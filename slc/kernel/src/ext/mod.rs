@@ -11,9 +11,12 @@
 //! - `prop`: which terms are propositions; propositional tautologies.
 //! - `seq`: natural deduction with hypotheses, quantifiers, equality,
 //!   definitions.
+//! - `arith`: linear arithmetic over the naturals; `nat_rec`'s recursion
+//!   equations.
 //! - `facts`: open lemmas and conditional theorems (bookkeeping, not a rule:
 //!   nothing resting on an open lemma becomes a `Thm`).
 
+pub mod arith;
 pub mod facts;
 pub mod prop;
 pub mod seq;

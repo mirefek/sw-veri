@@ -196,6 +196,25 @@ relies on.
    of the allocator decoded from the binary by proof.
 4. **Program rules and symbolic execution (E3), arithmetic (E4)**; the
    function lemmas of the leaves (`__mmap`, `munmap`, …, `memset`).
+   First part done — induction and arithmetic:
+   - trusted extension `ext/arith.rs`: `arith(p…)` proves a goal from
+     premises by propositional logic plus linear arithmetic over the
+     naturals (`+`, `succ`, literals, `*`/`/`/`%` by constants, `-` where
+     defined, `<`, `<=`, `=`; Fourier–Motzkin with integer tightening, no
+     external solver). A term counts as a number only if a premise says so
+     (`t in omega`, `t in bits(k)`, or `t` equated to a number). It rests
+     on standard theorems about the prelude's naturals, listed in the
+     module. Also `rec`: the recursion equations of `nat_rec` (the
+     recursion theorem);
+   - `core/nat.core`: `nat_ind` proven from `omega_ind`; examples
+     (`dbl(n) = 2 n` by induction);
+   - proof language: goal-directed `arith(…)` and `induct(base, step)`
+     (the base and step goals are computed), `rec({t}[, h])`, and
+     sub-proofs `have NAME: φ proof … qed` / `show [φ] proof … qed`, with
+     their own `assume`/`fix`/`obtain` scope, closed at their `qed`.
+   Tests check that `arith` rejects false or unjustified goals (`a < a`,
+   commutativity of unknown terms, `-` below zero, wrong remainders,
+   nonlinear facts).
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary

@@ -189,3 +189,99 @@ fn set_select_membership_steps() {
                theorem ok2(s, z): z in s -> z in set_select(s, x. x = x)\nproof\n  assume h: z in s\n  show z in set_select(s, x. x = x) by sel(taut(h, refl({z})))\nqed\n";
     assert_eq!(check(src), Ok(2));
 }
+
+/// Loads the prelude and the libraries up to core/nat.core, then `src`.
+fn check_nat(src: &str) -> Result<usize, String> {
+    let mut env = Env::new();
+    load(&mut env, &core_file("prelude.core"), true).unwrap();
+    for f in ["logic.core", "sets.core", "nat.core"] {
+        load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
+    }
+    load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| r.theorems.len()).map_err(|e| e.0)
+}
+
+fn arith_ok(stmt: &str, hyps: &[(&str, &str)]) -> Result<usize, String> {
+    let assumes: String = hyps.iter().map(|(n, t)| format!("  assume {}: {}\n", n, t)).collect();
+    let names: Vec<&str> = hyps.iter().map(|(n, _)| *n).collect();
+    check_nat(&format!("theorem t(a, b, x): {}\nproof\n{}  show by arith({})\nqed\n", stmt, assumes, names.join(", ")))
+}
+
+#[test]
+fn arithmetic_is_proven() {
+    let na = ("ha", "a in omega");
+    let nb = ("hb", "b in omega");
+    assert_eq!(arith_ok("a in omega -> b in omega -> nat_lt(a, b) -> nat_le(nat_add(a, 1), b)", &[na, nb, ("h", "nat_lt(a, b)")]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> b in omega -> a in b -> nat_lt(a, b)", &[na, nb, ("h", "a in b")]), Ok(1));
+    // `-` where it is defined
+    assert_eq!(
+        arith_ok("a in omega -> b in omega -> nat_le(b, a) -> nat_add(nat_sub(a, b), b) = a", &[na, nb, ("h", "nat_le(b, a)")]),
+        Ok(1)
+    );
+    // division by a constant
+    assert_eq!(arith_ok("a in omega -> nat_lt(nat_mod(a, 4), 4)", &[na]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> nat_le(nat_mul(4, nat_div(a, 4)), a)", &[na]), Ok(1));
+    // a term equated to a number is a number
+    assert_eq!(arith_ok("x = 3 -> nat_lt(x, 4)", &[("h", "x = 3")]), Ok(1));
+    // numbers built from numbers are in omega
+    assert_eq!(arith_ok("a in omega -> nat_add(nat_mul(3, a), 2) in omega", &[na]), Ok(1));
+}
+
+#[test]
+fn unsound_arithmetic_is_rejected() {
+    let na = ("ha", "a in omega");
+    let nb = ("hb", "b in omega");
+    let bad = |stmt: &str, hyps: &[(&str, &str)]| {
+        let r = arith_ok(stmt, hyps);
+        assert!(r.as_ref().is_err_and(|e| e.contains("arith")), "accepted: {} ({:?})", stmt, r);
+    };
+    bad("a in omega -> nat_lt(a, a)", &[na]);
+    bad("a in omega -> b in omega -> nat_lt(a, b)", &[na, nb]);
+    // not known to be numbers
+    bad("nat_add(a, b) = nat_add(b, a)", &[]);
+    bad("a in omega -> nat_le(0, x)", &[na]);
+    // `-` below zero is not a number
+    bad("a in omega -> b in omega -> nat_add(nat_sub(a, b), b) = a", &[na, nb]);
+    bad("a in omega -> b in omega -> nat_sub(a, b) in omega", &[na, nb]);
+    // division facts that do not hold
+    bad("a in omega -> nat_lt(nat_mod(a, 4), 3)", &[na]);
+    // products of variables are not linear: this true fact is not proven
+    bad("a in omega -> nat_le(0, nat_mul(a, a))", &[na]);
+}
+
+#[test]
+fn recursion_equations_need_their_premise() {
+    let src = |h: &str| {
+        format!("theorem t(m): m in omega -> nat_rec(0, k v. succ(v), nat_add(m, 1)) = succ(nat_rec(0, k v. succ(v), m))\nproof\n  assume hm: m in omega\n  show rec({{nat_rec(0, k v. succ(v), nat_add(m, 1))}}{})\nqed\n", h)
+    };
+    assert_eq!(check_nat(&src(", hm")), Ok(1));
+    let e = check_nat(&src("")).unwrap_err();
+    assert!(e.contains("m in omega"), "{}", e);
+    // a proof of membership for another term does not do
+    let e = check_nat(&src(", refl({m})")).unwrap_err();
+    assert!(e.contains("m in omega"), "{}", e);
+}
+
+#[test]
+fn induction_checks_base_and_step() {
+    // (core/nat.core, loaded by check_nat, proves dbl(n) = 2 n by induction)
+    // a wrong base case
+    let e = check_nat(
+        "theorem t: all n. n in omega -> nat_lt(0, n)\nproof\n  have base: nat_lt(0, 0) by arith()\n  show by induct(base, base)\nqed\n",
+    )
+    .unwrap_err();
+    assert!(e.contains("arith"), "{}", e);
+}
+
+#[test]
+fn sub_proofs_are_closed_at_their_qed() {
+    // the block proves `a -> a`; the outer proof uses it
+    let ok = "theorem t(a): (a -> a) && (a -> a)\nproof\n  have i: a -> a proof\n    assume h: a\n    show h\n  qed\n  show by taut(i)\nqed\n";
+    assert_eq!(check(ok), Ok(1));
+    // nested blocks, and `show proof` for the current goal
+    let nested = "theorem t(a, b): a -> b -> a\nproof\n  show proof\n    assume h: a\n    have k: b -> a proof\n      assume g: b\n      show h\n    qed\n    show k\n  qed\nqed\n";
+    assert_eq!(check(nested), Ok(1));
+    // a block must prove what it states: here it shows `a -> a`, not `a`
+    rejected("theorem t(a): a -> a\nproof\n  have x: a proof\n    assume h: a\n    show h\n  qed\n  show imp_weaken[a := a, b := a]\nqed\n", "this proves");
+    // a variable fixed inside a block is generalized there, not visible outside
+    rejected("theorem t: all x. x = x\nproof\n  have e: all y. y = y proof\n    fix y\n    show refl({y})\n  qed\n  show refl({y})\nqed\n", "y");
+}

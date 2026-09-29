@@ -108,7 +108,7 @@ impl Logic {
     }
 
     /// The propositional structure of `t` over atoms.
-    fn prop_tree(&self, env: &Env, t: &Term, atoms: &mut Vec<Term>, depth: u32) -> KResult<PTree> {
+    pub(crate) fn prop_tree(&self, env: &Env, t: &Term, atoms: &mut Vec<Term>, depth: u32) -> KResult<PTree> {
         if depth > 1000 {
             return err("formula too deep");
         }
@@ -168,14 +168,14 @@ impl Logic {
     }
 }
 
-enum PTree {
+pub(crate) enum PTree {
     Atom(usize),
     False,
     Imp(Box<PTree>, Box<PTree>),
 }
 
 impl PTree {
-    fn eval(&self, row: u64) -> bool {
+    pub(crate) fn eval(&self, row: u64) -> bool {
         match self {
             PTree::Atom(i) => row >> i & 1 == 1,
             PTree::False => false,

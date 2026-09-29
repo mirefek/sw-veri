@@ -304,6 +304,33 @@ impl Seq {
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
+    /// From premises `Γi ⊢ pi`: `⋃Γi ⊢ goal`, if `p1 -> .. -> goal` holds by
+    /// propositional logic and linear arithmetic over the naturals (see
+    /// `ext::arith`).
+    pub fn arith(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term) -> KResult<Seq> {
+        env.check_wf(goal, 0)?;
+        let mut hyps = Vec::new();
+        let mut open = Vec::new();
+        for p in premises {
+            hyps = union(&hyps, &p.hyps);
+            open = union(&open, &p.open);
+        }
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        lg.arith(env, &ps, goal)?;
+        Ok(Seq { hyps, concl: goal.clone(), open })
+    }
+
+    /// A recursion equation of `nat_rec` for `t` (see `Logic::nat_rec_eq`);
+    /// `m_nat` proves `m in omega` for the step case.
+    pub fn nat_rec_eq(env: &Env, lg: &Logic, t: &Term, m_nat: Option<&Seq>) -> KResult<Seq> {
+        env.check_wf(t, 0)?;
+        let concl = lg.nat_rec_eq(env, t, m_nat.map(|s| &s.concl))?;
+        Ok(match m_nat {
+            Some(s) => Seq { hyps: s.hyps.clone(), concl, open: s.open.clone() },
+            None => Seq { hyps: Vec::new(), concl, open: Vec::new() },
+        })
+    }
+
     /// A kernel theorem about literals or bytes, as a sequent.
     pub fn kernel(t: KResult<Thm>) -> KResult<Seq> {
         Ok(Seq::of_thm(&t?))

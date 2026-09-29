@@ -39,11 +39,26 @@ pub struct ScriptProver;
 impl Prover for ScriptProver {
     fn prove(&mut self, env: &mut Env, req: &ProofRequest) -> KResult<Seq> {
         let lg = Logic::new(env)?;
-        let mut st = State { scope: req.params.clone(), facts: Vec::new(), frames: Vec::new(), last: None, discharged: Default::default(), goal: Some(req.statement.clone()) };
-        for (line_no, step) in steps(&req.text) {
-            st.step(env, &lg, &step).map_err(|e| KernelError(format!("proof of `{}`, line {}: {}", req.name, req.line + line_no, e.0)))?;
-        }
-        let mut s = st.last.ok_or_else(|| KernelError(format!("proof of `{}` is empty", req.name)))?;
+        let st = State::new(req.params.clone(), Vec::new(), Some(req.statement.clone()));
+        run_block(env, &lg, st, &req.text, req.line).map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)))
+    }
+}
+
+/// Runs the steps of a proof (or of a `proof ... qed` block inside one),
+/// then closes its `assume`, `fix` and `obtain` steps. `line`: where the
+/// text starts, for messages.
+fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) -> KResult<Seq> {
+    for (line_no, step) in steps(text) {
+        st.step(env, lg, &step, line + line_no).map_err(|e| {
+            if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
+        })?;
+    }
+    close(env, lg, st)
+}
+
+fn close(env: &Env, lg: &Logic, st: State) -> KResult<Seq> {
+    {
+        let mut s = st.last.clone().ok_or_else(|| KernelError("the proof is empty".into()))?;
         for fr in st.frames.iter().rev() {
             s = match fr {
                 // an assumption already discharged by a step is not discharged again
@@ -53,19 +68,19 @@ impl Prover for ScriptProver {
                 Frame::Fix(v) => {
                     let mut vs = Vec::new();
                     s.concl().vars(&mut vs);
-                    if vs.contains(v) { Seq::gen(env, &lg, &s, *v)? } else { s }
+                    if vs.contains(v) { Seq::gen(env, lg, &s, *v)? } else { s }
                 }
                 // ∃-elimination: ψ(x) ⊢ Q becomes ψ(c) -> Q with c the choice
                 // witness of P, then modus ponens with `witness(P)`
                 Frame::Obtain(v, prop, ex) => {
                     let s1 = s.discharge(env, prop);
                     if has_var(s.concl(), *v) {
-                        return Err(KernelError(format!("proof of `{}`: the obtained `{}` occurs in the result", req.name, env.vars[*v as usize].name)));
+                        return Err(KernelError(format!("the obtained `{}` occurs in the result", env.vars[*v as usize].name)));
                     }
                     if s1.hyps().iter().any(|h| has_var(h, *v)) {
-                        return Err(KernelError(format!("proof of `{}`: the obtained `{}` occurs in an open assumption", req.name, env.vars[*v as usize].name)));
+                        return Err(KernelError(format!("the obtained `{}` occurs in an open assumption", env.vars[*v as usize].name)));
                     }
-                    let w = Seq::witness(env, &lg, ex)?;
+                    let w = Seq::witness(env, lg, ex)?;
                     let body = match ex.concl().node() {
                         Node::App(_, a) => a[0].clone(),
                         _ => unreachable!(),
@@ -77,6 +92,12 @@ impl Prover for ScriptProver {
             };
         }
         Ok(s)
+    }
+}
+
+impl State {
+    fn new(scope: Vec<(String, VarId)>, facts: Vec<(String, Seq)>, goal: Option<Term>) -> State {
+        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal }
     }
 }
 
@@ -93,7 +114,26 @@ fn steps(text: &str) -> Vec<(usize, String)> {
     let mut cur = String::new();
     let mut start = 0;
     let mut depth = 0i32;
+    // inside `... proof` .. `qed`: (start line, header, body, nesting)
+    let mut block: Option<(usize, String, String, u32)> = None;
+    let ends_proof = |s: &str| s == "proof" || s.ends_with(" proof");
     for (i, l) in text.lines().enumerate() {
+        if let Some((st, header, mut body, mut nest)) = block.take() {
+            let t = l.split("//").next().unwrap_or("").trim();
+            if t == "qed" {
+                nest -= 1;
+                if nest == 0 {
+                    out.push((st, format!("{}\n{}", header, body)));
+                    continue;
+                }
+            } else if ends_proof(t) {
+                nest += 1;
+            }
+            body.push_str(l);
+            body.push('\n');
+            block = Some((st, header, body, nest));
+            continue;
+        }
         let l = match l.find("//") {
             Some(k) => &l[..k],
             None => l,
@@ -121,7 +161,13 @@ fn steps(text: &str) -> Vec<(usize, String)> {
         // a line ending in an operator continues on the next line
         let open_op = ["=", "->", "&&", "||", "<->", ","].iter().any(|op| cur.trim_end().ends_with(op));
         if depth <= 0 && !open_op {
-            out.push((start, cur.trim().to_string()));
+            let s = cur.trim().to_string();
+            if ends_proof(&s) {
+                // a sub-proof follows, up to its `qed`
+                block = Some((start, s[..s.len() - "proof".len()].trim().to_string(), String::new(), 1));
+            } else {
+                out.push((start, s));
+            }
             cur.clear();
             depth = 0;
         }
@@ -152,7 +198,15 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "ex_intro", "defs", "sel"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "induct", "ex_intro", "defs", "sel"];
+
+/// `a -> b`: (a, b)
+fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
+    match t.node() {
+        Node::App(i, c) if *i == env.builtins.imp => Ok((c[0].clone(), c[1].clone())),
+        _ => err(format!("not an implication: {}", Printer::new(env).term(t))),
+    }
+}
 
 /// Proof expressions.
 #[derive(Debug)]
@@ -267,7 +321,31 @@ impl State {
         facts::seq_of(env, name).ok_or_else(|| KernelError(format!("unknown fact `{}`", name)))
     }
 
-    fn step(&mut self, env: &mut Env, lg: &Logic, step: &str) -> KResult<()> {
+    fn step(&mut self, env: &mut Env, lg: &Logic, step: &str, line: usize) -> KResult<()> {
+        // `have NAME: φ proof .. qed` / `show [φ] proof .. qed`: a sub-proof of
+        // φ with its own assume / fix / obtain steps, closed at its `qed`
+        if let Some((header, body)) = step.split_once('\n') {
+            let (kw, rest) = header.split_once(' ').unwrap_or((header, ""));
+            let (name, goal) = match kw {
+                "have" => {
+                    let (n, g) = rest.split_once(':').ok_or_else(|| KernelError("expected `have name: φ proof`".into()))?;
+                    (Some(n.trim().to_string()), self.term(env, g)?)
+                }
+                "show" if rest.trim().is_empty() => {
+                    (None, self.goal.clone().ok_or_else(|| KernelError("no current goal here: write `show φ proof`".into()))?)
+                }
+                "show" => (None, self.term(env, rest)?),
+                _ => return err("a sub-proof belongs to `have NAME: φ` or `show [φ]`"),
+            };
+            let child = State::new(self.scope.clone(), self.facts.clone(), Some(goal.clone()));
+            let s = run_block(env, lg, child, body, line + 1)?;
+            let s = self.check(env, s, &goal)?;
+            if let Some(n) = name {
+                self.facts.push((n, s.clone()));
+            }
+            self.last = Some(s);
+            return Ok(());
+        }
         let (kw, rest) = step.split_once(' ').unwrap_or((step, ""));
         match kw {
             "assume" => {
@@ -393,6 +471,39 @@ impl State {
                 let ps = self.proofs(env, lg, args)?;
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::taut(env, lg, &refs, goal)
+            }
+            // arith(p1, ..): the goal by propositional logic and linear arithmetic
+            "arith" => {
+                let ps = self.proofs(env, lg, args)?;
+                let refs: Vec<&Seq> = ps.iter().collect();
+                Seq::arith(env, lg, &refs, goal)
+            }
+            // induct(base, step): the goal `all n. n in omega -> P(n)` from
+            // base: P(0) and step: all n. n in omega -> P(n) -> P(n + 1)
+            // (the theorem `nat_ind`; base and step get their goals)
+            "induct" => {
+                let (Some(Arg::Proof(base)), Some(Arg::Proof(step))) = (args.first(), args.get(1)) else {
+                    return err("induct takes a proof of the base case and one of the step");
+                };
+                let body = match goal.node() {
+                    Node::App(a, b) if *a == lg.all => match b[0].node() {
+                        Node::App(i, c) if *i == env.builtins.imp => c[1].clone(),
+                        _ => return err("induct: the goal is not `all n. n in omega -> P(n)`"),
+                    },
+                    _ => return err("induct: the goal is not `all n. n in omega -> P(n)`"),
+                };
+                let ind = facts::seq_of(env, "nat_ind").ok_or_else(|| KernelError("induct needs the theorem `nat_ind` (core/nat.core)".into()))?;
+                let mut vs = Vec::new();
+                ind.concl().vars(&mut vs);
+                let p = vs.iter().copied().find(|v| env.vars[*v as usize].name == "p").ok_or_else(|| KernelError("nat_ind has no `p`".into()))?;
+                let ind = Seq::inst(env, &ind, p, &body)?;
+                // P(0) -> (step) -> goal
+                let (g_base, rest) = imp_parts(env, ind.concl())?;
+                let (g_step, _) = imp_parts(env, &rest)?;
+                let b = self.by(env, lg, &g_base, base)?;
+                let s = self.by(env, lg, &g_step, step)?;
+                let r = Seq::mp(env, &Seq::mp(env, &ind, &b)?, &s)?;
+                self.check(env, r, goal)
             }
             // ex_intro({w1}, .., {wk}, p): the goal `ex x1 .. xk. φ`, p a proof of φ(w1, .., wk)
             "ex_intro" if matches!(args.last(), Some(Arg::Proof(_))) && args[..args.len() - 1].iter().all(|a| matches!(a, Arg::Term(_))) => {
@@ -618,7 +729,17 @@ impl State {
                         let (ax, rhs) = self.select_def(env, h.concl())?;
                         Seq::taut(env, lg, &[&ax, &h], &rhs)
                     }
-                    "taut" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
+                    // rec({nat_rec(z, k v. s, n)} [, h]): its recursion equation for n = 0,
+                    // or for n = m + 1 with h: m in omega
+                    "rec" => {
+                        let t = self.term_arg(env, a0, 0)?;
+                        let h = match args.get(1) {
+                            Some(_) => Some(self.proof_arg(env, lg, args.get(1))?),
+                            None => None,
+                        };
+                        Seq::nat_rec_eq(env, lg, &t, h.as_ref())
+                    }
+                    "taut" | "arith" | "induct" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
             }

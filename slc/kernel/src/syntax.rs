@@ -555,15 +555,23 @@ pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Optio
                 if !matches!(&p.tok, Tok::Ident(k) if k == "proof") {
                     return p.error("expected `proof`");
                 }
-                // the proof text runs to a line holding just `qed`
+                // the proof text runs to the line holding just the matching
+                // `qed` (sub-proofs: a line ending in `proof` opens one)
                 let start = p.lex.pos;
                 let rest = &src[start..];
                 let mut off = 0;
                 let mut end = None;
+                let mut nest = 1;
                 for l in rest.split_inclusive('\n') {
-                    if l.trim() == "qed" {
-                        end = Some((off, off + l.len()));
-                        break;
+                    let t = l.split("//").next().unwrap_or("").trim();
+                    if t == "qed" {
+                        nest -= 1;
+                        if nest == 0 {
+                            end = Some((off, off + l.len()));
+                            break;
+                        }
+                    } else if off > 0 && (t == "proof" || t.ends_with(" proof")) {
+                        nest += 1;
                     }
                     off += l.len();
                 }
