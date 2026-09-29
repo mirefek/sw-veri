@@ -320,6 +320,43 @@ impl Seq {
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
+    /// From premises (list memberships among them): `⋃Γi ⊢ A = B` for list
+    /// expressions with the same pieces (see `ext::list`).
+    pub fn lists(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term) -> KResult<Seq> {
+        env.check_wf(goal, 0)?;
+        let (hyps, open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        lg.list_eq(env, &ps, goal)?;
+        Ok(Seq { hyps, concl: goal.clone(), open })
+    }
+
+    /// `⋃Γi ⊢ app(L, i) = e`: the element at i of a list expression, the
+    /// bounds of i shown by `arith` from the premises (see `ext::list`).
+    pub fn list_at(env: &Env, lg: &Logic, premises: &[&Seq], t: &Term) -> KResult<Seq> {
+        env.check_wf(t, 0)?;
+        let (hyps, open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        let concl = lg.list_at(env, &ps, t)?;
+        Ok(Seq { hyps, concl, open })
+    }
+
+    /// List extensionality (see `Logic::list_ext`).
+    pub fn list_ext(env: &Env, lg: &Logic, ha: &Seq, hb: &Seq, hlen: &Seq, hel: &Seq) -> KResult<Seq> {
+        let (hyps, open) = Self::gather(&[ha, hb, hlen, hel]);
+        let concl = lg.list_ext(env, &ha.concl, &hb.concl, &hlen.concl, &hel.concl)?;
+        Ok(Seq { hyps, concl, open })
+    }
+
+    fn gather(premises: &[&Seq]) -> (Vec<Term>, Vec<String>) {
+        let mut hyps = Vec::new();
+        let mut open = Vec::new();
+        for p in premises {
+            hyps = union(&hyps, &p.hyps);
+            open = union(&open, &p.open);
+        }
+        (hyps, open)
+    }
+
     /// A recursion equation of `nat_rec` for `t` (see `Logic::nat_rec_eq`);
     /// `m_nat` proves `m in omega` for the step case.
     pub fn nat_rec_eq(env: &Env, lg: &Logic, t: &Term, m_nat: Option<&Seq>) -> KResult<Seq> {

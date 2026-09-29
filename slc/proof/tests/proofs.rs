@@ -285,3 +285,41 @@ fn sub_proofs_are_closed_at_their_qed() {
     // a variable fixed inside a block is generalized there, not visible outside
     rejected("theorem t: all x. x = x\nproof\n  have e: all y. y = y proof\n    fix y\n    show refl({y})\n  qed\n  show refl({y})\nqed\n", "y");
 }
+
+/// Loads the libraries up to core/list.core, then `src`.
+fn check_list(src: &str) -> Result<usize, String> {
+    let mut env = Env::new();
+    load(&mut env, &core_file("prelude.core"), true).unwrap();
+    for f in ["logic.core", "sets.core", "nat.core", "list.core"] {
+        load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
+    }
+    load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| r.theorems.len()).map_err(|e| e.0)
+}
+
+#[test]
+fn the_list_library_checks() {
+    assert!(check_list("").is_ok());
+}
+
+#[test]
+fn unsound_list_steps_are_rejected() {
+    let bad = |src: &str, why: &str| match check_list(src) {
+        Ok(_) => panic!("accepted: {}", src),
+        Err(e) => assert!(e.contains(why), "expected `{}`, got: {}", why, e),
+    };
+    let lists2 = "  assume ha: a in list_type(t)\n  assume hb: b in list_type(t)\n";
+    // ++ is not commutative
+    bad(&format!("theorem x(a, b, t): a in list_type(t) -> b in list_type(t) -> seq_concat(a, b) = seq_concat(b, a)\nproof\n{}  show by lists(ha, hb)\nqed\n", lists2), "different pieces");
+    // different elements
+    bad("theorem x(p, q): seq_one(p) = seq_one(q)\nproof\n  show by lists()\nqed\n", "different pieces");
+    // a term not known to be a list
+    bad("theorem x(a): seq_concat(a, empty) = a\nproof\n  show by lists()\nqed\n", "known lists");
+    // lengths of unknown terms are not numbers
+    bad("theorem x(a): nat_le(0, seq_len(a))\nproof\n  show by arith()\nqed\n", "arith");
+    // an index past the end
+    bad("theorem x(p, q): app(seq_concat(seq_one(p), seq_one(q)), 2) = q\nproof\n  show at({app(seq_concat(seq_one(p), seq_one(q)), 2)})\nqed\n", "cannot place");
+    // an index whose piece is not determined by what is known
+    bad(&format!("theorem x(a, b, t, i): a in list_type(t) -> b in list_type(t) -> i in omega -> app(seq_concat(a, b), i) = app(a, i)\nproof\n{}  assume hi: i in omega\n  show at({{app(seq_concat(a, b), i)}}, ha, hb, hi)\nqed\n", lists2), "cannot place");
+    // extensionality needs the lengths of these two lists
+    bad("theorem x(a, b, c, t): a in list_type(t) -> b in list_type(t) -> seq_len(a) = seq_len(c) -> (all i. i in omega -> nat_lt(i, seq_len(a)) -> app(a, i) = app(b, i)) -> a = b\nproof\n  assume ha: a in list_type(t)\n  assume hb: b in list_type(t)\n  assume hl: seq_len(a) = seq_len(c)\n  assume he: all i. i in omega -> nat_lt(i, seq_len(a)) -> app(a, i) = app(b, i)\n  show list_ext(ha, hb, hl, he)\nqed\n", "third premise");
+}

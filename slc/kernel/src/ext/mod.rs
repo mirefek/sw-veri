@@ -13,11 +13,14 @@
 //!   definitions.
 //! - `arith`: linear arithmetic over the naturals; `nat_rec`'s recursion
 //!   equations.
+//! - `list`: lists up to associativity of `++`, their lengths (for
+//!   `arith`), indexing, extensionality.
 //! - `facts`: open lemmas and conditional theorems (bookkeeping, not a rule:
 //!   nothing resting on an open lemma becomes a `Thm`).
 
 pub mod arith;
 pub mod facts;
+pub mod list;
 pub mod prop;
 pub mod seq;
 

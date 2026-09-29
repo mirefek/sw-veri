@@ -252,7 +252,8 @@ impl<'s> Elab<'s> {
                 };
                 let (ev, _) = self.expr(cx, event, Some(&ety))?;
                 let cur = self.load(cx, &root, &steps)?;
-                let v = self.b.app("seq_append", vec![cur, ev]);
+                let one = self.b.app("seq_one", vec![ev]);
+                let v = self.b.app("seq_concat", vec![cur, one]);
                 self.store(cx, root, steps, v, span)
             }
             StmtKind::If { cond, then, els } => {

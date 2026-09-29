@@ -101,14 +101,20 @@ impl<'s> Elab<'s> {
                     Some(Ty::List(t) | Ty::Seq(t)) => Some((**t).clone()),
                     _ => None,
                 };
-                let mut acc = self.b.empty();
+                // [a, b, c] = seq_one(a) ++ seq_one(b) ++ seq_one(c): the
+                // form list reasoning normalizes (associativity of ++)
+                let mut acc: Option<Term> = None;
                 let mut ety = et.clone().unwrap_or(Ty::Unknown);
                 for x in xs {
                     let (t, ty) = self.expr(cx, x, et.as_ref())?;
                     ety = ty;
-                    acc = self.b.app("seq_append", vec![acc, t]);
+                    let one = self.b.app("seq_one", vec![t]);
+                    acc = Some(match acc {
+                        None => one,
+                        Some(a) => self.b.app("seq_concat", vec![a, one]),
+                    });
                 }
-                Ok((acc, Ty::List(Box::new(ety))))
+                Ok((acc.unwrap_or_else(|| self.b.empty()), Ty::List(Box::new(ety))))
             }
             ExprKind::Set(xs) => {
                 let mut et = match exp.map(|t| t.strip()) {

@@ -26,8 +26,9 @@
 //! integer tightening: sound, not complete). A term is read as a number
 //! only if it is known to be one: a literal, a term `t` with a premise
 //! `t in omega` or `t in bits(k)`, a term equated to a number by a premise,
-//! or built from those with `succ`, `+`, `*` by a constant, `-`, and `/`,
-//! `%` by a positive constant. Other atoms stay propositional.
+//! the length of a list expression over known lists (`ext::list`), or
+//! built from those with `succ`, `+`, `*` by a constant, `-`, and `/`, `%`
+//! by a positive constant. Other atoms stay propositional.
 
 use super::prop::Logic;
 use crate::env::{Env, KResult, KernelError};
@@ -94,6 +95,9 @@ struct SubVar {
 
 struct Reader {
     s: Syms,
+    ls: super::list::LSyms,
+    /// terms known to be lists (their lengths are naturals)
+    lists: Vec<Term>,
     /// terms known to be naturals
     nats: Vec<Term>,
     /// variables: the term each stands for
@@ -181,6 +185,23 @@ impl Reader {
             Node::Nat(n) => return n.to_u64().map(|v| Lin::konst(v as i128)),
             Node::App(e, a) if a.is_empty() && is(*e, s.empty) => return Some(Lin::konst(0)),
             Node::App(f, a) if is(*f, s.succ) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
+            // the length of a list expression: its singletons plus the
+            // lengths of the lists in it
+            Node::App(f, a) if is(*f, self.ls.len) => {
+                if let Some(pieces) = super::list::flatten(&self.ls, &a[0], &self.lists) {
+                    let mut l = Lin::konst(0);
+                    for p in pieces {
+                        l = match p {
+                            super::list::Piece::One(_) => l.add(&Lin::konst(1), 1)?,
+                            super::list::Piece::List(m) => {
+                                let v = self.var_of(&Term::app(*f, vec![m]));
+                                l.add(&Lin::var(v), 1)?
+                            }
+                        };
+                    }
+                    return Some(l);
+                }
+            }
             Node::App(f, a) if is(*f, s.nat_add) => {
                 let (x, y) = (self.lin(&a[0])?, self.lin(&a[1])?);
                 return x.add(&y, 1);
@@ -395,7 +416,7 @@ impl Logic {
     /// over the naturals (see the module docs).
     pub fn arith(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
         let s = Syms::new(env);
-        let mut r = Reader { s, nats: Vec::new(), vars: Vec::new(), side: Vec::new(), subs: Vec::new() };
+        let mut r = Reader { s, ls: super::list::LSyms::new(env), lists: super::list::known_lists(env, premises), nats: Vec::new(), vars: Vec::new(), side: Vec::new(), subs: Vec::new() };
         // numbers: memberships among the premises, then terms equated to
         // numbers (repeat until nothing changes)
         for p in premises {

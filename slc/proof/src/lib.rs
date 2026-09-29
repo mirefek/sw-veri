@@ -198,7 +198,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "induct", "ex_intro", "defs", "sel"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "lists", "induct", "ex_intro", "defs", "sel"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -478,6 +478,13 @@ impl State {
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::arith(env, lg, &refs, goal)
             }
+            // lists(p1, ..): `A = B` for list expressions with the same pieces
+            // (the premises say which terms are lists)
+            "lists" => {
+                let ps = self.proofs(env, lg, args)?;
+                let refs: Vec<&Seq> = ps.iter().collect();
+                Seq::lists(env, lg, &refs, goal)
+            }
             // induct(base, step): the goal `all n. n in omega -> P(n)` from
             // base: P(0) and step: all n. n in omega -> P(n) -> P(n + 1)
             // (the theorem `nat_ind`; base and step get their goals)
@@ -739,7 +746,24 @@ impl State {
                         };
                         Seq::nat_rec_eq(env, lg, &t, h.as_ref())
                     }
-                    "taut" | "arith" | "induct" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
+                    // at({app(L, i)}, p1, ..): the element of a list expression at
+                    // i, its bounds shown by arith from the premises
+                    "at" => {
+                        let t = self.term_arg(env, a0, 0)?;
+                        let ps = self.proofs(env, lg, &args[1.min(args.len())..])?;
+                        let refs: Vec<&Seq> = ps.iter().collect();
+                        Seq::list_at(env, lg, &refs, &t)
+                    }
+                    // list_ext(A in list_type(_), B in list_type(_), len A = len B,
+                    //          all i. i in omega -> i < len A -> A[i] = B[i]): A = B
+                    "list_ext" => {
+                        let ps = self.proofs(env, lg, args)?;
+                        match ps.as_slice() {
+                            [a, b, l, e] => Seq::list_ext(env, lg, a, b, l, e),
+                            _ => err("list_ext takes four proofs"),
+                        }
+                    }
+                    "taut" | "arith" | "lists" | "induct" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
             }

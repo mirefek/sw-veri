@@ -215,6 +215,23 @@ relies on.
    Tests check that `arith` rejects false or unjustified goals (`a < a`,
    commutativity of unknown terms, `-` below zero, wrong remainders,
    nonlinear facts).
+
+   Lists (functions on a natural number, as in ji-trust): a literal
+   `[a, b, c]` now elaborates to `seq_one(a) ++ seq_one(b) ++ seq_one(c)`
+   (`seq_one` added to the prelude), so every list expression is a
+   concatenation of pieces. Trusted extension `ext/list.rs`, over pieces
+   flattened by associativity of `++` (opaque pieces must be known lists,
+   `l in list_type(T)`):
+   - `lists(p…)`: `A = B` when both have the same pieces;
+   - `arith` reads `seq_len` of a list expression (singletons plus the
+     lengths of its lists);
+   - `at({L[i]}, p…)`: the element at i, found in the piece whose bounds
+     `arith` shows from the premises;
+   - `list_ext(…)`: extensionality.
+   Examples in `core/list.core`; tests check that `++` is not treated as
+   commutative, unknown terms are not lists, and out-of-range or
+   undetermined indices are refused. Structural list induction is not yet
+   there (index induction is `nat_ind`).
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
