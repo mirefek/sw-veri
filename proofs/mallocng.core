@@ -1,0 +1,362 @@
+// The laws of the malloc layer for mallocng's invariant (layers/mallocng.sl),
+// for any binary (`c: Cfg`).
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core \
+//     build/musl_malloc.core proofs/mallocng.core proofs/musl_malloc.core
+
+// ----------------------------------------------------------------------
+//  Membership in inv and owned
+
+theorem mallocng.inv_rep(c, s): s in mallocng.inv(c) -> ex A. A in mallocng.Abs && mallocng.rep(c, A, s)
+proof
+  assume h: s in mallocng.inv(c)
+  show ex A. A in mallocng.Abs && mallocng.rep(c, A, s) by taut(unsel(expand(h, mallocng.inv)))
+qed
+
+theorem mallocng.inv_intro(c, s, A):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) -> s in mallocng.inv(c)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: A in mallocng.Abs
+  assume hr: mallocng.rep(c, A, s)
+  have e: ex B. B in mallocng.Abs && mallocng.rep(c, B, s) by ex_intro({A}, taut(ha, hr))
+  show s in mallocng.inv(c) by defs(sel(taut(hs, e)), mallocng.inv)
+qed
+
+theorem mallocng.owned_app(c, s): s in rec_and(abi.World, malloc.Heap.ghost) -> app(mallocng.owned(c), s) = mallocng.owned_of(c, s)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  show app(mallocng.owned(c), s) = mallocng.owned_of(c, s)
+    by defs(mp(app_fn_build[d := rec_and(abi.World, malloc.Heap.ghost), v := x. mallocng.owned_of(c, x), a := s], hs), mallocng.owned)
+qed
+
+theorem mallocng.owned_mem(c, s, a):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> a in app(mallocng.owned(c), s) ->
+    ex A. A in mallocng.Abs && (mallocng.rep(c, A, s) && a in mallocng.footprint(c, A, app(s, "blocks")))
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: a in app(mallocng.owned(c), s)
+  have h2 := rewrite(mp(mallocng.owned_app[c := c, s := s], hs), ha)
+  show ex A. A in mallocng.Abs && (mallocng.rep(c, A, s) && a in mallocng.footprint(c, A, app(s, "blocks")))
+    by taut(unsel(expand(h2, mallocng.owned_of)))
+qed
+
+theorem mallocng.owned_intro(c, s, A, a):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) ->
+    a in omega -> a in mallocng.footprint(c, A, app(s, "blocks")) -> a in app(mallocng.owned(c), s)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: A in mallocng.Abs
+  assume hr: mallocng.rep(c, A, s)
+  assume ho: a in omega
+  assume hf: a in mallocng.footprint(c, A, app(s, "blocks"))
+  have e: ex B. B in mallocng.Abs && (mallocng.rep(c, B, s) && a in mallocng.footprint(c, B, app(s, "blocks")))
+    by ex_intro({A}, taut(ha, hr, hf))
+  have m: a in mallocng.owned_of(c, s) by defs(sel(taut(ho, e)), mallocng.owned_of)
+  show a in app(mallocng.owned(c), s) by rewrite(sym(mp(mallocng.owned_app[c := c, s := s], hs)), m)
+qed
+
+theorem mallocng.fp_not_live(c, A, b, a): a in mallocng.footprint(c, A, b) -> !(a in malloc.live_of(b))
+proof
+  assume h: a in mallocng.footprint(c, A, b)
+  show !(a in malloc.live_of(b)) by taut(unsel(expand(h, mallocng.footprint, mallocng.fp_set)))
+qed
+
+// ----------------------------------------------------------------------
+//  inv_wf
+
+theorem mallocng.wf_pt(c, s): s in mallocng.inv(c) -> malloc.heap_wf(s)
+proof
+  assume h: s in mallocng.inv(c)
+  obtain A, hA from mp(mallocng.inv_rep[c := c, s := s], h)
+  have r: mallocng.rep(c, A, s) by taut(hA)
+  have hb: malloc.blocks_wf(app(s, "blocks")) by taut(expand(r, mallocng.rep, mallocng.holds))
+  have hl: malloc.live_rw(s) by taut(expand(r, mallocng.rep))
+  show malloc.heap_wf(s) by defs(taut(hb, hl), malloc.heap_wf)
+qed
+
+theorem mallocng.law_inv_wf(c): malloc.inv_wf(mallocng.inv(c))
+proof
+  fix s
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume hi: s in mallocng.inv(c)
+  have g := gen(discharge(discharge(mp(mallocng.wf_pt[c := c, s := s], hi), hi), hs), s)
+  show malloc.inv_wf(mallocng.inv(c)) by defs(g, malloc.inv_wf)
+qed
+
+// ----------------------------------------------------------------------
+//  owned_private
+
+theorem mallocng.private_pt(c, s, a):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> a in app(mallocng.owned(c), s) -> !(a in malloc.live(s))
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: a in app(mallocng.owned(c), s)
+  obtain A, hA from mp(mp(mallocng.owned_mem[c := c, s := s, a := a], hs), ha)
+  have f: a in mallocng.footprint(c, A, app(s, "blocks")) by taut(hA)
+  show !(a in malloc.live(s)) by defs(mp(mallocng.fp_not_live[c := c, A := A, b := app(s, "blocks"), a := a], f), malloc.live)
+qed
+
+theorem mallocng.law_owned_private(c): malloc.owned_private(mallocng.inv(c), mallocng.owned(c))
+proof
+  fix s
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume hi: s in mallocng.inv(c)
+  fix a
+  assume ho: a in omega
+  have k: !(a in app(mallocng.owned(c), s) && a in malloc.live(s)) by taut(mp(mallocng.private_pt[c := c, s := s, a := a], hs))
+  have dj: malloc.disjoint(app(mallocng.owned(c), s), malloc.live(s)) by defs(gen(discharge(k, ho), a), malloc.disjoint)
+  have g := gen(discharge(discharge(dj, hi), hs), s)
+  show malloc.owned_private(mallocng.inv(c), mallocng.owned(c)) by defs(g, malloc.owned_private)
+qed
+
+// ----------------------------------------------------------------------
+//  owned_mapped
+
+theorem mallocng.mapped_pt(c, s, a):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> a in omega -> a in app(mallocng.owned(c), s) ->
+    x86_64_linux.mapped(app(s, "vm"), nat_div(a, x86_64_linux.PAGE))
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ho: a in omega
+  assume ha: a in app(mallocng.owned(c), s)
+  obtain A, hA from mp(mp(mallocng.owned_mem[c := c, s := s, a := a], hs), ha)
+  have r: mallocng.rep(c, A, s) by taut(hA)
+  have f: a in mallocng.footprint(c, A, app(s, "blocks")) by taut(hA)
+  // a is in one of the ranges, and not live
+  have u := unsel(expand(f, mallocng.footprint, mallocng.fp_set))
+  have ir: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) by taut(u)
+  have nl: !(a in malloc.live_of(app(s, "blocks"))) by taut(u)
+  obtain k, hk from expand(ir, mallocng.in_ranges)
+  have kin: k in omega by taut(hk)
+  have klt: nat_lt(k, seq_len(mallocng.fp_ranges(c, A))) by taut(hk)
+  have kr: mallocng.in_range(a, app(mallocng.fp_ranges(c, A), k)) by taut(hk)
+  have fm: mallocng.fp_mapped(mallocng.fp_ranges(c, A), app(s, "blocks"), app(s, "vm")) by taut(expand(r, mallocng.rep))
+  have inst := all_elim(all_elim(expand(fm, mallocng.fp_mapped), {k}), {a})
+  show x86_64_linux.mapped(app(s, "vm"), nat_div(a, x86_64_linux.PAGE)) by taut(inst, kin, ho, klt, expand(kr, mallocng.in_range), nl)
+qed
+
+theorem mallocng.law_owned_mapped(c): malloc.owned_mapped(mallocng.inv(c), mallocng.owned(c))
+proof
+  fix s
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume hi: s in mallocng.inv(c)
+  fix a
+  assume ho: a in omega
+  assume ha: a in app(mallocng.owned(c), s)
+  have m := mp(mp(mp(mallocng.mapped_pt[c := c, s := s, a := a], hs), ho), ha)
+  have g := gen(discharge(discharge(gen(discharge(discharge(m, ha), ho), a), hi), hs), s)
+  show malloc.owned_mapped(mallocng.inv(c), mallocng.owned(c)) by defs(g, malloc.owned_mapped)
+qed
+
+// ----------------------------------------------------------------------
+//  frame
+
+// The abstract state is determined by the memory. To prove: the ctx fields
+// are read from ctx; the lists (areas, free metas, active lists) by
+// following their links from ctx; the metas, slots and blocks from the
+// meta areas and groups those lists reach (see layers/mallocng.sl).
+lemma mallocng.abs_unique(c, s, A, B):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> B in mallocng.Abs ->
+    mallocng.rep(c, A, s) -> mallocng.rep(c, B, s) -> A = B
+
+// memory that agrees on the owned bytes (the frame law's hypothesis)
+def mallocng.agree(c, s, t) :=
+  all x. x in omega -> x in app(mallocng.owned(c), s) ->
+    app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)) = app(app(app(s, "vm"), "bytes"), bits_of_nat(64, x)) &&
+    app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))
+
+// agreement on the footprint of a representing state
+theorem mallocng.agree_fp(c, s, t, A, x):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) -> mallocng.agree(c, s, t) ->
+    x in omega -> x in mallocng.footprint(c, A, app(s, "blocks")) ->
+      app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)) = app(app(app(s, "vm"), "bytes"), bits_of_nat(64, x)) &&
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: A in mallocng.Abs
+  assume hr: mallocng.rep(c, A, s)
+  assume hg: mallocng.agree(c, s, t)
+  assume ho: x in omega
+  assume hx: x in mallocng.footprint(c, A, app(s, "blocks"))
+  have own := mp(mp(mp(mp(mp(mallocng.owned_intro[c := c, s := s, A := A, a := x], hs), ha), hr), ho), hx)
+  show mp(mp(all_elim(expand(hg, mallocng.agree), {x}), ho), own)
+qed
+
+// the view of the footprint is the same
+theorem mallocng.view_eq(c, s, t, A):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) -> mallocng.agree(c, s, t) ->
+    mallocng.mview(app(t, "vm"), mallocng.footprint(c, A, app(s, "blocks"))) =
+    mallocng.mview(app(s, "vm"), mallocng.footprint(c, A, app(s, "blocks")))
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: A in mallocng.Abs
+  assume hr: mallocng.rep(c, A, s)
+  assume hg: mallocng.agree(c, s, t)
+  fix x
+  assume ho: x in omega
+  assume hx: x in mallocng.footprint(c, A, app(s, "blocks"))
+  have eqs := mp(mp(mp(mp(mp(mp(mallocng.agree_fp[c := c, s := s, t := t, A := A, x := x], hs), ha), hr), hg), ho), hx)
+  have eb: app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)) = app(app(app(s, "vm"), "bytes"), bits_of_nat(64, x)) by taut(eqs)
+  have ep: app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) by taut(eqs)
+  have q0 := refl({some(pair(app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)), app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))))})
+  have q1 := subst({z. some(pair(app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)), app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)))) =
+                       some(pair(z, app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))))}, eb, q0)
+  have q2 := subst({z. some(pair(app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)), app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)))) =
+                       some(pair(app(app(app(s, "vm"), "bytes"), bits_of_nat(64, x)), z))}, ep, q1)
+  have ic := mp(ite_cong[c := x in mallocng.footprint(c, A, app(s, "blocks")),
+                         a := some(pair(app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)), app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)))),
+                         b := some(pair(app(app(app(s, "vm"), "bytes"), bits_of_nat(64, x)), app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)))),
+                         e := none], discharge(q2, hx))
+  have pw := gen(discharge(ic, ho), x)
+  have ext := mp(fn_build_ext[d := omega,
+     f := y. ite(y in mallocng.footprint(c, A, app(s, "blocks")), some(pair(app(app(app(t, "vm"), "bytes"), bits_of_nat(64, y)), app(app(app(t, "vm"), "pages"), nat_div(y, x86_64_linux.PAGE)))), none),
+     g := y. ite(y in mallocng.footprint(c, A, app(s, "blocks")), some(pair(app(app(app(s, "vm"), "bytes"), bits_of_nat(64, y)), app(app(app(s, "vm"), "pages"), nat_div(y, x86_64_linux.PAGE)))), none)], pw)
+  show mallocng.mview(app(t, "vm"), mallocng.footprint(c, A, app(s, "blocks"))) =
+       mallocng.mview(app(s, "vm"), mallocng.footprint(c, A, app(s, "blocks"))) by defs(ext, mallocng.mview)
+qed
+
+// the representation carries over to a state that agrees on the footprint
+theorem mallocng.rep_frame(c, A, s, t):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) ->
+    app(t, "blocks") = app(s, "blocks") -> app(app(t, "vm"), "brk") = app(app(s, "vm"), "brk") ->
+    mallocng.agree(c, s, t) -> (all x. x in omega -> x in malloc.live(s) ->
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))) -> mallocng.rep(c, A, t)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: A in mallocng.Abs
+  assume hr: mallocng.rep(c, A, s)
+  assume hb: app(t, "blocks") = app(s, "blocks")
+  assume hk: app(app(t, "vm"), "brk") = app(app(s, "vm"), "brk")
+  assume hg: mallocng.agree(c, s, t)
+  assume hl: all x. x in omega -> x in malloc.live(s) ->
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))
+  have ve := mp(mp(mp(mp(mallocng.view_eq[c := c, s := s, t := t, A := A], hs), ha), hr), hg)
+  have rs := expand(hr, mallocng.rep)
+  have H: mallocng.holds(c, A, mallocng.mview(app(s, "vm"), mallocng.footprint(c, A, app(s, "blocks"))), app(s, "blocks"), app(app(s, "vm"), "brk"))
+    by taut(rs)
+  have H3 := rewrite(sym(hk), rewrite(sym(hb), rewrite(sym(ve), H)))
+  // the footprint stays mapped: its pages are unchanged
+  have FM: mallocng.fp_mapped(mallocng.fp_ranges(c, A), app(s, "blocks"), app(s, "vm")) by taut(rs)
+  fix k
+  fix x
+  assume hko: k in omega && x in omega
+  assume hp: ((nat_lt(k, seq_len(mallocng.fp_ranges(c, A))) && nat_le(fst(app(mallocng.fp_ranges(c, A), k)), x)) &&
+      nat_lt(x, nat_add(fst(app(mallocng.fp_ranges(c, A), k)), snd(app(mallocng.fp_ranges(c, A), k))))) && !(x in malloc.live_of(app(t, "blocks")))
+  have hp2 := rewrite(hb, hp)
+  have ms := mp(mp(all_elim(all_elim(expand(FM, mallocng.fp_mapped), {k}), {x}), hko), hp2)
+  have kin: k in omega by taut(hko)
+  have ho: x in omega by taut(hko)
+  have klt: nat_lt(k, seq_len(mallocng.fp_ranges(c, A))) by taut(hp)
+  have irk: mallocng.in_range(x, app(mallocng.fp_ranges(c, A), k)) by defs(taut(hp), mallocng.in_range)
+  have ir: mallocng.in_ranges(x, mallocng.fp_ranges(c, A)) by defs(ex_intro({k}, taut(kin, klt, irk)), mallocng.in_ranges)
+  have nl: !(x in malloc.live_of(app(s, "blocks"))) by taut(hp2)
+  have hx: x in mallocng.footprint(c, A, app(s, "blocks")) by defs(sel(taut(ho, ir, nl)), mallocng.footprint, mallocng.fp_set)
+  have eqs := mp(mp(mp(mp(mp(mp(mallocng.agree_fp[c := c, s := s, t := t, A := A, x := x], hs), ha), hr), hg), ho), hx)
+  have ep: app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) by taut(eqs)
+  have mt: x86_64_linux.mapped(app(t, "vm"), nat_div(x, x86_64_linux.PAGE))
+    by defs(rewrite(sym(ep), expand(ms, x86_64_linux.mapped)), x86_64_linux.mapped)
+  have MT: mallocng.fp_mapped(mallocng.fp_ranges(c, A), app(t, "blocks"), app(t, "vm"))
+    by defs(gen(gen(discharge(discharge(mt, hp), hko), x), k), mallocng.fp_mapped)
+  // live blocks stay read-write: their pages are unchanged
+  have LS: malloc.live_rw(s) by taut(rs)
+  fix p
+  assume hp8: p in bits(64)
+  assume hn: !(app(app(t, "blocks"), p) = none)
+  fix y
+  assume hy: y in omega
+  assume hr2: nat_le(p, y) && nat_lt(y, nat_add(p, snd(app(app(t, "blocks"), p))))
+  have hn2 := rewrite(hb, hn)
+  have hr3 := rewrite(hb, hr2)
+  have rs_y := mp(mp(all_elim(mp(mp(all_elim(expand(LS, malloc.live_rw), {p}), hp8), hn2), {y}), hy), hr3)
+  have yr: y in malloc.range(p, snd(app(app(s, "blocks"), p))) by defs(sel(taut(hy, hr3)), malloc.range)
+  have ey: ex q. q in bits(64) && (!(app(app(s, "blocks"), q) = none) && y in malloc.range(q, snd(app(app(s, "blocks"), q))))
+    by ex_intro({p}, taut(hp8, hn2, yr))
+  have yl: y in malloc.live(s) by defs(sel(taut(hy, ey)), malloc.live, malloc.live_of)
+  have pe := mp(mp(all_elim(hl, {y}), hy), yl)
+  have rt_y: malloc.rw_mapped(app(t, "vm"), y)
+    by defs(rewrite(sym(pe), expand(rs_y, malloc.rw_mapped, x86_64_linux.mapped)), malloc.rw_mapped, x86_64_linux.mapped)
+  have LT: malloc.live_rw(t)
+    by defs(gen(discharge(discharge(gen(discharge(discharge(rt_y, hr2), hy), y), hn), hp8), p), malloc.live_rw)
+  show mallocng.rep(c, A, t) by defs(taut(H3, MT, LT), mallocng.rep)
+qed
+
+// with a unique representation, what t owns s owned
+theorem mallocng.owned_sub(c, s, t, A, a):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> t in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs ->
+    mallocng.rep(c, A, s) -> mallocng.rep(c, A, t) -> app(t, "blocks") = app(s, "blocks") ->
+    a in mallocng.owned_of(c, t) -> a in mallocng.owned_of(c, s)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ht: t in rec_and(abi.World, malloc.Heap.ghost)
+  assume ha: A in mallocng.Abs
+  assume hrs: mallocng.rep(c, A, s)
+  assume hrt: mallocng.rep(c, A, t)
+  assume hb: app(t, "blocks") = app(s, "blocks")
+  assume ho: a in mallocng.owned_of(c, t)
+  have u := unsel(expand(ho, mallocng.owned_of))
+  have ao: a in omega by taut(u)
+  have e: ex B. B in mallocng.Abs && (mallocng.rep(c, B, t) && a in mallocng.footprint(c, B, app(t, "blocks"))) by taut(u)
+  obtain B, hB from e
+  have hBa: B in mallocng.Abs by taut(hB)
+  have hBr: mallocng.rep(c, B, t) by taut(hB)
+  have hBf: a in mallocng.footprint(c, B, app(t, "blocks")) by taut(hB)
+  have eq := mp(mp(mp(mp(mp(mallocng.abs_unique[c := c, s := t, A := B, B := A], ht), hBa), ha), hBr), hrt)
+  have f2 := rewrite(hb, rewrite(eq, hBf))
+  have e2: ex B. B in mallocng.Abs && (mallocng.rep(c, B, s) && a in mallocng.footprint(c, B, app(s, "blocks")))
+    by ex_intro({A}, taut(ha, hrs, f2))
+  show a in mallocng.owned_of(c, s) by defs(sel(taut(ao, e2)), mallocng.owned_of)
+qed
+
+theorem mallocng.frame_pt(c, s, t):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> t in rec_and(abi.World, malloc.Heap.ghost) -> s in mallocng.inv(c) ->
+    app(t, "blocks") = app(s, "blocks") -> app(app(t, "vm"), "brk") = app(app(s, "vm"), "brk") ->
+    mallocng.agree(c, s, t) -> (all x. x in omega -> x in malloc.live(s) ->
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))) ->
+    t in mallocng.inv(c) && app(mallocng.owned(c), t) = app(mallocng.owned(c), s)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume ht: t in rec_and(abi.World, malloc.Heap.ghost)
+  assume hi: s in mallocng.inv(c)
+  assume hb: app(t, "blocks") = app(s, "blocks")
+  assume hk: app(app(t, "vm"), "brk") = app(app(s, "vm"), "brk")
+  assume hg: mallocng.agree(c, s, t)
+  assume hl: all x. x in omega -> x in malloc.live(s) ->
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE))
+  obtain A, hA from mp(mallocng.inv_rep[c := c, s := s], hi)
+  have ha: A in mallocng.Abs by taut(hA)
+  have hr: mallocng.rep(c, A, s) by taut(hA)
+  have rt := mp(mp(mp(mp(mp(mp(mp(mallocng.rep_frame[c := c, A := A, s := s, t := t], hs), ha), hr), hb), hk), hg), hl)
+  have ti := mp(mp(mp(mallocng.inv_intro[c := c, s := t, A := A], ht), ha), rt)
+  fix a
+  have d1 := mp(mp(mp(mp(mp(mp(mallocng.owned_sub[c := c, s := s, t := t, A := A, a := a], hs), ht), ha), hr), rt), hb)
+  have d2 := mp(mp(mp(mp(mp(mp(mallocng.owned_sub[c := c, s := t, t := s, A := A, a := a], ht), hs), ha), rt), hr), sym(hb))
+  have ie: a in mallocng.owned_of(c, t) <-> a in mallocng.owned_of(c, s) by taut(d1, d2)
+  have oe := mp(set_ext[a := mallocng.owned_of(c, t), b := mallocng.owned_of(c, s)], gen(ie, a))
+  have oe2 := trans(trans(mp(mallocng.owned_app[c := c, s := t], ht), oe), sym(mp(mallocng.owned_app[c := c, s := s], hs)))
+  show t in mallocng.inv(c) && app(mallocng.owned(c), t) = app(mallocng.owned(c), s) by taut(ti, oe2)
+qed
+
+theorem mallocng.law_frame(c): malloc.frame(mallocng.inv(c), mallocng.owned(c))
+proof
+  fix s
+  fix t
+  assume h1: s in rec_and(abi.World, malloc.Heap.ghost) && t in rec_and(abi.World, malloc.Heap.ghost)
+  assume h2: (((s in mallocng.inv(c) && app(t, "blocks") = app(s, "blocks")) && app(app(t, "vm"), "brk") = app(app(s, "vm"), "brk")) &&
+    (all x. x in omega -> x in app(mallocng.owned(c), s) ->
+       app(app(app(t, "vm"), "bytes"), bits_of_nat(64, x)) = app(app(app(s, "vm"), "bytes"), bits_of_nat(64, x)) &&
+       app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)))) &&
+    (all x. x in omega -> x in malloc.live(s) ->
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)))
+  have hs: s in rec_and(abi.World, malloc.Heap.ghost) by taut(h1)
+  have ht: t in rec_and(abi.World, malloc.Heap.ghost) by taut(h1)
+  have hi: s in mallocng.inv(c) by taut(h2)
+  have hb: app(t, "blocks") = app(s, "blocks") by taut(h2)
+  have hk: app(app(t, "vm"), "brk") = app(app(s, "vm"), "brk") by taut(h2)
+  have hg: mallocng.agree(c, s, t) by defs(taut(h2), mallocng.agree)
+  have hl: all x. x in omega -> x in malloc.live(s) ->
+      app(app(app(t, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), nat_div(x, x86_64_linux.PAGE)) by taut(h2)
+  have r := mp(mp(mp(mp(mp(mp(mp(mallocng.frame_pt[c := c, s := s, t := t], hs), ht), hi), hb), hk), hg), hl)
+  have g := gen(gen(discharge(discharge(r, h2), h1), t), s)
+  show malloc.frame(mallocng.inv(c), mallocng.owned(c)) by defs(g, malloc.frame)
+qed

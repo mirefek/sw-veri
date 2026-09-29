@@ -1,0 +1,297 @@
+// Background theory for SL.
+//
+// Axioms: classical second-order logic with Hilbert choice, set theory with a
+// hierarchy of Grothendieck universes, and a bridge between the kernel's
+// numeric literals and von Neumann naturals. Everything after the axioms is
+// a (conservative) definition.
+//
+// Conventions for SL values:
+//   bool      = the propositions false / true (a bool value *is* a proposition)
+//   nat       = von Neumann naturals (omega); literals denote them
+//   int       = nat for n >= 0, pair(1, n) for -n
+//   bits[n]   = naturals below 2^n
+//   tuples    = nested pairs, unit = empty
+//   records   = functions from field-name strings to values
+//   sums      = tag(i, payload); enums = their numeric value
+//   Seq[T]    = functions from n in omega, or from omega, to T
+//   programs  = sets of pairs (state, outcome)
+
+// =====================================================================
+//  Propositional logic
+
+const false
+def not(a) := a -> false
+def true := not(false)
+def or(a, b) := not(a) -> b
+def and(a, b) := not(or(not(a), not(b)))
+def iff(a, b) := and(a -> b, b -> a)
+
+axiom imp_weaken(a, b): a -> b -> a
+axiom imp_chain(a, b, c): (a -> b -> c) -> (a -> b) -> a -> c
+axiom false_elim(a): false -> a
+
+// =====================================================================
+//  Equality; classical logic (propositions are exactly false and true)
+
+def ne(a, b) := !(a = b)
+axiom eq_refl(a): a = a
+axiom eq_subst(a, b, x. p): a = b -> p(a) -> p(b)
+
+def is_prop(a) := a = false || a = true
+axiom imp_prop(a, b): is_prop(a -> b)
+axiom eq_prop(a, b): is_prop(a = b)
+
+// =====================================================================
+//  Quantifiers and choice
+
+const ex(x. p)
+const choose(x. p)
+axiom ex_prop(x. p): is_prop(ex x. p(x))
+axiom ex_intro(a, x. p): p(a) -> (ex x. p(x))
+axiom choose_spec(x. p): (ex x. p(x)) -> p(choose(x. p(x)))
+def all(x. p) := !(ex x. !p(x))
+axiom choose_ext(x. p, x. q): (all x. p(x) <-> q(x)) -> choose(x. p(x)) = choose(x. q(x))
+
+def ite(c, a, b) := choose(x. (c && x = a) || (!c && x = b))
+def letin(a, x. f) := f(a)
+
+// =====================================================================
+//  Sets
+
+const in(a, b)
+const set_select(s, x. p)       // {x in s | p(x)}
+const set_image(s, x. f)        // {f(x) | x in s}
+const powerset(s)
+const union(s)
+const univ(u)
+
+axiom in_prop(a, b): is_prop(a in b)
+def subset(a, b) := all x. x in a -> x in b
+axiom set_ext(a, b): (all x. x in a <-> x in b) -> a = b
+axiom set_select_def(s, x. p, z): z in set_select(s, x. p(x)) <-> z in s && p(z)
+axiom set_image_def(s, x. f, y): y in set_image(s, x. f(x)) <-> (ex x. x in s && f(x) = y)
+axiom powerset_def(s, a): a in powerset(s) <-> subset(a, s)
+axiom union_def(s, a): a in union(s) <-> (ex y. a in y && y in s)
+axiom regularity(s): (ex x. x in s) -> (ex x. x in s && !(ex y. y in x && y in s))
+
+def empty := set_select(false, x. false)
+def upair(a, b) := set_image(powerset(powerset(empty)), x. ite(x = empty, a, b))
+def single(a) := upair(a, a)
+def union2(a, b) := union(upair(a, b))
+def inter2(a, b) := set_select(a, x. x in b)
+def diff(a, b) := set_select(a, x. !(x in b))
+def insert(a, s) := union2(single(a), s)
+def succ(n) := union2(n, single(n))
+
+// universes: transitive, closed under subsets, replacement, powerset, union
+axiom univ_trans(u, a, b): b in univ(u) -> a in b -> a in univ(u)
+axiom univ_subset(u, a, b): b in univ(u) -> subset(a, b) -> a in univ(u)
+axiom univ_image(u, s, x. f): s in univ(u) -> (all x. x in s -> f(x) in univ(u)) -> set_image(s, x. f(x)) in univ(u)
+axiom univ_powerset(u, s): s in univ(u) -> powerset(s) in univ(u)
+axiom univ_union(u, s): s in univ(u) -> union(s) in univ(u)
+axiom univ_empty(u): empty in univ(u)
+axiom univ_chain(u): is_nat(u) -> univ(u) in univ(lit_add(u, 1))
+
+// infinity
+const omega
+axiom omega_zero: empty in omega
+axiom omega_succ(n): n in omega -> succ(n) in omega
+axiom omega_ind(s): empty in s -> (all n. n in s -> succ(n) in s) -> subset(omega, s)
+axiom omega_univ: omega in univ(1)
+
+// =====================================================================
+//  Pairs and functions
+
+def pair(a, b) := upair(single(a), upair(a, b))
+def fst(p) := choose(a. ex b. p = pair(a, b))
+def snd(p) := choose(b. ex a. p = pair(a, b))
+def cart(a, b) := union(set_image(a, x. set_image(b, y. pair(x, y))))
+
+def is_fun(f) := (all z. z in f -> (ex a b. z = pair(a, b))) &&
+                 (all a b c. pair(a, b) in f -> pair(a, c) in f -> b = c)
+def dom(f) := set_image(f, z. fst(z))
+def app(f, x) := choose(y. pair(x, y) in f)
+def fn_build(d, x. v) := set_image(d, x. pair(x, v(x)))
+def fn_update(f, x, v) := union2(set_select(f, z. fst(z) != x), single(pair(x, v)))
+def fn_space(a, b) := set_select(powerset(cart(a, b)), f. is_fun(f) && dom(f) = a)
+def restrict(f, d) := set_select(f, z. fst(z) in d)
+
+// =====================================================================
+//  Natural numbers
+
+def nat_lt(a, b) := a in b
+def nat_le(a, b) := a in b || a = b
+def nat_rec(z, k v. s, n) :=
+  app(choose(f. is_fun(f) && dom(f) = omega && app(f, empty) = z &&
+               (all k. k in omega -> app(f, succ(k)) = s(k, app(f, k)))), n)
+def nat_add(a, b) := nat_rec(a, k v. succ(v), b)
+def nat_mul(a, b) := nat_rec(empty, k v. nat_add(v, a), b)
+def nat_pow(a, b) := nat_rec(succ(empty), k v. nat_mul(v, a), b)
+def nat_sub(a, b) := choose(c. c in omega && nat_add(b, c) = a)
+def nat_div(a, b) := choose(q. q in omega && (ex r. r in b && nat_add(nat_mul(b, q), r) = a))
+def nat_mod(a, b) := choose(r. r in b && (ex q. q in omega && nat_add(nat_mul(b, q), r) = a))
+def nat_min(s) := choose(m. m in s && (all x. x in s -> nat_le(m, x)))
+def nat_max(s) := choose(m. m in s && (all x. x in s -> nat_le(x, m)))
+def nat_sum(a, b, i. f) := nat_rec(empty, k v. nat_add(v, f(nat_add(a, k))), nat_sub(b, a))
+def natinf := succ(omega)            // nat extended by omega (= infinity)
+def nat_range(a, b) := set_select(omega, i. nat_le(a, i) && i in b)
+
+// literals are von Neumann naturals
+axiom lit_zero: 0 = empty
+axiom lit_succ(n): is_nat(n) -> lit_add(n, 1) = succ(n)
+axiom lit_nat(n): is_nat(n) -> n in omega
+axiom lit_lt_def(a, b): is_nat(a) -> is_nat(b) -> (lit_lt(a, b) <-> a in b)
+axiom lit_add_def(a, b): is_nat(a) -> is_nat(b) -> lit_add(a, b) = nat_add(a, b)
+axiom lit_mul_def(a, b): is_nat(a) -> is_nat(b) -> lit_mul(a, b) = nat_mul(a, b)
+axiom lit_sub_def(a, b): is_nat(a) -> is_nat(b) -> !(a in b) -> lit_sub(a, b) = nat_sub(a, b)
+axiom lit_div_def(a, b): is_nat(a) -> is_nat(b) -> b != 0 -> lit_div(a, b) = nat_div(a, b)
+axiom lit_mod_def(a, b): is_nat(a) -> is_nat(b) -> b != 0 -> lit_mod(a, b) = nat_mod(a, b)
+
+// =====================================================================
+//  Integers
+
+def int := union2(omega, set_image(set_select(omega, n. n != empty), n. pair(1, n)))
+def int_isneg(a) := !(a in omega)
+def int_mag(a) := ite(a in omega, a, snd(a))
+def int_neg(a) := ite(a in omega, ite(a = empty, empty, pair(1, a)), snd(a))
+def int_nat_sub(a, b) := ite(nat_le(b, a), nat_sub(a, b), int_neg(nat_sub(b, a)))
+def int_add(a, b) :=
+  ite(int_isneg(a),
+      ite(int_isneg(b), int_neg(nat_add(int_mag(a), int_mag(b))), int_nat_sub(b, int_mag(a))),
+      ite(int_isneg(b), int_nat_sub(a, int_mag(b)), nat_add(a, b)))
+def int_sub(a, b) := int_add(a, int_neg(b))
+def int_mul(a, b) :=
+  ite(int_isneg(a) <-> int_isneg(b), nat_mul(int_mag(a), int_mag(b)), int_neg(nat_mul(int_mag(a), int_mag(b))))
+def int_lt(a, b) :=
+  ite(int_isneg(a), ite(int_isneg(b), int_mag(b) in int_mag(a), true), ite(int_isneg(b), false, a in b))
+def int_le(a, b) := int_lt(a, b) || a = b
+// Euclidean division: a = b*q + r with 0 <= r < |b|
+def int_div(a, b) := choose(q. q in int && (ex r. r in int_mag(b) && a = int_add(int_mul(b, q), r)))
+def int_mod(a, b) := choose(r. r in int_mag(b) && (ex q. q in int && a = int_add(int_mul(b, q), r)))
+
+// =====================================================================
+//  Bit vectors: bits[n] = naturals below 2^n
+
+def pow2(n) := nat_pow(2, n)
+def bits(n) := set_select(omega, x. x in pow2(n))
+def bit(x, i) := nat_mod(nat_div(x, pow2(i)), 2) = 1
+def bits_build(n, i. p) := choose(x. x in bits(n) && (all i. i in n -> (bit(x, i) <-> p(i))))
+def bits_of_nat(n, x) := nat_mod(x, pow2(n))
+def bits_of_int(n, z) := int_mod(z, pow2(n))
+def sint(n, a) := ite(a in pow2(nat_sub(n, 1)), a, int_nat_sub(a, pow2(n)))
+def bits_add(n, a, b) := nat_mod(nat_add(a, b), pow2(n))
+def bits_sub(n, a, b) := nat_mod(nat_sub(nat_add(a, pow2(n)), nat_mod(b, pow2(n))), pow2(n))
+def bits_neg(n, a) := bits_sub(n, 0, a)
+def bits_mul(n, a, b) := nat_mod(nat_mul(a, b), pow2(n))
+def bits_not(n, a) := bits_build(n, i. !bit(a, i))
+def bits_and(n, a, b) := bits_build(n, i. bit(a, i) && bit(b, i))
+def bits_or(n, a, b) := bits_build(n, i. bit(a, i) || bit(b, i))
+def bits_xor(n, a, b) := bits_build(n, i. !(bit(a, i) <-> bit(b, i)))
+def bits_shl(n, a, k) := nat_mod(nat_mul(a, pow2(k)), pow2(n))
+def bits_shr(n, a, k) := nat_div(a, pow2(k))
+def bits_sar(n, a, k) := bits_of_int(n, int_div(sint(n, a), pow2(k)))
+def bits_slice(x, hi, lo) := nat_mod(nat_div(x, pow2(lo)), pow2(nat_sub(succ(hi), lo)))
+def bits_set_slice(n, x, hi, lo, v) :=
+  bits_build(n, i. ite(nat_le(lo, i) && nat_le(i, hi), bit(v, nat_sub(i, lo)), bit(x, i)))
+def bits_set_bit(n, x, i, b) := bits_build(n, j. ite(j = i, b, bit(x, j)))
+def bits_sext(m, n, x) := bits_of_int(n, sint(m, x))
+def bits_concat_le(b, a, n) := nat_sum(0, n, i. nat_mul(app(b, bits_add(64, a, i)), nat_pow(256, i)))
+
+// =====================================================================
+//  Tagged values, options, records
+
+def tag(k, v) := pair(k, v)
+def none := tag(0, empty)
+def some(x) := tag(1, x)
+def option(t) := union2(single(none), set_image(t, x. some(x)))
+def bool := upair(false, true)
+def rec_merge(a, b) := union2(a, b)
+// records of `a` extended by fields of records of `b`
+def rec_and(a, b) := set_image(cart(a, b), z. union2(fst(z), snd(z)))
+// the fields of `r` whose names are not in `keys`
+def ghost_part(r, keys) := set_select(r, z. !(fst(z) in keys))
+
+// =====================================================================
+//  Sequences: functions on an initial segment of omega (possibly omega)
+
+def is_seq(s) := is_fun(s) && (dom(s) in omega || dom(s) = omega)
+def seq_type(t) := set_select(powerset(cart(omega, t)), s. is_seq(s))
+def list_type(t) := set_select(seq_type(t), s. dom(s) in omega)
+def set_type(t) := powerset(t)
+def seq_len(s) := dom(s)
+def seq_append(s, x) := union2(s, single(pair(dom(s), x)))
+def seq_concat(a, b) := union2(a, set_image(b, z. pair(nat_add(dom(a), fst(z)), snd(z))))
+def seq_take(s, k) := set_select(s, z. fst(z) in k)
+def seq_drop(s, k) := set_image(set_select(s, z. !(fst(z) in k)), z. pair(nat_sub(fst(z), k), snd(z)))
+def seq_slice(s, a, b) := seq_take(seq_drop(s, a), nat_sub(b, a))
+def seq_map(s, x. f) := set_image(s, z. pair(fst(z), f(snd(z))))
+// the subsequence of elements satisfying p, in order
+def seq_filter(s, x. p) :=
+  choose(u. is_seq(u) &&
+    (ex g. is_fun(g) && dom(g) = dom(u) &&
+       (all j k. j in dom(u) -> k in j -> app(g, k) in app(g, j)) &&
+       set_image(dom(u), j. app(g, j)) = set_select(dom(s), i. p(app(s, i))) &&
+       (all j. j in dom(u) -> app(u, j) = app(s, app(g, j)))))
+def seq_prefix_concat(ss, n) := nat_rec(empty, k v. seq_concat(v, app(ss, k)), n)
+def seq_flatten(ss) := union(set_image(set_select(succ(dom(ss)), n. n in omega), n. seq_prefix_concat(ss, n)))
+// sum over a (possibly infinite) sequence, in natinf
+def seq_sum(s, x. f) :=
+  union(set_image(set_select(succ(dom(s)), n. n in omega), n. nat_rec(empty, k v. nat_add(v, f(app(s, k))), n)))
+// `l` lists the elements of the finite set `s`, each once
+def set_enum(l, s) := is_seq(l) && dom(l) in omega && set_image(dom(l), i. app(l, i)) = s &&
+  (all i j. i in dom(l) -> j in dom(l) -> app(l, i) = app(l, j) -> i = j)
+def bytes_seq(b) := fn_build(bytes_len(b), i. bytes_at(b, i))
+
+// =====================================================================
+//  Outcomes and programs
+
+def ok(s, v) := tag(0, pair(s, v))
+def exc(s, e) := tag(1, pair(s, e))
+def diverge(t) := tag(2, t)
+def is_ok(o) := ex s v. o = ok(s, v)
+def out_state(o) := fst(snd(o))
+def out_value(o) := snd(snd(o))
+def exc_val(name, args) := pair(name, args)
+
+// a program is the set of its (initial state, outcome) pairs
+def mkprog(s o. r) := set_select(univ(1), z. ex s o. z = pair(s, o) && r(s, o))
+def runs(p, s, o) := pair(s, o) in p
+def refines(p, q) := all s o. runs(p, s, o) -> runs(q, s, o)
+
+// ghost extension: `h` ranges over the ghost part `g` of the richer state
+def with_ghost(o, h) :=
+  ite(ex s v. o = ok(s, v), ok(union2(out_state(o), h), out_value(o)),
+      ite(ex s e. o = exc(s, e), exc(union2(out_state(o), h), out_value(o)), o))
+def refines_ghost(p, q, g) :=
+  all s h o. h in g -> runs(p, s, o) -> (ex h2. h2 in g && runs(q, union2(s, h), with_ghost(o, h2)))
+
+// component-wise limit of an increasing chain of trace records
+def trace_limit(i. t) := fn_build(dom(t(empty)), f. union(set_image(omega, i. app(t(i), f))))
+
+// `while c do b` from loop state `l0`, with outcome `r`:
+// finitely many iterations, or infinitely many (diverging with the limit of
+// the traces `tr` of the loop states).
+def while_rel(l0, l. c, l o. b, l. tr, r) :=
+  (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+     (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+     ((!c(app(f, n)) && r = ok(app(f, n), empty)) ||
+      (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)))) ||
+  (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+     (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+     r = diverge(trace_limit(i. tr(app(f, i)))))
+
+// running `p` from `s`: continue with `k` on normal outcomes, `x` on exceptions, `d` on divergence
+def bind_rel(p, s, s1 v. k, s1 e. x, t. d) :=
+  ex o. runs(p, s, o) &&
+    ((ex s1 v. o = ok(s1, v) && k(s1, v)) || (ex s1 e. o = exc(s1, e) && x(s1, e)) || (ex t. o = diverge(t) && d(t)))
+// nondeterministic choice from `d`; no possible value means undefined (anything)
+def any_rel(x. d, x. k) := !(ex x. d(x)) || (ex x. d(x) && k(x))
+
+// bitwise operations on naturals
+def nat_bits(i. p) := choose(c. c in omega && (all i. i in omega -> (bit(c, i) <-> p(i))))
+def nat_or(a, b) := nat_bits(i. bit(a, i) || bit(b, i))
+def nat_and(a, b) := nat_bits(i. bit(a, i) && bit(b, i))
+
+def outcome_type(s, v) :=
+  union2(set_image(cart(s, v), z. ok(fst(z), snd(z))),
+         union2(set_image(cart(s, univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t. diverge(t))))

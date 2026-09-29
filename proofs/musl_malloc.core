@@ -1,0 +1,79 @@
+// The top of the proof of `musl_malloc` (docs/proof-plan.md, section 2).
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core build/musl_malloc.core \
+//     proofs/mallocng.core proofs/musl_malloc.core
+//
+// The claim is proven from the open lemmas below; each is proven later, in
+// its own file, with `theorem NAME proof ... qed`. `slc kernel-check`
+// prints what is still open.
+
+// ----------------------------------------------------------------------
+//  The witnesses: mallocng's invariant and the memory it owns
+//  (layers/mallocng.sl), for this binary
+
+def musl.cfg := fn_update(fn_update(fn_update(fn_update(empty,
+  "file", musl_malloc.file), "ctx", musl_malloc.at.__malloc_context),
+  "lock", musl_malloc.at.__malloc_lock), "libc", musl_malloc.at.__libc)
+def musl.inv := mallocng.inv(musl.cfg)
+def musl.owned := mallocng.owned(musl.cfg)
+
+// ----------------------------------------------------------------------
+//  The laws (proofs/mallocng.core; frame rests on mallocng.abs_unique)
+
+theorem musl.inv_wf: malloc.inv_wf(musl.inv)
+proof
+  show by defs(mallocng.law_inv_wf[c := musl.cfg], musl.inv)
+qed
+
+theorem musl.owned_private: malloc.owned_private(musl.inv, musl.owned)
+proof
+  show by defs(mallocng.law_owned_private[c := musl.cfg], musl.inv, musl.owned)
+qed
+
+theorem musl.owned_mapped: malloc.owned_mapped(musl.inv, musl.owned)
+proof
+  show by defs(mallocng.law_owned_mapped[c := musl.cfg], musl.inv, musl.owned)
+qed
+
+theorem musl.frame: malloc.frame(musl.inv, musl.owned)
+proof
+  show by defs(mallocng.law_frame[c := musl.cfg], musl.inv, musl.owned)
+qed
+
+// ----------------------------------------------------------------------
+//  Open lemmas
+
+// startup: from process start to `main`, the invariant is established
+lemma musl.init:
+  claim_malloc.init_at_main(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.file, musl_malloc.main_at, musl_malloc.static)
+
+// the machine code at malloc, free and calloc implements their specs; each
+// to be proven from the function lemmas of the call graph
+lemma musl.impl_malloc:
+  abi.implements(malloc.Heap.ghost, musl_malloc.malloc_at, malloc.malloc_fun(musl.inv, musl.owned, musl_malloc.errno_offset))
+lemma musl.impl_free:
+  abi.implements(malloc.Heap.ghost, musl_malloc.free_at, malloc.free_fun(musl.inv, musl.owned, musl_malloc.errno_offset))
+lemma musl.impl_calloc:
+  abi.implements(malloc.Heap.ghost, musl_malloc.calloc_at, malloc.calloc_fun(musl.inv, musl.owned, musl_malloc.errno_offset))
+
+// ----------------------------------------------------------------------
+//  The claim from the lemmas
+
+theorem musl.allocator_correct:
+  malloc.allocator_correct(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.malloc_at, musl_malloc.free_at, musl_malloc.calloc_at)
+proof
+  show by defs(taut(musl.impl_malloc, musl.impl_free, musl.impl_calloc), malloc.allocator_correct)
+qed
+
+theorem musl.allocator_claim:
+  claim_malloc.allocator_claim(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.file, musl_malloc.main_at,
+                               musl_malloc.malloc_at, musl_malloc.free_at, musl_malloc.calloc_at, musl_malloc.static)
+proof
+  show by defs(taut(musl.init, musl.allocator_correct), claim_malloc.allocator_claim)
+qed
+
+theorem musl_malloc
+proof
+  show by ex_intro({musl.inv}, {musl.owned},
+    taut(musl.inv_wf, musl.owned_private, musl.owned_mapped, musl.frame, musl.allocator_claim))
+qed
