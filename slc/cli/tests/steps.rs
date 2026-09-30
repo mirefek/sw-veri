@@ -4,6 +4,27 @@
 use std::path::Path;
 use std::process::Command;
 
+/// The facts about the x86 model (proofs/x86.core) check, among them that
+/// the closed-form memory write means the same as the byte loop.
+#[test]
+fn x86_model_facts_check() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let claim = root.join("build/musl_malloc_O0.core");
+    if !claim.exists() {
+        eprintln!("skipped: run scripts/build-musl.sh -O0 first");
+        return;
+    }
+    let c = Command::new(env!("CARGO_BIN_EXE_slc"))
+        .current_dir(&root)
+        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/records.core"])
+        .arg(&claim)
+        .arg("proofs/x86.core")
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&c.stdout);
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 10 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+}
+
 #[test]
 fn step_theorems_of_get_slot_index_prove() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

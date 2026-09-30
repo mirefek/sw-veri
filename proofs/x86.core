@@ -1,11 +1,12 @@
 // Facts about the x86-64 model (spec/x86_64), for any binary: used with
 // the generated step theorems (`slc steps`) to run instructions.
 //
-//   slc kernel-check core/prelude.core core/logic.core core/sets.core \
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/records.core \
 //     build/musl_malloc_O0.core proofs/x86.core
 //
 // (The model's definitions come with a claim file; `exec` is the access
-// kind 2.)
+// kind 2, `write` 1.) Also: that refactorings of the model mean the same as
+// before (`x86.store_bytes_closed`).
 
 // fetching a byte whose page is mapped and executable changes nothing
 theorem x86.touch_fetch: all m a o. x86_64_linux.fetchable(app(m, "vm"), a) -> runs(x86_64_linux.touch(a, 2), m, o) -> o = ok(m, empty)
@@ -103,4 +104,115 @@ proof
   have nlt: !nat_lt(bits_sub(64, c, a), n) by taut(nlt0)
   have f := mp(ite_f[c := nat_lt(bits_sub(64, c, a), n), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, c, a)))), b := app(b, c)], nlt)
   show by defs(taut(trans(e1, f)), x86_64_linux.store_le)
+qed
+// storing byte i after bytes 0..i-1 is storing bytes 0..i
+theorem x86.store_step: all b a i v. a in bits(64) -> i in omega -> nat_lt(i, 18446744073709551616) ->
+  fn_update(x86_64_linux.store_le(b, a, i, v), bits_add(64, a, bits_of_nat(64, i)), bits_of_nat(8, nat_div(v, nat_pow(256, i)))) = x86_64_linux.store_le(b, a, nat_add(i, 1), v)
+proof
+  fix b
+  fix a
+  fix i
+  fix v
+  assume ha: a in bits(64)
+  assume hi: i in omega
+  assume hm: nat_lt(i, 18446744073709551616)
+  have kb: bits_add(64, a, bits_of_nat(64, i)) in bits(64) by defs(simp(ha, hi, hm), bits_add, bits_of_nat, pow2)
+  have dk: bits_sub(64, bits_add(64, a, bits_of_nat(64, i)), a) = i by defs(simp(ha, hi, hm), bits_add, bits_sub, bits_of_nat, pow2)
+  have lt1: nat_lt(i, nat_add(i, 1)) by arith(hi)
+  have gk0 := mp(ite_t[c := nat_lt(i, nat_add(i, 1)), a := bits_of_nat(8, nat_div(v, nat_pow(256, i))), b := app(b, bits_add(64, a, bits_of_nat(64, i)))], lt1)
+  have gk: ite(nat_lt(bits_sub(64, bits_add(64, a, bits_of_nat(64, i)), a), nat_add(i, 1)), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, bits_add(64, a, bits_of_nat(64, i)), a)))), app(b, bits_add(64, a, bits_of_nat(64, i)))) = bits_of_nat(8, nat_div(v, nat_pow(256, i))) by simp(dk, gk0)
+  have others: all x. x in bits(64) -> !(x = bits_add(64, a, bits_of_nat(64, i))) -> ite(nat_lt(bits_sub(64, x, a), nat_add(i, 1)), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) = ite(nat_lt(bits_sub(64, x, a), i), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+    fix x
+    assume xb: x in bits(64)
+    assume xk: !(x = bits_add(64, a, bits_of_nat(64, i)))
+    have db: bits_sub(64, x, a) in omega by defs(simp(xb, ha), bits_sub, pow2)
+    have back := mp(mp(x86.bits_add_sub[a := a, c := x], xb), ha)
+    have ne0: bits_sub(64, x, a) = i -> false proof
+      assume e: bits_sub(64, x, a) = i
+      show by taut(sym(rewrite(e, back)), xk)
+    qed
+    have nei: !(bits_sub(64, x, a) = i) by taut(ne0)
+    have c1: nat_lt(bits_sub(64, x, a), i) -> ite(nat_lt(bits_sub(64, x, a), nat_add(i, 1)), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) = ite(nat_lt(bits_sub(64, x, a), i), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+      assume l: nat_lt(bits_sub(64, x, a), i)
+      have l2: nat_lt(bits_sub(64, x, a), nat_add(i, 1)) by arith(l, db, hi)
+      have t1 := mp(ite_t[c := nat_lt(bits_sub(64, x, a), nat_add(i, 1)), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l2)
+      have t2 := mp(ite_t[c := nat_lt(bits_sub(64, x, a), i), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l)
+      show by taut(trans(t1, sym(t2)))
+    qed
+    have c2: !nat_lt(bits_sub(64, x, a), i) -> ite(nat_lt(bits_sub(64, x, a), nat_add(i, 1)), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) = ite(nat_lt(bits_sub(64, x, a), i), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+      assume l: !nat_lt(bits_sub(64, x, a), i)
+      have l2: !nat_lt(bits_sub(64, x, a), nat_add(i, 1)) by arith(l, db, hi, nei)
+      have t1 := mp(ite_f[c := nat_lt(bits_sub(64, x, a), nat_add(i, 1)), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l2)
+      have t2 := mp(ite_f[c := nat_lt(bits_sub(64, x, a), i), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l)
+      show by taut(trans(t1, sym(t2)))
+    qed
+    show by taut(c1, c2)
+  qed
+  have fu := mp(mp(mp(fn_update_build[d := bits(64), f := x. ite(nat_lt(bits_sub(64, x, a), i), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)), g := x. ite(nat_lt(bits_sub(64, x, a), nat_add(i, 1)), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)), k := bits_add(64, a, bits_of_nat(64, i)), w := bits_of_nat(8, nat_div(v, nat_pow(256, i)))], kb), gk), others)
+  show by defs(taut(fu), x86_64_linux.store_le)
+qed
+
+// storing no bytes changes nothing (memory: a function on 64-bit addresses)
+theorem x86.store_zero: all b a v. is_fun(b) -> dom(b) = bits(64) -> a in bits(64) -> x86_64_linux.store_le(b, a, 0, v) = b
+proof
+  fix b
+  fix a
+  fix v
+  assume hf: is_fun(b)
+  assume hd: dom(b) = bits(64)
+  assume ha: a in bits(64)
+  have pw: all x. x in bits(64) -> ite(nat_lt(bits_sub(64, x, a), 0), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)) = app(b, x) proof
+    fix x
+    assume xb: x in bits(64)
+    have n0: !nat_lt(bits_sub(64, x, a), 0) by defs(simp(xb, ha), bits_sub, pow2)
+    show by taut(mp(ite_f[c := nat_lt(bits_sub(64, x, a), 0), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), b := app(b, x)], n0))
+  qed
+  have ext := mp(fn_build_ext[d := bits(64), f := x. ite(nat_lt(bits_sub(64, x, a), 0), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)), g := x. app(b, x)], pw)
+  have eta := mp(mp(fn_eta[f := b, d := bits(64)], hf), hd)
+  show by defs(taut(trans(ext, eta)), x86_64_linux.store_le)
+qed
+
+// a natural at most q and not below q is q
+theorem x86.le_not_lt: all p q. p in omega -> q in omega -> nat_le(p, q) -> !nat_lt(p, q) -> p = q
+proof
+  fix p
+  fix q
+  assume hp: p in omega
+  assume hq: q in omega
+  assume h1: nat_le(p, q)
+  assume h2: !nat_lt(p, q)
+  show by arith(hp, hq, h1, h2)
+qed
+
+// The closed form of the memory write means the same as the byte loop it
+// replaced (layers/x86_checks.sl), for every store of at most 2^64 bytes
+// (the model stores at most 16) and a machine whose memory is a function
+// on 64-bit addresses.
+theorem x86.store_bytes_closed: all m a n v o. n in omega -> nat_le(n, 18446744073709551616) -> a in bits(64) ->
+  is_fun(app(app(m, "vm"), "bytes")) -> dom(app(app(m, "vm"), "bytes")) = bits(64) ->
+  is_fun(m) -> "vm" in dom(m) -> is_fun(app(m, "vm")) -> "bytes" in dom(app(m, "vm")) ->
+  runs(x86_checks.store_bytes(a, n, v), m, o) -> o = ok(fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, n, v))), empty)
+proof
+  fix m
+  fix a
+  fix n
+  fix v
+  fix o
+  assume hn: n in omega
+  assume hm: nat_le(n, 18446744073709551616)
+  assume ha: a in bits(64)
+  assume hb: is_fun(app(app(m, "vm"), "bytes"))
+  assume hd: dom(app(app(m, "vm"), "bytes")) = bits(64)
+  assume hf: is_fun(m)
+  assume hv: "vm" in dom(m)
+  assume hf2: is_fun(app(m, "vm"))
+  assume hv2: "bytes" in dom(app(m, "vm"))
+  assume h: runs(x86_checks.store_bytes(a, n, v), m, o)
+  // the start: no bytes stored is m itself
+  have z := mp(mp(mp(all_elim(all_elim(all_elim(x86.store_zero, {app(app(m, "vm"), "bytes")}), {a}), {v}), hb), hd), ha)
+  have s1 := mp(mp(fn_update_same[f := app(m, "vm"), k := "bytes"], hf2), hv2)
+  have s2 := mp(mp(fn_update_same[f := m, k := "vm"], hf), hv)
+  have start: fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, 0, v))) = m by taut(trans(rewrite(sym(z), rewrite(sym(s1), s2)), refl({m})))
+  show by simp(h, hn, hm, ha, start, x86.store_step, x86.le_not_lt,
+    {l0 l. snd(l) in omega && nat_le(snd(l), n) && fst(l) = fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, snd(l), v)))}, {l. nat_sub(n, snd(l))})
 qed

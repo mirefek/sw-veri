@@ -1707,13 +1707,31 @@ impl Logic {
                 _ => None,
             };
             let mut substs: Vec<(crate::term::VarId, Term)> = Vec::new();
+            // (t built from constructors: x := t, so the goal computes; t
+            // opaque: t becomes x in the goal, as in the literals)
+            let ctor = |t: &Term| match t.node() {
+                Node::Nat(_) | Node::Bytes(_) => true,
+                Node::App(h, _) => [sp.s.pair, sp.s.tag, sp.s.ok, sp.s.exc, sp.s.diverge, sp.s.fn_update, sp.s.some, sp.s.none].iter().any(|c| is(*h, *c)),
+                _ => false,
+            };
             for &(a, b) in &eqs {
                 for (v, t) in [(a, b), (b, a)] {
                     if let Some(x) = var(v) {
-                        if !has_var(t, x) && has_var(&g, x) {
-                            g = self.simp_eqv(env, &g.subst_var(x, t, &bf));
-                            substs.push((x, t.clone()));
-                            break;
+                        if ctor(t) || var(t).is_some() {
+                            if has_var(t, x) {
+                                continue;
+                            }
+                            if has_var(&g, x) {
+                                g = self.simp_eqv(env, &g.subst_var(x, t, &bf));
+                                substs.push((x, t.clone()));
+                                break;
+                            }
+                        } else {
+                            let body = super::seq::abstract_term(&g, t, 0, &bf);
+                            if body != g {
+                                g = self.simp_eqv(env, &inst_k(env, &body, &[v.clone()]));
+                                break;
+                            }
                         }
                     }
                 }
