@@ -510,12 +510,13 @@ fn members_of_sets_are_evaluated() {
 
 #[test]
 fn loops_can_be_unrolled() {
-    // counting to 3 without an invariant: three iterations, then the exit;
-    // unrolling keeps that each iteration may also start a divergence
-    let src = count_thm("(ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3) || (ex t. o = diverge(t))", ", unroll");
+    // counting to 3 without an invariant: three iterations, then the exit
+    // (a divergence would continue as one from the next iteration, which
+    // runs out when the loop stops)
+    let src = count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", ", unroll");
     assert_eq!(check_nat(&src), Ok(1));
-    match check_nat(&count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", ", unroll")) {
-        Ok(_) => panic!("divergence dropped"),
+    match check_nat(&count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 2", ", unroll")) {
+        Ok(_) => panic!("wrong exit accepted"),
         Err(e) => assert!(e.contains("path"), "{}", e),
     }
 }

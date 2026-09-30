@@ -94,9 +94,37 @@ impl Logic {
     /// core/logic.core does this for `!!a -> a`, following ji-trust's
     /// `not_not_impl`).
     pub fn tautology(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        if premises.contains(goal) {
+            return Ok(());
+        }
+        // only the premises connected to the goal by shared atoms (the others
+        // can be dropped: a weaker implication, still a tautology if shown)
+        let mut premises: Vec<&Term> = premises.iter().collect();
+        if premises.len() > 8 {
+            let atoms_of = |t: &Term| -> KResult<Vec<Term>> {
+                let mut a = Vec::new();
+                self.prop_tree(env, t, &mut a, 0)?;
+                Ok(a)
+            };
+            let mut near = atoms_of(goal)?;
+            let mut rest: Vec<(&Term, Vec<Term>)> = premises.iter().map(|p| Ok((*p, atoms_of(p)?))).collect::<KResult<_>>()?;
+            let mut kept = Vec::new();
+            loop {
+                let (hit, miss): (Vec<_>, Vec<_>) = rest.into_iter().partition(|(_, a)| a.is_empty() || a.iter().any(|x| near.contains(x)));
+                rest = miss;
+                if hit.is_empty() {
+                    break;
+                }
+                for (p, a) in hit {
+                    near.extend(a);
+                    kept.push(p);
+                }
+            }
+            premises = kept;
+        }
         let mut f = goal.clone();
         for p in premises.iter().rev() {
-            f = Term::app(self.imp, vec![p.clone(), f]);
+            f = Term::app(self.imp, vec![(*p).clone(), f]);
         }
         let mut atoms: Vec<Term> = Vec::new();
         let tree = self.prop_tree(env, &f, &mut atoms, 0)?;

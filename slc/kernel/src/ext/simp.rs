@@ -340,6 +340,44 @@ impl<'a> Simp<'a> {
         None
     }
 
+    /// Byte strings: `bytes_len(B)`, `bytes_at(B, i)` (builtins), and a
+    /// literal as a list (`bytes_seq(B) = fn_build(bytes_len(B), i.
+    /// bytes_at(B, i))`): its length `seq_len` (the domain) and its byte at
+    /// a numeral index in range.
+    fn bytes(&self, f: SymId, args: &[Term]) -> Option<Term> {
+        let name = self.env.syms[f as usize].name.as_str();
+        let lit = |t: &Term| -> Option<std::rc::Rc<[u8]>> {
+            match t.node() {
+                Node::Bytes(b) => Some(b.clone()),
+                _ => None,
+            }
+        };
+        let seq = |t: &Term| -> Option<std::rc::Rc<[u8]>> {
+            match t.node() {
+                Node::App(g, b) if self.env.syms[*g as usize].name == "bytes_seq" && b.len() == 1 => lit(&b[0]),
+                _ => None,
+            }
+        };
+        let idx = |t: &Term| match t.node() {
+            Node::Nat(v) => v.to_u64(),
+            _ => None,
+        };
+        let nat = |n: u64| Term::nat(crate::nat::Nat::from_u64(n));
+        match (name, args.len()) {
+            ("bytes_len", 1) => Some(nat(lit(&args[0])?.len() as u64)),
+            ("seq_len", 1) => Some(nat(seq(&args[0])?.len() as u64)),
+            ("bytes_at", 2) => {
+                let (b, i) = (lit(&args[0])?, idx(&args[1])?);
+                b.get(i as usize).map(|&x| nat(x as u64))
+            }
+            ("app", 2) => {
+                let (b, i) = (seq(&args[0])?, idx(&args[1])?);
+                b.get(i as usize).map(|&x| nat(x as u64))
+            }
+            _ => None,
+        }
+    }
+
     /// Euclidean division of integer numerals (`int_div`, `int_mod`: a = b q
     /// + r with 0 <= r < |b|); integers are numerals or `pair(1, m)` for -m.
     fn compute_int(&self, op: &str, a: &[Term]) -> Option<Term> {
@@ -473,6 +511,9 @@ impl<'a> Simp<'a> {
             }
         }
         if let Some(v) = self.read_store(f, &args) {
+            return v;
+        }
+        if let Some(v) = self.bytes(f, &args) {
             return v;
         }
         if is(f, s.app) {
@@ -1072,6 +1113,29 @@ impl Simp<'_> {
                     .collect();
                 continue 'again;
             }
+            // `t = N` (t compound, N a numeral, e.g. a known register): N
+            // for t in the other literals (so they compute)
+            let known = p.lits.iter().enumerate().find_map(|(i, l)| {
+                let Node::App(e, ab) = l.node() else { return None };
+                if *e != self.s.eq {
+                    return None;
+                }
+                [(&ab[0], &ab[1]), (&ab[1], &ab[0])].into_iter().find_map(|(t, n)| {
+                    (matches!(t.node(), Node::App(_, b) if !b.is_empty())
+                        && matches!(n.node(), Node::Nat(_))
+                        && p.lits.iter().enumerate().any(|(j, m)| j != i && super::seq::abstract_term(m, t, 0, &bf) != *m))
+                        .then(|| (i, t.clone(), n.clone()))
+                })
+            });
+            if let Some((i, t, n)) = known {
+                p.lits = p
+                    .lits
+                    .iter()
+                    .enumerate()
+                    .map(|(j, m)| if j == i { m.clone() } else { inst_k(self.env, &super::seq::abstract_term(m, &t, 0, &bf), &[n.clone()]) })
+                    .collect();
+                continue 'again;
+            }
             // a literal and its negation
             if p.lits.iter().any(|l| matches!(l.node(), Node::App(n, a) if is(*n, self.s.not) && p.lits.contains(&a[0]))) {
                 return None;
@@ -1519,11 +1583,15 @@ impl Simp<'_> {
             *fresh += 1;
             (*fresh - 1, Term::var(*fresh - 1, vec![]))
         };
-        let ((l1v, l1), (tv, t)) = (var(), var());
+        let ((l1v, l1), (tv, t), (uv, u)) = (var(), var(), var());
         let stop = self.and(self.not(cond(l0)), Term::app(self.s.eq, vec![r.clone(), ok(l0)]));
         let leave = self.and(self.and(cond(l0), body(l0, r)), self.not(Term::app(is_ok, vec![r.clone()])));
-        let div = Term::app(self.s.eq, vec![r.clone(), Term::app(self.s.diverge.expect("diverge"), vec![t])]);
+        let diverge = |x: Term| Term::app(self.s.diverge.expect("diverge"), vec![x]);
+        let div = Term::app(self.s.eq, vec![r.clone(), diverge(t)]);
         let div = Term::app(self.s.ex, vec![abstract_var(env, &div, tv, 0)]);
+        // (the loop from l1 diverges too)
+        let div1 = Term::app(wr, vec![l1.clone(), a[1].clone(), a[2].clone(), a[3].clone(), diverge(u)]);
+        let div = self.and(div, Term::app(self.s.ex, vec![abstract_var(env, &div1, uv, 0)]));
         let again = Term::app(wr, vec![l1.clone(), a[1].clone(), a[2].clone(), a[3].clone(), r.clone()]);
         let next = self.and(body(l0, &ok(&l1)), self.or(again, div));
         let next = self.and(cond(l0), Term::app(self.s.ex, vec![abstract_var(env, &next, l1v, 0)]));

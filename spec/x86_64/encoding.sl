@@ -406,6 +406,12 @@ proc step() {
 // bytes is `exec_insn` of their one decoding)
 proc exec_insn(len: nat, insn: x86.Insn) {
   touch_range(rip, len, exec)
+  return exec_body(len, insn)
+}
+
+// the instruction after its bytes were fetched (code known to be
+// executable: `exec_insn` is `exec_body`)
+proc exec_body(len: nat, insn: x86.Insn) {
   rip := rip + bits[64](len)
   x86.execute(insn)
 }

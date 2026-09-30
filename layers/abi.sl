@@ -80,6 +80,15 @@ view[Machine] world(sp: Addr) : World {
 }
 
 ///////////////////////////////////////////////////////////////////////
+//  Machine code in memory
+
+// The bytes `code` are loaded at `a`: fetchable, and not writable (so no
+// store of the program changes them).
+pred code_at(vm: Vm, a: nat, code: List[bits[8]]) =
+  all i: nat. i < len(code) ->
+    fetchable(vm, bits[64](a + i)) && !can_access(vm, bits[64](a + i), write) && vm.bytes[bits[64](a + i)] = code[i]
+
+///////////////////////////////////////////////////////////////////////
 //  Calling a function
 
 // No other mapping lies within the guard gap below a stack page. Linux
