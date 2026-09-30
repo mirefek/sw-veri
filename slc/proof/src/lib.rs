@@ -199,7 +199,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "lists", "induct", "ex_intro", "defs", "sel"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "lists", "induct", "ex_intro", "defs", "sel", "eval"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -482,6 +482,13 @@ impl State {
                 Seq::taut(env, lg, &refs, goal)
             }
             // arith(p1, ..): the goal by propositional logic and linear arithmetic
+            // eval(p1, ..): the goal evaluated on concrete data, with the
+            // premises' equations as known values
+            "eval" => {
+                let ps = self.proofs(env, lg, args)?;
+                let refs: Vec<&Seq> = ps.iter().collect();
+                Seq::eval_goal(env, lg, &refs, goal)
+            }
             "arith" => {
                 let ps = self.proofs(env, lg, args)?;
                 let refs: Vec<&Seq> = ps.iter().collect();
@@ -496,8 +503,18 @@ impl State {
             "simp" => {
                 let mut facts = Vec::new();
                 let mut loops: Vec<LoopHint> = Vec::new();
+                let mut keep = Vec::new();
                 for a in args {
                     match a {
+                        // keep(P): runs of program P stay folded
+                        Arg::Proof(PE::Rule(r, xs)) if r == "keep" => {
+                            for x in xs {
+                                match x {
+                                    Arg::Proof(PE::Ref(n)) => keep.push(defined_sym(env, n)?),
+                                    _ => return err("keep(P, ..) takes names of programs"),
+                                }
+                            }
+                        }
                         Arg::Proof(PE::Ref(r)) if r == "unroll" => {
                             loops.push(LoopHint { inv: Term::app(env.builtins.eq, vec![Term::bvar(0), Term::bvar(0)]), var: None, unroll: true })
                         }
@@ -516,7 +533,7 @@ impl State {
                     }
                 }
                 let refs: Vec<&Seq> = facts.iter().collect();
-                Seq::simp_goal(env, lg, &refs, goal, &loops)
+                Seq::simp_goal(env, lg, &refs, goal, &loops, &keep)
             }
             // lists(p1, ..): `A = B` for list expressions with the same pieces
             // (the premises say which terms are lists)
@@ -778,10 +795,13 @@ impl State {
                     }
                     // rec({nat_rec(z, k v. s, n)} [, h]): its recursion equation for n = 0,
                     // or for n = m + 1 with h: m in omega
-                    // members({S}): the members of S, evaluated on concrete data
+                    // members({S}, h1, ..): the members of S, evaluated on
+                    // concrete data, with the equations h_i as known values
                     "members" => {
                         let t = self.term_arg(env, a0, 0)?;
-                        Seq::members(env, lg, &t)
+                        let ps = self.proofs(env, lg, &args[1..])?;
+                        let refs: Vec<&Seq> = ps.iter().collect();
+                        Seq::members(env, lg, &t, &refs)
                     }
                     "rec" => {
                         let t = self.term_arg(env, a0, 0)?;
@@ -814,7 +834,7 @@ impl State {
                         let p = self.proof_arg(env, lg, a0)?;
                         Ok(Seq::simp(env, lg, &p))
                     }
-                    "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
+                    "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" | "eval" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
             }

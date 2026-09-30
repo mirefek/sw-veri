@@ -92,6 +92,7 @@ struct Syms {
     out_value: Option<SymId>,
     app: Option<SymId>,
     fn_update: Option<SymId>,
+    fn_build: Option<SymId>,
     ite: Option<SymId>,
     runs: Option<SymId>,
     mkprog: Option<SymId>,
@@ -113,6 +114,8 @@ struct Simp<'a> {
     s: Syms,
     /// arithmetic definitions computed on numerals
     arith: std::collections::HashMap<SymId, &'static str>,
+    /// programs kept folded (`Logic::simp_keep`)
+    keep: Vec<SymId>,
 }
 
 /// The arithmetic and bitwise definitions of the prelude that `simp`
@@ -208,6 +211,7 @@ impl<'a> Simp<'a> {
         Simp {
             env,
             arith,
+            keep: lg.simp_keep.borrow().clone(),
             s: Syms {
                 eq: env.builtins.eq,
                 imp: env.builtins.imp,
@@ -231,6 +235,7 @@ impl<'a> Simp<'a> {
                 out_value: g("out_value"),
                 app: g("app"),
                 fn_update: g("fn_update"),
+                fn_build: g("fn_build"),
                 ite: g("ite"),
                 runs: g("runs"),
                 mkprog: g("mkprog"),
@@ -380,6 +385,11 @@ impl<'a> Simp<'a> {
                             continue;
                         }
                     }
+                    // `app(fn_build(omega, x. v), n)` = v(n) for a numeral n
+                    // (`app_fn_build`: n in omega)
+                    Some((g, b)) if is(g, s.fn_build) && matches!(args[1].node(), Node::Nat(_)) && matches!(b[0].node(), Node::App(o, _) if is(*o, s.omega)) => {
+                        return self.term(&inst_k(self.env, &b[1], &[args[1].clone()]));
+                    }
                     _ => {}
                 }
                 break;
@@ -481,9 +491,9 @@ impl<'a> Simp<'a> {
         }
         if is(f, s.runs) && pol == Pol::Pos {
             let mut p = self.term(&a[0]);
-            // a procedure: its definition is a `mkprog`
+            // a procedure: its definition is a `mkprog` (unless kept folded)
             if let Node::App(g, ga) = p.node() {
-                if !is(*g, s.mkprog) {
+                if !is(*g, s.mkprog) && !self.keep.contains(g) {
                     if let Some(u) = self.unfold(*g, ga) {
                         if matches!(u.node(), Node::App(m, _) if is(*m, s.mkprog)) {
                             p = u;

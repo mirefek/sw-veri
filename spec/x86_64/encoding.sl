@@ -398,6 +398,13 @@ proc step() {
   let matches = x86.decode((i: nat) => vm.bytes[rip + bits[64](i)])
   if matches = {} { undefined }                     // unmodelled or invalid
   let (len, insn) = any m: (nat, x86.Insn) where m in matches
+  return exec_insn(len, insn)
+}
+
+// a decoded instruction of `len` bytes at rip: fetched (executable), then
+// executed with rip after it (per-instruction theorems: `step()` at known
+// bytes is `exec_insn` of their one decoding)
+proc exec_insn(len: nat, insn: x86.Insn) {
   touch_range(rip, len, exec)
   rip := rip + bits[64](len)
   x86.execute(insn)

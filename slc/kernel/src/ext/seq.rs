@@ -355,7 +355,9 @@ impl Seq {
     /// From premises: `⋃Γi ⊢ goal`, when the simplified premises imply the
     /// simplified goal (equivalent to the goal) by propositional logic, or
     /// else by linear arithmetic.
-    pub fn simp_goal(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term, loops: &[super::simp::LoopHint]) -> KResult<Seq> {
+    /// `simp`: the goal from the premises, with loop hints, keeping the
+    /// programs `keep` folded.
+    pub fn simp_goal(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term, loops: &[super::simp::LoopHint], keep: &[SymId]) -> KResult<Seq> {
         env.check_wf(goal, 0)?;
         for h in loops {
             env.check_wf(&h.inv, 2)?;
@@ -365,7 +367,10 @@ impl Seq {
         }
         let (hyps, open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
-        lg.simp_prove_loops(env, &ps, goal, loops)?;
+        *lg.simp_keep.borrow_mut() = keep.to_vec();
+        let r = lg.simp_prove_loops(env, &ps, goal, loops);
+        lg.simp_keep.borrow_mut().clear();
+        r?;
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
@@ -381,13 +386,28 @@ impl Seq {
 
     /// A recursion equation of `nat_rec` for `t` (see `Logic::nat_rec_eq`);
     /// `m_nat` proves `m in omega` for the step case.
-    /// `⊢ all x. x in set <-> x = c1 || .. || x = cn`, the members of `set`
-    /// evaluated on concrete data (`Logic::eval_members`).
-    pub fn members(env: &Env, lg: &Logic, set: &Term) -> KResult<Seq> {
+    /// `Γ ⊢ goal`, evaluated to true on concrete data (`Logic::eval_truth`)
+    /// with the premises `lhs = value` as known values.
+    pub fn eval_goal(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term) -> KResult<Seq> {
+        env.check_wf(goal, 0)?;
+        let known: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        let used = lg.eval_truth(env, goal, &known)?;
+        let used: Vec<&Seq> = used.iter().map(|&i| premises[i]).collect();
+        let (hyps, open) = Self::gather(&used);
+        Ok(Seq { hyps, concl: goal.clone(), open })
+    }
+
+    /// `Γ ⊢ all x. x in set <-> x = c1 || .. || x = cn`, the members of
+    /// `set` evaluated on concrete data (`Logic::eval_members`), using the
+    /// premises `lhs = value` as known values (Γ: the used premises').
+    pub fn members(env: &Env, lg: &Logic, set: &Term, premises: &[&Seq]) -> KResult<Seq> {
         env.check_wf(set, 0)?;
-        let concl = lg.eval_members(env, set)?;
+        let known: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        let (concl, used) = lg.eval_members(env, set, &known)?;
         env.check_wf(&concl, 0)?;
-        Ok(Seq { hyps: Vec::new(), concl, open: Vec::new() })
+        let used: Vec<&Seq> = used.iter().map(|&i| premises[i]).collect();
+        let (hyps, open) = Self::gather(&used);
+        Ok(Seq { hyps, concl, open })
     }
 
     pub fn nat_rec_eq(env: &Env, lg: &Logic, t: &Term, m_nat: Option<&Seq>) -> KResult<Seq> {

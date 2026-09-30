@@ -34,6 +34,9 @@ pub(super) struct Ev<'s, 'a> {
     memo: HashMap<(Term, Term), Vec<Term>>,
     /// normal forms of terms met before
     norm_memo: HashMap<Term, Term>,
+    /// terms with known values (premises `lhs = value`), and which were used
+    known: Vec<(Term, Term)>,
+    used: std::cell::RefCell<Vec<bool>>,
     /// counters (printed with EVAL_STATS=1): subst, norm, truth, structural,
     /// outcomes, size of truth's input
     stats: std::cell::RefCell<[u64; 6]>,
@@ -52,7 +55,24 @@ fn err<T>(m: impl Into<String>) -> Result<T, String> {
 
 impl<'s, 'a> Ev<'s, 'a> {
     pub(super) fn new(sp: &'s Simp<'a>, fresh: u32) -> Self {
-        Ev { sp, fresh, fuel: FUEL, memo: HashMap::new(), norm_memo: HashMap::new(), stats: Default::default() }
+        Ev { sp, fresh, fuel: FUEL, memo: HashMap::new(), norm_memo: HashMap::new(), known: Vec::new(), used: Default::default(), stats: Default::default() }
+    }
+
+    /// Premises `lhs = value` (value closed) to use while evaluating.
+    pub(super) fn with_known(mut self, eqs: &[Term]) -> Self {
+        for e in eqs {
+            if let Node::App(q, ab) = e.node() {
+                if *q == self.sp.s.eq {
+                    let (l, v) = (self.sp.term(&ab[0]), self.sp.term(&ab[1]));
+                    self.known.push((l, v));
+                    continue;
+                }
+            }
+            // not an equation: kept (unused) so that indices match the premises
+            self.known.push((e.clone(), e.clone()));
+        }
+        self.used = std::cell::RefCell::new(vec![false; eqs.len()]);
+        self
     }
 
     fn var(&mut self) -> (VarId, Term) {
@@ -92,7 +112,12 @@ impl<'s, 'a> Ev<'s, 'a> {
         if let Some(r) = self.norm_memo.get(t) {
             return r.clone();
         }
-        let r = self.norm1(t);
+        let mut r = self.norm1(t);
+        // a term with a known value (a premise `lhs = value`)
+        if let Some(i) = self.known.iter().position(|(l, _)| *l == r) {
+            self.used.borrow_mut()[i] = true;
+            r = self.known[i].1.clone();
+        }
         self.norm_memo.insert(t.clone(), r.clone());
         r
     }
@@ -158,8 +183,12 @@ impl<'s, 'a> Ev<'s, 'a> {
         Some(Term::nat(crate::nat::Nat::from_u128(v)))
     }
 
-    /// definitions not unfolded as values
+    /// definitions not unfolded as values (arithmetic: computed on numerals,
+    /// kept otherwise)
     fn opaque(&self, f: SymId) -> bool {
+        if self.sp.arith.contains_key(&f) {
+            return true;
+        }
         let n = self.name(f);
         [
             "mkprog", "runs", "bind_rel", "any_rel", "while_rel", "set_select", "set_image", "choose", "nat_rec", "fn_build", "fn_update", "pair", "tag",
@@ -605,12 +634,26 @@ impl<'s, 'a> Ev<'s, 'a> {
 }
 
 impl Logic {
-    /// The members of `set` (a comprehension, evaluated on concrete data):
-    /// `all x. x in set <-> x = c1 || .. || x = cn`.
-    pub fn eval_members(&self, env: &Env, set: &Term) -> crate::env::KResult<Term> {
+    /// `p` is true, evaluated on concrete data with the premises `lhs =
+    /// value` as known values; which premises were used.
+    pub fn eval_truth(&self, env: &Env, p: &Term, known: &[Term]) -> crate::env::KResult<Vec<usize>> {
         let sp = Simp::new(env, self);
-        let fresh = (env.vars.len() as u32 + 5_000_000).max(max_var(set) + 1);
-        let mut ev = Ev::new(&sp, fresh);
+        let fresh = known.iter().chain([p]).map(|t| max_var(t) + 1).fold(env.vars.len() as u32 + 5_000_000, u32::max);
+        let mut ev = Ev::new(&sp, fresh).with_known(known);
+        match ev.truth(p) {
+            Ok(true) => Ok(ev.used.borrow().iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect()),
+            Ok(false) => Err(crate::env::KernelError(format!("eval: false: {}", ev.show(p)))),
+            Err(e) => Err(crate::env::KernelError(format!("eval: {}", e))),
+        }
+    }
+
+    /// The members of `set` (a comprehension, evaluated on concrete data,
+    /// with the premises `lhs = value` as known values): `all x. x in set
+    /// <-> x = c1 || .. || x = cn`, and which premises were used.
+    pub fn eval_members(&self, env: &Env, set: &Term, known: &[Term]) -> crate::env::KResult<(Term, Vec<usize>)> {
+        let sp = Simp::new(env, self);
+        let fresh = known.iter().chain([set]).map(|t| max_var(t) + 1).fold(env.vars.len() as u32 + 5_000_000, u32::max);
+        let mut ev = Ev::new(&sp, fresh).with_known(known);
         let ms = ev.members(set).map_err(|e| crate::env::KernelError(format!("eval: {}", e)))?;
         if std::env::var("EVAL_STATS").is_ok() {
             eprintln!("eval stats [subst, norm, truth, structural, outcomes, truth input size]: {:?}", ev.stats.borrow());
@@ -621,6 +664,7 @@ impl Logic {
             rhs = sp.or(rhs, Term::app(sp.s.eq, vec![Term::bvar(0), m.shift(1, 0, &env.binders_fn())]));
         }
         let body = Term::app(iff, vec![Term::app(sp.s.in_.unwrap(), vec![Term::bvar(0), set.shift(1, 0, &env.binders_fn())]), rhs]);
-        Ok(Term::app(sp.s.all, vec![body]))
+        let used: Vec<usize> = ev.used.borrow().iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect();
+        Ok((Term::app(sp.s.all, vec![body]), used))
     }
 }

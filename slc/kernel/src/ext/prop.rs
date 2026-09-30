@@ -22,6 +22,9 @@ pub struct Logic {
     pub choose: SymId,
     pub in_: SymId,
     pub is_prop: SymId,
+    /// programs `simp` keeps folded (`runs(P, ..)` not unfolded), for the
+    /// duration of one `simp` step
+    pub simp_keep: std::cell::RefCell<Vec<SymId>>,
 }
 
 impl Logic {
@@ -43,6 +46,7 @@ impl Logic {
             choose: sym("choose")?,
             in_: sym("in")?,
             is_prop: sym("is_prop")?,
+            simp_keep: Default::default(),
         })
     }
 
