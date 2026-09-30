@@ -940,7 +940,8 @@ pub fn cputest(args: &[String]) -> CResult {
         let out = String::from_utf8_lossy(&o.stdout).to_string();
         if !o.status.success() {
             crashed += 1;
-            println!("CRASH  row {:3} {}  ({})", k, label, o.status);
+            let err = String::from_utf8_lossy(&o.stderr);
+            println!("CRASH  row {:3} {}  ({}) {}", k, label, o.status, err.lines().last().unwrap_or(""));
             continue;
         }
         let mut tested = 0;
@@ -1001,17 +1002,22 @@ pub fn cputest(args: &[String]) -> CResult {
     for (why, c) in &skipped {
         println!("  skipped {:5}: {}", c, why);
     }
+    // a crashed worker (e.g. the spec on disk changed mid-run) is not a
+    // disagreement; it is reported apart so the two are not confused
+    let mut problems = Vec::new();
+    if bad_rows > 0 {
+        problems.push(format!("the spec disagrees with the CPU in {} rows", bad_rows));
+    }
+    if crashed > 0 {
+        problems.push(format!("{} rows crashed (see CRASH lines)", crashed));
+    }
     if explicit {
-        return if bad_rows + crashed > 0 { Err("the spec disagrees with the CPU".into()) } else { Ok(()) };
+        return if problems.is_empty() { Ok(()) } else { Err(problems.join("; ")) };
     }
     limits.sort();
     println!("\nLimits: {} of {} rows are not compared with the CPU", limits.len(), it.rows.len());
     for (why, row) in &limits {
         println!("  {:40} {}", why, row);
-    }
-    let mut problems = Vec::new();
-    if bad_rows + crashed > 0 {
-        problems.push("the spec disagrees with the CPU".to_string());
     }
     if let Some(f) = &limits_file {
         let path = root.join(f);
