@@ -93,6 +93,7 @@ struct Syms {
     ite: Option<SymId>,
     runs: Option<SymId>,
     mkprog: Option<SymId>,
+    set_select: Option<SymId>,
     in_: Option<SymId>,
     omega: Option<SymId>,
     tag: Option<SymId>,
@@ -108,14 +109,103 @@ fn is(s: SymId, o: Option<SymId>) -> bool {
 struct Simp<'a> {
     env: &'a Env,
     s: Syms,
+    /// arithmetic definitions computed on numerals
+    arith: std::collections::HashMap<SymId, &'static str>,
+}
+
+/// The arithmetic and bitwise definitions of the prelude that `simp`
+/// computes on numerals (their values follow from the definitions and the
+/// `lit_*` axioms; words up to 128 bits).
+const ARITH: &[&str] = &[
+    "nat_add", "nat_mul", "nat_sub", "nat_div", "nat_mod", "nat_pow", "pow2", "bits_of_nat", "bits_add", "bits_sub", "bits_neg", "bits_mul",
+    "bits_not", "bits_and", "bits_or", "bits_xor", "bits_shl", "bits_shr", "bits_slice", "nat_and", "nat_or", "lit_add", "lit_mul",
+    "lit_sub", "lit_div", "lit_mod", "succ",
+];
+
+/// Numerals: arithmetic on literal arguments (None: not all literals, or
+/// out of range)
+fn compute(op: &str, a: &[Term]) -> Option<Term> {
+    use crate::nat::Nat;
+    let n = |i: usize| -> Option<Nat> {
+        match a.get(i)?.node() {
+            Node::Nat(v) => Some(v.clone()),
+            _ => None,
+        }
+    };
+    let u = |i: usize| n(i).and_then(|v| v.to_u128());
+    let w = |i: usize| u(i).filter(|&v| v <= 128).map(|v| v as u32);
+    let mask = |bits: u32| if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+    let t = |v: Nat| Some(Term::nat(v));
+    let tu = |v: u128| Some(Term::nat(Nat::from_u128(v)));
+    match op {
+        "nat_add" | "lit_add" => t(n(0)?.add(&n(1)?)),
+        "nat_mul" | "lit_mul" => t(n(0)?.mul(&n(1)?)),
+        "nat_sub" | "lit_sub" => t(n(0)?.sub(&n(1)?)?),
+        "nat_div" | "lit_div" => t(n(0)?.divmod(&n(1)?)?.0),
+        "nat_mod" | "lit_mod" => t(n(0)?.divmod(&n(1)?)?.1),
+        "succ" => t(n(0)?.add(&Nat::from_u64(1))),
+        "nat_pow" => {
+            let (b, e) = (n(0)?, u(1)?);
+            if e > 256 {
+                return None;
+            }
+            let mut r = Nat::from_u64(1);
+            for _ in 0..e {
+                r = r.mul(&b);
+            }
+            t(r)
+        }
+        "pow2" => {
+            let e = u(0)?;
+            if e > 256 {
+                return None;
+            }
+            t(Nat::pow2(e as u64))
+        }
+        "bits_of_nat" => {
+            let k = u(0)?;
+            if k > 256 {
+                return None;
+            }
+            t(n(1)?.divmod(&Nat::pow2(k as u64))?.1)
+        }
+        "bits_add" => tu(u(1)?.wrapping_add(u(2)?) & mask(w(0)?)),
+        "bits_sub" => tu(u(1)?.wrapping_sub(u(2)?) & mask(w(0)?)),
+        "bits_neg" => tu(0u128.wrapping_sub(u(1)?) & mask(w(0)?)),
+        "bits_mul" => tu(u(1)?.wrapping_mul(u(2)?) & mask(w(0)?)),
+        "bits_not" => tu(!u(1)? & mask(w(0)?)),
+        "bits_and" => tu(u(1)? & u(2)? & mask(w(0)?)),
+        "bits_or" => tu((u(1)? | u(2)?) & mask(w(0)?)),
+        "bits_xor" => tu((u(1)? ^ u(2)?) & mask(w(0)?)),
+        "nat_and" => tu(u(0)? & u(1)?),
+        "nat_or" => tu(u(0)? | u(1)?),
+        "bits_shl" => {
+            let k = u(2)?;
+            tu(if k >= 128 { 0 } else { u(1)? << k } & mask(w(0)?))
+        }
+        "bits_shr" => {
+            let k = u(2)?;
+            tu(if k >= 128 { 0 } else { u(1)? >> k })
+        }
+        "bits_slice" => {
+            let (x, hi, lo) = (u(0)?, u(1)?, u(2)?);
+            if hi < lo || hi >= 128 {
+                return None;
+            }
+            tu((x >> lo) & mask((hi - lo + 1) as u32))
+        }
+        _ => None,
+    }
 }
 
 impl<'a> Simp<'a> {
     fn new(env: &'a Env, lg: &Logic) -> Simp<'a> {
         let g = |n: &str| env.sym_by_name.get(n).copied();
         let unfold = ["bind_rel", "any_rel", "is_ok"].iter().filter_map(|n| g(n)).collect();
+        let arith = ARITH.iter().filter_map(|n| g(n).map(|s| (s, *n))).collect();
         Simp {
             env,
+            arith,
             s: Syms {
                 eq: env.builtins.eq,
                 imp: env.builtins.imp,
@@ -142,6 +232,7 @@ impl<'a> Simp<'a> {
                 ite: g("ite"),
                 runs: g("runs"),
                 mkprog: g("mkprog"),
+                set_select: g("set_select"),
                 in_: g("in"),
                 omega: g("omega"),
                 tag: g("tag"),
@@ -231,6 +322,11 @@ impl<'a> Simp<'a> {
                         return if is(f, s.out_state) { b[0].clone() } else { b[1].clone() };
                     }
                 }
+            }
+        }
+        if let Some(op) = self.arith.get(&f) {
+            if let Some(v) = compute(op, &args) {
+                return v;
             }
         }
         if is(f, s.app) {
@@ -365,15 +461,58 @@ impl<'a> Simp<'a> {
             }
             return Term::app(f, vec![p, self.term(&a[1]), self.term(&a[2])]);
         }
-        // an atom: its arguments as terms
-        let t = self.term(t);
-        // a numeral is a natural number (`lit_nat`)
-        if let Node::App(m, b) = t.node() {
-            if is(*m, s.in_) && matches!(b[0].node(), Node::Nat(_)) && matches!(b[1].node(), Node::App(o, _) if is(*o, s.omega)) {
-                return self.tt();
+        // comprehension: `z in set_select(s, x. p)` <-> `z in s && p(z)`
+        if is(f, s.in_) {
+            if let Node::App(sel, sb) = a[1].node() {
+                if is(*sel, s.set_select) {
+                    let z = self.term(&a[0]);
+                    let mem = Term::app(f, vec![z.clone(), sb[0].clone()]);
+                    return self.and(self.prop(&mem, pol), self.prop(&inst_k(self.env, &sb[1], &[z]), pol));
+                }
             }
         }
+        // an atom: its arguments as terms
+        let t = self.term(t);
+        if let Some(b) = self.literal_prop(&t) {
+            return if b { self.tt() } else { self.ff() };
+        }
         t
+    }
+
+    /// Propositions about numerals: a numeral is a natural number (`lit_nat`);
+    /// order, membership (von Neumann) and bits of numerals.
+    fn literal_prop(&self, t: &Term) -> Option<bool> {
+        let s = &self.s;
+        let Node::App(m, b) = t.node() else { return None };
+        let lit = |x: &Term| match x.node() {
+            Node::Nat(v) => Some(v.clone()),
+            _ => None,
+        };
+        let name = self.env.syms.get(*m as usize).map(|x| x.name.as_str()).unwrap_or("");
+        if is(*m, s.in_) {
+            let x = lit(&b[0])?;
+            if let Node::App(o, ob) = b[1].node() {
+                if is(*o, s.omega) {
+                    return Some(true);
+                }
+                // x in bits(n): x < 2^n
+                if self.env.syms.get(*o as usize).is_some_and(|y| y.name == "bits") {
+                    let n = lit(&ob[0])?.to_u64()?;
+                    return Some(x < crate::nat::Nat::pow2(n));
+                }
+            }
+            return Some(x < lit(&b[1])?);
+        }
+        match name {
+            "nat_lt" | "lit_lt" => Some(lit(&b[0])? < lit(&b[1])?),
+            "nat_le" => Some(lit(&b[0])? <= lit(&b[1])?),
+            "bit" => {
+                let (x, i) = (lit(&b[0])?, lit(&b[1])?.to_u64()?);
+                let (q, _) = x.divmod(&crate::nat::Nat::pow2(i))?;
+                Some(!q.divmod(&crate::nat::Nat::from_u64(2))?.1.is_zero())
+            }
+            _ => None,
+        }
     }
 
     fn eq(&self, a: &Term, b: &Term) -> Term {
@@ -862,6 +1001,8 @@ impl Simp<'_> {
 pub struct LoopHint {
     pub inv: Term,
     pub var: Option<Term>,
+    /// no invariant: unroll loops without one, an iteration at a time
+    pub unroll: bool,
 }
 
 /// The literals sharing a variable with `goal`.
@@ -1074,30 +1215,63 @@ impl Simp<'_> {
                 return Ok(None);
             }
             let others: Vec<Term> = p.lits.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, l)| l.clone()).collect();
-            for (k, h) in hints.iter().enumerate() {
+            let replace = |out: Term, fresh: &mut u32| -> crate::env::KResult<Option<Vec<Path>>> {
+                let mut t = self.tt();
+                for o in &others {
+                    t = self.and(t, o.clone());
+                }
+                t = self.and(t, lg.simp_fact(self.env, &out));
+                let ps = self.paths(&t, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+                Ok(Some(
+                    ps.into_iter()
+                        .map(|mut q| {
+                            q.vars.extend(p.vars.iter().copied());
+                            q.done.extend(p.done.iter().cloned());
+                            q
+                        })
+                        .collect(),
+                ))
+            };
+            for (k, h) in hints.iter().enumerate().filter(|(_, h)| !h.unroll) {
                 match self.loop_rule(lg, &others, a, h, hints, fresh) {
-                    Ok(out) => {
-                        let mut t = self.tt();
-                        for o in &others {
-                            t = self.and(t, o.clone());
-                        }
-                        t = self.and(t, lg.simp_fact(self.env, &out));
-                        let ps = self.paths(&t, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
-                        return Ok(Some(
-                            ps.into_iter()
-                                .map(|mut q| {
-                                    q.vars.extend(p.vars.iter().copied());
-                                    q.done.extend(p.done.iter().cloned());
-                                    q
-                                })
-                                .collect(),
-                        ));
-                    }
+                    Ok(out) => return replace(out, fresh),
                     Err(e) => why.push_str(&format!("\n  (invariant {} for a loop on the path: {})", k + 1, e.0.replace('\n', "\n  "))),
                 }
             }
+            if hints.iter().any(|h| h.unroll) {
+                let out = self.unroll(a, fresh)?;
+                return replace(out, fresh);
+            }
         }
         Ok(None)
+    }
+
+    /// One iteration of `while_rel(l0, l. C, l o. B, l. T, r)` (theorem
+    /// `while_unroll`, core/loop.core): it stops at l0, the body leaves, or
+    /// the body continues to l1 and the loop runs on from there (or
+    /// diverges).
+    fn unroll(&self, a: &[Term], fresh: &mut u32) -> crate::env::KResult<Term> {
+        let env = self.env;
+        let wr = env.sym_by_name.get("while_rel").copied().ok_or_else(|| crate::env::KernelError("no while_rel".into()))?;
+        let is_ok = env.sym_by_name.get("is_ok").copied().ok_or_else(|| crate::env::KernelError("no is_ok".into()))?;
+        let empty = Term::app(env.sym_by_name.get("empty").copied().ok_or_else(|| crate::env::KernelError("no empty".into()))?, vec![]);
+        let (l0, r) = (&a[0], &a[4]);
+        let cond = |x: &Term| inst_k(env, &a[1], &[x.clone()]);
+        let body = |x: &Term, o: &Term| inst_k(env, &a[2], &[x.clone(), o.clone()]);
+        let ok = |x: &Term| Term::app(self.s.ok.expect("ok"), vec![x.clone(), empty.clone()]);
+        let mut var = || {
+            *fresh += 1;
+            (*fresh - 1, Term::var(*fresh - 1, vec![]))
+        };
+        let ((l1v, l1), (tv, t)) = (var(), var());
+        let stop = self.and(self.not(cond(l0)), Term::app(self.s.eq, vec![r.clone(), ok(l0)]));
+        let leave = self.and(self.and(cond(l0), body(l0, r)), self.not(Term::app(is_ok, vec![r.clone()])));
+        let div = Term::app(self.s.eq, vec![r.clone(), Term::app(self.s.diverge.expect("diverge"), vec![t])]);
+        let div = Term::app(self.s.ex, vec![abstract_var(env, &div, tv, 0)]);
+        let again = Term::app(wr, vec![l1.clone(), a[1].clone(), a[2].clone(), a[3].clone(), r.clone()]);
+        let next = self.and(body(l0, &ok(&l1)), self.or(again, div));
+        let next = self.and(cond(l0), Term::app(self.s.ex, vec![abstract_var(env, &next, l1v, 0)]));
+        Ok(self.or(self.or(stop, leave), next))
     }
 
     /// The outcome of `while_rel(a..)` given the hint, its premises shown

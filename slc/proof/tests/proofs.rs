@@ -489,6 +489,27 @@ fn leftover_paths_are_reported_as_facts() {
 }
 
 #[test]
+fn simp_computes_on_numerals() {
+    let src = "theorem t: nat_add(3, 4) = 7 && bits_and(8, 195, 15) = 3 && bits_add(64, 18446744073709551615, 2) = 1 && nat_lt(3, 4) && !nat_le(5, 4) && bit(5, 2) && 255 in bits(8) && !(256 in bits(8)) && 3 in set_select(omega, x. nat_lt(x, 5))\nproof\n  show by simp()\nqed\n";
+    assert_eq!(check(src), Ok(1));
+    for bad in ["nat_add(3, 4) = 8", "bits_and(8, 195, 15) = 4", "bit(5, 1)", "256 in bits(8)", "7 in set_select(omega, x. nat_lt(x, 5))"] {
+        rejected(&format!("theorem x: {}\nproof\n  show by simp()\nqed\n", bad), "simp");
+    }
+}
+
+#[test]
+fn loops_can_be_unrolled() {
+    // counting to 3 without an invariant: three iterations, then the exit;
+    // unrolling keeps that each iteration may also start a divergence
+    let src = count_thm("(ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3) || (ex t. o = diverge(t))", ", unroll");
+    assert_eq!(check_nat(&src), Ok(1));
+    match check_nat(&count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", ", unroll")) {
+        Ok(_) => panic!("divergence dropped"),
+        Err(e) => assert!(e.contains("path"), "{}", e),
+    }
+}
+
+#[test]
 fn differences_are_numbers_when_not_negative() {
     let (ha, hb) = (("ha", "a in omega"), ("hb", "b in omega"));
     assert_eq!(arith_ok("a in omega -> b in omega -> nat_le(b, a) -> nat_add(nat_sub(a, b), 1) in omega", &[ha, hb, ("h", "nat_le(b, a)")]), Ok(1));

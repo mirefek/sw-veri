@@ -28,6 +28,19 @@ impl Nat {
         }
     }
 
+    pub fn from_u128(v: u128) -> Nat {
+        let mut n = Nat { limbs: vec![v as u32, (v >> 32) as u32, (v >> 64) as u32, (v >> 96) as u32] };
+        n.trim();
+        n
+    }
+
+    pub fn to_u128(&self) -> Option<u128> {
+        if self.limbs.len() > 4 {
+            return None;
+        }
+        Some(self.limbs.iter().enumerate().fold(0u128, |a, (i, &l)| a | (l as u128) << (32 * i)))
+    }
+
     pub fn is_zero(&self) -> bool {
         self.limbs.is_empty()
     }

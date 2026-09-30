@@ -490,15 +490,20 @@ impl State {
             // simp(p1, ..): the goal, simplified, from the simplified premises
             // (symbolic execution of `runs`), then taut or arith
             // Loops need invariants: a term `{l0 l. I}` (the loop's first
-            // and current state), optionally followed by a variant `{l. m}`.
+            // and current state), optionally followed by a variant `{l. m}`;
+            // or `unroll`: loops without one are unrolled (when their
+            // iterations are decided, e.g. on concrete data)
             "simp" => {
                 let mut facts = Vec::new();
                 let mut loops: Vec<LoopHint> = Vec::new();
                 for a in args {
                     match a {
+                        Arg::Proof(PE::Ref(r)) if r == "unroll" => {
+                            loops.push(LoopHint { inv: Term::app(env.builtins.eq, vec![Term::bvar(0), Term::bvar(0)]), var: None, unroll: true })
+                        }
                         Arg::Proof(_) => facts.push(self.proof_arg(env, lg, Some(a))?),
                         Arg::Term(t) => match parse_value(env, t, &self.scope, 2) {
-                            Ok(inv) => loops.push(LoopHint { inv, var: None }),
+                            Ok(inv) => loops.push(LoopHint { inv, var: None, unroll: false }),
                             Err(_) => {
                                 let m = parse_value(env, t, &self.scope, 1)
                                     .map_err(|e| KernelError(format!("simp: `{{{}}}` is neither an invariant `{{l0 l. I}}` nor a variant `{{l. m}}`: {}", t, e.0)))?;
