@@ -529,11 +529,57 @@ proof
     {l0 l. abi.vm_grows(app(m, "vm"), app(fst(l), "vm")) && snd(l) in omega && nat_le(snd(l), n)}, {l. nat_sub(n, snd(l))})
 qed
 
+// stack growth changes only the memory
+theorem x86.grow_stack_vm: all m a p m1 e. runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e)) -> m1 = m || (ex v. m1 = fn_update(m, "vm", v))
+proof
+  fix m
+  fix a
+  fix p
+  fix m1
+  fix e
+  assume h: runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e))
+  show by simp(h, x86.prev_mapped_cases, keep(x86_64_linux.next_mapped, x86_64_linux.prev_mapped, x86_64_linux.run_end, x86_64_linux.mapped),
+    {l0 l. fst(l) = m || (ex v. fst(l) = fn_update(m, "vm", v))})
+qed
+
+// ... and so do accesses
+theorem x86.touch_vm: all m x k m1 e. runs(x86_64_linux.touch(x, k), m, ok(m1, e)) -> e = empty && (m1 = m || (ex v. m1 = fn_update(m, "vm", v)))
+proof
+  fix m
+  fix x
+  fix k
+  fix m1
+  fix e
+  assume h: runs(x86_64_linux.touch(x, k), m, ok(m1, e))
+  show by simp(h, x86.grow_stack_vm, keep(x86_64_linux.grow_stack, x86_64_linux.mapped))
+qed
+
+theorem x86.touch_range_vm: all m a n k m1 e. runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e)) -> e = empty && (m1 = m || (ex v. m1 = fn_update(m, "vm", v)))
+proof
+  fix m
+  fix a
+  fix n
+  fix k
+  fix m1
+  fix e
+  assume h: runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e))
+  show by simp(h, x86.touch_vm, keep(x86_64_linux.touch), {l0 l. fst(l) = m || (ex v. fst(l) = fn_update(m, "vm", v))})
+qed
+
 // ----------------------------------------------------------------------
 //  Loaded code survives the program's accesses and stores
 
+// a + (c - a) = c, as 64-bit addresses (a any natural: effective addresses
+// are sums that wrap around)
+theorem x86.bits_add_sub_nat(a, c): c in bits(64) -> a in omega -> bits_add(64, a, bits_of_nat(64, bits_sub(64, c, a))) = c
+proof
+  assume hc: c in bits(64)
+  assume ha: a in omega
+  show by defs(simp(hc, ha), bits_add, bits_sub, bits_of_nat, pow2)
+qed
+
 // reading through a store of n bytes at a, at an address c none of them is
-theorem x86.store_outside: all b a n v c. c in bits(64) -> a in bits(64) ->
+theorem x86.store_outside: all b a n v c. c in bits(64) -> a in omega ->
   (all i. i in omega -> nat_lt(i, n) -> !(bits_add(64, a, bits_of_nat(64, i)) = c)) ->
   app(x86_64_linux.store_le(b, a, n, v), c) = app(b, c)
 proof
@@ -543,11 +589,11 @@ proof
   fix v
   fix c
   assume hc: c in bits(64)
-  assume ha: a in bits(64)
+  assume ha: a in omega
   assume hw: all i. i in omega -> nat_lt(i, n) -> !(bits_add(64, a, bits_of_nat(64, i)) = c)
   have e1 := mp(app_fn_build[d := bits(64), v := x. ite(nat_lt(bits_sub(64, x, a), n), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)), a := c], hc)
   have k: bits_sub(64, c, a) in omega by defs(simp(hc, ha), bits_sub, pow2)
-  have id := mp(mp(x86.bits_add_sub[a := a, c := c], hc), ha)
+  have id := mp(mp(x86.bits_add_sub_nat[a := a, c := c], hc), ha)
   have nlt0: nat_lt(bits_sub(64, c, a), n) -> false proof
     assume lt: nat_lt(bits_sub(64, c, a), n)
     have w := mp(mp(all_elim(hw, {bits_sub(64, c, a)}), k), lt)
@@ -559,24 +605,24 @@ proof
 qed
 
 // a store (after its write accesses) keeps loaded code: code is not writable
-theorem x86.store_code: all m a n m1 e f code. a in bits(64) -> n in omega -> f in omega ->
+// (the code first: instantiated for a function, a rule for simp)
+theorem x86.store_code: all f code m a n m1 e. a in omega -> n in omega -> f in omega ->
   runs(x86_64_linux.touch_range(a, n, 1), m, ok(m1, e)) -> abi.code_at(app(m, "vm"), f, code) ->
   (all v. abi.code_at(fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), a, n, v)), f, code))
 proof
+  fix f
+  fix code
   fix m
   fix a
   fix n
   fix m1
   fix e
-  fix f
-  fix code
-  assume ha: a in bits(64)
+  assume ao: a in omega
   assume hn: n in omega
   assume hf: f in omega
   assume h: runs(x86_64_linux.touch_range(a, n, 1), m, ok(m1, e))
   assume hc: abi.code_at(app(m, "vm"), f, code)
-  have ao: a in omega by defs(simp(ha), pow2)
-  have g := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_range_frame, {m}), {a}), {n}), {1}), {m1}), {e}), ao), hn), h)
+  have g :=mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_range_frame, {m}), {a}), {n}), {1}), {m1}), {e}), ao), hn), h)
   have c1 := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(x86.code_grows, {app(m, "vm")}), {app(m1, "vm")}), {f}), {code}), hf), hc), g)
   have tw := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_range_write, {m}), {a}), {n}), {m1}), {e}), ao), hn), h)
   have cc := expand(hc, abi.code_at)
@@ -606,24 +652,24 @@ proof
       qed
       show by taut(ne0)
     qed
-    have so := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.store_outside, {app(app(m1, "vm"), "bytes")}), {a}), {n}), {v}), {bits_of_nat(64, nat_add(f, i))}), co), ha), out)
+    have so := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.store_outside, {app(app(m1, "vm"), "bytes")}), {a}), {n}), {v}), {bits_of_nat(64, nat_add(f, i))}), co), ao), out)
     show by defs(simp(expand(ci1, x86_64_linux.fetchable, x86_64_linux.can_access, x86_64_linux.mapped), so), x86_64_linux.fetchable, x86_64_linux.can_access, x86_64_linux.mapped)
   qed
   show by defs(taut(r), abi.code_at)
 qed
 
 // ... and so do accesses
-theorem x86.touch_range_code: all m a n k m1 e f code. a in omega -> n in omega -> f in omega ->
+theorem x86.touch_range_code: all f code m a n k m1 e. a in omega -> n in omega -> f in omega ->
   runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e)) -> abi.code_at(app(m, "vm"), f, code) -> abi.code_at(app(m1, "vm"), f, code)
 proof
+  fix f
+  fix code
   fix m
   fix a
   fix n
   fix k
   fix m1
   fix e
-  fix f
-  fix code
   assume ha: a in omega
   assume hn: n in omega
   assume hf: f in omega

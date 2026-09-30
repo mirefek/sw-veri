@@ -116,6 +116,9 @@ struct Simp<'a> {
     arith: std::collections::HashMap<SymId, &'static str>,
     /// programs kept folded (`Logic::simp_keep`)
     keep: Vec<SymId>,
+    /// terms the current path knows to be natural numbers (its literals
+    /// `t in omega`, `t in bits(k)`)
+    nats: std::cell::RefCell<Vec<Term>>,
 }
 
 /// The arithmetic and bitwise definitions of the prelude that `simp`
@@ -221,6 +224,7 @@ impl<'a> Simp<'a> {
             env,
             arith,
             keep: lg.simp_keep.borrow().clone(),
+            nats: std::cell::RefCell::new(Vec::new()),
             s: Syms {
                 eq: env.builtins.eq,
                 imp: env.builtins.imp,
@@ -260,16 +264,21 @@ impl<'a> Simp<'a> {
     }
 
     /// An n-bit address as base + offset (mod 2^n): `bits_add` and
-    /// `bits_sub` of numerals around at most one other term.
-    fn offset(&self, t: &Term, n: u32) -> (Option<Term>, u128) {
+    /// `bits_sub` of numerals around at most one other term. The base must
+    /// be a natural number (`nat_term`): for other sets the arithmetic is
+    /// unspecified; None then.
+    fn offset(&self, t: &Term, n: u32) -> Option<(Option<Term>, u128)> {
         let m = if n >= 128 { u128::MAX } else { (1u128 << n) - 1 };
         let name = |g: SymId| self.env.syms[g as usize].name.as_str();
         match t.node() {
-            Node::Nat(v) => (None, v.to_u128().map(|x| x & m).unwrap_or(0)),
+            Node::Nat(v) => {
+                let low = v.divmod(&crate::nat::Nat::pow2(n.min(128) as u64))?.1.to_u128()?;
+                Some((None, low & m))
+            }
             Node::App(g, a) if (name(*g) == "bits_add" || name(*g) == "bits_sub") && a.len() == 3 && matches!(a[0].node(), Node::Nat(w) if w.to_u64() == Some(n as u64)) => {
-                let (b1, c1) = self.offset(&a[1], n);
-                let (b2, c2) = self.offset(&a[2], n);
-                if name(*g) == "bits_add" {
+                let (b1, c1) = self.offset(&a[1], n)?;
+                let (b2, c2) = self.offset(&a[2], n)?;
+                Some(if name(*g) == "bits_add" {
                     match (b1, b2) {
                         (b, None) | (None, b) => (b, c1.wrapping_add(c2) & m),
                         _ => (Some(t.clone()), 0),
@@ -280,18 +289,86 @@ impl<'a> Simp<'a> {
                         (Some(x), Some(y)) if x == y => (None, c1.wrapping_sub(c2) & m),
                         _ => (Some(t.clone()), 0),
                     }
-                }
+                })
             }
-            _ => (Some(t.clone()), 0),
+            _ if self.nat_term(t) => Some((Some(t.clone()), 0)),
+            _ => None,
         }
     }
 
     /// `x - a` (n bits) as a numeral, when both have the same base.
     fn distance(&self, x: &Term, a: &Term, n: u32) -> Option<u128> {
         let m = if n >= 128 { u128::MAX } else { (1u128 << n) - 1 };
-        let (bx, cx) = self.offset(x, n);
-        let (ba, ca) = self.offset(a, n);
+        let (bx, cx) = self.offset(x, n)?;
+        let (ba, ca) = self.offset(a, n)?;
         (bx == ba).then(|| cx.wrapping_sub(ca) & m)
+    }
+
+    /// A proposition equivalent to `t` (in the current typing context).
+    fn eqv(&self, t: &Term) -> Term {
+        let mut t = t.clone();
+        for _ in 0..8 {
+            let u = self.prop(&t, Pol::Other);
+            if u == t {
+                break;
+            }
+            t = u;
+        }
+        t
+    }
+
+    /// The typing context of a path: the terms its literals say are natural
+    /// numbers.
+    fn set_nats(&self, lits: &[Term]) {
+        let s = &self.s;
+        let mut out = Vec::new();
+        for l in lits {
+            if let Node::App(i, ab) = l.node() {
+                if is(*i, s.in_) {
+                    let set_ok = match ab[1].node() {
+                        Node::App(o, x) if x.is_empty() && is(*o, s.omega) => true,
+                        Node::App(b, x) => self.env.syms[*b as usize].name == "bits" && x.len() == 1 && matches!(x[0].node(), Node::Nat(_)),
+                        _ => false,
+                    };
+                    if set_ok {
+                        out.push(ab[0].clone());
+                    }
+                }
+            }
+        }
+        *self.nats.borrow_mut() = out;
+    }
+
+    /// `t` is a natural number: a numeral, known to be one on the path
+    /// (`nats`: `t in omega`, `t in bits(k)`), or arithmetic on such.
+    fn nat_term(&self, t: &Term) -> bool {
+        self.nat_term_d(t, 0)
+    }
+
+    fn nat_term_d(&self, t: &Term, d: u32) -> bool {
+        if d > 32 {
+            return false;
+        }
+        match t.node() {
+            Node::Nat(_) => true,
+            Node::App(f, a) => {
+                if self.nats.borrow().contains(t) {
+                    return true;
+                }
+                let name = self.env.syms[*f as usize].name.as_str();
+                let num = |x: &Term| matches!(x.node(), Node::Nat(_));
+                let pos = |x: &Term| matches!(x.node(), Node::Nat(v) if !v.is_zero());
+                match name {
+                    "nat_add" | "nat_mul" => a.iter().all(|x| self.nat_term_d(x, d + 1)),
+                    "nat_div" | "nat_mod" => pos(&a[1]) && self.nat_term_d(&a[0], d + 1),
+                    // (a mod 2^n of a natural)
+                    "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => num(&a[0]) && self.nat_term_d(&a[1], d + 1) && self.nat_term_d(&a[2], d + 1),
+                    "bits_neg" | "bits_of_nat" if a.len() == 2 => num(&a[0]) && self.nat_term_d(&a[1], d + 1),
+                    _ => false,
+                }
+            }
+            _ => self.nats.borrow().contains(t),
+        }
     }
 
     /// Reads through a store (`x86_64_linux.store_le(b, a, n, v)`, the
@@ -823,6 +900,13 @@ impl<'a> Simp<'a> {
                 return if v.is_zero() { self.tt() } else { self.ff() };
             }
         }
+        // the same function updated at the same key: equal iff the values are
+        // (the pair (k, a) is in the one exactly if it is in the other)
+        if let (Node::App(f1, u), Node::App(f2, w)) = (x.node(), y.node()) {
+            if is(*f1, s.fn_update) && is(*f2, s.fn_update) && u[0] == w[0] && u[1] == w[1] {
+                return self.eq(&u[2], &w[2]);
+            }
+        }
         // constructors: injective and distinct
         let ctor = |t: &Term| -> Option<(u8, Vec<Term>)> {
             match t.node() {
@@ -1073,7 +1157,16 @@ impl Simp<'_> {
     /// Solves `x = t` literals of a path, simplifies its literals; `None`
     /// if the path is contradictory.
     fn settle(&self, mut p: Path) -> Option<Path> {
+        let mut rounds = 0u32;
         'again: loop {
+            rounds += 1;
+            self.set_nats(&p.lits);
+            if rounds == 5000 && std::env::var("SIMP_DEBUG").is_ok() {
+                let pr = crate::syntax::Printer::new(self.env);
+                for l in &p.lits {
+                    eprintln!("simp: settle loops on {}", pr.term(l).chars().take(300).collect::<String>());
+                }
+            }
             let mut lits = Vec::new();
             for l in &p.lits {
                 let l = self.prop(l, Pol::Other);
@@ -1113,6 +1206,7 @@ impl Simp<'_> {
             // `x = t` (x a variable, t compound, not containing x): t is x in
             // the other literals (so rules about x match)
             let bf = self.env.binders_fn();
+            let side_of = |_: &Term, _: &Term| false;
             let named = p.lits.iter().enumerate().find_map(|(i, l)| {
                 let Node::App(e, ab) = l.node() else { return None };
                 if *e != self.s.eq {
@@ -1121,7 +1215,7 @@ impl Simp<'_> {
                 let Node::Var(x, xa) = ab[0].node() else { return None };
                 let compound = matches!(ab[1].node(), Node::App(_, b) if !b.is_empty());
                 (xa.is_empty() && compound && !has_var(&ab[1], *x)
-                    && p.lits.iter().enumerate().any(|(j, m)| j != i && super::seq::abstract_term(m, &ab[1], 0, &bf) != *m))
+                    && p.lits.iter().enumerate().any(|(j, m)| j != i && !side_of(m, &ab[1]) && super::seq::abstract_term(m, &ab[1], 0, &bf) != *m))
                     .then(|| (i, ab[0].clone(), ab[1].clone()))
             });
             if let Some((i, x, t)) = named {
@@ -1129,7 +1223,7 @@ impl Simp<'_> {
                     .lits
                     .iter()
                     .enumerate()
-                    .map(|(j, m)| if j == i { m.clone() } else { inst_k(self.env, &super::seq::abstract_term(m, &t, 0, &bf), &[x.clone()]) })
+                    .map(|(j, m)| if j == i || side_of(m, &t) { m.clone() } else { inst_k(self.env, &super::seq::abstract_term(m, &t, 0, &bf), &[x.clone()]) })
                     .collect();
                 continue 'again;
             }
@@ -1186,9 +1280,17 @@ impl Simp<'_> {
             })
         };
         let eqs: Vec<_> = lits.iter().enumerate().filter_map(|(i, l)| side(l).map(|(x, t)| (i, x, t))).collect();
+        // (only constructor terms, which then split: `x = t` and `x = u` with
+        // t opaque both stay -- `x = t` names t in the other literals)
+        let s = &self.s;
+        let ctor = |t: &Term| match t.node() {
+            Node::Nat(_) | Node::Bytes(_) => true,
+            Node::App(h, _) => [s.pair, s.tag, s.ok, s.exc, s.diverge, s.some, s.none].iter().any(|c| is(*h, *c)),
+            _ => false,
+        };
         for (k, (_, x, a)) in eqs.iter().enumerate() {
             for (j, y, b) in &eqs[k + 1..] {
-                if x == y {
+                if x == y && ctor(a) && ctor(b) {
                     return Some((*j, Term::app(self.s.eq, vec![a.clone(), b.clone()])));
                 }
             }
@@ -1449,6 +1551,102 @@ impl Simp<'_> {
         (!hyps.is_empty() || (eq && !vs.is_empty())).then_some((vs, hyps, t))
     }
 
+    /// Typing: `t in omega` or `t in bits(k)` from the literals, by the
+    /// definitions of the arithmetic (`bits_add(n, a, b)` is `(a + b) mod
+    /// 2^n`: in bits(n) when a and b are naturals; `bits(n)` is part of
+    /// omega; ...).
+    fn typed(&self, lits: &[Term], g: &Term) -> bool {
+        let Node::App(i, ab) = g.node() else { return false };
+        if !is(*i, self.s.in_) {
+            return false;
+        }
+        let bits_of = |s: &Term| -> Option<u64> {
+            match s.node() {
+                Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => match x[0].node() {
+                    Node::Nat(k) => k.to_u64(),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        let is_omega = |s: &Term| matches!(s.node(), Node::App(o, x) if x.is_empty() && is(*o, self.s.omega));
+        if is_omega(&ab[1]) {
+            return self.is_nat(lits, &ab[0], 0);
+        }
+        match bits_of(&ab[1]) {
+            Some(k) => self.in_bits(lits, &ab[0], k, 0),
+            None => false,
+        }
+    }
+
+    fn is_nat(&self, lits: &[Term], t: &Term, depth: u32) -> bool {
+        if depth > 24 {
+            return false;
+        }
+        if matches!(t.node(), Node::Nat(_)) {
+            return true;
+        }
+        let known = lits.iter().any(|l| match l.node() {
+            Node::App(i, ab) if is(*i, self.s.in_) && ab[0] == *t => {
+                matches!(ab[1].node(), Node::App(o, x) if x.is_empty() && is(*o, self.s.omega))
+                    || matches!(ab[1].node(), Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1)
+            }
+            _ => false,
+        });
+        if known {
+            return true;
+        }
+        let Node::App(f, a) = t.node() else { return false };
+        let name = self.env.syms[*f as usize].name.as_str();
+        let pos = |x: &Term| matches!(x.node(), Node::Nat(v) if !v.is_zero());
+        match name {
+            "nat_add" | "nat_mul" => a.iter().all(|x| self.is_nat(lits, x, depth + 1)),
+            "nat_div" | "nat_mod" => pos(&a[1]) && self.is_nat(lits, &a[0], depth + 1),
+            _ => match a.first().and_then(|w| match w.node() {
+                Node::Nat(v) => v.to_u64(),
+                _ => None,
+            }) {
+                Some(k) => self.in_bits(lits, t, k, depth),
+                None => false,
+            },
+        }
+    }
+
+    fn in_bits(&self, lits: &[Term], t: &Term, k: u64, depth: u32) -> bool {
+        if depth > 24 {
+            return false;
+        }
+        if let Node::Nat(v) = t.node() {
+            return v.to_u128().is_some_and(|x| k >= 128 || x < (1u128 << k));
+        }
+        let known = lits.iter().any(|l| match l.node() {
+            Node::App(i, ab) if is(*i, self.s.in_) && ab[0] == *t => {
+                matches!(ab[1].node(), Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1
+                    && matches!(x[0].node(), Node::Nat(j) if j.to_u64().is_some_and(|j| j <= k)))
+            }
+            _ => false,
+        });
+        if known {
+            return true;
+        }
+        let Node::App(f, a) = t.node() else { return false };
+        let name = self.env.syms[*f as usize].name.as_str();
+        let width = |x: &Term| match x.node() {
+            Node::Nat(v) => v.to_u64(),
+            _ => None,
+        };
+        match name {
+            // nat_mod(x, 2^n) with x a natural
+            "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => {
+                width(&a[0]).is_some_and(|n| n <= k) && self.is_nat(lits, &a[1], depth + 1) && self.is_nat(lits, &a[2], depth + 1)
+            }
+            "bits_neg" | "bits_of_nat" if a.len() == 2 => width(&a[0]).is_some_and(|n| n <= k) && self.is_nat(lits, &a[1], depth + 1),
+            // a / 2^s, a in bits(n)
+            "bits_shr" if a.len() == 3 => width(&a[0]).is_some_and(|n| n <= k) && self.in_bits(lits, &a[1], k, depth + 1) && self.is_nat(lits, &a[2], depth + 1),
+            _ => false,
+        }
+    }
+
     /// `t` is an instance of a literal `all xs. C` (C not an implication).
     fn instance_of_all(&self, lits: &[Term], t: &Term) -> bool {
         for l in lits {
@@ -1495,7 +1693,30 @@ impl Simp<'_> {
                 _ => None,
             };
             let mut all_insts = Vec::new();
-            for (binds, open) in insts {
+            for (mut binds, mut open) in insts {
+                // an open hypothesis may match once instantiated and
+                // simplified (`app(m, "vm")` with m an update of rip)
+                if !vs.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
+                    let mut k = 0;
+                    while k < open.len() {
+                        let mut h = hyps[open[k]].clone();
+                        for (v, x) in &binds {
+                            h = h.subst_var(*v, x, &bf);
+                        }
+                        let h = self.prop(&h, Pol::Other);
+                        let hit = p.lits.iter().find_map(|l| {
+                            let mut b = binds.clone();
+                            pmatch(&h, l, &vs, &mut b).then_some(b)
+                        });
+                        match hit {
+                            Some(b) => {
+                                binds = b;
+                                open.remove(k);
+                            }
+                            None => k += 1,
+                        }
+                    }
+                }
                 if vs.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
                     all_insts.push((binds, open));
                 } else if let Some(lhs) = &lhs {
@@ -1529,7 +1750,8 @@ impl Simp<'_> {
                     self.prop(&t, Pol::Other)
                 };
                 let shown = |h: &Term| {
-                    self.instance_of_all(&p.lits, h)
+                    self.typed(&p.lits, h)
+                        || self.instance_of_all(&p.lits, h)
                         || lg.tautology(self.env, &p.lits, h).is_ok()
                         || lg.arith(self.env, &p.lits, h).is_ok()
                         || lg.arith(self.env, &relevant(&p.lits, h), h).is_ok()
@@ -1564,15 +1786,15 @@ impl Simp<'_> {
 
     /// The path with the fact `c` added (split into paths).
     fn extend(&self, lg: &Logic, p: &Path, c: Term, fresh: &mut u32) -> crate::env::KResult<Vec<Path>> {
-        let mut t = self.tt();
-        for o in &p.lits {
-            t = self.and(t, o.clone());
-        }
-        t = self.and(t, lg.simp_fact(self.env, &c));
-        let ps = self.paths(&t, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        // (the path's literals are in normal form already: only the new
+        // fact is split, each of its paths added to them)
+        let ps = self.paths(&lg.simp_fact(self.env, &c), fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
         Ok(ps
             .into_iter()
             .map(|mut q| {
+                let mut lits = p.lits.clone();
+                lits.append(&mut q.lits);
+                q.lits = lits;
                 q.vars.extend(p.vars.iter().copied());
                 q.done.extend(p.done.iter().cloned());
                 q.done.push(c.clone());
@@ -1597,15 +1819,13 @@ impl Simp<'_> {
             }
             let others: Vec<Term> = p.lits.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, l)| l.clone()).collect();
             let replace = |out: Term, fresh: &mut u32| -> crate::env::KResult<Option<Vec<Path>>> {
-                let mut t = self.tt();
-                for o in &others {
-                    t = self.and(t, o.clone());
-                }
-                t = self.and(t, lg.simp_fact(self.env, &out));
-                let ps = self.paths(&t, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+                let ps = self.paths(&lg.simp_fact(self.env, &out), fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
                 Ok(Some(
                     ps.into_iter()
                         .map(|mut q| {
+                            let mut lits = others.clone();
+                            lits.append(&mut q.lits);
+                            q.lits = lits;
                             q.vars.extend(p.vars.iter().copied());
                             q.done.extend(p.done.iter().cloned());
                             q
@@ -1812,6 +2032,9 @@ impl Logic {
         };
         while let Some(p) = work.pop() {
             npaths += 1;
+            if timing && npaths % 50 == 0 {
+                eprintln!("simp: {} paths, {} queued, {} literals; {:?}", npaths, work.len(), p.lits.len(), tm);
+            }
             lap(6, &mut tm);
             let Some(p) = sp.settle(p) else {
                 lap(0, &mut tm);
@@ -1821,7 +2044,8 @@ impl Logic {
             // the path's equations used in the goal: `x = t` or `t = x` (x a
             // variable) substituted, then `a = b` rewritten left to right
             let bf = env.binders_fn();
-            let mut g = g.clone();
+            // (the goal with the path's typing)
+            let mut g = sp.eqv(&g);
             let eqs_owned: Vec<(Term, Term)> = p
                 .lits
                 .iter()
@@ -1851,14 +2075,14 @@ impl Logic {
                                 continue;
                             }
                             if has_var(&g, x) {
-                                g = self.simp_eqv(env, &g.subst_var(x, t, &bf));
+                                g = sp.eqv(&g.subst_var(x, t, &bf));
                                 substs.push((x, t.clone()));
                                 break;
                             }
                         } else {
                             let body = super::seq::abstract_term(&g, t, 0, &bf);
                             if body != g {
-                                g = self.simp_eqv(env, &inst_k(env, &body, &[v.clone()]));
+                                g = sp.eqv(&inst_k(env, &body, &[v.clone()]));
                                 break;
                             }
                         }
@@ -1889,7 +2113,7 @@ impl Logic {
                 if var(a).is_none() && var(b).is_none() {
                     let body = super::seq::abstract_term(&g, a, 0, &bf);
                     if body != g {
-                        g = self.simp_eqv(env, &inst_k(env, &body, &[b.clone()]));
+                        g = sp.eqv(&inst_k(env, &body, &[b.clone()]));
                     }
                 }
             }
@@ -1897,7 +2121,7 @@ impl Logic {
             if sp.is_true(&g) {
                 continue;
             }
-            let closes = |g: &Term| self.tautology(env, &p.lits, g).is_ok() || self.arith(env, &p.lits, g).is_ok() || sp.instance_of_all(&p.lits, g);
+            let closes = |g: &Term| sp.typed(&p.lits, g) || self.tautology(env, &p.lits, g).is_ok() || self.arith(env, &p.lits, g).is_ok() || sp.instance_of_all(&p.lits, g);
             // a conjunction: each conjunct (arithmetic from the literals about it)
             let closes_part = |c: &Term| closes(c) || self.arith(env, &relevant(&p.lits, c), c).is_ok();
             let mut gs = Vec::new();
@@ -1924,6 +2148,9 @@ impl Logic {
             let ch = sp.chain(self, &p, &g, fresh);
             lap(5, &mut tm);
             if let Some(c) = ch {
+                if std::env::var("SIMP_DEBUG").is_ok() {
+                    eprintln!("simp: new fact {}", crate::syntax::Printer::new(env).term(&c).chars().take(300).collect::<String>());
+                }
                 steps += 1;
                 if steps > MAX_PATHS {
                     return Err(crate::env::KernelError("simp: too many paths".into()));
@@ -1933,6 +2160,13 @@ impl Logic {
             }
             // a loop on the path, with an invariant: continue with its outcome
             let mut why = String::new();
+            if std::env::var("SIMP_DEBUG").is_ok() && p.lits.len() > 60 {
+                let pr = crate::syntax::Printer::new(env);
+                for l in &p.lits {
+                    eprintln!("simp: literal {}", pr.term(l).chars().take(400).collect::<String>());
+                }
+                return Err(crate::env::KernelError("simp: stopped (SIMP_DEBUG, long path)".into()));
+            }
             if let Some(ps) = sp.loop_step(self, &p, hints, fresh, &mut why)? {
                 steps += 1;
                 if steps > MAX_PATHS {

@@ -470,6 +470,17 @@ fn facts_are_used_as_rules() {
 }
 
 #[test]
+fn address_arithmetic_needs_naturals() {
+    // (x + 5) - x = 5 for a 64-bit x; for an arbitrary set x the
+    // arithmetic is unspecified
+    let src = "theorem t(x): x in bits(64) -> bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  assume h: x in bits(64)\n  show by simp(h)\nqed\n";
+    assert_eq!(check_nat(src), Ok(1));
+    rejected("theorem t(x): bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  show by simp()\nqed\n", "simp");
+    // ... and so is x - x
+    rejected("theorem t(x): bits_sub(64, x, x) = 0\nproof\n  show by simp()\nqed\n", "simp");
+}
+
+#[test]
 fn rules_do_not_overreach() {
     let left = |src: String| match check_nat(&src) {
         Ok(_) => panic!("accepted: {}", src),
