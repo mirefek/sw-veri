@@ -778,6 +778,11 @@ impl State {
                     }
                     // rec({nat_rec(z, k v. s, n)} [, h]): its recursion equation for n = 0,
                     // or for n = m + 1 with h: m in omega
+                    // members({S}): the members of S, evaluated on concrete data
+                    "members" => {
+                        let t = self.term_arg(env, a0, 0)?;
+                        Seq::members(env, lg, &t)
+                    }
                     "rec" => {
                         let t = self.term_arg(env, a0, 0)?;
                         let h = match args.get(1) {

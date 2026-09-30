@@ -498,6 +498,17 @@ fn simp_computes_on_numerals() {
 }
 
 #[test]
+fn members_of_sets_are_evaluated() {
+    // the fact `members` gives, used: exactly 1 and 3
+    let src = "theorem t: all x. x in set_select(omega, x. (x = 1 || x = 3 || x = 2) && !(x = 2)) <-> x = 1 || x = 3\nproof\n  show members({set_select(omega, x. (x = 1 || x = 3 || x = 2) && !(x = 2))})\nqed\n";
+    assert_eq!(check(src), Ok(1));
+    // not another set of members
+    rejected("theorem t: all x. x in set_select(omega, x. x = 1 || x = 3) <-> x = 1\nproof\n  show members({set_select(omega, x. x = 1 || x = 3)})\nqed\n", "");
+    // an unknown bounded but not determined: no answer rather than a guess
+    rejected("theorem t: true\nproof\n  have h := members({set_select(omega, x. nat_lt(x, 4))})\n  show by taut()\nqed\n", "eval: unsolved");
+}
+
+#[test]
 fn loops_can_be_unrolled() {
     // counting to 3 without an invariant: three iterations, then the exit;
     // unrolling keeps that each iteration may also start a divergence

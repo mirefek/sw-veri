@@ -381,6 +381,15 @@ impl Seq {
 
     /// A recursion equation of `nat_rec` for `t` (see `Logic::nat_rec_eq`);
     /// `m_nat` proves `m in omega` for the step case.
+    /// `⊢ all x. x in set <-> x = c1 || .. || x = cn`, the members of `set`
+    /// evaluated on concrete data (`Logic::eval_members`).
+    pub fn members(env: &Env, lg: &Logic, set: &Term) -> KResult<Seq> {
+        env.check_wf(set, 0)?;
+        let concl = lg.eval_members(env, set)?;
+        env.check_wf(&concl, 0)?;
+        Ok(Seq { hyps: Vec::new(), concl, open: Vec::new() })
+    }
+
     pub fn nat_rec_eq(env: &Env, lg: &Logic, t: &Term, m_nat: Option<&Seq>) -> KResult<Seq> {
         env.check_wf(t, 0)?;
         let concl = lg.nat_rec_eq(env, t, m_nat.map(|s| &s.concl))?;

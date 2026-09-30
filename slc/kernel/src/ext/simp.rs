@@ -53,6 +53,8 @@ use super::prop::Logic;
 use crate::env::{Env, SymKind};
 use crate::term::{Node, SymId, Term};
 
+mod eval;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {
     /// a positive position of a fact: weakening allowed
@@ -119,7 +121,7 @@ struct Simp<'a> {
 const ARITH: &[&str] = &[
     "nat_add", "nat_mul", "nat_sub", "nat_div", "nat_mod", "nat_pow", "pow2", "bits_of_nat", "bits_add", "bits_sub", "bits_neg", "bits_mul",
     "bits_not", "bits_and", "bits_or", "bits_xor", "bits_shl", "bits_shr", "bits_slice", "nat_and", "nat_or", "lit_add", "lit_mul",
-    "lit_sub", "lit_div", "lit_mod", "succ",
+    "lit_sub", "lit_div", "lit_mod", "succ", "int_mod", "int_div",
 ];
 
 /// Numerals: arithmetic on literal arguments (None: not all literals, or
@@ -243,6 +245,38 @@ impl<'a> Simp<'a> {
         }
     }
 
+    /// Euclidean division of integer numerals (`int_div`, `int_mod`: a = b q
+    /// + r with 0 <= r < |b|); integers are numerals or `pair(1, m)` for -m.
+    fn compute_int(&self, op: &str, a: &[Term]) -> Option<Term> {
+        let int = |t: &Term| -> Option<i128> {
+            match t.node() {
+                Node::Nat(v) => i128::try_from(v.to_u128()?).ok(),
+                Node::App(p, b) if is(*p, self.s.pair) => match (b[0].node(), b[1].node()) {
+                    (Node::Nat(one), Node::Nat(m)) if one.to_u64() == Some(1) && !m.is_zero() => Some(-i128::try_from(m.to_u128()?).ok()?),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        let of = |v: i128| -> Term {
+            if v >= 0 {
+                Term::nat(crate::nat::Nat::from_u128(v as u128))
+            } else {
+                self.app2(self.s.pair, Term::nat(crate::nat::Nat::from_u64(1)), Term::nat(crate::nat::Nat::from_u128(v.unsigned_abs())))
+            }
+        };
+        let (x, y) = (int(a.first()?)?, int(a.get(1)?)?);
+        if y == 0 {
+            return None;
+        }
+        let r = x.rem_euclid(y.abs());
+        match op {
+            "int_mod" => Some(of(r)),
+            "int_div" => Some(of((x - r) / y)),
+            _ => None,
+        }
+    }
+
     fn tt(&self) -> Term {
         Term::app(self.s.true_.expect("true"), vec![])
     }
@@ -302,7 +336,8 @@ impl<'a> Simp<'a> {
             if let Some((g, b)) = head(&args[0]) {
                 let fst = is(f, s.fst);
                 let snd = is(f, s.snd);
-                if is(g, s.pair) {
+                // (a tag is a pair: `tag(k, v) = pair(k, v)`)
+                if is(g, s.pair) || is(g, s.tag) {
                     if fst {
                         return b[0].clone();
                     }
@@ -326,6 +361,9 @@ impl<'a> Simp<'a> {
         }
         if let Some(op) = self.arith.get(&f) {
             if let Some(v) = compute(op, &args) {
+                return v;
+            }
+            if let Some(v) = self.compute_int(op, &args) {
                 return v;
             }
         }
@@ -528,6 +566,13 @@ impl<'a> Simp<'a> {
         }
         if distinct_literals(&x, &y) {
             return self.ff();
+        }
+        // `empty` is the numeral 0 (`lit_zero`)
+        let is_empty = |t: &Term| matches!(t.node(), Node::App(e, b) if b.is_empty() && is(*e, s.empty));
+        for (p, q) in [(&x, &y), (&y, &x)] {
+            if let (Node::Nat(v), true) = (p.node(), is_empty(q)) {
+                return if v.is_zero() { self.tt() } else { self.ff() };
+            }
         }
         // constructors: injective and distinct
         let ctor = |t: &Term| -> Option<(u8, Vec<Term>)> {
