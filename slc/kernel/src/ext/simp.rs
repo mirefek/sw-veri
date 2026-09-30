@@ -131,6 +131,9 @@ struct Simp<'a> {
     footprints: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<Vec<Term>>>>,
     /// parameters used only mod 2^n (`word_param`)
     word_params: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<u64>>>,
+    /// time in rule chaining (SIMP_TIME): matching, typing / instances,
+    /// taut, arith
+    prof: std::cell::RefCell<[std::time::Duration; 4]>,
 }
 
 /// The arithmetic and bitwise definitions of the prelude that `simp`
@@ -360,6 +363,7 @@ impl<'a> Simp<'a> {
             nats: std::cell::RefCell::new(Vec::new()),
             footprints: Default::default(),
             word_params: Default::default(),
+            prof: Default::default(),
             s: Syms {
                 eq: env.builtins.eq,
                 imp: env.builtins.imp,
@@ -2029,8 +2033,26 @@ impl Simp<'_> {
 
     /// `t` is an instance of a literal `all xs. C` (C not an implication).
     fn instance_of_all(&self, lits: &[Term], t: &Term) -> bool {
+        let head = |x: &Term| match x.node() {
+            Node::App(g, _) => Some(*g),
+            _ => None,
+        };
+        let th = head(t);
         for l in lits {
             if !matches!(l.node(), Node::App(q, _) if *q == self.s.all) {
+                continue;
+            }
+            // (cheaply first: a body under the binders with t's head)
+            let mut b = l;
+            let mut fits = false;
+            while let Node::App(q, a) = b.node() {
+                if *q != self.s.all {
+                    break;
+                }
+                b = &a[0];
+                fits |= head(b) == th;
+            }
+            if !fits || head(b) == Some(self.s.imp) && th != Some(self.s.imp) && th != Some(self.s.all) {
                 continue;
             }
             // pattern variables above those of t and l
@@ -2130,11 +2152,50 @@ impl Simp<'_> {
                     self.prop(&t, Pol::Other)
                 };
                 let shown = |h: &Term| {
-                    self.typed(&p.lits, h)
-                        || self.instance_of_all(&p.lits, h)
-                        || lg.tautology(self.env, &p.lits, h).is_ok()
-                        || lg.arith(self.env, &p.lits, h).is_ok()
-                        || lg.arith(self.env, &relevant(&p.lits, h), h).is_ok()
+                    // the path's known values (`t = N`) in h first
+                    let mut h = h.clone();
+                    for l in &p.lits {
+                        if let Node::App(e, ab) = l.node() {
+                            if *e == self.s.eq && matches!(ab[1].node(), Node::Nat(_)) && matches!(ab[0].node(), Node::App(_, x) if !x.is_empty()) {
+                                let body = super::seq::abstract_term(&h, &ab[0], 0, &bf);
+                                if body != h {
+                                    h = self.prop(&inst_k(self.env, &body, &[ab[1].clone()]), Pol::Other);
+                                }
+                            }
+                        }
+                    }
+                    let h = &h;
+                    if self.is_false(h) || self.is_true(h) {
+                        return self.is_true(h);
+                    }
+                    // (a program's run holds only as a literal)
+                    if matches!(h.node(), Node::App(r, _) if is(*r, self.s.runs)) {
+                        return p.lits.contains(h);
+                    }
+                    let t = std::time::Instant::now();
+                    let lap = |i: usize, t: &mut std::time::Instant| {
+                        self.prof.borrow_mut()[i] += t.elapsed();
+                        *t = std::time::Instant::now();
+                    };
+                    let mut t = t;
+                    if self.typed(&p.lits, h) || self.instance_of_all(&p.lits, h) {
+                        lap(1, &mut t);
+                        return true;
+                    }
+                    lap(1, &mut t);
+                    if lg.tautology(self.env, &p.lits, h).is_ok() {
+                        lap(2, &mut t);
+                        return true;
+                    }
+                    lap(2, &mut t);
+                    // (the literals about h first: a much smaller problem)
+                    let near = relevant(&p.lits, h);
+                    let r = lg.arith(self.env, &near, h).is_ok() || (near.len() < p.lits.len() && lg.arith(self.env, &p.lits, h).is_ok());
+                    if !r && std::env::var("SIMP_DEBUG").is_ok() {
+                        eprintln!("simp: not shown {}", crate::syntax::Printer::new(self.env).term(h).chars().take(200).collect::<String>());
+                    }
+                    lap(3, &mut t);
+                    r
                 };
                 if !open.iter().all(|&i| shown(&inst(&hyps[i]))) {
                     continue;
@@ -2412,6 +2473,7 @@ impl Logic {
         let report_time = |tm: &[std::time::Duration; 7], n: usize| {
             if timing {
                 eprintln!("simp time [settle, goal, taut/arith, witnessed, near, chain, loop]: {:?}, {} paths", tm, n);
+                eprintln!("simp chain time [-, typed/instance, taut, arith]: {:?}", sp.prof.borrow());
             }
         };
         while let Some(p) = work.pop() {
