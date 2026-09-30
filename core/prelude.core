@@ -7,9 +7,10 @@
 //
 // Conventions for SL values:
 //   bool      = the propositions false / true (a bool value *is* a proposition)
-//   nat       = von Neumann naturals (omega); literals denote them
-//   int       = nat for n >= 0, pair(1, n) for -n
-//   bits[n]   = naturals below 2^n
+//   int       = von Neumann naturals (omega) for n >= 0, pair(1, n) for -n;
+//               literals denote naturals; arithmetic is on integers
+//   nat       = the integers >= 0 (omega)
+//   bits[n]   = the integers 0 <= x < 2^n
 //   tuples    = nested pairs, unit = empty
 //   records   = functions from field-name strings to values
 //   sums      = tag(i, payload); enums = their numeric value
@@ -117,85 +118,90 @@ def fn_space(a, b) := set_select(powerset(cart(a, b)), f. is_fun(f) && dom(f) = 
 def restrict(f, d) := set_select(f, z. fst(z) in d)
 
 // =====================================================================
-//  Natural numbers
+//  Integers
+//
+// The integers are the naturals (omega, von Neumann) and pair(1, n) for
+// -n (n > 0). Arithmetic is on integers, and total: a set that is not an
+// integer counts as 0 (`int_val`), so the laws of the integers hold for
+// any arguments, e.g. (x + 5) - x = 5 for every x. Naturals are only the
+// non-negative integers; there is no separate natural arithmetic.
 
-def nat_lt(a, b) := a in b
-def nat_le(a, b) := a in b || a = b
+// recursion on the naturals
 def nat_rec(z, k v. s, n) :=
   app(choose(f. is_fun(f) && dom(f) = omega && app(f, empty) = z &&
                (all k. k in omega -> app(f, succ(k)) = s(k, app(f, k)))), n)
-def nat_add(a, b) := nat_rec(a, k v. succ(v), b)
-def nat_mul(a, b) := nat_rec(empty, k v. nat_add(v, a), b)
-def nat_pow(a, b) := nat_rec(succ(empty), k v. nat_mul(v, a), b)
-def nat_sub(a, b) := choose(c. c in omega && nat_add(b, c) = a)
-def nat_div(a, b) := choose(q. q in omega && (ex r. r in b && nat_add(nat_mul(b, q), r) = a))
-def nat_mod(a, b) := choose(r. r in b && (ex q. q in omega && nat_add(nat_mul(b, q), r) = a))
-def nat_min(s) := choose(m. m in s && (all x. x in s -> nat_le(m, x)))
-def nat_max(s) := choose(m. m in s && (all x. x in s -> nat_le(x, m)))
-def nat_sum(a, b, i. f) := nat_rec(empty, k v. nat_add(v, f(nat_add(a, k))), nat_sub(b, a))
-def natinf := succ(omega)            // nat extended by omega (= infinity)
-def nat_range(a, b) := set_select(omega, i. nat_le(a, i) && i in b)
+
+def int := union2(omega, set_image(set_select(omega, n. n != empty), n. pair(1, n)))
+def int_val(a) := ite(a in int, a, empty)
+def int_abs(a) := letin(int_val(a), x. ite(x in omega, x, snd(x)))
+def int_neg(a) := letin(int_val(a), x. ite(x in omega, ite(x = empty, empty, pair(1, x)), snd(x)))
+// a + 1 (-n + 1 = -(n - 1); union(succ(k)) = k)
+def int_succ(a) := letin(int_val(a), x. ite(x in omega, succ(x), int_neg(union(snd(x)))))
+def int_pred(a) := int_neg(int_succ(int_neg(a)))
+// adding or subtracting 1, |b| times
+def int_add(a, b) :=
+  letin(int_val(b), y. ite(y in omega, nat_rec(int_val(a), k v. int_succ(v), y), nat_rec(int_val(a), k v. int_pred(v), snd(y))))
+def int_sub(a, b) := int_add(a, int_neg(b))
+def int_mul(a, b) := letin(nat_rec(empty, k v. int_add(v, a), int_abs(b)), p. ite(int_val(b) in omega, p, int_neg(p)))
+def int_le(a, b) := int_sub(b, a) in omega
+def int_lt(a, b) := int_le(int_succ(a), b)
+// a^n for n >= 0 (0 otherwise)
+def int_pow(a, n) := ite(int_val(n) in omega, nat_rec(1, k v. int_mul(v, a), int_val(n)), empty)
+// Euclidean division: a = b*q + r with 0 <= r < |b|; by 0: q = 0, r = a
+def int_mod(a, b) :=
+  ite(int_val(b) = empty, int_val(a),
+      choose(r. r in omega && int_lt(r, int_abs(b)) && (ex q. q in int && int_val(a) = int_add(int_mul(b, q), r))))
+def int_div(a, b) := ite(int_val(b) = empty, empty, choose(q. q in int && int_val(a) = int_add(int_mul(b, q), int_mod(a, b))))
+def int_min(s) := choose(m. m in s && (all x. x in s -> int_le(m, x)))
+def int_max(s) := choose(m. m in s && (all x. x in s -> int_le(x, m)))
+// a <= i < b
+def int_range(a, b) := set_select(int, i. int_le(a, i) && int_lt(i, b))
+// f(a) + .. + f(b - 1)
+def int_sum(a, b, i. f) := nat_rec(empty, k v. int_add(v, f(int_add(a, k))), ite(int_le(a, b), int_sub(b, a), empty))
+def natinf := succ(omega)            // the naturals and omega (= infinity)
+// the order of natinf (von Neumann: membership; on naturals, int_lt)
+def ord_lt(a, b) := a in b
+def ord_le(a, b) := a in b || a = b
 
 // literals are von Neumann naturals
 axiom lit_zero: 0 = empty
 axiom lit_succ(n): is_nat(n) -> lit_add(n, 1) = succ(n)
 axiom lit_nat(n): is_nat(n) -> n in omega
 axiom lit_lt_def(a, b): is_nat(a) -> is_nat(b) -> (lit_lt(a, b) <-> a in b)
-axiom lit_add_def(a, b): is_nat(a) -> is_nat(b) -> lit_add(a, b) = nat_add(a, b)
-axiom lit_mul_def(a, b): is_nat(a) -> is_nat(b) -> lit_mul(a, b) = nat_mul(a, b)
-axiom lit_sub_def(a, b): is_nat(a) -> is_nat(b) -> !(a in b) -> lit_sub(a, b) = nat_sub(a, b)
-axiom lit_div_def(a, b): is_nat(a) -> is_nat(b) -> b != 0 -> lit_div(a, b) = nat_div(a, b)
-axiom lit_mod_def(a, b): is_nat(a) -> is_nat(b) -> b != 0 -> lit_mod(a, b) = nat_mod(a, b)
+axiom lit_add_def(a, b): is_nat(a) -> is_nat(b) -> lit_add(a, b) = int_add(a, b)
+axiom lit_mul_def(a, b): is_nat(a) -> is_nat(b) -> lit_mul(a, b) = int_mul(a, b)
+axiom lit_sub_def(a, b): is_nat(a) -> is_nat(b) -> !(a in b) -> lit_sub(a, b) = int_sub(a, b)
+axiom lit_div_def(a, b): is_nat(a) -> is_nat(b) -> b != 0 -> lit_div(a, b) = int_div(a, b)
+axiom lit_mod_def(a, b): is_nat(a) -> is_nat(b) -> b != 0 -> lit_mod(a, b) = int_mod(a, b)
 
 // =====================================================================
-//  Integers
+//  Bit vectors: bits[n] = the integers 0 <= x < 2^n, arithmetic mod 2^n
 
-def int := union2(omega, set_image(set_select(omega, n. n != empty), n. pair(1, n)))
-def int_isneg(a) := !(a in omega)
-def int_mag(a) := ite(a in omega, a, snd(a))
-def int_neg(a) := ite(a in omega, ite(a = empty, empty, pair(1, a)), snd(a))
-def int_nat_sub(a, b) := ite(nat_le(b, a), nat_sub(a, b), int_neg(nat_sub(b, a)))
-def int_add(a, b) :=
-  ite(int_isneg(a),
-      ite(int_isneg(b), int_neg(nat_add(int_mag(a), int_mag(b))), int_nat_sub(b, int_mag(a))),
-      ite(int_isneg(b), int_nat_sub(a, int_mag(b)), nat_add(a, b)))
-def int_sub(a, b) := int_add(a, int_neg(b))
-def int_mul(a, b) :=
-  ite(int_isneg(a) <-> int_isneg(b), nat_mul(int_mag(a), int_mag(b)), int_neg(nat_mul(int_mag(a), int_mag(b))))
-def int_lt(a, b) :=
-  ite(int_isneg(a), ite(int_isneg(b), int_mag(b) in int_mag(a), true), ite(int_isneg(b), false, a in b))
-def int_le(a, b) := int_lt(a, b) || a = b
-// Euclidean division: a = b*q + r with 0 <= r < |b|
-def int_div(a, b) := choose(q. q in int && (ex r. r in int_mag(b) && a = int_add(int_mul(b, q), r)))
-def int_mod(a, b) := choose(r. r in int_mag(b) && (ex q. q in int && a = int_add(int_mul(b, q), r)))
-
-// =====================================================================
-//  Bit vectors: bits[n] = naturals below 2^n
-
-def pow2(n) := nat_pow(2, n)
-def bits(n) := set_select(omega, x. x in pow2(n))
-def bit(x, i) := nat_mod(nat_div(x, pow2(i)), 2) = 1
-def bits_build(n, i. p) := choose(x. x in bits(n) && (all i. i in n -> (bit(x, i) <-> p(i))))
-def bits_of_nat(n, x) := nat_mod(x, pow2(n))
+def pow2(n) := int_pow(2, n)
+def bits(n) := set_select(omega, x. int_lt(x, pow2(n)))
+def bit(x, i) := int_mod(int_div(x, pow2(i)), 2) = 1
+def bits_build(n, i. p) := choose(x. x in bits(n) && (all i. i in omega -> int_lt(i, n) -> (bit(x, i) <-> p(i))))
 def bits_of_int(n, z) := int_mod(z, pow2(n))
-def sint(n, a) := ite(a in pow2(nat_sub(n, 1)), a, int_nat_sub(a, pow2(n)))
-def bits_add(n, a, b) := nat_mod(nat_add(a, b), pow2(n))
-def bits_sub(n, a, b) := nat_mod(nat_sub(nat_add(a, pow2(n)), nat_mod(b, pow2(n))), pow2(n))
-def bits_neg(n, a) := bits_sub(n, 0, a)
-def bits_mul(n, a, b) := nat_mod(nat_mul(a, b), pow2(n))
+// the signed value of an n-bit word
+def sint(n, a) := letin(bits_of_int(n, a), x. ite(int_lt(x, pow2(int_sub(n, 1))), x, int_sub(x, pow2(n))))
+def bits_add(n, a, b) := int_mod(int_add(a, b), pow2(n))
+def bits_sub(n, a, b) := int_mod(int_sub(a, b), pow2(n))
+def bits_neg(n, a) := int_mod(int_neg(a), pow2(n))
+def bits_mul(n, a, b) := int_mod(int_mul(a, b), pow2(n))
 def bits_not(n, a) := bits_build(n, i. !bit(a, i))
 def bits_and(n, a, b) := bits_build(n, i. bit(a, i) && bit(b, i))
 def bits_or(n, a, b) := bits_build(n, i. bit(a, i) || bit(b, i))
 def bits_xor(n, a, b) := bits_build(n, i. !(bit(a, i) <-> bit(b, i)))
-def bits_shl(n, a, k) := nat_mod(nat_mul(a, pow2(k)), pow2(n))
-def bits_shr(n, a, k) := nat_div(a, pow2(k))
+def bits_shl(n, a, k) := int_mod(int_mul(a, pow2(k)), pow2(n))
+def bits_shr(n, a, k) := int_div(bits_of_int(n, a), pow2(k))
 def bits_sar(n, a, k) := bits_of_int(n, int_div(sint(n, a), pow2(k)))
-def bits_slice(x, hi, lo) := nat_mod(nat_div(x, pow2(lo)), pow2(nat_sub(succ(hi), lo)))
+// bits lo..hi of x
+def bits_slice(x, hi, lo) := int_mod(int_div(x, pow2(lo)), pow2(int_sub(int_succ(hi), lo)))
 def bits_set_slice(n, x, hi, lo, v) :=
-  bits_build(n, i. ite(nat_le(lo, i) && nat_le(i, hi), bit(v, nat_sub(i, lo)), bit(x, i)))
+  bits_build(n, i. ite(int_le(lo, i) && int_le(i, hi), bit(v, int_sub(i, lo)), bit(x, i)))
 def bits_set_bit(n, x, i, b) := bits_build(n, j. ite(j = i, b, bit(x, j)))
 def bits_sext(m, n, x) := bits_of_int(n, sint(m, x))
-def bits_concat_le(b, a, n) := nat_sum(0, n, i. nat_mul(app(b, bits_add(64, a, i)), nat_pow(256, i)))
+def bits_concat_le(b, a, n) := int_sum(0, n, i. int_mul(app(b, bits_add(64, a, i)), int_pow(256, i)))
 
 // =====================================================================
 //  Tagged values, options, records
@@ -222,10 +228,10 @@ def seq_len(s) := dom(s)
 def seq_append(s, x) := union2(s, single(pair(dom(s), x)))
 // the one-element list; list literals are concatenations of these
 def seq_one(x) := single(pair(0, x))
-def seq_concat(a, b) := union2(a, set_image(b, z. pair(nat_add(dom(a), fst(z)), snd(z))))
-def seq_take(s, k) := set_select(s, z. fst(z) in k)
-def seq_drop(s, k) := set_image(set_select(s, z. !(fst(z) in k)), z. pair(nat_sub(fst(z), k), snd(z)))
-def seq_slice(s, a, b) := seq_take(seq_drop(s, a), nat_sub(b, a))
+def seq_concat(a, b) := union2(a, set_image(b, z. pair(int_add(dom(a), fst(z)), snd(z))))
+def seq_take(s, k) := set_select(s, z. int_lt(fst(z), k))
+def seq_drop(s, k) := set_image(set_select(s, z. int_le(k, fst(z))), z. pair(int_sub(fst(z), k), snd(z)))
+def seq_slice(s, a, b) := seq_take(seq_drop(s, a), int_sub(b, a))
 def seq_map(s, x. f) := set_image(s, z. pair(fst(z), f(snd(z))))
 // the subsequence of elements satisfying p, in order
 def seq_filter(s, x. p) :=
@@ -238,7 +244,7 @@ def seq_prefix_concat(ss, n) := nat_rec(empty, k v. seq_concat(v, app(ss, k)), n
 def seq_flatten(ss) := union(set_image(set_select(succ(dom(ss)), n. n in omega), n. seq_prefix_concat(ss, n)))
 // sum over a (possibly infinite) sequence, in natinf
 def seq_sum(s, x. f) :=
-  union(set_image(set_select(succ(dom(s)), n. n in omega), n. nat_rec(empty, k v. nat_add(v, f(app(s, k))), n)))
+  union(set_image(set_select(succ(dom(s)), n. n in omega), n. nat_rec(empty, k v. int_add(v, f(app(s, k))), n)))
 // `l` lists the elements of the finite set `s`, each once
 def set_enum(l, s) := is_seq(l) && dom(l) in omega && set_image(dom(l), i. app(l, i)) = s &&
   (all i j. i in dom(l) -> j in dom(l) -> app(l, i) = app(l, j) -> i = j)
@@ -289,10 +295,10 @@ def bind_rel(p, s, s1 v. k, s1 e. x, t. d) :=
 // nondeterministic choice from `d`; no possible value means undefined (anything)
 def any_rel(x. d, x. k) := !(ex x. d(x)) || (ex x. d(x) && k(x))
 
-// bitwise operations on naturals
-def nat_bits(i. p) := choose(c. c in omega && (all i. i in omega -> (bit(c, i) <-> p(i))))
-def nat_or(a, b) := nat_bits(i. bit(a, i) || bit(b, i))
-def nat_and(a, b) := nat_bits(i. bit(a, i) && bit(b, i))
+// bitwise operations on (non-negative) integers
+def int_bits(i. p) := choose(c. c in omega && (all i. i in omega -> (bit(c, i) <-> p(i))))
+def int_or(a, b) := int_bits(i. bit(a, i) || bit(b, i))
+def int_and(a, b) := int_bits(i. bit(a, i) && bit(b, i))
 
 def outcome_type(s, v) :=
   union2(set_image(cart(s, v), z. ok(fst(z), snd(z))),

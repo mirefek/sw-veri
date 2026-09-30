@@ -430,17 +430,18 @@ impl<'s> Elab<'s> {
                 let (x, y) = if matches!(op, Gt | Ge) { (tb, ta) } else { (ta, tb) };
                 let strict = matches!(op, Lt | Gt);
                 let t = match ty.strip() {
-                    Ty::Int => self.b.app(if strict { "int_lt" } else { "int_le" }, vec![x, y]),
                     Ty::Seq(_) | Ty::List(_) | Ty::State(_) if !strict => self.b.app("subset", vec![x, y]),
                     Ty::Unknown => {
                         // e.g. prefix of trace sequences whose type is not known
                         if strict {
-                            self.b.app("nat_lt", vec![x, y])
+                            self.b.app("ord_lt", vec![x, y])
                         } else {
                             self.b.app("subset", vec![x, y])
                         }
                     }
-                    _ => self.b.app(if strict { "nat_lt" } else { "nat_le" }, vec![x, y]),
+                    // (with infinity: the order of ordinals)
+                    Ty::NatInf => self.b.app(if strict { "ord_lt" } else { "ord_le" }, vec![x, y]),
+                    _ => self.b.app(if strict { "int_lt" } else { "int_le" }, vec![x, y]),
                 };
                 Ok((t, Ty::Bool))
             }
@@ -490,7 +491,7 @@ impl<'s> Elab<'s> {
             Pow => {
                 let (ta, _) = self.expr(cx, a, Some(&Ty::Nat))?;
                 let (tb, _) = self.expr(cx, b, Some(&Ty::Nat))?;
-                Ok((self.b.app("nat_pow", vec![ta, tb]), if matches!(exp, Some(Ty::Int)) { Ty::Int } else { Ty::Nat }))
+                Ok((self.b.app("int_pow", vec![ta, tb]), if matches!(exp, Some(Ty::Int)) { Ty::Int } else { Ty::Nat }))
             }
             Add | Sub | Mul | Div | Mod | SDiv | SMod | BAnd | BOr | BXor | Shl | Shr | Sar => {
                 let (ta, tb, mut ty) = if matches!(op, Shl | Shr | Sar) {
@@ -520,20 +521,16 @@ impl<'s> Elab<'s> {
             (Ty::Bits(_), Shl) => "bits_shl",
             (Ty::Bits(_), Sar) => "bits_sar",
             (Ty::Bits(_), Shr) => return Ok((self.b.app("bits_shr", vec![self.width(&ty), a, b]), ty)),
-            (Ty::Bits(_), Div) => return Ok((self.b.app("nat_div", vec![a, b]), ty)),
-            (Ty::Bits(_), Mod) => return Ok((self.b.app("nat_mod", vec![a, b]), ty)),
-            (Ty::Int, Add) => "int_add",
-            (Ty::Int, Sub) => "int_sub",
-            (Ty::Int, Mul) => "int_mul",
-            (Ty::Int, Div) => "int_div",
-            (Ty::Int, Mod) => "int_mod",
-            (Ty::Nat | Ty::Enum(_) | Ty::Unknown | Ty::NatInf, Add) => "nat_add",
-            (Ty::Nat | Ty::Enum(_) | Ty::Unknown | Ty::NatInf, Sub) => "nat_sub",
-            (Ty::Nat | Ty::Enum(_) | Ty::Unknown | Ty::NatInf, Mul) => "nat_mul",
-            (Ty::Nat | Ty::Enum(_) | Ty::Unknown, Div) => "nat_div",
-            (Ty::Nat | Ty::Enum(_) | Ty::Unknown, Mod) => "nat_mod",
-            (Ty::Nat | Ty::Unknown, BOr) => "nat_or",
-            (Ty::Nat | Ty::Unknown, BAnd) => "nat_and",
+            (Ty::Bits(_), Div) => return Ok((self.b.app("int_div", vec![a, b]), ty)),
+            (Ty::Bits(_), Mod) => return Ok((self.b.app("int_mod", vec![a, b]), ty)),
+            // numbers are integers (naturals: the non-negative ones)
+            (Ty::Int | Ty::Nat | Ty::Enum(_) | Ty::Unknown | Ty::NatInf, Add) => "int_add",
+            (Ty::Int | Ty::Nat | Ty::Enum(_) | Ty::Unknown | Ty::NatInf, Sub) => "int_sub",
+            (Ty::Int | Ty::Nat | Ty::Enum(_) | Ty::Unknown | Ty::NatInf, Mul) => "int_mul",
+            (Ty::Int | Ty::Nat | Ty::Enum(_) | Ty::Unknown, Div) => "int_div",
+            (Ty::Int | Ty::Nat | Ty::Enum(_) | Ty::Unknown, Mod) => "int_mod",
+            (Ty::Nat | Ty::Unknown, BOr) => "int_or",
+            (Ty::Nat | Ty::Unknown, BAnd) => "int_and",
             _ => return err(span, format!("operator {:?} on {}", op, ty.describe())),
         };
         let t = if name.starts_with("bits_") {
@@ -550,12 +547,12 @@ impl<'s> Elab<'s> {
         let (hi, lo) = (self.b.norm(hi), self.b.norm(lo));
         if matches!(lo.node(), sl_kernel::Node::Nat(n) if n.is_zero()) {
             if let sl_kernel::Node::App(s, args) = hi.node() {
-                if self.b.env.syms[*s as usize].name == "nat_sub" && matches!(args[1].node(), sl_kernel::Node::Nat(n) if n.to_u64() == Some(1)) {
+                if self.b.env.syms[*s as usize].name == "int_sub" && matches!(args[1].node(), sl_kernel::Node::Nat(n) if n.to_u64() == Some(1)) {
                     return args[0].clone();
                 }
             }
         }
-        self.b.norm(&self.b.app("nat_sub", vec![self.b.app("succ", vec![hi]), lo]))
+        self.b.norm(&self.b.app("int_sub", vec![self.b.app("int_add", vec![hi, self.b.nat(1)]), lo]))
     }
 
     pub fn width(&self, ty: &Ty) -> Term {
@@ -570,7 +567,7 @@ impl<'s> Elab<'s> {
         if let ExprKind::Binary(BinOp::Range, lo, hi) = &s.kind {
             let (l, _) = self.expr(cx, lo, Some(&Ty::Nat))?;
             let (h, _) = self.expr(cx, hi, Some(&Ty::Nat))?;
-            return Ok(self.b.app("nat_range", vec![l, h]));
+            return Ok(self.b.app("int_range", vec![l, h]));
         }
         // a type name (enum type, type parameter)
         if let ExprKind::Name(n) = &s.kind {
@@ -665,12 +662,12 @@ impl<'s> Elab<'s> {
             let (l, _) = self.expr(cx, lo, Some(&Ty::Nat))?;
             let (h, _) = self.expr(cx, hi, Some(&Ty::Nat))?;
             let i = self.fresh(&v.name);
-            let val = self.b.app("nat_add", vec![l.clone(), self.b.v(i)]);
+            let val = self.b.app("int_add", vec![l.clone(), self.b.v(i)]);
             cx.push_local(&v.name, val, Ty::Nat, false);
             let r = self.pure_expr(cx, elem, None);
             cx.locals.pop();
             let (e, ety) = r?;
-            let len = self.b.app("nat_sub", vec![h, l]);
+            let len = self.b.app("int_sub", vec![h, l]);
             return Ok((self.b.bind_app("fn_build", vec![len], &[i], &e), Ty::List(Box::new(ety))));
         }
         let (s, sty) = self.expr(cx, iter, None)?;
@@ -711,7 +708,7 @@ impl<'s> Elab<'s> {
                 let r = self.pure_expr(cx, body, Some(&Ty::Nat));
                 cx.locals.pop();
                 let (e, _) = r?;
-                return Ok((self.b.bind_app("nat_sum", vec![l, h], &[i], &e), Ty::Nat));
+                return Ok((self.b.bind_app("int_sum", vec![l, h], &[i], &e), Ty::Nat));
             }
             let (s, sty) = self.expr(cx, dom, None)?;
             let ety = match sty.strip() {
@@ -1376,8 +1373,7 @@ impl<'s> Elab<'s> {
                 let t = match (n.name.as_str(), xty.strip()) {
                     ("zext", Ty::Bits(_)) => x,
                     ("sext", Ty::Bits(m)) => self.b.app("bits_sext", vec![m.clone(), w, x]),
-                    ("bits", Ty::Int) => self.b.app("bits_of_int", vec![w, x]),
-                    ("bits", Ty::Nat | Ty::Bits(_) | Ty::Enum(_) | Ty::Unknown | Ty::NatInf) => self.b.app("bits_of_nat", vec![w, x]),
+                    ("bits", Ty::Int | Ty::Nat | Ty::Bits(_) | Ty::Enum(_) | Ty::Unknown | Ty::NatInf) => self.b.app("bits_of_int", vec![w, x]),
                     _ => return err(span, format!("`{}[..]` of {}", n.name, xty.describe())),
                 };
                 Ok((t, out))
@@ -1408,7 +1404,7 @@ impl<'s> Elab<'s> {
             }
             "abs" => {
                 let (t, _) = one(self, cx, Some(&Ty::Int))?;
-                (self.b.app("int_mag", vec![t]), Ty::Nat)
+                (self.b.app("int_abs", vec![t]), Ty::Nat)
             }
             "len" => {
                 let (t, _) = one(self, cx, None)?;
@@ -1416,7 +1412,7 @@ impl<'s> Elab<'s> {
             }
             "min" | "max" => {
                 let (t, _) = one(self, cx, None)?;
-                (self.b.app(if name.name == "min" { "nat_min" } else { "nat_max" }, vec![t]), Ty::Nat)
+                (self.b.app(if name.name == "min" { "int_min" } else { "int_max" }, vec![t]), Ty::Nat)
             }
             "concat" => {
                 let (t, ty) = one(self, cx, None)?;
@@ -1455,7 +1451,7 @@ impl<'s> Elab<'s> {
                 let pos = self.b.field(s.clone(), "pos");
                 let v = self.b.app_fn(self.b.field(s.clone(), "bytes"), pos.clone());
                 if name.name == "next" {
-                    let s2 = self.b.fn_update(s, self.b.str("pos"), self.b.app("nat_add", vec![pos, self.b.nat(1)]));
+                    let s2 = self.b.fn_update(s, self.b.str("pos"), self.b.app("int_add", vec![pos, self.b.nat(1)]));
                     let sv = self.fresh("s");
                     cx.frames.push(Frame::Let { var: sv, value: s2 });
                     cx.state = Some(self.b.v(sv));

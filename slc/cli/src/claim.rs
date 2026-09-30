@@ -107,7 +107,7 @@ pub fn claim(args: &[String]) -> CResult {
     }
     let mut static_set = el.b.empty();
     for (lo, hi, _) in &ranges {
-        let r = el.b.app("nat_range", vec![el.b.natn(Nat::from_u64(*lo)), el.b.natn(Nat::from_u64(*hi))]);
+        let r = el.b.app("int_range",vec![el.b.natn(Nat::from_u64(*lo)), el.b.natn(Nat::from_u64(*hi))]);
         static_set = el.b.app("union2", vec![r, static_set]);
     }
     call.push(named(&mut el, "static", static_set)?);

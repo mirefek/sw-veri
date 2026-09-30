@@ -210,20 +210,20 @@ fn arith_ok(stmt: &str, hyps: &[(&str, &str)]) -> Result<usize, String> {
 fn arithmetic_is_proven() {
     let na = ("ha", "a in omega");
     let nb = ("hb", "b in omega");
-    assert_eq!(arith_ok("a in omega -> b in omega -> nat_lt(a, b) -> nat_le(nat_add(a, 1), b)", &[na, nb, ("h", "nat_lt(a, b)")]), Ok(1));
-    assert_eq!(arith_ok("a in omega -> b in omega -> a in b -> nat_lt(a, b)", &[na, nb, ("h", "a in b")]), Ok(1));
-    // `-` where it is defined
-    assert_eq!(
-        arith_ok("a in omega -> b in omega -> nat_le(b, a) -> nat_add(nat_sub(a, b), b) = a", &[na, nb, ("h", "nat_le(b, a)")]),
-        Ok(1)
-    );
+    assert_eq!(arith_ok("a in omega -> b in omega -> int_lt(a, b) -> int_le(int_add(a, 1), b)", &[na, nb, ("h", "int_lt(a, b)")]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> b in omega -> a in b -> int_lt(a, b)", &[na, nb, ("h", "a in b")]), Ok(1));
+    // integers: `-` everywhere
+    assert_eq!(arith_ok("a in omega -> b in omega -> int_add(int_sub(a, b), b) = a", &[na, nb]), Ok(1));
+    // arithmetic is total: laws of the integers for any sets
+    assert_eq!(arith_ok("int_add(a, b) = int_add(b, a)", &[]), Ok(1));
+    assert_eq!(arith_ok("int_sub(int_add(x, 5), x) = 5", &[]), Ok(1));
     // division by a constant
-    assert_eq!(arith_ok("a in omega -> nat_lt(nat_mod(a, 4), 4)", &[na]), Ok(1));
-    assert_eq!(arith_ok("a in omega -> nat_le(nat_mul(4, nat_div(a, 4)), a)", &[na]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> int_lt(int_mod(a, 4), 4)", &[na]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> int_le(int_mul(4, int_div(a, 4)), a)", &[na]), Ok(1));
     // a term equated to a number is a number
-    assert_eq!(arith_ok("x = 3 -> nat_lt(x, 4)", &[("h", "x = 3")]), Ok(1));
+    assert_eq!(arith_ok("x = 3 -> int_lt(x, 4)", &[("h", "x = 3")]), Ok(1));
     // numbers built from numbers are in omega
-    assert_eq!(arith_ok("a in omega -> nat_add(nat_mul(3, a), 2) in omega", &[na]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> int_add(int_mul(3, a), 2) in omega", &[na]), Ok(1));
 }
 
 #[test]
@@ -234,24 +234,24 @@ fn unsound_arithmetic_is_rejected() {
         let r = arith_ok(stmt, hyps);
         assert!(r.as_ref().is_err_and(|e| e.contains("arith")), "accepted: {} ({:?})", stmt, r);
     };
-    bad("a in omega -> nat_lt(a, a)", &[na]);
-    bad("a in omega -> b in omega -> nat_lt(a, b)", &[na, nb]);
-    // not known to be numbers
-    bad("nat_add(a, b) = nat_add(b, a)", &[]);
-    bad("a in omega -> nat_le(0, x)", &[na]);
-    // `-` below zero is not a number
-    bad("a in omega -> b in omega -> nat_add(nat_sub(a, b), b) = a", &[na, nb]);
-    bad("a in omega -> b in omega -> nat_sub(a, b) in omega", &[na, nb]);
+    bad("a in omega -> int_lt(a, a)", &[na]);
+    bad("a in omega -> b in omega -> int_lt(a, b)", &[na, nb]);
+    // sets with equal values need not be equal (a, b not known integers)
+    bad("int_le(a, b) -> int_le(b, a) -> a = b", &[("h1", "int_le(a, b)"), ("h2", "int_le(b, a)")]);
+    bad("int_add(a, 0) = a", &[]);
+    // not known to be naturals
+    bad("a in omega -> int_le(0, x)", &[na]);
+    bad("a in omega -> b in omega -> int_sub(a, b) in omega", &[na, nb]);
     // division facts that do not hold
-    bad("a in omega -> nat_lt(nat_mod(a, 4), 3)", &[na]);
+    bad("a in omega -> int_lt(int_mod(a, 4), 3)", &[na]);
     // products of variables are not linear: this true fact is not proven
-    bad("a in omega -> nat_le(0, nat_mul(a, a))", &[na]);
+    bad("a in omega -> int_le(0, int_mul(a, a))", &[na]);
 }
 
 #[test]
 fn recursion_equations_need_their_premise() {
     let src = |h: &str| {
-        format!("theorem t(m): m in omega -> nat_rec(0, k v. succ(v), nat_add(m, 1)) = succ(nat_rec(0, k v. succ(v), m))\nproof\n  assume hm: m in omega\n  show rec({{nat_rec(0, k v. succ(v), nat_add(m, 1))}}{})\nqed\n", h)
+        format!("theorem t(m): m in omega -> nat_rec(0, k v. succ(v), int_add(m, 1)) = succ(nat_rec(0, k v. succ(v), m))\nproof\n  assume hm: m in omega\n  show rec({{nat_rec(0, k v. succ(v), int_add(m, 1))}}{})\nqed\n", h)
     };
     assert_eq!(check_nat(&src(", hm")), Ok(1));
     let e = check_nat(&src("")).unwrap_err();
@@ -266,7 +266,7 @@ fn induction_checks_base_and_step() {
     // (core/nat.core, loaded by check_nat, proves dbl(n) = 2 n by induction)
     // a wrong base case
     let e = check_nat(
-        "theorem t: all n. n in omega -> nat_lt(0, n)\nproof\n  have base: nat_lt(0, 0) by arith()\n  show by induct(base, base)\nqed\n",
+        "theorem t: all n. n in omega -> int_lt(0, n)\nproof\n  have base: int_lt(0, 0) by arith()\n  show by induct(base, base)\nqed\n",
     )
     .unwrap_err();
     assert!(e.contains("arith"), "{}", e);
@@ -315,13 +315,13 @@ fn unsound_list_steps_are_rejected() {
     // a term not known to be a list
     bad("theorem x(a): seq_concat(a, empty) = a\nproof\n  show by lists()\nqed\n", "known lists");
     // lengths of unknown terms are not numbers
-    bad("theorem x(a): nat_le(0, seq_len(a))\nproof\n  show by arith()\nqed\n", "arith");
+    bad("theorem x(a): int_le(0, seq_len(a))\nproof\n  show by arith()\nqed\n", "arith");
     // an index past the end
     bad("theorem x(p, q): app(seq_concat(seq_one(p), seq_one(q)), 2) = q\nproof\n  show at({app(seq_concat(seq_one(p), seq_one(q)), 2)})\nqed\n", "cannot place");
     // an index whose piece is not determined by what is known
     bad(&format!("theorem x(a, b, t, i): a in list_type(t) -> b in list_type(t) -> i in omega -> app(seq_concat(a, b), i) = app(a, i)\nproof\n{}  assume hi: i in omega\n  show at({{app(seq_concat(a, b), i)}}, ha, hb, hi)\nqed\n", lists2), "cannot place");
     // extensionality needs the lengths of these two lists
-    bad("theorem x(a, b, c, t): a in list_type(t) -> b in list_type(t) -> seq_len(a) = seq_len(c) -> (all i. i in omega -> nat_lt(i, seq_len(a)) -> app(a, i) = app(b, i)) -> a = b\nproof\n  assume ha: a in list_type(t)\n  assume hb: b in list_type(t)\n  assume hl: seq_len(a) = seq_len(c)\n  assume he: all i. i in omega -> nat_lt(i, seq_len(a)) -> app(a, i) = app(b, i)\n  show list_ext(ha, hb, hl, he)\nqed\n", "third premise");
+    bad("theorem x(a, b, c, t): a in list_type(t) -> b in list_type(t) -> seq_len(a) = seq_len(c) -> (all i. i in omega -> int_lt(i, seq_len(a)) -> app(a, i) = app(b, i)) -> a = b\nproof\n  assume ha: a in list_type(t)\n  assume hb: b in list_type(t)\n  assume hl: seq_len(a) = seq_len(c)\n  assume he: all i. i in omega -> int_lt(i, seq_len(a)) -> app(a, i) = app(b, i)\n  show list_ext(ha, hb, hl, he)\nqed\n", "third premise");
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn the_loop_library_checks() {
 }
 
 /// A loop counting to 3 (the loop state: the program state and the counter).
-const COUNT: &str = "def count := mkprog(s o. while_rel(pair(s, 0), l. nat_lt(snd(l), 3), l o. o = ok(pair(fst(l), nat_add(snd(l), 1)), empty), l. empty, o))\n";
+const COUNT: &str = "def count := mkprog(s o. while_rel(pair(s, 0), l. int_lt(snd(l), 3), l o. o = ok(pair(fst(l), int_add(snd(l), 1)), empty), l. empty, o))\n";
 
 fn count_thm(goal: &str, hints: &str) -> String {
     format!(
@@ -414,9 +414,9 @@ fn count_thm(goal: &str, hints: &str) -> String {
 
 #[test]
 fn loops_are_executed_with_invariants() {
-    let inv = ", {l0 l. snd(l) in omega && nat_le(snd(l), 3) && fst(l) = fst(l0)}";
+    let inv = ", {l0 l. snd(l) in omega && int_le(snd(l), 3) && fst(l) = fst(l0)}";
     // with a variant: the loop ends, with the counter at 3
-    let src = count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", &format!("{}, {{l. nat_sub(3, snd(l))}}", inv));
+    let src = count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", &format!("{}, {{l. int_sub(3, snd(l))}}", inv));
     assert_eq!(check_nat(&src), Ok(1));
     // without one: ends so, or diverges
     let src = count_thm("(ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3) || (ex t. o = diverge(t))", inv);
@@ -433,15 +433,15 @@ fn wrong_loop_invariants_are_rejected() {
     // no invariant: the loop stays
     bad(ends, "", "needs its invariant");
     // without a variant, divergence is possible
-    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3) && fst(l) = fst(l0)}", "path left");
+    bad(ends, ", {l0 l. snd(l) in omega && int_le(snd(l), 3) && fst(l) = fst(l0)}", "path left");
     // not true at the start, not preserved
-    bad(ends, ", {l0 l. snd(l) = 1}, {l. nat_sub(3, snd(l))}", "at the start");
-    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 2)}, {l. nat_sub(3, snd(l))}", "after an iteration");
+    bad(ends, ", {l0 l. snd(l) = 1}, {l. int_sub(3, snd(l))}", "at the start");
+    bad(ends, ", {l0 l. snd(l) in omega && int_le(snd(l), 2)}, {l. int_sub(3, snd(l))}", "after an iteration");
     // a variant that grows, or is not a natural number
-    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3)}, {l. snd(l)}", "the variant decreases");
-    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3)}, {l. nat_sub(2, snd(l))}", "the variant is a natural number");
+    bad(ends, ", {l0 l. snd(l) in omega && int_le(snd(l), 3)}, {l. snd(l)}", "the variant decreases");
+    bad(ends, ", {l0 l. snd(l) in omega && int_le(snd(l), 3)}, {l. int_sub(2, snd(l))}", "the variant is a natural number");
     // a variant alone
-    bad(ends, ", {l. nat_sub(3, snd(l))}", "must follow its invariant");
+    bad(ends, ", {l. int_sub(3, snd(l))}", "must follow its invariant");
 }
 
 /// A theorem `hyps -> goal` proven by `simp` from its hypotheses h0, h1, ..
@@ -457,7 +457,7 @@ fn facts_are_used_as_rules() {
     // a rule whose hypothesis is on the path
     assert_eq!(check(&simp_thm(&["all y. y in f -> y in g", "x in f"], "x in g")), Ok(1));
     // a hypothesis that is not a literal, shown by arithmetic
-    assert_eq!(check_nat(&simp_thm(&["all y. y in omega -> nat_lt(y, 5) -> y in g", "x in omega", "nat_lt(x, 3)"], "x in g")), Ok(1));
+    assert_eq!(check_nat(&simp_thm(&["all y. y in omega -> int_lt(y, 5) -> y in g", "x in omega", "int_lt(x, 3)"], "x in g")), Ok(1));
     // an equation, its variables from the goal's terms, rewriting the goal
     assert_eq!(check(&simp_thm(&["all a. app(f, a) = pair(a, a)"], "fst(app(f, x)) = x")), Ok(1));
     // chained: the conclusion of one rule is the hypothesis of the next
@@ -470,14 +470,15 @@ fn facts_are_used_as_rules() {
 }
 
 #[test]
-fn address_arithmetic_needs_naturals() {
-    // (x + 5) - x = 5 for a 64-bit x; for an arbitrary set x the
-    // arithmetic is unspecified
-    let src = "theorem t(x): x in bits(64) -> bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  assume h: x in bits(64)\n  show by simp(h)\nqed\n";
+fn address_arithmetic_is_total() {
+    // (x + 5) - x = 5 and x - x = 0 in 64 bits, for any set x (arithmetic
+    // reads x as its value)
+    assert_eq!(check_nat("theorem t(x): bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  show by simp()\nqed\n"), Ok(1));
+    assert_eq!(check_nat("theorem t(x): bits_sub(64, x, x) = 0\nproof\n  show by simp()\nqed\n"), Ok(1));
+    // but x + 0 is x only for a 64-bit x
+    let src = "theorem t(x): x in bits(64) -> bits_add(64, x, 0) = x\nproof\n  assume h: x in bits(64)\n  show by simp(h)\nqed\n";
     assert_eq!(check_nat(src), Ok(1));
-    rejected("theorem t(x): bits_sub(64, bits_add(64, x, 5), x) = 5\nproof\n  show by simp()\nqed\n", "simp");
-    // ... and so is x - x
-    rejected("theorem t(x): bits_sub(64, x, x) = 0\nproof\n  show by simp()\nqed\n", "simp");
+    rejected("theorem t(x): bits_add(64, x, 0) = x\nproof\n  show by simp()\nqed\n", "simp");
 }
 
 #[test]
@@ -487,7 +488,7 @@ fn rules_do_not_overreach() {
         Err(e) => assert!(e.contains("1 path left") && e.contains("path 1: "), "{}", e),
     };
     // a hypothesis that does not hold
-    left(simp_thm(&["all y. y in omega -> nat_lt(y, 2) -> y in g", "x in omega", "nat_lt(x, 3)"], "x in g"));
+    left(simp_thm(&["all y. y in omega -> int_lt(y, 2) -> y in g", "x in omega", "int_lt(x, 3)"], "x in g"));
     // a variable bound by nothing on the path (nor by the goal)
     left(simp_thm(&["all y z. y in f -> pair(y, z) in g", "x in f"], "pair(x, x) in f"));
     // the other direction of an implication
@@ -506,9 +507,12 @@ fn leftover_paths_are_reported_as_facts() {
 
 #[test]
 fn simp_computes_on_numerals() {
-    let src = "theorem t: nat_add(3, 4) = 7 && bits_and(8, 195, 15) = 3 && bits_add(64, 18446744073709551615, 2) = 1 && nat_lt(3, 4) && !nat_le(5, 4) && bit(5, 2) && 255 in bits(8) && !(256 in bits(8)) && 3 in set_select(omega, x. nat_lt(x, 5))\nproof\n  show by simp()\nqed\n";
+    let src = "theorem t: int_add(3, 4) = 7 && bits_and(8, 195, 15) = 3 && bits_add(64, 18446744073709551615, 2) = 1 && int_lt(3, 4) && !int_le(5, 4) && bit(5, 2) && 255 in bits(8) && !(256 in bits(8)) && 3 in set_select(omega, x. int_lt(x, 5))\nproof\n  show by simp()\nqed\n";
     assert_eq!(check(src), Ok(1));
-    for bad in ["nat_add(3, 4) = 8", "bits_and(8, 195, 15) = 4", "bit(5, 1)", "256 in bits(8)", "7 in set_select(omega, x. nat_lt(x, 5))"] {
+    // negative integers, Euclidean division, words of negatives
+    let src = "theorem t: int_sub(3, 5) = int_neg(2) && int_lt(int_neg(2), 0) && int_div(int_neg(7), 2) = int_neg(4) && int_mod(int_neg(7), 2) = 1 && bits_of_int(8, int_neg(1)) = 255 && sint(8, 255) = int_neg(1) && !(int_neg(1) in omega)\nproof\n  show by simp()\nqed\n";
+    assert_eq!(check(src), Ok(1));
+    for bad in ["int_add(3, 4) = 8", "bits_and(8, 195, 15) = 4", "bit(5, 1)", "256 in bits(8)", "7 in set_select(omega, x. int_lt(x, 5))", "int_mod(int_neg(7), 2) = int_neg(1)"] {
         rejected(&format!("theorem x: {}\nproof\n  show by simp()\nqed\n", bad), "simp");
     }
 }
@@ -521,10 +525,10 @@ fn members_of_sets_are_evaluated() {
     // not another set of members
     rejected("theorem t: all x. x in set_select(omega, x. x = 1 || x = 3) <-> x = 1\nproof\n  show members({set_select(omega, x. x = 1 || x = 3)})\nqed\n", "");
     // below a numeral: each one
-    let src = "theorem t: all x. x in set_select(omega, x. nat_lt(x, 3)) <-> x = 0 || x = 1 || x = 2\nproof\n  show members({set_select(omega, x. nat_lt(x, 3))})\nqed\n";
+    let src = "theorem t: all x. x in set_select(omega, x. int_lt(x, 3)) <-> x = 0 || x = 1 || x = 2\nproof\n  show members({set_select(omega, x. int_lt(x, 3))})\nqed\n";
     assert_eq!(check(src), Ok(1));
     // an unknown not determined: no answer rather than a guess
-    rejected("theorem t(y): true\nproof\n  have h := members({set_select(omega, x. nat_lt(x, y))})\n  show by taut()\nqed\n", "eval: unsolved");
+    rejected("theorem t(y): true\nproof\n  have h := members({set_select(omega, x. int_lt(x, y))})\n  show by taut()\nqed\n", "eval: unsolved");
 }
 
 #[test]
@@ -545,19 +549,19 @@ fn arithmetic_modulo_large_powers() {
     // equalities are substituted exactly; `x in bits(k)` bounds x; 2^64 fits
     let m = "18446744073709551616";
     let bits = ("ha", "a in bits(64)");
-    assert_eq!(arith_ok(&format!("a in bits(64) -> nat_mod(a, {}) = a", m), &[bits]), Ok(1));
-    assert_eq!(arith_ok(&format!("a in bits(64) -> nat_div(a, {}) = 0", m), &[bits]), Ok(1));
-    assert_eq!(arith_ok("a in bits(8) -> nat_lt(a, 256)", &[("ha", "a in bits(8)")]), Ok(1));
+    assert_eq!(arith_ok(&format!("a in bits(64) -> int_mod(a, {}) = a", m), &[bits]), Ok(1));
+    assert_eq!(arith_ok(&format!("a in bits(64) -> int_div(a, {}) = 0", m), &[bits]), Ok(1));
+    assert_eq!(arith_ok("a in bits(8) -> int_lt(a, 256)", &[("ha", "a in bits(8)")]), Ok(1));
     // and not more
-    assert!(arith_ok(&format!("a in bits(65) -> nat_mod(a, {}) = a", m), &[("ha", "a in bits(65)")]).is_err());
-    assert!(arith_ok("a in bits(8) -> nat_lt(a, 255)", &[("ha", "a in bits(8)")]).is_err());
-    assert!(arith_ok("a in omega -> nat_mod(a, 256) = a", &[("ha", "a in omega")]).is_err());
+    assert!(arith_ok(&format!("a in bits(65) -> int_mod(a, {}) = a", m), &[("ha", "a in bits(65)")]).is_err());
+    assert!(arith_ok("a in bits(8) -> int_lt(a, 255)", &[("ha", "a in bits(8)")]).is_err());
+    assert!(arith_ok("a in omega -> int_mod(a, 256) = a", &[("ha", "a in omega")]).is_err());
 }
 
 #[test]
-fn differences_are_numbers_when_not_negative() {
+fn differences_are_naturals_when_not_negative() {
     let (ha, hb) = (("ha", "a in omega"), ("hb", "b in omega"));
-    assert_eq!(arith_ok("a in omega -> b in omega -> nat_le(b, a) -> nat_add(nat_sub(a, b), 1) in omega", &[ha, hb, ("h", "nat_le(b, a)")]), Ok(1));
-    assert!(arith_ok("a in omega -> b in omega -> nat_sub(a, b) in omega", &[ha, hb]).is_err());
-    assert!(arith_ok("a in omega -> b in omega -> nat_lt(a, b) -> nat_sub(a, b) in omega", &[ha, hb, ("h", "nat_lt(a, b)")]).is_err());
+    assert_eq!(arith_ok("a in omega -> b in omega -> int_le(b, a) -> int_add(int_sub(a, b), 1) in omega", &[ha, hb, ("h", "int_le(b, a)")]), Ok(1));
+    assert!(arith_ok("a in omega -> b in omega -> int_sub(a, b) in omega", &[ha, hb]).is_err());
+    assert!(arith_ok("a in omega -> b in omega -> int_lt(a, b) -> int_sub(a, b) in omega", &[ha, hb, ("h", "int_lt(a, b)")]).is_err());
 }

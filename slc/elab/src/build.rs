@@ -256,8 +256,8 @@ impl B {
     }
 
     /// Normal form of a width: literal arithmetic is folded, and linear
-    /// combinations (`nat_add`, `succ`, multiplication by a literal, and
-    /// `nat_sub` when the result is visibly non-negative) are brought to a
+    /// combinations (`int_add`, `succ`, multiplication by a literal, and
+    /// `int_sub` when the result is visibly non-negative) are brought to a
     /// canonical sum.
     pub fn norm(&self, t: &Term) -> Term {
         let t = self.fold(t);
@@ -279,12 +279,12 @@ impl B {
                         let (c, xs) = self.linear(&a[0])?;
                         Some((c.add(&one), xs))
                     }
-                    ("nat_add", 2) => {
+                    ("int_add", 2) => {
                         let (c1, x1) = self.linear(&a[0])?;
                         let (c2, x2) = self.linear(&a[1])?;
                         Some((c1.add(&c2), merge(x1, x2)))
                     }
-                    ("nat_mul", 2) => {
+                    ("int_mul", 2) => {
                         let (k, x) = match (a[0].node(), a[1].node()) {
                             (Node::Nat(k), _) => (k.clone(), &a[1]),
                             (_, Node::Nat(k)) => (k.clone(), &a[0]),
@@ -293,7 +293,7 @@ impl B {
                         let (c, xs) = self.linear(x)?;
                         Some((c.mul(&k), xs.into_iter().map(|(v, m)| (v, m.mul(&k))).filter(|(_, m)| !m.is_zero()).collect()))
                     }
-                    ("nat_sub", 2) => {
+                    ("int_sub", 2) => {
                         let (c1, x1) = self.linear(&a[0])?;
                         let (c2, x2) = self.linear(&a[1])?;
                         // only when every part of the subtrahend is present
@@ -321,14 +321,14 @@ impl B {
     fn from_linear(&self, (c, xs): (Nat, Vec<(Term, Nat)>)) -> Term {
         let mut parts: Vec<Term> = Vec::new();
         for (v, m) in xs {
-            parts.push(if m.to_u64() == Some(1) { v } else { self.app("nat_mul", vec![Term::nat(m), v]) });
+            parts.push(if m.to_u64() == Some(1) { v } else { self.app("int_mul", vec![Term::nat(m), v]) });
         }
         if !c.is_zero() || parts.is_empty() {
             parts.push(Term::nat(c));
         }
         let mut it = parts.into_iter();
         let first = it.next().unwrap();
-        it.fold(first, |acc, p| self.app("nat_add", vec![acc, p]))
+        it.fold(first, |acc, p| self.app("int_add", vec![acc, p]))
     }
 
     /// Folds literal arithmetic.
@@ -346,12 +346,13 @@ impl B {
                     (args.len(), args.first().map(|x| x.node()), args.get(1).map(|x| x.node()))
                 {
                     let r = match name.as_str() {
-                        "nat_add" => Some(a.add(b)),
-                        "nat_mul" => Some(a.mul(b)),
-                        "nat_sub" => a.sub(b),
-                        "nat_div" => a.divmod(b).map(|x| x.0),
-                        "nat_mod" => a.divmod(b).map(|x| x.1),
-                        "nat_pow" => b.to_u64().filter(|&e| e <= 4096).map(|e| (0..e).fold(Nat::from_u64(1), |acc, _| acc.mul(a))),
+                        "int_add" => Some(a.add(b)),
+                        "int_mul" => Some(a.mul(b)),
+                        // (a negative difference stays unfolded)
+                        "int_sub" => a.sub(b),
+                        "int_div" => a.divmod(b).map(|x| x.0),
+                        "int_mod" => a.divmod(b).map(|x| x.1),
+                        "int_pow" =>b.to_u64().filter(|&e| e <= 4096).map(|e| (0..e).fold(Nat::from_u64(1), |acc, _| acc.mul(a))),
                         _ => None,
                     };
                     if let Some(r) = r {

@@ -134,17 +134,14 @@ impl Logic {
             _ => return err("at: not `app(L, i)`"),
         };
         let pieces = flatten(&s, l, &known).ok_or_else(|| KernelError("at: not a list expression over known lists".into()))?;
-        let (nat_add, nat_sub, nat_le, nat_lt, and, len) = (
-            env.sym_by_name.get("nat_add").copied(),
-            env.sym_by_name.get("nat_sub").copied(),
-            env.sym_by_name.get("nat_le").copied(),
-            env.sym_by_name.get("nat_lt").copied(),
-            env.sym_by_name.get("and").copied(),
-            s.len,
-        );
-        let (Some(nat_add), Some(nat_sub), Some(nat_le), Some(nat_lt), Some(and), Some(len)) = (nat_add, nat_sub, nat_le, nat_lt, and, len) else {
+        let g = |n: &str| env.sym_by_name.get(n).copied();
+        let (Some(int_add), Some(int_sub), Some(int_le), Some(int_lt), Some(and), Some(omega), Some(len)) =
+            (g("int_add"), g("int_sub"), g("int_le"), g("int_lt"), g("and"), g("omega"), s.len)
+        else {
             return err("at: needs the prelude's arithmetic and lists");
         };
+        // (the index must be a natural: arithmetic compares values only)
+        let i_nat = Term::app(s.in_, vec![i.clone(), Term::app(omega, vec![])]);
         // offset of the current piece: a literal plus lengths of lists
         let mut ones: u64 = 0;
         let mut lens: Vec<Term> = Vec::new();
@@ -157,7 +154,7 @@ impl Logic {
             parts.extend(lens.iter().cloned());
             let mut o = parts[0].clone();
             for p in &parts[1..] {
-                o = Term::app(nat_add, vec![o, p.clone()]);
+                o = Term::app(int_add, vec![o, p.clone()]);
             }
             o
         };
@@ -167,15 +164,15 @@ impl Logic {
                 Piece::List(m) => (Term::app(len, vec![m.clone()]), Some(m.clone())),
             };
             let off = off_term(ones, &lens);
-            let lo = Term::app(nat_le, vec![off.clone(), i.clone()]);
-            let hi = Term::app(nat_lt, vec![i.clone(), Term::app(nat_add, vec![off.clone(), plen.clone()])]);
-            let goal = Term::app(and, vec![lo, hi]);
+            let lo = Term::app(int_le, vec![off.clone(), i.clone()]);
+            let hi = Term::app(int_lt, vec![i.clone(), Term::app(int_add, vec![off.clone(), plen.clone()])]);
+            let goal = Term::app(and, vec![i_nat.clone(), Term::app(and, vec![lo, hi])]);
             if self.arith(env, premises, &goal).is_ok() {
                 let e = match (pc, elem) {
                     (Piece::One(x), _) => x.clone(),
                     (Piece::List(_), Some(m)) => {
                         let zero = ones == 0 && lens.is_empty();
-                        let idx = if zero { i.clone() } else { Term::app(nat_sub, vec![i.clone(), off]) };
+                        let idx = if zero { i.clone() } else { Term::app(int_sub, vec![i.clone(), off]) };
                         Term::app(s.app.unwrap(), vec![m, idx])
                     }
                     _ => unreachable!(),
@@ -192,7 +189,7 @@ impl Logic {
 
     /// Extensionality: from `A in list_type(_)`, `B in list_type(_)`,
     /// `seq_len(A) = seq_len(B)` and
-    /// `all i. i in omega -> nat_lt(i, seq_len(A)) -> app(A, i) = app(B, i)`:
+    /// `all i. i in omega -> int_lt(i, seq_len(A)) -> app(A, i) = app(B, i)`:
     /// `A = B`.
     pub fn list_ext(&self, env: &Env, ha: &Term, hb: &Term, hlen: &Term, hel: &Term) -> KResult<Term> {
         let s = LSyms::new(env);
@@ -208,17 +205,17 @@ impl Logic {
         let (Some(a), Some(b)) = (member(ha), member(hb)) else { return err("list_ext: the first two premises are `A in list_type(T)`, `B in list_type(T')`") };
         let (len, app) = (s.len.unwrap(), s.app.unwrap());
         let omega = env.sym_by_name.get("omega").copied().ok_or_else(|| KernelError("no omega".into()))?;
-        let nat_lt = env.sym_by_name.get("nat_lt").copied().ok_or_else(|| KernelError("no nat_lt".into()))?;
+        let int_lt = env.sym_by_name.get("int_lt").copied().ok_or_else(|| KernelError("no int_lt".into()))?;
         let want_len = env.mk_eq(Term::app(len, vec![a.clone()]), Term::app(len, vec![b.clone()]));
         if hlen != &want_len {
             return err("list_ext: the third premise is `seq_len(A) = seq_len(B)`");
         }
-        // all i. i in omega -> nat_lt(i, seq_len(A)) -> app(A, i) = app(B, i)
+        // all i. i in omega -> int_lt(i, seq_len(A)) -> app(A, i) = app(B, i)
         let i = Term::bvar(0);
         let body = env.mk_imp(
             Term::app(s.in_, vec![i.clone(), Term::app(omega, vec![])]),
             env.mk_imp(
-                Term::app(nat_lt, vec![i.clone(), Term::app(len, vec![a.clone()])]),
+                Term::app(int_lt, vec![i.clone(), Term::app(len, vec![a.clone()])]),
                 env.mk_eq(Term::app(app, vec![a.clone(), i.clone()]), Term::app(app, vec![b.clone(), i])),
             ),
         );

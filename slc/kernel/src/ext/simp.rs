@@ -109,6 +109,14 @@ fn is(s: SymId, o: Option<SymId>) -> bool {
     o == Some(s)
 }
 
+/// What a path knows a term to be: an integer, a natural, an n-bit word.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Ty {
+    Int,
+    Nat,
+    Bits(u64),
+}
+
 struct Simp<'a> {
     env: &'a Env,
     s: Syms,
@@ -118,103 +126,224 @@ struct Simp<'a> {
     keep: Vec<SymId>,
     /// terms the current path knows to be natural numbers (its literals
     /// `t in omega`, `t in bits(k)`)
-    nats: std::cell::RefCell<Vec<(Term, Option<u64>)>>,
+    nats: std::cell::RefCell<Vec<(Term, Ty)>>,
     /// fields read by definitions of their parameters (`footprint`)
     footprints: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<Vec<Term>>>>,
 }
 
 /// The arithmetic and bitwise definitions of the prelude that `simp`
-/// computes on numerals (their values follow from the definitions and the
-/// `lit_*` axioms; words up to 128 bits).
+/// computes on integer literals (their values follow from the definitions
+/// and the `lit_*` axioms; words up to 128 bits).
 const ARITH: &[&str] = &[
-    "nat_add", "nat_mul", "nat_sub", "nat_div", "nat_mod", "nat_pow", "pow2", "bits_of_nat", "bits_add", "bits_sub", "bits_neg", "bits_mul",
-    "bits_not", "bits_and", "bits_or", "bits_xor", "bits_shl", "bits_shr", "bits_slice", "nat_and", "nat_or", "lit_add", "lit_mul",
-    "lit_sub", "lit_div", "lit_mod", "succ", "int_mod", "int_div", "bits_sext",
+    "int_add", "int_sub", "int_neg", "int_mul", "int_div", "int_mod", "int_pow", "int_succ", "int_pred", "int_abs", "int_val", "pow2",
+    "bits_of_int", "bits_add", "bits_sub", "bits_neg", "bits_mul", "bits_not", "bits_and", "bits_or", "bits_xor", "bits_shl", "bits_shr",
+    "bits_slice", "bits_sext", "sint", "int_and", "int_or", "lit_add", "lit_mul", "lit_sub", "lit_div", "lit_mod", "succ",
 ];
 
-/// Numerals: arithmetic on literal arguments (None: not all literals, or
-/// out of range)
-fn compute(op: &str, a: &[Term]) -> Option<Term> {
-    use crate::nat::Nat;
-    let n = |i: usize| -> Option<Nat> {
-        match a.get(i)?.node() {
-            Node::Nat(v) => Some(v.clone()),
+/// An integer literal's value: sign (true: negative) and magnitude. The
+/// literals of integers are numerals, and `pair(1, m)` (m > 0) for -m.
+#[derive(Clone, PartialEq, Debug)]
+struct SInt {
+    neg: bool,
+    m: crate::nat::Nat,
+}
+
+impl SInt {
+    fn new(neg: bool, m: crate::nat::Nat) -> SInt {
+        SInt { neg: neg && !m.is_zero(), m }
+    }
+    fn nat(m: crate::nat::Nat) -> SInt {
+        SInt::new(false, m)
+    }
+    fn neg(&self) -> SInt {
+        SInt::new(!self.neg, self.m.clone())
+    }
+    fn add(&self, o: &SInt) -> SInt {
+        if self.neg == o.neg {
+            return SInt::new(self.neg, self.m.add(&o.m));
+        }
+        // different signs: the larger magnitude wins
+        match self.m.sub(&o.m) {
+            Some(d) => SInt::new(self.neg, d),
+            None => SInt::new(o.neg, o.m.sub(&self.m).unwrap()),
+        }
+    }
+    fn mul(&self, o: &SInt) -> SInt {
+        SInt::new(self.neg != o.neg, self.m.mul(&o.m))
+    }
+    fn lt(&self, o: &SInt) -> bool {
+        match (self.neg, o.neg) {
+            (true, false) => true,
+            (false, true) => false,
+            (false, false) => self.m < o.m,
+            (true, true) => o.m < self.m,
+        }
+    }
+    /// Euclidean division (0 <= r < |d|); None for d = 0
+    fn divmod(&self, d: &SInt) -> Option<(SInt, SInt)> {
+        let (q, r) = self.m.divmod(&d.m)?;
+        let one = crate::nat::Nat::from_u64(1);
+        if !self.neg || r.is_zero() {
+            // a = |d| q + r (a >= 0), or a = -(|d| q) exactly
+            let q = SInt::new(self.neg != d.neg, q);
+            return Some((q, SInt::nat(r)));
+        }
+        // a = -m = -(|d| q + r) = |d| (-(q + 1)) + (|d| - r)
+        let q = SInt::new(!d.neg, q.add(&one));
+        Some((q, SInt::nat(d.m.sub(&r).unwrap())))
+    }
+    fn to_u128(&self) -> Option<u128> {
+        if self.neg { None } else { self.m.to_u128() }
+    }
+}
+
+impl Simp<'_> {
+    /// The value of an integer literal.
+    fn int_lit(&self, t: &Term) -> Option<SInt> {
+        match t.node() {
+            Node::Nat(v) => Some(SInt::nat(v.clone())),
+            Node::App(p, b) if is(*p, self.s.pair) && b.len() == 2 => match (b[0].node(), b[1].node()) {
+                (Node::Nat(one), Node::Nat(m)) if one.to_u64() == Some(1) && !m.is_zero() => Some(SInt::new(true, m.clone())),
+                _ => None,
+            },
+            Node::App(e, b) if b.is_empty() && is(*e, self.s.empty) => Some(SInt::nat(crate::nat::Nat::zero())),
             _ => None,
         }
-    };
-    let u = |i: usize| n(i).and_then(|v| v.to_u128());
-    let w = |i: usize| u(i).filter(|&v| v <= 128).map(|v| v as u32);
-    let mask = |bits: u32| if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
-    let t = |v: Nat| Some(Term::nat(v));
-    let tu = |v: u128| Some(Term::nat(Nat::from_u128(v)));
-    match op {
-        "nat_add" | "lit_add" => t(n(0)?.add(&n(1)?)),
-        "nat_mul" | "lit_mul" => t(n(0)?.mul(&n(1)?)),
-        "nat_sub" | "lit_sub" => t(n(0)?.sub(&n(1)?)?),
-        "nat_div" | "lit_div" => t(n(0)?.divmod(&n(1)?)?.0),
-        "nat_mod" | "lit_mod" => t(n(0)?.divmod(&n(1)?)?.1),
-        "succ" => t(n(0)?.add(&Nat::from_u64(1))),
-        "nat_pow" => {
-            let (b, e) = (n(0)?, u(1)?);
-            if e > 256 {
-                return None;
-            }
-            let mut r = Nat::from_u64(1);
-            for _ in 0..e {
-                r = r.mul(&b);
-            }
-            t(r)
-        }
-        "pow2" => {
-            let e = u(0)?;
-            if e > 256 {
-                return None;
-            }
-            t(Nat::pow2(e as u64))
-        }
-        "bits_of_nat" => {
-            let k = u(0)?;
-            if k > 256 {
-                return None;
-            }
-            t(n(1)?.divmod(&Nat::pow2(k as u64))?.1)
-        }
-        "bits_add" => tu(u(1)?.wrapping_add(u(2)?) & mask(w(0)?)),
-        "bits_sub" => tu(u(1)?.wrapping_sub(u(2)?) & mask(w(0)?)),
-        "bits_neg" => tu(0u128.wrapping_sub(u(1)?) & mask(w(0)?)),
-        "bits_mul" => tu(u(1)?.wrapping_mul(u(2)?) & mask(w(0)?)),
-        "bits_not" => tu(!u(1)? & mask(w(0)?)),
-        "bits_and" => tu(u(1)? & u(2)? & mask(w(0)?)),
-        "bits_or" => tu((u(1)? | u(2)?) & mask(w(0)?)),
-        "bits_xor" => tu((u(1)? ^ u(2)?) & mask(w(0)?)),
-        "nat_and" => tu(u(0)? & u(1)?),
-        "nat_or" => tu(u(0)? | u(1)?),
-        "bits_shl" => {
-            let k = u(2)?;
-            tu(if k >= 128 { 0 } else { u(1)? << k } & mask(w(0)?))
-        }
-        "bits_shr" => {
-            let k = u(2)?;
-            tu(if k >= 128 { 0 } else { u(1)? >> k })
-        }
-        // sign extension from m to n bits
-        "bits_sext" => {
-            let (m, n, x) = (w(0)?, w(1)?, u(2)?);
-            if m == 0 || m > n {
-                return None;
-            }
-            let neg = x >> (m - 1) & 1 == 1;
-            tu(if neg { (x | !mask(m)) & mask(n) } else { x & mask(m) })
-        }
-        "bits_slice" => {
-            let (x, hi, lo) = (u(0)?, u(1)?, u(2)?);
-            if hi < lo || hi >= 128 {
-                return None;
-            }
-            tu((x >> lo) & mask((hi - lo + 1) as u32))
-        }
-        _ => None,
     }
+
+    /// The literal of an integer.
+    fn of_int(&self, v: SInt) -> Term {
+        if v.neg {
+            self.app2(self.s.pair, Term::nat(crate::nat::Nat::from_u64(1)), Term::nat(v.m))
+        } else {
+            Term::nat(v.m)
+        }
+    }
+
+    /// Arithmetic on literal arguments (None: not all literals, or out of
+    /// range).
+    fn compute(&self, op: &str, a: &[Term]) -> Option<Term> {
+        use crate::nat::Nat;
+        let i = |k: usize| self.int_lit(a.get(k)?);
+        let n = |k: usize| i(k).filter(|v| !v.neg).map(|v| v.m);
+        let u = |k: usize| i(k)?.to_u128();
+        let w = |k: usize| u(k).filter(|&v| v <= 128).map(|v| v as u32);
+        let mask = |bits: u32| if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        let t = |v: SInt| Some(self.of_int(v));
+        let tu = |v: u128| Some(Term::nat(Nat::from_u128(v)));
+        let pow2 = |k: u128| (k <= 256).then(|| SInt::nat(Nat::pow2(k as u64)));
+        // x mod 2^n, for a width n
+        let wrap = |x: SInt, k: usize| -> Option<Term> { t(x.divmod(&pow2(u(k)?)?)?.1) };
+        match op {
+            "int_add" => t(i(0)?.add(&i(1)?)),
+            "int_sub" => t(i(0)?.add(&i(1)?.neg())),
+            "int_neg" => t(i(0)?.neg()),
+            "int_mul" => t(i(0)?.mul(&i(1)?)),
+            "int_succ" => t(i(0)?.add(&SInt::nat(Nat::from_u64(1)))),
+            "int_pred" => t(i(0)?.add(&SInt::new(true, Nat::from_u64(1)))),
+            "int_abs" => t(SInt::nat(i(0)?.m)),
+            "int_val" => t(i(0)?),
+            // (by 0: a / 0 = 0, a % 0 = a)
+            "int_div" if i(1)?.m.is_zero() => t(SInt::nat(Nat::zero())),
+            "int_mod" if i(1)?.m.is_zero() => t(i(0)?),
+            "int_div" => t(i(0)?.divmod(&i(1)?)?.0),
+            "int_mod" => t(i(0)?.divmod(&i(1)?)?.1),
+            "lit_add" => t(SInt::nat(n(0)?.add(&n(1)?))),
+            "lit_mul" => t(SInt::nat(n(0)?.mul(&n(1)?))),
+            "lit_sub" => t(SInt::nat(n(0)?.sub(&n(1)?)?)),
+            "lit_div" => t(SInt::nat(n(0)?.divmod(&n(1)?)?.0)),
+            "lit_mod" => t(SInt::nat(n(0)?.divmod(&n(1)?)?.1)),
+            "succ" => t(SInt::nat(n(0)?.add(&Nat::from_u64(1)))),
+            "int_pow" => {
+                let (b, e) = (i(0)?, i(1)?);
+                if e.neg {
+                    return t(SInt::nat(Nat::zero()));
+                }
+                let e = e.m.to_u64().filter(|&e| e <= 256)?;
+                let mut r = SInt::nat(Nat::from_u64(1));
+                for _ in 0..e {
+                    r = r.mul(&b);
+                }
+                t(r)
+            }
+            "pow2" => {
+                let e = i(0)?;
+                if e.neg {
+                    return t(SInt::nat(Nat::zero()));
+                }
+                t(pow2(e.to_u128()?)?)
+            }
+            "bits_of_int" => wrap(i(1)?, 0),
+            "bits_add" => wrap(i(1)?.add(&i(2)?), 0),
+            "bits_sub" => wrap(i(1)?.add(&i(2)?.neg()), 0),
+            "bits_neg" => wrap(i(1)?.neg(), 0),
+            "bits_mul" => wrap(i(1)?.mul(&i(2)?), 0),
+            "bits_shl" => {
+                let k = u(2)?;
+                if k > 256 {
+                    return None;
+                }
+                wrap(i(1)?.mul(&pow2(k)?), 0)
+            }
+            // on words: the arguments reduced mod 2^n first
+            "bits_not" | "bits_and" | "bits_or" | "bits_xor" | "bits_shr" | "bits_slice" | "sint" | "bits_sext" => {
+                let red = |k: usize, n: u32| -> Option<u128> { i(k)?.divmod(&pow2(n as u128)?).map(|x| x.1).and_then(|x| x.to_u128()) };
+                match op {
+                    "bits_not" => tu(!red(1, w(0)?)? & mask(w(0)?)),
+                    "bits_and" => tu(red(1, w(0)?)? & red(2, w(0)?)?),
+                    "bits_or" => tu(red(1, w(0)?)? | red(2, w(0)?)?),
+                    "bits_xor" => tu(red(1, w(0)?)? ^ red(2, w(0)?)?),
+                    "bits_shr" => {
+                        let k = u(2)?;
+                        let x = red(1, w(0)?)?;
+                        tu(if k >= 128 { 0 } else { x >> k })
+                    }
+                    "bits_slice" => {
+                        // (x / 2^lo) mod 2^(hi + 1 - lo)
+                        let (hi, lo) = (u(1)?, u(2)?);
+                        if hi < lo || hi >= 128 {
+                            return None;
+                        }
+                        let x = i(0)?.divmod(&pow2(lo)?)?.0;
+                        wrap_n(self, x, (hi - lo + 1) as u64)
+                    }
+                    "sint" => {
+                        let n = w(0)?;
+                        if n == 0 {
+                            return None;
+                        }
+                        let x = red(1, n)?;
+                        if x >> (n - 1) & 1 == 1 {
+                            t(SInt::nat(Nat::from_u128(x)).add(&pow2(n as u128)?.neg()))
+                        } else {
+                            tu(x)
+                        }
+                    }
+                    // sign extension from m to n bits
+                    _ => {
+                        let (m, n) = (w(0)?, w(1)?);
+                        if m == 0 || m > n {
+                            return None;
+                        }
+                        let x = red(2, m)?;
+                        let neg = x >> (m - 1) & 1 == 1;
+                        tu(if neg { (x | !mask(m)) & mask(n) } else { x & mask(m) })
+                    }
+                }
+            }
+            "int_and" => tu(u(0)? & u(1)?),
+            "int_or" => tu(u(0)? | u(1)?),
+            _ => None,
+        }
+    }
+}
+
+/// x mod 2^n as a literal
+fn wrap_n(sp: &Simp, x: SInt, n: u64) -> Option<Term> {
+    if n > 256 {
+        return None;
+    }
+    Some(sp.of_int(x.divmod(&SInt::nat(crate::nat::Nat::pow2(n)))?.1))
 }
 
 impl<'a> Simp<'a> {
@@ -294,22 +423,33 @@ impl<'a> Simp<'a> {
                     }
                 })
             }
-            // a sum of naturals (effective addresses: base + index + disp)
-            Node::App(g, a) if name(*g) == "nat_add" && a.len() == 2 && self.nat_term(&a[0]) && self.nat_term(&a[1]) => {
+            // integer sums (effective addresses: base + index + disp);
+            // x mod 2^n of x
+            Node::App(g, a) if (name(*g) == "int_add" || name(*g) == "int_sub") && a.len() == 2 => {
                 let (b1, c1) = self.offset(&a[0], n)?;
                 let (b2, c2) = self.offset(&a[1], n)?;
                 Some(match (b1, b2) {
-                    (b, None) | (None, b) => (b, c1.wrapping_add(c2) & m),
+                    (b, None) if name(*g) == "int_sub" => (b, c1.wrapping_sub(c2) & m),
+                    (b, None) | (None, b) if name(*g) == "int_add" => (b, c1.wrapping_add(c2) & m),
                     _ => (Some(t.clone()), 0),
                 })
             }
-            _ if self.nat_term(t) => Some((Some(t.clone()), 0)),
-            _ => None,
+            Node::App(g, a) if name(*g) == "bits_of_int" && a.len() == 2 && matches!(a[0].node(), Node::Nat(w) if w.to_u64() == Some(n as u64)) => {
+                self.offset(&a[1], n)
+            }
+            // a negative literal
+            _ if self.int_lit(t).is_some_and(|v| v.neg) => {
+                let v = self.int_lit(t)?;
+                let low = v.divmod(&SInt::nat(crate::nat::Nat::pow2(n.min(128) as u64)))?.1.to_u128()?;
+                Some((None, low & m))
+            }
+            // (arithmetic reads any set as its value: no typing needed)
+            _ => Some((Some(t.clone()), 0)),
         }
     }
 
     /// The canonical form of an n-bit address `t` (a `bits_add` / `bits_sub`
-    /// of naturals): base + c, as `bits_add(n, base, c)`, the base alone
+    /// of integers): base + c, as `bits_add(n, base, c)`, the base alone
     /// when c = 0 and it is an n-bit word, or the numeral c.
     fn canonical_addr(&self, t: &Term, n: u64) -> Option<Term> {
         let (b, c) = self.offset(t, n as u32)?;
@@ -399,8 +539,9 @@ impl<'a> Simp<'a> {
         }
     }
 
-    /// The typing context of a path: the terms its literals say are natural
-    /// numbers.
+    /// The typing context of a path: the terms its literals say are
+    /// integers (`t in int`), naturals (`t in omega`) or words (`t in
+    /// bits(k)`).
     fn set_nats(&self, lits: &[Term]) {
         let s = &self.s;
         let mut out = Vec::new();
@@ -408,11 +549,12 @@ impl<'a> Simp<'a> {
             if let Node::App(i, ab) = l.node() {
                 if is(*i, s.in_) {
                     match ab[1].node() {
-                        Node::App(o, x) if x.is_empty() && is(*o, s.omega) => out.push((ab[0].clone(), None)),
+                        Node::App(o, x) if x.is_empty() && is(*o, s.omega) => out.push((ab[0].clone(), Ty::Nat)),
+                        Node::App(o, x) if x.is_empty() && self.env.syms[*o as usize].name == "int" => out.push((ab[0].clone(), Ty::Int)),
                         Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => {
                             if let Node::Nat(k) = x[0].node() {
                                 if let Some(k) = k.to_u64() {
-                                    out.push((ab[0].clone(), Some(k)));
+                                    out.push((ab[0].clone(), Ty::Bits(k)));
                                 }
                             }
                         }
@@ -424,75 +566,73 @@ impl<'a> Simp<'a> {
         *self.nats.borrow_mut() = out;
     }
 
-    /// `t` is an n-bit word: a numeral below 2^n, known on the path, or
-    /// arithmetic mod 2^k (k <= n) on naturals.
-    fn bits_term(&self, t: &Term, n: u64) -> bool {
-        self.bits_term_d(t, n, 0)
+    fn known(&self, t: &Term, ok: impl Fn(Ty) -> bool) -> bool {
+        self.nats.borrow().iter().any(|(u, k)| u == t && ok(*k))
     }
 
-    fn bits_term_d(&self, t: &Term, n: u64, d: u32) -> bool {
-        if d > 32 {
-            return false;
-        }
+    /// `t` is an n-bit word (in bits(n)): a numeral below 2^n, known on the
+    /// path, or a word operation of width at most n (their results are
+    /// always words: arithmetic is total).
+    fn bits_term(&self, t: &Term, n: u64) -> bool {
         let width = |x: &Term| match x.node() {
             Node::Nat(v) => v.to_u64(),
             _ => None,
         };
-        match t.node() {
-            Node::Nat(v) => v.to_u128().is_some_and(|x| n >= 128 || x < (1u128 << n)),
-            Node::App(f, a) => {
-                if self.nats.borrow().iter().any(|(u, k)| u == t && k.is_some_and(|k| k <= n)) {
-                    return true;
-                }
-                let name = self.env.syms[*f as usize].name.as_str();
-                match name {
-                    "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => {
-                        width(&a[0]).is_some_and(|k| k <= n) && self.nat_term_d(&a[1], d + 1) && self.nat_term_d(&a[2], d + 1)
-                    }
-                    "bits_neg" | "bits_of_nat" if a.len() == 2 => width(&a[0]).is_some_and(|k| k <= n) && self.nat_term_d(&a[1], d + 1),
-                    // x / 2^lo mod 2^(hi + 1 - lo)
-                    "bits_slice" if a.len() == 3 => match (width(&a[1]), width(&a[2])) {
-                        (Some(hi), Some(lo)) => hi >= lo && hi + 1 - lo <= n && self.nat_term_d(&a[0], d + 1),
-                        _ => false,
-                    },
-                    _ => false,
-                }
+        if let Node::Nat(v) = t.node() {
+            return v.to_u128().is_some_and(|x| n >= 128 || x < (1u128 << n));
+        }
+        if self.known(t, |k| matches!(k, Ty::Bits(j) if j <= n)) {
+            return true;
+        }
+        let Node::App(f, a) = t.node() else { return false };
+        match self.env.syms[*f as usize].name.as_str() {
+            "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" | "bits_shr" | "bits_and" | "bits_or" | "bits_xor" | "bits_sar" if a.len() == 3 => {
+                width(&a[0]).is_some_and(|k| k <= n)
             }
-            _ => self.nats.borrow().iter().any(|(u, k)| u == t && k.is_some_and(|k| k <= n)),
+            "bits_neg" | "bits_of_int" | "bits_not" if a.len() == 2 => width(&a[0]).is_some_and(|k| k <= n),
+            "bits_sext" if a.len() == 3 => width(&a[1]).is_some_and(|k| k <= n),
+            // x / 2^lo mod 2^(hi + 1 - lo)
+            "bits_slice" if a.len() == 3 => match (width(&a[1]), width(&a[2])) {
+                (Some(hi), Some(lo)) => hi >= lo && hi + 1 - lo <= n,
+                _ => false,
+            },
+            // 0 <= x mod k < k <= 2^n
+            "int_mod" if a.len() == 2 => match a[1].node() {
+                Node::Nat(k) => !k.is_zero() && (n >= 128 || k.to_u128().is_some_and(|k| k <= 1u128 << n)),
+                _ => false,
+            },
+            _ => false,
         }
     }
 
-    /// `t` is a natural number: a numeral, known to be one on the path
-    /// (`nats`: `t in omega`, `t in bits(k)`), or arithmetic on such.
+    /// `t` is a natural (in omega).
     fn nat_term(&self, t: &Term) -> bool {
-        self.nat_term_d(t, 0)
+        if matches!(t.node(), Node::Nat(_)) || self.known(t, |k| k != Ty::Int) {
+            return true;
+        }
+        if (0..=128).any(|n| n % 8 == 0 && self.bits_term(t, n)) {
+            return true;
+        }
+        let Node::App(f, a) = t.node() else { return false };
+        match self.env.syms[*f as usize].name.as_str() {
+            "int_abs" => true,
+            "int_mod" if a.len() == 2 => matches!(a[1].node(), Node::Nat(k) if !k.is_zero()),
+            _ => false,
+        }
     }
 
-    fn nat_term_d(&self, t: &Term, d: u32) -> bool {
-        if d > 32 {
-            return false;
+    /// `t` is an integer (in int): a literal, an operation of arithmetic
+    /// (their results are integers), or known on the path.
+    fn int_term(&self, t: &Term) -> bool {
+        if self.int_lit(t).is_some() || self.known(t, |_| true) {
+            return true;
         }
-        match t.node() {
-            Node::Nat(_) => true,
-            Node::App(f, a) => {
-                if self.nats.borrow().iter().any(|(u, _)| u == t) {
-                    return true;
-                }
-                let name = self.env.syms[*f as usize].name.as_str();
-                let num = |x: &Term| matches!(x.node(), Node::Nat(_));
-                let pos = |x: &Term| matches!(x.node(), Node::Nat(v) if !v.is_zero());
-                match name {
-                    "nat_add" | "nat_mul" => a.iter().all(|x| self.nat_term_d(x, d + 1)),
-                    "nat_div" | "nat_mod" => pos(&a[1]) && self.nat_term_d(&a[0], d + 1),
-                    // (a mod 2^n of a natural)
-                    "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => num(&a[0]) && self.nat_term_d(&a[1], d + 1) && self.nat_term_d(&a[2], d + 1),
-                    "bits_neg" | "bits_of_nat" if a.len() == 2 => num(&a[0]) && self.nat_term_d(&a[1], d + 1),
-                    "bits_slice" if a.len() == 3 => num(&a[1]) && num(&a[2]) && self.nat_term_d(&a[0], d + 1),
-                    _ => false,
-                }
-            }
-            _ => self.nats.borrow().iter().any(|(u, _)| u == t),
-        }
+        let Node::App(f, _) = t.node() else { return false };
+        const INT_OPS: &[&str] = &[
+            "int_val", "int_abs", "int_neg", "int_succ", "int_pred", "int_add", "int_sub", "int_mul", "int_pow", "int_div", "int_mod", "int_sum", "pow2",
+            "sint",
+        ];
+        INT_OPS.contains(&self.env.syms[*f as usize].name.as_str()) || self.nat_term(t)
     }
 
     /// Reads through a store (`x86_64_linux.store_le(b, a, n, v)`, the
@@ -512,17 +652,17 @@ impl<'a> Simp<'a> {
             _ => None,
         };
         let nat = |v: u128| Term::nat(crate::nat::Nat::from_u128(v));
-        let bits_of_nat = self.env.sym_by_name.get("bits_of_nat").copied()?;
-        let nat_div = self.env.sym_by_name.get("nat_div").copied()?;
-        let pow = self.env.sym_by_name.get("nat_pow").copied()?;
+        let bits_of_int = self.env.sym_by_name.get("bits_of_int").copied()?;
+        let int_div = self.env.sym_by_name.get("int_div").copied()?;
+        let pow = self.env.sym_by_name.get("int_pow").copied()?;
         if is(f, self.s.app) {
             // app(store_le(b, a, n, v), x)
             let st = store(&args[0])?;
             let n = lit(&st[2])?;
             let d = self.distance(&args[1], &st[1], 64)?;
             if d < n {
-                let byte = Term::app(nat_div, vec![st[3].clone(), Term::app(pow, vec![nat(256), nat(d)])]);
-                return Some(self.term(&Term::app(bits_of_nat, vec![nat(8), byte])));
+                let byte = Term::app(int_div, vec![st[3].clone(), Term::app(pow, vec![nat(256), nat(d)])]);
+                return Some(self.term(&Term::app(bits_of_int, vec![nat(8), byte])));
             }
             return Some(self.term(&Term::app(f, vec![st[0].clone(), args[1].clone()])));
         }
@@ -532,7 +672,7 @@ impl<'a> Simp<'a> {
             let (n, m) = (lit(&st[2])?, lit(&args[2])?);
             let d = self.distance(&args[1], &st[1], 64)?;
             if d == 0 && m == n && n <= 16 {
-                return Some(self.term(&Term::app(bits_of_nat, vec![nat(8 * n), st[3].clone()])));
+                return Some(self.term(&Term::app(bits_of_int, vec![nat(8 * n), st[3].clone()])));
             }
             if n <= d && d.checked_add(m).is_some_and(|e| e <= 1u128 << 64) {
                 return Some(self.term(&Term::app(f, vec![st[0].clone(), args[1].clone(), args[2].clone()])));
@@ -575,38 +715,6 @@ impl<'a> Simp<'a> {
                 let (b, i) = (seq(&args[0])?, idx(&args[1])?);
                 b.get(i as usize).map(|&x| nat(x as u64))
             }
-            _ => None,
-        }
-    }
-
-    /// Euclidean division of integer numerals (`int_div`, `int_mod`: a = b q
-    /// + r with 0 <= r < |b|); integers are numerals or `pair(1, m)` for -m.
-    fn compute_int(&self, op: &str, a: &[Term]) -> Option<Term> {
-        let int = |t: &Term| -> Option<i128> {
-            match t.node() {
-                Node::Nat(v) => i128::try_from(v.to_u128()?).ok(),
-                Node::App(p, b) if is(*p, self.s.pair) => match (b[0].node(), b[1].node()) {
-                    (Node::Nat(one), Node::Nat(m)) if one.to_u64() == Some(1) && !m.is_zero() => Some(-i128::try_from(m.to_u128()?).ok()?),
-                    _ => None,
-                },
-                _ => None,
-            }
-        };
-        let of = |v: i128| -> Term {
-            if v >= 0 {
-                Term::nat(crate::nat::Nat::from_u128(v as u128))
-            } else {
-                self.app2(self.s.pair, Term::nat(crate::nat::Nat::from_u64(1)), Term::nat(crate::nat::Nat::from_u128(v.unsigned_abs())))
-            }
-        };
-        let (x, y) = (int(a.first()?)?, int(a.get(1)?)?);
-        if y == 0 {
-            return None;
-        }
-        let r = x.rem_euclid(y.abs());
-        match op {
-            "int_mod" => Some(of(r)),
-            "int_div" => Some(of((x - r) / y)),
             _ => None,
         }
     }
@@ -726,11 +834,35 @@ impl<'a> Simp<'a> {
             }
         }
         if let Some(op) = self.arith.get(&f) {
-            if let Some(v) = compute(op, &args) {
+            if let Some(v) = self.compute(op, &args) {
                 return v;
             }
-            if let Some(v) = self.compute_int(op, &args) {
-                return v;
+            // x + c1 + c2 = x + (c1 + c2), for any x (arithmetic is on the
+            // value of x); x + 0 = x for an integer x
+            if (*op == "int_add" || *op == "int_sub") && args.len() == 2 {
+                if let Some(c) = self.int_lit(&args[1]) {
+                    let c = if *op == "int_sub" { c.neg() } else { c };
+                    let (x, c) = match args[0].node() {
+                        Node::App(g, b) if b.len() == 2 && matches!(self.arith.get(g), Some(&"int_add") | Some(&"int_sub")) => match self.int_lit(&b[1]) {
+                            Some(c0) => (b[0].clone(), c.add(&if self.arith.get(g) == Some(&"int_sub") { c0.neg() } else { c0 })),
+                            None => (args[0].clone(), c),
+                        },
+                        _ => (args[0].clone(), c),
+                    };
+                    if c.m.is_zero() && self.int_term(&x) {
+                        return x;
+                    }
+                    let (name, m) = if c.neg { ("int_sub", SInt::nat(c.m.clone())) } else { ("int_add", c.clone()) };
+                    if let Some(g) = self.env.sym_by_name.get(name).copied() {
+                        let out = Term::app(g, vec![x, self.of_int(m)]);
+                        if out != Term::app(f, args.clone()) {
+                            return self.term(&out);
+                        }
+                    }
+                }
+            }
+            if *op == "int_val" && self.int_term(&args[0]) {
+                return args[0].clone();
             }
             // addresses in canonical form: base + offset
             if (*op == "bits_add" || *op == "bits_sub") && args.len() == 3 {
@@ -743,7 +875,7 @@ impl<'a> Simp<'a> {
                 }
             }
             // an n-bit x is its own n-bit value
-            if *op == "bits_of_nat" && args.len() == 2 {
+            if *op == "bits_of_int" && args.len() == 2 {
                 if let Node::Nat(w) = args[0].node() {
                     if w.to_u64().is_some_and(|n| n <= 256 && self.bits_term(&args[1], n)) {
                         return args[1].clone();
@@ -1019,7 +1151,24 @@ impl<'a> Simp<'a> {
             _ => None,
         };
         let name = self.env.syms.get(*m as usize).map(|x| x.name.as_str()).unwrap_or("");
+        match name {
+            "int_lt" => return Some(self.int_lit(&b[0])?.lt(&self.int_lit(&b[1])?)),
+            "int_le" => return Some(!self.int_lit(&b[1])?.lt(&self.int_lit(&b[0])?)),
+            _ => {}
+        }
         if is(*m, s.in_) {
+            // integer literals: integers; the negative ones in no set of naturals
+            if let Some(v) = self.int_lit(&b[0]) {
+                if let Node::App(o, ob) = b[1].node() {
+                    let set = self.env.syms[*o as usize].name.as_str();
+                    if set == "int" && ob.is_empty() {
+                        return Some(true);
+                    }
+                    if v.neg && (is(*o, s.omega) || set == "bits") {
+                        return Some(false);
+                    }
+                }
+            }
             let x = lit(&b[0])?;
             if let Node::App(o, ob) = b[1].node() {
                 if is(*o, s.omega) {
@@ -1050,8 +1199,8 @@ impl<'a> Simp<'a> {
             return Some(x < lit(&b[1])?);
         }
         match name {
-            "nat_lt" | "lit_lt" => Some(lit(&b[0])? < lit(&b[1])?),
-            "nat_le" => Some(lit(&b[0])? <= lit(&b[1])?),
+            "ord_lt" | "lit_lt" => Some(lit(&b[0])? < lit(&b[1])?),
+            "ord_le" => Some(lit(&b[0])? <= lit(&b[1])?),
             "bit" => {
                 let (x, i) = (lit(&b[0])?, lit(&b[1])?.to_u64()?);
                 let (q, _) = x.divmod(&crate::nat::Nat::pow2(i))?;
@@ -1762,98 +1911,22 @@ impl Simp<'_> {
         (!hyps.is_empty() || (eq && !vs.is_empty())).then_some((vs, hyps, t))
     }
 
-    /// Typing: `t in omega` or `t in bits(k)` from the literals, by the
-    /// definitions of the arithmetic (`bits_add(n, a, b)` is `(a + b) mod
-    /// 2^n`: in bits(n) when a and b are naturals; `bits(n)` is part of
-    /// omega; ...).
+    /// Typing: `t in int`, `t in omega` or `t in bits(k)` from the literals
+    /// and the definitions of the arithmetic (see `int_term`, `nat_term`,
+    /// `bits_term`).
     fn typed(&self, lits: &[Term], g: &Term) -> bool {
         let Node::App(i, ab) = g.node() else { return false };
         if !is(*i, self.s.in_) {
             return false;
         }
-        let bits_of = |s: &Term| -> Option<u64> {
-            match s.node() {
-                Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => match x[0].node() {
-                    Node::Nat(k) => k.to_u64(),
-                    _ => None,
-                },
-                _ => None,
-            }
-        };
-        let is_omega = |s: &Term| matches!(s.node(), Node::App(o, x) if x.is_empty() && is(*o, self.s.omega));
-        if is_omega(&ab[1]) {
-            return self.is_nat(lits, &ab[0], 0);
-        }
-        match bits_of(&ab[1]) {
-            Some(k) => self.in_bits(lits, &ab[0], k, 0),
-            None => false,
-        }
-    }
-
-    fn is_nat(&self, lits: &[Term], t: &Term, depth: u32) -> bool {
-        if depth > 24 {
-            return false;
-        }
-        if matches!(t.node(), Node::Nat(_)) {
-            return true;
-        }
-        let known = lits.iter().any(|l| match l.node() {
-            Node::App(i, ab) if is(*i, self.s.in_) && ab[0] == *t => {
-                matches!(ab[1].node(), Node::App(o, x) if x.is_empty() && is(*o, self.s.omega))
-                    || matches!(ab[1].node(), Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1)
-            }
-            _ => false,
-        });
-        if known {
-            return true;
-        }
-        let Node::App(f, a) = t.node() else { return false };
-        let name = self.env.syms[*f as usize].name.as_str();
-        let pos = |x: &Term| matches!(x.node(), Node::Nat(v) if !v.is_zero());
-        match name {
-            "nat_add" | "nat_mul" => a.iter().all(|x| self.is_nat(lits, x, depth + 1)),
-            "nat_div" | "nat_mod" => pos(&a[1]) && self.is_nat(lits, &a[0], depth + 1),
-            _ => match a.first().and_then(|w| match w.node() {
-                Node::Nat(v) => v.to_u64(),
-                _ => None,
-            }) {
-                Some(k) => self.in_bits(lits, t, k, depth),
-                None => false,
+        self.set_nats(lits);
+        match ab[1].node() {
+            Node::App(o, x) if x.is_empty() && is(*o, self.s.omega) => self.nat_term(&ab[0]),
+            Node::App(o, x) if x.is_empty() && self.env.syms[*o as usize].name == "int" => self.int_term(&ab[0]),
+            Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => match x[0].node() {
+                Node::Nat(k) => k.to_u64().is_some_and(|k| self.bits_term(&ab[0], k)),
+                _ => false,
             },
-        }
-    }
-
-    fn in_bits(&self, lits: &[Term], t: &Term, k: u64, depth: u32) -> bool {
-        if depth > 24 {
-            return false;
-        }
-        if let Node::Nat(v) = t.node() {
-            return v.to_u128().is_some_and(|x| k >= 128 || x < (1u128 << k));
-        }
-        let known = lits.iter().any(|l| match l.node() {
-            Node::App(i, ab) if is(*i, self.s.in_) && ab[0] == *t => {
-                matches!(ab[1].node(), Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1
-                    && matches!(x[0].node(), Node::Nat(j) if j.to_u64().is_some_and(|j| j <= k)))
-            }
-            _ => false,
-        });
-        if known {
-            return true;
-        }
-        let Node::App(f, a) = t.node() else { return false };
-        let name = self.env.syms[*f as usize].name.as_str();
-        let width = |x: &Term| match x.node() {
-            Node::Nat(v) => v.to_u64(),
-            _ => None,
-        };
-        match name {
-            // nat_mod(x, 2^n) with x a natural
-            "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => {
-                width(&a[0]).is_some_and(|n| n <= k) && self.is_nat(lits, &a[1], depth + 1) && self.is_nat(lits, &a[2], depth + 1)
-            }
-            "bits_neg" | "bits_of_nat" if a.len() == 2 => width(&a[0]).is_some_and(|n| n <= k) && self.is_nat(lits, &a[1], depth + 1),
-            // a / 2^s, a in bits(n)
-            "bits_shr" if a.len() == 3 => width(&a[0]).is_some_and(|n| n <= k) && self.in_bits(lits, &a[1], k, depth + 1) && self.is_nat(lits, &a[2], depth + 1),
             _ => false,
         }
     }
@@ -2126,7 +2199,7 @@ impl Simp<'_> {
             let mv = |x: &Term| inst_k(env, m, &[x.clone()]);
             let nat = Term::app(sym("in")?, vec![mv(&x), c0("omega")?]);
             show("the variant is a natural number,", &with(vec![inv(&x)]), &nat, fresh)?;
-            let lt = Term::app(sym("nat_lt")?, vec![mv(&y), mv(&x)]);
+            let lt = Term::app(sym("int_lt")?, vec![mv(&y), mv(&x)]);
             show("the variant decreases,", &step, &lt, fresh)?;
         }
         // theorems while_inv / while_var (core/loop.core)

@@ -442,7 +442,7 @@ impl<'s> Elab<'s> {
         }
         if let Some((ci, bound, name, mk)) = counter {
             let cur = bcx.locals[ci].term.clone();
-            let lt = self.b.app("nat_lt", vec![cur.clone(), bound]);
+            let lt = self.b.app("int_lt", vec![cur.clone(), bound]);
             let brk = self.exit_brk(&bcx, span)?;
             pre.push(Frame::Guard { cond: lt, fail: brk });
             let item = mk(&B2(&self.b), cur.clone());
@@ -450,7 +450,7 @@ impl<'s> Elab<'s> {
             pre.push(Frame::Let { var: x, value: item });
             let ity = Ty::Unknown;
             bcx.push_local(&name, self.b.v(x), ity, false);
-            post = Some((ci, self.b.app("nat_add", vec![cur, self.b.nat(1)])));
+            post = Some((ci, self.b.app("int_add", vec![cur, self.b.nat(1)])));
         }
         let _ = n0;
         let bf = self.stmts_formula(&mut bcx, &body.stmts, pre, post)?;

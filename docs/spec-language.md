@@ -592,8 +592,11 @@ fixed (`-> <-> || && ! = != in`), binders are `all x. P`, `ex x. P`, or an
 argument `x y. t` of a binder constant (`set_select(s, x. p)`).
 
 The elaborator turns each SL declaration into definitions: types into sets
-(`bits[n]` = naturals below 2^n, records = functions from field names,
-sums = `tag(i, payload)`), `fn` / `pred` into terms, procedures into programs
+(`bits[n]` = the integers 0 .. 2^n - 1, `nat` = the integers >= 0,
+records = functions from field names, sums = `tag(i, payload)`); numbers
+are integers, with total arithmetic (`int_add`, ...; a set that is not an
+integer counts as 0), and word operations are integer operations mod 2^n
+(`bits_add(n, a, b) = int_mod(a + b, 2^n)`); `fn` / `pred` into terms, procedures into programs
 `mkprog(s o. F)` — sets of (state, outcome) pairs — and tables into a
 `decode` set and an `execute` program. Layer parameters (`param`) become
 extra arguments of every definition that depends on them; `law`s become

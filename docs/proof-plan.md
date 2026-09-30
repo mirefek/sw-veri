@@ -199,13 +199,14 @@ relies on.
    First part done — induction and arithmetic:
    - trusted extension `ext/arith.rs`: `arith(p…)` proves a goal from
      premises by propositional logic plus linear arithmetic over the
-     naturals (`+`, `succ`, literals, `*`/`/`/`%` by constants, `-` where
-     defined, `<`, `<=`, `=`; Fourier–Motzkin with integer tightening, no
-     external solver). A term counts as a number only if a premise says so
-     (`t in omega`, `t in bits(k)`, or `t` equated to a number). It rests
-     on standard theorems about the prelude's naturals, listed in the
-     module. Also `rec`: the recursion equations of `nat_rec` (the
-     recursion theorem);
+     integers (`+`, `-`, literals, `*`/`/`/`%` by constants, word
+     operations mod 2^n, `<`, `<=`, `=`; Fourier–Motzkin with integer
+     tightening, no external solver). Arithmetic is total: any term stands
+     for its value (`int_val`), so the laws of the integers hold for any
+     sets; an equation between sets, or membership in `omega` / `bits(k)`,
+     is read only for terms known to be integers. It rests on standard
+     theorems about the prelude's integers, listed in the module. Also
+     `rec`: the recursion equations of `nat_rec` (the recursion theorem);
    - `core/nat.core`: `nat_ind` proven from `omega_ind`; examples
      (`dbl(n) = 2 n` by induction);
    - proof language: goal-directed `arith(…)` and `induct(base, step)`

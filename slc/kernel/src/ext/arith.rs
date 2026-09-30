@@ -1,36 +1,37 @@
-//! Natural-number arithmetic: linear arithmetic (with propositional
-//! structure), and the recursion equations of `nat_rec`.
+//! Integer arithmetic: linear arithmetic (with propositional structure),
+//! and the recursion equations of `nat_rec`.
 //!
-//! Trusted extension. The prelude's naturals are von Neumann ordinals in
-//! `omega`, with `nat_lt` = membership and `+ * - / %` defined by recursion
-//! (`nat_rec`) and choice. What this module relies on are the standard facts
-//! about them, all theorems of the prelude (via the recursion theorem for
-//! `nat_rec` and induction, `omega_ind`):
+//! Trusted extension. The prelude's integers are the von Neumann naturals
+//! (`omega`) and `pair(1, n)` for -n; arithmetic is total: every operation
+//! reads its arguments through `int_val` (a set that is not an integer
+//! counts as 0) and yields an integer. What this module relies on are the
+//! standard facts about them, all theorems of the prelude (via the
+//! recursion theorem for `nat_rec` and induction, `omega_ind`):
 //!
 //! * `nat_rec(z, k v. s, 0) = z`, and for `n in omega`:
 //!   `nat_rec(z, k v. s, n + 1) = s(n, nat_rec(z, k v. s, n))`;
-//! * `(omega, 0, succ, nat_add, nat_mul, nat_lt)` is the standard model of
-//!   the naturals: `succ(n) = n + 1`, `0 = empty` (`lit_zero`), literals
-//!   are their values (`lit_succ`, `lit_nat`), `+` and `*` are commutative
-//!   semiring operations, `<` (= `in`) is the strict order with `a < b`
-//!   iff `a + 1 <= b`, and `<=` (`nat_le`) is `<` or `=`;
-//! * `b <= a -> nat_sub(a, b) in omega && b + nat_sub(a, b) = a`
-//!   (nothing is used about `nat_sub(a, b)` when `a < b`);
-//! * for `k > 0`: `a = k * nat_div(a, k) + nat_mod(a, k)` with
-//!   `nat_mod(a, k) < k` (Euclidean division).
+//! * `(int, 0, int_add, int_neg, int_mul, int_lt)` is the ordered ring of the
+//!   integers on the values `int_val(x)` of its arguments, with `int_sub(a,
+//!   b) = a + (-b)`, `int_succ(a) = a + 1`, `int_pred(a) = a - 1`, `int_le`
+//!   is `<` or `=` of the values, `0 = empty` (`lit_zero`) and literals are
+//!   naturals with their values (`lit_*`);
+//! * for `k > 0`: `int_val(a) = k * int_div(a, k) + int_mod(a, k)` with
+//!   `0 <= int_mod(a, k) < k` (Euclidean division);
+//! * `omega` is the integers `>= 0`; `bits(n)` those in `0 .. 2^n - 1`;
+//!   `bits_add(n, a, b) = int_mod(a + b, 2^n)` (and `bits_sub`, `bits_neg`,
+//!   `bits_of_int` likewise); the length of a list is in omega.
 //!
 //! `arith(premises, goal)` checks that `premises -> goal` holds whenever
 //! each atom is read as true or false and the arithmetic atoms are
 //! consistent: for every assignment falsifying it, the arithmetic literals
 //! are infeasible over the integers (Fourier-Motzkin elimination with
-//! integer tightening: sound, not complete). A term is read as a number
-//! only if it is known to be one: a literal, a term `t` with a premise
-//! `t in omega` or `t in bits(k)`, a term equated to a number by a premise,
-//! the length of a list expression over known lists (`ext::list`), or
-//! built from those with `succ`, `+`, `*` by a constant, `-`, and `/`, `%`
-//! by a positive constant. Other atoms stay propositional. A goal
-//! `t in omega` where t has differences `nat_sub(a, b)` is shown from
-//! `b <= a` for each of them (then `nat_sub(a, b) in omega`, as above).
+//! integer tightening: sound, not complete). Every term in an arithmetic
+//! position stands for its value `int_val(t)`: arithmetic terms exactly,
+//! other terms as integer variables. Comparisons `int_lt`, `int_le` are
+//! comparisons of values. An equation `a = b`, and membership in `omega`
+//! or `bits(k)`, are read arithmetically only when a and b are integers
+//! (arithmetic terms, numerals, or with a premise `t in int`, `t in omega`
+//! or `t in bits(k)`): for other sets, equal values do not make equal sets.
 
 use super::prop::Logic;
 use crate::env::{Env, KResult, KernelError};
@@ -79,20 +80,14 @@ enum Rel {
     Eq,
 }
 
-/// An arithmetic atom `lhs rel rhs`, or a membership `t in omega` that
-/// holds because t is a number.
+/// An arithmetic atom `lhs rel rhs`, a range `lo <= x <= hi` (membership in
+/// `omega` or `bits(k)` of an integer), or an atom that holds (a term of
+/// arithmetic is an integer).
 #[derive(Clone, Debug)]
 enum Atom {
     Cmp(Lin, Rel, Lin),
+    Range(Lin, i128, Option<i128>),
     True,
-}
-
-/// `nat_sub(a, b)` stands for variable `v`: `b <= a -> v = a - b`.
-#[derive(Clone, Debug)]
-struct SubVar {
-    v: usize,
-    a: Lin,
-    b: Lin,
 }
 
 struct Reader {
@@ -100,13 +95,14 @@ struct Reader {
     ls: super::list::LSyms,
     /// terms known to be lists (their lengths are naturals)
     lists: Vec<Term>,
-    /// terms known to be naturals
+    /// terms known to be integers (premises `t in int / omega / bits(k)`)
+    ints: Vec<Term>,
+    /// ... and naturals (premises `t in omega / bits(k)`): succ(t) is t + 1
     nats: Vec<Term>,
-    /// variables: the term each stands for
+    /// variables: the term each stands for (its value)
     vars: Vec<Term>,
-    /// side conditions (each `lin >= 0`) for division variables
+    /// side conditions (each `lin >= 0`): divisions, list lengths
     side: Vec<Lin>,
-    subs: Vec<SubVar>,
 }
 
 #[derive(Clone, Copy)]
@@ -115,17 +111,25 @@ struct Syms {
     in_: SymId,
     lit_lt: SymId,
     lit_add: SymId,
-    nat_lt: Option<SymId>,
-    nat_le: Option<SymId>,
-    nat_add: Option<SymId>,
-    nat_sub: Option<SymId>,
-    nat_mul: Option<SymId>,
-    nat_div: Option<SymId>,
-    nat_mod: Option<SymId>,
+    int_lt: Option<SymId>,
+    int_le: Option<SymId>,
+    int_add: Option<SymId>,
+    int_sub: Option<SymId>,
+    int_neg: Option<SymId>,
+    int_mul: Option<SymId>,
+    int_div: Option<SymId>,
+    int_mod: Option<SymId>,
+    int_succ: Option<SymId>,
+    int_pred: Option<SymId>,
     succ: Option<SymId>,
     empty: Option<SymId>,
     omega: Option<SymId>,
+    int: Option<SymId>,
     bits: Option<SymId>,
+    bits_add: Option<SymId>,
+    bits_sub: Option<SymId>,
+    bits_neg: Option<SymId>,
+    bits_of_int: Option<SymId>,
 }
 
 impl Syms {
@@ -136,33 +140,40 @@ impl Syms {
             in_: s("in").unwrap_or(u32::MAX),
             lit_lt: env.builtins.lit_lt,
             lit_add: env.builtins.lit_add,
-            nat_lt: s("nat_lt"),
-            nat_le: s("nat_le"),
-            nat_add: s("nat_add"),
-            nat_sub: s("nat_sub"),
-            nat_mul: s("nat_mul"),
-            nat_div: s("nat_div"),
-            nat_mod: s("nat_mod"),
+            int_lt: s("int_lt"),
+            int_le: s("int_le"),
+            int_add: s("int_add"),
+            int_sub: s("int_sub"),
+            int_neg: s("int_neg"),
+            int_mul: s("int_mul"),
+            int_div: s("int_div"),
+            int_mod: s("int_mod"),
+            int_succ: s("int_succ"),
+            int_pred: s("int_pred"),
             succ: s("succ"),
             empty: s("empty"),
             omega: s("omega"),
+            int: s("int"),
             bits: s("bits"),
+            bits_add: s("bits_add"),
+            bits_sub: s("bits_sub"),
+            bits_neg: s("bits_neg"),
+            bits_of_int: s("bits_of_int"),
         }
-    }
-}
-
-/// The subterms of `t` headed by `f` (not under binders).
-fn collect_app(t: &Term, f: SymId, out: &mut Vec<Term>) {
-    if let Node::App(g, a) = t.node() {
-        if *g == f && !out.contains(t) {
-            out.push(t.clone());
-        }
-        a.iter().for_each(|x| collect_app(x, f, out));
     }
 }
 
 fn is(s: SymId, o: Option<SymId>) -> bool {
     o == Some(s)
+}
+
+/// numerals up to 2^100 (coefficients are i128; room for sums and products
+/// by small constants, which `Lin` checks)
+fn small(t: &Term) -> Option<i128> {
+    match t.node() {
+        Node::Nat(n) => n.to_u128().filter(|&v| v <= 1u128 << 100).map(|v| v as i128),
+        _ => None,
+    }
 }
 
 impl Reader {
@@ -176,31 +187,97 @@ impl Reader {
         }
     }
 
-    /// `t in omega` or `t in bits(k)`: the t
+    /// `t in int`, `t in omega` or `t in bits(k)`: the t
     fn membership(&self, t: &Term) -> Option<Term> {
         if let Node::App(i, a) = t.node() {
             if *i == self.s.in_ {
-                match a[1].node() {
-                    Node::App(o, _) if is(*o, self.s.omega) => return Some(a[0].clone()),
-                    Node::App(b, _) if is(*b, self.s.bits) => return Some(a[0].clone()),
-                    _ => {}
+                if let Node::App(o, _) = a[1].node() {
+                    if is(*o, self.s.omega) || is(*o, self.s.bits) || is(*o, self.s.int) {
+                        return Some(a[0].clone());
+                    }
                 }
             }
         }
         None
     }
 
-    /// The linear form of a natural-number term, if it is one.
+    /// `t` is an integer: a numeral, a term of arithmetic, or known to be one.
+    fn is_int(&self, t: &Term) -> bool {
+        let s = self.s;
+        match t.node() {
+            Node::Nat(_) => true,
+            Node::App(e, a) if a.is_empty() && is(*e, s.empty) => true,
+            Node::App(f, a) if is(*f, s.succ) => small(&a[0]).is_some() || self.nats.contains(&a[0]),
+            // the length of a list expression (a natural)
+            Node::App(f, a) if is(*f, self.ls.len) && super::list::flatten(&self.ls, &a[0], &self.lists).is_some() => true,
+            Node::App(f, _) => {
+                [s.int_add, s.int_sub, s.int_neg, s.int_mul, s.int_div, s.int_mod, s.int_succ, s.int_pred].iter().any(|g| is(*f, *g))
+                    || self.bits_op(t).is_some()
+                    || self.ints.contains(t)
+            }
+            _ => self.ints.contains(t),
+        }
+    }
+
+    /// `t` is known to be a natural: a numeral, or with a premise `t in
+    /// omega` / `t in bits(k)`.
+    fn natural(&self, t: &Term) -> bool {
+        small(t).is_some() || self.nats.contains(t)
+    }
+
+    /// `bits_add(n, a, b)` etc. with a numeral width: (2^n, the argument of
+    /// the reduction mod 2^n)
+    fn bits_op(&self, t: &Term) -> Option<(i128, Vec<(Term, i128)>)> {
+        let Node::App(f, a) = t.node() else { return None };
+        let s = self.s;
+        let n = small(a.first()?)?;
+        if !(0..=64).contains(&n) {
+            return None;
+        }
+        let m = 1i128 << n;
+        let parts = if is(*f, s.bits_add) && a.len() == 3 {
+            vec![(a[1].clone(), 1), (a[2].clone(), 1)]
+        } else if is(*f, s.bits_sub) && a.len() == 3 {
+            vec![(a[1].clone(), 1), (a[2].clone(), -1)]
+        } else if is(*f, s.bits_neg) && a.len() == 2 {
+            vec![(a[1].clone(), -1)]
+        } else if is(*f, s.bits_of_int) && a.len() == 2 {
+            vec![(a[1].clone(), 1)]
+        } else {
+            return None;
+        };
+        Some((m, parts))
+    }
+
+    /// `x mod k` (k > 0) of the value x: a fresh variable r, with
+    /// x = k q + r, 0 <= r <= k - 1 (q another fresh variable)
+    fn modulo(&mut self, t: &Term, x: Lin, k: i128) -> Option<(usize, usize)> {
+        let (qt, rt) = (Term::app(u32::MAX, vec![t.clone()]), t.clone());
+        let fresh = !self.vars.contains(&rt);
+        let (q, r) = (self.var_of(&qt), self.var_of(&rt));
+        if fresh {
+            // x - k q - r = 0, r >= 0, k - 1 - r >= 0
+            let d = x.add(&Lin::var(q), -k)?.add(&Lin::var(r), -1)?;
+            self.side.push(d.clone());
+            self.side.push(d.scale(-1)?);
+            self.side.push(Lin::var(r));
+            self.side.push(Lin::konst(k - 1).add(&Lin::var(r), -1)?);
+        }
+        Some((q, r))
+    }
+
+    /// The linear form of the value of `t`.
     fn lin(&mut self, t: &Term) -> Option<Lin> {
         let s = self.s;
         match t.node() {
-            // numerals up to 2^100 (coefficients are i128; room for sums
-            // and products by small constants, which `Lin` checks)
-            Node::Nat(n) => return n.to_u128().filter(|&v| v <= 1u128 << 100).map(|v| Lin::konst(v as i128)),
+            Node::Nat(_) => return small(t).map(Lin::konst),
             Node::App(e, a) if a.is_empty() && is(*e, s.empty) => return Some(Lin::konst(0)),
-            Node::App(f, a) if is(*f, s.succ) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
+            // succ of a natural is its + 1 (of other sets: a set)
+            Node::App(f, a) if is(*f, s.succ) && (small(&a[0]).is_some() || self.nats.contains(&a[0])) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
+            Node::App(f, a) if is(*f, s.int_succ) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
+            Node::App(f, a) if is(*f, s.int_pred) => return self.lin(&a[0])?.add(&Lin::konst(1), -1),
             // the length of a list expression: its singletons plus the
-            // lengths of the lists in it
+            // lengths of the lists in it (each >= 0)
             Node::App(f, a) if is(*f, self.ls.len) => {
                 if let Some(pieces) = super::list::flatten(&self.ls, &a[0], &self.lists) {
                     let mut l = Lin::konst(0);
@@ -209,6 +286,7 @@ impl Reader {
                             super::list::Piece::One(_) => l.add(&Lin::konst(1), 1)?,
                             super::list::Piece::List(m) => {
                                 let v = self.var_of(&Term::app(*f, vec![m]));
+                                self.side.push(Lin::var(v));
                                 l.add(&Lin::var(v), 1)?
                             }
                         };
@@ -216,68 +294,43 @@ impl Reader {
                     return Some(l);
                 }
             }
-            Node::App(f, a) if is(*f, s.nat_add) => {
-                let (x, y) = (self.lin(&a[0])?, self.lin(&a[1])?);
-                return x.add(&y, 1);
+            Node::App(f, a) if is(*f, s.int_add) => return self.lin(&a[0])?.add(&self.lin(&a[1])?, 1),
+            Node::App(f, a) if is(*f, s.int_sub) => return self.lin(&a[0])?.add(&self.lin(&a[1])?, -1),
+            Node::App(f, a) if is(*f, s.int_neg) => return self.lin(&a[0])?.scale(-1),
+            Node::App(f, a) if *f == s.lit_add && small(&a[0]).is_some() && small(&a[1]).is_some() => {
+                return self.lin(&a[0])?.add(&self.lin(&a[1])?, 1);
             }
-            Node::App(f, a) if *f == s.lit_add && matches!(a[0].node(), Node::Nat(_)) && matches!(a[1].node(), Node::Nat(_)) => {
-                let (x, y) = (self.lin(&a[0])?, self.lin(&a[1])?);
-                return x.add(&y, 1);
-            }
-            Node::App(f, a) if is(*f, s.nat_mul) => {
-                // linear only if one factor is a constant
-                if let Some(x) = self.lin_opt_const(&a[0]) {
-                    let y = self.lin(&a[1])?;
-                    return y.scale(x);
+            Node::App(f, a) if is(*f, s.int_mul) => {
+                // linear only if one factor is a numeral
+                if let Some(k) = small(&a[0]) {
+                    return self.lin(&a[1])?.scale(k);
                 }
-                if let Some(y) = self.lin_opt_const(&a[1]) {
+                if let Some(k) = small(&a[1]) {
+                    return self.lin(&a[0])?.scale(k);
+                }
+            }
+            Node::App(f, a) if is(*f, s.int_div) || is(*f, s.int_mod) => {
+                if let Some(k) = small(&a[1]).filter(|k| *k > 0) {
                     let x = self.lin(&a[0])?;
-                    return x.scale(y);
+                    let m = Term::app(s.int_mod.unwrap(), vec![a[0].clone(), a[1].clone()]);
+                    let (q, r) = self.modulo(&m, x, k)?;
+                    return Some(Lin::var(if is(*f, s.int_div) { q } else { r }));
                 }
             }
-            Node::App(f, a) if is(*f, s.nat_sub) => {
-                let (x, y) = (self.lin(&a[0])?, self.lin(&a[1])?);
-                if let Some(sv) = self.subs.iter().find(|sv| self.vars[sv.v] == *t) {
-                    return Some(Lin::var(sv.v));
-                }
-                let v = self.var_of(t);
-                self.subs.push(SubVar { v, a: x, b: y });
-                return Some(Lin::var(v));
-            }
-            Node::App(f, a) if is(*f, s.nat_div) || is(*f, s.nat_mod) => {
-                if let Some(k) = self.lin_opt_const(&a[1]).filter(|k| *k > 0) {
-                    let x = self.lin(&a[0])?;
-                    // q = a / k, r = a % k: a = k q + r, 0 <= r < k
-                    let (qt, rt) = (
-                        Term::app(s.nat_div.unwrap(), vec![a[0].clone(), a[1].clone()]),
-                        Term::app(s.nat_mod.unwrap(), vec![a[0].clone(), a[1].clone()]),
-                    );
-                    let fresh = !self.vars.contains(&qt);
-                    let (q, r) = (self.var_of(&qt), self.var_of(&rt));
-                    if fresh {
-                        // a - k q - r = 0, r >= 0, k - 1 - r >= 0, q >= 0
-                        let d = x.add(&Lin::var(q), -k)?.add(&Lin::var(r), -1)?;
-                        self.side.push(d.clone());
-                        self.side.push(d.scale(-1)?);
-                        self.side.push(Lin::konst(k - 1).add(&Lin::var(r), -1)?);
+            _ => {
+                if let Some((m, parts)) = self.bits_op(t) {
+                    let mut x = Lin::konst(0);
+                    for (p, k) in parts {
+                        x = x.add(&self.lin(&p)?, k)?;
                     }
-                    return Some(Lin::var(if is(*f, s.nat_div) { q } else { r }));
+                    let (_, r) = self.modulo(t, x, m)?;
+                    return Some(Lin::var(r));
                 }
             }
-            _ => {}
         }
-        if self.nats.contains(t) {
-            let v = self.var_of(t);
-            return Some(Lin::var(v));
-        }
-        None
-    }
-
-    fn lin_opt_const(&mut self, t: &Term) -> Option<i128> {
-        match t.node() {
-            Node::Nat(n) => n.to_u128().filter(|&v| v <= 1u128 << 100).map(|v| v as i128),
-            _ => None,
-        }
+        // any other term: its value, an integer variable
+        let v = self.var_of(t);
+        Some(Lin::var(v))
     }
 
     /// Reads an atom of the propositional structure.
@@ -288,37 +341,42 @@ impl Reader {
             return None;
         }
         let rel = if *f == s.eq {
-            Rel::Eq
-        } else if is(*f, s.nat_lt) || *f == s.lit_lt {
-            Rel::Lt
-        } else if is(*f, s.nat_le) {
-            Rel::Le
-        } else if *f == s.in_ {
-            if let Node::App(o, _) = a[1].node() {
-                if is(*o, s.omega) {
-                    // a number built from numbers is a number (no `-`: it
-                    // may leave omega; unless the difference is known to
-                    // be a number)
-                    let n = self.subs.len();
-                    let r = self.lin(&a[0]).map(|_| Atom::True);
-                    if self.subs[n..].iter().any(|sv| !self.nats.contains(&self.vars[sv.v])) {
-                        self.subs.truncate(n);
-                        return None;
-                    }
-                    return r;
-                }
-                // x in bits(k): x < 2^k (x is then a number)
-                if is(*o, s.bits) {
-                    if let Node::App(_, ob) = a[1].node() {
-                        if let Some(k) = self.lin_opt_const(&ob[0]).filter(|&k| (0..=100).contains(&k)) {
-                            let x = self.lin(&a[0])?;
-                            return Some(Atom::Cmp(x, Rel::Lt, Lin::konst(1i128 << k)));
-                        }
-                    }
-                    return None;
-                }
+            // (sets with equal values need not be equal)
+            if !self.is_int(&a[0]) || !self.is_int(&a[1]) {
+                return None;
             }
+            Rel::Eq
+        } else if is(*f, s.int_lt) {
             Rel::Lt
+        } else if is(*f, s.int_le) {
+            Rel::Le
+        } else if *f == s.lit_lt {
+            // (on numerals: their order)
+            small(&a[0])?;
+            small(&a[1])?;
+            Rel::Lt
+        } else if *f == s.in_ && self.natural(&a[0]) && self.natural(&a[1]) {
+            // naturals (von Neumann): membership is the order
+            Rel::Lt
+        } else if *f == s.in_ {
+            let Node::App(o, ob) = a[1].node() else { return None };
+            if is(*o, s.int) {
+                return self.is_int(&a[0]).then_some(Atom::True);
+            }
+            if !self.is_int(&a[0]) {
+                return None;
+            }
+            // an integer x: x in omega iff x >= 0; x in bits(k) iff 0 <= x < 2^k
+            if is(*o, s.omega) {
+                let x = self.lin(&a[0])?;
+                return Some(Atom::Range(x, 0, None));
+            }
+            if is(*o, s.bits) {
+                let k = small(&ob[0]).filter(|&k| (0..=100).contains(&k))?;
+                let x = self.lin(&a[0])?;
+                return Some(Atom::Range(x, 0, Some((1i128 << k) - 1)));
+            }
+            return None;
         } else {
             return None;
         };
@@ -429,112 +487,88 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
     }
 }
 
-/// The literals of one assignment (with `!=` split into cases) are
-/// infeasible.
-fn refuted(lits: &[(Lin, Rel, Lin, bool)], base: &[Lin], subs: &[SubVar], k: usize) -> bool {
+/// The literals of one assignment (with `!=` and ranges split into cases)
+/// are infeasible.
+fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize) -> bool {
     if k == lits.len() {
-        // `nat_sub` variables: either b <= a and v = a - b (v >= 0), or
-        // a < b and nothing is known (constraints using v are dropped)
-        return refute_subs(base.to_vec(), subs, 0);
+        return infeasible(base.to_vec());
     }
-    let (x, rel, y, val) = &lits[k];
     let add = |extra: Vec<Lin>| {
         let mut b = base.to_vec();
         b.extend(extra);
-        refuted(lits, &b, subs, k + 1)
+        refuted(lits, &b, k + 1)
     };
-    let d = y.add(x, -1).unwrap_or(Lin::konst(0)); // y - x
-    let dn = x.add(y, -1).unwrap_or(Lin::konst(0)); // x - y
-    match (rel, val) {
-        (Rel::Lt, true) => add(vec![d.add(&Lin::konst(1), -1).unwrap_or(d.clone())]),
-        (Rel::Lt, false) => add(vec![dn]),
-        (Rel::Le, true) => add(vec![d]),
-        (Rel::Le, false) => add(vec![dn.add(&Lin::konst(1), -1).unwrap_or(dn.clone())]),
-        (Rel::Eq, true) => add(vec![d, dn]),
-        (Rel::Eq, false) => {
-            add(vec![d.add(&Lin::konst(1), -1).unwrap_or(d.clone())])
-                && add(vec![dn.add(&Lin::konst(1), -1).unwrap_or(dn.clone())])
+    let minus1 = |l: &Lin| l.add(&Lin::konst(1), -1).unwrap_or(l.clone());
+    match &lits[k] {
+        (Atom::Cmp(x, rel, y), val) => {
+            let d = y.add(x, -1).unwrap_or(Lin::konst(0)); // y - x
+            let dn = x.add(y, -1).unwrap_or(Lin::konst(0)); // x - y
+            match (rel, val) {
+                (Rel::Lt, true) => add(vec![minus1(&d)]),
+                (Rel::Lt, false) => add(vec![dn]),
+                (Rel::Le, true) => add(vec![d]),
+                (Rel::Le, false) => add(vec![minus1(&dn)]),
+                (Rel::Eq, true) => add(vec![d, dn]),
+                (Rel::Eq, false) => add(vec![minus1(&d)]) && add(vec![minus1(&dn)]),
+            }
         }
+        (Atom::Range(x, lo, hi), val) => {
+            let above = x.add(&Lin::konst(*lo), -1).unwrap_or(Lin::konst(0)); // x - lo
+            let below = hi.map(|h| Lin::konst(h).add(x, -1).unwrap_or(Lin::konst(0))); // hi - x
+            if *val {
+                add([Some(above), below].into_iter().flatten().collect())
+            } else {
+                // x < lo, or x > hi
+                add(vec![minus1(&above.scale(-1).unwrap_or(Lin::konst(0)))]) && below.is_none_or(|b| add(vec![minus1(&b.scale(-1).unwrap_or(Lin::konst(0)))]))
+            }
+        }
+        (Atom::True, _) => refuted(lits, base, k + 1),
     }
-}
-
-fn refute_subs(base: Vec<Lin>, subs: &[SubVar], k: usize) -> bool {
-    if k == subs.len() {
-        return infeasible(base);
-    }
-    let sv = &subs[k];
-    // case b <= a: a - b >= 0, v = a - b
-    let mut c1 = base.clone();
-    let amb = sv.a.add(&sv.b, -1).unwrap_or(Lin::konst(0));
-    c1.push(amb.clone());
-    let e = amb.add(&Lin::var(sv.v), -1).unwrap_or(Lin::konst(0));
-    c1.push(e.clone());
-    c1.push(e.scale(-1).unwrap_or(Lin::konst(0)));
-    // case a < b: b - a - 1 >= 0, and nothing about v
-    let mut c2: Vec<Lin> = base.into_iter().filter(|l| !l.coeffs.contains_key(&sv.v)).collect();
-    c2.push(sv.b.add(&sv.a, -1).and_then(|x| x.add(&Lin::konst(1), -1)).unwrap_or(Lin::konst(0)));
-    refute_subs(c1, subs, k + 1) && refute_subs(c2, subs, k + 1)
 }
 
 impl Logic {
     /// `premises -> goal` holds by propositional logic and linear arithmetic
-    /// over the naturals (see the module docs).
+    /// over the integers (see the module docs).
     pub fn arith(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
-        // a goal `t in omega` with differences `nat_sub(a, b)` in t: from
-        // `b <= a` for each (then `nat_sub(a, b) in omega`)
         let s = Syms::new(env);
-        if let (Node::App(i, g), Some(nat_sub), Some(nat_le)) = (goal.node(), s.nat_sub, s.nat_le) {
-            if *i == s.in_ && matches!(g[1].node(), Node::App(o, _) if is(*o, s.omega)) {
-                let mut subs = Vec::new();
-                collect_app(&g[0], nat_sub, &mut subs);
-                if !subs.is_empty() && self.arith_core(env, premises, goal).is_err() {
-                    let mut ps = premises.to_vec();
-                    for t in &subs {
-                        let Node::App(_, ab) = t.node() else { unreachable!() };
-                        self.arith(env, premises, &Term::app(nat_le, vec![ab[1].clone(), ab[0].clone()]))?;
-                        ps.push(Term::app(s.in_, vec![t.clone(), g[1].clone()]));
-                    }
-                    return self.arith_core(env, &ps, goal);
-                }
-            }
-        }
-        self.arith_core(env, premises, goal)
-    }
-
-    fn arith_core(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
-        let s = Syms::new(env);
-        let mut r = Reader { s, ls: super::list::LSyms::new(env), lists: super::list::known_lists(env, premises), nats: Vec::new(), vars: Vec::new(), side: Vec::new(), subs: Vec::new() };
-        // numbers: memberships among the premises, then terms equated to
-        // numbers (repeat until nothing changes)
+        let mut r = Reader {
+            s,
+            ls: super::list::LSyms::new(env),
+            lists: super::list::known_lists(env, premises),
+            ints: Vec::new(),
+            nats: Vec::new(),
+            vars: Vec::new(),
+            side: Vec::new(),
+        };
+        // integers: memberships among the premises, then terms equated to
+        // integers (repeat until nothing changes)
         for p in premises {
             if let Some(t) = r.membership(p) {
-                r.nats.push(t);
+                if let Node::App(_, a) = p.node() {
+                    if matches!(a[1].node(), Node::App(o, _) if is(*o, s.omega) || is(*o, s.bits)) {
+                        r.nats.push(t.clone());
+                    }
+                }
+                r.ints.push(t);
             }
         }
         loop {
-            let before = r.nats.len();
+            let before = r.ints.len();
             for p in premises {
                 if let Node::App(e, a) = p.node() {
                     if *e == s.eq && a.len() == 2 {
                         for (x, y) in [(&a[0], &a[1]), (&a[1], &a[0])] {
-                            // (not through `-`: it may leave omega)
-                            let n = r.subs.len();
-                            let num = r.lin(y).is_some() && r.subs.len() == n;
-                            r.subs.truncate(n);
-                            if num && !r.nats.contains(x) {
-                                r.nats.push(x.clone());
+                            if r.is_int(y) && !r.ints.contains(x) {
+                                r.ints.push(x.clone());
                             }
                         }
                     }
                 }
             }
-            if r.nats.len() == before {
+            if r.ints.len() == before {
                 break;
             }
         }
-        r.vars.clear();
-        r.side.clear();
-        r.subs.clear();
         let mut f = goal.clone();
         for p in premises.iter().rev() {
             f = Term::app(self.imp, vec![p.clone(), f]);
@@ -545,9 +579,7 @@ impl Logic {
             return err("arith: too many atoms");
         }
         let read: Vec<Option<Atom>> = atoms.iter().map(|a| r.atom(a)).collect();
-        // every variable is a natural
-        let mut base: Vec<Lin> = (0..r.vars.len()).filter(|v| !r.subs.iter().any(|s| s.v == *v)).map(Lin::var).collect();
-        base.extend(r.side.iter().cloned());
+        let base: Vec<Lin> = r.side.clone();
         for row in 0u64..(1 << atoms.len()) {
             if tree.eval(row) {
                 continue;
@@ -557,15 +589,15 @@ impl Logic {
             for (i, a) in read.iter().enumerate() {
                 let val = row >> i & 1 == 1;
                 match a {
-                    Some(Atom::Cmp(x, rel, y)) => lits.push((x.clone(), *rel, y.clone(), val)),
                     Some(Atom::True) if !val => contradiction = true,
-                    _ => {}
+                    Some(a) => lits.push((a.clone(), val)),
+                    None => {}
                 }
             }
             if contradiction {
                 continue;
             }
-            if !refuted(&lits, &base, &r.subs, 0) {
+            if !refuted(&lits, &base, 0) {
                 let atoms_s: Vec<String> = atoms
                     .iter()
                     .enumerate()
@@ -579,7 +611,7 @@ impl Logic {
 
     /// The recursion equations of `nat_rec` for `t = nat_rec(z, k v. s, n)`:
     /// `t = z` if n is 0; `t = s(m, nat_rec(z, k v. s, m))` if n is
-    /// `m + 1` or `succ(m)`, given `m in omega` (`m_nat`).
+    /// `m + 1`, `int_succ(m)` or `succ(m)`, given `m in omega` (`m_nat`).
     pub fn nat_rec_eq(&self, env: &Env, t: &Term, m_nat: Option<&Term>) -> KResult<Term> {
         let rec = env.sym_by_name.get("nat_rec").copied();
         let s = Syms::new(env);
@@ -593,8 +625,8 @@ impl Logic {
             return Ok(env.mk_eq(t.clone(), z.clone()));
         }
         let m = match n.node() {
-            Node::App(g, x) if is(*g, s.succ) => x[0].clone(),
-            Node::App(g, x) if is(*g, s.nat_add) && matches!(x[1].node(), Node::Nat(k) if k.to_u64() == Some(1)) => x[0].clone(),
+            Node::App(g, x) if is(*g, s.succ) || is(*g, s.int_succ) => x[0].clone(),
+            Node::App(g, x) if is(*g, s.int_add) && matches!(x[1].node(), Node::Nat(k) if k.to_u64() == Some(1)) => x[0].clone(),
             _ => return err("rec: the argument is neither 0 nor m + 1"),
         };
         let omega = s.omega.ok_or_else(|| KernelError("no omega".into()))?;
@@ -602,6 +634,7 @@ impl Logic {
         if m_nat != Some(&want) {
             return err("rec: needs a proof of `m in omega`");
         }
+        // (the step's argument: the successor, as the definition has it)
         let prev = Term::app(*f, vec![z.clone(), step.clone(), m.clone()]);
         let body = step.instantiate_params(&[m, prev], &env.binders_fn());
         Ok(env.mk_eq(t.clone(), body))

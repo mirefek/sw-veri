@@ -356,7 +356,7 @@ impl<'s> Elab<'s> {
                 let s = cx.state.clone().unwrap();
                 let pos = self.b.field(s.clone(), "pos");
                 let byte = self.b.app_fn(self.b.field(s.clone(), "bytes"), pos.clone());
-                let s2 = self.b.fn_update(s, self.b.str("pos"), self.b.app("nat_add", vec![pos, self.b.nat(1)]));
+                let s2 = self.b.fn_update(s, self.b.str("pos"), self.b.app("int_add", vec![pos, self.b.nat(1)]));
                 let (want, _) = self.expr(cx, e, Some(&Ty::Bits(self.b.nat(8))))?;
                 let nomatch = self.b.app("exc_val", vec![self.b.str("nomatch"), self.b.empty()]);
                 let st = cx.state.clone().unwrap();

@@ -524,6 +524,26 @@ impl<'s, 'a> Ev<'s, 'a> {
             "set_select" => {
                 let (d, pb) = (b[0].clone(), b[1].clone());
                 let mut out = Vec::new();
+                // naturals below (or up to) a numeral: each of them
+                if matches!(d.node(), Node::App(o, oa) if oa.is_empty() && is(*o, self.sp.s.omega)) {
+                    let body = inst_k(self.sp.env, &pb, &[x.clone()]);
+                    if let Node::App(r, ra) = body.node() {
+                        let rel = self.name(*r).to_string();
+                        if (rel == "int_lt" || rel == "int_le") && ra[0] == *x {
+                            if let Some(n) = match self.norm(&ra[1]).node() {
+                                Node::Nat(n) => n.to_u64().filter(|&n| n <= 4096),
+                                _ => None,
+                            } {
+                                let top = if rel == "int_lt" { n } else { n + 1 };
+                                for v in 0..top {
+                                    let e = Term::app(self.sp.s.eq, vec![x.clone(), Term::nat(crate::nat::Nat::from_u64(v))]);
+                                    out.extend(self.solve(&e, us, a.clone())?);
+                                }
+                                return Ok(out);
+                            }
+                        }
+                    }
+                }
                 for e in self.solve(&inst_k(self.sp.env, &pb, &[x.clone()]), us, a)? {
                     let xv = self.norm(&self.subst(x, &e));
                     if self.open(&xv, us, &e) {

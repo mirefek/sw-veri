@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 const BYTES: &str = "app(app(app(m, \"vm\"), \"bytes\"), bits_add(64, app(m, \"rip\"), {k}))";
-const DECODED: &str = "fn_build(omega, i. app(app(app(m, \"vm\"), \"bytes\"), bits_add(64, app(m, \"rip\"), bits_of_nat(64, i))))";
+const DECODED: &str = "fn_build(omega, i. app(app(app(m, \"vm\"), \"bytes\"), bits_add(64, app(m, \"rip\"), bits_of_int(64, i))))";
 
 fn byte_eq(k: usize, v: u8) -> String {
     format!("{} = {}", BYTES.replace("{k}", &k.to_string()), v)

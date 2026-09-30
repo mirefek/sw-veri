@@ -744,12 +744,12 @@ impl<'s> Elab<'s> {
                 }
                 // `bits[8*n]` against `bits[8*m]` or `bits[64]`: n = m, n = 8
                 if let sl_kernel::Node::App(s, args) = pw.node() {
-                    if self.b.env.syms[*s as usize].name == "nat_mul" {
+                    if self.b.env.syms[*s as usize].name == "int_mul" {
                         if let (sl_kernel::Node::Nat(k), Some(v)) = (args[0].node(), is_gen_var(&args[1])) {
                             let aw = self.b.norm(aw);
                             let found = match aw.node() {
                                 sl_kernel::Node::App(s2, a2)
-                                    if self.b.env.syms[*s2 as usize].name == "nat_mul" && a2[0] == args[0] =>
+                                    if self.b.env.syms[*s2 as usize].name == "int_mul" && a2[0] == args[0] =>
                                 {
                                     Some(a2[1].clone())
                                 }
