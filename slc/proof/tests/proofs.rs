@@ -479,6 +479,10 @@ fn address_arithmetic_is_total() {
     let src = "theorem t(x): x in bits(64) -> bits_add(64, x, 0) = x\nproof\n  assume h: x in bits(64)\n  show by simp(h)\nqed\n";
     assert_eq!(check_nat(src), Ok(1));
     rejected("theorem t(x): bits_add(64, x, 0) = x\nproof\n  show by simp()\nqed\n", "simp");
+    // words with the same base and different offsets differ
+    assert_eq!(check_nat("theorem t(x): x in bits(64) -> x = bits_add(64, x, 8) -> false\nproof\n  assume h: x in bits(64)\n  assume e: x = bits_add(64, x, 8)\n  show by simp(h, e)\nqed\n"), Ok(1));
+    // ... but a set that is not known to be a word may be anything
+    rejected("theorem t(x): x = bits_add(64, x, 0) -> false\nproof\n  assume e: x = bits_add(64, x, 0)\n  show by simp(e)\nqed\n", "simp");
 }
 
 #[test]

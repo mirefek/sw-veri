@@ -129,6 +129,8 @@ struct Simp<'a> {
     nats: std::cell::RefCell<Vec<(Term, Ty)>>,
     /// fields read by definitions of their parameters (`footprint`)
     footprints: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<Vec<Term>>>>,
+    /// parameters used only mod 2^n (`word_param`)
+    word_params: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<u64>>>,
 }
 
 /// The arithmetic and bitwise definitions of the prelude that `simp`
@@ -357,6 +359,7 @@ impl<'a> Simp<'a> {
             keep: lg.simp_keep.borrow().clone(),
             nats: std::cell::RefCell::new(Vec::new()),
             footprints: Default::default(),
+            word_params: Default::default(),
             s: Syms {
                 eq: env.builtins.eq,
                 imp: env.builtins.imp,
@@ -506,6 +509,55 @@ impl<'a> Simp<'a> {
         r
     }
 
+    /// The width n if the definition of `f` uses its (first-order) parameter
+    /// i only as an argument of n-bit word operations (`bits_add(n, ..)`,
+    /// `bits_sub(n, ..)`, `bits_of_int(n, ..)`), which depend on it only mod
+    /// 2^n.
+    fn word_param(&self, f: SymId, i: usize) -> Option<u64> {
+        if let Some(r) = self.word_params.borrow().get(&(f, i)) {
+            return *r;
+        }
+        let r = self.word_param_of(f, i);
+        self.word_params.borrow_mut().insert((f, i), r);
+        r
+    }
+
+    fn word_param_of(&self, f: SymId, i: usize) -> Option<u64> {
+        let SymKind::Defined { params, body } = &self.env.syms[f as usize].kind else { return None };
+        let p = *params.get(i)?;
+        if self.env.vars[p as usize].arity != 0 {
+            return None;
+        }
+        fn walk(sp: &Simp, t: &Term, p: crate::term::VarId, w: &mut Option<u64>) -> bool {
+            let bare = |x: &Term| matches!(x.node(), Node::Var(v, xa) if *v == p && xa.is_empty());
+            match t.node() {
+                Node::Var(v, xa) => *v != p && xa.iter().all(|x| walk(sp, x, p, w)),
+                Node::App(g, xs) => {
+                    let name = sp.env.syms[*g as usize].name.as_str();
+                    let word = matches!((name, xs.len()), ("bits_add" | "bits_sub", 3) | ("bits_of_int", 2));
+                    for (j, x) in xs.iter().enumerate() {
+                        if bare(x) {
+                            let n = match xs[0].node() {
+                                Node::Nat(n) => n.to_u64(),
+                                _ => None,
+                            };
+                            match (word && j >= 1, n) {
+                                (true, Some(n)) if w.is_none_or(|m| m == n) => *w = Some(n),
+                                _ => return false,
+                            }
+                        } else if !walk(sp, x, p, w) {
+                            return false;
+                        }
+                    }
+                    true
+                }
+                _ => true,
+            }
+        }
+        let mut w = None;
+        (walk(self, body, p, &mut w)).then_some(w).flatten()
+    }
+
     fn reads(&self, t: &Term, p: crate::term::VarId, out: &mut Vec<Term>) -> bool {
         let bare = |x: &Term| matches!(x.node(), Node::Var(v, xa) if *v == p && xa.is_empty());
         match t.node() {
@@ -601,7 +653,24 @@ impl<'a> Simp<'a> {
                 Node::Nat(k) => !k.is_zero() && (n >= 128 || k.to_u128().is_some_and(|k| k <= 1u128 << n)),
                 _ => false,
             },
-            _ => false,
+            // a definition whose body is a word of a computable width (e.g.
+            // `le(b, a, n) := bits_of_int(8 * n, ..)`)
+            _ => match &self.env.syms[*f as usize].kind {
+                SymKind::Defined { params, body } if params.len() == a.len() => match body.node() {
+                    Node::App(g, gb) if self.env.syms[*g as usize].name == "bits_of_int" && gb.len() == 2 => {
+                        let mut wt = gb[0].clone();
+                        for (p, x) in params.iter().zip(a) {
+                            if self.env.vars[*p as usize].arity != 0 {
+                                return false;
+                            }
+                            wt = wt.subst_var(*p, x, &self.env.binders_fn());
+                        }
+                        width(&self.term(&wt)).is_some_and(|k| k <= n)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
         }
     }
 
@@ -788,6 +857,20 @@ impl<'a> Simp<'a> {
                 }
             }
         }
+        // an argument the definition uses only mod 2^n (in n-bit word
+        // operations, e.g. an address): in canonical n-bit form
+        if matches!(self.env.syms[f as usize].kind, SymKind::Defined { .. }) {
+            for i in 0..args.len() {
+                let Some(n) = self.word_param(f, i) else { continue };
+                if !matches!(args[i].node(), Node::App(g, _) if matches!(self.env.syms[*g as usize].name.as_str(), "int_add" | "int_sub")) {
+                    continue;
+                }
+                let w = self.term(&Term::app(self.env.sym_by_name["bits_of_int"], vec![Term::nat(crate::nat::Nat::from_u64(n)), args[i].clone()]));
+                if matches!(w.node(), Node::Nat(_)) || matches!(w.node(), Node::App(g, _) if self.env.syms[*g as usize].name == "bits_add") {
+                    args[i] = w;
+                }
+            }
+        }
         let args = args;
         let head = |x: &Term| match x.node() {
             Node::App(g, b) => Some((*g, b.clone())),
@@ -839,6 +922,10 @@ impl<'a> Simp<'a> {
             }
             // x + c1 + c2 = x + (c1 + c2), for any x (arithmetic is on the
             // value of x); x + 0 = x for an integer x
+            // 0 + x = x for an integer x
+            if *op == "int_add" && args.len() == 2 && self.int_lit(&args[0]).is_some_and(|c| c.m.is_zero()) && self.int_term(&args[1]) {
+                return args[1].clone();
+            }
             if (*op == "int_add" || *op == "int_sub") && args.len() == 2 {
                 if let Some(c) = self.int_lit(&args[1]) {
                     let c = if *op == "int_sub" { c.neg() } else { c };
@@ -865,7 +952,7 @@ impl<'a> Simp<'a> {
                 return args[0].clone();
             }
             // addresses in canonical form: base + offset
-            if (*op == "bits_add" || *op == "bits_sub") && args.len() == 3 {
+            if ((*op == "bits_add" || *op == "bits_sub") && args.len() == 3) || (*op == "bits_of_int" && args.len() == 2 && !self.bits_term(&args[1], 64)) {
                 if let Node::Nat(w) = args[0].node() {
                     if let Some(n) = w.to_u64().filter(|&n| n <= 128) {
                         if let Some(c) = self.canonical_addr(&Term::app(f, args.clone()), n) {
@@ -1229,6 +1316,15 @@ impl<'a> Simp<'a> {
         for (p, q) in [(&x, &y), (&y, &x)] {
             if let (Node::Nat(v), true) = (p.node(), is_empty(q)) {
                 return if v.is_zero() { self.tt() } else { self.ff() };
+            }
+        }
+        // two n-bit words with the same base: equal iff the offsets are
+        // (both words: each is its value mod 2^n)
+        for n in [64u64, 32, 16, 8] {
+            if self.bits_term(&x, n) && self.bits_term(&y, n) {
+                if let Some(d) = self.distance(&x, &y, n as u32) {
+                    return if d == 0 { self.tt() } else { self.ff() };
+                }
             }
         }
         // the same function updated at the same key: equal iff the values are
