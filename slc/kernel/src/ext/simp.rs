@@ -124,7 +124,7 @@ struct Simp<'a> {
 const ARITH: &[&str] = &[
     "nat_add", "nat_mul", "nat_sub", "nat_div", "nat_mod", "nat_pow", "pow2", "bits_of_nat", "bits_add", "bits_sub", "bits_neg", "bits_mul",
     "bits_not", "bits_and", "bits_or", "bits_xor", "bits_shl", "bits_shr", "bits_slice", "nat_and", "nat_or", "lit_add", "lit_mul",
-    "lit_sub", "lit_div", "lit_mod", "succ", "int_mod", "int_div",
+    "lit_sub", "lit_div", "lit_mod", "succ", "int_mod", "int_div", "bits_sext",
 ];
 
 /// Numerals: arithmetic on literal arguments (None: not all literals, or
@@ -191,6 +191,15 @@ fn compute(op: &str, a: &[Term]) -> Option<Term> {
         "bits_shr" => {
             let k = u(2)?;
             tu(if k >= 128 { 0 } else { u(1)? >> k })
+        }
+        // sign extension from m to n bits
+        "bits_sext" => {
+            let (m, n, x) = (w(0)?, w(1)?, u(2)?);
+            if m == 0 || m > n {
+                return None;
+            }
+            let neg = x >> (m - 1) & 1 == 1;
+            tu(if neg { (x | !mask(m)) & mask(n) } else { x & mask(m) })
         }
         "bits_slice" => {
             let (x, hi, lo) = (u(0)?, u(1)?, u(2)?);
@@ -396,6 +405,31 @@ impl<'a> Simp<'a> {
             }
             return Term::app(f, vec![m, args[1].clone()]);
         }
+        // an update of a field updated before (with only other literal keys
+        // in between): the earlier update is overwritten
+        if is(f, s.fn_update) {
+            let (k, v) = (&args[1], &args[2]);
+            let mut inner = Vec::new();
+            let mut m = args[0].clone();
+            while let Some((g, b)) = head(&m) {
+                if !is(g, s.fn_update) {
+                    break;
+                }
+                if b[1] == *k {
+                    // drop it, keep the updates above it
+                    let mut r = b[0].clone();
+                    for (ik, iv) in inner.into_iter().rev() {
+                        r = Term::app(f, vec![r, ik, iv]);
+                    }
+                    return Term::app(f, vec![r, k.clone(), v.clone()]);
+                }
+                if !distinct_literals(&b[1], k) {
+                    break;
+                }
+                inner.push((b[1].clone(), b[2].clone()));
+                m = b[0].clone();
+            }
+        }
         Term::app(f, args)
     }
 
@@ -447,6 +481,9 @@ impl<'a> Simp<'a> {
         let f = *f;
         if f == s.imp {
             let x = self.prop(&a[0], pol.flip());
+            if self.is_false(&x) {
+                return self.tt();
+            }
             let y = self.prop(&a[1], pol);
             if self.is_false(&x) || self.is_true(&y) {
                 return self.tt();
@@ -462,11 +499,21 @@ impl<'a> Simp<'a> {
         if is(f, s.not) {
             return self.not(self.prop(&a[0], pol.flip()));
         }
+        // (short-circuit: a decided left side spares simplifying the right,
+        // e.g. the arms of a `match` on a known constructor)
         if is(f, s.and) {
-            return self.and(self.prop(&a[0], pol), self.prop(&a[1], pol));
+            let x = self.prop(&a[0], pol);
+            if self.is_false(&x) {
+                return x;
+            }
+            return self.and(x, self.prop(&a[1], pol));
         }
         if is(f, s.or) {
-            return self.or(self.prop(&a[0], pol), self.prop(&a[1], pol));
+            let x = self.prop(&a[0], pol);
+            if self.is_true(&x) {
+                return x;
+            }
+            return self.or(x, self.prop(&a[1], pol));
         }
         if is(f, s.ne) {
             return self.not(self.eq(&a[0], &a[1]));
@@ -518,6 +565,27 @@ impl<'a> Simp<'a> {
                     return self.and(self.prop(&mem, pol), self.prop(&inst_k(self.env, &sb[1], &[z]), pol));
                 }
             }
+            // finite sets: `upair`, `single`, `insert`, `union2`, `empty`,
+            // and constants defined as one (`bool`)
+            let z = self.term(&a[0]);
+            let mut set = self.term(&a[1]);
+            for _ in 0..2 {
+                let Node::App(g, gb) = set.node() else { break };
+                let name = self.env.syms.get(*g as usize).map(|y| y.name.as_str()).unwrap_or("");
+                let mem = |x: &Term| Term::app(f, vec![z.clone(), x.clone()]);
+                match name {
+                    "empty" if gb.is_empty() => return self.ff(),
+                    "upair" => return self.or(self.eq(&z, &gb[0]), self.eq(&z, &gb[1])),
+                    "single" => return self.eq(&z, &gb[0]),
+                    "insert" => return self.or(self.eq(&z, &gb[0]), self.prop(&mem(&gb[1]), pol)),
+                    "union2" => return self.or(self.prop(&mem(&gb[0]), pol), self.prop(&mem(&gb[1]), pol)),
+                    _ if gb.is_empty() => match self.unfold(*g, gb) {
+                        Some(u) => set = self.term(&u),
+                        None => break,
+                    },
+                    _ => break,
+                }
+            }
         }
         // an atom: its arguments as terms
         let t = self.term(t);
@@ -547,6 +615,22 @@ impl<'a> Simp<'a> {
                 if self.env.syms.get(*o as usize).is_some_and(|y| y.name == "bits") {
                     let n = lit(&ob[0])?.to_u64()?;
                     return Some(x < crate::nat::Nat::pow2(n));
+                }
+                // a set literal of numerals: `insert(a, s)`, `single(a)`, `empty`
+                let mut set = b[1].clone();
+                loop {
+                    let Node::App(g, gb) = set.node() else { break };
+                    match self.env.syms.get(*g as usize).map(|y| y.name.as_str()) {
+                        Some("empty") => return Some(false),
+                        Some("single") => return Some(x == lit(&gb[0])?),
+                        Some("insert") => {
+                            if x == lit(&gb[0])? {
+                                return Some(true);
+                            }
+                            set = gb[1].clone();
+                        }
+                        _ => break,
+                    }
                 }
             }
             return Some(x < lit(&b[1])?);
@@ -869,6 +953,29 @@ impl Simp<'_> {
             // the second becomes `a = b` (then split by injectivity)
             if let Some((j, e)) = self.same_var_eqs(&p.lits) {
                 p.lits[j] = e;
+                continue 'again;
+            }
+            // `x = t` (x a variable, t compound, not containing x): t is x in
+            // the other literals (so rules about x match)
+            let bf = self.env.binders_fn();
+            let named = p.lits.iter().enumerate().find_map(|(i, l)| {
+                let Node::App(e, ab) = l.node() else { return None };
+                if *e != self.s.eq {
+                    return None;
+                }
+                let Node::Var(x, xa) = ab[0].node() else { return None };
+                let compound = matches!(ab[1].node(), Node::App(_, b) if !b.is_empty());
+                (xa.is_empty() && compound && !has_var(&ab[1], *x)
+                    && p.lits.iter().enumerate().any(|(j, m)| j != i && super::seq::abstract_term(m, &ab[1], 0, &bf) != *m))
+                    .then(|| (i, ab[0].clone(), ab[1].clone()))
+            });
+            if let Some((i, x, t)) = named {
+                p.lits = p
+                    .lits
+                    .iter()
+                    .enumerate()
+                    .map(|(j, m)| if j == i { m.clone() } else { inst_k(self.env, &super::seq::abstract_term(m, &t, 0, &bf), &[x.clone()]) })
+                    .collect();
                 continue 'again;
             }
             // a literal and its negation
@@ -1453,15 +1560,41 @@ impl Logic {
 
     fn prove_paths(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<()> {
         let sp = Simp::new(env, self);
+        let t0 = std::time::Instant::now();
         let mut prem = sp.tt();
         for p in premises {
             prem = sp.and(prem, self.simp_fact(env, p));
         }
+        let t1 = std::time::Instant::now();
         let g = self.simp_eqv(env, goal);
         let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        if std::env::var("SIMP_TIME").is_ok() {
+            eprintln!("simp time [facts, goal+paths]: {:?}, {:?}", t1 - t0, t1.elapsed());
+        }
         let (mut steps, mut left, mut report) = (0, 0, String::new());
+        // timings (SIMP_TIME=1): settle, goal, taut/arith, witnessed, near, chain, loop; paths
+        let timing = std::env::var("SIMP_TIME").is_ok();
+        let mut tm = [std::time::Duration::ZERO; 7];
+        let mut npaths = 0usize;
+        let mut clock = std::time::Instant::now();
+        let mut lap = |i: usize, tm: &mut [std::time::Duration; 7]| {
+            let now = std::time::Instant::now();
+            tm[i] += now - clock;
+            clock = now;
+        };
+        let report_time = |tm: &[std::time::Duration; 7], n: usize| {
+            if timing {
+                eprintln!("simp time [settle, goal, taut/arith, witnessed, near, chain, loop]: {:?}, {} paths", tm, n);
+            }
+        };
         while let Some(p) = work.pop() {
-            let Some(p) = sp.settle(p) else { continue };
+            npaths += 1;
+            lap(6, &mut tm);
+            let Some(p) = sp.settle(p) else {
+                lap(0, &mut tm);
+                continue;
+            };
+            lap(0, &mut tm);
             // the path's equations used in the goal: `x = t` or `t = x` (x a
             // variable) substituted, then `a = b` rewritten left to right
             let bf = env.binders_fn();
@@ -1496,23 +1629,32 @@ impl Logic {
                     }
                 }
             }
+            lap(1, &mut tm);
             if sp.is_true(&g) {
                 continue;
             }
             if self.tautology(env, &p.lits, &g).is_ok() || self.arith(env, &p.lits, &g).is_ok() {
+                lap(2, &mut tm);
                 continue;
             }
+            lap(2, &mut tm);
             if sp.witnessed(&p.lits, &g, fresh, self) {
+                lap(3, &mut tm);
                 continue;
             }
+            lap(3, &mut tm);
             // long paths: arithmetic from the literals about the goal's variables
             let near = relevant(&p.lits, &g);
             if near.len() < p.lits.len() && (self.tautology(env, &near, &g).is_ok() || self.arith(env, &near, &g).is_ok()) {
+                lap(4, &mut tm);
                 continue;
             }
+            lap(4, &mut tm);
             // a rule among the facts (`all xs. A -> .. -> C`) whose
             // hypotheses the path has: continue with its conclusion
-            if let Some(c) = sp.chain(self, &p, &g, fresh) {
+            let ch = sp.chain(self, &p, &g, fresh);
+            lap(5, &mut tm);
+            if let Some(c) = ch {
                 steps += 1;
                 if steps > MAX_PATHS {
                     return Err(crate::env::KernelError("simp: too many paths".into()));
@@ -1546,6 +1688,8 @@ impl Logic {
                 report.push_str(&format!("\n  path {}: {}{}", left, pr.term(&fact), why));
             }
         }
+        lap(6, &mut tm);
+        report_time(&tm, npaths);
         if left > 0 {
             let more = if left > MAX_REPORTED { format!("\n  ({} more)", left - MAX_REPORTED) } else { String::new() };
             return Err(crate::env::KernelError(format!(

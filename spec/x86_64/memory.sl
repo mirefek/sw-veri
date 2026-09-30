@@ -115,6 +115,10 @@ proc grow_stack(a: Addr, p: nat) {
   }
 }
 
+// an instruction byte can be fetched from a: its page is mapped and
+// executable (then `touch(a, exec)` changes nothing)
+pred fetchable(vm: Vm, a: Addr) = mapped(vm, page_of(a)) && hw_allows(vm.pages[page_of(a)].value.prot, exec)
+
 proc touch_range(a: Addr, n: nat, acc: Access) {
   for i in 0..n { touch(a + bits[64](i), acc) }
 }
