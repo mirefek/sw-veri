@@ -384,3 +384,59 @@ qed
     // different values: v is not determined to be 1
     rejected("theorem x(r, a, b, v): (r = ok(a, 1) || r = ok(a, 2)) -> r = ok(b, v) -> v = 1\nproof\n  assume h: r = ok(a, 1) || r = ok(a, 2)\n  assume hr: r = ok(b, v)\n  show by simp(h, hr)\nqed\n", "on the path");
 }
+
+#[test]
+fn the_loop_library_checks() {
+    let n = check_nat(&core_file("loop.core")).unwrap();
+    assert_eq!(n, 5);
+}
+
+/// A loop counting to 3 (the loop state: the program state and the counter).
+const COUNT: &str = "def count := mkprog(s o. while_rel(pair(s, 0), l. nat_lt(snd(l), 3), l o. o = ok(pair(fst(l), nat_add(snd(l), 1)), empty), l. empty, o))\n";
+
+fn count_thm(goal: &str, hints: &str) -> String {
+    format!(
+        "{}theorem t(s, o): runs(count, s, o) -> {}\nproof\n  assume h: runs(count, s, o)\n  show by simp(h{})\nqed\n",
+        COUNT, goal, hints
+    )
+}
+
+#[test]
+fn loops_are_executed_with_invariants() {
+    let inv = ", {l0 l. snd(l) in omega && nat_le(snd(l), 3) && fst(l) = fst(l0)}";
+    // with a variant: the loop ends, with the counter at 3
+    let src = count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", &format!("{}, {{l. nat_sub(3, snd(l))}}", inv));
+    assert_eq!(check_nat(&src), Ok(1));
+    // without one: ends so, or diverges
+    let src = count_thm("(ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3) || (ex t. o = diverge(t))", inv);
+    assert_eq!(check_nat(&src), Ok(1));
+}
+
+#[test]
+fn wrong_loop_invariants_are_rejected() {
+    let bad = |goal: &str, hints: &str, why: &str| match check_nat(&count_thm(goal, hints)) {
+        Ok(_) => panic!("accepted: {} {}", goal, hints),
+        Err(e) => assert!(e.contains(why), "expected `{}`, got: {}", why, e),
+    };
+    let ends = "ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3";
+    // no invariant: the loop stays
+    bad(ends, "", "needs its invariant");
+    // without a variant, divergence is possible
+    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3) && fst(l) = fst(l0)}", "on the path");
+    // not true at the start, not preserved
+    bad(ends, ", {l0 l. snd(l) = 1}, {l. nat_sub(3, snd(l))}", "at the start");
+    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 2)}, {l. nat_sub(3, snd(l))}", "after an iteration");
+    // a variant that grows, or is not a natural number
+    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3)}, {l. snd(l)}", "the variant decreases");
+    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3)}, {l. nat_sub(2, snd(l))}", "the variant is a natural number");
+    // a variant alone
+    bad(ends, ", {l. nat_sub(3, snd(l))}", "must follow its invariant");
+}
+
+#[test]
+fn differences_are_numbers_when_not_negative() {
+    let (ha, hb) = (("ha", "a in omega"), ("hb", "b in omega"));
+    assert_eq!(arith_ok("a in omega -> b in omega -> nat_le(b, a) -> nat_add(nat_sub(a, b), 1) in omega", &[ha, hb, ("h", "nat_le(b, a)")]), Ok(1));
+    assert!(arith_ok("a in omega -> b in omega -> nat_sub(a, b) in omega", &[ha, hb]).is_err());
+    assert!(arith_ok("a in omega -> b in omega -> nat_lt(a, b) -> nat_sub(a, b) in omega", &[ha, hb, ("h", "nat_lt(a, b)")]).is_err());
+}

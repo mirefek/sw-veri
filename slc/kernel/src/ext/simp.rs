@@ -19,6 +19,7 @@
 //! quantifier bodies, `ite` conditions):
 //! * the connectives with `true`/`false` operands (classical logic, any
 //!   operands: `true -> a` is interderivable with a);
+//! * `n in omega` is true for a numeral n (`lit_nat`);
 //! * `a = a` is true; distinct numeric or string literals are unequal
 //!   (numerals by `lit_*`, strings by `bytes_len`/`bytes_at`);
 //! * `pair(a, b) = pair(c, d) <-> a = c && b = d`, likewise for `ok`,
@@ -32,6 +33,11 @@
 //! of a fact being simplified, never in a goal):
 //! * `runs(mkprog(s o. R), S, O) -> R(S, O)` (membership in `mkprog`; the
 //!   converse also needs `pair(S, O) in univ(1)`).
+//!
+//! Loops, with invariants given by the user (`simp_prove_loops`): a literal
+//! `while_rel(l0, l. C, l o. B, l. T, r)` on a path is replaced by what the
+//! theorems `while_inv` / `while_var` (core/loop.core) conclude, once their
+//! premises are shown by `simp` itself, on that path.
 
 use super::prop::Logic;
 use crate::env::{Env, SymKind};
@@ -77,6 +83,8 @@ struct Syms {
     ite: Option<SymId>,
     runs: Option<SymId>,
     mkprog: Option<SymId>,
+    in_: Option<SymId>,
+    omega: Option<SymId>,
 }
 
 fn is(s: SymId, o: Option<SymId>) -> bool {
@@ -120,6 +128,8 @@ impl<'a> Simp<'a> {
                 ite: g("ite"),
                 runs: g("runs"),
                 mkprog: g("mkprog"),
+                in_: g("in"),
+                omega: g("omega"),
             },
         }
     }
@@ -338,7 +348,14 @@ impl<'a> Simp<'a> {
             return Term::app(f, vec![p, self.term(&a[1]), self.term(&a[2])]);
         }
         // an atom: its arguments as terms
-        self.term(t)
+        let t = self.term(t);
+        // a numeral is a natural number (`lit_nat`)
+        if let Node::App(m, b) = t.node() {
+            if is(*m, s.in_) && matches!(b[0].node(), Node::Nat(_)) && matches!(b[1].node(), Node::App(o, _) if is(*o, s.omega)) {
+                return self.tt();
+            }
+        }
+        t
     }
 
     fn eq(&self, a: &Term, b: &Term) -> Term {
@@ -803,6 +820,142 @@ impl Simp<'_> {
     }
 }
 
+/// A loop invariant for `simp`: `inv` is a body under two binders (the
+/// loop's initial state l0, the current state l), `var` under one (l): a
+/// natural number that each iteration decreases (the loop terminates).
+#[derive(Clone, Debug)]
+pub struct LoopHint {
+    pub inv: Term,
+    pub var: Option<Term>,
+}
+
+/// The literals sharing a variable with `goal`.
+fn relevant(lits: &[Term], goal: &Term) -> Vec<Term> {
+    fn vars(t: &Term, out: &mut Vec<crate::term::VarId>) {
+        match t.node() {
+            Node::Var(v, a) => {
+                if !out.contains(v) {
+                    out.push(*v);
+                }
+                a.iter().for_each(|x| vars(x, out));
+            }
+            Node::App(_, a) => a.iter().for_each(|x| vars(x, out)),
+            _ => {}
+        }
+    }
+    let mut gv = Vec::new();
+    vars(goal, &mut gv);
+    lits.iter()
+        .filter(|l| {
+            let mut lv = Vec::new();
+            vars(l, &mut lv);
+            lv.iter().any(|v| gv.contains(v))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The largest variable id in `t` (0 if none).
+fn max_var(t: &Term) -> u32 {
+    match t.node() {
+        Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => 0,
+        Node::Var(v, a) => a.iter().map(max_var).fold(*v, u32::max),
+        Node::App(_, a) => a.iter().map(max_var).fold(0, u32::max),
+    }
+}
+
+impl Simp<'_> {
+    /// The path with a `while_rel` literal replaced by the loop's outcome,
+    /// for the first loop and hint whose premises `simp` shows on the path
+    /// (the other literals); why the hints failed goes to `why`.
+    fn loop_step(&self, lg: &Logic, p: &Path, hints: &[LoopHint], fresh: &mut u32, why: &mut String) -> crate::env::KResult<Option<Vec<Path>>> {
+        let Some(wr) = self.env.sym_by_name.get("while_rel").copied() else { return Ok(None) };
+        for (i, l) in p.lits.iter().enumerate() {
+            let Node::App(f, a) = l.node() else { continue };
+            if *f != wr {
+                continue;
+            }
+            if hints.is_empty() {
+                why.push_str("\n  (a loop on the path: `simp` needs its invariant, `{l0 l. I}`)");
+                return Ok(None);
+            }
+            let others: Vec<Term> = p.lits.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, l)| l.clone()).collect();
+            for (k, h) in hints.iter().enumerate() {
+                match self.loop_rule(lg, &others, a, h, hints, fresh) {
+                    Ok(out) => {
+                        let mut t = self.tt();
+                        for o in &others {
+                            t = self.and(t, o.clone());
+                        }
+                        t = self.and(t, lg.simp_fact(self.env, &out));
+                        let ps = self.paths(&t, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+                        return Ok(Some(
+                            ps.into_iter()
+                                .map(|mut q| {
+                                    q.vars.extend(p.vars.iter().copied());
+                                    q
+                                })
+                                .collect(),
+                        ));
+                    }
+                    Err(e) => why.push_str(&format!("\n  (invariant {} for a loop on the path: {})", k + 1, e.0.replace('\n', "\n  "))),
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The outcome of `while_rel(a..)` given the hint, its premises shown
+    /// from `others`: `(ex l. I(l) && ((!C(l) && r = ok(l, empty)) ||
+    /// (C(l) && B(l, r) && !is_ok(r))))`, with `|| (ex t. r = diverge(t))`
+    /// unless the hint has a variant.
+    fn loop_rule(&self, lg: &Logic, others: &[Term], a: &[Term], h: &LoopHint, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<Term> {
+        let env = self.env;
+        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| crate::env::KernelError(format!("loops need `{}`", n)));
+        let c0 = |n: &str| sym(n).map(|s| Term::app(s, vec![]));
+        let (l0, r) = (&a[0], &a[4]);
+        let inv = |x: &Term| inst_k(env, &h.inv, &[l0.clone(), x.clone()]);
+        let cond = |x: &Term| inst_k(env, &a[1], &[x.clone()]);
+        let body = |x: &Term, o: &Term| inst_k(env, &a[2], &[x.clone(), o.clone()]);
+        let empty = c0("empty")?;
+        let ok = |x: &Term| Term::app(self.s.ok.expect("ok"), vec![x.clone(), empty.clone()]);
+        let mut var = || {
+            *fresh += 1;
+            Term::var(*fresh - 1, vec![])
+        };
+        let (x, y, z, t) = (var(), var(), var(), var());
+        let with = |extra: Vec<Term>| -> Vec<Term> { others.iter().cloned().chain(extra).collect() };
+        let pr = crate::syntax::Printer::new(env);
+        let show = |what: &str, prem: &[Term], goal: &Term, fresh: &mut u32| {
+            lg.prove_paths(env, prem, goal, hints, fresh)
+                .map_err(|e| crate::env::KernelError(format!("{} `{}`: {}", what, pr.term(goal), e.0)))
+        };
+        show("at the start,", others, &inv(l0), fresh)?;
+        let step = with(vec![inv(&x), cond(&x), body(&x, &ok(&y))]);
+        show("after an iteration,", &step, &inv(&y), fresh)?;
+        if let Some(m) = &h.var {
+            let mv = |x: &Term| inst_k(env, m, &[x.clone()]);
+            let nat = Term::app(sym("in")?, vec![mv(&x), c0("omega")?]);
+            show("the variant is a natural number,", &with(vec![inv(&x)]), &nat, fresh)?;
+            let lt = Term::app(sym("nat_lt")?, vec![mv(&y), mv(&x)]);
+            show("the variant decreases,", &step, &lt, fresh)?;
+        }
+        // theorems while_inv / while_var (core/loop.core)
+        let is_ok = Term::app(sym("is_ok")?, vec![r.clone()]);
+        let stop = self.and(self.not(cond(&z)), Term::app(self.s.eq, vec![r.clone(), ok(&z)]));
+        let exit = self.and(self.and(cond(&z), body(&z, r)), self.not(is_ok));
+        let Node::Var(zv, _) = z.node() else { unreachable!() };
+        let fin = self.and(inv(&z), self.or(stop, exit));
+        let mut out = Term::app(self.s.ex, vec![abstract_var(env, &fin, *zv, 0)]);
+        if h.var.is_none() {
+            let Node::Var(tv, _) = t.node() else { unreachable!() };
+            let div = Term::app(self.s.eq, vec![r.clone(), Term::app(self.s.diverge.expect("diverge"), vec![t.clone()])]);
+            out = self.or(out, Term::app(self.s.ex, vec![abstract_var(env, &div, *tv, 0)]));
+        }
+        Ok(out)
+    }
+}
+
 /// Matches `pat` (whose variables `pvars` are pattern variables) against
 /// `t`, extending `binds`.
 fn pmatch(pat: &Term, t: &Term, pvars: &[crate::term::VarId], binds: &mut Vec<(crate::term::VarId, Term)>) -> bool {
@@ -861,20 +1014,66 @@ impl Logic {
     /// choosing witnesses for the goal's existentials by matching its
     /// equations with the path's (∃-introduction).
     pub fn simp_prove(&self, env: &Env, premises: &[Term], goal: &Term) -> crate::env::KResult<()> {
+        self.simp_prove_loops(env, premises, goal, &[])
+    }
+
+    /// `simp_prove`, with invariants for the loops on the paths.
+    pub fn simp_prove_loops(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint]) -> crate::env::KResult<()> {
+        // fresh variables above every variable of the input
+        let mut fresh = env.vars.len() as u32 + 2_000_000;
+        for t in premises.iter().chain([goal]).chain(hints.iter().flat_map(|h| [&h.inv].into_iter().chain(&h.var))) {
+            fresh = fresh.max(max_var(t) + 1);
+        }
+        self.prove_paths(env, premises, goal, hints, &mut fresh)
+    }
+
+    fn prove_paths(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<()> {
         let sp = Simp::new(env, self);
         let mut prem = sp.tt();
         for p in premises {
             prem = sp.and(prem, self.simp_fact(env, p));
         }
         let g = self.simp_eqv(env, goal);
-        let mut fresh = env.vars.len() as u32 + 2_000_000;
-        let paths = sp.paths(&prem, &mut fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
-        for p in paths {
+        let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        let mut loops = 0;
+        while let Some(p) = work.pop() {
             let Some(p) = sp.settle(p) else { continue };
+            // the path's equations `x = t` (x a variable) used in the goal
+            let bf = env.binders_fn();
+            let mut g = g.clone();
+            for l in &p.lits {
+                if let Node::App(e, ab) = l.node() {
+                    if *e == sp.s.eq {
+                        if let Node::Var(x, xa) = ab[0].node() {
+                            if xa.is_empty() && !has_var(&ab[1], *x) && has_var(&g, *x) {
+                                g = self.simp_eqv(env, &g.subst_var(*x, &ab[1], &bf));
+                            }
+                        }
+                    }
+                }
+            }
+            if sp.is_true(&g) {
+                continue;
+            }
             if self.tautology(env, &p.lits, &g).is_ok() || self.arith(env, &p.lits, &g).is_ok() {
                 continue;
             }
-            if sp.witnessed(&p.lits, &g, &mut fresh, self) {
+            if sp.witnessed(&p.lits, &g, fresh, self) {
+                continue;
+            }
+            // long paths: arithmetic from the literals about the goal's variables
+            let near = relevant(&p.lits, &g);
+            if near.len() < p.lits.len() && self.arith(env, &near, &g).is_ok() {
+                continue;
+            }
+            // a loop on the path, with an invariant: continue with its outcome
+            let mut why = String::new();
+            if let Some(ps) = sp.loop_step(self, &p, hints, fresh, &mut why)? {
+                loops += 1;
+                if loops > MAX_PATHS {
+                    return Err(crate::env::KernelError("simp: too many paths".into()));
+                }
+                work.extend(ps);
                 continue;
             }
             // report the path (its variables closed again)
@@ -888,7 +1087,7 @@ impl Logic {
                 }
             }
             let pr = crate::syntax::Printer::new(env);
-            return Err(crate::env::KernelError(format!("simp: left to show: {}\n  on the path: {}", pr.term(&g), pr.term(&body))));
+            return Err(crate::env::KernelError(format!("simp: left to show: {}\n  on the path: {}{}", pr.term(&g), pr.term(&body), why)));
         }
         Ok(())
     }

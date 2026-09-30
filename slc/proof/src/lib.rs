@@ -25,6 +25,7 @@
 //! with a goal only: `taut(p, ...)`, `ex_intro({w}, p)`.
 
 use sl_kernel::ext::seq::{defined_sym, unfold_all};
+use sl_kernel::ext::simp::LoopHint;
 use sl_kernel::ext::{facts, Logic, Seq};
 use sl_kernel::syntax::{parse_term, parse_value, Printer, ProofRequest, Prover};
 use sl_kernel::{Env, KResult, KernelError, Node, SymId, Term, VarId};
@@ -488,10 +489,29 @@ impl State {
             }
             // simp(p1, ..): the goal, simplified, from the simplified premises
             // (symbolic execution of `runs`), then taut or arith
+            // Loops need invariants: a term `{l0 l. I}` (the loop's first
+            // and current state), optionally followed by a variant `{l. m}`.
             "simp" => {
-                let ps = self.proofs(env, lg, args)?;
-                let refs: Vec<&Seq> = ps.iter().collect();
-                Seq::simp_goal(env, lg, &refs, goal)
+                let mut facts = Vec::new();
+                let mut loops: Vec<LoopHint> = Vec::new();
+                for a in args {
+                    match a {
+                        Arg::Proof(_) => facts.push(self.proof_arg(env, lg, Some(a))?),
+                        Arg::Term(t) => match parse_value(env, t, &self.scope, 2) {
+                            Ok(inv) => loops.push(LoopHint { inv, var: None }),
+                            Err(_) => {
+                                let m = parse_value(env, t, &self.scope, 1)
+                                    .map_err(|e| KernelError(format!("simp: `{{{}}}` is neither an invariant `{{l0 l. I}}` nor a variant `{{l. m}}`: {}", t, e.0)))?;
+                                match loops.last_mut() {
+                                    Some(h) if h.var.is_none() => h.var = Some(m),
+                                    _ => return err(format!("simp: the variant `{{{}}}` must follow its invariant `{{l0 l. I}}`", t)),
+                                }
+                            }
+                        },
+                    }
+                }
+                let refs: Vec<&Seq> = facts.iter().collect();
+                Seq::simp_goal(env, lg, &refs, goal, &loops)
             }
             // lists(p1, ..): `A = B` for list expressions with the same pieces
             // (the premises say which terms are lists)

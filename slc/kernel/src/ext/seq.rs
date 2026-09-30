@@ -355,11 +355,17 @@ impl Seq {
     /// From premises: `⋃Γi ⊢ goal`, when the simplified premises imply the
     /// simplified goal (equivalent to the goal) by propositional logic, or
     /// else by linear arithmetic.
-    pub fn simp_goal(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term) -> KResult<Seq> {
+    pub fn simp_goal(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term, loops: &[super::simp::LoopHint]) -> KResult<Seq> {
         env.check_wf(goal, 0)?;
+        for h in loops {
+            env.check_wf(&h.inv, 2)?;
+            if let Some(m) = &h.var {
+                env.check_wf(m, 1)?;
+            }
+        }
         let (hyps, open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
-        lg.simp_prove(env, &ps, goal)?;
+        lg.simp_prove_loops(env, &ps, goal, loops)?;
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 

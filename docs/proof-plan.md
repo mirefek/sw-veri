@@ -254,7 +254,19 @@ relies on.
    The spec's fallbacks are explicit: `let x = any? T where P else S`
    (malloc may always fail, must when no block is possible) and
    `havoc … where P else S`, so no case is undefined by accident.
-   Loops (`while_rel`) stay opaque in `simp`: an invariant rule is next.
+   Loops: `simp(…, {l0 l. I}, {l. m})` gives an invariant (over the
+   loop's first state l0 and its current state l; for `for` loops, l is
+   the program state paired with the counter) and optionally a variant.
+   On each path `simp` shows, from the path, I at the start, I kept by an
+   iteration of the body (an `ok` outcome), and for the variant: a
+   natural number that decreases. Then the loop's literal becomes its
+   outcome: it stopped in a state with I, by its condition or by an exit
+   of the body (`break`/`return` are exceptions of the body), or — without
+   a variant — it diverged. The kernel theorems `while_inv`/`while_var`
+   (`core/loop.core`, proven by induction) are this step. Example:
+   `malloc.terminates` (malloc's spec never diverges, given that the
+   allocator can take some step — an open fact: keeping memory as it is
+   should be one).
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary

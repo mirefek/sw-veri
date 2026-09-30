@@ -28,7 +28,9 @@
 //! `t in omega` or `t in bits(k)`, a term equated to a number by a premise,
 //! the length of a list expression over known lists (`ext::list`), or
 //! built from those with `succ`, `+`, `*` by a constant, `-`, and `/`, `%`
-//! by a positive constant. Other atoms stay propositional.
+//! by a positive constant. Other atoms stay propositional. A goal
+//! `t in omega` where t has differences `nat_sub(a, b)` is shown from
+//! `b <= a` for each of them (then `nat_sub(a, b) in omega`, as above).
 
 use super::prop::Logic;
 use crate::env::{Env, KResult, KernelError};
@@ -146,6 +148,16 @@ impl Syms {
             omega: s("omega"),
             bits: s("bits"),
         }
+    }
+}
+
+/// The subterms of `t` headed by `f` (not under binders).
+fn collect_app(t: &Term, f: SymId, out: &mut Vec<Term>) {
+    if let Node::App(g, a) = t.node() {
+        if *g == f && !out.contains(t) {
+            out.push(t.clone());
+        }
+        a.iter().for_each(|x| collect_app(x, f, out));
     }
 }
 
@@ -283,10 +295,11 @@ impl Reader {
             if let Node::App(o, _) = a[1].node() {
                 if is(*o, s.omega) {
                     // a number built from numbers is a number (no `-`: it
-                    // may leave omega)
+                    // may leave omega; unless the difference is known to
+                    // be a number)
                     let n = self.subs.len();
                     let r = self.lin(&a[0]).map(|_| Atom::True);
-                    if self.subs.len() != n {
+                    if self.subs[n..].iter().any(|sv| !self.nats.contains(&self.vars[sv.v])) {
                         self.subs.truncate(n);
                         return None;
                     }
@@ -415,6 +428,28 @@ impl Logic {
     /// `premises -> goal` holds by propositional logic and linear arithmetic
     /// over the naturals (see the module docs).
     pub fn arith(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        // a goal `t in omega` with differences `nat_sub(a, b)` in t: from
+        // `b <= a` for each (then `nat_sub(a, b) in omega`)
+        let s = Syms::new(env);
+        if let (Node::App(i, g), Some(nat_sub), Some(nat_le)) = (goal.node(), s.nat_sub, s.nat_le) {
+            if *i == s.in_ && matches!(g[1].node(), Node::App(o, _) if is(*o, s.omega)) {
+                let mut subs = Vec::new();
+                collect_app(&g[0], nat_sub, &mut subs);
+                if !subs.is_empty() && self.arith_core(env, premises, goal).is_err() {
+                    let mut ps = premises.to_vec();
+                    for t in &subs {
+                        let Node::App(_, ab) = t.node() else { unreachable!() };
+                        self.arith(env, premises, &Term::app(nat_le, vec![ab[1].clone(), ab[0].clone()]))?;
+                        ps.push(Term::app(s.in_, vec![t.clone(), g[1].clone()]));
+                    }
+                    return self.arith_core(env, &ps, goal);
+                }
+            }
+        }
+        self.arith_core(env, premises, goal)
+    }
+
+    fn arith_core(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
         let s = Syms::new(env);
         let mut r = Reader { s, ls: super::list::LSyms::new(env), lists: super::list::known_lists(env, premises), nats: Vec::new(), vars: Vec::new(), side: Vec::new(), subs: Vec::new() };
         // numbers: memberships among the premises, then terms equated to
