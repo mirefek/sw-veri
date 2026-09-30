@@ -68,6 +68,22 @@ impl Symbols {
     fn addr(&self, n: &str) -> Option<u64> {
         self.local.get(n).or_else(|| self.global.get(n)).copied()
     }
+
+    /// A `static` local `n` of the file: GCC's symbol `n.<number>` (it must
+    /// be the only one of that name).
+    fn static_local(&self, n: &str) -> Result<u64, String> {
+        let found: Vec<u64> = self
+            .local
+            .iter()
+            .filter(|(k, _)| k.strip_prefix(n).and_then(|r| r.strip_prefix('.')).is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit())))
+            .map(|(_, &v)| v)
+            .collect();
+        match found[..] {
+            [a] => Ok(a),
+            [] => Err(format!("no symbol for the static local `{}`", n)),
+            _ => Err(format!("several symbols for the static local `{}`", n)),
+        }
+    }
 }
 
 /// Callees, numbered across a translated file.
@@ -195,6 +211,8 @@ struct Fx {
     decl: HashMap<String, RT>,
     /// memory locals: name -> (object index, type)
     objs: HashMap<String, (usize, RT)>,
+    /// `static` locals: name -> address
+    statics: HashMap<String, u64>,
     obj_list: Vec<(u64, u64)>,
     /// the function's return type
     ret: RT,
@@ -450,6 +468,9 @@ impl<'a> Lower<'a> {
             E::Name(s) => {
                 if let Some((k, _)) = fx.objs.get(s) {
                     return Ok((Base::Op(format!("obj({})", k)), 0));
+                }
+                if let Some(&a) = fx.statics.get(s) {
+                    return Ok((Base::Addr(a), 0));
                 }
                 if self.is_value_name(fx, s) {
                     return Err(format!("the address of value `{}`", s));
@@ -834,12 +855,25 @@ impl<'a> Lower<'a> {
 
     pub fn function(&mut self, f: &Func) -> Result<String, String> {
         let ret = self.ty(&f.ret)?;
-        let mut fx = Fx { names: HashMap::new(), types: Vec::new(), decl: HashMap::new(), objs: HashMap::new(), obj_list: Vec::new(), ret, out: Vec::new() };
+        let mut fx = Fx {
+            names: HashMap::new(),
+            types: Vec::new(),
+            decl: HashMap::new(),
+            objs: HashMap::new(),
+            statics: HashMap::new(),
+            obj_list: Vec::new(),
+            ret,
+            out: Vec::new(),
+        };
         for (n, t) in &f.params {
             fx.decl.insert(n.clone(), self.ty(t)?);
         }
         for (n, t) in &f.decls {
             fx.decl.insert(n.clone(), self.ty(t)?);
+        }
+        for (n, t) in &f.statics {
+            fx.decl.insert(n.clone(), self.ty(t)?);
+            fx.statics.insert(n.clone(), self.syms.static_local(n)?);
         }
         // locals used without an SSA version live in memory
         let mut bare: Vec<String> = Vec::new();

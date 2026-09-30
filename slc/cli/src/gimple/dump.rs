@@ -134,6 +134,8 @@ pub struct Func {
     pub params: Vec<(String, String)>,
     /// local declarations: name -> type text (with array dims)
     pub decls: Vec<(String, String)>,
+    /// `static` local declarations (global objects)
+    pub statics: Vec<(String, String)>,
     pub blocks: Vec<Block>,
 }
 
@@ -486,18 +488,31 @@ pub fn parse_dump(text: &str) -> Result<Vec<Func>, String> {
             let line_no = j + 1;
             let ctx = |e: String| format!("line {}: `{}`: {}", line_no, l, e);
             let is_label = l.ends_with(':') && !l.contains(' ') && !l.starts_with("<bb");
-            if l.is_empty() || l.starts_with("# DEBUG") || (cur.is_some() && is_label) {
-                // labels (from C `goto`s) carry nothing in GIMPLE
+            if l.is_empty() || l.starts_with("# DEBUG") || l.starts_with("//") || (cur.is_some() && is_label) {
+                // labels (from C `goto`s) carry nothing in GIMPLE; comments
+                // (branch predictions, in -O0 dumps) neither
             } else if l.starts_with("<bb ") {
                 if let Some(b) = cur.take() {
                     f.blocks.push(b);
                 }
                 cur = Some(Block { num: bb_num(l).ok_or_else(|| ctx("block".into()))?, ..Default::default() });
             } else if cur.is_none() {
-                // a declaration: `type name;` or `type name[dims];`
+                // a declaration: `type name;` or `type name[dims];`, maybe
+                // with an initializer: an automatic variable is initialized
+                // by statements (the dump just shows it), a `static` one is
+                // a global object
                 let d = l.trim_end_matches(';');
-                let (ty, name) = split_decl(d).ok_or_else(|| ctx("declaration".into()))?;
-                f.decls.push((name, ty));
+                let d = d.find(" = ").map_or(d, |k| &d[..k]);
+                match d.strip_prefix("static ") {
+                    Some(sd) => {
+                        let (ty, name) = split_decl(sd).ok_or_else(|| ctx("declaration".into()))?;
+                        f.statics.push((name, ty));
+                    }
+                    None => {
+                        let (ty, name) = split_decl(d).ok_or_else(|| ctx("declaration".into()))?;
+                        f.decls.push((name, ty));
+                    }
+                }
             } else if let Some(r) = l.strip_prefix("# ") {
                 // # x = PHI <a(3), b(4)>
                 let (dst, rest) = r.split_once(" = PHI <").ok_or_else(|| ctx("phi".into()))?;
