@@ -264,9 +264,11 @@ relies on.
    of the body (`break`/`return` are exceptions of the body), or — without
    a variant — it diverged. The kernel theorems `while_inv`/`while_var`
    (`core/loop.core`, proven by induction) are this step. Example:
-   `malloc.terminates` (malloc's spec never diverges, given that the
-   allocator can take some step — an open fact: keeping memory as it is
-   should be one).
+   `malloc.terminates` (malloc's spec never diverges on a well-typed
+   heap state), using `malloc.idle_step` (the allocator can always keep
+   memory as it is), which rests on a small library of functions and
+   records (`core/records.core`: `union2`, `rec_and` states,
+   `fn_update(f, k, app(f, k)) = f`, fields through ghost extensions).
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary

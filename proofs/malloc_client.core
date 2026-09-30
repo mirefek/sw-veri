@@ -2,7 +2,7 @@
 // (layers/malloc.sl), by symbolic execution (`simp`).
 //
 //   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/list.core \
-//     core/loop.core build/musl_malloc.core proofs/malloc_client.core
+//     core/loop.core core/records.core build/musl_malloc.core proofs/malloc_client.core
 
 // free(NULL) returns and changes nothing
 theorem malloc.free_null(i, o, e, s, r): runs(malloc.free(i, o, e, 0), s, r) -> r = ok(s, empty)
@@ -49,18 +49,57 @@ proof
   show by simp(h, hn, hi, he, hr)
 qed
 
-// malloc terminates, provided the allocator has some step it can take
-// (keeping memory as it is is one; not yet proven). The loop of set_errno
-// (state: the program state and the counter) needs an invariant and a
-// variant.
+// The allocator can always take a step: keeping memory as it is (the
+// memory of a heap state is its `vm` field; its ghost part has no `vm`).
+theorem malloc.idle_step(i, o, s, x):
+  s in rec_and(abi.World, malloc.Heap.ghost) -> s in i ->
+  ex vm. vm in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", vm), x)
+proof
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume hi: s in i
+  obtain w, hw from mp(rec_and_elim[a := abi.World, b := malloc.Heap.ghost, s := s], hs)
+  obtain g, hg from hw
+  have sw: s = union2(w, g) by taut(hg)
+  have hw1: w in abi.World by taut(hg)
+  have hg1: g in malloc.Heap.ghost by taut(hg)
+  have ww := unsel(expand(hw1, abi.World))
+  have gg := unsel(expand(hg1, malloc.Heap.ghost))
+  // "vm" is a field of the world, not a ghost field
+  have fw: is_fun(w) by taut(ww)
+  have dw: dom(w) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) by taut(ww)
+  have vw := rewrite(sym(dw), insert_l[a := "vm", s := insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))])
+  have dg: dom(g) = insert("blocks", empty) by taut(gg)
+  have ng0: "vm" in dom(g) -> false proof
+    assume h: "vm" in dom(g)
+    have c := mp(insert_elim[a := "blocks", s := empty, z := "vm"], rewrite(dg, h))
+    have d: !("vm" = "blocks") by simp()
+    show by taut(c, d, empty_mem[x := "vm"])
+  qed
+  have ng: !("vm" in dom(g)) by taut(ng0)
+  // updating vm with its value changes nothing
+  have fu := rewrite(sym(sw), mp(mp(mp(fn_update_union[w := w, g := g, k := "vm"], fw), vw), ng))
+  // a step to s itself: frame and invariant kept, nothing newly owned
+  have own: all a. a in omega -> a in app(o, s) ->
+      (a in app(o, s) || a in x) || !x86_64_linux.mapped(app(s, "vm"), nat_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    show by taut()
+  qed
+  have st: malloc.step_ok(i, o, s, s, x) by defs(simp(hi, own), malloc.step_ok, malloc.alloc_frame)
+  have st2 := subst({t. malloc.step_ok(i, o, s, t, x)}, sym(fu), st)
+  have vm: app(w, "vm") in x86_64_linux.Vm by taut(ww)
+  show by ex_intro({app(w, "vm")}, taut(vm, st2))
+qed
+
+// malloc terminates. The loop of set_errno (state: the program state and
+// the counter) needs an invariant and a variant.
 theorem malloc.terminates(i, o, e, n, s, r):
-  runs(malloc.malloc(i, o, e, n), s, r) -> s in i -> malloc.errno_ok(e, s) ->
-  (ex vm. vm in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", vm), malloc.errno_bytes(e, s))) ->
+  runs(malloc.malloc(i, o, e, n), s, r) -> s in rec_and(abi.World, malloc.Heap.ghost) -> s in i -> malloc.errno_ok(e, s) ->
   !(ex t. r = diverge(t))
 proof
   assume h: runs(malloc.malloc(i, o, e, n), s, r)
+  assume ht: s in rec_and(abi.World, malloc.Heap.ghost)
   assume hi: s in i
   assume he: malloc.errno_ok(e, s)
-  assume hs: ex vm. vm in x86_64_linux.Vm && malloc.step_ok(i, o, s, fn_update(s, "vm", vm), malloc.errno_bytes(e, s))
+  have hs := mp(mp(malloc.idle_step[i := i, o := o, s := s, x := malloc.errno_bytes(e, s)], ht), hi)
   show by simp(h, hi, he, hs, {l0 l. snd(l) in omega && nat_le(snd(l), 4)}, {l. nat_sub(4, snd(l))})
 qed

@@ -137,7 +137,7 @@ pred fresh_block(s: Heap, p: Addr, n: nat) =
 // failure it is ENOMEM. free preserves errno.
 
 // failing: the allocator may still tidy up (memory unchanged is always a
-// possible step), errno is ENOMEM
+// possible step: malloc.idle_step, proofs/malloc_client.core), errno is ENOMEM
 proc out_of_memory(before: Heap) -> Addr {
   allocator_step(before, errno_bytes(before))
   set_errno(ENOMEM)

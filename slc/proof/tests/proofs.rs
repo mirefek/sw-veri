@@ -386,6 +386,17 @@ qed
 }
 
 #[test]
+fn the_record_library_checks() {
+    let mut env = Env::new();
+    load(&mut env, &core_file("prelude.core"), true).unwrap();
+    for f in ["logic.core", "sets.core"] {
+        load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
+    }
+    let n = load_with(&mut env, &core_file("records.core"), false, Some(&mut ScriptProver)).unwrap().theorems.len();
+    assert!(n >= 10, "{}", n);
+}
+
+#[test]
 fn the_loop_library_checks() {
     let n = check_nat(&core_file("loop.core")).unwrap();
     assert_eq!(n, 5);
