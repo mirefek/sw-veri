@@ -32,6 +32,18 @@ pub(super) struct Ev<'s, 'a> {
     fresh: u32,
     fuel: usize,
     memo: HashMap<(Term, Term), Vec<Term>>,
+    /// normal forms of terms met before
+    norm_memo: HashMap<Term, Term>,
+    /// counters (printed with EVAL_STATS=1): subst, norm, truth, structural,
+    /// outcomes, size of truth's input
+    stats: std::cell::RefCell<[u64; 6]>,
+}
+
+fn size(t: &Term) -> u64 {
+    match t.node() {
+        Node::App(_, a) | Node::Var(_, a) => 1 + a.iter().map(size).sum::<u64>(),
+        _ => 1,
+    }
 }
 
 fn err<T>(m: impl Into<String>) -> Result<T, String> {
@@ -40,7 +52,7 @@ fn err<T>(m: impl Into<String>) -> Result<T, String> {
 
 impl<'s, 'a> Ev<'s, 'a> {
     pub(super) fn new(sp: &'s Simp<'a>, fresh: u32) -> Self {
-        Ev { sp, fresh, fuel: FUEL, memo: HashMap::new() }
+        Ev { sp, fresh, fuel: FUEL, memo: HashMap::new(), norm_memo: HashMap::new(), stats: Default::default() }
     }
 
     fn var(&mut self) -> (VarId, Term) {
@@ -49,6 +61,7 @@ impl<'s, 'a> Ev<'s, 'a> {
     }
 
     fn subst(&self, t: &Term, a: &Assign) -> Term {
+        self.stats.borrow_mut()[0] += 1;
         let bf = self.sp.env.binders_fn();
         let mut t = t.clone();
         for (v, x) in a {
@@ -76,6 +89,16 @@ impl<'s, 'a> Ev<'s, 'a> {
     /// of values unfolded where that exposes a constructor, a numeral or a
     /// record (not programs, not definitions by choice or recursion).
     fn norm(&mut self, t: &Term) -> Term {
+        if let Some(r) = self.norm_memo.get(t) {
+            return r.clone();
+        }
+        let r = self.norm1(t);
+        self.norm_memo.insert(t.clone(), r.clone());
+        r
+    }
+
+    fn norm1(&mut self, t: &Term) -> Term {
+        self.stats.borrow_mut()[1] += 1;
         let mut t = self.sp.term(t);
         for _ in 0..16 {
             let Node::App(f, a) = t.node() else { return t };
@@ -158,6 +181,11 @@ impl<'s, 'a> Ev<'s, 'a> {
     //  Deciding closed propositions
 
     fn truth(&mut self, p: &Term) -> Result<bool, String> {
+        {
+            let mut st = self.stats.borrow_mut();
+            st[2] += 1;
+            st[5] += size(p);
+        }
         let sp = self.sp;
         let s = &sp.s;
         let p = sp.prop(p, Pol::Other);
@@ -304,6 +332,7 @@ impl<'s, 'a> Ev<'s, 'a> {
     /// `solve` by the proposition's form (also for closed propositions that
     /// `truth` does not decide by itself: `ex`, `runs`, loops, members)
     fn structural(&mut self, p: &Term, us: &[VarId], a: Assign) -> Result<Vec<Assign>, String> {
+        self.stats.borrow_mut()[3] += 1;
         let p = p.clone();
         let sp = self.sp;
         let s = &sp.s;
@@ -522,6 +551,7 @@ impl<'s, 'a> Ev<'s, 'a> {
 
     /// The outcomes of program p run from the concrete state st.
     fn outcomes(&mut self, p: &Term, st: &Term) -> Result<Vec<Term>, String> {
+        self.stats.borrow_mut()[4] += 1;
         let p = self.norm(p);
         let st = self.norm(st);
         if let Some(r) = self.memo.get(&(p.clone(), st.clone())) {
@@ -582,6 +612,9 @@ impl Logic {
         let fresh = (env.vars.len() as u32 + 5_000_000).max(max_var(set) + 1);
         let mut ev = Ev::new(&sp, fresh);
         let ms = ev.members(set).map_err(|e| crate::env::KernelError(format!("eval: {}", e)))?;
+        if std::env::var("EVAL_STATS").is_ok() {
+            eprintln!("eval stats [subst, norm, truth, structural, outcomes, truth input size]: {:?}", ev.stats.borrow());
+        }
         let iff = env.sym_by_name.get("iff").copied().ok_or_else(|| crate::env::KernelError("no iff".into()))?;
         let mut rhs = sp.ff();
         for m in &ms {
