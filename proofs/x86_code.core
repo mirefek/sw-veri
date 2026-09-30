@@ -1,0 +1,634 @@
+// Loaded machine code in the x86-64 model: fetching it, and why the
+// program's memory accesses keep it (`abi.code_at`).
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     build/musl_malloc_O0.core proofs/x86.core proofs/x86_code.core
+//
+// Accesses may grow the stack, but only into unmapped pages: the memory
+// "grows" (`abi.vm_grows`: mapped pages and their bytes are kept). A write
+// access to a mapped byte succeeds only if it is writable, and code is not:
+// stores never change it.
+
+// ----------------------------------------------------------------------
+//  Fetching loaded code
+
+// a + (rip - a) + i, as 64-bit addresses
+theorem x86.addr_off(a, rip, i): a in omega -> rip in omega -> i in omega -> nat_le(a, rip) -> nat_lt(nat_add(rip, i), 18446744073709551616) ->
+  bits_add(64, rip, bits_of_nat(64, i)) = bits_of_nat(64, nat_add(a, nat_add(nat_sub(rip, a), i)))
+proof
+  assume ha: a in omega
+  assume hr: rip in omega
+  assume hi: i in omega
+  assume hle: nat_le(a, rip)
+  assume hlt: nat_lt(nat_add(rip, i), 18446744073709551616)
+  show by defs(simp(ha, hr, hi, hle, hlt), bits_add, bits_of_nat, pow2)
+qed
+
+// the n bytes at rip, inside loaded code, are fetchable
+theorem x86.code_fetch: all vm a code rip n. a in omega -> rip in omega -> n in omega -> seq_len(code) in omega ->
+  nat_le(a, rip) -> nat_le(nat_add(rip, n), nat_add(a, seq_len(code))) -> nat_lt(nat_add(a, seq_len(code)), 18446744073709551616) ->
+  abi.code_at(vm, a, code) ->
+  (all i. i in omega -> nat_lt(i, n) -> x86_64_linux.fetchable(vm, bits_add(64, rip, bits_of_nat(64, i))))
+proof
+  fix vm
+  fix a
+  fix code
+  fix rip
+  fix n
+  assume ha: a in omega
+  assume hr: rip in omega
+  assume hn: n in omega
+  assume hl: seq_len(code) in omega
+  assume h1: nat_le(a, rip)
+  assume h2: nat_le(nat_add(rip, n), nat_add(a, seq_len(code)))
+  assume h3: nat_lt(nat_add(a, seq_len(code)), 18446744073709551616)
+  assume hc: abi.code_at(vm, a, code)
+  fix i
+  assume hi: i in omega
+  assume hin: nat_lt(i, n)
+  have c := expand(hc, abi.code_at)
+  have jo: nat_add(nat_sub(rip, a), i) in omega by arith(ha, hr, hi, h1)
+  have jl: nat_lt(nat_add(nat_sub(rip, a), i), seq_len(code)) by arith(ha, hr, hi, hn, hl, h1, h2, hin)
+  have j := mp(mp(all_elim(c, {nat_add(nat_sub(rip, a), i)}), jo), jl)
+  have lt: nat_lt(nat_add(rip, i), 18446744073709551616) by arith(ha, hr, hi, hn, hl, h2, h3, hin)
+  have e := mp(mp(mp(mp(mp(x86.addr_off[a := a, rip := rip, i := i], ha), hr), hi), h1), lt)
+  show by taut(rewrite(sym(e), j))
+qed
+
+// ----------------------------------------------------------------------
+//  Memory that grows
+
+theorem x86.grows_refl: all vm. abi.vm_grows(vm, vm)
+proof
+  fix vm
+  show by defs(simp(), abi.vm_grows)
+qed
+
+theorem x86.grows_trans: all u v w. abi.vm_grows(u, v) -> abi.vm_grows(v, w) -> abi.vm_grows(u, w)
+proof
+  fix u
+  fix v
+  fix w
+  assume h1: abi.vm_grows(u, v)
+  assume h2: abi.vm_grows(v, w)
+  have g1 := expand(h1, abi.vm_grows)
+  have g2 := expand(h2, abi.vm_grows)
+  have g1p: all p. p in omega -> x86_64_linux.mapped(u, p) -> app(app(v, "pages"), p) = app(app(u, "pages"), p) by taut(g1)
+  have g1b: all a. a in bits(64) -> x86_64_linux.mapped(u, x86_64_linux.page_of(a)) -> app(app(v, "bytes"), a) = app(app(u, "bytes"), a) by taut(g1)
+  have g2p: all p. p in omega -> x86_64_linux.mapped(v, p) -> app(app(w, "pages"), p) = app(app(v, "pages"), p) by taut(g2)
+  have g2b: all a. a in bits(64) -> x86_64_linux.mapped(v, x86_64_linux.page_of(a)) -> app(app(w, "bytes"), a) = app(app(v, "bytes"), a) by taut(g2)
+  have pg: all p. p in omega -> x86_64_linux.mapped(u, p) -> app(app(w, "pages"), p) = app(app(u, "pages"), p) proof
+    fix p
+    assume hp: p in omega
+    assume hm: x86_64_linux.mapped(u, p)
+    have e1: app(app(v, "pages"), p) = app(app(u, "pages"), p) by taut(mp(mp(all_elim(g1p, {p}), hp), hm))
+    have mv: x86_64_linux.mapped(v, p) by defs(taut(rewrite(sym(e1), expand(hm, x86_64_linux.mapped))), x86_64_linux.mapped)
+    have e2: app(app(w, "pages"), p) = app(app(v, "pages"), p) by taut(mp(mp(all_elim(g2p, {p}), hp), mv))
+    show trans(e2, e1)
+  qed
+  have by: all a. a in bits(64) -> x86_64_linux.mapped(u, x86_64_linux.page_of(a)) -> app(app(w, "bytes"), a) = app(app(u, "bytes"), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume hm: x86_64_linux.mapped(u, x86_64_linux.page_of(a))
+    have po: x86_64_linux.page_of(a) in omega by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+    have e1: app(app(v, "pages"), x86_64_linux.page_of(a)) = app(app(u, "pages"), x86_64_linux.page_of(a)) by taut(mp(mp(all_elim(g1p, {x86_64_linux.page_of(a)}), po), hm))
+    have mv: x86_64_linux.mapped(v, x86_64_linux.page_of(a)) by defs(taut(rewrite(sym(e1), expand(hm, x86_64_linux.mapped))), x86_64_linux.mapped)
+    have b1: app(app(v, "bytes"), a) = app(app(u, "bytes"), a) by taut(mp(mp(all_elim(g1b, {a}), ha), hm))
+    have b2: app(app(w, "bytes"), a) = app(app(v, "bytes"), a) by taut(mp(mp(all_elim(g2b, {a}), ha), mv))
+    show trans(b2, b1)
+  qed
+  show by defs(taut(pg, by), abi.vm_grows)
+qed
+
+// mapping a page that was unmapped keeps the old memory
+theorem x86.grows_page: all v0 v i w. abi.vm_grows(v0, v) -> !x86_64_linux.mapped(v0, i) ->
+  abi.vm_grows(v0, fn_update(v, "pages", fn_update(app(v, "pages"), i, w)))
+proof
+  fix v0
+  fix v
+  fix i
+  fix w
+  assume h: abi.vm_grows(v0, v)
+  assume hn: !x86_64_linux.mapped(v0, i)
+  have g := expand(h, abi.vm_grows)
+  have gp: all p. p in omega -> x86_64_linux.mapped(v0, p) -> app(app(v, "pages"), p) = app(app(v0, "pages"), p) by taut(g)
+  have gb: all a. a in bits(64) -> x86_64_linux.mapped(v0, x86_64_linux.page_of(a)) -> app(app(v, "bytes"), a) = app(app(v0, "bytes"), a) by taut(g)
+  have pg: all p. p in omega -> x86_64_linux.mapped(v0, p) -> app(fn_update(app(v, "pages"), i, w), p) = app(app(v0, "pages"), p) proof
+    fix p
+    assume hp: p in omega
+    assume hm: x86_64_linux.mapped(v0, p)
+    have ne0: p = i -> false proof
+      assume e: p = i
+      show by taut(rewrite(e, hm), hn)
+    qed
+    have ne: !(p = i) by taut(ne0)
+    have a := mp(app_update_other[f := app(v, "pages"), k := i, v := w, x := p], ne)
+    show trans(a, mp(mp(all_elim(gp, {p}), hp), hm))
+  qed
+  show by defs(simp(pg, gb), abi.vm_grows)
+qed
+
+// writing a byte on an unmapped page keeps the old memory
+theorem x86.grows_byte: all v0 v b w. abi.vm_grows(v0, v) -> !x86_64_linux.mapped(v0, x86_64_linux.page_of(b)) ->
+  abi.vm_grows(v0, fn_update(v, "bytes", fn_update(app(v, "bytes"), b, w)))
+proof
+  fix v0
+  fix v
+  fix b
+  fix w
+  assume h: abi.vm_grows(v0, v)
+  assume hn: !x86_64_linux.mapped(v0, x86_64_linux.page_of(b))
+  have g := expand(h, abi.vm_grows)
+  have gp: all p. p in omega -> x86_64_linux.mapped(v0, p) -> app(app(v, "pages"), p) = app(app(v0, "pages"), p) by taut(g)
+  have gb: all a. a in bits(64) -> x86_64_linux.mapped(v0, x86_64_linux.page_of(a)) -> app(app(v, "bytes"), a) = app(app(v0, "bytes"), a) by taut(g)
+  have bg: all a. a in bits(64) -> x86_64_linux.mapped(v0, x86_64_linux.page_of(a)) -> app(fn_update(app(v, "bytes"), b, w), a) = app(app(v0, "bytes"), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume hm: x86_64_linux.mapped(v0, x86_64_linux.page_of(a))
+    have ne0: a = b -> false proof
+      assume e: a = b
+      show by taut(rewrite(e, hm), hn)
+    qed
+    have ne: !(a = b) by taut(ne0)
+    have e1 := mp(app_update_other[f := app(v, "bytes"), k := b, v := w, x := a], ne)
+    show trans(e1, mp(mp(all_elim(gb, {a}), ha), hm))
+  qed
+  show by defs(simp(gp, bg), abi.vm_grows)
+qed
+
+// loaded code stays loaded
+theorem x86.code_grows: all v0 v a c. a in omega -> abi.code_at(v0, a, c) -> abi.vm_grows(v0, v) -> abi.code_at(v, a, c)
+proof
+  fix v0
+  fix v
+  fix a
+  fix c
+  assume ha: a in omega
+  assume hc: abi.code_at(v0, a, c)
+  assume hg: abi.vm_grows(v0, v)
+  have cc := expand(hc, abi.code_at)
+  have g := expand(hg, abi.vm_grows)
+  have gp: all p. p in omega -> x86_64_linux.mapped(v0, p) -> app(app(v, "pages"), p) = app(app(v0, "pages"), p) by taut(g)
+  have gb: all x. x in bits(64) -> x86_64_linux.mapped(v0, x86_64_linux.page_of(x)) -> app(app(v, "bytes"), x) = app(app(v0, "bytes"), x) by taut(g)
+  have r: all i. i in omega -> nat_lt(i, seq_len(c)) ->
+      (x86_64_linux.fetchable(v, bits_of_nat(64, nat_add(a, i))) && !x86_64_linux.can_access(v, bits_of_nat(64, nat_add(a, i)), 1)) &&
+      app(app(v, "bytes"), bits_of_nat(64, nat_add(a, i))) = app(c, i) proof
+    fix i
+    assume hi: i in omega
+    assume hl: nat_lt(i, seq_len(c))
+    have ci := mp(mp(all_elim(cc, {i}), hi), hl)
+    have f0: x86_64_linux.fetchable(v0, bits_of_nat(64, nat_add(a, i))) by taut(ci)
+    have n0: !x86_64_linux.can_access(v0, bits_of_nat(64, nat_add(a, i)), 1) by taut(ci)
+    have b0: app(app(v0, "bytes"), bits_of_nat(64, nat_add(a, i))) = app(c, i) by taut(ci)
+    have xo: bits_of_nat(64, nat_add(a, i)) in bits(64) by defs(simp(ha, hi), bits_of_nat, pow2)
+    have po: x86_64_linux.page_of(bits_of_nat(64, nat_add(a, i))) in omega by defs(simp(ha, hi), x86_64_linux.page_of, x86_64_linux.PAGE, bits_of_nat, pow2)
+    have m0: x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_of_nat(64, nat_add(a, i)))) by taut(expand(f0, x86_64_linux.fetchable))
+    have ep := mp(mp(all_elim(gp, {x86_64_linux.page_of(bits_of_nat(64, nat_add(a, i)))}), po), m0)
+    have eb := mp(mp(all_elim(gb, {bits_of_nat(64, nat_add(a, i))}), xo), m0)
+    have f1 := rewrite(sym(ep), expand(expand(f0, x86_64_linux.fetchable), x86_64_linux.mapped))
+    have n1 := rewrite(sym(ep), expand(expand(n0, x86_64_linux.can_access), x86_64_linux.mapped))
+    have b1 := rewrite(sym(eb), b0)
+    show by defs(taut(f1, n1, b1), x86_64_linux.fetchable, x86_64_linux.can_access, x86_64_linux.mapped)
+  qed
+  show by defs(taut(r), abi.code_at)
+qed
+
+// an accessible byte stays accessible
+theorem x86.access_grows: all v0 v x k. x in bits(64) -> x86_64_linux.can_access(v0, x, k) -> abi.vm_grows(v0, v) -> x86_64_linux.can_access(v, x, k)
+proof
+  fix v0
+  fix v
+  fix x
+  fix k
+  assume hx: x in bits(64)
+  assume hc: x86_64_linux.can_access(v0, x, k)
+  assume hg: abi.vm_grows(v0, v)
+  have g := expand(hg, abi.vm_grows)
+  have gp: all p. p in omega -> x86_64_linux.mapped(v0, p) -> app(app(v, "pages"), p) = app(app(v0, "pages"), p) by taut(g)
+  have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of, x86_64_linux.PAGE)
+  have m0: x86_64_linux.mapped(v0, x86_64_linux.page_of(x)) by taut(expand(hc, x86_64_linux.can_access))
+  have ep := mp(mp(all_elim(gp, {x86_64_linux.page_of(x)}), po), m0)
+  have c1 := rewrite(sym(ep), expand(expand(hc, x86_64_linux.can_access), x86_64_linux.mapped))
+  show by defs(taut(c1), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+// a mapped page stays mapped
+theorem x86.mapped_grows: all v0 v p. p in omega -> x86_64_linux.mapped(v0, p) -> abi.vm_grows(v0, v) -> x86_64_linux.mapped(v, p)
+proof
+  fix v0
+  fix v
+  fix p
+  assume hp: p in omega
+  assume hm: x86_64_linux.mapped(v0, p)
+  assume hg: abi.vm_grows(v0, v)
+  have gp: all q. q in omega -> x86_64_linux.mapped(v0, q) -> app(app(v, "pages"), q) = app(app(v0, "pages"), q) by taut(expand(hg, abi.vm_grows))
+  have e := mp(mp(all_elim(gp, {p}), hp), hm)
+  show by defs(taut(rewrite(sym(e), expand(hm, x86_64_linux.mapped))), x86_64_linux.mapped)
+qed
+
+// ... and a byte on a page mapped before is accessible as it was
+theorem x86.access_back: all v0 v x k. x in bits(64) -> x86_64_linux.mapped(v0, x86_64_linux.page_of(x)) -> abi.vm_grows(v0, v) ->
+  x86_64_linux.can_access(v, x, k) -> x86_64_linux.can_access(v0, x, k)
+proof
+  fix v0
+  fix v
+  fix x
+  fix k
+  assume hx: x in bits(64)
+  assume hm: x86_64_linux.mapped(v0, x86_64_linux.page_of(x))
+  assume hg: abi.vm_grows(v0, v)
+  assume hc: x86_64_linux.can_access(v, x, k)
+  have gp: all q. q in omega -> x86_64_linux.mapped(v0, q) -> app(app(v, "pages"), q) = app(app(v0, "pages"), q) by taut(expand(hg, abi.vm_grows))
+  have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
+  have e := mp(mp(all_elim(gp, {x86_64_linux.page_of(x)}), po), hm)
+  have c1 := rewrite(e, expand(expand(hc, x86_64_linux.can_access), x86_64_linux.mapped))
+  show by defs(taut(c1), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+// 64-bit address arithmetic stays in 64 bits
+theorem x86.bits_add_type: all a b. a in omega -> b in omega -> bits_add(64, a, b) in bits(64)
+proof
+  fix a
+  fix b
+  assume ha: a in omega
+  assume hb: b in omega
+  show by defs(simp(ha, hb), bits_add, pow2)
+qed
+
+theorem x86.bits_of_nat_type: all j. j in omega -> bits_of_nat(64, j) in omega
+proof
+  fix j
+  assume hj: j in omega
+  show by defs(simp(hj), bits_of_nat, pow2)
+qed
+
+// ----------------------------------------------------------------------
+//  Stack growth maps only unmapped pages
+
+// the pages from p up to the next mapped page are unmapped
+theorem x86.next_mapped_gap: all vm p j. p in omega -> j in omega -> nat_le(p, j) ->
+  nat_lt(j, snd(x86_64_linux.next_mapped(vm, p))) -> !x86_64_linux.mapped(vm, j)
+proof
+  fix vm
+  fix p
+  fix j
+  assume hp: p in omega
+  assume hj: j in omega
+  assume hle: nat_le(p, j)
+  assume hlt: nat_lt(j, snd(x86_64_linux.next_mapped(vm, p)))
+  have nm0: x86_64_linux.mapped(vm, j) -> false proof
+    assume hm: x86_64_linux.mapped(vm, j)
+    have pj: nat_le(p, j) && x86_64_linux.mapped(vm, j) by taut(hle, hm)
+    have c: j in omega && (nat_le(p, j) && x86_64_linux.mapped(vm, j)) by taut(hj, hle, hm)
+    have ex := ex_intro({j}, {x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x))}, c)
+    have ms := mp(mp(nat_min_spec[p := x. nat_le(p, x) && x86_64_linux.mapped(vm, x), a := j], hj), pj)
+    have low: all y. y in omega -> nat_le(p, y) && x86_64_linux.mapped(vm, y) -> nat_le(nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x))), y) by taut(ms)
+    have lm := mp(mp(all_elim(low, {j}), hj), pj)
+    have it := mp(ite_t[c := ex x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x)), a := some(nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x)))), b := none], ex)
+    have lt := simp(rewrite(it, expand(hlt, x86_64_linux.next_mapped)))
+    have mo: nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x))) in omega by taut(ms)
+    show by arith(hj, mo, lm, lt)
+  qed
+  show by taut(nm0)
+qed
+
+// ... in bytes: the addresses from page p up to the next mapped page
+theorem x86.next_mapped_gap_bytes: all vm p i. p in omega -> i in omega -> nat_le(nat_mul(p, x86_64_linux.PAGE), i) ->
+  nat_lt(i, nat_mul(snd(x86_64_linux.next_mapped(vm, p)), x86_64_linux.PAGE)) -> !x86_64_linux.mapped(vm, x86_64_linux.page_of(bits_of_nat(64, i)))
+proof
+  fix vm
+  fix p
+  fix i
+  assume hp: p in omega
+  assume hi: i in omega
+  assume hle: nat_le(nat_mul(p, x86_64_linux.PAGE), i)
+  assume hlt: nat_lt(i, nat_mul(snd(x86_64_linux.next_mapped(vm, p)), x86_64_linux.PAGE))
+  // the next mapped page exists (else the range is empty) and is below 2^47 / PAGE
+  have nn0: !(ex x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x))) -> false proof
+    assume ne: !(ex x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x)))
+    have it := mp(ite_f[c := ex x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x)), a := some(nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x)))), b := none], ne)
+    have lt := simp(rewrite(it, expand(hlt, x86_64_linux.next_mapped)))
+    have z := rewrite(sym(lit_zero), lt)
+    show by arith(hi, z)
+  qed
+  have ex: ex x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x)) by taut(nn0)
+  obtain w, hw from ex
+  have wo: w in omega by taut(hw)
+  have pw: nat_le(p, w) && x86_64_linux.mapped(vm, w) by taut(hw)
+  have ms := mp(mp(nat_min_spec[p := x. nat_le(p, x) && x86_64_linux.mapped(vm, x), a := w], wo), pw)
+  have it := mp(ite_t[c := ex x. x in omega && (nat_le(p, x) && x86_64_linux.mapped(vm, x)), a := some(nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x)))), b := none], ex)
+  have lt := simp(rewrite(it, expand(hlt, x86_64_linux.next_mapped)))
+  have mo: nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x))) in omega by taut(ms)
+  have mm: x86_64_linux.mapped(vm, nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x)))) by taut(ms)
+  have mb: nat_lt(nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x))), nat_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by defs(taut(expand(mm, x86_64_linux.mapped)), x86_64_linux.mapped)
+  have tv: nat_div(x86_64_linux.TASK_SIZE, 4096) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE)
+  have small: nat_lt(i, 18446744073709551616) by arith(hi, mo, simp(lt), rewrite(tv, simp(mb)))
+  have md: nat_mod(i, 18446744073709551616) = i by arith(hi, small)
+  have pg: x86_64_linux.page_of(bits_of_nat(64, i)) = nat_div(i, 4096) by defs(simp(hi, small, md), x86_64_linux.page_of, x86_64_linux.PAGE, bits_of_nat, pow2)
+  have j1: nat_le(p, nat_div(i, 4096)) by arith(hp, hi, simp(hle))
+  have j2: nat_lt(nat_div(i, 4096), nat_min(set_select(omega, x. nat_le(p, x) && x86_64_linux.mapped(vm, x)))) by arith(hi, mo, simp(lt))
+  have jo: nat_div(i, 4096) in omega by arith(hi)
+  have j2x: nat_lt(nat_div(i, 4096), snd(x86_64_linux.next_mapped(vm, p))) by defs(simp(j2, it), x86_64_linux.next_mapped)
+  have g := mp(mp(mp(mp(all_elim(all_elim(all_elim(x86.next_mapped_gap, {vm}), {p}), {nat_div(i, 4096)}), hp), jo), j1), j2x)
+  show by taut(rewrite(sym(pg), g))
+qed
+
+// the previous mapped page, if any, is an option
+theorem x86.prev_mapped_cases: all vm p. fst(x86_64_linux.prev_mapped(vm, p)) = 1 || x86_64_linux.prev_mapped(vm, p) = none
+proof
+  fix vm
+  fix p
+  have c1: (ex x. x in omega && (nat_lt(x, p) && x86_64_linux.mapped(vm, x))) -> fst(x86_64_linux.prev_mapped(vm, p)) = 1 proof
+    assume e: ex x. x in omega && (nat_lt(x, p) && x86_64_linux.mapped(vm, x))
+    have it := mp(ite_t[c := ex x. x in omega && (nat_lt(x, p) && x86_64_linux.mapped(vm, x)), a := some(nat_max(set_select(omega, x. nat_lt(x, p) && x86_64_linux.mapped(vm, x)))), b := none], e)
+    show by defs(simp(it), x86_64_linux.prev_mapped)
+  qed
+  have c2: !(ex x. x in omega && (nat_lt(x, p) && x86_64_linux.mapped(vm, x))) -> x86_64_linux.prev_mapped(vm, p) = none proof
+    assume e: !(ex x. x in omega && (nat_lt(x, p) && x86_64_linux.mapped(vm, x)))
+    have it := mp(ite_f[c := ex x. x in omega && (nat_lt(x, p) && x86_64_linux.mapped(vm, x)), a := some(nat_max(set_select(omega, x. nat_lt(x, p) && x86_64_linux.mapped(vm, x)))), b := none], e)
+    show by defs(simp(it), x86_64_linux.prev_mapped)
+  qed
+  show by taut(c1, c2)
+qed
+
+// growing the stack keeps the memory
+theorem x86.grow_stack_grows: all m a p m1 e. p in omega -> runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e)) -> abi.vm_grows(app(m, "vm"), app(m1, "vm"))
+proof
+  fix m
+  fix a
+  fix p
+  fix m1
+  fix e
+  assume hp: p in omega
+  assume h: runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e))
+  have gap := all_elim(all_elim(x86.next_mapped_gap, {app(m, "vm")}), {p})
+  have gapb := all_elim(all_elim(x86.next_mapped_gap_bytes, {app(m, "vm")}), {p})
+  show by simp(h, hp, gap, gapb, x86.prev_mapped_cases, x86.grows_page, x86.grows_byte, x86.grows_refl, keep(abi.vm_grows, x86_64_linux.mapped, x86_64_linux.next_mapped, x86_64_linux.prev_mapped, x86_64_linux.run_end),
+    {l0 l. abi.vm_grows(app(m, "vm"), app(fst(l), "vm")) && snd(l) in omega && nat_le(p, snd(l))},
+    {l0 l. abi.vm_grows(app(m, "vm"), app(fst(l), "vm")) && snd(l) in omega && nat_le(nat_mul(p, x86_64_linux.PAGE), snd(l))})
+qed
+
+// ----------------------------------------------------------------------
+//  Accesses
+
+// an access keeps the memory (up to stack growth)
+theorem x86.touch_frame: all m x k m1 e. x in bits(64) -> runs(x86_64_linux.touch(x, k), m, ok(m1, e)) -> abi.vm_grows(app(m, "vm"), app(m1, "vm"))
+proof
+  fix m
+  fix x
+  fix k
+  fix m1
+  fix e
+  assume hx: x in bits(64)
+  assume h: runs(x86_64_linux.touch(x, k), m, ok(m1, e))
+  have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
+  show by simp(h, hx, po, x86.grow_stack_grows, x86.grows_refl, keep(x86_64_linux.grow_stack, abi.vm_grows, x86_64_linux.mapped, x86_64_linux.page_of))
+qed
+
+// a write access to a mapped byte succeeds only if it is writable
+theorem x86.touch_write: all m x m1 e. runs(x86_64_linux.touch(x, 1), m, ok(m1, e)) ->
+  x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(x)) -> x86_64_linux.can_access(app(m, "vm"), x, 1)
+proof
+  fix m
+  fix x
+  fix m1
+  fix e
+  assume h: runs(x86_64_linux.touch(x, 1), m, ok(m1, e))
+  assume hm: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(x))
+  show by defs(simp(expand(expand(h, x86_64_linux.touch), x86_64_linux.hw_allows), hm, keep(x86_64_linux.grow_stack, x86_64_linux.mapped, x86_64_linux.page_of)), x86_64_linux.can_access, x86_64_linux.hw_allows)
+qed
+
+// ... after the memory grew from v0: the byte is unmapped in v0 or was
+// writable there
+theorem x86.touch_write0: all v0 m x m1 e. x in bits(64) -> abi.vm_grows(v0, app(m, "vm")) -> runs(x86_64_linux.touch(x, 1), m, ok(m1, e)) ->
+  !x86_64_linux.mapped(v0, x86_64_linux.page_of(x)) || x86_64_linux.can_access(v0, x, 1)
+proof
+  fix v0
+  fix m
+  fix x
+  fix m1
+  fix e
+  assume hx: x in bits(64)
+  assume hg: abi.vm_grows(v0, app(m, "vm"))
+  assume h: runs(x86_64_linux.touch(x, 1), m, ok(m1, e))
+  have c: x86_64_linux.mapped(v0, x86_64_linux.page_of(x)) -> x86_64_linux.can_access(v0, x, 1) proof
+    assume hm: x86_64_linux.mapped(v0, x86_64_linux.page_of(x))
+    have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
+    have mm := mp(mp(mp(all_elim(all_elim(all_elim(x86.mapped_grows, {v0}), {app(m, "vm")}), {x86_64_linux.page_of(x)}), po), hm), hg)
+    have cw := mp(mp(all_elim(all_elim(all_elim(all_elim(x86.touch_write, {m}), {x}), {m1}), {e}), h), mm)
+    show mp(mp(mp(mp(all_elim(all_elim(all_elim(all_elim(x86.access_back, {v0}), {app(m, "vm")}), {x}), {1}), hx), hm), hg), cw)
+  qed
+  show by taut(c)
+qed
+
+// the two touch lemmas at an address a + j
+theorem x86.touch_frame_at: all m a j k m1 e. a in omega -> j in omega -> runs(x86_64_linux.touch(bits_add(64, a, bits_of_nat(64, j)), k), m, ok(m1, e)) -> abi.vm_grows(app(m, "vm"), app(m1, "vm"))
+proof
+  fix m
+  fix a
+  fix j
+  fix k
+  fix m1
+  fix e
+  assume ha: a in omega
+  assume hj: j in omega
+  assume h: runs(x86_64_linux.touch(bits_add(64, a, bits_of_nat(64, j)), k), m, ok(m1, e))
+  have t := mp(mp(all_elim(all_elim(x86.bits_add_type, {a}), {bits_of_nat(64, j)}), ha), mp(all_elim(x86.bits_of_nat_type, {j}), hj))
+  show mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_frame, {m}), {bits_add(64, a, bits_of_nat(64, j))}), {k}), {m1}), {e}), t), h)
+qed
+
+theorem x86.touch_write_at: all v0 m a j m1 e. a in omega -> j in omega -> abi.vm_grows(v0, app(m, "vm")) -> runs(x86_64_linux.touch(bits_add(64, a, bits_of_nat(64, j)), 1), m, ok(m1, e)) ->
+  !x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1)
+proof
+  fix v0
+  fix m
+  fix a
+  fix j
+  fix m1
+  fix e
+  assume ha: a in omega
+  assume hj: j in omega
+  assume hg: abi.vm_grows(v0, app(m, "vm"))
+  assume h: runs(x86_64_linux.touch(bits_add(64, a, bits_of_nat(64, j)), 1), m, ok(m1, e))
+  have t := mp(mp(all_elim(all_elim(x86.bits_add_type, {a}), {bits_of_nat(64, j)}), ha), mp(all_elim(x86.bits_of_nat_type, {j}), hj))
+  show mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_write0, {v0}), {m}), {bits_add(64, a, bits_of_nat(64, j))}), {m1}), {e}), t), hg), h)
+qed
+
+// the bytes a + j (j < i) written: unmapped in v0 or writable there
+theorem x86.prefix_zero: all v0 a. all j. j in omega -> nat_lt(j, 0) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1))
+proof
+  fix v0
+  fix a
+  fix j
+  assume hj: j in omega
+  assume hl: nat_lt(j, 0)
+  have f: false by arith(hj, hl)
+  show by taut(f)
+qed
+
+theorem x86.prefix_ext: all v0 a i. i in omega -> (all j. j in omega -> nat_lt(j, i) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1))) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, i)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, i)), 1)) ->
+  (all j. j in omega -> nat_lt(j, nat_add(i, 1)) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1)))
+proof
+  fix v0
+  fix a
+  fix i
+  assume hi: i in omega
+  assume hp: all j. j in omega -> nat_lt(j, i) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1))
+  assume hq: (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, i)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, i)), 1))
+  fix j
+  assume hj: j in omega
+  assume hl: nat_lt(j, nat_add(i, 1))
+  have c1: nat_lt(j, i) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1)) by taut(all_elim(hp, {j}), hj)
+  have c2: !nat_lt(j, i) -> (!x86_64_linux.mapped(v0, x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(v0, bits_add(64, a, bits_of_nat(64, j)), 1)) proof
+    assume n: !nat_lt(j, i)
+    have e: i = j by arith(hi, hj, hl, n)
+    show by taut(rewrite(e, hq))
+  qed
+  show by taut(c1, c2)
+qed
+
+// a write access to n bytes: each is unmapped before or was writable
+theorem x86.touch_range_write: all m a n m1 e. a in omega -> n in omega -> runs(x86_64_linux.touch_range(a, n, 1), m, ok(m1, e)) ->
+  (all j. j in omega -> nat_lt(j, n) -> (!x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_nat(64, j)), 1)))
+proof
+  fix m
+  fix a
+  fix n
+  fix m1
+  fix e
+  assume ha: a in omega
+  assume hn: n in omega
+  assume h: runs(x86_64_linux.touch_range(a, n, 1), m, ok(m1, e))
+  have en: all p. p in omega -> nat_le(p, n) -> !nat_lt(p, n) -> n = p proof
+    fix p
+    assume hp: p in omega
+    assume h1: nat_le(p, n)
+    assume h2: !nat_lt(p, n)
+    show by arith(hp, hn, h1, h2)
+  qed
+  show by simp(h, ha, hn, en, x86.touch_frame_at, x86.grows_trans, x86.grows_refl, x86.touch_write_at, x86.prefix_ext, x86.prefix_zero,
+    keep(x86_64_linux.touch, abi.vm_grows, x86_64_linux.mapped, x86_64_linux.page_of, x86_64_linux.can_access),
+    {l0 l. abi.vm_grows(app(m, "vm"), app(fst(l), "vm")) && snd(l) in omega && nat_le(snd(l), n) && (all j. j in omega -> nat_lt(j, snd(l)) -> (!x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(bits_add(64, a, bits_of_nat(64, j)))) || x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_nat(64, j)), 1)))},
+    {l. nat_sub(n, snd(l))})
+qed
+
+// accesses to n bytes keep the memory (up to stack growth)
+theorem x86.touch_range_frame: all m a n k m1 e. a in omega -> n in omega -> runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e)) ->
+  abi.vm_grows(app(m, "vm"), app(m1, "vm"))
+proof
+  fix m
+  fix a
+  fix n
+  fix k
+  fix m1
+  fix e
+  assume ha: a in omega
+  assume hn: n in omega
+  assume h: runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e))
+  show by simp(h, ha, hn, x86.touch_frame_at, x86.grows_trans, x86.grows_refl, keep(x86_64_linux.touch, abi.vm_grows),
+    {l0 l. abi.vm_grows(app(m, "vm"), app(fst(l), "vm")) && snd(l) in omega && nat_le(snd(l), n)}, {l. nat_sub(n, snd(l))})
+qed
+
+// ----------------------------------------------------------------------
+//  Loaded code survives the program's accesses and stores
+
+// reading through a store of n bytes at a, at an address c none of them is
+theorem x86.store_outside: all b a n v c. c in bits(64) -> a in bits(64) ->
+  (all i. i in omega -> nat_lt(i, n) -> !(bits_add(64, a, bits_of_nat(64, i)) = c)) ->
+  app(x86_64_linux.store_le(b, a, n, v), c) = app(b, c)
+proof
+  fix b
+  fix a
+  fix n
+  fix v
+  fix c
+  assume hc: c in bits(64)
+  assume ha: a in bits(64)
+  assume hw: all i. i in omega -> nat_lt(i, n) -> !(bits_add(64, a, bits_of_nat(64, i)) = c)
+  have e1 := mp(app_fn_build[d := bits(64), v := x. ite(nat_lt(bits_sub(64, x, a), n), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)), a := c], hc)
+  have k: bits_sub(64, c, a) in omega by defs(simp(hc, ha), bits_sub, pow2)
+  have id := mp(mp(x86.bits_add_sub[a := a, c := c], hc), ha)
+  have nlt0: nat_lt(bits_sub(64, c, a), n) -> false proof
+    assume lt: nat_lt(bits_sub(64, c, a), n)
+    have w := mp(mp(all_elim(hw, {bits_sub(64, c, a)}), k), lt)
+    show by taut(id, w)
+  qed
+  have nlt: !nat_lt(bits_sub(64, c, a), n) by taut(nlt0)
+  have f := mp(ite_f[c := nat_lt(bits_sub(64, c, a), n), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, c, a)))), b := app(b, c)], nlt)
+  show by defs(taut(trans(e1, f)), x86_64_linux.store_le)
+qed
+
+// a store (after its write accesses) keeps loaded code: code is not writable
+theorem x86.store_code: all m a n m1 e f code. a in bits(64) -> n in omega -> f in omega ->
+  runs(x86_64_linux.touch_range(a, n, 1), m, ok(m1, e)) -> abi.code_at(app(m, "vm"), f, code) ->
+  (all v. abi.code_at(fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), a, n, v)), f, code))
+proof
+  fix m
+  fix a
+  fix n
+  fix m1
+  fix e
+  fix f
+  fix code
+  assume ha: a in bits(64)
+  assume hn: n in omega
+  assume hf: f in omega
+  assume h: runs(x86_64_linux.touch_range(a, n, 1), m, ok(m1, e))
+  assume hc: abi.code_at(app(m, "vm"), f, code)
+  have ao: a in omega by defs(simp(ha), pow2)
+  have g := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_range_frame, {m}), {a}), {n}), {1}), {m1}), {e}), ao), hn), h)
+  have c1 := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(x86.code_grows, {app(m, "vm")}), {app(m1, "vm")}), {f}), {code}), hf), hc), g)
+  have tw := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_range_write, {m}), {a}), {n}), {m1}), {e}), ao), hn), h)
+  have cc := expand(hc, abi.code_at)
+  have cc1 := expand(c1, abi.code_at)
+  fix v
+  have r: all i. i in omega -> nat_lt(i, seq_len(code)) ->
+      (x86_64_linux.fetchable(fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), a, n, v)), bits_of_nat(64, nat_add(f, i))) &&
+       !x86_64_linux.can_access(fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), a, n, v)), bits_of_nat(64, nat_add(f, i)), 1)) &&
+      app(app(fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), a, n, v)), "bytes"), bits_of_nat(64, nat_add(f, i))) = app(code, i) proof
+    fix i
+    assume hi: i in omega
+    assume hl: nat_lt(i, seq_len(code))
+    have ci := mp(mp(all_elim(cc, {i}), hi), hl)
+    have ci1 := mp(mp(all_elim(cc1, {i}), hi), hl)
+    have co: bits_of_nat(64, nat_add(f, i)) in bits(64) by defs(simp(hf, hi), bits_of_nat, pow2)
+    have fe: x86_64_linux.fetchable(app(m, "vm"), bits_of_nat(64, nat_add(f, i))) by taut(ci)
+    have mp0: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(bits_of_nat(64, nat_add(f, i)))) by taut(expand(fe, x86_64_linux.fetchable))
+    have nw: !x86_64_linux.can_access(app(m, "vm"), bits_of_nat(64, nat_add(f, i)), 1) by taut(ci)
+    have out: all j. j in omega -> nat_lt(j, n) -> !(bits_add(64, a, bits_of_nat(64, j)) = bits_of_nat(64, nat_add(f, i))) proof
+      fix j
+      assume hj: j in omega
+      assume hjl: nat_lt(j, n)
+      have tj := mp(mp(all_elim(tw, {j}), hj), hjl)
+      have ne0: bits_add(64, a, bits_of_nat(64, j)) = bits_of_nat(64, nat_add(f, i)) -> false proof
+        assume eq: bits_add(64, a, bits_of_nat(64, j)) = bits_of_nat(64, nat_add(f, i))
+        show by taut(rewrite(eq, tj), mp0, nw)
+      qed
+      show by taut(ne0)
+    qed
+    have so := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(x86.store_outside, {app(app(m1, "vm"), "bytes")}), {a}), {n}), {v}), {bits_of_nat(64, nat_add(f, i))}), co), ha), out)
+    show by defs(simp(expand(ci1, x86_64_linux.fetchable, x86_64_linux.can_access, x86_64_linux.mapped), so), x86_64_linux.fetchable, x86_64_linux.can_access, x86_64_linux.mapped)
+  qed
+  show by defs(taut(r), abi.code_at)
+qed
+
+// ... and so do accesses
+theorem x86.touch_range_code: all m a n k m1 e f code. a in omega -> n in omega -> f in omega ->
+  runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e)) -> abi.code_at(app(m, "vm"), f, code) -> abi.code_at(app(m1, "vm"), f, code)
+proof
+  fix m
+  fix a
+  fix n
+  fix k
+  fix m1
+  fix e
+  fix f
+  fix code
+  assume ha: a in omega
+  assume hn: n in omega
+  assume hf: f in omega
+  assume h: runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e))
+  assume hc: abi.code_at(app(m, "vm"), f, code)
+  have g := mp(mp(mp(all_elim(all_elim(all_elim(all_elim(all_elim(all_elim(x86.touch_range_frame, {m}), {a}), {n}), {k}), {m1}), {e}), ha), hn), h)
+  show mp(mp(mp(all_elim(all_elim(all_elim(all_elim(x86.code_grows, {app(m, "vm")}), {app(m1, "vm")}), {f}), {code}), hf), hc), g)
+qed

@@ -88,6 +88,12 @@ pred code_at(vm: Vm, a: nat, code: List[bits[8]]) =
   all i: nat. i < len(code) ->
     fetchable(vm, bits[64](a + i)) && !can_access(vm, bits[64](a + i), write) && vm.bytes[bits[64](a + i)] = code[i]
 
+// `new` keeps the mapped pages of `old` and their contents: memory after
+// accesses that may have grown the stack (into unmapped pages)
+pred vm_grows(old: Vm, new: Vm) =
+  (all p: nat. mapped(old, p) -> new.pages[p] = old.pages[p]) &&
+  (all a: Addr. mapped(old, page_of(a)) -> new.bytes[a] = old.bytes[a])
+
 ///////////////////////////////////////////////////////////////////////
 //  Calling a function
 

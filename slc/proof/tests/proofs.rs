@@ -462,6 +462,11 @@ fn facts_are_used_as_rules() {
     assert_eq!(check(&simp_thm(&["all a. app(f, a) = pair(a, a)"], "fst(app(f, x)) = x")), Ok(1));
     // chained: the conclusion of one rule is the hypothesis of the next
     assert_eq!(check(&simp_thm(&["all y. y in f -> y in g", "all y. y in g -> app(g, y) = y", "x in f"], "app(g, x) = x")), Ok(1));
+    // a variable only in the conclusion: from the goal
+    assert_eq!(check(&simp_thm(&["all y z. y in f -> pair(y, z) in g", "x in f"], "pair(x, x) in g")), Ok(1));
+    // an instance of a universal fact, in the goal (a conjunct) or refuted
+    assert_eq!(check(&simp_thm(&["all y. app(f, y) in g", "x in f"], "x in f && app(f, x) in g")), Ok(1));
+    assert_eq!(check(&simp_thm(&["all y. app(f, y) in g", "!(app(f, x) in g)"], "false")), Ok(1));
 }
 
 #[test]
@@ -472,8 +477,8 @@ fn rules_do_not_overreach() {
     };
     // a hypothesis that does not hold
     left(simp_thm(&["all y. y in omega -> nat_lt(y, 2) -> y in g", "x in omega", "nat_lt(x, 3)"], "x in g"));
-    // a variable bound by nothing on the path
-    left(simp_thm(&["all y z. y in f -> pair(y, z) in g", "x in f"], "pair(x, x) in g"));
+    // a variable bound by nothing on the path (nor by the goal)
+    left(simp_thm(&["all y z. y in f -> pair(y, z) in g", "x in f"], "pair(x, x) in f"));
     // the other direction of an implication
     left(simp_thm(&["all y. y in f -> y in g", "x in g"], "x in f"));
     // an equation used left to right only

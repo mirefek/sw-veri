@@ -478,6 +478,18 @@ impl<'a> Simp<'a> {
                         return b[1].clone();
                     }
                 }
+                // (`some(x) = tag(1, x)`, `none = tag(0, empty)`)
+                if is(g, s.some) && (fst || snd) {
+                    return if fst { nat(1) } else { b[0].clone() };
+                }
+                if is(g, s.none) && b.is_empty() && (fst || snd) {
+                    if fst {
+                        return nat(0);
+                    }
+                    if let Some(e) = s.empty {
+                        return Term::app(e, vec![]);
+                    }
+                }
                 let tag = if is(g, s.ok) { Some(0) } else if is(g, s.exc) { Some(1) } else if is(g, s.diverge) { Some(2) } else { None };
                 if let Some(k) = tag {
                     if fst {
@@ -515,6 +527,14 @@ impl<'a> Simp<'a> {
         }
         if let Some(v) = self.bytes(f, &args) {
             return v;
+        }
+        // a constant defined as a numeral (`PAGE`)
+        if args.is_empty() {
+            if let SymKind::Defined { params, body } = &self.env.syms[f as usize].kind {
+                if params.is_empty() && matches!(body.node(), Node::Nat(_)) && !self.keep.contains(&f) {
+                    return body.clone();
+                }
+            }
         }
         if is(f, s.app) {
             let mut m = args[0].clone();
@@ -1140,6 +1160,10 @@ impl Simp<'_> {
             if p.lits.iter().any(|l| matches!(l.node(), Node::App(n, a) if is(*n, self.s.not) && p.lits.contains(&a[0]))) {
                 return None;
             }
+            // ... or the negation of an instance of a literal `all xs. C`
+            if p.lits.iter().any(|l| matches!(l.node(), Node::App(n, a) if is(*n, self.s.not) && self.instance_of_all(&p.lits, &a[0]))) {
+                return None;
+            }
             // `!(ex x. B(x))` with every conjunct of some B(t) among the
             // literals: contradictory (∃-introduction)
             if p.lits.iter().any(|l| self.refuted_by(l, &p.lits)) {
@@ -1425,6 +1449,32 @@ impl Simp<'_> {
         (!hyps.is_empty() || (eq && !vs.is_empty())).then_some((vs, hyps, t))
     }
 
+    /// `t` is an instance of a literal `all xs. C` (C not an implication).
+    fn instance_of_all(&self, lits: &[Term], t: &Term) -> bool {
+        for l in lits {
+            if !matches!(l.node(), Node::App(q, _) if *q == self.s.all) {
+                continue;
+            }
+            // pattern variables above those of t and l
+            let mut fresh = max_var(t).max(max_var(l)) + 1;
+            let mut vs = Vec::new();
+            let mut b = l.clone();
+            while let Node::App(q, a) = b.node() {
+                if *q != self.s.all {
+                    break;
+                }
+                vs.push(fresh);
+                fresh += 1;
+                b = inst_k(self.env, &a[0], &[Term::var(fresh - 1, vec![])]);
+                // (t may itself be universal: matched at each depth)
+                if !matches!(b.node(), Node::App(i, _) if *i == self.s.imp) && pmatch(&b, t, &vs, &mut Vec::new()) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// A new fact on the path from a rule among its literals: an instance
     /// whose hypotheses are literals of the path, or follow from them (taut
     /// or arith), and whose conclusion is not yet known.
@@ -1455,6 +1505,16 @@ impl Simp<'_> {
                             all_insts.push((b, open.clone()));
                         }
                     }
+                } else {
+                    // (otherwise from the goal: a conjunct the conclusion matches)
+                    let mut gs = Vec::new();
+                    self.conjuncts(goal, &mut gs);
+                    for u in &gs {
+                        let mut b = binds.clone();
+                        if pmatch(&concl, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                            all_insts.push((b, open.clone()));
+                        }
+                    }
                 }
                 if all_insts.len() >= MAX_INSTANCES {
                     break;
@@ -1469,7 +1529,8 @@ impl Simp<'_> {
                     self.prop(&t, Pol::Other)
                 };
                 let shown = |h: &Term| {
-                    lg.tautology(self.env, &p.lits, h).is_ok()
+                    self.instance_of_all(&p.lits, h)
+                        || lg.tautology(self.env, &p.lits, h).is_ok()
                         || lg.arith(self.env, &p.lits, h).is_ok()
                         || lg.arith(self.env, &relevant(&p.lits, h), h).is_ok()
                 };
@@ -1836,7 +1897,12 @@ impl Logic {
             if sp.is_true(&g) {
                 continue;
             }
-            if self.tautology(env, &p.lits, &g).is_ok() || self.arith(env, &p.lits, &g).is_ok() {
+            let closes = |g: &Term| self.tautology(env, &p.lits, g).is_ok() || self.arith(env, &p.lits, g).is_ok() || sp.instance_of_all(&p.lits, g);
+            // a conjunction: each conjunct (arithmetic from the literals about it)
+            let closes_part = |c: &Term| closes(c) || self.arith(env, &relevant(&p.lits, c), c).is_ok();
+            let mut gs = Vec::new();
+            sp.conjuncts(&g, &mut gs);
+            if closes(&g) || (gs.len() > 1 && gs.iter().all(|c| closes_part(c))) {
                 lap(2, &mut tm);
                 continue;
             }
