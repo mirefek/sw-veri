@@ -1599,28 +1599,51 @@ impl Logic {
             // variable) substituted, then `a = b` rewritten left to right
             let bf = env.binders_fn();
             let mut g = g.clone();
-            let eqs: Vec<(&Term, &Term)> = p
+            let eqs_owned: Vec<(Term, Term)> = p
                 .lits
                 .iter()
                 .filter_map(|l| match l.node() {
-                    Node::App(e, ab) if *e == sp.s.eq => Some((&ab[0], &ab[1])),
+                    Node::App(e, ab) if *e == sp.s.eq => Some((ab[0].clone(), ab[1].clone())),
                     _ => None,
                 })
                 .collect();
+            let eqs: Vec<(&Term, &Term)> = eqs_owned.iter().map(|(a, b)| (a, b)).collect();
             let var = |t: &Term| match t.node() {
                 Node::Var(x, xa) if xa.is_empty() => Some(*x),
                 _ => None,
             };
+            let mut substs: Vec<(crate::term::VarId, Term)> = Vec::new();
             for &(a, b) in &eqs {
                 for (v, t) in [(a, b), (b, a)] {
                     if let Some(x) = var(v) {
                         if !has_var(t, x) && has_var(&g, x) {
                             g = self.simp_eqv(env, &g.subst_var(x, t, &bf));
+                            substs.push((x, t.clone()));
                             break;
                         }
                     }
                 }
             }
+            // the same substitutions in the literals (they may name t by x)
+            let p = if substs.is_empty() {
+                p
+            } else {
+                let mut q = p.clone();
+                q.lits = q
+                    .lits
+                    .iter()
+                    .map(|l| {
+                        let mut l = l.clone();
+                        for (x, t) in &substs {
+                            if has_var(&l, *x) && !matches!(l.node(), Node::App(e, ab) if *e == sp.s.eq && matches!(ab[0].node(), Node::Var(y, _) if y == x)) {
+                                l = sp.prop(&l.subst_var(*x, t, &bf), Pol::Other);
+                            }
+                        }
+                        l
+                    })
+                    .collect();
+                q
+            };
             for &(a, b) in &eqs {
                 if var(a).is_none() && var(b).is_none() {
                     let body = super::seq::abstract_term(&g, a, 0, &bf);
