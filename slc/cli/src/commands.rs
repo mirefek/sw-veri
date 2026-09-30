@@ -150,7 +150,7 @@ use sl_interp::elf::Elf;
 use sl_interp::{Interp, V};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-fn load_spec_globals(sm: &mut sl_syntax::SourceMap) -> Result<sl_elab::globals::Globals, String> {
+pub(crate) fn load_spec_globals(sm: &mut sl_syntax::SourceMap) -> Result<sl_elab::globals::Globals, String> {
     let r = repo_root();
     let files = parse_all(&[r.join("spec"), r.join("layers")], sm)?;
     sl_elab::globals::Globals::build(files)

@@ -9,6 +9,7 @@ mod cputest;
 mod gimple;
 mod heapcheck;
 mod sha256;
+mod steps;
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -22,6 +23,7 @@ fn usage() -> ExitCode {
   slc claim malloc --elf ELF -o OUT.core           state the musl malloc claim
   slc cputest [--n N] [--seed S] [--rows K,..]     compare the instruction table with this CPU
   slc gimple --elf ELF --obj F.o --source F.c DUMP -o OUT.sl   translate a GIMPLE dump
+  slc steps ELF CLAIM.core SYMBOL... -o OUT.core    step theorems for the functions' instructions
   slc heapcheck [--every N] [--max N] ELF [ARGS...]   check the mallocng invariant on a real run"
     );
     ExitCode::from(2)
@@ -41,6 +43,7 @@ fn main() -> ExitCode {
         "claim" => claim::claim(&rest),
         "cputest" => cputest::cputest(&rest),
         "gimple" => gimple::gimple(&rest),
+        "steps" => steps::steps(&rest),
         "heapcheck" => heapcheck::heapcheck(&rest),
         _ => return usage(),
     };
