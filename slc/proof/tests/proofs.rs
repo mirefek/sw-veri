@@ -360,3 +360,27 @@ fn simp_does_not_overreach() {
     // a path that does not imply the goal is reported
     rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by simp(h)\nqed\n", "on the path");
 }
+
+#[test]
+fn simp_uses_equations_and_negated_existentials() {
+    // `r = ok(a, 1)` and `r = ok(b, v)` on a path: v = 1
+    let src = "\
+theorem t0(r, a, b, v): (r = ok(a, 1) || r = exc(a, 2)) -> r = ok(b, v) -> v = 1
+proof
+  assume h: r = ok(a, 1) || r = exc(a, 2)
+  assume hr: r = ok(b, v)
+  show by simp(h, hr)
+qed
+theorem t1(f, x, y): (all z. !(ex p. pair(p, z) in f && p = x)) -> pair(x, y) in f -> false
+proof
+  assume hn: all z. !(ex p. pair(p, z) in f && p = x)
+  assume h: pair(x, y) in f
+  show by simp(hn, h)
+qed
+";
+    assert_eq!(check(src), Ok(2));
+    // an instance must match every conjunct
+    rejected("theorem x(f, g, x, y): (all z. !(ex p. pair(p, z) in f && p in g)) -> pair(x, y) in f -> false\nproof\n  assume hn: all z. !(ex p. pair(p, z) in f && p in g)\n  assume h: pair(x, y) in f\n  show by simp(hn, h)\nqed\n", "simp");
+    // different values: v is not determined to be 1
+    rejected("theorem x(r, a, b, v): (r = ok(a, 1) || r = ok(a, 2)) -> r = ok(b, v) -> v = 1\nproof\n  assume h: r = ok(a, 1) || r = ok(a, 2)\n  assume hr: r = ok(b, v)\n  show by simp(h, hr)\nqed\n", "on the path");
+}

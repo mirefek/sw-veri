@@ -159,7 +159,10 @@ impl<'s> Elab<'s> {
             ExprKind::If(c, a, b) => self.if_expr(cx, c, a, b, exp, span),
             ExprKind::Match(s, arms) => self.match_expr(cx, s, arms, exp, span),
             ExprKind::Binder { kind, vars, domain, body } => self.binder(cx, *kind, vars, domain.as_deref(), body, span),
-            ExprKind::Any { var, ty, cond } => {
+            ExprKind::Any { var, ty, cond, els, .. } => {
+                if els.is_some() {
+                    return err(span, "`any ... else` only in `let x = any ...`");
+                }
                 let t = self.ty(cx, ty)?;
                 let name = var.as_ref().map(|v| v.name.clone()).unwrap_or_else(|| "$any".into());
                 self.any_value(cx, &name, t, cond.as_deref(), span)
@@ -755,10 +758,18 @@ impl<'s> Elab<'s> {
 
     /// `any x: T where P` (an effect in procedures).
     pub fn any_value(&mut self, cx: &mut Cx, name: &str, ty: Ty, cond: Option<&Expr>, span: Span) -> R<(Term, Ty)> {
+        let (x, dom) = self.any_dom(cx, name, &ty, cond, span)?;
+        cx.frames.push(Frame::Choose { var: x, dom });
+        Ok((self.b.v(x), ty))
+    }
+
+    /// The choice of `any name: ty where cond`: its variable and the formula
+    /// it must satisfy.
+    pub fn any_dom(&mut self, cx: &mut Cx, name: &str, ty: &Ty, cond: Option<&Expr>, span: Span) -> R<(VarId, Term)> {
         if cx.pure {
             return err(span, "`any` is a nondeterministic choice: only in procedures");
         }
-        let set = self.ty_set(&ty, span)?;
+        let set = self.ty_set(ty, span)?;
         let x = self.fresh(name);
         let mut dom = self.b.member(self.b.v(x), set);
         if let Some(c) = cond {
@@ -768,8 +779,7 @@ impl<'s> Elab<'s> {
             let (ct, _) = r?;
             dom = self.b.and(dom, ct);
         }
-        cx.frames.push(Frame::Choose { var: x, dom });
-        Ok((self.b.v(x), ty))
+        Ok((x, dom))
     }
 
     fn lambda(&mut self, cx: &mut Cx, params: &[Param], body: &Block, exp: Option<&Ty>, span: Span) -> R<(Term, Ty)> {

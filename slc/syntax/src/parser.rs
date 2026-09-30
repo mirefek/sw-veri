@@ -1058,12 +1058,26 @@ impl<'n> Parser<'n> {
             }
             "havoc" => {
                 self.bump();
+                let maybe = self.eat("?");
                 let mut targets = vec![self.postfix_expr()?];
                 while self.eat(",") {
                     targets.push(self.postfix_expr()?);
                 }
                 let cond = if self.eat_kw("where") { Some(self.expr()?) } else { None };
-                Ok(StmtKind::Havoc { targets, cond })
+                // (`else` may start the next line)
+                let els = if self.nl_then_kw("else") {
+                    self.bump();
+                    Some(self.block()?)
+                } else {
+                    None
+                };
+                if els.is_some() && cond.is_none() {
+                    return self.err("`havoc ... else` needs a `where` condition");
+                }
+                if maybe && els.is_none() {
+                    return self.err("`havoc?` needs an `else` block");
+                }
+                Ok(StmtKind::Havoc { targets, cond, maybe, els })
             }
             "require" => {
                 self.bump();
@@ -1600,6 +1614,7 @@ impl<'n> Parser<'n> {
                 }
                 "any" => {
                     self.bump();
+                    let maybe = self.eat("?");
                     let var = if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1).is_punct(":") {
                         let v = self.ident()?;
                         self.expect(":")?;
@@ -1609,7 +1624,20 @@ impl<'n> Parser<'n> {
                     };
                     let ty = self.ty()?;
                     let cond = if self.eat_kw("where") { Some(Box::new(self.expr()?)) } else { None };
-                    Ok(self.mk(ExprKind::Any { var, ty, cond }, start))
+                    // (`else` may start the next line)
+                    let els = if self.nl_then_kw("else") {
+                        self.bump();
+                        Some(Box::new(self.block()?))
+                    } else {
+                        None
+                    };
+                    if els.is_some() && cond.is_none() {
+                        return self.err("`any ... else` needs a `where` condition");
+                    }
+                    if maybe && els.is_none() {
+                        return self.err("`any?` needs an `else` block");
+                    }
+                    Ok(self.mk(ExprKind::Any { var, ty, cond, maybe, els }, start))
                 }
                 _ => {
                     let name = self.ident()?;

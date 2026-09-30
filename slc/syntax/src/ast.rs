@@ -141,7 +141,9 @@ pub enum ExprKind {
     /// `all x: T. P`, `ex x: T. P`, `sum i in a..b. e`
     Binder { kind: BinderKind, vars: Vec<(Ident, Option<Type>)>, domain: Option<Box<Expr>>, body: Box<Expr> },
     /// `any x: T where P`, `any T where P` (var bound by the enclosing `let`)
-    Any { var: Option<Ident>, ty: Type, cond: Option<Box<Expr>> },
+    /// `any [x:] T [where P] [else S]`; `any?` (maybe) may also take S when
+    /// P has solutions. `else` only in `let x = any ...`, and S must leave.
+    Any { var: Option<Ident>, ty: Type, cond: Option<Box<Expr>>, maybe: bool, els: Option<Box<Block>> },
     /// `(x: T, y: U) => body`
     Lambda(Vec<Param>, Box<Block>),
     /// `e is pat`
@@ -203,7 +205,9 @@ pub enum StmtKind {
     Raise(Expr),
     Try { body: Block, catches: Vec<(Pattern, Block)> },
     Either(Vec<Block>),
-    Havoc { targets: Vec<Expr>, cond: Option<Expr> },
+    /// `havoc targets [where P] [else S]`: S runs if P has no solution;
+    /// `havoc?` (maybe) may also run S when it has one
+    Havoc { targets: Vec<Expr>, cond: Option<Expr>, maybe: bool, els: Option<Block> },
     Require(Expr),
     Guard(Expr),
     Undefined,

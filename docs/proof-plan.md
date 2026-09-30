@@ -241,14 +241,19 @@ relies on.
    one-way step used only in positive positions of facts,
    `runs(mkprog(s o. R), S, O) -> R(S, O)`; then a path normal form
    (&& distributed over ||, existentials pulled out, `x = t` solved per
-   path, contradictory paths dropped). `simp(h)` turns
+   path, two equations `x = a`, `x = b` giving `a = b`, contradictory
+   paths dropped as they arise — also those refuted by an instance of a
+   `all xs. !(ex ys. B)` literal). `simp(h)` turns
    `runs(P, s, o)` into P's paths; goal-directed `simp(p…)` proves a goal
    path by path (taut or arith), choosing witnesses for the goal's
    existentials by matching its equations with the path's. `print P`
    shows a fact while writing a proof. `proofs/malloc_client.core`: from
-   the spec alone, `free(NULL)` changes nothing, and `free(p)` of a live
-   block returns with p freed — or no allocator step was possible, since
-   `havoc … where P` with no solution is undefined (see open question).
+   the spec alone, `free(NULL)` changes nothing, `free(p)` of a live
+   block returns with p freed (using the law `free_step`: a step always
+   exists), and malloc returns NULL when no place for a block exists.
+   The spec's fallbacks are explicit: `let x = any? T where P else S`
+   (malloc may always fail, must when no block is possible) and
+   `havoc … where P else S`, so no case is undefined by accident.
    Loops (`while_rel`) stay opaque in `simp`: an invariant rule is next.
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
 6. **The invariant; (C2) per function; the laws.** First part done:

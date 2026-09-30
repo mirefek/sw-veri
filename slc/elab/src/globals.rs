@@ -360,10 +360,13 @@ impl<'a> Collector<'a> {
                 })
             }
             StmtKind::Either(bs) => bs.iter().for_each(|b| self.block(b)),
-            StmtKind::Havoc { targets, cond } => {
+            StmtKind::Havoc { targets, cond, els, .. } => {
                 targets.iter().for_each(|t| self.expr(t));
                 if let Some(c) = cond {
                     self.expr(c)
+                }
+                if let Some(b) = els {
+                    self.block(b)
                 }
             }
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Undefined => {}
@@ -453,10 +456,13 @@ impl<'a> Collector<'a> {
                 }
                 self.expr(body)
             }
-            ExprKind::Any { ty, cond, .. } => {
+            ExprKind::Any { ty, cond, els, .. } => {
                 self.ty(ty);
                 if let Some(c) = cond {
                     self.expr(c)
+                }
+                if let Some(b) = els {
+                    self.block(b)
                 }
             }
             ExprKind::Lambda(ps, b) => {

@@ -1409,7 +1409,15 @@ impl<'g> Interp<'g> {
         match &s.kind {
             StmtKind::Let { pat, value, .. } => {
                 let v = match (&value.kind, pat) {
-                    (ExprKind::Any { var: None, cond, .. }, Pattern::Name(n)) => self.any(env, Some(&n.name), cond.as_deref(), run)?,
+                    (ExprKind::Any { var: None, cond, maybe, els, .. }, Pattern::Name(n)) => {
+                        // `any? .. else S` may take S (which leaves)
+                        if let (true, Some(b)) = (*maybe, els) {
+                            if run.oracle.choose(2) == 0 {
+                                return self.block(env, b, run);
+                            }
+                        }
+                        self.any(env, Some(&n.name), cond.as_deref(), run)?
+                    }
                     _ => self.eval(env, value, run)?,
                 };
                 if !self.bind(env, pat, &v)? {
@@ -1527,7 +1535,15 @@ impl<'g> Interp<'g> {
                 let k = run.oracle.choose(blocks.len());
                 self.block(env, &blocks[k], run)
             }
-            StmtKind::Havoc { targets, .. } => {
+            StmtKind::Havoc { targets, maybe, els, .. } => {
+                // `havoc? .. else S` may take S (a choice); a plain `else` is
+                // taken only when no value exists, which the interpreter
+                // does not decide: it assumes one does
+                if let (true, Some(b)) = (*maybe, els) {
+                    if run.oracle.choose(2) == 0 {
+                        return self.block(env, b, run);
+                    }
+                }
                 for t in targets {
                     match &t.kind {
                         ExprKind::FieldSet(base, fs) => {

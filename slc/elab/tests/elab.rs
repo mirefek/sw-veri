@@ -136,3 +136,20 @@ pred free_compiled(free_at: Addr, libc_free: CFun2[World]) =
     sl_kernel::syntax::load(&mut env, &prelude(), true).unwrap();
     sl_kernel::syntax::load(&mut env, &el.core_text(), false).unwrap();
 }
+
+#[test]
+fn havoc_and_any_take_an_else() {
+    let ok = format!(
+        "{}proc p() -> nat {{\n  havoc y where y > 3 else {{ y := 0 }}\n  havoc? x where x != 0 else {{ b := false }}\n  \
+         let a = any nat where a > y else {{ return 0 }}\n  let c = any? nat where c < a else {{ return 1 }}\n  return c\n}}\n",
+        HEADER
+    );
+    let e = errors_of(&ok);
+    assert!(e.is_empty(), "{:?}", e);
+    // the else of `let x = any` must leave: x would be unbound after it
+    let e = errors_of(&format!("{}proc p() -> nat {{\n  let a = any nat where a > y else {{ y := 0 }}\n  return a\n}}\n", HEADER));
+    assert!(e.iter().any(|m| m.contains("must end with `return` or `raise`")), "{:?}", e);
+    // only as a `let`
+    let e = errors_of(&format!("{}proc p() {{ y := any nat where y > 1 else {{ return }} }}\n", HEADER));
+    assert!(e.iter().any(|m| m.contains("only in `let x = any")), "{:?}", e);
+}

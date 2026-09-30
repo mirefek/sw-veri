@@ -537,7 +537,7 @@ struct Path {
     lits: Vec<Term>,
 }
 
-const MAX_PATHS: usize = 512;
+const MAX_PATHS: usize = 4096;
 
 impl Simp<'_> {
     fn paths(&self, t: &Term, fresh: &mut u32) -> Option<Vec<Path>> {
@@ -559,13 +559,18 @@ impl Simp<'_> {
                 if x.len() * y.len() > MAX_PATHS {
                     return None;
                 }
+                // contradictory combinations (e.g. `x = ok(..)` with
+                // `x = exc(..)` from consecutive statements) are dropped
+                // as they arise, so sequences do not multiply out
                 let mut out = Vec::new();
                 for p in &x {
                     for q in &y {
                         let mut r = p.clone();
                         r.vars.extend(q.vars.iter().copied());
                         r.lits.extend(q.lits.iter().cloned());
-                        out.push(r);
+                        if x.len() == 1 || y.len() == 1 || self.settle(r.clone()).is_some() {
+                            out.push(r);
+                        }
                     }
                 }
                 return Some(out);
@@ -618,8 +623,42 @@ impl Simp<'_> {
                 p.vars.retain(|y| *y != x);
                 continue 'again;
             }
+            // `x = a` and `x = b` for any variable x, a and b not variables:
+            // the second becomes `a = b` (then split by injectivity)
+            if let Some((j, e)) = self.same_var_eqs(&p.lits) {
+                p.lits[j] = e;
+                continue 'again;
+            }
+            // `!(ex x. B(x))` with every conjunct of some B(t) among the
+            // literals: contradictory (∃-introduction)
+            if p.lits.iter().any(|l| self.refuted_by(l, &p.lits)) {
+                return None;
+            }
             return Some(p);
         }
+    }
+
+    fn same_var_eqs(&self, lits: &[Term]) -> Option<(usize, Term)> {
+        let side = |l: &Term| -> Option<(crate::term::VarId, Term)> {
+            let Node::App(e, ab) = l.node() else { return None };
+            if *e != self.s.eq {
+                return None;
+            }
+            let var = |t: &Term| matches!(t.node(), Node::Var(_, a) if a.is_empty());
+            [(&ab[0], &ab[1]), (&ab[1], &ab[0])].into_iter().find_map(|(v, t)| match v.node() {
+                Node::Var(x, xa) if xa.is_empty() && !var(t) && !has_var(t, *x) => Some((*x, t.clone())),
+                _ => None,
+            })
+        };
+        let eqs: Vec<_> = lits.iter().enumerate().filter_map(|(i, l)| side(l).map(|(x, t)| (i, x, t))).collect();
+        for (k, (_, x, a)) in eqs.iter().enumerate() {
+            for (j, y, b) in &eqs[k + 1..] {
+                if x == y {
+                    return Some((*j, Term::app(self.s.eq, vec![a.clone(), b.clone()])));
+                }
+            }
+        }
+        None
     }
 
     /// The path normal form of a proposition (equivalent to it).
@@ -692,6 +731,64 @@ impl Simp<'_> {
             }
         }
         false
+    }
+
+    /// `l` is `!(ex x. B(x))` and the literals contain every conjunct of
+    /// B(t) for a t found by matching.
+    fn refuted_by(&self, l: &Term, lits: &[Term]) -> bool {
+        // `all xs. !(ex ys. B)` (xs or ys non-empty): they become pattern
+        // variables, B instantiated must be among the literals
+        let mut vs = Vec::new();
+        let mut next = self.env.vars.len() as u32 + 3_000_000;
+        let mut open = |t: &Term, vs: &mut Vec<crate::term::VarId>| {
+            vs.push(next);
+            next += 1;
+            inst_k(self.env, t, &[Term::var(next - 1, vec![])])
+        };
+        let mut t = l.clone();
+        while let Node::App(q, a) = t.node() {
+            if *q != self.s.all {
+                break;
+            }
+            t = open(&a[0], &mut vs);
+        }
+        let Node::App(n, a) = t.node() else { return false };
+        if !is(*n, self.s.not) {
+            return false;
+        }
+        let mut body = a[0].clone();
+        while let Node::App(e, b) = body.node() {
+            if *e != self.s.ex {
+                break;
+            }
+            body = open(&b[0], &mut vs);
+        }
+        if vs.is_empty() {
+            return false;
+        }
+        let mut cs = Vec::new();
+        self.conjuncts(&body, &mut cs);
+        let mut binds = Vec::new();
+        for c in &cs {
+            for pl in lits {
+                let mut bd = binds.clone();
+                if pmatch(c, pl, &vs, &mut bd) {
+                    binds = bd;
+                    break;
+                }
+            }
+        }
+        if !vs.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
+            return false;
+        }
+        let bf = self.env.binders_fn();
+        cs.iter().all(|c| {
+            let mut c = c.clone();
+            for (v, t) in &binds {
+                c = c.subst_var(*v, t, &bf);
+            }
+            lits.contains(&c)
+        })
     }
 
     fn disjuncts(&self, t: &Term, out: &mut Vec<Term>) {

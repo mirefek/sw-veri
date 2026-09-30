@@ -134,8 +134,11 @@ Statements:
 | `return e`, `raise e(...)` | leave normally / abnormally |
 | `try { } catch e(x) { }` | handle an exception |
 | `let x = any T where P(x)` | nondeterministic choice (`x` is bound in `P`); **if no such x exists the behavior is `undefined`** (never vacuous). General form in expressions: `any y: T where P(y)` |
+| `let x = any T where P(x) else { S }` | as above, but if no such x exists, run `S` (which must end with `return` or `raise`) |
+| `let x = any? T where P(x) else { S }` | may run `S` even when some x exists; must when none does (typical: `else { return fail() }` for an operation that may always fail) |
 | `either { } or { }` | nondeterministic choice between blocks |
 | `havoc lv`, `havoc flags.{af, pf}` | assign an arbitrary value (trace fields: any extension) |
+| `havoc lv where P else { S }`, `havoc? lv where P else { S }` | as for `any`: `S` runs if (`?`: or whenever) no value makes `P` hold; `S` need not leave |
 | `emit f e` | append event `e` to trace field `f` |
 | `require P` | precondition: `undefined` if `P` is false |
 | `undefined` | every outcome is possible |
@@ -166,7 +169,12 @@ may produce outcome `o`"). Rules, with `⟦·⟧` the translation:
 
 * `⟦A; B⟧(s, o)` = `⟦A⟧(s, o)` for non-`ok` `o`, or `∃ s1. ⟦A⟧(s, ok(s1)) ∧ ⟦B⟧(s1, o)`.
 * `⟦let x = any T where P⟧; K` = `(∃x:T. P ∧ ⟦K⟧) ∨ ¬(∃x:T. P)`
-  (the second disjunct: no witness ⇒ anything).
+  (the second disjunct: no witness ⇒ anything). With `else S`:
+  `(∃x:T. P ∧ ⟦K⟧) ∨ (¬(∃x:T. P) ∧ ⟦S⟧)`; `any?` adds `∨ ⟦S⟧`, i.e. it is
+  `either { S } or { let x = any T where P else S; K }`. There is
+  deliberately no construct with *no* outcome: a model (the machine, the
+  OS) without an outcome in some state would claim that state never
+  continues.
 * `⟦undefined⟧(s, o)` = `true`; `⟦require P⟧` = `P → skip`, i.e. `¬P ∨ ...`.
 * `while` / recursive procs: finite and infinite runs are defined separately,
   as in coinductive big-step semantics (Leroy & Grall, 2009):
@@ -257,7 +265,8 @@ stmt     := 'let' pat (':' type)? '=' expr | 'var' NAME (':' type)? '=' expr
           | 'if' expr block ('else' (block | if))? | 'match' expr '{' arm* '}'
           | 'while' expr block | 'for' NAME 'in' expr block | 'loop' block | 'break'
           | 'return' expr? | 'raise' expr | 'try' block ('catch' pat block)+
-          | 'either' block ('or' block)+ | 'havoc' expr,+ ('where' expr)?
+          | 'either' block ('or' block)+
+          | 'havoc' '?'? expr,+ ('where' expr ('else' block)?)?   // '?' needs 'else'
           | 'require' expr | 'guard' expr | 'undefined' | expr | block
 arm      := pat,+ '=>' (block | stmt)
 pat      := '_' | NUM | 'true' | 'false' | NAME | NAME '(' pat,* ')' | '(' pat,* ')'
@@ -387,7 +396,7 @@ definitions, to statements about the trusted spec.
 | `proc[S] p(...)` | a proc over state type `S`. By default a module's procs run over its declared `state`, so the prefix is only needed when mixing. |
 | `S & G`, `state H extends S { ghost f: T }` | a state extended with extra fields. **Ghost** fields exist only in the specification. Machine-level code never reads them, and they are changed only by `ghost` statements. A proc over `S` also runs on `S & G`, leaving `G` unchanged. |
 | `self` | the whole current state, as a value |
-| `havoc x where P` | give `x` any value such that `P` holds *afterwards*. If there is none, `undefined`. |
+| `havoc x where P` | give `x` any value such that `P` holds *afterwards*. If there is none, `undefined`; with `else { S }`, run `S` instead (`havoc?`: `S` may also run when there is one). |
 | `with v(args) { body }` | run `body`, a proc over the view's type, through the view `v`. It reads via `get`, and writes the result back via `set`, also on exceptional outcomes. |
 | `proc[S](A) -> R` | the type of procs. Procs are values, so a spec can take a spec as an argument. |
 | `outcome(s, p(args), o)` | predicate: running `p(args)` from `s` may produce `o`. It talks about the relation without running anything, so it is allowed in `pred`. |

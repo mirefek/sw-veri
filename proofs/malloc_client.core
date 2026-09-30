@@ -11,22 +11,40 @@ proof
   show by simp(h)
 qed
 
-// free(p) for a valid p: it returns normally, with p no longer live -- or
-// no allocator step was possible (`havoc ... where` with no solution is
-// undefined in SL, so the spec then allows anything)
+// free(p) of a live block returns normally, with p no longer live. (The
+// law free_step rules out the path where no allocator step exists.)
 theorem malloc.free_live(i, o, e, p, s, r):
+  malloc.free_step(i, o) -> s in rec_and(abi.World, malloc.Heap.ghost) -> p in bits(64) ->
   runs(malloc.free(i, o, e, p), s, r) -> !(p = 0) -> s in i -> malloc.errno_ok(e, s) -> !(app(app(s, "blocks"), p) = none) ->
-    (ex t. r = ok(t, empty) && app(t, "blocks") = fn_update(app(s, "blocks"), p, none)) ||
-    !(ex x1. x1 in x86_64_linux.Vm && ((malloc.alloc_frame(o, s, x1, malloc.range(p, snd(app(app(s, "blocks"), p)))) &&
-        fn_update(fn_update(s, "blocks", fn_update(app(s, "blocks"), p, none)), "vm", x1) in i) &&
-        (all x2. x2 in omega -> x2 in app(o, fn_update(fn_update(s, "blocks", fn_update(app(s, "blocks"), p, none)), "vm", x1)) ->
-           (x2 in app(o, s) || x2 in malloc.range(p, snd(app(app(s, "blocks"), p)))) ||
-           !x86_64_linux.mapped(app(s, "vm"), nat_div(x2, x86_64_linux.PAGE)))))
+    ex t. r = ok(t, empty) && app(t, "blocks") = malloc.set_block(app(s, "blocks"), p, none)
 proof
+  assume hl: malloc.free_step(i, o)
+  assume hs: s in rec_and(abi.World, malloc.Heap.ghost)
+  assume hp: p in bits(64)
   assume h: runs(malloc.free(i, o, e, p), s, r)
   assume h0: !(p = 0)
   assume hi: s in i
   assume he: malloc.errno_ok(e, s)
   assume hb: !(app(app(s, "blocks"), p) = none)
-  show by simp(h, h0, hi, he, hb)
+  // a step exists (the law, for s and p)
+  have hsp: s in rec_and(abi.World, malloc.Heap.ghost) && p in bits(64) by taut(hs, hp)
+  have hib: s in i && !(app(app(s, "blocks"), p) = none) by taut(hi, hb)
+  have step := mp(mp(all_elim(all_elim(expand(hl, malloc.free_step), {s}), {p}), hsp), hib)
+  show by simp(h, h0, hi, he, hb, step)
+qed
+
+// malloc must fail when there is no place for a block: if no 16-aligned,
+// non-null address has a free range (allocator memory or unmapped pages) of
+// any size, a normal return gives NULL.
+theorem malloc.no_place_null(i, o, e, n, s, r, t, v):
+  runs(malloc.malloc(i, o, e, n), s, r) ->
+  (all z. !(ex p. p in bits(64) && ((!(p = 0) && nat_mod(p, 16) = 0) && malloc.fresh_block(o, s, p, z)))) ->
+  s in i -> malloc.errno_ok(e, s) -> r = ok(t, v) -> v = 0
+proof
+  assume h: runs(malloc.malloc(i, o, e, n), s, r)
+  assume hn: all z. !(ex p. p in bits(64) && ((!(p = 0) && nat_mod(p, 16) = 0) && malloc.fresh_block(o, s, p, z)))
+  assume hi: s in i
+  assume he: malloc.errno_ok(e, s)
+  assume hr: r = ok(t, v)
+  show by simp(h, hn, hi, he, hr)
 qed

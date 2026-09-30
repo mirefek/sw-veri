@@ -97,14 +97,29 @@ pred alloc_frame(s: Heap, vm2: Vm, extra: Set[nat]) =
   vm2.stack_top = s.vm.stack_top && vm2.stack_limit = s.vm.stack_limit &&
   vm2.brk_start = s.vm.brk_start
 
-// the allocator reorganises its memory; afterwards its invariant holds (so
-// every live block, a new one too, is mapped read-write: inv_wf), and it
-// owns nothing new except fresh mappings and `extra`
+// A step of the allocator from `before` to `after`: it reorganises its
+// memory; afterwards its invariant holds (so every live block, a new one
+// too, is mapped read-write: inv_wf), and it owns nothing new except fresh
+// mappings and `extra`.
+pred step_ok(before: Heap, after: Heap, extra: Set[nat]) =
+  alloc_frame(before, after.vm, extra) && alloc_inv(after) &&
+  (all a: nat. a in alloc_owned(after) ->
+     a in alloc_owned(before) || a in extra || !mapped(before.vm, a / PAGE))
+
 proc allocator_step(before: Heap, extra: Set[nat]) {
-  havoc vm where alloc_frame(before, vm, extra) && alloc_inv(self) &&
-    (all a: nat. a in alloc_owned(self) ->
-       a in alloc_owned(before) || a in extra || !mapped(before.vm, a / PAGE))
+  havoc vm where step_ok(before, self, extra)
 }
+
+// the blocks with p set to v
+fn set_block(b: Addr -> Option[nat], p: Addr, v: Option[nat]) -> Addr -> Option[nat] =
+  (q: Addr) => if q = p { v } else { b[q] }
+
+// Freeing a live block is always possible: the allocator can take it back.
+// (Without this, a free with no possible step would be `undefined`, and
+// the implementation could do anything there.)
+law free_step(s: Heap, p: Addr):
+  alloc_inv(s) && s.blocks[p] != none ->
+    ex vm: Vm. step_ok(s, (s with { blocks: set_block(s.blocks, p, none) }) with { vm: vm }, range(p, s.blocks[p].value))
 
 proc set_errno(e: nat) {
   let a = fs_base + bits[64](errno_offset(()))
@@ -121,21 +136,30 @@ pred fresh_block(s: Heap, p: Addr, n: nat) =
 // malloc and calloc may change errno (C allows it even on success); on
 // failure it is ENOMEM. free preserves errno.
 
+// failing: the allocator may still tidy up (memory unchanged is always a
+// possible step), errno is ENOMEM
+proc out_of_memory(before: Heap) -> Addr {
+  allocator_step(before, errno_bytes(before))
+  set_errno(ENOMEM)
+  return 0
+}
+
+// malloc may always fail; it must fail when no block can be handed out: a
+// place for it (allocator memory or fresh mappings) and an allocator state
+// that includes it.
 proc malloc(n: bits[64]) -> Addr {
   require alloc_inv(self) && errno_ok(self)
   let before = self
-  either {
-    allocator_step(before, errno_bytes(before))   // may always fail
-    set_errno(ENOMEM)
-    return 0
-  } or {
-    // even malloc(0) returns a unique block with usable bytes
-    let size = any nat where size >= uint(n) && size >= 1
-    let p    = any Addr where p != 0 && uint(p) % 16 = 0 && fresh_block(before, p, size)
-    ghost blocks[p] := some(size)
-    allocator_step(before, errno_bytes(before))   // contents: arbitrary
-    return p
-  }
+  // even malloc(0) returns a unique block with usable bytes
+  let size  = any? nat where size >= uint(n) && size >= 1 else { return out_of_memory(before) }
+  let p     = any Addr where p != 0 && uint(p) % 16 = 0 && fresh_block(before, p, size)
+                else { return out_of_memory(before) }
+  let grown = before with { blocks: set_block(before.blocks, p, some(size)) }
+  let vm2   = any Vm where step_ok(before, grown with { vm: vm2 }, errno_bytes(before))
+                else { return out_of_memory(before) }
+  ghost blocks := grown.blocks
+  vm := vm2                                     // contents of the block: arbitrary
+  return p
 }
 
 proc free(p: Addr) {
@@ -144,8 +168,8 @@ proc free(p: Addr) {
   require blocks[p] != none                     // invalid or double free: undefined
   let before = self
   let freed  = range(p, blocks[p].value)
-  ghost blocks[p] := none
-  allocator_step(before, freed)                 // the block's memory returns to the allocator
+  ghost blocks := set_block(blocks, p, none)
+  allocator_step(before, freed)                 // the block's memory returns to the allocator (law free_step)
 }
 
 proc calloc(count: bits[64], size: bits[64]) -> Addr {

@@ -195,10 +195,25 @@ impl<'s> Elab<'s> {
                     None => None,
                 };
                 let (t, vty) = match (&value.kind, pat) {
-                    (ExprKind::Any { var: None, ty: aty, cond }, Pattern::Name(n)) => {
+                    (ExprKind::Any { var: None, ty: aty, cond, maybe, els }, Pattern::Name(n)) => {
                         let at = self.ty(cx, aty)?;
+                        if let Some(s) = els {
+                            // `let x = any T where P else S` (S leaves):
+                            //   [either { S } or {}]  if !(ex x. P) { S }  let x = any T where P
+                            if !leaves(s) {
+                                return err(s.span, "the `else` of `let x = any ...` must end with `return` or `raise`");
+                            }
+                            if *maybe {
+                                self.branches(cx, vec![(self.b.tru(), Some((**s).clone())), (self.b.tru(), None)], span)?;
+                            }
+                            let (x, dom) = self.any_dom(cx, &n.name, &at, cond.as_deref(), span)?;
+                            let exists = self.b.ex(&[x], dom);
+                            let none = self.b.not(exists.clone());
+                            self.branches(cx, vec![(none, Some((**s).clone())), (exists, None)], span)?;
+                        }
                         self.any_value(cx, &n.name, at, cond.as_deref(), span)?
                     }
+                    (ExprKind::Any { els: Some(_), .. }, _) => return err(span, "`any ... else` binds a single name"),
                     _ => self.expr(cx, value, declared.as_ref())?,
                 };
                 let vty = declared.unwrap_or(vty);
@@ -320,7 +335,25 @@ impl<'s> Elab<'s> {
                 Ok(())
             }
             StmtKind::Try { body, catches } => self.try_stmt(cx, body, catches, span),
-            StmtKind::Havoc { targets, cond } => self.havoc(cx, targets, cond.as_ref(), span),
+            StmtKind::Havoc { targets, cond, maybe, els: None } => {
+                let _ = maybe;
+                self.havoc(cx, targets, cond.as_ref(), span)
+            }
+            // `havoc? v where P else S` = either { S } or { havoc v where P else S }
+            StmtKind::Havoc { targets, cond, maybe: true, els: Some(s) } => {
+                let inner = Stmt { kind: StmtKind::Havoc { targets: targets.clone(), cond: cond.clone(), maybe: false, els: Some(s.clone()) }, span };
+                let blk = Block { stmts: vec![inner], span };
+                self.branches(cx, vec![(self.b.tru(), Some(s.clone())), (self.b.tru(), Some(blk))], span)
+            }
+            // `havoc v where P else S` = if (ex v. P) { havoc v where P } else { S }
+            StmtKind::Havoc { targets, cond, maybe: false, els: Some(s) } => {
+                let (x, dom, _) = self.havoc_parts(cx, targets, cond.as_ref(), span)?;
+                let exists = self.b.ex(&[x], dom);
+                let none = self.b.not(exists.clone());
+                let plain = Stmt { kind: StmtKind::Havoc { targets: targets.clone(), cond: cond.clone(), maybe: false, els: None }, span };
+                let blk = Block { stmts: vec![plain], span };
+                self.branches(cx, vec![(exists, Some(blk)), (none, Some(s.clone()))], span)
+            }
             StmtKind::Require(e) => {
                 let (c, _) = self.expr(cx, e, Some(&Ty::Bool))?;
                 cx.frames.push(Frame::Require(c));
@@ -712,6 +745,30 @@ impl<'s> Elab<'s> {
     //  havoc
 
     fn havoc(&mut self, cx: &mut Cx, targets: &[Expr], cond: Option<&Expr>, span: Span) -> R<()> {
+        let (x, dom, work) = self.havoc_parts(cx, targets, cond, span)?;
+        cx.frames.push(Frame::Choose { var: x, dom });
+        // name the new state / locals
+        if let Some(s) = work.state.clone() {
+            if Some(&s) != cx.state.as_ref() {
+                let sv = self.fresh("s");
+                cx.frames.push(Frame::Let { var: sv, value: s });
+                cx.state = Some(self.b.v(sv));
+            }
+        }
+        for i in 0..cx.locals.len() {
+            if work.locals[i].term != cx.locals[i].term {
+                let lv = self.fresh(&cx.locals[i].name.clone());
+                cx.frames.push(Frame::Let { var: lv, value: work.locals[i].term.clone() });
+                cx.locals[i].term = self.b.v(lv);
+            }
+        }
+        Ok(())
+    }
+
+    /// The choice a `havoc` makes: its variable (a tuple of the new values),
+    /// the formula it must satisfy, and the context with the targets set to
+    /// the new values.
+    fn havoc_parts(&mut self, cx: &mut Cx, targets: &[Expr], cond: Option<&Expr>, span: Span) -> R<(VarId, Term, Cx)> {
         // expand `x.{a, b}`
         let mut locs: Vec<Expr> = Vec::new();
         for t in targets {
@@ -763,24 +820,14 @@ impl<'s> Elab<'s> {
             let (ct, _) = self.pure_expr(&mut work, c, Some(&Ty::Bool))?;
             doms.push(ct);
         }
-        cx.frames.push(Frame::Choose { var: x, dom: self.b.ands(doms) });
-        // name the new state / locals
-        if let Some(s) = work.state.clone() {
-            if Some(&s) != cx.state.as_ref() {
-                let sv = self.fresh("s");
-                cx.frames.push(Frame::Let { var: sv, value: s });
-                cx.state = Some(self.b.v(sv));
-            }
-        }
-        for i in 0..cx.locals.len() {
-            if work.locals[i].term != cx.locals[i].term {
-                let lv = self.fresh(&cx.locals[i].name.clone());
-                cx.frames.push(Frame::Let { var: lv, value: work.locals[i].term.clone() });
-                cx.locals[i].term = self.b.v(lv);
-            }
-        }
-        Ok(())
+        let _ = cx;
+        Ok((x, self.b.ands(doms), work))
     }
+}
+
+/// The block ends by leaving (`return` or `raise`).
+fn leaves(b: &Block) -> bool {
+    matches!(b.stmts.last().map(|s| &s.kind), Some(StmtKind::Return(_) | StmtKind::Raise(_)))
 }
 
 /// A read-only view of the builder for closures.
