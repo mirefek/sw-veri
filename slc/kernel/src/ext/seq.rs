@@ -38,7 +38,7 @@ fn union<T: Clone + PartialEq>(a: &[T], b: &[T]) -> Vec<T> {
 /// Replaces every occurrence of the closed term `pat` in `t` by the bound
 /// variable of a new binder around `t` (so the result has one loose
 /// variable, `BVar(0)` at the top).
-fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
+pub(crate) fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
     if t == pat {
         return Term::bvar(depth);
     }

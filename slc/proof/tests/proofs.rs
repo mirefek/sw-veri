@@ -358,7 +358,7 @@ fn simp_does_not_overreach() {
     rejected("theorem x: \"ab\" = \"ab\" -> false\nproof\n  assume h: \"ab\" = \"ab\"\n  show by simp(h)\nqed\n", "simp");
     rejected("theorem x(a, b, c, d): pair(a, b) = pair(c, d) -> a = d\nproof\n  assume h: pair(a, b) = pair(c, d)\n  show by simp(h)\nqed\n", "simp");
     // a path that does not imply the goal is reported
-    rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by simp(h)\nqed\n", "on the path");
+    rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by simp(h)\nqed\n", "1 path left");
 }
 
 #[test]
@@ -382,7 +382,7 @@ qed
     // an instance must match every conjunct
     rejected("theorem x(f, g, x, y): (all z. !(ex p. pair(p, z) in f && p in g)) -> pair(x, y) in f -> false\nproof\n  assume hn: all z. !(ex p. pair(p, z) in f && p in g)\n  assume h: pair(x, y) in f\n  show by simp(hn, h)\nqed\n", "simp");
     // different values: v is not determined to be 1
-    rejected("theorem x(r, a, b, v): (r = ok(a, 1) || r = ok(a, 2)) -> r = ok(b, v) -> v = 1\nproof\n  assume h: r = ok(a, 1) || r = ok(a, 2)\n  assume hr: r = ok(b, v)\n  show by simp(h, hr)\nqed\n", "on the path");
+    rejected("theorem x(r, a, b, v): (r = ok(a, 1) || r = ok(a, 2)) -> r = ok(b, v) -> v = 1\nproof\n  assume h: r = ok(a, 1) || r = ok(a, 2)\n  assume hr: r = ok(b, v)\n  show by simp(h, hr)\nqed\n", "1 path left");
 }
 
 #[test]
@@ -433,7 +433,7 @@ fn wrong_loop_invariants_are_rejected() {
     // no invariant: the loop stays
     bad(ends, "", "needs its invariant");
     // without a variant, divergence is possible
-    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3) && fst(l) = fst(l0)}", "on the path");
+    bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3) && fst(l) = fst(l0)}", "path left");
     // not true at the start, not preserved
     bad(ends, ", {l0 l. snd(l) = 1}, {l. nat_sub(3, snd(l))}", "at the start");
     bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 2)}, {l. nat_sub(3, snd(l))}", "after an iteration");
@@ -442,6 +442,50 @@ fn wrong_loop_invariants_are_rejected() {
     bad(ends, ", {l0 l. snd(l) in omega && nat_le(snd(l), 3)}, {l. nat_sub(2, snd(l))}", "the variant is a natural number");
     // a variant alone
     bad(ends, ", {l. nat_sub(3, snd(l))}", "must follow its invariant");
+}
+
+/// A theorem `hyps -> goal` proven by `simp` from its hypotheses h0, h1, ..
+fn simp_thm(hyps: &[&str], goal: &str) -> String {
+    let stmt: String = hyps.iter().map(|h| format!("({}) -> ", h)).collect();
+    let assumes: String = hyps.iter().enumerate().map(|(i, h)| format!("  assume h{}: {}\n", i, h)).collect();
+    let names: Vec<String> = (0..hyps.len()).map(|i| format!("h{}", i)).collect();
+    format!("theorem t(f, g, x): {}{}\nproof\n{}  show by simp({})\nqed\n", stmt, goal, assumes, names.join(", "))
+}
+
+#[test]
+fn facts_are_used_as_rules() {
+    // a rule whose hypothesis is on the path
+    assert_eq!(check(&simp_thm(&["all y. y in f -> y in g", "x in f"], "x in g")), Ok(1));
+    // a hypothesis that is not a literal, shown by arithmetic
+    assert_eq!(check_nat(&simp_thm(&["all y. y in omega -> nat_lt(y, 5) -> y in g", "x in omega", "nat_lt(x, 3)"], "x in g")), Ok(1));
+    // an equation, its variables from the goal's terms, rewriting the goal
+    assert_eq!(check(&simp_thm(&["all a. app(f, a) = pair(a, a)"], "fst(app(f, x)) = x")), Ok(1));
+    // chained: the conclusion of one rule is the hypothesis of the next
+    assert_eq!(check(&simp_thm(&["all y. y in f -> y in g", "all y. y in g -> app(g, y) = y", "x in f"], "app(g, x) = x")), Ok(1));
+}
+
+#[test]
+fn rules_do_not_overreach() {
+    let left = |src: String| match check_nat(&src) {
+        Ok(_) => panic!("accepted: {}", src),
+        Err(e) => assert!(e.contains("1 path left") && e.contains("path 1: "), "{}", e),
+    };
+    // a hypothesis that does not hold
+    left(simp_thm(&["all y. y in omega -> nat_lt(y, 2) -> y in g", "x in omega", "nat_lt(x, 3)"], "x in g"));
+    // a variable bound by nothing on the path
+    left(simp_thm(&["all y z. y in f -> pair(y, z) in g", "x in f"], "pair(x, x) in g"));
+    // the other direction of an implication
+    left(simp_thm(&["all y. y in f -> y in g", "x in g"], "x in f"));
+    // an equation used left to right only
+    left(simp_thm(&["all a. pair(a, a) = app(f, a)"], "fst(app(f, x)) = x"));
+}
+
+#[test]
+fn leftover_paths_are_reported_as_facts() {
+    let src = "theorem t(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2) || o = ok(s, 3)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2) || o = ok(s, 3)), s, o)\n  show by simp(h)\nqed\n";
+    let e = check(src).unwrap_err();
+    assert!(e.contains("2 paths left"), "{}", e);
+    assert!(e.contains("path 1: o = ok(s, ") && e.contains("path 2: "), "{}", e);
 }
 
 #[test]

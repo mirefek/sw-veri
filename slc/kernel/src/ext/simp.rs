@@ -24,6 +24,8 @@
 //!   (numerals by `lit_*`, strings by `bytes_len`/`bytes_at`);
 //! * `pair(a, b) = pair(c, d) <-> a = c && b = d`, likewise for `ok`,
 //!   `exc`, `diverge`; outcomes built with different constructors differ;
+//!   `tag(k, v)`, `some(x)`, `none` are the pairs `pair(k, v)`,
+//!   `pair(1, x)`, `pair(0, empty)` (definitions);
 //! * `ex x. .. && x = t && ..` <-> the rest with `t` for x (x not in t),
 //!   `all x. x = t -> P(x)` <-> `P(t)`; `ex x. P` <-> P when x does not
 //!   occur (the universe is not empty);
@@ -33,6 +35,14 @@
 //! of a fact being simplified, never in a goal):
 //! * `runs(mkprog(s o. R), S, O) -> R(S, O)` (membership in `mkprog`; the
 //!   converse also needs `pair(S, O) in univ(1)`).
+//!
+//! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
+//! match literals of the path (or follow from them by taut/arith), with
+//! every x bound, adds its instance of C to the path (∀- and →-elimination);
+//! for an equation C (possibly n = 0), xs may also be bound by matching its
+//! left side against terms of the path or goal. The goal is rewritten with
+//! the path's equations `x = t` / `t = x` (x a variable) and `a = b` (left
+//! to right).
 //!
 //! Loops, with invariants given by the user (`simp_prove_loops`): a literal
 //! `while_rel(l0, l. C, l o. B, l. T, r)` on a path is replaced by what the
@@ -85,6 +95,10 @@ struct Syms {
     mkprog: Option<SymId>,
     in_: Option<SymId>,
     omega: Option<SymId>,
+    tag: Option<SymId>,
+    some: Option<SymId>,
+    none: Option<SymId>,
+    empty: Option<SymId>,
 }
 
 fn is(s: SymId, o: Option<SymId>) -> bool {
@@ -130,6 +144,10 @@ impl<'a> Simp<'a> {
                 mkprog: g("mkprog"),
                 in_: g("in"),
                 omega: g("omega"),
+                tag: g("tag"),
+                some: g("some"),
+                none: g("none"),
+                empty: g("empty"),
             },
         }
     }
@@ -360,9 +378,14 @@ impl<'a> Simp<'a> {
 
     fn eq(&self, a: &Term, b: &Term) -> Term {
         let s = &self.s;
-        let (x, y) = (self.term(a), self.term(b));
+        let (mut x, mut y) = (self.term(a), self.term(b));
         if x == y {
             return self.tt();
+        }
+        // a variable on the left (`t = x` is `x = t`)
+        let var = |t: &Term| matches!(t.node(), Node::Var(_, a) if a.is_empty());
+        if var(&y) && !var(&x) {
+            std::mem::swap(&mut x, &mut y);
         }
         if distinct_literals(&x, &y) {
             return self.ff();
@@ -370,7 +393,10 @@ impl<'a> Simp<'a> {
         // constructors: injective and distinct
         let ctor = |t: &Term| -> Option<(u8, Vec<Term>)> {
             match t.node() {
-                Node::App(g, b) if is(*g, s.pair) => Some((10, b.to_vec())),
+                Node::App(g, b) if is(*g, s.pair) || is(*g, s.tag) => Some((10, b.to_vec())),
+                // some(x) = tag(1, x), none = tag(0, empty)
+                Node::App(g, b) if is(*g, s.some) => Some((10, vec![Term::nat(crate::nat::Nat::from_u64(1)), b[0].clone()])),
+                Node::App(g, _) if is(*g, s.none) => Some((10, vec![Term::nat(crate::nat::Nat::zero()), Term::app(s.empty?, vec![])])),
                 Node::App(g, b) if is(*g, s.ok) => Some((0, b.to_vec())),
                 Node::App(g, b) if is(*g, s.exc) => Some((1, b.to_vec())),
                 Node::App(g, b) if is(*g, s.diverge) => Some((2, b.to_vec())),
@@ -552,15 +578,19 @@ fn lower(env: &Env, t: &Term, i: u32) -> Term {
 struct Path {
     vars: Vec<crate::term::VarId>,
     lits: Vec<Term>,
+    /// conclusions of rules already added to the path
+    done: Vec<Term>,
 }
 
 const MAX_PATHS: usize = 4096;
+/// leftover paths printed in full
+const MAX_REPORTED: usize = 3;
 
 impl Simp<'_> {
     fn paths(&self, t: &Term, fresh: &mut u32) -> Option<Vec<Path>> {
         let s = &self.s;
         if self.is_true(t) {
-            return Some(vec![Path { vars: vec![], lits: vec![] }]);
+            return Some(vec![Path { vars: vec![], lits: vec![], done: vec![] }]);
         }
         if self.is_false(t) {
             return Some(vec![]);
@@ -585,6 +615,7 @@ impl Simp<'_> {
                         let mut r = p.clone();
                         r.vars.extend(q.vars.iter().copied());
                         r.lits.extend(q.lits.iter().cloned());
+                        r.done.extend(q.done.iter().cloned());
                         if x.len() == 1 || y.len() == 1 || self.settle(r.clone()).is_some() {
                             out.push(r);
                         }
@@ -603,7 +634,7 @@ impl Simp<'_> {
                 return Some(ps);
             }
         }
-        Some(vec![Path { vars: vec![], lits: vec![t.clone()] }])
+        Some(vec![Path { vars: vec![], lits: vec![t.clone()], done: vec![] }])
     }
 
     /// Solves `x = t` literals of a path, simplifies its literals; `None`
@@ -645,6 +676,10 @@ impl Simp<'_> {
             if let Some((j, e)) = self.same_var_eqs(&p.lits) {
                 p.lits[j] = e;
                 continue 'again;
+            }
+            // a literal and its negation
+            if p.lits.iter().any(|l| matches!(l.node(), Node::App(n, a) if is(*n, self.s.not) && p.lits.contains(&a[0]))) {
+                return None;
             }
             // `!(ex x. B(x))` with every conjunct of some B(t) among the
             // literals: contradictory (∃-introduction)
@@ -864,7 +899,166 @@ fn max_var(t: &Term) -> u32 {
     }
 }
 
+/// Rule instances tried per rule and path.
+const MAX_INSTANCES: usize = 64;
+
+/// The bindings of pattern variables `vs` under which each hypothesis
+/// `hyps[i..]` matches a literal; a hypothesis matching none is left for
+/// checking (its index in the second component).
+fn instances(
+    hyps: &[Term],
+    i: usize,
+    lits: &[Term],
+    vs: &[crate::term::VarId],
+    binds: Vec<(crate::term::VarId, Term)>,
+    open: Vec<usize>,
+    out: &mut Vec<(Vec<(crate::term::VarId, Term)>, Vec<usize>)>,
+) {
+    if out.len() >= MAX_INSTANCES {
+        return;
+    }
+    if i == hyps.len() {
+        out.push((binds, open));
+        return;
+    }
+    let mut any = false;
+    for pl in lits {
+        let mut b = binds.clone();
+        if pmatch(&hyps[i], pl, vs, &mut b) {
+            any = true;
+            instances(hyps, i + 1, lits, vs, b, open.clone(), out);
+        }
+    }
+    if !any {
+        let mut o = open;
+        o.push(i);
+        instances(hyps, i + 1, lits, vs, binds, o, out);
+    }
+}
+
 impl Simp<'_> {
+    /// A literal as a rule `all xs. A1 -> .. -> An -> C` (n >= 1, or n = 0
+    /// for an equation C): its
+    /// variables (fresh pattern variables), the conjuncts of the Ai, and C.
+    fn rule(&self, l: &Term, fresh: &mut u32) -> Option<(Vec<crate::term::VarId>, Vec<Term>, Term)> {
+        let mut vs = Vec::new();
+        let mut t = l.clone();
+        while let Node::App(q, a) = t.node() {
+            if *q != self.s.all {
+                break;
+            }
+            vs.push(*fresh);
+            *fresh += 1;
+            t = inst_k(self.env, &a[0], &[Term::var(*fresh - 1, vec![])]);
+        }
+        let mut hyps = Vec::new();
+        while let Node::App(i, a) = t.node() {
+            if *i != self.s.imp {
+                break;
+            }
+            self.conjuncts(&a[0], &mut hyps);
+            t = a[1].clone();
+        }
+        // (an equation needs no hypotheses: a rewrite rule)
+        let eq = matches!(t.node(), Node::App(e, _) if *e == self.s.eq);
+        (!hyps.is_empty() || (eq && !vs.is_empty())).then_some((vs, hyps, t))
+    }
+
+    /// A new fact on the path from a rule among its literals: an instance
+    /// whose hypotheses are literals of the path, or follow from them (taut
+    /// or arith), and whose conclusion is not yet known.
+    fn chain(&self, lg: &Logic, p: &Path, goal: &Term, fresh: &mut u32) -> Option<Term> {
+        let bf = self.env.binders_fn();
+        // the terms an equation's left side may match (not under binders)
+        let mut subs = Vec::new();
+        for t in p.lits.iter().chain([goal]) {
+            self.subterms(t, &mut subs);
+        }
+        for l in &p.lits {
+            let Some((vs, hyps, concl)) = self.rule(l, fresh) else { continue };
+            let mut insts = Vec::new();
+            instances(&hyps, 0, &p.lits, &vs, Vec::new(), Vec::new(), &mut insts);
+            // variables only in the conclusion `lhs = rhs`: from the terms
+            let lhs = match concl.node() {
+                Node::App(e, ab) if *e == self.s.eq => Some(ab[0].clone()),
+                _ => None,
+            };
+            let mut all_insts = Vec::new();
+            for (binds, open) in insts {
+                if vs.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
+                    all_insts.push((binds, open));
+                } else if let Some(lhs) = &lhs {
+                    for u in &subs {
+                        let mut b = binds.clone();
+                        if pmatch(lhs, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                            all_insts.push((b, open.clone()));
+                        }
+                    }
+                }
+                if all_insts.len() >= MAX_INSTANCES {
+                    break;
+                }
+            }
+            for (binds, open) in all_insts {
+                let inst = |t: &Term| {
+                    let mut t = t.clone();
+                    for (v, x) in &binds {
+                        t = t.subst_var(*v, x, &bf);
+                    }
+                    self.prop(&t, Pol::Other)
+                };
+                let shown = |h: &Term| {
+                    lg.tautology(self.env, &p.lits, h).is_ok()
+                        || lg.arith(self.env, &p.lits, h).is_ok()
+                        || lg.arith(self.env, &relevant(&p.lits, h), h).is_ok()
+                };
+                if !open.iter().all(|&i| shown(&inst(&hyps[i]))) {
+                    continue;
+                }
+                let c = inst(&concl);
+                if self.is_true(&c) || p.done.contains(&c) || lg.tautology(self.env, &p.lits, &c).is_ok() {
+                    continue;
+                }
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    /// The subterms of `t` (applications, not under binders).
+    fn subterms(&self, t: &Term, out: &mut Vec<Term>) {
+        if let Node::App(f, a) = t.node() {
+            if !out.contains(t) {
+                out.push(t.clone());
+            }
+            let bf = self.env.binders_fn();
+            for (i, x) in a.iter().enumerate() {
+                if bf(*f, i) == 0 {
+                    self.subterms(x, out);
+                }
+            }
+        }
+    }
+
+    /// The path with the fact `c` added (split into paths).
+    fn extend(&self, lg: &Logic, p: &Path, c: Term, fresh: &mut u32) -> crate::env::KResult<Vec<Path>> {
+        let mut t = self.tt();
+        for o in &p.lits {
+            t = self.and(t, o.clone());
+        }
+        t = self.and(t, lg.simp_fact(self.env, &c));
+        let ps = self.paths(&t, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        Ok(ps
+            .into_iter()
+            .map(|mut q| {
+                q.vars.extend(p.vars.iter().copied());
+                q.done.extend(p.done.iter().cloned());
+                q.done.push(c.clone());
+                q
+            })
+            .collect())
+    }
+
     /// The path with a `while_rel` literal replaced by the loop's outcome,
     /// for the first loop and hint whose premises `simp` shows on the path
     /// (the other literals); why the hints failed goes to `why`.
@@ -893,6 +1087,7 @@ impl Simp<'_> {
                             ps.into_iter()
                                 .map(|mut q| {
                                     q.vars.extend(p.vars.iter().copied());
+                                    q.done.extend(p.done.iter().cloned());
                                     q
                                 })
                                 .collect(),
@@ -1035,20 +1230,40 @@ impl Logic {
         }
         let g = self.simp_eqv(env, goal);
         let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
-        let mut loops = 0;
+        let (mut steps, mut left, mut report) = (0, 0, String::new());
         while let Some(p) = work.pop() {
             let Some(p) = sp.settle(p) else { continue };
-            // the path's equations `x = t` (x a variable) used in the goal
+            // the path's equations used in the goal: `x = t` or `t = x` (x a
+            // variable) substituted, then `a = b` rewritten left to right
             let bf = env.binders_fn();
             let mut g = g.clone();
-            for l in &p.lits {
-                if let Node::App(e, ab) = l.node() {
-                    if *e == sp.s.eq {
-                        if let Node::Var(x, xa) = ab[0].node() {
-                            if xa.is_empty() && !has_var(&ab[1], *x) && has_var(&g, *x) {
-                                g = self.simp_eqv(env, &g.subst_var(*x, &ab[1], &bf));
-                            }
+            let eqs: Vec<(&Term, &Term)> = p
+                .lits
+                .iter()
+                .filter_map(|l| match l.node() {
+                    Node::App(e, ab) if *e == sp.s.eq => Some((&ab[0], &ab[1])),
+                    _ => None,
+                })
+                .collect();
+            let var = |t: &Term| match t.node() {
+                Node::Var(x, xa) if xa.is_empty() => Some(*x),
+                _ => None,
+            };
+            for &(a, b) in &eqs {
+                for (v, t) in [(a, b), (b, a)] {
+                    if let Some(x) = var(v) {
+                        if !has_var(t, x) && has_var(&g, x) {
+                            g = self.simp_eqv(env, &g.subst_var(x, t, &bf));
+                            break;
                         }
+                    }
+                }
+            }
+            for &(a, b) in &eqs {
+                if var(a).is_none() && var(b).is_none() {
+                    let body = super::seq::abstract_term(&g, a, 0, &bf);
+                    if body != g {
+                        g = self.simp_eqv(env, &inst_k(env, &body, &[b.clone()]));
                     }
                 }
             }
@@ -1063,31 +1278,54 @@ impl Logic {
             }
             // long paths: arithmetic from the literals about the goal's variables
             let near = relevant(&p.lits, &g);
-            if near.len() < p.lits.len() && self.arith(env, &near, &g).is_ok() {
+            if near.len() < p.lits.len() && (self.tautology(env, &near, &g).is_ok() || self.arith(env, &near, &g).is_ok()) {
+                continue;
+            }
+            // a rule among the facts (`all xs. A -> .. -> C`) whose
+            // hypotheses the path has: continue with its conclusion
+            if let Some(c) = sp.chain(self, &p, &g, fresh) {
+                steps += 1;
+                if steps > MAX_PATHS {
+                    return Err(crate::env::KernelError("simp: too many paths".into()));
+                }
+                work.extend(sp.extend(self, &p, c, fresh)?);
                 continue;
             }
             // a loop on the path, with an invariant: continue with its outcome
             let mut why = String::new();
             if let Some(ps) = sp.loop_step(self, &p, hints, fresh, &mut why)? {
-                loops += 1;
-                if loops > MAX_PATHS {
+                steps += 1;
+                if steps > MAX_PATHS {
                     return Err(crate::env::KernelError("simp: too many paths".into()));
                 }
                 work.extend(ps);
                 continue;
             }
-            // report the path (its variables closed again)
-            let mut body = sp.tt();
-            for l in &p.lits {
-                body = sp.and(body, l.clone());
-            }
-            for v in p.vars.iter().rev() {
-                if has_var(&body, *v) {
-                    body = Term::app(sp.s.ex, vec![abstract_var(env, &body, *v, 0)]);
+            // left: reported as a fact to prove (its variables universal)
+            left += 1;
+            if left <= MAX_REPORTED {
+                let mut fact = g.clone();
+                for l in p.lits.iter().rev() {
+                    fact = Term::app(sp.s.imp, vec![l.clone(), fact]);
                 }
+                for v in p.vars.iter().rev() {
+                    if has_var(&fact, *v) {
+                        fact = Term::app(sp.s.all, vec![abstract_var(env, &fact, *v, 0)]);
+                    }
+                }
+                let pr = crate::syntax::Printer::new(env);
+                report.push_str(&format!("\n  path {}: {}{}", left, pr.term(&fact), why));
             }
-            let pr = crate::syntax::Printer::new(env);
-            return Err(crate::env::KernelError(format!("simp: left to show: {}\n  on the path: {}{}", pr.term(&g), pr.term(&body), why)));
+        }
+        if left > 0 {
+            let more = if left > MAX_REPORTED { format!("\n  ({} more)", left - MAX_REPORTED) } else { String::new() };
+            return Err(crate::env::KernelError(format!(
+                "simp: {} path{} left (prove each as a fact -- keeping only the hypotheses it needs -- and pass it to simp):{}{}",
+                left,
+                if left == 1 { "" } else { "s" },
+                report,
+                more
+            )));
         }
         Ok(())
     }

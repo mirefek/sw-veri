@@ -254,6 +254,16 @@ relies on.
    The spec's fallbacks are explicit: `let x = any? T where P else S`
    (malloc may always fail, must when no block is possible) and
    `havoc … where P else S`, so no case is undefined by accident.
+   Leftover paths: when `simp` cannot close some paths, it reports each
+   (up to 3, with the count) as a fact ready to paste, `all x0 .. xk. L1
+   -> .. -> Ln -> goal`. Prove it — keeping only the hypotheses it needs
+   — and pass it to `simp`: facts of the form `all xs. A1 -> .. -> An ->
+   C` are rules, used on every path whose literals match the Ai (the
+   others are shown by taut/arith once all xs are bound); C is added. An
+   equation C needs no hypotheses: its left side is matched against the
+   goal's and the path's terms, and the goal is rewritten left to right.
+   Example: `malloc.result_live` (a non-null result is aligned and live)
+   with the rule `malloc.set_block_at`.
    Loops: `simp(…, {l0 l. I}, {l. m})` gives an invariant (over the
    loop's first state l0 and its current state l; for `for` loops, l is
    the program state paired with the counter) and optionally a variant.
