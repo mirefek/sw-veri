@@ -1,0 +1,32 @@
+// What a client of the malloc layer can conclude from the spec alone
+// (layers/malloc.sl), by symbolic execution (`simp`).
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/list.core \
+//     build/musl_malloc.core proofs/malloc_client.core
+
+// free(NULL) returns and changes nothing
+theorem malloc.free_null(i, o, e, s, r): runs(malloc.free(i, o, e, 0), s, r) -> r = ok(s, empty)
+proof
+  assume h: runs(malloc.free(i, o, e, 0), s, r)
+  show by simp(h)
+qed
+
+// free(p) for a valid p: it returns normally, with p no longer live -- or
+// no allocator step was possible (`havoc ... where` with no solution is
+// undefined in SL, so the spec then allows anything)
+theorem malloc.free_live(i, o, e, p, s, r):
+  runs(malloc.free(i, o, e, p), s, r) -> !(p = 0) -> s in i -> malloc.errno_ok(e, s) -> !(app(app(s, "blocks"), p) = none) ->
+    (ex t. r = ok(t, empty) && app(t, "blocks") = fn_update(app(s, "blocks"), p, none)) ||
+    !(ex x1. x1 in x86_64_linux.Vm && ((malloc.alloc_frame(o, s, x1, malloc.range(p, snd(app(app(s, "blocks"), p)))) &&
+        fn_update(fn_update(s, "blocks", fn_update(app(s, "blocks"), p, none)), "vm", x1) in i) &&
+        (all x2. x2 in omega -> x2 in app(o, fn_update(fn_update(s, "blocks", fn_update(app(s, "blocks"), p, none)), "vm", x1)) ->
+           (x2 in app(o, s) || x2 in malloc.range(p, snd(app(app(s, "blocks"), p)))) ||
+           !x86_64_linux.mapped(app(s, "vm"), nat_div(x2, x86_64_linux.PAGE)))))
+proof
+  assume h: runs(malloc.free(i, o, e, p), s, r)
+  assume h0: !(p = 0)
+  assume hi: s in i
+  assume he: malloc.errno_ok(e, s)
+  assume hb: !(app(app(s, "blocks"), p) = none)
+  show by simp(h, h0, hi, he, hb)
+qed

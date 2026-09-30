@@ -232,6 +232,24 @@ relies on.
    commutative, unknown terms are not lists, and out-of-range or
    undetermined indices are refused. Structural list induction is not yet
    there (index induction is `nat_ind`).
+
+   Programs — symbolic execution (`ext/simp.rs`, trusted): a simplifier
+   whose rules are theorems of the prelude (β for `letin`, projections of
+   pairs and outcomes, record reads through `fn_update`, literal and
+   constructor (in)equalities, connectives with true/false, the one-point
+   rule, the definitions of `bind_rel`/`any_rel`/`is_ok`) plus one
+   one-way step used only in positive positions of facts,
+   `runs(mkprog(s o. R), S, O) -> R(S, O)`; then a path normal form
+   (&& distributed over ||, existentials pulled out, `x = t` solved per
+   path, contradictory paths dropped). `simp(h)` turns
+   `runs(P, s, o)` into P's paths; goal-directed `simp(p…)` proves a goal
+   path by path (taut or arith), choosing witnesses for the goal's
+   existentials by matching its equations with the path's. `print P`
+   shows a fact while writing a proof. `proofs/malloc_client.core`: from
+   the spec alone, `free(NULL)` changes nothing, and `free(p)` of a live
+   block returns with p freed — or no allocator step was possible, since
+   `havoc … where P` with no solution is undefined (see open question).
+   Loops (`while_rel`) stay opaque in `simp`: an invariant rule is next.
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary

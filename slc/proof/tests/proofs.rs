@@ -323,3 +323,40 @@ fn unsound_list_steps_are_rejected() {
     // extensionality needs the lengths of these two lists
     bad("theorem x(a, b, c, t): a in list_type(t) -> b in list_type(t) -> seq_len(a) = seq_len(c) -> (all i. i in omega -> nat_lt(i, seq_len(a)) -> app(a, i) = app(b, i)) -> a = b\nproof\n  assume ha: a in list_type(t)\n  assume hb: b in list_type(t)\n  assume hl: seq_len(a) = seq_len(c)\n  assume he: all i. i in omega -> nat_lt(i, seq_len(a)) -> app(a, i) = app(b, i)\n  show list_ext(ha, hb, hl, he)\nqed\n", "third premise");
 }
+
+#[test]
+fn simp_executes_programs() {
+    let src = "\
+def prog(p) := mkprog(s o. ex x. ((p = 0 && x = exc(pair(s, empty), pair(\"ret\", empty))) || (!(p = 0) && x = ok(pair(s, empty), empty))) &&
+  ((fst(x) = 0 && o = ok(fst(out_state(x)), 7)) || (fst(x) = 1 && fst(out_value(x)) = \"ret\" && o = ok(fst(out_state(x)), snd(out_value(x))))))
+theorem t0(s, o): runs(prog(0), s, o) -> o = ok(s, empty)
+proof
+  assume h: runs(prog(0), s, o)
+  show by simp(h)
+qed
+theorem t1(s, o, p): runs(prog(p), s, o) -> !(p = 0) -> ex v. o = ok(s, v) && v = 7
+proof
+  assume h: runs(prog(p), s, o)
+  assume n: !(p = 0)
+  show by simp(h, n)
+qed
+theorem t2(a, b, c, d): (ok(a, b) = exc(c, d) -> false) && (ok(a, b) = ok(c, d) -> a = c) && letin(3, x. x = 3)
+proof
+  show by simp()
+qed
+";
+    assert_eq!(check(src), Ok(3));
+}
+
+#[test]
+fn simp_does_not_overreach() {
+    // running a program cannot be concluded without typing (univ membership)
+    rejected("theorem x(a, b): runs(mkprog(s o. true), a, b)\nproof\n  show by simp()\nqed\n", "simp");
+    // nor from a negated `runs` (the one-way step is not used there)
+    rejected("theorem x(a, b): !runs(mkprog(s o. true), a, b) -> false\nproof\n  assume h: !runs(mkprog(s o. true), a, b)\n  show by simp(h)\nqed\n", "simp");
+    // equal literals are not distinct; constructor arguments are not mixed up
+    rejected("theorem x: \"ab\" = \"ab\" -> false\nproof\n  assume h: \"ab\" = \"ab\"\n  show by simp(h)\nqed\n", "simp");
+    rejected("theorem x(a, b, c, d): pair(a, b) = pair(c, d) -> a = d\nproof\n  assume h: pair(a, b) = pair(c, d)\n  show by simp(h)\nqed\n", "simp");
+    // a path that does not imply the goal is reported
+    rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by simp(h)\nqed\n", "on the path");
+}

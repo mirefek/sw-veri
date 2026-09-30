@@ -15,6 +15,8 @@
 //!   equations.
 //! - `list`: lists up to associativity of `++`, their lengths (for
 //!   `arith`), indexing, extensionality.
+//! - `simp`: a simplifier for elaborated programs (symbolic execution of
+//!   `runs(P, s, o)`) and propositions.
 //! - `facts`: open lemmas and conditional theorems (bookkeeping, not a rule:
 //!   nothing resting on an open lemma becomes a `Thm`).
 
@@ -22,6 +24,7 @@ pub mod arith;
 pub mod facts;
 pub mod list;
 pub mod prop;
+pub mod simp;
 pub mod seq;
 
 pub use prop::Logic;

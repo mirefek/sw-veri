@@ -198,7 +198,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "lists", "induct", "ex_intro", "defs", "sel"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "lists", "induct", "ex_intro", "defs", "sel"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -369,6 +369,14 @@ impl State {
                 };
                 self.frames.push(Frame::Fix(v));
             }
+            // print P: shows what P proves (and the current goal), for writing proofs
+            "print" => {
+                let s = self.eval(env, lg, &parse_pe(rest)?)?;
+                eprintln!("line {}: {}", line, s.show(env));
+                if let Some(g) = &self.goal {
+                    eprintln!("  goal: {}", Printer::new(env).term(g));
+                }
+            }
             "obtain" => {
                 // obtain x, h from P   (P: ex y. ψ(y); h: ψ(x) for a new x)
                 let (names, p) = rest.split_once(" from ").ok_or_else(|| KernelError("expected `obtain x, h from P`".into()))?;
@@ -477,6 +485,13 @@ impl State {
                 let ps = self.proofs(env, lg, args)?;
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::arith(env, lg, &refs, goal)
+            }
+            // simp(p1, ..): the goal, simplified, from the simplified premises
+            // (symbolic execution of `runs`), then taut or arith
+            "simp" => {
+                let ps = self.proofs(env, lg, args)?;
+                let refs: Vec<&Seq> = ps.iter().collect();
+                Seq::simp_goal(env, lg, &refs, goal)
             }
             // lists(p1, ..): `A = B` for list expressions with the same pieces
             // (the premises say which terms are lists)
@@ -763,7 +778,13 @@ impl State {
                             _ => err("list_ext takes four proofs"),
                         }
                     }
-                    "taut" | "arith" | "lists" | "induct" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
+                    // simp(p): a simplified consequence of p (runs of a program
+                    // replaced by the conditions on its outcome)
+                    "simp" if args.len() == 1 => {
+                        let p = self.proof_arg(env, lg, a0)?;
+                        Ok(Seq::simp(env, lg, &p))
+                    }
+                    "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
             }

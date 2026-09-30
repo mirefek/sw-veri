@@ -653,7 +653,11 @@ impl<'e> Printer<'e> {
                 }
             }
             Node::Var(v, args) => {
-                out.push_str(&self.env.vars[*v as usize].name);
+                // (variables made up by tools, e.g. the simplifier's path variables)
+                match self.env.vars.get(*v as usize) {
+                    Some(info) => out.push_str(&info.name),
+                    None => out.push_str(&format!("?v{}", v)),
+                }
                 if !args.is_empty() {
                     out.push('(');
                     for (i, a) in args.iter().enumerate() {

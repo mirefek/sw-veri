@@ -347,6 +347,22 @@ impl Seq {
         Ok(Seq { hyps, concl, open })
     }
 
+    /// From `Γ ⊢ φ`: `Γ ⊢ φ'`, φ simplified (see `ext::simp`; φ implies φ').
+    pub fn simp(env: &Env, lg: &Logic, s: &Seq) -> Seq {
+        Seq { hyps: s.hyps.clone(), concl: lg.simp_fact(env, &s.concl), open: s.open.clone() }
+    }
+
+    /// From premises: `⋃Γi ⊢ goal`, when the simplified premises imply the
+    /// simplified goal (equivalent to the goal) by propositional logic, or
+    /// else by linear arithmetic.
+    pub fn simp_goal(env: &Env, lg: &Logic, premises: &[&Seq], goal: &Term) -> KResult<Seq> {
+        env.check_wf(goal, 0)?;
+        let (hyps, open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        lg.simp_prove(env, &ps, goal)?;
+        Ok(Seq { hyps, concl: goal.clone(), open })
+    }
+
     fn gather(premises: &[&Seq]) -> (Vec<Term>, Vec<String>) {
         let mut hyps = Vec::new();
         let mut open = Vec::new();
