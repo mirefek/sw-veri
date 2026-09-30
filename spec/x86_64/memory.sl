@@ -119,6 +119,12 @@ proc grow_stack(a: Addr, p: nat) {
 // executable (then `touch(a, exec)` changes nothing)
 pred fetchable(vm: Vm, a: Addr) = mapped(vm, page_of(a)) && hw_allows(vm.pages[page_of(a)].value.prot, exec)
 
+// a can be accessed as `acc` without a fault (then `touch(a, acc)` changes
+// nothing): mapped, allowed, and not an execute-only page (protection key)
+pred can_access(vm: Vm, a: Addr, acc: Access) =
+  mapped(vm, page_of(a)) && hw_allows(vm.pages[page_of(a)].value.prot, acc) &&
+  (acc = exec || vm.pages[page_of(a)].value.prot.r || vm.pages[page_of(a)].value.prot.w)
+
 proc touch_range(a: Addr, n: nat, acc: Access) {
   for i in 0..n { touch(a + bits[64](i), acc) }
 }
@@ -131,6 +137,11 @@ view mem(a: Addr, n: nat) : bits[8*n] {
   }
   set(v) {
     touch_range(a, n, write)
-    for i in 0..n { vm.bytes[a + bits[64](i)] := v[8*i+7 : 8*i] }
+    vm.bytes := store_le(vm.bytes, a, n, uint(v))
   }
 }
+
+// the memory b with the n bytes at a (little-endian, wrapping around the
+// address space) replaced by those of v
+fn store_le(b: Addr -> bits[8], a: Addr, n: nat, v: nat) -> Addr -> bits[8] =
+  (x: Addr) => if uint(x - a) < n { bits[8](v / 256^uint(x - a)) } else { b[x] }

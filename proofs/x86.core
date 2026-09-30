@@ -19,6 +19,35 @@ proof
   show by simp(h, hf2, keep(x86_64_linux.grow_stack))
 qed
 
+// accessing an accessible byte changes nothing (any access kind)
+theorem x86.touch_access: all m a k o. x86_64_linux.can_access(app(m, "vm"), a, k) -> runs(x86_64_linux.touch(a, k), m, o) -> o = ok(m, empty)
+proof
+  fix m
+  fix a
+  fix k
+  fix o
+  assume hf: x86_64_linux.can_access(app(m, "vm"), a, k)
+  assume h: runs(x86_64_linux.touch(a, k), m, o)
+  have hf2 := expand(hf, x86_64_linux.can_access)
+  show by simp(h, hf2, keep(x86_64_linux.grow_stack))
+qed
+
+// accessing n bytes that are all accessible changes nothing
+theorem x86.touch_range_access: all m a n k o. n in omega ->
+  (all i. i in omega -> nat_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_nat(64, i)), k)) ->
+  runs(x86_64_linux.touch_range(a, n, k), m, o) -> o = ok(m, empty)
+proof
+  fix m
+  fix a
+  fix n
+  fix k
+  fix o
+  assume hn: n in omega
+  assume hf: all i. i in omega -> nat_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_nat(64, i)), k)
+  assume h: runs(x86_64_linux.touch_range(a, n, k), m, o)
+  show by simp(h, hn, hf, x86.touch_access, keep(x86_64_linux.touch), {l0 l. fst(l) = m && snd(l) in omega && nat_le(snd(l), n)}, {l. nat_sub(n, snd(l))})
+qed
+
 // fetching n bytes that are all fetchable changes nothing
 theorem x86.touch_range_fetch: all m a n o. n in omega ->
   (all i. i in omega -> nat_lt(i, n) -> x86_64_linux.fetchable(app(m, "vm"), bits_add(64, a, bits_of_nat(64, i)))) ->
@@ -32,4 +61,46 @@ proof
   assume hf: all i. i in omega -> nat_lt(i, n) -> x86_64_linux.fetchable(app(m, "vm"), bits_add(64, a, bits_of_nat(64, i)))
   assume h: runs(x86_64_linux.touch_range(a, n, 2), m, o)
   show by simp(h, hn, hf, x86.touch_fetch, keep(x86_64_linux.touch), {l0 l. fst(l) = m && snd(l) in omega && nat_le(snd(l), n)}, {l. nat_sub(n, snd(l))})
+qed
+
+// ----------------------------------------------------------------------
+//  Memory
+
+// 64-bit addresses: a + (c - a) = c
+theorem x86.bits_add_sub(a, c): c in bits(64) -> a in bits(64) -> bits_add(64, a, bits_of_nat(64, bits_sub(64, c, a))) = c
+proof
+  assume hc: c in bits(64)
+  assume ha: a in bits(64)
+  show by defs(simp(hc, ha), bits_add, bits_sub, bits_of_nat, pow2)
+qed
+
+// reading a byte through a store that did not cover it: the old byte. A
+// byte that is not writable (code) is never covered by a store of
+// writable bytes.
+theorem x86.store_other: all vm b a n v c. c in bits(64) -> a in bits(64) ->
+  (all i. i in omega -> nat_lt(i, n) -> x86_64_linux.can_access(vm, bits_add(64, a, bits_of_nat(64, i)), 1)) ->
+  !x86_64_linux.can_access(vm, c, 1) ->
+  app(x86_64_linux.store_le(b, a, n, v), c) = app(b, c)
+proof
+  fix vm
+  fix b
+  fix a
+  fix n
+  fix v
+  fix c
+  assume hc: c in bits(64)
+  assume ha: a in bits(64)
+  assume hw: all i. i in omega -> nat_lt(i, n) -> x86_64_linux.can_access(vm, bits_add(64, a, bits_of_nat(64, i)), 1)
+  assume hn: !x86_64_linux.can_access(vm, c, 1)
+  have e1 := mp(app_fn_build[d := bits(64), v := x. ite(nat_lt(bits_sub(64, x, a), n), bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, x, a)))), app(b, x)), a := c], hc)
+  have k: bits_sub(64, c, a) in omega by defs(simp(hc, ha), bits_sub, pow2)
+  have id := mp(mp(x86.bits_add_sub[a := a, c := c], hc), ha)
+  have nlt0: nat_lt(bits_sub(64, c, a), n) -> false proof
+    assume lt: nat_lt(bits_sub(64, c, a), n)
+    have w := mp(mp(all_elim(hw, {bits_sub(64, c, a)}), k), lt)
+    show by taut(rewrite(id, w), hn)
+  qed
+  have nlt: !nat_lt(bits_sub(64, c, a), n) by taut(nlt0)
+  have f := mp(ite_f[c := nat_lt(bits_sub(64, c, a), n), a := bits_of_nat(8, nat_div(v, nat_pow(256, bits_sub(64, c, a)))), b := app(b, c)], nlt)
+  show by defs(taut(trans(e1, f)), x86_64_linux.store_le)
 qed

@@ -194,7 +194,9 @@ impl Reader {
     fn lin(&mut self, t: &Term) -> Option<Lin> {
         let s = self.s;
         match t.node() {
-            Node::Nat(n) => return n.to_u64().map(|v| Lin::konst(v as i128)),
+            // numerals up to 2^100 (coefficients are i128; room for sums
+            // and products by small constants, which `Lin` checks)
+            Node::Nat(n) => return n.to_u128().filter(|&v| v <= 1u128 << 100).map(|v| Lin::konst(v as i128)),
             Node::App(e, a) if a.is_empty() && is(*e, s.empty) => return Some(Lin::konst(0)),
             Node::App(f, a) if is(*f, s.succ) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
             // the length of a list expression: its singletons plus the
@@ -273,7 +275,7 @@ impl Reader {
 
     fn lin_opt_const(&mut self, t: &Term) -> Option<i128> {
         match t.node() {
-            Node::Nat(n) => n.to_u64().map(|v| v as i128),
+            Node::Nat(n) => n.to_u128().filter(|&v| v <= 1u128 << 100).map(|v| v as i128),
             _ => None,
         }
     }
@@ -305,6 +307,16 @@ impl Reader {
                     }
                     return r;
                 }
+                // x in bits(k): x < 2^k (x is then a number)
+                if is(*o, s.bits) {
+                    if let Node::App(_, ob) = a[1].node() {
+                        if let Some(k) = self.lin_opt_const(&ob[0]).filter(|&k| (0..=100).contains(&k)) {
+                            let x = self.lin(&a[0])?;
+                            return Some(Atom::Cmp(x, Rel::Lt, Lin::konst(1i128 << k)));
+                        }
+                    }
+                    return None;
+                }
             }
             Rel::Lt
         } else {
@@ -335,6 +347,42 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
     for l in cs.iter_mut() {
         norm(l);
     }
+    // equalities (l >= 0 and -l >= 0): solved for a variable with
+    // coefficient ±1 and substituted (exact over the integers, unlike the
+    // elimination below)
+    'eqs: loop {
+        for i in 0..cs.len() {
+            let neg = match cs[i].scale(-1) {
+                Some(n) => n,
+                None => continue,
+            };
+            let Some(j) = cs.iter().position(|m| *m == neg) else { continue };
+            let Some((&v, &cv)) = cs[i].coeffs.iter().find(|(_, c)| c.abs() == 1) else { continue };
+            // v = -(l - cv v) / cv: substitute l's solution for v
+            let l = cs[i].clone();
+            let mut out = Vec::new();
+            for (k, m) in cs.iter().enumerate() {
+                if k == i || k == j {
+                    continue;
+                }
+                match m.coeffs.get(&v) {
+                    // m + (-(m_v / cv)) l removes v
+                    Some(&mv) => match m.add(&l, -mv * cv) {
+                        Some(mut r) => {
+                            r.coeffs.remove(&v);
+                            norm(&mut r);
+                            out.push(r);
+                        }
+                        None => return false,
+                    },
+                    None => out.push(m.clone()),
+                }
+            }
+            cs = out;
+            continue 'eqs;
+        }
+        break;
+    }
     loop {
         if cs.iter().any(|l| l.coeffs.is_empty() && l.c < 0) {
             return true;
@@ -363,7 +411,11 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
         let neg: Vec<&Lin> = with.iter().filter(|l| l.coeffs[&v] < 0).collect();
         for p in &pos {
             for n in &neg {
+                // scaled to the lcm of the two coefficients (not their
+                // product: coefficients like 2^64 would overflow)
                 let (a, b) = (p.coeffs[&v], -n.coeffs[&v]);
+                let g = gcd(a, b);
+                let (a, b) = (a / g, b / g);
                 let Some(mut l) = p.scale(b).and_then(|x| x.add(n, a)) else { return false };
                 l.coeffs.remove(&v);
                 norm(&mut l);

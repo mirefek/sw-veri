@@ -259,6 +259,87 @@ impl<'a> Simp<'a> {
         }
     }
 
+    /// An n-bit address as base + offset (mod 2^n): `bits_add` and
+    /// `bits_sub` of numerals around at most one other term.
+    fn offset(&self, t: &Term, n: u32) -> (Option<Term>, u128) {
+        let m = if n >= 128 { u128::MAX } else { (1u128 << n) - 1 };
+        let name = |g: SymId| self.env.syms[g as usize].name.as_str();
+        match t.node() {
+            Node::Nat(v) => (None, v.to_u128().map(|x| x & m).unwrap_or(0)),
+            Node::App(g, a) if (name(*g) == "bits_add" || name(*g) == "bits_sub") && a.len() == 3 && matches!(a[0].node(), Node::Nat(w) if w.to_u64() == Some(n as u64)) => {
+                let (b1, c1) = self.offset(&a[1], n);
+                let (b2, c2) = self.offset(&a[2], n);
+                if name(*g) == "bits_add" {
+                    match (b1, b2) {
+                        (b, None) | (None, b) => (b, c1.wrapping_add(c2) & m),
+                        _ => (Some(t.clone()), 0),
+                    }
+                } else {
+                    match (b1, b2) {
+                        (b, None) => (b, c1.wrapping_sub(c2) & m),
+                        (Some(x), Some(y)) if x == y => (None, c1.wrapping_sub(c2) & m),
+                        _ => (Some(t.clone()), 0),
+                    }
+                }
+            }
+            _ => (Some(t.clone()), 0),
+        }
+    }
+
+    /// `x - a` (n bits) as a numeral, when both have the same base.
+    fn distance(&self, x: &Term, a: &Term, n: u32) -> Option<u128> {
+        let m = if n >= 128 { u128::MAX } else { (1u128 << n) - 1 };
+        let (bx, cx) = self.offset(x, n);
+        let (ba, ca) = self.offset(a, n);
+        (bx == ba).then(|| cx.wrapping_sub(ca) & m)
+    }
+
+    /// Reads through a store (`x86_64_linux.store_le(b, a, n, v)`, the
+    /// memory b with the n bytes at a replaced by v's, little-endian): a
+    /// byte at a known distance from a, and `le` of the same or a disjoint
+    /// range (distances from the definitions; addresses are 64-bit).
+    fn read_store(&self, f: SymId, args: &[Term]) -> Option<Term> {
+        let name = |g: SymId| self.env.syms[g as usize].name.as_str();
+        let store = |t: &Term| -> Option<Vec<Term>> {
+            match t.node() {
+                Node::App(g, b) if name(*g) == "x86_64_linux.store_le" && b.len() == 4 => Some(b.to_vec()),
+                _ => None,
+            }
+        };
+        let lit = |t: &Term| match t.node() {
+            Node::Nat(v) => v.to_u128(),
+            _ => None,
+        };
+        let nat = |v: u128| Term::nat(crate::nat::Nat::from_u128(v));
+        let bits_of_nat = self.env.sym_by_name.get("bits_of_nat").copied()?;
+        let nat_div = self.env.sym_by_name.get("nat_div").copied()?;
+        let pow = self.env.sym_by_name.get("nat_pow").copied()?;
+        if is(f, self.s.app) {
+            // app(store_le(b, a, n, v), x)
+            let st = store(&args[0])?;
+            let n = lit(&st[2])?;
+            let d = self.distance(&args[1], &st[1], 64)?;
+            if d < n {
+                let byte = Term::app(nat_div, vec![st[3].clone(), Term::app(pow, vec![nat(256), nat(d)])]);
+                return Some(self.term(&Term::app(bits_of_nat, vec![nat(8), byte])));
+            }
+            return Some(self.term(&Term::app(f, vec![st[0].clone(), args[1].clone()])));
+        }
+        if name(f) == "x86_64_linux.le" && args.len() == 3 {
+            // le(store_le(b, a, n, v), c, m)
+            let st = store(&args[0])?;
+            let (n, m) = (lit(&st[2])?, lit(&args[2])?);
+            let d = self.distance(&args[1], &st[1], 64)?;
+            if d == 0 && m == n && n <= 16 {
+                return Some(self.term(&Term::app(bits_of_nat, vec![nat(8 * n), st[3].clone()])));
+            }
+            if n <= d && d.checked_add(m).is_some_and(|e| e <= 1u128 << 64) {
+                return Some(self.term(&Term::app(f, vec![st[0].clone(), args[1].clone(), args[2].clone()])));
+            }
+        }
+        None
+    }
+
     /// Euclidean division of integer numerals (`int_div`, `int_mod`: a = b q
     /// + r with 0 <= r < |b|); integers are numerals or `pair(1, m)` for -m.
     fn compute_int(&self, op: &str, a: &[Term]) -> Option<Term> {
@@ -380,6 +461,19 @@ impl<'a> Simp<'a> {
             if let Some(v) = self.compute_int(op, &args) {
                 return v;
             }
+            // addresses: `bits_sub` of the same base is its offset
+            if *op == "bits_sub" {
+                if let (Node::Nat(w), 3) = (args[0].node(), args.len()) {
+                    if let Some(n) = w.to_u64().filter(|&n| n <= 128) {
+                        if let Some(d) = self.distance(&args[1], &args[2], n as u32) {
+                            return Term::nat(crate::nat::Nat::from_u128(d));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(v) = self.read_store(f, &args) {
+            return v;
         }
         if is(f, s.app) {
             let mut m = args[0].clone();

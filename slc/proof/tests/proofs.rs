@@ -521,6 +521,20 @@ fn loops_can_be_unrolled() {
 }
 
 #[test]
+fn arithmetic_modulo_large_powers() {
+    // equalities are substituted exactly; `x in bits(k)` bounds x; 2^64 fits
+    let m = "18446744073709551616";
+    let bits = ("ha", "a in bits(64)");
+    assert_eq!(arith_ok(&format!("a in bits(64) -> nat_mod(a, {}) = a", m), &[bits]), Ok(1));
+    assert_eq!(arith_ok(&format!("a in bits(64) -> nat_div(a, {}) = 0", m), &[bits]), Ok(1));
+    assert_eq!(arith_ok("a in bits(8) -> nat_lt(a, 256)", &[("ha", "a in bits(8)")]), Ok(1));
+    // and not more
+    assert!(arith_ok(&format!("a in bits(65) -> nat_mod(a, {}) = a", m), &[("ha", "a in bits(65)")]).is_err());
+    assert!(arith_ok("a in bits(8) -> nat_lt(a, 255)", &[("ha", "a in bits(8)")]).is_err());
+    assert!(arith_ok("a in omega -> nat_mod(a, 256) = a", &[("ha", "a in omega")]).is_err());
+}
+
+#[test]
 fn differences_are_numbers_when_not_negative() {
     let (ha, hb) = (("ha", "a in omega"), ("hb", "b in omega"));
     assert_eq!(arith_ok("a in omega -> b in omega -> nat_le(b, a) -> nat_add(nat_sub(a, b), 1) in omega", &[ha, hb, ("h", "nat_le(b, a)")]), Ok(1));
