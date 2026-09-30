@@ -280,6 +280,23 @@ relies on.
    records (`core/records.core`: `union2`, `rec_and` states,
    `fn_update(f, k, app(f, k)) = f`, fields through ghost extensions).
 5. **(C1) for all functions** — machine code ⊑ GIMPLE.
+   First target: the `-O0` build (`scripts/build-musl.sh -O0`,
+   `build/test_malloc_O0`, its claim `build/musl_malloc_O0.core`); an
+   optimization layer (optimized ⊑ unoptimized GIMPLE) can be inserted
+   later. At `-O0` GCC's final GIMPLE is the unoptimized one, nothing is
+   inlined (62 functions reachable from malloc/free/calloc), and every
+   local has its stack slot.
+   The intermediate is **readable GIMPLE** (`slc gimple --readable`, see
+   `layers/gimple.sl`): each function as an SL proc close to the C source
+   — C variables by name, structured `if`/`loop` with early returns,
+   struct fields through accessors from DWARF, callees as parameters — and
+   the human proofs (C2) are about it. It is not trusted and needs no
+   separate check against GIMPLE's semantics: machine code ⊑ R and R ⊑
+   spec give machine code ⊑ spec for any R. (The deep form, `Function`
+   data run by `run_fun`, stays for reference.) All of mallocng, calloc
+   and free translate, except inline assembly with operands (`a_cas`,
+   `a_or`, `__syscall1`): leaves, specified and checked at the machine
+   level directly.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
      (`Cfg`: the file, the addresses of ctx, the lock, `__libc`). An

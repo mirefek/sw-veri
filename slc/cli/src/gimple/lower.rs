@@ -11,6 +11,8 @@ use super::dwarf::{DType, Dwarf};
 use std::collections::HashMap;
 use std::fmt::Write;
 
+pub mod readable;
+
 /// Types of GIMPLE values and objects.
 #[derive(Clone, Debug)]
 pub enum RT {
@@ -854,6 +856,21 @@ impl<'a> Lower<'a> {
     //  Functions
 
     pub fn function(&mut self, f: &Func) -> Result<String, String> {
+        let (mut fx, bare) = self.frame(f)?;
+        // parameters: their default definitions (`p_2(D)`), as the body names them
+        let mut params = Vec::new();
+        for (n, _) in &f.params {
+            let dd = bare.iter().find(|b| b.ends_with("(D)") && is_ssa(b) && ssa_base(b) == n).cloned().unwrap_or(format!("{}_0(D)", n));
+            let x = self.name(&mut fx, &dd)?;
+            let (p, s) = fx.types[x];
+            params.push(format!("({}, {})", x, ty_sl(p, s)));
+        }
+        self.function_body(f, fx, params)
+    }
+
+    /// The declarations of a function: its names' types, stack objects and
+    /// static locals; and the names its statements use.
+    fn frame(&mut self, f: &Func) -> Result<(Fx, Vec<String>), String> {
         let ret = self.ty(&f.ret)?;
         let mut fx = Fx {
             names: HashMap::new(),
@@ -891,14 +908,10 @@ impl<'a> Lower<'a> {
                 fx.obj_list.push((size, align));
             }
         }
-        // parameters: their default definitions (`p_2(D)`), as the body names them
-        let mut params = Vec::new();
-        for (n, _) in &f.params {
-            let dd = bare.iter().find(|b| b.ends_with("(D)") && is_ssa(b) && ssa_base(b) == n).cloned().unwrap_or(format!("{}_0(D)", n));
-            let x = self.name(&mut fx, &dd)?;
-            let (p, s) = fx.types[x];
-            params.push(format!("({}, {})", x, ty_sl(p, s)));
-        }
+        Ok((fx, bare))
+    }
+
+    fn function_body(&mut self, f: &Func, mut fx: Fx, params: Vec<String>) -> Result<String, String> {
         let index: HashMap<u64, usize> = f.blocks.iter().enumerate().map(|(i, b)| (b.num, i)).collect();
         let bi = |n: u64| index.get(&n).copied().ok_or_else(|| format!("no block {}", n));
         let mut blocks = Vec::new();

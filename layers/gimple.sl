@@ -237,6 +237,98 @@ proc[World] grow_to(a: nat) {
 }
 
 ///////////////////////////////////////////////////////////////////////
+//  Readable GIMPLE: the operations
+//
+// `slc gimple --readable` translates each function to an SL proc close to
+// the C source: C variables keep their names, integers are words of their
+// precision (`bits[n]`; signedness is in the operations: `<s`, `>>s`,
+// `sext`), struct fields are read and written through accessors generated
+// from DWARF, and called functions are parameters (their specs, once
+// proven). Unsigned arithmetic and bitwise operations are SL's own; the
+// operations below are GIMPLE's where it has undefined behaviour: signed
+// overflow, shifts by the width or more, division by zero, null or unusable
+// memory, pointer arithmetic leaving the address space. Like the rest of
+// this layer, nothing here is trusted: machine code is checked against the
+// translation, and proofs about the translation carry over.
+
+proc[World] sadd[n: nat](a: bits[n], b: bits[n]) -> bits[n] { return bits[n](arith(Ty { prec: n, signed: true }, sint(a) + sint(b))) }
+proc[World] ssub[n: nat](a: bits[n], b: bits[n]) -> bits[n] { return bits[n](arith(Ty { prec: n, signed: true }, sint(a) - sint(b))) }
+proc[World] smul[n: nat](a: bits[n], b: bits[n]) -> bits[n] { return bits[n](arith(Ty { prec: n, signed: true }, sint(a) * sint(b))) }
+proc[World] sneg[n: nat](a: bits[n]) -> bits[n] { return bits[n](arith(Ty { prec: n, signed: true }, -sint(a))) }
+
+// division and remainder (truncating); `signed` as in C
+proc[World] cdiv[n: nat](a: bits[n], b: bits[n], signed: bool) -> bits[n] {
+  return bits[n](binop(div, Ty { prec: n, signed: signed }, uint(a), uint(b)))
+}
+proc[World] crem[n: nat](a: bits[n], b: bits[n], signed: bool) -> bits[n] {
+  return bits[n](binop(mod, Ty { prec: n, signed: signed }, uint(a), uint(b)))
+}
+
+// shifts by fewer bits than the width
+proc[World] shl[n: nat](a: bits[n], k: nat) -> bits[n] { if k >= n { undefined }; return a << k }
+proc[World] shr[n: nat](a: bits[n], k: nat) -> bits[n] { if k >= n { undefined }; return a >> k }
+proc[World] sar[n: nat](a: bits[n], k: nat) -> bits[n] { if k >= n { undefined }; return a >>s k }
+
+fn smin[n: nat](a: bits[n], b: bits[n]) -> bits[n] = if a <=s b { a } else { b }
+fn smax[n: nat](a: bits[n], b: bits[n]) -> bits[n] = if a >=s b { a } else { b }
+fn umin[n: nat](a: bits[n], b: bits[n]) -> bits[n] = if a <= b { a } else { b }
+fn umax[n: nat](a: bits[n], b: bits[n]) -> bits[n] = if a >= b { a } else { b }
+
+// a condition as a _Bool (precision 1)
+fn b1(c: bool) -> bits[1] = if c { 1 } else { 0 }
+
+// GCC's internal functions: the product and whether it overflowed (a
+// complex value: real part low, imaginary part high); trailing zeros
+// (undefined for 0 without a value for it)
+fn mul_ovf[n: nat](a: bits[n], b: bits[n], signed: bool) -> bits[2*n] = bits[2*n](
+  (if signed { sint(a) * sint(b) } else { uint(a) * uint(b) }) % 2^n +
+  2^n * (if fits(Ty { prec: n, signed: signed }, if signed { sint(a) * sint(b) } else { uint(a) * uint(b) }) { 0 } else { 1 }))
+proc[World] ctz[n: nat](a: bits[n]) -> bits[n] { if a = 0 { undefined }; return bits[n](tz(uint(a))) }
+
+// pointer + signed offset: may not leave the address space
+proc[World] padd(p: Addr, off: bits[64]) -> Addr {
+  return bits[64](binop(ptr_add, Ty { prec: 64, signed: false }, uint(p), uint(off)))
+}
+
+// the address of `size` bytes of a C object at p + off: p is not null, the
+// bytes are usable (readable; writable for `w`)
+proc[World] mem(p: Addr, off: bits[64], size: nat, w: bool) -> Addr {
+  if p = 0 { undefined }
+  let a = padd(p, off)
+  if !usable(vm, uint(a), size, w) { undefined }
+  return a
+}
+
+proc[World] ld8(p: Addr, off: bits[64]) -> bits[8] { return bits[8](bytes_at(vm, mem(p, off, 1, false), 1)) }
+proc[World] ld16(p: Addr, off: bits[64]) -> bits[16] { return bits[16](bytes_at(vm, mem(p, off, 2, false), 2)) }
+proc[World] ld32(p: Addr, off: bits[64]) -> bits[32] { return bits[32](bytes_at(vm, mem(p, off, 4, false), 4)) }
+proc[World] ld64(p: Addr, off: bits[64]) -> bits[64] { return bits[64](bytes_at(vm, mem(p, off, 8, false), 8)) }
+proc[World] ld128(p: Addr, off: bits[64]) -> bits[128] { return bits[128](bytes_at(vm, mem(p, off, 16, false), 16)) }
+
+proc[World] st8(p: Addr, off: bits[64], v: bits[8]) { write_bytes(mem(p, off, 1, true), 1, uint(v)) }
+proc[World] st16(p: Addr, off: bits[64], v: bits[16]) { write_bytes(mem(p, off, 2, true), 2, uint(v)) }
+proc[World] st32(p: Addr, off: bits[64], v: bits[32]) { write_bytes(mem(p, off, 4, true), 4, uint(v)) }
+proc[World] st64(p: Addr, off: bits[64], v: bits[64]) { write_bytes(mem(p, off, 8, true), 8, uint(v)) }
+proc[World] st128(p: Addr, off: bits[64], v: bits[128]) { write_bytes(mem(p, off, 16, true), 16, uint(v)) }
+
+// constant bytes (aggregate initializers)
+proc[World] st_bytes(p: Addr, off: bits[64], data: List[bits[8]]) {
+  let a = mem(p, off, len(data), true)
+  for i in 0..len(data) { vm.bytes[a + bits[64](i)] := data[i] }
+}
+
+// a bitfield: `bits` bits at bit `pos` of the `size` bytes at p + off
+proc[World] ldbf(p: Addr, off: bits[64], size: nat, pos: nat, bits: nat) -> nat {
+  return bytes_at(vm, mem(p, off, size, false), size) / 2^pos % 2^bits
+}
+proc[World] stbf(p: Addr, off: bits[64], size: nat, pos: nat, bits: nat, v: nat) {
+  let a = mem(p, off, size, true)
+  let old = bytes_at(vm, a, size)
+  let m = 2^pos * (2^bits - 1)
+  write_bytes(a, size, uint(b128(old) & ~b128(m)) + (v % 2^bits) * 2^pos)
+}
+
+///////////////////////////////////////////////////////////////////////
 //  Calls and inline assembly
 
 // A called function sees the world with its own stack pointer (below the
@@ -280,6 +372,52 @@ proc[Machine] run_code(code: List[bits[8]]) -> Reg -> bits[64] {
 // a value passed in a 64-bit register: the upper bits are unspecified
 fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec = v % 2^ty.prec}
 
+// Calling g: the arguments (values with their types) in registers, g on
+// its own stack below `low` (the stack pointer, or the lowest stack object
+// of the caller); the result registers rax, rdx.
+proc[World] call_at(low: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  var regs: List[bits[64]] = []
+  for i in 0..len(args) { regs := regs ++ [any r: bits[64] where r in in_reg(args[i][0], args[i][1])] }
+  let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
+  let (r0, r1) = with callee_world(sp2) { return g(regs) }
+  return (r0, r1)
+}
+
+// (readable GIMPLE) an argument, a call from a function without stack
+// objects, and from one with them
+fn arg[n: nat](x: bits[n]) -> (nat, Ty) = (uint(x), Ty { prec: n, signed: false })
+proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call_at(uint(sp), g, args) }
+proc[World] call_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  return call_at(min({a: nat | a = uint(sp) || (ex j: nat. j < len(objs) && a = uint(objs[j]))}), g, args)
+}
+
+// ... with the value in rax only
+proc[World] call1(g: CFun2[World], args: List[(nat, Ty)]) -> bits[64] {
+  let (r0, r1) = call(g, args)
+  return r0
+}
+proc[World] call1_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> bits[64] {
+  let (r0, r1) = call_objs(objs, g, args)
+  return r0
+}
+
+// (readable GIMPLE) the address of element i (signed) of `size` bytes
+proc[World] elem(p: Addr, i: bits[64], size: nat) -> Addr { return padd(p, smul(i, bits[64](size))) }
+
+// (readable GIMPLE) a result in a register: the upper bits are unspecified
+proc[World] result[n: nat](v: bits[n]) -> bits[64] {
+  return any r: bits[64] where r in in_reg(uint(v), Ty { prec: n, signed: false })
+}
+
+// inline assembly: the input registers set (the others arbitrary); the
+// registers afterwards
+proc[World] inline_asm(code: List[bits[8]], ins: List[(Reg, nat)]) -> Reg -> bits[64] {
+  var regs = any (Reg -> bits[64])
+  for i in 0..len(ins) { regs := set_reg(regs, ins[i][0], bits[64](ins[i][1])) }
+  let out = with asm_machine(regs, any (Reg -> bits[128]), any Flags, any Addr) { return run_code(code) }
+  return out
+}
+
 ///////////////////////////////////////////////////////////////////////
 //  Executing a function
 
@@ -318,21 +456,15 @@ proc[World] exec_stmt(fr: Frame, s: Stmt, callees: nat -> CFun2[World]) -> Frame
       return fr
     }
     call(dsts, k, args) => {
-      var regs: List[bits[64]] = []
-      for i in 0..len(args) { regs := regs ++ [any r: bits[64] where r in in_reg(operand(fr, args[i][0]), args[i][1])] }
-      let low  = min({a: nat | a = uint(sp) || (ex j: nat. j < len(fr.objs) && a = uint(fr.objs[j]))})
-      let sp2  = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
-      let g    = callees[k]
-      let (r0, r1) = with callee_world(sp2) { return g(regs) }
+      let low = min({a: nat | a = uint(sp) || (ex j: nat. j < len(fr.objs) && a = uint(fr.objs[j]))})
+      let (r0, r1) = call_at(low, callees[k], [(operand(fr, args[i][0]), args[i][1]) for i in 0..len(args)])
       let rs = [r0, r1]
       var vals = fr.vals
       for i in 0..len(dsts) { vals := set_val(vals, dsts[i][0], uint(rs[i]) % 2^dsts[i][1].prec) }
       return fr with { vals: vals }
     }
     asm(code, ins, outs) => {
-      var regs = any (Reg -> bits[64])
-      for i in 0..len(ins) { regs := set_reg(regs, ins[i][0], bits[64](operand(fr, ins[i][1]))) }
-      let out = with asm_machine(regs, any (Reg -> bits[128]), any Flags, any Addr) { return run_code(code) }
+      let out = inline_asm(code, [(ins[i][0], operand(fr, ins[i][1])) for i in 0..len(ins)])
       var vals = fr.vals
       for i in 0..len(outs) { vals := set_val(vals, outs[i][0], uint(out[outs[i][2]]) % 2^outs[i][1].prec) }
       return fr with { vals: vals }
