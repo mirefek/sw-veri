@@ -520,8 +520,11 @@ fn members_of_sets_are_evaluated() {
     assert_eq!(check(src), Ok(1));
     // not another set of members
     rejected("theorem t: all x. x in set_select(omega, x. x = 1 || x = 3) <-> x = 1\nproof\n  show members({set_select(omega, x. x = 1 || x = 3)})\nqed\n", "");
-    // an unknown bounded but not determined: no answer rather than a guess
-    rejected("theorem t: true\nproof\n  have h := members({set_select(omega, x. nat_lt(x, 4))})\n  show by taut()\nqed\n", "eval: unsolved");
+    // below a numeral: each one
+    let src = "theorem t: all x. x in set_select(omega, x. nat_lt(x, 3)) <-> x = 0 || x = 1 || x = 2\nproof\n  show members({set_select(omega, x. nat_lt(x, 3))})\nqed\n";
+    assert_eq!(check(src), Ok(1));
+    // an unknown not determined: no answer rather than a guess
+    rejected("theorem t(y): true\nproof\n  have h := members({set_select(omega, x. nat_lt(x, y))})\n  show by taut()\nqed\n", "eval: unsolved");
 }
 
 #[test]

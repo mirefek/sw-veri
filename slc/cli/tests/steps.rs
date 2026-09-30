@@ -43,7 +43,7 @@ fn loaded_code_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 32 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 37 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 #[test]

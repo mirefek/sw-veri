@@ -118,7 +118,9 @@ struct Simp<'a> {
     keep: Vec<SymId>,
     /// terms the current path knows to be natural numbers (its literals
     /// `t in omega`, `t in bits(k)`)
-    nats: std::cell::RefCell<Vec<Term>>,
+    nats: std::cell::RefCell<Vec<(Term, Option<u64>)>>,
+    /// fields read by definitions of their parameters (`footprint`)
+    footprints: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<Vec<Term>>>>,
 }
 
 /// The arithmetic and bitwise definitions of the prelude that `simp`
@@ -225,6 +227,7 @@ impl<'a> Simp<'a> {
             arith,
             keep: lg.simp_keep.borrow().clone(),
             nats: std::cell::RefCell::new(Vec::new()),
+            footprints: Default::default(),
             s: Syms {
                 eq: env.builtins.eq,
                 imp: env.builtins.imp,
@@ -291,9 +294,33 @@ impl<'a> Simp<'a> {
                     }
                 })
             }
+            // a sum of naturals (effective addresses: base + index + disp)
+            Node::App(g, a) if name(*g) == "nat_add" && a.len() == 2 && self.nat_term(&a[0]) && self.nat_term(&a[1]) => {
+                let (b1, c1) = self.offset(&a[0], n)?;
+                let (b2, c2) = self.offset(&a[1], n)?;
+                Some(match (b1, b2) {
+                    (b, None) | (None, b) => (b, c1.wrapping_add(c2) & m),
+                    _ => (Some(t.clone()), 0),
+                })
+            }
             _ if self.nat_term(t) => Some((Some(t.clone()), 0)),
             _ => None,
         }
+    }
+
+    /// The canonical form of an n-bit address `t` (a `bits_add` / `bits_sub`
+    /// of naturals): base + c, as `bits_add(n, base, c)`, the base alone
+    /// when c = 0 and it is an n-bit word, or the numeral c.
+    fn canonical_addr(&self, t: &Term, n: u64) -> Option<Term> {
+        let (b, c) = self.offset(t, n as u32)?;
+        let nat = |v: u128| Term::nat(crate::nat::Nat::from_u128(v));
+        let out = match b {
+            None => nat(c),
+            Some(b) if b == *t => return None,
+            Some(b) if c == 0 && self.bits_term(&b, n) => b,
+            Some(b) => Term::app(self.env.sym_by_name.get("bits_add").copied()?, vec![nat(n as u128), b, nat(c)]),
+        };
+        (out != *t).then_some(out)
     }
 
     /// `x - a` (n bits) as a numeral, when both have the same base.
@@ -317,6 +344,61 @@ impl<'a> Simp<'a> {
         t
     }
 
+    /// The fields that the definition of `f` reads of its (first-order)
+    /// parameter i: literal keys k in `app(p, k)`, or those of the defined
+    /// symbols p is passed to; None if p is used otherwise.
+    fn footprint(&self, f: SymId, i: usize) -> Option<Vec<Term>> {
+        if let Some(r) = self.footprints.borrow().get(&(f, i)) {
+            return r.clone();
+        }
+        // (in progress: unknown, which also cuts recursion)
+        self.footprints.borrow_mut().insert((f, i), None);
+        let r = (|| {
+            let SymKind::Defined { params, body } = &self.env.syms[f as usize].kind else { return None };
+            let p = *params.get(i)?;
+            if self.env.vars[p as usize].arity != 0 {
+                return None;
+            }
+            let mut out = Vec::new();
+            self.reads(body, p, &mut out).then_some(out)
+        })();
+        self.footprints.borrow_mut().insert((f, i), r.clone());
+        r
+    }
+
+    fn reads(&self, t: &Term, p: crate::term::VarId, out: &mut Vec<Term>) -> bool {
+        let bare = |x: &Term| matches!(x.node(), Node::Var(v, xa) if *v == p && xa.is_empty());
+        match t.node() {
+            Node::Var(v, xa) => *v != p && xa.iter().all(|x| self.reads(x, p, out)),
+            Node::App(g, xs) => {
+                if is(*g, self.s.app) && bare(&xs[0]) && matches!(xs[1].node(), Node::Bytes(_) | Node::Nat(_)) {
+                    if !out.contains(&xs[1]) {
+                        out.push(xs[1].clone());
+                    }
+                    return true;
+                }
+                for (j, x) in xs.iter().enumerate() {
+                    if bare(x) {
+                        match self.footprint(*g, j) {
+                            Some(fs) => {
+                                for k in fs {
+                                    if !out.contains(&k) {
+                                        out.push(k);
+                                    }
+                                }
+                            }
+                            None => return false,
+                        }
+                    } else if !self.reads(x, p, out) {
+                        return false;
+                    }
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
     /// The typing context of a path: the terms its literals say are natural
     /// numbers.
     fn set_nats(&self, lits: &[Term]) {
@@ -325,18 +407,59 @@ impl<'a> Simp<'a> {
         for l in lits {
             if let Node::App(i, ab) = l.node() {
                 if is(*i, s.in_) {
-                    let set_ok = match ab[1].node() {
-                        Node::App(o, x) if x.is_empty() && is(*o, s.omega) => true,
-                        Node::App(b, x) => self.env.syms[*b as usize].name == "bits" && x.len() == 1 && matches!(x[0].node(), Node::Nat(_)),
-                        _ => false,
-                    };
-                    if set_ok {
-                        out.push(ab[0].clone());
+                    match ab[1].node() {
+                        Node::App(o, x) if x.is_empty() && is(*o, s.omega) => out.push((ab[0].clone(), None)),
+                        Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => {
+                            if let Node::Nat(k) = x[0].node() {
+                                if let Some(k) = k.to_u64() {
+                                    out.push((ab[0].clone(), Some(k)));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
         }
         *self.nats.borrow_mut() = out;
+    }
+
+    /// `t` is an n-bit word: a numeral below 2^n, known on the path, or
+    /// arithmetic mod 2^k (k <= n) on naturals.
+    fn bits_term(&self, t: &Term, n: u64) -> bool {
+        self.bits_term_d(t, n, 0)
+    }
+
+    fn bits_term_d(&self, t: &Term, n: u64, d: u32) -> bool {
+        if d > 32 {
+            return false;
+        }
+        let width = |x: &Term| match x.node() {
+            Node::Nat(v) => v.to_u64(),
+            _ => None,
+        };
+        match t.node() {
+            Node::Nat(v) => v.to_u128().is_some_and(|x| n >= 128 || x < (1u128 << n)),
+            Node::App(f, a) => {
+                if self.nats.borrow().iter().any(|(u, k)| u == t && k.is_some_and(|k| k <= n)) {
+                    return true;
+                }
+                let name = self.env.syms[*f as usize].name.as_str();
+                match name {
+                    "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => {
+                        width(&a[0]).is_some_and(|k| k <= n) && self.nat_term_d(&a[1], d + 1) && self.nat_term_d(&a[2], d + 1)
+                    }
+                    "bits_neg" | "bits_of_nat" if a.len() == 2 => width(&a[0]).is_some_and(|k| k <= n) && self.nat_term_d(&a[1], d + 1),
+                    // x / 2^lo mod 2^(hi + 1 - lo)
+                    "bits_slice" if a.len() == 3 => match (width(&a[1]), width(&a[2])) {
+                        (Some(hi), Some(lo)) => hi >= lo && hi + 1 - lo <= n && self.nat_term_d(&a[0], d + 1),
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            }
+            _ => self.nats.borrow().iter().any(|(u, k)| u == t && k.is_some_and(|k| k <= n)),
+        }
     }
 
     /// `t` is a natural number: a numeral, known to be one on the path
@@ -352,7 +475,7 @@ impl<'a> Simp<'a> {
         match t.node() {
             Node::Nat(_) => true,
             Node::App(f, a) => {
-                if self.nats.borrow().contains(t) {
+                if self.nats.borrow().iter().any(|(u, _)| u == t) {
                     return true;
                 }
                 let name = self.env.syms[*f as usize].name.as_str();
@@ -364,10 +487,11 @@ impl<'a> Simp<'a> {
                     // (a mod 2^n of a natural)
                     "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" if a.len() == 3 => num(&a[0]) && self.nat_term_d(&a[1], d + 1) && self.nat_term_d(&a[2], d + 1),
                     "bits_neg" | "bits_of_nat" if a.len() == 2 => num(&a[0]) && self.nat_term_d(&a[1], d + 1),
+                    "bits_slice" if a.len() == 3 => num(&a[1]) && num(&a[2]) && self.nat_term_d(&a[0], d + 1),
                     _ => false,
                 }
             }
-            _ => self.nats.borrow().contains(t),
+            _ => self.nats.borrow().iter().any(|(u, _)| u == t),
         }
     }
 
@@ -536,7 +660,27 @@ impl<'a> Simp<'a> {
             }
             return Term::app(f, vec![c, self.term(&a[1]), self.term(&a[2])]);
         }
-        let args: Vec<Term> = a.iter().map(|x| self.term(x)).collect();
+        let mut args: Vec<Term> = a.iter().map(|x| self.term(x)).collect();
+        // an argument updated at a field the definition never reads (e.g.
+        // `can_access(fn_update(vm, "bytes", b), x, k)`, which reads only
+        // the pages): the update dropped
+        if matches!(self.env.syms[f as usize].kind, SymKind::Defined { .. }) {
+            for i in 0..args.len() {
+                while let Node::App(u, ub) = args[i].node() {
+                    if !is(*u, s.fn_update) || !matches!(ub[1].node(), Node::Bytes(_) | Node::Nat(_)) {
+                        break;
+                    }
+                    match self.footprint(f, i) {
+                        Some(fs) if fs.iter().all(|k| distinct_literals(k, &ub[1])) => {
+                            let v = ub[0].clone();
+                            args[i] = v;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+        let args = args;
         let head = |x: &Term| match x.node() {
             Node::App(g, b) => Some((*g, b.clone())),
             _ => None,
@@ -588,6 +732,33 @@ impl<'a> Simp<'a> {
             if let Some(v) = self.compute_int(op, &args) {
                 return v;
             }
+            // addresses in canonical form: base + offset
+            if (*op == "bits_add" || *op == "bits_sub") && args.len() == 3 {
+                if let Node::Nat(w) = args[0].node() {
+                    if let Some(n) = w.to_u64().filter(|&n| n <= 128) {
+                        if let Some(c) = self.canonical_addr(&Term::app(f, args.clone()), n) {
+                            return c;
+                        }
+                    }
+                }
+            }
+            // an n-bit x is its own n-bit value
+            if *op == "bits_of_nat" && args.len() == 2 {
+                if let Node::Nat(w) = args[0].node() {
+                    if w.to_u64().is_some_and(|n| n <= 256 && self.bits_term(&args[1], n)) {
+                        return args[1].clone();
+                    }
+                }
+            }
+            // typed words: all bits of x (`bits_slice(x, n-1, 0)` of an n-bit
+            // x); `bits_set_slice(n, x, n-1, 0, v)` of an n-bit v is v
+            if *op == "bits_slice" && args.len() == 3 {
+                if let (Node::Nat(hi), Node::Nat(lo)) = (args[1].node(), args[2].node()) {
+                    if lo.is_zero() && hi.to_u64().is_some_and(|h| h < 256 && self.bits_term(&args[0], h + 1)) {
+                        return args[0].clone();
+                    }
+                }
+            }
             // addresses: `bits_sub` of the same base is its offset
             if *op == "bits_sub" {
                 if let (Node::Nat(w), 3) = (args[0].node(), args.len()) {
@@ -604,6 +775,17 @@ impl<'a> Simp<'a> {
         }
         if let Some(v) = self.bytes(f, &args) {
             return v;
+        }
+        if self.env.syms[f as usize].name == "bits_set_slice" && args.len() == 5 {
+            let num = |x: &Term| match x.node() {
+                Node::Nat(v) => v.to_u64(),
+                _ => None,
+            };
+            if let (Some(n), Some(hi), Some(0)) = (num(&args[0]), num(&args[2]), num(&args[3])) {
+                if n >= 1 && hi == n - 1 && self.bits_term(&args[4], n) {
+                    return args[4].clone();
+                }
+            }
         }
         // a constant defined as a numeral (`PAGE`)
         if args.is_empty() {
@@ -1114,6 +1296,28 @@ impl Simp<'_> {
         }
         if let Node::App(f, a) = t.node() {
             if is(*f, s.or) {
+                // a choice of constants for a variable (`x = false || x =
+                // true`: an undefined flag) stays one literal: splitting
+                // would duplicate everything after it
+                let mut ds = Vec::new();
+                self.disjuncts(t, &mut ds);
+                let choice = |d: &Term| -> Option<crate::term::VarId> {
+                    let Node::App(e, ab) = d.node() else { return None };
+                    if *e != s.eq {
+                        return None;
+                    }
+                    let konst = |c: &Term| self.is_true(c) || self.is_false(c);
+                    match (ab[0].node(), ab[1].node()) {
+                        (Node::Var(v, va), _) if va.is_empty() && konst(&ab[1]) => Some(*v),
+                        (_, Node::Var(v, va)) if va.is_empty() && konst(&ab[0]) => Some(*v),
+                        _ => None,
+                    }
+                };
+                if let Some(v0) = ds.first().and_then(choice) {
+                    if ds.iter().all(|d| choice(d) == Some(v0)) {
+                        return Some(vec![Path { vars: vec![], lits: vec![t.clone()], done: vec![] }]);
+                    }
+                }
                 let mut x = self.paths(&a[0], fresh)?;
                 x.extend(self.paths(&a[1], fresh)?);
                 return (x.len() <= MAX_PATHS).then_some(x);
@@ -1176,7 +1380,11 @@ impl Simp<'_> {
                 if !self.is_true(&l) {
                     let mut cs = Vec::new();
                     self.conjuncts(&l, &mut cs);
-                    lits.extend(cs);
+                    for c in cs {
+                        if !lits.contains(&c) {
+                            lits.push(c);
+                        }
+                    }
                 }
             }
             p.lits = lits;
@@ -1546,6 +1754,9 @@ impl Simp<'_> {
             self.conjuncts(&a[0], &mut hyps);
             t = a[1].clone();
         }
+        // (hypotheses about runs first: they bind the most, and a more
+        // general hypothesis matched first may bind wrongly)
+        hyps.sort_by_key(|h| !matches!(h.node(), Node::App(r, _) if is(*r, self.s.runs)));
         // (an equation needs no hypotheses: a rewrite rule)
         let eq = matches!(t.node(), Node::App(e, _) if *e == self.s.eq);
         (!hyps.is_empty() || (eq && !vs.is_empty())).then_some((vs, hyps, t))
@@ -1864,17 +2075,21 @@ impl Simp<'_> {
             *fresh += 1;
             (*fresh - 1, Term::var(*fresh - 1, vec![]))
         };
-        let ((l1v, l1), (tv, t), (uv, u)) = (var(), var(), var());
+        let ((l1v, l1), (rv, r1)) = (var(), var());
         let stop = self.and(self.not(cond(l0)), Term::app(self.s.eq, vec![r.clone(), ok(l0)]));
         let leave = self.and(self.and(cond(l0), body(l0, r)), self.not(Term::app(is_ok, vec![r.clone()])));
-        let diverge = |x: Term| Term::app(self.s.diverge.expect("diverge"), vec![x]);
-        let div = Term::app(self.s.eq, vec![r.clone(), diverge(t)]);
-        let div = Term::app(self.s.ex, vec![abstract_var(env, &div, tv, 0)]);
-        // (the loop from l1 diverges too)
-        let div1 = Term::app(wr, vec![l1.clone(), a[1].clone(), a[2].clone(), a[3].clone(), diverge(u)]);
-        let div = self.and(div, Term::app(self.s.ex, vec![abstract_var(env, &div1, uv, 0)]));
-        let again = Term::app(wr, vec![l1.clone(), a[1].clone(), a[2].clone(), a[3].clone(), r.clone()]);
-        let next = self.and(body(l0, &ok(&l1)), self.or(again, div));
+        // the loop runs on from l1 with an outcome r1 of the same kind: r
+        // itself, or both divergences (with other traces). As one path:
+        // `fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)` (outcomes are
+        // tagged 0, 1, 2), so the rest of the loop is followed once.
+        let fst = |x: &Term| Term::app(self.s.fst.expect("fst"), vec![x.clone()]);
+        let nat = |n: u64| Term::nat(crate::nat::Nat::from_u64(n));
+        let again = Term::app(wr, vec![l1.clone(), a[1].clone(), a[2].clone(), a[3].clone(), r1.clone()]);
+        let kind = Term::app(self.s.eq, vec![fst(&r1), fst(r)]);
+        let same = Term::app(self.s.imp, vec![self.not(Term::app(self.s.eq, vec![fst(r), nat(2)])), Term::app(self.s.eq, vec![r1.clone(), r.clone()])]);
+        let again = self.and(self.and(again, kind), same);
+        let again = Term::app(self.s.ex, vec![abstract_var(env, &again, rv, 0)]);
+        let next = self.and(body(l0, &ok(&l1)), again);
         let next = self.and(cond(l0), Term::app(self.s.ex, vec![abstract_var(env, &next, l1v, 0)]));
         Ok(self.or(self.or(stop, leave), next))
     }
@@ -2160,7 +2375,7 @@ impl Logic {
             }
             // a loop on the path, with an invariant: continue with its outcome
             let mut why = String::new();
-            if std::env::var("SIMP_DEBUG").is_ok() && p.lits.len() > 60 {
+            if std::env::var("SIMP_DEBUG").is_ok() && p.lits.len() > 150 {
                 let pr = crate::syntax::Printer::new(env);
                 for l in &p.lits {
                     eprintln!("simp: literal {}", pr.term(l).chars().take(400).collect::<String>());

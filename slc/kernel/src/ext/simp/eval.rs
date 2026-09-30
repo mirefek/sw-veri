@@ -508,6 +508,17 @@ impl<'s, 'a> Ev<'s, 'a> {
     }
 
     fn solve_member(&mut self, x: &Term, set: &Term, us: &[VarId], a: Assign) -> Result<Vec<Assign>, String> {
+        // a numeral n (von Neumann: {0, .., n-1}), not too large: each element
+        if let Node::Nat(n) = set.node() {
+            if let Some(n) = n.to_u64().filter(|&n| n <= 4096) {
+                let mut out = Vec::new();
+                for v in 0..n {
+                    let e = Term::app(self.sp.s.eq, vec![x.clone(), Term::nat(crate::nat::Nat::from_u64(v))]);
+                    out.extend(self.solve(&e, us, a.clone())?);
+                }
+                return Ok(out);
+            }
+        }
         let Node::App(g, b) = set.node() else { return err(format!("{}membership in {}", UNSOLVED, self.show(set))) };
         match self.name(*g) {
             "set_select" => {
