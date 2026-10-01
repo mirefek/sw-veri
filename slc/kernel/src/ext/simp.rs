@@ -63,7 +63,10 @@
 //!   `fst(p)`, `snd(p)` (and `out_state`, `out_value`) if f or p is (they
 //!   are `empty` when undefined); `ite(c, a, b)` if a and b are;
 //!   `restrict(f, d)` and `ghost_part(f, d)` if f is (subsets:
-//!   `restrict_univ`, `ghost_part_univ` in core/records.core).
+//!   `restrict_univ`, `ghost_part_univ` in core/records.core); updates of
+//!   the same base b at different literal keys are equal if they agree at
+//!   every key, b is a function and the keys updated on one side only are
+//!   in dom(b) (`fn_update_fun`, `fn_update_dom`, `rec_ext`).
 //!
 //! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
 //! match literals of the path (or follow from them by taut/arith), with
@@ -71,7 +74,9 @@
 //! for an equation C (possibly n = 0), xs may also be bound by matching its
 //! left side against terms of the path or goal. The goal is rewritten with
 //! the path's equations `x = t` / `t = x` (x a variable) and `a = b` (left
-//! to right).
+//! to right), again while it changes (simplified, it may show a rewritten
+//! term anew), with the goal-side rule for equations of update chains.
+//! (`SIMP_GOAL=1` prints each path's equations and rewritten goal.)
 //!
 //! Delayed case splits (no rule, only the order of the search): a
 //! disjunction about the pending outcome r of a loop (`while_rel(.., r)`)
@@ -1672,6 +1677,22 @@ impl<'a> Simp<'a> {
             r = self.and(r, self.eq(&app(&x, k), &app(&y, k)));
         }
         Some(r)
+    }
+
+    /// `update_chains_goal` on the equations among the goal's top-level
+    /// conjuncts.
+    fn chain_eqs_goal(&self, g: &Term) -> Term {
+        match g.node() {
+            Node::App(f, a) if is(*f, self.s.and) => {
+                let (x, y) = (self.chain_eqs_goal(&a[0]), self.chain_eqs_goal(&a[1]));
+                if x.ptr_eq(&a[0]) && y.ptr_eq(&a[1]) {
+                    return g.clone();
+                }
+                self.and(x, y)
+            }
+            Node::App(f, a) if *f == self.s.eq => self.update_chains_goal(&a[0], &a[1]).unwrap_or_else(|| g.clone()),
+            _ => g.clone(),
+        }
     }
 
     fn eq(&self, a: &Term, b: &Term) -> Term {
@@ -3598,26 +3619,46 @@ impl Logic {
                 Node::App(h, _) => [sp.s.pair, sp.s.tag, sp.s.ok, sp.s.exc, sp.s.diverge, sp.s.fn_update, sp.s.some, sp.s.none].iter().any(|c| is(*h, *c)),
                 _ => false,
             };
-            for &(a, b) in &eqs {
-                for (v, t) in [(a, b), (b, a)] {
-                    if let Some(x) = var(v) {
-                        if ctor(t) || var(t).is_some() {
-                            if has_var(t, x) {
-                                continue;
-                            }
-                            if has_var(&g, x) {
-                                g = sp.eqv(&g.subst_var(x, t, &bf));
-                                substs.push((x, t.clone()));
-                                break;
-                            }
-                        } else {
-                            let body = super::seq::abstract_term(&g, t, 0, &bf);
-                            if body != g {
-                                g = sp.eqv(&inst_k(env, &body, &[v.clone()]));
-                                break;
+            // (repeated: the goal simplified again may show a rewritten term
+            // anew, e.g. `restrict(s, d)` from a restriction of updates of s)
+            for _round in 0..4 {
+                let g0 = g.clone();
+                for &(a, b) in &eqs {
+                    for (v, t) in [(a, b), (b, a)] {
+                        if let Some(x) = var(v) {
+                            if ctor(t) || var(t).is_some() {
+                                if has_var(t, x) {
+                                    continue;
+                                }
+                                if has_var(&g, x) {
+                                    g = sp.eqv(&g.subst_var(x, t, &bf));
+                                    substs.push((x, t.clone()));
+                                    break;
+                                }
+                            } else {
+                                let body = super::seq::abstract_term(&g, t, 0, &bf);
+                                if body != g {
+                                    g = sp.eqv(&inst_k(env, &body, &[v.clone()]));
+                                    break;
+                                }
                             }
                         }
                     }
+                }
+                for &(a, b) in &eqs {
+                    if var(a).is_none() && var(b).is_none() {
+                        let body = super::seq::abstract_term(&g, a, 0, &bf);
+                        if body != g {
+                            g = sp.eqv(&inst_k(env, &body, &[b.clone()]));
+                        }
+                    }
+                }
+                // (equations of update chains the rewriting brought to
+                // light: the goal-side rule, as in the goal's first
+                // simplification)
+                g = sp.chain_eqs_goal(&g);
+                if g.ptr_eq(&g0) || g == g0 {
+                    break;
                 }
             }
             // the same substitutions in the literals (they may name t by x)
@@ -3640,14 +3681,6 @@ impl Logic {
                     .collect();
                 q
             };
-            for &(a, b) in &eqs {
-                if var(a).is_none() && var(b).is_none() {
-                    let body = super::seq::abstract_term(&g, a, 0, &bf);
-                    if body != g {
-                        g = sp.eqv(&inst_k(env, &body, &[b.clone()]));
-                    }
-                }
-            }
             // the path's (non-equation) literals in the goal: true there (a
             // negated one: its atom false), the goal simplified again
             let mut known = false;
@@ -3672,6 +3705,13 @@ impl Logic {
             lap(1, &mut tm);
             if sp.is_true(&g) {
                 continue;
+            }
+            if std::env::var("SIMP_GOAL").is_ok() {
+                let pr = crate::syntax::Printer::new(env);
+                for (a, b) in &eqs {
+                    eprintln!("simp: equation on the path: {} = {}", pr.term(a), pr.term(b));
+                }
+                eprintln!("simp: goal on the path: {}", pr.term(&g));
             }
             // the checks below without the held disjunctions (undecided,
             // they cannot close the path; fewer premises is sound); the path
