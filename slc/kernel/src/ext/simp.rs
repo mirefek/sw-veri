@@ -99,6 +99,22 @@
 //! * a goal `all ys. H1 -> .. -> C` holds when C (its variables fixed) is an
 //!   instance of a literal `all xs. D` (`all i. i in omega -> P(f(i))` from
 //!   `all a. P(a)`).
+//! * the path's literal bounds of an integer term (`d <= 31`, `!(k < d)`)
+//!   decide comparisons of it with literals -- not the literal they come
+//!   from (`int_lt(d, 2^31)` in an `ite` condition).
+//! * a goal computing `ite(c, a, b)` whose condition no literal decides is
+//!   split on c (or on an undecided atom of a compound c), as `c || !c`.
+//! * a premise `all xs. f(xs) = rhs` (f defined, the xs in order, f not in
+//!   rhs) unfolds f everywhere, as a definition would (`x86.cond_eval`: a
+//!   jump's condition computed from the flags); a bit of a numeral as a
+//!   value is its proposition; `p = true` / `p = false` of a proposition p
+//!   is p / !p.
+//! * a proposition (eq, in, imp, ex, and what unfolds to them) is in
+//!   univ(1) and above (the prelude's `false_univ`, `true_univ`).
+//! * arith, when the literals alone do not close a path, also gets the
+//!   widths simp knows of opaque words (`le(b, a, 1) in bits(8)`).
+//! * witnesses: a variable only typed `x in bits(n)` / `x in omega` (an
+//!   uninitialized local) takes 0 when nothing else binds it.
 //! * a choice of constants (`t = false || t = true`) stays one literal (not
 //!   a case split) also for a projection t of a variable (`fst(snd(u))`:
 //!   one of several undefined flags).
@@ -259,6 +275,8 @@ struct Simp<'a> {
     memo: std::cell::RefCell<FxMap<usize, (Term, Term)>>,
     /// programs kept folded (`Logic::simp_keep`)
     keep: Vec<SymId>,
+    /// symbols unfolded by premises `all xs. f(xs) = rhs` (`Logic::simp_rewrites`)
+    rewrites: Vec<(SymId, usize, Term)>,
     /// run loops in the goal (`Logic::simp_goal_loops`)
     goal_loops: bool,
     /// library lemmas used (for `Logic::simp_used`)
@@ -269,6 +287,9 @@ struct Simp<'a> {
     /// in the goal's first simplification: the premises' literals `t in S`
     /// (the typing rule leaves those as they are)
     known_mems: std::cell::RefCell<Vec<Term>>,
+    /// literal bounds the path's literals give integers: (x, upper, k, the
+    /// literal's atom) for x <= k (upper) or x >= k
+    bounds: std::cell::RefCell<Vec<(Term, bool, SInt, Term)>>,
     /// fields read by definitions of their parameters (`footprint`)
     footprints: std::cell::RefCell<FxMap<(SymId, usize), Option<Vec<Term>>>>,
     /// parameters used only mod 2^n (`word_param`)
@@ -502,12 +523,14 @@ impl<'a> Simp<'a> {
             env,
             arith,
             keep: lg.simp_keep.borrow().clone(),
+            rewrites: lg.simp_rewrites.borrow().clone(),
             goal_loops: lg.simp_goal_loops.get(),
             used: Default::default(),
             no_hold: Default::default(),
             memo: Default::default(),
             nats: std::cell::RefCell::new(Vec::new()),
             known_mems: std::cell::RefCell::new(Vec::new()),
+            bounds: std::cell::RefCell::new(Vec::new()),
             footprints: Default::default(),
             word_params: Default::default(),
             prof: Default::default(),
@@ -797,6 +820,85 @@ impl<'a> Simp<'a> {
             *self.nats.borrow_mut() = out;
             *self.known_mems.borrow_mut() = mems;
         }
+        // literal bounds of integers: `x <= k`, `k < x`, `!(x < k)`, ..
+        let bounds = self.literal_bounds(lits);
+        if *self.bounds.borrow() != bounds {
+            self.memo.borrow_mut().clear();
+            *self.bounds.borrow_mut() = bounds;
+        }
+    }
+
+    /// The literals with the widths simp knows of their opaque words (`le(b,
+    /// a, 1) in bits(8)`), for arithmetic: a value read from memory is a
+    /// word, which arith alone does not see.
+    fn width_facts(&self, lits: &[Term]) -> Vec<Term> {
+        fn walk(sp: &Simp, t: &Term, out: &mut Vec<Term>) {
+            let Node::App(f, a) = t.node() else { return };
+            if *f == sp.s.all || *f == sp.s.ex {
+                return;
+            }
+            let name = sp.env.syms[*f as usize].name.as_str();
+            let opaque = !sp.arith.contains_key(f) && !name.starts_with("bits_") && name != "bit" && matches!(sp.env.syms[*f as usize].kind, SymKind::Defined { .. } | SymKind::Primitive);
+            if opaque && !out.contains(t) {
+                if let (Some(n), Some(b), Some(i)) = ([8u64, 16, 32, 64].into_iter().find(|&n| sp.bits_term(t, n)), sp.env.sym_by_name.get("bits"), sp.s.in_) {
+                    out.push(Term::app(i, vec![t.clone(), Term::app(*b, vec![Term::nat(crate::nat::Nat::from_u64(n))])]));
+                }
+            }
+            for x in a {
+                walk(sp, x, out);
+            }
+        }
+        let mut found = Vec::new();
+        for l in lits {
+            walk(self, l, &mut found);
+        }
+        let mut out = lits.to_vec();
+        out.extend(found);
+        out
+    }
+
+    /// The bounds `x <= k` / `x >= k` (k a literal, x an integer) the
+    /// literals state, each with the comparison it comes from.
+    fn literal_bounds(&self, lits: &[Term]) -> Vec<(Term, bool, SInt, Term)> {
+        use crate::nat::Nat;
+        let one = SInt::nat(Nat::from_u64(1));
+        let minus_one = SInt::new(true, Nat::from_u64(1));
+        let mut out = Vec::new();
+        for l in lits {
+            let (neg, atom) = match l.node() {
+                Node::App(n, a) if is(*n, self.s.not) && a.len() == 1 => (true, &a[0]),
+                _ => (false, l),
+            };
+            let Node::App(f, b) = atom.node() else { continue };
+            if b.len() != 2 {
+                continue;
+            }
+            let strict = match self.env.syms[*f as usize].name.as_str() {
+                "int_lt" => true,
+                "int_le" => false,
+                _ => continue,
+            };
+            let (x, lit_left, k) = match (self.int_lit(&b[0]), self.int_lit(&b[1])) {
+                (Some(k), None) => (&b[1], true, k),
+                (None, Some(k)) => (&b[0], false, k),
+                _ => continue,
+            };
+            if !self.int_term(x) {
+                continue;
+            }
+            let (upper, k) = match (lit_left, strict, neg) {
+                (false, false, false) => (true, k),             // x <= k
+                (false, true, false) => (true, k.add(&minus_one)), // x < k
+                (false, false, true) => (false, k.add(&one)),   // !(x <= k)
+                (false, true, true) => (false, k),              // !(x < k)
+                (true, false, false) => (false, k),             // k <= x
+                (true, true, false) => (false, k.add(&one)),    // k < x
+                (true, false, true) => (true, k.add(&minus_one)), // !(k <= x)
+                (true, true, true) => (true, k),                // !(k < x)
+            };
+            out.push((x.clone(), upper, k, atom.clone()));
+        }
+        out
     }
 
     fn known(&self, t: &Term, ok: impl Fn(Ty) -> bool) -> bool {
@@ -1029,7 +1131,29 @@ impl<'a> Simp<'a> {
             }
             return t.with_args(vec![c, self.term(&a[1]), self.term(&a[2])]);
         }
+        // a symbol a premise unfolds (`all xs. f(xs) = rhs`): rhs instantiated
+        if let Some((_, _, rule)) = self.rewrites.iter().find(|(g, n, _)| *g == f && *n == a.len()) {
+            let mut r = rule.clone();
+            for x in a.iter() {
+                let body = match r.node() {
+                    Node::App(_, b) => b[0].clone(),
+                    _ => break,
+                };
+                r = inst_k(self.env, &body, &[x.clone()]);
+            }
+            if let Node::App(e, b) = r.node() {
+                if *e == s.eq {
+                    return self.term(&b[1]);
+                }
+            }
+        }
         let mut args: Vec<Term> = a.iter().map(|x| self.term(x)).collect();
+        // a bit of a numeral, as a value (`c = bit(7, 0)`): the proposition
+        if self.env.syms[f as usize].name == "bit" && args.len() == 2 {
+            if let Some(b) = self.literal_prop(&t.with_args(args.clone())) {
+                return if b { self.tt() } else { self.ff() };
+            }
+        }
         // an argument updated at a field the definition never reads (e.g.
         // `can_access(fn_update(vm, "bytes", b), x, k)`, which reads only
         // the pages): the update dropped
@@ -1500,6 +1624,19 @@ impl<'a> Simp<'a> {
                     return r;
                 }
             }
+            // a proposition equal to true / false (`(c || z) = bit(7, 0)`, a
+            // jump's condition): the proposition / its negation
+            for (p, c) in [(&a[0], &a[1]), (&a[1], &a[0])] {
+                if self.prop_shaped(p, 4) {
+                    let c = self.term(c);
+                    if self.is_true(&c) {
+                        return self.prop(p, pol);
+                    }
+                    if self.is_false(&c) {
+                        return self.prop(&self.not(p.clone()), pol);
+                    }
+                }
+            }
             let r = self.eq(&a[0], &a[1]);
             if matches!(r.node(), Node::App(e, b) if *e == f && b[0].ptr_eq(&a[0]) && b[1].ptr_eq(&a[1])) {
                 return t.clone();
@@ -1630,8 +1767,22 @@ impl<'a> Simp<'a> {
             _ => return None,
         };
         let zero = SInt::nat(Nat::zero());
-        let lo = self.nat_term(x).then(|| zero.clone());
-        let hi = (1..=128u64).find(|&n| self.bits_term(x, n)).map(|n| SInt::nat(Nat::pow2(n)).add(&SInt::new(true, Nat::from_u64(1))));
+        let mut lo = self.nat_term(x).then(|| zero.clone());
+        let mut hi = (1..=128u64).find(|&n| self.bits_term(x, n)).map(|n| SInt::nat(Nat::pow2(n)).add(&SInt::new(true, Nat::from_u64(1))));
+        // the path's literal bounds on x (not one from t itself: a literal
+        // does not decide itself)
+        for (y, upper, k, src) in self.bounds.borrow().iter() {
+            if y != x || src == t {
+                continue;
+            }
+            if *upper {
+                if hi.as_ref().is_none_or(|h| k.lt(h)) {
+                    hi = Some(k.clone());
+                }
+            } else if lo.as_ref().is_none_or(|l| l.lt(k)) {
+                lo = Some(k.clone());
+            }
+        }
         // x's range [lo, hi] against k: x < k, x <= k, k < x, k <= x
         let below = |a: &SInt, c: &SInt| a.lt(c);
         let le = |a: &SInt, c: &SInt| !c.lt(a);
@@ -1689,7 +1840,8 @@ impl<'a> Simp<'a> {
     /// `and`, `or`, `all`, `bit`, ..).
     fn prop_shaped(&self, t: &Term, depth: u32) -> bool {
         let Node::App(g, _) = t.node() else { return false };
-        if *g == self.s.eq || *g == self.env.builtins.imp || *g == self.s.ex || self.is_false(t) || self.is_true(t) {
+        // (`a in b` too: the prelude's `in_prop`)
+        if *g == self.s.eq || *g == self.env.builtins.imp || *g == self.s.ex || is(*g, self.s.in_) || self.is_false(t) || self.is_true(t) {
             return true;
         }
         if self.env.syms[*g as usize].name == "false" {
@@ -1744,6 +1896,11 @@ impl<'a> Simp<'a> {
             _ => false,
         };
         if above_omega && self.int_term(x) {
+            return Some(self.tt());
+        }
+        // a proposition: false or true, both in univ(1) (the prelude's
+        // `false_univ`, `true_univ`) and so in every universe above
+        if above_omega && self.prop_shaped(x, 4) && ["false_univ", "true_univ"].iter().all(|a| self.env.axioms.iter().any(|(n, _)| n == a)) {
             return Some(self.tt());
         }
         // in a goal: a member by the path (before the strengthening below
@@ -2401,6 +2558,16 @@ fn has_bvar_any(env: &Env, t: &Term, depth: u32) -> bool {
     }
 }
 
+/// The condition of an `ite` in `t` that mentions no bound variable (a
+/// case split for a goal computing a branch: `ok(w, ite(c, 1, 0))`).
+fn open_ite(env: &Env, ite: Option<SymId>, t: &Term) -> Option<Term> {
+    let Node::App(f, a) = t.node() else { return None };
+    if is(*f, ite) && a.len() == 3 && !has_bvar_any(env, &a[0], 0) {
+        return Some(a[0].clone());
+    }
+    a.iter().enumerate().filter(|(k, _)| env.syms[*f as usize].binders[*k] == 0).find_map(|(_, x)| open_ite(env, ite, x))
+}
+
 fn has_bvar(env: &Env, t: &Term, i: u32) -> bool {
     match t.node() {
         Node::BVar(j) => *j == i,
@@ -2683,9 +2850,9 @@ impl Simp<'_> {
         let mut dirty = vec![true; p.lits.len()];
         'again: loop {
             rounds += 1;
-            let before = self.nats.borrow().clone();
+            let before = (self.nats.borrow().clone(), self.bounds.borrow().clone());
             self.set_nats(&p.lits);
-            if *self.nats.borrow() != before {
+            if *self.nats.borrow() != before.0 || *self.bounds.borrow() != before.1 {
                 dirty.iter_mut().for_each(|d| *d = true);
             }
             if rounds == 5000 && std::env::var("SIMP_DEBUG").is_ok() {
@@ -3114,6 +3281,29 @@ impl Simp<'_> {
                         if binds.len() > start {
                             let n = binds.len();
                             stack.push((0, binds, n));
+                            continue;
+                        }
+                        // nothing binds the rest: a variable only typed
+                        // `x in bits(n)` / `x in omega` (a value left open,
+                        // e.g. an uninitialized local) takes 0, the rest may
+                        // follow from it (checked as any witness)
+                        let mut more = binds.clone();
+                        for l in &gp.lits {
+                            if let Node::App(m, ab) = l.node() {
+                                if !is(*m, self.s.in_) || ab.len() != 2 {
+                                    continue;
+                                }
+                                if let (Node::Var(v, va), Node::App(set, sa)) = (ab[0].node(), ab[1].node()) {
+                                    let zero_in = is(*set, self.s.omega) || (self.env.syms[*set as usize].name == "bits" && sa.len() == 1);
+                                    if va.is_empty() && zero_in && gp.vars.contains(v) && !more.iter().any(|(w, _)| w == v) {
+                                        more.push((*v, Term::nat(crate::nat::Nat::zero())));
+                                    }
+                                }
+                            }
+                        }
+                        if more.len() > binds.len() {
+                            let n = more.len();
+                            stack.push((0, more, n));
                         }
                         continue;
                     }
@@ -4152,7 +4342,48 @@ impl Logic {
         self.prove_paths(env, premises, goal, hints, &mut fresh)
     }
 
+    /// The premises that unfold a defined symbol: `all x1 .. xn. f(x1, ..,
+    /// xn) = rhs` (n >= 1, the xs distinct and in order, f not in rhs).
+    fn rewrite_rules(&self, env: &Env, premises: &[Term]) -> Vec<(SymId, usize, Term)> {
+        fn mentions(t: &Term, f: SymId) -> bool {
+            match t.node() {
+                Node::App(g, a) => *g == f || a.iter().any(|x| mentions(x, f)),
+                Node::Var(_, a) => a.iter().any(|x| mentions(x, f)),
+                _ => false,
+            }
+        }
+        let mut out = Vec::new();
+        for p in premises {
+            let mut n = 0;
+            let mut b = p;
+            while let Node::App(q, a) = b.node() {
+                if *q != self.all {
+                    break;
+                }
+                b = &a[0];
+                n += 1;
+            }
+            let Node::App(e, ab) = b.node() else { continue };
+            if *e != self.eq || n == 0 {
+                continue;
+            }
+            let Node::App(f, xs) = ab[0].node() else { continue };
+            let in_order = xs.len() == n && xs.iter().enumerate().all(|(i, x)| matches!(x.node(), Node::BVar(j) if *j as usize == n - 1 - i));
+            if in_order && matches!(env.syms[*f as usize].kind, SymKind::Defined { .. }) && !mentions(&ab[1], *f) {
+                out.push((*f, n, p.clone()));
+            }
+        }
+        out
+    }
+
     fn prove_paths(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<()> {
+        *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
+        let r = self.prove_paths_with(env, premises, goal, hints, fresh);
+        self.simp_rewrites.borrow_mut().clear();
+        r
+    }
+
+    fn prove_paths_with(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<()> {
         let sp = Simp::new(env, self);
         let t0 = std::time::Instant::now();
         let mut prem = sp.tt();
@@ -4345,7 +4576,15 @@ impl Logic {
                     sp.unsplit(l) && lv.iter().any(|v| gv.contains(v))
                 })
             };
-            let closes = |g: &Term| !waits && (sp.typed(&p.lits, g) || self.tautology(env, &p.lits, g).is_ok() || self.arith(env, &p.lits, g).is_ok() || sp.instance_of_all(&p.lits, g));
+            let closes = |g: &Term| {
+                !waits
+                    && (sp.typed(&p.lits, g)
+                        || self.tautology(env, &p.lits, g).is_ok()
+                        || self.arith(env, &p.lits, g).is_ok()
+                        || sp.instance_of_all(&p.lits, g)
+                        // (with the widths of words read from memory)
+                        || self.arith(env, &sp.width_facts(&p.lits), g).is_ok())
+            };
             // a conjunction: each conjunct (arithmetic from the literals about it)
             let closes_part = |c: &Term| closes(c) || (!waits && self.arith(env, &relevant(&p.lits, c), c).is_ok());
             let mut gs = Vec::new();
@@ -4412,6 +4651,35 @@ impl Logic {
             if let Some(ps) = sp.release(&full, fresh, false).or_else(|| sp.release(&full, fresh, true)) {
                 work.extend(ps);
                 continue;
+            }
+            // the goal computes a branch `ite(c, a, b)` its path does not
+            // decide: split on c (c || !c)
+            // (a compound condition: an atom of it the path does not have)
+            let split_on = |c: Term| -> Option<Term> {
+                fn atoms(sp: &Simp, t: &Term, out: &mut Vec<Term>) {
+                    match t.node() {
+                        Node::App(f, a) if is(*f, sp.s.and) || is(*f, sp.s.or) || is(*f, sp.s.not) => a.iter().for_each(|x| atoms(sp, x, out)),
+                        _ => out.push(t.clone()),
+                    }
+                }
+                let mut cands = vec![c.clone()];
+                atoms(&sp, &c, &mut cands);
+                cands.into_iter().find(|a| {
+                    let na = Term::app(sp.s.not.unwrap(), vec![a.clone()]);
+                    !full.lits.contains(a) && !full.lits.contains(&na)
+                })
+            };
+            if let Some(c) = open_ite(env, sp.s.ite, &g).and_then(split_on) {
+                let nc = Term::app(sp.s.not.unwrap(), vec![c.clone()]);
+                {
+                    steps += 1;
+                    if steps > MAX_PATHS {
+                        return Err(crate::env::KernelError("simp: too many paths".into()));
+                    }
+                    work.extend(sp.extend(self, &full, c, fresh)?);
+                    work.extend(sp.extend(self, &full, nc, fresh)?);
+                    continue;
+                }
             }
             // left: reported as a fact to prove (its variables universal)
             left += 1;

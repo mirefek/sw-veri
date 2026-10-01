@@ -258,12 +258,13 @@ fn ok_lemma(env: &mut Env, lg: &sl_kernel::ext::Logic, ns: &str, base: u64, addr
         let mut out = out;
         let mut conds: Vec<Term> = Vec::new();
         let mut subst: Vec<(u32, Term)> = Vec::new();
+        let mut touched: Vec<(Term, Term, Term)> = Vec::new();
         for l in lits {
             if let Node::App(r, a) = l.node() {
                 if *r == runs {
                     if let (Node::App(t, ta), Node::App(k, kb)) = (a[0].node(), a[2].node()) {
                         if *t == touch && *k == ok {
-                            accesses.push((pr.term(&ta[0]), pr.term(&ta[1]), pr.term(&ta[2])));
+                            touched.push((ta[0].clone(), ta[1].clone(), ta[2].clone()));
                             if let Node::Var(y, _) = kb[0].node() {
                                 subst.push((*y, a[1].clone()));
                             }
@@ -276,6 +277,24 @@ fn ok_lemma(env: &mut Env, lg: &sl_kernel::ext::Logic, ns: &str, base: u64, addr
                 }
             }
             conds.push(l.clone());
+        }
+        // (a touch may start from the state an earlier one left -- a read,
+        // then a write: the substitution resolved to a fixpoint)
+        for _ in 0..subst.len() {
+            let snapshot = subst.clone();
+            for (_, t) in subst.iter_mut() {
+                for (v, u) in &snapshot {
+                    *t = t.subst_var(*v, u, &bf);
+                }
+            }
+        }
+        for (a, n, k) in &touched {
+            let mut a = a.clone();
+            for (v, t) in &subst {
+                a = a.subst_var(*v, t, &bf);
+            }
+            let a = lg.simp_term(env, &a);
+            accesses.push((pr.term(&a), pr.term(n), pr.term(k)));
         }
         for (v, t) in &subst {
             out = out.subst_var(*v, t, &bf);

@@ -31,6 +31,9 @@ pub struct Logic {
     /// `simp` runs loops of the goal (with `unroll`): an iteration at a
     /// time, by the lemmas `while_stop`, `while_leave`, `while_step`
     pub simp_goal_loops: std::cell::Cell<bool>,
+    /// premises of the current `simp` step that unfold a symbol, `all xs.
+    /// f(xs) = rhs` (the symbol, its arity, the premise)
+    pub simp_rewrites: std::cell::RefCell<Vec<(SymId, usize, Term)>>,
 }
 
 impl Logic {
@@ -55,6 +58,7 @@ impl Logic {
             simp_keep: Default::default(),
             simp_used: Default::default(),
             simp_goal_loops: Default::default(),
+            simp_rewrites: Default::default(),
         })
     }
 

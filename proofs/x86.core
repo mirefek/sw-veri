@@ -336,6 +336,49 @@ proof
   show := sym(e4)
 qed
 
+// a condition code's test of the flags, computed (a conditional jump's
+// branch condition: `ja` is cc 7, !(cf || zf))
+abbrev x86.cc_test(f, cc) := ite(bits_slice(cc, 3, 1) = 0, app(f, "of"), ite(bits_slice(cc, 3, 1) = 1, app(f, "cf"), ite(bits_slice(cc, 3, 1) = 2, app(f, "zf"), ite(bits_slice(cc, 3, 1) = 3, app(f, "cf") || app(f, "zf"), ite(bits_slice(cc, 3, 1) = 4, app(f, "sf"), ite(bits_slice(cc, 3, 1) = 5, app(f, "pf"), ite(bits_slice(cc, 3, 1) = 6, !(app(f, "sf") = app(f, "of")), app(f, "zf") || !(app(f, "sf") = app(f, "of")))))))))
+abbrev x86.cc_prog(f, cc) := mkprog(x2 x3. letin(x86.cc_test(f, cc), x4. x3 = ok(x2, !(x4 = bit(cc, 0)))))
+// (bit 0 of the code negates the test)
+abbrev x86.cc_val(f, cc) := (!(x86.cc_test(f, cc) = bit(cc, 0)))
+
+theorem x86.cond_eval: all f cc. x86_64_linux.cond(f, cc) = x86.cc_val(f, cc)
+proof
+  fix f
+  fix cc
+  have pq: all x0. (ex x1. runs(x86.cc_prog(f, cc), empty, ok(x1, x0))) <-> x0 = x86.cc_val(f, cc) proof
+    fix x0
+    have d1: (ex x1. runs(x86.cc_prog(f, cc), empty, ok(x1, x0))) -> x0 = x86.cc_val(f, cc) proof
+      assume h: ex x1. runs(x86.cc_prog(f, cc), empty, ok(x1, x0))
+      obtain y, hy from h
+      show by simp(hy)
+    qed
+    have d2: x0 = x86.cc_val(f, cc) -> (ex x1. runs(x86.cc_prog(f, cc), empty, ok(x1, x0))) proof
+      assume h: x0 = x86.cc_val(f, cc)
+      have ut: x86.cc_val(f, cc) -> x86.cc_val(f, cc) in univ(1) proof
+        assume hv: x86.cc_val(f, cc)
+        have e: x86.cc_val(f, cc) = true by simp(hv)
+        show := rewrite(sym(e), true_univ)
+      qed
+      have uf: !x86.cc_val(f, cc) -> x86.cc_val(f, cc) in univ(1) proof
+        assume hv: !x86.cc_val(f, cc)
+        have e: x86.cc_val(f, cc) = false by simp(hv)
+        show := rewrite(sym(e), false_univ)
+      qed
+      have u: x86.cc_val(f, cc) in univ(1) by taut(ut, uf)
+      have ux: x0 in univ(1) := rewrite(sym(h), u)
+      have r: runs(x86.cc_prog(f, cc), empty, ok(empty, x0)) by simp(h, ux)
+      show := ex_intro({empty}, {x1. runs(x86.cc_prog(f, cc), empty, ok(x1, x0))}, r)
+    qed
+    show by taut(d1, d2)
+  qed
+  have e := mp(choose_ext[p := x0. ex x1. runs(x86.cc_prog(f, cc), empty, ok(x1, x0)), q := x0. x0 = x86.cc_val(f, cc)], pq)
+  have ea := ex_intro({x86.cc_val(f, cc)}, {x. x = x86.cc_val(f, cc)}, all_elim(all_refl, {x86.cc_val(f, cc)}))
+  have c := mp(choose_eq[a := x86.cc_val(f, cc)], ea)
+  show by defs(trans(e, c), x86_64_linux.cond)
+qed
+
 // `and` commutes (the machine's `and` may take its operands in the other
 // order than the source)
 theorem x86.and_comm: all n a b. bits_and(n, a, b) = bits_and(n, b, a)

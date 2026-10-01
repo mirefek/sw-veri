@@ -22,7 +22,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 17 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 18 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -103,7 +103,7 @@ fn get_slot_index_implements_its_gimple() {
     let slc = env!("CARGO_BIN_EXE_slc");
     let tmp = std::env::temp_dir();
     let (steps, gimple) = (tmp.join(format!("slc-gsi-steps-{}.core", std::process::id())), tmp.join(format!("slc-gsi-gimple-{}.core", std::process::id())));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "upgradelock", "resetlock", "a_ctz_32", "-o"]).arg(&steps).output().unwrap();
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "upgradelock", "resetlock", "a_ctz_32", "is_bouncing", "get_stride", "step_seq", "-o"]).arg(&steps).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
@@ -125,6 +125,7 @@ fn get_slot_index_implements_its_gimple() {
             "proofs/upgradelock.core",
             "proofs/resetlock.core",
             "proofs/a_ctz_32.core",
+            "proofs/is_bouncing.core",
         ])
         .output()
         .unwrap();
@@ -136,6 +137,7 @@ fn get_slot_index_implements_its_gimple() {
             && checked.contains("resetlock.core: 0 constants, 0 axioms, 0 definitions, 2 theorems, 3 conditional theorems")
             && checked.contains("abi_stack.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems")
             && checked.contains("a_ctz_32.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 2 conditional theorems")
+            && checked.contains("is_bouncing.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 2 conditional theorems")
             && checked.contains("lemma while_unroll: open"),
         "{}{}",
         checked,

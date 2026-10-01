@@ -211,6 +211,51 @@ proof
   show := rewrite(neq, rt)
 qed
 
+// a run from s returned as the ABI asks: m1 a Machine with the memory v and
+// r in rax, back at the return address with rsp past it, callee-saved
+// registers, df and the thread's state as at entry (a run lemma's summary:
+// flags, rdx and the other scratch registers are left out)
+abbrev abi.returns(s, m1, v, r) := m1 in x86_64_linux.Machine && app(m1, "vm") = v && app(app(m1, "gpr"), 0) = r &&
+  app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) && abi.callee_saved(m1, s) &&
+  app(app(m1, "flags"), "df") = app(app(s, "flags"), "df") && app(m1, "os") = app(s, "os") && app(m1, "fs_base") = app(s, "fs_base") &&
+  app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base")
+
+// a normal return of a function whose spec leaves the world as it is: the
+// machine's memory v at the return is the view the spec ran on
+theorem abi.ret_view: all f spec args s m1 v. s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> pair(s, ok(m1, empty)) in univ(1) ->
+  v in x86_64_linux.Vm -> v in univ(1) -> abi.scratch_view(v, app(s, "vm"), abi.sp(s)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) ->
+  abi.returns(s, m1, v, app(app(m1, "gpr"), 0)) ->
+  runs(app(spec, args), abi.view(v, s), ok(abi.view(v, s), pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) ->
+  runs(abi.abi_function(single(empty), f, spec, args), s, ok(m1, empty))
+proof
+  fix f
+  fix spec
+  fix args
+  fix s
+  fix m1
+  fix v
+  assume hM: s in x86_64_linux.Machine
+  assume he: abi.entry_ok(s, args)
+  assume hp: pair(s, ok(m1, empty)) in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hvu: v in univ(1)
+  assume hs: abi.scratch_view(v, app(s, "vm"), abi.sp(s))
+  assume hm: abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s))
+  assume hrt: abi.returns(s, m1, v, app(app(m1, "gpr"), 0))
+  assume hr: runs(app(spec, args), abi.view(v, s), ok(abi.view(v, s), pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2))))
+  have ok0 := apply(abi.ok_univ, hp)
+  have su: s in univ(1) by taut(ok0)
+  have hM1: m1 in x86_64_linux.Machine by taut(hrt)
+  have ev: app(m1, "vm") = v by taut(hrt)
+  have wu: abi.view(v, s) in univ(1) by simp(su, hvu)
+  have wt: abi.view(v, s) in abi.World by simp(hM, hv, wu)
+  have nm: abi.world_matches(app(s, "vm"), app(m1, "vm"), app(abi.view(v, s), "vm"), abi.sp(s))
+    by defs(simp(ev, keep(abi.scratch, abi.scratch_page, abi.stack_page)), abi.world_matches)
+  have ndf: !app(app(s, "flags"), "df") by simp(expand(he, abi.entry_ok))
+  show := apply(abi.ret_case, {f}, {spec}, {args}, {s}, {m1}, {v}, {abi.view(v, s)},
+    hM, he, hM1, hp, hv, hvu, hs, hm, hr, wt, wu, nm, simp(hrt), simp(hrt), simp(hrt), simp(hrt), simp(hrt), simp(hrt), simp(hrt), simp(hrt, ndf))
+qed
+
 // the contract from the runs that start at f, as the ABI requires
 theorem abi.implements_intro: all f spec base code statics.
   (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
