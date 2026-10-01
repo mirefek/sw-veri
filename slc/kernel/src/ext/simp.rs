@@ -1614,6 +1614,37 @@ impl<'a> Simp<'a> {
                 return self.eq(&u[2], &w[2]);
             }
         }
+        // updates of the same base at the same literal keys (in any order,
+        // repeated or not): equal iff they agree at each key (elsewhere both
+        // are the base). (Not for different key sets: a key updated on one
+        // side only adds a pair the base may lack.)
+        let chain = |t: &Term| -> (Term, Vec<Term>) {
+            let mut keys = Vec::new();
+            let mut b = t.clone();
+            while let Node::App(g, a) = b.node() {
+                if !is(*g, s.fn_update) || !matches!(a[1].node(), Node::Bytes(_) | Node::Nat(_)) {
+                    break;
+                }
+                keys.push(a[1].clone());
+                b = a[0].clone();
+            }
+            (b, keys)
+        };
+        let ((bx, kx), (by, ky)) = (chain(&x), chain(&y));
+        if !kx.is_empty() && bx == by && kx.iter().all(|k| ky.contains(k)) && ky.iter().all(|k| kx.contains(k)) {
+            let mut keys: Vec<Term> = Vec::new();
+            for k in kx {
+                if !keys.contains(&k) {
+                    keys.push(k);
+                }
+            }
+            let app = |r: &Term, k: &Term| self.term(&Term::app(s.app.expect("app"), vec![r.clone(), k.clone()]));
+            let mut r = self.tt();
+            for k in &keys {
+                r = self.and(r, self.eq(&app(&x, k), &app(&y, k)));
+            }
+            return r;
+        }
         // constructors: injective and distinct
         let ctor = |t: &Term| -> Option<(u8, Vec<Term>)> {
             match t.node() {

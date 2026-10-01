@@ -359,6 +359,10 @@ fn simp_does_not_overreach() {
     rejected("theorem x(a, b, c, d): pair(a, b) = pair(c, d) -> a = d\nproof\n  assume h: pair(a, b) = pair(c, d)\n  show by simp(h)\nqed\n", "simp");
     // a path that does not imply the goal is reported
     rejected("theorem x(p, o, s): runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o) -> o = ok(s, 1)\nproof\n  assume h: runs(mkprog(s o. o = ok(s, 1) || o = ok(s, 2)), s, o)\n  show by simp(h)\nqed\n", "1 path left");
+    // records: updates at the same keys compare field by field; an update
+    // on one side only is not the identity (the base may lack the key)
+    assert_eq!(check("theorem x(s, a, b, c): fn_update(fn_update(fn_update(s, \"x\", a), \"y\", b), \"x\", c) = fn_update(fn_update(s, \"y\", b), \"x\", c)\nproof\n  show by simp()\nqed\n"), Ok(1));
+    rejected("theorem x(s, a): fn_update(s, \"x\", a) = fn_update(fn_update(s, \"x\", a), \"y\", app(s, \"y\"))\nproof\n  show by simp()\nqed\n", "simp");
 }
 
 #[test]
