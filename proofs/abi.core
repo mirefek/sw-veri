@@ -116,3 +116,93 @@ proof
   have rm := mp(restrict_univ[u := 1, f := m, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], mu)
   show by simp(mu, hp, nu, rm, wun, gmu, gwu, rmu, wu, r0u, r1u, g, st, hspec, keep(abi.scratch_view, abi.world_matches, abi.world.get, abi.world.set))
 qed
+
+// a run's state and outcome are in the universe
+theorem abi.ok_univ: all s x. pair(s, ok(x, empty)) in univ(1) -> s in univ(1) && x in univ(1)
+proof
+  fix s
+  fix x
+  assume hp: pair(s, ok(x, empty)) in univ(1)
+  show by simp(hp)
+qed
+
+// no arguments: the first one reads as 0 (empty)
+theorem abi.args_empty: all args. args in list_type(bits(64)) -> !int_lt(0, seq_len(args)) -> app(args, 0) = empty
+proof
+  fix args
+  assume h1: args in list_type(bits(64))
+  assume h2: !int_lt(0, seq_len(args))
+  have l0: seq_len(args) = 0 by simp(h1, h2)
+  have d0: dom(args) = empty by simp(expand(l0, seq_len))
+  have n0: !(0 in dom(args)) by simp(d0)
+  have n1: all y. pair(0, y) in args -> false proof
+    fix y
+    assume hy: pair(0, y) in args
+    have w: ex x. x in args && fst(x) = 0 by ex_intro({pair(0, y)}, simp(hy))
+    show by taut(w, expand(n0, dom), set_image_def[s := args, f := x. fst(x), y := 0])
+  qed
+  have n2: (ex y. pair(0, y) in args) -> false proof
+    assume e: ex y. pair(0, y) in args
+    obtain y, hy from e
+    show := mp(all_elim(n1, {y}), hy)
+  qed
+  show by defs(simp(n2), app)
+qed
+
+// the world a machine state shows through a view v of its memory is a World
+theorem abi.world_typed: all s v sp. s in x86_64_linux.Machine -> v in x86_64_linux.Vm -> sp in bits(64) -> fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp) in univ(1) -> fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp) in abi.World
+proof
+  fix s
+  fix v
+  fix sp
+  assume hM: s in x86_64_linux.Machine
+  assume hv: v in x86_64_linux.Vm
+  assume hsp: sp in bits(64)
+  assume hu: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp) in univ(1)
+  have mt: app(s, "fs_base") in bits(64) && app(s, "cpu") in x86_64_linux.Cpu && app(s, "os") in x86_64_linux.Os by simp(expand(hM, x86_64_linux.Machine))
+  have de := dom_empty
+  have f0: is_fun(empty) by taut(de)
+  have d0: dom(empty) = empty by taut(de)
+  have f1 := mp(fn_update_fun[f := empty, k := "vm", v := v], f0)
+  have d1 := mp(dom_update[f := empty, k := "vm", v := v], f0)
+  have f2 := mp(fn_update_fun[f := fn_update(empty, "vm", v), k := "os", v := app(s, "os")], f1)
+  have d2 := mp(dom_update[f := fn_update(empty, "vm", v), k := "os", v := app(s, "os")], f1)
+  have f3 := mp(fn_update_fun[f := fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), k := "fs_base", v := app(s, "fs_base")], f2)
+  have d3 := mp(dom_update[f := fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), k := "fs_base", v := app(s, "fs_base")], f2)
+  have f4 := mp(fn_update_fun[f := fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), k := "cpu", v := app(s, "cpu")], f3)
+  have d4 := mp(dom_update[f := fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), k := "cpu", v := app(s, "cpu")], f3)
+  have f5 := mp(fn_update_fun[f := fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), k := "sp", v := sp], f4)
+  have d5 := mp(dom_update[f := fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), k := "sp", v := sp], f4)
+  have dset: all x. x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) <-> x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) proof
+    fix x
+    have l: x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) -> x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) proof
+      assume h: x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty)))))
+      show by simp(h)
+    qed
+    have r: x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) -> x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) proof
+      assume h: x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))
+      show by simp(h)
+    qed
+    show by taut(l, r)
+  qed
+  have deq := mp(set_ext[a := insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))), b := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], dset)
+  have dw: dom(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) by simp(d5, d4, d3, d2, d1, d0, deq)
+  have pw: (((((is_fun(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)) && dom(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "vm") in x86_64_linux.Vm) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "os") in x86_64_linux.Os) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "fs_base") in bits(64)) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "cpu") in x86_64_linux.Cpu) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "sp") in bits(64) by simp(f5, dw, mt, hv, hsp)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))), p := x0. (((((is_fun(x0) && dom(x0) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))) && app(x0, "vm") in x86_64_linux.Vm) && app(x0, "os") in x86_64_linux.Os) && app(x0, "fs_base") in bits(64)) && app(x0, "cpu") in x86_64_linux.Cpu) && app(x0, "sp") in bits(64), r := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)], hu), f5), dw), pw)
+  show by defs(r, abi.World)
+qed
+
+// the spec raises from w: an exception outcome of its run
+theorem abi.raises_intro: all w spec args e. w in rec_and(abi.World, single(empty)) -> e in univ(1) -> runs(app(spec, args), w, exc(w, e)) ->
+  abi.spec_raises(rec_and(abi.World, single(empty)), w, spec, args)
+proof
+  fix w
+  fix spec
+  fix args
+  fix e
+  assume hw: w in rec_and(abi.World, single(empty))
+  assume he: e in univ(1)
+  assume hr: runs(app(spec, args), w, exc(w, e))
+  have ot := mp(mp(exc_outcome_type[s := rec_and(abi.World, single(empty)), v := cart(bits(64), bits(64)), x := w, e := e], hw), he)
+  show by defs(ex_intro({exc(w, e)}, simp(ot, hr, keep(outcome_type))), abi.spec_raises)
+qed

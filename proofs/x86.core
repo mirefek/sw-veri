@@ -216,3 +216,76 @@ proof
   show by simp(h, hn, hm, ha, start, x86.store_step, x86.le_not_lt,
     {l0 l. snd(l) in omega && int_le(snd(l), n) && fst(l) = fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, snd(l), v)))}, {l. int_sub(n, snd(l))})
 qed
+
+// access rights are per page
+theorem x86.same_page: all vm a b k. x86_64_linux.can_access(vm, b, k) -> int_div(a, 4096) = int_div(b, 4096) -> x86_64_linux.can_access(vm, a, k)
+proof
+  fix vm
+  fix a
+  fix b
+  fix k
+  assume h: x86_64_linux.can_access(vm, b, k)
+  assume e: int_div(a, 4096) = int_div(b, 4096)
+  show by defs(simp(expand(h, x86_64_linux.can_access, x86_64_linux.page_of), e), x86_64_linux.can_access, x86_64_linux.page_of)
+qed
+
+// what can be written can be read
+theorem x86.write_read: all vm a. x86_64_linux.can_access(vm, a, 1) -> x86_64_linux.can_access(vm, a, 0)
+proof
+  fix vm
+  fix a
+  assume h: x86_64_linux.can_access(vm, a, 1)
+  show by defs(simp(expand(h, x86_64_linux.can_access, x86_64_linux.hw_allows)), x86_64_linux.can_access, x86_64_linux.hw_allows, x86_64_linux.accessible)
+qed
+
+// storing bytes keeps a byte map a byte map
+theorem x86.store_typed: all b a n v. b in fn_space(bits(64), bits(8)) -> x86_64_linux.store_le(b, a, n, v) in fn_space(bits(64), bits(8))
+proof
+  fix b
+  fix a
+  fix n
+  fix v
+  assume bt: b in fn_space(bits(64), bits(8))
+  have vals: all x. x in bits(64) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) in bits(8) proof
+    fix x
+    assume hx: x in bits(64)
+    have ax := mp(mp(fn_space_app[a := bits(64), b := bits(8), f := b, x := x], bt), hx)
+    have c1: int_lt(bits_sub(64, x, a), n) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) in bits(8) proof
+      assume hc: int_lt(bits_sub(64, x, a), n)
+      have e := mp(ite_t[c := int_lt(bits_sub(64, x, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], hc)
+      have m: bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))) in bits(8) by simp()
+      show := rewrite(sym(e), m)
+    qed
+    have c2: !int_lt(bits_sub(64, x, a), n) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) in bits(8) proof
+      assume hc: !int_lt(bits_sub(64, x, a), n)
+      have e := mp(ite_f[c := int_lt(bits_sub(64, x, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], hc)
+      show := rewrite(sym(e), ax)
+    qed
+    show by taut(c1, c2)
+  qed
+  have st := mp(fn_build_space[d := bits(64), v := x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)), b := bits(8)], vals)
+  show by defs(st, x86_64_linux.store_le)
+qed
+
+// storing bytes keeps a memory well-typed
+theorem x86.store_vm: all vm a n v. vm in x86_64_linux.Vm -> fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)) in univ(1) ->
+  fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)) in x86_64_linux.Vm
+proof
+  fix vm
+  fix a
+  fix n
+  fix v
+  assume h: vm in x86_64_linux.Vm
+  assume hu: fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)) in univ(1)
+  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) && app(vm, "bytes") in fn_space(bits(64), bits(8)) by simp(expand(h, x86_64_linux.Vm))
+  have bt: app(vm, "bytes") in fn_space(bits(64), bits(8)) by taut(ht)
+  have st := expand(mp(all_elim(all_elim(all_elim(all_elim(x86.store_typed, {app(vm, "bytes")}), {a}), {n}), {v}), bt), x86_64_linux.store_le)
+  have hf: is_fun(vm) by taut(ht)
+  have bd: "bytes" in dom(vm) by simp(ht)
+  have fuf := mp(fn_update_fun[f := vm, k := "bytes", v := x86_64_linux.store_le(app(vm, "bytes"), a, n, v)], hf)
+  have fud := mp(mp(fn_update_dom[f := vm, k := "bytes", v := x86_64_linux.store_le(app(vm, "bytes"), a, n, v)], hf), bd)
+  have dv: dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by taut(ht)
+  have pv: ((((((is_fun(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v))) && dom(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v))) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "bytes") in fn_space(bits(64), bits(8))) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "stack_top") in bits(64)) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "stack_limit") in omega) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "brk_start") in bits(64)) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "brk") in bits(64) by defs(simp(expand(h, x86_64_linux.Vm), st, expand(fuf, x86_64_linux.store_le), expand(fud, x86_64_linux.store_le), dv), x86_64_linux.store_le)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))), p := x0. ((((((is_fun(x0) && dom(x0) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(x0, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(x0, "bytes") in fn_space(bits(64), bits(8))) && app(x0, "stack_top") in bits(64)) && app(x0, "stack_limit") in omega) && app(x0, "brk_start") in bits(64)) && app(x0, "brk") in bits(64), r := fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v))], hu), fuf), trans(fud, dv)), pv)
+  show by defs(r, x86_64_linux.Vm)
+qed

@@ -22,7 +22,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 10 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 14 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -85,4 +85,53 @@ fn step_theorems_of_get_slot_index_prove() {
         String::from_utf8_lossy(&c.stderr)
     );
     let _ = std::fs::remove_file(&out);
+}
+
+/// C1 for get_slot_index: its machine code implements its readable GIMPLE
+/// under the ABI (`gsi.implements`, proofs/get_slot_index_abi.core), resting
+/// only on the open loop lemmas. Needs the -O0 build and its readable GIMPLE
+/// (`slc gimple --readable`).
+#[test]
+fn get_slot_index_implements_its_gimple() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (elf, claim, sl) = (root.join("build/test_malloc_O0"), root.join("build/musl_malloc_O0.core"), root.join("build/gimple-O0/sl/c_mallocng_malloc.sl"));
+    if !elf.exists() || !claim.exists() || !sl.exists() {
+        eprintln!("skipped: run scripts/build-musl.sh -O0 and slc gimple --readable first");
+        return;
+    }
+    let slc = env!("CARGO_BIN_EXE_slc");
+    let tmp = std::env::temp_dir();
+    let (steps, gimple) = (tmp.join(format!("slc-gsi-steps-{}.core", std::process::id())), tmp.join(format!("slc-gsi-gimple-{}.core", std::process::id())));
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "-o"]).arg(&steps).output().unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
+    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
+    assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
+    let c = Command::new(slc)
+        .current_dir(&root)
+        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core"])
+        .arg(&gimple)
+        .args(["proofs/x86.core", "proofs/x86_code.core"])
+        .arg(&steps)
+        .args([
+            "proofs/get_slot_index_run.core",
+            "proofs/abi.core",
+            "proofs/abi_restore.core",
+            "proofs/gimple.core",
+            "proofs/get_slot_index.core",
+            "proofs/get_slot_index_stack.core",
+            "proofs/get_slot_index_abi.core",
+        ])
+        .output()
+        .unwrap();
+    let checked = String::from_utf8_lossy(&c.stdout);
+    assert!(
+        c.status.success()
+            && checked.contains("get_slot_index_abi.core: 0 constants, 0 axioms, 0 definitions, 1 theorems, 3 conditional theorems, 0 open lemmas")
+            && checked.contains("lemma while_unroll: open"),
+        "{}{}",
+        checked,
+        String::from_utf8_lossy(&c.stderr)
+    );
+    let _ = std::fs::remove_file(&steps);
+    let _ = std::fs::remove_file(&gimple);
 }

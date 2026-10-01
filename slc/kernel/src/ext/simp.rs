@@ -3616,7 +3616,7 @@ impl Logic {
             // opaque: t becomes x in the goal, as in the literals)
             let ctor = |t: &Term| match t.node() {
                 Node::Nat(_) | Node::Bytes(_) => true,
-                Node::App(h, _) => [sp.s.pair, sp.s.tag, sp.s.ok, sp.s.exc, sp.s.diverge, sp.s.fn_update, sp.s.some, sp.s.none].iter().any(|c| is(*h, *c)),
+                Node::App(h, _) => [sp.s.pair, sp.s.tag, sp.s.ok, sp.s.exc, sp.s.diverge, sp.s.fn_update, sp.s.some, sp.s.none, sp.s.empty].iter().any(|c| is(*h, *c)),
                 _ => false,
             };
             // (repeated: the goal simplified again may show a rewritten term
