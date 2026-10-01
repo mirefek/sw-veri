@@ -416,10 +416,11 @@ it.
   callee's scratch space is the stack below the caller's stack pointer plus
   the free space right below it into which the stack can grow (bounded by
   the next mapping, not by `RLIMIT_STACK`, so an unlimited stack does not
-  swallow the heap). The view zeroes its contents when reading, but keeps
-  its pages visible (stack pages are not free memory for an allocator), and
-  when writing back leaves the contents arbitrary and lets the stack grow
-  into free pages.
+  swallow the heap). When reading, the view shows its contents as arbitrary
+  (a function cannot rely on what lies below its caller's stack pointer;
+  a proof chooses what the machine has there), but keeps its pages visible
+  (stack pages are not free memory for an allocator); when writing back it
+  leaves the contents arbitrary and lets the stack grow into free pages.
 * A C function spec is a `CFun[S] = proc[S](Args) -> bits[64]` over `World`,
   or over an extension of it with ghost state.
 * `abi_function(f, spec, args)` is what the ABI promises from function entry
@@ -444,6 +445,15 @@ it.
   it returns to the return address) `refines` `abi_function(f, spec, args)`.
 * `call_rule`: at a `call f` site the machine can be reasoned about as the
   spec. It is proven once, and then used at every call.
+* Functions inside a program: `implements2_at(f, spec, base, code)` is
+  `implements2` provided the program's executable segment `code` is loaded
+  at `base` (`code_at`: its bytes in memory, executable, not writable).
+  Every function of the program assumes the same segment, so a caller and
+  its callees share the precondition; `call_rule_at` uses it at a call
+  site. To go on after a call, the caller needs the callee's spec to keep
+  the code loaded (`keeps_code`, a frame property proven for each function
+  at the C level). The program's entry points (malloc, free, calloc) keep
+  the plain `implements2`: their specs give the code loaded (`image_ok`).
 
 ### 9.3 The malloc layer (`layers/malloc.sl`)
 

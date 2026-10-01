@@ -28,7 +28,7 @@ fn spec_and_layers_elaborate_and_recheck() {
     sl_kernel::syntax::load(&mut env, &prelude(), true).unwrap();
     let rep = sl_kernel::syntax::load(&mut env, &el.core_text(), false).unwrap();
     assert!(rep.defs > 300);
-    assert_eq!(rep.claims, vec!["abi.call_rule".to_string()]);
+    assert_eq!(rep.claims, vec!["abi.call_rule".to_string(), "abi.call_rule_at".to_string()]);
 }
 
 /// Elaborates one module (with a minimal state) and returns the error messages.

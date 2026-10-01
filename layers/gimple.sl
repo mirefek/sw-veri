@@ -334,7 +334,10 @@ proc[World] stbf(p: Addr, off: bits[64], size: nat, pos: nat, bits: nat, v: nat)
 // A called function sees the world with its own stack pointer (below the
 // caller's stack objects); afterwards the stack below it is arbitrary.
 view[World] callee_world(sp2: Addr) : World {
-  get = World { vm: clean(vm, sp2), os, fs_base, cpu, sp: sp2 }
+  get {
+    let v = any Vm where scratch_view(v, vm, sp2)
+    return World { vm: v, os, fs_base, cpu, sp: sp2 }
+  }
   set(w) {
     let old = vm
     havoc vm where world_matches(old, vm, w.vm, sp2)

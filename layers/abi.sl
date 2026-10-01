@@ -50,11 +50,13 @@ pred scratch(vm: Vm, sp: Addr, a: nat) =
 
 pred scratch_page(vm: Vm, sp: Addr, p: nat) = scratch(vm, sp, p * PAGE + PAGE - 1)
 
-// memory with the contents of the scratch space normalised to zero (its
-// pages stay visible: stack pages are not free memory)
-fn clean(vm: Vm, sp: Addr) -> Vm = vm with {
-  bytes: (a: Addr) => if scratch(vm, sp, uint(a)) { 0 } else { vm.bytes[a] }
-}
+// `w` shows the memory `vm` with arbitrary contents in the scratch space:
+// everything else as in vm (its pages stay visible: stack pages are not
+// free memory). A function cannot rely on what lies below its caller's
+// stack pointer; a proof chooses the contents the machine has there.
+pred scratch_view(w: Vm, vm: Vm, sp: Addr) =
+  (w with { bytes: vm.bytes }) = vm &&
+  (all a: nat. !scratch(vm, sp, a) -> w.bytes[bits[64](a)] = vm.bytes[bits[64](a)])
 
 // `new` is the machine's memory after a callee ran from `old`, where the
 // callee's world ended as `w`: outside the scratch space they agree; in it,
@@ -70,7 +72,10 @@ pred world_matches(old: Vm, new: Vm, w: Vm, sp: Addr) =
 // caller's stack pointer `sp`. Writing a world back leaves the scratch space
 // arbitrary: a callee may have used (and grown) the stack there.
 view[Machine] world(sp: Addr) : World {
-  get = World { vm: clean(vm, sp), os, fs_base, cpu, sp }
+  get {
+    let v = any Vm where scratch_view(v, vm, sp)
+    return World { vm: v, os, fs_base, cpu, sp }
+  }
   set(w) {
     let old = vm
     havoc vm where world_matches(old, vm, w.vm, sp)
@@ -182,6 +187,26 @@ pred implements2[G](f: Addr, spec: CFun2[World & G]) =
 
 pred implements[G](f: Addr, spec: CFun[World & G]) = implements2(f, wide(spec))
 
+// ... provided the program's code (its executable segment `code`, loaded
+// at `base`) is in memory: the contract of a function inside the program,
+// which only its callers use. Every function of a program assumes the same
+// segment, so callers and callees have the same precondition; the
+// program's entry points (e.g. malloc) show it from their own spec.
+pred implements2_at[G](f: Addr, spec: CFun2[World & G], base: nat, code: List[bits[8]]) =
+  all args: Args. run_to_return() refines do[Machine & G] { require code_at(vm, base, code); abi_function(f, spec, args) }
+
+// A spec keeps the program's code loaded: from a world with the code in
+// memory, every outcome still has it (a frame property, proven for each
+// function at the C level; a caller needs it to go on after a call).
+pred keeps_code[S](spec: CFun2[S], base: nat, code: List[bits[8]]) =
+  all args: Args, w: S, o: Outcome[S, (bits[64], bits[64])].
+    code_at(w.vm, base, code) && outcome(w, spec(args), o) ->
+      match o {
+        ok(s, _)  => code_at(s.vm, base, code)
+        exc(s, _) => code_at(s.vm, base, code)
+        diverge(_) => true
+      }
+
 ///////////////////////////////////////////////////////////////////////
 //  Using it
 
@@ -191,3 +216,9 @@ pred implements[G](f: Addr, spec: CFun[World & G]) = implements2(f, wide(spec))
 theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args):
   implements2(f, spec) ->
     do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args) }
+
+// ... for a function inside the program: at the call, the code must be
+// loaded.
+theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, base: nat, code: List[bits[8]]):
+  implements2_at(f, spec, base, code) ->
+    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require code_at(vm, base, code); push(rip); rip := f; abi_function(f, spec, args) }
