@@ -440,7 +440,14 @@ it.
     the process dies. The I/O done so far (output written, input consumed)
     must be the beginning of some complete behavior the spec allows. This is
     sound because the crashed run is the same run as with a larger stack
-    limit, cut short.
+    limit, cut short;
+  - if the spec may raise from the entry world (`spec_raises`), anything.
+    A C function's spec raises only through undefined behavior
+    (`undefined` allows every outcome, exceptions included) or a deliberate
+    crash, and C promises nothing then. (A spec's `undefined` alone would
+    not suffice: it allows any outcome of the spec, but `abi_function` then
+    still sets the registers and returns.) The program's top-level spec
+    never raises, so this case never applies to a whole program.
 * `implements(f, spec)`: `run_to_return()` (the actual machine, stepping until
   it returns to the return address) `refines` `abi_function(f, spec, args)`.
 * `call_rule`: at a `call f` site the machine can be reasoned about as the

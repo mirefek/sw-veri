@@ -193,6 +193,8 @@ impl<'s, 'a> Ev<'s, 'a> {
         [
             "mkprog", "runs", "bind_rel", "any_rel", "while_rel", "set_select", "set_image", "choose", "nat_rec", "fn_build", "fn_update", "pair", "tag",
             "ok", "exc", "diverge", "some", "none", "empty", "omega", "univ", "cart", "powerset", "union", "upair", "single", "union2", "insert",
+            // (computed by the simplifier's rules on constructed data)
+            "app", "fst", "snd",
         ]
         .contains(&n)
             || matches!(&self.sp.env.syms[f as usize].kind, SymKind::Defined { body, .. } if matches!(body.node(), Node::App(g, _) if self.name(*g) == "mkprog"))

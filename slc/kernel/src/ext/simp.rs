@@ -29,12 +29,20 @@
 //! * `ex x. .. && x = t && ..` <-> the rest with `t` for x (x not in t),
 //!   `all x. x = t -> P(x)` <-> `P(t)`; `ex x. P` <-> P when x does not
 //!   occur (the universe is not empty);
-//! * the definitions of `bind_rel`, `any_rel`, `is_ok`, `ne`.
+//! * the definitions of `bind_rel`, `any_rel`, `is_ok`, `ne`;
+//! * `runs(mkprog(s o. R), S, O) <-> pair(S, O) in univ(1) && R(S, O)`
+//!   (membership in `mkprog`; in positive positions of the goal);
+//! * `pair(a, b) in univ(u) <-> a in univ(u) && b in univ(u)` (likewise
+//!   `tag`, outcomes, `some`, `upair`, `single`); integers are in `univ(u)`
+//!   for u >= 1 (`omega_univ`), numerals and strings in every universe.
 //!
-//! One implication, used only where weakening is sound (positive positions
-//! of a fact being simplified, never in a goal):
-//! * `runs(mkprog(s o. R), S, O) -> R(S, O)` (membership in `mkprog`; the
-//!   converse also needs `pair(S, O) in univ(1)`).
+//! Implications, used only where they are sound:
+//! * in positive positions of a fact being simplified (weakening):
+//!   `runs(mkprog(s o. R), S, O) -> R(S, O)`;
+//! * in positive positions of the goal (strengthening): `fn_update(f, k, v)`,
+//!   `insert`, `union2` are in `univ(u)` if their arguments are; `app(f, k)`,
+//!   `fst(p)`, `snd(p)` (and `out_state`, `out_value`) if f or p is (they
+//!   are `empty` when undefined); `ite(c, a, b)` if a and b are.
 //!
 //! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
 //! match literals of the path (or follow from them by taut/arith), with
@@ -59,7 +67,10 @@ mod eval;
 enum Pol {
     /// a positive position of a fact: weakening allowed
     Pos,
-    /// negative, or both (a goal, an `iff`): equivalences only
+    /// a positive position of the goal: equivalences only, but runs of a
+    /// program are unfolded (to choose the outcomes of its parts)
+    Goal,
+    /// negative, or both (an `iff`): equivalences only
     Other,
 }
 
@@ -96,6 +107,7 @@ struct Syms {
     ite: Option<SymId>,
     runs: Option<SymId>,
     mkprog: Option<SymId>,
+    univ: Option<SymId>,
     set_select: Option<SymId>,
     in_: Option<SymId>,
     omega: Option<SymId>,
@@ -391,6 +403,7 @@ impl<'a> Simp<'a> {
                 ite: g("ite"),
                 runs: g("runs"),
                 mkprog: g("mkprog"),
+                univ: g("univ"),
                 set_select: g("set_select"),
                 in_: g("in"),
                 omega: g("omega"),
@@ -1159,7 +1172,7 @@ impl<'a> Simp<'a> {
             return self.eq(&a[0], &a[1]);
         }
         if f == s.ex {
-            return self.ex(&self.prop(&a[0], pol));
+            return self.ex(&self.prop(&a[0], pol), pol == Pol::Goal);
         }
         if f == s.all {
             return self.all(&self.prop(&a[0], pol));
@@ -1173,7 +1186,7 @@ impl<'a> Simp<'a> {
                 return self.prop(&u, pol);
             }
         }
-        if is(f, s.runs) && pol == Pol::Pos {
+        if is(f, s.runs) && pol != Pol::Other {
             let mut p = self.term(&a[0]);
             // a procedure: its definition is a `mkprog` (unless kept folded)
             if let Node::App(g, ga) = p.node() {
@@ -1188,13 +1201,28 @@ impl<'a> Simp<'a> {
             if let Node::App(m, r) = p.node() {
                 if is(*m, s.mkprog) {
                     let (st, o) = (self.term(&a[1]), self.term(&a[2]));
-                    return self.prop(&inst_k(self.env, &r[0], &[st, o]), pol);
+                    let body = self.prop(&inst_k(self.env, &r[0], &[st.clone(), o.clone()]), pol);
+                    if pol == Pol::Pos {
+                        return body;
+                    }
+                    // (in a goal: also the typing `pair(S, O) in univ(1)`)
+                    let (Some(in_), Some(univ), Some(pair)) = (s.in_, s.univ, s.pair) else { return Term::app(f, vec![p, st, o]) };
+                    let one = Term::nat(crate::nat::Nat::from_u64(1));
+                    let ty = Term::app(in_, vec![Term::app(pair, vec![st, o]), Term::app(univ, vec![one])]);
+                    return self.and(self.prop(&ty, pol), body);
                 }
             }
             return Term::app(f, vec![p, self.term(&a[1]), self.term(&a[2])]);
         }
         // comprehension: `z in set_select(s, x. p)` <-> `z in s && p(z)`
         if is(f, s.in_) {
+            if let Node::App(un, ub) = a[1].node() {
+                if is(*un, s.univ) {
+                    if let Some(r) = self.univ_mem(&self.term(&a[0]), &a[1], pol) {
+                        return r;
+                    }
+                }
+            }
             if let Node::App(sel, sb) = a[1].node() {
                 if is(*sel, s.set_select) {
                     let z = self.term(&a[0]);
@@ -1230,6 +1258,52 @@ impl<'a> Simp<'a> {
             return if b { self.tt() } else { self.ff() };
         }
         t
+    }
+
+    /// `x in univ(u)` by the closure of universes: a pair (an outcome, a
+    /// tagged value) is in it iff its parts are; in a goal, also the
+    /// stronger: a finite set or function update built from members, a
+    /// component (`app`, `fst`, `snd`, which are `empty` when undefined) of
+    /// a member, either branch of an `ite`; integers (in `univ(1)` and
+    /// above, as `omega` is) and finite data always.
+    fn univ_mem(&self, x: &Term, set: &Term, pol: Pol) -> Option<Term> {
+        let s = &self.s;
+        let mem = |y: &Term| self.prop(&Term::app(s.in_.expect("in"), vec![y.clone(), set.clone()]), pol);
+        let all = |ys: &[Term]| ys.iter().fold(self.tt(), |acc, y| self.and(acc, mem(y)));
+        let above_omega = match set.node() {
+            Node::App(_, ub) => matches!(ub[0].node(), Node::Nat(n) if *n != crate::nat::Nat::zero()),
+            _ => false,
+        };
+        if above_omega && self.int_term(x) {
+            return Some(self.tt());
+        }
+        match x.node() {
+            Node::Nat(_) | Node::Bytes(_) => Some(self.tt()),
+            Node::App(h, args) => {
+                let h = *h;
+                let name = self.env.syms.get(h as usize).map(|y| y.name.as_str()).unwrap_or("");
+                if [s.pair, s.tag, s.ok, s.exc, s.diverge, s.some].iter().any(|c| is(h, *c)) || name == "upair" || name == "single" {
+                    return Some(all(args));
+                }
+                if is(h, s.none) || name == "empty" {
+                    return Some(self.tt());
+                }
+                if pol != Pol::Goal {
+                    return None;
+                }
+                if is(h, s.fn_update) || name == "insert" || name == "union2" {
+                    return Some(all(args));
+                }
+                if [s.app, s.fst, s.snd, s.out_state, s.out_value].iter().any(|c| is(h, *c)) {
+                    return Some(mem(&args[0]));
+                }
+                if is(h, s.ite) {
+                    return Some(all(&args[1..]));
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// Propositions about numerals: a numeral is a natural number (`lit_nat`);
@@ -1366,8 +1440,9 @@ impl<'a> Simp<'a> {
         Term::app(s.eq, vec![x, y])
     }
 
-    /// `ex x. body` (body under one binder)
-    fn ex(&self, body: &Term) -> Term {
+    /// `ex x. body` (body under one binder); in the goal also the steps
+    /// that prepare choosing witnesses (they multiply terms in facts)
+    fn ex(&self, body: &Term, goal: bool) -> Term {
         if self.is_false(body) {
             return self.ff();
         }
@@ -1396,13 +1471,172 @@ impl<'a> Simp<'a> {
                 }
             }
         }
+        if !goal {
+            // distribute over a disjunction, so each branch can use one-point
+            if let Node::App(o, ab) = body.node() {
+                if is(*o, self.s.or) {
+                    return self.or(self.ex(&ab[0], goal), self.ex(&ab[1], goal));
+                }
+            }
+            return Term::app(self.s.ex, vec![body.clone()]);
+        }
+        // one-point through an inner existential (R without x):
+        // `ex x. A(x) && (ex y. x = t(y) && R(y))` <-> `ex y. A(t(y)) && R(y)`
+        let bf = self.env.binders_fn();
+        for (i, c) in cs.iter().enumerate() {
+            let Node::App(e2, eb) = c.node() else { continue };
+            if *e2 != self.s.ex {
+                continue;
+            }
+            // (inside: BVar(0) is y, BVar(1) is x)
+            let mut ds = Vec::new();
+            self.conjuncts(&eb[0], &mut ds);
+            let pt = ds.iter().enumerate().find_map(|(k, d)| match d.node() {
+                Node::App(e, ab) if *e == self.s.eq => [(&ab[0], &ab[1]), (&ab[1], &ab[0])]
+                    .into_iter()
+                    .find(|(v, t)| matches!(v.node(), Node::BVar(1)) && !has_bvar(self.env, t, 1))
+                    .map(|(_, t)| (k, t.clone())),
+                _ => None,
+            });
+            let Some((k, t)) = pt else { continue };
+            if ds.iter().enumerate().any(|(j, d)| j != k && has_bvar(self.env, d, 1)) {
+                continue;
+            }
+            let t = lower(self.env, &t, 1);
+            let mut a = self.tt();
+            for (j, d) in cs.iter().enumerate() {
+                if j != i {
+                    a = self.and(a, d.clone());
+                }
+            }
+            let mut r = inst_k(self.env, &a.shift(1, 1, &bf), &[t]);
+            for (j, d) in ds.iter().enumerate() {
+                if j != k {
+                    r = self.and(r, lower(self.env, d, 1));
+                }
+            }
+            return self.ex(&self.prop(&r, Pol::Other), goal);
+        }
+        // a conjunct `A || (B && x = t)` (e.g. `require`'s): distribute, so
+        // that branch can use one-point
+        let point = |d: &Term| {
+            let mut ds = Vec::new();
+            self.conjuncts(d, &mut ds);
+            ds.iter().any(|c| match c.node() {
+                Node::App(e, ab) if *e == self.s.eq => [(&ab[0], &ab[1]), (&ab[1], &ab[0])]
+                    .iter()
+                    .any(|(v, t)| matches!(v.node(), Node::BVar(0)) && !has_bvar(self.env, t, 0)),
+                _ => false,
+            })
+        };
+        for (i, c) in cs.iter().enumerate() {
+            let mut ds = Vec::new();
+            self.disjuncts(c, &mut ds);
+            if ds.len() > 1 && ds.iter().any(|d| point(d)) {
+                let mut rest = self.tt();
+                for (j, d) in cs.iter().enumerate() {
+                    if j != i {
+                        rest = self.and(rest, d.clone());
+                    }
+                }
+                let mut r = self.ff();
+                for d in ds {
+                    r = self.or(r, self.ex(&self.and(d, rest.clone()), goal));
+                }
+                return r;
+            }
+        }
         // distribute over a disjunction, so each branch can use one-point
         if let Node::App(o, ab) = body.node() {
             if is(*o, self.s.or) {
-                return self.or(self.ex(&ab[0]), self.ex(&ab[1]));
+                return self.or(self.ex(&ab[0], goal), self.ex(&ab[1], goal));
+            }
+        }
+        // x only through its projections: `ex x. P(fst(x), snd(x))` <->
+        // `ex a b. P(a, b)` (x = pair(a, b); `x in univ(u)` is `a in univ(u)
+        // && b in univ(u)`, as fst and snd stay in universes)
+        if let Some(nb) = self.proj_split(body, 0) {
+            let inner = self.ex(&self.prop(&nb, Pol::Other), goal);
+            return self.ex(&inner, goal);
+        }
+        // miniscoping: the conjuncts without x out
+        let (inner, outer): (Vec<&Term>, Vec<&Term>) = cs.iter().partition(|c| has_bvar(self.env, c, 0));
+        if !outer.is_empty() {
+            let mut b = self.tt();
+            for c in inner {
+                b = self.and(b, c.clone());
+            }
+            let mut r = self.ex(&b, goal);
+            for c in outer {
+                r = self.and(lower(self.env, c, 0), r);
+            }
+            return r;
+        }
+        // `ex x. x in S` for a set with a known member (0)
+        if let [c] = cs.as_slice() {
+            if let Node::App(m, ab) = c.node() {
+                if is(*m, self.s.in_) && matches!(ab[0].node(), Node::BVar(0)) && !has_bvar(self.env, &ab[1], 0) {
+                    let s = lower(self.env, &ab[1], 0);
+                    let zero = Term::nat(crate::nat::Nat::zero());
+                    let mem = self.prop(&Term::app(*m, vec![zero, s]), Pol::Other);
+                    if self.is_true(&mem) {
+                        return self.tt();
+                    }
+                }
             }
         }
         Term::app(self.s.ex, vec![body.clone()])
+    }
+
+    /// `t` (under d binders below x = BVar(d)) with x replaced by two
+    /// binders a (outer), b (inner): `fst(x)` is a, `snd(x)` is b,
+    /// `out_state(x)` is `fst(b)`, `out_value(x)` is `snd(b)`; None if x
+    /// occurs otherwise (or not at all).
+    fn proj_split(&self, t: &Term, d: u32) -> Option<Term> {
+        fn go(sp: &Simp, t: &Term, d: u32, used: &mut bool) -> Option<Term> {
+            let s = &sp.s;
+            let (a, b) = (Term::bvar(d + 1), Term::bvar(d));
+            match t.node() {
+                Node::BVar(j) if *j == d => None,
+                Node::BVar(j) if *j > d => Some(Term::bvar(j + 1)),
+                Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => Some(t.clone()),
+                Node::Var(v, xs) => Some(Term::var(*v, xs.iter().map(|x| go(sp, x, d, used)).collect::<Option<Vec<_>>>()?)),
+                Node::App(f, xs) => {
+                    let f = *f;
+                    if xs.len() == 1 && matches!(xs[0].node(), Node::BVar(j) if *j == d) {
+                        let r = if is(f, s.fst) {
+                            a
+                        } else if is(f, s.snd) {
+                            b
+                        } else if is(f, s.out_state) {
+                            Term::app(s.fst?, vec![b])
+                        } else if is(f, s.out_value) {
+                            Term::app(s.snd?, vec![b])
+                        } else {
+                            return None;
+                        };
+                        *used = true;
+                        return Some(r);
+                    }
+                    if is(f, s.in_) && matches!(xs[0].node(), Node::BVar(j) if *j == d) {
+                        if let Node::App(u, _) = xs[1].node() {
+                            if is(*u, s.univ) {
+                                // (not a use: x must have a projection)
+                                let us = go(sp, &xs[1], d, used)?;
+                                return Some(sp.app2(s.and, Term::app(f, vec![a, us.clone()]), Term::app(f, vec![b, us])));
+                            }
+                        }
+                        return None;
+                    }
+                    let bf = sp.env.binders_fn();
+                    let ys = xs.iter().enumerate().map(|(k, x)| go(sp, x, d + bf(f, k), used)).collect::<Option<Vec<_>>>()?;
+                    Some(Term::app(f, ys))
+                }
+            }
+        }
+        let mut used = false;
+        let r = go(self, t, d, &mut used)?;
+        used.then_some(r)
     }
 
     /// `all x. body`
@@ -1782,45 +2016,101 @@ impl Simp<'_> {
 impl Simp<'_> {
     /// Some disjunct of the goal, its existentials instantiated by matching
     /// its equations against the path's literals, follows from the path.
+    /// More bindings from the goal path's equations `a = b`: with the
+    /// bindings substituted, one side matched against the other once that
+    /// has no unbound variables (e.g. `x = ok(y, z)` with x bound).
+    fn solve_goal_eqs(&self, glits: &[Term], vars: &[crate::term::VarId], binds: &mut Vec<(crate::term::VarId, Term)>) {
+        let bf = self.env.binders_fn();
+        let sub = |t: &Term, binds: &[(crate::term::VarId, Term)]| {
+            let mut t = t.clone();
+            for (v, x) in binds {
+                t = t.subst_var(*v, x, &bf);
+            }
+            t
+        };
+        let unbound = |t: &Term, binds: &[(crate::term::VarId, Term)]| vars.iter().any(|v| has_var(t, *v) && !binds.iter().any(|(w, _)| w == v));
+        loop {
+            let n = binds.len();
+            for l in glits {
+                let Node::App(e, ab) = l.node() else { continue };
+                if *e != self.s.eq {
+                    continue;
+                }
+                let (a, b) = (sub(&ab[0], binds), sub(&ab[1], binds));
+                for (p, t) in [(&a, &b), (&b, &a)] {
+                    if unbound(p, binds) && !unbound(t, binds) {
+                        let mut bs = binds.clone();
+                        if pmatch(p, &self.term(t), vars, &mut bs) {
+                            *binds = bs;
+                            break;
+                        }
+                    }
+                }
+            }
+            if binds.len() == n {
+                return;
+            }
+        }
+    }
+
+    /// The goal path's literals, with the bindings, follow from the path's.
+    fn witness_ok(&self, lits: &[Term], glits: &[Term], binds: &[(crate::term::VarId, Term)], lg: &Logic) -> bool {
+        let bf = self.env.binders_fn();
+        let mut want = self.tt();
+        for l in glits {
+            let mut l = l.clone();
+            for (v, t) in binds {
+                l = l.subst_var(*v, t, &bf);
+            }
+            want = self.and(want, self.prop(&l, Pol::Other));
+        }
+        lg.tautology(self.env, lits, &want).is_ok() || lg.arith(self.env, lits, &want).is_ok()
+    }
+
     fn witnessed(&self, lits: &[Term], goal: &Term, fresh: &mut u32, lg: &Logic) -> bool {
         let mut ds = Vec::new();
         self.disjuncts(goal, &mut ds);
         for d in ds {
             let Some(gps) = self.paths(&d, fresh) else { continue };
+            // (the typing of the path, not of the goal's paths)
+            self.set_nats(lits);
             for gp in gps {
                 if gp.vars.is_empty() {
                     continue;
                 }
-                let mut binds: Vec<(crate::term::VarId, Term)> = Vec::new();
-                for gl in &gp.lits {
-                    for pl in lits {
+                // the bindings from matching goal literals with path
+                // literals, each goal literal matched or not (a search,
+                // matches first; at most WITNESS_TRIES complete ones tried)
+                const WITNESS_TRIES: usize = 64;
+                let (mut tries, mut nodes) = (0, 0);
+                let mut stack: Vec<(usize, Vec<(crate::term::VarId, Term)>)> = vec![(0, Vec::new())];
+                while let Some((i, mut binds)) = stack.pop() {
+                    nodes += 1;
+                    if nodes > 64 * WITNESS_TRIES {
+                        break;
+                    }
+                    self.solve_goal_eqs(&gp.lits, &gp.vars, &mut binds);
+                    if gp.vars.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
+                        tries += 1;
+                        if tries > WITNESS_TRIES {
+                            break;
+                        }
+                        if self.witness_ok(lits, &gp.lits, &binds, lg) {
+                            return true;
+                        }
+                        continue;
+                    }
+                    if i == gp.lits.len() {
+                        continue;
+                    }
+                    // (pushed last: tried first)
+                    stack.push((i + 1, binds.clone()));
+                    for pl in lits.iter().rev() {
                         let mut b = binds.clone();
-                        if pmatch(gl, pl, &gp.vars, &mut b) {
-                            binds = b;
+                        if pmatch(&gp.lits[i], pl, &gp.vars, &mut b) && b.len() > binds.len() {
+                            stack.push((i + 1, b));
                         }
                     }
-                }
-                if !gp.vars.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
-                    continue;
-                }
-                let bf = self.env.binders_fn();
-                let inst: Vec<Term> = gp
-                    .lits
-                    .iter()
-                    .map(|l| {
-                        let mut l = l.clone();
-                        for (v, t) in &binds {
-                            l = l.subst_var(*v, t, &bf);
-                        }
-                        self.prop(&l, Pol::Other)
-                    })
-                    .collect();
-                let mut want = self.tt();
-                for l in inst {
-                    want = self.and(want, l);
-                }
-                if lg.tautology(self.env, lits, &want).is_ok() || lg.arith(self.env, lits, &want).is_ok() {
-                    return true;
                 }
             }
         }
@@ -2581,6 +2871,11 @@ impl Logic {
                 lap(3, &mut tm);
                 continue;
             }
+            // (each conjunct by itself, its existentials witnessed)
+            if gs.len() > 1 && gs.iter().all(|c| closes_part(c) || sp.witnessed(&p.lits, c, fresh, self)) {
+                lap(3, &mut tm);
+                continue;
+            }
             lap(3, &mut tm);
             // long paths: arithmetic from the literals about the goal's variables
             let near = relevant(&p.lits, &g);
@@ -2652,12 +2947,12 @@ impl Logic {
         Ok(())
     }
 
-    /// A proposition equivalent to `t`.
+    /// A proposition equivalent to the goal `t`.
     pub fn simp_eqv(&self, env: &Env, t: &Term) -> Term {
         let sp = Simp::new(env, self);
         let mut t = t.clone();
         for _ in 0..8 {
-            let u = sp.prop(&t, Pol::Other);
+            let u = sp.prop(&t, Pol::Goal);
             if u == t {
                 break;
             }

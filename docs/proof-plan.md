@@ -247,7 +247,16 @@ relies on.
    `all xs. !(ex ys. B)` literal). `simp(h)` turns
    `runs(P, s, o)` into P's paths; goal-directed `simp(p…)` proves a goal
    path by path (taut or arith), choosing witnesses for the goal's
-   existentials by matching its equations with the path's. `print P`
+   existentials by matching its equations with the path's. A goal
+   `runs(P, s, o)` (the spec side of a refinement) is unfolded too, with
+   the typing `pair(s, o) in univ(1)` that membership in `mkprog` needs
+   (shown by the closure of universes; `app`, `fst`, `snd` are `empty`
+   when undefined, so they stay in universes); its existentials are
+   witnessed by a search over matches with the path's literals (e.g. the
+   outcome of a sub-program from a lemma about it, `keep` folded), by the
+   goal's own equations once those are bound, and by splitting an outcome
+   seen only through its projections (`ex x. P(fst x, snd x)` is
+   `ex a b. P(a, b)`). `print P`
    shows a fact while writing a proof. `proofs/malloc_client.core`: from
    the spec alone, `free(NULL)` changes nothing, `free(p)` of a live
    block returns with p freed (using the law `free_step`: a step always

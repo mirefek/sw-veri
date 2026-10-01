@@ -149,16 +149,35 @@ pred crash_io_ok[S](w: S, spec: CFun2[S], args: Args, crash: Os) =
   }
 
 ///////////////////////////////////////////////////////////////////////
+//  Undefined behavior
+
+// The spec may raise from `w`. A C function's spec raises only through
+// undefined behavior (`undefined` allows every outcome of the spec,
+// exceptions included) or a deliberate crash (e.g. a_crash). In both cases
+// the implementation owes nothing: in C, undefined behavior makes the whole
+// run undefined, and a program's top-level spec (malloc's) never raises, so
+// it excludes both.
+pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
+  ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
+    ok(_, _)   => false
+    exc(_, _)  => true
+    diverge(_) => false
+  }
+
+///////////////////////////////////////////////////////////////////////
 //  What the ABI promises
 
 // From entry to return: the function behaves like `spec` on the world;
 // callee-saved registers and rsp are restored, rax holds the result, other
 // registers (including all XMM registers) and flags are clobbered. Or it runs out of stack (see above).
+// If the spec may raise (undefined behavior), anything.
 proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
+  let w0    = with world(sp) { return self }    // the world, with ghost state
+  require !spec_raises(w0, spec, args)
   either {
     let (r0, r1) = with world(sp) { return spec(args) }
     havoc gpr, xmm, flags
@@ -169,7 +188,6 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
     flags.df  := false
     rip       := ret
   } or {
-    let w0 = with world(sp) { return self }    // the world, with ghost state
     let vm0 = vm
     let a = any Addr where scratch(vm0, sp, uint(a))
     havoc self where crash_io_ok(w0, spec, args, os)
