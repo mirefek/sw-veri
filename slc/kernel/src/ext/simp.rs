@@ -241,6 +241,9 @@ struct Simp<'a> {
     /// terms the current path knows to be natural numbers (its literals
     /// `t in omega`, `t in bits(k)`)
     nats: std::cell::RefCell<Vec<(Term, Ty)>>,
+    /// in the goal's first simplification: the premises' literals `t in S`
+    /// (the typing rule leaves those as they are)
+    known_mems: std::cell::RefCell<Vec<Term>>,
     /// fields read by definitions of their parameters (`footprint`)
     footprints: std::cell::RefCell<FxMap<(SymId, usize), Option<Vec<Term>>>>,
     /// parameters used only mod 2^n (`word_param`)
@@ -477,6 +480,7 @@ impl<'a> Simp<'a> {
             no_hold: Default::default(),
             memo: Default::default(),
             nats: std::cell::RefCell::new(Vec::new()),
+            known_mems: std::cell::RefCell::new(Vec::new()),
             footprints: Default::default(),
             word_params: Default::default(),
             prof: Default::default(),
@@ -1715,6 +1719,12 @@ impl<'a> Simp<'a> {
     /// (then both sides are functions on dom(b) and the keys of both sides,
     /// agreeing everywhere: `fn_update_fun`, `fn_update_dom`, `rec_ext`).
     fn update_chains_goal(&self, x: &Term, y: &Term) -> Option<Term> {
+        self.update_chains_goal_b(x, y, false)
+    }
+
+    /// `update_chains_goal`; with `bare`, also updates of b equal to b
+    /// itself (`fn_update_same`).
+    fn update_chains_goal_b(&self, x: &Term, y: &Term, bare: bool) -> Option<Term> {
         let s = &self.s;
         let (x, y) = (self.term(x), self.term(y));
         let chain = |t: &Term| -> (Term, Vec<Term>) {
@@ -1734,7 +1744,7 @@ impl<'a> Simp<'a> {
         let ((bx, kx), (by, ky)) = (chain(&x), chain(&y));
         // (both sides updates: `m = fn_update(m, k, v)` stays a literal, which
         // the path may have)
-        if kx.is_empty() || ky.is_empty() || bx != by {
+        if (kx.is_empty() && ky.is_empty()) || (!bare && (kx.is_empty() || ky.is_empty())) || bx != by {
             return None;
         }
         let only: Vec<&Term> = kx.iter().filter(|k| !ky.contains(k)).chain(ky.iter().filter(|k| !kx.contains(k))).collect();
@@ -1756,18 +1766,41 @@ impl<'a> Simp<'a> {
         Some(r)
     }
 
-    /// `update_chains_goal` on the equations among the goal's top-level
-    /// conjuncts.
-    fn chain_eqs_goal(&self, g: &Term) -> Term {
+    /// `update_chains_goal` (also with a bare base) on the equations among
+    /// the goal's top-level conjuncts that are not literals of the path.
+    fn chain_eqs_goal(&self, g: &Term, lits: &[Term]) -> Term {
         match g.node() {
             Node::App(f, a) if is(*f, self.s.and) => {
-                let (x, y) = (self.chain_eqs_goal(&a[0]), self.chain_eqs_goal(&a[1]));
+                let (x, y) = (self.chain_eqs_goal(&a[0], lits), self.chain_eqs_goal(&a[1], lits));
                 if x.ptr_eq(&a[0]) && y.ptr_eq(&a[1]) {
                     return g.clone();
                 }
                 self.and(x, y)
             }
-            Node::App(f, a) if *f == self.s.eq => self.update_chains_goal(&a[0], &a[1]).unwrap_or_else(|| g.clone()),
+            Node::App(f, a) if *f == self.s.eq => {
+                if lits.iter().any(|l| l == g || matches!(l.node(), Node::App(e, b) if *e == self.s.eq && b[0] == a[1] && b[1] == a[0])) {
+                    return g.clone();
+                }
+                if let Some(r) = self.update_chains_goal_b(&a[0], &a[1], true) {
+                    return r;
+                }
+                // records of a record type the path gives one side: equal if
+                // the other is of it too and they agree at every key (`rec_ext`)
+                for (x, y) in [(&a[0], &a[1]), (&a[1], &a[0])] {
+                    for ty in self.types_of(lits, y, 0) {
+                        let Some(rt) = self.rec_type(&ty) else { continue };
+                        let Some(keys) = self.key_list(&rt.keys) else { continue };
+                        let (appf, in_) = (self.s.app.expect("app"), self.s.in_.expect("in"));
+                        let mut r = self.prop(&Term::app(in_, vec![x.clone(), ty.clone()]), Pol::Goal);
+                        for k in &keys {
+                            let (u, w) = (self.term(&Term::app(appf, vec![x.clone(), k.clone()])), self.term(&Term::app(appf, vec![y.clone(), k.clone()])));
+                            r = self.and(r, self.eq(&u, &w));
+                        }
+                        return r;
+                    }
+                }
+                g.clone()
+            }
             _ => g.clone(),
         }
     }
@@ -3152,20 +3185,57 @@ impl Simp<'_> {
     /// `bits_term`).
     fn typed(&self, lits: &[Term], g: &Term) -> bool {
         let Node::App(i, ab) = g.node() else { return false };
+        let name = |t: &Term| match t.node() {
+            Node::App(h, _) => self.env.syms[*h as usize].name.clone(),
+            _ => String::new(),
+        };
+        // the domain of a function the path types: a record type's keys,
+        // fn_space(A, B)'s A (and so it is a function)
+        let domain = |b: &Term| -> Option<Term> {
+            self.types_of(lits, b, 3).into_iter().find_map(|ty| {
+                if let Some(rt) = self.rec_type(&ty) {
+                    return Some(rt.keys);
+                }
+                match ty.node() {
+                    Node::App(fs, fa) if self.env.syms[*fs as usize].name == "fn_space" && fa.len() == 2 => Some(fa[0].clone()),
+                    _ => None,
+                }
+            })
+        };
+        if self.env.syms[*i as usize].name == "is_fun" && ab.len() == 1 {
+            return domain(&ab[0]).is_some();
+        }
+        // `x = false || x = true` (x in bool, unfolded): x of the type `bool`
+        if is(*i, self.s.or) {
+            if let (Node::App(e1, x), Node::App(e2, y)) = (ab[0].node(), ab[1].node()) {
+                if *e1 == self.s.eq && *e2 == self.s.eq && x[0] == y[0] && self.is_bool_pair(&x[1], &y[1]) {
+                    return self.types_of(lits, &x[0], 3).iter().any(|t| name(t) == "bool");
+                }
+            }
+        }
         if !is(*i, self.s.in_) {
             return false;
         }
+        if name(&ab[1]) == "dom" {
+            let Node::App(_, db) = ab[1].node() else { unreachable!() };
+            if let Some(d) = domain(&db[0]) {
+                if self.key_in(&ab[0], &d) == Some(true) {
+                    return true;
+                }
+            }
+        }
         self.set_nats(lits);
-        match ab[1].node() {
+        let by_form = match ab[1].node() {
             Node::App(o, x) if x.is_empty() && is(*o, self.s.omega) => self.nat_term(&ab[0]),
             Node::App(o, x) if x.is_empty() && self.env.syms[*o as usize].name == "int" => self.int_term(&ab[0]),
             Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => match x[0].node() {
                 Node::Nat(k) => k.to_u64().is_some_and(|k| self.bits_term(&ab[0], k)),
                 _ => false,
             },
-            // a field of a record of a known record type
-            _ => matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app)) && self.types_of(lits, &ab[0], 3).contains(&ab[1]),
-        }
+            _ => false,
+        };
+        // (or a field of a record of a known record type)
+        by_form || matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app)) && self.types_of(lits, &ab[0], 3).contains(&ab[1])
     }
 
     /// The types the path gives `t`: its literals `t in T`, and for a field
@@ -3186,6 +3256,12 @@ impl Simp<'_> {
                         if let Some(rt) = self.rec_type(&r) {
                             if let Some((_, ty)) = rt.fields.iter().find(|(k, _)| *k == ab[1]) {
                                 out.push(ty.clone());
+                            }
+                        }
+                        // an argument of a function in fn_space(A, B) (`fn_space_app`)
+                        if let Node::App(fs, fa) = r.node() {
+                            if self.env.syms[*fs as usize].name == "fn_space" && fa.len() == 2 && self.key_in(&ab[1], &fa[0]) == Some(true) {
+                                out.push(fa[1].clone());
                             }
                         }
                     }
@@ -3259,6 +3335,9 @@ impl Simp<'_> {
     fn typed_goal(&self, x: &Term, set: &Term, outer: Option<&Term>) -> Option<Term> {
         let s = &self.s;
         let x = self.term(x);
+        if self.known_mems.borrow().iter().any(|l| matches!(l.node(), Node::App(_, ab) if ab[0] == x && ab[1] == *set)) {
+            return Some(self.tt());
+        }
         let mut keys: Vec<Term> = Vec::new();
         let mut vals: Vec<Term> = Vec::new();
         let mut b = x.clone();
@@ -3301,7 +3380,7 @@ impl Simp<'_> {
                 }
             }
             let univ = Term::app(s.univ?, vec![rt.u.clone()]);
-            return Some(self.and(r, Term::app(in_, vec![w.clone(), univ])));
+            return Some(self.and(r, self.prop(&Term::app(in_, vec![w.clone(), univ]), Pol::Goal)));
         }
         let Node::App(fs, fa) = set.node() else { return None };
         if self.env.syms[*fs as usize].name != "fn_space" || fa.len() != 2 {
@@ -3313,6 +3392,28 @@ impl Simp<'_> {
             r = self.and(r, mem(v, &fa[1], None));
         }
         Some(r)
+    }
+
+    /// The elements of a finite set of literals (`insert(a, .. empty)`).
+    fn key_list(&self, d: &Term) -> Option<Vec<Term>> {
+        let mut out: Vec<Term> = Vec::new();
+        let mut d = d.clone();
+        loop {
+            let next = {
+                let Node::App(g, a) = d.node() else { return None };
+                match self.env.syms[*g as usize].name.as_str() {
+                    "empty" if a.is_empty() => return Some(out),
+                    "insert" if matches!(a[0].node(), Node::Bytes(_) | Node::Nat(_)) => {
+                        if !out.contains(&a[0]) {
+                            out.push(a[0].clone());
+                        }
+                        a[1].clone()
+                    }
+                    _ => return None,
+                }
+            };
+            d = next;
+        }
     }
 
     /// The number of elements of a finite set of distinct literals
@@ -3814,7 +3915,7 @@ impl Logic {
         // goal's strengthening, which would take such a t apart)
         let mut cs = Vec::new();
         sp.conjuncts(&prem, &mut cs);
-        cs.retain(|c| matches!(c.node(), Node::App(i, ab) if is(*i, sp.s.in_) && matches!(ab[1].node(), Node::App(u, _) if is(*u, sp.s.univ))));
+        cs.retain(|c| matches!(c.node(), Node::App(i, _) if is(*i, sp.s.in_)));
         let g = self.simp_eqv_known(env, goal, &cs);
         let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
         if std::env::var("SIMP_TIME").is_ok() {
@@ -3911,7 +4012,7 @@ impl Logic {
                 // (equations of update chains the rewriting brought to
                 // light: the goal-side rule, as in the goal's first
                 // simplification)
-                g = sp.chain_eqs_goal(&g);
+                g = sp.chain_eqs_goal(&g, &p.lits);
                 if g.ptr_eq(&g0) || g == g0 {
                     break;
                 }
@@ -4096,6 +4197,7 @@ impl Logic {
     fn simp_eqv_known(&self, env: &Env, t: &Term, known: &[Term]) -> Term {
         let sp = Simp::new(env, self);
         sp.set_nats(known);
+        *sp.known_mems.borrow_mut() = known.to_vec();
         let mut t = t.clone();
         for _ in 0..8 {
             let u = sp.prop(&t, Pol::Goal);

@@ -13,16 +13,25 @@
 //! have h: φ := P         a fact from a proof expression (φ, if given, is checked)
 //! have h: φ by R(args)   a fact by a rule that needs the goal φ (taut, ex_intro, ...)
 //! show P  /  show φ by R(args)   the result (else the last `have`)
+//! let N := t / let N(a, b) := t   an abbreviation, to the end of the block
 //! ```
+//!
+//! (Core files also have `abbrev N(a, b) := t`; abbreviations are read as
+//! their expansions.)
 //!
 //! Proof expressions: a fact (`h`, a theorem or axiom), instantiated
 //! (`eq_subst[a := t, p := x. x = t]`), or a rule `name(args)`; arguments
 //! are proof expressions, terms in braces `{t}`, or (for `unfold`) a symbol.
 //!
-//! Rules: `mp(ab, a)`, `refl({t})`, `sym(e)`, `trans(e1, e2)`,
-//! `subst({x. φ}, e, p)`, `rewrite(e, p)`, `unfold(sym)`, `all_elim(p, {t})`,
-//! `ex_intro({w}, {x. φ}, p)`, `witness(p)`, `prop({t})`, `lit({t})`;
-//! with a goal only: `taut(p, ...)`, `ex_intro({w}, p)`.
+//! Rules: `mp(ab, a1, ..)`, `refl({t})`, `sym(e)`, `trans(e1, e2)`,
+//! `subst({x. φ}, e, p)`, `rewrite(e, p)`, `unfold(sym)`,
+//! `all_elim(p, {t1}, ..)`, `ex_intro({w}, {x. φ}, p)`, `witness(p)`,
+//! `prop({t})`, `lit({t})`; `apply(f, a1, ..)`: f's leading `all`s and
+//! schematic variables instantiated -- by the terms `{t}` among the ai, in
+//! order, the rest by matching f's premises with the proofs (or a conjunct
+//! of one) -- and f applied to them; with a goal only: `taut(p, ...)`,
+//! `ex_intro({w}, p)`. In `mp` and `apply`, a goal rule (`simp(..)`, ..)
+//! proves its premise.
 
 use sl_kernel::ext::seq::{defined_sym, unfold_all};
 use sl_kernel::ext::simp::LoopHint;
@@ -657,11 +666,18 @@ impl State {
     fn apply(&self, env: &mut Env, lg: &Logic, args: &[Arg]) -> KResult<Seq> {
         let mut s = self.proof_arg(env, lg, args.first())?;
         let mut terms = Vec::new();
-        let mut proofs = Vec::new();
+        // the proofs; a goal rule (`simp(..)`, `taut(..)`, ..) proves its
+        // premise, instantiated, once the others have fixed the variables
+        let mut proofs: Vec<Option<Seq>> = Vec::new();
+        let mut goal_args: Vec<(usize, &PE)> = Vec::new();
         for a in &args[1..] {
             match a {
                 Arg::Term(_) => terms.push(self.term_arg(env, Some(a), 0)?),
-                Arg::Proof(_) => proofs.push(self.proof_arg(env, lg, Some(a))?),
+                Arg::Proof(p @ PE::Rule(n, _)) if GOAL_RULES.contains(&n.as_str()) => {
+                    goal_args.push((proofs.len(), p));
+                    proofs.push(None);
+                }
+                Arg::Proof(_) => proofs.push(Some(self.proof_arg(env, lg, Some(a))?)),
             }
         }
         // the pattern variables: f's schematic variables (not fixed in this
@@ -700,13 +716,31 @@ impl State {
         // match the premises
         let mut binds: Vec<(VarId, Term)> = Vec::new();
         let mut c = s.concl().clone();
-        for (i, p) in proofs.iter().enumerate() {
+        let and = env.sym_by_name.get("and").copied();
+        for (i, p) in proofs.iter_mut().enumerate() {
             let (a, b) = imp_parts(env, &c).map_err(|_| KernelError(format!("apply: no premise for the proof number {}", i + 1)))?;
-            if !pmatch(env, &a, p.concl(), &pvars, &mut binds) {
-                let pp = Printer::new(env);
-                return err(format!("apply: premise {} `{}` does not match `{}`", i + 1, pp.term(&a), pp.term(p.concl())));
-            }
             c = b;
+            let Some(p) = p else { continue };
+            if !pmatch(env, &a, p.concl(), &pvars, &mut binds) {
+                // a conjunct of the proof's statement that matches
+                let mut cs = Vec::new();
+                conjuncts(p.concl(), and, &mut cs);
+                let hit = cs.iter().find(|x| {
+                    let mut b = binds.clone();
+                    pmatch(env, &a, x, &pvars, &mut b)
+                });
+                match hit {
+                    Some(x) => {
+                        pmatch(env, &a, x, &pvars, &mut binds);
+                        let x = x.clone();
+                        *p = Seq::taut(env, lg, &[&*p], &x)?;
+                    }
+                    None => {
+                        let pp = Printer::new(env);
+                        return err(format!("apply: premise {} `{}` does not match `{}`", i + 1, pp.term(&a), pp.term(p.concl())));
+                    }
+                }
+            }
         }
         for v in &pvars {
             match binds.iter().find(|(w, _)| w == v) {
@@ -720,7 +754,20 @@ impl State {
                 }
             }
         }
-        for p in &proofs {
+        // the goal rules, on their premises as instantiated
+        if !goal_args.is_empty() {
+            let mut ps = Vec::new();
+            let mut c = s.concl().clone();
+            for _ in 0..proofs.len() {
+                let (a, b) = imp_parts(env, &c)?;
+                ps.push(a);
+                c = b;
+            }
+            for (i, pe) in goal_args {
+                proofs[i] = Some(self.by(env, lg, &ps[i], pe).map_err(|e| KernelError(format!("apply: premise {}: {}", i + 1, e.0)))?);
+            }
+        }
+        for p in proofs.iter().flatten() {
             s = Seq::mp(env, &s, p)?;
         }
         Ok(s)
@@ -806,19 +853,24 @@ impl State {
             PE::Rule(name, args) => {
                 let a0 = args.first();
                 match name.as_str() {
-                    // mp(f, x1, .., xn): f applied to x1, then to x2, ..
+                    // mp(f, x1, .., xn): f applied to x1, then to x2, ..; a
+                    // goal rule xi (`simp(..)`, ..) proves the premise there
                     "mp" => {
-                        let ps = self.proofs(env, lg, args)?;
-                        match ps.split_first() {
-                            Some((f, xs)) if !xs.is_empty() => {
-                                let mut s = f.clone();
-                                for x in xs {
-                                    s = Seq::mp(env, &s, x)?;
-                                }
-                                Ok(s)
-                            }
-                            _ => err("mp takes a proof and its premises"),
+                        if args.len() < 2 {
+                            return err("mp takes a proof and its premises");
                         }
+                        let mut s = self.proof_arg(env, lg, a0)?;
+                        for a in &args[1..] {
+                            let x = match a {
+                                Arg::Proof(p @ PE::Rule(n, _)) if GOAL_RULES.contains(&n.as_str()) => {
+                                    let (prem, _) = imp_parts(env, s.concl())?;
+                                    self.by(env, lg, &prem, p)?
+                                }
+                                _ => self.proof_arg(env, lg, Some(a))?,
+                            };
+                            s = Seq::mp(env, &s, &x)?;
+                        }
+                        Ok(s)
                     }
                     // apply(f, a1, .., an): f's variables (its leading `all`s
                     // and schematic ones) instantiated -- by the terms `{t}`
@@ -986,6 +1038,26 @@ fn pmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId
         (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
         _ => p == t,
     }
+}
+
+/// The conjuncts of `t`: the parts of its tree of `and`s (the inner
+/// conjunctions too, after the leaves).
+fn conjuncts(t: &Term, and: Option<SymId>, out: &mut Vec<Term>) {
+    let mut inner = Vec::new();
+    fn go(t: &Term, and: Option<SymId>, out: &mut Vec<Term>, inner: &mut Vec<Term>, top: bool) {
+        match t.node() {
+            Node::App(a, x) if Some(*a) == and => {
+                if !top {
+                    inner.push(t.clone());
+                }
+                go(&x[0], and, out, inner, false);
+                go(&x[1], and, out, inner, false);
+            }
+            _ => out.push(t.clone()),
+        }
+    }
+    go(t, and, out, &mut inner, true);
+    out.append(&mut inner);
 }
 
 /// `t` has bound variables pointing outside it (beyond `depth` binders).

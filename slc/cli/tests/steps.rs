@@ -116,6 +116,7 @@ fn get_slot_index_implements_its_gimple() {
             "proofs/get_slot_index_run.core",
             "proofs/abi.core",
             "proofs/abi_restore.core",
+            "proofs/abi_glue.core",
             "proofs/gimple.core",
             "proofs/get_slot_index.core",
             "proofs/get_slot_index_stack.core",
@@ -126,7 +127,7 @@ fn get_slot_index_implements_its_gimple() {
     let checked = String::from_utf8_lossy(&c.stdout);
     assert!(
         c.status.success()
-            && checked.contains("get_slot_index_abi.core: 0 constants, 0 axioms, 0 definitions, 1 theorems, 3 conditional theorems, 0 open lemmas")
+            && checked.contains("get_slot_index_abi.core: 0 constants, 0 axioms, 0 definitions, 0 theorems, 1 conditional theorems, 0 open lemmas")
             && checked.contains("lemma while_unroll: open"),
         "{}{}",
         checked,

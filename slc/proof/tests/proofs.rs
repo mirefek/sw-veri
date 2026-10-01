@@ -29,6 +29,22 @@ fn rejected(src: &str, why: &str) {
     }
 }
 
+/// `abbrev` and `let` are read as their expansions; `apply` instantiates a
+/// fact by matching its premises; a `let` ends with its block.
+#[test]
+fn abbreviations_let_and_apply() {
+    let src = "abbrev self_imp(a) := imp(a, a)\n\
+theorem t1(p): self_imp(p)\nproof\n  assume h: p\n  show h\nqed\n\
+theorem t2(p, q): p -> (p -> q) -> q\nproof\n  assume h: p\n  assume g: p -> q\n  let r := q\n  have x: r := apply(g, h)\n  show x\nqed\n\
+theorem t3(p, q): (all x. x -> q) -> p -> q\nproof\n  assume g: all x. x -> q\n  assume h: p\n  show apply(g, h)\nqed\n";
+    assert_eq!(check(src), Ok(3));
+    // a `let` of one proof is unknown in the next
+    rejected(
+        "theorem t1(p): p -> p\nproof\n  let r := p\n  assume h: r\n  show h\nqed\ntheorem t2(p): p -> p\nproof\n  assume h: r\n  show h\nqed\n",
+        "unknown symbol `r`",
+    );
+}
+
 #[test]
 fn a_proof_of_another_statement_is_rejected() {
     rejected("theorem bad(a): a\nproof\n  show imp_weaken[a := a, b := a]\nqed\n", "not the statement");
