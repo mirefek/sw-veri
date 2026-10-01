@@ -43,7 +43,7 @@ fn loaded_code_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 37 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 38 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 #[test]
@@ -58,17 +58,23 @@ fn step_theorems_of_get_slot_index_prove() {
     let slc = env!("CARGO_BIN_EXE_slc");
     let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "-o"]).arg(&out).output().unwrap();
     let msg = String::from_utf8_lossy(&g.stdout);
-    assert!(g.status.success() && msg.contains("7 instructions, 7 distinct encodings, 7 theorems"), "{}{}", msg, String::from_utf8_lossy(&g.stderr));
+    assert!(g.status.success() && msg.contains("7 instructions, 7 distinct encodings, 7 theorems, 7 outcomes"), "{}{}", msg, String::from_utf8_lossy(&g.stderr));
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(text.contains("theorem x86.step_4883e803(m, o)"), "{}", text);
+    // the outcome of `ret`: rip from the stack, rsp past it
+    assert!(text.contains("theorem get_slot_index.ok_40211a"), "{}", text);
     let c = Command::new(slc)
         .current_dir(&root)
-        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core"])
+        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core"])
         .arg(&claim)
+        .args(["proofs/x86.core", "proofs/x86_code.core"])
         .arg(&out)
+        .args(["proofs/get_slot_index_run.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && checked.contains("7 theorems"), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
+    // 7 step theorems, and per instruction where a step from it goes and
+    // its outcome; the function's run from them
+    assert!(c.status.success() && checked.contains("1 definitions, 21 theorems") && checked.contains("get_slot_index_run.core: 0 constants, 0 axioms, 0 definitions, 1 theorems"), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     let _ = std::fs::remove_file(&out);
 }

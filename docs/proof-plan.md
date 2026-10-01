@@ -307,6 +307,16 @@ relies on.
    and free translate, except inline assembly with operands (`a_cas`,
    `a_or`, `__syscall1`): leaves, specified and checked at the machine
    level directly.
+   The machine side of a function: `slc steps ELF CLAIM F -o OUT` proves,
+   per instruction encoding, what `step` runs (the decoding), and per
+   instruction of F where a step from it goes (`F.at_A`) and its outcome
+   when its memory accesses succeed (`F.ok_A`: the successor state, with
+   the accesses as hypotheses; computed by the simplifier, proven in the
+   file). A run of F (`proofs/get_slot_index_run.core`) chains these
+   outcomes, one path per instruction (get_slot_index: 0.2 s; expanding
+   every instruction's semantics with its fault cases took 1.2 s and 456
+   paths). The faults are separate cases, for the ABI's crash branch and
+   the spec's undefined behavior.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
      (`Cfg`: the file, the addresses of ctx, the lock, `__libc`). An

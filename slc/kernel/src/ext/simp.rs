@@ -1041,6 +1041,28 @@ impl<'a> Simp<'a> {
             if *op == "int_val" && self.int_term(&args[0]) {
                 return args[0].clone();
             }
+            // the operands of an n-bit addition are read mod 2^n: an integer
+            // sum among them in canonical n-bit form
+            if (*op == "bits_add" || *op == "bits_sub") && args.len() == 3 {
+                if let (Node::Nat(w), Some(boi)) = (args[0].node(), self.s.bits_of_int) {
+                    let w = Term::nat(w.clone());
+                    let mut new = args.clone();
+                    let mut changed = false;
+                    for x in new.iter_mut().skip(1) {
+                        if matches!(x.node(), Node::App(g, _) if matches!(self.arith.get(g), Some(&"int_add") | Some(&"int_sub"))) {
+                            let c = self.term(&Term::app(boi, vec![w.clone(), x.clone()]));
+                            let sum = |y: &Term| matches!(y.node(), Node::App(g, _) if matches!(self.arith.get(g), Some(&"int_add") | Some(&"int_sub")));
+                            if matches!(c.node(), Node::Nat(_)) || matches!(c.node(), Node::App(g, cb) if is(*g, self.s.bits_add) && !cb.iter().any(sum)) {
+                                *x = c;
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        return self.term(&t.with_args(new));
+                    }
+                }
+            }
             // addresses in canonical form: base + offset
             if ((*op == "bits_add" || *op == "bits_sub") && args.len() == 3) || (*op == "bits_of_int" && args.len() == 2 && !self.bits_term(&args[1], 64)) {
                 if let Node::Nat(w) = args[0].node() {
@@ -1650,10 +1672,24 @@ impl<'a> Simp<'a> {
                 _ => false,
             })
         };
+        // `x = c` with c a constant (no variables): one of finitely many values
+        fn ground(t: &Term) -> bool {
+            match t.node() {
+                Node::Var(..) | Node::BVar(_) => false,
+                Node::App(_, a) => a.iter().all(ground),
+                _ => true,
+            }
+        }
+        let const_point = |d: &Term| match d.node() {
+            Node::App(e, ab) if *e == self.s.eq => [(&ab[0], &ab[1]), (&ab[1], &ab[0])].iter().any(|(v, t)| matches!(v.node(), Node::BVar(0)) && ground(t)),
+            _ => false,
+        };
         for (i, c) in cs.iter().enumerate() {
             let mut ds = Vec::new();
             self.disjuncts(c, &mut ds);
-            if ds.len() > 1 && ds.iter().any(|d| point(d)) {
+            // (not a mere choice among values, `x = a || x = b`: that stays,
+            // for matching x with a path's variable)
+            if ds.len() > 1 && ds.iter().any(|d| point(d)) && !ds.iter().all(|d| const_point(d)) {
                 let mut rest = self.tt();
                 for (j, d) in cs.iter().enumerate() {
                     if j != i {
@@ -2890,6 +2926,31 @@ impl Logic {
     /// equations with the path's (∃-introduction).
     pub fn simp_prove(&self, env: &Env, premises: &[Term], goal: &Term) -> crate::env::KResult<()> {
         self.simp_prove_loops(env, premises, goal, &[])
+    }
+
+    /// `t` simplified as a term (the simplifier's equations), for tools.
+    pub fn simp_term(&self, env: &Env, t: &Term) -> Term {
+        Simp::new(env, self).term(t)
+    }
+
+    /// The settled paths of the premises (programs in `keep` folded): each
+    /// its existential variables (fresh, not in `env`) and literals. For
+    /// tools that propose statements (e.g. an instruction's outcome); it
+    /// proves nothing.
+    pub fn simp_paths(&self, env: &Env, premises: &[Term], keep: &[SymId]) -> crate::env::KResult<Vec<(Vec<crate::term::VarId>, Vec<Term>)>> {
+        let mut fresh = env.vars.len() as u32 + 2_000_000;
+        for t in premises {
+            fresh = fresh.max(max_var(t) + 1);
+        }
+        *self.simp_keep.borrow_mut() = keep.to_vec();
+        let sp = Simp::new(env, self);
+        let mut prem = sp.tt();
+        for p in premises {
+            prem = sp.and(prem, self.simp_fact(env, p));
+        }
+        self.simp_keep.borrow_mut().clear();
+        let work = sp.paths(&prem, &mut fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
+        Ok(work.into_iter().filter_map(|p| sp.settle(p)).map(|p| (p.vars, p.lits)).collect())
     }
 
     /// `simp_prove`, with invariants for the loops on the paths.
