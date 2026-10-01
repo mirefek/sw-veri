@@ -331,10 +331,21 @@ relies on.
    connects its run lemma and its spec lemmas: get_slot_index
    (`gsi.implements`, proofs/get_slot_index_abi.core, 100 lines, 0.8 s)
    chooses the view showing the stack slot as the machine writes it (it
-   is scratch space: `gsi.store_view`) and splits on whether p[-3] is
+   is scratch space: `abi.slot_view`) and splits on whether p[-3] is
    defined. Typing obligations (a state after updates is a Machine, ..)
    are simp's: record types are checked field by field. It rests only on
-   the open loop lemmas.
+   the open loop lemmas. The same glue gives C1 for upgradelock and
+   resetlock (a store to a global: `loaded` keeps static data off the
+   stack pages, so the return address stays) and a_ctz_32
+   (`ac.implements`, proofs/a_ctz_32.core: a 4-byte slot, the de Bruijn
+   table read on the view; the machine's `neg`/`and`/signed `imul`
+   connected to the source's `0 - x`/`&`/`*` by `ac.hash`). A leaf
+   function's red-zone slot (n bytes at rsp - k, n <= k <= 8) is covered
+   once, in proofs/abi_stack.core (`abi.slot_access`, `abi.ret_access`,
+   `abi.slot_view`). Found on the way: a call with fewer arguments than
+   the function's parameters left the spec computing on `args[i] =
+   empty` while the machine read whatever the register held; the
+   generated `_fun` wrappers now `require len(args) >= n` (C: undefined).
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
      (`Cfg`: the file, the addresses of ctx, the lock, `__libc`). An

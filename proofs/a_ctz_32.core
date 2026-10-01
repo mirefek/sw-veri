@@ -1,0 +1,234 @@
+// a_ctz_32 (musl, `debruijn32[(x & -x) * 0x076be629 >> 27]` at -O0): C1
+// under the ABI. The argument goes to a stack slot (4 bytes at rsp - 4,
+// scratch space: abi_stack.core) and is read back; the result is a byte of
+// the static table debruijn32, read on the memory with the slot written (the
+// spec's view).
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     build/leaf_steps.core proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core \
+//     proofs/abi_stack.core proofs/a_ctz_32.core
+
+abbrev ac.spec := c_src_malloc_mallocng_malloc.a_ctz_32_fun()
+// the table index: the de Bruijn hash of the lowest set bit
+abbrev ac.h(x) := bits_shr(32, bits_mul(32, bits_and(32, x, bits_sub(32, 0, x)), 124511785), 27)
+abbrev ac.addr(x) := int_add(4219040, ac.h(x))
+abbrev ac.res(v, x) := bits_sext(8, 32, bits_of_int(8, gimple.bytes_at(v, ac.addr(x), 1)))
+abbrev ac.defined(v, x) := gimple.usable(v, ac.addr(x), 1, false)
+abbrev ac.arg(args) := bits_of_int(32, app(args, 0))
+// the C function's call defined: an argument passed, its table byte readable
+abbrev ac.ok(v, args) := ord_le(1, seq_len(args)) && ac.defined(v, ac.arg(args))
+
+theorem ac.proc_ok: all w x. w in univ(1) -> x in bits(32) -> ac.defined(app(w, "vm"), x) ->
+  runs(c_src_malloc_mallocng_malloc.a_ctz_32(x), w, ok(w, ac.res(app(w, "vm"), x)))
+proof
+  fix w
+  fix x
+  assume hw: w in univ(1)
+  assume hx: x in bits(32)
+  assume hu: ac.defined(app(w, "vm"), x)
+  have hb: ac.h(x) in bits(32) by simp(hx)
+  have el := apply(g.elem1_ok, {w}, {4219040}, {ac.h(x)}, hw, simp(), hb, simp(hb))
+  have ld := apply(g.ld8_ok, {w}, {ac.addr(x)}, hw, simp(hb), simp(hb), hu)
+  show by defs(simp(hw, hx, hb, el, ld, keep(gimple.elem, gimple.ld8)), c_src_malloc_mallocng_malloc.a_ctz_32, c_src_malloc_mallocng_malloc.debruijn32)
+qed
+
+theorem ac.proc_raises: all w x e. w in univ(1) -> e in univ(1) -> x in bits(32) -> !ac.defined(app(w, "vm"), x) ->
+  runs(c_src_malloc_mallocng_malloc.a_ctz_32(x), w, exc(w, e))
+proof
+  fix w
+  fix x
+  fix e
+  assume hw: w in univ(1)
+  assume he: e in univ(1)
+  assume hx: x in bits(32)
+  assume hn: !ac.defined(app(w, "vm"), x)
+  have hb: ac.h(x) in bits(32) by simp(hx)
+  have el := apply(g.elem1_ok, {w}, {4219040}, {ac.h(x)}, hw, simp(), hb, simp(hb))
+  have ld := apply(g.ld8_ub, {w}, {ac.addr(x)}, {e}, hw, he, simp(hn), simp(hb))
+  show by defs(simp(hw, he, hx, hb, el, ld, keep(gimple.elem, gimple.ld8)), c_src_malloc_mallocng_malloc.a_ctz_32, c_src_malloc_mallocng_malloc.debruijn32)
+qed
+
+theorem ac.fun_ok: all w args y. w in univ(1) -> args in abi.ARGS -> y in bits(64) -> ac.ok(app(w, "vm"), args) ->
+  runs(app(ac.spec, args), w, ok(w, pair(ac.res(app(w, "vm"), ac.arg(args)), y)))
+proof
+  fix w
+  fix args
+  fix y
+  assume hw: w in univ(1)
+  assume hA: args in abi.ARGS
+  assume hy: y in bits(64)
+  assume hu: ac.ok(app(w, "vm"), args)
+  have pr := apply(ac.proc_ok, {w}, {ac.arg(args)}, hw, simp(), simp(hu))
+  have rs := apply(g.result_ok, {w}, {ac.res(app(w, "vm"), ac.arg(args))}, hw, simp())
+  show by defs(simp(hw, hA, hy, hu, pr, rs, keep(c_src_malloc_mallocng_malloc.a_ctz_32, gimple.result)), c_src_malloc_mallocng_malloc.a_ctz_32_fun)
+qed
+
+theorem ac.fun_raises: all w args e. w in univ(1) -> e in univ(1) -> args in abi.ARGS -> !ac.ok(app(w, "vm"), args) ->
+  runs(app(ac.spec, args), w, exc(w, e))
+proof
+  fix w
+  fix args
+  fix e
+  assume hw: w in univ(1)
+  assume he: e in univ(1)
+  assume hA: args in abi.ARGS
+  assume hn: !ac.ok(app(w, "vm"), args)
+  // no argument: undefined
+  have c1: !ord_le(1, seq_len(args)) -> runs(app(ac.spec, args), w, exc(w, e)) proof
+    assume hl: !ord_le(1, seq_len(args))
+    show by defs(simp(hw, he, hA, hl, keep(c_src_malloc_mallocng_malloc.a_ctz_32, gimple.result)), c_src_malloc_mallocng_malloc.a_ctz_32_fun)
+  qed
+  // its table byte not readable: the load raises
+  have c2: !ac.defined(app(w, "vm"), ac.arg(args)) -> runs(app(ac.spec, args), w, exc(w, e)) proof
+    assume hd: !ac.defined(app(w, "vm"), ac.arg(args))
+    have pr := apply(ac.proc_raises, {w}, {ac.arg(args)}, {e}, hw, he, simp(), hd)
+    show by defs(simp(hw, he, hA, pr, keep(c_src_malloc_mallocng_malloc.a_ctz_32, gimple.result)), c_src_malloc_mallocng_malloc.a_ctz_32_fun)
+  qed
+  show by taut(hn, c1, c2)
+qed
+
+// the machine's hash is the source's: `neg` is 0 - x, `and` commutes, and
+// the signed 32-bit `imul` has the low 32 bits of the unsigned product
+theorem ac.imul: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), 124511785), 0) = bits_mul(32, y, 124511785)
+proof
+  fix y
+  assume hy: y in bits(32)
+  have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 124511785), 0) = bits_mul(32, y, 124511785) proof
+    assume hl: int_lt(y, 2147483648)
+    show by defs(simp(hy, hl), bits_add, bits_mul, sint)
+  qed
+  have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 124511785), 0) = bits_mul(32, y, 124511785) proof
+    assume hl: !int_lt(y, 2147483648)
+    have e: int_mod(int_mul(int_sub(y, 4294967296), 124511785), 4294967296) = int_mod(int_mul(y, 124511785), 4294967296) by arith(hy)
+    show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)
+  qed
+  show by taut(c1, c2)
+qed
+
+theorem ac.hash: all x. x in bits(32) -> bits_shr(32, bits_add(32, int_mul(sint(32, bits_and(32, bits_neg(32, x), x)), 124511785), 0), 27) = ac.h(x)
+proof
+  fix x
+  assume hx: x in bits(32)
+  have n: bits_neg(32, x) = bits_sub(32, 0, x) by defs(simp(hx), bits_neg, bits_sub)
+  have a := all_elim(x86.and_comm, {32}, {bits_sub(32, 0, x)}, {x})
+  have im := apply(ac.imul, {bits_and(32, x, bits_sub(32, 0, x))}, simp())
+  show by simp(n, a, im)
+qed
+
+// the machine, from entry to return: the argument stored to its slot and
+// read back, the hash, the table byte (read on the memory with the slot
+// written), sign-extended into eax; OF and AF undefined (either value)
+abbrev acm.rsp(m) := app(app(m, "gpr"), 4)
+abbrev acm.x(m) := bits_slice(app(app(m, "gpr"), 7), 31, 0)
+abbrev acm.slot(m) := bits_add(64, acm.rsp(m), 18446744073709551612)
+abbrev acm.vm1(m) := fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), acm.slot(m), 4, acm.x(m)))
+abbrev acm.t3(m) := bits_add(32, int_mul(sint(32, bits_and(32, bits_neg(32, acm.x(m)), acm.x(m))), 124511785), 0)
+abbrev acm.t4(m) := bits_shr(32, acm.t3(m), 27)
+abbrev acm.res(m) := bits_sext(8, 32, x86_64_linux.le(app(acm.vm1(m), "bytes"), bits_add(64, acm.t4(m), 4219040), 1))
+abbrev acm.flags(m, of, af) := fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(app(m, "flags"), "cf", bit(acm.t3(m), 26)), "of", of), "zf", acm.t4(m) = 0), "sf", bit(acm.t4(m), 31)), "pf", x86_64_linux.even_parity(bits_slice(acm.t4(m), 7, 0))), "af", af)
+abbrev acm.final(m, of, af) := fn_update(fn_update(fn_update(fn_update(m, "vm", acm.vm1(m)), "flags", acm.flags(m, of, af)),
+  "gpr", fn_update(fn_update(fn_update(app(m, "gpr"), 2, acm.t4(m)), 0, acm.res(m)), 4, abi.sp(m))), "rip", abi.ret(m))
+
+theorem a_ctz_32.run(m, o): abi.code_at(app(m, "vm"), 4205681, a_ctz_32.code()) -> app(m, "rip") = 4205681 -> acm.rsp(m) in bits(64) -> app(app(m, "gpr"), 7) in bits(64) ->
+  (all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, acm.slot(m), bits_of_int(64, i)), 1)) ->
+  (all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, acm.slot(m), bits_of_int(64, i)), 0)) ->
+  (all i. i in omega -> int_lt(i, 1) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, acm.t4(m), 4219040), bits_of_int(64, i)), 0)) ->
+  (all i. i in omega -> int_lt(i, 8) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, acm.rsp(m), bits_of_int(64, i)), 0)) ->
+  runs(abi.run_to_return(), m, o) ->
+  ex of af. (of = false || of = true) && (af = false || af = true) && o = ok(acm.final(m, of, af), empty)
+proof
+  assume hc: abi.code_at(app(m, "vm"), 4205681, a_ctz_32.code())
+  assume hr: app(m, "rip") = 4205681
+  assume hsp: acm.rsp(m) in bits(64)
+  assume hdi: app(app(m, "gpr"), 7) in bits(64)
+  assume aw: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, acm.slot(m), bits_of_int(64, i)), 1)
+  assume ar: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, acm.slot(m), bits_of_int(64, i)), 0)
+  assume at: all i. i in omega -> int_lt(i, 1) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, acm.t4(m), 4219040), bits_of_int(64, i)), 0)
+  assume a7: all i. i in omega -> int_lt(i, 8) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, acm.rsp(m), bits_of_int(64, i)), 0)
+  assume h: runs(abi.run_to_return(), m, o)
+  show by simp(h, hc, hr, hsp, hdi, aw, ar, at, a7, a_ctz_32.ok_402c71, a_ctz_32.ok_402c75, a_ctz_32.ok_402c79, a_ctz_32.ok_402c7b, a_ctz_32.ok_402c7f, a_ctz_32.ok_402c85, a_ctz_32.ok_402c88, a_ctz_32.ok_402c8a, a_ctz_32.ok_402c91, a_ctz_32.ok_402c95, a_ctz_32.ok_402c98, unroll, keep(x86_64_linux.step, abi.code_at, a_ctz_32.code, x86_64_linux.can_access))
+qed
+
+// C1: the machine code implements the C function's spec, in any program
+theorem ac.implements: all statics. abi.implements2_at(single(empty), 4205681, ac.spec, 4205681, a_ctz_32.code(), statics)
+proof
+  fix statics
+  have runs: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), 4205681, a_ctz_32.code(), statics) -> app(s, "rip") = 4205681 -> abi.entry_ok(s, args) ->
+      runs(abi.run_to_return(), s, o) -> runs(abi.abi_function(single(empty), 4205681, ac.spec, args), s, o) proof
+    fix args
+    fix s
+    fix o
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume hl: abi.loaded(app(s, "vm"), 4205681, a_ctz_32.code(), statics)
+    assume hrip: app(s, "rip") = 4205681
+    assume he: abi.entry_ok(s, args)
+    assume hr: runs(abi.run_to_return(), s, o)
+    have hc: abi.code_at(app(s, "vm"), 4205681, a_ctz_32.code()) by taut(expand(hl, abi.loaded))
+    have hp := apply(abi.run_univ, hr)
+    have su: s in univ(1) by simp(hp)
+    have hsv: app(s, "vm") in x86_64_linux.Vm by simp(hM)
+    have hsp: acm.rsp(s) in bits(64) by simp(hM)
+    have hdi: app(app(s, "gpr"), 7) in bits(64) by simp(hM)
+    have ent := apply(abi.entry_stack, hM, he)
+    // the slot: scratch space, the memory after the store a view of the memory at entry
+    have sv := apply(abi.slot_view, {app(s, "vm")}, {acm.rsp(s)}, {18446744073709551612}, {4}, {acm.x(s)}, hsv, hsp, ent, ent, ent, simp(), simp(), simp())
+    have bt: app(app(s, "vm"), "bytes") in fn_space(bits(64), bits(8)) by simp(hM)
+    have stt := apply(x86.store_typed, {app(app(s, "vm"), "bytes")}, {acm.slot(s)}, {4}, {acm.x(s)}, bt)
+    have stu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], stt)
+    have v1u: acm.vm1(s) in univ(1) by simp(su, stu, keep(x86_64_linux.store_le))
+    have v1: acm.vm1(s) in x86_64_linux.Vm by simp(hM, v1u, x86.store_typed)
+    let w := abi.view(acm.vm1(s), s)
+    have wu: w in univ(1) by simp(su, v1u)
+    have eu: empty in univ(1) by simp()
+    // no argument, or its table byte not readable: the spec raises
+    have ub: !ac.ok(acm.vm1(s), args) -> runs(abi.abi_function(single(empty), 4205681, ac.spec, args), s, o) proof
+      assume hn: !ac.ok(acm.vm1(s), args)
+      have fr := apply(ac.fun_raises, wu, eu, hA, simp(hn))
+      show := apply(abi.ub_case, {4205681}, {ac.spec}, {args}, {s}, {o}, {acm.vm1(s)}, {empty}, hM, v1, v1u, sv, sv, eu, fr, hp, simp(apply(abi.run_shape, hr)))
+    qed
+    // defined: the run returns normally, in the state abi.ret_case asks for
+    have ret: ac.ok(acm.vm1(s), args) -> runs(abi.abi_function(single(empty), 4205681, ac.spec, args), s, o) proof
+      assume hd: ac.ok(acm.vm1(s), args)
+      have pa := apply(abi.arg_passed, hA, he, simp(hd))
+      // the argument the machine reads back is the spec's
+      have sl: bits_slice(app(args, 0), 31, 0) = bits_of_int(32, app(args, 0)) by defs(simp(), bits_slice, bits_of_int)
+      have ex: acm.x(s) = ac.arg(args) by simp(pa, sl)
+      have xb: ac.arg(args) in bits(32) by simp()
+      have hh := apply(ac.hash, xb)
+      have et: acm.t4(s) = ac.h(ac.arg(args)) by simp(ex, hh)
+      have hb: ac.h(ac.arg(args)) in bits(32) by simp(xb)
+      // the table byte can be read
+      have at: all i. i in omega -> int_lt(i, 1) -> x86_64_linux.can_access(app(s, "vm"), bits_add(64, bits_add(64, acm.t4(s), 4219040), bits_of_int(64, i)), 0) proof
+        fix i
+        assume i1: i in omega
+        assume i2: int_lt(i, 1)
+        have r := apply(g.usable_read, {acm.vm1(s)}, {app(s, "vm")}, {ac.addr(ac.arg(args))}, {1}, {i}, simp(hd), simp(), simp(hb), i1, i2)
+        have ea: bits_add(64, bits_add(64, acm.t4(s), 4219040), bits_of_int(64, i)) = bits_of_int(64, int_add(ac.addr(ac.arg(args)), i)) by simp(et, hb, i1, i2)
+        show := rewrite(sym(ea), r)
+      qed
+      have sa := apply(abi.slot_access, {app(s, "vm")}, {acm.rsp(s)}, {18446744073709551612}, {4}, hsp, ent, ent, simp(), simp(), simp())
+      have ra := apply(abi.ret_access, {app(s, "vm")}, {acm.rsp(s)}, hsp, ent, ent)
+      have run := apply(a_ctz_32.run, hc, hrip, hsp, hdi, sa, sa, at, ra, hr)
+      obtain of, hof from run
+      obtain af, haf from hof
+      let m1 := acm.final(s, of, af)
+      have eo: o = ok(m1, empty) by taut(haf)
+      have hp2 := rewrite(eo, hp)
+      have m1u: m1 in univ(1) by taut(apply(abi.ok_univ, hp2))
+      have m1M: m1 in x86_64_linux.Machine by simp(hM, haf, m1u, x86.store_typed)
+      // the spec's run on the view: its result is the machine's
+      have fo := apply(ac.fun_ok, {w}, {args}, {app(app(m1, "gpr"), 2)}, wu, hA, simp(), simp(hd))
+      have e0: ac.res(app(w, "vm"), ac.arg(args)) = app(app(m1, "gpr"), 0)
+        by defs(simp(et, hb), gimple.bytes_at, x86_64_linux.le)
+      have rc := apply(abi.ret_case, {4205681}, {ac.spec}, {args}, {s}, {m1}, {acm.vm1(s)}, {w},
+        hM, he, m1M, hp2, v1, v1u, sv, sv, rewrite(e0, fo), simp(hM, v1, wu), wu,
+        defs(simp(keep(abi.scratch, abi.scratch_page, abi.stack_page)), abi.world_matches),
+        simp(), simp(), simp(), simp(), simp(), simp(), simp(), simp(expand(he, abi.entry_ok)))
+      show := rewrite(sym(eo), rc)
+    qed
+    show by taut(ub, ret)
+  qed
+  show := apply(abi.implements_intro, runs)
+qed

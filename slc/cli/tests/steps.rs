@@ -22,7 +22,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 16 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 17 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -87,9 +87,10 @@ fn step_theorems_of_get_slot_index_prove() {
     let _ = std::fs::remove_file(&out);
 }
 
-/// C1 for get_slot_index: its machine code implements its readable GIMPLE
-/// under the ABI (`gsi.implements`, proofs/get_slot_index_abi.core), resting
-/// only on the open loop lemmas. Needs the -O0 build and its readable GIMPLE
+/// C1 for get_slot_index, upgradelock, resetlock and a_ctz_32: their
+/// machine code implements their readable GIMPLE under the ABI
+/// (`gsi.implements`, `ug.implements`, `rl.implements`, `ac.implements`),
+/// resting only on the open loop lemmas. Needs the -O0 build and its readable GIMPLE
 /// (`slc gimple --readable`).
 #[test]
 fn get_slot_index_implements_its_gimple() {
@@ -119,10 +120,11 @@ fn get_slot_index_implements_its_gimple() {
             "proofs/abi_glue.core",
             "proofs/gimple.core",
             "proofs/get_slot_index.core",
-            "proofs/get_slot_index_stack.core",
+            "proofs/abi_stack.core",
             "proofs/get_slot_index_abi.core",
             "proofs/upgradelock.core",
             "proofs/resetlock.core",
+            "proofs/a_ctz_32.core",
         ])
         .output()
         .unwrap();
@@ -132,6 +134,8 @@ fn get_slot_index_implements_its_gimple() {
             && checked.contains("get_slot_index_abi.core: 0 constants, 0 axioms, 0 definitions, 0 theorems, 1 conditional theorems, 0 open lemmas")
             && checked.contains("upgradelock.core: 0 constants, 0 axioms, 0 definitions, 1 theorems, 2 conditional theorems")
             && checked.contains("resetlock.core: 0 constants, 0 axioms, 0 definitions, 2 theorems, 3 conditional theorems")
+            && checked.contains("abi_stack.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems")
+            && checked.contains("a_ctz_32.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 2 conditional theorems")
             && checked.contains("lemma while_unroll: open"),
         "{}{}",
         checked,

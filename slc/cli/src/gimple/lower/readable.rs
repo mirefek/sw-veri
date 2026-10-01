@@ -288,6 +288,11 @@ impl<'a> Lower<'a> {
         let mut call_args: Vec<String> = rx.params.iter().enumerate().map(|(i, (_, w, _))| format!("bits[{}](args[{}])", w, i)).collect();
         call_args.extend(rx.callees.iter().cloned());
         writeln!(s, "fn {}_fun({}) -> CFun2[World] = (args: Args) => {{", fname, cps.join(", ")).unwrap();
+        // a call with fewer arguments than the function's parameters is
+        // undefined (the missing ones would be whatever the registers hold)
+        if !rx.params.is_empty() {
+            writeln!(s, "  require len(args) >= {}", rx.params.len()).unwrap();
+        }
         match ret_ty {
             None => writeln!(s, "  {}({})\n  return (any bits[64], any bits[64])", fname, call_args.join(", ")).unwrap(),
             Some(_) if two_words => writeln!(s, "  let (r0, r1) = {}({})\n  return (r0, r1)", fname, call_args.join(", ")).unwrap(),

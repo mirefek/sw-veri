@@ -4,7 +4,7 @@
 //   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
 //     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
 //     build/get_slot_index_steps.core proofs/get_slot_index_run.core proofs/abi.core proofs/abi_restore.core \
-//     proofs/abi_glue.core proofs/gimple.core proofs/get_slot_index.core proofs/get_slot_index_stack.core \
+//     proofs/abi_glue.core proofs/gimple.core proofs/get_slot_index.core proofs/abi_stack.core \
 //     proofs/get_slot_index_abi.core
 //
 // From abi.implements_intro: a run from a valid entry is one abi_function
@@ -22,9 +22,10 @@ abbrev gsi.res(s) := bits_and(32, x86_64_linux.le(app(gsi.vm1(s), "bytes"), bits
 abbrev gsi.final(s, af) := fn_update(fn_update(fn_update(fn_update(s, "vm", gsi.vm1(s)), "flags",
     fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(app(s, "flags"), "zf", gsi.res(s) = 0), "sf", bit(gsi.res(s), 31)), "pf", x86_64_linux.even_parity(bits_slice(gsi.res(s), 7, 0))), "cf", false), "of", false), "af", af)),
   "gpr", fn_update(fn_update(app(s, "gpr"), 0, gsi.res(s)), 4, bits_add(64, gsi.rsp(s), 8))), "rip", abi.ret(s))
-// the spec's argument p, and when p[-3] is defined (on the memory v)
+// the spec's argument p, and when p[-3] is defined (on the memory v; p
+// passed)
 abbrev gsi.p(args) := bits_of_int(64, app(args, 0))
-abbrev gsi.defined(v, args) := int_le(3, gsi.p(args)) && !(int_sub(gsi.p(args), 3) = 0) && gimple.usable(v, int_sub(gsi.p(args), 3), 1, false)
+abbrev gsi.defined(v, args) := ord_le(1, seq_len(args)) && int_le(3, gsi.p(args)) && !(int_sub(gsi.p(args), 3) = 0) && gimple.usable(v, int_sub(gsi.p(args), 3), 1, false)
 abbrev gsi.spec := c_src_malloc_mallocng_malloc.get_slot_index_fun()
 
 theorem gsi.implements: all statics. abi.implements2_at(single(empty), 4202755, gsi.spec, 4202755, get_slot_index.code(), statics)
@@ -49,7 +50,7 @@ proof
     have hsp: gsi.rsp(s) in bits(64) by simp(hM)
     have hdi: gsi.rdi(s) in bits(64) by simp(hM)
     have ent := apply(abi.entry_stack, hM, he)
-    have sv := apply(gsi.store_view, {app(s, "vm")}, {gsi.rsp(s)}, {gsi.rdi(s)}, hsv, hsp, ent, ent, ent)
+    have sv := apply(abi.slot_view, {app(s, "vm")}, {gsi.rsp(s)}, {18446744073709551608}, {8}, {gsi.rdi(s)}, hsv, hsp, ent, ent, ent, simp(), simp(), simp())
     // the view vm1: a memory, in the universe
     have bt: app(app(s, "vm"), "bytes") in fn_space(bits(64), bits(8)) by simp(hM)
     have stt := apply(x86.store_typed, {app(app(s, "vm"), "bytes")}, {bits_add(64, gsi.rsp(s), 18446744073709551608)}, {8}, {gsi.rdi(s)}, bt)
@@ -69,7 +70,8 @@ proof
     have ret: gsi.defined(gsi.vm1(s), args) -> runs(abi.abi_function(single(empty), 4202755, gsi.spec, args), s, o) proof
       assume hd: gsi.defined(gsi.vm1(s), args)
       have pa := apply(abi.arg0, hM, hA, he, simp(hd))
-      have sa := apply(gsi.stack_access, {app(s, "vm")}, {gsi.rsp(s)}, hsp, ent, ent)
+      have sa := apply(abi.slot_access, {app(s, "vm")}, {gsi.rsp(s)}, {18446744073709551608}, {8}, hsp, ent, ent, simp(), simp(), simp())
+      have ra := apply(abi.ret_access, {app(s, "vm")}, {gsi.rsp(s)}, hsp, ent, ent)
       // the byte at p - 3 = rdi - 3 can be read
       have a4: all i. i in omega -> int_lt(i, 1) -> x86_64_linux.can_access(app(s, "vm"), bits_add(64, bits_add(64, gsi.rdi(s), 18446744073709551613), bits_of_int(64, i)), 0) proof
         fix i
@@ -80,7 +82,7 @@ proof
         show := rewrite(sym(ea), r)
       qed
       // the run
-      have run := apply(get_slot_index.run, hc, hrip, hsp, hdi, sa, sa, a4, sa, hr)
+      have run := apply(get_slot_index.run, hc, hrip, hsp, hdi, sa, sa, a4, ra, hr)
       obtain af, haf from run
       let m1 := gsi.final(s, af)
       have eo: o = ok(m1, empty) by taut(haf)
@@ -88,7 +90,7 @@ proof
       have m1u: m1 in univ(1) by taut(apply(abi.ok_univ, hp2))
       have m1M: m1 in x86_64_linux.Machine by simp(hM, haf, m1u, x86.store_typed)
       // the spec's run on the view: its result is the machine's
-      have fo := apply(gsi.fun_ok, {w}, {args}, {app(app(s, "gpr"), 2)}, wu, hA, simp(hM), simp(hd), simp(hd), simp(hd))
+      have fo := apply(gsi.fun_ok, {w}, {args}, {app(app(s, "gpr"), 2)}, wu, hA, simp(hM), simp(hd), simp(hd), simp(hd), simp(hd))
       have e0: bits_and(32, bits_of_int(8, gimple.bytes_at(app(w, "vm"), int_sub(gsi.p(args), 3), 1)), 31) = app(app(m1, "gpr"), 0)
         by defs(simp(pa, hdi, hd), gimple.bytes_at, x86_64_linux.le)
       have e2: app(app(s, "gpr"), 2) = app(app(m1, "gpr"), 2) by simp()

@@ -283,6 +283,19 @@ fn ok_lemma(env: &mut Env, lg: &sl_kernel::ext::Logic, ns: &str, base: u64, addr
         let out = lg.simp_term(env, &out);
         // conditions: what is left but the premises, the outcome, typing and
         // the canonical-address checks
+        // (a choice the model leaves open, `t = false` / `t = true` for t of
+        // the path's own values: either, so the paths of the choices merge)
+        let false_ = env.sym_by_name.get("false").copied();
+        let open_choice = |c: &Term| -> Option<Term> {
+            let Node::App(e, a) = c.node() else { return None };
+            if *e != eq {
+                return None;
+            }
+            let is_bool = |t: &Term| matches!(t.node(), Node::App(f, x) if x.is_empty() && (Some(*f) == false_ || env.syms[*f as usize].name == "true"));
+            let mut vs = Vec::new();
+            a[0].vars(&mut vs);
+            (is_bool(&a[1]) && vs.iter().any(|v| vars.contains(v))).then(|| a[0].clone())
+        };
         let conds: Vec<String> = conds
             .iter()
             .map(|c| {
@@ -290,7 +303,13 @@ fn ok_lemma(env: &mut Env, lg: &sl_kernel::ext::Logic, ns: &str, base: u64, addr
                 for (v, t) in &subst {
                     c = c.subst_var(*v, t, &bf);
                 }
-                pr.term(&c)
+                match open_choice(&c) {
+                    Some(t) => {
+                        let t = pr.term(&t);
+                        format!("{} = false || {} = true", t, t)
+                    }
+                    None => pr.term(&c),
+                }
             })
             .filter(|c| !c.starts_with("o = ") && !c.contains("canonical") && !c.ends_with(" in bits(64)") && !prem.iter().any(|p| pr.term(p) == *c))
             .map(|c| format!("({})", c))
@@ -300,14 +319,20 @@ fn ok_lemma(env: &mut Env, lg: &sl_kernel::ext::Logic, ns: &str, base: u64, addr
         body.push(format!("o = ok({}, empty)", x));
         body.push(format!("abi.code_at(app({}, \"vm\"), {}, {}.code())", x, base, ns));
         let mut alt = body.join(" && ");
-        // values left open: existential (the path's own variables)
+        // values left open: existential (the path's own variables, named by
+        // their order, so that paths alike are alike in text)
+        let mut k = 0;
         for v in vars {
             let name = format!("?v{}", v);
             if alt.contains(&name) {
-                alt = format!("ex u{v}. {}", alt.replace(&name, &format!("u{}", v)));
+                alt = format!("ex u{k}. {}", alt.replace(&name, &format!("u{}", k)));
+                k += 1;
             }
         }
-        alts.push(format!("({})", alt));
+        let alt = format!("({})", alt);
+        if !alts.contains(&alt) {
+            alts.push(alt);
+        }
     }
     if alts.is_empty() {
         return Ok(None);

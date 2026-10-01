@@ -92,6 +92,16 @@
 //!   step then rests on, like `while_unroll` for loops of facts.
 //! * in facts, `ex x. P(fst(x), snd(x))` is split into the projections when
 //!   that decides it (a choice of several values that exists).
+//! * a comparison of a literal k with a natural x, or with a word x of a
+//!   width n (0 <= x < 2^n), is decided when k lies outside that range
+//!   (`int_le(2^63, x)` is false for a 32-bit x); `int_mod(x, k)` of an
+//!   n-bit x with 2^n <= k is x.
+//! * a goal `all ys. H1 -> .. -> C` holds when C (its variables fixed) is an
+//!   instance of a literal `all xs. D` (`all i. i in omega -> P(f(i))` from
+//!   `all a. P(a)`).
+//! * a choice of constants (`t = false || t = true`) stays one literal (not
+//!   a case split) also for a projection t of a variable (`fst(snd(u))`:
+//!   one of several undefined flags).
 //!
 //! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
 //! match literals of the path (or follow from them by taut/arith), with
@@ -1204,6 +1214,14 @@ impl<'a> Simp<'a> {
                     }
                 }
             }
+            // x mod k of an n-bit x with 2^n <= k: x
+            if *op == "int_mod" && args.len() == 2 {
+                if let Node::Nat(k) = args[1].node() {
+                    if (1..=128u64).any(|n| crate::nat::Nat::pow2(n) <= *k && self.bits_term(&args[0], n)) {
+                        return args[0].clone();
+                    }
+                }
+            }
             // typed words: all bits of x (`bits_slice(x, n-1, 0)` of an n-bit
             // x); `bits_set_slice(n, x, n-1, 0, v)` of an n-bit v is v
             if *op == "bits_slice" && args.len() == 3 {
@@ -1586,10 +1604,76 @@ impl<'a> Simp<'a> {
         }
         // an atom: its arguments as terms
         let t = self.term(t);
-        if let Some(b) = self.literal_prop(&t) {
+        if let Some(b) = self.literal_prop(&t).or_else(|| self.bound_prop(&t)) {
             return if b { self.tt() } else { self.ff() };
         }
         t
+    }
+
+    /// A comparison of a literal k with a term x known to be a natural (x
+    /// >= 0) or a word of a width n (0 <= x <= 2^n - 1): decided when k lies
+    /// outside that range (`int_le(2^63, x)` is false for a 32-bit x).
+    fn bound_prop(&self, t: &Term) -> Option<bool> {
+        use crate::nat::Nat;
+        let Node::App(m, b) = t.node() else { return None };
+        if b.len() != 2 {
+            return None;
+        }
+        let strict = match self.env.syms.get(*m as usize)?.name.as_str() {
+            "int_lt" => true,
+            "int_le" => false,
+            _ => return None,
+        };
+        let (k, x, lit_left) = match (self.int_lit(&b[0]), self.int_lit(&b[1])) {
+            (Some(k), None) => (k, &b[1], true),
+            (None, Some(k)) => (k, &b[0], false),
+            _ => return None,
+        };
+        let zero = SInt::nat(Nat::zero());
+        let lo = self.nat_term(x).then(|| zero.clone());
+        let hi = (1..=128u64).find(|&n| self.bits_term(x, n)).map(|n| SInt::nat(Nat::pow2(n)).add(&SInt::new(true, Nat::from_u64(1))));
+        // x's range [lo, hi] against k: x < k, x <= k, k < x, k <= x
+        let below = |a: &SInt, c: &SInt| a.lt(c);
+        let le = |a: &SInt, c: &SInt| !c.lt(a);
+        match (lit_left, strict) {
+            // k < x: true when k < lo; false when hi <= k
+            (true, true) => {
+                if lo.as_ref().is_some_and(|l| below(&k, l)) {
+                    return Some(true);
+                }
+                if hi.as_ref().is_some_and(|h| le(h, &k)) {
+                    return Some(false);
+                }
+            }
+            // k <= x: true when k <= lo; false when hi < k
+            (true, false) => {
+                if lo.as_ref().is_some_and(|l| le(&k, l)) {
+                    return Some(true);
+                }
+                if hi.as_ref().is_some_and(|h| below(h, &k)) {
+                    return Some(false);
+                }
+            }
+            // x < k: true when hi < k; false when k <= lo
+            (false, true) => {
+                if hi.as_ref().is_some_and(|h| below(h, &k)) {
+                    return Some(true);
+                }
+                if lo.as_ref().is_some_and(|l| le(&k, l)) {
+                    return Some(false);
+                }
+            }
+            // x <= k: true when hi <= k; false when k < lo
+            (false, false) => {
+                if hi.as_ref().is_some_and(|h| le(h, &k)) {
+                    return Some(true);
+                }
+                if lo.as_ref().is_some_and(|l| below(&k, l)) {
+                    return Some(false);
+                }
+            }
+        }
+        None
     }
 
     /// `{a, b}` is `{false, true}`.
@@ -2442,19 +2526,38 @@ impl Simp<'_> {
         }
         let mut ds = Vec::new();
         self.disjuncts(l, &mut ds);
-        let choice = |d: &Term| -> Option<crate::term::VarId> {
+        !self.const_choice(&ds)
+    }
+
+    /// The disjuncts `ds` choose among constants for one variable, or one
+    /// projection of a variable (`fst(snd(u)) = false || … = true`, a flag
+    /// of an open choice): such a disjunction stays one literal.
+    fn const_choice(&self, ds: &[Term]) -> bool {
+        fn proj_of_var(sp: &Simp, t: &Term) -> bool {
+            match t.node() {
+                Node::Var(_, va) => va.is_empty(),
+                Node::App(g, b) if b.len() == 1 && (is(*g, sp.s.fst) || is(*g, sp.s.snd)) => proj_of_var(sp, &b[0]),
+                _ => false,
+            }
+        }
+        let choice = |d: &Term| -> Option<Term> {
             let Node::App(e, ab) = d.node() else { return None };
             if *e != self.s.eq {
                 return None;
             }
             let konst = |c: &Term| self.is_true(c) || self.is_false(c);
-            match (ab[0].node(), ab[1].node()) {
-                (Node::Var(v, va), _) if va.is_empty() && konst(&ab[1]) => Some(*v),
-                (_, Node::Var(v, va)) if va.is_empty() && konst(&ab[0]) => Some(*v),
-                _ => None,
+            if proj_of_var(self, &ab[0]) && konst(&ab[1]) {
+                Some(ab[0].clone())
+            } else if proj_of_var(self, &ab[1]) && konst(&ab[0]) {
+                Some(ab[1].clone())
+            } else {
+                None
             }
         };
-        !matches!(ds.first().and_then(choice), Some(v0) if ds.iter().all(|d| choice(d) == Some(v0)))
+        match ds.first().and_then(choice) {
+            Some(v0) => ds.iter().all(|d| choice(d).as_ref() == Some(&v0)),
+            None => false,
+        }
     }
 
     /// The paths of a conjunction from those of its parts (contradictory
@@ -2513,22 +2616,8 @@ impl Simp<'_> {
                 // would duplicate everything after it
                 let mut ds = Vec::new();
                 self.disjuncts(t, &mut ds);
-                let choice = |d: &Term| -> Option<crate::term::VarId> {
-                    let Node::App(e, ab) = d.node() else { return None };
-                    if *e != s.eq {
-                        return None;
-                    }
-                    let konst = |c: &Term| self.is_true(c) || self.is_false(c);
-                    match (ab[0].node(), ab[1].node()) {
-                        (Node::Var(v, va), _) if va.is_empty() && konst(&ab[1]) => Some(*v),
-                        (_, Node::Var(v, va)) if va.is_empty() && konst(&ab[0]) => Some(*v),
-                        _ => None,
-                    }
-                };
-                if let Some(v0) = ds.first().and_then(choice) {
-                    if ds.iter().all(|d| choice(d) == Some(v0)) {
-                        return Some(vec![Path { vars: vec![], lits: vec![t.clone()], done: vec![] }]);
-                    }
+                if self.const_choice(&ds) {
+                    return Some(vec![Path { vars: vec![], lits: vec![t.clone()], done: vec![] }]);
                 }
                 let mut x = self.paths(&a[0], fresh)?;
                 x.extend(self.paths(&a[1], fresh)?);
@@ -3531,6 +3620,30 @@ impl Simp<'_> {
 
     /// `t` is an instance of a literal `all xs. C` (C not an implication).
     fn instance_of_all(&self, lits: &[Term], t: &Term) -> bool {
+        if self.instance_of_all_at(lits, t) {
+            return true;
+        }
+        // (t universal, with hypotheses: its conclusion, its variables
+        // fixed, is an instance: `all i. i in omega -> P(f(i))` from
+        // `all a. P(a)`)
+        let mut c = t.clone();
+        let mut fresh = lits.iter().map(max_var).max().unwrap_or(0).max(max_var(t)) + 1;
+        let mut opened = false;
+        loop {
+            match c.node() {
+                Node::App(q, a) if *q == self.s.all => {
+                    c = inst_k(self.env, &a[0], &[Term::var(fresh, vec![])]);
+                    fresh += 1;
+                }
+                Node::App(q, a) if *q == self.s.imp => c = a[1].clone(),
+                _ => break,
+            }
+            opened = true;
+        }
+        opened && self.instance_of_all_at(lits, &c)
+    }
+
+    fn instance_of_all_at(&self, lits: &[Term], t: &Term) -> bool {
         let head = |x: &Term| match x.node() {
             Node::App(g, _) => Some(*g),
             _ => None,
@@ -4278,8 +4391,9 @@ impl Logic {
             let mut why = String::new();
             if std::env::var("SIMP_DEBUG").is_ok() && p.lits.len() > 150 {
                 let pr = crate::syntax::Printer::new(env);
+                let width = if std::env::var("SIMP_DEBUG").is_ok_and(|v| v == "full") { usize::MAX } else { 400 };
                 for l in &p.lits {
-                    eprintln!("simp: literal {}", pr.term(l).chars().take(400).collect::<String>());
+                    eprintln!("simp: literal {}", pr.term(l).chars().take(width).collect::<String>());
                 }
                 return Err(crate::env::KernelError("simp: stopped (SIMP_DEBUG, long path)".into()));
             }
