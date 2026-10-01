@@ -58,7 +58,7 @@ pred scratch_page(vm: Vm, sp: Addr, p: nat) = scratch(vm, sp, p * PAGE + PAGE - 
 // stack pointer; a proof chooses the contents the machine has there.
 pred scratch_view(w: Vm, vm: Vm, sp: Addr) =
   (w with { bytes: vm.bytes }) = vm &&
-  (all a: nat. !scratch(vm, sp, a) -> w.bytes[bits[64](a)] = vm.bytes[bits[64](a)])
+  (all a: Addr. !scratch(vm, sp, uint(a)) -> w.bytes[a] = vm.bytes[a])
 
 // `new` is the machine's memory after a callee ran from `old`, where the
 // callee's world ended as `w`: outside the scratch space they agree; in it,
@@ -66,7 +66,7 @@ pred scratch_view(w: Vm, vm: Vm, sp: Addr) =
 pred world_matches(old: Vm, new: Vm, w: Vm, sp: Addr) =
   new.stack_top = w.stack_top && new.stack_limit = w.stack_limit &&
   new.brk_start = w.brk_start && new.brk = w.brk &&
-  (all a: nat. !scratch(old, sp, a) -> new.bytes[bits[64](a)] = w.bytes[bits[64](a)]) &&
+  (all a: Addr. !scratch(old, sp, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
   (all p: PageNo. new.pages[p] = w.pages[p] ||
      (scratch_page(old, sp, p) && w.pages[p] = none && stack_page(new, p)))
 

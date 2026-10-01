@@ -562,9 +562,9 @@ pred coupled(f: Function, pt: Point, sp: Addr, ret: Addr, entry: Reg -> bits[64]
   m.os = w.os && m.fs_base = w.fs_base && m.cpu = w.cpu && w.sp = sp &&
   (all p: PageNo. m.vm.pages[p] = w.vm.pages[p] ||             // the machine's stack may be
      (scratch_page(w.vm, sp, p) && w.vm.pages[p] = none && stack_page(m.vm, p))) &&   // deeper (spills)
-  (all a: nat. (!scratch(w.vm, sp, a) || (ex k: nat. k < len(fr.objs) &&
-       uint(fr.objs[k]) <= a && a < uint(fr.objs[k]) + f.objs[k][0])) ->
-     m.vm.bytes[bits[64](a)] = w.vm.bytes[bits[64](a)]) &&
+  (all a: Addr. (!scratch(w.vm, sp, uint(a)) || (ex k: nat. k < len(fr.objs) &&
+       uint(fr.objs[k]) <= uint(a) && uint(a) < uint(fr.objs[k]) + f.objs[k][0])) ->
+     m.vm.bytes[a] = w.vm.bytes[a]) &&
   (all k: nat. k < len(fr.objs) -> uint(fr.objs[k]) = uint(sp) + pt.objs[k]) &&
   (all x: Name. holds(m, sp, pt.homes[x], fr.vals[x], f.types[x])) &&
   (all r: Reg. r in CALLEE_SAVED -> holds(m, sp, pt.saved[r], uint(entry[r]), Ty { prec: 64, signed: false })) &&
