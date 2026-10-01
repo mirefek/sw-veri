@@ -400,7 +400,7 @@ definitions, to statements about the trusted spec.
 | `with v(args) { body }` | run `body`, a proc over the view's type, through the view `v`. It reads via `get`, and writes the result back via `set`, also on exceptional outcomes. |
 | `proc[S](A) -> R` | the type of procs. Procs are values, so a spec can take a spec as an argument. |
 | `outcome(s, p(args), o)` | predicate: running `p(args)` from `s` may produce `o`. It talks about the relation without running anything, so it is allowed in `pred`. |
-| `low refines high` | every outcome of `low` is an outcome of `high`. If `high` has extra ghost fields: for every initial ghost value, and each outcome of `low`, *some* final ghost value makes it an outcome of `high` (forward simulation). |
+| `low refines high` | from every state of `low`'s state type (e.g. a well-formed `Machine`), every outcome of `low` is an outcome of `high`. If `high` has extra ghost fields: for every initial ghost value, and each outcome of `low`, *some* final ghost value makes it an outcome of `high` (forward simulation). |
 | `param pred p(x)`, `param fn f(x) -> T` | an unknown of the layer. Everything in the layer holds for any value of it. |
 | `law name(x): P` | an assumption about the params. It is not an axiom: it is discharged by an `instance`. |
 | `instance M { p := ..., f := ... }` | gives the params concrete definitions, and turns each law into a proof obligation |

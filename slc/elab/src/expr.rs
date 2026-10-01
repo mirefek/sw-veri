@@ -473,11 +473,13 @@ impl<'s> Elab<'s> {
                             return err(span, "`refines` compares programs over states");
                         };
                         let extra: Vec<Ext> = y.ext.iter().filter(|e| !x.ext.contains(e)).cloned().collect();
+                        // (from the states of low's type)
+                        let states = self.state_set(x, span)?;
                         if extra.is_empty() {
-                            Ok((self.b.app("refines", vec![ta, tb]), Ty::Bool))
+                            Ok((self.b.app("refines", vec![ta, tb, states]), Ty::Bool))
                         } else {
                             let g = self.ext_set(&extra, span)?;
-                            Ok((self.b.app("refines_ghost", vec![ta, tb, g]), Ty::Bool))
+                            Ok((self.b.app("refines_ghost", vec![ta, tb, states, g]), Ty::Bool))
                         }
                     }
                     _ => err(span, "`refines` compares two programs"),

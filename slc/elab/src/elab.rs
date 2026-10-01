@@ -527,7 +527,7 @@ impl<'s> Elab<'s> {
         Ok(self.b.bind_app("set_select", vec![space], &[r], &cond))
     }
 
-    fn state_set(&mut self, st: &StateTy, span: Span) -> R<Term> {
+    pub fn state_set(&mut self, st: &StateTy, span: Span) -> R<Term> {
         if st.base.starts_with('$') || st.base.is_empty() {
             return Ok(self.b.app("univ", vec![self.b.nat(1)]));
         }
