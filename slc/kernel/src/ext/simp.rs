@@ -66,7 +66,21 @@
 //!   `restrict_univ`, `ghost_part_univ` in core/records.core); updates of
 //!   the same base b at different literal keys are equal if they agree at
 //!   every key, b is a function and the keys updated on one side only are
-//!   in dom(b) (`fn_update_fun`, `fn_update_dom`, `rec_ext`).
+//!   in dom(b) (`fn_update_fun`, `fn_update_dom`, `rec_ext`);
+//!   updates x of a base b at literal keys are in a record type T
+//!   (`set_select(powerset(cart(K, univ(u))), x. is_fun(x) && dom(x) = K
+//!   && app(x, "k") in T_k ..)`, or a constant defined as one) if b is (or
+//!   b is `empty` and every key is updated), the keys are T's, each value
+//!   is of its field's type, and the outermost record w that x is a field
+//!   of is in univ(u) (its fields then are: `app_univ`) -- by
+//!   `rec_type_intro`, `fn_update_fd`, `dom_update`; and in `fn_space(A,
+//!   B)` if b is, the keys are in A and the values in B.
+//! * a proposition by its form (an equation, implication, existential,
+//!   `false`, or a definition whose body is one) is in `bool` (`eq_prop`,
+//!   `imp_prop`, `ex_prop`, `false_is_prop`);
+//! * a field `app(r, k)` is of the type of the field k in a record type the
+//!   path gives r; the premises' `t in univ(u)` (in the goal: also the
+//!   path's) count before the goal's strengthening takes t apart.
 //!
 //! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
 //! match literals of the path (or follow from them by taut/arith), with
@@ -162,12 +176,21 @@ fn is(s: SymId, o: Option<SymId>) -> bool {
     o == Some(s)
 }
 
-/// What a path knows a term to be: an integer, a natural, an n-bit word.
+/// A record type (`Simp::rec_type`): its universe, keys, field types.
+struct RecType {
+    u: Term,
+    keys: Term,
+    fields: Vec<(Term, Term)>,
+}
+
+/// What a path knows a term to be: an integer, a natural, an n-bit word,
+/// a member of `univ(u)`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Ty {
     Int,
     Nat,
     Bits(u64),
+    Univ(u64),
 }
 
 /// A fast hasher for the simplifier's small integer keys (symbols, node
@@ -722,6 +745,13 @@ impl<'a> Simp<'a> {
                                 }
                             }
                         }
+                        Node::App(b, x) if is(*b, s.univ) && x.len() == 1 => {
+                            if let Node::Nat(k) = x[0].node() {
+                                if let Some(k) = k.to_u64() {
+                                    out.push((ab[0].clone(), Ty::Univ(k)));
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -792,7 +822,7 @@ impl<'a> Simp<'a> {
 
     /// `t` is a natural (in omega).
     fn nat_term(&self, t: &Term) -> bool {
-        if matches!(t.node(), Node::Nat(_)) || self.known(t, |k| k != Ty::Int) {
+        if matches!(t.node(), Node::Nat(_)) || self.known(t, |k| matches!(k, Ty::Nat | Ty::Bits(_))) {
             return true;
         }
         if (0..=128).any(|n| n % 8 == 0 && self.bits_term(t, n)) {
@@ -809,7 +839,7 @@ impl<'a> Simp<'a> {
     /// `t` is an integer (in int): a literal, an operation of arithmetic
     /// (their results are integers), or known on the path.
     fn int_term(&self, t: &Term) -> bool {
-        if self.int_lit(t).is_some() || self.known(t, |_| true) {
+        if self.int_lit(t).is_some() || self.known(t, |k| !matches!(k, Ty::Univ(_))) {
             return true;
         }
         let Node::App(f, _) = t.node() else { return false };
@@ -1444,6 +1474,11 @@ impl<'a> Simp<'a> {
         }
         // comprehension: `z in set_select(s, x. p)` <-> `z in s && p(z)`
         if is(f, s.in_) {
+            if pol == Pol::Goal {
+                if let Some(r) = self.typed_goal(&a[0], &a[1], None) {
+                    return r;
+                }
+            }
             if let Node::App(un, _) = a[1].node() {
                 if is(*un, s.univ) {
                     if let Some(r) = self.univ_mem(&self.term(&a[0]), &a[1], pol) {
@@ -1468,6 +1503,9 @@ impl<'a> Simp<'a> {
                 let mem = |x: &Term| Term::app(f, vec![z.clone(), x.clone()]);
                 match name {
                     "empty" if gb.is_empty() => return self.ff(),
+                    // `bool`: a proposition is false or true (`eq_prop`,
+                    // `imp_prop`, `ex_prop`, `false_is_prop`)
+                    "upair" if self.is_bool_pair(&gb[0], &gb[1]) && self.prop_shaped(&z, 4) => return self.tt(),
                     "upair" => return self.or(self.eq(&z, &gb[0]), self.eq(&z, &gb[1])),
                     "single" => return self.eq(&z, &gb[0]),
                     "insert" => return self.or(self.eq(&z, &gb[0]), self.prop(&mem(&gb[1]), pol)),
@@ -1486,6 +1524,34 @@ impl<'a> Simp<'a> {
             return if b { self.tt() } else { self.ff() };
         }
         t
+    }
+
+    /// `{a, b}` is `{false, true}`.
+    fn is_bool_pair(&self, a: &Term, b: &Term) -> bool {
+        let named = |t: &Term, n: &str| matches!(t.node(), Node::App(g, x) if x.is_empty() && self.env.syms[*g as usize].name == n);
+        let is_true = |t: &Term| named(t, "true") || self.is_true(t);
+        let is_false = |t: &Term| named(t, "false") || self.is_false(t);
+        (is_false(a) && is_true(b)) || (is_true(a) && is_false(b))
+    }
+
+    /// `t` is a proposition by its form: an equation, an implication, an
+    /// existential, false, or a definition whose body is one (`not`,
+    /// `and`, `or`, `all`, `bit`, ..).
+    fn prop_shaped(&self, t: &Term, depth: u32) -> bool {
+        let Node::App(g, _) = t.node() else { return false };
+        if *g == self.s.eq || *g == self.env.builtins.imp || *g == self.s.ex || self.is_false(t) || self.is_true(t) {
+            return true;
+        }
+        if self.env.syms[*g as usize].name == "false" {
+            return true;
+        }
+        if depth == 0 {
+            return false;
+        }
+        match &self.env.syms[*g as usize].kind {
+            SymKind::Defined { body, .. } => self.prop_shaped(body, depth - 1),
+            _ => false,
+        }
     }
 
     /// `k in d`, when decided (k a literal, d a finite set of literals).
@@ -1529,6 +1595,17 @@ impl<'a> Simp<'a> {
         };
         if above_omega && self.int_term(x) {
             return Some(self.tt());
+        }
+        // in a goal: a member by the path (before the strengthening below
+        // takes it apart)
+        if let (Pol::Goal, Node::App(_, ub)) = (pol, set.node()) {
+            if let Some(Node::Nat(u)) = ub.first().map(|n| n.node()) {
+                if let Some(u) = u.to_u64() {
+                    if self.known(x, |k| k == Ty::Univ(u)) {
+                        return Some(self.tt());
+                    }
+                }
+            }
         }
         match x.node() {
             Node::Nat(_) | Node::Bytes(_) => Some(self.tt()),
@@ -3086,7 +3163,180 @@ impl Simp<'_> {
                 Node::Nat(k) => k.to_u64().is_some_and(|k| self.bits_term(&ab[0], k)),
                 _ => false,
             },
-            _ => false,
+            // a field of a record of a known record type
+            _ => matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app)) && self.types_of(lits, &ab[0], 3).contains(&ab[1]),
+        }
+    }
+
+    /// The types the path gives `t`: its literals `t in T`, and for a field
+    /// `app(r, k)` the type of the field k in a record type of r
+    /// (`depth` levels of fields).
+    fn types_of(&self, lits: &[Term], t: &Term, depth: u32) -> Vec<Term> {
+        let mut out: Vec<Term> = lits
+            .iter()
+            .filter_map(|l| match l.node() {
+                Node::App(i, ab) if is(*i, self.s.in_) && ab[0] == *t => Some(ab[1].clone()),
+                _ => None,
+            })
+            .collect();
+        if depth > 0 {
+            if let Node::App(a, ab) = t.node() {
+                if is(*a, self.s.app) {
+                    for r in self.types_of(lits, &ab[0], depth - 1) {
+                        if let Some(rt) = self.rec_type(&r) {
+                            if let Some((_, ty)) = rt.fields.iter().find(|(k, _)| *k == ab[1]) {
+                                out.push(ty.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// A record type: `set_select(powerset(cart(K, univ(u))), x. P(x))`
+    /// with P a conjunction of `is_fun(x)`, `dom(x) = K` and field types
+    /// `app(x, "k") in T` (T closed), possibly a constant defined as one
+    /// (`x86_64_linux.Machine`).
+    fn rec_type(&self, set: &Term) -> Option<RecType> {
+        let name = |g: SymId| self.env.syms[g as usize].name.as_str();
+        let mut set = set.clone();
+        if let Node::App(g, a) = set.node() {
+            if a.is_empty() {
+                if let SymKind::Defined { params, body } = &self.env.syms[*g as usize].kind {
+                    if params.is_empty() {
+                        set = body.clone();
+                    }
+                }
+            }
+        }
+        let Node::App(sel, sb) = set.node() else { return None };
+        if !is(*sel, self.s.set_select) {
+            return None;
+        }
+        let Node::App(pw, pa) = sb[0].node() else { return None };
+        let Node::App(ca, cb) = pa.first()?.node() else { return None };
+        let Node::App(un, ub) = cb.get(1)?.node() else { return None };
+        if name(*pw) != "powerset" || name(*ca) != "cart" || !is(*un, self.s.univ) {
+            return None;
+        }
+        let u = ub.first()?.clone();
+        let keys = cb[0].clone();
+        let mut cs = Vec::new();
+        self.conjuncts(&sb[1], &mut cs);
+        let x0 = |t: &Term| matches!(t.node(), Node::BVar(0));
+        let mut fields = Vec::new();
+        let (mut fun, mut dom) = (false, false);
+        for c in cs {
+            let Node::App(h, b) = c.node() else { return None };
+            if name(*h) == "is_fun" && x0(&b[0]) {
+                fun = true;
+            } else if *h == self.s.eq && matches!(b[0].node(), Node::App(d, db) if name(*d) == "dom" && x0(&db[0])) && b[1] == keys {
+                dom = true;
+            } else if is(*h, self.s.in_) && !has_bvar(self.env, &b[1], 0) && matches!(b[0].node(), Node::App(ap, xb) if is(*ap, self.s.app) && x0(&xb[0]) && matches!(xb[1].node(), Node::Bytes(_) | Node::Nat(_))) {
+                let Node::App(_, xb) = b[0].node() else { unreachable!() };
+                fields.push((xb[1].clone(), lower(self.env, &b[1], 0)));
+            } else {
+                return None;
+            }
+        }
+        if !fun || !dom {
+            return None;
+        }
+        Some(RecType { u, keys, fields })
+    }
+
+    /// In the goal (strengthening): `x in T` for x updates of a base b
+    /// (literal keys): for a record type T, b in T (or, b = `empty`, every
+    /// key updated), the updated keys T's, each value of its field's type,
+    /// and `w in univ(u)` for w the outermost record x is a field of (x
+    /// itself at the top; its values, as fields of it, are then members);
+    /// for `fn_space(A, B)`, b in it, the keys in A, the values in B.
+    /// (By `rec_type_intro`, `fn_update_fd`, `dom_update`, `app_univ`,
+    /// `fn_space_univ`'s argument: the update's pairs are b's or the new
+    /// ones.)
+    fn typed_goal(&self, x: &Term, set: &Term, outer: Option<&Term>) -> Option<Term> {
+        let s = &self.s;
+        let x = self.term(x);
+        let mut keys: Vec<Term> = Vec::new();
+        let mut vals: Vec<Term> = Vec::new();
+        let mut b = x.clone();
+        while let Node::App(g, a) = b.node() {
+            if !is(*g, s.fn_update) || !matches!(a[1].node(), Node::Bytes(_) | Node::Nat(_)) {
+                break;
+            }
+            if !keys.contains(&a[1]) {
+                keys.push(a[1].clone());
+                vals.push(a[2].clone());
+            }
+            b = a[0].clone();
+        }
+        if keys.is_empty() {
+            return None;
+        }
+        let in_ = s.in_?;
+        let mem = |y: &Term, t: &Term, w: Option<&Term>| -> Term {
+            self.typed_goal(y, t, w).unwrap_or_else(|| self.prop(&Term::app(in_, vec![y.clone(), t.clone()]), Pol::Goal))
+        };
+        if let Some(rt) = self.rec_type(set) {
+            if !keys.iter().all(|k| self.key_in(k, &rt.keys) == Some(true)) {
+                return None;
+            }
+            let base_empty = matches!(b.node(), Node::App(e, ea) if ea.is_empty() && self.env.syms[*e as usize].name == "empty");
+            let mut r = if base_empty {
+                // every key updated (and only keys: checked above)
+                let n = self.key_count(&rt.keys)?;
+                if n != keys.len() || !rt.fields.iter().all(|(k, _)| keys.contains(k)) {
+                    return None;
+                }
+                self.tt()
+            } else {
+                self.prop(&Term::app(in_, vec![b.clone(), set.clone()]), Pol::Goal)
+            };
+            let w = outer.unwrap_or(&x);
+            for (k, v) in keys.iter().zip(&vals) {
+                if let Some((_, ty)) = rt.fields.iter().find(|(fk, _)| fk == k) {
+                    r = self.and(r, mem(v, ty, Some(w)));
+                }
+            }
+            let univ = Term::app(s.univ?, vec![rt.u.clone()]);
+            return Some(self.and(r, Term::app(in_, vec![w.clone(), univ])));
+        }
+        let Node::App(fs, fa) = set.node() else { return None };
+        if self.env.syms[*fs as usize].name != "fn_space" || fa.len() != 2 {
+            return None;
+        }
+        let mut r = self.prop(&Term::app(in_, vec![b.clone(), set.clone()]), Pol::Goal);
+        for (k, v) in keys.iter().zip(&vals) {
+            r = self.and(r, self.prop(&Term::app(in_, vec![k.clone(), fa[0].clone()]), Pol::Goal));
+            r = self.and(r, mem(v, &fa[1], None));
+        }
+        Some(r)
+    }
+
+    /// The number of elements of a finite set of distinct literals
+    /// (`insert(a, insert(b, .. empty))`).
+    fn key_count(&self, d: &Term) -> Option<usize> {
+        let mut n = 0;
+        let mut seen: Vec<&Term> = Vec::new();
+        let mut d = d;
+        loop {
+            let Node::App(g, a) = d.node() else { return None };
+            match self.env.syms[*g as usize].name.as_str() {
+                "empty" if a.is_empty() => return Some(n),
+                "insert" => {
+                    if !matches!(a[0].node(), Node::Bytes(_) | Node::Nat(_)) {
+                        return None;
+                    }
+                    if !seen.contains(&&a[0]) {
+                        seen.push(&a[0]);
+                        n += 1;
+                    }
+                    d = &a[1];
+                }
+                _ => return None,
+            }
         }
     }
 
@@ -3560,7 +3810,12 @@ impl Logic {
             prem = sp.and(prem, self.simp_fact(env, p));
         }
         let t1 = std::time::Instant::now();
-        let g = self.simp_eqv(env, goal);
+        // (the premises' `t in univ(u)` hold on every path: known to the
+        // goal's strengthening, which would take such a t apart)
+        let mut cs = Vec::new();
+        sp.conjuncts(&prem, &mut cs);
+        cs.retain(|c| matches!(c.node(), Node::App(i, ab) if is(*i, sp.s.in_) && matches!(ab[1].node(), Node::App(u, _) if is(*u, sp.s.univ))));
+        let g = self.simp_eqv_known(env, goal, &cs);
         let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
         if std::env::var("SIMP_TIME").is_ok() {
             eprintln!("simp time [facts, goal+paths]: {:?}, {:?}", t1 - t0, t1.elapsed());
@@ -3833,7 +4088,14 @@ impl Logic {
 
     /// A proposition equivalent to the goal `t`.
     pub fn simp_eqv(&self, env: &Env, t: &Term) -> Term {
+        self.simp_eqv_known(env, t, &[])
+    }
+
+    /// `simp_eqv` with the facts `known` (literals `t in univ(u)`) in the
+    /// typing context.
+    fn simp_eqv_known(&self, env: &Env, t: &Term, known: &[Term]) -> Term {
         let sp = Simp::new(env, self);
+        sp.set_nats(known);
         let mut t = t.clone();
         for _ in 0..8 {
             let u = sp.prop(&t, Pol::Goal);

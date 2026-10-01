@@ -5,6 +5,7 @@
 //! const ex(x. p)                          // argument binding one variable
 //! axiom ex_intro(a, x. p): p(a) -> ex(x. p(x))
 //! def all(x. p) := !ex(x. !p(x))
+//! abbrev sq(a) := int_mul(a, a)           // read sq(t) as int_mul(t, t)
 //! claim c: all x. x = x
 //! lemma l(a): a -> a                      // open lemma: to be proven later
 //! theorem t(a): a -> a                    // proof checked by the `Prover`
@@ -365,6 +366,12 @@ impl<'a, 'e> Parser<'a, 'e> {
             }
             return Ok(Term::var(v, args));
         }
+        if let Some((k, body)) = self.env.abbrevs.get(&name) {
+            if *k != args.len() || arg_binders.iter().any(|&b| b > 0) {
+                return self.error(&format!("`{}`: an abbreviation of {} arguments (binding none)", name, k));
+            }
+            return Ok(body.instantiate_params(&args, &self.env.binders_fn()));
+        }
         let s = self.sym_named(&name)?;
         let expected = &self.env.syms[s as usize].binders;
         if *expected != arg_binders {
@@ -410,9 +417,21 @@ impl<'a, 'e> Parser<'a, 'e> {
     }
 }
 
+/// Declares an abbreviation: `body` with its `k` parameters as its outer
+/// bound variables. (A name of a symbol cannot be one.)
+pub fn define_abbrev(env: &mut Env, name: &str, k: usize, body: Term) -> KResult<()> {
+    if env.sym_by_name.contains_key(name) {
+        return Err(KernelError(format!("`{}` is a symbol", name)));
+    }
+    env.check_wf(&body, k as u32)?;
+    env.abbrevs.insert(name.to_string(), (k, body));
+    Ok(())
+}
+
 /// Statistics of a loaded file.
 #[derive(Default, Debug)]
 pub struct LoadReport {
+    pub abbrevs: usize,
     pub consts: usize,
     pub axioms: Vec<String>,
     pub defs: usize,
@@ -513,6 +532,25 @@ pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Optio
                 let t = p.term()?;
                 p.env.define(&name, vs, t).map_err(ctx)?;
                 rep.defs += 1;
+            }
+            // abbrev NAME(a, b) := term: read NAME(s, t) as term[a := s, b := t]
+            "abbrev" => {
+                let ps = p.param_list()?;
+                if ps.iter().any(|(_, k)| *k > 0) {
+                    return p.error("an abbreviation's parameters are terms (binding none)");
+                }
+                p.expect(":=")?;
+                p.params.clear();
+                let n = ps.len();
+                p.scopes.extend(ps.into_iter().map(|(x, _)| x));
+                let body = p.term();
+                p.scopes.truncate(p.scopes.len() - n);
+                let body = body?;
+                if p.env.abbrevs.contains_key(&name) {
+                    return Err(ctx(KernelError("abbreviation already declared".into())));
+                }
+                define_abbrev(p.env, &name, n, body).map_err(ctx)?;
+                rep.abbrevs += 1;
             }
             "claim" => {
                 p.params.clear();

@@ -49,11 +49,23 @@ impl Prover for ScriptProver {
 /// then closes its `assume`, `fix` and `obtain` steps. `line`: where the
 /// text starts, for messages.
 fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) -> KResult<Seq> {
+    let mut res = Ok(());
     for (line_no, step) in steps(text) {
-        st.step(env, lg, &step, line + line_no).map_err(|e| {
+        res = st.step(env, lg, &step, line + line_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
-        })?;
+        });
+        if res.is_err() {
+            break;
+        }
     }
+    // the block's `let`s end with it (an outer one it shadowed is back)
+    for (name, prev) in st.lets.drain(..).rev() {
+        match prev {
+            Some(p) => env.abbrevs.insert(name, p),
+            None => env.abbrevs.remove(&name),
+        };
+    }
+    res?;
     close(env, lg, st)
 }
 
@@ -98,7 +110,7 @@ fn close(env: &Env, lg: &Logic, st: State) -> KResult<Seq> {
 
 impl State {
     fn new(scope: Vec<(String, VarId)>, facts: Vec<(String, Seq)>, goal: Option<Term>) -> State {
-        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal }
+        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new() }
     }
 }
 
@@ -196,6 +208,8 @@ struct State {
     /// what is left to prove after the `assume` and `fix` steps so far
     /// (for `show by R`), if known
     goal: Option<Term>,
+    /// the block's `let`s, with the abbreviation each shadowed
+    lets: Vec<(String, Option<(usize, Term)>)>,
 }
 
 /// Rules that take their statement from the goal.
@@ -349,6 +363,25 @@ impl State {
         }
         let (kw, rest) = step.split_once(' ').unwrap_or((step, ""));
         match kw {
+            // let NAME := t  /  let NAME(a, b) := t: an abbreviation, to the end
+            // of the block (a term is read with it expanded)
+            "let" => {
+                let (head, body) = rest.split_once(":=").ok_or_else(|| KernelError("expected `let NAME := term`".into()))?;
+                let head = head.trim();
+                let (name, params) = match head.split_once('(') {
+                    Some((n, ps)) => {
+                        let ps = ps.strip_suffix(')').ok_or_else(|| KernelError("expected `let NAME(a, b) := term`".into()))?;
+                        (n.trim(), ps.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect::<Vec<_>>())
+                    }
+                    None => (head, Vec::new()),
+                };
+                let k = params.len();
+                let text = if k == 0 { body.trim().to_string() } else { format!("{}. {}", params.join(" "), body.trim()) };
+                let t = parse_value(env, &text, &self.scope, k as u32)?;
+                let prev = env.abbrevs.get(name).cloned();
+                sl_kernel::syntax::define_abbrev(env, name, k, t)?;
+                self.lets.push((name.to_string(), prev));
+            }
             "assume" => {
                 let (n, t) = rest.split_once(':').ok_or_else(|| KernelError("expected `assume name: φ`".into()))?;
                 let t = self.term(env, t)?;
@@ -620,6 +653,79 @@ impl State {
         }
     }
 
+    /// `apply(f, a1, .., an)` (see `eval`).
+    fn apply(&self, env: &mut Env, lg: &Logic, args: &[Arg]) -> KResult<Seq> {
+        let mut s = self.proof_arg(env, lg, args.first())?;
+        let mut terms = Vec::new();
+        let mut proofs = Vec::new();
+        for a in &args[1..] {
+            match a {
+                Arg::Term(_) => terms.push(self.term_arg(env, Some(a), 0)?),
+                Arg::Proof(_) => proofs.push(self.proof_arg(env, lg, Some(a))?),
+            }
+        }
+        // the pattern variables: f's schematic variables (not fixed in this
+        // proof, not in its hypotheses), then one per leading `all`
+        let mut pvars: Vec<VarId> = Vec::new();
+        {
+            let (mut vs, mut hv) = (Vec::new(), Vec::new());
+            s.concl().vars(&mut vs);
+            for h in s.hyps() {
+                h.vars(&mut hv);
+            }
+            for v in vs {
+                if !hv.contains(&v) && !self.scope.iter().any(|(_, w)| *w == v) && env.vars[v as usize].arity == 0 && !pvars.contains(&v) {
+                    pvars.push(v);
+                }
+            }
+        }
+        let mut terms = terms.into_iter();
+        while let Node::App(a, _) = s.concl().node() {
+            if *a != lg.all {
+                break;
+            }
+            let t = match terms.next() {
+                Some(t) => t,
+                None => {
+                    let v = env.new_var("x?", 0);
+                    pvars.push(v);
+                    Term::var(v, vec![])
+                }
+            };
+            s = Seq::all_elim(env, lg, &s, &t)?;
+        }
+        if terms.next().is_some() {
+            return err("apply: more terms than leading `all`s");
+        }
+        // match the premises
+        let mut binds: Vec<(VarId, Term)> = Vec::new();
+        let mut c = s.concl().clone();
+        for (i, p) in proofs.iter().enumerate() {
+            let (a, b) = imp_parts(env, &c).map_err(|_| KernelError(format!("apply: no premise for the proof number {}", i + 1)))?;
+            if !pmatch(env, &a, p.concl(), &pvars, &mut binds) {
+                let pp = Printer::new(env);
+                return err(format!("apply: premise {} `{}` does not match `{}`", i + 1, pp.term(&a), pp.term(p.concl())));
+            }
+            c = b;
+        }
+        for v in &pvars {
+            match binds.iter().find(|(w, _)| w == v) {
+                Some((_, t)) => s = Seq::inst(env, &s, *v, t)?,
+                None => {
+                    let mut vs = Vec::new();
+                    s.concl().vars(&mut vs);
+                    if vs.contains(v) {
+                        return err(format!("apply: `{}` is not determined (give it as a term `{{t}}`)", env.vars[*v as usize].name));
+                    }
+                }
+            }
+        }
+        for p in &proofs {
+            s = Seq::mp(env, &s, p)?;
+        }
+        Ok(s)
+    }
+
     /// For `z in set_select(S, x. P)`: the instance of the axiom
     /// `set_select_def` (`z in set_select(S, x. P) <-> z in S && P(z)`) and
     /// its right side.
@@ -700,13 +806,26 @@ impl State {
             PE::Rule(name, args) => {
                 let a0 = args.first();
                 match name.as_str() {
+                    // mp(f, x1, .., xn): f applied to x1, then to x2, ..
                     "mp" => {
                         let ps = self.proofs(env, lg, args)?;
-                        match ps.as_slice() {
-                            [f, x] => Seq::mp(env, f, x),
-                            _ => err("mp takes two proofs"),
+                        match ps.split_first() {
+                            Some((f, xs)) if !xs.is_empty() => {
+                                let mut s = f.clone();
+                                for x in xs {
+                                    s = Seq::mp(env, &s, x)?;
+                                }
+                                Ok(s)
+                            }
+                            _ => err("mp takes a proof and its premises"),
                         }
                     }
+                    // apply(f, a1, .., an): f's variables (its leading `all`s
+                    // and schematic ones) instantiated -- by the terms `{t}`
+                    // among the ai, in order, and the rest by matching f's
+                    // premises with the proofs among the ai -- then f applied
+                    // to the proofs, in order
+                    "apply" => self.apply(env, lg, args),
                     "refl" => {
                         let t = self.term_arg(env, a0, 0)?;
                         Seq::refl(env, &t)
@@ -757,10 +876,17 @@ impl State {
                         let v = v.ok_or_else(|| KernelError("gen takes a proof and a variable".into()))?;
                         Seq::gen(env, lg, &p, v)
                     }
+                    // all_elim(p, {t1}, .., {tn})
                     "all_elim" => {
-                        let p = self.proof_arg(env, lg, a0)?;
-                        let t = self.term_arg(env, args.get(1), 0)?;
-                        Seq::all_elim(env, lg, &p, &t)
+                        let mut p = self.proof_arg(env, lg, a0)?;
+                        if args.len() < 2 {
+                            return err("all_elim takes a proof and terms");
+                        }
+                        for a in &args[1..] {
+                            let t = self.term_arg(env, Some(a), 0)?;
+                            p = Seq::all_elim(env, lg, &p, &t)?;
+                        }
+                        Ok(p)
                     }
                     "ex_intro" => {
                         let w = self.term_arg(env, a0, 0)?;
@@ -839,6 +965,36 @@ impl State {
                 }
             }
         }
+    }
+}
+
+/// Matches the pattern `p` (its variables `pvars`, first-order) with `t`,
+/// extending `binds`.
+fn pmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>) -> bool {
+    match (p.node(), t.node()) {
+        (Node::Var(v, a), _) if a.is_empty() && pvars.contains(v) => {
+            if let Some((_, b)) = binds.iter().find(|(w, _)| w == v) {
+                return b == t;
+            }
+            if loose(env, t, 0) {
+                return false;
+            }
+            binds.push((*v, t.clone()));
+            true
+        }
+        (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
+        (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
+        _ => p == t,
+    }
+}
+
+/// `t` has bound variables pointing outside it (beyond `depth` binders).
+fn loose(env: &Env, t: &Term, depth: u32) -> bool {
+    match t.node() {
+        Node::BVar(i) => *i >= depth,
+        Node::App(f, a) => a.iter().enumerate().any(|(i, x)| loose(env, x, depth + env.syms[*f as usize].binders[i])),
+        Node::Var(_, a) => a.iter().any(|x| loose(env, x, depth)),
+        _ => false,
     }
 }
 

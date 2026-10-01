@@ -89,6 +89,11 @@ pub struct Env {
     /// open lemmas and conditional theorems (`ext::facts`; never `Thm`s)
     pub open: crate::ext::facts::OpenFacts,
     pub builtins: Builtins,
+    /// abbreviations (`abbrev NAME(params) := term`, a proof's `let`): read
+    /// as their expansion -- the body with its k parameters as the outer k
+    /// bound variables, instantiated like a definition's. Only the parser
+    /// sees them; terms never contain them.
+    pub abbrevs: HashMap<String, (usize, Term)>,
 }
 
 impl Env {
@@ -102,6 +107,7 @@ impl Env {
             claims: Vec::new(),
             theorems: Vec::new(),
             open: Default::default(),
+            abbrevs: HashMap::new(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,
