@@ -1010,6 +1010,12 @@ impl<'a> Simp<'a> {
                     if snd {
                         return b[1].clone();
                     }
+                    // `out_state(o) = fst(snd(o))`, `out_value(o) = snd(snd(o))`
+                    if let Some((h, c)) = head(&b[1]) {
+                        if is(h, s.pair) || is(h, s.tag) {
+                            return if is(f, s.out_state) { c[0].clone() } else { c[1].clone() };
+                        }
+                    }
                 }
                 // (`some(x) = tag(1, x)`, `none = tag(0, empty)`)
                 if is(g, s.some) && (fst || snd) {
@@ -2554,6 +2560,11 @@ impl Simp<'_> {
                     if binds.iter().any(|(w, _)| w == v) {
                         continue;
                     }
+                    // (only for a variable occurring nowhere but under
+                    // projections: elsewhere its value is to be matched)
+                    if glits.iter().any(|l| self.occurs_bare(&sub(l, binds), *v)) {
+                        continue;
+                    }
                     let mut cs: Vec<(Vec<bool>, Term)> = Vec::new();
                     for l in glits {
                         let Node::App(e, ab) = l.node() else { continue };
@@ -2579,6 +2590,31 @@ impl Simp<'_> {
             if binds.len() == n {
                 return;
             }
+        }
+    }
+
+    /// The variable v occurs in t other than under projections (fst, snd,
+    /// out_state, out_value).
+    fn occurs_bare(&self, t: &Term, v: crate::term::VarId) -> bool {
+        let s = &self.s;
+        match t.node() {
+            Node::Var(w, a) => (*w == v && a.is_empty()) || a.iter().any(|x| self.occurs_bare(x, v)),
+            Node::App(f, a) => {
+                let proj = [s.fst, s.snd, s.out_state, s.out_value].iter().any(|p| is(*f, *p));
+                if proj && a.len() == 1 {
+                    // a chain of projections ending at v: not bare
+                    let mut x = &a[0];
+                    loop {
+                        match x.node() {
+                            Node::Var(w, b) if *w == v && b.is_empty() => return false,
+                            Node::App(g, b) if b.len() == 1 && [s.fst, s.snd, s.out_state, s.out_value].iter().any(|p| is(*g, *p)) => x = &b[0],
+                            _ => break,
+                        }
+                    }
+                }
+                a.iter().any(|x| self.occurs_bare(x, v))
+            }
+            _ => false,
         }
     }
 
@@ -2646,14 +2682,34 @@ impl Simp<'_> {
             }
             want = self.and(want, self.prop(&l, Pol::Other));
         }
-        lg.tautology(self.env, lits, &want).is_ok() || lg.arith(self.env, lits, &want).is_ok()
+        let ok = lg.tautology(self.env, lits, &want).is_ok() || lg.arith(self.env, lits, &want).is_ok();
+        if !ok && std::env::var("WITNESS_DEBUG").is_ok() {
+            let pr = crate::syntax::Printer::new(self.env);
+            let mut ws = Vec::new();
+            self.conjuncts(&want, &mut ws);
+            for w in ws {
+                if lg.tautology(self.env, lits, &w).is_err() && lg.arith(self.env, lits, &w).is_err() {
+                    let t = pr.term(&w); eprintln!("witness: not shown: {} ... {}", t.chars().take(200).collect::<String>(), t.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>());
+                }
+            }
+            eprintln!("witness: --");
+        }
+        ok
     }
 
     fn witnessed(&self, lits: &[Term], goal: &Term, fresh: &mut u32, lg: &Logic) -> bool {
         let mut ds = Vec::new();
         self.disjuncts(goal, &mut ds);
         for d in ds {
-            let Some(gps) = self.paths(&d, fresh) else { continue };
+            // (no held disjunctions in the goal: matching needs its
+            // alternatives open)
+            self.no_hold.set(true);
+            let gps = self.paths(&d, fresh);
+            self.no_hold.set(false);
+            if std::env::var("WITNESS_DEBUG").is_ok() {
+                eprintln!("witness: goal disjunct: {} paths", gps.as_ref().map_or(usize::MAX, |g| g.len()));
+            }
+            let Some(gps) = gps else { continue };
             // (the typing of the path, not of the goal's paths)
             self.set_nats(lits);
             for gp in gps {
@@ -2663,15 +2719,24 @@ impl Simp<'_> {
                 // the bindings from matching goal literals with path
                 // literals, each goal literal matched or not (a search,
                 // matches first; at most WITNESS_TRIES complete ones tried)
-                const WITNESS_TRIES: usize = 64;
+                let witness_tries: usize = std::env::var("WITNESS_TRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+                #[allow(non_snake_case)]
+                let WITNESS_TRIES = witness_tries;
                 let (mut tries, mut nodes) = (0, 0);
-                let mut stack: Vec<(usize, Vec<(crate::term::VarId, Term)>)> = vec![(0, Vec::new())];
-                while let Some((i, mut binds)) = stack.pop() {
+                // (each entry: the next literal, the bindings, how many there
+                // were when this pass over the literals began)
+                let mut stack: Vec<(usize, Vec<(crate::term::VarId, Term)>, usize)> = vec![(0, Vec::new(), 0)];
+                let debug = std::env::var("WITNESS_DEBUG").is_ok();
+                let mut best: Vec<(crate::term::VarId, Term)> = Vec::new();
+                while let Some((i, mut binds, start)) = stack.pop() {
                     nodes += 1;
                     if nodes > 64 * WITNESS_TRIES {
                         break;
                     }
                     self.solve_goal_eqs(&gp.lits, &gp.vars, &mut binds);
+                    if debug && binds.len() > best.len() {
+                        best = binds.clone();
+                    }
                     if gp.vars.iter().all(|v| binds.iter().any(|(w, _)| w == v)) {
                         tries += 1;
                         if tries > WITNESS_TRIES {
@@ -2683,14 +2748,57 @@ impl Simp<'_> {
                         continue;
                     }
                     if i == gp.lits.len() {
+                        // another pass, if this one bound more: literals
+                        // passed over may match now
+                        if binds.len() > start {
+                            let n = binds.len();
+                            stack.push((0, binds, n));
+                        }
                         continue;
                     }
                     // (pushed last: tried first)
-                    stack.push((i + 1, binds.clone()));
+                    stack.push((i + 1, binds.clone(), start));
+                    // (the literal with the bindings so far, simplified:
+                    // bound parts compute, as the path's literals did)
+                    let pat = if binds.is_empty() {
+                        gp.lits[i].clone()
+                    } else {
+                        let bf = self.env.binders_fn();
+                        let mut t = gp.lits[i].clone();
+                        for (v, x) in &binds {
+                            t = t.subst_var(*v, x, &bf);
+                        }
+                        self.prop(&t, Pol::Other)
+                    };
+                    // (a typing `x in S` of an unbound x does not bind it:
+                    // checked once x is bound by something else)
+                    let typing = matches!(pat.node(), Node::App(m, ab) if is(*m, self.s.in_) && matches!(ab[0].node(), Node::Var(v, a) if a.is_empty() && gp.vars.contains(v)));
+                    if typing {
+                        continue;
+                    }
                     for pl in lits.iter().rev() {
                         let mut b = binds.clone();
-                        if pmatch(&gp.lits[i], pl, &gp.vars, &mut b) && b.len() > binds.len() {
-                            stack.push((i + 1, b));
+                        if pmatch(&pat, pl, &gp.vars, &mut b) && b.len() > binds.len() {
+                            stack.push((i + 1, b, start));
+                        } else if debug && std::env::var("WITNESS_HEAD").is_ok_and(|h| matches!((pat.node(), pl.node()), (Node::App(f, _), Node::App(g, _)) if f == g && self.env.syms[*f as usize].name == h)) {
+                            let pr = crate::syntax::Printer::new(self.env);
+                            eprintln!("witness: no match\n  pattern {}\n  literal {}", pr.term(&pat), pr.term(pl));
+                        }
+                    }
+                }
+                if debug {
+                    // the goal path's literals still unbound in the best
+                    // partial binding
+                    let pr = crate::syntax::Printer::new(self.env);
+                    let bf = self.env.binders_fn();
+                    eprintln!("witness: path of {} vars, best binds {}", gp.vars.len(), best.len());
+                    for l in &gp.lits {
+                        let mut t = l.clone();
+                        for (v, x) in &best {
+                            t = t.subst_var(*v, x, &bf);
+                        }
+                        if gp.vars.iter().any(|v| has_var(&t, *v)) {
+                            eprintln!("witness:   unbound in: {}", pr.term(&t).chars().take(300).collect::<String>());
                         }
                     }
                 }
