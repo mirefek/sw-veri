@@ -33,6 +33,7 @@ fn wide[G](spec: CFun[World & G]) -> CFun2[World & G] = (args: Args) => (spec(ar
 
 const ARG_REGS     = [rdi, rsi, rdx, rcx, r8, r9]
 const CALLEE_SAVED = {rbx, rbp, r12, r13, r14, r15}
+const CALLEE_SAVED_LIST = [rbx, rbp, r12, r13, r14, r15]   // the same, in a fixed order
 
 ///////////////////////////////////////////////////////////////////////
 //  The world as a view of the machine
@@ -182,7 +183,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
   either {
     let (r0, r1) = with world(sp) { return spec(args) }
     havoc gpr, xmm, flags
-    for reg in CALLEE_SAVED { gpr[reg] := saved[reg] }
+    for reg in CALLEE_SAVED_LIST { gpr[reg] := saved[reg] }
     gpr[rsp]  := sp
     gpr[rax]  := r0
     gpr[rdx]  := r1

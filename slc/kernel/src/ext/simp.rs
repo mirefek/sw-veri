@@ -41,7 +41,12 @@
 //!   if not; `app(union2(a, b), k)` (`rec_merge`) is `app(a, k)` when b has
 //!   no pair with first element k (`empty`, a ghost part or restriction
 //!   without k, updates at other keys of such) -- by `app_ext`, the pairs
-//!   at k being the same; `app(empty, k)` is `empty`.
+//!   at k being the same; `app(empty, k)` is `empty`;
+//!   `ghost_part(fn_update(f, k, v), d)` is `ghost_part(f, d)` and
+//!   `restrict(fn_update(f, k, v), d)` is `fn_update(restrict(f, d), k, v)`
+//!   if k in d; both are `empty` of `empty`; `union2(a, empty)` and
+//!   `union2(empty, a)` are a (`union2_empty`; `rec_merge` likewise) -- set
+//!   equalities, by the definitions.
 //!
 //! Per path, the goal is also simplified with the path's literals (a
 //! literal L true, `!L`'s L false). Witnesses for the goal's existentials:
@@ -1212,6 +1217,35 @@ impl<'a> Simp<'a> {
                 break;
             }
             return Term::app(f, vec![m, args[1].clone()]);
+        }
+        // record operations through updates: a ghost part drops an update
+        // at one of its keys; a restriction keeps it (outside); merging
+        // with `empty` changes nothing
+        {
+            let name = self.env.syms[f as usize].name.as_str();
+            let is_empty = |t: &Term| matches!(t.node(), Node::App(e, b) if b.is_empty() && is(*e, s.empty));
+            if (name == "ghost_part" || name == "restrict") && args.len() == 2 {
+                if is_empty(&args[0]) {
+                    return args[0].clone();
+                }
+                if let Node::App(u, ub) = args[0].node() {
+                    if is(*u, s.fn_update) && self.key_in(&ub[1], &args[1]) == Some(true) {
+                        if name == "ghost_part" {
+                            return self.term(&Term::app(f, vec![ub[0].clone(), args[1].clone()]));
+                        }
+                        let inner = self.term(&Term::app(f, vec![ub[0].clone(), args[1].clone()]));
+                        return Term::app(*u, vec![inner, ub[1].clone(), ub[2].clone()]);
+                    }
+                }
+            }
+            if (name == "union2" || name == "rec_merge") && args.len() == 2 {
+                if is_empty(&args[1]) {
+                    return args[0].clone();
+                }
+                if is_empty(&args[0]) {
+                    return args[1].clone();
+                }
+            }
         }
         // an update of a field updated before (with only other literal keys
         // in between): the earlier update is overwritten
