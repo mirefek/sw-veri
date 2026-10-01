@@ -36,6 +36,20 @@
 //!   `tag`, outcomes, `some`, `upair`, `single`); integers are in `univ(u)`
 //!   for u >= 1 (`omega_univ`), numerals and strings in every universe.
 //!
+//! * records: `app(restrict(f, d), k)` is `app(f, k)` if k in d, `empty`
+//!   if not; `app(ghost_part(f, d), k)` is `empty` if k in d, `app(f, k)`
+//!   if not; `app(union2(a, b), k)` (`rec_merge`) is `app(a, k)` when b has
+//!   no pair with first element k (`empty`, a ghost part or restriction
+//!   without k, updates at other keys of such) -- by `app_ext`, the pairs
+//!   at k being the same; `app(empty, k)` is `empty`.
+//!
+//! Per path, the goal is also simplified with the path's literals (a
+//! literal L true, `!L`'s L false). Witnesses for the goal's existentials:
+//! matching its literals with the path's, its own equations once bound, and
+//! for a variable seen only through projections (`fst(x) = 1`, `m =
+//! fst(out_state(x))`) the nested pairs those fix (the rest `empty`);
+//! each candidate is then checked (taut / arith).
+//!
 //! Implications, used only where they are sound:
 //! * in positive positions of a fact being simplified (weakening):
 //!   `runs(mkprog(s o. R), S, O) -> R(S, O)`;
@@ -1156,6 +1170,43 @@ impl<'a> Simp<'a> {
                     Some((g, b)) if is(g, s.fn_build) && matches!(args[1].node(), Node::Nat(_)) && matches!(b[0].node(), Node::App(o, _) if is(*o, s.omega)) => {
                         return self.term(&inst_k(self.env, &b[1], &[args[1].clone()]));
                     }
+                    // records through restriction, ghost parts and merges
+                    // (`app_ext`: the pairs with first element k are the same)
+                    Some((g, b)) => {
+                        let name = self.env.syms[g as usize].name.as_str();
+                        let k = &args[1];
+                        match name {
+                            // no pair at all: `empty` (app's default)
+                            "empty" if b.is_empty() => return m,
+                            "restrict" => match self.key_in(k, &b[1]) {
+                                Some(true) => {
+                                    m = b[0].clone();
+                                    continue;
+                                }
+                                Some(false) if s.empty.is_some() => return Term::app(s.empty.unwrap(), vec![]),
+                                _ => {}
+                            },
+                            "ghost_part" => match self.key_in(k, &b[1]) {
+                                Some(true) if s.empty.is_some() => return Term::app(s.empty.unwrap(), vec![]),
+                                Some(false) => {
+                                    m = b[0].clone();
+                                    continue;
+                                }
+                                _ => {}
+                            },
+                            "union2" | "rec_merge" => {
+                                if self.lacks(&b[1], k) {
+                                    m = b[0].clone();
+                                    continue;
+                                }
+                                if self.lacks(&b[0], k) {
+                                    m = b[1].clone();
+                                    continue;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     _ => {}
                 }
                 break;
@@ -1385,6 +1436,31 @@ impl<'a> Simp<'a> {
         t
     }
 
+    /// `k in d`, when decided (k a literal, d a finite set of literals).
+    fn key_in(&self, k: &Term, d: &Term) -> Option<bool> {
+        let r = self.prop(&Term::app(self.s.in_?, vec![k.clone(), d.clone()]), Pol::Other);
+        if self.is_true(&r) {
+            Some(true)
+        } else if self.is_false(&r) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// `x` has no pair with first element k (a record without the field k).
+    fn lacks(&self, x: &Term, k: &Term) -> bool {
+        let Node::App(g, b) = x.node() else { return false };
+        match self.env.syms[*g as usize].name.as_str() {
+            "empty" => b.is_empty(),
+            "ghost_part" => self.key_in(k, &b[1]) == Some(true),
+            "restrict" => self.key_in(k, &b[1]) == Some(false),
+            "fn_update" => distinct_literals(&b[1], k) && self.lacks(&b[0], k),
+            "union2" | "rec_merge" => self.lacks(&b[0], k) && self.lacks(&b[1], k),
+            _ => false,
+        }
+    }
+
     /// `x in univ(u)` by the closure of universes: a pair (an outcome, a
     /// tagged value) is in it iff its parts are; in a goal, also the
     /// stronger: a finite set or function update built from members, a
@@ -1416,7 +1492,7 @@ impl<'a> Simp<'a> {
                 if pol != Pol::Goal {
                     return None;
                 }
-                if is(h, s.fn_update) || name == "insert" || name == "union2" {
+                if is(h, s.fn_update) || name == "insert" || name == "union2" || name == "rec_merge" {
                     return Some(all(args));
                 }
                 if [s.app, s.fst, s.snd, s.out_state, s.out_value].iter().any(|c| is(h, *c)) {
@@ -2405,10 +2481,93 @@ impl Simp<'_> {
                     }
                 }
             }
+            // a variable seen only through projections (`fst(x) = 1`,
+            // `m = fst(out_state(x))`): built as nested pairs from them
+            // (the parts no equation fixes: empty)
+            if binds.len() == n {
+                for v in vars {
+                    if binds.iter().any(|(w, _)| w == v) {
+                        continue;
+                    }
+                    let mut cs: Vec<(Vec<bool>, Term)> = Vec::new();
+                    for l in glits {
+                        let Node::App(e, ab) = l.node() else { continue };
+                        if *e != self.s.eq {
+                            continue;
+                        }
+                        let (a, b) = (sub(&ab[0], binds), sub(&ab[1], binds));
+                        for (p, t) in [(&a, &b), (&b, &a)] {
+                            if let Some(path) = self.proj_path(p, *v) {
+                                if !unbound(t, binds) {
+                                    cs.push((path, self.term(t)));
+                                }
+                            }
+                        }
+                    }
+                    if !cs.is_empty() {
+                        if let Some(t) = self.build_from_projs(&cs) {
+                            binds.push((*v, t));
+                        }
+                    }
+                }
+            }
             if binds.len() == n {
                 return;
             }
         }
+    }
+
+    /// `t` is projections of the variable v: the steps from v (false: fst,
+    /// true: snd), innermost first.
+    fn proj_path(&self, t: &Term, v: crate::term::VarId) -> Option<Vec<bool>> {
+        let s = &self.s;
+        let mut steps = Vec::new();
+        let mut t = t;
+        loop {
+            match t.node() {
+                Node::Var(w, a) if *w == v && a.is_empty() => {
+                    if steps.is_empty() {
+                        return None;
+                    }
+                    steps.reverse();
+                    return Some(steps);
+                }
+                Node::App(f, a) if a.len() == 1 => {
+                    let f = *f;
+                    // (outermost first; reversed at the end)
+                    if is(f, s.fst) {
+                        steps.push(false);
+                    } else if is(f, s.snd) {
+                        steps.push(true);
+                    } else if is(f, s.out_state) {
+                        steps.extend([false, true]);
+                    } else if is(f, s.out_value) {
+                        steps.extend([true, true]);
+                    } else {
+                        return None;
+                    }
+                    t = &a[0];
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The nested pairs with the given parts (paths from the root, false:
+    /// fst, true: snd); None if two of them conflict.
+    fn build_from_projs(&self, cs: &[(Vec<bool>, Term)]) -> Option<Term> {
+        if let Some((_, t)) = cs.iter().find(|(p, _)| p.is_empty()) {
+            return cs.iter().all(|(p, u)| !p.is_empty() || u == t).then(|| t.clone());
+        }
+        let part = |side: bool| -> Option<Term> {
+            let sub: Vec<(Vec<bool>, Term)> = cs.iter().filter(|(p, _)| p[0] == side).map(|(p, t)| (p[1..].to_vec(), t.clone())).collect();
+            if sub.is_empty() {
+                Some(Term::app(self.s.empty?, vec![]))
+            } else {
+                self.build_from_projs(&sub)
+            }
+        };
+        Some(Term::app(self.s.pair?, vec![part(false)?, part(true)?]))
     }
 
     /// The goal path's literals, with the bindings, follow from the path's.
@@ -3252,6 +3411,27 @@ impl Logic {
                         g = sp.eqv(&inst_k(env, &body, &[b.clone()]));
                     }
                 }
+            }
+            // the path's (non-equation) literals in the goal: true there (a
+            // negated one: its atom false), the goal simplified again
+            let mut known = false;
+            for l in &p.lits {
+                let (atom, val) = match l.node() {
+                    Node::App(n, a) if is(*n, sp.s.not) => (&a[0], sp.ff()),
+                    Node::App(e, _) if *e == sp.s.eq || *e == sp.s.all => continue,
+                    _ => (l, sp.tt()),
+                };
+                if matches!(atom.node(), Node::App(o, _) if is(*o, sp.s.or) || is(*o, sp.s.and) || *o == sp.s.imp) {
+                    continue;
+                }
+                let body = super::seq::abstract_term(&g, atom, 0, &bf);
+                if body != g {
+                    g = inst_k(env, &body, &[val]);
+                    known = true;
+                }
+            }
+            if known {
+                g = self.simp_eqv(env, &g);
             }
             lap(1, &mut tm);
             if sp.is_true(&g) {

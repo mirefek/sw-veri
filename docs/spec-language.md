@@ -425,7 +425,8 @@ it.
   or over an extension of it with ghost state.
 * `abi_function(f, spec, args)` is what the ABI promises from function entry
   to return:
-  - the entry conditions are `require`s: rsp on a stack page, with no other
+  - the entry conditions are `require`s: rsp on a writable stack page (the
+    `call` has just written the return address there), with no other
     mapping within the guard gap below the stack (Linux keeps this gap for
     all but `MAP_FIXED` mappings; without it a push could overwrite other
     memory instead of faulting), alignment, direction flag clear, arguments

@@ -1,0 +1,75 @@
+// The ABI layer (layers/abi.sl), from the machine's side: when a run of the
+// machine is one that `abi_function` allows. Proven once, used for every
+// function (with no ghost state: G = single(empty)).
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     build/musl_malloc_O0.core proofs/abi.core
+//
+// - the view `world(sp)`: reading it (`get_ok`, for a view v of the
+//   memory) and writing a world back (`set_ok`, for memory that matches it)
+// - `ub_intro`: if the spec may raise from the entry world (undefined
+//   behavior), any outcome of the machine is allowed
+
+theorem abi.get_ok: all sp s v. s in univ(1) -> sp in bits(64) -> v in univ(1) -> v in x86_64_linux.Vm -> abi.scratch_view(v, app(s, "vm"), sp) ->
+  runs(abi.world.get(sp), s, ok(s, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)))
+proof
+  fix sp
+  fix s
+  fix v
+  assume hs: s in univ(1)
+  assume hp: sp in bits(64)
+  assume hvu: v in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hw: abi.scratch_view(v, app(s, "vm"), sp)
+  show by simp(hs, hp, hvu, hv, hw, keep(abi.scratch_view))
+qed
+
+theorem abi.set_ok: all sp s w nv. s in univ(1) -> w in univ(1) -> nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(app(s, "vm"), nv, app(w, "vm"), sp) ->
+  runs(abi.world.set(sp, w), s, ok(fn_update(fn_update(fn_update(s, "vm", nv), "os", app(w, "os")), "fs_base", app(w, "fs_base")), empty))
+proof
+  fix sp
+  fix s
+  fix w
+  fix nv
+  assume hs: s in univ(1)
+  assume hw: w in univ(1)
+  assume hvu: nv in univ(1)
+  assume hv: nv in x86_64_linux.Vm
+  assume hm: abi.world_matches(app(s, "vm"), nv, app(w, "vm"), sp)
+  show by simp(hs, hw, hvu, hv, hm, keep(abi.world_matches))
+qed
+
+theorem abi.ub_intro: all f spec args s o v. pair(s, o) in univ(1) -> ((ex m1 e. o = ok(m1, e)) || (ex m1 e. o = exc(m1, e)) || (ex t. o = diverge(t))) -> v in univ(1) -> v in x86_64_linux.Vm ->
+  abi.scratch_view(v, app(s, "vm"), bits_add(64, app(app(s, "gpr"), 4), 8)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, bits_add(64, app(app(s, "gpr"), 4), 8)) ->
+  app(s, "vm") in x86_64_linux.Vm -> app(app(s, "gpr"), 4) in bits(64) ->
+  abi.spec_raises(rec_and(abi.World, single(empty)), rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), spec, args) ->
+  runs(abi.abi_function(single(empty), f, spec, args), s, o)
+proof
+  fix f
+  fix spec
+  fix args
+  fix s
+  fix o
+  fix v
+  assume hu: pair(s, o) in univ(1)
+  assume ho: (ex m1 e. o = ok(m1, e)) || (ex m1 e. o = exc(m1, e)) || (ex t. o = diverge(t))
+  assume hvu: v in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hs: abi.scratch_view(v, app(s, "vm"), bits_add(64, app(app(s, "gpr"), 4), 8))
+  assume hm: abi.world_matches(app(s, "vm"), app(s, "vm"), v, bits_add(64, app(app(s, "gpr"), 4), 8))
+  assume hsv: app(s, "vm") in x86_64_linux.Vm
+  assume hsp: app(app(s, "gpr"), 4) in bits(64)
+  assume hr: abi.spec_raises(rec_and(abi.World, single(empty)), rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), spec, args)
+  have su: s in univ(1) by simp(hu)
+  have spb: bits_add(64, app(app(s, "gpr"), 4), 8) in bits(64) by simp(hsp)
+  have g := mp(mp(mp(mp(all_elim(all_elim(all_elim(abi.get_ok, {bits_add(64, app(app(s, "gpr"), 4), 8)}), {s}), {v}), su), spb), hvu), hv)
+  have gp := mp(g, hs)
+  have x7u: rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))) in univ(1) by simp(su, hvu, mp(ghost_part_univ[u := 1, f := s, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], su))
+  have wu := mp(restrict_univ[u := 1, f := rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], x7u)
+  have vmu: app(s, "vm") in univ(1) by simp(su)
+  have st := mp(mp(mp(mp(all_elim(all_elim(all_elim(all_elim(abi.set_ok, {bits_add(64, app(app(s, "gpr"), 4), 8)}), {s}), {restrict(rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))}), {app(s, "vm")}), su), wu), vmu), hsv)
+  have hm2: abi.world_matches(app(s, "vm"), app(s, "vm"), app(restrict(rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))), "vm"), bits_add(64, app(app(s, "gpr"), 4), 8)) by simp(hm, keep(abi.world_matches))
+  have st2 := mp(st, hm2)
+  have wun: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)) in univ(1) by simp(su, hvu)
+  show by simp(hu, ho, wun, gp, st2, hm, hr, mp(ghost_part_univ[u := 1, f := s, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], su), x7u, keep(abi.scratch_view, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set))
+qed
