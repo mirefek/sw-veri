@@ -366,7 +366,9 @@ impl Seq {
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
         *lg.simp_keep.borrow_mut() = keep.to_vec();
         lg.simp_used.borrow_mut().clear();
+        lg.simp_goal_loops.set(loops.iter().any(|h| h.unroll));
         let r = lg.simp_prove_loops(env, &ps, goal, loops);
+        lg.simp_goal_loops.set(false);
         lg.simp_keep.borrow_mut().clear();
         let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
         r?;

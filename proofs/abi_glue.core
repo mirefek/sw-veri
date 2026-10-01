@@ -2,7 +2,7 @@
 // about its machine run -- proven once, used for every function:
 //
 // - `implements_intro`: implements2_at from "every run from an entry that
-//   meets entry_ok (and has the code loaded) is one abi_function allows"
+//   meets entry_ok (with the program loaded) is one abi_function allows"
 // - `ub_case`: the spec raises (undefined behavior) on the world the ABI
 //   shows (`abi.view`): any outcome is allowed
 // - `ret_case`: a normal return, in machine terms -- the final state is a
@@ -196,18 +196,20 @@ proof
 qed
 
 // the contract from the runs that start at f, as the ABI requires
-theorem abi.implements_intro: all f spec base code.
-  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.code_at(app(s, "vm"), base, code) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+theorem abi.implements_intro: all f spec base code statics.
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
     runs(abi.run_to_return(), s, o) -> runs(abi.abi_function(single(empty), f, spec, args), s, o)) ->
-  abi.implements2_at(single(empty), f, spec, base, code)
+  abi.implements2_at(single(empty), f, spec, base, code, statics)
 proof
   fix f
   fix spec
   fix base
   fix code
-  assume hrun: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.code_at(app(s, "vm"), base, code) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+  fix statics
+  assume hrun: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
     runs(abi.run_to_return(), s, o) -> runs(abi.abi_function(single(empty), f, spec, args), s, o)
-  let rel(a) := mkprog(x1 x2. !abi.code_at(app(x1, "vm"), base, code) || bind_rel(abi.abi_function(single(empty), f, spec, a), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  let ld(m) := abi.loaded(app(m, "vm"), base, code, statics)
+  let rel(a) := mkprog(x1 x2. !ld(x1) || bind_rel(abi.abi_function(single(empty), f, spec, a), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have main: all x0. x0 in abi.ARGS -> (all s h o. s in x86_64_linux.Machine -> h in single(empty) -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in single(empty) && runs(rel(x0), union2(s, h), with_ghost(o, h2)))) proof
     fix args
     assume hA: args in abi.ARGS
@@ -225,16 +227,16 @@ proof
         assume hn: !(app(s, "rip") = f && abi.entry_ok(s, args))
         show by simp(hp, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.scratch, abi.crash_io_ok))
       qed
-      have mc: abi.code_at(app(s, "vm"), base, code) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
-        assume hc: abi.code_at(app(s, "vm"), base, code)
+      have mc: ld(s) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+        assume hc: ld(s)
         have run: app(s, "rip") = f && abi.entry_ok(s, args) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
           assume hy: app(s, "rip") = f && abi.entry_ok(s, args)
           show := apply(hrun, hA, hM, hc, hy, hy, hr)
         qed
         show by taut(pre, run)
       qed
-      have mc2: !abi.code_at(app(s, "vm"), base, code) || runs(abi.abi_function(single(empty), f, spec, args), s, o) by taut(mc)
-      show by defs(ex_intro({empty}, simp(hh, hp, hsh, mc2, keep(abi.abi_function, abi.code_at, abi.run_to_return))), with_ghost)
+      have mc2: !ld(s) || runs(abi.abi_function(single(empty), f, spec, args), s, o) by taut(mc)
+      show by defs(ex_intro({empty}, simp(hh, hp, hsh, mc2, keep(abi.abi_function, abi.loaded, abi.run_to_return))), with_ghost)
     qed
   qed
   show by defs(main, abi.implements2_at, refines_ghost)

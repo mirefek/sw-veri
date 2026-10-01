@@ -2,8 +2,8 @@
 // side of a refinement -- `runs(op, s, o)` goals, by `simp`.
 //
 //   slc elab spec layers build/gimple-O0/sl/c_mallocng_malloc.sl -o build/c_mallocng_malloc.core
-//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/records.core \
-//     build/c_mallocng_malloc.core proofs/gimple.core
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/gimple.core
 //
 // Each operation from a state s (in univ(1): states are sets of the first
 // universe) either returns its value in s, or -- where GIMPLE has undefined
@@ -99,4 +99,113 @@ proof
   have mpd: int_lt(int_div(int_add(a, i), 4096), 34359738367) by simp(expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
   have eb: bits_of_int(64, int_add(a, i)) = int_add(a, i) by simp(mpd, h0, hi)
   show by defs(simp(u, eb), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+qed
+
+// ... and memory usable for writing can be written
+theorem g.usable_write: all v vm a n i. gimple.usable(v, a, n, true) -> app(v, "pages") = app(vm, "pages") -> int_le(0, a) -> i in omega -> int_lt(i, n) ->
+  x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 1)
+proof
+  fix v
+  fix vm
+  fix a
+  fix n
+  fix i
+  assume hu: gimple.usable(v, a, n, true)
+  assume hpg: app(v, "pages") = app(vm, "pages")
+  assume h0: int_le(0, a)
+  assume hi: i in omega
+  assume hn: int_lt(i, n)
+  have u := rewrite(hpg, expand(mp(all_elim(expand(hu, gimple.usable), {i}), hi, hn), x86_64_linux.mapped))
+  have mpd: int_lt(int_div(int_add(a, i), 4096), 34359738367) by simp(expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+  have eb: bits_of_int(64, int_add(a, i)) = int_add(a, i) by simp(mpd, h0, hi)
+  show by defs(simp(u, eb), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+qed
+
+// the bytes after a store are a member of the universe
+theorem g.store_univ: all vm a n v. vm in x86_64_linux.Vm -> x86_64_linux.store_le(app(vm, "bytes"), a, n, v) in univ(1)
+proof
+  fix vm
+  fix a
+  fix n
+  fix v
+  assume hv: vm in x86_64_linux.Vm
+  show := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], apply(x86.store_typed, {app(vm, "bytes")}, {a}, {n}, {v}, simp(hv)))
+qed
+
+// stores: the address (`mem`), the bytes written (`write_bytes`, a loop
+// run in the goal: `unroll`), a 32-bit store, and its undefined behavior
+theorem g.mem_ok: all s a n w. s in univ(1) -> a in bits(64) -> !(a = 0) -> gimple.usable(app(s, "vm"), a, n, w) -> runs(gimple.mem(a, 0, n, w), s, ok(s, a))
+proof
+  fix s
+  fix a
+  fix n
+  fix w
+  assume hs: s in univ(1)
+  assume ha: a in bits(64)
+  assume hz: !(a = 0)
+  assume hu: gimple.usable(app(s, "vm"), a, n, w)
+  have pa: runs(gimple.padd(a, 0), s, ok(s, a)) by simp(hs, ha, expand(all_elim(g.padd_ok, {s}, {a}, {0}), gimple.sval), keep(gimple.padd))
+  show by defs(simp(hs, ha, hz, hu, pa, keep(gimple.padd)), gimple.mem)
+qed
+
+theorem g.write4_ok: all s a v. s in univ(1) -> a in bits(64) -> v in omega -> app(s, "vm") in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  runs(gimple.write_bytes(a, 4, v), s, ok(fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", x86_64_linux.store_le(app(app(s, "vm"), "bytes"), a, 4, v))), empty))
+proof
+  fix s
+  fix a
+  fix v
+  assume hs: s in univ(1)
+  assume ha: a in bits(64)
+  assume hv: v in omega
+  assume hvm: app(s, "vm") in x86_64_linux.Vm
+  assume hf: is_fun(s)
+  assume hd: "vm" in dom(s)
+  have s4 := apply(x86.store4, {app(app(s, "vm"), "bytes")}, {a}, {v}, simp(hvm), simp(hvm), ha, hv)
+  show by defs(simp(hs, ha, hv, hvm, hf, hd, s4, unroll), gimple.write_bytes)
+qed
+
+theorem g.st32_ok: all s a v. s in univ(1) -> a in bits(64) -> v in bits(32) -> !(a = 0) -> gimple.usable(app(s, "vm"), a, 4, true) ->
+  app(s, "vm") in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  runs(gimple.st32(a, 0, v), s, ok(fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", x86_64_linux.store_le(app(app(s, "vm"), "bytes"), a, 4, v))), empty))
+proof
+  fix s
+  fix a
+  fix v
+  assume hs: s in univ(1)
+  assume ha: a in bits(64)
+  assume hv: v in bits(32)
+  assume hz: !(a = 0)
+  assume hu: gimple.usable(app(s, "vm"), a, 4, true)
+  assume hvm: app(s, "vm") in x86_64_linux.Vm
+  assume hf: is_fun(s)
+  assume hd: "vm" in dom(s)
+  have m := apply(g.mem_ok, {s}, {a}, {4}, {true}, hs, ha, hz, hu)
+  have w := apply(g.write4_ok, {s}, {a}, {v}, hs, ha, simp(hv), hvm, hf, hd)
+  have stu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], apply(x86.store_typed, {app(app(s, "vm"), "bytes")}, {a}, {4}, {v}, simp(hvm)))
+  show by defs(simp(hs, m, w, stu, keep(gimple.mem, gimple.write_bytes)), gimple.st32)
+qed
+
+theorem g.st32_ub: all s a v e. s in univ(1) -> e in univ(1) -> a in bits(64) -> !(!(a = 0) && gimple.usable(app(s, "vm"), a, 4, true)) ->
+  runs(gimple.st32(a, 0, v), s, exc(s, e))
+proof
+  fix s
+  fix a
+  fix v
+  fix e
+  assume hs: s in univ(1)
+  assume he: e in univ(1)
+  assume ha: a in bits(64)
+  assume hn: !(!(a = 0) && gimple.usable(app(s, "vm"), a, 4, true))
+  have pa: runs(gimple.padd(a, 0), s, ok(s, a)) by simp(hs, ha, expand(all_elim(g.padd_ok, {s}, {a}, {0}), gimple.sval), keep(gimple.padd))
+  have c1: !(a = 0) -> runs(gimple.mem(a, 0, 4, true), s, exc(s, e)) proof
+    assume hz: !(a = 0)
+    have hu: !gimple.usable(app(s, "vm"), a, 4, true) by taut(hn, hz)
+    show by defs(simp(hs, he, ha, hz, hu, pa, keep(gimple.padd)), gimple.mem)
+  qed
+  have c2: a = 0 -> runs(gimple.mem(a, 0, 4, true), s, exc(s, e)) proof
+    assume hz: a = 0
+    show by defs(simp(hs, he, ha, hz, keep(gimple.padd)), gimple.mem)
+  qed
+  have mu: runs(gimple.mem(a, 0, 4, true), s, exc(s, e)) by taut(c1, c2)
+  show by defs(simp(hs, he, mu, keep(gimple.mem, gimple.write_bytes)), gimple.st32)
 qed

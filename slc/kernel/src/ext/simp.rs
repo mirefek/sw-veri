@@ -81,6 +81,17 @@
 //! * a field `app(r, k)` is of the type of the field k in a record type the
 //!   path gives r; the premises' `t in univ(u)` (in the goal: also the
 //!   path's) count before the goal's strengthening takes t apart.
+//! * `app(fn_build(d, x. v), a)` is v(a) when a in d is known (a premise or
+//!   literal, or d = bits(n) and a an n-bit word: `app_fn_build`);
+//!   `int_sum(a, b, i. f)` for numerals a <= b (at most 64 apart) is
+//!   f(a) + .. + f(b - 1) (its definition, `nat_rec`'s equations); x / 1 =
+//!   x * 1 = x for an integer x.
+//! * with `unroll`, a loop of the goal whose condition is decided at a known
+//!   state is run an iteration at a time: it stops (`while_stop`), the body
+//!   leaves (`while_leave`) or goes on (`while_step`) -- open lemmas the
+//!   step then rests on, like `while_unroll` for loops of facts.
+//! * in facts, `ex x. P(fst(x), snd(x))` is split into the projections when
+//!   that decides it (a choice of several values that exists).
 //!
 //! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
 //! match literals of the path (or follow from them by taut/arith), with
@@ -238,6 +249,10 @@ struct Simp<'a> {
     memo: std::cell::RefCell<FxMap<usize, (Term, Term)>>,
     /// programs kept folded (`Logic::simp_keep`)
     keep: Vec<SymId>,
+    /// run loops in the goal (`Logic::simp_goal_loops`)
+    goal_loops: bool,
+    /// library lemmas used (for `Logic::simp_used`)
+    used: std::cell::RefCell<Vec<String>>,
     /// terms the current path knows to be natural numbers (its literals
     /// `t in omega`, `t in bits(k)`)
     nats: std::cell::RefCell<Vec<(Term, Ty)>>,
@@ -477,6 +492,8 @@ impl<'a> Simp<'a> {
             env,
             arith,
             keep: lg.simp_keep.borrow().clone(),
+            goal_loops: lg.simp_goal_loops.get(),
+            used: Default::default(),
             no_hold: Default::default(),
             memo: Default::default(),
             nats: std::cell::RefCell::new(Vec::new()),
@@ -761,10 +778,14 @@ impl<'a> Simp<'a> {
                 }
             }
         }
+        // the memberships (a function's argument in its domain: `term` applies
+        // a built function to it)
+        let mems: Vec<Term> = lits.iter().filter(|l| matches!(l.node(), Node::App(i, _) if is(*i, s.in_))).cloned().collect();
         // (`term` depends on the typing: its memo only for this one)
-        if *self.nats.borrow() != out {
+        if *self.nats.borrow() != out || *self.known_mems.borrow() != mems {
             self.memo.borrow_mut().clear();
             *self.nats.borrow_mut() = out;
+            *self.known_mems.borrow_mut() = mems;
         }
     }
 
@@ -1084,6 +1105,26 @@ impl<'a> Simp<'a> {
                 }
             }
         }
+        // a sum over numeral bounds, term by term (`int_sum`'s definition and
+        // the recursion equations of `nat_rec`): f(a) + .. + f(b - 1)
+        if self.env.syms[f as usize].name == "int_sum" && args.len() == 3 {
+            if let (Node::Nat(a0), Node::Nat(b0)) = (args[0].node(), args[1].node()) {
+                if let (Some(a0), Some(b0)) = (a0.to_u64(), b0.to_u64()) {
+                    if a0 <= b0 && b0 - a0 <= 64 {
+                        let add = self.env.sym_by_name.get("int_add").copied();
+                        let empty = self.env.sym_by_name.get("empty").copied();
+                        if let (Some(add), Some(empty)) = (add, empty) {
+                            let mut r = Term::app(empty, vec![]);
+                            for k in a0..b0 {
+                                let fk = inst_k(self.env, &args[2], &[Term::nat(crate::nat::Nat::from_u64(k))]);
+                                r = Term::app(add, vec![r, fk]);
+                            }
+                            return self.term(&r);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(op) = self.arith.get(&f) {
             if let Some(v) = self.compute(op, &args) {
                 return v;
@@ -1093,6 +1134,10 @@ impl<'a> Simp<'a> {
             // 0 + x = x for an integer x
             if *op == "int_add" && args.len() == 2 && self.int_lit(&args[0]).is_some_and(|c| c.m.is_zero()) && self.int_term(&args[1]) {
                 return args[1].clone();
+            }
+            // x / 1 = x * 1 = x for an integer x
+            if (*op == "int_div" || *op == "int_mul") && args.len() == 2 && self.int_lit(&args[1]).is_some_and(|c| !c.neg && c.m == crate::nat::Nat::from_u64(1)) && self.int_term(&args[0]) {
+                return args[0].clone();
             }
             if (*op == "int_add" || *op == "int_sub") && args.len() == 2 {
                 if let Some(c) = self.int_lit(&args[1]) {
@@ -1220,6 +1265,16 @@ impl<'a> Simp<'a> {
                     // `app(fn_build(omega, x. v), n)` = v(n) for a numeral n
                     // (`app_fn_build`: n in omega)
                     Some((g, b)) if is(g, s.fn_build) && matches!(args[1].node(), Node::Nat(_)) && matches!(b[0].node(), Node::App(o, _) if is(*o, s.omega)) => {
+                        return self.term(&inst_k(self.env, &b[1], &[args[1].clone()]));
+                    }
+                    // ... for any a the premises or path give `a in d`
+                    // (a C function applied to its arguments)
+                    Some((g, b))
+                        if is(g, s.fn_build)
+                            && (self.known_mems.borrow().iter().any(|l| matches!(l.node(), Node::App(_, ab) if ab[0] == args[1] && ab[1] == b[0]))
+                                || matches!(b[0].node(), Node::App(bt, w) if self.env.syms[*bt as usize].name == "bits" && w.len() == 1
+                                    && matches!(w[0].node(), Node::Nat(k) if k.to_u64().is_some_and(|k| self.bits_term(&args[1], k))))) =>
+                    {
                         return self.term(&inst_k(self.env, &b[1], &[args[1].clone()]));
                     }
                     // records through restriction, ghost parts and merges
@@ -1520,6 +1575,13 @@ impl<'a> Simp<'a> {
                     },
                     _ => break,
                 }
+            }
+        }
+        // in the goal, with `unroll`: a loop whose condition is decided, an
+        // iteration at a time
+        if pol == Pol::Goal && self.goal_loops && self.env.syms[f as usize].name == "while_rel" && a.len() == 5 {
+            if let Some(r) = self.goal_loop(a) {
+                return r;
             }
         }
         // an atom: its arguments as terms
@@ -1940,6 +2002,17 @@ impl<'a> Simp<'a> {
                     return self.or(self.ex(&ab[0], goal), self.ex(&ab[1], goal));
                 }
             }
+            // x only through projections, when that decides it (a choice of
+            // several values that exists: `any (bool, bool)`); otherwise
+            // kept, so facts do not multiply
+            // (the goal's steps: equivalences, kept only when decided)
+            if let Some(nb) = self.proj_split(body, 0) {
+                let inner = self.ex(&self.prop(&nb, Pol::Other), true);
+                let r = self.ex(&inner, true);
+                if self.is_true(&r) || self.is_false(&r) {
+                    return r;
+                }
+            }
             return Term::app(self.s.ex, vec![body.clone()]);
         }
         // one-point through an inner existential (R without x):
@@ -2234,6 +2307,16 @@ fn distinct_literals(a: &Term, b: &Term) -> bool {
 }
 
 /// Does bound variable `i` (relative to the top) occur in t?
+/// `t` has a loose bound variable (any index >= `depth`).
+fn has_bvar_any(env: &Env, t: &Term, depth: u32) -> bool {
+    match t.node() {
+        Node::BVar(j) => *j >= depth,
+        Node::App(f, a) => a.iter().enumerate().any(|(k, x)| has_bvar_any(env, x, depth + env.syms[*f as usize].binders[k])),
+        Node::Var(_, a) => a.iter().any(|x| has_bvar_any(env, x, depth)),
+        _ => false,
+    }
+}
+
 fn has_bvar(env: &Env, t: &Term, i: u32) -> bool {
     match t.node() {
         Node::BVar(j) => *j == i,
@@ -3205,6 +3288,11 @@ impl Simp<'_> {
         if self.env.syms[*i as usize].name == "is_fun" && ab.len() == 1 {
             return domain(&ab[0]).is_some();
         }
+        // `dom(b) = A` for b of a type with the domain A
+        if *i == self.s.eq && name(&ab[0]) == "dom" {
+            let Node::App(_, db) = ab[0].node() else { unreachable!() };
+            return domain(&db[0]).is_some_and(|d| d == ab[1]);
+        }
         // `x = false || x = true` (x in bool, unfolded): x of the type `bool`
         if is(*i, self.s.or) {
             if let (Node::App(e1, x), Node::App(e2, y)) = (ab[0].node(), ab[1].node()) {
@@ -3713,6 +3801,54 @@ impl Simp<'_> {
         Ok(None)
     }
 
+    /// In the goal (strengthening), `while_rel(l0, l. C, l o. B, l. T, r)`
+    /// with C(l0) decided: false -- it stops, `r = ok(l0, empty)`
+    /// (`while_stop`); true -- the body leaves (`while_leave`) or goes on to
+    /// some l1 from which the loop gives r (`while_step`).
+    fn goal_loop(&self, a: &[Term]) -> Option<Term> {
+        let env = self.env;
+        let wr = env.sym_by_name.get("while_rel").copied()?;
+        let is_ok = env.sym_by_name.get("is_ok").copied()?;
+        let empty = Term::app(env.sym_by_name.get("empty").copied()?, vec![]);
+        let (l0, r) = (self.term(&a[0]), &a[4]);
+        // (from a known state: not one bound inside the goal, which one-point
+        // fixes first; an iteration per round of the goal's simplification)
+        if has_bvar_any(env, &l0, 0) {
+            return None;
+        }
+        let c = self.prop(&inst_k(env, &a[1], &[l0.clone()]), Pol::Other);
+        let ok = |x: &Term| Term::app(self.s.ok.expect("ok"), vec![x.clone(), empty.clone()]);
+        let use_ = |n: &str| {
+            if !self.used.borrow().iter().any(|m| m == n) {
+                self.used.borrow_mut().push(n.into());
+            }
+        };
+        if self.is_false(&c) {
+            use_("while_stop");
+            return Some(self.eq(r, &ok(&l0)));
+        }
+        if !self.is_true(&c) {
+            return None;
+        }
+        use_("while_leave");
+        use_("while_step");
+        let body = |x: &Term, o: &Term| inst_k(env, &a[2], &[x.clone(), o.clone()]);
+        let leave = self.and(body(&l0, r), self.not(Term::app(is_ok, vec![r.clone()])));
+        // ex l1. B(l0, ok(l1)) && while_rel(l1, ..., r) && !(fst(r) = 2)
+        let l1 = Term::bvar(0);
+        let bf = env.binders_fn();
+        // (under the new binder: the loop's parts shifted past their own
+        // binders)
+        let sh = |t: &Term, k: u32| t.shift(1, k, &bf);
+        let (c1, b1, t1) = (sh(&a[1], 1), sh(&a[2], 2), sh(&a[3], 1));
+        let again = Term::app(wr, vec![l1.clone(), c1, b1.clone(), t1, sh(r, 0)]);
+        let fst = Term::app(self.s.fst.expect("fst"), vec![sh(r, 0)]);
+        let not_div = self.not(Term::app(self.s.eq, vec![fst, Term::nat(crate::nat::Nat::from_u64(2))]));
+        let step_body = self.and(self.and(inst_k(env, &b1, &[sh(&l0, 0), ok(&l1)]), again), not_div);
+        let step = Term::app(self.s.ex, vec![step_body]);
+        Some(self.prop(&self.or(leave, step), Pol::Goal))
+    }
+
     /// One iteration of `while_rel(l0, l. C, l o. B, l. T, r)` (theorem
     /// `while_unroll`, core/loop.core): it stops at l0, the body leaves, or
     /// the body continues to l1 and the loop runs on from there (or
@@ -3915,6 +4051,10 @@ impl Logic {
         // goal's strengthening, which would take such a t apart)
         let mut cs = Vec::new();
         sp.conjuncts(&prem, &mut cs);
+        // (and as given: `args in set_select(..)` is split above)
+        for p in premises {
+            sp.conjuncts(p, &mut cs);
+        }
         cs.retain(|c| matches!(c.node(), Node::App(i, _) if is(*i, sp.s.in_)));
         let g = self.simp_eqv_known(env, goal, &cs);
         let mut work = sp.paths(&prem, fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
@@ -4016,6 +4156,9 @@ impl Logic {
                 if g.ptr_eq(&g0) || g == g0 {
                     break;
                 }
+                // (rewritten: the goal's rules again, e.g. the universe
+                // closure of what an equation brought in)
+                g = sp.prop(&g, Pol::Goal);
             }
             // the same substitutions in the literals (they may name t by x)
             let p = if substs.is_empty() {
@@ -4197,14 +4340,19 @@ impl Logic {
     fn simp_eqv_known(&self, env: &Env, t: &Term, known: &[Term]) -> Term {
         let sp = Simp::new(env, self);
         sp.set_nats(known);
-        *sp.known_mems.borrow_mut() = known.to_vec();
         let mut t = t.clone();
-        for _ in 0..8 {
+        // (more rounds when running a loop of the goal: one per iteration)
+        for _ in 0..if sp.goal_loops { 64 } else { 8 } {
             let u = sp.prop(&t, Pol::Goal);
             if u == t {
                 break;
             }
             t = u;
+        }
+        for n in sp.used.borrow().iter() {
+            if !self.simp_used.borrow().contains(n) {
+                self.simp_used.borrow_mut().push(n.clone());
+            }
         }
         t
     }

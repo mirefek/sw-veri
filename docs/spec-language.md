@@ -453,14 +453,16 @@ it.
   it returns to the return address) `refines` `abi_function(f, spec, args)`.
 * `call_rule`: at a `call f` site the machine can be reasoned about as the
   spec. It is proven once, and then used at every call.
-* Functions inside a program: `implements2_at(f, spec, base, code)` is
-  `implements2` provided the program's executable segment `code` is loaded
-  at `base` (`code_at`: its bytes in memory, executable, not writable).
-  Every function of the program assumes the same segment, so a caller and
+* Functions inside a program: `implements2_at(f, spec, base, code, statics)`
+  is `implements2` provided the program is loaded (`loaded`): its
+  executable segment `code` at `base` (`code_at`: its bytes in memory,
+  executable, not writable), and its static data (the addresses `statics`)
+  not on stack pages -- else a store to a global could overwrite a return
+  address. Every function of the program assumes the same, so a caller and
   its callees share the precondition; `call_rule_at` uses it at a call
   site. To go on after a call, the caller needs the callee's spec to keep
-  the code loaded (`keeps_code`, a frame property proven for each function
-  at the C level). The program's entry points (malloc, free, calloc) keep
+  the program loaded (`keeps_code`, a frame property proven for each
+  function at the C level). The program's entry points (malloc, free, calloc) keep
   the plain `implements2`: their specs give the code loaded (`image_ok`).
 
 ### 9.3 The malloc layer (`layers/malloc.sl`)

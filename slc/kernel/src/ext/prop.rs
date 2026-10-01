@@ -28,6 +28,9 @@ pub struct Logic {
     /// library facts a `simp` step relied on (e.g. `while_unroll` for
     /// unrolling a loop): its sequent rests on them unless proven
     pub simp_used: std::cell::RefCell<Vec<String>>,
+    /// `simp` runs loops of the goal (with `unroll`): an iteration at a
+    /// time, by the lemmas `while_stop`, `while_leave`, `while_step`
+    pub simp_goal_loops: std::cell::Cell<bool>,
 }
 
 impl Logic {
@@ -51,6 +54,7 @@ impl Logic {
             is_prop: sym("is_prop")?,
             simp_keep: Default::default(),
             simp_used: Default::default(),
+            simp_goal_loops: Default::default(),
         })
     }
 

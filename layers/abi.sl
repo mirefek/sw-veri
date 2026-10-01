@@ -225,23 +225,30 @@ pred implements2[G](f: Addr, spec: CFun2[World & G]) =
 
 pred implements[G](f: Addr, spec: CFun[World & G]) = implements2(f, wide(spec))
 
-// ... provided the program's code (its executable segment `code`, loaded
-// at `base`) is in memory: the contract of a function inside the program,
-// which only its callers use. Every function of a program assumes the same
-// segment, so callers and callees have the same precondition; the
-// program's entry points (e.g. malloc) show it from their own spec.
-pred implements2_at[G](f: Addr, spec: CFun2[World & G], base: nat, code: List[bits[8]]) =
-  all args: Args. run_to_return() refines do[Machine & G] { require code_at(vm, base, code); abi_function(f, spec, args) }
+// The program is loaded: its code (the executable segment `code`, at
+// `base`) is in memory, and its static data (the addresses `statics`) is
+// not on the stack -- the ELF's segments are mapped at load, and the stack
+// grows only into unmapped pages. (Otherwise a store to a global could
+// overwrite a return address, which the ABI cannot allow for.)
+pred loaded(vm: Vm, base: nat, code: List[bits[8]], statics: Set[nat]) =
+  code_at(vm, base, code) && (all a: nat. a in statics -> !stack_page(vm, a / PAGE))
 
-// A spec keeps the program's code loaded: from a world with the code in
-// memory, every outcome still has it (a frame property, proven for each
-// function at the C level; a caller needs it to go on after a call).
-pred keeps_code[S](spec: CFun2[S], base: nat, code: List[bits[8]]) =
+// ... provided the program is loaded: the contract of a function inside
+// the program, which only its callers use. Every function of a program
+// assumes the same, so callers and callees have the same precondition;
+// the program's entry points (e.g. malloc) show it from their own spec.
+pred implements2_at[G](f: Addr, spec: CFun2[World & G], base: nat, code: List[bits[8]], statics: Set[nat]) =
+  all args: Args. run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function(f, spec, args) }
+
+// A spec keeps the program loaded: from a world where it is, every outcome
+// still has it (a frame property, proven for each function at the C level;
+// a caller needs it to go on after a call).
+pred keeps_code[S](spec: CFun2[S], base: nat, code: List[bits[8]], statics: Set[nat]) =
   all args: Args, w: S, o: Outcome[S, (bits[64], bits[64])].
-    code_at(w.vm, base, code) && outcome(w, spec(args), o) ->
+    loaded(w.vm, base, code, statics) && outcome(w, spec(args), o) ->
       match o {
-        ok(s, _)  => code_at(s.vm, base, code)
-        exc(s, _) => code_at(s.vm, base, code)
+        ok(s, _)  => loaded(s.vm, base, code, statics)
+        exc(s, _) => loaded(s.vm, base, code, statics)
         diverge(_) => true
       }
 
@@ -255,8 +262,8 @@ theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args):
   implements2(f, spec) ->
     do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args) }
 
-// ... for a function inside the program: at the call, the code must be
+// ... for a function inside the program: at the call, the program must be
 // loaded.
-theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, base: nat, code: List[bits[8]]):
-  implements2_at(f, spec, base, code) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require code_at(vm, base, code); push(rip); rip := f; abi_function(f, spec, args) }
+theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, base: nat, code: List[bits[8]], statics: Set[nat]):
+  implements2_at(f, spec, base, code, statics) ->
+    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require loaded(vm, base, code, statics); push(rip); rip := f; abi_function(f, spec, args) }
