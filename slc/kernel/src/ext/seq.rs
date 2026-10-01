@@ -362,12 +362,28 @@ impl Seq {
                 env.check_wf(m, 1)?;
             }
         }
-        let (hyps, open) = Self::gather(premises);
+        let (hyps, mut open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
         *lg.simp_keep.borrow_mut() = keep.to_vec();
+        lg.simp_used.borrow_mut().clear();
         let r = lg.simp_prove_loops(env, &ps, goal, loops);
         lg.simp_keep.borrow_mut().clear();
+        let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
         r?;
+        // the library facts the step relied on: proven, or open lemmas this
+        // sequent rests on (never silently assumed)
+        for name in used {
+            if env.theorems.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            if env.open.lemmas.iter().any(|(n, _)| *n == name) {
+                if !open.contains(&name) {
+                    open.push(name);
+                }
+                continue;
+            }
+            return err(format!("simp relies on `{}` (core/loop.core): load it", name));
+        }
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 

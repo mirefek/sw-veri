@@ -65,7 +65,7 @@ fn step_theorems_of_get_slot_index_prove() {
     assert!(text.contains("theorem get_slot_index.ok_40211a"), "{}", text);
     let c = Command::new(slc)
         .current_dir(&root)
-        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core"])
+        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/loop.core"])
         .arg(&claim)
         .args(["proofs/x86.core", "proofs/x86_code.core"])
         .arg(&out)
@@ -74,7 +74,15 @@ fn step_theorems_of_get_slot_index_prove() {
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // 7 step theorems, and per instruction where a step from it goes and
-    // its outcome; the function's run from them
-    assert!(c.status.success() && checked.contains("1 definitions, 21 theorems") && checked.contains("get_slot_index_run.core: 0 constants, 0 axioms, 0 definitions, 1 theorems"), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
+    // its outcome; the function's run from them (resting on the open lemma
+    // while_unroll: the loop of run_to_return is unrolled)
+    assert!(
+        c.status.success()
+            && checked.contains("1 definitions, 21 theorems")
+            && checked.contains("get_slot_index_run.core: 0 constants, 0 axioms, 0 definitions, 0 theorems, 1 conditional theorems"),
+        "{}{}",
+        checked,
+        String::from_utf8_lossy(&c.stderr)
+    );
     let _ = std::fs::remove_file(&out);
 }

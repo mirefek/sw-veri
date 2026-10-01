@@ -3163,6 +3163,11 @@ impl Simp<'_> {
                 }
             }
             if hints.iter().any(|h| h.unroll) {
+                // (the step is the lemma `while_unroll`, core/loop.core)
+                let used = &lg.simp_used;
+                if !used.borrow().iter().any(|n| n == "while_unroll") {
+                    used.borrow_mut().push("while_unroll".into());
+                }
                 let out = self.unroll(a, fresh)?;
                 return replace(out, fresh);
             }

@@ -200,6 +200,16 @@ fn check_nat(src: &str) -> Result<usize, String> {
     load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| r.theorems.len()).map_err(|e| e.0)
 }
 
+/// With the loop library: (theorems, theorems resting on open lemmas).
+fn check_loop(src: &str) -> Result<(usize, Vec<String>), String> {
+    let mut env = Env::new();
+    load(&mut env, &core_file("prelude.core"), true).unwrap();
+    for f in ["logic.core", "sets.core", "nat.core", "loop.core"] {
+        load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
+    }
+    load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| (r.theorems.len(), r.conditional)).map_err(|e| e.0)
+}
+
 fn arith_ok(stmt: &str, hyps: &[(&str, &str)]) -> Result<usize, String> {
     let assumes: String = hyps.iter().map(|(n, t)| format!("  assume {}: {}\n", n, t)).collect();
     let names: Vec<&str> = hyps.iter().map(|(n, _)| *n).collect();
@@ -544,9 +554,12 @@ fn loops_can_be_unrolled() {
     // counting to 3 without an invariant: three iterations, then the exit
     // (a divergence would continue as one from the next iteration, which
     // runs out when the loop stops)
+    // -- resting on the open lemma while_unroll (core/loop.core), which an
+    // unrolling step uses: a conditional theorem, never a silent one
     let src = count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", ", unroll");
-    assert_eq!(check_nat(&src), Ok(1));
-    match check_nat(&count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 2", ", unroll")) {
+    assert_eq!(check_loop(&src), Ok((0, vec!["t".to_string()])));
+    assert!(check_nat(&src).unwrap_err().contains("while_unroll"));
+    match check_loop(&count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 2", ", unroll")) {
         Ok(_) => panic!("wrong exit accepted"),
         Err(e) => assert!(e.contains("path"), "{}", e),
     }

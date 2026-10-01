@@ -317,6 +317,10 @@ relies on.
    every instruction's semantics with its fault cases took 1.2 s and 456
    paths). The faults are separate cases, for the ABI's crash branch and
    the spec's undefined behavior.
+   General facts the trusted `simp` relies on are tracked like any open
+   lemma: unrolling a loop is the lemma `while_unroll` (core/loop.core,
+   open for now), so a proof that unrolls one is a conditional theorem
+   resting on it, and so is every claim built on it, until it is proven.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
      (`Cfg`: the file, the addresses of ctx, the lock, `__libc`). An
