@@ -173,6 +173,9 @@ struct Simp<'a> {
     s: Syms,
     /// arithmetic definitions computed on numerals
     arith: FxMap<SymId, &'static str>,
+    /// `term` of the nodes seen (by address; the node kept alive), valid
+    /// for the current typing context `nats`
+    memo: std::cell::RefCell<FxMap<usize, (Term, Term)>>,
     /// programs kept folded (`Logic::simp_keep`)
     keep: Vec<SymId>,
     /// terms the current path knows to be natural numbers (its literals
@@ -411,6 +414,7 @@ impl<'a> Simp<'a> {
             env,
             arith,
             keep: lg.simp_keep.borrow().clone(),
+            memo: Default::default(),
             nats: std::cell::RefCell::new(Vec::new()),
             footprints: Default::default(),
             word_params: Default::default(),
@@ -685,7 +689,11 @@ impl<'a> Simp<'a> {
                 }
             }
         }
-        *self.nats.borrow_mut() = out;
+        // (`term` depends on the typing: its memo only for this one)
+        if *self.nats.borrow() != out {
+            self.memo.borrow_mut().clear();
+            *self.nats.borrow_mut() = out;
+        }
     }
 
     fn known(&self, t: &Term, ok: impl Fn(Ty) -> bool) -> bool {
@@ -887,6 +895,19 @@ impl<'a> Simp<'a> {
     //  Terms (equations only)
 
     fn term(&self, t: &Term) -> Term {
+        if !matches!(t.node(), Node::App(..)) {
+            return t.clone();
+        }
+        let key = t.node() as *const Node as usize;
+        if let Some((_, r)) = self.memo.borrow().get(&key) {
+            return r.clone();
+        }
+        let r = self.term_uncached(t);
+        self.memo.borrow_mut().insert(key, (t.clone(), r.clone()));
+        r
+    }
+
+    fn term_uncached(&self, t: &Term) -> Term {
         let s = &self.s;
         let Node::App(f, a) = t.node() else { return t.clone() };
         let f = *f;
@@ -903,7 +924,7 @@ impl<'a> Simp<'a> {
             if self.is_false(&c) {
                 return self.term(&a[2]);
             }
-            return Term::app(f, vec![c, self.term(&a[1]), self.term(&a[2])]);
+            return t.with_args(vec![c, self.term(&a[1]), self.term(&a[2])]);
         }
         let mut args: Vec<Term> = a.iter().map(|x| self.term(x)).collect();
         // an argument updated at a field the definition never reads (e.g.
@@ -1011,7 +1032,7 @@ impl<'a> Simp<'a> {
                     let (name, m) = if c.neg { ("int_sub", SInt::nat(c.m.clone())) } else { ("int_add", c.clone()) };
                     if let Some(g) = if name == "int_sub" { self.s.int_sub } else { self.s.int_add } {
                         let out = Term::app(g, vec![x, self.of_int(m)]);
-                        if out != Term::app(f, args.clone()) {
+                        if !matches!(out.node(), Node::App(h, b) if *h == f && b[..] == args[..]) {
                             return self.term(&out);
                         }
                     }
@@ -1024,7 +1045,7 @@ impl<'a> Simp<'a> {
             if ((*op == "bits_add" || *op == "bits_sub") && args.len() == 3) || (*op == "bits_of_int" && args.len() == 2 && !self.bits_term(&args[1], 64)) {
                 if let Node::Nat(w) = args[0].node() {
                     if let Some(n) = w.to_u64().filter(|&n| n <= 128) {
-                        if let Some(c) = self.canonical_addr(&Term::app(f, args.clone()), n) {
+                        if let Some(c) = self.canonical_addr(&t.with_args(args.clone()), n) {
                             return c;
                         }
                     }
@@ -1132,7 +1153,7 @@ impl<'a> Simp<'a> {
                 m = b[0].clone();
             }
         }
-        Term::app(f, args)
+        t.with_args(args)
     }
 
     // ------------------------------------------------------------------
@@ -1196,10 +1217,16 @@ impl<'a> Simp<'a> {
             if self.is_false(&y) {
                 return self.not(x);
             }
-            return Term::app(f, vec![x, y]);
+            return t.with_args(vec![x, y]);
         }
+        // (unchanged operands, none decided: the term itself, not a copy)
+        let decided = |x: &Term| self.is_true(x) || self.is_false(x);
         if is(f, s.not) {
-            return self.not(self.prop(&a[0], pol.flip()));
+            let x = self.prop(&a[0], pol.flip());
+            if x.ptr_eq(&a[0]) && !decided(&x) && !matches!(x.node(), Node::App(n, _) if is(*n, s.not)) {
+                return t.clone();
+            }
+            return self.not(x);
         }
         // (short-circuit: a decided left side spares simplifying the right,
         // e.g. the arms of a `match` on a known constructor)
@@ -1208,20 +1235,32 @@ impl<'a> Simp<'a> {
             if self.is_false(&x) {
                 return x;
             }
-            return self.and(x, self.prop(&a[1], pol));
+            let y = self.prop(&a[1], pol);
+            if x.ptr_eq(&a[0]) && y.ptr_eq(&a[1]) && !decided(&x) && !decided(&y) {
+                return t.clone();
+            }
+            return self.and(x, y);
         }
         if is(f, s.or) {
             let x = self.prop(&a[0], pol);
             if self.is_true(&x) {
                 return x;
             }
-            return self.or(x, self.prop(&a[1], pol));
+            let y = self.prop(&a[1], pol);
+            if x.ptr_eq(&a[0]) && y.ptr_eq(&a[1]) && !decided(&x) && !decided(&y) {
+                return t.clone();
+            }
+            return self.or(x, y);
         }
         if is(f, s.ne) {
             return self.not(self.eq(&a[0], &a[1]));
         }
         if f == s.eq {
-            return self.eq(&a[0], &a[1]);
+            let r = self.eq(&a[0], &a[1]);
+            if matches!(r.node(), Node::App(e, b) if *e == f && b[0].ptr_eq(&a[0]) && b[1].ptr_eq(&a[1])) {
+                return t.clone();
+            }
+            return r;
         }
         if f == s.ex {
             return self.ex(&self.prop(&a[0], pol), pol == Pol::Goal);
@@ -1770,8 +1809,8 @@ fn inst_k(env: &Env, body: &Term, args: &[Term]) -> Term {
             Node::BVar(j) if j - dep < k => args[(k - 1 - (j - dep)) as usize].shift(dep, 0, &env.binders_fn()),
             Node::BVar(j) => Term::bvar(j - k),
             Node::Nat(_) | Node::Bytes(_) => t.clone(),
-            Node::Var(v, a) => Term::var(*v, a.iter().map(|x| go(env, x, args, dep)).collect()),
-            Node::App(s, a) => Term::app(*s, a.iter().enumerate().map(|(i, x)| go(env, x, args, dep + env.binders_fn()(*s, i))).collect()),
+            Node::Var(_, a) => t.with_args(a.iter().map(|x| go(env, x, args, dep)).collect()),
+            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, args, dep + env.binders_fn()(*s, i))).collect()),
         }
     }
     go(env, body, args, 0)
@@ -1791,10 +1830,10 @@ fn subst_var_ctx(env: &Env, t: &Term, v: crate::term::VarId, value: &Term, k: u3
                     let val = value.shift(dep, k, &env.binders_fn());
                     inst_k(env, &val, &a)
                 } else {
-                    Term::var(*w, a)
+                    t.with_args(a)
                 }
             }
-            Node::App(s, a) => Term::app(*s, a.iter().enumerate().map(|(i, x)| go(env, x, v, value, k, dep + env.binders_fn()(*s, i))).collect()),
+            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, v, value, k, dep + env.binders_fn()(*s, i))).collect()),
             _ => t.clone(),
         }
     }
@@ -1829,8 +1868,8 @@ fn swap01(env: &Env, t: &Term, i: u32) -> Term {
         Node::BVar(j) if *j == i => Term::bvar(i + 1),
         Node::BVar(j) if *j == i + 1 => Term::bvar(i),
         Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
-        Node::Var(v, a) => Term::var(*v, a.iter().map(|x| swap01(env, x, i)).collect()),
-        Node::App(s, a) => Term::app(*s, a.iter().enumerate().map(|(k, x)| swap01(env, x, i + env.binders_fn()(*s, k))).collect()),
+        Node::Var(_, a) => t.with_args(a.iter().map(|x| swap01(env, x, i)).collect()),
+        Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(k, x)| swap01(env, x, i + env.binders_fn()(*s, k))).collect()),
     }
 }
 
@@ -1838,8 +1877,8 @@ fn lower(env: &Env, t: &Term, i: u32) -> Term {
     match t.node() {
         Node::BVar(j) if *j > i => Term::bvar(j - 1),
         Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
-        Node::Var(v, a) => Term::var(*v, a.iter().map(|x| lower(env, x, i)).collect()),
-        Node::App(s, a) => Term::app(*s, a.iter().enumerate().map(|(k, x)| lower(env, x, i + env.binders_fn()(*s, k))).collect()),
+        Node::Var(_, a) => t.with_args(a.iter().map(|x| lower(env, x, i)).collect()),
+        Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(k, x)| lower(env, x, i + env.binders_fn()(*s, k))).collect()),
     }
 }
 

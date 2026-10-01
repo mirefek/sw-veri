@@ -48,6 +48,34 @@ impl Term {
         &self.0
     }
 
+    /// The same node (not just an equal one).
+    pub fn ptr_eq(&self, other: &Term) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// This application (or variable) with the arguments `args`: the term
+    /// itself, not a rebuilt copy, when every argument is the old one (so
+    /// unchanged terms stay shared, and equal terms often pointer-equal).
+    pub fn with_args(&self, args: Vec<Term>) -> Term {
+        match self.node() {
+            Node::App(s, old) => {
+                if old.len() == args.len() && old.iter().zip(&args).all(|(a, b)| a.ptr_eq(b)) {
+                    self.clone()
+                } else {
+                    Term::app(*s, args)
+                }
+            }
+            Node::Var(v, old) => {
+                if old.len() == args.len() && old.iter().zip(&args).all(|(a, b)| a.ptr_eq(b)) {
+                    self.clone()
+                } else {
+                    Term::var(*v, args)
+                }
+            }
+            _ => self.clone(),
+        }
+    }
+
     /// Number of enclosing binders needed to make the term closed
     /// (0 = no loose bound variables). `binders(s, i)` gives the number of
     /// variables bound by argument `i` of symbol `s`.
@@ -87,9 +115,8 @@ impl Term {
         match self.node() {
             Node::BVar(i) if *i >= cutoff => Term::bvar(i + d),
             Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => self.clone(),
-            Node::Var(v, args) => Term::var(*v, args.iter().map(|a| a.shift(d, cutoff, binders)).collect()),
-            Node::App(s, args) => Term::app(
-                *s,
+            Node::Var(_, args) => self.with_args(args.iter().map(|a| a.shift(d, cutoff, binders)).collect()),
+            Node::App(s, args) => self.with_args(
                 args.iter()
                     .enumerate()
                     .map(|(i, a)| a.shift(d, cutoff + binders(*s, i), binders))
@@ -114,9 +141,8 @@ impl Term {
                 args[(k - 1 - j) as usize].shift(depth, 0, binders)
             }
             Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => self.clone(),
-            Node::Var(v, a) => Term::var(*v, a.iter().map(|x| x.inst_params_at(args, depth, binders)).collect()),
-            Node::App(s, a) => Term::app(
-                *s,
+            Node::Var(_, a) => self.with_args(a.iter().map(|x| x.inst_params_at(args, depth, binders)).collect()),
+            Node::App(s, a) => self.with_args(
                 a.iter()
                     .enumerate()
                     .map(|(i, x)| x.inst_params_at(args, depth + binders(*s, i), binders))
@@ -133,10 +159,10 @@ impl Term {
                 if *w == v {
                     value.instantiate_params(&args, binders)
                 } else {
-                    Term::var(*w, args)
+                    self.with_args(args)
                 }
             }
-            Node::App(s, args) => Term::app(*s, args.iter().map(|a| a.subst_var(v, value, binders)).collect()),
+            Node::App(_, args) => self.with_args(args.iter().map(|a| a.subst_var(v, value, binders)).collect()),
             _ => self.clone(),
         }
     }

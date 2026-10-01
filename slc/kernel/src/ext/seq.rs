@@ -43,11 +43,8 @@ pub(crate) fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(S
         return Term::bvar(depth);
     }
     match t.node() {
-        Node::App(s, args) => Term::app(
-            *s,
-            args.iter().enumerate().map(|(i, a)| abstract_term(a, pat, depth + binders(*s, i), binders)).collect(),
-        ),
-        Node::Var(v, args) => Term::var(*v, args.iter().map(|a| abstract_term(a, pat, depth, binders)).collect()),
+        Node::App(s, args) => t.with_args(args.iter().enumerate().map(|(i, a)| abstract_term(a, pat, depth + binders(*s, i), binders)).collect()),
+        Node::Var(_, args) => t.with_args(args.iter().map(|a| abstract_term(a, pat, depth, binders)).collect()),
         // bound variables of `t` itself: those below `depth` are bound inside
         // `t`, the new binder is outside them all
         _ => t.clone(),
