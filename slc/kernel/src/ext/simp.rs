@@ -1517,6 +1517,35 @@ impl<'a> Simp<'a> {
             }
             return self.ex(&self.prop(&r, Pol::Other), goal);
         }
+        // an equation for x deeper in a conjunct `ex y. D`: swap,
+        // `ex x. A(x) && (ex y. D(x, y))` <-> `ex y. ex x. A(x) && D(x, y)`
+        // (until the equation is one level down)
+        fn deep_point(sp: &Simp, d: &Term, depth: u32) -> bool {
+            let mut ds = Vec::new();
+            sp.conjuncts(d, &mut ds);
+            ds.iter().any(|c| match c.node() {
+                Node::App(e, ab) if *e == sp.s.eq => [(&ab[0], &ab[1]), (&ab[1], &ab[0])]
+                    .iter()
+                    .any(|(v, t)| matches!(v.node(), Node::BVar(j) if *j == depth) && !has_bvar(sp.env, t, depth)),
+                Node::App(e, ab) if *e == sp.s.ex => deep_point(sp, &ab[0], depth + 1),
+                _ => false,
+            })
+        }
+        for (i, c) in cs.iter().enumerate() {
+            let Node::App(e2, eb) = c.node() else { continue };
+            if *e2 != self.s.ex || !deep_point(self, &eb[0], 1) {
+                continue;
+            }
+            let mut a = self.tt();
+            for (j, d) in cs.iter().enumerate() {
+                if j != i {
+                    a = self.and(a, d.clone());
+                }
+            }
+            let nb = self.and(a.shift(1, 1, &bf), swap01(self.env, &eb[0], 0));
+            let inner = self.ex(&self.prop(&nb, Pol::Other), goal);
+            return self.ex(&inner, goal);
+        }
         // a conjunct `A || (B && x = t)` (e.g. `require`'s): distribute, so
         // that branch can use one-point
         let point = |d: &Term| {
@@ -1740,6 +1769,18 @@ fn has_bvar(env: &Env, t: &Term, i: u32) -> bool {
 
 /// t without bound variable `i` (which must not occur): the variables
 /// above it move down by one.
+/// `t` with the bound variables i and i + 1 exchanged (two adjacent binders
+/// swapped).
+fn swap01(env: &Env, t: &Term, i: u32) -> Term {
+    match t.node() {
+        Node::BVar(j) if *j == i => Term::bvar(i + 1),
+        Node::BVar(j) if *j == i + 1 => Term::bvar(i),
+        Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
+        Node::Var(v, a) => Term::var(*v, a.iter().map(|x| swap01(env, x, i)).collect()),
+        Node::App(s, a) => Term::app(*s, a.iter().enumerate().map(|(k, x)| swap01(env, x, i + env.binders_fn()(*s, k))).collect()),
+    }
+}
+
 fn lower(env: &Env, t: &Term, i: u32) -> Term {
     match t.node() {
         Node::BVar(j) if *j > i => Term::bvar(j - 1),
