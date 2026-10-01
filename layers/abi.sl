@@ -169,6 +169,27 @@ pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
 ///////////////////////////////////////////////////////////////////////
 //  What the ABI promises
 
+// The parts of a normal return (separate, so that proofs can take them one
+// at a time): the spec run on the world, its result in rax:rdx
+proc[Machine & G] abi_call[G](spec: CFun2[World & G], args: Args, sp: Addr) -> (bits[64], bits[64]) {
+  let (r0, r1) = with world(sp) { return spec(args) }
+  return (r0, r1)
+}
+
+// the callee-saved registers back to their values at entry
+proc[Machine] abi_restore(saved: Reg -> bits[64]) {
+  for reg in CALLEE_SAVED_LIST { gpr[reg] := saved[reg] }
+}
+
+// the caller's stack pointer, the result, df clear, back to the caller
+proc[Machine] abi_set_result(sp: Addr, ret: Addr, r0: bits[64], r1: bits[64]) {
+  gpr[rsp]  := sp
+  gpr[rax]  := r0
+  gpr[rdx]  := r1
+  flags.df  := false
+  rip       := ret
+}
+
 // From entry to return: the function behaves like `spec` on the world;
 // callee-saved registers and rsp are restored, rax holds the result, other
 // registers (including all XMM registers) and flags are clobbered. Or it runs out of stack (see above).
@@ -181,14 +202,10 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
   let w0    = with world(sp) { return self }    // the world, with ghost state
   require !spec_raises(w0, spec, args)
   either {
-    let (r0, r1) = with world(sp) { return spec(args) }
+    let (r0, r1) = abi_call(spec, args, sp)
     havoc gpr, xmm, flags
-    for reg in CALLEE_SAVED_LIST { gpr[reg] := saved[reg] }
-    gpr[rsp]  := sp
-    gpr[rax]  := r0
-    gpr[rdx]  := r1
-    flags.df  := false
-    rip       := ret
+    abi_restore(saved)
+    abi_set_result(sp, ret, r0, r1)
   } or {
     let vm0 = vm
     let a = any Addr where scratch(vm0, sp, uint(a))

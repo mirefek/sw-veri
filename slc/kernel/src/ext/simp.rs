@@ -61,7 +61,9 @@
 //! * in positive positions of the goal (strengthening): `fn_update(f, k, v)`,
 //!   `insert`, `union2` are in `univ(u)` if their arguments are; `app(f, k)`,
 //!   `fst(p)`, `snd(p)` (and `out_state`, `out_value`) if f or p is (they
-//!   are `empty` when undefined); `ite(c, a, b)` if a and b are.
+//!   are `empty` when undefined); `ite(c, a, b)` if a and b are;
+//!   `restrict(f, d)` and `ghost_part(f, d)` if f is (subsets:
+//!   `restrict_univ`, `ghost_part_univ` in core/records.core).
 //!
 //! Rules: a path literal `all xs. A1 -> .. -> An -> C` whose hypotheses
 //! match literals of the path (or follow from them by taut/arith), with
@@ -1538,6 +1540,10 @@ impl<'a> Simp<'a> {
                 if [s.app, s.fst, s.snd, s.out_state, s.out_value].iter().any(|c| is(h, *c)) {
                     return Some(mem(&args[0]));
                 }
+                // parts of a record: subsets (`restrict_univ`, `ghost_part_univ`)
+                if (name == "restrict" || name == "ghost_part") && args.len() == 2 {
+                    return Some(mem(&args[0]));
+                }
                 if is(h, s.ite) {
                     return Some(all(&args[1..]));
                 }
@@ -2689,7 +2695,7 @@ impl Simp<'_> {
             self.conjuncts(&want, &mut ws);
             for w in ws {
                 if lg.tautology(self.env, lits, &w).is_err() && lg.arith(self.env, lits, &w).is_err() {
-                    let t = pr.term(&w); eprintln!("witness: not shown: {} ... {}", t.chars().take(200).collect::<String>(), t.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>());
+                    let t = pr.term(&w); if std::env::var("WITNESS_FULL").is_ok() { eprintln!("witness: not shown: {}", t); } else { eprintln!("witness: not shown: {} ... {}", t.chars().take(200).collect::<String>(), t.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()); }
                 }
             }
             eprintln!("witness: --");

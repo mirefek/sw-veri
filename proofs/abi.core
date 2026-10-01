@@ -9,6 +9,8 @@
 //   memory) and writing a world back (`set_ok`, for memory that matches it)
 // - `ub_intro`: if the spec may raise from the entry world (undefined
 //   behavior), any outcome of the machine is allowed
+// - `call_ok`: abi_call, the spec run on the world and the world written
+//   back
 
 theorem abi.get_ok: all sp s v. s in univ(1) -> sp in bits(64) -> v in univ(1) -> v in x86_64_linux.Vm -> abi.scratch_view(v, app(s, "vm"), sp) ->
   runs(abi.world.get(sp), s, ok(s, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)))
@@ -72,4 +74,45 @@ proof
   have st2 := mp(st, hm2)
   have wun: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)) in univ(1) by simp(su, hvu)
   show by simp(hu, ho, wun, gp, st2, hm, hr, mp(ghost_part_univ[u := 1, f := s, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], su), x7u, keep(abi.scratch_view, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set))
+qed
+
+// The spec run on the world (abi_call): read through the view v, the spec's
+// outcome, written back as nv -- the result (r0, r1) in the merged state.
+theorem abi.call_ok: all spec args sp m v nv w2 r0 r1. m in univ(1) -> sp in bits(64) -> v in univ(1) -> v in x86_64_linux.Vm ->
+  abi.scratch_view(v, app(m, "vm"), sp) -> runs(app(spec, args), rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp), ghost_part(m, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), ok(w2, pair(r0, r1))) -> w2 in univ(1) ->
+  nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(app(m, "vm"), nv, app(w2, "vm"), sp) -> r0 in univ(1) -> r1 in univ(1) ->
+  runs(abi.abi_call(single(empty), spec, args, sp), m, ok(rec_merge(restrict(fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))), ghost_part(w2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), pair(r0, r1)))
+proof
+  fix spec
+  fix args
+  fix sp
+  fix m
+  fix v
+  fix nv
+  fix w2
+  fix r0
+  fix r1
+  assume mu: m in univ(1)
+  assume hp: sp in bits(64)
+  assume vu: v in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hs: abi.scratch_view(v, app(m, "vm"), sp)
+  assume hspec: runs(app(spec, args), rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp), ghost_part(m, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), ok(w2, pair(r0, r1)))
+  assume wu: w2 in univ(1)
+  assume nu: nv in univ(1)
+  assume hnv: nv in x86_64_linux.Vm
+  assume hnm: abi.world_matches(app(m, "vm"), nv, app(w2, "vm"), sp)
+  assume r0u: r0 in univ(1)
+  assume r1u: r1 in univ(1)
+  have g := mp(mp(mp(mp(mp(all_elim(all_elim(all_elim(abi.get_ok, {sp}), {m}), {v}), mu), hp), vu), hv), hs)
+  have w2r := mp(restrict_univ[u := 1, f := w2, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], wu)
+  have hnm1: abi.world_matches(app(m, "vm"), nv, app(restrict(w2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))), "vm"), sp) by simp(hnm, keep(abi.world_matches))
+  have st := mp(mp(mp(mp(mp(all_elim(all_elim(all_elim(all_elim(abi.set_ok, {sp}), {m}), {restrict(w2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))}), {nv}), mu), w2r), nu), hnv), hnm1)
+  have wun: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp) in univ(1) by simp(mu, vu, hp)
+  have gmu := mp(ghost_part_univ[u := 1, f := m, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], mu)
+  have gwu := mp(ghost_part_univ[u := 1, f := w2, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], wu)
+  have m2u: fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")) in univ(1) by simp(mu, nu, wu)
+  have rmu := mp(restrict_univ[u := 1, f := fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], m2u)
+  have rm := mp(restrict_univ[u := 1, f := m, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], mu)
+  show by simp(mu, hp, nu, rm, wun, gmu, gwu, rmu, wu, r0u, r1u, g, st, hspec, keep(abi.scratch_view, abi.world_matches, abi.world.get, abi.world.set))
 qed
