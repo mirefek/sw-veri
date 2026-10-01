@@ -44,10 +44,11 @@ pred stack_page(vm: Vm, p: nat) = mapped(vm, p) && vm.pages[p].value.kind = stac
 // below it, into which the stack can grow -- the pages from `a` up to `sp`
 // are all stack pages or unmapped. (Not bounded by RLIMIT_STACK: growth
 // beyond it faults, and with an unlimited limit the stack may grow down to
-// the next mapping.)
+// the next mapping.) The last page is the one holding sp - 1: when sp is
+// page-aligned, the page at sp is the caller's.
 pred scratch(vm: Vm, sp: Addr, a: nat) =
   a < uint(sp) &&
-  (all p: nat. a / PAGE <= p && p <= uint(sp) / PAGE -> stack_page(vm, p) || !mapped(vm, p))
+  (all p: nat. a / PAGE <= p && p <= (uint(sp) - 1) / PAGE -> stack_page(vm, p) || !mapped(vm, p))
 
 pred scratch_page(vm: Vm, sp: Addr, p: nat) = scratch(vm, sp, p * PAGE + PAGE - 1)
 
