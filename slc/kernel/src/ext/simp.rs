@@ -52,6 +52,15 @@
 //! the path's equations `x = t` / `t = x` (x a variable) and `a = b` (left
 //! to right).
 //!
+//! Delayed case splits (no rule, only the order of the search): a
+//! disjunction about the pending outcome r of a loop (`while_rel(.., r)`)
+//! or of a folded program (`runs(P, s, r)`) -- e.g. how a run's result
+//! becomes the function's outcome -- stays one literal while r is unknown,
+//! and is split only when nothing else applies (no rule, no loop step):
+//! by then r is usually known and one alternative is left. Meanwhile the
+//! closing checks leave it out (fewer premises), and a goal about what it
+//! decides waits.
+//!
 //! Loops, with invariants given by the user (`simp_prove_loops`): a literal
 //! `while_rel(l0, l. C, l o. B, l. T, r)` on a path is replaced by what the
 //! theorems `while_inv` / `while_var` (core/loop.core) conclude, once their
@@ -173,6 +182,8 @@ struct Simp<'a> {
     s: Syms,
     /// arithmetic definitions computed on numerals
     arith: FxMap<SymId, &'static str>,
+    /// split every disjunction (no holding: `pending_outs` is empty)
+    no_hold: std::cell::Cell<bool>,
     /// `term` of the nodes seen (by address; the node kept alive), valid
     /// for the current typing context `nats`
     memo: std::cell::RefCell<FxMap<usize, (Term, Term)>>,
@@ -414,6 +425,7 @@ impl<'a> Simp<'a> {
             env,
             arith,
             keep: lg.simp_keep.borrow().clone(),
+            no_hold: Default::default(),
             memo: Default::default(),
             nats: std::cell::RefCell::new(Vec::new()),
             footprints: Default::default(),
@@ -1938,6 +1950,135 @@ const MAX_PATHS: usize = 4096;
 const MAX_REPORTED: usize = 3;
 
 impl Simp<'_> {
+    /// The variables that are the pending outcome of something on the
+    /// path: of a loop (`while_rel(.., r)`) or of a program kept folded
+    /// (`runs(P, s, r)`).
+    fn pending_outs(&self, lits: &[Term]) -> Vec<crate::term::VarId> {
+        if self.no_hold.get() {
+            return Vec::new();
+        }
+        let wr = self.env.sym_by_name.get("while_rel").copied();
+        let mut out = Vec::new();
+        for l in lits {
+            let Node::App(f, a) = l.node() else { continue };
+            let r = if Some(*f) == wr && a.len() == 5 {
+                &a[4]
+            } else if is(*f, self.s.runs) && a.len() == 3 {
+                &a[2]
+            } else {
+                continue;
+            };
+            if let Node::Var(v, va) = r.node() {
+                if va.is_empty() {
+                    out.push(*v);
+                }
+            }
+        }
+        // ... and a variable tied to a pending one by an equation or an
+        // implication about just the two (an unrolled loop's outcome r is
+        // the rest's r1: `fst(r1) = fst(r)`, `fst(r) != 2 -> r1 = r`)
+        if !out.is_empty() {
+            loop {
+                let n = out.len();
+                for l in lits {
+                    let Node::App(f, _) = l.node() else { continue };
+                    if *f != self.s.eq && *f != self.s.imp {
+                        continue;
+                    }
+                    let mut vs = Vec::new();
+                    l.vars(&mut vs);
+                    if let [a, b] = vs[..] {
+                        if out.contains(&a) && !out.contains(&b) {
+                            out.push(b);
+                        } else if out.contains(&b) && !out.contains(&a) {
+                            out.push(a);
+                        }
+                    }
+                }
+                if out.len() == n {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    /// `l` is a disjunction whose every alternative is about one of the
+    /// pending outcomes `outs` (to be decided once that is known).
+    fn held(&self, l: &Term, outs: &[crate::term::VarId]) -> bool {
+        if !matches!(l.node(), Node::App(o, _) if is(*o, self.s.or)) {
+            return false;
+        }
+        let mut ds = Vec::new();
+        self.disjuncts(l, &mut ds);
+        outs.iter().any(|r| ds.iter().all(|d| has_var(d, *r)))
+    }
+
+    /// `l` is a disjunction not yet split (held, or decided but not yet
+    /// released); not a choice among constants, which stays a literal.
+    fn unsplit(&self, l: &Term) -> bool {
+        let Node::App(o, _) = l.node() else { return false };
+        if !is(*o, self.s.or) {
+            return false;
+        }
+        let mut ds = Vec::new();
+        self.disjuncts(l, &mut ds);
+        let choice = |d: &Term| -> Option<crate::term::VarId> {
+            let Node::App(e, ab) = d.node() else { return None };
+            if *e != self.s.eq {
+                return None;
+            }
+            let konst = |c: &Term| self.is_true(c) || self.is_false(c);
+            match (ab[0].node(), ab[1].node()) {
+                (Node::Var(v, va), _) if va.is_empty() && konst(&ab[1]) => Some(*v),
+                (_, Node::Var(v, va)) if va.is_empty() && konst(&ab[0]) => Some(*v),
+                _ => None,
+            }
+        };
+        !matches!(ds.first().and_then(choice), Some(v0) if ds.iter().all(|d| choice(d) == Some(v0)))
+    }
+
+    /// The paths of a conjunction from those of its parts (contradictory
+    /// combinations dropped).
+    fn combine(&self, x: Vec<Path>, y: Vec<Path>) -> Option<Vec<Path>> {
+        if x.len() * y.len() > MAX_PATHS {
+            return None;
+        }
+        let mut out = Vec::new();
+        for p in &x {
+            for q in &y {
+                let mut r = p.clone();
+                r.vars.extend(q.vars.iter().copied());
+                r.lits.extend(q.lits.iter().cloned());
+                r.done.extend(q.done.iter().cloned());
+                if x.len() == 1 || y.len() == 1 || self.settle(r.clone()).is_some() {
+                    out.push(r);
+                }
+            }
+        }
+        Some(out)
+    }
+
+    /// A path's literals that are no longer held (their outcome is known,
+    /// or the path has no more to do): split into paths again.
+    fn release(&self, p: &Path, fresh: &mut u32, all: bool) -> Option<Vec<Path>> {
+        let outs = self.pending_outs(&p.lits);
+        let splittable = |l: &Term| match l.node() {
+            Node::App(o, _) if is(*o, self.s.or) => (all || !self.held(l, &outs)) && self.paths(l, &mut 0).is_some_and(|ps| ps.len() > 1),
+            Node::App(e, _) if *e == self.s.ex => true,
+            _ => false,
+        };
+        let i = p.lits.iter().position(|l| splittable(l))?;
+        let mut rest = p.clone();
+        let l = rest.lits.remove(i);
+        if all {
+            self.no_hold.set(true);
+        }
+        let ps = self.paths(&l, fresh);
+        self.no_hold.set(false);
+        self.combine(vec![rest], ps?)
+    }
+
     fn paths(&self, t: &Term, fresh: &mut u32) -> Option<Vec<Path>> {
         let s = &self.s;
         if self.is_true(t) {
@@ -1975,6 +2116,21 @@ impl Simp<'_> {
                 return (x.len() <= MAX_PATHS).then_some(x);
             }
             if is(*f, s.and) {
+                // a disjunction about the pending outcome of a loop or a
+                // folded program among the conjuncts stays one literal: it
+                // is decided once that outcome is known (splitting now would
+                // repeat everything until then, once per alternative)
+                let mut cs = Vec::new();
+                self.conjuncts(t, &mut cs);
+                let outs = self.pending_outs(&cs);
+                if !outs.is_empty() && cs.iter().any(|c| self.held(c, &outs)) {
+                    let mut acc = vec![Path { vars: vec![], lits: vec![], done: vec![] }];
+                    for c in &cs {
+                        let y = if self.held(c, &outs) { vec![Path { vars: vec![], lits: vec![c.clone()], done: vec![] }] } else { self.paths(c, fresh)? };
+                        acc = self.combine(acc, y)?;
+                    }
+                    return Some(acc);
+                }
                 let (x, y) = (self.paths(&a[0], fresh)?, self.paths(&a[1], fresh)?);
                 if x.len() * y.len() > MAX_PATHS {
                     return None;
@@ -2635,6 +2791,7 @@ impl Simp<'_> {
                     break;
                 }
             }
+            let outs = self.pending_outs(&p.lits);
             for (binds, open) in all_insts {
                 let inst = |t: &Term| {
                     let mut t = t.clone();
@@ -2663,6 +2820,15 @@ impl Simp<'_> {
                     // (a program's run holds only as a literal)
                     if matches!(h.node(), Node::App(r, _) if is(*r, self.s.runs)) {
                         return p.lits.contains(h);
+                    }
+                    // (about a pending outcome: not shown before it is known,
+                    // unless it is a literal)
+                    if !outs.is_empty() {
+                        let mut hv = Vec::new();
+                        h.vars(&mut hv);
+                        if hv.iter().any(|v| outs.contains(v)) {
+                            return p.lits.contains(h);
+                        }
                     }
                     let t = std::time::Instant::now();
                     let lap = |i: usize, t: &mut std::time::Instant| {
@@ -2835,6 +3001,13 @@ impl Simp<'_> {
             Term::var(*fresh - 1, vec![])
         };
         let (x, y, z, t) = (var(), var(), var(), var());
+        // (the facts about the loop's outcome r play no part in its
+        // iterations: left out of these proofs)
+        let others: Vec<Term> = match r.node() {
+            Node::Var(rv, ra) if ra.is_empty() => others.iter().filter(|l| !has_var(l, *rv)).cloned().collect(),
+            _ => others.to_vec(),
+        };
+        let others = &others[..];
         let with = |extra: Vec<Term>| -> Vec<Term> { others.iter().cloned().chain(extra).collect() };
         let pr = crate::syntax::Printer::new(env);
         let show = |what: &str, prem: &[Term], goal: &Term, fresh: &mut u32| {
@@ -3084,9 +3257,29 @@ impl Logic {
             if sp.is_true(&g) {
                 continue;
             }
-            let closes = |g: &Term| sp.typed(&p.lits, g) || self.tautology(env, &p.lits, g).is_ok() || self.arith(env, &p.lits, g).is_ok() || sp.instance_of_all(&p.lits, g);
+            // the checks below without the held disjunctions (undecided,
+            // they cannot close the path; fewer premises is sound); the path
+            // goes on with them (`full`)
+            let full = p;
+            let p = if !full.lits.iter().any(|l| sp.unsplit(l)) {
+                full.clone()
+            } else {
+                Path { vars: full.vars.clone(), lits: full.lits.iter().filter(|l| !sp.unsplit(l)).cloned().collect(), done: full.done.clone() }
+            };
+            // a goal about what such a disjunction decides (e.g. the run's
+            // outcome o) waits until it is decided: the checks would fail
+            let waits = p.lits.len() < full.lits.len() && {
+                let mut gv = Vec::new();
+                g.vars(&mut gv);
+                full.lits.iter().any(|l| {
+                    let mut lv = Vec::new();
+                    l.vars(&mut lv);
+                    sp.unsplit(l) && lv.iter().any(|v| gv.contains(v))
+                })
+            };
+            let closes = |g: &Term| !waits && (sp.typed(&p.lits, g) || self.tautology(env, &p.lits, g).is_ok() || self.arith(env, &p.lits, g).is_ok() || sp.instance_of_all(&p.lits, g));
             // a conjunction: each conjunct (arithmetic from the literals about it)
-            let closes_part = |c: &Term| closes(c) || self.arith(env, &relevant(&p.lits, c), c).is_ok();
+            let closes_part = |c: &Term| closes(c) || (!waits && self.arith(env, &relevant(&p.lits, c), c).is_ok());
             let mut gs = Vec::new();
             sp.conjuncts(&g, &mut gs);
             if closes(&g) || (gs.len() > 1 && gs.iter().all(|c| closes_part(c))) {
@@ -3094,19 +3287,19 @@ impl Logic {
                 continue;
             }
             lap(2, &mut tm);
-            if sp.witnessed(&p.lits, &g, fresh, self) {
+            if !waits && sp.witnessed(&p.lits, &g, fresh, self) {
                 lap(3, &mut tm);
                 continue;
             }
             // (each conjunct by itself, its existentials witnessed)
-            if gs.len() > 1 && gs.iter().all(|c| closes_part(c) || sp.witnessed(&p.lits, c, fresh, self)) {
+            if !waits && gs.len() > 1 && gs.iter().all(|c| closes_part(c) || sp.witnessed(&p.lits, c, fresh, self)) {
                 lap(3, &mut tm);
                 continue;
             }
             lap(3, &mut tm);
             // long paths: arithmetic from the literals about the goal's variables
             let near = relevant(&p.lits, &g);
-            if near.len() < p.lits.len() && (self.tautology(env, &near, &g).is_ok() || self.arith(env, &near, &g).is_ok()) {
+            if !waits && near.len() < p.lits.len() && (self.tautology(env, &near, &g).is_ok() || self.arith(env, &near, &g).is_ok()) {
                 lap(4, &mut tm);
                 continue;
             }
@@ -3123,7 +3316,7 @@ impl Logic {
                 if steps > MAX_PATHS {
                     return Err(crate::env::KernelError("simp: too many paths".into()));
                 }
-                work.extend(sp.extend(self, &p, c, fresh)?);
+                work.extend(sp.extend(self, &full, c, fresh)?);
                 continue;
             }
             // a loop on the path, with an invariant: continue with its outcome
@@ -3135,11 +3328,19 @@ impl Logic {
                 }
                 return Err(crate::env::KernelError("simp: stopped (SIMP_DEBUG, long path)".into()));
             }
-            if let Some(ps) = sp.loop_step(self, &p, hints, fresh, &mut why)? {
+            if let Some(ps) = sp.loop_step(self, &full, hints, fresh, &mut why)? {
                 steps += 1;
                 if steps > MAX_PATHS {
                     return Err(crate::env::KernelError("simp: too many paths".into()));
                 }
+                work.extend(ps);
+                continue;
+            }
+            // nothing else to do: a held disjunction whose outcome is known
+            // now is split (late: a rule may still refute the path), else
+            // those still held (as without holding), before the path counts
+            // as left
+            if let Some(ps) = sp.release(&full, fresh, false).or_else(|| sp.release(&full, fresh, true)) {
                 work.extend(ps);
                 continue;
             }
