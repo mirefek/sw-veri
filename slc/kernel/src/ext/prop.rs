@@ -128,15 +128,11 @@ impl Logic {
         }
         let mut atoms: Vec<Term> = Vec::new();
         let tree = self.prop_tree(env, &f, &mut atoms, 0)?;
-        if atoms.len() > 20 {
-            return err("too many atoms for a truth table");
+        match tree.falsifying_rows(atoms.len(), 20) {
+            None => err("too many atoms for a truth table"),
+            Some(rows) if rows.is_empty() => Ok(()),
+            Some(_) => err("not a tautology"),
         }
-        for row in 0u64..(1 << atoms.len()) {
-            if !tree.eval(row) {
-                return err("not a tautology");
-            }
-        }
-        Ok(())
     }
 
     /// The propositional structure of `t` over atoms.
@@ -207,6 +203,76 @@ pub(crate) enum PTree {
 }
 
 impl PTree {
+    /// The rows (assignments to the atoms, as bits) that make the tree
+    /// false. A row falsifies `p1 -> .. -> pk -> g` only if every pi is
+    /// true and g false, so atomic pi (and negated ones, `a -> false`), and
+    /// the atoms of g's own chain, have forced values; only the other atoms
+    /// are enumerated (at most `max_free` of them, else None).
+    pub(crate) fn falsifying_rows(&self, n_atoms: usize, max_free: usize) -> Option<Vec<u64>> {
+        if n_atoms > 63 {
+            return None;
+        }
+        let (mut mask, mut val) = (0u64, 0u64);
+        let mut conflict = false;
+        let mut force = |i: usize, b: bool, mask: &mut u64, val: &mut u64| {
+            let bit = 1u64 << i;
+            if *mask & bit != 0 {
+                if (*val & bit != 0) != b {
+                    conflict = true;
+                }
+            } else {
+                *mask |= bit;
+                if b {
+                    *val |= bit;
+                }
+            }
+        };
+        // walk the chain: `t` must be false
+        let mut t = self;
+        loop {
+            match t {
+                PTree::Imp(p, rest) => {
+                    // p must be true
+                    match &**p {
+                        PTree::Atom(i) => force(*i, true, &mut mask, &mut val),
+                        PTree::Imp(a, f) if matches!(**f, PTree::False) => {
+                            if let PTree::Atom(i) = **a {
+                                force(i, false, &mut mask, &mut val);
+                            }
+                        }
+                        _ => {}
+                    }
+                    t = rest;
+                }
+                PTree::Atom(i) => {
+                    force(*i, false, &mut mask, &mut val);
+                    break;
+                }
+                PTree::False => break,
+            }
+        }
+        if conflict {
+            return Some(Vec::new());
+        }
+        let free: Vec<usize> = (0..n_atoms).filter(|i| mask >> i & 1 == 0).collect();
+        if free.len() > max_free {
+            return None;
+        }
+        let mut rows = Vec::new();
+        for k in 0u64..(1 << free.len()) {
+            let mut row = val;
+            for (j, i) in free.iter().enumerate() {
+                if k >> j & 1 == 1 {
+                    row |= 1 << i;
+                }
+            }
+            if !self.eval(row) {
+                rows.push(row);
+            }
+        }
+        Some(rows)
+    }
+
     pub(crate) fn eval(&self, row: u64) -> bool {
         match self {
             PTree::Atom(i) => row >> i & 1 == 1,

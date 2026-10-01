@@ -575,15 +575,12 @@ impl Logic {
         }
         let mut atoms: Vec<Term> = Vec::new();
         let tree = self.prop_tree(env, &f, &mut atoms, 0)?;
-        if atoms.len() > 20 {
+        let Some(rows) = tree.falsifying_rows(atoms.len(), 20) else {
             return err("arith: too many atoms");
-        }
+        };
         let read: Vec<Option<Atom>> = atoms.iter().map(|a| r.atom(a)).collect();
         let base: Vec<Lin> = r.side.clone();
-        for row in 0u64..(1 << atoms.len()) {
-            if tree.eval(row) {
-                continue;
-            }
+        for row in rows {
             let mut lits = Vec::new();
             let mut contradiction = false;
             for (i, a) in read.iter().enumerate() {

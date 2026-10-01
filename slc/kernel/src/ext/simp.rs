@@ -108,6 +108,12 @@ struct Syms {
     runs: Option<SymId>,
     mkprog: Option<SymId>,
     univ: Option<SymId>,
+    bits_add: Option<SymId>,
+    bits_of_int: Option<SymId>,
+    int_add: Option<SymId>,
+    int_sub: Option<SymId>,
+    int_div: Option<SymId>,
+    int_pow: Option<SymId>,
     set_select: Option<SymId>,
     in_: Option<SymId>,
     omega: Option<SymId>,
@@ -129,20 +135,53 @@ enum Ty {
     Bits(u64),
 }
 
+/// A fast hasher for the simplifier's small integer keys (symbols, node
+/// addresses): SipHash's flooding resistance is not needed here.
+#[derive(Default, Clone, Copy)]
+struct FxHasher(u64);
+
+impl std::hash::Hasher for FxHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.add(*b as u64);
+        }
+    }
+    fn write_u32(&mut self, i: u32) {
+        self.add(i as u64)
+    }
+    fn write_u64(&mut self, i: u64) {
+        self.add(i)
+    }
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64)
+    }
+}
+
+impl FxHasher {
+    fn add(&mut self, w: u64) {
+        self.0 = (self.0.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+type FxMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<FxHasher>>;
+
 struct Simp<'a> {
     env: &'a Env,
     s: Syms,
     /// arithmetic definitions computed on numerals
-    arith: std::collections::HashMap<SymId, &'static str>,
+    arith: FxMap<SymId, &'static str>,
     /// programs kept folded (`Logic::simp_keep`)
     keep: Vec<SymId>,
     /// terms the current path knows to be natural numbers (its literals
     /// `t in omega`, `t in bits(k)`)
     nats: std::cell::RefCell<Vec<(Term, Ty)>>,
     /// fields read by definitions of their parameters (`footprint`)
-    footprints: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<Vec<Term>>>>,
+    footprints: std::cell::RefCell<FxMap<(SymId, usize), Option<Vec<Term>>>>,
     /// parameters used only mod 2^n (`word_param`)
-    word_params: std::cell::RefCell<std::collections::HashMap<(SymId, usize), Option<u64>>>,
+    word_params: std::cell::RefCell<FxMap<(SymId, usize), Option<u64>>>,
     /// time in rule chaining (SIMP_TIME): matching, typing / instances,
     /// taut, arith
     prof: std::cell::RefCell<[std::time::Duration; 4]>,
@@ -404,6 +443,12 @@ impl<'a> Simp<'a> {
                 runs: g("runs"),
                 mkprog: g("mkprog"),
                 univ: g("univ"),
+                bits_add: g("bits_add"),
+                bits_of_int: g("bits_of_int"),
+                int_add: g("int_add"),
+                int_sub: g("int_sub"),
+                int_div: g("int_div"),
+                int_pow: g("int_pow"),
                 set_select: g("set_select"),
                 in_: g("in"),
                 omega: g("omega"),
@@ -424,6 +469,10 @@ impl<'a> Simp<'a> {
         let name = |g: SymId| self.env.syms[g as usize].name.as_str();
         match t.node() {
             Node::Nat(v) => {
+                // (the low bits directly when it fits: no division)
+                if let Some(x) = v.to_u128() {
+                    return Some((None, x & m));
+                }
                 let low = v.divmod(&crate::nat::Nat::pow2(n.min(128) as u64))?.1.to_u128()?;
                 Some((None, low & m))
             }
@@ -460,6 +509,10 @@ impl<'a> Simp<'a> {
             // a negative literal
             _ if self.int_lit(t).is_some_and(|v| v.neg) => {
                 let v = self.int_lit(t)?;
+                // (-x mod 2^n is the two's complement of x's low bits)
+                if let Some(x) = v.m.to_u128() {
+                    return Some((None, x.wrapping_neg() & m));
+                }
                 let low = v.divmod(&SInt::nat(crate::nat::Nat::pow2(n.min(128) as u64)))?.1.to_u128()?;
                 Some((None, low & m))
             }
@@ -478,7 +531,7 @@ impl<'a> Simp<'a> {
             None => nat(c),
             Some(b) if b == *t => return None,
             Some(b) if c == 0 && self.bits_term(&b, n) => b,
-            Some(b) => Term::app(self.env.sym_by_name.get("bits_add").copied()?, vec![nat(n as u128), b, nat(c)]),
+            Some(b) => Term::app(self.s.bits_add?, vec![nat(n as u128), b, nat(c)]),
         };
         (out != *t).then_some(out)
     }
@@ -738,9 +791,7 @@ impl<'a> Simp<'a> {
             _ => None,
         };
         let nat = |v: u128| Term::nat(crate::nat::Nat::from_u128(v));
-        let bits_of_int = self.env.sym_by_name.get("bits_of_int").copied()?;
-        let int_div = self.env.sym_by_name.get("int_div").copied()?;
-        let pow = self.env.sym_by_name.get("int_pow").copied()?;
+        let (bits_of_int, int_div, pow) = (self.s.bits_of_int?, self.s.int_div?, self.s.int_pow?);
         if is(f, self.s.app) {
             // app(store_le(b, a, n, v), x)
             let st = store(&args[0])?;
@@ -882,7 +933,8 @@ impl<'a> Simp<'a> {
                 if !matches!(args[i].node(), Node::App(g, _) if matches!(self.env.syms[*g as usize].name.as_str(), "int_add" | "int_sub")) {
                     continue;
                 }
-                let w = self.term(&Term::app(self.env.sym_by_name["bits_of_int"], vec![Term::nat(crate::nat::Nat::from_u64(n)), args[i].clone()]));
+                let Some(boi) = self.s.bits_of_int else { continue };
+                let w = self.term(&Term::app(boi, vec![Term::nat(crate::nat::Nat::from_u64(n)), args[i].clone()]));
                 if matches!(w.node(), Node::Nat(_)) || matches!(w.node(), Node::App(g, _) if self.env.syms[*g as usize].name == "bits_add") {
                     args[i] = w;
                 }
@@ -957,7 +1009,7 @@ impl<'a> Simp<'a> {
                         return x;
                     }
                     let (name, m) = if c.neg { ("int_sub", SInt::nat(c.m.clone())) } else { ("int_add", c.clone()) };
-                    if let Some(g) = self.env.sym_by_name.get(name).copied() {
+                    if let Some(g) = if name == "int_sub" { self.s.int_sub } else { self.s.int_add } {
                         let out = Term::app(g, vec![x, self.of_int(m)]);
                         if out != Term::app(f, args.clone()) {
                             return self.term(&out);
@@ -1216,7 +1268,7 @@ impl<'a> Simp<'a> {
         }
         // comprehension: `z in set_select(s, x. p)` <-> `z in s && p(z)`
         if is(f, s.in_) {
-            if let Node::App(un, ub) = a[1].node() {
+            if let Node::App(un, _) = a[1].node() {
                 if is(*un, s.univ) {
                     if let Some(r) = self.univ_mem(&self.term(&a[0]), &a[1], pol) {
                         return r;
@@ -1398,9 +1450,10 @@ impl<'a> Simp<'a> {
         }
         // two n-bit words with the same base: equal iff the offsets are
         // (both words: each is its value mod 2^n)
+        // (the offsets first: cheaper than the typing)
         for n in [64u64, 32, 16, 8] {
-            if self.bits_term(&x, n) && self.bits_term(&y, n) {
-                if let Some(d) = self.distance(&x, &y, n as u32) {
+            if let Some(d) = self.distance(&x, &y, n as u32) {
+                if self.bits_term(&x, n) && self.bits_term(&y, n) {
                     return if d == 0 { self.tt() } else { self.ff() };
                 }
             }
@@ -1886,9 +1939,16 @@ impl Simp<'_> {
     /// if the path is contradictory.
     fn settle(&self, mut p: Path) -> Option<Path> {
         let mut rounds = 0u32;
+        // the literals changed since they were simplified (only those are
+        // simplified again, unless the typing changed)
+        let mut dirty = vec![true; p.lits.len()];
         'again: loop {
             rounds += 1;
+            let before = self.nats.borrow().clone();
             self.set_nats(&p.lits);
+            if *self.nats.borrow() != before {
+                dirty.iter_mut().for_each(|d| *d = true);
+            }
             if rounds == 5000 && std::env::var("SIMP_DEBUG").is_ok() {
                 let pr = crate::syntax::Printer::new(self.env);
                 for l in &p.lits {
@@ -1896,7 +1956,13 @@ impl Simp<'_> {
                 }
             }
             let mut lits = Vec::new();
-            for l in &p.lits {
+            for (l, d) in p.lits.iter().zip(&dirty) {
+                if !*d {
+                    if !lits.contains(l) {
+                        lits.push(l.clone());
+                    }
+                    continue;
+                }
                 let l = self.prop(l, Pol::Other);
                 if self.is_false(&l) {
                     return None;
@@ -1912,6 +1978,7 @@ impl Simp<'_> {
                 }
             }
             p.lits = lits;
+            dirty = vec![false; p.lits.len()];
             // a literal `x = t` (or `t = x`) for a path variable x not in t
             let found = p.lits.iter().enumerate().find_map(|(i, l)| {
                 let Node::App(e, ab) = l.node() else { return None };
@@ -1925,7 +1992,17 @@ impl Simp<'_> {
             });
             if let Some((i, x, t)) = found {
                 let bf = self.env.binders_fn();
-                p.lits = p.lits.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, l)| l.subst_var(x, &t, &bf)).collect();
+                let (mut lits, mut ds) = (Vec::new(), Vec::new());
+                for (j, l) in p.lits.iter().enumerate() {
+                    if j == i {
+                        continue;
+                    }
+                    let changed = has_var(l, x);
+                    lits.push(if changed { l.subst_var(x, &t, &bf) } else { l.clone() });
+                    ds.push(changed);
+                }
+                p.lits = lits;
+                dirty = ds;
                 p.vars.retain(|y| *y != x);
                 continue 'again;
             }
@@ -1933,6 +2010,7 @@ impl Simp<'_> {
             // the second becomes `a = b` (then split by injectivity)
             if let Some((j, e)) = self.same_var_eqs(&p.lits) {
                 p.lits[j] = e;
+                dirty[j] = true;
                 continue 'again;
             }
             // `x = t` (x a variable, t compound, not containing x): t is x in
@@ -1951,12 +2029,16 @@ impl Simp<'_> {
                     .then(|| (i, ab[0].clone(), ab[1].clone()))
             });
             if let Some((i, x, t)) = named {
-                p.lits = p
-                    .lits
-                    .iter()
-                    .enumerate()
-                    .map(|(j, m)| if j == i || side_of(m, &t) { m.clone() } else { inst_k(self.env, &super::seq::abstract_term(m, &t, 0, &bf), &[x.clone()]) })
-                    .collect();
+                for j in 0..p.lits.len() {
+                    if j == i || side_of(&p.lits[j], &t) {
+                        continue;
+                    }
+                    let a = super::seq::abstract_term(&p.lits[j], &t, 0, &bf);
+                    if a != p.lits[j] {
+                        p.lits[j] = inst_k(self.env, &a, &[x.clone()]);
+                        dirty[j] = true;
+                    }
+                }
                 continue 'again;
             }
             // `t = N` (t compound, N a numeral, e.g. a known register): N
@@ -1974,12 +2056,16 @@ impl Simp<'_> {
                 })
             });
             if let Some((i, t, n)) = known {
-                p.lits = p
-                    .lits
-                    .iter()
-                    .enumerate()
-                    .map(|(j, m)| if j == i { m.clone() } else { inst_k(self.env, &super::seq::abstract_term(m, &t, 0, &bf), &[n.clone()]) })
-                    .collect();
+                for j in 0..p.lits.len() {
+                    if j == i {
+                        continue;
+                    }
+                    let a = super::seq::abstract_term(&p.lits[j], &t, 0, &bf);
+                    if a != p.lits[j] {
+                        p.lits[j] = inst_k(self.env, &a, &[n.clone()]);
+                        dirty[j] = true;
+                    }
+                }
                 continue 'again;
             }
             // a literal and its negation
