@@ -1383,6 +1383,11 @@ impl<'a> Simp<'a> {
             return self.not(self.eq(&a[0], &a[1]));
         }
         if f == s.eq {
+            if pol == Pol::Goal {
+                if let Some(r) = self.update_chains_goal(&a[0], &a[1]) {
+                    return r;
+                }
+            }
             let r = self.eq(&a[0], &a[1]);
             if matches!(r.node(), Node::App(e, b) if *e == f && b[0].ptr_eq(&a[0]) && b[1].ptr_eq(&a[1])) {
                 return t.clone();
@@ -1620,6 +1625,53 @@ impl<'a> Simp<'a> {
             }
             _ => None,
         }
+    }
+
+    /// In the goal (strengthening): updates of the same base `b` at
+    /// different sets of literal keys are equal if they agree at every key,
+    /// b is a function and each key updated on one side only is in dom(b)
+    /// (then both sides are functions on dom(b) and the keys of both sides,
+    /// agreeing everywhere: `fn_update_fun`, `fn_update_dom`, `rec_ext`).
+    fn update_chains_goal(&self, x: &Term, y: &Term) -> Option<Term> {
+        let s = &self.s;
+        let (x, y) = (self.term(x), self.term(y));
+        let chain = |t: &Term| -> (Term, Vec<Term>) {
+            let mut keys = Vec::new();
+            let mut b = t.clone();
+            while let Node::App(g, a) = b.node() {
+                if !is(*g, s.fn_update) || !matches!(a[1].node(), Node::Bytes(_) | Node::Nat(_)) {
+                    break;
+                }
+                if !keys.contains(&a[1]) {
+                    keys.push(a[1].clone());
+                }
+                b = a[0].clone();
+            }
+            (b, keys)
+        };
+        let ((bx, kx), (by, ky)) = (chain(&x), chain(&y));
+        // (both sides updates: `m = fn_update(m, k, v)` stays a literal, which
+        // the path may have)
+        if kx.is_empty() || ky.is_empty() || bx != by {
+            return None;
+        }
+        let only: Vec<&Term> = kx.iter().filter(|k| !ky.contains(k)).chain(ky.iter().filter(|k| !kx.contains(k))).collect();
+        if only.is_empty() {
+            return None;
+        }
+        let is_fun = self.env.sym_by_name.get("is_fun").copied()?;
+        let dom = self.env.sym_by_name.get("dom").copied()?;
+        let (appf, in_) = (s.app?, s.in_?);
+        let app = |r: &Term, k: &Term| self.term(&Term::app(appf, vec![r.clone(), k.clone()]));
+        let mut r = self.prop(&Term::app(is_fun, vec![bx.clone()]), Pol::Goal);
+        for k in &only {
+            let d = Term::app(dom, vec![bx.clone()]);
+            r = self.and(r, self.prop(&Term::app(in_, vec![(*k).clone(), d]), Pol::Goal));
+        }
+        for k in kx.iter().chain(ky.iter().filter(|k| !kx.contains(k))) {
+            r = self.and(r, self.eq(&app(&x, k), &app(&y, k)));
+        }
+        Some(r)
     }
 
     fn eq(&self, a: &Term, b: &Term) -> Term {

@@ -447,8 +447,11 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
         }
         cs.retain(|l| !l.coeffs.is_empty());
         cs.dedup();
-        // the variable with the fewest new constraints
-        let mut best: Option<(usize, usize)> = None;
+        // the variable with the fewest new constraints, preferring one whose
+        // elimination is exact over the integers (coefficient 1 on one
+        // side: with larger ones on both, the real shadow can lose integer
+        // infeasibility, e.g. of a quotient `x = 4096 q + r`)
+        let mut best: Option<(usize, (bool, usize))> = None;
         let mut vars: Vec<usize> = cs.iter().flat_map(|l| l.coeffs.keys().copied()).collect();
         vars.sort();
         vars.dedup();
@@ -458,7 +461,9 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
         for &v in &vars {
             let p = cs.iter().filter(|l| l.coeffs.get(&v).is_some_and(|c| *c > 0)).count();
             let n = cs.iter().filter(|l| l.coeffs.get(&v).is_some_and(|c| *c < 0)).count();
-            let cost = p * n;
+            let exact = cs.iter().all(|l| l.coeffs.get(&v).is_none_or(|c| *c <= 1))
+                || cs.iter().all(|l| l.coeffs.get(&v).is_none_or(|c| *c >= -1));
+            let cost = (!exact, p * n);
             if best.is_none_or(|b| cost < b.1) {
                 best = Some((v, cost));
             }
