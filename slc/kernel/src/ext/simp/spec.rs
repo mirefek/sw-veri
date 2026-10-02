@@ -890,19 +890,27 @@ impl Sr<'_, '_> {
     /// An obligation `all lv. A.. -> G` (lv the loop's state): decided in
     /// the context with the A's, or kept.
     fn obligation(&self, ctx: &[Term], ants: &[Term], goal: &Term, lv: &[VarId], hyps: &mut Vec<Term>) {
+        let t0 = std::time::Instant::now();
+        let how = self.obligation_with(ctx, ants, goal, lv, hyps);
+        if std::env::var("SPEC_DEBUG").is_ok() {
+            eprintln!("spec_run: obligation {} in {:?}", how, t0.elapsed());
+        }
+    }
+
+    fn obligation_with(&self, ctx: &[Term], ants: &[Term], goal: &Term, lv: &[VarId], hyps: &mut Vec<Term>) -> &'static str {
         let sp = self.sp;
         let mut cx = ctx.to_vec();
         for a in ants {
             sp.conjuncts(a, &mut cx);
         }
         if self.decide_in(&cx, goal, 2) == Some(true) {
-            return;
+            return "decided";
         }
         // (vacuous: an antecedent the others refute)
         for k in ctx.len()..cx.len() {
             let others: Vec<Term> = cx.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, t)| t.clone()).collect();
             if self.decide_in(&others, &cx[k], 1) == Some(false) {
-                return;
+                return "vacuous";
             }
         }
         let mut t = goal.clone();
@@ -911,15 +919,18 @@ impl Sr<'_, '_> {
         }
         let t = bind_vars(self.lg.all, &t, lv, &sp.env.binders_fn());
         // (by simp, from the premises -- the user's lemmas about the loop --
-        // and the conditions on the way)
+        // and the conditions on the way; opened: lv's variables fresh, the
+        // antecedents premises)
         let mut ps = self.premises.clone();
         ps.extend(ctx.iter().cloned());
-        if self.lg.simp_prove_loops(sp.env, &ps, &t, &[]).is_ok() {
-            return;
+        ps.extend(ants.iter().filter(|a| !sp.is_true(a)).cloned());
+        if self.lg.simp_prove_loops(sp.env, &ps, goal, &[]).is_ok() {
+            return "by simp";
         }
         if !hyps.contains(&t) {
             hyps.push(t);
         }
+        "kept"
     }
 
     /// `x in S` for a parameter x (not the loop's state) of an inhabited
