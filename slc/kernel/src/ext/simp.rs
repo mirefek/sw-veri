@@ -131,7 +131,12 @@
 //!   a 16-bit value is the value; sign extension of a small value is the
 //!   value; x * 1 is x; x + x is 2 * x; widths of products with literals,
 //!   of sums, of `and` with a mask, of `bits_set_slice`; an address of the
-//!   domain's width is in its domain (`app(f, a)` of f in fn_space).
+//!   domain's width is in its domain (`app(f, a)` of f in fn_space);
+//!   signed values: `sint(n, x)` of x below 2^(n-1) is x, of a sign
+//!   extension `bits_sext(m, n, y)` (m <= n) is `sint(m, y)`; an n-bit
+//!   operation (add, sub, `bits_of_int`) reads an operand `sint(m, y)`
+//!   (m >= n) as y, and `bits_of_int(n, sint(m, y))` (m < n) is
+//!   `bits_sext(m, n, y)`.
 //! * a choice of constants (`t = false || t = true`) stays one literal (not
 //!   a case split) also for a projection t of a variable (`fst(snd(u))`:
 //!   one of several undefined flags).
@@ -140,7 +145,9 @@
 //! match literals of the path (or follow from them by taut/arith), with
 //! every x bound, adds its instance of C to the path (∀- and →-elimination);
 //! for an equation C (possibly n = 0), xs may also be bound by matching its
-//! left side against terms of the path or goal. The goal is rewritten with
+//! left side against terms of the path or goal, and for a run C by matching
+//! C against the goal (`all o. o in univ(1) -> runs(P, s, o)`: an outcome
+//! no literal has), its hypotheses then shown. The goal is rewritten with
 //! the path's equations `x = t` / `t = x` (x a variable) and `a = b` (left
 //! to right), again while it changes (simplified, it may show a rewritten
 //! term anew), with the goal-side rule for equations of update chains.
@@ -167,6 +174,8 @@ use crate::term::{Node, SymId, Term};
 mod eval;
 // symbolic execution of machine code to its return (`symex`)
 mod symex;
+// forward execution of a spec program (`spec_run`)
+mod spec;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {
@@ -1540,6 +1549,54 @@ impl<'a> Simp<'a> {
                     }
                 }
             }
+            // the signed value of a sign extension (m <= n): the signed m-bit
+            // value (`sint(n, bits_of_int(n, sint(m, y)))`, in n-bit range)
+            if *op == "sint" && args.len() == 2 {
+                // (of a non-negative value, below 2^(n-1): the value)
+                if let Node::Nat(n) = args[0].node() {
+                    if n.to_u64().is_some_and(|n| (2..=129).contains(&n) && self.bits_term(&args[1], n - 1)) {
+                        return args[1].clone();
+                    }
+                }
+                if let (Node::Nat(n), Node::App(g, b)) = (args[0].node(), args[1].node()) {
+                    if self.arith.get(g) == Some(&"bits_sext") && b.len() == 3 && b[1] == args[0] && matches!(b[0].node(), Node::Nat(m) if m <= n) {
+                        return self.term(&t.with_args(vec![b[0].clone(), b[2].clone()]));
+                    }
+                }
+            }
+            // an operand of an n-bit operation is read mod 2^n: the signed
+            // m-bit value of y (m >= n) as y; as all of it, the signed m-bit
+            // value (m < n) is y sign extended
+            if ((*op == "bits_add" || *op == "bits_sub") && args.len() == 3) || (*op == "bits_of_int" && args.len() == 2) {
+                if let Node::Nat(n) = args[0].node() {
+                    let sint_of = |x: &Term| match x.node() {
+                        Node::App(g, b) if self.arith.get(g) == Some(&"sint") && b.len() == 2 => match b[0].node() {
+                            Node::Nat(m) => Some((m.clone(), b[1].clone())),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let mut new = args.clone();
+                    let mut changed = false;
+                    for x in new.iter_mut().skip(1) {
+                        if let Some((m, y)) = sint_of(x) {
+                            if m >= *n {
+                                *x = y;
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        return self.term(&t.with_args(new));
+                    }
+                    let zero = *op == "bits_of_int" || (*op == "bits_add" && self.int_lit(&args[2]).is_some_and(|c| c.m.is_zero()));
+                    if let (true, Some((m, y)), Some(sx)) = (zero, sint_of(&args[1]), self.env.sym_by_name.get("bits_sext")) {
+                        if m < *n {
+                            return self.term(&Term::app(*sx, vec![Term::nat(m), args[0].clone(), y]));
+                        }
+                    }
+                }
+            }
             // the sign extension of a non-negative m-bit x (x below 2^(m-1)): x
             if *op == "bits_sext" && args.len() == 3 {
                 if let Node::Nat(m) = args[0].node() {
@@ -2482,6 +2539,18 @@ impl<'a> Simp<'a> {
         }
         if !has_bvar(self.env, body, 0) {
             return lower(self.env, body, 0);
+        }
+        // a member of a set that has one: `ex x. x in bits(n)` (0), omega,
+        // int, bool (false)
+        if let Node::App(i, ab) = body.node() {
+            if is(*i, self.s.in_) && matches!(ab[0].node(), Node::BVar(0)) && !has_bvar(self.env, &ab[1], 0) {
+                if let Node::App(set, sa) = ab[1].node() {
+                    let name = self.env.syms[*set as usize].name.as_str();
+                    if (name == "bits" && sa.len() == 1) || (matches!(name, "omega" | "int" | "bool") && sa.is_empty()) {
+                        return self.tt();
+                    }
+                }
+            }
         }
         // one-point: a conjunct `x = t` or `t = x`
         let mut cs = Vec::new();
@@ -4313,6 +4382,19 @@ impl Simp<'_> {
                     break;
                 }
             }
+            // a run's rule also at the goal's runs (its outcome may be no
+            // literal's: `all o. o in univ(1) -> runs(P, s, o)`), the
+            // hypotheses to show
+            if matches!(concl.node(), Node::App(r, _) if is(*r, self.s.runs)) && all_insts.len() < MAX_INSTANCES {
+                let mut gs = Vec::new();
+                self.conjuncts(goal, &mut gs);
+                for u in &gs {
+                    let mut b = Vec::new();
+                    if pmatch(&concl, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) && !all_insts.iter().any(|(x, _)| *x == b) {
+                        all_insts.push((b, (0..hyps.len()).collect()));
+                    }
+                }
+            }
             let outs = self.pending_outs(&p.lits);
             for (binds, open) in all_insts {
                 let inst = |t: &Term| {
@@ -4338,6 +4420,9 @@ impl Simp<'_> {
                     let h = &h;
                     if self.is_false(h) || self.is_true(h) {
                         return self.is_true(h);
+                    }
+                    if p.lits.contains(h) {
+                        return true;
                     }
                     // (a program's run holds only as a literal)
                     if matches!(h.node(), Node::App(r, _) if is(*r, self.s.runs)) {
@@ -4377,7 +4462,13 @@ impl Simp<'_> {
                     lap(3, &mut t);
                     r
                 };
-                if !open.iter().all(|&i| shown(&inst(&hyps[i]))) {
+                // (an instance's conjunction by its conjuncts)
+                let shown_all = |h: &Term| {
+                    let mut cs = Vec::new();
+                    self.conjuncts(h, &mut cs);
+                    cs.iter().all(|c| shown(c))
+                };
+                if !open.iter().all(|&i| shown_all(&inst(&hyps[i]))) {
                     continue;
                 }
                 let c = inst(&concl);

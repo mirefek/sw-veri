@@ -20,30 +20,8 @@ abbrev ib.defined(v, sc) := int_le(ib.d(sc), 31) -> gimple.usable(v, ib.addr(sc)
 abbrev ib.arg(args) := bits_of_int(32, app(args, 0))
 abbrev ib.ok(v, args) := ord_le(1, seq_len(args)) && ib.defined(v, ib.arg(args))
 
-// in range: sc - 7 without overflow, the counter's address, the load
-theorem ib.in_range: all w sc. w in univ(1) -> sc in bits(32) -> int_le(ib.d(sc), 31) ->
-  runs(gimple.sadd(32, sc, bits_neg(32, 7)), w, ok(w, ib.d(sc))) &&
-  runs(gimple.padd(c_src_malloc_mallocng_malloc.__malloc_context, 880), w, ok(w, 4228208)) &&
-  runs(gimple.elem(4228208, bits_sext(32, 64, ib.d(sc)), 1), w, ok(w, ib.addr(sc)))
-proof
-  fix w
-  fix sc
-  assume hw: w in univ(1)
-  assume hx: sc in bits(32)
-  assume hl: int_le(ib.d(sc), 31)
-  have r: int_le(7, sc) && int_le(sc, 38) by arith(hx, hl)
-  have ed: ib.d(sc) = int_sub(sc, 7) by arith(hx, hl, r)
-  have db: ib.d(sc) in bits(32) by simp(hx)
-  have s31: int_lt(sc, 2147483648) by arith(r)
-  have sa: runs(gimple.sadd(32, sc, bits_neg(32, 7)), w, ok(w, ib.d(sc))) by defs(simp(hw, hx, r, s31, ed), gimple.sadd, gimple.arith, gimple.fits, gimple.wrap, sint)
-  have pa := apply(g.padd_ok, {w}, {4227328}, {880}, hw, simp(), simp(), defs(simp(), gimple.sval), defs(simp(), gimple.sval))
-  have se: bits_sext(32, 64, ib.d(sc)) = ib.d(sc) by defs(simp(db, hl), bits_sext, sint)
-  have el := apply(g.elem1_ok, {w}, {4228208}, {ib.d(sc)}, hw, simp(), db, simp(db))
-  have pc: runs(gimple.padd(c_src_malloc_mallocng_malloc.__malloc_context, 880), w, ok(w, 4228208)) by defs(simp(expand(pa, gimple.sval), keep(gimple.padd)), c_src_malloc_mallocng_malloc.__malloc_context)
-  have ec: runs(gimple.elem(4228208, bits_sext(32, 64, ib.d(sc)), 1), w, ok(w, ib.addr(sc))) by simp(el, se, keep(gimple.elem))
-  show by taut(sa, pc, ec)
-qed
-
+// the spec's branches (spec_run: out of range; the counter's byte usable,
+// above 99 or not; not usable)
 theorem ib.proc_ok: all w sc. w in univ(1) -> sc in bits(32) -> ib.defined(app(w, "vm"), sc) ->
   runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), w, ok(w, ib.res(app(w, "vm"), sc)))
 proof
@@ -52,26 +30,8 @@ proof
   assume hw: w in univ(1)
   assume hx: sc in bits(32)
   assume hu: ib.defined(app(w, "vm"), sc)
-  have c1: !int_le(ib.d(sc), 31) -> runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), w, ok(w, ib.res(app(w, "vm"), sc))) proof
-    assume hl: !int_le(ib.d(sc), 31)
-    show by defs(simp(hw, hx, hl), c_src_malloc_mallocng_malloc.is_bouncing)
-  qed
-  have c2: int_le(ib.d(sc), 31) -> runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), w, ok(w, ib.res(app(w, "vm"), sc))) proof
-    assume hl: int_le(ib.d(sc), 31)
-    have ir := apply(ib.in_range, hw, hx, hl)
-    have db: ib.d(sc) in bits(32) by simp(hx)
-    have ld := apply(g.ld8_ok, {w}, {ib.addr(sc)}, hw, simp(db), simp(db), mp(hu, hl))
-    have c21: int_lt(99, ib.byte(app(w, "vm"), sc)) -> runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), w, ok(w, 1)) proof
-      assume hb: int_lt(99, ib.byte(app(w, "vm"), sc))
-      show by defs(simp(hw, hx, hl, hb, ir, ld, keep(gimple.sadd, gimple.padd, gimple.elem, gimple.ld8)), c_src_malloc_mallocng_malloc.is_bouncing)
-    qed
-    have c22: !int_lt(99, ib.byte(app(w, "vm"), sc)) -> runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), w, ok(w, 0)) proof
-      assume hb: !int_lt(99, ib.byte(app(w, "vm"), sc))
-      show by defs(simp(hw, hx, hl, hb, ir, ld, keep(gimple.sadd, gimple.padd, gimple.elem, gimple.ld8)), c_src_malloc_mallocng_malloc.is_bouncing)
-    qed
-    show by simp(hl, c21, c22, keep(c_src_malloc_mallocng_malloc.is_bouncing))
-  qed
-  show by taut(c1, c2)
+  have r := spec_run({c_src_malloc_mallocng_malloc.is_bouncing(sc)}, {w}, hw, hx, g.padd_ok, g.padd_ub, g.ld8_ok, g.ld8_ub)
+  show by simp(r, hu, hx, keep(c_src_malloc_mallocng_malloc.is_bouncing))
 qed
 
 theorem ib.proc_raises: all w sc e. w in univ(1) -> e in univ(1) -> sc in bits(32) -> !ib.defined(app(w, "vm"), sc) ->
@@ -84,11 +44,8 @@ proof
   assume he: e in univ(1)
   assume hx: sc in bits(32)
   assume hn: !ib.defined(app(w, "vm"), sc)
-  have hl: int_le(ib.d(sc), 31) by taut(hn)
-  have ir := apply(ib.in_range, hw, hx, hl)
-  have db: ib.d(sc) in bits(32) by simp(hx)
-  have ld := apply(g.ld8_ub, {w}, {ib.addr(sc)}, {e}, hw, he, simp(hn), simp(db))
-  show by defs(simp(hw, he, hx, hl, ir, ld, keep(gimple.sadd, gimple.padd, gimple.elem, gimple.ld8)), c_src_malloc_mallocng_malloc.is_bouncing)
+  have r := spec_run({c_src_malloc_mallocng_malloc.is_bouncing(sc)}, {w}, hw, hx, g.padd_ok, g.padd_ub, g.ld8_ok, g.ld8_ub)
+  show by simp(r, hn, hx, he, keep(c_src_malloc_mallocng_malloc.is_bouncing))
 qed
 
 theorem ib.fun_ok: all w args y. w in univ(1) -> args in abi.ARGS -> y in bits(64) -> ib.ok(app(w, "vm"), args) ->
@@ -101,9 +58,8 @@ proof
   assume hA: args in abi.ARGS
   assume hy: y in bits(64)
   assume hu: ib.ok(app(w, "vm"), args)
-  have pr := apply(ib.proc_ok, {w}, {ib.arg(args)}, hw, simp(), simp(hu))
-  have rs := apply(g.result_ok, {w}, {ib.res(app(w, "vm"), ib.arg(args))}, hw, simp())
-  show by defs(simp(hw, hA, hy, hu, pr, rs, keep(c_src_malloc_mallocng_malloc.is_bouncing, gimple.result)), c_src_malloc_mallocng_malloc.is_bouncing_fun)
+  have r := spec_run({app(ib.spec, args)}, {w}, hw, hA, ib.proc_ok, ib.proc_raises, g.result_ok)
+  show by simp(r, hu, hy, keep(c_src_malloc_mallocng_malloc.is_bouncing_fun))
 qed
 
 theorem ib.fun_raises: all w args e. w in univ(1) -> e in univ(1) -> args in abi.ARGS -> !ib.ok(app(w, "vm"), args) ->
@@ -116,16 +72,16 @@ proof
   assume he: e in univ(1)
   assume hA: args in abi.ARGS
   assume hn: !ib.ok(app(w, "vm"), args)
+  have r := spec_run({app(ib.spec, args)}, {w}, hw, hA, ib.proc_ok, ib.proc_raises, g.result_ok)
   have c1: !ord_le(1, seq_len(args)) -> runs(app(ib.spec, args), w, exc(w, e)) proof
     assume hl: !ord_le(1, seq_len(args))
-    show by defs(simp(hw, he, hA, hl, keep(c_src_malloc_mallocng_malloc.is_bouncing, gimple.result)), c_src_malloc_mallocng_malloc.is_bouncing_fun)
+    show by simp(r, hl, hw, he, keep(c_src_malloc_mallocng_malloc.is_bouncing_fun))
   qed
-  have c2: !ib.defined(app(w, "vm"), ib.arg(args)) -> runs(app(ib.spec, args), w, exc(w, e)) proof
-    assume hd: !ib.defined(app(w, "vm"), ib.arg(args))
-    have pr := apply(ib.proc_raises, {w}, {ib.arg(args)}, {e}, hw, he, simp(), hd)
-    show by defs(simp(hw, he, hA, pr, keep(c_src_malloc_mallocng_malloc.is_bouncing, gimple.result)), c_src_malloc_mallocng_malloc.is_bouncing_fun)
+  have c2: ord_le(1, seq_len(args)) -> runs(app(ib.spec, args), w, exc(w, e)) proof
+    assume hl: ord_le(1, seq_len(args))
+    show by simp(r, hl, hn, he, keep(c_src_malloc_mallocng_malloc.is_bouncing_fun))
   qed
-  show by taut(hn, c1, c2)
+  show by taut(c1, c2)
 qed
 
 // the machine, from entry to return (three paths: out of range; the

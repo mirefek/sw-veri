@@ -887,6 +887,17 @@ impl State {
                         let refs: Vec<&Seq> = ps.iter().collect();
                         Seq::symex(env, lg, &refs)
                     }
+                    // spec_run({P}, {W}, f1, ..): the program P run forward
+                    // from the world W, with the operations' lemmas and the
+                    // facts among the fi: `(all ps. C.. -> runs(P, W, O)) &&
+                    // ..`, one conjunct per branch
+                    "spec_run" => {
+                        let p = self.term_arg(env, a0, 0)?;
+                        let w = self.term_arg(env, args.get(1), 0)?;
+                        let ps = self.proofs(env, lg, &args[2..])?;
+                        let refs: Vec<&Seq> = ps.iter().collect();
+                        Seq::spec_run(env, lg, &p, &w, &refs)
+                    }
                     "refl" => {
                         let t = self.term_arg(env, a0, 0)?;
                         Seq::refl(env, &t)

@@ -415,6 +415,19 @@ impl Seq {
         Ok(Seq { hyps, concl, open })
     }
 
+    /// `Γ ⊢ (all ps. C.. -> runs(P, W, O1)) && ..`: the branches of the
+    /// program P run from W (`Logic::spec_run`), with the premises' lemmas
+    /// for its operations and facts for its conditions.
+    pub fn spec_run(env: &Env, lg: &Logic, p: &Term, w: &Term, premises: &[&Seq]) -> KResult<Seq> {
+        env.check_wf(p, 0)?;
+        env.check_wf(w, 0)?;
+        let (hyps, open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        let concl = lg.spec_run(env, p, w, &ps)?;
+        env.check_wf(&concl, 0)?;
+        Ok(Seq { hyps, concl, open })
+    }
+
     fn gather(premises: &[&Seq]) -> (Vec<Term>, Vec<String>) {
         let mut hyps = Vec::new();
         let mut open = Vec::new();

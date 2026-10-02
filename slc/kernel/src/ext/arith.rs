@@ -130,6 +130,7 @@ struct Syms {
     bits_sub: Option<SymId>,
     bits_neg: Option<SymId>,
     bits_of_int: Option<SymId>,
+    pair: Option<SymId>,
 }
 
 impl Syms {
@@ -159,6 +160,7 @@ impl Syms {
             bits_sub: s("bits_sub"),
             bits_neg: s("bits_neg"),
             bits_of_int: s("bits_of_int"),
+            pair: s("pair"),
         }
     }
 }
@@ -207,6 +209,8 @@ impl Reader {
         match t.node() {
             Node::Nat(_) => true,
             Node::App(e, a) if a.is_empty() && is(*e, s.empty) => true,
+            // a negative literal: pair(1, m) is -m
+            Node::App(p, a) if is(*p, s.pair) && a.len() == 2 && small(&a[0]) == Some(1) && small(&a[1]).is_some_and(|m| m > 0) => true,
             Node::App(f, a) if is(*f, s.succ) => small(&a[0]).is_some() || self.nats.contains(&a[0]),
             // the length of a list expression (a natural)
             Node::App(f, a) if is(*f, self.ls.len) && super::list::flatten(&self.ls, &a[0], &self.lists).is_some() => true,
@@ -271,6 +275,10 @@ impl Reader {
         let s = self.s;
         match t.node() {
             Node::Nat(_) => return small(t).map(Lin::konst),
+            // pair(1, m): the integer -m (the prelude's negative literals)
+            Node::App(p, a) if is(*p, s.pair) && a.len() == 2 && small(&a[0]) == Some(1) && small(&a[1]).is_some_and(|m| m > 0) => {
+                return small(&a[1]).map(|m| Lin::konst(-m));
+            }
             Node::App(e, a) if a.is_empty() && is(*e, s.empty) => return Some(Lin::konst(0)),
             // succ of a natural is its + 1 (of other sets: a set)
             Node::App(f, a) if is(*f, s.succ) && (small(&a[0]).is_some() || self.nats.contains(&a[0])) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),

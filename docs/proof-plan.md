@@ -522,6 +522,20 @@ have sp := spec_run(gs.spec, w, args)
 This replaces the per-function `proc_ok`/`proc_raises`/`fun_ok`/
 `fun_raises` lemmas (about 150 lines per function now).
 
+Status (first version, `slc/kernel/src/ext/simp/spec.rs`):
+`spec_run({P}, {W}, facts.., op-lemmas..)` returns the conjunction of
+`all ps. C.. -> runs(P, W, O)`, one per branch (the program's undecided
+`if`s, the operations' lemmas: `_ok` and `_ub` give two branches). The
+conditions are stated in word form (`gimple.wrap`/`sval`/`fits` of
+literal types as `bits_add`/`sint`/true, a sign extension's signed value,
+non-wrapping address sums as integer sums), and the range tests the facts
+decide are gone: for is_bouncing four branches (out of range; the
+counter usable, above 99 or not; not usable). A `_fun` wrapper runs as its
+proc, so the proc lemmas serve as operation lemmas for it. is_bouncing's
+four spec lemmas are now `spec_run` + `simp` (72 lines fewer, `ib.in_range`
+gone); `defined` is still written by hand in the statement, and read off
+the branches' conditions. Not yet: get_stride, loops (step_seq).
+
 ### 6.3 Simulation, block by block
 
 (C1) as a simulation between the machine and the readable GIMPLE, with the

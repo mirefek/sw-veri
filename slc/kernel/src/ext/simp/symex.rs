@@ -346,7 +346,7 @@ impl Logic {
 
     /// A condition decided in the context: by simp, a literal (or its
     /// negation), or taut / arith from the literals about it.
-    fn symex_decide(&self, sp: &Simp, ctx: &[Term], c: &Term) -> Option<bool> {
+    pub(super) fn symex_decide(&self, sp: &Simp, ctx: &[Term], c: &Term) -> Option<bool> {
         let c = sp.prop(c, Pol::Other);
         if sp.is_true(&c) {
             return Some(true);
