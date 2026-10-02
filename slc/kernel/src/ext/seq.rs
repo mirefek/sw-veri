@@ -425,6 +425,24 @@ impl Seq {
         Ok(())
     }
 
+    /// `Γ ⊢ abi.matches(spec, args, S, O)`: the bridge from the readable
+    /// GIMPLE `p = app(spec, args)` to the machine's run in the premises
+    /// (`Logic::bridge`).
+    pub fn bridge(env: &Env, lg: &Logic, p: &Term, premises: &[&Seq]) -> KResult<Seq> {
+        env.check_wf(p, 0)?;
+        let (hyps, mut open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        lg.simp_used.borrow_mut().clear();
+        let r = lg.bridge(env, p, &ps);
+        let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
+        let concl = r?;
+        env.check_wf(&concl, 0)?;
+        // (what symex, spec_run and simp inside relied on: symex's
+        // unrolling of the machine's run, ..)
+        Self::rests_on(env, "bridge", used, &mut open)?;
+        Ok(Seq { hyps, concl, open })
+    }
+
     /// `Γ ⊢ (all ps. C.. -> runs(P, W, O1)) && ..`: the branches of the
     /// program P run from W (`Logic::spec_run`), with the premises' lemmas
     /// for its operations and facts for its conditions.

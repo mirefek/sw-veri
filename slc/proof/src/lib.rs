@@ -901,6 +901,22 @@ impl State {
                     // from the world W, with the operations' lemmas and the
                     // facts among the fi: `(all ps. C.. -> runs(P, W, O)) &&
                     // ..`, one conjunct per branch
+                    // bridge(h, {app(spec, args)}, f1, ..): with h the
+                    // machine's run from an entry, `abi.matches(spec, args,
+                    // S, O)` -- the readable GIMPLE to machine code bridge
+                    "bridge" => {
+                        let mut terms = Vec::new();
+                        let mut ps = Vec::new();
+                        for a in args {
+                            match a {
+                                Arg::Term(_) => terms.push(self.term_arg(env, Some(a), 0)?),
+                                Arg::Proof(x) => ps.push(self.eval(env, lg, x)?),
+                            }
+                        }
+                        let [p] = &terms[..] else { return err("bridge takes the spec `{app(spec, args)}` and proofs") };
+                        let refs: Vec<&Seq> = ps.iter().collect();
+                        Seq::bridge(env, lg, p, &refs)
+                    }
                     // (a loop by an invariant and a variant: `{l. I}, {l.
                     // m}` after W, for the program's loops in order)
                     "spec_run" => {

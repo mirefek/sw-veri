@@ -34,6 +34,10 @@ pub struct Logic {
     /// premises of the current `simp` step that unfold a symbol, `all xs.
     /// f(xs) = rhs` (the symbol, its arity, the premise)
     pub simp_rewrites: std::cell::RefCell<Vec<(SymId, usize, Term)>>,
+    /// premises for simp when symex cannot show a step's premise otherwise
+    /// (set by the bridge: the library's access lemmas and the spec's
+    /// conditions); empty: off
+    pub symex_simp: std::cell::RefCell<Vec<Term>>,
 }
 
 impl Logic {
@@ -59,6 +63,7 @@ impl Logic {
             simp_used: Default::default(),
             simp_goal_loops: Default::default(),
             simp_rewrites: Default::default(),
+            symex_simp: Default::default(),
         })
     }
 

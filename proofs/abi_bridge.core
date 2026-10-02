@@ -6,14 +6,56 @@
 // ABI contract (`abi.abi_function`'s run), proven once.
 //
 //   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
-//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/abi.core \
-//     proofs/abi_restore.core proofs/abi_glue.core proofs/abi_bridge.core
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     build/leaf_steps.core proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core \
+//     proofs/abi_stack.core proofs/abi_loop.core proofs/abi_bridge.core
+
+// the frame's accesses, a byte at a time (for the bridge, which shows a
+// step's access premises by simp from these): a byte of the red zone below
+// sp, for reading or writing; a byte of the return address
+theorem abi.slot_at: all vm sp c i k. sp in bits(64) -> x86_64_linux.can_access(vm, sp, 1) -> int_mod(bits_add(64, sp, 8), 16) = 0 ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> i in omega -> int_lt(int_add(c, i), 18446744073709551616) -> (k = 0 || k = 1) ->
+  x86_64_linux.can_access(vm, bits_add(64, bits_add(64, sp, c), bits_of_int(64, i)), k)
+proof
+  fix vm
+  fix sp
+  fix c
+  fix i
+  fix k
+  assume hsp: sp in bits(64)
+  assume hca: x86_64_linux.can_access(vm, sp, 1)
+  assume hal: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume hc: c in bits(64)
+  assume hle: int_le(18446744073709551608, c)
+  assume hi: i in omega
+  assume hlt: int_lt(int_add(c, i), 18446744073709551616)
+  assume hk: k = 0 || k = 1
+  have hn: int_le(int_sub(18446744073709551616, c), int_sub(18446744073709551616, c)) by arith(hc)
+  have sa := apply(abi.slot_access, {vm}, {sp}, {c}, {int_sub(18446744073709551616, c)}, hsp, hca, hal, hc, hle, hn)
+  have il: int_lt(i, int_sub(18446744073709551616, c)) by arith(hi, hc, hlt)
+  show by simp(sa, hi, il, hk)
+qed
+
+theorem abi.ret_at: all vm sp i. sp in bits(64) -> x86_64_linux.can_access(vm, sp, 1) -> int_mod(bits_add(64, sp, 8), 16) = 0 ->
+  i in omega -> int_lt(i, 8) -> x86_64_linux.can_access(vm, bits_add(64, sp, bits_of_int(64, i)), 0)
+proof
+  fix vm
+  fix sp
+  fix i
+  assume hsp: sp in bits(64)
+  assume hca: x86_64_linux.can_access(vm, sp, 1)
+  assume hal: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume hi: i in omega
+  assume hlt: int_lt(i, 8)
+  have ra := apply(abi.ret_access, {vm}, {sp}, hsp, hca, hal)
+  show := mp(mp(all_elim(ra, {i}), hi), hlt)
+qed
 
 // the outcome o of the machine's run from the entry s, as the spec's on the
 // world s shows: the spec raises there (undefined behaviour: anything), or
 // o is a return matching the spec's ok outcome (the world's memory and
 // state, rax:rdx, the ABI's registers), or both diverge with the same trace
-abbrev abi.matches(spec, args, s, o) :=
+def abi.matches(spec, args, s, o) :=
   (ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))) ||
   (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
     runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
@@ -170,7 +212,7 @@ proof
     have dv := apply(abi.div_case, {f}, {spec}, {args}, {s}, {app(s, "vm")}, {t}, hM, hp1, hsv, vu, sv, wm, taut(h1))
     show := rewrite(sym(eo), dv)
   qed
-  show by taut(hm, c1, c2, c3)
+  show by taut(expand(hm, abi.matches), c1, c2, c3)
 qed
 
 // C1 from the bridge: every run from an entry matched with the spec

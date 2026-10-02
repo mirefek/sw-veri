@@ -1115,17 +1115,32 @@ impl Sr<'_, '_> {
     }
 }
 
+/// spec_run's result: the statement, and for the bridge its parts -- the
+/// branches not past a loop (their conditions and outcome, the parameters
+/// `>= first` universal), and D, the condition whose failure is the
+/// merged undefined behaviour (the spec raising from any world)
+pub(super) struct SpecOut {
+    pub statement: Term,
+    pub branches: Vec<(Vec<Term>, Term)>,
+    pub ub: Option<Term>,
+    pub first: u32,
+}
+
 impl Logic {
     /// The branches of the program `p` run from the world `w` (see the
     /// module): `all ps. C.. -> runs(p, w, O)` per branch, conjoined.
     pub fn spec_run(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<Term> {
+        Ok(self.spec_run_out(env, p, w, hints, premises)?.statement)
+    }
+
+    pub(super) fn spec_run_out(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<SpecOut> {
         *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
         let r = self.spec_run_with(env, p, w, hints, premises);
         self.simp_rewrites.borrow_mut().clear();
         r
     }
 
-    fn spec_run_with(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<Term> {
+    fn spec_run_with(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<SpecOut> {
         let kerr = |m: String| crate::env::KernelError(format!("spec_run: {}", m));
         let sp = Simp::new(env, self);
         let runs = sp.s.runs.ok_or_else(|| kerr("no `runs`".into()))?;
@@ -1289,6 +1304,7 @@ impl Logic {
             }
         }
         let mut merged: Option<Term> = None;
+        let mut ub_d: Option<Term> = None;
         let mut gone: Vec<usize> = Vec::new();
         if let (true, Some(set)) = (same && !ub.is_empty(), set) {
             let in_ = sp.s.in_.unwrap();
@@ -1316,6 +1332,10 @@ impl Logic {
                 }
             };
             if let Some(d) = all_ub.iter().map(|(_, cs)| chain(cs)).reduce(|a, b| sp.and(a, b)) {
+                // (for the bridge: D, when the raise is from any world)
+                if s_cond.is_some() {
+                    ub_d = Some(d.clone());
+                }
                 let (_, et) = sr.var();
                 let mut t = Term::app(env.builtins.imp, vec![Term::app(in_, vec![et.clone(), set]), Term::app(env.builtins.imp, vec![sp.not(d), Term::app(runs, vec![p.clone(), w.clone(), Term::app(sp.s.exc.unwrap(), vec![s, et.clone()])])])]);
                 if let Some(c) = s_cond {
@@ -1459,6 +1479,8 @@ impl Logic {
                 t
             })
             .collect();
-        Ok(ts.into_iter().rev().reduce(|r, t| Term::app(and, vec![t, r])).unwrap())
+        let statement = ts.into_iter().rev().reduce(|r, t| Term::app(and, vec![t, r])).unwrap();
+        let branches = done.into_iter().enumerate().filter(|(i, _)| bs[*i].group.is_none() && !gone.contains(i)).map(|(_, b)| b).collect();
+        Ok(SpecOut { statement, branches, ub: ub_d, first })
     }
 }

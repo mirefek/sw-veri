@@ -182,6 +182,8 @@ mod eval;
 mod symex;
 // forward execution of a spec program (`spec_run`)
 mod spec;
+// the bridge from readable GIMPLE to machine code (`bridge`)
+mod bridge;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {
@@ -4348,6 +4350,20 @@ impl Simp<'_> {
         for l in &p.lits {
             let Some((vs, hyps, concl)) = self.rule(l, fresh) else { continue };
             let mut insts = Vec::new();
+            // (goal-directed first: the conclusion matching a conjunct of
+            // the goal binds its variables, the hypotheses then; a typing
+            // hypothesis would otherwise bind a variable to any literal of
+            // its type)
+            if !matches!(concl.node(), Node::App(e, _) if *e == self.s.eq) {
+                let mut gs = Vec::new();
+                self.conjuncts(goal, &mut gs);
+                for u in &gs {
+                    let mut b = Vec::new();
+                    if pmatch(&concl, u, &vs, &mut b) && !b.is_empty() {
+                        instances(&hyps, 0, &match_lits, &vs, b, Vec::new(), &mut insts);
+                    }
+                }
+            }
             instances(&hyps, 0, &match_lits, &vs, Vec::new(), Vec::new(), &mut insts);
             // variables only in the conclusion `lhs = rhs`: from the terms
             let lhs = match concl.node() {
@@ -4905,9 +4921,10 @@ impl Logic {
     }
 
     fn prove_paths(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<()> {
-        *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
+        // (the caller's rules kept: simp may run inside symex or spec_run)
+        let saved = std::mem::replace(&mut *self.simp_rewrites.borrow_mut(), self.rewrite_rules(env, premises));
         let r = self.prove_paths_with(env, premises, goal, hints, fresh);
-        self.simp_rewrites.borrow_mut().clear();
+        *self.simp_rewrites.borrow_mut() = saved;
         r
     }
 

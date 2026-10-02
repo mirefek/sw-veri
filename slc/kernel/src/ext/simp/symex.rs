@@ -449,7 +449,30 @@ impl Logic {
             }
         }
         let near = relevant(ctx, h);
-        self.tautology(env, &near, h).is_ok() || self.arith(env, &near, h).is_ok()
+        if self.tautology(env, &near, h).is_ok() || self.arith(env, &near, h).is_ok() {
+            return true;
+        }
+        // (by simp, from the premises the bridge gives -- with the path's
+        // literals: the state is the same)
+        let extra = self.symex_simp.borrow().clone();
+        if !extra.is_empty() {
+            // (the registers' typing symex adds left out: simp has it from
+            // the machine's, and as literals it would bind a lemma's word
+            // variables to registers)
+            let reg_typing = |l: &Term| match l.node() {
+                Node::App(i, ab) if is(*i, sp.s.in_) && ab.len() == 2 => matches!(ab[0].node(), Node::App(a, x) if is(*a, sp.s.app) && x.len() == 2
+                    && matches!(x[0].node(), Node::App(a2, y) if is(*a2, sp.s.app) && y.len() == 2 && matches!(y[1].node(), Node::Bytes(b) if &b[..] == b"gpr"))),
+                _ => false,
+            };
+            let mut ps = extra;
+            ps.extend(ctx.iter().filter(|l| !reg_typing(l)).cloned());
+            let r = self.simp_prove_loops(env, &ps, h, &[]);
+            if let (Err(e), true) = (&r, std::env::var("SYMEX_DEBUG").is_ok()) {
+                eprintln!("symex: premise by simp failed: {}", e.0.chars().take(1500).collect::<String>());
+            }
+            return r.is_ok();
+        }
+        false
     }
 }
 
