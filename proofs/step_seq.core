@@ -16,55 +16,40 @@ abbrev ss.seq(v) := bits_add(8, gimple.bytes_at(v, 4228240, 1), 0)
 // the spec's bytes b with the first n of unmap_seq zeroed
 def ss.zs(b, n) := nat_rec(b, k v. fn_update(v, int_add(4228176, k), 0), n)
 abbrev ss.ws(w, n) := fn_update(w, "vm", fn_update(app(w, "vm"), "bytes", ss.zs(app(app(w, "vm"), "bytes"), n)))
-// the loop's state (the world, i): its invariant and variant
-abbrev ss.inv(w, l) := snd(l) in bits(32) && int_le(snd(l), 32) && fst(l) = ss.ws(w, snd(l)) && fst(l) in univ(1) &&
-  (all j. j in omega -> int_lt(j, snd(l)) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true))
+// the loop's state, the world s and i (from the world w at the loop's
+// entry): its invariant (the variant is 32 - i)
+abbrev ss.inv(w, s, i) := i in bits(32) && int_le(i, 32) && s = ss.ws(w, i) && s in univ(1) &&
+  (all j. j in omega -> int_lt(j, i) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true))
 
-// one pass through the loop's body keeps the invariant (unmap_seq[i] = 0)
-// and decreases the variant
-theorem ss.step: all w l. ss.inv(w, l) -> !int_lt(31, snd(l)) -> gimple.usable(app(fst(l), "vm"), int_add(4228176, snd(l)), 1, true) ->
-  ss.inv(w, pair(fn_update(fst(l), "vm", fn_update(app(fst(l), "vm"), "bytes", fn_update(app(app(fst(l), "vm"), "bytes"), int_add(4228176, snd(l)), 0))), int_add(snd(l), 1))) &&
-  int_lt(int_sub(32, int_add(snd(l), 1)), int_sub(32, snd(l)))
+// the bytes after zeroing stay in the universe (a world of them is one)
+theorem ss.zs_univ: all b. b in univ(1) -> (all n. n in omega -> ss.zs(b, n) in univ(1))
+proof
+  fix b
+  assume hb: b in univ(1)
+  have base: ss.zs(b, 0) in univ(1) by defs(simp(hb, rec({nat_rec(b, k v. fn_update(v, int_add(4228176, k), 0), 0)})), ss.zs)
+  have step: all n. n in omega -> ss.zs(b, n) in univ(1) -> ss.zs(b, int_add(n, 1)) in univ(1) proof
+    fix n
+    assume hn: n in omega
+    assume ih: ss.zs(b, n) in univ(1)
+    have r := rec({nat_rec(b, k v. fn_update(v, int_add(4228176, k), 0), int_add(n, 1))}, hn)
+    show by defs(simp(r, hn, expand(ih, ss.zs)), ss.zs)
+  qed
+  show by induct(base, step)
+qed
+
+theorem ss.ws_univ: all w n. w in univ(1) -> n in omega -> ss.ws(w, n) in univ(1)
 proof
   fix w
-  fix l
-  assume hi: ss.inv(w, l)
-  assume hlt: !int_lt(31, snd(l))
-  assume hu: gimple.usable(app(fst(l), "vm"), int_add(4228176, snd(l)), 1, true)
-  have hb: snd(l) in bits(32) by taut(hi)
-  have ho: snd(l) in omega by simp(hb)
-  have hf: fst(l) = ss.ws(w, snd(l)) by taut(hi)
-  have hh: all j. j in omega -> int_lt(j, snd(l)) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) by taut(hi)
-  have r := rec({nat_rec(app(app(w, "vm"), "bytes"), k v. fn_update(v, int_add(4228176, k), 0), int_add(snd(l), 1))}, ho)
-  have hw: fn_update(fst(l), "vm", fn_update(app(fst(l), "vm"), "bytes", fn_update(app(app(fst(l), "vm"), "bytes"), int_add(4228176, snd(l)), 0))) = ss.ws(w, int_add(snd(l), 1))
-    by defs(simp(expand(hf, ss.zs), r), ss.zs)
-  have hu1: gimple.usable(fn_update(app(w, "vm"), "bytes", ss.zs(app(app(w, "vm"), "bytes"), snd(l))), int_add(4228176, snd(l)), 1, true) by simp(rewrite(hf, hu))
-  have ub := all_elim(g.usable_bytes, {app(w, "vm")}, {ss.zs(app(app(w, "vm"), "bytes"), snd(l))}, {int_add(4228176, snd(l))}, {1}, {true})
-  have hu2: gimple.usable(app(w, "vm"), int_add(4228176, snd(l)), 1, true) by taut(hu1, ub)
-  have hh2: all j. j in omega -> int_lt(j, int_add(snd(l), 1)) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) proof
-    fix j
-    assume hj: j in omega
-    assume lt: int_lt(j, int_add(snd(l), 1))
-    have c1: int_lt(j, snd(l)) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) proof
-      assume l1: int_lt(j, snd(l))
-      show := mp(mp(all_elim(hh, {j}), hj), l1)
-    qed
-    have c2: !int_lt(j, snd(l)) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) proof
-      assume l2: !int_lt(j, snd(l))
-      have e: j = snd(l) by arith(hj, ho, lt, l2)
-      show := rewrite(sym(e), hu2)
-    qed
-    show by taut(c1, c2)
-  qed
-  have b2: int_add(snd(l), 1) in bits(32) && int_le(int_add(snd(l), 1), 32) by simp(hb, hlt)
-  have fu: fst(l) in univ(1) by taut(hi)
-  have nu: fn_update(fst(l), "vm", fn_update(app(fst(l), "vm"), "bytes", fn_update(app(app(fst(l), "vm"), "bytes"), int_add(4228176, snd(l)), 0))) in univ(1) by simp(fu, ho)
-  have dv: int_lt(int_sub(32, int_add(snd(l), 1)), int_sub(32, snd(l))) by arith(ho)
-  show by simp(b2, hw, hh2, nu, dv)
+  fix n
+  assume hw: w in univ(1)
+  assume hn: n in omega
+  have bu: app(app(w, "vm"), "bytes") in univ(1) by simp(hw)
+  have z := mp(all_elim(mp(all_elim(ss.zs_univ, {app(app(w, "vm"), "bytes")}), bu), {n}), hn)
+  show by simp(hw, z)
 qed
 
 // the loop's entry: i = 0, nothing written
-theorem ss.entry: all w. w in abi.World -> w in univ(1) -> ss.inv(w, pair(w, 0))
+theorem ss.entry: all w. w in abi.World -> w in univ(1) -> ss.inv(w, w, 0)
 proof
   fix w
   assume hW: w in abi.World
@@ -82,6 +67,66 @@ proof
   show by simp(he, hh, hw)
 qed
 
+// one pass through the loop's body keeps the invariant (unmap_seq[i] = 0)
+// and decreases the variant
+theorem ss.step: all w s i. ss.inv(w, s, i) -> !int_lt(31, i) -> gimple.usable(app(s, "vm"), int_add(4228176, i), 1, true) ->
+  ss.inv(w, fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", fn_update(app(app(s, "vm"), "bytes"), int_add(4228176, i), 0))), int_add(i, 1)) &&
+  int_lt(int_sub(32, int_add(i, 1)), int_sub(32, i))
+proof
+  fix w
+  fix s
+  fix i
+  assume hi: ss.inv(w, s, i)
+  assume hlt: !int_lt(31, i)
+  assume hu: gimple.usable(app(s, "vm"), int_add(4228176, i), 1, true)
+  have hb: i in bits(32) by taut(hi)
+  have ho: i in omega by simp(hb)
+  have hf: s = ss.ws(w, i) by taut(hi)
+  have hh: all j. j in omega -> int_lt(j, i) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) by taut(hi)
+  have r := rec({nat_rec(app(app(w, "vm"), "bytes"), k v. fn_update(v, int_add(4228176, k), 0), int_add(i, 1))}, ho)
+  have hw: fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", fn_update(app(app(s, "vm"), "bytes"), int_add(4228176, i), 0))) = ss.ws(w, int_add(i, 1))
+    by defs(simp(expand(hf, ss.zs), r), ss.zs)
+  have hu1: gimple.usable(fn_update(app(w, "vm"), "bytes", ss.zs(app(app(w, "vm"), "bytes"), i)), int_add(4228176, i), 1, true) by simp(rewrite(hf, hu))
+  have ub := all_elim(g.usable_bytes, {app(w, "vm")}, {ss.zs(app(app(w, "vm"), "bytes"), i)}, {int_add(4228176, i)}, {1}, {true})
+  have hu2: gimple.usable(app(w, "vm"), int_add(4228176, i), 1, true) by taut(hu1, ub)
+  have hh2: all j. j in omega -> int_lt(j, int_add(i, 1)) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) proof
+    fix j
+    assume hj: j in omega
+    assume lt: int_lt(j, int_add(i, 1))
+    have c1: int_lt(j, i) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) proof
+      assume l1: int_lt(j, i)
+      show := mp(mp(all_elim(hh, {j}), hj), l1)
+    qed
+    have c2: !int_lt(j, i) -> gimple.usable(app(w, "vm"), int_add(4228176, j), 1, true) proof
+      assume l2: !int_lt(j, i)
+      have e: j = i by arith(hj, ho, lt, l2)
+      show := rewrite(sym(e), hu2)
+    qed
+    show by taut(c1, c2)
+  qed
+  have b2: int_add(i, 1) in bits(32) && int_le(int_add(i, 1), 32) by simp(hb, hlt)
+  have dv: int_lt(int_sub(32, int_add(i, 1)), int_sub(32, i)) by arith(ho)
+  have su: s in univ(1) by taut(hi)
+  have nu: fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", fn_update(app(app(s, "vm"), "bytes"), int_add(4228176, i), 0))) in univ(1) by simp(su, ho)
+  show by simp(b2, hw, hh2, dv, nu)
+qed
+
+// the loop's exit (i > 31): i = 32, unmap_seq zeroed -- the loop's
+// post-state
+theorem ss.exit: all w s i. ss.inv(w, s, i) -> int_lt(31, i) -> i = 32 && s = ss.ws(w, 32)
+proof
+  fix w
+  fix s
+  fix i
+  assume hi: ss.inv(w, s, i)
+  assume hx: int_lt(31, i)
+  have hb: i in bits(32) by taut(hi)
+  have hle: int_le(i, 32) by taut(hi)
+  have e: i = 32 by arith(hb, hle, hx)
+  have hf: s = ss.ws(w, i) by taut(hi)
+  show by taut(e, rewrite(e, hf))
+qed
+
 // defined: seq can be read and written, and when it is 255 the 32 bytes of
 // unmap_seq written
 abbrev ss.defined(v) := gimple.usable(v, 4228240, 1, false) && gimple.usable(v, 4228240, 1, true) &&
@@ -91,7 +136,74 @@ abbrev ss.res(w) := ite(ss.seq(app(w, "vm")) = 255,
   fn_update(w, "vm", fn_update(app(w, "vm"), "bytes", fn_update(ss.zs(app(app(w, "vm"), "bytes"), 32), 4228240, 1))),
   fn_update(w, "vm", fn_update(app(w, "vm"), "bytes", fn_update(app(app(w, "vm"), "bytes"), 4228240, bits_add(8, gimple.bytes_at(app(w, "vm"), 4228240, 1), 1)))))
 
-// (in progress: ss.fun_ok / ss.fun_raises from
-//   spec_run({app(ss.spec, args)}, {w}, {l. ss.inv(w, l)}, {l. int_sub(32, snd(l))}, ..)
-// whose obligations ss.entry and ss.step discharge; then the machine side
-// by symex to the head 0x4024f5 and abi.run_cut, and the ABI glue)
+// the spec, from defined: seq + 1, or (seq = 255) unmap_seq zeroed and seq
+// = 1 -- the loop by its invariant, its post-state by ss.exit
+theorem ss.fun_ok: all w args y z. w in abi.World -> w in univ(1) -> args in abi.ARGS -> y in bits(64) -> z in bits(64) -> ss.defined(app(w, "vm")) ->
+  runs(app(ss.spec, args), w, ok(ss.res(w), pair(y, z)))
+proof
+  fix w
+  fix args
+  fix y
+  fix z
+  assume hW: w in abi.World
+  assume hw: w in univ(1)
+  assume hA: args in abi.ARGS
+  assume hy: y in bits(64)
+  assume hz: z in bits(64)
+  assume hd: ss.defined(app(w, "vm"))
+  have e := apply(ss.entry, hW, hw)
+  have r := spec_run({app(ss.spec, args)}, {w}, {l. ss.inv(w, fst(l), snd(l))}, {l. int_sub(32, snd(l))}, hw, hA, e, ss.step,
+    g.padd_ok, g.padd_ub, g.ld8_ok, g.ld8_ub, g.mem_at_ok, g.mem_at_ub, g.elem1_ok)
+  // (the branches: seq + 1; the loop's statement, its results y, z and its
+  // exceptions' values chosen)
+  have r1 := part(r, {1})
+  have r3 := all_elim(part(r, {3}), {y}, {z}, {w}, {empty}, {w}, {empty})
+  have c1: !(ss.seq(app(w, "vm")) = 255) -> runs(app(ss.spec, args), w, ok(ss.res(w), pair(y, z))) proof
+    assume hs: !(ss.seq(app(w, "vm")) = 255)
+    show by simp(r1, hs, hd, hy, hz, keep(c_src_malloc_mallocng_malloc.step_seq_fun))
+  qed
+  have c2: ss.seq(app(w, "vm")) = 255 -> runs(app(ss.spec, args), w, ok(ss.res(w), pair(y, z))) proof
+    assume hs: ss.seq(app(w, "vm")) = 255
+    show by simp(r3, hs, hd, hy, hz, hw, ss.exit, keep(c_src_malloc_mallocng_malloc.step_seq_fun))
+  qed
+  show by taut(c1, c2)
+qed
+
+// not defined: the spec raises (from the world it starts in, as undefined
+// behaviour allows)
+theorem ss.fun_raises: all w args e. w in abi.World -> w in univ(1) -> e in univ(1) -> args in abi.ARGS -> !ss.defined(app(w, "vm")) ->
+  runs(app(ss.spec, args), w, exc(w, e))
+proof
+  fix w
+  fix args
+  fix e
+  assume hW: w in abi.World
+  assume hw: w in univ(1)
+  assume he: e in univ(1)
+  assume hA: args in abi.ARGS
+  assume hn: !ss.defined(app(w, "vm"))
+  have ent := apply(ss.entry, hW, hw)
+  have r := spec_run({app(ss.spec, args)}, {w}, {l. ss.inv(w, fst(l), snd(l))}, {l. int_sub(32, snd(l))}, hw, hA, ent, ss.step,
+    g.padd_ok, g.padd_ub, g.ld8_ok, g.ld8_ub, g.mem_at_ok, g.mem_at_ub, g.elem1_ok)
+  // (the undefined behaviour of the increment; the loop's statement, its
+  // results any words, its exceptions' values this one)
+  have r2 := all_elim(part(r, {2}), {w}, {e})
+  have r3 := all_elim(part(r, {3}), {0}, {0}, {w}, {e}, {w}, {e})
+  have c1: !(ss.seq(app(w, "vm")) = 255) -> runs(app(ss.spec, args), w, exc(w, e)) proof
+    assume hs: !(ss.seq(app(w, "vm")) = 255)
+    show by simp(r2, hs, hn, hw, he, keep(c_src_malloc_mallocng_malloc.step_seq_fun))
+  qed
+  have c2: ss.seq(app(w, "vm")) = 255 -> runs(app(ss.spec, args), w, exc(w, e)) proof
+    assume hs: ss.seq(app(w, "vm")) = 255
+    have u1: !gimple.usable(app(w, "vm"), 4228240, 1, false) -> runs(app(ss.spec, args), w, exc(w, e)) proof
+      assume hr: !gimple.usable(app(w, "vm"), 4228240, 1, false)
+      show by simp(r2, hs, hr, hw, he, keep(c_src_malloc_mallocng_malloc.step_seq_fun))
+    qed
+    have u2: gimple.usable(app(w, "vm"), 4228240, 1, false) -> runs(app(ss.spec, args), w, exc(w, e)) proof
+      assume hr: gimple.usable(app(w, "vm"), 4228240, 1, false)
+      show by simp(r3, hs, hr, hn, hw, he, ss.exit, keep(c_src_malloc_mallocng_malloc.step_seq_fun))
+    qed
+    show by taut(u1, u2)
+  qed
+  show by taut(c1, c2)
+qed

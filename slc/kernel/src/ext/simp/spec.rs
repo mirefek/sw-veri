@@ -60,7 +60,13 @@
 //!     (ex lv. D1 && runs(P, W, O1)) || ..
 //!
 //! one disjunct per branch past the loop, its exit's conditions and its own
-//! in Di; the branches past an exit covering it is an obligation too.
+//! in Di; the branches past an exit covering it is an obligation too. The
+//! loop's state has its entry's shape: a pair of variables for a pair
+//! (`(world, i)`; `while_exists` with the invariant `l is such a pair &&
+//! I(l)`, each state the body goes on to checked to be one), so that the
+//! invariant's equations define variables. An obligation is also tried by
+//! simp, from the premises (the user's lemmas about the loop: its entry,
+//! one pass, its exit) and the conditions on the way.
 //! Parameters the body or the rest leave open (an exception value of
 //! undefined behaviour) are chosen once, for all iterations: universal,
 //! their typing among the hypotheses.
@@ -103,8 +109,21 @@ struct Br {
 struct Group {
     pre: Vec<Term>,
     hyps: Vec<Term>,
-    lv: VarId,
+    /// the variables of the state at the exit (its components, when the
+    /// loop's state is a pair)
+    lv: Vec<VarId>,
     exits: Vec<Vec<Term>>,
+}
+
+/// t with the variables vs bound by q (`all`/`ex`), those it has.
+fn bind_vars(q: SymId, t: &Term, vs: &[VarId], bf: &dyn Fn(SymId, usize) -> u32) -> Term {
+    let mut t = t.clone();
+    for v in vs.iter().rev() {
+        if has_var(&t, *v) {
+            t = Term::app(q, vec![abstract_term(&t, &Term::var(*v, vec![]), 0, bf)]);
+        }
+    }
+    t
 }
 
 struct Sr<'s, 'a> {
@@ -122,6 +141,8 @@ struct Sr<'s, 'a> {
     groups: Vec<Group>,
     /// inside an operation of the GIMPLE layer (its loops unrolled)
     op_depth: usize,
+    /// the premises as given (for simp, on a loop's obligations)
+    premises: Vec<Term>,
 }
 
 fn err<T>(m: impl Into<String>) -> Result<T, String> {
@@ -718,8 +739,12 @@ impl Sr<'_, '_> {
         if std::env::var("SPEC_DEBUG").is_ok() {
             eprintln!("spec_run: loop group {} pre {:?}", self.groups.len(), pre.iter().map(|c| self.show(&self.subst(c, &b0.a))).collect::<Vec<_>>());
         }
-        // the state lv, any with P and C
-        let (lv_id, lv) = self.var();
+        // the state lv, any with P and C -- of l0's shape: a pair of fresh
+        // variables for a pair (`while_exists` with the invariant `l is a
+        // pair of that shape && P(l)`: l0 is one, each state the body goes
+        // on to is checked to be one)
+        let mut lv_ids: Vec<VarId> = Vec::new();
+        let lv = self.shaped(&l0, &mut lv_ids);
         let pl = at(&inv, &lv);
         let cl = at(&a[1], &lv);
         let ml = inst_k(env, &var, &[lv.clone()]);
@@ -727,7 +752,7 @@ impl Sr<'_, '_> {
         let mut hyps = Vec::new();
         let omega = Term::app(s.omega.ok_or("no omega")?, vec![]);
         let in_ = s.in_.unwrap();
-        self.obligation(&ctx0, &[pl.clone()], &Term::app(in_, vec![ml.clone(), omega]), lv_id, &mut hyps);
+        self.obligation(&ctx0, &[pl.clone()], &Term::app(in_, vec![ml.clone(), omega]), &lv_ids, &mut hyps);
         // the body, once
         let (_, xo) = self.unknown();
         let body = inst_k(env, &a[2], &[lv.clone(), xo.clone()]);
@@ -781,16 +806,19 @@ impl Sr<'_, '_> {
             }
             sp.set_nats(&octx);
             let o = sp.term(&self.word(&octx, &o));
-            let core: Vec<Term> = new.iter().filter(|c| !self.param_typing(c, lv_id)).cloned().collect();
+            let core: Vec<Term> = new.iter().filter(|c| !self.param_typing(c, &lv_ids)).cloned().collect();
             cover.push(core.iter().cloned().reduce(|x, y| sp.and(x, y)).unwrap_or_else(|| sp.tt()));
             match o.node() {
                 Node::App(g, oa) if is(*g, s.ok) && oa.len() == 2 && oa[1] == empty => {
-                    // continues: P(l2), m(l2) < m(lv)
+                    // continues: P(l2), m(l2) < m(lv) -- l2 of the state's shape
                     let l2 = oa[0].clone();
+                    if !Self::same_shape(sp, &lv, &l2) {
+                        return err(format!("the loop's body goes on to a state not of its entry's shape: {}", self.show(&l2)));
+                    }
                     let goal = sp.and(at(&inv, &l2), Term::app(lt, vec![inst_k(env, &var, &[l2.clone()]), ml.clone()]));
                     let mut ants = vec![pl.clone(), cl.clone()];
                     ants.extend(new.iter().cloned());
-                    self.obligation(&ctx0, &ants, &goal, lv_id, &mut hyps);
+                    self.obligation(&ctx0, &ants, &goal, &lv_ids, &mut hyps);
                 }
                 Node::App(g, _) if is(*g, s.exc) => leaves.push((new, bb, o)),
                 _ => return err(format!("a loop's body outcome other than ok or an exception: {}", self.show(&o))),
@@ -798,7 +826,7 @@ impl Sr<'_, '_> {
         }
         // the body's branches cover P(lv) && C(lv)
         let any = cover.into_iter().reduce(|x, y| sp.or(x, y)).unwrap_or_else(|| sp.ff());
-        self.obligation(&ctx0, &[pl.clone(), cl.clone()], &any, lv_id, &mut hyps);
+        self.obligation(&ctx0, &[pl.clone(), cl.clone()], &any, &lv_ids, &mut hyps);
         // the exits
         let gid = self.groups.len();
         let mut exits: Vec<Vec<Term>> = Vec::new();
@@ -827,13 +855,41 @@ impl Sr<'_, '_> {
                 out.push(bb);
             }
         }
-        self.groups.push(Group { pre, hyps, lv: lv_id, exits });
+        self.groups.push(Group { pre, hyps, lv: lv_ids, exits });
         Ok(out)
+    }
+
+    /// A state of t's shape: a pair of such states for a pair, else a fresh
+    /// variable (pushed to vs).
+    fn shaped(&mut self, t: &Term, vs: &mut Vec<VarId>) -> Term {
+        let pair = self.sp.s.pair.unwrap();
+        match t.node() {
+            Node::App(p, x) if *p == pair && x.len() == 2 => {
+                let a = self.shaped(&x[0], vs);
+                let b = self.shaped(&x[1], vs);
+                Term::app(pair, vec![a, b])
+            }
+            _ => {
+                let (v, t) = self.var();
+                vs.push(v);
+                t
+            }
+        }
+    }
+
+    /// t has the pairs `shape` has (where shape is a pair, t is one).
+    fn same_shape(sp: &Simp, shape: &Term, t: &Term) -> bool {
+        let pair = sp.s.pair.unwrap();
+        match (shape.node(), t.node()) {
+            (Node::App(p, x), Node::App(q, y)) if *p == pair && x.len() == 2 => *q == pair && y.len() == 2 && Self::same_shape(sp, &x[0], &y[0]) && Self::same_shape(sp, &x[1], &y[1]),
+            (Node::App(p, _), _) if *p == pair => false,
+            _ => true,
+        }
     }
 
     /// An obligation `all lv. A.. -> G` (lv the loop's state): decided in
     /// the context with the A's, or kept.
-    fn obligation(&self, ctx: &[Term], ants: &[Term], goal: &Term, lv: VarId, hyps: &mut Vec<Term>) {
+    fn obligation(&self, ctx: &[Term], ants: &[Term], goal: &Term, lv: &[VarId], hyps: &mut Vec<Term>) {
         let sp = self.sp;
         let mut cx = ctx.to_vec();
         for a in ants {
@@ -853,8 +909,14 @@ impl Sr<'_, '_> {
         for a in ants.iter().rev().filter(|a| !sp.is_true(a)) {
             t = Term::app(sp.env.builtins.imp, vec![a.clone(), t]);
         }
-        let x = Term::var(lv, vec![]);
-        let t = if has_var(&t, lv) { Term::app(self.lg.all, vec![abstract_term(&t, &x, 0, &sp.env.binders_fn())]) } else { t };
+        let t = bind_vars(self.lg.all, &t, lv, &sp.env.binders_fn());
+        // (by simp, from the premises -- the user's lemmas about the loop --
+        // and the conditions on the way)
+        let mut ps = self.premises.clone();
+        ps.extend(ctx.iter().cloned());
+        if self.lg.simp_prove_loops(sp.env, &ps, &t, &[]).is_ok() {
+            return;
+        }
         if !hyps.contains(&t) {
             hyps.push(t);
         }
@@ -862,13 +924,13 @@ impl Sr<'_, '_> {
 
     /// `x in S` for a parameter x (not the loop's state) of an inhabited
     /// type: a universe or words (its typing, stated outside)
-    fn param_typing(&self, c: &Term, lv: VarId) -> bool {
+    fn param_typing(&self, c: &Term, lv: &[VarId]) -> bool {
         let sp = self.sp;
         match c.node() {
             Node::App(i, ab) if is(*i, sp.s.in_) && ab.len() == 2 => {
-                let param = matches!(ab[0].node(), Node::Var(v, va) if va.is_empty() && *v != lv && self.us.contains(v));
+                let param = matches!(ab[0].node(), Node::Var(v, va) if va.is_empty() && !lv.contains(v) && self.us.contains(v));
                 let inhabited = matches!(ab[1].node(), Node::App(u, _) if is(*u, sp.s.univ) || Some(*u) == sp.env.sym_by_name.get("bits").copied());
-                param && inhabited && !has_var(&ab[1], lv)
+                param && inhabited && !lv.iter().any(|v| has_var(&ab[1], *v))
             }
             _ => false,
         }
@@ -1086,7 +1148,7 @@ impl Logic {
             fresh = fresh.max(max_var(t) + 1);
         }
         let first = fresh;
-        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: hints.to_vec(), groups: Vec::new(), op_depth: 0 };
+        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: hints.to_vec(), groups: Vec::new(), op_depth: 0, premises: premises.to_vec() };
         let (_, ot) = sr.unknown();
         let t0 = std::time::Instant::now();
         let bs = sr.run(p, w, &ot, Br::default()).map_err(kerr)?;
@@ -1289,7 +1351,6 @@ impl Logic {
             };
             let base_a = members.first().map(|i| bs[*i].a.clone()).unwrap_or_default();
             let pre = norm(&g.pre, &base_a);
-            let lv = Term::var(g.lv, vec![]);
             let conj = |cs: &[Term]| cs.iter().cloned().reduce(|x, y| sp.and(x, y)).unwrap_or_else(|| sp.tt());
             let mut typing: Vec<Term> = Vec::new();
             let mut disj: Vec<Term> = Vec::new();
@@ -1324,7 +1385,7 @@ impl Logic {
                     if pre.contains(c) {
                         continue;
                     }
-                    if sr.param_typing(c, g.lv) {
+                    if sr.param_typing(c, &g.lv) {
                         if !typing.contains(c) {
                             typing.push(c.clone());
                         }
@@ -1336,7 +1397,7 @@ impl Logic {
                 post[e].push(conj(&after));
                 exit_d[e].get_or_insert(dex);
                 let body = sp.and(conj(&d), Term::app(runs, vec![p.clone(), w.clone(), o.clone()]));
-                disj.push(if has_var(&body, g.lv) { Term::app(self.ex, vec![abstract_term(&body, &lv, 0, &bf)]) } else { body });
+                disj.push(bind_vars(self.ex, &body, &g.lv, &bf));
             }
             // (each exit covered by the branches past it)
             let mut hyps = g.hyps.clone();
@@ -1346,7 +1407,7 @@ impl Logic {
                 let ctx: Vec<Term> = sr.facts.iter().chain(&pre).chain(&dex).cloned().collect();
                 if sr.decide_in(&ctx, &goal, 2) != Some(true) {
                     let t = Term::app(imp, vec![conj(&dex), goal]);
-                    let t = if has_var(&t, g.lv) { Term::app(self.all, vec![abstract_term(&t, &lv, 0, &bf)]) } else { t };
+                    let t = bind_vars(self.all, &t, &g.lv, &bf);
                     if !hyps.contains(&t) {
                         hyps.push(t);
                     }
@@ -1363,7 +1424,7 @@ impl Logic {
                 }
                 let Node::Var(v, va) = ab[0].node() else { return false };
                 let inhabited = matches!(ab[1].node(), Node::App(u, _) if is(*u, sp.s.univ) || Some(*u) == env.sym_by_name.get("bits").copied());
-                va.is_empty() && *v >= first && *v != g.lv && inhabited && !has_var(&body, *v) && conds.iter().filter(|d| has_var(d, *v)).count() == 1
+                va.is_empty() && *v >= first && !g.lv.contains(v) && inhabited && !has_var(&body, *v) && conds.iter().filter(|d| has_var(d, *v)).count() == 1
             };
             let mut t = body.clone();
             for c in conds.iter().rev().filter(|c| !only_typed(c)) {

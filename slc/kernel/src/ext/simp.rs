@@ -147,7 +147,13 @@
 //! for an equation C (possibly n = 0), xs may also be bound by matching its
 //! left side against terms of the path or goal, and for a run C by matching
 //! C against the goal (`all o. o in univ(1) -> runs(P, s, o)`: an outcome
-//! no literal has), its hypotheses then shown. The goal is rewritten with
+//! no literal has), its hypotheses then shown -- with the path's
+//! definitions of variables (`x = t`) put in, a hypothesis `x in omega`
+//! also met by a literal `x in bits(k)`. C is added unless known (a literal,
+//! or by taut from the literals other than the rule: a disjunction C is
+//! then split into its cases). A goal `all xs. A1 -> .. -> C` that simp
+//! does not show as it is, is tried once more opened: the xs fresh, the
+//! A's premises, C the goal (introduction). The goal is rewritten with
 //! the path's equations `x = t` / `t = x` (x a variable) and `a = b` (left
 //! to right), again while it changes (simplified, it may show a rewritten
 //! term anew), with the goal-side rule for equations of update chains.
@@ -4324,10 +4330,25 @@ impl Simp<'_> {
         for t in p.lits.iter().chain([goal]) {
             self.subterms(t, &mut subs);
         }
+        // (the literals to match a rule's hypotheses against: also `t in
+        // omega` for a word t, `t in bits(k)` -- words are naturals)
+        let mut match_lits = p.lits.clone();
+        if let (Some(in_), Some(omega)) = (self.s.in_, self.s.omega) {
+            for l in &p.lits {
+                if let Node::App(i, ab) = l.node() {
+                    if is(*i, Some(in_)) && ab.len() == 2 && matches!(ab[1].node(), Node::App(b, _) if self.env.syms[*b as usize].name == "bits") {
+                        let t = Term::app(in_, vec![ab[0].clone(), Term::app(omega, vec![])]);
+                        if !match_lits.contains(&t) {
+                            match_lits.push(t);
+                        }
+                    }
+                }
+            }
+        }
         for l in &p.lits {
             let Some((vs, hyps, concl)) = self.rule(l, fresh) else { continue };
             let mut insts = Vec::new();
-            instances(&hyps, 0, &p.lits, &vs, Vec::new(), Vec::new(), &mut insts);
+            instances(&hyps, 0, &match_lits, &vs, Vec::new(), Vec::new(), &mut insts);
             // variables only in the conclusion `lhs = rhs`: from the terms
             let lhs = match concl.node() {
                 Node::App(e, ab) if *e == self.s.eq => Some(ab[0].clone()),
@@ -4417,6 +4438,19 @@ impl Simp<'_> {
                             }
                         }
                     }
+                    // (and the path's definitions of variables, `x = t`: the
+                    // literals have t for x)
+                    for l in &p.lits {
+                        if let Node::App(e, ab) = l.node() {
+                            if *e == self.s.eq && ab.len() == 2 {
+                                if let Node::Var(v, va) = ab[0].node() {
+                                    if va.is_empty() && !has_var(&ab[1], *v) && has_var(&h, *v) {
+                                        h = self.prop(&h.subst_var(*v, &ab[1], &bf), Pol::Other);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let h = &h;
                     if self.is_false(h) || self.is_true(h) {
                         return self.is_true(h);
@@ -4472,7 +4506,11 @@ impl Simp<'_> {
                     continue;
                 }
                 let c = inst(&concl);
-                if self.is_true(&c) || p.done.contains(&c) || lg.tautology(self.env, &p.lits, &c).is_ok() {
+                // (known: a literal, or by taut from the literals -- not the
+                // rule itself, which with its hypotheses gives c by modus
+                // ponens, c then never split into its cases)
+                let others: Vec<Term> = p.lits.iter().filter(|x| *x != l).cloned().collect();
+                if self.is_true(&c) || p.done.contains(&c) || lg.tautology(self.env, &others, &c).is_ok() {
                     continue;
                 }
                 return Some(c);
@@ -4799,7 +4837,37 @@ impl Logic {
         for t in premises.iter().chain([goal]).chain(hints.iter().flat_map(|h| [&h.inv].into_iter().chain(&h.var))) {
             fresh = fresh.max(max_var(t) + 1);
         }
-        self.prove_paths(env, premises, goal, hints, &mut fresh)
+        let first = self.prove_paths(env, premises, goal, hints, &mut fresh);
+        if first.is_ok() {
+            return first;
+        }
+        // else, a goal `all xs. A1 -> .. -> An -> C`: C, the xs fresh, the
+        // A's premises (introduction; the xs occur nowhere else)
+        let mut g = goal.clone();
+        let mut prem = premises.to_vec();
+        let mut opened = false;
+        loop {
+            match g.node() {
+                Node::App(q, a) if *q == self.all && a.len() == 1 => {
+                    g = inst_k(env, &a[0], &[Term::var(fresh, vec![])]);
+                    fresh += 1;
+                }
+                Node::App(i, a) if *i == env.builtins.imp && a.len() == 2 => {
+                    prem.push(a[0].clone());
+                    g = a[1].clone();
+                }
+                _ => break,
+            }
+            opened = true;
+        }
+        if opened {
+            match self.prove_paths(env, &prem, &g, hints, &mut fresh) {
+                Ok(()) => return Ok(()),
+                Err(e) if std::env::var("SIMP_INTRO").is_ok() => eprintln!("simp: after introduction: {}", e.0),
+                Err(_) => {}
+            }
+        }
+        first
     }
 
     /// The premises that unfold a defined symbol: `all x1 .. xn. f(x1, ..,

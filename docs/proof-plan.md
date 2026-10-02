@@ -558,11 +558,21 @@ count as if a variable, on both sides:
   head H with `run_from`, and starts from one. step_seq: entry to the head
   0x4024f5 runs.
 
-Open for step_seq's C1: `ss.fun_ok`/`ss.fun_raises` from spec_run's
-loop statement (one simp call over the disjunction of exits explodes: to
-be taken apart by exit), the machine invariant at the head (rip, rsp, the
+The general theorems about loops (core/loop.core): `while_cases` -- every
+run stops, leaves through its body (an exception), or diverges
+(`diverge(t)`); `while_inv` / `while_var` -- the same with an invariant,
+divergence ruled out by a variant; `while_exists` -- a run that exists
+(spec side). For step_seq's loop, its post-state `ss.exit` (i = 32,
+unmap_seq zeroed), with `ss.entry`, `ss.step` the lemmas spec_run proves
+its obligations by; the spec is then `ss.fun_ok` (defined: the world
+`ss.res(w)`) and `ss.fun_raises` (not defined: a raise), each a few
+simp calls over spec_run's statement, its parameters chosen (`part(r,
+{k})`, `all_elim`).
+
+Open for step_seq's C1: the machine invariant at the head (rip, rsp, the
 memory `store_le(zm(b, i), slot, 4, i)` with the machine's zeroed bytes
-`zm` likewise by `nat_rec`), and the ABI glue (`abi.ret_case`).
+`zm` likewise by `nat_rec`), symex around the loop with `abi.run_cut`,
+and the ABI glue (`abi.ret_case`).
 
 ### 6.3 Simulation, block by block
 

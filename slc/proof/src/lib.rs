@@ -972,6 +972,36 @@ impl State {
                         Seq::gen(env, lg, &p, v)
                     }
                     // all_elim(p, {t1}, .., {tn})
+                    // part(p, {k}): the k-th conjunct (from 1) of p's
+                    // `A1 && (A2 && ..)`, by taut
+                    "part" => {
+                        let p = self.proof_arg(env, lg, a0)?;
+                        let k = match self.term_arg(env, args.get(1), 0)?.node() {
+                            Node::Nat(n) => n.to_u64().unwrap_or(0) as usize,
+                            _ => 0,
+                        };
+                        let and_s: SymId = env.sym_by_name.get("and").copied().ok_or_else(|| KernelError("part: no `and`".into()))?;
+                        let mut t = p.concl().clone();
+                        let mut i = 1;
+                        loop {
+                            match t.node() {
+                                Node::App(a, x) if *a == and_s && x.len() == 2 && i < k => {
+                                    t = x[1].clone();
+                                    i += 1;
+                                }
+                                Node::App(a, x) if *a == and_s && x.len() == 2 && i == k => {
+                                    t = x[0].clone();
+                                    break;
+                                }
+                                _ if i == k => break,
+                                _ => return err(format!("part: no conjunct {} (of {})", k, i)),
+                            }
+                        }
+                        if k == 0 {
+                            return err("part: conjuncts are counted from 1");
+                        }
+                        Seq::taut(env, lg, &[&p], &t)
+                    }
                     "all_elim" => {
                         let mut p = self.proof_arg(env, lg, a0)?;
                         if args.len() < 2 {
