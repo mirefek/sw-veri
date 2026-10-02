@@ -513,3 +513,115 @@ proof
   qed
   show by defs(simp(hx, bs, keep(abi.scratch, abi.scratch_page, abi.stack_page, x86_64_linux.store_le)), abi.world_matches)
 qed
+
+// The coupling at a loop's head: the machine's bytes and the world's agree
+// outside the scratch area (the frame, below the return address)
+def abi.agree(old, sp, b1, b2) := all a. a in bits(64) -> !abi.scratch(old, sp, a) -> app(b1, a) = app(b2, a)
+
+theorem abi.agree_refl: all old sp b. abi.agree(old, sp, b, b)
+proof
+  fix old
+  fix sp
+  fix b
+  show by defs(simp(), abi.agree)
+qed
+
+// a store to the slot (scratch) keeps the agreement
+theorem abi.agree_slot: all old b1 b2 sp c n x. sp in bits(64) -> abi.stack_page(old, int_div(sp, 4096)) -> int_mod(bits_add(64, sp, 8), 16) = 0 -> int_lt(sp, 140737488355328) ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  abi.agree(old, bits_add(64, sp, 8), b1, b2) -> abi.agree(old, bits_add(64, sp, 8), x86_64_linux.store_le(b1, bits_add(64, sp, c), n, x), b2)
+proof
+  fix old
+  fix b1
+  fix b2
+  fix sp
+  fix c
+  fix n
+  fix x
+  assume h1: sp in bits(64)
+  assume h2: abi.stack_page(old, int_div(sp, 4096))
+  assume h3: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume h4: int_lt(sp, 140737488355328)
+  assume hc: c in bits(64)
+  assume hk: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  assume ha: abi.agree(old, bits_add(64, sp, 8), b1, b2)
+  have hx := expand(ha, abi.agree)
+  have bs: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(x86_64_linux.store_le(b1, bits_add(64, sp, c), n, x), a) = app(b2, a) proof
+    fix a
+    assume hb: a in bits(64)
+    assume hs: !abi.scratch(old, bits_add(64, sp, 8), a)
+    have o1 := apply(abi.slot_out, {old}, {b1}, {sp}, {c}, {n}, {x}, {a}, h1, h2, h3, h4, hc, hk, hn, hb, hs)
+    show := trans(o1, mp(mp(all_elim(hx, {a}), hb), hs))
+  qed
+  show by defs(simp(bs, keep(abi.scratch, x86_64_linux.store_le)), abi.agree)
+qed
+
+// the same byte stored on both sides keeps the agreement
+theorem abi.agree_st1: all old sp b1 b2 a x y. a in bits(64) -> y = bits_of_int(8, x) -> abi.agree(old, sp, b1, b2) ->
+  abi.agree(old, sp, x86_64_linux.store_le(b1, a, 1, x), fn_update(b2, a, y))
+proof
+  fix old
+  fix sp
+  fix b1
+  fix b2
+  fix a
+  fix x
+  fix y
+  assume ha: a in bits(64)
+  assume hy: y = bits_of_int(8, x)
+  assume hg: abi.agree(old, sp, b1, b2)
+  have hx := expand(hg, abi.agree)
+  have bs: all z. z in bits(64) -> !abi.scratch(old, sp, z) -> app(x86_64_linux.store_le(b1, a, 1, x), z) = app(fn_update(b2, a, y), z) proof
+    fix z
+    assume hz: z in bits(64)
+    assume hs: !abi.scratch(old, sp, z)
+    have ab := mp(app_fn_build[d := bits(64), v := u. ite(int_lt(bits_sub(64, u, a), 1), bits_of_int(8, int_div(x, int_pow(256, bits_sub(64, u, a)))), app(b1, u)), a := z], hz)
+    have e1: z = a -> app(x86_64_linux.store_le(b1, a, 1, x), z) = app(fn_update(b2, a, y), z) proof
+      assume he: z = a
+      show by defs(simp(ab, he, hy, ha), x86_64_linux.store_le)
+    qed
+    have e2: !(z = a) -> app(x86_64_linux.store_le(b1, a, 1, x), z) = app(fn_update(b2, a, y), z) proof
+      assume hn: !(z = a)
+      have d: !int_lt(bits_sub(64, z, a), 1) by simp(hn, hz, ha)
+      have r := mp(mp(all_elim(hx, {z}), hz), hs)
+      have u := mp(app_update_other[f := b2, k := a, v := y, x := z], hn)
+      show by defs(simp(ab, hn, d, r, u), x86_64_linux.store_le)
+    qed
+    show by taut(e1, e2)
+  qed
+  show by defs(simp(bs, keep(abi.scratch, x86_64_linux.store_le)), abi.agree)
+qed
+
+// at the return: the agreement is the world's match
+theorem abi.agree_wm: all old sp b1 b2. abi.agree(old, sp, b1, b2) -> abi.world_matches(old, fn_update(old, "bytes", b1), fn_update(old, "bytes", b2), sp)
+proof
+  fix old
+  fix sp
+  fix b1
+  fix b2
+  assume hg: abi.agree(old, sp, b1, b2)
+  have hx := expand(hg, abi.agree)
+  show by defs(simp(hx, keep(abi.scratch, abi.scratch_page, abi.stack_page)), abi.world_matches)
+qed
+
+// The bridge's loop rule (open: the library's general loop lemma, as
+// core/loop.core's). A relation R between the machine at a loop's head and
+// the spec's loop state, the coupling, such that from every coupled pair
+// the machine either reaches the head again (after a step) where the spec's
+// body goes on to a coupled state, or leaves with an outcome o that Q
+// relates to the way r the spec's loop leaves; and the coupled states have
+// the same trace (the OS's events). Then from a coupled pair the machine's
+// outcome is Q-related to the loop's, or both diverge -- with the same
+// trace: a terminating machine run passes the head finitely often
+// (induction on the passes); a diverging one, infinitely often (segments
+// are finite), and the spec's loop then runs the matching iterations
+// forever, its trace the limit of the same events.
+lemma abi.loop_sim(m0, l. c, l o. b, l. tr, m l. rr, o r. q):
+  (all m l. rr(m, l) -> (all o. abi.run_from(m0, m, o) ->
+    (c(l) && (ex m2 o2 l2. abi.run_from(m0, m2, o2) && fst(o2) = fst(o) && (!(fst(o) = 2) -> o2 = o) && b(l, ok(l2, empty)) && rr(m2, l2))) ||
+    (ex r. ((c(l) && b(l, r) && !is_ok(r)) || (!c(l) && r = ok(l, empty))) && q(o, r)))) ->
+  (all m l. rr(m, l) -> tr(l) = fn_update(empty, "os.events", app(app(m, "os"), "events"))) ->
+  (all m l o. rr(m, l) -> abi.run_from(m0, m, o) ->
+    (ex r. while_rel(l, l. c(l), l o. b(l, o), l. tr(l), r) && q(o, r)) ||
+    (ex t. o = diverge(t) && while_rel(l, l. c(l), l o. b(l, o), l. tr(l), diverge(t))))

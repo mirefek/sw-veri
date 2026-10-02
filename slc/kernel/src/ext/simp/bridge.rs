@@ -130,6 +130,28 @@ impl Logic {
         // holding args (all six: v is a witness only, its obligations shown
         // below -- where a register is no argument, its store is scratch)
         let vm0 = field(&s, b"vm");
+        if std::env::var("BRIDGE_SPEC_ONLY").is_ok() {
+            let conj = |cs: &[Term]| cs.iter().cloned().reduce(|a, b| Term::app(sp.s.and.unwrap(), vec![a, b])).unwrap_or_else(|| sp.tt());
+            let out = self.spec_run_cut(env, p, &view(&vm0), premises)?;
+            for (c, o) in &out.branches {
+                eprintln!("branch: {} => {}", short(&conj(c)), short(o));
+            }
+            if let Some(cut) = &out.cut {
+                eprintln!("cut: l0 = {}; pre = {}", short(&cut.l0), short(&conj(&cut.pre)));
+                for (e, vs, bs) in &cut.exits {
+                    eprintln!("  exit {} ({} params): {} branches", short(e), vs.len(), bs.len());
+                    for (c, o) in bs {
+                        eprintln!("    {} => {}", short(&conj(c)), short(o));
+                    }
+                }
+                let it = self.spec_iter(env, cut, premises, self.bridge_fresh(env, premises, &out.statement))?;
+                eprintln!("iteration from {}:", short(&it.lv));
+                for (c, o, on) in &it.branches {
+                    eprintln!("  {} => {} {}", short(&conj(c)), short(o), if *on { "(on)" } else { "(out)" });
+                }
+            }
+            return Err(kerr("BRIDGE_SPEC_ONLY".into()));
+        }
         let v = {
             let mut gpr = field(&s, b"gpr");
             let mut facts = premises.to_vec();

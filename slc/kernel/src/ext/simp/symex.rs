@@ -57,6 +57,8 @@ struct XPath {
     vars: Vec<VarId>,
     /// it has taken a step (a stop applies only then)
     moved: bool,
+    /// the addresses it has been at (the head-finding mode)
+    seen: Vec<u128>,
 }
 
 impl Logic {
@@ -184,6 +186,7 @@ impl Logic {
         let (stop_at, run_from) = stops;
         let [app, ok, empty, le, badd, code_at, eq] = syms;
         let prologue = self.symex_prologue.borrow().is_some();
+        let head_mode = self.symex_head.borrow().is_some();
         // (at the bridge: premises and conditions also in the word forms)
         let bridge = !self.symex_simp.borrow().is_empty();
         let err = |m: String| Err(crate::env::KernelError(format!("symex: {}", m)));
@@ -227,7 +230,7 @@ impl Logic {
         for t in facts.iter().chain([m0, s0, o0]) {
             fresh = fresh.max(max_var(t) + 1);
         }
-        let mut work = vec![XPath { state: s0.clone(), conds: Vec::new(), code: codes, vars: Vec::new(), moved: false }];
+        let mut work = vec![XPath { state: s0.clone(), conds: Vec::new(), code: codes, vars: Vec::new(), moved: false, seen: Vec::new() }];
         let mut done: Vec<XPath> = Vec::new();
         // (paths at a stop address, after a step at least)
         let mut stopped: Vec<XPath> = Vec::new();
@@ -275,6 +278,14 @@ impl Logic {
                 }) else {
                     return err(format!("rip is not known: {}", short(&rip)));
                 };
+                // (the head-finding mode: the first address a path is at twice)
+                if head_mode {
+                    if p.seen.contains(&addr) {
+                        *self.symex_head.borrow_mut() = Some(Some(addr));
+                        return Ok(sp.tt());
+                    }
+                    p.seen.push(addr);
+                }
                 // a stop: the run from here
                 if p.moved && stop_at.contains(&addr) {
                     stopped.push(p);
@@ -321,7 +332,7 @@ impl Logic {
                 sp.disjuncts(&inst(&lem.concl), &mut alts);
                 let mut next: Vec<XPath> = Vec::new();
                 for alt in alts {
-                    let mut q = XPath { state: s.clone(), conds: p.conds.clone(), code: Vec::new(), vars: p.vars.clone(), moved: true };
+                    let mut q = XPath { state: s.clone(), conds: p.conds.clone(), code: Vec::new(), vars: p.vars.clone(), moved: true, seen: p.seen.clone() };
                     // (values the model leaves open: fresh, existential in the result)
                     let mut body = alt;
                     while let Node::App(x, b) = body.node() {

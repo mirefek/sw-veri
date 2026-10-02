@@ -143,6 +143,46 @@ struct Sr<'s, 'a> {
     op_depth: usize,
     /// the premises as given (for simp, on a loop's obligations)
     premises: Vec<Term>,
+    /// the bridge's cut at the loop (`cut_loop`): on, and the loop found
+    cut_mode: bool,
+    cut: Option<CutRec>,
+}
+
+/// The loop the bridge cuts at: `while_rel(l0, C, B, T, r)` reached with the
+/// conditions pre; the program goes on from each way of leaving it, r one of
+/// the exits E (its state and value parameters).
+#[derive(Clone)]
+struct CutRec {
+    l0: Term,
+    args: Vec<Term>,
+    pre: Vec<Term>,
+    pre_a: Assign,
+    exits: Vec<(Term, Vec<VarId>)>,
+}
+
+/// The loop cut at, for the bridge: its entry state and conditions, its
+/// condition, body and trace (binders as in `while_rel`), and per exit E
+/// (`ok(lx, empty)`, `exc(lx, pair("brk", empty))`, `exc(lx, pair("ret",
+/// v))`, `exc(lx, pair("raise", e))`) its parameters and the program's
+/// branches from there (conditions, outcome) -- stated in the statement as
+/// `C.. -> while_rel(l0, C, B, T, E) -> runs(P, W, O)`.
+/// One iteration of the cut loop (`spec_iter`): the state lv (its
+/// variables), and per branch its conditions, outcome, and whether it goes
+/// on (`ok(l2, empty)` from the body).
+pub(super) struct IterOut {
+    pub lv: Term,
+    pub lv_ids: Vec<VarId>,
+    pub branches: Vec<(Vec<Term>, Term, bool)>,
+    pub first: u32,
+}
+
+pub(super) struct CutOut {
+    pub l0: Term,
+    pub cond: Term,
+    pub body: Term,
+    pub trace: Term,
+    pub pre: Vec<Term>,
+    pub exits: Vec<(Term, Vec<VarId>, Vec<(Vec<Term>, Term)>)>,
 }
 
 fn err<T>(m: impl Into<String>) -> Result<T, String> {
@@ -759,6 +799,9 @@ impl Sr<'_, '_> {
             return err(format!("{}{}", UNSOLVED, self.show(&p)));
         }
         if Some(f) == sp.env.sym_by_name.get("while_rel").copied() && x.len() == 5 && !self.open(&x[0], &br.a) {
+            if self.cut_mode && self.op_depth == 0 {
+                return self.cut_loop(x, br);
+            }
             if !self.hints.is_empty() && self.op_depth == 0 {
                 return self.run_loop_inv(x, br);
             }
@@ -804,6 +847,44 @@ impl Sr<'_, '_> {
             return self.solve(&q, br);
         }
         err(format!("{}{}", UNSOLVED, self.show(&p)))
+    }
+
+    /// The bridge's cut at a loop `while_rel(l0, l. C, l o. B, l. T, r)`:
+    /// recorded, and the program on from each exit E -- r = E, E's state of
+    /// l0's shape, its parameters fresh (marked as the cut's group, exit k).
+    fn cut_loop(&mut self, a: &[Term], br: Br) -> Result<Vec<Br>, String> {
+        if self.cut.is_some() {
+            return err(format!("{}a second loop (the bridge cuts at one loop yet)", UNSOLVED));
+        }
+        let sp = self.sp;
+        let s = &sp.s;
+        let l0 = sp.term(&self.subst(&a[0], &br.a));
+        let empty = Term::app(s.empty.unwrap(), vec![]);
+        let (ok, exc, pair) = (s.ok.unwrap(), s.exc.unwrap(), s.pair.unwrap());
+        let mut exits = Vec::new();
+        let mut out = Vec::new();
+        for k in 0..4usize {
+            let mut vs = Vec::new();
+            let lx = self.shaped(&l0, &mut vs);
+            let e = match k {
+                0 => Term::app(ok, vec![lx, empty.clone()]),
+                1 => Term::app(exc, vec![lx, Term::app(pair, vec![Term::bytes(b"brk"), empty.clone()])]),
+                _ => {
+                    let (v, x) = self.var();
+                    vs.push(v);
+                    let tag: &[u8] = if k == 2 { b"ret" } else { b"raise" };
+                    Term::app(exc, vec![lx, Term::app(pair, vec![Term::bytes(tag), x])])
+                }
+            };
+            exits.push((e.clone(), vs));
+            let mut b = br.clone();
+            b.group = Some((usize::MAX, k));
+            if self.unify(&a[4], &e, &mut b)? == Some(true) {
+                out.push(b);
+            }
+        }
+        self.cut = Some(CutRec { l0, args: a[1..4].to_vec(), pre: br.conds.clone(), pre_a: br.a.clone(), exits });
+        Ok(out)
     }
 
     /// A loop `while_rel(l0, l. C, l o. B, l. T, r)` from a known state, an
@@ -1310,6 +1391,7 @@ pub(super) struct SpecOut {
     pub branches: Vec<(Vec<Term>, Term)>,
     pub ub: Option<Term>,
     pub first: u32,
+    pub cut: Option<CutOut>,
 }
 
 impl Logic {
@@ -1321,12 +1403,110 @@ impl Logic {
 
     pub(super) fn spec_run_out(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<SpecOut> {
         *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
-        let r = self.spec_run_with(env, p, w, hints, premises);
+        let r = self.spec_run_with(env, p, w, hints, premises, false);
         self.simp_rewrites.borrow_mut().clear();
         r
     }
 
-    fn spec_run_with(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<SpecOut> {
+    /// spec_run cut at the program's loop (for the bridge: `SpecOut::cut`)
+    pub(super) fn spec_run_cut(&self, env: &Env, p: &Term, w: &Term, premises: &[Term]) -> KResult<SpecOut> {
+        *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
+        let r = self.spec_run_with(env, p, w, &[], premises, true);
+        self.simp_rewrites.borrow_mut().clear();
+        r
+    }
+
+    /// One iteration of the cut loop from a state lv of l0's shape (fresh
+    /// variables, from `fresh` up): its branches -- conditions on lv and
+    /// the outcome: `ok(l2, empty)` (on, to l2) where C(lv) holds and the
+    /// body goes on, or a way out: `ok(lv, empty)` where C(lv) fails, the
+    /// body's exception where it leaves. (For the bridge: C(lv) && B(lv, O)
+    /// on each of the body's branches, as spec_run derives them.)
+    pub(super) fn spec_iter(&self, env: &Env, cut: &CutOut, premises: &[Term], fresh: u32) -> KResult<IterOut> {
+        let kerr = |m: String| crate::env::KernelError(format!("spec_run (an iteration): {}", m));
+        let sp = Simp::new(env, self);
+        let runs = sp.s.runs.ok_or_else(|| kerr("no `runs`".into()))?;
+        let mut lemmas = Vec::new();
+        let mut facts = Vec::new();
+        for t in premises {
+            let mut c = t.clone();
+            let mut quantified = false;
+            while let Node::App(a, b) = c.node() {
+                if *a != self.all {
+                    break;
+                }
+                quantified = true;
+                c = b[0].clone();
+            }
+            while let Node::App(i, ab) = c.node() {
+                if *i != env.builtins.imp {
+                    break;
+                }
+                c = ab[1].clone();
+            }
+            if quantified && matches!(c.node(), Node::App(r, _) if *r == runs) {
+                lemmas.push(t.clone());
+            } else {
+                sp.conjuncts(&self.simp_fact(env, t), &mut facts);
+            }
+        }
+        let mut fresh = fresh;
+        for t in premises.iter().chain([&cut.l0, &cut.cond, &cut.body]) {
+            fresh = fresh.max(max_var(t) + 1);
+        }
+        let first = fresh;
+        *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
+        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: Vec::new(), groups: Vec::new(), op_depth: 0, premises: premises.to_vec(), cut_mode: false, cut: None };
+        let mut lv_ids = Vec::new();
+        let lv = sr.shaped(&cut.l0, &mut lv_ids);
+        let s = &sp.s;
+        let empty = Term::app(s.empty.unwrap(), vec![]);
+        let c = sp.prop(&inst_k(env, &cut.cond, &[lv.clone()]), Pol::Other);
+        let mut raw: Vec<(Br, Term, bool)> = Vec::new();
+        // (C fails: out, at lv)
+        if !sp.is_true(&c) {
+            for b in sr.with_cond(&sp.not(c.clone()), Br::default()) {
+                raw.push((b, Term::app(s.ok.unwrap(), vec![lv.clone(), empty.clone()]), false));
+            }
+        }
+        // (C holds: the body)
+        let start = if sp.is_true(&c) { vec![Br::default()] } else { sr.with_cond(&c, Br::default()) };
+        let r = (|| -> Result<(), String> {
+            for b in start {
+                let (_, xo) = sr.unknown();
+                let body = inst_k(env, &cut.body, &[lv.clone(), xo.clone()]);
+                for bb in sr.solve(&body, b)? {
+                    let o = sp.term(&sr.subst(&xo, &bb.a));
+                    let on = matches!(o.node(), Node::App(g, oa) if is(*g, s.ok) && oa.len() == 2 && oa[1] == empty);
+                    raw.push((bb, o, on));
+                }
+            }
+            Ok(())
+        })();
+        self.simp_rewrites.borrow_mut().clear();
+        r.map_err(kerr)?;
+        let mut branches = Vec::new();
+        for (b, o, on) in raw {
+            let mut conds: Vec<Term> = Vec::new();
+            sp.set_nats(&sr.facts);
+            for c in &b.conds {
+                let mut cs = Vec::new();
+                sp.conjuncts(&sp.prop(&sr.word(&sr.facts, &sr.subst(c, &b.a)), Pol::Other), &mut cs);
+                for c in cs {
+                    if !sp.is_true(&c) && !conds.contains(&c) && !sr.facts.contains(&c) {
+                        conds.push(c);
+                    }
+                }
+            }
+            let ctx: Vec<Term> = sr.facts.iter().chain(&conds).cloned().collect();
+            sp.set_nats(&ctx);
+            let o = sr.word(&ctx, &sr.subst(&o, &b.a));
+            branches.push((conds, o, on));
+        }
+        Ok(IterOut { lv, lv_ids, branches, first })
+    }
+
+    fn spec_run_with(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term], cut_mode: bool) -> KResult<SpecOut> {
         let kerr = |m: String| crate::env::KernelError(format!("spec_run: {}", m));
         let sp = Simp::new(env, self);
         let runs = sp.s.runs.ok_or_else(|| kerr("no `runs`".into()))?;
@@ -1360,7 +1540,7 @@ impl Logic {
             fresh = fresh.max(max_var(t) + 1);
         }
         let first = fresh;
-        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: hints.to_vec(), groups: Vec::new(), op_depth: 0, premises: premises.to_vec() };
+        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: hints.to_vec(), groups: Vec::new(), op_depth: 0, premises: premises.to_vec(), cut_mode, cut: None };
         let (_, ot) = sr.unknown();
         let t0 = std::time::Instant::now();
         let bs = sr.run(p, w, &ot, Br::default()).map_err(kerr)?;
@@ -1649,6 +1829,30 @@ impl Logic {
             }
             ts.push(t);
         }
+        // the branches past the bridge's cut: `C.. -> while_rel(l0, C, B, T,
+        // E) -> runs(P, W, O)` (the program, the loop leaving by E)
+        let mut cut_out = None;
+        if let (Some(c), Some(wr)) = (&sr.cut, env.sym_by_name.get("while_rel").copied()) {
+            let mut exits: Vec<(Term, Vec<VarId>, Vec<(Vec<Term>, Term)>)> = c.exits.iter().map(|(e, vs)| (e.clone(), vs.clone(), Vec::new())).collect();
+            for (i, (kept, o)) in done.iter().enumerate() {
+                let Some((usize::MAX, k)) = bs[i].group else { continue };
+                let l0 = sp.term(&sr.subst(&c.l0, &bs[i].a));
+                let lp = Term::app(wr, vec![l0, c.args[0].clone(), c.args[1].clone(), c.args[2].clone(), exits[k].0.clone()]);
+                let mut t = Term::app(env.builtins.imp, vec![lp, Term::app(runs, vec![p.clone(), w.clone(), o.clone()])]);
+                for cc in kept.iter().rev() {
+                    t = Term::app(env.builtins.imp, vec![cc.clone(), t]);
+                }
+                ts.push(t);
+                exits[k].2.push((kept.clone(), o.clone()));
+            }
+            sp.set_nats(&sr.facts);
+            let mut pre = Vec::new();
+            for cc in &c.pre {
+                sp.conjuncts(&sp.prop(&sr.word(&sr.facts, &sr.subst(cc, &c.pre_a)), Pol::Other), &mut pre);
+            }
+            pre.retain(|x| !sp.is_true(x));
+            cut_out = Some(CutOut { l0: sp.term(&sr.subst(&c.l0, &c.pre_a)), cond: c.args[0].clone(), body: c.args[1].clone(), trace: c.args[2].clone(), pre, exits });
+        }
         // (the values left open, among them an outcome undefined behaviour
         // leaves open: parameters)
         let ts: Vec<Term> = ts
@@ -1667,6 +1871,6 @@ impl Logic {
             .collect();
         let statement = ts.into_iter().rev().reduce(|r, t| Term::app(and, vec![t, r])).unwrap();
         let branches = done.into_iter().enumerate().filter(|(i, _)| bs[*i].group.is_none() && !gone.contains(i)).map(|(_, b)| b).collect();
-        Ok(SpecOut { statement, branches, ub: ub_d, first })
+        Ok(SpecOut { statement, branches, ub: ub_d, first, cut: cut_out })
     }
 }

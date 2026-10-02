@@ -42,6 +42,9 @@ pub struct Logic {
     /// to the first access to memory not at the entry's rsp, a branch or
     /// the return, and leaves the state there in it
     pub symex_prologue: std::cell::RefCell<Option<Option<Term>>>,
+    /// the head-finding mode of symex (the bridge): `Some(None)` runs to
+    /// the first address a path is at twice, and leaves it there
+    pub symex_head: std::cell::RefCell<Option<Option<u128>>>,
 }
 
 impl Logic {
@@ -69,6 +72,7 @@ impl Logic {
             simp_rewrites: Default::default(),
             symex_simp: Default::default(),
             symex_prologue: Default::default(),
+            symex_head: Default::default(),
         })
     }
 
