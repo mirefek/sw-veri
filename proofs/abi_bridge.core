@@ -1,0 +1,204 @@
+// The bridge's end (proof-plan 6.3): what the readable GIMPLE to machine
+// code bridge establishes for a function, `abi.matches` -- each outcome of
+// the machine run from the entry is the spec's raising (undefined
+// behaviour), a normal return matching the spec's ok outcome, or a
+// divergence with the spec's same trace -- and the theorem making that the
+// ABI contract (`abi.abi_function`'s run), proven once.
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/abi.core \
+//     proofs/abi_restore.core proofs/abi_glue.core proofs/abi_bridge.core
+
+// the outcome o of the machine's run from the entry s, as the spec's on the
+// world s shows: the spec raises there (undefined behaviour: anything), or
+// o is a return matching the spec's ok outcome (the world's memory and
+// state, rax:rdx, the ABI's registers), or both diverge with the same trace
+abbrev abi.matches(spec, args, s, o) :=
+  (ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))) ||
+  (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+    runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+    abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+    app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+    abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) ||
+  (ex t. o = diverge(t) && runs(app(spec, args), abi.view(app(s, "vm"), s), diverge(t)))
+
+// the spec's world read through the view v of m (abi.world.get), with m's
+// ghost part
+abbrev abi.cw(m, v, sp) := rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp), ghost_part(m, abi.KEYS))
+
+// the spec diverging on the world: abi_call diverges, with the same trace
+theorem abi.call_div: all spec args sp m v t. m in univ(1) -> sp in bits(64) -> v in univ(1) -> v in x86_64_linux.Vm ->
+  abi.scratch_view(v, app(m, "vm"), sp) -> runs(app(spec, args), abi.cw(m, v, sp), diverge(t)) -> t in univ(1) ->
+  runs(abi.abi_call(single(empty), spec, args, sp), m, diverge(t))
+proof
+  fix spec
+  fix args
+  fix sp
+  fix m
+  fix v
+  fix t
+  assume mu: m in univ(1)
+  assume hp: sp in bits(64)
+  assume vu: v in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hs: abi.scratch_view(v, app(m, "vm"), sp)
+  assume hspec: runs(app(spec, args), abi.cw(m, v, sp), diverge(t))
+  assume tu: t in univ(1)
+  have g := mp(mp(mp(mp(mp(all_elim(abi.get_ok, {sp}, {m}, {v}), mu), hp), vu), hv), hs)
+  have wun: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp) in univ(1) by simp(mu, vu, hp)
+  have gmu := mp(ghost_part_univ[u := 1, f := m, d := abi.KEYS], mu)
+  show by simp(mu, hp, tu, wun, gmu, g, hspec, keep(abi.scratch_view, abi.world_matches, abi.world.get, abi.world.set))
+qed
+
+// a divergence: the spec diverging on the view v of the entry s, with the
+// machine's trace -- abi_function allows the machine's divergence
+theorem abi.div_case: all f spec args s v t. s in x86_64_linux.Machine -> pair(s, diverge(t)) in univ(1) ->
+  v in x86_64_linux.Vm -> v in univ(1) -> abi.scratch_view(v, app(s, "vm"), abi.sp(s)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) ->
+  runs(app(spec, args), abi.view(v, s), diverge(t)) ->
+  runs(abi.abi_function(single(empty), f, spec, args), s, diverge(t))
+proof
+  fix f
+  fix spec
+  fix args
+  fix s
+  fix v
+  fix t
+  assume hM: s in x86_64_linux.Machine
+  assume hp: pair(s, diverge(t)) in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hvu: v in univ(1)
+  assume hs: abi.scratch_view(v, app(s, "vm"), abi.sp(s))
+  assume hm: abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s))
+  assume hr: runs(app(spec, args), abi.view(v, s), diverge(t))
+  // the states of abi_function's way to the call (as abi.ret_intro's)
+  let x7 := rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS))
+  let s1 := fn_update(fn_update(fn_update(s, "vm", app(s, "vm")), "os", app(s, "os")), "fs_base", app(s, "fs_base"))
+  let mm1 := rec_merge(restrict(s1, abi.KEYS), ghost_part(x7, abi.WKEYS))
+  have su: s in univ(1) by simp(hp)
+  have tu: t in univ(1) by simp(hp)
+  have hsv: app(s, "vm") in x86_64_linux.Vm by simp(hM)
+  have hsp: app(app(s, "gpr"), 4) in bits(64) by simp(hM)
+  have spb: abi.sp(s) in bits(64) by simp(hsp)
+  have vmu: app(s, "vm") in univ(1) by simp(su)
+  have kf := apply(pow_cart_fst, unsel(expand(hM, x86_64_linux.Machine)))
+  have rs0 := apply(restrict_all, kf)
+  have gs0 := apply(ghost_part_none, kf)
+  // the spec's world at the call is the view
+  have ein: abi.cw(mm1, v, abi.sp(s)) = abi.view(v, s) by simp(rs0, gs0)
+  have hspec := rewrite(sym(ein), hr)
+  have gsu := mp(ghost_part_univ[u := 1, f := s, d := abi.KEYS], su)
+  have wun: abi.view(v, s) in univ(1) by simp(su, hvu, spb)
+  have x7u: x7 in univ(1) by simp(su, hvu, wun, gsu)
+  // the entry world: read, and written back unchanged
+  have g0 := mp(mp(mp(mp(mp(all_elim(abi.get_ok, {abi.sp(s)}, {s}, {v}), su), spb), hvu), hv), hs)
+  have wu := mp(restrict_univ[u := 1, f := x7, d := abi.WKEYS], x7u)
+  have hm0: abi.world_matches(app(s, "vm"), app(s, "vm"), app(restrict(x7, abi.WKEYS), "vm"), abi.sp(s)) by simp(hm, keep(abi.world_matches))
+  have s0 := mp(mp(mp(mp(mp(all_elim(abi.set_ok, {abi.sp(s)}, {s}, {restrict(x7, abi.WKEYS)}, {app(s, "vm")}), su), wu), vmu), hsv), hm0)
+  // the spec on the world, from mm1
+  have s1u: s1 in univ(1) by simp(su, vmu)
+  have m1u: mm1 in univ(1) by simp(su, mp(restrict_univ[u := 1, f := s1, d := abi.KEYS], s1u), mp(ghost_part_univ[u := 1, f := x7, d := abi.WKEYS], x7u))
+  have hs1: abi.scratch_view(v, app(mm1, "vm"), abi.sp(s)) by simp(hs, keep(abi.scratch_view))
+  have cl := mp(mp(mp(mp(mp(mp(mp(all_elim(abi.call_div, {spec}, {args}, {abi.sp(s)}, {mm1}, {v}, {t}), m1u), spb), hvu), hv), hs1), hspec), tu)
+  show by simp(su, hvu, wun, x7u, gsu, m1u, g0, s0, cl, hp, keep(abi.scratch_view, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore))
+qed
+
+// the machine's memory is a view of itself
+theorem abi.view_self: all vm sp. vm in x86_64_linux.Vm -> abi.scratch_view(vm, vm, sp) && abi.world_matches(vm, vm, vm, sp)
+proof
+  fix vm
+  fix sp
+  assume hv: vm in x86_64_linux.Vm
+  show by defs(simp(hv), abi.scratch_view, abi.world_matches)
+qed
+
+// a run the bridge matched with the spec is one abi_function allows
+theorem abi.bridge_run: all f spec args s o. s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> runs(abi.run_to_return(), s, o) ->
+  abi.matches(spec, args, s, o) -> runs(abi.abi_function(single(empty), f, spec, args), s, o)
+proof
+  fix f
+  fix spec
+  fix args
+  fix s
+  fix o
+  assume hM: s in x86_64_linux.Machine
+  assume he: abi.entry_ok(s, args)
+  assume hr: runs(abi.run_to_return(), s, o)
+  assume hm: abi.matches(spec, args, s, o)
+  have hp := apply(abi.run_univ, hr)
+  have hsh := apply(abi.run_shape, hr)
+  have su: s in univ(1) by simp(hp)
+  have hsv: app(s, "vm") in x86_64_linux.Vm by simp(hM)
+  have vu: app(s, "vm") in univ(1) by simp(su)
+  have vs := apply(abi.view_self, {app(s, "vm")}, {abi.sp(s)}, hsv)
+  have sv: abi.scratch_view(app(s, "vm"), app(s, "vm"), abi.sp(s)) by taut(vs)
+  have wm: abi.world_matches(app(s, "vm"), app(s, "vm"), app(s, "vm"), abi.sp(s)) by taut(vs)
+  // the spec raises: anything
+  have c1: (ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))) ->
+      runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+    assume h: ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))
+    obtain e, he1 from h
+    have eu: e in univ(1) by taut(he1)
+    have rx: runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e)) by taut(he1)
+    have ho: abi.outcome(o) by simp(hsh)
+    show := apply(abi.ub_case, {f}, {spec}, {args}, {s}, {o}, {app(s, "vm")}, {e}, hM, hsv, vu, sv, wm, eu, rx, hp, ho)
+  qed
+  // a return
+  have c2: (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+      runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+      app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+      abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+    assume h: ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+      runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+      app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+      abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")
+    obtain m1, h1 from h
+    obtain w2, h2 from h1
+    have eo: o = ok(m1, empty) by taut(h2)
+    have hp1 := rewrite(eo, hp)
+    have rt := apply(abi.ret_case, {f}, {spec}, {args}, {s}, {m1}, {app(s, "vm")}, {w2}, hM, he, taut(h2), hp1, hsv, vu, sv, wm,
+      taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2))
+    show := rewrite(sym(eo), rt)
+  qed
+  // a divergence
+  have c3: (ex t. o = diverge(t) && runs(app(spec, args), abi.view(app(s, "vm"), s), diverge(t))) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+    assume h: ex t. o = diverge(t) && runs(app(spec, args), abi.view(app(s, "vm"), s), diverge(t))
+    obtain t, h1 from h
+    have eo: o = diverge(t) by taut(h1)
+    have hp1 := rewrite(eo, hp)
+    have dv := apply(abi.div_case, {f}, {spec}, {args}, {s}, {app(s, "vm")}, {t}, hM, hp1, hsv, vu, sv, wm, taut(h1))
+    show := rewrite(sym(eo), dv)
+  qed
+  show by taut(hm, c1, c2, c3)
+qed
+
+// C1 from the bridge: every run from an entry matched with the spec
+theorem abi.bridge_implements: all f spec base code statics.
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+    runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, s, o)) ->
+  abi.implements2_at(single(empty), f, spec, base, code, statics)
+proof
+  fix f
+  fix spec
+  fix base
+  fix code
+  fix statics
+  assume hb: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+    runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, s, o)
+  have hrun: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+      runs(abi.run_to_return(), s, o) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+    fix args
+    fix s
+    fix o
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume hl: abi.loaded(app(s, "vm"), base, code, statics)
+    assume hrip: app(s, "rip") = f
+    assume he: abi.entry_ok(s, args)
+    assume hr: runs(abi.run_to_return(), s, o)
+    have hm := mp(mp(mp(mp(mp(mp(all_elim(hb, {args}, {s}, {o}), hA), hM), hl), hrip), he), hr)
+    show := apply(abi.bridge_run, {f}, {spec}, {args}, {s}, {o}, hM, he, hr, hm)
+  qed
+  show := apply(abi.implements_intro, hrun)
+qed
