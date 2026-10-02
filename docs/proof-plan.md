@@ -346,6 +346,17 @@ relies on.
    the function's parameters left the spec computing on `args[i] =
    empty` while the machine read whatever the register held; the
    generated `_fun` wrappers now `require len(args) >= n` (C: undefined).
+   Functions with branches (is_bouncing, get_stride:
+   proofs/is_bouncing.core, proofs/get_stride.core) state their run lemma
+   as a summary, `ex m1. o = ok(m1, empty) && abi.returns(s, m1, vm, r)`
+   (flags and scratch registers left out), and a spec that leaves the
+   world as it is closes with `abi.ret_view`. get_stride reads the meta's
+   bit fields; the machine reads the same word as 1, 2 or 8 bytes, and
+   small bridge lemmas (`gb.*`) connect the two, the arithmetic by simp's
+   word normalizations and arith. step_seq is still open: its loop stores
+   the counter to the stack slot between byte stores to the context, which
+   needs separation of the slot from static data inside a loop, an
+   unrolled spec loop, and a world-changing ret_case.
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
      (`Cfg`: the file, the addresses of ctx, the lock, `__libc`). An
