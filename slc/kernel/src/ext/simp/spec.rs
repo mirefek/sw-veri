@@ -32,11 +32,13 @@
 //! dropped, as its witness 0 would be.
 //!
 //! The branches of undefined behaviour -- `C1 -> .. -> Cn -> runs(P, W,
-//! exc(S, x))` for any x in univ(1), all with the same S, and those with
-//! any outcome at all (a wrapper's missing argument) -- are stated
-//! together, as the disjunction of their conditions:
+//! exc(S, x))` for any x in univ(1), all with the same S or with any S
+//! (undefined behaviour leaves the world open: the `_ub` lemmas raise from
+//! any world), and those with any outcome at all (a wrapper's missing
+//! argument) -- are stated together, as the disjunction of their
+//! conditions:
 //!
-//!   all e. e in univ(1) -> !D -> runs(P, W, exc(S, e))
+//!   all s e. s in univ(1) -> e in univ(1) -> !D -> runs(P, W, exc(s, e))
 //!
 //! with D the conjunction of their `C1 -> .. -> !Cn` (what defined means:
 //! the reads each path makes can be made). A proof of a `raises` lemma
@@ -873,8 +875,10 @@ impl Logic {
             }
             Some((rest, set))
         };
-        let mut ub: Vec<(usize, Vec<Term>)> = Vec::new();
+        let mut ub: Vec<(usize, Vec<Term>, bool)> = Vec::new();
         let mut any: Vec<(usize, Vec<Term>, Option<Term>)> = Vec::new();
+        // (the exception's world: a common one, or any -- a parameter, as
+        // undefined behaviour leaves it)
         let mut state: Option<Term> = None;
         let mut set: Option<Term> = None;
         let mut same = true;
@@ -886,10 +890,20 @@ impl Logic {
                         continue;
                     }
                     let Some((rest, s)) = strip(kept, x) else { continue };
-                    same &= state.as_ref().is_none_or(|t| *t == ab[0]) && (set.is_none() || s.is_none() || set == s);
-                    state = Some(ab[0].clone());
+                    let (rest, free) = match param(&ab[0]) {
+                        Some(y) => match strip(&rest, y) {
+                            Some((r, sy)) if sy.is_some() && (s.is_none() || sy == s) => (r, true),
+                            _ => continue,
+                        },
+                        None => (rest, false),
+                    };
+                    if !free {
+                        same &= state.as_ref().is_none_or(|t| *t == ab[0]);
+                        state = Some(ab[0].clone());
+                    }
+                    same &= set.is_none() || s.is_none() || set == s;
                     set = set.or(s);
-                    ub.push((i, rest));
+                    ub.push((i, rest, free));
                 }
                 Node::Var(..) => {
                     if let Some(x) = param(o) {
@@ -903,11 +917,22 @@ impl Logic {
         }
         let mut merged: Option<Term> = None;
         let mut gone: Vec<usize> = Vec::new();
-        if let (true, Some(s), Some(set)) = (same && !ub.is_empty(), state, set) {
-            // (an outcome of any branch is exc(S, e) when that is in univ(1))
+        if let (true, Some(set)) = (same && !ub.is_empty(), set) {
             let in_ = sp.s.in_.unwrap();
-            let s_ok = matches!(set.node(), Node::App(u, _) if is(*u, sp.s.univ)) && (sp.typed(&sr.facts, &Term::app(in_, vec![s.clone(), set.clone()])) || sr.facts.contains(&Term::app(in_, vec![s.clone(), set.clone()])));
-            let mut all_ub = ub.clone();
+            let univ = matches!(set.node(), Node::App(u, _) if is(*u, sp.s.univ));
+            // the world: the common one, or (all branches leaving it open)
+            // a parameter in the set
+            let (s, s_cond) = match state {
+                Some(s) => (s, None),
+                None => {
+                    let (_, st) = sr.var();
+                    (st.clone(), Some(Term::app(in_, vec![st, set.clone()])))
+                }
+            };
+            // (exc(S, e) is an outcome of a branch leaving the world open,
+            // or any outcome, when S is in the set, a universe)
+            let s_ok = univ && (s_cond.is_some() || sp.typed(&sr.facts, &Term::app(in_, vec![s.clone(), set.clone()])) || sr.facts.contains(&Term::app(in_, vec![s.clone(), set.clone()])));
+            let mut all_ub: Vec<(usize, Vec<Term>)> = ub.iter().filter(|(_, _, free)| !free || s_ok).map(|(i, r, _)| (*i, r.clone())).collect();
             if s_ok {
                 all_ub.extend(any.iter().filter(|(_, _, s)| s.as_ref() == Some(&set)).map(|(i, r, _)| (*i, r.clone())));
             }
@@ -917,12 +942,15 @@ impl Logic {
                     Some((last, init)) => init.iter().rev().fold(sp.prop(&sp.not(last.clone()), Pol::Other), |t, c| Term::app(env.builtins.imp, vec![c.clone(), t])),
                 }
             };
-            let d = all_ub.iter().map(|(_, cs)| chain(cs)).reduce(|a, b| sp.and(a, b)).unwrap();
-            let (ev, et) = sr.var();
-            let t = Term::app(env.builtins.imp, vec![Term::app(in_, vec![et.clone(), set]), Term::app(env.builtins.imp, vec![sp.not(d), Term::app(runs, vec![p.clone(), w.clone(), Term::app(sp.s.exc.unwrap(), vec![s, et.clone()])])])]);
-            merged = Some(t);
-            gone = all_ub.iter().map(|(i, _)| *i).collect();
-            let _ = ev;
+            if let Some(d) = all_ub.iter().map(|(_, cs)| chain(cs)).reduce(|a, b| sp.and(a, b)) {
+                let (_, et) = sr.var();
+                let mut t = Term::app(env.builtins.imp, vec![Term::app(in_, vec![et.clone(), set]), Term::app(env.builtins.imp, vec![sp.not(d), Term::app(runs, vec![p.clone(), w.clone(), Term::app(sp.s.exc.unwrap(), vec![s, et.clone()])])])]);
+                if let Some(c) = s_cond {
+                    t = Term::app(env.builtins.imp, vec![c, t]);
+                }
+                merged = Some(t);
+                gone = all_ub.iter().map(|(i, _)| *i).collect();
+            }
         }
         let and = sp.s.and.unwrap();
         let mut ts: Vec<Term> = Vec::new();
