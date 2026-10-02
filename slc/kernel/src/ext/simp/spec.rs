@@ -357,6 +357,19 @@ impl<'s, 'a> Words<'s, 'a> {
         Words { sp, lg, bytes, memo: Default::default(), eqs }
     }
 
+    /// b a memory of bytes: `app(m, "bytes")` of a typed memory (a Vm, or
+    /// a machine's), or stores to one (store_le writes bytes)
+    fn byte_memory(&self, ctx: &[Term], b: &Term) -> bool {
+        let Node::App(f, a) = b.node() else { return false };
+        if self.sp.env.syms[*f as usize].name == "x86_64_linux.store_le" && a.len() == 4 {
+            return self.byte_memory(ctx, &a[0]);
+        }
+        let (Some(fs), Some(bits), Some(in_)) = (self.sp.env.sym_by_name.get("fn_space"), self.sp.env.sym_by_name.get("bits"), self.sp.s.in_) else { return false };
+        let nat = |k: u64| Term::nat(crate::nat::Nat::from_u64(k));
+        let ty = Term::app(in_, vec![b.clone(), Term::app(*fs, vec![Term::app(*bits, vec![nat(64)]), Term::app(*bits, vec![nat(8)])])]);
+        self.sp.typed(ctx, &ty)
+    }
+
     /// t by an equation whose left side it is, its hypotheses shown
     fn by_eqs(&self, ctx: &[Term], t: &Term) -> Option<Term> {
         let bf = self.sp.env.binders_fn();
@@ -408,6 +421,13 @@ impl Words<'_, '_> {
 
     fn word_base(&self, ctx: &[Term], t: &Term) -> Term {
         let Node::App(g, x) = t.node() else { return t.clone() };
+        // (shifts by a literal: the spec divides and multiplies -- unfolded
+        // first, their operand then read as below)
+        if self.bytes && matches!(self.sp.env.syms[*g as usize].name.as_str(), "bits_shr" | "bits_shl") && x.len() == 3 && matches!(x[2].node(), Node::Nat(_)) {
+            if let Some(u) = self.sp.unfold(*g, x) {
+                return self.word(ctx, &u);
+            }
+        }
         let bind = self.sp.env.binders_fn();
         // (under binders too: the context decides closed subterms only)
         let x: Vec<Term> = x.iter().map(|y| self.word(ctx, y)).collect();
@@ -415,6 +435,18 @@ impl Words<'_, '_> {
         let name = self.sp.env.syms[*g as usize].name.as_str();
         if self.bytes && matches!(name, "gimple.bytes_at" | "x86_64_linux.le") && x.len() == 3 && matches!(x[2].node(), Node::Nat(k) if k.to_u64().is_some_and(|k| (1..=8).contains(&k))) {
             if let Some(u) = self.sp.unfold(*g, &x) {
+                // (the spec's read of k bytes -- of a memory whose every byte
+                // is one: the sum below 2^(8k) -- as the machine's, its 8k
+                // bits)
+                if name == "gimple.bytes_at" {
+                    let mem = self.sp.s.app.map(|a| self.sp.term(&Term::app(a, vec![x[0].clone(), Term::bytes(b"bytes")])));
+                    if let (Some(mem), Some(boi), Node::Nat(k)) = (mem, self.sp.s.bits_of_int, x[2].node()) {
+                        if self.byte_memory(ctx, &mem) {
+                            let w = Term::nat(k.mul(&crate::nat::Nat::from_u64(8)));
+                            return self.word(ctx, &self.sp.term(&Term::app(boi, vec![w, u])));
+                        }
+                    }
+                }
                 return self.word(ctx, &self.sp.term(&u));
             }
         }
@@ -436,10 +468,29 @@ impl Words<'_, '_> {
                 }
             }
         }
+        // (comparing with the machine: a 64-bit word y -- a pointer -- plus a
+        // literal c the context shows does not wrap, as the machine adds:
+        // `bits_add(64, y, c)`)
+        if self.bytes && name == "int_add" && x.len() == 2 {
+            if let (Some(ba), Some(lt)) = (self.sp.s.bits_add, self.sp.env.sym_by_name.get("int_lt")) {
+                for (y, c) in [(&x[0], &x[1]), (&x[1], &x[0])] {
+                    let Node::Nat(cv) = c.node() else { continue };
+                    let small = (1..64u64).any(|m| self.sp.bits_term(y, m) && crate::nat::Nat::pow2(m).add(cv) <= crate::nat::Nat::pow2(64));
+                    if cv.is_zero() || matches!(y.node(), Node::Nat(_)) || small || !self.sp.bits_term(y, 64) {
+                        continue;
+                    }
+                    let goal = Term::app(*lt, vec![t.clone(), Term::nat(crate::nat::Nat::pow2(64))]);
+                    if self.lg.symex_decide(self.sp, ctx, &goal) == Some(true) {
+                        return self.sp.term(&Term::app(ba, vec![Term::nat(crate::nat::Nat::from_u64(64)), y.clone(), c.clone()]));
+                    }
+                }
+            }
+        }
         // an n-bit sum of a word y and a literal c the context shows does not
         // wrap (y + c < 2^n): the integer sum -- an address as base + offset
-        // (c a large literal first), an index as i + c
-        if name == "bits_add" && x.len() == 3 {
+        // (c a large literal first), an index as i + c (not when comparing
+        // with the machine: the other way, above)
+        if name == "bits_add" && x.len() == 3 && !self.bytes {
             if let (Node::Nat(n), Some(ia), Some(lt)) = (x[0].node(), self.sp.env.sym_by_name.get("int_add"), self.sp.env.sym_by_name.get("int_lt")) {
                 if let Some(n) = n.to_u64().filter(|&n| (1..=128).contains(&n)) {
                     for (y, c) in [(&x[1], &x[2]), (&x[2], &x[1])] {
