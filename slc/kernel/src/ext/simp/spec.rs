@@ -77,7 +77,7 @@ struct Sr<'s, 'a> {
     lemmas: Vec<Term>,
     fresh: u32,
     /// the unknowns (bound by a branch's assignment, or open)
-    us: Vec<VarId>,
+    us: std::collections::HashSet<VarId>,
     fuel: usize,
     depth: usize,
 }
@@ -95,30 +95,44 @@ impl Sr<'_, '_> {
 
     fn unknown(&mut self) -> (VarId, Term) {
         let (v, t) = self.var();
-        self.us.push(v);
+        self.us.insert(v);
         (v, t)
     }
 
+    /// t with the assignment's unknowns replaced by their values (and
+    /// theirs, transitively; a parameter is bound to itself). The values
+    /// are closed (no loose bound variables), so binders need no shifting.
     fn subst(&self, t: &Term, a: &Assign) -> Term {
-        let bf = self.sp.env.binders_fn();
-        let mut t = t.clone();
-        for _ in 0..32 {
-            let mut u = t.clone();
-            for (v, x) in a {
-                if has_var(&u, *v) {
-                    u = u.subst_var(*v, x, &bf);
-                }
-            }
-            if u == t {
-                break;
-            }
-            t = u;
+        if a.is_empty() {
+            return t.clone();
         }
-        t
+        let map: std::collections::HashMap<VarId, &Term> = a.iter().map(|(v, x)| (*v, x)).collect();
+        fn go(t: &Term, map: &std::collections::HashMap<VarId, &Term>, memo: &mut std::collections::HashMap<usize, Term>, depth: u32) -> Term {
+            match t.node() {
+                Node::Var(v, args) if args.is_empty() => match map.get(v) {
+                    Some(x) if depth < 64 && !matches!(x.node(), Node::Var(w, wa) if w == v && wa.is_empty()) => go(x, map, memo, depth + 1),
+                    _ => t.clone(),
+                },
+                Node::App(_, xs) | Node::Var(_, xs) if !xs.is_empty() => {
+                    let key = t.node() as *const Node as usize;
+                    if let Some(r) = memo.get(&key) {
+                        return r.clone();
+                    }
+                    let ys: Vec<Term> = xs.iter().map(|x| go(x, map, memo, depth)).collect();
+                    let r = if ys.iter().zip(xs.iter()).all(|(y, x)| y.node() as *const Node == x.node() as *const Node) { t.clone() } else { t.with_args(ys) };
+                    memo.insert(key, r.clone());
+                    r
+                }
+                _ => t.clone(),
+            }
+        }
+        go(t, &map, &mut std::collections::HashMap::new(), 0)
     }
 
     fn open(&self, t: &Term, a: &Assign) -> bool {
-        self.us.iter().any(|v| has_var(t, *v) && !a.iter().any(|(w, _)| w == v))
+        let mut vs = Vec::new();
+        t.vars(&mut vs);
+        vs.iter().any(|v| self.us.contains(v) && !a.iter().any(|(w, _)| w == v))
     }
 
     fn show(&self, t: &Term) -> String {
@@ -453,6 +467,9 @@ impl Sr<'_, '_> {
             }
             return err(format!("{}{}", UNSOLVED, self.show(&p)));
         }
+        if Some(f) == sp.env.sym_by_name.get("while_rel").copied() && x.len() == 5 && !self.open(&x[0], &br.a) {
+            return self.run_loop(x, br);
+        }
         if is(f, s.runs) {
             if self.open(&x[0], &br.a) || self.open(&x[1], &br.a) {
                 return err(format!("{}{}", UNSOLVED, self.show(&p)));
@@ -493,6 +510,75 @@ impl Sr<'_, '_> {
             return self.solve(&q, br);
         }
         err(format!("{}{}", UNSOLVED, self.show(&p)))
+    }
+
+    /// A loop `while_rel(l0, l. C, l o. B, l. T, r)` from a known state, an
+    /// iteration at a time (as simp's `unroll`, resting on the open lemmas
+    /// of core/loop.core): C(l0) false -- it stops, r = ok(l0, empty)
+    /// (`while_stop`); true -- the body's branches from l0: one that leaves
+    /// is r (`while_leave`), one that goes on to l1 runs the loop from l1
+    /// (`while_step`; a divergence after a step is not derived). A C(l0)
+    /// the branch does not decide splits it.
+    fn run_loop(&mut self, a: &[Term], br: Br) -> Result<Vec<Br>, String> {
+        let sp = self.sp;
+        let s = &sp.s;
+        let empty = Term::app(s.empty.unwrap(), vec![]);
+        let used = |n: &str| {
+            let mut u = self.lg.simp_used.borrow_mut();
+            if !u.iter().any(|m| m == n) {
+                u.push(n.into());
+            }
+        };
+        used("while_stop");
+        used("while_leave");
+        used("while_step");
+        let r = a[4].clone();
+        let mut out = Vec::new();
+        // (state, branch, iterations so far)
+        let mut work = vec![(sp.term(&self.subst(&a[0], &br.a)), br, 0usize)];
+        while let Some((l0, br, k)) = work.pop() {
+            if self.fuel == 0 {
+                return err("the program's search ran out of fuel (a loop)");
+            }
+            self.fuel -= 1;
+            let c = sp.prop(&inst_k(sp.env, &a[1], &[l0.clone()]), Pol::Other);
+            let cases: Vec<(bool, Br)> = match self.decide(&c, &br) {
+                Some(v) => vec![(v, br)],
+                None => {
+                    let mut v: Vec<(bool, Br)> = self.with_cond(&c, br.clone()).into_iter().map(|b| (true, b)).collect();
+                    v.extend(self.with_cond(&sp.not(c.clone()), br).into_iter().map(|b| (false, b)));
+                    v
+                }
+            };
+            for (cv, b) in cases {
+                if !cv {
+                    let mut b = b;
+                    let stop = Term::app(s.ok.unwrap(), vec![l0.clone(), empty.clone()]);
+                    if self.unify(&r, &stop, &mut b)? == Some(true) {
+                        out.push(b);
+                    }
+                    continue;
+                }
+                let (_, xo) = self.unknown();
+                let body = inst_k(sp.env, &a[2], &[l0.clone(), xo.clone()]);
+                for mut bb in self.solve(&body, b)? {
+                    let o = sp.term(&self.subst(&xo, &bb.a));
+                    match o.node() {
+                        Node::App(g, oa) if is(*g, s.ok) && oa.len() == 2 && sp.is_true(&sp.prop(&Term::app(s.eq, vec![oa[1].clone(), empty.clone()]), Pol::Other)) => {
+                            work.push((oa[0].clone(), bb, k + 1));
+                        }
+                        Node::App(g, _) if is(*g, s.exc) || (is(*g, s.diverge) && k == 0) => {
+                            if self.unify(&r, &o, &mut bb)? == Some(true) {
+                                out.push(bb);
+                            }
+                        }
+                        Node::App(g, _) if is(*g, s.diverge) => {}
+                        _ => return err(format!("{}a loop's body outcome {}", UNSOLVED, self.show(&o))),
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The pattern (with unknowns) matched against a value: constructors
@@ -701,9 +787,13 @@ impl Logic {
             fresh = fresh.max(max_var(t) + 1);
         }
         let first = fresh;
-        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Vec::new(), fuel: FUEL, depth: 0 };
+        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0 };
         let (_, ot) = sr.unknown();
+        let t0 = std::time::Instant::now();
         let bs = sr.run(p, w, &ot, Br::default()).map_err(kerr)?;
+        if std::env::var("SPEC_DEBUG").is_ok() {
+            eprintln!("spec_run: {} branches in {:?}", bs.len(), t0.elapsed());
+        }
         if bs.is_empty() {
             return Err(kerr("no branch of the program found".into()));
         }
