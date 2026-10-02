@@ -288,11 +288,62 @@ impl Sr<'_, '_> {
     /// `sint(n, v)` (signed) or v; `gimple.fits(T, sint(m, y))` is true for
     /// a signed T of n >= m bits.
     fn word(&self, ctx: &[Term], t: &Term) -> Term {
+        Words { sp: self.sp, lg: self.lg, bytes: false, memo: Default::default() }.word(ctx, t)
+    }
+
+    /// The arithmetic helpers unfolded in t (bottom-up).
+    fn unfold_arith(&self, t: &Term) -> Term {
         let Node::App(g, x) = t.node() else { return t.clone() };
         let bind = self.sp.env.binders_fn();
-        let x: Vec<Term> = x.iter().enumerate().map(|(i, y)| if bind(*g, i) == 0 { self.word(ctx, y) } else { y.clone() }).collect();
+        let x: Vec<Term> = x.iter().enumerate().map(|(i, y)| if bind(*g, i) == 0 { self.unfold_arith(y) } else { y.clone() }).collect();
+        if ARITH_DEFS.contains(&self.sp.env.syms[*g as usize].name.as_str()) {
+            if let Some(u) = self.sp.unfold(*g, &x) {
+                return self.unfold_arith(&self.sp.term(&u));
+            }
+        }
+        t.with_args(x)
+    }
+}
+
+/// The word normalization under a context (the spec's, and the machine's
+/// states and premises, at the bridge: one form for both).
+pub(super) struct Words<'s, 'a> {
+    pub(super) sp: &'s Simp<'a>,
+    pub(super) lg: &'s Logic,
+    /// memory reads of a few bytes as their sums of bytes: the spec's
+    /// `gimple.bytes_at(vm, a, k)` and the machine's
+    /// `x86_64_linux.le(b, a, k)` (k <= 8 a literal) unfolded -- one form
+    /// for both, where they are compared
+    pub(super) bytes: bool,
+    /// the forms found, under the one context (cleared when it changes)
+    pub(super) memo: std::cell::RefCell<std::collections::HashMap<Term, Term>>,
+}
+
+impl Words<'_, '_> {
+    pub(super) fn word(&self, ctx: &[Term], t: &Term) -> Term {
+        if let Some(u) = self.memo.borrow().get(t) {
+            return u.clone();
+        }
+        let u = self.word_of(ctx, t);
+        self.memo.borrow_mut().insert(t.clone(), u.clone());
+        u
+    }
+
+    fn word_of(&self, ctx: &[Term], t: &Term) -> Term {
+        let Node::App(g, x) = t.node() else { return t.clone() };
+        let bind = self.sp.env.binders_fn();
+        // (under binders too: the context decides closed subterms only)
+        let x: Vec<Term> = x.iter().map(|y| self.word(ctx, y)).collect();
         let t = t.with_args(x.clone());
         let name = self.sp.env.syms[*g as usize].name.as_str();
+        if self.bytes && matches!(name, "gimple.bytes_at" | "x86_64_linux.le") && x.len() == 3 && matches!(x[2].node(), Node::Nat(k) if k.to_u64().is_some_and(|k| (1..=8).contains(&k))) {
+            if let Some(u) = self.sp.unfold(*g, &x) {
+                return self.word(ctx, &self.sp.term(&u));
+            }
+        }
+        if t.loose_depth(&bind) > 0 {
+            return t;
+        }
         // an n-bit sum of an m-bit word and a literal c that does not wrap
         // (2^m + c <= 2^n): the integer sum c + x (an address, as the
         // spec's operations compute it)
@@ -316,7 +367,9 @@ impl Sr<'_, '_> {
                 if let Some(n) = n.to_u64().filter(|&n| (1..=128).contains(&n)) {
                     for (y, c) in [(&x[1], &x[2]), (&x[2], &x[1])] {
                         let Node::Nat(cv) = c.node() else { continue };
-                        if cv.is_zero() || matches!(y.node(), Node::Nat(_)) || !self.sp.bits_term(y, n) {
+                        // (c below 2^(n-1): a negative c, a subtraction, wraps
+                        // unless y is large -- not an address's offset)
+                        if cv.is_zero() || *cv >= crate::nat::Nat::pow2(n - 1) || matches!(y.node(), Node::Nat(_)) || !self.sp.bits_term(y, n) {
                             continue;
                         }
                         let sum = if *cv >= crate::nat::Nat::from_u64(4096) { Term::app(*ia, vec![c.clone(), y.clone()]) } else { Term::app(*ia, vec![y.clone(), c.clone()]) };
@@ -388,20 +441,9 @@ impl Sr<'_, '_> {
             _ => self.sp.term(&t),
         }
     }
+}
 
-    /// The arithmetic helpers unfolded in t (bottom-up).
-    fn unfold_arith(&self, t: &Term) -> Term {
-        let Node::App(g, x) = t.node() else { return t.clone() };
-        let bind = self.sp.env.binders_fn();
-        let x: Vec<Term> = x.iter().enumerate().map(|(i, y)| if bind(*g, i) == 0 { self.unfold_arith(y) } else { y.clone() }).collect();
-        if ARITH_DEFS.contains(&self.sp.env.syms[*g as usize].name.as_str()) {
-            if let Some(u) = self.sp.unfold(*g, &x) {
-                return self.unfold_arith(&self.sp.term(&u));
-            }
-        }
-        t.with_args(x)
-    }
-
+impl Sr<'_, '_> {
     /// The branch with the condition c: kept, dropped, or c added.
     fn with_cond(&self, c: &Term, br: Br) -> Vec<Br> {
         match self.decide(c, &br) {

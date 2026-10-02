@@ -1586,9 +1586,22 @@ impl<'a> Simp<'a> {
                     };
                     let mut new = args.clone();
                     let mut changed = false;
+                    // (likewise the low k+1 bits of y, k+1 >= n: y)
+                    let slice_of = |x: &Term| match x.node() {
+                        Node::App(g, b) if self.arith.get(g) == Some(&"bits_slice") && b.len() == 3 => match (b[1].node(), b[2].node()) {
+                            (Node::Nat(k), Node::Nat(lo)) if lo.is_zero() => Some((k.clone(), b[0].clone())),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
                     for x in new.iter_mut().skip(1) {
                         if let Some((m, y)) = sint_of(x) {
                             if m >= *n {
+                                *x = y;
+                                changed = true;
+                            }
+                        } else if let Some((k, y)) = slice_of(x) {
+                            if k.to_u64().zip(n.to_u64()).is_some_and(|(k, n)| k + 1 >= n) {
                                 *x = y;
                                 changed = true;
                             }

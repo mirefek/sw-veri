@@ -38,6 +38,10 @@ pub struct Logic {
     /// (set by the bridge: the library's access lemmas and the spec's
     /// conditions); empty: off
     pub symex_simp: std::cell::RefCell<Vec<Term>>,
+    /// the prologue mode of symex (set by the bridge): `Some(None)` runs
+    /// to the first access to memory not at the entry's rsp, a branch or
+    /// the return, and leaves the state there in it
+    pub symex_prologue: std::cell::RefCell<Option<Option<Term>>>,
 }
 
 impl Logic {
@@ -64,6 +68,7 @@ impl Logic {
             simp_goal_loops: Default::default(),
             simp_rewrites: Default::default(),
             symex_simp: Default::default(),
+            symex_prologue: Default::default(),
         })
     }
 

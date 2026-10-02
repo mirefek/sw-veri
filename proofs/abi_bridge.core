@@ -36,6 +36,51 @@ proof
   show by simp(sa, hi, il, hk)
 qed
 
+// a byte the spec may read (write): the machine may (its memory has the
+// same pages) -- the address any word in the range, for the bridge to match
+// the machine's own computation of it
+theorem g.read_at: all v vm a n x. gimple.usable(v, a, n, false) -> app(v, "pages") = app(vm, "pages") -> int_le(0, a) ->
+  x in bits(64) -> int_le(a, x) -> int_lt(x, int_add(a, n)) -> x86_64_linux.can_access(vm, x, 0)
+proof
+  fix v
+  fix vm
+  fix a
+  fix n
+  fix x
+  assume hu: gimple.usable(v, a, n, false)
+  assume hpg: app(v, "pages") = app(vm, "pages")
+  assume h0: int_le(0, a)
+  assume hx: x in bits(64)
+  assume hl: int_le(a, x)
+  assume hh: int_lt(x, int_add(a, n))
+  have io: int_sub(x, a) in omega by arith(hx, hl)
+  have il: int_lt(int_sub(x, a), n) by arith(hx, hl, hh)
+  have r := apply(g.usable_read, {v}, {vm}, {a}, {n}, {int_sub(x, a)}, hu, hpg, h0, io, il)
+  have e: bits_of_int(64, int_add(a, int_sub(x, a))) = x by simp(hx, hl, h0)
+  show := rewrite(e, r)
+qed
+
+theorem g.write_at: all v vm a n x. gimple.usable(v, a, n, true) -> app(v, "pages") = app(vm, "pages") -> int_le(0, a) ->
+  x in bits(64) -> int_le(a, x) -> int_lt(x, int_add(a, n)) -> x86_64_linux.can_access(vm, x, 1)
+proof
+  fix v
+  fix vm
+  fix a
+  fix n
+  fix x
+  assume hu: gimple.usable(v, a, n, true)
+  assume hpg: app(v, "pages") = app(vm, "pages")
+  assume h0: int_le(0, a)
+  assume hx: x in bits(64)
+  assume hl: int_le(a, x)
+  assume hh: int_lt(x, int_add(a, n))
+  have io: int_sub(x, a) in omega by arith(hx, hl)
+  have il: int_lt(int_sub(x, a), n) by arith(hx, hl, hh)
+  have r := apply(g.usable_write, {v}, {vm}, {a}, {n}, {int_sub(x, a)}, hu, hpg, h0, io, il)
+  have e: bits_of_int(64, int_add(a, int_sub(x, a))) = x by simp(hx, hl, h0)
+  show := rewrite(e, r)
+qed
+
 theorem abi.ret_at: all vm sp i. sp in bits(64) -> x86_64_linux.can_access(vm, sp, 1) -> int_mod(bits_add(64, sp, 8), 16) = 0 ->
   i in omega -> int_lt(i, 8) -> x86_64_linux.can_access(vm, bits_add(64, sp, bits_of_int(64, i)), 0)
 proof
@@ -52,17 +97,24 @@ proof
 qed
 
 // the outcome o of the machine's run from the entry s, as the spec's on the
-// world s shows: the spec raises there (undefined behaviour: anything), or
-// o is a return matching the spec's ok outcome (the world's memory and
-// state, rax:rdx, the ABI's registers), or both diverge with the same trace
-def abi.matches(spec, args, s, o) :=
-  (ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))) ||
+// world with the memory v (s's, but for scratch bytes) shows: the spec
+// raises there (undefined behaviour: anything), or o is a return matching
+// the spec's ok outcome (the world's memory and state, rax:rdx, the ABI's
+// registers), or both diverge with the same trace
+def abi.matches_at(spec, args, s, v, o) :=
+  (ex e. e in univ(1) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))) ||
   (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
-    runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+    runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
     app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
     abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) ||
-  (ex t. o = diverge(t) && runs(app(spec, args), abi.view(app(s, "vm"), s), diverge(t)))
+  (ex t. o = diverge(t) && runs(app(spec, args), abi.view(v, s), diverge(t)))
+
+// ... for some such v (the bridge's: the memory after the prologue's
+// stores to the stack, as the code reads it)
+def abi.matches(spec, args, s, o) :=
+  ex v. v in x86_64_linux.Vm && v in univ(1) && abi.scratch_view(v, app(s, "vm"), abi.sp(s)) && abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) &&
+    abi.matches_at(spec, args, s, v, o)
 
 // the spec's world read through the view v of m (abi.world.get), with m's
 // ghost part
@@ -169,29 +221,31 @@ proof
   have hp := apply(abi.run_univ, hr)
   have hsh := apply(abi.run_shape, hr)
   have su: s in univ(1) by simp(hp)
-  have hsv: app(s, "vm") in x86_64_linux.Vm by simp(hM)
-  have vu: app(s, "vm") in univ(1) by simp(su)
-  have vs := apply(abi.view_self, {app(s, "vm")}, {abi.sp(s)}, hsv)
-  have sv: abi.scratch_view(app(s, "vm"), app(s, "vm"), abi.sp(s)) by taut(vs)
-  have wm: abi.world_matches(app(s, "vm"), app(s, "vm"), app(s, "vm"), abi.sp(s)) by taut(vs)
+  // the view's memory
+  obtain v, hv from expand(hm, abi.matches)
+  have hsv: v in x86_64_linux.Vm by taut(hv)
+  have vu: v in univ(1) by taut(hv)
+  have sv: abi.scratch_view(v, app(s, "vm"), abi.sp(s)) by taut(hv)
+  have wm: abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) by taut(hv)
+  have hma: abi.matches_at(spec, args, s, v, o) by taut(hv)
   // the spec raises: anything
-  have c1: (ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))) ->
+  have c1: (ex e. e in univ(1) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))) ->
       runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
-    assume h: ex e. e in univ(1) && runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e))
+    assume h: ex e. e in univ(1) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))
     obtain e, he1 from h
     have eu: e in univ(1) by taut(he1)
-    have rx: runs(app(spec, args), abi.view(app(s, "vm"), s), exc(abi.view(app(s, "vm"), s), e)) by taut(he1)
+    have rx: runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e)) by taut(he1)
     have ho: abi.outcome(o) by simp(hsh)
-    show := apply(abi.ub_case, {f}, {spec}, {args}, {s}, {o}, {app(s, "vm")}, {e}, hM, hsv, vu, sv, wm, eu, rx, hp, ho)
+    show := apply(abi.ub_case, {f}, {spec}, {args}, {s}, {o}, {v}, {e}, hM, hsv, vu, sv, wm, eu, rx, hp, ho)
   qed
   // a return
   have c2: (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
-      runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
       abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
       app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
       abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
     assume h: ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
-      runs(app(spec, args), abi.view(app(s, "vm"), s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
       abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
       app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
       abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")
@@ -199,20 +253,20 @@ proof
     obtain w2, h2 from h1
     have eo: o = ok(m1, empty) by taut(h2)
     have hp1 := rewrite(eo, hp)
-    have rt := apply(abi.ret_case, {f}, {spec}, {args}, {s}, {m1}, {app(s, "vm")}, {w2}, hM, he, taut(h2), hp1, hsv, vu, sv, wm,
+    have rt := apply(abi.ret_case, {f}, {spec}, {args}, {s}, {m1}, {v}, {w2}, hM, he, taut(h2), hp1, hsv, vu, sv, wm,
       taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2), taut(h2))
     show := rewrite(sym(eo), rt)
   qed
   // a divergence
-  have c3: (ex t. o = diverge(t) && runs(app(spec, args), abi.view(app(s, "vm"), s), diverge(t))) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
-    assume h: ex t. o = diverge(t) && runs(app(spec, args), abi.view(app(s, "vm"), s), diverge(t))
+  have c3: (ex t. o = diverge(t) && runs(app(spec, args), abi.view(v, s), diverge(t))) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+    assume h: ex t. o = diverge(t) && runs(app(spec, args), abi.view(v, s), diverge(t))
     obtain t, h1 from h
     have eo: o = diverge(t) by taut(h1)
     have hp1 := rewrite(eo, hp)
-    have dv := apply(abi.div_case, {f}, {spec}, {args}, {s}, {app(s, "vm")}, {t}, hM, hp1, hsv, vu, sv, wm, taut(h1))
+    have dv := apply(abi.div_case, {f}, {spec}, {args}, {s}, {v}, {t}, hM, hp1, hsv, vu, sv, wm, taut(h1))
     show := rewrite(sym(eo), dv)
   qed
-  show by taut(expand(hm, abi.matches), c1, c2, c3)
+  show by taut(expand(hma, abi.matches_at), c1, c2, c3)
 qed
 
 // C1 from the bridge: every run from an entry matched with the spec
@@ -243,4 +297,179 @@ proof
     show := apply(abi.bridge_run, {f}, {spec}, {args}, {s}, {o}, hM, he, hr, hm)
   qed
   show := apply(abi.implements_intro, hrun)
+qed
+
+// The view after the prologue: the entry's memory with stores to the slot
+// below the return address (the red zone's top 8 bytes and the return
+// address's) -- scratch. In the form `fn_update(y, "bytes", B)` with B a
+// chain of stores (as simp normalizes the memory), one store at a time.
+
+// the memory matches itself (no store at all)
+theorem abi.wm_refl: all old v sp. abi.world_matches(old, v, v, sp)
+proof
+  fix old
+  fix v
+  fix sp
+  show by defs(simp(), abi.world_matches)
+qed
+
+// (the bytes of a memory, written back: the memory)
+theorem abi.vm_bytes_same: all vm. vm in x86_64_linux.Vm -> fn_update(vm, "bytes", app(vm, "bytes")) = vm
+proof
+  fix vm
+  assume hv: vm in x86_64_linux.Vm
+  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by simp(expand(hv, x86_64_linux.Vm))
+  have hf: is_fun(vm) by taut(ht)
+  have bd: "bytes" in dom(vm) by simp(ht)
+  show := mp(mp(fn_update_same[f := vm, k := "bytes"], hf), bd)
+qed
+
+// no store: the memory is a scratch view of itself, matching
+theorem abi.sv_base: all vm sp. vm in x86_64_linux.Vm -> abi.scratch_view(fn_update(vm, "bytes", app(vm, "bytes")), vm, sp)
+proof
+  fix vm
+  fix sp
+  assume hv: vm in x86_64_linux.Vm
+  have e := apply(abi.vm_bytes_same, hv)
+  show by defs(simp(e), abi.scratch_view)
+qed
+
+theorem abi.wm_base: all old vm sp. vm in x86_64_linux.Vm -> abi.world_matches(old, vm, fn_update(vm, "bytes", app(vm, "bytes")), sp)
+proof
+  fix old
+  fix vm
+  fix sp
+  assume hv: vm in x86_64_linux.Vm
+  have e := apply(abi.vm_bytes_same, hv)
+  show by defs(simp(e), abi.world_matches)
+qed
+
+// a store to the slot changes scratch bytes only
+theorem abi.slot_out: all old b sp c n x a. sp in bits(64) -> abi.stack_page(old, int_div(sp, 4096)) -> int_mod(bits_add(64, sp, 8), 16) = 0 -> int_lt(sp, 140737488355328) ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(x86_64_linux.store_le(b, bits_add(64, sp, c), n, x), a) = app(b, a)
+proof
+  fix old
+  fix b
+  fix sp
+  fix c
+  fix n
+  fix x
+  fix a
+  assume h1: sp in bits(64)
+  assume h2: abi.stack_page(old, int_div(sp, 4096))
+  assume h3: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume h4: int_lt(sp, 140737488355328)
+  assume hc: c in bits(64)
+  assume hk: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  assume ha: a in bits(64)
+  assume hs: !abi.scratch(old, bits_add(64, sp, 8), a)
+  have sl := apply(abi.slot_scratch, {old}, {sp}, {c}, {a}, h1, h2, h3, h4, hc, hk, ha)
+  have nk: !int_lt(bits_sub(64, a, bits_add(64, sp, c)), int_sub(18446744073709551616, c)) by taut(sl, hs)
+  have nl: !int_lt(bits_sub(64, a, bits_add(64, sp, c)), n) by simp(nk, hn)
+  have ab := mp(app_fn_build[d := bits(64), v := y. ite(int_lt(bits_sub(64, y, bits_add(64, sp, c)), n), bits_of_int(8, int_div(x, int_pow(256, bits_sub(64, y, bits_add(64, sp, c))))), app(b, y)), a := a], ha)
+  have itf := mp(ite_f[c := int_lt(bits_sub(64, a, bits_add(64, sp, c)), n), a := bits_of_int(8, int_div(x, int_pow(256, bits_sub(64, a, bits_add(64, sp, c))))), b := app(b, a)], nl)
+  show by defs(trans(ab, itf), x86_64_linux.store_le)
+qed
+
+// a store to the slot keeps a scratch view
+theorem abi.slot_sv: all old y b sp c n x. sp in bits(64) -> abi.stack_page(old, int_div(sp, 4096)) -> int_mod(bits_add(64, sp, 8), 16) = 0 -> int_lt(sp, 140737488355328) ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  abi.scratch_view(fn_update(y, "bytes", b), old, bits_add(64, sp, 8)) ->
+  abi.scratch_view(fn_update(y, "bytes", x86_64_linux.store_le(b, bits_add(64, sp, c), n, x)), old, bits_add(64, sp, 8))
+proof
+  fix old
+  fix y
+  fix b
+  fix sp
+  fix c
+  fix n
+  fix x
+  assume h1: sp in bits(64)
+  assume h2: abi.stack_page(old, int_div(sp, 4096))
+  assume h3: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume h4: int_lt(sp, 140737488355328)
+  assume hc: c in bits(64)
+  assume hk: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  assume hv: abi.scratch_view(fn_update(y, "bytes", b), old, bits_add(64, sp, 8))
+  have hx := expand(hv, abi.scratch_view)
+  have hb: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(b, a) = app(app(old, "bytes"), a) by simp(hx)
+  have bs: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(x86_64_linux.store_le(b, bits_add(64, sp, c), n, x), a) = app(app(old, "bytes"), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume hs: !abi.scratch(old, bits_add(64, sp, 8), a)
+    have o1 := apply(abi.slot_out, {old}, {b}, {sp}, {c}, {n}, {x}, {a}, h1, h2, h3, h4, hc, hk, hn, ha, hs)
+    show := trans(o1, mp(mp(all_elim(hb, {a}), ha), hs))
+  qed
+  show by defs(simp(hx, bs, keep(abi.scratch, x86_64_linux.store_le)), abi.scratch_view)
+qed
+
+// a store to the slot keeps a match, in the world's memory (the view)
+theorem abi.slot_wm: all old new y b sp c n x. sp in bits(64) -> abi.stack_page(old, int_div(sp, 4096)) -> int_mod(bits_add(64, sp, 8), 16) = 0 -> int_lt(sp, 140737488355328) ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  abi.world_matches(old, new, fn_update(y, "bytes", b), bits_add(64, sp, 8)) ->
+  abi.world_matches(old, new, fn_update(y, "bytes", x86_64_linux.store_le(b, bits_add(64, sp, c), n, x)), bits_add(64, sp, 8))
+proof
+  fix old
+  fix new
+  fix y
+  fix b
+  fix sp
+  fix c
+  fix n
+  fix x
+  assume h1: sp in bits(64)
+  assume h2: abi.stack_page(old, int_div(sp, 4096))
+  assume h3: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume h4: int_lt(sp, 140737488355328)
+  assume hc: c in bits(64)
+  assume hk: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  assume hm: abi.world_matches(old, new, fn_update(y, "bytes", b), bits_add(64, sp, 8))
+  have hx := expand(hm, abi.world_matches)
+  have hb: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(app(new, "bytes"), a) = app(b, a) by simp(hx)
+  have bs: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(app(new, "bytes"), a) = app(x86_64_linux.store_le(b, bits_add(64, sp, c), n, x), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume hs: !abi.scratch(old, bits_add(64, sp, 8), a)
+    have o1 := apply(abi.slot_out, {old}, {b}, {sp}, {c}, {n}, {x}, {a}, h1, h2, h3, h4, hc, hk, hn, ha, hs)
+    show := trans(mp(mp(all_elim(hb, {a}), ha), hs), sym(o1))
+  qed
+  show by defs(simp(hx, bs, keep(abi.scratch, abi.scratch_page, abi.stack_page, x86_64_linux.store_le)), abi.world_matches)
+qed
+
+// a store to the slot keeps a match, in the machine's memory
+theorem abi.slot_matches: all old w y b sp c n x. sp in bits(64) -> abi.stack_page(old, int_div(sp, 4096)) -> int_mod(bits_add(64, sp, 8), 16) = 0 -> int_lt(sp, 140737488355328) ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  abi.world_matches(old, fn_update(y, "bytes", b), w, bits_add(64, sp, 8)) ->
+  abi.world_matches(old, fn_update(y, "bytes", x86_64_linux.store_le(b, bits_add(64, sp, c), n, x)), w, bits_add(64, sp, 8))
+proof
+  fix old
+  fix w
+  fix y
+  fix b
+  fix sp
+  fix c
+  fix n
+  fix x
+  assume h1: sp in bits(64)
+  assume h2: abi.stack_page(old, int_div(sp, 4096))
+  assume h3: int_mod(bits_add(64, sp, 8), 16) = 0
+  assume h4: int_lt(sp, 140737488355328)
+  assume hc: c in bits(64)
+  assume hk: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  assume hm: abi.world_matches(old, fn_update(y, "bytes", b), w, bits_add(64, sp, 8))
+  have hx := expand(hm, abi.world_matches)
+  have hb: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(b, a) = app(app(w, "bytes"), a) by simp(hx)
+  have bs: all a. a in bits(64) -> !abi.scratch(old, bits_add(64, sp, 8), a) -> app(x86_64_linux.store_le(b, bits_add(64, sp, c), n, x), a) = app(app(w, "bytes"), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume hs: !abi.scratch(old, bits_add(64, sp, 8), a)
+    have o1 := apply(abi.slot_out, {old}, {b}, {sp}, {c}, {n}, {x}, {a}, h1, h2, h3, h4, hc, hk, hn, ha, hs)
+    show := trans(o1, mp(mp(all_elim(hb, {a}), ha), hs))
+  qed
+  show by defs(simp(hx, bs, keep(abi.scratch, abi.scratch_page, abi.stack_page, x86_64_linux.store_le)), abi.world_matches)
 qed
