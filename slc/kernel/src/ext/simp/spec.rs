@@ -288,7 +288,7 @@ impl Sr<'_, '_> {
     /// `sint(n, v)` (signed) or v; `gimple.fits(T, sint(m, y))` is true for
     /// a signed T of n >= m bits.
     fn word(&self, ctx: &[Term], t: &Term) -> Term {
-        Words { sp: self.sp, lg: self.lg, bytes: false, memo: Default::default() }.word(ctx, t)
+        Words { sp: self.sp, lg: self.lg, bytes: false, memo: Default::default(), eqs: Vec::new() }.word(ctx, t)
     }
 
     /// The arithmetic helpers unfolded in t (bottom-up).
@@ -317,10 +317,76 @@ pub(super) struct Words<'s, 'a> {
     pub(super) bytes: bool,
     /// the forms found, under the one context (cleared when it changes)
     pub(super) memo: std::cell::RefCell<std::collections::HashMap<Term, Term>>,
+    /// the premises' equations `all xs. H.. -> l = r` (math lemmas: the
+    /// machine's computation l as the spec's r), applied where H holds
+    pub(super) eqs: Vec<(Vec<VarId>, Vec<Term>, Term, Term)>,
+}
+
+impl<'s, 'a> Words<'s, 'a> {
+    pub(super) fn new(sp: &'s Simp<'a>, lg: &'s Logic, bytes: bool, premises: &[Term]) -> Self {
+        let mut fresh = sp.env.vars.len() as u32 + 7_000_000;
+        for p in premises {
+            fresh = fresh.max(max_var(p) + 1);
+        }
+        let mut eqs = Vec::new();
+        for p in premises {
+            if !matches!(p.node(), Node::App(q, _) if *q == lg.all) {
+                continue;
+            }
+            let Some((vs, hyps, concl)) = sp.rule(p, &mut fresh) else { continue };
+            let Node::App(e, ab) = concl.node() else { continue };
+            if *e != sp.s.eq || !matches!(ab[0].node(), Node::App(..)) {
+                continue;
+            }
+            let mut lv = Vec::new();
+            ab[0].vars(&mut lv);
+            if vs.iter().all(|v| lv.contains(v)) {
+                eqs.push((vs, hyps, ab[0].clone(), ab[1].clone()));
+            }
+        }
+        // (the equations in the same forms -- their reads of memory as
+        // sums of bytes -- no context: nothing decided)
+        let plain = Words { sp, lg, bytes, memo: Default::default(), eqs: Vec::new() };
+        let eqs = eqs
+            .into_iter()
+            .map(|(vs, hyps, l, r)| {
+                let hyps = hyps.iter().map(|h| plain.word(&[], h)).collect();
+                (vs, hyps, plain.word(&[], &l), plain.word(&[], &r))
+            })
+            .collect();
+        Words { sp, lg, bytes, memo: Default::default(), eqs }
+    }
+
+    /// t by an equation whose left side it is, its hypotheses shown
+    fn by_eqs(&self, ctx: &[Term], t: &Term) -> Option<Term> {
+        let bf = self.sp.env.binders_fn();
+        for (vs, hyps, l, r) in &self.eqs {
+            let mut b = Vec::new();
+            if !super::pmatch(l, t, vs, &mut b) || !vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                continue;
+            }
+            let sub = |x: &Term| b.iter().fold(x.clone(), |x, (v, y)| x.subst_var(*v, y, &bf));
+            let shown = hyps.iter().all(|h| {
+                let h = self.sp.prop(&sub(h), Pol::Other);
+                self.sp.is_true(&h) || ctx.contains(&h) || self.sp.typed(ctx, &h) || self.lg.symex_decide(self.sp, ctx, &h) == Some(true)
+            });
+            if shown {
+                return Some(self.sp.term(&sub(r)));
+            }
+        }
+        None
+    }
 }
 
 impl Words<'_, '_> {
     pub(super) fn word(&self, ctx: &[Term], t: &Term) -> Term {
+        if std::env::var("WORDS_DEBUG").is_ok_and(|v| v == "2") && t.loose_depth(&self.sp.env.binders_fn()) == 0 {
+            let pr = crate::syntax::Printer::new(self.sp.env);
+            let s = pr.term(t);
+            if s.starts_with("bits_add(64, app(args, 0), 32)") || s.starts_with("bits_add(64, bits_add(64, app(args") {
+                eprintln!("words: word of {} (memo {})", s, self.memo.borrow().contains_key(t));
+            }
+        }
         if let Some(u) = self.memo.borrow().get(t) {
             return u.clone();
         }
@@ -330,6 +396,17 @@ impl Words<'_, '_> {
     }
 
     fn word_of(&self, ctx: &[Term], t: &Term) -> Term {
+        let u = self.word_base(ctx, t);
+        if self.eqs.is_empty() || u.loose_depth(&self.sp.env.binders_fn()) > 0 {
+            return u;
+        }
+        match self.by_eqs(ctx, &u) {
+            Some(r) if r != u => self.word(ctx, &r),
+            _ => u,
+        }
+    }
+
+    fn word_base(&self, ctx: &[Term], t: &Term) -> Term {
         let Node::App(g, x) = t.node() else { return t.clone() };
         let bind = self.sp.env.binders_fn();
         // (under binders too: the context decides closed subterms only)
@@ -370,11 +447,27 @@ impl Words<'_, '_> {
                         // (c below 2^(n-1): a negative c, a subtraction, wraps
                         // unless y is large -- not an address's offset)
                         if cv.is_zero() || *cv >= crate::nat::Nat::pow2(n - 1) || matches!(y.node(), Node::Nat(_)) || !self.sp.bits_term(y, n) {
+                            if std::env::var("WORDS_DEBUG").is_ok() && !cv.is_zero() {
+                                let pr = crate::syntax::Printer::new(self.sp.env);
+                                let ty = ctx.iter().find(|l| matches!(l.node(), Node::App(i, ab) if is(*i, self.sp.s.in_) && ab[0] == *y)).map(|l| pr.term(l));
+                                eprintln!("words: no sum (typing {}, in context {:?}): {}", self.sp.bits_term(y, n), ty, pr.term(&t));
+                            }
                             continue;
                         }
                         let sum = if *cv >= crate::nat::Nat::from_u64(4096) { Term::app(*ia, vec![c.clone(), y.clone()]) } else { Term::app(*ia, vec![y.clone(), c.clone()]) };
                         let lim = Term::nat(crate::nat::Nat::pow2(n));
-                        if self.lg.symex_decide(self.sp, ctx, &Term::app(*lt, vec![Term::app(*ia, vec![y.clone(), c.clone()]), lim])) == Some(true) {
+                        let goal = Term::app(*lt, vec![Term::app(*ia, vec![y.clone(), c.clone()]), lim]);
+                        let d = self.lg.symex_decide(self.sp, ctx, &goal);
+                        if std::env::var("WORDS_DEBUG").is_ok() {
+                            let pr = crate::syntax::Printer::new(self.sp.env);
+                            eprintln!("words: no wrap {:?}: {} (as {})", d, pr.term(&goal), pr.term(&self.sp.prop(&goal, Pol::Other)));
+                            if d.is_none() {
+                                for l in ctx.iter().filter(|l| pr.term(l).contains("int_lt(") && pr.term(l).len() < 200) {
+                                    eprintln!("   ctx: {}", pr.term(l));
+                                }
+                            }
+                        }
+                        if d == Some(true) {
                             return sum;
                         }
                     }

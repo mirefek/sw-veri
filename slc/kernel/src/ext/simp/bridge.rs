@@ -43,7 +43,7 @@ impl Logic {
                 eprintln!("bridge: {:8.3}s {}", t0.elapsed().as_secs_f64(), what)
             }
         };
-        let (runs, rtr, app, matches, matches_at, fn_update, empty, badd, ok, pair) = (
+        let (runs, rtr, app, matches, matches_at, fn_update, empty, badd, ok, pair, exc) = (
             sym("runs")?,
             sym("abi.run_to_return")?,
             sym("app")?,
@@ -54,6 +54,7 @@ impl Logic {
             sym("bits_add")?,
             sym("ok")?,
             sym("pair")?,
+            sym("exc")?,
         );
         let pr = crate::syntax::Printer::new(env);
         let short = |t: &Term| pr.term(t).chars().take(600).collect::<String>();
@@ -125,18 +126,19 @@ impl Logic {
         let with_run = |facts: &[Term], s2: &Term| -> Vec<Term> {
             facts.iter().map(|t| if is_run(t) { Term::app(runs, vec![Term::app(rtr, vec![]), s2.clone(), o.clone()]) } else { t.clone() }).collect()
         };
-        // the prologue: the spec on S's memory for D (the arity: which
-        // argument registers hold args), the machine from there
+        // the prologue: the machine from S with the argument registers
+        // holding args (all six: v is a witness only, its obligations shown
+        // below -- where a register is no argument, its store is scratch)
         let vm0 = field(&s, b"vm");
         let v = {
-            let w0 = view(&vm0);
-            let out0 = self.spec_run_out(env, p, &w0, &[], premises)?;
-            lap("the spec on the entry's memory");
+            let mut gpr = field(&s, b"gpr");
             let mut facts = premises.to_vec();
-            facts.extend(out0.ub.iter().cloned());
-            facts.push(Term::app(in_, vec![w0, u1.clone()]));
-            let (s2, facts) = self.bridge_couple(env, &sp, &facts, &s, &args)?;
-            lap("the arguments");
+            for (i, r) in [7u64, 6, 2, 1, 8, 9].iter().enumerate() {
+                let arg = Term::app(app, vec![args.clone(), nat(i as u64)]);
+                facts.push(Term::app(in_, vec![arg.clone(), Term::app(sym("bits")?, vec![nat(64)])]));
+                gpr = Term::app(fn_update, vec![gpr, nat(*r), arg]);
+            }
+            let s2 = Term::app(fn_update, vec![s.clone(), Term::bytes(b"gpr"), gpr]);
             let facts = with_run(&facts, &s2);
             *self.symex_simp.borrow_mut() = facts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect();
             *self.symex_prologue.borrow_mut() = Some(None);
@@ -200,6 +202,11 @@ impl Logic {
         // the spec's branches
         let out = self.spec_run_out(env, p, &w, &[], premises)?;
         lap("the spec on the view");
+        if dbg {
+            if let Some(d) = &out.ub {
+                eprintln!("bridge: D = {}", pr.term(d));
+            }
+        }
         let and = sp.s.and.unwrap();
         let conj = |cs: &[Term]| cs.iter().cloned().reduce(|a, b| Term::app(and, vec![a, b])).unwrap_or_else(|| sp.tt());
         let bf = env.binders_fn();
@@ -221,29 +228,79 @@ impl Logic {
         lap("the arguments");
         let mut covers: Vec<Term> = Vec::new();
         for (bi, (conds, outcome)) in out.branches.iter().enumerate() {
-            // ok(Wk, (r0, r1)): a branch to match; others (a raise not merged)
-            // are covered by D or not at all
+            // ok(Wk, (r0, r1)): a branch to match; a raise from the view
+            // exc(W, e): the raise case, whatever the machine does; others
+            // (a raise elsewhere) are covered by D or not at all
             let Node::App(okk, oa) = outcome.node() else { continue };
+            // (its parameters' typing dropped from the coverage: inhabited)
+            let core: Vec<Term> = conds.iter().filter(|c| !Self::bridge_param_typing(&sp, c, out.first)).cloned().collect();
+            if *okk == exc && oa.len() == 2 && oa[0] == w {
+                // (e: an open value -- empty, then -- or a term in univ(1))
+                let e0 = match oa[1].node() {
+                    Node::Var(x, xa) if xa.is_empty() && *x >= out.first => Term::app(empty, vec![]),
+                    _ => oa[1].clone(),
+                };
+                let sub = |t: &Term| match oa[1].node() {
+                    Node::Var(x, xa) if xa.is_empty() && *x >= out.first => t.subst_var(*x, &e0, &bf),
+                    _ => t.clone(),
+                };
+                let mut ps = dfacts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect::<Vec<_>>();
+                ps.push(out.statement.clone());
+                ps.extend(core.iter().cloned());
+                let mut obl: Vec<Term> = conds.iter().map(sub).filter(|c| !core.contains(c)).collect();
+                obl.push(Term::app(in_, vec![e0.clone(), u1.clone()]));
+                obl.push(Term::app(runs, vec![p.clone(), w.clone(), Term::app(exc, vec![w.clone(), e0.clone()])]));
+                for c in obl {
+                    if let Err(e) = self.simp_prove_loops(env, &ps, &c, &[]) {
+                        return Err(kerr(format!("branch {} of the spec ({}), a raise: not shown: {}: {}", bi + 1, short(&conj(conds)), short(&c), e.0)));
+                    }
+                    ps.push(c);
+                }
+                covers.push(conj(&core));
+                lap(&format!("branch {}: a raise", bi + 1));
+                continue;
+            }
             if *okk != ok || oa.len() != 2 || !matches!(oa[1].node(), Node::App(pp, _) if *pp == pair) {
                 continue;
             }
-            // (its parameters' typing dropped from the coverage: inhabited)
-            let core: Vec<Term> = conds.iter().filter(|c| !Self::bridge_param_typing(&sp, c, out.first)).cloned().collect();
             covers.push(conj(&core));
-            // the machine under Ck (and the facts of every branch)
+            if dbg {
+                for c in conds {
+                    eprintln!("bridge: branch {} condition: {}", bi + 1, pr.term(c));
+                }
+            }
+            // the machine under Ck (and the facts of every branch); the
+            // arguments in their registers again where Ck gives more (a
+            // nonzero argument: `abi.arg0`)
             let mut facts = dfacts.clone();
             facts.extend(conds.iter().cloned());
+            let s2 = if s2 == s {
+                let (s3, f3) = self.bridge_couple(env, &sp, &facts, &s, &args)?;
+                facts = f3;
+                lap(&format!("branch {}: the arguments", bi + 1));
+                s3
+            } else {
+                s2.clone()
+            };
             // (Ck's reads of memory also as the machine's: sums of bytes)
-            let words = super::spec::Words { sp: &sp, lg: self, bytes: true, memo: Default::default() };
-            let ctx = facts.clone();
-            sp.set_nats(&ctx);
-            for c in conds {
-                let c2 = sp.prop(&words.word(&ctx, c), Pol::Other);
-                if !facts.contains(&c2) {
-                    facts.push(c2);
+            let words = super::spec::Words::new(&sp, self, true, &facts);
+            // (twice: the second with the first's forms in the context)
+            for _ in 0..2 {
+                let ctx = facts.clone();
+                sp.set_nats(&ctx);
+                words.memo.borrow_mut().clear();
+                for c in conds {
+                    let c2 = sp.prop(&words.word(&ctx, c), Pol::Other);
+                    if !facts.contains(&c2) {
+                        facts.push(c2);
+                    }
                 }
             }
             let facts = with_run(&facts, &s2);
+            if dbg {
+                let ty: Vec<String> = facts.iter().map(|t| pr.term(t)).filter(|x| x.starts_with("app(args")).collect();
+                eprintln!("bridge: branch {} argument facts: {:?}", bi + 1, ty);
+            }
             // (for simp on a step's premise: not the run itself, nor the
             // instructions' lemmas)
             *self.symex_simp.borrow_mut() = facts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect();
@@ -286,6 +343,11 @@ impl Logic {
                 // values (parameters) those the machine returns -- (rax, rdx)
                 let mut ps: Vec<Term> = facts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect();
                 ps.push(out.statement.clone());
+                // (and in word forms: the machine's values compared)
+                let stw = sp.prop(&words.word(&facts, &out.statement), Pol::Other);
+                if stw != out.statement {
+                    ps.push(stw);
+                }
                 ps.extend(pconds.iter().cloned());
                 sp.set_nats(&ps);
                 let reg = |r: u64| sp.term(&Term::app(app, vec![field(&m1, b"gpr"), nat(r)]));
@@ -338,6 +400,9 @@ impl Logic {
                         // (or with its reads of memory as sums of bytes)
                         sp.set_nats(&shown);
                         let c2 = sp.prop(&words.word(&shown, &c), Pol::Other);
+                        if dbg {
+                            eprintln!("bridge: in word forms: {}", pr.term(&c2));
+                        }
                         if c2 == c || self.simp_prove_loops(env, &shown, &c2, &[]).is_err() {
                             return Err(fail(&format!("its return does not match, at {}", short(&c)), e.0));
                         }
@@ -422,6 +487,13 @@ impl Logic {
             false
         };
         let no_run: Vec<Term> = facts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect();
+        // (the lemmas and literals: the compound facts split simp's paths --
+        // D, needed for the arity only)
+        let compound = |l: &Term| match l.node() {
+            Node::App(c, _) => *c == env.builtins.imp || is(*c, sp.s.or) || is(*c, sp.s.and),
+            _ => false,
+        };
+        let lean: Vec<Term> = no_run.iter().filter(|t| !compound(t)).cloned().collect();
         let mut gpr = field(s, b"gpr");
         for (i, r) in [7u64, 6, 2, 1, 8, 9].iter().enumerate() {
             let reg = Term::app(app, vec![field(s, b"gpr"), nat(*r)]);
@@ -429,19 +501,26 @@ impl Logic {
             let e = Term::app(env.builtins.eq, vec![reg.clone(), arg.clone()]);
             // (the arity first: the spec's own guard `ord_le(i+1, seq_len(args))`)
             let guard = Term::app(sym("ord_le")?, vec![nat(i as u64 + 1), Term::app(sym("seq_len")?, vec![args.clone()])]);
-            let mut with_guard = no_run.clone();
-            if self.simp_prove_loops(env, &no_run, &guard, &[]).is_ok() {
+            let mut with_guard = lean.clone();
+            let arity = self.simp_prove_loops(env, &lean, &guard, &[]).is_ok() || self.simp_prove_loops(env, &no_run, &guard, &[]).is_ok();
+            if arity {
                 with_guard.push(guard);
-            } else {
+            }
+            // (or by a lemma from other facts: `abi.arg0`, a nonzero
+            // argument passed)
+            let coupled = self.simp_prove_loops(env, &with_guard, &e, &[]).is_ok();
+            if !coupled && !arity {
                 // (fewer arguments: none further)
                 break;
             }
-            if self.simp_prove_loops(env, &with_guard, &e, &[]).is_ok() {
+            if coupled {
                 // (the register's typing, and reg = arg: the argument's)
                 let bits64 = Term::app(sym("bits")?, vec![nat(64)]);
                 sp.set_nats(&no_run);
-                if sp.typed(&no_run, &Term::app(sp.s.in_.unwrap(), vec![reg, bits64.clone()])) {
-                    facts.push(Term::app(sp.s.in_.unwrap(), vec![arg.clone(), bits64]));
+                let rty = Term::app(sp.s.in_.unwrap(), vec![reg, bits64.clone()]);
+                let aty = Term::app(sp.s.in_.unwrap(), vec![arg.clone(), bits64]);
+                if sp.typed(&no_run, &rty) || self.simp_prove_loops(env, &lean, &rty, &[]).is_ok() {
+                    facts.push(aty);
                 }
                 facts.push(e);
                 gpr = Term::app(fn_update, vec![gpr, nat(*r), arg]);

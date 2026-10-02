@@ -1586,10 +1586,15 @@ impl<'a> Simp<'a> {
                     };
                     let mut new = args.clone();
                     let mut changed = false;
-                    // (likewise the low k+1 bits of y, k+1 >= n: y)
+                    // (likewise the low k+1 bits of y, k+1 >= n: y -- as a
+                    // slice, or y mod 2^(k+1), `bits_add(k+1, y, 0)`)
                     let slice_of = |x: &Term| match x.node() {
                         Node::App(g, b) if self.arith.get(g) == Some(&"bits_slice") && b.len() == 3 => match (b[1].node(), b[2].node()) {
                             (Node::Nat(k), Node::Nat(lo)) if lo.is_zero() => Some((k.clone(), b[0].clone())),
+                            _ => None,
+                        },
+                        Node::App(g, b) if self.arith.get(g) == Some(&"bits_add") && b.len() == 3 && self.int_lit(&b[2]).is_some_and(|c| c.m.is_zero()) => match b[0].node() {
+                            Node::Nat(m) if !m.is_zero() => Some((m.sub(&crate::nat::Nat::from_u64(1))?, b[1].clone())),
                             _ => None,
                         },
                         _ => None,
@@ -1647,6 +1652,12 @@ impl<'a> Simp<'a> {
                 if let (Node::Nat(hi), Node::Nat(lo)) = (args[1].node(), args[2].node()) {
                     if lo.is_zero() && hi.to_u64().is_some_and(|h| h < 256 && self.bits_term(&args[0], h + 1)) {
                         return args[0].clone();
+                    }
+                    // the low k+1 bits: x mod 2^(k+1), in its one form
+                    // `bits_add(k+1, x, 0)`
+                    if lo.is_zero() && hi.to_u64().is_some_and(|h| h < 256) {
+                        let z = Term::nat(crate::nat::Nat::zero());
+                        return self.term(&Term::app(self.s.bits_add.unwrap(), vec![Term::nat(hi.add(&crate::nat::Nat::from_u64(1))), args[0].clone(), z]));
                     }
                 }
             }
@@ -4377,12 +4388,22 @@ impl Simp<'_> {
                     }
                 }
             }
-            instances(&hyps, 0, &match_lits, &vs, Vec::new(), Vec::new(), &mut insts);
             // variables only in the conclusion `lhs = rhs`: from the terms
             let lhs = match concl.node() {
                 Node::App(e, ab) if *e == self.s.eq => Some(ab[0].clone()),
                 _ => None,
             };
+            // (an equation: first where its left side occurs -- a typing
+            // hypothesis binds its variable to any typed literal)
+            if let Some(lhs) = &lhs {
+                for u in &subs {
+                    let mut b = Vec::new();
+                    if pmatch(lhs, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                        instances(&hyps, 0, &match_lits, &vs, b, Vec::new(), &mut insts);
+                    }
+                }
+            }
+            instances(&hyps, 0, &match_lits, &vs, Vec::new(), Vec::new(), &mut insts);
             let mut all_insts = Vec::new();
             for (mut binds, mut open) in insts {
                 // an open hypothesis may match once instantiated and

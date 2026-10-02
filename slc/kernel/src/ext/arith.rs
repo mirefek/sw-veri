@@ -131,6 +131,11 @@ struct Syms {
     bits_neg: Option<SymId>,
     bits_of_int: Option<SymId>,
     pair: Option<SymId>,
+    /// the other word operations, each n-bit (`int_mod(.., 2^n)`, a
+    /// `bits_build(n, ..)`, a `bits_of_int(n, ..)`): (symbol, the position of
+    /// n among its arguments, its arity)
+    words: [Option<(SymId, usize, usize)>; 8],
+    bits_shr: Option<SymId>,
 }
 
 impl Syms {
@@ -161,6 +166,9 @@ impl Syms {
             bits_neg: s("bits_neg"),
             bits_of_int: s("bits_of_int"),
             pair: s("pair"),
+            words: [("bits_mul", 0, 3), ("bits_shl", 0, 3), ("bits_sar", 0, 3), ("bits_and", 0, 3), ("bits_or", 0, 3), ("bits_xor", 0, 3), ("bits_not", 0, 2), ("bits_sext", 1, 3)]
+                .map(|(n, i, k)| s(n).map(|f| (f, i, k))),
+            bits_shr: s("bits_shr"),
         }
     }
 }
@@ -336,8 +344,21 @@ impl Reader {
                 }
             }
         }
-        // any other term: its value, an integer variable
+        // any other term: its value, an integer variable -- of an n-bit word
+        // operation, in 0 .. 2^n - 1 (`bits_shr(n, a, k)`, a numeral k: the
+        // n-bit a divided)
+        let fresh = !self.vars.contains(t);
         let v = self.var_of(t);
+        if fresh {
+            if let Node::App(f, a) = t.node() {
+                let width = s.words.iter().flatten().find(|(g, _, k)| g == f && a.len() == *k).and_then(|(_, i, _)| small(&a[*i]));
+                let width = width.or_else(|| (is(*f, s.bits_shr) && a.len() == 3 && small(&a[2]).is_some()).then(|| small(&a[0])).flatten());
+                if let Some(n) = width.filter(|n| (0..=100).contains(n)) {
+                    self.side.push(Lin::var(v));
+                    self.side.push(Lin::konst((1i128 << n) - 1).add(&Lin::var(v), -1)?);
+                }
+            }
+        }
         Some(Lin::var(v))
     }
 

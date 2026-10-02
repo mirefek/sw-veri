@@ -194,6 +194,14 @@ impl Logic {
         let mut lits = Vec::new();
         for f in facts {
             sp.conjuncts(&self.simp_fact(env, f), &mut lits);
+            // (a word's typing also as given: the word forms read it)
+            if matches!(f.node(), Node::App(i, ab) if is(*i, sp.s.in_) && ab.len() == 2 && matches!(ab[1].node(), Node::App(b, _) if env.syms[*b as usize].name == "bits")) && !lits.contains(f) {
+                lits.push(f.clone());
+            }
+        }
+        if std::env::var("SYMEX_DEBUG").is_ok() {
+            eprintln!("symex: facts with typing: {:?}", facts.iter().map(|f| short(f)).filter(|x| x.ends_with("in bits(64)") && x.len() < 60).collect::<Vec<_>>());
+            eprintln!("symex: lits with typing: {:?}", lits.iter().map(|f| short(f)).filter(|x| x.ends_with("in bits(64)") && x.len() < 60).collect::<Vec<_>>());
         }
         // (M normalized: an entry state with the argument registers set)
         sp.set_nats(&lits);
@@ -226,7 +234,7 @@ impl Logic {
         let mut steps = 0usize;
         // (time in: the word forms, premises shown, conditions decided, the return decided)
         let mut prof = [0f64; 4];
-        let words = super::spec::Words { sp: &sp, lg: self, bytes: true, memo: Default::default() };
+        let words = super::spec::Words::new(&sp, self, true, &self.symex_simp.borrow());
         let mut words_conds: Vec<Term> = Vec::new();
         while let Some(mut p) = work.pop() {
             loop {
@@ -298,6 +306,10 @@ impl Logic {
                         prof[0] += tq.elapsed().as_secs_f64();
                         let tq = std::time::Instant::now();
                         shown = h != h0 && self.symex_shows(env, &sp, &ctx, &h);
+                        if std::env::var("SYMEX_DEBUG").is_ok() {
+                            let ty = ctx.iter().filter(|l| short(l).contains("in bits(64)")).map(|l| short(l)).collect::<Vec<_>>();
+                            eprintln!("symex: word form ({}): {}\n  typings: {:?}", if shown { "shown" } else { "not shown" }, short(&h), ty);
+                        }
                         prof[1] += tq.elapsed().as_secs_f64();
                     }
                     if !shown {
@@ -544,13 +556,27 @@ impl Logic {
                 _ => false,
             };
             // (the lemmas and literals: compound facts -- D's implications,
-            // a branch's alternatives -- would only split simp's paths)
-            let compound = |l: &Term| match l.node() {
-                Node::App(c, _) => *c == env.builtins.imp || is(*c, sp.s.or) || is(*c, sp.s.and),
-                _ => false,
-            };
-            let mut ps: Vec<Term> = extra.into_iter().filter(|l| !compound(l)).collect();
-            ps.extend(ctx.iter().filter(|l| !reg_typing(l) && !compound(l)).cloned());
+            // a branch's alternatives -- would only split simp's paths; an
+            // implication whose antecedent the path decides gives its
+            // consequent, a conjunction its conjuncts)
+            let mut ps: Vec<Term> = Vec::new();
+            let mut st: Vec<Term> = extra.into_iter().chain(ctx.iter().filter(|l| !reg_typing(l)).cloned()).collect();
+            while let Some(l) = st.pop() {
+                match l.node() {
+                    Node::App(c, ab) if *c == env.builtins.imp => {
+                        if self.symex_decide(sp, ctx, &ab[0]) == Some(true) {
+                            st.push(ab[1].clone());
+                        }
+                    }
+                    Node::App(c, _) if is(*c, sp.s.and) => sp.conjuncts(&l, &mut st),
+                    Node::App(c, _) if is(*c, sp.s.or) => {}
+                    _ => {
+                        if !ps.contains(&l) {
+                            ps.push(l);
+                        }
+                    }
+                }
+            }
             let t0 = std::time::Instant::now();
             let r = self.simp_prove_loops(env, &ps, h, &[]);
             if std::env::var("SYMEX_DEBUG").is_ok() {
@@ -558,7 +584,7 @@ impl Logic {
                 eprintln!("symex: premise by simp ({:.3}s, {}): {}", t0.elapsed().as_secs_f64(), if r.is_ok() { "ok" } else { "failed" }, pr.term(h).chars().take(200).collect::<String>());
             }
             if let (Err(e), true) = (&r, std::env::var("SYMEX_DEBUG").is_ok_and(|v| v == "2")) {
-                eprintln!("symex: premise by simp failed: {}", e.0.chars().take(1500).collect::<String>());
+                eprintln!("symex: premise by simp failed: {}", e.0);
             }
             return r.is_ok();
         }
