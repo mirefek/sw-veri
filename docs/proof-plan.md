@@ -533,8 +533,13 @@ decide are gone: for is_bouncing four branches (out of range; the
 counter usable, above 99 or not; not usable). A `_fun` wrapper runs as its
 proc, so the proc lemmas serve as operation lemmas for it. is_bouncing's
 four spec lemmas are now `spec_run` + `simp` (72 lines fewer, `ib.in_range`
-gone); `defined` is still written by hand in the statement, and read off
-the branches' conditions. Not yet: get_stride, loops (step_seq).
+gone), and so are get_stride's (nine branches; 180 lines fewer, its five
+accessor lemmas gone). The undefined-behaviour branches come as one
+statement `all e. e in univ(1) -> !D -> runs(P, W, exc(S, e))`, D the
+conjunction of the branches' `C1 -> .. -> !Cn`, so a `raises` lemma is
+`simp(r, hn, he)`: its hand-written `defined` implies D propositionally.
+`defined` is still written by hand in the statement. Not yet: loops
+(step_seq).
 
 ### 6.3 Simulation, block by block
 

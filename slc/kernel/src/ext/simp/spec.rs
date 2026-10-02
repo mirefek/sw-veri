@@ -31,6 +31,17 @@
 //! only typed as a word (`x in bits(n)`, a value nothing reads) is
 //! dropped, as its witness 0 would be.
 //!
+//! The branches of undefined behaviour -- `C1 -> .. -> Cn -> runs(P, W,
+//! exc(S, x))` for any x in univ(1), all with the same S, and those with
+//! any outcome at all (a wrapper's missing argument) -- are stated
+//! together, as the disjunction of their conditions:
+//!
+//!   all e. e in univ(1) -> !D -> runs(P, W, exc(S, e))
+//!
+//! with D the conjunction of their `C1 -> .. -> !Cn` (what defined means:
+//! the reads each path makes can be made). A proof of a `raises` lemma
+//! then only shows its own definedness to imply D.
+//!
 //! Each branch is shown by construction: the program's relation holds for
 //! the branch's outcome when its conditions do (`runs(mkprog(R), s, o)` is
 //! `pair(s, o) in univ(1) && R(s, o)`, whose membership is among the
@@ -697,9 +708,9 @@ impl Logic {
             return Err(kerr("no branch of the program found".into()));
         }
         let bf = env.binders_fn();
-        let and = sp.s.and.unwrap();
-        let mut out: Option<Term> = None;
-        for b in bs.iter().rev() {
+        // each branch: its conditions, in word form, and its outcome
+        let mut done: Vec<(Vec<Term>, Term)> = Vec::new();
+        for b in &bs {
             // (the conditions in word form, by conjuncts, those the facts
             // show dropped)
             let mut conds: Vec<Term> = Vec::new();
@@ -745,25 +756,113 @@ impl Logic {
             }
             vs.retain(|v| *v >= first && unused(*v));
             kept.retain(|c| !vs.iter().any(|v| has_var(c, *v)));
+            done.push((kept, o));
+        }
+        // the branches of undefined behaviour, `C.. -> runs(P, W, exc(S,
+        // x))` for any x in univ(1) (or any outcome x), stated together:
+        // `all e. e in univ(1) -> !D -> runs(P, W, exc(S, e))` with D the
+        // conjunction of their `C1 -> .. -> !Cn` (D fails: one of them
+        // holds)
+        let param = |t: &Term| match t.node() {
+            Node::Var(v, a) if a.is_empty() && *v >= first => Some(*v),
+            _ => None,
+        };
+        // (the conditions without the parameter's typing, and that typing's set)
+        let strip = |conds: &[Term], x: VarId| -> Option<(Vec<Term>, Option<Term>)> {
+            let mut rest = Vec::new();
+            let mut set = None;
+            for c in conds {
+                if !has_var(c, x) {
+                    rest.push(c.clone());
+                    continue;
+                }
+                match c.node() {
+                    Node::App(i, ab) if is(*i, sp.s.in_) && param(&ab[0]) == Some(x) && !has_var(&ab[1], x) => set = Some(ab[1].clone()),
+                    _ => return None,
+                }
+            }
+            Some((rest, set))
+        };
+        let mut ub: Vec<(usize, Vec<Term>)> = Vec::new();
+        let mut any: Vec<(usize, Vec<Term>, Option<Term>)> = Vec::new();
+        let mut state: Option<Term> = None;
+        let mut set: Option<Term> = None;
+        let mut same = true;
+        for (i, (kept, o)) in done.iter().enumerate() {
+            match o.node() {
+                Node::App(ex, ab) if Some(*ex) == sp.s.exc && ab.len() == 2 => {
+                    let Some(x) = param(&ab[1]) else { continue };
+                    if has_var(&ab[0], x) {
+                        continue;
+                    }
+                    let Some((rest, s)) = strip(kept, x) else { continue };
+                    same &= state.as_ref().is_none_or(|t| *t == ab[0]) && (set.is_none() || s.is_none() || set == s);
+                    state = Some(ab[0].clone());
+                    set = set.or(s);
+                    ub.push((i, rest));
+                }
+                Node::Var(..) => {
+                    if let Some(x) = param(o) {
+                        if let Some((rest, s)) = strip(kept, x) {
+                            any.push((i, rest, s));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut merged: Option<Term> = None;
+        let mut gone: Vec<usize> = Vec::new();
+        if let (true, Some(s), Some(set)) = (same && !ub.is_empty(), state, set) {
+            // (an outcome of any branch is exc(S, e) when that is in univ(1))
+            let in_ = sp.s.in_.unwrap();
+            let s_ok = matches!(set.node(), Node::App(u, _) if is(*u, sp.s.univ)) && (sp.typed(&sr.facts, &Term::app(in_, vec![s.clone(), set.clone()])) || sr.facts.contains(&Term::app(in_, vec![s.clone(), set.clone()])));
+            let mut all_ub = ub.clone();
+            if s_ok {
+                all_ub.extend(any.iter().filter(|(_, _, s)| s.as_ref() == Some(&set)).map(|(i, r, _)| (*i, r.clone())));
+            }
+            let chain = |cs: &[Term]| -> Term {
+                match cs.split_last() {
+                    None => sp.ff(),
+                    Some((last, init)) => init.iter().rev().fold(sp.prop(&sp.not(last.clone()), Pol::Other), |t, c| Term::app(env.builtins.imp, vec![c.clone(), t])),
+                }
+            };
+            let d = all_ub.iter().map(|(_, cs)| chain(cs)).reduce(|a, b| sp.and(a, b)).unwrap();
+            let (ev, et) = sr.var();
+            let t = Term::app(env.builtins.imp, vec![Term::app(in_, vec![et.clone(), set]), Term::app(env.builtins.imp, vec![sp.not(d), Term::app(runs, vec![p.clone(), w.clone(), Term::app(sp.s.exc.unwrap(), vec![s, et.clone()])])])]);
+            merged = Some(t);
+            gone = all_ub.iter().map(|(i, _)| *i).collect();
+            let _ = ev;
+        }
+        let and = sp.s.and.unwrap();
+        let mut ts: Vec<Term> = Vec::new();
+        for (i, (kept, o)) in done.into_iter().enumerate() {
+            if gone.contains(&i) {
+                continue;
+            }
             let mut t = Term::app(runs, vec![p.clone(), w.clone(), o]);
             for c in kept.iter().rev() {
                 t = Term::app(env.builtins.imp, vec![c.clone(), t]);
             }
-            // (the values left open, among them an outcome undefined
-            // behaviour leaves open: parameters)
-            let mut vs = Vec::new();
-            t.vars(&mut vs);
-            vs.retain(|v| *v >= first);
-            vs.sort();
-            vs.dedup();
-            for v in vs.iter().rev() {
-                t = Term::app(self.all, vec![abstract_term(&t, &Term::var(*v, vec![]), 0, &bf)]);
-            }
-            out = Some(match out {
-                None => t,
-                Some(r) => Term::app(and, vec![t, r]),
-            });
+            ts.push(t);
         }
-        Ok(out.unwrap())
+        ts.extend(merged);
+        // (the values left open, among them an outcome undefined behaviour
+        // leaves open: parameters)
+        let ts: Vec<Term> = ts
+            .into_iter()
+            .map(|mut t| {
+                let mut vs = Vec::new();
+                t.vars(&mut vs);
+                vs.retain(|v| *v >= first);
+                vs.sort();
+                vs.dedup();
+                for v in vs.iter().rev() {
+                    t = Term::app(self.all, vec![abstract_term(&t, &Term::var(*v, vec![]), 0, &bf)]);
+                }
+                t
+            })
+            .collect();
+        Ok(ts.into_iter().rev().reduce(|r, t| Term::app(and, vec![t, r])).unwrap())
     }
 }
