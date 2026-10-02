@@ -110,7 +110,7 @@
 //!   value is its proposition; `p = true` / `p = false` of a proposition p
 //!   is p / !p.
 //! * a proposition (eq, in, imp, ex, and what unfolds to them) is in
-//!   univ(1) and above (the prelude's `false_univ`, `true_univ`).
+//!   every universe (the prelude's `prop_univ`: in univ(0)).
 //! * arith, when the literals alone do not close a path, also gets the
 //!   widths simp knows of opaque words (`le(b, a, 1) in bits(8)`).
 //! * witnesses: a variable only typed `x in bits(n)` / `x in omega` (an
@@ -2062,9 +2062,10 @@ impl<'a> Simp<'a> {
         if above_omega && self.int_term(x) {
             return Some(self.tt());
         }
-        // a proposition: false or true, both in univ(1) (the prelude's
-        // `false_univ`, `true_univ`) and so in every universe above
-        if above_omega && self.prop_shaped(x, 4) && ["false_univ", "true_univ"].iter().all(|a| self.env.axioms.iter().any(|(n, _)| n == a)) {
+        // a proposition: in univ(0) (the prelude's `prop_univ`) and so in
+        // every universe
+        let literal_univ = matches!(set.node(), Node::App(_, ub) if matches!(ub.first().map(|n| n.node()), Some(Node::Nat(_))));
+        if literal_univ && self.prop_shaped(x, 4) && self.env.axioms.iter().any(|(n, _)| n == "prop_univ") {
             return Some(self.tt());
         }
         // in a goal: a member by the path (before the strengthening below
@@ -3833,10 +3834,10 @@ impl Simp<'_> {
         if !is(*i, self.s.in_) {
             return false;
         }
-        // an open flag (`x = false || x = true` on the path) in univ(u), u
-        // >= 1: false and true are (the prelude's `false_univ`, `true_univ`)
+        // an open flag (`x = false || x = true` on the path) in univ(u):
+        // false and true are (the prelude's `prop_univ`: in univ(0))
         if let Node::App(u, ub) = ab[1].node() {
-            if is(*u, self.s.univ) && matches!(ub[0].node(), Node::Nat(k) if !k.is_zero()) && ["false_univ", "true_univ"].iter().all(|a| self.env.axioms.iter().any(|(n, _)| n == a)) {
+            if is(*u, self.s.univ) && matches!(ub[0].node(), Node::Nat(_)) && self.env.axioms.iter().any(|(n, _)| n == "prop_univ") {
                 let choice = lits.iter().any(|l| {
                     let mut ds = Vec::new();
                     self.disjuncts(l, &mut ds);
