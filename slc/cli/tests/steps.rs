@@ -126,6 +126,7 @@ fn get_slot_index_implements_its_gimple() {
             "proofs/resetlock.core",
             "proofs/a_ctz_32.core",
             "proofs/is_bouncing.core",
+            "proofs/get_stride.core",
         ])
         .output()
         .unwrap();
@@ -138,6 +139,7 @@ fn get_slot_index_implements_its_gimple() {
             && checked.contains("abi_stack.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems")
             && checked.contains("a_ctz_32.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 2 conditional theorems")
             && checked.contains("is_bouncing.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 2 conditional theorems")
+            && checked.contains("get_stride.core: 0 constants, 0 axioms, 0 definitions, 16 theorems, 2 conditional theorems")
             && checked.contains("lemma while_unroll: open"),
         "{}{}",
         checked,

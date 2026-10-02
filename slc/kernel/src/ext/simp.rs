@@ -114,7 +114,18 @@
 //! * arith, when the literals alone do not close a path, also gets the
 //!   widths simp knows of opaque words (`le(b, a, 1) in bits(8)`).
 //! * witnesses: a variable only typed `x in bits(n)` / `x in omega` (an
-//!   uninitialized local) takes 0 when nothing else binds it.
+//!   uninitialized local) takes 0 when nothing else binds it; an equation
+//!   binds a variable only through injective constructors; a goal too large
+//!   to enumerate is first reduced with the outcomes of the runs the path
+//!   knows (`runs(P, s, o)`: the goal's `ex x. runs(P, s, x) && ..` takes
+//!   o) and its literals as decided.
+//! * words (bit fields): `x mod 2^n` is `bits_add(n, x, 0)`, and that is x
+//!   for an n-bit x; mod 2^k of mod 2^n (k <= n) is mod 2^k; `and` with a
+//!   low mask 2^k - 1 is mod 2^k, of x with itself is x; a 16-bit write of
+//!   a 16-bit value is the value; sign extension of a small value is the
+//!   value; x * 1 is x; x + x is 2 * x; widths of products with literals,
+//!   of sums, of `and` with a mask, of `bits_set_slice`; an address of the
+//!   domain's width is in its domain (`app(f, a)` of f in fn_space).
 //! * a choice of constants (`t = false || t = true`) stays one literal (not
 //!   a case split) also for a projection t of a variable (`fst(snd(u))`:
 //!   one of several undefined flags).
@@ -950,6 +961,19 @@ impl<'a> Simp<'a> {
             }
             "bits_neg" | "bits_of_int" | "bits_not" if a.len() == 2 => width(&a[0]).is_some_and(|k| k <= n),
             "bits_sext" if a.len() == 3 => width(&a[1]).is_some_and(|k| k <= n),
+            // a product with a literal c: an m-bit a times c is below
+            // 2^(m + bits of c); a sum of two words below 2^(n-1)
+            "int_mul" if a.len() == 2 => {
+                let lit = |t: &Term| match t.node() {
+                    Node::Nat(v) => v.to_u128(),
+                    _ => None,
+                };
+                let bitlen = |c: u128| 128 - c.leading_zeros() as u64;
+                [(&a[0], &a[1]), (&a[1], &a[0])].iter().any(|(x, c)| {
+                    lit(c).is_some_and(|c| c > 0 && bitlen(c) <= n && self.bits_term(x, n - bitlen(c)))
+                })
+            }
+            "int_add" if a.len() == 2 && n >= 1 => self.bits_term(&a[0], n - 1) && self.bits_term(&a[1], n - 1),
             // (a bits_build of the width: a partial register write)
             "bits_set_slice" | "bits_set_bit" if !a.is_empty() => width(&a[0]).is_some_and(|k| k <= n),
             // x / 2^lo mod 2^(hi + 1 - lo)
@@ -1392,10 +1416,14 @@ impl<'a> Simp<'a> {
                     }
                 }
             }
-            // mod 2^k of a value mod 2^n (k <= n): mod 2^k of the value
+            // x + 0 mod 2^n: x for an n-bit x; mod 2^k of a value mod 2^n
+            // (k <= n): mod 2^k of the value
             if *op == "bits_add" && args.len() == 3 && self.int_lit(&args[2]).is_some_and(|c| c.m.is_zero()) {
                 if let Node::Nat(k) = args[0].node() {
                     if let Some(k) = k.to_u64().filter(|&k| k <= 128) {
+                        if self.bits_term(&args[1], k) {
+                            return args[1].clone();
+                        }
                         if let Node::App(g, b) = args[1].node() {
                             let inner_n = match b.first().map(|x| x.node()) {
                                 Some(Node::Nat(n)) => n.to_u64(),
@@ -1406,6 +1434,12 @@ impl<'a> Simp<'a> {
                             }
                         }
                     }
+                }
+            }
+            // x + x: 2 * x (an index scaled by `lea (x, x)`)
+            if *op == "int_add" && args.len() == 2 && args[0] == args[1] && self.int_term(&args[0]) {
+                if let Some(m) = self.env.sym_by_name.get("int_mul") {
+                    return self.term(&Term::app(*m, vec![args[0].clone(), Term::nat(crate::nat::Nat::from_u64(2))]));
                 }
             }
             // x * 1 (an address's scale): x mod 2^n
@@ -1430,6 +1464,13 @@ impl<'a> Simp<'a> {
                 if let Node::Nat(k) = args[1].node() {
                     if (1..=128u64).any(|n| crate::nat::Nat::pow2(n) <= *k && self.bits_term(&args[0], n)) {
                         return args[0].clone();
+                    }
+                    // x mod 2^n: as `bits_add(n, x, 0)` (one form for the
+                    // value of n bits; for any x: int_mod reads x through
+                    // int_val, as x + 0 is)
+                    if let Some(n) = (1..=128u64).find(|&n| crate::nat::Nat::pow2(n) == *k) {
+                        let z = Term::nat(crate::nat::Nat::zero());
+                        return self.term(&Term::app(self.s.bits_add.unwrap(), vec![Term::nat(crate::nat::Nat::from_u64(n)), args[0].clone(), z]));
                     }
                 }
             }
@@ -1971,6 +2012,16 @@ impl<'a> Simp<'a> {
 
     /// `k in d`, when decided (k a literal, d a finite set of literals).
     fn key_in(&self, k: &Term, d: &Term) -> Option<bool> {
+        // (a word of the domain's width: an address in bits(64))
+        if let Node::App(b, x) = d.node() {
+            if self.env.syms[*b as usize].name == "bits" && x.len() == 1 {
+                if let Node::Nat(n) = x[0].node() {
+                    if n.to_u64().is_some_and(|n| self.bits_term(k, n)) {
+                        return Some(true);
+                    }
+                }
+            }
+        }
         let r = self.prop(&Term::app(self.s.in_?, vec![k.clone(), d.clone()]), Pol::Other);
         if self.is_true(&r) {
             Some(true)
