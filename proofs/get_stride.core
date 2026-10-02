@@ -1,0 +1,114 @@
+// get_stride (musl mallocng, at -O0): the stride of a group's slots from
+// its meta (at g): for a mapped group (sizeclass bits 0 and a page count,
+// `maplen`), maplen * 4096 - 16; otherwise UNIT * size_classes[sizeclass].
+// C1 under the ABI; the machine reads the meta's word at g + 32 as one
+// byte, eight bytes or two, where the spec reads its bit fields.
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     build/leaf_steps.core proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core \
+//     proofs/abi_stack.core proofs/get_stride.core
+
+abbrev gs.spec := c_src_malloc_mallocng_malloc.get_stride_fun()
+// the spec's reads of the meta at g (on the memory v)
+abbrev gs.bf(v, g, off, n, pos, k) := int_mod(int_div(gimple.bytes_at(v, int_add(g, off), n), int_pow(2, pos)), int_pow(2, k))
+abbrev gs.c1(v, g) := bits_and(8, bits_of_int(8, gs.bf(v, g, 32, 1, 0, 8)), 31) = 0
+abbrev gs.c2(v, g) := !(bits_and(64, bits_of_int(64, gs.bf(v, g, 32, 8, 0, 64)), bits_neg(64, 4096)) = 0)
+abbrev gs.maplen(v, g) := bits_of_int(52, gs.bf(v, g, 33, 7, 4, 52))
+abbrev gs.sc(v, g) := bits_of_int(6, gs.bf(v, g, 32, 2, 6, 6))
+abbrev gs.taddr(v, g) := int_add(4218912, int_mul(gs.sc(v, g), 2))
+abbrev gs.ent(v, g) := bits_of_int(16, gimple.bytes_at(v, gs.taddr(v, g), 2))
+abbrev gs.res_map(v, g) := bits_add(64, bits_mul(64, gs.maplen(v, g), 4096), bits_neg(64, 16))
+abbrev gs.res_sc(v, g) := bits_sext(32, 64, int_mul(gs.ent(v, g), 16))
+abbrev gs.res(v, g) := ite(gs.c1(v, g) && gs.c2(v, g), gs.res_map(v, g), gs.res_sc(v, g))
+// defined: the reads it makes can be made
+abbrev gs.defined(v, g) := g.mem_defined(v, g, 32, 1, false) &&
+  (gs.c1(v, g) -> g.mem_defined(v, g, 32, 8, false) && (gs.c2(v, g) -> g.mem_defined(v, g, 33, 7, false))) &&
+  (!(gs.c1(v, g) && gs.c2(v, g)) -> g.mem_defined(v, g, 32, 2, false) && g.mem_defined(v, gs.taddr(v, g), 0, 2, false))
+abbrev gs.arg(args) := bits_of_int(64, app(args, 0))
+abbrev gs.ok(v, args) := ord_le(1, seq_len(args)) && gs.defined(v, gs.arg(args))
+
+// the accessors: the bit fields
+theorem gs.maplen_ok: all w g. w in univ(1) -> g in bits(64) -> g.mem_defined(app(w, "vm"), g, 33, 7, false) ->
+  runs(c_src_malloc_mallocng_malloc.meta_maplen(g), w, ok(w, gs.maplen(app(w, "vm"), g)))
+proof
+  fix w
+  fix g
+  assume hw: w in univ(1)
+  assume hg: g in bits(64)
+  assume hd: g.mem_defined(app(w, "vm"), g, 33, 7, false)
+  have l := apply(g.ldbf_ok, {w}, {g}, {33}, {7}, {4}, {52}, hw, hg, simp(), hd)
+  show by defs(simp(hw, l, keep(gimple.ldbf)), c_src_malloc_mallocng_malloc.meta_maplen)
+qed
+
+theorem gs.sizeclass_ok: all w g. w in univ(1) -> g in bits(64) -> g.mem_defined(app(w, "vm"), g, 32, 2, false) ->
+  runs(c_src_malloc_mallocng_malloc.meta_sizeclass(g), w, ok(w, gs.sc(app(w, "vm"), g)))
+proof
+  fix w
+  fix g
+  assume hw: w in univ(1)
+  assume hg: g in bits(64)
+  assume hd: g.mem_defined(app(w, "vm"), g, 32, 2, false)
+  have l := apply(g.ldbf_ok, {w}, {g}, {32}, {2}, {6}, {6}, hw, hg, simp(), hd)
+  show by defs(simp(hw, l, keep(gimple.ldbf)), c_src_malloc_mallocng_malloc.meta_sizeclass)
+qed
+
+// the size-class path: the table's entry, times 16
+theorem gs.sc_path: all w g. w in univ(1) -> g in bits(64) -> g.mem_defined(app(w, "vm"), g, 32, 2, false) -> g.mem_defined(app(w, "vm"), gs.taddr(app(w, "vm"), g), 0, 2, false) ->
+  runs(c_src_malloc_mallocng_malloc.meta_sizeclass(g), w, ok(w, gs.sc(app(w, "vm"), g))) &&
+  runs(gimple.elem(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_sext(32, 64, gs.sc(app(w, "vm"), g)), 2), w, ok(w, gs.taddr(app(w, "vm"), g))) &&
+  runs(gimple.ld16(gs.taddr(app(w, "vm"), g), 0), w, ok(w, gs.ent(app(w, "vm"), g))) &&
+  runs(gimple.smul(32, gs.ent(app(w, "vm"), g), 16), w, ok(w, int_mul(gs.ent(app(w, "vm"), g), 16)))
+proof
+  fix w
+  fix g
+  assume hw: w in univ(1)
+  assume hg: g in bits(64)
+  assume h2: g.mem_defined(app(w, "vm"), g, 32, 2, false)
+  assume ht: g.mem_defined(app(w, "vm"), gs.taddr(app(w, "vm"), g), 0, 2, false)
+  have ms := apply(gs.sizeclass_ok, hw, hg, h2)
+  have sb: gs.sc(app(w, "vm"), g) in bits(6) by simp()
+  have el := apply(g.elem_ok, {w}, {4218912}, {gs.sc(app(w, "vm"), g)}, {2}, hw, simp(), simp(sb), simp(), simp(sb), simp(sb))
+  have ec: runs(gimple.elem(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_sext(32, 64, gs.sc(app(w, "vm"), g)), 2), w, ok(w, gs.taddr(app(w, "vm"), g)))
+    by defs(simp(el, sb, keep(gimple.elem)), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+  have ld := apply(g.ld16_ok, {w}, {gs.taddr(app(w, "vm"), g)}, hw, simp(sb), ht)
+  have eb: gs.ent(app(w, "vm"), g) in bits(16) by simp()
+  have sm: runs(gimple.smul(32, gs.ent(app(w, "vm"), g), 16), w, ok(w, int_mul(gs.ent(app(w, "vm"), g), 16)))
+    by defs(simp(hw, eb), gimple.smul, gimple.arith, gimple.fits, gimple.wrap, sint)
+  show by taut(ms, ec, ld, sm)
+qed
+
+theorem gs.proc_ok: all w g. w in univ(1) -> g in bits(64) -> gs.defined(app(w, "vm"), g) ->
+  runs(c_src_malloc_mallocng_malloc.get_stride(g), w, ok(w, gs.res(app(w, "vm"), g)))
+proof
+  fix w
+  fix g
+  assume hw: w in univ(1)
+  assume hg: g in bits(64)
+  assume hd: gs.defined(app(w, "vm"), g)
+  have l1 := apply(g.ldbf_ok, {w}, {g}, {32}, {1}, {0}, {8}, hw, hg, simp(), simp(hd))
+  // mapped: the page count
+  have ca: gs.c1(app(w, "vm"), g) && gs.c2(app(w, "vm"), g) -> runs(c_src_malloc_mallocng_malloc.get_stride(g), w, ok(w, gs.res_map(app(w, "vm"), g))) proof
+    assume hc: gs.c1(app(w, "vm"), g) && gs.c2(app(w, "vm"), g)
+    have l8 := apply(g.ldbf_ok, {w}, {g}, {32}, {8}, {0}, {64}, hw, hg, simp(), simp(hd, hc))
+    have mm := apply(gs.maplen_ok, hw, hg, simp(hd, hc))
+    show by defs(simp(hw, hg, hc, l1, l8, mm, keep(gimple.ldbf, c_src_malloc_mallocng_malloc.meta_maplen, c_src_malloc_mallocng_malloc.meta_sizeclass)), c_src_malloc_mallocng_malloc.get_stride)
+  qed
+  // otherwise: the size class
+  have cb: !(gs.c1(app(w, "vm"), g) && gs.c2(app(w, "vm"), g)) -> runs(c_src_malloc_mallocng_malloc.get_stride(g), w, ok(w, gs.res_sc(app(w, "vm"), g))) proof
+    assume hc: !(gs.c1(app(w, "vm"), g) && gs.c2(app(w, "vm"), g))
+    have sp := apply(gs.sc_path, hw, hg, simp(hd, hc), simp(hd, hc))
+    have b1: !gs.c1(app(w, "vm"), g) -> runs(c_src_malloc_mallocng_malloc.get_stride(g), w, ok(w, gs.res_sc(app(w, "vm"), g))) proof
+      assume h1: !gs.c1(app(w, "vm"), g)
+      show by defs(simp(hw, hg, h1, l1, sp, keep(gimple.ldbf, gimple.elem, gimple.ld16, gimple.smul, c_src_malloc_mallocng_malloc.meta_maplen, c_src_malloc_mallocng_malloc.meta_sizeclass)), c_src_malloc_mallocng_malloc.get_stride)
+    qed
+    have b2: gs.c1(app(w, "vm"), g) -> runs(c_src_malloc_mallocng_malloc.get_stride(g), w, ok(w, gs.res_sc(app(w, "vm"), g))) proof
+      assume h1: gs.c1(app(w, "vm"), g)
+      have h2: !gs.c2(app(w, "vm"), g) by taut(hc, h1)
+      have l8 := apply(g.ldbf_ok, {w}, {g}, {32}, {8}, {0}, {64}, hw, hg, simp(), simp(hd, h1))
+      show by defs(simp(hw, hg, h1, h2, l1, l8, sp, keep(gimple.ldbf, gimple.elem, gimple.ld16, gimple.smul, c_src_malloc_mallocng_malloc.meta_maplen, c_src_malloc_mallocng_malloc.meta_sizeclass)), c_src_malloc_mallocng_malloc.get_stride)
+    qed
+    show by taut(b1, b2)
+  qed
+  show by simp(ca, cb, keep(c_src_malloc_mallocng_malloc.get_stride))
+qed

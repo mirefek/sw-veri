@@ -290,6 +290,16 @@ struct Simp<'a> {
     /// literal bounds the path's literals give integers: (x, upper, k, the
     /// literal's atom) for x <= k (upper) or x >= k
     bounds: std::cell::RefCell<Vec<(Term, bool, SInt, Term)>>,
+    /// the path's literals `runs(P, s, o)`: a goal's `ex x. runs(P, s, x)
+    /// && ..` takes x := o
+    runs_facts: std::cell::RefCell<Vec<Term>>,
+    /// (only for a goal too large to search a witness in otherwise)
+    eager_runs: std::cell::Cell<bool>,
+    /// the path's literals (with `eager_runs`: a goal's atom that is one
+    /// holds, its negation fails)
+    lit_facts: std::cell::RefCell<Vec<Term>>,
+    /// the witness search's goal is the eager step's
+    eager_tried: std::cell::Cell<bool>,
     /// fields read by definitions of their parameters (`footprint`)
     footprints: std::cell::RefCell<FxMap<(SymId, usize), Option<Vec<Term>>>>,
     /// parameters used only mod 2^n (`word_param`)
@@ -531,6 +541,10 @@ impl<'a> Simp<'a> {
             nats: std::cell::RefCell::new(Vec::new()),
             known_mems: std::cell::RefCell::new(Vec::new()),
             bounds: std::cell::RefCell::new(Vec::new()),
+            runs_facts: std::cell::RefCell::new(Vec::new()),
+            eager_runs: Default::default(),
+            lit_facts: std::cell::RefCell::new(Vec::new()),
+            eager_tried: Default::default(),
             footprints: Default::default(),
             word_params: Default::default(),
             prof: Default::default(),
@@ -826,6 +840,14 @@ impl<'a> Simp<'a> {
             self.memo.borrow_mut().clear();
             *self.bounds.borrow_mut() = bounds;
         }
+        let rf: Vec<Term> = lits.iter().filter(|l| matches!(l.node(), Node::App(r, a) if is(*r, self.s.runs) && a.len() == 3)).cloned().collect();
+        if *self.runs_facts.borrow() != rf {
+            self.memo.borrow_mut().clear();
+            *self.runs_facts.borrow_mut() = rf;
+        }
+        if *self.lit_facts.borrow() != lits {
+            *self.lit_facts.borrow_mut() = lits.to_vec();
+        }
     }
 
     /// The literals with the widths simp knows of their opaque words (`le(b,
@@ -923,9 +945,13 @@ impl<'a> Simp<'a> {
         match self.env.syms[*f as usize].name.as_str() {
             "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" | "bits_shr" | "bits_and" | "bits_or" | "bits_xor" | "bits_sar" if a.len() == 3 => {
                 width(&a[0]).is_some_and(|k| k <= n)
+                    // (`and` with a mask below 2^n)
+                    || (self.env.syms[*f as usize].name == "bits_and" && [&a[1], &a[2]].iter().any(|c| matches!(c.node(), Node::Nat(v) if n >= 128 || v.to_u128().is_some_and(|v| v < (1u128 << n)))))
             }
             "bits_neg" | "bits_of_int" | "bits_not" if a.len() == 2 => width(&a[0]).is_some_and(|k| k <= n),
             "bits_sext" if a.len() == 3 => width(&a[1]).is_some_and(|k| k <= n),
+            // (a bits_build of the width: a partial register write)
+            "bits_set_slice" | "bits_set_bit" if !a.is_empty() => width(&a[0]).is_some_and(|k| k <= n),
             // x / 2^lo mod 2^(hi + 1 - lo)
             "bits_slice" if a.len() == 3 => match (width(&a[1]), width(&a[2])) {
                 (Some(hi), Some(lo)) => hi >= lo && hi + 1 - lo <= n,
@@ -984,7 +1010,14 @@ impl<'a> Simp<'a> {
             "int_val", "int_abs", "int_neg", "int_succ", "int_pred", "int_add", "int_sub", "int_mul", "int_pow", "int_div", "int_mod", "int_sum", "pow2",
             "sint",
         ];
-        INT_OPS.contains(&self.env.syms[*f as usize].name.as_str()) || self.nat_term(t)
+        if INT_OPS.contains(&self.env.syms[*f as usize].name.as_str()) || self.nat_term(t) {
+            return true;
+        }
+        // a definition whose body is an integer operation (`bytes_at`, a sum)
+        match &self.env.syms[*f as usize].kind {
+            SymKind::Defined { body, .. } => matches!(body.node(), Node::App(g, _) if INT_OPS.contains(&self.env.syms[*g as usize].name.as_str())),
+            _ => false,
+        }
     }
 
     /// Reads through a store (`x86_64_linux.store_le(b, a, n, v)`, the
@@ -1338,6 +1371,60 @@ impl<'a> Simp<'a> {
                     }
                 }
             }
+            // `and` with a low mask 2^k - 1 (k <= n): x mod 2^k; `and` of x
+            // with itself: x (as n bits)
+            if *op == "bits_and" && args.len() == 3 {
+                if let Node::Nat(w) = args[0].node() {
+                    if let Some(n) = w.to_u64().filter(|&n| n <= 128) {
+                        if args[1] == args[2] {
+                            return self.term(&Term::app(self.s.bits_of_int.unwrap(), vec![args[0].clone(), args[1].clone()]));
+                        }
+                        for (x, c) in [(&args[1], &args[2]), (&args[2], &args[1])] {
+                            if let Node::Nat(c) = c.node() {
+                                let k = (0..=n).find(|&k| crate::nat::Nat::pow2(k).sub(&crate::nat::Nat::from_u64(1)).as_ref() == Some(c));
+                                if let Some(k) = k {
+                                    // (as `bits_add(k, x, 0)`, the canonical form of x mod 2^k)
+                                    let z = Term::nat(crate::nat::Nat::zero());
+                                    return self.term(&Term::app(self.s.bits_add.unwrap(), vec![Term::nat(crate::nat::Nat::from_u64(k)), x.clone(), z]));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // mod 2^k of a value mod 2^n (k <= n): mod 2^k of the value
+            if *op == "bits_add" && args.len() == 3 && self.int_lit(&args[2]).is_some_and(|c| c.m.is_zero()) {
+                if let Node::Nat(k) = args[0].node() {
+                    if let Some(k) = k.to_u64().filter(|&k| k <= 128) {
+                        if let Node::App(g, b) = args[1].node() {
+                            let inner_n = match b.first().map(|x| x.node()) {
+                                Some(Node::Nat(n)) => n.to_u64(),
+                                _ => None,
+                            };
+                            if self.arith.get(g) == Some(&"bits_add") && b.len() == 3 && inner_n.is_some_and(|n| k <= n) && self.int_lit(&b[2]).is_some_and(|c| c.m.is_zero()) {
+                                return self.term(&t.with_args(vec![args[0].clone(), b[1].clone(), args[2].clone()]));
+                            }
+                        }
+                    }
+                }
+            }
+            // x * 1 (an address's scale): x mod 2^n
+            if *op == "bits_mul" && args.len() == 3 {
+                let one = |t: &Term| matches!(t.node(), Node::Nat(v) if v.to_u64() == Some(1));
+                for (x, c) in [(&args[1], &args[2]), (&args[2], &args[1])] {
+                    if one(c) {
+                        return self.term(&Term::app(self.s.bits_of_int.unwrap(), vec![args[0].clone(), x.clone()]));
+                    }
+                }
+            }
+            // the sign extension of a non-negative m-bit x (x below 2^(m-1)): x
+            if *op == "bits_sext" && args.len() == 3 {
+                if let Node::Nat(m) = args[0].node() {
+                    if m.to_u64().is_some_and(|m| (2..=129).contains(&m) && self.bits_term(&args[2], m - 1)) {
+                        return args[2].clone();
+                    }
+                }
+            }
             // x mod k of an n-bit x with 2^n <= k: x
             if *op == "int_mod" && args.len() == 2 {
                 if let Node::Nat(k) = args[1].node() {
@@ -1379,6 +1466,11 @@ impl<'a> Simp<'a> {
             };
             if let (Some(n), Some(hi), Some(0)) = (num(&args[0]), num(&args[2]), num(&args[3])) {
                 if n >= 1 && hi == n - 1 && self.bits_term(&args[4], n) {
+                    return args[4].clone();
+                }
+                // (all the bits x has, written: x and v of hi + 1 bits, a
+                // 16-bit write to a register holding a 16-bit value)
+                if hi < 128 && self.bits_term(&args[1], hi + 1) && self.bits_term(&args[4], hi + 1) {
                     return args[4].clone();
                 }
             }
@@ -1565,6 +1657,17 @@ impl<'a> Simp<'a> {
         let s = &self.s;
         let Node::App(f, a) = t.node() else { return t.clone() };
         let f = *f;
+        // (eager, in a goal: a path literal holds, its negation fails --
+        // equations too, which are decided below before atoms are)
+        if self.eager_runs.get() && f == s.eq {
+            let lf = self.lit_facts.borrow();
+            if lf.contains(t) {
+                return self.tt();
+            }
+            if lf.iter().any(|l| matches!(l.node(), Node::App(n, b) if is(*n, s.not) && b[0] == *t)) {
+                return self.ff();
+            }
+        }
         if f == s.imp {
             let x = self.prop(&a[0], pol.flip());
             if self.is_false(&x) {
@@ -1743,6 +1846,16 @@ impl<'a> Simp<'a> {
         let t = self.term(t);
         if let Some(b) = self.literal_prop(&t).or_else(|| self.bound_prop(&t)) {
             return if b { self.tt() } else { self.ff() };
+        }
+        // (eager, in a goal: a path literal holds, its negation fails)
+        if self.eager_runs.get() {
+            let lf = self.lit_facts.borrow();
+            if lf.contains(&t) {
+                return self.tt();
+            }
+            if lf.iter().any(|l| matches!(l.node(), Node::App(n, a) if is(*n, self.s.not) && a[0] == t)) {
+                return self.ff();
+            }
         }
         t
     }
@@ -2230,7 +2343,56 @@ impl<'a> Simp<'a> {
                             }
                             let tl = lower(self.env, t, 0);
                             let r = inst_k(self.env, &rest, &[tl]);
-                            return self.prop(&r, Pol::Other);
+                            // (eager: still a goal, its runs now closed may take their outcomes)
+                            return self.prop(&r, if goal && self.eager_runs.get() { Pol::Goal } else { Pol::Other });
+                        }
+                    }
+                }
+            }
+        }
+        // in a goal, a run the path knows the outcome of: `ex x. runs(P, s,
+        // x) && K(x)` with `runs(P, s, o)` a literal: K(o) (a witness; for a
+        // goal too large for the witness search)
+        if goal && self.eager_runs.get() {
+            // (the outcome's pattern: x is BVar(0), outer bound variables
+            // wildcards -- their own `ex` binds them in turn)
+            fn bind(env: &Env, pat: &Term, val: &Term) -> Option<Option<Term>> {
+                match pat.node() {
+                    Node::BVar(0) => Some(Some(val.clone())),
+                    Node::BVar(_) => Some(None),
+                    _ if !has_bvar_any(env, pat, 0) => (lower(env, pat, 0) == *val).then_some(None),
+                    Node::App(f, ps) => match val.node() {
+                        Node::App(g, vs) if f == g && ps.len() == vs.len() && env.syms[*f as usize].binders.iter().all(|b| *b == 0) => {
+                            let mut out = None;
+                            for (p, v) in ps.iter().zip(vs) {
+                                if let Some(b) = bind(env, p, v)? {
+                                    if out.as_ref().is_some_and(|o| *o != b) {
+                                        return None;
+                                    }
+                                    out = Some(b);
+                                }
+                            }
+                            Some(out)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            for c in &cs {
+                if let Node::App(r, ab) = c.node() {
+                    if is(*r, self.s.runs) && ab.len() == 3 && has_bvar(self.env, &ab[2], 0) && !has_bvar_any(self.env, &ab[0], 0) && !has_bvar_any(self.env, &ab[1], 0) {
+                        let (p, st) = (lower(self.env, &ab[0], 0), lower(self.env, &ab[1], 0));
+                        let known = self.runs_facts.borrow().iter().find_map(|l| match l.node() {
+                            Node::App(_, lb) if lb[0] == p && lb[1] == st => bind(self.env, &ab[2], &lb[2]).flatten(),
+                            _ => None,
+                        });
+                        if std::env::var("WITNESS_DEBUG").is_ok() {
+                            let pr = crate::syntax::Printer::new(self.env);
+                            eprintln!("witness: eager {} for {} ({} runs facts)", known.is_some(), pr.term(&p).chars().take(80).collect::<String>(), self.runs_facts.borrow().len());
+                        }
+                        if let Some(o) = known {
+                            return self.prop(&inst_k(self.env, body, &[o]), Pol::Goal);
                         }
                     }
                 }
@@ -3062,6 +3224,22 @@ impl Simp<'_> {
             t
         };
         let unbound = |t: &Term, binds: &[(crate::term::VarId, Term)]| vars.iter().any(|v| has_var(t, *v) && !binds.iter().any(|(w, _)| w == v));
+        // (an equation determines its variables only through injective
+        // constructors: not `x mod 2^5 = c`)
+        fn injective(sp: &Simp, p: &Term, vars: &[crate::term::VarId]) -> bool {
+            match p.node() {
+                Node::Var(..) => true,
+                Node::App(f, a) => {
+                    if !vars.iter().any(|v| has_var(p, *v)) {
+                        return true;
+                    }
+                    let name = sp.env.syms[*f as usize].name.as_str();
+                    let ctor = [sp.s.pair, sp.s.tag, sp.s.ok, sp.s.exc, sp.s.diverge, sp.s.some].iter().any(|c| is(*f, *c)) || name == "fn_update" || name == "insert";
+                    ctor && a.iter().all(|x| injective(sp, x, vars))
+                }
+                _ => true,
+            }
+        }
         loop {
             let n = binds.len();
             for l in glits {
@@ -3071,7 +3249,7 @@ impl Simp<'_> {
                 }
                 let (a, b) = (sub(&ab[0], binds), sub(&ab[1], binds));
                 for (p, t) in [(&a, &b), (&b, &a)] {
-                    if unbound(p, binds) && !unbound(t, binds) {
+                    if unbound(p, binds) && !unbound(t, binds) && injective(self, p, vars) {
                         let mut bs = binds.clone();
                         if pmatch(p, &self.term(t), vars, &mut bs) {
                             *binds = bs;
@@ -3232,7 +3410,23 @@ impl Simp<'_> {
             // (no held disjunctions in the goal: matching needs its
             // alternatives open)
             self.no_hold.set(true);
-            let gps = self.paths(&d, fresh);
+            self.eager_tried.set(false);
+            let mut gps = self.paths(&d, fresh);
+            // (too many: the runs the path knows the outcomes of taken as
+            // witnesses first, which prunes the program's alternatives)
+            if gps.is_none() {
+                self.set_nats(lits);
+                self.eager_runs.set(true);
+                self.memo.borrow_mut().clear();
+                let d2 = self.prop(&d, Pol::Goal);
+                if std::env::var("WITNESS_EAGER").is_ok() {
+                    eprintln!("witness: eager goal {}", crate::syntax::Printer::new(self.env).term(&d2));
+                }
+                self.eager_runs.set(false);
+                self.memo.borrow_mut().clear();
+                gps = self.paths(&d2, fresh);
+                self.eager_tried.set(true);
+            }
             self.no_hold.set(false);
             if std::env::var("WITNESS_DEBUG").is_ok() {
                 eprintln!("witness: goal disjunct: {} paths", gps.as_ref().map_or(usize::MAX, |g| g.len()));
@@ -3242,6 +3436,11 @@ impl Simp<'_> {
             self.set_nats(lits);
             for gp in gps {
                 if gp.vars.is_empty() {
+                    // (nothing to bind: holds if its literals do -- a goal
+                    // the eager step above reduced to the path's facts)
+                    if self.eager_tried.get() && self.witness_ok(lits, &gp.lits, &[], lg) {
+                        return true;
+                    }
                     continue;
                 }
                 // the bindings from matching goal literals with path
@@ -3582,6 +3781,20 @@ impl Simp<'_> {
         }
         if !is(*i, self.s.in_) {
             return false;
+        }
+        // an open flag (`x = false || x = true` on the path) in univ(u), u
+        // >= 1: false and true are (the prelude's `false_univ`, `true_univ`)
+        if let Node::App(u, ub) = ab[1].node() {
+            if is(*u, self.s.univ) && matches!(ub[0].node(), Node::Nat(k) if !k.is_zero()) && ["false_univ", "true_univ"].iter().all(|a| self.env.axioms.iter().any(|(n, _)| n == a)) {
+                let choice = lits.iter().any(|l| {
+                    let mut ds = Vec::new();
+                    self.disjuncts(l, &mut ds);
+                    ds.len() == 2 && self.const_choice(&ds) && ds.iter().all(|d| matches!(d.node(), Node::App(e, x) if *e == self.s.eq && (x[0] == ab[0] || x[1] == ab[0])))
+                });
+                if choice {
+                    return true;
+                }
+            }
         }
         if name(&ab[1]) == "dom" {
             let Node::App(_, db) = ab[1].node() else { unreachable!() };
