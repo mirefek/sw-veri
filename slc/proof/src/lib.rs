@@ -878,6 +878,15 @@ impl State {
                     // premises with the proofs among the ai -- then f applied
                     // to the proofs, in order
                     "apply" => self.apply(env, lg, args),
+                    // symex(h, f1, ..): h: runs(abi.run_to_return(), M, O),
+                    // the machine run symbolically to its return with the
+                    // instructions' outcome lemmas and facts among the fi:
+                    // `O = ok(S1, empty) || ..`, one disjunct per path
+                    "symex" => {
+                        let ps = self.proofs(env, lg, args)?;
+                        let refs: Vec<&Seq> = ps.iter().collect();
+                        Seq::symex(env, lg, &refs)
+                    }
                     "refl" => {
                         let t = self.term_arg(env, a0, 0)?;
                         Seq::refl(env, &t)

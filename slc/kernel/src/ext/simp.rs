@@ -165,6 +165,8 @@ use crate::env::{Env, SymKind};
 use crate::term::{Node, SymId, Term};
 
 mod eval;
+// symbolic execution of machine code to its return (`symex`)
+mod symex;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {
@@ -1976,7 +1978,17 @@ impl<'a> Simp<'a> {
             }
         }
         // an atom: its arguments as terms
+        let t0 = t;
         let t = self.term(t);
+        // (unfolded by a premise into a proposition: `cond(f, cc)` by
+        // x86.cond_eval: simplified as one)
+        if t != *t0 {
+            if let Node::App(g, _) = t.node() {
+                if *g != f && (*g == s.imp || *g == s.eq || *g == s.ex || *g == s.all || is(*g, s.not) || is(*g, s.and) || is(*g, s.or)) {
+                    return self.prop(&t, pol);
+                }
+            }
+        }
         if let Some(b) = self.literal_prop(&t).or_else(|| self.bound_prop(&t)) {
             return if b { self.tt() } else { self.ff() };
         }

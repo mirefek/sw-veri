@@ -479,6 +479,21 @@ Validation: regenerate the run lemmas of the six functions (their C1
 proofs must stay green), then step_seq's, unrolled: linear time should
 make 200 steps cheap.
 
+Status (first version, `slc/kernel/src/ext/simp/symex.rs`): `symex(h,
+facts..)` returns `O = ok(S1, empty) || ..` with each path's conditions
+and its open values (flags) existential; values overwritten later are
+dropped. The state is a term normalized by simp's term rules (memory by
+the `x86.apart` facts), the path keeps only its branch conditions and the
+code fact, premises of a step are shown from the facts (literal, instance
+of a `∀` fact, `A -> h` with A decided, typing, taut / arith), and a
+premise that cannot be shown is reported with the instruction's address.
+The six run lemmas are now `have r := symex(..)` and `simp(r, ..)` for
+the stated form (the leaf chain: 27 s before, 16.5 s now); step_seq's
+whole run (two paths, 32 loop iterations, ~200 steps) takes under a
+second, where simp had not finished in 15 minutes. Not yet: premises
+collected and returned instead of required; stop points other than the
+return.
+
 ### 6.2 Forward execution of the spec (`spec_run`)
 
 The same for the readable GIMPLE: run a proc statement by statement on a

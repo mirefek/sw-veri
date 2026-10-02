@@ -389,6 +389,32 @@ impl Seq {
         Ok(Seq { hyps, concl: goal.clone(), open })
     }
 
+    /// `Γ ⊢ O = ok(S1, empty) || ..`: the outcome of the premise `runs(
+    /// abi.run_to_return(), M, O)` by symbolic execution with the other
+    /// premises (`Logic::symex`); rests on `while_unroll`.
+    pub fn symex(env: &Env, lg: &Logic, premises: &[&Seq]) -> KResult<Seq> {
+        let (hyps, mut open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        lg.simp_used.borrow_mut().clear();
+        let r = lg.symex(env, &ps);
+        let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
+        let concl = r?;
+        env.check_wf(&concl, 0)?;
+        for name in used {
+            if env.theorems.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            if env.open.lemmas.iter().any(|(n, _)| *n == name) {
+                if !open.contains(&name) {
+                    open.push(name);
+                }
+                continue;
+            }
+            return err(format!("symex relies on `{}` (core/loop.core): load it", name));
+        }
+        Ok(Seq { hyps, concl, open })
+    }
+
     fn gather(premises: &[&Seq]) -> (Vec<Term>, Vec<String>) {
         let mut hyps = Vec::new();
         let mut open = Vec::new();
