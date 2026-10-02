@@ -538,8 +538,15 @@ accessor lemmas gone). The undefined-behaviour branches come as one
 statement `all e. e in univ(1) -> !D -> runs(P, W, exc(S, e))`, D the
 conjunction of the branches' `C1 -> .. -> !Cn`, so a `raises` lemma is
 `simp(r, hn, he)`: its hand-written `defined` implies D propositionally.
-`defined` is still written by hand in the statement. Not yet: loops
-(step_seq).
+`defined` is still written by hand in the statement. Loops from a known
+state are unrolled (`while_stop`/`while_leave`/`while_step`, the open
+lemmas simp's `unroll` rests on): step_seq's spec runs through its 32
+iterations in 2.4 s (37 branches: the increment, the reset, and a UB
+branch per byte of the 32 written). Open for step_seq's C1: its `defined`
+-- the 32 per-byte write conditions as one range (`gimple.usable(v,
+4228176, 32, true)`) needs a lemma relating a range to its bytes, and
+`abi.ub_case` generalized to an exception from a later world (the stores
+before the failing one).
 
 ### 6.3 Simulation, block by block
 
