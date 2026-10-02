@@ -411,3 +411,161 @@ relies on.
    `init` whether it holds at `main`).
 7. **Init** — startup to `main`.
 8. **Hardening**: reduce extensions to kernel steps where it matters.
+
+## 6. Structured automation for (C1) (plan, 2026-10)
+
+The six leaf functions done so far (get_slot_index, upgradelock,
+resetlock, a_ctz_32, is_bouncing, get_stride) were proven with one tool
+doing everything: `simp` executed the machine code (unrolling
+`run_to_return`), unfolded the GIMPLE procs and searched for the spec's
+outcome, typed records, and normalized word arithmetic, all over a flat
+list of path literals. That stops scaling:
+
+- cost: every machine step adds ~5 literals and rule matching rescans the
+  path, so a run is quadratic in its length; step_seq's loop (32 x 6
+  steps) did not finish in 15 minutes;
+- the spec side unfolds a whole proc into one formula and searches for a
+  witness of its outcome (get_stride: past the 4096-path limit until the
+  eager outcome heuristic);
+- normal forms depend on what a path knows, so facts and goals stop
+  matching in ways that are hard to see (`bits_add(64, x, 0)` vs `x`);
+- a failure is "1 path left" with a large formula; the proof structure
+  (which block, which statement) is lost;
+- every function needed hand-written bridges between the machine's view
+  of its values and the GIMPLE's.
+
+The structure the proofs need is the compiler's: at -O0 each GIMPLE
+statement becomes a short instruction sequence, every local lives in its
+stack slot, and loops stay loops. The plan uses it in three parts, each
+usable on its own. Trusted extensions remain fine where they make the
+interface simpler; the aim is proofs that are short, steerable and fast,
+with failures that point at a block and a statement.
+
+### 6.1 Symbolic execution of machine code (`symex`)
+
+A proof-language step, backed by an extension, that runs the machine from
+a state at an address to a set of stop points and returns what it found:
+
+```
+have r := symex(h, stop: return)            // h: runs(abi.run_to_return(), m, o)
+// r: ex m1. o = ok(m1, empty) && <path condition> && <final state>, per path
+```
+
+- State: kept structured, not as literals: registers, flags, rip, and
+  memory as the entry memory plus a list of stores, each tagged with its
+  region (frame, a static object, the object a pointer argument points
+  to). Only the current state is kept; a step costs the same at step 10
+  and step 1000.
+- Steps: the `F.ok_A` lemmas from `slc steps` (one per instruction), each
+  applied by instantiation, not found by rule matching. A conditional
+  jump splits the state on its condition (`x86.cond_eval`), giving one
+  path per side; a path whose condition is contradictory is dropped.
+- Memory: reads resolve through the store list by region (two regions
+  are disjoint by an `x86.apart` fact or by being distinct objects);
+  stores to the same address replace older ones. This is what simp does
+  now with `apart` literals, as a data structure.
+- Hypotheses the steps need (accesses allowed, the frame apart from static
+  data) are collected and returned as the run lemma's premises, stated
+  per region (`reads(frame, 16)`, `writes(__malloc_context + 848, 32)`),
+  so the user sees what the run assumes.
+- Stop points: the return (the loop of `run_to_return` leaves), a loop
+  head (6.3), a call (later: callees' contracts).
+- Output for a function: its run lemma, as today's summaries
+  (`abi.returns(s, m1, vm, r)`, one result term with `ite` for branches).
+  It rests on `while_unroll` as now (or on a lemma for `run_to_return`
+  cut at a point, open like the other loop lemmas).
+
+Validation: regenerate the run lemmas of the six functions (their C1
+proofs must stay green), then step_seq's, unrolled: linear time should
+make 200 steps cheap.
+
+### 6.2 Forward execution of the spec (`spec_run`)
+
+The same for the readable GIMPLE: run a proc statement by statement on a
+symbolic world, with the operation lemmas of `proofs/gimple.core`
+(`g.ld8_ok`, `g.ldbf_ok`, `g.elem_ok`, `g.st32_ok`, …, each with its `_ub`
+twin), and return
+
+```
+have sp := spec_run(gs.spec, w, args)
+// sp: defined(w, args) -> runs(app(gs.spec, args), w, ok(w', pair(r, y)))
+//     !defined(w, args) -> runs(app(gs.spec, args), w, exc(w, e))
+```
+
+- the outcome is constructed, not searched for: each statement's lemma
+  gives the next world and value, so there is no witness search and no
+  path explosion from the program's ok/exc/diverge alternatives;
+- `defined` is collected from the operations' side conditions along the
+  way (each load's `mem_defined`, each signed operation's range), split
+  by the branches taken; it is what the hand-written `gs.defined`,
+  `ib.defined`, … were;
+- accessor procs (`meta_maplen`, …) are executed by their definitions, or
+  by lemmas given to `spec_run`;
+- a `loop` with a constant trip count can be run through (step_seq's 32);
+  otherwise it needs 6.3.
+
+This replaces the per-function `proc_ok`/`proc_raises`/`fun_ok`/
+`fun_raises` lemmas (about 150 lines per function now).
+
+### 6.3 Simulation, block by block
+
+(C1) as a simulation between the machine and the readable GIMPLE, with the
+relation `coupled` of `layers/gimple.sl` adapted to the readable form:
+
+- at a cut point (function entry, loop heads, the return; later calls),
+  the machine is at the point's address, each GIMPLE variable's value is
+  in its home (for -O0 locals: their stack slot, read from DWARF:
+  `DW_AT_location` is `DW_OP_fbreg` relative to the frame base, the CFA =
+  rsp + 8 at entry; step_seq's `i` is at CFA - 12 = rsp - 4), memory
+  agrees outside the frame, rsp, the return address and the callee-saved
+  registers are as at entry;
+- obligation per piece of code between cut points: from coupled states,
+  6.1 and 6.2 run the machine and the GIMPLE to the next cut point, and
+  `coupled` holds again there (or both return, with the same result, and
+  the ABI glue closes the call);
+- loops: the loop heads correspond (the GIMPLE `loop` and the machine's
+  back edge), `coupled` at the head is the loop invariant, and the body
+  is checked once, for a symbolic iteration; a general simulation lemma
+  for `while_rel` (open, like the other loop lemmas) turns the per-body
+  obligation into one for the whole loop;
+- the cut points and the correspondence come from the structure (the
+  readable GIMPLE's `loop`s and the machine CFG's back edges, matched in
+  order); a proof can also name them.
+
+What the user writes for a function, the target:
+
+```
+theorem ss.implements: all statics. ctx.in_statics(statics) -> abi.implements2_at(..., step_seq.code(), statics)
+proof
+  simulate(step_seq, ss.spec)
+qed
+```
+
+with failures reported per obligation: "loop body 4024df..4024fa against
+`st8(..); i := sadd(i, 1)`: at the head, slot i = bits_add(32, i, 1)
+expected, found ..". The six existing proofs become a few lines each; the
+bridge lemmas (`gb.*`, `ac.hash`) turn into obligations of single blocks,
+where the arithmetic is small.
+
+Loops with symbolic trip counts (most of mallocng's loops: over slots,
+over pages) need 6.3; 6.1 + 6.2 alone can unroll constant loops only.
+
+### 6.4 Word arithmetic as library lemmas
+
+The facts behind the bit-field bridges are ordinary arithmetic: a shift
+right is division by a power of two, `and` with a low mask is a
+remainder, a little-endian word is its first byte plus 256 times the
+rest. They go into a library (`core/words.core`) as lemmas that 6.1–6.3
+and simp use, instead of more special cases inside simp; the word rules
+added to simp during get_stride move there where they can.
+
+### Order
+
+1. 6.1 `symex`: the six run lemmas regenerated; step_seq's run, unrolled.
+2. 6.2 `spec_run`: is_bouncing and get_stride without hand-written spec
+   lemmas; step_seq's spec (unrolled loop, 33 stores).
+3. step_seq's C1 with 6.1 + 6.2 and the ABI glue (`abi.ret_case`: the
+   frame store is scratch, `abi.slot_view`'s matching half).
+4. 6.3 `simulate` on step_seq (no unrolling), then the others; then the
+   first function with a loop over a symbolic bound.
+5. 6.4 alongside, as lemmas are needed.
