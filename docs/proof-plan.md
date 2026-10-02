@@ -574,30 +574,59 @@ memory `store_le(zm(b, i), slot, 4, i)` with the machine's zeroed bytes
 `zm` likewise by `nat_rec`), symex around the loop with `abi.run_cut`,
 and the ABI glue (`abi.ret_case`).
 
-### 6.3 Simulation, block by block
+### 6.3 The bridge: readable GIMPLE to machine code (simulation)
 
-(C1) as a simulation between the machine and the readable GIMPLE, with the
-relation `coupled` of `layers/gimple.sl` adapted to the readable form:
+Principle (2026-10): a function's behaviour is reasoned about only on the
+readable GIMPLE (spec_run, simp, loop invariants: C2 and the convenient
+specs). The machine code appears only in the bridge, which proves (C1)
+without any behavioural reasoning: it checks that the compiled code does
+what the GIMPLE does, piece by piece, and a theorem proven once makes that
+a refinement of the whole function. GCC is not verified; each compiled
+function is validated (translation validation), the method being general.
 
-- at a cut point (function entry, loop heads, the return; later calls),
-  the machine is at the point's address, each GIMPLE variable's value is
-  in its home (for -O0 locals: their stack slot, read from DWARF:
-  `DW_AT_location` is `DW_OP_fbreg` relative to the frame base, the CFA =
-  rsp + 8 at entry; step_seq's `i` is at CFA - 12 = rsp - 4), memory
-  agrees outside the frame, rsp, the return address and the callee-saved
-  registers are as at entry;
-- obligation per piece of code between cut points: from coupled states,
-  6.1 and 6.2 run the machine and the GIMPLE to the next cut point, and
-  `coupled` holds again there (or both return, with the same result, and
-  the ABI glue closes the call);
-- loops: the loop heads correspond (the GIMPLE `loop` and the machine's
-  back edge), `coupled` at the head is the loop invariant, and the body
-  is checked once, for a symbolic iteration; a general simulation lemma
-  for `while_rel` (open, like the other loop lemmas) turns the per-body
-  obligation into one for the whole loop;
-- the cut points and the correspondence come from the structure (the
-  readable GIMPLE's `loop`s and the machine CFG's back edges, matched in
-  order); a proof can also name them.
+- cut points: the entry, each loop's head, the return (later: calls). A
+  GIMPLE `loop` (a `while_rel` over iterations) corresponds to the
+  machine loop it was compiled to: its head the first address a machine
+  path visits twice (the natural loop's header at -O0, where the loop
+  condition is tested, as the GIMPLE iteration starts with it);
+- the coupling at a cut point (`coupled` of `layers/gimple.sl`, for the
+  readable form): memory agrees outside the frame, the GIMPLE locals are
+  in their homes (at -O0 the C variables in their stack slots, from DWARF
+  `DW_OP_fbreg`; step_seq's `i` at rsp - 4), rsp, the return address and
+  the callee-saved registers as at entry, the thread's state (os, fs_base,
+  cpu) the same;
+- a segment (from a cut point to the next ones): the GIMPLE run by
+  spec_run's machinery, the machine by symex, from coupled states; each
+  machine path matched with a GIMPLE branch: its conditions implying the
+  branch's, the end states coupled at the same next cut point, or both
+  returned with the same results and world, or the GIMPLE's undefined
+  behaviour (anything allowed). No behavioural reasoning: the conditions
+  compared are each side's own tests and memory effects;
+- a loop: at its head both states generalized, related by the coupling
+  only (the coupling is the loop's invariant, nothing about what the loop
+  computes); one iteration checked as a segment; the library's loop rule
+  makes it the whole loop, the correspondence full: a terminating machine
+  run passes the head finitely often (induction on the passes), a
+  diverging one infinitely often -- segments have no backward jumps, so
+  are finite -- and an infinite GIMPLE run follows (each pass's matching
+  iteration chosen, by recursion), with the same trace (the coupling keeps
+  the OS state, so the event logs, equal at the heads; a run's trace is
+  the limit of an increasing chain, a cofinal part of it has the same
+  limit);
+- the result, per function: `abi.matches(spec, args, s, o)` -- every
+  machine outcome o from the entry s is the spec's raising (undefined
+  behaviour), or a return matching the spec's ok outcome (world, rax:rdx),
+  or a divergence with the spec's same trace -- and one theorem, proven
+  once from `abi.ub_case`, `abi.ret_case` and a divergence case, makes it
+  `abi.implements2_at`.
+
+Milestones: (1) the glue: `abi.matches` and its theorem (with the
+divergence case); (2) the bridge for loop-free code (an extension
+co-running both sides per segment), checked on is_bouncing, a_ctz_32,
+get_stride; (3) loops: generalized heads and the loop rule; (4) step_seq's
+C1 by it, then the six existing functions again. Later, per statement
+pattern of -O0 code, lemmas proven once could replace the per-occurrence
+checks.
 
 What the user writes for a function, the target:
 
