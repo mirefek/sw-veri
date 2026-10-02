@@ -22,7 +22,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 0 definitions, 18 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 20 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -136,7 +136,7 @@ fn get_slot_index_implements_its_gimple() {
             && checked.contains("get_slot_index_abi.core: 0 constants, 0 axioms, 0 definitions, 0 theorems, 1 conditional theorems, 0 open lemmas")
             && checked.contains("upgradelock.core: 0 constants, 0 axioms, 0 definitions, 1 theorems, 2 conditional theorems")
             && checked.contains("resetlock.core: 0 constants, 0 axioms, 0 definitions, 2 theorems, 3 conditional theorems")
-            && checked.contains("abi_stack.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems")
+            && checked.contains("abi_stack.core: 0 constants, 0 axioms, 0 definitions, 8 theorems, 0 conditional theorems")
             && checked.contains("a_ctz_32.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 2 conditional theorems")
             && checked.contains("is_bouncing.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 2 conditional theorems")
             && checked.contains("get_stride.core: 0 constants, 0 axioms, 0 definitions, 16 theorems, 2 conditional theorems")

@@ -119,6 +119,12 @@
 //!   to enumerate is first reduced with the outcomes of the runs the path
 //!   knows (`runs(P, s, o)`: the goal's `ex x. runs(P, s, x) && ..` takes
 //!   o) and its literals as decided.
+//! * separated memory: a path literal `x86.apart(A, N, B, M)` (the regions
+//!   [A, A+N) and [B, B+M) disjoint; N, M numerals) lets a read of one
+//!   region skip stores to the other (ranges placed in the regions by their
+//!   known distance from A, B); and puts stores in an order: a store to A's
+//!   region moves out past a store to B's (disjoint stores commute), and a
+//!   store of the same n bytes at the same address replaces an earlier one.
 //! * words (bit fields): `x mod 2^n` is `bits_add(n, x, 0)`, and that is x
 //!   for an n-bit x; mod 2^k of mod 2^n (k <= n) is mod 2^k; `and` with a
 //!   low mask 2^k - 1 is mod 2^k, of x with itself is x; a 16-bit write of
@@ -304,6 +310,9 @@ struct Simp<'a> {
     /// the path's literals `runs(P, s, o)`: a goal's `ex x. runs(P, s, x)
     /// && ..` takes x := o
     runs_facts: std::cell::RefCell<Vec<Term>>,
+    /// the path's literals `x86.apart(A, N, B, M)` (N, M numerals): the
+    /// regions [A, A+N) and [B, B+M) are disjoint
+    aparts: std::cell::RefCell<Vec<(Term, u128, Term, u128)>>,
     /// (only for a goal too large to search a witness in otherwise)
     eager_runs: std::cell::Cell<bool>,
     /// the path's literals (with `eager_runs`: a goal's atom that is one
@@ -553,6 +562,7 @@ impl<'a> Simp<'a> {
             known_mems: std::cell::RefCell::new(Vec::new()),
             bounds: std::cell::RefCell::new(Vec::new()),
             runs_facts: std::cell::RefCell::new(Vec::new()),
+            aparts: std::cell::RefCell::new(Vec::new()),
             eager_runs: Default::default(),
             lit_facts: std::cell::RefCell::new(Vec::new()),
             eager_tried: Default::default(),
@@ -856,6 +866,23 @@ impl<'a> Simp<'a> {
             self.memo.borrow_mut().clear();
             *self.runs_facts.borrow_mut() = rf;
         }
+        let ap: Vec<(Term, u128, Term, u128)> = match self.env.sym_by_name.get("x86.apart") {
+            Some(apart) => lits
+                .iter()
+                .filter_map(|l| match l.node() {
+                    Node::App(g, a) if g == apart && a.len() == 4 => match (a[1].node(), a[3].node()) {
+                        (Node::Nat(n), Node::Nat(m)) => Some((a[0].clone(), n.to_u128()?, a[2].clone(), m.to_u128()?)),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        if *self.aparts.borrow() != ap {
+            self.memo.borrow_mut().clear();
+            *self.aparts.borrow_mut() = ap;
+        }
         if *self.lit_facts.borrow() != lits {
             *self.lit_facts.borrow_mut() = lits.to_vec();
         }
@@ -1048,6 +1075,59 @@ impl<'a> Simp<'a> {
     /// memory b with the n bytes at a replaced by v's, little-endian): a
     /// byte at a known distance from a, and `le` of the same or a disjoint
     /// range (distances from the definitions; addresses are 64-bit).
+    /// The n bytes at x lie in [r, r + len) (x at a known distance from r).
+    fn within(&self, x: &Term, n: u128, r: &Term, len: u128) -> bool {
+        self.distance(x, r, 64).is_some_and(|d| d.checked_add(n).is_some_and(|e| e <= len))
+    }
+
+    /// Which side of an `apart` fact the n bytes at x lie in, for a fact
+    /// that also places the m bytes at y on the other side: (fact index,
+    /// x in its first region).
+    fn apart_sides(&self, x: &Term, n: u128, y: &Term, m: u128) -> Option<(usize, bool)> {
+        self.aparts.borrow().iter().enumerate().find_map(|(i, (a, an, b, bm))| {
+            if self.within(x, n, a, *an) && self.within(y, m, b, *bm) {
+                Some((i, true))
+            } else if self.within(x, n, b, *bm) && self.within(y, m, a, *an) {
+                Some((i, false))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The n bytes at x and the m bytes at y are disjoint (by an `apart`
+    /// fact of the path).
+    fn disjoint(&self, x: &Term, n: u128, y: &Term, m: u128) -> bool {
+        self.apart_sides(x, n, y, m).is_some()
+    }
+
+    /// Stores in a canonical order: a store to the first region of an
+    /// `apart` fact moves out past a store to its second region (they
+    /// commute: disjoint bytes); a store of the same n bytes at the same
+    /// address replaces an earlier one.
+    fn store_order(&self, args: &[Term]) -> Option<Term> {
+        let store = self.env.sym_by_name.get("x86_64_linux.store_le").copied()?;
+        let Node::App(g, inner) = args[0].node() else { return None };
+        if *g != store || inner.len() != 4 {
+            return None;
+        }
+        let lit = |t: &Term| match t.node() {
+            Node::Nat(v) => v.to_u128(),
+            _ => None,
+        };
+        let (n1, n2) = (lit(&inner[2])?, lit(&args[2])?);
+        // (overwritten)
+        if n1 == n2 && self.distance(&args[1], &inner[1], 64) == Some(0) {
+            return Some(self.term(&Term::app(store, vec![inner[0].clone(), args[1].clone(), args[2].clone(), args[3].clone()])));
+        }
+        // (the inner store to the first region: moved out)
+        if let Some((_, true)) = self.apart_sides(&inner[1], n1, &args[1], n2) {
+            let swapped_in = self.term(&Term::app(store, vec![inner[0].clone(), args[1].clone(), args[2].clone(), args[3].clone()]));
+            return Some(self.term(&Term::app(store, vec![swapped_in, inner[1].clone(), inner[2].clone(), inner[3].clone()])));
+        }
+        None
+    }
+
     fn read_store(&self, f: SymId, args: &[Term]) -> Option<Term> {
         let name = |g: SymId| self.env.syms[g as usize].name.as_str();
         let store = |t: &Term| -> Option<Vec<Term>> {
@@ -1066,6 +1146,10 @@ impl<'a> Simp<'a> {
             // app(store_le(b, a, n, v), x)
             let st = store(&args[0])?;
             let n = lit(&st[2])?;
+            // (x in a region apart from the store's: b's byte)
+            if self.disjoint(&args[1], 1, &st[1], n) {
+                return Some(self.term(&Term::app(f, vec![st[0].clone(), args[1].clone()])));
+            }
             let d = self.distance(&args[1], &st[1], 64)?;
             if d < n {
                 let byte = Term::app(int_div, vec![st[3].clone(), Term::app(pow, vec![nat(256), nat(d)])]);
@@ -1077,6 +1161,9 @@ impl<'a> Simp<'a> {
             // le(store_le(b, a, n, v), c, m)
             let st = store(&args[0])?;
             let (n, m) = (lit(&st[2])?, lit(&args[2])?);
+            if self.disjoint(&args[1], m, &st[1], n) {
+                return Some(self.term(&Term::app(f, vec![st[0].clone(), args[1].clone(), args[2].clone()])));
+            }
             let d = self.distance(&args[1], &st[1], 64)?;
             if d == 0 && m == n && n <= 16 {
                 return Some(self.term(&Term::app(bits_of_int, vec![nat(8 * n), st[3].clone()])));
@@ -1496,6 +1583,11 @@ impl<'a> Simp<'a> {
         }
         if let Some(v) = self.read_store(f, &args) {
             return v;
+        }
+        if args.len() == 4 && self.env.syms[f as usize].name == "x86_64_linux.store_le" {
+            if let Some(v) = self.store_order(&args) {
+                return v;
+            }
         }
         if let Some(v) = self.bytes(f, &args) {
             return v;
