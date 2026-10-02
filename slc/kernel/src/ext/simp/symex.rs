@@ -24,6 +24,12 @@ use crate::env::KResult;
 use crate::ext::seq::abstract_term;
 use crate::term::VarId;
 
+/// The definition of `abi.run_to_return` that symex implements (layers/
+/// abi.sl): sp = rsp + 8, ret = the 8 bytes at rsp, then `step` while not
+/// (rip = ret and rsp = sp); its outcome the state at the exit. Checked at
+/// each use: another definition is refused, not run.
+const RUN_TO_RETURN: &str = r#"mkprog(x0 x1. letin(bits_add(64, app(app(x0, "gpr"), 4), 8), x2. letin(x86_64_linux.le(app(app(x0, "vm"), "bytes"), app(app(x0, "gpr"), 4), 8), x3. ex x4. while_rel(pair(x0, empty), x5. true, x5 x6. (!(app(fst(x5), "rip") = x3 && app(app(fst(x5), "gpr"), 4) = x2) && bind_rel(x86_64_linux.step, fst(x5), x7 x8. x6 = ok(pair(x7, empty), empty), x7 x8. x6 = exc(pair(x7, empty), pair("raise", x8)), x7. x6 = diverge(x7))) || (!!(app(fst(x5), "rip") = x3 && app(app(fst(x5), "gpr"), 4) = x2) && x6 = exc(pair(fst(x5), empty), pair("brk", empty))), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), x4) && (((fst(x4) = 0 || (fst(x4) = 1 && fst(out_value(x4)) = "brk")) && x1 = ok(fst(out_state(x4)), empty)) || ((((fst(x4) = 1 && fst(out_value(x4)) = "ret") && x1 = ok(fst(out_state(x4)), snd(out_value(x4)))) || ((fst(x4) = 1 && fst(out_value(x4)) = "raise") && x1 = exc(fst(out_state(x4)), snd(out_value(x4))))) || (fst(x4) = 2 && x1 = diverge(snd(x4))))))))"#;
+
 /// steps of all paths
 const MAX_STEPS: usize = 200_000;
 const MAX_PATHS: usize = 4096;
@@ -63,6 +69,11 @@ impl Logic {
         ) else {
             return err("needs the x86 model and the ABI layer".into());
         };
+        // (the loop it runs must be the one it implements)
+        match &env.syms[rtr as usize].kind {
+            SymKind::Defined { params, body } if params.is_empty() && crate::syntax::Printer::new(env).term(body) == RUN_TO_RETURN => {}
+            _ => return err("`abi.run_to_return` is not the definition symex implements (layers/abi.sl changed?)".into()),
+        }
         let imp = env.builtins.imp;
         let eq = env.builtins.eq;
         // the run, the instructions' lemmas (by address), the other facts
@@ -228,6 +239,7 @@ impl Logic {
                     let mut cs = Vec::new();
                     sp.conjuncts(&body, &mut cs);
                     let mut out: Option<Term> = None;
+                    let mut fault: Option<Term> = None;
                     let mut dead = false;
                     for c in cs {
                         match c.node() {
@@ -238,7 +250,10 @@ impl Logic {
                                         continue;
                                     }
                                 }
-                                dead = true;
+                                // (an outcome other than ok -- a fault --
+                                // cannot be left out unless its conditions
+                                // fail: checked below)
+                                fault = Some(c.clone());
                             }
                             Node::App(k, _) if *k == code_at => q.code.push(sp.prop(&c, Pol::Other)),
                             _ => match self.symex_decide(&sp, &ctx, &c) {
@@ -253,6 +268,9 @@ impl Logic {
                     }
                     if dead {
                         continue;
+                    }
+                    if let Some(f) = fault {
+                        return err(format!("at {:#x}: the outcome lemma allows {}; only `ok` outcomes are followed", addr, short(&f)));
                     }
                     let Some(n) = out else { return err(format!("at {:#x}: an alternative without an outcome", addr)) };
                     q.state = n;
