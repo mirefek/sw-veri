@@ -538,15 +538,31 @@ accessor lemmas gone). The undefined-behaviour branches come as one
 statement `all e. e in univ(1) -> !D -> runs(P, W, exc(S, e))`, D the
 conjunction of the branches' `C1 -> .. -> !Cn`, so a `raises` lemma is
 `simp(r, hn, he)`: its hand-written `defined` implies D propositionally.
-`defined` is still written by hand in the statement. Loops from a known
-state are unrolled (`while_stop`/`while_leave`/`while_step`, the open
-lemmas simp's `unroll` rests on): step_seq's spec runs through its 32
-iterations in 2.4 s (37 branches: the increment, the reset, and a UB
-branch per byte of the 32 written). Open for step_seq's C1: its `defined`
--- the 32 per-byte write conditions as one range (`gimple.usable(v,
-4228176, 32, true)`) needs a lemma relating a range to its bytes, and
-`abi.ub_case` generalized to an exception from a later world (the stores
-before the failing one).
+`defined` is still written by hand in the statement.
+
+Loops (2026-10): undefined behaviour raises from any world (the `_ub`
+lemmas give `exc(s2, e)` for any s2, e), so a failure after earlier stores
+needs no other ABI rule. A loop is reasoned about as a loop, its trip
+count as if a variable, on both sides:
+- spec: `spec_run({P}, {W}, {l. I}, {l. m}, ..)` runs the body once from a
+  state with the invariant I; the obligations of `while_exists`
+  (core/loop.core; invariant kept with a smaller variant, the branches
+  covering the case) are decided or stated as hypotheses, and the result
+  is `pre -> obligations -> (ex lv. D1 && runs(P, W, O1)) || ..` over the
+  loop's exits. step_seq: the coverage obligations decided; entry and
+  preservation are `ss.entry`, `ss.step` (proofs/step_seq.core, the bytes
+  zeroed so far `ss.zs(b, i)` by `nat_rec`);
+- machine: `abi.run_from(m0, s, o)` (the run continued at s) and
+  `abi.run_cut` (proofs/abi_loop.core: an invariant at the loop's head and
+  a variant; induction, no open lemma); `symex(h, .., {H})` stops at the
+  head H with `run_from`, and starts from one. step_seq: entry to the head
+  0x4024f5 runs.
+
+Open for step_seq's C1: `ss.fun_ok`/`ss.fun_raises` from spec_run's
+loop statement (one simp call over the disjunction of exits explodes: to
+be taken apart by exit), the machine invariant at the head (rip, rsp, the
+memory `store_le(zm(b, i), slot, 4, i)` with the machine's zeroed bytes
+`zm` likewise by `nat_rec`), and the ABI glue (`abi.ret_case`).
 
 ### 6.3 Simulation, block by block
 

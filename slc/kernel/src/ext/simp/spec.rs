@@ -281,7 +281,28 @@ impl Sr<'_, '_> {
                     let Node::Nat(c) = c.node() else { continue };
                     let fits = (1..64u64).find(|&m| self.sp.bits_term(y, m)).is_some_and(|m| crate::nat::Nat::pow2(m).add(c) <= *n.to_u64().map(crate::nat::Nat::pow2).as_ref().unwrap_or(&crate::nat::Nat::zero()));
                     if fits && !c.is_zero() && !matches!(y.node(), Node::Nat(_)) {
-                        return Term::app(*ia, vec![Term::nat(c.clone()), y.clone()]);
+                        let lit = Term::nat(c.clone());
+                        return if *c >= crate::nat::Nat::from_u64(4096) { Term::app(*ia, vec![lit, y.clone()]) } else { Term::app(*ia, vec![y.clone(), lit]) };
+                    }
+                }
+            }
+        }
+        // an n-bit sum of a word y and a literal c the context shows does not
+        // wrap (y + c < 2^n): the integer sum -- an address as base + offset
+        // (c a large literal first), an index as i + c
+        if name == "bits_add" && x.len() == 3 {
+            if let (Node::Nat(n), Some(ia), Some(lt)) = (x[0].node(), self.sp.env.sym_by_name.get("int_add"), self.sp.env.sym_by_name.get("int_lt")) {
+                if let Some(n) = n.to_u64().filter(|&n| (1..=128).contains(&n)) {
+                    for (y, c) in [(&x[1], &x[2]), (&x[2], &x[1])] {
+                        let Node::Nat(cv) = c.node() else { continue };
+                        if cv.is_zero() || matches!(y.node(), Node::Nat(_)) || !self.sp.bits_term(y, n) {
+                            continue;
+                        }
+                        let sum = if *cv >= crate::nat::Nat::from_u64(4096) { Term::app(*ia, vec![c.clone(), y.clone()]) } else { Term::app(*ia, vec![y.clone(), c.clone()]) };
+                        let lim = Term::nat(crate::nat::Nat::pow2(n));
+                        if self.lg.symex_decide(self.sp, ctx, &Term::app(*lt, vec![Term::app(*ia, vec![y.clone(), c.clone()]), lim])) == Some(true) {
+                            return sum;
+                        }
                     }
                 }
             }
@@ -752,6 +773,14 @@ impl Sr<'_, '_> {
             if dead {
                 continue;
             }
+            // (the outcome in word form under the branch's conditions too:
+            // the bounds of its path)
+            let mut octx = lctx.clone();
+            for c in &new {
+                sp.conjuncts(c, &mut octx);
+            }
+            sp.set_nats(&octx);
+            let o = sp.term(&self.word(&octx, &o));
             let core: Vec<Term> = new.iter().filter(|c| !self.param_typing(c, lv_id)).cloned().collect();
             cover.push(core.iter().cloned().reduce(|x, y| sp.and(x, y)).unwrap_or_else(|| sp.tt()));
             match o.node() {
@@ -821,7 +850,7 @@ impl Sr<'_, '_> {
             }
         }
         let mut t = goal.clone();
-        for a in ants.iter().rev() {
+        for a in ants.iter().rev().filter(|a| !sp.is_true(a)) {
             t = Term::app(sp.env.builtins.imp, vec![a.clone(), t]);
         }
         let x = Term::var(lv, vec![]);
@@ -1323,8 +1352,21 @@ impl Logic {
                     }
                 }
             }
-            let mut t = disj.into_iter().reduce(|x, y| sp.or(x, y)).unwrap_or_else(|| sp.ff());
-            for c in pre.iter().chain(&typing).chain(&hyps).rev() {
+            let body = disj.into_iter().reduce(|x, y| sp.or(x, y)).unwrap_or_else(|| sp.ff());
+            // (a parameter only typed, in a universe or words, and nowhere
+            // else: dropped, as any value of its type would do)
+            let conds: Vec<Term> = pre.iter().chain(&typing).chain(&hyps).cloned().collect();
+            let only_typed = |c: &Term| {
+                let Node::App(i, ab) = c.node() else { return false };
+                if !is(*i, sp.s.in_) || ab.len() != 2 {
+                    return false;
+                }
+                let Node::Var(v, va) = ab[0].node() else { return false };
+                let inhabited = matches!(ab[1].node(), Node::App(u, _) if is(*u, sp.s.univ) || Some(*u) == env.sym_by_name.get("bits").copied());
+                va.is_empty() && *v >= first && *v != g.lv && inhabited && !has_var(&body, *v) && conds.iter().filter(|d| has_var(d, *v)).count() == 1
+            };
+            let mut t = body.clone();
+            for c in conds.iter().rev().filter(|c| !only_typed(c)) {
                 t = Term::app(imp, vec![c.clone(), t]);
             }
             ts.push(t);
