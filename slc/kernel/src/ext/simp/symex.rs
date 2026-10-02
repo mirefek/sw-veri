@@ -18,6 +18,14 @@
 //! path's conditions and the code fact are kept, so a step costs the same
 //! however long the run; memory is the entry memory and its stores, read
 //! and ordered by `simp`'s term rules (with the facts' `x86.apart`).
+//!
+//! Loops (proofs/abi_loop.core): the run may also be `abi.run_from(M0, S,
+//! O)`, the same loop from a state S (its exit still M0's return), and
+//! `symex(h, .., {H})` stops a path that reaches the address H after a step
+//! (a loop's head): its disjunct is `ex o2. abi.run_from(M0, S1, o2) &&
+//! fst(o2) = fst(O) && (!(fst(O) = 2) -> o2 = O)` -- the run on from S1,
+//! of O's kind, O itself unless it diverges (as `while_unroll` gives). The
+//! definition of `abi.run_from` is checked against `run_to_return`'s.
 
 use super::*;
 use crate::env::KResult;
@@ -47,13 +55,15 @@ struct XPath {
     conds: Vec<Term>,
     code: Vec<Term>,
     vars: Vec<VarId>,
+    /// it has taken a step (a stop applies only then)
+    moved: bool,
 }
 
 impl Logic {
     /// The outcome of the run `h` (a premise `runs(abi.run_to_return(), M,
     /// O)`) by symbolic execution with the other premises: the instructions'
     /// outcome lemmas and the facts their premises need.
-    pub fn symex(&self, env: &Env, premises: &[Term]) -> KResult<Term> {
+    pub fn symex(&self, env: &Env, stops: &[Term], premises: &[Term]) -> KResult<Term> {
         let err = |m: String| Err(crate::env::KernelError(format!("symex: {}", m)));
         let sym = |n: &str| env.sym_by_name.get(n).copied();
         let (Some(runs), Some(rtr), Some(step), Some(app), Some(ok), Some(empty), Some(le), Some(badd), Some(code_at)) = (
@@ -74,16 +84,30 @@ impl Logic {
             SymKind::Defined { params, body } if params.is_empty() && crate::syntax::Printer::new(env).term(body) == RUN_TO_RETURN => {}
             _ => return err("`abi.run_to_return` is not the definition symex implements (layers/abi.sl changed?)".into()),
         }
+        // (`abi.run_from`, proofs/abi_loop.core: the same loop from another
+        // state, its exit as at the entry m0)
+        let run_from = sym("abi.run_from").filter(|rf| match (&env.syms[*rf as usize].kind, &env.syms[rtr as usize].kind) {
+            (SymKind::Defined { params, body }, SymKind::Defined { body: rbody, .. }) if params.len() == 3 => {
+                let [m0, s, o] = [params[0], params[1], params[2]].map(|v| Term::var(v, vec![]));
+                expected_run_from(env, rbody, &m0, &s, &o).is_some_and(|e| e == *body)
+            }
+            _ => false,
+        });
         let imp = env.builtins.imp;
         let eq = env.builtins.eq;
-        // the run, the instructions' lemmas (by address), the other facts
-        let mut run: Option<(Term, Term)> = None;
+        // the run (entry, start, outcome), the instructions' lemmas (by
+        // address), the other facts
+        let mut run: Option<(Term, Term, Term)> = None;
         let mut lemmas: Vec<(u128, Lemma)> = Vec::new();
         let mut facts: Vec<Term> = Vec::new();
         for p in premises {
             if let Node::App(r, a) = p.node() {
                 if *r == runs && a.len() == 3 && matches!(a[0].node(), Node::App(g, x) if *g == rtr && x.is_empty()) && run.is_none() {
-                    run = Some((a[1].clone(), a[2].clone()));
+                    run = Some((a[1].clone(), a[1].clone(), a[2].clone()));
+                    continue;
+                }
+                if Some(*r) == run_from && a.len() == 3 && run.is_none() {
+                    run = Some((a[0].clone(), a[1].clone(), a[2].clone()));
                     continue;
                 }
             }
@@ -93,10 +117,21 @@ impl Logic {
             }
             facts.push(p.clone());
         }
-        let Some((m0, o0)) = run else { return err("no premise `runs(abi.run_to_return(), M, O)`".into()) };
+        let Some((m0, s0, o0)) = run else { return err("no premise `runs(abi.run_to_return(), M, O)` or `abi.run_from(M, S, O)`".into()) };
+        // the stop addresses (numerals)
+        let mut stop_at = Vec::new();
+        for t in stops {
+            match t.node() {
+                Node::Nat(v) if v.to_u128().is_some() => stop_at.push(v.to_u128().unwrap()),
+                _ => return err(format!("a stop address is a numeral, not {}", crate::syntax::Printer::new(env).term(t))),
+            }
+        }
+        if !stop_at.is_empty() && run_from.is_none() {
+            return err("stopping at a loop's head needs `abi.run_from` (proofs/abi_loop.core)".into());
+        }
         // (premises `all xs. f(xs) = rhs` unfold f, as in simp)
         *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
-        let r = self.symex_run(env, &facts, &lemmas, &m0, &o0, [app, ok, empty, le, badd, code_at, eq]);
+        let r = self.symex_run(env, &facts, &lemmas, (&m0, &s0, &o0), (&stop_at, run_from), [app, ok, empty, le, badd, code_at, eq]);
         self.simp_rewrites.borrow_mut().clear();
         if r.is_ok() {
             self.simp_used.borrow_mut().push("while_unroll".into());
@@ -144,7 +179,9 @@ impl Logic {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn symex_run(&self, env: &Env, facts: &[Term], lemmas: &[(u128, Lemma)], m0: &Term, o0: &Term, syms: [SymId; 7]) -> KResult<Term> {
+    fn symex_run(&self, env: &Env, facts: &[Term], lemmas: &[(u128, Lemma)], run: (&Term, &Term, &Term), stops: (&[u128], Option<SymId>), syms: [SymId; 7]) -> KResult<Term> {
+        let (m0, s0, o0) = run;
+        let (stop_at, run_from) = stops;
         let [app, ok, empty, le, badd, code_at, eq] = syms;
         let err = |m: String| Err(crate::env::KernelError(format!("symex: {}", m)));
         let sp = Simp::new(env, self);
@@ -173,11 +210,13 @@ impl Logic {
         let ret = Term::app(le, vec![field(&field(m0, b"vm"), b"bytes"), gpr(m0, 4), Term::nat(crate::nat::Nat::from_u64(8))]);
         let sp_end = Term::app(badd, vec![Term::nat(crate::nat::Nat::from_u64(64)), gpr(m0, 4), Term::nat(crate::nat::Nat::from_u64(8))]);
         let mut fresh = env.vars.len() as u32 + 3_000_000;
-        for t in facts.iter().chain([m0, o0]) {
+        for t in facts.iter().chain([m0, s0, o0]) {
             fresh = fresh.max(max_var(t) + 1);
         }
-        let mut work = vec![XPath { state: m0.clone(), conds: Vec::new(), code: codes, vars: Vec::new() }];
+        let mut work = vec![XPath { state: s0.clone(), conds: Vec::new(), code: codes, vars: Vec::new(), moved: false }];
         let mut done: Vec<XPath> = Vec::new();
+        // (paths at a stop address, after a step at least)
+        let mut stopped: Vec<XPath> = Vec::new();
         let mut steps = 0usize;
         while let Some(mut p) = work.pop() {
             loop {
@@ -207,6 +246,11 @@ impl Logic {
                 }) else {
                     return err(format!("rip is not known: {}", short(&rip)));
                 };
+                // a stop: the run from here
+                if p.moved && stop_at.contains(&addr) {
+                    stopped.push(p);
+                    break;
+                }
                 let Some((_, lem)) = lemmas.iter().find(|(a, _)| *a == addr) else {
                     return err(format!("no outcome lemma for the instruction at {:#x} (pass its `F.ok_{:x}`)", addr, addr));
                 };
@@ -224,7 +268,7 @@ impl Logic {
                 sp.disjuncts(&inst(&lem.concl), &mut alts);
                 let mut next: Vec<XPath> = Vec::new();
                 for alt in alts {
-                    let mut q = XPath { state: s.clone(), conds: p.conds.clone(), code: Vec::new(), vars: p.vars.clone() };
+                    let mut q = XPath { state: s.clone(), conds: p.conds.clone(), code: Vec::new(), vars: p.vars.clone(), moved: true };
                     // (values the model leaves open: fresh, existential in the result)
                     let mut body = alt;
                     while let Node::App(x, b) = body.node() {
@@ -292,8 +336,31 @@ impl Logic {
         // O = ok(S, empty) per path, its conditions, its open values existential
         let bf = env.binders_fn();
         let mut result: Option<Term> = None;
-        for p in done.into_iter().rev() {
-            let mut body = Term::app(eq, vec![o0.clone(), Term::app(ok, vec![p.state.clone(), Term::app(empty, vec![])])]);
+        // (a stopped path: `ex o2. abi.run_from(m0, S, o2) && fst(o2) =
+        // fst(O) && (!(fst(O) = 2) -> o2 = O)` -- the run on from S, with O's
+        // outcome; a divergence's trace may differ, as in `while_unroll`)
+        let n_done = done.len();
+        let paths: Vec<(bool, XPath)> = done.into_iter().map(|p| (false, p)).chain(stopped.into_iter().map(|p| (true, p))).collect();
+        if paths.len() > n_done && std::env::var("SYMEX_DEBUG").is_ok() {
+            eprintln!("symex: {} paths returned, {} stopped", n_done, paths.len() - n_done);
+        }
+        for (stop, p) in paths.into_iter().rev() {
+            let mut body = if stop {
+                let fst = |t: &Term| Term::app(sp.s.fst.unwrap(), vec![t.clone()]);
+                let o2 = Term::bvar(0);
+                let o0s = o0.shift(1, 0, &bf);
+                let st = p.state.shift(1, 0, &bf);
+                let m0s = m0.shift(1, 0, &bf);
+                let two = Term::nat(crate::nat::Nat::from_u64(2));
+                let rf = Term::app(run_from.unwrap(), vec![m0s, st, o2.clone()]);
+                let same = Term::app(eq, vec![fst(&o2), fst(&o0s)]);
+                let div = Term::app(sp.s.not.unwrap(), vec![Term::app(eq, vec![fst(&o0s), two])]);
+                let eqo = Term::app(env.builtins.imp, vec![div, Term::app(eq, vec![o2, o0s])]);
+                let and = sp.s.and.unwrap();
+                Term::app(self.ex, vec![Term::app(and, vec![rf, Term::app(and, vec![same, eqo])])])
+            } else {
+                Term::app(eq, vec![o0.clone(), Term::app(ok, vec![p.state.clone(), Term::app(empty, vec![])])])
+            };
             // (an open value overwritten later: its choice dropped, it is
             // only `v = false || v = true` of a value nothing else mentions)
             let conds: Vec<&Term> = p
@@ -384,4 +451,29 @@ impl Logic {
         let near = relevant(ctx, h);
         self.tautology(env, &near, h).is_ok() || self.arith(env, &near, h).is_ok()
     }
+}
+
+/// What `abi.run_from(m0, s, o)` must be: `run_to_return`'s relation at
+/// (m0, o) -- `mkprog(x0 x1. letin(sp, x2. letin(ret, x3. ex x4.
+/// while_rel(pair(x0, empty), ..) && ..)))` with its lets taken -- with the
+/// loop started at `pair(s, empty)` instead of `pair(m0, empty)`.
+fn expected_run_from(env: &Env, rbody: &Term, m0: &Term, s: &Term, o: &Term) -> Option<Term> {
+    let sym = |n: &str| env.sym_by_name.get(n).copied();
+    let (mkprog, letin, pair, empty) = (sym("mkprog")?, sym("letin")?, sym("pair")?, sym("empty")?);
+    let Node::App(mk, rel) = rbody.node() else { return None };
+    if *mk != mkprog || rel.len() != 1 {
+        return None;
+    }
+    let mut t = inst_k(env, &rel[0], &[m0.clone(), o.clone()]);
+    for _ in 0..2 {
+        let Node::App(l, la) = t.node() else { return None };
+        if *l != letin || la.len() != 2 {
+            return None;
+        }
+        t = inst_k(env, &la[1], &[la[0].clone()]);
+    }
+    let e = Term::app(empty, vec![]);
+    let start = Term::app(pair, vec![m0.clone(), e.clone()]);
+    let body = abstract_term(&t, &start, 0, &env.binders_fn());
+    Some(inst_k(env, &body, &[Term::app(pair, vec![s.clone(), e])]))
 }

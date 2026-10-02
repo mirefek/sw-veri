@@ -392,14 +392,24 @@ impl Seq {
     /// `Γ ⊢ O = ok(S1, empty) || ..`: the outcome of the premise `runs(
     /// abi.run_to_return(), M, O)` by symbolic execution with the other
     /// premises (`Logic::symex`); rests on `while_unroll`.
-    pub fn symex(env: &Env, lg: &Logic, premises: &[&Seq]) -> KResult<Seq> {
+    pub fn symex(env: &Env, lg: &Logic, stops: &[Term], premises: &[&Seq]) -> KResult<Seq> {
+        for s in stops {
+            env.check_wf(s, 0)?;
+        }
         let (hyps, mut open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
         lg.simp_used.borrow_mut().clear();
-        let r = lg.symex(env, &ps);
+        let r = lg.symex(env, stops, &ps);
         let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
         let concl = r?;
         env.check_wf(&concl, 0)?;
+        Self::rests_on(env, "symex", used, &mut open)?;
+        Ok(Seq { hyps, concl, open })
+    }
+
+    /// The library facts an extension's step relied on (`simp_used`): a
+    /// theorem, or an open lemma the result then rests on.
+    fn rests_on(env: &Env, rule: &str, used: Vec<String>, open: &mut Vec<String>) -> KResult<()> {
         for name in used {
             if env.theorems.iter().any(|(n, _)| *n == name) {
                 continue;
@@ -410,9 +420,9 @@ impl Seq {
                 }
                 continue;
             }
-            return err(format!("symex relies on `{}` (core/loop.core): load it", name));
+            return err(format!("{} relies on `{}` (core/loop.core): load it", rule, name));
         }
-        Ok(Seq { hyps, concl, open })
+        Ok(())
     }
 
     /// `Γ ⊢ (all ps. C.. -> runs(P, W, O1)) && ..`: the branches of the
@@ -421,10 +431,15 @@ impl Seq {
     pub fn spec_run(env: &Env, lg: &Logic, p: &Term, w: &Term, premises: &[&Seq]) -> KResult<Seq> {
         env.check_wf(p, 0)?;
         env.check_wf(w, 0)?;
-        let (hyps, open) = Self::gather(premises);
+        let (hyps, mut open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
-        let concl = lg.spec_run(env, p, w, &ps)?;
+        // (a loop it runs through rests on the lemmas of one iteration)
+        lg.simp_used.borrow_mut().clear();
+        let r = lg.spec_run(env, p, w, &ps);
+        let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
+        let concl = r?;
         env.check_wf(&concl, 0)?;
+        Self::rests_on(env, "spec_run", used, &mut open)?;
         Ok(Seq { hyps, concl, open })
     }
 

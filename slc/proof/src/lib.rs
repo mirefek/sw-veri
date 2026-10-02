@@ -882,10 +882,20 @@ impl State {
                     // the machine run symbolically to its return with the
                     // instructions' outcome lemmas and facts among the fi:
                     // `O = ok(S1, empty) || ..`, one disjunct per path
+                    // symex(h, f1, .., {H}..): the run h by symbolic
+                    // execution; a path stops at an address {H} (a loop's
+                    // head) with the run from there
                     "symex" => {
-                        let ps = self.proofs(env, lg, args)?;
+                        let mut stops = Vec::new();
+                        let mut ps = Vec::new();
+                        for a in args {
+                            match a {
+                                Arg::Term(_) => stops.push(self.term_arg(env, Some(a), 0)?),
+                                Arg::Proof(p) => ps.push(self.eval(env, lg, p)?),
+                            }
+                        }
                         let refs: Vec<&Seq> = ps.iter().collect();
-                        Seq::symex(env, lg, &refs)
+                        Seq::symex(env, lg, &stops, &refs)
                     }
                     // spec_run({P}, {W}, f1, ..): the program P run forward
                     // from the world W, with the operations' lemmas and the
