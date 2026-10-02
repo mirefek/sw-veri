@@ -901,12 +901,25 @@ impl State {
                     // from the world W, with the operations' lemmas and the
                     // facts among the fi: `(all ps. C.. -> runs(P, W, O)) &&
                     // ..`, one conjunct per branch
+                    // (a loop by an invariant and a variant: `{l. I}, {l.
+                    // m}` after W, for the program's loops in order)
                     "spec_run" => {
                         let p = self.term_arg(env, a0, 0)?;
                         let w = self.term_arg(env, args.get(1), 0)?;
-                        let ps = self.proofs(env, lg, &args[2..])?;
+                        let mut ls = Vec::new();
+                        let mut ps = Vec::new();
+                        for a in args.iter().skip(2) {
+                            match a {
+                                Arg::Term(_) => ls.push(self.term_arg(env, Some(a), 1)?),
+                                Arg::Proof(x) => ps.push(self.eval(env, lg, x)?),
+                            }
+                        }
+                        if ls.len() % 2 != 0 {
+                            return err("spec_run: a loop's invariant `{l. I}` and variant `{l. m}` come in pairs");
+                        }
+                        let hints: Vec<(Term, Term)> = ls.chunks(2).map(|c| (c[0].clone(), c[1].clone())).collect();
                         let refs: Vec<&Seq> = ps.iter().collect();
-                        Seq::spec_run(env, lg, &p, &w, &refs)
+                        Seq::spec_run(env, lg, &p, &w, &hints, &refs)
                     }
                     "refl" => {
                         let t = self.term_arg(env, a0, 0)?;

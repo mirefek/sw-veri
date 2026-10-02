@@ -44,6 +44,27 @@
 //! the reads each path makes can be made). A proof of a `raises` lemma
 //! then only shows its own definedness to imply D.
 //!
+//! Loops: without a hint, a loop from a known state is unrolled (resting
+//! on `while_stop`, `while_leave`, `while_step`). With `spec_run({P}, {W},
+//! {l. I}, {l. m}, ..)`, the program's loop (not the GIMPLE layer's, over
+//! an access's bytes) is run by the invariant I and variant m, as
+//! `while_exists` (core/loop.core) allows: I at the entry a condition; the
+//! body once, from a state lv with I and the loop's condition; the
+//! obligations -- m(lv) a natural; each branch going on to l2 giving I(l2)
+//! and m(l2) < m(lv); the body's branches covering the case -- decided, or
+//! stated as hypotheses (closed in lv); the exits -- the condition failing
+//! at lv, or a body branch leaving (a break, undefined behaviour) -- with
+//! lv existential. Per such loop one statement:
+//!
+//!   all ps. pre.. -> typing.. -> obligations.. ->
+//!     (ex lv. D1 && runs(P, W, O1)) || ..
+//!
+//! one disjunct per branch past the loop, its exit's conditions and its own
+//! in Di; the branches past an exit covering it is an obligation too.
+//! Parameters the body or the rest leave open (an exception value of
+//! undefined behaviour) are chosen once, for all iterations: universal,
+//! their typing among the hypotheses.
+//!
 //! Each branch is shown by construction: the program's relation holds for
 //! the branch's outcome when its conditions do (`runs(mkprog(R), s, o)` is
 //! `pair(s, o) in univ(1) && R(s, o)`, whose membership is among the
@@ -70,6 +91,20 @@ const FUEL: usize = 200_000;
 struct Br {
     a: Assign,
     conds: Vec<Term>,
+    /// a branch past a loop run by its invariant: (the loop's group, which
+    /// exit of the loop)
+    group: Option<(usize, usize)>,
+}
+
+/// A loop run by its invariant P and variant m (`run_loop_inv`): the
+/// conditions on the way to it (P(l0) among them), the obligations left
+/// (closed in the loop's state), the variable for the state at the exit,
+/// and per exit its conditions on that state.
+struct Group {
+    pre: Vec<Term>,
+    hyps: Vec<Term>,
+    lv: VarId,
+    exits: Vec<Vec<Term>>,
 }
 
 struct Sr<'s, 'a> {
@@ -82,6 +117,11 @@ struct Sr<'s, 'a> {
     us: std::collections::HashSet<VarId>,
     fuel: usize,
     depth: usize,
+    /// the loops' invariants and variants (`{l. I}`, `{l. m}`)
+    hints: Vec<(Term, Term)>,
+    groups: Vec<Group>,
+    /// inside an operation of the GIMPLE layer (its loops unrolled)
+    op_depth: usize,
 }
 
 fn err<T>(m: impl Into<String>) -> Result<T, String> {
@@ -158,6 +198,12 @@ impl Sr<'_, '_> {
         let c = &self.sp.prop(&self.word(ctx, c), Pol::Other);
         if let Some(r) = self.lg.symex_decide(self.sp, ctx, c) {
             return Some(r);
+        }
+        // (true by a stronger form: simp's strengthening of goals, e.g. a
+        // function update of members is in a universe)
+        let g = self.sp.prop(c, Pol::Goal);
+        if g != *c && self.lg.symex_decide(self.sp, ctx, &g) == Some(true) {
+            return Some(true);
         }
         let u = self.sp.prop(&self.unfold_arith(c), Pol::Other);
         if u != *c {
@@ -236,6 +282,18 @@ impl Sr<'_, '_> {
                     let fits = (1..64u64).find(|&m| self.sp.bits_term(y, m)).is_some_and(|m| crate::nat::Nat::pow2(m).add(c) <= *n.to_u64().map(crate::nat::Nat::pow2).as_ref().unwrap_or(&crate::nat::Nat::zero()));
                     if fits && !c.is_zero() && !matches!(y.node(), Node::Nat(_)) {
                         return Term::app(*ia, vec![Term::nat(c.clone()), y.clone()]);
+                    }
+                }
+            }
+        }
+        // the sign extension of an m-bit x the context bounds below
+        // 2^(m-1): x
+        if name == "bits_sext" && x.len() == 3 {
+            if let (Node::Nat(m), Some(lt)) = (x[0].node(), self.sp.env.sym_by_name.get("int_lt")) {
+                if let Some(m) = m.to_u64().filter(|&m| (2..=128).contains(&m) && self.sp.bits_term(&x[2], m)) {
+                    let half = Term::nat(crate::nat::Nat::pow2(m - 1));
+                    if self.lg.symex_decide(self.sp, ctx, &Term::app(*lt, vec![x[2].clone(), half])) == Some(true) {
+                        return x[2].clone();
                     }
                 }
             }
@@ -386,6 +444,9 @@ impl Sr<'_, '_> {
                     Ok(out)
                 }
                 Err(m) if m.starts_with(UNSOLVED) => {
+                    if std::env::var("SPEC_DEBUG").is_ok() {
+                        eprintln!("spec_run: and, left {}", m.chars().take(300).collect::<String>());
+                    }
                     let mut out = Vec::new();
                     for b in self.solve(&x[1], br).map_err(|_| m.clone())? {
                         out.extend(self.solve(&x[0], b).map_err(|_| m.clone())?);
@@ -470,6 +531,9 @@ impl Sr<'_, '_> {
             return err(format!("{}{}", UNSOLVED, self.show(&p)));
         }
         if Some(f) == sp.env.sym_by_name.get("while_rel").copied() && x.len() == 5 && !self.open(&x[0], &br.a) {
+            if !self.hints.is_empty() && self.op_depth == 0 {
+                return self.run_loop_inv(x, br);
+            }
             return self.run_loop(x, br);
         }
         if is(f, s.runs) {
@@ -581,6 +645,204 @@ impl Sr<'_, '_> {
             }
         }
         Ok(out)
+    }
+
+    /// A loop `while_rel(l0, l. C, l o. B, l. T, r)` by the invariant P and
+    /// variant m (the hint): P(l0) a condition; the body run once from a
+    /// state lv with P(lv) and C(lv); the obligations of `while_exists`
+    /// (core/loop.core) -- m(lv) a natural, each body branch that continues
+    /// to l2 giving P(l2) and m(l2) < m(lv), the body's branches covering
+    /// P(lv) && C(lv) -- decided, or kept for the statement (closed in lv).
+    /// The loop's outcome: the state lv where C fails (r = ok(lv, empty)),
+    /// or a body branch that leaves (r its outcome, lv where it does), lv
+    /// existential in the statement (`while_exists` with g: the body's
+    /// branches that leave). The branches go on after the loop from there,
+    /// marked with the loop's group and exit.
+    fn run_loop_inv(&mut self, a: &[Term], br: Br) -> Result<Vec<Br>, String> {
+        let sp = self.sp;
+        let s = &sp.s;
+        let env = sp.env;
+        if std::env::var("SPEC_DEBUG").is_ok() {
+            eprintln!("spec_run: loop at {} (group {:?}), raw {}", self.show(&self.subst(&a[0], &br.a)), br.group, self.show(&a[0]));
+            let mut vs = Vec::new();
+            a[0].vars(&mut vs);
+            for v in vs {
+                if let Some((_, x)) = br.a.iter().find(|(w, _)| *w == v) {
+                    eprintln!("    ?v{} := {}", v, self.show(x));
+                }
+            }
+        }
+        if br.group.is_some() {
+            return err(format!("{}a loop past a loop run by its invariant (not supported yet)", UNSOLVED));
+        }
+        if self.hints.len() != 1 {
+            return err("one loop invariant and variant: more loops by invariants are not supported yet");
+        }
+        let (inv, var) = self.hints[0].clone();
+        for n in ["while_stop", "while_leave", "while_step"] {
+            let mut u = self.lg.simp_used.borrow_mut();
+            if !u.iter().any(|m| m == n) {
+                u.push(n.into());
+            }
+        }
+        let empty = Term::app(s.empty.unwrap(), vec![]);
+        let at = |t: &Term, l: &Term| sp.prop(&inst_k(env, t, &[l.clone()]), Pol::Other);
+        // the entry: P(l0)
+        let l0 = sp.term(&self.subst(&a[0], &br.a));
+        let p0 = at(&inv, &l0);
+        let Some(b0) = self.with_cond(&p0, br).pop() else {
+            return err(format!("the loop's invariant fails at its entry: {}", self.show(&p0)));
+        };
+        let pre = b0.conds.clone();
+        if std::env::var("SPEC_DEBUG").is_ok() {
+            eprintln!("spec_run: loop group {} pre {:?}", self.groups.len(), pre.iter().map(|c| self.show(&self.subst(c, &b0.a))).collect::<Vec<_>>());
+        }
+        // the state lv, any with P and C
+        let (lv_id, lv) = self.var();
+        let pl = at(&inv, &lv);
+        let cl = at(&a[1], &lv);
+        let ml = inst_k(env, &var, &[lv.clone()]);
+        let ctx0: Vec<Term> = self.facts.iter().chain(&pre).cloned().collect();
+        let mut hyps = Vec::new();
+        let omega = Term::app(s.omega.ok_or("no omega")?, vec![]);
+        let in_ = s.in_.unwrap();
+        self.obligation(&ctx0, &[pl.clone()], &Term::app(in_, vec![ml.clone(), omega]), lv_id, &mut hyps);
+        // the body, once
+        let (_, xo) = self.unknown();
+        let body = inst_k(env, &a[2], &[lv.clone(), xo.clone()]);
+        let mut start = b0.clone();
+        start.conds.push(pl.clone());
+        if !sp.is_true(&cl) {
+            start.conds.push(cl.clone());
+        }
+        let lt = env.sym_by_name.get("int_lt").copied().ok_or("no int_lt")?;
+        let mut cover: Vec<Term> = Vec::new();
+        let mut leaves: Vec<(Vec<Term>, Br, Term)> = Vec::new();
+        // (in word form under P(lv) and C(lv), which hold on each of the
+        // body's paths: a value P bounds read as such)
+        let mut lctx = ctx0.clone();
+        sp.conjuncts(&pl, &mut lctx);
+        sp.conjuncts(&cl, &mut lctx);
+        for bb in self.solve(&body, start.clone())? {
+            sp.set_nats(&lctx);
+            let o = sp.term(&self.word(&lctx, &self.subst(&xo, &bb.a)));
+            // (a divergence of the body is no exit `while_exists` takes:
+            // left out, its case covered by the other branches or not)
+            if matches!(o.node(), Node::App(g, _) if is(*g, s.diverge)) {
+                continue;
+            }
+            let mut new: Vec<Term> = Vec::new();
+            let mut dead = false;
+            for c in bb.conds.iter().filter(|c| !start.conds.contains(c)) {
+                sp.set_nats(&lctx);
+                let mut xs = Vec::new();
+                sp.conjuncts(&sp.prop(&self.word(&lctx, &self.subst(c, &bb.a)), Pol::Other), &mut xs);
+                for x in xs {
+                    if sp.is_true(&x) || new.contains(&x) || lctx.contains(&x) || sp.typed(&lctx, &x) {
+                        continue;
+                    }
+                    match self.decide_in(&lctx, &x, 1) {
+                        Some(true) => {}
+                        Some(false) => dead = true,
+                        None => new.push(x),
+                    }
+                }
+            }
+            // (a branch P(lv) and C(lv) rule out: not taken)
+            if dead {
+                continue;
+            }
+            let core: Vec<Term> = new.iter().filter(|c| !self.param_typing(c, lv_id)).cloned().collect();
+            cover.push(core.iter().cloned().reduce(|x, y| sp.and(x, y)).unwrap_or_else(|| sp.tt()));
+            match o.node() {
+                Node::App(g, oa) if is(*g, s.ok) && oa.len() == 2 && oa[1] == empty => {
+                    // continues: P(l2), m(l2) < m(lv)
+                    let l2 = oa[0].clone();
+                    let goal = sp.and(at(&inv, &l2), Term::app(lt, vec![inst_k(env, &var, &[l2.clone()]), ml.clone()]));
+                    let mut ants = vec![pl.clone(), cl.clone()];
+                    ants.extend(new.iter().cloned());
+                    self.obligation(&ctx0, &ants, &goal, lv_id, &mut hyps);
+                }
+                Node::App(g, _) if is(*g, s.exc) => leaves.push((new, bb, o)),
+                _ => return err(format!("a loop's body outcome other than ok or an exception: {}", self.show(&o))),
+            }
+        }
+        // the body's branches cover P(lv) && C(lv)
+        let any = cover.into_iter().reduce(|x, y| sp.or(x, y)).unwrap_or_else(|| sp.ff());
+        self.obligation(&ctx0, &[pl.clone(), cl.clone()], &any, lv_id, &mut hyps);
+        // the exits
+        let gid = self.groups.len();
+        let mut exits: Vec<Vec<Term>> = Vec::new();
+        let mut out = Vec::new();
+        let mut cx: Vec<Term> = ctx0.clone();
+        cx.push(pl.clone());
+        if self.decide_in(&cx, &cl, 2) != Some(true) {
+            let d = vec![pl.clone(), sp.prop(&sp.not(cl.clone()), Pol::Other)];
+            let mut b = b0.clone();
+            b.conds.extend(d.iter().cloned());
+            if self.unify(&a[4], &Term::app(s.ok.unwrap(), vec![lv.clone(), empty.clone()]), &mut b)? == Some(true) {
+                b.group = Some((gid, exits.len()));
+                exits.push(d);
+                out.push(b);
+            }
+        }
+        for (new, mut bb, o) in leaves {
+            let mut d = vec![pl.clone()];
+            if !sp.is_true(&cl) {
+                d.push(cl.clone());
+            }
+            d.extend(new);
+            if self.unify(&a[4], &o, &mut bb)? == Some(true) {
+                bb.group = Some((gid, exits.len()));
+                exits.push(d);
+                out.push(bb);
+            }
+        }
+        self.groups.push(Group { pre, hyps, lv: lv_id, exits });
+        Ok(out)
+    }
+
+    /// An obligation `all lv. A.. -> G` (lv the loop's state): decided in
+    /// the context with the A's, or kept.
+    fn obligation(&self, ctx: &[Term], ants: &[Term], goal: &Term, lv: VarId, hyps: &mut Vec<Term>) {
+        let sp = self.sp;
+        let mut cx = ctx.to_vec();
+        for a in ants {
+            sp.conjuncts(a, &mut cx);
+        }
+        if self.decide_in(&cx, goal, 2) == Some(true) {
+            return;
+        }
+        // (vacuous: an antecedent the others refute)
+        for k in ctx.len()..cx.len() {
+            let others: Vec<Term> = cx.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, t)| t.clone()).collect();
+            if self.decide_in(&others, &cx[k], 1) == Some(false) {
+                return;
+            }
+        }
+        let mut t = goal.clone();
+        for a in ants.iter().rev() {
+            t = Term::app(sp.env.builtins.imp, vec![a.clone(), t]);
+        }
+        let x = Term::var(lv, vec![]);
+        let t = if has_var(&t, lv) { Term::app(self.lg.all, vec![abstract_term(&t, &x, 0, &sp.env.binders_fn())]) } else { t };
+        if !hyps.contains(&t) {
+            hyps.push(t);
+        }
+    }
+
+    /// `x in S` for a parameter x (not the loop's state) of an inhabited
+    /// type: a universe or words (its typing, stated outside)
+    fn param_typing(&self, c: &Term, lv: VarId) -> bool {
+        let sp = self.sp;
+        match c.node() {
+            Node::App(i, ab) if is(*i, sp.s.in_) && ab.len() == 2 => {
+                let param = matches!(ab[0].node(), Node::Var(v, va) if va.is_empty() && *v != lv && self.us.contains(v));
+                let inhabited = matches!(ab[1].node(), Node::App(u, _) if is(*u, sp.s.univ) || Some(*u) == sp.env.sym_by_name.get("bits").copied());
+                param && inhabited && !has_var(&ab[1], lv)
+            }
+            _ => false,
+        }
     }
 
     /// The pattern (with unknowns) matched against a value: constructors
@@ -736,7 +998,13 @@ impl Sr<'_, '_> {
         }
         let rel = inst_k(sp.env, &r[0], &[st.clone(), out.clone()]);
         let mut res = Vec::new();
-        for b in self.solve(&rel, br)? {
+        // (an operation of the GIMPLE layer: its loops -- over an access's
+        // bytes -- are unrolled, the invariants are for the program's own)
+        let op = matches!(q.node(), Node::App(g, _) if sp.env.syms[*g as usize].name.starts_with("gimple."));
+        self.op_depth += op as usize;
+        let solved = self.solve(&rel, br);
+        self.op_depth -= op as usize;
+        for b in solved? {
             let o = self.subst(out, &b.a);
             let mem = Term::app(sp.s.in_.unwrap(), vec![Term::app(sp.s.pair.unwrap(), vec![st.clone(), o]), Term::app(sp.s.univ.unwrap(), vec![Term::nat(crate::nat::Nat::from_u64(1))])]);
             res.extend(self.with_cond(&mem, b));
@@ -748,14 +1016,14 @@ impl Sr<'_, '_> {
 impl Logic {
     /// The branches of the program `p` run from the world `w` (see the
     /// module): `all ps. C.. -> runs(p, w, O)` per branch, conjoined.
-    pub fn spec_run(&self, env: &Env, p: &Term, w: &Term, premises: &[Term]) -> KResult<Term> {
+    pub fn spec_run(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<Term> {
         *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
-        let r = self.spec_run_with(env, p, w, premises);
+        let r = self.spec_run_with(env, p, w, hints, premises);
         self.simp_rewrites.borrow_mut().clear();
         r
     }
 
-    fn spec_run_with(&self, env: &Env, p: &Term, w: &Term, premises: &[Term]) -> KResult<Term> {
+    fn spec_run_with(&self, env: &Env, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[Term]) -> KResult<Term> {
         let kerr = |m: String| crate::env::KernelError(format!("spec_run: {}", m));
         let sp = Simp::new(env, self);
         let runs = sp.s.runs.ok_or_else(|| kerr("no `runs`".into()))?;
@@ -785,11 +1053,11 @@ impl Logic {
             }
         }
         let mut fresh = env.vars.len() as u32 + 4_000_000;
-        for t in premises.iter().chain([p, w]) {
+        for t in premises.iter().chain([p, w]).chain(hints.iter().flat_map(|(i, m)| [i, m])) {
             fresh = fresh.max(max_var(t) + 1);
         }
         let first = fresh;
-        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0 };
+        let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: hints.to_vec(), groups: Vec::new(), op_depth: 0 };
         let (_, ot) = sr.unknown();
         let t0 = std::time::Instant::now();
         let bs = sr.run(p, w, &ot, Br::default()).map_err(kerr)?;
@@ -883,6 +1151,9 @@ impl Logic {
         let mut set: Option<Term> = None;
         let mut same = true;
         for (i, (kept, o)) in done.iter().enumerate() {
+            if bs[i].group.is_some() {
+                continue;
+            }
             match o.node() {
                 Node::App(ex, ab) if Some(*ex) == sp.s.exc && ab.len() == 2 => {
                     let Some(x) = param(&ab[1]) else { continue };
@@ -954,17 +1225,110 @@ impl Logic {
         }
         let and = sp.s.and.unwrap();
         let mut ts: Vec<Term> = Vec::new();
-        for (i, (kept, o)) in done.into_iter().enumerate() {
-            if gone.contains(&i) {
+        for (i, (kept, o)) in done.iter().enumerate() {
+            if gone.contains(&i) || bs[i].group.is_some() {
                 continue;
             }
-            let mut t = Term::app(runs, vec![p.clone(), w.clone(), o]);
+            let mut t = Term::app(runs, vec![p.clone(), w.clone(), o.clone()]);
             for c in kept.iter().rev() {
                 t = Term::app(env.builtins.imp, vec![c.clone(), t]);
             }
             ts.push(t);
         }
         ts.extend(merged);
+        // the branches past a loop run by its invariant, per loop:
+        //   pre -> typing -> obligations -> (ex lv. D1 && runs(P, W, O1)) || ..
+        // (`while_exists`: the loop has a run to one of its exits, from
+        // there the program to one of the branches past that exit -- which
+        // cover it, an obligation too)
+        let imp = env.builtins.imp;
+        for (gid, g) in sr.groups.iter().enumerate() {
+            let members: Vec<usize> = (0..bs.len()).filter(|i| bs[*i].group.map(|x| x.0) == Some(gid)).collect();
+            let norm = |cs: &[Term], a: &Assign| -> Vec<Term> {
+                sp.set_nats(&sr.facts);
+                let mut out = Vec::new();
+                for c in cs {
+                    let mut xs = Vec::new();
+                    sp.conjuncts(&sp.prop(&sr.word(&sr.facts, &sr.subst(c, a)), Pol::Other), &mut xs);
+                    for x in xs {
+                        if !out.contains(&x) && !sp.is_true(&x) {
+                            out.push(x);
+                        }
+                    }
+                }
+                out
+            };
+            let base_a = members.first().map(|i| bs[*i].a.clone()).unwrap_or_default();
+            let pre = norm(&g.pre, &base_a);
+            let lv = Term::var(g.lv, vec![]);
+            let conj = |cs: &[Term]| cs.iter().cloned().reduce(|x, y| sp.and(x, y)).unwrap_or_else(|| sp.tt());
+            let mut typing: Vec<Term> = Vec::new();
+            let mut disj: Vec<Term> = Vec::new();
+            let mut post: Vec<Vec<Term>> = vec![Vec::new(); g.exits.len()];
+            let mut exit_d: Vec<Option<Vec<Term>>> = vec![None; g.exits.len()];
+            for &i in &members {
+                let e = bs[i].group.unwrap().1;
+                let dex = norm(&g.exits[e], &bs[i].a);
+                // (the branch's conditions and outcome in word form, in the
+                // context of the exit: its state's invariant known)
+                let mut gctx: Vec<Term> = sr.facts.iter().chain(&pre).cloned().collect();
+                for c in &dex {
+                    sp.conjuncts(c, &mut gctx);
+                }
+                let mut kept: Vec<Term> = Vec::new();
+                for c in &bs[i].conds {
+                    sp.set_nats(&gctx);
+                    let mut xs = Vec::new();
+                    sp.conjuncts(&sp.prop(&sr.word(&gctx, &sr.subst(c, &bs[i].a)), Pol::Other), &mut xs);
+                    for x in xs {
+                        let implied = !dex.contains(&x) && (gctx.contains(&x) || sp.typed(&gctx, &x) || sr.decide_in(&gctx, &x, 1) == Some(true));
+                        if !sp.is_true(&x) && !kept.contains(&x) && !implied {
+                            kept.push(x);
+                        }
+                    }
+                }
+                sp.set_nats(&gctx);
+                let o = &sr.word(&gctx, &sr.subst(&ot, &bs[i].a));
+                let kept = &kept;
+                let mut d = Vec::new();
+                for c in kept {
+                    if pre.contains(c) {
+                        continue;
+                    }
+                    if sr.param_typing(c, g.lv) {
+                        if !typing.contains(c) {
+                            typing.push(c.clone());
+                        }
+                        continue;
+                    }
+                    d.push(c.clone());
+                }
+                let after: Vec<Term> = d.iter().filter(|c| !dex.contains(c)).cloned().collect();
+                post[e].push(conj(&after));
+                exit_d[e].get_or_insert(dex);
+                let body = sp.and(conj(&d), Term::app(runs, vec![p.clone(), w.clone(), o.clone()]));
+                disj.push(if has_var(&body, g.lv) { Term::app(self.ex, vec![abstract_term(&body, &lv, 0, &bf)]) } else { body });
+            }
+            // (each exit covered by the branches past it)
+            let mut hyps = g.hyps.clone();
+            for (e, ps) in post.iter().enumerate() {
+                let dex = exit_d[e].clone().unwrap_or_else(|| norm(&g.exits[e], &base_a));
+                let goal = ps.iter().cloned().reduce(|x, y| sp.or(x, y)).unwrap_or_else(|| sp.ff());
+                let ctx: Vec<Term> = sr.facts.iter().chain(&pre).chain(&dex).cloned().collect();
+                if sr.decide_in(&ctx, &goal, 2) != Some(true) {
+                    let t = Term::app(imp, vec![conj(&dex), goal]);
+                    let t = if has_var(&t, g.lv) { Term::app(self.all, vec![abstract_term(&t, &lv, 0, &bf)]) } else { t };
+                    if !hyps.contains(&t) {
+                        hyps.push(t);
+                    }
+                }
+            }
+            let mut t = disj.into_iter().reduce(|x, y| sp.or(x, y)).unwrap_or_else(|| sp.ff());
+            for c in pre.iter().chain(&typing).chain(&hyps).rev() {
+                t = Term::app(imp, vec![c.clone(), t]);
+            }
+            ts.push(t);
+        }
         // (the values left open, among them an outcome undefined behaviour
         // leaves open: parameters)
         let ts: Vec<Term> = ts

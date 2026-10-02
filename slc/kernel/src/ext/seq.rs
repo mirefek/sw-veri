@@ -428,14 +428,18 @@ impl Seq {
     /// `Γ ⊢ (all ps. C.. -> runs(P, W, O1)) && ..`: the branches of the
     /// program P run from W (`Logic::spec_run`), with the premises' lemmas
     /// for its operations and facts for its conditions.
-    pub fn spec_run(env: &Env, lg: &Logic, p: &Term, w: &Term, premises: &[&Seq]) -> KResult<Seq> {
+    pub fn spec_run(env: &Env, lg: &Logic, p: &Term, w: &Term, hints: &[(Term, Term)], premises: &[&Seq]) -> KResult<Seq> {
         env.check_wf(p, 0)?;
         env.check_wf(w, 0)?;
+        for (i, m) in hints {
+            env.check_wf(i, 1)?;
+            env.check_wf(m, 1)?;
+        }
         let (hyps, mut open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
         // (a loop it runs through rests on the lemmas of one iteration)
         lg.simp_used.borrow_mut().clear();
-        let r = lg.spec_run(env, p, w, &ps);
+        let r = lg.spec_run(env, p, w, hints, &ps);
         let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
         let concl = r?;
         env.check_wf(&concl, 0)?;
