@@ -1097,7 +1097,47 @@ impl<'a> Simp<'a> {
     /// range (distances from the definitions; addresses are 64-bit).
     /// The n bytes at x lie in [r, r + len) (x at a known distance from r).
     fn within(&self, x: &Term, n: u128, r: &Term, len: u128) -> bool {
-        self.distance(x, r, 64).is_some_and(|d| d.checked_add(n).is_some_and(|e| e <= len))
+        if self.distance(x, r, 64).is_some_and(|d| d.checked_add(n).is_some_and(|e| e <= len)) {
+            return true;
+        }
+        // (a base c plus an offset t the path bounds, in a region at a
+        // literal r: r - c <= t and t + n <= r - c + len -- no wrap, the
+        // sum below 2^64)
+        let lit = |t: &Term| match t.node() {
+            Node::Nat(v) => v.to_u128().filter(|v| *v < 1u128 << 64).map(|v| v as i128),
+            _ => None,
+        };
+        let Some(r) = lit(r) else { return false };
+        let parts = match x.node() {
+            Node::App(g, a) if self.arith.get(g) == Some(&"int_add") && a.len() == 2 => match (lit(&a[0]), lit(&a[1])) {
+                (Some(c), None) => Some((c, a[1].clone())),
+                (None, Some(c)) => Some((c, a[0].clone())),
+                _ => None,
+            },
+            Node::App(g, a) if self.arith.get(g) == Some(&"bits_add") && a.len() == 3 && matches!(a[0].node(), Node::Nat(w) if w.to_u64() == Some(64)) => match (lit(&a[1]), lit(&a[2])) {
+                (Some(c), None) => Some((c, a[2].clone())),
+                (None, Some(c)) => Some((c, a[1].clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((c, t)) = parts else { return false };
+        let to_i = |k: &SInt| k.m.to_u128().filter(|v| *v < 1u128 << 100).map(|v| if k.neg { -(v as i128) } else { v as i128 });
+        let mut lo: Option<i128> = (self.nat_term(&t) || self.bits_term(&t, 64)).then_some(0);
+        let mut hi: Option<i128> = (1..=64u64).find(|&k| self.bits_term(&t, k)).map(|k| (1i128 << k) - 1);
+        for (u, upper, k, _) in self.bounds.borrow().iter() {
+            if *u != t {
+                continue;
+            }
+            let Some(k) = to_i(k) else { continue };
+            if *upper {
+                hi = Some(hi.map_or(k, |h| h.min(k)));
+            } else {
+                lo = Some(lo.map_or(k, |l| l.max(k)));
+            }
+        }
+        let (Some(lo), Some(hi)) = (lo, hi) else { return false };
+        lo >= r - c && hi + n as i128 <= r - c + len as i128 && c + hi + (n as i128) <= (1i128 << 64)
     }
 
     /// Which side of an `apart` fact the n bytes at x lie in, for a fact
@@ -4073,7 +4113,10 @@ impl Simp<'_> {
             _ => false,
         };
         // (or a field of a record of a known record type)
-        by_form || matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app)) && self.types_of(lits, &ab[0], 3).contains(&ab[1])
+        // (or stores to bytes: bytes)
+        by_form
+            || matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app) || self.env.syms[*a as usize].name == "x86_64_linux.store_le" || is(*a, self.s.fn_update))
+                && self.types_of(lits, &ab[0], 3).contains(&ab[1])
     }
 
     /// The types the path gives `t`: its literals `t in T`, and for a field
@@ -4088,6 +4131,25 @@ impl Simp<'_> {
             })
             .collect();
         if depth > 0 {
+            // stores to bytes: bytes (x86.store_typed; a byte at a 64-bit
+            // key: fn_update in the function space)
+            if let Node::App(st, sa) = t.node() {
+                let byte_update = is(*st, self.s.fn_update) && sa.len() == 3 && self.bits_term(&sa[1], 64) && self.bits_term(&sa[2], 8);
+                if (self.env.syms[*st as usize].name == "x86_64_linux.store_le" && sa.len() == 4) || byte_update {
+                    for r in self.types_of(lits, &sa[0], depth) {
+                        if let Node::App(fs, fa) = r.node() {
+                            let bits_k = |x: &Term, k: u64| matches!(x.node(), Node::App(b, ba) if self.env.syms[*b as usize].name == "bits" && ba.len() == 1 && matches!(ba[0].node(), Node::Nat(n) if n.to_u64() == Some(k)));
+                            if self.env.syms[*fs as usize].name == "fn_space" && fa.len() == 2 && bits_k(&fa[0], 64) && bits_k(&fa[1], 8) && !out.contains(&r) {
+                                out.push(r.clone());
+                                // (a set of pairs of naturals: in univ(1))
+                                if let Some(u) = self.s.univ {
+                                    out.push(Term::app(u, vec![Term::nat(crate::nat::Nat::from_u64(1))]));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if let Node::App(a, ab) = t.node() {
                 if is(*a, self.s.app) {
                     for r in self.types_of(lits, &ab[0], depth - 1) {
@@ -4382,6 +4444,17 @@ impl Simp<'_> {
             if !matches!(concl.node(), Node::App(e, _) if *e == self.s.eq) {
                 let mut gs = Vec::new();
                 self.conjuncts(goal, &mut gs);
+                // (also as simp reads them: the conclusion is in its forms)
+                let normed: Vec<Term> = gs.iter().map(|u| self.prop(u, Pol::Other)).filter(|u| !gs.contains(u)).collect();
+                gs.extend(normed);
+                if std::env::var("SIMP_CHAIN").is_ok() {
+                    let pr = crate::syntax::Printer::new(self.env);
+                    for u in &gs {
+                        if u.loose_depth(&bf) == 0 {
+                            eprintln!("chain: goal {}", pr.term(u).chars().take(300).collect::<String>());
+                        }
+                    }
+                }
                 for u in &gs {
                     let mut b = Vec::new();
                     if pmatch(&concl, u, &vs, &mut b) && !b.is_empty() {

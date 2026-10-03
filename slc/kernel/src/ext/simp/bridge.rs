@@ -627,21 +627,36 @@ impl Logic {
             Node::App(g, ga) if *g == badd && ga.len() == 3 && ga[1] == rsp0 => matches!(ga[2].node(), Node::Nat(c) if *c >= crate::nat::Nat::pow2(63)),
             _ => false,
         };
-        let mut goals = Vec::new();
+        // (each layer with the instance of its lemma: abi.agree_refl at
+        // (old, sp, b), abi.agree_slot at (old, b1, b2, rsp, c, n, x),
+        // abi.agree_st1b at (old, sp, b1, b2, a1, a2, x, y))
+        let mut goals: Vec<(Term, Vec<Term>)> = Vec::new();
         let (mut x, mut y) = (sp.term(b1), sp.term(b2));
         loop {
-            goals.push(Term::app(agree, vec![vm0.clone(), spv.clone(), x.clone(), y.clone()]));
+            let g = Term::app(agree, vec![vm0.clone(), spv.clone(), x.clone(), y.clone()]);
             if x == y {
+                goals.push((g, vec![vm0.clone(), spv.clone(), x.clone()]));
                 break;
             }
             match (x.node(), y.node()) {
-                (Node::App(st, sa), _) if *st == store_le && sa.len() == 4 && slot(&sa[1]) => x = sa[0].clone(),
+                (Node::App(st, sa), _) if *st == store_le && sa.len() == 4 && slot(&sa[1]) => {
+                    let c = match norm(&sa[1]).node() {
+                        Node::App(_, ga) => ga[2].clone(),
+                        _ => unreachable!(),
+                    };
+                    goals.push((g, vec![vm0.clone(), sa[0].clone(), y.clone(), rsp0.clone(), c, sa[2].clone(), sa[3].clone()]));
+                    x = sa[0].clone();
+                }
                 (Node::App(st, sa), Node::App(fu, fa)) if *st == store_le && sa.len() == 4 && is(*fu, sp.s.fn_update) && fa.len() == 3 && norm(&sa[1]) == norm(&fa[1]) => {
+                    goals.push((g, vec![vm0.clone(), spv.clone(), sa[0].clone(), fa[0].clone(), sa[1].clone(), fa[1].clone(), sa[3].clone(), fa[2].clone()]));
                     let (nx, ny) = (sa[0].clone(), fa[0].clone());
                     x = nx;
                     y = ny;
                 }
-                _ => break,
+                _ => {
+                    goals.push((g, Vec::new()));
+                    break;
+                }
             }
         }
         let compound = |l: &Term| match l.node() {
@@ -649,9 +664,14 @@ impl Logic {
             _ => false,
         };
         let mut known = facts.to_vec();
-        for g in goals.into_iter().rev() {
+        for (g, inst) in goals.into_iter().rev() {
             let g = sp.prop(&g, Pol::Other);
             if sp.is_true(&g) || known.contains(&g) {
+                continue;
+            }
+            // (its lemma at the instance, its hypotheses shown)
+            if !inst.is_empty() && self.bridge_apply(env, &sp, &known, &g, &inst) {
+                known.push(g);
                 continue;
             }
             // (the lemmas and literals, conjunctions split)
@@ -675,11 +695,90 @@ impl Logic {
             } || self.simp_prove_loops(env, &known, &g, &[]).is_ok();
             if !ok {
                 let pr = crate::syntax::Printer::new(env);
-                return Err(format!("the bytes agree outside the frame: {} not shown", pr.term(&g).chars().take(600).collect::<String>()));
+                sp.set_nats(&known);
+                let g2 = sp.prop(&words.word(&known, &g), Pol::Other);
+                let left = if std::env::var("BRIDGE_DEBUG").is_ok() { let l2: Vec<Term> = lean.clone(); self.simp_prove_loops(env, &l2, &g2, &[]).err().map(|e| e.0).unwrap_or_default() } else { String::new() };
+                return Err(format!("the bytes agree outside the frame: {} not shown (in word forms {}) {}", pr.term(&g).chars().take(600).collect::<String>(), pr.term(&g2).chars().take(600).collect::<String>(), left));
             }
             known.push(g);
         }
         Ok(known)
+    }
+
+    /// The goal by a premise `all x1 .. xk. H.. -> C` at the given k terms:
+    /// C there is the goal, each H there shown (a fact, typing, or simp on
+    /// the facts' lemmas and literals, in word forms too).
+    pub(super) fn bridge_apply(&self, env: &Env, sp: &Simp, facts: &[Term], goal: &Term, inst: &[Term]) -> bool {
+        let k = inst.len();
+        let target = sp.prop(goal, Pol::Other);
+        let compound = |l: &Term| match l.node() {
+            Node::App(c, _) => *c == env.builtins.imp || is(*c, sp.s.or),
+            _ => false,
+        };
+        let mut lean: Vec<Term> = Vec::new();
+        let mut st: Vec<Term> = facts.to_vec();
+        while let Some(t) = st.pop() {
+            match t.node() {
+                Node::App(c, _) if is(*c, sp.s.and) => sp.conjuncts(&t, &mut st),
+                _ if compound(&t) => {}
+                _ => {
+                    if !lean.contains(&t) {
+                        lean.push(t)
+                    }
+                }
+            }
+        }
+        for l in facts {
+            // (exactly k binders)
+            let mut body = l.clone();
+            let mut n = 0;
+            while let Node::App(q, b) = body.node() {
+                if *q != self.all {
+                    break;
+                }
+                body = b[0].clone();
+                n += 1;
+            }
+            if n != k {
+                continue;
+            }
+            let mut t = l.clone();
+            for x in inst {
+                let Node::App(_, b) = t.node() else { break };
+                t = inst_k(env, &b[0], &[x.clone()]);
+            }
+            let mut hyps = Vec::new();
+            while let Node::App(i, ab) = t.node() {
+                if *i != env.builtins.imp {
+                    break;
+                }
+                hyps.push(ab[0].clone());
+                t = ab[1].clone();
+            }
+            let words = super::spec::Words::new(sp, self, true, facts);
+            if sp.prop(&t, Pol::Other) != target {
+                // (or in word forms: a generic state's registers read)
+                sp.set_nats(facts);
+                let a = sp.prop(&words.word(facts, &t), Pol::Other);
+                let b = sp.prop(&words.word(facts, &target), Pol::Other);
+                if a != b {
+                    continue;
+                }
+            }
+            let ok = hyps.iter().all(|h| {
+                let h = sp.prop(h, Pol::Other);
+                if sp.is_true(&h) || facts.contains(&h) || sp.typed(facts, &h) || self.simp_prove_loops(env, &lean, &h, &[]).is_ok() {
+                    return true;
+                }
+                sp.set_nats(facts);
+                let h2 = sp.prop(&words.word(facts, &h), Pol::Other);
+                h2 != h && (sp.is_true(&h2) || self.simp_prove_loops(env, &lean, &h2, &[]).is_ok())
+            });
+            if ok {
+                return true;
+            }
+        }
+        false
     }
 
     pub(super) fn bridge_fresh(&self, env: &Env, premises: &[Term], r: &Term) -> u32 {

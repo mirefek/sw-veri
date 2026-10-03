@@ -492,10 +492,12 @@ impl Words<'_, '_> {
                     }
                 }
                 let sc = size(&c);
+                // (and none it must not introduce: a loop's generic world)
+                let avoid = self.lg.words_avoid.borrow().clone();
                 let drops = |u: &Term| {
                     let mut uv = Vec::new();
                     u.vars(&mut uv);
-                    tv.iter().any(|v| !uv.contains(v))
+                    tv.iter().any(|v| !uv.contains(v)) && !uv.iter().any(|v| avoid.contains(v) && !tv.contains(v))
                 };
                 let found = ctx.iter().find_map(|l| match l.node() {
                     Node::App(e, ab) if *e == self.sp.s.eq && ab.len() == 2 && ab[0] == c && ab[1] != c && size(&ab[1]) <= sc && drops(&ab[1]) => Some(ab[1].clone()),
@@ -505,6 +507,14 @@ impl Words<'_, '_> {
                 if let Some(u) = found {
                     return self.word(ctx, &u);
                 }
+            }
+        }
+        // (a read of stores simp reads through -- the bytes just stored, or
+        // past stores apart from them: that, first)
+        if self.bytes && name == "x86_64_linux.le" && x.len() == 3 && matches!(x[0].node(), Node::App(st, _) if self.sp.env.syms[*st as usize].name == "x86_64_linux.store_le") {
+            let r = self.sp.term(&t);
+            if r != t && !matches!(r.node(), Node::App(h, _) if h == g) {
+                return self.word(ctx, &r);
             }
         }
         if self.bytes && matches!(name, "gimple.bytes_at" | "x86_64_linux.le") && x.len() == 3 && matches!(x[2].node(), Node::Nat(k) if k.to_u64().is_some_and(|k| (1..=8).contains(&k))) {
@@ -563,7 +573,8 @@ impl Words<'_, '_> {
             }
         }
         if t.loose_depth(&bind) > 0 {
-            return t;
+            // (open: simp's own forms only -- nothing the context decides)
+            return self.sp.term(&t);
         }
         // an n-bit sum of an m-bit word and a literal c that does not wrap
         // (2^m + c <= 2^n): the integer sum c + x (an address, as the

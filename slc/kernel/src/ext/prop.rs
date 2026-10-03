@@ -45,6 +45,9 @@ pub struct Logic {
     /// the head-finding mode of symex (the bridge): `Some(None)` runs to
     /// the first address a path is at twice, and leaves it there
     pub symex_head: std::cell::RefCell<Option<Option<u128>>>,
+    /// variables the bridge's comparison forms never introduce (a
+    /// loop's generic world: its equations read the other way only)
+    pub words_avoid: std::cell::RefCell<Vec<crate::term::VarId>>,
 }
 
 impl Logic {
@@ -73,6 +76,7 @@ impl Logic {
             symex_simp: Default::default(),
             symex_prologue: Default::default(),
             symex_head: Default::default(),
+            words_avoid: Default::default(),
         })
     }
 

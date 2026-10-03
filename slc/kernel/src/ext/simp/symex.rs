@@ -616,8 +616,84 @@ impl Logic {
     /// A premise of an instruction's lemma shown from the context: simp,
     /// typing, a literal or an instance of one, a fact `A -> h` with A
     /// shown, taut / arith.
+    /// A memory access premise `all x. .. -> can_access(vm, .., k)` from
+    /// the spec's `gimple.usable(v, a, n, w)` (a literal): the premises'
+    /// lemma `all v vm a n. ..` (g.read_off, g.write_off) at (v, vm, a, n),
+    /// its conclusion the premise, its hypotheses shown.
+    fn shows_access(&self, env: &Env, sp: &Simp, ctx: &[Term], h: &Term) -> bool {
+        let Some(usable) = env.sym_by_name.get("gimple.usable").copied() else { return false };
+        let Some(ca) = env.sym_by_name.get("x86_64_linux.can_access").copied() else { return false };
+        // the premise's memory
+        let mut vm = None;
+        let mut st = vec![h.clone()];
+        while let Some(u) = st.pop() {
+            if let Node::App(g, a) = u.node() {
+                if *g == ca && a.len() == 3 && a[0].loose_depth(&env.binders_fn()) == 0 {
+                    vm = Some(a[0].clone());
+                    break;
+                }
+                st.extend(a.iter().cloned());
+            }
+        }
+        let Some(vm) = vm else { return false };
+        let target = sp.prop(h, Pol::Other);
+        let lemmas: Vec<Term> = self.symex_simp.borrow().iter().filter(|l| matches!(l.node(), Node::App(q, _) if *q == self.all)).cloned().collect();
+        for u in ctx {
+            let Node::App(g, ua) = u.node() else { continue };
+            if *g != usable || ua.len() != 4 {
+                continue;
+            }
+            for l in &lemmas {
+                // (four binders: v vm a n)
+                let mut body = l.clone();
+                let mut k = 0;
+                while let Node::App(q, b) = body.node() {
+                    if *q != self.all || k == 4 {
+                        break;
+                    }
+                    body = b[0].clone();
+                    k += 1;
+                }
+                if k != 4 || matches!(body.node(), Node::App(q, _) if *q == self.all) {
+                    continue;
+                }
+                let mut b4 = l.clone();
+                for x in [&ua[0], &vm, &ua[1], &ua[2]] {
+                    let Node::App(_, b) = b4.node() else { break };
+                    b4 = inst_k(env, &b[0], &[x.clone()]);
+                }
+                let mut hyps = Vec::new();
+                let mut c = b4.clone();
+                while let Node::App(i, ab) = c.node() {
+                    if *i != env.builtins.imp {
+                        break;
+                    }
+                    hyps.push(ab[0].clone());
+                    c = ab[1].clone();
+                }
+                if sp.prop(&c, Pol::Other) != target {
+                    continue;
+                }
+                let ok = hyps.iter().all(|hy| {
+                    let hy = sp.prop(hy, Pol::Other);
+                    sp.is_true(&hy) || ctx.contains(&hy) || sp.typed(ctx, &hy) || {
+                        let lits: Vec<Term> = ctx.iter().filter(|x| !matches!(x.node(), Node::App(q, _) if *q == self.all || *q == env.builtins.imp)).cloned().collect();
+                        self.simp_prove_loops(env, &lits, &hy, &[]).is_ok()
+                    }
+                });
+                if ok {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn symex_shows(&self, env: &Env, sp: &Simp, ctx: &[Term], h: &Term) -> bool {
         if sp.is_true(h) || ctx.contains(h) || sp.typed(ctx, h) || sp.instance_of_all(ctx, h) {
+            return true;
+        }
+        if !self.symex_simp.borrow().is_empty() && self.shows_access(env, sp, ctx, h) {
             return true;
         }
         for l in ctx {

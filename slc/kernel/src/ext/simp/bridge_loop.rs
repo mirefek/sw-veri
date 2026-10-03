@@ -298,6 +298,9 @@ impl Logic {
             cs.push(Term::app(in_, vec![fld(m, "gpr"), Term::app(fn_space, vec![Term::app(sym("x86_64_linux.Reg").unwrap(), vec![]), Term::app(bits, vec![nat(64)])])]));
             cs.push(Term::app(in_, vec![fld(m, "vm"), Term::app(sym("x86_64_linux.Vm").unwrap(), vec![])]));
             cs.push(Term::app(in_, vec![fld(m, "flags"), Term::app(sym("x86_64_linux.Flags").unwrap(), vec![])]));
+            let fs8 = Term::app(fn_space, vec![Term::app(bits, vec![nat(64)]), Term::app(bits, vec![nat(8)])]);
+            cs.push(Term::app(in_, vec![fld(&fld(m, "vm"), "bytes"), fs8]));
+            cs.push(Term::app(in_, vec![fld(&fld(m, "vm"), "bytes"), u1.clone()]));
             for k in ["os", "fs_base", "gs_base", "cpu"] {
                 cs.push(e(fld(m, k), fld(s, k)));
             }
@@ -316,6 +319,9 @@ impl Logic {
             cs.push(e(Term::app(le, vec![bm.clone(), rsp0.clone(), nat(8)]), Term::app(le, vec![fld(&vm0, "bytes"), rsp0.clone(), nat(8)])));
             cs.push(Term::app(in_, vec![wv.clone(), u1.clone()]));
             cs.push(Term::app(in_, vec![wv.clone(), Term::app(world, vec![])]));
+            cs.push(Term::app(in_, vec![fld(&wv, "vm"), Term::app(sym("x86_64_linux.Vm").unwrap(), vec![])]));
+            let fs8w = Term::app(fn_space, vec![Term::app(bits, vec![nat(64)]), Term::app(bits, vec![nat(8)])]);
+            cs.push(Term::app(in_, vec![fld(&fld(&wv, "vm"), "bytes"), fs8w]));
             for k in ["os", "fs_base", "cpu", "sp"] {
                 cs.push(e(fld(&wv, k), fld(&w0, k)));
             }
@@ -356,7 +362,7 @@ impl Logic {
                     sp.set_nats(&known);
                     let c2 = sp.prop(&words.word(&known, &c), Pol::Other);
                     if c2 == c || self.simp_prove_loops(env, &lean, &c2, &[]).is_err() {
-                        return Err(format!("{}: the coupling at {}: {}", what, short(&c), e.0));
+                        return Err(format!("{}: the coupling at {} (in word forms {}): {}", what, short(&c), pr.term(&c2), e.0));
                     }
                 }
                 known.push(c);
@@ -493,7 +499,9 @@ impl Logic {
 
         // 2. the iteration, from a coupled pair (M, L) -- fresh
         let (_, mv) = var();
-        let (_, wvv) = var();
+        let (wid, wvv) = var();
+        *self.words_avoid.borrow_mut() = vec![wid];
+        let _clear = AvoidGuard(self);
         fn shaped(t: &Term, pair: SymId, var: &dyn Fn() -> (VarId, Term)) -> Term {
             match t.node() {
                 Node::App(p, x) if *p == pair && x.len() == 2 => Term::app(pair, vec![shaped(&x[0], pair, var), shaped(&x[1], pair, var)]),
@@ -684,5 +692,14 @@ impl Logic {
             u.push("abi.loop_sim".into());
         }
         Ok(())
+    }
+}
+
+/// Clears the comparison forms' variables to avoid when the loop is done.
+struct AvoidGuard<'a>(&'a Logic);
+
+impl Drop for AvoidGuard<'_> {
+    fn drop(&mut self) {
+        self.0.words_avoid.borrow_mut().clear();
     }
 }
