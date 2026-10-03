@@ -30,10 +30,11 @@
 
 use super::*;
 use crate::env::KResult;
+use super::bridge_loop::LoopCx;
 
 impl Logic {
     /// `abi.matches(spec, args, S, O)` (see the module).
-    pub fn bridge(&self, env: &Env, p: &Term, premises: &[Term]) -> KResult<Term> {
+    pub fn bridge(&self, env: &Env, p: &Term, inv: Option<&Term>, premises: &[Term]) -> KResult<Term> {
         let kerr = |m: String| crate::env::KernelError(format!("bridge: {}", m));
         let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| kerr(format!("needs `{}`", n)));
         let t0 = std::time::Instant::now();
@@ -130,28 +131,6 @@ impl Logic {
         // holding args (all six: v is a witness only, its obligations shown
         // below -- where a register is no argument, its store is scratch)
         let vm0 = field(&s, b"vm");
-        if std::env::var("BRIDGE_SPEC_ONLY").is_ok() {
-            let conj = |cs: &[Term]| cs.iter().cloned().reduce(|a, b| Term::app(sp.s.and.unwrap(), vec![a, b])).unwrap_or_else(|| sp.tt());
-            let out = self.spec_run_cut(env, p, &view(&vm0), premises)?;
-            for (c, o) in &out.branches {
-                eprintln!("branch: {} => {}", short(&conj(c)), short(o));
-            }
-            if let Some(cut) = &out.cut {
-                eprintln!("cut: l0 = {}; pre = {}", short(&cut.l0), short(&conj(&cut.pre)));
-                for (e, vs, bs) in &cut.exits {
-                    eprintln!("  exit {} ({} params): {} branches", short(e), vs.len(), bs.len());
-                    for (c, o) in bs {
-                        eprintln!("    {} => {}", short(&conj(c)), short(o));
-                    }
-                }
-                let it = self.spec_iter(env, cut, premises, self.bridge_fresh(env, premises, &out.statement))?;
-                eprintln!("iteration from {}:", short(&it.lv));
-                for (c, o, on) in &it.branches {
-                    eprintln!("  {} => {} {}", short(&conj(c)), short(o), if *on { "(on)" } else { "(out)" });
-                }
-            }
-            return Err(kerr("BRIDGE_SPEC_ONLY".into()));
-        }
         let v = {
             let mut gpr = field(&s, b"gpr");
             let mut facts = premises.to_vec();
@@ -222,7 +201,7 @@ impl Logic {
         lap("the view's obligations");
         let w = view(&v);
         // the spec's branches
-        let out = self.spec_run_out(env, p, &w, &[], premises)?;
+        let out = self.spec_run_cut(env, p, &w, premises)?;
         lap("the spec on the view");
         if dbg {
             if let Some(d) = &out.ub {
@@ -248,6 +227,31 @@ impl Logic {
         dfacts.push(Term::app(in_, vec![w.clone(), u1.clone()]));
         let (s2, dfacts) = self.bridge_couple(env, &sp, &dfacts, &s, &args)?;
         lap("the arguments");
+        // (a loop: the machine's head, the first address a path is at twice,
+        // from the way to the spec's loop; the branches without the loop
+        // stop there -- reaching it, they do not match)
+        let head: Option<u128> = match &out.cut {
+            Some(cut) => {
+                let mut facts = dfacts.clone();
+                facts.extend(cut.pre.iter().cloned());
+                let facts = with_run(&facts, &s2);
+                *self.symex_simp.borrow_mut() = facts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect();
+                *self.symex_head.borrow_mut() = Some(None);
+                let r = self.symex(env, &[], &facts);
+                self.symex_simp.borrow_mut().clear();
+                let h = self.symex_head.borrow_mut().take().flatten();
+                match (r, h) {
+                    (Ok(_), Some(h)) => Some(h),
+                    (Err(e), _) => return Err(kerr(format!("the machine's way to the loop: {}", e.0))),
+                    _ => return Err(kerr("the spec loops, the machine's way there does not".into())),
+                }
+            }
+            None if inv.is_some() => return Err(kerr("an invariant for a program without a loop".into())),
+            None => None,
+        };
+        let wm_sym = sym("abi.world_matches")?;
+        let stops: Vec<Term> = head.iter().map(|h| Term::nat(crate::nat::Nat::from_u128(*h))).collect();
+        lap("the loop's head");
         let mut covers: Vec<Term> = Vec::new();
         for (bi, (conds, outcome)) in out.branches.iter().enumerate() {
             // ok(Wk, (r0, r1)): a branch to match; a raise from the view
@@ -326,7 +330,7 @@ impl Logic {
             // (for simp on a step's premise: not the run itself, nor the
             // instructions' lemmas)
             *self.symex_simp.borrow_mut() = facts.iter().filter(|t| !is_run(t) && !is_step(t)).cloned().collect();
-            let r = self.symex(env, &[], &facts);
+            let r = self.symex(env, &stops, &facts);
             self.symex_simp.borrow_mut().clear();
             lap(&format!("branch {}: the machine", bi + 1));
             let r = r.map_err(|e| kerr(format!("branch {} of the spec ({}): the machine: {}", bi + 1, short(&conj(conds)), e.0)))?;
@@ -356,7 +360,22 @@ impl Logic {
                         _ => pconds.push(c),
                     }
                 }
-                let Some(m1) = m1 else { return Err(kerr("a machine path without its outcome".into())) };
+                let Some(m1) = m1 else {
+                    // (a path to the loop's head the branch's conditions rule
+                    // out: not taken -- its conditions contradict them)
+                    // (on the lemmas and literals: the compound facts would
+                    // split simp's paths)
+                    let mut ps: Vec<Term> = facts.iter().filter(|t| !is_run(t) && !is_step(t) && !compound(t)).cloned().collect();
+                    sp.set_nats(&ps);
+                    for c in &pconds {
+                        ps.push(c.clone());
+                        ps.push(sp.prop(&words.word(&facts, c), Pol::Other));
+                    }
+                    if self.simp_prove_loops(env, &ps, &sp.ff(), &[]).is_ok() {
+                        continue;
+                    }
+                    return Err(kerr(format!("branch {} of the spec ({}): a machine path ({}) reaches the loop's head, the spec's branch does not", bi + 1, short(&conj(conds)), short(&conj(&pconds)))));
+                };
                 let Some(goal) = goal_of(&m1) else { return Err(kerr("`abi.matches_at` is not a definition".into())) };
                 let fail = |what: &str, e: String| {
                     kerr(format!("branch {} of the spec ({}), machine path {} ({}): {}: {}", bi + 1, short(&conj(conds)), pi + 1, short(&conj(&pconds)), what, e))
@@ -410,6 +429,15 @@ impl Logic {
                     if sp.is_true(&c) || shown.contains(&c) {
                         continue;
                     }
+                    // (the memories' match: their bytes' agreement first, by layers)
+                    if let Node::App(g, ga) = c.node() {
+                        if *g == wm_sym && ga.len() == 4 {
+                            let bytes = |t: &Term| sp.term(&field(t, b"bytes"));
+                            if let Ok(k) = self.bridge_agree(env, &shown, &s, &bytes(&ga[1]), &bytes(&ga[2])) {
+                                shown = k;
+                            }
+                        }
+                    }
                     // (first from the lemmas and literals only: the compound
                     // facts split simp's paths)
                     let lean: Vec<Term> = shown.iter().filter(|t| !compound(t)).cloned().collect();
@@ -441,6 +469,13 @@ impl Logic {
             return Err(kerr("the view is not shown in univ(1)".into()));
         }
         base.push(wu);
+        // the loop: from the way there, segment by segment (bridge_loop)
+        if let (Some(cut), Some(h)) = (&out.cut, head) {
+            covers.push(conj(&cut.pre.iter().filter(|c| !Self::bridge_param_typing(&sp, c, out.first)).cloned().collect::<Vec<_>>()));
+            let cx = LoopCx { s: s.clone(), o: o.clone(), spec: spec.clone(), args: args.clone(), v: v.clone(), w: w.clone(), dfacts: dfacts.clone(), s2: s2.clone(), head: h };
+            self.bridge_loop(env, p, inv, premises, &out, cut, &cx)?;
+            lap("the loop");
+        }
         // coverage: D (or always, without undefined behaviour) implies a branch
         let any = covers.into_iter().reduce(|a, b| sp.or(a, b)).unwrap_or_else(|| sp.ff());
         let cover = match &out.ub {
@@ -560,7 +595,7 @@ impl Logic {
 
     /// `x in S` for a parameter x of the spec's branch (a value it leaves
     /// open) of a universe or words
-    fn bridge_param_typing(sp: &Simp, c: &Term, first: u32) -> bool {
+    pub(super) fn bridge_param_typing(sp: &Simp, c: &Term, first: u32) -> bool {
         match c.node() {
             Node::App(i, ab) if is(*i, sp.s.in_) && ab.len() == 2 => {
                 matches!(ab[0].node(), Node::Var(v, va) if va.is_empty() && *v >= first)
@@ -570,7 +605,84 @@ impl Logic {
         }
     }
 
-    fn bridge_fresh(&self, env: &Env, premises: &[Term], r: &Term) -> u32 {
+    /// `abi.agree(vm0, sp, b1, b2)`, the machine's bytes b1 and the world's
+    /// b2 agreeing outside the scratch area: store by store from the outside
+    /// -- a store to the frame below the return address (scratch), the same
+    /// byte stored on both sides -- down to bytes that agree (a fact) or are
+    /// the same, each step shown by simp from the one below
+    /// (`abi.agree_slot`, `abi.agree_st1`; in word forms where needed).
+    /// The facts with the agreements shown.
+    pub(super) fn bridge_agree(&self, env: &Env, facts: &[Term], s: &Term, b1: &Term, b2: &Term) -> Result<Vec<Term>, String> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| format!("needs `{}`", n));
+        let (app, badd, agree, store_le) = (sym("app")?, sym("bits_add")?, sym("abi.agree")?, sym("x86_64_linux.store_le")?);
+        let sp = Simp::new(env, self);
+        let nat = |k: u64| Term::nat(crate::nat::Nat::from_u64(k));
+        let rsp0 = Term::app(app, vec![Term::app(app, vec![s.clone(), Term::bytes(b"gpr")]), nat(4)]);
+        let spv = Term::app(badd, vec![nat(64), rsp0.clone(), nat(8)]);
+        let vm0 = Term::app(app, vec![s.clone(), Term::bytes(b"vm")]);
+        let words = super::spec::Words::new(&sp, self, true, facts);
+        sp.set_nats(facts);
+        let norm = |t: &Term| sp.term(&words.word(facts, &sp.term(t)));
+        let slot = |a: &Term| match norm(a).node() {
+            Node::App(g, ga) if *g == badd && ga.len() == 3 && ga[1] == rsp0 => matches!(ga[2].node(), Node::Nat(c) if *c >= crate::nat::Nat::pow2(63)),
+            _ => false,
+        };
+        let mut goals = Vec::new();
+        let (mut x, mut y) = (sp.term(b1), sp.term(b2));
+        loop {
+            goals.push(Term::app(agree, vec![vm0.clone(), spv.clone(), x.clone(), y.clone()]));
+            if x == y {
+                break;
+            }
+            match (x.node(), y.node()) {
+                (Node::App(st, sa), _) if *st == store_le && sa.len() == 4 && slot(&sa[1]) => x = sa[0].clone(),
+                (Node::App(st, sa), Node::App(fu, fa)) if *st == store_le && sa.len() == 4 && is(*fu, sp.s.fn_update) && fa.len() == 3 && norm(&sa[1]) == norm(&fa[1]) => {
+                    let (nx, ny) = (sa[0].clone(), fa[0].clone());
+                    x = nx;
+                    y = ny;
+                }
+                _ => break,
+            }
+        }
+        let compound = |l: &Term| match l.node() {
+            Node::App(c, _) => *c == env.builtins.imp || is(*c, sp.s.or) || is(*c, sp.s.and),
+            _ => false,
+        };
+        let mut known = facts.to_vec();
+        for g in goals.into_iter().rev() {
+            let g = sp.prop(&g, Pol::Other);
+            if sp.is_true(&g) || known.contains(&g) {
+                continue;
+            }
+            // (the lemmas and literals, conjunctions split)
+            let mut lean: Vec<Term> = Vec::new();
+            let mut st: Vec<Term> = known.clone();
+            while let Some(t) = st.pop() {
+                match t.node() {
+                    Node::App(c, _) if is(*c, sp.s.and) => sp.conjuncts(&t, &mut st),
+                    _ if compound(&t) => {}
+                    _ => {
+                        if !lean.contains(&t) {
+                            lean.push(t)
+                        }
+                    }
+                }
+            }
+            let ok = self.simp_prove_loops(env, &lean, &g, &[]).is_ok() || {
+                sp.set_nats(&known);
+                let g2 = sp.prop(&words.word(&known, &g), Pol::Other);
+                g2 != g && self.simp_prove_loops(env, &lean, &g2, &[]).is_ok()
+            } || self.simp_prove_loops(env, &known, &g, &[]).is_ok();
+            if !ok {
+                let pr = crate::syntax::Printer::new(env);
+                return Err(format!("the bytes agree outside the frame: {} not shown", pr.term(&g).chars().take(600).collect::<String>()));
+            }
+            known.push(g);
+        }
+        Ok(known)
+    }
+
+    pub(super) fn bridge_fresh(&self, env: &Env, premises: &[Term], r: &Term) -> u32 {
         let mut fresh = env.vars.len() as u32 + 5_000_000;
         for t in premises.iter().chain([r]) {
             fresh = fresh.max(max_var(t) + 1);

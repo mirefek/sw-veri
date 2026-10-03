@@ -239,6 +239,21 @@ impl Logic {
         let mut prof = [0f64; 4];
         let words = super::spec::Words::new(&sp, self, true, &self.symex_simp.borrow());
         let mut words_conds: Vec<Term> = Vec::new();
+        // (at the bridge: the literals also in the word forms -- as the
+        // conditions and premises are compared)
+        if bridge {
+            sp.set_nats(&lits);
+            let base = lits.clone();
+            for l in &base {
+                if l.loose_depth(&env.binders_fn()) == 0 && !matches!(l.node(), Node::App(q, _) if *q == self.all) {
+                    let l2 = sp.prop(&words.word(&base, l), Pol::Other);
+                    if !lits.contains(&l2) && !sp.is_true(&l2) {
+                        lits.push(l2);
+                    }
+                }
+            }
+            words.memo.borrow_mut().clear();
+        }
         while let Some(mut p) = work.pop() {
             loop {
                 steps += 1;
@@ -257,9 +272,23 @@ impl Logic {
                     words_conds = p.conds.clone();
                 }
                 // returned?
-                let back = Term::app(sp.s.and.unwrap(), vec![Term::app(eq, vec![field(&s, b"rip"), ret.clone()]), Term::app(eq, vec![gpr(&s, 4), sp_end.clone()])]);
+                // (rip and rsp as the path's equalities give them: a state at a
+                // loop's head, its registers known by the coupling)
+                let back = Term::app(sp.s.and.unwrap(), vec![Term::app(eq, vec![self.symex_value(&sp, &ctx, &field(&s, b"rip")), ret.clone()]), Term::app(eq, vec![{
+                    let r = self.symex_value(&sp, &ctx, &gpr(&s, 4));
+                    ctx.iter().find_map(|l| match l.node() {
+                        Node::App(e, ab) if *e == eq && ab.len() == 2 && ab[0] == r => Some(ab[1].clone()),
+                        _ => None,
+                    }).unwrap_or(r)
+                }, sp_end.clone()])]);
                 let tq = std::time::Instant::now();
-                let back_d = self.symex_decide(&sp, &ctx, &back);
+                let mut back_d = self.symex_decide(&sp, &ctx, &back);
+                // (at the bridge: also in the word forms, the coupling's values read)
+                if back_d.is_none() && bridge {
+                    sp.set_nats(&ctx);
+                    let b2 = sp.prop(&words.word(&ctx, &back), Pol::Other);
+                    back_d = if sp.is_false(&b2) { Some(false) } else if sp.is_true(&b2) { Some(true) } else { self.symex_decide(&sp, &ctx, &b2) };
+                }
                 prof[3] += tq.elapsed().as_secs_f64();
                 match back_d {
                     Some(true) if prologue => return self.prologue_end(&s, &sp),
@@ -268,7 +297,12 @@ impl Logic {
                         break;
                     }
                     Some(false) => {}
-                    None => return err(format!("whether the function has returned is not decided at the state {} ({})", short(&s), short(&sp.prop(&back, Pol::Other)))),
+                    None => {
+                        let rel: Vec<String> = ctx.iter().map(|l| short(l)).filter(|x| x.contains("\"gpr\"), 4)") && x.len() < 200).collect();
+                        sp.set_nats(&ctx);
+                        let b2 = sp.prop(&words.word(&ctx, &back), Pol::Other);
+                        return err(format!("whether the function has returned is not decided at the state {} ({}; in word forms {}); about rsp: {:?}", short(&s), short(&sp.prop(&back, Pol::Other)), short(&b2), rel));
+                    }
                 }
                 // the instruction at rip
                 let rip = self.symex_value(&sp, &ctx, &field(&s, b"rip"));
@@ -304,7 +338,9 @@ impl Logic {
                         return self.prologue_end(&s, &sp);
                     }
                 }
-                for h in &lem.hyps {
+                // (finding the head: exploring only, nothing shown)
+                let mut dead_path = false;
+                for h in lem.hyps.iter().filter(|_| !head_mode) {
                     // (as stated; at the bridge, else in the word forms)
                     let h0 = sp.prop(&inst(h), Pol::Other);
                     let tq = std::time::Instant::now();
@@ -324,8 +360,42 @@ impl Logic {
                         prof[1] += tq.elapsed().as_secs_f64();
                     }
                     if !shown {
+                        // (at the bridge: a path its conditions rule out --
+                        // they contradict the facts -- is not taken)
+                        if bridge {
+                            // (not a variable's definition `x = t`: simp would put t
+                            // for x, the conditions' arithmetic lost in it)
+                            let defn = |l: &Term| matches!(l.node(), Node::App(e, ab) if *e == eq && ab.len() == 2 && matches!(ab[0].node(), Node::Var(_, a) if a.is_empty()));
+                            // (the literals about the conditions' variables only)
+                            let mut cvs = Vec::new();
+                            for c in &p.conds {
+                                c.vars(&mut cvs);
+                            }
+                            let near_c = |l: &Term| { let mut lv = Vec::new(); l.vars(&mut lv); lv.iter().any(|v| cvs.contains(v)) };
+                            let mut ps: Vec<Term> = ctx.iter().filter(|l| near_c(l) && !defn(l) && !matches!(l.node(), Node::App(q, _) if *q == self.all || *q == env.builtins.imp || is(*q, sp.s.or))).cloned().collect();
+                            sp.set_nats(&ctx);
+                            for c in &p.conds {
+                                ps.push(sp.prop(&words.word(&ctx, c), Pol::Other));
+                            }
+                            crate::ext::arith::BRANCH.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let dead = self.simp_prove_loops(env, &ps, &sp.ff(), &[]);
+                            crate::ext::arith::BRANCH.store(false, std::sync::atomic::Ordering::Relaxed);
+                            match dead {
+                                Ok(()) => {
+                                    dead_path = true;
+                                    break;
+                                }
+                                Err(e) if std::env::var("SYMEX_DEBUG").is_ok_and(|v| v == "3") => {
+                                    eprintln!("symex: the path is not ruled out: {}", e.0);
+                                }
+                                Err(_) => {}
+                            }
+                        }
                         return err(format!("at {:#x}: cannot show the premise {}", addr, short(&h)));
                     }
+                }
+                if dead_path {
+                    break;
                 }
                 // its alternatives: decided, or paths
                 let mut alts = Vec::new();
@@ -364,7 +434,7 @@ impl Logic {
                                 fault = Some(c.clone());
                             }
                             Node::App(k, _) if *k == code_at => q.code.push(sp.prop(&c, Pol::Other)),
-                            _ => match { let tq = std::time::Instant::now(); let d = self.symex_decide(&sp, &ctx, &c); prof[2] += tq.elapsed().as_secs_f64(); d } {
+                            _ => match { let tq = std::time::Instant::now(); let mut d = self.symex_decide(&sp, &ctx, &c); if d.is_none() && bridge { sp.set_nats(&ctx); let c2 = sp.prop(&words.word(&ctx, &c), Pol::Other); d = if sp.is_true(&c2) { Some(true) } else if sp.is_false(&c2) { Some(false) } else { self.symex_decide(&sp, &ctx, &c2) }; if d.is_none() && std::env::var("SYMEX_DEBUG").is_ok_and(|v| v == "3") { eprintln!("symex: at {:#x} undecided: {}\n  as {}", addr, short(&c), pr.term(&c2)); for l in ctx.iter().filter(|l| short(l).contains("int_lt(31")) { eprintln!("  ctx: {}", short(l)); } } } prof[2] += tq.elapsed().as_secs_f64(); d } {
                                 Some(true) => {}
                                 Some(false) => dead = true,
                                 None => q.conds.push(if bridge { sp.prop(&words.word(&ctx, &sp.prop(&c, Pol::Other)), Pol::Other) } else { sp.prop(&c, Pol::Other) }),
@@ -448,6 +518,13 @@ impl Logic {
                 .collect();
             for c in conds.into_iter().rev() {
                 body = Term::app(sp.s.and.unwrap(), vec![c.clone(), body]);
+            }
+            // (a stopped path: also the code where its state is, for a
+            // loop's next iteration)
+            if stop {
+                for c in p.code.iter().rev() {
+                    body = Term::app(sp.s.and.unwrap(), vec![c.clone(), body]);
+                }
             }
             for v in p.vars.iter().rev() {
                 if has_var(&body, *v) {

@@ -473,6 +473,40 @@ impl Words<'_, '_> {
         let x: Vec<Term> = x.iter().map(|y| self.word(ctx, y)).collect();
         let t = t.with_args(x.clone());
         let name = self.sp.env.syms[*g as usize].name.as_str();
+        // (a term the context equates with one without some variable of
+        // its -- a generic state's field, the coupling's value: that value;
+        // the term as is, or as simp reads it -- past stores apart from it)
+        if self.bytes && t.loose_depth(&bind) == 0 {
+            for c in [t.clone(), self.sp.term(&t)] {
+                let mut tv = Vec::new();
+                c.vars(&mut tv);
+                if tv.is_empty() {
+                    continue;
+                }
+                // (towards a smaller term -- or as stated, an equal one --
+                // without a variable of c: no rewriting back)
+                fn size(t: &Term) -> usize {
+                    match t.node() {
+                        Node::App(_, a) | Node::Var(_, a) => 1 + a.iter().map(size).sum::<usize>(),
+                        _ => 1,
+                    }
+                }
+                let sc = size(&c);
+                let drops = |u: &Term| {
+                    let mut uv = Vec::new();
+                    u.vars(&mut uv);
+                    tv.iter().any(|v| !uv.contains(v))
+                };
+                let found = ctx.iter().find_map(|l| match l.node() {
+                    Node::App(e, ab) if *e == self.sp.s.eq && ab.len() == 2 && ab[0] == c && ab[1] != c && size(&ab[1]) <= sc && drops(&ab[1]) => Some(ab[1].clone()),
+                    Node::App(e, ab) if *e == self.sp.s.eq && ab.len() == 2 && ab[1] == c && ab[0] != c && size(&ab[0]) < sc && drops(&ab[0]) => Some(ab[0].clone()),
+                    _ => None,
+                });
+                if let Some(u) = found {
+                    return self.word(ctx, &u);
+                }
+            }
+        }
         if self.bytes && matches!(name, "gimple.bytes_at" | "x86_64_linux.le") && x.len() == 3 && matches!(x[2].node(), Node::Nat(k) if k.to_u64().is_some_and(|k| (1..=8).contains(&k))) {
             if let Some(u) = self.sp.unfold(*g, &x) {
                 // (the spec's read of k bytes -- of a memory whose every byte
@@ -488,6 +522,44 @@ impl Words<'_, '_> {
                     }
                 }
                 return self.word(ctx, &self.sp.term(&u));
+            }
+        }
+        // (a property of a memory's pages, of the memory with other bytes:
+        // the memory's -- their definitions read only "pages")
+        if self.bytes
+            && matches!(
+                name,
+                "x86_64_linux.can_access" | "x86_64_linux.mapped" | "x86_64_linux.fetchable" | "x86_64_linux.readable" | "abi.stack_page" | "abi.scratch" | "abi.stack_gap_free" | "gimple.usable"
+            )
+            && !x.is_empty()
+        {
+            if let Node::App(fu, fa) = x[0].node() {
+                if self.sp.env.syms[*fu as usize].name == "fn_update" && fa.len() == 3 && fa[1] == Term::bytes(b"bytes") {
+                    let mut y = x.clone();
+                    y[0] = fa[0].clone();
+                    return self.word(ctx, &t.with_args(y));
+                }
+            }
+            // (a memory the context gives another's pages: that other's)
+            if let Some(app) = self.sp.s.app {
+                let pages = |m: &Term| Term::app(app, vec![m.clone(), Term::bytes(b"pages")]);
+                let mine = pages(&x[0]);
+                let other = ctx.iter().find_map(|l| match l.node() {
+                    Node::App(e, ab) if *e == self.sp.s.eq && ab.len() == 2 => {
+                        let (a, b) = (&ab[0], &ab[1]);
+                        let of = |p: &Term| match p.node() {
+                            Node::App(g, ga) if *g == app && ga.len() == 2 && ga[1] == Term::bytes(b"pages") => Some(ga[0].clone()),
+                            _ => None,
+                        };
+                        if *a == mine { of(b) } else { None }
+                    }
+                    _ => None,
+                });
+                if let Some(o) = other.filter(|o| *o != x[0] && x[0].loose_depth(&bind) == 0) {
+                    let mut y = x.clone();
+                    y[0] = o;
+                    return self.word(ctx, &t.with_args(y));
+                }
             }
         }
         if t.loose_depth(&bind) > 0 {
@@ -561,6 +633,22 @@ impl Words<'_, '_> {
                         if d == Some(true) {
                             return sum;
                         }
+                    }
+                }
+            }
+        }
+        // bit k of a word v the context bounds: below 2^k, false; from 2^k
+        // and below 2^(k+1), true (`bit(v, k)` is (v div 2^k) mod 2 = 1)
+        if name == "bit" && x.len() == 2 && self.bytes {
+            if let (Node::Nat(k), Some(lt), Some(le)) = (x[1].node(), self.sp.env.sym_by_name.get("int_lt"), self.sp.env.sym_by_name.get("int_le")) {
+                if let Some(k) = k.to_u64().filter(|&k| k < 128) {
+                    let p = Term::nat(crate::nat::Nat::pow2(k));
+                    if self.lg.symex_decide(self.sp, ctx, &Term::app(*lt, vec![x[0].clone(), p.clone()])) == Some(true) && self.lg.symex_decide(self.sp, ctx, &Term::app(*le, vec![Term::nat(crate::nat::Nat::zero()), x[0].clone()])) == Some(true) {
+                        return self.sp.ff();
+                    }
+                    let p2 = Term::nat(crate::nat::Nat::pow2(k + 1));
+                    if self.lg.symex_decide(self.sp, ctx, &Term::app(*le, vec![p, x[0].clone()])) == Some(true) && self.lg.symex_decide(self.sp, ctx, &Term::app(*lt, vec![x[0].clone(), p2])) == Some(true) {
+                        return self.sp.tt();
                     }
                 }
             }
@@ -863,13 +951,19 @@ impl Sr<'_, '_> {
         let (ok, exc, pair) = (s.ok.unwrap(), s.exc.unwrap(), s.pair.unwrap());
         let mut exits = Vec::new();
         let mut out = Vec::new();
-        for k in 0..4usize {
+        for k in 0..5usize {
             let mut vs = Vec::new();
-            let lx = self.shaped(&l0, &mut vs);
             let e = match k {
-                0 => Term::app(ok, vec![lx, empty.clone()]),
-                1 => Term::app(exc, vec![lx, Term::app(pair, vec![Term::bytes(b"brk"), empty.clone()])]),
+                0 => Term::app(ok, vec![self.shaped(&l0, &mut vs), empty.clone()]),
+                1 => Term::app(exc, vec![self.shaped(&l0, &mut vs), Term::app(pair, vec![Term::bytes(b"brk"), empty.clone()])]),
+                // (diverging: its trace t)
+                4 => {
+                    let (v, x) = self.var();
+                    vs.push(v);
+                    Term::app(s.diverge.unwrap(), vec![x])
+                }
                 _ => {
+                    let lx = self.shaped(&l0, &mut vs);
                     let (v, x) = self.var();
                     vs.push(v);
                     let tag: &[u8] = if k == 2 { b"ret" } else { b"raise" };
@@ -1422,7 +1516,7 @@ impl Logic {
     /// body goes on, or a way out: `ok(lv, empty)` where C(lv) fails, the
     /// body's exception where it leaves. (For the bridge: C(lv) && B(lv, O)
     /// on each of the body's branches, as spec_run derives them.)
-    pub(super) fn spec_iter(&self, env: &Env, cut: &CutOut, premises: &[Term], fresh: u32) -> KResult<IterOut> {
+    pub(super) fn spec_iter(&self, env: &Env, cut: &CutOut, lv: &Term, premises: &[Term], fresh: u32) -> KResult<IterOut> {
         let kerr = |m: String| crate::env::KernelError(format!("spec_run (an iteration): {}", m));
         let sp = Simp::new(env, self);
         let runs = sp.s.runs.ok_or_else(|| kerr("no `runs`".into()))?;
@@ -1451,14 +1545,14 @@ impl Logic {
             }
         }
         let mut fresh = fresh;
-        for t in premises.iter().chain([&cut.l0, &cut.cond, &cut.body]) {
+        for t in premises.iter().chain([&cut.l0, &cut.cond, &cut.body, lv]) {
             fresh = fresh.max(max_var(t) + 1);
         }
         let first = fresh;
         *self.simp_rewrites.borrow_mut() = self.rewrite_rules(env, premises);
         let mut sr = Sr { sp: &sp, lg: self, facts, lemmas, fresh, us: Default::default(), fuel: FUEL, depth: 0, hints: Vec::new(), groups: Vec::new(), op_depth: 0, premises: premises.to_vec(), cut_mode: false, cut: None };
-        let mut lv_ids = Vec::new();
-        let lv = sr.shaped(&cut.l0, &mut lv_ids);
+        let lv_ids: Vec<VarId> = Vec::new();
+        let lv = lv.clone();
         let s = &sp.s;
         let empty = Term::app(s.empty.unwrap(), vec![]);
         let c = sp.prop(&inst_k(env, &cut.cond, &[lv.clone()]), Pol::Other);

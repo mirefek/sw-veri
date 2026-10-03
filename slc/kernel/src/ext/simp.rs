@@ -184,6 +184,7 @@ mod symex;
 mod spec;
 // the bridge from readable GIMPLE to machine code (`bridge`)
 mod bridge;
+mod bridge_loop;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {

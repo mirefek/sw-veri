@@ -136,6 +136,8 @@ struct Syms {
     /// n among its arguments, its arity)
     words: [Option<(SymId, usize, usize)>; 8],
     bits_shr: Option<SymId>,
+    sint: Option<SymId>,
+    bit: Option<SymId>,
 }
 
 impl Syms {
@@ -169,6 +171,8 @@ impl Syms {
             words: [("bits_mul", 0, 3), ("bits_shl", 0, 3), ("bits_sar", 0, 3), ("bits_and", 0, 3), ("bits_or", 0, 3), ("bits_xor", 0, 3), ("bits_not", 0, 2), ("bits_sext", 1, 3)]
                 .map(|(n, i, k)| s(n).map(|f| (f, i, k))),
             bits_shr: s("bits_shr"),
+            sint: s("sint"),
+            bit: s("bit"),
         }
     }
 }
@@ -225,6 +229,10 @@ impl Reader {
             Node::App(f, _) => {
                 [s.int_add, s.int_sub, s.int_neg, s.int_mul, s.int_div, s.int_mod, s.int_succ, s.int_pred].iter().any(|g| is(*f, *g))
                     || self.bits_op(t).is_some()
+                    // (a signed value, the other word operations: integers)
+                    || is(*f, s.sint)
+                    || is(*f, s.bits_shr)
+                    || s.words.iter().flatten().any(|(g, _, _)| g == f)
                     || self.ints.contains(t)
             }
             _ => self.ints.contains(t),
@@ -313,6 +321,22 @@ impl Reader {
             Node::App(f, a) if is(*f, s.int_add) => return self.lin(&a[0])?.add(&self.lin(&a[1])?, 1),
             Node::App(f, a) if is(*f, s.int_sub) => return self.lin(&a[0])?.add(&self.lin(&a[1])?, -1),
             Node::App(f, a) if is(*f, s.int_neg) => return self.lin(&a[0])?.scale(-1),
+            // the signed value of n bits (`sint(n, a)`, a numeral n): x - 2^n *
+            // (x div 2^(n-1)), x = a mod 2^n -- its definition, x below 2^n
+            Node::App(f, a) if is(*f, s.sint) && a.len() == 2 && small(&a[0]).is_some_and(|n| (1..=64).contains(&n)) => {
+                let n = small(&a[0])?;
+                let x = self.lin(&a[1])?;
+                let bx = Term::app(s.bits_of_int?, vec![a[0].clone(), a[1].clone()]);
+                // (an n-bit operation's value already below 2^n: itself)
+                let r = match (self.bits_op(&a[1]), x.coeffs.len(), x.c) {
+                    (Some((m, _)), 1, 0) if m == 1i128 << n && x.coeffs.values().all(|c| *c == 1) => *x.coeffs.keys().next().unwrap(),
+                    _ => self.modulo(&bx, x, 1i128 << n)?.1,
+                };
+                // (x mod 2^(n-1), keyed as that term: its quotient is x's top bit)
+                let key = Term::app(s.int_mod?, vec![bx.clone(), Term::nat(crate::nat::Nat::from_u128(1u128 << (n - 1)))]);
+                let (q, _) = self.modulo(&key, Lin::var(r), 1i128 << (n - 1))?;
+                return Lin::var(r).add(&Lin::var(q), -(1i128 << n));
+            }
             Node::App(f, a) if *f == s.lit_add && small(&a[0]).is_some() && small(&a[1]).is_some() => {
                 return self.lin(&a[0])?.add(&self.lin(&a[1])?, 1);
             }
@@ -369,6 +393,15 @@ impl Reader {
         if a.len() != 2 {
             return None;
         }
+        // bit k of a value (`bit(x, k)`, a numeral k): (x div 2^k) mod 2 = 1,
+        // its definition
+        if is(*f, s.bit) {
+            let k = small(&a[1]).filter(|k| (0..=100).contains(k))?;
+            let d = Term::app(s.int_div?, vec![a[0].clone(), Term::nat(crate::nat::Nat::from_u128(1u128 << k))]);
+            let m = Term::app(s.int_mod?, vec![d, Term::nat(crate::nat::Nat::from_u64(2))]);
+            let x = self.lin(&m)?;
+            return Some(Atom::Cmp(x, Rel::Eq, Lin::konst(1)));
+        }
         let rel = if *f == s.eq {
             // (sets with equal values need not be equal)
             if !self.is_int(&a[0]) || !self.is_int(&a[1]) {
@@ -416,7 +449,61 @@ impl Reader {
 
 /// Fourier-Motzkin: is `{ l >= 0 : l in cs }` infeasible over the integers?
 /// (Unknown is reported as feasible.)
-fn infeasible(mut cs: Vec<Lin>) -> bool {
+/// Cases on {0, 1}-variables (`branch`): on where asked for (costly: the
+/// bridge's check that a machine path is not taken).
+pub static BRANCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn infeasible(cs: Vec<Lin>) -> bool {
+    if BRANCH.load(std::sync::atomic::Ordering::Relaxed) {
+        branch(cs, 3)
+    } else {
+        infeasible_fm(cs)
+    }
+}
+
+/// Infeasible by elimination, or -- feasible over the reals -- by cases on a
+/// variable the constraints keep in {0, 1} (a quotient, typically: whether
+/// a sum wrapped): infeasible at 0 and at 1. Sound: the cases cover the
+/// variable's integer values.
+fn branch(cs: Vec<Lin>, depth: usize) -> bool {
+    if infeasible_fm(cs.clone()) {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let mut vars: Vec<usize> = cs.iter().flat_map(|l| l.coeffs.keys().copied()).collect();
+    vars.sort();
+    vars.dedup();
+    let mut tried = 0;
+    for v in vars {
+        let with = |l: Option<Lin>| -> Option<Vec<Lin>> {
+            let mut c = cs.clone();
+            c.push(l?);
+            Some(c)
+        };
+        let (Some(ge2), Some(le_m1), Some(le0), Some(ge1)) = (
+            with(Lin::var(v).add(&Lin::konst(1), -2)),
+            with(Lin::var(v).scale(-1).and_then(|x| x.add(&Lin::konst(1), -1))),
+            with(Lin::var(v).scale(-1)),
+            with(Lin::var(v).add(&Lin::konst(1), -1)),
+        ) else {
+            continue;
+        };
+        if infeasible_fm(ge2) && infeasible_fm(le_m1) {
+            tried += 1;
+            if branch(le0, depth - 1) && branch(ge1, depth - 1) {
+                return true;
+            }
+            if tried >= 8 {
+                break;
+            }
+        }
+    }
+    false
+}
+
+fn infeasible_fm(mut cs: Vec<Lin>) -> bool {
     fn gcd(a: i128, b: i128) -> i128 {
         if b == 0 { a.abs() } else { gcd(b, a % b) }
     }

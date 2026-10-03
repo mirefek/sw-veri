@@ -428,12 +428,15 @@ impl Seq {
     /// `Γ ⊢ abi.matches(spec, args, S, O)`: the bridge from the readable
     /// GIMPLE `p = app(spec, args)` to the machine's run in the premises
     /// (`Logic::bridge`).
-    pub fn bridge(env: &Env, lg: &Logic, p: &Term, premises: &[&Seq]) -> KResult<Seq> {
+    pub fn bridge(env: &Env, lg: &Logic, p: &Term, inv: Option<&Term>, premises: &[&Seq]) -> KResult<Seq> {
         env.check_wf(p, 0)?;
         let (hyps, mut open) = Self::gather(premises);
         let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
         lg.simp_used.borrow_mut().clear();
-        let r = lg.bridge(env, p, &ps);
+        if let Some(i) = inv {
+            env.check_wf(i, 1)?;
+        }
+        let r = lg.bridge(env, p, inv, &ps);
         let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
         let concl = r?;
         env.check_wf(&concl, 0)?;

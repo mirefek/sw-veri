@@ -907,15 +907,23 @@ impl State {
                     "bridge" => {
                         let mut terms = Vec::new();
                         let mut ps = Vec::new();
+                        // (the spec, then optionally the loop's invariant
+                        // `{l. I}` on the spec's loop state)
                         for a in args {
                             match a {
-                                Arg::Term(_) => terms.push(self.term_arg(env, Some(a), 0)?),
+                                Arg::Term(_) => {
+                                    let k = terms.len().min(1) as u32;
+                                    terms.push(self.term_arg(env, Some(a), k)?)
+                                }
                                 Arg::Proof(x) => ps.push(self.eval(env, lg, x)?),
                             }
                         }
-                        let [p] = &terms[..] else { return err("bridge takes the spec `{app(spec, args)}` and proofs") };
                         let refs: Vec<&Seq> = ps.iter().collect();
-                        Seq::bridge(env, lg, p, &refs)
+                        match &terms[..] {
+                            [p] => Seq::bridge(env, lg, p, None, &refs),
+                            [p, i] => Seq::bridge(env, lg, p, Some(i), &refs),
+                            _ => err("bridge takes the spec `{app(spec, args)}`, a loop's invariant `{l. I}` if any, and proofs"),
+                        }
                     }
                     // (a loop by an invariant and a variant: `{l. I}, {l.
                     // m}` after W, for the program's loops in order)
