@@ -3318,7 +3318,7 @@ impl Simp<'_> {
             if rounds == 5000 && std::env::var("SIMP_DEBUG").is_ok() {
                 let pr = crate::syntax::Printer::new(self.env);
                 for l in &p.lits {
-                    eprintln!("simp: settle loops on {}", pr.term(l).chars().take(300).collect::<String>());
+                    eprintln!("simp: settle loops on {}", pr.term(l).chars().take(3000).collect::<String>());
                 }
             }
             let mut lits = Vec::new();
@@ -3693,7 +3693,7 @@ impl Simp<'_> {
             self.conjuncts(&want, &mut ws);
             for w in ws {
                 if lg.tautology(self.env, lits, &w).is_err() && lg.arith(self.env, lits, &w).is_err() {
-                    let t = pr.term(&w); if std::env::var("WITNESS_FULL").is_ok() { eprintln!("witness: not shown: {}", t); } else { eprintln!("witness: not shown: {} ... {}", t.chars().take(200).collect::<String>(), t.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()); }
+                    let t = pr.term(&w); if std::env::var("WITNESS_FULL").is_ok() { eprintln!("witness: not shown: {}", t); } else { eprintln!("witness: not shown: {} ... {}", t.chars().take(200).collect::<String>(), t.chars().rev().take(3000).collect::<String>().chars().rev().collect::<String>()); }
                 }
             }
             eprintln!("witness: --");
@@ -3846,7 +3846,7 @@ impl Simp<'_> {
                             t = t.subst_var(*v, x, &bf);
                         }
                         if gp.vars.iter().any(|v| has_var(&t, *v)) {
-                            eprintln!("witness:   unbound in: {}", pr.term(&t).chars().take(300).collect::<String>());
+                            eprintln!("witness:   unbound in: {}", pr.term(&t).chars().take(3000).collect::<String>());
                         }
                     }
                 }
@@ -4451,7 +4451,7 @@ impl Simp<'_> {
                     let pr = crate::syntax::Printer::new(self.env);
                     for u in &gs {
                         if u.loose_depth(&bf) == 0 {
-                            eprintln!("chain: goal {}", pr.term(u).chars().take(300).collect::<String>());
+                            eprintln!("chain: goal {}", pr.term(u).chars().take(3000).collect::<String>());
                         }
                     }
                 }
@@ -4956,6 +4956,21 @@ impl Logic {
 
     /// `simp_prove`, with invariants for the loops on the paths.
     pub fn simp_prove_loops(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint]) -> crate::env::KResult<()> {
+        // (SIMP_SLOW=secs: the calls taking longer, reported)
+        let slow = std::env::var("SIMP_SLOW").ok().and_then(|v| v.parse::<f64>().ok());
+        let t0 = std::time::Instant::now();
+        let r = self.simp_prove_loops_(env, premises, goal, hints);
+        if let Some(th) = slow {
+            let dt = t0.elapsed().as_secs_f64();
+            if dt > th {
+                let pr = crate::syntax::Printer::new(env);
+                eprintln!("simp slow: {:.3}s, {}, {} facts: {}", dt, if r.is_ok() { "ok" } else { "failed" }, premises.len(), pr.term(goal).chars().take(3000).collect::<String>());
+            }
+        }
+        r
+    }
+
+    fn simp_prove_loops_(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint]) -> crate::env::KResult<()> {
         // fresh variables above every variable of the input
         let mut fresh = env.vars.len() as u32 + 2_000_000;
         for t in premises.iter().chain([goal]).chain(hints.iter().flat_map(|h| [&h.inv].into_iter().chain(&h.var))) {
@@ -5270,7 +5285,7 @@ impl Logic {
             lap(5, &mut tm);
             if let Some(c) = ch {
                 if std::env::var("SIMP_DEBUG").is_ok() {
-                    eprintln!("simp: new fact {}", crate::syntax::Printer::new(env).term(&c).chars().take(300).collect::<String>());
+                    eprintln!("simp: new fact {}", crate::syntax::Printer::new(env).term(&c).chars().take(3000).collect::<String>());
                 }
                 steps += 1;
                 if steps > MAX_PATHS {

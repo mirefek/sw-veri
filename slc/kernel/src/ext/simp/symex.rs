@@ -345,6 +345,9 @@ impl Logic {
                     let h0 = sp.prop(&inst(h), Pol::Other);
                     let tq = std::time::Instant::now();
                     let mut shown = self.symex_shows(env, &sp, &ctx, &h0);
+                    if std::env::var("SYMEX_DEBUG").is_ok() && tq.elapsed().as_secs_f64() > 0.03 {
+                        eprintln!("symex: premise at {:#x} ({:.3}s, {}): {}", addr, tq.elapsed().as_secs_f64(), if shown { "shown" } else { "not shown" }, short(&h0));
+                    }
                     prof[1] += tq.elapsed().as_secs_f64();
                     let mut h = h0.clone();
                     if !shown && bridge {
@@ -401,6 +404,9 @@ impl Logic {
                 let mut alts = Vec::new();
                 sp.disjuncts(&inst(&lem.concl), &mut alts);
                 let mut next: Vec<XPath> = Vec::new();
+                // (a condition decided, and its negation: the alternatives
+                // share them)
+                let mut memo: Vec<(Term, Option<bool>)> = Vec::new();
                 for alt in alts {
                     let mut q = XPath { state: s.clone(), conds: p.conds.clone(), code: Vec::new(), vars: p.vars.clone(), moved: true, seen: p.seen.clone() };
                     // (values the model leaves open: fresh, existential in the result)
@@ -434,7 +440,7 @@ impl Logic {
                                 fault = Some(c.clone());
                             }
                             Node::App(k, _) if *k == code_at => q.code.push(sp.prop(&c, Pol::Other)),
-                            _ => match { let tq = std::time::Instant::now(); let mut d = self.symex_decide(&sp, &ctx, &c); if d.is_none() && bridge { sp.set_nats(&ctx); let c2 = sp.prop(&words.word(&ctx, &c), Pol::Other); d = if sp.is_true(&c2) { Some(true) } else if sp.is_false(&c2) { Some(false) } else { self.symex_decide(&sp, &ctx, &c2) }; if d.is_none() && std::env::var("SYMEX_DEBUG").is_ok_and(|v| v == "3") { eprintln!("symex: at {:#x} undecided: {}\n  as {}", addr, short(&c), pr.term(&c2)); for l in ctx.iter().filter(|l| short(l).contains("int_lt(31")) { eprintln!("  ctx: {}", short(l)); } } } prof[2] += tq.elapsed().as_secs_f64(); d } {
+                            _ => match if let Some((_, d)) = memo.iter().find(|(k, _)| *k == c) { *d } else { let d = { let tq = std::time::Instant::now(); let mut d = self.symex_decide(&sp, &ctx, &c); if d.is_none() && bridge { sp.set_nats(&ctx); let c2 = sp.prop(&words.word(&ctx, &c), Pol::Other); d = if sp.is_true(&c2) { Some(true) } else if sp.is_false(&c2) { Some(false) } else { self.symex_decide(&sp, &ctx, &c2) }; if d.is_none() && std::env::var("SYMEX_DEBUG").is_ok_and(|v| v == "3") { eprintln!("symex: at {:#x} undecided: {}\n  as {}", addr, short(&c), pr.term(&c2)); for l in ctx.iter().filter(|l| short(l).contains("int_lt(31")) { eprintln!("  ctx: {}", short(l)); } } } if std::env::var("SYMEX_DEBUG").is_ok() && tq.elapsed().as_secs_f64() > 0.03 { eprintln!("symex: decision at {:#x} ({:.3}s, {:?}): {}", addr, tq.elapsed().as_secs_f64(), d, short(&c)); } prof[2] += tq.elapsed().as_secs_f64(); d }; memo.push((c.clone(), d)); memo.push((sp.not(c.clone()), d.map(|b| !b))); d } {
                                 Some(true) => {}
                                 Some(false) => dead = true,
                                 None => q.conds.push(if bridge { sp.prop(&words.word(&ctx, &sp.prop(&c, Pol::Other)), Pol::Other) } else { sp.prop(&c, Pol::Other) }),
@@ -693,7 +699,12 @@ impl Logic {
         if sp.is_true(h) || ctx.contains(h) || sp.typed(ctx, h) || sp.instance_of_all(ctx, h) {
             return true;
         }
-        if !self.symex_simp.borrow().is_empty() && self.shows_access(env, sp, ctx, h) {
+        let tq = std::time::Instant::now();
+        let acc = !self.symex_simp.borrow().is_empty() && self.shows_access(env, sp, ctx, h);
+        if std::env::var("SYMEX_DEBUG").is_ok() && tq.elapsed().as_secs_f64() > 0.02 {
+            eprintln!("symex: shows_access {:.3}s", tq.elapsed().as_secs_f64());
+        }
+        if acc {
             return true;
         }
         for l in ctx {
@@ -704,7 +715,12 @@ impl Logic {
             }
         }
         let near = relevant(ctx, h);
-        if self.tautology(env, &near, h).is_ok() || self.arith(env, &near, h).is_ok() {
+        let tq = std::time::Instant::now();
+        let ta = self.tautology(env, &near, h).is_ok() || self.arith(env, &near, h).is_ok();
+        if std::env::var("SYMEX_DEBUG").is_ok() && tq.elapsed().as_secs_f64() > 0.02 {
+            eprintln!("symex: taut/arith {:.3}s ({} facts)", tq.elapsed().as_secs_f64(), near.len());
+        }
+        if ta {
             return true;
         }
         // (by simp, from the premises the bridge gives -- with the path's
@@ -722,27 +738,71 @@ impl Logic {
             // (the lemmas and literals: compound facts -- D's implications,
             // a branch's alternatives -- would only split simp's paths; an
             // implication whose antecedent the path decides gives its
-            // consequent, a conjunction its conjuncts)
-            let mut ps: Vec<Term> = Vec::new();
-            let mut st: Vec<Term> = extra.into_iter().chain(ctx.iter().filter(|l| !reg_typing(l)).cloned()).collect();
-            while let Some(l) = st.pop() {
-                match l.node() {
-                    Node::App(c, ab) if *c == env.builtins.imp => {
-                        if self.symex_decide(sp, ctx, &ab[0]) == Some(true) {
-                            st.push(ab[1].clone());
+            // consequent, if `resolve` -- deciding them costs -- a
+            // conjunction its conjuncts)
+            let collect = |resolve: bool| -> Vec<Term> {
+                let mut ps: Vec<Term> = Vec::new();
+                let mut st: Vec<Term> = extra.iter().cloned().chain(ctx.iter().filter(|l| !reg_typing(l)).cloned()).collect();
+                while let Some(l) = st.pop() {
+                    match l.node() {
+                        Node::App(c, ab) if *c == env.builtins.imp => {
+                            if resolve && self.symex_decide(sp, ctx, &ab[0]) == Some(true) {
+                                st.push(ab[1].clone());
+                            }
                         }
-                    }
-                    Node::App(c, _) if is(*c, sp.s.and) => sp.conjuncts(&l, &mut st),
-                    Node::App(c, _) if is(*c, sp.s.or) => {}
-                    _ => {
-                        if !ps.contains(&l) {
-                            ps.push(l);
+                        Node::App(c, _) if is(*c, sp.s.and) => sp.conjuncts(&l, &mut st),
+                        Node::App(c, _) if is(*c, sp.s.or) => {}
+                        _ => {
+                            if !ps.contains(&l) {
+                                ps.push(l);
+                            }
                         }
                     }
                 }
-            }
+                ps
+            };
             let t0 = std::time::Instant::now();
-            let r = self.simp_prove_loops(env, &ps, h, &[]);
+            // (first focused: the lemmas concluding the goal's head, the
+            // literals not about runs -- the spec's run and the others'
+            // lemmas only make simp search; implications not resolved; then
+            // all)
+            let head = |t: &Term| -> Option<SymId> {
+                let mut t = t.clone();
+                loop {
+                    match t.node() {
+                        Node::App(q, b) if *q == self.all && b.len() == 1 => t = b[0].clone(),
+                        Node::App(i, ab) if *i == env.builtins.imp && ab.len() == 2 => t = ab[1].clone(),
+                        Node::App(f, _) => return Some(*f),
+                        _ => return None,
+                    }
+                }
+            };
+            let runs_like: Vec<SymId> = ["runs", "while_rel", "abi.run_from"].iter().filter_map(|n| env.sym_by_name.get(*n).copied()).collect();
+            let mentions_run = |t: &Term| {
+                let mut st = vec![t.clone()];
+                while let Some(u) = st.pop() {
+                    if let Node::App(g, xs) = u.node() {
+                        if runs_like.contains(g) {
+                            return true;
+                        }
+                        st.extend(xs.iter().cloned());
+                    }
+                }
+                false
+            };
+            let gh = head(h);
+            let focus = |ps: &[Term]| -> Vec<Term> {
+                ps.iter().filter(|l| if matches!(l.node(), Node::App(q, _) if *q == self.all) { head(l) == gh } else { !mentions_run(l) }).cloned().collect()
+            };
+            let r = self.simp_prove_loops(env, &focus(&collect(false)), h, &[]).or_else(|_| {
+                let ps = collect(true);
+                let focused = focus(&ps);
+                match self.simp_prove_loops(env, &focused, h, &[]) {
+                    Ok(x) => Ok(x),
+                    Err(_) if focused.len() < ps.len() => self.simp_prove_loops(env, &ps, h, &[]),
+                    Err(e) => Err(e),
+                }
+            });
             if std::env::var("SYMEX_DEBUG").is_ok() {
                 let pr = crate::syntax::Printer::new(env);
                 eprintln!("symex: premise by simp ({:.3}s, {}): {}", t0.elapsed().as_secs_f64(), if r.is_ok() { "ok" } else { "failed" }, pr.term(h).chars().take(200).collect::<String>());

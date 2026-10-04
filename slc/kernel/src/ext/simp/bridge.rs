@@ -253,6 +253,10 @@ impl Logic {
         let stops: Vec<Term> = head.iter().map(|h| Term::nat(crate::nat::Nat::from_u128(*h))).collect();
         lap("the loop's head");
         let mut covers: Vec<Term> = Vec::new();
+        // (the spec's statement by branches: `all ps. C.. -> runs(p, w, O)`)
+        let mut stmt_parts: Vec<Term> = Vec::new();
+        sp.conjuncts(&out.statement, &mut stmt_parts);
+        let spec_run_of = |t: &Term| matches!(t.node(), Node::App(r, a) if *r == runs && a.len() == 3) && !is_run(t);
         for (bi, (conds, outcome)) in out.branches.iter().enumerate() {
             // ok(Wk, (r0, r1)): a branch to match; a raise from the view
             // exc(W, e): the raise case, whatever the machine does; others
@@ -438,6 +442,88 @@ impl Logic {
                             }
                         }
                     }
+                    // (the spec's run: the branch's statement `all ps. C.. ->
+                    // runs(p, w, O)` at the witnesses, its C's shown)
+                    if spec_run_of(&c) {
+                        let h = conds.iter().rev().fold(c.clone(), |t, ci| Term::app(env.builtins.imp, vec![sub(ci), t]));
+                        let held = |ci: &Term| {
+                            let ci = sp.prop(&sub(ci), Pol::Other);
+                            sp.is_true(&ci) || shown.contains(&ci) || sp.typed(&shown, &ci) || self.symex_decide(&sp, &shown, &ci) == Some(true)
+                        };
+                        // (h an instance of a part: its binders matched)
+                        let instance = |part: &Term| {
+                            let mut fresh = super::max_var(part).max(super::max_var(&h)) + 1;
+                            let (mut b, mut vs) = (part.clone(), Vec::new());
+                            while let Node::App(q, a) = b.node() {
+                                if *q != self.all {
+                                    break;
+                                }
+                                vs.push(fresh);
+                                b = inst_k(env, &a[0], &[Term::var(fresh, vec![])]);
+                                fresh += 1;
+                            }
+                            super::pmatch(&b, &h, &vs, &mut Vec::new())
+                        };
+                        if conds.iter().all(held) && stmt_parts.iter().any(instance) {
+                            shown.push(c.clone());
+                            lap(&format!("branch {}, path {}: {} (the branch's statement)", bi + 1, pi + 1, short(&c).chars().take(60).collect::<String>()));
+                            continue;
+                        }
+                        // (or an instance up to values: where h and the part
+                        // differ -- the machine's value, the spec's -- equal)
+                        fn diff(pat: &Term, t: &Term, pvars: &[crate::term::VarId], binds: &mut Vec<(crate::term::VarId, Term)>, out: &mut Vec<(Term, Term)>) -> bool {
+                            match (pat.node(), t.node()) {
+                                (Node::Var(v, a), _) if a.is_empty() && pvars.contains(v) => match binds.iter().find(|(w, _)| w == v) {
+                                    Some((_, b)) => b == t,
+                                    None => {
+                                        binds.push((*v, t.clone()));
+                                        true
+                                    }
+                                },
+                                (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b.iter()).all(|(x, y)| diff(x, y, pvars, binds, out)),
+                                _ if pat == t => true,
+                                _ => {
+                                    let mut vs = Vec::new();
+                                    pat.vars(&mut vs);
+                                    if vs.iter().any(|v| pvars.contains(v)) {
+                                        return false;
+                                    }
+                                    out.push((t.clone(), pat.clone()));
+                                    true
+                                }
+                            }
+                        }
+                        let up_to = |part: &Term| -> Option<Vec<(Term, Term)>> {
+                            let mut fresh = super::max_var(part).max(super::max_var(&h)) + 1;
+                            let (mut b, mut vs) = (part.clone(), Vec::new());
+                            while let Node::App(q, a) = b.node() {
+                                if *q != self.all {
+                                    break;
+                                }
+                                vs.push(fresh);
+                                b = inst_k(env, &a[0], &[Term::var(fresh, vec![])]);
+                                fresh += 1;
+                            }
+                            let mut out = Vec::new();
+                            (diff(&b, &h, &vs, &mut Vec::new(), &mut out) && !out.is_empty() && out.len() <= 4 && out.iter().all(|(x, y)| x.loose_depth(&bf) == 0 && y.loose_depth(&bf) == 0)).then_some(out)
+                        };
+                        if conds.iter().all(held) {
+                            let lean: Vec<Term> = shown.iter().filter(|t| !compound(t)).cloned().collect();
+                            let equal = |(x, y): &(Term, Term)| {
+                                let e = sp.prop(&Term::app(env.builtins.eq, vec![x.clone(), y.clone()]), Pol::Other);
+                                sp.is_true(&e) || shown.contains(&e) || self.simp_prove_loops(env, &lean, &e, &[]).is_ok() || {
+                                    sp.set_nats(&shown);
+                                    let e2 = sp.prop(&words.word(&shown, &e), Pol::Other);
+                                    sp.is_true(&e2) || e2 != e && self.simp_prove_loops(env, &lean, &e2, &[]).is_ok()
+                                }
+                            };
+                            if stmt_parts.iter().filter_map(up_to).any(|ds| ds.iter().all(equal)) {
+                                shown.push(c.clone());
+                                lap(&format!("branch {}, path {}: {} (the branch's statement, values equal)", bi + 1, pi + 1, short(&c).chars().take(60).collect::<String>()));
+                                continue;
+                            }
+                        }
+                    }
                     // (first from the lemmas and literals only: the compound
                     // facts split simp's paths)
                     let lean: Vec<Term> = shown.iter().filter(|t| !compound(t)).cloned().collect();
@@ -559,7 +645,22 @@ impl Logic {
             // (the arity first: the spec's own guard `ord_le(i+1, seq_len(args))`)
             let guard = Term::app(sym("ord_le")?, vec![nat(i as u64 + 1), Term::app(sym("seq_len")?, vec![args.clone()])]);
             let mut with_guard = lean.clone();
-            let arity = self.simp_prove_loops(env, &lean, &guard, &[]).is_ok() || self.simp_prove_loops(env, &no_run, &guard, &[]).is_ok();
+            // (from the compound facts only if one mentions the guard: else
+            // they only make simp search)
+            let mentions = |t: &Term| {
+                let mut st = vec![t.clone()];
+                while let Some(u) = st.pop() {
+                    if u == guard {
+                        return true;
+                    }
+                    if let Node::App(_, xs) = u.node() {
+                        st.extend(xs.iter().cloned());
+                    }
+                }
+                false
+            };
+            let arity = self.simp_prove_loops(env, &lean, &guard, &[]).is_ok()
+                || no_run.iter().any(|t| compound(t) && mentions(t)) && self.simp_prove_loops(env, &no_run, &guard, &[]).is_ok();
             if arity {
                 with_guard.push(guard);
             }
