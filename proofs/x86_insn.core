@@ -1,0 +1,331 @@
+// The instructions' semantics, proven once from the model with their
+// operand fields symbolic (layer 2 of docs/bridge-pattern-design.md): the
+// state after `exec_body(len, insn)` -- the decoded instruction run with rip
+// past it. Widths are concrete; registers, displacements, immediates are
+// not. The flags an instruction sets are left open (`x86i.flags_ok`: a
+// flags record, its df as before): the translation tracks no flags across
+// instructions but a comparison's, which its branch lemma reads.
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     proofs/x86_insn.core
+
+def x86i.flags_ok(m, f) := f in x86_64_linux.Flags && app(f, "df") = app(app(m, "flags"), "df")
+
+// a machine's parts, typed
+theorem x86i.parts: all m. m in x86_64_linux.Machine -> app(m, "flags") in x86_64_linux.Flags && app(m, "gpr") in fn_space(x86_64_linux.Reg, bits(64)) &&
+  app(m, "rip") in bits(64) && app(m, "vm") in x86_64_linux.Vm
+proof
+  fix m
+  assume hM: m in x86_64_linux.Machine
+  show by simp(expand(hM, x86_64_linux.Machine))
+qed
+
+// a register's value, a word
+theorem x86i.reg_typed: all m r. m in x86_64_linux.Machine -> r in x86_64_linux.Reg -> app(app(m, "gpr"), r) in bits(64)
+proof
+  fix m
+  fix r
+  assume hM: m in x86_64_linux.Machine
+  assume hr: r in x86_64_linux.Reg
+  have pt: app(m, "gpr") in fn_space(x86_64_linux.Reg, bits(64)) by taut(apply(x86i.parts, hM))
+  show := mp(mp(fn_space_app[a := x86_64_linux.Reg, b := bits(64), f := app(m, "gpr"), x := r], pt), hr)
+qed
+
+// a flag the model leaves open: a boolean
+theorem x86i.bool_univ: all b. (b = false || b = true) -> b in univ(1)
+proof
+  fix b
+  assume hb: b = false || b = true
+  show by simp(hb)
+qed
+
+// rsp, a word
+theorem x86i.rsp_typed: all m. m in x86_64_linux.Machine -> app(app(m, "gpr"), 4) in bits(64)
+proof
+  fix m
+  assume hM: m in x86_64_linux.Machine
+  have r4: 4 in x86_64_linux.Reg by simp()
+  show := apply(x86i.reg_typed, hM, r4)
+qed
+
+// neg r32 (F7 /3)
+theorem x86i.neg32: all m o g z len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg ->
+  runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), "gpr",
+    fn_update(app(m, "gpr"), g, bits_neg(32, bits_slice(app(app(m, "gpr"), g), 31, 0)))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix z
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume h: runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  show by defs(simp(h, hu, pt, apply(x86i.reg_typed, hM, hg)), x86i.flags_ok)
+qed
+
+// an rsp-based memory operand [rsp + d], and its address as the model forms it
+abbrev x86i.rsp_mem(d) := tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, 4)), "index", none), "scale", 1), "disp", d))
+abbrev x86i.rsp_ea(m, d) := bits_add(64, int_add(app(app(m, "gpr"), 4), d), 0)
+// (the n bytes from a accessible, for reading (k = 0) or writing (k = 1))
+abbrev x86i.acc(m, a, n, k) := all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_int(64, i)), k)
+
+// mov [rsp + d], r32 (89 /r)
+theorem x86i.store32_rsp: all m o g d z1 z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  x86i.acc(m, x86i.rsp_ea(m, d), 4, 1) ->
+  runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "vm",
+    fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 4, bits_slice(app(app(m, "gpr"), g), 31, 0)))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix d
+  fix z1
+  fix z2
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hd: d in bits(64)
+  assume a0: x86i.acc(m, x86i.rsp_ea(m, d), 4, 1)
+  assume h: runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  have k0: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
+    fix i
+    assume i1: i in omega
+    assume i2: int_lt(i, 4)
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {1}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  show by simp(h, hu, pt, apply(x86i.reg_typed, hM, hg), hd, apply(x86i.rsp_typed, hM), a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed
+
+// mov r32, [rsp + d] (8B /r)
+theorem x86i.load32_rsp: all m o g d z1 z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  x86i.acc(m, x86i.rsp_ea(m, d), 4, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(76, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "gpr",
+    fn_update(app(m, "gpr"), g, x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 4))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix d
+  fix z1
+  fix z2
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hd: d in bits(64)
+  assume a0: x86i.acc(m, x86i.rsp_ea(m, d), 4, 0)
+  assume h: runs(x86_64_linux.exec_body(len, tag(76, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  have k0: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
+    fix i
+    assume i1: i in omega
+    assume i2: int_lt(i, 4)
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  show by simp(h, hu, pt, apply(x86i.reg_typed, hM, hg), hd, apply(x86i.rsp_typed, hM), a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed
+
+// and r32, [rsp + d] (23 /r)
+theorem x86i.and32_rsp: all m o g d z1 z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  x86i.acc(m, x86i.rsp_ea(m, d), 4, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(48, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), "gpr",
+    fn_update(app(m, "gpr"), g, bits_and(32, bits_slice(app(app(m, "gpr"), g), 31, 0), x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 4)))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix d
+  fix z1
+  fix z2
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hd: d in bits(64)
+  assume a0: x86i.acc(m, x86i.rsp_ea(m, d), 4, 0)
+  assume h: runs(x86_64_linux.exec_body(len, tag(48, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  have k0: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
+    fix i
+    assume i1: i in omega
+    assume i2: int_lt(i, 4)
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  show by defs(simp(h, hu, pt, apply(x86i.reg_typed, hM, hg), hd, apply(x86i.rsp_typed, hM), a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok)
+qed
+
+// imul r32, r/m32 (a register), imm (69 /r id)
+theorem x86i.imul32_imm: all m o g h z1 z2 k len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> h in x86_64_linux.Reg -> k in bits(32) ->
+  runs(x86_64_linux.exec_body(len, tag(89, pair(4, pair(g, pair(tag(0, h), pair(z1, pair(z2, k))))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), "gpr",
+    fn_update(app(m, "gpr"), g, bits_add(32, int_mul(sint(32, bits_slice(app(app(m, "gpr"), h), 31, 0)), sint(32, k)), 0))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix h
+  fix z1
+  fix z2
+  fix k
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hh: h in x86_64_linux.Reg
+  assume hk: k in bits(32)
+  assume hr: runs(x86_64_linux.exec_body(len, tag(89, pair(4, pair(g, pair(tag(0, h), pair(z1, pair(z2, k))))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  show by defs(simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), apply(x86i.reg_typed, hM, hh), hk, x86i.bool_univ), x86i.flags_ok)
+qed
+
+// shr r32, imm (C1 /5 ib), the count c in 1..31
+theorem x86i.shr32_imm: all m o g z c len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> c in omega -> int_lt(0, c) -> int_lt(c, 32) ->
+  runs(x86_64_linux.exec_body(len, tag(72, pair(4, pair(5, pair(tag(0, g), pair(z, c)))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), "gpr",
+    fn_update(app(m, "gpr"), g, bits_shr(32, bits_slice(app(app(m, "gpr"), g), 31, 0), c))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix z
+  fix c
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hc: c in omega
+  assume hc1: int_lt(0, c)
+  assume hc2: int_lt(c, 32)
+  assume hr: runs(x86_64_linux.exec_body(len, tag(72, pair(4, pair(5, pair(tag(0, g), pair(z, c)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  // (the count, masked to 5 bits: itself)
+  have cm: bits_add(5, c, 0) = c by arith(hc, hc2)
+  show by defs(simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), hc, hc1, hc2, cm, x86i.bool_univ), x86i.flags_ok)
+qed
+
+// mov r/m32 (a register h), r32 g (89 /r): h := g, zero-extended
+theorem x86i.mov32_rr: all m o g h z1 z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> h in x86_64_linux.Reg ->
+  runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(g, pair(tag(0, h), pair(z1, z2)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "gpr", fn_update(app(m, "gpr"), h, bits_slice(app(app(m, "gpr"), g), 31, 0))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix h
+  fix z1
+  fix z2
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hh: h in x86_64_linux.Reg
+  assume hr: runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(g, pair(tag(0, h), pair(z1, z2)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  show by simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), apply(x86i.reg_typed, hM, hh))
+qed
+
+// lea r64, [rip + d] (REX.W 8D /r; the memory operand, its last field)
+theorem x86i.lea_rip: all m o g d z1 z2 z3 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  runs(x86_64_linux.exec_body(len, tag(78, pair(8, pair(g, pair(z1, pair(z2, pair(z3, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(1, empty)), "index", none), "scale", 1), "disp", d)))))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "gpr", fn_update(app(m, "gpr"), g, bits_add(64, int_add(bits_add(64, app(m, "rip"), len), d), 0))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix d
+  fix z1
+  fix z2
+  fix z3
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hd: d in bits(64)
+  assume hr: runs(x86_64_linux.exec_body(len, tag(78, pair(8, pair(g, pair(z1, pair(z2, pair(z3, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(1, empty)), "index", none), "scale", 1), "disp", d)))))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  show by simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), hd)
+qed
+
+// movzx r32, byte [b + i] (0F B6 /r)
+theorem x86i.movzx8_idx: all m o g b i z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> b in x86_64_linux.Reg -> i in x86_64_linux.Reg ->
+  x86i.acc(m, bits_add(64, int_add(app(app(m, "gpr"), b), bits_mul(64, app(app(m, "gpr"), i), 1)), 0), 1, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(79, pair(4, pair(g, pair(tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, b)), "index", some(i)), "scale", 1), "disp", 0)), pair(tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, b)), "index", some(i)), "scale", 1), "disp", 0)), z2)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "gpr",
+    fn_update(app(m, "gpr"), g, x86_64_linux.le(app(app(m, "vm"), "bytes"), bits_add(64, int_add(app(app(m, "gpr"), b), bits_mul(64, app(app(m, "gpr"), i), 1)), 0), 1))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix b
+  fix i
+  fix z2
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hb: b in x86_64_linux.Reg
+  assume hi: i in x86_64_linux.Reg
+  assume a0: x86i.acc(m, bits_add(64, int_add(app(app(m, "gpr"), b), bits_mul(64, app(app(m, "gpr"), i), 1)), 0), 1, 0)
+  assume hr: runs(x86_64_linux.exec_body(len, tag(79, pair(4, pair(g, pair(tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, b)), "index", some(i)), "scale", 1), "disp", 0)), pair(tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, b)), "index", some(i)), "scale", 1), "disp", 0)), z2)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  have k0: all j. j in omega -> int_lt(j, 1) -> x86_64_linux.canonical(bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), b), bits_mul(64, app(app(m, "gpr"), i), 1)), 0), bits_of_int(64, j))) proof
+    fix j
+    assume j1: j in omega
+    assume j2: int_lt(j, 1)
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), b), bits_mul(64, app(app(m, "gpr"), i), 1)), 0), bits_of_int(64, j))}), {0}), mp(mp(all_elim(a0, {j}), j1), j2))
+  qed
+  show by simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), apply(x86i.reg_typed, hM, hb), apply(x86i.reg_typed, hM, hi), a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed
+
+// movsx r32, r/m8 (a register h; 0F BE /r)
+theorem x86i.movsx8_rr: all m o g h z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> h in x86_64_linux.Reg -> int_lt(h, 4) ->
+  runs(x86_64_linux.exec_body(len, tag(81, pair(4, pair(g, pair(tag(0, h), pair(tag(0, h), z2)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "gpr", fn_update(app(m, "gpr"), g, bits_sext(8, 32, bits_slice(app(app(m, "gpr"), h), 7, 0)))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix h
+  fix z2
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hg: g in x86_64_linux.Reg
+  assume hh: h in x86_64_linux.Reg
+  assume hh2: int_lt(h, 4)
+  assume hr: runs(x86_64_linux.exec_body(len, tag(81, pair(4, pair(g, pair(tag(0, h), pair(tag(0, h), z2)))))), m, o)
+  have pt := apply(x86i.parts, hM)
+  show by simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), hh, hh2, apply(x86i.reg_typed, hM, hh))
+qed
+
+// ret (C3)
+theorem x86i.ret: all m o len. m in x86_64_linux.Machine -> m in univ(1) -> x86i.acc(m, app(app(m, "gpr"), 4), 8, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o) ->
+  o = ok(fn_update(fn_update(m, "gpr", fn_update(app(m, "gpr"), 4, bits_add(64, app(app(m, "gpr"), 4), 8))), "rip", x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(m, "gpr"), 4), 8)), empty)
+proof
+  fix m
+  fix o
+  fix len
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume a0: x86i.acc(m, app(app(m, "gpr"), 4), 8, 0)
+  assume hr: runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o)
+  have pt := apply(x86i.parts, hM)
+  have k0: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.canonical(bits_add(64, app(app(m, "gpr"), 4), bits_of_int(64, j))) proof
+    fix j
+    assume j1: j in omega
+    assume j2: int_lt(j, 8)
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, app(app(m, "gpr"), 4), bits_of_int(64, j))}), {0}), mp(mp(all_elim(a0, {j}), j1), j2))
+  qed
+  show by simp(hr, hu, pt, apply(x86i.rsp_typed, hM), a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed

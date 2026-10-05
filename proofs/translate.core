@@ -128,26 +128,24 @@ proof
   show by taut(n)
 qed
 
-theorem tr.step: all s v p w m m2. (all o. runs(x86_64_linux.step(), m, o) -> o = ok(m2, empty)) ->
-  !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) -> tr.sim(s, v, p, w, m2) -> tr.sim(s, v, p, w, m)
+// (the steps from m end in states with q: an instruction's effect, its
+// flags left open where the model havocs them)
+theorem tr.step(s, v, p, w, m, x. q): (all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && q(m2))) ->
+  !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) -> (all m2. q(m2) -> tr.sim(s, v, p, w, m2)) -> tr.sim(s, v, p, w, m)
 proof
-  fix s
-  fix v
-  fix p
-  fix w
-  fix m
-  fix m2
-  assume hs: all o. runs(x86_64_linux.step(), m, o) -> o = ok(m2, empty)
+  assume hs: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && q(m2))
   assume hn: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s))
-  assume h: tr.sim(s, v, p, w, m2)
-  // the pass from m: a step to m2
-  have hb_ok: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> l1 = pair(m2, empty) proof
+  assume h: all m2. q(m2) -> tr.sim(s, v, p, w, m2)
+  // the pass from m: a step to some m2 with q
+  have hb_ok: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> (ex m2. l1 = pair(m2, empty) && q(m2)) proof
     fix l1
     assume hb: tr.rb(s, pair(m, empty), ok(l1, empty))
     have b1: ex x1. runs(x86_64_linux.step(), m, x1) && (ex x2 x3. x1 = ok(x2, x3) && l1 = pair(x2, empty)) by simp(expand(hb, tr.rb), hn, keep(x86_64_linux.step))
     obtain x1, c1 from b1
     have e := mp(all_elim(hs, {x1}), taut(c1))
-    show by simp(c1, e, keep(x86_64_linux.step))
+    obtain m2, e2 from e
+    have l1e: l1 = pair(m2, empty) by simp(c1, e2, keep(x86_64_linux.step))
+    show by ex_intro({m2}, taut(l1e, e2))
   qed
   have hb_nok: all r. tr.rb(s, pair(m, empty), r) -> !is_ok(r) -> false proof
     fix r
@@ -157,17 +155,20 @@ proof
       (ex x2 x3. x1 = exc(x2, x3) && r = exc(pair(x2, empty), pair("raise", x3))) || (ex x2. x1 = diverge(x2) && r = diverge(x2))) by simp(expand(hb, tr.rb), hn, keep(x86_64_linux.step))
     obtain x1, c1 from b1
     have e := mp(all_elim(hs, {x1}), taut(c1))
-    show by simp(c1, e, hn2, keep(x86_64_linux.step))
+    obtain m2, e2 from e
+    show by simp(c1, e2, hn2, keep(x86_64_linux.step))
   qed
-  // the claim at m2, for the loop's runs from it
-  have hk: all r o2. tr.rw(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o2) proof
+  // the claim at an m2 with q, for the loop's runs from it
+  have hk: all m2 r o2. q(m2) -> tr.rw(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o2) proof
+    fix m2
     fix r
     fix o2
+    assume hq: q(m2)
     assume hw: tr.rw(s, pair(m2, empty), r)
     assume hm: tr.rmap(r, o2)
     have ex1: ex x0. tr.rw(s, pair(m2, empty), x0) && tr.rmap(x0, o2) by ex_intro({r}, taut(hw, hm))
     have rf: abi.run_from(s, m2, o2) by taut(all_elim(tr.run_from_parts, {s}, {m2}, {o2}), ex1)
-    show := mp(all_elim(expand(h, tr.sim), {o2}), rf)
+    show := mp(all_elim(expand(mp(all_elim(h, {m2}), hq), tr.sim), {o2}), rf)
   qed
   have g: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
     fix o
@@ -185,7 +186,9 @@ proof
       assume e: ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
       obtain l1, e1 from e
       have rb1: tr.rb(s, pair(m, empty), ok(l1, empty)) by taut(e1)
-      have l1e := mp(all_elim(hb_ok, {l1}), rb1)
+      obtain m2, l1q from mp(all_elim(hb_ok, {l1}), rb1)
+      have l1e: l1 = pair(m2, empty) by taut(l1q)
+      have hq: q(m2) by taut(l1q)
       have e1b: ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4) by taut(e1)
       obtain r1, e2 from e1b
       have w0: W(l1, r1) by taut(e2)
@@ -193,12 +196,12 @@ proof
       have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
         assume nd: !(fst(x4) = 2)
         have re: r1 = x4 by taut(e2, nd)
-        show := mp(mp(all_elim(hk, {r1}, {o}), w1), rewrite(sym(re), hm))
+        show := mp(mp(mp(all_elim(hk, {m2}, {r1}, {o}), hq), w1), rewrite(sym(re), hm))
       qed
       have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
         assume d: fst(x4) = 2
         have d1: fst(r1) = 2 by simp(e2, d)
-        have c := mp(mp(all_elim(hk, {r1}, {diverge(snd(r1))}), w1), defs(simp(d1), tr.rmap))
+        have c := mp(mp(mp(all_elim(hk, {m2}, {r1}, {diverge(snd(r1))}), hq), w1), defs(simp(d1), tr.rmap))
         have nk := all_elim(tr.ok_not_div, {s}, {p}, {w}, {snd(r1)})
         show by taut(c, nk)
       qed
