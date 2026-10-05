@@ -566,6 +566,80 @@ proof
 qed
 
 // a register the coupling gives
+// a home the coupling gives
+theorem tr.homes_get: all s m hs c n x. tr.homes(s, m, hs) -> c in dom(hs) -> app(hs, c) = pair(n, x) ->
+  x86_64_linux.le(app(app(m, "vm"), "bytes"), bits_add(64, int_add(app(app(s, "gpr"), 4), c), 0), n) = x
+proof
+  fix s
+  fix m
+  fix hs
+  fix c
+  fix n
+  fix x
+  assume h: tr.homes(s, m, hs)
+  assume hd: c in dom(hs)
+  assume he: app(hs, c) = pair(n, x)
+  have k := mp(all_elim(expand(h, tr.homes), {c}), hd)
+  have k2 := rewrite(he, k)
+  show by simp(k2)
+qed
+
+// a home's n bytes (within 8 below the entry's rsp), accessible for
+// reading and writing
+theorem tr.home_acc: all s base code m w c n. tr.inv(s, base, code, m, w) -> c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  x86i.acc(m, bits_add(64, int_add(app(app(m, "gpr"), 4), c), 0), n, 1) && x86i.acc(m, bits_add(64, int_add(app(app(m, "gpr"), 4), c), 0), n, 0)
+proof
+  fix s
+  fix base
+  fix code
+  fix m
+  fix w
+  fix c
+  fix n
+  assume hi: tr.inv(s, base, code, m, w)
+  assume hc: c in bits(64)
+  assume hc1: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  have i := expand(hi, tr.inv)
+  have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have ca: x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have al: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have rspm: app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have vmm: fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have r4 := apply(x86i.rsp_typed, sM)
+  have sa := apply(abi.slot_access, {app(s, "vm")}, {app(app(s, "gpr"), 4)}, {c}, {n}, r4, ca, al, hc, hc1, hn)
+  // (the address as the slot lemma forms it, and as the model)
+  have ea: all x0. x0 in omega -> bits_add(64, bits_add(64, app(app(s, "gpr"), 4), c), x0) = bits_add(64, int_add(app(app(s, "gpr"), 4), c), x0) proof
+    fix x0
+    assume hx: x0 in omega
+    have p64: pow2(64) = 18446744073709551616 by simp()
+    have e2: int_mod(int_add(int_mod(int_add(app(app(s, "gpr"), 4), c), 18446744073709551616), x0), 18446744073709551616) =
+      int_mod(int_add(int_add(app(app(s, "gpr"), 4), c), x0), 18446744073709551616) by arith(r4, hc, hx)
+    show by defs(rewrite(sym(p64), e2), bits_add)
+  qed
+  have sa1: all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(s, "vm"), bits_add(64, bits_add(64, app(app(s, "gpr"), 4), c), bits_of_int(64, i)), 1) by taut(sa)
+  have sa0: all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(s, "vm"), bits_add(64, bits_add(64, app(app(s, "gpr"), 4), c), bits_of_int(64, i)), 0) by taut(sa)
+  have g1: all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), 4), c), 0), bits_of_int(64, i)), 1) proof
+    fix i
+    assume i1: i in omega
+    assume i2: int_lt(i, n)
+    have c1 := mp(mp(all_elim(sa1, {i}), i1), i2)
+    have e := mp(all_elim(ea, {bits_of_int(64, i)}), simp(i1))
+    have c2 := rewrite(e, c1)
+    show by simp(c2, rspm, sym(vmm), r4, hc, i1)
+  qed
+  have g0: all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), 4), c), 0), bits_of_int(64, i)), 0) proof
+    fix i
+    assume i1: i in omega
+    assume i2: int_lt(i, n)
+    have c1 := mp(mp(all_elim(sa0, {i}), i1), i2)
+    have e := mp(all_elim(ea, {bits_of_int(64, i)}), simp(i1))
+    have c2 := rewrite(e, c1)
+    show by simp(c2, rspm, sym(vmm), r4, hc, i1)
+  qed
+  show by taut(g1, g0)
+qed
+
 theorem tr.regs_get: all m rs g n u. tr.regs(m, rs) -> g in dom(rs) -> app(rs, g) = pair(n, u) -> app(app(m, "gpr"), g) = u && u in bits(int_mul(8, n))
 proof
   fix m
