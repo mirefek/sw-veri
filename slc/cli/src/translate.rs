@@ -271,6 +271,15 @@ impl<'e> Gen<'e> {
                 if !ok {
                     return Err(format!("a choice from {}", self.lambda(1, &d)));
                 }
+                // only a dead value (an uninitialised variable written before
+                // any read): no run depends on it, so any witness is the
+                // machine's; a read one would need the machine's value
+                let free = |t: &Term, i: u32| self.remap(t, 0, &|j| (j != i).then_some(j)).is_some();
+                let dead = free(&x[1], 0)
+                    || self.app(&x[1], "letin", 2).map_or(false, |l| matches!(l[0].node(), Node::BVar(0)) && free(&l[1], 0) && free(&l[1], 1));
+                if !dead {
+                    return Err(format!("a choice whose value is read: {}", self.lambda(3, &x[1])));
+                }
                 let q2 = self.mk("mkprog", vec![x[1].instantiate_params(&[Term::bvar(1), Term::bvar(0), lit(0)], &self.env.binders_fn())]);
                 let j = self.new_q(q2);
                 let t = format!(
