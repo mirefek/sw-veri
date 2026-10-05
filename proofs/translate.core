@@ -1,0 +1,210 @@
+// The translation of a function's machine code from its readable GIMPLE,
+// statement by statement (docs/bridge-pattern-design.md): the claim at a
+// point of the function, and the rules a function's proof chains from its
+// return back to its entry.
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core proofs/abi_stack.core \
+//     proofs/abi_loop.core proofs/abi_bridge.core proofs/translate.core
+
+// ----------------------------------------------------------------------
+//  The claim at a point: from the machine state m, the rest of the run to
+//  the caller of the entry s matches the rest of the spec, the program P
+//  from the world w -- P raises (undefined behaviour: anything), or the
+//  machine returns as P returns (abi.matches_at's return case). (No
+//  divergence: a function without loops returns or faults; the loop rule
+//  adds it.)
+
+def tr.ub(s, v, p, w) := ex e. e in univ(1) && runs(p, w, exc(abi.view(v, s), e))
+
+def tr.ok(s, p, w, o) :=
+  ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+    runs(p, w, ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+    abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+    app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+    abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")
+
+def tr.sim(s, v, p, w, m) := all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o)
+
+// at the entry: abi.matches_at
+theorem tr.entry: all spec args s v o. tr.sim(s, v, app(spec, args), abi.view(v, s), s) -> runs(abi.run_to_return(), s, o) ->
+  abi.matches_at(spec, args, s, v, o)
+proof
+  fix spec
+  fix args
+  fix s
+  fix v
+  fix o
+  assume h: tr.sim(s, v, app(spec, args), abi.view(v, s), s)
+  assume hr: runs(abi.run_to_return(), s, o)
+  have rf := apply(abi.run_from_entry, hr)
+  have c := mp(all_elim(expand(h, tr.sim), {o}), rf)
+  show by defs(taut(expand(expand(c, tr.ub), tr.ok)), abi.matches_at)
+qed
+
+// ----------------------------------------------------------------------
+//  The spec's side: P from w reduced to P2 from w2 (every outcome of P2
+//  from w2 one of P from w) -- a statement run, a definition unfolded
+
+def tr.red(p, w, p2, w2) := all o. runs(p2, w2, o) -> runs(p, w, o)
+
+theorem tr.sim_red: all s v p w p2 w2 m. tr.red(p, w, p2, w2) -> tr.sim(s, v, p2, w2, m) -> tr.sim(s, v, p, w, m)
+proof
+  fix s
+  fix v
+  fix p
+  fix w
+  fix p2
+  fix w2
+  fix m
+  assume hr: tr.red(p, w, p2, w2)
+  assume h: tr.sim(s, v, p2, w2, m)
+  have r := expand(hr, tr.red)
+  have u: tr.ub(s, v, p2, w2) -> tr.ub(s, v, p, w) proof
+    assume hu: tr.ub(s, v, p2, w2)
+    obtain e, he from expand(hu, tr.ub)
+    have r2: runs(p2, w2, exc(abi.view(v, s), e)) by taut(he)
+    have r1 := mp(all_elim(r, {exc(abi.view(v, s), e)}), r2)
+    have eu: e in univ(1) by taut(he)
+    show by defs(ex_intro({e}, taut(eu, r1)), tr.ub)
+  qed
+  have k: all o. tr.ok(s, p2, w2, o) -> tr.ok(s, p, w, o) proof
+    fix o
+    assume hk: tr.ok(s, p2, w2, o)
+    obtain m1, k1 from expand(hk, tr.ok)
+    obtain w3, k2 from k1
+    have r2: runs(p2, w2, ok(w3, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) by taut(k2)
+    have r1 := mp(all_elim(r, {ok(w3, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))}), r2)
+    show by defs(ex_intro({m1}, {w3}, taut(k2, r1)), tr.ok)
+  qed
+  have g: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+    fix o
+    assume ho: abi.run_from(s, m, o)
+    have c := mp(all_elim(expand(h, tr.sim), {o}), ho)
+    show by taut(c, u, all_elim(k, {o}))
+  qed
+  show by defs(g, tr.sim)
+qed
+
+// ----------------------------------------------------------------------
+//  The machine's side: a step from m that can only end at m2 (not at the
+//  return: the run goes on)
+
+// abi.run_from's parts: one pass of its loop from the state l (a step,
+// unless at the return), the loop, its outcome as the run's
+// (definitions, not abbreviations: a case analysis sees each as one atom)
+abbrev tr.at_ret(s, x) := app(x, "rip") = x86_64_linux.le(app(app(s, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) && app(app(x, "gpr"), 4) = bits_add(64, app(app(s, "gpr"), 4), 8)
+def tr.rb(s, l, o) := (!tr.at_ret(s, fst(l)) &&
+    bind_rel(x86_64_linux.step, fst(l), x7 x8. o = ok(pair(x7, empty), empty), x7 x8. o = exc(pair(x7, empty), pair("raise", x8)), x7. o = diverge(x7))) ||
+  (!!tr.at_ret(s, fst(l)) && o = exc(pair(fst(l), empty), pair("brk", empty)))
+def tr.rw(s, l, r) := while_rel(l, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
+def tr.rmap(r, o) := (((fst(r) = 0 || (fst(r) = 1 && fst(out_value(r)) = "brk")) && o = ok(fst(out_state(r)), empty)) ||
+  ((((fst(r) = 1 && fst(out_value(r)) = "ret") && o = ok(fst(out_state(r)), snd(out_value(r)))) ||
+    ((fst(r) = 1 && fst(out_value(r)) = "raise") && o = exc(fst(out_state(r)), snd(out_value(r))))) ||
+   (fst(r) = 2 && o = diverge(snd(r)))))
+
+theorem tr.run_from_parts: all s m o. abi.run_from(s, m, o) <-> (ex r. tr.rw(s, pair(m, empty), r) && tr.rmap(r, o))
+proof
+  fix s
+  fix m
+  fix o
+  show by defs(taut(), abi.run_from, tr.rw, tr.rb, tr.rmap)
+qed
+
+theorem tr.ok_not_div: all s p w t. !tr.ok(s, p, w, diverge(t))
+proof
+  fix s
+  fix p
+  fix w
+  fix t
+  have n: tr.ok(s, p, w, diverge(t)) -> false proof
+    assume k: tr.ok(s, p, w, diverge(t))
+    obtain m1, k1 from expand(k, tr.ok)
+    obtain w2, k2 from k1
+    have e: diverge(t) = ok(m1, empty) by taut(k2)
+    show by simp(e)
+  qed
+  show by taut(n)
+qed
+
+theorem tr.step: all s v p w m m2. (all o. runs(x86_64_linux.step(), m, o) -> o = ok(m2, empty)) ->
+  !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) -> tr.sim(s, v, p, w, m2) -> tr.sim(s, v, p, w, m)
+proof
+  fix s
+  fix v
+  fix p
+  fix w
+  fix m
+  fix m2
+  assume hs: all o. runs(x86_64_linux.step(), m, o) -> o = ok(m2, empty)
+  assume hn: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s))
+  assume h: tr.sim(s, v, p, w, m2)
+  // the pass from m: a step to m2
+  have hb_ok: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> l1 = pair(m2, empty) proof
+    fix l1
+    assume hb: tr.rb(s, pair(m, empty), ok(l1, empty))
+    have b1: ex x1. runs(x86_64_linux.step(), m, x1) && (ex x2 x3. x1 = ok(x2, x3) && l1 = pair(x2, empty)) by simp(expand(hb, tr.rb), hn, keep(x86_64_linux.step))
+    obtain x1, c1 from b1
+    have e := mp(all_elim(hs, {x1}), taut(c1))
+    show by simp(c1, e, keep(x86_64_linux.step))
+  qed
+  have hb_nok: all r. tr.rb(s, pair(m, empty), r) -> !is_ok(r) -> false proof
+    fix r
+    assume hb: tr.rb(s, pair(m, empty), r)
+    assume hn2: !is_ok(r)
+    have b1: ex x1. runs(x86_64_linux.step(), m, x1) && ((ex x2 x3. x1 = ok(x2, x3) && r = ok(pair(x2, empty), empty)) ||
+      (ex x2 x3. x1 = exc(x2, x3) && r = exc(pair(x2, empty), pair("raise", x3))) || (ex x2. x1 = diverge(x2) && r = diverge(x2))) by simp(expand(hb, tr.rb), hn, keep(x86_64_linux.step))
+    obtain x1, c1 from b1
+    have e := mp(all_elim(hs, {x1}), taut(c1))
+    show by simp(c1, e, hn2, keep(x86_64_linux.step))
+  qed
+  // the claim at m2, for the loop's runs from it
+  have hk: all r o2. tr.rw(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o2) proof
+    fix r
+    fix o2
+    assume hw: tr.rw(s, pair(m2, empty), r)
+    assume hm: tr.rmap(r, o2)
+    have ex1: ex x0. tr.rw(s, pair(m2, empty), x0) && tr.rmap(x0, o2) by ex_intro({r}, taut(hw, hm))
+    have rf: abi.run_from(s, m2, o2) by taut(all_elim(tr.run_from_parts, {s}, {m2}, {o2}), ex1)
+    show := mp(all_elim(expand(h, tr.sim), {o2}), rf)
+  qed
+  have g: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+    fix o
+    assume ho: abi.run_from(s, m, o)
+    have hx0: ex x0. tr.rw(s, pair(m, empty), x0) && tr.rmap(x0, o) by taut(all_elim(tr.run_from_parts, {s}, {m}, {o}), ho)
+    obtain x4, hx from hx0
+    have hw: tr.rw(s, pair(m, empty), x4) by taut(hx)
+    have hm: tr.rmap(x4, o) by taut(hx)
+    let W(l, r) := while_rel(l, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
+    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rb(s, l, o),
+      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rw))
+    // (the loop goes on from m2)
+    have on: (ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
+        tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+      assume e: ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
+      obtain l1, e1 from e
+      have rb1: tr.rb(s, pair(m, empty), ok(l1, empty)) by taut(e1)
+      have l1e := mp(all_elim(hb_ok, {l1}), rb1)
+      have e1b: ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4) by taut(e1)
+      obtain r1, e2 from e1b
+      have w0: W(l1, r1) by taut(e2)
+      have w1: tr.rw(s, pair(m2, empty), r1) by defs(rewrite(l1e, w0), tr.rw)
+      have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+        assume nd: !(fst(x4) = 2)
+        have re: r1 = x4 by taut(e2, nd)
+        show := mp(mp(all_elim(hk, {r1}, {o}), w1), rewrite(sym(re), hm))
+      qed
+      have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+        assume d: fst(x4) = 2
+        have d1: fst(r1) = 2 by simp(e2, d)
+        have c := mp(mp(all_elim(hk, {r1}, {diverge(snd(r1))}), w1), defs(simp(d1), tr.rmap))
+        have nk := all_elim(tr.ok_not_div, {s}, {p}, {w}, {snd(r1)})
+        show by taut(c, nk)
+      qed
+      show by taut(same, div)
+    qed
+    show by taut(u, on, all_elim(hb_nok, {x4}))
+  qed
+  show by defs(g, tr.sim)
+qed
