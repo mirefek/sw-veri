@@ -208,3 +208,84 @@ proof
   qed
   show by defs(g, tr.sim)
 qed
+
+// at the return (rip the caller's return address, rsp past it): the run
+// ends there, ok(m) -- the spec returning the machine's rax:rdx, the world
+// and the ABI's registers as at the return case of abi.matches_at
+theorem tr.ret: all s v p w m w2. tr.at_ret(s, m) -> m in x86_64_linux.Machine ->
+  runs(p, w, ok(w2, pair(app(app(m, "gpr"), 0), app(app(m, "gpr"), 2)))) -> w2 in abi.World -> w2 in univ(1) ->
+  abi.world_matches(app(s, "vm"), app(m, "vm"), app(w2, "vm"), abi.sp(s)) -> app(m, "os") = app(w2, "os") -> app(m, "fs_base") = app(w2, "fs_base") ->
+  app(m, "cpu") = app(s, "cpu") -> app(m, "gs_base") = app(s, "gs_base") -> abi.callee_saved(m, s) -> !app(app(m, "flags"), "df") ->
+  tr.sim(s, v, p, w, m)
+proof
+  fix s
+  fix v
+  fix p
+  fix w
+  fix m
+  fix w2
+  assume ha: tr.at_ret(s, m)
+  assume hM: m in x86_64_linux.Machine
+  assume hr: runs(p, w, ok(w2, pair(app(app(m, "gpr"), 0), app(app(m, "gpr"), 2))))
+  assume h1: w2 in abi.World
+  assume h2: w2 in univ(1)
+  assume h3: abi.world_matches(app(s, "vm"), app(m, "vm"), app(w2, "vm"), abi.sp(s))
+  assume h4: app(m, "os") = app(w2, "os")
+  assume h5: app(m, "fs_base") = app(w2, "fs_base")
+  assume h6: app(m, "cpu") = app(s, "cpu")
+  assume h7: app(m, "gs_base") = app(s, "gs_base")
+  assume h8: abi.callee_saved(m, s)
+  assume h9: !app(app(m, "flags"), "df")
+  // the run from m: ok(m)
+  have g: all o. abi.run_from(s, m, o) -> o = ok(m, empty) proof
+    fix o
+    assume ho: abi.run_from(s, m, o)
+    have hx0: ex x0. tr.rw(s, pair(m, empty), x0) && tr.rmap(x0, o) by taut(all_elim(tr.run_from_parts, {s}, {m}, {o}), ho)
+    obtain x4, hx from hx0
+    have hw: tr.rw(s, pair(m, empty), x4) by taut(hx)
+    have hm: tr.rmap(x4, o) by taut(hx)
+    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rb(s, l, o),
+      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rw))
+    have b_at: all r. tr.rb(s, pair(m, empty), r) -> r = exc(pair(m, empty), pair("brk", empty)) proof
+      fix r
+      assume hb: tr.rb(s, pair(m, empty), r)
+      show by simp(expand(hb, tr.rb), ha, keep(x86_64_linux.step))
+    qed
+    have x4e: x4 = exc(pair(m, empty), pair("brk", empty)) proof
+      have c3: !(ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
+          fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) proof
+        have n: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> false proof
+          fix l1
+          assume hb: tr.rb(s, pair(m, empty), ok(l1, empty))
+          have e := mp(all_elim(b_at, {ok(l1, empty)}), hb)
+          show by simp(e)
+        qed
+        have n2: (ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
+            fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) -> false proof
+          assume e: ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
+            fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
+          obtain l1, e1 from e
+          have rb1: tr.rb(s, pair(m, empty), ok(l1, empty)) by taut(e1)
+          show := mp(all_elim(n, {l1}), rb1)
+        qed
+        show by taut(n2)
+      qed
+      show by taut(u, c3, all_elim(b_at, {x4}))
+    qed
+    have hm2 := rewrite(x4e, hm)
+    show by simp(expand(hm2, tr.rmap))
+  qed
+  have k: all o. o = ok(m, empty) -> tr.ok(s, p, w, o) proof
+    fix o
+    assume e: o = ok(m, empty)
+    show by defs(ex_intro({m}, {w2}, simp(e, hM, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
+  qed
+  have all_o: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+    fix o
+    assume ho: abi.run_from(s, m, o)
+    have e := mp(all_elim(g, {o}), ho)
+    have kk := mp(all_elim(k, {o}), e)
+    show by taut(kk)
+  qed
+  show by defs(all_o, tr.sim)
+qed
