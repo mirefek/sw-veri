@@ -1459,3 +1459,120 @@ proof
   qed
   show by taut(used, notused)
 qed
+
+// ----------------------------------------------------------------------
+//  The return: `ret` with rax holding the spec's result (the spec returning
+//  it, rdx anything)
+
+theorem tr.ret_insn: all s v base code a len hs rs p w n bigv.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a -> runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o)) ->
+  0 in dom(rs) -> app(rs, 0) = pair(n, bigv) ->
+  (w in univ(1) -> bigv in bits(int_mul(8, n)) -> (all y. y in bits(64) -> runs(p, w, ok(w, pair(bigv, y))))) ->
+  tr.pt(s, v, base, code, a, hs, rs, p, w)
+proof
+  fix s
+  fix v
+  fix base
+  fix code
+  fix a
+  fix len
+  fix hs
+  fix rs
+  fix p
+  fix w
+  fix n
+  fix bigv
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a -> runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o)
+  assume h0d: 0 in dom(rs)
+  assume h0: app(rs, 0) = pair(n, bigv)
+  assume hsp: w in univ(1) -> bigv in bits(int_mul(8, n)) -> (all y. y in bits(64) -> runs(p, w, ok(w, pair(bigv, y))))
+  have g: all m. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.sim(s, v, p, w, m) proof
+    fix m
+    assume hi: tr.inv(s, base, code, m, w)
+    assume hr: app(m, "rip") = a
+    assume hhs: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    have i := expand(hi, tr.inv)
+    have mM: m in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have mu: m in univ(1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have cd: abi.code_at(app(m, "vm"), base, code) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have ca: x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have al: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have rspm: app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have vmm: fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have rest: x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) = abi.ret(s) && abi.callee_saved(m, s) && app(m, "cpu") = app(s, "cpu") && app(m, "gs_base") = app(s, "gs_base") &&
+      app(m, "os") = app(w, "os") && app(m, "fs_base") = app(w, "fs_base") && !app(app(m, "flags"), "df") && w in abi.World && w in univ(1) && app(w, "vm") = app(m, "vm")
+      by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have r4 := apply(x86i.rsp_typed, sM)
+    // (the return address's 8 bytes: readable)
+    have ra := apply(abi.ret_access, {app(s, "vm")}, {app(app(s, "gpr"), 4)}, r4, ca, al)
+    have acc: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, app(app(m, "gpr"), 4), bits_of_int(64, j)), 0) proof
+      fix j
+      assume j1: j in omega
+      assume j2: int_lt(j, 8)
+      have c1 := mp(mp(all_elim(ra, {j}), j1), j2)
+      show by simp(c1, rspm, sym(vmm))
+    qed
+    let M2 := fn_update(fn_update(m, "gpr", fn_update(app(m, "gpr"), 4, bits_add(64, app(app(m, "gpr"), 4), 8))), "rip", x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(m, "gpr"), 4), 8))
+    have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && m2 = M2) proof
+      fix o
+      assume ho: runs(x86_64_linux.step(), m, o)
+      have hx := mp(mp(mp(all_elim(hat, {m}, {o}), ho), cd), hr)
+      have e := apply(x86i.ret, {m}, {o}, {len}, mM, mu, acc, hx)
+      show by ex_intro({M2}, simp(e))
+    qed
+    have nr: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by simp(rspm, r4)
+    // (at M2: the return point, the spec's result)
+    have post: all m2. m2 = M2 -> tr.sim(s, v, p, w, m2) proof
+      fix m2
+      assume e2: m2 = M2
+      have pt := apply(x86i.parts, mM)
+      have r0 := apply(tr.regs_get, {m}, {rs}, {0}, {n}, {bigv}, hrs, h0d, h0)
+      have r2R: 2 in x86_64_linux.Reg by simp()
+      have r2t := mp(mp(all_elim(x86i.reg_typed, {m}, {2}), mM), r2R)
+      have atr: tr.at_ret(s, M2) by simp(rest, rspm, r4)
+      have lt: x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(m, "gpr"), 4), 8) in bits(64) by simp()
+      have m2M: M2 in x86_64_linux.Machine by defs(simp(expand(mM, x86_64_linux.Machine), mu, pt, lt, r4, rspm), x86_64_linux.Machine)
+      have wu: w in univ(1) by taut(rest)
+      have bt: bigv in bits(int_mul(8, n)) by taut(r0)
+      have sp := mp(mp(hsp, wu), bt)
+      have rr: runs(p, w, ok(w, pair(app(app(M2, "gpr"), 0), app(app(M2, "gpr"), 2)))) by simp(sp, r0, r2t)
+      have wm := all_elim(abi.wm_refl, {app(s, "vm")}, {app(m, "vm")}, {abi.sp(s)})
+      have wm2: abi.world_matches(app(s, "vm"), app(M2, "vm"), app(w, "vm"), abi.sp(s)) by simp(wm, rest, keep(abi.world_matches))
+      have e3 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := bits_add(64, app(app(m, "gpr"), 4), 8), x := 3], simp())
+      have e5 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := bits_add(64, app(app(m, "gpr"), 4), 8), x := 5], simp())
+      have e12 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := bits_add(64, app(app(m, "gpr"), 4), 8), x := 12], simp())
+      have e13 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := bits_add(64, app(app(m, "gpr"), 4), 8), x := 13], simp())
+      have e14 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := bits_add(64, app(app(m, "gpr"), 4), 8), x := 14], simp())
+      have e15 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := bits_add(64, app(app(m, "gpr"), 4), 8), x := 15], simp())
+      have cs: abi.callee_saved(M2, s) by simp(rest, e3, e5, e12, e13, e14, e15)
+      have oth: app(M2, "os") = app(w, "os") && app(M2, "fs_base") = app(w, "fs_base") && app(M2, "cpu") = app(s, "cpu") && app(M2, "gs_base") = app(s, "gs_base") &&
+        !app(app(M2, "flags"), "df") && w in abi.World by simp(rest, keep(abi.World))
+      have c := apply(tr.ret, {s}, {v}, {p}, {w}, {M2}, {w}, atr, m2M, rr, taut(rest), wu, wm2, taut(oth), taut(oth), taut(oth), taut(oth), cs, taut(oth))
+      show := rewrite(sym(e2), c)
+    qed
+    show := mp(mp(mp(tr.step[s := s, v := v, p := p, w := w, m := m, q := x. x = M2], st), nr), post)
+  qed
+  show by defs(g, tr.pt)
+qed
+
+// the wrapper's return of a 32-bit result: (result, any 64-bit rdx)
+theorem tr.result32: all w bigv. w in univ(1) -> bigv in bits(int_mul(8, 4)) -> (all y. y in bits(64) ->
+  runs(mkprog(x1 x2. letin(bigv, x5. bind_rel(gimple.result(32, x5), x1, x6 x7. any_rel(x8. x8 in bits(64), x8. x2 = ok(x6, pair(x7, x8))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6)))), w, ok(w, pair(bigv, y))))
+proof
+  fix w
+  fix bigv
+  assume hw: w in univ(1)
+  assume hb: bigv in bits(int_mul(8, 4))
+  fix y
+  assume hy: y in bits(64)
+  have b32: bigv in bits(32) by simp(hb)
+  have ro := apply(g.result_ok, {w}, {bigv}, hw, b32)
+  have k: bind_rel(gimple.result(32, bigv), w, x6 x7. any_rel(x8. x8 in bits(64), x8. ok(w, pair(bigv, y)) = ok(x6, pair(x7, x8))), x6 x7. ok(w, pair(bigv, y)) = exc(x6, x7), x6. ok(w, pair(bigv, y)) = diverge(x6))
+    by defs(ex_intro({ok(w, bigv)}, simp(ro, hy, keep(runs, gimple.result))), bind_rel)
+  have pu: pair(w, ok(w, pair(bigv, y))) in univ(1) by simp(hw, b32, hy)
+  have r := mp(mp(all_elim(tr.runs_intro[r := x1 x2. letin(bigv, x5. bind_rel(gimple.result(32, x5), x1, x6 x7. any_rel(x8. x8 in bits(64), x8. x2 = ok(x6, pair(x7, x8))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6)))],
+    {w}, {ok(w, pair(bigv, y))}), pu), defs(k, letin))
+  show := r
+qed
