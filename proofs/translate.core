@@ -486,6 +486,82 @@ proof
   show by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
 qed
 
+// (an instruction leaving the flags: as setting them to themselves)
+theorem tr.flags_same: all m a2 x. m in x86_64_linux.Machine ->
+  fn_update(fn_update(fn_update(m, "rip", a2), "flags", app(m, "flags")), "gpr", x) = fn_update(fn_update(m, "rip", a2), "gpr", x)
+proof
+  fix m
+  fix a2
+  fix x
+  assume hM: m in x86_64_linux.Machine
+  have mf: is_fun(m) && "flags" in dom(m) by simp(expand(hM, x86_64_linux.Machine))
+  have mfun: is_fun(m) by taut(mf)
+  have f1 := mp(fn_update_fun[f := m, k := "rip", v := a2], mfun)
+  have d1 := mp(dom_update[f := m, k := "rip", v := a2], mfun)
+  have r1: is_fun(fn_update(m, "rip", a2)) && "flags" in dom(fn_update(m, "rip", a2)) by simp(mf, f1, d1)
+  have e := mp(mp(fn_update_same[f := fn_update(m, "rip", a2), k := "flags"], simp(r1)), simp(r1))
+  have e2: app(fn_update(m, "rip", a2), "flags") = app(m, "flags") by simp()
+  have e3 := rewrite(e2, e)
+  show := subst({y. fn_update(fn_update(fn_update(m, "rip", a2), "flags", app(m, "flags")), "gpr", x) = fn_update(y, "gpr", x)}, e3,
+    refl({fn_update(fn_update(fn_update(m, "rip", a2), "flags", app(m, "flags")), "gpr", x)}))
+qed
+
+theorem tr.flags_ok_same: all m. m in x86_64_linux.Machine -> m in univ(1) -> x86i.flags_ok(m, app(m, "flags"))
+proof
+  fix m
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  have pt := apply(x86i.parts, hM)
+  show by defs(simp(pt, hu), x86i.flags_ok)
+qed
+
+// a register write leaving the flags
+theorem tr.reg_step0: all s v base code a a2 g n bigv hs rs p w.
+  (all m o. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+     o = ok(fn_update(fn_update(m, "rip", a2), "gpr", fn_update(app(m, "gpr"), g, bigv)), empty)) ->
+  a2 in bits(64) -> tr.scratch_reg(g) -> bigv in bits(int_mul(8, n)) -> bigv in bits(64) ->
+  tr.pt(s, v, base, code, a2, hs, fn_update(rs, g, pair(n, bigv)), p, w) -> tr.pt(s, v, base, code, a, hs, rs, p, w)
+proof
+  fix s
+  fix v
+  fix base
+  fix code
+  fix a
+  fix a2
+  fix g
+  fix n
+  fix bigv
+  fix hs
+  fix rs
+  fix p
+  fix w
+  assume he0: all m o. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+     o = ok(fn_update(fn_update(m, "rip", a2), "gpr", fn_update(app(m, "gpr"), g, bigv)), empty)
+  assume ha2: a2 in bits(64)
+  assume hg: tr.scratch_reg(g)
+  assume hv: bigv in bits(int_mul(8, n))
+  assume v64: bigv in bits(64)
+  assume hpt: tr.pt(s, v, base, code, a2, hs, fn_update(rs, g, pair(n, bigv)), p, w)
+  have he: all m o. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), g, bigv)), empty)) proof
+    fix m
+    fix o
+    assume hi: tr.inv(s, base, code, m, w)
+    assume hr: app(m, "rip") = a
+    assume hh: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    assume ho: runs(x86_64_linux.step(), m, o)
+    have ip := apply(tr.inv_parts, hi)
+    have eo := mp(mp(mp(mp(mp(all_elim(he0, {m}, {o}), hi), hr), hh), hrs), ho)
+    have mM: m in x86_64_linux.Machine by taut(ip)
+    have mu: m in univ(1) by taut(ip)
+    have fs := mp(all_elim(tr.flags_same, {m}, {a2}, {fn_update(app(m, "gpr"), g, bigv)}), mM)
+    have fo := mp(mp(all_elim(tr.flags_ok_same, {m}), mM), mu)
+    show by ex_intro({app(m, "flags")}, taut(fo, rewrite(sym(fs), eo)))
+  qed
+  show := apply(tr.reg_step, {s}, {v}, {base}, {code}, {a}, {a2}, {g}, {n}, {bigv}, {hs}, {rs}, {p}, {w}, he, ha2, hg, hv, v64, hpt)
+qed
+
 // a register the coupling gives
 theorem tr.regs_get: all m rs g n u. tr.regs(m, rs) -> g in dom(rs) -> app(rs, g) = pair(n, u) -> app(app(m, "gpr"), g) = u && u in bits(int_mul(8, n))
 proof
