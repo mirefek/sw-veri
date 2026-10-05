@@ -903,7 +903,9 @@ impl State {
                     // ..`, one conjunct per branch
                     // bridge(h, {app(spec, args)}, f1, ..): with h the
                     // machine's run from an entry, `abi.matches(spec, args,
-                    // S, O)` -- the readable GIMPLE to machine code bridge
+                    // S, O)` -- the readable GIMPLE to machine code bridge;
+                    // the fi the run's facts and the function's lemmas, the
+                    // generic ones taken from the library (`BRIDGE_LEMMAS`)
                     "bridge" => {
                         let mut terms = Vec::new();
                         let mut ps = Vec::new();

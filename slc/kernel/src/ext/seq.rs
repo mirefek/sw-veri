@@ -51,6 +51,115 @@ pub(crate) fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(S
     }
 }
 
+/// The generic lemmas the bridge takes from the library itself (the
+/// proofs pass only their run's facts and their function's lemmas): the
+/// GIMPLE operations (proofs/gimple.core), the frame's accesses and the
+/// memories' agreement (proofs/abi_bridge.core), the arguments
+/// (proofs/abi_glue.core), the stack (proofs/abi_stack.core), the stores
+/// and flags (proofs/x86.core). Each must be loaded.
+const BRIDGE_LEMMAS: &[&str] = &[
+    // the GIMPLE operations
+    "g.padd_ok", "g.padd_ub", "g.ld8_ok", "g.ld8_ub", "g.ld16_ok", "g.ld16_ub", "g.mem_ok", "g.mem_at_ok", "g.mem_at_ub",
+    "g.ldbf_ok", "g.ldbf_ub", "g.st32_ok", "g.st32_ub", "g.elem1_ok", "g.elem_ok", "g.result_ok", "g.result64_ok",
+    // the machine's stores and flags
+    "x86.cond_eval", "x86.store_typed", "g.store_univ",
+    // the arguments, the frame, the accesses
+    "abi.arg_passed", "abi.slot_at", "abi.ret_at", "abi.sp_low", "g.read_at", "g.write_at", "g.read_off", "g.write_off",
+    // the stack view and the memories' match
+    "abi.sv_refl", "abi.sv_base", "abi.slot_sv", "abi.wm_base", "abi.slot_wm", "abi.wm_refl", "abi.slot_matches",
+    "abi.agree_refl", "abi.agree_slot", "abi.agree_st1", "abi.agree_st1b", "abi.agree_wm2",
+];
+
+/// The operations' occurrences t reaches, through the definitions of the
+/// symbols it mentions -- not the operations' (`ops`): spec_run takes them
+/// by their lemmas.
+fn occurrences(env: &Env, t: &Term, ops: &[SymId]) -> Vec<Term> {
+    let mut seen: Vec<SymId> = Vec::new();
+    let mut occs: Vec<Term> = Vec::new();
+    let mut st = vec![t.clone()];
+    while let Some(u) = st.pop() {
+        match u.node() {
+            Node::App(f, xs) => {
+                if ops.contains(f) {
+                    if !occs.contains(&u) {
+                        occs.push(u.clone());
+                    }
+                } else if !seen.contains(f) {
+                    seen.push(*f);
+                    if let Some((_, d)) = env.defs.iter().find(|(s, _)| s == f) {
+                        st.push(d.prop().clone());
+                    }
+                }
+                st.extend(xs.iter().cloned());
+            }
+            Node::Var(_, xs) => st.extend(xs.iter().cloned()),
+            _ => {}
+        }
+    }
+    occs
+}
+
+/// An operation's lemma `all xs. H.. -> runs(Q, s, O)`: Q (its binders
+/// loose) and O's head.
+fn operation_of(env: &Env, t: &Term) -> Option<(Term, Option<SymId>)> {
+    let (all, runs) = (env.sym_by_name.get("all").copied(), env.sym_by_name.get("runs").copied());
+    let mut t = t.clone();
+    loop {
+        match t.node() {
+            Node::App(q, b) if Some(*q) == all && b.len() == 1 => t = b[0].clone(),
+            Node::App(i, ab) if *i == env.builtins.imp && ab.len() == 2 => t = ab[1].clone(),
+            Node::App(r, ra) if Some(*r) == runs && ra.len() == 3 => {
+                let o = match ra[2].node() {
+                    Node::App(k, _) => Some(*k),
+                    _ => None,
+                };
+                return matches!(ra[0].node(), Node::App(..)).then(|| (ra[0].clone(), o));
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// An argument's lemma `all xs. .. -> ord_le(k, seq_len(args)) -> ..`: its
+/// arity hypothesis (its binders loose).
+fn arity_of(env: &Env, t: &Term) -> Option<Term> {
+    let (all, ord_le, seq_len) = (env.sym_by_name.get("all").copied(), env.sym_by_name.get("ord_le").copied()?, env.sym_by_name.get("seq_len").copied()?);
+    let mut t = t.clone();
+    loop {
+        match t.node() {
+            Node::App(q, b) if Some(*q) == all && b.len() == 1 => t = b[0].clone(),
+            Node::App(i, ab) if *i == env.builtins.imp && ab.len() == 2 => {
+                if matches!(ab[0].node(), Node::App(o, oa) if *o == ord_le && oa.len() == 2 && matches!(oa[1].node(), Node::App(l, _) if *l == seq_len)) {
+                    return Some(ab[0].clone());
+                }
+                t = ab[1].clone();
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The pattern q (its bound variables any term) may stand for t: their
+/// literals agree, their heads -- t's variables any term too.
+fn fits(q: &Term, t: &Term) -> bool {
+    match (q.node(), t.node()) {
+        (Node::BVar(_), _) | (_, Node::BVar(_)) | (_, Node::Var(..)) => true,
+        (Node::App(f, a), Node::App(g, b)) => f == g && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| fits(x, y)),
+        (Node::App(..), _) | (_, Node::App(..)) => true,
+        _ => q == t,
+    }
+}
+
+/// The pattern g is more general than q: q an instance of it.
+fn general(g: &Term, q: &Term) -> bool {
+    match (g.node(), q.node()) {
+        (Node::BVar(_), _) => true,
+        (_, Node::BVar(_)) => false,
+        (Node::App(f, a), Node::App(h, b)) => f == h && a.len() == b.len() && a.iter().zip(b).all(|(x, y)| general(x, y)),
+        _ => g == q,
+    }
+}
+
 impl Seq {
     pub fn hyps(&self) -> &[Term] {
         &self.hyps
@@ -420,7 +529,7 @@ impl Seq {
                 }
                 continue;
             }
-            return err(format!("{} relies on `{}` (core/loop.core): load it", rule, name));
+            return err(format!("{} relies on `{}`: load the file proving it", rule, name));
         }
         Ok(())
     }
@@ -431,13 +540,85 @@ impl Seq {
     pub fn bridge(env: &Env, lg: &Logic, p: &Term, inv: Option<&Term>, premises: &[&Seq]) -> KResult<Seq> {
         env.check_wf(p, 0)?;
         let (hyps, mut open) = Self::gather(premises);
-        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        let mut ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        // (the generic lemmas from the library, after the premises: the
+        // conclusion rests on them as on premises -- a conditional theorem
+        // with its open lemmas. An operation's lemma, `.. -> runs(Q, s, O)`,
+        // only if the spec reaches Q's operation through its definitions:
+        // the others only make simp search)
+        let mut generic: Vec<(&str, Term, Vec<String>)> = Vec::new();
+        for n in BRIDGE_LEMMAS {
+            let found = match env.theorems.iter().find(|(m, _)| m == n) {
+                Some((_, th)) => Some((th.prop().clone(), Vec::new())),
+                None => env.open.conditional.iter().find(|(m, s)| m == n && s.hyps.is_empty()).map(|(_, s)| (s.concl.clone(), s.open.clone())),
+            };
+            let Some((t, lemma_open)) = found else {
+                return err(format!("bridge relies on `{}`: load the file proving it", n));
+            };
+            generic.push((n, t, lemma_open));
+        }
+        let opl: Vec<Option<(Term, Option<SymId>)>> = generic.iter().map(|(_, t, _)| operation_of(env, t)).collect();
+        let arity: Vec<Option<Term>> = generic.iter().map(|(_, t, _)| arity_of(env, t)).collect();
+        let heads: Vec<SymId> = opl
+            .iter()
+            .flatten()
+            .map(|(q, _)| q)
+            .chain(arity.iter().flatten())
+            .filter_map(|q| match q.node() {
+                Node::App(f, _) => Some(*f),
+                _ => None,
+            })
+            .collect();
+        let occs = occurrences(env, p, &heads);
+        // (for an occurrence, the family of lemmas -- those of one pattern,
+        // by outcome -- fitting it: the most specific one covering the
+        // outcomes of the more general ones. `elem(p, i, 1)` by g.elem1_ok,
+        // not g.elem_ok; `mem(a, 0, n, w)` by g.mem_at_ok and g.mem_at_ub,
+        // g.mem_ok having no raise)
+        let outcomes = |q: &Term| -> Vec<Option<SymId>> { opl.iter().flatten().filter(|(q2, _)| general(q, q2) && general(q2, q)).map(|(_, o)| *o).collect() };
+        let covers = |q2: &Term, q: &Term| outcomes(q).iter().all(|o| outcomes(q2).contains(o));
+        // (an argument's lemma: the spec's arity guard fitting its)
+        let wanted = |k: usize| -> bool {
+            if let Some(g) = &arity[k] {
+                // (`ord_le(k, seq_len(..))`, the same k)
+                let Node::App(o, ga) = g.node() else { return true };
+                return occs.iter().any(|t| matches!(t.node(), Node::App(o2, ta) if o2 == o && ta.len() == 2 && matches!(ta[0].node(), Node::Nat(_)) && ta[0] == ga[0] && general(&ga[1], &ta[1])));
+            }
+            let Some((q, _)) = &opl[k] else { return true };
+            occs.iter().any(|t| {
+                fits(q, t)
+                    && !opl.iter().flatten().any(|(q2, _)| {
+                        fits(q2, t) && (general(q, q2) && !general(q2, q) && covers(q2, q) || general(q2, q) && !general(q, q2) && !covers(q, q2))
+                    })
+            })
+        };
+        let mut used_generic: Vec<String> = Vec::new();
+        for (k, (n, t, lemma_open)) in generic.into_iter().enumerate() {
+            if !wanted(k) {
+                continue;
+            }
+            if std::env::var("BRIDGE_DEBUG").is_ok() {
+                eprintln!("bridge: generic lemma {}", n);
+            }
+            if !ps.contains(&t) {
+                ps.push(t);
+            }
+            if lemma_open.is_empty() {
+                used_generic.push(n.to_string());
+            }
+            for o in lemma_open {
+                if !open.contains(&o) {
+                    open.push(o);
+                }
+            }
+        }
         lg.simp_used.borrow_mut().clear();
         if let Some(i) = inv {
             env.check_wf(i, 1)?;
         }
         let r = lg.bridge(env, p, inv, &ps);
-        let used = std::mem::take(&mut *lg.simp_used.borrow_mut());
+        let mut used = std::mem::take(&mut *lg.simp_used.borrow_mut());
+        used.extend(used_generic);
         let concl = r?;
         env.check_wf(&concl, 0)?;
         // (what symex, spec_run and simp inside relied on: symex's

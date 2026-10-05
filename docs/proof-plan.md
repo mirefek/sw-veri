@@ -618,7 +618,15 @@ function is validated (translation validation), the method being general.
   behaviour), or a return matching the spec's ok outcome (world, rax:rdx),
   or a divergence with the spec's same trace -- and one theorem, proven
   once from `abi.ub_case`, `abi.ret_case` and a divergence case, makes it
-  `abi.implements2_at`.
+  `abi.implements2_at`;
+- the lemmas: a proof passes the run's facts and its function's own
+  lemmas (the instructions' step lemmas, a spec's table); the generic ones
+  the bridge takes from the library itself (`BRIDGE_LEMMAS`, the result
+  resting on them as on premises): the frame's accesses, the memories'
+  agreement, the stores, the flags -- and of the GIMPLE operations' lemmas
+  those for the operations the spec uses (the most specific family
+  covering their outcomes: `elem(p, i, 1)` by g.elem1_ok), the arguments'
+  only for a spec with arguments.
 
 Milestones: (1) the glue: `abi.matches` and its theorem (with the
 divergence case); (2) the bridge for loop-free code (an extension
