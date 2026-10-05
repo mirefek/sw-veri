@@ -124,6 +124,10 @@ impl Logic {
     /// core/logic.core does this for `!!a -> a`, following ji-trust's
     /// `not_not_impl`).
     pub fn tautology(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        crate::ext::inventory::measure("taut", env, goal, || self.tautology_(env, premises, goal))
+    }
+
+    fn tautology_(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
         if premises.contains(goal) {
             return Ok(());
         }

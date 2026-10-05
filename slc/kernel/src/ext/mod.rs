@@ -22,6 +22,7 @@
 
 pub mod arith;
 pub mod facts;
+pub(crate) mod inventory;
 pub mod list;
 pub mod prop;
 pub mod simp;

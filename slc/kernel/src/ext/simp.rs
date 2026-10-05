@@ -4959,7 +4959,7 @@ impl Logic {
         // (SIMP_SLOW=secs: the calls taking longer, reported)
         let slow = std::env::var("SIMP_SLOW").ok().and_then(|v| v.parse::<f64>().ok());
         let t0 = std::time::Instant::now();
-        let r = self.simp_prove_loops_(env, premises, goal, hints);
+        let r = crate::ext::inventory::measure("simp", env, goal, || self.simp_prove_loops_(env, premises, goal, hints));
         if let Some(th) = slow {
             let dt = t0.elapsed().as_secs_f64();
             if dt > th {

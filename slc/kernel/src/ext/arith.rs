@@ -651,6 +651,10 @@ impl Logic {
     /// `premises -> goal` holds by propositional logic and linear arithmetic
     /// over the integers (see the module docs).
     pub fn arith(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        crate::ext::inventory::measure("arith", env, goal, || self.arith_(env, premises, goal))
+    }
+
+    fn arith_(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
         let s = Syms::new(env);
         let mut r = Reader {
             s,
