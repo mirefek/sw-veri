@@ -1,0 +1,55 @@
+// Layer 2 of the pattern design (docs/bridge-pattern-design.md): an
+// instruction's execution proven once, its operand fields symbolic. Run
+// after the leaf chain:
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     proofs/wip/layer2_check.core
+
+// neg r32 (F7 /3, operand size 4): any general register g
+theorem l2.neg32: all m o g z len. g in omega -> int_lt(g, 16) -> app(app(m, "gpr"), g) in bits(64) ->
+  runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o) ->
+  ex f. o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), "gpr",
+    fn_update(app(m, "gpr"), g, bits_neg(32, bits_slice(app(app(m, "gpr"), g), 31, 0)))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix z
+  fix len
+  assume hg: g in omega
+  assume hg2: int_lt(g, 16)
+  assume ht: app(app(m, "gpr"), g) in bits(64)
+  assume h: runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o)
+  show by simp(h, hg, hg2, ht)
+qed
+
+// mov r32, [rsp + d] (8B /r, operand size 4): any destination g, any
+// displacement d; the access to the 4 bytes given
+theorem l2.load32_rsp: all m o g d z w len. g in omega -> int_lt(g, 16) -> d in bits(64) -> app(app(m, "gpr"), 4) in bits(64) ->
+  (all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), 4), d), 0), bits_of_int(64, i)), 0)) ->
+  runs(x86_64_linux.exec_body(len, tag(76, pair(4, pair(g, pair(tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, 4)), "index", none), "scale", 1), "disp", d)), pair(z, w)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "gpr",
+    fn_update(app(m, "gpr"), g, x86_64_linux.le(app(app(m, "vm"), "bytes"), bits_add(64, int_add(app(app(m, "gpr"), 4), d), 0), 4))), empty)
+proof
+  fix m
+  fix o
+  fix g
+  fix d
+  fix z
+  fix w
+  fix len
+  assume hg: g in omega
+  assume hg2: int_lt(g, 16)
+  assume hd: d in bits(64)
+  assume t4: app(app(m, "gpr"), 4) in bits(64)
+  assume a0: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), 4), d), 0), bits_of_int(64, i)), 0)
+  assume h: runs(x86_64_linux.exec_body(len, tag(76, pair(4, pair(g, pair(tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 0), "base", tag(2, 4)), "index", none), "scale", 1), "disp", d)), pair(z, w)))))), m, o)
+  have k0: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.canonical(bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), 4), d), 0), bits_of_int(64, i))) proof
+    fix i
+    assume i1: i in omega
+    assume i2: int_lt(i, 4)
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, bits_add(64, int_add(app(app(m, "gpr"), 4), d), 0), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  show by simp(h, hg, hg2, hd, t4, a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed

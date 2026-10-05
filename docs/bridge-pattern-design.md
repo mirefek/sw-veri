@@ -291,10 +291,20 @@ struct stores.
 2. **The pattern lemmas' form:** one lemma per pattern with all its variants
    as holes (fewer lemmas, more general proofs), or one per variant (simpler
    proofs, more lemmas).
-3. **Instruction semantics (layer 2):** the model's executor must allow
-   proofs with symbolic operand fields. That holds if `x86.decode` yields an
-   AST that the executor dispatches on. I still have to confirm it in the
-   model, and it's the first technical risk.
+3. **Instruction semantics (layer 2): confirmed.** `x86.decode` yields
+   `(len, tag(row, fields))`, and `exec_body` dispatches on the row. The
+   generated `at_ADDR` lemmas are already the decode facts of layer 1.
+   proofs/wip/layer2_check.core proves, by simp from the model, two lemmas:
+   - `neg r32`, for any register g;
+   - `mov r32, [rsp + d]`, for any destination g and displacement d, given
+     the 4 bytes' access.
+
+   Each takes a few hundredths of a second. Two notes:
+   - a lemma is stated in the model's own address form (`bits_add(64,
+     int_add(rsp, d), 0)`), and its relation to `bits_add(64, rsp, d)` is a
+     word lemma proven once;
+   - rsp-based memory operands run the model's stack check, so they are
+     their own forms, separate from other bases.
 
 ## 7. Plan
 
