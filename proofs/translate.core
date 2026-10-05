@@ -1136,3 +1136,141 @@ proof
   have a2b: a2 in bits(64) by simp(ha2)
   show := apply(tr.reg_step, {s}, {v}, {base}, {code}, {a}, {a2}, {g}, {4}, {bits_and(32, x, u)}, {hs}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
 qed
+
+// ----------------------------------------------------------------------
+//  The spec's side. A point's program is the function's wrapper around the
+//  procedure's rest q: `mkprog(x1 x2. bind_rel(q, x1, kw, exc, div))`, kw
+//  the wrapper's continuation (the return of the procedure's result); the
+//  statements reduce q.
+
+// (a program's relation weakened: its runs; bind_rel's program weakened)
+theorem tr.mkprog_mono(s, x y. r1, x y. r2): (all o. r2(s, o) -> r1(s, o)) -> (all o. runs(mkprog(x y. r2(x, y)), s, o) -> runs(mkprog(x y. r1(x, y)), s, o))
+proof
+  assume h: all o. r2(s, o) -> r1(s, o)
+  fix o
+  assume hr: runs(mkprog(x y. r2(x, y)), s, o)
+  have hu: pair(s, o) in univ(1) && r2(s, o) by simp(expand(expand(hr, runs), mkprog))
+  have r: r1(s, o) := mp(all_elim(h, {o}), taut(hu))
+  show by defs(simp(hu, r), runs, mkprog)
+qed
+
+theorem tr.bind_mono(p, p2, s, s1 v. k, s1 e. x, t. d): (all o. runs(p2, s, o) -> runs(p, s, o)) ->
+  bind_rel(p2, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) -> bind_rel(p, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t))
+proof
+  assume hp: all o. runs(p2, s, o) -> runs(p, s, o)
+  assume hb: bind_rel(p2, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t))
+  obtain o, ho from expand(hb, bind_rel)
+  have r := mp(all_elim(hp, {o}), taut(ho))
+  show by defs(ex_intro({o}, taut(r, ho)), bind_rel)
+qed
+
+// q reduced to q2 (every outcome of q2 one of q): the point's claim for q2
+// gives it for q
+theorem tr.wred(s, v, base, code, a, hs, rs, w, q, q2, x3 x4 x2. kw):
+  (all o. runs(q2, w, o) -> runs(q, w, o)) ->
+  tr.pt(s, v, base, code, a, hs, rs, mkprog(x1 x2. bind_rel(q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) ->
+  tr.pt(s, v, base, code, a, hs, rs, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hq: all o. runs(q2, w, o) -> runs(q, w, o)
+  assume hpt: tr.pt(s, v, base, code, a, hs, rs, mkprog(x1 x2. bind_rel(q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+  have r0: all o. runs(mkprog(x1 x2. bind_rel(q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) ->
+      runs(mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) proof
+    fix o
+    have bm: all o0. bind_rel(q2, w, x3 x4. kw(x3, x4, o0), x3 x4. o0 = exc(x3, x4), x3. o0 = diverge(x3)) ->
+        bind_rel(q, w, x3 x4. kw(x3, x4, o0), x3 x4. o0 = exc(x3, x4), x3. o0 = diverge(x3)) proof
+      fix o0
+      assume hb: bind_rel(q2, w, x3 x4. kw(x3, x4, o0), x3 x4. o0 = exc(x3, x4), x3. o0 = diverge(x3))
+      show := apply(tr.bind_mono[p := q, p2 := q2, s := w, k := s1 v. kw(s1, v, o0), x := s1 e. o0 = exc(s1, e), d := t. o0 = diverge(t)], hq, hb)
+    qed
+    show := all_elim(mp(tr.mkprog_mono[s := w, r1 := x y. bind_rel(q, x, x3 x4. kw(x3, x4, y), x3 x4. y = exc(x3, x4), x3. y = diverge(x3)),
+      r2 := x y. bind_rel(q2, x, x3 x4. kw(x3, x4, y), x3 x4. y = exc(x3, x4), x3. y = diverge(x3))], bm), {o})
+  qed
+  have r: tr.red(mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w,
+      mkprog(x1 x2. bind_rel(q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) by defs(r0, tr.red)
+  have g: all m. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) ->
+      tr.sim(s, v, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, m) proof
+    fix m
+    assume hi: tr.inv(s, base, code, m, w)
+    assume hr: app(m, "rip") = a
+    assume hh: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    have c := mp(mp(mp(mp(all_elim(expand(hpt, tr.pt), {m}), hi), hr), hh), hrs)
+    show := apply(tr.sim_red, r, c)
+  qed
+  show by defs(g, tr.pt)
+qed
+
+// the procedure's statements: a `let`, a variable's unspecified start, an
+// operation that ends ok leaving the world
+theorem tr.q_let(e, x0 x1 x. b): all w o. runs(mkprog(x0 x1. b(x0, x1, e)), w, o) -> runs(mkprog(x0 x1. letin(e, x. b(x0, x1, x))), w, o)
+proof
+  fix w
+  have k: all o. b(w, o, e) -> letin(e, x. b(w, o, x)) proof
+    fix o
+    assume h: b(w, o, e)
+    show by defs(h, letin)
+  qed
+  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. letin(e, x. b(x0, x1, x)), r2 := x0 x1. b(x0, x1, e)], k)
+qed
+
+theorem tr.q_any(c, x. d, x0 x1 x. b): d(c) -> (all w o. runs(mkprog(x0 x1. b(x0, x1, c)), w, o) -> runs(mkprog(x0 x1. any_rel(x. d(x), x. b(x0, x1, x))), w, o))
+proof
+  assume hc: d(c)
+  fix w
+  have k: all o. b(w, o, c) -> any_rel(x. d(x), x. b(w, o, x)) proof
+    fix o
+    assume h: b(w, o, c)
+    have e: ex x. d(x) && b(w, o, x) by ex_intro({c}, taut(hc, h))
+    show by defs(taut(e), any_rel)
+  qed
+  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. any_rel(x. d(x), x. b(x0, x1, x)), r2 := x0 x1. b(x0, x1, c)], k)
+qed
+
+theorem tr.q_op(qop, r, x2 x3 x1. b): all w. runs(qop, w, ok(w, r)) ->
+  (all o. runs(mkprog(x0 x1. b(x0, r, x1)), w, o) -> runs(mkprog(x0 x1. bind_rel(qop, x0, x2 x3. b(x2, x3, x1), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), w, o))
+proof
+  fix w
+  assume hq: runs(qop, w, ok(w, r))
+  have k: all o. b(w, r, o) -> bind_rel(qop, w, x2 x3. b(x2, x3, o), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+    fix o
+    assume h: b(w, r, o)
+    have e: ex o2. runs(qop, w, o2) && ((ex s1 v. o2 = ok(s1, v) && b(s1, v, o)) || (ex s1 e. o2 = exc(s1, e) && o = exc(s1, e)) || (ex t. o2 = diverge(t) && o = diverge(t)))
+      by ex_intro({ok(w, r)}, simp(hq, h))
+    show by defs(e, bind_rel)
+  qed
+  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. bind_rel(qop, x0, x2 x3. b(x2, x3, x1), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2)), r2 := x0 x1. b(x0, r, x1)], k)
+qed
+
+// the procedure's return: the wrapper goes on with its result
+theorem tr.wret(s, v, base, code, a, hs, rs, w, val, x3 x4 x2. kw): val in univ(1) ->
+  tr.pt(s, v, base, code, a, hs, rs, mkprog(x1 x2. kw(x1, val, x2)), w) ->
+  tr.pt(s, v, base, code, a, hs, rs, mkprog(x1 x2. bind_rel(mkprog(y0 y1. y1 = ok(y0, val)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hv: val in univ(1)
+  assume hpt: tr.pt(s, v, base, code, a, hs, rs, mkprog(x1 x2. kw(x1, val, x2)), w)
+  have g: all m. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) ->
+      tr.sim(s, v, mkprog(x1 x2. bind_rel(mkprog(y0 y1. y1 = ok(y0, val)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, m) proof
+    fix m
+    assume hi: tr.inv(s, base, code, m, w)
+    assume hr: app(m, "rip") = a
+    assume hh: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    have wu: w in univ(1) by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    // (the procedure's run: ok(w, val))
+    have pr: runs(mkprog(y0 y1. y1 = ok(y0, val)), w, ok(w, val)) by defs(simp(wu, hv), runs, mkprog)
+    have k: all o. kw(w, val, o) -> bind_rel(mkprog(y0 y1. y1 = ok(y0, val)), w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+      fix o
+      assume h: kw(w, val, o)
+      have e: ex o2. runs(mkprog(y0 y1. y1 = ok(y0, val)), w, o2) && ((ex s1 v1. o2 = ok(s1, v1) && kw(s1, v1, o)) || (ex s1 e. o2 = exc(s1, e) && o = exc(s1, e)) || (ex t. o2 = diverge(t) && o = diverge(t)))
+        by ex_intro({ok(w, val)}, simp(pr, h, wu, hv))
+      show by defs(e, bind_rel)
+    qed
+    have r0 := mp(tr.mkprog_mono[s := w, r1 := x1 x2. bind_rel(mkprog(y0 y1. y1 = ok(y0, val)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)),
+      r2 := x1 x2. kw(x1, val, x2)], k)
+    have r: tr.red(mkprog(x1 x2. bind_rel(mkprog(y0 y1. y1 = ok(y0, val)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w,
+      mkprog(x1 x2. kw(x1, val, x2)), w) by defs(r0, tr.red)
+    have c := mp(mp(mp(mp(all_elim(expand(hpt, tr.pt), {m}), hi), hr), hh), hrs)
+    show := apply(tr.sim_red, r, c)
+  qed
+  show by defs(g, tr.pt)
+qed
