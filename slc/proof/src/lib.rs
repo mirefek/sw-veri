@@ -23,7 +23,8 @@
 //! (`eq_subst[a := t, p := x. x = t]`), or a rule `name(args)`; arguments
 //! are proof expressions, terms in braces `{t}`, or (for `unfold`) a symbol.
 //!
-//! Rules: `mp(ab, a1, ..)`, `refl({t})`, `sym(e)`, `trans(e1, e2)`,
+//! Rules: `mp(ab, a1, ..)` (in order: a proof discharges the leading
+//! premise, a term `{t}` instantiates the leading `all`), `refl({t})`, `sym(e)`, `trans(e1, e2)`,
 //! `subst({x. φ}, e, p)`, `rewrite(e, p)`, `unfold(sym)`,
 //! `all_elim(p, {t1}, ..)`, `ex_intro({w}, {x. φ}, p)`, `witness(p)`,
 //! `prop({t})`, `lit({t})`; `apply(f, a1, ..)`: f's leading `all`s and
@@ -859,8 +860,15 @@ impl State {
                         if args.len() < 2 {
                             return err("mp takes a proof and its premises");
                         }
+                        // (in order: a term `{t}` instantiates the leading
+                        // `all`, a proof discharges the leading premise)
                         let mut s = self.proof_arg(env, lg, a0)?;
                         for a in &args[1..] {
+                            if let Arg::Term(_) = a {
+                                let t = self.term_arg(env, Some(a), 0)?;
+                                s = Seq::all_elim(env, lg, &s, &t)?;
+                                continue;
+                            }
                             let x = match a {
                                 Arg::Proof(p @ PE::Rule(n, _)) if GOAL_RULES.contains(&n.as_str()) => {
                                     let (prem, _) = imp_parts(env, s.concl())?;
