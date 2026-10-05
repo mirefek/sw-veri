@@ -292,3 +292,77 @@ proof
   qed
   show by defs(all_o, tr.sim)
 qed
+
+// ----------------------------------------------------------------------
+//  The coupling at a point of a leaf function (rsp as at the entry s; the
+//  frame in the red zone below it)
+//
+//  - the ABI's part (tr.inv): the machine typed, its code loaded at base,
+//    rsp and the return address as at s, the callee-saved registers, cpu,
+//    gs_base as at s, os and fs_base the world's, df clear; the machine's
+//    memory the spec world's (the spec's view chose the prologue's stores:
+//    vm(m) = vm(w)), only its bytes changed since s; s's entry facts;
+//  - the homes (hs: offset c from s's rsp -> pair(n, x)): the n bytes there
+//    hold x;
+//  - the registers (rs: register -> pair(n, x)): the register holds x, an
+//    n-byte value.
+
+def tr.inv(s, base, code, m, w) :=
+  m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) &&
+  app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4) && fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
+  app(w, "vm") = app(m, "vm") && x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) = abi.ret(s) &&
+  abi.callee_saved(m, s) && app(m, "cpu") = app(s, "cpu") && app(m, "gs_base") = app(s, "gs_base") &&
+  app(m, "os") = app(w, "os") && app(m, "fs_base") = app(w, "fs_base") && !app(app(m, "flags"), "df") &&
+  w in abi.World && w in univ(1) && s in x86_64_linux.Machine &&
+  x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) && int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 &&
+  abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) && int_lt(app(app(s, "gpr"), 4), 140737488355328)
+
+def tr.homes(s, m, hs) := all c. c in dom(hs) ->
+  x86_64_linux.le(app(app(m, "vm"), "bytes"), bits_add(64, int_add(app(app(s, "gpr"), 4), c), 0), fst(app(hs, c))) = snd(app(hs, c))
+
+def tr.regs(m, rs) := all r. r in dom(rs) -> app(app(m, "gpr"), r) = snd(app(rs, r)) && snd(app(rs, r)) in bits(int_mul(8, fst(app(rs, r))))
+
+// the claim at the address a: from every machine state there, coupled
+def tr.pt(s, v, base, code, a, hs, rs, p, w) :=
+  all m. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.sim(s, v, p, w, m)
+
+// a register an instruction may write: not rsp, not callee-saved
+def tr.scratch_reg(g) := g in x86_64_linux.Reg && !(g = 3) && !(g = 4) && !(g = 5) && !(g = 12) && !(g = 13) && !(g = 14) && !(g = 15)
+
+// the invariant after a register write (and rip, the flags)
+theorem tr.inv_reg: all s base code m w r f g x. tr.inv(s, base, code, m, w) -> r in bits(64) -> x86i.flags_ok(m, f) -> tr.scratch_reg(g) -> x in bits(64) ->
+  tr.inv(s, base, code, fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(app(m, "gpr"), g, x)), w)
+proof
+  fix s
+  fix base
+  fix code
+  fix m
+  fix w
+  fix r
+  fix f
+  fix g
+  fix x
+  assume hi: tr.inv(s, base, code, m, w)
+  assume hr: r in bits(64)
+  assume hf: x86i.flags_ok(m, f)
+  assume hg: tr.scratch_reg(g)
+  assume hx: x in bits(64)
+  have i := expand(hi, tr.inv)
+  have mM: m in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have mu: m in univ(1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have pt := apply(x86i.parts, mM)
+  have f1 := expand(hf, x86i.flags_ok)
+  have g1 := expand(hg, tr.scratch_reg)
+  have m2: fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(app(m, "gpr"), g, x)) in x86_64_linux.Machine by defs(simp(expand(mM, x86_64_linux.Machine), mu, hr, f1, g1, hx, pt), x86_64_linux.Machine)
+  have gn: !(g = 3) && !(g = 4) && !(g = 5) && !(g = 12) && !(g = 13) && !(g = 14) && !(g = 15) by taut(g1)
+  have gu: g in univ(1) by simp(g1)
+  // (rsp and the callee-saved registers untouched)
+  have e3 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 3], simp(gn))
+  have e4 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 4], simp(gn))
+  have e5 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 5], simp(gn))
+  have e12 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 12], simp(gn))
+  have e13 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 13], simp(gn))
+  have e14 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 14], simp(gn))
+  have e15 := mp(app_update_other[f := app(m, "gpr"), k := g, v := x, x := 15], simp(gn))
+  show by defs(simp(i, m2, hr, f1, gn, gu, hx, e3, e4, e5, e12, e13, e14, e15, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+qed
