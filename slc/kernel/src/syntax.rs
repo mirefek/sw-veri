@@ -669,6 +669,18 @@ impl<'e> Printer<'e> {
         out
     }
 
+    /// `t` with k loose bound variables, as the binder `x0 .. xk-1. t`
+    /// (`BVar(0)` the last)
+    pub fn lambda(&self, k: usize, t: &Term) -> String {
+        let mut scope: Vec<String> = (0..k).map(|i| format!("x{}", i)).collect();
+        let mut out = scope.join(" ");
+        if k > 0 {
+            out.push_str(". ");
+        }
+        self.go(t, &mut scope, 0, &mut out);
+        out
+    }
+
     fn fresh(&self, scope: &[String]) -> String {
         format!("x{}", scope.len())
     }
