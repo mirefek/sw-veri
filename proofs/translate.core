@@ -472,3 +472,87 @@ proof
   qed
   show by defs(g, tr.pt)
 qed
+
+// the invariant's facts the instruction rules use
+theorem tr.inv_parts: all s base code m w. tr.inv(s, base, code, m, w) ->
+  m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) && app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4)
+proof
+  fix s
+  fix base
+  fix code
+  fix m
+  fix w
+  assume hi: tr.inv(s, base, code, m, w)
+  show by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+qed
+
+// a register the coupling gives
+theorem tr.regs_get: all m rs g n u. tr.regs(m, rs) -> g in dom(rs) -> app(rs, g) = pair(n, u) -> app(app(m, "gpr"), g) = u && u in bits(int_mul(8, n))
+proof
+  fix m
+  fix rs
+  fix g
+  fix n
+  fix u
+  assume h: tr.regs(m, rs)
+  assume hd: g in dom(rs)
+  assume he: app(rs, g) = pair(n, u)
+  have r: all r. r in dom(rs) -> app(app(m, "gpr"), r) = snd(app(rs, r)) && snd(app(rs, r)) in bits(int_mul(8, fst(app(rs, r)))) by taut(expand(h, tr.regs))
+  have c := mp(all_elim(r, {g}), hd)
+  have c2 := rewrite(he, c)
+  show by simp(c2)
+qed
+
+// ----------------------------------------------------------------------
+//  The instructions, at a point (the at_ADDR fact: the bytes at a decode
+//  to the instruction): from the claim after, the claim before
+
+// neg r32: g := 0 - u
+theorem tr.neg32: all s v base code a a2 len g z u hs rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> g in dom(rs) -> app(rs, g) = pair(4, u) ->
+  tr.pt(s, v, base, code, a2, hs, fn_update(rs, g, pair(4, bits_sub(32, 0, u))), p, w) -> tr.pt(s, v, base, code, a, hs, rs, p, w)
+proof
+  fix s
+  fix v
+  fix base
+  fix code
+  fix a
+  fix a2
+  fix len
+  fix g
+  fix z
+  fix u
+  fix hs
+  fix rs
+  fix p
+  fix w
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o)
+  assume ha2: a2 = bits_add(64, a, len)
+  assume hg: tr.scratch_reg(g)
+  assume hd: g in dom(rs)
+  assume hu: app(rs, g) = pair(4, u)
+  assume hpt: tr.pt(s, v, base, code, a2, hs, fn_update(rs, g, pair(4, bits_sub(32, 0, u))), p, w)
+  have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+  have he: all m o. tr.inv(s, base, code, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), g, bits_sub(32, 0, u))), empty)) proof
+    fix m
+    fix o
+    assume hi: tr.inv(s, base, code, m, w)
+    assume hr: app(m, "rip") = a
+    assume hh: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    assume ho: runs(x86_64_linux.step(), m, o)
+    have ip := apply(tr.inv_parts, hi)
+    have rg := apply(tr.regs_get, {m}, {rs}, {g}, {4}, {u}, hrs, hd, hu)
+    have hx := mp(mp(mp(all_elim(hat, {m}, {o}), ho), taut(ip)), hr)
+    obtain f, hf from apply(x86i.neg32, {m}, {o}, {g}, {z}, {len}, taut(ip), taut(ip), gR, hx)
+    show by ex_intro({f}, simp(hf, rg, hr, ha2, keep(x86i.flags_ok)))
+  qed
+  have uv: bits_sub(32, 0, u) in bits(int_mul(8, 4)) by simp()
+  have u64: bits_sub(32, 0, u) in bits(64) by simp()
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step, {s}, {v}, {base}, {code}, {a}, {a2}, {g}, {4}, {bits_sub(32, 0, u)}, {hs}, {rs}, {p}, {w}, he, a2b, hg, uv, u64, hpt)
+qed
