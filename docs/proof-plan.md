@@ -576,6 +576,11 @@ and the ABI glue (`abi.ret_case`).
 
 ### 6.3 The bridge: readable GIMPLE to machine code (simulation)
 
+Revision (2026-10-05): the per-function co-execution described below searches
+(bridge-search-inventory.md). The proposed replacement is in
+bridge-pattern-design.md: statement patterns proven once, and a function's
+proof as a syntactic matching of its code against the readable GIMPLE.
+
 Principle (2026-10): a function's behaviour is reasoned about only on the
 readable GIMPLE (spec_run, simp, loop invariants: C2 and the convenient
 specs). The machine code appears only in the bridge, which proves (C1)
