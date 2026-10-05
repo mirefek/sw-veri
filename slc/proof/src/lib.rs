@@ -60,10 +60,20 @@ impl Prover for ScriptProver {
 /// text starts, for messages.
 fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) -> KResult<Seq> {
     let mut res = Ok(());
+    // (STEP_SLOW=secs: the steps taking longer, reported -- a nested
+    // block's with it)
+    let slow = std::env::var("STEP_SLOW").ok().and_then(|v| v.parse::<f64>().ok());
     for (line_no, step) in steps(text) {
+        let t0 = std::time::Instant::now();
         res = st.step(env, lg, &step, line + line_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
         });
+        if let Some(s) = slow {
+            let dt = t0.elapsed().as_secs_f64();
+            if dt > s {
+                eprintln!("step slow: {:.3}s, line {}: {}", dt, line + line_no, step.chars().take(160).collect::<String>());
+            }
+        }
         if res.is_err() {
             break;
         }

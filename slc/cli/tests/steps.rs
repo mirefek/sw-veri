@@ -153,11 +153,12 @@ fn get_slot_index_implements_its_gimple() {
     let _ = std::fs::remove_file(&gimple);
 }
 
-/// C1 for a_ctz_32 by translation: `slc translate` writes the certificate
-/// (the committed proofs/a_ctz_32_tr.core, unchanged), and it checks with
+/// C1 for a_ctz_32 and is_bouncing by translation: `slc translate` writes
+/// the certificates (the committed proofs/a_ctz_32_tr.core and
+/// proofs/is_bouncing_tr.core, unchanged), and they check with
 /// proofs/translate.core's rules. Needs the -O0 build and its readable GIMPLE.
 #[test]
-fn a_ctz_32_translation_is_generated_and_checks() {
+fn translations_are_generated_and_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (elf, claim, sl) = (root.join("build/test_malloc_O0"), root.join("build/musl_malloc_O0.core"), root.join("build/gimple-O0/sl/c_mallocng_malloc.sl"));
     if !elf.exists() || !claim.exists() || !sl.exists() {
@@ -167,53 +168,51 @@ fn a_ctz_32_translation_is_generated_and_checks() {
     let slc = env!("CARGO_BIN_EXE_slc");
     let tmp = std::env::temp_dir();
     let id = std::process::id();
-    let (steps, gimple, cert) = (tmp.join(format!("slc-act-steps-{}.core", id)), tmp.join(format!("slc-act-gimple-{}.core", id)), tmp.join(format!("slc-act-tr-{}.core", id)));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "-o"]).arg(&steps).output().unwrap();
+    let (steps, gimple) = (tmp.join(format!("slc-tr-steps-{}.core", id)), tmp.join(format!("slc-tr-gimple-{}.core", id)));
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "-o"]).arg(&steps).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
-    let libs = ["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core"];
-    let t = Command::new(slc)
-        .current_dir(&root)
-        .args(["translate", "a_ctz_32", "c_src_malloc_mallocng_malloc.a_ctz_32_fun", "act", "-o"])
-        .arg(&cert)
-        .args(libs)
-        .arg(&gimple)
-        .args(["proofs/x86.core", "proofs/x86_code.core"])
-        .arg(&steps)
-        .output()
-        .unwrap();
-    assert!(t.status.success(), "{}", String::from_utf8_lossy(&t.stderr));
-    let (made, kept) = (std::fs::read_to_string(&cert).unwrap(), std::fs::read_to_string(root.join("proofs/a_ctz_32_tr.core")).unwrap());
-    assert!(made == kept, "proofs/a_ctz_32_tr.core differs from the generated {}", cert.display());
-    let c = Command::new(slc)
-        .current_dir(&root)
-        .arg("kernel-check")
-        .args(libs)
-        .arg(&gimple)
-        .args(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_insn.core"])
-        .arg(&steps)
-        .args([
-            "proofs/abi.core",
-            "proofs/abi_restore.core",
-            "proofs/abi_glue.core",
-            "proofs/gimple.core",
-            "proofs/abi_stack.core",
-            "proofs/abi_loop.core",
-            "proofs/abi_bridge.core",
-            "proofs/translate.core",
-        ])
-        .arg(&cert)
-        .output()
-        .unwrap();
+    // the libraries, the spec, the decode facts, the rules
+    let mut files: Vec<std::ffi::OsString> = ["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core"]
+        .iter()
+        .map(|f| f.into())
+        .collect();
+    files.push(gimple.clone().into());
+    files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
+    files.push(steps.clone().into());
+    files.extend(
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core"]
+            .iter()
+            .map(|f| f.into()),
+    );
+    let mut certs = Vec::new();
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt")] {
+        let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
+        let t = Command::new(slc)
+            .current_dir(&root)
+            .args(["translate", f, &format!("c_src_malloc_mallocng_malloc.{}_fun", f), prefix, "-o"])
+            .arg(&cert)
+            .args(&files)
+            .output()
+            .unwrap();
+        assert!(t.status.success(), "{}", String::from_utf8_lossy(&t.stderr));
+        let kept = format!("proofs/{}_tr.core", f);
+        let (made, k) = (std::fs::read_to_string(&cert).unwrap(), std::fs::read_to_string(root.join(&kept)).unwrap());
+        assert!(made == k, "{} differs from the generated {}", kept, cert.display());
+        certs.push(cert);
+    }
+    let c = Command::new(slc).current_dir(&root).arg("kernel-check").args(&files).args(&certs).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     assert!(
-        c.status.success() && checked.contains("0 constants, 0 axioms, 0 definitions, 1 theorems, 2 conditional theorems, 0 open lemmas"),
+        c.status.success()
+            && checked.contains("a_ctz_32-") && checked.matches("0 definitions, 1 theorems, 2 conditional theorems, 0 open lemmas").count() == 1
+            && checked.matches("0 definitions, 0 theorems, 2 conditional theorems, 0 open lemmas").count() == 1,
         "{}{}",
         checked,
         String::from_utf8_lossy(&c.stderr)
     );
-    for f in [&steps, &gimple, &cert] {
+    for f in certs.iter().chain([&steps, &gimple]) {
         let _ = std::fs::remove_file(f);
     }
 }
