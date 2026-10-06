@@ -514,3 +514,21 @@ planned, and everything it does not use is removed.
    certificates are unconditional theorems, and the chain checks in about
    6 s. What is left unproven is the claims `abi.call_rule` /
    `abi.call_rule_at`, which only functions that call others will use.
+7. **decay_bounces (2026-10-07)**: proofs/decay_bounces_tr.core, generated
+   (229 spec rests, 337 lines). New:
+   - `test r8; je` (`tr.test8_je`), `movsxd r64, r32` (`tr.movsxd`), a
+     32-bit `lea r32, [b + d]` (`tr.lea32_bd`, its value the spec's x + k
+     by `tr.lea32_val`), `mov byte [b + i], r8` (`tr.store8_bi`);
+   - the stored byte matched with the spec's when their constants agree
+     mod 256 (`tr.low8_add_mod`: x + -1 in 8 bits, x + 0xffffffff in 32);
+   - a store at an array element bounded by a branch, not a loop
+     (`tr.elem_in_u`: an index i <= k < 2^31);
+   - the one-argument entry (`tr.entry1_32` / `_64`) hands the body
+     `abi.loaded` and the view's World fact, so its stores have the
+     statics' facts (`hns`) and `hW`;
+   - a register deep in the register map: its `in dom` fact by a
+     determined chain (`tr.dom_keep` .. `tr.dom_upd`), not simp's search.
+
+   Its frame write is the argument's store, which the entry rule takes into
+   the view: its loads are still before a write of the frame (`ds` false),
+   so "loads after the frame is written" is still open.
