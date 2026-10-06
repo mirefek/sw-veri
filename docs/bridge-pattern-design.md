@@ -381,12 +381,40 @@ struct stores.
    - `padd` with a symbolic pointer: its value `bits_add(64, p, d)`, split
      on its definedness.
 
-   get_stride is next. It needs:
-   - bitfield loads (`ldbf`), and their relation to the machine's
-     shifts/masks of a wider load (`shr 12; shl 12` against
-     `bits[52](ldbf(p, 33, 7, 4, 52)) * 4096`);
-   - calls of helper procedures inlined (`meta_maplen`, `meta_sizeclass`);
-   - a `return` from inside a block;
-   - 16-bit loads and about a dozen more instruction forms.
+   **get_stride done**: proofs/get_stride_tr.core, generated.
+   - Size: 171 spec rests, 317 lines.
+   - Cost: about 0.35 s on top of the other three certificates.
+   - New on the spec side:
+     - bitfield loads: `tr.ldbf_ok`, raising by `g.ldbf_ub`;
+     - helper procedures, called with one operation and inlined:
+       `tr.call1_ok`/`_ub`;
+     - signed 32-bit multiply: `tr.smul32_ok`/`_ub`;
+     - the 2-byte element at a sign-extended index: `tr.elem2_sx_*`;
+     - a full-width field `bits[N](x / 2^0 mod 2^N)` normalised to
+       `bits[N](x)` by `tr.qe_eq` with `tr.bits_field0_N`;
+     - a 64-bit result: `tr.result64`.
+   - New on the machine side:
+     - loads at `[b + d]`: byte, word and quad, on `tr.reads`/`tr.le_bytes`;
+     - `movzx r32, word [b + i]`;
+     - `and` with an imm8 of a byte, or with an imm32 into rax;
+     - `movzx` from r8 or r16;
+     - `shl r32, c` as a product;
+     - `lea [b + i]`;
+     - the branches `test r8; jne` and `test r64; je`.
+   - Bitfields, as the machine computes them:
+     - `shr 12; shl 12` of a quad load is `bits[52](ldbf(p, off + 1, 7, 4,
+       52)) * 4096`, by `tr.shl12_field`, which splits the 8 bytes into 1 and 7
+       (`tr.bytes8_split`);
+     - `movzx word; shr r16, pos; and imm8` is `bits[kb](ldbf(.., 2, pos,
+       kb))`, by `tr.and_field16`. The shifted register is kept in the
+       machine's `bits_set_slice` form, and the mask identity is a
+       per-field premise `tr.field16(pos, kb, kk)`.
+   - Per-immediate facts:
+     - `tr.imul_by(k)`, `tr.narrow8(kk)` and `tr.field16(..)` are proven in the
+       certificate for each literal it uses (`gst.imul_16`, `gst.narrow8_31`,
+       `gst.field16_6_6_63`);
+     - each proof is a fixed arith/simp step on literals, with no search.
+   - Generator: values named once and compared expanded (`canon`). An
+     index matched through its expansion is renamed back before printing.
 4. The loop rule and step_seq, without an invariant.
 5. Retire the per-function bridge; redo the remaining functions.
