@@ -52,6 +52,8 @@ struct St {
     regs: Vec<(u128, u128, Term)>,
     /// their map's name
     rs: String,
+    /// the frame written since the entry (`tr.mem`'s flag): `false`, `true`
+    ds: String,
     spec: Spec,
     /// the facts in scope: a branch's condition (or its negation), a
     /// defined operation's condition, by name
@@ -342,7 +344,7 @@ impl<'e> Gen<'e> {
     }
 
     fn pt(&self, st: &St, a: u128) -> String {
-        format!("tr.pt(s, V, {}, {}, {}, HS, {}, {}, W)", self.base, self.code, a, st.rs, self.p(&st.spec))
+        format!("tr.pt(s, V, {}, {}, {}, HS, {}, {}, {}, W)", self.base, self.code, a, st.ds, st.rs, self.p(&st.spec))
     }
 
     // ------------------------------------------------------------------
@@ -876,8 +878,8 @@ impl<'e> Gen<'e> {
 
     fn wred(&self, st: &St, qi: usize, j: usize) -> String {
         format!(
-            "tr.wred[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, rs := {}, w := W, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
-            self.base, self.code, st.a, st.rs, self.qs[qi].0, self.qs[j].0
+            "tr.wred[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, ds := {}, rs := {}, w := W, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
+            self.base, self.code, st.a, st.ds, st.rs, self.qs[qi].0, self.qs[j].0
         )
     }
 
@@ -938,8 +940,8 @@ impl<'e> Gen<'e> {
                     let mut lines = rest.lines;
                     lines.push(format!("have {} := {}", pn, rest.expr));
                     let expr = format!(
-                        "mp(tr.wret[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, rs := {}, w := W, val := {}, kw := x0 x1 x2. KW(x0, x1, x2)], simp(hvu), {})",
-                        self.base, self.code, st.a, st.rs, self.print(&val), pn
+                        "mp(tr.wret[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, ds := {}, rs := {}, w := W, val := {}, kw := x0 x1 x2. KW(x0, x1, x2)], simp(hvu), {})",
+                        self.base, self.code, st.a, st.ds, st.rs, self.print(&val), pn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -966,8 +968,8 @@ impl<'e> Gen<'e> {
                     lines.extend(indent(body));
                     lines.push("qed".into());
                     let expr = format!(
-                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, rs := {}, w := W, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
-                        self.base, self.code, st.a, st.rs, self.qs[qi].0, ct, un, dn
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, ds := {}, rs := {}, w := W, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        self.base, self.code, st.a, st.ds, st.rs, self.qs[qi].0, ct, un, dn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -1018,7 +1020,21 @@ impl<'e> Gen<'e> {
     /// the instance's tail: the coupling's maps, the decode fact, n literal
     /// facts, the extra premises, the next point
     fn tail(&self, st: &St, insn: &Insn, n: usize, extra: &[String]) -> String {
-        let mut t = format!(", {{HS}}, {{{}}}, {{{}}}, {{W}}, {}", st.rs, self.p(&st.spec), insn.name);
+        self.tail_ds(st, insn, n, extra, true)
+    }
+
+    /// the same for a rule reading memory: before the frame is written, no
+    /// flag (the rule's claims at `ds` false)
+    fn tailv(&self, st: &St, insn: &Insn, n: usize, extra: &[String]) -> Result<String, String> {
+        if st.ds != "false" {
+            return Err(format!("{:x}: a load after the frame is written: not covered yet", st.a));
+        }
+        Ok(self.tail_ds(st, insn, n, extra, false))
+    }
+
+    fn tail_ds(&self, st: &St, insn: &Insn, n: usize, extra: &[String], with_ds: bool) -> String {
+        let ds = if with_ds { format!(", {{{}}}", st.ds) } else { String::new() };
+        let mut t = format!(", {{HS}}{}, {{{}}}, {{{}}}, {{W}}, {}", ds, st.rs, self.p(&st.spec), insn.name);
         for _ in 0..n {
             t.push_str(", simp(L)");
         }
@@ -1067,7 +1083,7 @@ impl<'e> Gen<'e> {
                     let (bn, b, d) = self.base_disp(&x[2]).ok_or_else(|| bad("not [b + d]"))?;
                     let bp = self.need_reg(st, bn, 8)?;
                     let hc = self.mem_hyp(st, &bp, &d, 8)?;
-                    let t = self.head("load64_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tail(st, insn, 6, &[hc]);
+                    let t = self.head("load64_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tailv(st, insn, 6, &[hc])?;
                     let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
@@ -1337,7 +1353,7 @@ impl<'e> Gen<'e> {
                         }
                         let c = self.mk("int_le", vec![u.clone(), lit(kk)]);
                         let text = format!(
-                            "mp(tr.cmp32_ja, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                            "mp(tr.cmp32_ja, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                             self.base,
                             self.code,
                             a,
@@ -1347,6 +1363,7 @@ impl<'e> Gen<'e> {
                             insn.len,
                             jn,
                             self.terms(&[&g, &x[3], &x[4], &lit(kk), &j, &u]),
+                            st.ds,
                             st.rs,
                             self.p(&st.spec),
                             insn.name,
@@ -1368,7 +1385,7 @@ impl<'e> Gen<'e> {
                 }
                 let c = self.mk("int_lt", vec![lit(k), b.clone()]);
                 let text = format!(
-                    "mp(tr.cmp8_jbe, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                    "mp(tr.cmp8_jbe, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                     self.base,
                     self.code,
                     a,
@@ -1378,6 +1395,7 @@ impl<'e> Gen<'e> {
                     insn.len,
                     jn,
                     self.terms(&[&f, &j, &b]),
+                    st.ds,
                     st.rs,
                     self.p(&st.spec),
                     insn.name,
@@ -1471,7 +1489,7 @@ impl<'e> Gen<'e> {
                     let (bn, b, d) = self.base_disp(&x[2]).ok_or_else(|| bad("not [b + d]"))?;
                     let bp = self.need_reg(st, bn, 8)?;
                     let hc = self.mem_hyp(st, &bp, &d, 1)?;
-                    let t = self.head("movzx8_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tail(st, insn, 6, &[hc]);
+                    let t = self.head("movzx8_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tailv(st, insn, 6, &[hc])?;
                     let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 1))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
@@ -1487,7 +1505,7 @@ impl<'e> Gen<'e> {
                     let bv = self.need_reg(st, bn, 8)?;
                     let cond = self.ld8_cond(&bv);
                     let hc = st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: a byte load at {} the spec does not load", a, self.print(&bv)))?;
-                    let t = self.head("movzx8_b", a, insn) + &self.terms(&[&x[1], &b, &x[4], &bv]) + &self.tail(st, insn, 5, &[format!("taut({})", hc)]);
+                    let t = self.head("movzx8_b", a, insn) + &self.terms(&[&x[1], &b, &x[4], &bv]) + &self.tailv(st, insn, 5, &[format!("taut({})", hc)])?;
                     let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                     let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, bv, lit(1)])]);
                     let by = self.value(&by);
@@ -1510,7 +1528,7 @@ impl<'e> Gen<'e> {
                     let vals: Vec<String> = self.vals.iter().map(|(v, t)| format!("{} = {}", self.env.vars[*v as usize].name, self.print(t))).collect();
                     format!("{:x}: a byte load at {} the spec does not load (the facts: {}; the values: {})", a, self.print(&ad), facts.join(", "), vals.join(", "))
                 })?;
-                let t = self.head("movzx8_ld", a, insn) + &self.terms(&[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv]) + &self.tail(st, insn, 8, &[format!("taut({})", hc)]);
+                let t = self.head("movzx8_ld", a, insn) + &self.terms(&[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv]) + &self.tailv(st, insn, 8, &[format!("taut({})", hc)])?;
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                 let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, ad, lit(1)])]);
                 let by = self.value(&by);
@@ -1538,7 +1556,7 @@ impl<'e> Gen<'e> {
                     let (bn, b, d) = self.base_disp(&x[2]).ok_or_else(|| bad("not [b + d]"))?;
                     let bp = self.need_reg(st, bn, 8)?;
                     let hc = self.mem_hyp(st, &bp, &d, 2)?;
-                    let t = self.head("movzx16_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tail(st, insn, 6, &[hc]);
+                    let t = self.head("movzx16_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tailv(st, insn, 6, &[hc])?;
                     let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 2))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
@@ -1555,7 +1573,7 @@ impl<'e> Gen<'e> {
                 let iv = self.need_reg(st, inn, 8)?;
                 let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
                 let hc = self.mem_hyp(st, &ad, &lit(0), 2)?;
-                let t = self.head("movzx16_ld", a, insn) + &self.terms(&[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv]) + &self.tail(st, insn, 8, &[hc]);
+                let t = self.head("movzx16_ld", a, insn) + &self.terms(&[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv]) + &self.tailv(st, insn, 8, &[hc])?;
                 let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app(W, \"vm\"), {}, 2))", self.print(&ad)))?;
                 let v = self.value(&v);
                 self.scratch.insert(g);
@@ -1599,7 +1617,7 @@ impl<'e> Gen<'e> {
                 let z = self.mk("eq", vec![u.clone(), lit(0)]);
                 let c = if size == 1 { z } else { self.mk("not", vec![z]) };
                 let text = format!(
-                    "mp(tr.{}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                    "mp(tr.{}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                     rule,
                     self.base,
                     self.code,
@@ -1610,6 +1628,7 @@ impl<'e> Gen<'e> {
                     insn.len,
                     jn,
                     self.terms(&[&g, &j, &u]),
+                    st.ds,
                     st.rs,
                     self.p(&st.spec),
                     insn.name,
@@ -1652,11 +1671,12 @@ impl<'e> Gen<'e> {
                     return Err(format!("{:x}: rax holds {}, the spec returns {}", a, self.print(&v), self.print(val)));
                 }
                 let expr = format!(
-                    "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
+                    "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
                     self.base,
                     self.code,
                     a,
                     insn.len,
+                    st.ds,
                     st.rs,
                     pr,
                     n,
@@ -1923,7 +1943,7 @@ pub fn translate(args: &[String]) -> CResult {
     let i0 = g.new_q(q0);
 
     // the proof
-    let st0 = St { a: a2, regs: Vec::new(), rs: "empty".into(), spec: Spec::Proc(i0), hyps: Vec::new() };
+    let st0 = St { a: a2, regs: Vec::new(), rs: "empty".into(), ds: "false".into(), spec: Spec::Proc(i0), hyps: Vec::new() };
     let pf = g.prove(st0)?;
 
     // the text
@@ -1958,7 +1978,7 @@ pub fn translate(args: &[String]) -> CResult {
     }
     let p = &prefix;
     o.push_str(&format!(
-        "theorem {p}.body: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), empty,\n    {}, {p}.w(s))\nproof\n",
+        "theorem {p}.body: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
         g.base,
         g.code,
         a2,
