@@ -369,7 +369,7 @@ struct stores.
      pointer add, element at a sign-extended or a 32-bit index; each ok or
      raising.
    - The old top-level reductions (`tr.q_let`, `tr.q_any`, `tr.q_op`,
-     `tr.ld8_elem`) are no longer used.
+     `tr.ld8_elem`) were replaced by `tr.qs_*` and have been removed.
 
    **get_slot_index done**: proofs/get_slot_index_tr.core, generated on the
    first try once its forms existed. New:
