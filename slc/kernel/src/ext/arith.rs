@@ -449,61 +449,7 @@ impl Reader {
 
 /// Fourier-Motzkin: is `{ l >= 0 : l in cs }` infeasible over the integers?
 /// (Unknown is reported as feasible.)
-/// Cases on {0, 1}-variables (`branch`): on where asked for (costly: the
-/// bridge's check that a machine path is not taken).
-pub static BRANCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-fn infeasible(cs: Vec<Lin>) -> bool {
-    if BRANCH.load(std::sync::atomic::Ordering::Relaxed) {
-        branch(cs, 3)
-    } else {
-        infeasible_fm(cs)
-    }
-}
-
-/// Infeasible by elimination, or -- feasible over the reals -- by cases on a
-/// variable the constraints keep in {0, 1} (a quotient, typically: whether
-/// a sum wrapped): infeasible at 0 and at 1. Sound: the cases cover the
-/// variable's integer values.
-fn branch(cs: Vec<Lin>, depth: usize) -> bool {
-    if infeasible_fm(cs.clone()) {
-        return true;
-    }
-    if depth == 0 {
-        return false;
-    }
-    let mut vars: Vec<usize> = cs.iter().flat_map(|l| l.coeffs.keys().copied()).collect();
-    vars.sort();
-    vars.dedup();
-    let mut tried = 0;
-    for v in vars {
-        let with = |l: Option<Lin>| -> Option<Vec<Lin>> {
-            let mut c = cs.clone();
-            c.push(l?);
-            Some(c)
-        };
-        let (Some(ge2), Some(le_m1), Some(le0), Some(ge1)) = (
-            with(Lin::var(v).add(&Lin::konst(1), -2)),
-            with(Lin::var(v).scale(-1).and_then(|x| x.add(&Lin::konst(1), -1))),
-            with(Lin::var(v).scale(-1)),
-            with(Lin::var(v).add(&Lin::konst(1), -1)),
-        ) else {
-            continue;
-        };
-        if infeasible_fm(ge2) && infeasible_fm(le_m1) {
-            tried += 1;
-            if branch(le0, depth - 1) && branch(ge1, depth - 1) {
-                return true;
-            }
-            if tried >= 8 {
-                break;
-            }
-        }
-    }
-    false
-}
-
-fn infeasible_fm(mut cs: Vec<Lin>) -> bool {
+fn infeasible(mut cs: Vec<Lin>) -> bool {
     fn gcd(a: i128, b: i128) -> i128 {
         if b == 0 { a.abs() } else { gcd(b, a % b) }
     }

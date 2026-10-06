@@ -421,6 +421,12 @@ relies on.
 
 ## 6. Structured automation for (C1) (plan, 2026-10)
 
+(Superseded, 2026-10-06: C1 is by translation -- `slc translate`'s
+certificates checked against proofs/translate.core and
+proofs/translate_store_loop.core, docs/bridge-pattern-design.md. The tools
+6.1-6.3 describe -- `symex`, `spec_run`, `bridge` -- and their open lemma
+`abi.loop_sim` are removed; this section records how they worked.)
+
 The six leaf functions done so far (get_slot_index, upgradelock,
 resetlock, a_ctz_32, is_bouncing, get_stride) were proven with one tool
 doing everything: `simp` executed the machine code (unrolling

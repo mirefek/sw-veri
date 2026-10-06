@@ -164,24 +164,17 @@ struct Gen<'e> {
 #[derive(Clone)]
 struct Loop {
     head: u128,
-    /// the induction hypothesis' name, the claim's name, the bound K of the
-    /// counting loop, the home d of its counter
+    /// the induction hypothesis' name, the bound K of the counting loop,
+    /// the home d of its counter
     ih: String,
-    claim: String,
     k: u128,
     d: u128,
     /// the rest at the head, the counter abstracted (a term of the counter's
-    /// placeholder `li`), the world's placeholder `lw`
+    /// placeholder `li`)
     qh: Term,
     li: Term,
-    lw: Term,
-    /// in the step: the invariant's fact, the counter's (tr.count_inv
-    /// expanded)
-    hp: String,
+    /// in the step: the counter's fact (tr.count_inv expanded)
     ci: String,
-    /// the invariant's and variant's names
-    inv: String,
-    var: String,
 }
 
 fn nat(t: &Term) -> Option<u128> {
@@ -1476,20 +1469,7 @@ impl<'e> Gen<'e> {
         let (cl, pi, mv) = (format!("CL{ln}"), format!("PI{ln}"), format!("MV{ln}"));
         let (hp, ih, cc, ci) = (format!("hp{ln}"), format!("ih{ln}"), format!("cc{ln}"), format!("ci{ln}"));
         let idx = self.loops.len();
-        self.loops.push(Loop {
-            head: h,
-            ih: ih.clone(),
-            claim: cl.clone(),
-            k: kv,
-            d,
-            qh: self.qs[jh].1.clone(),
-            li: li.clone(),
-            lw: lw.clone(),
-            hp: hp.clone(),
-            ci: ci.clone(),
-            inv: pi.clone(),
-            var: mv.clone(),
-        });
+        self.loops.push(Loop { head: h, ih: ih.clone(), k: kv, d, qh: self.qs[jh].1.clone(), li: li.clone(), ci: ci.clone() });
         let hst = format!("fn_update(empty, {}, pair(4, {}))", d, lin);
         let st_head = St {
             a: h,

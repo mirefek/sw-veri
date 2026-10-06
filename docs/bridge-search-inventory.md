@@ -1,5 +1,8 @@
 # The bridge's searches: inventory (2026-10-05)
 
+(Historical: the bridge, symex and spec_run were removed on 2026-10-06; C1
+is by translation, docs/bridge-pattern-design.md.)
+
 Goal: the bridge translates a function directly. Each obligation has a known
 shape and is discharged by a determined lemma instance or by comparing normal
 forms, not by a general search. This lists where it still searches.

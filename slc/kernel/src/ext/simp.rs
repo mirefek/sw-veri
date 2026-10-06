@@ -178,13 +178,6 @@ use crate::env::{Env, SymKind};
 use crate::term::{Node, SymId, Term};
 
 mod eval;
-// symbolic execution of machine code to its return (`symex`)
-mod symex;
-// forward execution of a spec program (`spec_run`)
-mod spec;
-// the bridge from readable GIMPLE to machine code (`bridge`)
-mod bridge;
-mod bridge_loop;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Pol {
@@ -4929,31 +4922,6 @@ impl Logic {
         self.simp_prove_loops(env, premises, goal, &[])
     }
 
-    /// `t` simplified as a term (the simplifier's equations), for tools.
-    pub fn simp_term(&self, env: &Env, t: &Term) -> Term {
-        Simp::new(env, self).term(t)
-    }
-
-    /// The settled paths of the premises (programs in `keep` folded): each
-    /// its existential variables (fresh, not in `env`) and literals. For
-    /// tools that propose statements (e.g. an instruction's outcome); it
-    /// proves nothing.
-    pub fn simp_paths(&self, env: &Env, premises: &[Term], keep: &[SymId]) -> crate::env::KResult<Vec<(Vec<crate::term::VarId>, Vec<Term>)>> {
-        let mut fresh = env.vars.len() as u32 + 2_000_000;
-        for t in premises {
-            fresh = fresh.max(max_var(t) + 1);
-        }
-        *self.simp_keep.borrow_mut() = keep.to_vec();
-        let sp = Simp::new(env, self);
-        let mut prem = sp.tt();
-        for p in premises {
-            prem = sp.and(prem, self.simp_fact(env, p));
-        }
-        self.simp_keep.borrow_mut().clear();
-        let work = sp.paths(&prem, &mut fresh).ok_or_else(|| crate::env::KernelError("simp: too many paths".into()))?;
-        Ok(work.into_iter().filter_map(|p| sp.settle(p)).map(|p| (p.vars, p.lits)).collect())
-    }
-
     /// `simp_prove`, with invariants for the loops on the paths.
     pub fn simp_prove_loops(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint]) -> crate::env::KResult<()> {
         // (SIMP_SLOW=secs: the calls taking longer, reported)
@@ -5044,7 +5012,7 @@ impl Logic {
     }
 
     fn prove_paths(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<()> {
-        // (the caller's rules kept: simp may run inside symex or spec_run)
+        // (the caller's rules kept: simp may run nested)
         let saved = std::mem::replace(&mut *self.simp_rewrites.borrow_mut(), self.rewrite_rules(env, premises));
         let r = self.prove_paths_with(env, premises, goal, hints, fresh);
         *self.simp_rewrites.borrow_mut() = saved;

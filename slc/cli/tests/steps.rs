@@ -58,11 +58,11 @@ fn step_theorems_of_get_slot_index_prove() {
     let slc = env!("CARGO_BIN_EXE_slc");
     let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "-o"]).arg(&out).output().unwrap();
     let msg = String::from_utf8_lossy(&g.stdout);
-    assert!(g.status.success() && msg.contains("7 instructions, 7 distinct encodings, 7 theorems, 7 outcomes"), "{}{}", msg, String::from_utf8_lossy(&g.stderr));
+    assert!(g.status.success() && msg.contains("7 instructions, 7 distinct encodings, 7 theorems"), "{}{}", msg, String::from_utf8_lossy(&g.stderr));
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(text.contains("theorem x86.step_4883e803(m, o)"), "{}", text);
-    // the outcome of `ret`: rip from the stack, rsp past it
-    assert!(text.contains("theorem get_slot_index.ok_40211a"), "{}", text);
+    // the decode fact of `ret`
+    assert!(text.contains("theorem get_slot_index.at_40211a"), "{}", text);
     let c = Command::new(slc)
         .current_dir(&root)
         .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/loop.core"])
@@ -72,10 +72,9 @@ fn step_theorems_of_get_slot_index_prove() {
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    // 7 step theorems, and per instruction where a step from it goes and
-    // its outcome
+    // 7 step theorems, and per instruction where a step from it goes
     assert!(
-        c.status.success() && checked.contains("1 definitions, 21 theorems"),
+        c.status.success() && checked.contains("1 definitions, 14 theorems"),
         "{}{}",
         checked,
         String::from_utf8_lossy(&c.stderr)

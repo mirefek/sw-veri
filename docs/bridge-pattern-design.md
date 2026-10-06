@@ -266,6 +266,8 @@ struct stores.
 
 ## 5. What stays, what goes
 
+As planned (2026-10-05):
+
 - **Stays:**
   - the x86 model;
   - `abi.matches`, `abi.bridge_implements`, `abi.implements2_at`;
@@ -283,6 +285,24 @@ struct stores.
   - the bridge's lemma selection;
   - the loop invariant argument;
   - the word-form retries and their searches.
+
+As done (2026-10-06): the translation needed less of the old route than
+planned, and everything it does not use is removed.
+
+- **Stays:** the x86 model and the GIMPLE operations' semantics;
+  `abi.matches`, `abi.bridge_implements`, `abi.implements2_at`; `abi.agree`
+  (the coupling of a written frame, `tr.mem`); `abi.run_from`; the
+  slot's scratch lemmas `abi.slot_out` / `_sv` / `_wm`.
+- **Gone:**
+  - the kernel's `bridge`, `symex` and `spec_run` tactics (the pattern
+    lemmas are all proven by `simp`, so symex and spec_run had no role
+    left), with `arith`'s 0/1 case split that only the bridge turned on;
+  - `slc steps`' outcome lemmas `F.ok_A` (the certificates use only the
+    decode facts `F.at_A`);
+  - the open lemma `abi.loop_sim` -- the loop argument is now
+    `tr.wf2` / `tr.qs_loop`, by an invariant and a variant;
+  - the bridge's frame and agreement lemmas (`abi.slot_at`, `abi.agree_*`
+    but `abi.agree`, `g.read_at` / `_off`, `abi.slot_matches`, ...).
 
 ## 6. Decisions needed
 
