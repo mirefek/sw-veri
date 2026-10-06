@@ -88,8 +88,9 @@
 //!   x * 1 = x for an integer x.
 //! * with `unroll`, a loop of the goal whose condition is decided at a known
 //!   state is run an iteration at a time: it stops (`while_stop`), the body
-//!   leaves (`while_leave`) or goes on (`while_step`) -- open lemmas the
-//!   step then rests on, like `while_unroll` for loops of facts.
+//!   leaves (`while_leave`) or goes on (`while_step`) -- theorems of
+//!   core/loop.core the step relies on, like `while_unroll` for loops of
+//!   facts (the step is refused unless they are loaded).
 //! * in facts, `ex x. P(fst(x), snd(x))` is split into the projections when
 //!   that decides it (a choice of several values that exists).
 //! * a comparison of a literal k with a natural x, or with a word x of a

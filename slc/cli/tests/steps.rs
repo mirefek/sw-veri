@@ -134,20 +134,19 @@ fn translations_are_generated_and_check() {
     }
     let c = Command::new(slc).current_dir(&root).arg("kernel-check").args(&files).args(&certs).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    // (conditional: on core/loop.core's open while_step / while_leave /
-    // while_unroll, through the ABI glue all of them end in)
-    assert!(
-        c.status.success()
-            && checked.contains("a_ctz_32-") && checked.matches("0 definitions, 1 theorems, 2 conditional theorems, 0 open lemmas").count() == 1
-            // is_bouncing, get_slot_index, upgradelock
-            && checked.matches("0 definitions, 0 theorems, 2 conditional theorems, 0 open lemmas").count() == 3
-            && checked.matches("0 definitions, 3 theorems, 2 conditional theorems, 0 open lemmas").count() == 1
-            // step_seq, resetlock (their statics' range defined)
-            && checked.matches("1 definitions, 0 theorems, 2 conditional theorems, 0 open lemmas").count() == 2,
-        "{}{}",
-        checked,
-        String::from_utf8_lossy(&c.stderr)
-    );
+    // each certificate's theorems unconditional: nothing in the chain rests
+    // on an open lemma (step_seq's and resetlock's statics' range defined)
+    let expect = [
+        ("a_ctz_32", "0 definitions, 3 theorems"),
+        ("is_bouncing", "0 definitions, 2 theorems"),
+        ("get_slot_index", "0 definitions, 2 theorems"),
+        ("get_stride", "0 definitions, 5 theorems"),
+        ("step_seq", "1 definitions, 2 theorems"),
+        ("upgradelock", "0 definitions, 2 theorems"),
+        ("resetlock", "1 definitions, 2 theorems"),
+    ];
+    let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)));
+    assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple]) {
         let _ = std::fs::remove_file(f);
     }

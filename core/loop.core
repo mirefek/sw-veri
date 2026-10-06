@@ -1,5 +1,8 @@
 // Loops: `while_rel` (prelude) with an invariant, and termination with a
-// variant. These justify the loop step of `simp` (`inv{...}` hints).
+// variant. These justify the loop step of `simp` (`inv{...}` hints); one
+// iteration (`while_unroll`) and runs built an iteration at a time
+// (`while_stop`, `while_leave`, `while_step`) justify its `unroll`. All
+// proven from `while_rel`'s definition.
 //
 //   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/loop.core
 
@@ -131,28 +134,368 @@ qed
 //  leaves, or the body continues to l1 and the loop runs on from there --
 //  with an outcome r1 of the same kind: r itself, or, if the loop diverges,
 //  a divergence too (the trace of an infinite run from l1 need not be the
-//  one from l0). To prove: the runs from l0 are those from l1, shifted.
-lemma while_unroll(l0, l. c, l o. b, l. tr, r):
+//  one from l0): the runs from l0 are those from l1, shifted.
+
+// (an element of a natural number is one)
+theorem nat_elem(k, i): k in omega -> i in k -> i in omega
+proof
+  have all_k: all n. n in omega -> (all j. j in n -> j in omega) proof
+    have base: all j. j in 0 -> j in omega proof
+      fix j
+      assume hj: j in 0
+      have he := rewrite(lit_zero, hj)
+      show by taut(he, empty_mem[x := j])
+    qed
+    have step: all n. n in omega -> (all j. j in n -> j in omega) -> (all j. j in int_add(n, 1) -> j in omega) proof
+      fix n
+      assume hn: n in omega
+      assume ih: all j. j in n -> j in omega
+      fix j
+      assume hj: j in int_add(n, 1)
+      have e: succ(n) = int_add(n, 1) by arith(hn)
+      have h2 := expand(expand(rewrite(sym(e), hj), succ), union2)
+      have u: ex y. j in y && y in upair(n, single(n)) by taut(h2, union_def[s := upair(n, single(n)), a := j])
+      obtain y, hy from u
+      have jy: j in y by taut(hy)
+      have yu := mp(upair_elim[a := n, b := single(n), z := y], taut(hy))
+      have c1: y = n -> j in omega proof
+        assume e1: y = n
+        show := mp(all_elim(ih, {j}), rewrite(e1, jy))
+      qed
+      have c2: y = single(n) -> j in omega proof
+        assume e2: y = single(n)
+        have jn := mp(single_elim[a := n, z := j], rewrite(e2, jy))
+        show := rewrite(sym(jn), hn)
+      qed
+      show by taut(yu, c1, c2)
+    qed
+    show := mp(mp(nat_ind[p := x. all j. j in x -> j in omega], base), step)
+  qed
+  assume hk: k in omega
+  assume hi: i in k
+  show := mp(all_elim(mp(all_elim(all_k, {k}), hk), {i}), hi)
+qed
+
+// (succ(0) as a numeral: 0 + 1)
+theorem succ_zero: succ(empty) = int_add(0, 1)
+proof
+  have a: succ(0) = int_add(0, 1) by arith()
+  show := subst({y. succ(y) = int_add(0, 1)}, lit_zero, a)
+qed
+
+theorem while_unroll(l0, l. c, l o. b, l. tr, r):
   while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r) ->
   (!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r)) ||
   (c(l0) && (ex l1. b(l0, ok(l1, empty)) && (ex r1. while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r1) &&
      fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))))
+proof
+  assume hw: while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
+  have s0 := succ_zero
+  have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+  // finitely many iterations
+  have fcase: (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)))) ->
+      (!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r)) ||
+      (c(l0) && (ex l1. b(l0, ok(l1, empty)) && (ex r1. while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r1) &&
+        fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)))) proof
+    assume e: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)))
+    obtain n, h1 from e
+    obtain f, hf from h1
+    have hn: n in omega by taut(hf)
+    have hf0: app(f, empty) = l0 by taut(hf)
+    have hst: all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
+    have hend: (!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)) by taut(hf)
+    // no iteration: the loop stops at l0, or its body leaves
+    have z: n = 0 -> (!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r)) proof
+      assume e0: n = 0
+      have ee: n = empty := rewrite(lit_zero, e0)
+      have fn: app(f, n) = l0 := subst({y. app(f, y) = l0}, sym(ee), hf0)
+      show := rewrite(fn, hend)
+    qed
+    // an iteration to l1 = f(1), then the run from there: f shifted
+    have s: !(n = 0) -> c(l0) && (ex l1. b(l0, ok(l1, empty)) && (ex r1. while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r1) &&
+        fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) proof
+      assume nz: !(n = 0)
+      have m0: 0 in n by arith(hn, nz)
+      have st0 := mp(all_elim(hst, {empty}), rewrite(lit_zero, m0))
+      have st0l: c(l0) && b(l0, ok(app(f, succ(empty)), empty)) := rewrite(hf0, st0)
+      let M := int_sub(n, 1)
+      let F := fn_build(succ(M), i. app(f, int_add(i, 1)))
+      have hM: M in omega by arith(hn, nz)
+      have hM1: int_add(M, 1) in omega by arith(hM)
+      have eM: succ(M) = int_add(M, 1) by arith(hM)
+      have ff := fn_build_fun[d := succ(M), v := i. app(f, int_add(i, 1))]
+      have fd := fn_build_dom[d := succ(M), v := i. app(f, int_add(i, 1))]
+      have fs: all j. j in omega -> int_le(j, M) -> app(F, j) = app(f, int_add(j, 1)) proof
+        fix j
+        assume j1: j in omega
+        assume j2: int_le(j, M)
+        have m: j in int_add(M, 1) by arith(hM1, j1, j2, hM)
+        show := mp(app_fn_build[d := succ(M), v := i. app(f, int_add(i, 1)), a := j], rewrite(sym(eM), m))
+      qed
+      // F(0) = f(1)
+      have z0: int_le(0, M) by arith(hM)
+      have fz := mp(mp(all_elim(fs, {0}), zo), z0)
+      have fz2 := subst({y. app(F, y) = app(f, int_add(0, 1))}, lit_zero, fz)
+      have f0: app(F, empty) = app(f, succ(empty)) := subst({y. app(F, empty) = app(f, y)}, sym(s0), fz2)
+      // F's iterations: f's from the second
+      have fst1: all i. i in M -> c(app(F, i)) && b(app(F, i), ok(app(F, succ(i)), empty)) proof
+        fix i
+        assume hi: i in M
+        have io := mp(mp(nat_elem[k := M, i := i], hM), hi)
+        have i1o: int_add(i, 1) in omega by arith(io)
+        have il: int_le(i, M) by arith(io, hM, hi)
+        have i1l: int_le(int_add(i, 1), M) by arith(io, hM, hi)
+        have i1n: int_add(i, 1) in n by arith(i1o, hn, io, hi, hM, nz)
+        have st := mp(all_elim(hst, {int_add(i, 1)}), i1n)
+        have e2: succ(int_add(i, 1)) = int_add(int_add(i, 1), 1) by arith(i1o)
+        have st2 := rewrite(e2, st)
+        have fi := mp(mp(all_elim(fs, {i}), io), il)
+        have fi1 := mp(mp(all_elim(fs, {int_add(i, 1)}), i1o), i1l)
+        have es: succ(i) = int_add(i, 1) by arith(io)
+        have fsi: app(F, succ(i)) = app(f, int_add(int_add(i, 1), 1)) := subst({y. app(F, y) = app(f, int_add(int_add(i, 1), 1))}, sym(es), fi1)
+        have st3 := rewrite(sym(fi), st2)
+        show := rewrite(sym(fsi), st3)
+      qed
+      // its end: F(M) = f(n)
+      have mm: int_le(M, M) by arith(hM)
+      have fM := mp(mp(all_elim(fs, {M}), hM), mm)
+      have eMn: int_add(M, 1) = n by arith(hn, nz)
+      have fMn: app(F, M) = app(f, n) := rewrite(eMn, fM)
+      have hend2: (!c(app(F, M)) && r = ok(app(F, M), empty)) || (c(app(F, M)) && b(app(F, M), r) && !is_ok(r)) := rewrite(sym(fMn), hend)
+      have e1: ex g. M in omega && is_fun(g) && dom(g) = succ(M) && app(g, empty) = app(f, succ(empty)) &&
+          (all i. i in M -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+          ((!c(app(g, M)) && r = ok(app(g, M), empty)) || (c(app(g, M)) && b(app(g, M), r) && !is_ok(r)))
+        by ex_intro({F}, taut(hM, ff, fd, f0, fst1, hend2))
+      have e2: ex m g. m in omega && is_fun(g) && dom(g) = succ(m) && app(g, empty) = app(f, succ(empty)) &&
+          (all i. i in m -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+          ((!c(app(g, m)) && r = ok(app(g, m), empty)) || (c(app(g, m)) && b(app(g, m), r) && !is_ok(r)))
+        by ex_intro({M}, e1)
+      have w1: while_rel(app(f, succ(empty)), l. c(l), l o. b(l, o), l. tr(l), r) by defs(taut(e2), while_rel)
+      have er: ex r1. while_rel(app(f, succ(empty)), l. c(l), l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)
+        by ex_intro({r}, taut(w1, refl({fst(r)}), refl({r})))
+      have el: ex l1. b(l0, ok(l1, empty)) && (ex r1. while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))
+        by ex_intro({app(f, succ(empty))}, taut(st0l, er))
+      show by taut(st0l, el)
+    qed
+    show by taut(z, s)
+  qed
+  // infinitely many: an iteration to f(1), then the run from there, f
+  // shifted, also infinite (its trace another limit)
+  have icase: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) ->
+      c(l0) && (ex l1. b(l0, ok(l1, empty)) && (ex r1. while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r1) &&
+        fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) proof
+    assume e: ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))
+    obtain f, hf from e
+    have hf0: app(f, empty) = l0 by taut(hf)
+    have hst: all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
+    have rd: r = diverge(trace_limit(i. tr(app(f, i)))) by taut(hf)
+    have st0 := mp(all_elim(hst, {empty}), omega_zero)
+    have st0l: c(l0) && b(l0, ok(app(f, succ(empty)), empty)) := rewrite(hf0, st0)
+    let F := fn_build(omega, i. app(f, int_add(i, 1)))
+    have ff := fn_build_fun[d := omega, v := i. app(f, int_add(i, 1))]
+    have fd := fn_build_dom[d := omega, v := i. app(f, int_add(i, 1))]
+    have fz := mp(app_fn_build[d := omega, v := i. app(f, int_add(i, 1)), a := 0], zo)
+    have fz2 := subst({y. app(F, y) = app(f, int_add(0, 1))}, lit_zero, fz)
+    have f0: app(F, empty) = app(f, succ(empty)) := subst({y. app(F, empty) = app(f, y)}, sym(s0), fz2)
+    have fst1: all i. i in omega -> c(app(F, i)) && b(app(F, i), ok(app(F, succ(i)), empty)) proof
+      fix i
+      assume io: i in omega
+      have i1o: int_add(i, 1) in omega by arith(io)
+      have st := mp(all_elim(hst, {int_add(i, 1)}), i1o)
+      have e2: succ(int_add(i, 1)) = int_add(int_add(i, 1), 1) by arith(i1o)
+      have st2 := rewrite(e2, st)
+      have fi := mp(app_fn_build[d := omega, v := i. app(f, int_add(i, 1)), a := i], io)
+      have fi1 := mp(app_fn_build[d := omega, v := i. app(f, int_add(i, 1)), a := int_add(i, 1)], i1o)
+      have es: succ(i) = int_add(i, 1) by arith(io)
+      have fsi: app(F, succ(i)) = app(f, int_add(int_add(i, 1), 1)) := subst({y. app(F, y) = app(f, int_add(int_add(i, 1), 1))}, sym(es), fi1)
+      have st3 := rewrite(sym(fi), st2)
+      show := rewrite(sym(fsi), st3)
+    qed
+    have e1: ex g. is_fun(g) && dom(g) = omega && app(g, empty) = app(f, succ(empty)) &&
+        (all i. i in omega -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+        diverge(trace_limit(i. tr(app(F, i)))) = diverge(trace_limit(i. tr(app(g, i))))
+      by ex_intro({F}, taut(ff, fd, f0, fst1, refl({diverge(trace_limit(i. tr(app(F, i))))})))
+    have w1: while_rel(app(f, succ(empty)), l. c(l), l o. b(l, o), l. tr(l), diverge(trace_limit(i. tr(app(F, i))))) by defs(taut(e1), while_rel)
+    have f2: fst(r) = 2 by simp(rd)
+    have f1: fst(diverge(trace_limit(i. tr(app(F, i))))) = fst(r) by simp(f2)
+    have er: ex r1. while_rel(app(f, succ(empty)), l. c(l), l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)
+      by ex_intro({diverge(trace_limit(i. tr(app(F, i))))}, taut(w1, f1, f2))
+    have el: ex l1. b(l0, ok(l1, empty)) && (ex r1. while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))
+      by ex_intro({app(f, succ(empty))}, taut(st0l, er))
+    show by taut(st0l, el)
+  qed
+  show by taut(expand(hw, while_rel), fcase, icase)
+qed
 
 // ----------------------------------------------------------------------
 //  Runs of a loop, built an iteration at a time (for a loop on the spec side
-//  of a refinement, whose run is to be shown). To prove: a run of 0
-//  iterations; prepending an iteration to a run (finite: the outcome is not
-//  a divergence).
+//  of a refinement, whose run is to be shown): a run of 0 iterations;
+//  prepending an iteration to a run (finite: the outcome is not a
+//  divergence).
 
-lemma while_stop(l0, l. c, l o. b, l. tr):
+// (the run of no iteration: l0 alone, where the loop stops or its body
+// leaves)
+theorem while_one(l0, l. c, l o. b, l. tr, r):
+  ((!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r))) -> while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
+proof
+  assume h: (!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r))
+  let F := fn_build(succ(empty), i. l0)
+  have ff := fn_build_fun[d := succ(empty), v := i. l0]
+  have fd := fn_build_dom[d := succ(empty), v := i. l0]
+  have z1: empty in succ(empty) by simp(omega_zero)
+  have f0 := mp(app_fn_build[d := succ(empty), v := i. l0, a := empty], z1)
+  have vac: all i. i in empty -> c(app(F, i)) && b(app(F, i), ok(app(F, succ(i)), empty)) proof
+    fix i
+    assume hi: i in empty
+    show by taut(hi, empty_mem[x := i])
+  qed
+  have hl: (!c(app(F, empty)) && r = ok(app(F, empty), empty)) || (c(app(F, empty)) && b(app(F, empty), r) && !is_ok(r)) := rewrite(sym(f0), h)
+  have e1: ex f. empty in omega && is_fun(f) && dom(f) = succ(empty) && app(f, empty) = l0 &&
+     (all i. i in empty -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+     ((!c(app(f, empty)) && r = ok(app(f, empty), empty)) || (c(app(f, empty)) && b(app(f, empty), r) && !is_ok(r)))
+    by ex_intro({F}, taut(omega_zero, ff, fd, f0, vac, hl))
+  have e2: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+     (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+     ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)))
+    by ex_intro({empty}, e1)
+  show by defs(taut(e2), while_rel)
+qed
+
+theorem while_stop(l0, l. c, l o. b, l. tr):
   !c(l0) -> while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), ok(l0, empty))
+proof
+  assume hc: !c(l0)
+  show := mp(while_one[l0 := l0, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := ok(l0, empty)], taut(hc, refl({ok(l0, empty)})))
+qed
 
-lemma while_leave(l0, l. c, l o. b, l. tr, r):
+theorem while_leave(l0, l. c, l o. b, l. tr, r):
   c(l0) -> b(l0, r) -> !is_ok(r) -> while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
+proof
+  assume hc: c(l0)
+  assume hb: b(l0, r)
+  assume hn: !is_ok(r)
+  show := mp(while_one[l0 := l0, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := r], taut(hc, hb, hn))
+qed
 
-lemma while_step(l0, l1, l. c, l o. b, l. tr, r):
+// (the run from l1 is finite -- its outcome not a divergence -- so l0
+// prepended: l0, then its states)
+theorem while_step(l0, l1, l. c, l o. b, l. tr, r):
   c(l0) -> b(l0, ok(l1, empty)) -> while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r) -> !(fst(r) = 2) ->
   while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
+proof
+  assume hc: c(l0)
+  assume hb: b(l0, ok(l1, empty))
+  assume hw: while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r)
+  assume hnd: !(fst(r) = 2)
+  // not infinitely many iterations from l1: r would be a divergence
+  have ninf: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l1 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) -> false proof
+    assume e: ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l1 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))
+    obtain f, hf from e
+    have rd: r = diverge(trace_limit(i. tr(app(f, i)))) by taut(hf)
+    have f2: fst(r) = 2 by simp(rd)
+    show by taut(f2, hnd)
+  qed
+  have fin: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l1 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r))) by taut(expand(hw, while_rel), ninf)
+  obtain n, h1 from fin
+  obtain f, hf from h1
+  have hn: n in omega by taut(hf)
+  have hf0: app(f, empty) = l1 by taut(hf)
+  have hst: all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
+  have hend: (!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)) by taut(hf)
+  // the run from l0: l0, then f's states (n + 1 iterations)
+  let N := int_add(n, 1)
+  let G := fn_build(succ(N), i. ite(i = empty, l0, app(f, int_sub(i, 1))))
+  have hN: N in omega by arith(hn)
+  have hN1: int_add(N, 1) in omega by arith(hn)
+  have eN: succ(N) = int_add(N, 1) by arith(hN)
+  have gf := fn_build_fun[d := succ(N), v := i. ite(i = empty, l0, app(f, int_sub(i, 1)))]
+  have gd := fn_build_dom[d := succ(N), v := i. ite(i = empty, l0, app(f, int_sub(i, 1)))]
+  // G(0) = l0
+  have m0: 0 in int_add(N, 1) by arith(hn, hN1)
+  have m0e := rewrite(lit_zero, rewrite(sym(eN), m0))
+  have a0 := mp(app_fn_build[d := succ(N), v := i. ite(i = empty, l0, app(f, int_sub(i, 1))), a := empty], m0e)
+  have g0: app(G, empty) = l0 := trans(a0, mp(ite_t[c := empty = empty, a := l0, b := app(f, int_sub(empty, 1))], refl({empty})))
+  // G(j + 1) = f(j), j <= n
+  have gs: all j. j in omega -> int_le(j, n) -> app(G, int_add(j, 1)) = app(f, j) proof
+    fix j
+    assume j1: j in omega
+    assume j2: int_le(j, n)
+    have jo: int_add(j, 1) in omega by arith(j1)
+    have m: int_add(j, 1) in int_add(N, 1) by arith(hN1, jo, j1, j2, hn)
+    have a := mp(app_fn_build[d := succ(N), v := i. ite(i = empty, l0, app(f, int_sub(i, 1))), a := int_add(j, 1)], rewrite(sym(eN), m))
+    have z: !(int_add(j, 1) = 0) by arith(j1)
+    have ne := rewrite(lit_zero, z)
+    have it := mp(ite_f[c := int_add(j, 1) = empty, a := l0, b := app(f, int_sub(int_add(j, 1), 1))], ne)
+    have sub: int_sub(int_add(j, 1), 1) = j by arith(j1)
+    show := rewrite(sub, trans(a, it))
+  qed
+  // G's iterations: i < N
+  have gst: all i. i in N -> c(app(G, i)) && b(app(G, i), ok(app(G, succ(i)), empty)) proof
+    fix i
+    assume hi: i in N
+    have io := mp(mp(nat_elem[k := N, i := i], hN), hi)
+    have es: succ(i) = int_add(i, 1) by arith(io)
+    have ile: int_le(i, n) by arith(io, hN, hi, hn)
+    have gsi := mp(mp(all_elim(gs, {i}), io), ile)
+    have gsucc: app(G, succ(i)) = app(f, i) := rewrite(sym(es), gsi)
+    // the first: l0 to l1
+    have k0: i = 0 -> c(app(G, i)) && b(app(G, i), ok(app(G, succ(i)), empty)) proof
+      assume e0: i = 0
+      have ee: i = empty := rewrite(lit_zero, e0)
+      have gi: app(G, i) = l0 := subst({y. app(G, y) = l0}, sym(ee), g0)
+      have fi: app(f, i) = l1 := subst({y. app(f, y) = l1}, sym(ee), hf0)
+      have g1 := trans(gsucc, fi)
+      have c0: c(app(G, i)) := subst({y. c(y)}, sym(gi), hc)
+      have b1 := subst({z. b(l0, ok(z, empty))}, sym(g1), hb)
+      have b0: b(app(G, i), ok(app(G, succ(i)), empty)) := subst({y. b(y, ok(app(G, succ(i)), empty))}, sym(gi), b1)
+      show by taut(c0, b0)
+    qed
+    // a later one: f's
+    have k1: !(i = 0) -> c(app(G, i)) && b(app(G, i), ok(app(G, succ(i)), empty)) proof
+      assume nz: !(i = 0)
+      have jo: int_sub(i, 1) in omega by arith(io, nz)
+      have ej: int_add(int_sub(i, 1), 1) = i by arith(io)
+      have jn: int_sub(i, 1) in n by arith(jo, hn, io, hi, hN, nz)
+      have jle: int_le(int_sub(i, 1), n) by arith(io, ile)
+      have gj := mp(mp(all_elim(gs, {int_sub(i, 1)}), jo), jle)
+      have gi: app(G, i) = app(f, int_sub(i, 1)) := rewrite(ej, gj)
+      have es2: succ(int_sub(i, 1)) = int_add(int_sub(i, 1), 1) by arith(jo)
+      have sj := trans(es2, ej)
+      have st := mp(all_elim(hst, {int_sub(i, 1)}), jn)
+      have st2 := rewrite(sj, st)
+      have st3 := rewrite(sym(gi), st2)
+      show := rewrite(sym(gsucc), st3)
+    qed
+    show by taut(k0, k1)
+  qed
+  // the end: G(N) = f(n)
+  have nn: int_le(n, n) by arith(hn)
+  have gN: app(G, N) = app(f, n) := mp(mp(all_elim(gs, {n}), hn), nn)
+  have hend2: (!c(app(G, N)) && r = ok(app(G, N), empty)) || (c(app(G, N)) && b(app(G, N), r) && !is_ok(r)) := rewrite(sym(gN), hend)
+  have e1: ex g. N in omega && is_fun(g) && dom(g) = succ(N) && app(g, empty) = l0 &&
+      (all i. i in N -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+      ((!c(app(g, N)) && r = ok(app(g, N), empty)) || (c(app(g, N)) && b(app(g, N), r) && !is_ok(r)))
+    by ex_intro({G}, taut(hN, gf, gd, g0, gst, hend2))
+  have e2: ex m g. m in omega && is_fun(g) && dom(g) = succ(m) && app(g, empty) = l0 &&
+      (all i. i in m -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+      ((!c(app(g, m)) && r = ok(app(g, m), empty)) || (c(app(g, m)) && b(app(g, m), r) && !is_ok(r)))
+    by ex_intro({N}, e1)
+  show by defs(taut(e2), while_rel)
+qed
 
 // ----------------------------------------------------------------------
 //  The loop rules
@@ -212,7 +555,7 @@ qed
 //  p and a smaller m, or leaves (an outcome that is neither ok nor a
 //  divergence) with g, then the loop has a run, ending where it stops or
 //  where its body leaves with g (g: the body's outcomes the prover chose).
-//  Rests on `while_stop`, `while_leave`, `while_step`.
+//  By `while_stop`, `while_leave`, `while_step`.
 theorem while_exists(l0, l. c, l o. b, l. tr, l. p, l. m, l o. g):
   p(l0) -> (all l. p(l) -> m(l) in omega) ->
   (all l. p(l) -> c(l) -> (ex l2. b(l, ok(l2, empty)) && p(l2) && int_lt(m(l2), m(l))) || (ex r. b(l, r) && g(l, r) && !is_ok(r) && !(fst(r) = 2))) ->

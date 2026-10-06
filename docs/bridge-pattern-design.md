@@ -471,10 +471,11 @@ planned, and everything it does not use is removed.
      Values and lets made inside a turn are local to its proof.
    - New entry/exit forms: a no-argument entry (`tr.entry0`) and a void
      return (`tr.ret_void`, `tr.result_void`).
-   - Open lemmas: `tr.qs_loop` rests on core/loop.core's open `while_step` /
-     `while_leave`. Every certificate already rests on them, together with
-     `while_unroll`, through the ABI glue (`abi.bridge_implements`), so
-     step_seq adds no new open dependency.
+   - Open lemmas: `tr.qs_loop` is by core/loop.core's `while_step` /
+     `while_leave`. These, with `while_unroll` and `while_stop`, were open
+     until 2026-10-07; every certificate rested on them through the ABI glue
+     (`abi.bridge_implements`). They are now proven (see step 6 below), and
+     all seven certificates are unconditional theorems.
    - Limits:
      - the frame is one home (`hs ⊆ {d}`);
      - loads after the frame is written (ds = true) are not covered yet;
@@ -501,3 +502,15 @@ planned, and everything it does not use is removed.
    they used (`abi.ret_view`, `abi.returns`, `abi.run_cut`,
    `abi.frame_apart`, `g.usable_bytes`) and three nothing used
    (`abi.agree_wm`, `g.read_off2`, `g.write_off2`).
+6. **The loop lemmas proven (2026-10-07).** core/loop.core's `while_stop`,
+   `while_leave`, `while_step` and `while_unroll` are theorems, from
+   `while_rel`'s definition: a run's states are a function on the
+   iterations, built for one state (`while_one`), extended by one in front
+   (`while_step`), or shifted by one (`while_unroll`; a divergence shifted
+   is one, with another trace). Helpers: `nat_elem` (an element of a natural
+   number is one), `succ_zero`; `fn_build_fun` / `fn_build_dom` moved from
+   core/records.core to core/sets.core so core/loop.core needs no more than
+   before. Nothing in the chain rests on an open lemma: all seven
+   certificates are unconditional theorems, and the chain checks in about
+   6 s. What is left unproven is the claims `abi.call_rule` /
+   `abi.call_rule_at`, which only functions that call others will use.

@@ -429,7 +429,7 @@ fn the_record_library_checks() {
 #[test]
 fn the_loop_library_checks() {
     let n = check_nat(&core_file("loop.core")).unwrap();
-    assert_eq!(n, 6);
+    assert_eq!(n, 14);
 }
 
 /// A loop counting to 3 (the loop state: the program state and the counter).
@@ -570,10 +570,10 @@ fn loops_can_be_unrolled() {
     // counting to 3 without an invariant: three iterations, then the exit
     // (a divergence would continue as one from the next iteration, which
     // runs out when the loop stops)
-    // -- resting on the open lemma while_unroll (core/loop.core), which an
-    // unrolling step uses: a conditional theorem, never a silent one
+    // -- by the theorem while_unroll (core/loop.core), which an unrolling
+    // step uses: without the loop library, refused
     let src = count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 3", ", unroll");
-    assert_eq!(check_loop(&src), Ok((0, vec!["t".to_string()])));
+    assert_eq!(check_loop(&src), Ok((1, vec![])));
     assert!(check_nat(&src).unwrap_err().contains("while_unroll"));
     match check_loop(&count_thm("ex l. o = ok(l, empty) && fst(l) = s && snd(l) = 2", ", unroll")) {
         Ok(_) => panic!("wrong exit accepted"),
