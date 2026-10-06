@@ -451,10 +451,27 @@ struct stores.
      Values and lets made inside a turn are local to its proof.
    - New entry/exit forms: a no-argument entry (`tr.entry0`) and a void
      return (`tr.ret_void`, `tr.result_void`).
+   - Open lemmas: `tr.qs_loop` rests on core/loop.core's open `while_step` /
+     `while_leave`. Every certificate already rests on them, together with
+     `while_unroll`, through the ABI glue (`abi.bridge_implements`), so
+     step_seq adds no new open dependency.
    - Limits:
-     - `tr.qs_loop` rests on core/loop.core's open `while_step` /
-       `while_leave`, so the certificate's two theorems are conditional;
      - the frame is one home (`hs ⊆ {d}`);
      - loads after the frame is written (ds = true) are not covered yet;
        step_seq has none.
+
+   **upgradelock, resetlock done**: proofs/upgradelock_tr.core (8 lines),
+   proofs/resetlock_tr.core (24 lines), both generated.
+   - upgradelock (`nop; ret`) needed nothing new.
+   - resetlock (`movl $0, __malloc_lock(%rip)`) is the spec's `st32`: a
+     4-byte store to a static. For it, the store rules now take n bytes:
+     - `tr.store_step`, `tr.store_keeps` and `tr.store_acc` take the width;
+     - the stack-page fact is per byte (`tr.off_stack1` for one byte,
+       `tr.off_stackn` from the statics' range);
+     - `tr.storen_other` and `tr.store_near` replace `tr.store1_other`.
+
+     New forms: `g.st32_at_ok`/`_ub`, `tr.st32_at_ok` (the spec side),
+     `x86i.store32i_rip` and `tr.store32i_rip` (the machine side).
+   - The C1 premise is `rlt.statics(statics)`: all 4 bytes of the lock
+     word are among the statics.
 5. Retire the per-function bridge; redo the remaining functions.

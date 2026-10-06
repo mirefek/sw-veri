@@ -1,6 +1,7 @@
 //! `slc translate`: the certificate of a function's C1 by statement patterns
 //! (docs/bridge-pattern-design.md). Not trusted: it writes a proof that
-//! `slc kernel-check` checks, with proofs/translate.core's rules.
+//! `slc kernel-check` checks, with proofs/translate.core's and
+//! proofs/translate_store_loop.core's rules.
 //!
 //! It walks the function's decode facts (`FN.at_ADDR`, build/leaf_steps.core)
 //! from the entry, alongside the spec's procedure (`SPEC_fun`):
@@ -93,9 +94,10 @@ enum Red {
     Guard { cond: Term, ub: (usize, String) },
 }
 
-/// A store of the spec: st8(p, off, v) (or a helper whose body is one,
-/// named), its definedness, its address
+/// A store of the spec: st8(p, off, v) or st32(p, off, v) (or a helper
+/// whose body is one, named), its width, its definedness, its address
 struct StoreOp {
+    n: u128,
     cond: Term,
     p: Term,
     off: Term,
@@ -840,11 +842,12 @@ impl<'e> Gen<'e> {
         Err(format!("no rule for the operation {}", self.print(op)))
     }
 
-    /// A store at the head: `gimple.st8(p, off, v)`, or a helper's call
-    /// whose body is one (`mkprog(x0 x1. bind_rel(st8(..), x0, x2 x3. x1 =
-    /// ok(x2, empty), ..))`)
+    /// A store at the head: `gimple.st8(p, off, v)` or `gimple.st32(..)`,
+    /// or a helper's call whose body is one (`mkprog(x0 x1. bind_rel(st8(..),
+    /// x0, x2 x3. x1 = ok(x2, empty), ..))`)
     fn store_op(&mut self, op: &Term) -> Result<Option<StoreOp>, String> {
-        let (inner, helper) = if self.app(op, "gimple.st8", 3).is_some() {
+        let is_store = |g: &Gen, t: &Term| g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st32", 3).is_some();
+        let (inner, helper) = if is_store(self, op) {
             (op.clone(), None)
         } else {
             let Node::App(f, args) = op.node() else { return Ok(None) };
@@ -858,7 +861,7 @@ impl<'e> Gen<'e> {
                 let m = self.app(&b, "mkprog", 1)?;
                 let br = self.app(&m[0], "bind_rel", 5)?;
                 matches!(br[1].node(), Node::BVar(1)).then_some(())?;
-                self.app(&br[0], "gimple.st8", 3)?;
+                is_store(self, &br[0]).then_some(())?;
                 let e = self.app(&br[2], "eq", 2)?;
                 let o = self.app(&e[1], "ok", 2)?;
                 (matches!(e[0].node(), Node::BVar(2)) && matches!(o[0].node(), Node::BVar(1)) && self.app(&o[1], "empty", 0).is_some()).then_some(())?;
@@ -867,7 +870,10 @@ impl<'e> Gen<'e> {
             let Some(inner) = inner else { return Ok(None) };
             (inner, Some(fname))
         };
-        let x = self.app(&inner, "gimple.st8", 3).unwrap().to_vec();
+        let (n, x) = match self.app(&inner, "gimple.st8", 3) {
+            Some(x) => (1, x.to_vec()),
+            None => (4, self.app(&inner, "gimple.st32", 3).unwrap().to_vec()),
+        };
         let (p, off, v) = (x[0].clone(), x[1].clone(), x[2].clone());
         let addr = match (self.eval_lit(&p), self.eval_lit(&off)) {
             (Some(pv), Some(ov)) => lit((pv + ov) % P64),
@@ -877,8 +883,8 @@ impl<'e> Gen<'e> {
         let w = self.print(&self.w.clone());
         let hv = self.hvu.clone();
         let (ps, os, vs) = (self.print(&p), self.print(&off), self.print(&v));
-        let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {ps}, {os}, 1, true)"))?;
-        let inner_ub = format!("mp(g.st8_at_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{vs}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
+        let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {ps}, {os}, {n}, true)"))?;
+        let inner_ub = format!("mp(g.st{}_at_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{vs}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})", 8 * n);
         let ub = match &helper {
             None => inner_ub,
             Some(fname) => {
@@ -886,14 +892,14 @@ impl<'e> Gen<'e> {
                 format!("defs(mp({ubl}, {{{w}}}, {hv}, hvu, simp(), {inner_ub}), {fname})")
             }
         };
-        Ok(Some(StoreOp { cond, p, off, v, addr, inner, helper, ub }))
+        Ok(Some(StoreOp { n, cond, p, off, v, addr, inner, helper, ub }))
     }
 
-    /// The spec's store at the head of `st`'s rest, the machine storing at
-    /// `addr`: its definedness fact, the stored value, the world after (its
-    /// lines: its definition, its facts), the state after, the reduction
-    /// `tr.red(WRAP(q), w, WRAP(q2), w2)`'s proof, the address
-    fn spec_store(&mut self, st: &St, addr: &Term) -> Result<(String, Term, Vec<String>, St, String, Term), String> {
+    /// The spec's store at the head of `st`'s rest, the machine storing n
+    /// bytes at `addr`: its definedness fact, the stored value, the world
+    /// after (its lines: its definition, its facts), the state after, the
+    /// reduction `tr.red(WRAP(q), w, WRAP(q2), w2)`'s proof, the address
+    fn spec_store(&mut self, st: &St, addr: &Term, n: u128) -> Result<(String, Term, Vec<String>, St, String, Term), String> {
         let Spec::Proc(qi) = st.spec else { return Err(format!("{:x}: a store after the procedure's result", st.a)) };
         let q = self.qs[qi].1.clone();
         let badm = format!("{:x}: a store the spec does not make here (its rest: {})", st.a, self.print(&q));
@@ -903,6 +909,9 @@ impl<'e> Gen<'e> {
         let (a, k) = (ex[0].clone(), ex[1].clone());
         let x = self.app(&a, "bind_rel", 5).ok_or_else(bad)?.to_vec();
         let so = self.store_op(&x[0])?.ok_or_else(bad)?;
+        if so.n != n {
+            return Err(format!("{:x}: the machine stores {} bytes, the spec {}", st.a, n, so.n));
+        }
         let hc = st.hyps.iter().find(|h| h.0 == so.cond).map(|h| h.1.clone()).ok_or_else(bad)?;
         if self.canon(&so.addr) != self.canon(addr) && !(self.eval_lit(&so.addr).is_some() && self.eval_lit(&so.addr) == self.eval_lit(addr)) {
             return Err(format!("{:x}: the machine stores at {}, the spec at {}", st.a, self.print(addr), self.print(&so.addr)));
@@ -919,15 +928,15 @@ impl<'e> Gen<'e> {
         let (wn2, hw2, hv2) = (format!("W{}", k2), format!("hW{}", k2), format!("hvu{}", k2));
         let w2 = self.var(&wn2);
         let (wn, ap, vp) = (st.wn.clone(), self.print(&so.addr), self.print(&so.v));
-        let w2t = format!("fn_update({wn}, \"vm\", fn_update(app({wn}, \"vm\"), \"bytes\", x86_64_linux.store_le(app(app({wn}, \"vm\"), \"bytes\"), {ap}, 1, {vp})))");
+        let w2t = format!("fn_update({wn}, \"vm\", fn_update(app({wn}, \"vm\"), \"bytes\", x86_64_linux.store_le(app(app({wn}, \"vm\"), \"bytes\"), {ap}, {n}, {vp})))");
         let pre = vec![
             format!("let {wn2} := {w2t}"),
-            format!("have {hw2} := apply(tr.world_store, {{{wn}}}, {{{ap}}}, {{1}}, {{{vp}}}, taut({}), taut({}), simp(L))", st.hw, st.hw),
+            format!("have {hw2} := apply(tr.world_store, {{{wn}}}, {{{ap}}}, {{{n}}}, {{{vp}}}, taut({}), taut({}), simp(L))", st.hw, st.hw),
             format!("have {hv2}: {wn2} in univ(1) by taut({hw2})"),
         ];
         // the store's run: ok, to the world after
         let (ps, os) = (self.print(&so.p), self.print(&so.off));
-        let st8ok = format!("mp(tr.st8_at_ok, {{{wn}}}, {{{ps}}}, {{{os}}}, {{{vp}}}, {{{ap}}}, taut({}), {}, simp(L), simp(L), simp(L), simp(L), {hc})", st.hw, st.hvu);
+        let st8ok = format!("mp(tr.st{}_at_ok, {{{wn}}}, {{{ps}}}, {{{os}}}, {{{vp}}}, {{{ap}}}, taut({}), {}, simp(L), simp(L), simp(L), simp(L), {hc})", 8 * n, st.hw, st.hvu);
         let okp = match &so.helper {
             None => st8ok,
             Some(fname) => {
@@ -989,6 +998,14 @@ impl<'e> Gen<'e> {
         let (lip, ci, pp) = (self.print(&lp.li), lp.ci.clone(), self.print(&pt));
         let er = format!("apply(tr.elem_in, {{{pp}}}, {{{lip}}}, {{{k}}}, simp(L), taut({ci}), simp(L), taut({ci}), {hg}, simp(L), simp(L))");
         Ok(format!("mp(hns, {{{ap}}}, simp(L), simp(L, {er}), simp(L, {er}))"))
+    }
+
+    /// a store's n bytes at the static address addr off the stack pages:
+    /// their proof (the statics' range, known at the end: {SLO}, {SHI})
+    fn off_stack_n(&mut self, st: &St, addr: &Term, n: u128) -> Result<String, String> {
+        let av = self.eval_lit(addr).ok_or_else(|| format!("{:x}: a {}-byte store at {}: not covered yet", st.a, n, self.print(addr)))?;
+        self.add_static(av, av + n);
+        Ok(format!("apply(tr.off_stackn, {{app(s, \"vm\")}}, {{{{SLO}}}}, {{{{SHI}}}}, {{{}}}, {{{n}}}, hns, simp(L), simp(L), simp(L), simp(L), simp(L))", self.print(addr)))
     }
 
     /// the static bytes [lo, hi) the spec reads or writes
@@ -2473,7 +2490,7 @@ impl<'e> Gen<'e> {
                     let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
                     ("store8i_bi", vec![b.clone(), i.clone(), k.clone(), lit(nb), bv, iv], 9, ad)
                 };
-                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &ad)?;
+                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &ad, 1)?;
                 if self.eval_lit(&v) != nat(&k) {
                     return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&k), self.print(&v)));
                 }
@@ -2502,7 +2519,7 @@ impl<'e> Gen<'e> {
                 let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                 let biga = lit((a2 + d) % P64);
                 let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
-                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &biga)?;
+                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &biga, 1)?;
                 // (the register's low byte: the spec's value, u + k against v + k)
                 let (ue, ve) = (self.expand(&u), self.expand(&v));
                 let low8 = (|| {
@@ -2564,6 +2581,32 @@ impl<'e> Gen<'e> {
                 let mut st2 = st.clone();
                 st2.a = tt;
                 self.then(t, st2)
+            }
+            // mov dword [rip + d], imm32: the spec's 4-byte store of k at a
+            // static's address
+            77 if self.pairs(&f, 4).and_then(|x| self.memop(&x[1])).and_then(|m| self.tag(&m["base"])).map_or(false, |b| b.0 == 1) => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                let m = self.memop(&x[1]).ok_or_else(|| bad("fields"))?;
+                if nat(&x[0]) != Some(4) || x[2] != x[1] {
+                    return Err(bad("not mov dword [rip + d], imm32"));
+                }
+                let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let biga = lit((a2 + d) % P64);
+                let k = x[3].clone();
+                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &biga, 4)?;
+                if self.eval_lit(&v) != nat(&k) {
+                    return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&k), self.print(&v)));
+                }
+                let ns = self.off_stack_n(st, &sa, 4)?;
+                let low = self.homes_low(st)?;
+                let t = self.head("store32i_rip", a, insn)
+                    + &self.terms(&[&lit(d), &k, &biga])
+                    + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
+                    + &", simp(L)".repeat(5)
+                    + &format!(", simp(L, {hc}), {ns}, {low}, simp(), {red}, {{NEXT}})");
+                let mut st3 = st2;
+                st3.a = a2;
+                self.then_pre(t, st3, pre)
             }
             // mov dword [rsp + d], imm32: the home d := k (the frame written)
             77 => {
@@ -2896,7 +2939,7 @@ pub fn translate(args: &[String]) -> CResult {
     // the text
     let mut o = String::new();
     o.push_str(&format!(
-        "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, proofs/translate.core)\n// Each step: a rule of proofs/translate.core with its instance -- a spec\n// reduction, or an instruction (its decode fact, build/leaf_steps.core;\n// literal facts, simp(L)) -- then the next point. Checked after\n// proofs/translate.core.\n\n",
+        "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, the rules)\n// Each step: a rule of proofs/translate.core or proofs/translate_store_loop.core\n// with its instance -- a spec reduction, or an instruction (its decode\n// fact, build/leaf_steps.core; literal facts, simp(L)) -- then the next\n// point. Checked after proofs/translate_store_loop.core.\n\n",
         fname, fname, spec_name, prefix
     ));
     let view = if guarded { format!("tr.view1(s, {}, {}, {})", dn, n, arg_reg) } else { "app(s, \"vm\")".to_string() };
@@ -3046,6 +3089,11 @@ pub fn translate(args: &[String]) -> CResult {
         c = g.code,
         spec = spec_name
     ));
+    // (the statics' range in the proofs that name it)
+    let o = match srange {
+        Some((lo, hi)) => o.replace("{SLO}", &lo.to_string()).replace("{SHI}", &hi.to_string()),
+        None => o,
+    };
     std::fs::write(&out_path, o).map_err(|e| format!("{}: {}", out_path, e))?;
     println!("{}: {} spec rests, {} values, {} lines", out_path, g.qs.len(), g.vals.len(), pf.lines.len());
     Ok(())
