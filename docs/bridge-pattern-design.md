@@ -370,5 +370,23 @@ struct stores.
      raising.
    - The old top-level reductions (`tr.q_let`, `tr.q_any`, `tr.q_op`,
      `tr.ld8_elem`) are no longer used.
+
+   **get_slot_index done**: proofs/get_slot_index_tr.core, generated on the
+   first try once its forms existed. New:
+   - the 64-bit entry (`tr.entry1_64`, `tr.prologue1_64`), a copy of the
+     32-bit one at the other width;
+   - the 64-bit home load, `sub r64, imm8` (producing GIMPLE's `p + -k`),
+     `and r32, imm8`;
+   - `movzx r32, byte [b]` and `movzx r32, r8`;
+   - `padd` with a symbolic pointer: its value `bits_add(64, p, d)`, split
+     on its definedness.
+
+   get_stride is next. It needs:
+   - bitfield loads (`ldbf`), and their relation to the machine's
+     shifts/masks of a wider load (`shr 12; shl 12` against
+     `bits[52](ldbf(p, 33, 7, 4, 52)) * 4096`);
+   - calls of helper procedures inlined (`meta_maplen`, `meta_sizeclass`);
+   - a `return` from inside a block;
+   - 16-bit loads and about a dozen more instruction forms.
 4. The loop rule and step_seq, without an invariant.
 5. Retire the per-function bridge; redo the remaining functions.

@@ -524,6 +524,15 @@ impl<'e> Gen<'e> {
                     return Ok((None, r, ok, String::new()));
                 }
             }
+            // a pointer's: p + d in 64 bits, when in the address range
+            // (tr.padd_def, as it expands)
+            let ty = self.mk("fn_update", vec![self.mk("fn_update", vec![self.mk("empty", vec![]), Term::bytes(b"prec"), lit(64)]), Term::bytes(b"signed"), self.mk("true", vec![])]);
+            let sum = self.mk("int_add", vec![p.clone(), self.mk("gimple.sval", vec![ty, d.clone()])]);
+            let cond = self.mk("and", vec![self.mk("int_le", vec![lit(0), sum.clone()]), self.mk("int_lt", vec![sum, lit(P64)])]);
+            let r = self.mk("bits_add", vec![lit(64), p.clone(), d.clone()]);
+            let ok = format!("mp(tr.padd_okb, {{{w}}}, {{{}}}, {{{}}}, hvu, simp(L), simp(L), {{HC}})", pr(self, &p), pr(self, &d));
+            let ub = format!("mp(tr.padd_ub, {{{w}}}, {{{}}}, {{{}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), simp(L), simp(L), {{HN}})", pr(self, &p), pr(self, &d));
+            return Ok((Some(cond), r, ok, ub));
         }
         if let Some(x) = self.app(op, "gimple.elem", 3) {
             if nat(&x[2]) == Some(1) {
@@ -896,15 +905,22 @@ impl<'e> Gen<'e> {
             }
         };
         match insn.row {
-            // mov r32, [rsp + d]: the home's value
+            // mov r32/r64, [rsp + d]: the home's value
             76 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
                 let g = reg(&x[1])?;
-                let v = home(&self.hs, &d)?;
-                let t = self.head("load32_home", a, insn) + &self.terms(&[&x[1], &d, &x[3], &x[4], &v]) + &self.tail(st, insn, 7, &[]);
+                let n = nat(&x[0]).ok_or_else(|| bad("fields"))?;
+                let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let v = match (n, self.hs.get(&dn)) {
+                    (4, _) => home(&self.hs, &d)?,
+                    (8, Some((8, x))) => x.clone(),
+                    _ => return Err(bad("no home of the load's width")),
+                };
+                let rule = if n == 8 { "load64_home" } else { "load32_home" };
+                let t = self.head(rule, a, insn) + &self.terms(&[&x[1], &d, &x[3], &x[4], &v]) + &self.tail(st, insn, 7, &[]);
                 self.scratch.insert(g);
-                let st2 = self.set_reg(st, a2, g, 4, v);
+                let st2 = self.set_reg(st, a2, g, n, v);
                 self.then(t, st2)
             }
             // neg r32
@@ -1005,13 +1021,34 @@ impl<'e> Gen<'e> {
                 let (k, g) = self.tag(&x[2]).ok_or_else(|| bad("fields"))?;
                 let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;
                 let kk = if imm >= 128 { imm + 0xffff_ff00 } else { imm };
-                if k != 0 || nat(&x[0]) != Some(4) {
-                    return Err(bad("not r32, imm8"));
+                let size = nat(&x[0]).ok_or_else(|| bad("fields"))?;
+                if k != 0 || (size != 4 && size != 8) {
+                    return Err(bad("not r32/r64, imm8"));
                 }
                 let gn = reg(&g)?;
-                let u = self.need_reg(st, gn, 4)?;
-                match nat(&x[1]) {
-                    Some(5) => {
+                let u = self.need_reg(st, gn, size)?;
+                match (size, nat(&x[1])) {
+                    // sub r64, imm8: GIMPLE's p + -k
+                    (8, Some(5)) => {
+                        let kk = if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm };
+                        let t = self.head("sub64_imm", a, insn) + &self.terms(&[&g, &x[3], &x[4], &lit(kk), &u]) + &self.tail(st, insn, 6, &[]);
+                        let neg = self.mk("bits_neg", vec![lit(64), lit(kk)]);
+                        let r = self.mk("bits_add", vec![lit(64), u, neg]);
+                        let r = self.value(&r);
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 8, r);
+                        self.then(t, st2)
+                    }
+                    // and r32, imm8
+                    (4, Some(4)) => {
+                        let t = self.head("and32_imm", a, insn) + &self.terms(&[&g, &x[3], &x[4], &lit(kk), &u]) + &self.tail(st, insn, 6, &[]);
+                        let r = self.mk("bits_and", vec![lit(32), u, lit(kk)]);
+                        let r = self.value(&r);
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 4, r);
+                        self.then(t, st2)
+                    }
+                    (4, Some(5)) => {
                         let t = self.head("sub32_imm", a, insn) + &self.terms(&[&g, &x[3], &x[4], &lit(kk), &u]) + &self.tail(st, insn, 6, &[]);
                         let neg = self.mk("bits_neg", vec![lit(32), lit(kk)]);
                         let r = self.mk("bits_add", vec![lit(32), u, neg]);
@@ -1021,7 +1058,7 @@ impl<'e> Gen<'e> {
                         self.then(t, st2)
                     }
                     // cmp r32, imm8; ja t
-                    Some(7) => {
+                    (4, Some(7)) => {
                         let (j, jn, a3, tt, cc) = self.jcc(a2)?;
                         if cc != 7 {
                             return Err(bad("cmp not followed by ja"));
@@ -1122,8 +1159,37 @@ impl<'e> Gen<'e> {
             79 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
+                // movzx r32, r8 (h holding the byte b)
+                if let Some((0, h)) = self.tag(&x[2]) {
+                    let hn = reg(&h)?;
+                    if x[3] != x[2] || hn >= 4 {
+                        return Err(bad("not movzx r32, r8"));
+                    }
+                    let b = self.need_reg(st, hn, 1)?;
+                    let t = self.head("movzx8_rr", a, insn) + &self.terms(&[&x[1], &h, &x[4], &b]) + &self.tail(st, insn, 6, &[]);
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 4, b);
+                    return self.then(t, st2);
+                }
                 let m = self.memop(&x[2]).ok_or_else(|| bad("fields"))?;
                 let (bk, b) = self.tag(&m["base"]).ok_or_else(|| bad("fields"))?;
+                // movzx r32, byte [b] (b holding the pointer)
+                if self.app(&m["index"], "none", 0).is_some() {
+                    if bk != 2 || nat(&m["disp"]) != Some(0) || x[3] != x[2] {
+                        return Err(bad("not [b]"));
+                    }
+                    let bn = reg(&b)?;
+                    let bv = self.need_reg(st, bn, 8)?;
+                    let cond = self.ld8_cond(&bv);
+                    let hc = st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: a byte load at {} the spec does not load", a, self.print(&bv)))?;
+                    let t = self.head("movzx8_b", a, insn) + &self.terms(&[&x[1], &b, &x[4], &bv]) + &self.tail(st, insn, 5, &[format!("taut({})", hc)]);
+                    let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
+                    let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, bv, lit(1)])]);
+                    let by = self.value(&by);
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 1, by);
+                    return self.then(t, st2);
+                }
                 let i = self.app(&m["index"], "some", 1).ok_or_else(|| bad("no index"))?[0].clone();
                 if bk != 2 || nat(&m["disp"]) != Some(0) || nat(&m["scale"]) != Some(1) || x[3] != x[2] {
                     return Err(bad("not [b + i]"));
@@ -1412,23 +1478,25 @@ pub fn translate(args: &[String]) -> CResult {
     let (proc, kw, wrap) = parts.ok_or_else(|| format!("`{}`: not a one-argument procedure's spec", spec_name))?;
     g.kw = kw.clone();
 
-    // the entry: mov [rsp + d], edi
+    // the entry: mov [rsp + d], edi / rdi (the argument's n bytes)
     let (e_len, e_name, ef) = {
         let e0 = &g.insns[&entry];
         (e0.len, e0.name.clone(), g.pairs(&e0.fields, 5).ok_or("the entry's fields")?)
     };
-    let d = match (g.insns[&entry].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
-        (75, Some(4), Some(7), Some(d)) => d,
-        _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi`", entry)),
+    let (d, n) = match (g.insns[&entry].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
+        (75, Some(n), Some(7), Some(d)) if n == 4 || n == 8 => (d, n),
+        _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi` or `rdi`", entry)),
     };
     let dn = nat(&d).ok_or("the entry's displacement")?;
     let a2 = (entry + e_len) % P64;
-    let x = g.mk("bits_of_int", vec![lit(32), g.mk("app", vec![args_t.clone(), lit(0)])]);
+    let x = g.mk("bits_of_int", vec![lit(8 * n), g.mk("app", vec![args_t.clone(), lit(0)])]);
+    // (the entry rule, the argument register's value stored)
+    let (entry_rule, arg_reg) = if n == 8 { ("tr.entry1_64", "app(app(s, \"gpr\"), 7)".to_string()) } else { ("tr.entry1_32", "bits_slice(app(app(s, \"gpr\"), 7), 31, 0)".to_string()) };
     let q0raw = proc.instantiate_params(&[args_t.clone()], &g.env.binders_fn());
     let Node::Var(qv, _) = q_t.node() else { unreachable!() };
     let wrap_q0 = wrap.subst_var(*qv, &q0raw, &g.env.binders_fn());
     let xn = g.value(&x);
-    g.hs.insert(dn, (4u128, xn.clone()));
+    g.hs.insert(dn, (n, xn.clone()));
     let q0 = g.canon(&q0raw);
     let i0 = g.new_q(q0);
 
@@ -1442,7 +1510,7 @@ pub fn translate(args: &[String]) -> CResult {
         "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, proofs/translate.core)\n// Each step: a rule of proofs/translate.core with its instance -- a spec\n// reduction, or an instruction (its decode fact, build/leaf_steps.core;\n// literal facts, simp(L)) -- then the next point. Checked after\n// proofs/translate.core.\n\n",
         fname, fname, spec_name, prefix
     ));
-    let view = format!("tr.view1(s, {}, 4, bits_slice(app(app(s, \"gpr\"), 7), 31, 0))", dn);
+    let view = format!("tr.view1(s, {}, {}, {})", dn, n, arg_reg);
     o.push_str(&format!("abbrev {p}.v(s) := {}\nabbrev {p}.w(s) := abi.view({p}.v(s), s)\n\n", view, p = prefix));
     for c in g.imuls.clone() {
         o.push_str(&format!(
@@ -1453,11 +1521,13 @@ pub fn translate(args: &[String]) -> CResult {
     }
     let p = &prefix;
     o.push_str(&format!(
-        "theorem {p}.body: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {}, {}, {}, fn_update(empty, {}, pair(4, bits_of_int(32, app(args, 0)))), empty,\n    {}, {p}.w(s))\nproof\n",
+        "theorem {p}.body: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), empty,\n    {}, {p}.w(s))\nproof\n",
         g.base,
         g.code,
         a2,
         dn,
+        n,
+        8 * n,
         g.print(&wrap_q0)
     ));
     o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n  assume hg: ord_le(1, seq_len(args))\n");
@@ -1485,7 +1555,7 @@ pub fn translate(args: &[String]) -> CResult {
     for (v, t) in &g.vals {
         o.push_str(&format!("  let {} := {}\n", g.env.vars[*v as usize].name, g.print(t)));
     }
-    o.push_str(&format!("  let HS := fn_update(empty, {}, pair(4, {}))\n", dn, g.print(&xn)));
+    o.push_str(&format!("  let HS := fn_update(empty, {}, pair({}, {}))\n", dn, n, g.print(&xn)));
     o.push_str("  // the spec's rest at each point\n");
     for (n, t) in &g.qs {
         o.push_str(&format!("  let {} := {}\n", n, g.print(t)));
@@ -1501,7 +1571,8 @@ pub fn translate(args: &[String]) -> CResult {
     o.push_str(&format!("  show := {}\nqed\n\n", pf.expr));
     let ql = g.lambda(1, &proc);
     o.push_str(&format!(
-        "theorem {p}.implements: all statics. abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n  have m0 := mp(tr.entry1_32[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {p}.body)\n",
+        "theorem {p}.implements: all statics. abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {p}.body)\n",
+        er = entry_rule,
         b = g.base,
         c = g.code,
         spec = spec_name,
