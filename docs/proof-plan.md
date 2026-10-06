@@ -357,6 +357,13 @@ relies on.
    the counter to the stack slot between byte stores to the context, which
    needs separation of the slot from static data inside a loop, an
    unrolled spec loop, and a world-changing ret_case.
+   (Retired 2026-10-06: these per-function proofs -- get_slot_index_run,
+   get_slot_index_abi, a_ctz_32, is_bouncing, get_stride, upgradelock,
+   resetlock, step_seq -- and the lemmas only they used (`abi.ret_view`,
+   `abi.returns`, `abi.run_cut`, `abi.frame_apart`, `g.usable_bytes`) are
+   removed. C1 for all seven functions is now by the generated certificates
+   proofs/FN_tr.core (docs/bridge-pattern-design.md); the text above records
+   how the first proofs were built.)
 6. **The invariant; (C2) per function; the laws.** First part done:
    - `layers/mallocng.sl`: mallocng's invariant for a given binary
      (`Cfg`: the file, the addresses of ctx, the lock, `__libc`). An
@@ -572,7 +579,10 @@ simp calls over spec_run's statement, its parameters chosen (`part(r,
 Open for step_seq's C1: the machine invariant at the head (rip, rsp, the
 memory `store_le(zm(b, i), slot, 4, i)` with the machine's zeroed bytes
 `zm` likewise by `nat_rec`), symex around the loop with `abi.run_cut`,
-and the ABI glue (`abi.ret_case`).
+and the ABI glue (`abi.ret_case`). (Superseded: step_seq's C1 is
+proofs/step_seq_tr.core, by translation, its loop by an invariant and a
+variant at the head (`tr.wf2`); proofs/step_seq.core and `abi.run_cut`
+are removed.)
 
 ### 6.3 The bridge: readable GIMPLE to machine code (simulation)
 

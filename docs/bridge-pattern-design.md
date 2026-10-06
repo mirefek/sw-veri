@@ -475,3 +475,9 @@ struct stores.
    - The C1 premise is `rlt.statics(statics)`: all 4 bytes of the lock
      word are among the statics.
 5. Retire the per-function bridge; redo the remaining functions.
+   **Per-function proofs retired**: proofs/{a_ctz_32, is_bouncing,
+   get_slot_index, get_slot_index_run, get_slot_index_abi, get_stride,
+   step_seq, upgradelock, resetlock}.core are removed, with the lemmas only
+   they used (`abi.ret_view`, `abi.returns`, `abi.run_cut`,
+   `abi.frame_apart`, `g.usable_bytes`) and three nothing used
+   (`abi.agree_wm`, `g.read_off2`, `g.write_off2`).

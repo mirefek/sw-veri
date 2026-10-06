@@ -69,88 +69,18 @@ fn step_theorems_of_get_slot_index_prove() {
         .arg(&claim)
         .args(["proofs/x86.core", "proofs/x86_code.core"])
         .arg(&out)
-        .args(["proofs/get_slot_index_run.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // 7 step theorems, and per instruction where a step from it goes and
-    // its outcome; the function's run from them (resting on the open lemma
-    // while_unroll: the loop of run_to_return is unrolled)
+    // its outcome
     assert!(
-        c.status.success()
-            && checked.contains("1 definitions, 21 theorems")
-            && checked.contains("get_slot_index_run.core: 0 constants, 0 axioms, 0 definitions, 0 theorems, 1 conditional theorems"),
+        c.status.success() && checked.contains("1 definitions, 21 theorems"),
         "{}{}",
         checked,
         String::from_utf8_lossy(&c.stderr)
     );
     let _ = std::fs::remove_file(&out);
-}
-
-/// C1 for get_slot_index, upgradelock, resetlock and a_ctz_32: their
-/// machine code implements their readable GIMPLE under the ABI
-/// (`gsi.implements`, `ug.implements`, `rl.implements`, `ac.implements`),
-/// resting only on the open loop lemmas. Needs the -O0 build and its readable GIMPLE
-/// (`slc gimple --readable`).
-#[test]
-fn get_slot_index_implements_its_gimple() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (elf, claim, sl) = (root.join("build/test_malloc_O0"), root.join("build/musl_malloc_O0.core"), root.join("build/gimple-O0/sl/c_mallocng_malloc.sl"));
-    if !elf.exists() || !claim.exists() || !sl.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 and slc gimple --readable first");
-        return;
-    }
-    let slc = env!("CARGO_BIN_EXE_slc");
-    let tmp = std::env::temp_dir();
-    let (steps, gimple) = (tmp.join(format!("slc-gsi-steps-{}.core", std::process::id())), tmp.join(format!("slc-gsi-gimple-{}.core", std::process::id())));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "upgradelock", "resetlock", "a_ctz_32", "is_bouncing", "get_stride", "step_seq", "-o"]).arg(&steps).output().unwrap();
-    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
-    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
-    assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
-    let c = Command::new(slc)
-        .current_dir(&root)
-        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core"])
-        .arg(&gimple)
-        .args(["proofs/x86.core", "proofs/x86_code.core"])
-        .arg(&steps)
-        .args([
-            "proofs/get_slot_index_run.core",
-            "proofs/abi.core",
-            "proofs/abi_restore.core",
-            "proofs/abi_glue.core",
-            "proofs/gimple.core",
-            "proofs/get_slot_index.core",
-            "proofs/abi_stack.core",
-            "proofs/get_slot_index_abi.core",
-            "proofs/abi_loop.core",
-            "proofs/abi_bridge.core",
-            "proofs/upgradelock.core",
-            "proofs/resetlock.core",
-            "proofs/a_ctz_32.core",
-            "proofs/is_bouncing.core",
-            "proofs/get_stride.core",
-            "proofs/step_seq.core",
-        ])
-        .output()
-        .unwrap();
-    let checked = String::from_utf8_lossy(&c.stdout);
-    assert!(
-        c.status.success()
-            && checked.contains("get_slot_index_abi.core: 0 constants, 0 axioms, 0 definitions, 0 theorems, 1 conditional theorems, 0 open lemmas")
-            && checked.contains("upgradelock.core: 0 constants, 0 axioms, 0 definitions, 1 theorems, 2 conditional theorems")
-            && checked.contains("resetlock.core: 0 constants, 0 axioms, 0 definitions, 2 theorems, 3 conditional theorems")
-            && checked.contains("abi_stack.core: 0 constants, 0 axioms, 0 definitions, 8 theorems, 0 conditional theorems")
-            && checked.contains("a_ctz_32.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 3 conditional theorems")
-            && checked.contains("is_bouncing.core: 0 constants, 0 axioms, 0 definitions, 4 theorems, 3 conditional theorems")
-            && checked.contains("get_stride.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 2 conditional theorems")
-            && checked.contains("step_seq.core: 0 constants, 0 axioms, 1 definitions, 5 theorems, 3 conditional theorems")
-            && checked.contains("lemma while_unroll: open"),
-        "{}{}",
-        checked,
-        String::from_utf8_lossy(&c.stderr)
-    );
-    let _ = std::fs::remove_file(&steps);
-    let _ = std::fs::remove_file(&gimple);
 }
 
 /// C1 for a_ctz_32, is_bouncing, get_slot_index, get_stride, step_seq,

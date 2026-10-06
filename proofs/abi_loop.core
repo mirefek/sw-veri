@@ -1,8 +1,6 @@
-// Loops in machine runs: the run to return (`abi.run_to_return`) continued
-// from a state s it reaches (`abi.run_from`), and the rule for a loop of the
-// machine code: an invariant at the loop's head and a variant that each
-// pass through the body decreases (`abi.run_cut`). `symex` stops at a
-// loop's head with `run_from` (`symex(h, .., {H})`), and continues from one.
+// The run to return (`abi.run_to_return`) continued from a state s it
+// reaches (`abi.run_from`): the run the translation's claim at a point is
+// about (`tr.sim`, proofs/translate.core).
 //
 //   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
 //     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/abi.core \
@@ -19,103 +17,4 @@ proof
   fix o
   assume h: runs(abi.run_to_return(), m, o)
   show by defs(simp(expand(h, abi.run_to_return)), abi.run_from)
-qed
-
-// A loop at a cut point: q holds at the loop's head (and the run goes on
-// from there), m decreases from head to head; if every run from a head
-// either comes back to a head (the same outcome, up to the trace of a
-// divergence) or ends with an outcome that has x, then every run from a
-// head does -- x excluding divergence (the variant rules it out).
-theorem abi.run_cut(m0, l. q, l. m, o. x):
-  (all l. q(l) -> m(l) in omega) ->
-  (all o. x(o) -> !(fst(o) = 2)) ->
-  (all l o. q(l) -> abi.run_from(m0, l, o) ->
-     (ex l2 o2. q(l2) && int_lt(m(l2), m(l)) && abi.run_from(m0, l2, o2) && fst(o2) = fst(o) && (!(fst(o) = 2) -> o2 = o)) || x(o)) ->
-  all l o. q(l) -> abi.run_from(m0, l, o) -> x(o)
-proof
-  assume hm: all l. q(l) -> m(l) in omega
-  assume hx: all o. x(o) -> !(fst(o) = 2)
-  assume hs: all l o. q(l) -> abi.run_from(m0, l, o) ->
-     (ex l2 o2. q(l2) && int_lt(m(l2), m(l)) && abi.run_from(m0, l2, o2) && fst(o2) = fst(o) && (!(fst(o) = 2) -> o2 = o)) || x(o)
-  have all_n: all n. n in omega -> (all l o. q(l) -> int_le(m(l), n) -> abi.run_from(m0, l, o) -> x(o)) proof
-    // a state whose successors at the head have x: it has x
-    have one: all l o k. k in omega -> q(l) -> int_le(m(l), k) -> abi.run_from(m0, l, o) ->
-        (all l2 o2. q(l2) -> int_lt(m(l2), m(l)) -> abi.run_from(m0, l2, o2) -> x(o2)) -> x(o) proof
-      fix l
-      fix o
-      fix k
-      assume hk: k in omega
-      assume hq: q(l)
-      assume hle: int_le(m(l), k)
-      assume hr: abi.run_from(m0, l, o)
-      assume ih: all l2 o2. q(l2) -> int_lt(m(l2), m(l)) -> abi.run_from(m0, l2, o2) -> x(o2)
-      have c := mp(mp(all_elim(hs, {l}, {o}), hq), hr)
-      have back: (ex l2 o2. q(l2) && int_lt(m(l2), m(l)) && abi.run_from(m0, l2, o2) && fst(o2) = fst(o) && (!(fst(o) = 2) -> o2 = o)) -> x(o) proof
-        assume e: ex l2 o2. q(l2) && int_lt(m(l2), m(l)) && abi.run_from(m0, l2, o2) && fst(o2) = fst(o) && (!(fst(o) = 2) -> o2 = o)
-        obtain l2, e1 from e
-        obtain o2, h2 from e1
-        have q2: q(l2) by taut(h2)
-        have lt: int_lt(m(l2), m(l)) by taut(h2)
-        have r2: abi.run_from(m0, l2, o2) by taut(h2)
-        have x2 := mp(mp(mp(all_elim(ih, {l2}, {o2}), q2), lt), r2)
-        have nd := mp(all_elim(hx, {o2}), x2)
-        have ef: fst(o2) = fst(o) by taut(h2)
-        have nd2 := rewrite(ef, nd)
-        have eo: o2 = o by taut(h2, nd2)
-        show := rewrite(eo, x2)
-      qed
-      show by taut(c, back)
-    qed
-    have base: all l o. q(l) -> int_le(m(l), 0) -> abi.run_from(m0, l, o) -> x(o) proof
-      fix l
-      fix o
-      assume hq: q(l)
-      assume hz: int_le(m(l), 0)
-      assume hr: abi.run_from(m0, l, o)
-      have v: all l2 o2. q(l2) -> int_lt(m(l2), m(l)) -> abi.run_from(m0, l2, o2) -> x(o2) proof
-        fix l2
-        fix o2
-        assume q2: q(l2)
-        assume lt: int_lt(m(l2), m(l))
-        assume r2: abi.run_from(m0, l2, o2)
-        have m2 := mp(all_elim(hm, {l2}), q2)
-        have f: false by arith(m2, hz, lt)
-        show by taut(f)
-      qed
-      have z: 0 in omega by simp()
-      show := mp(mp(mp(mp(mp(all_elim(one, {l}, {o}, {0}), z), hq), hz), hr), v)
-    qed
-    have step: all i. i in omega -> (all l o. q(l) -> int_le(m(l), i) -> abi.run_from(m0, l, o) -> x(o)) ->
-        (all l o. q(l) -> int_le(m(l), int_add(i, 1)) -> abi.run_from(m0, l, o) -> x(o)) proof
-      fix i
-      assume hi: i in omega
-      assume ih: all l o. q(l) -> int_le(m(l), i) -> abi.run_from(m0, l, o) -> x(o)
-      fix l
-      fix o
-      assume hq: q(l)
-      assume hle: int_le(m(l), int_add(i, 1))
-      assume hr: abi.run_from(m0, l, o)
-      have v: all l2 o2. q(l2) -> int_lt(m(l2), m(l)) -> abi.run_from(m0, l2, o2) -> x(o2) proof
-        fix l2
-        fix o2
-        assume q2: q(l2)
-        assume lt: int_lt(m(l2), m(l))
-        assume r2: abi.run_from(m0, l2, o2)
-        have m2 := mp(all_elim(hm, {l2}), q2)
-        have le: int_le(m(l2), i) by arith(m2, hi, hle, lt)
-        show := mp(mp(mp(all_elim(ih, {l2}, {o2}), q2), le), r2)
-      qed
-      have k: int_add(i, 1) in omega by arith(hi)
-      show := mp(mp(mp(mp(mp(all_elim(one, {l}, {o}, {int_add(i, 1)}), k), hq), hle), hr), v)
-    qed
-    show by induct(base, step)
-  qed
-  fix l
-  fix o
-  assume hq: q(l)
-  assume hr: abi.run_from(m0, l, o)
-  have ml := mp(all_elim(hm, {l}), hq)
-  have q2 := mp(all_elim(all_n, {m(l)}), ml)
-  have le: int_le(m(l), m(l)) by arith(ml)
-  show := mp(mp(mp(all_elim(q2, {l}, {o}), hq), le), hr)
 qed
