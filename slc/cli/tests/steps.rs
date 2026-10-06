@@ -153,10 +153,10 @@ fn get_slot_index_implements_its_gimple() {
     let _ = std::fs::remove_file(&gimple);
 }
 
-/// C1 for a_ctz_32, is_bouncing, get_slot_index and get_stride by translation: `slc
-/// translate` writes the certificates (the committed proofs/FN_tr.core,
-/// unchanged), and they check with
-/// proofs/translate.core's rules. Needs the -O0 build and its readable GIMPLE.
+/// C1 for a_ctz_32, is_bouncing, get_slot_index, get_stride and step_seq by
+/// translation: `slc translate` writes the certificates (the committed
+/// proofs/FN_tr.core, unchanged), and they check with
+/// proofs/translate.core's and proofs/translate_store_loop.core's rules. Needs the -O0 build and its readable GIMPLE.
 #[test]
 fn translations_are_generated_and_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -169,7 +169,7 @@ fn translations_are_generated_and_check() {
     let tmp = std::env::temp_dir();
     let id = std::process::id();
     let (steps, gimple) = (tmp.join(format!("slc-tr-steps-{}.core", id)), tmp.join(format!("slc-tr-gimple-{}.core", id)));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "-o"]).arg(&steps).output().unwrap();
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "-o"]).arg(&steps).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
@@ -182,12 +182,12 @@ fn translations_are_generated_and_check() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_store_loop.core"]
             .iter()
             .map(|f| f.into()),
     );
     let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst")] {
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst")] {
         let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
         let t = Command::new(slc)
             .current_dir(&root)
@@ -208,7 +208,9 @@ fn translations_are_generated_and_check() {
         c.status.success()
             && checked.contains("a_ctz_32-") && checked.matches("0 definitions, 1 theorems, 2 conditional theorems, 0 open lemmas").count() == 1
             && checked.matches("0 definitions, 0 theorems, 2 conditional theorems, 0 open lemmas").count() == 2
-            && checked.matches("0 definitions, 3 theorems, 2 conditional theorems, 0 open lemmas").count() == 1,
+            && checked.matches("0 definitions, 3 theorems, 2 conditional theorems, 0 open lemmas").count() == 1
+            // (step_seq's: its loop by tr.qs_loop, on core/loop.core's open while_step / while_leave)
+            && checked.matches("1 definitions, 0 theorems, 2 conditional theorems, 0 open lemmas").count() == 1,
         "{}{}",
         checked,
         String::from_utf8_lossy(&c.stderr)

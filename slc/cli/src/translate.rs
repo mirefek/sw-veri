@@ -27,6 +27,7 @@ const USAGE: &str = "usage: slc translate FN SPEC PREFIX -o OUT.core FILE.core..
 const P64: u128 = 1 << 64;
 
 /// A decode fact: at its address, `len` bytes decode to `tag(row, fields)`.
+#[derive(Clone)]
 struct Insn {
     name: String,
     len: u128,
@@ -54,6 +55,17 @@ struct St {
     rs: String,
     /// the frame written since the entry (`tr.mem`'s flag): `false`, `true`
     ds: String,
+    /// the spec's world (its placeholder), its name, the fact that it is a
+    /// set (`hvu`) and a world (`hw`)
+    w: Term,
+    wn: String,
+    hvu: String,
+    hw: String,
+    /// the homes: offset -> (bytes, value), and the map's text
+    hsm: BTreeMap<u128, (u128, Term)>,
+    hst: String,
+    /// the loop whose body this is (an index into `loops`)
+    lp: Option<usize>,
     spec: Spec,
     /// the facts in scope: a branch's condition (or its negation), a
     /// defined operation's condition, by name
@@ -76,6 +88,22 @@ enum Red {
     /// an operation defined under `cond`: ok to `ok.0` by `ok.1` (`{HC}` the
     /// condition's proof), raising to `ub.0` by `ub.1` (`{HN}` its negation's)
     Split { cond: Term, ok: (usize, String), ub: (usize, String) },
+    /// a store defined under `cond` (the rest kept: the machine's store
+    /// makes it), raising as `Split`'s
+    Guard { cond: Term, ub: (usize, String) },
+}
+
+/// A store of the spec: st8(p, off, v) (or a helper whose body is one,
+/// named), its definedness, its address
+struct StoreOp {
+    cond: Term,
+    p: Term,
+    off: Term,
+    v: Term,
+    addr: Term,
+    inner: Term,
+    helper: Option<String>,
+    ub: String,
 }
 
 /// One step towards a disjunct whose guard holds.
@@ -96,7 +124,6 @@ struct Gen<'e> {
     lets: Vec<(String, String)>,
     lemmas: HashMap<String, (Vec<VarId>, Term)>,
     insns: BTreeMap<u128, Insn>,
-    hs: BTreeMap<u128, (u128, Term)>,
     imuls: BTreeSet<u128>,
     /// the per-immediate facts the rules take: an and's narrowing, a
     /// field's shift and mask
@@ -109,8 +136,50 @@ struct Gen<'e> {
     code: String,
     prefix: String,
     kw: Term,
+    /// the current point's world, its name, its `in univ(1)` fact (set by
+    /// `prove`)
     w: Term,
+    wn: String,
+    hvu: String,
+    /// the spec's view at the entry (`W`): the state of its raises
+    vw: Term,
     n: usize,
+    /// the loops met: their heads and claims
+    loops: Vec<Loop>,
+    /// the static bytes the spec loads and stores: [lo, hi)
+    statics_range: Option<(u128, u128)>,
+    /// the values' count (their names); the rests and lets local to a
+    /// loop's step (defined in its proof)
+    nval: usize,
+    scoped_q: BTreeSet<usize>,
+    scoped_l: BTreeSet<usize>,
+    /// the literal facts' name list for simp (`L`, and a loop step's)
+    lf: String,
+}
+
+/// A loop of the spec met at a machine address (its head): the claim there,
+/// for every world and local with the invariant, by induction on the variant
+#[derive(Clone)]
+struct Loop {
+    head: u128,
+    /// the induction hypothesis' name, the claim's name, the bound K of the
+    /// counting loop, the home d of its counter
+    ih: String,
+    claim: String,
+    k: u128,
+    d: u128,
+    /// the rest at the head, the counter abstracted (a term of the counter's
+    /// placeholder `li`), the world's placeholder `lw`
+    qh: Term,
+    li: Term,
+    lw: Term,
+    /// in the step: the invariant's fact, the counter's (tr.count_inv
+    /// expanded)
+    hp: String,
+    ci: String,
+    /// the invariant's and variant's names
+    inv: String,
+    var: String,
 }
 
 fn nat(t: &Term) -> Option<u128> {
@@ -282,7 +351,8 @@ impl<'e> Gen<'e> {
             Node::App(_, a) if a.is_empty() => return t,
             _ => {}
         }
-        let name = format!("T{}", self.vals.len());
+        let name = format!("T{}", self.nval);
+        self.nval += 1;
         let v = self.env.new_var(&name, 0);
         self.names.push((name, v));
         self.vals.push((v, t));
@@ -344,7 +414,7 @@ impl<'e> Gen<'e> {
     }
 
     fn pt(&self, st: &St, a: u128) -> String {
-        format!("tr.pt(s, V, {}, {}, {}, HS, {}, {}, {}, W)", self.base, self.code, a, st.ds, st.rs, self.p(&st.spec))
+        format!("tr.pt(s, V, {}, {}, {}, {}, {}, {}, {}, {})", self.base, self.code, a, st.hst, st.ds, st.rs, self.p(&st.spec), st.wn)
     }
 
     // ------------------------------------------------------------------
@@ -402,28 +472,54 @@ impl<'e> Gen<'e> {
 
     /// a guard's value: a literal comparison, a fact in scope
     fn guard(&self, g: &Term, hyps: &[(Term, String)]) -> Option<(bool, String)> {
-        if let Some(h) = hyps.iter().find(|h| h.0 == *g) {
-            return Some((true, h.1.clone()));
+        let (v, facts) = self.guard_facts(g, hyps)?;
+        // (the fact itself, or simp from the facts it rests on)
+        if v && facts.len() == 1 && hyps.iter().any(|h| h.0 == *g && h.1 == facts[0]) {
+            return Some((v, facts[0].clone()));
         }
-        if let Some(a) = self.app(g, "not", 1) {
-            if hyps.iter().any(|h| h.0 == a[0]) {
-                return Some((false, String::new()));
+        Some((v, format!("simp({})", facts.join(", "))))
+    }
+
+    /// a guard's value, and the facts in scope it rests on
+    fn guard_facts(&self, g: &Term, hyps: &[(Term, String)]) -> Option<(bool, Vec<String>)> {
+        if let Some(h) = hyps.iter().find(|h| h.0 == *g) {
+            return Some((true, vec![h.1.clone()]));
+        }
+        if self.app(g, "true", 0).is_some() {
+            return Some((true, vec![]));
+        }
+        let join = |mut x: Vec<String>, y: Vec<String>| {
+            for f in y {
+                if !x.contains(&f) {
+                    x.push(f);
+                }
             }
-            let (v, _) = self.guard(&a[0], hyps)?;
-            return Some((!v, "simp()".into()));
+            x
+        };
+        if let Some(a) = self.app(g, "not", 1) {
+            let (v, f) = self.guard_facts(&a[0], hyps)?;
+            return Some((!v, f));
         }
         if let Some(a) = self.app(g, "and", 2) {
-            let (x, _) = self.guard(&a[0], hyps)?;
-            let (y, _) = self.guard(&a[1], hyps)?;
-            return Some((x && y, "simp()".into()));
+            let (x, f) = self.guard_facts(&a[0], hyps)?;
+            let (y, f2) = self.guard_facts(&a[1], hyps)?;
+            return Some((x && y, join(f, f2)));
+        }
+        if let Some(a) = self.app(g, "or", 2) {
+            let (x, f) = self.guard_facts(&a[0], hyps)?;
+            let (y, f2) = self.guard_facts(&a[1], hyps)?;
+            return Some((x || y, join(f, f2)));
         }
         if let Some(a) = self.app(g, "eq", 2) {
+            if a[0] == a[1] && g.loose_depth(&self.env.binders_fn()) == 0 {
+                return Some((true, vec![]));
+            }
             let v = match (a[0].node(), a[1].node()) {
                 (Node::Nat(x), Node::Nat(y)) => x == y,
                 (Node::Bytes(x), Node::Bytes(y)) => x == y,
                 _ => return None,
             };
-            return Some((v, "simp()".into()));
+            return Some((v, vec![]));
         }
         None
     }
@@ -487,6 +583,28 @@ impl<'e> Gen<'e> {
         None
     }
 
+    /// An equation of a term (of x0 only) with itself in the rest's body:
+    /// it, its side (at the body)
+    fn refl_redex(&self, t: &Term, depth: u32) -> Option<(Term, Term)> {
+        let lift = |x: &Term| self.remap(x, 0, &|j| (j == depth + 1).then_some(1));
+        if let Some(e) = self.app(t, "eq", 2) {
+            if e[0] == e[1] {
+                if let (Some(r), Some(s)) = (lift(t), lift(&e[0])) {
+                    return Some((r, s));
+                }
+            }
+        }
+        if let Node::App(s, a) = t.node() {
+            let bs = self.env.syms[*s as usize].binders.clone();
+            for (x, k) in a.iter().zip(bs) {
+                if let Some(r) = self.refl_redex(x, depth + k) {
+                    return Some(r);
+                }
+            }
+        }
+        None
+    }
+
     /// `bits_of_int(n, x)` (closed) with x a whole n-bit field
     /// (`int_mod(int_div(b, int_pow(2, 0)), int_pow(2, n))`): it, n, b
     fn whole_field(&self, t: &Term) -> Option<(Term, u128, Term)> {
@@ -539,7 +657,22 @@ impl<'e> Gen<'e> {
     /// fact's text, the raise fact's text); no definedness when literally
     /// defined.
     fn op(&mut self, op: &Term) -> Result<(Option<Term>, Term, String, String), String> {
+        let (c, r, ok, ub) = self.op_raw(op)?;
+        Ok((c, r, self.lfacts(&ok), self.lfacts(&ub)))
+    }
+
+    /// a text's literal facts (`simp(L)`): in a loop's step, with its
+    /// counter's facts
+    fn lfacts(&self, t: &str) -> String {
+        if self.lf == "L" {
+            return t.to_string();
+        }
+        t.replace("simp(L)", &format!("simp({})", self.lf)).replace("simp(L, ", &format!("simp({}, ", self.lf))
+    }
+
+    fn op_raw(&mut self, op: &Term) -> Result<(Option<Term>, Term, String, String), String> {
         let w = self.print(&self.w.clone());
+        let hv = self.hvu.clone();
         let pr = |g: &Gen, t: &Term| g.print(t);
         if let Some(x) = self.app(op, "gimple.sadd", 3) {
             if nat(&x[0]) == Some(32) {
@@ -548,8 +681,8 @@ impl<'e> Gen<'e> {
                 let ty = self.mk("fn_update", vec![self.mk("fn_update", vec![self.mk("empty", vec![]), Term::bytes(b"prec"), lit(32)]), Term::bytes(b"signed"), self.mk("true", vec![])]);
                 let cond = self.mk("gimple.fits", vec![ty, self.mk("int_add", vec![s32(self, &a), s32(self, &b)])]);
                 let r = self.mk("bits_add", vec![lit(32), a.clone(), b.clone()]);
-                let ok = format!("mp(tr.sadd32_ok, {{{w}}}, {{{}}}, {{{}}}, hvu, simp(L), simp(L), {{HC}})", pr(self, &a), pr(self, &b));
-                let ub = format!("mp(tr.sadd32_ub, {{{w}}}, {{{}}}, {{{}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), {{HN}})", pr(self, &a), pr(self, &b));
+                let ok = format!("mp(tr.sadd32_ok, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), {{HC}})", pr(self, &a), pr(self, &b));
+                let ub = format!("mp(tr.sadd32_ub, {{{w}}}, {{{}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}})", pr(self, &a), pr(self, &b));
                 return Ok((Some(cond), r, ok, ub));
             }
         }
@@ -558,7 +691,7 @@ impl<'e> Gen<'e> {
             if let (Some(_), Some(dv)) = (self.eval_lit(&p), self.eval_lit(&d)) {
                 if dv < 1 << 63 {
                     let r = self.mk("int_add", vec![p.clone(), d.clone()]);
-                    let ok = format!("mp(tr.padd_ok, {{{w}}}, {{{}}}, {{{}}}, hvu, simp(L), simp(L), simp(L), simp(L))", pr(self, &p), pr(self, &d));
+                    let ok = format!("mp(tr.padd_ok, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), simp(L), simp(L))", pr(self, &p), pr(self, &d));
                     return Ok((None, r, ok, String::new()));
                 }
             }
@@ -568,8 +701,8 @@ impl<'e> Gen<'e> {
             let sum = self.mk("int_add", vec![p.clone(), self.mk("gimple.sval", vec![ty, d.clone()])]);
             let cond = self.mk("and", vec![self.mk("int_le", vec![lit(0), sum.clone()]), self.mk("int_lt", vec![sum, lit(P64)])]);
             let r = self.mk("bits_add", vec![lit(64), p.clone(), d.clone()]);
-            let ok = format!("mp(tr.padd_okb, {{{w}}}, {{{}}}, {{{}}}, hvu, simp(L), simp(L), {{HC}})", pr(self, &p), pr(self, &d));
-            let ub = format!("mp(tr.padd_ub, {{{w}}}, {{{}}}, {{{}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), simp(L), simp(L), {{HN}})", pr(self, &p), pr(self, &d));
+            let ok = format!("mp(tr.padd_okb, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), {{HC}})", pr(self, &p), pr(self, &d));
+            let ub = format!("mp(tr.padd_ub, {{{w}}}, {{{}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})", pr(self, &p), pr(self, &d));
             return Ok((Some(cond), r, ok, ub));
         }
         if let Some(x) = self.app(op, "gimple.elem", 3) {
@@ -589,8 +722,8 @@ impl<'e> Gen<'e> {
                     self.mk("int_lt", vec![self.mk("int_add", vec![p.clone(), i.clone()]), lit(P64)])
                 };
                 let r = self.mk("bits_add", vec![lit(64), p.clone(), x[1].clone()]);
-                let ok = format!("mp(tr.elem1_{}_ok, {{{w}}}, {{{}}}, {{{}}}, hvu, simp(L), simp(L), {{HC}})", kind, pr(self, &p), pr(self, &i));
-                let ub = format!("mp(tr.elem1_{}_ub, {{{w}}}, {{{}}}, {{{}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), simp(L), simp(L), {{HN}})", kind, pr(self, &p), pr(self, &i));
+                let ok = format!("mp(tr.elem1_{}_ok, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), {{HC}})", kind, pr(self, &p), pr(self, &i));
+                let ub = format!("mp(tr.elem1_{}_ub, {{{w}}}, {{{}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})", kind, pr(self, &p), pr(self, &i));
                 return Ok((Some(cond), r, ok, ub));
             }
         }
@@ -600,8 +733,21 @@ impl<'e> Gen<'e> {
                 let cond = self.ld8_cond(&a);
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                 let r = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, a.clone(), lit(1)])]);
-                let ok = format!("mp(g.ld8_ok, {{{w}}}, {{{}}}, hvu, simp(L), taut({{HC}}), taut({{HC}}))", pr(self, &a));
-                let ub = format!("mp(g.ld8_ub, {{{w}}}, {{{}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), {{HN}}, simp(L))", pr(self, &a));
+                let ok = format!("mp(g.ld8_ok, {{{w}}}, {{{}}}, {hv}, simp(L), taut({{HC}}), taut({{HC}}))", pr(self, &a));
+                let ub = format!("mp(g.ld8_ub, {{{w}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}}, simp(L))", pr(self, &a));
+                return Ok((Some(cond), r, ok, ub));
+            }
+        }
+        // a byte load at a static's field: p + off, both literals (the
+        // address computed)
+        if let Some(x) = self.app(op, "gimple.ld8", 2) {
+            if let (Some(pv), Some(ov)) = (self.eval_lit(&x[0]), self.eval_lit(&x[1])) {
+                let (p, off, a) = (pr(self, &x[0]), pr(self, &x[1]), (pv + ov) % P64);
+                self.add_static(a, a + 1);
+                let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {p}, {off}, 1, false)"))?;
+                let r = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({w}, \"vm\"), {a}, 1))"))?;
+                let ok = format!("mp(tr.ld8_at_ok, {{{w}}}, {{{p}}}, {{{off}}}, {{{a}}}, {hv}, simp(L), simp(L), simp(L), {{HC}})");
+                let ub = format!("mp(g.ld8_at_ub, {{{w}}}, {{{p}}}, {{{off}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
                 return Ok((Some(cond), r, ok, ub));
             }
         }
@@ -611,8 +757,8 @@ impl<'e> Gen<'e> {
                 let a = x[0].clone();
                 let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {}, 0, 2, false)", pr(self, &a)))?;
                 let r = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app({w}, \"vm\"), {}, 2))", pr(self, &a)))?;
-                let ok = format!("mp(g.ld16_ok, {{{w}}}, {{{}}}, hvu, simp(L), {{HC}})", pr(self, &a));
-                let ub = format!("mp(g.ld16_ub, {{{w}}}, {{{}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), simp(L), {{HN}})", pr(self, &a));
+                let ok = format!("mp(g.ld16_ok, {{{w}}}, {{{}}}, {hv}, simp(L), {{HC}})", pr(self, &a));
+                let ub = format!("mp(g.ld16_ub, {{{w}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), {{HN}})", pr(self, &a));
                 return Ok((Some(cond), r, ok, ub));
             }
         }
@@ -624,8 +770,8 @@ impl<'e> Gen<'e> {
                     let (p, i) = (pr(self, &x[0]), pr(self, &self.canon(&y[2])));
                     let cond = self.parse(&format!("tr.elem2_sx_def({}, {})", p, i))?;
                     let r = self.parse(&format!("bits_add(64, {p}, bits_add(64, bits_sext(32, 64, {i}), bits_sext(32, 64, {i})))"))?;
-                    let ok = format!("mp(tr.elem2_sx_ok, {{{w}}}, {{{p}}}, {{{i}}}, hvu, simp(L), simp(L), {{HC}})");
-                    let ub = format!("mp(tr.elem2_sx_ub, {{{w}}}, {{{p}}}, {{{i}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), simp(L), simp(L), {{HN}})");
+                    let ok = format!("mp(tr.elem2_sx_ok, {{{w}}}, {{{p}}}, {{{i}}}, {hv}, simp(L), simp(L), {{HC}})");
+                    let ub = format!("mp(tr.elem2_sx_ub, {{{w}}}, {{{p}}}, {{{i}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
                     return Ok((Some(cond), r, ok, ub));
                 }
             }
@@ -636,8 +782,8 @@ impl<'e> Gen<'e> {
             let (p, off, n, pos, k) = (&t[0], &t[1], &t[2], &t[3], &t[4]);
             let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {p}, {off}, {n}, false)"))?;
             let r = self.parse(&format!("int_mod(int_div(gimple.bytes_at(app({w}, \"vm\"), bits_add(64, {p}, {off}), {n}), int_pow(2, {pos})), int_pow(2, {k}))"))?;
-            let ok = format!("mp(tr.ldbf_ok, {{{w}}}, {{{p}}}, {{{off}}}, {{{n}}}, {{{pos}}}, {{{k}}}, hvu, simp(L), simp(L), {{HC}})");
-            let ub = format!("mp(g.ldbf_ub, {{{w}}}, {{{p}}}, {{{off}}}, {{{n}}}, {{{pos}}}, {{{k}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), simp(L), simp(L), {{HN}})");
+            let ok = format!("mp(tr.ldbf_ok, {{{w}}}, {{{p}}}, {{{off}}}, {{{n}}}, {{{pos}}}, {{{k}}}, {hv}, simp(L), simp(L), {{HC}})");
+            let ub = format!("mp(g.ldbf_ub, {{{w}}}, {{{p}}}, {{{off}}}, {{{n}}}, {{{pos}}}, {{{k}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
             return Ok((Some(cond), r, ok, ub));
         }
         // a signed 32-bit product by an immediate (tr.imul_by(k), proven per
@@ -649,8 +795,8 @@ impl<'e> Gen<'e> {
                     let a = pr(self, &x[1]);
                     let cond = self.parse(&format!("tr.s32_fits(int_mul(sint(32, {a}), sint(32, {k})))"))?;
                     let r = self.parse(&format!("bits_mul(32, {a}, {k})"))?;
-                    let ok = format!("mp(tr.smul32_ok, {{{w}}}, {{{a}}}, {{{k}}}, hvu, simp(L), simp(L), {}.imul_{k}, {{HC}})", self.prefix);
-                    let ub = format!("mp(tr.smul32_ub, {{{w}}}, {{{a}}}, {{{k}}}, {{{w}}}, {{empty}}, hvu, hvu, simp(), {{HN}})");
+                    let ok = format!("mp(tr.smul32_ok, {{{w}}}, {{{a}}}, {{{k}}}, {hv}, simp(L), simp(L), {}.imul_{k}, {{HC}})", self.prefix);
+                    let ub = format!("mp(tr.smul32_ub, {{{w}}}, {{{a}}}, {{{k}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}})");
                     return Ok((Some(cond), r, ok, ub));
                 }
             }
@@ -679,11 +825,11 @@ impl<'e> Gen<'e> {
                     let (cond, r2, ok2, ub2) = self.op(&op2)?;
                     let r = fl.instantiate_params(&[r2.clone()], &self.env.binders_fn());
                     let (okl, _) = self.inst("tr.call1_ok", &[("op", op2.clone()), ("r", r2.clone()), ("f", fl.clone())])?;
-                    let ok = format!("defs(mp({okl}, {{{w}}}, hvu, simp(L), {ok2}), {fname})");
+                    let ok = format!("defs(mp({okl}, {{{w}}}, {hv}, simp(L), {ok2}), {fname})");
                     let ub = match cond {
                         Some(_) => {
-                            let (ubl, _) = self.inst("tr.call1_ub", &[("op", op2.clone()), ("s2", self.w.clone()), ("e", self.mk("empty", vec![])), ("f", fl.clone())])?;
-                            format!("defs(mp({ubl}, {{{w}}}, hvu, hvu, simp(), {ub2}), {fname})")
+                            let (ubl, _) = self.inst("tr.call1_ub", &[("op", op2.clone()), ("s2", self.vw.clone()), ("e", self.mk("empty", vec![])), ("f", fl.clone())])?;
+                            format!("defs(mp({ubl}, {{{w}}}, {hv}, hvu, simp(), {ub2}), {fname})")
                         }
                         None => String::new(),
                     };
@@ -692,6 +838,165 @@ impl<'e> Gen<'e> {
             }
         }
         Err(format!("no rule for the operation {}", self.print(op)))
+    }
+
+    /// A store at the head: `gimple.st8(p, off, v)`, or a helper's call
+    /// whose body is one (`mkprog(x0 x1. bind_rel(st8(..), x0, x2 x3. x1 =
+    /// ok(x2, empty), ..))`)
+    fn store_op(&mut self, op: &Term) -> Result<Option<StoreOp>, String> {
+        let (inner, helper) = if self.app(op, "gimple.st8", 3).is_some() {
+            (op.clone(), None)
+        } else {
+            let Node::App(f, args) = op.node() else { return Ok(None) };
+            let SymKind::Defined { params, body } = &self.env.syms[*f as usize].kind else { return Ok(None) };
+            let fname = self.env.syms[*f as usize].name.clone();
+            let mut b = body.clone();
+            for (p, x) in params.clone().iter().zip(args.iter()) {
+                b = b.subst_var(*p, x, &self.env.binders_fn());
+            }
+            let inner = (|| {
+                let m = self.app(&b, "mkprog", 1)?;
+                let br = self.app(&m[0], "bind_rel", 5)?;
+                matches!(br[1].node(), Node::BVar(1)).then_some(())?;
+                self.app(&br[0], "gimple.st8", 3)?;
+                let e = self.app(&br[2], "eq", 2)?;
+                let o = self.app(&e[1], "ok", 2)?;
+                (matches!(e[0].node(), Node::BVar(2)) && matches!(o[0].node(), Node::BVar(1)) && self.app(&o[1], "empty", 0).is_some()).then_some(())?;
+                Some(br[0].clone())
+            })();
+            let Some(inner) = inner else { return Ok(None) };
+            (inner, Some(fname))
+        };
+        let x = self.app(&inner, "gimple.st8", 3).unwrap().to_vec();
+        let (p, off, v) = (x[0].clone(), x[1].clone(), x[2].clone());
+        let addr = match (self.eval_lit(&p), self.eval_lit(&off)) {
+            (Some(pv), Some(ov)) => lit((pv + ov) % P64),
+            _ if nat(&off) == Some(0) => p.clone(),
+            _ => return Err(format!("a store at {} + {}: not covered yet", self.print(&p), self.print(&off))),
+        };
+        let w = self.print(&self.w.clone());
+        let hv = self.hvu.clone();
+        let (ps, os, vs) = (self.print(&p), self.print(&off), self.print(&v));
+        let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {ps}, {os}, 1, true)"))?;
+        let inner_ub = format!("mp(g.st8_at_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{vs}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
+        let ub = match &helper {
+            None => inner_ub,
+            Some(fname) => {
+                let (ubl, _) = self.inst("tr.call1_ub", &[("op", inner.clone()), ("s2", self.vw.clone()), ("e", self.mk("empty", vec![])), ("f", self.mk("empty", vec![]))])?;
+                format!("defs(mp({ubl}, {{{w}}}, {hv}, hvu, simp(), {inner_ub}), {fname})")
+            }
+        };
+        Ok(Some(StoreOp { cond, p, off, v, addr, inner, helper, ub }))
+    }
+
+    /// The spec's store at the head of `st`'s rest, the machine storing at
+    /// `addr`: its definedness fact, the stored value, the world after (its
+    /// lines: its definition, its facts), the state after, the reduction
+    /// `tr.red(WRAP(q), w, WRAP(q2), w2)`'s proof, the address
+    fn spec_store(&mut self, st: &St, addr: &Term) -> Result<(String, Term, Vec<String>, St, String, Term), String> {
+        let Spec::Proc(qi) = st.spec else { return Err(format!("{:x}: a store after the procedure's result", st.a)) };
+        let q = self.qs[qi].1.clone();
+        let badm = format!("{:x}: a store the spec does not make here (its rest: {})", st.a, self.print(&q));
+        let bad = || badm.clone();
+        let body = self.app(&q, "mkprog", 1).ok_or_else(bad)?[0].clone();
+        let ex = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())).ok_or_else(bad)?;
+        let (a, k) = (ex[0].clone(), ex[1].clone());
+        let x = self.app(&a, "bind_rel", 5).ok_or_else(bad)?.to_vec();
+        let so = self.store_op(&x[0])?.ok_or_else(bad)?;
+        let hc = st.hyps.iter().find(|h| h.0 == so.cond).map(|h| h.1.clone()).ok_or_else(bad)?;
+        if self.canon(&so.addr) != self.canon(addr) && !(self.eval_lit(&so.addr).is_some() && self.eval_lit(&so.addr) == self.eval_lit(addr)) {
+            return Err(format!("{:x}: the machine stores at {}, the spec at {}", st.a, self.print(addr), self.print(&so.addr)));
+        }
+        let ctx = ["x0", "x1", "x8"];
+        let kl = self.lam(&k, &ctx, &["x8", "x1"]).ok_or("a block's rest reads the world")?;
+        let c5 = ["x0", "x1", "x8", "x9", "x10"];
+        let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("a store's continuation reads the world before it")?;
+        let xl = self.lam(&x[3], &c5, &["x9", "x10", "x8"]).ok_or("a store's handler reads the world before it")?;
+        let dl = self.lam(&x[4], &["x0", "x1", "x8", "x9"], &["x9", "x8"]).ok_or("a store's handler reads the world before it")?;
+        // the world after it
+        self.n += 1;
+        let k2 = self.n;
+        let (wn2, hw2, hv2) = (format!("W{}", k2), format!("hW{}", k2), format!("hvu{}", k2));
+        let w2 = self.var(&wn2);
+        let (wn, ap, vp) = (st.wn.clone(), self.print(&so.addr), self.print(&so.v));
+        let w2t = format!("fn_update({wn}, \"vm\", fn_update(app({wn}, \"vm\"), \"bytes\", x86_64_linux.store_le(app(app({wn}, \"vm\"), \"bytes\"), {ap}, 1, {vp})))");
+        let pre = vec![
+            format!("let {wn2} := {w2t}"),
+            format!("have {hw2} := apply(tr.world_store, {{{wn}}}, {{{ap}}}, {{1}}, {{{vp}}}, taut({}), taut({}), simp(L))", st.hw, st.hw),
+            format!("have {hv2}: {wn2} in univ(1) by taut({hw2})"),
+        ];
+        // the store's run: ok, to the world after
+        let (ps, os) = (self.print(&so.p), self.print(&so.off));
+        let st8ok = format!("mp(tr.st8_at_ok, {{{wn}}}, {{{ps}}}, {{{os}}}, {{{vp}}}, {{{ap}}}, taut({}), {}, simp(L), simp(L), simp(L), simp(L), {hc})", st.hw, st.hvu);
+        let okp = match &so.helper {
+            None => st8ok,
+            Some(fname) => {
+                let (okl, _) = self.inst("tr.call1w_ok", &[("op", so.inner.clone()), ("r", self.mk("empty", vec![]))])?;
+                format!("defs(mp({okl}, {{{wn}}}, {{{wn2}}}, {}, {hv2}, {st8ok}), {fname})", st.hvu)
+            }
+        };
+        let empty = self.mk("empty", vec![]);
+        let (j, text) = self.by(qi, "tr.qs_opw", &[("op", x[0].clone()), ("r", empty), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+        let qred = format!("mp({text}, {{{wn}}}, {{{wn2}}}, {}, {okp})", st.hvu);
+        let red = format!(
+            "mp(tr.wredw[w := {wn}, w2 := {wn2}, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)], {}, {qred})",
+            self.qs[qi].0, self.qs[j].0, st.hvu
+        );
+        let mut st2 = st.clone();
+        st2.w = w2;
+        st2.wn = wn2;
+        st2.hvu = hv2;
+        st2.hw = hw2;
+        st2.spec = Spec::Proc(j);
+        let _ = &so.cond;
+        Ok((hc, so.v.clone(), pre, st2, red, so.addr.clone()))
+    }
+
+    /// the homes below rsp (`tr.homes_low`): its proof
+    fn homes_low(&self, st: &St) -> Result<String, String> {
+        match st.hsm.iter().next() {
+            None => Ok("tr.homes_low_empty".into()),
+            Some((&d, (4, x))) if st.hsm.len() == 1 => Ok(format!("mp(tr.homes_low_one, {{{}}}, {{{}}}, simp(L), simp(L), simp(L))", d, self.print(x))),
+            _ => Err(format!("{:x}: a frame of other homes: not covered yet", st.a)),
+        }
+    }
+
+    /// a store's address off the stack pages: its proof (a static's byte,
+    /// or a byte array's element at a loop's counter)
+    fn off_stack(&mut self, st: &St, addr: &Term) -> Result<String, String> {
+        let ap = self.print(addr);
+        if let Some(av) = self.eval_lit(addr) {
+            self.add_static(av, av + 1);
+            return Ok(format!("mp(hns, {{{ap}}}, simp(L), simp(L), simp(L))"));
+        }
+        // p + sext(i), p a static's, i the loop's counter in [0, K]
+        let e = self.expand(addr);
+        let parts = (|| {
+            let x = self.app(&e, "bits_add", 3)?;
+            let sx = self.app(&x[2], "bits_sext", 3)?;
+            Some((self.eval_lit(&x[1])?, sx[2].clone(), x[1].clone()))
+        })();
+        let (pv, i, pt) = parts.ok_or_else(|| format!("{:x}: a store at {}: not covered yet", st.a, ap))?;
+        let lp = st.lp.and_then(|l| self.loops.get(l).cloned()).ok_or_else(|| format!("{:x}: a store at an index out of a loop", st.a))?;
+        if self.canon(&i) != self.canon(&lp.li) {
+            return Err(format!("{:x}: a store at an index not the loop's counter", st.a));
+        }
+        let k = lp.k;
+        let hi = pv + k + 1;
+        self.add_static(pv, hi);
+        let g = self.mk("not", vec![self.mk("int_lt", vec![self.mk("sint", vec![lit(32), lit(k)]), self.mk("sint", vec![lit(32), lp.li.clone()])])]);
+        let hg = st.hyps.iter().find(|h| h.0 == g).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: the loop's condition not in scope", st.a))?;
+        let (lip, ci, pp) = (self.print(&lp.li), lp.ci.clone(), self.print(&pt));
+        let er = format!("apply(tr.elem_in, {{{pp}}}, {{{lip}}}, {{{k}}}, simp(L), taut({ci}), simp(L), taut({ci}), {hg}, simp(L), simp(L))");
+        Ok(format!("mp(hns, {{{ap}}}, simp(L), simp(L, {er}), simp(L, {er}))"))
+    }
+
+    /// the static bytes [lo, hi) the spec reads or writes
+    fn add_static(&mut self, lo: u128, hi: u128) {
+        self.statics_range = Some(match self.statics_range {
+            Some((l, h)) => (l.min(lo), h.max(hi)),
+            None => (lo, hi),
+        });
     }
 
     /// a term from text, the placeholders by their names
@@ -710,11 +1015,44 @@ impl<'e> Gen<'e> {
 
     /// the fact in scope that the spec's n-byte load at p + d is defined
     fn mem_hyp(&mut self, st: &St, p: &Term, d: &Term, n: u128) -> Result<String, String> {
-        let cond = self.parse(&format!("g.mem_defined(app(W, \"vm\"), {}, {}, {}, false)", self.print(p), self.print(d), n))?;
+        let wn = st.wn.clone();
+        let cond = self.parse(&format!("g.mem_defined(app({wn}, \"vm\"), {}, {}, {}, false)", self.print(p), self.print(d), n))?;
         st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| {
             let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
             format!("{:x}: a load of {} bytes at {} + {} the spec does not make (the facts: {})", st.a, n, self.print(p), self.print(d), facts.join(", "))
         })
+    }
+
+    /// the fact in scope that the spec's byte load (or store) at the static
+    /// address a is defined (its address p + off, literals)
+    fn static_hyp(&self, st: &St, a: u128, write: bool) -> Result<String, String> {
+        fn usable<'t>(g: &Gen, t: &'t Term, out: &mut Vec<&'t Term>) {
+            if let Some(x) = g.app(t, "gimple.usable", 4) {
+                out.push(t);
+                let _ = x;
+                return;
+            }
+            if let Node::App(_, xs) = t.node() {
+                for x in xs.iter() {
+                    usable(g, x, out);
+                }
+            }
+        }
+        for (h, name) in &st.hyps {
+            let mut us = Vec::new();
+            usable(self, h, &mut us);
+            for u in us {
+                let x = self.app(u, "gimple.usable", 4).unwrap();
+                let wr = self.app(&x[3], "true", 0).is_some();
+                if x[0] == self.mk("app", vec![st.w.clone(), Term::bytes(b"vm")]) && nat(&x[2]) == Some(1) && wr == write {
+                    let at = self.app(&x[1], "int_add", 2).and_then(|s| Some((self.eval_lit(&s[0])? + self.eval_lit(&s[1])?) % P64)).or_else(|| self.eval_lit(&x[1]));
+                    if at == Some(a) {
+                        return Ok(name.clone());
+                    }
+                }
+            }
+        }
+        Err(format!("{:x}: an access at the static {:x} the spec does not make", st.a, a))
     }
 
     /// a byte load's definedness at a
@@ -742,9 +1080,9 @@ impl<'e> Gen<'e> {
                     let j = self.new_q(b);
                     let u = self.fresh("u");
                     let pre = vec![
-                        format!("have {}: all o. runs({}, W, o) -> runs({}, W, o) proof", u, self.qs[j].0, self.qs[qi].0),
+                        format!("have {}: all o. runs({}, {w}, o) -> runs({}, {w}, o) proof", u, self.qs[j].0, self.qs[qi].0),
                         "  fix o".into(),
-                        format!("  assume h: runs({}, W, o)", self.qs[j].0),
+                        format!("  assume h: runs({}, {w}, o)", self.qs[j].0),
                         format!("  show by defs(h, {})", fname),
                         "qed".into(),
                     ];
@@ -817,13 +1155,25 @@ impl<'e> Gen<'e> {
                 let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("an operation's continuation reads the world before it")?;
                 let xl = self.lam(&x[3], &c5, &["x9", "x10", "x8"]).ok_or("an operation's handler reads the world before it")?;
                 let dl = self.lam(&x[4], &["x0", "x1", "x8", "x9"], &["x9", "x8"]).ok_or("an operation's handler reads the world before it")?;
+                // a store: its definedness split here, the store itself at
+                // the machine's
+                if let Some(so) = self.store_op(&x[0])? {
+                    if hyps.iter().any(|h| h.0 == so.cond) {
+                        return Ok(None);
+                    }
+                    let mut ra = vec![("op", x[0].clone()), ("s2", self.vw.clone()), ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())];
+                    ra.push(("e", self.mk("empty", vec![])));
+                    let (u, rtext) = self.by(qi, "tr.qs_raise", &ra)?;
+                    let ubr = format!("mp({}, {{{w}}}, {})", rtext, so.ub);
+                    return Ok(Some(Red::Guard { cond: so.cond, ub: (u, ubr) }));
+                }
                 let (cond, r, okf, ubf) = self.op(&x[0])?;
                 let r = self.value(&r);
                 let args = |r2: (&'static str, Term)| vec![("op", x[0].clone()), r2, ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())];
                 let (j, text) = self.by(qi, "tr.qs_op", &args(("r", r.clone())))?;
                 let okr = format!("mp({}, {{{w}}}, {})", text, okf);
                 let Some(cond) = cond else { return Ok(Some(Red::Q(j, okr, vec![]))) };
-                let mut ra = args(("s2", self.w.clone()));
+                let mut ra = args(("s2", self.vw.clone()));
                 ra.push(("e", self.mk("empty", vec![])));
                 let (u, rtext) = self.by(qi, "tr.qs_raise", &ra)?;
                 let ubr = format!("mp({}, {{{w}}}, {})", rtext, ubf);
@@ -870,6 +1220,14 @@ impl<'e> Gen<'e> {
                 }
             }));
         }
+        // (nothing else: an equation of a term with itself, of the world --
+        // true)
+        if let Some((r, s)) = self.refl_redex(&body, 0) {
+            let b = self.abstract_(&body, &r, 0);
+            let st = self.lam(&s, &["x0", "x1"], &["x0"]).ok_or("refl")?;
+            let (j, text) = self.by(qi, "tr.qe_refl", &[("b", b), ("st", st)])?;
+            return Ok(Some(Red::Q(j, format!("mp({}, {{{w}}})", text), vec![])));
+        }
         Ok(None)
     }
 
@@ -878,8 +1236,8 @@ impl<'e> Gen<'e> {
 
     fn wred(&self, st: &St, qi: usize, j: usize) -> String {
         format!(
-            "tr.wred[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, ds := {}, rs := {}, w := W, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
-            self.base, self.code, st.a, st.ds, st.rs, self.qs[qi].0, self.qs[j].0
+            "tr.wred[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
+            self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, self.qs[j].0
         )
     }
 
@@ -891,7 +1249,7 @@ impl<'e> Gen<'e> {
         let mut lines = Vec::new();
         let exc_end = |g: &Gen, q: &Term| {
             g.app(q, "mkprog", 1).and_then(|b| g.app(&b[0], "eq", 2).map(|x| x.to_vec())).map_or(false, |x| {
-                matches!(x[0].node(), Node::BVar(0)) && g.app(&x[1], "exc", 2).map_or(false, |e| e[0] == g.w && g.app(&e[1], "empty", 0).is_some())
+                matches!(x[0].node(), Node::BVar(0)) && g.app(&x[1], "exc", 2).map_or(false, |e| e[0] == g.vw && g.app(&e[1], "empty", 0).is_some())
             })
         };
         while !exc_end(self, &self.qs[cur].1.clone()) {
@@ -905,7 +1263,8 @@ impl<'e> Gen<'e> {
             }
         }
         let mut name = self.fresh("r");
-        lines.push(format!("have {} := mp(tr.q_exc_runs, {{W}}, {{W}}, {{empty}}, hvu, hvu, simp())", name));
+        let (wn, hv) = (self.wn.clone(), self.hvu.clone());
+        lines.push(format!("have {} := mp(tr.q_exc_runs, {{{wn}}}, {{W}}, {{empty}}, {hv}, hvu, simp())", name));
         for r in steps.into_iter().rev() {
             let n2 = self.fresh("r");
             lines.push(format!("have {} := mp({}, {{exc(W, empty)}}, {})", n2, r, name));
@@ -916,6 +1275,16 @@ impl<'e> Gen<'e> {
 
     /// The proof of the point claim at `st`.
     fn prove(&mut self, st: St) -> Result<Pf, String> {
+        self.w = st.w.clone();
+        self.wn = st.wn.clone();
+        self.hvu = st.hvu.clone();
+        self.lf = match st.lp {
+            Some(l) => format!("L, {}", self.loops[l].ci),
+            None => "L".into(),
+        };
+        if let Some(pf) = self.loop_point(&st)? {
+            return Ok(pf);
+        }
         if let Spec::Proc(qi) = st.spec {
             match self.reduce(qi, &st.hyps)? {
                 Some(Red::Q(j, r, pre)) => {
@@ -940,8 +1309,8 @@ impl<'e> Gen<'e> {
                     let mut lines = rest.lines;
                     lines.push(format!("have {} := {}", pn, rest.expr));
                     let expr = format!(
-                        "mp(tr.wret[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, ds := {}, rs := {}, w := W, val := {}, kw := x0 x1 x2. KW(x0, x1, x2)], simp(hvu), {})",
-                        self.base, self.code, st.a, st.ds, st.rs, self.print(&val), pn
+                        "mp(tr.wret[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, val := {}, kw := x0 x1 x2. KW(x0, x1, x2)], simp({}), {})",
+                        self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.print(&val), st.hvu, pn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -950,7 +1319,8 @@ impl<'e> Gen<'e> {
                     let ct = self.print(&cond);
                     // undefined: the spec raises
                     let chain = self.raise_chain(ub.0)?;
-                    let mut lines = vec![format!("have {}: !({}) -> runs({}, W, exc(W, empty)) proof", un, ct, self.qs[qi].0), format!("  assume {}: !({})", hn, ct)];
+                    let wn = st.wn.clone();
+                    let mut lines = vec![format!("have {}: !({}) -> runs({}, {wn}, exc(W, empty)) proof", un, ct, self.qs[qi].0), format!("  assume {}: !({})", hn, ct)];
                     let mut body = chain.lines;
                     body.push(format!("show := mp({}, {{exc(W, empty)}}, {})", ub.1.replace("{HN}", &hn), chain.expr));
                     lines.extend(indent(body));
@@ -968,8 +1338,35 @@ impl<'e> Gen<'e> {
                     lines.extend(indent(body));
                     lines.push("qed".into());
                     let expr = format!(
-                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := HS, ds := {}, rs := {}, w := W, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
-                        self.base, self.code, st.a, st.ds, st.rs, self.qs[qi].0, ct, un, dn
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
+                    );
+                    return Ok(Pf { lines, expr });
+                }
+                Some(Red::Guard { cond, ub }) => {
+                    let (hn, hc, un, dn) = (self.fresh("hn"), self.fresh("hc"), self.fresh("u"), self.fresh("d"));
+                    let ct = self.print(&cond);
+                    // undefined: the spec raises
+                    let chain = self.raise_chain(ub.0)?;
+                    let wn = st.wn.clone();
+                    let mut lines = vec![format!("have {}: !({}) -> runs({}, {wn}, exc(W, empty)) proof", un, ct, self.qs[qi].0), format!("  assume {}: !({})", hn, ct)];
+                    let mut body = chain.lines;
+                    body.push(format!("show := mp({}, {{exc(W, empty)}}, {})", ub.1.replace("{HN}", &hn), chain.expr));
+                    lines.extend(indent(body));
+                    lines.push("qed".into());
+                    // defined: the same rest, with the condition
+                    let mut st2 = st.clone();
+                    st2.hyps.push((cond.clone(), hc.clone()));
+                    let rest = self.prove(st2)?;
+                    lines.push(format!("have {}: {} -> {} proof", dn, ct, self.pt(&st, st.a)));
+                    let mut body = vec![format!("assume {}: {}", hc, ct)];
+                    body.extend(rest.lines);
+                    body.push(format!("show := {}", rest.expr));
+                    lines.extend(indent(body));
+                    lines.push("qed".into());
+                    let expr = format!(
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -979,11 +1376,263 @@ impl<'e> Gen<'e> {
         self.insn(st)
     }
 
+    /// a loop's head (the spec's loop there): its claim, by induction
+    fn loop_point(&mut self, st: &St) -> Result<Option<Pf>, String> {
+        let Spec::Proc(qi) = st.spec else { return Ok(None) };
+        if self.loop_head(qi).is_none() || !self.is_loop_test(st.a) {
+            return Ok(None);
+        }
+        if let Some(l) = st.lp {
+            if self.loops[l].head == st.a {
+                return self.loop_back(st, qi, l).map(Some);
+            }
+        }
+        self.loop_start(st, qi).map(Some)
+    }
+
+    /// the machine's loop test at a: an instruction followed by a backward
+    /// conditional jump
+    fn is_loop_test(&self, a: u128) -> bool {
+        let Some(i) = self.insns.get(&a) else { return false };
+        matches!(self.jcc((a + i.len) % P64), Ok((_, _, _, tt, _)) if tt <= a)
+    }
+
+    /// A counting loop met at its head h (the machine's test `cmp dword [rsp
+    /// + d], K; jle`, the counter in the home d): the claim at h for every
+    /// world lw and counter li with the invariant, by induction on the
+    /// variant (tr.wf2); here, at the counter's start value.
+    fn loop_start(&mut self, st: &St, qi: usize) -> Result<Pf, String> {
+        let h = st.a;
+        let bad = |m: &str| format!("{:x}: a loop {}: not covered yet", h, m);
+        // the machine's test: the counter's home, the bound
+        let (d, kv) = {
+            let i = &self.insns[&h];
+            let x = (i.row == 60).then(|| self.pairs(&i.fields, 5)).flatten().ok_or_else(|| bad("whose test is not cmp dword [rsp + d], imm8"))?;
+            let d = self.rsp_mem(&x[2]).and_then(|d| nat(&d)).ok_or_else(|| bad("whose test is not on a home"))?;
+            let k = nat(&x[4]).filter(|k| *k < 128 && nat(&x[1]) == Some(7)).ok_or_else(|| bad("whose test is not cmp with a small immediate"))?;
+            (d, k)
+        };
+        // the rest: ex x8. while_rel(pair(x0, I0), true, B, TR, x8) && K
+        let q = self.qs[qi].1.clone();
+        let body = self.app(&q, "mkprog", 1).unwrap()[0].clone();
+        let y = self.app(&self.app(&body, "ex", 1).unwrap()[0], "and", 2).unwrap().to_vec();
+        let ctx = ["x0", "x1", "x8"];
+        let al = self.lam(&y[0], &ctx, &["x0", "x8"]).ok_or_else(|| bad("whose head reads the outcome"))?;
+        let kl = self.lam(&y[1], &ctx, &["x8", "x1"]).ok_or_else(|| bad("whose rest reads the world"))?;
+        let wr = self.app(&al, "while_rel", 5).ok_or_else(|| bad("not a while"))?.to_vec();
+        let l0 = self.app(&wr[0], "pair", 2).ok_or_else(|| bad("whose state is not the world and one local"))?.to_vec();
+        let i0 = l0[1].clone();
+        let outer = {
+            let bf = self.env.binders_fn();
+            i0.loose_depth(&bf) > 0 || wr[2].loose_depth(&bf) > 2 || wr[3].loose_depth(&bf) > 1
+        };
+        if outer {
+            return Err(bad("whose body reads the outer state"));
+        }
+        match st.hsm.get(&d) {
+            Some((4, x)) if self.canon(x) == self.canon(&i0) => {}
+            _ => return Err(bad("whose counter is not its home's value")),
+        }
+        if st.ds != "true" || st.hsm.len() != 1 {
+            return Err(bad("in a frame of other homes"));
+        }
+        let wn = st.wn.clone();
+        // (at the counter's start: the guarded rest, the claim's at i0)
+        let (j0, nodiv0) = self.by(qi, "tr.qs_nodiv", &[("a", al.clone()), ("k", kl.clone())])?;
+        // the step's names; its rests and values (local to its proof)
+        self.n += 1;
+        let ln = self.n;
+        let (lwn, lin) = (format!("lw{ln}"), format!("li{ln}"));
+        let lw = self.var(&lwn);
+        let li = self.var(&lin);
+        let (nq0, nv0, nl0) = (self.qs.len(), self.vals.len(), self.lets.len());
+        let l0li = wr[0].with_args(vec![l0[0].clone(), li.clone()]);
+        let mut wa: Vec<Term> = wr.clone();
+        wa[0] = l0li;
+        let al_li = al.with_args(wa);
+        let (_, stmt) = self.inst("tr.qs_nodiv", &[("a", al_li), ("k", kl.clone())])?;
+        let (_, qh) = self.qparts(&stmt).ok_or("qs_nodiv")?;
+        let qhc = self.canon(&qh);
+        let jh = self.new_q(qhc);
+        let l0f = self.mk("pair", vec![Term::bvar(0), li.clone()]);
+        let (ju, unroll) = self.by(jh, "tr.qs_loop", &[("l0", l0f), ("b", wr[2].clone()), ("tr", wr[3].clone()), ("k", kl.clone())])?;
+        let (cl, pi, mv) = (format!("CL{ln}"), format!("PI{ln}"), format!("MV{ln}"));
+        let (hp, ih, cc, ci) = (format!("hp{ln}"), format!("ih{ln}"), format!("cc{ln}"), format!("ci{ln}"));
+        let idx = self.loops.len();
+        self.loops.push(Loop {
+            head: h,
+            ih: ih.clone(),
+            claim: cl.clone(),
+            k: kv,
+            d,
+            qh: self.qs[jh].1.clone(),
+            li: li.clone(),
+            lw: lw.clone(),
+            hp: hp.clone(),
+            ci: ci.clone(),
+            inv: pi.clone(),
+            var: mv.clone(),
+        });
+        let hst = format!("fn_update(empty, {}, pair(4, {}))", d, lin);
+        let st_head = St {
+            a: h,
+            regs: Vec::new(),
+            rs: "empty".into(),
+            ds: "true".into(),
+            w: lw.clone(),
+            wn: lwn.clone(),
+            hvu: format!("hvu{lwn}"),
+            hw: format!("hW{lwn}"),
+            hsm: [(d, (4, li.clone()))].into_iter().collect(),
+            hst: hst.clone(),
+            lp: Some(idx),
+            spec: Spec::Proc(jh),
+            hyps: st.hyps.clone(),
+        };
+        let mut st_body = st_head.clone();
+        st_body.spec = Spec::Proc(ju);
+        let body_pf = self.prove(st_body)?;
+        // the step's local definitions: its values, rests, register maps
+        let mut local = Vec::new();
+        let lvals: Vec<(VarId, Term)> = self.vals.drain(nv0..).collect();
+        for (v, t) in lvals {
+            local.push(format!("let {} := {}", self.env.vars[v as usize].name, self.print(&t)));
+        }
+        for i in nq0..self.qs.len() {
+            local.push(format!("let {} := {}", self.qs[i].0, self.print(&self.qs[i].1)));
+            self.scoped_q.insert(i);
+        }
+        for i in nl0..self.lets.len() {
+            local.push(format!("let {} := {}", self.lets[i].0, self.lets[i].1));
+            self.scoped_l.insert(i);
+        }
+        // the claim, the invariant, the variant
+        let (b, c, kvp) = (self.base.clone(), self.code.clone(), kv);
+        let qhp = self.print(&self.qs[jh].1);
+        let mut lines = vec![
+            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {h}, {hst}, true, empty, WRAP({qhp}), {lwn})"),
+            format!("let {pi}({lwn}, {lin}) := tr.count_inv({kvp}, {lin}) && {lwn} in abi.World && {lwn} in univ(1)"),
+            format!("let {mv}({lwn}, {lin}) := tr.count_var({kvp}, {lin})"),
+            format!("have nat{ln}: all {lwn} {lin}. {pi}({lwn}, {lin}) -> {mv}({lwn}, {lin}) in omega proof"),
+            format!("  fix {lwn}"),
+            format!("  fix {lin}"),
+            format!("  assume h: {pi}({lwn}, {lin})"),
+            format!("  have c: tr.count_inv({kvp}, {lin}) by taut(h)"),
+            format!("  show := apply(tr.count_nat, {{{kvp}}}, {{{lin}}}, simp(), c)"),
+            "qed".into(),
+            format!("have step{ln}: all {lwn} {lin}. {pi}({lwn}, {lin}) -> (all x2 y2. {pi}(x2, y2) -> int_lt({mv}(x2, y2), {mv}({lwn}, {lin})) -> {cl}(x2, y2)) -> {cl}({lwn}, {lin}) proof"),
+        ];
+        let mut sb = vec![
+            format!("fix {lwn}"),
+            format!("fix {lin}"),
+            format!("assume {hp}: {pi}({lwn}, {lin})"),
+            format!("assume {ih}: all x2 y2. {pi}(x2, y2) -> int_lt({mv}(x2, y2), {mv}({lwn}, {lin})) -> {cl}(x2, y2)"),
+            format!("have hW{lwn}: {lwn} in abi.World && {lwn} in univ(1) by taut({hp})"),
+            format!("have hvu{lwn}: {lwn} in univ(1) by taut({hp})"),
+            format!("have {cc}: tr.count_inv({kvp}, {lin}) by taut({hp})"),
+            format!("have {ci} := expand({cc}, tr.count_inv)"),
+        ];
+        sb.extend(local);
+        sb.extend(body_pf.lines);
+        let pn = self.fresh("p");
+        sb.push(format!("have {pn} := {}", body_pf.expr));
+        sb.push(format!("show := mp({}, mp({unroll}, {{{lwn}}}), {pn})", self.wred(&st_head, jh, ju)));
+        lines.extend(indent(sb));
+        lines.push("qed".into());
+        lines.push(format!("have loop{ln} := mp(tr.wf2[claim := x y. {cl}(x, y), p := x y. {pi}(x, y), mm := x y. {mv}(x, y)], nat{ln}, step{ln})"));
+        let i0p = self.print(&i0);
+        if nat(&i0) != Some(0) {
+            return Err(bad("whose counter does not start at 0"));
+        }
+        lines.push(format!("have i0{ln} := apply(tr.count_init, {{{kvp}}}, simp())"));
+        lines.push(format!("have c{ln} := mp(all_elim(loop{ln}, {{{wn}}}, {{{i0p}}}), taut(i0{ln}, {}))", st.hw));
+        let rs = format!(
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{h}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
+            st.hst, st.rs, self.qs[j0].0
+        );
+        let expr = format!("mp({}, mp({nodiv0}, {{{wn}}}), {rs})", self.wred(st, qi, j0));
+        Ok(Pf { lines, expr })
+    }
+
+    /// the loop's head again (its body's end): the claim there, by the
+    /// induction hypothesis at the world and counter now
+    fn loop_back(&mut self, st: &St, qi: usize, l: usize) -> Result<Pf, String> {
+        let lp = self.loops[l].clone();
+        let q = self.qs[qi].1.clone();
+        let badm = format!("{:x}: back at the loop's head, the rest not the loop's: {}", st.a, self.print(&q));
+        let bad = || badm.clone();
+        // the rest: ex x8. (while_rel(pair(x0, T'), ..) && !(fst(x8) = 2)) && (ex x2. k(x8, x2) && x1 = x2)
+        let body = self.app(&q, "mkprog", 1).ok_or_else(bad)?[0].clone();
+        let y = self.app(&self.app(&body, "ex", 1).ok_or_else(bad)?[0], "and", 2).ok_or_else(bad)?.to_vec();
+        let al = self.lam(&y[0], &["x0", "x1", "x8"], &["x0", "x8"]).ok_or_else(bad)?;
+        let ek = self.app(&y[1], "ex", 1).ok_or_else(bad)?.to_vec();
+        let ka = self.app(&ek[0], "and", 2).ok_or_else(bad)?.to_vec();
+        let kl = self.lam(&ka[0], &["x0", "x1", "x8", "x2"], &["x8", "x2"]).ok_or_else(bad)?;
+        let (j, settle) = self.by(qi, "tr.qs_settle", &[("a", al.clone()), ("k", kl)])?;
+        // the counter now: T' = li + 1, at the home
+        let g0 = self.app(&al, "and", 2).ok_or_else(bad)?[0].clone();
+        let wr = self.app(&g0, "while_rel", 5).ok_or_else(bad)?.to_vec();
+        let tp = self.app(&wr[0], "pair", 2).ok_or_else(bad)?[1].clone();
+        let step = self.mk("bits_add", vec![lit(32), lp.li.clone(), lit(1)]);
+        if self.expand(&tp) != self.expand(&step) {
+            return Err(format!("{:x}: the counter at the loop's end {} is not {} + 1", st.a, self.print(&tp), self.print(&lp.li)));
+        }
+        match st.hsm.get(&lp.d) {
+            Some((4, x)) if self.canon(x) == self.canon(&tp) && st.hsm.len() == 1 => {}
+            _ => return Err(format!("{:x}: the counter's home not the counter at the loop's end", st.a)),
+        }
+        // (the rest now: the claim's at T')
+        let Node::Var(liv, _) = lp.li.node() else { unreachable!() };
+        let qh2 = self.canon(&lp.qh.subst_var(*liv, &tp, &self.env.binders_fn()));
+        if self.canon(&self.qs[j].1) != qh2 {
+            return Err(format!("{:x}: the rest at the loop's end not the claim's:\n  {}\n  {}", st.a, self.print(&self.qs[j].1), self.print(&qh2)));
+        }
+        // the invariant at (W', T'), the variant smaller: by the counter's step
+        let k = lp.k;
+        let g = self.mk("not", vec![self.mk("int_lt", vec![self.mk("sint", vec![lit(32), lit(k)]), self.mk("sint", vec![lit(32), lp.li.clone()])])]);
+        let hg = st.hyps.iter().find(|h| h.0 == g).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: the loop's condition not in scope", st.a))?;
+        let (lip, tpp, wn) = (self.print(&lp.li), self.print(&tp), st.wn.clone());
+        let cc = lp.ci.replacen("ci", "cc", 1);
+        let (csn, cn) = (self.fresh("cs"), self.fresh("c"));
+        let lines = vec![
+            format!("have {csn} := apply(tr.count_step, {{{k}}}, {{{lip}}}, simp(), {cc}, simp(), {hg})"),
+            format!("have {cn} := mp(all_elim({}, {{{wn}}}, {{{tpp}}}), taut({csn}, {}), taut({csn}))", lp.ih, st.hw),
+        ];
+        let rs = format!(
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
+            self.base, self.code, st.a, st.hst, st.rs, self.qs[j].0
+        );
+        let expr = format!("mp({}, mp({settle}, {{{wn}}}), {rs})", self.wred(st, qi, j));
+        Ok(Pf { lines, expr })
+    }
+
+    /// the rest `qi`'s head a loop: `ex x8. while_rel(l0, c, b, tr, x8) && k`
+    /// (its parts: l0, b, tr, k, as the rest has them)
+    fn loop_head(&self, qi: usize) -> Option<Vec<Term>> {
+        let body = self.app(&self.qs[qi].1, "mkprog", 1)?[0].clone();
+        let e = self.app(&body, "ex", 1)?;
+        let y = self.app(&e[0], "and", 2)?;
+        // (or guarded: while_rel(..) && !(fst(x8) = 2), at the body's end)
+        let w0 = self.app(&y[0], "and", 2).map(|g| g[0].clone()).unwrap_or(y[0].clone());
+        let wr = self.app(&w0, "while_rel", 5)?;
+        Some(vec![wr[0].clone(), wr[2].clone(), wr[3].clone(), y[1].clone()])
+    }
+
     /// a linear step: the rule's text with `{NEXT}`, the state after
     fn then(&mut self, text: String, st2: St) -> Result<Pf, String> {
         let rest = self.prove(st2)?;
         let pn = self.fresh("p");
         let mut lines = rest.lines;
+        lines.push(format!("have {} := {}", pn, rest.expr));
+        Ok(Pf { lines, expr: text.replace("{NEXT}", &pn) })
+    }
+
+    /// the same, after the lines `pre` (the next point's definitions)
+    fn then_pre(&mut self, text: String, st2: St, pre: Vec<String>) -> Result<Pf, String> {
+        let rest = self.prove(st2)?;
+        let pn = self.fresh("p");
+        let mut lines = pre;
+        lines.extend(rest.lines);
         lines.push(format!("have {} := {}", pn, rest.expr));
         Ok(Pf { lines, expr: text.replace("{NEXT}", &pn) })
     }
@@ -1053,14 +1702,21 @@ impl<'e> Gen<'e> {
     /// The instruction at st's address.
     fn insn(&mut self, st: St) -> Result<Pf, String> {
         let a = st.a;
-        let insn = self.insns.remove(&a).ok_or_else(|| format!("no decode fact at {:x}", a))?;
+        let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
         let r = self.insn_at(&st, &insn);
-        self.insns.insert(a, insn);
-        r
+        // (the instance's homes and world: the point's)
+        let mut pf = r?;
+        self.lf = match st.lp {
+            Some(l) => format!("L, {}", self.loops[l].ci),
+            None => "L".into(),
+        };
+        pf.expr = self.lfacts(&pf.expr.replace("{HS}", &format!("{{{}}}", st.hst)).replace("{W}", &format!("{{{}}}", st.wn)));
+        Ok(pf)
     }
 
     fn insn_at(&mut self, st: &St, insn: &Insn) -> Result<Pf, String> {
         let a = st.a;
+        let wn = st.wn.clone();
         let a2 = (a + insn.len) % P64;
         let fs = self.print(&insn.fields);
         let bad = |what: &str| format!("{:x}: {} (row {}): {}", a, what, insn.row, fs);
@@ -1084,7 +1740,7 @@ impl<'e> Gen<'e> {
                     let bp = self.need_reg(st, bn, 8)?;
                     let hc = self.mem_hyp(st, &bp, &d, 8)?;
                     let t = self.head("load64_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tailv(st, insn, 6, &[hc])?;
-                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&bp), self.print(&d)))?;
+                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, v);
@@ -1093,8 +1749,8 @@ impl<'e> Gen<'e> {
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
                 let n = nat(&x[0]).ok_or_else(|| bad("fields"))?;
                 let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
-                let v = match (n, self.hs.get(&dn)) {
-                    (4, _) => home(&self.hs, &d)?,
+                let v = match (n, st.hsm.get(&dn)) {
+                    (4, _) => home(&st.hsm, &d)?,
                     (8, Some((8, x))) => x.clone(),
                     _ => return Err(bad("no home of the load's width")),
                 };
@@ -1125,7 +1781,7 @@ impl<'e> Gen<'e> {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
                 let g = reg(&x[1])?;
-                let v = home(&self.hs, &d)?;
+                let v = home(&st.hsm, &d)?;
                 let u = self.need_reg(st, g, 4)?;
                 let t = self.head("and32_home", a, insn) + &self.terms(&[&x[1], &d, &x[3], &x[4], &v, &u]) + &self.tail(st, insn, 9, &[]);
                 let r = self.mk("bits_and", vec![lit(32), v, u]);
@@ -1199,7 +1855,7 @@ impl<'e> Gen<'e> {
                         let bp = self.canon(&bp);
                         let t = self.head("shl12_field", a, insn) + &self.terms(&[&g, &x[3], &bp, &lit(off), &lit(off + 1)]) + &self.tail(st, insn, 5, &[]);
                         let r = self.parse(&format!(
-                            "bits_mul(64, bits_of_int(52, int_mod(int_div(gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 7), int_pow(2, 4)), int_pow(2, 52))), 4096)",
+                            "bits_mul(64, bits_of_int(52, int_mod(int_div(gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 7), int_pow(2, 4)), int_pow(2, 52))), 4096)",
                             self.print(&bp),
                             off + 1
                         ))?;
@@ -1263,6 +1919,54 @@ impl<'e> Gen<'e> {
             // sub r32, imm8: GIMPLE's x + -k
             60 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                // add / cmp dword [rsp + d], imm8: the home d (u)
+                if let Some(d) = self.rsp_mem(&x[2]) {
+                    let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;
+                    let kk = lit(if imm >= 128 { imm + 0xffff_ff00 } else { imm });
+                    if nat(&x[0]) != Some(4) || x[3] != x[2] {
+                        return Err(bad("not dword [rsp + d], imm8"));
+                    }
+                    let u = home(&st.hsm, &d)?;
+                    return match nat(&x[1]) {
+                        Some(0) => {
+                            let only = self.only(st, dn)?;
+                            let t = self.head("add32_home", a, insn) + &self.terms(&[&d, &x[4], &kk, &u]) + &self.tail(st, insn, 7, &[only, "simp(L)".into(), "simp(L)".into()]);
+                            let r = self.mk("bits_add", vec![lit(32), u, kk]);
+                            let r = self.value(&r);
+                            let st2 = self.set_home(st, a2, dn, r);
+                            self.then(t, st2)
+                        }
+                        // cmp; jle t: on to a3 (the loop's leaving) when kk <s u
+                        Some(7) => {
+                            let (j, jn, a3, tt, cc) = self.jcc(a2)?;
+                            if cc != 14 {
+                                return Err(bad("cmp of a home not followed by jle"));
+                            }
+                            let c = self.mk("int_lt", vec![self.mk("sint", vec![lit(32), kk.clone()]), self.mk("sint", vec![lit(32), u.clone()])]);
+                            let text = format!(
+                                "mp(tr.cmp32_home_jle, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                                self.base,
+                                self.code,
+                                a,
+                                a2,
+                                a3,
+                                tt,
+                                insn.len,
+                                jn,
+                                self.terms(&[&d, &x[4], &kk, &j, &u]),
+                                st.ds,
+                                st.rs,
+                                self.p(&st.spec),
+                                insn.name,
+                                self.insns[&a2].name,
+                                ", simp(L)".repeat(11)
+                            );
+                            self.branch(st, c, a3, tt, text)
+                        }
+                        _ => Err(bad("an operation on a home other than add, cmp")),
+                    };
+                }
                 let (k, g) = self.tag(&x[2]).ok_or_else(|| bad("fields"))?;
                 let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;
                 let kk = if imm >= 128 { imm + 0xffff_ff00 } else { imm };
@@ -1305,7 +2009,7 @@ impl<'e> Gen<'e> {
                             + &self.terms(&[&g, &x[3], &x[4], &lit(kk), &q, &lit(pos), &lit(kb)])
                             + &self.tail(st, insn, 4, &[format!("{}.field16_{}_{}_{}", self.prefix, pos, kb, kk), "simp(L)".into(), "simp(L)".into(), "simp(L)".into()]);
                         let r = self.parse(&format!(
-                            "bits_of_int({kb}, int_mod(int_div(gimple.bytes_at(app(W, \"vm\"), {}, 2), int_pow(2, {pos})), int_pow(2, {kb})))",
+                            "bits_of_int({kb}, int_mod(int_div(gimple.bytes_at(app({wn}, \"vm\"), {}, 2), int_pow(2, {pos})), int_pow(2, {kb})))",
                             self.print(&q)
                         ))?;
                         let r = self.value(&r);
@@ -1313,6 +2017,19 @@ impl<'e> Gen<'e> {
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         return self.then(t, st2);
                     }
+                }
+                // add r32, imm8 (g holding a value of at most 4 bytes): g := u + kk
+                if (size, nat(&x[1])) == (4, Some(0)) {
+                    let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
+                    if n > 4 {
+                        return Err(bad("add r32 of a wider value"));
+                    }
+                    let t = self.head("add32_imm", a, insn) + &self.terms(&[&g, &x[3], &x[4], &lit(kk), &lit(n), &u]) + &self.tail(st, insn, 7, &[]);
+                    let r = self.mk("bits_add", vec![lit(32), u, lit(kk)]);
+                    let r = self.value(&r);
+                    self.scratch.insert(gn);
+                    let st2 = self.set_reg(st, a2, gn, 4, r);
+                    return self.then(t, st2);
                 }
                 let u = self.need_reg(st, gn, size)?;
                 match (size, nat(&x[1])) {
@@ -1380,8 +2097,33 @@ impl<'e> Gen<'e> {
                 let k = nat(&f).ok_or_else(|| bad("an immediate that is not a literal"))?;
                 let b = self.need_reg(st, 0, 1)?;
                 let (j, jn, a3, tt, cc) = self.jcc(a2)?;
+                // cmp al, imm8; jne t: on to a3 when al = k (k as GIMPLE writes
+                // it: a negative byte bits_neg(8, -k))
+                if cc == 5 {
+                    let kk = if k >= 128 { self.mk("bits_neg", vec![lit(8), lit(256 - k)]) } else { lit(k) };
+                    let c = self.mk("eq", vec![b.clone(), kk.clone()]);
+                    let text = format!(
+                        "mp(tr.cmp8_jne, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                        self.base,
+                        self.code,
+                        a,
+                        a2,
+                        a3,
+                        tt,
+                        insn.len,
+                        jn,
+                        self.terms(&[&f, &kk, &j, &b]),
+                        st.ds,
+                        st.rs,
+                        self.p(&st.spec),
+                        insn.name,
+                        self.insns[&a2].name,
+                        ", simp(L)".repeat(8)
+                    );
+                    return self.branch(st, c, a3, tt, text);
+                }
                 if cc != 6 {
-                    return Err(bad("cmp not followed by jbe"));
+                    return Err(bad("cmp not followed by jbe or jne"));
                 }
                 let c = self.mk("int_lt", vec![lit(k), b.clone()]);
                 let text = format!(
@@ -1484,13 +2226,25 @@ impl<'e> Gen<'e> {
                 }
                 let m = self.memop(&x[2]).ok_or_else(|| bad("fields"))?;
                 let (bk, b) = self.tag(&m["base"]).ok_or_else(|| bad("fields"))?;
+                // movzx r32, byte [rip + d]: the spec's load of a static's byte
+                if bk == 1 {
+                    let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let biga = (a2 + d) % P64;
+                    let hc = self.static_hyp(st, biga, false)?;
+                    let t = self.head("movzx8_rip", a, insn) + &self.terms(&[&x[1], &lit(d), &x[4], &lit(biga)]) + &self.tailv(st, insn, 4, &[format!("simp(L, {})", hc)])?;
+                    let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), {biga}, 1))"))?;
+                    let v = self.value(&v);
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 1, v);
+                    return self.then(t, st2);
+                }
                 // movzx r32, byte [b + d] (b holding a pointer): the spec's field load
                 if self.app(&m["index"], "none", 0).is_some() && nat(&m["disp"]) != Some(0) {
                     let (bn, b, d) = self.base_disp(&x[2]).ok_or_else(|| bad("not [b + d]"))?;
                     let bp = self.need_reg(st, bn, 8)?;
                     let hc = self.mem_hyp(st, &bp, &d, 1)?;
                     let t = self.head("movzx8_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tailv(st, insn, 6, &[hc])?;
-                    let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 1))", self.print(&bp), self.print(&d)))?;
+                    let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 1))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 1, v);
@@ -1557,7 +2311,7 @@ impl<'e> Gen<'e> {
                     let bp = self.need_reg(st, bn, 8)?;
                     let hc = self.mem_hyp(st, &bp, &d, 2)?;
                     let t = self.head("movzx16_bd", a, insn) + &self.terms(&[&x[1], &b, &d, &x[4], &bp]) + &self.tailv(st, insn, 6, &[hc])?;
-                    let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app(W, \"vm\"), bits_add(64, {}, {}), 2))", self.print(&bp), self.print(&d)))?;
+                    let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 2))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 2, v);
@@ -1574,7 +2328,7 @@ impl<'e> Gen<'e> {
                 let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
                 let hc = self.mem_hyp(st, &ad, &lit(0), 2)?;
                 let t = self.head("movzx16_ld", a, insn) + &self.terms(&[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv]) + &self.tailv(st, insn, 8, &[hc])?;
-                let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app(W, \"vm\"), {}, 2))", self.print(&ad)))?;
+                let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app({wn}, \"vm\"), {}, 2))", self.print(&ad)))?;
                 let v = self.value(&v);
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 2, v);
@@ -1665,6 +2419,14 @@ impl<'e> Gen<'e> {
                         _ => String::new(),
                     }));
                 };
+                // (no result: rax:rdx anything)
+                if self.rbytes == 0 {
+                    let expr = format!(
+                        "mp(tr.ret_void, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, mp(tr.result_void, {{W}}))",
+                        self.base, self.code, a, insn.len, st.ds, st.rs, pr, insn.name
+                    );
+                    return Ok(Pf { lines: vec![], expr });
+                }
                 let n = self.rbytes;
                 let v = self.need_reg(st, 0, n)?;
                 if &v != val {
@@ -1687,8 +2449,159 @@ impl<'e> Gen<'e> {
                 );
                 Ok(Pf { lines: vec![], expr })
             }
+            // mov byte [b + i], imm8 / mov byte [rip + d], imm8: the spec's store
+            30 => {
+                let x = self.pairs(&f, 3).ok_or_else(|| bad("fields"))?;
+                let m = self.memop(&x[0]).ok_or_else(|| bad("fields"))?;
+                let (bk, b) = self.tag(&m["base"]).ok_or_else(|| bad("fields"))?;
+                let k = x[2].clone();
+                if x[1] != x[0] {
+                    return Err(bad("not mov byte [m], imm8"));
+                }
+                let (rule, terms, n, ad) = if bk == 1 {
+                    let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let biga = lit((a2 + d) % P64);
+                    ("store8i_rip", vec![lit(d), k.clone(), biga.clone()], 5, biga)
+                } else {
+                    let i = self.app(&m["index"], "some", 1).ok_or_else(|| bad("no index"))?[0].clone();
+                    if bk != 2 || nat(&m["disp"]) != Some(0) || nat(&m["scale"]) != Some(1) {
+                        return Err(bad("not [b + i]"));
+                    }
+                    let (bn, inn) = (reg(&b)?, reg(&i)?);
+                    let (nb, bv) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
+                    let iv = self.need_reg(st, inn, 8)?;
+                    let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
+                    ("store8i_bi", vec![b.clone(), i.clone(), k.clone(), lit(nb), bv, iv], 9, ad)
+                };
+                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &ad)?;
+                if self.eval_lit(&v) != nat(&k) {
+                    return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&k), self.print(&v)));
+                }
+                let ns = self.off_stack(st, &sa)?;
+                let low = self.homes_low(st)?;
+                let tr: Vec<&Term> = terms.iter().collect();
+                let t = self.head(rule, a, insn)
+                    + &self.terms(&tr)
+                    + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
+                    + &", simp(L)".repeat(n)
+                    + &format!(", simp(L, {hc}), {ns}, {low}, simp(), {red}, {{NEXT}})");
+                let mut st3 = st2;
+                st3.a = a2;
+                self.then_pre(t, st3, pre)
+            }
+            // mov byte [rip + d], r8: the spec's store of the register's low byte
+            28 => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                let m = self.memop(&x[2]).ok_or_else(|| bad("fields"))?;
+                let (bk, _) = self.tag(&m["base"]).ok_or_else(|| bad("fields"))?;
+                let (gk, g) = self.tag(&x[3]).ok_or_else(|| bad("fields"))?;
+                let gn = reg(&g)?;
+                if bk != 1 || gk != 0 || gn >= 4 {
+                    return Err(bad("not mov byte [rip + d], r8"));
+                }
+                let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let biga = lit((a2 + d) % P64);
+                let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
+                let (hc, v, pre, st2, red, sa) = self.spec_store(st, &biga)?;
+                // (the register's low byte: the spec's value, u + k against v + k)
+                let (ue, ve) = (self.expand(&u), self.expand(&v));
+                let low8 = (|| {
+                    let x = self.app(&ue, "bits_add", 3)?;
+                    let y = self.app(&ve, "bits_add", 3)?;
+                    (nat(&x[0])? == 32 && nat(&y[0])? == 8 && self.canon(&x[1]) == self.canon(&y[1]) && self.eval_lit(&x[2])? == self.eval_lit(&y[2])?).then(|| (x[1].clone(), x[2].clone()))
+                })();
+                let (bb, kk) = low8.ok_or_else(|| format!("{:x}: the stored byte {} is not the spec's {}", a, self.print(&u), self.print(&v)))?;
+                let lp = format!("mp(tr.low8_add, {{{}}}, {{{}}}, simp(L), simp(L))", self.print(&bb), self.print(&kk));
+                let ns = self.off_stack(st, &sa)?;
+                let low = self.homes_low(st)?;
+                let t = self.head("store8_rip", a, insn)
+                    + &self.terms(&[&g, &lit(d), &x[0], &x[1], &lit(n), &u, &v, &biga])
+                    + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
+                    + &", simp(L)".repeat(8)
+                    + &format!(", {lp}, simp(L, {hc}), {ns}, {low}, simp(), {red}, {{NEXT}})");
+                let mut st3 = st2;
+                st3.a = a2;
+                self.then_pre(t, st3, pre)
+            }
+            // nop
+            109 => {
+                let t = format!(
+                    "mp(tr.nop, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, simp(L), {{NEXT}})",
+                    self.base,
+                    self.code,
+                    a,
+                    a2,
+                    insn.len,
+                    self.print(&f),
+                    st.ds,
+                    st.rs,
+                    self.p(&st.spec),
+                    insn.name
+                );
+                let mut st2 = st.clone();
+                st2.a = a2;
+                self.then(t, st2)
+            }
+            // jmp rel8
+            125 => {
+                let r = nat(&f).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let sx = if r & 0x80 != 0 { r + 0xffff_ffff_ffff_ff00 } else { r };
+                let tt = (a2 + sx) % P64;
+                let t = format!(
+                    "mp(tr.jmp8, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, simp(L), simp(L), simp(L), {{NEXT}})",
+                    self.base,
+                    self.code,
+                    a,
+                    a2,
+                    tt,
+                    insn.len,
+                    r,
+                    st.ds,
+                    st.rs,
+                    self.p(&st.spec),
+                    insn.name
+                );
+                let mut st2 = st.clone();
+                st2.a = tt;
+                self.then(t, st2)
+            }
+            // mov dword [rsp + d], imm32: the home d := k (the frame written)
+            77 => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&x[1]).ok_or_else(|| bad("not a home"))?;
+                let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                if nat(&x[0]) != Some(4) || x[2] != x[1] {
+                    return Err(bad("not mov dword [rsp + d], imm32"));
+                }
+                let only = self.only(st, dn)?;
+                let k = x[3].clone();
+                let t = self.head("store32i_home", a, insn) + &self.terms(&[&d, &k]) + &self.tail(st, insn, 6, &[only]);
+                let st2 = self.set_home(st, a2, dn, k);
+                self.then(t, st2)
+            }
             _ => Err(bad("no rule for the instruction")),
         }
+    }
+
+    /// the homes: d's alone (the rule's premise, its proof)
+    fn only(&self, st: &St, d: u128) -> Result<String, String> {
+        match st.hsm.iter().next() {
+            None => Ok(format!("all_elim(tr.only_empty, {{{}}})", d)),
+            Some((&c, (n, x))) if c == d && st.hsm.len() == 1 => Ok(format!("all_elim(tr.only_upd, {{{}}}, {{pair({}, {})}})", d, n, self.print(x))),
+            _ => Err(format!("{:x}: a frame of more homes than the one at {:x}: not covered yet", st.a, d)),
+        }
+    }
+
+    /// after a write of the 4-byte home d (x): the home's value, the frame
+    /// written
+    fn set_home(&mut self, st: &St, a2: u128, d: u128, x: Term) -> St {
+        let mut st2 = st.clone();
+        st2.a = a2;
+        st2.hsm = BTreeMap::new();
+        st2.hsm.insert(d, (4, x.clone()));
+        st2.hst = format!("fn_update(empty, {}, pair(4, {}))", d, self.print(&x));
+        st2.ds = "true".into();
+        st2
     }
 
     /// the conditional jump at a2: its displacement field, decode fact's
@@ -1857,6 +2770,7 @@ pub fn translate(args: &[String]) -> CResult {
     }
 
     // the spec: fn_build(D, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(PROC, x1, KW, EXC, DIV)))
+    // (one argument), or fn_build(D, x0. mkprog(x1 x2. bind_rel(PROC, x1, KW, EXC, DIV))) (none)
     let ssym = *env.sym_by_name.get(&spec_name).ok_or_else(|| format!("no spec `{}`", spec_name))?;
     let SymKind::Defined { body: sbody, .. } = env.syms[ssym as usize].kind.clone() else { return Err(format!("`{}` is not a definition", spec_name)) };
     let mut g = Gen {
@@ -1868,7 +2782,6 @@ pub fn translate(args: &[String]) -> CResult {
         lets: Vec::new(),
         lemmas,
         insns,
-        hs: BTreeMap::new(),
         imuls: BTreeSet::new(),
         narrows: BTreeSet::new(),
         fields: BTreeSet::new(),
@@ -1879,22 +2792,36 @@ pub fn translate(args: &[String]) -> CResult {
         prefix: prefix.clone(),
         kw: Term::bvar(0),
         w: Term::bvar(0),
+        wn: "W".into(),
+        hvu: "hvu".into(),
+        vw: Term::bvar(0),
         n: 0,
+        loops: Vec::new(),
+        statics_range: None,
+        nval: 0,
+        scoped_q: BTreeSet::new(),
+        scoped_l: BTreeSet::new(),
+        lf: "L".into(),
     };
     let args_t = g.var("args");
     g.var("s");
     g.w = g.var("W");
+    g.vw = g.w.clone();
     let q_t = g.var("q");
     g.base = g.print(&base_t);
     g.code = g.print(&code_t);
-    let parts = (|| -> Option<(Term, Term, Term)> {
+    let parts = (|| -> Option<(bool, Term, Term, Term)> {
         let fb = g.app(&sbody, "fn_build", 2)?;
         let mp = g.app(&fb[1], "mkprog", 1)?;
-        let or = g.app(&mp[0], "or", 2)?;
-        let guard = g.app(&or[0], "not", 1)?;
-        let le = g.app(&guard[0], "ord_le", 2)?;
-        (nat(&le[0])? == 1).then_some(())?;
-        let br = g.app(&or[1], "bind_rel", 5)?;
+        let (guarded, br) = match g.app(&mp[0], "or", 2) {
+            Some(or) => {
+                let guard = g.app(&or[0], "not", 1)?;
+                let le = g.app(&guard[0], "ord_le", 2)?;
+                (nat(&le[0])? == 1).then_some(())?;
+                (true, g.app(&or[1], "bind_rel", 5)?.to_vec())
+            }
+            None => (false, g.app(&mp[0], "bind_rel", 5)?.to_vec()),
+        };
         matches!(br[1].node(), Node::BVar(1)).then_some(())?;
         // PROC(x0); KW(x3, x4, x2); the wrapper without x0
         let proc = g.lam(&br[0], &["x0", "x1", "x2"], &["x0"])?;
@@ -1904,9 +2831,9 @@ pub fn translate(args: &[String]) -> CResult {
         let mut wa = vec![q_t.clone()];
         wa.extend(rest);
         let wrap = g.mk("mkprog", vec![g.mk("bind_rel", wa)]);
-        Some((proc, kw, wrap))
+        Some((guarded, proc, kw, wrap))
     })();
-    let (proc, kw, wrap) = parts.ok_or_else(|| format!("`{}`: not a one-argument procedure's spec", spec_name))?;
+    let (guarded, proc, kw, wrap) = parts.ok_or_else(|| format!("`{}`: not a procedure's spec of one argument or none", spec_name))?;
     g.kw = kw.clone();
     // (the result's width: the wrapper's gimple.result(N, ..))
     fn result_bits(g: &Gen, t: &Term) -> Option<u128> {
@@ -1918,32 +2845,52 @@ pub fn translate(args: &[String]) -> CResult {
             _ => None,
         }
     }
-    g.rbytes = result_bits(&g, &kw).unwrap_or(32) / 8;
+    g.rbytes = result_bits(&g, &kw).unwrap_or(0) / 8;
 
-    // the entry: mov [rsp + d], edi / rdi (the argument's n bytes)
-    let (e_len, e_name, ef) = {
-        let e0 = &g.insns[&entry];
-        (e0.len, e0.name.clone(), g.pairs(&e0.fields, 5).ok_or("the entry's fields")?)
-    };
-    let (d, n) = match (g.insns[&entry].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
-        (75, Some(n), Some(7), Some(d)) if n == 4 || n == 8 => (d, n),
-        _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi` or `rdi`", entry)),
+    // the entry: mov [rsp + d], edi / rdi (the argument's n bytes); none
+    // without arguments (the first point the entry itself)
+    let (e_len, e_name) = (g.insns[&entry].len, g.insns[&entry].name.clone());
+    let ef = if guarded { g.pairs(&g.insns[&entry].fields, 5).ok_or("the entry's fields")? } else { Vec::new() };
+    let (d, n) = if guarded {
+        match (g.insns[&entry].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
+            (75, Some(n), Some(7), Some(d)) if n == 4 || n == 8 => (d, n),
+            _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi` or `rdi`", entry)),
+        }
+    } else {
+        (lit(0), 0)
     };
     let dn = nat(&d).ok_or("the entry's displacement")?;
-    let a2 = (entry + e_len) % P64;
+    let a2 = if guarded { (entry + e_len) % P64 } else { entry };
     let x = g.mk("bits_of_int", vec![lit(8 * n), g.mk("app", vec![args_t.clone(), lit(0)])]);
     // (the entry rule, the argument register's value stored)
     let (entry_rule, arg_reg) = if n == 8 { ("tr.entry1_64", "app(app(s, \"gpr\"), 7)".to_string()) } else { ("tr.entry1_32", "bits_slice(app(app(s, \"gpr\"), 7), 31, 0)".to_string()) };
     let q0raw = proc.instantiate_params(&[args_t.clone()], &g.env.binders_fn());
     let Node::Var(qv, _) = q_t.node() else { unreachable!() };
     let wrap_q0 = wrap.subst_var(*qv, &q0raw, &g.env.binders_fn());
-    let xn = g.value(&x);
-    g.hs.insert(dn, (n, xn.clone()));
+    let mut hsm0 = BTreeMap::new();
+    let xn = if guarded { g.value(&x) } else { lit(0) };
+    if guarded {
+        hsm0.insert(dn, (n, xn.clone()));
+    }
     let q0 = g.canon(&q0raw);
     let i0 = g.new_q(q0);
 
     // the proof
-    let st0 = St { a: a2, regs: Vec::new(), rs: "empty".into(), ds: "false".into(), spec: Spec::Proc(i0), hyps: Vec::new() };
+    let st0 = St {
+        a: a2,
+        regs: Vec::new(),
+        rs: "empty".into(),
+        ds: "false".into(),
+        w: g.w.clone(),
+        wn: "W".into(),
+        hvu: "hvu".into(),
+        hw: "hW".into(),
+        hsm: hsm0,
+        hst: if guarded { "HS".into() } else { "empty".into() },
+        lp: None,
+        spec: Spec::Proc(i0),
+        hyps: Vec::new(),
+    };
     let pf = g.prove(st0)?;
 
     // the text
@@ -1952,8 +2899,14 @@ pub fn translate(args: &[String]) -> CResult {
         "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, proofs/translate.core)\n// Each step: a rule of proofs/translate.core with its instance -- a spec\n// reduction, or an instruction (its decode fact, build/leaf_steps.core;\n// literal facts, simp(L)) -- then the next point. Checked after\n// proofs/translate.core.\n\n",
         fname, fname, spec_name, prefix
     ));
-    let view = format!("tr.view1(s, {}, {}, {})", dn, n, arg_reg);
+    let view = if guarded { format!("tr.view1(s, {}, {}, {})", dn, n, arg_reg) } else { "app(s, \"vm\")".to_string() };
     o.push_str(&format!("abbrev {p}.v(s) := {}\nabbrev {p}.w(s) := abi.view({p}.v(s), s)\n\n", view, p = prefix));
+    // (the static bytes the spec reads and writes: among the statics, no
+    // stack pages)
+    let srange = g.statics_range;
+    if let Some((lo, hi)) = srange {
+        o.push_str(&format!("def {p}.statics(st) := all a. a in omega -> int_le({lo}, a) -> int_lt(a, {hi}) -> a in st\n\n", p = prefix));
+    }
     for c in g.imuls.clone() {
         o.push_str(&format!(
             "theorem {p}.imul_{c}: tr.imul_by({c})\nproof\n  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, {c})), 0) = bits_mul(32, y, {c}) proof\n    fix y\n    assume hy: y in bits(32)\n    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), {c}), 0) = bits_mul(32, y, {c}) proof\n      assume hl: int_lt(y, 2147483648)\n      show by defs(simp(hy, hl), bits_add, bits_mul, sint)\n    qed\n    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), {c}), 0) = bits_mul(32, y, {c}) proof\n      assume hl: !int_lt(y, 2147483648)\n      have e: int_mod(int_mul(int_sub(y, 4294967296), {c}), 4294967296) = int_mod(int_mul(y, {c}), 4294967296) by arith(hy)\n      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)\n    qed\n    have e: bits_add(32, int_mul(sint(32, y), {c}), 0) = bits_mul(32, y, {c}) by taut(c1, c2)\n    show by simp(e)\n  qed\n  show by defs(g, tr.imul_by)\nqed\n\n",
@@ -1977,18 +2930,40 @@ pub fn translate(args: &[String]) -> CResult {
         ));
     }
     let p = &prefix;
-    o.push_str(&format!(
-        "theorem {p}.body: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
-        g.base,
-        g.code,
-        a2,
-        dn,
-        n,
-        8 * n,
-        g.print(&wrap_q0)
-    ));
-    o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n  assume hg: ord_le(1, seq_len(args))\n");
-    o.push_str(&format!("  assume hvu: {p}.w(s) in univ(1)\n"));
+    if guarded {
+        o.push_str(&format!(
+            "theorem {p}.body: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
+            g.base,
+            g.code,
+            a2,
+            dn,
+            n,
+            8 * n,
+            g.print(&wrap_q0)
+        ));
+        o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n  assume hg: ord_le(1, seq_len(args))\n");
+        o.push_str(&format!("  assume hvu: {p}.w(s) in univ(1)\n"));
+    } else {
+        let sp = if srange.is_some() { format!("{p}.statics(statics) -> ") } else { String::new() };
+        o.push_str(&format!(
+            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {b}, empty, false, empty,\n    {}, {p}.w(s))\nproof\n",
+            g.print(&wrap_q0),
+            b = g.base,
+            c = g.code,
+        ));
+        o.push_str("  fix statics\n");
+        if srange.is_some() {
+            o.push_str(&format!("  assume hst: {p}.statics(statics)\n"));
+        }
+        o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n");
+        o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", g.base, g.code));
+        o.push_str(&format!("  assume hvu: {p}.w(s) in univ(1)\n"));
+        if let Some((lo, hi)) = srange {
+            o.push_str(&format!(
+                "  // the static bytes: no stack pages\n  have ls: all x0. x0 in omega -> x0 in statics -> !abi.stack_page(app(s, \"vm\"), int_div(x0, 4096)) by simp(expand(hl, abi.loaded))\n  have hns: all a. a in omega -> int_le({lo}, a) -> int_lt(a, {hi}) -> !abi.stack_page(app(s, \"vm\"), int_div(a, 4096)) proof\n    fix a\n    assume a1: a in omega\n    assume a2: int_le({lo}, a)\n    assume a3: int_lt(a, {hi})\n    have i := mp(all_elim(expand(hst, {p}.statics), {{a}}), a1, a2, a3)\n    show := mp(all_elim(ls, {{a}}), a1, i)\n  qed\n"
+            ));
+        }
+    }
     let mut l = vec!["tr.dom_upd".to_string(), "tr.dom_keep".to_string()];
     let mut lt = vec!["(all f k v. k in dom(fn_update(f, k, v)))".to_string(), "(all f k j v. k in dom(f) -> !(k = j) -> k in dom(fn_update(f, j, v)))".to_string()];
     for r in &g.scratch {
@@ -2002,6 +2977,9 @@ pub fn translate(args: &[String]) -> CResult {
     o.push_str(&format!("  // the wrapper: the procedure's rest q, its result returned\n  let KW(x0, x1, x2) := {}\n", kwb));
     o.push_str(&format!("  let WRAP(q) := {}\n", g.print(&wrap)));
     o.push_str(&format!("  let V := {p}.v(s)\n  let W := {p}.w(s)\n"));
+    if !guarded {
+        o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) proof\n    have pt := apply(x86i.parts, hM)\n    have r4 := apply(x86i.rsp_typed, hM)\n    have vV: V in x86_64_linux.Vm by simp(pt)\n    have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)\n    show by taut(wt, hvu)\n  qed\n");
+    }
     if !g.zs.is_empty() {
         o.push_str("  // the choices' witnesses (no machine value is one)\n");
         for z in &g.zs {
@@ -2012,14 +2990,20 @@ pub fn translate(args: &[String]) -> CResult {
     for (v, t) in &g.vals {
         o.push_str(&format!("  let {} := {}\n", g.env.vars[*v as usize].name, g.print(t)));
     }
-    o.push_str(&format!("  let HS := fn_update(empty, {}, pair({}, {}))\n", dn, n, g.print(&xn)));
+    if guarded {
+        o.push_str(&format!("  let HS := fn_update(empty, {}, pair({}, {}))\n", dn, n, g.print(&xn)));
+    }
     o.push_str("  // the spec's rest at each point\n");
-    for (n, t) in &g.qs {
-        o.push_str(&format!("  let {} := {}\n", n, g.print(t)));
+    for (i, (n, t)) in g.qs.iter().enumerate() {
+        if !g.scoped_q.contains(&i) {
+            o.push_str(&format!("  let {} := {}\n", n, g.print(t)));
+        }
     }
     o.push_str("  // the registers after each write; the wrapper after the result\n");
-    for (n, t) in &g.lets {
-        o.push_str(&format!("  let {} := {}\n", n, t));
+    for (i, (n, t)) in g.lets.iter().enumerate() {
+        if !g.scoped_l.contains(&i) {
+            o.push_str(&format!("  let {} := {}\n", n, t));
+        }
     }
     o.push_str("  // the steps (each from the next point's claim)\n");
     for line in &pf.lines {
@@ -2027,19 +3011,35 @@ pub fn translate(args: &[String]) -> CResult {
     }
     o.push_str(&format!("  show := {}\nqed\n\n", pf.expr));
     let ql = g.lambda(1, &proc);
-    o.push_str(&format!(
-        "theorem {p}.implements: all statics. abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {p}.body)\n",
-        er = entry_rule,
-        b = g.base,
-        c = g.code,
-        spec = spec_name,
-        len = e_len,
-        d = dn,
-        z1 = g.print(&ef[3]),
-        z2 = g.print(&ef[4]),
-        a2 = a2,
-        at0 = e_name,
-    ));
+    if guarded {
+        o.push_str(&format!(
+            "theorem {p}.implements: all statics. abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {p}.body)\n",
+            er = entry_rule,
+            b = g.base,
+            c = g.code,
+            spec = spec_name,
+            len = e_len,
+            d = dn,
+            z1 = g.print(&ef[3]),
+            z2 = g.print(&ef[4]),
+            a2 = a2,
+            at0 = e_name,
+        ));
+    } else {
+        // (no arguments: the procedure itself)
+        let q0p = g.print(&q0raw);
+        let (sp, hs1, body) = match srange {
+            Some(_) => (format!("{p}.statics(statics) -> "), "  assume hst: {P}.statics(statics)\n".replace("{P}", p), format!("mp(all_elim({p}.body, {{statics}}), hst)")),
+            None => (String::new(), String::new(), format!("all_elim({p}.body, {{statics}})")),
+        };
+        o.push_str(&format!(
+            "theorem {p}.implements: all statics. {sp}abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry0[base := {b}, code := {c}, statics := statics, f := {b}, q := {q0p}, kw := {kwl}],\n    simp(), {body})\n",
+            b = g.base,
+            c = g.code,
+            spec = spec_name,
+        ));
+        let _ = (e_len, e_name);
+    }
     o.push_str(&format!(
         "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> runs(abi.run_to_return(), s, o) -> abi.matches({spec}(), args, s, o) by defs(m0, {spec})\n  show := apply(abi.bridge_implements, m)\nqed\n",
         b = g.base,

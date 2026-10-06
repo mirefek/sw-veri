@@ -416,5 +416,45 @@ struct stores.
      - each proof is a fixed arith/simp step on literals, with no search.
    - Generator: values named once and compared expanded (`canon`). An
      index matched through its expansion is renamed back before printing.
-4. The loop rule and step_seq, without an invariant.
+4. The loop rule and step_seq. **Done**: proofs/step_seq_tr.core, generated
+   (185 spec rests, 433 lines); the rules are in
+   proofs/translate_store_loop.core. Checking the whole chain with it takes
+   about 6.5 s, most of it the libraries.
+   - Stores: the spec's `st8` waits for the machine's store. It splits on
+     definedness and keeps its rest (`Red::Guard`). Both sides then store the
+     same byte at the same address (`tr.store_step`):
+     - the world becomes `w` with `store_le(.., a, 1, x)` (`tr.world_store`);
+     - the coupling is kept (`tr.mem_store`);
+     - the return address and the homes are untouched, since the address is
+       off the stack pages (`tr.store_keeps`, `tr.off_stack`).
+
+     The forms are `movb $k` and `mov %al` at a `rip`-relative address, and
+     `movb $k,(b,i)` at a static array's element (`tr.elem_in`, from the
+     statics' range `p.statics`).
+   - The frame: `movl $k,h`, `addl $k,h` and `cmpl $k,h; jle` act on the
+     slot only (`tr.home_step4`). The machine's frame is then dirty
+     (`tr.mem`'s ds = true; `tr.mem_home`).
+   - The signed compare `cmpl; jle`: `zf || sf != of` is `sint(u) <= sint(k)`
+     (`tr.jle_flags`, `tr.jle_core`), a math lemma on the flags' arithmetic.
+   - The loop is generic: an invariant and a variant at its head, never
+     unrolled. The head is the machine's test, where the spec is at its
+     `while_rel`. The claim at the head is proven for every loop-carried
+     value `li` and world `lw` by well-founded induction on the variant
+     (`tr.wf2`):
+     - the invariant is `tr.count_inv(K, li)` with the world typed;
+     - the variant is `tr.count_var(K, li)`;
+     - one turn unfolds the spec's loop once (`tr.qs_loop`), runs the body,
+       and closes the back edge by the induction hypothesis
+       (`tr.count_step`, `tr.qs_settle`);
+     - the entry reaches the head by `tr.count_init`.
+
+     Values and lets made inside a turn are local to its proof.
+   - New entry/exit forms: a no-argument entry (`tr.entry0`) and a void
+     return (`tr.ret_void`, `tr.result_void`).
+   - Limits:
+     - `tr.qs_loop` rests on core/loop.core's open `while_step` /
+       `while_leave`, so the certificate's two theorems are conditional;
+     - the frame is one home (`hs ⊆ {d}`);
+     - loads after the frame is written (ds = true) are not covered yet;
+       step_seq has none.
 5. Retire the per-function bridge; redo the remaining functions.
