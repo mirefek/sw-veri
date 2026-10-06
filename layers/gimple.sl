@@ -375,23 +375,44 @@ proc[Machine] run_code(code: List[bits[8]]) -> Reg -> bits[64] {
 // a value passed in a 64-bit register: the upper bits are unspecified
 fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec = v % 2^ty.prec}
 
+// The caller's frame at a call to a callee with stack pointer sp2: the
+// stack may have grown down to the return address's slot below sp2 (free
+// pages become stack pages), and the bytes from that slot up to `hi` --
+// the caller's private frame [sp2, hi), below its stack pointer and
+// holding none of its C objects -- are arbitrary: the caller's machine
+// code keeps values there that C does not see.
+pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
+  new.stack_top = old.stack_top && new.stack_limit = old.stack_limit &&
+  new.brk_start = old.brk_start && new.brk = old.brk &&
+  (all a: Addr. !(uint(sp2) - 8 <= uint(a) && uint(a) < hi) -> new.bytes[a] = old.bytes[a]) &&
+  (all p: PageNo. new.pages[p] = old.pages[p] ||
+     ((uint(sp2) - 8) / PAGE <= p && p * PAGE < hi && old.pages[p] = none && stack_page(new, p)))
+
 // Calling g: the arguments (values with their types) in registers, g on
 // its own stack below `low` (the stack pointer, or the lowest stack object
-// of the caller); the result registers rax, rdx.
-proc[World] call_at(low: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+// of the caller); the result registers rax, rdx. The caller's private
+// frame [sp2, hi) is the caller's own: a callee that changes it is
+// undefined (C: none of the caller's objects it may access is there).
+proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   var regs: List[bits[64]] = []
   for i in 0..len(args) { regs := regs ++ [any r: bits[64] where r in in_reg(args[i][0], args[i][1])] }
   let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
+  let old = vm
+  havoc vm where frame_at_call(old, vm, sp2, hi)
+  let mid = vm.bytes
   let (r0, r1) = with callee_world(sp2) { return g(regs) }
+  if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a]) { undefined }
   return (r0, r1)
 }
 
 // (readable GIMPLE) an argument, a call from a function without stack
-// objects, and from one with them
+// objects, and from one with them (the private frame then only below the
+// lowest object: the objects' sizes are not passed here)
 fn arg[n: nat](x: bits[n]) -> (nat, Ty) = (uint(x), Ty { prec: n, signed: false })
-proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call_at(uint(sp), g, args) }
+proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call_at(uint(sp), uint(sp), g, args) }
 proc[World] call_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
-  return call_at(min({a: nat | a = uint(sp) || (ex j: nat. j < len(objs) && a = uint(objs[j]))}), g, args)
+  let low = min({a: nat | a = uint(sp) || (ex j: nat. j < len(objs) && a = uint(objs[j]))})
+  return call_at(low, low, g, args)
 }
 
 // ... with the value in rax only
@@ -460,7 +481,7 @@ proc[World] exec_stmt(fr: Frame, s: Stmt, callees: nat -> CFun2[World]) -> Frame
     }
     call(dsts, k, args) => {
       let low = min({a: nat | a = uint(sp) || (ex j: nat. j < len(fr.objs) && a = uint(fr.objs[j]))})
-      let (r0, r1) = call_at(low, callees[k], [(operand(fr, args[i][0]), args[i][1]) for i in 0..len(args)])
+      let (r0, r1) = call_at(low, low, callees[k], [(operand(fr, args[i][0]), args[i][1]) for i in 0..len(args)])
       let rs = [r0, r1]
       var vals = fr.vals
       for i in 0..len(dsts) { vals := set_val(vals, dsts[i][0], uint(rs[i]) % 2^dsts[i][1].prec) }

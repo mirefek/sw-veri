@@ -517,7 +517,13 @@ machine code; `scripts/dump-gimple.sh` dumps it with musl's exact flags).
   as needed; running out of stack is the ABI's crash case), the current and
   previous block (for phis).
 * **Calls** run the callee's spec on a nested world view whose stack pointer
-  lies below the caller's stack objects. **Inline assembly** is given its
+  `sp2` lies below the caller's stack objects. The caller's private frame
+  `[sp2, sp)` (below the lowest object, with objects) holds none of its C
+  objects: before the call its bytes are arbitrary, and the stack may have
+  grown down to the return address's slot (`frame_at_call`); a callee that
+  changes them is undefined -- C gives a callee no access there. (Machine
+  code keeps spilled values in that frame; the bridge chooses the arbitrary
+  bytes as the machine's.) **Inline assembly** is given its
   meaning by the machine model itself: the operands go into registers, the
   instruction bytes run through `x86.decode` / `x86.execute` on a machine
   built from the world.
