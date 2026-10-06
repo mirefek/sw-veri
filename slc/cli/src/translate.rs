@@ -3175,7 +3175,7 @@ pub fn translate(args: &[String]) -> CResult {
     };
     if guarded {
         o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {body})\n",
+            "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {body})\n",
             er = entry_rule,
             b = g.base,
             c = g.code,
@@ -3191,7 +3191,7 @@ pub fn translate(args: &[String]) -> CResult {
         // (no arguments: the procedure itself)
         let q0p = g.print(&q0raw);
         o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry0[base := {b}, code := {c}, statics := statics, f := {b}, q := {q0p}, kw := {kwl}],\n    simp(), {body})\n",
+            "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry0[base := {b}, code := {c}, statics := statics, f := {b}, q := {q0p}, kw := {kwl}],\n    simp(), {body})\n",
             b = g.base,
             c = g.code,
             spec = spec_name,
@@ -3199,7 +3199,18 @@ pub fn translate(args: &[String]) -> CResult {
         let _ = (e_len, e_name);
     }
     o.push_str(&format!(
-        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> runs(abi.run_to_return(), s, o) -> abi.matches({spec}(), args, s, o) by defs(m0, {spec})\n  show := apply(abi.bridge_implements, m)\nqed\n",
+        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> abi.matches({spec}(), args, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
+        b = g.base,
+        c = g.code,
+        spec = spec_name
+    ));
+    // (the ABI's contract, from the bridge's)
+    let imp = match srange {
+        Some(_) => format!("mp(all_elim({p}.implements, {{statics}}), hst)"),
+        None => format!("all_elim({p}.implements, {{statics}})"),
+    };
+    o.push_str(&format!(
+        "theorem {p}.implements_abi: all statics. {sp}abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  show := apply(tr.implements_abi, {imp})\nqed\n",
         b = g.base,
         c = g.code,
         spec = spec_name

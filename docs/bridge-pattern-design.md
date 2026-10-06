@@ -532,3 +532,25 @@ planned, and everything it does not use is removed.
    Its frame write is the argument's store, which the entry rule takes into
    the view: its loads are still before a write of the frame (`ds` false),
    so "loads after the frame is written" is still open.
+8. **Calls (in progress, 2026-10-07).**
+   - GIMPLE (layers/gimple.sl, `call_at`): the caller's private frame
+     `[sp2, sp)` is arbitrary before a call (`frame_at_call`, the stack
+     maybe grown down to the return address's slot) and must be unchanged
+     after it, else undefined. The bridge chooses `sp2` as the machine's
+     rsp at the call and those bytes as the machine's, so a callee's spec
+     runs on the same world on both sides; no footprint per function.
+   - The stack discipline (the bridge's contract): a caller's run steps
+     through its callee, so it splits at the callee's return only if the
+     callee does not reach the caller's return state on the way. The claim
+     at a point (`tr.sim`) is about the disciplined run `tr.run_d`: a pass
+     from a state whose rsp is not below the entry's sp leaves with "disc"
+     (the step rule needs rsp < sp, which the invariant gives). Every
+     certificate proves `tr.implements_at` (every disciplined run from an
+     entry matches the spec) and from it `abi.implements2_at`
+     (`tr.implements_abi`: a run is disciplined, or its disciplined run
+     leaves with "disc", which `abi.matches` allows only where the spec
+     raises -- `while_guard` in core/loop.core cuts the run at the first
+     violation).
+   - Still to do: the crash case (stack exhaustion) and divergence at the
+     bridge's end; the run split at a call; the call rule; frames after
+     `sub rsp`; a_clz_32.

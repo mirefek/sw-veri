@@ -25,9 +25,99 @@ def tr.ok(s, p, w, o) :=
     app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
     abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")
 
-def tr.sim(s, v, p, w, m) := all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o)
+// abi.run_from's parts: one pass of its loop from the state l (a step,
+// unless at the return), the loop, its outcome as the run's
+// (definitions, not abbreviations: a case analysis sees each as one atom)
+abbrev tr.at_ret(s, x) := app(x, "rip") = x86_64_linux.le(app(app(s, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) && app(app(x, "gpr"), 4) = bits_add(64, app(app(s, "gpr"), 4), 8)
+def tr.rb(s, l, o) := (!tr.at_ret(s, fst(l)) &&
+    bind_rel(x86_64_linux.step, fst(l), x7 x8. o = ok(pair(x7, empty), empty), x7 x8. o = exc(pair(x7, empty), pair("raise", x8)), x7. o = diverge(x7))) ||
+  (!!tr.at_ret(s, fst(l)) && o = exc(pair(fst(l), empty), pair("brk", empty)))
+def tr.rw(s, l, r) := while_rel(l, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
+def tr.rmap(r, o) := (((fst(r) = 0 || (fst(r) = 1 && fst(out_value(r)) = "brk")) && o = ok(fst(out_state(r)), empty)) ||
+  ((((fst(r) = 1 && fst(out_value(r)) = "ret") && o = ok(fst(out_state(r)), snd(out_value(r)))) ||
+    ((fst(r) = 1 && fst(out_value(r)) = "raise") && o = exc(fst(out_state(r)), snd(out_value(r))))) ||
+   (fst(r) = 2 && o = diverge(snd(r)))))
 
-// at the entry: abi.matches_at
+theorem tr.run_from_parts: all s m o. abi.run_from(s, m, o) <-> (ex r. tr.rw(s, pair(m, empty), r) && tr.rmap(r, o))
+proof
+  fix s
+  fix m
+  fix o
+  show by defs(taut(), abi.run_from, tr.rw, tr.rb, tr.rmap)
+qed
+
+// The run with the stack discipline: a pass from a state l that is not at
+// the return and whose rsp is not below the entry's sp leaves with
+// exc(l, "disc") -- a function keeps its rsp below its sp until it
+// returns (what a caller needs at a call: its own return is not reached
+// inside the callee). The claim at a point is about this run.
+abbrev tr.disc_ok(s, x) := tr.at_ret(s, x) || int_lt(app(app(x, "gpr"), 4), abi.sp(s))
+def tr.rbd(s, l, o) := (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", "disc")))
+def tr.rwd(s, l, r) := while_rel(l, x5. true, x5 x6. tr.rbd(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
+def tr.run_d(s, m, o) := ex r. tr.rwd(s, pair(m, empty), r) && tr.rmap(r, o)
+
+// (the run from the entry: a disciplined run, or the disciplined run
+// leaves with "disc" at the first state that breaks the discipline)
+theorem tr.run_disc: all s o. runs(abi.run_to_return(), s, o) -> tr.run_d(s, s, o) || (ex x. tr.run_d(s, s, exc(x, "disc")))
+proof
+  fix s
+  fix o
+  assume hr: runs(abi.run_to_return(), s, o)
+  have rf := apply(abi.run_from_entry, hr)
+  have hx0: ex x0. tr.rw(s, pair(s, empty), x0) && tr.rmap(x0, o) by taut(all_elim(tr.run_from_parts, {s}, {s}, {o}), rf)
+  obtain x4, hx from hx0
+  have hw: tr.rw(s, pair(s, empty), x4) by taut(hx)
+  have hm: tr.rmap(x4, o) by taut(hx)
+  have ne: all l. !is_ok(exc(l, pair("raise", "disc"))) proof
+    fix l
+    have n: is_ok(exc(l, pair("raise", "disc"))) -> false proof
+      assume h: is_ok(exc(l, pair("raise", "disc")))
+      obtain a, h1 from expand(h, is_ok)
+      obtain b, h2 from h1
+      show by simp(h2)
+    qed
+    show by taut(n)
+  qed
+  have g := mp(mp(while_guard[l0 := pair(s, empty), b := l o. tr.rb(s, l, o), tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")),
+    p := l. tr.disc_ok(s, fst(l)), e := l. exc(l, pair("raise", "disc")), r := x4], ne), expand(hw, tr.rw))
+  have kept: while_rel(pair(s, empty), l. true, l o. (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", "disc"))),
+      l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), x4) -> tr.run_d(s, s, o) proof
+    assume w: while_rel(pair(s, empty), l. true, l o. (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", "disc"))),
+      l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), x4)
+    have wd: tr.rwd(s, pair(s, empty), x4) by defs(w, tr.rwd, tr.rbd)
+    show by defs(ex_intro({x4}, taut(wd, hm)), tr.run_d)
+  qed
+  have left: (ex l. while_rel(pair(s, empty), l. true, l o. (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", "disc"))),
+      l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), exc(l, pair("raise", "disc")))) -> (ex x. tr.run_d(s, s, exc(x, "disc"))) proof
+    assume e: ex l. while_rel(pair(s, empty), l. true, l o. (tr.disc_ok(s, fst(l)) && tr.rb(s, l, o)) || (!tr.disc_ok(s, fst(l)) && o = exc(l, pair("raise", "disc"))),
+      l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), exc(l, pair("raise", "disc")))
+    obtain l, w from e
+    have wd: tr.rwd(s, pair(s, empty), exc(l, pair("raise", "disc"))) by defs(w, tr.rwd, tr.rbd)
+    have rm: tr.rmap(exc(l, pair("raise", "disc")), exc(fst(l), "disc")) by defs(simp(), tr.rmap)
+    have rd: tr.run_d(s, s, exc(fst(l), "disc")) by defs(ex_intro({exc(l, pair("raise", "disc"))}, taut(wd, rm)), tr.run_d)
+    show by ex_intro({fst(l)}, rd)
+  qed
+  show by taut(g, kept, left)
+qed
+
+def tr.sim(s, v, p, w, m) := all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o)
+
+// (rsp as at the entry, below 2^47: below the entry's sp)
+theorem tr.sp_lt: all x. x in bits(64) -> int_lt(x, 140737488355328) -> int_lt(x, bits_add(64, x, 8))
+proof
+  fix x
+  assume hx: x in bits(64)
+  assume hl: int_lt(x, 140737488355328)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have e0: int_mod(int_add(x, 8), 18446744073709551616) = int_add(x, 8) by arith(hx, hl)
+  have e: bits_add(64, x, 8) = int_add(x, 8) by defs(rewrite(sym(p64), e0), bits_add)
+  have l0: int_lt(x, int_add(x, 8)) by arith(hx)
+  show := rewrite(sym(e), l0)
+qed
+
+// at the entry: abi.matches_at -- a run breaking the discipline is one only
+// where the spec raises (its disciplined run then leaves with "disc", which
+// is no normal return)
 theorem tr.entry: all spec args s v o. tr.sim(s, v, app(spec, args), abi.view(v, s), s) -> runs(abi.run_to_return(), s, o) ->
   abi.matches_at(spec, args, s, v, o)
 proof
@@ -38,9 +128,124 @@ proof
   fix o
   assume h: tr.sim(s, v, app(spec, args), abi.view(v, s), s)
   assume hr: runs(abi.run_to_return(), s, o)
-  have rf := apply(abi.run_from_entry, hr)
-  have c := mp(all_elim(expand(h, tr.sim), {o}), rf)
+  have d := apply(tr.run_disc, {s}, {o}, hr)
+  have c1: tr.run_d(s, s, o) -> abi.matches_at(spec, args, s, v, o) proof
+    assume rd: tr.run_d(s, s, o)
+    have c := mp(all_elim(expand(h, tr.sim), {o}), rd)
+    show by defs(taut(expand(expand(c, tr.ub), tr.ok)), abi.matches_at)
+  qed
+  have c2: (ex x. tr.run_d(s, s, exc(x, "disc"))) -> abi.matches_at(spec, args, s, v, o) proof
+    assume e: ex x. tr.run_d(s, s, exc(x, "disc"))
+    obtain x, rd from e
+    have c := mp(all_elim(expand(h, tr.sim), {exc(x, "disc")}), rd)
+    have nk: tr.ok(s, app(spec, args), abi.view(v, s), exc(x, "disc")) -> false proof
+      assume k: tr.ok(s, app(spec, args), abi.view(v, s), exc(x, "disc"))
+      obtain m1, k1 from expand(k, tr.ok)
+      obtain w2, k2 from k1
+      have eo: exc(x, "disc") = ok(m1, empty) by taut(k2)
+      show by simp(eo)
+    qed
+    show by defs(taut(expand(c, tr.ub), nk), abi.matches_at)
+  qed
+  show by taut(d, c1, c2)
+qed
+
+// ... for the disciplined run itself
+theorem tr.entry_d: all spec args s v o. tr.sim(s, v, app(spec, args), abi.view(v, s), s) -> tr.run_d(s, s, o) ->
+  abi.matches_at(spec, args, s, v, o)
+proof
+  fix spec
+  fix args
+  fix s
+  fix v
+  fix o
+  assume h: tr.sim(s, v, app(spec, args), abi.view(v, s), s)
+  assume rd: tr.run_d(s, s, o)
+  have c := mp(all_elim(expand(h, tr.sim), {o}), rd)
   show by defs(taut(expand(expand(c, tr.ub), tr.ok)), abi.matches_at)
+qed
+
+// The bridge's contract of a function at f: every disciplined run from an
+// entry matches the spec -- abi.implements2_at, and a caller's run
+// through a call to f splits at f's return (f keeps its rsp below its sp
+// until then, where its spec does not raise).
+def tr.implements_at(f, spec, base, code, statics) :=
+  all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> abi.matches(spec, args, s, o)
+
+// (an outcome the spec matches only by raising: so is every outcome)
+theorem tr.matches_raise: all spec args s x o. abi.matches(spec, args, s, exc(x, "disc")) -> abi.matches(spec, args, s, o)
+proof
+  fix spec
+  fix args
+  fix s
+  fix x
+  fix o
+  assume h: abi.matches(spec, args, s, exc(x, "disc"))
+  obtain v, hv from expand(h, abi.matches)
+  have ma: abi.matches_at(spec, args, s, v, exc(x, "disc")) by taut(hv)
+  have n2: (ex m1 w2. exc(x, "disc") = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+      runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+      app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+      abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) -> false proof
+    assume e: ex m1 w2. exc(x, "disc") = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+      runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+      app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+      abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")
+    obtain m1, e1 from e
+    obtain w2, e2 from e1
+    have q: exc(x, "disc") = ok(m1, empty) by taut(e2)
+    show by simp(q)
+  qed
+  have n3: (ex t. exc(x, "disc") = diverge(t) && runs(app(spec, args), abi.view(v, s), diverge(t))) -> false proof
+    assume e: ex t. exc(x, "disc") = diverge(t) && runs(app(spec, args), abi.view(v, s), diverge(t))
+    obtain t, e1 from e
+    have q: exc(x, "disc") = diverge(t) by taut(e1)
+    show by simp(q)
+  qed
+  have r: ex e. e in univ(1) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e)) by taut(expand(ma, abi.matches_at), n2, n3)
+  have ma2: abi.matches_at(spec, args, s, v, o) by defs(taut(r), abi.matches_at)
+  show by defs(ex_intro({v}, taut(hv, ma2)), abi.matches)
+qed
+
+// the bridge's contract gives the ABI's
+theorem tr.implements_abi: all f spec base code statics. tr.implements_at(f, spec, base, code, statics) -> abi.implements2_at(single(empty), f, spec, base, code, statics)
+proof
+  fix f
+  fix spec
+  fix base
+  fix code
+  fix statics
+  assume hi: tr.implements_at(f, spec, base, code, statics)
+  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+      runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, s, o) proof
+    fix args
+    fix s
+    fix o
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume hl: abi.loaded(app(s, "vm"), base, code, statics)
+    assume hrip: app(s, "rip") = f
+    assume he: abi.entry_ok(s, args)
+    assume hr: runs(abi.run_to_return(), s, o)
+    have su: s in univ(1) by simp(apply(abi.run_univ, hr))
+    have c := expand(hi, tr.implements_at)
+    have d := apply(tr.run_disc, {s}, {o}, hr)
+    have c1: tr.run_d(s, s, o) -> abi.matches(spec, args, s, o) proof
+      assume rd: tr.run_d(s, s, o)
+      show := mp(all_elim(c, {args}, {s}, {o}), hA, hM, su, hl, hrip, he, rd)
+    qed
+    have c2: (ex x. tr.run_d(s, s, exc(x, "disc"))) -> abi.matches(spec, args, s, o) proof
+      assume e: ex x. tr.run_d(s, s, exc(x, "disc"))
+      obtain x, rd from e
+      have mx := mp(all_elim(c, {args}, {s}, {exc(x, "disc")}), hA, hM, su, hl, hrip, he, rd)
+      show := apply(tr.matches_raise, {spec}, {args}, {s}, {x}, {o}, mx)
+    qed
+    show by taut(d, c1, c2)
+  qed
+  show := apply(abi.bridge_implements, m)
 qed
 
 // ----------------------------------------------------------------------
@@ -78,9 +283,9 @@ proof
     have r1 := mp(all_elim(r, {ok(w3, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))}), r2)
     show by defs(ex_intro({m1}, {w3}, taut(k2, r1)), tr.ok)
   qed
-  have g: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
     fix o
-    assume ho: abi.run_from(s, m, o)
+    assume ho: tr.run_d(s, m, o)
     have c := mp(all_elim(expand(h, tr.sim), {o}), ho)
     show by taut(c, u, all_elim(k, {o}))
   qed
@@ -90,27 +295,6 @@ qed
 // ----------------------------------------------------------------------
 //  The machine's side: a step from m that can only end at m2 (not at the
 //  return: the run goes on)
-
-// abi.run_from's parts: one pass of its loop from the state l (a step,
-// unless at the return), the loop, its outcome as the run's
-// (definitions, not abbreviations: a case analysis sees each as one atom)
-abbrev tr.at_ret(s, x) := app(x, "rip") = x86_64_linux.le(app(app(s, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) && app(app(x, "gpr"), 4) = bits_add(64, app(app(s, "gpr"), 4), 8)
-def tr.rb(s, l, o) := (!tr.at_ret(s, fst(l)) &&
-    bind_rel(x86_64_linux.step, fst(l), x7 x8. o = ok(pair(x7, empty), empty), x7 x8. o = exc(pair(x7, empty), pair("raise", x8)), x7. o = diverge(x7))) ||
-  (!!tr.at_ret(s, fst(l)) && o = exc(pair(fst(l), empty), pair("brk", empty)))
-def tr.rw(s, l, r) := while_rel(l, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
-def tr.rmap(r, o) := (((fst(r) = 0 || (fst(r) = 1 && fst(out_value(r)) = "brk")) && o = ok(fst(out_state(r)), empty)) ||
-  ((((fst(r) = 1 && fst(out_value(r)) = "ret") && o = ok(fst(out_state(r)), snd(out_value(r)))) ||
-    ((fst(r) = 1 && fst(out_value(r)) = "raise") && o = exc(fst(out_state(r)), snd(out_value(r))))) ||
-   (fst(r) = 2 && o = diverge(snd(r)))))
-
-theorem tr.run_from_parts: all s m o. abi.run_from(s, m, o) <-> (ex r. tr.rw(s, pair(m, empty), r) && tr.rmap(r, o))
-proof
-  fix s
-  fix m
-  fix o
-  show by defs(taut(), abi.run_from, tr.rw, tr.rb, tr.rmap)
-qed
 
 theorem tr.ok_not_div: all s p w t. !tr.ok(s, p, w, diverge(t))
 proof
@@ -129,13 +313,27 @@ proof
 qed
 
 // (the steps from m end in states with q: an instruction's effect, its
-// flags left open where the model havocs them)
+// flags left open where the model havocs them; rsp below the entry's sp,
+// so the run goes on with a step)
 theorem tr.step(s, v, p, w, m, x. q): (all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && q(m2))) ->
-  !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) -> (all m2. q(m2) -> tr.sim(s, v, p, w, m2)) -> tr.sim(s, v, p, w, m)
+  int_lt(app(app(m, "gpr"), 4), abi.sp(s)) -> (all m2. q(m2) -> tr.sim(s, v, p, w, m2)) -> tr.sim(s, v, p, w, m)
 proof
   assume hs: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && q(m2))
-  assume hn: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s))
+  assume hlt: int_lt(app(app(m, "gpr"), 4), abi.sp(s))
   assume h: all m2. q(m2) -> tr.sim(s, v, p, w, m2)
+  have hn0: app(app(m, "gpr"), 4) = abi.sp(s) -> false proof
+    assume e: app(app(m, "gpr"), 4) = abi.sp(s)
+    have l2 := rewrite(e, hlt)
+    show by arith(l2)
+  qed
+  have hn: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by taut(hn0)
+  // (the discipline holds at m: the guarded pass is the plain one)
+  have dok: tr.disc_ok(s, fst(pair(m, empty))) by simp(hlt)
+  have hbd: all r. tr.rbd(s, pair(m, empty), r) -> tr.rb(s, pair(m, empty), r) proof
+    fix r
+    assume hb: tr.rbd(s, pair(m, empty), r)
+    show by taut(expand(hb, tr.rbd), dok)
+  qed
   // the pass from m: a step to some m2 with q
   have hb_ok: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> (ex m2. l1 = pair(m2, empty) && q(m2)) proof
     fix l1
@@ -158,41 +356,46 @@ proof
     obtain m2, e2 from e
     show by simp(c1, e2, hn2, keep(x86_64_linux.step))
   qed
+  have hbd_nok: all r. tr.rbd(s, pair(m, empty), r) -> !is_ok(r) -> false proof
+    fix r
+    assume hb: tr.rbd(s, pair(m, empty), r)
+    assume hn2: !is_ok(r)
+    show := mp(mp(all_elim(hb_nok, {r}), mp(all_elim(hbd, {r}), hb)), hn2)
+  qed
   // the claim at an m2 with q, for the loop's runs from it
-  have hk: all m2 r o2. q(m2) -> tr.rw(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o2) proof
+  have hk: all m2 r o2. q(m2) -> tr.rwd(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o2) proof
     fix m2
     fix r
     fix o2
     assume hq: q(m2)
-    assume hw: tr.rw(s, pair(m2, empty), r)
+    assume hw: tr.rwd(s, pair(m2, empty), r)
     assume hm: tr.rmap(r, o2)
-    have ex1: ex x0. tr.rw(s, pair(m2, empty), x0) && tr.rmap(x0, o2) by ex_intro({r}, taut(hw, hm))
-    have rf: abi.run_from(s, m2, o2) by taut(all_elim(tr.run_from_parts, {s}, {m2}, {o2}), ex1)
+    have rf: tr.run_d(s, m2, o2) by defs(ex_intro({r}, taut(hw, hm)), tr.run_d)
     show := mp(all_elim(expand(mp(all_elim(h, {m2}), hq), tr.sim), {o2}), rf)
   qed
-  have g: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
     fix o
-    assume ho: abi.run_from(s, m, o)
-    have hx0: ex x0. tr.rw(s, pair(m, empty), x0) && tr.rmap(x0, o) by taut(all_elim(tr.run_from_parts, {s}, {m}, {o}), ho)
-    obtain x4, hx from hx0
-    have hw: tr.rw(s, pair(m, empty), x4) by taut(hx)
+    assume ho: tr.run_d(s, m, o)
+    obtain x4, hx from expand(ho, tr.run_d)
+    have hw: tr.rwd(s, pair(m, empty), x4) by taut(hx)
     have hm: tr.rmap(x4, o) by taut(hx)
-    let W(l, r) := while_rel(l, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
-    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rb(s, l, o),
-      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rw))
+    let W(l, r) := while_rel(l, x5. true, x5 x6. tr.rbd(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
+    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rbd(s, l, o),
+      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rwd))
     // (the loop goes on from m2)
-    have on: (ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
+    have on: (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
         tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
-      assume e: ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
+      assume e: ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
       obtain l1, e1 from e
-      have rb1: tr.rb(s, pair(m, empty), ok(l1, empty)) by taut(e1)
+      have rbd1: tr.rbd(s, pair(m, empty), ok(l1, empty)) by taut(e1)
+      have rb1 := mp(all_elim(hbd, {ok(l1, empty)}), rbd1)
       obtain m2, l1q from mp(all_elim(hb_ok, {l1}), rb1)
       have l1e: l1 = pair(m2, empty) by taut(l1q)
       have hq: q(m2) by taut(l1q)
       have e1b: ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4) by taut(e1)
       obtain r1, e2 from e1b
       have w0: W(l1, r1) by taut(e2)
-      have w1: tr.rw(s, pair(m2, empty), r1) by defs(rewrite(l1e, w0), tr.rw)
+      have w1: tr.rwd(s, pair(m2, empty), r1) by defs(rewrite(l1e, w0), tr.rwd)
       have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
         assume nd: !(fst(x4) = 2)
         have re: r1 = x4 by taut(e2, nd)
@@ -207,7 +410,7 @@ proof
       qed
       show by taut(same, div)
     qed
-    show by taut(u, on, all_elim(hb_nok, {x4}))
+    show by taut(u, on, all_elim(hbd_nok, {x4}))
   qed
   show by defs(g, tr.sim)
 qed
@@ -240,35 +443,37 @@ proof
   assume h8: abi.callee_saved(m, s)
   assume h9: !app(app(m, "flags"), "df")
   // the run from m: ok(m)
-  have g: all o. abi.run_from(s, m, o) -> o = ok(m, empty) proof
+  have g: all o. tr.run_d(s, m, o) -> o = ok(m, empty) proof
     fix o
-    assume ho: abi.run_from(s, m, o)
-    have hx0: ex x0. tr.rw(s, pair(m, empty), x0) && tr.rmap(x0, o) by taut(all_elim(tr.run_from_parts, {s}, {m}, {o}), ho)
-    obtain x4, hx from hx0
-    have hw: tr.rw(s, pair(m, empty), x4) by taut(hx)
+    assume ho: tr.run_d(s, m, o)
+    obtain x4, hx from expand(ho, tr.run_d)
+    have hw: tr.rwd(s, pair(m, empty), x4) by taut(hx)
     have hm: tr.rmap(x4, o) by taut(hx)
-    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rb(s, l, o),
-      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rw))
-    have b_at: all r. tr.rb(s, pair(m, empty), r) -> r = exc(pair(m, empty), pair("brk", empty)) proof
+    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rbd(s, l, o),
+      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rwd))
+    // (at the return the discipline holds: the guarded pass is the plain one)
+    have dok: tr.disc_ok(s, fst(pair(m, empty))) by simp(ha)
+    have b_at: all r. tr.rbd(s, pair(m, empty), r) -> r = exc(pair(m, empty), pair("brk", empty)) proof
       fix r
-      assume hb: tr.rb(s, pair(m, empty), r)
+      assume hbd: tr.rbd(s, pair(m, empty), r)
+      have hb: tr.rb(s, pair(m, empty), r) by taut(expand(hbd, tr.rbd), dok)
       show by simp(expand(hb, tr.rb), ha, keep(x86_64_linux.step))
     qed
     have x4e: x4 = exc(pair(m, empty), pair("brk", empty)) proof
-      have c3: !(ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
+      have c3: !(ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rbd(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
           fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) proof
-        have n: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> false proof
+        have n: all l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) -> false proof
           fix l1
-          assume hb: tr.rb(s, pair(m, empty), ok(l1, empty))
+          assume hb: tr.rbd(s, pair(m, empty), ok(l1, empty))
           have e := mp(all_elim(b_at, {ok(l1, empty)}), hb)
           show by simp(e)
         qed
-        have n2: (ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
+        have n2: (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rbd(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
             fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) -> false proof
-          assume e: ex l1. tr.rb(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rb(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
+          assume e: ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rbd(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r1) &&
             fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
           obtain l1, e1 from e
-          have rb1: tr.rb(s, pair(m, empty), ok(l1, empty)) by taut(e1)
+          have rb1: tr.rbd(s, pair(m, empty), ok(l1, empty)) by taut(e1)
           show := mp(all_elim(n, {l1}), rb1)
         qed
         show by taut(n2)
@@ -283,9 +488,9 @@ proof
     assume e: o = ok(m, empty)
     show by defs(ex_intro({m}, {w2}, simp(e, hM, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
   qed
-  have all_o: all o. abi.run_from(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
+  have all_o: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) proof
     fix o
-    assume ho: abi.run_from(s, m, o)
+    assume ho: tr.run_d(s, m, o)
     have e := mp(all_elim(g, {o}), ho)
     have kk := mp(all_elim(k, {o}), e)
     show by taut(kk)
@@ -519,7 +724,8 @@ proof
     have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have r4 := apply(x86i.rsp_typed, sM)
     have rspm: app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
-    have nr: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by simp(rspm, r4)
+    have nr := subst({y. int_lt(y, abi.sp(s))}, sym(rspm), apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4,
+      simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))))
     // (after the step: coupled at a2)
     have post: all m2. Q(m2) -> tr.sim(s, v, p, w, m2) proof
       fix m2
@@ -682,7 +888,8 @@ proof
     have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have r4 := apply(x86i.rsp_typed, sM)
     have rspm: app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
-    have nr: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by simp(rspm, r4)
+    have nr := subst({y. int_lt(y, abi.sp(s))}, sym(rspm), apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4,
+      simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))))
     have post: all m2. Q(m2) -> tr.sim(s, v, p, w, m2) proof
       fix m2
       assume hq: Q(m2)
@@ -1552,7 +1759,7 @@ proof
     have rp := mp(mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {exc(abi.view(v, s), empty)}), pu), b)
     have eu: empty in univ(1) by simp()
     have ub: tr.ub(s, v, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) by defs(ex_intro({empty}, taut(eu, rp)), tr.ub)
-    show by defs(simp(ub, keep(tr.ub, tr.ok, abi.run_from)), tr.sim)
+    show by defs(simp(ub, keep(tr.ub, tr.ok, tr.run_d)), tr.sim)
   qed
   show by defs(g, tr.pt)
 qed
@@ -1629,7 +1836,8 @@ proof
       have e := apply(x86i.ret, {m}, {o}, {len}, mM, mu, acc, hx)
       show by ex_intro({M2}, simp(e))
     qed
-    have nr: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by simp(rspm, r4)
+    have nr := subst({y. int_lt(y, abi.sp(s))}, sym(rspm), apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4,
+      simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))))
     // (at M2: the return point, the spec's result)
     have post: all m2. m2 = M2 -> tr.sim(s, v, p, w, m2) proof
       fix m2
@@ -1868,7 +2076,7 @@ proof
     have e := apply(x86i.store32_rsp, {s}, {o}, {7}, {d}, {z1}, {z2}, {len}, hM, hu, r7R, hd, acc, hx2)
     show by ex_intro({M1}, simp(e, ea1, hrip, ha2))
   qed
-  have nr: !(app(s, "rip") = abi.ret(s) && app(app(s, "gpr"), 4) = abi.sp(s)) by simp(r4)
+  have nr := apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4, hlt)
   // after it: coupled at a2
   have post: all m2. m2 = M1 -> tr.sim(s, V, p, W, m2) proof
     fix m2
@@ -1931,8 +2139,8 @@ theorem tr.entry1_32(base, code, statics, f, len, d, z1, z2, a2, x0. q, x3 x4 x2
     tr.pt(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, a2, fn_update(empty, d, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
       mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
       abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
-  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
-    abi.entry_ok(s, args) -> runs(abi.run_to_return(), s, o) ->
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
     abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
   assume hbase: base in omega
@@ -1953,17 +2161,18 @@ proof
   fix o
   assume hA: args in abi.ARGS
   assume hM: s in x86_64_linux.Machine
+  assume hsu: s in univ(1)
   assume hl: abi.loaded(app(s, "vm"), base, code, statics)
   assume hrip: app(s, "rip") = f
   assume he: abi.entry_ok(s, args)
-  assume hr: runs(abi.run_to_return(), s, o)
+  assume hr: tr.run_d(s, s, o)
   let X := bits_slice(app(app(s, "gpr"), 7), 31, 0)
   let V := tr.view1(s, d, 4, X)
   let W := abi.view(V, s)
   let SPEC := fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))
   let BIND := mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have hc: abi.code_at(app(s, "vm"), base, code) by taut(expand(hl, abi.loaded))
-  have su: s in univ(1) by simp(apply(abi.run_univ, hr))
+  have su := hsu
   have ent := apply(abi.entry_stack, hM, he)
   have hdf: !app(app(s, "flags"), "df") by taut(expand(he, abi.entry_ok))
   have r7R: 7 in x86_64_linux.Reg by simp()
@@ -1996,7 +2205,7 @@ proof
         r2 := x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], k)
       have red: tr.red(app(SPEC, args), W, BIND, W) by defs(rewrite(sym(ae), r0), tr.red)
       have sim := apply(tr.sim_red, red, sim0)
-      show := apply(tr.entry, {SPEC}, {args}, {s}, {V}, {o}, sim, hr)
+      show := apply(tr.entry_d,{SPEC}, {args}, {s}, {V}, {o}, sim, hr)
     qed
     have few: !ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
       assume hng: !ord_le(1, seq_len(args))
@@ -2316,7 +2525,8 @@ proof
     have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have r4 := apply(x86i.rsp_typed, sM)
     have rspm: app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
-    have nr: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by simp(rspm, r4)
+    have nr := subst({y. int_lt(y, abi.sp(s))}, sym(rspm), apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4,
+      simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))))
     let Q1(m2) := ex f. x86i.flags_ok(m, f) && ff(f) && m2 = fn_update(fn_update(m, "rip", a2), "flags", f)
     have st1: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && Q1(m2)) proof
       fix o
@@ -2337,7 +2547,7 @@ proof
       have hh2: tr.homes(s, M2, hs) by defs(simp(expand(hh, tr.homes)), tr.homes)
       have rs2: tr.regs(M2, rs) by defs(simp(expand(hrs, tr.regs)), tr.regs)
       have ip2 := apply(tr.inv_parts, i2)
-      have nr2: !(app(M2, "rip") = abi.ret(s) && app(app(M2, "gpr"), 4) = abi.sp(s)) by simp(ip2, r4)
+      have nr2: int_lt(app(app(M2, "gpr"), 4), abi.sp(s)) by simp(nr)
       have k := mp(all_elim(h3, {m}, {f}), hi, hr, hh, hrs, fff)
       let Q2(m3) := m3 = fn_update(M2, "rip", ite(x86_64_linux.cond(f, cc), t, a3))
       have st2: all o. runs(x86_64_linux.step(), M2, o) -> (ex m3. o = ok(m3, empty) && Q2(m3)) proof
@@ -5326,7 +5536,7 @@ proof
     have e := apply(x86i.store64_rsp, {s}, {o}, {7}, {d}, {z1}, {z2}, {len}, hM, hu, r7R, hd, acc, hx2)
     show by ex_intro({M1}, simp(e, ea1, hrip, ha2))
   qed
-  have nr: !(app(s, "rip") = abi.ret(s) && app(app(s, "gpr"), 4) = abi.sp(s)) by simp(r4)
+  have nr := apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4, hlt)
   // after it: coupled at a2
   have post: all m2. m2 = M1 -> tr.sim(s, V, p, W, m2) proof
     fix m2
@@ -5389,8 +5599,8 @@ theorem tr.entry1_64(base, code, statics, f, len, d, z1, z2, a2, x0. q, x3 x4 x2
     tr.pt(s, tr.view1(s, d, 8, app(app(s, "gpr"), 7)), base, code, a2, fn_update(empty, d, pair(8, bits_of_int(64, app(args, 0)))), false, empty,
       mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
       abi.view(tr.view1(s, d, 8, app(app(s, "gpr"), 7)), s))) ->
-  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
-    abi.entry_ok(s, args) -> runs(abi.run_to_return(), s, o) ->
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
     abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
   assume hbase: base in omega
@@ -5411,17 +5621,18 @@ proof
   fix o
   assume hA: args in abi.ARGS
   assume hM: s in x86_64_linux.Machine
+  assume hsu: s in univ(1)
   assume hl: abi.loaded(app(s, "vm"), base, code, statics)
   assume hrip: app(s, "rip") = f
   assume he: abi.entry_ok(s, args)
-  assume hr: runs(abi.run_to_return(), s, o)
+  assume hr: tr.run_d(s, s, o)
   let X := app(app(s, "gpr"), 7)
   let V := tr.view1(s, d, 8, X)
   let W := abi.view(V, s)
   let SPEC := fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))
   let BIND := mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have hc: abi.code_at(app(s, "vm"), base, code) by taut(expand(hl, abi.loaded))
-  have su: s in univ(1) by simp(apply(abi.run_univ, hr))
+  have su := hsu
   have ent := apply(abi.entry_stack, hM, he)
   have hdf: !app(app(s, "flags"), "df") by taut(expand(he, abi.entry_ok))
   have r7R: 7 in x86_64_linux.Reg by simp()
@@ -5454,7 +5665,7 @@ proof
         r2 := x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], k)
       have red: tr.red(app(SPEC, args), W, BIND, W) by defs(rewrite(sym(ae), r0), tr.red)
       have sim := apply(tr.sim_red, red, sim0)
-      show := apply(tr.entry, {SPEC}, {args}, {s}, {V}, {o}, sim, hr)
+      show := apply(tr.entry_d,{SPEC}, {args}, {s}, {V}, {o}, sim, hr)
     qed
     have few: !ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
       assume hng: !ord_le(1, seq_len(args))
