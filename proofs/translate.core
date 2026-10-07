@@ -16,7 +16,7 @@
 //  divergence: a function without loops returns or faults; the loop rule
 //  adds it.)
 
-def tr.ub(s, v, p, w) := ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(p, w, exc(abi.view(v, s), e))
+def tr.ub(s, v, p, w) := ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(v, s, x) && runs(p, w, exc(x, e))
 
 // (a pair is not empty: the raise the rules use is no stack overflow)
 theorem tr.pair_ne: all a b. !(empty = pair(a, b))
@@ -341,6 +341,17 @@ proof
   show by defs(ex_intro({m1}, {a}, {k}, taut(h3, ov)), abi.crashes_at)
 qed
 
+// (at the entry: the claim's raise is the ABI's)
+theorem tr.ub_at: all spec args s v. tr.ub(s, v, app(spec, args), abi.view(v, s)) -> abi.raises_at(spec, args, s, v)
+proof
+  fix spec
+  fix args
+  fix s
+  fix v
+  assume h: tr.ub(s, v, app(spec, args), abi.view(v, s))
+  show by defs(expand(h, tr.ub), abi.raises_at)
+qed
+
 // (a crash is no divergence, no return)
 theorem tr.crash_not_div: all s p w t. !tr.crash(s, p, w, diverge(t))
 proof
@@ -390,7 +401,8 @@ proof
     assume rd: tr.run_d(s, s, o)
     have c := mp(all_elim(expand(h, tr.sim), {o}), rd)
     have cr := all_elim(tr.crash_at, {spec}, {args}, {s}, {v}, {o})
-    show by defs(taut(expand(expand(c, tr.ub), tr.ok), cr), abi.matches_at)
+    have ua := all_elim(tr.ub_at, {spec}, {args}, {s}, {v})
+    show by defs(taut(expand(c, tr.ok), cr, ua), abi.matches_at)
   qed
   have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches_at(spec, args, s, v, o) proof
     assume e: ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))
@@ -411,7 +423,8 @@ proof
       have eo: exc(x, exc_val("disc", empty)) = exc(m1, exc_val("segv", pair(a, c0))) by taut(k3)
       show by simp(expand(eo, exc_val))
     qed
-    show by defs(taut(expand(c, tr.ub), nk, nc), abi.matches_at)
+    have ua := all_elim(tr.ub_at, {spec}, {args}, {s}, {v})
+    show by defs(taut(c, nk, nc, ua), abi.matches_at)
   qed
   show by taut(d, c1, c2)
 qed
@@ -420,7 +433,7 @@ qed
 // where the spec raises (the claim has no divergence; every loop has a
 // variant), so a caller's run through a call ends or raises
 def tr.matches_at_t(spec, args, s, v, o) :=
-  (ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))) ||
+  abi.raises_at(spec, args, s, v) ||
   (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
     runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
@@ -457,7 +470,8 @@ proof
   assume rd: tr.run_d(s, s, o)
   have c := mp(all_elim(expand(h, tr.sim), {o}), rd)
   have cr := all_elim(tr.crash_at, {spec}, {args}, {s}, {v}, {o})
-  show by defs(taut(expand(expand(c, tr.ub), tr.ok), cr), tr.matches_at_t)
+  have ua := all_elim(tr.ub_at, {spec}, {args}, {s}, {v})
+  show by defs(taut(expand(c, tr.ok), cr, ua), tr.matches_at_t)
 qed
 
 // The bridge's contract of a function at f: every disciplined run from an
@@ -508,7 +522,7 @@ proof
     have q: exc(x, exc_val("disc", empty)) = exc(m1, exc_val("segv", pair(a, c0))) by taut(e3)
     show by simp(expand(q, exc_val))
   qed
-  have r: ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e)) by taut(expand(ma, abi.matches_at), n2, n3, n4)
+  have r: abi.raises_at(spec, args, s, v) by taut(expand(ma, abi.matches_at), n2, n3, n4)
   have ma2: abi.matches_at(spec, args, s, v, o) by defs(taut(r), abi.matches_at)
   show by defs(ex_intro({v}, taut(hv, ma2)), abi.matches)
 qed
@@ -573,12 +587,11 @@ proof
   have r := expand(hr, tr.red)
   have u: tr.ub(s, v, p2, w2) -> tr.ub(s, v, p, w) proof
     assume hu: tr.ub(s, v, p2, w2)
-    obtain e, he from expand(hu, tr.ub)
-    have r2: runs(p2, w2, exc(abi.view(v, s), e)) by taut(he)
-    have r1 := mp(all_elim(r, {exc(abi.view(v, s), e)}), r2)
-    have eu: e in univ(1) by taut(he)
-    have eno: !(e = exc_val("stack_overflow", empty)) by taut(he)
-    show by defs(ex_intro({e}, taut(eu, eno, r1)), tr.ub)
+    obtain e, he0 from expand(hu, tr.ub)
+    obtain x, he from he0
+    have r2: runs(p2, w2, exc(x, e)) by taut(he)
+    have r1 := mp(all_elim(r, {exc(x, e)}), r2)
+    show by defs(ex_intro({e}, {x}, taut(he, r1)), tr.ub)
   qed
   have k: all o. tr.ok(s, p2, w2, o) -> tr.ok(s, p, w, o) proof
     fix o
@@ -2593,7 +2606,10 @@ proof
     have rp := mp(mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {exc(abi.view(v, s), empty)}), pu), b)
     have eu: empty in univ(1) by simp()
     have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
-    have ub: tr.ub(s, v, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) by defs(ex_intro({empty}, taut(eu, eno, rp)), tr.ub)
+    have ub: tr.ub(s, v, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) proof
+      have rs: abi.raise_state(v, s, abi.view(v, s)) by defs(taut(refl({abi.view(v, s)})), abi.raise_state)
+      show by defs(ex_intro({empty}, {abi.view(v, s)}, taut(eu, eno, rs, rp)), tr.ub)
+    qed
     show by defs(simp(ub, keep(tr.ub, tr.ok, tr.crash, tr.run_d)), tr.sim)
   qed
   show by defs(g, tr.pt)
@@ -3297,7 +3313,8 @@ proof
         {W}, {exc(W, empty)}), pu), taut(hng))
       have rs := rewrite(sym(ae), rr)
       have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
-      have ub: ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(SPEC, args), W, exc(W, e)) by ex_intro({empty}, taut(eu, eno, rs))
+      have rst: abi.raise_state(V, s, W) by defs(taut(refl({W})), abi.raise_state)
+      have ub: abi.raises_at(SPEC, args, s, V) by defs(ex_intro({empty}, {W}, taut(eu, eno, rst, rs)), abi.raises_at)
       show by defs(taut(ub), tr.matches_at_t)
     qed
     show by taut(enough, few)
@@ -6940,7 +6957,8 @@ proof
         {W}, {exc(W, empty)}), pu), taut(hng))
       have rs := rewrite(sym(ae), rr)
       have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
-      have ub: ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(SPEC, args), W, exc(W, e)) by ex_intro({empty}, taut(eu, eno, rs))
+      have rst: abi.raise_state(V, s, W) by defs(taut(refl({W})), abi.raise_state)
+      have ub: abi.raises_at(SPEC, args, s, V) by defs(ex_intro({empty}, {W}, taut(eu, eno, rst, rs)), abi.raises_at)
       show by defs(taut(ub), tr.matches_at_t)
     qed
     show by taut(enough, few)

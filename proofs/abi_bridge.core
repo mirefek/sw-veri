@@ -23,8 +23,11 @@ def abi.crashes_at(spec, args, s, v, o) :=
 // raises there (undefined behaviour: anything), or o is a return matching
 // the spec's ok outcome (the world's memory and state, rax:rdx, the ABI's
 // registers), or both diverge with the same trace, or a crash
+def abi.raises_at(spec, args, s, v) :=
+  ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(v, s, x) && runs(app(spec, args), abi.view(v, s), exc(x, e))
+
 def abi.matches_at(spec, args, s, v, o) :=
-  (ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))) ||
+  abi.raises_at(spec, args, s, v) ||
   (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
     runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
@@ -217,15 +220,16 @@ proof
   have wm: abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) by taut(hv)
   have hma: abi.matches_at(spec, args, s, v, o) by taut(hv)
   // the spec raises: anything
-  have c1: (ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))) ->
-      runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
-    assume h: ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))
-    obtain e, he1 from h
+  have c1: abi.raises_at(spec, args, s, v) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+    assume h: abi.raises_at(spec, args, s, v)
+    obtain e, he0 from expand(h, abi.raises_at)
+    obtain x, he1 from he0
     have eu: e in univ(1) by taut(he1)
     have eno: !(e = exc_val("stack_overflow", empty)) by taut(he1)
-    have rx: runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e)) by taut(he1)
+    have hx: abi.raise_state(v, s, x) by taut(he1)
+    have rx: runs(app(spec, args), abi.view(v, s), exc(x, e)) by taut(he1)
     have ho: abi.outcome(o) by simp(hsh)
-    show := apply(abi.ub_case, {f}, {spec}, {args}, {s}, {o}, {v}, {e}, hM, hsv, vu, sv, wm, eu, eno, rx, hp, ho)
+    show := apply(abi.ub_case, {f}, {spec}, {args}, {s}, {o}, {v}, {e}, {x}, hM, hsv, vu, sv, wm, eu, eno, hx, rx, hp, ho)
   qed
   // a return
   have c2: (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&

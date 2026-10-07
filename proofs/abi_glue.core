@@ -63,11 +63,15 @@ proof
   show by simp(expand(mp(all_elim(ac, {0}), z0, l0), abi.ARG_REGS), ar0)
 qed
 
+// the state a raising spec ends in: the view it started from, or any world
+// (a callee's raise, through its caller)
+def abi.raise_state(v, s, x) := x = abi.view(v, s) || x in rec_and(abi.World, single(empty))
+
 // undefined behavior: the spec raises from the view
-theorem abi.ub_case: all f spec args s o v e. s in x86_64_linux.Machine -> v in x86_64_linux.Vm -> v in univ(1) ->
+theorem abi.ub_case: all f spec args s o v e x. s in x86_64_linux.Machine -> v in x86_64_linux.Vm -> v in univ(1) ->
   abi.scratch_view(v, app(s, "vm"), abi.sp(s)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) -> e in univ(1) ->
-  !(e = exc_val("stack_overflow", empty)) ->
-  runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e)) -> pair(s, o) in univ(1) -> abi.outcome(o) ->
+  !(e = exc_val("stack_overflow", empty)) -> abi.raise_state(v, s, x) ->
+  runs(app(spec, args), abi.view(v, s), exc(x, e)) -> pair(s, o) in univ(1) -> abi.outcome(o) ->
   runs(abi.abi_function(single(empty), f, spec, args), s, o)
 proof
   fix f
@@ -77,6 +81,7 @@ proof
   fix o
   fix v
   fix e
+  fix x
   assume hM: s in x86_64_linux.Machine
   assume hv: v in x86_64_linux.Vm
   assume hvu: v in univ(1)
@@ -84,7 +89,8 @@ proof
   assume hm: abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s))
   assume he: e in univ(1)
   assume hno: !(e = exc_val("stack_overflow", empty))
-  assume hr: runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))
+  assume hx: abi.raise_state(v, s, x)
+  assume hr: runs(app(spec, args), abi.view(v, s), exc(x, e))
   assume hp: pair(s, o) in univ(1)
   assume ho: abi.outcome(o)
   have su: s in univ(1) by simp(hp)
@@ -98,7 +104,14 @@ proof
   have gi: ghost_part(s, abi.KEYS) in single(empty) by simp(gs0)
   have ra: rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS)) in rec_and(abi.World, single(empty)) by defs(apply(rec_and_intro, wt, gi), rec_merge)
   have e0: rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS)) = abi.view(v, s) by simp(gs0)
-  have hra := apply(abi.raises_intro, ra, he, hno, rewrite(sym(e0), hr))
+  have rv: abi.view(v, s) in rec_and(abi.World, single(empty)) := rewrite(e0, ra)
+  have xr0: x = abi.view(v, s) -> x in rec_and(abi.World, single(empty)) proof
+    assume ex: x = abi.view(v, s)
+    show := rewrite(sym(ex), rv)
+  qed
+  have xr: x in rec_and(abi.World, single(empty)) by taut(expand(hx, abi.raise_state), xr0)
+  have hr2 := rewrite(sym(e0), hr)
+  have hra := apply(abi.raises_intro, {rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS))}, {x}, {spec}, {args}, {e}, xr, he, hno, hr2)
   show := apply(abi.ub_intro, {f}, hp, ho, hvu, hv, hs, hm, hsv, hsp, hra)
 qed
 
