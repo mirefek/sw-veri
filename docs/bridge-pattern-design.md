@@ -551,6 +551,24 @@ planned, and everything it does not use is removed.
      leaves with "disc", which `abi.matches` allows only where the spec
      raises -- `while_guard` in core/loop.core cuts the run at the first
      violation).
-   - Still to do: the crash case (stack exhaustion) and divergence at the
-     bridge's end; the run split at a call; the call rule; frames after
-     `sub rsp`; a_clz_32.
+   - Stack overflow is a spec outcome (`stack_overflow`; GIMPLE may raise
+     it before a callee runs and after it returns). The claim's third case
+     is a crash (`tr.crash`): the machine faults in the entry's scratch
+     space, its input as at the entry and its events grown, with the I/O
+     of an outcome of the spec from the current point where the I/O
+     stops (`tr.ovf`: a stack overflow, a return, a divergence).
+     `tr.sim_red` carries it back along reductions; at the entry it is
+     `abi.crashes_at`, the crash case of `abi.matches_at`, which
+     `abi.crash_case` shows `abi_function`'s crash branch allows. The run
+     leaving the discipline is the exception `disc`.
+   - Where crashes come from: a `call` pushing the return address (the
+     GIMPLE call has an overflow point there), a callee's crash (its
+     contract's crash case: a stack overflow in the callee's spec
+     propagates; a return with the crash's I/O meets the caller's overflow
+     point after the call), and frame stores below the entry's page. The
+     last needs an overflow point of the spec at every point between calls
+     (the spec reaches its next call or its return without I/O); a_clz_32's
+     frame stays in the entry's page, so it waits for a function that needs
+     it.
+   - Still to do: divergence at the bridge's end (a callee's); the run
+     split at a call; the call rule; frames after `sub rsp`; a_clz_32.

@@ -441,8 +441,10 @@ it.
     be that of a point where the spec may stop (`overflow_ok`): a
     `stack_overflow` outcome of the spec, or an outcome after which it does
     no more I/O (it returns, or runs on silently). Specs say where they may
-    overflow: readable GIMPLE at every call, a spec above it at every call or
-    stack push it models;
+    overflow: readable GIMPLE at every call, before the callee runs and
+    after it returns (a callee crashing after its last I/O matches its
+    spec's return, so the caller needs an overflow point there); a spec
+    above it at every call or stack push it models;
   - if the spec may raise from the entry world (`spec_raises`: an exception
     other than `stack_overflow`), anything.
     A C function's spec raises only through undefined behavior
@@ -842,8 +844,8 @@ set-builders over large ranges silently truncated).
    an unmapped page) currently decodes against the byte map and then faults –
    imprecise only in exotic cases (may give `undefined` instead of `segv`).
 5. Name of the language.
-6. The stack-overflow "prefix of an allowed behavior" policy should later
-   cover other external kills too (the OOM killer, signals).
+6. The stack-overflow policy (`overflow_ok`) should later cover other
+   external kills too (the OOM killer, signals).
 7. `realloc`, threads (malloc arenas, TLS), stack-passed and floating-point
    arguments.
 8. Coverage beyond the musl allocator and startup: after `main`, `exit` may

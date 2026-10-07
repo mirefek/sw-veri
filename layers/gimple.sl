@@ -395,7 +395,8 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
 // undefined (C: none of the caller's objects it may access is there). A
 // call with the thread pointer broken (the word at fs:0 not pointing to
 // itself, as the ABI requires at every call) is undefined. Every call may
-// overflow the stack (`stack_overflow`, the ABI's: no undefined behavior).
+// overflow the stack (`stack_overflow`, the ABI's: no undefined behavior),
+// before the callee runs and after it returns.
 proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   // (a call may overflow the stack: here, the world as it is)
   either { raise stack_overflow } or { }
@@ -408,6 +409,9 @@ proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -
   if !thread_ok(vm, fs_base) { undefined }
   let mid = vm.bytes
   let (r0, r1) = with callee_world(sp2) { return g(regs) }
+  // (... and on the way back: the callee may crash after its last I/O --
+  // its spec then returns, with the I/O the crash has)
+  either { raise stack_overflow } or { }
   if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a]) { undefined }
   return (r0, r1)
 }
