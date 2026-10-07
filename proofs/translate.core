@@ -838,8 +838,12 @@ qed
 //    has written its frame (ds true), the same but for scratch bytes (the
 //    spec's locals are not in its memory).
 
+// (the code loaded at the entry, loaded still: the function's own, a
+// callee's)
+def tr.keeps_code(sv, vm) := all gb gc. gb in omega -> abi.code_at(sv, gb, gc) -> abi.code_at(vm, gb, gc)
+
 def tr.inv(s, base, code, fr, m, w) :=
-  m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) &&
+  m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) && tr.keeps_code(app(s, "vm"), app(m, "vm")) &&
   app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) && fr in omega && fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
   x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) = abi.ret(s) &&
   abi.callee_saved(m, s) && app(m, "cpu") = app(s, "cpu") && app(m, "gs_base") = app(s, "gs_base") &&
@@ -2749,6 +2753,44 @@ proof
   show by defs(taut(r), abi.code_at)
 qed
 
+theorem tr.keeps_refl: all vm. tr.keeps_code(vm, vm)
+proof
+  fix vm
+  have g: all gb gc. gb in omega -> abi.code_at(vm, gb, gc) -> abi.code_at(vm, gb, gc) proof
+    fix gb
+    fix gc
+    assume hb: gb in omega
+    assume hc: abi.code_at(vm, gb, gc)
+    show := hc
+  qed
+  show by defs(g, tr.keeps_code)
+qed
+
+// (a store to writable bytes keeps the loaded code)
+theorem tr.keeps_store: all sv vm a n v. n in omega -> tr.keeps_code(sv, vm) ->
+  (all j. j in omega -> int_lt(j, n) -> x86_64_linux.can_access(vm, bits_add(64, a, bits_of_int(64, j)), 1)) ->
+  tr.keeps_code(sv, fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)))
+proof
+  fix sv
+  fix vm
+  fix a
+  fix n
+  fix v
+  assume hn: n in omega
+  assume hk: tr.keeps_code(sv, vm)
+  assume hw: all j. j in omega -> int_lt(j, n) -> x86_64_linux.can_access(vm, bits_add(64, a, bits_of_int(64, j)), 1)
+  have g: all gb gc. gb in omega -> abi.code_at(sv, gb, gc) -> abi.code_at(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), gb, gc) proof
+    fix gb
+    fix gc
+    assume hb: gb in omega
+    assume hc: abi.code_at(sv, gb, gc)
+    have c1 := mp(mp(all_elim(expand(hk, tr.keeps_code), {gb}, {gc}), hb), hc)
+    have sc := apply(tr.store_code_acc, {gb}, {gc}, {vm}, {a}, {n}, hn, hb, c1, hw)
+    show := all_elim(sc, {v})
+  qed
+  show by defs(g, tr.keeps_code)
+qed
+
 // the prologue `mov [rsp + d], edi`: from the entry s to the state after it,
 // coupled with the spec's view (its memory, the home holding x)
 theorem tr.prologue1_32: all s base code f len d z1 z2 a2 x p.
@@ -2849,6 +2891,7 @@ proof
     // (the code: the store's bytes are writable, the code's not)
     have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, simp(), hbase, hc, sa1)
     have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
+    have kc := apply(tr.keeps_store, {app(s, "vm")}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, {X}, simp(), all_elim(tr.keeps_refl, {app(s, "vm")}), sa1)
     // (the return address: the store is below it)
     have below: all k. k in omega -> int_lt(k, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k)), bits_add(64, app(app(s, "gpr"), 4), d)), 4) proof
       fix k
@@ -2861,7 +2904,7 @@ proof
     have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, {X}, r4, simp(r4, hd), below)
     have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0,m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0, kc, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have rp: app(M1, "rip") = a2 by simp()
     have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {X}, simp(pt), simp(r4, hd), xo)
     have du := mp(dom_update[f := empty, k := d, v := pair(4, x)], taut(dom_empty))
@@ -3055,6 +3098,7 @@ proof
       have m1u: M1 in univ(1) by simp(m0u, hu, f1, vU, a2b)
       have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {4}, simp(), hbase, hc, sa1)
       have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
+      have kc := apply(tr.keeps_store, {app(s, "vm")}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {4}, {X}, simp(), all_elim(tr.keeps_refl, {app(s, "vm")}), sa1)
       have below: all k0. k0 in omega -> int_lt(k0, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k0)), bits_add(64, app(app(s, "gpr"), 4), c)), 4) proof
         fix k0
         assume k1: k0 in omega
@@ -3073,7 +3117,7 @@ proof
       have e14 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 14], simp())
       have e15 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 15], simp())
       have e7 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 7], simp())
-      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], m1M,m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
+      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], kc, m1M, m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
         keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
       have rp: app(M1, "rip") = a2 by simp()
       have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {X}, simp(pt), simp(r4, hcb), xo)
@@ -6688,6 +6732,7 @@ proof
     // (the code: the store's bytes are writable, the code's not)
     have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, simp(), hbase, hc, sa1)
     have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
+    have kc := apply(tr.keeps_store, {app(s, "vm")}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, {X}, simp(), all_elim(tr.keeps_refl, {app(s, "vm")}), sa1)
     // (the return address: the store is below it)
     have below: all k. k in omega -> int_lt(k, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k)), bits_add(64, app(app(s, "gpr"), 4), d)), 8) proof
       fix k
@@ -6700,7 +6745,7 @@ proof
     have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, {X}, r4, simp(r4, hd), below)
     have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0,m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0, kc, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have rp: app(M1, "rip") = a2 by simp()
     have ld := apply(tr.le_store8, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {X}, simp(pt), simp(r4, hd), xo)
     have du := mp(dom_update[f := empty, k := d, v := pair(8, x)], taut(dom_empty))
