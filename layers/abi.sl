@@ -125,6 +125,11 @@ pred entry_ok(m: Machine, args: Args) =
 // the thread pointer as entry_ok has it: the word at fs:0 points to itself
 pred thread_ok(vm: Vm, fs: Addr) = readable(vm, uint(fs), 8) && le(vm.bytes, fs, 8) = fs
 
+// the stack as entry_ok has it, rsp at the return address's slot: a
+// writable stack page, no other mapping in the guard gap below the stack
+pred stack_ok(vm: Vm, rsp: Addr) =
+  stack_page(vm, uint(rsp) / PAGE) && can_access(vm, rsp, write) && stack_gap_free(vm)
+
 // The machine, from the function's entry until it returns to its caller.
 proc[Machine] run_to_return() {
   let sp  = gpr[rsp] + 8

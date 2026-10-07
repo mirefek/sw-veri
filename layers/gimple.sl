@@ -377,7 +377,8 @@ fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec 
 
 // The caller's frame at a call to a callee with stack pointer sp2: the
 // stack may have grown down to the return address's slot below sp2 (free
-// pages become stack pages), and the bytes from that slot up to `hi` --
+// pages mapped; the call checks they are stack pages), and the bytes from
+// that slot up to `hi` --
 // the caller's private frame [sp2, hi), below its stack pointer and
 // holding none of its C objects -- are arbitrary: the caller's machine
 // code keeps values there that C does not see.
@@ -386,7 +387,7 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
   new.brk_start = old.brk_start && new.brk = old.brk &&
   (all a: Addr. !(uint(sp2) - 8 <= uint(a) && uint(a) < hi) -> new.bytes[a] = old.bytes[a]) &&
   (all p: PageNo. new.pages[p] = old.pages[p] ||
-     ((uint(sp2) - 8) / PAGE <= p && p * PAGE < hi && old.pages[p] = none && stack_page(new, p)))
+     ((uint(sp2) - 8) / PAGE <= p && p * PAGE < hi && old.pages[p] = none))
 
 // Calling g: the arguments (values with their types) in registers, g on
 // its own stack below `low` (the stack pointer, or the lowest stack object
@@ -395,7 +396,9 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
 // or its pages) is undefined (C: none of the caller's objects it may
 // access is there). A
 // call with the thread pointer broken (the word at fs:0 not pointing to
-// itself, as the ABI requires at every call) is undefined. Every call may
+// itself, as the ABI requires at every call) or the stack unsound (the
+// return address's slot not a writable stack page, a mapping in the guard
+// gap: the ABI's entry conditions) is undefined. Every call may
 // overflow the stack (`stack_overflow`, the ABI's: no undefined behavior),
 // before the callee runs and after it returns.
 proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
@@ -406,8 +409,9 @@ proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -
   let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
   let old = vm
   havoc vm where frame_at_call(old, vm, sp2, hi)
-  // (the ABI's thread pointer at a call: the word at fs:0 points to itself)
-  if !thread_ok(vm, fs_base) { undefined }
+  // (the ABI's thread pointer at a call: the word at fs:0 points to itself;
+  // the stack sound at the return address's slot)
+  if !(thread_ok(vm, fs_base) && stack_ok(vm, sp2 - 8)) { undefined }
   let mid = vm.bytes
   let mid_pages = vm.pages
   let (r0, r1) = with callee_world(sp2) { return g(regs) }

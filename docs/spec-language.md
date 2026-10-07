@@ -525,9 +525,13 @@ machine code; `scripts/dump-gimple.sh` dumps it with musl's exact flags).
   `[sp2, sp)` (below the lowest object, with objects) holds none of its C
   objects: before the call its bytes are arbitrary, and the stack may have
   grown down to the return address's slot (`frame_at_call`); a callee that
-  changes them is undefined -- C gives a callee no access there. (Machine
-  code keeps spilled values in that frame; the bridge chooses the arbitrary
-  bytes as the machine's.) **Inline assembly** is given its
+  changes them (bytes or pages) is undefined -- C gives a callee no access
+  there. (Machine code keeps spilled values in that frame; the bridge
+  chooses the arbitrary bytes as the machine's.) A call with the thread
+  pointer broken or the stack unsound at the return address's slot
+  (`stack_ok`: the ABI's entry conditions) is undefined; every call may
+  overflow the stack, before the callee runs and after it returns.
+  **Inline assembly** is given its
   meaning by the machine model itself: the operands go into registers, the
   instruction bytes run through `x86.decode` / `x86.execute` on a machine
   built from the world.
