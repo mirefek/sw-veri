@@ -81,6 +81,20 @@ mod tests {
     }
 
     #[test]
+    fn cached_theorems_only_from_a_cache_file() {
+        let mut env = mini();
+        // a source file cannot claim a theorem without its proof
+        assert!(syntax::load(&mut env, "theorem t: all x. x = x cached", false).is_err());
+        assert!(env.fact("t").is_none());
+        // a cache file's statement is recorded as proven
+        let rep = syntax::load_cached(&mut env, "theorem t: all x. x = x cached", false).unwrap();
+        assert_eq!(rep.theorems, vec!["t".to_string()]);
+        assert!(env.fact("t").is_some());
+        // still no axioms in it
+        assert!(syntax::load_cached(&mut env, "axiom bad: false", false).is_err());
+    }
+
+    #[test]
     fn literals() {
         let env = mini();
         let b = &env.builtins;

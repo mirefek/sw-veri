@@ -163,7 +163,12 @@ relies on.
 
    Still to do in this milestone: theorems attached to SL files; hashes
    of the definitions a fact depends on (to invalidate proofs when a
-   definition changes, across runs).
+   definition changes, across runs). Across runs, per file so far:
+   `slc kernel-check` keeps each checked file's statements (its proofs
+   replaced by `cached`, `slc/kernel/src/ext/cache.rs`) in
+   build/kernel-cache, and takes a file from there when it is not newer
+   than its entry and the statements before it are the same (their
+   hash); `--no-cache` checks everything (the tests do).
 2. **The top of the DAG** (done): `proofs/musl_malloc.core` proves
    `musl_malloc` from 8 open lemmas — the four laws, `init`, and
    `implements` for malloc, free and calloc — with `musl.inv` and

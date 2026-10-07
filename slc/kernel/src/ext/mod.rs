@@ -19,8 +19,11 @@
 //!   `runs(P, s, o)`) and propositions.
 //! - `facts`: open lemmas and conditional theorems (bookkeeping, not a rule:
 //!   nothing resting on an open lemma becomes a `Thm`).
+//! - `cache`: theorems from `slc kernel-check`'s file cache, recorded
+//!   without their proofs (trusting the cache; `--no-cache` avoids it).
 
 pub mod arith;
+pub mod cache;
 pub mod facts;
 pub(crate) mod inventory;
 pub mod list;

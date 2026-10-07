@@ -1,6 +1,5 @@
 //! `slc` — the SL toolchain driver.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod commands;
@@ -15,7 +14,10 @@ mod translate;
 fn usage() -> ExitCode {
     eprintln!(
         "usage:
-  slc kernel-check PRELUDE.core [FILE.core ...]   check core files (axioms only in the first)
+  slc kernel-check [--no-cache] PRELUDE.core [FILE.core ...]   check core files (axioms only in the first);
+                                                   a file not newer than its cache entry (build/kernel-cache,
+                                                   after the same statements before it) is not checked again,
+                                                   its statements taken from the entry; --no-cache: check all
   slc parse PATH...                                parse SL files
   slc check PATH...                                parse and type-check SL files
   slc elab PATH... -o OUT.core                     elaborate SL to core
@@ -36,7 +38,7 @@ fn main() -> ExitCode {
     let Some(cmd) = args.first() else { return usage() };
     let rest: Vec<String> = args[1..].to_vec();
     let r = match cmd.as_str() {
-        "kernel-check" => commands::kernel_check(&rest.iter().map(PathBuf::from).collect::<Vec<_>>()),
+        "kernel-check" => commands::kernel_check(&rest),
         "parse" => commands::parse(&rest),
         "check" => commands::check(&rest),
         "elab" => commands::elab(&rest),

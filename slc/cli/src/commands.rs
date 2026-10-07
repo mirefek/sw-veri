@@ -3,17 +3,119 @@ use std::path::PathBuf;
 
 pub type CResult = Result<(), String>;
 
-pub fn kernel_check(files: &[PathBuf]) -> CResult {
+/// The file cache of `kernel-check`: per checked file, its statements (the
+/// file with its proofs replaced by `cached`, `sl_kernel::ext::cache`),
+/// in build/kernel-cache. A file's entry is used when the file is not
+/// newer than it and it was written by the same checker after the same
+/// statements of the files before (their hash, `prefix`); otherwise the
+/// file is checked and its entry written again.
+struct Cache {
+    dir: PathBuf,
+    /// the checker's identity: its executable's modification time
+    checker: String,
+}
+
+impl Cache {
+    fn new() -> Cache {
+        let exe = std::env::current_exe().ok().and_then(|e| std::fs::metadata(e).ok()).and_then(|m| m.modified().ok());
+        let checker = exe.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos().to_string()).unwrap_or_default();
+        Cache { dir: repo_root().join("build/kernel-cache"), checker }
+    }
+
+    fn entry(&self, f: &std::path::Path) -> PathBuf {
+        let abs = std::fs::canonicalize(f).unwrap_or_else(|_| f.to_path_buf());
+        let key = crate::sha256::hex(abs.to_string_lossy().as_bytes());
+        let base = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.dir.join(format!("{}-{}", &key[..16], base))
+    }
+
+    fn header(&self, prefix: &str, first: bool) -> String {
+        format!("// slc kernel-check cache (statements only; see `slc kernel-check --no-cache`)\n// checker {}\n// prefix {}\n// first {}\n", self.checker, prefix, first)
+    }
+
+    /// f's statements, if its entry holds
+    fn lookup(&self, f: &std::path::Path, prefix: &str, first: bool) -> Option<String> {
+        if self.checker.is_empty() {
+            return None;
+        }
+        let e = self.entry(f);
+        let (tf, te) = (std::fs::metadata(f).ok()?.modified().ok()?, std::fs::metadata(&e).ok()?.modified().ok()?);
+        if tf > te {
+            return None;
+        }
+        let text = std::fs::read_to_string(&e).ok()?;
+        text.strip_prefix(&self.header(prefix, first)).map(|s| s.to_string())
+    }
+
+    /// writes f's entry, dated as f when read (`modified`): a change of f
+    /// while it was checked makes f newer
+    fn store(&self, f: &std::path::Path, prefix: &str, first: bool, stmts: &str, modified: std::time::SystemTime) {
+        if self.checker.is_empty() || std::fs::create_dir_all(&self.dir).is_err() {
+            return;
+        }
+        let e = self.entry(f);
+        let tmp = e.with_extension(format!("tmp{}", std::process::id()));
+        let ok = std::fs::write(&tmp, format!("{}{}", self.header(prefix, first), stmts)).is_ok()
+            && std::fs::File::options().write(true).open(&tmp).and_then(|h| h.set_modified(modified)).is_ok();
+        if !ok || std::fs::rename(&tmp, &e).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// A checked file's statements: its proofs replaced by `cached` (with the
+/// open lemmas a conditional theorem rests on)
+fn statements(env: &Env, src: &str, rep: &syntax::LoadReport) -> String {
+    let mut out = String::new();
+    let mut at = 0;
+    for (name, s, e) in &rep.proofs {
+        out.push_str(&src[at..*s]);
+        out.push_str("cached");
+        if let Some((_, q)) = env.open.conditional.iter().find(|(n, _)| n == name) {
+            out.push_str(&format!(" rests({})", q.open().join(", ")));
+        }
+        out.push('\n');
+        at = *e;
+    }
+    out.push_str(&src[at..]);
+    out
+}
+
+pub fn kernel_check(args: &[String]) -> CResult {
+    let no_cache = args.iter().any(|a| a == "--no-cache");
+    let files: Vec<PathBuf> = args.iter().filter(|a| *a != "--no-cache").map(PathBuf::from).collect();
     if files.is_empty() {
         return Err("no files".into());
     }
+    let cache = if no_cache { None } else { Some(Cache::new()) };
     let mut env = Env::new();
     let mut prover = sl_proof::ScriptProver;
+    // (the hash of the statements of the files so far)
+    let mut prefix = String::new();
     for (i, f) in files.iter().enumerate() {
-        let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
-        let rep = syntax::load_with(&mut env, &src, i == 0, Some(&mut prover)).map_err(|e| format!("{}: {}", f.display(), e))?;
+        let first = i == 0;
+        let hit = cache.as_ref().and_then(|c| c.lookup(f, &prefix, first));
+        let cached = hit.is_some();
+        let (rep, stmts) = match hit {
+            Some(stmts) => {
+                let rep = syntax::load_cached(&mut env, &stmts, first)
+                    .map_err(|e| format!("{} (its cache entry): {} -- check with --no-cache", f.display(), e))?;
+                (rep, stmts)
+            }
+            None => {
+                let modified = std::fs::metadata(f).and_then(|m| m.modified()).map_err(|e| format!("{}: {}", f.display(), e))?;
+                let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
+                let rep = syntax::load_with(&mut env, &src, first, Some(&mut prover)).map_err(|e| format!("{}: {}", f.display(), e))?;
+                let stmts = statements(&env, &src, &rep);
+                if let Some(c) = &cache {
+                    c.store(f, &prefix, first, &stmts, modified);
+                }
+                (rep, stmts)
+            }
+        };
+        prefix = crate::sha256::hex(format!("{}\n{}\n{}", prefix, first, stmts).as_bytes());
         println!(
-            "{}: {} constants, {} axioms, {} definitions, {} theorems, {} conditional theorems, {} open lemmas, {} claims",
+            "{}: {} constants, {} axioms, {} definitions, {} theorems, {} conditional theorems, {} open lemmas, {} claims{}",
             f.display(),
             rep.consts,
             rep.axioms.len(),
@@ -21,7 +123,8 @@ pub fn kernel_check(files: &[PathBuf]) -> CResult {
             rep.theorems.len(),
             rep.conditional.len(),
             rep.lemmas.len(),
-            rep.claims.len()
+            rep.claims.len(),
+            if cached { " (cached)" } else { "" }
         );
     }
     // what the claims and conditional theorems still rest on

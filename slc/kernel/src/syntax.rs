@@ -441,6 +441,9 @@ pub struct LoadReport {
     pub lemmas: Vec<String>,
     /// theorems proven from open lemmas
     pub conditional: Vec<String>,
+    /// each proof's text in the source, `proof` to the line of its `qed`
+    /// (byte offsets), with its theorem's name
+    pub proofs: Vec<(String, usize, usize)>,
 }
 
 /// A proof checker for `theorem ... proof ... qed`, supplied by the caller of
@@ -496,7 +499,18 @@ pub fn load(env: &mut Env, src: &str, allow_axioms: bool) -> KResult<LoadReport>
 
 /// `load`, also accepting `theorem NAME(params): statement proof ... qed`,
 /// whose proofs `prover` checks.
-pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&mut dyn Prover>) -> KResult<LoadReport> {
+pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, prover: Option<&mut dyn Prover>) -> KResult<LoadReport> {
+    load_mode(env, src, allow_axioms, prover, false)
+}
+
+/// Loads a cache file of `slc kernel-check` (`ext::cache`): a checked file
+/// whose theorems end in `cached` (`cached rests(a, b)`: resting on those
+/// open lemmas) instead of their proofs, recorded without them.
+pub fn load_cached(env: &mut Env, src: &str, allow_axioms: bool) -> KResult<LoadReport> {
+    load_mode(env, src, allow_axioms, None, true)
+}
+
+fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&mut dyn Prover>, cached: bool) -> KResult<LoadReport> {
     let mut lex = Lexer { src: src.as_bytes(), pos: 0, line: 1 };
     let tok = lex.next()?;
     let mut p = Parser { lex, tok, env, scopes: Vec::new(), params: HashMap::new() };
@@ -572,7 +586,7 @@ pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Optio
                 // `theorem NAME proof`: proves the open lemma or claim NAME
                 let known = facts::statement_of(p.env, &name);
                 let (params, t) = match (&p.tok, known) {
-                    (Tok::Ident(k), Some(t)) if k == "proof" => {
+                    (Tok::Ident(k), Some(t)) if k == "proof" || (cached && k == "cached") => {
                         let mut vs = Vec::new();
                         t.vars(&mut vs);
                         (vs.iter().map(|v| (p.env.vars[*v as usize].name.clone(), *v)).collect::<Vec<_>>(), t)
@@ -590,6 +604,34 @@ pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Optio
                         (ps.iter().map(|(n, _)| n.clone()).zip(vs).collect(), t)
                     }
                 };
+                // (a cache file's theorem: its statement, `cached`)
+                if cached {
+                    if !matches!(&p.tok, Tok::Ident(k) if k == "cached") {
+                        return p.error("expected `cached`");
+                    }
+                    p.bump()?;
+                    let mut open = Vec::new();
+                    if matches!(&p.tok, Tok::Ident(k) if k == "rests") {
+                        p.bump()?;
+                        p.expect("(")?;
+                        loop {
+                            open.push(p.ident()?);
+                            if !p.is_sym(",") {
+                                break;
+                            }
+                            p.bump()?;
+                        }
+                        p.expect(")")?;
+                    }
+                    let conditional = !open.is_empty();
+                    crate::ext::cache::admit(p.env, &name, t, open).map_err(ctx)?;
+                    if conditional {
+                        rep.conditional.push(name);
+                    } else {
+                        rep.theorems.push(name);
+                    }
+                    continue;
+                }
                 if !matches!(&p.tok, Tok::Ident(k) if k == "proof") {
                     return p.error("expected `proof`");
                 }
@@ -615,6 +657,7 @@ pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Optio
                 }
                 let Some((stop, after)) = end else { return p.error("`proof` without `qed`") };
                 let text = rest[..stop].to_string();
+                rep.proofs.push((name.clone(), start - "proof".len(), start + after));
                 p.lex.line += rest[..after].matches('\n').count();
                 p.lex.pos = start + after;
                 p.tok = p.lex.next()?;

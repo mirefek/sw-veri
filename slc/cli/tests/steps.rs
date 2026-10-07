@@ -16,7 +16,7 @@ fn x86_model_facts_check() {
     }
     let c = Command::new(env!("CARGO_BIN_EXE_slc"))
         .current_dir(&root)
-        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/records.core"])
+        .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/records.core"])
         .arg(&claim)
         .arg("proofs/x86.core")
         .output()
@@ -37,7 +37,7 @@ fn loaded_code_facts_check() {
     }
     let c = Command::new(env!("CARGO_BIN_EXE_slc"))
         .current_dir(&root)
-        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core"])
+        .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core"])
         .arg(&claim)
         .args(["proofs/x86.core", "proofs/x86_code.core"])
         .output()
@@ -65,7 +65,7 @@ fn step_theorems_of_get_slot_index_prove() {
     assert!(text.contains("theorem get_slot_index.at_40211a"), "{}", text);
     let c = Command::new(slc)
         .current_dir(&root)
-        .args(["kernel-check", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/loop.core"])
+        .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/loop.core"])
         .arg(&claim)
         .args(["proofs/x86.core", "proofs/x86_code.core"])
         .arg(&out)
@@ -134,7 +134,7 @@ fn translations_are_generated_and_check() {
         assert!(made == k, "{} differs from the generated {}", kept, cert.display());
         certs.push(cert);
     }
-    let c = Command::new(slc).current_dir(&root).arg("kernel-check").args(&files).args(&certs).output().unwrap();
+    let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).args(&certs).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // each certificate's theorems unconditional: nothing in the chain rests
     // on an open lemma (the storing functions' statics' range defined)

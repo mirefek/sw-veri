@@ -84,6 +84,11 @@ impl Seq {
         }
     }
 
+    /// `⊢ φ` resting on `open`: a cached conditional theorem (`ext::cache`).
+    pub(crate) fn cached(concl: Term, open: Vec<String>) -> Seq {
+        Seq { hyps: Vec::new(), concl, open }
+    }
+
     /// A theorem, once no hypotheses and no open lemmas are left.
     pub fn into_thm(self, env: &Env) -> KResult<Thm> {
         if !self.hyps.is_empty() {
