@@ -224,9 +224,37 @@ proof
   show by taut(d, c1, c2)
 qed
 
+// abi.matches_at without its divergence case: the machine diverges only
+// where the spec raises (the claim has no divergence; every loop has a
+// variant), so a caller's run through a call ends or raises
+def tr.matches_at_t(spec, args, s, v, o) :=
+  (ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(spec, args), abi.view(v, s), exc(abi.view(v, s), e))) ||
+  (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+    runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+    abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+    app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+    abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) ||
+  abi.crashes_at(spec, args, s, v, o)
+def tr.matches_t(spec, args, s, o) :=
+  ex v. v in x86_64_linux.Vm && v in univ(1) && abi.scratch_view(v, app(s, "vm"), abi.sp(s)) && abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) &&
+    tr.matches_at_t(spec, args, s, v, o)
+
+theorem tr.matches_t_abi: all spec args s o. tr.matches_t(spec, args, s, o) -> abi.matches(spec, args, s, o)
+proof
+  fix spec
+  fix args
+  fix s
+  fix o
+  assume h: tr.matches_t(spec, args, s, o)
+  obtain v, hv from expand(h, tr.matches_t)
+  have mt: tr.matches_at_t(spec, args, s, v, o) by taut(hv)
+  have ma: abi.matches_at(spec, args, s, v, o) by defs(taut(expand(mt, tr.matches_at_t)), abi.matches_at)
+  show by defs(ex_intro({v}, taut(hv, ma)), abi.matches)
+qed
+
 // ... for the disciplined run itself
 theorem tr.entry_d: all spec args s v o. tr.sim(s, v, app(spec, args), abi.view(v, s), s) -> tr.run_d(s, s, o) ->
-  abi.matches_at(spec, args, s, v, o)
+  tr.matches_at_t(spec, args, s, v, o)
 proof
   fix spec
   fix args
@@ -237,7 +265,7 @@ proof
   assume rd: tr.run_d(s, s, o)
   have c := mp(all_elim(expand(h, tr.sim), {o}), rd)
   have cr := all_elim(tr.crash_at, {spec}, {args}, {s}, {v}, {o})
-  show by defs(taut(expand(expand(c, tr.ub), tr.ok), cr), abi.matches_at)
+  show by defs(taut(expand(expand(c, tr.ub), tr.ok), cr), tr.matches_at_t)
 qed
 
 // The bridge's contract of a function at f: every disciplined run from an
@@ -246,7 +274,7 @@ qed
 // until then, where its spec does not raise).
 def tr.implements_at(f, spec, base, code, statics) :=
   all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
-    abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> abi.matches(spec, args, s, o)
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, s, o)
 
 // (an outcome the spec matches only by raising: so is every outcome)
 theorem tr.matches_raise: all spec args s x o. abi.matches(spec, args, s, exc(x, exc_val("disc", empty))) -> abi.matches(spec, args, s, o)
@@ -318,12 +346,14 @@ proof
     have d := apply(tr.run_disc, {s}, {o}, hr)
     have c1: tr.run_d(s, s, o) -> abi.matches(spec, args, s, o) proof
       assume rd: tr.run_d(s, s, o)
-      show := mp(all_elim(c, {args}, {s}, {o}), hA, hM, su, hl, hrip, he, rd)
+      have mt := mp(all_elim(c, {args}, {s}, {o}), hA, hM, su, hl, hrip, he, rd)
+      show := apply(tr.matches_t_abi, mt)
     qed
     have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches(spec, args, s, o) proof
       assume e: ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))
       obtain x, rd from e
-      have mx := mp(all_elim(c, {args}, {s}, {exc(x, exc_val("disc", empty))}), hA, hM, su, hl, hrip, he, rd)
+      have mt := mp(all_elim(c, {args}, {s}, {exc(x, exc_val("disc", empty))}), hA, hM, su, hl, hrip, he, rd)
+      have mx := apply(tr.matches_t_abi, mt)
       show := apply(tr.matches_raise, {spec}, {args}, {s}, {x}, {o}, mx)
     qed
     show by taut(d, c1, c2)
@@ -622,6 +652,7 @@ def tr.inv(s, base, code, fr, m, w) :=
   x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) = abi.ret(s) &&
   abi.callee_saved(m, s) && app(m, "cpu") = app(s, "cpu") && app(m, "gs_base") = app(s, "gs_base") &&
   app(m, "os") = app(w, "os") && app(m, "fs_base") = app(w, "fs_base") && !app(app(m, "flags"), "df") &&
+  app(app(w, "os"), "input") = app(app(s, "os"), "input") && subset(app(app(s, "os"), "events"), app(app(w, "os"), "events")) &&
   w in abi.World && w in univ(1) && s in x86_64_linux.Machine &&
   x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) && int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 &&
   abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) && int_lt(app(app(s, "gpr"), 4), 140737488355328)
@@ -2638,7 +2669,7 @@ proof
     have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, {X}, r4, simp(r4, hd), below)
     have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(z0, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0,m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have rp: app(M1, "rip") = a2 by simp()
     have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {X}, simp(pt), simp(r4, hd), xo)
     have du := mp(dom_update[f := empty, k := d, v := pair(4, x)], taut(dom_empty))
@@ -2850,7 +2881,7 @@ proof
       have e14 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 14], simp())
       have e15 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 15], simp())
       have e7 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 7], simp())
-      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(m1M, m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
+      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], m1M,m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
         keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
       have rp: app(M1, "rip") = a2 by simp()
       have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {X}, simp(pt), simp(r4, hcb), xo)
@@ -2891,7 +2922,7 @@ theorem tr.entry1_32g(base, code, statics, f, d, x0. q, x3 x4 x2. kw):
       abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s)) ->
   (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
-    abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
   assume hd: d in bits(64)
   assume hd1: int_le(18446744073709551608, d)
@@ -2928,8 +2959,8 @@ proof
   have hvu: W in univ(1) by simp(su, vU)
   // the spec applied: its body at args
   have ae: app(SPEC, args) = mkprog(x1 x2. !ord_le(1, seq_len(args)) || bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))) by simp(hA)
-  have ma: abi.matches_at(SPEC, args, s, V, o) proof
-    have enough: ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
+  have ma: tr.matches_at_t(SPEC, args, s, V, o) proof
+    have enough: ord_le(1, seq_len(args)) -> tr.matches_at_t(SPEC, args, s, V, o) proof
       assume hg: ord_le(1, seq_len(args))
       have sim0 := mp(all_elim(hpro, {args}, {s}), hA, hM, su, hl, hrip, he, hg)
       // (the spec's runs: the call's, the guard holding)
@@ -2945,7 +2976,7 @@ proof
       have sim := apply(tr.sim_red, red, sim0)
       show := apply(tr.entry_d,{SPEC}, {args}, {s}, {V}, {o}, sim, hr)
     qed
-    have few: !ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
+    have few: !ord_le(1, seq_len(args)) -> tr.matches_at_t(SPEC, args, s, V, o) proof
       assume hng: !ord_le(1, seq_len(args))
       have eu: empty in univ(1) by simp()
       have pu: pair(W, exc(W, empty)) in univ(1) by simp(hvu)
@@ -2954,11 +2985,11 @@ proof
       have rs := rewrite(sym(ae), rr)
       have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
       have ub: ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(SPEC, args), W, exc(W, e)) by ex_intro({empty}, taut(eu, eno, rs))
-      show by defs(taut(ub), abi.matches_at)
+      show by defs(taut(ub), tr.matches_at_t)
     qed
     show by taut(enough, few)
   qed
-  show by defs(ex_intro({V}, taut(vf, ma)), abi.matches)
+  show by defs(ex_intro({V}, taut(vf, ma)), tr.matches_t)
 qed
 
 // ... its prologue `mov [rsp + d], edi`: the claim after it, for every
@@ -2975,7 +3006,7 @@ theorem tr.entry1_32(base, code, statics, f, len, d, z1, z2, a2, x0. q, x3 x4 x2
       abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
   (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
-    abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
   assume hbase: base in omega
   assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
@@ -3046,7 +3077,7 @@ theorem tr.entry1_32s(base, code, statics, f, k, len0, z0, a1, len, d, c, z1, z2
       abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
   (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
-    abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
   assume hbase: base in omega
   assume hat0: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
@@ -6477,7 +6508,7 @@ proof
     have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, {X}, r4, simp(r4, hd), below)
     have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(z0, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0,m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have rp: app(M1, "rip") = a2 by simp()
     have ld := apply(tr.le_store8, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {X}, simp(pt), simp(r4, hd), xo)
     have du := mp(dom_update[f := empty, k := d, v := pair(8, x)], taut(dom_empty))
@@ -6518,7 +6549,7 @@ theorem tr.entry1_64(base, code, statics, f, len, d, z1, z2, a2, x0. q, x3 x4 x2
       abi.view(tr.view1(s, d, 8, app(app(s, "gpr"), 7)), s))) ->
   (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
-    abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
   assume hbase: base in omega
   assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
@@ -6561,8 +6592,8 @@ proof
   have hvu: W in univ(1) by simp(su, vU)
   // the spec applied: its body at args
   have ae: app(SPEC, args) = mkprog(x1 x2. !ord_le(1, seq_len(args)) || bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))) by simp(hA)
-  have ma: abi.matches_at(SPEC, args, s, V, o) proof
-    have enough: ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
+  have ma: tr.matches_at_t(SPEC, args, s, V, o) proof
+    have enough: ord_le(1, seq_len(args)) -> tr.matches_at_t(SPEC, args, s, V, o) proof
       assume hg: ord_le(1, seq_len(args))
       have ap := apply(abi.arg_passed, {s}, {args}, hA, he, hg)
       have hx: bits_of_int(64, app(app(s, "gpr"), 7)) = bits_of_int(64, app(args, 0)) by simp(ap)
@@ -6584,7 +6615,7 @@ proof
       have sim := apply(tr.sim_red, red, sim0)
       show := apply(tr.entry_d,{SPEC}, {args}, {s}, {V}, {o}, sim, hr)
     qed
-    have few: !ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
+    have few: !ord_le(1, seq_len(args)) -> tr.matches_at_t(SPEC, args, s, V, o) proof
       assume hng: !ord_le(1, seq_len(args))
       have eu: empty in univ(1) by simp()
       have pu: pair(W, exc(W, empty)) in univ(1) by simp(hvu)
@@ -6593,9 +6624,9 @@ proof
       have rs := rewrite(sym(ae), rr)
       have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
       have ub: ex e. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && runs(app(SPEC, args), W, exc(W, e)) by ex_intro({empty}, taut(eu, eno, rs))
-      show by defs(taut(ub), abi.matches_at)
+      show by defs(taut(ub), tr.matches_at_t)
     qed
     show by taut(enough, few)
   qed
-  show by defs(ex_intro({V}, taut(vf, ma)), abi.matches)
+  show by defs(ex_intro({V}, taut(vf, ma)), tr.matches_t)
 qed

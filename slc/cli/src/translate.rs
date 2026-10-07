@@ -3027,17 +3027,34 @@ pub fn translate(args: &[String]) -> CResult {
     // the entry: mov [rsp + d], edi / rdi (the argument's n bytes); none
     // without arguments (the first point the entry itself)
     let (e_len, e_name) = (g.insns[&entry].len, g.insns[&entry].name.clone());
-    let ef = if guarded { g.pairs(&g.insns[&entry].fields, 5).ok_or("the entry's fields")? } else { Vec::new() };
+    // (a frame first: sub rsp, k (k <= 8), the store after it)
+    let sub = (|| {
+        let i = &g.insns[&entry];
+        let x = (i.row == 60).then(|| g.pairs(&i.fields, 5)).flatten()?;
+        let (t, r) = g.tag(&x[2])?;
+        (nat(&x[0])? == 8 && nat(&x[1])? == 5 && t == 0 && nat(&r)? == 4).then_some(())?;
+        let k = nat(&x[4]).filter(|k| *k <= 8)?;
+        Some((k, x[3].clone()))
+    })()
+    .filter(|_| guarded);
+    let (fr0, store) = match &sub {
+        Some((k, _)) => (*k, (entry + e_len) % P64),
+        None => (0, entry),
+    };
+    let (s_len, s_name) = (g.insns[&store].len, g.insns[&store].name.clone());
+    let ef = if guarded { g.pairs(&g.insns[&store].fields, 5).ok_or("the entry's fields")? } else { Vec::new() };
     let (d, n) = if guarded {
-        match (g.insns[&entry].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
-            (75, Some(n), Some(7), Some(d)) if n == 4 || n == 8 => (d, n),
-            _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi` or `rdi`", entry)),
+        match (g.insns[&store].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
+            (75, Some(n), Some(7), Some(d)) if n == 4 || (n == 8 && sub.is_none()) => (d, n),
+            _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi` or `rdi` (after a `sub rsp, k`)", store)),
         }
     } else {
         (lit(0), 0)
     };
-    let dn = nat(&d).ok_or("the entry's displacement")?;
-    let a2 = if guarded { (entry + e_len) % P64 } else { entry };
+    let dd = nat(&d).ok_or("the entry's displacement")?;
+    // (the argument's home: its offset from the entry's rsp)
+    let dn = (dd + P64 - fr0) % P64;
+    let a2 = if guarded { (store + s_len) % P64 } else { entry };
     let x = g.mk("bits_of_int", vec![lit(8 * n), g.mk("app", vec![args_t.clone(), lit(0)])]);
     // (the entry rule, the argument register's value stored)
     let (entry_rule, arg_reg) = if n == 8 { ("tr.entry1_64", "app(app(s, \"gpr\"), 7)".to_string()) } else { ("tr.entry1_32", "bits_slice(app(app(s, \"gpr\"), 7), 31, 0)".to_string()) };
@@ -3055,7 +3072,7 @@ pub fn translate(args: &[String]) -> CResult {
     // the proof
     let st0 = St {
         a: a2,
-        fr: 0,
+        fr: fr0,
         regs: Vec::new(),
         rs: "empty".into(),
         ds: "false".into(),
@@ -3112,7 +3129,8 @@ pub fn translate(args: &[String]) -> CResult {
     let sp = if srange.is_some() { format!("{p}.statics(statics) -> ") } else { String::new() };
     if guarded {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, 0, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
+            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
+            fr0,
             a2,
             dn,
             n,
@@ -3201,7 +3219,25 @@ pub fn translate(args: &[String]) -> CResult {
         Some(_) => (format!("  assume hst: {p}.statics(statics)\n"), format!("mp(all_elim({p}.body, {{statics}}), hst)")),
         None => (String::new(), format!("all_elim({p}.body, {{statics}})")),
     };
-    if guarded {
+    if let Some((k, z0)) = &sub {
+        o.push_str(&format!(
+            "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry1_32s[base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {body})\n",
+            b = g.base,
+            c = g.code,
+            spec = spec_name,
+            len0 = e_len,
+            z0 = g.print(z0),
+            a1 = store,
+            len = s_len,
+            d = dd,
+            cc = dn,
+            z1 = g.print(&ef[3]),
+            z2 = g.print(&ef[4]),
+            a2 = a2,
+            at0 = e_name,
+            at1 = s_name,
+        ));
+    } else if guarded {
         o.push_str(&format!(
             "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {body})\n",
             er = entry_rule,
@@ -3227,7 +3263,7 @@ pub fn translate(args: &[String]) -> CResult {
         let _ = (e_len, e_name);
     }
     o.push_str(&format!(
-        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> abi.matches({spec}(), args, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
+        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> tr.matches_t({spec}(), args, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
         b = g.base,
         c = g.code,
         spec = spec_name
