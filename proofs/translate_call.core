@@ -1587,3 +1587,194 @@ proof
   qed
   show by taut(expand(hb, tr.rbd), c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  After the callee: the loaded code, the return address
+
+// (code at the same pages and bytes: loaded still)
+theorem tr.code_at_tr: all v1 v2 gb gc. abi.code_at(v1, gb, gc) ->
+  (all i. i in omega -> int_lt(i, seq_len(gc)) ->
+    app(app(v2, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(v1, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) &&
+    app(app(v2, "bytes"), bits_of_int(64, int_add(gb, i))) = app(app(v1, "bytes"), bits_of_int(64, int_add(gb, i)))) ->
+  abi.code_at(v2, gb, gc)
+proof
+  fix v1
+  fix v2
+  fix gb
+  fix gc
+  assume hc: abi.code_at(v1, gb, gc)
+  assume he: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+    app(app(v2, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(v1, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) &&
+    app(app(v2, "bytes"), bits_of_int(64, int_add(gb, i))) = app(app(v1, "bytes"), bits_of_int(64, int_add(gb, i)))
+  have cc := expand(hc, abi.code_at)
+  have r: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+      ((x86_64_linux.fetchable(v2, bits_of_int(64, int_add(gb, i))) && !x86_64_linux.can_access(v2, bits_of_int(64, int_add(gb, i)), 1)) &&
+        !abi.stack_page(v2, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))))) &&
+      app(app(v2, "bytes"), bits_of_int(64, int_add(gb, i))) = app(gc, i) proof
+    fix i
+    assume hi: i in omega
+    assume hl: int_lt(i, seq_len(gc))
+    have ci := mp(all_elim(cc, {i}), hi, hl)
+    have ei := mp(all_elim(he, {i}), hi, hl)
+    have pe: app(app(v2, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(v1, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) by taut(ei)
+    have be: app(app(v2, "bytes"), bits_of_int(64, int_add(gb, i))) = app(app(v1, "bytes"), bits_of_int(64, int_add(gb, i))) by taut(ei)
+    have ac := apply(tr.access_page, {v2}, {v1}, {bits_of_int(64, int_add(gb, i))}, {bits_of_int(64, int_add(gb, i))}, {1}, refl({x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))}), pe)
+    have f1: x86_64_linux.fetchable(v1, bits_of_int(64, int_add(gb, i))) by taut(ci)
+    have f2: x86_64_linux.fetchable(v2, bits_of_int(64, int_add(gb, i))) by defs(rewrite(sym(pe), expand(f1, x86_64_linux.fetchable, x86_64_linux.mapped)), x86_64_linux.fetchable, x86_64_linux.mapped)
+    have s1: !abi.stack_page(v1, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) by taut(ci)
+    have s2: !abi.stack_page(v2, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) by defs(rewrite(sym(pe), expand(s1, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+    have b1: app(app(v1, "bytes"), bits_of_int(64, int_add(gb, i))) = app(gc, i) by taut(ci)
+    have b2 := trans(be, b1)
+    show by taut(ci, ac, f2, s2, b2)
+  qed
+  show by defs(r, abi.code_at)
+qed
+
+// (a mapped, non-stack page: no scratch byte on it)
+theorem tr.not_scratch: all vm sp a. a in bits(64) -> x86_64_linux.mapped(vm, x86_64_linux.page_of(a)) -> !abi.stack_page(vm, x86_64_linux.page_of(a)) ->
+  !abi.scratch(vm, sp, a)
+proof
+  fix vm
+  fix sp
+  fix a
+  assume ha: a in bits(64)
+  assume hm: x86_64_linux.mapped(vm, x86_64_linux.page_of(a))
+  assume hs: !abi.stack_page(vm, x86_64_linux.page_of(a))
+  have g: abi.scratch(vm, sp, a) -> false proof
+    assume sc: abi.scratch(vm, sp, a)
+    have sc2 := expand(sc, abi.scratch)
+    have lt: int_lt(a, sp) by taut(sc2)
+    have al: all x0. x0 in omega -> int_le(int_div(a, x86_64_linux.PAGE), x0) && int_le(x0, int_div(int_sub(sp, 1), x86_64_linux.PAGE)) ->
+      abi.stack_page(vm, x0) || !x86_64_linux.mapped(vm, x0) by taut(sc2)
+    have ao: a in omega by simp(ha)
+    have po: int_div(a, x86_64_linux.PAGE) in omega by defs(simp(ao), x86_64_linux.PAGE)
+    have rg: int_le(int_div(a, x86_64_linux.PAGE), int_div(a, x86_64_linux.PAGE)) && int_le(int_div(a, x86_64_linux.PAGE), int_div(int_sub(sp, 1), x86_64_linux.PAGE))
+      by defs(arith(ao, lt), x86_64_linux.PAGE)
+    have c := mp(all_elim(al, {int_div(a, x86_64_linux.PAGE)}), po, rg)
+    have hm2: x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) by defs(hm, x86_64_linux.page_of)
+    have hs2: !abi.stack_page(vm, int_div(a, x86_64_linux.PAGE)) by defs(hs, x86_64_linux.page_of)
+    show by taut(c, hm2, hs2)
+  qed
+  show by taut(g)
+qed
+
+// (a code byte: on a mapped, non-stack page)
+theorem tr.code_page: all vm gb gc i. abi.code_at(vm, gb, gc) -> i in omega -> int_lt(i, seq_len(gc)) ->
+  x86_64_linux.mapped(vm, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) && !abi.stack_page(vm, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))))
+proof
+  fix vm
+  fix gb
+  fix gc
+  fix i
+  assume hc: abi.code_at(vm, gb, gc)
+  assume hi: i in omega
+  assume hl: int_lt(i, seq_len(gc))
+  have ci := mp(all_elim(expand(hc, abi.code_at), {i}), hi, hl)
+  have f: x86_64_linux.fetchable(vm, bits_of_int(64, int_add(gb, i))) by taut(ci)
+  have m: x86_64_linux.mapped(vm, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) by taut(expand(f, x86_64_linux.fetchable))
+  show by taut(m, ci)
+qed
+
+// loaded code: seen through a callee's view of the memory
+theorem tr.loaded_sv: all vv cv sp gb gc st. abi.scratch_view(vv, cv, sp) -> abi.loaded(cv, gb, gc, st) -> abi.loaded(vv, gb, gc, st)
+proof
+  fix vv
+  fix cv
+  fix sp
+  fix gb
+  fix gc
+  fix st
+  assume hs: abi.scratch_view(vv, cv, sp)
+  assume hl: abi.loaded(cv, gb, gc, st)
+  have sv := expand(hs, abi.scratch_view)
+  have e0: fn_update(vv, "bytes", app(cv, "bytes")) = cv by taut(sv)
+  have q0: app(fn_update(vv, "bytes", app(cv, "bytes")), "pages") = app(vv, "pages") by simp()
+  have pe := sym(rewrite(e0, q0))
+  have be: all x0. x0 in bits(64) -> !abi.scratch(cv, sp, x0) -> app(app(vv, "bytes"), x0) = app(app(cv, "bytes"), x0) by taut(sv)
+  have cc: abi.code_at(cv, gb, gc) by taut(expand(hl, abi.loaded))
+  have he: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+      app(app(vv, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(cv, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) &&
+      app(app(vv, "bytes"), bits_of_int(64, int_add(gb, i))) = app(app(cv, "bytes"), bits_of_int(64, int_add(gb, i))) proof
+    fix i
+    assume hi: i in omega
+    assume hli: int_lt(i, seq_len(gc))
+    have cp := apply(tr.code_page, {cv}, {gb}, {gc}, {i}, cc, hi, hli)
+    have xb: bits_of_int(64, int_add(gb, i)) in bits(64) by defs(simp(), bits_of_int, pow2)
+    have ns := apply(tr.not_scratch, {cv}, {sp}, {bits_of_int(64, int_add(gb, i))}, xb, taut(cp), taut(cp))
+    have b := mp(all_elim(be, {bits_of_int(64, int_add(gb, i))}), xb, ns)
+    have p: app(app(vv, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(cv, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) by simp(pe)
+    show by taut(p, b)
+  qed
+  have c2 := apply(tr.code_at_tr, {cv}, {vv}, {gb}, {gc}, cc, he)
+  have stc: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(cv, int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(cv, int_div(x0, x86_64_linux.PAGE))
+    by taut(expand(hl, abi.loaded))
+  have stv: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(vv, int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(vv, int_div(x0, x86_64_linux.PAGE)) proof
+    fix x0
+    assume h0: x0 in omega
+    assume h1: x0 in st
+    have c := mp(all_elim(stc, {x0}), h0, h1)
+    show by defs(rewrite(sym(pe), expand(c, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+  qed
+  show by defs(taut(c2, stv), abi.loaded)
+qed
+
+// ... and through the write-back of the callee's world wv (machine memory
+// xv matching it outside the callee's scratch space)
+theorem tr.loaded_wm: all cv xv wv sp gb gc st. abi.world_matches(cv, xv, wv, sp) -> abi.loaded(cv, gb, gc, st) -> abi.loaded(wv, gb, gc, st) ->
+  abi.loaded(xv, gb, gc, st)
+proof
+  fix cv
+  fix xv
+  fix wv
+  fix sp
+  fix gb
+  fix gc
+  fix st
+  assume hm: abi.world_matches(cv, xv, wv, sp)
+  assume hl: abi.loaded(cv, gb, gc, st)
+  assume hw: abi.loaded(wv, gb, gc, st)
+  have wm := expand(hm, abi.world_matches)
+  have be: all x0. x0 in bits(64) -> !abi.scratch(cv, sp, x0) -> app(app(xv, "bytes"), x0) = app(app(wv, "bytes"), x0) by taut(wm)
+  have pg: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ->
+    app(app(xv, "pages"), x0) = app(app(wv, "pages"), x0) || ((abi.scratch_page(cv, sp, x0) && app(app(wv, "pages"), x0) = none) && abi.stack_page(xv, x0)) by taut(wm)
+  // (a page mapped in wv: xv's the same)
+  have pm: all p. p in omega -> x86_64_linux.mapped(wv, p) -> app(app(xv, "pages"), p) = app(app(wv, "pages"), p) proof
+    fix p
+    assume hp: p in omega
+    assume hmp: x86_64_linux.mapped(wv, p)
+    have mm := expand(hmp, x86_64_linux.mapped)
+    have pd: p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(hp, mm)
+    have c := mp(all_elim(pg, {p}), pd)
+    show by taut(c, mm)
+  qed
+  have ccv: abi.code_at(cv, gb, gc) by taut(expand(hl, abi.loaded))
+  have cwv: abi.code_at(wv, gb, gc) by taut(expand(hw, abi.loaded))
+  have he: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+      app(app(xv, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(wv, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) &&
+      app(app(xv, "bytes"), bits_of_int(64, int_add(gb, i))) = app(app(wv, "bytes"), bits_of_int(64, int_add(gb, i))) proof
+    fix i
+    assume hi: i in omega
+    assume hli: int_lt(i, seq_len(gc))
+    have cpc := apply(tr.code_page, {cv}, {gb}, {gc}, {i}, ccv, hi, hli)
+    have cpw := apply(tr.code_page, {wv}, {gb}, {gc}, {i}, cwv, hi, hli)
+    have xb: bits_of_int(64, int_add(gb, i)) in bits(64) by defs(simp(), bits_of_int, pow2)
+    have po: x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))) in omega by defs(simp(xb), x86_64_linux.page_of, x86_64_linux.PAGE)
+    have ns := apply(tr.not_scratch, {cv}, {sp}, {bits_of_int(64, int_add(gb, i))}, xb, taut(cpc), taut(cpc))
+    have b := mp(all_elim(be, {bits_of_int(64, int_add(gb, i))}), xb, ns)
+    have p := mp(all_elim(pm, {x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))}), po, taut(cpw))
+    show by taut(p, b)
+  qed
+  have c2 := apply(tr.code_at_tr, {wv}, {xv}, {gb}, {gc}, cwv, he)
+  have stw: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(wv, int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(wv, int_div(x0, x86_64_linux.PAGE))
+    by taut(expand(hw, abi.loaded))
+  have stx: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(xv, int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(xv, int_div(x0, x86_64_linux.PAGE)) proof
+    fix x0
+    assume h0: x0 in omega
+    assume h1: x0 in st
+    have c := mp(all_elim(stw, {x0}), h0, h1)
+    have po: int_div(x0, x86_64_linux.PAGE) in omega by defs(simp(h0), x86_64_linux.PAGE)
+    have p := mp(all_elim(pm, {int_div(x0, x86_64_linux.PAGE)}), po, taut(c))
+    show by defs(rewrite(sym(p), expand(c, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+  qed
+  show by defs(taut(c2, stx), abi.loaded)
+qed
