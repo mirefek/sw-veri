@@ -532,7 +532,7 @@ planned, and everything it does not use is removed.
    Its frame write is the argument's store, which the entry rule takes into
    the view: its loads are still before a write of the frame (`ds` false),
    so "loads after the frame is written" is still open.
-8. **Calls (in progress, 2026-10-07).**
+8. **Calls (the rule done, 2026-10-07).**
    - GIMPLE (layers/gimple.sl, `call_at`): the caller's private frame
      `[sp2, sp)` is arbitrary before a call (`frame_at_call`, the stack
      maybe grown down to the return address's slot) and must be unchanged
@@ -599,7 +599,34 @@ planned, and everything it does not use is removed.
      at the top.
    - A raise (undefined behaviour) may end in any world (`abi.raise_state`):
      a callee's raise reaches its caller.
-   - Still to do: the call rule -- the callee's entry conditions, its
-     contract, the GIMPLE call lemmas (`call_at`'s choices, the callee's
-     world, the overflow points, the private frame), the result and the
-     clobbered registers; a_clz_32.
+   - **The call rule (done): `tr.call1`** (proofs/translate_call.core), a
+     `call rel32` from a frame of 8 bytes against `call1` of one argument.
+     The step may fault (`tr.step_x`): the push's 8 bytes are on one page
+     (`tr.push_at`); its fault (proofs/x86_stack.core: `touch_range`'s
+     faults, the pages a push may grow, `x86.pages_in`) is a crash in the
+     caller's contract (no mapping: `abi.overflow_at`, the I/O that of
+     GIMPLE's overflow before the callee) or, the page mapped without
+     write access, GIMPLE's call undefined (its stack check). The push
+     done, GIMPLE's frame at the call is the callee's entry memory itself
+     (`tr.push_frame`: the coupling's differing bytes are the homes, in
+     the private frame), its checks failing are undefined, holding they
+     are the callee's entry conditions (`tr.callee_entry`). The callee's
+     contract on its entry, through the run split (`tr.callee_sim`): its
+     raise is the caller's (`tr.callee_raise_ub`); its crash is the
+     caller's (`tr.callee_crash`: below its sp so below the caller's, the
+     I/O that of its spec's return -- GIMPLE overflowing after the call --,
+     its overflow, or its divergence); its return, the private frame kept
+     (else undefined), gives the coupling after the call
+     (`tr.post_call`: the world written back, rax the result, no homes)
+     where the certificate's claim goes on. The callee's spec is typed and
+     keeps input, events and loaded code (`tr.callee_io`), program-wide
+     premises.
+   - Changes this needed: the ABI's crash address stated at the fault
+     (`abi.overflow_at`: the scratch space of the entry fails once munmap
+     frees pages, and does not compose); `with` writing the state back on
+     an exception (as the language docs say; the elaborator dropped the
+     callee's I/O); loaded code not on stack pages; the coupling's world
+     cpu and sp; machine and world differing only at the homes.
+   - Still to do: the generator (`slc translate` emitting `tr.call1`, the
+     claim after the call for every world), a caller's entry with the
+     callee's code loaded, a_clz_32.
