@@ -133,25 +133,31 @@ proc[Machine] run_to_return() {
 }
 
 ///////////////////////////////////////////////////////////////////////
-//  Crashes the spec cannot foresee (stack overflow)
+//  Stack overflow
 //
-// A C-level spec knows nothing about stack usage, so the implementation may
-// run out of stack at any point inside the function: an access to its
-// scratch space faults (the stack cannot grow further). The process dies:
-// memory and registers no longer matter, but the I/O done so far does.
-// Policy: that I/O is the beginning of some complete behavior the spec
-// allows. (Sound: the crashed run is the same as a run with a larger stack
-// limit, cut short, and that run is allowed by the spec.)
+// The implementation may run out of stack inside the function: an access
+// to its scratch space faults (the stack cannot grow further). The process
+// dies: memory and registers no longer matter, but the I/O done so far
+// does. Policy: the spec says where it may overflow (`stack_overflow`), and
+// the crash's I/O is that of such a point of the spec -- or of one where
+// the spec does no more I/O (it returns, or runs on silently).
 
-// a crash state's I/O lies between the entry and some complete outcome the
-// spec allows from `w` -- including infinite runs, whose outcome carries the
-// limit of their (possibly infinite) trace
-pred crash_io_ok[S](w: S, spec: CFun2[S], args: Args, crash: Os) =
-  w.os.input = crash.input && w.os.events <= crash.events &&
+// Specs say where a stack overflow may stop them: the exception
+// `stack_overflow` (no undefined behavior, see `spec_raises`). Readable
+// GIMPLE may overflow at every call; a spec above it at every call or
+// stack push it models. (The machine itself has no such exception: it
+// faults with segv in the scratch space.)
+exception stack_overflow
+
+// a crash state's I/O is that of some outcome the spec allows from `w`
+// where the I/O stops: a stack overflow, a normal return (the crash came
+// after the last I/O), or an infinite run with that trace
+pred overflow_ok[S](w: S, spec: CFun2[S], args: Args, crash: Os) =
+  w.os.input = crash.input &&
   ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
-    ok(s, _)   => crash.events <= s.os.events
-    exc(s, _)  => crash.events <= s.os.events
-    diverge(t) => crash.events <= t.os.events
+    ok(s, _)   => s.os.events = crash.events
+    exc(s, e)  => e = stack_overflow && s.os.events = crash.events
+    diverge(t) => t.os.events = crash.events
   }
 
 ///////////////////////////////////////////////////////////////////////
@@ -162,11 +168,12 @@ pred crash_io_ok[S](w: S, spec: CFun2[S], args: Args, crash: Os) =
 // exceptions included) or a deliberate crash (e.g. a_crash). In both cases
 // the implementation owes nothing: in C, undefined behavior makes the whole
 // run undefined, and a program's top-level spec (malloc's) never raises, so
-// it excludes both.
+// it excludes both. A stack overflow is not raising: the implementation
+// then crashes as `overflow_ok` allows.
 pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
   ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
     ok(_, _)   => false
-    exc(_, _)  => true
+    exc(_, e)  => e != stack_overflow
     diverge(_) => false
   }
 
@@ -213,7 +220,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
   } or {
     let vm0 = vm
     let a = any Addr where scratch(vm0, sp, uint(a))
-    havoc self where crash_io_ok(w0, spec, args, os)
+    havoc self where overflow_ok(w0, spec, args, os)
     either { raise segv(a, maperr) } or { raise segv(a, accerr) }
   }
 }

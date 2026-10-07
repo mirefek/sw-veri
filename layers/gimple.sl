@@ -394,8 +394,11 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
 // frame [sp2, hi) is the caller's own: a callee that changes it is
 // undefined (C: none of the caller's objects it may access is there). A
 // call with the thread pointer broken (the word at fs:0 not pointing to
-// itself, as the ABI requires at every call) is undefined.
+// itself, as the ABI requires at every call) is undefined. Every call may
+// overflow the stack (`stack_overflow`, the ABI's: no undefined behavior).
 proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  // (a call may overflow the stack: here, the world as it is)
+  either { raise stack_overflow } or { }
   var regs: List[bits[64]] = []
   for i in 0..len(args) { regs := regs ++ [any r: bits[64] where r in in_reg(args[i][0], args[i][1])] }
   let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0

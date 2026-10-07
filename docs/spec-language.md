@@ -436,13 +436,15 @@ it.
   - rbx, rbp, r12–r15 and rsp are restored, the result is in rax, and all
     other registers and the flags are clobbered;
   - **or** it runs out of stack: a fault (`maperr` or `accerr`) at an address
-    of its scratch space, which is always possible. Memory and registers are
-    then arbitrary, since
-    the process dies. The I/O done so far (output written, input consumed)
-    must be the beginning of some complete behavior the spec allows. This is
-    sound because the crashed run is the same run as with a larger stack
-    limit, cut short;
-  - if the spec may raise from the entry world (`spec_raises`), anything.
+    of its scratch space. Memory and registers are then arbitrary, since the
+    process dies. The I/O done so far (output written, input consumed) must
+    be that of a point where the spec may stop (`overflow_ok`): a
+    `stack_overflow` outcome of the spec, or an outcome after which it does
+    no more I/O (it returns, or runs on silently). Specs say where they may
+    overflow: readable GIMPLE at every call, a spec above it at every call or
+    stack push it models;
+  - if the spec may raise from the entry world (`spec_raises`: an exception
+    other than `stack_overflow`), anything.
     A C function's spec raises only through undefined behavior
     (`undefined` allows every outcome, exceptions included) or a deliberate
     crash, and C promises nothing then. (A spec's `undefined` alone would
