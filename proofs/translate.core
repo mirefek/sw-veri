@@ -1968,6 +1968,45 @@ proof
   show by defs(taut(si2, e2), dom)
 qed
 
+// a key not in a map: not in it after updates of other keys
+theorem tr.dom_none: all k. !(k in dom(empty))
+proof
+  fix k
+  show by simp(dom_empty)
+qed
+
+theorem tr.dom_out: all f k j v. !(k in dom(f)) -> !(k = j) -> !(k in dom(fn_update(f, j, v)))
+proof
+  fix f
+  fix k
+  fix j
+  fix v
+  assume hk: !(k in dom(f))
+  assume hne: !(k = j)
+  have no: k in dom(fn_update(f, j, v)) -> false proof
+    assume hin: k in dom(fn_update(f, j, v))
+    have si := set_image_def[s := fn_update(f, j, v), f := x. fst(x), y := k]
+    have e: ex z. z in fn_update(f, j, v) && fst(z) = k by taut(si, expand(hin, dom))
+    obtain z, hz from e
+    have i := fn_update_iff[f := f, k := j, v := v, z := z]
+    have c1: z in f && fst(z) != j -> false proof
+      assume h1: z in f && fst(z) != j
+      have si2 := set_image_def[s := f, f := x. fst(x), y := k]
+      have e2: ex y. y in f && fst(y) = k by ex_intro({z}, taut(h1, hz))
+      have kin: k in dom(f) by defs(taut(si2, e2), dom)
+      show by taut(hk, kin)
+    qed
+    have c2: z = pair(j, v) -> false proof
+      assume h2: z = pair(j, v)
+      have zk: fst(z) = k by taut(hz)
+      have f2: fst(z) = j by simp(h2)
+      show by taut(hne, trans(sym(zk), f2))
+    qed
+    show by taut(i, hz, c1, c2)
+  qed
+  show by taut(no)
+qed
+
 theorem tr.regs_get: all m rs g n u. tr.regs(m, rs) -> g in dom(rs) -> app(rs, g) = pair(n, u) -> app(app(m, "gpr"), g) = u && u in bits(int_mul(8, n))
 proof
   fix m
@@ -4560,6 +4599,69 @@ proof
   assume he: e in univ(1)
   assume hf: !tr.s32_fits(int_add(sint(32, a), sint(32, b)))
   show by defs(simp(hs, h2, he, hf), gimple.sadd, gimple.arith)
+qed
+
+// ... and a signed subtraction
+theorem tr.sint_sub32: all a b. a in bits(32) -> b in bits(32) ->
+  int_mod(int_sub(sint(32, a), sint(32, b)), 4294967296) = int_mod(int_sub(a, b), 4294967296)
+proof
+  fix a
+  fix b
+  assume ha: a in bits(32)
+  assume hb: b in bits(32)
+  have sa: sint(32, a) = a || sint(32, a) = int_sub(a, 4294967296) by defs(simp(ha), sint)
+  have sb: sint(32, b) = b || sint(32, b) = int_sub(b, 4294967296) by defs(simp(hb), sint)
+  show by arith(ha, hb, sa, sb)
+qed
+
+theorem tr.ssub32_ok: all s a b. s in univ(1) -> a in bits(32) -> b in bits(32) -> tr.s32_fits(int_sub(sint(32, a), sint(32, b))) ->
+  runs(gimple.ssub(32, a, b), s, ok(s, bits_sub(32, a, b)))
+proof
+  fix s
+  fix a
+  fix b
+  assume hs: s in univ(1)
+  assume ha: a in bits(32)
+  assume hb: b in bits(32)
+  assume hf: tr.s32_fits(int_sub(sint(32, a), sint(32, b)))
+  have e := mp(tr.sint_sub32, {a}, {b}, ha, hb)
+  have v: bits_of_int(32, int_sub(sint(32, a), sint(32, b))) = bits_sub(32, a, b) by defs(simp(e), bits_of_int, bits_sub)
+  show by defs(simp(hs, ha, hb, hf, v), gimple.ssub, gimple.arith, gimple.wrap)
+qed
+
+// (a literal first operand: the value with the literal, as the machine has it)
+theorem tr.ssub32_ok_lit: all s k b. s in univ(1) -> k in bits(32) -> b in bits(32) -> tr.s32_fits(int_sub(sint(32, bits_of_int(32, k)), sint(32, b))) ->
+  runs(gimple.ssub(32, bits_of_int(32, k), b), s, ok(s, bits_sub(32, k, b)))
+proof
+  fix s
+  fix k
+  fix b
+  assume hs: s in univ(1)
+  assume hk: k in bits(32)
+  assume hb: b in bits(32)
+  assume hf: tr.s32_fits(int_sub(sint(32, bits_of_int(32, k)), sint(32, b)))
+  have p32: pow2(32) = 4294967296 by simp()
+  have m32: int_mod(k, 4294967296) = k by arith(hk)
+  have q: bits_of_int(32, k) = k by defs(rewrite(sym(p32), m32), bits_of_int)
+  have hk2: bits_of_int(32, k) in bits(32) by rewrite(sym(q), hk)
+  have o := mp(tr.ssub32_ok, {s}, {bits_of_int(32, k)}, {b}, hs, hk2, hb, hf)
+  have vq: bits_sub(32, bits_of_int(32, k), b) = bits_sub(32, k, b) by simp(q)
+  show by rewrite(vq, o)
+qed
+
+theorem tr.ssub32_ub: all s a b s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> !tr.s32_fits(int_sub(sint(32, a), sint(32, b))) ->
+  runs(gimple.ssub(32, a, b), s, exc(s2, e))
+proof
+  fix s
+  fix a
+  fix b
+  fix s2
+  fix e
+  assume hs: s in univ(1)
+  assume h2: s2 in univ(1)
+  assume he: e in univ(1)
+  assume hf: !tr.s32_fits(int_sub(sint(32, a), sint(32, b)))
+  show by defs(simp(hs, h2, he, hf), gimple.ssub, gimple.arith)
 qed
 
 // p + d, d a non-negative 64-bit offset (a field's)

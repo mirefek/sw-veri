@@ -627,6 +627,21 @@ planned, and everything it does not use is removed.
      an exception (as the language docs say; the elaborator dropped the
      callee's I/O); loaded code not on stack pages; the coupling's world
      cpu and sp; machine and world differing only at the homes.
-   - Still to do: the generator (`slc translate` emitting `tr.call1`, the
-     claim after the call for every world), a caller's entry with the
-     callee's code loaded, a_clz_32.
+   - **a_clz_32 by translation (done):** proofs/a_clz_32_tr.core,
+     generated and checked in `translations_are_generated_and_check`.
+     `slc translate` emits `tr.call1` at a `call` meeting the spec's
+     `call1`; the claim after the call is a sub-proof for every world and
+     result (its definitions local to it). The loaded code is the callee's
+     followed by the caller's (`seq_concat`; the entry via
+     `tr.entry1_32s_w`, the caller's bytes loaded after the callee's,
+     `tr.loaded_after`). The callee's contract, typing and `tr.callee_io`
+     are premises of `aclz.implements`, for any G0 implementing at the
+     callee's address. New rules: `shr r32, 1` (register and home),
+     `or r32, [home]`, `sub r32, r32`, `add rsp, k` closing the frame
+     (rsp not in the register map: `tr.dom_out`), GIMPLE's 32-bit signed
+     subtraction (`tr.ssub32_ok`, with a literal operand
+     `tr.ssub32_ok_lit`).
+   - Still to do: instantiate `aclz.implements` with a_ctz_32
+     (`act.implements` widened to the concatenated code,
+     `tr.implements_widen`; a_ctz_32's spec typed and keeping I/O);
+     frames above 8 bytes; calls of more arguments.

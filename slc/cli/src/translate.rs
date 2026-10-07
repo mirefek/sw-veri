@@ -94,6 +94,9 @@ enum Red {
     /// a store defined under `cond` (the rest kept: the machine's store
     /// makes it), raising as `Split`'s
     Guard { cond: Term, ub: (usize, String) },
+    /// a call of `g` with one argument `ar` (the machine's `call` makes
+    /// it): the block's continuation, handlers and rest
+    Call { g: Term, ar: Term, a: Term, xx: Term, dd: Term, k: Term },
 }
 
 /// A store of the spec: st8(p, off, v) or st32(p, off, v) (or a helper
@@ -163,6 +166,11 @@ struct Gen<'e> {
     /// the register maps' updates: a map's name -> its parent's, the
     /// register, the value pair
     rmaps: HashMap<String, (String, u128, String)>,
+    /// the calls met: the callee (a spec parameter) and its address
+    callees: Vec<(Term, u128)>,
+    /// the contract's code: the function's own, or with its callees'
+    lbase: String,
+    lcode: String,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,
@@ -376,6 +384,18 @@ impl<'e> Gen<'e> {
             SymKind::Defined { params, body } if params.is_empty() && a.is_empty() => nat(body),
             _ => None,
         }
+    }
+
+    /// an n-bit literal `bits_of_int(n, k)` as k (as the machine has it)
+    fn lit_bits(&self, t: &Term) -> Term {
+        if let Some(a) = self.app(t, "bits_of_int", 2) {
+            if let (Some(n), Some(k)) = (nat(&a[0]), nat(&a[1])) {
+                if n < 128 && k < 1 << n {
+                    return a[1].clone();
+                }
+            }
+        }
+        t.clone()
     }
 
     fn new_q(&mut self, t: Term) -> usize {
@@ -678,6 +698,20 @@ impl<'e> Gen<'e> {
         Some(format!("mp(all_elim(tr.dom_keep, {{{parent}}}, {{{g}}}, {{{r}}}, {{{pv}}}), {inner}, simp())"))
     }
 
+    /// `!(g in dom(rs))` for a register not in the map named rs, by its
+    /// updates (`tr.dom_out`) down to empty (`tr.dom_none`)
+    fn dom_out_pf(&self, rs: &str, g: u128) -> Option<String> {
+        if rs == "empty" {
+            return Some(format!("all_elim(tr.dom_none, {{{g}}})"));
+        }
+        let (parent, r, pv) = self.rmaps.get(rs)?;
+        if *r == g {
+            return None;
+        }
+        let inner = self.dom_out_pf(parent, g)?;
+        Some(format!("mp(all_elim(tr.dom_out, {{{parent}}}, {{{g}}}, {{{r}}}, {{{pv}}}), {inner}, simp())"))
+    }
+
     /// the registers two updates or more below the top of the map rs: their
     /// `in dom` facts (simp(L) shows the others)
     fn deep_doms(&self, rs: &str) -> Vec<String> {
@@ -717,6 +751,22 @@ impl<'e> Gen<'e> {
                 let r = self.mk("bits_add", vec![lit(32), a.clone(), b.clone()]);
                 let ok = format!("mp(tr.sadd32_ok, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), {{HC}})", pr(self, &a), pr(self, &b));
                 let ub = format!("mp(tr.sadd32_ub, {{{w}}}, {{{}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}})", pr(self, &a), pr(self, &b));
+                return Ok((Some(cond), r, ok, ub));
+            }
+        }
+        if let Some(x) = self.app(op, "gimple.ssub", 3) {
+            if nat(&x[0]) == Some(32) {
+                let (a, b) = (x[1].clone(), x[2].clone());
+                let s32 = |g: &Gen, t: &Term| g.mk("sint", vec![lit(32), t.clone()]);
+                let ty = self.mk("fn_update", vec![self.mk("fn_update", vec![self.mk("empty", vec![]), Term::bytes(b"prec"), lit(32)]), Term::bytes(b"signed"), self.mk("true", vec![])]);
+                let cond = self.mk("gimple.fits", vec![ty, self.mk("int_sub", vec![s32(self, &a), s32(self, &b)])]);
+                let r = self.mk("bits_sub", vec![lit(32), self.lit_bits(&a), b.clone()]);
+                let ok = if self.lit_bits(&a) != a {
+                    format!("mp(tr.ssub32_ok_lit, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), {{HC}})", pr(self, &self.lit_bits(&a)), pr(self, &b))
+                } else {
+                    format!("mp(tr.ssub32_ok, {{{w}}}, {{{}}}, {{{}}}, {hv}, simp(L), simp(L), {{HC}})", pr(self, &a), pr(self, &b))
+                };
+                let ub = format!("mp(tr.ssub32_ub, {{{w}}}, {{{}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}})", pr(self, &a), pr(self, &b));
                 return Ok((Some(cond), r, ok, ub));
             }
         }
@@ -1232,6 +1282,12 @@ impl<'e> Gen<'e> {
                     let ubr = format!("mp({}, {{{w}}}, {})", rtext, so.ub);
                     return Ok(Some(Red::Guard { cond: so.cond, ub: (u, ubr) }));
                 }
+                // a call of one argument: the machine's call makes it
+                if let Some(c) = self.app(&x[0], "gimple.call1", 2) {
+                    if let Some(one) = self.app(&c[1], "seq_one", 1) {
+                        return Ok(Some(Red::Call { g: c[0].clone(), ar: one[0].clone(), a: al, xx: xl, dd: dl, k: kl }));
+                    }
+                }
                 let (cond, r, okf, ubf) = self.op(&x[0])?;
                 let r = self.value(&r);
                 let args = |r2: (&'static str, Term)| vec![("op", x[0].clone()), r2, ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())];
@@ -1409,6 +1465,12 @@ impl<'e> Gen<'e> {
                     );
                     return Ok(Pf { lines, expr });
                 }
+                // (a call: at the machine's call; the instructions before it first)
+                Some(Red::Call { g, ar, a, xx, dd, k }) => {
+                    if self.insns.get(&st.a).map(|i| i.row) == Some(120) {
+                        return self.call_at(&st, qi, g, ar, a, xx, dd, k);
+                    }
+                }
                 Some(Red::Guard { cond, ub }) => {
                     let (hn, hc, un, dn) = (self.fresh("hn"), self.fresh("hc"), self.fresh("u"), self.fresh("d"));
                     let ct = self.print(&cond);
@@ -1440,6 +1502,140 @@ impl<'e> Gen<'e> {
             }
         }
         self.insn(st)
+    }
+
+    /// A call (tr.call1): the machine's `call rel32` at st's address, the
+    /// spec's call1 of g with the argument ar in rdi; the claim after it
+    /// (at the return address, rax the result) for every world and result,
+    /// its definitions local to it
+    #[allow(clippy::too_many_arguments)]
+    fn call_at(&mut self, st: &St, qi: usize, g: Term, ar: Term, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Pf, String> {
+        let a = st.a;
+        let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
+        if insn.row != 120 {
+            return Err(format!("{:x}: the spec calls, the machine does not", a));
+        }
+        if st.fr != 8 {
+            return Err(format!("{:x}: a call from a frame of {} bytes (only 8 so far)", a, st.fr));
+        }
+        let off = nat(&insn.fields).ok_or_else(|| format!("{:x}: the call's displacement", a))?;
+        let a2 = (a + insn.len) % P64;
+        let f = (a2 + if off >= 1 << 31 { off + (P64 - (1 << 32)) } else { off }) % P64;
+        // the argument: arg(32, X), X in rdi
+        let ax = self.app(&ar, "gimple.arg", 2).filter(|x| nat(&x[0]) == Some(32)).ok_or_else(|| format!("{:x}: a call's argument not of 32 bits", a))?;
+        let x = ax[1].clone();
+        let (n7, v7) = self.reg(st, 7).ok_or_else(|| format!("{:x}: rdi holds no value at the call", a))?;
+        if n7 != 4 || self.canon(&v7) != self.canon(&x) {
+            return Err(format!("{:x}: rdi holds {}, the spec passes {}", a, self.print(&v7), self.print(&x)));
+        }
+        let gi = self.callees.iter().position(|c| c.0 == g && c.1 == f).unwrap_or_else(|| {
+            self.callees.push((g.clone(), f));
+            self.callees.len() - 1
+        });
+        let (gn, wn) = (self.print(&g), st.wn.clone());
+        let hv = st.hvu.clone();
+        // the continuation's raise and divergence: the function's
+        let n = self.fresh("c");
+        let (xv, ev, tv) = (self.var(&format!("XC{n}")), self.var(&format!("EC{n}")), self.var(&format!("TC{n}")));
+        let x8 = Term::bvar(0);
+        let mkq = |gg: &Gen, h: Term| -> Term {
+            let kk = kl.instantiate_params(&[Term::bvar(0), Term::bvar(1)], &gg.env.binders_fn());
+            gg.mk("mkprog", vec![gg.mk("ex", vec![gg.mk("and", vec![h, kk])])])
+        };
+        let qx = mkq(self, xl.instantiate_params(&[xv.clone(), ev.clone(), x8.clone()], &self.env.binders_fn()));
+        let qd = mkq(self, dl.instantiate_params(&[tv.clone(), x8.clone()], &self.env.binders_fn()));
+        let (xs, es, ts) = (self.print(&xv), self.print(&ev), self.print(&tv));
+        let mut lines = vec![
+            format!("have hk{n}: all {xs} {es}. {xs} in univ(1) -> {es} in univ(1) -> runs({}, {wn}, exc({xs}, {es})) proof", self.print(&qx)),
+            format!("  fix {xs}"),
+            format!("  fix {es}"),
+            format!("  assume hx: {xs} in univ(1)"),
+            format!("  assume he: {es} in univ(1)"),
+            format!("  show by defs(simp(hx, he, {hv}), runs, mkprog)"),
+            "qed".into(),
+            format!("have hd{n}: all {ts}. {ts} in univ(1) -> runs({}, {wn}, diverge({ts})) proof", self.print(&qd)),
+            format!("  fix {ts}"),
+            format!("  assume ht: {ts} in univ(1)"),
+            format!("  show by defs(simp(ht, {hv}), runs, mkprog)"),
+            "qed".into(),
+        ];
+        // the claim after the call, for every world W4 and result R0
+        let (wc, rc) = (format!("WC{n}"), format!("RC{n}"));
+        let (w4, r0) = (self.var(&wc), self.var(&rc));
+        let (nv0, nq0, nl0) = (self.vals.len(), self.qs.len(), self.lets.len());
+        let ka = al.instantiate_params(&[Term::bvar(2), r0.clone(), Term::bvar(0)], &self.env.binders_fn());
+        let q2 = self.canon(&mkq(self, ka));
+        let j = self.new_q(q2);
+        let mut st0 = st.clone();
+        st0.a = a2;
+        st0.regs = Vec::new();
+        st0.rs = "empty".into();
+        st0.ds = "false".into();
+        st0.w = w4.clone();
+        st0.wn = wc.clone();
+        st0.hvu = format!("hvu{wc}");
+        st0.hw = format!("hW{wc}");
+        st0.hsm = BTreeMap::new();
+        st0.hst = "empty".into();
+        st0.spec = Spec::Proc(j);
+        let st2 = self.set_reg(&st0, a2, 0, 8, r0.clone());
+        let pt2 = format!("tr.pt(s, V, {}, {}, 8, {}, empty, false, fn_update(empty, 0, pair(8, {rc})), WRAP({}), {wc})", self.base, self.code, a2, self.print(&self.qs[j].1));
+        let rest = self.prove(st2)?;
+        // (the definitions after the call: in its proof)
+        let mut local = Vec::new();
+        let lvals: Vec<(VarId, Term)> = self.vals.drain(nv0..).collect();
+        for (v, t) in lvals {
+            local.push(format!("let {} := {}", self.env.vars[v as usize].name, self.print(&t)));
+        }
+        for i in nq0..self.qs.len() {
+            local.push(format!("let {} := {}", self.qs[i].0, self.print(&self.qs[i].1)));
+            self.scoped_q.insert(i);
+        }
+        for i in nl0..self.lets.len() {
+            local.push(format!("let {} := {}", self.lets[i].0, self.lets[i].1));
+            self.scoped_l.insert(i);
+        }
+        lines.push(format!("have pc{n}: all {wc} {rc}. {wc} in abi.World && {wc} in univ(1) -> {rc} in bits(64) -> {pt2} proof"));
+        let mut body = vec![
+            format!("fix {wc}"),
+            format!("fix {rc}"),
+            format!("assume hW{wc}: {wc} in abi.World && {wc} in univ(1)"),
+            format!("assume h{rc}: {rc} in bits(64)"),
+            format!("have hvu{wc}: {wc} in univ(1) by taut(hW{wc})"),
+        ];
+        body.extend(local);
+        body.extend(rest.lines);
+        body.push(format!("show := {}", rest.expr));
+        lines.extend(indent(body));
+        lines.push("qed".into());
+        let rule = format!(
+            "tr.call1[s := s, v := V, base := {}, code := {}, a := {}, a2 := {}, len := {}, off := {}, f := {}, g := {gn}, ar := {}, cb := {}, cc := {}, st := statics, hs := {}, ds := {}, rs := {}, w := {wn}, ka := {}, xx := {}, dd := {}, k := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
+            self.base,
+            self.code,
+            a,
+            a2,
+            insn.len,
+            off,
+            f,
+            self.print(&ar),
+            self.lbase,
+            self.lcode,
+            st.hst,
+            st.ds,
+            st.rs,
+            self.lambda(3, &al),
+            self.lambda(3, &xl),
+            self.lambda(2, &dl),
+            self.lambda(2, &kl),
+        );
+        let _ = qi;
+        let expr = format!(
+            "mp({rule}, {}, simp(L), simp(L), simp(L), hvu, simp(L), hcall{gi}, hl, simp(), htyp{gi}, hio{gi}, apply(tr.arg32_reg, {{{}}}, {{{}}}, simp(L), simp(L)), hk{n}, hd{n}, pc{n})",
+            insn.name,
+            st.rs,
+            self.print(&x)
+        );
+        Ok(Pf { lines, expr })
     }
 
     /// a loop's head (the spec's loop there): its claim, by induction
@@ -1972,6 +2168,71 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, hn, 4, u);
                 self.then(t, st2)
             }
+            // shr r32 / dword [rsp + d], 1
+            73 => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                if nat(&x[0]) != Some(4) || nat(&x[1]) != Some(5) || x[2] != x[3] {
+                    return Err(bad("not shr r/m32, 1"));
+                }
+                if let Some(d) = self.rsp_mem(&x[2]) {
+                    let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let u = home(&st.hsm, &d)?;
+                    let cn = self.hkey(dn);
+                    let only = self.only(st, cn)?;
+                    let t = self.head("shr32_1_home", a, insn) + &self.terms(&[&d, &lit(cn), &u]) + &self.tail(st, insn, 7, &[only, "simp(L)".into(), "simp(L)".into()]);
+                    let r = self.mk("bits_shr", vec![lit(32), u, lit(1)]);
+                    let r = self.value(&r);
+                    let st2 = self.set_home(st, a2, cn, r);
+                    return self.then(t, st2);
+                }
+                let Some((0, g)) = self.tag(&x[2]) else { return Err(bad("not shr r/m32, 1")) };
+                let gn = reg(&g)?;
+                let u = self.need_reg(st, gn, 4)?;
+                let t = self.head("shr32_1", a, insn) + &self.terms(&[&g, &u]) + &self.tail(st, insn, 4, &[]);
+                let r = self.mk("bits_shr", vec![lit(32), u, lit(1)]);
+                let r = self.value(&r);
+                self.scratch.insert(gn);
+                let st2 = self.set_reg(st, a2, gn, 4, r);
+                self.then(t, st2)
+            }
+            // or dword [rsp + d], r32
+            38 => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not or [rsp + d], r32"))?;
+                let g = reg(&x[1])?;
+                if nat(&x[0]) != Some(4) || x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                    return Err(bad("not or dword [rsp + d], r32"));
+                }
+                let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let u = home(&st.hsm, &d)?;
+                let v = self.need_reg(st, g, 4)?;
+                let cn = self.hkey(dn);
+                let only = self.only(st, cn)?;
+                let t = self.head("or32_home", a, insn)
+                    + &self.terms(&[&d, &lit(cn), &x[1], &v, &u])
+                    + &self.tail(st, insn, 7, &[only, "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into()]);
+                let r = self.mk("bits_or", vec![lit(32), u, v]);
+                let r = self.value(&r);
+                let st2 = self.set_home(st, a2, cn, r);
+                self.then(t, st2)
+            }
+            // sub r32, r32 (the source's low 32 bits)
+            50 => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let Some((0, g)) = self.tag(&x[2]) else { return Err(bad("not sub r32, r32")) };
+                if nat(&x[0]) != Some(4) || x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                    return Err(bad("not sub r32, r32"));
+                }
+                let (gn, hn) = (reg(&g)?, reg(&x[1])?);
+                let u = self.need_reg(st, gn, 4)?;
+                let (nh, xv) = self.reg(st, hn).ok_or_else(|| bad("an empty register"))?;
+                let t = self.head("sub32_rr", a, insn) + &self.terms(&[&g, &x[1], &u, &lit(nh), &xv]) + &self.tail(st, insn, 7, &[]);
+                let r = self.mk("bits_sub", vec![lit(32), u, self.mk("bits_of_int", vec![lit(32), xv.clone()])]);
+                let r = self.value(&r);
+                self.scratch.insert(gn);
+                let st2 = self.set_reg(st, a2, gn, 4, r);
+                self.then(t, st2)
+            }
             // mov r32, imm32
             111 => {
                 let x = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
@@ -2044,6 +2305,19 @@ impl<'e> Gen<'e> {
                     return Err(bad("not r32/r64, imm8"));
                 }
                 let gn = reg(&g)?;
+                // add rsp, k: the frame's end (k at most the frame)
+                if (size, nat(&x[1]), gn) == (8, Some(0), 4) {
+                    if imm >= 128 || imm > self.fr {
+                        return Err(bad("add rsp beyond the frame"));
+                    }
+                    let fr2 = self.fr - imm;
+                    let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+                    let t = self.head("add_rsp", a, insn) + &self.terms(&[&x[3], &x[4], &lit(fr2)]) + &self.tail(st, insn, 6, &[n4]);
+                    let mut st2 = st.clone();
+                    st2.a = a2;
+                    st2.fr = fr2;
+                    return self.then(t, st2);
+                }
                 // and r32, imm8 of a byte: in 8 bits; of a shifted word: the field
                 if (size, nat(&x[1])) == (4, Some(4)) {
                     let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
@@ -2542,7 +2816,7 @@ impl<'e> Gen<'e> {
                 let n = self.rbytes;
                 let v = self.need_reg(st, 0, n)?;
                 if &v != val {
-                    return Err(format!("{:x}: rax holds {}, the spec returns {}", a, self.print(&v), self.print(val)));
+                    return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))));
                 }
                 let expr = format!(
                     "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
@@ -2947,7 +3221,37 @@ pub fn translate(args: &[String]) -> CResult {
     // the spec: fn_build(D, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(PROC, x1, KW, EXC, DIV)))
     // (one argument), or fn_build(D, x0. mkprog(x1 x2. bind_rel(PROC, x1, KW, EXC, DIV))) (none)
     let ssym = *env.sym_by_name.get(&spec_name).ok_or_else(|| format!("no spec `{}`", spec_name))?;
-    let SymKind::Defined { body: sbody, .. } = env.syms[ssym as usize].kind.clone() else { return Err(format!("`{}` is not a definition", spec_name)) };
+    let SymKind::Defined { body: sbody, params: sparams } = env.syms[ssym as usize].kind.clone() else { return Err(format!("`{}` is not a definition", spec_name)) };
+    // the callee (the calls' target): its code, loaded before the function's
+    // own (the contract's code: both)
+    let mut targets: BTreeSet<u128> = BTreeSet::new();
+    for (&a, i) in &insns {
+        if i.row == 120 {
+            let off = nat(&i.fields).ok_or_else(|| format!("{:x}: the call's displacement", a))?;
+            let a2 = (a + i.len) % P64;
+            targets.insert((a2 + if off >= 1 << 31 { off + (P64 - (1 << 32)) } else { off }) % P64);
+        }
+    }
+    if targets.len() > 1 {
+        return Err("calls to several callees: not covered yet".into());
+    }
+    let callee = match targets.iter().next() {
+        None => None,
+        Some(&f) => {
+            let suffix = format!(".at_{:x}", f);
+            let (cname, t) = env.claims.iter().find(|(n, _)| n.ends_with(&suffix)).cloned().ok_or_else(|| format!("no decode fact of the callee at {:x}", f))?;
+            let g0 = Gen0(&env);
+            let cc = (|| {
+                let t = &g0.app(t.clone(), "all")?;
+                let t = &g0.app(t.clone(), "all")?;
+                let i1 = g0.imp(t)?;
+                let i2 = g0.imp(&i1.1)?;
+                Some(g0.args(&i2.0, "abi.code_at")?[2].clone())
+            })()
+            .ok_or_else(|| format!("{}: not a decode fact", cname))?;
+            Some((f, cc))
+        }
+    };
     let mut g = Gen {
         env: &mut env,
         names: Vec::new(),
@@ -2979,6 +3283,9 @@ pub fn translate(args: &[String]) -> CResult {
         scoped_l: BTreeSet::new(),
         lf: "L".into(),
         rmaps: HashMap::new(),
+        callees: Vec::new(),
+        lbase: String::new(),
+        lcode: String::new(),
     };
     let args_t = g.var("args");
     g.var("s");
@@ -2987,6 +3294,29 @@ pub fn translate(args: &[String]) -> CResult {
     let q_t = g.var("q");
     g.base = g.print(&base_t);
     g.code = g.print(&code_t);
+    // (the spec's parameters, the callees: G0, G1, ...)
+    let mut sbody = sbody;
+    let mut gnames = Vec::new();
+    for (i, p) in sparams.iter().enumerate() {
+        let gn = format!("G{}", i);
+        let gv = g.var(&gn);
+        sbody = sbody.subst_var(*p, &gv, &g.env.binders_fn());
+        gnames.push(gn);
+    }
+    let spec_app = format!("{}({})", spec_name, gnames.join(", "));
+    // (the contract's code: the callee's then the function's)
+    let callee_text = match &callee {
+        None => {
+            g.lbase = g.base.clone();
+            g.lcode = g.code.clone();
+            None
+        }
+        Some((f, cc)) => {
+            g.lbase = f.to_string();
+            g.lcode = format!("seq_concat({}, {})", g.print(cc), g.code);
+            Some((*f, g.print(cc)))
+        }
+    };
     let parts = (|| -> Option<(bool, Term, Term, Term)> {
         let fb = g.app(&sbody, "fn_build", 2)?;
         let mp = g.app(&fb[1], "mkprog", 1)?;
@@ -3090,9 +3420,14 @@ pub fn translate(args: &[String]) -> CResult {
 
     // the text
     let mut o = String::new();
+    let after = if g.callees.is_empty() {
+        "Checked after proofs/translate_store_loop.core.".to_string()
+    } else {
+        "A call: proofs/translate_call.core's\n// tr.call1, the callee's contract a premise. Checked after proofs/translate_call.core.".to_string()
+    };
     o.push_str(&format!(
-        "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, the rules)\n// Each step: a rule of proofs/translate.core or proofs/translate_store_loop.core\n// with its instance -- a spec reduction, or an instruction (its decode\n// fact, build/leaf_steps.core; literal facts, simp(L)) -- then the next\n// point. Checked after proofs/translate_store_loop.core.\n\n",
-        fname, fname, spec_name, prefix
+        "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, the rules)\n// Each step: a rule of proofs/translate.core or proofs/translate_store_loop.core\n// with its instance -- a spec reduction, or an instruction (its decode\n// fact, build/leaf_steps.core; literal facts, simp(L)) -- then the next\n// point. {}\n\n",
+        fname, fname, spec_name, prefix, after
     ));
     let view = if guarded { format!("tr.view1(s, {}, {}, {})", dn, n, arg_reg) } else { "app(s, \"vm\")".to_string() };
     o.push_str(&format!("abbrev {p}.v(s) := {}\nabbrev {p}.w(s) := abi.view({p}.v(s), s)\n\n", view, p = prefix));
@@ -3127,9 +3462,22 @@ pub fn translate(args: &[String]) -> CResult {
     let p = &prefix;
     // (the static bytes the spec stores to: a premise on the statics)
     let sp = if srange.is_some() { format!("{p}.statics(statics) -> ") } else { String::new() };
+    // (the callee: its contract on the code with the function's, its spec
+    // typed and keeping I/O and code -- premises)
+    let (lb, lc) = (g.lbase.clone(), g.lcode.clone());
+    let cprem = match &callee_text {
+        Some((f, _)) => format!(
+            "tr.implements_at({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0) -> "
+        ),
+        None => String::new(),
+    };
+    let call = if callee_text.is_some() { "all G0. " } else { "" };
+    if callee_text.is_some() && (sub.is_none() || gnames.len() != 1) {
+        return Err("a caller: only with a frame (sub rsp, k) and one callee so far".into());
+    }
     if guarded {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
+            "theorem {p}.body: all statics. {sp}{call}{cprem}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
             fr0,
             a2,
             dn,
@@ -3151,11 +3499,16 @@ pub fn translate(args: &[String]) -> CResult {
     if srange.is_some() {
         o.push_str(&format!("  assume hst: {p}.statics(statics)\n"));
     }
+    if let Some((f, _)) = &callee_text {
+        o.push_str(&format!(
+            "  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0)\n"
+        ));
+    }
     o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n");
     if guarded {
         o.push_str("  assume hg: ord_le(1, seq_len(args))\n");
         o.push_str(&format!("  assume hvu: {p}.w(s) in univ(1)\n"));
-        o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", g.base, g.code));
+        o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", lb, lc));
         o.push_str(&format!("  assume hWw: {p}.w(s) in abi.World\n"));
     } else {
         o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", g.base, g.code));
@@ -3219,7 +3572,39 @@ pub fn translate(args: &[String]) -> CResult {
         Some(_) => (format!("  assume hst: {p}.statics(statics)\n"), format!("mp(all_elim({p}.body, {{statics}}), hst)")),
         None => (String::new(), format!("all_elim({p}.body, {{statics}})")),
     };
-    if let Some((k, z0)) = &sub {
+    if let (Some((k, z0)), Some((f, cc))) = (&sub, &callee_text) {
+        // (a code's bytes: its definition's literal)
+        let lit_of = |g: &Gen, code: &str| -> Result<String, String> {
+            let name = code.strip_suffix("()").unwrap_or(code);
+            let sym = *g.env.sym_by_name.get(name).ok_or_else(|| format!("no code `{}`", name))?;
+            let SymKind::Defined { body, .. } = &g.env.syms[sym as usize].kind else { return Err(format!("`{}` is not a definition", name)) };
+            let a = g.app(body, "bytes_seq", 1).ok_or_else(|| format!("`{}`: not bytes", name))?;
+            Ok(g.print(&a[0]))
+        };
+        let (bf, bo) = (lit_of(&g, cc)?, lit_of(&g, &g.code)?);
+        let (cname, oname) = (cc.strip_suffix("()").unwrap_or(cc).to_string(), g.code.strip_suffix("()").unwrap_or(&g.code).to_string());
+        let bodyc = match srange {
+            Some(_) => format!("mp(all_elim(mp(all_elim({p}.body, {{statics}}), hst), {{G0}}), hcall0, htyp0, hio0)"),
+            None => format!("mp(all_elim({p}.body, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
+        };
+        o.push_str(&format!(
+            "theorem {p}.implements: all statics. {sp}all G0. {cprem}tr.implements_at({b}, {sapp}, {lb}, {lc}, statics)\nproof\n  fix statics\n{hs1}  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0)\n  // the function's own code: after its callee's\n  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have h2: abi.loaded(vm, {lb}, seq_concat(bytes_seq({bf}), bytes_seq({bo})), statics) by defs(h, {cname}, {oname})\n    have l := apply(tr.loaded_after, {{vm}}, {{{bf}}}, {{{bo}}}, {{{lb}}}, {{statics}}, simp(), simp(), simp(), h2)\n    show by defs(simp(expand(l, abi.loaded)), {oname})\n  qed\n  have m0 := mp(tr.entry1_32s_w[lb := {lb}, lc := {lc}, base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc2}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), hsub, {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {bodyc})\n",
+            b = g.base,
+            c = g.code,
+            sapp = spec_app,
+            len0 = e_len,
+            z0 = g.print(z0),
+            a1 = store,
+            len = s_len,
+            d = dd,
+            cc2 = dn,
+            z1 = g.print(&ef[3]),
+            z2 = g.print(&ef[4]),
+            a2 = a2,
+            at0 = e_name,
+            at1 = s_name,
+        ));
+    } else if let Some((k, z0)) = &sub {
         o.push_str(&format!(
             "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry1_32s[base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {body})\n",
             b = g.base,
@@ -3263,21 +3648,29 @@ pub fn translate(args: &[String]) -> CResult {
         let _ = (e_len, e_name);
     }
     o.push_str(&format!(
-        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> tr.matches_t({spec}(), args, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
+        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> tr.matches_t({sapp}, args, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
         b = g.base,
-        c = g.code,
+        sapp = spec_app,
         spec = spec_name
     ));
     // (the ABI's contract, from the bridge's)
-    let imp = match srange {
-        Some(_) => format!("mp(all_elim({p}.implements, {{statics}}), hst)"),
-        None => format!("all_elim({p}.implements, {{statics}})"),
+    let imp = match (srange, &callee_text) {
+        (Some(_), None) => format!("mp(all_elim({p}.implements, {{statics}}), hst)"),
+        (None, None) => format!("all_elim({p}.implements, {{statics}})"),
+        (Some(_), Some(_)) => format!("mp(all_elim(mp(all_elim({p}.implements, {{statics}}), hst), {{G0}}), hcall0, htyp0, hio0)"),
+        (None, Some(_)) => format!("mp(all_elim({p}.implements, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
+    };
+    let (cfix, cass) = match &callee_text {
+        Some((f, _)) => (
+            "all G0. ".to_string(),
+            format!("  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0)\n"),
+        ),
+        None => (String::new(), String::new()),
     };
     o.push_str(&format!(
-        "theorem {p}.implements_abi: all statics. {sp}abi.implements2_at(single(empty), {b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  show := apply(tr.implements_abi, {imp})\nqed\n",
+        "theorem {p}.implements_abi: all statics. {sp}{cfix}{cprem}abi.implements2_at(single(empty), {b}, {sapp}, {lb}, {lc}, statics)\nproof\n  fix statics\n{hs1}{cass}  show := apply(tr.implements_abi, {imp})\nqed\n",
         b = g.base,
-        c = g.code,
-        spec = spec_name
+        sapp = spec_app,
     ));
     // (the statics' range in the proofs that name it)
     let o = match srange {
