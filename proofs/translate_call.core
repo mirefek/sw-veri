@@ -1804,6 +1804,110 @@ def tr.callee_io(g) := all args w w2 r. w in abi.World -> runs(app(g, args), w, 
   app(app(w2, "os"), "input") = app(app(w, "os"), "input") && subset(app(app(w, "os"), "events"), app(app(w2, "os"), "events")) &&
   (all gb gc st. gb in omega -> abi.loaded(app(w, "vm"), gb, gc, st) -> abi.loaded(app(w2, "vm"), gb, gc, st))
 
+// (the callee's spec typed, as the ABI has specs: its runs in univ(1))
+theorem tr.spec_univ: all g args w o. g in fn_space(abi.ARGS, powerset(univ(1))) -> args in abi.ARGS -> runs(app(g, args), w, o) -> pair(w, o) in univ(1)
+proof
+  fix g
+  fix args
+  fix w
+  fix o
+  assume hg: g in fn_space(abi.ARGS, powerset(univ(1)))
+  assume ha: args in abi.ARGS
+  assume hr: runs(app(g, args), w, o)
+  have pa := mp(mp(fn_space_app[a := abi.ARGS, b := powerset(univ(1)), f := g, x := args], hg), ha)
+  have ss: subset(app(g, args), univ(1)) by taut(powerset_def[s := univ(1), a := app(g, args)], pa)
+  show := mp(subset_elim[a := app(g, args), b := univ(1), z := pair(w, o)], ss, expand(hr, runs))
+qed
+
+// (an outcome of a type: a return, an exception, a divergence)
+theorem tr.outcome_cases: all S V x0. x0 in outcome_type(S, V) ->
+  (ex a b. a in S && b in V && x0 = ok(a, b)) || (ex a b. a in S && b in univ(1) && x0 = exc(a, b)) || (ex t. t in univ(1) && x0 = diverge(t))
+proof
+  fix S
+  fix V
+  fix x0
+  assume h: x0 in outcome_type(S, V)
+  have u1 := union2_iff[a := set_image(cart(S, V), z. ok(fst(z), snd(z))), b := union2(set_image(cart(S, univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t. diverge(t))), z := x0]
+  have u2 := union2_iff[a := set_image(cart(S, univ(1)), z. exc(fst(z), snd(z))), b := set_image(univ(1), t. diverge(t)), z := x0]
+  have s1 := set_image_def[s := cart(S, V), f := z. ok(fst(z), snd(z)), y := x0]
+  have s2 := set_image_def[s := cart(S, univ(1)), f := z. exc(fst(z), snd(z)), y := x0]
+  have s3 := set_image_def[s := univ(1), f := t. diverge(t), y := x0]
+  have hh: x0 in union2(set_image(cart(S, V), z. ok(fst(z), snd(z))), union2(set_image(cart(S, univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t. diverge(t)))) by defs(h, outcome_type)
+  have c1: (ex z. z in cart(S, V) && ok(fst(z), snd(z)) = x0) -> (ex a b. a in S && b in V && x0 = ok(a, b)) proof
+    assume e: ex z. z in cart(S, V) && ok(fst(z), snd(z)) = x0
+    obtain z, hz from e
+    obtain a, ha from mp(cart_elim[a := S, b := V, z := z], taut(hz))
+    obtain b, hb from ha
+    have eq: x0 = ok(a, b) by simp(hz, hb)
+    show by ex_intro({a}, {b}, taut(hb, eq))
+  qed
+  have c2: (ex z. z in cart(S, univ(1)) && exc(fst(z), snd(z)) = x0) -> (ex a b. a in S && b in univ(1) && x0 = exc(a, b)) proof
+    assume e: ex z. z in cart(S, univ(1)) && exc(fst(z), snd(z)) = x0
+    obtain z, hz from e
+    obtain a, ha from mp(cart_elim[a := S, b := univ(1), z := z], taut(hz))
+    obtain b, hb from ha
+    have eq: x0 = exc(a, b) by simp(hz, hb)
+    show by ex_intro({a}, {b}, taut(hb, eq))
+  qed
+  have c3: (ex t. t in univ(1) && diverge(t) = x0) -> (ex t. t in univ(1) && x0 = diverge(t)) proof
+    assume e: ex t. t in univ(1) && diverge(t) = x0
+    obtain t, ht from e
+    have eq: x0 = diverge(t) by simp(ht)
+    show by ex_intro({t}, taut(ht, eq))
+  qed
+  show by taut(hh, u1, u2, s1, s2, s3, c1, c2, c3)
+qed
+
+// a crash's I/O: that of the function's overflow (or divergence) from w
+theorem tr.ovf_exc: all p w os x. x in rec_and(abi.World, single(empty)) -> runs(p, w, exc(x, exc_val("stack_overflow", empty))) ->
+  app(app(x, "os"), "events") = app(os, "events") -> tr.ovf(p, w, os)
+proof
+  fix p
+  fix w
+  fix os
+  fix x
+  assume hx: x in rec_and(abi.World, single(empty))
+  assume hr: runs(p, w, exc(x, exc_val("stack_overflow", empty)))
+  assume hev: app(app(x, "os"), "events") = app(os, "events")
+  have ou: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
+  have ot := mp(mp(exc_outcome_type[s := rec_and(abi.World, single(empty)), v := cart(bits(64), bits(64)), x := x, e := exc_val("stack_overflow", empty)], hx), ou)
+  have it1 := apply(tr.ite_f, {fst(exc(x, exc_val("stack_overflow", empty))) = 0}, {app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(os, "events")},
+    {ite(fst(exc(x, exc_val("stack_overflow", empty))) = 1, snd(snd(exc(x, exc_val("stack_overflow", empty)))) = exc_val("stack_overflow", empty) &&
+      app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(os, "events"), app(snd(exc(x, exc_val("stack_overflow", empty))), "os.events") = app(os, "events"))}, simp())
+  have it2 := apply(tr.ite_t, {fst(exc(x, exc_val("stack_overflow", empty))) = 1}, {snd(snd(exc(x, exc_val("stack_overflow", empty)))) = exc_val("stack_overflow", empty) &&
+      app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(os, "events")}, {app(snd(exc(x, exc_val("stack_overflow", empty))), "os.events") = app(os, "events")}, simp())
+  have cc: snd(snd(exc(x, exc_val("stack_overflow", empty)))) = exc_val("stack_overflow", empty) &&
+      app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(os, "events") by simp(hev)
+  have iv := rewrite(sym(trans(it1, it2)), cc)
+  show by defs(ex_intro({exc(x, exc_val("stack_overflow", empty))}, taut(ot, hr, iv)), tr.ovf)
+qed
+
+theorem tr.ovf_div: all p w os t. t in univ(1) -> runs(p, w, diverge(t)) -> app(t, "os.events") = app(os, "events") -> tr.ovf(p, w, os)
+proof
+  fix p
+  fix w
+  fix os
+  fix t
+  assume ht: t in univ(1)
+  assume hr: runs(p, w, diverge(t))
+  assume hev: app(t, "os.events") = app(os, "events")
+  have si := set_image_def[s := univ(1), f := t0. diverge(t0), y := diverge(t)]
+  have ex1: ex t0. t0 in univ(1) && diverge(t0) = diverge(t) by ex_intro({t}, taut(ht, refl({diverge(t)})))
+  have m3: diverge(t) in set_image(univ(1), t0. diverge(t0)) by taut(si, ex1)
+  have u1 := union2_iff[a := set_image(cart(rec_and(abi.World, single(empty)), cart(bits(64), bits(64))), z. ok(fst(z), snd(z))),
+    b := union2(set_image(cart(rec_and(abi.World, single(empty)), univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t0. diverge(t0))), z := diverge(t)]
+  have u2 := union2_iff[a := set_image(cart(rec_and(abi.World, single(empty)), univ(1)), z. exc(fst(z), snd(z))), b := set_image(univ(1), t0. diverge(t0)), z := diverge(t)]
+  have ot: diverge(t) in outcome_type(rec_and(abi.World, single(empty)), cart(bits(64), bits(64))) by defs(taut(m3, u1, u2), outcome_type)
+  have it1 := apply(tr.ite_f, {fst(diverge(t)) = 0}, {app(app(fst(snd(diverge(t))), "os"), "events") = app(os, "events")},
+    {ite(fst(diverge(t)) = 1, snd(snd(diverge(t))) = exc_val("stack_overflow", empty) && app(app(fst(snd(diverge(t))), "os"), "events") = app(os, "events"),
+      app(snd(diverge(t)), "os.events") = app(os, "events"))}, simp())
+  have it2 := apply(tr.ite_f, {fst(diverge(t)) = 1}, {snd(snd(diverge(t))) = exc_val("stack_overflow", empty) && app(app(fst(snd(diverge(t))), "os"), "events") = app(os, "events")},
+    {app(snd(diverge(t)), "os.events") = app(os, "events")}, simp())
+  have cc: app(snd(diverge(t)), "os.events") = app(os, "events") by simp(hev)
+  have iv := rewrite(sym(trans(it1, it2)), cc)
+  show by defs(ex_intro({diverge(t)}, taut(ot, hr, iv)), tr.ovf)
+qed
+
 // (subsets: transitive)
 theorem tr.subset_trans: all a b c. subset(a, b) -> subset(b, c) -> subset(a, c)
 proof
