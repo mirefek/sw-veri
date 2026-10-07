@@ -732,25 +732,59 @@ proof
   show by defs(g, abi.agree)
 qed
 
-// (the scratch space is the pages': new bytes keep it)
-theorem tr.agree_vb: all vm sp y b1 b2. abi.agree(vm, sp, b1, b2) -> abi.agree(fn_update(vm, "bytes", y), sp, b1, b2)
+// (... and the same but for the homes)
+theorem tr.fagree_store: all s b1 b2 a n x. tr.fagree(s, b1, b2) ->
+  tr.fagree(s, x86_64_linux.store_le(b1, a, n, x), x86_64_linux.store_le(b2, a, n, x))
 proof
-  fix vm
-  fix sp
-  fix y
+  fix s
   fix b1
   fix b2
-  assume h: abi.agree(vm, sp, b1, b2)
-  have ag := expand(h, abi.agree)
-  have g: all z. z in bits(64) -> !abi.scratch(fn_update(vm, "bytes", y), sp, z) -> app(b1, z) = app(b2, z) proof
+  fix a
+  fix n
+  fix x
+  assume h: tr.fagree(s, b1, b2)
+  have ag := expand(h, tr.fagree)
+  have g: all z. z in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 8), z) && int_lt(z, app(app(s, "gpr"), 4))) ->
+      app(x86_64_linux.store_le(b1, a, n, x), z) = app(x86_64_linux.store_le(b2, a, n, x), z) proof
     fix z
     assume hz: z in bits(64)
-    assume hn: !abi.scratch(fn_update(vm, "bytes", y), sp, z)
-    have sc: abi.scratch(fn_update(vm, "bytes", y), sp, z) <-> abi.scratch(vm, sp, z) by defs(simp(), abi.scratch, abi.stack_page, x86_64_linux.mapped)
-    have n2: !abi.scratch(vm, sp, z) by taut(sc, hn)
-    show := mp(all_elim(ag, {z}), hz, n2)
+    assume hn: !(int_le(int_sub(app(app(s, "gpr"), 4), 8), z) && int_lt(z, app(app(s, "gpr"), 4)))
+    have ez := mp(all_elim(ag, {z}), hz, hn)
+    show := apply(tr.store_le_agree, {b1}, {b2}, {a}, {n}, {x}, {z}, hz, ez)
   qed
-  show by defs(g, abi.agree)
+  show by defs(g, tr.fagree)
+qed
+
+// a store to the n bytes at sp + c (c from -8): only the 8 bytes below sp
+theorem tr.slot_out8: all b sp c n x a. sp in bits(64) -> int_le(8, sp) -> int_lt(sp, 140737488355328) ->
+  c in bits(64) -> int_le(18446744073709551608, c) -> int_le(n, int_sub(18446744073709551616, c)) ->
+  a in bits(64) -> !(int_le(int_sub(sp, 8), a) && int_lt(a, sp)) -> app(x86_64_linux.store_le(b, bits_add(64, sp, c), n, x), a) = app(b, a)
+proof
+  fix b
+  fix sp
+  fix c
+  fix n
+  fix x
+  fix a
+  assume h1: sp in bits(64)
+  assume h8: int_le(8, sp)
+  assume h4: int_lt(sp, 140737488355328)
+  assume hc: c in bits(64)
+  assume hk: int_le(18446744073709551608, c)
+  assume hn: int_le(n, int_sub(18446744073709551616, c))
+  assume ha: a in bits(64)
+  assume hs: !(int_le(int_sub(sp, 8), a) && int_lt(a, sp))
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have sb: int_le(0, sp) && int_lt(sp, 18446744073709551616) by simp(h1)
+  have cb: int_le(0, c) && int_lt(c, 18446744073709551616) by simp(hc)
+  have ab: int_le(0, a) && int_lt(a, 18446744073709551616) by simp(ha)
+  have e0: int_mod(int_sub(a, int_mod(int_add(sp, c), 18446744073709551616)), 18446744073709551616) = int_mod(int_add(int_sub(a, sp), int_sub(18446744073709551616, c)), 18446744073709551616) by arith(sb, cb, ab)
+  have nl0: !int_lt(int_mod(int_add(int_sub(a, sp), int_sub(18446744073709551616, c)), 18446744073709551616), n) by arith(sb, cb, ab, h8, h4, hk, hn, hs)
+  have nl1 := rewrite(sym(e0), nl0)
+  have nl: !int_lt(bits_sub(64, a, bits_add(64, sp, c)), n) by defs(rewrite(sym(p64), nl1), bits_sub, bits_add)
+  have ab2 := mp(app_fn_build[d := bits(64), v := y. ite(int_lt(bits_sub(64, y, bits_add(64, sp, c)), n), bits_of_int(8, int_div(x, int_pow(256, bits_sub(64, y, bits_add(64, sp, c))))), app(b, y)), a := a], ha)
+  have itf := mp(ite_f[c := int_lt(bits_sub(64, a, bits_add(64, sp, c)), n), a := bits_of_int(8, int_div(x, int_pow(256, bits_sub(64, a, bits_add(64, sp, c))))), b := app(b, a)], nl)
+  show by defs(trans(ab2, itf), x86_64_linux.store_le)
 qed
 
 theorem tr.mem_store: all s m m2 w w2 ds a n x. tr.mem(s, m, w, ds) ->
@@ -779,19 +813,17 @@ proof
   qed
   have c2: (ds && fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
       abi.agree(app(s, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) &&
-      abi.agree(app(m, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))) -> tr.mem(s, m2, w2, ds) proof
+      tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))) -> tr.mem(s, m2, w2, ds) proof
     assume h2: ds && fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
       abi.agree(app(s, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) &&
-      abi.agree(app(m, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))
+      tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))
     have d: ds by taut(h2)
     have e: fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") by taut(h2)
     have f1: fn_update(app(w2, "vm"), "bytes", app(app(m2, "vm"), "bytes")) = app(m2, "vm") by simp(em, ew, sym(e))
     have g1 := apply(tr.agree_store, {app(s, "vm")}, {abi.sp(s)}, {app(app(m, "vm"), "bytes")}, {app(app(w, "vm"), "bytes")}, {a}, {n}, {x}, taut(h2))
-    have g2 := apply(tr.agree_store, {app(m, "vm")}, {abi.sp(s)}, {app(app(m, "vm"), "bytes")}, {app(app(w, "vm"), "bytes")}, {a}, {n}, {x}, taut(h2))
-    have g3 := apply(tr.agree_vb, {app(m, "vm")}, {abi.sp(s)}, {x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, n, x)},
-      {x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, n, x)}, {x86_64_linux.store_le(app(app(w, "vm"), "bytes"), a, n, x)}, g2)
+    have g2 := apply(tr.fagree_store, {s}, {app(app(m, "vm"), "bytes")}, {app(app(w, "vm"), "bytes")}, {a}, {n}, {x}, taut(h2))
     have f2: abi.agree(app(s, "vm"), abi.sp(s), app(app(m2, "vm"), "bytes"), app(app(w2, "vm"), "bytes")) by simp(em, ew, g1)
-    have f3: abi.agree(app(m2, "vm"), abi.sp(s), app(app(m2, "vm"), "bytes"), app(app(w2, "vm"), "bytes")) by simp(em, ew, g3)
+    have f3: tr.fagree(s, app(app(m2, "vm"), "bytes"), app(app(w2, "vm"), "bytes")) by simp(em, ew, g2)
     show by defs(taut(d, f1, f2, f3), tr.mem)
   qed
   show by taut(expand(h, tr.mem), c1, c2)
@@ -1076,23 +1108,20 @@ proof
     have o := apply(abi.slot_out, {app(s, "vm")}, {B}, {app(app(s, "gpr"), 4)}, {d}, {n}, {x}, {a}, r4, hsp, al, hlt, hd, hd1, hd2, ha, hn)
     show := rewrite(sym(se), o)
   qed
-  have kpt: tr.kept(app(s, "vm"), app(m, "vm"), app(app(s, "gpr"), 4)) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.kept))
-  have ro: app(app(s, "gpr"), 4) in omega by simp(r4)
-  have kr := mp(all_elim(expand(kpt, tr.kept), {app(app(s, "gpr"), 4)}), ro, arith(ro), arith(ro))
-  have pe: int_div(app(app(s, "gpr"), 4), 4096) = x86_64_linux.page_of(app(app(s, "gpr"), 4)) by defs(simp(ro), x86_64_linux.page_of)
-  have hspm: abi.stack_page(app(m, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) by defs(simp(rewrite(sym(pe), kr), expand(hsp, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
-  have outm: all a. a in bits(64) -> !abi.scratch(app(m, "vm"), abi.sp(s), a) -> app(x86_64_linux.store_le(B, bits_add(64, int_add(app(app(s, "gpr"), 4), d), 0), n, x), a) = app(B, a) proof
+  have s8 := apply(tr.inv_sp8, hi)
+  have outm: all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 8), a) && int_lt(a, app(app(s, "gpr"), 4))) ->
+      app(x86_64_linux.store_le(B, bits_add(64, int_add(app(app(s, "gpr"), 4), d), 0), n, x), a) = app(B, a) proof
     fix a
     assume ha: a in bits(64)
-    assume hn: !abi.scratch(app(m, "vm"), abi.sp(s), a)
-    have o := apply(abi.slot_out, {app(m, "vm")}, {B}, {app(app(s, "gpr"), 4)}, {d}, {n}, {x}, {a}, r4, hspm, al, hlt, hd, hd1, hd2, ha, hn)
+    assume hn: !(int_le(int_sub(app(app(s, "gpr"), 4), 8), a) && int_lt(a, app(app(s, "gpr"), 4)))
+    have o := apply(tr.slot_out8, {B}, {app(app(s, "gpr"), 4)}, {d}, {n}, {x}, {a}, r4, s8, hlt, hd, hd1, hd2, ha, hn)
     show := rewrite(sym(se), o)
   qed
-  // (before: the world's bytes the machine's outside the scratch bytes)
+  // (before: the world's bytes the machine's outside the scratch bytes, the homes)
   have pre: fn_update(app(w, "vm"), "bytes", B) = app(m, "vm") && abi.agree(app(s, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) &&
-      abi.agree(app(m, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) proof
+      tr.fagree(s, B, app(app(w, "vm"), "bytes")) proof
     have c1: (!ds && app(w, "vm") = app(m, "vm")) -> fn_update(app(w, "vm"), "bytes", B) = app(m, "vm") && abi.agree(app(s, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) &&
-        abi.agree(app(m, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) proof
+        tr.fagree(s, B, app(app(w, "vm"), "bytes")) proof
       assume h1: !ds && app(w, "vm") = app(m, "vm")
       have e: app(w, "vm") = app(m, "vm") by taut(h1)
       have ip := apply(tr.inv_parts, hi)
@@ -1102,25 +1131,25 @@ proof
       have vb := apply(abi.vm_bytes_same, vV)
       have f1: fn_update(app(w, "vm"), "bytes", B) = app(m, "vm") by simp(e, vb)
       have f2: abi.agree(app(s, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) by defs(simp(e), abi.agree)
-      have f3: abi.agree(app(m, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) by defs(simp(e), abi.agree)
+      have f3: tr.fagree(s, B, app(app(w, "vm"), "bytes")) by defs(simp(e), tr.fagree)
       show by taut(f1, f2, f3)
     qed
     have c2: (ds && fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
         abi.agree(app(s, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) &&
-        abi.agree(app(m, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))) ->
+        tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))) ->
         fn_update(app(w, "vm"), "bytes", B) = app(m, "vm") && abi.agree(app(s, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) &&
-        abi.agree(app(m, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) proof
+        tr.fagree(s, B, app(app(w, "vm"), "bytes")) proof
       assume h2: ds && fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
         abi.agree(app(s, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) &&
-        abi.agree(app(m, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))
+        tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))
       show by taut(h2)
     qed
     show by taut(expand(hmm, tr.mem), c1, c2)
   qed
   have agp: abi.agree(app(s, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) by taut(pre)
   have ag := expand(agp, abi.agree)
-  have agpm: abi.agree(app(m, "vm"), abi.sp(s), B, app(app(w, "vm"), "bytes")) by taut(pre)
-  have agm := expand(agpm, abi.agree)
+  have agpm: tr.fagree(s, B, app(app(w, "vm"), "bytes")) by taut(pre)
+  have agm := expand(agpm, tr.fagree)
   have f1: fn_update(app(w, "vm"), "bytes", app(app(m2, "vm"), "bytes")) = app(m2, "vm") proof
     have e: fn_update(app(w, "vm"), "bytes", B) = app(m, "vm") by taut(pre)
     show by simp(em, sym(e))
@@ -1136,20 +1165,18 @@ proof
     qed
     show by defs(g, abi.agree)
   qed
-  have f3m: abi.agree(app(m, "vm"), abi.sp(s), app(app(m2, "vm"), "bytes"), app(app(w, "vm"), "bytes")) proof
-    have g: all a. a in bits(64) -> !abi.scratch(app(m, "vm"), abi.sp(s), a) -> app(app(app(m2, "vm"), "bytes"), a) = app(app(app(w, "vm"), "bytes"), a) proof
+  have f3: tr.fagree(s, app(app(m2, "vm"), "bytes"), app(app(w, "vm"), "bytes")) proof
+    have g: all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 8), a) && int_lt(a, app(app(s, "gpr"), 4))) ->
+        app(app(app(m2, "vm"), "bytes"), a) = app(app(app(w, "vm"), "bytes"), a) proof
       fix a
       assume ha: a in bits(64)
-      assume hn: !abi.scratch(app(m, "vm"), abi.sp(s), a)
+      assume hn: !(int_le(int_sub(app(app(s, "gpr"), 4), 8), a) && int_lt(a, app(app(s, "gpr"), 4)))
       have o := mp(all_elim(outm, {a}), ha, hn)
       have b := mp(all_elim(agm, {a}), ha, hn)
       show by simp(em, o, b)
     qed
-    show by defs(g, abi.agree)
+    show by defs(g, tr.fagree)
   qed
-  have g3 := apply(tr.agree_vb, {app(m, "vm")}, {abi.sp(s)}, {x86_64_linux.store_le(B, bits_add(64, int_add(app(app(s, "gpr"), 4), d), 0), n, x)},
-    {app(app(m2, "vm"), "bytes")}, {app(app(w, "vm"), "bytes")}, f3m)
-  have f3: abi.agree(app(m2, "vm"), abi.sp(s), app(app(m2, "vm"), "bytes"), app(app(w, "vm"), "bytes")) := rewrite(sym(em), g3)
   show by defs(taut(f1, f2, f3), tr.mem)
 qed
 
