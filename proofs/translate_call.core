@@ -1514,3 +1514,76 @@ proof
   qed
   show by defs(simp(expand(hk2, abi.stack_ok), expand(ht, abi.thread_ok), hr4, al, hdf, ar, hfs, keep(abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access, x86_64_linux.readable, abi.ARG_REGS)), abi.entry_ok)
 qed
+
+// a disciplined run returns only at its return point
+theorem tr.run_d_ok: all s m x e. tr.run_d(s, m, ok(x, e)) -> tr.at_ret(s, x)
+proof
+  fix s
+  fix m
+  fix x
+  fix e
+  assume h: tr.run_d(s, m, ok(x, e))
+  obtain r, hr from expand(h, tr.run_d)
+  have hw: tr.rwd(s, pair(m, empty), r) by taut(hr)
+  have hm: tr.rmap(r, ok(x, e)) by taut(hr)
+  have wi := mp(mp(mp(while_inv[l0 := pair(m, empty), c := l. true, b := l o. tr.rbd(s, l, o),
+    tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := r, p := l. true], simp()), simp()), expand(hw, tr.rwd))
+  have nd: !(ex t. r = diverge(t)) proof
+    have g: (ex t. r = diverge(t)) -> false proof
+      assume ed: ex t. r = diverge(t)
+      obtain t, ht from ed
+      show by simp(expand(rewrite(ht, hm), tr.rmap))
+    qed
+    show by taut(g)
+  qed
+  have el: ex l. true && ((!true && r = ok(l, empty)) || (true && tr.rbd(s, l, r) && !is_ok(r))) by taut(wi, nd)
+  obtain l, hl from el
+  have hb: tr.rbd(s, l, r) by taut(hl)
+  have nk: !is_ok(r) by taut(hl)
+  have rr := expand(hm, tr.rmap)
+  have c1: tr.disc_ok(s, fst(l)) && tr.rb(s, l, r) -> tr.at_ret(s, x) proof
+    assume hd: tr.disc_ok(s, fst(l)) && tr.rb(s, l, r)
+    have rb: tr.rb(s, l, r) by taut(hd)
+    have b1: (!tr.at_ret(s, fst(l)) && bind_rel(x86_64_linux.step, fst(l), x7 x8. r = ok(pair(x7, empty), empty), x7 x8. r = exc(pair(x7, empty), pair("raise", x8)), x7. r = diverge(x7))) ->
+        tr.at_ret(s, x) proof
+      assume hb1: !tr.at_ret(s, fst(l)) && bind_rel(x86_64_linux.step, fst(l), x7 x8. r = ok(pair(x7, empty), empty), x7 x8. r = exc(pair(x7, empty), pair("raise", x8)), x7. r = diverge(x7))
+      have bb: bind_rel(x86_64_linux.step, fst(l), x7 x8. r = ok(pair(x7, empty), empty), x7 x8. r = exc(pair(x7, empty), pair("raise", x8)), x7. r = diverge(x7)) by taut(hb1)
+      obtain o2, ho2 from expand(bb, bind_rel)
+      have k1: (ex s1 v1. o2 = ok(s1, v1) && r = ok(pair(s1, empty), empty)) -> tr.at_ret(s, x) proof
+        assume ek: ex s1 v1. o2 = ok(s1, v1) && r = ok(pair(s1, empty), empty)
+        obtain s1, ek1 from ek
+        obtain v1, ek2 from ek1
+        have re: r = ok(pair(s1, empty), empty) by taut(ek2)
+        show by simp(expand(rewrite(re, nk), is_ok))
+      qed
+      have k2: (ex s1 e1. o2 = exc(s1, e1) && r = exc(pair(s1, empty), pair("raise", e1))) -> tr.at_ret(s, x) proof
+        assume ek: ex s1 e1. o2 = exc(s1, e1) && r = exc(pair(s1, empty), pair("raise", e1))
+        obtain s1, ek1 from ek
+        obtain e1, ek2 from ek1
+        have re: r = exc(pair(s1, empty), pair("raise", e1)) by taut(ek2)
+        show by simp(expand(rewrite(re, hm), tr.rmap))
+      qed
+      have k3: (ex t. o2 = diverge(t) && r = diverge(t)) -> tr.at_ret(s, x) proof
+        assume ek: ex t. o2 = diverge(t) && r = diverge(t)
+        obtain t, ek1 from ek
+        have re: r = diverge(t) by taut(ek1)
+        show by simp(expand(rewrite(re, hm), tr.rmap))
+      qed
+      show by taut(ho2, k1, k2, k3)
+    qed
+    have b2: (!!tr.at_ret(s, fst(l)) && r = exc(pair(fst(l), empty), pair("brk", empty))) -> tr.at_ret(s, x) proof
+      assume hb2: !!tr.at_ret(s, fst(l)) && r = exc(pair(fst(l), empty), pair("brk", empty))
+      have re: r = exc(pair(fst(l), empty), pair("brk", empty)) by taut(hb2)
+      have xe: x = fst(l) by simp(expand(rewrite(re, hm), tr.rmap))
+      have ar: tr.at_ret(s, fst(l)) by taut(hb2)
+      show := rewrite(sym(xe), ar)
+    qed
+    show by taut(expand(rb, tr.rb), b1, b2)
+  qed
+  have c2: !tr.disc_ok(s, fst(l)) && r = exc(l, pair("raise", exc_val("disc", empty))) -> tr.at_ret(s, x) proof
+    assume hd: !tr.disc_ok(s, fst(l)) && r = exc(l, pair("raise", exc_val("disc", empty)))
+    have re: r = exc(l, pair("raise", exc_val("disc", empty))) by taut(hd)
+    show by simp(expand(rewrite(re, hm), tr.rmap))
+  qed
+  show by taut(expand(hb, tr.rbd), c1, c2)
+qed
