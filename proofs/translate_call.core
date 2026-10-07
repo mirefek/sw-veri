@@ -1181,3 +1181,206 @@ proof
   qed
   show by taut(po, pu, pk)
 qed
+
+// ----------------------------------------------------------------------
+//  The push done: the callee's entry state C
+
+// (a machine with a memory, rsp and rip put in: a machine)
+theorem tr.mach_push: all m1 nv r T. m1 in x86_64_linux.Machine -> m1 in univ(1) -> nv in x86_64_linux.Vm -> nv in univ(1) -> r in bits(64) -> T in bits(64) ->
+  fn_update(fn_update(fn_update(m1, "vm", nv), "gpr", fn_update(app(m1, "gpr"), 4, r)), "rip", T) in x86_64_linux.Machine &&
+  fn_update(fn_update(fn_update(m1, "vm", nv), "gpr", fn_update(app(m1, "gpr"), 4, r)), "rip", T) in univ(1)
+proof
+  fix m1
+  fix nv
+  fix r
+  fix T
+  assume hM: m1 in x86_64_linux.Machine
+  assume hu: m1 in univ(1)
+  assume hv: nv in x86_64_linux.Vm
+  assume hvu: nv in univ(1)
+  assume hr: r in bits(64)
+  assume ht: T in bits(64)
+  have pt := apply(x86i.parts, hM)
+  have g4 := apply(x86.space_upd, {x86_64_linux.Reg}, {bits(64)}, {app(m1, "gpr")}, {4}, {r}, taut(pt), simp(), hr)
+  have gu := mp(app_univ[u := 1, f := m1, k := "gpr"], hu)
+  have a: fn_update(fn_update(fn_update(m1, "vm", nv), "gpr", fn_update(app(m1, "gpr"), 4, r)), "rip", T) in x86_64_linux.Machine
+    by defs(simp(expand(hM, x86_64_linux.Machine), hu, hv, hvu, g4, gu, hr, ht), x86_64_linux.Machine)
+  have b: fn_update(fn_update(fn_update(m1, "vm", nv), "gpr", fn_update(app(m1, "gpr"), 4, r)), "rip", T) in univ(1) by simp(hu, hvu, gu, hr, ht)
+  show by taut(a, b)
+qed
+
+// (a page mapped before the stack grew: its entry kept)
+theorem tr.pages_eq_mapped: all v0 v1 l r p. x86.pages_in(v0, v1, l, r) -> p in omega -> x86_64_linux.mapped(v0, p) ->
+  app(app(v1, "pages"), p) = app(app(v0, "pages"), p)
+proof
+  fix v0
+  fix v1
+  fix l
+  fix r
+  fix p
+  assume h: x86.pages_in(v0, v1, l, r)
+  assume hp: p in omega
+  assume hm: x86_64_linux.mapped(v0, p)
+  have a := mp(all_elim(expand(h, x86.pages_in), {p}), hp)
+  have mm := expand(hm, x86_64_linux.mapped)
+  show by taut(a, mm)
+qed
+
+theorem tr.push_ok: all s base code m w RA T m1 e1 C. tr.inv(s, base, code, 8, m, w) -> int_le(16, app(app(s, "gpr"), 4)) ->
+  RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
+    "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
+  C in x86_64_linux.Machine && C in univ(1) &&
+  app(C, "os") = app(m, "os") && app(C, "fs_base") = app(m, "fs_base") && app(C, "cpu") = app(m, "cpu") && app(C, "gs_base") = app(m, "gs_base") &&
+  app(C, "flags") = app(m, "flags") && app(C, "gpr") = fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), 16)) && app(C, "rip") = T &&
+  tr.keeps_code(app(m, "vm"), app(C, "vm")) && x86.vm_fields(app(m, "vm"), app(C, "vm")) &&
+  x86_64_linux.le(app(app(C, "vm"), "bytes"), int_sub(app(app(s, "gpr"), 4), 16), 8) = RA &&
+  x86.pages_in(app(m, "vm"), app(C, "vm"), int_div(int_sub(app(app(s, "gpr"), 4), 16), 4096), int_div(app(app(s, "gpr"), 4), 4096)) &&
+  (all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 16), a) && int_lt(a, int_sub(app(app(s, "gpr"), 4), 8))) ->
+    x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) -> app(app(app(C, "vm"), "bytes"), a) = app(app(app(m, "vm"), "bytes"), a))
+proof
+  fix s
+  fix base
+  fix code
+  fix m
+  fix w
+  fix RA
+  fix T
+  fix m1
+  fix e1
+  fix C
+  assume hi: tr.inv(s, base, code, 8, m, w)
+  assume h16: int_le(16, app(app(s, "gpr"), 4))
+  assume hra: RA in bits(64)
+  assume ht: T in bits(64)
+  assume htr: runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1))
+  assume hC: C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
+    "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T)
+  let S := app(app(s, "gpr"), 4)
+  let M2 := fn_update(m, "rip", RA)
+  let PA := int_sub(S, 16)
+  let L := int_div(int_sub(S, 16), 4096)
+  let P0 := int_div(S, 4096)
+  have ic := apply(tr.inv_call, hi)
+  have sb: S in bits(64) by taut(ic)
+  have slt: int_lt(S, 140737488355328) by taut(ic)
+  have sal: int_mod(bits_add(64, S, 8), 16) = 0 by taut(ic)
+  have mM: m in x86_64_linux.Machine by taut(ic)
+  have mu: m in univ(1) by taut(ic)
+  have er4: app(app(m, "gpr"), 4) = int_sub(S, 8) by taut(ic)
+  have so: S in omega by simp(sb)
+  have bs: bits_sub(64, app(app(m, "gpr"), 4), 8) = PA by defs(simp(er4, sb, h16, slt), bits_sub)
+  have htr2 := rewrite(bs, htr)
+  have hC2 := rewrite(bs, hC)
+  have pab: PA in bits(64) by simp(sb, h16)
+  have m2M: M2 in x86_64_linux.Machine by defs(simp(expand(mM, x86_64_linux.Machine), mu, hra), x86_64_linux.Machine)
+  have m2u: M2 in univ(1) by simp(mu, hra)
+  // (the pushed bytes: on page L, at most S's page P0, which is mapped)
+  have pp := apply(tr.push_pages, {S}, sb, h16, slt, sal)
+  have lp: int_le(L, P0) by taut(pp)
+  have rb: x86.range_below(PA, 8, L, P0) proof
+    have g: all j. j in omega -> int_lt(j, 8) ->
+        int_le(L, x86_64_linux.page_of(bits_add(64, PA, bits_of_int(64, j)))) && int_le(x86_64_linux.page_of(bits_add(64, PA, bits_of_int(64, j))), P0) proof
+      fix j
+      assume hj: j in omega
+      assume hj8: int_lt(j, 8)
+      have pa := apply(tr.push_at, {S}, {j}, sb, h16, slt, sal, hj, hj8)
+      have pa1: bits_add(64, bits_sub(64, int_sub(S, 8), 8), bits_of_int(64, j)) = int_add(int_sub(S, 16), j) by taut(pa)
+      have bs2: bits_sub(64, int_sub(S, 8), 8) = PA by defs(simp(sb, h16, slt), bits_sub)
+      have pa3 := rewrite(bs2, pa1)
+      have pa2: int_div(int_add(int_sub(S, 16), j), 4096) = L by taut(pa)
+      have pg: x86_64_linux.page_of(bits_add(64, PA, bits_of_int(64, j))) = L by defs(simp(pa3, pa2), x86_64_linux.page_of, x86_64_linux.PAGE)
+      show by simp(pg, lp, keep(x86_64_linux.page_of))
+    qed
+    show by defs(g, x86.range_below)
+  qed
+  have kpt: tr.kept(app(s, "vm"), app(m, "vm"), S) by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access, tr.kept, tr.keeps_code))
+  have kr := mp(all_elim(expand(kpt, tr.kept), {S}), so, arith(so), arith(so))
+  have kr2: app(app(app(m, "vm"), "pages"), P0) = app(app(app(s, "vm"), "pages"), P0) by defs(kr, x86_64_linux.page_of, x86_64_linux.PAGE)
+  have hsps: abi.stack_page(app(s, "vm"), P0) by taut(ic)
+  have mp0: x86_64_linux.mapped(app(M2, "vm"), P0) by defs(simp(kr2, expand(hsps, abi.stack_page, x86_64_linux.mapped)), x86_64_linux.mapped)
+  have p0o: P0 in omega by simp(so)
+  have pin := apply(x86.touch_range_ok_pages, {M2}, {PA}, {8}, {1}, {L}, {P0}, {m1}, {e1}, p0o, mp0, rb, htr2)
+  // (m1: M2 grown, typed, its fields)
+  have ty := apply(x86.touch_range_typed, {M2}, {PA}, {8}, {1}, {m1}, {e1}, m2M, m2u, htr2)
+  have tv := apply(x86.touch_range_vm, {M2}, {PA}, {8}, {1}, {m1}, {e1}, htr2)
+  have gr := apply(x86.touch_range_frame, {M2}, {PA}, {8}, {1}, {m1}, {e1}, simp(), htr2)
+  have fl := apply(x86.touch_range_fields, {M2}, {PA}, {8}, {1}, {m1}, {e1}, htr2)
+  have mf: app(m1, "os") = app(m, "os") && app(m1, "fs_base") = app(m, "fs_base") && app(m1, "cpu") = app(m, "cpu") && app(m1, "gs_base") = app(m, "gs_base") &&
+    app(m1, "flags") = app(m, "flags") && app(m1, "gpr") = app(m, "gpr") && app(m1, "rip") = RA by simp(tv)
+  have m1M: m1 in x86_64_linux.Machine by taut(ty)
+  have m1u: m1 in univ(1) by taut(ty)
+  have pt1 := apply(x86i.parts, m1M)
+  have v1: app(m1, "vm") in x86_64_linux.Vm by taut(pt1)
+  have b1: app(app(m1, "vm"), "bytes") in fn_space(bits(64), bits(8)) by simp(v1)
+  // C: typed
+  have su := apply(g.store_univ, {app(m1, "vm")}, {PA}, {8}, {RA}, v1)
+  have v1u := mp(app_univ[u := 1, f := m1, k := "vm"], m1u)
+  have nu: fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), PA, 8, RA)) in univ(1) by simp(v1u, su)
+  have nv := apply(x86.store_vm, {app(m1, "vm")}, {PA}, {8}, {RA}, v1, nu)
+  have mpu := apply(tr.mach_push, {m1}, {fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), PA, 8, RA))}, {PA}, {T}, m1M, m1u, nv, nu, pab, ht)
+  have mpu2 := rewrite(sym(hC2), mpu)
+  have cM: C in x86_64_linux.Machine by taut(mpu2)
+  have cu: C in univ(1) by taut(mpu2)
+  have cf: app(C, "os") = app(m, "os") && app(C, "fs_base") = app(m, "fs_base") && app(C, "cpu") = app(m, "cpu") && app(C, "gs_base") = app(m, "gs_base") &&
+    app(C, "flags") = app(m, "flags") && app(C, "gpr") = fn_update(app(m, "gpr"), 4, PA) && app(C, "rip") = T by simp(hC2, mf)
+  have cvm: app(C, "vm") = fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), PA, 8, RA)) by simp(hC2)
+  // its memory: fields, pages, the return address, the other bytes
+  have cfl: x86.vm_fields(app(m, "vm"), app(C, "vm")) by defs(simp(cvm, expand(fl, x86.vm_fields)), x86.vm_fields)
+  have cpi: x86.pages_in(app(m, "vm"), app(C, "vm"), L, P0) by defs(simp(cvm, expand(pin, x86.pages_in)), x86.pages_in)
+  have rao: RA in omega by simp(hra)
+  have ls := apply(tr.le_store8, {app(app(m1, "vm"), "bytes")}, {PA}, {RA}, b1, pab, rao)
+  have cle: x86_64_linux.le(app(app(C, "vm"), "bytes"), PA, 8) = RA by simp(cvm, ls, hra)
+  have cby: all a. a in bits(64) -> !(int_le(PA, a) && int_lt(a, int_sub(S, 8))) -> x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) ->
+      app(app(app(C, "vm"), "bytes"), a) = app(app(app(m, "vm"), "bytes"), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume hn: !(int_le(PA, a) && int_lt(a, int_sub(S, 8)))
+    assume hm: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a))
+    have ne: all i. i in omega -> int_lt(i, 8) -> !(bits_add(64, PA, bits_of_int(64, i)) = a) proof
+      fix i
+      assume hi0: i in omega
+      assume hi8: int_lt(i, 8)
+      have pa := apply(tr.push_at, {S}, {i}, sb, h16, slt, sal, hi0, hi8)
+      have pa1: bits_add(64, bits_sub(64, int_sub(S, 8), 8), bits_of_int(64, i)) = int_add(int_sub(S, 16), i) by taut(pa)
+      have bs2: bits_sub(64, int_sub(S, 8), 8) = PA by defs(simp(sb, h16, slt), bits_sub)
+      have pa3 := rewrite(bs2, pa1)
+      have ao: a in omega by simp(ha)
+      have nq: !(int_add(int_sub(S, 16), i) = a) by arith(hn, hi0, hi8, so, ao)
+      show := rewrite(sym(pa3), nq)
+    qed
+    have so2 := apply(x86.store_outside, {app(app(m1, "vm"), "bytes")}, {PA}, {8}, {RA}, {a}, ha, ne)
+    have gb: all x0. x0 in bits(64) -> x86_64_linux.mapped(app(M2, "vm"), x86_64_linux.page_of(x0)) -> app(app(app(m1, "vm"), "bytes"), x0) = app(app(app(M2, "vm"), "bytes"), x0)
+      by taut(expand(gr, abi.vm_grows))
+    have gg := mp(all_elim(gb, {a}), ha, simp(hm))
+    show by simp(cvm, so2, gg)
+  qed
+  // the code: kept by the push (its bytes writable or newly mapped stack)
+  have kc: tr.keeps_code(app(m, "vm"), app(C, "vm")) proof
+    have g: all gb gc st. gb in omega -> abi.loaded(app(m, "vm"), gb, gc, st) -> abi.loaded(app(C, "vm"), gb, gc, st) proof
+      fix gb
+      fix gc
+      fix st
+      assume hb: gb in omega
+      assume hl: abi.loaded(app(m, "vm"), gb, gc, st)
+      have lc: abi.code_at(app(M2, "vm"), gb, gc) by simp(expand(hl, abi.loaded), keep(abi.code_at))
+      have sc := all_elim(apply(x86.store_code, {gb}, {gc}, {M2}, {PA}, {8}, {m1}, {e1}, simp(), hb, htr2, lc), {RA})
+      have cc: abi.code_at(app(C, "vm"), gb, gc) := rewrite(sym(cvm), sc)
+      have stt: all x. x in omega -> x in st -> x86_64_linux.mapped(app(C, "vm"), int_div(x, x86_64_linux.PAGE)) && !abi.stack_page(app(C, "vm"), int_div(x, x86_64_linux.PAGE)) proof
+        fix x
+        assume hx: x in omega
+        assume hs: x in st
+        have lst: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(app(m, "vm"), int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(app(m, "vm"), int_div(x0, x86_64_linux.PAGE))
+          by taut(expand(hl, abi.loaded))
+        have l0 := mp(all_elim(lst, {x}), hx, hs)
+        have po: int_div(x, x86_64_linux.PAGE) in omega by defs(simp(hx), x86_64_linux.PAGE)
+        have pe := apply(tr.pages_eq_mapped, {app(m, "vm")}, {app(C, "vm")}, {L}, {P0}, {int_div(x, x86_64_linux.PAGE)}, cpi, po, taut(l0))
+        show by defs(simp(pe, expand(l0, abi.stack_page, x86_64_linux.mapped), keep(x86_64_linux.PAGE)), abi.stack_page, x86_64_linux.mapped)
+      qed
+      show by defs(taut(cc, stt), abi.loaded)
+    qed
+    show by defs(g, tr.keeps_code)
+  qed
+  show by taut(cM, cu, cf, kc, cfl, cle, cpi, cby)
+qed
