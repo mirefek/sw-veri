@@ -237,11 +237,12 @@ pred implements[G](f: Addr, spec: CFun[World & G]) = implements2(f, wide(spec))
 
 // The program is loaded: its code (the executable segment `code`, at
 // `base`) is in memory, and its static data (the addresses `statics`) is
-// not on the stack -- the ELF's segments are mapped at load, and the stack
-// grows only into unmapped pages. (Otherwise a store to a global could
-// overwrite a return address, which the ABI cannot allow for.)
+// mapped and not on the stack -- the ELF's segments are mapped at load,
+// and the stack grows only into unmapped pages. (Otherwise a store to a
+// global could overwrite a return address, which the ABI cannot allow
+// for.)
 pred loaded(vm: Vm, base: nat, code: List[bits[8]], statics: Set[nat]) =
-  code_at(vm, base, code) && (all a: nat. a in statics -> !stack_page(vm, a / PAGE))
+  code_at(vm, base, code) && (all a: nat. a in statics -> mapped(vm, a / PAGE) && !stack_page(vm, a / PAGE))
 
 // ... provided the program is loaded: the contract of a function inside
 // the program, which only its callers use. Every function of a program

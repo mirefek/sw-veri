@@ -860,7 +860,7 @@ def tr.kept(sv, vm, r) := all a. a in omega -> int_le(int_sub(r, 8), a) -> int_l
 
 // (the code loaded at the entry, loaded still: the function's own, a
 // callee's)
-def tr.keeps_code(sv, vm) := all gb gc. gb in omega -> abi.code_at(sv, gb, gc) -> abi.code_at(vm, gb, gc)
+def tr.keeps_code(sv, vm) := all gb gc st. gb in omega -> abi.loaded(sv, gb, gc, st) -> abi.loaded(vm, gb, gc, st)
 
 def tr.inv(s, base, code, fr, m, w) :=
   m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) && tr.keeps_code(app(s, "vm"), app(m, "vm")) &&
@@ -2886,11 +2886,12 @@ qed
 theorem tr.keeps_refl: all vm. tr.keeps_code(vm, vm)
 proof
   fix vm
-  have g: all gb gc. gb in omega -> abi.code_at(vm, gb, gc) -> abi.code_at(vm, gb, gc) proof
+  have g: all gb gc st. gb in omega -> abi.loaded(vm, gb, gc, st) -> abi.loaded(vm, gb, gc, st) proof
     fix gb
     fix gc
+    fix st
     assume hb: gb in omega
-    assume hc: abi.code_at(vm, gb, gc)
+    assume hc: abi.loaded(vm, gb, gc, st)
     show := hc
   qed
   show by defs(g, tr.keeps_code)
@@ -2909,14 +2910,29 @@ proof
   assume hn: n in omega
   assume hk: tr.keeps_code(sv, vm)
   assume hw: all j. j in omega -> int_lt(j, n) -> x86_64_linux.can_access(vm, bits_add(64, a, bits_of_int(64, j)), 1)
-  have g: all gb gc. gb in omega -> abi.code_at(sv, gb, gc) -> abi.code_at(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), gb, gc) proof
+  have g: all gb gc st. gb in omega -> abi.loaded(sv, gb, gc, st) -> abi.loaded(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), gb, gc, st) proof
     fix gb
     fix gc
+    fix st
     assume hb: gb in omega
-    assume hc: abi.code_at(sv, gb, gc)
-    have c1 := mp(mp(all_elim(expand(hk, tr.keeps_code), {gb}, {gc}), hb), hc)
-    have sc := apply(tr.store_code_acc, {gb}, {gc}, {vm}, {a}, {n}, hn, hb, c1, hw)
-    show := all_elim(sc, {v})
+    assume hc: abi.loaded(sv, gb, gc, st)
+    have c1 := mp(mp(all_elim(expand(hk, tr.keeps_code), {gb}, {gc}, {st}), hb), hc)
+    have l1 := expand(c1, abi.loaded)
+    have cd: abi.code_at(vm, gb, gc) by taut(l1)
+    have sc := apply(tr.store_code_acc, {gb}, {gc}, {vm}, {a}, {n}, hn, hb, cd, hw)
+    have cd2 := all_elim(sc, {v})
+    have stt: all a0. a0 in omega -> a0 in st -> x86_64_linux.mapped(vm, int_div(a0, x86_64_linux.PAGE)) && !abi.stack_page(vm, int_div(a0, x86_64_linux.PAGE)) by taut(l1)
+    have sq: all p. abi.stack_page(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), p) = abi.stack_page(vm, p) proof
+      fix p
+      show by defs(simp(), abi.stack_page, x86_64_linux.mapped)
+    qed
+    have mq: all p. x86_64_linux.mapped(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), p) = x86_64_linux.mapped(vm, p) proof
+      fix p
+      show by defs(simp(), x86_64_linux.mapped)
+    qed
+    have st2: all a0. a0 in omega -> a0 in st -> x86_64_linux.mapped(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), int_div(a0, x86_64_linux.PAGE)) &&
+        !abi.stack_page(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), int_div(a0, x86_64_linux.PAGE)) by simp(stt, sq, mq, keep(abi.stack_page, x86_64_linux.mapped))
+    show by defs(taut(cd2, st2), abi.loaded)
   qed
   show by defs(g, tr.keeps_code)
 qed
