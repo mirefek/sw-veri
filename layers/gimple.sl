@@ -402,21 +402,39 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
 // overflow the stack (`stack_overflow`, the ABI's: no undefined behavior),
 // before the callee runs and after it returns.
 proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  let (regs, sp2) = call_enter(low, hi, args)
+  let mid = vm.bytes
+  let mid_pages = vm.pages
+  let (r0, r1) = call_callee(sp2, g, regs)
+  return call_leave(sp2, hi, mid, mid_pages, r0, r1)
+}
+
+// (the callee on its world, the caller's memory below sp2)
+proc[World] call_callee(sp2: Addr, g: CFun2[World], regs: List[bits[64]]) -> (bits[64], bits[64]) {
+  let (r0, r1) = with callee_world(sp2) { return g(regs) }
+  return (r0, r1)
+}
+
+// (the call's way in: the arguments in registers, the callee's stack
+// pointer, the caller's frame, the thread pointer and the stack checked)
+proc[World] call_enter(low: nat, hi: nat, args: List[(nat, Ty)]) -> (List[bits[64]], Addr) {
   // (a call may overflow the stack: here, the world as it is)
   either { raise stack_overflow } or { }
-  var regs: List[bits[64]] = []
-  for i in 0..len(args) { regs := regs ++ [any r: bits[64] where r in in_reg(args[i][0], args[i][1])] }
+  let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
   let old = vm
   havoc vm where frame_at_call(old, vm, sp2, hi)
   // (the ABI's thread pointer at a call: the word at fs:0 points to itself;
   // the stack sound at the return address's slot)
   if !(thread_ok(vm, fs_base) && stack_ok(vm, sp2 - 8)) { undefined }
-  let mid = vm.bytes
-  let mid_pages = vm.pages
-  let (r0, r1) = with callee_world(sp2) { return g(regs) }
-  // (... and on the way back: the callee may crash after its last I/O --
-  // its spec then returns, with the I/O the crash has)
+  return (regs, sp2)
+}
+
+// (... and its way back: the private frame [sp2, hi) as it was before the
+// callee (mid, mid_pages))
+proc[World] call_leave(sp2: Addr, hi: nat, mid: Addr -> bits[8], mid_pages: PageNo -> Option[Page], r0: bits[64], r1: bits[64]) -> (bits[64], bits[64]) {
+  // (the callee may crash after its last I/O -- its spec then returns,
+  // with the I/O the crash has)
   either { raise stack_overflow } or { }
   if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a] && vm.pages[page_of(a)] = mid_pages[page_of(a)]) { undefined }
   return (r0, r1)
