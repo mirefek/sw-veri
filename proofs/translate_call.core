@@ -1094,3 +1094,90 @@ proof
   have b: bind_rel(q, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by defs(b0, bind_rel)
   show := mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {o}), pu, b)
 qed
+
+// (the caller's private frame [sp2, hi) after the callee: as before, in
+// bytes and pages)
+def tr.frame_same(v3, v1, sp2, hi) := all a. a in bits(64) -> int_le(sp2, a) && int_lt(a, hi) ->
+  app(app(v3, "bytes"), a) = app(app(v1, "bytes"), a) && app(app(v3, "pages"), x86_64_linux.page_of(a)) = app(app(v1, "pages"), x86_64_linux.page_of(a))
+
+// after the callee returned (the caller's world W3, the callee's result
+// r0:r1): the call overflowing the stack, undefined (the frame changed),
+// or the spec's rest from W3 with the result r0
+theorem tr.leave_p(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w u sp2 vm1 w3 r0 r1.
+  w in univ(1) -> w3 in univ(1) -> r0 in univ(1) -> r1 in univ(1) ->
+  runs(gimple.call_enter(app(w, "sp"), app(w, "sp"), seq_one(ar)), w, ok(fn_update(w, "vm", vm1), pair(seq_one(u), sp2))) ->
+  runs(gimple.call_callee(sp2, g, seq_one(u)), fn_update(w, "vm", vm1), ok(w3, pair(r0, r1))) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(w3, exc_val("stack_overflow", empty))) &&
+  (!tr.frame_same(app(w3, "vm"), vm1, sp2, app(w, "sp")) -> (all x e. x in univ(1) -> e in univ(1) ->
+    runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+      x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(x, e)))) &&
+  (tr.frame_same(app(w3, "vm"), vm1, sp2, app(w, "sp")) -> (all o.
+    runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w3, o) ->
+    runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+      x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o)))
+proof
+  fix w
+  fix u
+  fix sp2
+  fix vm1
+  fix w3
+  fix r0
+  fix r1
+  assume hw: w in univ(1)
+  assume hw3: w3 in univ(1)
+  assume hr0: r0 in univ(1)
+  assume hr1: r1 in univ(1)
+  assume hen: runs(gimple.call_enter(app(w, "sp"), app(w, "sp"), seq_one(ar)), w, ok(fn_update(w, "vm", vm1), pair(seq_one(u), sp2)))
+  assume hco: runs(gimple.call_callee(sp2, g, seq_one(u)), fn_update(w, "vm", vm1), ok(w3, pair(r0, r1)))
+  assume hk: all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))
+  let Q := mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1))
+  let LV := gimple.call_leave(sp2, app(w, "sp"), app(app(fn_update(w, "vm", vm1), "vm"), "bytes"), app(app(fn_update(w, "vm", vm1), "vm"), "pages"), fst(pair(r0, r1)), snd(pair(r0, r1)))
+  have ou: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
+  // overflow after the callee
+  have lo0 := apply(gc.leave_ovf, {sp2}, {app(w, "sp")}, {app(app(fn_update(w, "vm", vm1), "vm"), "bytes")}, {app(app(fn_update(w, "vm", vm1), "vm"), "pages")},
+    {fst(pair(r0, r1))}, {snd(pair(r0, r1))}, {w3}, hw3)
+  have ao := apply(gc.call_at_via_exc, {app(w, "sp")}, {app(w, "sp")}, {g}, {seq_one(ar)}, {w}, {fn_update(w, "vm", vm1)}, {seq_one(u)}, {sp2}, {w3}, {pair(r0, r1)},
+    {w3}, {exc_val("stack_overflow", empty)}, hw, hw3, ou, hen, hco, lo0)
+  have c1o := apply(gc.call1_exc, {g}, {seq_one(ar)}, {w}, {w3}, {exc_val("stack_overflow", empty)}, hw, hw3, ou, ao)
+  have po := apply(tr.call_exc[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)],
+    {w}, {w3}, {exc_val("stack_overflow", empty)}, hw, hw3, ou, c1o, mp(all_elim(hk, {w3}, {exc_val("stack_overflow", empty)}), hw3, ou))
+  // the frame changed: undefined
+  have pu: !tr.frame_same(app(w3, "vm"), vm1, sp2, app(w, "sp")) -> (all x e. x in univ(1) -> e in univ(1) ->
+      runs(mkprog(x1 x2. bind_rel(Q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(x, e))) proof
+    assume hn: !tr.frame_same(app(w3, "vm"), vm1, sp2, app(w, "sp"))
+    fix x
+    fix e
+    assume hx: x in univ(1)
+    assume he: e in univ(1)
+    have hn2: !(all a. a in bits(64) -> int_le(sp2, a) && int_lt(a, app(w, "sp")) ->
+        app(app(app(w3, "vm"), "bytes"), a) = app(app(app(fn_update(w, "vm", vm1), "vm"), "bytes"), a) &&
+        app(app(app(w3, "vm"), "pages"), x86_64_linux.page_of(a)) = app(app(app(fn_update(w, "vm", vm1), "vm"), "pages"), x86_64_linux.page_of(a))) by simp(expand(hn, tr.frame_same))
+    have lu := apply(gc.leave_ub, {sp2}, {app(w, "sp")}, {app(app(fn_update(w, "vm", vm1), "vm"), "bytes")}, {app(app(fn_update(w, "vm", vm1), "vm"), "pages")},
+      {fst(pair(r0, r1))}, {snd(pair(r0, r1))}, {w3}, {x}, {e}, hw3, hx, he, hn2)
+    have au := apply(gc.call_at_via_exc, {app(w, "sp")}, {app(w, "sp")}, {g}, {seq_one(ar)}, {w}, {fn_update(w, "vm", vm1)}, {seq_one(u)}, {sp2}, {w3}, {pair(r0, r1)},
+      {x}, {e}, hw, hx, he, hen, hco, lu)
+    have c1u := apply(gc.call1_exc, {g}, {seq_one(ar)}, {w}, {x}, {e}, hw, hx, he, au)
+    show := apply(tr.call_exc[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)],
+      {w}, {x}, {e}, hw, hx, he, c1u, mp(all_elim(hk, {x}, {e}), hx, he))
+  qed
+  // the frame as before: the call returns r0
+  have pk: tr.frame_same(app(w3, "vm"), vm1, sp2, app(w, "sp")) -> (all o.
+      runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w3, o) ->
+      runs(mkprog(x1 x2. bind_rel(Q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o)) proof
+    assume hs: tr.frame_same(app(w3, "vm"), vm1, sp2, app(w, "sp"))
+    have hs2: all a. a in bits(64) -> int_le(sp2, a) && int_lt(a, app(w, "sp")) ->
+        app(app(app(w3, "vm"), "bytes"), a) = app(app(app(fn_update(w, "vm", vm1), "vm"), "bytes"), a) &&
+        app(app(app(w3, "vm"), "pages"), x86_64_linux.page_of(a)) = app(app(app(fn_update(w, "vm", vm1), "vm"), "pages"), x86_64_linux.page_of(a)) by defs(simp(expand(hs, tr.frame_same)), tr.frame_same)
+    have lk := apply(gc.leave_ok, {sp2}, {app(w, "sp")}, {app(app(fn_update(w, "vm", vm1), "vm"), "bytes")}, {app(app(fn_update(w, "vm", vm1), "vm"), "pages")},
+      {fst(pair(r0, r1))}, {snd(pair(r0, r1))}, {w3}, hw3, simp(hr0), simp(hr1), hs2)
+    have ak := apply(gc.call_at_via_ok, {app(w, "sp")}, {app(w, "sp")}, {g}, {seq_one(ar)}, {w}, {fn_update(w, "vm", vm1)}, {seq_one(u)}, {sp2}, {w3}, {pair(r0, r1)},
+      {w3}, {pair(fst(pair(r0, r1)), snd(pair(r0, r1)))}, hw, hw3, simp(hr0, hr1), hen, hco, lk)
+    have ak2: runs(gimple.call_at(app(w, "sp"), app(w, "sp"), g, seq_one(ar)), w, ok(w3, pair(r0, r1))) by simp(ak, keep(gimple.call_at))
+    have c1k := apply(gc.call1_ok, {g}, {seq_one(ar)}, {w}, {w3}, {r0}, {r1}, hw, hw3, hr0, hr1, ak2)
+    have qc := mp(all_elim(tr.qs_call[op := gimple.call1(g, seq_one(ar)), w4 := w3, r := r0, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), hw, c1k)
+    show := apply(tr.p_red[q := Q, q2 := mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {w3}, hw, qc)
+  qed
+  show by taut(po, pu, pk)
+qed
