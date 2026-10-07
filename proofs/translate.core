@@ -33,7 +33,7 @@ proof
 qed
 
 def tr.ok(s, p, w, o) :=
-  ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+  ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine && m1 in univ(1) &&
     runs(p, w, ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
     app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
@@ -386,6 +386,24 @@ qed
 // at the entry: abi.matches_at -- a run breaking the discipline is one only
 // where the spec raises (its disciplined run then leaves with disc, which
 // is no normal return, no crash)
+// (a return: the ABI's return case, which does not ask m1 in univ(1))
+theorem tr.ok_abi: all s p w o. tr.ok(s, p, w, o) ->
+  (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+    runs(p, w, ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+    abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+    app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+    abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df"))
+proof
+  fix s
+  fix p
+  fix w
+  fix o
+  assume h: tr.ok(s, p, w, o)
+  obtain m1, h1 from expand(h, tr.ok)
+  obtain w2, h2 from h1
+  show by ex_intro({m1}, {w2}, taut(h2))
+qed
+
 theorem tr.entry: all spec args s v o. tr.sim(s, v, app(spec, args), abi.view(v, s), s) -> runs(abi.run_to_return(), s, o) ->
   abi.matches_at(spec, args, s, v, o)
 proof
@@ -402,7 +420,8 @@ proof
     have c := mp(all_elim(expand(h, tr.sim), {o}), rd)
     have cr := all_elim(tr.crash_at, {spec}, {args}, {s}, {v}, {o})
     have ua := all_elim(tr.ub_at, {spec}, {args}, {s}, {v})
-    show by defs(taut(expand(c, tr.ok), cr, ua), abi.matches_at)
+    have oa := all_elim(tr.ok_abi, {s}, {app(spec, args)}, {abi.view(v, s)}, {o})
+    show by defs(taut(c, oa, cr, ua), abi.matches_at)
   qed
   have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches_at(spec, args, s, v, o) proof
     assume e: ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))
@@ -434,7 +453,7 @@ qed
 // variant), so a caller's run through a call ends or raises
 def tr.matches_at_t(spec, args, s, v, o) :=
   abi.raises_at(spec, args, s, v) ||
-  (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+  (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine && m1 in univ(1) &&
     runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
     app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
@@ -453,7 +472,10 @@ proof
   assume h: tr.matches_t(spec, args, s, o)
   obtain v, hv from expand(h, tr.matches_t)
   have mt: tr.matches_at_t(spec, args, s, v, o) by taut(hv)
-  have ma: abi.matches_at(spec, args, s, v, o) by defs(taut(expand(mt, tr.matches_at_t)), abi.matches_at)
+  have mt2: abi.raises_at(spec, args, s, v) || tr.ok(s, app(spec, args), abi.view(v, s), o) || abi.crashes_at(spec, args, s, v, o)
+    by defs(taut(expand(mt, tr.matches_at_t)), tr.ok)
+  have oa := all_elim(tr.ok_abi, {s}, {app(spec, args)}, {abi.view(v, s)}, {o})
+  have ma: abi.matches_at(spec, args, s, v, o) by defs(taut(mt2, oa), abi.matches_at)
   show by defs(ex_intro({v}, taut(hv, ma)), abi.matches)
 qed
 
@@ -751,7 +773,7 @@ qed
 // at the return (rip the caller's return address, rsp past it): the run
 // ends there, ok(m) -- the spec returning the machine's rax:rdx, the world
 // and the ABI's registers as at the return case of abi.matches_at
-theorem tr.ret: all s v p w m w2. tr.at_ret(s, m) -> m in x86_64_linux.Machine ->
+theorem tr.ret: all s v p w m w2. tr.at_ret(s, m) -> m in x86_64_linux.Machine -> m in univ(1) ->
   runs(p, w, ok(w2, pair(app(app(m, "gpr"), 0), app(app(m, "gpr"), 2)))) -> w2 in abi.World -> w2 in univ(1) ->
   abi.world_matches(app(s, "vm"), app(m, "vm"), app(w2, "vm"), abi.sp(s)) -> app(m, "os") = app(w2, "os") -> app(m, "fs_base") = app(w2, "fs_base") ->
   app(m, "cpu") = app(s, "cpu") -> app(m, "gs_base") = app(s, "gs_base") -> abi.callee_saved(m, s) -> !app(app(m, "flags"), "df") ->
@@ -765,6 +787,7 @@ proof
   fix w2
   assume ha: tr.at_ret(s, m)
   assume hM: m in x86_64_linux.Machine
+  assume hmu: m in univ(1)
   assume hr: runs(p, w, ok(w2, pair(app(app(m, "gpr"), 0), app(app(m, "gpr"), 2))))
   assume h1: w2 in abi.World
   assume h2: w2 in univ(1)
@@ -819,7 +842,7 @@ proof
   have k: all o. o = ok(m, empty) -> tr.ok(s, p, w, o) proof
     fix o
     assume e: o = ok(m, empty)
-    show by defs(ex_intro({m}, {w2}, simp(e, hM, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
+    show by defs(ex_intro({m}, {w2}, simp(e, hM, hmu, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
   qed
   have all_o: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) || tr.crash(s, p, w, o) proof
     fix o
@@ -2766,7 +2789,9 @@ proof
       have cs: abi.callee_saved(M2, s) by simp(rest, e3, e5, e12, e13, e14, e15)
       have oth: app(M2, "os") = app(w, "os") && app(M2, "fs_base") = app(w, "fs_base") && app(M2, "cpu") = app(s, "cpu") && app(M2, "gs_base") = app(s, "gs_base") &&
         !app(app(M2, "flags"), "df") && w in abi.World by simp(rest, keep(abi.World))
-      have c := apply(tr.ret, {s}, {v}, {p}, {w}, {M2}, {w}, atr, m2M, rr, taut(rest), wu, wm2, taut(oth), taut(oth), taut(oth), taut(oth), cs, taut(oth))
+      have gu := mp(app_univ[u := 1, f := m, k := "gpr"], mu)
+      have m2u: M2 in univ(1) by simp(mu, gu, lt, r4)
+      have c := apply(tr.ret, {s}, {v}, {p}, {w}, {M2}, {w}, atr, m2M, m2u, rr, taut(rest), wu, wm2, taut(oth), taut(oth), taut(oth), taut(oth), cs, taut(oth))
       show := rewrite(sym(e2), c)
     qed
     show := mp(mp(mp(tr.step[s := s, v := v, p := p, w := w, m := m, q := x. x = M2], st), nr), post)
