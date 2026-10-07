@@ -122,6 +122,9 @@ pred entry_ok(m: Machine, args: Args) =
   (all i: nat. i < len(args) -> m.gpr[ARG_REGS[i]] = args[i]) &&
   readable(m.vm, uint(m.fs_base), 8) && le(m.vm.bytes, m.fs_base, 8) = m.fs_base
 
+// the thread pointer as entry_ok has it: the word at fs:0 points to itself
+pred thread_ok(vm: Vm, fs: Addr) = readable(vm, uint(fs), 8) && le(vm.bytes, fs, 8) = fs
+
 // The machine, from the function's entry until it returns to its caller.
 proc[Machine] run_to_return() {
   let sp  = gpr[rsp] + 8

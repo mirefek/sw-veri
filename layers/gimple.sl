@@ -392,13 +392,17 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
 // its own stack below `low` (the stack pointer, or the lowest stack object
 // of the caller); the result registers rax, rdx. The caller's private
 // frame [sp2, hi) is the caller's own: a callee that changes it is
-// undefined (C: none of the caller's objects it may access is there).
+// undefined (C: none of the caller's objects it may access is there). A
+// call with the thread pointer broken (the word at fs:0 not pointing to
+// itself, as the ABI requires at every call) is undefined.
 proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   var regs: List[bits[64]] = []
   for i in 0..len(args) { regs := regs ++ [any r: bits[64] where r in in_reg(args[i][0], args[i][1])] }
   let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
   let old = vm
   havoc vm where frame_at_call(old, vm, sp2, hi)
+  // (the ABI's thread pointer at a call: the word at fs:0 points to itself)
+  if !thread_ok(vm, fs_base) { undefined }
   let mid = vm.bytes
   let (r0, r1) = with callee_world(sp2) { return g(regs) }
   if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a]) { undefined }
