@@ -1384,3 +1384,95 @@ proof
   qed
   show by taut(cM, cu, cf, kc, cfl, cle, cpi, cby)
 qed
+
+// GIMPLE's frame at the call: the callee's entry memory cv (the world's but
+// for the return address's slot, the homes, the stack grown below S's page)
+theorem tr.push_frame: all s base code m w ds cv. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) -> int_le(16, app(app(s, "gpr"), 4)) ->
+  x86.vm_fields(app(m, "vm"), cv) ->
+  x86.pages_in(app(m, "vm"), cv, int_div(int_sub(app(app(s, "gpr"), 4), 16), 4096), int_div(app(app(s, "gpr"), 4), 4096)) ->
+  (all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 16), a) && int_lt(a, int_sub(app(app(s, "gpr"), 4), 8))) ->
+    x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) -> app(app(cv, "bytes"), a) = app(app(app(m, "vm"), "bytes"), a)) ->
+  gimple.frame_at_call(app(w, "vm"), cv, int_sub(app(app(s, "gpr"), 4), 8), app(w, "sp"))
+proof
+  fix s
+  fix base
+  fix code
+  fix m
+  fix w
+  fix ds
+  fix cv
+  assume hi: tr.inv(s, base, code, 8, m, w)
+  assume hmm: tr.mem(s, m, w, ds)
+  assume h16: int_le(16, app(app(s, "gpr"), 4))
+  assume hf: x86.vm_fields(app(m, "vm"), cv)
+  assume hp: x86.pages_in(app(m, "vm"), cv, int_div(int_sub(app(app(s, "gpr"), 4), 16), 4096), int_div(app(app(s, "gpr"), 4), 4096))
+  assume hb: all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 16), a) && int_lt(a, int_sub(app(app(s, "gpr"), 4), 8))) ->
+    x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) -> app(app(cv, "bytes"), a) = app(app(app(m, "vm"), "bytes"), a)
+  let S := app(app(s, "gpr"), 4)
+  have ic := apply(tr.inv_call, hi)
+  have sb: S in bits(64) by taut(ic)
+  have slt: int_lt(S, 140737488355328) by taut(ic)
+  have sal: int_mod(bits_add(64, S, 8), 16) = 0 by taut(ic)
+  have so: S in omega by simp(sb)
+  have mM: m in x86_64_linux.Machine by taut(ic)
+  have mv: app(m, "vm") in x86_64_linux.Vm by simp(apply(x86i.parts, mM))
+  have mve := apply(tr.mem_vm_eq, {s}, {m}, {w}, {ds}, mv, hmm)
+  have wf: app(app(w, "vm"), "stack_top") = app(app(m, "vm"), "stack_top") && app(app(w, "vm"), "stack_limit") = app(app(m, "vm"), "stack_limit") &&
+    app(app(w, "vm"), "brk_start") = app(app(m, "vm"), "brk_start") && app(app(w, "vm"), "brk") = app(app(m, "vm"), "brk") &&
+    app(app(w, "vm"), "pages") = app(app(m, "vm"), "pages") by simp(sym(mve))
+  have wsp: app(w, "sp") = abi.sp(s) by taut(ic)
+  have pp := apply(tr.push_pages, {S}, sb, h16, slt, sal)
+  have pp4: bits_add(64, S, 8) = int_add(S, 8) by taut(pp)
+  have hiw: app(w, "sp") = int_add(S, 8) by simp(wsp, pp4)
+  // the bytes outside the frame [S - 16, S + 8): the world's
+  have bw: all a. a in bits(64) -> !(int_le(int_sub(int_sub(S, 8), 8), a) && int_lt(a, app(w, "sp"))) && x86_64_linux.mapped(app(w, "vm"), x86_64_linux.page_of(a)) ->
+      app(app(cv, "bytes"), a) = app(app(app(w, "vm"), "bytes"), a) proof
+    fix a
+    assume ha: a in bits(64)
+    assume h2: !(int_le(int_sub(int_sub(S, 8), 8), a) && int_lt(a, app(w, "sp"))) && x86_64_linux.mapped(app(w, "vm"), x86_64_linux.page_of(a))
+    have ao: a in omega by simp(ha)
+    have h3 := rewrite(hiw, h2)
+    have nfr: !(int_le(int_sub(int_sub(S, 8), 8), a) && int_lt(a, int_add(S, 8))) by taut(h3)
+    have mw: x86_64_linux.mapped(app(w, "vm"), x86_64_linux.page_of(a)) by taut(h3)
+    have n1: !(int_le(int_sub(S, 16), a) && int_lt(a, int_sub(S, 8))) by arith(nfr, so, ao)
+    have n2: !(int_le(int_sub(S, 8), a) && int_lt(a, S)) by arith(nfr, so, ao)
+    have wpe: app(app(w, "vm"), "pages") = app(app(m, "vm"), "pages") by taut(wf)
+    have mm: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) by defs(rewrite(wpe, expand(mw, x86_64_linux.mapped)), x86_64_linux.mapped)
+    have cb := mp(all_elim(hb, {a}), ha, n1, mm)
+    have c1: (!ds && app(w, "vm") = app(m, "vm")) -> app(app(app(m, "vm"), "bytes"), a) = app(app(app(w, "vm"), "bytes"), a) proof
+      assume h1: !ds && app(w, "vm") = app(m, "vm")
+      have e: app(w, "vm") = app(m, "vm") by taut(h1)
+      show by simp(e)
+    qed
+    have c2: (ds && fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
+        abi.agree(app(s, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) &&
+        tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))) -> app(app(app(m, "vm"), "bytes"), a) = app(app(app(w, "vm"), "bytes"), a) proof
+      assume h1: ds && fn_update(app(w, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
+        abi.agree(app(s, "vm"), abi.sp(s), app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) &&
+        tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes"))
+      have fa: tr.fagree(s, app(app(m, "vm"), "bytes"), app(app(w, "vm"), "bytes")) by taut(h1)
+      show := mp(all_elim(expand(fa, tr.fagree), {a}), ha, n2)
+    qed
+    have mw2: app(app(app(m, "vm"), "bytes"), a) = app(app(app(w, "vm"), "bytes"), a) by taut(expand(hmm, tr.mem), c1, c2)
+    show := trans(cb, mw2)
+  qed
+  // the pages: the world's, or grown in [S - 16's page, S's page)
+  have pw: all p. p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ->
+      app(app(cv, "pages"), p) = app(app(app(w, "vm"), "pages"), p) ||
+      ((int_le(int_div(int_sub(int_sub(S, 8), 8), x86_64_linux.PAGE), p) && int_lt(int_mul(p, x86_64_linux.PAGE), app(w, "sp"))) && app(app(app(w, "vm"), "pages"), p) = none) proof
+    fix p
+    assume hpp: p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
+    have po: p in omega by simp(hpp)
+    have a := mp(all_elim(expand(hp, x86.pages_in), {p}), po)
+    have l0: int_div(int_sub(S, 16), 4096) = int_div(int_sub(int_sub(S, 8), 8), 4096) by arith(so)
+    have c: int_lt(p, int_div(S, 4096)) -> int_lt(int_mul(p, 4096), int_add(S, 8)) proof
+      assume hlt: int_lt(p, int_div(S, 4096))
+      show by arith(po, so, hlt)
+    qed
+    have pe: app(app(app(w, "vm"), "pages"), p) = app(app(app(m, "vm"), "pages"), p) by simp(wf)
+    show by defs(simp(a, pe, l0, c, hiw), x86_64_linux.PAGE)
+  qed
+  have wf4: app(app(w, "vm"), "stack_top") = app(app(m, "vm"), "stack_top") && app(app(w, "vm"), "stack_limit") = app(app(m, "vm"), "stack_limit") &&
+    app(app(w, "vm"), "brk_start") = app(app(m, "vm"), "brk_start") && app(app(w, "vm"), "brk") = app(app(m, "vm"), "brk") by taut(wf)
+  show by defs(simp(wf4, expand(hf, x86.vm_fields), bw, pw), gimple.frame_at_call)
+qed
