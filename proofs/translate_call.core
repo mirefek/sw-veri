@@ -371,65 +371,58 @@ proof
   show by simp(e8, d1, d2, d3)
 qed
 
-// the pushed bytes: scratch at the entry (S's page a stack page, nothing
-// but stack in its guard gap)
-theorem tr.push_scratch: all sv S j. S in bits(64) -> int_le(16, S) -> int_lt(S, 140737488355328) -> int_mod(bits_add(64, S, 8), 16) = 0 ->
-  abi.stack_page(sv, int_div(S, 4096)) -> abi.stack_gap_free(sv) -> j in omega -> int_lt(j, 8) ->
-  abi.scratch(sv, bits_add(64, S, 8), int_add(int_sub(S, 16), j))
+// the pushed bytes, at a fault for want of a mapping (the page of S - 16
+// unmapped, S's a stack page): where the stack could not grow, rsp S - 8
+theorem tr.push_overflow: all xv S j. S in bits(64) -> int_le(16, S) -> int_lt(S, 140737488355328) -> int_mod(bits_add(64, S, 8), 16) = 0 ->
+  abi.stack_page(xv, int_div(S, 4096)) -> !x86_64_linux.mapped(xv, int_div(int_sub(S, 16), 4096)) -> j in omega -> int_lt(j, 8) ->
+  abi.overflow_at(xv, int_sub(S, 8), bits_add(64, S, 8), int_add(int_sub(S, 16), j))
 proof
-  fix sv
+  fix xv
   fix S
   fix j
   assume hs: S in bits(64)
   assume h16: int_le(16, S)
   assume hl: int_lt(S, 140737488355328)
   assume ha: int_mod(bits_add(64, S, 8), 16) = 0
-  assume hsp: abi.stack_page(sv, int_div(S, 4096))
-  assume hg: abi.stack_gap_free(sv)
+  assume hsp: abi.stack_page(xv, int_div(S, 4096))
+  assume hnm: !x86_64_linux.mapped(xv, int_div(int_sub(S, 16), 4096))
   assume hj: j in omega
   assume hj8: int_lt(j, 8)
   have pa := apply(tr.push_at, {S}, {j}, hs, h16, hl, ha, hj, hj8)
   have pp := apply(tr.push_pages, {S}, hs, h16, hl, ha)
   have so: S in omega by simp(hs)
   have p0: int_div(S, 4096) in omega by simp(so)
-  have gp: all p. p in omega -> int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) && int_le(p, int_div(int_sub(bits_add(64, S, 8), 1), 4096)) ->
-      abi.stack_page(sv, p) || !x86_64_linux.mapped(sv, p) proof
+  have m1: int_mod(int_add(S, 8), 16) = 0 by simp(hs, ha, hl)
+  have m2: int_le(8, int_mod(S, 4096)) && int_le(int_mod(S, 4096), 4088) by simp(hs, m1)
+  have r8: int_div(int_sub(S, 8), 4096) = int_div(S, 4096) by simp(hs, m2, h16)
+  have pp2: int_le(int_div(S, 4096), int_add(int_div(int_sub(S, 16), 4096), 1)) by taut(pp)
+  have pa2: int_div(int_add(int_sub(S, 16), j), 4096) = int_div(int_sub(S, 16), 4096) by taut(pa)
+  have gp: all p. p in omega -> int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) && int_le(p, int_div(int_sub(S, 8), 4096)) ->
+      abi.stack_page(xv, p) || !x86_64_linux.mapped(xv, p) proof
     fix p
     assume hp: p in omega
-    assume h12: int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) && int_le(p, int_div(int_sub(bits_add(64, S, 8), 1), 4096))
+    assume h12: int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) && int_le(p, int_div(int_sub(S, 8), 4096))
     have h1: int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) by taut(h12)
-    have h2: int_le(p, int_div(int_sub(bits_add(64, S, 8), 1), 4096)) by taut(h12)
-    have c1: p = int_div(S, 4096) -> abi.stack_page(sv, p) || !x86_64_linux.mapped(sv, p) proof
+    have h2: int_le(p, int_div(int_sub(S, 8), 4096)) by taut(h12)
+    have c1: p = int_div(S, 4096) -> abi.stack_page(xv, p) || !x86_64_linux.mapped(xv, p) proof
       assume e: p = int_div(S, 4096)
       have r := rewrite(sym(e), hsp)
       show by taut(r)
     qed
-    have c2: !(p = int_div(S, 4096)) -> abi.stack_page(sv, p) || !x86_64_linux.mapped(sv, p) proof
+    have c2: !(p = int_div(S, 4096)) -> abi.stack_page(xv, p) || !x86_64_linux.mapped(xv, p) proof
       assume ne: !(p = int_div(S, 4096))
-      have pp3: int_div(int_sub(bits_add(64, S, 8), 1), 4096) = int_div(S, 4096) by taut(pp)
-      have pp2: int_le(int_div(S, 4096), int_add(int_div(int_sub(S, 16), 4096), 1)) by taut(pp)
-      have pa2: int_div(int_add(int_sub(S, 16), j), 4096) = int_div(int_sub(S, 16), 4096) by taut(pa)
-      have h2b := rewrite(pp3, h2)
+      have h2b := rewrite(r8, h2)
       have h1b := rewrite(pa2, h1)
-      have lt: int_lt(p, int_div(S, 4096)) by arith(h2b, ne, hp, p0)
-      have gg0: int_le(int_mul(int_sub(int_div(S, 4096), p), 4096), int_mul(256, 4096)) by arith(pp2, h1b, hp, p0)
-      have gg: int_le(int_mul(int_sub(int_div(S, 4096), p), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP) by defs(gg0, x86_64_linux.PAGE, x86_64_linux.STACK_GUARD_GAP)
-      have gf := all_elim(expand(hg, abi.stack_gap_free), {int_div(S, 4096)}, {p})
-      have m: x86_64_linux.mapped(sv, p) -> abi.stack_page(sv, p) proof
-        assume hm: x86_64_linux.mapped(sv, p)
-        have pq: int_div(S, 4096) in omega && p in omega by taut(p0, hp)
-        have cnd: ((abi.stack_page(sv, int_div(S, 4096)) && int_lt(p, int_div(S, 4096))) && int_le(int_mul(int_sub(int_div(S, 4096), p), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP)) &&
-          x86_64_linux.mapped(sv, p) by taut(hsp, lt, gg, hm)
-        show := mp(mp(gf, pq), cnd)
-      qed
-      show by taut(m)
+      have pl: p = int_div(int_sub(S, 16), 4096) by arith(h2b, h1b, ne, pp2, hp, p0)
+      have n := rewrite(sym(pl), hnm)
+      show by taut(n)
     qed
     show by taut(c1, c2)
   qed
   have pp4: bits_add(64, S, 8) = int_add(S, 8) by taut(pp)
   have lt1: int_lt(int_add(int_sub(S, 16), j), int_add(S, 8)) by arith(hj8)
   have lt0 := rewrite(sym(pp4), lt1)
-  show by defs(taut(lt0, gp), abi.scratch, x86_64_linux.PAGE)
+  show by defs(taut(lt0, gp), abi.overflow_at, x86_64_linux.PAGE)
 qed
 
 // (the coupled memories: the world's but for the machine's bytes)
@@ -625,9 +618,27 @@ proof
   let B := int_add(int_sub(S, 16), j)
   have bb: B in bits(64) by simp(sb, h16, slt, jo, j8)
   // no mapping: a crash
-  have c0: e = exc_val("segv", pair(B, 0)) -> tr.ub(s, v, P, w) || tr.crash(s, P, w, exc(x, e)) proof
-    assume ee: e = exc_val("segv", pair(B, 0))
-    have sc := apply(tr.push_scratch, {app(s, "vm")}, {S}, {j}, sb, h16, slt, sal, taut(ic), taut(ic), jo, j8)
+  have c0: (e = exc_val("segv", pair(B, 0)) && !x86_64_linux.mapped(app(x, "vm"), x86_64_linux.page_of(B))) -> tr.ub(s, v, P, w) || tr.crash(s, P, w, exc(x, e)) proof
+    assume ee0: e = exc_val("segv", pair(B, 0)) && !x86_64_linux.mapped(app(x, "vm"), x86_64_linux.page_of(B))
+    have ee: e = exc_val("segv", pair(B, 0)) by taut(ee0)
+    // (S's page: a stack page at the fault -- kept from the entry, not grown)
+    have kpt: tr.kept(app(s, "vm"), app(m, "vm"), S) by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access, tr.kept, tr.keeps_code))
+    have so: S in omega by simp(sb)
+    have kr := mp(all_elim(expand(kpt, tr.kept), {S}), so, arith(so), arith(so))
+    have g1: x86.pages_in(app(M2, "vm"), app(x, "vm"), int_div(int_sub(S, 16), 4096), int_div(S, 4096)) by taut(expand(hg, x86.grown))
+    have p0o: int_div(S, 4096) in omega by simp(so)
+    have g1a := mp(all_elim(expand(g1, x86.pages_in), {int_div(S, 4096)}), p0o)
+    have kr2: app(app(app(m, "vm"), "pages"), int_div(S, 4096)) = app(app(app(s, "vm"), "pages"), int_div(S, 4096)) by defs(kr, x86_64_linux.page_of, x86_64_linux.PAGE)
+    have xp: app(app(app(x, "vm"), "pages"), int_div(S, 4096)) = app(app(app(s, "vm"), "pages"), int_div(S, 4096)) by simp(g1a, kr2)
+    have hsps: abi.stack_page(app(s, "vm"), int_div(S, 4096)) by taut(ic)
+    have hspx: abi.stack_page(app(x, "vm"), int_div(S, 4096)) by defs(simp(xp, expand(hsps, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+    have pa2: int_div(int_add(int_sub(S, 16), j), 4096) = int_div(int_sub(S, 16), 4096) by taut(pa)
+    have nm0: !x86_64_linux.mapped(app(x, "vm"), x86_64_linux.page_of(B)) by taut(ee0)
+    have pb: x86_64_linux.page_of(B) = int_div(int_sub(S, 16), 4096) by defs(pa2, x86_64_linux.page_of, x86_64_linux.PAGE)
+    have nm := rewrite(pb, nm0)
+    have ovp := apply(tr.push_overflow, {app(x, "vm")}, {S}, {j}, sb, h16, slt, sal, hspx, nm, jo, j8)
+    have xr: app(app(x, "gpr"), 4) = int_sub(S, 8) by simp(gt, er4)
+    have sc := rewrite(sym(xr), ovp)
     have xos: app(x, "os") = app(m, "os") by simp(gt)
     have wos: app(m, "os") = app(w, "os") by taut(ic)
     have ev: app(app(w, "os"), "events") = app(app(x, "os"), "events") by simp(xos, wos)

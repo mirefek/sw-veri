@@ -553,8 +553,9 @@ planned, and everything it does not use is removed.
      violation).
    - Stack overflow is a spec outcome (`stack_overflow`; GIMPLE may raise
      it before a callee runs and after it returns). The claim's third case
-     is a crash (`tr.crash`): the machine faults in the entry's scratch
-     space, its input as at the entry and its events grown, with the I/O
+     is a crash (`tr.crash`): the machine faults where its stack could not
+     grow (`abi.overflow_at`, at the fault -- below the entry's sp, the pages
+     from the address up to rsp stack or unmapped), its input as at the entry and its events grown, with the I/O
      of an outcome of the spec from the current point where the I/O
      stops (`tr.ovf`: a stack overflow, a return, a divergence).
      `tr.sim_red` carries it back along reductions; at the entry it is

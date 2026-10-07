@@ -141,17 +141,27 @@ proc[Machine] run_to_return() {
 //  Stack overflow
 //
 // The implementation may run out of stack inside the function: an access
-// to its scratch space faults (the stack cannot grow further). The process
+// to its stack faults (the stack cannot grow further). The process
 // dies: memory and registers no longer matter, but the I/O done so far
 // does. Policy: the spec says where it may overflow (`stack_overflow`), and
 // the crash's I/O is that of such a point of the spec -- or of one where
 // the spec does no more I/O (it returns, or runs on silently).
 
+// Where a stack overflow faults, as the machine has it at the fault (vm,
+// rsp): below the function's sp, every page from the address up to rsp's
+// a stack page or unmapped -- a push or a frame access the stack could not
+// grow to. Stated at the fault, not at the entry: the page map may change
+// in between (munmap), and a callee's overflow is then its caller's (its
+// sp is lower).
+pred overflow_at(vm: Vm, rsp: Addr, sp: Addr, a: Addr) =
+  uint(a) < uint(sp) &&
+  (all p: nat. uint(a) / PAGE <= p && p <= uint(rsp) / PAGE -> stack_page(vm, p) || !mapped(vm, p))
+
 // Specs say where a stack overflow may stop them: the exception
 // `stack_overflow` (no undefined behavior, see `spec_raises`). Readable
 // GIMPLE may overflow at every call; a spec above it at every call or
 // stack push it models. (The machine itself has no such exception: it
-// faults with segv in the scratch space.)
+// faults with segv, overflow_at.)
 exception stack_overflow
 
 // a crash state's I/O is that of some outcome the spec allows from `w`
@@ -223,9 +233,8 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
     abi_restore(saved)
     abi_set_result(sp, ret, r0, r1)
   } or {
-    let vm0 = vm
-    let a = any Addr where scratch(vm0, sp, uint(a))
     havoc self where overflow_ok(w0, spec, args, os)
+    let a = any Addr where overflow_at(vm, gpr[rsp], sp, a)
     either { raise segv(a, maperr) } or { raise segv(a, accerr) }
   }
 }

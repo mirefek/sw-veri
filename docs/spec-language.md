@@ -435,8 +435,12 @@ it.
   - the function behaves like `spec` on the world;
   - rbx, rbp, r12–r15 and rsp are restored, the result is in rax, and all
     other registers and the flags are clobbered;
-  - **or** it runs out of stack: a fault (`maperr` or `accerr`) at an address
-    of its scratch space. Memory and registers are then arbitrary, since the
+  - **or** it runs out of stack: a fault (`maperr` or `accerr`) where the
+    stack could not grow (`overflow_at`, stated at the fault: below the
+    function's sp, every page from the address up to rsp's a stack page or
+    unmapped -- what the machine's push or frame access leaves; at the fault,
+    not the entry, as munmap may free pages in between, and so a callee's
+    overflow is its caller's). Memory and registers are then arbitrary, since the
     process dies. The I/O done so far (output written, input consumed) must
     be that of a point where the spec may stop (`overflow_ok`): a
     `stack_overflow` outcome of the spec, or an outcome after which it does
