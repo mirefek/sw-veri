@@ -838,13 +838,21 @@ qed
 //    has written its frame (ds true), the same but for scratch bytes (the
 //    spec's locals are not in its memory).
 
+// (the memory as at the entry but for its bytes and the stack grown in
+// the scratch space below sp: a page is the entry's, or a stack page
+// mapped where the entry had none)
+def tr.grown(sv, vm, sp) := app(vm, "stack_top") = app(sv, "stack_top") && app(vm, "stack_limit") = app(sv, "stack_limit") &&
+  app(vm, "brk_start") = app(sv, "brk_start") && app(vm, "brk") = app(sv, "brk") &&
+  (all p. app(app(vm, "pages"), p) = app(app(sv, "pages"), p) ||
+    (abi.scratch_page(sv, sp, p) && app(app(sv, "pages"), p) = none && abi.stack_page(vm, p)))
+
 // (the code loaded at the entry, loaded still: the function's own, a
 // callee's)
 def tr.keeps_code(sv, vm) := all gb gc. gb in omega -> abi.code_at(sv, gb, gc) -> abi.code_at(vm, gb, gc)
 
 def tr.inv(s, base, code, fr, m, w) :=
   m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) && tr.keeps_code(app(s, "vm"), app(m, "vm")) &&
-  app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) && fr in omega && fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") &&
+  app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) && fr in omega && tr.grown(app(s, "vm"), app(m, "vm"), abi.sp(s)) &&
   x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) = abi.ret(s) &&
   abi.callee_saved(m, s) && app(m, "cpu") = app(s, "cpu") && app(m, "gs_base") = app(s, "gs_base") &&
   app(m, "os") = app(w, "os") && app(m, "fs_base") = app(w, "fs_base") && !app(app(m, "flags"), "df") &&
@@ -865,6 +873,66 @@ def tr.mem(s, m, w, ds) := (!ds && app(w, "vm") = app(m, "vm")) ||
 // the claim at the address a: from every machine state there, coupled
 def tr.pt(s, v, base, code, fr, a, hs, ds, rs, p, w) :=
   all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, ds) -> tr.sim(s, v, p, w, m)
+
+// (the entry's memory: grown by nothing)
+theorem tr.grown_refl: all sv sp. sv in x86_64_linux.Vm -> tr.grown(sv, sv, sp)
+proof
+  fix sv
+  fix sp
+  assume hv: sv in x86_64_linux.Vm
+  have e: app(sv, "stack_top") = app(sv, "stack_top") && app(sv, "stack_limit") = app(sv, "stack_limit") &&
+    app(sv, "brk_start") = app(sv, "brk_start") && app(sv, "brk") = app(sv, "brk") by simp()
+  have g: all p. app(app(sv, "pages"), p) = app(app(sv, "pages"), p) ||
+      (abi.scratch_page(sv, sp, p) && app(app(sv, "pages"), p) = none && abi.stack_page(sv, p)) proof
+    fix p
+    show by taut(refl({app(app(sv, "pages"), p)}))
+  qed
+  show by defs(taut(e, g), tr.grown)
+qed
+
+// (an accessible byte of the entry's memory: accessible still)
+theorem tr.grown_acc: all sv vm sp a k. tr.grown(sv, vm, sp) -> x86_64_linux.can_access(sv, a, k) -> x86_64_linux.can_access(vm, a, k)
+proof
+  fix sv
+  fix vm
+  fix sp
+  fix a
+  fix k
+  assume hg: tr.grown(sv, vm, sp)
+  assume hc: x86_64_linux.can_access(sv, a, k)
+  have g := expand(hg, tr.grown)
+  have pgs: all p. app(app(vm, "pages"), p) = app(app(sv, "pages"), p) ||
+      (abi.scratch_page(sv, sp, p) && app(app(sv, "pages"), p) = none && abi.stack_page(vm, p)) by taut(g)
+  have pg := all_elim(pgs, {x86_64_linux.page_of(a)})
+  have mp0: !(app(app(sv, "pages"), x86_64_linux.page_of(a)) = none) by taut(expand(expand(hc, x86_64_linux.can_access), x86_64_linux.mapped))
+  have e: app(app(vm, "pages"), x86_64_linux.page_of(a)) = app(app(sv, "pages"), x86_64_linux.page_of(a)) by taut(pg, mp0)
+  have c := expand(expand(hc, x86_64_linux.can_access), x86_64_linux.mapped)
+  have c2 := rewrite(sym(e), c)
+  show by defs(defs(c2, x86_64_linux.mapped), x86_64_linux.can_access)
+qed
+
+// (bytes written: grown still)
+theorem tr.grown_bytes: all sv vm sp x. tr.grown(sv, vm, sp) -> tr.grown(sv, fn_update(vm, "bytes", x), sp)
+proof
+  fix sv
+  fix vm
+  fix sp
+  fix x
+  assume hg: tr.grown(sv, vm, sp)
+  have g := expand(hg, tr.grown)
+  have e: app(vm, "stack_top") = app(sv, "stack_top") && app(vm, "stack_limit") = app(sv, "stack_limit") &&
+    app(vm, "brk_start") = app(sv, "brk_start") && app(vm, "brk") = app(sv, "brk") by taut(g)
+  have pg: all p. app(app(vm, "pages"), p) = app(app(sv, "pages"), p) ||
+      (abi.scratch_page(sv, sp, p) && app(app(sv, "pages"), p) = none && abi.stack_page(vm, p)) by taut(g)
+  have pg2: all p. app(app(fn_update(vm, "bytes", x), "pages"), p) = app(app(sv, "pages"), p) ||
+      (abi.scratch_page(sv, sp, p) && app(app(sv, "pages"), p) = none && abi.stack_page(fn_update(vm, "bytes", x), p)) proof
+    fix p
+    have c := all_elim(pg, {p})
+    have sq: abi.stack_page(fn_update(vm, "bytes", x), p) = abi.stack_page(vm, p) by defs(simp(), abi.stack_page, x86_64_linux.mapped)
+    show by simp(c, sq, keep(abi.scratch_page, abi.stack_page))
+  qed
+  show by defs(simp(e, pg2, keep(abi.scratch_page, abi.stack_page)), tr.grown)
+qed
 
 // (no frame: rsp the entry's)
 theorem tr.inv0_rsp: all s base code m w. tr.inv(s, base, code, 0, m, w) -> app(app(m, "gpr"), 4) = app(app(s, "gpr"), 4)
@@ -1720,7 +1788,7 @@ proof
   have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
   have ca: x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
   have al: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
-  have vmm: fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have gr: tr.grown(app(s, "vm"), app(m, "vm"), abi.sp(s)) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.grown))
   have r4 := apply(x86i.rsp_typed, sM)
   have sa := apply(abi.slot_access, {app(s, "vm")}, {app(app(s, "gpr"), 4)}, {c}, {n}, r4, ca, al, hc, hc1, hn)
   // (the address as the slot lemma forms it, and as the model)
@@ -1741,7 +1809,8 @@ proof
     have c1 := mp(mp(all_elim(sa1, {i}), i1), i2)
     have e := mp(all_elim(ea, {bits_of_int(64, i)}), simp(i1))
     have c2 := rewrite(e, c1)
-    show by simp(c2, sym(vmm), r4, hc, i1)
+    have c3 := apply(tr.grown_acc, {app(s, "vm")}, {app(m, "vm")}, {abi.sp(s)}, {bits_add(64, int_add(app(app(s, "gpr"), 4), c), bits_of_int(64, i))}, {1}, gr, c2)
+    show by simp(c3, r4, hc, i1)
   qed
   have g0: all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, bits_add(64, int_add(app(app(s, "gpr"), 4), c), 0), bits_of_int(64, i)), 0) proof
     fix i
@@ -1750,7 +1819,8 @@ proof
     have c1 := mp(mp(all_elim(sa0, {i}), i1), i2)
     have e := mp(all_elim(ea, {bits_of_int(64, i)}), simp(i1))
     have c2 := rewrite(e, c1)
-    show by simp(c2, sym(vmm), r4, hc, i1)
+    have c3 := apply(tr.grown_acc, {app(s, "vm")}, {app(m, "vm")}, {abi.sp(s)}, {bits_add(64, int_add(app(app(s, "gpr"), 4), c), bits_of_int(64, i))}, {0}, gr, c2)
+    show by simp(c3, r4, hc, i1)
   qed
   show by taut(g1, g0)
 qed
@@ -2579,7 +2649,7 @@ proof
     have ca: x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have al: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have rspm := apply(tr.inv0_rsp, hi)
-    have vmm: fn_update(app(s, "vm"), "bytes", app(app(m, "vm"), "bytes")) = app(m, "vm") by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have gr: tr.grown(app(s, "vm"), app(m, "vm"), abi.sp(s)) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.grown))
     have rest: x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(s, "gpr"), 4), 8) = abi.ret(s) && abi.callee_saved(m, s) && app(m, "cpu") = app(s, "cpu") && app(m, "gs_base") = app(s, "gs_base") &&
       app(m, "os") = app(w, "os") && app(m, "fs_base") = app(w, "fs_base") && !app(app(m, "flags"), "df") && w in abi.World && w in univ(1)
       by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
@@ -2591,7 +2661,8 @@ proof
       assume j1: j in omega
       assume j2: int_lt(j, 8)
       have c1 := mp(mp(all_elim(ra, {j}), j1), j2)
-      show by simp(c1, rspm, sym(vmm))
+      have c3 := apply(tr.grown_acc, {app(s, "vm")}, {app(m, "vm")}, {abi.sp(s)}, {bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, j))}, {0}, gr, c1)
+      show by simp(c3, rspm)
     qed
     let M2 := fn_update(fn_update(m, "gpr", fn_update(app(m, "gpr"), 4, bits_add(64, app(app(m, "gpr"), 4), 8))), "rip", x86_64_linux.le(app(app(m, "vm"), "bytes"), app(app(m, "gpr"), 4), 8))
     have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && m2 = M2) proof
@@ -2892,6 +2963,9 @@ proof
     have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, simp(), hbase, hc, sa1)
     have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
     have kc := apply(tr.keeps_store, {app(s, "vm")}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, {X}, simp(), all_elim(tr.keeps_refl, {app(s, "vm")}), sa1)
+    have svm: app(s, "vm") in x86_64_linux.Vm by simp(pt)
+    have gv := apply(tr.grown_bytes, {app(s, "vm")}, {app(s, "vm")}, {abi.sp(s)}, {x86_64_linux.store_le(app(app(s, "vm"), "bytes"), bits_add(64, app(app(s, "gpr"), 4), d), 4, X)},
+      mp(all_elim(tr.grown_refl, {app(s, "vm")}, {abi.sp(s)}), svm))
     // (the return address: the store is below it)
     have below: all k. k in omega -> int_lt(k, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k)), bits_add(64, app(app(s, "gpr"), 4), d)), 4) proof
       fix k
@@ -2904,7 +2978,7 @@ proof
     have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {4}, {X}, r4, simp(r4, hd), below)
     have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0, kc, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0, kc, gv, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have rp: app(M1, "rip") = a2 by simp()
     have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {X}, simp(pt), simp(r4, hd), xo)
     have du := mp(dom_update[f := empty, k := d, v := pair(4, x)], taut(dom_empty))
@@ -3099,6 +3173,9 @@ proof
       have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {4}, simp(), hbase, hc, sa1)
       have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
       have kc := apply(tr.keeps_store, {app(s, "vm")}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {4}, {X}, simp(), all_elim(tr.keeps_refl, {app(s, "vm")}), sa1)
+      have svm: app(s, "vm") in x86_64_linux.Vm by simp(pt)
+      have gv := apply(tr.grown_bytes, {app(s, "vm")}, {app(s, "vm")}, {abi.sp(s)}, {x86_64_linux.store_le(app(app(s, "vm"), "bytes"), bits_add(64, app(app(s, "gpr"), 4), c), 4, X)},
+        mp(all_elim(tr.grown_refl, {app(s, "vm")}, {abi.sp(s)}), svm))
       have below: all k0. k0 in omega -> int_lt(k0, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k0)), bits_add(64, app(app(s, "gpr"), 4), c)), 4) proof
         fix k0
         assume k1: k0 in omega
@@ -3117,7 +3194,7 @@ proof
       have e14 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 14], simp())
       have e15 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 15], simp())
       have e7 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 7], simp())
-      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], kc, m1M, m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
+      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], kc, gv, m1M, m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
         keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
       have rp: app(M1, "rip") = a2 by simp()
       have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {X}, simp(pt), simp(r4, hcb), xo)
@@ -6733,6 +6810,9 @@ proof
     have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, simp(), hbase, hc, sa1)
     have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
     have kc := apply(tr.keeps_store, {app(s, "vm")}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, {X}, simp(), all_elim(tr.keeps_refl, {app(s, "vm")}), sa1)
+    have svm: app(s, "vm") in x86_64_linux.Vm by simp(pt)
+    have gv := apply(tr.grown_bytes, {app(s, "vm")}, {app(s, "vm")}, {abi.sp(s)}, {x86_64_linux.store_le(app(app(s, "vm"), "bytes"), bits_add(64, app(app(s, "gpr"), 4), d), 8, X)},
+      mp(all_elim(tr.grown_refl, {app(s, "vm")}, {abi.sp(s)}), svm))
     // (the return address: the store is below it)
     have below: all k. k in omega -> int_lt(k, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k)), bits_add(64, app(app(s, "gpr"), 4), d)), 8) proof
       fix k
@@ -6745,7 +6825,7 @@ proof
     have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {8}, {X}, r4, simp(r4, hd), below)
     have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0, kc, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+    have inv: tr.inv(s, base, code, 0, M1, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], z0, kc, gv, m1M, m1u, cd, far, hdf, wt, hvu, hM, ca, al, hsp, hlt, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have rp: app(M1, "rip") = a2 by simp()
     have ld := apply(tr.le_store8, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), d)}, {X}, simp(pt), simp(r4, hd), xo)
     have du := mp(dom_update[f := empty, k := d, v := pair(8, x)], taut(dom_empty))
