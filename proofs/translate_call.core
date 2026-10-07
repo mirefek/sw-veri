@@ -3105,3 +3105,186 @@ proof
   qed
   show by defs(g0, tr.pt)
 qed
+
+// ----------------------------------------------------------------------
+//  A caller's contract: its code with its callees'
+
+// (code loaded as two pieces: each loaded at its place)
+theorem tr.code_concat: all vm b c1 c2 t. c1 in list_type(t) -> c2 in list_type(t) -> b in omega -> abi.code_at(vm, b, seq_concat(c1, c2)) ->
+  abi.code_at(vm, b, c1) && abi.code_at(vm, int_add(b, seq_len(c1)), c2)
+proof
+  fix vm
+  fix b
+  fix c1
+  fix c2
+  fix t
+  assume h1: c1 in list_type(t)
+  assume h2: c2 in list_type(t)
+  assume hb: b in omega
+  assume hc: abi.code_at(vm, b, seq_concat(c1, c2))
+  have cc := expand(hc, abi.code_at)
+  have n1: seq_len(c1) in omega by simp(h1)
+  have n2: seq_len(c2) in omega by simp(h2)
+  have ln: seq_len(seq_concat(c1, c2)) = int_add(seq_len(c1), seq_len(c2)) by arith(h1, h2)
+  have g1: all i. i in omega -> int_lt(i, seq_len(c1)) ->
+      ((x86_64_linux.fetchable(vm, bits_of_int(64, int_add(b, i))) && !x86_64_linux.can_access(vm, bits_of_int(64, int_add(b, i)), 1)) &&
+        !abi.stack_page(vm, x86_64_linux.page_of(bits_of_int(64, int_add(b, i))))) && app(app(vm, "bytes"), bits_of_int(64, int_add(b, i))) = app(c1, i) proof
+    fix i
+    assume hi: i in omega
+    assume hl: int_lt(i, seq_len(c1))
+    have l2: int_lt(i, seq_len(seq_concat(c1, c2))) by arith(hl, ln, n2, hi)
+    have ci := mp(all_elim(cc, {i}), hi, l2)
+    have e := at({app(seq_concat(c1, c2), i)}, h1, h2, hi, hl)
+    show by simp(ci, e)
+  qed
+  have g2: all i. i in omega -> int_lt(i, seq_len(c2)) ->
+      ((x86_64_linux.fetchable(vm, bits_of_int(64, int_add(int_add(b, seq_len(c1)), i))) && !x86_64_linux.can_access(vm, bits_of_int(64, int_add(int_add(b, seq_len(c1)), i)), 1)) &&
+        !abi.stack_page(vm, x86_64_linux.page_of(bits_of_int(64, int_add(int_add(b, seq_len(c1)), i))))) &&
+      app(app(vm, "bytes"), bits_of_int(64, int_add(int_add(b, seq_len(c1)), i))) = app(c2, i) proof
+    fix i
+    assume hi: i in omega
+    assume hl: int_lt(i, seq_len(c2))
+    have jo: int_add(seq_len(c1), i) in omega by simp(n1, hi)
+    have l2: int_lt(int_add(seq_len(c1), i), seq_len(seq_concat(c1, c2))) by arith(hl, ln, n1, hi)
+    have ci := mp(all_elim(cc, {int_add(seq_len(c1), i)}), jo, l2)
+    have e0 := at({app(seq_concat(c1, c2), int_add(seq_len(c1), i))}, h1, h2, hi, hl, n1)
+    have k: int_sub(int_add(seq_len(c1), i), seq_len(c1)) = i by arith(hi, n1)
+    have e := rewrite(k, e0)
+    have ad: int_add(b, int_add(seq_len(c1), i)) = int_add(int_add(b, seq_len(c1)), i) by arith(hb, n1, hi)
+    have ci2 := rewrite(ad, ci)
+    show by simp(ci2, e)
+  qed
+  have r1: abi.code_at(vm, b, c1) by defs(g1, abi.code_at)
+  have r2: abi.code_at(vm, int_add(b, seq_len(c1)), c2) by defs(g2, abi.code_at)
+  show by taut(r1, r2)
+qed
+
+// ... and so the program with its statics
+theorem tr.loaded_concat: all vm b c1 c2 t st. c1 in list_type(t) -> c2 in list_type(t) -> b in omega -> abi.loaded(vm, b, seq_concat(c1, c2), st) ->
+  abi.loaded(vm, b, c1, st) && abi.loaded(vm, int_add(b, seq_len(c1)), c2, st)
+proof
+  fix vm
+  fix b
+  fix c1
+  fix c2
+  fix t
+  fix st
+  assume h1: c1 in list_type(t)
+  assume h2: c2 in list_type(t)
+  assume hb: b in omega
+  assume hl: abi.loaded(vm, b, seq_concat(c1, c2), st)
+  have l := expand(hl, abi.loaded)
+  have cc := apply(tr.code_concat, {vm}, {b}, {c1}, {c2}, {t}, h1, h2, hb, taut(l))
+  show by defs(taut(l, cc), abi.loaded)
+qed
+
+// a callee's contract for its own code: for more code loaded too
+theorem tr.implements_widen: all f spec b c b2 c2 st. tr.implements_at(f, spec, b, c, st) ->
+  (all vm. abi.loaded(vm, b2, c2, st) -> abi.loaded(vm, b, c, st)) -> tr.implements_at(f, spec, b2, c2, st)
+proof
+  fix f
+  fix spec
+  fix b
+  fix c
+  fix b2
+  fix c2
+  fix st
+  assume h: tr.implements_at(f, spec, b, c, st)
+  assume hw: all vm. abi.loaded(vm, b2, c2, st) -> abi.loaded(vm, b, c, st)
+  have g: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), b2, c2, st) -> app(s, "rip") = f ->
+      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, s, o) proof
+    fix args
+    fix s
+    fix o
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume hu: s in univ(1)
+    assume hl: abi.loaded(app(s, "vm"), b2, c2, st)
+    assume hr: app(s, "rip") = f
+    assume he: abi.entry_ok(s, args)
+    assume hd: tr.run_d(s, s, o)
+    have l := mp(all_elim(hw, {app(s, "vm")}), hl)
+    show := mp(all_elim(expand(h, tr.implements_at), {args}, {s}, {o}), hA, hM, hu, l, hr, he, hd)
+  qed
+  show by defs(g, tr.implements_at)
+qed
+
+// tr.entry1_32s for a contract whose code lb/lc holds the function's own
+// (base/code) -- a caller's, holding its callees' code too
+theorem tr.entry1_32s_w(lb, lc, base, code, statics, f, k, len0, z0, a1, len, d, c, z1, z2, a2, x0. q, x3 x4 x2. kw): base in omega ->
+  (all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len0, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z0, k)))))), m, o)) ->
+  a1 = bits_add(64, f, len0) -> k in bits(8) -> int_lt(k, 128) -> int_le(k, 8) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a1 ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)) ->
+  a2 = bits_add(64, a1, len) -> d in bits(64) -> c = int_mod(int_sub(d, k), 18446744073709551616) -> c in bits(64) ->
+  int_le(18446744073709551608, c) -> int_le(4, int_sub(18446744073709551616, c)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
+    abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+    abi.loaded(app(s, "vm"), lb, lc, statics) -> abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
+    tr.pt(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, k, a2, fn_update(empty, c, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
+      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), lb, lc, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+proof
+  assume hbase: base in omega
+  assume hsub: all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)
+  assume hat0: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len0, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z0, k)))))), m, o)
+  assume ha1: a1 = bits_add(64, f, len0)
+  assume hk: k in bits(8)
+  assume hkl: int_lt(k, 128)
+  assume hk8: int_le(k, 8)
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a1 ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  assume ha2: a2 = bits_add(64, a1, len)
+  assume hd: d in bits(64)
+  assume hcd: c = int_mod(int_sub(d, k), 18446744073709551616)
+  assume hcb: c in bits(64)
+  assume hd1: int_le(18446744073709551608, c)
+  assume hd2: int_le(4, int_sub(18446744073709551616, c))
+  assume hbody: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
+    abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+    abi.loaded(app(s, "vm"), lb, lc, statics) -> abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
+    tr.pt(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, k, a2, fn_update(empty, c, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
+      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))
+  have hpro: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), lb, lc, statics) -> app(s, "rip") = f ->
+      abi.entry_ok(s, args) -> ord_le(1, seq_len(args)) ->
+      tr.sim(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+        abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s) proof
+    fix args
+    fix s
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume su: s in univ(1)
+    assume hl: abi.loaded(app(s, "vm"), lb, lc, statics)
+    assume hrip: app(s, "rip") = f
+    assume he: abi.entry_ok(s, args)
+    assume hg: ord_le(1, seq_len(args))
+    let X := bits_slice(app(app(s, "gpr"), 7), 31, 0)
+    let V := tr.view1(s, c, 4, X)
+    let BIND := mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+    have hc := mp(all_elim(hsub, {app(s, "vm")}), hl)
+    have ent := apply(abi.entry_stack, hM, he)
+    have hdf: !app(app(s, "flags"), "df") by taut(expand(he, abi.entry_ok))
+    have r7R: 7 in x86_64_linux.Reg by simp()
+    have r7 := mp(mp(all_elim(x86i.reg_typed, {s}, {7}), hM), r7R)
+    have xo: X in omega by simp(r7)
+    have vf := apply(tr.view1_ok, {s}, {c}, {4}, {X}, hM, su, taut(ent), taut(ent), taut(ent), hcb, hd1, hd2, simp(), xo)
+    have vV: V in x86_64_linux.Vm by taut(vf)
+    have vU: V in univ(1) by taut(vf)
+    have hvu: abi.view(V, s) in univ(1) by simp(su, vU)
+    have ap := apply(abi.arg_passed, {s}, {args}, hA, he, hg)
+    have hx: bits_of_int(32, app(app(s, "gpr"), 7)) = bits_of_int(32, app(args, 0)) by simp(ap)
+    have r4 := apply(x86i.rsp_typed, hM)
+    have hWw := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
+    have body := mp(mp(mp(mp(mp(mp(all_elim(hbody, {args}, {s}), hA), hM), hg), hvu), hl), hWw)
+    show := apply(tr.prologue_sub1_32, {s}, {base}, {code}, {f}, {k}, {len0}, {z0}, {a1}, {len}, {d}, {c}, {z1}, {z2}, {a2}, {bits_of_int(32, app(args, 0))}, {BIND},
+      hM, su, hbase, hc, hrip, hdf, taut(ent), taut(ent), taut(ent), taut(ent), apply(abi.entry_gap, he), hat0, ha1, hk, hkl, hk8, hat, ha2, hd, hcd, hcb, hd1, hd2, hx, hvu, body)
+  qed
+  show := mp(tr.entry1_32g[base := lb, code := lc, statics := statics, f := f, d := c, q := x0. q(x0), kw := x3 x4 x2. kw(x3, x4, x2)], hcb, hd1, hd2, hpro)
+qed
