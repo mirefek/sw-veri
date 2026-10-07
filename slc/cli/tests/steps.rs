@@ -112,7 +112,7 @@ fn translations_are_generated_and_check() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_store_loop.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_store_loop.core"]
             .iter()
             .map(|f| f.into()),
     );
