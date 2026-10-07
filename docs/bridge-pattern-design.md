@@ -570,5 +570,28 @@ planned, and everything it does not use is removed.
      (the spec reaches its next call or its return without I/O); a_clz_32's
      frame stays in the entry's page, so it waits for a function that needs
      it.
-   - Still to do: divergence at the bridge's end (a callee's); the run
-     split at a call; the call rule; frames after `sub rsp`; a_clz_32.
+   - Frames: the coupling takes the frame's size `fr` (rsp is the entry's
+     less fr; homes stay keyed by their offset from the entry's rsp, an
+     instruction's `[rsp + d]` being the home `d - fr`, `tr.frame_ea`).
+     `tr.sub_rsp` / `tr.add_rsp` move between frames (at most 8 bytes so
+     far: the frame stays in the entry's page); `ret` is at frame 0. The
+     entry with a `sub rsp, k` prologue: `tr.entry1_32s` (via
+     `tr.prologue_sub1_32`), both entry rules instances of
+     `tr.entry1_32g`.
+   - The contract is terminating: `tr.implements_at` gives `tr.matches_t`
+     (no divergence case; every certificate proves it, as loops have
+     variants), so a caller's run through a call ends or raises; the ABI's
+     contract still follows (`tr.matches_t_abi`).
+   - The coupling keeps the entry's input and growing events (a callee's
+     crash is one from the caller's entry) and all code loaded at the
+     entry (`tr.keeps_code`: a callee's code at its call).
+   - The run split: `tr.run_split` (from `while_split` in core/loop.core)
+     cuts a caller's run at the callee's return.
+   - Still to do: the call rule. Its machine side meets stack growth: the
+     `call`'s push may map a new stack page (or fault: the crash case), so
+     the coupling's memory relation (`vm` as the entry's but for bytes)
+     must allow stack pages grown in the scratch space, as GIMPLE's
+     `frame_at_call` does. Then: the callee's entry conditions, its
+     contract, the GIMPLE call lemmas (`call_at`'s choices, the callee's
+     world, the overflow points, the private frame), the result and the
+     clobbered registers; a_clz_32.
