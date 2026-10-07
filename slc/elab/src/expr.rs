@@ -1035,22 +1035,27 @@ impl<'s> Elab<'s> {
         let es = self.fresh("s");
         let ee = self.fresh("e");
         let dt = self.fresh("t");
-        // exceptions and divergence of the body propagate (after writing back)
+        // exceptions and divergence of the body propagate; an exception after
+        // writing the body's state back through the view's setter (as on a
+        // normal end), the setter's own outcomes propagating
         let ikeys = self.base_keys(&StateTy { base: inner_st.base.clone(), ext: vec![] })?;
-        let exc_state = {
-            let back = self.b.app("restrict", vec![self.b.v(es), ikeys.clone()]);
-            let _ = back;
-            // on exceptions the world is written back without running `set`
-            self.b.v(es)
-        };
-        let _ = exc_state;
         let ef = {
-            let s2 = self.b.app("rec_merge", vec![
-                self.b.app("ghost_part", vec![s_before.clone(), self.b.app("union2", vec![okeys.clone(), ikeys.clone()])]),
+            let mut xargs = self.lift_args(cx, &ssig, span)?;
+            xargs.extend(args.clone());
+            xargs.push(self.b.app("restrict", vec![self.b.v(es), ikeys.clone()]));
+            let xset = self.b.app(&ssig.core, xargs);
+            let (s6, v6, s8, e8, t8) = (self.fresh("s"), self.fresh("v"), self.fresh("s"), self.fresh("e"), self.fresh("t"));
+            let back = self.b.app("rec_merge", vec![
+                self.b.app("restrict", vec![self.b.v(s6), okeys.clone()]),
                 self.b.app("ghost_part", vec![self.b.v(es), ikeys.clone()]),
             ]);
-            let merged = self.b.app("rec_merge", vec![self.b.app("restrict", vec![s_before.clone(), okeys.clone()]), s2]);
-            self.exit_raise(cx, merged, self.b.v(ee))
+            let ok_exit = self.exit_raise(cx, back, self.b.v(ee));
+            let raise_exit = self.exit_raise(cx, self.b.v(s8), self.b.v(e8));
+            let div_exit = self.exit_div(cx, self.b.v(t8));
+            self.b.bind_args(
+                "bind_rel",
+                vec![(vec![], xset), (vec![], s_before.clone()), (vec![s6, v6], ok_exit), (vec![s8, e8], raise_exit), (vec![t8], div_exit)],
+            )
         };
         let df = self.exit_div(cx, self.b.v(dt));
         cx.frames.push(Frame::Run { prog, s_in: w0g, s_out: w1, v_out: r, exc: (es, ee, ef), div: (dt, df) });
