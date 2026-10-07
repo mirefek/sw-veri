@@ -377,15 +377,15 @@ fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec 
 
 // The caller's frame at a call to a callee with stack pointer sp2: the
 // stack may have grown down to the return address's slot below sp2 (free
-// pages mapped; the call checks they are stack pages), and the bytes from
-// that slot up to `hi` --
+// pages mapped, their bytes new; the call checks they are stack pages),
+// and the bytes from that slot up to `hi` --
 // the caller's private frame [sp2, hi), below its stack pointer and
 // holding none of its C objects -- are arbitrary: the caller's machine
 // code keeps values there that C does not see.
 pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
   new.stack_top = old.stack_top && new.stack_limit = old.stack_limit &&
   new.brk_start = old.brk_start && new.brk = old.brk &&
-  (all a: Addr. !(uint(sp2) - 8 <= uint(a) && uint(a) < hi) -> new.bytes[a] = old.bytes[a]) &&
+  (all a: Addr. !(uint(sp2) - 8 <= uint(a) && uint(a) < hi) && mapped(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
   (all p: PageNo. new.pages[p] = old.pages[p] ||
      ((uint(sp2) - 8) / PAGE <= p && p * PAGE < hi && old.pages[p] = none))
 
