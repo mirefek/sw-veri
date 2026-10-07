@@ -1,0 +1,278 @@
+// The stack growing (spec/x86_64/memory.sl, `touch` / `grow_stack`): the
+// machine stays well-typed -- what a call's push needs for the callee's
+// entry state.
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     build/musl_malloc_O0.core proofs/x86.core proofs/x86_code.core proofs/x86_stack.core
+
+// a function updated inside its domain, with a value of its range
+theorem x86.space_upd: all a b f k v. f in fn_space(a, b) -> k in a -> v in b -> fn_update(f, k, v) in fn_space(a, b)
+proof
+  fix a
+  fix b
+  fix f
+  fix k
+  fix v
+  assume hf: f in fn_space(a, b)
+  assume hk: k in a
+  assume hv: v in b
+  have fd: is_fun(f) && dom(f) = a by simp(expand(hf, fn_space))
+  have vals: all x. x in a -> ite(x = k, v, app(f, x)) in b proof
+    fix x
+    assume hx: x in a
+    have c1: x = k -> ite(x = k, v, app(f, x)) in b proof
+      assume e: x = k
+      have t := mp(ite_t[c := x = k, a := v, b := app(f, x)], e)
+      show := rewrite(sym(t), hv)
+    qed
+    have c2: !(x = k) -> ite(x = k, v, app(f, x)) in b proof
+      assume e: !(x = k)
+      have t := mp(ite_f[c := x = k, a := v, b := app(f, x)], e)
+      have fx := mp(mp(fn_space_app[a := a, b := b, f := f, x := x], hf), hx)
+      show := rewrite(sym(t), fx)
+    qed
+    show by taut(c1, c2)
+  qed
+  have sp := mp(fn_build_space[d := a, v := x. ite(x = k, v, app(f, x)), b := b], vals)
+  // (the update is that function)
+  have gk: ite(k = k, v, app(f, k)) = v := mp(ite_t[c := k = k, a := v, b := app(f, k)], refl({k}))
+  have go: all x. x in a -> !(x = k) -> ite(x = k, v, app(f, x)) = app(f, x) proof
+    fix x
+    assume hx: x in a
+    assume e: !(x = k)
+    show := mp(ite_f[c := x = k, a := v, b := app(f, x)], e)
+  qed
+  have ub := mp(mp(mp(fn_update_build[d := a, f := x. app(f, x), g := x. ite(x = k, v, app(f, x)), k := k, w := v], hk), gk), go)
+  have e := mp(mp(fn_eta[f := f, d := a], taut(fd)), taut(fd))
+  have ub2 := rewrite(e, ub)
+  show := rewrite(sym(ub2), sp)
+qed
+
+// a memory with one page entry set (a page or none) is a memory
+theorem x86.vm_page_set: all vm i w. vm in x86_64_linux.Vm -> vm in univ(1) -> i in omega -> int_lt(i, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) ->
+  w in option(x86_64_linux.Page) -> w in univ(1) ->
+  fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)) in x86_64_linux.Vm && fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)) in univ(1)
+proof
+  fix vm
+  fix i
+  fix w
+  assume h: vm in x86_64_linux.Vm
+  assume hu: vm in univ(1)
+  assume hi: i in omega
+  assume hl: int_lt(i, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+  assume hw: w in option(x86_64_linux.Page)
+  assume hwu: w in univ(1)
+  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) &&
+    app(vm, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page)) by simp(expand(h, x86_64_linux.Vm))
+  have pt: app(vm, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page)) by taut(ht)
+  have id: i in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(hi, hl)
+  have sp := apply(x86.space_upd, {set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))}, {option(x86_64_linux.Page)}, {app(vm, "pages")}, {i}, {w}, pt, id, hw)
+  have pu := mp(app_univ[u := 1, f := vm, k := "pages"], hu)
+  have iu := mp(mp(univ_trans[u := 1, a := i, b := omega], omega_univ), hi)
+  have nu: fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)) in univ(1) by simp(hu, pu, hwu, iu)
+  have hf: is_fun(vm) by taut(ht)
+  have pd: "pages" in dom(vm) by simp(ht)
+  have fuf := mp(fn_update_fun[f := vm, k := "pages", v := fn_update(app(vm, "pages"), i, w)], hf)
+  have fud := mp(mp(fn_update_dom[f := vm, k := "pages", v := fn_update(app(vm, "pages"), i, w)], hf), pd)
+  have dv: dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by taut(ht)
+  have pv: ((((((is_fun(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w))) && dom(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w))) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)), "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)), "bytes") in fn_space(bits(64), bits(8))) && app(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)), "stack_top") in bits(64)) && app(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)), "stack_limit") in omega) && app(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)), "brk_start") in bits(64)) && app(fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)), "brk") in bits(64)
+    by simp(expand(h, x86_64_linux.Vm), sp, fuf, fud, dv)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))), p := x0. ((((((is_fun(x0) && dom(x0) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(x0, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(x0, "bytes") in fn_space(bits(64), bits(8))) && app(x0, "stack_top") in bits(64)) && app(x0, "stack_limit") in omega) && app(x0, "brk_start") in bits(64)) && app(x0, "brk") in bits(64), r := fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w))], nu), fuf), trans(fud, dv)), pv)
+  have rv: fn_update(vm, "pages", fn_update(app(vm, "pages"), i, w)) in x86_64_linux.Vm by defs(r, x86_64_linux.Vm)
+  show by taut(rv, nu)
+qed
+
+// ... and with one byte set
+theorem x86.vm_byte_set: all vm b w. vm in x86_64_linux.Vm -> vm in univ(1) -> b in bits(64) -> w in bits(8) ->
+  fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)) in x86_64_linux.Vm && fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)) in univ(1)
+proof
+  fix vm
+  fix b
+  fix w
+  assume h: vm in x86_64_linux.Vm
+  assume hu: vm in univ(1)
+  assume hb: b in bits(64)
+  assume hw: w in bits(8)
+  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) &&
+    app(vm, "bytes") in fn_space(bits(64), bits(8)) by simp(expand(h, x86_64_linux.Vm))
+  have bt: app(vm, "bytes") in fn_space(bits(64), bits(8)) by taut(ht)
+  have sp := apply(x86.space_upd, {bits(64)}, {bits(8)}, {app(vm, "bytes")}, {b}, {w}, bt, hb, hw)
+  have bu := mp(app_univ[u := 1, f := vm, k := "bytes"], hu)
+  have wu := mp(mp(univ_trans[u := 1, a := w, b := bits(8)], bits_univ[n := 8]), hw)
+  have nu: fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)) in univ(1) by simp(hu, bu, wu, hb)
+  have hf: is_fun(vm) by taut(ht)
+  have bd: "bytes" in dom(vm) by simp(ht)
+  have fuf := mp(fn_update_fun[f := vm, k := "bytes", v := fn_update(app(vm, "bytes"), b, w)], hf)
+  have fud := mp(mp(fn_update_dom[f := vm, k := "bytes", v := fn_update(app(vm, "bytes"), b, w)], hf), bd)
+  have dv: dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by taut(ht)
+  have pv: ((((((is_fun(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w))) && dom(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w))) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)), "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)), "bytes") in fn_space(bits(64), bits(8))) && app(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)), "stack_top") in bits(64)) && app(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)), "stack_limit") in omega) && app(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)), "brk_start") in bits(64)) && app(fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)), "brk") in bits(64)
+    by simp(expand(h, x86_64_linux.Vm), sp, fuf, fud, dv)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))), p := x0. ((((((is_fun(x0) && dom(x0) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(x0, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(x0, "bytes") in fn_space(bits(64), bits(8))) && app(x0, "stack_top") in bits(64)) && app(x0, "stack_limit") in omega) && app(x0, "brk_start") in bits(64)) && app(x0, "brk") in bits(64), r := fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w))], nu), fuf), trans(fud, dv)), pv)
+  have rv: fn_update(vm, "bytes", fn_update(app(vm, "bytes"), b, w)) in x86_64_linux.Vm by defs(r, x86_64_linux.Vm)
+  show by taut(rv, nu)
+qed
+
+// the next mapped page, when there is one, is a page number
+theorem x86.next_mapped_in: all vm p. !(x86_64_linux.next_mapped(vm, p) = none) ->
+  snd(x86_64_linux.next_mapped(vm, p)) in omega && int_lt(snd(x86_64_linux.next_mapped(vm, p)), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+proof
+  fix vm
+  fix p
+  assume hn: !(x86_64_linux.next_mapped(vm, p) = none)
+  have c1: !(ex x. x in omega && (int_le(p, x) && x86_64_linux.mapped(vm, x))) -> false proof
+    assume ne: !(ex x. x in omega && (int_le(p, x) && x86_64_linux.mapped(vm, x)))
+    have it := mp(ite_f[c := ex x. x in omega && (int_le(p, x) && x86_64_linux.mapped(vm, x)), a := some(int_min(set_select(omega, x. int_le(p, x) && x86_64_linux.mapped(vm, x)))), b := none], ne)
+    have e: x86_64_linux.next_mapped(vm, p) = none by defs(it, x86_64_linux.next_mapped)
+    show by taut(e, hn)
+  qed
+  have ex: ex x. x in omega && (int_le(p, x) && x86_64_linux.mapped(vm, x)) by taut(c1)
+  have it := mp(ite_t[c := ex x. x in omega && (int_le(p, x) && x86_64_linux.mapped(vm, x)), a := some(int_min(set_select(omega, x. int_le(p, x) && x86_64_linux.mapped(vm, x)))), b := none], ex)
+  have e: x86_64_linux.next_mapped(vm, p) = some(int_min(set_select(omega, x. int_le(p, x) && x86_64_linux.mapped(vm, x)))) by defs(it, x86_64_linux.next_mapped)
+  obtain j, hj from ex
+  have ms := mp(mp(int_min_spec[p := x. int_le(p, x) && x86_64_linux.mapped(vm, x), a := j], taut(hj)), taut(hj))
+  have mo: int_min(set_select(omega, x. int_le(p, x) && x86_64_linux.mapped(vm, x))) in omega by taut(ms)
+  have mm: x86_64_linux.mapped(vm, int_min(set_select(omega, x. int_le(p, x) && x86_64_linux.mapped(vm, x)))) by taut(ms)
+  have mq: all q. x86_64_linux.mapped(vm, q) -> int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) proof
+    fix q
+    assume h: x86_64_linux.mapped(vm, q)
+    show by simp(expand(h, x86_64_linux.mapped))
+  qed
+  have ml := mp(all_elim(mq, {int_min(set_select(omega, x. int_le(p, x) && x86_64_linux.mapped(vm, x)))}), mm)
+  show by simp(e, mo, ml)
+qed
+
+// a memory's page table, and an entry of it
+theorem x86.vm_pages_typed: all vm. vm in x86_64_linux.Vm ->
+  app(vm, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))
+proof
+  fix vm
+  assume h: vm in x86_64_linux.Vm
+  show by simp(expand(h, x86_64_linux.Vm))
+qed
+
+theorem x86.vm_page_at: all vm q. vm in x86_64_linux.Vm -> q in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ->
+  app(app(vm, "pages"), q) in option(x86_64_linux.Page)
+proof
+  fix vm
+  fix q
+  assume h: vm in x86_64_linux.Vm
+  assume hq: q in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
+  show := mp(mp(fn_space_app[a := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), b := option(x86_64_linux.Page), f := app(vm, "pages"), x := q], apply(x86.vm_pages_typed, {vm}, h)), hq)
+qed
+
+// growing the stack keeps the memory typed
+theorem x86.grow_stack_typed: all m a p m1 e. app(m, "vm") in x86_64_linux.Vm -> m in univ(1) -> p in omega ->
+  runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e)) -> app(m1, "vm") in x86_64_linux.Vm && m1 in univ(1)
+proof
+  fix m
+  fix a
+  fix p
+  fix m1
+  fix e
+  assume hv: app(m, "vm") in x86_64_linux.Vm
+  assume hmu: m in univ(1)
+  have hu := mp(app_univ[u := 1, f := m, k := "vm"], hmu)
+  assume hp: p in omega
+  assume h: runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e))
+  have nq := all_elim(all_elim(x86.next_mapped_in, {app(m, "vm")}), {p})
+  // (the pages copied to, and the one copied: page numbers)
+  have nq2: !(x86_64_linux.next_mapped(app(m, "vm"), p) = none) -> all i. i in omega -> int_lt(i, snd(x86_64_linux.next_mapped(app(m, "vm"), p))) ->
+    i in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) proof
+    assume hn: !(x86_64_linux.next_mapped(app(m, "vm"), p) = none)
+    have q := mp(nq, hn)
+    fix i
+    assume hi: i in omega
+    assume hl: int_lt(i, snd(x86_64_linux.next_mapped(app(m, "vm"), p)))
+    have l2: int_lt(i, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(q, hi, hl)
+    show by simp(hi, l2)
+  qed
+  have nq3: !(x86_64_linux.next_mapped(app(m, "vm"), p) = none) ->
+    snd(x86_64_linux.next_mapped(app(m, "vm"), p)) in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) proof
+    assume hn: !(x86_64_linux.next_mapped(app(m, "vm"), p) = none)
+    show by simp(mp(nq, hn))
+  qed
+  show by simp(h, hv, hu, hmu, hp, nq2, nq3, x86.prev_mapped_cases, x86.space_upd, x86.vm_pages_typed, x86.vm_page_at, keep(x86_64_linux.Vm, x86_64_linux.mapped, x86_64_linux.next_mapped, x86_64_linux.prev_mapped, x86_64_linux.run_end),
+    {l0 l. app(fst(l), "vm") in x86_64_linux.Vm && l in univ(1) && fst(l) in univ(1) && snd(l) in omega && int_le(p, snd(l))},
+    {l0 l. app(fst(l), "vm") in x86_64_linux.Vm && l in univ(1) && fst(l) in univ(1)})
+qed
+
+// ... and so does an access
+theorem x86.touch_typed: all m x k m1 e. app(m, "vm") in x86_64_linux.Vm -> m in univ(1) -> x in bits(64) ->
+  runs(x86_64_linux.touch(x, k), m, ok(m1, e)) -> app(m1, "vm") in x86_64_linux.Vm && m1 in univ(1)
+proof
+  fix m
+  fix x
+  fix k
+  fix m1
+  fix e
+  assume hv: app(m, "vm") in x86_64_linux.Vm
+  assume hmu: m in univ(1)
+  assume hx: x in bits(64)
+  assume h: runs(x86_64_linux.touch(x, k), m, ok(m1, e))
+  have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
+  show by simp(h, hv, hmu, po, x86.grow_stack_typed, keep(x86_64_linux.Vm, x86_64_linux.grow_stack, x86_64_linux.mapped, x86_64_linux.page_of))
+qed
+
+// ... and a range of them
+theorem x86.touch_range_vm_typed: all m a n k m1 e. app(m, "vm") in x86_64_linux.Vm -> m in univ(1) ->
+  runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e)) -> app(m1, "vm") in x86_64_linux.Vm && m1 in univ(1)
+proof
+  fix m
+  fix a
+  fix n
+  fix k
+  fix m1
+  fix e
+  assume hv: app(m, "vm") in x86_64_linux.Vm
+  assume hmu: m in univ(1)
+  assume h: runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e))
+  show by simp(h, hv, hmu, x86.touch_typed, keep(x86_64_linux.Vm, x86_64_linux.touch),
+    {l0 l. app(fst(l), "vm") in x86_64_linux.Vm && l in univ(1) && fst(l) in univ(1)})
+qed
+
+// a machine with a memory put in is a machine
+theorem x86.mach_vm: all m v. m in x86_64_linux.Machine -> m in univ(1) -> v in x86_64_linux.Vm -> v in univ(1) ->
+  fn_update(m, "vm", v) in x86_64_linux.Machine && fn_update(m, "vm", v) in univ(1)
+proof
+  fix m
+  fix v
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hvu: v in univ(1)
+  have mM: fn_update(m, "vm", v) in x86_64_linux.Machine by defs(simp(expand(hM, x86_64_linux.Machine), hu, hv, hvu), x86_64_linux.Machine)
+  have mu: fn_update(m, "vm", v) in univ(1) by simp(hu, hvu)
+  show by taut(mM, mu)
+qed
+
+// a range of accesses keeps the machine typed
+theorem x86.touch_range_typed: all m a n k m1 e. m in x86_64_linux.Machine -> m in univ(1) ->
+  runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e)) -> m1 in x86_64_linux.Machine && m1 in univ(1)
+proof
+  fix m
+  fix a
+  fix n
+  fix k
+  fix m1
+  fix e
+  assume hM: m in x86_64_linux.Machine
+  assume hu: m in univ(1)
+  assume h: runs(x86_64_linux.touch_range(a, n, k), m, ok(m1, e))
+  have vm: app(m, "vm") in x86_64_linux.Vm by simp(expand(hM, x86_64_linux.Machine))
+  have t := apply(x86.touch_range_vm_typed, {m}, {a}, {n}, {k}, {m1}, {e}, vm, hu, h)
+  have c := apply(x86.touch_range_vm, {m}, {a}, {n}, {k}, {m1}, {e}, h)
+  have c1: m1 = m -> m1 in x86_64_linux.Machine && m1 in univ(1) proof
+    assume e1: m1 = m
+    show by simp(e1, hM, hu)
+  qed
+  have c2: (ex v. m1 = fn_update(m, "vm", v)) -> m1 in x86_64_linux.Machine && m1 in univ(1) proof
+    assume ev: ex v. m1 = fn_update(m, "vm", v)
+    obtain v, hv from ev
+    have t2 := rewrite(hv, t)
+    have au := mp(app_univ[u := 1, f := fn_update(m, "vm", v), k := "vm"], taut(t2))
+    have tv: v in x86_64_linux.Vm && v in univ(1) by simp(t2, au)
+    have mv := apply(x86.mach_vm, {m}, {v}, hM, hu, taut(tv), taut(tv))
+    show := rewrite(sym(hv), mv)
+  qed
+  show by taut(c, c1, c2)
+qed
