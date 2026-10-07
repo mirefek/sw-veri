@@ -114,6 +114,198 @@ proof
   show by taut(g, kept, left)
 qed
 
+// (at the return, as one atom)
+def tr.at_ret_d(s, x) := tr.at_ret(s, x)
+
+// (a conditional's branches)
+theorem tr.ite_t: all c a b. c -> ite(c, a, b) = a
+proof
+  fix c
+  fix a
+  fix b
+  assume hc: c
+  have ex1: ex x. (c && x = a) || (!c && x = b) by ex_intro({a}, taut(hc, refl({a})))
+  have cs := mp(choose_spec[p := x. (c && x = a) || (!c && x = b)], ex1)
+  have e: choose(x. (c && x = a) || (!c && x = b)) = a by taut(cs, hc)
+  show by defs(e, ite)
+qed
+
+theorem tr.ite_f: all c a b. !c -> ite(c, a, b) = b
+proof
+  fix c
+  fix a
+  fix b
+  assume hc: !c
+  have ex1: ex x. (c && x = a) || (!c && x = b) by ex_intro({b}, taut(hc, refl({b})))
+  have cs := mp(choose_spec[p := x. (c && x = a) || (!c && x = b)], ex1)
+  have e: choose(x. (c && x = a) || (!c && x = b)) = b by taut(cs, hc)
+  show by defs(e, ite)
+qed
+
+// A caller's disciplined run from a callee's entry c (the callee's sp at
+// most the caller's): the callee's disciplined run (it neither returns nor
+// leaves its discipline), or the callee returns to x and the caller's run
+// goes on from x (to the same outcome; a divergence to some divergence),
+// or the callee leaves its discipline.
+theorem tr.run_split: all s c o. s in x86_64_linux.Machine -> int_le(abi.sp(c), abi.sp(s)) -> tr.run_d(s, c, o) ->
+  tr.run_d(c, c, o) ||
+  (ex x o1. tr.run_d(c, c, ok(x, empty)) && tr.run_d(s, x, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
+  (ex x. tr.run_d(c, c, exc(x, exc_val("disc", empty))))
+proof
+  fix s
+  fix c
+  fix o
+  assume hM: s in x86_64_linux.Machine
+  assume hsp: int_le(abi.sp(c), abi.sp(s))
+  assume hr: tr.run_d(s, c, o)
+  have r4 := apply(x86i.rsp_typed, hM)
+  have spb: abi.sp(s) in bits(64) by simp(r4)
+  obtain x4, hx from expand(hr, tr.run_d)
+  have hw: tr.rwd(s, pair(c, empty), x4) by taut(hx)
+  have hm: tr.rmap(x4, o) by taut(hx)
+  // the guard: inside the callee (not at its return, rsp below its sp);
+  // where it fails, the callee's exits
+  let P(l) := !tr.at_ret(c, fst(l)) && int_lt(app(app(fst(l), "gpr"), 4), abi.sp(c))
+  let E(l) := ite(tr.at_ret_d(c, fst(l)), exc(pair(fst(l), empty), pair("brk", empty)), exc(l, pair("raise", exc_val("disc", empty))))
+  let TR(l) := fn_update(empty, "os.events", app(app(fst(l), "os"), "events"))
+  have he: all l. !is_ok(E(l)) proof
+    fix l
+    have n: is_ok(E(l)) -> false proof
+      assume h: is_ok(E(l))
+      obtain a, h1 from expand(h, is_ok)
+      obtain b, h2 from h1
+      have c1: tr.at_ret_d(c, fst(l)) -> false proof
+        assume ar: tr.at_ret_d(c, fst(l))
+        have et := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {exc(pair(fst(l), empty), pair("brk", empty))}, {exc(l, pair("raise", exc_val("disc", empty)))}, ar)
+        show by simp(rewrite(et, h2))
+      qed
+      have c2: !tr.at_ret_d(c, fst(l)) -> false proof
+        assume nar: !tr.at_ret_d(c, fst(l))
+        have ef := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {exc(pair(fst(l), empty), pair("brk", empty))}, {exc(l, pair("raise", exc_val("disc", empty)))}, nar)
+        show by simp(rewrite(ef, h2))
+      qed
+      show by taut(c1, c2)
+    qed
+    show by taut(n)
+  qed
+  // (the loop states: pairs with an empty second part)
+  have hq: all l l2. l = pair(fst(l), empty) -> tr.rbd(s, l, ok(l2, empty)) -> l2 = pair(fst(l2), empty) proof
+    fix l
+    fix l2
+    assume ql: l = pair(fst(l), empty)
+    assume hb: tr.rbd(s, l, ok(l2, empty))
+    show by simp(expand(hb, tr.rbd, tr.rb), keep(x86_64_linux.step))
+  qed
+  have sp0 := all_elim(tr.pair_ne, {c}, {empty})
+  have sp := mp(while_split[l0 := pair(c, empty), b := l o. tr.rbd(s, l, o), tr := l. TR(l), p := l. P(l), e := l. E(l), r := x4, q := l. l = pair(fst(l), empty)],
+    he, simp(), hq, expand(hw, tr.rwd))
+  // the guarded body: the callee's
+  have gb: all l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)) -> tr.rbd(c, l, o) proof
+    fix l
+    fix o2
+    assume h: (P(l) && tr.rbd(s, l, o2)) || (!P(l) && o2 = E(l))
+    have in: P(l) -> tr.rbd(c, l, o2) proof
+      assume hp: P(l)
+      have lt: int_lt(app(app(fst(l), "gpr"), 4), abi.sp(c)) by taut(hp)
+      have lt2: int_lt(app(app(fst(l), "gpr"), 4), abi.sp(s)) by arith(lt, hsp)
+      have ne0: app(app(fst(l), "gpr"), 4) = abi.sp(s) -> false proof
+        assume e: app(app(fst(l), "gpr"), 4) = abi.sp(s)
+        have l3 := rewrite(e, lt2)
+        show by arith(l3, spb)
+      qed
+      have ne: !(app(app(fst(l), "gpr"), 4) = abi.sp(s)) by taut(ne0)
+      have nar: !tr.at_ret(s, fst(l)) by taut(ne)
+      have b1: tr.rbd(s, l, o2) by taut(h, hp)
+      show by defs(simp(expand(b1, tr.rbd, tr.rb), hp, lt, lt2, nar, keep(x86_64_linux.step)), tr.rbd, tr.rb)
+    qed
+    have out: !P(l) -> tr.rbd(c, l, o2) proof
+      assume np: !P(l)
+      have eo: o2 = E(l) by taut(h, np)
+      have c1: tr.at_ret_d(c, fst(l)) -> tr.rbd(c, l, o2) proof
+        assume ar: tr.at_ret_d(c, fst(l))
+        have et := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {exc(pair(fst(l), empty), pair("brk", empty))}, {exc(l, pair("raise", exc_val("disc", empty)))}, ar)
+        have eo2 := rewrite(et, eo)
+        have ar2: tr.at_ret(c, fst(l)) by defs(ar, tr.at_ret_d)
+        show by defs(simp(eo2, ar2, keep(x86_64_linux.step)), tr.rbd, tr.rb)
+      qed
+      have c2: !tr.at_ret_d(c, fst(l)) -> tr.rbd(c, l, o2) proof
+        assume nar: !tr.at_ret_d(c, fst(l))
+        have ef := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {exc(pair(fst(l), empty), pair("brk", empty))}, {exc(l, pair("raise", exc_val("disc", empty)))}, nar)
+        have eo2 := rewrite(ef, eo)
+        have nar2: !tr.at_ret(c, fst(l)) by defs(nar, tr.at_ret_d)
+        have nlt: !int_lt(app(app(fst(l), "gpr"), 4), abi.sp(c)) by taut(np, nar2)
+        show by defs(simp(eo2, nar2, nlt, keep(x86_64_linux.step)), tr.rbd, tr.rb)
+      qed
+      show by taut(c1, c2)
+    qed
+    show by taut(in, out)
+  qed
+  // the guarded run throughout: the callee's run
+  have ca: while_rel(pair(c, empty), l. true, l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), l. TR(l), x4) -> tr.run_d(c, c, o) proof
+    assume w: while_rel(pair(c, empty), l. true, l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), l. TR(l), x4)
+    have w2 := mp(while_mono[l0 := pair(c, empty), c := l. true, b1 := l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), b2 := l o. tr.rbd(c, l, o),
+      tr := l. TR(l), r := x4], gb, w)
+    have wd: tr.rwd(c, pair(c, empty), x4) by defs(w2, tr.rwd)
+    show by defs(ex_intro({x4}, taut(wd, hm)), tr.run_d)
+  qed
+  // the guarded run leaves at l: the callee's return or its leaving the
+  // discipline
+  have cb: (ex l. l = pair(fst(l), empty) && while_rel(pair(c, empty), l. true, l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), l. TR(l), E(l)) &&
+      (ex r1. while_rel(l, l. true, l o. tr.rbd(s, l, o), l. TR(l), r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
+      (ex x o1. tr.run_d(c, c, ok(x, empty)) && tr.run_d(s, x, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
+      (ex x. tr.run_d(c, c, exc(x, exc_val("disc", empty)))) proof
+    assume h: ex l. l = pair(fst(l), empty) && while_rel(pair(c, empty), l. true, l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), l. TR(l), E(l)) &&
+      (ex r1. while_rel(l, l. true, l o. tr.rbd(s, l, o), l. TR(l), r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
+    obtain l, h1 from h
+    have ql: l = pair(fst(l), empty) by taut(h1)
+    have wg: while_rel(pair(c, empty), l. true, l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), l. TR(l), E(l)) by taut(h1)
+    have w2 := mp(while_mono[l0 := pair(c, empty), c := l. true, b1 := l o. (P(l) && tr.rbd(s, l, o)) || (!P(l) && o = E(l)), b2 := l o. tr.rbd(c, l, o),
+      tr := l. TR(l), r := E(l)], gb, wg)
+    have wd: tr.rwd(c, pair(c, empty), E(l)) by defs(w2, tr.rwd)
+    have c1: tr.at_ret_d(c, fst(l)) -> (ex x o1. tr.run_d(c, c, ok(x, empty)) && tr.run_d(s, x, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) proof
+      assume ar: tr.at_ret_d(c, fst(l))
+      have ee := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {exc(pair(fst(l), empty), pair("brk", empty))}, {exc(l, pair("raise", exc_val("disc", empty)))}, ar)
+      have wd2 := rewrite(ee, wd)
+      have rm: tr.rmap(exc(pair(fst(l), empty), pair("brk", empty)), ok(fst(l), empty)) by defs(simp(), tr.rmap)
+      have rc: tr.run_d(c, c, ok(fst(l), empty)) by defs(ex_intro({exc(pair(fst(l), empty), pair("brk", empty))}, taut(wd2, rm)), tr.run_d)
+      have er1: ex r1. while_rel(l, l. true, l o. tr.rbd(s, l, o), l. TR(l), r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4) by taut(h1)
+      obtain r1, hr1 from er1
+      have wr1: while_rel(l, l. true, l o. tr.rbd(s, l, o), l. TR(l), r1) by taut(hr1)
+      have wr2 := rewrite(ql, wr1)
+      have wd3: tr.rwd(s, pair(fst(l), empty), r1) by defs(wr2, tr.rwd)
+      // (the caller's outcome from x: o, or both divergences)
+      have same: !(fst(x4) = 2) -> (ex o1. tr.run_d(s, fst(l), o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) proof
+        assume nd: !(fst(x4) = 2)
+        have re: r1 = x4 by taut(hr1, nd)
+        have rd: tr.run_d(s, fst(l), o) by defs(ex_intro({r1}, taut(wd3, rewrite(sym(re), hm))), tr.run_d)
+        show by ex_intro({o}, taut(rd, refl({o})))
+      qed
+      have div: fst(x4) = 2 -> (ex o1. tr.run_d(s, fst(l), o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) proof
+        assume d: fst(x4) = 2
+        have d1: fst(r1) = 2 by simp(hr1, d)
+        have rm1: tr.rmap(r1, diverge(snd(r1))) by defs(simp(d1), tr.rmap)
+        have rd: tr.run_d(s, fst(l), diverge(snd(r1))) by defs(ex_intro({r1}, taut(wd3, rm1)), tr.run_d)
+        have od: fst(o) = 2 by simp(expand(hm, tr.rmap), d)
+        have dd: fst(diverge(snd(r1))) = 2 by simp()
+        show by ex_intro({diverge(snd(r1))}, taut(rd, od, dd))
+      qed
+      have eo1: ex o1. tr.run_d(s, fst(l), o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2)) by taut(same, div)
+      obtain o1, ho1 from eo1
+      show by ex_intro({fst(l)}, {o1}, taut(rc, ho1))
+    qed
+    have c2: !tr.at_ret_d(c, fst(l)) -> (ex x. tr.run_d(c, c, exc(x, exc_val("disc", empty)))) proof
+      assume nar: !tr.at_ret_d(c, fst(l))
+      have ee := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {exc(pair(fst(l), empty), pair("brk", empty))}, {exc(l, pair("raise", exc_val("disc", empty)))}, nar)
+      have wd2 := rewrite(ee, wd)
+      have rm: tr.rmap(exc(l, pair("raise", exc_val("disc", empty))), exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+      have rc: tr.run_d(c, c, exc(fst(l), exc_val("disc", empty))) by defs(ex_intro({exc(l, pair("raise", exc_val("disc", empty)))}, taut(wd2, rm)), tr.run_d)
+      show by ex_intro({fst(l)}, rc)
+    qed
+    show by taut(c1, c2)
+  qed
+  show by taut(sp, ca, cb)
+qed
+
 // A crash (the stack overflowing): the machine faults in the entry's
 // scratch space, its I/O so far (input kept, events grown since s) that of
 // an outcome of the spec from w where the I/O stops -- a stack overflow, a

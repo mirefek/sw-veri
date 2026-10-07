@@ -1003,25 +1003,85 @@ proof
   show by ex_intro({trace_limit(i. tr(app(G, i)))}, w)
 qed
 
+// (an invariant along a run's first n + 1 states)
+theorem while_path_inv(l. c, l o. b, l. q, f, n, k):
+  n in omega -> (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) ->
+  q(app(f, empty)) -> (all l l2. q(l) -> b(l, ok(l2, empty)) -> q(l2)) ->
+  k in omega -> int_le(k, n) -> q(app(f, k))
+proof
+  assume hn: n in omega
+  assume hst: all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))
+  assume hq0: q(app(f, empty))
+  assume hs: all l l2. q(l) -> b(l, ok(l2, empty)) -> q(l2)
+  assume hk: k in omega
+  assume hkn: int_le(k, n)
+  have base: int_le(0, n) -> q(app(f, 0)) proof
+    assume h0: int_le(0, n)
+    show := subst({y. q(app(f, y))}, sym(lit_zero), hq0)
+  qed
+  have step: all x. x in omega -> (int_le(x, n) -> q(app(f, x))) -> (int_le(int_add(x, 1), n) -> q(app(f, int_add(x, 1)))) proof
+    fix x
+    assume xo: x in omega
+    assume ih: int_le(x, n) -> q(app(f, x))
+    assume hl: int_le(int_add(x, 1), n)
+    have xl: int_le(x, n) by arith(xo, hl)
+    have qx := mp(ih, xl)
+    have xn: x in n by arith(xo, hl, hn)
+    have bx: b(app(f, x), ok(app(f, succ(x)), empty)) by taut(mp(all_elim(hst, {x}), xn))
+    have q1 := mp(mp(all_elim(hs, {app(f, x)}, {app(f, succ(x))}), qx), bx)
+    have es: succ(x) = int_add(x, 1) by arith(xo)
+    show := rewrite(es, q1)
+  qed
+  have all := mp(mp(nat_ind[p := x. int_le(x, n) -> q(app(f, x))], base), step)
+  show := mp(mp(all_elim(all, {k}), hk), hkn)
+qed
+
+// (... along an infinite run)
+theorem while_path_inv_inf(l. c, l o. b, l. q, f, k):
+  (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) ->
+  q(app(f, empty)) -> (all l l2. q(l) -> b(l, ok(l2, empty)) -> q(l2)) ->
+  k in omega -> q(app(f, k))
+proof
+  assume hst: all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))
+  assume hq0: q(app(f, empty))
+  assume hs: all l l2. q(l) -> b(l, ok(l2, empty)) -> q(l2)
+  assume hk: k in omega
+  have base: q(app(f, 0)) := subst({y. q(app(f, y))}, sym(lit_zero), hq0)
+  have step: all x. x in omega -> q(app(f, x)) -> q(app(f, int_add(x, 1))) proof
+    fix x
+    assume xo: x in omega
+    assume qx: q(app(f, x))
+    have bx: b(app(f, x), ok(app(f, succ(x)), empty)) by taut(mp(all_elim(hst, {x}), xo))
+    have q1 := mp(mp(all_elim(hs, {app(f, x)}, {app(f, succ(x))}), qx), bx)
+    have es: succ(x) = int_add(x, 1) by arith(xo)
+    show := rewrite(es, q1)
+  qed
+  have all := mp(mp(nat_ind[p := x. q(app(f, x))], base), step)
+  show := mp(all_elim(all, {k}), hk)
+qed
+
 // A run split where the guard p first fails: every run of the unguarded
 // loop is one of the guarded (p throughout), or the guarded one leaves at
 // some state l with e(l) and the unguarded run goes on from l -- to the
-// same outcome, or (a divergence) to some divergence.
-theorem while_split(l0, l o. b, l. tr, l. p, l. e, r):
-  (all l. !is_ok(e(l))) ->
+// same outcome, or (a divergence) to some divergence. (An invariant q of
+// the run holds at l.)
+theorem while_split(l0, l o. b, l. tr, l. p, l. e, r, l. q):
+  (all l. !is_ok(e(l))) -> q(l0) -> (all l l2. q(l) -> b(l, ok(l2, empty)) -> q(l2)) ->
   while_rel(l0, l. true, l o. b(l, o), l. tr(l), r) ->
   while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), r) ||
-  (ex l. while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
+  (ex l. q(l) && while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
     (ex r1. while_rel(l, l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)))
 proof
   assume he: all l. !is_ok(e(l))
+  assume hq0: q(l0)
+  assume hqs: all l l2. q(l) -> b(l, ok(l2, empty)) -> q(l2)
   assume hw: while_rel(l0, l. true, l o. b(l, o), l. tr(l), r)
   // finitely many iterations
   have fcase: (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
       (all i. i in n -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
       ((!true && r = ok(app(f, n), empty)) || (true && b(app(f, n), r) && !is_ok(r)))) ->
       while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), r) ||
-      (ex l. while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
+      (ex l. q(l) && while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
         (ex r1. while_rel(l, l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) proof
     assume h: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
       (all i. i in n -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
@@ -1037,7 +1097,7 @@ proof
     // p fails at some iteration: the guarded loop leaves at the first, the
     // run goes on from there
     have viol: (ex k. k in omega && (int_le(k, n) && !p(app(f, k)))) ->
-        (ex l. while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
+        (ex l. q(l) && while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
           (ex r1. while_rel(l, l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) proof
       assume v: ex k. k in omega && (int_le(k, n) && !p(app(f, k)))
       obtain k, hk from mp(nat_least[p := x. int_le(x, n) && !p(app(f, x))], v)
@@ -1069,7 +1129,8 @@ proof
       have cont := mp(while_suffix[c := l. true, b := l o. b(l, o), tr := l. tr(l), r := r, f := f, n := n, k := k], hn, hst, hend, ko, kn)
       have c1: ex r1. while_rel(app(f, k), l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)
         by ex_intro({r}, taut(cont, refl({fst(r)}), refl({r})))
-      show by ex_intro({app(f, k)}, taut(w, c1))
+      have qk := mp(while_path_inv[c := l. true, b := l o. b(l, o), q := l. q(l), f := f, n := n, k := k], hn, hst, rewrite(sym(hf0), hq0), hqs, ko, kn)
+      show by ex_intro({app(f, k)}, taut(qk, w, c1))
     qed
     // p holds throughout: the same run, guarded
     have keep: !(ex k. k in omega && (int_le(k, n) && !p(app(f, k)))) ->
@@ -1108,7 +1169,7 @@ proof
       (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
       r = diverge(trace_limit(i. tr(app(f, i))))) ->
       while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), r) ||
-      (ex l. while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
+      (ex l. q(l) && while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
         (ex r1. while_rel(l, l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) proof
     assume h: ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
       (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
@@ -1118,7 +1179,7 @@ proof
     have hst: all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
     have hr: r = diverge(trace_limit(i. tr(app(f, i)))) by taut(hf)
     have viol: (ex k. k in omega && !p(app(f, k))) ->
-        (ex l. while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
+        (ex l. q(l) && while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), e(l)) &&
           (ex r1. while_rel(l, l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) proof
       assume v: ex k. k in omega && !p(app(f, k))
       obtain k, hk from mp(nat_least[p := x. !p(app(f, x))], v)
@@ -1153,7 +1214,8 @@ proof
       qed
       have c1: ex r1. while_rel(app(f, k), l. true, l o. b(l, o), l. tr(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r)
         by ex_intro({diverge(t)}, taut(cont, f2, nd))
-      show by ex_intro({app(f, k)}, taut(w, c1))
+      have qk := mp(while_path_inv_inf[c := l. true, b := l o. b(l, o), q := l. q(l), f := f, k := k], hst, rewrite(sym(hf0), hq0), hqs, ko)
+      show by ex_intro({app(f, k)}, taut(qk, w, c1))
     qed
     have keep: !(ex k. k in omega && !p(app(f, k))) ->
         while_rel(l0, l. true, l o. (p(l) && b(l, o)) || (!p(l) && o = e(l)), l. tr(l), r) proof
@@ -1176,6 +1238,62 @@ proof
       show by defs(taut(e1), while_rel)
     qed
     show by taut(viol, keep)
+  qed
+  show by taut(expand(hw, while_rel), fcase, icase)
+qed
+
+// a run with a body b1 is one with any body b2 it implies
+theorem while_mono(l0, l. c, l o. b1, l o. b2, l. tr, r):
+  (all l o. b1(l, o) -> b2(l, o)) ->
+  while_rel(l0, l. c(l), l o. b1(l, o), l. tr(l), r) -> while_rel(l0, l. c(l), l o. b2(l, o), l. tr(l), r)
+proof
+  assume hb: all l o. b1(l, o) -> b2(l, o)
+  assume hw: while_rel(l0, l. c(l), l o. b1(l, o), l. tr(l), r)
+  have fcase: (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+      (all i. i in n -> c(app(f, i)) && b1(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b1(app(f, n), r) && !is_ok(r)))) ->
+      while_rel(l0, l. c(l), l o. b2(l, o), l. tr(l), r) proof
+    assume h: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+      (all i. i in n -> c(app(f, i)) && b1(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b1(app(f, n), r) && !is_ok(r)))
+    obtain n, h1 from h
+    obtain f, hf from h1
+    have hst: all i. i in n -> c(app(f, i)) && b1(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
+    have st: all i. i in n -> c(app(f, i)) && b2(app(f, i), ok(app(f, succ(i)), empty)) proof
+      fix i
+      assume hi: i in n
+      have s := mp(all_elim(hst, {i}), hi)
+      have b := mp(all_elim(hb, {app(f, i)}, {ok(app(f, succ(i)), empty)}), taut(s))
+      show by taut(s, b)
+    qed
+    have bn := all_elim(hb, {app(f, n)}, {r})
+    have e1: ex n2 g. n2 in omega && is_fun(g) && dom(g) = succ(n2) && app(g, empty) = l0 &&
+        (all i. i in n2 -> c(app(g, i)) && b2(app(g, i), ok(app(g, succ(i)), empty))) &&
+        ((!c(app(g, n2)) && r = ok(app(g, n2), empty)) || (c(app(g, n2)) && b2(app(g, n2), r) && !is_ok(r)))
+      by ex_intro({n}, {f}, taut(hf, st, bn))
+    show by defs(taut(e1), while_rel)
+  qed
+  have icase: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+      (all i. i in omega -> c(app(f, i)) && b1(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) ->
+      while_rel(l0, l. c(l), l o. b2(l, o), l. tr(l), r) proof
+    assume h: ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+      (all i. i in omega -> c(app(f, i)) && b1(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))
+    obtain f, hf from h
+    have hst: all i. i in omega -> c(app(f, i)) && b1(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
+    have st: all i. i in omega -> c(app(f, i)) && b2(app(f, i), ok(app(f, succ(i)), empty)) proof
+      fix i
+      assume hi: i in omega
+      have s := mp(all_elim(hst, {i}), hi)
+      have b := mp(all_elim(hb, {app(f, i)}, {ok(app(f, succ(i)), empty)}), taut(s))
+      show by taut(s, b)
+    qed
+    have e1: ex g. is_fun(g) && dom(g) = omega && app(g, empty) = l0 &&
+        (all i. i in omega -> c(app(g, i)) && b2(app(g, i), ok(app(g, succ(i)), empty))) &&
+        r = diverge(trace_limit(i. tr(app(g, i))))
+      by ex_intro({f}, taut(hf, st))
+    show by defs(taut(e1), while_rel)
   qed
   show by taut(expand(hw, while_rel), fcase, icase)
 qed
