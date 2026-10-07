@@ -1,0 +1,433 @@
+// A call in the translation (docs/bridge-pattern-design.md, step 8): the
+// machine's `call` against readable GIMPLE's call_at -- the push (a fault:
+// a crash or GIMPLE's undefined call), the callee's contract
+// (tr.implements_at) on its entry state, the caller's run split at the
+// callee's return (tr.run_split), and the claim after the call.
+//
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
+//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/x86_code.core \
+//     proofs/x86_stack.core proofs/x86_insn.core proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core \
+//     proofs/gimple.core proofs/gimple_call.core proofs/abi_stack.core proofs/abi_loop.core proofs/abi_bridge.core \
+//     proofs/translate.core proofs/translate_store_loop.core proofs/translate_call.core
+
+// ----------------------------------------------------------------------
+//  Generic pieces
+
+// a step that may fault: its successors' claims, and every fault a crash
+// or undefined
+theorem tr.step_x(s, v, p, w, m, x. q, x y. qx): (all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && q(m2)) || (ex x e. o = exc(x, e) && qx(x, e))) ->
+  int_lt(app(app(m, "gpr"), 4), abi.sp(s)) -> (all m2. q(m2) -> tr.sim(s, v, p, w, m2)) ->
+  (all x e. qx(x, e) -> tr.ub(s, v, p, w) || tr.crash(s, p, w, exc(x, e))) -> tr.sim(s, v, p, w, m)
+proof
+  assume hs: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && q(m2)) || (ex x e. o = exc(x, e) && qx(x, e))
+  assume hlt: int_lt(app(app(m, "gpr"), 4), abi.sp(s))
+  assume h: all m2. q(m2) -> tr.sim(s, v, p, w, m2)
+  assume hx: all x e. qx(x, e) -> tr.ub(s, v, p, w) || tr.crash(s, p, w, exc(x, e))
+  have hn0: app(app(m, "gpr"), 4) = abi.sp(s) -> false proof
+    assume e: app(app(m, "gpr"), 4) = abi.sp(s)
+    have l2 := rewrite(e, hlt)
+    show by arith(l2)
+  qed
+  have hn: !(app(m, "rip") = abi.ret(s) && app(app(m, "gpr"), 4) = abi.sp(s)) by taut(hn0)
+  have dok: tr.disc_ok(s, fst(pair(m, empty))) by simp(hlt)
+  have hbd: all r. tr.rbd(s, pair(m, empty), r) -> tr.rb(s, pair(m, empty), r) proof
+    fix r
+    assume hb: tr.rbd(s, pair(m, empty), r)
+    show by taut(expand(hb, tr.rbd), dok)
+  qed
+  // the pass from m: a step to some m2 with q, or a fault
+  have hb_ok: all l1. tr.rb(s, pair(m, empty), ok(l1, empty)) -> (ex m2. l1 = pair(m2, empty) && q(m2)) proof
+    fix l1
+    assume hb: tr.rb(s, pair(m, empty), ok(l1, empty))
+    have b1: ex x1. runs(x86_64_linux.step(), m, x1) && (ex x2 x3. x1 = ok(x2, x3) && l1 = pair(x2, empty)) by simp(expand(hb, tr.rb), hn, keep(x86_64_linux.step))
+    obtain x1, c1 from b1
+    have e := mp(all_elim(hs, {x1}), taut(c1))
+    have c2: (ex x e. x1 = exc(x, e) && qx(x, e)) -> false proof
+      assume ex: ex x e. x1 = exc(x, e) && qx(x, e)
+      obtain x, ex2 from ex
+      obtain e3, ex3 from ex2
+      show by simp(c1, ex3, keep(x86_64_linux.step))
+    qed
+    have e1: ex m2. x1 = ok(m2, empty) && q(m2) by taut(e, c2)
+    obtain m2, e2 from e1
+    have l1e: l1 = pair(m2, empty) by simp(c1, e2, keep(x86_64_linux.step))
+    show by ex_intro({m2}, taut(l1e, e2))
+  qed
+  have hb_nok: all r. tr.rb(s, pair(m, empty), r) -> !is_ok(r) -> (ex x e. r = exc(pair(x, empty), pair("raise", e)) && qx(x, e)) proof
+    fix r
+    assume hb: tr.rb(s, pair(m, empty), r)
+    assume hn2: !is_ok(r)
+    have b1: ex x1. runs(x86_64_linux.step(), m, x1) && ((ex x2 x3. x1 = ok(x2, x3) && r = ok(pair(x2, empty), empty)) ||
+      (ex x2 x3. x1 = exc(x2, x3) && r = exc(pair(x2, empty), pair("raise", x3))) || (ex x2. x1 = diverge(x2) && r = diverge(x2))) by simp(expand(hb, tr.rb), hn, keep(x86_64_linux.step))
+    obtain x1, c1 from b1
+    have e := mp(all_elim(hs, {x1}), taut(c1))
+    have k1: (ex m2. x1 = ok(m2, empty) && q(m2)) -> (ex x e. r = exc(pair(x, empty), pair("raise", e)) && qx(x, e)) proof
+      assume ek: ex m2. x1 = ok(m2, empty) && q(m2)
+      obtain m2, e2 from ek
+      show by simp(c1, e2, hn2, keep(x86_64_linux.step))
+    qed
+    have k2: (ex x e. x1 = exc(x, e) && qx(x, e)) -> (ex x e. r = exc(pair(x, empty), pair("raise", e)) && qx(x, e)) proof
+      assume ek: ex x e. x1 = exc(x, e) && qx(x, e)
+      obtain x, ek2 from ek
+      obtain e3, ek3 from ek2
+      have re: r = exc(pair(x, empty), pair("raise", e3)) by simp(c1, ek3, keep(x86_64_linux.step))
+      have q3: qx(x, e3) by taut(ek3)
+      show by ex_intro({x}, {e3}, taut(re, q3))
+    qed
+    show by taut(e, k1, k2)
+  qed
+  have hk: all m2 r o2. q(m2) -> tr.rwd(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o2) || tr.crash(s, p, w, o2) proof
+    fix m2
+    fix r
+    fix o2
+    assume hq: q(m2)
+    assume hw: tr.rwd(s, pair(m2, empty), r)
+    assume hm: tr.rmap(r, o2)
+    have rf: tr.run_d(s, m2, o2) by defs(ex_intro({r}, taut(hw, hm)), tr.run_d)
+    show := mp(all_elim(expand(mp(all_elim(h, {m2}), hq), tr.sim), {o2}), rf)
+  qed
+  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) || tr.crash(s, p, w, o) proof
+    fix o
+    assume ho: tr.run_d(s, m, o)
+    obtain x4, hx4 from expand(ho, tr.run_d)
+    have hw: tr.rwd(s, pair(m, empty), x4) by taut(hx4)
+    have hm: tr.rmap(x4, o) by taut(hx4)
+    let W(l, r) := while_rel(l, x5. true, x5 x6. tr.rbd(s, x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
+    have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rbd(s, l, o),
+      tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rwd))
+    // (the first pass faults: the run's outcome that fault)
+    have fl: tr.rbd(s, pair(m, empty), x4) && !is_ok(x4) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) || tr.crash(s, p, w, o) proof
+      assume hf: tr.rbd(s, pair(m, empty), x4) && !is_ok(x4)
+      have rb := mp(all_elim(hbd, {x4}), taut(hf))
+      have ef := mp(all_elim(hb_nok, {x4}), rb, taut(hf))
+      obtain x, ef2 from ef
+      obtain e, ef3 from ef2
+      have xe: x4 = exc(pair(x, empty), pair("raise", e)) by taut(ef3)
+      have hm2 := rewrite(xe, hm)
+      have oe: o = exc(x, e) by simp(expand(hm2, tr.rmap))
+      have q3: qx(x, e) by taut(ef3)
+      have c := mp(all_elim(hx, {x}, {e}), q3)
+      have c2: tr.ub(s, v, p, w) || tr.ok(s, p, w, exc(x, e)) || tr.crash(s, p, w, exc(x, e)) by taut(c)
+      show := rewrite(sym(oe), c2)
+    qed
+    // (the loop goes on from m2)
+    have on: (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
+        tr.ub(s, v, p, w) || tr.ok(s, p, w, o) || tr.crash(s, p, w, o) proof
+      assume e: ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))
+      obtain l1, e1 from e
+      have rbd1: tr.rbd(s, pair(m, empty), ok(l1, empty)) by taut(e1)
+      have rb1 := mp(all_elim(hbd, {ok(l1, empty)}), rbd1)
+      obtain m2, l1q from mp(all_elim(hb_ok, {l1}), rb1)
+      have l1e: l1 = pair(m2, empty) by taut(l1q)
+      have hq: q(m2) by taut(l1q)
+      have e1b: ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4) by taut(e1)
+      obtain r1, e2 from e1b
+      have w0: W(l1, r1) by taut(e2)
+      have w1: tr.rwd(s, pair(m2, empty), r1) by defs(rewrite(l1e, w0), tr.rwd)
+      have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) || tr.crash(s, p, w, o) proof
+        assume nd: !(fst(x4) = 2)
+        have re: r1 = x4 by taut(e2, nd)
+        show := mp(mp(mp(all_elim(hk, {m2}, {r1}, {o}), hq), w1), rewrite(sym(re), hm))
+      qed
+      have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, p, w, o) || tr.crash(s, p, w, o) proof
+        assume d: fst(x4) = 2
+        have d1: fst(r1) = 2 by simp(e2, d)
+        have c := mp(mp(mp(all_elim(hk, {m2}, {r1}, {diverge(snd(r1))}), hq), w1), defs(simp(d1), tr.rmap))
+        have nk := all_elim(tr.ok_not_div, {s}, {p}, {w}, {snd(r1)})
+        have nc := all_elim(tr.crash_not_div, {s}, {p}, {w}, {snd(r1)})
+        show by taut(c, nk, nc)
+      qed
+      show by taut(same, div)
+    qed
+    show by taut(u, on, fl)
+  qed
+  show by defs(g, tr.sim)
+qed
+
+// an operation that changes the world: the spec's rest from its result
+theorem tr.qs_call(op, w4, r, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k): all w. w in univ(1) -> runs(op, w, ok(w4, r)) ->
+  (all o. runs(mkprog(x0 x1. ex x8. a(x0, r, x8) && k(x8, x1)), w4, o) ->
+    runs(mkprog(x0 x1. ex x8. bind_rel(op, x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), w, o))
+proof
+  fix w
+  assume hwu: w in univ(1)
+  assume hq: runs(op, w, ok(w4, r))
+  fix o
+  assume h0: runs(mkprog(x0 x1. ex x8. a(x0, r, x8) && k(x8, x1)), w4, o)
+  have hu: pair(w4, o) in univ(1) && (ex x8. a(w4, r, x8) && k(x8, o)) by simp(expand(expand(h0, runs), mkprog))
+  have pu: pair(w, o) in univ(1) by simp(hu, hwu)
+  have h: ex x8. a(w4, r, x8) && k(x8, o) by taut(hu)
+  obtain y, hy from h
+  have ay: a(w4, r, y) by taut(hy)
+  have e: ex o2. runs(op, w, o2) && ((ex s1 v. o2 = ok(s1, v) && a(s1, v, y)) || (ex s1 e. o2 = exc(s1, e) && xx(s1, e, y)) || (ex t. o2 = diverge(t) && dd(t, y)))
+    by ex_intro({ok(w4, r)}, simp(hq, ay))
+  have b: bind_rel(op, w, x9 x10. a(x9, x10, y), x9 x10. xx(x9, x10, y), x9. dd(x9, y)) by defs(e, bind_rel)
+  have g: ex x8. bind_rel(op, w, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, o) by ex_intro({y}, taut(b, hy))
+  show := mp(all_elim(tr.runs_intro[r := x0 x1. ex x8. bind_rel(op, x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)], {w}, {o}), pu, g)
+qed
+
+// the procedure's rest raising: the function raising
+theorem tr.p_exc(q, x3 x4 x2. kw): all w x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> runs(q, w, exc(x, e)) ->
+  runs(mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(x, e))
+proof
+  fix w
+  fix x
+  fix e
+  assume hw: w in univ(1)
+  assume hx: x in univ(1)
+  assume he: e in univ(1)
+  assume hr: runs(q, w, exc(x, e))
+  have b0: ex o2. runs(q, w, o2) && ((ex s1 v. o2 = ok(s1, v) && kw(s1, v, exc(x, e))) || (ex s1 e1. o2 = exc(s1, e1) && exc(x, e) = exc(s1, e1)) ||
+    (ex t. o2 = diverge(t) && exc(x, e) = diverge(t))) by ex_intro({exc(x, e)}, simp(hr))
+  have b: bind_rel(q, w, x3 x4. kw(x3, x4, exc(x, e)), x3 x4. exc(x, e) = exc(x3, x4), x3. exc(x, e) = diverge(x3)) by defs(b0, bind_rel)
+  have pu: pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)
+  show := mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {exc(x, e)}), pu, b)
+qed
+
+// ... at a call: the call raising
+theorem tr.call_exc(g, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
+  runs(gimple.call1(g, args), w, exc(x, e)) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e)) ->
+  runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(x, e))
+proof
+  fix w
+  fix x
+  fix e
+  assume hw: w in univ(1)
+  assume hx: x in univ(1)
+  assume he: e in univ(1)
+  assume hc: runs(gimple.call1(g, args), w, exc(x, e))
+  assume hk: runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))
+  have q := mp(all_elim(mp(all_elim(tr.qs_raise[op := gimple.call1(g, args), s2 := x, e := e, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), hc), {exc(x, e)}), hk)
+  show := apply(tr.p_exc[q := mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), kw := x3 x4 x2. kw(x3, x4, x2)],
+    {w}, {x}, {e}, hw, hx, he, q)
+qed
+
+// (a World, with no ghost part)
+theorem tr.world_and: all w. w in abi.World -> w in rec_and(abi.World, single(empty))
+proof
+  fix w
+  assume hw: w in abi.World
+  have r := mp(mp(rec_and_intro[a := abi.World, b := single(empty), x := w, y := empty], hw), simp())
+  show by simp(r)
+qed
+
+// (a one-element list)
+theorem tr.seq_one_type: all x t. x in t -> seq_one(x) in list_type(t)
+proof
+  fix x
+  fix t
+  assume hx: x in t
+  have mem: all z. z in seq_one(x) -> z = pair(0, x) proof
+    fix z
+    assume hz: z in seq_one(x)
+    show := mp(single_elim[a := pair(0, x), z := z], expand(hz, seq_one))
+  qed
+  have f1: all z. z in seq_one(x) -> (ex a b. z = pair(a, b)) proof
+    fix z
+    assume hz: z in seq_one(x)
+    have e := mp(all_elim(mem, {z}), hz)
+    show by ex_intro({0}, {x}, e)
+  qed
+  have f2: all a b c. pair(a, b) in seq_one(x) -> pair(a, c) in seq_one(x) -> b = c proof
+    fix a
+    fix b
+    fix c
+    assume h1: pair(a, b) in seq_one(x)
+    assume h2: pair(a, c) in seq_one(x)
+    have e1 := mp(all_elim(mem, {pair(a, b)}), h1)
+    have e2 := mp(all_elim(mem, {pair(a, c)}), h2)
+    show by simp(e1, e2)
+  qed
+  have fu: is_fun(seq_one(x)) by defs(taut(f1, f2), is_fun)
+  have ss: all z. z in seq_one(x) -> z in cart(omega, t) proof
+    fix z
+    assume hz: z in seq_one(x)
+    have e := mp(all_elim(mem, {z}), hz)
+    have c := mp(mp(cart_intro[a := omega, b := t, x := 0, y := x], simp()), hx)
+    show := rewrite(sym(e), c)
+  qed
+  have sb: subset(seq_one(x), cart(omega, t)) by defs(ss, subset)
+  have pw: seq_one(x) in powerset(cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := seq_one(x)], sb)
+  have l1: seq_len(seq_one(x)) = 1 by arith()
+  have l1d: dom(seq_one(x)) = 1 by defs(l1, seq_len)
+  have o1: 1 in omega by simp()
+  have d1: dom(seq_one(x)) in omega := rewrite(sym(l1d), o1)
+  show by defs(simp(pw, fu, d1), list_type, seq_type, is_seq)
+qed
+
+// one argument, in a register
+theorem tr.regs1: all u ar. u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
+  seq_one(u) in list_type(bits(64)) && seq_one(u) in univ(1) && seq_len(seq_one(u)) = seq_len(seq_one(ar)) &&
+  (all i. i in omega -> int_lt(i, seq_len(seq_one(ar))) -> app(seq_one(u), i) in gimple.in_reg(fst(app(seq_one(ar), i)), snd(app(seq_one(ar), i))))
+proof
+  fix u
+  fix ar
+  assume hu: u in bits(64)
+  assume hi: u in gimple.in_reg(fst(ar), snd(ar))
+  have g: all i. i in omega -> int_lt(i, seq_len(seq_one(ar))) -> app(seq_one(u), i) in gimple.in_reg(fst(app(seq_one(ar), i)), snd(app(seq_one(ar), i))) proof
+    fix i
+    assume h1: i in omega
+    assume h2: int_lt(i, seq_len(seq_one(ar)))
+    have z: i = 0 by simp(h1, h2)
+    have e1 := at({app(seq_one(u), 0)})
+    have e2 := at({app(seq_one(ar), 0)})
+    show by simp(z, hi, e1, e2)
+  qed
+  have l1: seq_len(seq_one(u)) = 1 by arith()
+  have l2: seq_len(seq_one(ar)) = 1 by arith()
+  have lt := apply(tr.seq_one_type, {u}, {bits(64)}, hu)
+  have lu: seq_one(u) in univ(1) by defs(simp(hu), seq_one)
+  show by simp(lt, lu, l1, l2, g)
+qed
+
+// GIMPLE's call undefined (the thread pointer or the stack unsound at the
+// callee's frame vm1): the function's spec raises
+theorem tr.call_ub(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all s v w u sp2 vm1.
+  w in univ(1) -> abi.view(v, s) in univ(1) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
+  sp2 in bits(64) -> int_le(sp2, app(w, "sp")) -> int_mod(sp2, 16) = 0 ->
+  vm1 in x86_64_linux.Vm -> vm1 in univ(1) -> gimple.frame_at_call(app(w, "vm"), vm1, sp2, app(w, "sp")) ->
+  !(abi.thread_ok(vm1, app(w, "fs_base")) && abi.stack_ok(vm1, bits_sub(64, sp2, 8))) ->
+  runs(mkprog(x0 x1. ex x8. xx(abi.view(v, s), empty, x8) && k(x8, x1)), w, exc(abi.view(v, s), empty)) ->
+  tr.ub(s, v, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  fix s
+  fix v
+  fix w
+  fix u
+  fix sp2
+  fix vm1
+  assume hw: w in univ(1)
+  assume hvu: abi.view(v, s) in univ(1)
+  assume hu: u in bits(64)
+  assume hi: u in gimple.in_reg(fst(ar), snd(ar))
+  assume hs: sp2 in bits(64)
+  assume hl: int_le(sp2, app(w, "sp"))
+  assume ha: int_mod(sp2, 16) = 0
+  assume hv: vm1 in x86_64_linux.Vm
+  assume hv1: vm1 in univ(1)
+  assume hf: gimple.frame_at_call(app(w, "vm"), vm1, sp2, app(w, "sp"))
+  assume hn: !(abi.thread_ok(vm1, app(w, "fs_base")) && abi.stack_ok(vm1, bits_sub(64, sp2, 8)))
+  assume hk: runs(mkprog(x0 x1. ex x8. xx(abi.view(v, s), empty, x8) && k(x8, x1)), w, exc(abi.view(v, s), empty))
+  have eu: empty in univ(1) by simp()
+  have r1 := apply(tr.regs1, {u}, {ar}, hu, hi)
+  have en := apply(gc.enter_ub, {app(w, "sp")}, {app(w, "sp")}, {seq_one(ar)}, {w}, {seq_one(u)}, {sp2}, {vm1}, {abi.view(v, s)}, {empty},
+    hw, hvu, eu, taut(r1), taut(r1), taut(r1), taut(r1), hs, hl, ha, hv, hv1, hf, hn)
+  have ca := apply(gc.call_at_enter_exc, {app(w, "sp")}, {app(w, "sp")}, {g}, {seq_one(ar)}, {w}, {abi.view(v, s)}, {empty}, hw, hvu, eu, en)
+  have c1 := apply(gc.call1_exc, {g}, {seq_one(ar)}, {w}, {abi.view(v, s)}, {empty}, hw, hvu, eu, ca)
+  have pe := apply(tr.call_exc[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)],
+    {w}, {abi.view(v, s)}, {empty}, hw, hvu, eu, c1, hk)
+  have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+  have rst: abi.raise_state(v, s, abi.view(v, s)) by defs(taut(refl({abi.view(v, s)})), abi.raise_state)
+  show by defs(ex_intro({empty}, {abi.view(v, s)}, taut(eu, eno, rst, pe)), tr.ub)
+qed
+
+// ----------------------------------------------------------------------
+//  The push of a call from a frame of 8 bytes: rsp S - 8 (S the entry's
+//  rsp), the return address to the 8 bytes from S - 16 -- one page, at most
+//  the one below S's
+
+theorem tr.push_at: all S j. S in bits(64) -> int_le(16, S) -> int_lt(S, 140737488355328) -> int_mod(bits_add(64, S, 8), 16) = 0 ->
+  j in omega -> int_lt(j, 8) ->
+  bits_add(64, bits_sub(64, int_sub(S, 8), 8), bits_of_int(64, j)) = int_add(int_sub(S, 16), j) &&
+  int_div(int_add(int_sub(S, 16), j), 4096) = int_div(int_sub(S, 16), 4096)
+proof
+  fix S
+  fix j
+  assume hs: S in bits(64)
+  assume h16: int_le(16, S)
+  assume hl: int_lt(S, 140737488355328)
+  assume ha: int_mod(bits_add(64, S, 8), 16) = 0
+  assume hj: j in omega
+  assume hj8: int_lt(j, 8)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have sb: int_le(0, S) && int_lt(S, 18446744073709551616) by simp(hs)
+  have m1: int_mod(int_add(S, 8), 16) = 0 by simp(hs, ha, hl)
+  have e0: int_mod(int_add(int_mod(int_sub(int_sub(S, 8), 8), 18446744073709551616), int_mod(j, 18446744073709551616)), 18446744073709551616) = int_add(int_sub(S, 16), j)
+    by arith(sb, h16, hl, hj, hj8)
+  have e: bits_add(64, bits_sub(64, int_sub(S, 8), 8), bits_of_int(64, j)) = int_add(int_sub(S, 16), j) by defs(rewrite(sym(p64), e0), bits_add, bits_sub, bits_of_int)
+  have m2: int_le(8, int_mod(int_sub(S, 16), 4096)) && int_le(int_mod(int_sub(S, 16), 4096), 4088) by simp(hs, m1, h16)
+  have d: int_div(int_add(int_sub(S, 16), j), 4096) = int_div(int_sub(S, 16), 4096) by simp(hs, h16, m2, hj, hj8)
+  show by taut(e, d)
+qed
+
+// (the page of S - 16: S's, or the one below; S's page holds S + 7)
+theorem tr.push_pages: all S. S in bits(64) -> int_le(16, S) -> int_lt(S, 140737488355328) -> int_mod(bits_add(64, S, 8), 16) = 0 ->
+  int_le(int_div(int_sub(S, 16), 4096), int_div(S, 4096)) && int_le(int_div(S, 4096), int_add(int_div(int_sub(S, 16), 4096), 1)) &&
+  int_div(int_sub(bits_add(64, S, 8), 1), 4096) = int_div(S, 4096) && bits_add(64, S, 8) = int_add(S, 8)
+proof
+  fix S
+  assume hs: S in bits(64)
+  assume h16: int_le(16, S)
+  assume hl: int_lt(S, 140737488355328)
+  assume ha: int_mod(bits_add(64, S, 8), 16) = 0
+  have m1: int_mod(int_add(S, 8), 16) = 0 by simp(hs, ha, hl)
+  have m2: int_le(8, int_mod(S, 4096)) && int_le(int_mod(S, 4096), 4088) by simp(hs, m1)
+  have e8: bits_add(64, S, 8) = int_add(S, 8) by simp(hs, hl)
+  have d1: int_le(int_div(int_sub(S, 16), 4096), int_div(S, 4096)) by simp(hs, h16)
+  have d2: int_le(int_div(S, 4096), int_add(int_div(int_sub(S, 16), 4096), 1)) by simp(hs, h16, m2)
+  have d3: int_div(int_sub(int_add(S, 8), 1), 4096) = int_div(S, 4096) by simp(hs, m2)
+  show by simp(e8, d1, d2, d3)
+qed
+
+// the pushed bytes: scratch at the entry (S's page a stack page, nothing
+// but stack in its guard gap)
+theorem tr.push_scratch: all sv S j. S in bits(64) -> int_le(16, S) -> int_lt(S, 140737488355328) -> int_mod(bits_add(64, S, 8), 16) = 0 ->
+  abi.stack_page(sv, int_div(S, 4096)) -> abi.stack_gap_free(sv) -> j in omega -> int_lt(j, 8) ->
+  abi.scratch(sv, bits_add(64, S, 8), int_add(int_sub(S, 16), j))
+proof
+  fix sv
+  fix S
+  fix j
+  assume hs: S in bits(64)
+  assume h16: int_le(16, S)
+  assume hl: int_lt(S, 140737488355328)
+  assume ha: int_mod(bits_add(64, S, 8), 16) = 0
+  assume hsp: abi.stack_page(sv, int_div(S, 4096))
+  assume hg: abi.stack_gap_free(sv)
+  assume hj: j in omega
+  assume hj8: int_lt(j, 8)
+  have pa := apply(tr.push_at, {S}, {j}, hs, h16, hl, ha, hj, hj8)
+  have pp := apply(tr.push_pages, {S}, hs, h16, hl, ha)
+  have so: S in omega by simp(hs)
+  have p0: int_div(S, 4096) in omega by simp(so)
+  have gp: all p. p in omega -> int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) && int_le(p, int_div(int_sub(bits_add(64, S, 8), 1), 4096)) ->
+      abi.stack_page(sv, p) || !x86_64_linux.mapped(sv, p) proof
+    fix p
+    assume hp: p in omega
+    assume h12: int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) && int_le(p, int_div(int_sub(bits_add(64, S, 8), 1), 4096))
+    have h1: int_le(int_div(int_add(int_sub(S, 16), j), 4096), p) by taut(h12)
+    have h2: int_le(p, int_div(int_sub(bits_add(64, S, 8), 1), 4096)) by taut(h12)
+    have c1: p = int_div(S, 4096) -> abi.stack_page(sv, p) || !x86_64_linux.mapped(sv, p) proof
+      assume e: p = int_div(S, 4096)
+      have r := rewrite(sym(e), hsp)
+      show by taut(r)
+    qed
+    have c2: !(p = int_div(S, 4096)) -> abi.stack_page(sv, p) || !x86_64_linux.mapped(sv, p) proof
+      assume ne: !(p = int_div(S, 4096))
+      have pp3: int_div(int_sub(bits_add(64, S, 8), 1), 4096) = int_div(S, 4096) by taut(pp)
+      have pp2: int_le(int_div(S, 4096), int_add(int_div(int_sub(S, 16), 4096), 1)) by taut(pp)
+      have pa2: int_div(int_add(int_sub(S, 16), j), 4096) = int_div(int_sub(S, 16), 4096) by taut(pa)
+      have h2b := rewrite(pp3, h2)
+      have h1b := rewrite(pa2, h1)
+      have lt: int_lt(p, int_div(S, 4096)) by arith(h2b, ne, hp, p0)
+      have gg0: int_le(int_mul(int_sub(int_div(S, 4096), p), 4096), int_mul(256, 4096)) by arith(pp2, h1b, hp, p0)
+      have gg: int_le(int_mul(int_sub(int_div(S, 4096), p), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP) by defs(gg0, x86_64_linux.PAGE, x86_64_linux.STACK_GUARD_GAP)
+      have gf := all_elim(expand(hg, abi.stack_gap_free), {int_div(S, 4096)}, {p})
+      have m: x86_64_linux.mapped(sv, p) -> abi.stack_page(sv, p) proof
+        assume hm: x86_64_linux.mapped(sv, p)
+        have pq: int_div(S, 4096) in omega && p in omega by taut(p0, hp)
+        have cnd: ((abi.stack_page(sv, int_div(S, 4096)) && int_lt(p, int_div(S, 4096))) && int_le(int_mul(int_sub(int_div(S, 4096), p), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP)) &&
+          x86_64_linux.mapped(sv, p) by taut(hsp, lt, gg, hm)
+        show := mp(mp(gf, pq), cnd)
+      qed
+      show by taut(m)
+    qed
+    show by taut(c1, c2)
+  qed
+  have pp4: bits_add(64, S, 8) = int_add(S, 8) by taut(pp)
+  have lt1: int_lt(int_add(int_sub(S, 16), j), int_add(S, 8)) by arith(hj8)
+  have lt0 := rewrite(sym(pp4), lt1)
+  show by defs(taut(lt0, gp), abi.scratch, x86_64_linux.PAGE)
+qed
