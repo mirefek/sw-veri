@@ -90,10 +90,12 @@ view[Machine] world(sp: Addr) : World {
 //  Machine code in memory
 
 // The bytes `code` are loaded at `a`: fetchable, and not writable (so no
-// store of the program changes them).
+// store of the program changes them), and not on the stack (no callee's
+// scratch space: what a callee leaves there is arbitrary).
 pred code_at(vm: Vm, a: nat, code: List[bits[8]]) =
   all i: nat. i < len(code) ->
-    fetchable(vm, bits[64](a + i)) && !can_access(vm, bits[64](a + i), write) && vm.bytes[bits[64](a + i)] = code[i]
+    fetchable(vm, bits[64](a + i)) && !can_access(vm, bits[64](a + i), write) && !stack_page(vm, page_of(bits[64](a + i))) &&
+    vm.bytes[bits[64](a + i)] = code[i]
 
 // `new` keeps the mapped pages of `old` and their contents: memory after
 // accesses that may have grown the stack (into unmapped pages)
