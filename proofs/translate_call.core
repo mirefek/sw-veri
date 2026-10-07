@@ -706,3 +706,165 @@ proof
   qed
   show by taut(tf, c0, c2, c13b)
 qed
+
+// ----------------------------------------------------------------------
+//  GIMPLE's call when the callee runs
+
+// (worlds: their fields only, and with a memory, an os, a thread pointer put in)
+theorem tr.world_keys: all w. w in abi.World -> restrict(w, abi.WKEYS) = w && ghost_part(w, abi.WKEYS) = empty
+proof
+  fix w
+  assume hw: w in abi.World
+  have kf := apply(pow_cart_fst, unsel(expand(hw, abi.World)))
+  have r := apply(restrict_all, kf)
+  have g := apply(ghost_part_none, kf)
+  show by taut(r, g)
+qed
+
+theorem tr.world_set: all w v os fs. w in abi.World -> w in univ(1) -> v in x86_64_linux.Vm -> v in univ(1) ->
+  os in x86_64_linux.Os -> os in univ(1) -> fs in bits(64) ->
+  fn_update(fn_update(fn_update(w, "vm", v), "os", os), "fs_base", fs) in abi.World && fn_update(fn_update(fn_update(w, "vm", v), "os", os), "fs_base", fs) in univ(1) &&
+  fn_update(w, "vm", v) in abi.World && fn_update(w, "vm", v) in univ(1)
+proof
+  fix w
+  fix v
+  fix os
+  fix fs
+  assume hw: w in abi.World
+  assume hu: w in univ(1)
+  assume hv: v in x86_64_linux.Vm
+  assume hvu: v in univ(1)
+  assume ho: os in x86_64_linux.Os
+  assume hou: os in univ(1)
+  assume hf: fs in bits(64)
+  have wf := expand(hw, abi.World)
+  have r1: fn_update(fn_update(fn_update(w, "vm", v), "os", os), "fs_base", fs) in abi.World by defs(simp(wf, hu, hv, hvu, ho, hou, hf), abi.World)
+  have r2: fn_update(fn_update(fn_update(w, "vm", v), "os", os), "fs_base", fs) in univ(1) by simp(hu, hvu, hou, hf)
+  have r3: fn_update(w, "vm", v) in abi.World by defs(simp(wf, hu, hv, hvu), abi.World)
+  have r4: fn_update(w, "vm", v) in univ(1) by simp(hu, hvu)
+  show by taut(r1, r2, r3, r4)
+qed
+
+// (a World with an empty ghost part: a World)
+theorem tr.and_world: all x. x in rec_and(abi.World, single(empty)) -> x in abi.World
+proof
+  fix x
+  assume h: x in rec_and(abi.World, single(empty))
+  obtain x0, h1 from mp(rec_and_elim[a := abi.World, b := single(empty), s := x], h)
+  obtain y0, h2 from h1
+  have ye: y0 = empty := mp(single_elim[a := empty, z := y0], taut(h2))
+  have xe: x = union2(x0, y0) by taut(h2)
+  have xe1 := rewrite(ye, xe)
+  have xe2 := trans(xe1, union2_empty[a := x0])
+  have x0w: x0 in abi.World by taut(h2)
+  show := rewrite(sym(xe2), x0w)
+qed
+
+// the spec's rest diverging: the function diverging
+theorem tr.qs_div(op, t, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k): all w. runs(op, w, diverge(t)) ->
+  (all o. runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, o) ->
+    runs(mkprog(x0 x1. ex x8. bind_rel(op, x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), w, o))
+proof
+  fix w
+  assume hq: runs(op, w, diverge(t))
+  have g: all o. (ex x8. dd(t, x8) && k(x8, o)) -> (ex x8. bind_rel(op, w, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, o)) proof
+    fix o
+    assume h: ex x8. dd(t, x8) && k(x8, o)
+    obtain y, hy from h
+    have dy: dd(t, y) by taut(hy)
+    have e1: ex o2. runs(op, w, o2) && ((ex s1 v. o2 = ok(s1, v) && a(s1, v, y)) || (ex s1 e2. o2 = exc(s1, e2) && xx(s1, e2, y)) || (ex t2. o2 = diverge(t2) && dd(t2, y)))
+      by ex_intro({diverge(t)}, simp(hq, dy))
+    have b: bind_rel(op, w, x9 x10. a(x9, x10, y), x9 x10. xx(x9, x10, y), x9. dd(x9, y)) by defs(e1, bind_rel)
+    show by ex_intro({y}, taut(b, hy))
+  qed
+  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. ex x8. bind_rel(op, x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1),
+    r2 := x0 x1. ex x8. dd(t, x8) && k(x8, x1)], g)
+qed
+
+theorem tr.p_div(q, x3 x4 x2. kw): all w t. w in univ(1) -> t in univ(1) -> runs(q, w, diverge(t)) ->
+  runs(mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, diverge(t))
+proof
+  fix w
+  fix t
+  assume hw: w in univ(1)
+  assume ht: t in univ(1)
+  assume hr: runs(q, w, diverge(t))
+  have b0: ex o2. runs(q, w, o2) && ((ex s1 v. o2 = ok(s1, v) && kw(s1, v, diverge(t))) || (ex s1 e1. o2 = exc(s1, e1) && diverge(t) = exc(s1, e1)) ||
+    (ex t2. o2 = diverge(t2) && diverge(t) = diverge(t2))) by ex_intro({diverge(t)}, simp(hr))
+  have b: bind_rel(q, w, x3 x4. kw(x3, x4, diverge(t)), x3 x4. diverge(t) = exc(x3, x4), x3. diverge(t) = diverge(x3)) by defs(b0, bind_rel)
+  have pu: pair(w, diverge(t)) in univ(1) by simp(hw, ht)
+  show := mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {diverge(t)}), pu, b)
+qed
+
+// ... at a call: the call diverging
+theorem tr.call_div(g, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w t. w in univ(1) -> t in univ(1) ->
+  runs(gimple.call1(g, args), w, diverge(t)) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t)) ->
+  runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, diverge(t))
+proof
+  fix w
+  fix t
+  assume hw: w in univ(1)
+  assume ht: t in univ(1)
+  assume hc: runs(gimple.call1(g, args), w, diverge(t))
+  assume hk: runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))
+  have q := mp(all_elim(mp(all_elim(tr.qs_div[op := gimple.call1(g, args), t := t, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), hc), {diverge(t)}), hk)
+  show := apply(tr.p_div[q := mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), kw := x3 x4 x2. kw(x3, x4, x2)],
+    {w}, {t}, hw, ht, q)
+qed
+
+// (the callee's world: its view of the caller's, no ghost part)
+theorem tr.callee_view: all w1 vv sp2. w1 in abi.World ->
+  rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", vv), "os", app(w1, "os")), "fs_base", app(w1, "fs_base")), "cpu", app(w1, "cpu")), "sp", sp2),
+    ghost_part(w1, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))) =
+  fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", vv), "os", app(w1, "os")), "fs_base", app(w1, "fs_base")), "cpu", app(w1, "cpu")), "sp", sp2)
+proof
+  fix w1
+  fix vv
+  fix sp2
+  assume hw: w1 in abi.World
+  have k := apply(tr.world_keys, hw)
+  have g: ghost_part(w1, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))) = empty by taut(k)
+  show by defs(simp(g, union2_empty[a := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", vv), "os", app(w1, "os")), "fs_base", app(w1, "fs_base")), "cpu", app(w1, "cpu")), "sp", sp2)]), rec_merge)
+qed
+
+// the callee's final world xw written back (the memory vm2, matching it
+// outside the callee's scratch space): the caller's world W3
+theorem tr.callee_set: all w1 xw vm2 sp2. w1 in abi.World -> w1 in univ(1) -> xw in abi.World -> xw in univ(1) ->
+  vm2 in x86_64_linux.Vm -> vm2 in univ(1) -> abi.world_matches(app(w1, "vm"), vm2, app(xw, "vm"), sp2) ->
+  runs(gimple.callee_world.set(sp2, restrict(xw, abi.WKEYS)), w1, ok(fn_update(fn_update(fn_update(w1, "vm", vm2), "os", app(xw, "os")), "fs_base", app(xw, "fs_base")), empty)) &&
+  rec_merge(restrict(fn_update(fn_update(fn_update(w1, "vm", vm2), "os", app(xw, "os")), "fs_base", app(xw, "fs_base")), abi.WKEYS), ghost_part(xw, abi.WKEYS)) =
+    fn_update(fn_update(fn_update(w1, "vm", vm2), "os", app(xw, "os")), "fs_base", app(xw, "fs_base")) &&
+  fn_update(fn_update(fn_update(w1, "vm", vm2), "os", app(xw, "os")), "fs_base", app(xw, "fs_base")) in abi.World &&
+  fn_update(fn_update(fn_update(w1, "vm", vm2), "os", app(xw, "os")), "fs_base", app(xw, "fs_base")) in univ(1)
+proof
+  fix w1
+  fix xw
+  fix vm2
+  fix sp2
+  assume hw: w1 in abi.World
+  assume hwu: w1 in univ(1)
+  assume hx: xw in abi.World
+  assume hxu: xw in univ(1)
+  assume hv: vm2 in x86_64_linux.Vm
+  assume hvu: vm2 in univ(1)
+  assume hm: abi.world_matches(app(w1, "vm"), vm2, app(xw, "vm"), sp2)
+  let W3 := fn_update(fn_update(fn_update(w1, "vm", vm2), "os", app(xw, "os")), "fs_base", app(xw, "fs_base"))
+  have xk := apply(tr.world_keys, hx)
+  have rx: restrict(xw, abi.WKEYS) = xw by taut(xk)
+  have gx: ghost_part(xw, abi.WKEYS) = empty by taut(xk)
+  have xf := expand(hx, abi.World)
+  have xos: app(xw, "os") in x86_64_linux.Os by simp(xf)
+  have xosu := mp(app_univ[u := 1, f := xw, k := "os"], hxu)
+  have xfs: app(xw, "fs_base") in bits(64) by simp(xf)
+  have ws := apply(tr.world_set, {w1}, {vm2}, {app(xw, "os")}, {app(xw, "fs_base")}, hw, hwu, hv, hvu, xos, xosu, xfs)
+  have w3W: W3 in abi.World by taut(ws)
+  have w3u: W3 in univ(1) by taut(ws)
+  have so := apply(gc.set_ok, {sp2}, {xw}, {w1}, {vm2}, hwu, hxu, hv, hvu, hm)
+  have se: gimple.callee_world.set(sp2, xw) = gimple.callee_world.set(sp2, restrict(xw, abi.WKEYS)) by simp(rx)
+  have so2 := rewrite(se, so)
+  have k3 := apply(tr.world_keys, w3W)
+  have r3: restrict(W3, abi.WKEYS) = W3 by taut(k3)
+  have e: rec_merge(restrict(W3, abi.WKEYS), ghost_part(xw, abi.WKEYS)) = W3 by defs(simp(r3, gx, union2_empty[a := W3]), rec_merge)
+  show by taut(so2, e, w3W, w3u)
+qed
