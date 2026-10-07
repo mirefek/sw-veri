@@ -50,6 +50,8 @@ enum Spec {
 #[derive(Clone)]
 struct St {
     a: u128,
+    /// the frame's size: rsp is the entry's minus fr (`tr.inv`)
+    fr: u128,
     /// the registers written: register, bytes, value
     regs: Vec<(u128, u128, Term)>,
     /// their map's name
@@ -138,8 +140,9 @@ struct Gen<'e> {
     code: String,
     prefix: String,
     kw: Term,
-    /// the current point's world, its name, its `in univ(1)` fact (set by
-    /// `prove`)
+    /// the current point's frame size, world, its name, its `in univ(1)`
+    /// fact (set by `prove`)
+    fr: u128,
     w: Term,
     wn: String,
     hvu: String,
@@ -414,7 +417,7 @@ impl<'e> Gen<'e> {
     }
 
     fn pt(&self, st: &St, a: u128) -> String {
-        format!("tr.pt(s, V, {}, {}, {}, {}, {}, {}, {}, {})", self.base, self.code, a, st.hst, st.ds, st.rs, self.p(&st.spec), st.wn)
+        format!("tr.pt(s, V, {}, {}, {}, {}, {}, {}, {}, {}, {})", self.base, self.code, st.fr, a, st.hst, st.ds, st.rs, self.p(&st.spec), st.wn)
     }
 
     // ------------------------------------------------------------------
@@ -1298,8 +1301,8 @@ impl<'e> Gen<'e> {
 
     fn wred(&self, st: &St, qi: usize, j: usize) -> String {
         format!(
-            "tr.wred[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
-            self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, self.qs[j].0
+            "tr.wred[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, q2 := {}, kw := x0 x1 x2. KW(x0, x1, x2)]",
+            self.base, self.code, st.fr, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, self.qs[j].0
         )
     }
 
@@ -1337,6 +1340,7 @@ impl<'e> Gen<'e> {
 
     /// The proof of the point claim at `st`.
     fn prove(&mut self, st: St) -> Result<Pf, String> {
+        self.fr = st.fr;
         self.w = st.w.clone();
         self.wn = st.wn.clone();
         self.hvu = st.hvu.clone();
@@ -1371,8 +1375,8 @@ impl<'e> Gen<'e> {
                     let mut lines = rest.lines;
                     lines.push(format!("have {} := {}", pn, rest.expr));
                     let expr = format!(
-                        "mp(tr.wret[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, val := {}, kw := x0 x1 x2. KW(x0, x1, x2)], simp({}), {})",
-                        self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.print(&val), st.hvu, pn
+                        "mp(tr.wret[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, val := {}, kw := x0 x1 x2. KW(x0, x1, x2)], simp({}), {})",
+                        self.base, self.code, st.fr, st.a, st.hst, st.ds, st.rs, st.wn, self.print(&val), st.hvu, pn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -1400,8 +1404,8 @@ impl<'e> Gen<'e> {
                     lines.extend(indent(body));
                     lines.push("qed".into());
                     let expr = format!(
-                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
-                        self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        self.base, self.code, st.fr, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -1427,8 +1431,8 @@ impl<'e> Gen<'e> {
                     lines.extend(indent(body));
                     lines.push("qed".into());
                     let expr = format!(
-                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
-                        self.base, self.code, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        self.base, self.code, st.fr, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
                     );
                     return Ok(Pf { lines, expr });
                 }
@@ -1472,7 +1476,7 @@ impl<'e> Gen<'e> {
             let x = (i.row == 60).then(|| self.pairs(&i.fields, 5)).flatten().ok_or_else(|| bad("whose test is not cmp dword [rsp + d], imm8"))?;
             let d = self.rsp_mem(&x[2]).and_then(|d| nat(&d)).ok_or_else(|| bad("whose test is not on a home"))?;
             let k = nat(&x[4]).filter(|k| *k < 128 && nat(&x[1]) == Some(7)).ok_or_else(|| bad("whose test is not cmp with a small immediate"))?;
-            (d, k)
+            (self.hkey(d), k)
         };
         // the rest: ex x8. while_rel(pair(x0, I0), true, B, TR, x8) && K
         let q = self.qs[qi].1.clone();
@@ -1525,6 +1529,7 @@ impl<'e> Gen<'e> {
         let hst = format!("fn_update(empty, {}, pair(4, {}))", d, lin);
         let st_head = St {
             a: h,
+            fr: st.fr,
             regs: Vec::new(),
             rs: "empty".into(),
             ds: "true".into(),
@@ -1559,7 +1564,7 @@ impl<'e> Gen<'e> {
         let (b, c, kvp) = (self.base.clone(), self.code.clone(), kv);
         let qhp = self.print(&self.qs[jh].1);
         let mut lines = vec![
-            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {h}, {hst}, true, empty, WRAP({qhp}), {lwn})"),
+            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {}, {h}, {hst}, true, empty, WRAP({qhp}), {lwn})", st.fr),
             format!("let {pi}({lwn}, {lin}) := tr.count_inv({kvp}, {lin}) && {lwn} in abi.World && {lwn} in univ(1)"),
             format!("let {mv}({lwn}, {lin}) := tr.count_var({kvp}, {lin})"),
             format!("have nat{ln}: all {lwn} {lin}. {pi}({lwn}, {lin}) -> {mv}({lwn}, {lin}) in omega proof"),
@@ -1596,8 +1601,8 @@ impl<'e> Gen<'e> {
         lines.push(format!("have i0{ln} := apply(tr.count_init, {{{kvp}}}, simp())"));
         lines.push(format!("have c{ln} := mp(all_elim(loop{ln}, {{{wn}}}, {{{i0p}}}), taut(i0{ln}, {}))", st.hw));
         let rs = format!(
-            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{h}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
-            st.hst, st.rs, self.qs[j0].0
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{}}}, {{{h}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
+            st.fr, st.hst, st.rs, self.qs[j0].0
         );
         let expr = format!("mp({}, mp({nodiv0}, {{{wn}}}), {rs})", self.wred(st, qi, j0));
         Ok(Pf { lines, expr })
@@ -1648,8 +1653,8 @@ impl<'e> Gen<'e> {
             format!("have {cn} := mp(all_elim({}, {{{wn}}}, {{{tpp}}}), taut({csn}, {}), taut({csn}))", lp.ih, st.hw),
         ];
         let rs = format!(
-            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
-            self.base, self.code, st.a, st.hst, st.rs, self.qs[j].0
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
+            self.base, self.code, st.fr, st.a, st.hst, st.rs, self.qs[j].0
         );
         let expr = format!("mp({}, mp({settle}, {{{wn}}}), {rs})", self.wred(st, qi, j));
         Ok(Pf { lines, expr })
@@ -1710,9 +1715,14 @@ impl<'e> Gen<'e> {
         Ok(Pf { lines, expr: text.replace("{T}", &names[0]).replace("{F}", &names[1]) })
     }
 
-    /// the instance's common head: `{s}, {V}, {base}, {code}, {a}, {a2}, {len}`
+    /// the instance's common head: `{s}, {V}, {base}, {code}, {fr}, {a}, {a2}, {len}`
     fn head(&self, rule: &str, a: u128, insn: &Insn) -> String {
-        format!("mp(tr.{}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}", rule, self.base, self.code, a, (a + insn.len) % P64, insn.len)
+        format!("mp(tr.{}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}", rule, self.base, self.code, self.fr, a, (a + insn.len) % P64, insn.len)
+    }
+
+    /// a home's key: the offset from the entry's rsp of rsp + d in the frame
+    fn hkey(&self, d: u128) -> u128 {
+        (d + P64 - self.fr % P64) % P64
     }
 
     /// the instance's tail: the coupling's maps, the decode fact, n literal
@@ -1775,9 +1785,10 @@ impl<'e> Gen<'e> {
         let bad = |what: &str| format!("{:x}: {} (row {}): {}", a, what, insn.row, fs);
         let reg = |g: &Term| nat(g).ok_or_else(|| bad("a register that is not a literal"));
         let f = insn.fields.clone();
+        let fr = self.fr;
         let home = |hs: &BTreeMap<u128, (u128, Term)>, d: &Term| -> Result<Term, String> {
             let d = nat(d).ok_or_else(|| bad("a displacement that is not a literal"))?;
-            match hs.get(&d) {
+            match hs.get(&((d + P64 - fr % P64) % P64)) {
                 Some((4, x)) => Ok(x.clone()),
                 _ => Err(format!("{:x}: no 4-byte home at rsp{:+}", a, d as i128 - if d >= P64 / 2 { P64 as i128 } else { 0 })),
             }
@@ -1802,13 +1813,14 @@ impl<'e> Gen<'e> {
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
                 let n = nat(&x[0]).ok_or_else(|| bad("fields"))?;
                 let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
-                let v = match (n, st.hsm.get(&dn)) {
+                let c = lit(self.hkey(dn));
+                let v = match (n, st.hsm.get(&self.hkey(dn))) {
                     (4, _) => home(&st.hsm, &d)?,
                     (8, Some((8, x))) => x.clone(),
                     _ => return Err(bad("no home of the load's width")),
                 };
                 let rule = if n == 8 { "load64_home" } else { "load32_home" };
-                let t = self.head(rule, a, insn) + &self.terms(&[&x[1], &d, &x[3], &x[4], &v]) + &self.tail(st, insn, 7, &[]);
+                let t = self.head(rule, a, insn) + &self.terms(&[&x[1], &d, &c, &x[3], &x[4], &v]) + &self.tail(st, insn, 9, &[]);
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, n, v);
                 self.then(t, st2)
@@ -1836,7 +1848,8 @@ impl<'e> Gen<'e> {
                 let g = reg(&x[1])?;
                 let v = home(&st.hsm, &d)?;
                 let u = self.need_reg(st, g, 4)?;
-                let t = self.head("and32_home", a, insn) + &self.terms(&[&x[1], &d, &x[3], &x[4], &v, &u]) + &self.tail(st, insn, 9, &[]);
+                let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
+                let t = self.head("and32_home", a, insn) + &self.terms(&[&x[1], &d, &c, &x[3], &x[4], &v, &u]) + &self.tail(st, insn, 11, &[]);
                 let r = self.mk("bits_and", vec![lit(32), v, u]);
                 let r = self.value(&r);
                 self.scratch.insert(g);
@@ -1981,13 +1994,15 @@ impl<'e> Gen<'e> {
                         return Err(bad("not dword [rsp + d], imm8"));
                     }
                     let u = home(&st.hsm, &d)?;
+                    let cn = self.hkey(dn);
+                    let ck = lit(cn);
                     return match nat(&x[1]) {
                         Some(0) => {
-                            let only = self.only(st, dn)?;
-                            let t = self.head("add32_home", a, insn) + &self.terms(&[&d, &x[4], &kk, &u]) + &self.tail(st, insn, 7, &[only, "simp(L)".into(), "simp(L)".into()]);
+                            let only = self.only(st, cn)?;
+                            let t = self.head("add32_home", a, insn) + &self.terms(&[&d, &ck, &x[4], &kk, &u]) + &self.tail(st, insn, 9, &[only, "simp(L)".into(), "simp(L)".into()]);
                             let r = self.mk("bits_add", vec![lit(32), u, kk]);
                             let r = self.value(&r);
-                            let st2 = self.set_home(st, a2, dn, r);
+                            let st2 = self.set_home(st, a2, cn, r);
                             self.then(t, st2)
                         }
                         // cmp; jle t: on to a3 (the loop's leaving) when kk <s u
@@ -1998,22 +2013,23 @@ impl<'e> Gen<'e> {
                             }
                             let c = self.mk("int_lt", vec![self.mk("sint", vec![lit(32), kk.clone()]), self.mk("sint", vec![lit(32), u.clone()])]);
                             let text = format!(
-                                "mp(tr.cmp32_home_jle, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                                "mp(tr.cmp32_home_jle, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                                 self.base,
                                 self.code,
+                                self.fr,
                                 a,
                                 a2,
                                 a3,
                                 tt,
                                 insn.len,
                                 jn,
-                                self.terms(&[&d, &x[4], &kk, &j, &u]),
+                                self.terms(&[&d, &ck, &x[4], &kk, &j, &u]),
                                 st.ds,
                                 st.rs,
                                 self.p(&st.spec),
                                 insn.name,
                                 self.insns[&a2].name,
-                                ", simp(L)".repeat(11)
+                                ", simp(L)".repeat(13)
                             );
                             self.branch(st, c, a3, tt, text)
                         }
@@ -2123,9 +2139,10 @@ impl<'e> Gen<'e> {
                         }
                         let c = self.mk("int_le", vec![u.clone(), lit(kk)]);
                         let text = format!(
-                            "mp(tr.cmp32_ja, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                            "mp(tr.cmp32_ja, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                             self.base,
                             self.code,
+                            self.fr,
                             a,
                             a2,
                             a3,
@@ -2156,9 +2173,10 @@ impl<'e> Gen<'e> {
                     let kk = if k >= 128 { self.mk("bits_neg", vec![lit(8), lit(256 - k)]) } else { lit(k) };
                     let c = self.mk("eq", vec![b.clone(), kk.clone()]);
                     let text = format!(
-                        "mp(tr.cmp8_jne, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                        "mp(tr.cmp8_jne, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                         self.base,
                         self.code,
+                        self.fr,
                         a,
                         a2,
                         a3,
@@ -2180,9 +2198,10 @@ impl<'e> Gen<'e> {
                 }
                 let c = self.mk("int_lt", vec![lit(k), b.clone()]);
                 let text = format!(
-                    "mp(tr.cmp8_jbe, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                    "mp(tr.cmp8_jbe, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                     self.base,
                     self.code,
+                    self.fr,
                     a,
                     a2,
                     a3,
@@ -2460,10 +2479,11 @@ impl<'e> Gen<'e> {
                 let z = self.mk("eq", vec![u.clone(), lit(0)]);
                 let c = if cc == 5 { z } else { self.mk("not", vec![z]) };
                 let text = format!(
-                    "mp(tr.{}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                    "mp(tr.{}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                     rule,
                     self.base,
                     self.code,
+                    self.fr,
                     a,
                     a2,
                     a3,
@@ -2502,6 +2522,9 @@ impl<'e> Gen<'e> {
             }
             // ret: eax the spec's result
             122 => {
+                if st.fr != 0 {
+                    return Err(format!("{:x}: ret with a frame of {} bytes", a, st.fr));
+                }
                 let Spec::Ret(val, pr) = &st.spec else {
                     return Err(format!("{:x}: ret before the procedure's result (the spec at {})", a, match &st.spec {
                         Spec::Proc(i) => self.print(&self.qs[*i].1),
@@ -2649,9 +2672,10 @@ impl<'e> Gen<'e> {
             // nop
             109 => {
                 let t = format!(
-                    "mp(tr.nop, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, simp(L), {{NEXT}})",
+                    "mp(tr.nop, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, simp(L), {{NEXT}})",
                     self.base,
                     self.code,
+                    self.fr,
                     a,
                     a2,
                     insn.len,
@@ -2671,9 +2695,10 @@ impl<'e> Gen<'e> {
                 let sx = if r & 0x80 != 0 { r + 0xffff_ffff_ffff_ff00 } else { r };
                 let tt = (a2 + sx) % P64;
                 let t = format!(
-                    "mp(tr.jmp8, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, simp(L), simp(L), simp(L), {{NEXT}})",
+                    "mp(tr.jmp8, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, simp(L), simp(L), simp(L), {{NEXT}})",
                     self.base,
                     self.code,
+                    self.fr,
                     a,
                     a2,
                     tt,
@@ -2722,10 +2747,11 @@ impl<'e> Gen<'e> {
                 if nat(&x[0]) != Some(4) || x[2] != x[1] {
                     return Err(bad("not mov dword [rsp + d], imm32"));
                 }
-                let only = self.only(st, dn)?;
+                let cn = self.hkey(dn);
+                let only = self.only(st, cn)?;
                 let k = x[3].clone();
-                let t = self.head("store32i_home", a, insn) + &self.terms(&[&d, &k]) + &self.tail(st, insn, 6, &[only]);
-                let st2 = self.set_home(st, a2, dn, k);
+                let t = self.head("store32i_home", a, insn) + &self.terms(&[&d, &lit(cn), &k]) + &self.tail(st, insn, 8, &[only]);
+                let st2 = self.set_home(st, a2, cn, k);
                 self.then(t, st2)
             }
             _ => Err(bad("no rule for the instruction")),
@@ -2940,6 +2966,7 @@ pub fn translate(args: &[String]) -> CResult {
         code: String::new(),
         prefix: prefix.clone(),
         kw: Term::bvar(0),
+        fr: 0,
         w: Term::bvar(0),
         wn: "W".into(),
         hvu: "hvu".into(),
@@ -3028,6 +3055,7 @@ pub fn translate(args: &[String]) -> CResult {
     // the proof
     let st0 = St {
         a: a2,
+        fr: 0,
         regs: Vec::new(),
         rs: "empty".into(),
         ds: "false".into(),
@@ -3084,7 +3112,7 @@ pub fn translate(args: &[String]) -> CResult {
     let sp = if srange.is_some() { format!("{p}.statics(statics) -> ") } else { String::new() };
     if guarded {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
+            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, 0, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
             a2,
             dn,
             n,
@@ -3095,7 +3123,7 @@ pub fn translate(args: &[String]) -> CResult {
         ));
     } else {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {b}, empty, false, empty,\n    {}, {p}.w(s))\nproof\n",
+            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {b}, {c}, 0, {b}, empty, false, empty,\n    {}, {p}.w(s))\nproof\n",
             g.print(&wrap_q0),
             b = g.base,
             c = g.code,
