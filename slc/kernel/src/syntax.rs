@@ -673,7 +673,9 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 };
                 let s = pr.prove(p.env, &req).map_err(ctx)?;
                 if s.concl() != &t || !s.hyps().is_empty() {
-                    return Err(ctx(KernelError(format!("the proof shows `{}`, not the statement `{}`", s.show(p.env), Printer::new(p.env).term(&t)))));
+                    let pr = Printer::new(p.env);
+                    let why = if s.hyps().is_empty() { pr.mismatch(&t, s.concl()) } else { format!("hypotheses left: {}", s.hyps().iter().map(|h| pr.short(h)).collect::<Vec<_>>().join(", ")) };
+                    return Err(ctx(KernelError(format!("the proof shows `{}`, not the statement `{}`\n  {}", pr.short(s.concl()), pr.short(&t), why))));
                 }
                 let conditional = !s.open().is_empty();
                 facts::record(p.env, &name, s).map_err(ctx)?;
@@ -691,7 +693,10 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
 // ----------------------------------------------------------------------
 //  Printing
 
-const OPS: &[(&str, &str, u8)] = &[("iff", "<->", 1), ("imp", "->", 2), ("or", "||", 3), ("and", "&&", 4)];
+/// characters of a term in an error message (`Printer::short`)
+const SHORT: usize = 400;
+
+const OPS: &[(&str, &str, u8)] =&[("iff", "<->", 1), ("imp", "->", 2), ("or", "||", 3), ("and", "&&", 4)];
 
 pub struct Printer<'e> {
     env: &'e Env,
@@ -726,6 +731,125 @@ impl<'e> Printer<'e> {
 
     fn fresh(&self, scope: &[String]) -> String {
         format!("x{}", scope.len())
+    }
+
+    /// `t` (under the binders `scope`) printed, cut to `SHORT` characters
+    /// unless `SLC_FULL_ERRORS` is set
+    fn short_in(&self, t: &Term, scope: &mut Vec<String>) -> String {
+        let mut out = String::new();
+        self.go(t, scope, 0, &mut out);
+        if out.chars().count() > SHORT && std::env::var("SLC_FULL_ERRORS").is_err() {
+            let n = out.chars().count();
+            out = format!("{} ... ({} characters; SLC_FULL_ERRORS=1 prints all)", out.chars().take(SHORT).collect::<String>(), n);
+        }
+        out
+    }
+
+    /// A term for an error message: cut to `SHORT` characters (see
+    /// `short_in`).
+    pub fn short(&self, t: &Term) -> String {
+        self.short_in(t, &mut Vec::new())
+    }
+
+    /// Where `given` differs from `expected`, for an error message: the
+    /// path to the first differing subterm (through an implication's
+    /// premises, a conjunction's conjuncts, an application's arguments) and
+    /// the two subterms there.
+    pub fn mismatch(&self, expected: &Term, given: &Term) -> String {
+        let mut path: Vec<String> = Vec::new();
+        let mut scope: Vec<String> = Vec::new();
+        let (mut e, mut g) = (expected.clone(), given.clone());
+        loop {
+            // (an implication's premises / a conjunction's conjuncts: by number)
+            let (ie, ig) = (self.spine(&e, "imp"), self.spine(&g, "imp"));
+            // (premises by number; with fewer premises on one side, the rest
+            // of the longer chain against the shorter's conclusion)
+            let n = ie.len().min(ig.len());
+            let part = |c: &[Term], i: usize| if i == n - 1 && c.len() > n { self.imps(&c[i..]) } else { c[i].clone() };
+            let diff: Vec<usize> = (0..n).filter(|i| part(&ie, *i) != part(&ig, *i)).collect();
+            if n > 1 && !diff.is_empty() {
+                let i = diff[0];
+                let what = if i < n - 1 { format!("premise {}", i + 1) } else if ie.len() == ig.len() { "conclusion".into() } else { format!("after premise {}", n - 1) };
+                path.push(self.also(what, "premise", &diff[1..], n));
+                (e, g) = (part(&ie, i), part(&ig, i));
+                continue;
+            }
+            let (ce, cg) = (self.conjuncts(&e), self.conjuncts(&g));
+            let diff: Vec<usize> = if ce.len() > 1 && ce.len() == cg.len() { (0..ce.len()).filter(|i| ce[*i] != cg[*i]).collect() } else { Vec::new() };
+            if !diff.is_empty() {
+                let i = diff[0];
+                path.push(self.also(format!("conjunct {}", i + 1), "conjunct", &diff[1..], ce.len()));
+                (e, g) = (ce[i].clone(), cg[i].clone());
+                continue;
+            }
+            let step = match (e.node(), g.node()) {
+                (Node::App(se, ae), Node::App(sg, ag)) if se == sg && ae.len() == ag.len() => Some((self.name(*se).to_string(), self.env.syms[*se as usize].binders.clone(), ae.clone(), ag.clone())),
+                (Node::Var(ve, ae), Node::Var(vg, ag)) if ve == vg && ae.len() == ag.len() && !ae.is_empty() => {
+                    Some((self.env.vars.get(*ve as usize).map(|v| v.name.clone()).unwrap_or_default(), vec![0; ae.len()], ae.clone(), ag.clone()))
+                }
+                _ => None,
+            };
+            let Some((name, binders, ae, ag)) = step else { break };
+            let diff: Vec<usize> = (0..ae.len()).filter(|i| ae[*i] != ag[*i]).collect();
+            if diff.is_empty() {
+                break;
+            }
+            let i = diff[0];
+            path.push(self.also(format!("{}, argument {}", name, i + 1), "argument", &diff[1..], ae.len()));
+            for _ in 0..binders[i] {
+                let v = self.fresh(&scope);
+                scope.push(v);
+            }
+            e = ae[i].clone();
+            g = ag[i].clone();
+        }
+        let at = if path.is_empty() { "the whole term".to_string() } else { path.join(" > ") };
+        let bound = if scope.is_empty() { String::new() } else { format!(" (under the binders {})", scope.join(" ")) };
+        format!("first difference at: {}{}\n    expected: {}\n    given:    {}", at, bound, self.short_in(&e, &mut scope.clone()), self.short_in(&g, &mut scope.clone()))
+    }
+
+    /// `t` as `a1 op (a2 op (.. an))`: [a1, .., an] (right-nested)
+    fn spine(&self, t: &Term, op: &str) -> Vec<Term> {
+        let mut out = Vec::new();
+        let mut t = t.clone();
+        loop {
+            match t.node() {
+                Node::App(s, a) if a.len() == 2 && self.name(*s) == op => {
+                    out.push(a[0].clone());
+                    t = a[1].clone();
+                }
+                _ => break,
+            }
+        }
+        out.push(t);
+        out
+    }
+
+    /// [a1, .., an] as `a1 -> (.. -> an)`
+    fn imps(&self, c: &[Term]) -> Term {
+        let imp = self.env.builtins.imp;
+        c[..c.len() - 1].iter().rev().fold(c[c.len() - 1].clone(), |t, p| Term::app(imp, vec![p.clone(), t]))
+    }
+
+    /// the leaves of a conjunction, however nested
+    fn conjuncts(&self, t: &Term) -> Vec<Term> {
+        match t.node() {
+            Node::App(s, a) if a.len() == 2 && self.name(*s) == "and" => {
+                let mut v = self.conjuncts(&a[0]);
+                v.extend(self.conjuncts(&a[1]));
+                v
+            }
+            _ => vec![t.clone()],
+        }
+    }
+
+    /// a path step, with the other parts differing there
+    fn also(&self, what: String, part: &str, more: &[usize], n: usize) -> String {
+        if more.is_empty() {
+            return what;
+        }
+        let ns: Vec<String> = more.iter().map(|j| if part == "premise" && *j == n - 1 { "the conclusion".to_string() } else { format!("{} {}", part, j + 1) }).collect();
+        format!("{} (also differing: {})", what, ns.join(", "))
     }
 
     fn go(&self, t: &Term, scope: &mut Vec<String>, prec: u8, out: &mut String) {

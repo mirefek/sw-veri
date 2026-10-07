@@ -602,3 +602,17 @@ fn differences_are_naturals_when_not_negative() {
     assert!(arith_ok("a in omega -> b in omega -> int_sub(a, b) in omega", &[ha, hb]).is_err());
     assert!(arith_ok("a in omega -> b in omega -> int_lt(a, b) -> int_sub(a, b) in omega", &[ha, hb, ("h", "int_lt(a, b)")]).is_err());
 }
+
+/// A mismatch names the first differing subterm and its path: premises by
+/// number, conjuncts however nested, arguments of the symbols on the way.
+#[test]
+fn mismatches_point_at_the_difference() {
+    rejected(
+        "theorem r(a, b, c): (a -> b -> c) -> a -> b -> c\nproof\n  assume h: a -> c -> c\n  show := h\nqed\n",
+        "first difference at: premise 1 (also differing: premise 3) > premise 2\n    expected: b\n    given:    c",
+    );
+    rejected(
+        "theorem m(a, b): a -> (a -> b = a) -> b = a\nproof\n  assume h: a\n  assume k: a -> a = b\n  show := mp(k, h)\nqed\n",
+        "first difference at: premise 2 (also differing: the conclusion) > conclusion > eq, argument 1 (also differing: argument 2)\n    expected: b\n    given:    a",
+    );
+}

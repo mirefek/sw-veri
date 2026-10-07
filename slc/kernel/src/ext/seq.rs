@@ -123,10 +123,11 @@ impl Seq {
             Node::App(s, args) if *s == env.builtins.imp && args[0] == a.concl => {
                 Ok(Seq { hyps: union(&imp.hyps, &a.hyps), concl: args[1].clone(), open: union(&imp.open, &a.open) })
             }
-            _ => {
+            Node::App(s, args) if *s == env.builtins.imp => {
                 let p = Printer::new(env);
-                err(format!("modus ponens: `{}` does not apply to `{}`", p.term(&imp.concl), p.term(&a.concl)))
+                err(format!("modus ponens: the fact does not match the premise `{}`\n  {}", p.short(&args[0]), p.mismatch(&args[0], &a.concl)))
             }
+            _ => err(format!("modus ponens: not an implication: `{}`", Printer::new(env).short(&imp.concl))),
         }
     }
 
@@ -183,7 +184,7 @@ impl Seq {
         let inst = body.instantiate_params(std::slice::from_ref(w), &env.binders_fn());
         if inst != s.concl {
             let p = Printer::new(env);
-            return err(format!("ex_intro: `{}` is not `{}`", p.term(&s.concl), p.term(&inst)));
+            return err(format!("ex_intro: the fact is not the instance `{}`\n  {}", p.short(&inst), p.mismatch(&inst, &s.concl)));
         }
         Ok(Seq { hyps: s.hyps.clone(), concl: Term::app(lg.ex, vec![body.clone()]), open: s.open.clone() })
     }
@@ -225,7 +226,7 @@ impl Seq {
         let (b2, c) = Self::eq_sides(env, s2)?;
         if b != b2 {
             let p = Printer::new(env);
-            return err(format!("trans: `{}` is not `{}`", p.term(&b), p.term(&b2)));
+            return err(format!("trans: the middle terms differ\n  {}", p.mismatch(&b, &b2)));
         }
         Ok(Seq { hyps: union(&s1.hyps, &s2.hyps), concl: env.mk_eq(a, c), open: union(&s1.open, &s2.open) })
     }
@@ -274,9 +275,10 @@ impl Seq {
     /// unfold to these.
     pub fn conv(env: &Env, s: &Seq, goal: &Term, syms: &[SymId]) -> KResult<Seq> {
         env.check_wf(goal, 0)?;
-        if unfold_all(env, &s.concl, syms) != unfold_all(env, goal, syms) {
+        let (uf, ug) = (unfold_all(env, &s.concl, syms), unfold_all(env, goal, syms));
+        if uf != ug {
             let p = Printer::new(env);
-            return err(format!("`{}` and `{}` differ after unfolding", p.term(&s.concl), p.term(goal)));
+            return err(format!("the fact and the goal `{}` differ after unfolding\n  {}", p.short(goal), p.mismatch(&ug, &uf)));
         }
         Ok(Seq { hyps: s.hyps.clone(), concl: goal.clone(), open: s.open.clone() })
     }

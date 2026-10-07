@@ -479,7 +479,7 @@ impl State {
                         let g = self.term(env, &g)?;
                         if s.concl() != &g {
                             let pp = Printer::new(env);
-                            return err(format!("this proves `{}`, not `{}`", pp.term(s.concl()), pp.term(&g)));
+                            return err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(&g), pp.mismatch(&g, s.concl())));
                         }
                     }
                     s
@@ -748,7 +748,10 @@ impl State {
                     }
                     None => {
                         let pp = Printer::new(env);
-                        return err(format!("apply: premise {} `{}` does not match `{}`", i + 1, pp.term(&a), pp.term(p.concl())));
+                        // (the premise with the variables matched so far)
+                        let bf = env.binders_fn();
+                        let a2 = binds.iter().fold(a.clone(), |t, (v, x)| t.subst_var(*v, x, &bf));
+                        return err(format!("apply: the proof number {} does not match the premise `{}`\n  {}", i + 1, pp.short(&a2), pp.mismatch(&a2, p.concl())));
                     }
                 }
             }
@@ -824,7 +827,7 @@ impl State {
     fn check(&self, env: &Env, s: Seq, goal: &Term) -> KResult<Seq> {
         if s.concl() != goal {
             let pp = Printer::new(env);
-            return err(format!("this proves `{}`, not `{}`", pp.term(s.concl()), pp.term(goal)));
+            return err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(goal), pp.mismatch(goal, s.concl())));
         }
         Ok(s)
     }

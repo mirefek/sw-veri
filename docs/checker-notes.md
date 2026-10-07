@@ -45,6 +45,24 @@ Measured on the full chain (25 files): 36 s uncached, 0.27 s all cached,
   not apply` error printed thousands of characters; the cause was one
   subterm (`4205681` vs `bits_add(64, a2, bits_sext(...))`). Report the
   first differing subterm and its path instead.
+
+  **Implemented** (`Printer::mismatch`, `Printer::short`): modus ponens,
+  `apply`, `ex_intro`, `trans`, `defs` (after unfolding), a block's or
+  `show`'s goal, and a theorem's statement now report
+
+  ```
+  modus ponens: the fact does not match the premise `tr.implements_at(bits_add(64, ...), G0, ...)`
+    first difference at: tr.implements_at, argument 1
+      expected: bits_add(64, 4205803, bits_sext(32, 64, 4294967174))
+      given:    4205681
+  ```
+
+  The path goes through implications by premise number ("after premise k"
+  when one side has fewer), conjunctions by conjunct (however nested),
+  and other symbols by argument, noting the other differing parts on the
+  way. Terms in messages are cut to 400 characters; `SLC_FULL_ERRORS=1`
+  prints them whole. The `tr.call1` error went from several thousand
+  characters to 277.
 - **Restating formulas.** `assume` repeats the goal's hypothesis verbatim
   (`u2` in translate_call.core: a six-line formula twice); extracting a
   conjunct restates it (`have slt: int_lt(S, ...) by taut(ic)`). Wanted:
