@@ -587,11 +587,18 @@ planned, and everything it does not use is removed.
      entry (`tr.keeps_code`: a callee's code at its call).
    - The run split: `tr.run_split` (from `while_split` in core/loop.core)
      cuts a caller's run at the callee's return.
-   - Still to do: the call rule. Its machine side meets stack growth: the
-     `call`'s push may map a new stack page (or fault: the crash case), so
-     the coupling's memory relation (`vm` as the entry's but for bytes)
-     must allow stack pages grown in the scratch space, as GIMPLE's
-     `frame_at_call` does. Then: the callee's entry conditions, its
+   - The memory is coupled to the world (`tr.mem`); from the entry the
+     coupling keeps only the pages of the 16 bytes around the entry's rsp
+     (the homes below it, the return address from it: `tr.kept`, with
+     `tr.home_range` / `tr.ret_range`). A call's push may grow the stack
+     and a callee may change the page map (mmap, munmap, brk); GIMPLE's
+     `call_at` makes it undefined if the callee changes the pages (or
+     bytes) of the caller's private frame, which holds those 16 bytes.
+     The program's text staying mapped is a program-wide fact, stated once
+     at the top.
+   - A raise (undefined behaviour) may end in any world (`abi.raise_state`):
+     a callee's raise reaches its caller.
+   - Still to do: the call rule -- the callee's entry conditions, its
      contract, the GIMPLE call lemmas (`call_at`'s choices, the callee's
      world, the overflow points, the private frame), the result and the
      clobbered registers; a_clz_32.

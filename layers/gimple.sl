@@ -391,8 +391,9 @@ pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
 // Calling g: the arguments (values with their types) in registers, g on
 // its own stack below `low` (the stack pointer, or the lowest stack object
 // of the caller); the result registers rax, rdx. The caller's private
-// frame [sp2, hi) is the caller's own: a callee that changes it is
-// undefined (C: none of the caller's objects it may access is there). A
+// frame [sp2, hi) is the caller's own: a callee that changes it (its bytes
+// or its pages) is undefined (C: none of the caller's objects it may
+// access is there). A
 // call with the thread pointer broken (the word at fs:0 not pointing to
 // itself, as the ABI requires at every call) is undefined. Every call may
 // overflow the stack (`stack_overflow`, the ABI's: no undefined behavior),
@@ -408,11 +409,12 @@ proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -
   // (the ABI's thread pointer at a call: the word at fs:0 points to itself)
   if !thread_ok(vm, fs_base) { undefined }
   let mid = vm.bytes
+  let mid_pages = vm.pages
   let (r0, r1) = with callee_world(sp2) { return g(regs) }
   // (... and on the way back: the callee may crash after its last I/O --
   // its spec then returns, with the I/O the crash has)
   either { raise stack_overflow } or { }
-  if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a]) { undefined }
+  if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a] && vm.pages[page_of(a)] = mid_pages[page_of(a)]) { undefined }
   return (r0, r1)
 }
 
