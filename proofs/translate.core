@@ -846,6 +846,298 @@ proof
   show by defs(taut(fu, k), tr.regs)
 qed
 
+// (the entry's rsp: at least 8, as rsp + 8 is 16-aligned)
+theorem tr.inv_sp8: all s base code fr m w. tr.inv(s, base, code, fr, m, w) -> int_le(8, app(app(s, "gpr"), 4))
+proof
+  fix s
+  fix base
+  fix code
+  fix fr
+  fix m
+  fix w
+  assume hi: tr.inv(s, base, code, fr, m, w)
+  have i := expand(hi, tr.inv)
+  have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have r4 := apply(x86i.rsp_typed, sM)
+  have al: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have hlt: int_lt(app(app(s, "gpr"), 4), 140737488355328) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have e0: int_mod(int_add(app(app(s, "gpr"), 4), 8), 18446744073709551616) = int_add(app(app(s, "gpr"), 4), 8) by arith(r4, hlt)
+  have e: bits_add(64, app(app(s, "gpr"), 4), 8) = int_add(app(app(s, "gpr"), 4), 8) by defs(rewrite(sym(p64), e0), bits_add)
+  have al2 := rewrite(e, al)
+  show by arith(al2, r4)
+qed
+
+// the invariant after rsp := s's less fr2, a frame of at most 8 bytes (and
+// rip, the flags)
+theorem tr.inv_rsp: all s base code fr fr2 m w r f. tr.inv(s, base, code, fr, m, w) -> r in bits(64) -> x86i.flags_ok(m, f) -> fr2 in omega -> int_le(fr2, 8) ->
+  tr.inv(s, base, code, fr2, fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), fr2))), w)
+proof
+  fix s
+  fix base
+  fix code
+  fix fr
+  fix fr2
+  fix m
+  fix w
+  fix r
+  fix f
+  assume hi: tr.inv(s, base, code, fr, m, w)
+  assume hr: r in bits(64)
+  assume hf: x86i.flags_ok(m, f)
+  assume hfo: fr2 in omega
+  assume hfl: int_le(fr2, 8)
+  have i := expand(hi, tr.inv)
+  have mM: m in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have mu: m in univ(1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+  have r4 := apply(x86i.rsp_typed, sM)
+  have s8 := apply(tr.inv_sp8, hi)
+  have x64: int_sub(app(app(s, "gpr"), 4), fr2) in bits(64) by arith(r4, s8, hfo, hfl)
+  have pt := apply(x86i.parts, mM)
+  have f1 := expand(hf, x86i.flags_ok)
+  have m2: fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), fr2))) in x86_64_linux.Machine
+    by defs(simp(expand(mM, x86_64_linux.Machine), mu, hr, f1, x64, pt), x86_64_linux.Machine)
+  have xu: int_sub(app(app(s, "gpr"), 4), fr2) in univ(1) by simp(x64)
+  // (the callee-saved registers untouched)
+  have e3 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := int_sub(app(app(s, "gpr"), 4), fr2), x := 3], simp())
+  have e5 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := int_sub(app(app(s, "gpr"), 4), fr2), x := 5], simp())
+  have e12 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := int_sub(app(app(s, "gpr"), 4), fr2), x := 12], simp())
+  have e13 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := int_sub(app(app(s, "gpr"), 4), fr2), x := 13], simp())
+  have e14 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := int_sub(app(app(s, "gpr"), 4), fr2), x := 14], simp())
+  have e15 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := int_sub(app(app(s, "gpr"), 4), fr2), x := 15], simp())
+  show by defs(simp(i, m2, hr, f1, xu, hfo, e3, e5, e12, e13, e14, e15, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+qed
+
+// the registers after a write of rsp (not among them)
+theorem tr.regs_keep4: all m rs r f x. tr.regs(m, rs) -> !(4 in dom(rs)) ->
+  tr.regs(fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, x)), rs)
+proof
+  fix m
+  fix rs
+  fix r
+  fix f
+  fix x
+  assume h: tr.regs(m, rs)
+  assume hn: !(4 in dom(rs))
+  have r0f := expand(h, tr.regs)
+  have fu: is_fun(rs) by taut(r0f)
+  have rr: all r1. r1 in dom(rs) -> app(app(m, "gpr"), r1) = snd(app(rs, r1)) && snd(app(rs, r1)) in bits(int_mul(8, fst(app(rs, r1)))) by taut(r0f)
+  have k: all r1. r1 in dom(rs) -> app(app(fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, x)), "gpr"), r1) = snd(app(rs, r1)) &&
+      snd(app(rs, r1)) in bits(int_mul(8, fst(app(rs, r1)))) proof
+    fix r1
+    assume hd: r1 in dom(rs)
+    have ne0: r1 = 4 -> false proof
+      assume e: r1 = 4
+      have h4 := rewrite(e, hd)
+      show by taut(h4, hn)
+    qed
+    have ne: !(r1 = 4) by taut(ne0)
+    have e1 := mp(app_update_other[f := app(m, "gpr"), k := 4, v := x, x := r1], ne)
+    have c := mp(all_elim(rr, {r1}), hd)
+    show by simp(e1, c)
+  qed
+  show by defs(taut(fu, k), tr.regs)
+qed
+
+// a step setting rsp to s's less fr2 (a frame of at most 8 bytes): the
+// claim with the frame fr2 after it gives the claim before
+theorem tr.rsp_step: all s v base code fr fr2 a a2 hs ds rs p w.
+  (all m o. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+     (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), fr2))), empty))) ->
+  a2 in bits(64) -> fr2 in omega -> int_le(fr2, 8) -> !(4 in dom(rs)) ->
+  tr.pt(s, v, base, code, fr2, a2, hs, ds, rs, p, w) -> tr.pt(s, v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s
+  fix v
+  fix base
+  fix code
+  fix fr
+  fix fr2
+  fix a
+  fix a2
+  fix hs
+  fix ds
+  fix rs
+  fix p
+  fix w
+  assume he: all m o. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+     (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), fr2))), empty))
+  assume ha2: a2 in bits(64)
+  assume hfo: fr2 in omega
+  assume hfl: int_le(fr2, 8)
+  assume hn4: !(4 in dom(rs))
+  assume hpt: tr.pt(s, v, base, code, fr2, a2, hs, ds, rs, p, w)
+  let X := int_sub(app(app(s, "gpr"), 4), fr2)
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, ds) -> tr.sim(s, v, p, w, m) proof
+    fix m
+    assume hi: tr.inv(s, base, code, fr, m, w)
+    assume hr: app(m, "rip") = a
+    assume hh: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    assume hmm: tr.mem(s, m, w, ds)
+    let Q(m2) := ex f. x86i.flags_ok(m, f) && m2 = fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X))
+    have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && Q(m2)) proof
+      fix o
+      assume ho: runs(x86_64_linux.step(), m, o)
+      obtain f, hf from mp(mp(mp(mp(mp(all_elim(he, {m}, {o}), hi), hr), hh), hrs), ho)
+      have q2: Q(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X))) by ex_intro({f}, simp(hf, keep(x86i.flags_ok)))
+      show by ex_intro({fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X))}, taut(q2, hf))
+    qed
+    have nr := apply(tr.inv_nr, hi)
+    // (after the step: coupled at a2, in the frame fr2)
+    have post: all m2. Q(m2) -> tr.sim(s, v, p, w, m2) proof
+      fix m2
+      assume hq: Q(m2)
+      obtain f, hf from hq
+      have fo: x86i.flags_ok(m, f) by taut(hf)
+      have e: m2 = fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X)) by taut(hf)
+      have i2 := apply(tr.inv_rsp, {s}, {base}, {code}, {fr}, {fr2}, {m}, {w}, {a2}, {f}, hi, ha2, fo, hfo, hfl)
+      have h2: tr.homes(s, fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X)), hs) by defs(simp(expand(hh, tr.homes)), tr.homes)
+      have rs2 := apply(tr.regs_keep4, {m}, {rs}, {a2}, {f}, {X}, hrs, hn4)
+      have rip2: app(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X)), "rip") = a2 by simp()
+      have mm2 := apply(tr.mem_vm, {s}, {m}, {fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X))}, {w}, {ds}, simp(), hmm)
+      have c := mp(mp(mp(mp(mp(all_elim(expand(hpt, tr.pt), {fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, X))}), i2), rip2), h2), rs2), mm2)
+      show := rewrite(sym(e), c)
+    qed
+    show := mp(mp(mp(tr.step[s := s, v := v, p := p, w := w, m := m, q := x. Q(x)], st), nr), post)
+  qed
+  show by defs(g, tr.pt)
+qed
+
+// sub rsp, imm8 (the prologue): the frame grows by k, to at most 8 bytes
+theorem tr.sub_rsp: all s v base code fr a a2 len z k fr2 hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z, k)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> k in bits(8) -> int_lt(k, 128) -> fr2 = int_add(fr, k) -> fr2 in omega -> int_le(fr2, 8) -> !(4 in dom(rs)) ->
+  tr.pt(s, v, base, code, fr2, a2, hs, ds, rs, p, w) -> tr.pt(s, v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s
+  fix v
+  fix base
+  fix code
+  fix fr
+  fix a
+  fix a2
+  fix len
+  fix z
+  fix k
+  fix fr2
+  fix hs
+  fix ds
+  fix rs
+  fix p
+  fix w
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z, k)))))), m, o)
+  assume ha2: a2 = bits_add(64, a, len)
+  assume hk: k in bits(8)
+  assume hkl: int_lt(k, 128)
+  assume hf2: fr2 = int_add(fr, k)
+  assume hfo: fr2 in omega
+  assume hfl: int_le(fr2, 8)
+  assume hn4: !(4 in dom(rs))
+  assume hpt: tr.pt(s, v, base, code, fr2, a2, hs, ds, rs, p, w)
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), fr2))), empty)) proof
+    fix m
+    fix o
+    assume hi: tr.inv(s, base, code, fr, m, w)
+    assume hr: app(m, "rip") = a
+    assume hhs: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    assume ho: runs(x86_64_linux.step(), m, o)
+    have ip: m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) && app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr)
+      by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have r4R: 4 in x86_64_linux.Reg by simp()
+    have hx := mp(mp(mp(all_elim(hat, {m}, {o}), ho), taut(ip)), hr)
+    obtain f, hf from apply(x86i.sub64_imm, {m}, {o}, {4}, {z}, {k}, {len}, taut(ip), taut(ip), r4R, hk, hx)
+    // (rsp - k: s's less fr + k, no wrap)
+    have i := expand(hi, tr.inv)
+    have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have r4 := apply(x86i.rsp_typed, sM)
+    have s8 := apply(tr.inv_sp8, hi)
+    have fo: fr in omega by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have rspm: app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) by taut(ip)
+    have sx: bits_sext(8, 64, k) = k by defs(simp(hk, hkl), bits_sext, sint)
+    have p64: pow2(64) = 18446744073709551616 by simp()
+    have e0: int_mod(int_sub(int_sub(app(app(s, "gpr"), 4), fr), k), 18446744073709551616) = int_sub(app(app(s, "gpr"), 4), fr2) by arith(r4, s8, fo, hk, hf2, hfl)
+    have e2: int_mod(int_sub(app(app(m, "gpr"), 4), bits_sext(8, 64, k)), 18446744073709551616) = int_sub(app(app(s, "gpr"), 4), fr2) by simp(e0, rspm, sx)
+    have e1: bits_sub(64, app(app(m, "gpr"), 4), bits_sext(8, 64, k)) = int_sub(app(app(s, "gpr"), 4), fr2) by defs(rewrite(sym(p64), e2), bits_sub)
+    show by ex_intro({f}, simp(hf, e1, hr, ha2, keep(x86i.flags_ok)))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.rsp_step, {s}, {v}, {base}, {code}, {fr}, {fr2}, {a}, {a2}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hfo, hfl, hn4, hpt)
+qed
+
+// add rsp, imm8 (the epilogue): the frame shrinks by k
+theorem tr.add_rsp: all s v base code fr a a2 len z k fr2 hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(0, pair(tag(0, 4), pair(z, k)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> k in bits(8) -> int_lt(k, 128) -> fr2 = int_sub(fr, k) -> fr2 in omega -> int_le(fr2, 8) -> !(4 in dom(rs)) ->
+  tr.pt(s, v, base, code, fr2, a2, hs, ds, rs, p, w) -> tr.pt(s, v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s
+  fix v
+  fix base
+  fix code
+  fix fr
+  fix a
+  fix a2
+  fix len
+  fix z
+  fix k
+  fix fr2
+  fix hs
+  fix ds
+  fix rs
+  fix p
+  fix w
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(0, pair(tag(0, 4), pair(z, k)))))), m, o)
+  assume ha2: a2 = bits_add(64, a, len)
+  assume hk: k in bits(8)
+  assume hkl: int_lt(k, 128)
+  assume hf2: fr2 = int_sub(fr, k)
+  assume hfo: fr2 in omega
+  assume hfl: int_le(fr2, 8)
+  assume hn4: !(4 in dom(rs))
+  assume hpt: tr.pt(s, v, base, code, fr2, a2, hs, ds, rs, p, w)
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), fr2))), empty)) proof
+    fix m
+    fix o
+    assume hi: tr.inv(s, base, code, fr, m, w)
+    assume hr: app(m, "rip") = a
+    assume hhs: tr.homes(s, m, hs)
+    assume hrs: tr.regs(m, rs)
+    assume ho: runs(x86_64_linux.step(), m, o)
+    have ip: m in x86_64_linux.Machine && m in univ(1) && abi.code_at(app(m, "vm"), base, code) && app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr)
+      by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have r4R: 4 in x86_64_linux.Reg by simp()
+    have hx := mp(mp(mp(all_elim(hat, {m}, {o}), ho), taut(ip)), hr)
+    obtain f, hf from apply(x86i.add64_imm, {m}, {o}, {4}, {z}, {k}, {len}, taut(ip), taut(ip), r4R, hk, hx)
+    // (rsp + k: s's less fr - k, below 2^64)
+    have i := expand(hi, tr.inv)
+    have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have r4 := apply(x86i.rsp_typed, sM)
+    have hlt: int_lt(app(app(s, "gpr"), 4), 140737488355328) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have fo: fr in omega by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have rspm: app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) by taut(ip)
+    have mM: m in x86_64_linux.Machine by taut(ip)
+    have m4 := apply(x86i.rsp_typed, mM)
+    have m4b := rewrite(rspm, m4)
+    have sx: bits_sext(8, 64, k) = k by defs(simp(hk, hkl), bits_sext, sint)
+    have p64: pow2(64) = 18446744073709551616 by simp()
+    have e0: int_mod(int_add(int_sub(app(app(s, "gpr"), 4), fr), k), 18446744073709551616) = int_sub(app(app(s, "gpr"), 4), fr2) by arith(r4, hlt, m4b, fo, hk, hf2, hfo)
+    have e2: int_mod(int_add(app(app(m, "gpr"), 4), bits_sext(8, 64, k)), 18446744073709551616) = int_sub(app(app(s, "gpr"), 4), fr2) by simp(e0, rspm, sx)
+    have e1: bits_add(64, app(app(m, "gpr"), 4), bits_sext(8, 64, k)) = int_sub(app(app(s, "gpr"), 4), fr2) by defs(rewrite(sym(p64), e2), bits_add)
+    show by ex_intro({f}, simp(hf, e1, hr, ha2, keep(x86i.flags_ok)))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.rsp_step, {s}, {v}, {base}, {code}, {fr}, {fr2}, {a}, {a2}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hfo, hfl, hn4, hpt)
+qed
+
 // a register write's step: from a coupled state at a, the instruction ends
 // with g := V (the value the coupling gives) and rip a2, the flags open;
 // the claim after it, with g holding V, gives the claim at a
@@ -2371,37 +2663,243 @@ proof
   show := mp(mp(mp(tr.step[s := s, v := V, p := p, w := W, m := s, q := y. y = M1], st), nr), post)
 qed
 
-// the entry of a function of one 32-bit argument (`require len(args) >= 1`,
-// the procedure called with it, its result returned by kw): the claim after
-// the prologue, for every entry, gives abi.matches. (Too few arguments: the
-// spec allows anything.)
-theorem tr.entry1_32(base, code, statics, f, len, d, z1, z2, a2, x0. q, x3 x4 x2. kw): base in omega ->
+// the prologue `sub rsp, k; mov [rsp + d], edi` (a frame of k <= 8 bytes,
+// the argument's home c = d - k): from the entry s to the state after it,
+// coupled with the spec's view
+theorem tr.prologue_sub1_32: all s base code f k len0 z0 a1 len d c z1 z2 a2 x p.
+  s in x86_64_linux.Machine -> s in univ(1) -> base in omega -> abi.code_at(app(s, "vm"), base, code) -> app(s, "rip") = f -> !app(app(s, "flags"), "df") ->
+  x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) -> int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 ->
+  abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) -> int_lt(app(app(s, "gpr"), 4), 140737488355328) ->
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len0, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z0, k)))))), m, o)) ->
+  a1 = bits_add(64, f, len0) -> k in bits(8) -> int_lt(k, 128) -> int_le(k, 8) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a1 ->
     runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)) ->
-  a2 = bits_add(64, f, len) -> d in bits(64) -> int_le(18446744073709551608, d) -> int_le(4, int_sub(18446744073709551616, d)) ->
-  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
-    abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
-    abi.loaded(app(s, "vm"), base, code, statics) -> abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
-    tr.pt(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, 0, a2, fn_update(empty, d, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
-      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
-      abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
+  a2 = bits_add(64, a1, len) -> d in bits(64) -> c = int_mod(int_sub(d, k), 18446744073709551616) -> c in bits(64) ->
+  int_le(18446744073709551608, c) -> int_le(4, int_sub(18446744073709551616, c)) ->
+  bits_of_int(32, app(app(s, "gpr"), 7)) = x ->
+  abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+  tr.pt(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, k, a2, fn_update(empty, c, pair(4, x)), false, empty, p,
+    abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s)) ->
+  tr.sim(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), p, abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s)
+proof
+  fix s
+  fix base
+  fix code
+  fix f
+  fix k
+  fix len0
+  fix z0
+  fix a1
+  fix len
+  fix d
+  fix c
+  fix z1
+  fix z2
+  fix a2
+  fix x
+  fix p
+  assume hM: s in x86_64_linux.Machine
+  assume hu: s in univ(1)
+  assume hbase: base in omega
+  assume hc: abi.code_at(app(s, "vm"), base, code)
+  assume hrip: app(s, "rip") = f
+  assume hdf: !app(app(s, "flags"), "df")
+  assume ca: x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1)
+  assume al: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0
+  assume hsp: abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096))
+  assume hlt: int_lt(app(app(s, "gpr"), 4), 140737488355328)
+  assume hat0: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len0, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z0, k)))))), m, o)
+  assume ha1: a1 = bits_add(64, f, len0)
+  assume hk: k in bits(8)
+  assume hkl: int_lt(k, 128)
+  assume hk8: int_le(k, 8)
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a1 ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  assume ha2: a2 = bits_add(64, a1, len)
+  assume hd: d in bits(64)
+  assume hcd: c = int_mod(int_sub(d, k), 18446744073709551616)
+  assume hcb: c in bits(64)
+  assume hd1: int_le(18446744073709551608, c)
+  assume hd2: int_le(4, int_sub(18446744073709551616, c))
+  assume hx: bits_of_int(32, app(app(s, "gpr"), 7)) = x
+  assume hvu: abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1)
+  assume hpt: tr.pt(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, k, a2, fn_update(empty, c, pair(4, x)), false, empty, p,
+    abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))
+  let X := bits_slice(app(app(s, "gpr"), 7), 31, 0)
+  let V := tr.view1(s, c, 4, X)
+  let W := abi.view(V, s)
+  let R := int_sub(app(app(s, "gpr"), 4), k)
+  let M0(fl) := fn_update(fn_update(fn_update(s, "rip", a1), "flags", fl), "gpr", fn_update(app(s, "gpr"), 4, R))
+  have pt := apply(x86i.parts, hM)
+  have r4 := apply(x86i.rsp_typed, hM)
+  have r7R: 7 in x86_64_linux.Reg by simp()
+  have r7 := mp(mp(all_elim(x86i.reg_typed, {s}, {7}), hM), r7R)
+  have xo: X in omega by simp(r7)
+  have ko: k in omega by simp(hk)
+  have vf := apply(tr.view1_ok, {s}, {c}, {4}, {X}, hM, hu, hsp, al, hlt, hcb, hd1, hd2, simp(), xo)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  // (the entry's rsp: at least 8; the frame's rsp, R)
+  have e8: int_mod(int_add(app(app(s, "gpr"), 4), 8), 18446744073709551616) = int_add(app(app(s, "gpr"), 4), 8) by arith(r4, hlt)
+  have e8b: bits_add(64, app(app(s, "gpr"), 4), 8) = int_add(app(app(s, "gpr"), 4), 8) by defs(rewrite(sym(p64), e8), bits_add)
+  have al2 := rewrite(e8b, al)
+  have s8: int_le(8, app(app(s, "gpr"), 4)) by arith(al2, r4)
+  have rb: R in bits(64) by arith(r4, s8, ko, hk8)
+  have sx: bits_sext(8, 64, k) = k by defs(simp(hk, hkl), bits_sext, sint)
+  have es0: int_mod(int_sub(app(app(s, "gpr"), 4), k), 18446744073709551616) = R by arith(r4, s8, ko, hk8)
+  have es1: int_mod(int_sub(app(app(s, "gpr"), 4), bits_sext(8, 64, k)), 18446744073709551616) = R by simp(es0, sx)
+  have es: bits_sub(64, app(app(s, "gpr"), 4), bits_sext(8, 64, k)) = R by defs(rewrite(sym(p64), es1), bits_sub)
+  // (the store's address: rsp + d in the frame, s's rsp + c)
+  have ea: all x0. x0 in omega -> bits_add(64, bits_add(64, app(app(s, "gpr"), 4), c), x0) = bits_add(64, int_add(app(app(s, "gpr"), 4), c), x0) proof
+    fix x0
+    assume h0: x0 in omega
+    have e2: int_mod(int_add(int_mod(int_add(app(app(s, "gpr"), 4), c), 18446744073709551616), x0), 18446744073709551616) =
+      int_mod(int_add(int_add(app(app(s, "gpr"), 4), c), x0), 18446744073709551616) by arith(r4, hcb, h0)
+    show by defs(rewrite(sym(p64), e2), bits_add)
+  qed
+  have ef: all x0. x0 in omega -> bits_add(64, int_add(R, d), x0) = bits_add(64, int_add(app(app(s, "gpr"), 4), c), x0) proof
+    fix x0
+    assume h0: x0 in omega
+    have e2: int_mod(int_add(int_add(int_sub(app(app(s, "gpr"), 4), k), d), x0), 18446744073709551616) =
+      int_mod(int_add(int_add(app(app(s, "gpr"), 4), int_mod(int_sub(d, k), 18446744073709551616)), x0), 18446744073709551616) by arith(r4, hd, h0, ko)
+    have e3 := subst({y. int_mod(int_add(int_add(int_sub(app(app(s, "gpr"), 4), k), d), x0), 18446744073709551616) =
+      int_mod(int_add(int_add(app(app(s, "gpr"), 4), y), x0), 18446744073709551616)}, sym(hcd), e2)
+    show by defs(rewrite(sym(p64), e3), bits_add)
+  qed
+  have ea0 := mp(all_elim(ea, {0}), simp())
+  have ea1: bits_add(64, int_add(app(app(s, "gpr"), 4), c), 0) = bits_add(64, app(app(s, "gpr"), 4), c) by simp(ea0, r4, hcb)
+  have ef0 := mp(all_elim(ef, {0}), simp())
+  have ef1: bits_add(64, int_add(R, d), 0) = bits_add(64, app(app(s, "gpr"), 4), c) := rewrite(ea1, ef0)
+  // (the home's 4 bytes: writable)
+  have sa := apply(abi.slot_access, {app(s, "vm")}, {app(app(s, "gpr"), 4)}, {c}, {4}, r4, ca, al, hcb, hd1, hd2)
+  have sa1: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(s, "vm"), bits_add(64, bits_add(64, app(app(s, "gpr"), 4), c), bits_of_int(64, i)), 1) by taut(sa)
+  // the first step: the frame
+  let Q0(m) := ex fl. x86i.flags_ok(s, fl) && m = M0(fl)
+  have st0: all o. runs(x86_64_linux.step(), s, o) -> (ex m2. o = ok(m2, empty) && Q0(m2)) proof
+    fix o
+    assume ho: runs(x86_64_linux.step(), s, o)
+    have hx0 := mp(mp(mp(all_elim(hat0, {s}, {o}), ho), hc), hrip)
+    have r4R: 4 in x86_64_linux.Reg by simp()
+    obtain fl, hf from apply(x86i.sub64_imm, {s}, {o}, {4}, {z0}, {k}, {len0}, hM, hu, r4R, hk, hx0)
+    have q: Q0(M0(fl)) by ex_intro({fl}, simp(hf, keep(x86i.flags_ok)))
+    show by ex_intro({M0(fl)}, simp(q, hf, es, hrip, ha1, keep(x86i.flags_ok)))
+  qed
+  have nr0 := apply(tr.sp_lt, {app(app(s, "gpr"), 4)}, r4, hlt)
+  have post0: all m1. Q0(m1) -> tr.sim(s, V, p, W, m1) proof
+    fix m1
+    assume hq: Q0(m1)
+    obtain fl, hfl from hq
+    have fo: x86i.flags_ok(s, fl) by taut(hfl)
+    have em: m1 = M0(fl) by taut(hfl)
+    have f1 := expand(fo, x86i.flags_ok)
+    have a1b: a1 in bits(64) by simp(ha1)
+    have m0M: M0(fl) in x86_64_linux.Machine by defs(simp(expand(hM, x86_64_linux.Machine), hu, pt, f1, rb, a1b), x86_64_linux.Machine)
+    have m0u: M0(fl) in univ(1) by simp(hu, f1, rb, a1b)
+    let M1 := fn_update(fn_update(M0(fl), "rip", a2), "vm", V)
+    // the second step: the store
+    have acc: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.can_access(app(M0(fl), "vm"), bits_add(64, x86i.rsp_ea(M0(fl), d), bits_of_int(64, i)), 1) proof
+      fix i
+      assume i1: i in omega
+      assume i2: int_lt(i, 4)
+      have c1 := mp(mp(all_elim(sa1, {i}), i1), i2)
+      have e := mp(all_elim(ea, {bits_of_int(64, i)}), simp(i1))
+      have c2 := rewrite(e, c1)
+      have e2 := mp(all_elim(ef, {bits_of_int(64, i)}), simp(i1))
+      have c3 := rewrite(sym(e2), c2)
+      show by simp(c3, rb, hd)
+    qed
+    have st: all o. runs(x86_64_linux.step(), M0(fl), o) -> (ex m2. o = ok(m2, empty) && m2 = M1) proof
+      fix o
+      assume ho: runs(x86_64_linux.step(), M0(fl), o)
+      have cd0: abi.code_at(app(M0(fl), "vm"), base, code) by simp(hc)
+      have rp0: app(M0(fl), "rip") = a1 by simp()
+      have hx2 := mp(mp(mp(all_elim(hat, {M0(fl)}, {o}), ho), cd0), rp0)
+      have e := apply(x86i.store32_rsp, {M0(fl)}, {o}, {7}, {d}, {z1}, {z2}, {len}, m0M, m0u, r7R, hd, acc, hx2)
+      show by ex_intro({M1}, simp(e, ef1, ha2))
+    qed
+    have nrR: int_lt(int_sub(app(app(s, "gpr"), 4), k), abi.sp(s)) by arith(nr0, ko)
+    have nr: int_lt(app(app(M0(fl), "gpr"), 4), abi.sp(s)) by simp(nrR)
+    // after it: coupled at a2, in the frame k
+    have post: all m2. m2 = M1 -> tr.sim(s, V, p, W, m2) proof
+      fix m2
+      assume e2: m2 = M1
+      have vV: V in x86_64_linux.Vm by taut(vf)
+      have vU: V in univ(1) by taut(vf)
+      have a2b: a2 in bits(64) by simp(ha2)
+      have pt0 := apply(x86i.parts, m0M)
+      have m1M: M1 in x86_64_linux.Machine by defs(simp(expand(hM, x86_64_linux.Machine), hu, pt, f1, rb, m0u, pt0, vV, vU, a2b), x86_64_linux.Machine)
+      have m1u: M1 in univ(1) by simp(m0u, hu, f1, vU, a2b)
+      have sc := apply(tr.store_code_acc, {base}, {code}, {app(s, "vm")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {4}, simp(), hbase, hc, sa1)
+      have cd: abi.code_at(V, base, code) := all_elim(sc, {X})
+      have below: all k0. k0 in omega -> int_lt(k0, 8) -> !int_lt(bits_sub(64, bits_add(64, app(app(s, "gpr"), 4), bits_of_int(64, k0)), bits_add(64, app(app(s, "gpr"), 4), c)), 4) proof
+        fix k0
+        assume k1: k0 in omega
+        assume k2: int_lt(k0, 8)
+        have e3: !int_lt(int_mod(int_sub(int_mod(int_add(app(app(s, "gpr"), 4), int_mod(k0, 18446744073709551616)), 18446744073709551616),
+            int_mod(int_add(app(app(s, "gpr"), 4), c), 18446744073709551616)), 18446744073709551616), 4) by arith(r4, hcb, hd1, hd2, k1, k2)
+        show by defs(rewrite(sym(p64), e3), bits_sub, bits_add, bits_of_int)
+      qed
+      have far := apply(x86.le_store_far, {app(app(s, "vm"), "bytes")}, {app(app(s, "gpr"), 4)}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {4}, {X}, r4, simp(r4, hcb), below)
+      have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
+      // (the callee-saved registers: s's, rsp the only one written)
+      have e3 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 3], simp())
+      have e5 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 5], simp())
+      have e12 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 12], simp())
+      have e13 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 13], simp())
+      have e14 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 14], simp())
+      have e15 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 15], simp())
+      have e7 := mp(app_update_other[f := app(s, "gpr"), k := 4, v := R, x := 7], simp())
+      have inv: tr.inv(s, base, code, k, M1, W) by defs(simp(m1M, m1u, cd, far, hdf, f1, wt, hvu, hM, ca, al, hsp, hlt, ko, e3, e5, e12, e13, e14, e15,
+        keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+      have rp: app(M1, "rip") = a2 by simp()
+      have ld := apply(tr.le_store4, {app(app(s, "vm"), "bytes")}, {bits_add(64, app(app(s, "gpr"), 4), c)}, {X}, simp(pt), simp(r4, hcb), xo)
+      have du := mp(dom_update[f := empty, k := c, v := pair(4, x)], taut(dom_empty))
+      have hh0: all c0. c0 in dom(fn_update(empty, c, pair(4, x))) -> x86_64_linux.le(app(app(M1, "vm"), "bytes"), bits_add(64, int_add(app(app(s, "gpr"), 4), c0), 0), fst(app(fn_update(empty, c, pair(4, x)), c0))) =
+          snd(app(fn_update(empty, c, pair(4, x)), c0)) proof
+        fix c0
+        assume hc0: c0 in dom(fn_update(empty, c, pair(4, x)))
+        have hcd2 := rewrite(du, hc0)
+        have de: dom(empty) = empty by taut(dom_empty)
+        have ce: c0 = c by simp(rewrite(de, hcd2))
+        have g0: x86_64_linux.le(app(app(M1, "vm"), "bytes"), bits_add(64, int_add(app(app(s, "gpr"), 4), c), 0), fst(app(fn_update(empty, c, pair(4, x)), c))) =
+            snd(app(fn_update(empty, c, pair(4, x)), c)) by simp(ld, ea1, hx, r7)
+        show := subst({y. x86_64_linux.le(app(app(M1, "vm"), "bytes"), bits_add(64, int_add(app(app(s, "gpr"), 4), y), 0), fst(app(fn_update(empty, c, pair(4, x)), y))) =
+          snd(app(fn_update(empty, c, pair(4, x)), y))}, sym(ce), g0)
+      qed
+      have hh: tr.homes(s, M1, fn_update(empty, c, pair(4, x))) by defs(hh0, tr.homes)
+      have rr: tr.regs(M1, empty) by defs(simp(dom_empty), tr.regs)
+      have mm: tr.mem(s, M1, W, false) by defs(simp(), tr.mem)
+      have cc := mp(mp(mp(mp(mp(all_elim(expand(hpt, tr.pt), {M1}), inv), rp), hh), rr), mm)
+      show := rewrite(sym(e2), cc)
+    qed
+    have sm := mp(mp(mp(tr.step[s := s, v := V, p := p, w := W, m := M0(fl), q := y. y = M1], st), nr), post)
+    show := rewrite(sym(em), sm)
+  qed
+  show := mp(mp(mp(tr.step[s := s, v := V, p := p, w := W, m := s, q := y. Q0(y)], st0), nr0), post0)
+qed
+
+// the entry of a function of one 32-bit argument (`require len(args) >= 1`,
+// the procedure called with it, its result returned by kw), its home at d:
+// the claim at the entry, for every entry with an argument, gives
+// abi.matches. (Too few arguments: the spec allows anything.)
+theorem tr.entry1_32g(base, code, statics, f, d, x0. q, x3 x4 x2. kw):
+  d in bits(64) -> int_le(18446744073709551608, d) -> int_le(4, int_sub(18446744073709551616, d)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> ord_le(1, seq_len(args)) ->
+    tr.sim(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s)) ->
   (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
     abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
 proof
-  assume hbase: base in omega
-  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
-    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
-  assume ha2: a2 = bits_add(64, f, len)
   assume hd: d in bits(64)
   assume hd1: int_le(18446744073709551608, d)
   assume hd2: int_le(4, int_sub(18446744073709551616, d))
-  assume hbody: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
-    abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
-    abi.loaded(app(s, "vm"), base, code, statics) -> abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
-    tr.pt(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, 0, a2, fn_update(empty, d, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
-      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
-      abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))
+  assume hpro: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> ord_le(1, seq_len(args)) ->
+    tr.sim(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s)
   fix args
   fix s
   fix o
@@ -2433,13 +2931,7 @@ proof
   have ma: abi.matches_at(SPEC, args, s, V, o) proof
     have enough: ord_le(1, seq_len(args)) -> abi.matches_at(SPEC, args, s, V, o) proof
       assume hg: ord_le(1, seq_len(args))
-      have ap := apply(abi.arg_passed, {s}, {args}, hA, he, hg)
-      have hx: bits_of_int(32, app(app(s, "gpr"), 7)) = bits_of_int(32, app(args, 0)) by simp(ap)
-      have r4 := apply(x86i.rsp_typed, hM)
-      have hWw := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
-      have body := mp(mp(mp(mp(mp(mp(all_elim(hbody, {args}, {s}), hA), hM), hg), hvu), hl), hWw)
-      have sim0 := apply(tr.prologue1_32, {s}, {base}, {code}, {f}, {len}, {d}, {z1}, {z2}, {a2}, {bits_of_int(32, app(args, 0))}, {BIND},
-        hM, su, hbase, hc, hrip, hdf, taut(ent), taut(ent), taut(ent), taut(ent), hat, ha2, hd, hd1, hd2, hx, hvu, body)
+      have sim0 := mp(all_elim(hpro, {args}, {s}), hA, hM, su, hl, hrip, he, hg)
       // (the spec's runs: the call's, the guard holding)
       have k: all o2. bind_rel(q(args), W, x3 x4. kw(x3, x4, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) ->
           (!ord_le(1, seq_len(args)) || bind_rel(q(args), W, x3 x4. kw(x3, x4, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))) proof
@@ -2467,6 +2959,151 @@ proof
     show by taut(enough, few)
   qed
   show by defs(ex_intro({V}, taut(vf, ma)), abi.matches)
+qed
+
+// ... its prologue `mov [rsp + d], edi`: the claim after it, for every
+// entry, gives abi.matches
+theorem tr.entry1_32(base, code, statics, f, len, d, z1, z2, a2, x0. q, x3 x4 x2. kw): base in omega ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)) ->
+  a2 = bits_add(64, f, len) -> d in bits(64) -> int_le(18446744073709551608, d) -> int_le(4, int_sub(18446744073709551616, d)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
+    abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+    abi.loaded(app(s, "vm"), base, code, statics) -> abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
+    tr.pt(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, 0, a2, fn_update(empty, d, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
+      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
+    abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+proof
+  assume hbase: base in omega
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  assume ha2: a2 = bits_add(64, f, len)
+  assume hd: d in bits(64)
+  assume hd1: int_le(18446744073709551608, d)
+  assume hd2: int_le(4, int_sub(18446744073709551616, d))
+  assume hbody: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
+    abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+    abi.loaded(app(s, "vm"), base, code, statics) -> abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
+    tr.pt(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, 0, a2, fn_update(empty, d, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
+      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))
+  have hpro: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+      abi.entry_ok(s, args) -> ord_le(1, seq_len(args)) ->
+      tr.sim(s, tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+        abi.view(tr.view1(s, d, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s) proof
+    fix args
+    fix s
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume su: s in univ(1)
+    assume hl: abi.loaded(app(s, "vm"), base, code, statics)
+    assume hrip: app(s, "rip") = f
+    assume he: abi.entry_ok(s, args)
+    assume hg: ord_le(1, seq_len(args))
+    let X := bits_slice(app(app(s, "gpr"), 7), 31, 0)
+    let V := tr.view1(s, d, 4, X)
+    let BIND := mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+    have hc: abi.code_at(app(s, "vm"), base, code) by taut(expand(hl, abi.loaded))
+    have ent := apply(abi.entry_stack, hM, he)
+    have hdf: !app(app(s, "flags"), "df") by taut(expand(he, abi.entry_ok))
+    have r7R: 7 in x86_64_linux.Reg by simp()
+    have r7 := mp(mp(all_elim(x86i.reg_typed, {s}, {7}), hM), r7R)
+    have xo: X in omega by simp(r7)
+    have vf := apply(tr.view1_ok, {s}, {d}, {4}, {X}, hM, su, taut(ent), taut(ent), taut(ent), hd, hd1, hd2, simp(), xo)
+    have vV: V in x86_64_linux.Vm by taut(vf)
+    have vU: V in univ(1) by taut(vf)
+    have hvu: abi.view(V, s) in univ(1) by simp(su, vU)
+    have ap := apply(abi.arg_passed, {s}, {args}, hA, he, hg)
+    have hx: bits_of_int(32, app(app(s, "gpr"), 7)) = bits_of_int(32, app(args, 0)) by simp(ap)
+    have r4 := apply(x86i.rsp_typed, hM)
+    have hWw := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
+    have body := mp(mp(mp(mp(mp(mp(all_elim(hbody, {args}, {s}), hA), hM), hg), hvu), hl), hWw)
+    show := apply(tr.prologue1_32, {s}, {base}, {code}, {f}, {len}, {d}, {z1}, {z2}, {a2}, {bits_of_int(32, app(args, 0))}, {BIND},
+      hM, su, hbase, hc, hrip, hdf, taut(ent), taut(ent), taut(ent), taut(ent), hat, ha2, hd, hd1, hd2, hx, hvu, body)
+  qed
+  show := mp(tr.entry1_32g[base := base, code := code, statics := statics, f := f, d := d, q := x0. q(x0), kw := x3 x4 x2. kw(x3, x4, x2)], hd, hd1, hd2, hpro)
+qed
+
+// ... its prologue `sub rsp, k; mov [rsp + d], edi` (a frame of k <= 8
+// bytes, the argument's home c = d - k): the claim after it, for every
+// entry, gives abi.matches
+theorem tr.entry1_32s(base, code, statics, f, k, len0, z0, a1, len, d, c, z1, z2, a2, x0. q, x3 x4 x2. kw): base in omega ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len0, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z0, k)))))), m, o)) ->
+  a1 = bits_add(64, f, len0) -> k in bits(8) -> int_lt(k, 128) -> int_le(k, 8) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a1 ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)) ->
+  a2 = bits_add(64, a1, len) -> d in bits(64) -> c = int_mod(int_sub(d, k), 18446744073709551616) -> c in bits(64) ->
+  int_le(18446744073709551608, c) -> int_le(4, int_sub(18446744073709551616, c)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
+    abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+    abi.loaded(app(s, "vm"), base, code, statics) -> abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
+    tr.pt(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, k, a2, fn_update(empty, c, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
+      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))) ->
+  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> tr.run_d(s, s, o) ->
+    abi.matches(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, s, o))
+proof
+  assume hbase: base in omega
+  assume hat0: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = f ->
+    runs(x86_64_linux.exec_body(len0, tag(60, pair(8, pair(5, pair(tag(0, 4), pair(z0, k)))))), m, o)
+  assume ha1: a1 = bits_add(64, f, len0)
+  assume hk: k in bits(8)
+  assume hkl: int_lt(k, 128)
+  assume hk8: int_le(k, 8)
+  assume hat: all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a1 ->
+    runs(x86_64_linux.exec_body(len, tag(75, pair(4, pair(7, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)
+  assume ha2: a2 = bits_add(64, a1, len)
+  assume hd: d in bits(64)
+  assume hcd: c = int_mod(int_sub(d, k), 18446744073709551616)
+  assume hcb: c in bits(64)
+  assume hd1: int_le(18446744073709551608, c)
+  assume hd2: int_le(4, int_sub(18446744073709551616, c))
+  assume hbody: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->
+    abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in univ(1) ->
+    abi.loaded(app(s, "vm"), base, code, statics) -> abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s) in abi.World ->
+    tr.pt(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), base, code, k, a2, fn_update(empty, c, pair(4, bits_of_int(32, app(args, 0)))), false, empty,
+      mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+      abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s))
+  have hpro: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+      abi.entry_ok(s, args) -> ord_le(1, seq_len(args)) ->
+      tr.sim(s, tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))),
+        abi.view(tr.view1(s, c, 4, bits_slice(app(app(s, "gpr"), 7), 31, 0)), s), s) proof
+    fix args
+    fix s
+    assume hA: args in abi.ARGS
+    assume hM: s in x86_64_linux.Machine
+    assume su: s in univ(1)
+    assume hl: abi.loaded(app(s, "vm"), base, code, statics)
+    assume hrip: app(s, "rip") = f
+    assume he: abi.entry_ok(s, args)
+    assume hg: ord_le(1, seq_len(args))
+    let X := bits_slice(app(app(s, "gpr"), 7), 31, 0)
+    let V := tr.view1(s, c, 4, X)
+    let BIND := mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+    have hc: abi.code_at(app(s, "vm"), base, code) by taut(expand(hl, abi.loaded))
+    have ent := apply(abi.entry_stack, hM, he)
+    have hdf: !app(app(s, "flags"), "df") by taut(expand(he, abi.entry_ok))
+    have r7R: 7 in x86_64_linux.Reg by simp()
+    have r7 := mp(mp(all_elim(x86i.reg_typed, {s}, {7}), hM), r7R)
+    have xo: X in omega by simp(r7)
+    have vf := apply(tr.view1_ok, {s}, {c}, {4}, {X}, hM, su, taut(ent), taut(ent), taut(ent), hcb, hd1, hd2, simp(), xo)
+    have vV: V in x86_64_linux.Vm by taut(vf)
+    have vU: V in univ(1) by taut(vf)
+    have hvu: abi.view(V, s) in univ(1) by simp(su, vU)
+    have ap := apply(abi.arg_passed, {s}, {args}, hA, he, hg)
+    have hx: bits_of_int(32, app(app(s, "gpr"), 7)) = bits_of_int(32, app(args, 0)) by simp(ap)
+    have r4 := apply(x86i.rsp_typed, hM)
+    have hWw := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)
+    have body := mp(mp(mp(mp(mp(mp(all_elim(hbody, {args}, {s}), hA), hM), hg), hvu), hl), hWw)
+    show := apply(tr.prologue_sub1_32, {s}, {base}, {code}, {f}, {k}, {len0}, {z0}, {a1}, {len}, {d}, {c}, {z1}, {z2}, {a2}, {bits_of_int(32, app(args, 0))}, {BIND},
+      hM, su, hbase, hc, hrip, hdf, taut(ent), taut(ent), taut(ent), taut(ent), hat0, ha1, hk, hkl, hk8, hat, ha2, hd, hcd, hcb, hd1, hd2, hx, hvu, body)
+  qed
+  show := mp(tr.entry1_32g[base := base, code := code, statics := statics, f := f, d := c, q := x0. q(x0), kw := x3 x4 x2. kw(x3, x4, x2)], hcb, hd1, hd2, hpro)
 qed
 
 // ----------------------------------------------------------------------
