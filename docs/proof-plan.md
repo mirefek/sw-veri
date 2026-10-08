@@ -835,3 +835,87 @@ added to simp during get_stride move there where they can.
 4. 6.3 `simulate` on step_seq (no unrolling), then the others; then the
    first function with a loop over a symbolic bound.
 5. 6.4 alongside, as lemmas are needed.
+
+## 7. dequeue end to end: what the layers and the proof language made easy and hard (2026-10-08)
+
+dequeue (mallocng's list unlinking: two arguments, a red-zone frame,
+64-bit loads and stores through pointers, branches on 64-bit equality, an
+early return) is the first function with both halves:
+
+- **C1** (machine code ⊑ readable GIMPLE): generated,
+  proofs/dequeue_tr.core (1218 lines, 10 theorems, with its
+  `tr.callee_io`). It needed new rules (64-bit field loads/stores, cmp of a
+  home with je/jne), and before that the frame generalization
+  (proofs/translate_frame.core: frames of any size, homes kept by a
+  determined `tr.hkeep` chain, the generic entry `tr.entry_n`).
+- **C2** (readable GIMPLE ⊑ spec): by hand.
+  - layers/mallocng_specs.sl (57 lines): `dequeue_spec` is a named
+    precondition (the words involved usable, aligned, apart) and its
+    effect as a function of the memory.
+  - proofs/gimple_inv.core (310 lines, reusable): inverting GIMPLE.
+  - proofs/mallocng_c2.core (480 lines): the word lemmas, the accessors,
+    and the two cases of dequeue; the main case is 167 lines. Result:
+    `ms.dequeue_c2: refines(dequeue, dequeue_spec, World)`.
+
+### What worked
+
+- **The layers.** The C world (memory a partial byte map, `usable` its
+  domain, `objs`) makes the spec short. C2 never mentions the stack,
+  registers or frames, and C1 never mentions the list.
+- **`apply` with higher-order inference.** `g.bind_inv` (a step's
+  continuation, given the step's one outcome) infers its continuation
+  lambda from the hypothesis. Peeling a GIMPLE statement is one line
+  (`apply(g.letin_e, apply(g.bind_inv, h, det))`), with no restated terms.
+  Premises given as `simp()` get their goal from `apply`.
+- **simp for small inversions.** `padd`'s determinism follows directly from
+  its unfolded hypothesis.
+- **Loops by invariant and variant** (`while_var`, `while_exists`):
+  `write_bytes` is proven for every n, both directions, in about 60 lines
+  each, with no unrolling.
+
+### What was hard (with proposals)
+
+1. **Goals behind a definition.** `fix` and `assume` do not see through
+   `g.det(..)`. Every such lemma restates the unfolded goal as
+   `have g: … proof … qed; show by defs(g, D)`.
+   Proposal: an `unfold D` step on the goal, or `fix`/`assume` looking
+   through definitions.
+2. **`taut` and simp as arguments need a goal.** So `taut(h)` cannot
+   extract a conjunct inline. Destructuring (`have a b c := h`) must name
+   exactly the flattened conjuncts.
+   Proposal: `_` for the rest of a conjunction, and goal-less `taut`/simp
+   where `apply` supplies the premise (it does for simp already).
+3. **Equations have no direction.** `taut` does not use symmetry
+   (`!(m = N)` versus `!(N = m)` needed a three-line proof each time).
+   simp may use a fact `l = r` right to left: here it blew a word read back
+   from memory into the whole written memory.
+   Proposal: oriented rewriting for given facts (`simp(→e, ..)`), and
+   tautologies modulo symmetric equality.
+4. **No structure-preserving normalization of a hypothesis.** The
+   goal-less `simp(p)` normalizes everything, including the `bind_rel`
+   shapes the next step needs. Selecting a branch took small lemmas
+   (`g.pick`, `g.pick2`, `g.pick0`) and `out_state(ok(a, b)) = a`.
+   Proposal: goal-less simp honouring `keep(..)`.
+5. **SL functions with a block body** elaborate to a `choose` over a
+   program run, which is unusable in proofs; I rewrote the spec with
+   expression-only functions.
+   Proposal: elaborate `let`-only blocks to nested `letin`.
+6. **Two forms of an address.** GIMPLE's `mem` yields `int_add(p, off)`,
+   while SL's `Addr` arithmetic yields `bits_add(64, p, off)`, so every
+   step converted (`ms.addr`).
+   Proposal: one form (GIMPLE's `mem` returning the `bits_add` form when
+   defined).
+7. **Reading after writing** is a chain of `ms.rd_wr_far` with one
+   apartness fact per pair of words: mechanical, but a third of the main
+   case.
+   Proposal: a memory normalizer for `rd64`/`wr64` from apartness facts
+   (as `symex` had for the machine).
+8. **Error messages print expanded `let`s.** A failing step shows terms of
+   thousands of characters where the proof text says `V2`.
+   Proposal: the printer folds the proof's abbreviations back.
+9. **GIMPLE inversion is new for C2** (C1 only ever ran specs forwards).
+   `gimple_inv.core` covers what dequeue uses. The other operations (8-,
+   16- and 32-bit loads and stores, arithmetic, calls) follow the same
+   pattern; then a C2 proof is a chain of `bind_inv` steps that a tool
+   could emit, as the C1 generator does, leaving only the memory facts by
+   hand.
