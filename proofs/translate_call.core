@@ -764,7 +764,7 @@ qed
 // function-specific): the input as it was, the events grown, the program
 // loaded still
 def tr.returns_valid(w, w2) := app(app(w2, "os"), "input") = app(app(w, "os"), "input") && subset(app(app(w, "os"), "events"), app(app(w2, "os"), "events")) &&
-  (all gb gc st. gb in omega -> abi.loaded(app(w, "vm"), gb, gc, st) -> abi.loaded(app(w2, "vm"), gb, gc, st))
+  (all gb gc st. gb in omega -> abi.loaded(app(w, "vm"), gb, gc, st) -> abi.loaded(app(w2, "vm"), gb, gc, st)) && app(w2, "cpu") = app(w, "cpu")
 
 // the spec is undefined from w: it allows every exception (and so, as
 // GIMPLE's undefined behaviour does, every outcome)
@@ -1316,6 +1316,149 @@ proof
   have wvv: app(gc.gw(w, PG), "vm") in x86_64_linux.Vm by simp(vt.1)
   have dso: ds in set_type(omega) by simp(expand(wW, abi.World), wob)
   show by taut(eok, vok, ook, veq, wvv, dso)
+qed
+
+
+// (the program loaded, in a memory with the same mapped pages -- but the
+// stack's -- and the same bytes on them: loaded there)
+theorem tr.loaded_xfer: all v1 v2 gb gc st. (all p. p in omega -> x86_64_linux.mapped(v1, p) -> !abi.stack_page(v1, p) -> app(app(v2, "pages"), p) = app(app(v1, "pages"), p)) ->
+  (all a. a in bits(64) -> x86_64_linux.mapped(v1, x86_64_linux.page_of(a)) -> !abi.stack_page(v1, x86_64_linux.page_of(a)) -> app(app(v2, "bytes"), a) = app(app(v1, "bytes"), a)) ->
+  abi.loaded(v1, gb, gc, st) -> abi.loaded(v2, gb, gc, st)
+proof
+  fix v1 v2 gb gc st
+  assume hp hb hl
+  have l1 l2 := expand(hl, abi.loaded)
+  have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+      app(app(v2, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) = app(app(v1, "pages"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) &&
+      app(app(v2, "bytes"), bits_of_int(64, int_add(gb, i))) = app(app(v1, "bytes"), bits_of_int(64, int_add(gb, i))) proof
+    fix i
+    assume hi hn
+    have cm cs := apply(tr.code_page, {v1}, {gb}, {gc}, {i}, l1, hi, hn)
+    have po: x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))) in omega by defs(simp(), x86_64_linux.page_of)
+    have pe := mp(all_elim(hp, {x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))}), po, cm, cs)
+    have be := mp(all_elim(hb, {bits_of_int(64, int_add(gb, i))}), simp(), cm, cs)
+    show by taut(pe, be)
+  qed
+  have c2 := apply(tr.code_at_tr, {v1}, {v2}, {gb}, {gc}, l1, e)
+  have s2: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(v2, int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(v2, int_div(x0, x86_64_linux.PAGE)) proof
+    fix x0
+    assume h1 h2
+    have c := mp(all_elim(l2, {x0}), h1, h2)
+    have po: int_div(x0, x86_64_linux.PAGE) in omega by defs(simp(h1), x86_64_linux.PAGE)
+    have pe := mp(all_elim(hp, {int_div(x0, x86_64_linux.PAGE)}), po, c.1, c.2)
+    show by defs(rewrite(sym(pe), expand(c, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+  qed
+  show by defs(taut(c2, s2), abi.loaded)
+qed
+
+// (the entry's stack pages kept to the callee's return x: through the
+// push, the world grown, the callee -- which kept the world's stack pages
+// -- and its return)
+theorem tr.post_stack: all s base code m w ds RA T m1 e1 C x w2 p. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) -> RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
+    "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
+  gc.keeps_stack(gc.gw(w, app(app(C, "vm"), "pages")), w2) -> abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), ds, abi.sp(C)) ->
+  p in omega -> abi.stack_page(app(s, "vm"), p) ->
+  app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(app(w2, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) &&
+  app(app(app(x, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)
+proof
+  fix s base code m w ds RA T m1 e1 C x w2 p
+  assume hi hmm hra ht htr hC hks hwm hp hsp
+  let S := app(app(s, "gpr"), 4)
+  have s16 := apply(tr.inv_gap, hi)
+  have h16: int_le(16, S) by arith(s16)
+  have _ _ _ _ _ _ _ _ _ _ _ _ cpi _ _ _ := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
+  have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {p}, hi, hmm, hp, hsp)
+  have sm := expand(hsp, abi.stack_page, x86_64_linux.mapped)
+  have pi := mp(all_elim(expand(cpi, x86.pages_in), {p}), hp)
+  have nn: !(app(app(app(m, "vm"), "pages"), p) = none) by simp(k2, sm)
+  have ec: app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) := trans((app(app(app(C, "vm"), "pages"), p) = app(app(app(m, "vm"), "pages"), p) by taut(pi, nn)), k2)
+  have pp: p in gc.PN by simp(hp, sm)
+  have ks := mp(all_elim(hks, {p}), pp)
+  have ks1: !(app(app(app(C, "vm"), "pages"), p) = none) && app(snd(app(app(app(C, "vm"), "pages"), p)), "kind") = 2 -> app(app(app(w2, "vm"), "pages"), p) = app(app(app(C, "vm"), "pages"), p) by simp(ks)
+  have ks2 := rewrite(ec, ks1)
+  have sm2: !(app(app(app(s, "vm"), "pages"), p) = none) && app(snd(app(app(app(s, "vm"), "pages"), p)), "kind") = 2 by taut(sm)
+  have ew := mp(ks2, sm2)
+  have {pages} := hwm
+  have px := mp(all_elim(pages, {p}), pp)
+  have n2: !(app(app(app(w2, "vm"), "pages"), p) = none) by simp(ew, sm)
+  have ex: app(app(app(x, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) := trans((app(app(app(x, "vm"), "pages"), p) = app(app(app(w2, "vm"), "pages"), p) by taut(px, n2)), ew)
+  show by taut(ec, ew, ex)
+qed
+
+// (the program loaded: in the world a machine's memory matches, from the
+// machine's -- and back)
+theorem tr.wm_back: all o n wv ob sp gb gc st. abi.world_matches(o, n, wv, ob, sp) -> abi.loaded(n, gb, gc, st) -> abi.loaded(wv, gb, gc, st)
+proof
+  fix o n wv ob sp gb gc st
+  assume hw hl
+  have {bytes, pages} := hw
+  have pp: all p. p in omega -> x86_64_linux.mapped(n, p) -> !abi.stack_page(n, p) -> app(app(wv, "pages"), p) = app(app(n, "pages"), p) proof
+    fix p
+    assume hp hm hs
+    have pn: p in gc.PN by simp(hp, expand(hm, x86_64_linux.mapped))
+    have c := mp(all_elim(pages, {p}), pn)
+    have ns: !(app(app(wv, "pages"), p) = none && abi.stack_page(n, p)) by taut(hs)
+    have e1: app(app(n, "pages"), p) = app(app(wv, "pages"), p) by taut(c, ns)
+    show := sym(e1)
+  qed
+  have bb: all a. a in bits(64) -> x86_64_linux.mapped(n, x86_64_linux.page_of(a)) -> !abi.stack_page(n, x86_64_linux.page_of(a)) -> app(app(wv, "bytes"), a) = app(app(n, "bytes"), a) proof
+    fix a
+    assume ha hm hs
+    have po: x86_64_linux.page_of(a) in omega by defs(simp(ha), x86_64_linux.page_of)
+    have e := mp(all_elim(pp, {x86_64_linux.page_of(a)}), po, hm, hs)
+    have pe: x86_64_linux.page_of(a) = int_div(a, x86_64_linux.PAGE) by defs(simp(), x86_64_linux.page_of)
+    have d: abi.in_domain(wv, ob, a) by defs(simp(rewrite(pe, e), expand(rewrite(pe, hm), x86_64_linux.mapped), expand(rewrite(pe, hs), abi.stack_page, x86_64_linux.mapped)), abi.in_domain, x86_64_linux.mapped)
+    have b := mp(all_elim(bytes, {a}), ha, d)
+    show := sym(b)
+  qed
+  show := apply(tr.loaded_xfer, {n}, {wv}, {gb}, {gc}, {st}, pp, bb, hl)
+qed
+
+theorem tr.wm_fwd: all o n wv ob sp gb gc st. abi.world_matches(o, n, wv, ob, sp) -> abi.loaded(wv, gb, gc, st) -> abi.loaded(n, gb, gc, st)
+proof
+  fix o n wv ob sp gb gc st
+  assume hw hl
+  have {bytes, pages} := hw
+  have pp: all p. p in omega -> x86_64_linux.mapped(wv, p) -> !abi.stack_page(wv, p) -> app(app(n, "pages"), p) = app(app(wv, "pages"), p) proof
+    fix p
+    assume hp hm hs
+    have pn: p in gc.PN by simp(hp, expand(hm, x86_64_linux.mapped))
+    have c := mp(all_elim(pages, {p}), pn)
+    have nn: !(app(app(wv, "pages"), p) = none) by taut(expand(hm, x86_64_linux.mapped))
+    show by taut(c, nn)
+  qed
+  have bb: all a. a in bits(64) -> x86_64_linux.mapped(wv, x86_64_linux.page_of(a)) -> !abi.stack_page(wv, x86_64_linux.page_of(a)) -> app(app(n, "bytes"), a) = app(app(wv, "bytes"), a) proof
+    fix a
+    assume ha hm hs
+    have pe: x86_64_linux.page_of(a) = int_div(a, x86_64_linux.PAGE) by defs(simp(), x86_64_linux.page_of)
+    have d: abi.in_domain(wv, ob, a) by defs(simp(expand(rewrite(pe, hm), x86_64_linux.mapped), expand(rewrite(pe, hs), abi.stack_page, x86_64_linux.mapped)), abi.in_domain, x86_64_linux.mapped)
+    show := mp(all_elim(bytes, {a}), ha, d)
+  qed
+  show := apply(tr.loaded_xfer, {wv}, {n}, {gb}, {gc}, {st}, pp, bb, hl)
+qed
+
+// (... and in the world grown)
+theorem tr.grown_loaded: all wv pg gb gc st. gc.grown(wv, pg) -> abi.loaded(wv, gb, gc, st) -> abi.loaded(fn_update(wv, "pages", pg), gb, gc, st)
+proof
+  fix wv pg gb gc st
+  assume hg hl
+  have pp: all p. p in omega -> x86_64_linux.mapped(wv, p) -> !abi.stack_page(wv, p) -> app(app(fn_update(wv, "pages", pg), "pages"), p) = app(app(wv, "pages"), p) proof
+    fix p
+    assume hp hm hs
+    have pn: p in gc.PN by simp(hp, expand(hm, x86_64_linux.mapped))
+    have c := mp(all_elim(hg.2, {p}), pn)
+    have nn: !(app(app(wv, "pages"), p) = none) by taut(expand(hm, x86_64_linux.mapped))
+    show by simp(c, nn)
+  qed
+  have bb: all a. a in bits(64) -> x86_64_linux.mapped(wv, x86_64_linux.page_of(a)) -> !abi.stack_page(wv, x86_64_linux.page_of(a)) ->
+      app(app(fn_update(wv, "pages", pg), "bytes"), a) = app(app(wv, "bytes"), a) proof
+    fix a
+    assume ha hm hs
+    show by simp()
+  qed
+  show := apply(tr.loaded_xfer, {wv}, {fn_update(wv, "pages", pg)}, {gb}, {gc}, {st}, pp, bb, hl)
 qed
 
 // ----------------------------------------------------------------------
