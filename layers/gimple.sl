@@ -210,7 +210,8 @@ proc[World] write_bytes(a: Addr, n: nat, v: nat) {
 // Stack objects are placed in the scratch space below `sp` (anywhere GCC's
 // frame layout may put them), disjoint and aligned; their contents are
 // arbitrary. The stack grows as needed (running out of stack is the ABI's
-// crash case).
+// crash case). `sp` then is the lowest object: the objects are the
+// function's, no longer scratch (calls go below them).
 proc[World] alloc_objs(objs: List[(nat, nat)]) -> List[Addr] {
   let addrs = any l: List[Addr] where len(l) = len(objs) &&
     (all k: nat. k < len(objs) ->
@@ -222,6 +223,7 @@ proc[World] alloc_objs(objs: List[(nat, nat)]) -> List[Addr] {
     for a in uint(addrs[k]) .. uint(addrs[k]) + objs[k][0] { grow_to(a) }
     for i in 0..objs[k][0] { vm.bytes[addrs[k] + bits[64](i)] := any bits[8] }
   }
+  sp := bits[64](min({a: nat | a = uint(sp) || (ex j: nat. j < len(addrs) && a = uint(addrs[j]))}))
   return addrs
 }
 
@@ -292,10 +294,16 @@ proc[World] padd(p: Addr, off: bits[64]) -> Addr {
 
 // the address of `size` bytes of a C object at p + off: p is not null, the
 // bytes are usable (readable; writable for `w`)
+// Scratch memory (below the stack pointer: the function's own stack, where
+// the machine keeps the values C does not see) holds no C object but the
+// function's stack objects, which `alloc_objs` puts above `sp`: an access
+// there is through a dangling pointer, undefined.
+pred unscratched(vm: Vm, sp: Addr, a: nat, n: nat) = all i: nat. i < n -> !scratch(vm, sp, a + i)
+
 proc[World] mem(p: Addr, off: bits[64], size: nat, w: bool) -> Addr {
   if p = 0 { undefined }
   let a = padd(p, off)
-  if !usable(vm, uint(a), size, w) { undefined }
+  if !usable(vm, uint(a), size, w) || !unscratched(vm, sp, uint(a), size) { undefined }
   return a
 }
 

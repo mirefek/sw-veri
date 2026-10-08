@@ -817,7 +817,7 @@ impl<'e> Gen<'e> {
                 let cond = self.ld8_cond(&a);
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                 let r = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, a.clone(), lit(1)])]);
-                let ok = format!("mp(g.ld8_ok, {{{w}}}, {{{}}}, {hv}, simp(L), taut({{HC}}), taut({{HC}}))", pr(self, &a));
+                let ok = format!("mp(g.ld8_ok, {{{w}}}, {{{}}}, {hv}, simp(L), taut({{HC}}), taut({{HC}}), taut({{HC}}))", pr(self, &a));
                 let ub = format!("mp(g.ld8_ub, {{{w}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}}, simp(L))", pr(self, &a));
                 return Ok((Some(cond), r, ok, ub));
             }
@@ -828,7 +828,7 @@ impl<'e> Gen<'e> {
             if let (Some(pv), Some(ov)) = (self.eval_lit(&x[0]), self.eval_lit(&x[1])) {
                 let (p, off, a) = (pr(self, &x[0]), pr(self, &x[1]), (pv + ov) % P64);
                 self.add_static(a, a + 1);
-                let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {p}, {off}, 1, false)"))?;
+                let cond = self.parse(&format!("g.mem_defined({w}, {p}, {off}, 1, false)"))?;
                 let r = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({w}, \"vm\"), {a}, 1))"))?;
                 let ok = format!("mp(tr.ld8_at_ok, {{{w}}}, {{{p}}}, {{{off}}}, {{{a}}}, {hv}, simp(L), simp(L), simp(L), {{HC}})");
                 let ub = format!("mp(g.ld8_at_ub, {{{w}}}, {{{p}}}, {{{off}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
@@ -839,7 +839,7 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.app(op, "gimple.ld16", 2) {
             if nat(&x[1]) == Some(0) {
                 let a = x[0].clone();
-                let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {}, 0, 2, false)", pr(self, &a)))?;
+                let cond = self.parse(&format!("g.mem_defined({w}, {}, 0, 2, false)", pr(self, &a)))?;
                 let r = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app({w}, \"vm\"), {}, 2))", pr(self, &a)))?;
                 let ok = format!("mp(g.ld16_ok, {{{w}}}, {{{}}}, {hv}, simp(L), {{HC}})", pr(self, &a));
                 let ub = format!("mp(g.ld16_ub, {{{w}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), {{HN}})", pr(self, &a));
@@ -864,7 +864,7 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.app(op, "gimple.ldbf", 5) {
             let t: Vec<String> = x.iter().map(|y| pr(self, y)).collect();
             let (p, off, n, pos, k) = (&t[0], &t[1], &t[2], &t[3], &t[4]);
-            let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {p}, {off}, {n}, false)"))?;
+            let cond = self.parse(&format!("g.mem_defined({w}, {p}, {off}, {n}, false)"))?;
             let r = self.parse(&format!("int_mod(int_div(gimple.bytes_at(app({w}, \"vm\"), bits_add(64, {p}, {off}), {n}), int_pow(2, {pos})), int_pow(2, {k}))"))?;
             let ok = format!("mp(tr.ldbf_ok, {{{w}}}, {{{p}}}, {{{off}}}, {{{n}}}, {{{pos}}}, {{{k}}}, {hv}, simp(L), simp(L), {{HC}})");
             let ub = format!("mp(g.ldbf_ub, {{{w}}}, {{{p}}}, {{{off}}}, {{{n}}}, {{{pos}}}, {{{k}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
@@ -965,7 +965,7 @@ impl<'e> Gen<'e> {
         let w = self.print(&self.w.clone());
         let hv = self.hvu.clone();
         let (ps, os, vs) = (self.print(&p), self.print(&off), self.print(&v));
-        let cond = self.parse(&format!("g.mem_defined(app({w}, \"vm\"), {ps}, {os}, {n}, true)"))?;
+        let cond = self.parse(&format!("g.mem_defined({w}, {ps}, {os}, {n}, true)"))?;
         let inner_ub = format!("mp(g.st{}_at_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{vs}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})", 8 * n);
         let ub = match &helper {
             None => inner_ub,
@@ -1131,7 +1131,7 @@ impl<'e> Gen<'e> {
     /// the fact in scope that the spec's n-byte load at p + d is defined
     fn mem_hyp(&mut self, st: &St, p: &Term, d: &Term, n: u128) -> Result<String, String> {
         let wn = st.wn.clone();
-        let cond = self.parse(&format!("g.mem_defined(app({wn}, \"vm\"), {}, {}, {}, false)", self.print(p), self.print(d), n))?;
+        let cond = self.parse(&format!("g.mem_defined({wn}, {}, {}, {}, false)", self.print(p), self.print(d), n))?;
         st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| {
             let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
             format!("{:x}: a load of {} bytes at {} + {} the spec does not make (the facts: {})", st.a, n, self.print(p), self.print(d), facts.join(", "))
@@ -1174,8 +1174,9 @@ impl<'e> Gen<'e> {
     fn ld8_cond(&self, a: &Term) -> Term {
         let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
         let nz = self.mk("not", vec![self.mk("eq", vec![a.clone(), lit(0)])]);
-        let us = self.mk("gimple.usable", vec![vm, a.clone(), lit(1), self.mk("false", vec![])]);
-        self.mk("and", vec![nz, us])
+        let us = self.mk("gimple.usable", vec![vm.clone(), a.clone(), lit(1), self.mk("false", vec![])]);
+        let sc = self.mk("gimple.unscratched", vec![vm, self.mk("app", vec![self.w.clone(), Term::bytes(b"sp")]), a.clone(), lit(1)]);
+        self.mk("and", vec![self.mk("and", vec![nz, us]), sc])
     }
 
     /// One reduction of the rest `qi` (None: the head waits for the machine).

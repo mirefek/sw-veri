@@ -544,8 +544,11 @@ machine code; `scripts/dump-gimple.sh` dumps it with musl's exact flags).
   the precision, pointer arithmetic that wraps around, misaligned accesses
   and accesses without the needed permission (C objects are never
   write-only), accesses through a null base pointer (even if page 0 were
-  mapped: GCC deletes null tests after a dereference), `.CTZ (0)` without a
-  value for zero. No type-based aliasing
+  mapped: GCC deletes null tests after a dereference), accesses to scratch
+  memory -- the stack below `sp`, where the machine keeps the values C does
+  not see; no C object is there but the function's stack objects, which
+  `alloc_objs` puts above `sp` by lowering it (a dangling pointer, in C) --,
+  `.CTZ (0)` without a value for zero. No type-based aliasing
   rules: musl is compiled with `-fno-strict-aliasing`.
 * **Coupling for proofs**: `coupled(f, pt, sp, ret, entry, fr, w, m)`
   relates the running GIMPLE function (frame `fr`, world `w`) to the machine
