@@ -143,6 +143,15 @@ pred free_range(vm: Vm, p: nat, n: nat) =
   (all q: nat. q >= p + n && q < p + n + STACK_GUARD_GAP / PAGE && mapped(vm, q)
                -> vm.pages[q].value.kind != stack)
 
+// p..p+n lies outside the main stack's space and the guard gap below it
+// (memory.sl, stack_floor): Linux places mappings without an address hint
+// below mmap_base, which it sets at exec below the stack's space and gap
+// (for a finite RLIMIT_STACK), and grows the brk heap there too (we treat
+// brk reaching the stack's space as refused: it would have to cross the
+// whole mmap area first)
+pred off_stack_space(vm: Vm, p: nat, n: nat) =
+  (p + n) * PAGE + STACK_GUARD_GAP <= stack_floor(vm) || p * PAGE >= uint(vm.stack_top)
+
 proc map_pages(p: nat, n: nat, pg: Page) {
   for q in p..p+n { vm.pages[q] := some(pg) }
   for i in p*PAGE .. (p+n)*PAGE { vm.bytes[bits[64](i)] := 0 }
@@ -166,10 +175,11 @@ proc sys_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64],
     p := page_of(addr)
     if p + n > TASK_SIZE / PAGE { return err(ENOMEM) }
   } else {
-    // the address hint may or may not be honoured; never page 0 (POSIX:
-    // "When the implementation selects a value for pa, it never places a
-    // mapping at address 0")
-    p := any q: nat where q >= 1 && free_range(vm, q, n)
+    // the address hint may or may not be honoured (a free place); without
+    // a hint, off the stack's space (Linux: below mmap_base); never page 0
+    // (POSIX: "When the implementation selects a value for pa, it never
+    // places a mapping at address 0")
+    p := any q: nat where q >= 1 && free_range(vm, q, n) && (addr != 0 || off_stack_space(vm, q, n))
   }
   map_pages(p, n, Page { prot: prot_of(prot), kind: anon })   // MAP_FIXED replaces
   return bits[64](p * PAGE)
@@ -203,7 +213,7 @@ proc sys_brk(new: Addr) -> bits[64] {
   let new_end = pages_for(uint(new))
   if new < vm.brk_start { return vm.brk }
   if new_end > old_end {
-    if !free_range(vm, old_end, new_end - old_end) { return vm.brk }
+    if !free_range(vm, old_end, new_end - old_end) || !off_stack_space(vm, old_end, new_end - old_end) { return vm.brk }
     either { return vm.brk } or {}                    // out of memory
     map_pages(old_end, new_end - old_end,
               Page { prot: Prot { r: true, w: true, x: false }, kind: heap })

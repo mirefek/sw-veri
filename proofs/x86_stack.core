@@ -742,8 +742,309 @@ proof
   show by taut(gi, c2)
 qed
 
-// (v1's pages: v0's, or stack pages)
-def x86.stk_ext(v0, v1) := all i. i in omega -> app(app(v1, "pages"), i) = app(app(v0, "pages"), i) || abi.stack_page(v1, i)
+// (a page table P from P0: the pages from p below Q set to Q's entry PQ --
+// those below l so far)
+def x86.gstp(P, P0, p, l, Q, PQ) := (all i. i in omega -> app(P, i) = app(P0, i) || ((int_le(p, i) && int_lt(i, Q)) && app(P, i) = PQ)) &&
+  (all i. i in omega -> int_le(p, i) -> int_lt(i, l) -> app(P, i) = PQ) && app(P, Q) = PQ
+
+theorem x86.gstp_refl: all P p Q. x86.gstp(P, P, p, p, Q, app(P, Q))
+proof
+  fix P p Q
+  have b: all i. i in omega -> int_le(p, i) -> int_lt(i, p) -> app(P, i) = app(P, Q) proof
+    fix i
+    assume hi h1 h2
+    have f: false by arith(h1, h2)
+    show by taut(f)
+  qed
+  show by defs(simp(b), x86.gstp)
+qed
+
+theorem x86.gstp_step: all P P0 p l Q PQ. x86.gstp(P, P0, p, l, Q, PQ) -> l in omega -> int_le(p, l) -> int_lt(l, Q) ->
+  x86.gstp(fn_update(P, l, app(P, Q)), P0, p, int_add(l, 1), Q, PQ)
+proof
+  fix P P0 p l Q PQ
+  assume h hl hpl hlq
+  have a1 a2 a3 := expand(h, x86.gstp)
+  have kq: !(Q = l) proof
+    have c: Q = l -> false proof
+      assume e
+      show by arith(rewrite(e, hlq))
+    qed
+    show by taut(c)
+  qed
+  have eq := mp(app_update_other[f := P, k := l, v := app(P, Q), x := Q], kq)
+  have g1: all i. i in omega -> app(fn_update(P, l, app(P, Q)), i) = app(P0, i) || ((int_le(p, i) && int_lt(i, Q)) && app(fn_update(P, l, app(P, Q)), i) = PQ) proof
+    fix i
+    assume hi
+    have c1: i = l -> app(fn_update(P, l, app(P, Q)), i) = app(P0, i) || ((int_le(p, i) && int_lt(i, Q)) && app(fn_update(P, l, app(P, Q)), i) = PQ) proof
+      assume e
+      have v: app(fn_update(P, l, app(P, Q)), i) = app(P, Q) by simp(e)
+      have b1: int_le(p, i) && int_lt(i, Q) by arith(e, hpl, hlq, hi, hl)
+      show by taut(trans(v, a3), b1)
+    qed
+    have c2: !(i = l) -> app(fn_update(P, l, app(P, Q)), i) = app(P0, i) || ((int_le(p, i) && int_lt(i, Q)) && app(fn_update(P, l, app(P, Q)), i) = PQ) proof
+      assume ne
+      have o := mp(app_update_other[f := P, k := l, v := app(P, Q), x := i], ne)
+      show := rewrite(sym(o), mp(all_elim(a1, {i}), hi))
+    qed
+    show by taut(c1, c2)
+  qed
+  have g2: all i. i in omega -> int_le(p, i) -> int_lt(i, int_add(l, 1)) -> app(fn_update(P, l, app(P, Q)), i) = PQ proof
+    fix i
+    assume hi h1 h2
+    have c1: i = l -> app(fn_update(P, l, app(P, Q)), i) = PQ proof
+      assume e
+      have v: app(fn_update(P, l, app(P, Q)), i) = app(P, Q) by simp(e)
+      show trans(v, a3)
+    qed
+    have c2: !(i = l) -> app(fn_update(P, l, app(P, Q)), i) = PQ proof
+      assume ne
+      have o := mp(app_update_other[f := P, k := l, v := app(P, Q), x := i], ne)
+      have lt: int_lt(i, l) by arith(h2, ne, hi, hl)
+      show := rewrite(sym(o), mp(all_elim(a2, {i}), hi, h1, lt))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(taut(g1, g2, trans(eq, a3)), x86.gstp)
+qed
+
+theorem x86.gstp_end: all P P0 p l Q PQ. x86.gstp(P, P0, p, l, Q, PQ) -> l in omega -> Q in omega -> int_le(l, Q) -> !int_lt(l, Q) -> x86.gstp(P, P0, p, Q, Q, PQ)
+proof
+  fix P P0 p l Q PQ
+  assume h hl hq h1 h2
+  have e: l = Q by arith(hl, hq, h1, h2)
+  show := rewrite(e, h)
+qed
+
+// the next mapped page at or above p
+abbrev x86.nmq(vm, p) := snd(x86_64_linux.next_mapped(vm, p))
+
+// growing the stack (Linux's expand_downwards): the next mapped page Q
+// above p a stack page, the stack within its limit from Q's run's end down
+// to p, the pages from p below Q set to Q's entry
+theorem x86.grow_fill: all m a p m1 e. p in omega -> runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e)) ->
+  !(x86_64_linux.next_mapped(app(m, "vm"), p) = none) && !(app(app(app(m, "vm"), "pages"), x86.nmq(app(m, "vm"), p)) = none) &&
+  app(snd(app(app(app(m, "vm"), "pages"), x86.nmq(app(m, "vm"), p))), "kind") = 2 &&
+  !int_lt(app(app(m, "vm"), "stack_limit"), int_mul(int_sub(x86_64_linux.run_end(app(m, "vm"), x86.nmq(app(m, "vm"), p)), p), x86_64_linux.PAGE)) &&
+  x86.gstp(app(app(m1, "vm"), "pages"), app(app(m, "vm"), "pages"), p, x86.nmq(app(m, "vm"), p), x86.nmq(app(m, "vm"), p), app(app(app(m, "vm"), "pages"), x86.nmq(app(m, "vm"), p)))
+proof
+  fix m a p m1 e
+  assume hp h
+  let Q := x86.nmq(app(m, "vm"), p)
+  let PQ := app(app(app(m, "vm"), "pages"), Q)
+  have nmi := all_elim(x86.next_mapped_in, {app(m, "vm")}, {p})
+  have nmm := all_elim(x86.next_mapped_mapped, {app(m, "vm")}, {p})
+  have pm: int_mul(p, 4096) in omega by arith(hp)
+  show by simp(h, hp, nmi, nmm, pm, x86.gstp_step, x86.gstp_refl, x86.gstp_end, x86.prev_mapped_cases, keep(x86.gstp, x86_64_linux.mapped, x86_64_linux.next_mapped, x86_64_linux.prev_mapped, x86_64_linux.run_end),
+    {l0 l. x86.gstp(app(app(fst(l), "vm"), "pages"), app(app(m, "vm"), "pages"), p, snd(l), Q, PQ) && (snd(l) in omega && int_le(p, snd(l)) && int_le(snd(l), Q))},
+    {l0 l. x86.gstp(app(app(fst(l), "vm"), "pages"), app(app(m, "vm"), "pages"), p, Q, Q, PQ) && snd(l) in omega})
+qed
+
+// (a page as another one, in the same vm or another: mapped / a stack page alike)
+theorem x86.sp_same: all v1 v2 i j. app(app(v2, "pages"), j) = app(app(v1, "pages"), i) -> int_lt(j, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) ->
+  abi.stack_page(v1, i) -> abi.stack_page(v2, j)
+proof
+  fix v1 v2 i j
+  assume e hj h
+  show by defs(simp(e, hj, expand(h, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+qed
+
+// growing the stack keeps its reserve: the new pages lie in its space (the
+// limit counted from its run's end, stack_top), one run with the pages above
+theorem x86.grow_rsv: all m a p m1 e. p in omega -> runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e)) ->
+  abi.stack_reserve(app(m, "vm")) -> abi.stack_reserve(app(m1, "vm"))
+proof
+  fix m a p m1 e
+  assume hp h hr
+  let V := app(m, "vm")
+  let V1 := app(m1, "vm")
+  let Q := x86.nmq(V, p)
+  let PQ := app(app(V, "pages"), Q)
+  let TOP := app(V, "stack_top")
+  have nn qn qk lim gs := apply(x86.grow_fill, hp, h)
+  have fl := expand(apply(x86.grow_fields, h), x86.vm_fields)
+  have et: app(V1, "stack_top") = TOP by taut(fl)
+  have el: app(V1, "stack_limit") = app(V, "stack_limit") by taut(fl)
+  have g1 g2 g3 := expand(gs, x86.gstp)
+  have g0 al sp nm := expand(hr, abi.stack_reserve, x86_64_linux.PAGE)
+  have qo ql pq := mp(all_elim(x86.next_mapped_in, {V}, {p}), nn)
+  have qs: abi.stack_page(V, Q) by defs(simp(qn, qk, ql, qo), abi.stack_page, x86_64_linux.mapped)
+  have qf qt cq qe := mp(all_elim(sp, {Q}), qo, qs)
+  // (the pages from p below Q: unmapped)
+  have un: all i. i in omega -> int_le(p, i) -> int_lt(i, Q) -> !x86_64_linux.mapped(V, i) proof
+    fix i
+    assume hi h1 h2
+    have c: x86_64_linux.mapped(V, i) -> false proof
+      assume hm
+      have le := mp(all_elim(x86.next_mapped_le, {V}, {p}, {i}), hp, hi, h1, hm).2
+      show by arith(le, h2)
+    qed
+    show by taut(c)
+  qed
+  // (the run of Q ends at the top page T: the stack's pages up to it are Q's)
+  let T := int_div(TOP, x86_64_linux.PAGE)
+  have tq: int_le(int_mul(T, 4096), TOP) && int_le(TOP, int_mul(T, 4096)) by defs(arith(al), x86_64_linux.PAGE)
+  have ts: !abi.stack_page(V, T) proof
+    have c: abi.stack_page(V, T) -> false proof
+      assume hs
+      have to: T in omega by defs(arith(qt, qo), x86_64_linux.PAGE)
+      have b := mp(all_elim(sp, {T}), to, hs).2
+      show by defs(arith(b, tq), x86_64_linux.PAGE)
+    qed
+    show by taut(c)
+  qed
+  have tin: int_lt(Q, T) && !(app(app(V, "pages"), T) = PQ) proof
+    have lt: int_lt(Q, T) by defs(arith(qt, tq, qo), x86_64_linux.PAGE)
+    show conj(lt, qe)
+  qed
+  have to: T in omega by arith(tin.1, qo)
+  have ms := mp(mp(int_min_spec[p := x. int_lt(Q, x) && !(app(app(V, "pages"), x) = PQ), a := T], to), tin)
+  have re: int_le(T, x86_64_linux.run_end(V, Q)) proof
+    have mo mp0 mle := ms
+    have e: x86_64_linux.run_end(V, Q) = int_min(set_select(omega, x. int_lt(Q, x) && !(app(app(V, "pages"), x) = PQ))) by rsimp(x86_64_linux.run_end)
+    have c: int_lt(int_min(set_select(omega, x. int_lt(Q, x) && !(app(app(V, "pages"), x) = PQ))), T) -> false proof
+      assume hl
+      let R := int_min(set_select(omega, x. int_lt(Q, x) && !(app(app(V, "pages"), x) = PQ)))
+      have rb: int_le(int_mul(int_add(R, 1), x86_64_linux.PAGE), TOP) by defs(arith(hl, tq, mo), x86_64_linux.PAGE)
+      have rq := mp(all_elim(cq, {R}), mo, conj((int_le(Q, R) by arith(mp0.1, mo, qo)), rb))
+      show by taut(rq, mp0.2)
+    qed
+    have ge: !int_lt(int_min(set_select(omega, x. int_lt(Q, x) && !(app(app(V, "pages"), x) = PQ))), T) by taut(c)
+    show by arith(rewrite(sym(e), ge), mo, to)
+  qed
+  // (p: within the limit from the top)
+  have pf: int_le(x86_64_linux.stack_floor(V), int_mul(p, x86_64_linux.PAGE)) by defs(arith(expand(lim, x86_64_linux.PAGE), re, tq, hp, qo), x86_64_linux.stack_floor, x86_64_linux.PAGE)
+  // the reserve of V1, its parts
+  have ef: x86_64_linux.stack_floor(V1) = x86_64_linux.stack_floor(V) by defs(simp(et, el), x86_64_linux.stack_floor)
+  have r0: int_le(x86_64_linux.STACK_GUARD_GAP, x86_64_linux.stack_floor(V1)) := rewrite(sym(ef), g0)
+  have r1: int_mod(app(V1, "stack_top"), x86_64_linux.PAGE) = 0 := rewrite(sym(et), al)
+  // (a page of V1 that is V's: unchanged from p below Q only if unmapped there)
+  have old: all i j. i in omega -> j in omega -> abi.stack_page(V, i) -> int_le(i, j) -> app(app(V1, "pages"), j) = app(app(V, "pages"), j) proof
+    fix i j
+    assume hi hj hs hij
+    have c := mp(all_elim(g1, {j}), hj)
+    have nr: !(int_le(p, j) && int_lt(j, Q)) proof
+      have d: int_le(p, j) && int_lt(j, Q) -> false proof
+        assume hr2
+        have ms2: x86_64_linux.mapped(V, i) by taut(expand(hs, abi.stack_page))
+        have below: int_lt(i, p) -> false proof
+          assume hl
+          have tb: int_le(int_mul(int_add(p, 1), x86_64_linux.PAGE), TOP) proof
+            have ib := mp(all_elim(sp, {i}), hi, hs).2
+            show by defs(arith(hr2, qt, qo, hp), x86_64_linux.PAGE)
+          qed
+          have ip := mp(all_elim(mp(all_elim(sp, {i}), hi, hs).3, {p}), hp, conj((int_le(i, p) by arith(hl)), tb))
+          have pm: x86_64_linux.mapped(V, p) by defs(simp(ip, expand(ms2, x86_64_linux.mapped), (int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(hr2, ql))), x86_64_linux.mapped)
+          have nu := mp(all_elim(un, {p}), hp, (int_le(p, p) by arith(hp)), (int_lt(p, Q) by arith(hr2)))
+          show by taut(pm, nu)
+        qed
+        have inside: int_le(p, i) -> false proof
+          assume hl
+          have nu := mp(all_elim(un, {i}), hi, hl, (int_lt(i, Q) by arith(hij, hr2)))
+          show by taut(ms2, nu)
+        qed
+        show by taut(below, inside, (int_lt(i, p) || int_le(p, i) by arith(hi, hp)))
+      qed
+      show by taut(d)
+    qed
+    show by taut(c, nr)
+  qed
+  // (the top page T: unchanged)
+  have tt: app(app(V1, "pages"), T) = app(app(V, "pages"), T) proof
+    have c := mp(all_elim(g1, {T}), to)
+    have nr: !(int_le(p, T) && int_lt(T, Q)) by arith(tin.1)
+    show by taut(c, nr)
+  qed
+  have te: int_div(app(V1, "stack_top"), x86_64_linux.PAGE) = T := rewrite(et, refl({int_div(app(V1, "stack_top"), x86_64_linux.PAGE)}), {2})
+  have r2: all x0. x0 in omega -> abi.stack_page(V1, x0) -> (int_le(x86_64_linux.stack_floor(V1), int_mul(x0, x86_64_linux.PAGE)) && int_le(int_mul(int_add(x0, 1), x86_64_linux.PAGE), app(V1, "stack_top"))) &&
+      (all x1. x1 in omega -> int_le(x0, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), app(V1, "stack_top")) -> app(app(V1, "pages"), x1) = app(app(V1, "pages"), x0)) &&
+      !(app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), x0)) proof
+    fix i
+    assume hi hs
+    have c := mp(all_elim(g1, {i}), hi)
+    have was: app(app(V1, "pages"), i) = app(app(V, "pages"), i) -> (int_le(x86_64_linux.stack_floor(V1), int_mul(i, x86_64_linux.PAGE)) && int_le(int_mul(int_add(i, 1), x86_64_linux.PAGE), app(V1, "stack_top"))) &&
+      (all x1. x1 in omega -> int_le(i, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), app(V1, "stack_top")) -> app(app(V1, "pages"), x1) = app(app(V1, "pages"), i)) &&
+      !(app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), i)) proof
+      assume e
+      have il: int_lt(i, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by defs(simp(expand(hs, abi.stack_page, x86_64_linux.mapped)), x86_64_linux.mapped)
+      have s0 := apply(x86.sp_same, {V1}, {V}, {i}, {i}, sym(e), il, hs)
+      have b1 b2 b3 b4 := mp(all_elim(sp, {i}), hi, s0)
+      have c1: int_le(x86_64_linux.stack_floor(V1), int_mul(i, x86_64_linux.PAGE)) && int_le(int_mul(int_add(i, 1), x86_64_linux.PAGE), app(V1, "stack_top")) by defs(arith(rewrite(sym(ef), b1), rewrite(sym(et), b2)), x86_64_linux.PAGE)
+      have c2: all x1. x1 in omega -> int_le(i, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), app(V1, "stack_top")) -> app(app(V1, "pages"), x1) = app(app(V1, "pages"), i) proof
+        fix j
+        assume hj hb
+        have oj := mp(all_elim(old, {i}, {j}), hi, hj, s0, hb.1)
+        have cj := mp(all_elim(b3, {j}), hj, conj(hb.1, (int_le(int_mul(int_add(j, 1), 4096), TOP) by defs(arith(expand(rewrite(et, hb.2), x86_64_linux.PAGE)), x86_64_linux.PAGE))))
+        show trans(oj, trans(cj, sym(e)))
+      qed
+      have c3: !(app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), i)) proof
+        have ti: int_le(i, T) by defs(arith(b2, tq, hi), x86_64_linux.PAGE)
+        have ot := mp(all_elim(old, {i}, {T}), hi, to, s0, ti)
+        have d: app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), i) -> false proof
+          assume q
+          have q2 := trans(trans(sym(ot), rewrite(te, q)), e)
+          show by taut(expand(q2, x86_64_linux.PAGE), b4)
+        qed
+        show by taut(d)
+      qed
+      show conj(c1, c2, c3)
+    qed
+    have new: (int_le(p, i) && int_lt(i, Q)) && app(app(V1, "pages"), i) = PQ -> (int_le(x86_64_linux.stack_floor(V1), int_mul(i, x86_64_linux.PAGE)) && int_le(int_mul(int_add(i, 1), x86_64_linux.PAGE), app(V1, "stack_top"))) &&
+      (all x1. x1 in omega -> int_le(i, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), app(V1, "stack_top")) -> app(app(V1, "pages"), x1) = app(app(V1, "pages"), i)) &&
+      !(app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), i)) proof
+      assume hn
+      have b1: int_le(x86_64_linux.stack_floor(V1), int_mul(i, x86_64_linux.PAGE)) by defs(arith(expand(rewrite(sym(ef), pf), x86_64_linux.PAGE), hn, hp, hi), x86_64_linux.PAGE)
+      have b2: int_le(int_mul(int_add(i, 1), x86_64_linux.PAGE), app(V1, "stack_top")) by defs(arith(rewrite(sym(et), qt), hn, qo, hi), x86_64_linux.PAGE)
+      have b3: all x1. x1 in omega -> int_le(i, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), app(V1, "stack_top")) -> app(app(V1, "pages"), x1) = app(app(V1, "pages"), i) proof
+        fix j
+        assume hj hb
+        have lo: int_lt(j, Q) -> app(app(V1, "pages"), j) = PQ proof
+          assume hl
+          show := mp(all_elim(g2, {j}), hj, (int_le(p, j) by arith(hn.1, hb.1, hi)), hl)
+        qed
+        have hi2: !int_lt(j, Q) -> app(app(V1, "pages"), j) = PQ proof
+          assume hl
+          have cj := mp(all_elim(g1, {j}), hj)
+          have pj: app(app(V1, "pages"), j) = app(app(V, "pages"), j) by taut(cj, hl)
+          have qj := mp(all_elim(cq, {j}), hj, conj((int_le(Q, j) by arith(hl, hj, qo)), (int_le(int_mul(int_add(j, 1), 4096), TOP) by defs(arith(expand(rewrite(et, hb.2), x86_64_linux.PAGE)), x86_64_linux.PAGE))))
+          show trans(pj, qj)
+        qed
+        have pj: app(app(V1, "pages"), j) = PQ by taut(lo, hi2)
+        show trans(pj, sym(hn.3))
+      qed
+      have b4: !(app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), i)) proof
+        have d: app(app(V1, "pages"), int_div(app(V1, "stack_top"), x86_64_linux.PAGE)) = app(app(V1, "pages"), i) -> false proof
+          assume q
+          have q2 := trans(trans(sym(tt), rewrite(te, q)), hn.3)
+          show by taut(q2, tin.2)
+        qed
+        show by taut(d)
+      qed
+      show conj(b1, b2, b3, b4)
+    qed
+    show by taut(c, was, new)
+  qed
+  have r3: all x0. x0 in omega -> x86_64_linux.mapped(V1, x0) && !abi.stack_page(V1, x0) ->
+      int_le(int_add(int_mul(int_add(x0, 1), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V1)) || int_le(app(V1, "stack_top"), int_mul(x0, x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hm
+    have c := mp(all_elim(g1, {i}), hi)
+    have new: (int_le(p, i) && int_lt(i, Q)) && app(app(V1, "pages"), i) = PQ -> false proof
+      assume hn
+      have il: int_lt(i, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(hn, ql)
+      show by taut(apply(x86.sp_same, {V}, {V1}, {Q}, {i}, hn.3, il, qs), hm)
+    qed
+    have e: app(app(V1, "pages"), i) = app(app(V, "pages"), i) by taut(c, new)
+    have m0: x86_64_linux.mapped(V, i) && !abi.stack_page(V, i) by defs(rewrite(e, expand(hm, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+    have o := mp(all_elim(nm, {i}), hi, m0)
+    show := rewrite(sym(et), rewrite(sym(ef), o))
+  qed
+  show by defs(taut(r0, r1, r2, r3), abi.stack_reserve)
+qed
+
+// (v1's pages: v0's, or stack pages; the stack's reserve kept)
+def x86.stk_ext(v0, v1) := (all i. i in omega -> app(app(v1, "pages"), i) = app(app(v0, "pages"), i) || abi.stack_page(v1, i)) &&
+  (abi.stack_reserve(v0) -> abi.stack_reserve(v1))
 
 theorem x86.stk_ext_refl: all v. x86.stk_ext(v, v)
 proof
@@ -758,8 +1059,8 @@ proof
   have g: all i. i in omega -> app(app(v2, "pages"), i) = app(app(v0, "pages"), i) || abi.stack_page(v2, i) proof
     fix i
     assume hi
-    have a1 := mp(all_elim(expand(h1, x86.stk_ext), {i}), hi)
-    have a2 := mp(all_elim(expand(h2, x86.stk_ext), {i}), hi)
+    have a1 := mp(all_elim(expand(h1, x86.stk_ext).1, {i}), hi)
+    have a2 := mp(all_elim(expand(h2, x86.stk_ext).1, {i}), hi)
     have c: app(app(v2, "pages"), i) = app(app(v1, "pages"), i) -> abi.stack_page(v1, i) -> abi.stack_page(v2, i) proof
       assume e s1
       show by defs(rewrite(sym(e), expand(s1, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
@@ -770,7 +1071,30 @@ proof
     qed
     show by taut(a1, a2, c, c2)
   qed
-  show by defs(g, x86.stk_ext)
+  have r: abi.stack_reserve(v0) -> abi.stack_reserve(v2) by taut(expand(h1, x86.stk_ext).2, expand(h2, x86.stk_ext).2)
+  show by defs(taut(g, r), x86.stk_ext)
+qed
+
+// (a touch: nothing changed, or the stack grown to the page)
+theorem x86.touch_grow: all m x k y e. runs(x86_64_linux.touch(x, k), m, ok(y, e)) ->
+  y = m || (ex e2. runs(x86_64_linux.grow_stack(x, x86_64_linux.page_of(x)), m, ok(y, e2)))
+proof
+  fix m x k y e
+  assume h
+  show by simp(h, keep(x86_64_linux.grow_stack, x86_64_linux.mapped, x86_64_linux.page_of))
+qed
+
+// (a growth: the pages extended, the reserve kept)
+theorem x86.grow_stk: all m a p y e. p in omega -> runs(x86_64_linux.grow_stack(a, p), m, ok(y, e)) -> x86.stk_ext(app(m, "vm"), app(y, "vm"))
+proof
+  fix m a p y e
+  assume hp h
+  have g1 := apply(x86.grow_stackp, hp, h)
+  have g2: abi.stack_reserve(app(m, "vm")) -> abi.stack_reserve(app(y, "vm")) proof
+    assume hr
+    show := apply(x86.grow_rsv, hp, h, hr)
+  qed
+  show by defs(taut(g1, g2), x86.stk_ext)
 qed
 
 theorem x86.touch_stk: all m x k y e. x in bits(64) -> runs(x86_64_linux.touch(x, k), m, ok(y, e)) -> x86.stk_ext(app(m, "vm"), app(y, "vm"))
@@ -778,9 +1102,17 @@ proof
   fix m x k y e
   assume hx h
   have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
-  have gs := all_elim(x86.grow_stackp, {m}, {x}, {x86_64_linux.page_of(x)})
-  have rf := all_elim(x86.stk_ext_refl, {app(m, "vm")})
-  show by defs(simp(h, po, gs, rf, keep(x86.stk_ext, x86_64_linux.grow_stack, x86_64_linux.mapped, x86_64_linux.page_of)), x86.stk_ext)
+  have tg := apply(x86.touch_grow, h)
+  have c1: y = m -> x86.stk_ext(app(m, "vm"), app(y, "vm")) proof
+    assume e0
+    show := rewrite(sym(e0), all_elim(x86.stk_ext_refl, {app(m, "vm")}), {2})
+  qed
+  have c2: (ex e2. runs(x86_64_linux.grow_stack(x, x86_64_linux.page_of(x)), m, ok(y, e2))) -> x86.stk_ext(app(m, "vm"), app(y, "vm")) proof
+    assume hg
+    obtain e2, h2 from hg
+    show := apply(x86.grow_stk, po, h2)
+  qed
+  show by taut(tg, c1, c2)
 qed
 
 theorem x86.touch_range_stk: all m a n k y e. runs(x86_64_linux.touch_range(a, n, k), m, ok(y, e)) -> x86.stk_ext(app(m, "vm"), app(y, "vm"))
@@ -966,10 +1298,19 @@ proof
   fix m x k y e
   assume hx h
   have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
-  have gs := all_elim(x86.grow_stackp, {m}, {x}, {x86_64_linux.page_of(x)})
-  have rf := all_elim(x86.stk_ext_refl, {app(m, "vm")})
   have ge := all_elim(x86.grow_exc, {m}, {x}, {x86_64_linux.page_of(x)})
-  show by defs(simp(h, po, gs, ge, rf, keep(x86.stk_ext, x86_64_linux.grow_stack, x86_64_linux.mapped, x86_64_linux.page_of)), x86.stk_ext)
+  // (the fault's state: the touch's from, or after a growth)
+  have tg: y = m || (ex e2. runs(x86_64_linux.grow_stack(x, x86_64_linux.page_of(x)), m, ok(y, e2))) by simp(h, ge, keep(x86_64_linux.grow_stack, x86_64_linux.mapped, x86_64_linux.page_of))
+  have c1: y = m -> x86.stk_ext(app(m, "vm"), app(y, "vm")) proof
+    assume e0
+    show := rewrite(sym(e0), all_elim(x86.stk_ext_refl, {app(m, "vm")}), {2})
+  qed
+  have c2: (ex e2. runs(x86_64_linux.grow_stack(x, x86_64_linux.page_of(x)), m, ok(y, e2))) -> x86.stk_ext(app(m, "vm"), app(y, "vm")) proof
+    assume hg
+    obtain e2, h2 from hg
+    show := apply(x86.grow_stk, po, h2)
+  qed
+  show by taut(tg, c1, c2)
 qed
 
 theorem x86.touch_range_stk_exc: all m a n k y e. runs(x86_64_linux.touch_range(a, n, k), m, exc(y, e)) -> x86.stk_ext(app(m, "vm"), app(y, "vm"))

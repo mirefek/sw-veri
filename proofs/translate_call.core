@@ -280,18 +280,18 @@ qed
 // (the coupling at a call from a frame of 8 bytes: its parts)
 theorem tr.inv_call: all s base code m w. tr.inv(s, base, code, 8, m, w) ->
   sM: s in x86_64_linux.Machine && mM: m in x86_64_linux.Machine && mu: m in univ(1) && wW: w in abi.World && wu: w in univ(1) &&
-  wst: (all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> app(app(app(w, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)) && wcpu: app(w, "cpu") = app(s, "cpu") && mos: app(m, "os") = app(w, "os") && mfs: app(m, "fs_base") = app(w, "fs_base") &&
+  wcpu: app(w, "cpu") = app(s, "cpu") && mos: app(m, "os") = app(w, "os") && mfs: app(m, "fs_base") = app(w, "fs_base") &&
   er4: app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), 8) && sb: app(app(s, "gpr"), 4) in bits(64) && slt: int_lt(app(app(s, "gpr"), 4), 140737488355328) &&
   sal: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 && hsps: abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) &&
-  sgf: abi.stack_gap_free(app(s, "vm")) && winp: app(app(w, "os"), "input") = app(app(s, "os"), "input") &&
+  sgf: abi.stack_gap_free(app(s, "vm")) && srsv: abi.stack_reserve(app(s, "vm")) && winp: app(app(w, "os"), "input") = app(app(s, "os"), "input") &&
   sws: subset(app(app(s, "os"), "events"), app(app(w, "os"), "events")) && mcpu: app(m, "cpu") = app(s, "cpu") && mgs: app(m, "gs_base") = app(s, "gs_base") &&
   mdf: !app(app(m, "flags"), "df")
 proof
   fix s base code m w
   assume hi
-  have {sM, mM, mu, wW, wu, wst, wcpu, mos, mfs, rspm, slt, sal, hsps, sgf, winp, sws, mcpu, mgs, mdf} := hi
+  have {sM, mM, mu, wW, wu, wcpu, mos, mfs, rspm, slt, sal, hsps, sgf, srsv, winp, sws, mcpu, mgs, mdf} := hi
   have sb := apply(x86i.rsp_typed, sM)
-  show := conj(sM, mM, mu, wW, wu, wst, wcpu, mos, mfs, rspm, sb, slt, sal, hsps, sgf, winp, sws, mcpu, mgs, mdf)
+  show := conj(sM, mM, mu, wW, wu, wcpu, mos, mfs, rspm, sb, slt, sal, hsps, sgf, srsv, winp, sws, mcpu, mgs, mdf)
 qed
 
 // ----------------------------------------------------------------------
@@ -554,11 +554,16 @@ proof
     have g: all i. i in omega -> app(app(app(C, "vm"), "pages"), i) = app(app(app(m, "vm"), "pages"), i) || abi.stack_page(app(C, "vm"), i) proof
       fix i
       assume hi
-      have a0 := mp(all_elim(expand(st0, x86.stk_ext), {i}), hi)
+      have a0 := mp(all_elim(expand(st0, x86.stk_ext).1, {i}), hi)
       have sq := mp(all_elim(tr.sp_pages, {app(m1, "vm")}, {app(C, "vm")}, {i}), pe)
       show by simp(a0, pe, sq)
     qed
-    show by defs(g, x86.stk_ext)
+    have r: abi.stack_reserve(app(m, "vm")) -> abi.stack_reserve(app(C, "vm")) proof
+      assume h0
+      have r1: abi.stack_reserve(app(m1, "vm")) := mp(expand(st0, x86.stk_ext).2, (abi.stack_reserve(app(M2, "vm")) by simp(h0)))
+      show := apply(tr.rsv_same, pe, (app(app(C, "vm"), "stack_top") = app(app(m1, "vm"), "stack_top") by simp(cvm)), (app(app(C, "vm"), "stack_limit") = app(app(m1, "vm"), "stack_limit") by simp(cvm)), r1)
+    qed
+    show by defs(taut(g, r), x86.stk_ext)
   qed
   have ac0 := apply(x86.touch_range_acc, {M2}, {PA}, {8}, {m1}, {e1}, htr2)
   have acc: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(app(C, "vm"), bits_add(64, PA, bits_of_int(64, j)), 1) proof
@@ -854,25 +859,58 @@ proof
   show by defs(simp(e, expand(h, abi.stack_gap_free, abi.stack_page, x86_64_linux.mapped)), abi.stack_gap_free, abi.stack_page, x86_64_linux.mapped)
 qed
 
-// the machine's memory after the push (cv): the world's stack grown
-theorem tr.push_grown: all s m w ds cv l r. tr.mem(s, m, w, ds) -> cv in x86_64_linux.Vm -> x86.pages_in(app(m, "vm"), cv, l, r) -> x86.stk_ext(app(m, "vm"), cv) ->
-  gc.grown(app(w, "vm"), app(cv, "pages"))
+// the machine's memory after the push (cv): the world's pages its pages
+// but the stack's (the world has none; the push grew only the stack)
+theorem tr.push_wpages: all s m w ds cv l r. tr.mem(s, m, w, ds) -> x86.pages_in(app(m, "vm"), cv, l, r) -> x86.stk_ext(app(m, "vm"), cv) ->
+  abi.world_pages(cv, app(w, "vm"))
 proof
   fix s m w ds cv l r
-  assume hmm hv hpi hse
-  have {pages} := expand(hmm, tr.mem).wm
-  have f: app(cv, "pages") in fn_space(gc.PN, option(x86_64_linux.Page)) by simp(expand(hv, x86_64_linux.Vm))
-  have g: all p. p in gc.PN -> app(app(cv, "pages"), p) = app(app(app(w, "vm"), "pages"), p) ||
-      (app(app(app(w, "vm"), "pages"), p) = none && !(app(app(cv, "pages"), p) = none) && app(snd(app(app(cv, "pages"), p)), "kind") = 2) proof
+  assume hmm hpi hse
+  have {pages, nostk} := expand(hmm, tr.mem).wm
+  have g: all p. p in gc.PN -> app(app(app(w, "vm"), "pages"), p) = ite(abi.stack_page(cv, p), none, app(app(cv, "pages"), p)) proof
     fix p
     assume hp
     have po: p in omega by simp(hp)
+    have pl: int_lt(p, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by simp(hp)
     have a1 := mp(all_elim(pages, {p}), hp)
     have a2 := mp(all_elim(expand(hpi, x86.pages_in), {p}), po)
-    have a3 := mp(all_elim(expand(hse, x86.stk_ext), {p}), po)
-    show by simp(a1, a2, expand(a3, abi.stack_page, x86_64_linux.mapped), expand(a1, abi.stack_page, x86_64_linux.mapped))
+    have a3 := mp(all_elim(expand(hse, x86.stk_ext).1, {p}), po)
+    have ns := mp(all_elim(nostk, {p}), hp)
+    // (a stack page of cv: none of the world's -- a world's page is the machine's, not the stack's)
+    have st: abi.stack_page(cv, p) -> app(app(app(w, "vm"), "pages"), p) = none proof
+      assume hs
+      have c: !(app(app(app(w, "vm"), "pages"), p) = none) -> false proof
+        assume hn
+        have mw: app(app(app(m, "vm"), "pages"), p) = app(app(app(w, "vm"), "pages"), p) by taut(a1, hn)
+        have mn: !(app(app(app(m, "vm"), "pages"), p) = none) := rewrite(sym(mw), hn)
+        have cm: app(app(cv, "pages"), p) = app(app(app(m, "vm"), "pages"), p) by taut(a2, mn)
+        have k := mp(ns, hn)
+        have sk := expand(hs, abi.stack_page, x86_64_linux.mapped)
+        have k2: app(snd(app(app(cv, "pages"), p)), "kind") = 2 by taut(sk)
+        have k3 := rewrite(mw, rewrite(cm, k2))
+        show by taut(k3, k)
+      qed
+      show by taut(c)
+    qed
+    // (not a stack page: the machine's before the push, the world's)
+    have nst: !abi.stack_page(cv, p) -> app(app(app(w, "vm"), "pages"), p) = app(app(cv, "pages"), p) proof
+      assume hn
+      have cm: app(app(cv, "pages"), p) = app(app(app(m, "vm"), "pages"), p) by taut(a3, hn)
+      have nsm: !abi.stack_page(app(m, "vm"), p) by defs(rewrite(cm, expand(hn, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+      have mw: app(app(app(m, "vm"), "pages"), p) = app(app(app(w, "vm"), "pages"), p) by taut(a1, nsm)
+      show := sym(trans(cm, mw))
+    qed
+    have t: abi.stack_page(cv, p) -> app(app(app(w, "vm"), "pages"), p) = ite(abi.stack_page(cv, p), none, app(app(cv, "pages"), p)) proof
+      assume hs
+      show := trans(mp(st, hs), sym(mp(tr.ite_t[c := abi.stack_page(cv, p), a := none, b := app(app(cv, "pages"), p)], hs)))
+    qed
+    have f: !abi.stack_page(cv, p) -> app(app(app(w, "vm"), "pages"), p) = ite(abi.stack_page(cv, p), none, app(app(cv, "pages"), p)) proof
+      assume hn
+      show := trans(mp(nst, hn), sym(mp(tr.ite_f[c := abi.stack_page(cv, p), a := none, b := app(app(cv, "pages"), p)], hn)))
+    qed
+    show by taut(t, f)
   qed
-  show by taut(f, g)
+  show by defs(g, abi.world_pages)
 qed
 
 // (the push's slot, S - 16, accessible: on a stack page -- S's, or the one
@@ -981,37 +1019,30 @@ proof
   show by taut(mr.1, trans(cb, mw))
 qed
 
-// (the stack grown: the world's domain as before)
-theorem tr.dom_grown: all wv pg ob a. a in bits(64) -> gc.grown(wv, pg) -> abi.in_domain(fn_update(wv, "pages", pg), ob, a) -> abi.in_domain(wv, ob, a)
-proof
-  fix wv pg ob a
-  assume ha hg hd
-  have c1: a in ob -> abi.in_domain(wv, ob, a) proof
-    assume h
-    show by defs(taut(h), abi.in_domain)
-  qed
-  have c2: x86_64_linux.mapped(fn_update(wv, "pages", pg), int_div(a, x86_64_linux.PAGE)) && !(app(snd(app(app(fn_update(wv, "pages", pg), "pages"), int_div(a, x86_64_linux.PAGE))), "kind") = 2) ->
-      abi.in_domain(wv, ob, a) proof
-    assume h
-    have pp: int_div(a, x86_64_linux.PAGE) in gc.PN by simp(ha, expand(h.1, x86_64_linux.mapped))
-    have gp := mp(all_elim(hg.2, {int_div(a, x86_64_linux.PAGE)}), pp)
-    have e: app(pg, int_div(a, x86_64_linux.PAGE)) = app(app(wv, "pages"), int_div(a, x86_64_linux.PAGE)) by simp(gp, h.2)
-    have hm: (int_lt(int_div(a, x86_64_linux.PAGE), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) && !(app(pg, int_div(a, x86_64_linux.PAGE)) = none)) && !(app(snd(app(pg, int_div(a, x86_64_linux.PAGE))), "kind") = 2) by simp(expand(h, x86_64_linux.mapped))
-    have hm2 := rewrite(e, hm)
-    have m2: x86_64_linux.mapped(wv, int_div(a, x86_64_linux.PAGE)) && !(app(snd(app(app(wv, "pages"), int_div(a, x86_64_linux.PAGE))), "kind") = 2) by defs(taut(hm2), x86_64_linux.mapped)
-    show by defs(taut(m2), abi.in_domain)
-  qed
-  show by taut(expand(hd, abi.in_domain), c1, c2)
-qed
-
-// a sound thread pointer, in a memory with the same pages and bytes on the
-// domain: sound there
-theorem tr.thread_xfer: all wv cv ob fs. app(cv, "pages") = app(wv, "pages") -> abi.thread_ok(wv, fs) -> fs in bits(64) ->
+// a sound thread pointer, in a memory whose pages the world's are (but
+// the stack's) and with the same bytes on the domain: sound there
+theorem tr.thread_xfer: all wv cv ob fs. abi.world_pages(cv, wv) -> abi.thread_ok(wv, fs) -> fs in bits(64) ->
   (all a. a in bits(64) -> abi.in_domain(wv, ob, a) -> app(app(cv, "bytes"), a) = app(app(wv, "bytes"), a)) -> abi.thread_ok(cv, fs)
 proof
   fix wv cv ob fs
   assume e ht hf hb
   have rd ns le := expand(ht, abi.thread_ok)
+  // (a page the world maps: the machine's, not a stack page)
+  have wp: all q. q in omega -> x86_64_linux.mapped(wv, q) -> app(app(cv, "pages"), q) = app(app(wv, "pages"), q) && !abi.stack_page(cv, q) proof
+    fix q
+    assume hq hm
+    have mq := expand(hm, x86_64_linux.mapped)
+    have qp: q in gc.PN by simp(hq, mq)
+    have eq := mp(all_elim(expand(e, abi.world_pages), {q}), qp)
+    have c: abi.stack_page(cv, q) -> false proof
+      assume hs
+      have n := rewrite(mp(tr.ite_t[c := abi.stack_page(cv, q), a := none, b := app(app(cv, "pages"), q)], hs), eq)
+      show by taut(n, mq)
+    qed
+    have ns2: !abi.stack_page(cv, q) by taut(c)
+    have e2 := rewrite(mp(tr.ite_f[c := abi.stack_page(cv, q), a := none, b := app(app(cv, "pages"), q)], ns2), eq)
+    show conj(sym(e2), ns2)
+  qed
   have by: all k. k in omega -> int_lt(k, 8) -> app(app(cv, "bytes"), bits_add(64, fs, bits_of_int(64, k))) = app(app(wv, "bytes"), bits_add(64, fs, bits_of_int(64, k))) proof
     fix k
     assume k1 k2
@@ -1024,9 +1055,23 @@ proof
     show := rewrite(sym(ea), b)
   qed
   have ls := apply(tr.le_same, {app(cv, "bytes")}, {app(wv, "bytes")}, {fs}, {8}, simp(), by)
-  have rd2: x86_64_linux.readable(cv, fs, 8) by defs(rewrite(sym(e), expand(rd, x86_64_linux.readable, x86_64_linux.mapped)), x86_64_linux.readable, x86_64_linux.mapped)
-  have ns2: all x0. x0 in omega -> int_lt(x0, 8) -> !abi.stack_page(cv, int_div(int_add(fs, x0), x86_64_linux.PAGE)) by defs(rewrite(sym(e), expand(ns, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
-  show by defs(taut(rd2, ns2, trans(ls, le)), abi.thread_ok)
+  have rd2: all x0. x0 in omega -> int_lt(x0, 8) -> x86_64_linux.mapped(cv, int_div(int_add(fs, x0), x86_64_linux.PAGE)) && app(app(snd(app(app(cv, "pages"), int_div(int_add(fs, x0), x86_64_linux.PAGE))), "prot"), "r") proof
+    fix k
+    assume k1 k2
+    have r := mp(all_elim(expand(rd, x86_64_linux.readable), {k}), k1, k2)
+    have qo: int_div(int_add(fs, k), x86_64_linux.PAGE) in omega by defs(simp(hf, k1), x86_64_linux.PAGE)
+    have w2 := mp(all_elim(wp, {int_div(int_add(fs, k), x86_64_linux.PAGE)}), qo, r.1)
+    show by defs(rewrite(sym(w2.1), expand(r, x86_64_linux.mapped)), x86_64_linux.mapped)
+  qed
+  have ns2: all x0. x0 in omega -> int_lt(x0, 8) -> !abi.stack_page(cv, int_div(int_add(fs, x0), x86_64_linux.PAGE)) proof
+    fix k
+    assume k1 k2
+    have r := mp(all_elim(expand(rd, x86_64_linux.readable), {k}), k1, k2)
+    have qo: int_div(int_add(fs, k), x86_64_linux.PAGE) in omega by defs(simp(hf, k1), x86_64_linux.PAGE)
+    show := mp(all_elim(wp, {int_div(int_add(fs, k), x86_64_linux.PAGE)}), qo, r.1).2
+  qed
+  have rd3: x86_64_linux.readable(cv, fs, 8) by defs(rd2, x86_64_linux.readable)
+  show by defs(taut(rd3, ns2, trans(ls, le)), abi.thread_ok)
 qed
 
 
@@ -1073,86 +1118,81 @@ proof
   show := mp(rec_ext[a := w, b := R], wf.1, f5, dw, ap)
 qed
 
-// (the entry's stack pages: the machine's still, the world's)
+// (the entry's stack pages from its rsp up: the machine's still -- the
+// callees kept them)
 theorem tr.inv_stack: all s base code fr m w ds p. tr.inv(s, base, code, fr, m, w) -> tr.mem(s, m, w, ds) -> p in omega -> abi.stack_page(app(s, "vm"), p) ->
-  app(app(app(w, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(app(m, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)
+  int_le(int_div(app(app(s, "gpr"), 4), 4096), p) -> app(app(app(m, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)
 proof
   fix s base code fr m w ds p
-  assume hi hmm hp hs
-  have {wst} := hi
-  have {pages} := expand(hmm, tr.mem).wm
-  have e1 := mp(all_elim(wst, {p}), hp, hs)
-  have sm := expand(hs, abi.stack_page, x86_64_linux.mapped)
-  have pp: p in gc.PN by simp(hp, sm)
-  have pc := mp(all_elim(pages, {p}), pp)
-  have nn: !(app(app(app(w, "vm"), "pages"), p) = none) by simp(e1, sm)
-  have e2: app(app(app(m, "vm"), "pages"), p) = app(app(app(w, "vm"), "pages"), p) by taut(pc, nn)
-  show by taut(e1, trans(e2, e1))
+  assume hi hmm hp hs hl
+  have {sM, slt} := hi
+  have sb := apply(x86i.rsp_typed, sM)
+  have {stk} := expand(hmm, tr.mem).wm
+  have l2: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), p) by defs(arith(hl, sb, slt, hp), x86_64_linux.PAGE)
+  show := mp(all_elim(stk, {p}), hp, conj(hs, l2))
 qed
 
-// The push done (C), GIMPLE's checks holding on the world grown to C's
-// pages (W1): the callee's entry as the ABI has it, W1's memory a view of
-// C's, the stack objects the callee's, W1 the callee's world
+// The push done (C), GIMPLE's check holding on the world (the thread
+// pointer): the callee's entry as the ABI has it -- the stack's reserve
+// kept by the push --, the world's memory a view of C's (its pages but the
+// stack's), the stack objects the callee's, the world the callee's
 theorem tr.callee_ready: all s base code m w ds u RA T m1 e1 C. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) ->
   RA in bits(64) -> T in bits(64) -> app(app(m, "gpr"), 7) = u ->
   runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
   C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
     "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
-  gc.sound(gc.gw(w, app(app(C, "vm"), "pages"))) ->
-  abi.entry_ok(C, seq_one(u)) && abi.view_ok(C, ds, app(gc.gw(w, app(app(C, "vm"), "pages")), "vm")) && tr.objs_ok(C, ds) &&
-  abi.view(C, ds, app(gc.gw(w, app(app(C, "vm"), "pages")), "vm")) = gc.gw(w, app(app(C, "vm"), "pages")) &&
-  app(gc.gw(w, app(app(C, "vm"), "pages")), "vm") in x86_64_linux.Vm && ds in set_type(omega)
+  gc.sound(w) ->
+  abi.entry_ok(C, seq_one(u)) && abi.view_ok(C, ds, app(w, "vm")) && tr.objs_ok(C, ds) &&
+  abi.view(C, ds, app(w, "vm")) = w && app(w, "vm") in x86_64_linux.Vm && ds in set_type(omega)
 proof
   fix s base code m w ds u RA T m1 e1 C
   assume hi hmm hra ht hu7 htr hC hsd
   let S := app(app(s, "gpr"), 4)
-  let PG := app(app(C, "vm"), "pages")
-  let WV := fn_update(app(w, "vm"), "pages", PG)
-  have {sM, mM, mu, wW, wu, wcpu, mos, mfs, er4, sb, slt, sal, hsps, mdf, mcpu} := apply(tr.inv_call, hi)
+  let WV := app(w, "vm")
+  let L := int_div(int_sub(S, 16), 4096)
+  let P0 := int_div(S, 4096)
+  have {sM, mM, mu, wW, wu, wcpu, mos, mfs, er4, sb, slt, sal, hsps, srsv, mdf, mcpu} := apply(tr.inv_call, hi)
   have s16 := apply(tr.inv_gap, hi)
   have h16: int_le(16, S) by arith(s16)
   have so: S in omega by simp(sb)
   have cM cu co cf cc0 cgs cfl cgpr crip ckc cvf cle cpi cby cstk cacc := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
   have cv: app(C, "vm") in x86_64_linux.Vm := apply(x86i.parts, cM).4
-  have gr := apply(tr.push_grown, {s}, {m}, {w}, {ds}, {app(C, "vm")}, {int_div(int_sub(S, 16), 4096)}, {int_div(S, 4096)}, hmm, cv, cpi, cstk)
-  have hs: abi.thread_ok(WV, app(w, "fs_base")) && abi.stack_gap_free(WV) by simp(hsd, keep(abi.thread_ok, abi.stack_gap_free))
-  have pe: app(app(C, "vm"), "pages") = app(WV, "pages") by simp()
-  have sgfC := apply(tr.sgf_pages, {WV}, {app(C, "vm")}, pe, hs.2)
-  // (the entry's stack pages: C's still)
-  have kst: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> app(PG, p) = app(app(app(s, "vm"), "pages"), p) proof
+  have wpg := apply(tr.push_wpages, {s}, {m}, {w}, {ds}, {app(C, "vm")}, {L}, {P0}, hmm, cpi, cstk)
+  have {rsv, nostk, top, limit, brk0, brk} := expand(hmm, tr.mem).wm
+  // (the stack's reserve: the entry's, the machine's, C's -- no other mapping where the stack may grow)
+  have rsvC: abi.stack_reserve(app(C, "vm")) := mp(expand(cstk, x86.stk_ext).2, mp(rsv, srsv))
+  have sgfC := apply(abi.reserve_gap, rsvC)
+  // (the entry's stack pages from its rsp up: C's still)
+  have kst: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> int_le(P0, p) -> app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) proof
     fix p
-    assume hp hsp
-    have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {p}, hi, hmm, hp, hsp)
+    assume hp hsp hl
+    have k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {p}, hi, hmm, hp, hsp, hl)
     have pi := mp(all_elim(expand(cpi, x86.pages_in), {p}), hp)
     have nn: !(app(app(app(m, "vm"), "pages"), p) = none) by simp(k2, expand(hsp, abi.stack_page, x86_64_linux.mapped))
-    have e: app(PG, p) = app(app(app(m, "vm"), "pages"), p) by taut(pi, nn)
+    have e: app(app(app(C, "vm"), "pages"), p) = app(app(app(m, "vm"), "pages"), p) by taut(pi, nn)
     show := trans(e, k2)
   qed
-  have kspc: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> abi.stack_page(app(C, "vm"), p) proof
+  have kspc: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> int_le(P0, p) -> abi.stack_page(app(C, "vm"), p) proof
     fix p
-    assume hp hsp
-    have e := mp(all_elim(kst, {p}), hp, hsp)
+    assume hp hsp hl
+    have e := mp(all_elim(kst, {p}), hp, hsp, hl)
     show by defs(rewrite(sym(e), expand(hsp, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
   qed
-  have p0o: int_div(S, 4096) in omega by simp(so)
-  have p0c := mp(all_elim(kspc, {int_div(S, 4096)}), p0o, hsps)
+  have p0o: P0 in omega by simp(so)
+  have p0c := mp(all_elim(kspc, {P0}), p0o, hsps, (int_le(P0, P0) by arith(p0o)))
   have a00 := mp(all_elim(cacc, {0}), simp(), simp())
-  have p64: pow2(64) = 18446744073709551616 by simp()
-  have ea0: int_mod(int_add(int_sub(S, 16), int_mod(0, 18446744073709551616)), 18446744073709551616) = int_sub(S, 16) by arith(so, h16, slt)
-  have ea: bits_add(64, int_sub(S, 16), bits_of_int(64, 0)) = int_sub(S, 16) by defs(rewrite(sym(p64), ea0), bits_add, bits_of_int)
+  have ea: bits_add(64, int_sub(S, 16), bits_of_int(64, 0)) = int_sub(S, 16) by arith(so, h16, slt)
   have acc0 := rewrite(ea, a00)
   have spC := apply(tr.push_page_stack, {app(C, "vm")}, {S}, sb, h16, slt, sal, sgfC, p0c, acc0)
   have dom := apply(tr.push_dom, {s}, {base}, {code}, {m}, {w}, {ds}, {app(C, "vm")}, hi, hmm, cpi, cby, spC)
-  // C's bytes: the grown world's on its domain
+  // C's bytes: the world's on its domain
   have byW: all a. a in bits(64) -> abi.in_domain(WV, ds, a) -> app(app(app(C, "vm"), "bytes"), a) = app(app(WV, "bytes"), a) proof
     fix a
     assume ha hd
-    have d0 := apply(tr.dom_grown, {app(w, "vm")}, {PG}, {ds}, {a}, ha, gr, hd)
-    have d1 := mp(all_elim(dom, {a}), ha, d0)
-    show by simp(d1.2)
+    show := mp(all_elim(dom, {a}), ha, hd).2
   qed
   have fsb: app(w, "fs_base") in bits(64) by simp(expand(wW, abi.World))
-  have tC := apply(tr.thread_xfer, {WV}, {app(C, "vm")}, {ds}, {app(w, "fs_base")}, pe, hs.1, fsb, byW)
+  have tC := apply(tr.thread_xfer, {WV}, {app(C, "vm")}, {ds}, {app(w, "fs_base")}, wpg, hsd, fsb, byW)
   have cfs: app(C, "fs_base") = app(w, "fs_base") := trans(cf, mfs)
   // the ABI's entry
   have c4: app(app(C, "gpr"), 4) = int_sub(S, 16) by simp(cgpr)
@@ -1173,9 +1213,8 @@ proof
   have spC2: abi.stack_page(app(C, "vm"), int_div(app(app(C, "gpr"), 4), x86_64_linux.PAGE)) by defs(simp(c4, spC), x86_64_linux.PAGE)
   have acc2: x86_64_linux.can_access(app(C, "vm"), app(app(C, "gpr"), 4), 1) by simp(c4, acc0)
   have al2: int_mod(bits_add(64, app(app(C, "gpr"), 4), 8), 16) = 0 by simp(c4, al)
-  have eok: abi.entry_ok(C, seq_one(u)) by defs(taut(spC2, acc2, sgfC, al2, cdf, ar, tC2), abi.entry_ok)
+  have eok: abi.entry_ok(C, seq_one(u)) by defs(taut(spC2, acc2, rsvC, al2, cdf, ar, tC2), abi.entry_ok)
   // the view
-  have {top, limit, brk0, brk} := expand(hmm, tr.mem).wm
   have vf := expand(cvf, x86.vm_fields)
   have wmC: abi.world_matches(app(C, "vm"), app(C, "vm"), WV, ds, abi.sp(C)) proof
     have fr: all x0. x0 in bits(64) -> (int_le(abi.sp(C), x0) && !abi.in_domain(WV, ds, x0)) && abi.stack_page(app(C, "vm"), x86_64_linux.page_of(x0)) ->
@@ -1187,11 +1226,26 @@ proof
     have pg: all x0. x0 in gc.PN -> app(app(app(C, "vm"), "pages"), x0) = app(app(WV, "pages"), x0) || (app(app(WV, "pages"), x0) = none && abi.stack_page(app(C, "vm"), x0)) proof
       fix x0
       assume h
-      show by simp()
+      have eq := mp(all_elim(expand(wpg, abi.world_pages), {x0}), h)
+      have t: abi.stack_page(app(C, "vm"), x0) -> app(app(WV, "pages"), x0) = none && abi.stack_page(app(C, "vm"), x0) proof
+        assume hs
+        show conj(rewrite(mp(tr.ite_t[c := abi.stack_page(app(C, "vm"), x0), a := none, b := app(app(app(C, "vm"), "pages"), x0)], hs), eq), hs)
+      qed
+      have f: !abi.stack_page(app(C, "vm"), x0) -> app(app(app(C, "vm"), "pages"), x0) = app(app(WV, "pages"), x0) proof
+        assume hn
+        show := sym(rewrite(mp(tr.ite_f[c := abi.stack_page(app(C, "vm"), x0), a := none, b := app(app(app(C, "vm"), "pages"), x0)], hn), eq))
+      qed
+      show by taut(t, f)
     qed
-    show by defs(simp(vf, top, limit, brk0, brk, byW, fr, pg, keep(abi.in_domain, abi.stack_page)), abi.world_matches)
+    have st: all x0. x0 in omega -> abi.stack_page(app(C, "vm"), x0) && int_le(int_div(int_sub(abi.sp(C), 8), x86_64_linux.PAGE), x0) -> app(app(app(C, "vm"), "pages"), x0) = app(app(app(C, "vm"), "pages"), x0) proof
+      fix x0
+      assume h1 h2
+      show := refl({app(app(app(C, "vm"), "pages"), x0)})
+    qed
+    have rs: abi.stack_reserve(app(C, "vm")) -> abi.stack_reserve(app(C, "vm")) by taut()
+    show by defs(simp(vf, top, limit, brk0, brk, byW, fr, pg, nostk, st, rs, keep(abi.in_domain, abi.stack_page, abi.stack_reserve)), abi.world_matches)
   qed
-  have vok: abi.view_ok(C, ds, app(gc.gw(w, PG), "vm")) by simp(wmC, keep(abi.world_matches))
+  have vok: abi.view_ok(C, ds, WV) := conj(wpg, wmC)
   // the stack objects
   have {oacc} := hmm
   have spc: abi.sp(C) = int_sub(S, 8) by simp(c4, sb, h16, slt)
@@ -1206,30 +1260,24 @@ proof
       have ca: x86_64_linux.can_access(app(m, "vm"), bits_of_int(64, x), 1) by taut(o)
       have l: int_le(abi.sp(C), x) by arith(sa, spc, pp4, so, h1)
       have xpo: int_div(x, x86_64_linux.PAGE) in omega by defs(simp(h1), x86_64_linux.PAGE)
-      have sc := mp(all_elim(kspc, {int_div(x, x86_64_linux.PAGE)}), xpo, sp0)
+      have xl: int_le(P0, int_div(x, x86_64_linux.PAGE)) by defs(arith(sa, sb, slt, h1), x86_64_linux.PAGE)
+      have sc := mp(all_elim(kspc, {int_div(x, x86_64_linux.PAGE)}), xpo, sp0, xl)
       // (its page: s's in C and in m)
-      have xb: bits_of_int(64, x) in bits(64) by simp()
       have mc: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(bits_of_int(64, x))) by taut(expand(ca, x86_64_linux.can_access))
       have pgo: x86_64_linux.page_of(bits_of_int(64, x)) in omega by defs(simp(), x86_64_linux.page_of)
-      have pi := apply(tr.pages_eq_mapped, {app(m, "vm")}, {app(C, "vm")}, {int_div(int_sub(S, 16), 4096)}, {int_div(S, 4096)}, {x86_64_linux.page_of(bits_of_int(64, x))}, cpi, pgo, mc)
+      have pi := apply(tr.pages_eq_mapped, {app(m, "vm")}, {app(C, "vm")}, {L}, {P0}, {x86_64_linux.page_of(bits_of_int(64, x))}, cpi, pgo, mc)
       have cc := apply(tr.access_page, {app(C, "vm")}, {app(m, "vm")}, {bits_of_int(64, x)}, {bits_of_int(64, x)}, {1}, refl({x86_64_linux.page_of(bits_of_int(64, x))}), pi)
       show by taut(l, sc, cc, ca)
     qed
     show by defs(g, tr.objs_ok)
   qed
-  // the callee's world: the grown one
+  // the callee's world: the caller's
   have we := apply(tr.world_eta, wW)
   have {wob} := hmm
-  have veq: abi.view(C, ds, app(gc.gw(w, PG), "vm")) = gc.gw(w, PG) proof
-    have e2: gc.gw(w, PG) = fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", app(w, "vm")), "os", app(w, "os")), "fs_base", app(w, "fs_base")), "cpu", app(w, "cpu")), "objs", app(w, "objs")), "vm", WV)
-      := subst({y. fn_update(y, "vm", WV) = fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", app(w, "vm")), "os", app(w, "os")), "fs_base", app(w, "fs_base")), "cpu", app(w, "cpu")), "objs", app(w, "objs")), "vm", WV)}, sym(we), refl({fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", app(w, "vm")), "os", app(w, "os")), "fs_base", app(w, "fs_base")), "cpu", app(w, "cpu")), "objs", app(w, "objs")), "vm", WV)}))
-    show by simp(e2, co, mos, cf, mfs, cc0, mcpu, wcpu, wob)
-  qed
-  have wu2 := mp(app_univ[u := 1, f := w, k := "vm"], wu)
-  have wv0: app(w, "vm") in x86_64_linux.Vm by simp(expand(wW, abi.World))
-  have pgu := mp(app_univ[u := 1, f := app(C, "vm"), k := "pages"], mp(app_univ[u := 1, f := C, k := "vm"], cu))
-  have vt := apply(x86.vm_pages_put, {app(w, "vm")}, {PG}, wv0, wu2, apply(x86.vm_pages_typed, cv), pgu)
-  have wvv: app(gc.gw(w, PG), "vm") in x86_64_linux.Vm by simp(vt.1)
+  have ccw: app(C, "cpu") = app(w, "cpu") := trans(cc0, trans(mcpu, sym(wcpu)))
+  have cow: app(C, "os") = app(w, "os") := trans(co, mos)
+  have veq: abi.view(C, ds, WV) = w by simp(we, cow, cfs, ccw, wob)
+  have wvv: WV in x86_64_linux.Vm by simp(expand(wW, abi.World))
   have dso: ds in set_type(omega) by simp(expand(wW, abi.World), wob)
   show by taut(eok, vok, ook, veq, wvv, dso)
 qed
@@ -1267,40 +1315,34 @@ proof
   show by defs(taut(c2, s2), abi.loaded)
 qed
 
-// (the entry's stack pages kept to the callee's return x: through the
-// push, the world grown, the callee -- which kept the world's stack pages
-// -- and its return)
+// (the entry's stack pages from its rsp up, kept to the callee's return x:
+// through the push, and the callee -- which kept its callers' stack pages)
 theorem tr.post_stack: all s base code m w ds RA T m1 e1 C x w2 p. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) -> RA in bits(64) -> T in bits(64) ->
   runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
   C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
     "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
-  gc.keeps_stack(gc.gw(w, app(app(C, "vm"), "pages")), w2) -> abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), ds, abi.sp(C)) ->
-  p in omega -> abi.stack_page(app(s, "vm"), p) ->
-  app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(app(w2, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) &&
-  app(app(app(x, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)
+  abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), ds, abi.sp(C)) ->
+  p in omega -> abi.stack_page(app(s, "vm"), p) -> int_le(int_div(app(app(s, "gpr"), 4), 4096), p) ->
+  app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(app(x, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)
 proof
   fix s base code m w ds RA T m1 e1 C x w2 p
-  assume hi hmm hra ht htr hC hks hwm hp hsp
+  assume hi hmm hra ht htr hC hwm hp hsp hl
   let S := app(app(s, "gpr"), 4)
+  have {sb, slt} := apply(tr.inv_call, hi)
   have s16 := apply(tr.inv_gap, hi)
   have h16: int_le(16, S) by arith(s16)
-  have _ _ _ _ _ _ _ _ _ _ _ _ cpi .. := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
-  have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {p}, hi, hmm, hp, hsp)
+  have _ _ _ _ _ _ _ cgpr _ _ _ _ cpi .. := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
+  have k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {p}, hi, hmm, hp, hsp, hl)
   have sm := expand(hsp, abi.stack_page, x86_64_linux.mapped)
   have pi := mp(all_elim(expand(cpi, x86.pages_in), {p}), hp)
   have nn: !(app(app(app(m, "vm"), "pages"), p) = none) by simp(k2, sm)
   have ec: app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) := trans((app(app(app(C, "vm"), "pages"), p) = app(app(app(m, "vm"), "pages"), p) by taut(pi, nn)), k2)
-  have pp: p in gc.PN by simp(hp, sm)
-  have ks := mp(all_elim(hks, {p}), pp)
-  have ks1: !(app(app(app(C, "vm"), "pages"), p) = none) && app(snd(app(app(app(C, "vm"), "pages"), p)), "kind") = 2 -> app(app(app(w2, "vm"), "pages"), p) = app(app(app(C, "vm"), "pages"), p) by simp(ks)
-  have ks2 := rewrite(ec, ks1)
-  have sm2: !(app(app(app(s, "vm"), "pages"), p) = none) && app(snd(app(app(app(s, "vm"), "pages"), p)), "kind") = 2 by taut(sm)
-  have ew := mp(ks2, sm2)
-  have {pages} := hwm
-  have px := mp(all_elim(pages, {p}), pp)
-  have n2: !(app(app(app(w2, "vm"), "pages"), p) = none) by simp(ew, sm)
-  have ex: app(app(app(x, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) := trans((app(app(app(x, "vm"), "pages"), p) = app(app(app(w2, "vm"), "pages"), p) by taut(px, n2)), ew)
-  show by taut(ec, ew, ex)
+  have scp: abi.stack_page(app(C, "vm"), p) by defs(rewrite(sym(ec), sm), abi.stack_page, x86_64_linux.mapped)
+  have spc: abi.sp(C) = int_sub(S, 8) by simp(cgpr, sb, h16, slt)
+  have lp: int_le(int_div(int_sub(abi.sp(C), 8), x86_64_linux.PAGE), p) by defs(arith(spc, hl, sb, h16, hp), x86_64_linux.PAGE)
+  have {stk} := hwm
+  have xc := mp(all_elim(stk, {p}), hp, conj(scp, lp))
+  show conj(ec, trans(xc, ec))
 qed
 
 // (the program loaded: in the world a machine's memory matches, from the
@@ -1355,84 +1397,43 @@ proof
   show := apply(tr.loaded_xfer, {wv}, {n}, {gb}, {gc}, {st}, pp, bb, hl)
 qed
 
-// (... and in the world grown)
-theorem tr.grown_loaded: all wv pg gb gc st. gc.grown(wv, pg) -> abi.loaded(wv, gb, gc, st) -> abi.loaded(fn_update(wv, "pages", pg), gb, gc, st)
-proof
-  fix wv pg gb gc st
-  assume hg hl
-  have pp: all p. p in omega -> x86_64_linux.mapped(wv, p) -> !abi.stack_page(wv, p) -> app(app(fn_update(wv, "pages", pg), "pages"), p) = app(app(wv, "pages"), p) proof
-    fix p
-    assume hp hm hs
-    have pn: p in gc.PN by simp(hp, expand(hm, x86_64_linux.mapped))
-    have c := mp(all_elim(hg.2, {p}), pn)
-    have nn: !(app(app(wv, "pages"), p) = none) by taut(expand(hm, x86_64_linux.mapped))
-    show by simp(c, nn)
-  qed
-  have bb: all a. a in bits(64) -> x86_64_linux.mapped(wv, x86_64_linux.page_of(a)) -> !abi.stack_page(wv, x86_64_linux.page_of(a)) ->
-      app(app(fn_update(wv, "pages", pg), "bytes"), a) = app(app(wv, "bytes"), a) proof
-    fix a
-    assume ha hm hs
-    show by simp()
-  qed
-  show := apply(tr.loaded_xfer, {wv}, {fn_update(wv, "pages", pg)}, {gb}, {gc}, {st}, pp, bb, hl)
-qed
-
-
-// The callee returned (x, its world w2, from C at the world grown W1):
+// The callee returned (x, its world w2, from C on the caller's world w):
 // the caller's coupling at the return address with the world W4 (w2 with
-// the caller's stack objects, its pages the machine's), rax the result
+// the caller's stack objects), rax the result
 theorem tr.post_call: all s base code m w ds RA T m1 e1 C x w2. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) -> base in omega -> RA in bits(64) -> T in bits(64) ->
   runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
   C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
     "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
-  tr.returns_valid(gc.gw(w, app(app(C, "vm"), "pages")), w2) -> gc.keeps_stack(gc.gw(w, app(app(C, "vm"), "pages")), w2) ->
+  tr.returns_valid(w, w2) ->
   x in x86_64_linux.Machine -> x in univ(1) -> w2 in abi.World -> w2 in univ(1) ->
   abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), ds, abi.sp(C)) -> app(x, "os") = app(w2, "os") -> app(x, "fs_base") = app(w2, "fs_base") ->
   app(x, "cpu") = app(C, "cpu") -> app(x, "gs_base") = app(C, "gs_base") -> app(x, "rip") = abi.ret(C) -> app(app(x, "gpr"), 4) = abi.sp(C) ->
   abi.callee_saved(x, C) -> !app(app(x, "flags"), "df") ->
-  tr.inv(s, base, code, 8, x, gc.gw(gc.back(w2, gc.gw(w, app(app(C, "vm"), "pages"))), app(app(x, "vm"), "pages"))) &&
-  tr.mem(s, x, gc.gw(gc.back(w2, gc.gw(w, app(app(C, "vm"), "pages"))), app(app(x, "vm"), "pages")), ds) &&
+  tr.inv(s, base, code, 8, x, gc.back(w2, w)) && tr.mem(s, x, gc.back(w2, w), ds) &&
   tr.homes(s, x, empty) && tr.regs(x, fn_update(empty, 0, pair(8, app(app(x, "gpr"), 0)))) && app(x, "rip") = RA
 proof
   fix s base code m w ds RA T m1 e1 C x w2
-  assume hi hmm hbo hra ht htr hC hrv hks xM xu w2W w2u hwm xos xfs xcpu xgs xrip xr4 xcs xdf
+  assume hi hmm hbo hra ht htr hC hrv xM xu w2W w2u hwm xos xfs xcpu xgs xrip xr4 xcs xdf
   let S := app(app(s, "gpr"), 4)
-  let PG := app(app(C, "vm"), "pages")
-  let W1 := gc.gw(w, PG)
+  let P0 := int_div(S, 4096)
   let XV := app(x, "vm")
-  let W4 := gc.gw(gc.back(w2, W1), app(XV, "pages"))
-  have {sM, mM, mu, wW, wu, wst, wcpu, mos, mfs, er4, sb, slt, sal, hsps, sgf, winp, sws, mcpu, mgs, mdf} := apply(tr.inv_call, hi)
+  let W4 := gc.back(w2, w)
+  have {sM, mM, mu, wW, wu, wcpu, mos, mfs, er4, sb, slt, sal, hsps, sgf, srsv, winp, sws, mcpu, mgs, mdf} := apply(tr.inv_call, hi)
   have {cd, kc, ra8, mcs, sacc} := hi
   have s16 := apply(tr.inv_gap, hi)
   have h16: int_le(16, S) by arith(s16)
   have so: S in omega by simp(sb)
   have cM cu co cf cc0 cgs cfl cgpr crip ckc cvf cle cpi cby cstk cacc := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
-  have cv: app(C, "vm") in x86_64_linux.Vm := apply(x86i.parts, cM).4
-  have gr := apply(tr.push_grown, {s}, {m}, {w}, {ds}, {app(C, "vm")}, {int_div(int_sub(S, 16), 4096)}, {int_div(S, 4096)}, hmm, cv, cpi, cstk)
   have rinp rev rld rcpu := expand(hrv, tr.returns_valid)
-  have {top, limit, brk0, brk, bytes, frames, pages} := hwm
+  have {top, limit, brk0, brk, bytes, frames, pages, nostk, stk, rsv} := hwm
   have {wob, wm} := hmm
-  have xv: XV in x86_64_linux.Vm := apply(x86i.parts, xM).4
-  // (x's pages: w2's stack grown)
-  have gr2: gc.grown(app(w2, "vm"), app(XV, "pages")) proof
-    have f: app(XV, "pages") in fn_space(gc.PN, option(x86_64_linux.Page)) := apply(x86.vm_pages_typed, xv)
-    have g: all p. p in gc.PN -> app(app(XV, "pages"), p) = app(app(app(w2, "vm"), "pages"), p) ||
-        (app(app(app(w2, "vm"), "pages"), p) = none && !(app(app(XV, "pages"), p) = none) && app(snd(app(app(XV, "pages"), p)), "kind") = 2) proof
-      fix p
-      assume hp
-      have c := mp(all_elim(pages, {p}), hp)
-      show by simp(c, expand(c, abi.stack_page, x86_64_linux.mapped))
-    qed
-    show by taut(f, g)
-  qed
-  // the program loaded at x: loaded at m, the world, the world grown, the callee's world
+  have {mpages = pages, mnostk = nostk, mrsv = rsv} := expand(hmm, tr.mem).wm
+  // the program loaded at x: loaded at m, the world, the callee's world
   have chain: all gb gc st. gb in omega -> abi.loaded(app(m, "vm"), gb, gc, st) -> abi.loaded(XV, gb, gc, st) proof
     fix gb gc st
     assume hb l1
     have l2 := apply(tr.wm_back, wm, l1)
-    have l3 := apply(tr.grown_loaded, gr, l2)
-    have l3b: abi.loaded(app(W1, "vm"), gb, gc, st) by simp(l3)
-    have l4 := mp(all_elim(rld, {gb}, {gc}, {st}), hb, l3b)
+    have l4 := mp(all_elim(rld, {gb}, {gc}, {st}), hb, l2)
     show := apply(tr.wm_fwd, hwm, l4)
   qed
   have kcx: tr.keeps_code(app(s, "vm"), XV) proof
@@ -1447,18 +1448,38 @@ proof
   have lm: abi.loaded(app(m, "vm"), base, code, empty) by defs(simp(cd), abi.loaded)
   have lx := mp(all_elim(chain, {base}, {code}, {empty}), hbo, lm)
   have cdx := expand(lx, abi.loaded).1
-  // (the entry's stack pages: x's, w2's, C's as s's)
-  have pst: all p. p in omega -> abi.stack_page(app(s, "vm"), p) ->
-      app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(app(w2, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) &&
-      app(app(XV, "pages"), p) = app(app(app(s, "vm"), "pages"), p) proof
+  // (the entry's stack pages from its rsp up: C's, x's as s's)
+  have pst: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> int_le(P0, p) ->
+      app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(XV, "pages"), p) = app(app(app(s, "vm"), "pages"), p) proof
     fix p
-    assume hp hsp
-    show := apply(tr.post_stack, {s}, {base}, {code}, {m}, {w}, {ds}, {RA}, {T}, {m1}, {e1}, {C}, {x}, {w2}, {p}, hi, hmm, hra, ht, htr, hC, hks, hwm, hp, hsp)
+    assume hp hsp hl
+    show := apply(tr.post_stack, {s}, {base}, {code}, {m}, {w}, {ds}, {RA}, {T}, {m1}, {e1}, {C}, {x}, {w2}, {p}, hi, hmm, hra, ht, htr, hC, hwm, hp, hsp, hl)
   qed
-  have p0o: int_div(S, 4096) in omega by simp(so)
-  have ps0 := mp(all_elim(pst, {int_div(S, 4096)}), p0o, hsps)
+  have p0o: P0 in omega by simp(so)
+  have ps0 := mp(all_elim(pst, {P0}), p0o, hsps, (int_le(P0, P0) by arith(p0o)))
   have spc: abi.sp(C) = int_sub(S, 8) by simp(cgpr, sb, h16, slt)
   have pp4 := apply(tr.push_pages, {S}, sb, h16, slt, sal).4
+  // (a stack page of the entry's from its rsp up: no page of a world -- the
+  // world has no stack pages, and the machine keeps it)
+  have nw: all wv q nv. q in omega -> abi.stack_page(app(s, "vm"), q) -> app(app(nv, "pages"), q) = app(app(app(s, "vm"), "pages"), q) ->
+      (all x0. x0 in gc.PN -> app(app(nv, "pages"), x0) = app(app(wv, "pages"), x0) || (app(app(wv, "pages"), x0) = none && abi.stack_page(nv, x0))) ->
+      (all x0. x0 in gc.PN -> !(app(app(wv, "pages"), x0) = none) -> !(app(snd(app(app(wv, "pages"), x0)), "kind") = 2)) ->
+      app(app(wv, "pages"), q) = none proof
+    fix wv q nv
+    assume hq hsq he hpg hns
+    have sm := expand(hsq, abi.stack_page, x86_64_linux.mapped)
+    have qp: q in gc.PN by simp(hq, sm)
+    have c := mp(all_elim(hpg, {q}), qp)
+    have d: !(app(app(wv, "pages"), q) = none) -> false proof
+      assume hn
+      have e2: app(app(nv, "pages"), q) = app(app(wv, "pages"), q) by taut(c, hn)
+      have k := mp(all_elim(hns, {q}), qp, hn)
+      have k2: app(snd(app(app(app(s, "vm"), "pages"), q)), "kind") = 2 by taut(sm)
+      have k3 := rewrite(e2, rewrite(sym(he), k2))
+      show by taut(k3, k)
+    qed
+    show by taut(d)
+  qed
   // (a byte of the entry's stack pages, at or above sp(C), not an object: x's as C's, as m's)
   have xc: all a. a in bits(64) -> int_le(int_sub(S, 8), a) -> !(a in ds) -> abi.stack_page(app(s, "vm"), int_div(a, 4096)) ->
       app(app(XV, "bytes"), a) = app(app(app(m, "vm"), "bytes"), a) proof
@@ -1466,31 +1487,32 @@ proof
     assume ha hl hn hsp
     have ao: a in omega by simp(ha)
     have po: int_div(a, 4096) in omega by simp(ha)
-    have e1 e2 .. := mp(all_elim(pst, {int_div(a, 4096)}), po, hsp)
+    have pl: int_le(P0, int_div(a, 4096)) by arith(hl, sal, sb, slt, ao)
+    have e1 e2 := mp(all_elim(pst, {int_div(a, 4096)}), po, hsp, pl)
     have pe: x86_64_linux.page_of(a) = int_div(a, 4096) by defs(simp(), x86_64_linux.page_of, x86_64_linux.PAGE)
     have sm := expand(hsp, abi.stack_page, x86_64_linux.mapped)
-    have nd: !abi.in_domain(app(w2, "vm"), ds, a) by defs(simp(hn, e2, sm), abi.in_domain, x86_64_linux.mapped, x86_64_linux.PAGE)
+    have w2n := apply(nw, {app(w2, "vm")}, {int_div(a, 4096)}, {XV}, po, hsp, e2, pages, nostk)
+    have nd: !abi.in_domain(app(w2, "vm"), ds, a) by defs(simp(hn, w2n), abi.in_domain, x86_64_linux.mapped, x86_64_linux.PAGE)
     have sc: abi.stack_page(app(C, "vm"), x86_64_linux.page_of(a)) by defs(simp(pe, e1, sm), abi.stack_page, x86_64_linux.mapped)
     have l2: int_le(abi.sp(C), a) by simp(spc, hl)
     have lns: (int_le(abi.sp(C), a) && !abi.in_domain(app(w2, "vm"), ds, a)) && abi.stack_page(app(C, "vm"), x86_64_linux.page_of(a)) by taut(l2, nd, sc)
     have f := mp(all_elim(frames, {a}), ha, lns)
     have nr: !(int_le(int_sub(S, 16), a) && int_lt(a, int_sub(S, 8))) by arith(hl, so, ao)
-    have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(a, 4096)}, hi, hmm, po, hsp)
+    have k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(a, 4096)}, hi, hmm, po, hsp, pl)
     have mm: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) by defs(simp(pe, k2, sm), x86_64_linux.mapped)
     have cb := mp(all_elim(cby, {a}), ha, nr, mm)
     show := trans(f, cb)
   qed
   // the invariant
   have x4: app(app(x, "gpr"), 4) = int_sub(S, 8) := trans(xr4, spc)
-  have z8: int_sub(S, 8) = int_sub(app(app(s, "gpr"), 4), 8) := refl({int_sub(S, 8)})
   have kpx: tr.kept(app(s, "vm"), XV, S) proof
     have g: all a. a in omega -> int_le(int_sub(S, 8), a) -> int_lt(a, int_add(S, 8)) ->
         app(app(XV, "pages"), x86_64_linux.page_of(a)) = app(app(app(s, "vm"), "pages"), x86_64_linux.page_of(a)) proof
       fix a
       assume h1 h2 h3
       have pn := apply(tr.page_near, {S}, {a}, sb, sal, slt, h2, h3)
-      have pe: x86_64_linux.page_of(a) = int_div(S, 4096) by defs(simp(pn), x86_64_linux.page_of, x86_64_linux.PAGE)
-      show by simp(pe, ps0.3)
+      have pe: x86_64_linux.page_of(a) = P0 by defs(simp(pn), x86_64_linux.page_of, x86_64_linux.PAGE)
+      show by simp(pe, ps0.2)
     qed
     show by defs(g, tr.kept)
   qed
@@ -1519,44 +1541,29 @@ proof
   have xcs2: abi.callee_saved(x, s) by simp(xcs, cgpr, mcs)
   have xcpu2: app(x, "cpu") = app(s, "cpu") by simp(xcpu, cc0, mcpu)
   have xgs2: app(x, "gs_base") = app(s, "gs_base") by simp(xgs, cgs, mgs)
-  have w4os: app(W4, "os") = app(w2, "os") by simp()
-  have w4fs: app(W4, "fs_base") = app(w2, "fs_base") by simp()
   have w4in: app(app(W4, "os"), "input") = app(app(s, "os"), "input") by simp(rinp, winp)
   have w4ev: subset(app(app(s, "os"), "events"), app(app(W4, "os"), "events")) proof
-    have e1: subset(app(app(s, "os"), "events"), app(app(W1, "os"), "events")) by simp(sws)
-    have e2 := apply(tr.subset_trans, e1, rev)
+    have e2 := apply(tr.subset_trans, sws, rev)
     show by simp(e2)
   qed
   have w4cpu: app(W4, "cpu") = app(s, "cpu") by simp(rcpu, wcpu)
   // (W4: a world)
   have w2f := expand(w2W, abi.World)
   have wf := expand(wW, abi.World)
-  have w2v: app(w2, "vm") in x86_64_linux.Vm by simp(w2f)
-  have w2vu := mp(app_univ[u := 1, f := w2, k := "vm"], w2u)
-  have xpu := mp(app_univ[u := 1, f := XV, k := "pages"], mp(app_univ[u := 1, f := x, k := "vm"], xu))
-  have vt := apply(x86.vm_pages_put, {app(w2, "vm")}, {app(XV, "pages")}, w2v, w2vu, apply(x86.vm_pages_typed, xv), xpu)
   have wou := mp(app_univ[u := 1, f := w, k := "objs"], wu)
-  have w4W: W4 in abi.World by defs(simp(w2f, wf, vt, w2u, wou), abi.World)
-  have w4u: W4 in univ(1) by simp(w2u, vt, wou)
-  have w4st: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> app(app(app(W4, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) proof
-    fix p
-    assume po hsp
-    show by simp(mp(all_elim(pst, {p}), po, hsp).3)
-  qed
+  have w4W: W4 in abi.World by defs(simp(w2f, wf, w2u, wou), abi.World)
+  have w4u: W4 in univ(1) by simp(w2u, wou)
   have invx: tr.inv(s, base, code, 8, x, W4) by defs(simp(xM, xu, cdx, kcx, (app(app(x, "gpr"), 4) = int_sub(S, 8) by simp(x4)), (8 in omega by simp()), kpx, rax, xcs2, xcpu2, xgs2,
-    (app(x, "os") = app(W4, "os") by simp(xos)), (app(x, "fs_base") = app(W4, "fs_base") by simp(xfs)), xdf, w4in, w4ev, w4W, w4u, w4cpu, w4st, sM, sacc, sal, hsps, slt, sgf, keep(abi.code_at, tr.keeps_code, tr.kept, x86_64_linux.Machine, abi.World, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access)), tr.inv)
+    (app(x, "os") = app(W4, "os") by simp(xos)), (app(x, "fs_base") = app(W4, "fs_base") by simp(xfs)), xdf, w4in, w4ev, w4W, w4u, w4cpu, sM, sacc, sal, hsps, slt, sgf, srsv, keep(abi.code_at, tr.keeps_code, tr.kept, x86_64_linux.Machine, abi.World, abi.stack_page, abi.stack_gap_free, abi.stack_reserve, x86_64_linux.can_access)), tr.inv)
   // the coupling
   have {oacc} := hmm
-  have {wm} := hmm
-  have mby := expand(wm, abi.world_matches)
   have mframes: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(app(w, "vm"), ds, x0)) && abi.stack_page(app(s, "vm"), x86_64_linux.page_of(x0)) ->
       app(app(app(m, "vm"), "bytes"), x0) = app(app(app(s, "vm"), "bytes"), x0) := expand(wm, abi.world_matches).frames
   have by4: all a. a in bits(64) -> abi.in_domain(app(W4, "vm"), ds, a) -> app(app(XV, "bytes"), a) = app(app(app(W4, "vm"), "bytes"), a) proof
     fix a
     assume ha hd
-    have hd2: abi.in_domain(fn_update(app(w2, "vm"), "pages", app(XV, "pages")), ds, a) by simp(hd)
-    have d0 := apply(tr.dom_grown, {app(w2, "vm")}, {app(XV, "pages")}, {ds}, {a}, ha, gr2, hd2)
-    have b := mp(all_elim(bytes, {a}), ha, d0)
+    have hd2: abi.in_domain(app(w2, "vm"), ds, a) by simp(hd)
+    have b := mp(all_elim(bytes, {a}), ha, hd2)
     show by simp(b)
   qed
   have fr4: all a. a in bits(64) -> (int_le(abi.sp(s), a) && !abi.in_domain(app(W4, "vm"), ds, a)) && abi.stack_page(app(s, "vm"), x86_64_linux.page_of(a)) ->
@@ -1572,33 +1579,41 @@ proof
     have la: int_le(abi.sp(s), a) by taut(hf)
     have l1: int_le(int_sub(S, 8), a) by arith(la, pp4, so, ao)
     have xm := mp(all_elim(xc, {a}), ha, l1, nd, sp1)
-    // (m's: s's -- the world's page there s's stack page)
+    // (m's: s's -- the world has no page there)
     have po: int_div(a, 4096) in omega by simp(ha)
-    have k1 .. := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(a, 4096)}, hi, hmm, po, sp1)
-    have sm := expand(sp1, abi.stack_page, x86_64_linux.mapped)
-    have ndw: !abi.in_domain(app(w, "vm"), ds, a) by defs(simp(nd, k1, sm), abi.in_domain, x86_64_linux.mapped, x86_64_linux.PAGE)
+    have pl: int_le(P0, int_div(a, 4096)) by arith(l1, sal, sb, slt, ao)
+    have k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(a, 4096)}, hi, hmm, po, sp1, pl)
+    have wn := apply(nw, {app(w, "vm")}, {int_div(a, 4096)}, {app(m, "vm")}, po, sp1, k2, mpages, mnostk)
+    have ndw: !abi.in_domain(app(w, "vm"), ds, a) by defs(simp(nd, wn), abi.in_domain, x86_64_linux.mapped, x86_64_linux.PAGE)
     have pre: (int_le(abi.sp(s), a) && !abi.in_domain(app(w, "vm"), ds, a)) && abi.stack_page(app(s, "vm"), x86_64_linux.page_of(a)) by taut(hf, ndw)
     have ms := mp(all_elim(mframes, {a}), ha, pre)
     show := trans(xm, ms)
   qed
-  have pg4: all x0. x0 in gc.PN -> app(app(XV, "pages"), x0) = app(app(app(W4, "vm"), "pages"), x0) || (app(app(app(W4, "vm"), "pages"), x0) = none && abi.stack_page(XV, x0)) proof
+  have stk4: all x0. x0 in omega -> abi.stack_page(app(s, "vm"), x0) && int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), x0) -> app(app(XV, "pages"), x0) = app(app(app(s, "vm"), "pages"), x0) proof
     fix x0
-    assume h
-    show by simp()
+    assume h0 h1
+    have pl: int_le(P0, x0) by defs(arith(expand(h1, x86_64_linux.PAGE), sb, slt, h0), x86_64_linux.PAGE)
+    show := mp(all_elim(pst, {x0}), h0, h1.1, pl).2
   qed
-  have wm4: abi.world_matches(app(s, "vm"), XV, app(W4, "vm"), ds, abi.sp(s)) by defs(simp(top, limit, brk0, brk, by4, fr4, pg4, keep(abi.in_domain, abi.stack_page)), abi.world_matches)
+  have rsv4: abi.stack_reserve(app(s, "vm")) -> abi.stack_reserve(XV) proof
+    assume h0
+    show := mp(rsv, mp(expand(cstk, x86.stk_ext).2, mp(mrsv, h0)))
+  qed
+  have wm4: abi.world_matches(app(s, "vm"), XV, app(W4, "vm"), ds, abi.sp(s)) by defs(simp(top, limit, brk0, brk, by4, fr4, pages, nostk, stk4, rsv4, keep(abi.in_domain, abi.stack_page, abi.stack_reserve)), abi.world_matches)
   have oa4: all y. y in omega -> y in ds -> (int_le(abi.sp(s), y) && abi.stack_page(app(s, "vm"), int_div(y, x86_64_linux.PAGE))) && x86_64_linux.can_access(XV, bits_of_int(64, y), 1) proof
     fix y
     assume h1 h2
     have o := mp(all_elim(oacc, {y}), h1, h2)
+    have sa: int_le(abi.sp(s), y) by taut(o)
     have sp1: abi.stack_page(app(s, "vm"), int_div(y, x86_64_linux.PAGE)) by taut(o)
     have ca: x86_64_linux.can_access(app(m, "vm"), bits_of_int(64, y), 1) by taut(o)
     have sm := expand(sp1, abi.stack_page, x86_64_linux.mapped)
     have yl: int_lt(y, 18446744073709551616) by simp(h1, expand(sm, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
     have yb: bits_of_int(64, y) = y by simp(h1, yl)
     have po: int_div(y, x86_64_linux.PAGE) in omega by defs(simp(h1), x86_64_linux.PAGE)
-    have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(y, x86_64_linux.PAGE)}, hi, hmm, po, sp1)
-    have xp := mp(all_elim(pst, {int_div(y, x86_64_linux.PAGE)}), po, sp1).3
+    have pl: int_le(P0, int_div(y, x86_64_linux.PAGE)) by defs(arith(sa, sb, slt, h1), x86_64_linux.PAGE)
+    have k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(y, x86_64_linux.PAGE)}, hi, hmm, po, sp1, pl)
+    have xp := mp(all_elim(pst, {int_div(y, x86_64_linux.PAGE)}), po, sp1, pl).2
     have pe: x86_64_linux.page_of(y) = int_div(y, x86_64_linux.PAGE) by defs(simp(), x86_64_linux.page_of)
     have eqp: app(app(XV, "pages"), x86_64_linux.page_of(y)) = app(app(app(m, "vm"), "pages"), x86_64_linux.page_of(y)) by simp(pe, xp, k2)
     have ca2 := rewrite(yb, ca)
@@ -1638,28 +1653,28 @@ qed
 
 // GIMPLE's call (the stack grown to pg) with the callee raising: the
 // caller's rest raising
-theorem tr.gcall_exc(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w pg u x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.grown(app(w, "vm"), pg) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
-  gc.sound(gc.gw(w, pg)) -> runs(app(g, seq_one(u)), gc.gw(w, pg), exc(x, e)) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+theorem tr.gcall_exc(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w u x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
+  gc.sound(w) -> runs(app(g, seq_one(u)), w, exc(x, e)) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
   runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(x, e))
 proof
-  fix w pg u x e
-  assume hw hx he hg hu hi hs hc hk
+  fix w u x e
+  assume hw hx he hu hi hs hc hk
   have rg := apply(tr.regs_one, hu, hi)
-  have c := apply(gc.call_exc, {g}, {seq_one(ar)}, {w}, {pg}, {seq_one(u)}, {x}, {e}, hw, hx, he, hg, rg, hs, hc)
+  have c := apply(gc.call_exc, {g}, {seq_one(ar)}, {w}, {seq_one(u)}, {x}, {e}, hw, hx, he, rg, hs, hc)
   have c1 := apply(gc.call1_exc, {g}, {seq_one(ar)}, {w}, {x}, {e}, hw, hx, he, c)
   show := apply(tr.call_exc[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {x}, {e}, hw, hx, he, c1, mp(all_elim(hk, {x}, {e}), hx, he))
 qed
 
-theorem tr.gcall_div(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w pg u t. w in univ(1) -> t in univ(1) -> gc.grown(app(w, "vm"), pg) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
-  gc.sound(gc.gw(w, pg)) -> runs(app(g, seq_one(u)), gc.gw(w, pg), diverge(t)) -> (all t. t in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))) ->
+theorem tr.gcall_div(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w u t. w in univ(1) -> t in univ(1) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
+  gc.sound(w) -> runs(app(g, seq_one(u)), w, diverge(t)) -> (all t. t in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))) ->
   runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, diverge(t))
 proof
-  fix w pg u t
-  assume hw ht hg hu hi hs hc hd
+  fix w u t
+  assume hw ht hu hi hs hc hd
   have rg := apply(tr.regs_one, hu, hi)
-  have c := apply(gc.call_div, {g}, {seq_one(ar)}, {w}, {pg}, {seq_one(u)}, {t}, hw, ht, hg, rg, hs, hc)
+  have c := apply(gc.call_div, {g}, {seq_one(ar)}, {w}, {seq_one(u)}, {t}, hw, ht, rg, hs, hc)
   have c1 := apply(gc.call1_div, {g}, {seq_one(ar)}, {w}, {t}, hw, ht, c)
   show := apply(tr.call_div[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {t}, hw, ht, c1, mp(all_elim(hd, {t}), ht))
 qed
@@ -1682,27 +1697,25 @@ proof
 qed
 
 // the callee returned (w4, the result r0:r1): the call overflowing after
-// it (the stack grown to pg2), or the caller's rest from W4 with r0
-theorem tr.gcall_ret(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w pg u w4 r0 r1 pg2. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.grown(app(w, "vm"), pg) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
-  gc.sound(gc.gw(w, pg)) -> runs(app(g, seq_one(u)), gc.gw(w, pg), ok(w4, pair(r0, r1))) -> gc.keeps_stack(gc.gw(w, pg), w4) -> gc.grown(app(w4, "vm"), pg2) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+// it, or the caller's rest from W4 (w4 with the caller's objects) with r0
+theorem tr.gcall_ret(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all w u w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) ->
+  gc.sound(w) -> runs(app(g, seq_one(u)), w, ok(w4, pair(r0, r1))) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
   runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
-    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty))) &&
-  (all o. runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), o) ->
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, exc(gc.back(w4, w), exc_val("stack_overflow", empty))) &&
+  (all o. runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), gc.back(w4, w), o) ->
     runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o))
 proof
-  fix w pg u w4 r0 r1 pg2
-  assume hw hw4 h0 h1 hg hu hi hs hc hks hg2 hk
-  let W4 := gc.gw(gc.back(w4, gc.gw(w, pg)), pg2)
+  fix w u w4 r0 r1
+  assume hw hw4 h0 h1 hu hi hs hc hk
+  let W4 := gc.back(w4, w)
   have rg := apply(tr.regs_one, hu, hi)
-  have gu := apply(gc.gw_univ, hw, hg)
-  have bu: gc.back(w4, gc.gw(w, pg)) in univ(1) by simp(hw4, hw, gu)
-  have w4u := apply(gc.gw_univ, bu, (gc.grown(app(gc.back(w4, gc.gw(w, pg)), "vm"), pg2) by simp(hg2)))
+  have w4u: W4 in univ(1) by simp(hw4, hw)
   have ou: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
-  have co := apply(gc.call_ovf_after, {g}, {seq_one(ar)}, {w}, {pg}, {seq_one(u)}, {w4}, {r0}, {r1}, {pg2}, hw, hw4, h0, h1, hg, rg, hs, hc, hks, hg2)
+  have co := apply(gc.call_ovf_after, {g}, {seq_one(ar)}, {w}, {seq_one(u)}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, rg, hs, hc)
   have c1o := apply(gc.call1_exc, {g}, {seq_one(ar)}, {w}, {W4}, {exc_val("stack_overflow", empty)}, hw, w4u, ou, co)
   have po := apply(tr.call_exc[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {W4}, {exc_val("stack_overflow", empty)}, hw, w4u, ou, c1o, mp(all_elim(hk, {W4}, {exc_val("stack_overflow", empty)}), w4u, ou))
-  have ck := apply(gc.call_ok, {g}, {seq_one(ar)}, {w}, {pg}, {seq_one(u)}, {w4}, {pg2}, {r0}, {r1}, hw, hw4, h0, h1, hg, rg, hs, hc, hks, hg2)
+  have ck := apply(gc.call_ok, {g}, {seq_one(ar)}, {w}, {seq_one(u)}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, rg, hs, hc)
   have c1k := apply(gc.call1_ok, {g}, {seq_one(ar)}, {w}, {W4}, {r0}, {r1}, hw, w4u, h0, h1, ck)
   have qc := mp(all_elim(tr.qs_call[op := gimple.call1(g, seq_one(ar)), w4 := W4, r := r0, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), hw, c1k)
   have pk := apply(tr.p_red[q := mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)),
@@ -1710,53 +1723,33 @@ proof
   show by taut(po, pk)
 qed
 
-// (a memory's own pages: grown)
-theorem tr.grown_refl: all vm. vm in x86_64_linux.Vm -> gc.grown(vm, app(vm, "pages"))
-proof
-  fix vm
-  assume hv
-  have f := apply(x86.vm_pages_typed, hv)
-  have g: all p. p in gc.PN -> app(app(vm, "pages"), p) = app(app(vm, "pages"), p) ||
-      (app(app(vm, "pages"), p) = none && !(app(app(vm, "pages"), p) = none) && app(snd(app(app(vm, "pages"), p)), "kind") = 2) proof
-    fix p
-    assume h
-    show by simp()
-  qed
-  show by taut(f, g)
-qed
-
 // (the callee's world xw back with the caller's (w's) stack objects: a world)
-theorem tr.back_world: all xw w pg. xw in abi.World -> xw in univ(1) -> w in abi.World -> w in univ(1) ->
-  gc.gw(gc.back(xw, gc.gw(w, pg)), app(app(xw, "vm"), "pages")) in abi.World && gc.gw(gc.back(xw, gc.gw(w, pg)), app(app(xw, "vm"), "pages")) in univ(1)
+theorem tr.back_world: all xw w. xw in abi.World -> xw in univ(1) -> w in abi.World -> w in univ(1) ->
+  gc.back(xw, w) in abi.World && gc.back(xw, w) in univ(1)
 proof
-  fix xw w pg
+  fix xw w
   assume hx hxu hw hwu
   have xf := expand(hx, abi.World)
   have wf := expand(hw, abi.World)
-  have xv: app(xw, "vm") in x86_64_linux.Vm by simp(xf)
-  have xvu := mp(app_univ[u := 1, f := xw, k := "vm"], hxu)
-  have vs := apply(abi.vm_bytes_same, xv)
-  have pe: fn_update(app(xw, "vm"), "pages", app(app(xw, "vm"), "pages")) = app(xw, "vm") by simp(mp(mp(fn_update_same[f := app(xw, "vm"), k := "pages"], simp(expand(xv, x86_64_linux.Vm))), simp(expand(xv, x86_64_linux.Vm))))
   have wou := mp(app_univ[u := 1, f := w, k := "objs"], hwu)
-  have pt := apply(x86.vm_pages_typed, xv)
-  have a: gc.gw(gc.back(xw, gc.gw(w, pg)), app(app(xw, "vm"), "pages")) in abi.World by defs(simp(xf, wf, pe, pt, xv, xvu, hxu, wou), abi.World)
-  have b: gc.gw(gc.back(xw, gc.gw(w, pg)), app(app(xw, "vm"), "pages")) in univ(1) by simp(pe, xvu, hxu, wou)
+  have a: gc.back(xw, w) in abi.World by defs(simp(xf, wf, hxu, wou), abi.World)
+  have b: gc.back(xw, w) in univ(1) by simp(hxu, wou)
   show by taut(a, b)
 qed
 
-// The callee (on W1, the world grown) crashing as the ABI allows: the
+// The callee (on the caller's world) crashing as the ABI allows: the
 // caller crashing as it allows
-theorem tr.callee_crash(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all s base code m w ds pg u C o. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) ->
+theorem tr.callee_crash(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all s base code m w ds u C o. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) ->
   app(C, "os") = app(m, "os") -> app(app(C, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), 16) ->
-  gc.grown(app(w, "vm"), pg) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) -> gc.sound(gc.gw(w, pg)) ->
-  g in fn_space(abi.ARGS, powerset(univ(1))) -> seq_one(u) in abi.ARGS -> abi.view(C, ds, app(gc.gw(w, pg), "vm")) = gc.gw(w, pg) ->
+  u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) -> gc.sound(w) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> seq_one(u) in abi.ARGS -> abi.view(C, ds, app(w, "vm")) = w ->
   (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> (all t. t in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))) ->
-  abi.crashes_at(g, seq_one(u), ds, app(gc.gw(w, pg), "vm"), C, o) ->
+  abi.crashes_at(g, seq_one(u), ds, app(w, "vm"), C, o) ->
   tr.crash(s, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o)
 proof
-  fix s base code m w ds pg u C o
-  assume hi hmm co c4 hg hu hi0 hs hgt hA veq hk hd hc
+  fix s base code m w ds u C o
+  assume hi hmm co c4 hu hi0 hs hgt hA veq hk hd hc
   let S := app(app(s, "gpr"), 4)
   let P := mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
@@ -1765,7 +1758,6 @@ proof
   have h16: int_le(16, S) by arith(s16)
   have spc: abi.sp(C) = int_sub(S, 8) by simp(c4, sb, h16, slt)
   have pp4 := apply(tr.push_pages, {S}, sb, h16, slt, sal).4
-  have gu := apply(gc.gw_univ, wu, hg)
   obtain m1 a0 k0, {oe, m1M, ab, sev, ovk} from expand(hc, abi.crashes_at)
   // the fault: below the caller's sp too
   have oe2: (o = exc(m1, exc_val("segv", pair(a0, k0))) && (k0 = 0 || k0 = 1 || k0 = 3) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a0)) ||
@@ -1788,13 +1780,13 @@ proof
   have inp2 := rewrite(trans(co, mos), inp1)
   have inp := trans(sym(winp), inp2)
   // (the callee overflowed right at its call: GIMPLE's call overflows first)
-  have oc: app(app(abi.view(C, ds, app(gc.gw(w, pg), "vm")), "os"), "events") = app(app(m1, "os"), "events") -> tr.ovf(P, w, app(m1, "os")) proof
+  have oc: app(app(abi.view(C, ds, app(w, "vm")), "os"), "events") = app(app(m1, "os"), "events") -> tr.ovf(P, w, app(m1, "os")) proof
     assume e
     have ev: app(app(w, "os"), "events") = app(app(m1, "os"), "events") by simp(e, co, mos)
     show := apply(tr.call_ovf[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {app(m1, "os")}, wW, wu, ev, mp(all_elim(hk, {w}, {exc_val("stack_overflow", empty)}), wu, defs(simp(), exc_val)))
   qed
   // (the spec's point where the I/O stops: the caller's rest stops there too)
-  have ox: (ex x0. x0 in outcome_type(rec_and(abi.World, single(empty)), cart(bits(64), bits(64))) && (runs(app(g, seq_one(u)), abi.view(C, ds, app(gc.gw(w, pg), "vm")), x0) &&
+  have ox: (ex x0. x0 in outcome_type(rec_and(abi.World, single(empty)), cart(bits(64), bits(64))) && (runs(app(g, seq_one(u)), abi.view(C, ds, app(w, "vm")), x0) &&
       ite(fst(x0) = 0, app(app(fst(snd(x0)), "os"), "events") = app(app(m1, "os"), "events"),
         ite(fst(x0) = 1, snd(snd(x0)) = exc_val("stack_overflow", empty) && app(app(fst(snd(x0)), "os"), "events") = app(app(m1, "os"), "events"),
           app(snd(x0), "os.events") = app(app(m1, "os"), "events"))))) -> tr.ovf(P, w, app(m1, "os")) proof
@@ -1802,7 +1794,7 @@ proof
     obtain x0, hx0t hx0ri from ex1
     have hx0r hit := hx0ri
     have hx0r2 := rewrite(veq, hx0r)
-    have pu := apply(tr.spec_univ, {g}, {seq_one(u)}, {gc.gw(w, pg)}, {x0}, hgt, hA, hx0r2)
+    have pu := apply(tr.spec_univ, {g}, {seq_one(u)}, {w}, {x0}, hgt, hA, hx0r2)
     have cs := apply(tr.outcome_cases, {rec_and(abi.World, single(empty))}, {cart(bits(64), bits(64))}, {x0}, hx0t)
     // the callee returned (its I/O the crash's): GIMPLE's call overflows after it, or is undefined
     have c1: (ex a b. a in rec_and(abi.World, single(empty)) && b in cart(bits(64), bits(64)) && x0 = ok(a, b)) -> tr.ovf(P, w, app(m1, "os")) proof
@@ -1820,25 +1812,10 @@ proof
       have ev0 := rewrite(it, hit)
       have ev: app(app(xw, "os"), "events") = app(app(m1, "os"), "events") by simp(rewrite(xe, ev0))
       have hg2 := rewrite(re, rewrite(xe, hx0r2))
-      have xv: app(xw, "vm") in x86_64_linux.Vm by simp(expand(xW, abi.World))
-      have ks: gc.keeps_stack(gc.gw(w, pg), xw) -> tr.ovf(P, w, app(m1, "os")) proof
-        assume hks
-        have gr2 := apply(tr.grown_refl, xv)
-        have po .. := apply(tr.gcall_ret[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {pg}, {u}, {xw}, {r0}, {r1}, {app(app(xw, "vm"), "pages")}, wu, xu, r0u, r1u, hg, hu, hi0, hs, hg2, hks, gr2, hk)
-        have bw bu := apply(tr.back_world, {xw}, {w}, {pg}, xW, xu, wW, wu)
-        have ev3: app(app(gc.gw(gc.back(xw, gc.gw(w, pg)), app(app(xw, "vm"), "pages")), "os"), "events") = app(app(m1, "os"), "events") by simp(ev)
-        show := apply(tr.ovf_exc, {P}, {w}, {app(m1, "os")}, {gc.gw(gc.back(xw, gc.gw(w, pg)), app(app(xw, "vm"), "pages"))}, apply(tr.world_and, bw), po, ev3)
-      qed
-      have nks: !gc.keeps_stack(gc.gw(w, pg), xw) -> tr.ovf(P, w, app(m1, "os")) proof
-        assume hn
-        have rg := apply(tr.regs_one, hu, hi0)
-        have ou: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
-        have cu := apply(gc.call_ub_after, {g}, {seq_one(ar)}, {w}, {pg}, {seq_one(u)}, {xw}, {pair(r0, r1)}, {xw}, {exc_val("stack_overflow", empty)}, wu, xu, xu, ou, hg, rg, hs, hg2, hn)
-        have c1x := apply(gc.call1_exc, {g}, {seq_one(ar)}, {w}, {xw}, {exc_val("stack_overflow", empty)}, wu, xu, ou, cu)
-        have pe := apply(tr.call_exc[g := g, args := seq_one(ar), a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {xw}, {exc_val("stack_overflow", empty)}, wu, xu, ou, c1x, mp(all_elim(hk, {xw}, {exc_val("stack_overflow", empty)}), xu, ou))
-        show := apply(tr.ovf_exc, {P}, {w}, {app(m1, "os")}, {xw}, xa, pe, ev)
-      qed
-      show by taut(ks, nks)
+      have po .. := apply(tr.gcall_ret[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {u}, {xw}, {r0}, {r1}, wu, xu, r0u, r1u, hu, hi0, hs, hg2, hk)
+      have bw bu := apply(tr.back_world, {xw}, {w}, xW, xu, wW, wu)
+      have ev3: app(app(gc.back(xw, w), "os"), "events") = app(app(m1, "os"), "events") by simp(ev)
+      show := apply(tr.ovf_exc, {P}, {w}, {app(m1, "os")}, {gc.back(xw, w)}, apply(tr.world_and, bw), po, ev3)
     qed
     // the callee overflowed: so does the caller
     have c2: (ex a b. a in rec_and(abi.World, single(empty)) && b in univ(1) && x0 = exc(a, b)) -> tr.ovf(P, w, app(m1, "os")) proof
@@ -1854,7 +1831,7 @@ proof
       have c0 := rewrite(trans(itf, itt), hit)
       have eo ev: eb = exc_val("stack_overflow", empty) && app(app(xw, "os"), "events") = app(app(m1, "os"), "events") by simp(rewrite(xe, c0))
       have hg2 := rewrite(xe, hx0r2)
-      have pe0 := apply(tr.gcall_exc[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {pg}, {u}, {xw}, {eb}, wu, xu, ebu, hg, hu, hi0, hs, hg2, hk)
+      have pe0 := apply(tr.gcall_exc[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {u}, {xw}, {eb}, wu, xu, ebu, hu, hi0, hs, hg2, hk)
       have pe := rewrite(eo, pe0)
       show := apply(tr.ovf_exc, {P}, {w}, {app(m1, "os")}, {xw}, xa, pe, ev)
     qed
@@ -1870,7 +1847,7 @@ proof
       have c0 := rewrite(trans(itf, itf2), hit)
       have ev: app(t, "os.events") = app(app(m1, "os"), "events") by simp(rewrite(xe, c0))
       have hg2 := rewrite(xe, hx0r2)
-      have pd := apply(tr.gcall_div[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {pg}, {u}, {t}, wu, tu, hg, hu, hi0, hs, hg2, hd)
+      have pd := apply(tr.gcall_div[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {u}, {t}, wu, tu, hu, hi0, hs, hg2, hd)
       show := apply(tr.ovf_div, {P}, {w}, {app(m1, "os")}, {t}, tu, pd, ev)
     qed
     show by taut(cs, c1, c2, c3)
@@ -1900,8 +1877,7 @@ proof
   fix s v base code m w ds u RA T m1 e1 C cb cc st
   assume hi hmm hb hu7 hu hin hra ht htr hC himp hld hcb hdso hds8 hgt hio hk hd hpost
   let S := app(app(s, "gpr"), 4)
-  let PG := app(app(C, "vm"), "pages")
-  let W1 := gc.gw(w, PG)
+  let W1 := w
   let P := mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, seq_one(ar)), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have {sM, wW, wu, sb, slt, sal} := apply(tr.inv_call, hi)
@@ -1910,7 +1886,6 @@ proof
   have h16: int_le(16, S) by arith(s16)
   have cM cu co cf cc0 cgs cfl cgpr crip ckc cvf cle cpi cby cstk cacc := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
   have cv: app(C, "vm") in x86_64_linux.Vm := apply(x86i.parts, cM).4
-  have gr := apply(tr.push_grown, {s}, {m}, {w}, {v}, {app(C, "vm")}, {int_div(int_sub(S, 16), 4096)}, {int_div(S, 4096)}, hmm, cv, cpi, cstk)
   have c4: app(app(C, "gpr"), 4) = int_sub(S, 16) by simp(cgpr)
   have spc: abi.sp(C) = int_sub(S, 8) by simp(c4, sb, h16, slt)
   have pp4 := apply(tr.push_pages, {S}, sb, h16, slt, sal).4
@@ -1921,7 +1896,7 @@ proof
     have all: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.call(g, seq_one(ar)), w, exc(x, e)) proof
       fix x e
       assume hx he
-      show := apply(gc.call_ub, {g}, {seq_one(ar)}, {w}, {PG}, {seq_one(u)}, {x}, {e}, wu, hx, he, gr, rg, hn)
+      show := apply(gc.call_ub, {g}, {seq_one(ar)}, {w}, {seq_one(u)}, {x}, {e}, wu, hx, he, rg, hn)
     qed
     have ub := apply(tr.gcall_ub[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {v}, {w}, wW, wu, all, hk)
     show := apply(tr.sim_ub, {s}, {v}, {P}, {w}, {C}, ub)
@@ -1947,7 +1922,7 @@ proof
     have vu: abi.view(C, v, WV) in univ(1) by simp(cu, ou, wvu)
     have vW := apply(abi.world_typed, cM, dso, wvv, vu)
     have w1W: W1 in abi.World := rewrite(veq, vW)
-    have w1u := apply(gc.gw_univ, wu, gr)
+    have w1u: W1 in univ(1) := wu
     // the callee raising: the caller undefined
     have rub: abi.raises_at(g, seq_one(u), v, WV, C) -> tr.ub(s, v, P, w) proof
       assume hr
@@ -1955,7 +1930,7 @@ proof
       have rr2 := rewrite(veq, rr)
       have pu := apply(tr.spec_univ, {g}, {seq_one(u)}, {W1}, {exc(x, e)}, hgt, hA, rr2)
       have xu: x in univ(1) by simp(pu)
-      have pe := apply(tr.gcall_exc[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {PG}, {u}, {x}, {e}, wu, xu, eu, gr, hu, hin, hs, rr2, hk)
+      have pe := apply(tr.gcall_exc[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {u}, {x}, {e}, wu, xu, eu, hu, hin, hs, rr2, hk)
       show by defs(ex_intro({e}, {x}, taut(eu, eno, rst, pe)), tr.ub)
     qed
     // the caller's run from C
@@ -1975,7 +1950,7 @@ proof
         qed
         have u2: abi.crashes_at(g, seq_one(u), v, WV, C, o) -> tr.ub(s, v, P, w) || tr.ok(s, v, P, w, o) || tr.crash(s, P, w, o) proof
           assume ca
-          have cr := apply(tr.callee_crash[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {base}, {code}, {m}, {w}, {v}, {PG}, {u}, {C}, {o}, hi, hmm, co, c4, gr, hu, hin, hs, hgt, hA, veq, hk, hd, ca)
+          have cr := apply(tr.callee_crash[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {base}, {code}, {m}, {w}, {v}, {u}, {C}, {o}, hi, hmm, co, c4, hu, hin, hs, hgt, hA, veq, hk, hd, ca)
           show by taut(cr)
         qed
         // (a return of the callee is not the caller's: its rsp is lower)
@@ -2066,37 +2041,14 @@ proof
             have ra: abi.raises_at(g, seq_one(u), v, WV, C) by defs(ex_intro({empty}, {W1}, taut(eu, eno, rst, pe2)), abi.raises_at)
             show := mp(u1, ra)
           qed
-          // the callee changed the world's stack pages: undefined
-          have fc: !gc.keeps_stack(W1, w2) -> tr.ub(s, v, P, w) || tr.ok(s, v, P, w, o) || tr.crash(s, P, w, o) proof
-            assume hn
-            have all: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.call(g, seq_one(ar)), w, exc(x, e)) proof
-              fix x0 e0
-              assume hx he
-              show := apply(gc.call_ub_after, {g}, {seq_one(ar)}, {w}, {PG}, {seq_one(u)}, {w2}, {pair(r0, r1)}, {x0}, {e0}, wu, w2u, hx, he, gr, rg, hs, hg8, hn)
-            qed
-            have ub := apply(tr.gcall_ub[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {v}, {w}, wW, wu, all, hk)
-            show by taut(ub)
-          qed
-          // ... kept: the caller goes on at the return address with the result
-          have fk: gc.keeps_stack(W1, w2) -> tr.returns_valid(W1, w2) -> tr.ub(s, v, P, w) || tr.ok(s, v, P, w, o) || tr.crash(s, P, w, o) proof
-            assume hks rv
+          // the caller goes on at the return address with the result
+          have fk: tr.returns_valid(W1, w2) -> tr.ub(s, v, P, w) || tr.ok(s, v, P, w, o) || tr.crash(s, P, w, o) proof
+            assume rv
             have xv: app(x, "vm") in x86_64_linux.Vm := apply(x86i.parts, xM).4
             have pinv pmem phom preg prip := apply(tr.post_call, {s}, {base}, {code}, {m}, {w}, {v}, {RA}, {T}, {m1}, {e1}, {C}, {x}, {w2},
-              hi, hmm, hb, hra, ht, htr, hC, rv, hks, xM, xu, w2W, w2u, wm0, xos, xfs, xcpu, xgs, xrip0, xr4, xcs, xdf)
-            let W4 := gc.gw(gc.back(w2, W1), app(app(x, "vm"), "pages"))
-            have gr2: gc.grown(app(w2, "vm"), app(app(x, "vm"), "pages")) proof
-              have f := apply(x86.vm_pages_typed, xv)
-              have {pages} := wm0
-              have g1: all p. p in gc.PN -> app(app(app(x, "vm"), "pages"), p) = app(app(app(w2, "vm"), "pages"), p) ||
-                  (app(app(app(w2, "vm"), "pages"), p) = none && !(app(app(app(x, "vm"), "pages"), p) = none) && app(snd(app(app(app(x, "vm"), "pages"), p)), "kind") = 2) proof
-                fix p
-                assume hp
-                have c := mp(all_elim(pages, {p}), hp)
-                show by simp(c, expand(c, abi.stack_page, x86_64_linux.mapped))
-              qed
-              show by taut(f, g1)
-            qed
-            have _ pk := apply(tr.gcall_ret[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {PG}, {u}, {w2}, {r0}, {r1}, {app(app(x, "vm"), "pages")}, wu, w2u, r0u, r1u, gr, hu, hin, hs, hg8, hks, gr2, hk)
+              hi, hmm, hb, hra, ht, htr, hC, rv, xM, xu, w2W, w2u, wm0, xos, xfs, xcpu, xgs, xrip0, xr4, xcs, xdf)
+            let W4 := gc.back(w2, W1)
+            have _ pk := apply(tr.gcall_ret[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {u}, {w2}, {r0}, {r1}, wu, w2u, r0u, r1u, hu, hin, hs, hg8, hk)
             have red: tr.red(P, w, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W4) by defs(pk, tr.red)
             have {w4W = wW, w4u = wu} := pinv
             have ptk := mp(all_elim(hpost, {W4}, {r0}), taut(w4W, w4u), r0b)
@@ -2131,7 +2083,7 @@ proof
             qed
             show by taut(ho1, same, divs)
           qed
-          show by taut(fc, fk, ci, mr)
+          show by taut(fk, ci, mr)
         qed
         show by taut(mt2, n2, u1, u2)
       qed
@@ -2144,8 +2096,8 @@ qed
 
 
 // A fault of the push (from m, rip past the call: a2): a crash where the
-// stack could not grow (or its page denies the write), or a mapping in the
-// stack's guard gap -- GIMPLE's call undefined
+// stack could not grow (or its page denies the write) -- the stack's
+// reserve leaves no other mapping where the push lands
 theorem tr.call_fault(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all s v base code m w u a2 x e.
   tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, v) -> u in bits(64) -> u in gimple.in_reg(fst(ar), snd(ar)) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> a2 in bits(64) ->
   x86.grown(fn_update(m, "rip", a2), int_div(int_sub(app(app(s, "gpr"), 4), 16), 4096), int_div(app(app(s, "gpr"), 4), 4096), x) ->
@@ -2162,7 +2114,8 @@ proof
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   let L := int_div(int_sub(S, 16), 4096)
   let P0 := int_div(S, 4096)
-  have {mM, mu, wW, wu, wst, mos, er4, sb, slt, sal, hsps, winp, sws} := apply(tr.inv_call, hi)
+  have {mM, mu, wW, wu, mos, er4, sb, slt, sal, hsps, srsv, winp, sws} := apply(tr.inv_call, hi)
+  have {rsv} := expand(hmm, tr.mem).wm
   have {sacc} := hi
   have s16 := apply(tr.inv_gap, hi)
   have h16: int_le(16, S) by arith(s16)
@@ -2174,7 +2127,7 @@ proof
   have g1 _ _ xv .. := expand(hg, x86.grown)
   // (S's page: s's at the fault, a stack page)
   have p0o: P0 in omega by simp(so)
-  have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {v}, {P0}, hi, hmm, p0o, hsps)
+  have k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {v}, {P0}, hi, hmm, p0o, hsps, (int_le(P0, P0) by arith(p0o)))
   have g1a := mp(all_elim(expand(g1, x86.pages_in), {P0}), p0o)
   have sm := expand(hsps, abi.stack_page, x86_64_linux.mapped)
   have nn: !(app(app(app(M2, "vm"), "pages"), P0) = none) by simp(k2, sm)
@@ -2243,52 +2196,20 @@ proof
       qed
       show by taut(he, c1, c3)
     qed
-    // (a mapping in the guard gap: the world's too -- GIMPLE's call undefined)
-    have kn: x86_64_linux.mapped(app(x, "vm"), L) && !abi.stack_page(app(x, "vm"), L) -> tr.ub(s, v, P, w) proof
+    // (a mapping other than the stack's in the guard gap: not so -- the
+    // stack's reserve, kept by the machine)
+    have kn: x86_64_linux.mapped(app(x, "vm"), L) && !abi.stack_page(app(x, "vm"), L) -> false proof
       assume hm
       have lo: L in omega by simp(so, h16)
-      have se := mp(all_elim(expand(hse, x86.stk_ext), {L}), lo)
-      have xl: app(app(app(x, "vm"), "pages"), L) = app(app(app(m, "vm"), "pages"), L) by taut(se, hm)
-      have {pages} := expand(hmm, tr.mem).wm
-      have lp: L in gc.PN by simp(lo, expand(hm.1, x86_64_linux.mapped))
-      have pc := mp(all_elim(pages, {L}), lp)
-      have ns: !abi.stack_page(app(m, "vm"), L) by defs(rewrite(xl, expand(hm.2, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
-      have mw: app(app(app(m, "vm"), "pages"), L) = app(app(app(w, "vm"), "pages"), L) by taut(pc, ns)
-      have wl := trans(sym(mw), sym(xl))
-      have wm: x86_64_linux.mapped(app(w, "vm"), L) && !abi.stack_page(app(w, "vm"), L) by defs(rewrite(sym(wl), expand(hm, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
-      have wp0 := mp(all_elim(wst, {P0}), p0o, hsps)
-      have ws0: abi.stack_page(app(w, "vm"), P0) by defs(simp(wp0, sm), abi.stack_page, x86_64_linux.mapped)
+      have rx: abi.stack_reserve(app(x, "vm")) := mp(expand(hse, x86.stk_ext).2, mp(rsv, srsv))
+      have gx := apply(abi.reserve_gap, rx)
       have l1 l2 .. := apply(tr.push_pages, {S}, sb, h16, slt, sal)
       have lt: int_lt(L, P0) by arith(l1, ne0, so)
       have gap: int_le(int_mul(int_sub(P0, L), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP) by defs(arith(l1, l2, lt, so), x86_64_linux.PAGE, x86_64_linux.STACK_GUARD_GAP)
-      have nsg: !abi.stack_gap_free(app(w, "vm")) proof
-        have c: abi.stack_gap_free(app(w, "vm")) -> false proof
-          assume hg2
-          have pr1: P0 in omega && L in omega by taut(p0o, lo)
-          have pr2: ((abi.stack_page(app(w, "vm"), P0) && int_lt(L, P0)) && int_le(int_mul(int_sub(P0, L), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP)) && x86_64_linux.mapped(app(w, "vm"), L) by taut(ws0, lt, gap, wm)
-          have sl := mp(all_elim(expand(hg2, abi.stack_gap_free).1, {P0}, {L}), pr1, pr2)
-          show by taut(sl, wm)
-        qed
-        show by taut(c)
-      qed
-      have wv: app(w, "vm") in x86_64_linux.Vm by simp(expand(wW, abi.World))
-      have gr := apply(tr.grown_refl, wv)
-      have pq: app(app(gc.gw(w, app(app(w, "vm"), "pages")), "vm"), "pages") = app(app(w, "vm"), "pages") by simp()
-      have nsd: !gc.sound(gc.gw(w, app(app(w, "vm"), "pages"))) proof
-        have c: abi.stack_gap_free(app(gc.gw(w, app(app(w, "vm"), "pages")), "vm")) -> false proof
-          assume hg2
-          have s2 := apply(tr.sgf_pages, {app(gc.gw(w, app(app(w, "vm"), "pages")), "vm")}, {app(w, "vm")}, sym(pq), hg2)
-          show by taut(s2, nsg)
-        qed
-        show by taut(c)
-      qed
-      have rg := apply(tr.regs_one, hu, hin)
-      have all: all x0 e0. x0 in univ(1) -> e0 in univ(1) -> runs(gimple.call(g, seq_one(ar)), w, exc(x0, e0)) proof
-        fix x0 e0
-        assume hx he0
-        show := apply(gc.call_ub, {g}, {seq_one(ar)}, {w}, {app(app(w, "vm"), "pages")}, {seq_one(u)}, {x0}, {e0}, wu, hx, he0, gr, rg, nsd)
-      qed
-      show := apply(tr.gcall_ub[g := g, ar := ar, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {s}, {v}, {w}, wW, wu, all, hk)
+      have pr1: P0 in omega && L in omega by taut(p0o, lo)
+      have pr2: ((abi.stack_page(app(x, "vm"), P0) && int_lt(L, P0)) && int_le(int_mul(int_sub(P0, L), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP)) && x86_64_linux.mapped(app(x, "vm"), L) by taut(hspx, lt, gap, hm)
+      have sl := mp(all_elim(expand(gx, abi.stack_gap_free).1, {P0}, {L}), pr1, pr2)
+      show by taut(sl, hm)
     qed
     show by taut(ks, kn)
   qed

@@ -255,23 +255,27 @@ qed
 //  stack pages, the rest kept) and a frame store
 
 // (pages equal: an extension)
-theorem tr.stk_ext_pages: all v0 v1. app(v1, "pages") = app(v0, "pages") -> x86.stk_ext(v0, v1)
+theorem tr.stk_ext_pages: all v0 v1. app(v1, "pages") = app(v0, "pages") -> app(v1, "stack_top") = app(v0, "stack_top") -> app(v1, "stack_limit") = app(v0, "stack_limit") -> x86.stk_ext(v0, v1)
 proof
   fix v0 v1
-  assume e
+  assume e et el
   have g: all i. i in omega -> app(app(v1, "pages"), i) = app(app(v0, "pages"), i) || abi.stack_page(v1, i) by simp(e)
-  show by defs(g, x86.stk_ext)
+  have r: abi.stack_reserve(v0) -> abi.stack_reserve(v1) proof
+    assume h
+    show := apply(tr.rsv_same, e, et, el, h)
+  qed
+  show by defs(taut(g, r), x86.stk_ext)
 qed
 
 theorem tr.frame_store: all s m m2 fd vm1. tr.frame(s, m, fd) -> app(m2, "os") = app(m, "os") -> abi.vm_grows(app(m, "vm"), vm1) -> x86.stk_ext(app(m, "vm"), vm1) ->
-  app(app(m2, "vm"), "pages") = app(vm1, "pages") -> tr.frame(s, m2, fd)
+  app(app(m2, "vm"), "pages") = app(vm1, "pages") -> app(app(m2, "vm"), "stack_top") = app(vm1, "stack_top") -> app(app(m2, "vm"), "stack_limit") = app(vm1, "stack_limit") -> tr.frame(s, m2, fd)
 proof
   fix s m m2 fd vm1
-  assume hf eo hg hx ep
+  assume hf eo hg hx ep et el
   have d1: app(m, "os") = app(s, "os") && x86.stk_ext(app(s, "vm"), app(m, "vm")) -> tr.frame(s, m2, fd) proof
     assume h
     have ho hse := h
-    have x2 := apply(tr.stk_ext_pages, {vm1}, {app(m2, "vm")}, ep)
+    have x2 := apply(tr.stk_ext_pages, {vm1}, {app(m2, "vm")}, ep, et, el)
     have t1 := apply(x86.stk_ext_trans, {app(s, "vm")}, {app(m, "vm")}, {vm1}, hse, hx)
     have t2 := apply(x86.stk_ext_trans, {app(s, "vm")}, {vm1}, {app(m2, "vm")}, t1, x2)
     have o2: app(m2, "os") = app(s, "os") := trans(eo, ho)
@@ -294,9 +298,8 @@ theorem tr.mem_grow: all s base code fr m m1 w v. tr.inv(s, base, code, fr, m, w
 proof
   fix s base code fr m m1 w v
   assume hi hmm hg hx hfl
-  have {wst} := hi
   have {wob, wm, oacc} := hmm
-  have {top, limit, brk0, brk, bytes, frames, pages} := wm
+  have {top, limit, brk0, brk, bytes, frames, pages, nostk, stk, rsv} := wm
   have gp gb := expand(hg, abi.vm_grows)
   have fl := expand(hfl, x86.vm_fields)
   // (a page the world maps: the machine's, mapped)
@@ -345,9 +348,10 @@ proof
     have po: P in omega by defs(simp(hx0), x86_64_linux.page_of)
     have hf1 hf2 sp := hf
     have hp: P in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(expand(sp, abi.stack_page, x86_64_linux.mapped), po)
-    have ws := mp(all_elim(wst, {P}), po, sp)
-    have hn: !(app(app(app(w, "vm"), "pages"), P) = none) by simp(ws, expand(sp, abi.stack_page, x86_64_linux.mapped))
-    have ke km := mp(all_elim(wmap, {P}), hp, hn)
+    // (a callers' stack page: the machine's still, mapped)
+    have pl: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by defs(arith(hf1, hx0), x86_64_linux.page_of, x86_64_linux.PAGE)
+    have sk := mp(all_elim(stk, {P}), po, conj(sp, pl))
+    have km: x86_64_linux.mapped(app(m, "vm"), P) by defs(taut(rewrite(sym(sk), expand(sp, abi.stack_page, x86_64_linux.mapped))), x86_64_linux.mapped)
     have g := mp(all_elim(gb, {x0}), hx0, km)
     show := trans(g, e)
   qed
@@ -357,7 +361,7 @@ proof
     assume hp
     have c := mp(all_elim(pages, {x0}), hp)
     have po: x0 in omega by simp(hp)
-    have xe := mp(all_elim(expand(hx, x86.stk_ext), {x0}), po)
+    have xe := mp(all_elim(expand(hx, x86.stk_ext).1, {x0}), po)
     have same: app(app(app(m1, "vm"), "pages"), x0) = app(app(app(m, "vm"), "pages"), x0) ->
         app(app(app(m1, "vm"), "pages"), x0) = app(app(app(w, "vm"), "pages"), x0) || (app(app(app(w, "vm"), "pages"), x0) = none && abi.stack_page(app(m1, "vm"), x0)) proof
       assume e
@@ -380,7 +384,18 @@ proof
     qed
     show by taut(xe, same, grown)
   qed
-  have wm2: abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w, "vm"), v, abi.sp(s)) by defs(simp(fl, top, limit, brk0, brk, by2, fr2, pg2, keep(abi.in_domain, abi.stack_page)), abi.world_matches)
+  have stk2: all x0. x0 in omega -> abi.stack_page(app(s, "vm"), x0) && int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), x0) -> app(app(app(m1, "vm"), "pages"), x0) = app(app(app(s, "vm"), "pages"), x0) proof
+    fix x0
+    assume po h
+    have sk := mp(all_elim(stk, {x0}), po, h)
+    have km: x86_64_linux.mapped(app(m, "vm"), x0) by defs(taut(rewrite(sym(sk), expand(h.1, abi.stack_page, x86_64_linux.mapped))), x86_64_linux.mapped)
+    show trans(mp(all_elim(gp, {x0}), po, km), sk)
+  qed
+  have rsv2: abi.stack_reserve(app(s, "vm")) -> abi.stack_reserve(app(m1, "vm")) proof
+    assume h0
+    show := mp(expand(hx, x86.stk_ext).2, mp(rsv, h0))
+  qed
+  have wm2: abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w, "vm"), v, abi.sp(s)) by defs(simp(fl, top, limit, brk0, brk, by2, fr2, pg2, nostk, stk2, rsv2, keep(abi.in_domain, abi.stack_page, abi.stack_reserve)), abi.world_matches)
   have oa2: all y. y in omega -> y in v -> (int_le(abi.sp(s), y) && abi.stack_page(app(s, "vm"), int_div(y, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(m1, "vm"), bits_of_int(64, y), 1) proof
     fix y
     assume h1 h2
@@ -461,7 +476,7 @@ proof
   have d1: app(m, "os") = app(s, "os") && x86.stk_ext(app(s, "vm"), app(m, "vm")) -> abi.stack_page(app(m, "vm"), P) proof
     assume h
     have ho hse := h
-    have xe := mp(all_elim(expand(hse, x86.stk_ext), {P}), po)
+    have xe := mp(all_elim(expand(hse, x86.stk_ext).1, {P}), po)
     have eq: app(app(app(m, "vm"), "pages"), P) = app(app(app(s, "vm"), "pages"), P) -> abi.stack_page(app(m, "vm"), P) proof
       assume e
       have ms: x86_64_linux.mapped(app(s, "vm"), P) by defs(simp(sym(e), expand(hm, x86_64_linux.mapped)), x86_64_linux.mapped)
@@ -503,7 +518,7 @@ proof
     let P := int_div(bits_add(64, tr.ha(s, c), bits_of_int(64, i)), 4096)
     have a := mp(all_elim(ac, {i}), i1, i2)
     have po: P in omega by simp()
-    have xe := mp(all_elim(expand(st, x86.stk_ext), {P}), po)
+    have xe := mp(all_elim(expand(st, x86.stk_ext).1, {P}), po)
     have eq: app(app(app(m1, "vm"), "pages"), P) = app(app(app(fn_update(m, "rip", a2), "vm"), "pages"), P) -> abi.stack_page(app(m1, "vm"), P) proof
       assume e
       have e2: app(app(app(m1, "vm"), "pages"), P) = app(app(app(m, "vm"), "pages"), P) by simp(e)
@@ -650,7 +665,7 @@ proof
       abi.stack_page(yv, p) || !x86_64_linux.mapped(yv, p) proof
     fix p
     assume hp hr
-    have xe := mp(all_elim(expand(hx, x86.stk_ext), {p}), hp)
+    have xe := mp(all_elim(expand(hx, x86.stk_ext).1, {p}), hp)
     have eq: app(app(yv, "pages"), p) = app(app(app(s, "vm"), "pages"), p) -> abi.stack_page(yv, p) || !x86_64_linux.mapped(yv, p) proof
       assume e
       have mc: x86_64_linux.mapped(yv, p) -> abi.stack_page(yv, p) proof
@@ -851,7 +866,7 @@ proof
       have rs2: tr.regs(ST(m1), rs) by defs(simp(expand(hrs, tr.regs), cgpr), tr.regs)
       have mm1 := apply(tr.mem_grow, {s}, {base}, {code}, {fr}, {m}, {m1}, {w}, {v}, hi, hmm, gr, stk, fl)
       have mm2 := apply(tr.mem_fstore, {s}, {base}, {code}, {fr}, {m}, {m1}, {ST(m1)}, {w}, {v}, {c}, {n}, {x}, hi, mm1, hc, ac1, simp())
-      have f2 := apply(tr.frame_store, {s}, {m}, {ST(m1)}, {fd}, {app(m1, "vm")}, hfr, cos, gr, stk, pe)
+      have f2 := apply(tr.frame_store, {s}, {m}, {ST(m1)}, {fd}, {app(m1, "vm")}, hfr, cos, gr, stk, pe, simp(), simp())
       have c := mp(all_elim(expand(hpt, tr.pt), {ST(m1)}), i2, crip, h2, rs2, mm2, f2)
       show := rewrite(sym(e2), c)
     qed
@@ -962,7 +977,7 @@ proof
     have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
     have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hg, hl, hvu)
     have z0: int_sub(app(app(s, "gpr"), 4), 0) = app(app(s, "gpr"), 4) by arith(r4)
-    have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], hvw.1, apply(abi.entry_gap, he), all_elim(tr.keeps_refl, {app(s, "vm")}),
+    have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := app(app(s, "os"), "events")], hvw.1, apply(abi.entry_gap, he), apply(abi.entry_rsv, he), all_elim(tr.keeps_refl, {app(s, "vm")}),
       all_elim(tr.kept_refl, {app(s, "vm")}, {app(app(s, "gpr"), 4)}), z0, hM, su, hc, hdf, wt, hvu, ent,
       keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
     have hh := all_elim(tr.homes_empty, {s}, {s})
@@ -1151,7 +1166,7 @@ proof
       have h2 := apply(tr.homes_put, {s}, {M2(f)}, {hs2}, {c}, {n}, {x}, hk2, lv, hc, hacc2)
       have rs2: tr.regs(M2(f), rs) by defs(simp(expand(hrs, tr.regs)), tr.regs)
       have mm2 := apply(tr.mem_fstore, {s}, {base}, {code}, {fr}, {m}, {m}, {M2(f)}, {w}, {v}, {c}, {n}, {x}, hi, hmm, hc, ha, ev)
-      have f2 := apply(tr.frame_store, {s}, {m}, {M2(f)}, {fd}, {app(m, "vm")}, hfr, simp(), all_elim(x86.grows_refl, {app(m, "vm")}), all_elim(x86.stk_ext_refl, {app(m, "vm")}), pe)
+      have f2 := apply(tr.frame_store, {s}, {m}, {M2(f)}, {fd}, {app(m, "vm")}, hfr, simp(), all_elim(x86.grows_refl, {app(m, "vm")}), all_elim(x86.stk_ext_refl, {app(m, "vm")}), pe, simp(), simp())
       have rp: app(M2(f), "rip") = a2 by simp()
       have c := mp(all_elim(expand(hpt, tr.pt), {M2(f)}), i3, rp, h2, rs2, mm2, f2)
       show := rewrite(sym(e2), c)

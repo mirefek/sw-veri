@@ -669,7 +669,7 @@ proof
   have k: all o. o = ok(m, empty) -> tr.ok(s, v, p, w, o) proof
     fix o
     assume e
-    show by defs(ex_intro({m}, {w2}, simp(e, hM, hmu, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
+    show by defs(ex_intro({m}, {w2}, simp(e, hM, hmu, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_pages, abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
   qed
   have all_o: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
     fix o
@@ -848,11 +848,11 @@ def tr.inv(s, base, code, fr, m, w) :=
   mcs: abi.callee_saved(m, s) && mcpu: app(m, "cpu") = app(s, "cpu") && mgs: app(m, "gs_base") = app(s, "gs_base") &&
   mos: app(m, "os") = app(w, "os") && mfs: app(m, "fs_base") = app(w, "fs_base") && mdf: !app(app(m, "flags"), "df") &&
   winp: app(app(w, "os"), "input") = app(app(s, "os"), "input") && sws: subset(app(app(s, "os"), "events"), app(app(w, "os"), "events")) &&
-  wW: w in abi.World && wu: w in univ(1) && wcpu: app(w, "cpu") = app(s, "cpu") && wst: (all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> app(app(app(w, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)) &&
+  wW: w in abi.World && wu: w in univ(1) && wcpu: app(w, "cpu") = app(s, "cpu") &&
   sM: s in x86_64_linux.Machine &&
   sacc: x86_64_linux.can_access(app(s, "vm"), app(app(s, "gpr"), 4), 1) && sal: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 &&
   hsps: abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) && slt: int_lt(app(app(s, "gpr"), 4), 140737488355328) &&
-  sgf: abi.stack_gap_free(app(s, "vm"))
+  sgf: abi.stack_gap_free(app(s, "vm")) && srsv: abi.stack_reserve(app(s, "vm"))
 
 def tr.homes(s, m, hs) := all c. c in dom(hs) ->
   x86_64_linux.le(app(app(m, "vm"), "bytes"), bits_add(64, int_add(app(app(s, "gpr"), 4), c), 0), fst(app(hs, c))) = snd(app(hs, c)) &&
@@ -2286,6 +2286,17 @@ proof
   show by defs(simp(e), abi.stack_page, x86_64_linux.mapped)
 qed
 
+// (the stack's reserve: of the pages and the stack's space only)
+theorem tr.rsv_same: all v1 v2. app(v2, "pages") = app(v1, "pages") -> app(v2, "stack_top") = app(v1, "stack_top") -> app(v2, "stack_limit") = app(v1, "stack_limit") ->
+  abi.stack_reserve(v1) -> abi.stack_reserve(v2)
+proof
+  fix v1 v2
+  assume hp ht hl hr
+  have e := expand(hr, abi.stack_reserve, abi.stack_page, x86_64_linux.mapped, x86_64_linux.stack_floor)
+  have e2 := rewrite(sym(hl), rewrite(sym(ht), rewrite(sym(hp), e)))
+  show by defs(e2, abi.stack_reserve, abi.stack_page, x86_64_linux.mapped, x86_64_linux.stack_floor)
+qed
+
 // the coupling after the machine's bytes changed only outside the world's
 // domain, below the entry's sp
 theorem tr.mem_bytes: all s m m2 w ob b. tr.mem(s, m, w, ob) -> app(m2, "vm") = fn_update(app(m, "vm"), "bytes", b) ->
@@ -2295,7 +2306,7 @@ proof
   fix s m m2 w ob b
   assume h em hk
   have {wob, wm, oacc} := h
-  have {top, limit, brk0, brk, bytes, frames, pages} := wm
+  have {top, limit, brk0, brk, bytes, frames, pages, nostk, stk, rsv} := wm
   have by2: all x0. x0 in bits(64) -> abi.in_domain(app(w, "vm"), ob, x0) -> app(app(app(m2, "vm"), "bytes"), x0) = app(app(app(w, "vm"), "bytes"), x0) proof
     fix x0
     assume hx hd
@@ -2321,7 +2332,11 @@ proof
     have sq2 := mp(sq, pe)
     show := rewrite(sym(sq2), rewrite(sym(pe), c))
   qed
-  have wm2: abi.world_matches(app(s, "vm"), app(m2, "vm"), app(w, "vm"), ob, abi.sp(s)) by defs(simp(em, top, limit, brk0, brk, rewrite(em, by2), rewrite(em, fr2), rewrite(em, pg2), keep(abi.in_domain, abi.stack_page)), abi.world_matches)
+  have rsv2: abi.stack_reserve(app(s, "vm")) -> abi.stack_reserve(app(m2, "vm")) proof
+    assume h0
+    show := apply(tr.rsv_same, pe, (app(app(m2, "vm"), "stack_top") = app(app(m, "vm"), "stack_top") by simp(em)), (app(app(m2, "vm"), "stack_limit") = app(app(m, "vm"), "stack_limit") by simp(em)), mp(rsv, h0))
+  qed
+  have wm2: abi.world_matches(app(s, "vm"), app(m2, "vm"), app(w, "vm"), ob, abi.sp(s)) by defs(simp(em, top, limit, brk0, brk, rewrite(em, by2), rewrite(em, fr2), rewrite(em, pg2), nostk, stk, rewrite(em, rsv2), keep(abi.in_domain, abi.stack_page, abi.stack_reserve)), abi.world_matches)
   have oa2: all x. x in omega -> x in ob -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(m2, "vm"), bits_of_int(64, x), 1) proof
     fix x
     assume h1 h2

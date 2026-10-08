@@ -11,8 +11,9 @@ layer abi uses x86_64_linux
 //  What a C function sees
 
 // What a C function sees: the machine's memory on the world's domain (a
-// partial byte map: the mapped pages that are not stack pages, and the bytes
-// of the live stack objects `objs` -- address-taken locals it may reach),
+// partial byte map: the mapped pages that are not stack pages -- the
+// world's page map has none --, and the bytes of the live stack objects
+// `objs` -- address-taken locals it may reach),
 // the I/O, the thread pointer, the CPU. Not the registers, and not the
 // stack: frames, spilled values, return addresses and the stack's growth are
 // the machine's own business (the ABI below constrains them); running out
@@ -55,19 +56,29 @@ pred stack_page(vm: Vm, p: nat) = mapped(vm, p) && vm.pages[p].value.kind = stac
 // objects (bytes outside the domain and the stack -- unmapped -- the
 // machine's, whatever a callee left there); the
 // pages the world's, or stack pages where the world has none (the stack
-// grew).
+// grew), and no stack pages in the world; the stack pages from the
+// callee's return address up (its return slot, the callers' frames) as
+// they were; the stack's reserve kept.
 pred world_matches(old: Vm, new: Vm, w: Vm, objs: Set[nat], sp: Addr) =
   top: new.stack_top = w.stack_top && limit: new.stack_limit = w.stack_limit &&
   brk0: new.brk_start = w.brk_start && brk: new.brk = w.brk &&
   bytes: (all a: Addr. in_domain(w, objs, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
   frames: (all a: Addr. uint(sp) <= uint(a) && !in_domain(w, objs, uint(a)) && stack_page(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
-  pages: (all p: PageNo. new.pages[p] = w.pages[p] || (w.pages[p] = none && stack_page(new, p)))
+  pages: (all p: PageNo. new.pages[p] = w.pages[p] || (w.pages[p] = none && stack_page(new, p))) &&
+  nostk: (all p: PageNo. w.pages[p] != none -> w.pages[p].value.kind != stack) &&
+  stk: (all p: nat. stack_page(old, p) && (uint(sp) - 8) / PAGE <= p -> new.pages[p] = old.pages[p]) &&
+  rsv: (stack_reserve(old) -> stack_reserve(new))
+
+// the machine's page map as the world has it: without the stack's pages
+pred world_pages(vm: Vm, mem: Vm) =
+  all p: PageNo. mem.pages[p] = (if stack_page(vm, p) { none } else { vm.pages[p] })
 
 // `world(sp, objs, mem)` views a machine as a World, for a function called
 // with the caller's stack pointer `sp`, which may reach the stack objects
 // `objs` (above sp): the world's memory `mem`, a view of the machine's (at
-// the entry, abi_function: its pages, and its bytes on the world's domain
-// -- what lies outside the domain is no C function's to see). Writing a world back: its domain
+// the entry, abi_function: its pages but the stack's, and its bytes on the
+// world's domain -- what lies outside the domain is no C function's to
+// see). Writing a world back: its domain
 // the world's, the callers' frames kept, the stack below sp arbitrary (the
 // callee used it).
 view[Machine] world(sp: Addr, objs: Set[nat], mem: Vm) : World {
@@ -103,14 +114,29 @@ pred vm_grows(old: Vm, new: Vm) =
 //  Calling a function
 
 // No other mapping lies within the guard gap below a stack page, and the
-// gap fits above address 0. Linux keeps this gap for every mapping it
-// places (only MAP_FIXED can break it); it makes a callee's stack use fault
-// instead of overwriting other memory, or wrapping around the address
-// space.
+// gap fits above address 0: a callee's stack use faults instead of
+// overwriting other memory, or wrapping around the address space. (A
+// consequence of the stack's reserve, below.)
 pred stack_gap_free(vm: Vm) =
   (all p: nat, q: nat. stack_page(vm, p) && q < p && (p - q) * PAGE <= STACK_GUARD_GAP && mapped(vm, q) ->
     stack_page(vm, q)) &&
   (all p: nat. stack_page(vm, p) -> STACK_GUARD_GAP <= p * PAGE)
+
+// The main stack's reserve, as Linux keeps it: the stack's pages lie in its
+// space (memory.sl: from stack_floor to stack_top, page-aligned), one run
+// that ends at stack_top; no other mapping lies in the space or in the guard gap
+// below it (Linux places mappings without an address hint, and the brk
+// heap, below mmap_base, under the space and the gap); the gap fits above
+// address 0. The stack then grows only into its space, and an access below
+// it faults (a stack overflow) -- it never lands in other memory, whatever
+// the frames' sizes. Machine steps keep it (growth is limited to the
+// space), and so does every C function (the ABI's promise, world_matches).
+pred stack_reserve(vm: Vm) =
+  STACK_GUARD_GAP <= stack_floor(vm) && uint(vm.stack_top) % PAGE = 0 &&
+  (all p: nat. stack_page(vm, p) -> stack_floor(vm) <= p * PAGE && (p + 1) * PAGE <= uint(vm.stack_top) &&
+     (all q: nat. p <= q && (q + 1) * PAGE <= uint(vm.stack_top) -> vm.pages[q] = vm.pages[p]) &&
+     vm.pages[uint(vm.stack_top) / PAGE] != vm.pages[p]) &&
+  (all p: nat. mapped(vm, p) && !stack_page(vm, p) -> (p + 1) * PAGE + STACK_GUARD_GAP <= stack_floor(vm) || uint(vm.stack_top) <= p * PAGE)
 
 // the thread pointer as the ABI has it: the word at fs:0 points to itself
 // (x86-64 TLS ABI: it is how code finds its TLS), in the program's memory
@@ -123,15 +149,15 @@ pred thread_ok(vm: Vm, fs: Addr) =
 // aligned, the direction flag is clear, arguments are in registers, and
 // the thread pointer is sound
 pred entry_ok(m: Machine, args: Args) =
-  stack_page(m.vm, uint(m.gpr[rsp]) / PAGE) && can_access(m.vm, m.gpr[rsp], write) && stack_gap_free(m.vm) &&
+  stack_page(m.vm, uint(m.gpr[rsp]) / PAGE) && can_access(m.vm, m.gpr[rsp], write) && stack_reserve(m.vm) &&
   uint(m.gpr[rsp] + 8) % 16 = 0 && !m.flags.df &&
   (all i: nat. i < len(args) -> m.gpr[ARG_REGS[i]] = args[i]) &&
   thread_ok(m.vm, m.fs_base)
 
 // the stack as entry_ok has it, rsp at the return address's slot: a
-// writable stack page, no other mapping in the guard gap below the stack
+// writable stack page, the stack's reserve kept
 pred stack_ok(vm: Vm, rsp: Addr) =
-  stack_page(vm, uint(rsp) / PAGE) && can_access(vm, rsp, write) && stack_gap_free(vm)
+  stack_page(vm, uint(rsp) / PAGE) && can_access(vm, rsp, write) && stack_reserve(vm)
 
 // The machine, from the function's entry until it returns to its caller.
 proc[Machine] run_to_return() {
@@ -205,29 +231,16 @@ pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
 // overflow or the effect:
 //
 //   require pre
-//   either { overflow() } or { ..; become(vm1); return r }
+//   either { overflow() } or { ..; vm := vm1; return r }
 //
-// `vm1` is the memory the post describes; the stack may have grown on the
-// way (every call grows it: the frames, the pushes) and every call may
-// overflow (the process then dies, only its I/O matters: `overflow_ok`).
-// A leaf's implementation shows the effect without either; a caller's
-// uses its callees' contracts at its calls.
-
-// vm2 is vm1 with the stack grown: unmapped pages may have become stack
-// pages (as GIMPLE's calls have it, `grow_stack`); nothing else changed
-pred stack_grown(vm1: Vm, vm2: Vm) =
-  vm2 with { pages: vm1.pages } = vm1 &&
-  (all p: PageNo. vm2.pages[p] = vm1.pages[p] || (vm1.pages[p] = none && vm2.pages[p] != none && vm2.pages[p].value.kind = stack))
+// Every call may overflow (the process then dies, only its I/O matters:
+// `overflow_ok`). A leaf's implementation shows the effect without it; a
+// caller's uses its callees' contracts at its calls.
 
 // a stack overflow: the memory then is any (the process dies)
 proc[World] overflow() {
   havoc vm
   raise stack_overflow
-}
-
-// the memory becomes vm1, the stack grown
-proc[World] become(vm1: Vm) {
-  havoc vm where stack_grown(vm1, vm)
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -268,7 +281,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, o
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
   require all a: nat. a in objs -> uint(sp) <= a && stack_page(vm, a / PAGE) && can_access(vm, bits[64](a), write)
-  require mem.pages = vm.pages && world_matches(vm, vm, mem, objs, sp)
+  require world_pages(vm, mem) && world_matches(vm, vm, mem, objs, sp)
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
   let w0    = with world(sp, objs, mem) { return self }    // the world, with ghost state

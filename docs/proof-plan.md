@@ -215,11 +215,32 @@ Decisions made while porting the bridge (step 3):
 - *GIMPLE `usable`*: on a mapped non-stack page the page's permission;
   elsewhere the byte must be one of `objs` (and below 2^64). The frames
   clause of `world_matches` speaks of stack pages, not of mapped ones.
-- *Calls in GIMPLE*: `either overflow; grow_stack; callee; grow_stack;
-  either overflow`, where `grow_stack` havocs only pages that become
-  stack pages; the caller's `objs` are restored after the callee (its own
-  stack objects are gone). A call's soundness side condition is
-  `thread_ok && stack_gap_free`.
+- *Calls in GIMPLE* (revised 2026-10-09): `either overflow; callee;
+  either overflow` -- the callee on the caller's world, the caller's
+  `objs` restored after it; undefined only if the thread pointer is
+  broken. The world has no stack pages: at the entry its page map is the
+  machine's without the stack's (`world_pages`). (An earlier port had put
+  the stack's pages, `grow_stack` and the guard-gap check into GIMPLE's
+  call to ease the bridge; that made every caller's C2 impossible -- a
+  growth into a gap made any call undefined -- and was undone.)
+- *The stack's reserve* (`abi.stack_reserve`, the ABI's stack condition at
+  every entry): the stack's pages lie in its space (`stack_floor` ..
+  `stack_top`, one run ending at `stack_top`), no other mapping lies in
+  the space or in the guard gap below it, the gap fits above 0. Linux
+  keeps it: it places hint-less mmaps and the brk heap below `mmap_base`,
+  under the space and the gap (spec/linux/process.sl now says so), and
+  growth stays within the limit (`x86.grow_rsv`). It implies
+  `stack_gap_free`, so a push or frame access below the stack lands on a
+  stack page, an unmapped page (growth or a fault) or faults -- never in
+  other memory, for frames of any size. Linux's per-growth check alone
+  (only the nearest mapping, only if accessible) would not exclude
+  stack clash past a PROT_NONE page. Not covered: unlimited RLIMIT_STACK
+  and MAP_FIXED or hinted mappings into the reserve.
+- *The ABI's promise* (`world_matches`) also says: the world has no stack
+  pages, the stack pages from the callee's return slot up are kept, the
+  reserve is kept. The bridge carries the reserve in the coupling
+  (`tr.mem`) and the entry's in `tr.inv` (`srsv`); `x86.stk_ext` (the
+  stack's growth) keeps it.
 - *Machine faults*: SIGSEGV codes 0, 1 and 3 (with `pkuerr`) are crashes
   of the ABI; `stack_gap_free` also says every stack page lies above
   `STACK_GUARD_GAP`. `thread_ok`: the thread pointer's 8 bytes are

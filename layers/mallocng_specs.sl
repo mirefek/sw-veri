@@ -54,5 +54,5 @@ fn dequeue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm = wr64(wr64(dq_head(dq_links(v
 
 proc[World] dequeue_spec(phead: bits[64], m: bits[64]) {
   require dequeue_pre(vm, objs, phead, m)
-  either { overflow() } or { become(dequeue_vm(vm, phead, m)) }
+  either { overflow() } or { vm := dequeue_vm(vm, phead, m) }
 }

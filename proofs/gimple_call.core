@@ -1,44 +1,19 @@
 // Readable GIMPLE's calls (layers/gimple.sl, `call`, `call1`): the callee on
-// the caller's world, its stack grown (before and after the callee). Its
-// outcomes: a stack overflow before the callee runs or after it returns;
-// undefined behavior if the thread pointer or a stack's guard gap is
-// broken, or the callee changed a stack page; else the callee's return,
-// raise or divergence.
+// the caller's world. Its outcomes: a stack overflow before the callee runs
+// or after it returns; undefined behavior if the thread pointer is broken;
+// else the callee's return (the caller's stack objects back), raise or
+// divergence. (The stack is not in the world: no growth, no guard gap
+// here -- the ABI bridge's business.)
 
 // the arguments in registers, as the call passes them
 abbrev gc.regs_ok(regs, args) := regs in list_type(bits(64)) && seq_len(regs) = seq_len(args) &&
   (all x4. x4 in omega -> int_lt(x4, seq_len(args)) -> app(regs, x4) in gimple.in_reg(fst(app(args, x4)), snd(app(args, x4))))
 // the world sound for a call (as the ABI requires at every call)
-abbrev gc.sound(w) := abi.thread_ok(app(w, "vm"), app(w, "fs_base")) && abi.stack_gap_free(app(w, "vm"))
-// the callee kept the stack's pages (where its callers' frames are)
-abbrev gc.keeps_stack(w, w4) := all p. p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ->
-  !(app(app(app(w, "vm"), "pages"), p) = none) && app(snd(app(app(app(w, "vm"), "pages"), p)), "kind") = 2 -> app(app(app(w4, "vm"), "pages"), p) = app(app(app(w, "vm"), "pages"), p)
-
+abbrev gc.sound(w) := abi.thread_ok(app(w, "vm"), app(w, "fs_base"))
+// the page numbers
 abbrev gc.PN := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
-// pg: the pages of vm0 with the stack grown (unmapped pages become stack pages)
-abbrev gc.grown(vm0, pg) := pg in fn_space(gc.PN, option(x86_64_linux.Page)) &&
-  (all p. p in gc.PN -> app(pg, p) = app(app(vm0, "pages"), p) || (app(app(vm0, "pages"), p) = none && !(app(pg, p) = none) && app(snd(app(pg, p)), "kind") = 2))
-// the world w with the pages pg
-abbrev gc.gw(w, pg) := fn_update(w, "vm", fn_update(app(w, "vm"), "pages", pg))
 // the callee's world w4 back with the caller's (w's) stack objects
 abbrev gc.back(w4, w) := fn_update(w4, "objs", app(w, "objs"))
-
-// (the world with grown pages: a member)
-theorem gc.gw_univ: all w pg. w in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.gw(w, pg) in univ(1)
-proof
-  fix w pg
-  assume hw hg
-  have pu := mp(mp(mp(fn_space_univ[u := 1, a := gc.PN, b := option(x86_64_linux.Page), f := pg], x86.pn_univ), x86.opt_page_univ), hg.1)
-  show by simp(hw, pu)
-qed
-
-theorem gc.grow_ok: all w pg. w in univ(1) -> gc.grown(app(w, "vm"), pg) -> runs(gimple.grow_stack, w, ok(gc.gw(w, pg), empty))
-proof
-  fix w pg
-  assume hw hg
-  have pu := mp(mp(mp(fn_space_univ[u := 1, a := gc.PN, b := option(x86_64_linux.Page), f := pg], x86.pn_univ), x86.opt_page_univ), hg.1)
-  show by defs(simp(hw, hg, pu), gimple.grow_stack)
-qed
 
 // (a bind from a known run of its first part)
 theorem gc.bind_ok(p, s1 v. k, s1 e. x, t. d): all s s1 v. runs(p, s, ok(s1, v)) -> k(s1, v) -> bind_rel(p, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t))
@@ -62,53 +37,32 @@ proof
   show by defs(ex_intro({diverge(t)}, simp(hr, hd)), bind_rel)
 qed
 
-// a call's parts (gimple.call): after the callee (from x5, its result x7,
-// the call's outcome x1), the callee's part on from the grown world x3
-abbrev gc.aft(x5, x7, x1) := bind_rel(gimple.grow_stack, x5, x8 x9. ex x10. (x10 = exc(pair(x8, empty), pair("raise", exc_val("stack_overflow", empty))) || x10 = ok(pair(x8, empty), empty)) &&
-  ((fst(x10) = 0 && x1 = ok(fst(out_state(x10)), pair(fst(x7), snd(x7)))) || ((((fst(x10) = 1 && fst(out_value(x10)) = "ret") && x1 = ok(fst(out_state(x10)), snd(out_value(x10)))) ||
-  ((fst(x10) = 1 && fst(out_value(x10)) = "raise") && x1 = exc(fst(out_state(x10)), snd(out_value(x10))))) || (fst(x10) = 2 && x1 = diverge(snd(x10))))), x8 x9. x1 = exc(x8, x9), x8. x1 = diverge(x8))
-abbrev gc.cc(g, args, x3, x1) := bind_rel(gimple.call_callee(g, args), x3, x5 x6. letin(x6, x7. gc.aft(x5, x7, x1)), x5 x6. x1 = exc(x5, x6), x5. x1 = diverge(x5))
+// a call's parts (gimple.call): after the callee (from x3, its result x5,
+// the call's outcome x1), the callee's part on from the world x0
+abbrev gc.aft(x3, x5, x1) := ex x6. (x6 = exc(pair(x3, empty), pair("raise", exc_val("stack_overflow", empty))) || x6 = ok(pair(x3, empty), empty)) &&
+  ((fst(x6) = 0 && x1 = ok(fst(out_state(x6)), pair(fst(x5), snd(x5)))) || ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && x1 = ok(fst(out_state(x6)), snd(out_value(x6)))) ||
+  ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && x1 = exc(fst(out_state(x6)), snd(out_value(x6))))) || (fst(x6) = 2 && x1 = diverge(snd(x6)))))
+abbrev gc.cc(g, args, x0, x1) := bind_rel(gimple.call_callee(g, args), x0, x3 x4. letin(x4, x5. gc.aft(x3, x5, x1)), x3 x4. x1 = exc(x3, x4), x3. x1 = diverge(x3))
 
-// (the call from its grown world on: the call's run)
-theorem gc.call_from: all g args w pg o. w in univ(1) -> pair(w, o) in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.cc(g, args, gc.gw(w, pg), o) -> runs(gimple.call(g, args), w, o)
+// (the call from the callee's part on: the call's run)
+theorem gc.call_from: all g args w o. w in univ(1) -> pair(w, o) in univ(1) -> gc.cc(g, args, w, o) -> runs(gimple.call(g, args), w, o)
 proof
-  fix g args w pg o
-  assume hw hp hg hc
-  have gr := apply(gc.grow_ok, hw, hg)
-  have b0 := apply(gc.bind_ok[p := gimple.grow_stack, k := x3 x4. gc.cc(g, args, x3, o), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], gr, hc)
-  show by defs(simp(hp, b0, keep(gimple.grow_stack, gimple.call_callee)), gimple.call)
+  fix g args w o
+  assume hw hp hc
+  show by defs(simp(hp, hc, keep(gimple.call_callee)), gimple.call)
 qed
 
-// (after the callee, from w4 with the result r: the stack grown to pg2,
-// the return or an overflow)
-theorem gc.aft_ok: all w4 pg2 r. w4 in univ(1) -> r in univ(1) -> gc.grown(app(w4, "vm"), pg2) -> gc.aft(w4, r, ok(gc.gw(w4, pg2), pair(fst(r), snd(r))))
+// (after the callee, from w4 with the result r: the return or an overflow)
+theorem gc.aft_ok: all w4 r. gc.aft(w4, r, ok(w4, pair(fst(r), snd(r))))
 proof
-  fix w4 pg2 r
-  assume hw hr hg
-  have gr := apply(gc.grow_ok, hw, hg)
-    have k: ex x10. (x10 = exc(pair(gc.gw(w4, pg2), empty), pair("raise", exc_val("stack_overflow", empty))) || x10 = ok(pair(gc.gw(w4, pg2), empty), empty)) &&
-      ((fst(x10) = 0 && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = ok(fst(out_state(x10)), pair(fst(r), snd(r)))) || ((((fst(x10) = 1 && fst(out_value(x10)) = "ret") && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = ok(fst(out_state(x10)), snd(out_value(x10)))) ||
-      ((fst(x10) = 1 && fst(out_value(x10)) = "raise") && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = exc(fst(out_state(x10)), snd(out_value(x10))))) || (fst(x10) = 2 && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = diverge(snd(x10)))))
-    by ex_intro({ok(pair(gc.gw(w4, pg2), empty), empty)}, simp())
-  show := apply(gc.bind_ok[p := gimple.grow_stack, k := x8 x9. ex x10. (x10 = exc(pair(x8, empty), pair("raise", exc_val("stack_overflow", empty))) || x10 = ok(pair(x8, empty), empty)) &&
-    ((fst(x10) = 0 && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = ok(fst(out_state(x10)), pair(fst(r), snd(r)))) || ((((fst(x10) = 1 && fst(out_value(x10)) = "ret") && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = ok(fst(out_state(x10)), snd(out_value(x10)))) ||
-    ((fst(x10) = 1 && fst(out_value(x10)) = "raise") && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = exc(fst(out_state(x10)), snd(out_value(x10))))) || (fst(x10) = 2 && ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = diverge(snd(x10))))),
-    x := x8 x9. ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = exc(x8, x9), d := x8. ok(gc.gw(w4, pg2), pair(fst(r), snd(r))) = diverge(x8)], gr, k)
+  fix w4 r
+  show by ex_intro({ok(pair(w4, empty), empty)}, simp())
 qed
 
-theorem gc.aft_ovf: all w4 pg2 r. w4 in univ(1) -> gc.grown(app(w4, "vm"), pg2) -> gc.aft(w4, r, exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)))
+theorem gc.aft_ovf: all w4 r. gc.aft(w4, r, exc(w4, exc_val("stack_overflow", empty)))
 proof
-  fix w4 pg2 r
-  assume hw hg
-  have gr := apply(gc.grow_ok, hw, hg)
-  have k: ex x10. (x10 = exc(pair(gc.gw(w4, pg2), empty), pair("raise", exc_val("stack_overflow", empty))) || x10 = ok(pair(gc.gw(w4, pg2), empty), empty)) &&
-      ((fst(x10) = 0 && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = ok(fst(out_state(x10)), pair(fst(r), snd(r)))) || ((((fst(x10) = 1 && fst(out_value(x10)) = "ret") && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = ok(fst(out_state(x10)), snd(out_value(x10)))) ||
-      ((fst(x10) = 1 && fst(out_value(x10)) = "raise") && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = exc(fst(out_state(x10)), snd(out_value(x10))))) || (fst(x10) = 2 && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = diverge(snd(x10)))))
-    by ex_intro({exc(pair(gc.gw(w4, pg2), empty), pair("raise", exc_val("stack_overflow", empty)))}, simp())
-  show := apply(gc.bind_ok[p := gimple.grow_stack, k := x8 x9. ex x10. (x10 = exc(pair(x8, empty), pair("raise", exc_val("stack_overflow", empty))) || x10 = ok(pair(x8, empty), empty)) &&
-    ((fst(x10) = 0 && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = ok(fst(out_state(x10)), pair(fst(r), snd(r)))) || ((((fst(x10) = 1 && fst(out_value(x10)) = "ret") && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = ok(fst(out_state(x10)), snd(out_value(x10)))) ||
-    ((fst(x10) = 1 && fst(out_value(x10)) = "raise") && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = exc(fst(out_state(x10)), snd(out_value(x10))))) || (fst(x10) = 2 && exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = diverge(snd(x10))))),
-    x := x8 x9. exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = exc(x8, x9), d := x8. exc(gc.gw(w4, pg2), exc_val("stack_overflow", empty)) = diverge(x8)], gr, k)
+  fix w4 r
+  show by ex_intro({exc(pair(w4, empty), pair("raise", exc_val("stack_overflow", empty)))}, simp())
 qed
 
 theorem gc.call_ovf: all g args w. w in univ(1) -> runs(gimple.call(g, args), w, exc(w, exc_val("stack_overflow", empty)))
@@ -119,126 +73,97 @@ proof
   show by defs(simp(hw, eu), gimple.call)
 qed
 
-// The callee's part (the stack grown: from W1 = gc.gw(w, pg))
-theorem gc.cc_ub: all g args W1 regs x e. W1 in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> !gc.sound(W1) ->
-  runs(gimple.call_callee(g, args), W1, exc(x, e))
+// The callee's part
+theorem gc.cc_ub: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> !gc.sound(w) ->
+  runs(gimple.call_callee(g, args), w, exc(x, e))
 proof
-  fix g args W1 regs x e
+  fix g args w regs x e
   assume hw hx he hr hn
   show by defs(simp(hw, hx, he, hr, hn), gimple.call_callee)
 qed
 
-theorem gc.cc_ok: all g args W1 regs w4 r0 r1. W1 in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(W1) ->
-  runs(app(g, regs), W1, ok(w4, pair(r0, r1))) -> gc.keeps_stack(W1, w4) -> runs(gimple.call_callee(g, args), W1, ok(gc.back(w4, W1), pair(r0, r1)))
+theorem gc.cc_ok: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, ok(w4, pair(r0, r1))) -> runs(gimple.call_callee(g, args), w, ok(gc.back(w4, w), pair(r0, r1)))
 proof
-  fix g args W1 regs w4 r0 r1
-  assume hw hw4 h0 h1 hr hs hc hk
-  show by defs(simp(hw, hw4, h0, h1, hr, hs, hc, hk), gimple.call_callee)
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hs hc
+  show by defs(simp(hw, hw4, h0, h1, hr, hs, hc), gimple.call_callee)
 qed
 
-theorem gc.cc_ub_after: all g args W1 regs w4 r x e. W1 in univ(1) -> w4 in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(W1) ->
-  runs(app(g, regs), W1, ok(w4, r)) -> !gc.keeps_stack(W1, w4) -> runs(gimple.call_callee(g, args), W1, exc(x, e))
+theorem gc.cc_exc: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, exc(x, e)) -> runs(gimple.call_callee(g, args), w, exc(x, e))
 proof
-  fix g args W1 regs w4 r x e
-  assume hw hw4 hx he hr hs hc hk
-  show by defs(simp(hw, hw4, hx, he, hr, hs, hc, hk), gimple.call_callee)
-qed
-
-theorem gc.cc_exc: all g args W1 regs x e. W1 in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(W1) ->
-  runs(app(g, regs), W1, exc(x, e)) -> runs(gimple.call_callee(g, args), W1, exc(x, e))
-proof
-  fix g args W1 regs x e
+  fix g args w regs x e
   assume hw hx he hr hs hc
   show by defs(simp(hw, hx, he, hr, hs, hc), gimple.call_callee)
 qed
 
-theorem gc.cc_div: all g args W1 regs t. W1 in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(W1) ->
-  runs(app(g, regs), W1, diverge(t)) -> runs(gimple.call_callee(g, args), W1, diverge(t))
+theorem gc.cc_div: all g args w regs t. w in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, diverge(t)) -> runs(gimple.call_callee(g, args), w, diverge(t))
 proof
-  fix g args W1 regs t
+  fix g args w regs t
   assume hw ht hr hs hc
   show by defs(simp(hw, ht, hr, hs, hc), gimple.call_callee)
 qed
 
-// The call: from w, the stack grown to pg (W1), the callee's outcome
-theorem gc.call_ub: all g args w pg regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.regs_ok(regs, args) ->
-  !gc.sound(gc.gw(w, pg)) -> runs(gimple.call(g, args), w, exc(x, e))
+// The call: from w, the callee's outcome
+theorem gc.call_ub: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) ->
+  !gc.sound(w) -> runs(gimple.call(g, args), w, exc(x, e))
 proof
-  fix g args w pg regs x e
-  assume hw hx he hg hr hn
-  have gu := apply(gc.gw_univ, hw, hg)
-  have c := apply(gc.cc_ub, {g}, {args}, {gc.gw(w, pg)}, {regs}, {x}, {e}, gu, hx, he, hr, hn)
-  have b := apply(gc.bind_exc[p := gimple.call_callee(g, args), k := x5 x6. letin(x6, x7. gc.aft(x5, x7, exc(x, e))), x := x5 x6. exc(x, e) = exc(x5, x6), d := x5. exc(x, e) = diverge(x5)], c, refl({exc(x, e)}))
-  show := apply(gc.call_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), hg, b)
+  fix g args w regs x e
+  assume hw hx he hr hn
+  have c := apply(gc.cc_ub, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, hr, hn)
+  have b := apply(gc.bind_exc[p := gimple.call_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, exc(x, e))), x := x3 x4. exc(x, e) = exc(x3, x4), d := x3. exc(x, e) = diverge(x3)], c, refl({exc(x, e)}))
+  show := apply(gc.call_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), b)
 qed
 
-theorem gc.call_ok: all g args w pg regs w4 pg2 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.regs_ok(regs, args) ->
-  gc.sound(gc.gw(w, pg)) -> runs(app(g, regs), gc.gw(w, pg), ok(w4, pair(r0, r1))) -> gc.keeps_stack(gc.gw(w, pg), w4) -> gc.grown(app(w4, "vm"), pg2) ->
-  runs(gimple.call(g, args), w, ok(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), pair(r0, r1)))
+theorem gc.call_ok: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) ->
+  gc.sound(w) -> runs(app(g, regs), w, ok(w4, pair(r0, r1))) ->
+  runs(gimple.call(g, args), w, ok(gc.back(w4, w), pair(r0, r1)))
 proof
-  fix g args w pg regs w4 pg2 r0 r1
-  assume hw hw4 h0 h1 hg hr hs hc hk hg2
-  have gu := apply(gc.gw_univ, hw, hg)
-  have bu: gc.back(w4, gc.gw(w, pg)) in univ(1) by simp(hw4, hw, gu)
-  have bg: gc.grown(app(gc.back(w4, gc.gw(w, pg)), "vm"), pg2) by simp(hg2)
-  have c := apply(gc.cc_ok, {g}, {args}, {gc.gw(w, pg)}, {regs}, {w4}, {r0}, {r1}, gu, hw4, h0, h1, hr, hs, hc, hk)
-  have a0 := apply(gc.aft_ok, {gc.back(w4, gc.gw(w, pg))}, {pg2}, {pair(r0, r1)}, bu, (pair(r0, r1) in univ(1) by simp(h0, h1)), bg)
-  have a1: letin(pair(r0, r1), x7. gc.aft(gc.back(w4, gc.gw(w, pg)), x7, ok(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), pair(r0, r1)))) by defs(simp(a0, keep(gimple.grow_stack)), letin)
-  have b := apply(gc.bind_ok[p := gimple.call_callee(g, args), k := x5 x6. letin(x6, x7. gc.aft(x5, x7, ok(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), pair(r0, r1)))), x := x5 x6. ok(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), pair(r0, r1)) = exc(x5, x6), d := x5. ok(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), pair(r0, r1)) = diverge(x5)], c, a1)
-  have gu2 := apply(gc.gw_univ, bu, bg)
-  show := apply(gc.call_from, hw, (pair(w, ok(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), pair(r0, r1))) in univ(1) by simp(hw, gu2, h0, h1)), hg, b)
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hs hc
+  have bu: gc.back(w4, w) in univ(1) by simp(hw4, hw)
+  have c := apply(gc.cc_ok, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, hs, hc)
+  have a0 := all_elim(gc.aft_ok, {gc.back(w4, w)}, {pair(r0, r1)})
+  have a1: letin(pair(r0, r1), x5. gc.aft(gc.back(w4, w), x5, ok(gc.back(w4, w), pair(r0, r1)))) by defs(simp(a0), letin)
+  have b := apply(gc.bind_ok[p := gimple.call_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, ok(gc.back(w4, w), pair(r0, r1)))), x := x3 x4. ok(gc.back(w4, w), pair(r0, r1)) = exc(x3, x4), d := x3. ok(gc.back(w4, w), pair(r0, r1)) = diverge(x3)], c, a1)
+  show := apply(gc.call_from, hw, (pair(w, ok(gc.back(w4, w), pair(r0, r1))) in univ(1) by simp(hw, bu, h0, h1)), b)
 qed
 
-theorem gc.call_ovf_after: all g args w pg regs w4 r0 r1 pg2. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.regs_ok(regs, args) ->
-  gc.sound(gc.gw(w, pg)) -> runs(app(g, regs), gc.gw(w, pg), ok(w4, pair(r0, r1))) -> gc.keeps_stack(gc.gw(w, pg), w4) -> gc.grown(app(w4, "vm"), pg2) ->
-  runs(gimple.call(g, args), w, exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty)))
+theorem gc.call_ovf_after: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) ->
+  gc.sound(w) -> runs(app(g, regs), w, ok(w4, pair(r0, r1))) ->
+  runs(gimple.call(g, args), w, exc(gc.back(w4, w), exc_val("stack_overflow", empty)))
 proof
-  fix g args w pg regs w4 r0 r1 pg2
-  assume hw hw4 h0 h1 hg hr hs hc hk hg2
-  have gu := apply(gc.gw_univ, hw, hg)
-  have bu: gc.back(w4, gc.gw(w, pg)) in univ(1) by simp(hw4, hw, gu)
-  have bg: gc.grown(app(gc.back(w4, gc.gw(w, pg)), "vm"), pg2) by simp(hg2)
-  have c0 := apply(gc.cc_ok, {g}, {args}, {gc.gw(w, pg)}, {regs}, {w4}, {r0}, {r1}, gu, hw4, h0, h1, hr, hs, hc, hk)
-  have a0 := apply(gc.aft_ovf, {gc.back(w4, gc.gw(w, pg))}, {pg2}, {pair(r0, r1)}, bu, bg)
-  have a1: letin(pair(r0, r1), x7. gc.aft(gc.back(w4, gc.gw(w, pg)), x7, exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty)))) by defs(simp(a0, keep(gimple.grow_stack)), letin)
-  have b := apply(gc.bind_ok[p := gimple.call_callee(g, args), k := x5 x6. letin(x6, x7. gc.aft(x5, x7, exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty)))), x := x5 x6. exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty)) = exc(x5, x6), d := x5. exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty)) = diverge(x5)], c0, a1)
-  have gu2 := apply(gc.gw_univ, bu, bg)
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hs hc
+  have bu: gc.back(w4, w) in univ(1) by simp(hw4, hw)
+  have c0 := apply(gc.cc_ok, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, hs, hc)
+  have a0 := all_elim(gc.aft_ovf, {gc.back(w4, w)}, {pair(r0, r1)})
+  have a1: letin(pair(r0, r1), x5. gc.aft(gc.back(w4, w), x5, exc(gc.back(w4, w), exc_val("stack_overflow", empty)))) by defs(simp(a0), letin)
+  have b := apply(gc.bind_ok[p := gimple.call_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, exc(gc.back(w4, w), exc_val("stack_overflow", empty)))), x := x3 x4. exc(gc.back(w4, w), exc_val("stack_overflow", empty)) = exc(x3, x4), d := x3. exc(gc.back(w4, w), exc_val("stack_overflow", empty)) = diverge(x3)], c0, a1)
   have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
-  show := apply(gc.call_from, hw, (pair(w, exc(gc.gw(gc.back(w4, gc.gw(w, pg)), pg2), exc_val("stack_overflow", empty))) in univ(1) by simp(hw, gu2, eu)), hg, b)
+  show := apply(gc.call_from, hw, (pair(w, exc(gc.back(w4, w), exc_val("stack_overflow", empty))) in univ(1) by simp(hw, bu, eu)), b)
 qed
 
-// a callee that changed the stack's pages: the call undefined
-theorem gc.call_ub_after: all g args w pg regs w4 r x e. w in univ(1) -> w4 in univ(1) -> x in univ(1) -> e in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.regs_ok(regs, args) ->
-  gc.sound(gc.gw(w, pg)) -> runs(app(g, regs), gc.gw(w, pg), ok(w4, r)) -> !gc.keeps_stack(gc.gw(w, pg), w4) -> runs(gimple.call(g, args), w, exc(x, e))
+theorem gc.call_exc: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, exc(x, e)) -> runs(gimple.call(g, args), w, exc(x, e))
 proof
-  fix g args w pg regs w4 r x e
-  assume hw hw4 hx he hg hr hs hc hk
-  have gu := apply(gc.gw_univ, hw, hg)
-  have c := apply(gc.cc_ub_after, {g}, {args}, {gc.gw(w, pg)}, {regs}, {w4}, {r}, {x}, {e}, gu, hw4, hx, he, hr, hs, hc, hk)
-  have b := apply(gc.bind_exc[p := gimple.call_callee(g, args), k := x5 x6. letin(x6, x7. gc.aft(x5, x7, exc(x, e))), x := x5 x6. exc(x, e) = exc(x5, x6), d := x5. exc(x, e) = diverge(x5)], c, refl({exc(x, e)}))
-  show := apply(gc.call_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), hg, b)
+  fix g args w regs x e
+  assume hw hx he hr hs hc
+  have c := apply(gc.cc_exc, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, hr, hs, hc)
+  have b := apply(gc.bind_exc[p := gimple.call_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, exc(x, e))), x := x3 x4. exc(x, e) = exc(x3, x4), d := x3. exc(x, e) = diverge(x3)], c, refl({exc(x, e)}))
+  show := apply(gc.call_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), b)
 qed
 
-theorem gc.call_exc: all g args w pg regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.regs_ok(regs, args) -> gc.sound(gc.gw(w, pg)) ->
-  runs(app(g, regs), gc.gw(w, pg), exc(x, e)) -> runs(gimple.call(g, args), w, exc(x, e))
+theorem gc.call_div: all g args w regs t. w in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, diverge(t)) -> runs(gimple.call(g, args), w, diverge(t))
 proof
-  fix g args w pg regs x e
-  assume hw hx he hg hr hs hc
-  have gu := apply(gc.gw_univ, hw, hg)
-  have c := apply(gc.cc_exc, {g}, {args}, {gc.gw(w, pg)}, {regs}, {x}, {e}, gu, hx, he, hr, hs, hc)
-  have b := apply(gc.bind_exc[p := gimple.call_callee(g, args), k := x5 x6. letin(x6, x7. gc.aft(x5, x7, exc(x, e))), x := x5 x6. exc(x, e) = exc(x5, x6), d := x5. exc(x, e) = diverge(x5)], c, refl({exc(x, e)}))
-  show := apply(gc.call_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), hg, b)
-qed
-
-theorem gc.call_div: all g args w pg regs t. w in univ(1) -> t in univ(1) -> gc.grown(app(w, "vm"), pg) -> gc.regs_ok(regs, args) -> gc.sound(gc.gw(w, pg)) ->
-  runs(app(g, regs), gc.gw(w, pg), diverge(t)) -> runs(gimple.call(g, args), w, diverge(t))
-proof
-  fix g args w pg regs t
-  assume hw ht hg hr hs hc
-  have gu := apply(gc.gw_univ, hw, hg)
-  have c := apply(gc.cc_div, {g}, {args}, {gc.gw(w, pg)}, {regs}, {t}, gu, ht, hr, hs, hc)
-  have b := apply(gc.bind_div[p := gimple.call_callee(g, args), k := x5 x6. letin(x6, x7. gc.aft(x5, x7, diverge(t))), x := x5 x6. diverge(t) = exc(x5, x6), d := x5. diverge(t) = diverge(x5)], c, refl({diverge(t)}))
-  show := apply(gc.call_from, hw, (pair(w, diverge(t)) in univ(1) by simp(hw, ht)), hg, b)
+  fix g args w regs t
+  assume hw ht hr hs hc
+  have c := apply(gc.cc_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, hr, hs, hc)
+  have b := apply(gc.bind_div[p := gimple.call_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, diverge(t))), x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], c, refl({diverge(t)}))
+  show := apply(gc.call_from, hw, (pair(w, diverge(t)) in univ(1) by simp(hw, ht)), b)
 qed
 
 // call1: the value in rax only

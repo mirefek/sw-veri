@@ -180,10 +180,10 @@ record Frame { vals: Name -> nat, objs: List[Addr], bb: nat, prev: nat }
 fn operand(fr: Frame, o: Opnd) -> nat =
   match o { ssa(x) => fr.vals[x], cst(v) => v, obj(k) => uint(fr.objs[k]) }
 
-// The memory a GIMPLE access may use: the world's (its domain: mapped
-// pages that are not the stack's, as their protection allows -- C objects
-// are never write-only --, and elsewhere the stack objects, not wrapping
-// around the address space). Anything else
+// The memory a GIMPLE access may use: the world's (its domain: its mapped
+// pages, as their protection allows -- C objects are never write-only --,
+// and elsewhere the stack objects, not wrapping around the address space;
+// the world has no stack pages, so the test for them is vacuous). Anything else
 // is undefined (GCC may remove, reorder or speculate accesses that are
 // valid in C): also the stack outside the stack objects, where the machine
 // keeps what C does not see -- reached only by a dangling pointer.
@@ -355,36 +355,17 @@ proc[Machine] run_code(code: List[bits[8]]) -> Reg -> bits[64] {
 // a value passed in a 64-bit register: the upper bits are unspecified
 fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec = v % 2^ty.prec}
 
-// No mapping but the stack's lies within the guard gap below a stack page
-// (abi.stack_gap_free): what the ABI needs of the world at a call, so that
-// the callee's stack, below the caller's, stays clear of the world's
-// memory.
-
-// The stack may have grown (the frames, the calls' pushes -- the machine's
-// business): unmapped pages may have become stack pages. The world sees
-// the stack's pages (so that no C mapping may replace them), not their
-// contents.
-proc[World] grow_stack() {
-  let pages0 = vm.pages
-  havoc vm.pages where all p: PageNo. vm.pages[p] = pages0[p] || (pages0[p] = none && vm.pages[p] != none && vm.pages[p].value.kind = stack)
-}
-
 // Calling g: the arguments (values with their types) in registers, the
 // result registers rax, rdx. The callee runs on the caller's world (with
 // its stack objects, which it may reach; the caller's frame is not in the
-// world, only its stack pages). A call with the thread pointer broken (the
-// word at fs:0 not pointing to itself, as the ABI requires at every call)
-// or a mapping in a stack's guard gap is undefined, and so is a callee that
-// changed a stack page (unmapped or remapped the stack: where its callers'
-// frames are). The stack may grow at a call (the caller's frame, the push,
-// the callee's frames). Every call may overflow the stack
-// (`stack_overflow`, the ABI's: no undefined behavior), before the callee
-// runs and after it returns.
+// world, nor is the rest of the stack: the machine's business, the ABI
+// bridge's). A call with the thread pointer broken (the word at fs:0 not
+// pointing to itself, as the ABI requires at every call) is undefined.
+// Every call may overflow the stack (`stack_overflow`, the ABI's: no
+// undefined behavior), before the callee runs and after it returns.
 proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   either { raise stack_overflow } or { }
-  grow_stack()
   let (r0, r1) = call_callee(g, args)
-  grow_stack()
   // (the callee may crash after its last I/O -- its spec then returns,
   // with the I/O the crash has)
   either { raise stack_overflow } or { }
@@ -394,11 +375,9 @@ proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64])
 // (the callee's part of a call)
 proc[World] call_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
-  if !(thread_ok(vm, fs_base) && stack_gap_free(vm)) { undefined }
-  let pages0 = vm.pages
+  if !thread_ok(vm, fs_base) { undefined }
   let objs0 = objs
   let (r0, r1) = g(regs)
-  if !(all p: PageNo. pages0[p] != none && pages0[p].value.kind = stack -> vm.pages[p] = pages0[p]) { undefined }
   objs := objs0              // (the callee's stack objects are gone)
   return (r0, r1)
 }
