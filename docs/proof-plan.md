@@ -126,6 +126,86 @@ level above.
   temporarily); structuring these assumptions (no repetition, each
   function assuming what it needs) is part of C2's design.
 
+### 2.2 Architecture: what each layer sees (2026-10-08)
+
+Each layer's world holds only what its programs can legitimately observe;
+the machine's details are absorbed once, where the ABI relates the machine
+to the C world, not in every function's proof.
+
+**L0 -- the machine** (x86-64 + Linux): exact. Memory is pages (with a
+kind: anonymous, heap, stack) and bytes.
+
+**L1 -- the C world and the ABI.** The world's memory is a *partial byte
+map*: the machine's memory restricted to its domain -- the mapped pages
+that are not stack pages, with their permissions, and the bytes of the
+live stack objects (address-taken locals: `objs`). Objects (allocations,
+lifetimes) may come in later layers; at malloc's level memory is raw.
+- An access outside the domain is undefined: this one rule covers null
+  pointers, unmapped memory, wrong permissions and dangling pointers into
+  the stack.
+- The machine's stack -- frames, spilled values, return addresses, its
+  growth into free pages -- is not in the world. It is the machine's
+  private business, constrained only by the ABI: callee-saved registers,
+  the return address, and a callee not writing the stack above its stack
+  pointer (no C object of a caller is there that it may reach).
+- A function's world is its caller's world: the caller's frame is not in
+  it, so a callee cannot touch it by construction.
+- Running out of stack is the stack's only C-visible effect:
+  `stack_overflow` may happen at every call (at a function's entry, before
+  it does anything). On the machine, every fault caused by a stack access
+  (a push, a `call`, an rsp-relative access; SIGSEGV, or SIGBUS for a
+  non-canonical address) is a stack overflow. One lemma, at this level,
+  shows that such a fault happens with the I/O of the last call boundary
+  (frames are allocated in the prologue; a call's push maps everything
+  above it), so it is matched by an overflow at that call -- for any frame
+  size and any optimization level.
+
+**L2 -- readable GIMPLE** (`slc gimple --readable`): GCC's final GIMPLE as
+SL procedures over the L1 world, with the C function's variables and
+callees by name. The one GIMPLE layer, for now of the -O0 build. Its
+semantics is the abstraction the compiler preserves, so that GCC's
+optimizations are refinements of it:
+- *Observable*: the world's memory on its domain, the I/O (os), the
+  results, termination, and `stack_overflow` at calls -- nothing of the
+  stack, of registers, or of where values live.
+- *Undefined behaviour* as GCC assumes it: signed overflow, null and
+  out-of-domain accesses, misaligned accesses, `.CTZ (0)`, ...; no
+  type-based aliasing (`-fno-strict-aliasing`). An undefined execution
+  allows every outcome.
+- *Nondeterminism* where C leaves things unspecified: uninitialised
+  locals, the placement of stack objects, the contents of fresh memory.
+- Locals are values, not memory: GCC may keep them anywhere, merge,
+  remove or reorder them.
+So an optimized program refines the unoptimized one when, for every world,
+each of its observable behaviours is one of the original's (or the
+original is undefined there); an optimization layer can be added as
+GIMPLE ⊑ GIMPLE on this semantics.
+
+**C1 -- machine code ⊑ readable GIMPLE**, per function, generated: a
+simulation in which, at each program point, a *location map* says where
+each GIMPLE value lives (a register, a frame slot, a constant) -- read off
+the homes at -O0, off DWARF location lists and the register allocation
+when optimized. Frame slots appear only in the location map, never in the
+memory coupling, which is just "the machine's memory is the world's on
+the world's domain". Instruction rules are per instruction class and
+parametric in locations; the bookkeeping of calls (`tr.callee_io`) is
+generated from the spec's structure.
+
+**C2 -- readable GIMPLE ⊑ the function's spec**: hand proofs, with
+explicit named preconditions (§2.1); the invariant and the laws.
+
+Migration, each step keeping the chain checking:
+1. L1: the world's domain (non-stack pages and `objs`; no `sp`), the ABI
+   correspondence without the stack, the stack-fault lemma; the ABI glue
+   re-proven.
+2. L2: the stack mechanics out of layers/gimple.sl (`frame_at_call`, the
+   private frame, `sp`); `alloc_objs` adds its objects to `objs`.
+3. The bridge: location maps and the domain coupling; the instruction
+   rules and the generator ported; the certificates regenerated.
+4. The remaining -O0 functions (frames of any size, several homes, any
+   number of arguments need nothing special any more).
+5. Later: optimized code, through DWARF location maps.
+
 ## 3. The systems that build the theorems
 
 | | system | produces | status |
