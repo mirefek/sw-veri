@@ -80,7 +80,10 @@
 //! simplified, unless it became `true`). The older `simp` (symbolic
 //! execution, closing paths by taut / arith) stays as it is.
 
-use sl_kernel::ext::seq::{defined_sym, unfold_all};
+use sl_kernel::ext::seq::{defined_sym, unfold_all, unfold_all_bounded};
+
+/// subterms implicit unfolding may visit in a term (per attempt)
+const UNFOLD_BUDGET: usize = 200_000;
 use sl_kernel::ext::simp::LoopHint;
 use sl_kernel::ext::{facts, Logic, Seq};
 use sl_kernel::syntax::{parse_term, parse_value, Printer, ProofRequest, Prover};
@@ -100,9 +103,9 @@ impl Prover for ScriptProver {
         let lg = Logic::new(env)?;
         let st = State::new(req.params.clone(), Vec::new(), Some(req.statement.clone()));
         let t0 = std::time::Instant::now();
-        let r = run_block(env, &lg, st, &req.text, req.line);
+        let r = run_block(env, &lg, st, &req.text, req.line, |env, s| conv_to(env, s, &req.statement, &[]));
         let t1 = std::time::Instant::now();
-        let r = r.and_then(|s| conv_to(env, s, &req.statement, &[])).map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)));
+        let r = r.map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)));
         // (STEP_SLOW=secs: also the proofs taking longer, and their final check)
         if let Some(lim) = std::env::var("STEP_SLOW").ok().and_then(|v| v.parse::<f64>().ok()) {
             let (a, b) = ((t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64());
@@ -116,8 +119,9 @@ impl Prover for ScriptProver {
 
 /// Runs the steps of a proof (or of a `proof ... qed` block inside one),
 /// then closes its `assume`, `fix` and `obtain` steps. `line`: where the
-/// text starts, for messages.
-fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) -> KResult<Seq> {
+/// text starts, for messages. `then`: the caller's check of the result,
+/// while the block's `let`s still hold (its messages fold them).
+fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, then: impl FnOnce(&mut Env, Seq) -> KResult<Seq>) -> KResult<Seq> {
     let mut res = Ok(());
     // (STEP_SLOW=secs: the steps taking longer, reported -- a nested
     // block's with it)
@@ -137,15 +141,16 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) 
             break;
         }
     }
+    let lets = std::mem::take(&mut st.lets);
+    let r = res.and_then(|_| close(env, lg, st)).and_then(|s| then(env, s));
     // the block's `let`s end with it (an outer one it shadowed is back)
-    for (name, prev) in st.lets.drain(..).rev() {
+    for (name, prev) in lets.into_iter().rev() {
         match prev {
             Some(p) => env.abbrevs.insert(name, p),
             None => env.abbrevs.remove(&name),
         };
     }
-    res?;
-    close(env, lg, st)
+    r
 }
 
 fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
@@ -225,7 +230,12 @@ fn unfold_match(env: &Env, a: &Term, b: &Term, start: &[SymId]) -> Option<Vec<Sy
         _ => None,
     };
     loop {
-        let (ua, ub) = if syms.is_empty() { (a.clone(), b.clone()) } else { (unfold_all(env, a, &syms), unfold_all(env, b, &syms)) };
+        // (a bounded effort: arithmetic's definitions, unfolded, explode)
+        let (ua, ub) = if syms.is_empty() {
+            (a.clone(), b.clone())
+        } else {
+            (unfold_all_bounded(env, a, &syms, UNFOLD_BUDGET)?, unfold_all_bounded(env, b, &syms, UNFOLD_BUDGET)?)
+        };
         if ua == ub {
             return Some(syms);
         }
@@ -391,6 +401,62 @@ fn flip_seq(env: &mut Env, lg: &Logic, s: &Seq) -> KResult<Seq> {
             }
         }
     }
+}
+
+fn nes_of(t: &Term, ne: Option<SymId>, out: &mut Vec<Term>) {
+    if let Node::App(s, a) = t.node() {
+        if Some(*s) == ne && !out.contains(t) {
+            out.push(t.clone());
+        }
+        a.iter().for_each(|x| nes_of(x, ne, out));
+    }
+}
+
+/// `a = b -> b = a` for the closed equations occurring both ways among
+/// the premises and the goal (also as `a != b`)
+fn sym_facts(env: &Env, ps: &[Seq], goal: &Term) -> KResult<Vec<Seq>> {
+    fn eqs(env: &Env, t: &Term, ne: Option<SymId>, out: &mut Vec<(Term, Term)>) {
+        if let Node::App(s, a) = t.node() {
+            if (*s == env.builtins.eq || Some(*s) == ne) && a.len() == 2 && t.loose_depth(&env.binders_fn()) == 0 && a[0] != a[1] {
+                let e = (a[0].clone(), a[1].clone());
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+            a.iter().for_each(|x| eqs(env, x, ne, out));
+        }
+    }
+    let ne = env.sym_by_name.get("ne").copied();
+    let mut all = Vec::new();
+    for p in ps {
+        eqs(env, p.concl(), ne, &mut all);
+    }
+    eqs(env, goal, ne, &mut all);
+    let mut out = Vec::new();
+    // (`a != b`: `!(a = b)`, both ways)
+    let mut nes = Vec::new();
+    for t in ps.iter().map(|p| p.concl()).chain([goal]) {
+        nes_of(t, ne, &mut nes);
+    }
+    for t in nes.into_iter().filter(|t| t.loose_depth(&env.binders_fn()) == 0) {
+        let ne = ne.unwrap();
+        let u = unfold_all(env, &t, &[ne]);
+        let f = Seq::conv(env, &Seq::assume(env, t.clone())?, &u, &[ne])?.discharge(env, &t);
+        let g = Seq::conv(env, &Seq::assume(env, u.clone())?, &t, &[ne])?.discharge(env, &u);
+        out.extend([f, g]);
+    }
+    for (a, b) in &all {
+        if all.contains(&(b.clone(), a.clone())) {
+            let Some(mut l) = facts::seq_of(env, "eq_sym") else { return Ok(Vec::new()) };
+            let mut vs = Vec::new();
+            l.concl().vars(&mut vs);
+            for (v, t) in vs.iter().zip([a.clone(), b.clone()]) {
+                l = Seq::inst(env, &l, *v, &t)?;
+            }
+            out.push(l);
+        }
+    }
+    Ok(out)
 }
 
 fn has_var(t: &Term, v: VarId) -> bool {
@@ -702,8 +768,7 @@ impl State {
                 _ => return err("a sub-proof belongs to `have NAME: φ` or `show [φ]`"),
             };
             let child = State::new(self.scope.clone(), self.facts.clone(), Some(goal.clone()));
-            let s = run_block(env, lg, child, body, body_line)?;
-            let s = self.check(env, s, &goal)?;
+            let s = run_block(env, lg, child, body, body_line, |env, s| self.check(env, s, &goal))?;
             if let Some(n) = name {
                 self.facts.push((n, s.clone()));
             }
@@ -928,7 +993,7 @@ impl State {
                 self.facts.extend(named);
             }
             // have h1 .. hk [: φ] (:= P | by R): its k conjuncts as written
-            // (`_` names none)
+            // (`_` names none; a last `..` ignores the rest, `r..` names it)
             "have" if rest.split(':').next().is_some_and(|l| l.split_whitespace().count() > 1) => {
                 let k = rest.find(':').unwrap();
                 let hs: Vec<&str> = rest[..k].split_whitespace().collect();
@@ -1030,8 +1095,13 @@ impl State {
                 let rs = self.rsimp_rules(env, lg, args)?;
                 self.rsimp_close(env, lg, goal, &rs, 0)
             }
+            // taut(p1, ..): the goal by propositional logic, an equation the
+            // same as its flip (`eq_sym` instances added for the equations
+            // occurring both ways)
             "taut" => {
-                let ps = self.proofs(env, lg, args)?;
+                let mut ps = self.proofs(env, lg, args)?;
+                let syms = sym_facts(env, &ps, goal)?;
+                ps.extend(syms);
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::taut(env, lg, &refs, goal)
             }
@@ -1991,7 +2061,11 @@ fn conj_named(env: &Env, s: &Seq, names: &[&str], what: &str) -> KResult<Vec<(St
     // (a defined head: unfolded to the conjunction)
     let s = &head_to(env, s.clone(), |t| names.len() < 2 || conj_parts(env, t).len() > 1)?;
     let n = conj_parts(env, s.concl()).len();
-    if n != names.len() {
+    // (a last name `..` / `r..`: the rest of the conjuncts ignored / as
+    // one conjunction r)
+    let rest = names.last().and_then(|l| l.strip_suffix(".."));
+    let m = if rest.is_some() { names.len() - 1 } else { names.len() };
+    if (rest.is_none() && n != m) || (rest.is_some() && n <= m) {
         return err(format!("{}: {} names for {} conjuncts of `{}`", what, names.len(), n, Printer::new(env).short(s.concl())));
     }
     let mut parts = Vec::new();
@@ -2002,7 +2076,24 @@ fn conj_named(env: &Env, s: &Seq, names: &[&str], what: &str) -> KResult<Vec<(St
     }
     parts.push(cur);
     parts.reverse();
-    Ok(names.iter().zip(parts).filter(|(h, _)| **h != "_").map(|(h, p)| (h.to_string(), p)).collect())
+    let tail = parts.split_off(m);
+    let mut named: Vec<(String, Seq)> = names.iter().zip(parts).filter(|(h, _)| **h != "_").map(|(h, p)| (h.to_string(), p)).collect();
+    if let Some(r) = rest.filter(|r| !r.is_empty()) {
+        let lemma = facts::seq_of(env, "and_intro").ok_or_else(|| KernelError("`and_intro` (core/logic.core) is not loaded".into()))?;
+        let mut vs = Vec::new();
+        lemma.concl().vars(&mut vs);
+        let mut it = tail.into_iter();
+        let mut acc = it.next().unwrap();
+        for p in it {
+            let mut l = lemma.clone();
+            for (v, x) in vs.iter().zip([acc.concl().clone(), p.concl().clone()]) {
+                l = Seq::inst(env, &l, *v, &x)?;
+            }
+            acc = Seq::mp(env, &Seq::mp(env, &l, &acc)?, &p)?;
+        }
+        named.push((r.to_string(), acc));
+    }
+    Ok(named)
 }
 
 /// The kernel's literal rules, selected by the term's shape.

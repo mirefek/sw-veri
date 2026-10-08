@@ -613,9 +613,22 @@ impl Seq {
 /// `t` with every occurrence of the defined symbols `syms` unfolded,
 /// repeatedly (definitions are not recursive, so this terminates).
 pub fn unfold_all(env: &Env, t: &Term, syms: &[SymId]) -> Term {
+    let mut unbounded = usize::MAX;
+    unfold_all_in(env, t, syms, &mut unbounded).unwrap()
+}
+
+/// `unfold_all`, unless it visits more than `budget` subterms (unfolding
+/// can grow a term exponentially: arithmetic's definitions).
+pub fn unfold_all_bounded(env: &Env, t: &Term, syms: &[SymId], budget: usize) -> Option<Term> {
+    let mut budget = budget;
+    unfold_all_in(env, t, syms, &mut budget)
+}
+
+fn unfold_all_in(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize) -> Option<Term> {
+    *budget = budget.checked_sub(1)?;
     match t.node() {
         Node::App(s, args) => {
-            let args: Vec<Term> = args.iter().map(|a| unfold_all(env, a, syms)).collect();
+            let args: Vec<Term> = args.iter().map(|a| unfold_all_in(env, a, syms, budget)).collect::<Option<Vec<_>>>()?;
             if syms.contains(s) {
                 if let SymKind::Defined { params, body } = &env.syms[*s as usize].kind {
                     let bf = env.binders_fn();
@@ -629,17 +642,17 @@ pub fn unfold_all(env: &Env, t: &Term, syms: &[SymId]) -> Term {
                         b = if open(p, a) { subst_open(env, &b, *p, a, 0) } else { b.subst_var(*p, a, &bf) };
                     }
                     // (the occurrence's label, if any, on the unfolded body)
-                    let r = unfold_all(env, &b, syms);
-                    return match t.label() {
+                    let r = unfold_all_in(env, &b, syms, budget)?;
+                    return Some(match t.label() {
                         Some(l) => r.with_label(Some(l.into())),
                         None => r,
-                    };
+                    });
                 }
             }
-            t.with_args(args)
+            Some(t.with_args(args))
         }
-        Node::Var(_, args) => t.with_args(args.iter().map(|a| unfold_all(env, a, syms)).collect()),
-        _ => t.clone(),
+        Node::Var(_, args) => Some(t.with_args(args.iter().map(|a| unfold_all_in(env, a, syms, budget)).collect::<Option<Vec<_>>>()?)),
+        _ => Some(t.clone()),
     }
 }
 

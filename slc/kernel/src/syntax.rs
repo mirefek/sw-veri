@@ -740,11 +740,94 @@ const OPS: &[(&str, &str, u8)] =&[("iff", "<->", 1), ("imp", "->", 2), ("or", "|
 
 pub struct Printer<'e> {
     env: &'e Env,
+    /// messages (`short`, `mismatch`): abbreviations folded back
+    fold: std::cell::Cell<bool>,
+    /// the abbreviations to fold, by their body's head (built when needed)
+    folds: std::cell::OnceCell<HashMap<Head, Vec<(String, usize, Term)>>>,
+}
+
+/// a term's head, for finding the abbreviations that may match it
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Head {
+    Sym(u32),
+    Var(u32),
+}
+
+fn head_of(t: &Term) -> Option<Head> {
+    match t.node() {
+        Node::App(s, a) if !a.is_empty() => Some(Head::Sym(*s)),
+        Node::Var(v, a) if !a.is_empty() => Some(Head::Var(*v)),
+        _ => None,
+    }
+}
+
+fn term_size(t: &Term) -> usize {
+    match t.node() {
+        Node::App(_, a) | Node::Var(_, a) => 1 + a.iter().map(term_size).sum::<usize>(),
+        _ => 1,
+    }
+}
+
+/// `t` with its loose bound variables from `cutoff` on lowered by `d`;
+/// none if one of them is among the `d` (bound inside the matched part)
+fn unshift(t: &Term, d: u32, cutoff: u32, binders: &dyn Fn(u32, usize) -> u32) -> Option<Term> {
+    match t.node() {
+        Node::BVar(i) if *i >= cutoff => (*i - cutoff >= d).then(|| Term::bvar(i - d)),
+        Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => Some(t.clone()),
+        Node::Var(_, a) => Some(t.with_args(a.iter().map(|x| unshift(x, d, cutoff, binders)).collect::<Option<Vec<_>>>()?)),
+        Node::App(s, a) => Some(t.with_args(a.iter().enumerate().map(|(i, x)| unshift(x, d, cutoff + binders(*s, i), binders)).collect::<Option<Vec<_>>>()?)),
+    }
 }
 
 impl<'e> Printer<'e> {
     pub fn new(env: &'e Env) -> Self {
-        Printer { env }
+        Printer { env, fold: std::cell::Cell::new(false), folds: std::cell::OnceCell::new() }
+    }
+
+    /// The abbreviation (and its arguments) `t` is an instance of: the
+    /// largest that matches (abbreviations with a compound body only).
+    fn folded(&self, t: &Term) -> Option<(String, Vec<Term>)> {
+        let h = head_of(t)?;
+        let folds = self.folds.get_or_init(|| {
+            let mut m: HashMap<Head, Vec<(String, usize, Term)>> = HashMap::new();
+            for (n, (k, b)) in &self.env.abbrevs {
+                if let Some(h) = head_of(b) {
+                    m.entry(h).or_default().push((n.clone(), *k, b.clone()));
+                }
+            }
+            for v in m.values_mut() {
+                v.sort_by(|a, b| term_size(&b.2).cmp(&term_size(&a.2)).then(a.0.cmp(&b.0)));
+            }
+            m
+        });
+        let bf = self.env.binders_fn();
+        for (n, k, b) in folds.get(&h)? {
+            let mut args: Vec<Option<Term>> = vec![None; *k];
+            if self.fold_match(b, t, *k, 0, &mut args, &bf) {
+                return Some((n.clone(), args.into_iter().map(|a| a.unwrap_or_else(|| Term::nat(Nat::zero()))).collect()));
+            }
+        }
+        None
+    }
+
+    /// `t` an instance of the k-parameter body `p` (at binder depth d)
+    fn fold_match(&self, p: &Term, t: &Term, k: usize, d: u32, args: &mut Vec<Option<Term>>, bf: &dyn Fn(u32, usize) -> u32) -> bool {
+        match (p.node(), t.node()) {
+            (Node::BVar(j), _) if *j >= d => {
+                let i = k - 1 - (*j - d) as usize;
+                let Some(v) = unshift(t, d, 0, bf) else { return false };
+                match &args[i] {
+                    Some(a) => *a == v,
+                    None => {
+                        args[i] = Some(v);
+                        true
+                    }
+                }
+            }
+            (Node::App(f, a), Node::App(g, b)) => f == g && a.len() == b.len() && a.iter().zip(b.iter()).enumerate().all(|(i, (x, y))| self.fold_match(x, y, k, d + bf(*f, i), args, bf)),
+            (Node::Var(v, a), Node::Var(w, b)) => v == w && a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| self.fold_match(x, y, k, d, args, bf)),
+            _ => p == t,
+        }
     }
 
     fn name(&self, s: u32) -> &str {
@@ -777,7 +860,9 @@ impl<'e> Printer<'e> {
     /// unless `SLC_FULL_ERRORS` is set
     fn short_in(&self, t: &Term, scope: &mut Vec<String>) -> String {
         let mut out = String::new();
+        let f = self.fold.replace(true);
         self.go(t, scope, 0, &mut out);
+        self.fold.set(f);
         if out.chars().count() > SHORT && std::env::var("SLC_FULL_ERRORS").is_err() {
             let n = out.chars().count();
             out = format!("{} ... ({} characters; SLC_FULL_ERRORS=1 prints all)", out.chars().take(SHORT).collect::<String>(), n);
@@ -893,6 +978,23 @@ impl<'e> Printer<'e> {
     }
 
     fn go(&self, t: &Term, scope: &mut Vec<String>, prec: u8, out: &mut String) {
+        // (in messages: an abbreviation's instance by its name)
+        if self.fold.get() && t.label().is_none() {
+            if let Some((n, args)) = self.folded(t) {
+                out.push_str(&n);
+                if !args.is_empty() {
+                    out.push('(');
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            out.push_str(", ");
+                        }
+                        self.go(a, scope, 0, out);
+                    }
+                    out.push(')');
+                }
+                return;
+            }
+        }
         // a label: `NAME: φ` where an operand of `&&` may stand, else in
         // parentheses (φ at the operand's precedence)
         if let Some(l) = t.label() {

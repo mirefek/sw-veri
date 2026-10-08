@@ -71,6 +71,29 @@ fn rsimp_rewrites_left_to_right() {
     rejected(&format!("{}theorem t(x, y): x = y -> true && x = y\nproof\n  assume h\n  show by rsimp(only, h)\nqed\n", lib), "the goal simplifies to `true && y = y`");
 }
 
+/// Small conveniences: messages fold a proof's `let`s back (and implicit
+/// unfolding gives up on arithmetic's definitions quickly); `..` ends a
+/// destructuring (`r..` names the rest); taut takes an equation as its flip
+/// (also `!=`).
+#[test]
+fn folded_messages_rest_patterns_and_symmetric_taut() {
+    let logic = core_file("logic.core");
+    let base = check(&logic).unwrap();
+    rejected(
+        &format!("{}theorem f(a, b, c): int_add(int_mul(a, b), c) = c -> int_add(int_mul(a, b), c) = int_add(c, 1)\nproof\n  let P := int_mul(a, b)\n  let S(x) := int_add(P, x)\n  assume h\n  show h\nqed\n", logic),
+        "this proves `S(c) = c -> S(c) = c`, not `S(c) = c -> S(c) = int_add(c, 1)`",
+    );
+    let ok = [
+        "theorem t(a, b, c): a = 1 && b = 2 && c = 3 && a = c -> b = 2\nproof\n  assume h\n  have x y .. := h\n  show y\nqed\n",
+        "theorem t(a, b, c): a = 1 && b = 2 && c = 3 && a = c -> c = 3 && a = c\nproof\n  assume h\n  have x y r.. := h\n  show r\nqed\n",
+        "theorem t(m, n, p): !(m = n) -> p -> p && !(n = m)\nproof\n  assume h g\n  show by taut(h, g)\nqed\n",
+        "theorem t(m, n): m != n -> !(n = m)\nproof\n  assume h\n  show by taut(h)\nqed\n",
+    ];
+    for t in ok {
+        assert_eq!(check(&format!("{}{}", logic, t)), Ok(base + 1), "{}", t);
+    }
+}
+
 /// flip: an equation or disequation the other way round -- a fact (also
 /// under `all`s and premises) or, as a step, the goal / a fact h.
 #[test]
