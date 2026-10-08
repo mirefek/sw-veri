@@ -301,3 +301,67 @@ proof
   have u := unsel(expand(h, runs, mkprog))
   show by taut(u)
 qed
+
+// ----------------------------------------------------------------------
+//  Contracts (layers/abi.sl): `become` and `overflow` read as outcomes;
+//  the stack grown by nothing, or in steps
+
+theorem ct.grown_refl: all v. v in x86_64_linux.Vm -> abi.stack_grown(v, v)
+proof
+  fix v
+  assume h
+  have ht: is_fun(v) && "pages" in dom(v) by simp(expand(h, x86_64_linux.Vm))
+  have e := apply(fn_update_same[f := v, k := "pages"], ht.1, ht.2)
+  show by defs(simp(e), abi.stack_grown)
+qed
+
+theorem ct.become_intro: all s v1 v2. abi.stack_grown(v1, v2) -> v2 in x86_64_linux.Vm -> pair(s, ok(fn_update(s, "vm", v2), empty)) in univ(1) ->
+  runs(abi.become(v1), s, ok(fn_update(s, "vm", v2), empty))
+proof
+  fix s v1 v2
+  assume hg hv hu
+  show by simp(hg, hv, hu, keep(abi.stack_grown))
+qed
+
+theorem ct.become_inv: all s v1 o. v1 in x86_64_linux.Vm -> runs(abi.become(v1), s, o) -> ex v2. v2 in x86_64_linux.Vm && abi.stack_grown(v1, v2) && o = ok(fn_update(s, "vm", v2), empty)
+proof
+  fix s v1 o
+  assume hv h
+  have ne: ex x. x in x86_64_linux.Vm && abi.stack_grown(v1, x) by ex_intro({v1}, taut(hv, apply(ct.grown_refl, hv)))
+  show by simp(h, ne, keep(abi.stack_grown))
+qed
+
+theorem ct.overflow_inv: all s o. app(s, "vm") in x86_64_linux.Vm -> runs(abi.overflow, s, o) -> ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))
+proof
+  fix s o
+  assume hv h
+  have ne: ex x. x in x86_64_linux.Vm by ex_intro({app(s, "vm")}, hv)
+  show by simp(h, ne)
+qed
+
+theorem ct.overflow_intro: all s v. v in x86_64_linux.Vm -> pair(s, exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) in univ(1) ->
+  runs(abi.overflow, s, exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty)))
+proof
+  fix s v
+  assume hv hu
+  show by simp(hv, hu)
+qed
+
+theorem ct.grown_trans: all a b c. abi.stack_grown(a, b) -> abi.stack_grown(b, c) -> abi.stack_grown(a, c)
+proof
+  fix a b c
+  assume hab hbc
+  have e1 pab := expand(hab, abi.stack_grown)
+  have e2 pbc := expand(hbc, abi.stack_grown)
+  have tw := fn_update_twice[f := c, k := "pages", a := app(b, "pages"), b := app(a, "pages")]
+  have e3: fn_update(c, "pages", app(a, "pages")) = a := trans(sym(tw), rewrite(sym(e2), e1))
+  have pg: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) -> app(app(c, "pages"), x0) = app(app(a, "pages"), x0) ||
+      ((app(app(a, "pages"), x0) = none && !(app(app(c, "pages"), x0) = none)) && app(snd(app(app(c, "pages"), x0)), "kind") = 2) proof
+    fix x0
+    assume hx
+    have q1 := mp(all_elim(pab, {x0}), hx)
+    have q2 := mp(all_elim(pbc, {x0}), hx)
+    show by simp(q1, q2)
+  qed
+  show by defs(taut(e3, pg), abi.stack_grown)
+qed

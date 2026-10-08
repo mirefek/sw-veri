@@ -199,6 +199,38 @@ pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
   }
 
 ///////////////////////////////////////////////////////////////////////
+//  Contracts
+//
+// A C function's spec, as a contract: a precondition, then a stack
+// overflow or the effect:
+//
+//   require pre
+//   either { overflow() } or { ..; become(vm1); return r }
+//
+// `vm1` is the memory the post describes; the stack may have grown on the
+// way (every call grows it: the frames, the pushes) and every call may
+// overflow (the process then dies, only its I/O matters: `overflow_ok`).
+// A leaf's implementation shows the effect without either; a caller's
+// uses its callees' contracts at its calls.
+
+// vm2 is vm1 with the stack grown: unmapped pages may have become stack
+// pages (as GIMPLE's calls have it, `grow_stack`); nothing else changed
+pred stack_grown(vm1: Vm, vm2: Vm) =
+  vm2 with { pages: vm1.pages } = vm1 &&
+  (all p: PageNo. vm2.pages[p] = vm1.pages[p] || (vm1.pages[p] = none && vm2.pages[p] != none && vm2.pages[p].value.kind = stack))
+
+// a stack overflow: the memory then is any (the process dies)
+proc[World] overflow() {
+  havoc vm
+  raise stack_overflow
+}
+
+// the memory becomes vm1, the stack grown
+proc[World] become(vm1: Vm) {
+  havoc vm where stack_grown(vm1, vm)
+}
+
+///////////////////////////////////////////////////////////////////////
 //  What the ABI promises
 
 // The parts of a normal return (separate, so that proofs can take them one

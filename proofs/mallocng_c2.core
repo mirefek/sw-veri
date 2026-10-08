@@ -78,6 +78,44 @@ proof
   show by simp(wf)
 qed
 
+// (memories after words written: memories)
+theorem ms.wr_vm: all vm a v. vm in x86_64_linux.Vm -> vm in univ(1) -> a in bits(64) ->
+  mallocng_specs.wr64(vm, a, v) in x86_64_linux.Vm && mallocng_specs.wr64(vm, a, v) in univ(1)
+proof
+  fix vm a v
+  assume hv hu ha
+  have su := apply(g.store_univ, {vm}, {a}, {8}, {v}, hv)
+  have nu: fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, 8, v)) in univ(1) by simp(hu, su)
+  have nv := apply(x86.store_vm, {vm}, {a}, {8}, {v}, hv, nu)
+  show conj(nv, nu)
+qed
+
+theorem ms.dqvm_vm: all vm phead m. vm in x86_64_linux.Vm -> vm in univ(1) -> phead in bits(64) -> m in bits(64) ->
+  mallocng_specs.dequeue_vm(vm, phead, m) in x86_64_linux.Vm && mallocng_specs.dequeue_vm(vm, phead, m) in univ(1)
+proof
+  fix vm phead m
+  assume hv hu hph hm
+  let N := mallocng_specs.mnext(vm, m)
+  let P := mallocng_specs.mprev(vm, m)
+  have hN: N in bits(64) by defs(simp(), mallocng_specs.mnext, mallocng_specs.rd64)
+  have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+  have hP8: bits_add(64, P, 8) in bits(64) by arith(hP)
+  have hm8: bits_add(64, m, 8) in bits(64) by arith(hm)
+  have a1 a2 := apply(ms.wr_vm, {vm}, {bits_add(64, P, 8)}, {N}, hv, hu, hP8)
+  have b1 b2 := apply(ms.wr_vm, {mallocng_specs.wr64(vm, bits_add(64, P, 8), N)}, {N}, {P}, a1, a2, hN)
+  have c1 c2 := apply(ms.wr_vm, {vm}, {phead}, {0}, hv, hu, hph)
+  let L := mallocng_specs.dq_links(vm, phead, m)
+  have l1: L in x86_64_linux.Vm by apply(ite_in, b1, c1)
+  have l2: L in univ(1) by apply(ite_in, b2, c2)
+  have d1 d2 := apply(ms.wr_vm, {L}, {phead}, {N}, l1, l2, hph)
+  let H := mallocng_specs.dq_head(L, vm, phead, m)
+  have h1: H in x86_64_linux.Vm by apply(ite_in, d1, l1)
+  have h2: H in univ(1) by apply(ite_in, d2, l2)
+  have e1 e2 := apply(ms.wr_vm, {H}, {bits_add(64, m, 8)}, {0}, h1, h2, hm8)
+  have f1 f2 := apply(ms.wr_vm, {mallocng_specs.wr64(H, bits_add(64, m, 8), 0)}, {m}, {0}, e1, e2, hm)
+  show conj(f1, f2)
+qed
+
 // ----------------------------------------------------------------------
 //  The accessors' runs: one outcome each (the word defined)
 
@@ -413,10 +451,13 @@ proof
     let M8 := bits_add(64, m, 8)
     have pu := apply(g.runs_univ, hr)
     have hu: s in univ(1) by simp(pu)
-    let R(x, y) := !mallocng_specs.dequeue_pre(app(x, "vm"), app(x, "objs"), phead, m) || letin(fn_update(x, "vm", mallocng_specs.dequeue_vm(app(x, "vm"), phead, m)), x2. y = ok(x2, empty))
-    have rel: R(s, o) proof
-      have np: !mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> R(s, o) by taut()
-      have yp: mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> R(s, o) proof
+    let SPEC := mallocng_specs.dequeue_spec(phead, m)
+    have vV vfun .. := apply(ms.world_parts, hw)
+    have np: !mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.become, abi.overflow, mallocng_specs.dequeue_pre, mallocng_specs.dequeue_vm))
+    qed
+    have yp: mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> runs(SPEC, s, o) proof
         assume hp
         have alone: m = N -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
           assume e
@@ -439,11 +480,13 @@ proof
           show := apply(ms.dq_linked, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
         qed
         have oe: o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) by taut(alone, linked)
-        show by rsimp(oe)
-      qed
-      show by taut(np, yp)
+        // (the effect, its stack grown by nothing)
+        have vu: V0 in univ(1) by simp(hu)
+        have dv du := apply(ms.dqvm_vm, {V0}, {phead}, {m}, vV, vu, hph, hm)
+        have bi := apply(ct.become_intro, {s}, {mallocng_specs.dequeue_vm(V0, phead, m)}, {mallocng_specs.dequeue_vm(V0, phead, m)}, apply(ct.grown_refl, dv), dv, rewrite(oe, pu))
+        show by simp(oe, bi, pu, hp, keep(abi.become, abi.overflow, mallocng_specs.dequeue_pre, mallocng_specs.dequeue_vm))
     qed
-    show apply(tr.runs_intro[r := x y. R(x, y)], {s}, {o}, pu, rel)
+    show by taut(np, yp)
   qed
   show g
 qed

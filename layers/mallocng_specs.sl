@@ -1,10 +1,11 @@
 layer mallocng_specs uses gimple, abi
 
 // Specs of mallocng's internal functions on the C world (readable GIMPLE's
-// world: memory a partial byte map, `usable` its domain). Each spec is a
-// named precondition (`require`: outside it the spec allows anything) and
-// an effect, stated as a function of the world. C2 shows the function's
-// readable GIMPLE refines its spec (proofs/*_c2.core).
+// world: memory a partial byte map, `usable` its domain), as contracts
+// (layers/abi.sl): a named precondition (`require`: outside it the spec
+// allows anything), then a stack overflow or the effect, stated as a
+// function of the world. C2 shows the function's readable GIMPLE refines
+// its spec (proofs/*_c2.core).
 
 ///////////////////////////////////////////////////////////////////////
 //  Words
@@ -53,5 +54,5 @@ fn dequeue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm = wr64(wr64(dq_head(dq_links(v
 
 proc[World] dequeue_spec(phead: bits[64], m: bits[64]) {
   require dequeue_pre(vm, objs, phead, m)
-  vm := dequeue_vm(vm, phead, m)
+  either { overflow() } or { become(dequeue_vm(vm, phead, m)) }
 }
