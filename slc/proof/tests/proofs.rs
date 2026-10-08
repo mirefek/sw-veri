@@ -717,3 +717,17 @@ theorem t2: fn_build(omega, x. succ(x)) = fn_build(omega, x. succ(x))\nproof\n  
     rejected("theorem l(f): (ex x. f = x) -> true\nproof\n  assume h\n  show by taut()\nqed\n\
 theorem t(a): (ex x. x = x) -> true\nproof\n  assume h\n  show := apply(l, h)\nqed\n", "does not match");
 }
+
+/// Unfolding a definition with a function parameter (`letin(a, x. f)`)
+/// whose argument mentions variables bound around the occurrence: the
+/// argument's parameters take the call's arguments, its other variables
+/// stay bound where they were.
+#[test]
+fn unfolding_under_binders_with_function_arguments() {
+    let ok = "theorem t1(v): (ex z. z = v) -> (ex z. letin(v, x. z = x))\nproof\n  assume h\n  show by defs(h, letin)\nqed\n\
+theorem t2(v): (all y. ex z. app(z, y) = v) -> (all y. ex z. letin(v, x. letin(y, u. app(z, u) = x)))\nproof\n  assume h\n  show by defs(h, letin)\nqed\n\
+theorem t3(v): (ex z. all y. z = y) -> (ex z. letin(v, x. all y. letin(y, u. z = u)))\nproof\n  assume h\n  show by defs(h, letin)\nqed\n";
+    assert_eq!(check(ok), Ok(3));
+    // the variables kept apart: z = v is not v = z
+    rejected("theorem b(v): (ex z. z = v) -> (ex z. letin(v, x. x = z))\nproof\n  assume h\n  show by defs(h, letin)\nqed\n", "differ after unfolding");
+}

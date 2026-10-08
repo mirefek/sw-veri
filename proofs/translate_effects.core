@@ -1,0 +1,418 @@
+// C1's bookkeeping for calls: a callee's spec returns to a world valid for
+// GIMPLE (tr.returns_valid), or is undefined there (tr.callee_io). Proven
+// from the spec's structure, without search: one lemma per GIMPLE
+// combinator and primitive below, composed as the spec is built.
+// Checked after proofs/translate_call.core.
+
+// ---------------------------------------------------------------------
+//  Validity kept
+
+theorem tr.rv_refl: all w. tr.returns_valid(w, w)
+proof
+  fix w
+  have l: all gb gc st. gb in omega -> abi.loaded(app(w, "vm"), gb, gc, st) -> abi.loaded(app(w, "vm"), gb, gc, st) proof
+    fix gb gc st
+    assume _ h
+    show := h
+  qed
+  show by defs(taut(refl({app(app(w, "os"), "input")}), subset_refl[s := app(app(w, "os"), "events")], l), tr.returns_valid)
+qed
+
+theorem tr.rv_trans: all a b c. tr.returns_valid(a, b) -> tr.returns_valid(b, c) -> tr.returns_valid(a, c)
+proof
+  fix a b c
+  assume h1 h2
+  have i1 e1 l1 := expand(h1, tr.returns_valid)
+  have i2 e2 l2 := expand(h2, tr.returns_valid)
+  have ez: all z. z in app(app(a, "os"), "events") -> z in app(app(c, "os"), "events") proof
+    fix z
+    assume hz
+    have zb := mp(subset_elim[a := app(app(a, "os"), "events"), b := app(app(b, "os"), "events"), z := z], e1, hz)
+    show := mp(subset_elim[a := app(app(b, "os"), "events"), b := app(app(c, "os"), "events"), z := z], e2, zb)
+  qed
+  have e: subset(app(app(a, "os"), "events"), app(app(c, "os"), "events")) by defs(ez, subset)
+  have l: all gb gc st. gb in omega -> abi.loaded(app(a, "vm"), gb, gc, st) -> abi.loaded(app(c, "vm"), gb, gc, st) proof
+    fix gb gc st
+    assume hg hl
+    show := mp(all_elim(l2, {gb}, {gc}, {st}), hg, mp(all_elim(l1, {gb}, {gc}, {st}), hg, hl))
+  qed
+  show by defs(taut(trans(i2, i1), e, l), tr.returns_valid)
+qed
+
+// ---------------------------------------------------------------------
+//  Effects: the outcomes r(o) of a program run from w
+
+// every return keeps the world valid, or every exception is allowed (the
+// program is undefined from w)
+def tr.eff(w, o. r) := (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w, w2)) || (all x e. x in univ(1) -> e in univ(1) -> r(exc(x, e)))
+
+// a return in the state it started from
+theorem tr.eff_ret: all w v. tr.eff(w, o. o = ok(w, v))
+proof
+  fix w v
+  have g: all w2 r. ok(w2, r) = ok(w, v) -> tr.returns_valid(w, w2) proof
+    fix w2 r
+    assume h
+    have e: w2 = w by simp(h)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  show by defs(taut(g), tr.eff)
+qed
+
+// sequencing: p, then k on its return (exceptions and divergence passed on)
+theorem tr.eff_bind(p, s1 v o. k): all w. tr.eff(w, o. runs(p, w, o)) -> (all s1 v. runs(p, w, ok(s1, v)) -> tr.eff(s1, o. k(s1, v, o))) ->
+  tr.eff(w, o. bind_rel(p, w, s1 v. k(s1, v, o), s1 e. o = exc(s1, e), t. o = diverge(t)))
+proof
+  fix w
+  assume hp hk
+  let B(o) := bind_rel(p, w, s1 v. k(s1, v, o), s1 e. o = exc(s1, e), t. o = diverge(t))
+  // p undefined: so is the sequence
+  have ua: (all x e. x in univ(1) -> e in univ(1) -> runs(p, w, exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> B(exc(x, e))) proof
+    assume hu
+    fix x e
+    assume hx he
+    have r := mp(all_elim(hu, {x}, {e}), hx, he)
+    show by defs(ex_intro({exc(x, e)}, simp(r)), bind_rel)
+  qed
+  // a return of p after which k is undefined: so is the sequence
+  have ub: (ex s1 v. runs(p, w, ok(s1, v)) && (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e)))) ->
+      (all x e. x in univ(1) -> e in univ(1) -> B(exc(x, e))) proof
+    assume h
+    obtain s1 v, hr hu from h
+    fix x e
+    assume hx he
+    have kx := mp(all_elim(hu, {x}, {e}), hx, he)
+    show by defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel)
+  qed
+  // otherwise every return is valid: p's, then k's
+  have uc: (all w2 v. runs(p, w, ok(w2, v)) -> tr.returns_valid(w, w2)) ->
+      !(ex s1 v. runs(p, w, ok(s1, v)) && (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e)))) ->
+      (all w2 r. B(ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hv hn
+    fix w2 r
+    assume hb
+    obtain o1, hr1 hc from expand(hb, bind_rel)
+    have c1: (ex s1 v. o1 = ok(s1, v) && k(s1, v, ok(w2, r))) -> tr.returns_valid(w, w2) proof
+      assume e1
+      obtain s1 v, eo ko from e1
+      have r1 := rewrite(eo, hr1)
+      have ek := expand(mp(all_elim(hk, {s1}, {v}), r1), tr.eff)
+      have nu: (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e))) -> false proof
+        assume hu
+        have ex: ex s1 v. runs(p, w, ok(s1, v)) && (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e))) by ex_intro({s1}, {v}, taut(r1, hu))
+        show by taut(hn, ex)
+      qed
+      have kv: all w3 v3. k(s1, v, ok(w3, v3)) -> tr.returns_valid(s1, w3) by taut(ek, nu)
+      have rv2 := mp(all_elim(kv, {w2}, {r}), ko)
+      have rv1 := mp(all_elim(hv, {s1}, {v}), r1)
+      show := mp(all_elim(tr.rv_trans, {w}, {s1}, {w2}), rv1, rv2)
+    qed
+    have c2: (ex s1 e. o1 = exc(s1, e) && ok(w2, r) = exc(s1, e)) -> tr.returns_valid(w, w2) proof
+      assume e2
+      obtain s1 e, _ ee from e2
+      show by simp(ee)
+    qed
+    have c3: (ex t. o1 = diverge(t) && ok(w2, r) = diverge(t)) -> tr.returns_valid(w, w2) proof
+      assume e3
+      obtain t, _ ee from e3
+      show by simp(ee)
+    qed
+    show by taut(hc, c1, c2, c3)
+  qed
+  have ep := expand(hp, tr.eff)
+  show by defs(taut(ep, ua, ub, uc), tr.eff)
+qed
+
+// a choice: each choice's effect (no choice possible: undefined)
+theorem tr.eff_any(x. d, x o. k): all w. (all x. d(x) -> tr.eff(w, o. k(x, o))) -> tr.eff(w, o. any_rel(x. d(x), x. k(x, o)))
+proof
+  fix w
+  assume hk
+  // nothing to choose: anything
+  have ua: !(ex x. d(x)) -> (all y e. y in univ(1) -> e in univ(1) -> any_rel(x. d(x), x. k(x, exc(y, e)))) proof
+    assume hn
+    fix y e
+    assume _ _
+    show by defs(taut(hn), any_rel)
+  qed
+  // a choice after which k is undefined: so is the whole
+  have ub: (ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) ->
+      (all y e. y in univ(1) -> e in univ(1) -> any_rel(x. d(x), x. k(x, exc(y, e)))) proof
+    assume h
+    obtain x, hd hu from h
+    fix y e
+    assume hy he
+    have kx := mp(all_elim(hu, {y}, {e}), hy, he)
+    show by defs(taut(((ex x. d(x) && k(x, exc(y, e))) by ex_intro({x}, taut(hd, kx)))), any_rel)
+  qed
+  // otherwise every return is valid: the chosen one's
+  have uc: (ex x. d(x)) -> !(ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) ->
+      (all w2 r. any_rel(x. d(x), x. k(x, ok(w2, r))) -> tr.returns_valid(w, w2)) proof
+    assume hd0 hn
+    fix w2 r
+    assume ha
+    have ha2 := expand(ha, any_rel)
+    have c: (ex x. d(x) && k(x, ok(w2, r))) -> tr.returns_valid(w, w2) proof
+      assume e1
+      obtain x, hd kx from e1
+      have ek := expand(mp(all_elim(hk, {x}), hd), tr.eff)
+      have nu: (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) -> false proof
+        assume hu
+        have ex: ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) by ex_intro({x}, taut(hd, hu))
+        show by taut(hn, ex)
+      qed
+      have kv: all w3 v3. k(x, ok(w3, v3)) -> tr.returns_valid(w, w3) by taut(ek, nu)
+      show := mp(all_elim(kv, {w2}, {r}), kx)
+    qed
+    show by taut(ha2, hd0, c)
+  qed
+  show by defs(taut(ua, ub, uc), tr.eff)
+qed
+
+// a guard: when it holds, the program's effect
+theorem tr.eff_guard(c, o. r): all w. c -> tr.eff(w, o. r(o)) -> tr.eff(w, o. !c || r(o))
+proof
+  fix w
+  assume hc he
+  have e := expand(he, tr.eff)
+  have a1: (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. !c || r(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume h
+    fix w2 v
+    assume g
+    show := mp(all_elim(h, {w2}, {v}), (r(ok(w2, v)) by taut(g, hc)))
+  qed
+  have a2: (all x e. x in univ(1) -> e in univ(1) -> r(exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> !c || r(exc(x, e))) proof
+    assume h
+    fix x e
+    assume hx he2
+    show by taut(mp(all_elim(h, {x}, {e}), hx, he2))
+  qed
+  show by defs(taut(e, a1, a2), tr.eff)
+qed
+
+// a program: its relation's effect from w (from a w outside univ(1), it
+// has no runs at all)
+theorem tr.eff_prog(x0 o. r): all w. tr.eff(w, o. r(w, o)) -> tr.eff(w, o. runs(mkprog(x0 o. r(x0, o)), w, o))
+proof
+  fix w
+  assume he
+  have e := expand(he, tr.eff)
+  have a1: (all w2 v. r(w, ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. runs(mkprog(x0 o. r(x0, o)), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume h
+    fix w2 v
+    assume g
+    show := mp(all_elim(h, {w2}, {v}), (r(w, ok(w2, v)) by simp(g)))
+  qed
+  have a2: w in univ(1) -> (all x e. x in univ(1) -> e in univ(1) -> r(w, exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 o. r(x0, o)), w, exc(x, e))) proof
+    assume hw h
+    fix x e
+    assume hx hy
+    have rx := mp(all_elim(h, {x}, {e}), hx, hy)
+    show by simp(hw, hx, hy, rx)
+  qed
+  // (no runs from a w outside univ(1))
+  have a3: !(w in univ(1)) -> (all w2 v. runs(mkprog(x0 o. r(x0, o)), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume hn
+    fix w2 v
+    assume g
+    have m := expand(g, runs, mkprog)
+    have pu: pair(w, ok(w2, v)) in univ(1) by taut(set_select_def[s := univ(1), p := z. ex s o. z = pair(s, o) && r(s, o), z := pair(w, ok(w2, v))], m)
+    have hw: w in univ(1) by simp(pu)
+    show by taut(hn, hw)
+  qed
+  show by defs(taut(e, a1, a2, a3), tr.eff)
+qed
+
+// `undefined if c; ..`: c is anything (every exception: a raise as the
+// first statement's outcome); else the rest from the same state
+theorem tr.eff_undef_if(c, s o. k): all w. (!c -> tr.eff(w, o. k(w, o))) ->
+  tr.eff(w, o. ex x2. (c || (!c && x2 = ok(pair(w, empty), empty))) && ((fst(x2) = 0 && k(fst(out_state(x2)), o)) ||
+    ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o = diverge(snd(x2))))))
+proof
+  fix w
+  assume hk
+  let Q(o) := ex x2. (c || (!c && x2 = ok(pair(w, empty), empty))) && ((fst(x2) = 0 && k(fst(out_state(x2)), o)) ||
+    ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o = diverge(snd(x2)))))
+  // undefined: a raise as the first statement's outcome
+  have ua: c -> (all x e. x in univ(1) -> e in univ(1) -> Q(exc(x, e))) proof
+    assume hc
+    fix x e
+    assume _ _
+    show by ex_intro({exc(pair(x, empty), pair("raise", e))}, simp(hc))
+  qed
+  // defined: the rest, from w
+  have ub: !c -> (all x e. x in univ(1) -> e in univ(1) -> k(w, exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> Q(exc(x, e))) proof
+    assume hn hu
+    fix x e
+    assume hx he
+    have kx := mp(all_elim(hu, {x}, {e}), hx, he)
+    have os: fst(out_state(ok(pair(w, empty), empty))) = w by simp()
+    show by ex_intro({ok(pair(w, empty), empty)}, simp(hn, rewrite(sym(os), kx)))
+  qed
+  have uc: !c -> (all w2 v. k(w, ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume hn hv
+    fix w2 v
+    assume hq
+    obtain x2, hx hd from hq
+    have e2: x2 = ok(pair(w, empty), empty) by taut(hx, hn)
+    have os: fst(out_state(ok(pair(w, empty), empty))) = w by simp()
+    have k0: k(fst(out_state(ok(pair(w, empty), empty))), ok(w2, v)) by simp(rewrite(e2, hd))
+    have kk := rewrite(os, k0)
+    show := mp(all_elim(hv, {w2}, {v}), kk)
+  qed
+  have ek: !c -> (all w2 v. k(w, ok(w2, v)) -> tr.returns_valid(w, w2)) || (all x e. x in univ(1) -> e in univ(1) -> k(w, exc(x, e))) proof
+    assume hn
+    show := expand(mp(hk, hn), tr.eff)
+  qed
+  show by defs(taut(ua, ub, uc, ek), tr.eff)
+qed
+
+// (a program runs only from a state in univ(1))
+theorem tr.runs_univ(x0 o. r): all w o. runs(mkprog(x0 o. r(x0, o)), w, o) -> w in univ(1)
+proof
+  fix w o
+  assume g
+  have m := expand(g, runs, mkprog)
+  have pu: pair(w, o) in univ(1) by taut(set_select_def[s := univ(1), p := z. ex s o. z = pair(s, o) && r(s, o), z := pair(w, o)], m)
+  show by simp(pu)
+qed
+
+// a return of a fixed value after p's return
+theorem tr.eff_bind_ret(p, v. f): all w. tr.eff(w, o. runs(p, w, o)) -> tr.eff(w, o. bind_rel(p, w, s1 v. o = ok(s1, f(v)), s1 e. o = exc(s1, e), t. o = diverge(t)))
+proof
+  fix w
+  assume hp
+  have k: all s1 v. runs(p, w, ok(s1, v)) -> tr.eff(s1, o. o = ok(s1, f(v))) proof
+    fix s1 v
+    assume _
+    show := all_elim(tr.eff_ret, {s1}, {f(v)})
+  qed
+  show by apply(tr.eff_bind, {w}, hp, k)
+qed
+
+// ---------------------------------------------------------------------
+//  GIMPLE's primitives: the state kept, or undefined
+
+theorem tr.eff_padd: all w p d. tr.eff(w, o. runs(gimple.padd(p, d), w, o))
+proof
+  fix w p d
+  let A := int_add(p, gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), d))
+  have a1: int_le(0, A) && int_lt(A, 18446744073709551616) -> (all w2 v. runs(gimple.padd(p, d), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume hd
+    fix w2 v
+    assume h
+    have e: w2 = w by simp(expand(h, gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap), hd)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  have a2: w in univ(1) -> !(int_le(0, A) && int_lt(A, 18446744073709551616)) -> (all x e. x in univ(1) -> e in univ(1) -> runs(gimple.padd(p, d), w, exc(x, e))) proof
+    assume hw hn
+    fix x e
+    assume hx he
+    show by defs(simp(hw, hx, he, hn), gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap)
+  qed
+  have a3: !(w in univ(1)) -> (all w2 v. runs(gimple.padd(p, d), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume hn
+    fix w2 v
+    assume h
+    show by taut(hn, apply(tr.runs_univ, expand(h, gimple.padd)))
+  qed
+  show by defs(taut(a1, a2, a3), tr.eff)
+qed
+
+theorem tr.eff_arith: all w ty x. tr.eff(w, o. runs(gimple.arith(ty, x), w, o))
+proof
+  fix w ty x
+  let C := app(ty, "signed") && !gimple.fits(ty, x)
+  have b := mp(all_elim(tr.eff_undef_if[c := C, k := s o. o = ok(s, gimple.wrap(ty, x))], {w}), (!C -> tr.eff(w, o. o = ok(w, gimple.wrap(ty, x))) by taut(all_elim(tr.eff_ret, {w}, {gimple.wrap(ty, x)}))))
+  show by defs(apply(tr.eff_prog, {w}, b), gimple.arith)
+qed
+
+theorem tr.eff_smul: all w n a b. tr.eff(w, o. runs(gimple.smul(n, a, b), w, o))
+proof
+  fix w n a b
+  have ar := all_elim(tr.eff_arith, {w}, {fn_update(fn_update(empty, "prec", n), "signed", true)}, {int_mul(sint(n, a), sint(n, b))})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, ar)), gimple.smul)
+qed
+
+theorem tr.eff_elem: all w p i k. tr.eff(w, o. runs(gimple.elem(p, i, k), w, o))
+proof
+  fix w p i k
+  have sm := all_elim(tr.eff_smul, {w}, {64}, {i}, {bits_of_int(64, k)})
+  have kp: all s1 v. runs(gimple.smul(64, i, bits_of_int(64, k)), w, ok(s1, v)) ->
+      tr.eff(s1, o. bind_rel(gimple.padd(p, v), s1, x4 x5. o = ok(x4, x5), x4 x5. o = exc(x4, x5), x4. o = diverge(x4))) proof
+    fix s1 v
+    assume _
+    show by apply(tr.eff_bind_ret, {s1}, all_elim(tr.eff_padd, {s1}, {p}, {v}))
+  qed
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind, {w}, sm, kp)), gimple.elem)
+qed
+
+theorem tr.eff_result: all w n v. tr.eff(w, o. runs(gimple.result(n, v), w, o))
+proof
+  fix w n v
+  have k: all x. x in bits(64) && x in gimple.in_reg(v, fn_update(fn_update(empty, "prec", n), "signed", false)) -> tr.eff(w, o. o = ok(w, x)) proof
+    fix x
+    assume _
+    show := all_elim(tr.eff_ret, {w}, {x})
+  qed
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_any, {w}, k)), gimple.result)
+qed
+
+theorem tr.eff_mem: all w p off n wr. tr.eff(w, o. runs(gimple.mem(p, off, n, wr), w, o))
+proof
+  fix w p off n wr
+  // after the address: `undefined if !usable`, then its return
+  let K2(x3, x4, x1) := letin(x4, x5. ex x6. (!gimple.usable(app(x3, "vm"), x5, n, wr) || (!!gimple.usable(app(x3, "vm"), x5, n, wr) && x6 = ok(pair(x3, empty), empty))) &&
+    ((fst(x6) = 0 && x1 = ok(fst(out_state(x6)), x5)) || ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && x1 = ok(fst(out_state(x6)), snd(out_value(x6)))) ||
+      ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && x1 = exc(fst(out_state(x6)), snd(out_value(x6))))) || (fst(x6) = 2 && x1 = diverge(snd(x6))))))
+  have k2: all s1 v. runs(gimple.padd(p, off), w, ok(s1, v)) -> tr.eff(s1, o. K2(s1, v, o)) proof
+    fix s1 v
+    assume _
+    let U := !gimple.usable(app(s1, "vm"), v, n, wr)
+    have b := mp(all_elim(tr.eff_undef_if[c := U, k := s o. o = ok(s, v)], {s1}), (!U -> tr.eff(s1, o. o = ok(s1, v)) by taut(all_elim(tr.eff_ret, {s1}, {v}))))
+    show by defs(b, letin)
+  qed
+  have k1 := apply(tr.eff_bind, {w}, all_elim(tr.eff_padd, {w}, {p}, {off}), k2)
+  have b := mp(all_elim(tr.eff_undef_if[c := p = 0, k := s o. bind_rel(gimple.padd(p, off), s, x3 x4. K2(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3))], {w}), taut(k1))
+  show by defs(apply(tr.eff_prog, {w}, b), gimple.mem)
+qed
+
+theorem tr.eff_ld8: all w p off. tr.eff(w, o. runs(gimple.ld8(p, off), w, o))
+proof
+  fix w p off
+  have m := all_elim(tr.eff_mem, {w}, {p}, {off}, {1}, {false})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, m)), gimple.ld8)
+qed
+
+// ---------------------------------------------------------------------
+//  A spec's bookkeeping for its callers
+
+// a `_fun` wrapper's program per argument list: its effect for the lists
+// of at least n arguments gives tr.callee_io
+theorem tr.callee_io_fun(x0 x1 x2. r): all n. (all args w. args in abi.ARGS -> ord_le(n, seq_len(args)) -> tr.eff(w, o. runs(mkprog(x1 x2. r(args, x1, x2)), w, o))) ->
+  tr.callee_io(fn_build(abi.ARGS, x0. mkprog(x1 x2. r(x0, x1, x2))), n)
+proof
+  fix n
+  assume h
+  have g: all args w w2 rr. ord_le(n, seq_len(args)) -> w in abi.World -> runs(app(fn_build(abi.ARGS, x0. mkprog(x1 x2. r(x0, x1, x2))), args), w, ok(w2, rr)) ->
+      tr.returns_valid(w, w2) || tr.may_raise(fn_build(abi.ARGS, x0. mkprog(x1 x2. r(x0, x1, x2))), args, w) proof
+    fix args w w2 rr
+    assume hn _ hr
+    have ha hp := apply(runs_fn_build, hr)
+    have e := expand(mp(all_elim(h, {args}, {w}), ha, hn), tr.eff)
+    have ap := mp(app_fn_build[d := abi.ARGS, v := x0. mkprog(x1 x2. r(x0, x1, x2)), a := args], ha)
+    have c1: (all w3 v. runs(mkprog(x1 x2. r(args, x1, x2)), w, ok(w3, v)) -> tr.returns_valid(w, w3)) -> tr.returns_valid(w, w2) proof
+      assume hv
+      show := mp(all_elim(hv, {w2}, {rr}), hp)
+    qed
+    have c2: (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x1 x2. r(args, x1, x2)), w, exc(x, e))) ->
+        tr.may_raise(fn_build(abi.ARGS, x0. mkprog(x1 x2. r(x0, x1, x2))), args, w) proof
+      assume hu
+      show by defs(rewrite(sym(ap), hu), tr.may_raise)
+    qed
+    show by taut(e, c1, c2)
+  qed
+  show by defs(g, tr.callee_io)
+qed

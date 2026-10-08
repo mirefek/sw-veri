@@ -106,7 +106,7 @@ impl Term {
     }
 
     /// `self` with `outer`'s label, if it has one (the outer label wins).
-    fn labelled_as(self, outer: &Term) -> Term {
+    pub(crate) fn labelled_as(self, outer: &Term) -> Term {
         match &outer.0.label {
             Some(l) => self.with_label(Some(l.clone())),
             None => self,

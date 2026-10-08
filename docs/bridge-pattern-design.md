@@ -641,7 +641,25 @@ planned, and everything it does not use is removed.
      (rsp not in the register map: `tr.dom_out`), GIMPLE's 32-bit signed
      subtraction (`tr.ssub32_ok`, with a literal operand
      `tr.ssub32_ok_lit`).
-   - Still to do: instantiate `aclz.implements` with a_ctz_32
-     (`act.implements` widened to the concatenated code,
-     `tr.implements_widen`; a_ctz_32's spec typed and keeping I/O);
+   - **Linking (done, 2026-10-08):** proofs/mallocng_link.core instantiates
+     `aclz.implements` with a_ctz_32: `aclz.linked` /
+     `aclz.linked_abi` are C1 for a_clz_32 with its real callee,
+     unconditional. The callee's premises:
+     - its contract for the concatenated code (`tr.implements_widen`,
+       `tr.loaded_before`);
+     - its spec typed (`tr.fun_typed`, for any `_fun` wrapper);
+     - `tr.callee_io(g, n)`: for argument lists of at least n, a return
+       keeps the world valid for GIMPLE (`tr.returns_valid`) or the spec is
+       undefined there (`tr.may_raise`; the call rule then takes the
+       callee's raise path). It was stated before for every argument list
+       and every world, which no real spec satisfies (a `_fun` wrapper with
+       too few arguments, or undefined behaviour, allows any outcome). It is
+       proven from the spec's structure, without search, by
+       proofs/translate_effects.core: `tr.eff(w, o. R)` (every return
+       valid, or every exception allowed), one lemma per combinator
+       (`bind_rel`, `any_rel`, `undefined if`, the arity guard, `mkprog`,
+       a return) and per primitive (`padd`, `arith`, `smul`, `elem`,
+       `mem`, `ld8`, `result`).
+   - Still to do: `slc translate` emitting each function's `tr.callee_io`
+     proof (written by hand for a_ctz_32 so far: `act.eff`, `act.io`);
      frames above 8 bytes; calls of more arguments.

@@ -431,7 +431,11 @@ impl Seq {
     /// every primitive binder of the prelude: `ex` (witness and
     /// `ex_intro`), `choose` (`choose_ext`), `set_select` and `set_image`
     /// (`set_ext` with `set_select_def`, `set_image_def`); defined binders
-    /// unfold to these.
+    /// unfold to these. An argument mentioning variables bound around the
+    /// occurrence (`letin(v, x. z = x)` under `ex z`) is the equation's
+    /// instance at those variables' values: in the body, the argument's
+    /// parameters take the call's arguments, its other bound variables are
+    /// shifted past the body's binders.
     pub fn conv(env: &Env, s: &Seq, goal: &Term, syms: &[SymId]) -> KResult<Seq> {
         env.check_wf(goal, 0)?;
         let (uf, ug) = (unfold_all(env, &s.concl, syms), unfold_all(env, goal, syms));
@@ -616,12 +620,9 @@ pub fn unfold_all(env: &Env, t: &Term, syms: &[SymId]) -> Term {
                 if let SymKind::Defined { params, body } = &env.syms[*s as usize].kind {
                     let bf = env.binders_fn();
                     // an argument with bound variables of the context (the
-                    // occurrence is under binders): only for a first-order
-                    // parameter, placed under the body's binders shifted
+                    // occurrence is under binders): placed under the body's
+                    // binders shifted
                     let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.vars[*p as usize].arity;
-                    if params.iter().zip(&args).any(|(p, a)| open(p, a) && env.vars[*p as usize].arity > 0) {
-                        return t.with_args(args);
-                    }
                     // the kernel's instantiation of the defining equation
                     let mut b = body.clone();
                     for (p, a) in params.iter().zip(&args) {
@@ -672,18 +673,47 @@ pub fn unfold_at(env: &Env, t: &Term, sym: SymId, occ: &[usize], count: &mut usi
     }
 }
 
-/// `t` with the first-order variable `v` replaced by `a`, a term with bound
-/// variables of the context: at binder depth `d` in `t`, `a` shifted by d.
+/// `t` with the variable `v` (k parameters) replaced by `a`, a term with
+/// bound variables of the context: at binder depth `d` in `t`, an
+/// occurrence `v(x1, .., xk)` becomes `a` with its parameters the xi and
+/// its context's variables shifted by d.
 fn subst_open(env: &Env, t: &Term, v: VarId, a: &Term, d: u32) -> Term {
     let bf = env.binders_fn();
     match t.node() {
-        Node::Var(w, xs) if *w == v && xs.is_empty() => match t.label() {
-            Some(l) => a.shift(d, 0, &bf).with_label(Some(l.into())),
-            None => a.shift(d, 0, &bf),
-        },
+        Node::Var(w, xs) if *w == v => {
+            let xs: Vec<Term> = xs.iter().map(|x| subst_open(env, x, v, a, d)).collect();
+            let r = open_inst(env, a, &xs, d, 0);
+            match t.label() {
+                Some(l) => r.with_label(Some(l.into())),
+                None => r,
+            }
+        }
         Node::Var(_, xs) => t.with_args(xs.iter().map(|x| subst_open(env, x, v, a, d)).collect()),
         Node::App(s, xs) => t.with_args(xs.iter().enumerate().map(|(i, x)| subst_open(env, x, v, a, d + bf(*s, i))).collect()),
         _ => t.clone(),
+    }
+}
+
+/// `a` (at depth `dd` within it) with its parameters (the k loose bound
+/// variables below its context's: parameter j is BVar(k - 1 - j)) the
+/// terms `xs` (at the site, depth d in the body) and its context's bound
+/// variables lowered by k and shifted by d.
+fn open_inst(env: &Env, a: &Term, xs: &[Term], d: u32, dd: u32) -> Term {
+    let bf = env.binders_fn();
+    let k = xs.len() as u32;
+    match a.node() {
+        Node::BVar(i) if *i < dd => a.clone(),
+        Node::BVar(i) => {
+            let j = i - dd;
+            if j < k {
+                xs[(k - 1 - j) as usize].shift(dd, 0, &bf).labelled_as(a)
+            } else {
+                Term::bvar(j - k + d + dd)
+            }
+        }
+        Node::App(s, ys) => a.with_args(ys.iter().enumerate().map(|(i, y)| open_inst(env, y, xs, d, dd + bf(*s, i))).collect()),
+        Node::Var(_, ys) => a.with_args(ys.iter().map(|y| open_inst(env, y, xs, d, dd)).collect()),
+        _ => a.clone(),
     }
 }
 

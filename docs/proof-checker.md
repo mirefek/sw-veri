@@ -68,6 +68,14 @@ below are the design decisions behind it.
   variables bound around the instance, never one bound inside the
   matched left side (`all p. (ex x. p) = p` rewrites `all y. ex x. y = 1`,
   not `ex x. x = 1`).
+- **Lemmas with function parameters** (`x. v`, `s o. k`) are instantiated
+  by matching: in `apply` against its premises, and (in `show by apply`,
+  `defs(apply(..), ..)`, `show :=`) its conclusion against the goal first.
+  A parameter applied to distinct bound variables (`k(s1, v, o)` under
+  the binders of s1, v, o) matches any term over them; one applied to
+  other terms (`k(fst(out_state(x2)), o)`) does not, and is given
+  explicitly (`lemma[k := s o. ..]`). A nested `apply` whose parameters
+  only its premise determines is proven against that premise.
 - **Goal rules inline.** A rule that needs its goal (`taut`, `simp`,
   `defs`, `ex_intro`, ..) is a proof expression as `(φ by R(args))`.
 - **Bridge proofs without search**: each obligation by a determined

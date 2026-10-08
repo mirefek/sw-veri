@@ -17,6 +17,15 @@ expected gain:
   hypothesis is re-normalised in every call.
 - **Parallel checking**: statements first, then the proofs independently.
 
+## C1 certificates
+
+- **Generate each function's `tr.callee_io`** in its certificate (`slc
+  translate`), from its spec's structure with proofs/translate_effects.core's
+  lemmas, as written by hand for a_ctz_32 (`act.eff`, `act.io` in
+  proofs/mallocng_link.core); effect lemmas for the primitives not yet
+  covered (stores, calls -- by the callee's own `tr.callee_io` --, loops
+  by an invariant).
+
 ## Proof language
 
 - **Grouped conjunctions with `conj`.** `conj(p1, .., pn)` builds the flat

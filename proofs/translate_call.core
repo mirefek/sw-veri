@@ -1342,12 +1342,21 @@ proof
   show by defs(simp(k0, k1, k2, k3, k4, k5, k6, k7), x86_64_linux.le)
 qed
 
-// The callee's spec, program-wide: on a return, the input as it was, the
-// events grown, the program loaded still -- called with at least its n
-// arguments (with fewer, a `_fun` wrapper allows any outcome)
-def tr.callee_io(g, n) := all args w w2 r. ord_le(n, seq_len(args)) -> w in abi.World -> runs(app(g, args), w, ok(w2, r)) ->
-  app(app(w2, "os"), "input") = app(app(w, "os"), "input") && subset(app(app(w, "os"), "events"), app(app(w2, "os"), "events")) &&
+// A return keeps the world valid for GIMPLE (C1's bookkeeping, nothing
+// function-specific): the input as it was, the events grown, the program
+// loaded still
+def tr.returns_valid(w, w2) := app(app(w2, "os"), "input") = app(app(w, "os"), "input") && subset(app(app(w, "os"), "events"), app(app(w2, "os"), "events")) &&
   (all gb gc st. gb in omega -> abi.loaded(app(w, "vm"), gb, gc, st) -> abi.loaded(app(w2, "vm"), gb, gc, st))
+
+// the spec is undefined from w: it allows every exception (and so, as
+// GIMPLE's undefined behaviour does, every outcome)
+def tr.may_raise(g, args, w) := all x e. x in univ(1) -> e in univ(1) -> runs(app(g, args), w, exc(x, e))
+
+// The callee's spec, program-wide: called with at least its n arguments
+// (with fewer, a `_fun` wrapper allows any outcome), a return keeps the
+// world valid -- or the spec is undefined there (so is its caller's call)
+def tr.callee_io(g, n) := all args w w2 r. ord_le(n, seq_len(args)) -> w in abi.World -> runs(app(g, args), w, ok(w2, r)) ->
+  tr.returns_valid(w, w2) || tr.may_raise(g, args, w)
 
 // a spec built as GIMPLE's `_fun` wrappers are (a program per argument
 // list): typed as the ABI has specs
@@ -1470,7 +1479,7 @@ qed
 // The coupling after the callee returned (x, its world w2, the caller's
 // frame [S - 8, S + 8) as at the call): the caller's world W3, the result
 // in rax, the homes gone (the spec's world is the machine's again)
-theorem tr.post_call: all s base code m w C x w2 vv g n regs.
+theorem tr.post_call: all s base code m w C x w2 vv.
   tr.inv(s, base, code, 8, m, w) -> base in omega -> int_le(16, app(app(s, "gpr"), 4)) ->
   C in x86_64_linux.Machine -> C in univ(1) -> app(C, "os") = app(m, "os") -> app(C, "cpu") = app(m, "cpu") -> app(C, "gs_base") = app(m, "gs_base") ->
   app(C, "gpr") = fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), 16)) -> tr.keeps_code(app(m, "vm"), app(C, "vm")) ->
@@ -1478,7 +1487,7 @@ theorem tr.post_call: all s base code m w C x w2 vv g n regs.
   (all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 16), a) && int_lt(a, int_sub(app(app(s, "gpr"), 4), 8))) ->
     x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) -> app(app(app(C, "vm"), "bytes"), a) = app(app(app(m, "vm"), "bytes"), a)) ->
   vv in x86_64_linux.Vm -> vv in univ(1) -> abi.scratch_view(vv, app(C, "vm"), abi.sp(C)) ->
-  tr.callee_io(g, n) -> ord_le(n, seq_len(regs)) -> runs(app(g, regs), abi.view(vv, C), ok(w2, pair(app(app(x, "gpr"), 0), app(app(x, "gpr"), 2)))) ->
+  tr.returns_valid(abi.view(vv, C), w2) ->
   x in x86_64_linux.Machine -> x in univ(1) -> w2 in abi.World -> w2 in univ(1) ->
   abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), abi.sp(C)) -> app(x, "os") = app(w2, "os") -> app(x, "fs_base") = app(w2, "fs_base") ->
   app(x, "cpu") = app(C, "cpu") -> app(x, "gs_base") = app(C, "gs_base") -> app(app(x, "gpr"), 4) = abi.sp(C) ->
@@ -1488,8 +1497,8 @@ theorem tr.post_call: all s base code m w C x w2 vv g n regs.
   tr.mem(s, x, fn_update(fn_update(fn_update(fn_update(w, "vm", app(C, "vm")), "vm", app(x, "vm")), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), false) &&
   tr.homes(s, x, empty) && tr.regs(x, fn_update(empty, 0, pair(8, app(app(x, "gpr"), 0))))
 proof
-  fix s base code m w C x w2 vv g n regs
-  assume hi hb h16 cM cu cos ccpu cgs cgpr ckc cpi cby hvv hvvu hsv hio hn hg xM xu w2W w2u hwm xos xfs xcpu xgs xr4 xcs xdf hfs
+  fix s base code m w C x w2 vv
+  assume hi hb h16 cM cu cos ccpu cgs cgpr ckc cpi cby hvv hvvu hsv hrv xM xu w2W w2u hwm xos xfs xcpu xgs xr4 xcs xdf hfs
   let S := app(app(s, "gpr"), 4)
   let W1 := fn_update(w, "vm", app(C, "vm"))
   let W3 := fn_update(fn_update(fn_update(W1, "vm", app(x, "vm")), "os", app(w2, "os")), "fs_base", app(w2, "fs_base"))
@@ -1505,9 +1514,7 @@ proof
   have wsp: app(w, "sp") = int_add(S, 8) by simp(wsp0, pp4)
   have fs := expand(hfs, tr.frame_same)
   // the callee's spec: input kept, events grown, the program loaded still
-  have vt := apply(abi.world_typed, {C}, {vv}, {abi.sp(C)}, cM, hvv, simp(csp, sb, h16), simp(cu, hvvu, csp, sb, h16))
-  have io := mp(all_elim(expand(hio, tr.callee_io), {regs}, {abi.view(vv, C)}, {w2}, {pair(app(app(x, "gpr"), 0), app(app(x, "gpr"), 2))}), hn, vt, hg)
-  have ioi ioe iol := io
+  have ioi ioe iol := expand(hrv, tr.returns_valid)
   // the code loaded at the entry: loaded still (the push, the callee's view, its spec, the write-back)
   have kc: tr.keeps_code(app(s, "vm"), app(x, "vm")) proof
     have g0: all gb gc st. gb in omega -> abi.loaded(app(s, "vm"), gb, gc, st) -> abi.loaded(app(x, "vm"), gb, gc, st) proof
@@ -1992,6 +1999,20 @@ proof
           have r0u: r0 in univ(1) by simp(r0b)
           have r1u: r1 in univ(1) by simp(r1b)
           have ru: pair(r0, r1) in univ(1) by simp(r0u, r1u)
+          // the callee's spec: a valid world on its return, or undefined there (so is this call)
+          have vu: abi.view(vv, C) in univ(1) by simp(cu, vU, spc, sb, h16)
+          have vt := apply(abi.world_typed, {C}, {vv}, {abi.sp(C)}, cM, vV, simp(spc, sb, h16), vu)
+          have ci := mp(all_elim(expand(hio, tr.callee_io), {seq_one(u)}, {abi.view(vv, C)}, {w2}, {pair(r0, r1)}),
+            (ord_le(1, seq_len(seq_one(u))) by defs(arith(), ord_le)), vt, hg0)
+          have mr: tr.may_raise(g, seq_one(u), abi.view(vv, C)) -> tr.ub(s, v, P, w) || tr.ok(s, P, w, o) || tr.crash(s, P, w, o) proof
+            assume hm
+            have eu: empty in univ(1) by simp()
+            have pe := mp(all_elim(expand(hm, tr.may_raise), {abi.view(vv, C)}, {empty}), vu, eu)
+            have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+            have rst: abi.raise_state(vv, C, abi.view(vv, C)) by defs(taut(refl({abi.view(vv, C)})), abi.raise_state)
+            have ra: abi.raises_at(g, seq_one(u), C, vv) by defs(ex_intro({empty}, {abi.view(vv, C)}, taut(eu, eno, rst, pe)), abi.raises_at)
+            show := mp(u1, ra)
+          qed
           have ckr w3W w3u := apply(tr.callee_ok_p, {g}, {w}, {u}, {int_sub(S, 8)}, {app(C, "vm")}, {vv}, {w2}, {pair(r0, r1)}, {app(x, "vm")},
             wW, wu, cv, cvu, vV, vU, s8b, sv8, hg8, w2W, w2u, ru, xv, xvu, wm8)
           let W3 := fn_update(fn_update(fn_update(fn_update(w, "vm", app(C, "vm")), "vm", app(x, "vm")), "os", app(w2, "os")), "fs_base", app(w2, "fs_base"))
@@ -2011,14 +2032,15 @@ proof
             show by taut(ub)
           qed
           // ... kept: the caller goes on at the return address with the result
-          have fk: tr.frame_same(app(x, "vm"), app(C, "vm"), int_sub(S, 8), app(w, "sp")) -> tr.ub(s, v, P, w) || tr.ok(s, P, w, o) || tr.crash(s, P, w, o) proof
-            assume hs
+          have fk: tr.frame_same(app(x, "vm"), app(C, "vm"), int_sub(S, 8), app(w, "sp")) -> tr.returns_valid(abi.view(vv, C), w2) ->
+              tr.ub(s, v, P, w) || tr.ok(s, P, w, o) || tr.crash(s, P, w, o) proof
+            assume hs rv
             have hs2 := rewrite(sym(w3v), hs)
             have red: tr.red(P, w, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W3)
               by defs(mp(lk, hs2), tr.red)
             have sv0 := rewrite(sym(spc), sv8)
-            have pinv pmem phom preg := apply(tr.post_call, {s}, {base}, {code}, {m}, {w}, {C}, {x}, {w2}, {vv}, {g}, {1}, {seq_one(u)}, hi, hb, h16, cM, cu, co, cc0, cgs, cgpr, ckc, cpi, cby,
-              vV, vU, sv0, hio, defs(arith(), ord_le), hg0, xM, xu, w2W, w2u, wm0, xos, xfs, xcpu, xgs, xr4, xcs, xdf, hs)
+            have pinv pmem phom preg := apply(tr.post_call, {s}, {base}, {code}, {m}, {w}, {C}, {x}, {w2}, {vv}, hi, hb, h16, cM, cu, co, cc0, cgs, cgpr, ckc, cpi, cby,
+              vV, vU, sv0, rv, xM, xu, w2W, w2u, wm0, xos, xfs, xcpu, xgs, xr4, xcs, xdf, hs)
             have xrip: app(x, "rip") = RA by simp(xrip0, c4, cle)
             have ptk := mp(all_elim(hpost, {W3}, {r0}), taut(w3W, w3u), r0b)
             have sm := mp(all_elim(expand(ptk, tr.pt), {x}), pinv, xrip, phom, preg, pmem)
@@ -2045,7 +2067,7 @@ proof
             qed
             show by taut(ho1, same, divs)
           qed
-          show by taut(fc, fk)
+          show by taut(fc, fk, ci, mr)
         qed
         show by taut(mt2, n2, u1, u2)
       qed

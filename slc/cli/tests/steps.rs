@@ -84,7 +84,8 @@ fn step_theorems_of_get_slot_index_prove() {
 
 /// C1 for a_ctz_32, is_bouncing, get_slot_index, get_stride, step_seq,
 /// upgradelock, resetlock, decay_bounces and a_clz_32 (calling a_ctz_32, its
-/// contract a premise) by translation: `slc translate` writes the
+/// contract a premise; linked with a_ctz_32's in proofs/mallocng_link.core)
+/// by translation: `slc translate` writes the
 /// certificates (the committed proofs/FN_tr.core, unchanged), and they
 /// check with proofs/translate.core's, proofs/translate_store_loop.core's
 /// and proofs/translate_call.core's rules. Needs the -O0 build and its
@@ -114,7 +115,7 @@ fn translations_are_generated_and_check() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_store_loop.core", "proofs/translate_call.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/translate_effects.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -134,7 +135,8 @@ fn translations_are_generated_and_check() {
         assert!(made == k, "{} differs from the generated {}", kept, cert.display());
         certs.push(cert);
     }
-    let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).args(&certs).output().unwrap();
+    // and a_clz_32 linked with a_ctz_32 (proofs/mallocng_link.core)
+    let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).args(&certs).arg("proofs/mallocng_link.core").output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // each certificate's theorems unconditional: nothing in the chain rests
     // on an open lemma (the storing functions' statics' range defined)
@@ -149,7 +151,8 @@ fn translations_are_generated_and_check() {
         ("decay_bounces", "1 definitions, 3 theorems"),
         ("a_clz_32", "0 definitions, 3 theorems"),
     ];
-    let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)));
+    let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
+        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple]) {
         let _ = std::fs::remove_file(f);

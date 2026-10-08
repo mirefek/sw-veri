@@ -57,9 +57,12 @@
 //! `prop({t})`, `lit({t})`; `apply(f, a1, ..)`: f's leading `all`s and
 //! schematic variables instantiated -- by the terms `{t}` among the ai, in
 //! order, the rest by matching f's premises with the proofs (or a conjunct
-//! of one) -- and f applied to them; with a goal only: `taut(p, ...)`,
-//! `ex_intro({w}, p)`. In `mp` and `apply`, a goal rule (`simp(..)`, ..)
-//! proves its premise.
+//! of one), with a goal its conclusion first matched with the goal -- and f
+//! applied to them; a function parameter applied to distinct bound
+//! variables matches any term over them (a higher-order pattern); with a
+//! goal only: `taut(p, ...)`, `ex_intro({w}, p)`. In `mp` and `apply`, a
+//! goal rule (`simp(..)`, ..) proves its premise, and so does a nested
+//! `apply` that only its premise determines.
 
 use sl_kernel::ext::seq::{defined_sym, unfold_all};
 use sl_kernel::ext::simp::LoopHint;
@@ -697,6 +700,10 @@ impl State {
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::taut(env, lg, &refs, goal)
             }
+            "apply" => {
+                let s = self.apply_to(env, lg, args, Some(goal))?;
+                self.check(env, s, goal)
+            }
             // arith(p1, ..): the goal by propositional logic and linear arithmetic
             // eval(p1, ..): the goal evaluated on concrete data, with the
             // premises' equations as known values
@@ -826,6 +833,7 @@ impl State {
                 let unfolded = self.unfold_sel(env, goal, &syms, &occ)?;
                 let s = match p {
                     PE::Rule(n, _) if GOAL_RULES.contains(&n.as_str()) => self.by(env, lg, &unfolded, p)?,
+                    PE::Rule(n, a) if n == "apply" => self.apply_to(env, lg, a, Some(&unfolded))?,
                     _ => {
                         let s = self.eval(env, lg, p)?;
                         self.fit(env, s, &unfolded)?
@@ -842,19 +850,34 @@ impl State {
 
     /// `apply(f, a1, .., an)` (see `eval`).
     fn apply(&self, env: &mut Env, lg: &Logic, args: &[Arg]) -> KResult<Seq> {
+        self.apply_to(env, lg, args, None)
+    }
+
+    /// `apply`, its conclusion first matched with the goal if there is one
+    /// (binding the variables the premises have only applied to terms).
+    fn apply_to(&self, env: &mut Env, lg: &Logic, args: &[Arg], goal: Option<&Term>) -> KResult<Seq> {
         let mut s = self.proof_arg(env, lg, args.first())?;
         let mut terms = Vec::new();
         // the proofs; a goal rule (`simp(..)`, `taut(..)`, ..) proves its
         // premise, instantiated, once the others have fixed the variables
         let mut proofs: Vec<Option<Seq>> = Vec::new();
-        let mut goal_args: Vec<(usize, &PE)> = Vec::new();
+        let mut goal_args: Vec<(usize, &PE, Option<Seq>)> = Vec::new();
         for a in &args[1..] {
             match a {
                 Arg::Term(_) => terms.push(self.term_arg(env, Some(a), 0)?),
                 Arg::Proof(p @ PE::Rule(n, _)) if GOAL_RULES.contains(&n.as_str()) => {
-                    goal_args.push((proofs.len(), p));
+                    goal_args.push((proofs.len(), p, None));
                     proofs.push(None);
                 }
+                // (a nested apply: on its own if that determines it, else
+                // against its premise as instantiated)
+                Arg::Proof(p @ PE::Rule(n, _)) if n == "apply" => match self.eval(env, lg, p) {
+                    Ok(s) if self.free_vars(&s).is_empty() => proofs.push(Some(s)),
+                    r => {
+                        goal_args.push((proofs.len(), p, r.ok()));
+                        proofs.push(None);
+                    }
+                },
                 Arg::Proof(_) => proofs.push(Some(self.proof_arg(env, lg, Some(a))?)),
             }
         }
@@ -879,14 +902,32 @@ impl State {
         if terms.next().is_some() {
             return err("apply: more terms than leading `all`s");
         }
-        // match the premises
+        // match the conclusion with the goal, then the premises
         let mut binds: Vec<(VarId, Term)> = Vec::new();
+        if let Some(g) = goal {
+            let mut c = s.concl().clone();
+            for _ in 0..proofs.len() {
+                match imp_parts(env, &c) {
+                    Ok((_, b)) => c = b,
+                    Err(_) => break,
+                }
+            }
+            let mut b = Vec::new();
+            if pmatch(env, &c, g, &pvars, &mut b) {
+                binds = b;
+            }
+        }
         let mut c = s.concl().clone();
         let and = env.sym_by_name.get("and").copied();
         for (i, p) in proofs.iter_mut().enumerate() {
             let (a, b) = imp_parts(env, &c).map_err(|_| KernelError(format!("apply: no premise for the proof number {}", i + 1)))?;
             c = b;
             let Some(p) = p else { continue };
+            // (the variables bound so far substituted)
+            let a = {
+                let bf = env.binders_fn();
+                binds.iter().fold(a, |t, (v, x)| t.subst_var(*v, x, &bf))
+            };
             if !pmatch(env, &a, p.concl(), &pvars, &mut binds) {
                 // a conjunct of the proof's statement that matches
                 let mut cs = Vec::new();
@@ -932,8 +973,11 @@ impl State {
                 ps.push(a);
                 c = b;
             }
-            for (i, pe) in goal_args {
-                proofs[i] = Some(self.by(env, lg, &ps[i], pe).map_err(|e| KernelError(format!("apply: premise {}: {}", i + 1, e.0)))?);
+            for (i, pe, eager) in goal_args {
+                proofs[i] = Some(match (self.by(env, lg, &ps[i], pe), eager) {
+                    (Ok(x), _) | (Err(_), Some(x)) => x,
+                    (Err(e), None) => return err(format!("apply: premise {}: {}", i + 1, e.0)),
+                });
             }
         }
         for p in proofs.iter().flatten() {
@@ -1154,6 +1198,15 @@ impl State {
                                 Arg::Proof(p @ PE::Rule(n, _)) if GOAL_RULES.contains(&n.as_str()) => {
                                     let (prem, _) = imp_parts(env, s.concl())?;
                                     self.by(env, lg, &prem, p)?
+                                }
+                                // (a nested apply: on its own, or else
+                                // against the premise)
+                                Arg::Proof(p @ PE::Rule(n, _)) if n == "apply" => {
+                                    let (prem, _) = imp_parts(env, s.concl())?;
+                                    match self.eval(env, lg, p) {
+                                        Ok(x) if x.concl() == &prem => x,
+                                        _ => self.by(env, lg, &prem, p)?,
+                                    }
                                 }
                                 _ => self.proof_arg(env, lg, Some(a))?,
                             };

@@ -93,6 +93,39 @@ The new definitions the DAG needs: `INV` and `OWNED`, and one spec
 `spec_F` per internal function (in terms of typed views of mallocng's
 structures). Those are the design work of the proof; the rest is proof.
 
+### 2.1 Worlds and their validity, by level (2026-10-08)
+
+Each level sees the state as its own world, and assumes it valid in its
+own sense; a valid world of a lower level corresponds to a world of the
+level above.
+
+| level | world | valid when | where |
+|---|---|---|---|
+| machine code | the x86 machine | the program (code, statics) loaded, the stack as the ABI has it at an entry | `abi.loaded`, `abi.entry_ok` |
+| readable GIMPLE | the ABI's view (`abi.view`): memory, os, fs | -- (any world; the machine's validity makes it one) | |
+| malloc | the abstract heap (`Abs`) | the invariant, `mallocng.holds` | layers/mallocng.sl |
+
+- **C1** (machine code ⊑ readable GIMPLE) is compilation correctness: it
+  holds for every world and every argument, with no function-specific
+  assumptions. Where the C code has undefined behaviour, GIMPLE allows
+  anything, so the machine matches trivially. Its assumptions are the
+  machine-level validity above. A call needs one more piece of
+  bookkeeping: after the callee returns, the world is valid again
+  (`tr.returns_valid`: the input as it was, the events grown, the program
+  loaded), unless the callee's spec is undefined there, in which case the
+  caller's call is undefined too (`tr.callee_io`). This is a property of
+  GIMPLE as a language (every operation keeps validity or is undefined),
+  proven per function from its spec's structure
+  (proofs/translate_effects.core), not a precondition a caller proves.
+- **C2** (readable GIMPLE ⊑ the function's spec) holds the function
+  contracts: "if the world is malloc-valid (the invariant) and the
+  arguments satisfy P, then the function does X". Each function's
+  assumptions are stated once there, as named definitions, and composed
+  by proving the callee's precondition at each call from the caller's.
+  Local functions may assume a weaker invariant (they break it
+  temporarily); structuring these assumptions (no repetition, each
+  function assuming what it needs) is part of C2's design.
+
 ## 3. The systems that build the theorems
 
 | | system | produces | status |
