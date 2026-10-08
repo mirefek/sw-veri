@@ -73,9 +73,9 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) 
     // (STEP_SLOW=secs: the steps taking longer, reported -- a nested
     // block's with it)
     let slow = std::env::var("STEP_SLOW").ok().and_then(|v| v.parse::<f64>().ok());
-    for (line_no, step) in steps(text) {
+    for (line_no, body_no, step) in steps(text) {
         let t0 = std::time::Instant::now();
-        res = st.step(env, lg, &step, line + line_no).map_err(|e| {
+        res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
         });
         if let Some(s) = slow {
@@ -150,23 +150,24 @@ fn has_var(t: &Term, v: VarId) -> bool {
     vs.contains(&v)
 }
 
-/// Steps with their line numbers (relative to the start of the proof text):
-/// a step continues on the next lines while brackets are open.
-fn steps(text: &str) -> Vec<(usize, String)> {
+/// Steps with their line numbers (relative to the start of the proof text)
+/// and, for a sub-proof, its body's first line: a step continues on the
+/// next lines while brackets are open.
+fn steps(text: &str) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut start = 0;
     let mut depth = 0i32;
-    // inside `... proof` .. `qed`: (start line, header, body, nesting)
-    let mut block: Option<(usize, String, String, u32)> = None;
+    // inside `... proof` .. `qed`: (start line, body line, header, body, nesting)
+    let mut block: Option<(usize, usize, String, String, u32)> = None;
     let ends_proof = |s: &str| s == "proof" || s.ends_with(" proof");
     for (i, l) in text.lines().enumerate() {
-        if let Some((st, header, mut body, mut nest)) = block.take() {
+        if let Some((st, bl, header, mut body, mut nest)) = block.take() {
             let t = l.split("//").next().unwrap_or("").trim();
             if t == "qed" {
                 nest -= 1;
                 if nest == 0 {
-                    out.push((st, format!("{}\n{}", header, body)));
+                    out.push((st, bl, format!("{}\n{}", header, body)));
                     continue;
                 }
             } else if ends_proof(t) {
@@ -174,7 +175,7 @@ fn steps(text: &str) -> Vec<(usize, String)> {
             }
             body.push_str(l);
             body.push('\n');
-            block = Some((st, header, body, nest));
+            block = Some((st, bl, header, body, nest));
             continue;
         }
         let l = match l.find("//") {
@@ -186,7 +187,7 @@ fn steps(text: &str) -> Vec<(usize, String)> {
         }
         // a line starting with `by` or `:=` continues the previous step
         if cur.is_empty() && (l.trim_start().starts_with("by ") || l.trim_start().starts_with(":= ")) {
-            if let Some((k, prev)) = out.pop() {
+            if let Some((k, _, prev)) = out.pop() {
                 start = k;
                 cur = prev;
             }
@@ -207,16 +208,16 @@ fn steps(text: &str) -> Vec<(usize, String)> {
             let s = cur.trim().to_string();
             if ends_proof(&s) {
                 // a sub-proof follows, up to its `qed`
-                block = Some((start, s[..s.len() - "proof".len()].trim().to_string(), String::new(), 1));
+                block = Some((start, i + 1, s[..s.len() - "proof".len()].trim().to_string(), String::new(), 1));
             } else {
-                out.push((start, s));
+                out.push((start, start, s));
             }
             cur.clear();
             depth = 0;
         }
     }
     if !cur.trim().is_empty() {
-        out.push((start, cur.trim().to_string()));
+        out.push((start, start, cur.trim().to_string()));
     }
     out
 }
@@ -385,7 +386,8 @@ impl State {
         err(format!("unknown fact `{}`", name))
     }
 
-    fn step(&mut self, env: &mut Env, lg: &Logic, step: &str, line: usize) -> KResult<()> {
+    /// one step at `line` (a sub-proof's body from `body_line`)
+    fn step(&mut self, env: &mut Env, lg: &Logic, step: &str, line: usize, body_line: usize) -> KResult<()> {
         // `have NAME: φ proof .. qed` / `show [φ] proof .. qed`: a sub-proof of
         // φ with its own assume / fix / obtain steps, closed at its `qed`
         if let Some((header, body)) = step.split_once('\n') {
@@ -402,7 +404,7 @@ impl State {
                 _ => return err("a sub-proof belongs to `have NAME: φ` or `show [φ]`"),
             };
             let child = State::new(self.scope.clone(), self.facts.clone(), Some(goal.clone()));
-            let s = run_block(env, lg, child, body, line + 1)?;
+            let s = run_block(env, lg, child, body, body_line)?;
             let s = self.check(env, s, &goal)?;
             if let Some(n) = name {
                 self.facts.push((n, s.clone()));
@@ -440,7 +442,14 @@ impl State {
                 };
                 for (n, t) in given {
                     let t = match t {
-                        Some(t) => t,
+                        // (SLC_TIDY: report a stated formula that is the goal's
+                        // premise, for scripts/tidy_proofs.py)
+                        Some(t) => {
+                            if std::env::var("SLC_TIDY").is_ok() && matches!(self.goal.as_ref().map(|g| imp_parts(env, g)), Some(Ok((p, _))) if p == t) {
+                                eprintln!("tidy-assume\t{}", line);
+                            }
+                            t
+                        }
                         None => match self.goal.as_ref().map(|g| imp_parts(env, g)) {
                             Some(Ok((p, _))) => p,
                             _ => return err(format!("assume {}: the goal is not known to be an implication here (write `assume {}: φ`)", n, n)),
@@ -515,7 +524,7 @@ impl State {
             "have" if rest.split(':').next().is_some_and(|l| l.split_whitespace().count() > 1) => {
                 let k = rest.find(':').unwrap();
                 let hs: Vec<&str> = rest[..k].split_whitespace().collect();
-                self.step(env, lg, &format!("have __parts{}", &rest[k..]), line)?;
+                self.step(env, lg, &format!("have __parts{}", &rest[k..]), line, line)?;
                 let (_, s) = self.facts.pop().unwrap();
                 let named = conj_named(env, &s, &hs, "have")?;
                 self.facts.extend(named);

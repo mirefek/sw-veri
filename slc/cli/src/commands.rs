@@ -95,6 +95,10 @@ pub fn kernel_check(args: &[String]) -> CResult {
     for (i, f) in files.iter().enumerate() {
         let first = i == 0;
         let t0 = std::time::Instant::now();
+        // (SLC_TIDY: the prover's reports below are this file's)
+        if std::env::var("SLC_TIDY").is_ok() {
+            eprintln!("tidy-file\t{}", f.display());
+        }
         let hit = cache.as_ref().and_then(|c| c.lookup(f, &prefix, first));
         let cached = hit.is_some();
         let (rep, stmts) = match hit {

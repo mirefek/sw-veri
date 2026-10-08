@@ -669,7 +669,8 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                     params,
                     statement: t.clone(),
                     text,
-                    line,
+                    // (the line of `proof`, where the text starts)
+                    line: src[..start].matches('\n').count() + 1,
                 };
                 let s = pr.prove(p.env, &req).map_err(ctx)?;
                 if s.concl() != &t || !s.hyps().is_empty() {

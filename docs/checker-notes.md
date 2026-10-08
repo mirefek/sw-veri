@@ -68,6 +68,38 @@ Measured on the full chain (25 files): 36 s uncached, 0.27 s all cached,
   conjunct restates it (`have slt: int_lt(S, ...) by taut(ic)`). Wanted:
   `assume eo` taking its formula from the goal; positional conjunct access
   (`ic.3`); `obtain x o1, h from e` for several witnesses.
+
+  **Implemented** (slc/proof/src/lib.rs): `assume h1 h2` (the goal's next
+  premises), `fix x y`, `h.k` / `R(args).k` (by `and_left`/`and_right`,
+  core/logic.core: modus ponens, no search), `have h1 h2 .. := P` (any
+  `have` form, its conjuncts as written, `_` skips), `obtain x y, h1 h2
+  from P`, a line starting with `:=` continuing the step. All hand-written
+  proofs use them now: the conjunct extractions in translate_call.core,
+  abi_bridge.core and translate.core by hand; the redundant assume
+  formulas (3,360) and runs of `fix`/`assume` lines by
+  scripts/tidy_proofs.py (the checker reports the assumes whose formula
+  is the goal's premise: `SLC_TIDY=1`). core/ and proofs/: about 6,200
+  lines shorter.
+
+  **Judgement.**
+  - Speed: the big win. Extracting a conjunct with `taut` (or
+    `simp(i, keep(..))`) from a large conjunction searched over all its
+    atoms, ~0.5 s per use on the 20-conjunct `tr.inv_call`; a projection
+    is a few `mp`s. translate_call.core 30 s -> 0.25 s, abi_bridge.core
+    7.5 s -> 0.65 s, translate.core 3 s -> 0.9 s; the whole chain
+    uncached 36-55 s -> 6.6 s.
+  - Reading: `assume hi hr hh hrs hmm` under a statement right above reads
+    well; `obtain m1 a k, oe kk m1M .. from expand(h, abi.crashes_at)`
+    replaced chains of obtain + taut. A block-local `let OKC(vv, o) := ..`
+    named a 5-line formula used four times -- worth doing more.
+  - Weak spot: positions in long conjunctions. `have _ _ _ _ rspm fo _ ..
+    sM _ _ _ hlt _ := expand(hi, tr.inv)` (26 positions) is hard to read
+    and easy to miscount; `i.21` is opaque. **Next idea: labelled
+    conjuncts in definitions** (`def tr.inv(..) := mM: m in Machine && ..`),
+    so proofs say `i.sM` or `have {sM, hlt} := i`.
+  - Still `taut`: rebuilding a conjunction from parts (`tr.ok_abi` drops a
+    conjunct, `tr.sim_red` replaces one). A cheap builder (`conj(p1, ..)`
+    by `and_intro`) would cover it.
 - **`rewrite` / `expand` act on every occurrence**, under binders too. To
   rewrite only a value (not the program containing the same subterm) an
   auxiliary equation was needed (`vq` in `tr.ssub32_ok_lit`). Wanted:
