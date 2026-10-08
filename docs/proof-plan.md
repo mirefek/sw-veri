@@ -206,6 +206,29 @@ Migration, each step keeping the chain checking:
    number of arguments need nothing special any more).
 5. Later: optimized code, through DWARF location maps.
 
+Decisions made while porting the bridge (step 3):
+- *The C world's memory at a call* is a view: `abi_function` takes the
+  stack objects `objs` (above `sp`, on writable stack pages) and a memory
+  `mem` with the machine's pages that agrees with the machine on the
+  domain (`abi.view_ok`); the contract is stated on
+  `world(sp, objs, mem)`. A raise is a world in `rec_and(World, {})`.
+- *GIMPLE `usable`*: on a mapped non-stack page the page's permission;
+  elsewhere the byte must be one of `objs` (and below 2^64). The frames
+  clause of `world_matches` speaks of stack pages, not of mapped ones.
+- *Calls in GIMPLE*: `either overflow; grow_stack; callee; grow_stack;
+  either overflow`, where `grow_stack` havocs only pages that become
+  stack pages; the caller's `objs` are restored after the callee (its own
+  stack objects are gone). A call's soundness side condition is
+  `thread_ok && stack_gap_free`.
+- *Machine faults*: SIGSEGV codes 0, 1 and 3 (with `pkuerr`) are crashes
+  of the ABI; `stack_gap_free` also says every stack page lies above
+  `STACK_GUARD_GAP`. `thread_ok`: the thread pointer's 8 bytes are
+  readable, not on stack pages, and point at themselves.
+- *Coupling* (`tr.mem`): the world's `objs` are the entry objects, the
+  memories match on the domain, and every object is an accessible byte on
+  a stack page above `sp`; writes are allowed exactly where `tr.wbl` says
+  (accessible, or an object not on a non-stack mapped page).
+
 ## 3. The systems that build the theorems
 
 | | system | produces | status |

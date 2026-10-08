@@ -1142,7 +1142,7 @@ impl<'e> Gen<'e> {
     /// address a is defined (its address p + off, literals)
     fn static_hyp(&self, st: &St, a: u128, write: bool) -> Result<String, String> {
         fn usable<'t>(g: &Gen, t: &'t Term, out: &mut Vec<&'t Term>) {
-            if let Some(x) = g.app(t, "gimple.usable", 4) {
+            if let Some(x) = g.app(t, "gimple.usable", 5) {
                 out.push(t);
                 let _ = x;
                 return;
@@ -1157,10 +1157,10 @@ impl<'e> Gen<'e> {
             let mut us = Vec::new();
             usable(self, h, &mut us);
             for u in us {
-                let x = self.app(u, "gimple.usable", 4).unwrap();
-                let wr = self.app(&x[3], "true", 0).is_some();
-                if x[0] == self.mk("app", vec![st.w.clone(), Term::bytes(b"vm")]) && nat(&x[2]) == Some(1) && wr == write {
-                    let at = self.app(&x[1], "int_add", 2).and_then(|s| Some((self.eval_lit(&s[0])? + self.eval_lit(&s[1])?) % P64)).or_else(|| self.eval_lit(&x[1]));
+                let x = self.app(u, "gimple.usable", 5).unwrap();
+                let wr = self.app(&x[4], "true", 0).is_some();
+                if x[0] == self.mk("app", vec![st.w.clone(), Term::bytes(b"vm")]) && nat(&x[3]) == Some(1) && wr == write {
+                    let at = self.app(&x[2], "int_add", 2).and_then(|s| Some((self.eval_lit(&s[0])? + self.eval_lit(&s[1])?) % P64)).or_else(|| self.eval_lit(&x[2]));
                     if at == Some(a) {
                         return Ok(name.clone());
                     }
@@ -1761,7 +1761,7 @@ impl<'e> Gen<'e> {
         let (b, c, kvp) = (self.base.clone(), self.code.clone(), kv);
         let qhp = self.print(&self.qs[jh].1);
         let mut lines = vec![
-            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {}, {h}, {hst}, true, empty, WRAP({qhp}), {lwn})", st.fr),
+            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {}, {h}, {hst}, V, empty, WRAP({qhp}), {lwn})", st.fr),
             format!("let {pi}({lwn}, {lin}) := tr.count_inv({kvp}, {lin}) && {lwn} in abi.World && {lwn} in univ(1)"),
             format!("let {mv}({lwn}, {lin}) := tr.count_var({kvp}, {lin})"),
             format!("have nat{ln}: all {lwn} {lin}. {pi}({lwn}, {lin}) -> {mv}({lwn}, {lin}) in omega proof"),
@@ -1798,7 +1798,7 @@ impl<'e> Gen<'e> {
         lines.push(format!("have i0{ln} := apply(tr.count_init, {{{kvp}}}, simp())"));
         lines.push(format!("have c{ln} := mp(all_elim(loop{ln}, {{{wn}}}, {{{i0p}}}), taut(i0{ln}, {}))", st.hw));
         let rs = format!(
-            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{}}}, {{{h}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{}}}, {{{h}}}, {{{}}}, {{V}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
             st.fr, st.hst, st.rs, self.qs[j0].0
         );
         let expr = format!("mp({}, mp({nodiv0}, {{{wn}}}), {rs})", self.wred(st, qi, j0));
@@ -1850,7 +1850,7 @@ impl<'e> Gen<'e> {
             format!("have {cn} := mp(all_elim({}, {{{wn}}}, {{{tpp}}}), taut({csn}, {}), taut({csn}))", lp.ih, st.hw),
         ];
         let rs = format!(
-            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{true}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{V}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
             self.base, self.code, st.fr, st.a, st.hst, st.rs, self.qs[j].0
         );
         let expr = format!("mp({}, mp({settle}, {{{wn}}}), {rs})", self.wred(st, qi, j));
