@@ -270,13 +270,32 @@ impl<'a, 'e> Parser<'a, 'e> {
     }
 
     fn and(&mut self) -> KResult<Term> {
-        let mut a = self.unary()?;
+        let mut a = self.labeled()?;
         while self.is_sym("&&") {
             self.bump()?;
-            let b = self.unary()?;
+            let b = self.labeled()?;
             a = Term::app(self.sym_named("and")?, vec![a, b]);
         }
         Ok(a)
+    }
+
+    /// `NAME: φ` (a conjunct named: metadata, see `Term`) or `φ`
+    fn labeled(&mut self) -> KResult<Term> {
+        if let Tok::Ident(name) = &self.tok {
+            let name = name.clone();
+            // (look ahead: a `:` after the name)
+            let (pos, line) = (self.lex.pos, self.lex.line);
+            let next = self.lex.next()?;
+            self.lex.pos = pos;
+            self.lex.line = line;
+            if next == Tok::Sym(":") {
+                self.bump()?;
+                self.bump()?;
+                let t = self.unary()?;
+                return Ok(t.with_label(Some(name.into())));
+            }
+        }
+        self.unary()
     }
 
     fn unary(&mut self) -> KResult<Term> {
@@ -854,6 +873,21 @@ impl<'e> Printer<'e> {
     }
 
     fn go(&self, t: &Term, scope: &mut Vec<String>, prec: u8, out: &mut String) {
+        // a label: `NAME: φ` where an operand of `&&` may stand, else in
+        // parentheses (φ at the operand's precedence)
+        if let Some(l) = t.label() {
+            let paren = prec > 5;
+            if paren {
+                out.push('(');
+            }
+            out.push_str(l);
+            out.push_str(": ");
+            self.go(&t.with_label(None), scope, 5, out);
+            if paren {
+                out.push(')');
+            }
+            return;
+        }
         match t.node() {
             Node::BVar(i) => out.push_str(&scope[scope.len() - 1 - *i as usize]),
             Node::Nat(n) => out.push_str(&n.to_string()),

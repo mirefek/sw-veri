@@ -461,19 +461,24 @@ pub fn unfold_all(env: &Env, t: &Term, syms: &[SymId]) -> Term {
                     // parameter, placed under the body's binders shifted
                     let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.vars[*p as usize].arity;
                     if params.iter().zip(&args).any(|(p, a)| open(p, a) && env.vars[*p as usize].arity > 0) {
-                        return Term::app(*s, args);
+                        return t.with_args(args);
                     }
                     // the kernel's instantiation of the defining equation
                     let mut b = body.clone();
                     for (p, a) in params.iter().zip(&args) {
                         b = if open(p, a) { subst_open(env, &b, *p, a, 0) } else { b.subst_var(*p, a, &bf) };
                     }
-                    return unfold_all(env, &b, syms);
+                    // (the occurrence's label, if any, on the unfolded body)
+                    let r = unfold_all(env, &b, syms);
+                    return match t.label() {
+                        Some(l) => r.with_label(Some(l.into())),
+                        None => r,
+                    };
                 }
             }
-            Term::app(*s, args)
+            t.with_args(args)
         }
-        Node::Var(v, args) => Term::var(*v, args.iter().map(|a| unfold_all(env, a, syms)).collect()),
+        Node::Var(_, args) => t.with_args(args.iter().map(|a| unfold_all(env, a, syms)).collect()),
         _ => t.clone(),
     }
 }
@@ -483,9 +488,12 @@ pub fn unfold_all(env: &Env, t: &Term, syms: &[SymId]) -> Term {
 fn subst_open(env: &Env, t: &Term, v: VarId, a: &Term, d: u32) -> Term {
     let bf = env.binders_fn();
     match t.node() {
-        Node::Var(w, xs) if *w == v && xs.is_empty() => a.shift(d, 0, &bf),
-        Node::Var(w, xs) => Term::var(*w, xs.iter().map(|x| subst_open(env, x, v, a, d)).collect()),
-        Node::App(s, xs) => Term::app(*s, xs.iter().enumerate().map(|(i, x)| subst_open(env, x, v, a, d + bf(*s, i))).collect()),
+        Node::Var(w, xs) if *w == v && xs.is_empty() => match t.label() {
+            Some(l) => a.shift(d, 0, &bf).with_label(Some(l.into())),
+            None => a.shift(d, 0, &bf),
+        },
+        Node::Var(_, xs) => t.with_args(xs.iter().map(|x| subst_open(env, x, v, a, d)).collect()),
+        Node::App(s, xs) => t.with_args(xs.iter().enumerate().map(|(i, x)| subst_open(env, x, v, a, d + bf(*s, i))).collect()),
         _ => t.clone(),
     }
 }

@@ -26,6 +26,15 @@
 //! `and_left` / `and_right` (core/logic.core) -- no tautology search. A line
 //! starting with `by` or `:=` continues the step before.
 //!
+//! Labelled conjuncts: a definition's body or a statement may name its
+//! conjuncts, `mM: m in Machine && sM: s in Machine` (term metadata, not
+//! logic: `sl_kernel::Term`). `h.sM` / `R(args).sM` is the conjunct labelled
+//! sM (a definition at the head of h's statement unfolded once if needed);
+//! `have {sM, x = mM} := P` and `obtain v, {sM} from P` name the conjuncts
+//! labelled so (x: the one labelled mM). Labels follow the terms through
+//! instantiation and unfolding; a labelled group `l: (a && b)` is one
+//! conjunct.
+//!
 //! (Core files also have `abbrev N(a, b) := t`; abbreviations are read as
 //! their expansions.)
 //!
@@ -262,8 +271,9 @@ enum PE {
     Rule(String, Vec<Arg>),
     /// instantiation of schematic variables: `var := value text`
     Inst(Box<PE>, Vec<(String, String)>),
-    /// `P.k`: the k-th conjunct (from 1, as written) of what P proves
-    Conj(Box<PE>, usize),
+    /// `P.k` / `P.l`: the k-th conjunct (from 1, as written) of what P
+    /// proves / the conjunct labelled l
+    Conj(Box<PE>, Result<usize, String>),
 }
 
 #[derive(Debug)]
@@ -336,11 +346,13 @@ fn parse_pe(s: &str) -> KResult<PE> {
         }
         pos = close + 1;
         let mut pe = PE::Rule(name.to_string(), args);
-        // R(args).k.j: conjuncts of its result
+        // R(args).k.j / R(args).l: conjuncts of its result
         while let Some(r) = s[pos..].strip_prefix('.') {
-            let n = r.find(|c: char| !c.is_ascii_digit()).unwrap_or(r.len());
-            let Ok(k) = r[..n].parse::<usize>() else { break };
-            pe = PE::Conj(Box::new(pe), k);
+            let n = r.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(r.len());
+            if n == 0 {
+                break;
+            }
+            pe = PE::Conj(Box::new(pe), r[..n].parse::<usize>().map_err(|_| r[..n].to_string()));
             pos += 1 + n;
         }
         pe
@@ -377,10 +389,14 @@ impl State {
         if let Some(s) = facts::seq_of(env, name) {
             return Ok(s);
         }
-        // h.k: the k-th conjunct of h (h.k.j: of that)
+        // h.k: the k-th conjunct of h (h.k.j: of that); h.l: the conjunct
+        // labelled l
         if let Some((h, k)) = name.rsplit_once('.') {
-            if let Ok(k) = k.parse::<usize>() {
-                return conj_get(env, &self.fact(env, h)?, k);
+            if let Ok(f) = self.fact(env, h) {
+                return match k.parse::<usize>() {
+                    Ok(k) => conj_get(env, &f, k),
+                    Err(_) => conj_label(env, &f, k),
+                };
             }
         }
         err(format!("unknown fact `{}`", name))
@@ -512,12 +528,29 @@ impl State {
                     prop = Some(pv);
                 }
                 let h = Seq::assume(env, prop.unwrap())?;
-                if hs.len() == 1 {
+                // (obtain x, {l1, l2} from P: the conjuncts labelled so)
+                let hs_text = names.split_once(',').unwrap().1.trim();
+                if let Some(inner) = hs_text.strip_prefix('{').and_then(|x| x.strip_suffix('}')) {
+                    let ls: Vec<&str> = inner.split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                    let named = conj_labels(env, &h, &ls)?;
+                    self.facts.extend(named);
+                } else if hs.len() == 1 {
                     self.facts.push((hs[0].to_string(), h));
                 } else {
                     let named = conj_named(env, &h, &hs, "obtain")?;
                     self.facts.extend(named);
                 }
+            }
+            // have {l1, .., lk} [: φ] (:= P | by R): its conjuncts labelled
+            // l1 .. lk, named so
+            "have" if rest.trim_start().starts_with('{') => {
+                let close = rest.find('}').ok_or_else(|| KernelError("expected `have {l1, ..} := P`".into()))?;
+                let open = rest.find('{').unwrap();
+                let ls: Vec<&str> = rest[open + 1..close].split(',').map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                self.step(env, lg, &format!("have __parts{}", &rest[close + 1..]), line, line)?;
+                let (_, s) = self.facts.pop().unwrap();
+                let named = conj_labels(env, &s, &ls)?;
+                self.facts.extend(named);
             }
             // have h1 .. hk [: φ] (:= P | by R): its k conjuncts as written
             // (`_` names none)
@@ -919,7 +952,10 @@ impl State {
             PE::Ref(name) => self.fact(env, name),
             PE::Conj(p, k) => {
                 let s = self.eval(env, lg, p)?;
-                conj_get(env, &s, *k)
+                match k {
+                    Ok(k) => conj_get(env, &s, *k),
+                    Err(l) => conj_label(env, &s, l),
+                }
             }
             PE::Inst(p, insts) => {
                 // simultaneous: names refer to the fact's variables before any
@@ -1198,14 +1234,17 @@ fn conjuncts(t: &Term, and: Option<SymId>, out: &mut Vec<Term>) {
 }
 
 /// `t`'s conjuncts as written: `a && b && c` (`(a && b) && c`) is [a, b, c];
-/// an explicitly grouped `a && (b && c)` is [a, b && c].
+/// an explicitly grouped `a && (b && c)` is [a, b && c], and so is a
+/// labelled `l: (a && b) && c` [l: a && b, c].
 fn conj_parts(env: &Env, t: &Term) -> Vec<Term> {
     let and = env.sym_by_name.get("and").copied();
     let mut out = Vec::new();
     let mut t = t.clone();
+    let mut top = true;
     loop {
         match t.node() {
-            Node::App(a, x) if Some(*a) == and => {
+            Node::App(a, x) if Some(*a) == and && (top || t.label().is_none()) => {
+                top = false;
                 out.push(x[1].clone());
                 t = x[0].clone();
             }
@@ -1249,6 +1288,50 @@ fn conj_get(env: &Env, s: &Seq, k: usize) -> KResult<Seq> {
         s = and_part(env, &s, true)?;
     }
     Ok(s)
+}
+
+/// The conjunct labelled `l` of `s`'s statement (a definition at its head
+/// unfolded once if it has none: `hi.sM` for `hi: tr.inv(..)`).
+fn conj_label(env: &Env, s: &Seq, l: &str) -> KResult<Seq> {
+    let find = |s: &Seq| -> KResult<Option<Seq>> {
+        let parts = conj_parts(env, s.concl());
+        match parts.iter().position(|p| p.label() == Some(l)) {
+            Some(_) if parts.len() == 1 => Ok(Some(s.clone())),
+            Some(k) => conj_get(env, s, k + 1).map(Some),
+            None => Ok(None),
+        }
+    };
+    if let Some(r) = find(s)? {
+        return Ok(r);
+    }
+    let mut s2 = s.clone();
+    if let Node::App(f, _) = s.concl().node() {
+        if matches!(env.syms[*f as usize].kind, sl_kernel::SymKind::Defined { .. }) {
+            let goal = unfold_all(env, s.concl(), &[*f]);
+            s2 = Seq::conv(env, s, &goal, &[*f])?;
+            if let Some(r) = find(&s2)? {
+                return Ok(r);
+            }
+        }
+    }
+    let labels: Vec<String> = conj_parts(env, s2.concl()).iter().filter_map(|p| p.label().map(|x| x.to_string())).collect();
+    let have = if labels.is_empty() { "none".to_string() } else { labels.join(", ") };
+    err(format!("no conjunct labelled `{}` in `{}` (its labels: {})", l, Printer::new(env).short(s.concl()), have))
+}
+
+/// The conjuncts labelled `labels` of `s`'s statement, named by their labels
+/// (`have {a, b} := P`) or as given (`{x = a}`: x names the conjunct a).
+fn conj_labels(env: &Env, s: &Seq, labels: &[&str]) -> KResult<Vec<(String, Seq)>> {
+    labels
+        .iter()
+        .map(|item| {
+            let (name, l) = match item.split_once('=') {
+                Some((n, l)) => (n.trim(), l.trim()),
+                None => (*item, *item),
+            };
+            Ok((name.to_string(), conj_label(env, s, l)?))
+        })
+        .collect()
 }
 
 /// All conjuncts (as written) of `s`'s statement, in order, named by

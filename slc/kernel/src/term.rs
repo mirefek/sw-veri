@@ -16,10 +16,35 @@ use std::rc::Rc;
 pub type SymId = u32;
 pub type VarId = u32;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Term(Rc<Node>);
+/// A term, with an optional label: metadata for proofs (`name: φ`, a
+/// conjunct named), not part of the logic -- equality and hashing ignore
+/// it, and no rule looks at it. Rebuilding a node keeps its label; where a
+/// variable is substituted, the variable's label (the outer one) wins over
+/// the value's.
+#[derive(Clone, Debug)]
+pub struct Term(Rc<Inner>);
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(Debug)]
+struct Inner {
+    node: Node,
+    label: Option<Rc<str>>,
+}
+
+impl PartialEq for Term {
+    fn eq(&self, other: &Term) -> bool {
+        Rc::ptr_eq(&self.0, &other.0) || self.0.node == other.0.node
+    }
+}
+
+impl Eq for Term {}
+
+impl std::hash::Hash for Term {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.node.hash(state)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Node {
     App(SymId, Box<[Term]>),
     Var(VarId, Box<[Term]>),
@@ -29,23 +54,47 @@ pub enum Node {
 }
 
 impl Term {
+    fn mk(node: Node) -> Term {
+        Term(Rc::new(Inner { node, label: None }))
+    }
     pub fn app(s: SymId, args: Vec<Term>) -> Term {
-        Term(Rc::new(Node::App(s, args.into_boxed_slice())))
+        Term::mk(Node::App(s, args.into_boxed_slice()))
     }
     pub fn var(v: VarId, args: Vec<Term>) -> Term {
-        Term(Rc::new(Node::Var(v, args.into_boxed_slice())))
+        Term::mk(Node::Var(v, args.into_boxed_slice()))
     }
     pub fn bvar(i: u32) -> Term {
-        Term(Rc::new(Node::BVar(i)))
+        Term::mk(Node::BVar(i))
     }
     pub fn nat(n: Nat) -> Term {
-        Term(Rc::new(Node::Nat(n)))
+        Term::mk(Node::Nat(n))
     }
     pub fn bytes(b: &[u8]) -> Term {
-        Term(Rc::new(Node::Bytes(b.into())))
+        Term::mk(Node::Bytes(b.into()))
     }
     pub fn node(&self) -> &Node {
-        &self.0
+        &self.0.node
+    }
+
+    /// The term's label (metadata, see `Term`).
+    pub fn label(&self) -> Option<&str> {
+        self.0.label.as_deref()
+    }
+
+    /// The same term labelled `label` (None: unlabelled).
+    pub fn with_label(&self, label: Option<Rc<str>>) -> Term {
+        if self.0.label == label {
+            return self.clone();
+        }
+        Term(Rc::new(Inner { node: self.0.node.clone(), label }))
+    }
+
+    /// `self` with `outer`'s label, if it has one (the outer label wins).
+    fn labelled_as(self, outer: &Term) -> Term {
+        match &outer.0.label {
+            Some(l) => self.with_label(Some(l.clone())),
+            None => self,
+        }
     }
 
     /// The same node (not just an equal one).
@@ -62,14 +111,14 @@ impl Term {
                 if old.len() == args.len() && old.iter().zip(&args).all(|(a, b)| a.ptr_eq(b)) {
                     self.clone()
                 } else {
-                    Term::app(*s, args)
+                    Term::app(*s, args).labelled_as(self)
                 }
             }
             Node::Var(v, old) => {
                 if old.len() == args.len() && old.iter().zip(&args).all(|(a, b)| a.ptr_eq(b)) {
                     self.clone()
                 } else {
-                    Term::var(*v, args)
+                    Term::var(*v, args).labelled_as(self)
                 }
             }
             _ => self.clone(),
@@ -113,7 +162,7 @@ impl Term {
             return self.clone();
         }
         match self.node() {
-            Node::BVar(i) if *i >= cutoff => Term::bvar(i + d),
+            Node::BVar(i) if *i >= cutoff => Term::bvar(i + d).labelled_as(self),
             Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => self.clone(),
             Node::Var(_, args) => self.with_args(args.iter().map(|a| a.shift(d, cutoff, binders)).collect()),
             Node::App(s, args) => self.with_args(
@@ -138,7 +187,7 @@ impl Term {
             Node::BVar(i) if *i >= depth => {
                 let j = i - depth;
                 debug_assert!(j < k, "value has loose variables beyond its parameters");
-                args[(k - 1 - j) as usize].shift(depth, 0, binders)
+                args[(k - 1 - j) as usize].shift(depth, 0, binders).labelled_as(self)
             }
             Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => self.clone(),
             Node::Var(_, a) => self.with_args(a.iter().map(|x| x.inst_params_at(args, depth, binders)).collect()),
@@ -157,7 +206,7 @@ impl Term {
             Node::Var(w, args) => {
                 let args: Vec<Term> = args.iter().map(|a| a.subst_var(v, value, binders)).collect();
                 if *w == v {
-                    value.instantiate_params(&args, binders)
+                    value.instantiate_params(&args, binders).labelled_as(self)
                 } else {
                     self.with_args(args)
                 }

@@ -95,6 +95,29 @@ mod tests {
     }
 
     #[test]
+    fn labels_are_metadata() {
+        let mut env = mini();
+        syntax::load(&mut env, "def p(a, b) := l: a = b && r: b = a", false).unwrap();
+        let p = env.sym_by_name["p"];
+        let SymKind::Defined { params, body } = env.syms[p as usize].kind.clone() else { panic!() };
+        let Node::App(_, parts) = body.node() else { panic!() };
+        assert_eq!(parts[1].label(), Some("r"));
+        // equal to the unlabelled term, labels kept through substitution
+        let bare = parts[1].with_label(None);
+        assert_eq!(parts[1], bare);
+        let seven = Term::nat(Nat::from_u64(7));
+        let inst = parts[1].subst_var(params[0], &seven, &env.binders_fn());
+        assert_eq!(inst.label(), Some("r"));
+        // the outer label wins at a substitution site
+        let lv = Term::var(params[0], vec![]).with_label(Some("outer".into()));
+        let lab = seven.with_label(Some("inner".into()));
+        assert_eq!(lv.subst_var(params[0], &lab, &env.binders_fn()).label(), Some("outer"));
+        // printed, and read back
+        let pr = syntax::Printer::new(&env);
+        assert_eq!(pr.term(&body), "l: a = b && r: b = a");
+    }
+
+    #[test]
     fn literals() {
         let env = mini();
         let b = &env.builtins;

@@ -97,6 +97,22 @@ Measured on the full chain (25 files): 36 s uncached, 0.27 s all cached,
     and easy to miscount; `i.21` is opaque. **Next idea: labelled
     conjuncts in definitions** (`def tr.inv(..) := mM: m in Machine && ..`),
     so proofs say `i.sM` or `have {sM, hlt} := i`.
+
+    **Implemented** as term metadata (slc/kernel/src/term.rs): a term may
+    carry a label, which equality and hashing ignore and no rule reads;
+    rebuilding a node keeps it, and where a variable is substituted the
+    variable's label (the outer one) wins. So a labelled conjunct inside a
+    definition or a theorem's statement -- under binders, in a premise, in
+    an `ex` body -- keeps its label through instantiation and unfolding.
+    Written `name: φ` as an operand of `&&` (printed so; in parentheses
+    where an operand cannot stand). In proofs: `hi.sM` (unfolding
+    `tr.inv` at the head), `have {rspm, fro, sM, slt} := hi`,
+    `have {xM = cM} := gt` (renamed), `obtain m2 a0 k0, {oe} from ..`.
+    Labelled now: `tr.inv`, `tr.inv_call`, `tr.matches_t`,
+    `abi.crashes_at`, `x86.grown_typed`; the positional destructurings of
+    them are gone (`tr.inv_call`'s own proof: 15 lines -> 4). Not yet:
+    SL predicates (`abi.world_matches`, `abi.overflow_ok`), which would
+    need the elaborator to carry labels.
   - Still `taut`: rebuilding a conjunction from parts (`tr.ok_abi` drops a
     conjunct, `tr.sim_red` replaces one). A cheap builder (`conj(p1, ..)`
     by `and_intro`) would cover it.

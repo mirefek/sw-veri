@@ -623,6 +623,25 @@ theorem t7(a, b): a && b -> b\nproof\n  assume h\n  show := mp(imp_refl[a := a &
     rejected("theorem b: (ex x. x = 1 && x = 1) -> 1 = 1\nproof\n  assume h\n  obtain x, p q r from h\n  show := refl({1})\nqed\n", "3 names for 2 conjuncts");
 }
 
+/// Labelled conjuncts (`name: φ`, term metadata): selected by `h.name` (a
+/// definition at the head unfolded), `R(args).name`, `have {a, x = b} :=
+/// P`, `obtain x, {a} from P` -- in a definition, a theorem's statement,
+/// an `ex` body; a labelled group counts as one conjunct.
+#[test]
+fn labelled_conjuncts() {
+    let ok = "def P(x, y) := px: x = 1 && grp: (x = x && y = y) && py: y = 2\n\
+theorem t1(a, b): P(a, b) -> b = 2 && a = 1\nproof\n  assume h\n  show by taut(h.py, h.px)\nqed\n\
+theorem t2(a, b): P(a, b) -> a = a\nproof\n  assume h\n  have {grp, q = py} := h\n  show := grp.1\nqed\n\
+theorem t3(a): (ex x. one: x = a && two: a = x) -> ex y. y = a\nproof\n  assume h\n  obtain x, {one} from h\n  show by ex_intro({x}, one)\nqed\n\
+theorem t4(a, b): a = b -> lft: a = b && rgt: b = a\nproof\n  assume h\n  show by taut(h, sym(h))\nqed\n\
+theorem t5(a, b): a = b -> b = a\nproof\n  assume h\n  show := mp(t4[a := a, b := b], h).rgt\nqed\n";
+    assert_eq!(check_nat(ok), Ok(5));
+    // an unknown label: the ones there are
+    rejected("def P(x) := px: x = 1 && qx: x = x\ntheorem b(a): P(a) -> a = 1\nproof\n  assume h\n  show := h.rx\nqed\n", "its labels: px, qx");
+    // labels are not logic: a statement with them is the one without
+    assert_eq!(check_nat("theorem e(a): a = a -> l: a = a\nproof\n  assume h\n  show := h\nqed\n"), Ok(1));
+}
+
 /// A mismatch names the first differing subterm and its path: premises by
 /// number, conjuncts however nested, arguments of the symbols on the way.
 #[test]
