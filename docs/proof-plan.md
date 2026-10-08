@@ -919,3 +919,24 @@ early return) is the first function with both halves:
    pattern; then a C2 proof is a chain of `bind_inv` steps that a tool
    could emit, as the C1 generator does, leaving only the memory facts by
    hand.
+
+### Status (2026-10-08)
+
+1. Done: `unfold [D..] [in h]`, implicit unfolding at a mismatch (also
+   `fix`/`assume` through a defined goal, `mp`/`apply` premises,
+   destructuring), `irreducible NAME`.
+2. Done: `have a b .. := h` / `r..`; goal rules inline in `apply`/`mp`
+   (already so).
+3. Done: `flip`; `taut` takes `a = b` as `b = a` (and `!=` as `!(=)`);
+   `rsimp` rewrites left to right only.
+4. Done: `rsimp(h, only, ..)` simplifies a fact with exactly the rules
+   given.
+5. Done: a `fn` block body is the term of its value (`letin`, `ite`); no
+   `choose`; nondeterministic statements rejected.
+6. Done: arith reads symbolic widths; `bits_add_nowrap` and friends
+   (core/nat.core) are simp rules, their bounds shown by arith.
+7. Open: a memory normalizer (rd/wr rules for rsimp with apartness by
+   arith) -- to be planned.
+8. Done: messages fold abbreviations (a proof's `let`s) back.
+9. Open: inversion lemmas for the remaining GIMPLE operations; calls (the
+   caller's C2 from the callee's C2 only).
