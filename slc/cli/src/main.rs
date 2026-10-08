@@ -10,6 +10,7 @@ mod heapcheck;
 mod sha256;
 mod steps;
 mod translate;
+mod effects;
 
 fn usage() -> ExitCode {
     eprintln!(

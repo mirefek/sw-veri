@@ -416,3 +416,423 @@ proof
   qed
   show by defs(g, tr.callee_io)
 qed
+
+// ---------------------------------------------------------------------
+//  Statements: a block's statement outcome x carries the world and the
+//  locals (out_state(x) = pair(world, locals)); a normal outcome (fst = 0)
+//  goes on with the next statement, a "ret" returns, a "raise" raises
+
+// every normal or returning outcome keeps the world valid, or every raise
+// is allowed (the statement is undefined from w)
+def tr.seff(w, x. a) := (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) ||
+  (all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e)))))
+
+// a block, as the program's body: its statement's outcome dispatched
+theorem tr.eff_seq(x. a, x o. k): all w. tr.seff(w, x. a(x)) -> (all x. a(x) -> fst(x) = 0 -> tr.eff(fst(out_state(x)), o. k(x, o))) ->
+  tr.eff(w, o. ex x. a(x) && ((fst(x) = 0 && k(x, o)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && o = ok(fst(out_state(x)), snd(out_value(x)))) ||
+    ((fst(x) = 1 && fst(out_value(x)) = "raise") && o = exc(fst(out_state(x)), snd(out_value(x))))) || (fst(x) = 2 && o = diverge(snd(x))))))
+proof
+  fix w
+  assume ha hk
+  let Q(o) := ex x. a(x) && ((fst(x) = 0 && k(x, o)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && o = ok(fst(out_state(x)), snd(out_value(x)))) ||
+    ((fst(x) = 1 && fst(out_value(x)) = "raise") && o = exc(fst(out_state(x)), snd(out_value(x))))) || (fst(x) = 2 && o = diverge(snd(x)))))
+  // the statement undefined: a raise of anything
+  have ua: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e))))) -> (all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e))) proof
+    assume hu
+    fix y e
+    assume hy he
+    obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({exc(pair(y, l), pair("raise", e))}, simp(hl))
+  qed
+  // a normal outcome after which the rest is undefined
+  have ub: (ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) -> (all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e))) proof
+    assume h
+    obtain x, hx h0 hu from h
+    fix y e
+    assume hy he
+    have kx := mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({x}, taut(hx, h0, kx))
+  qed
+  // otherwise: every return valid
+  have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) ->
+      !(ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume hv hn
+    fix w2 v
+    assume hq
+    obtain x, hx hd from hq
+    have c1: (fst(x) = 0 && k(x, ok(w2, v))) -> tr.returns_valid(w, w2) proof
+      assume h1
+      have h0 kx := h1
+      have ek := expand(mp(all_elim(hk, {x}), hx, h0), tr.eff)
+      have nu: (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) -> false proof
+        assume hu
+        have ex: ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) by ex_intro({x}, taut(hx, h0, hu))
+        show by taut(hn, ex)
+      qed
+      have kv: all w3 v3. k(x, ok(w3, v3)) -> tr.returns_valid(fst(out_state(x)), w3) by taut(ek, nu)
+      have r1 := mp(all_elim(hv, {x}), hx, (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret") by taut(h0)))
+      show := mp(all_elim(tr.rv_trans, {w}, {fst(out_state(x))}, {w2}), r1, mp(all_elim(kv, {w2}, {v}), kx))
+    qed
+    have c2: ((fst(x) = 1 && fst(out_value(x)) = "ret") && ok(w2, v) = ok(fst(out_state(x)), snd(out_value(x)))) -> tr.returns_valid(w, w2) proof
+      assume h2
+      have hr1 hr2 he := h2
+      have e2: w2 = fst(out_state(x)) by simp(he)
+      have r1 := mp(all_elim(hv, {x}), hx, (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret") by taut(hr1, hr2)))
+      show := rewrite(sym(e2), r1)
+    qed
+    have c3: ((fst(x) = 1 && fst(out_value(x)) = "raise") && ok(w2, v) = exc(fst(out_state(x)), snd(out_value(x)))) -> tr.returns_valid(w, w2) proof
+      assume h3
+      show by simp(h3.3)
+    qed
+    have c4: (fst(x) = 2 && ok(w2, v) = diverge(snd(x))) -> tr.returns_valid(w, w2) proof
+      assume h4
+      show by simp(h4.2)
+    qed
+    show by taut(hd, c1, c2, c3, c4)
+  qed
+  have ea := expand(ha, tr.seff)
+  show by defs(taut(ea, ua, ub, uc), tr.eff)
+qed
+
+// a normal outcome, the world as it was
+theorem tr.seff_ok: all w l v. tr.seff(w, y. y = ok(pair(w, l), v))
+proof
+  fix w l v
+  have g: all y. y = ok(pair(w, l), v) -> (fst(y) = 0 || (fst(y) = 1 && fst(out_value(y)) = "ret")) -> tr.returns_valid(w, fst(out_state(y))) proof
+    fix y
+    assume h _
+    have e: fst(out_state(y)) = w by simp(h)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  show by defs(taut(g), tr.seff)
+qed
+
+// a return, the world as it was
+theorem tr.seff_ret: all w l v. tr.seff(w, y. y = exc(pair(w, l), pair("ret", v)))
+proof
+  fix w l v
+  have g: all y. y = exc(pair(w, l), pair("ret", v)) -> (fst(y) = 0 || (fst(y) = 1 && fst(out_value(y)) = "ret")) -> tr.returns_valid(w, fst(out_state(y))) proof
+    fix y
+    assume h _
+    have e: fst(out_state(y)) = w by simp(h)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  show by defs(taut(g), tr.seff)
+qed
+
+// `undefined if c`: anything, else a normal outcome
+theorem tr.seff_undef_if(c): all w. tr.seff(w, x. c || (!c && x = ok(pair(w, empty), empty)))
+proof
+  fix w
+  have ua: c -> (all y e. y in univ(1) -> e in univ(1) -> (ex l. c || (!c && exc(pair(y, l), pair("raise", e)) = ok(pair(w, empty), empty)))) proof
+    assume hc
+    fix y e
+    assume _ _
+    show by ex_intro({empty}, taut(hc))
+  qed
+  have uc: !c -> (all x. c || (!c && x = ok(pair(w, empty), empty)) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) proof
+    assume hn
+    fix x
+    assume h _
+    have e: fst(out_state(x)) = w by simp(h, hn)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  show by defs(taut(ua, uc), tr.seff)
+qed
+
+// `if c`: each branch's
+theorem tr.seff_if(c, y. a1, y. a2): all w. (c -> tr.seff(w, y. a1(y))) -> (!c -> tr.seff(w, y. a2(y))) -> tr.seff(w, y. (c && a1(y)) || (!c && a2(y)))
+proof
+  fix w
+  assume h1 h2
+  have b1: c -> tr.seff(w, y. (c && a1(y)) || (!c && a2(y))) proof
+    assume hc
+    have e := expand(mp(h1, hc), tr.seff)
+    have v: (all x. a1(x) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) ->
+        (all x. (c && a1(x)) || (!c && a2(x)) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) proof
+      assume hv
+      fix x
+      assume ha hr
+      show := mp(all_elim(hv, {x}), (a1(x) by taut(ha, hc)), hr)
+    qed
+    have u: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a1(exc(pair(y, l), pair("raise", e))))) ->
+        (all y e. y in univ(1) -> e in univ(1) -> (ex l. (c && a1(exc(pair(y, l), pair("raise", e)))) || (!c && a2(exc(pair(y, l), pair("raise", e)))))) proof
+      assume hu
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l}, taut(hc, hl))
+    qed
+    show by defs(taut(e, v, u), tr.seff)
+  qed
+  have b2: !c -> tr.seff(w, y. (c && a1(y)) || (!c && a2(y))) proof
+    assume hc
+    have e := expand(mp(h2, hc), tr.seff)
+    have v: (all x. a2(x) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) ->
+        (all x. (c && a1(x)) || (!c && a2(x)) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) proof
+      assume hv
+      fix x
+      assume ha hr
+      show := mp(all_elim(hv, {x}), (a2(x) by taut(ha, hc)), hr)
+    qed
+    have u: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a2(exc(pair(y, l), pair("raise", e))))) ->
+        (all y e. y in univ(1) -> e in univ(1) -> (ex l. (c && a1(exc(pair(y, l), pair("raise", e)))) || (!c && a2(exc(pair(y, l), pair("raise", e)))))) proof
+      assume hu
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l}, taut(hc, hl))
+    qed
+    show by defs(taut(e, v, u), tr.seff)
+  qed
+  show by taut(b1, b2)
+qed
+
+// a choice: each choice's (none possible: anything)
+theorem tr.seff_any(x. d, x y. k): all w. (all x. d(x) -> tr.seff(w, y. k(x, y))) -> tr.seff(w, y. any_rel(x. d(x), x. k(x, y)))
+proof
+  fix w
+  assume hk
+  have ua: !(ex x. d(x)) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l. any_rel(x. d(x), x. k(x, exc(pair(y, l), pair("raise", e)))))) proof
+    assume hn
+    fix y e
+    assume _ _
+    show by ex_intro({empty}, defs(taut(hn), any_rel))
+  qed
+  have ub: (ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e)))))) ->
+      (all y e. y in univ(1) -> e in univ(1) -> (ex l. any_rel(x. d(x), x. k(x, exc(pair(y, l), pair("raise", e)))))) proof
+    assume h
+    obtain x, hd hu from h
+    fix y e
+    assume hy he
+    obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({l}, defs(taut(((ex x. d(x) && k(x, exc(pair(y, l), pair("raise", e)))) by ex_intro({x}, taut(hd, hl)))), any_rel))
+  qed
+  have uc: (ex x. d(x)) -> !(ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e)))))) ->
+      (all z. any_rel(x. d(x), x. k(x, z)) -> (fst(z) = 0 || (fst(z) = 1 && fst(out_value(z)) = "ret")) -> tr.returns_valid(w, fst(out_state(z)))) proof
+    assume hd0 hn
+    fix z
+    assume ha hr
+    have ha2 := expand(ha, any_rel)
+    have c: (ex x. d(x) && k(x, z)) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume e1
+      obtain x, hd kx from e1
+      have ek := expand(mp(all_elim(hk, {x}), hd), tr.seff)
+      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e))))) -> false proof
+        assume hu
+        have ex: ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e))))) by ex_intro({x}, taut(hd, hu))
+        show by taut(hn, ex)
+      qed
+      have kv: all z2. k(x, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && fst(out_value(z2)) = "ret")) -> tr.returns_valid(w, fst(out_state(z2))) by taut(ek, nu)
+      show := mp(all_elim(kv, {z}), kx, hr)
+    qed
+    show by taut(ha2, hd0, c)
+  qed
+  show by defs(taut(ua, ub, uc), tr.seff)
+qed
+
+// a statement's sequencing: p, then k on its return; p's raise raised
+// with the locals l
+theorem tr.seff_bind(p, s v y. k, s. l): all w. tr.eff(w, o. runs(p, w, o)) -> (all s1 v. runs(p, w, ok(s1, v)) -> tr.seff(s1, y. k(s1, v, y))) ->
+  tr.seff(w, y. bind_rel(p, w, s1 v. k(s1, v, y), s1 e. y = exc(pair(s1, l(s1)), pair("raise", e)), t. y = diverge(t)))
+proof
+  fix w
+  assume hp hk
+  let B(y) := bind_rel(p, w, s1 v. k(s1, v, y), s1 e. y = exc(pair(s1, l(s1)), pair("raise", e)), t. y = diverge(t))
+  have ua: (all x e. x in univ(1) -> e in univ(1) -> runs(p, w, exc(x, e))) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l2. B(exc(pair(y, l2), pair("raise", e))))) proof
+    assume hu
+    fix y e
+    assume hy he
+    have r := mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({l(y)}, defs(ex_intro({exc(y, e)}, simp(r)), bind_rel))
+  qed
+  have ub: (ex s1 v. runs(p, w, ok(s1, v)) && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e)))))) ->
+      (all y e. y in univ(1) -> e in univ(1) -> (ex l2. B(exc(pair(y, l2), pair("raise", e))))) proof
+    assume h
+    obtain s1 v, hr hu from h
+    fix y e
+    assume hy he
+    obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({l2}, defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel))
+  qed
+  have uc: (all w2 v. runs(p, w, ok(w2, v)) -> tr.returns_valid(w, w2)) ->
+      !(ex s1 v. runs(p, w, ok(s1, v)) && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e)))))) ->
+      (all z. B(z) -> (fst(z) = 0 || (fst(z) = 1 && fst(out_value(z)) = "ret")) -> tr.returns_valid(w, fst(out_state(z)))) proof
+    assume hv hn
+    fix z
+    assume hb hr
+    obtain o1, hr1 hc from expand(hb, bind_rel)
+    have c1: (ex s1 v. o1 = ok(s1, v) && k(s1, v, z)) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume e1
+      obtain s1 v, eo ko from e1
+      have r1 := rewrite(eo, hr1)
+      have ek := expand(mp(all_elim(hk, {s1}, {v}), r1), tr.seff)
+      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e))))) -> false proof
+        assume hu
+        have ex: ex s1 v. runs(p, w, ok(s1, v)) && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e))))) by ex_intro({s1}, {v}, taut(r1, hu))
+        show by taut(hn, ex)
+      qed
+      have kv: all z2. k(s1, v, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && fst(out_value(z2)) = "ret")) -> tr.returns_valid(s1, fst(out_state(z2))) by taut(ek, nu)
+      have rv2 := mp(all_elim(kv, {z}), ko, hr)
+      have rv1 := mp(all_elim(hv, {s1}, {v}), r1)
+      show := mp(all_elim(tr.rv_trans, {w}, {s1}, {fst(out_state(z))}), rv1, rv2)
+    qed
+    have c2: (ex s1 e. o1 = exc(s1, e) && z = exc(pair(s1, l(s1)), pair("raise", e))) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume e2
+      obtain s1 e, _ ee from e2
+      show by simp(ee, hr)
+    qed
+    have c3: (ex t. o1 = diverge(t) && z = diverge(t)) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume e3
+      obtain t, _ ee from e3
+      show by simp(ee, hr)
+    qed
+    show by taut(hc, c1, c2, c3)
+  qed
+  have ep := expand(hp, tr.eff)
+  show by defs(taut(ep, ua, ub, uc), tr.seff)
+qed
+
+// a block inside a statement: its statement's outcome dispatched, the
+// locals l(x) packed on a return or raise
+theorem tr.seff_seq(x. a, x y. k, x. l): all w. tr.seff(w, x. a(x)) -> (all x. a(x) -> fst(x) = 0 -> tr.seff(fst(out_state(x)), y. k(x, y))) ->
+  tr.seff(w, y. ex x. a(x) && ((fst(x) = 0 && k(x, y)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && y = exc(pair(fst(out_state(x)), l(x)), pair("ret", snd(out_value(x))))) ||
+    ((fst(x) = 1 && fst(out_value(x)) = "raise") && y = exc(pair(fst(out_state(x)), l(x)), pair("raise", snd(out_value(x)))))) || (fst(x) = 2 && y = diverge(snd(x))))))
+proof
+  fix w
+  assume ha hk
+  let Q(y) := ex x. a(x) && ((fst(x) = 0 && k(x, y)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && y = exc(pair(fst(out_state(x)), l(x)), pair("ret", snd(out_value(x))))) ||
+    ((fst(x) = 1 && fst(out_value(x)) = "raise") && y = exc(pair(fst(out_state(x)), l(x)), pair("raise", snd(out_value(x)))))) || (fst(x) = 2 && y = diverge(snd(x)))))
+  have ua: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. a(exc(pair(y, l2), pair("raise", e))))) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e))))) proof
+    assume hu
+    fix y e
+    assume hy he
+    obtain l2, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({l(exc(pair(y, l2), pair("raise", e)))}, ex_intro({exc(pair(y, l2), pair("raise", e))}, simp(hl)))
+  qed
+  have ub: (ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))))) ->
+      (all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e))))) proof
+    assume h
+    obtain x, hx h0 hu from h
+    fix y e
+    assume hy he
+    obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
+    show by ex_intro({l2}, ex_intro({x}, taut(hx, h0, kx)))
+  qed
+  have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret")) -> tr.returns_valid(w, fst(out_state(x)))) ->
+      !(ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))))) ->
+      (all z. Q(z) -> (fst(z) = 0 || (fst(z) = 1 && fst(out_value(z)) = "ret")) -> tr.returns_valid(w, fst(out_state(z)))) proof
+    assume hv hn
+    fix z
+    assume hq hr
+    obtain x, hx hd from hq
+    have c1: (fst(x) = 0 && k(x, z)) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume h1
+      have h0 kx := h1
+      have ek := expand(mp(all_elim(hk, {x}), hx, h0), tr.seff)
+      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e))))) -> false proof
+        assume hu
+        have ex: ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e))))) by ex_intro({x}, taut(hx, h0, hu))
+        show by taut(hn, ex)
+      qed
+      have kv: all z2. k(x, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && fst(out_value(z2)) = "ret")) -> tr.returns_valid(fst(out_state(x)), fst(out_state(z2))) by taut(ek, nu)
+      have r1 := mp(all_elim(hv, {x}), hx, (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret") by taut(h0)))
+      show := mp(all_elim(tr.rv_trans, {w}, {fst(out_state(x))}, {fst(out_state(z))}), r1, mp(all_elim(kv, {z}), kx, hr))
+    qed
+    have c2: ((fst(x) = 1 && fst(out_value(x)) = "ret") && z = exc(pair(fst(out_state(x)), l(x)), pair("ret", snd(out_value(x))))) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume h2
+      have hr1 hr2 he := h2
+      have e2: fst(out_state(z)) = fst(out_state(x)) by simp(he)
+      have r1 := mp(all_elim(hv, {x}), hx, (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "ret") by taut(hr1, hr2)))
+      show := rewrite(sym(e2), r1)
+    qed
+    have c3: ((fst(x) = 1 && fst(out_value(x)) = "raise") && z = exc(pair(fst(out_state(x)), l(x)), pair("raise", snd(out_value(x))))) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume h3
+      show by simp(h3.3, hr)
+    qed
+    have c4: (fst(x) = 2 && z = diverge(snd(x))) -> tr.returns_valid(w, fst(out_state(z))) proof
+      assume h4
+      show by simp(h4.2, hr)
+    qed
+    show by taut(hd, c1, c2, c3, c4)
+  qed
+  have ea := expand(ha, tr.seff)
+  show by defs(taut(ea, ua, ub, uc), tr.seff)
+qed
+
+// `if c` in a program: each branch's
+theorem tr.eff_if(c, o. r1, o. r2): all w. (c -> tr.eff(w, o. r1(o))) -> (!c -> tr.eff(w, o. r2(o))) -> tr.eff(w, o. (c && r1(o)) || (!c && r2(o)))
+proof
+  fix w
+  assume h1 h2
+  have b1: c -> tr.eff(w, o. (c && r1(o)) || (!c && r2(o))) proof
+    assume hc
+    have e := expand(mp(h1, hc), tr.eff)
+    have v: (all w2 v. r1(ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. (c && r1(ok(w2, v))) || (!c && r2(ok(w2, v))) -> tr.returns_valid(w, w2)) proof
+      assume hv
+      fix w2 v
+      assume ha
+      show := mp(all_elim(hv, {w2}, {v}), (r1(ok(w2, v)) by taut(ha, hc)))
+    qed
+    have u: (all x e. x in univ(1) -> e in univ(1) -> r1(exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> (c && r1(exc(x, e))) || (!c && r2(exc(x, e)))) proof
+      assume hu
+      fix x e
+      assume hx he
+      show by taut(hc, mp(all_elim(hu, {x}, {e}), hx, he))
+    qed
+    show by defs(taut(e, v, u), tr.eff)
+  qed
+  have b2: !c -> tr.eff(w, o. (c && r1(o)) || (!c && r2(o))) proof
+    assume hc
+    have e := expand(mp(h2, hc), tr.eff)
+    have v: (all w2 v. r2(ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. (c && r1(ok(w2, v))) || (!c && r2(ok(w2, v))) -> tr.returns_valid(w, w2)) proof
+      assume hv
+      fix w2 v
+      assume ha
+      show := mp(all_elim(hv, {w2}, {v}), (r2(ok(w2, v)) by taut(ha, hc)))
+    qed
+    have u: (all x e. x in univ(1) -> e in univ(1) -> r2(exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> (c && r1(exc(x, e))) || (!c && r2(exc(x, e)))) proof
+      assume hu
+      fix x e
+      assume hx he
+      show by taut(hc, mp(all_elim(hu, {x}, {e}), hx, he))
+    qed
+    show by defs(taut(e, v, u), tr.eff)
+  qed
+  show by taut(b1, b2)
+qed
+
+theorem tr.eff_sadd: all w n a b. tr.eff(w, o. runs(gimple.sadd(n, a, b), w, o))
+proof
+  fix w n a b
+  have ar := all_elim(tr.eff_arith, {w}, {fn_update(fn_update(empty, "prec", n), "signed", true)}, {int_add(sint(n, a), sint(n, b))})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, ar)), gimple.sadd)
+qed
+
+theorem tr.eff_ldbf: all w p off size pos bits. tr.eff(w, o. runs(gimple.ldbf(p, off, size, pos, bits), w, o))
+proof
+  fix w p off size pos bits
+  have m := all_elim(tr.eff_mem, {w}, {p}, {off}, {size}, {false})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, m)), gimple.ldbf)
+qed
+
+theorem tr.eff_ld16: all w p off. tr.eff(w, o. runs(gimple.ld16(p, off), w, o))
+proof
+  fix w p off
+  have m := all_elim(tr.eff_mem, {w}, {p}, {off}, {2}, {false})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, m)), gimple.ld16)
+qed
+
+theorem tr.eff_ld32: all w p off. tr.eff(w, o. runs(gimple.ld32(p, off), w, o))
+proof
+  fix w p off
+  have m := all_elim(tr.eff_mem, {w}, {p}, {off}, {4}, {false})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, m)), gimple.ld32)
+qed
+
+theorem tr.eff_ld64: all w p off. tr.eff(w, o. runs(gimple.ld64(p, off), w, o))
+proof
+  fix w p off
+  have m := all_elim(tr.eff_mem, {w}, {p}, {off}, {8}, {false})
+  show by defs(apply(tr.eff_prog, {w}, apply(tr.eff_bind_ret, {w}, m)), gimple.ld64)
+qed

@@ -660,6 +660,16 @@ planned, and everything it does not use is removed.
        (`bind_rel`, `any_rel`, `undefined if`, the arity guard, `mkprog`,
        a return) and per primitive (`padd`, `arith`, `smul`, `elem`,
        `mem`, `ld8`, `result`).
-   - Still to do: `slc translate` emitting each function's `tr.callee_io`
-     proof (written by hand for a_ctz_32 so far: `act.eff`, `act.io`);
-     frames above 8 bytes; calls of more arguments.
+   - **Generated (2026-10-08):** `slc translate` emits each function's
+     `FN.io` (`tr.callee_io`) and `FN.typed` in its certificate
+     (slc/cli/src/effects.rs), one step per construct of the spec, at two
+     levels: programs (`tr.eff`: `bind_rel`, `any_rel`, `if`, a block's
+     dispatch `tr.eff_seq`, a return) and statements (`tr.seff`: the same,
+     `undefined if`, a normal or returning outcome, a nested block
+     `tr.seff_seq`); primitives by `tr.eff_P`. Generated for a_ctz_32,
+     is_bouncing, get_slot_index, get_stride, upgradelock; not yet for the
+     storing functions (step_seq, resetlock, decay_bounces: stores keep the
+     program loaded as their target is writable and code is not -- a lemma
+     on `write_bytes` still to prove), nor for callers (from their callees'
+     `FN.io`).
+   - Still to do: frames above 8 bytes; calls of more arguments.
