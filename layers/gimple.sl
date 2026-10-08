@@ -360,25 +360,44 @@ fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec 
 // the callee's stack, below the caller's, stays clear of the world's
 // memory.
 
+// The stack may have grown (the frames, the calls' pushes -- the machine's
+// business): unmapped pages may have become stack pages. The world sees
+// the stack's pages (so that no C mapping may replace them), not their
+// contents.
+proc[World] grow_stack() {
+  let pages0 = vm.pages
+  havoc vm.pages where all p: PageNo. vm.pages[p] = pages0[p] || (pages0[p] = none && vm.pages[p] != none && vm.pages[p].value.kind = stack)
+}
+
 // Calling g: the arguments (values with their types) in registers, the
 // result registers rax, rdx. The callee runs on the caller's world (with
 // its stack objects, which it may reach; the caller's frame is not in the
-// world). A call with the thread pointer broken (the word at fs:0 not
-// pointing to itself, as the ABI requires at every call) or a mapping in a
-// stack's guard gap is undefined, and so is a callee that changed a stack
-// page (unmapped or remapped the stack: where its callers' frames are).
-// Every call may overflow the stack (`stack_overflow`, the ABI's: no
-// undefined behavior), before the callee runs and after it returns.
+// world, only its stack pages). A call with the thread pointer broken (the
+// word at fs:0 not pointing to itself, as the ABI requires at every call)
+// or a mapping in a stack's guard gap is undefined, and so is a callee that
+// changed a stack page (unmapped or remapped the stack: where its callers'
+// frames are). The stack may grow at a call (the caller's frame, the push,
+// the callee's frames). Every call may overflow the stack
+// (`stack_overflow`, the ABI's: no undefined behavior), before the callee
+// runs and after it returns.
 proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   either { raise stack_overflow } or { }
+  grow_stack()
+  let (r0, r1) = call_callee(g, args)
+  grow_stack()
+  // (the callee may crash after its last I/O -- its spec then returns,
+  // with the I/O the crash has)
+  either { raise stack_overflow } or { }
+  return (r0, r1)
+}
+
+// (the callee's part of a call)
+proc[World] call_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !(thread_ok(vm, fs_base) && stack_gap_free(vm)) { undefined }
   let pages0 = vm.pages
   let (r0, r1) = g(regs)
   if !(all p: PageNo. pages0[p] != none && pages0[p].value.kind = stack -> vm.pages[p] = pages0[p]) { undefined }
-  // (the callee may crash after its last I/O -- its spec then returns,
-  // with the I/O the crash has)
-  either { raise stack_overflow } or { }
   return (r0, r1)
 }
 

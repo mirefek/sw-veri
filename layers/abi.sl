@@ -65,10 +65,9 @@ pred world_matches(old: Vm, new: Vm, w: Vm, objs: Set[nat], sp: Addr) =
 
 // `world(sp, objs, mem)` views a machine as a World, for a function called
 // with the caller's stack pointer `sp`, which may reach the stack objects
-// `objs` (above sp): the world's memory `mem`, a view of the machine's
-// (`world_matches(vm, vm, mem, objs, sp)`: the machine's bytes on the
-// world's domain, its pages but for grown stack pages -- what lies outside
-// the domain is no C function's to see). Writing a world back: its domain
+// `objs` (above sp): the world's memory `mem`, a view of the machine's (at
+// the entry, abi_function: its pages, and its bytes on the world's domain
+// -- what lies outside the domain is no C function's to see). Writing a world back: its domain
 // the world's, the callers' frames kept, the stack below sp arbitrary (the
 // callee used it).
 view[Machine] world(sp: Addr, objs: Set[nat], mem: Vm) : World {
@@ -232,7 +231,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, o
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
   require all a: nat. a in objs -> uint(sp) <= a && stack_page(vm, a / PAGE) && can_access(vm, bits[64](a), write)
-  require world_matches(vm, vm, mem, objs, sp)
+  require mem.pages = vm.pages && world_matches(vm, vm, mem, objs, sp)
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
   let w0    = with world(sp, objs, mem) { return self }    // the world, with ghost state
