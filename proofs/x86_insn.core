@@ -895,3 +895,38 @@ proof
   have pt := apply(x86i.parts, hM)
   show by defs(simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), apply(x86i.reg_typed, hM, hh), x86i.bool_univ), x86i.flags_ok)
 qed
+
+// mov [rsp + d], r32 / r64 (89 /r) where the bytes may not be accessible
+// yet (the frame's first store there): touched for writing -- the stack may
+// grow, or the touch fault -- then written
+theorem x86i.store_rsp_t: all m o n g d z1 z2 len x. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  (n = 4 && x = bits_slice(app(app(m, "gpr"), g), 31, 0) || n = 8 && x = app(app(m, "gpr"), g)) ->
+  (all i. i in omega -> int_lt(i, n) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i)))) ->
+  runs(x86_64_linux.exec_body(len, tag(75, pair(n, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o) ->
+  (ex m1 e1. runs(x86_64_linux.touch_range(x86i.rsp_ea(m, d), n, 1), fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), ok(m1, e1)) &&
+    o = ok(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), x86i.rsp_ea(m, d), n, x))), empty)) ||
+  (ex y e. runs(x86_64_linux.touch_range(x86i.rsp_ea(m, d), n, 1), fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), exc(y, e)) && o = exc(y, e)) ||
+  (ex t. runs(x86_64_linux.touch_range(x86i.rsp_ea(m, d), n, 1), fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), diverge(t)) && o = diverge(t))
+proof
+  fix m o n g d z1 z2 len x
+  assume hM hu hg hd hn hk hr
+  have pt := apply(x86i.parts, hM)
+  show by simp(hr, hu, pt, hn, apply(x86i.reg_typed, hM, hg), hd, apply(x86i.rsp_typed, hM), hk, keep(x86_64_linux.touch_range))
+qed
+
+// mov dword [rsp + d], imm32 (C7 /0 id) where the bytes may not be
+// accessible yet: touched for writing, then written
+theorem x86i.store32i_rsp_t: all m o d k len. m in x86_64_linux.Machine -> m in univ(1) -> d in bits(64) -> k in bits(32) ->
+  (all i. i in omega -> int_lt(i, 4) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i)))) ->
+  runs(x86_64_linux.exec_body(len, tag(77, pair(4, pair(x86i.rsp_mem(d), pair(x86i.rsp_mem(d), k))))), m, o) ->
+  (ex m1 e1. runs(x86_64_linux.touch_range(x86i.rsp_ea(m, d), 4, 1), fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), ok(m1, e1)) &&
+    o = ok(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), x86i.rsp_ea(m, d), 4, k))), empty)) ||
+  (ex y e. runs(x86_64_linux.touch_range(x86i.rsp_ea(m, d), 4, 1), fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), exc(y, e)) && o = exc(y, e)) ||
+  (ex t. runs(x86_64_linux.touch_range(x86i.rsp_ea(m, d), 4, 1), fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), diverge(t)) && o = diverge(t))
+proof
+  fix m o d k len
+  assume hM hu hd hk k0 h
+  have pt := apply(x86i.parts, hM)
+  have se: bits_sext(32, 32, k) = k by defs(simp(hk), bits_sext)
+  show by simp(h, hu, pt, hk, se, hd, apply(x86i.rsp_typed, hM), k0, keep(x86_64_linux.touch_range))
+qed
