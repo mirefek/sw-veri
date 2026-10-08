@@ -94,6 +94,25 @@ fn folded_messages_rest_patterns_and_symmetric_taut() {
     }
 }
 
+/// Words and integers: arith reads word operations of a symbolic width
+/// (their definitions, the remainder of a small value); rsimp turns a word
+/// sum without wrap-around into the integer one (`bits_add_nowrap`), its
+/// bounds shown by arith from the facts about its terms.
+#[test]
+fn words_and_integers() {
+    let lib = format!("{}{}{}", core_file("logic.core"), core_file("sets.core"), core_file("nat.core"));
+    let base = check(&lib).unwrap();
+    let ok = [
+        "theorem t(n, a, b): n in omega -> a in bits(n) -> b in bits(n) -> bits_add(n, a, b) in bits(n)\nproof\n  assume hn ha hb\n  show by arith(hn, ha, hb)\nqed\n",
+        "theorem t(n, a, b): a in bits(n) -> b in bits(n) -> int_le(b, a) -> bits_sub(n, a, b) = int_sub(a, b)\nproof\n  assume ha hb hl\n  show by arith(ha, hb, hl)\nqed\n",
+        "theorem t(p): p in bits(64) -> int_lt(p, 1000) -> bits_add(64, p, 8) = int_add(p, 8)\nproof\n  assume hp hl\n  show by rsimp()\nqed\n",
+        "theorem t(p): p in bits(64) -> int_lt(int_add(p, 8), int_pow(2, 64)) -> int_add(p, 8) in bits(64)\nproof\n  assume hp hl\n  show by arith(hp, hl)\nqed\n",
+    ];
+    for t in ok {
+        assert_eq!(check(&format!("{}{}", lib, t)), Ok(base + 1), "{}", t);
+    }
+}
+
 /// flip: an equation or disequation the other way round -- a fact (also
 /// under `all`s and premises) or, as a step, the goal / a fact h.
 #[test]

@@ -119,6 +119,8 @@ struct Syms {
     int_mul: Option<SymId>,
     int_div: Option<SymId>,
     int_mod: Option<SymId>,
+    pow2: Option<SymId>,
+    int_pow: Option<SymId>,
     int_succ: Option<SymId>,
     int_pred: Option<SymId>,
     succ: Option<SymId>,
@@ -156,6 +158,8 @@ impl Syms {
             int_mul: s("int_mul"),
             int_div: s("int_div"),
             int_mod: s("int_mod"),
+            pow2: s("pow2"),
+            int_pow: s("int_pow"),
             int_succ: s("int_succ"),
             int_pred: s("int_pred"),
             succ: s("succ"),
@@ -299,6 +303,12 @@ impl Reader {
             // succ of a natural is its + 1 (of other sets: a set)
             Node::App(f, a) if is(*f, s.succ) && (small(&a[0]).is_some() || self.nats.contains(&a[0])) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
             Node::App(f, a) if is(*f, s.int_succ) => return self.lin(&a[0])?.add(&Lin::konst(1), 1),
+            // powers of numerals: their values (`pow2(64)`, `int_pow(2, 64)`)
+            Node::App(f, a) if is(*f, s.pow2) && small(&a[0]).is_some_and(|k| (0..=120).contains(&k)) => return Some(Lin::konst(1i128 << small(&a[0])?)),
+            Node::App(f, a) if is(*f, s.int_pow) && small(&a[0]).is_some() && small(&a[1]).is_some_and(|k| (0..=120).contains(&k)) => {
+                let (b, k) = (small(&a[0])?, small(&a[1])? as u32);
+                return b.checked_pow(k).map(Lin::konst);
+            }
             Node::App(f, a) if is(*f, s.int_pred) => return self.lin(&a[0])?.add(&Lin::konst(1), -1),
             // the length of a list expression: its singletons plus the
             // lengths of the lists in it (each >= 0)
@@ -593,6 +603,95 @@ fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize) -> bool {
     }
 }
 
+/// Facts about word operations of a symbolic width n (arith reads only
+/// literal widths and moduli), for the closed terms occurring in
+/// `premises` and `goal` -- standard facts of the prelude's arithmetic:
+/// * `bits_add(n, a, b) = int_mod(int_add(a, b), pow2(n))` (likewise
+///   `bits_sub`, `bits_of_int`: their definitions);
+/// * `n in omega -> int_lt(0, pow2(n))`;
+/// * for r = `int_mod(x, m)`, m not a numeral: `int_lt(0, m) -> int_le(0, r)
+///   && int_lt(r, m)`, and `int_le(0, x) && int_lt(x, m) -> r = x`
+///   (Euclidean division; the remainder of a value in 0 .. m - 1 is itself);
+/// * `x in bits(n) <-> x in omega && int_lt(x, pow2(n))` (`bits`'s definition).
+fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
+    let g = |n: &str| env.sym_by_name.get(n).copied();
+    let (Some(imod), Some(lt), Some(le), Some(pow2), Some(and), Some(iff), Some(inn), Some(omega), Some(bits), Some(iadd), Some(isub)) =
+        (g("int_mod"), g("int_lt"), g("int_le"), g("pow2"), g("and"), g("iff"), g("in"), g("omega"), g("bits"), g("int_add"), g("int_sub"))
+    else {
+        return Vec::new();
+    };
+    let (badd, bsub, boi) = (g("bits_add"), g("bits_sub"), g("bits_of_int"));
+    let bf = env.binders_fn();
+    // (the closed subterms with these heads, each once)
+    let heads: Vec<SymId> = [Some(imod), Some(pow2), Some(inn), badd, bsub, boi].into_iter().flatten().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut terms: Vec<Term> = Vec::new();
+    fn collect(t: &Term, heads: &[SymId], bf: &dyn Fn(SymId, usize) -> u32, seen: &mut std::collections::HashSet<Term>, out: &mut Vec<Term>) {
+        if let Node::App(f, a) = t.node() {
+            if heads.contains(f) && t.loose_depth(bf) == 0 && seen.insert(t.clone()) {
+                out.push(t.clone());
+            }
+            a.iter().for_each(|x| collect(x, heads, bf, seen, out));
+        }
+    }
+    for p in premises.iter().chain([goal]) {
+        collect(p, &heads, &bf, &mut seen, &mut terms);
+    }
+    let zero = Term::nat(crate::nat::Nat::zero());
+    let app = |s: SymId, a: Vec<Term>| Term::app(s, a);
+    let imp = |a: Term, b: Term| Term::app(env.builtins.imp, vec![a, b]);
+    let eq = |a: Term, b: Term| Term::app(env.builtins.eq, vec![a, b]);
+    let mut out = Vec::new();
+    let mut mods = Vec::new();
+    for t in &terms {
+        let Node::App(f, a) = t.node() else { continue };
+        let wide = |w: &Term| small(w).is_none();
+        if Some(*f) == badd && a.len() == 3 && wide(&a[0]) {
+            let m = app(imod, vec![app(iadd, vec![a[1].clone(), a[2].clone()]), app(pow2, vec![a[0].clone()])]);
+            out.push(eq(t.clone(), m.clone()));
+            mods.push(m);
+        } else if Some(*f) == bsub && a.len() == 3 && wide(&a[0]) {
+            let m = app(imod, vec![app(isub, vec![a[1].clone(), a[2].clone()]), app(pow2, vec![a[0].clone()])]);
+            out.push(eq(t.clone(), m.clone()));
+            mods.push(m);
+        } else if Some(*f) == boi && a.len() == 2 && wide(&a[0]) {
+            let m = app(imod, vec![a[1].clone(), app(pow2, vec![a[0].clone()])]);
+            out.push(eq(t.clone(), m.clone()));
+            mods.push(m);
+        } else if *f == pow2 && a.len() == 1 && wide(&a[0]) {
+            out.push(imp(app(inn, vec![a[0].clone(), app(omega, vec![])]), app(lt, vec![zero.clone(), t.clone()])));
+        } else if *f == imod && a.len() == 2 && small(&a[1]).is_none() {
+            mods.push(t.clone());
+        } else if *f == inn && a.len() == 2 {
+            if let Node::App(b, w) = a[1].node() {
+                if *b == bits && w.len() == 1 && wide(&w[0]) {
+                    let p2 = app(pow2, vec![w[0].clone()]);
+                    let rhs = app(and, vec![app(inn, vec![a[0].clone(), app(omega, vec![])]), app(lt, vec![a[0].clone(), p2])]);
+                    out.push(app(iff, vec![t.clone(), rhs]));
+                }
+            }
+        }
+    }
+    for r in mods {
+        let Node::App(_, a) = r.node() else { continue };
+        let (x, m) = (a[0].clone(), a[1].clone());
+        if let Node::App(p, w) = m.node() {
+            if *p == pow2 && wide(&w[0]) {
+                out.push(imp(app(inn, vec![w[0].clone(), app(omega, vec![])]), app(lt, vec![zero.clone(), m.clone()])));
+            }
+        }
+        let range = app(and, vec![app(le, vec![zero.clone(), r.clone()]), app(lt, vec![r.clone(), m.clone()])]);
+        out.push(imp(app(lt, vec![zero.clone(), m.clone()]), range));
+        let small_x = app(and, vec![app(le, vec![zero.clone(), x.clone()]), app(lt, vec![x.clone(), m.clone()])]);
+        out.push(imp(small_x, eq(r.clone(), x)));
+    }
+    out
+}
+
+fn wide(w: &Term) -> bool {
+    small(w).is_none()
+}
+
 impl Logic {
     /// `premises -> goal` holds by propositional logic and linear arithmetic
     /// over the integers (see the module docs).
@@ -601,6 +700,10 @@ impl Logic {
     }
 
     fn arith_(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        // (words of a symbolic width: the standard facts, as premises)
+        let mut ext = premises.to_vec();
+        ext.extend(symbolic_facts(env, premises, goal));
+        let premises = &ext[..];
         let s = Syms::new(env);
         let mut r = Reader {
             s,

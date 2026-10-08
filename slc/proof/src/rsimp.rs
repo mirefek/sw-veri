@@ -53,6 +53,10 @@ pub(crate) struct Rules {
     defs: Vec<SymId>,
     /// the facts given, for premises
     given: Vec<Seq>,
+    /// (rule, term, depth) found not to apply, and premises tried: each
+    /// tried once per rsimp call (a rewrite elsewhere does not change them)
+    failed: std::cell::RefCell<std::collections::HashSet<(usize, Term, usize)>>,
+    premises: std::cell::RefCell<std::collections::HashMap<(Term, usize), Option<Seq>>>,
 }
 
 /// `name`'s instance at `ts` (its schematic variables in the order they
@@ -107,6 +111,65 @@ fn ground_cmp(env: &Env, t: &Term) -> Option<bool> {
     })
 }
 
+/// a comparison or a membership in `omega` / `bits(n)` / `int` (closed)
+fn arith_goal(env: &Env, t: &Term) -> bool {
+    let name = |s: &SymId| env.syms[*s as usize].name.as_str();
+    arith_atom(env, t) && matches!(t.node(), Node::App(s, _) if ["int_lt", "int_le", "in"].contains(&name(s)))
+}
+
+/// the terms an arithmetic proposition is about: its subterms that are
+/// not arithmetic operations, comparisons or numerals
+fn arith_leaves(env: &Env, t: &Term, out: &mut Vec<Term>) {
+    let ops = ["int_lt", "int_le", "int_add", "int_sub", "int_mul", "int_div", "int_mod", "in", "not", "ne", "omega", "bits", "int", "pow2", "int_pow", "bits_add", "bits_sub", "bits_of_int"];
+    match t.node() {
+        Node::App(s, a) if ops.contains(&env.syms[*s as usize].name.as_str()) || *s == env.builtins.eq => a.iter().for_each(|x| arith_leaves(env, x, out)),
+        Node::Nat(_) | Node::Bytes(_) | Node::BVar(_) => {}
+        _ => {
+            if !out.contains(t) {
+                out.push(t.clone());
+            }
+        }
+    }
+}
+
+fn occurs(x: &Term, t: &Term) -> bool {
+    t == x
+        || match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => a.iter().any(|y| occurs(x, y)),
+            _ => false,
+        }
+}
+
+/// at most `n` nodes
+fn small_term(t: &Term, n: usize) -> bool {
+    fn go(t: &Term, left: &mut usize) -> bool {
+        if *left == 0 {
+            return false;
+        }
+        *left -= 1;
+        match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => a.iter().all(|x| go(x, left)),
+            _ => true,
+        }
+    }
+    go(t, &mut n.clone())
+}
+
+/// a comparison, a membership in `omega` / `bits(n)` / `int`, an
+/// equation, or a negation of one: what arith reads (closed)
+fn arith_atom(env: &Env, t: &Term) -> bool {
+    if t.loose_depth(&env.binders_fn()) > 0 {
+        return false;
+    }
+    let name = |s: &SymId| env.syms[*s as usize].name.as_str();
+    match t.node() {
+        Node::App(s, a) if name(s) == "not" => arith_atom(env, &a[0]),
+        Node::App(s, _) if ["int_lt", "int_le", "ne"].contains(&name(s)) || *s == env.builtins.eq => true,
+        Node::App(s, a) if name(s) == "in" => matches!(a[1].node(), Node::App(k, _) if ["omega", "bits", "int"].contains(&name(k))),
+        _ => false,
+    }
+}
+
 /// distinct numeric or string literals
 fn lit_ne(a: &Term, b: &Term) -> bool {
     matches!((a.node(), b.node()), (Node::Nat(x), Node::Nat(y)) if x != y) || matches!((a.node(), b.node()), (Node::Bytes(x), Node::Bytes(y)) if x != y)
@@ -122,7 +185,7 @@ fn eq_parts(env: &Env, t: &Term) -> Option<(Term, Term)> {
 impl State {
     /// The rules of `rsimp(args)`.
     pub(crate) fn rsimp_rules(&self, env: &mut Env, lg: &Logic, args: &[Arg]) -> KResult<Rules> {
-        let mut rs = Rules { rules: Vec::new(), defs: Vec::new(), given: Vec::new() };
+        let mut rs = Rules { rules: Vec::new(), defs: Vec::new(), given: Vec::new(), failed: Default::default(), premises: Default::default() };
         let mut only = false;
         for a in args {
             match a {
@@ -197,11 +260,24 @@ impl State {
     }
 
     /// `rule` at the closed term `t`: the equation `t = t'` (t' different)
-    fn rule_at(&self, env: &mut Env, lg: &Logic, rule: &Rule, t: &Term, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
+    fn rule_at(&self, env: &mut Env, lg: &Logic, i: usize, rule: &Rule, t: &Term, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
         let mut binds = Vec::new();
         if !pmatch_at(env, &rule.lhs, t, &rule.pvars, &mut binds, 0, false) {
             return Ok(None);
         }
+        // (matched before, its premises not shown: not again)
+        let key = (i, t.clone(), depth);
+        if rule.prems > 0 && rs.failed.borrow().contains(&key) {
+            return Ok(None);
+        }
+        let r = self.rule_inst(env, lg, rule, t, binds, rs, depth)?;
+        if r.is_none() && rule.prems > 0 {
+            rs.failed.borrow_mut().insert(key);
+        }
+        Ok(r)
+    }
+
+    fn rule_inst(&self, env: &mut Env, lg: &Logic, rule: &Rule, t: &Term, binds: Vec<(VarId, Term)>, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
         let mut s = rule.seq.clone();
         for (v, x) in &binds {
             s = Seq::inst(env, &s, *v, x)?;
@@ -274,13 +350,51 @@ impl State {
 
     /// a rule's premise: known, or simp shows it (not too deeply nested)
     fn premise(&self, env: &mut Env, lg: &Logic, h: &Term, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
+        let key = (h.clone(), depth);
+        if let Some(r) = rs.premises.borrow().get(&key) {
+            return Ok(r.clone());
+        }
+        let t0 = std::time::Instant::now();
+        let r = self.premise_(env, lg, h, rs, depth)?;
+        if std::env::var("RSIMP_TRACE").is_ok() {
+            eprintln!("rsimp premise {} ({:.3}s, depth {}): {}", if r.is_some() { "shown" } else { "not shown" }, t0.elapsed().as_secs_f64(), depth, Printer::new(env).short(h));
+        }
+        rs.premises.borrow_mut().insert(key, r.clone());
+        Ok(r)
+    }
+
+    fn premise_(&self, env: &mut Env, lg: &Logic, h: &Term, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
         if let Some(s) = self.premise_known(env, lg, h, rs) {
             return Ok(Some(s));
         }
-        if depth >= DEPTH {
-            return Ok(None);
+        if depth < DEPTH {
+            if let Ok(s) = self.rsimp_close(env, lg, h, rs, depth + 1) {
+                return Ok(Some(s));
+            }
         }
-        Ok(self.rsimp_close(env, lg, h, rs, depth + 1).ok())
+        // (a comparison or a range: without variables, decided; else arith,
+        // from the small arithmetic facts about its terms)
+        if arith_goal(env, h) {
+            let mut vs = Vec::new();
+            h.vars(&mut vs);
+            if vs.is_empty() {
+                if let Ok(s) = Seq::simp_goal(env, lg, &[], h, &[], &[]) {
+                    return Ok(Some(s));
+                }
+            }
+            let mut leaves = Vec::new();
+            arith_leaves(env, h, &mut leaves);
+            let known: Vec<&Seq> = rs
+                .given
+                .iter()
+                .chain(self.facts.iter().map(|(_, s)| s))
+                .filter(|s| arith_atom(env, s.concl()) && small_term(s.concl(), 64) && leaves.iter().any(|l| occurs(l, s.concl())))
+                .collect();
+            if let Ok(s) = Seq::arith(env, lg, &known, h) {
+                return Ok(Some(s));
+            }
+        }
+        Ok(None)
     }
 
     /// the first rewrite in `t` (innermost first): `u = u'` for a closed
@@ -300,8 +414,8 @@ impl State {
         if t.loose_depth(&env.binders_fn()) > 0 {
             return Ok(None);
         }
-        for r in &rs.rules {
-            if let Some(e) = self.rule_at(env, lg, r, t, rs, depth)? {
+        for (i, r) in rs.rules.iter().enumerate() {
+            if let Some(e) = self.rule_at(env, lg, i, r, t, rs, depth)? {
                 return Ok(Some(e));
             }
         }
