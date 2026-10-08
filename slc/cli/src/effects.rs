@@ -120,8 +120,12 @@ impl<'e> Eff<'e> {
                     }
                 }
                 if let Some(k) = self.app(&e[1], "exc", 2) {
-                    if st && at_s(&k[0]) && self.app(&k[1], "pair", 2).is_some_and(|p| matches!(p[0].node(), Node::Bytes(b) if &b[..] == b"ret")) {
+                    let label = |l: &[u8]| self.app(&k[1], "pair", 2).is_some_and(|p| matches!(p[0].node(), Node::Bytes(b) if &b[..] == l));
+                    if st && at_s(&k[0]) && label(b"ret") {
                         return Ok(vec![show("ret", "")]);
+                    }
+                    if st && at_s(&k[0]) && label(b"brk") {
+                        return Ok(vec![show("brk", "")]);
                     }
                 }
             }
@@ -142,6 +146,22 @@ impl<'e> Eff<'e> {
             out.push(format!("{ind}qed"));
             out.push(show("bind", &format!(", {pe}, {h}")));
             return Ok(out);
+        }
+        // a statement `while`: while_rel(pair(S, loc), l. c, l o. B, l. tr, o), the body's
+        // effect from each state with the condition
+        if let Some(wl) = self.app(r, "while_rel", 5) {
+            if st && wl[4] == ov && self.app(&wl[0], "pair", 2).is_some_and(|p| p[0] == *s) {
+                let (ln, lv) = self.fresh("ls");
+                let c = self.open(&wl[1], &[lv.clone()]);
+                let b = self.open(&wl[2], &[lv.clone(), ov.clone()]);
+                let ls = self.mk("fst", vec![lv.clone()])?;
+                let h = format!("k{}", self.n);
+                let mut out = vec![format!("{ind}have {h}: all {ln}. {} -> {} proof", self.print(&c), self.eff(true, &ls, &b, o)?), format!("{ind}  fix {ln}"), format!("{ind}  assume _")];
+                out.extend(self.prove(true, &ls, &b, o, &format!("{ind}  "))?);
+                out.push(format!("{ind}qed"));
+                out.push(show("while", &format!(", {h}")));
+                return Ok(out);
+            }
         }
         // any_rel(x. d, x. K)
         if let Some(a) = self.app(r, "any_rel", 2) {
@@ -193,7 +213,18 @@ impl<'e> Eff<'e> {
                 let x = *x;
                 let stmt = self.open(&a[0], &[xv.clone()]);
                 let disp = self.open(&a[1], &[xv.clone()]);
-                let k = self.app(&disp, "or", 2).and_then(|d| self.app(&d[0], "and", 2)).map(|n| n[1].clone()).ok_or_else(|| format!("not a block's dispatch: {}", Printer::new(self.env).short(r)))?;
+                let norm = self.app(&disp, "or", 2).and_then(|d| self.app(&d[0], "and", 2)).ok_or_else(|| format!("not a block's dispatch: {}", Printer::new(self.env).short(r)))?.to_vec();
+                let k = norm[1].clone();
+                // (after a loop: its normal or "brk" exit goes on; in a loop
+                // body: a "brk" passed on)
+                let after_loop = self.app(&norm[0], "or", 2).is_some();
+                let passes_brk = self.app(&disp, "or", 2).is_some_and(|d| mentions_bytes(&d[1], b"brk"));
+                let (rule, cond) = match (after_loop, st, passes_brk) {
+                    (true, false, _) => ("seq_loop", format!("(fst({xn}) = 0 || (fst({xn}) = 1 && fst(out_value({xn})) = \"brk\"))")),
+                    (false, true, true) => ("seq_brk", format!("fst({xn}) = 0")),
+                    (false, _, false) => ("seq", format!("fst({xn}) = 0")),
+                    _ => return Err(format!("a block's dispatch not covered: {}", Printer::new(self.env).short(r))),
+                };
                 let state = self.mk("fst", vec![self.mk("out_state", vec![xv.clone()])?])?;
                 let ha = format!("k{}", self.n);
                 let mut out = vec![format!("{ind}have {ha}: {} proof", self.eff(true, s, &stmt, x)?)];
@@ -201,12 +232,12 @@ impl<'e> Eff<'e> {
                 out.push(format!("{ind}qed"));
                 let hk = format!("k{}", self.n + 1);
                 self.n += 1;
-                out.push(format!("{ind}have {hk}: all {xn}. {} -> fst({xn}) = 0 -> {} proof", self.print(&stmt), self.eff(st, &state, &k, o)?));
+                out.push(format!("{ind}have {hk}: all {xn}. {} -> {cond} -> {} proof", self.print(&stmt), self.eff(st, &state, &k, o)?));
                 out.push(format!("{ind}  fix {xn}"));
                 out.push(format!("{ind}  assume _ _"));
                 out.extend(self.prove(st, &state, &k, o, &format!("{ind}  "))?);
                 out.push(format!("{ind}qed"));
-                out.push(show("seq", &format!(", {ha}, {hk}")));
+                out.push(show(rule, &format!(", {ha}, {hk}")));
                 return Ok(out);
             }
         }
@@ -357,3 +388,11 @@ fn beta(env: &Env, f: &Term, a: &Term, k: u32) -> Term {
     }
 }
 
+/// `t` has the bytes literal `b`
+fn mentions_bytes(t: &Term, b: &[u8]) -> bool {
+    match t.node() {
+        Node::Bytes(x) => &x[..] == b,
+        Node::App(_, a) | Node::Var(_, a) => a.iter().any(|x| mentions_bytes(x, b)),
+        _ => false,
+    }
+}

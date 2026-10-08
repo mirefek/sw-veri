@@ -664,12 +664,17 @@ planned, and everything it does not use is removed.
      `FN.io` (`tr.callee_io`) and `FN.typed` in its certificate
      (slc/cli/src/effects.rs), one step per construct of the spec, at two
      levels: programs (`tr.eff`: `bind_rel`, `any_rel`, `if`, a block's
-     dispatch `tr.eff_seq`, a return) and statements (`tr.seff`: the same,
-     `undefined if`, a normal or returning outcome, a nested block
-     `tr.seff_seq`); primitives by `tr.eff_P`. Generated for a_ctz_32,
-     is_bouncing, get_slot_index, get_stride, upgradelock; not yet for the
-     storing functions (step_seq, resetlock, decay_bounces: stores keep the
-     program loaded as their target is writable and code is not -- a lemma
-     on `write_bytes` still to prove), nor for callers (from their callees'
-     `FN.io`).
+     dispatch `tr.eff_seq`, after a loop `tr.eff_seq_loop`, a return) and
+     statements (`tr.seff`: every outcome but a raise keeps the world
+     valid -- `bind_rel`, `any_rel`, `if`, `undefined if`, a normal, `ret`
+     or `brk` outcome, nested blocks `tr.seff_seq` / `tr.seff_seq_brk`,
+     loops `tr.seff_while`); primitives by `tr.eff_P` (`padd`, `arith`,
+     `smul`, `sadd`, `elem`, `mem`, loads, `ldbf`, `result`, `st8`,
+     `st32`). Loops by their runs: the world valid along a run's states,
+     unless the body is undefined at one -- then the run up to it
+     (`while_prefix`) makes the loop undefined. Stores keep the program
+     loaded: only bytes the world may write change (`tr.wr_only`; code is
+     not writable), `write_bytes` by its loop's invariant. Generated for
+     all functions but the caller a_clz_32 (from its callee's `FN.io`:
+     still to do).
    - Still to do: frames above 8 bytes; calls of more arguments.

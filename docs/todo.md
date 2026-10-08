@@ -19,11 +19,10 @@ expected gain:
 
 ## C1 certificates
 
-- **`tr.callee_io` for the remaining constructs** (generated per function
-  by slc/cli/src/effects.rs): stores (`tr.eff_st8`/`st32`: a defined
-  store's target is writable, the code is not, so the program stays
-  loaded -- a forward lemma on `write_bytes`), calls (by the callee's own
-  `FN.io`), loops (`while_rel`: validity as the invariant).
+- **`tr.callee_io` for callers** (slc/cli/src/effects.rs): a call's
+  effect from the callee's own `FN.io` (`gimple.call1`), so that callers
+  can be callees too; then the program-level `while` (so far loops occur
+  as statements).
 
 ## Proof language
 

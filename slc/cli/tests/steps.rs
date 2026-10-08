@@ -145,10 +145,10 @@ fn translations_are_generated_and_check() {
         ("is_bouncing", "0 definitions, 6 theorems"),
         ("get_slot_index", "0 definitions, 6 theorems"),
         ("get_stride", "0 definitions, 11 theorems"),
-        ("step_seq", "1 definitions, 3 theorems"),
+        ("step_seq", "1 definitions, 8 theorems"),
         ("upgradelock", "0 definitions, 6 theorems"),
-        ("resetlock", "1 definitions, 3 theorems"),
-        ("decay_bounces", "1 definitions, 3 theorems"),
+        ("resetlock", "1 definitions, 6 theorems"),
+        ("decay_bounces", "1 definitions, 6 theorems"),
         ("a_clz_32", "0 definitions, 3 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
