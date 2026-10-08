@@ -797,3 +797,165 @@ proof
   have rf := all_elim(x86.stk_ext_refl, {app(m, "vm")})
   show by simp(h, rf, st, keep(x86.stk_ext, x86_64_linux.touch), {l0 l1. x86.stk_ext(app(m, "vm"), app(fst(l1), "vm"))})
 qed
+
+// (... and the pages from p below n set to PQ)
+def x86.gst2(P, P0, Q, PQ, p, n) := x86.gstk(P, P0, Q, PQ) && (all i. i in omega -> int_le(p, i) -> int_lt(i, n) -> app(P, i) = PQ)
+
+theorem x86.gst2_init: all P Q p. x86.gst2(P, P, Q, app(P, Q), p, p)
+proof
+  fix P Q p
+  have g: all i. i in omega -> int_le(p, i) -> int_lt(i, p) -> app(P, i) = app(P, Q) proof
+    fix i
+    assume h1 h2 h3
+    show by arith(h2, h3)
+  qed
+  show by defs(taut(all_elim(x86.gstk_refl, {P}, {Q}), g), x86.gst2)
+qed
+
+theorem x86.gst2_step: all P P0 Q PQ p n. x86.gst2(P, P0, Q, PQ, p, n) -> n in omega -> int_lt(n, Q) -> x86.gst2(fn_update(P, n, app(P, Q)), P0, Q, PQ, p, int_add(n, 1))
+proof
+  fix P P0 Q PQ p n
+  assume h hn hl
+  have hs hset := expand(h, x86.gst2)
+  have s2 := apply(x86.gstk_step, {P}, {P0}, {Q}, {PQ}, {n}, hs, hn, hl)
+  have pq := expand(hs, x86.gstk).2
+  have g: all i. i in omega -> int_le(p, i) -> int_lt(i, int_add(n, 1)) -> app(fn_update(P, n, app(P, Q)), i) = PQ proof
+    fix i
+    assume h1 h2 h3
+    have c1: i = n -> app(fn_update(P, n, app(P, Q)), i) = PQ proof
+      assume e
+      have v: app(fn_update(P, n, app(P, Q)), i) = app(P, Q) by simp(e)
+      show := trans(v, pq)
+    qed
+    have c2: !(i = n) -> app(fn_update(P, n, app(P, Q)), i) = PQ proof
+      assume ne
+      have o := mp(app_update_other[f := P, k := n, v := app(P, Q), x := i], ne)
+      have l: int_lt(i, n) by arith(h1, hn, h3, ne)
+      show := trans(o, mp(all_elim(hset, {i}), h1, h2, l))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(taut(s2, g), x86.gst2)
+qed
+
+theorem x86.gst2_mono: all P P0 Q PQ p n. x86.gst2(P, P0, Q, PQ, p, n) -> int_le(Q, n) -> x86.gst2(P, P0, Q, PQ, p, Q)
+proof
+  fix P P0 Q PQ p n
+  assume h hl
+  have hs hset := expand(h, x86.gst2)
+  have g: all i. i in omega -> int_le(p, i) -> int_lt(i, Q) -> app(P, i) = PQ proof
+    fix i
+    assume h1 h2 h3
+    have l: int_lt(i, n) by arith(h3, hl)
+    show := mp(all_elim(hset, {i}), h1, h2, l)
+  qed
+  show by defs(taut(hs, g), x86.gst2)
+qed
+
+// growing the stack from the unmapped page p: p mapped after
+theorem x86.grow_sets: all m a p m1 e. p in omega -> app(app(app(m, "vm"), "pages"), p) = none -> runs(x86_64_linux.grow_stack(a, p), m, ok(m1, e)) ->
+  !(app(app(app(m1, "vm"), "pages"), p) = none)
+proof
+  fix m a p m1 e
+  assume hp hn h
+  let Q := snd(x86_64_linux.next_mapped(app(m, "vm"), p))
+  let PQ := app(app(app(m, "vm"), "pages"), Q)
+  have nmi := all_elim(x86.next_mapped_in, {app(m, "vm")}, {p})
+  have nmm := all_elim(x86.next_mapped_mapped, {app(m, "vm")}, {p})
+  have g: x86.gst2(app(app(m1, "vm"), "pages"), app(app(m, "vm"), "pages"), Q, PQ, p, Q) &&
+      !(x86_64_linux.next_mapped(app(m, "vm"), p) = none) && !(PQ = none)
+    by simp(h, hp, nmi, nmm, x86.gst2_step, x86.gst2_init, x86.gst2_mono, x86.prev_mapped_cases, keep(x86.gst2, x86_64_linux.mapped, x86_64_linux.next_mapped, x86_64_linux.prev_mapped, x86_64_linux.run_end),
+      {l0 l. x86.gst2(app(app(fst(l), "vm"), "pages"), app(app(m, "vm"), "pages"), Q, PQ, p, snd(l)) && snd(l) in omega && int_le(p, snd(l))},
+      {l0 l. x86.gst2(app(app(fst(l), "vm"), "pages"), app(app(m, "vm"), "pages"), Q, PQ, p, Q) && snd(l) in omega})
+  have nn := mp(nmi, g.2)
+  // (p below the next mapped page: p is not mapped)
+  have pq: !(p = Q) proof
+    have c: p = Q -> false proof
+      assume e
+      have e2 := rewrite(sym(e), g.3)
+      show by taut(e2, hn)
+    qed
+    show by taut(c)
+  qed
+  have lt: int_lt(p, Q) by arith(nn.1, nn.3, pq, hp)
+  have v := mp(all_elim(expand(g.1, x86.gst2).2, {p}), hp, arith(hp), lt)
+  show := rewrite(sym(v), g.3)
+qed
+// a write access done: the address writable after it
+theorem x86.touch_acc: all m x y e. x in bits(64) -> runs(x86_64_linux.touch(x, 1), m, ok(y, e)) -> x86_64_linux.can_access(app(y, "vm"), x, 1)
+proof
+  fix m x y e
+  assume hx h
+  let PG := app(app(app(y, "vm"), "pages"), x86_64_linux.page_of(x))
+  have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
+  let P := x86_64_linux.page_of(x)
+  have k1: x86_64_linux.hw_allows(app(snd(PG), "prot"), 1) by simp(hx, h, keep(x86_64_linux.grow_stack, x86_64_linux.hw_allows, x86_64_linux.page_of, x86_64_linux.mapped))
+  have k2: x86_64_linux.mapped(app(y, "vm"), P) || (!x86_64_linux.mapped(app(m, "vm"), P) && !int_le(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), P) &&
+      (ex e2. runs(x86_64_linux.grow_stack(x, P), m, ok(y, e2))))
+    by simp(hx, h, keep(x86_64_linux.grow_stack, x86_64_linux.hw_allows, x86_64_linux.page_of, x86_64_linux.mapped))
+  have c2: (!x86_64_linux.mapped(app(m, "vm"), P) && !int_le(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), P) &&
+      (ex e2. runs(x86_64_linux.grow_stack(x, P), m, ok(y, e2)))) -> x86_64_linux.mapped(app(y, "vm"), P) proof
+    assume hc
+    have nm lt eg := hc
+    have l: int_lt(P, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(lt, po)
+    have pn: app(app(app(m, "vm"), "pages"), P) = none by taut(expand(nm, x86_64_linux.mapped), l)
+    obtain e2, hg from eg
+    have ny := apply(x86.grow_sets, {m}, {x}, {P}, {y}, {e2}, po, pn, hg)
+    show by defs(taut(l, ny), x86_64_linux.mapped)
+  qed
+  have k: x86_64_linux.hw_allows(app(snd(PG), "prot"), 1) && x86_64_linux.mapped(app(y, "vm"), x86_64_linux.page_of(x)) by taut(k1, k2, c2)
+  have w: app(app(snd(PG), "prot"), "w") by simp(expand(k.1, x86_64_linux.hw_allows))
+  show by defs(taut(k, w), x86_64_linux.can_access)
+qed
+
+// (an access allowed: still, the memory grown)
+theorem x86.access_fwd: all v0 v x k. x in bits(64) -> abi.vm_grows(v0, v) -> x86_64_linux.can_access(v0, x, k) -> x86_64_linux.can_access(v, x, k)
+proof
+  fix v0 v x k
+  assume hx hg hc
+  have c := expand(expand(hc, x86_64_linux.can_access), x86_64_linux.mapped)
+  have m0: x86_64_linux.mapped(v0, x86_64_linux.page_of(x)) by defs(taut(c), x86_64_linux.mapped)
+  have po: x86_64_linux.page_of(x) in omega by defs(simp(hx), x86_64_linux.page_of)
+  have e := mp(all_elim(expand(hg, abi.vm_grows).1, {x86_64_linux.page_of(x)}), po, m0)
+  have c2 := rewrite(sym(e), c)
+  show by defs(defs(c2, x86_64_linux.mapped), x86_64_linux.can_access)
+qed
+
+// (one more byte of a write access done)
+theorem x86.tra_step: all c c2 e2 a j. (all i. i in omega -> int_lt(i, j) -> x86_64_linux.can_access(app(c, "vm"), bits_add(64, a, bits_of_int(64, i)), 1)) -> j in omega ->
+  runs(x86_64_linux.touch(bits_add(64, a, bits_of_int(64, j)), 1), c, ok(c2, e2)) ->
+  (all i. i in omega -> int_lt(i, int_add(j, 1)) -> x86_64_linux.can_access(app(c2, "vm"), bits_add(64, a, bits_of_int(64, i)), 1))
+proof
+  fix c c2 e2 a j
+  assume hp hj ht
+  have gr := apply(x86.touch_frame_at, {c}, {a}, {j}, {1}, {c2}, {e2}, ht)
+  have ta := apply(x86.touch_acc, {c}, {bits_add(64, a, bits_of_int(64, j))}, {c2}, {e2}, (bits_add(64, a, bits_of_int(64, j)) in bits(64) by simp()), ht)
+  fix i
+  assume hi hl
+  have c1: i = j -> x86_64_linux.can_access(app(c2, "vm"), bits_add(64, a, bits_of_int(64, i)), 1) proof
+    assume e
+    show := rewrite(sym(e), ta)
+  qed
+  have c3: !(i = j) -> x86_64_linux.can_access(app(c2, "vm"), bits_add(64, a, bits_of_int(64, i)), 1) proof
+    assume ne
+    have l: int_lt(i, j) by arith(hi, hj, hl, ne)
+    have o := mp(all_elim(hp, {i}), hi, l)
+    show := apply(x86.access_fwd, (bits_add(64, a, bits_of_int(64, i)) in bits(64) by simp()), gr, o)
+  qed
+  show by taut(c1, c3)
+qed
+
+// ... and all n bytes of a write access done
+theorem x86.touch_range_acc: all m a n y e. runs(x86_64_linux.touch_range(a, n, 1), m, ok(y, e)) ->
+  (all j. j in omega -> int_lt(j, n) -> x86_64_linux.can_access(app(y, "vm"), bits_add(64, a, bits_of_int(64, j)), 1))
+proof
+  fix m a n y e
+  assume h
+  have i0: all i. i in omega -> int_lt(i, 0) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_int(64, i)), 1) proof
+    fix i
+    assume h1 h2
+    show by arith(h1, h2)
+  qed
+  show by simp(h, i0, x86.tra_step, keep(x86_64_linux.touch, x86_64_linux.can_access),
+    {l0 l1. (all j. j in omega -> int_lt(j, snd(l1)) -> x86_64_linux.can_access(app(fst(l1), "vm"), bits_add(64, a, bits_of_int(64, j)), 1)) && snd(l1) in omega})
+qed
