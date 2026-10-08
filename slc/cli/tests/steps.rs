@@ -136,7 +136,15 @@ fn translations_are_generated_and_check() {
         certs.push(cert);
     }
     // and a_clz_32 linked with a_ctz_32 (proofs/mallocng_link.core)
-    let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).args(&certs).arg("proofs/mallocng_link.core").output().unwrap();
+    // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl)
+    let c = Command::new(slc)
+        .current_dir(&root)
+        .args(["kernel-check", "--no-cache"])
+        .args(&files)
+        .args(&certs)
+        .args(["proofs/mallocng_link.core", "proofs/gimple_inv.core", "proofs/mallocng_c2.core"])
+        .output()
+        .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // each certificate's theorems unconditional: nothing in the chain rests
     // on an open lemma (the storing functions' statics' range defined)
@@ -153,7 +161,9 @@ fn translations_are_generated_and_check() {
         ("dequeue", "0 definitions, 10 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
-        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 3 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 3 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 15 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple]) {
         let _ = std::fs::remove_file(f);

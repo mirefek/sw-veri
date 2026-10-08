@@ -1,0 +1,480 @@
+// C2 of mallocng's internal functions: their readable GIMPLE refines their
+// specs (layers/mallocng_specs.sl). A run of the code is inverted step by
+// step (proofs/gimple_inv.core: each operation's one outcome), in the
+// specs' vocabulary (rd64, wr64, word_ok); the spec's run is the outcome.
+//
+//   checked after proofs/translate_effects.core and proofs/gimple_inv.core
+
+// ----------------------------------------------------------------------
+//  Words: written, read back
+
+// (a word's address: no wrap -- int_add the code's, bits_add the spec's)
+theorem ms.addr: all p off. p in bits(64) -> off in bits(32) -> int_le(int_add(int_add(p, off), 8), int_pow(2, 64)) -> int_add(p, off) = bits_add(64, p, off)
+proof
+  fix p off
+  assume hp ho hl
+  have bdef: bits_add(64, p, off) = int_mod(int_add(p, off), 18446744073709551616) by defs(simp(), bits_add)
+  have l2: int_lt(int_add(p, off), 18446744073709551616) by simp(hl, hp, ho)
+  show by arith(bdef, hp, ho, l2)
+qed
+
+theorem ms.rd_wr_same: all vm a v. app(vm, "bytes") in fn_space(bits(64), bits(8)) -> a in bits(64) -> v in bits(64) ->
+  mallocng_specs.rd64(mallocng_specs.wr64(vm, a, v), a) = v
+proof
+  fix vm a v
+  assume hb ha hv
+  let W := fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, 8, v))
+  have ew: mallocng_specs.wr64(vm, a, v) = W by defs(simp(), mallocng_specs.wr64)
+  have l := apply(tr.le_store8, {app(vm, "bytes")}, {a}, {v}, hb, ha, simp(hv))
+  have lb := all_elim(tr.le_bytes, {W}, {a}, {8})
+  have r: bits_of_int(64, gimple.bytes_at(W, a, 8)) = v by simp(lb, l, hv, keep(x86_64_linux.le, gimple.bytes_at))
+  show by defs(simp(ew, r, keep(gimple.bytes_at)), mallocng_specs.rd64)
+qed
+
+theorem ms.rd_wr_far: all vm a b v. a in bits(64) -> b in bits(64) -> mallocng_specs.al8(a) -> mallocng_specs.al8(b) -> !(a = b) ->
+  mallocng_specs.rd64(mallocng_specs.wr64(vm, a, v), b) = mallocng_specs.rd64(vm, b)
+proof
+  fix vm a b v
+  assume ha hb aa ab ne
+  have a8 := expand(aa, mallocng_specs.al8)
+  have b8 := expand(ab, mallocng_specs.al8)
+  have far: all k. k in omega -> int_lt(k, 8) -> !int_lt(bits_sub(64, bits_add(64, b, bits_of_int(64, k)), a), 8) proof
+    fix k
+    assume k1 k2
+    have p64: pow2(64) = 18446744073709551616 by simp()
+    have e0: !int_lt(int_mod(int_sub(int_mod(int_add(b, int_mod(k, 18446744073709551616)), 18446744073709551616), a), 18446744073709551616), 8) by arith(ha, hb, a8, b8, ne, k1, k2)
+    show by defs(rewrite(sym(p64), e0), bits_sub, bits_add, bits_of_int)
+  qed
+  have lf := apply(x86.le_store_far, {app(vm, "bytes")}, {b}, {a}, {8}, {v}, hb, ha, far)
+  let W := fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, 8, v))
+  have ew: mallocng_specs.wr64(vm, a, v) = W by defs(simp(), mallocng_specs.wr64)
+  have l1 := all_elim(tr.le_bytes, {W}, {b}, {8})
+  have l2 := all_elim(tr.le_bytes, {vm}, {b}, {8})
+  have r: bits_of_int(64, gimple.bytes_at(W, b, 8)) = bits_of_int(64, gimple.bytes_at(vm, b, 8)) by simp(l1, l2, lf, keep(x86_64_linux.le, x86_64_linux.store_le, gimple.bytes_at))
+  show by defs(simp(ew, r, keep(gimple.bytes_at)), mallocng_specs.rd64)
+qed
+
+// ----------------------------------------------------------------------
+//  Worlds after a word written
+
+theorem ms.world_wr: all s a v. s in abi.World -> s in univ(1) -> a in bits(64) ->
+  fn_update(s, "vm", mallocng_specs.wr64(app(s, "vm"), a, v)) in abi.World && fn_update(s, "vm", mallocng_specs.wr64(app(s, "vm"), a, v)) in univ(1)
+proof
+  fix s a v
+  assume hw hu ha
+  have r := apply(tr.world_store, {s}, {a}, {8}, {v}, hw, hu, ha)
+  show by defs(r, mallocng_specs.wr64)
+qed
+
+theorem ms.word_wr: all vm objs p off a v. mallocng_specs.word_ok(vm, objs, p, off) -> mallocng_specs.word_ok(mallocng_specs.wr64(vm, a, v), objs, p, off)
+proof
+  fix vm objs p off a v
+  assume h
+  show by defs(simp(expand(h, mallocng_specs.word_ok, gimple.usable)), mallocng_specs.word_ok, gimple.usable, mallocng_specs.wr64)
+qed
+
+// (a world's parts, for GIMPLE's stores)
+theorem ms.world_parts: all s. s in abi.World -> app(s, "vm") in x86_64_linux.Vm && is_fun(s) && "vm" in dom(s) && app(app(s, "vm"), "bytes") in fn_space(bits(64), bits(8))
+proof
+  fix s
+  assume h
+  have wf := expand(h, abi.World)
+  show by simp(wf)
+qed
+
+// ----------------------------------------------------------------------
+//  The accessors' runs: one outcome each (the word defined)
+
+theorem ms.ld_det: all s p off. s in univ(1) -> p in bits(64) -> off in bits(32) -> mallocng_specs.word_ok(app(s, "vm"), app(s, "objs"), p, off) ->
+  g.det(gimple.ld64(p, off), s, ok(s, mallocng_specs.rd64(app(s, "vm"), bits_add(64, p, off))))
+proof
+  fix s p off
+  assume hs hp ho hk
+  have nz lt ur uw := expand(hk, mallocng_specs.word_ok)
+  have ea := apply(ms.addr, {p}, {off}, hp, ho, lt)
+  have md: g.mem_defined(s, p, off, 8, false) by simp(nz, lt, ur, hp, ho)
+  have ld := apply(g.ld64_det, {s}, {p}, {off}, hs, hp, ho, md)
+  show by defs(rewrite(ea, ld), mallocng_specs.rd64)
+qed
+
+theorem ms.st_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> mallocng_specs.word_ok(app(s, "vm"), app(s, "objs"), p, off) ->
+  g.det(gimple.st64(p, off, v), s, ok(fn_update(s, "vm", mallocng_specs.wr64(app(s, "vm"), bits_add(64, p, off), v)), empty))
+proof
+  fix s p off v
+  assume hw hs hp ho hk
+  have nz lt ur uw := expand(hk, mallocng_specs.word_ok)
+  have ea := apply(ms.addr, {p}, {off}, hp, ho, lt)
+  have md: g.mem_defined(s, p, off, 8, true) by simp(nz, lt, uw, hp, ho)
+  have pv pf pd _ := apply(ms.world_parts, hw)
+  have st := apply(g.st64_det, {s}, {p}, {off}, {v}, hs, hp, ho, md, pv, pf, pd)
+  show by defs(rewrite(ea, st), mallocng_specs.wr64)
+qed
+
+theorem ms.next_det: all s m. s in univ(1) -> m in bits(64) -> mallocng_specs.word_ok(app(s, "vm"), app(s, "objs"), m, 8) ->
+  g.det(c_src_malloc_mallocng_malloc.meta_next(m), s, ok(s, mallocng_specs.mnext(app(s, "vm"), m)))
+proof
+  fix s m
+  assume hs hm hk
+  have d := apply(ms.ld_det, {s}, {m}, {8}, hs, hm, simp(), hk)
+  show by defs(apply(g.ret_det, d), c_src_malloc_mallocng_malloc.meta_next, mallocng_specs.mnext)
+qed
+
+theorem ms.prev_det: all s m. s in univ(1) -> m in bits(64) -> mallocng_specs.word_ok(app(s, "vm"), app(s, "objs"), m, 0) ->
+  g.det(c_src_malloc_mallocng_malloc.meta_prev(m), s, ok(s, mallocng_specs.mprev(app(s, "vm"), m)))
+proof
+  fix s m
+  assume hs hm hk
+  have d := apply(ms.ld_det, {s}, {m}, {0}, hs, hm, simp(), hk)
+  have z: bits_add(64, m, 0) = m by simp(hm)
+  show by defs(apply(g.ret_det, rewrite(z, d)), c_src_malloc_mallocng_malloc.meta_prev, mallocng_specs.mprev)
+qed
+
+theorem ms.setnext_det: all s p v. s in abi.World -> s in univ(1) -> p in bits(64) -> mallocng_specs.word_ok(app(s, "vm"), app(s, "objs"), p, 8) ->
+  g.det(c_src_malloc_mallocng_malloc.set_meta_next(p, v), s, ok(fn_update(s, "vm", mallocng_specs.wr64(app(s, "vm"), bits_add(64, p, 8), v)), empty))
+proof
+  fix s p v
+  assume hw hs hp hk
+  have d := apply(ms.st_det, {s}, {p}, {8}, {v}, hw, hs, hp, simp(), hk)
+  show by defs(apply(g.unit_det, d), c_src_malloc_mallocng_malloc.set_meta_next)
+qed
+
+theorem ms.setprev_det: all s p v. s in abi.World -> s in univ(1) -> p in bits(64) -> mallocng_specs.word_ok(app(s, "vm"), app(s, "objs"), p, 0) ->
+  g.det(c_src_malloc_mallocng_malloc.set_meta_prev(p, v), s, ok(fn_update(s, "vm", mallocng_specs.wr64(app(s, "vm"), p, v)), empty))
+proof
+  fix s p v
+  assume hw hs hp hk
+  have d := apply(ms.st_det, {s}, {p}, {0}, {v}, hw, hs, hp, simp(), hk)
+  have z: bits_add(64, p, 0) = p by simp(hp)
+  show by defs(apply(g.unit_det, rewrite(z, d)), c_src_malloc_mallocng_malloc.set_meta_prev)
+qed
+
+// ----------------------------------------------------------------------
+//  Worlds as the code writes them: s with its memory X
+
+// (a world written again: one update)
+theorem ms.upd: all s X a v. fn_update(fn_update(s, "vm", X), "vm", mallocng_specs.wr64(app(fn_update(s, "vm", X), "vm"), a, v)) = fn_update(s, "vm", mallocng_specs.wr64(X, a, v))
+proof
+  fix s X a v
+  have t := fn_update_twice[f := s, k := "vm", a := X, b := mallocng_specs.wr64(X, a, v)]
+  show by simp(t)
+qed
+
+// (s with its memory X, X then written: a world, its memory's facts)
+theorem ms.sw: all s X a v. fn_update(s, "vm", X) in abi.World -> fn_update(s, "vm", X) in univ(1) -> a in bits(64) ->
+  fn_update(s, "vm", mallocng_specs.wr64(X, a, v)) in abi.World && fn_update(s, "vm", mallocng_specs.wr64(X, a, v)) in univ(1)
+proof
+  fix s X a v
+  assume hw hu ha
+  have r := apply(ms.world_wr, {fn_update(s, "vm", X)}, {a}, {v}, hw, hu, ha)
+  show by simp(rewrite(all_elim(ms.upd, {s}, {X}, {a}, {v}), r))
+qed
+
+// (an 8-aligned word's successor's address: aligned, no wrap)
+theorem ms.al8_add: all p. p in bits(64) -> mallocng_specs.al8(p) -> int_le(int_add(int_add(p, 8), 8), int_pow(2, 64)) ->
+  mallocng_specs.al8(bits_add(64, p, 8)) && bits_add(64, p, 8) = int_add(p, 8) && bits_add(64, p, 8) in bits(64)
+proof
+  fix p
+  assume hp ha hl
+  have e := apply(ms.addr, {p}, {8}, hp, simp(), hl)
+  have a8 := expand(ha, mallocng_specs.al8)
+  have g: int_mod(int_add(p, 8), 8) = 0 by arith(a8, hp)
+  show by defs(simp(sym(e), g), mallocng_specs.al8)
+qed
+
+// ----------------------------------------------------------------------
+//  dequeue
+
+// m alone (its next itself): the head cleared, m's links cleared
+theorem ms.dq_alone: all phead m s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.dequeue_pre(app(s, "vm"), app(s, "objs"), phead, m) -> m = mallocng_specs.mnext(app(s, "vm"), m) ->
+  runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(app(s, "vm"), phead, 0), bits_add(64, m, 8), 0), m, 0)), empty)
+proof
+  fix phead m s o
+  assume hph hm hw hu hpre heq hr
+  let V0 := app(s, "vm")
+  let N := mallocng_specs.mnext(V0, m)
+  have kh km0 km8 ah am nhm nhm8 _ := expand(hpre, mallocng_specs.dequeue_pre)
+  // the first load, the branch not taken
+  have h0 := apply(g.runs_elim, expand(hr, c_src_malloc_mallocng_malloc.dequeue))
+  have d0 := apply(ms.next_det, {s}, {m}, hu, hm, km8)
+  obtain x5, hc hrest from apply(g.letin_e, apply(g.bind_inv, h0, d0))
+  have e5: x5 = ok(pair(s, empty), empty) := apply(g.pick2, hc, (!!(m = N) by taut(heq)), (!!(m = N) by taut(heq)))
+  have os := all_elim(g.ok_state, {pair(s, empty)}, {empty})
+  have h1 := apply(g.pick0, rewrite(e5, hrest), simp(os), simp(os))
+  // *phead := 0
+  have fp: fst(pair(s, empty)) = s by simp()
+  have hs1 := apply(g.bind_inv, rewrite(fp, rewrite(os.1, h1)), apply(ms.st_det, {s}, {phead}, {0}, {0}, hw, hu, hph, simp(), kh))
+  // m.next := 0
+  have zp: bits_add(64, phead, 0) = phead by simp(hph)
+  let V1 := mallocng_specs.wr64(V0, phead, 0)
+  let S1 := fn_update(s, "vm", V1)
+  have w1 u1 := apply(ms.world_wr, {s}, {phead}, {0}, hw, hu, hph)
+  have km8b: mallocng_specs.word_ok(app(S1, "vm"), app(S1, "objs"), m, 8) by simp(apply(ms.word_wr, {V0}, {app(s, "objs")}, {m}, {8}, {phead}, {0}, km8))
+  have km0b: mallocng_specs.word_ok(app(S1, "vm"), app(S1, "objs"), m, 0) by simp(apply(ms.word_wr, {V0}, {app(s, "objs")}, {m}, {0}, {phead}, {0}, km0))
+  have hs2 := apply(g.bind_inv, rewrite(zp, hs1), apply(ms.setnext_det, {S1}, {m}, {0}, w1, u1, hm, km8b))
+  let M8 := bits_add(64, m, 8)
+  let V2 := mallocng_specs.wr64(V1, M8, 0)
+  let S2 := fn_update(s, "vm", V2)
+  have hs2b := rewrite(all_elim(ms.upd, {s}, {V1}, {M8}, {0}), hs2)
+  have w2 u2 := apply(ms.sw, {s}, {V1}, {M8}, {0}, w1, u1, simp())
+  have km8c: mallocng_specs.word_ok(app(S2, "vm"), app(S2, "objs"), m, 8) by simp(apply(ms.word_wr, {V1}, {app(s, "objs")}, {m}, {8}, {M8}, {0}, simp(km8b)))
+  have km0c: mallocng_specs.word_ok(app(S2, "vm"), app(S2, "objs"), m, 0) by simp(apply(ms.word_wr, {V1}, {app(s, "objs")}, {m}, {0}, {M8}, {0}, simp(km0b)))
+  // t8 := m.next (0, just written)
+  have bt1 := apply(ms.world_parts, w1).4
+  have r0: mallocng_specs.mnext(app(S2, "vm"), m) = 0 by defs(simp(apply(ms.rd_wr_same, {V1}, {M8}, {0}, simp(bt1), simp(), simp())), mallocng_specs.mnext)
+  have hs3 := rewrite(r0, apply(g.letin_e, apply(g.bind_inv, hs2b, apply(ms.next_det, {S2}, {m}, u2, hm, km8c))))
+  // m.prev := t8
+  have hs4 := apply(g.bind_inv, hs3, apply(ms.setprev_det, {S2}, {m}, {0}, w2, u2, hm, km0c))
+  show := rewrite(all_elim(ms.upd, {s}, {V2}, {m}, {0}), hs4)
+qed
+
+// (a meta's links: its words)
+theorem ms.mnext_def: all vm m. mallocng_specs.mnext(vm, m) = mallocng_specs.rd64(vm, bits_add(64, m, 8))
+proof
+  fix vm m
+  show by defs(refl({mallocng_specs.rd64(vm, bits_add(64, m, 8))}), mallocng_specs.mnext)
+qed
+
+theorem ms.mprev_def: all vm m. mallocng_specs.mprev(vm, m) = mallocng_specs.rd64(vm, m)
+proof
+  fix vm m
+  show by defs(refl({mallocng_specs.rd64(vm, m)}), mallocng_specs.mprev)
+qed
+
+// (two 8-aligned addresses x + 8, y + 8: equal only if x, y are)
+theorem ms.add8_ne: all x y. x in bits(64) -> y in bits(64) -> int_le(int_add(int_add(x, 8), 8), int_pow(2, 64)) -> int_le(int_add(int_add(y, 8), 8), int_pow(2, 64)) ->
+  !(x = y) -> !(bits_add(64, x, 8) = bits_add(64, y, 8))
+proof
+  fix x y
+  assume hx hy lx ly ne
+  have ex := apply(ms.addr, {x}, {8}, hx, simp(), lx)
+  have ey := apply(ms.addr, {y}, {8}, hy, simp(), ly)
+  have g: !(int_add(x, 8) = int_add(y, 8)) by arith(ne, hx, hy)
+  show := rewrite(ey, rewrite(ex, g))
+qed
+
+// m linked (its next another meta): the neighbours linked to each other,
+// the head moved past m if it was m, m's links cleared
+theorem ms.dq_linked: all phead m s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.dequeue_pre(app(s, "vm"), app(s, "objs"), phead, m) -> !(m = mallocng_specs.mnext(app(s, "vm"), m)) ->
+  runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(app(s, "vm"), phead, m)), empty)
+proof
+  fix phead m s o
+  assume hph hm hw hu hpre hne hr
+  let V0 := app(s, "vm")
+  let OB := app(s, "objs")
+  let N := mallocng_specs.mnext(V0, m)
+  let P := mallocng_specs.mprev(V0, m)
+  let PA := bits_add(64, P, 8)
+  let M8 := bits_add(64, m, 8)
+  have kh km0 km8 ah am nhm nhm8 hl := expand(hpre, mallocng_specs.dequeue_pre)
+  have nNm: !(N = m) proof
+    have c: N = m -> false proof
+      assume e
+      show by taut(hne, sym(e))
+    qed
+    show by taut(c)
+  qed
+  have kp8 kn0 ap an npm np8m nn8 np8h nnh np8n := mp(hl, nNm)
+  have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+  have hN: N in bits(64) by defs(simp(), mallocng_specs.mnext, mallocng_specs.rd64)
+  // (the addresses: P + 8, m + 8 aligned, no wrap)
+  have _ plt _ _ := expand(kp8, mallocng_specs.word_ok)
+  have _ mlt _ _ := expand(km8, mallocng_specs.word_ok)
+  have apa epa hpa := apply(ms.al8_add, {P}, hP, ap, plt)
+  have am8 em8 hm8 := apply(ms.al8_add, {m}, hm, am, mlt)
+  have pa_m8 := apply(ms.add8_ne, {P}, {m}, hP, hm, plt, mlt, npm)
+  have pa_m: !(PA = m) := rewrite(sym(epa), np8m)
+  have n_m8: !(N = M8) := rewrite(sym(em8), nn8)
+  have pa_h: !(PA = phead) := rewrite(sym(epa), np8h)
+  have pa_n: !(PA = N) := rewrite(sym(epa), np8n)
+  // t1 := m.next, the branch taken
+  have h0 := apply(g.runs_elim, expand(hr, c_src_malloc_mallocng_malloc.dequeue))
+  have d0 := apply(ms.next_det, {s}, {m}, hu, hm, km8)
+  obtain x5, hc hrest from apply(g.letin_e, apply(g.bind_inv, h0, d0))
+  have hA := apply(g.pick, hc, hne, (!!!(m = N) by taut(hne)))
+  // t2 := m.prev, t3 := m.next, t2.next := t3
+  have a1 := apply(g.letin_e, apply(g.bind_inv, hA, apply(ms.prev_det, {s}, {m}, hu, hm, km0)))
+  have a2 := apply(g.letin_e, apply(g.bind_inv, a1, d0))
+  have a3 := apply(g.bind_inv, a2, apply(ms.setnext_det, {s}, {P}, {N}, hw, hu, hP, kp8))
+  let V1 := mallocng_specs.wr64(V0, PA, N)
+  let S1 := fn_update(s, "vm", V1)
+  have w1 u1 := apply(ms.world_wr, {s}, {PA}, {N}, hw, hu, hpa)
+  have km8_1: mallocng_specs.word_ok(app(S1, "vm"), app(S1, "objs"), m, 8) by simp(apply(ms.word_wr, {V0}, {OB}, {m}, {8}, {PA}, {N}, km8))
+  have km0_1: mallocng_specs.word_ok(app(S1, "vm"), app(S1, "objs"), m, 0) by simp(apply(ms.word_wr, {V0}, {OB}, {m}, {0}, {PA}, {N}, km0))
+  have kn0_1: mallocng_specs.word_ok(app(S1, "vm"), app(S1, "objs"), N, 0) by simp(apply(ms.word_wr, {V0}, {OB}, {N}, {0}, {PA}, {N}, kn0))
+  // t4 := m.next (N: m's next not written), t5 := m.prev (P), t4.prev := t5
+  have sv1: app(S1, "vm") = V1 by simp()
+  have e1a: mallocng_specs.mnext(V1, m) = N := trans(all_elim(ms.mnext_def, {V1}, {m}), trans(apply(ms.rd_wr_far, {V0}, {PA}, {M8}, {N}, hpa, hm8, apa, am8, pa_m8), sym(all_elim(ms.mnext_def, {V0}, {m}))))
+  have e1 := rewrite(sym(sv1), e1a)
+  have a4 := rewrite(e1, apply(g.letin_e, apply(g.bind_inv, a3, apply(ms.next_det, {S1}, {m}, u1, hm, km8_1))))
+  have e2a: mallocng_specs.mprev(V1, m) = P := trans(all_elim(ms.mprev_def, {V1}, {m}), trans(apply(ms.rd_wr_far, {V0}, {PA}, {m}, {N}, hpa, hm, apa, am, pa_m), sym(all_elim(ms.mprev_def, {V0}, {m}))))
+  have e2 := rewrite(sym(sv1), e2a)
+  have a5 := rewrite(e2, apply(g.letin_e, apply(g.bind_inv, a4, apply(ms.prev_det, {S1}, {m}, u1, hm, km0_1))))
+  have a6 := rewrite(all_elim(ms.upd, {s}, {V1}, {N}, {P}), apply(g.bind_inv, a5, apply(ms.setprev_det, {S1}, {N}, {P}, w1, u1, hN, kn0_1)))
+  let V2 := mallocng_specs.wr64(V1, N, P)
+  let S2 := fn_update(s, "vm", V2)
+  have w2 u2 := apply(ms.sw, {s}, {V1}, {N}, {P}, w1, u1, hN)
+  have sv2: app(S2, "vm") = V2 by simp()
+  have kh_2: mallocng_specs.word_ok(app(S2, "vm"), app(S2, "objs"), phead, 0) by simp(apply(ms.word_wr, {V1}, {OB}, {phead}, {0}, {N}, {P}, simp(apply(ms.word_wr, {V0}, {OB}, {phead}, {0}, {PA}, {N}, kh))))
+  have km8_2: mallocng_specs.word_ok(V2, OB, m, 8) := apply(ms.word_wr, {V1}, {OB}, {m}, {8}, {N}, {P}, simp(km8_1))
+  // t6 := *phead (as at the entry: the neighbours' words are apart from it)
+  let H := mallocng_specs.rd64(V0, phead)
+  have zp: bits_add(64, phead, 0) = phead by simp(hph)
+  have e3a: mallocng_specs.rd64(V2, phead) = H :=
+    trans(apply(ms.rd_wr_far, {V1}, {N}, {phead}, {P}, hN, hph, an, ah, nnh), apply(ms.rd_wr_far, {V0}, {PA}, {phead}, {N}, hpa, hph, apa, ah, pa_h))
+  have e3 := rewrite(sym(sv2), e3a)
+  have a7 := rewrite(e3, rewrite(zp, apply(g.letin_e, apply(g.bind_inv, a6, apply(ms.ld_det, {S2}, {phead}, {0}, u2, hph, simp(), kh_2)))))
+  obtain x25, hc2 hrest2 from a7
+  // the rest after the head's update: m's links cleared, the return
+  have tl: all X. fn_update(s, "vm", X) in abi.World -> fn_update(s, "vm", X) in univ(1) -> mallocng_specs.word_ok(X, OB, m, 8) -> mallocng_specs.word_ok(X, OB, m, 0) ->
+      x25 = ok(pair(fn_update(s, "vm", X), empty), empty) ->
+      x5 = exc(pair(fn_update(s, "vm", mallocng_specs.wr64(mallocng_specs.wr64(X, M8, 0), m, 0)), empty), pair("ret", empty)) proof
+    fix X
+    assume hwx hux k8 k0 ex
+    let SX := fn_update(s, "vm", X)
+    have os := all_elim(g.ok_state, {pair(SX, empty)}, {empty})
+    have t1 := apply(g.pick0, rewrite(ex, hrest2), simp(os), simp(os))
+    have fp: fst(pair(SX, empty)) = SX by simp()
+    have k8x: mallocng_specs.word_ok(app(SX, "vm"), app(SX, "objs"), m, 8) by simp(k8)
+    have k0x: mallocng_specs.word_ok(app(SX, "vm"), app(SX, "objs"), m, 0) by simp(k0)
+    have t2 := rewrite(all_elim(ms.upd, {s}, {X}, {M8}, {0}), apply(g.bind_inv, rewrite(fp, rewrite(os.1, t1)), apply(ms.setnext_det, {SX}, {m}, {0}, hwx, hux, hm, k8x)))
+    let X1 := mallocng_specs.wr64(X, M8, 0)
+    let SX1 := fn_update(s, "vm", X1)
+    have wx1 ux1 := apply(ms.sw, {s}, {X}, {M8}, {0}, hwx, hux, hm8)
+    have k8y: mallocng_specs.word_ok(app(SX1, "vm"), app(SX1, "objs"), m, 8) by simp(apply(ms.word_wr, {X}, {OB}, {m}, {8}, {M8}, {0}, k8))
+    have k0y: mallocng_specs.word_ok(app(SX1, "vm"), app(SX1, "objs"), m, 0) by simp(apply(ms.word_wr, {X}, {OB}, {m}, {0}, {M8}, {0}, k0))
+    have btx := apply(ms.world_parts, hwx).4
+    have r0a: mallocng_specs.mnext(X1, m) = 0 := trans(all_elim(ms.mnext_def, {X1}, {m}), apply(ms.rd_wr_same, {X}, {M8}, {0}, simp(btx), hm8, simp()))
+    have svx: app(SX1, "vm") = X1 by simp()
+    have t3 := rewrite(rewrite(sym(svx), r0a), apply(g.letin_e, apply(g.bind_inv, t2, apply(ms.next_det, {SX1}, {m}, ux1, hm, k8y))))
+    have t4 := apply(g.bind_inv, t3, apply(ms.setprev_det, {SX1}, {m}, {0}, wx1, ux1, hm, k0y))
+    show := rewrite(all_elim(ms.upd, {s}, {X1}, {m}, {0}), t4)
+  qed
+  // the head: moved past m if it was m
+  let X3 := ite(m = H, mallocng_specs.wr64(V2, phead, N), V2)
+  have km0_2: mallocng_specs.word_ok(V2, OB, m, 0) := apply(ms.word_wr, {V1}, {OB}, {m}, {0}, {N}, {P}, simp(km0_1))
+  have ex3: x25 = ok(pair(fn_update(s, "vm", X3), empty), empty) && fn_update(s, "vm", X3) in abi.World && fn_update(s, "vm", X3) in univ(1) &&
+      mallocng_specs.word_ok(X3, OB, m, 8) && mallocng_specs.word_ok(X3, OB, m, 0) proof
+    have was: m = H -> x25 = ok(pair(fn_update(s, "vm", X3), empty), empty) && fn_update(s, "vm", X3) in abi.World && fn_update(s, "vm", X3) in univ(1) &&
+        mallocng_specs.word_ok(X3, OB, m, 8) && mallocng_specs.word_ok(X3, OB, m, 0) proof
+      assume hmh
+      have x3e: X3 = mallocng_specs.wr64(V2, phead, N) by simp(hmh)
+      have b1 := apply(g.pick, hc2, hmh, (!!(m = H) by taut(hmh)))
+      have km8_2b: mallocng_specs.word_ok(app(S2, "vm"), app(S2, "objs"), m, 8) by simp(km8_2)
+      have e4a: mallocng_specs.mnext(V2, m) = N := trans(all_elim(ms.mnext_def, {V2}, {m}),
+        trans(apply(ms.rd_wr_far, {V1}, {N}, {M8}, {P}, hN, hm8, an, am8, n_m8), trans(apply(ms.rd_wr_far, {V0}, {PA}, {M8}, {N}, hpa, hm8, apa, am8, pa_m8), sym(all_elim(ms.mnext_def, {V0}, {m})))))
+      have b2 := rewrite(rewrite(sym(sv2), e4a), apply(g.letin_e, apply(g.bind_inv, b1, apply(ms.next_det, {S2}, {m}, u2, hm, km8_2b))))
+      have b3 := rewrite(all_elim(ms.upd, {s}, {V2}, {phead}, {N}), rewrite(zp, apply(g.bind_inv, b2, apply(ms.st_det, {S2}, {phead}, {0}, {N}, w2, u2, hph, simp(), kh_2))))
+      have ww uu := apply(ms.sw, {s}, {V2}, {phead}, {N}, w2, u2, hph)
+      have k8 := apply(ms.word_wr, {V2}, {OB}, {m}, {8}, {phead}, {N}, km8_2)
+      have k0 := apply(ms.word_wr, {V2}, {OB}, {m}, {0}, {phead}, {N}, km0_2)
+      show := rewrite(sym(x3e), conj(b3, ww, uu, k8, k0))
+    qed
+    have wasnt: !(m = H) -> x25 = ok(pair(fn_update(s, "vm", X3), empty), empty) && fn_update(s, "vm", X3) in abi.World && fn_update(s, "vm", X3) in univ(1) &&
+        mallocng_specs.word_ok(X3, OB, m, 8) && mallocng_specs.word_ok(X3, OB, m, 0) proof
+      assume hmh
+      have x3e: X3 = V2 by simp(hmh)
+      have b1 := apply(g.pick2, hc2, hmh, (!(m = H) by taut(hmh)))
+      show := rewrite(sym(x3e), conj(b1, w2, u2, km8_2, km0_2))
+    qed
+    show by taut(was, wasnt)
+  qed
+  have ex25 hw3 hu3 k83 k03 := ex3
+  have ex5 := mp(all_elim(tl, {X3}), hw3, hu3, k83, k03, ex25)
+  // the return: o, the world after
+  have oe: o = ok(fn_update(s, "vm", mallocng_specs.wr64(mallocng_specs.wr64(X3, M8, 0), m, 0)), empty) by simp(rewrite(ex5, hrest))
+  // the spec's effect: the same memory
+  have hd0: (!(N = m) && H = m) <-> m = H proof
+    have s1: H = m -> m = H proof
+      assume e
+      show := sym(e)
+    qed
+    have s2: m = H -> H = m proof
+      assume e
+      show := sym(e)
+    qed
+    show by taut(nNm, s1, s2)
+  qed
+  have hd: !(N = m) && mallocng_specs.rd64(V2, phead) = m <-> m = H by simp(hd0, e3a)
+  have dl: mallocng_specs.dq_links(V0, phead, m) = V2 by defs(mp(tr.ite_t[c := !(N = m), a := V2, b := mallocng_specs.wr64(V0, phead, 0)], nNm), mallocng_specs.dq_links)
+  have dh: mallocng_specs.dq_head(V2, V0, phead, m) = X3 proof
+    let C := !(N = m) && mallocng_specs.rd64(V2, phead) = m
+    have t: m = H -> mallocng_specs.dq_head(V2, V0, phead, m) = X3 proof
+      assume e
+      have c: C by taut(hd, e)
+      have i1 := mp(tr.ite_t[c := C, a := mallocng_specs.wr64(V2, phead, N), b := V2], c)
+      have i2 := mp(tr.ite_t[c := m = H, a := mallocng_specs.wr64(V2, phead, N), b := V2], e)
+      show by defs(trans(i1, sym(i2)), mallocng_specs.dq_head)
+    qed
+    have f: !(m = H) -> mallocng_specs.dq_head(V2, V0, phead, m) = X3 proof
+      assume e
+      have c: !C by taut(hd, e)
+      have i1 := mp(tr.ite_f[c := C, a := mallocng_specs.wr64(V2, phead, N), b := V2], c)
+      have i2 := mp(tr.ite_f[c := m = H, a := mallocng_specs.wr64(V2, phead, N), b := V2], e)
+      show by defs(trans(i1, sym(i2)), mallocng_specs.dq_head)
+    qed
+    show by taut(t, f)
+  qed
+  have d0: mallocng_specs.dequeue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)
+    by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)}), mallocng_specs.dequeue_vm)
+  have dv := rewrite(dh, rewrite(dl, d0))
+  show := rewrite(sym(dv), oe)
+qed
+
+// C2 of dequeue: its readable GIMPLE refines its spec, on every world
+theorem ms.dequeue_c2: all phead m. phead in bits(64) -> m in bits(64) ->
+  refines(c_src_malloc_mallocng_malloc.dequeue(phead, m), mallocng_specs.dequeue_spec(phead, m), abi.World)
+proof
+  fix phead m
+  assume hph hm
+  have g: all s o. s in abi.World -> runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) -> runs(mallocng_specs.dequeue_spec(phead, m), s, o) proof
+    fix s o
+    assume hw hr
+    let V0 := app(s, "vm")
+    let N := mallocng_specs.mnext(V0, m)
+    let M8 := bits_add(64, m, 8)
+    have pu := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.dequeue))
+    have hu: s in univ(1) by simp(pu)
+    let R(x, y) := !mallocng_specs.dequeue_pre(app(x, "vm"), app(x, "objs"), phead, m) || letin(fn_update(x, "vm", mallocng_specs.dequeue_vm(app(x, "vm"), phead, m)), x2. y = ok(x2, empty))
+    have rel: R(s, o) proof
+      have np: !mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> R(s, o) by taut()
+      have yp: mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> R(s, o) proof
+        assume hp
+        have alone: m = N -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+          assume e
+          have oe := apply(ms.dq_alone, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
+          have nn: !!(N = m) proof
+            have c: !(N = m) -> false proof
+              assume h
+              show by taut(h, sym(e))
+            qed
+            show by taut(c)
+          qed
+          have nc: !(!(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m) by taut(nn)
+          have dl: mallocng_specs.dq_links(V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
+            by defs(mp(tr.ite_f[c := !(N = m), a := mallocng_specs.wr64(mallocng_specs.wr64(V0, bits_add(64, mallocng_specs.mprev(V0, m), 8), N), N, mallocng_specs.mprev(V0, m)),
+              b := mallocng_specs.wr64(V0, phead, 0)], nn), mallocng_specs.dq_links)
+          have dh: mallocng_specs.dq_head(mallocng_specs.wr64(V0, phead, 0), V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
+            by defs(mp(tr.ite_f[c := !(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m, a := mallocng_specs.wr64(mallocng_specs.wr64(V0, phead, 0), phead, N),
+              b := mallocng_specs.wr64(V0, phead, 0)], nc), mallocng_specs.dq_head)
+          have d0: mallocng_specs.dequeue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)
+            by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)}), mallocng_specs.dequeue_vm)
+          have dv := rewrite(dh, rewrite(dl, d0))
+          show := rewrite(sym(dv), oe)
+        qed
+        have linked: !(m = N) -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+          assume e
+          show := apply(ms.dq_linked, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
+        qed
+        have oe: o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) by taut(alone, linked)
+        show by defs(simp(oe), letin)
+      qed
+      show by taut(np, yp)
+    qed
+    show by defs(apply(tr.runs_intro[r := x y. R(x, y)], {s}, {o}, pu, rel), mallocng_specs.dequeue_spec)
+  qed
+  show by defs(g, refines)
+qed
