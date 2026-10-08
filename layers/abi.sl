@@ -63,13 +63,17 @@ pred world_matches(old: Vm, new: Vm, w: Vm, objs: Set[nat], sp: Addr) =
   frames: (all a: Addr. uint(sp) <= uint(a) && !in_domain(w, objs, uint(a)) && stack_page(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
   pages: (all p: PageNo. new.pages[p] = w.pages[p] || (w.pages[p] = none && stack_page(new, p)))
 
-// `world(sp, objs)` views a machine as a World, for a function called with
-// the caller's stack pointer `sp`, which may reach the stack objects `objs`
-// (above sp). Writing a world back: its domain the world's, the callers'
-// frames kept, the stack below sp arbitrary (the callee used it).
-view[Machine] world(sp: Addr, objs: Set[nat]) : World {
+// `world(sp, objs, mem)` views a machine as a World, for a function called
+// with the caller's stack pointer `sp`, which may reach the stack objects
+// `objs` (above sp): the world's memory `mem`, a view of the machine's
+// (`world_matches(vm, vm, mem, objs, sp)`: the machine's bytes on the
+// world's domain, its pages but for grown stack pages -- what lies outside
+// the domain is no C function's to see). Writing a world back: its domain
+// the world's, the callers' frames kept, the stack below sp arbitrary (the
+// callee used it).
+view[Machine] world(sp: Addr, objs: Set[nat], mem: Vm) : World {
   get {
-    return World { vm, os, fs_base, cpu, objs }
+    return World { vm: mem, os, fs_base, cpu, objs }
   }
   set(w) {
     let old = vm
@@ -195,8 +199,8 @@ pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
 
 // The parts of a normal return (separate, so that proofs can take them one
 // at a time): the spec run on the world, its result in rax:rdx
-proc[Machine & G] abi_call[G](spec: CFun2[World & G], args: Args, sp: Addr, objs: Set[nat]) -> (bits[64], bits[64]) {
-  let (r0, r1) = with world(sp, objs) { return spec(args) }
+proc[Machine & G] abi_call[G](spec: CFun2[World & G], args: Args, sp: Addr, objs: Set[nat], mem: Vm) -> (bits[64], bits[64]) {
+  let (r0, r1) = with world(sp, objs, mem) { return spec(args) }
   return (r0, r1)
 }
 
@@ -216,23 +220,25 @@ proc[Machine] abi_set_result(sp: Addr, ret: Addr, r0: bits[64], r1: bits[64]) {
 
 // From entry to return: the function behaves like `spec` on the world (with
 // the stack objects `objs` of its callers it may reach: above sp, on their
-// writable stack);
+// writable stack pages), whichever view `mem` of the machine's memory is
+// the world's;
 // callee-saved registers and rsp are restored, rax holds the result, other
 // registers (including all XMM registers) and flags are clobbered. Or it runs
 // out of stack (see above: also right at the call, before any I/O): a
 // fault of a stack access -- a page the stack cannot grow to, or a
 // non-canonical address (the stack's address wrapped).
 // If the spec may raise (undefined behavior), anything.
-proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat]) {
+proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], mem: Vm) {
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
-  require all a: nat. a in objs -> uint(sp) <= a && can_access(vm, bits[64](a), write)
+  require all a: nat. a in objs -> uint(sp) <= a && stack_page(vm, a / PAGE) && can_access(vm, bits[64](a), write)
+  require world_matches(vm, vm, mem, objs, sp)
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
-  let w0    = with world(sp, objs) { return self }    // the world, with ghost state
+  let w0    = with world(sp, objs, mem) { return self }    // the world, with ghost state
   require !spec_raises(w0, spec, args)
   either {
-    let (r0, r1) = abi_call(spec, args, sp, objs)
+    let (r0, r1) = abi_call(spec, args, sp, objs, mem)
     havoc gpr, xmm, flags
     abi_restore(saved)
     abi_set_result(sp, ret, r0, r1)
@@ -251,7 +257,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, o
 // each machine outcome is matched by a spec outcome for *some* final ghost
 // value (the proof chooses it; a forward simulation).
 pred implements2[G](f: Addr, spec: CFun2[World & G]) =
-  all args: Args, objs: Set[nat]. run_to_return() refines abi_function(f, spec, args, objs)
+  all args: Args, objs: Set[nat], mem: Vm. run_to_return() refines abi_function(f, spec, args, objs, mem)
 
 pred implements[G](f: Addr, spec: CFun[World & G]) = implements2(f, wide(spec))
 
@@ -269,7 +275,7 @@ pred loaded(vm: Vm, base: nat, code: List[bits[8]], statics: Set[nat]) =
 // assumes the same, so callers and callees have the same precondition;
 // the program's entry points (e.g. malloc) show it from their own spec.
 pred implements2_at[G](f: Addr, spec: CFun2[World & G], base: nat, code: List[bits[8]], statics: Set[nat]) =
-  all args: Args, objs: Set[nat]. run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function(f, spec, args, objs) }
+  all args: Args, objs: Set[nat], mem: Vm. run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function(f, spec, args, objs, mem) }
 
 // A spec keeps the program loaded: from a world where it is, every outcome
 // still has it (a frame property, proven for each function at the C level;
@@ -289,12 +295,12 @@ pred keeps_code[S](spec: CFun2[S], base: nat, code: List[bits[8]], statics: Set[
 // The call rule: at a call site `call f` (after the arguments are set up),
 // the machine may be reasoned about as the spec. Follows from the
 // definitions; proven once, used at every call site.
-theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat]):
+theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], mem: Vm):
   implements2(f, spec) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args, objs) }
+    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args, objs, mem) }
 
 // ... for a function inside the program: at the call, the program must be
 // loaded.
-theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], base: nat, code: List[bits[8]], statics: Set[nat]):
+theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], mem: Vm, base: nat, code: List[bits[8]], statics: Set[nat]):
   implements2_at(f, spec, base, code, statics) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require loaded(vm, base, code, statics); push(rip); rip := f; abi_function(f, spec, args, objs) }
+    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require loaded(vm, base, code, statics); push(rip); rip := f; abi_function(f, spec, args, objs, mem) }
