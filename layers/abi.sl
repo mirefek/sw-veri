@@ -250,7 +250,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, o
     havoc self where overflow_ok(w0, spec, args, os)
     either {
       let a = any Addr where overflow_at(vm, gpr[rsp], sp, a)
-      either { raise segv(a, maperr) } or { raise segv(a, accerr) }
+      either { raise segv(a, maperr) } or { raise segv(a, accerr) } or { raise segv(a, pkuerr) }
     } or { raise stack_fault }
   }
 }
