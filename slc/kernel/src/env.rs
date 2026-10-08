@@ -98,6 +98,10 @@ pub struct Env {
     /// (`irreducible NAME`; explicit unfolding still unfolds them). A hint
     /// for proof search only: the kernel's rules ignore it.
     pub irreducible: std::collections::HashSet<SymId>,
+    /// the registered rewrite rules of the proof checker's simp (`simp
+    /// NAME`: a proven fact, an equation or equivalence possibly under
+    /// premises), in order. A hint for proof search only.
+    pub simp_set: Vec<String>,
 }
 
 impl Env {
@@ -113,6 +117,7 @@ impl Env {
             open: Default::default(),
             abbrevs: HashMap::new(),
             irreducible: Default::default(),
+            simp_set: Vec::new(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,

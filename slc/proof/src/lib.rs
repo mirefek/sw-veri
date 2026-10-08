@@ -72,12 +72,21 @@
 //! need. `irreducible NAME` (a declaration) keeps NAME folded there; the
 //! step `unfold [D..] [in h]` unfolds explicitly (the goal, or fact h; no
 //! D: the goal's head).
+//!
+//! Simplification: `rsimp(e1, .., D1, .. [, only])` (Lean-like, see
+//! rsimp.rs): rewriting left to right with the facts and definitions given
+//! and the registered rules (`simp NAME` declarations), to `true`; on a
+//! fact, `rsimp(h, ..)`; as a step, `rsimp e1, .. [in h]` (the goal kept,
+//! simplified, unless it became `true`). The older `simp` (symbolic
+//! execution, closing paths by taut / arith) stays as it is.
 
 use sl_kernel::ext::seq::{defined_sym, unfold_all};
 use sl_kernel::ext::simp::LoopHint;
 use sl_kernel::ext::{facts, Logic, Seq};
 use sl_kernel::syntax::{parse_term, parse_value, Printer, ProofRequest, Prover};
 use sl_kernel::{Env, KResult, KernelError, Node, SymId, Term, VarId};
+
+mod rsimp;
 
 fn err<T>(m: impl Into<String>) -> KResult<T> {
     Err(KernelError(m.into()))
@@ -90,9 +99,18 @@ impl Prover for ScriptProver {
     fn prove(&mut self, env: &mut Env, req: &ProofRequest) -> KResult<Seq> {
         let lg = Logic::new(env)?;
         let st = State::new(req.params.clone(), Vec::new(), Some(req.statement.clone()));
-        run_block(env, &lg, st, &req.text, req.line)
-            .and_then(|s| conv_to(env, s, &req.statement, &[]))
-            .map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)))
+        let t0 = std::time::Instant::now();
+        let r = run_block(env, &lg, st, &req.text, req.line);
+        let t1 = std::time::Instant::now();
+        let r = r.and_then(|s| conv_to(env, s, &req.statement, &[])).map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)));
+        // (STEP_SLOW=secs: also the proofs taking longer, and their final check)
+        if let Some(lim) = std::env::var("STEP_SLOW").ok().and_then(|v| v.parse::<f64>().ok()) {
+            let (a, b) = ((t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64());
+            if a + b > lim {
+                eprintln!("proof slow: {:.3}s (closing check {:.3}s): {}", a + b, b, req.name);
+            }
+        }
+        r
     }
 }
 
@@ -164,6 +182,15 @@ fn close(env: &Env, lg: &Logic, st: State) -> KResult<Seq> {
                     Seq::mp(env, &s2, &w)?
                 }
                 Frame::Unfold(g, syms) => conv_to(env, s, g, syms)?,
+                Frame::Rewrite(g, e) => {
+                    let n = match e.concl().node() {
+                        Node::App(_, a) => a[1].clone(),
+                        _ => unreachable!(),
+                    };
+                    let s = conv_to(env, s, &n, &[])?;
+                    let s = Seq::rewrite(env, &Seq::sym(env, e)?, &s)?;
+                    conv_to(env, s, g, &[])?
+                }
             };
         }
         Ok(s)
@@ -381,6 +408,8 @@ enum Frame {
     /// the goal unfolded (`unfold`, or `fix` / `assume` on a defined goal):
     /// the goal before, and the definitions unfolded
     Unfold(Term, Vec<SymId>),
+    /// the goal simplified (`rsimp`): the goal before, and `goal = new`
+    Rewrite(Term, Seq),
 }
 
 struct State {
@@ -398,7 +427,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "lists", "induct", "ex_intro", "defs", "sel", "eval"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -711,6 +740,42 @@ impl State {
                     }
                 }
             }
+            // rsimp [e1, ..] [in h]: the goal (or the fact h) simplified with
+            // the rules (see `rsimp`); a goal simplified to `true` is proven
+            "rsimp" => {
+                let (rules, h) = match split_top_kw(rest, "in") {
+                    Some((a, b)) => (a.trim(), Some(b.trim())),
+                    None => (rest.trim(), None),
+                };
+                let args = match parse_pe(&format!("rsimp({})", rules))? {
+                    PE::Rule(_, a) => a,
+                    _ => unreachable!(),
+                };
+                let rs = self.rsimp_rules(env, lg, &args)?;
+                match h {
+                    Some(h) => {
+                        let f = self.fact(env, h)?;
+                        let s = self.rsimp_fact(env, lg, f, &rs)?;
+                        self.facts.push((h.to_string(), s));
+                    }
+                    None => {
+                        let g = self.goal.clone().ok_or_else(|| KernelError("rsimp: no current goal here".into()))?;
+                        let e = self.rsimp_eq(env, lg, &g, &rs, 0)?;
+                        let n = match e.concl().node() {
+                            Node::App(_, a) => a[1].clone(),
+                            _ => unreachable!(),
+                        };
+                        match self.closes(env, lg, &n, &rs) {
+                            Some(p) => self.last = Some(Seq::rewrite(env, &Seq::sym(env, &e)?, &p)?),
+                            None if n == g => return err("rsimp: no rule applies to the goal"),
+                            None => {
+                                self.frames.push(Frame::Rewrite(g, e));
+                                self.goal = Some(n);
+                            }
+                        }
+                    }
+                }
+            }
             // print P: shows what P proves (and the current goal), for writing proofs
             "print" => {
                 let s = self.eval(env, lg, &parse_pe(rest)?)?;
@@ -869,6 +934,12 @@ impl State {
             return self.check(env, s, goal);
         };
         match name.as_str() {
+            // rsimp(e1, .., D1, .. [, only]): the goal rewritten with the
+            // rules to `true` (or a known fact)
+            "rsimp" => {
+                let rs = self.rsimp_rules(env, lg, args)?;
+                self.rsimp_close(env, lg, goal, &rs, 0)
+            }
             "taut" => {
                 let ps = self.proofs(env, lg, args)?;
                 let refs: Vec<&Seq> = ps.iter().collect();
@@ -1602,6 +1673,12 @@ impl State {
                         let p = self.proof_arg(env, lg, a0)?;
                         Ok(Seq::simp(env, lg, &p))
                     }
+                    // rsimp(h, e1, ..): the fact h simplified
+                    "rsimp" => {
+                        let h = self.proof_arg(env, lg, a0)?;
+                        let rs = self.rsimp_rules(env, lg, &args[1.min(args.len())..])?;
+                        self.rsimp_fact(env, lg, h, &rs)
+                    }
                     "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" | "eval" => err(format!("{} needs a goal: `have h: φ by {}(...)`, or inline `(φ by {}(...))`", name, name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
@@ -1615,10 +1692,11 @@ impl State {
 /// under the binders of x0, x1: a higher-order pattern) matches a term
 /// whose bound variables from there are among those, abstracted over them.
 fn pmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>) -> bool {
-    pmatch_at(env, p, t, pvars, binds, 0)
+    pmatch_at(env, p, t, pvars, binds, 0, true)
 }
 
-fn pmatch_at(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>, depth: u32) -> bool {
+/// (`delta`: where the heads differ, a definition unfolded)
+fn pmatch_at(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>, depth: u32, delta: bool) -> bool {
     match (p.node(), t.node()) {
         (Node::Var(v, a), _) if pvars.contains(v) && pattern_args(a, depth).is_some() => {
             let idx = pattern_args(a, depth).unwrap();
@@ -1631,10 +1709,11 @@ fn pmatch_at(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(Va
         }
         (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => {
             let bs = &env.syms[*f as usize].binders;
-            a.iter().zip(b).enumerate().all(|(i, (x, y))| pmatch_at(env, x, y, pvars, binds, depth + bs[i]))
+            a.iter().zip(b).enumerate().all(|(i, (x, y))| pmatch_at(env, x, y, pvars, binds, depth + bs[i], delta))
         }
-        (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch_at(env, x, y, pvars, binds, depth)),
+        (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch_at(env, x, y, pvars, binds, depth, delta)),
         _ if p == t => true,
+        _ if !delta => false,
         // (different heads: the newer definition among them unfolded, once
         // -- implicit unfolding; the fact is converted when applied)
         _ => {
@@ -1646,9 +1725,9 @@ fn pmatch_at(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(Va
             let up = || unfold_head(env, p, false).filter(|(u, _)| u != p);
             let ut = || unfold_head(env, t, false).filter(|(u, _)| u != t);
             match (up(), ut()) {
-                (Some((u, _)), Some(_)) if hp > ht => pmatch_at(env, &u, t, pvars, binds, depth),
-                (_, Some((u, _))) => pmatch_at(env, p, &u, pvars, binds, depth),
-                (Some((u, _)), None) => pmatch_at(env, &u, t, pvars, binds, depth),
+                (Some((u, _)), Some(_)) if hp > ht => pmatch_at(env, &u, t, pvars, binds, depth, delta),
+                (_, Some((u, _))) => pmatch_at(env, p, &u, pvars, binds, depth, delta),
+                (Some((u, _)), None) => pmatch_at(env, &u, t, pvars, binds, depth, delta),
                 (None, None) => false,
             }
         }

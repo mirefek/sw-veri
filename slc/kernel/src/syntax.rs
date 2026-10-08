@@ -596,6 +596,14 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 };
                 p.env.irreducible.insert(s);
             }
+            // simp NAME: the fact NAME a rewrite rule of the proof checker's
+            // simp (registered, used unless `only`; a hint, not checked here:
+            // a file loaded without its proofs records no facts)
+            "simp" => {
+                if !p.env.simp_set.contains(&name) {
+                    p.env.simp_set.push(name);
+                }
+            }
             "claim" => {
                 p.params.clear();
                 p.expect(":")?;

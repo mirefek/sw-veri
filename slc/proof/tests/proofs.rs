@@ -45,6 +45,32 @@ theorem t3(p, q): (all x. x -> q) -> p -> q\nproof\n  assume g: all x. x -> q\n 
     );
 }
 
+/// rsimp: rewriting left to right with the facts given (an equation, a
+/// proposition as `true`, a negation's proposition as `false`), the
+/// definitions given, and the registered rules (core/logic.core's
+/// propositional ones, `ite_t` with its premise from a fact); numerals
+/// evaluated; also under binders; on a fact, and as a step.
+#[test]
+fn rsimp_rewrites_left_to_right() {
+    let lib = format!("{}{}", core_file("logic.core"), core_file("sets.core"));
+    let base = check(&lib).unwrap();
+    let ok = [
+        "theorem t(x, q): x in q -> (true && x in q) || q = 1\nproof\n  assume h\n  show by rsimp(h)\nqed\n",
+        "theorem t(x, y): x = 3 -> y = x -> y = 3\nproof\n  assume h g\n  show by rsimp(g, h)\nqed\n",
+        "theorem t(c, a, b): c -> ite(c, a, b) = a\nproof\n  assume h\n  show by rsimp(h)\nqed\n",
+        "def both(a, b) := a && b\ntheorem t(x, s, q): x in s -> both(x in s, q = 1) = (q = 1)\nproof\n  assume h\n  show by rsimp(both, h)\nqed\n",
+        "theorem t(x, s, q): x in s -> !(q = 1) -> (x in s && !(q = 1)) || false\nproof\n  assume h g\n  rsimp h, g\nqed\n",
+        "theorem t(x): x = 3 -> all z. z = x -> z = 3\nproof\n  assume h\n  show by rsimp(h)\nqed\n",
+        "theorem t(a, b, c): a = b -> b = c -> a = c\nproof\n  assume h g\n  have k := rsimp(h, g)\n  show k\nqed\n",
+        "theorem t: int_lt(int_add(pow2(3), 1), 10) && int_mod(17, 5) = 2\nproof\n  show by rsimp()\nqed\n",
+    ];
+    for t in ok {
+        assert_eq!(check(&format!("{}{}", lib, t)), Ok(base + 1), "{}", t);
+    }
+    // only the rules given (`only`); what is left is shown
+    rejected(&format!("{}theorem t(x, y): x = y -> true && x = y\nproof\n  assume h\n  show by rsimp(only, h)\nqed\n", lib), "the goal simplifies to `true && y = y`");
+}
+
 /// Implicit unfolding: a definition is unfolded where the fact and the goal
 /// differ (a defined goal under `assume` / `fix`, a stated premise, a
 /// premise of `mp` / `apply`, a destructured fact) -- not an `irreducible`
@@ -698,7 +724,7 @@ theorem t1(a): a = 1 -> 1 = a\nproof\n  assume h\n  show := mp(l1[x := a, y := 1
 theorem t2(a): all x. a = x -> x = a\nproof\n  show := l1[x := a]\nqed\n\
 theorem t3(a): all x. x = a -> a = x\nproof\n  show := l1[y := a]\nqed\n\
 theorem t4(a, b, c): a -> b -> c -> a && b && c\nproof\n  assume ha hb hc\n  show := conj(ha, hb, hc)\nqed\n";
-    assert_eq!(check(&format!("{}{}", core_file("logic.core"), ok)), Ok(17 + 6));
+    assert_eq!(check(&format!("{}{}", core_file("logic.core"), ok)), Ok(check(&core_file("logic.core")).unwrap() + 6));
     rejected(&format!("{}theorem f(a, b): a -> b -> b && a\nproof\n  assume ha hb\n  show := conj(ha, hb)\nqed\n", core_file("logic.core")), "");
 }
 
