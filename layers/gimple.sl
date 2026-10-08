@@ -180,16 +180,18 @@ record Frame { vals: Name -> nat, objs: List[Addr], bb: nat, prev: nat }
 fn operand(fr: Frame, o: Opnd) -> nat =
   match o { ssa(x) => fr.vals[x], cst(v) => v, obj(k) => uint(fr.objs[k]) }
 
-// The memory a GIMPLE access may use: the world's (its domain: the stack
-// objects, or mapped pages that are not the stack's), readable / writable
-// (C objects are never write-only), and aligned. Anything else is undefined
-// (GCC may remove, reorder or speculate accesses that are valid in C):
-// also the stack outside the stack objects, where the machine keeps what C
-// does not see -- reached only by a dangling pointer.
+// The memory a GIMPLE access may use: the world's (its domain: mapped
+// pages that are not the stack's, as their protection allows -- C objects
+// are never write-only --, and elsewhere the stack objects, not wrapping
+// around the address space). Anything else
+// is undefined (GCC may remove, reorder or speculate accesses that are
+// valid in C): also the stack outside the stack objects, where the machine
+// keeps what C does not see -- reached only by a dangling pointer.
 pred usable(vm: Vm, objs: Set[nat], a: nat, n: nat, w: bool) =
-  all i: nat. i < n -> a + i in objs ||
-    (mapped(vm, (a + i) / PAGE) && vm.pages[(a + i) / PAGE].value.kind != stack &&
-     (if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }))
+  all i: nat. i < n ->
+    if mapped(vm, (a + i) / PAGE) && vm.pages[(a + i) / PAGE].value.kind != stack {
+      if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }
+    } else { a + i < 2^64 && a + i in objs }
 
 // An access through a null base pointer is undefined, whatever is mapped at
 // page 0: no C object is there, and GCC relies on it (a dereferenced pointer

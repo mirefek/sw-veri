@@ -51,14 +51,16 @@ pred stack_page(vm: Vm, p: nat) = mapped(vm, p) && vm.pages[p].value.kind = stac
 // `new` is the machine's memory after a callee called with the stack
 // pointer `sp` ran from `old`, where the callee's world ended as `w` (with
 // the stack objects `objs`): on the world's domain, the world's; the stack
-// at and above sp (the callers' frames) as it was, but for the objects; the
+// pages at and above sp (the callers' frames) as they were, but for the
+// objects (bytes outside the domain and the stack -- unmapped -- the
+// machine's, whatever a callee left there); the
 // pages the world's, or stack pages where the world has none (the stack
 // grew).
 pred world_matches(old: Vm, new: Vm, w: Vm, objs: Set[nat], sp: Addr) =
   top: new.stack_top = w.stack_top && limit: new.stack_limit = w.stack_limit &&
   brk0: new.brk_start = w.brk_start && brk: new.brk = w.brk &&
   bytes: (all a: Addr. in_domain(w, objs, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
-  frames: (all a: Addr. uint(sp) <= uint(a) && !in_domain(w, objs, uint(a)) && mapped(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
+  frames: (all a: Addr. uint(sp) <= uint(a) && !in_domain(w, objs, uint(a)) && stack_page(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
   pages: (all p: PageNo. new.pages[p] = w.pages[p] || (w.pages[p] = none && stack_page(new, p)))
 
 // `world(sp, objs)` views a machine as a World, for a function called with
