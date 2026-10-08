@@ -324,9 +324,11 @@ impl<'a, 'e> Parser<'a, 'e> {
         let n = names.len();
         self.scopes.extend(names);
         let mut body = self.term()?;
-        self.scopes.truncate(self.scopes.len() - n);
-        for _ in 0..n {
-            body = Term::app(s, vec![body]);
+        let names: Vec<String> = self.scopes.drain(self.scopes.len() - n..).collect();
+        // (each binder keeps its written name: metadata, for instantiating
+        // it by name)
+        for name in names.into_iter().rev() {
+            body = Term::app(s, vec![body]).with_binder_name(Some(name.into()));
         }
         Ok(body)
     }
@@ -698,7 +700,8 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                     return Err(ctx(KernelError(format!("the proof shows `{}`, not the statement `{}`\n  {}", pr.short(s.concl()), pr.short(&t), why))));
                 }
                 let conditional = !s.open().is_empty();
-                facts::record(p.env, &name, s).map_err(ctx)?;
+                // (recorded as written: its labels and binder names)
+                facts::record(p.env, &name, s.restated(&t)).map_err(ctx)?;
                 if conditional {
                     rep.conditional.push(name);
                 } else {

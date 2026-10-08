@@ -655,3 +655,51 @@ fn mismatches_point_at_the_difference() {
         "first difference at: premise 2 (also differing: the conclusion) > conclusion > eq, argument 1 (also differing: argument 2)\n    expected: b\n    given:    a",
     );
 }
+
+/// Goal rules inline (`(φ by R(args))`), lemmas instantiated by binder
+/// name (`l[x := t]`, the other leading `all`s kept), `conj(p1, .., pn)`.
+#[test]
+fn inline_goals_instances_and_conj() {
+    let ok = "theorem t(a, b): a && b -> b && a\nproof\n  assume h\n  show by taut((a by taut(h)), (b by taut(h)))\nqed\n\
+theorem l1: all x y. x = y -> y = x\nproof\n  fix x y\n  assume h\n  show := sym(h)\nqed\n\
+theorem t1(a): a = 1 -> 1 = a\nproof\n  assume h\n  show := mp(l1[x := a, y := 1], h)\nqed\n\
+theorem t2(a): all x. a = x -> x = a\nproof\n  show := l1[x := a]\nqed\n\
+theorem t3(a): all x. x = a -> a = x\nproof\n  show := l1[y := a]\nqed\n\
+theorem t4(a, b, c): a -> b -> c -> a && b && c\nproof\n  assume ha hb hc\n  show := conj(ha, hb, hc)\nqed\n";
+    assert_eq!(check(&format!("{}{}", core_file("logic.core"), ok)), Ok(17 + 6));
+    rejected(&format!("{}theorem f(a, b): a -> b -> b && a\nproof\n  assume ha hb\n  show := conj(ha, hb)\nqed\n", core_file("logic.core")), "");
+}
+
+/// simp normalizes its equations by each other: chains of equations.
+#[test]
+fn simp_chains_equations() {
+    let ok = "theorem t7(c, m, w, p): app(p, app(c, \"os\")) = 1 -> app(c, \"os\") = app(m, \"os\") -> app(w, \"os\") = app(m, \"os\") -> app(p, app(w, \"os\")) = 1\nproof\n  assume h e1 e2\n  show by simp(h, e1, e2)\nqed\n";
+    assert_eq!(check_nat(ok), Ok(1));
+}
+
+/// rewrite / expand: every occurrence, or the chosen ones (`{k}`, outer
+/// before inner, left to right); an equation under `all`s rewrites its
+/// instances also under binders -- its variables matched only by terms
+/// without the variables bound inside the instance.
+#[test]
+fn rewrite_and_expand_occurrences() {
+    let ok = "def twice(x) := int_add(x, x)\n\
+theorem r1(a, f): a = 1 -> app(f, a) = a -> app(f, 1) = a\nproof\n  assume e h\n  show := rewrite(e, h, {1})\nqed\n\
+theorem r2(a, f): a = 1 -> app(f, a) = a -> app(f, a) = 1\nproof\n  assume e h\n  show := rewrite(e, h, {2})\nqed\n\
+theorem comm: all x y. int_add(x, y) = int_add(y, x)\nproof\n  fix x y\n  show by arith()\nqed\n\
+theorem r3(s): (all z. int_add(z, 1) in s) -> (all z. int_add(1, z) in s)\nproof\n  assume h\n  show := rewrite(comm, h)\nqed\n\
+theorem r4(a, b): twice(a) = twice(b) -> int_add(a, a) = twice(b)\nproof\n  assume h\n  show := expand(h, twice, {1})\nqed\n\
+theorem r5(a, b): twice(a) = twice(b) -> twice(a) = int_add(b, b)\nproof\n  assume h\n  show := expand(h, twice, {2})\nqed\n\
+theorem c1: (all p. (ex x. p) = p) -> (all y. ex x. y = 1) -> (all y. y = 1)\nproof\n  assume e h\n  show := rewrite(e, h)\nqed\n";
+    assert_eq!(check_nat(ok), Ok(7));
+    rejected(
+        "theorem comm: all x y. int_add(x, y) = int_add(y, x)\nproof\n  fix x y\n  show by arith()\nqed\n\
+theorem r6(s): (all z. int_add(z, 1) in s) -> (all z. int_add(1, z) in s)\nproof\n  assume h\n  show := rewrite(comm, h, {2})\nqed\n",
+        "no instance 2 of the left side",
+    );
+    // `p` cannot take `x = 1`: x is bound by the equation's own `ex`
+    rejected(
+        "theorem c2: (all p. (ex x. p) = p) -> (ex x. x = 1) -> 1 = 1\nproof\n  assume e h\n  have g := rewrite(e, h)\n  show by taut()\nqed\n",
+        "no instance of the left side",
+    );
+}

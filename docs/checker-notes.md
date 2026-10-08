@@ -110,21 +110,66 @@ Measured on the full chain (25 files): 36 s uncached, 0.27 s all cached,
     `have {xM = cM} := gt` (renamed), `obtain m2 a0 k0, {oe} from ..`.
     Labelled now: `tr.inv`, `tr.inv_call`, `tr.matches_t`,
     `abi.crashes_at`, `x86.grown_typed`; the positional destructurings of
-    them are gone (`tr.inv_call`'s own proof: 15 lines -> 4). Not yet:
-    SL predicates (`abi.world_matches`, `abi.overflow_ok`), which would
-    need the elaborator to carry labels.
+    them are gone (`tr.inv_call`'s own proof: 15 lines -> 4). SL
+    predicates take labels too (`pred world_matches(..) = top: .. &&
+    bytes: (all a: Addr. ..) && ..`; the parser's `&&` operands, the
+    elaborator attaching the label to the elaborated term):
+    `abi.world_matches` (top limit brk0 brk bytes pages) and
+    `abi.overflow_ok` (input events), used as `hm.bytes` in
+    `abi.slot_wm`.
   - Still `taut`: rebuilding a conjunction from parts (`tr.ok_abi` drops a
     conjunct, `tr.sim_red` replaces one). A cheap builder (`conj(p1, ..)`
     by `and_intro`) would cover it.
+
+    **Implemented**: `conj(p1, .., pn)` proves `p1 && .. && pn` (nested
+    to the left, as `&&` parses) by `and_intro` (core/logic.core), with
+    labels as the goal has them (`show :=` compares up to metadata). Used
+    for the flat rebuilds (`tr.inv_parts`, `tr.inv_call`'s conclusion,
+    `tr.matches_t`'s parts); a differently grouped goal stays with
+    `taut` or nests `conj`.
 - **`rewrite` / `expand` act on every occurrence**, under binders too. To
   rewrite only a value (not the program containing the same subterm) an
   auxiliary equation was needed (`vq` in `tr.ssub32_ok_lit`). Wanted:
   occurrence selection or a restricted position.
+
+  **Implemented**:
+  - `rewrite(e, h, {k}..)`, `expand(h, c.., {k}..)`, `defs(R, c.., {k}..)`
+    act on the chosen occurrences only (numbered from 1, outer before
+    inner, left to right; an error says how many there are).
+    `tr.ssub32_ok_lit` is now `rewrite(q, o, {2})`. No new trust:
+    `Seq::rewrite_at` abstracts the chosen occurrences and substitutes
+    (`eq_subst`); `unfold_at` unfolds one level there, checked by
+    `Seq::conv`.
+  - An equation under `all`s (`all x y. int_add(x, y) = int_add(y, x)`)
+    rewrites its instances, also under binders (`all z. int_add(z, 1) in
+    s` to `all z. int_add(1, z) in s`), all or chosen ones. A new trusted
+    rule, `Seq::rewrite_under` (slc/kernel/src/ext/seq.rs): each instance
+    is matched against the left side, the pattern variables taking terms
+    that may mention the variables bound around the instance (available
+    there) but not ones bound inside the matched left side (so `all p.
+    (ex x. p) = p` rewrites `all y. ex x. y = 1` but not `ex x. x = 1`).
+    Justified by extensionality of the primitive binders (`ex`, `all` for
+    propositions; `choose_ext`; `set_ext` for `set_select`/`set_image`),
+    the same as `Seq::conv`'s unfolding under binders; every variable of
+    the equation must occur in its left side.
 - **Small inconsistencies.** `taut` / `defs` need a named goal
   (`show by taut(hk, defs(...))` fails); four ways to instantiate a lemma
   (`name[p := ...]`, `all_elim(name, {x})`, positional `mp(name, {x}, ...)`,
   `apply`); `simp` does not chain equations stated after the facts
   (`rewrite(trans(...))` instead).
+
+  **Implemented**:
+  - Goal rules inline: `(φ by R(args))` is a proof expression
+    (`show by taut((a by taut(h)), hb)`); the error for a goal rule
+    without a goal suggests it.
+  - `name[x := t]` also instantiates a theorem's leading `all`s by their
+    binder names (kept as term metadata), any subset, the others staying
+    general: `l1[y := a]` of `all x y. ..` is `all x. ..`. So parameters
+    and bound variables are instantiated the same way; `all_elim` / `mp`
+    with `{x}` remain for positional use.
+  - `simp` normalises its path equations by each other before rewriting
+    the goal, so `c.os = m.os`, `w.os = m.os` give `c.os = w.os` in any
+    order.
 
 ## 3. Speed
 

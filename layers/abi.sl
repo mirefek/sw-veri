@@ -64,10 +64,10 @@ pred scratch_view(w: Vm, vm: Vm, sp: Addr) =
 // callee's world ended as `w`: outside the scratch space they agree; in it,
 // the contents are arbitrary and the stack may have grown into free pages.
 pred world_matches(old: Vm, new: Vm, w: Vm, sp: Addr) =
-  new.stack_top = w.stack_top && new.stack_limit = w.stack_limit &&
-  new.brk_start = w.brk_start && new.brk = w.brk &&
-  (all a: Addr. !scratch(old, sp, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
-  (all p: PageNo. new.pages[p] = w.pages[p] ||
+  top: new.stack_top = w.stack_top && limit: new.stack_limit = w.stack_limit &&
+  brk0: new.brk_start = w.brk_start && brk: new.brk = w.brk &&
+  bytes: (all a: Addr. !scratch(old, sp, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
+  pages: (all p: PageNo. new.pages[p] = w.pages[p] ||
      (scratch_page(old, sp, p) && w.pages[p] = none && stack_page(new, p)))
 
 // `world(sp)` views a machine as a World, for a function called with the
@@ -170,8 +170,8 @@ exception stack_overflow
 // where the I/O stops: a stack overflow, a normal return (the crash came
 // after the last I/O), or an infinite run with that trace
 pred overflow_ok[S](w: S, spec: CFun2[S], args: Args, crash: Os) =
-  w.os.input = crash.input &&
-  ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
+  input: w.os.input = crash.input &&
+  events: ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
     ok(s, _)   => s.os.events = crash.events
     exc(s, e)  => e = stack_overflow && s.os.events = crash.events
     diverge(t) => t.os.events = crash.events

@@ -1230,12 +1230,24 @@ impl<'n> Parser<'n> {
     }
 
     fn expr_and(&mut self) -> PResult<Expr> {
-        let mut a = self.expr_cmp()?;
+        let mut a = self.expr_labeled()?;
         while self.eat("&&") {
-            let b = self.expr_cmp()?;
+            let b = self.expr_labeled()?;
             a = self.bin(BinOp::And, a, b);
         }
         Ok(a)
+    }
+
+    /// an `&&` operand, optionally labelled: `name: P`
+    fn expr_labeled(&mut self) -> PResult<Expr> {
+        if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1).is_punct(":") {
+            let start = self.span();
+            let l = self.ident()?;
+            self.expect(":")?;
+            let e = self.expr_cmp()?;
+            return Ok(self.mk(ExprKind::Labeled(l, Box::new(e)), start));
+        }
+        self.expr_cmp()
     }
 
     fn expr_cmp(&mut self) -> PResult<Expr> {

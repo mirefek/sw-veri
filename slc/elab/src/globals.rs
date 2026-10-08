@@ -473,6 +473,7 @@ impl<'a> Collector<'a> {
                 self.expr(a);
                 self.pat(p)
             }
+            ExprKind::Labeled(_, a) => self.expr(a),
             ExprKind::Block(b) => self.block(b),
             ExprKind::Do(t, b) => {
                 if let Some(t) = t {

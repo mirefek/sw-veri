@@ -39,12 +39,20 @@
 //! their expansions.)
 //!
 //! Proof expressions: a fact (`h`, a theorem or axiom), instantiated
-//! (`eq_subst[a := t, p := x. x = t]`), or a rule `name(args)`; arguments
-//! are proof expressions, terms in braces `{t}`, or (for `unfold`) a symbol.
+//! (`eq_subst[a := t, p := x. x = t]`: its parameters, or its leading
+//! `all`s by their binder names, the others staying general), a rule
+//! `name(args)`, or inline `(φ by R(args))` (a goal rule given its goal);
+//! arguments are proof expressions, terms in braces `{t}`, occurrence
+//! selections `{1, 3}`, or (for `unfold`, `expand`, `defs`) symbols.
 //!
 //! Rules: `mp(ab, a1, ..)` (in order: a proof discharges the leading
 //! premise, a term `{t}` instantiates the leading `all`), `refl({t})`, `sym(e)`, `trans(e1, e2)`,
-//! `subst({x. φ}, e, p)`, `rewrite(e, p)`, `unfold(sym)`,
+//! `subst({x. φ}, e, p)`, `conj(p1, .., pn)` (`p1 && .. && pn`, by
+//! `and_intro`), `rewrite(e, p [, {k}..])` (every occurrence of e's left
+//! side, or the k-th ones: numbered from 1, outer before inner, left to
+//! right; e may be `all x... l = r`, rewriting its instances, also under
+//! binders), `expand(p, c.. [, {k}..])` (c's occurrences unfolded once),
+//! `unfold(sym)`,
 //! `all_elim(p, {t1}, ..)`, `ex_intro({w}, {x. φ}, p)`, `witness(p)`,
 //! `prop({t})`, `lit({t})`; `apply(f, a1, ..)`: f's leading `all`s and
 //! schematic variables instantiated -- by the terms `{t}` among the ai, in
@@ -274,6 +282,8 @@ enum PE {
     /// `P.k` / `P.l`: the k-th conjunct (from 1, as written) of what P
     /// proves / the conjunct labelled l
     Conj(Box<PE>, Result<usize, String>),
+    /// `(φ by R(args))`: φ by a goal rule, inline (as `have h: φ by R`)
+    By(String, Box<PE>),
 }
 
 #[derive(Debug)]
@@ -306,6 +316,31 @@ fn split_top(s: &str, sep: char) -> Vec<String> {
     out
 }
 
+/// an occurrence number `{k}` among a rule's arguments
+fn occurrence(a: &Arg) -> Option<usize> {
+    match a {
+        Arg::Term(t) => t.trim().parse::<usize>().ok(),
+        _ => None,
+    }
+}
+
+/// `s` split at its last top-level (outside brackets) occurrence of `kw`
+fn split_top_kw<'a>(s: &'a str, kw: &str) -> Option<(&'a str, &'a str)> {
+    let mut depth = 0i32;
+    let mut found = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && s[i..].starts_with(kw) {
+            found = Some(i);
+        }
+    }
+    found.map(|i| (&s[..i], &s[i + kw.len()..]))
+}
+
 /// The index of the bracket closing the one at `open`.
 fn closing(s: &str, open: usize) -> KResult<usize> {
     let mut depth = 0i32;
@@ -327,6 +362,14 @@ fn closing(s: &str, open: usize) -> KResult<usize> {
 /// `name`, `name(args)`, each optionally followed by `[var := value, ...]`.
 fn parse_pe(s: &str) -> KResult<PE> {
     let s = s.trim();
+    // (φ by R(args)): a goal rule with its goal, inline
+    if s.starts_with('(') && closing(s, 0)? == s.len() - 1 {
+        let inner = &s[1..s.len() - 1];
+        if let Some((g, r)) = split_top_kw(inner, " by ") {
+            return Ok(PE::By(g.trim().to_string(), Box::new(parse_pe(r)?)));
+        }
+        return parse_pe(inner);
+    }
     let name_end = s.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.' || c == '$')).unwrap_or(s.len());
     let name = &s[..name_end];
     if name.is_empty() {
@@ -774,7 +817,8 @@ impl State {
                     Some(Arg::Proof(p)) => p,
                     _ => return err("defs takes a proof and definitions"),
                 };
-                let unfolded = unfold_all(env, goal, &syms);
+                let occ = self.occs(&args[1.min(args.len())..]);
+                let unfolded = self.unfold_sel(env, goal, &syms, &occ)?;
                 let s = match p {
                     PE::Rule(n, _) if GOAL_RULES.contains(&n.as_str()) => self.by(env, lg, &unfolded, p)?,
                     _ => self.eval(env, lg, p)?,
@@ -932,11 +976,32 @@ impl State {
     /// Defined symbols named by the arguments.
     fn syms(&self, env: &Env, args: &[Arg]) -> KResult<Vec<SymId>> {
         args.iter()
+            .filter(|a| occurrence(a).is_none())
             .map(|a| match a {
                 Arg::Proof(PE::Ref(n)) => defined_sym(env, n),
                 _ => err("expected the name of a definition"),
             })
             .collect()
+    }
+
+    /// the occurrence numbers among `args` (`{2}`)
+    fn occs(&self, args: &[Arg]) -> Vec<usize> {
+        args.iter().filter_map(occurrence).collect()
+    }
+
+    /// `t` unfolded for `defs` / `expand`: every occurrence of `syms`
+    /// (repeatedly), or only the chosen occurrences `occ` of one symbol
+    fn unfold_sel(&self, env: &Env, t: &Term, syms: &[SymId], occ: &[usize]) -> KResult<Term> {
+        if occ.is_empty() {
+            return Ok(unfold_all(env, t, syms));
+        }
+        let [sym] = syms else { return err("occurrences ({k}) go with one definition") };
+        let mut n = 0;
+        let u = sl_kernel::ext::seq::unfold_at(env, t, *sym, occ, &mut n);
+        if let Some(k) = occ.iter().find(|k| **k == 0 || **k > n) {
+            return err(format!("no occurrence {} of `{}` ({} in all)", k, env.syms[*sym as usize].name, n));
+        }
+        Ok(u)
     }
 
     fn check(&self, env: &Env, s: Seq, goal: &Term) -> KResult<Seq> {
@@ -947,9 +1012,54 @@ impl State {
         Ok(s)
     }
 
+    /// `s` (`all x1 .. xn. φ`) with the binders named in `bound` instantiated
+    /// by their values (`name[x2 := t]`), the ones before them kept general
+    /// (eliminated with a fresh variable, generalized again).
+    fn inst_bound(&self, env: &mut Env, lg: &Logic, mut s: Seq, bound: &[(&str, &str)]) -> KResult<Seq> {
+        let mut names = Vec::new();
+        let mut t = s.concl().clone();
+        while let Node::App(a, x) = t.node() {
+            if *a != lg.all {
+                break;
+            }
+            names.push(t.binder_name().map(|n| n.to_string()));
+            t = x[0].clone();
+        }
+        let mut last = 0;
+        for (n, _) in bound {
+            match names.iter().position(|m| m.as_deref() == Some(*n)) {
+                Some(i) => last = last.max(i + 1),
+                None => {
+                    let known: Vec<&str> = names.iter().flatten().map(|x| x.as_str()).collect();
+                    return err(format!("no variable `{}` to instantiate (the leading binders: {})", n, if known.is_empty() { "none".to_string() } else { known.join(", ") }));
+                }
+            }
+        }
+        let mut general = Vec::new();
+        for name in names.iter().take(last) {
+            let value = match bound.iter().find(|(n, _)| Some(*n) == name.as_deref()) {
+                Some((_, text)) => self.term(env, text)?,
+                None => {
+                    let v = env.new_var(name.as_deref().unwrap_or("x"), 0);
+                    general.push(v);
+                    Term::var(v, vec![])
+                }
+            };
+            s = Seq::all_elim(env, lg, &s, &value)?;
+        }
+        for v in general.into_iter().rev() {
+            s = Seq::gen(env, lg, &s, v)?;
+        }
+        Ok(s)
+    }
+
     fn eval(&self, env: &mut Env, lg: &Logic, p: &PE) -> KResult<Seq> {
         match p {
             PE::Ref(name) => self.fact(env, name),
+            PE::By(g, p) => {
+                let goal = self.term(env, g)?;
+                self.by(env, lg, &goal, p)
+            }
             PE::Conj(p, k) => {
                 let s = self.eval(env, lg, p)?;
                 match k {
@@ -967,11 +1077,16 @@ impl State {
                     h.vars(&mut vs);
                 }
                 let mut staged = Vec::new();
+                // (names of leading `all` binders: instantiated after)
+                let mut bound: Vec<(&str, &str)> = Vec::new();
                 for (vname, text) in insts {
                     let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.vars[*v as usize].name == *vname).collect();
                     let v = match cands.as_slice() {
                         [v] => *v,
-                        [] => return err(format!("no variable `{}` to instantiate", vname)),
+                        [] => {
+                            bound.push((vname, text));
+                            continue;
+                        }
                         _ => return err(format!("several variables named `{}`", vname)),
                     };
                     let k = env.vars[v as usize].arity;
@@ -983,6 +1098,9 @@ impl State {
                 }
                 for (tmp, value) in staged {
                     s = Seq::inst(env, &s, tmp, &value)?;
+                }
+                if !bound.is_empty() {
+                    s = self.inst_bound(env, lg, s, &bound)?;
                 }
                 Ok(s)
             }
@@ -1038,9 +1156,35 @@ impl State {
                         let (e, x) = (self.proof_arg(env, lg, args.get(1))?, self.proof_arg(env, lg, args.get(2))?);
                         Seq::subst(env, &e, &body, &x)
                     }
+                    // conj(p1, .., pn): p1 && .. && pn (left-nested, as
+                    // written), by and_intro -- no tautology search
+                    "conj" => {
+                        let ps = self.proofs(env, lg, args)?;
+                        let mut it = ps.into_iter();
+                        let mut acc = it.next().ok_or_else(|| KernelError("conj takes proofs".into()))?;
+                        let lemma = facts::seq_of(env, "and_intro").ok_or_else(|| KernelError("`and_intro` (core/logic.core) is not loaded".into()))?;
+                        let mut vs = Vec::new();
+                        lemma.concl().vars(&mut vs);
+                        for p in it {
+                            let mut l = lemma.clone();
+                            for (v, x) in vs.iter().zip([acc.concl().clone(), p.concl().clone()]) {
+                                l = Seq::inst(env, &l, *v, &x)?;
+                            }
+                            acc = Seq::mp(env, &Seq::mp(env, &l, &acc)?, &p)?;
+                        }
+                        Ok(acc)
+                    }
+                    // rewrite(e, p [, {k}..]): e `a = b` (closed: eq_subst) or
+                    // `all xs. l = r` (its instances, also under binders);
+                    // every occurrence, or the k-th ones
                     "rewrite" => {
                         let (e, x) = (self.proof_arg(env, lg, a0)?, self.proof_arg(env, lg, args.get(1))?);
-                        Seq::rewrite(env, &e, &x)
+                        let occ = self.occs(&args[2.min(args.len())..]);
+                        match e.concl().node() {
+                            Node::App(q, _) if *q == lg.all => Seq::rewrite_under(env, lg, &e, &x, &occ),
+                            _ if occ.is_empty() => Seq::rewrite(env, &e, &x),
+                            _ => Seq::rewrite_at(env, &e, &x, &occ),
+                        }
                     }
                     "unfold" => match a0 {
                         Some(Arg::Proof(PE::Ref(sym))) => Seq::def_eq(env, defined_sym(env, sym)?),
@@ -1135,7 +1279,8 @@ impl State {
                     "expand" => {
                         let p = self.proof_arg(env, lg, a0)?;
                         let syms = self.syms(env, &args[1.min(args.len())..])?;
-                        let goal = unfold_all(env, p.concl(), &syms);
+                        let occ = self.occs(&args[1.min(args.len())..]);
+                        let goal = self.unfold_sel(env, p.concl(), &syms, &occ)?;
                         Seq::conv(env, &p, &goal, &syms)
                     }
                     // unsel(h): from `z in set_select(S, x. P)`, `z in S && P(z)`
@@ -1185,7 +1330,7 @@ impl State {
                         let p = self.proof_arg(env, lg, a0)?;
                         Ok(Seq::simp(env, lg, &p))
                     }
-                    "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" | "eval" => err(format!("{} needs a goal: `have h: φ by {}(...)`", name, name)),
+                    "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" | "eval" => err(format!("{} needs a goal: `have h: φ by {}(...)`, or inline `(φ by {}(...))`", name, name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
             }

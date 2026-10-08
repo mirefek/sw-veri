@@ -154,6 +154,9 @@ pub enum ExprKind {
     Do(Option<Type>, Block),
     /// `with view(args) { stmts }`: run a proc of the view's state through the view
     WithView(Box<Expr>, Block),
+    /// `name: P`, a labelled conjunct (an `&&` operand): metadata of the
+    /// elaborated term, for selecting the conjunct in proofs (`h.name`)
+    Labeled(Ident, Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq)]

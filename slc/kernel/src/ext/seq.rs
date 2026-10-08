@@ -51,6 +51,102 @@ pub(crate) fn abstract_term(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(S
     }
 }
 
+/// `abstract_term` at the chosen occurrences of `pat` only (numbered from
+/// 1 in `count`, outer before inner, left to right; all if `occ` is empty).
+fn abstract_at(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32, occ: &[usize], count: &mut usize) -> Term {
+    if t == pat {
+        *count += 1;
+        if occ.is_empty() || occ.contains(count) {
+            return Term::bvar(depth);
+        }
+        return t.clone();
+    }
+    match t.node() {
+        Node::App(s, args) => t.with_args(args.iter().enumerate().map(|(i, a)| abstract_at(a, pat, depth + binders(*s, i), binders, occ, count)).collect()),
+        Node::Var(_, args) => t.with_args(args.iter().map(|a| abstract_at(a, pat, depth, binders, occ, count)).collect()),
+        _ => t.clone(),
+    }
+}
+
+/// bound variable `i` (counted at `depth` 0) occurs loose in `t`
+fn bvar_free_at(t: &Term, i: u32, depth: u32, bf: &dyn Fn(SymId, usize) -> u32) -> bool {
+    match t.node() {
+        Node::BVar(j) => *j == i + depth,
+        Node::App(s, a) => a.iter().enumerate().any(|(k, x)| bvar_free_at(x, i, depth + bf(*s, k), bf)),
+        Node::Var(_, a) => a.iter().any(|x| bvar_free_at(x, i, depth, bf)),
+        _ => false,
+    }
+}
+
+/// `t` with its loose bound variables from `k` on lowered by `k` (None if one
+/// below `k` occurs: bound inside the matched part)
+fn lower(t: &Term, k: u32, depth: u32, bf: &dyn Fn(SymId, usize) -> u32) -> Option<Term> {
+    if k == 0 {
+        return Some(t.clone());
+    }
+    Some(match t.node() {
+        Node::BVar(i) if *i >= depth + k => Term::bvar(i - k),
+        Node::BVar(i) if *i >= depth => return None,
+        Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
+        Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(j, x)| lower(x, k, depth + bf(*s, j), bf)).collect::<Option<_>>()?),
+        Node::Var(_, a) => t.with_args(a.iter().map(|x| lower(x, k, depth, bf)).collect::<Option<_>>()?),
+    })
+}
+
+/// matches the pattern `p` (its loose bound variables from `pd` on the n
+/// pattern variables, `as_[j]` for `BVar(pd + j)`) against `t`
+fn match_pat(p: &Term, t: &Term, pd: u32, n: u32, as_: &mut Vec<Option<Term>>, bf: &dyn Fn(SymId, usize) -> u32) -> bool {
+    match (p.node(), t.node()) {
+        (Node::BVar(i), _) if *i >= pd && *i < pd + n => {
+            // (the value: t at the match site, no variable bound inside)
+            let Some(v) = lower(t, pd, 0, bf) else { return false };
+            let j = (i - pd) as usize;
+            match &as_[j] {
+                Some(w) => *w == v,
+                None => {
+                    as_[j] = Some(v);
+                    true
+                }
+            }
+        }
+        (Node::BVar(i), Node::BVar(j)) if *i < pd => i == j,
+        (Node::BVar(i), Node::BVar(j)) => *j == *i - n,
+        (Node::App(s1, a1), Node::App(s2, a2)) if s1 == s2 && a1.len() == a2.len() => {
+            a1.iter().zip(a2.iter()).enumerate().all(|(k, (x, y))| match_pat(x, y, pd + bf(*s1, k), n, as_, bf))
+        }
+        (Node::Var(v1, a1), Node::Var(v2, a2)) if v1 == v2 && a1.len() == a2.len() => a1.iter().zip(a2.iter()).all(|(x, y)| match_pat(x, y, pd, n, as_, bf)),
+        (Node::Nat(_), _) | (Node::Bytes(_), _) => p == t,
+        _ => false,
+    }
+}
+
+/// `t` (at binder depth `d` of the whole statement) with the instances of
+/// `l` (n pattern variables) replaced by those of `r`: all, or the chosen
+/// ones (`count` numbers them; outer before inner, left to right)
+#[allow(clippy::too_many_arguments)]
+fn rewrite_pat(env: &Env, t: &Term, l: &Term, r: &Term, n: u32, d: u32, occ: &[usize], count: &mut usize) -> Term {
+    let bf = env.binders_fn();
+    let mut as_ = vec![None; n as usize];
+    if match_pat(l, t, 0, n, &mut as_, &bf) && as_.iter().all(|x| x.is_some()) {
+        *count += 1;
+        if occ.is_empty() || occ.contains(count) {
+            // (r's BVar(j) is pattern variable j: instantiate_params takes
+            // them outermost first)
+            let args: Vec<Term> = as_.into_iter().rev().map(|x| x.unwrap()).collect();
+            let rr = r.instantiate_params(&args, &bf);
+            return match t.label() {
+                Some(lb) => rr.with_label(Some(lb.into())),
+                None => rr,
+            };
+        }
+    }
+    match t.node() {
+        Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| rewrite_pat(env, x, l, r, n, d + bf(*s, i), occ, count)).collect()),
+        Node::Var(_, a) => t.with_args(a.iter().map(|x| rewrite_pat(env, x, l, r, n, d, occ, count)).collect()),
+        _ => t.clone(),
+    }
+}
+
 impl Seq {
     pub fn hyps(&self) -> &[Term] {
         &self.hyps
@@ -82,6 +178,13 @@ impl Seq {
             Some((_, t)) => Ok(Seq { hyps: Vec::new(), concl: t.clone(), open: vec![name.to_string()] }),
             None => err(format!("no open lemma `{}`", name)),
         }
+    }
+
+    /// The same sequent with its conclusion as written in `t` (equal to it:
+    /// only the metadata, labels and binder names, are `t`'s).
+    pub(crate) fn restated(self, t: &Term) -> Seq {
+        assert!(self.concl == *t, "restated: a different statement");
+        Seq { concl: t.clone(), ..self }
     }
 
     /// `⊢ φ` resting on `open`: a cached conditional theorem (`ext::cache`).
@@ -252,6 +355,62 @@ impl Seq {
             return err(format!("rewrite: `{}` does not occur", Printer::new(env).term(&a)));
         }
         Self::subst(env, eq, &body, s)
+    }
+
+    /// `rewrite` at the chosen occurrences of `a` (numbered from 1, left to
+    /// right, outer before inner) only (`subst` with φ abstracted there).
+    pub fn rewrite_at(env: &Env, eq: &Seq, s: &Seq, occ: &[usize]) -> KResult<Seq> {
+        let (a, _) = Self::eq_sides(env, eq)?;
+        let mut n = 0;
+        let body = abstract_at(&s.concl, &a, 0, &env.binders_fn(), occ, &mut n);
+        if let Some(k) = occ.iter().find(|k| **k == 0 || **k > n) {
+            return err(format!("rewrite: no occurrence {} of `{}` ({} in all)", k, Printer::new(env).short(&a), n));
+        }
+        Self::subst(env, eq, &body, s)
+    }
+
+    /// From `Γ ⊢ all x1 .. xn. l = r` and `Δ ⊢ φ`: `Γ, Δ ⊢ φ'`, φ with each
+    /// instance `l[t1 .. tn]` (or the chosen ones, numbered as in
+    /// `rewrite_at`) replaced by `r[t1 .. tn]` -- also under binders, where
+    /// the ts may mention the bound variables. Derivation: an instance with
+    /// closed ts is `all_elim` and `eq_subst`; under a binder, the two sides
+    /// are equal for every value of the bound variables, so the binder's
+    /// terms are equal by its extensionality (`ex`/`all`: propositional;
+    /// `choose`: `choose_ext`; `set_select`, `set_image`: `set_ext`; a
+    /// defined binder unfolds to these), and `eq_subst` replaces the whole
+    /// binder term (`eq_congr` through the context).
+    pub fn rewrite_under(env: &Env, lg: &Logic, eq: &Seq, s: &Seq, occ: &[usize]) -> KResult<Seq> {
+        // (the pattern: the equation under its n leading `all`s)
+        let mut n = 0u32;
+        let mut b = eq.concl.clone();
+        while let Node::App(q, a) = b.node() {
+            if *q != lg.all {
+                break;
+            }
+            b = a[0].clone();
+            n += 1;
+        }
+        let (l, r) = match b.node() {
+            Node::App(e, a) if *e == env.builtins.eq => (a[0].clone(), a[1].clone()),
+            _ => return err(format!("rewrite: not an equation under `all`s: {}", Printer::new(env).short(&eq.concl))),
+        };
+        // every variable of r bound by matching l
+        let bf = env.binders_fn();
+        for i in 0..n {
+            if !bvar_free_at(&l, i, 0, &bf) {
+                return err("rewrite: a variable of the equation is not in its left side");
+            }
+        }
+        let mut count = 0;
+        let concl = rewrite_pat(env, &s.concl, &l, &r, n, 0, occ, &mut count);
+        if count == 0 {
+            return err(format!("rewrite: no instance of the left side of `{}`", Printer::new(env).short(&eq.concl)));
+        }
+        if let Some(k) = occ.iter().find(|k| **k == 0 || **k > count) {
+            return err(format!("rewrite: no instance {} of the left side of `{}` ({} in all)", k, Printer::new(env).short(&eq.concl), count));
+        }
+        env.check_wf(&concl, 0)?;
+        Ok(Seq { hyps: union(&eq.hyps, &s.hyps), concl, open: union(&eq.open, &s.open) })
     }
 
     /// The defining equation of a defined symbol, `⊢ c(params) = body`
@@ -479,6 +638,36 @@ pub fn unfold_all(env: &Env, t: &Term, syms: &[SymId]) -> Term {
             t.with_args(args)
         }
         Node::Var(_, args) => t.with_args(args.iter().map(|a| unfold_all(env, a, syms)).collect()),
+        _ => t.clone(),
+    }
+}
+
+/// `t` with the chosen occurrences of the defined symbol `sym` (numbered from
+/// 1 in `count`, outer before inner, left to right; all if `occ` is empty)
+/// unfolded once (their bodies not unfolded further). For `Seq::conv`.
+pub fn unfold_at(env: &Env, t: &Term, sym: SymId, occ: &[usize], count: &mut usize) -> Term {
+    match t.node() {
+        Node::App(s, args) if *s == sym => {
+            *count += 1;
+            if occ.is_empty() || occ.contains(count) {
+                if let SymKind::Defined { params, body } = &env.syms[*s as usize].kind {
+                    let bf = env.binders_fn();
+                    let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.vars[*p as usize].arity;
+                    if !params.iter().zip(args.iter()).any(|(p, a)| open(p, a) && env.vars[*p as usize].arity > 0) {
+                        let mut b = body.clone();
+                        for (p, a) in params.iter().zip(args.iter()) {
+                            b = if open(p, a) { subst_open(env, &b, *p, a, 0) } else { b.subst_var(*p, a, &bf) };
+                        }
+                        return match t.label() {
+                            Some(l) => b.with_label(Some(l.into())),
+                            None => b,
+                        };
+                    }
+                }
+            }
+            t.with_args(args.iter().map(|a| unfold_at(env, a, sym, occ, count)).collect())
+        }
+        Node::App(_, args) | Node::Var(_, args) => t.with_args(args.iter().map(|a| unfold_at(env, a, sym, occ, count)).collect()),
         _ => t.clone(),
     }
 }

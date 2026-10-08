@@ -5083,11 +5083,42 @@ impl Logic {
                     _ => None,
                 })
                 .collect();
-            let eqs: Vec<(&Term, &Term)> = eqs_owned.iter().map(|(a, b)| (a, b)).collect();
             let var = |t: &Term| match t.node() {
                 Node::Var(x, xa) if xa.is_empty() => Some(*x),
                 _ => None,
             };
+            // (the equations rewritten by one another, left to right, so
+            // they chain: `f(a) = 1` with `a = b` is `f(b) = 1` -- all hold
+            // on the path; a few rounds)
+            let mut eqs_owned = eqs_owned;
+            for _round in 0..3 {
+                let mut changed = false;
+                for j in 0..eqs_owned.len() {
+                    let (a, b) = eqs_owned[j].clone();
+                    if var(&a).is_some() || var(&b).is_some() || a == b {
+                        continue;
+                    }
+                    for i in 0..eqs_owned.len() {
+                        if i == j {
+                            continue;
+                        }
+                        let (l, r) = eqs_owned[i].clone();
+                        let rw = |t: &Term| {
+                            let body = super::seq::abstract_term(t, &a, 0, &bf);
+                            if body == *t { None } else { Some(inst_k(env, &body, &[b.clone()])) }
+                        };
+                        let (l2, r2) = (rw(&l), rw(&r));
+                        if l2.is_some() || r2.is_some() {
+                            eqs_owned[i] = (l2.unwrap_or(l), r2.unwrap_or(r));
+                            changed = true;
+                        }
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            let eqs: Vec<(&Term, &Term)> = eqs_owned.iter().map(|(a, b)| (a, b)).collect();
             let mut substs: Vec<(crate::term::VarId, Term)> = Vec::new();
             // (t built from constructors: x := t, so the goal computes; t
             // opaque: t becomes x in the goal, as in the literals)

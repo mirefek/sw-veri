@@ -10,7 +10,8 @@
 //!
 //! - `prop`: which terms are propositions; propositional tautologies.
 //! - `seq`: natural deduction with hypotheses, quantifiers, equality,
-//!   definitions.
+//!   definitions; rewriting with an equation under `all`s at its instances
+//!   under binders (`rewrite_under`, by the binders' extensionality).
 //! - `arith`: linear arithmetic over the naturals; `nat_rec`'s recursion
 //!   equations.
 //! - `list`: lists up to associativity of `++`, their lengths (for

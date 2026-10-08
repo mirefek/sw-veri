@@ -835,6 +835,7 @@ impl<'g> Interp<'g> {
                 module: env.module.clone(),
             }))),
             ExprKind::Block(b) => self.block_value(env, b, run),
+            ExprKind::Labeled(_, a) => self.eval(env, a, run),
             other => {
                 let d = format!("{:?}", other);
                 unsupported(format!("expression not supported by the interpreter: {}", d.split(['(', ' ', '{']).next().unwrap_or("")))
@@ -2042,6 +2043,7 @@ fn conjuncts<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
             conjuncts(a, out);
             conjuncts(b, out);
         }
+        ExprKind::Labeled(_, a) => conjuncts(a, out),
         _ => out.push(e),
     }
 }

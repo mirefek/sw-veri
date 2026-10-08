@@ -168,6 +168,10 @@ impl<'s> Elab<'s> {
                 self.any_value(cx, &name, t, cond.as_deref(), span)
             }
             ExprKind::Lambda(params, body) => self.lambda(cx, params, body, exp, span),
+            ExprKind::Labeled(l, a) => {
+                let (t, _) = self.expr(cx, a, Some(&Ty::Bool))?;
+                Ok((t.with_label(Some(l.name.as_str().into())), Ty::Bool))
+            }
             ExprKind::Is(a, p) => {
                 let (t, ty) = self.expr(cx, a, None)?;
                 let (c, _) = self.pattern(cx, p, &t, &ty)?;

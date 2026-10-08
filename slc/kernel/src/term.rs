@@ -28,6 +28,9 @@ pub struct Term(Rc<Inner>);
 struct Inner {
     node: Node,
     label: Option<Rc<str>>,
+    /// (metadata too) the name written at an `all`/`ex` binder, for
+    /// instantiating it by name
+    bind: Option<Rc<str>>,
 }
 
 impl PartialEq for Term {
@@ -55,7 +58,7 @@ pub enum Node {
 
 impl Term {
     fn mk(node: Node) -> Term {
-        Term(Rc::new(Inner { node, label: None }))
+        Term(Rc::new(Inner { node, label: None, bind: None }))
     }
     pub fn app(s: SymId, args: Vec<Term>) -> Term {
         Term::mk(Node::App(s, args.into_boxed_slice()))
@@ -86,7 +89,20 @@ impl Term {
         if self.0.label == label {
             return self.clone();
         }
-        Term(Rc::new(Inner { node: self.0.node.clone(), label }))
+        Term(Rc::new(Inner { node: self.0.node.clone(), label, bind: self.0.bind.clone() }))
+    }
+
+    /// The name written at this `all`/`ex` binder (metadata, see `Term`).
+    pub fn binder_name(&self) -> Option<&str> {
+        self.0.bind.as_deref()
+    }
+
+    /// The same term with the binder name `bind`.
+    pub fn with_binder_name(&self, bind: Option<Rc<str>>) -> Term {
+        if self.0.bind == bind {
+            return self.clone();
+        }
+        Term(Rc::new(Inner { node: self.0.node.clone(), label: self.0.label.clone(), bind }))
     }
 
     /// `self` with `outer`'s label, if it has one (the outer label wins).
@@ -94,6 +110,15 @@ impl Term {
         match &outer.0.label {
             Some(l) => self.with_label(Some(l.clone())),
             None => self,
+        }
+    }
+
+    /// a rebuilt `old`: its label and binder name kept
+    fn rebuilt_from(self, old: &Term) -> Term {
+        let t = self.labelled_as(old);
+        match &old.0.bind {
+            Some(b) => t.with_binder_name(Some(b.clone())),
+            None => t,
         }
     }
 
@@ -111,14 +136,14 @@ impl Term {
                 if old.len() == args.len() && old.iter().zip(&args).all(|(a, b)| a.ptr_eq(b)) {
                     self.clone()
                 } else {
-                    Term::app(*s, args).labelled_as(self)
+                    Term::app(*s, args).rebuilt_from(self)
                 }
             }
             Node::Var(v, old) => {
                 if old.len() == args.len() && old.iter().zip(&args).all(|(a, b)| a.ptr_eq(b)) {
                     self.clone()
                 } else {
-                    Term::var(*v, args).labelled_as(self)
+                    Term::var(*v, args).rebuilt_from(self)
                 }
             }
             _ => self.clone(),

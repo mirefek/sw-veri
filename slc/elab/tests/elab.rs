@@ -29,6 +29,9 @@ fn spec_and_layers_elaborate_and_recheck() {
     let rep = sl_kernel::syntax::load(&mut env, &el.core_text(), false).unwrap();
     assert!(rep.defs > 300);
     assert_eq!(rep.claims, vec!["abi.call_rule".to_string(), "abi.call_rule_at".to_string()]);
+    // labelled conjuncts (`name: P`) carried into the definitions
+    let wm = el.core_text().lines().find(|l| l.starts_with("def abi.world_matches(")).unwrap().to_string();
+    assert!(wm.contains(" := ((((top: ") && wm.contains("&& bytes: (all"), "{}", wm);
 }
 
 /// Elaborates one module (with a minimal state) and returns the error messages.
