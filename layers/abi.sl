@@ -166,16 +166,19 @@ pred overflow_at(vm: Vm, rsp: Addr, sp: Addr, a: Addr) =
 // faults with segv, overflow_at.)
 exception stack_overflow
 
-// a crash state's I/O is that of some outcome the spec allows from `w`
-// where the I/O stops: a stack overflow, a normal return (the crash came
-// after the last I/O), or an infinite run with that trace
+// a crash state's I/O is the entry's (the call itself overflowed: the
+// function's frame, before it did anything -- as GIMPLE's call may overflow
+// before its callee runs), or that of some outcome the spec allows from
+// `w` where the I/O stops: a stack overflow, a normal return (the crash
+// came after the last I/O), or an infinite run with that trace
 pred overflow_ok[S](w: S, spec: CFun2[S], args: Args, crash: Os) =
   input: w.os.input = crash.input &&
-  events: ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
+  events: (at_call: w.os.events = crash.events ||
+  ex o: Outcome[S, (bits[64], bits[64])]. outcome(w, spec(args), o) && match o {
     ok(s, _)   => s.os.events = crash.events
     exc(s, e)  => e = stack_overflow && s.os.events = crash.events
     diverge(t) => t.os.events = crash.events
-  }
+  })
 
 ///////////////////////////////////////////////////////////////////////
 //  Undefined behavior
@@ -220,7 +223,7 @@ proc[Machine] abi_set_result(sp: Addr, ret: Addr, r0: bits[64], r1: bits[64]) {
 
 // From entry to return: the function behaves like `spec` on the world;
 // callee-saved registers and rsp are restored, rax holds the result, other
-// registers (including all XMM registers) and flags are clobbered. Or it runs out of stack (see above).
+// registers (including all XMM registers) and flags are clobbered. Or it runs out of stack (see above: also right at the call, before any I/O).
 // If the spec may raise (undefined behavior), anything.
 proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
   require rip = f && entry_ok(self, args)

@@ -32,6 +32,19 @@ fn byte_eq(k: usize, v: u8) -> String {
     format!("{} = {}", BYTES.replace("{k}", &k.to_string()), v)
 }
 
+/// A function by its symbol, or `ALIAS=ADDR` (hex): the function at ADDR,
+/// named ALIAS (a static function with copies in several files)
+fn function<'a>(elf: &'a Elf, s: &'a str) -> Result<(&'a str, &'a sl_interp::elf::Symbol), String> {
+    match s.split_once('=') {
+        Some((alias, a)) => {
+            let addr = u64::from_str_radix(a.trim_start_matches("0x"), 16).map_err(|e| format!("{}: {}", s, e))?;
+            let sym = elf.symbol_at(addr).filter(|y| y.value == addr).ok_or_else(|| format!("no function at {:x}", addr))?;
+            Ok((alias, sym))
+        }
+        None => Ok((s, elf.symbol(s).ok_or_else(|| format!("no symbol `{}`", s))?)),
+    }
+}
+
 pub fn steps(args: &[String]) -> CResult {
     let (mut out, mut pos) = (None, Vec::new());
     let mut it = args.iter();
@@ -52,7 +65,7 @@ pub fn steps(args: &[String]) -> CResult {
     // encoding (with the 15 bytes at its first address) -> addresses
     let mut encodings: BTreeMap<Vec<u8>, (Vec<u8>, Vec<u64>)> = BTreeMap::new();
     for s in &pos[2..] {
-        let sym = elf.symbol(s).ok_or_else(|| format!("no symbol `{}`", s))?;
+        let (_, sym) = function(&elf, s)?;
         let mut addr = sym.value;
         while addr < sym.value + sym.size {
             let window = elf.bytes_at(addr, 15).unwrap_or(&[]).to_vec();
@@ -137,10 +150,9 @@ pub fn steps(args: &[String]) -> CResult {
     // per function: its code, and for each instruction what a step from it
     // does (`at_`)
     for sname in &pos[2..] {
-        let sym = elf.symbol(sname).ok_or_else(|| format!("no symbol `{}`", sname))?;
+        let (ns, sym) = function(&elf, sname)?;
         let code = elf.bytes_at(sym.value, sym.size as usize).ok_or_else(|| format!("{}: no bytes", sname))?.to_vec();
         let base = sym.value;
-        let ns = sname.as_str();
         writeln!(s, "// ----------------------------------------------------------------------\n// {}: its instructions, at {:x}\n", ns, base).unwrap();
         writeln!(s, "def {}.code() := bytes_seq(bytes\"{}\")\n", ns, code.iter().map(|b| format!("{:02x}", b)).collect::<String>()).unwrap();
         let mut addr = base;
