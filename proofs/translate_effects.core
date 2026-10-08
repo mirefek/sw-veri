@@ -15,15 +15,15 @@ proof
     assume _ h
     show := h
   qed
-  show by defs(taut(refl({app(app(w, "os"), "input")}), subset_refl[s := app(app(w, "os"), "events")], l), tr.returns_valid)
+  show by defs(taut(refl({app(app(w, "os"), "input")}), subset_refl[s := app(app(w, "os"), "events")], l, refl({app(w, "cpu")})), tr.returns_valid)
 qed
 
 theorem tr.rv_trans: all a b c. tr.returns_valid(a, b) -> tr.returns_valid(b, c) -> tr.returns_valid(a, c)
 proof
   fix a b c
   assume h1 h2
-  have i1 e1 l1 := expand(h1, tr.returns_valid)
-  have i2 e2 l2 := expand(h2, tr.returns_valid)
+  have i1 e1 l1 c1 := expand(h1, tr.returns_valid)
+  have i2 e2 l2 c2 := expand(h2, tr.returns_valid)
   have ez: all z. z in app(app(a, "os"), "events") -> z in app(app(c, "os"), "events") proof
     fix z
     assume hz
@@ -36,7 +36,7 @@ proof
     assume hg hl
     show := mp(all_elim(l2, {gb}, {gc}, {st}), hg, mp(all_elim(l1, {gb}, {gc}, {st}), hg, hl))
   qed
-  show by defs(taut(trans(i2, i1), e, l), tr.returns_valid)
+  show by defs(taut(trans(i2, i1), e, l, trans(c2, c1)), tr.returns_valid)
 qed
 
 // ---------------------------------------------------------------------
@@ -843,9 +843,14 @@ qed
 //  Stores: only the bytes the world may write change, so the program
 //  stays loaded (its code is not writable)
 
+// a byte the world w0 may write: writable, or a stack object's (off the
+// program's mapped pages)
+abbrev tr.wbl(w0, a) := x86_64_linux.can_access(app(w0, "vm"), a, 1) ||
+  (a in app(w0, "objs") && !(x86_64_linux.mapped(app(w0, "vm"), x86_64_linux.page_of(a)) && !abi.stack_page(app(w0, "vm"), x86_64_linux.page_of(a))))
+
 // w is w0 with its memory's bytes changed only where w0 may write
 def tr.wr_only(w0, w) := w = w0 || (ex b. w = fn_update(w0, "vm", fn_update(app(w0, "vm"), "bytes", b)) &&
-  (all a. !(app(b, a) = app(app(app(w0, "vm"), "bytes"), a)) -> x86_64_linux.can_access(app(w0, "vm"), a, 1)))
+  (all a. !(app(b, a) = app(app(app(w0, "vm"), "bytes"), a)) -> tr.wbl(w0, a)))
 
 // ... so the world stays valid: code is not writable
 theorem tr.wr_only_valid: all w0 w. tr.wr_only(w0, w) -> tr.returns_valid(w0, w)
@@ -857,7 +862,7 @@ proof
     show := rewrite(sym(e), all_elim(tr.rv_refl, {w0}), {2})
   qed
   have c2: (ex b. w = fn_update(w0, "vm", fn_update(app(w0, "vm"), "bytes", b)) &&
-      (all a. !(app(b, a) = app(app(app(w0, "vm"), "bytes"), a)) -> x86_64_linux.can_access(app(w0, "vm"), a, 1))) -> tr.returns_valid(w0, w) proof
+      (all a. !(app(b, a) = app(app(app(w0, "vm"), "bytes"), a)) -> tr.wbl(w0, a))) -> tr.returns_valid(w0, w) proof
     assume hb
     obtain b, he hd from hb
     have ose: app(w, "os") = app(w0, "os") by simp(he)
@@ -873,7 +878,8 @@ proof
         fix i
         assume hi hlt
         have c0 := mp(all_elim(expand(hc, abi.code_at), {i}), hi, hlt)
-        have nb: app(b, bits_of_int(64, int_add(gb, i))) = app(app(app(w0, "vm"), "bytes"), bits_of_int(64, int_add(gb, i))) by taut(all_elim(hd, {bits_of_int(64, int_add(gb, i))}), c0)
+        have fm: x86_64_linux.mapped(app(w0, "vm"), x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) by taut(expand(c0, x86_64_linux.fetchable))
+        have nb: app(b, bits_of_int(64, int_add(gb, i))) = app(app(app(w0, "vm"), "bytes"), bits_of_int(64, int_add(gb, i))) by taut(all_elim(hd, {bits_of_int(64, int_add(gb, i))}), c0, fm)
         show by defs(simp(expand(c0, x86_64_linux.fetchable, x86_64_linux.can_access, abi.stack_page, x86_64_linux.mapped), nb, vme), x86_64_linux.fetchable, x86_64_linux.can_access, abi.stack_page, x86_64_linux.mapped)
       qed
       have s: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(app(w, "vm"), int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(app(w, "vm"), int_div(x0, x86_64_linux.PAGE)) proof
@@ -886,13 +892,14 @@ proof
       show by defs(taut(cg, s), abi.loaded)
     qed
     have ev: subset(app(app(w0, "os"), "events"), app(app(w, "os"), "events")) := rewrite(sym(ose), subset_refl[s := app(app(w0, "os"), "events")], {2})
-    show by defs(taut(rewrite(sym(ose), refl({app(app(w0, "os"), "input")}), {1}), ev, l), tr.returns_valid)
+    have cpe: app(w, "cpu") = app(w0, "cpu") by simp(he)
+    show by defs(taut(rewrite(sym(ose), refl({app(app(w0, "os"), "input")}), {1}), ev, l, cpe), tr.returns_valid)
   qed
   show by taut(expand(h, tr.wr_only), c1, c2)
 qed
 
 // one more byte stored where s may write
-theorem tr.wr_only_step: all s w x c. tr.wr_only(s, w) -> x86_64_linux.can_access(app(s, "vm"), x, 1) ->
+theorem tr.wr_only_step: all s w x c. tr.wr_only(s, w) -> tr.wbl(s, x) ->
   tr.wr_only(s, fn_update(w, "vm", fn_update(app(w, "vm"), "bytes", fn_update(app(app(w, "vm"), "bytes"), x, c))))
 proof
   fix s w x c
@@ -900,18 +907,18 @@ proof
   let BS := app(app(s, "vm"), "bytes")
   let NEW := fn_update(w, "vm", fn_update(app(w, "vm"), "bytes", fn_update(app(app(w, "vm"), "bytes"), x, c)))
   // (the new bytes differ from s's at x, or where the old ones did)
-  have d: all b. (all a. !(app(b, a) = app(BS, a)) -> x86_64_linux.can_access(app(s, "vm"), a, 1)) ->
-      (all a. !(app(fn_update(b, x, c), a) = app(BS, a)) -> x86_64_linux.can_access(app(s, "vm"), a, 1)) proof
+  have d: all b. (all a. !(app(b, a) = app(BS, a)) -> tr.wbl(s, a)) ->
+      (all a. !(app(fn_update(b, x, c), a) = app(BS, a)) -> tr.wbl(s, a)) proof
     fix b
     assume hb
     fix a
     assume hn
     have o: !(a = x) -> app(fn_update(b, x, c), a) = app(b, a) := app_update_other[f := b, k := x, v := c, x := a]
-    have e: a = x -> x86_64_linux.can_access(app(s, "vm"), a, 1) proof
+    have e: a = x -> tr.wbl(s, a) proof
       assume ea
       show := rewrite(sym(ea), hx)
     qed
-    have n: !(a = x) -> x86_64_linux.can_access(app(s, "vm"), a, 1) proof
+    have n: !(a = x) -> tr.wbl(s, a) proof
       assume hax
       show := mp(all_elim(hb, {a}), rewrite(mp(o, hax), hn))
     qed
@@ -919,18 +926,18 @@ proof
   qed
   have c1: w = s -> tr.wr_only(s, NEW) proof
     assume e
-    have r: all a. !(app(BS, a) = app(BS, a)) -> x86_64_linux.can_access(app(s, "vm"), a, 1) proof
+    have r: all a. !(app(BS, a) = app(BS, a)) -> tr.wbl(s, a) proof
       fix a
       assume hn
       show by taut(hn, refl({app(BS, a)}))
     qed
     have d1 := mp(all_elim(d, {BS}), r)
     have ne: NEW = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", fn_update(BS, x, c))) by simp(e)
-    have ex: ex b. NEW = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", b)) && (all a. !(app(b, a) = app(BS, a)) -> x86_64_linux.can_access(app(s, "vm"), a, 1))
+    have ex: ex b. NEW = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", b)) && (all a. !(app(b, a) = app(BS, a)) -> tr.wbl(s, a))
       by ex_intro({fn_update(BS, x, c)}, taut(ne, d1))
     show by defs(taut(ex), tr.wr_only)
   qed
-  have c2: (ex b. w = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", b)) && (all a. !(app(b, a) = app(BS, a)) -> x86_64_linux.can_access(app(s, "vm"), a, 1))) ->
+  have c2: (ex b. w = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", b)) && (all a. !(app(b, a) = app(BS, a)) -> tr.wbl(s, a))) ->
       tr.wr_only(s, NEW) proof
     assume hb0
     obtain b, he hb from hb0
@@ -938,7 +945,7 @@ proof
     have ne: NEW = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", fn_update(b, x, c))) by simp(he,
       fn_update_twice[f := app(s, "vm"), k := "bytes", a := b, b := fn_update(b, x, c)],
       fn_update_twice[f := s, k := "vm", a := fn_update(app(s, "vm"), "bytes", b), b := fn_update(app(s, "vm"), "bytes", fn_update(b, x, c))])
-    have ex: ex b. NEW = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", b)) && (all a. !(app(b, a) = app(BS, a)) -> x86_64_linux.can_access(app(s, "vm"), a, 1))
+    have ex: ex b. NEW = fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", b)) && (all a. !(app(b, a) = app(BS, a)) -> tr.wbl(s, a))
       by ex_intro({fn_update(b, x, c)}, taut(ne, d1))
     show by defs(taut(ex), tr.wr_only)
   qed
@@ -953,9 +960,41 @@ proof
   show by simp(h)
 qed
 
+// (a byte of an access usable for writing: one the world may write)
+theorem tr.usable_wbl: all w a n j. gimple.usable(app(w, "vm"), app(w, "objs"), a, n, true) -> a in bits(64) -> j in omega -> int_lt(j, n) ->
+  tr.wbl(w, bits_add(64, a, bits_of_int(64, j)))
+proof
+  fix w a n j
+  assume hu ha hj hn
+  have e := apply(tr.usable_ea, {app(w, "vm")}, {app(w, "objs")}, {a}, {n}, {true}, {j}, hu, ha, hj, hn)
+  let X := int_add(a, j)
+  let P := int_div(X, x86_64_linux.PAGE)
+  let C := x86_64_linux.mapped(app(w, "vm"), P) && !(app(snd(app(app(app(w, "vm"), "pages"), P)), "kind") = 2)
+  let PW := app(app(snd(app(app(app(w, "vm"), "pages"), P)), "prot"), "w")
+  let PR := app(app(snd(app(app(app(w, "vm"), "pages"), P)), "prot"), "r")
+  have ui := mp(all_elim(expand(hu, gimple.usable), {j}), hj, hn)
+  have pe: x86_64_linux.page_of(X) = P by defs(simp(), x86_64_linux.page_of)
+  have c1: C -> tr.wbl(w, X) proof
+    assume hc
+    have ip := rewrite(mp(ite_t[c := C, a := ite(true, PW, PR), b := int_lt(X, int_pow(2, 64)) && X in app(w, "objs")], hc), ui)
+    have pw: PW by simp(ip)
+    have ca: x86_64_linux.can_access(app(w, "vm"), X, 1) by defs(simp(pe, expand(hc, x86_64_linux.mapped), pw), x86_64_linux.can_access, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+    show by taut(ca)
+  qed
+  have c2: !C -> tr.wbl(w, X) proof
+    assume hc
+    have ho0 := rewrite(mp(ite_f[c := C, a := ite(true, PW, PR), b := int_lt(X, int_pow(2, 64)) && X in app(w, "objs")], hc), ui)
+    have xo: X in app(w, "objs") by taut(ho0)
+    have nc: !(x86_64_linux.mapped(app(w, "vm"), x86_64_linux.page_of(X)) && !abi.stack_page(app(w, "vm"), x86_64_linux.page_of(X))) by defs(simp(pe, hc), abi.stack_page)
+    show by taut(xo, nc)
+  qed
+  have r: tr.wbl(w, X) by taut(c1, c2)
+  show := rewrite(sym(e), r)
+qed
+
 // writing n bytes at a, usable for writing: only bytes s may write
 // changed (the loop by its invariant)
-theorem tr.write_wr: all s a n v s2 r. runs(gimple.write_bytes(a, n, v), s, ok(s2, r)) -> gimple.usable(app(s, "vm"), a, n, true) -> a in bits(64) -> tr.wr_only(s, s2)
+theorem tr.write_wr: all s a n v s2 r. runs(gimple.write_bytes(a, n, v), s, ok(s2, r)) -> gimple.usable(app(s, "vm"), app(s, "objs"), a, n, true) -> a in bits(64) -> tr.wr_only(s, s2)
 proof
   fix s a n v s2 r
   assume h hu ha
@@ -978,11 +1017,7 @@ proof
         bits_add(64, a, bits_of_int(64, snd(l))), bits_of_int(8, int_div(v, int_pow(256, snd(l))))))), int_add(snd(l), 1)) by simp(he)
       // the byte's address: writable in s
       have h0: int_le(0, a) by simp(ha)
-      have cw := apply(g.usable_write, {app(s, "vm")}, {app(s, "vm")}, {a}, {n}, {snd(l)}, hu, refl({app(app(s, "vm"), "pages")}), h0, ho, hlt)
-      have u := expand(mp(all_elim(expand(hu, gimple.usable), {snd(l)}), ho, hlt), x86_64_linux.mapped)
-      have mpd: int_lt(int_div(int_add(a, snd(l)), 4096), 34359738367) by simp(expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
-      have ea: bits_add(64, a, bits_of_int(64, snd(l))) = bits_of_int(64, int_add(a, snd(l))) by simp(mpd, ha, ho)
-      have cw2 := rewrite(sym(ea), cw)
+      have cw2 := apply(tr.usable_wbl, {s}, {a}, {n}, {snd(l)}, hu, ha, ho, hlt)
       have w2 := apply(tr.wr_only_step, {s}, {fst(l)}, {bits_add(64, a, bits_of_int(64, snd(l)))}, {bits_of_int(8, int_div(v, int_pow(256, snd(l))))}, hwo, cw2)
       show by simp(e2, w2, ho)
     qed
@@ -1070,7 +1105,7 @@ proof
         obtain s3 r3, eo2 ee from e2
         have e3: w2 = s3 by simp(ee)
         have hw2 := rewrite(es, rewrite(ea, rewrite(eo2, hw)))
-        have hu: gimple.usable(app(w, "vm"), AD, n, true) by taut(expand(hd, tr.mem_def))
+        have hu: gimple.usable(app(w, "vm"), app(w, "objs"), AD, n, true) by taut(expand(hd, tr.mem_def))
         have ab: AD in bits(64) by simp()
         have wo := mp(all_elim(tr.write_wr, {w}, {AD}, {n}, {v}, {s3}, {r3}), hw2, hu, ab)
         show := rewrite(sym(e3), mp(all_elim(tr.wr_only_valid, {w}, {s3}), wo))
