@@ -1,7 +1,13 @@
 //! `slc translate`: the certificate of a function's C1 by statement patterns
 //! (docs/bridge-pattern-design.md). Not trusted: it writes a proof that
-//! `slc kernel-check` checks, with proofs/translate.core's and
-//! proofs/translate_store_loop.core's rules.
+//! `slc kernel-check` checks, with proofs/translate.core's,
+//! proofs/translate_frame.core's and proofs/translate_store_loop.core's
+//! rules.
+//!
+//! The entry is the function's first instruction, its arguments in their
+//! registers (tr.entry_n); the prologue (`sub rsp, k`, the arguments'
+//! stores) is instructions as any. A home store names the homes it leaves
+//! (a tr.hkeep chain over the map's entries).
 //!
 //! It walks the function's decode facts (`FN.at_ADDR`, build/leaf_steps.core)
 //! from the entry, alongside the spec's procedure (`SPEC_fun`):
@@ -56,7 +62,7 @@ struct St {
     regs: Vec<(u128, u128, Term)>,
     /// their map's name
     rs: String,
-    /// the frame written since the entry (`tr.mem`'s flag): `false`, `true`
+    /// the frame's depth (`tr.pt`'s fd, the function's: its literal)
     ds: String,
     /// the spec's world (its placeholder), its name, the fact that it is a
     /// set (`hvu`) and a world (`hw`)
@@ -143,6 +149,9 @@ struct Gen<'e> {
     code: String,
     prefix: String,
     kw: Term,
+    /// the function's frame depth (`tr.frame`): its stack accesses reach
+    /// fd bytes below the entry's rsp
+    fd: u128,
     /// the current point's frame size, world, its name, its `in univ(1)`
     /// fact (set by `prove`)
     fr: u128,
@@ -154,8 +163,6 @@ struct Gen<'e> {
     n: usize,
     /// the loops met: their heads and claims
     loops: Vec<Loop>,
-    /// the static bytes the spec loads and stores: [lo, hi)
-    statics_range: Option<(u128, u128)>,
     /// the values' count (their names); the rests and lets local to a
     /// loop's step (defined in its proof)
     nval: usize,
@@ -827,7 +834,6 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.app(op, "gimple.ld8", 2) {
             if let (Some(pv), Some(ov)) = (self.eval_lit(&x[0]), self.eval_lit(&x[1])) {
                 let (p, off, a) = (pr(self, &x[0]), pr(self, &x[1]), (pv + ov) % P64);
-                self.add_static(a, a + 1);
                 let cond = self.parse(&format!("g.mem_defined({w}, {p}, {off}, 1, false)"))?;
                 let r = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({w}, \"vm\"), {a}, 1))"))?;
                 let ok = format!("mp(tr.ld8_at_ok, {{{w}}}, {{{p}}}, {{{off}}}, {{{a}}}, {hv}, simp(L), simp(L), simp(L), {{HC}})");
@@ -858,6 +864,17 @@ impl<'e> Gen<'e> {
                     let ub = format!("mp(tr.elem2_sx_ub, {{{w}}}, {{{p}}}, {{{i}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
                     return Ok((Some(cond), r, ok, ub));
                 }
+            }
+        }
+        // a 64-bit field load at p + off (off a literal)
+        if let Some(x) = self.app(op, "gimple.ld64", 2) {
+            if nat(&x[1]).is_some() {
+                let (p, off) = (pr(self, &x[0]), pr(self, &x[1]));
+                let cond = self.parse(&format!("g.mem_defined({w}, {p}, {off}, 8, false)"))?;
+                let r = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({w}, \"vm\"), bits_add(64, {p}, {off}), 8))"))?;
+                let ok = format!("mp(tr.ld64_ok, {{{w}}}, {{{p}}}, {{{off}}}, {hv}, simp(L), simp(L), {{HC}})");
+                let ub = format!("mp(tr.ld64_ub, {{{w}}}, {{{p}}}, {{{off}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})");
+                return Ok((Some(cond), r, ok, ub));
             }
         }
         // a bitfield load: n bytes at p + off, bits pos.., k of them
@@ -1041,77 +1058,6 @@ impl<'e> Gen<'e> {
         st2.spec = Spec::Proc(j);
         let _ = &so.cond;
         Ok((hc, so.v.clone(), pre, st2, red, so.addr.clone()))
-    }
-
-    /// the homes below rsp (`tr.homes_low`): its proof
-    fn homes_low(&self, st: &St) -> Result<String, String> {
-        match st.hsm.iter().next() {
-            None => Ok("tr.homes_low_empty".into()),
-            Some((&d, (4, x))) if st.hsm.len() == 1 => Ok(format!("mp(tr.homes_low_one, {{{}}}, {{{}}}, simp(L), simp(L), simp(L))", d, self.print(x))),
-            _ => Err(format!("{:x}: a frame of other homes: not covered yet", st.a)),
-        }
-    }
-
-    /// a store's address off the stack pages: its proof (a static's byte,
-    /// or a byte array's element at a loop's counter)
-    fn off_stack(&mut self, st: &St, addr: &Term) -> Result<String, String> {
-        let ap = self.print(addr);
-        if let Some(av) = self.eval_lit(addr) {
-            self.add_static(av, av + 1);
-            return Ok(format!("mp(hns, {{{ap}}}, simp(L), simp(L), simp(L))"));
-        }
-        // p + sext(i), p a static's, i the loop's counter in [0, K]
-        let e = self.expand(addr);
-        let parts = (|| {
-            let x = self.app(&e, "bits_add", 3)?;
-            let sx = self.app(&x[2], "bits_sext", 3)?;
-            Some((self.eval_lit(&x[1])?, sx[2].clone(), x[1].clone()))
-        })();
-        let (pv, i, pt) = parts.ok_or_else(|| format!("{:x}: a store at {}: not covered yet", st.a, ap))?;
-        let Some(lp) = st.lp.and_then(|l| self.loops.get(l).cloned()) else {
-            // out of a loop: a branch's bound on the index (unsigned), i <= k
-            let ci = self.canon(&i);
-            let bound = st.hyps.iter().find_map(|(h, name)| {
-                let x = self.app(h, "int_le", 2)?;
-                let k = nat(&x[1])?;
-                (self.canon(&x[0]) == ci && k < (1 << 31)).then(|| (k, name.clone()))
-            });
-            let Some((k, hb)) = bound else {
-                let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
-                return Err(format!("{:x}: a store at an index without a bound (index {}; facts: {})", st.a, self.print(&i), facts.join("; ")));
-            };
-            self.add_static(pv, pv + k + 1);
-            let (ip, pp) = (self.print(&i), self.print(&pt));
-            let er = format!("apply(tr.elem_in_u, {{{pp}}}, {{{ip}}}, {{{k}}}, simp(L), simp(L), {hb}, simp(L), simp(L))");
-            return Ok(format!("mp(hns, {{{ap}}}, simp(L), simp(L, {er}), simp(L, {er}))"));
-        };
-        if self.canon(&i) != self.canon(&lp.li) {
-            return Err(format!("{:x}: a store at an index not the loop's counter", st.a));
-        }
-        let k = lp.k;
-        let hi = pv + k + 1;
-        self.add_static(pv, hi);
-        let g = self.mk("not", vec![self.mk("int_lt", vec![self.mk("sint", vec![lit(32), lit(k)]), self.mk("sint", vec![lit(32), lp.li.clone()])])]);
-        let hg = st.hyps.iter().find(|h| h.0 == g).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: the loop's condition not in scope", st.a))?;
-        let (lip, ci, pp) = (self.print(&lp.li), lp.ci.clone(), self.print(&pt));
-        let er = format!("apply(tr.elem_in, {{{pp}}}, {{{lip}}}, {{{k}}}, simp(L), taut({ci}), simp(L), taut({ci}), {hg}, simp(L), simp(L))");
-        Ok(format!("mp(hns, {{{ap}}}, simp(L), simp(L, {er}), simp(L, {er}))"))
-    }
-
-    /// a store's n bytes at the static address addr off the stack pages:
-    /// their proof (the statics' range, known at the end: {SLO}, {SHI})
-    fn off_stack_n(&mut self, st: &St, addr: &Term, n: u128) -> Result<String, String> {
-        let av = self.eval_lit(addr).ok_or_else(|| format!("{:x}: a {}-byte store at {}: not covered yet", st.a, n, self.print(addr)))?;
-        self.add_static(av, av + n);
-        Ok(format!("apply(tr.off_stackn, {{app(s, \"vm\")}}, {{{{SLO}}}}, {{{{SHI}}}}, {{{}}}, {{{n}}}, hns, simp(L), simp(L), simp(L), simp(L), simp(L))", self.print(addr)))
-    }
-
-    /// the static bytes [lo, hi) the spec reads or writes
-    fn add_static(&mut self, lo: u128, hi: u128) {
-        self.statics_range = Some(match self.statics_range {
-            Some((l, h)) => (l.min(lo), h.max(hi)),
-            None => (lo, hi),
-        });
     }
 
     /// a term from text, the placeholders by their names
@@ -1571,7 +1517,6 @@ impl<'e> Gen<'e> {
         st0.a = a2;
         st0.regs = Vec::new();
         st0.rs = "empty".into();
-        st0.ds = "V".into();
         st0.w = w4.clone();
         st0.wn = wc.clone();
         st0.hvu = format!("hvu{wc}");
@@ -1580,7 +1525,7 @@ impl<'e> Gen<'e> {
         st0.hst = "empty".into();
         st0.spec = Spec::Proc(j);
         let st2 = self.set_reg(&st0, a2, 0, 8, r0.clone());
-        let pt2 = format!("tr.pt(s, V, {}, {}, 8, {}, empty, V, fn_update(empty, 0, pair(8, {rc})), WRAP({}), {wc})", self.base, self.code, a2, self.print(&self.qs[j].1));
+        let pt2 = format!("tr.pt(s, V, {}, {}, 8, {}, empty, {}, fn_update(empty, 0, pair(8, {rc})), WRAP({}), {wc})", self.base, self.code, a2, st.ds, self.print(&self.qs[j].1));
         let rest = self.prove(st2)?;
         // (the definitions after the call: in its proof)
         let mut local = Vec::new();
@@ -1631,7 +1576,7 @@ impl<'e> Gen<'e> {
         );
         let _ = qi;
         let expr = format!(
-            "mp({rule}, {}, simp(L), simp(L), simp(L), simp(L), hcall{gi}, hl, simp(), htyp{gi}, hio{gi}, apply(tr.arg32_reg, {{{}}}, {{{}}}, simp(L), simp(L)), hk{n}, hd{n}, pc{n})",
+            "mp({rule}, {}, simp(L), simp(L), simp(L), simp(L), hcall{gi}, hl, simp(), simp(), simp(), htyp{gi}, hio{gi}, apply(tr.arg32_reg, {{{}}}, {{{}}}, simp(L), simp(L)), hk{n}, hd{n}, pc{n})",
             insn.name,
             st.rs,
             self.print(&x)
@@ -1729,7 +1674,7 @@ impl<'e> Gen<'e> {
             fr: st.fr,
             regs: Vec::new(),
             rs: "empty".into(),
-            ds: "V".into(),
+            ds: self.fd.to_string(),
             w: lw.clone(),
             wn: lwn.clone(),
             hvu: format!("hvu{lwn}"),
@@ -1761,7 +1706,7 @@ impl<'e> Gen<'e> {
         let (b, c, kvp) = (self.base.clone(), self.code.clone(), kv);
         let qhp = self.print(&self.qs[jh].1);
         let mut lines = vec![
-            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {}, {h}, {hst}, V, empty, WRAP({qhp}), {lwn})", st.fr),
+            format!("let {cl}({lwn}, {lin}) := tr.pt(s, V, {b}, {c}, {}, {h}, {hst}, {}, empty, WRAP({qhp}), {lwn})", st.fr, self.fd),
             format!("let {pi}({lwn}, {lin}) := tr.count_inv({kvp}, {lin}) && {lwn} in abi.World && {lwn} in univ(1)"),
             format!("let {mv}({lwn}, {lin}) := tr.count_var({kvp}, {lin})"),
             format!("have nat{ln}: all {lwn} {lin}. {pi}({lwn}, {lin}) -> {mv}({lwn}, {lin}) in omega proof"),
@@ -1797,8 +1742,9 @@ impl<'e> Gen<'e> {
         }
         lines.push(format!("have i0{ln} := apply(tr.count_init, {{{kvp}}}, simp())"));
         lines.push(format!("have c{ln} := mp(all_elim(loop{ln}, {{{wn}}}, {{{i0p}}}), taut(i0{ln}, {}))", st.hw));
+        let fdl = self.fd;
         let rs = format!(
-            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{}}}, {{{h}}}, {{{}}}, {{V}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{b}}}, {{{c}}}, {{{}}}, {{{h}}}, {{{}}}, {{{fdl}}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, c{ln})",
             st.fr, st.hst, st.rs, self.qs[j0].0
         );
         let expr = format!("mp({}, mp({nodiv0}, {{{wn}}}), {rs})", self.wred(st, qi, j0));
@@ -1849,8 +1795,9 @@ impl<'e> Gen<'e> {
             format!("have {csn} := apply(tr.count_step, {{{k}}}, {{{lip}}}, simp(), {cc}, simp(), {hg})"),
             format!("have {cn} := mp(all_elim({}, {{{wn}}}, {{{tpp}}}), taut({csn}, {}), taut({csn}))", lp.ih, st.hw),
         ];
+        let fdl = self.fd;
         let rs = format!(
-            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{V}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
+            "mp(tr.pt_rs, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{fdl}}}, {{{}}}, {{WRAP({})}}, {{{wn}}}, {cn})",
             self.base, self.code, st.fr, st.a, st.hst, st.rs, self.qs[j].0
         );
         let expr = format!("mp({}, mp({settle}, {{{wn}}}), {rs})", self.wred(st, qi, j));
@@ -1948,6 +1895,21 @@ impl<'e> Gen<'e> {
         t
     }
 
+    /// the same for a rule writing a home: the homes it leaves (hs2) after
+    /// the map
+    fn tail_h(&self, st: &St, insn: &Insn, hs2: &str, n: usize, extra: &[String]) -> String {
+        let mut t = format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}", hs2, st.ds, st.rs, self.p(&st.spec), insn.name);
+        for _ in 0..n {
+            t.push_str(", simp(L)");
+        }
+        for e in extra {
+            t.push_str(", ");
+            t.push_str(e);
+        }
+        t.push_str(", {NEXT})");
+        t
+    }
+
     fn terms(&self, ts: &[&Term]) -> String {
         ts.iter().map(|t| format!(", {{{}}}", self.print(t))).collect()
     }
@@ -2014,7 +1976,7 @@ impl<'e> Gen<'e> {
                     _ => return Err(bad("no home of the load's width")),
                 };
                 let rule = if n == 8 { "load64_home" } else { "load32_home" };
-                let t = self.head(rule, a, insn) + &self.terms(&[&x[1], &d, &c, &x[3], &x[4], &v]) + &self.tail(st, insn, 9, &[]);
+                let t = self.head(rule, a, insn) + &self.terms(&[&x[1], &d, &c, &x[3], &x[4], &v]) + &self.tail(st, insn, 6, &[]);
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, n, v);
                 self.then(t, st2)
@@ -2043,7 +2005,7 @@ impl<'e> Gen<'e> {
                 let v = home(&st.hsm, &d)?;
                 let u = self.need_reg(st, g, 4)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
-                let t = self.head("and32_home", a, insn) + &self.terms(&[&x[1], &d, &c, &x[3], &x[4], &v, &u]) + &self.tail(st, insn, 11, &[]);
+                let t = self.head("and32_home", a, insn) + &self.terms(&[&x[1], &d, &c, &x[3], &x[4], &v, &u]) + &self.tail(st, insn, 8, &[]);
                 let r = self.mk("bits_and", vec![lit(32), v, u]);
                 let r = self.value(&r);
                 self.scratch.insert(g);
@@ -2158,7 +2120,30 @@ impl<'e> Gen<'e> {
             75 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
-                let Some((0, h)) = self.tag(&x[2]) else { return Err(bad("a store (only the prologue's is matched)")) };
+                // mov [rsp + d], r32 / r64: the home c := the register's low n bytes
+                if let Some(d) = self.rsp_mem(&x[2]) {
+                    let n = nat(&x[0]).ok_or_else(|| bad("fields"))?;
+                    if n != 4 && n != 8 {
+                        return Err(bad("a store to a home of other than 4 or 8 bytes"));
+                    }
+                    let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let cn = self.hkey(dn);
+                    let (ng, u) = self.reg(st, g).ok_or_else(|| bad("an empty register"))?;
+                    // (the value: the register's; its low bytes, of a 64-bit word bits_of_int(64, y): y's)
+                    let xv = if ng == n {
+                        u.clone()
+                    } else {
+                        let y = self.app(&u, "bits_of_int", 2).filter(|y| nat(&y[0]) == Some(64)).map(|y| y[1].clone()).unwrap_or_else(|| u.clone());
+                        self.mk("bits_of_int", vec![lit(8 * n), y])
+                    };
+                    let (_, hs2, hk) = self.hkeep(st, cn, n);
+                    let t = self.head("store_home_r", a, insn)
+                        + &self.terms(&[&x[0], &x[1], &d, &lit(cn), &x[3], &x[4], &lit(ng), &u, &xv])
+                        + &self.tail_h(st, insn, &hs2, 9, &["defs(simp(), tr.hrange)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), hk]);
+                    let st2 = self.set_home(st, a2, cn, n, xv);
+                    return self.then(t, st2);
+                }
+                let Some((0, h)) = self.tag(&x[2]) else { return Err(bad("a store to memory other than a home")) };
                 let hn = reg(&h)?;
                 let u = self.need_reg(st, g, 4)?;
                 let t = self.head("mov32_rr", a, insn) + &self.terms(&[&x[1], &h, &x[3], &x[4], &u]) + &self.tail(st, insn, 5, &[]);
@@ -2176,11 +2161,11 @@ impl<'e> Gen<'e> {
                     let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let u = home(&st.hsm, &d)?;
                     let cn = self.hkey(dn);
-                    let only = self.only(st, cn)?;
-                    let t = self.head("shr32_1_home", a, insn) + &self.terms(&[&d, &lit(cn), &u]) + &self.tail(st, insn, 7, &[only, "simp(L)".into(), "simp(L)".into()]);
+                    let (_, hs2, hk) = self.hkeep(st, cn, 4);
+                    let t = self.head("shr32_1_home", a, insn) + &self.terms(&[&d, &lit(cn), &u]) + &self.tail_h(st, insn, &hs2, 6, &[hk]);
                     let r = self.mk("bits_shr", vec![lit(32), u, lit(1)]);
                     let r = self.value(&r);
-                    let st2 = self.set_home(st, a2, cn, r);
+                    let st2 = self.set_home(st, a2, cn, 4, r);
                     return self.then(t, st2);
                 }
                 let Some((0, g)) = self.tag(&x[2]) else { return Err(bad("not shr r/m32, 1")) };
@@ -2205,13 +2190,11 @@ impl<'e> Gen<'e> {
                 let u = home(&st.hsm, &d)?;
                 let v = self.need_reg(st, g, 4)?;
                 let cn = self.hkey(dn);
-                let only = self.only(st, cn)?;
-                let t = self.head("or32_home", a, insn)
-                    + &self.terms(&[&d, &lit(cn), &x[1], &v, &u])
-                    + &self.tail(st, insn, 7, &[only, "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into()]);
+                let (_, hs2, hk) = self.hkeep(st, cn, 4);
+                let t = self.head("or32_home", a, insn) + &self.terms(&[&d, &lit(cn), &x[1], &v, &u]) + &self.tail_h(st, insn, &hs2, 9, &[hk]);
                 let r = self.mk("bits_or", vec![lit(32), u, v]);
                 let r = self.value(&r);
-                let st2 = self.set_home(st, a2, cn, r);
+                let st2 = self.set_home(st, a2, cn, 4, r);
                 self.then(t, st2)
             }
             // sub r32, r32 (the source's low 32 bits)
@@ -2257,11 +2240,11 @@ impl<'e> Gen<'e> {
                     let ck = lit(cn);
                     return match nat(&x[1]) {
                         Some(0) => {
-                            let only = self.only(st, cn)?;
-                            let t = self.head("add32_home", a, insn) + &self.terms(&[&d, &ck, &x[4], &kk, &u]) + &self.tail(st, insn, 9, &[only, "simp(L)".into(), "simp(L)".into()]);
+                            let (_, hs2, hk) = self.hkeep(st, cn, 4);
+                            let t = self.head("add32_home", a, insn) + &self.terms(&[&d, &ck, &x[4], &kk, &u]) + &self.tail_h(st, insn, &hs2, 8, &[hk]);
                             let r = self.mk("bits_add", vec![lit(32), u, kk]);
                             let r = self.value(&r);
-                            let st2 = self.set_home(st, a2, cn, r);
+                            let st2 = self.set_home(st, a2, cn, 4, r);
                             self.then(t, st2)
                         }
                         // cmp; jle t: on to a3 (the loop's leaving) when kk <s u
@@ -2288,7 +2271,7 @@ impl<'e> Gen<'e> {
                                 self.p(&st.spec),
                                 insn.name,
                                 self.insns[&a2].name,
-                                ", simp(L)".repeat(13)
+                                ", simp(L)".repeat(10)
                             );
                             self.branch(st, c, a3, tt, text)
                         }
@@ -2303,6 +2286,19 @@ impl<'e> Gen<'e> {
                     return Err(bad("not r32/r64, imm8"));
                 }
                 let gn = reg(&g)?;
+                // sub rsp, k: the frame grows (the prologue)
+                if (size, nat(&x[1]), gn) == (8, Some(5), 4) {
+                    if imm >= 128 || self.fr + imm > 65536 {
+                        return Err(bad("sub rsp beyond the frame's bound"));
+                    }
+                    let fr2 = self.fr + imm;
+                    let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+                    let t = self.head("sub_rsp", a, insn) + &self.terms(&[&x[3], &x[4], &lit(fr2)]) + &self.tail(st, insn, 6, &[n4]);
+                    let mut st2 = st.clone();
+                    st2.a = a2;
+                    st2.fr = fr2;
+                    return self.then(t, st2);
+                }
                 // add rsp, k: the frame's end (k at most the frame)
                 if (size, nat(&x[1]), gn) == (8, Some(0), 4) {
                     if imm >= 128 || imm > self.fr {
@@ -2806,8 +2802,8 @@ impl<'e> Gen<'e> {
                 // (no result: rax:rdx anything)
                 if self.rbytes == 0 {
                     let expr = format!(
-                        "mp(tr.ret_void, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {}, mp(tr.result_void, {{W}}))",
-                        self.base, self.code, a, insn.len, st.rs, pr, insn.name
+                        "mp(tr.ret_void, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, mp(tr.result_void, {{W}}))",
+                        self.base, self.code, a, insn.len, st.ds, st.rs, pr, insn.name
                     );
                     return Ok(Pf { lines: vec![], expr });
                 }
@@ -2817,11 +2813,12 @@ impl<'e> Gen<'e> {
                     return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))));
                 }
                 let expr = format!(
-                    "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
+                    "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
                     self.base,
                     self.code,
                     a,
                     insn.len,
+                    st.ds,
                     st.rs,
                     pr,
                     n,
@@ -2860,14 +2857,13 @@ impl<'e> Gen<'e> {
                 if self.eval_lit(&v) != nat(&k) {
                     return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&k), self.print(&v)));
                 }
-                let ns = self.off_stack(st, &sa)?;
-                let low = self.homes_low(st)?;
+                let _ = &sa;
                 let tr: Vec<&Term> = terms.iter().collect();
                 let t = self.head(rule, a, insn)
                     + &self.terms(&tr)
                     + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
                     + &", simp(L)".repeat(n)
-                    + &format!(", simp(L, {hc}), {ns}, {low}, simp(), {red}, {{NEXT}})");
+                    + &format!(", simp(L, {hc}), simp(), {red}, {{NEXT}})");
                 let mut st3 = st2;
                 st3.a = a2;
                 self.then_pre(t, st3, pre)
@@ -2924,8 +2920,7 @@ impl<'e> Gen<'e> {
                 } else {
                     format!("mp(tr.low8_add_mod, {{{}}}, {{{}}}, {{{}}}, simp(L), simp(L), simp(L), simp(L))", self.print(&bb), self.print(&kk), self.print(&kk2))
                 };
-                let ns = self.off_stack(st, &sa)?;
-                let low = self.homes_low(st)?;
+                let _ = &sa;
                 let mut terms: Vec<&Term> = terms.iter().collect();
                 terms.push(&v);
                 if rule == "store8_rip" {
@@ -2935,7 +2930,7 @@ impl<'e> Gen<'e> {
                     + &self.terms(&terms)
                     + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
                     + &", simp(L)".repeat(nlit)
-                    + &format!(", {lp}, simp(L, {hc}), {ns}, {low}, simp(), {red}, {{NEXT}})");
+                    + &format!(", {lp}, simp(L, {hc}), simp(), {red}, {{NEXT}})");
                 let mut st3 = st2;
                 st3.a = a2;
                 self.then_pre(t, st3, pre)
@@ -2999,13 +2994,12 @@ impl<'e> Gen<'e> {
                 if self.eval_lit(&v) != nat(&k) {
                     return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&k), self.print(&v)));
                 }
-                let ns = self.off_stack_n(st, &sa, 4)?;
-                let low = self.homes_low(st)?;
+                let _ = &sa;
                 let t = self.head("store32i_rip", a, insn)
                     + &self.terms(&[&lit(d), &k, &biga])
                     + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
                     + &", simp(L)".repeat(5)
-                    + &format!(", simp(L, {hc}), {ns}, {low}, simp(), {red}, {{NEXT}})");
+                    + &format!(", simp(L, {hc}), simp(), {red}, {{NEXT}})");
                 let mut st3 = st2;
                 st3.a = a2;
                 self.then_pre(t, st3, pre)
@@ -3019,34 +3013,55 @@ impl<'e> Gen<'e> {
                     return Err(bad("not mov dword [rsp + d], imm32"));
                 }
                 let cn = self.hkey(dn);
-                let only = self.only(st, cn)?;
+                let (_, hs2, hk) = self.hkeep(st, cn, 4);
                 let k = x[3].clone();
-                let t = self.head("store32i_home", a, insn) + &self.terms(&[&d, &lit(cn), &k]) + &self.tail(st, insn, 8, &[only]);
-                let st2 = self.set_home(st, a2, cn, k);
+                let t = self.head("store32i_home", a, insn)
+                    + &self.terms(&[&d, &lit(cn), &k])
+                    + &self.tail_h(st, insn, &hs2, 4, &["defs(simp(), tr.hrange)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), "simp(L)".into(), hk]);
+                let st2 = self.set_home(st, a2, cn, 4, k);
                 self.then(t, st2)
             }
             _ => Err(bad("no rule for the instruction")),
         }
     }
 
-    /// the homes: d's alone (the rule's premise, its proof)
-    fn only(&self, st: &St, d: u128) -> Result<String, String> {
-        match st.hsm.iter().next() {
-            None => Ok(format!("all_elim(tr.only_empty, {{{}}})", d)),
-            Some((&c, (n, x))) if c == d && st.hsm.len() == 1 => Ok(format!("all_elim(tr.only_upd, {{{}}}, {{pair({}, {})}})", d, n, self.print(x))),
-            _ => Err(format!("{:x}: a frame of more homes than the one at {:x}: not covered yet", st.a, d)),
+    /// a home map's text: its entries in their keys' order
+    fn hs_text(&self, hsm: &BTreeMap<u128, (u128, Term)>) -> String {
+        let mut t = "empty".to_string();
+        for (c, (n, x)) in hsm {
+            t = format!("fn_update({}, {}, pair({}, {}))", t, c, n, self.print(x));
         }
+        t
     }
 
-    /// after a write of the 4-byte home d (x): the home's value, the frame
-    /// written
-    fn set_home(&mut self, st: &St, a2: u128, d: u128, x: Term) -> St {
+    /// a store of n bytes to the home c: the homes it leaves (apart from
+    /// it), their map's text, and the `tr.hkeep` proof (`{HS}` the homes
+    /// before) -- one `tr.hkeep_upd` per home left
+    fn hkeep(&self, st: &St, c: u128, n: u128) -> (BTreeMap<u128, (u128, Term)>, String, String) {
+        let mut kept = BTreeMap::new();
+        let mut pf = format!("all_elim(tr.hkeep_empty, {{HS}}, {{{c}}}, {{{n}}})");
+        for (&k, (nk, xk)) in &st.hsm {
+            if k + nk <= c || c + n <= k {
+                let f = self.hs_text(&kept);
+                pf = format!(
+                    "mp(tr.hkeep_upd, {{HS}}, {{{f}}}, {{{c}}}, {{{n}}}, {{{k}}}, {{{nk}}}, {{{}}}, {pf}, simp(L), simp(L), defs(simp(), tr.hdisj))",
+                    self.print(xk)
+                );
+                kept.insert(k, (*nk, xk.clone()));
+            }
+        }
+        let t = self.hs_text(&kept);
+        (kept, t, pf)
+    }
+
+    /// after a write of n bytes x to the home c: the homes it left, and it
+    fn set_home(&mut self, st: &St, a2: u128, c: u128, n: u128, x: Term) -> St {
+        let (mut kept, _, _) = self.hkeep(st, c, n);
+        kept.insert(c, (n, x));
         let mut st2 = st.clone();
         st2.a = a2;
-        st2.hsm = BTreeMap::new();
-        st2.hsm.insert(d, (4, x.clone()));
-        st2.hst = format!("fn_update(empty, {}, pair(4, {}))", d, self.print(&x));
-        st2.ds = "V".into();
+        st2.hst = self.hs_text(&kept);
+        st2.hsm = kept;
         st2
     }
 
@@ -3267,6 +3282,7 @@ pub fn translate(args: &[String]) -> CResult {
         code: String::new(),
         prefix: prefix.clone(),
         kw: Term::bvar(0),
+        fd: 0,
         fr: 0,
         w: Term::bvar(0),
         wn: "W".into(),
@@ -3274,7 +3290,6 @@ pub fn translate(args: &[String]) -> CResult {
         vw: Term::bvar(0),
         n: 0,
         loops: Vec::new(),
-        statics_range: None,
         nval: 0,
         scoped_q: BTreeSet::new(),
         scoped_l: BTreeSet::new(),
@@ -3314,17 +3329,18 @@ pub fn translate(args: &[String]) -> CResult {
             Some((*f, g.print(cc)))
         }
     };
-    let parts = (|| -> Option<(bool, Term, Term, Term)> {
+    let parts = (|| -> Option<(u128, Term, Term, Term)> {
         let fb = g.app(&sbody, "fn_build", 2)?;
         let mp = g.app(&fb[1], "mkprog", 1)?;
-        let (guarded, br) = match g.app(&mp[0], "or", 2) {
+        let (nargs, br) = match g.app(&mp[0], "or", 2) {
             Some(or) => {
                 let guard = g.app(&or[0], "not", 1)?;
                 let le = g.app(&guard[0], "ord_le", 2)?;
-                (nat(&le[0])? == 1).then_some(())?;
-                (true, g.app(&or[1], "bind_rel", 5)?.to_vec())
+                let n = nat(&le[0])?;
+                (1..=6).contains(&n).then_some(())?;
+                (n, g.app(&or[1], "bind_rel", 5)?.to_vec())
             }
-            None => (false, g.app(&mp[0], "bind_rel", 5)?.to_vec()),
+            None => (0, g.app(&mp[0], "bind_rel", 5)?.to_vec()),
         };
         matches!(br[1].node(), Node::BVar(1)).then_some(())?;
         // PROC(x0); KW(x3, x4, x2); the wrapper without x0
@@ -3335,9 +3351,10 @@ pub fn translate(args: &[String]) -> CResult {
         let mut wa = vec![q_t.clone()];
         wa.extend(rest);
         let wrap = g.mk("mkprog", vec![g.mk("bind_rel", wa)]);
-        Some((guarded, proc, kw, wrap))
+        Some((nargs, proc, kw, wrap))
     })();
-    let (guarded, proc, kw, wrap) = parts.ok_or_else(|| format!("`{}`: not a procedure's spec of one argument or none", spec_name))?;
+    let (nargs, proc, kw, wrap) = parts.ok_or_else(|| format!("`{}`: not a procedure's spec", spec_name))?;
+    let guarded = nargs > 0;
     g.kw = kw.clone();
     // (the result's width: the wrapper's gimple.result(N, ..))
     fn result_bits(g: &Gen, t: &Term) -> Option<u128> {
@@ -3351,68 +3368,80 @@ pub fn translate(args: &[String]) -> CResult {
     }
     g.rbytes = result_bits(&g, &kw).unwrap_or(0) / 8;
 
-    // the entry: mov [rsp + d], edi / rdi (the argument's n bytes); none
-    // without arguments (the first point the entry itself)
-    let (e_len, e_name) = (g.insns[&entry].len, g.insns[&entry].name.clone());
-    // (a frame first: sub rsp, k (k <= 8), the store after it)
-    let sub = (|| {
+    // the frame: `sub rsp, k` at the entry (or none); fd, the deepest byte
+    // below the entry's rsp the function's stack accesses reach
+    let k0 = (|| {
         let i = &g.insns[&entry];
         let x = (i.row == 60).then(|| g.pairs(&i.fields, 5)).flatten()?;
         let (t, r) = g.tag(&x[2])?;
         (nat(&x[0])? == 8 && nat(&x[1])? == 5 && t == 0 && nat(&r)? == 4).then_some(())?;
-        let k = nat(&x[4]).filter(|k| *k <= 8)?;
-        Some((k, x[3].clone()))
+        nat(&x[4])
     })()
-    .filter(|_| guarded);
-    let (fr0, store) = match &sub {
-        Some((k, _)) => (*k, (entry + e_len) % P64),
-        None => (0, entry),
-    };
-    let (s_len, s_name) = (g.insns[&store].len, g.insns[&store].name.clone());
-    let ef = if guarded { g.pairs(&g.insns[&store].fields, 5).ok_or("the entry's fields")? } else { Vec::new() };
-    let (d, n) = if guarded {
-        match (g.insns[&store].row, nat(&ef[0]), nat(&ef[1]), g.rsp_mem(&ef[2])) {
-            (75, Some(n), Some(7), Some(d)) if n == 4 || (n == 8 && sub.is_none()) => (d, n),
-            _ => return Err(format!("the entry {:x} is not `mov [rsp + d], edi` or `rdi` (after a `sub rsp, k`)", store)),
+    .unwrap_or(0);
+    fn rsp_disps(g: &Gen, t: &Term, out: &mut Vec<u128>) {
+        if let Some(d) = g.rsp_mem(t).and_then(|d| nat(&d)) {
+            out.push(d);
+            return;
         }
-    } else {
-        (lit(0), 0)
-    };
-    let dd = nat(&d).ok_or("the entry's displacement")?;
-    // (the argument's home: its offset from the entry's rsp)
-    let dn = (dd + P64 - fr0) % P64;
-    let a2 = if guarded { (store + s_len) % P64 } else { entry };
-    let x = g.mk("bits_of_int", vec![lit(8 * n), g.mk("app", vec![args_t.clone(), lit(0)])]);
-    // (the entry rule, the argument register's value stored)
-    let (entry_rule, arg_reg) = if n == 8 { ("tr.entry1_64", "app(app(s, \"gpr\"), 7)".to_string()) } else { ("tr.entry1_32", "bits_slice(app(app(s, \"gpr\"), 7), 31, 0)".to_string()) };
+        if let Node::App(_, a) = t.node() {
+            for x in a.iter() {
+                rsp_disps(g, x, out);
+            }
+        }
+    }
+    let mut fd = k0;
+    for i in g.insns.values() {
+        let mut ds = Vec::new();
+        rsp_disps(&g, &i.fields, &mut ds);
+        for d in ds {
+            let c = (d + P64 - k0) % P64;
+            if c >= P64 / 2 {
+                fd = fd.max(P64 - c);
+            }
+        }
+    }
+    if fd > 65536 {
+        return Err(format!("a frame of {} bytes: beyond tr.FMAX", fd));
+    }
+    g.fd = fd;
+
+    // the entry: the arguments in their registers (64 bits each); the
+    // prologue is instructions as any
     let q0raw = proc.instantiate_params(&[args_t.clone()], &g.env.binders_fn());
     let Node::Var(qv, _) = q_t.node() else { unreachable!() };
     let wrap_q0 = wrap.subst_var(*qv, &q0raw, &g.env.binders_fn());
-    let mut hsm0 = BTreeMap::new();
-    let xn = if guarded { g.value(&x) } else { lit(0) };
-    if guarded {
-        hsm0.insert(dn, (n, xn.clone()));
-    }
     let q0 = g.canon(&q0raw);
     let i0 = g.new_q(q0);
-
-    // the proof
-    let st0 = St {
-        a: a2,
-        fr: fr0,
+    let argregs = [7u128, 6, 2, 1, 8, 9];
+    let mut st0 = St {
+        a: entry,
+        fr: 0,
         regs: Vec::new(),
         rs: "empty".into(),
-        ds: "V".into(),
+        ds: fd.to_string(),
         w: g.w.clone(),
         wn: "W".into(),
         hvu: "hvu".into(),
         hw: "hW".into(),
-        hsm: hsm0,
-        hst: if guarded { "HS".into() } else { "empty".into() },
+        hsm: BTreeMap::new(),
+        hst: "empty".into(),
         lp: None,
         spec: Spec::Proc(i0),
         hyps: Vec::new(),
     };
+    // (the registers' map, as a function of the arguments x0)
+    let mut rs_maps = vec!["empty".to_string()];
+    for i in 0..nargs {
+        let r = argregs[i as usize];
+        let v = g.mk("bits_of_int", vec![lit(64), g.mk("app", vec![args_t.clone(), lit(i)])]);
+        st0 = g.set_reg(&st0, entry, r, 8, v);
+        let prev = rs_maps.last().unwrap().clone();
+        rs_maps.push(format!("fn_update({prev}, {r}, pair(8, bits_of_int(64, app(x0, {i}))))"));
+    }
+    let rs_lam = rs_maps.last().unwrap().clone();
+    let at_args = |t: &str| t.replace("app(x0, ", "app(args, ");
+
+    // the proof
     let pf = g.prove(st0)?;
 
     // the text
@@ -3423,16 +3452,9 @@ pub fn translate(args: &[String]) -> CResult {
         "A call: proofs/translate_call.core's\n// tr.call1, the callee's contract a premise. Checked after proofs/translate_effects.core.".to_string()
     };
     o.push_str(&format!(
-        "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, the rules)\n// Each step: a rule of proofs/translate.core or proofs/translate_store_loop.core\n// with its instance -- a spec reduction, or an instruction (its decode\n// fact, build/leaf_steps.core; literal facts, simp(L)) -- then the next\n// point. {}\n\n",
+        "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, the rules)\n// Each step: a rule of proofs/translate.core, proofs/translate_frame.core or\n// proofs/translate_store_loop.core with its instance -- a spec reduction, or an\n// instruction (its decode fact, build/leaf_steps.core; literal facts, simp(L))\n// -- then the next point. {}\n\n",
         fname, fname, spec_name, prefix, after
     ));
-    let _ = &arg_reg;
-    // (the static bytes the spec reads and writes: among the statics, no
-    // stack pages)
-    let srange = g.statics_range;
-    if let Some((lo, hi)) = srange {
-        o.push_str(&format!("def {p}.statics(st) := all a. a in omega -> int_le({lo}, a) -> int_lt(a, {hi}) -> a in st\n\n", p = prefix));
-    }
     for c in g.imuls.clone() {
         o.push_str(&format!(
             "theorem {p}.imul_{c}: tr.imul_by({c})\nproof\n  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, {c})), 0) = bits_mul(32, y, {c}) proof\n    fix y\n    assume hy: y in bits(32)\n    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), {c}), 0) = bits_mul(32, y, {c}) proof\n      assume hl: int_lt(y, 2147483648)\n      show by defs(simp(hy, hl), bits_add, bits_mul, sint)\n    qed\n    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), {c}), 0) = bits_mul(32, y, {c}) proof\n      assume hl: !int_lt(y, 2147483648)\n      have e: int_mod(int_mul(int_sub(y, 4294967296), {c}), 4294967296) = int_mod(int_mul(y, {c}), 4294967296) by arith(hy)\n      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)\n    qed\n    have e: bits_add(32, int_mul(sint(32, y), {c}), 0) = bits_mul(32, y, {c}) by taut(c1, c2)\n    show by simp(e)\n  qed\n  show by defs(g, tr.imul_by)\nqed\n\n",
@@ -3456,45 +3478,31 @@ pub fn translate(args: &[String]) -> CResult {
         ));
     }
     let p = &prefix;
-    // (the static bytes the spec stores to: a premise on the statics)
-    let sp = if srange.is_some() { format!("{p}.statics(statics) -> ") } else { String::new() };
     // (the callee: its contract on the code with the function's, its spec
     // typed and keeping I/O and code -- premises)
     let (lb, lc) = (g.lbase.clone(), g.lcode.clone());
     let cprem = match &callee_text {
-        Some((f, _)) => format!(
-            "tr.implements_at({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0, 1) -> "
-        ),
+        Some((f, _)) => format!("tr.implements_at({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0, 1) -> "),
         None => String::new(),
     };
     let call = if callee_text.is_some() { "all G0. " } else { "" };
-    if callee_text.is_some() && (sub.is_none() || gnames.len() != 1) {
-        return Err("a caller: only with a frame (sub rsp, k) and one callee so far".into());
+    if callee_text.is_some() && gnames.len() != 1 {
+        return Err("a caller: one callee so far".into());
     }
+    let (b, c) = (g.base.clone(), g.code.clone());
+    let rs_args = at_args(&rs_lam);
     if guarded {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}{call}{cprem}all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->\n  abi.view(s, v, mem) in univ(1) -> abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> abi.view(s, v, mem) in abi.World ->\n  tr.pt(s, v, {b}, {c}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), v, empty,\n    {}, abi.view(s, v, mem))\nproof\n",
-            fr0,
-            a2,
-            dn,
-            n,
-            8 * n,
+            "theorem {p}.body: all statics. {call}{cprem}all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le({nargs}, seq_len(args)) ->\n  abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> abi.view(s, v, mem) in univ(1) ->\n  tr.pt(s, v, {b}, {c}, 0, {b}, empty, {fd}, {rs_args},\n    {}, abi.view(s, v, mem))\nproof\n",
             g.print(&wrap_q0),
-            b = g.base,
-            c = g.code,
         ));
     } else {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> abi.view(s, v, mem) in univ(1) ->\n  tr.pt(s, v, {b}, {c}, 0, {b}, empty, v, empty,\n    {}, abi.view(s, v, mem))\nproof\n",
+            "theorem {p}.body: all statics. {call}{cprem}all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine ->\n  abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> abi.view(s, v, mem) in univ(1) ->\n  tr.pt(s, v, {b}, {c}, 0, {b}, empty, {fd}, empty,\n    {}, abi.view(s, v, mem))\nproof\n",
             g.print(&wrap_q0),
-            b = g.base,
-            c = g.code,
         ));
     }
     o.push_str("  fix statics\n");
-    if srange.is_some() {
-        o.push_str(&format!("  assume hst: {p}.statics(statics)\n"));
-    }
     if let Some((f, _)) = &callee_text {
         o.push_str(&format!(
             "  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n"
@@ -3502,19 +3510,10 @@ pub fn translate(args: &[String]) -> CResult {
     }
     o.push_str("  fix args\n  fix v\n  fix mem\n  fix s\n  assume hA: args in abi.ARGS\n  assume hvo: v in set_type(omega)\n  assume hmv: mem in x86_64_linux.Vm\n  assume hM: s in x86_64_linux.Machine\n");
     if guarded {
-        o.push_str("  assume hg: ord_le(1, seq_len(args))\n");
-        o.push_str("  assume hvu: abi.view(s, v, mem) in univ(1)\n");
-        o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", lb, lc));
-        o.push_str("  assume hWw: abi.view(s, v, mem) in abi.World\n");
-    } else {
-        o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", g.base, g.code));
-        o.push_str("  assume hvu: abi.view(s, v, mem) in univ(1)\n");
+        o.push_str(&format!("  assume hg: ord_le({nargs}, seq_len(args))\n"));
     }
-    if let Some((lo, hi)) = srange {
-        o.push_str(&format!(
-            "  // the static bytes: no stack pages\n  have ls: all x0. x0 in omega -> x0 in statics -> !abi.stack_page(app(s, \"vm\"), int_div(x0, 4096)) by simp(expand(hl, abi.loaded))\n  have hns: all a. a in omega -> int_le({lo}, a) -> int_lt(a, {hi}) -> !abi.stack_page(app(s, \"vm\"), int_div(a, 4096)) proof\n    fix a\n    assume a1: a in omega\n    assume a2: int_le({lo}, a)\n    assume a3: int_lt(a, {hi})\n    have i := mp(all_elim(expand(hst, {p}.statics), {{a}}), a1, a2, a3)\n    show := mp(all_elim(ls, {{a}}), a1, i)\n  qed\n"
-        ));
-    }
+    o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics)\n"));
+    o.push_str("  assume hvu: abi.view(s, v, mem) in univ(1)\n");
     let mut l = vec!["tr.dom_upd".to_string(), "tr.dom_keep".to_string()];
     let mut lt = vec!["(all f k v. k in dom(fn_update(f, k, v)))".to_string(), "(all f k j v. k in dom(f) -> !(k = j) -> k in dom(fn_update(f, j, v)))".to_string()];
     for r in &g.scratch {
@@ -3528,11 +3527,7 @@ pub fn translate(args: &[String]) -> CResult {
     o.push_str(&format!("  // the wrapper: the procedure's rest q, its result returned\n  let KW(x0, x1, x2) := {}\n", kwb));
     o.push_str(&format!("  let WRAP(q) := {}\n", g.print(&wrap)));
     o.push_str("  let V := v\n  let W := abi.view(s, v, mem)\n");
-    if !guarded {
-        o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) proof\n    have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)\n    show by taut(wt, hvu)\n  qed\n");
-    } else {
-        o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) by taut(hWw, hvu)\n");
-    }
+    o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) proof\n    have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)\n    show by taut(wt, hvu)\n  qed\n");
     if !g.zs.is_empty() {
         o.push_str("  // the choices' witnesses (no machine value is one)\n");
         for z in &g.zs {
@@ -3542,9 +3537,6 @@ pub fn translate(args: &[String]) -> CResult {
     o.push_str("  // the values\n");
     for (v, t) in &g.vals {
         o.push_str(&format!("  let {} := {}\n", g.env.vars[*v as usize].name, g.print(t)));
-    }
-    if guarded {
-        o.push_str(&format!("  let HS := fn_update(empty, {}, pair({}, {}))\n", dn, n, g.print(&xn)));
     }
     o.push_str("  // the spec's rest at each point\n");
     for (i, (n, t)) in g.qs.iter().enumerate() {
@@ -3564,109 +3556,69 @@ pub fn translate(args: &[String]) -> CResult {
     }
     o.push_str(&format!("  show := {}\nqed\n\n", pf.expr));
     let ql = g.lambda(1, &proc);
-    let (hs1, body) = match srange {
-        Some(_) => (format!("  assume hst: {p}.statics(statics)\n"), format!("mp(all_elim({p}.body, {{statics}}), hst)")),
-        None => (String::new(), format!("all_elim({p}.body, {{statics}})")),
+    // (the code the contract holds: the function's own, a callee's before it)
+    let hsub = match &callee_text {
+        None => format!("  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    show by taut(expand(h, abi.loaded))\n  qed\n"),
+        Some((_, cc)) => {
+            // (a code's bytes: its definition's literal)
+            let lit_of = |g: &Gen, code: &str| -> Result<String, String> {
+                let name = code.strip_suffix("()").unwrap_or(code);
+                let sym = *g.env.sym_by_name.get(name).ok_or_else(|| format!("no code `{}`", name))?;
+                let SymKind::Defined { body, .. } = &g.env.syms[sym as usize].kind else { return Err(format!("`{}` is not a definition", name)) };
+                let a = g.app(body, "bytes_seq", 1).ok_or_else(|| format!("`{}`: not bytes", name))?;
+                Ok(g.print(&a[0]))
+            };
+            let (bf, bo) = (lit_of(&g, cc)?, lit_of(&g, &g.code)?);
+            let (cname, oname) = (cc.strip_suffix("()").unwrap_or(cc).to_string(), g.code.strip_suffix("()").unwrap_or(&g.code).to_string());
+            format!(
+                "  // the function's own code: after its callee's\n  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have h2: abi.loaded(vm, {lb}, seq_concat(bytes_seq({bf}), bytes_seq({bo})), statics) by defs(h, {cname}, {oname})\n    have l := apply(tr.loaded_after, {{vm}}, {{{bf}}}, {{{bo}}}, {{{lb}}}, {{statics}}, simp(), simp(), simp(), h2)\n    show by defs(simp(expand(l, abi.loaded)), {oname})\n  qed\n"
+            )
+        }
     };
-    if let (Some((k, z0)), Some((f, cc))) = (&sub, &callee_text) {
-        // (a code's bytes: its definition's literal)
-        let lit_of = |g: &Gen, code: &str| -> Result<String, String> {
-            let name = code.strip_suffix("()").unwrap_or(code);
-            let sym = *g.env.sym_by_name.get(name).ok_or_else(|| format!("no code `{}`", name))?;
-            let SymKind::Defined { body, .. } = &g.env.syms[sym as usize].kind else { return Err(format!("`{}` is not a definition", name)) };
-            let a = g.app(body, "bytes_seq", 1).ok_or_else(|| format!("`{}`: not bytes", name))?;
-            Ok(g.print(&a[0]))
-        };
-        let (bf, bo) = (lit_of(&g, cc)?, lit_of(&g, &g.code)?);
-        let (cname, oname) = (cc.strip_suffix("()").unwrap_or(cc).to_string(), g.code.strip_suffix("()").unwrap_or(&g.code).to_string());
-        let bodyc = match srange {
-            Some(_) => format!("mp(all_elim(mp(all_elim({p}.body, {{statics}}), hst), {{G0}}), hcall0, htyp0, hio0)"),
-            None => format!("mp(all_elim({p}.body, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
-        };
-        o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}all G0. {cprem}tr.implements_at({b}, {sapp}, {lb}, {lc}, statics)\nproof\n  fix statics\n{hs1}  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n  // the function's own code: after its callee's\n  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have h2: abi.loaded(vm, {lb}, seq_concat(bytes_seq({bf}), bytes_seq({bo})), statics) by defs(h, {cname}, {oname})\n    have l := apply(tr.loaded_after, {{vm}}, {{{bf}}}, {{{bo}}}, {{{lb}}}, {{statics}}, simp(), simp(), simp(), h2)\n    show by defs(simp(expand(l, abi.loaded)), {oname})\n  qed\n  have m0 := mp(tr.entry1_32s_w[lb := {lb}, lc := {lc}, base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc2}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), hsub, {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {bodyc})\n",
-            b = g.base,
-            c = g.code,
-            sapp = spec_app,
-            len0 = e_len,
-            z0 = g.print(z0),
-            a1 = store,
-            len = s_len,
-            d = dd,
-            cc2 = dn,
-            z1 = g.print(&ef[3]),
-            z2 = g.print(&ef[4]),
-            a2 = a2,
-            at0 = e_name,
-            at1 = s_name,
-        ));
-    } else if let Some((k, z0)) = &sub {
-        o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry1_32s[base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {body})\n",
-            b = g.base,
-            c = g.code,
-            spec = spec_name,
-            len0 = e_len,
-            z0 = g.print(z0),
-            a1 = store,
-            len = s_len,
-            d = dd,
-            cc = dn,
-            z1 = g.print(&ef[3]),
-            z2 = g.print(&ef[4]),
-            a2 = a2,
-            at0 = e_name,
-            at1 = s_name,
-        ));
-    } else if guarded {
-        o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp({er}[base := {b}, code := {c}, statics := statics, f := {b}, len := {len}, d := {d}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), {at0}, simp(), simp(), simp(), simp(), {body})\n",
-            er = entry_rule,
-            b = g.base,
-            c = g.code,
-            spec = spec_name,
-            len = e_len,
-            d = dn,
-            z1 = g.print(&ef[3]),
-            z2 = g.print(&ef[4]),
-            a2 = a2,
-            at0 = e_name,
-        ));
-    } else {
-        // (no arguments: the procedure itself)
-        let q0p = g.print(&q0raw);
-        o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}tr.implements_at({b}, {spec}(), {b}, {c}, statics)\nproof\n  fix statics\n{hs1}  have m0 := mp(tr.entry0[base := {b}, code := {c}, statics := statics, f := {b}, q := {q0p}, kw := {kwl}],\n    simp(), {body})\n",
-            b = g.base,
-            c = g.code,
-            spec = spec_name,
-        ));
-        let _ = (e_len, e_name);
-    }
-    o.push_str(&format!(
-        "  have m: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->\n      abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> app(s, \"rip\") = {b} -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->\n      tr.matches_t({sapp}, args, objs, mem, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
-        b = g.base,
-        sapp = spec_app,
-        spec = spec_name
-    ));
-    // (the ABI's contract, from the bridge's)
-    let imp = match (srange, &callee_text) {
-        (Some(_), None) => format!("mp(all_elim({p}.implements, {{statics}}), hst)"),
-        (None, None) => format!("all_elim({p}.implements, {{statics}})"),
-        (Some(_), Some(_)) => format!("mp(all_elim(mp(all_elim({p}.implements, {{statics}}), hst), {{G0}}), hcall0, htyp0, hio0)"),
-        (None, Some(_)) => format!("mp(all_elim({p}.implements, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
-    };
-    let (cfix, cass) = match &callee_text {
+    let (cfix, cass, bodyc) = match &callee_text {
         Some((f, _)) => (
             "all G0. ".to_string(),
             format!("  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n"),
+            format!("mp(all_elim({p}.body, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
         ),
-        None => (String::new(), String::new()),
+        None => (String::new(), String::new(), format!("all_elim({p}.body, {{statics}})")),
+    };
+    o.push_str(&format!("theorem {p}.implements: all statics. {cfix}{cprem}tr.implements_at({b}, {spec_app}, {lb}, {lc}, statics)\nproof\n  fix statics\n{cass}{hsub}"));
+    if guarded {
+        // (the arguments' registers at the entry: the map's entries one by one)
+        let mut h = format!(
+            "  have hregs: all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> ord_le({nargs}, seq_len(args)) -> tr.regs(s, {rs_args}) proof\n    fix args\n    fix s\n    assume hA hM he hg\n    have ln: seq_len(args) in omega by simp(hA)\n    have r0 := all_elim(tr.regs_empty, {{s}})\n"
+        );
+        for i in 0..nargs {
+            let r = argregs[i as usize];
+            let prev = at_args(&rs_maps[i as usize]);
+            h.push_str(&format!(
+                "    have a{i} := apply(tr.arg_reg, {{s}}, {{args}}, {{{i}}}, {{{r}}}, hM, he, simp(), (int_lt({i}, seq_len(args)) by arith(ln, expand(hg, ord_le))), simp(tr.argregs), simp())\n    have r{} := apply(tr.regs_add, {{s}}, {{{prev}}}, {{{r}}}, {{8}}, {{bits_of_int(64, app(args, {i}))}}, r{i}, simp(a{i}), simp(a{i}))\n",
+                i + 1
+            ));
+        }
+        h.push_str(&format!("    show := r{nargs}\n  qed\n"));
+        o.push_str(&h);
+        o.push_str(&format!(
+            "  have m0 := mp(tr.entry_n[lb := {lb}, lc := {lc}, base := {b}, code := {c}, statics := statics, f := {b}, n := {nargs}, fd := {fd}, rs := x0. {rs_lam},\n    q := {ql}, kw := {kwl}],\n    simp(), hsub, hregs, {bodyc})\n"
+        ));
+    } else {
+        if callee_text.is_some() {
+            return Err("a caller without arguments: not covered yet".into());
+        }
+        let q0p = g.print(&q0raw);
+        o.push_str(&format!("  have m0 := mp(tr.entry0[base := {b}, code := {c}, statics := statics, f := {b}, fd := {fd}, q := {q0p}, kw := {kwl}],\n    simp(), {bodyc})\n"));
+    }
+    o.push_str(&format!(
+        "  have m: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->\n      abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> app(s, \"rip\") = {b} -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->\n      tr.matches_t({spec_app}, args, objs, mem, s, o) by defs(m0, {spec_name})\n  show by defs(m, tr.implements_at)\nqed\n\n"
+    ));
+    // (the ABI's contract, from the bridge's)
+    let imp = match &callee_text {
+        None => format!("all_elim({p}.implements, {{statics}})"),
+        Some(_) => format!("mp(all_elim({p}.implements, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
     };
     o.push_str(&format!(
-        "theorem {p}.implements_abi: all statics. {sp}{cfix}{cprem}abi.implements2_at(single(empty), {b}, {sapp}, {lb}, {lc}, statics)\nproof\n  fix statics\n{hs1}{cass}  show := apply(tr.implements_abi, {imp})\nqed\n",
-        b = g.base,
-        sapp = spec_app,
+        "theorem {p}.implements_abi: all statics. {cfix}{cprem}abi.implements2_at(single(empty), {b}, {spec_app}, {lb}, {lc}, statics)\nproof\n  fix statics\n{cass}  show := apply(tr.implements_abi, {imp})\nqed\n"
     ));
     // (as a callee: tr.callee_io from the spec's structure; a caller's
     // waits for its callees')
@@ -3680,11 +3632,6 @@ pub fn translate(args: &[String]) -> CResult {
             Err(e) => o.push_str(&format!("\n// no tr.callee_io yet: {}\n", e)),
         }
     }
-    // (the statics' range in the proofs that name it)
-    let o = match srange {
-        Some((lo, hi)) => o.replace("{SLO}", &lo.to_string()).replace("{SHI}", &hi.to_string()),
-        None => o,
-    };
     std::fs::write(&out_path, o).map_err(|e| format!("{}: {}", out_path, e))?;
     println!("{}: {} spec rests, {} values, {} lines", out_path, g.qs.len(), g.vals.len(), pf.lines.len());
     Ok(())
