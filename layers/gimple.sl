@@ -363,14 +363,17 @@ fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec 
 // its stack objects, which it may reach; the caller's frame is not in the
 // world). A call with the thread pointer broken (the word at fs:0 not
 // pointing to itself, as the ABI requires at every call) or a mapping in a
-// stack's guard gap is undefined. Every call may overflow the stack
-// (`stack_overflow`, the ABI's: no undefined behavior), before the callee
-// runs and after it returns.
+// stack's guard gap is undefined, and so is a callee that changed a stack
+// page (unmapped or remapped the stack: where its callers' frames are).
+// Every call may overflow the stack (`stack_overflow`, the ABI's: no
+// undefined behavior), before the callee runs and after it returns.
 proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   either { raise stack_overflow } or { }
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !(thread_ok(vm, fs_base) && stack_gap_free(vm)) { undefined }
+  let pages0 = vm.pages
   let (r0, r1) = g(regs)
+  if !(all p: PageNo. pages0[p] != none && pages0[p].value.kind = stack -> vm.pages[p] = pages0[p]) { undefined }
   // (the callee may crash after its last I/O -- its spec then returns,
   // with the I/O the crash has)
   either { raise stack_overflow } or { }
