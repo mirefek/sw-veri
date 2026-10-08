@@ -754,7 +754,8 @@ cargo build --release  (in slc/)
 slc parse  [PATH...]                      parse (default: spec/ and layers/)
 slc check  [PATH...]                      parse, resolve, type-check, elaborate
 slc elab   [PATH...] -o OUT.core          write the elaborated definitions
-slc kernel-check core/prelude.core X.core re-check a core file with the kernel
+slc kernel-check [--no-cache] core/prelude.core X.core...
+                                          check core files and their proofs (docs/proof-checker.md)
 slc decode ELF SYMBOL                     disassemble with the spec's own table
 slc coverage ELF SYMBOL...                reachable instructions / syscalls not modelled
 slc claim malloc --elf ELF -o OUT.core    state the claim (+ OUT.summary.txt)
