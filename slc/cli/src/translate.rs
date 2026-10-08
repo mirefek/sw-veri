@@ -945,7 +945,7 @@ impl<'e> Gen<'e> {
     /// or a helper's call whose body is one (`mkprog(x0 x1. bind_rel(st8(..),
     /// x0, x2 x3. x1 = ok(x2, empty), ..))`)
     fn store_op(&mut self, op: &Term) -> Result<Option<StoreOp>, String> {
-        let is_store = |g: &Gen, t: &Term| g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st32", 3).is_some();
+        let is_store = |g: &Gen, t: &Term| g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some();
         let (inner, helper) = if is_store(self, op) {
             (op.clone(), None)
         } else {
@@ -969,13 +969,16 @@ impl<'e> Gen<'e> {
             let Some(inner) = inner else { return Ok(None) };
             (inner, Some(fname))
         };
-        let (n, x) = match self.app(&inner, "gimple.st8", 3) {
-            Some(x) => (1, x.to_vec()),
-            None => (4, self.app(&inner, "gimple.st32", 3).unwrap().to_vec()),
+        let (n, x) = match (self.app(&inner, "gimple.st8", 3), self.app(&inner, "gimple.st32", 3)) {
+            (Some(x), _) => (1, x.to_vec()),
+            (_, Some(x)) => (4, x.to_vec()),
+            _ => (8, self.app(&inner, "gimple.st64", 3).unwrap().to_vec()),
         };
         let (p, off, v) = (x[0].clone(), x[1].clone(), x[2].clone());
         let addr = match (self.eval_lit(&p), self.eval_lit(&off)) {
             (Some(pv), Some(ov)) => lit((pv + ov) % P64),
+            // (a 64-bit field: at p + off, as the machine's [b + d])
+            _ if n == 8 && nat(&off).is_some() => self.mk("bits_add", vec![lit(64), p.clone(), off.clone()]),
             _ if nat(&off) == Some(0) => p.clone(),
             _ => return Err(format!("a store at {} + {}: not covered yet", self.print(&p), self.print(&off))),
         };
@@ -1028,8 +1031,11 @@ impl<'e> Gen<'e> {
         let w2 = self.var(&wn2);
         let (wn, ap, vp) = (st.wn.clone(), self.print(&so.addr), self.print(&so.v));
         let w2t = format!("fn_update({wn}, \"vm\", fn_update(app({wn}, \"vm\"), \"bytes\", x86_64_linux.store_le(app(app({wn}, \"vm\"), \"bytes\"), {ap}, {n}, {vp})))");
+        // (a value as any: the values read from it come after it)
+        let w2term = self.parse(&w2t)?;
+        let Node::Var(w2v, _) = w2.node() else { unreachable!() };
+        self.vals.push((*w2v, w2term));
         let pre = vec![
-            format!("let {wn2} := {w2t}"),
             format!("have {hw2} := apply(tr.world_store, {{{wn}}}, {{{ap}}}, {{{n}}}, {{{vp}}}, taut({}), taut({}), simp(L))", st.hw, st.hw),
             format!("have {hv2}: {wn2} in univ(1) by taut({hw2})"),
         ];
@@ -2143,6 +2149,24 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_home(st, a2, cn, n, xv);
                     return self.then(t, st2);
                 }
+                // mov [b + d], r64 (b holding a pointer): the spec's 8-byte field store
+                if let (Some((bn, b, d)), Some(8)) = (self.base_disp(&x[2]).filter(|z| z.0 != 4), nat(&x[0])) {
+                    let bv = self.need_reg(st, bn, 8)?;
+                    let u = self.need_reg(st, g, 8)?;
+                    let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
+                    let (hc, v, pre, st2, red, _) = self.spec_store(st, &ad, 8)?;
+                    if self.canon(&v) != self.canon(&u) {
+                        return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&u), self.print(&v)));
+                    }
+                    let t = self.head("store64_bd", a, insn)
+                        + &self.terms(&[&x[1], &b, &d, &x[3], &x[4], &bv, &u])
+                        + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
+                        + &", simp(L)".repeat(10)
+                        + &format!(", simp(L, {hc}), simp(), {red}, {{NEXT}})");
+                    let mut st3 = st2;
+                    st3.a = a2;
+                    return self.then_pre(t, st3, pre);
+                }
                 let Some((0, h)) = self.tag(&x[2]) else { return Err(bad("a store to memory other than a home")) };
                 let hn = reg(&h)?;
                 let u = self.need_reg(st, g, 4)?;
@@ -2196,6 +2220,45 @@ impl<'e> Gen<'e> {
                 let r = self.value(&r);
                 let st2 = self.set_home(st, a2, cn, 4, r);
                 self.then(t, st2)
+            }
+            // cmp [rsp + d], r64 (the home's word against g's); je / jne t
+            56 => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not cmp [rsp + d], r64"))?;
+                if nat(&x[0]) != Some(8) || x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                    return Err(bad("not cmp qword [rsp + d], r64"));
+                }
+                let g = reg(&x[1])?;
+                let cn = self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?);
+                let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
+                let u = self.need_reg(st, g, 8)?;
+                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
+                let eq = self.mk("eq", vec![xv.clone(), u.clone()]);
+                let (rule, c) = match cc {
+                    4 => ("cmp64_hr_je", self.mk("not", vec![eq])),
+                    5 => ("cmp64_hr_jne", eq),
+                    _ => return Err(bad("cmp not followed by je or jne")),
+                };
+                let text = format!(
+                    "mp(tr.{rule}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                    self.base,
+                    self.code,
+                    self.fr,
+                    a,
+                    a2,
+                    a3,
+                    tt,
+                    insn.len,
+                    jn,
+                    self.terms(&[&x[1], &d, &lit(cn), &j, &xv, &u]),
+                    st.ds,
+                    st.rs,
+                    self.p(&st.spec),
+                    insn.name,
+                    self.insns[&a2].name,
+                    ", simp(L)".repeat(13)
+                );
+                self.branch(st, c, a3, tt, text)
             }
             // sub r32, r32 (the source's low 32 bits)
             50 => {
@@ -3004,6 +3067,31 @@ impl<'e> Gen<'e> {
                 st3.a = a2;
                 self.then_pre(t, st3, pre)
             }
+            // mov qword [b + d], imm32 (b holding a pointer): the spec's 8-byte
+            // field store of the immediate sign-extended
+            77 if self.pairs(&f, 4).and_then(|x| self.base_disp(&x[1])).map_or(false, |z| z.0 != 4) => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                let (bn, b, d) = self.base_disp(&x[1]).ok_or_else(|| bad("not [b + d]"))?;
+                if nat(&x[0]) != Some(8) || x[2] != x[1] {
+                    return Err(bad("not mov qword [b + d], imm32"));
+                }
+                let k = nat(&x[3]).ok_or_else(|| bad("an immediate that is not a literal"))?;
+                let kk = if k >= 1 << 31 { k + (P64 - (1 << 32)) } else { k };
+                let bv = self.need_reg(st, bn, 8)?;
+                let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
+                let (hc, v, pre, st2, red, _) = self.spec_store(st, &ad, 8)?;
+                if self.eval_lit(&v) != Some(kk) {
+                    return Err(format!("{:x}: the machine stores {}, the spec {}", a, kk, self.print(&v)));
+                }
+                let t = self.head("store64i_bd", a, insn)
+                    + &self.terms(&[&b, &d, &x[3], &lit(kk), &bv])
+                    + &format!(", {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {}", st.ds, st.rs, self.p(&st.spec), self.p(&st2.spec), st2.wn, insn.name)
+                    + &", simp(L)".repeat(9)
+                    + &format!(", simp(L, {hc}), simp(), {red}, {{NEXT}})");
+                let mut st3 = st2;
+                st3.a = a2;
+                self.then_pre(t, st3, pre)
+            }
             // mov dword [rsp + d], imm32: the home d := k (the frame written)
             77 => {
                 let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
@@ -3056,11 +3144,12 @@ impl<'e> Gen<'e> {
 
     /// after a write of n bytes x to the home c: the homes it left, and it
     fn set_home(&mut self, st: &St, a2: u128, c: u128, n: u128, x: Term) -> St {
-        let (mut kept, _, _) = self.hkeep(st, c, n);
-        kept.insert(c, (n, x));
+        // (the rules' map after: the kept ones', then the stored home)
+        let (mut kept, kt, _) = self.hkeep(st, c, n);
         let mut st2 = st.clone();
         st2.a = a2;
-        st2.hst = self.hs_text(&kept);
+        st2.hst = format!("fn_update({}, {}, pair({}, {}))", kt, c, n, self.print(&x));
+        kept.insert(c, (n, x));
         st2.hsm = kept;
         st2
     }

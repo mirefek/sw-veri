@@ -83,7 +83,7 @@ fn step_theorems_of_get_slot_index_prove() {
 }
 
 /// C1 for a_ctz_32, is_bouncing, get_slot_index, get_stride, step_seq,
-/// upgradelock, resetlock, decay_bounces and a_clz_32 (calling a_ctz_32, its
+/// upgradelock, resetlock, decay_bounces, dequeue and a_clz_32 (calling a_ctz_32, its
 /// contract a premise; linked with a_ctz_32's in proofs/mallocng_link.core)
 /// by translation: `slc translate` writes the
 /// certificates (the committed proofs/FN_tr.core, unchanged), and they
@@ -102,7 +102,7 @@ fn translations_are_generated_and_check() {
     let tmp = std::env::temp_dir();
     let id = std::process::id();
     let (steps, gimple) = (tmp.join(format!("slc-tr-steps-{}.core", id)), tmp.join(format!("slc-tr-gimple-{}.core", id)));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "-o"]).arg(&steps).output().unwrap();
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue", "-o"]).arg(&steps).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
@@ -120,7 +120,7 @@ fn translations_are_generated_and_check() {
             .map(|f| f.into()),
     );
     let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz")] {
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt")] {
         let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
         let t = Command::new(slc)
             .current_dir(&root)
@@ -150,6 +150,7 @@ fn translations_are_generated_and_check() {
         ("resetlock", "0 definitions, 6 theorems"),
         ("decay_bounces", "0 definitions, 6 theorems"),
         ("a_clz_32", "0 definitions, 3 theorems"),
+        ("dequeue", "0 definitions, 10 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 3 theorems, 0 conditional theorems, 0 open lemmas");
