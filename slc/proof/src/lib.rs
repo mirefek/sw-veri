@@ -633,14 +633,19 @@ impl State {
                         },
                     };
                     let s = self.eval(env, lg, &parse_pe(p)?)?;
-                    if let Some(g) = goal {
-                        let g = self.term(env, &g)?;
-                        if s.concl() != &g {
-                            let pp = Printer::new(env);
-                            return err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(&g), pp.mismatch(&g, s.concl())));
+                    // (the fact's free schematic variables fitted to the
+                    // stated formula, or show's current goal)
+                    match goal {
+                        Some(g) => {
+                            let g = self.term(env, &g)?;
+                            self.check(env, s, &g)?
                         }
+                        None if kw == "show" => match self.goal.clone() {
+                            Some(g) => self.fit(env, s, &g)?,
+                            None => s,
+                        },
+                        None => s,
                     }
-                    s
                 };
                 if let Some(n) = name {
                     self.facts.push((n, s.clone()));
@@ -821,7 +826,10 @@ impl State {
                 let unfolded = self.unfold_sel(env, goal, &syms, &occ)?;
                 let s = match p {
                     PE::Rule(n, _) if GOAL_RULES.contains(&n.as_str()) => self.by(env, lg, &unfolded, p)?,
-                    _ => self.eval(env, lg, p)?,
+                    _ => {
+                        let s = self.eval(env, lg, p)?;
+                        self.fit(env, s, &unfolded)?
+                    }
                 };
                 Seq::conv(env, &s, goal, &syms)
             }
@@ -852,19 +860,7 @@ impl State {
         }
         // the pattern variables: f's schematic variables (not fixed in this
         // proof, not in its hypotheses), then one per leading `all`
-        let mut pvars: Vec<VarId> = Vec::new();
-        {
-            let (mut vs, mut hv) = (Vec::new(), Vec::new());
-            s.concl().vars(&mut vs);
-            for h in s.hyps() {
-                h.vars(&mut hv);
-            }
-            for v in vs {
-                if !hv.contains(&v) && !self.scope.iter().any(|(_, w)| *w == v) && env.vars[v as usize].arity == 0 && !pvars.contains(&v) {
-                    pvars.push(v);
-                }
-            }
-        }
+        let mut pvars = self.free_vars(&s);
         let mut terms = terms.into_iter();
         while let Node::App(a, _) = s.concl().node() {
             if *a != lg.all {
@@ -921,7 +917,7 @@ impl State {
                 None => {
                     let mut vs = Vec::new();
                     s.concl().vars(&mut vs);
-                    if vs.contains(v) {
+                    if vs.contains(v) && env.vars[*v as usize].arity == 0 {
                         return err(format!("apply: `{}` is not determined (give it as a term `{{t}}`)", env.vars[*v as usize].name));
                     }
                 }
@@ -1004,7 +1000,39 @@ impl State {
         Ok(u)
     }
 
-    fn check(&self, env: &Env, s: Seq, goal: &Term) -> KResult<Seq> {
+    /// The schematic variables of `s` free to instantiate: not fixed in
+    /// this proof, not in its hypotheses.
+    fn free_vars(&self, s: &Seq) -> Vec<VarId> {
+        let (mut vs, mut hv, mut out) = (Vec::new(), Vec::new(), Vec::new());
+        s.concl().vars(&mut vs);
+        for h in s.hyps() {
+            h.vars(&mut hv);
+        }
+        for v in vs {
+            if !hv.contains(&v) && !self.scope.iter().any(|(_, w)| *w == v) && !out.contains(&v) {
+                out.push(v);
+            }
+        }
+        out
+    }
+
+    /// `s` with its free schematic variables instantiated so that it is
+    /// `target`, where they match it (else `s` as it is).
+    fn fit(&self, env: &mut Env, s: Seq, target: &Term) -> KResult<Seq> {
+        let pvars = self.free_vars(&s);
+        let mut binds = Vec::new();
+        if pvars.is_empty() || s.concl() == target || !pmatch(env, s.concl(), target, &pvars, &mut binds) {
+            return Ok(s);
+        }
+        let mut s = s;
+        for (v, t) in binds {
+            s = Seq::inst(env, &s, v, &t)?;
+        }
+        Ok(s)
+    }
+
+    fn check(&self, env: &mut Env, s: Seq, goal: &Term) -> KResult<Seq> {
+        let s = self.fit(env, s, goal)?;
         if s.concl() != goal {
             let pp = Printer::new(env);
             return err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(goal), pp.mismatch(goal, s.concl())));
@@ -1338,24 +1366,66 @@ impl State {
     }
 }
 
-/// Matches the pattern `p` (its variables `pvars`, first-order) with `t`,
-/// extending `binds`.
+/// Matches the pattern `p` (its variables `pvars`) with `t`, extending
+/// `binds`. A variable applied to distinct bound variables (`v(x0, x1)`
+/// under the binders of x0, x1: a higher-order pattern) matches a term
+/// whose bound variables from there are among those, abstracted over them.
 fn pmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>) -> bool {
+    pmatch_at(env, p, t, pvars, binds, 0)
+}
+
+fn pmatch_at(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>, depth: u32) -> bool {
     match (p.node(), t.node()) {
-        (Node::Var(v, a), _) if a.is_empty() && pvars.contains(v) => {
+        (Node::Var(v, a), _) if pvars.contains(v) && pattern_args(a, depth).is_some() => {
+            let idx = pattern_args(a, depth).unwrap();
+            let Some(val) = abstract_bvars(env, t, &idx, 0) else { return false };
             if let Some((_, b)) = binds.iter().find(|(w, _)| w == v) {
-                return b == t;
+                return *b == val;
             }
-            if loose(env, t, 0) {
-                return false;
-            }
-            binds.push((*v, t.clone()));
+            binds.push((*v, val));
             true
         }
-        (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
-        (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
+        (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => {
+            let bs = &env.syms[*f as usize].binders;
+            a.iter().zip(b).enumerate().all(|(i, (x, y))| pmatch_at(env, x, y, pvars, binds, depth + bs[i]))
+        }
+        (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch_at(env, x, y, pvars, binds, depth)),
         _ => p == t,
     }
+}
+
+/// the bound variables a pattern variable is applied to (distinct, bound
+/// within `depth`)
+fn pattern_args(a: &[Term], depth: u32) -> Option<Vec<u32>> {
+    let mut idx = Vec::new();
+    for x in a {
+        match x.node() {
+            Node::BVar(i) if *i < depth && !idx.contains(i) => idx.push(*i),
+            _ => return None,
+        }
+    }
+    Some(idx)
+}
+
+/// `t` (at `depth` binders below the match site) as the value of a
+/// variable whose arguments are the bound variables `idx` of the match
+/// site: `idx[j]` becomes parameter j; None if another variable bound
+/// outside `t` occurs.
+fn abstract_bvars(env: &Env, t: &Term, idx: &[u32], depth: u32) -> Option<Term> {
+    let k = idx.len() as u32;
+    Some(match t.node() {
+        Node::BVar(i) if *i < depth => t.clone(),
+        Node::BVar(i) => {
+            let j = idx.iter().position(|x| *x == i - depth)? as u32;
+            Term::bvar(depth + k - 1 - j)
+        }
+        Node::App(f, a) => {
+            let bs = &env.syms[*f as usize].binders;
+            t.with_args(a.iter().enumerate().map(|(i, x)| abstract_bvars(env, x, idx, depth + bs[i])).collect::<Option<_>>()?)
+        }
+        Node::Var(_, a) => t.with_args(a.iter().map(|x| abstract_bvars(env, x, idx, depth)).collect::<Option<_>>()?),
+        _ => t.clone(),
+    })
 }
 
 /// The conjuncts of `t`: the parts of its tree of `and`s (the inner
@@ -1495,16 +1565,6 @@ fn conj_named(env: &Env, s: &Seq, names: &[&str], what: &str) -> KResult<Vec<(St
     parts.push(cur);
     parts.reverse();
     Ok(names.iter().zip(parts).filter(|(h, _)| **h != "_").map(|(h, p)| (h.to_string(), p)).collect())
-}
-
-/// `t` has bound variables pointing outside it (beyond `depth` binders).
-fn loose(env: &Env, t: &Term, depth: u32) -> bool {
-    match t.node() {
-        Node::BVar(i) => *i >= depth,
-        Node::App(f, a) => a.iter().enumerate().any(|(i, x)| loose(env, x, depth + env.syms[*f as usize].binders[i])),
-        Node::Var(_, a) => a.iter().any(|x| loose(env, x, depth)),
-        _ => false,
-    }
 }
 
 /// The kernel's literal rules, selected by the term's shape.

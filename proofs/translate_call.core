@@ -1343,10 +1343,30 @@ proof
 qed
 
 // The callee's spec, program-wide: on a return, the input as it was, the
-// events grown, the program loaded still
-def tr.callee_io(g) := all args w w2 r. w in abi.World -> runs(app(g, args), w, ok(w2, r)) ->
+// events grown, the program loaded still -- called with at least its n
+// arguments (with fewer, a `_fun` wrapper allows any outcome)
+def tr.callee_io(g, n) := all args w w2 r. ord_le(n, seq_len(args)) -> w in abi.World -> runs(app(g, args), w, ok(w2, r)) ->
   app(app(w2, "os"), "input") = app(app(w, "os"), "input") && subset(app(app(w, "os"), "events"), app(app(w2, "os"), "events")) &&
   (all gb gc st. gb in omega -> abi.loaded(app(w, "vm"), gb, gc, st) -> abi.loaded(app(w2, "vm"), gb, gc, st))
+
+// a spec built as GIMPLE's `_fun` wrappers are (a program per argument
+// list): typed as the ABI has specs
+theorem tr.fun_typed(x0 x1 x2. r): fn_build(abi.ARGS, x0. mkprog(x1 x2. r(x0, x1, x2))) in fn_space(abi.ARGS, powerset(univ(1)))
+proof
+  have v: all x0. x0 in abi.ARGS -> mkprog(x1 x2. r(x0, x1, x2)) in powerset(univ(1)) proof
+    fix x0
+    assume _
+    have g: all z. z in mkprog(x1 x2. r(x0, x1, x2)) -> z in univ(1) proof
+      fix z
+      assume hz
+      have m := set_select_def[s := univ(1), p := y. ex x1 x2. y = pair(x1, x2) && r(x0, x1, x2), z := z]
+      show by taut(m, expand(hz, mkprog))
+    qed
+    have s: subset(mkprog(x1 x2. r(x0, x1, x2)), univ(1)) by defs(g, subset)
+    show by taut(powerset_def[s := univ(1), a := mkprog(x1 x2. r(x0, x1, x2))], s)
+  qed
+  show := mp(fn_build_space[d := abi.ARGS, v := x0. mkprog(x1 x2. r(x0, x1, x2)), b := powerset(univ(1))], v)
+qed
 
 // (the callee's spec typed, as the ABI has specs: its runs in univ(1))
 theorem tr.spec_univ: all g args w o. g in fn_space(abi.ARGS, powerset(univ(1))) -> args in abi.ARGS -> runs(app(g, args), w, o) -> pair(w, o) in univ(1)
@@ -1450,7 +1470,7 @@ qed
 // The coupling after the callee returned (x, its world w2, the caller's
 // frame [S - 8, S + 8) as at the call): the caller's world W3, the result
 // in rax, the homes gone (the spec's world is the machine's again)
-theorem tr.post_call: all s base code m w C x w2 vv g regs.
+theorem tr.post_call: all s base code m w C x w2 vv g n regs.
   tr.inv(s, base, code, 8, m, w) -> base in omega -> int_le(16, app(app(s, "gpr"), 4)) ->
   C in x86_64_linux.Machine -> C in univ(1) -> app(C, "os") = app(m, "os") -> app(C, "cpu") = app(m, "cpu") -> app(C, "gs_base") = app(m, "gs_base") ->
   app(C, "gpr") = fn_update(app(m, "gpr"), 4, int_sub(app(app(s, "gpr"), 4), 16)) -> tr.keeps_code(app(m, "vm"), app(C, "vm")) ->
@@ -1458,7 +1478,7 @@ theorem tr.post_call: all s base code m w C x w2 vv g regs.
   (all a. a in bits(64) -> !(int_le(int_sub(app(app(s, "gpr"), 4), 16), a) && int_lt(a, int_sub(app(app(s, "gpr"), 4), 8))) ->
     x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) -> app(app(app(C, "vm"), "bytes"), a) = app(app(app(m, "vm"), "bytes"), a)) ->
   vv in x86_64_linux.Vm -> vv in univ(1) -> abi.scratch_view(vv, app(C, "vm"), abi.sp(C)) ->
-  tr.callee_io(g) -> runs(app(g, regs), abi.view(vv, C), ok(w2, pair(app(app(x, "gpr"), 0), app(app(x, "gpr"), 2)))) ->
+  tr.callee_io(g, n) -> ord_le(n, seq_len(regs)) -> runs(app(g, regs), abi.view(vv, C), ok(w2, pair(app(app(x, "gpr"), 0), app(app(x, "gpr"), 2)))) ->
   x in x86_64_linux.Machine -> x in univ(1) -> w2 in abi.World -> w2 in univ(1) ->
   abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), abi.sp(C)) -> app(x, "os") = app(w2, "os") -> app(x, "fs_base") = app(w2, "fs_base") ->
   app(x, "cpu") = app(C, "cpu") -> app(x, "gs_base") = app(C, "gs_base") -> app(app(x, "gpr"), 4) = abi.sp(C) ->
@@ -1468,8 +1488,8 @@ theorem tr.post_call: all s base code m w C x w2 vv g regs.
   tr.mem(s, x, fn_update(fn_update(fn_update(fn_update(w, "vm", app(C, "vm")), "vm", app(x, "vm")), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), false) &&
   tr.homes(s, x, empty) && tr.regs(x, fn_update(empty, 0, pair(8, app(app(x, "gpr"), 0))))
 proof
-  fix s base code m w C x w2 vv g regs
-  assume hi hb h16 cM cu cos ccpu cgs cgpr ckc cpi cby hvv hvvu hsv hio hg xM xu w2W w2u hwm xos xfs xcpu xgs xr4 xcs xdf hfs
+  fix s base code m w C x w2 vv g n regs
+  assume hi hb h16 cM cu cos ccpu cgs cgpr ckc cpi cby hvv hvvu hsv hio hn hg xM xu w2W w2u hwm xos xfs xcpu xgs xr4 xcs xdf hfs
   let S := app(app(s, "gpr"), 4)
   let W1 := fn_update(w, "vm", app(C, "vm"))
   let W3 := fn_update(fn_update(fn_update(W1, "vm", app(x, "vm")), "os", app(w2, "os")), "fs_base", app(w2, "fs_base"))
@@ -1486,7 +1506,7 @@ proof
   have fs := expand(hfs, tr.frame_same)
   // the callee's spec: input kept, events grown, the program loaded still
   have vt := apply(abi.world_typed, {C}, {vv}, {abi.sp(C)}, cM, hvv, simp(csp, sb, h16), simp(cu, hvvu, csp, sb, h16))
-  have io := mp(all_elim(expand(hio, tr.callee_io), {regs}, {abi.view(vv, C)}, {w2}, {pair(app(app(x, "gpr"), 0), app(app(x, "gpr"), 2))}), vt, hg)
+  have io := mp(all_elim(expand(hio, tr.callee_io), {regs}, {abi.view(vv, C)}, {w2}, {pair(app(app(x, "gpr"), 0), app(app(x, "gpr"), 2))}), hn, vt, hg)
   have ioi ioe iol := io
   // the code loaded at the entry: loaded still (the push, the callee's view, its spec, the write-back)
   have kc: tr.keeps_code(app(s, "vm"), app(x, "vm")) proof
@@ -1803,7 +1823,7 @@ theorem tr.callee_sim(g, ar, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x
   C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
     "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
   tr.implements_at(T, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
-  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, 1) ->
   (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
   (all t. t in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))) ->
   (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, v, base, code, 8, RA, empty, false, fn_update(empty, 0, pair(8, r0)),
@@ -1997,8 +2017,8 @@ proof
             have red: tr.red(P, w, mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W3)
               by defs(mp(lk, hs2), tr.red)
             have sv0 := rewrite(sym(spc), sv8)
-            have pinv pmem phom preg := apply(tr.post_call, {s}, {base}, {code}, {m}, {w}, {C}, {x}, {w2}, {vv}, {g}, {seq_one(u)}, hi, hb, h16, cM, cu, co, cc0, cgs, cgpr, ckc, cpi, cby,
-              vV, vU, sv0, hio, hg0, xM, xu, w2W, w2u, wm0, xos, xfs, xcpu, xgs, xr4, xcs, xdf, hs)
+            have pinv pmem phom preg := apply(tr.post_call, {s}, {base}, {code}, {m}, {w}, {C}, {x}, {w2}, {vv}, {g}, {1}, {seq_one(u)}, hi, hb, h16, cM, cu, co, cc0, cgs, cgpr, ckc, cpi, cby,
+              vV, vU, sv0, hio, defs(arith(), ord_le), hg0, xM, xu, w2W, w2u, wm0, xos, xfs, xcpu, xgs, xr4, xcs, xdf, hs)
             have xrip: app(x, "rip") = RA by simp(xrip0, c4, cle)
             have ptk := mp(all_elim(hpost, {W3}, {r0}), taut(w3W, w3u), r0b)
             have sm := mp(all_elim(expand(ptk, tr.pt), {x}), pinv, xrip, phom, preg, pmem)
@@ -2111,7 +2131,7 @@ theorem tr.call1(s, v, base, code, a, a2, len, off, f, g, ar, cb, cc, st, hs, ds
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
   a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega -> abi.view(v, s) in univ(1) ->
   f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.implements_at(f, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
-  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g) ->
+  g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, 1) ->
   (all m. tr.regs(m, rs) -> app(app(m, "gpr"), 7) in gimple.in_reg(fst(ar), snd(ar))) ->
   (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
   (all t. t in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))) ->
@@ -2404,6 +2424,35 @@ proof
   assume h hn
   have l := mp(mp(tr.build_list[d := bytes_len(b), v := i. bytes_at(b, i), t := t], hn), h)
   show by defs(l, bytes_seq)
+qed
+
+// two pieces of code loaded one after the other: the first at its place
+theorem tr.loaded_before: all vm b1 b2 lb st. bytes_len(b1) in omega -> bytes_len(b2) in omega -> lb in omega ->
+  abi.loaded(vm, lb, seq_concat(bytes_seq(b1), bytes_seq(b2)), st) -> abi.loaded(vm, lb, bytes_seq(b1), st)
+proof
+  fix vm b1 b2 lb st
+  assume h1 h2 hl h
+  let T := union2(set_image(bytes_len(b1), i. bytes_at(b1, i)), set_image(bytes_len(b2), i. bytes_at(b2, i)))
+  have m1: all i. i in bytes_len(b1) -> bytes_at(b1, i) in T proof
+    fix i
+    assume hi
+    have si := set_image_def[s := bytes_len(b1), f := j. bytes_at(b1, j), y := bytes_at(b1, i)]
+    have ex: ex j. j in bytes_len(b1) && bytes_at(b1, j) = bytes_at(b1, i) by ex_intro({i}, taut(hi, refl({bytes_at(b1, i)})))
+    have u := union2_iff[a := set_image(bytes_len(b1), j. bytes_at(b1, j)), b := set_image(bytes_len(b2), j. bytes_at(b2, j)), z := bytes_at(b1, i)]
+    show by taut(si, ex, u)
+  qed
+  have m2: all i. i in bytes_len(b2) -> bytes_at(b2, i) in T proof
+    fix i
+    assume hi
+    have si := set_image_def[s := bytes_len(b2), f := j. bytes_at(b2, j), y := bytes_at(b2, i)]
+    have ex: ex j. j in bytes_len(b2) && bytes_at(b2, j) = bytes_at(b2, i) by ex_intro({i}, taut(hi, refl({bytes_at(b2, i)})))
+    have u := union2_iff[a := set_image(bytes_len(b1), j. bytes_at(b1, j)), b := set_image(bytes_len(b2), j. bytes_at(b2, j)), z := bytes_at(b2, i)]
+    show by taut(si, ex, u)
+  qed
+  have l1 := apply(tr.bytes_list, {b1}, {T}, m1, h1)
+  have l2 := apply(tr.bytes_list, {b2}, {T}, m2, h2)
+  have lc := apply(tr.loaded_concat, {vm}, {lb}, {bytes_seq(b1)}, {bytes_seq(b2)}, {T}, {st}, l1, l2, hl, h)
+  show := lc.1
 qed
 
 // two pieces of code loaded one after the other: the second at its place

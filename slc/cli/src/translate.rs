@@ -3467,7 +3467,7 @@ pub fn translate(args: &[String]) -> CResult {
     let (lb, lc) = (g.lbase.clone(), g.lcode.clone());
     let cprem = match &callee_text {
         Some((f, _)) => format!(
-            "tr.implements_at({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0) -> "
+            "tr.implements_at({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0, 1) -> "
         ),
         None => String::new(),
     };
@@ -3501,7 +3501,7 @@ pub fn translate(args: &[String]) -> CResult {
     }
     if let Some((f, _)) = &callee_text {
         o.push_str(&format!(
-            "  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0)\n"
+            "  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n"
         ));
     }
     o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n");
@@ -3588,7 +3588,7 @@ pub fn translate(args: &[String]) -> CResult {
             None => format!("mp(all_elim({p}.body, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
         };
         o.push_str(&format!(
-            "theorem {p}.implements: all statics. {sp}all G0. {cprem}tr.implements_at({b}, {sapp}, {lb}, {lc}, statics)\nproof\n  fix statics\n{hs1}  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0)\n  // the function's own code: after its callee's\n  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have h2: abi.loaded(vm, {lb}, seq_concat(bytes_seq({bf}), bytes_seq({bo})), statics) by defs(h, {cname}, {oname})\n    have l := apply(tr.loaded_after, {{vm}}, {{{bf}}}, {{{bo}}}, {{{lb}}}, {{statics}}, simp(), simp(), simp(), h2)\n    show by defs(simp(expand(l, abi.loaded)), {oname})\n  qed\n  have m0 := mp(tr.entry1_32s_w[lb := {lb}, lc := {lc}, base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc2}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), hsub, {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {bodyc})\n",
+            "theorem {p}.implements: all statics. {sp}all G0. {cprem}tr.implements_at({b}, {sapp}, {lb}, {lc}, statics)\nproof\n  fix statics\n{hs1}  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n  // the function's own code: after its callee's\n  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have h2: abi.loaded(vm, {lb}, seq_concat(bytes_seq({bf}), bytes_seq({bo})), statics) by defs(h, {cname}, {oname})\n    have l := apply(tr.loaded_after, {{vm}}, {{{bf}}}, {{{bo}}}, {{{lb}}}, {{statics}}, simp(), simp(), simp(), h2)\n    show by defs(simp(expand(l, abi.loaded)), {oname})\n  qed\n  have m0 := mp(tr.entry1_32s_w[lb := {lb}, lc := {lc}, base := {b}, code := {c}, statics := statics, f := {b}, k := {k}, len0 := {len0}, z0 := {z0}, a1 := {a1}, len := {len}, d := {d}, c := {cc2}, z1 := {z1}, z2 := {z2}, a2 := {a2},\n    q := {ql}, kw := {kwl}],\n    simp(), hsub, {at0}, simp(), simp(), simp(), simp(), {at1}, simp(), simp(), simp(), simp(), simp(), simp(), {bodyc})\n",
             b = g.base,
             c = g.code,
             sapp = spec_app,
@@ -3663,7 +3663,7 @@ pub fn translate(args: &[String]) -> CResult {
     let (cfix, cass) = match &callee_text {
         Some((f, _)) => (
             "all G0. ".to_string(),
-            format!("  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0)\n"),
+            format!("  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n"),
         ),
         None => (String::new(), String::new()),
     };

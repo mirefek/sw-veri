@@ -703,3 +703,17 @@ theorem r6(s): (all z. int_add(z, 1) in s) -> (all z. int_add(1, z) in s)\nproof
         "no instance of the left side",
     );
 }
+
+/// Function parameters of lemmas (`v` in `x. v`) are found by matching:
+/// `apply` against its premises, `show :=` / `defs` against the goal --
+/// a parameter applied to bound variables matches a term over them.
+#[test]
+fn higher_order_parameters_matched() {
+    let ok = "theorem t1(a): runs(app(fn_build(omega, x. mkprog(s o. o = ok(s, x))), a), 0, ok(0, a)) -> a in omega\nproof\n  assume h\n  have k := apply(runs_fn_build, h)\n  show := k.1\nqed\n\
+theorem l(x. f): fn_build(omega, x. f(x)) = fn_build(omega, x. f(x))\nproof\n  show := refl({fn_build(omega, x. f(x))})\nqed\n\
+theorem t2: fn_build(omega, x. succ(x)) = fn_build(omega, x. succ(x))\nproof\n  show := l\nqed\n";
+    assert_eq!(check_nat(ok), Ok(3));
+    // a bound variable the parameter does not take: no match
+    rejected("theorem l(f): (ex x. f = x) -> true\nproof\n  assume h\n  show by taut()\nqed\n\
+theorem t(a): (ex x. x = x) -> true\nproof\n  assume h\n  show := apply(l, h)\nqed\n", "does not match");
+}
