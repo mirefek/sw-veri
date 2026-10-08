@@ -817,7 +817,7 @@ impl<'e> Gen<'e> {
                 let cond = self.ld8_cond(&a);
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                 let r = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, a.clone(), lit(1)])]);
-                let ok = format!("mp(g.ld8_ok, {{{w}}}, {{{}}}, {hv}, simp(L), taut({{HC}}), taut({{HC}}), taut({{HC}}))", pr(self, &a));
+                let ok = format!("mp(g.ld8_ok, {{{w}}}, {{{}}}, {hv}, simp(L), taut({{HC}}), taut({{HC}}))", pr(self, &a));
                 let ub = format!("mp(g.ld8_ub, {{{w}}}, {{{}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), {{HN}}, simp(L))", pr(self, &a));
                 return Ok((Some(cond), r, ok, ub));
             }
@@ -1174,9 +1174,9 @@ impl<'e> Gen<'e> {
     fn ld8_cond(&self, a: &Term) -> Term {
         let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
         let nz = self.mk("not", vec![self.mk("eq", vec![a.clone(), lit(0)])]);
-        let us = self.mk("gimple.usable", vec![vm.clone(), a.clone(), lit(1), self.mk("false", vec![])]);
-        let sc = self.mk("gimple.unscratched", vec![vm, self.mk("app", vec![self.w.clone(), Term::bytes(b"sp")]), a.clone(), lit(1)]);
-        self.mk("and", vec![self.mk("and", vec![nz, us]), sc])
+        let ob = self.mk("app", vec![self.w.clone(), Term::bytes(b"objs")]);
+        let us = self.mk("gimple.usable", vec![vm, ob, a.clone(), lit(1), self.mk("false", vec![])]);
+        self.mk("and", vec![nz, us])
     }
 
     /// One reduction of the rest `qi` (None: the head waits for the machine).
@@ -1461,7 +1461,7 @@ impl<'e> Gen<'e> {
                     lines.extend(indent(body));
                     lines.push("qed".into());
                     let expr = format!(
-                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], {{W}}, taut(hW), hvu, {}, {})",
                         self.base, self.code, st.fr, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
                     );
                     return Ok(Pf { lines, expr });
@@ -1494,7 +1494,7 @@ impl<'e> Gen<'e> {
                     lines.extend(indent(body));
                     lines.push("qed".into());
                     let expr = format!(
-                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], hvu, {}, {})",
+                        "mp(tr.wsplit[s := s, v := V, base := {}, code := {}, fr := {}, a := {}, hs := {}, ds := {}, rs := {}, w := {}, q := {}, kw := x0 x1 x2. KW(x0, x1, x2), c := {}], {{W}}, taut(hW), hvu, {}, {})",
                         self.base, self.code, st.fr, st.a, st.hst, st.ds, st.rs, st.wn, self.qs[qi].0, ct, un, dn
                     );
                     return Ok(Pf { lines, expr });
@@ -1571,7 +1571,7 @@ impl<'e> Gen<'e> {
         st0.a = a2;
         st0.regs = Vec::new();
         st0.rs = "empty".into();
-        st0.ds = "false".into();
+        st0.ds = "V".into();
         st0.w = w4.clone();
         st0.wn = wc.clone();
         st0.hvu = format!("hvu{wc}");
@@ -1580,7 +1580,7 @@ impl<'e> Gen<'e> {
         st0.hst = "empty".into();
         st0.spec = Spec::Proc(j);
         let st2 = self.set_reg(&st0, a2, 0, 8, r0.clone());
-        let pt2 = format!("tr.pt(s, V, {}, {}, 8, {}, empty, false, fn_update(empty, 0, pair(8, {rc})), WRAP({}), {wc})", self.base, self.code, a2, self.print(&self.qs[j].1));
+        let pt2 = format!("tr.pt(s, V, {}, {}, 8, {}, empty, V, fn_update(empty, 0, pair(8, {rc})), WRAP({}), {wc})", self.base, self.code, a2, self.print(&self.qs[j].1));
         let rest = self.prove(st2)?;
         // (the definitions after the call: in its proof)
         let mut local = Vec::new();
@@ -1631,7 +1631,7 @@ impl<'e> Gen<'e> {
         );
         let _ = qi;
         let expr = format!(
-            "mp({rule}, {}, simp(L), simp(L), simp(L), hvu, simp(L), hcall{gi}, hl, simp(), htyp{gi}, hio{gi}, apply(tr.arg32_reg, {{{}}}, {{{}}}, simp(L), simp(L)), hk{n}, hd{n}, pc{n})",
+            "mp({rule}, {}, simp(L), simp(L), simp(L), simp(L), hcall{gi}, hl, simp(), htyp{gi}, hio{gi}, apply(tr.arg32_reg, {{{}}}, {{{}}}, simp(L), simp(L)), hk{n}, hd{n}, pc{n})",
             insn.name,
             st.rs,
             self.print(&x)
@@ -1696,7 +1696,7 @@ impl<'e> Gen<'e> {
             Some((4, x)) if self.canon(x) == self.canon(&i0) => {}
             _ => return Err(bad("whose counter is not its home's value")),
         }
-        if st.ds != "true" || st.hsm.len() != 1 {
+        if st.hsm.len() != 1 {
             return Err(bad("in a frame of other homes"));
         }
         let wn = st.wn.clone();
@@ -1729,7 +1729,7 @@ impl<'e> Gen<'e> {
             fr: st.fr,
             regs: Vec::new(),
             rs: "empty".into(),
-            ds: "true".into(),
+            ds: "V".into(),
             w: lw.clone(),
             wn: lwn.clone(),
             hvu: format!("hvu{lwn}"),
@@ -1931,10 +1931,7 @@ impl<'e> Gen<'e> {
     /// the same for a rule reading memory: before the frame is written, no
     /// flag (the rule's claims at `ds` false)
     fn tailv(&self, st: &St, insn: &Insn, n: usize, extra: &[String]) -> Result<String, String> {
-        if st.ds != "false" {
-            return Err(format!("{:x}: a load after the frame is written: not covered yet", st.a));
-        }
-        Ok(self.tail_ds(st, insn, n, extra, false))
+        Ok(self.tail_ds(st, insn, n, extra, true))
     }
 
     fn tail_ds(&self, st: &St, insn: &Insn, n: usize, extra: &[String], with_ds: bool) -> String {
@@ -2809,8 +2806,8 @@ impl<'e> Gen<'e> {
                 // (no result: rax:rdx anything)
                 if self.rbytes == 0 {
                     let expr = format!(
-                        "mp(tr.ret_void, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, mp(tr.result_void, {{W}}))",
-                        self.base, self.code, a, insn.len, st.ds, st.rs, pr, insn.name
+                        "mp(tr.ret_void, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {}, mp(tr.result_void, {{W}}))",
+                        self.base, self.code, a, insn.len, st.rs, pr, insn.name
                     );
                     return Ok(Pf { lines: vec![], expr });
                 }
@@ -2820,12 +2817,11 @@ impl<'e> Gen<'e> {
                     return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))));
                 }
                 let expr = format!(
-                    "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
+                    "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result{}, {{W}}, {{{}}}))",
                     self.base,
                     self.code,
                     a,
                     insn.len,
-                    st.ds,
                     st.rs,
                     pr,
                     n,
@@ -3050,7 +3046,7 @@ impl<'e> Gen<'e> {
         st2.hsm = BTreeMap::new();
         st2.hsm.insert(d, (4, x.clone()));
         st2.hst = format!("fn_update(empty, {}, pair(4, {}))", d, self.print(&x));
-        st2.ds = "true".into();
+        st2.ds = "V".into();
         st2
     }
 
@@ -3406,7 +3402,7 @@ pub fn translate(args: &[String]) -> CResult {
         fr: fr0,
         regs: Vec::new(),
         rs: "empty".into(),
-        ds: "false".into(),
+        ds: "V".into(),
         w: g.w.clone(),
         wn: "W".into(),
         hvu: "hvu".into(),
@@ -3430,8 +3426,7 @@ pub fn translate(args: &[String]) -> CResult {
         "// {}'s C1 by translation (docs/bridge-pattern-design.md). Generated by\n//   slc translate {} {} {} -o OUT.core FILES (the spec's and the decode facts' files, the rules)\n// Each step: a rule of proofs/translate.core or proofs/translate_store_loop.core\n// with its instance -- a spec reduction, or an instruction (its decode\n// fact, build/leaf_steps.core; literal facts, simp(L)) -- then the next\n// point. {}\n\n",
         fname, fname, spec_name, prefix, after
     ));
-    let view = if guarded { format!("tr.view1(s, {}, {}, {})", dn, n, arg_reg) } else { "app(s, \"vm\")".to_string() };
-    o.push_str(&format!("abbrev {p}.v(s) := {}\nabbrev {p}.w(s) := abi.view({p}.v(s), s)\n\n", view, p = prefix));
+    let _ = &arg_reg;
     // (the static bytes the spec reads and writes: among the statics, no
     // stack pages)
     let srange = g.statics_range;
@@ -3478,7 +3473,7 @@ pub fn translate(args: &[String]) -> CResult {
     }
     if guarded {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}{call}{cprem}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) -> {p}.w(s) in univ(1) ->\n  abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> {p}.w(s) in abi.World ->\n  tr.pt(s, {p}.v(s), {b}, {c}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), false, empty,\n    {}, {p}.w(s))\nproof\n",
+            "theorem {p}.body: all statics. {sp}{call}{cprem}all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(1, seq_len(args)) ->\n  abi.view(s, v, mem) in univ(1) -> abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> abi.view(s, v, mem) in abi.World ->\n  tr.pt(s, v, {b}, {c}, {}, {}, fn_update(empty, {}, pair({}, bits_of_int({}, app(args, 0)))), v, empty,\n    {}, abi.view(s, v, mem))\nproof\n",
             fr0,
             a2,
             dn,
@@ -3490,7 +3485,7 @@ pub fn translate(args: &[String]) -> CResult {
         ));
     } else {
         o.push_str(&format!(
-            "theorem {p}.body: all statics. {sp}all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> {p}.w(s) in univ(1) ->\n  tr.pt(s, {p}.v(s), {b}, {c}, 0, {b}, empty, false, empty,\n    {}, {p}.w(s))\nproof\n",
+            "theorem {p}.body: all statics. {sp}all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine ->\n  abi.loaded(app(s, \"vm\"), {b}, {c}, statics) -> abi.view(s, v, mem) in univ(1) ->\n  tr.pt(s, v, {b}, {c}, 0, {b}, empty, v, empty,\n    {}, abi.view(s, v, mem))\nproof\n",
             g.print(&wrap_q0),
             b = g.base,
             c = g.code,
@@ -3505,15 +3500,15 @@ pub fn translate(args: &[String]) -> CResult {
             "  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, 1)\n"
         ));
     }
-    o.push_str("  fix args\n  fix s\n  assume hA: args in abi.ARGS\n  assume hM: s in x86_64_linux.Machine\n");
+    o.push_str("  fix args\n  fix v\n  fix mem\n  fix s\n  assume hA: args in abi.ARGS\n  assume hvo: v in set_type(omega)\n  assume hmv: mem in x86_64_linux.Vm\n  assume hM: s in x86_64_linux.Machine\n");
     if guarded {
         o.push_str("  assume hg: ord_le(1, seq_len(args))\n");
-        o.push_str(&format!("  assume hvu: {p}.w(s) in univ(1)\n"));
+        o.push_str("  assume hvu: abi.view(s, v, mem) in univ(1)\n");
         o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", lb, lc));
-        o.push_str(&format!("  assume hWw: {p}.w(s) in abi.World\n"));
+        o.push_str("  assume hWw: abi.view(s, v, mem) in abi.World\n");
     } else {
         o.push_str(&format!("  assume hl: abi.loaded(app(s, \"vm\"), {}, {}, statics)\n", g.base, g.code));
-        o.push_str(&format!("  assume hvu: {p}.w(s) in univ(1)\n"));
+        o.push_str("  assume hvu: abi.view(s, v, mem) in univ(1)\n");
     }
     if let Some((lo, hi)) = srange {
         o.push_str(&format!(
@@ -3532,9 +3527,9 @@ pub fn translate(args: &[String]) -> CResult {
     let kwb = kwl.split_once(". ").map(|x| x.1.to_string()).unwrap_or(kwl.clone());
     o.push_str(&format!("  // the wrapper: the procedure's rest q, its result returned\n  let KW(x0, x1, x2) := {}\n", kwb));
     o.push_str(&format!("  let WRAP(q) := {}\n", g.print(&wrap)));
-    o.push_str(&format!("  let V := {p}.v(s)\n  let W := {p}.w(s)\n"));
+    o.push_str("  let V := v\n  let W := abi.view(s, v, mem)\n");
     if !guarded {
-        o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) proof\n    have pt := apply(x86i.parts, hM)\n    have r4 := apply(x86i.rsp_typed, hM)\n    have vV: V in x86_64_linux.Vm by simp(pt)\n    have wt := apply(abi.world_typed, {s}, {V}, {abi.sp(s)}, hM, vV, simp(r4), hvu)\n    show by taut(wt, hvu)\n  qed\n");
+        o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) proof\n    have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)\n    show by taut(wt, hvu)\n  qed\n");
     } else {
         o.push_str("  // the world: a world\n  have hW: W in abi.World && W in univ(1) by taut(hWw, hvu)\n");
     }
@@ -3649,7 +3644,7 @@ pub fn translate(args: &[String]) -> CResult {
         let _ = (e_len, e_name);
     }
     o.push_str(&format!(
-        "  have m: all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> app(s, \"rip\") = {b} ->\n      abi.entry_ok(s, args) -> tr.run_d(s, s, o) -> tr.matches_t({sapp}, args, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
+        "  have m: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->\n      abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> app(s, \"rip\") = {b} -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->\n      tr.matches_t({sapp}, args, objs, mem, s, o) by defs(m0, {spec})\n  show by defs(m, tr.implements_at)\nqed\n\n",
         b = g.base,
         sapp = spec_app,
         spec = spec_name
