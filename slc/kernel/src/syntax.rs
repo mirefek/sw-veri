@@ -587,6 +587,15 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 define_abbrev(p.env, &name, n, body).map_err(ctx)?;
                 rep.abbrevs += 1;
             }
+            // irreducible NAME: the proof checker's implicit unfolding (on a
+            // mismatch) leaves the definition NAME folded
+            "irreducible" => {
+                let s = match p.env.sym_by_name.get(&name) {
+                    Some(s) if matches!(p.env.syms[*s as usize].kind, SymKind::Defined { .. }) => *s,
+                    _ => return Err(ctx(KernelError("not a defined symbol".into()))),
+                };
+                p.env.irreducible.insert(s);
+            }
             "claim" => {
                 p.params.clear();
                 p.expect(":")?;

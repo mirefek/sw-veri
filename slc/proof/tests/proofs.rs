@@ -45,9 +45,41 @@ theorem t3(p, q): (all x. x -> q) -> p -> q\nproof\n  assume g: all x. x -> q\n 
     );
 }
 
+/// Implicit unfolding: a definition is unfolded where the fact and the goal
+/// differ (a defined goal under `assume` / `fix`, a stated premise, a
+/// premise of `mp` / `apply`, a destructured fact) -- not an `irreducible`
+/// one, which `unfold` still unfolds.
+#[test]
+fn implicit_and_explicit_unfolding() {
+    let logic = core_file("logic.core");
+    let base = check(&logic).unwrap();
+    let defs = format!("{}def self_imp(a) := a -> a\ndef both(a, b) := a && b\ndef every(x. p) := all x. p(x)\n", logic);
+    let ok = [
+        // the goal's head unfolded by `assume` / `fix`
+        "theorem t(p): self_imp(p)\nproof\n  assume h\n  show h\nqed\n",
+        "theorem t: every(x. self_imp(x))\nproof\n  fix x\n  assume h\n  show h\nqed\n",
+        // a stated premise, unfolded
+        "theorem t(p, q): self_imp(p) -> q -> q\nproof\n  assume h: p -> p\n  assume g: q\n  show g\nqed\n",
+        // the conclusion: the goal up to unfolding
+        "theorem t(p, q): p -> q -> both(p, q)\nproof\n  assume h g\n  have c: p && q by taut(h, g)\n  show c\nqed\n",
+        // modus ponens with a folded premise; destructuring a defined fact
+        "theorem t(p, q): both(p, q) -> (p && q -> q) -> q\nproof\n  assume h k\n  show mp(k, h)\nqed\n",
+        "theorem t(p, q): both(p, q) -> q\nproof\n  assume h\n  have a b := h\n  show b\nqed\n",
+        // the explicit step, on the goal and on a fact
+        "theorem t(p, q): both(p, q) -> both(q, p)\nproof\n  assume h\n  unfold both in h\n  unfold both\n  show by taut(h)\nqed\n",
+    ];
+    for t in ok {
+        assert_eq!(check(&format!("{}{}", defs, t)), Ok(base + 1), "{}", t);
+    }
+    // irreducible: left folded implicitly, unfolded explicitly
+    let irr = format!("{}irreducible both\n", defs);
+    rejected(&format!("{}theorem t(p, q): p -> q -> both(p, q)\nproof\n  assume h g\n  have c: p && q by taut(h, g)\n  show c\nqed\n", irr), "not `p -> q -> both(p, q)`");
+    assert_eq!(check(&format!("{}theorem t(p, q): p -> q -> both(p, q)\nproof\n  assume h g\n  unfold both\n  show by taut(h, g)\nqed\n", irr)), Ok(base + 1));
+}
+
 #[test]
 fn a_proof_of_another_statement_is_rejected() {
-    rejected("theorem bad(a): a\nproof\n  show imp_weaken[a := a, b := a]\nqed\n", "not the statement");
+    rejected("theorem bad(a): a\nproof\n  show imp_weaken[a := a, b := a]\nqed\n", "this proves `a -> a -> a`, not `a`");
 }
 
 #[test]

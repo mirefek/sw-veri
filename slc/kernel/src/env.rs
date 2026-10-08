@@ -94,6 +94,10 @@ pub struct Env {
     /// bound variables, instantiated like a definition's. Only the parser
     /// sees them; terms never contain them.
     pub abbrevs: HashMap<String, (usize, Term)>,
+    /// definitions the proof checker's implicit unfolding leaves folded
+    /// (`irreducible NAME`; explicit unfolding still unfolds them). A hint
+    /// for proof search only: the kernel's rules ignore it.
+    pub irreducible: std::collections::HashSet<SymId>,
 }
 
 impl Env {
@@ -108,6 +112,7 @@ impl Env {
             theorems: Vec::new(),
             open: Default::default(),
             abbrevs: HashMap::new(),
+            irreducible: Default::default(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,

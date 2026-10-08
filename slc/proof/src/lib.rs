@@ -63,6 +63,15 @@
 //! goal only: `taut(p, ...)`, `ex_intro({w}, p)`. In `mp` and `apply`, a
 //! goal rule (`simp(..)`, ..) proves its premise, and so does a nested
 //! `apply` that only its premise determines.
+//!
+//! Unfolding: a fact proves a goal that differs from it by definitions
+//! (implicitly unfolded at the mismatches, the newer definition first: in a
+//! step's result against its goal, a premise of `mp` / `apply`, a stated
+//! `assume`, a destructured `have` / `obtain`, `all_elim`); `assume` and
+//! `fix` unfold a defined goal's head to the implication / `all` they
+//! need. `irreducible NAME` (a declaration) keeps NAME folded there; the
+//! step `unfold [D..] [in h]` unfolds explicitly (the goal, or fact h; no
+//! D: the goal's head).
 
 use sl_kernel::ext::seq::{defined_sym, unfold_all};
 use sl_kernel::ext::simp::LoopHint;
@@ -81,7 +90,9 @@ impl Prover for ScriptProver {
     fn prove(&mut self, env: &mut Env, req: &ProofRequest) -> KResult<Seq> {
         let lg = Logic::new(env)?;
         let st = State::new(req.params.clone(), Vec::new(), Some(req.statement.clone()));
-        run_block(env, &lg, st, &req.text, req.line).map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)))
+        run_block(env, &lg, st, &req.text, req.line)
+            .and_then(|s| conv_to(env, s, &req.statement, &[]))
+            .map_err(|e| KernelError(format!("proof of `{}`, {}", req.name, e.0)))
     }
 }
 
@@ -152,6 +163,7 @@ fn close(env: &Env, lg: &Logic, st: State) -> KResult<Seq> {
                     let s2 = Seq::inst(env, &s1, *v, &c)?;
                     Seq::mp(env, &s2, &w)?
                 }
+                Frame::Unfold(g, syms) => conv_to(env, s, g, syms)?,
             };
         }
         Ok(s)
@@ -162,6 +174,125 @@ impl State {
     fn new(scope: Vec<(String, VarId)>, facts: Vec<(String, Seq)>, goal: Option<Term>) -> State {
         State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new() }
     }
+}
+
+/// Implicit unfolding: the definitions (`start` and more) after whose
+/// unfolding (`unfold_all`) `a` and `b` are the same, if any. Chosen at the
+/// first mismatch: its heads' definitions (the newer first), else the
+/// definitions around it (the innermost first), else any in the terms (the
+/// newer first) -- one at a time, until the two agree. Definitions declared
+/// `irreducible` are left folded (unless in `start`). No backtracking:
+/// unfolding more never separates terms already equal.
+fn unfold_match(env: &Env, a: &Term, b: &Term, start: &[SymId]) -> Option<Vec<SymId>> {
+    let mut syms = start.to_vec();
+    let ok = |s: SymId, syms: &[SymId]| {
+        matches!(env.syms[s as usize].kind, sl_kernel::SymKind::Defined { .. }) && !env.irreducible.contains(&s) && !syms.contains(&s)
+    };
+    let head = |t: &Term| match t.node() {
+        Node::App(s, _) => Some(*s),
+        _ => None,
+    };
+    loop {
+        let (ua, ub) = if syms.is_empty() { (a.clone(), b.clone()) } else { (unfold_all(env, a, &syms), unfold_all(env, b, &syms)) };
+        if ua == ub {
+            return Some(syms);
+        }
+        // the path to the first mismatch
+        let mut path = Vec::new();
+        let (mut x, mut y) = (ua.clone(), ub.clone());
+        loop {
+            path.push((x.clone(), y.clone()));
+            let next = match (x.node(), y.node()) {
+                (Node::App(s, xa), Node::App(t, ya)) if s == t && xa.len() == ya.len() => xa.iter().zip(ya.iter()).find(|(p, q)| p != q).map(|(p, q)| (p.clone(), q.clone())),
+                (Node::Var(s, xa), Node::Var(t, ya)) if s == t && xa.len() == ya.len() => xa.iter().zip(ya.iter()).find(|(p, q)| p != q).map(|(p, q)| (p.clone(), q.clone())),
+                _ => None,
+            };
+            match next {
+                Some((p, q)) => (x, y) = (p, q),
+                None => break,
+            }
+        }
+        let (mx, my) = path.pop().unwrap();
+        let mut cands: Vec<SymId> = [head(&mx), head(&my)].into_iter().flatten().filter(|s| ok(*s, &syms)).collect();
+        cands.sort_by(|p, q| q.cmp(p));
+        if cands.is_empty() {
+            cands = path.iter().rev().filter_map(|(p, _)| head(p)).filter(|s| ok(*s, &syms)).take(1).collect();
+        }
+        if cands.is_empty() {
+            let mut all = Vec::new();
+            syms_of(&ua, &mut all);
+            syms_of(&ub, &mut all);
+            cands = all.into_iter().filter(|s| ok(*s, &syms)).max().into_iter().collect();
+        }
+        syms.push(*cands.first()?);
+    }
+}
+
+fn syms_of(t: &Term, out: &mut Vec<SymId>) {
+    match t.node() {
+        Node::App(s, a) => {
+            out.push(*s);
+            a.iter().for_each(|x| syms_of(x, out));
+        }
+        Node::Var(_, a) => a.iter().for_each(|x| syms_of(x, out)),
+        _ => {}
+    }
+}
+
+/// `s` as a proof of `goal`: the same, or the same after implicit unfolding
+/// (`unfold_match`, from `start`); else the mismatch, on the folded terms.
+fn conv_to(env: &Env, s: Seq, goal: &Term, start: &[SymId]) -> KResult<Seq> {
+    if s.concl() == goal && start.is_empty() {
+        return Ok(s);
+    }
+    match unfold_match(env, s.concl(), goal, start) {
+        Some(syms) if syms.is_empty() => Ok(s),
+        Some(syms) => Seq::conv(env, &s, goal, &syms),
+        None => {
+            let pp = Printer::new(env);
+            err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(goal), pp.mismatch(goal, s.concl())))
+        }
+    }
+}
+
+/// Modus ponens, the fact fitted to the premise by implicit unfolding.
+fn mp_u(env: &Env, imp: &Seq, a: &Seq) -> KResult<Seq> {
+    if let Node::App(i, c) = imp.concl().node() {
+        if *i == env.builtins.imp && c[0] != *a.concl() {
+            if let Some(syms) = unfold_match(env, a.concl(), &c[0], &[]) {
+                return Seq::mp(env, imp, &Seq::conv(env, a, &c[0], &syms)?);
+            }
+        }
+    }
+    Seq::mp(env, imp, a)
+}
+
+/// `t` with its head definition unfolded once (an irreducible one only if
+/// `forced`): the result and the definition.
+fn unfold_head(env: &Env, t: &Term, forced: bool) -> Option<(Term, SymId)> {
+    match t.node() {
+        Node::App(s, _) if matches!(env.syms[*s as usize].kind, sl_kernel::SymKind::Defined { .. }) && (forced || !env.irreducible.contains(s)) => {
+            let mut n = 0;
+            Some((sl_kernel::ext::seq::unfold_at(env, t, *s, &[1], &mut n), *s))
+        }
+        _ => None,
+    }
+}
+
+/// The fact `s` with its head definitions unfolded (implicitly: not
+/// irreducible ones) until it has the form `want` (else `s`).
+fn head_to(env: &Env, s: Seq, want: impl Fn(&Term) -> bool) -> KResult<Seq> {
+    let (mut t, mut syms) = (s.concl().clone(), Vec::new());
+    while !want(&t) {
+        match unfold_head(env, &t, false) {
+            Some((u, d)) => {
+                t = u;
+                syms.push(d);
+            }
+            None => return Ok(s),
+        }
+    }
+    if syms.is_empty() { Ok(s) } else { Seq::conv(env, &s, &t, &syms) }
 }
 
 fn has_var(t: &Term, v: VarId) -> bool {
@@ -247,6 +378,9 @@ enum Frame {
     Fix(VarId),
     /// `obtain x, h from P`: the variable, its property, and P (`ex y. ψ(y)`)
     Obtain(VarId, Term, Seq),
+    /// the goal unfolded (`unfold`, or `fix` / `assume` on a defined goal):
+    /// the goal before, and the definitions unfolded
+    Unfold(Term, Vec<SymId>),
 }
 
 struct State {
@@ -503,6 +637,8 @@ impl State {
                     None => return err("expected `assume name: φ` or `assume name ..`"),
                 };
                 for (n, t) in given {
+                    // (a defined goal: its head unfolded to an implication)
+                    self.unfold_goal(env, |g| matches!(g.node(), Node::App(i, _) if *i == env.builtins.imp));
                     let t = match t {
                         // (SLC_TIDY: report a stated formula that is the goal's
                         // premise, for scripts/tidy_proofs.py)
@@ -519,8 +655,9 @@ impl State {
                     };
                     let s = Seq::assume(env, t.clone())?;
                     self.facts.push((n, s));
+                    // (a stated premise: the goal's up to implicit unfolding)
                     self.goal = match self.goal.as_ref().map(|g| g.node()) {
-                        Some(Node::App(i, a)) if *i == env.builtins.imp && a[0] == t => Some(a[1].clone()),
+                        Some(Node::App(i, a)) if *i == env.builtins.imp && (a[0] == t || unfold_match(env, &a[0], &t, &[]).is_some()) => Some(a[1].clone()),
                         _ => None,
                     };
                     self.frames.push(Frame::Assume(t));
@@ -529,6 +666,7 @@ impl State {
             // fix x  /  fix x y ..
             "fix" => {
                 for n in rest.split_whitespace() {
+                    self.unfold_goal(env, |g| matches!(g.node(), Node::App(a, _) if *a == lg.all));
                     let v = env.new_var(n, 0);
                     self.scope.push((n.to_string(), v));
                     self.goal = match self.goal.as_ref().map(|g| g.node()) {
@@ -536,6 +674,41 @@ impl State {
                         _ => None,
                     };
                     self.frames.push(Frame::Fix(v));
+                }
+            }
+            // unfold [D..] [in h]: the goal (or the fact h) with the
+            // definitions D unfolded (every occurrence, repeatedly) -- or the
+            // goal's head definition, once
+            "unfold" => {
+                let (names, h) = match split_top_kw(rest, "in") {
+                    Some((a, b)) => (a.trim(), Some(b.trim())),
+                    None => (rest.trim(), None),
+                };
+                let syms = names.split_whitespace().map(|n| defined_sym(env, n)).collect::<KResult<Vec<SymId>>>()?;
+                match h {
+                    Some(h) => {
+                        if syms.is_empty() {
+                            return err("expected `unfold D.. in h`");
+                        }
+                        let f = self.fact(env, h)?;
+                        let t = unfold_all(env, f.concl(), &syms);
+                        let s = Seq::conv(env, &f, &t, &syms)?;
+                        self.facts.push((h.to_string(), s));
+                    }
+                    None => {
+                        let g = self.goal.clone().ok_or_else(|| KernelError("unfold: no current goal here".into()))?;
+                        let (u, syms) = if syms.is_empty() {
+                            let (u, s) = unfold_head(env, &g, true).ok_or_else(|| KernelError("unfold: the goal's head is not a definition".into()))?;
+                            (u, vec![s])
+                        } else {
+                            (unfold_all(env, &g, &syms), syms)
+                        };
+                        if u == g {
+                            return err("unfold: the goal has none of these definitions");
+                        }
+                        self.frames.push(Frame::Unfold(g, syms));
+                        self.goal = Some(u);
+                    }
                 }
             }
             // print P: shows what P proves (and the current goal), for writing proofs
@@ -560,6 +733,7 @@ impl State {
                 let mut ex = self.eval(env, lg, &parse_pe(p)?)?;
                 let mut prop = None;
                 for x in &xs {
+                    ex = head_to(env, ex, |t| matches!(t.node(), Node::App(e, _) if *e == lg.ex))?;
                     let body = match ex.concl().node() {
                         Node::App(e, a) if *e == lg.ex => a[0].clone(),
                         _ => return err(format!("obtain {}: `{}` is not `ex y. ...`", x, Printer::new(env).short(ex.concl()))),
@@ -981,7 +1155,7 @@ impl State {
             }
         }
         for p in proofs.iter().flatten() {
-            s = Seq::mp(env, &s, p)?;
+            s = mp_u(env, &s, p)?;
         }
         Ok(s)
     }
@@ -1075,13 +1249,29 @@ impl State {
         Ok(s)
     }
 
+    /// The goal's head definitions unfolded (implicitly: not irreducible
+    /// ones) until it is of the form `want`.
+    fn unfold_goal(&mut self, env: &Env, want: impl Fn(&Term) -> bool) {
+        let Some(mut g) = self.goal.clone() else { return };
+        let mut syms = Vec::new();
+        while !want(&g) {
+            match unfold_head(env, &g, false) {
+                Some((u, s)) => {
+                    g = u;
+                    syms.push(s);
+                }
+                None => break,
+            }
+        }
+        if !syms.is_empty() && want(&g) {
+            self.frames.push(Frame::Unfold(self.goal.take().unwrap(), syms));
+            self.goal = Some(g);
+        }
+    }
+
     fn check(&self, env: &mut Env, s: Seq, goal: &Term) -> KResult<Seq> {
         let s = self.fit(env, s, goal)?;
-        if s.concl() != goal {
-            let pp = Printer::new(env);
-            return err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(goal), pp.mismatch(goal, s.concl())));
-        }
-        Ok(s)
+        conv_to(env, s, goal, &[])
     }
 
     /// `s` (`all x1 .. xn. φ`) with the binders named in `bound` instantiated
@@ -1210,7 +1400,7 @@ impl State {
                                 }
                                 _ => self.proof_arg(env, lg, Some(a))?,
                             };
-                            s = Seq::mp(env, &s, &x)?;
+                            s = mp_u(env, &s, &x)?;
                         }
                         Ok(s)
                     }
@@ -1334,6 +1524,7 @@ impl State {
                         }
                         for a in &args[1..] {
                             let t = self.term_arg(env, Some(a), 0)?;
+                            p = head_to(env, p, |t| matches!(t.node(), Node::App(e, _) if *e == lg.all))?;
                             p = Seq::all_elim(env, lg, &p, &t)?;
                         }
                         Ok(p)
@@ -1443,7 +1634,24 @@ fn pmatch_at(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(Va
             a.iter().zip(b).enumerate().all(|(i, (x, y))| pmatch_at(env, x, y, pvars, binds, depth + bs[i]))
         }
         (Node::Var(v, a), Node::Var(w, b)) if v == w && a.len() == b.len() => a.iter().zip(b).all(|(x, y)| pmatch_at(env, x, y, pvars, binds, depth)),
-        _ => p == t,
+        _ if p == t => true,
+        // (different heads: the newer definition among them unfolded, once
+        // -- implicit unfolding; the fact is converted when applied)
+        _ => {
+            let head = |x: &Term| match x.node() {
+                Node::App(s, _) => Some(*s),
+                _ => None,
+            };
+            let (hp, ht) = (head(p), head(t));
+            let up = || unfold_head(env, p, false).filter(|(u, _)| u != p);
+            let ut = || unfold_head(env, t, false).filter(|(u, _)| u != t);
+            match (up(), ut()) {
+                (Some((u, _)), Some(_)) if hp > ht => pmatch_at(env, &u, t, pvars, binds, depth),
+                (_, Some((u, _))) => pmatch_at(env, p, &u, pvars, binds, depth),
+                (Some((u, _)), None) => pmatch_at(env, &u, t, pvars, binds, depth),
+                (None, None) => false,
+            }
+        }
     }
 }
 
@@ -1605,6 +1813,8 @@ fn conj_labels(env: &Env, s: &Seq, labels: &[&str]) -> KResult<Vec<(String, Seq)
 /// All conjuncts (as written) of `s`'s statement, in order, named by
 /// `names` (`_`: none) -- one pass down the chain.
 fn conj_named(env: &Env, s: &Seq, names: &[&str], what: &str) -> KResult<Vec<(String, Seq)>> {
+    // (a defined head: unfolded to the conjunction)
+    let s = &head_to(env, s.clone(), |t| names.len() < 2 || conj_parts(env, t).len() > 1)?;
     let n = conj_parts(env, s.concl()).len();
     if n != names.len() {
         return err(format!("{}: {} names for {} conjuncts of `{}`", what, names.len(), n, Printer::new(env).short(s.concl())));
