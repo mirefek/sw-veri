@@ -102,26 +102,31 @@ pred vm_grows(old: Vm, new: Vm) =
 ///////////////////////////////////////////////////////////////////////
 //  Calling a function
 
-// No other mapping lies within the guard gap below a stack page. Linux
-// keeps this gap for every mapping it places (only MAP_FIXED can break it);
-// it makes a callee's stack use fault instead of overwriting other memory.
+// No other mapping lies within the guard gap below a stack page, and the
+// gap fits above address 0. Linux keeps this gap for every mapping it
+// places (only MAP_FIXED can break it); it makes a callee's stack use fault
+// instead of overwriting other memory, or wrapping around the address
+// space.
 pred stack_gap_free(vm: Vm) =
-  all p: nat, q: nat. stack_page(vm, p) && q < p && (p - q) * PAGE <= STACK_GUARD_GAP && mapped(vm, q) ->
-    stack_page(vm, q)
+  (all p: nat, q: nat. stack_page(vm, p) && q < p && (p - q) * PAGE <= STACK_GUARD_GAP && mapped(vm, q) ->
+    stack_page(vm, q)) &&
+  (all p: nat. stack_page(vm, p) -> STACK_GUARD_GAP <= p * PAGE)
+
+// the thread pointer as the ABI has it: the word at fs:0 points to itself
+// (x86-64 TLS ABI: it is how code finds its TLS), in the program's memory
+// (not on the stack)
+pred thread_ok(vm: Vm, fs: Addr) =
+  readable(vm, uint(fs), 8) && (all i: nat. i < 8 -> !stack_page(vm, (uint(fs) + i) / PAGE)) && le(vm.bytes, fs, 8) = fs
 
 // entry conditions: rsp points to the return address on the stack (its
 // page writable: `call` has just written it there), rsp + 8 is 16-byte
 // aligned, the direction flag is clear, arguments are in registers, and
-// the thread pointer points to itself (x86-64 TLS ABI: the word at fs:0 is
-// the thread pointer, which is how code finds its TLS)
+// the thread pointer is sound
 pred entry_ok(m: Machine, args: Args) =
   stack_page(m.vm, uint(m.gpr[rsp]) / PAGE) && can_access(m.vm, m.gpr[rsp], write) && stack_gap_free(m.vm) &&
   uint(m.gpr[rsp] + 8) % 16 = 0 && !m.flags.df &&
   (all i: nat. i < len(args) -> m.gpr[ARG_REGS[i]] = args[i]) &&
-  readable(m.vm, uint(m.fs_base), 8) && le(m.vm.bytes, m.fs_base, 8) = m.fs_base
-
-// the thread pointer as entry_ok has it: the word at fs:0 points to itself
-pred thread_ok(vm: Vm, fs: Addr) = readable(vm, uint(fs), 8) && le(vm.bytes, fs, 8) = fs
+  thread_ok(m.vm, m.fs_base)
 
 // the stack as entry_ok has it, rsp at the return address's slot: a
 // writable stack page, no other mapping in the guard gap below the stack

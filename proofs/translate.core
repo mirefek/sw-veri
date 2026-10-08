@@ -287,10 +287,10 @@ def tr.ovf(p, w, os) := ex x0. x0 in outcome_type(rec_and(abi.World, single(empt
     ite(fst(x0) = 1, snd(snd(x0)) = exc_val("stack_overflow", empty) && app(app(fst(snd(x0)), "os"), "events") = app(os, "events"),
       app(snd(x0), "os.events") = app(os, "events"))))
 def tr.crash(s, p, w, o) :=
-  ex m1 a k. o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1) && m1 in x86_64_linux.Machine && a in bits(64) &&
-    abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a) && subset(app(app(s, "os"), "events"), app(app(m1, "os"), "events")) &&
-    app(app(s, "os"), "input") = app(app(m1, "os"), "input") &&
-    (tr.ovf(p, w, app(m1, "os")) || app(app(s, "os"), "events") = app(app(m1, "os"), "events"))
+  ex m1 a k. oe: (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a) ||
+      o = exc(m1, exc_val("stack_fault", empty))) && m1M: m1 in x86_64_linux.Machine && ab: a in bits(64) &&
+    sev: subset(app(app(s, "os"), "events"), app(app(m1, "os"), "events")) && inp: app(app(s, "os"), "input") = app(app(m1, "os"), "input") &&
+    io: (tr.ovf(p, w, app(m1, "os")) || app(app(s, "os"), "events") = app(app(m1, "os"), "events"))
 
 def tr.sim(s, v, p, w, m) := all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o)
 
@@ -301,8 +301,8 @@ proof
   assume h
   obtain m1 a k, h3 from expand(h, tr.crash)
   have ein: app(app(abi.view(s, v, mem), "os"), "input") = app(app(s, "os"), "input") by simp()
-  have hin := rewrite(sym(ein), h3.7)
-  have ho := h3.8
+  have hin := rewrite(sym(ein), h3.inp)
+  have ho := h3.io
   // (the crash's events the entry's: the call overflowed)
   have c2: app(app(s, "os"), "events") = app(app(m1, "os"), "events") -> app(app(abi.view(s, v, mem), "os"), "events") = app(app(m1, "os"), "events") proof
     assume e
@@ -327,8 +327,8 @@ proof
   fix s p w t
   have n: tr.crash(s, p, w, diverge(t)) -> false proof
     assume k
-    obtain m1 a c, k3 from expand(k, tr.crash)
-    show by simp(k3.1)
+    obtain m1 a c, {oe} from expand(k, tr.crash)
+    show by simp(oe)
   qed
   show by taut(n)
 qed
@@ -738,10 +738,10 @@ def tr.regs(m, rs) := is_fun(rs) && (all r. r in dom(rs) -> app(app(m, "gpr"), r
 // domain the world's bytes, the callers' frames (the entry's stack pages
 // at and above its sp, outside the domain) as at the entry, the page map
 // the world's or grown stack pages, the other fields the world's
-// (and the stack objects -- the callers' -- at or above sp, accessible: a
-// pointer access to one is the machine's)
+// (and the stack objects -- the callers' -- at or above sp, on the entry's
+// stack pages, accessible: a pointer access to one is the machine's)
 def tr.mem(s, m, w, ob) := wob: app(w, "objs") = ob && wm: abi.world_matches(app(s, "vm"), app(m, "vm"), app(w, "vm"), ob, abi.sp(s)) &&
-  oacc: (all x. x in omega -> x in ob -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(m, "vm"), bits_of_int(64, x), 1))
+  oacc: (all x. x in omega -> x in ob -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(m, "vm"), bits_of_int(64, x), 1))
 
 // the claim at the address a: from every machine state there, coupled
 def tr.pt(s, v, base, code, fr, a, hs, ds, rs, p, w) :=
@@ -2134,7 +2134,7 @@ proof
   assume ho hv
   have wm2: abi.world_matches(app(s, "vm"), app(s, "vm"), app(abi.view(s, v, mem), "vm"), v, abi.sp(s)) by simp(hv.2, keep(abi.world_matches))
   have e: app(abi.view(s, v, mem), "objs") = v by simp()
-  have oa: all x. x in omega -> x in v -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1) proof
+  have oa: all x. x in omega -> x in v -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1) proof
     fix x
     assume h1 h2
     have c := mp(all_elim(expand(ho, tr.objs_ok), {x}), h1, h2)
@@ -2242,7 +2242,7 @@ proof
     show := rewrite(sym(sq2), rewrite(sym(pe), c))
   qed
   have wm2: abi.world_matches(app(s, "vm"), app(m2, "vm"), app(w, "vm"), ob, abi.sp(s)) by defs(simp(em, top, limit, brk0, brk, rewrite(em, by2), rewrite(em, fr2), rewrite(em, pg2), keep(abi.in_domain, abi.stack_page)), abi.world_matches)
-  have oa2: all x. x in omega -> x in ob -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(m2, "vm"), bits_of_int(64, x), 1) proof
+  have oa2: all x. x in omega -> x in ob -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(m2, "vm"), bits_of_int(64, x), 1) proof
     fix x
     assume h1 h2
     have c := mp(all_elim(oacc, {x}), h1, h2)

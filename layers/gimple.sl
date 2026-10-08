@@ -396,8 +396,10 @@ proc[World] call_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bi
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !(thread_ok(vm, fs_base) && stack_gap_free(vm)) { undefined }
   let pages0 = vm.pages
+  let objs0 = objs
   let (r0, r1) = g(regs)
   if !(all p: PageNo. pages0[p] != none && pages0[p].value.kind = stack -> vm.pages[p] = pages0[p]) { undefined }
+  objs := objs0              // (the callee's stack objects are gone)
   return (r0, r1)
 }
 
