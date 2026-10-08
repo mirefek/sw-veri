@@ -603,6 +603,26 @@ fn differences_are_naturals_when_not_negative() {
     assert!(arith_ok("a in omega -> b in omega -> int_lt(a, b) -> int_sub(a, b) in omega", &[ha, hb, ("h", "int_lt(a, b)")]).is_err());
 }
 
+/// `assume h1 h2` (the goal's premises), `fix x y`, conjuncts by position
+/// (`h.k`, `R(..).k`), `have a b := P` / `obtain x y, a b from P` naming
+/// conjuncts as written (`_` none), a line continued by `:=`.
+#[test]
+fn premises_conjuncts_and_witnesses() {
+    let ok = "theorem t1(a, b, c): a && b && c -> b && a\nproof\n  assume h\n  show b && a by taut(h.2, h.1)\nqed\n\
+theorem t2(a, b, c): a -> b -> c -> a && c\nproof\n  assume ha hb hc\n  show a && c by taut(ha, hc)\nqed\n\
+theorem t3: (ex x y. x = 1 && y = x && 2 = 2) -> ex y. y = 1\nproof\n  assume h\n  obtain x y, hx hy _ from h\n  have e: y = 1\n    := trans(hy, hx)\n  show ex_intro({y}, {z. z = 1}, e)\nqed\n\
+theorem t4: all x y. x = y -> y = x\nproof\n  fix x y\n  assume h\n  show := sym(h)\nqed\n\
+theorem t5(a, b): (a && b) && (b && a) -> a\nproof\n  assume h\n  show := h.3.2\nqed\n\
+theorem t6(a, b, c): a && b && c -> c && a\nproof\n  assume h\n  have ha _ hc := h\n  show c && a by taut(ha, hc)\nqed\n\
+theorem t7(a, b): a && b -> b\nproof\n  assume h\n  show := mp(imp_refl[a := a && b], h).2\nqed\n";
+    assert_eq!(check_nat(ok), Ok(7));
+    // a premise from the goal: only where the goal is an implication
+    rejected("theorem b(a): a\nproof\n  assume h\n  show := h\nqed\n", "not known to be an implication");
+    // conjuncts: in range; names: one per conjunct
+    rejected("theorem b(a, b): a && b -> a\nproof\n  assume h\n  show := h.3\nqed\n", "has conjuncts 1 to 2");
+    rejected("theorem b: (ex x. x = 1 && x = 1) -> 1 = 1\nproof\n  assume h\n  obtain x, p q r from h\n  show := refl({1})\nqed\n", "3 names for 2 conjuncts");
+}
+
 /// A mismatch names the first differing subterm and its path: premises by
 /// number, conjuncts however nested, arguments of the symbols on the way.
 #[test]

@@ -94,6 +94,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
     let mut prefix = String::new();
     for (i, f) in files.iter().enumerate() {
         let first = i == 0;
+        let t0 = std::time::Instant::now();
         let hit = cache.as_ref().and_then(|c| c.lookup(f, &prefix, first));
         let cached = hit.is_some();
         let (rep, stmts) = match hit {
@@ -126,6 +127,10 @@ pub fn kernel_check(args: &[String]) -> CResult {
             rep.claims.len(),
             if cached { " (cached)" } else { "" }
         );
+        // (SLC_TIMES: each file's time)
+        if std::env::var("SLC_TIMES").is_ok() {
+            eprintln!("{:8.2}s {}", t0.elapsed().as_secs_f64(), f.display());
+        }
     }
     // what the claims and conditional theorems still rest on
     let mut status = Vec::new();

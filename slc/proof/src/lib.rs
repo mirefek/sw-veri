@@ -9,12 +9,22 @@
 //!
 //! ```text
 //! assume h: φ            hypothesis h (discharged at the end: φ -> ...)
-//! fix x                  a new variable x (generalized at the end: all x. ...)
+//! assume h1 h2           the goal's next premises, named
+//! fix x  /  fix x y      new variables (generalized at the end: all x. ...)
 //! have h: φ := P         a fact from a proof expression (φ, if given, is checked)
 //! have h: φ by R(args)   a fact by a rule that needs the goal φ (taut, ex_intro, ...)
+//! have h1 h2 h3 ...      (any `have` with several names) its conjuncts, named
+//! obtain x, h from P     a witness of P: `ex y. ψ(y)` (h: ψ(x))
+//! obtain x y, h1 h2 from P   witnesses of `ex y z. ...`, its conjuncts named
 //! show P  /  show φ by R(args)   the result (else the last `have`)
 //! let N := t / let N(a, b) := t   an abbreviation, to the end of the block
 //! ```
+//!
+//! Conjuncts are counted as written: `a && b && c` (`(a && b) && c`) has
+//! three, an explicitly grouped `a && (b && c)` two; `_` names none. `h.k`
+//! (also `R(args).k`) is the k-th conjunct of what h proves (from 1), by
+//! `and_left` / `and_right` (core/logic.core) -- no tautology search. A line
+//! starting with `by` or `:=` continues the step before.
 //!
 //! (Core files also have `abbrev N(a, b) := t`; abbreviations are read as
 //! their expansions.)
@@ -174,8 +184,8 @@ fn steps(text: &str) -> Vec<(usize, String)> {
         if l.trim().is_empty() && depth == 0 {
             continue;
         }
-        // a line starting with `by` continues the previous step
-        if cur.is_empty() && l.trim_start().starts_with("by ") {
+        // a line starting with `by` or `:=` continues the previous step
+        if cur.is_empty() && (l.trim_start().starts_with("by ") || l.trim_start().starts_with(":= ")) {
             if let Some((k, prev)) = out.pop() {
                 start = k;
                 cur = prev;
@@ -251,6 +261,8 @@ enum PE {
     Rule(String, Vec<Arg>),
     /// instantiation of schematic variables: `var := value text`
     Inst(Box<PE>, Vec<(String, String)>),
+    /// `P.k`: the k-th conjunct (from 1, as written) of what P proves
+    Conj(Box<PE>, usize),
 }
 
 #[derive(Debug)]
@@ -322,7 +334,15 @@ fn parse_pe(s: &str) -> KResult<PE> {
             }
         }
         pos = close + 1;
-        PE::Rule(name.to_string(), args)
+        let mut pe = PE::Rule(name.to_string(), args);
+        // R(args).k.j: conjuncts of its result
+        while let Some(r) = s[pos..].strip_prefix('.') {
+            let n = r.find(|c: char| !c.is_ascii_digit()).unwrap_or(r.len());
+            let Ok(k) = r[..n].parse::<usize>() else { break };
+            pe = PE::Conj(Box::new(pe), k);
+            pos += 1 + n;
+        }
+        pe
     } else {
         PE::Ref(name.to_string())
     };
@@ -353,7 +373,16 @@ impl State {
             return Ok(s.clone());
         }
         // theorems, axioms, conditional theorems, open lemmas
-        facts::seq_of(env, name).ok_or_else(|| KernelError(format!("unknown fact `{}`", name)))
+        if let Some(s) = facts::seq_of(env, name) {
+            return Ok(s);
+        }
+        // h.k: the k-th conjunct of h (h.k.j: of that)
+        if let Some((h, k)) = name.rsplit_once('.') {
+            if let Ok(k) = k.parse::<usize>() {
+                return conj_get(env, &self.fact(env, h)?, k);
+            }
+        }
+        err(format!("unknown fact `{}`", name))
     }
 
     fn step(&mut self, env: &mut Env, lg: &Logic, step: &str, line: usize) -> KResult<()> {
@@ -402,26 +431,41 @@ impl State {
                 sl_kernel::syntax::define_abbrev(env, name, k, t)?;
                 self.lets.push((name.to_string(), prev));
             }
+            // assume h: φ  /  assume h1 h2 ..: the goal's leading premises
             "assume" => {
-                let (n, t) = rest.split_once(':').ok_or_else(|| KernelError("expected `assume name: φ`".into()))?;
-                let t = self.term(env, t)?;
-                let s = Seq::assume(env, t.clone())?;
-                self.facts.push((n.trim().to_string(), s));
-                self.goal = match self.goal.as_ref().map(|g| g.node()) {
-                    Some(Node::App(i, a)) if *i == env.builtins.imp && a[0] == t => Some(a[1].clone()),
-                    _ => None,
+                let given: Vec<(String, Option<Term>)> = match rest.split_once(':') {
+                    Some((n, t)) => vec![(n.trim().to_string(), Some(self.term(env, t)?))],
+                    None if !rest.trim().is_empty() => rest.split_whitespace().map(|n| (n.to_string(), None)).collect(),
+                    None => return err("expected `assume name: φ` or `assume name ..`"),
                 };
-                self.frames.push(Frame::Assume(t));
+                for (n, t) in given {
+                    let t = match t {
+                        Some(t) => t,
+                        None => match self.goal.as_ref().map(|g| imp_parts(env, g)) {
+                            Some(Ok((p, _))) => p,
+                            _ => return err(format!("assume {}: the goal is not known to be an implication here (write `assume {}: φ`)", n, n)),
+                        },
+                    };
+                    let s = Seq::assume(env, t.clone())?;
+                    self.facts.push((n, s));
+                    self.goal = match self.goal.as_ref().map(|g| g.node()) {
+                        Some(Node::App(i, a)) if *i == env.builtins.imp && a[0] == t => Some(a[1].clone()),
+                        _ => None,
+                    };
+                    self.frames.push(Frame::Assume(t));
+                }
             }
+            // fix x  /  fix x y ..
             "fix" => {
-                let n = rest.trim();
-                let v = env.new_var(n, 0);
-                self.scope.push((n.to_string(), v));
-                self.goal = match self.goal.as_ref().map(|g| g.node()) {
-                    Some(Node::App(a, b)) if *a == lg.all => Some(b[0].instantiate_params(&[Term::var(v, vec![])], &env.binders_fn())),
-                    _ => None,
-                };
-                self.frames.push(Frame::Fix(v));
+                for n in rest.split_whitespace() {
+                    let v = env.new_var(n, 0);
+                    self.scope.push((n.to_string(), v));
+                    self.goal = match self.goal.as_ref().map(|g| g.node()) {
+                        Some(Node::App(a, b)) if *a == lg.all => Some(b[0].instantiate_params(&[Term::var(v, vec![])], &env.binders_fn())),
+                        _ => None,
+                    };
+                    self.frames.push(Frame::Fix(v));
+                }
             }
             // print P: shows what P proves (and the current goal), for writing proofs
             "print" => {
@@ -432,20 +476,49 @@ impl State {
                 }
             }
             "obtain" => {
-                // obtain x, h from P   (P: ex y. ψ(y); h: ψ(x) for a new x)
+                // obtain x, h from P   (P: ex y. ψ(y); h: ψ(x) for a new x);
+                // obtain x1 .. xn, h from P   (P: ex y1 .. yn. ψ);
+                // obtain x.., h1 .. hk from P   (ψ's k conjuncts as written,
+                // `conj_parts`; `_` names none)
                 let (names, p) = rest.split_once(" from ").ok_or_else(|| KernelError("expected `obtain x, h from P`".into()))?;
-                let (x, h) = names.split_once(',').ok_or_else(|| KernelError("expected `obtain x, h from P`".into()))?;
-                let (x, h) = (x.trim(), h.trim());
-                let ex = self.eval(env, lg, &parse_pe(p)?)?;
-                let body = match ex.concl().node() {
-                    Node::App(e, a) if *e == lg.ex => a[0].clone(),
-                    _ => return err(format!("obtain: `{}` is not `ex y. ...`", Printer::new(env).term(ex.concl()))),
-                };
-                let v = env.new_var(x, 0);
-                self.scope.push((x.to_string(), v));
-                let prop = body.instantiate_params(&[Term::var(v, vec![])], &env.binders_fn());
-                self.facts.push((h.to_string(), Seq::assume(env, prop.clone())?));
-                self.frames.push(Frame::Obtain(v, prop, ex));
+                let (xs, hs) = names.split_once(',').ok_or_else(|| KernelError("expected `obtain x, h from P`".into()))?;
+                let (xs, hs): (Vec<&str>, Vec<&str>) = (xs.split_whitespace().collect(), hs.split_whitespace().collect());
+                if xs.is_empty() || hs.is_empty() {
+                    return err("expected `obtain x.., h.. from P`");
+                }
+                let mut ex = self.eval(env, lg, &parse_pe(p)?)?;
+                let mut prop = None;
+                for x in &xs {
+                    let body = match ex.concl().node() {
+                        Node::App(e, a) if *e == lg.ex => a[0].clone(),
+                        _ => return err(format!("obtain {}: `{}` is not `ex y. ...`", x, Printer::new(env).short(ex.concl()))),
+                    };
+                    let v = env.new_var(x, 0);
+                    self.scope.push((x.to_string(), v));
+                    let pv = body.instantiate_params(&[Term::var(v, vec![])], &env.binders_fn());
+                    self.frames.push(Frame::Obtain(v, pv.clone(), ex));
+                    // (the next witness: from this property, discharged by
+                    // the frame above when the block closes)
+                    ex = Seq::assume(env, pv.clone())?;
+                    prop = Some(pv);
+                }
+                let h = Seq::assume(env, prop.unwrap())?;
+                if hs.len() == 1 {
+                    self.facts.push((hs[0].to_string(), h));
+                } else {
+                    let named = conj_named(env, &h, &hs, "obtain")?;
+                    self.facts.extend(named);
+                }
+            }
+            // have h1 .. hk [: φ] (:= P | by R): its k conjuncts as written
+            // (`_` names none)
+            "have" if rest.split(':').next().is_some_and(|l| l.split_whitespace().count() > 1) => {
+                let k = rest.find(':').unwrap();
+                let hs: Vec<&str> = rest[..k].split_whitespace().collect();
+                self.step(env, lg, &format!("have __parts{}", &rest[k..]), line)?;
+                let (_, s) = self.facts.pop().unwrap();
+                let named = conj_named(env, &s, &hs, "have")?;
+                self.facts.extend(named);
             }
             "have" | "show" => {
                 // have NAME [: φ] (:= P | by R(args)) ;  show (P | φ by R(args))
@@ -835,6 +908,10 @@ impl State {
     fn eval(&self, env: &mut Env, lg: &Logic, p: &PE) -> KResult<Seq> {
         match p {
             PE::Ref(name) => self.fact(env, name),
+            PE::Conj(p, k) => {
+                let s = self.eval(env, lg, p)?;
+                conj_get(env, &s, *k)
+            }
             PE::Inst(p, insts) => {
                 // simultaneous: names refer to the fact's variables before any
                 // substitution; each goes through a fresh variable first
@@ -1109,6 +1186,78 @@ fn conjuncts(t: &Term, and: Option<SymId>, out: &mut Vec<Term>) {
     }
     go(t, and, out, &mut inner, true);
     out.append(&mut inner);
+}
+
+/// `t`'s conjuncts as written: `a && b && c` (`(a && b) && c`) is [a, b, c];
+/// an explicitly grouped `a && (b && c)` is [a, b && c].
+fn conj_parts(env: &Env, t: &Term) -> Vec<Term> {
+    let and = env.sym_by_name.get("and").copied();
+    let mut out = Vec::new();
+    let mut t = t.clone();
+    loop {
+        match t.node() {
+            Node::App(a, x) if Some(*a) == and => {
+                out.push(x[1].clone());
+                t = x[0].clone();
+            }
+            _ => break,
+        }
+    }
+    out.push(t);
+    out.reverse();
+    out
+}
+
+/// `and_left` / `and_right` (core/logic.core) applied to `s`
+fn and_part(env: &Env, s: &Seq, right: bool) -> KResult<Seq> {
+    let (l, r) = match s.concl().node() {
+        Node::App(a, x) if Some(*a) == env.sym_by_name.get("and").copied() => (x[0].clone(), x[1].clone()),
+        _ => return err("not a conjunction"),
+    };
+    let name = if right { "and_right" } else { "and_left" };
+    let mut lemma = facts::seq_of(env, name).ok_or_else(|| KernelError(format!("`{}` (core/logic.core) is not loaded", name)))?;
+    let mut vs = Vec::new();
+    lemma.concl().vars(&mut vs);
+    for (v, x) in vs.into_iter().zip([l, r]) {
+        lemma = Seq::inst(env, &lemma, v, &x)?;
+    }
+    Seq::mp(env, &lemma, s)
+}
+
+/// The k-th conjunct (from 1, as written: `conj_parts`) of `s`'s statement.
+fn conj_get(env: &Env, s: &Seq, k: usize) -> KResult<Seq> {
+    let n = conj_parts(env, s.concl()).len();
+    if n < 2 || k == 0 || k > n {
+        let what = if n < 2 { "is not a conjunction".to_string() } else { format!("has conjuncts 1 to {}", n) };
+        return err(format!("conjunct {}: `{}` {}", k, Printer::new(env).short(s.concl()), what));
+    }
+    // ((p1 && p2) && ..) && pn: left n - k times, then right (unless k = 1)
+    let mut s = s.clone();
+    for _ in 0..n - k {
+        s = and_part(env, &s, false)?;
+    }
+    if k > 1 {
+        s = and_part(env, &s, true)?;
+    }
+    Ok(s)
+}
+
+/// All conjuncts (as written) of `s`'s statement, in order, named by
+/// `names` (`_`: none) -- one pass down the chain.
+fn conj_named(env: &Env, s: &Seq, names: &[&str], what: &str) -> KResult<Vec<(String, Seq)>> {
+    let n = conj_parts(env, s.concl()).len();
+    if n != names.len() {
+        return err(format!("{}: {} names for {} conjuncts of `{}`", what, names.len(), n, Printer::new(env).short(s.concl())));
+    }
+    let mut parts = Vec::new();
+    let mut cur = s.clone();
+    for _ in 1..n {
+        parts.push(and_part(env, &cur, true)?);
+        cur = and_part(env, &cur, false)?;
+    }
+    parts.push(cur);
+    parts.reverse();
+    Ok(names.iter().zip(parts).filter(|(h, _)| **h != "_").map(|(h, p)| (h.to_string(), p)).collect())
 }
 
 /// `t` has bound variables pointing outside it (beyond `depth` binders).
