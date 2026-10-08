@@ -213,7 +213,8 @@ proc[Machine] abi_set_result(sp: Addr, ret: Addr, r0: bits[64], r1: bits[64]) {
 }
 
 // From entry to return: the function behaves like `spec` on the world (with
-// the stack objects `objs` of its callers it may reach, above sp);
+// the stack objects `objs` of its callers it may reach: above sp, on their
+// writable stack);
 // callee-saved registers and rsp are restored, rax holds the result, other
 // registers (including all XMM registers) and flags are clobbered. Or it runs
 // out of stack (see above: also right at the call, before any I/O): a
@@ -223,7 +224,7 @@ proc[Machine] abi_set_result(sp: Addr, ret: Addr, r0: bits[64], r1: bits[64]) {
 proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat]) {
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
-  require all a: nat. a in objs -> uint(sp) <= a
+  require all a: nat. a in objs -> uint(sp) <= a && can_access(vm, bits[64](a), write)
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
   let w0    = with world(sp, objs) { return self }    // the world, with ghost state

@@ -14,22 +14,6 @@
 //     core/list.core core/loop.core build/musl_malloc_O0.core proofs/x86.core proofs/abi.core \
 //     proofs/abi_restore.core proofs/abi_glue.core
 
-abbrev abi.KEYS := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))
-abbrev abi.WKEYS := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))
-abbrev abi.ARGS := set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6))
-// the caller's stack pointer and the return address, at entry s
-abbrev abi.sp(s) := bits_add(64, app(app(s, "gpr"), 4), 8)
-abbrev abi.ret(s) := x86_64_linux.le(app(app(s, "vm"), "bytes"), app(app(s, "gpr"), 4), 8)
-// the world with memory v, the rest from m, the stack pointer of s
-abbrev abi.wv(v, m, s) := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", abi.sp(s))
-// the world the spec sees at entry s, through the view v of the memory
-abbrev abi.view(v, s) := abi.wv(v, s, s)
-abbrev abi.outcome(o) := (ex m1 e. o = ok(m1, e)) || (ex m1 e. o = exc(m1, e)) || (ex t. o = diverge(t))
-// the callee-saved registers of m as at entry s
-abbrev abi.callee_saved(m, s) := app(app(m, "gpr"), 3) = app(app(s, "gpr"), 3) && app(app(m, "gpr"), 5) = app(app(s, "gpr"), 5) &&
-  app(app(m, "gpr"), 12) = app(app(s, "gpr"), 12) && app(app(m, "gpr"), 13) = app(app(s, "gpr"), 13) &&
-  app(app(m, "gpr"), 14) = app(app(s, "gpr"), 14) && app(app(m, "gpr"), 15) = app(app(s, "gpr"), 15)
-
 // the stack at entry: rsp's page a writable stack page, rsp = 8 (mod 16),
 // in the user half
 theorem abi.entry_stack: all s args. s in x86_64_linux.Machine -> abi.entry_ok(s, args) ->
@@ -66,66 +50,76 @@ proof
   show by simp(expand(mp(all_elim(ac, {0}), z0, l0), abi.ARG_REGS), ar0)
 qed
 
-// the state a raising spec ends in: the view it started from, or any world
-// (a callee's raise, through its caller)
-def abi.raise_state(v, s, x) := x = abi.view(v, s) || x in rec_and(abi.World, single(empty))
+// the state a raising spec ends in: the world it started from, or any
+// world (a callee's raise, through its caller)
+def abi.raise_state(s, objs, x) := x = abi.view(s, objs) || x in rec_and(abi.World, single(empty))
 
-// undefined behavior: the spec raises from the view
-theorem abi.ub_case: all f spec args s o v e x. s in x86_64_linux.Machine -> v in x86_64_linux.Vm -> v in univ(1) ->
-  abi.scratch_view(v, app(s, "vm"), abi.sp(s)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) -> e in univ(1) ->
-  !(e = exc_val("stack_overflow", empty)) -> abi.raise_state(v, s, x) ->
-  runs(app(spec, args), abi.view(v, s), exc(x, e)) -> pair(s, o) in univ(1) -> abi.outcome(o) ->
-  runs(abi.abi_function(single(empty), f, spec, args), s, o)
+// (a set of addresses: a value)
+theorem abi.objs_univ: all objs. objs in set_type(omega) -> objs in univ(1)
 proof
-  fix f spec args s o v e x
-  assume hM hv hvu hs hm he hno hx hr hp ho
+  fix objs
+  assume h
+  have ss: subset(objs, omega) by taut(powerset_def[s := omega, a := objs], expand(h, set_type))
+  show := mp(univ_subset[u := 1, a := objs, b := omega], omega_univ, ss)
+qed
+
+// undefined behavior: the spec raises from the world
+theorem abi.ub_case: all f spec args objs s o e x. s in x86_64_linux.Machine -> objs in set_type(omega) -> e in univ(1) ->
+  !(e = exc_val("stack_overflow", empty)) -> abi.raise_state(s, objs, x) ->
+  runs(app(spec, args), abi.view(s, objs), exc(x, e)) -> pair(s, o) in univ(1) -> abi.outcome(o) ->
+  runs(abi.abi_function(single(empty), f, spec, args, objs), s, o)
+proof
+  fix f spec args objs s o e x
+  assume hM hot he hno hx hr hp ho
   have su: s in univ(1) by simp(hp)
+  have ou := apply(abi.objs_univ, hot)
   have kf := apply(pow_cart_fst, unsel(expand(hM, x86_64_linux.Machine)))
   have gs0 := apply(ghost_part_none, kf)
   have hsv: app(s, "vm") in x86_64_linux.Vm by simp(hM)
   have hsp: app(app(s, "gpr"), 4) in bits(64) by simp(hM)
-  // the view is a World; with s's (empty) ghost part, the world the ABI shows
-  have vu: abi.view(v, s) in univ(1) by simp(su, hvu)
-  have wt: abi.view(v, s) in abi.World by simp(hM, hv, vu)
+  // the world is a World; with s's (empty) ghost part, the world the ABI shows
+  have vu: abi.view(s, objs) in univ(1) by simp(su, ou)
+  have wt := apply(abi.world_typed, hM, hot, vu)
   have gi: ghost_part(s, abi.KEYS) in single(empty) by simp(gs0)
-  have ra: rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS)) in rec_and(abi.World, single(empty)) by defs(apply(rec_and_intro, wt, gi), rec_merge)
-  have e0: rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS)) = abi.view(v, s) by simp(gs0)
-  have rv: abi.view(v, s) in rec_and(abi.World, single(empty)) := rewrite(e0, ra)
-  have xr0: x = abi.view(v, s) -> x in rec_and(abi.World, single(empty)) proof
+  have ra: rec_merge(abi.view(s, objs), ghost_part(s, abi.KEYS)) in rec_and(abi.World, single(empty)) by defs(apply(rec_and_intro, wt, gi), rec_merge)
+  have e0: rec_merge(abi.view(s, objs), ghost_part(s, abi.KEYS)) = abi.view(s, objs) by simp(gs0)
+  have rv: abi.view(s, objs) in rec_and(abi.World, single(empty)) := rewrite(e0, ra)
+  have xr0: x = abi.view(s, objs) -> x in rec_and(abi.World, single(empty)) proof
     assume ex
     show := rewrite(sym(ex), rv)
   qed
   have xr: x in rec_and(abi.World, single(empty)) by taut(expand(hx, abi.raise_state), xr0)
   have hr2 := rewrite(sym(e0), hr)
-  have hra := apply(abi.raises_intro, {rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS))}, {x}, {spec}, {args}, {e}, xr, he, hno, hr2)
-  show := apply(abi.ub_intro, {f}, hp, ho, hvu, hv, hs, hm, hsv, hsp, hra)
+  have hra := apply(abi.raises_intro, {rec_merge(abi.view(s, objs), ghost_part(s, abi.KEYS))}, {x}, {spec}, {args}, {e}, xr, he, hno, hr2)
+  show := apply(abi.ub_intro, {f}, hp, ho, ou, hsv, hsp, hra)
 qed
 
-// a normal return: the machine's final state m1, the spec's run on the view
-// v ending in w2 with the result in rax:rdx
-theorem abi.ret_case: all f spec args s m1 v w2. s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> m1 in x86_64_linux.Machine -> pair(s, ok(m1, empty)) in univ(1) ->
-  v in x86_64_linux.Vm -> v in univ(1) -> abi.scratch_view(v, app(s, "vm"), abi.sp(s)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, abi.sp(s)) ->
-  runs(app(spec, args), abi.view(v, s), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) -> w2 in abi.World -> w2 in univ(1) ->
-  abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), abi.sp(s)) -> app(m1, "os") = app(w2, "os") -> app(m1, "fs_base") = app(w2, "fs_base") ->
+// a normal return: the machine's final state m1, the spec's run on the
+// world ending in w2 with the result in rax:rdx
+theorem abi.ret_case: all f spec args objs s m1 w2. s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> m1 in x86_64_linux.Machine -> pair(s, ok(m1, empty)) in univ(1) ->
+  objs in set_type(omega) -> (all x. x in omega -> x in objs -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) ->
+  runs(app(spec, args), abi.view(s, objs), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) -> w2 in abi.World -> w2 in univ(1) ->
+  abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), objs, abi.sp(s)) -> app(m1, "os") = app(w2, "os") -> app(m1, "fs_base") = app(w2, "fs_base") ->
   app(m1, "cpu") = app(s, "cpu") -> app(m1, "gs_base") = app(s, "gs_base") -> app(m1, "rip") = abi.ret(s) -> app(app(m1, "gpr"), 4) = abi.sp(s) ->
   abi.callee_saved(m1, s) -> !app(app(m1, "flags"), "df") ->
-  runs(abi.abi_function(single(empty), f, spec, args), s, ok(m1, empty))
+  runs(abi.abi_function(single(empty), f, spec, args, objs), s, ok(m1, empty))
 proof
-  fix f spec args s m1 v w2
-  assume hM he hM1 hp hv hvu hs hm hr hw hwu hnm hos hfs hcpu hgs hrip hrsp hcs hdf
+  fix f spec args objs s m1 w2
+  assume hM he hM1 hp hot hob hr hw hwu hnm hos hfs hcpu hgs hrip hrsp hcs hdf
   // abi.ret_intro's states, for nv, g, xm, fl the machine's
-  let x7 := rec_merge(abi.view(v, s), ghost_part(s, abi.KEYS))
+  let x7 := abi.cw(s, objs)
   let s1 := fn_update(fn_update(fn_update(s, "vm", app(s, "vm")), "os", app(s, "os")), "fs_base", app(s, "fs_base"))
   let mm1 := rec_merge(restrict(s1, abi.KEYS), ghost_part(x7, abi.WKEYS))
-  let in1 := rec_merge(abi.wv(v, mm1, s), ghost_part(mm1, abi.KEYS))
+  let in1 := abi.cw(mm1, objs)
   have ok0 := apply(abi.ok_univ, hp)
   have su: s in univ(1) by taut(ok0)
   have m1u: m1 in univ(1) by taut(ok0)
+  have ou := apply(abi.objs_univ, hot)
   have kf := apply(pow_cart_fst, unsel(expand(hM, x86_64_linux.Machine)))
   have rs0 := apply(restrict_all, kf)
   have gs0 := apply(ghost_part_none, kf)
   have gw0 := apply(ghost_part_none, apply(pow_cart_fst, unsel(expand(hw, abi.World))))
-  have ein: in1 = abi.view(v, s) by simp(rs0, gs0)
+  have ein: in1 = abi.view(s, objs) by simp(rs0, gs0)
   have hspec := rewrite(sym(ein), hr)
   // false is a value (the prelude's prop_univ)
   have fbu: false in univ(1) by simp()
@@ -144,8 +138,8 @@ proof
   have tx: app(m1, "xmm") in fn_space(x86_64_linux.Reg, bits(128)) by simp(hM1)
   have fu: app(m1, "flags") in univ(1) by simp(m1u)
   have tf: app(m1, "flags") in x86_64_linux.Flags by simp(hM1)
-  have rt := apply(abi.ret_intro, {f}, {spec}, {args}, {s}, {v}, {app(m1, "vm")}, {w2}, {app(app(m1, "gpr"), 0)}, {app(app(m1, "gpr"), 2)}, {app(m1, "gpr")}, {app(m1, "xmm")}, {app(m1, "flags")},
-    su, hvu, hv, hsv, hsp, hs, hm, hspec, hwu, h0, h1, hnu, hnv, hnm, gu, tg, xu, tx, fu, tf)
+  have rt := apply(abi.ret_intro, {f}, {spec}, {args}, {objs}, {s}, {app(m1, "vm")}, {w2}, {app(app(m1, "gpr"), 0)}, {app(app(m1, "gpr"), 2)}, {app(m1, "gpr")}, {app(m1, "xmm")}, {app(m1, "flags")},
+    su, ou, hsv, hsp, hob, hspec, hwu, h0, h1, hnu, hnv, hnm, gu, tg, xu, tx, fu, tf)
   // its final state is m1
   let m2 := fn_update(fn_update(fn_update(mm1, "vm", app(m1, "vm")), "os", app(w2, "os")), "fs_base", app(w2, "fs_base"))
   let x12 := rec_merge(restrict(m2, abi.KEYS), ghost_part(w2, abi.WKEYS))
@@ -163,36 +157,42 @@ qed
 
 // the contract from the runs that start at f, as the ABI requires
 theorem abi.implements_intro: all f spec base code statics.
-  (all args s o. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
-    runs(abi.run_to_return(), s, o) -> runs(abi.abi_function(single(empty), f, spec, args), s, o)) ->
+  (all args objs s o. args in abi.ARGS -> objs in set_type(omega) -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) ->
+    (all x. x in omega -> x in objs -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) ->
+    runs(abi.run_to_return(), s, o) -> runs(abi.abi_function(single(empty), f, spec, args, objs), s, o)) ->
   abi.implements2_at(single(empty), f, spec, base, code, statics)
 proof
   fix f spec base code statics
   assume hrun
   let ld(m) := abi.loaded(app(m, "vm"), base, code, statics)
-  let rel(a) := mkprog(x1 x2. !ld(x1) || bind_rel(abi.abi_function(single(empty), f, spec, a), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
-  have main: all x0. x0 in abi.ARGS -> (all s h o. s in x86_64_linux.Machine -> h in single(empty) -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in single(empty) && runs(rel(x0), union2(s, h), with_ghost(o, h2)))) proof
-    fix args
-    assume hA
-    show all s h o. s in x86_64_linux.Machine -> h in single(empty) -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in single(empty) && runs(rel(args), union2(s, h), with_ghost(o, h2))) proof
+  let rel(a, ob) := mkprog(x1 x2. !ld(x1) || bind_rel(abi.abi_function(single(empty), f, spec, a, ob), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have main: all x0 x1. x0 in abi.ARGS && x1 in set_type(omega) -> (all s h o. s in x86_64_linux.Machine -> h in single(empty) -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in single(empty) && runs(rel(x0, x1), union2(s, h), with_ghost(o, h2)))) proof
+    fix args objs
+    assume hAo
+    have hA hot := hAo
+    show all s h o. s in x86_64_linux.Machine -> h in single(empty) -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in single(empty) && runs(rel(args, objs), union2(s, h), with_ghost(o, h2))) proof
       fix s h o
       assume hM hh hr
       have hp := apply(abi.run_univ, hr)
       have hsh := apply(abi.run_shape, hr)
-      // abi_function: its precondition, else the given runs
-      have pre: !(app(s, "rip") = f && abi.entry_ok(s, args)) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+      // abi_function: its preconditions, else the given runs
+      have pre: !(app(s, "rip") = f && abi.entry_ok(s, args)) -> runs(abi.abi_function(single(empty), f, spec, args, objs), s, o) proof
         assume hn
-        show by simp(hp, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.scratch, abi.overflow_ok))
+        show by simp(hp, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at))
       qed
-      have mc: ld(s) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
+      have pre2: !(all x. x in omega -> x in objs -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> runs(abi.abi_function(single(empty), f, spec, args, objs), s, o) proof
+        assume hn
+        show by simp(hp, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at))
+      qed
+      have mc: ld(s) -> runs(abi.abi_function(single(empty), f, spec, args, objs), s, o) proof
         assume hc
-        have run: app(s, "rip") = f && abi.entry_ok(s, args) -> runs(abi.abi_function(single(empty), f, spec, args), s, o) proof
-          assume hy
-          show := apply(hrun, hA, hM, hc, hy, hy, hr)
+        have run: app(s, "rip") = f && abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> int_le(abi.sp(s), x) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> runs(abi.abi_function(single(empty), f, spec, args, objs), s, o) proof
+          assume hy hb
+          show := apply(hrun, hA, hot, hM, hc, hy, hy, hb, hr)
         qed
-        show by taut(pre, run)
+        show by taut(pre, pre2, run)
       qed
-      have mc2: !ld(s) || runs(abi.abi_function(single(empty), f, spec, args), s, o) by taut(mc)
+      have mc2: !ld(s) || runs(abi.abi_function(single(empty), f, spec, args, objs), s, o) by taut(mc)
       show by defs(ex_intro({empty}, simp(hh, hp, hsh, mc2, keep(abi.abi_function, abi.loaded, abi.run_to_return))), with_ghost)
     qed
   qed

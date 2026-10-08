@@ -5,71 +5,94 @@
 //   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
 //     build/musl_malloc_O0.core proofs/abi.core
 //
-// - the view `world(sp)`: reading it (`get_ok`, for a view v of the
-//   memory) and writing a world back (`set_ok`, for memory that matches it)
+// - the view `world(sp, objs)`: reading it (`get_ok`: the machine's memory,
+//   with the stack objects objs) and writing a world back (`set_ok`, for
+//   memory that matches it)
 // - `ub_intro`: if the spec may raise from the entry world (undefined
 //   behavior), any outcome of the machine is allowed
 // - `call_ok`: abi_call, the spec run on the world and the world written
 //   back
 
-theorem abi.get_ok: all sp s v. s in univ(1) -> sp in bits(64) -> v in univ(1) -> v in x86_64_linux.Vm -> abi.scratch_view(v, app(s, "vm"), sp) ->
-  runs(abi.world.get(sp), s, ok(s, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)))
+abbrev abi.KEYS := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))
+abbrev abi.WKEYS := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty)))))
+abbrev abi.ARGS := set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6))
+// the caller's stack pointer and the return address, at entry s
+abbrev abi.sp(s) := bits_add(64, app(app(s, "gpr"), 4), 8)
+abbrev abi.ret(s) := x86_64_linux.le(app(app(s, "vm"), "bytes"), app(app(s, "gpr"), 4), 8)
+// the world of the machine state m, with the stack objects objs
+abbrev abi.wo(m, objs) := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", app(m, "vm")), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "objs", objs)
+// ... in the merged state of abi_call (no ghost state)
+abbrev abi.cw(m, objs) := rec_merge(abi.wo(m, objs), ghost_part(m, abi.KEYS))
+// the world at the entry s
+abbrev abi.view(s, objs) := abi.wo(s, objs)
+abbrev abi.outcome(o) := (ex m1 e. o = ok(m1, e)) || (ex m1 e. o = exc(m1, e)) || (ex t. o = diverge(t))
+// the callee-saved registers of m as at entry s
+abbrev abi.callee_saved(m, s) := app(app(m, "gpr"), 3) = app(app(s, "gpr"), 3) && app(app(m, "gpr"), 5) = app(app(s, "gpr"), 5) &&
+  app(app(m, "gpr"), 12) = app(app(s, "gpr"), 12) && app(app(m, "gpr"), 13) = app(app(s, "gpr"), 13) &&
+  app(app(m, "gpr"), 14) = app(app(s, "gpr"), 14) && app(app(m, "gpr"), 15) = app(app(s, "gpr"), 15)
+
+theorem abi.get_ok: all sp objs s. s in univ(1) -> objs in univ(1) -> runs(abi.world.get(sp, objs), s, ok(s, abi.wo(s, objs)))
 proof
-  fix sp s v
-  assume hs hp hvu hv hw
-  show by simp(hs, hp, hvu, hv, hw, keep(abi.scratch_view))
+  fix sp objs s
+  assume hs ho
+  show by simp(hs, ho)
 qed
 
-theorem abi.set_ok: all sp s w nv. s in univ(1) -> w in univ(1) -> nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(app(s, "vm"), nv, app(w, "vm"), sp) ->
-  runs(abi.world.set(sp, w), s, ok(fn_update(fn_update(fn_update(s, "vm", nv), "os", app(w, "os")), "fs_base", app(w, "fs_base")), empty))
+theorem abi.set_ok: all sp objs s w nv. s in univ(1) -> w in univ(1) -> nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(app(s, "vm"), nv, app(w, "vm"), objs, sp) ->
+  runs(abi.world.set(sp, objs, w), s, ok(fn_update(fn_update(fn_update(s, "vm", nv), "os", app(w, "os")), "fs_base", app(w, "fs_base")), empty))
 proof
-  fix sp s w nv
+  fix sp objs s w nv
   assume hs hw hvu hv hm
   show by simp(hs, hw, hvu, hv, hm, keep(abi.world_matches))
 qed
 
-theorem abi.ub_intro: all f spec args s o v. pair(s, o) in univ(1) -> ((ex m1 e. o = ok(m1, e)) || (ex m1 e. o = exc(m1, e)) || (ex t. o = diverge(t))) -> v in univ(1) -> v in x86_64_linux.Vm ->
-  abi.scratch_view(v, app(s, "vm"), bits_add(64, app(app(s, "gpr"), 4), 8)) -> abi.world_matches(app(s, "vm"), app(s, "vm"), v, bits_add(64, app(app(s, "gpr"), 4), 8)) ->
-  app(s, "vm") in x86_64_linux.Vm -> app(app(s, "gpr"), 4) in bits(64) ->
-  abi.spec_raises(rec_and(abi.World, single(empty)), rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), spec, args) ->
-  runs(abi.abi_function(single(empty), f, spec, args), s, o)
+// (the world written back unchanged: the memory as it was)
+theorem abi.wm_self: all vm objs sp. abi.world_matches(vm, vm, vm, objs, sp)
 proof
-  fix f spec args s o v
-  assume hu ho hvu hv hs hm hsv hsp hr
-  have su: s in univ(1) by simp(hu)
-  have spb: bits_add(64, app(app(s, "gpr"), 4), 8) in bits(64) by simp(hsp)
-  have g := mp(mp(mp(mp(all_elim(all_elim(all_elim(abi.get_ok, {bits_add(64, app(app(s, "gpr"), 4), 8)}), {s}), {v}), su), spb), hvu), hv)
-  have gp := mp(g, hs)
-  have x7u: rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))) in univ(1) by simp(su, hvu, mp(ghost_part_univ[u := 1, f := s, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], su))
-  have wu := mp(restrict_univ[u := 1, f := rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], x7u)
-  have vmu: app(s, "vm") in univ(1) by simp(su)
-  have st := mp(mp(mp(mp(all_elim(all_elim(all_elim(all_elim(abi.set_ok, {bits_add(64, app(app(s, "gpr"), 4), 8)}), {s}), {restrict(rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))}), {app(s, "vm")}), su), wu), vmu), hsv)
-  have hm2: abi.world_matches(app(s, "vm"), app(s, "vm"), app(restrict(rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)), ghost_part(s, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))), "vm"), bits_add(64, app(app(s, "gpr"), 4), 8)) by simp(hm, keep(abi.world_matches))
-  have st2 := mp(st, hm2)
-  have wun: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", bits_add(64, app(app(s, "gpr"), 4), 8)) in univ(1) by simp(su, hvu)
-  show by simp(hu, ho, wun, gp, st2, hm, hr, mp(ghost_part_univ[u := 1, f := s, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], su), x7u, keep(abi.scratch_view, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set))
+  fix vm objs sp
+  show by defs(simp(), abi.world_matches)
 qed
 
-// The spec run on the world (abi_call): read through the view v, the spec's
-// outcome, written back as nv -- the result (r0, r1) in the merged state.
-theorem abi.call_ok: all spec args sp m v nv w2 r0 r1. m in univ(1) -> sp in bits(64) -> v in univ(1) -> v in x86_64_linux.Vm ->
-  abi.scratch_view(v, app(m, "vm"), sp) -> runs(app(spec, args), rec_merge(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp), ghost_part(m, insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty))))))))))), ok(w2, pair(r0, r1))) -> w2 in univ(1) ->
-  nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(app(m, "vm"), nv, app(w2, "vm"), sp) -> r0 in univ(1) -> r1 in univ(1) ->
-  runs(abi.abi_call(single(empty), spec, args, sp), m, ok(rec_merge(restrict(fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))), ghost_part(w2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), pair(r0, r1)))
+theorem abi.ub_intro: all f spec args objs s o. pair(s, o) in univ(1) -> abi.outcome(o) -> objs in univ(1) ->
+  app(s, "vm") in x86_64_linux.Vm -> app(app(s, "gpr"), 4) in bits(64) ->
+  abi.spec_raises(rec_and(abi.World, single(empty)), abi.cw(s, objs), spec, args) ->
+  runs(abi.abi_function(single(empty), f, spec, args, objs), s, o)
 proof
-  fix spec args sp m v nv w2 r0 r1
-  assume mu hp vu hv hs hspec wu nu hnv hnm r0u r1u
-  have g := mp(mp(mp(mp(mp(all_elim(all_elim(all_elim(abi.get_ok, {sp}), {m}), {v}), mu), hp), vu), hv), hs)
-  have w2r := mp(restrict_univ[u := 1, f := w2, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], wu)
-  have hnm1: abi.world_matches(app(m, "vm"), nv, app(restrict(w2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))), "vm"), sp) by simp(hnm, keep(abi.world_matches))
-  have st := mp(mp(mp(mp(mp(all_elim(all_elim(all_elim(all_elim(abi.set_ok, {sp}), {m}), {restrict(w2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))}), {nv}), mu), w2r), nu), hnv), hnm1)
-  have wun: fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(m, "os")), "fs_base", app(m, "fs_base")), "cpu", app(m, "cpu")), "sp", sp) in univ(1) by simp(mu, vu, hp)
-  have gmu := mp(ghost_part_univ[u := 1, f := m, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], mu)
-  have gwu := mp(ghost_part_univ[u := 1, f := w2, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], wu)
+  fix f spec args objs s o
+  assume hu ho hou hsv hsp hr
+  have su: s in univ(1) by simp(hu)
+  have gp := mp(all_elim(abi.get_ok, {abi.sp(s)}, {objs}, {s}), su, hou)
+  have wun: abi.wo(s, objs) in univ(1) by simp(su, hou)
+  have gpu := mp(ghost_part_univ[u := 1, f := s, d := abi.KEYS], su)
+  have cwu: abi.cw(s, objs) in univ(1) by simp(wun, gpu)
+  have wu := mp(restrict_univ[u := 1, f := abi.cw(s, objs), d := abi.WKEYS], cwu)
+  have vmu: app(s, "vm") in univ(1) by simp(su)
+  have hm2: abi.world_matches(app(s, "vm"), app(s, "vm"), app(restrict(abi.cw(s, objs), abi.WKEYS), "vm"), objs, abi.sp(s)) by simp(all_elim(abi.wm_self, {app(s, "vm")}, {objs}, {abi.sp(s)}), keep(abi.world_matches))
+  have st := mp(all_elim(abi.set_ok, {abi.sp(s)}, {objs}, {s}, {restrict(abi.cw(s, objs), abi.WKEYS)}, {app(s, "vm")}), su, wu, vmu, hsv, hm2)
+  show by simp(hu, ho, wun, gp, st, hr, gpu, cwu, keep(abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set))
+qed
+
+// The spec run on the world (abi_call): its outcome, written back as nv --
+// the result (r0, r1) in the merged state.
+theorem abi.call_ok: all spec args sp objs m nv w2 r0 r1. m in univ(1) -> objs in univ(1) ->
+  runs(app(spec, args), abi.cw(m, objs), ok(w2, pair(r0, r1))) -> w2 in univ(1) ->
+  nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(app(m, "vm"), nv, app(w2, "vm"), objs, sp) -> r0 in univ(1) -> r1 in univ(1) ->
+  runs(abi.abi_call(single(empty), spec, args, sp, objs), m, ok(rec_merge(restrict(fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), abi.KEYS),
+    ghost_part(w2, abi.WKEYS)), pair(r0, r1)))
+proof
+  fix spec args sp objs m nv w2 r0 r1
+  assume mu ou hspec wu nu hnv hnm r0u r1u
+  have g := mp(all_elim(abi.get_ok, {sp}, {objs}, {m}), mu, ou)
+  have w2r := mp(restrict_univ[u := 1, f := w2, d := abi.WKEYS], wu)
+  have hnm1: abi.world_matches(app(m, "vm"), nv, app(restrict(w2, abi.WKEYS), "vm"), objs, sp) by simp(hnm, keep(abi.world_matches))
+  have st := mp(all_elim(abi.set_ok, {sp}, {objs}, {m}, {restrict(w2, abi.WKEYS)}, {nv}), mu, w2r, nu, hnv, hnm1)
+  have wun: abi.wo(m, objs) in univ(1) by simp(mu, ou)
+  have gmu := mp(ghost_part_univ[u := 1, f := m, d := abi.KEYS], mu)
+  have gwu := mp(ghost_part_univ[u := 1, f := w2, d := abi.WKEYS], wu)
   have m2u: fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")) in univ(1) by simp(mu, nu, wu)
-  have rmu := mp(restrict_univ[u := 1, f := fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], m2u)
-  have rm := mp(restrict_univ[u := 1, f := m, d := insert("gpr", insert("xmm", insert("rip", insert("flags", insert("cpu", insert("fs_base", insert("gs_base", insert("vm", insert("os", empty)))))))))], mu)
-  show by simp(mu, hp, nu, rm, wun, gmu, gwu, rmu, wu, r0u, r1u, g, st, hspec, keep(abi.scratch_view, abi.world_matches, abi.world.get, abi.world.set))
+  have rmu := mp(restrict_univ[u := 1, f := fn_update(fn_update(fn_update(m, "vm", nv), "os", app(w2, "os")), "fs_base", app(w2, "fs_base")), d := abi.KEYS], m2u)
+  have rm := mp(restrict_univ[u := 1, f := m, d := abi.KEYS], mu)
+  show by simp(mu, nu, rm, wun, gmu, gwu, rmu, wu, r0u, r1u, g, st, hspec, keep(abi.world_matches, abi.world.get, abi.world.set))
 qed
 
 // a run's state and outcome are in the universe
@@ -80,41 +103,44 @@ proof
   show by simp(hp)
 qed
 
-// the world a machine state shows through a view v of its memory is a World
-theorem abi.world_typed: all s v sp. s in x86_64_linux.Machine -> v in x86_64_linux.Vm -> sp in bits(64) -> fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp) in univ(1) -> fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp) in abi.World
+// the world of a machine state is a World
+theorem abi.world_typed: all s objs. s in x86_64_linux.Machine -> objs in set_type(omega) -> abi.wo(s, objs) in univ(1) -> abi.wo(s, objs) in abi.World
 proof
-  fix s v sp
-  assume hM hv hsp hu
-  have mt: app(s, "fs_base") in bits(64) && app(s, "cpu") in x86_64_linux.Cpu && app(s, "os") in x86_64_linux.Os by simp(expand(hM, x86_64_linux.Machine))
+  fix s objs
+  assume hM ho hu
+  let W := abi.wo(s, objs)
+  have mt: app(s, "vm") in x86_64_linux.Vm && app(s, "fs_base") in bits(64) && app(s, "cpu") in x86_64_linux.Cpu && app(s, "os") in x86_64_linux.Os by simp(expand(hM, x86_64_linux.Machine))
   have de := dom_empty
   have f0: is_fun(empty) by taut(de)
   have d0: dom(empty) = empty by taut(de)
-  have f1 := mp(fn_update_fun[f := empty, k := "vm", v := v], f0)
-  have d1 := mp(dom_update[f := empty, k := "vm", v := v], f0)
-  have f2 := mp(fn_update_fun[f := fn_update(empty, "vm", v), k := "os", v := app(s, "os")], f1)
-  have d2 := mp(dom_update[f := fn_update(empty, "vm", v), k := "os", v := app(s, "os")], f1)
-  have f3 := mp(fn_update_fun[f := fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), k := "fs_base", v := app(s, "fs_base")], f2)
-  have d3 := mp(dom_update[f := fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), k := "fs_base", v := app(s, "fs_base")], f2)
-  have f4 := mp(fn_update_fun[f := fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), k := "cpu", v := app(s, "cpu")], f3)
-  have d4 := mp(dom_update[f := fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), k := "cpu", v := app(s, "cpu")], f3)
-  have f5 := mp(fn_update_fun[f := fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), k := "sp", v := sp], f4)
-  have d5 := mp(dom_update[f := fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), k := "sp", v := sp], f4)
-  have dset: all x. x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) <-> x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) proof
+  have f1 := mp(fn_update_fun[f := empty, k := "vm", v := app(s, "vm")], f0)
+  have d1 := mp(dom_update[f := empty, k := "vm", v := app(s, "vm")], f0)
+  have f2 := mp(fn_update_fun[f := fn_update(empty, "vm", app(s, "vm")), k := "os", v := app(s, "os")], f1)
+  have d2 := mp(dom_update[f := fn_update(empty, "vm", app(s, "vm")), k := "os", v := app(s, "os")], f1)
+  have f3 := mp(fn_update_fun[f := fn_update(fn_update(empty, "vm", app(s, "vm")), "os", app(s, "os")), k := "fs_base", v := app(s, "fs_base")], f2)
+  have d3 := mp(dom_update[f := fn_update(fn_update(empty, "vm", app(s, "vm")), "os", app(s, "os")), k := "fs_base", v := app(s, "fs_base")], f2)
+  have f4 := mp(fn_update_fun[f := fn_update(fn_update(fn_update(empty, "vm", app(s, "vm")), "os", app(s, "os")), "fs_base", app(s, "fs_base")), k := "cpu", v := app(s, "cpu")], f3)
+  have d4 := mp(dom_update[f := fn_update(fn_update(fn_update(empty, "vm", app(s, "vm")), "os", app(s, "os")), "fs_base", app(s, "fs_base")), k := "cpu", v := app(s, "cpu")], f3)
+  have f5 := mp(fn_update_fun[f := fn_update(fn_update(fn_update(fn_update(empty, "vm", app(s, "vm")), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), k := "objs", v := objs], f4)
+  have d5 := mp(dom_update[f := fn_update(fn_update(fn_update(fn_update(empty, "vm", app(s, "vm")), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), k := "objs", v := objs], f4)
+  have dset: all x. x in insert("objs", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) <-> x in abi.WKEYS proof
     fix x
-    have l: x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) -> x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) proof
+    have l: x in insert("objs", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) -> x in abi.WKEYS proof
       assume h
       show by simp(h)
     qed
-    have r: x in insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) -> x in insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) proof
+    have r: x in abi.WKEYS -> x in insert("objs", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))) proof
       assume h
       show by simp(h)
     qed
     show by taut(l, r)
   qed
-  have deq := mp(set_ext[a := insert("sp", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))), b := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))], dset)
-  have dw: dom(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))) by simp(d5, d4, d3, d2, d1, d0, deq)
-  have pw: (((((is_fun(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)) && dom(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "vm") in x86_64_linux.Vm) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "os") in x86_64_linux.Os) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "fs_base") in bits(64)) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "cpu") in x86_64_linux.Cpu) && app(fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp), "sp") in bits(64) by simp(f5, dw, mt, hv, hsp)
-  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))), p := x0. (((((is_fun(x0) && dom(x0) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))) && app(x0, "vm") in x86_64_linux.Vm) && app(x0, "os") in x86_64_linux.Os) && app(x0, "fs_base") in bits(64)) && app(x0, "cpu") in x86_64_linux.Cpu) && app(x0, "sp") in bits(64), r := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(s, "os")), "fs_base", app(s, "fs_base")), "cpu", app(s, "cpu")), "sp", sp)], hu), f5), dw), pw)
+  have deq := mp(set_ext[a := insert("objs", insert("cpu", insert("fs_base", insert("os", insert("vm", empty))))), b := abi.WKEYS], dset)
+  have dw: dom(W) = abi.WKEYS by simp(d5, d4, d3, d2, d1, d0, deq)
+  have pw: (((((is_fun(W) && dom(W) = abi.WKEYS) && app(W, "vm") in x86_64_linux.Vm) && app(W, "os") in x86_64_linux.Os) && app(W, "fs_base") in bits(64)) &&
+      app(W, "cpu") in x86_64_linux.Cpu) && app(W, "objs") in set_type(omega) by simp(f5, dw, mt, ho)
+  have r := mp(rec_type_intro[u := 1, k := abi.WKEYS, p := x0. (((((is_fun(x0) && dom(x0) = abi.WKEYS) && app(x0, "vm") in x86_64_linux.Vm) && app(x0, "os") in x86_64_linux.Os) &&
+    app(x0, "fs_base") in bits(64)) && app(x0, "cpu") in x86_64_linux.Cpu) && app(x0, "objs") in set_type(omega), r := W], hu, f5, dw, pw)
   show by defs(r, abi.World)
 qed
 

@@ -17,12 +17,12 @@ proof
   show by defs(simp(hs, hp, hd, h0, h1), gimple.padd, gimple.binop, gimple.fits, gimple.wrap, gimple.arith)
 qed
 
-theorem g.ld8_ok: all s a. s in univ(1) -> a in bits(64) -> !(a = 0) -> gimple.usable(app(s, "vm"), a, 1, false) -> gimple.unscratched(app(s, "vm"), app(s, "sp"), a, 1) -> runs(gimple.ld8(a, 0), s, ok(s, bits_of_int(8, gimple.bytes_at(app(s, "vm"), a, 1))))
+theorem g.ld8_ok: all s a. s in univ(1) -> a in bits(64) -> !(a = 0) -> gimple.usable(app(s, "vm"), app(s, "objs"), a, 1, false)  -> runs(gimple.ld8(a, 0), s, ok(s, bits_of_int(8, gimple.bytes_at(app(s, "vm"), a, 1))))
 proof
   fix s a
-  assume hs ha hz hu hsc
+  assume hs ha hz hu
   have pa: runs(gimple.padd(a, 0), s, ok(s, a)) by simp(hs, ha, expand(all_elim(all_elim(all_elim(g.padd_ok, {s}), {a}), {0}), gimple.sval), keep(gimple.padd))
-  show by defs(simp(hs, ha, hz, hu, hsc, pa, keep(gimple.padd)), gimple.ld8, gimple.mem)
+  show by defs(simp(hs, ha, hz, hu, pa, keep(gimple.padd)), gimple.ld8, gimple.mem)
 qed
 
 theorem g.padd_ub: all s p d s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> p in bits(64) -> d in bits(64) -> int_lt(int_add(p, gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), d)), 0) -> runs(gimple.padd(p, d), s, exc(s2, e))
@@ -32,14 +32,14 @@ proof
   show by defs(simp(hs, h2, he, hp, hd, h0), gimple.padd, gimple.binop, gimple.fits, gimple.wrap, gimple.arith)
 qed
 
-theorem g.ld8_ub: all s a s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> !(!(a = 0) && gimple.usable(app(s, "vm"), a, 1, false) && gimple.unscratched(app(s, "vm"), app(s, "sp"), a, 1)) -> a in bits(64) -> runs(gimple.ld8(a, 0), s, exc(s2, e))
+theorem g.ld8_ub: all s a s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> !(!(a = 0) && gimple.usable(app(s, "vm"), app(s, "objs"), a, 1, false)) -> a in bits(64) -> runs(gimple.ld8(a, 0), s, exc(s2, e))
 proof
   fix s a s2 e
   assume hs h2 he hn ha
   have pa: runs(gimple.padd(a, 0), s, ok(s, a)) by simp(hs, ha, expand(all_elim(all_elim(all_elim(g.padd_ok, {s}), {a}), {0}), gimple.sval), keep(gimple.padd))
   have c1: !(a = 0) -> runs(gimple.ld8(a, 0), s, exc(s2, e)) proof
     assume hz
-    have hu: !gimple.usable(app(s, "vm"), a, 1, false) || !gimple.unscratched(app(s, "vm"), app(s, "sp"), a, 1) by taut(hn, hz)
+    have hu: !gimple.usable(app(s, "vm"), app(s, "objs"), a, 1, false) by taut(hn, hz)
     show by defs(simp(hs, h2, he, ha, hu, hz, pa, keep(gimple.padd)), gimple.ld8, gimple.mem)
   qed
   have c2: a = 0 -> runs(gimple.ld8(a, 0), s, exc(s2, e)) proof
@@ -64,28 +64,53 @@ proof
 qed
 
 // memory usable for reading can be read by the machine (whose memory has
-// the same pages)
-theorem g.usable_read: all v vm a n i. gimple.usable(v, a, n, false) -> app(v, "pages") = app(vm, "pages") -> int_le(0, a) -> i in omega -> int_lt(i, n) ->
+// the same pages; the stack objects writable on it)
+theorem g.usable_read: all v objs vm a n i. gimple.usable(v, objs, a, n, false) -> app(v, "pages") = app(vm, "pages") ->
+  (all x. x in omega -> x in objs -> x86_64_linux.can_access(vm, bits_of_int(64, x), 1)) -> int_le(0, a) -> i in omega -> int_lt(i, n) ->
   x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 0)
 proof
-  fix v vm a n i
-  assume hu hpg h0 hi hn
-  have u := rewrite(hpg, expand(mp(all_elim(expand(hu, gimple.usable), {i}), hi, hn), x86_64_linux.mapped))
-  have mpd: int_lt(int_div(int_add(a, i), 4096), 34359738367) by simp(expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
-  have eb: bits_of_int(64, int_add(a, i)) = int_add(a, i) by simp(mpd, h0, hi)
-  show by defs(simp(u, eb), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+  fix v objs vm a n i
+  assume hu hpg ho h0 hi hn
+  have ui := mp(all_elim(expand(hu, gimple.usable), {i}), hi, hn)
+  have ao: int_add(a, i) in omega by simp(h0, hi)
+  // a stack object's byte: writable, so readable
+  have c1: int_add(a, i) in objs -> x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 0) proof
+    assume hx
+    have w := mp(all_elim(ho, {int_add(a, i)}), ao, hx)
+    show by defs(simp(expand(w, x86_64_linux.can_access, x86_64_linux.hw_allows, x86_64_linux.accessible)), x86_64_linux.can_access, x86_64_linux.hw_allows, x86_64_linux.accessible)
+  qed
+  // a page's: mapped, readable
+  have c2: !(int_add(a, i) in objs) -> x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 0) proof
+    assume hx
+    have u := rewrite(hpg, expand(ui, x86_64_linux.mapped))
+    have mpd: int_lt(int_div(int_add(a, i), 4096), 34359738367) by simp(hx, expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+    have eb: bits_of_int(64, int_add(a, i)) = int_add(a, i) by simp(mpd, h0, hi)
+    show by defs(simp(u, eb, hx), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+  qed
+  show by taut(c1, c2)
 qed
 
 // ... and memory usable for writing can be written
-theorem g.usable_write: all v vm a n i. gimple.usable(v, a, n, true) -> app(v, "pages") = app(vm, "pages") -> int_le(0, a) -> i in omega -> int_lt(i, n) ->
+theorem g.usable_write: all v objs vm a n i. gimple.usable(v, objs, a, n, true) -> app(v, "pages") = app(vm, "pages") ->
+  (all x. x in omega -> x in objs -> x86_64_linux.can_access(vm, bits_of_int(64, x), 1)) -> int_le(0, a) -> i in omega -> int_lt(i, n) ->
   x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 1)
 proof
-  fix v vm a n i
-  assume hu hpg h0 hi hn
-  have u := rewrite(hpg, expand(mp(all_elim(expand(hu, gimple.usable), {i}), hi, hn), x86_64_linux.mapped))
-  have mpd: int_lt(int_div(int_add(a, i), 4096), 34359738367) by simp(expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
-  have eb: bits_of_int(64, int_add(a, i)) = int_add(a, i) by simp(mpd, h0, hi)
-  show by defs(simp(u, eb), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+  fix v objs vm a n i
+  assume hu hpg ho h0 hi hn
+  have ui := mp(all_elim(expand(hu, gimple.usable), {i}), hi, hn)
+  have ao: int_add(a, i) in omega by simp(h0, hi)
+  have c1: int_add(a, i) in objs -> x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 1) proof
+    assume hx
+    show := mp(all_elim(ho, {int_add(a, i)}), ao, hx)
+  qed
+  have c2: !(int_add(a, i) in objs) -> x86_64_linux.can_access(vm, bits_of_int(64, int_add(a, i)), 1) proof
+    assume hx
+    have u := rewrite(hpg, expand(ui, x86_64_linux.mapped))
+    have mpd: int_lt(int_div(int_add(a, i), 4096), 34359738367) by simp(hx, expand(u, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+    have eb: bits_of_int(64, int_add(a, i)) = int_add(a, i) by simp(mpd, h0, hi)
+    show by defs(simp(u, eb, hx), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
+  qed
+  show by taut(c1, c2)
 qed
 
 // the bytes after a store are a member of the universe
@@ -98,12 +123,12 @@ qed
 
 // stores: the address (`mem`), the bytes written (`write_bytes`, a loop
 // run in the goal: `unroll`), a 32-bit store, and its undefined behavior
-theorem g.mem_ok: all s a n w. s in univ(1) -> a in bits(64) -> !(a = 0) -> gimple.usable(app(s, "vm"), a, n, w) -> gimple.unscratched(app(s, "vm"), app(s, "sp"), a, n) -> runs(gimple.mem(a, 0, n, w), s, ok(s, a))
+theorem g.mem_ok: all s a n w. s in univ(1) -> a in bits(64) -> !(a = 0) -> gimple.usable(app(s, "vm"), app(s, "objs"), a, n, w)  -> runs(gimple.mem(a, 0, n, w), s, ok(s, a))
 proof
   fix s a n w
-  assume hs ha hz hu hsc
+  assume hs ha hz hu
   have pa: runs(gimple.padd(a, 0), s, ok(s, a)) by simp(hs, ha, expand(all_elim(g.padd_ok, {s}, {a}, {0}), gimple.sval), keep(gimple.padd))
-  show by defs(simp(hs, ha, hz, hu, hsc, pa, keep(gimple.padd)), gimple.mem)
+  show by defs(simp(hs, ha, hz, hu, pa, keep(gimple.padd)), gimple.mem)
 qed
 
 theorem g.write4_ok: all s a v. s in univ(1) -> a in bits(64) -> v in omega -> app(s, "vm") in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
@@ -115,19 +140,19 @@ proof
   show by defs(simp(hs, ha, hv, hvm, hf, hd, s4, unroll), gimple.write_bytes)
 qed
 
-theorem g.st32_ok: all s a v. s in univ(1) -> a in bits(64) -> v in bits(32) -> !(a = 0) -> gimple.usable(app(s, "vm"), a, 4, true) -> gimple.unscratched(app(s, "vm"), app(s, "sp"), a, 4) ->
+theorem g.st32_ok: all s a v. s in univ(1) -> a in bits(64) -> v in bits(32) -> !(a = 0) -> gimple.usable(app(s, "vm"), app(s, "objs"), a, 4, true)  ->
   app(s, "vm") in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
   runs(gimple.st32(a, 0, v), s, ok(fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", x86_64_linux.store_le(app(app(s, "vm"), "bytes"), a, 4, v))), empty))
 proof
   fix s a v
-  assume hs ha hv hz hu hsc hvm hf hd
-  have m := apply(g.mem_ok, {s}, {a}, {4}, {true}, hs, ha, hz, hu, hsc)
+  assume hs ha hv hz hu hvm hf hd
+  have m := apply(g.mem_ok, {s}, {a}, {4}, {true}, hs, ha, hz, hu)
   have w := apply(g.write4_ok, {s}, {a}, {v}, hs, ha, simp(hv), hvm, hf, hd)
   have stu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], apply(x86.store_typed, {app(app(s, "vm"), "bytes")}, {a}, {4}, {v}, simp(hvm)))
   show by defs(simp(hs, m, w, stu, keep(gimple.mem, gimple.write_bytes)), gimple.st32)
 qed
 
-theorem g.st32_ub: all s a v s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> a in bits(64) -> !(!(a = 0) && gimple.usable(app(s, "vm"), a, 4, true) && gimple.unscratched(app(s, "vm"), app(s, "sp"), a, 4)) ->
+theorem g.st32_ub: all s a v s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> a in bits(64) -> !(!(a = 0) && gimple.usable(app(s, "vm"), app(s, "objs"), a, 4, true)) ->
   runs(gimple.st32(a, 0, v), s, exc(s2, e))
 proof
   fix s a v s2 e
@@ -135,7 +160,7 @@ proof
   have pa: runs(gimple.padd(a, 0), s, ok(s, a)) by simp(hs, ha, expand(all_elim(g.padd_ok, {s}, {a}, {0}), gimple.sval), keep(gimple.padd))
   have c1: !(a = 0) -> runs(gimple.mem(a, 0, 4, true), s, exc(s2, e)) proof
     assume hz
-    have hu: !gimple.usable(app(s, "vm"), a, 4, true) || !gimple.unscratched(app(s, "vm"), app(s, "sp"), a, 4) by taut(hn, hz)
+    have hu: !gimple.usable(app(s, "vm"), app(s, "objs"), a, 4, true) by taut(hn, hz)
     show by defs(simp(hs, h2, he, ha, hz, hu, pa, keep(gimple.padd)), gimple.mem)
   qed
   have c2: a = 0 -> runs(gimple.mem(a, 0, 4, true), s, exc(s2, e)) proof
@@ -174,8 +199,7 @@ qed
 
 // an access of n bytes at p + off (off a small constant): its address,
 // or undefined (p null, p + off past the address space, not usable)
-abbrev g.mem_defined(s, p, off, n, w) := !(p = 0) && int_lt(int_add(p, off), pow2(64)) && gimple.usable(app(s, "vm"), int_add(p, off), n, w) &&
-  gimple.unscratched(app(s, "vm"), app(s, "sp"), int_add(p, off), n)
+abbrev g.mem_defined(s, p, off, n, w) := !(p = 0) && int_lt(int_add(p, off), pow2(64)) && gimple.usable(app(s, "vm"), app(s, "objs"), int_add(p, off), n, w)
 
 theorem g.mem_at_ok: all s p off n w. s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, n, w) ->
   runs(gimple.mem(p, off, n, w), s, ok(s, int_add(p, off)))
@@ -206,7 +230,7 @@ proof
   qed
   have c2: !(p = 0) -> int_lt(int_add(p, off), pow2(64)) -> runs(gimple.mem(p, off, n, w), s, exc(s2, e)) proof
     assume hz hl
-    have hu: !gimple.usable(app(s, "vm"), int_add(p, off), n, w) || !gimple.unscratched(app(s, "vm"), app(s, "sp"), int_add(p, off), n) by taut(hn, hz, hl)
+    have hu: !gimple.usable(app(s, "vm"), app(s, "objs"), int_add(p, off), n, w) by taut(hn, hz, hl)
     have pa: runs(gimple.padd(p, off), s, ok(s, int_add(p, off))) by simp(hs, hp, ho, hl, rewrite(sv, all_elim(g.padd_ok, {s}, {p}, {off})), keep(gimple.padd))
     show by defs(simp(hs, h2, he, hz, hu, pa, keep(gimple.padd)), gimple.mem)
   qed

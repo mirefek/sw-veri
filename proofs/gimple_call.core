@@ -1,233 +1,93 @@
-// Readable GIMPLE calls (layers/gimple.sl, `call_at`): their outcomes from
-// the choices the bridge makes -- the stack overflowing before the callee
-// runs, the call undefined, the callee's outcomes through the caller.
-//
-//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core \
-//     core/list.core core/loop.core build/c_mallocng_malloc.core proofs/x86.core proofs/gimple.core proofs/gimple_call.core
+// Readable GIMPLE's calls (layers/gimple.sl, `call`, `call1`): the callee on
+// the caller's world. Its outcomes: a stack overflow before the callee runs
+// or after it returns; undefined behavior if the thread pointer or a
+// stack's guard gap is broken; else the callee's return, raise or
+// divergence.
 
-// a call may overflow the stack first: the world as it is
-theorem gc.call_at_ovf: all low hi g args w. w in univ(1) ->
-  runs(gimple.call_at(low, hi, g, args), w, exc(w, exc_val("stack_overflow", empty)))
-proof
-  fix low hi g args w
-  assume hw
-  have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
-  show by simp(hw, eu, keep(gimple.callee_world.get, gimple.callee_world.set, gimple.frame_at_call, gimple.in_reg, abi.thread_ok, abi.stack_ok))
-qed
+// the arguments in registers, as the call passes them
+abbrev gc.regs_ok(regs, args) := regs in list_type(bits(64)) && seq_len(regs) = seq_len(args) &&
+  (all x4. x4 in omega -> int_lt(x4, seq_len(args)) -> app(regs, x4) in gimple.in_reg(fst(app(args, x4)), snd(app(args, x4))))
+// the world sound for a call (as the ABI requires at every call)
+abbrev gc.sound(w) := abi.thread_ok(app(w, "vm"), app(w, "fs_base")) && abi.stack_gap_free(app(w, "vm"))
 
-theorem gc.call1_ovf: all g args w. w in univ(1) ->
-  runs(gimple.call1(g, args), w, exc(w, exc_val("stack_overflow", empty)))
+theorem gc.call_ovf: all g args w. w in univ(1) -> runs(gimple.call(g, args), w, exc(w, exc_val("stack_overflow", empty)))
 proof
   fix g args w
   assume hw
-  have c := apply(gc.call_at_ovf, {app(w, "sp")}, {app(w, "sp")}, {g}, {args}, hw)
   have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
-  show by simp(hw, c, eu, keep(gimple.call_at))
+  show by defs(simp(hw, eu), gimple.call)
 qed
 
-// the way in: no overflow, the registers regs, the callee's stack pointer
-// sp2, the caller's frame vm1 (thread pointer and stack sound)
-theorem gc.enter_ok: all low hi args w regs sp2 vm1.
-  w in univ(1) -> regs in list_type(bits(64)) -> regs in univ(1) -> seq_len(regs) = seq_len(args) ->
-  (all i. i in omega -> int_lt(i, seq_len(args)) -> app(regs, i) in gimple.in_reg(fst(app(args, i)), snd(app(args, i)))) ->
-  sp2 in bits(64) -> int_le(sp2, low) -> int_mod(sp2, 16) = 0 ->
-  vm1 in x86_64_linux.Vm -> vm1 in univ(1) -> gimple.frame_at_call(app(w, "vm"), vm1, sp2, hi) ->
-  abi.thread_ok(vm1, app(w, "fs_base")) -> abi.stack_ok(vm1, bits_sub(64, sp2, 8)) ->
-  runs(gimple.call_enter(low, hi, args), w, ok(fn_update(w, "vm", vm1), pair(regs, sp2)))
+theorem gc.call_ub: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> !gc.sound(w) ->
+  runs(gimple.call(g, args), w, exc(x, e))
 proof
-  fix low hi args w regs sp2 vm1
-  assume hw hl ru hn hr hs1 hs2 hs3 hv1 hv1u hf ht hk
-  show by simp(hw, hl, ru, hn, hr, hs1, hs2, hs3, hv1, hv1u, hf, ht, hk,
-    keep(gimple.frame_at_call, abi.thread_ok, abi.stack_ok, gimple.in_reg, list_type))
+  fix g args w regs x e
+  assume hw hx he hr hn
+  show by defs(simp(hw, hx, he, hr, hn), gimple.call)
 qed
 
-// the way back: no overflow, the private frame kept -- the result
-theorem gc.leave_ok: all sp2 hi mid midp r0 r1 w. w in univ(1) -> r0 in univ(1) -> r1 in univ(1) ->
-  (all a. a in bits(64) -> int_le(sp2, a) && int_lt(a, hi) ->
-    app(app(app(w, "vm"), "bytes"), a) = app(mid, a) && app(app(app(w, "vm"), "pages"), x86_64_linux.page_of(a)) = app(midp, x86_64_linux.page_of(a))) ->
-  runs(gimple.call_leave(sp2, hi, mid, midp, r0, r1), w, ok(w, pair(r0, r1)))
+theorem gc.call_ok: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, ok(w4, pair(r0, r1))) -> runs(gimple.call(g, args), w, ok(w4, pair(r0, r1)))
 proof
-  fix sp2 hi mid midp r0 r1 w
-  assume hw h0 h1 hp
-  show by simp(hw, h0, h1, hp)
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hs hc
+  show by defs(simp(hw, hw4, h0, h1, hr, hs, hc), gimple.call)
 qed
 
-// ... or the stack overflowing there
-theorem gc.leave_ovf: all sp2 hi mid midp r0 r1 w. w in univ(1) ->
-  runs(gimple.call_leave(sp2, hi, mid, midp, r0, r1), w, exc(w, exc_val("stack_overflow", empty)))
+theorem gc.call_ovf_after: all g args w regs w4 r. w in univ(1) -> w4 in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, ok(w4, r)) -> runs(gimple.call(g, args), w, exc(w4, exc_val("stack_overflow", empty)))
 proof
-  fix sp2 hi mid midp r0 r1 w
-  assume hw
+  fix g args w regs w4 r
+  assume hw hw4 hr hs hc
   have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
-  show by simp(hw, eu)
+  show by defs(simp(hw, hw4, hr, hs, hc, eu), gimple.call)
 qed
 
-// ... or the callee having changed the private frame: undefined
-theorem gc.leave_ub: all sp2 hi mid midp r0 r1 w x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
-  !(all a. a in bits(64) -> int_le(sp2, a) && int_lt(a, hi) ->
-    app(app(app(w, "vm"), "bytes"), a) = app(mid, a) && app(app(app(w, "vm"), "pages"), x86_64_linux.page_of(a)) = app(midp, x86_64_linux.page_of(a))) ->
-  runs(gimple.call_leave(sp2, hi, mid, midp, r0, r1), w, exc(x, e))
+theorem gc.call_exc: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, exc(x, e)) -> runs(gimple.call(g, args), w, exc(x, e))
 proof
-  fix sp2 hi mid midp r0 r1 w x e
-  assume hw hx he hp
-  show by simp(hw, hx, he, hp)
+  fix g args w regs x e
+  assume hw hx he hr hs hc
+  show by defs(simp(hw, hx, he, hr, hs, hc), gimple.call)
 qed
 
-// the callee's world: its view v of the caller's memory below sp2
-theorem gc.get_ok: all sp2 w v. w in univ(1) -> sp2 in univ(1) -> v in x86_64_linux.Vm -> v in univ(1) -> abi.scratch_view(v, app(w, "vm"), sp2) ->
-  runs(gimple.callee_world.get(sp2), w, ok(w, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", v), "os", app(w, "os")), "fs_base", app(w, "fs_base")), "cpu", app(w, "cpu")), "sp", sp2)))
+theorem gc.call_div: all g args w regs t. w in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) -> gc.sound(w) ->
+  runs(app(g, regs), w, diverge(t)) -> runs(gimple.call(g, args), w, diverge(t))
 proof
-  fix sp2 w v
-  assume hw hs hv hvu hsv
-  show by simp(hw, hs, hv, hvu, hsv, keep(abi.scratch_view))
+  fix g args w regs t
+  assume hw ht hr hs hc
+  show by defs(simp(hw, ht, hr, hs, hc), gimple.call)
 qed
 
-// ... written back: the caller's memory vm2 as the callee's world wc ends,
-// its I/O and thread pointer
-theorem gc.set_ok: all sp2 wc w vm2. w in univ(1) -> wc in univ(1) -> vm2 in x86_64_linux.Vm -> vm2 in univ(1) ->
-  abi.world_matches(app(w, "vm"), vm2, app(wc, "vm"), sp2) ->
-  runs(gimple.callee_world.set(sp2, wc), w, ok(fn_update(fn_update(fn_update(w, "vm", vm2), "os", app(wc, "os")), "fs_base", app(wc, "fs_base")), empty))
-proof
-  fix sp2 wc w vm2
-  assume hw hwc hv hvu hm
-  show by simp(hw, hwc, hv, hvu, hm, keep(abi.world_matches))
-qed
-
-// the callee on its world: the view wv, the callee returning in wc2 with
-// res, the caller's state w3 after the write-back
-theorem gc.callee_ok: all sp2 g regs w wv wc2 res w3. w in univ(1) -> wv in univ(1) -> wc2 in univ(1) -> res in univ(1) -> w3 in univ(1) ->
-  runs(gimple.callee_world.get(sp2), w, ok(w, wv)) ->
-  runs(app(g, regs), rec_merge(wv, ghost_part(w, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), ok(wc2, res)) ->
-  runs(gimple.callee_world.set(sp2, restrict(wc2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), w, ok(w3, empty)) ->
-  runs(gimple.call_callee(sp2, g, regs), w,
-    ok(rec_merge(restrict(w3, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))), ghost_part(wc2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))),
-      pair(fst(res), snd(res))))
-proof
-  fix sp2 g regs w wv wc2 res w3
-  assume hw rg hwc hres rs hg0 hg hs
-  show by simp(hw, hwc, hres, hg0, hg, hs, rs, rg, keep(gimple.callee_world.get, gimple.callee_world.set))
-qed
-
-// The call from its parts: the way in (registers, sp2, the caller's state
-// w1), the callee (the caller's state w3, the result rr), and whatever the
-// way back does (o: a return, an overflow, undefined)
-theorem gc.call_at_via_ok: all low hi g args w w1 regs sp2 w3 rr w4 v4. w in univ(1) -> w4 in univ(1) -> v4 in univ(1) ->
-  runs(gimple.call_enter(low, hi, args), w, ok(w1, pair(regs, sp2))) ->
-  runs(gimple.call_callee(sp2, g, regs), w1, ok(w3, rr)) ->
-  runs(gimple.call_leave(sp2, hi, app(app(w1, "vm"), "bytes"), app(app(w1, "vm"), "pages"), fst(rr), snd(rr)), w3, ok(w4, v4)) ->
-  runs(gimple.call_at(low, hi, g, args), w, ok(w4, v4))
-proof
-  fix low hi g args w w1 regs sp2 w3 rr w4 v4
-  assume hw hw4 hv4 he hc hl
-  show by simp(hw, hw4, hv4, he, hc, hl, keep(gimple.call_enter, gimple.call_callee, gimple.call_leave))
-qed
-
-theorem gc.call_at_via_exc: all low hi g args w w1 regs sp2 w3 rr x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
-  runs(gimple.call_enter(low, hi, args), w, ok(w1, pair(regs, sp2))) ->
-  runs(gimple.call_callee(sp2, g, regs), w1, ok(w3, rr)) ->
-  runs(gimple.call_leave(sp2, hi, app(app(w1, "vm"), "bytes"), app(app(w1, "vm"), "pages"), fst(rr), snd(rr)), w3, exc(x, e)) ->
-  runs(gimple.call_at(low, hi, g, args), w, exc(x, e))
-proof
-  fix low hi g args w w1 regs sp2 w3 rr x e
-  assume hw hx he0 he hc hl
-  show by simp(hw, hx, he0, he, hc, hl, keep(gimple.call_enter, gimple.call_callee, gimple.call_leave))
-qed
-
-// the way in, the thread pointer or the stack unsound for the chosen frame:
-// undefined
-theorem gc.enter_ub: all low hi args w regs sp2 vm1 x e.
-  w in univ(1) -> x in univ(1) -> e in univ(1) -> regs in list_type(bits(64)) -> regs in univ(1) -> seq_len(regs) = seq_len(args) ->
-  (all i. i in omega -> int_lt(i, seq_len(args)) -> app(regs, i) in gimple.in_reg(fst(app(args, i)), snd(app(args, i)))) ->
-  sp2 in bits(64) -> int_le(sp2, low) -> int_mod(sp2, 16) = 0 ->
-  vm1 in x86_64_linux.Vm -> vm1 in univ(1) -> gimple.frame_at_call(app(w, "vm"), vm1, sp2, hi) ->
-  !(abi.thread_ok(vm1, app(w, "fs_base")) && abi.stack_ok(vm1, bits_sub(64, sp2, 8))) ->
-  runs(gimple.call_enter(low, hi, args), w, exc(x, e))
-proof
-  fix low hi args w regs sp2 vm1 x e
-  assume hw hx he hl ru hn hr hs1 hs2 hs3 hv1 hv1u hf hk
-  show by simp(hw, hx, he, hl, ru, hn, hr, hs1, hs2, hs3, hv1, hv1u, hf, hk,
-    keep(gimple.frame_at_call, abi.thread_ok, abi.stack_ok, gimple.in_reg, list_type))
-qed
-
-// a raise on the way in: the call's
-theorem gc.call_at_enter_exc: all low hi g args w x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
-  runs(gimple.call_enter(low, hi, args), w, exc(x, e)) -> runs(gimple.call_at(low, hi, g, args), w, exc(x, e))
-proof
-  fix low hi g args w x e
-  assume hw hx he0 he
-  show by simp(hw, hx, he0, he, keep(gimple.call_enter, gimple.call_callee, gimple.call_leave))
-qed
-
-// the callee raising (in wc2, e): the caller's world written back, the raise
-theorem gc.callee_exc: all sp2 g regs w wv wc2 e w3. w in univ(1) -> wv in univ(1) -> wc2 in univ(1) -> e in univ(1) -> w3 in univ(1) ->
-  runs(gimple.callee_world.get(sp2), w, ok(w, wv)) ->
-  runs(app(g, regs), rec_merge(wv, ghost_part(w, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), exc(wc2, e)) ->
-  runs(gimple.callee_world.set(sp2, restrict(wc2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), w, ok(w3, empty)) ->
-  runs(gimple.call_callee(sp2, g, regs), w,
-    exc(rec_merge(restrict(w3, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty)))))), ghost_part(wc2, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), e))
-proof
-  fix sp2 g regs w wv wc2 e w3
-  assume hw hwv hwc he hw3 hg0 hg hs
-  show by simp(hw, hwv, hwc, he, hw3, hg0, hg, hs, keep(gimple.callee_world.get, gimple.callee_world.set))
-qed
-
-// ... the call's raise
-theorem gc.call_at_callee_exc: all low hi g args w w1 regs sp2 x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
-  runs(gimple.call_enter(low, hi, args), w, ok(w1, pair(regs, sp2))) ->
-  runs(gimple.call_callee(sp2, g, regs), w1, exc(x, e)) ->
-  runs(gimple.call_at(low, hi, g, args), w, exc(x, e))
-proof
-  fix low hi g args w w1 regs sp2 x e
-  assume hw hx he0 he hc
-  show by simp(hw, hx, he0, he, hc, keep(gimple.call_enter, gimple.call_callee, gimple.call_leave))
-qed
-
-// call1: the call from the world's sp, its result's rax
+// call1: the value in rax only
 theorem gc.call1_ok: all g args w w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) ->
-  runs(gimple.call_at(app(w, "sp"), app(w, "sp"), g, args), w, ok(w4, pair(r0, r1))) ->
-  runs(gimple.call1(g, args), w, ok(w4, r0))
+  runs(gimple.call(g, args), w, ok(w4, pair(r0, r1))) -> runs(gimple.call1(g, args), w, ok(w4, r0))
 proof
   fix g args w w4 r0 r1
   assume hw hw4 h0 h1 hc
-  show by simp(hw, hw4, h0, h1, hc, keep(gimple.call_at))
+  show by simp(hw, hw4, h0, h1, hc, keep(gimple.call))
 qed
 
 theorem gc.call1_exc: all g args w x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
-  runs(gimple.call_at(app(w, "sp"), app(w, "sp"), g, args), w, exc(x, e)) ->
-  runs(gimple.call1(g, args), w, exc(x, e))
+  runs(gimple.call(g, args), w, exc(x, e)) -> runs(gimple.call1(g, args), w, exc(x, e))
 proof
   fix g args w x e
   assume hw hx he hc
-  show by simp(hw, hx, he, hc, keep(gimple.call_at))
-qed
-
-// the callee running on: so does the call
-theorem gc.callee_div: all sp2 g regs w wv t. w in univ(1) -> wv in univ(1) -> t in univ(1) ->
-  runs(gimple.callee_world.get(sp2), w, ok(w, wv)) ->
-  runs(app(g, regs), rec_merge(wv, ghost_part(w, insert("vm", insert("os", insert("fs_base", insert("cpu", insert("sp", empty))))))), diverge(t)) ->
-  runs(gimple.call_callee(sp2, g, regs), w, diverge(t))
-proof
-  fix sp2 g regs w wv t
-  assume hw hwv ht hg0 hg
-  show by simp(hw, hwv, ht, hg0, hg, keep(gimple.callee_world.get, gimple.callee_world.set))
-qed
-
-theorem gc.call_at_callee_div: all low hi g args w w1 regs sp2 t. w in univ(1) -> t in univ(1) ->
-  runs(gimple.call_enter(low, hi, args), w, ok(w1, pair(regs, sp2))) ->
-  runs(gimple.call_callee(sp2, g, regs), w1, diverge(t)) ->
-  runs(gimple.call_at(low, hi, g, args), w, diverge(t))
-proof
-  fix low hi g args w w1 regs sp2 t
-  assume hw ht he hc
-  show by simp(hw, ht, he, hc, keep(gimple.call_enter, gimple.call_callee, gimple.call_leave))
+  show by simp(hw, hx, he, hc, keep(gimple.call))
 qed
 
 theorem gc.call1_div: all g args w t. w in univ(1) -> t in univ(1) ->
-  runs(gimple.call_at(app(w, "sp"), app(w, "sp"), g, args), w, diverge(t)) ->
-  runs(gimple.call1(g, args), w, diverge(t))
+  runs(gimple.call(g, args), w, diverge(t)) -> runs(gimple.call1(g, args), w, diverge(t))
 proof
   fix g args w t
   assume hw ht hc
-  show by simp(hw, ht, hc, keep(gimple.call_at))
+  show by simp(hw, ht, hc, keep(gimple.call))
 qed
 
+theorem gc.call1_ovf: all g args w. w in univ(1) -> runs(gimple.call1(g, args), w, exc(w, exc_val("stack_overflow", empty)))
+proof
+  fix g args w
+  assume hw
+  have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
+  show := apply(gc.call1_exc, {g}, {args}, hw, hw, eu, mp(all_elim(gc.call_ovf, {g}, {args}, {w}), hw))
+qed
