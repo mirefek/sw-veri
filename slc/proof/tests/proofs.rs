@@ -71,6 +71,26 @@ fn rsimp_rewrites_left_to_right() {
     rejected(&format!("{}theorem t(x, y): x = y -> true && x = y\nproof\n  assume h\n  show by rsimp(only, h)\nqed\n", lib), "the goal simplifies to `true && y = y`");
 }
 
+/// flip: an equation or disequation the other way round -- a fact (also
+/// under `all`s and premises) or, as a step, the goal / a fact h.
+#[test]
+fn flip_turns_equations_around() {
+    let lib = format!("{}{}", core_file("logic.core"), core_file("sets.core"));
+    let base = check(&lib).unwrap();
+    let ok = [
+        "theorem t(a, b): a = b -> b = a\nproof\n  assume h\n  show flip(h)\nqed\n",
+        "theorem t(a, b): a != b -> b != a\nproof\n  assume h\n  show flip(h)\nqed\n",
+        "theorem t(a, b): !(a = b) -> !(b = a)\nproof\n  assume h\n  show flip(h)\nqed\n",
+        "theorem t(c): (all x y. x in c -> int_add(x, y) = int_add(y, x)) -> all x y. x in c -> int_add(y, x) = int_add(x, y)\nproof\n  assume h\n  show flip(h)\nqed\n",
+        "theorem t(a, b): a = b -> b = a\nproof\n  assume h\n  flip\n  show h\nqed\n",
+        "theorem t(x, y): y = 3 -> y = x -> 3 = x\nproof\n  assume h g\n  flip in g\n  flip\n  show by rsimp(g, h)\nqed\n",
+    ];
+    for t in ok {
+        assert_eq!(check(&format!("{}{}", lib, t)), Ok(base + 1), "{}", t);
+    }
+    rejected(&format!("{}theorem t(a): a in a -> a in a\nproof\n  assume h\n  show flip(h)\nqed\n", lib), "flip: not an equation or disequation");
+}
+
 /// Implicit unfolding: a definition is unfolded where the fact and the goal
 /// differ (a defined goal under `assume` / `fix`, a stated premise, a
 /// premise of `mp` / `apply`, a destructured fact) -- not an `irreducible`

@@ -148,7 +148,7 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize) 
     close(env, lg, st)
 }
 
-fn close(env: &Env, lg: &Logic, st: State) -> KResult<Seq> {
+fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
     {
         let mut s = st.last.clone().ok_or_else(|| KernelError("the proof is empty".into()))?;
         for fr in st.frames.iter().rev() {
@@ -182,6 +182,11 @@ fn close(env: &Env, lg: &Logic, st: State) -> KResult<Seq> {
                     Seq::mp(env, &s2, &w)?
                 }
                 Frame::Unfold(g, syms) => conv_to(env, s, g, syms)?,
+                Frame::Flip(g) => {
+                    let s = conv_to(env, s, &flip_term(env, lg, g)?, &[])?;
+                    let s = flip_seq(env, lg, &s)?;
+                    conv_to(env, s, g, &[])?
+                }
                 Frame::Rewrite(g, e) => {
                     let n = match e.concl().node() {
                         Node::App(_, a) => a[1].clone(),
@@ -322,6 +327,72 @@ fn head_to(env: &Env, s: Seq, want: impl Fn(&Term) -> bool) -> KResult<Seq> {
     if syms.is_empty() { Ok(s) } else { Seq::conv(env, &s, &t, &syms) }
 }
 
+/// `t` (`all xs. H.. -> l = r`, or `l != r` / `!(l = r)` at the end) with
+/// the conclusion's sides swapped
+fn flip_term(env: &Env, lg: &Logic, t: &Term) -> KResult<Term> {
+    let ne = env.sym_by_name.get("ne").copied();
+    let not = env.sym_by_name.get("not").copied();
+    match t.node() {
+        Node::App(q, a) if *q == lg.all => Ok(t.with_args(vec![flip_term(env, lg, &a[0])?])),
+        Node::App(q, a) if *q == env.builtins.imp => Ok(t.with_args(vec![a[0].clone(), flip_term(env, lg, &a[1])?])),
+        Node::App(q, a) if *q == env.builtins.eq || Some(*q) == ne => Ok(t.with_args(vec![a[1].clone(), a[0].clone()])),
+        Node::App(q, a) if Some(*q) == not && matches!(a[0].node(), Node::App(e, _) if *e == env.builtins.eq) => Ok(t.with_args(vec![flip_term(env, lg, &a[0])?])),
+        _ => err(format!("flip: not an equation or disequation: {}", Printer::new(env).short(t))),
+    }
+}
+
+/// `s` with its conclusion flipped (`flip_term`): under `all`s and
+/// premises, by `sym`, or for a disequation by taut with `eq_sym`
+fn flip_seq(env: &mut Env, lg: &Logic, s: &Seq) -> KResult<Seq> {
+    let c = s.concl().clone();
+    match c.node() {
+        Node::App(q, _) if *q == lg.all => {
+            let v = env.new_var(c.binder_name().unwrap_or("x"), 0);
+            let f = flip_seq(env, lg, &Seq::all_elim(env, lg, s, &Term::var(v, vec![]))?)?;
+            let g = Seq::gen(env, lg, &f, v)?;
+            // (the binder's name as written)
+            conv_to(env, g, &flip_term(env, lg, &c)?, &[])
+        }
+        Node::App(q, a) if *q == env.builtins.imp => {
+            let h = a[0].clone();
+            let f = flip_seq(env, lg, &Seq::mp(env, s, &Seq::assume(env, h.clone())?)?)?;
+            Ok(f.discharge(env, &h))
+        }
+        Node::App(q, _) if *q == env.builtins.eq => Seq::sym(env, s),
+        _ => {
+            let target = flip_term(env, lg, &c)?;
+            let (x, y) = match c.node() {
+                Node::App(_, a) if a.len() == 2 => (a[0].clone(), a[1].clone()),
+                Node::App(_, a) => match a[0].node() {
+                    Node::App(_, b) => (b[0].clone(), b[1].clone()),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            };
+            let mut l = facts::seq_of(env, "eq_sym").ok_or_else(|| KernelError("flip: `eq_sym` (core/logic.core) is not loaded".into()))?;
+            let mut vs = Vec::new();
+            l.concl().vars(&mut vs);
+            for (v, t) in vs.iter().zip([y, x]) {
+                l = Seq::inst(env, &l, *v, &t)?;
+            }
+            let ne = env.sym_by_name.get("ne").copied();
+            let (s, target) = match c.node() {
+                Node::App(q, _) if Some(*q) == ne => {
+                    let syms = [ne.unwrap()];
+                    let (u, ut) = (unfold_all(env, &c, &syms), unfold_all(env, &target, &syms));
+                    (Seq::conv(env, s, &u, &syms)?, (ut, Some(target)))
+                }
+                _ => (s.clone(), (target, None)),
+            };
+            let r = Seq::taut(env, lg, &[&s, &l], &target.0)?;
+            match target.1 {
+                Some(t) => Seq::conv(env, &r, &t, &[ne.unwrap()]),
+                None => Ok(r),
+            }
+        }
+    }
+}
+
 fn has_var(t: &Term, v: VarId) -> bool {
     let mut vs = Vec::new();
     t.vars(&mut vs);
@@ -410,6 +481,8 @@ enum Frame {
     Unfold(Term, Vec<SymId>),
     /// the goal simplified (`rsimp`): the goal before, and `goal = new`
     Rewrite(Term, Seq),
+    /// the goal flipped (`flip`): the goal before
+    Flip(Term),
 }
 
 struct State {
@@ -740,6 +813,23 @@ impl State {
                     }
                 }
             }
+            // flip [in h]: the goal's (or the fact h's) equation or
+            // disequation the other way round (under `all`s and premises)
+            "flip" => match rest.trim().strip_prefix("in ") {
+                Some(h) => {
+                    let h = h.trim();
+                    let f = self.fact(env, h)?;
+                    let s = flip_seq(env, lg, &f)?;
+                    self.facts.push((h.to_string(), s));
+                }
+                None if rest.trim().is_empty() => {
+                    let g = self.goal.clone().ok_or_else(|| KernelError("flip: no current goal here".into()))?;
+                    let u = flip_term(env, lg, &g)?;
+                    self.frames.push(Frame::Flip(g));
+                    self.goal = Some(u);
+                }
+                None => return err("expected `flip` or `flip in h`"),
+            },
             // rsimp [e1, ..] [in h]: the goal (or the fact h) simplified with
             // the rules (see `rsimp`); a goal simplified to `true` is proven
             "rsimp" => {
@@ -1484,6 +1574,12 @@ impl State {
                     "refl" => {
                         let t = self.term_arg(env, a0, 0)?;
                         Seq::refl(env, &t)
+                    }
+                    // flip(p): p's equation or disequation the other way round
+                    // (also under `all`s and premises)
+                    "flip" => {
+                        let x = self.proof_arg(env, lg, a0)?;
+                        flip_seq(env, lg, &x)
                     }
                     "sym" => {
                         let x = self.proof_arg(env, lg, a0)?;

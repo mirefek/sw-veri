@@ -73,6 +73,32 @@ fn rejects_nondeterminism_in_functions() {
     assert!(e.iter().any(|m| m.contains("only in procedures")), "{:?}", e);
 }
 
+/// A `fn` with a statement body is the term of its value (lets, `ite`s),
+/// never a `choose` over runs; statements that choose or run programs are
+/// rejected there.
+#[test]
+fn function_blocks_are_terms() {
+    let src = format!(
+        "{}fn f(a: nat) -> nat {{\n  var r: nat = a\n  if a > 3 {{ r := r + 1 }}\n  let s = match a {{ 0 => 5\n 1 => 6\n _ => r }}\n  return s * 2\n}}\n",
+        HEADER
+    );
+    let mut sm = SourceMap::default();
+    let dir = std::env::temp_dir().join(format!("slc-test-fb-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fb.sl");
+    std::fs::write(&path, &src).unwrap();
+    let (files, diags) = parse_files(&mut sm, &[path]);
+    assert!(diags.is_empty(), "{:?}", diags);
+    let el = elaborate(&prelude(), files, &sm).unwrap();
+    assert_eq!(el.errors(), 0);
+    let def = el.core_text().lines().find(|l| l.starts_with("def t.f(")).unwrap().to_string();
+    assert!(def.contains("letin(") && def.contains("ite(") && !def.contains("choose") && !def.contains("runs("), "{}", def);
+    for (body, what) in [("let y = any nat where y > a\n  return y", "let"), ("var r: nat = 0\n  while r < a { r := r + 1 }\n  return r", "while"), ("either { return 1 } or { return 2 }", "either")] {
+        let e = errors_of(&format!("{}fn g(a: nat) -> nat {{\n  {}\n}}\n", HEADER, body));
+        assert!(e.iter().any(|m| m.contains("a `fn` body is deterministic") || m.contains("only in procedures")), "{}: {:?}", what, e);
+    }
+}
+
 #[test]
 fn rejects_program_as_number() {
     let e = errors_of(&format!("{}proc q() -> nat = 1\nfn f() -> nat = q()\n", HEADER));

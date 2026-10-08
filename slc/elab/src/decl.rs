@@ -168,20 +168,82 @@ impl<'s> Elab<'s> {
                 }
                 t
             }
-            (_, Body::Block(b)) => {
-                // statements over the unit state; the value is the returned one
-                let unit = Ty::State(StateTy { base: "$unit".into(), ext: vec![] });
-                cx.pure = false;
-                let prog = self.program(&cx, &unit, b, &sig.ret, span)?;
-                let v = self.fresh("v");
-                let s = self.fresh("s");
-                let runs = self.b.app("runs", vec![prog, self.b.empty(), self.b.app("ok", vec![self.b.v(s), self.b.v(v)])]);
-                let ex = self.b.ex(&[s], runs);
-                self.b.bind_app("choose", vec![], &[v], &ex)
-            }
+            // statements, deterministic: evaluated to the returned value (a
+            // term of lets and conditionals -- no programs, no choices)
+            (_, Body::Block(b)) => self.det_block(&mut cx, &b.stmts, &sig.ret, &sig.core, b.span)?,
         };
         self.define(&sig.core, params, body, span)?;
         Ok(())
+    }
+
+    /// A `fn`'s block body as the term of its value: `let` / `var` / an
+    /// assignment bind the rest (`letin`), `if` / `match` choose between the
+    /// rests of their branches (`ite`; a `match` with no arm matching takes
+    /// the last, as in expressions), `return e` is e. Statements that run
+    /// programs or choose (loops, `either`, `any`, `require`, ...) belong in
+    /// a `proc`.
+    fn det_block(&mut self, cx: &mut Cx, stmts: &[Stmt], ret: &Ty, name: &str, span: Span) -> R<Term> {
+        let Some((st, rest)) = stmts.split_first() else {
+            return err(span, format!("`{}`: a `fn` body ends with `return`", name));
+        };
+        let nondet = || err(st.span, format!("`{}`: a `fn` body is deterministic -- this statement runs a program or chooses; write a `proc`", name));
+        let then = |b: &Block| b.stmts.iter().chain(rest.iter()).cloned().collect::<Vec<Stmt>>();
+        match &st.kind {
+            StmtKind::Let { .. } | StmtKind::Var { .. } | StmtKind::Assign { .. } => {
+                let f0 = cx.frames.len();
+                self.stmt(cx, st)?;
+                if cx.frames[f0..].iter().any(|f| !matches!(f, Frame::Let { .. })) {
+                    return nondet();
+                }
+                let frames = cx.frames.split_off(f0);
+                let body = self.det_block(cx, rest, ret, name, span)?;
+                Ok(self.wrap_frames(frames, body))
+            }
+            StmtKind::If { cond, then: a, els } => {
+                let (c, _) = self.pure_expr(cx, cond, Some(&Ty::Bool))?;
+                let sa = then(a);
+                let sb = match els {
+                    Some(b) => then(b),
+                    None => rest.to_vec(),
+                };
+                let ta = self.det_block(&mut cx.clone(), &sa, ret, name, span)?;
+                let tb = self.det_block(&mut cx.clone(), &sb, ret, name, span)?;
+                Ok(self.b.ite(c, ta, tb))
+            }
+            StmtKind::Match { scrut, arms } => {
+                let (sv, sty) = self.pure_expr(cx, scrut, None)?;
+                let mut alts = Vec::new();
+                for arm in arms {
+                    let mut conds = Vec::new();
+                    let mut binds = Vec::new();
+                    for p in &arm.pats {
+                        let (c, bs) = self.pattern(cx, p, &sv, &sty)?;
+                        conds.push(c);
+                        if binds.is_empty() {
+                            binds = bs;
+                        }
+                    }
+                    let mut ca = cx.clone();
+                    for (n, t, ty) in binds {
+                        ca.push_local(&n, t, ty, false);
+                    }
+                    let v = self.det_block(&mut ca, &then(&arm.body), ret, name, span)?;
+                    alts.push((self.b.ors(conds), v));
+                }
+                // (first match wins; the last arm is the default)
+                let Some((_, last)) = alts.pop() else { return err(st.span, "a `match` without arms") };
+                Ok(alts.into_iter().rev().fold(last, |acc, (c, v)| self.b.ite(c, v, acc)))
+            }
+            StmtKind::Block(b) => self.det_block(cx, &then(b), ret, name, span),
+            StmtKind::Return(Some(e)) => {
+                let (t, ty) = self.pure_expr(cx, e, Some(ret))?;
+                if !crate::expr::compatible(ret, &ty) {
+                    return err(e.span, format!("`{}` returns {}, but this is {}", name, ret.describe(), ty.describe()));
+                }
+                Ok(t)
+            }
+            _ => nondet(),
+        }
     }
 
     /// `all params. (types) -> prop`
