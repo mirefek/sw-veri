@@ -293,10 +293,16 @@ impl<'a> Lower<'a> {
         if !rx.params.is_empty() {
             writeln!(s, "  require len(args) >= {}", rx.params.len()).unwrap();
         }
+        // (a function's stack objects end with it: the world's as before)
+        let has_objs = !rx.fx.obj_list.is_empty();
+        if has_objs {
+            writeln!(s, "  let objs0 = objs").unwrap();
+        }
+        let drop = if has_objs { "\n  objs := objs0" } else { "" };
         match ret_ty {
-            None => writeln!(s, "  {}({})\n  return (any bits[64], any bits[64])", fname, call_args.join(", ")).unwrap(),
-            Some(_) if two_words => writeln!(s, "  let (r0, r1) = {}({})\n  return (r0, r1)", fname, call_args.join(", ")).unwrap(),
-            Some(_) => writeln!(s, "  let r = {}({})\n  return (result(r), any bits[64])", fname, call_args.join(", ")).unwrap(),
+            None => writeln!(s, "  {}({}){drop}\n  return (any bits[64], any bits[64])", fname, call_args.join(", ")).unwrap(),
+            Some(_) if two_words => writeln!(s, "  let (r0, r1) = {}({}){drop}\n  return (r0, r1)", fname, call_args.join(", ")).unwrap(),
+            Some(_) => writeln!(s, "  let r = {}({}){drop}\n  return (result(r), any bits[64])", fname, call_args.join(", ")).unwrap(),
         }
         writeln!(s, "}}").unwrap();
         Ok(s)

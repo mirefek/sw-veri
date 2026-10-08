@@ -11,9 +11,10 @@ proc[Machine] run_until(target: Addr) {
   while rip != target { step() }
 }
 
-// the heap at machine state `m`, with no live blocks
-fn empty_heap(m: Machine) -> Heap =
-  Heap { vm: m.vm, os: m.os, fs_base: m.fs_base, cpu: m.cpu, sp: m.gpr[rsp], blocks: (p: Addr) => none }
+// the heap at machine state `m`, with no live blocks, the stack's objects
+// `objs` (the program's data on the initial stack)
+fn empty_heap(m: Machine, objs: Set[nat]) -> Heap =
+  Heap { vm: m.vm, os: m.os, fs_base: m.fs_base, cpu: m.cpu, objs: objs, blocks: (p: Addr) => none }
 
 // Assumption of this claim: the program starts without privileges. musl's
 // startup then skips its secure path, whose system calls (poll, open) are
@@ -41,8 +42,8 @@ pred init_at_main(f: File, main_at: Addr, static: Set[nat]) =
   all argv: List[List[bits[8]]], envp: List[List[bits[8]]], m0: Machine, m: Machine.
     exec_state(f, argv, envp, m0) && unprivileged(m0.os) &&
     outcome(m0, run_until(main_at), ok(m, ())) ->
-      alloc_inv(empty_heap(m)) &&
-      (all a: nat. a in alloc_owned(empty_heap(m)) ->
+      alloc_inv(empty_heap(m, {a: nat | initial_auxv(m0, argv, envp, a)})) &&
+      (all a: nat. a in alloc_owned(empty_heap(m, {a: nat | initial_auxv(m0, argv, envp, a)})) ->
          a in static || a in range(m.fs_base, errno_offset(())) || initial_auxv(m0, argv, envp, a))
 
 pred allocator_claim(f: File, main_at: Addr, malloc_at: Addr, free_at: Addr, calloc_at: Addr, static: Set[nat]) =

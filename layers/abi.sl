@@ -10,16 +10,24 @@ layer abi uses x86_64_linux
 ///////////////////////////////////////////////////////////////////////
 //  What a C function sees
 
-// The part of the machine that a C function can see and change: everything
-// except registers. The stack below the caller's stack pointer is the
-// callee's scratch space; the view `world` hides its contents.
+// What a C function sees: the machine's memory on the world's domain (a
+// partial byte map: the mapped pages that are not stack pages, and the bytes
+// of the live stack objects `objs` -- address-taken locals it may reach),
+// the I/O, the thread pointer, the CPU. Not the registers, and not the
+// stack: frames, spilled values, return addresses and the stack's growth are
+// the machine's own business (the ABI below constrains them); running out
+// of stack is a C function's only contact with it (`stack_overflow`).
 state World {
   vm      : Vm
   os      : Os
   fs_base : Addr          // thread pointer: TLS, errno
   cpu     : Cpu           // CPU features (fixed for the run)
-  sp      : Addr          // the caller's stack pointer: memory below is the function's scratch
+  objs    : Set[nat]      // the bytes of the live stack objects (on stack pages)
 }
+
+// the world's memory: the byte at a is in its domain
+pred in_domain(vm: Vm, objs: Set[nat], a: nat) =
+  a in objs || (mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.kind != stack)
 
 // A C function specification: a program over the world (possibly extended
 // by ghost state of higher layers), from arguments to the value in rax.
@@ -40,47 +48,30 @@ const CALLEE_SAVED_LIST = [rbx, rbp, r12, r13, r14, r15]   // the same, in a fix
 
 pred stack_page(vm: Vm, p: nat) = mapped(vm, p) && vm.pages[p].value.kind = stack
 
-// Scratch space of a callee: the stack below `sp` and the free space right
-// below it, into which the stack can grow -- the pages from `a` up to `sp`
-// are all stack pages or unmapped. (Not bounded by RLIMIT_STACK: growth
-// beyond it faults, and with an unlimited limit the stack may grow down to
-// the next mapping.) The last page is the one holding sp - 1: when sp is
-// page-aligned, the page at sp is the caller's.
-pred scratch(vm: Vm, sp: Addr, a: nat) =
-  a < uint(sp) &&
-  (all p: nat. a / PAGE <= p && p <= (uint(sp) - 1) / PAGE -> stack_page(vm, p) || !mapped(vm, p))
-
-pred scratch_page(vm: Vm, sp: Addr, p: nat) = scratch(vm, sp, p * PAGE + PAGE - 1)
-
-// `w` shows the memory `vm` with arbitrary contents in the scratch space:
-// everything else as in vm (its pages stay visible: stack pages are not
-// free memory). A function cannot rely on what lies below its caller's
-// stack pointer; a proof chooses the contents the machine has there.
-pred scratch_view(w: Vm, vm: Vm, sp: Addr) =
-  (w with { bytes: vm.bytes }) = vm &&
-  (all a: Addr. !scratch(vm, sp, uint(a)) -> w.bytes[a] = vm.bytes[a])
-
-// `new` is the machine's memory after a callee ran from `old`, where the
-// callee's world ended as `w`: outside the scratch space they agree; in it,
-// the contents are arbitrary and the stack may have grown into free pages.
-pred world_matches(old: Vm, new: Vm, w: Vm, sp: Addr) =
+// `new` is the machine's memory after a callee called with the stack
+// pointer `sp` ran from `old`, where the callee's world ended as `w` (with
+// the stack objects `objs`): on the world's domain, the world's; the stack
+// at and above sp (the callers' frames) as it was, but for the objects; the
+// pages the world's, or stack pages where the world has none (the stack
+// grew).
+pred world_matches(old: Vm, new: Vm, w: Vm, objs: Set[nat], sp: Addr) =
   top: new.stack_top = w.stack_top && limit: new.stack_limit = w.stack_limit &&
   brk0: new.brk_start = w.brk_start && brk: new.brk = w.brk &&
-  bytes: (all a: Addr. !scratch(old, sp, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
-  pages: (all p: PageNo. new.pages[p] = w.pages[p] ||
-     (scratch_page(old, sp, p) && w.pages[p] = none && stack_page(new, p)))
+  bytes: (all a: Addr. in_domain(w, objs, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
+  frames: (all a: Addr. uint(sp) <= uint(a) && !in_domain(w, objs, uint(a)) && mapped(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
+  pages: (all p: PageNo. new.pages[p] = w.pages[p] || (w.pages[p] = none && stack_page(new, p)))
 
-// `world(sp)` views a machine as a World, for a function called with the
-// caller's stack pointer `sp`. Writing a world back leaves the scratch space
-// arbitrary: a callee may have used (and grown) the stack there.
-view[Machine] world(sp: Addr) : World {
+// `world(sp, objs)` views a machine as a World, for a function called with
+// the caller's stack pointer `sp`, which may reach the stack objects `objs`
+// (above sp). Writing a world back: its domain the world's, the callers'
+// frames kept, the stack below sp arbitrary (the callee used it).
+view[Machine] world(sp: Addr, objs: Set[nat]) : World {
   get {
-    let v = any Vm where scratch_view(v, vm, sp)
-    return World { vm: v, os, fs_base, cpu, sp }
+    return World { vm, os, fs_base, cpu, objs }
   }
   set(w) {
     let old = vm
-    havoc vm where world_matches(old, vm, w.vm, sp)
+    havoc vm where world_matches(old, vm, w.vm, objs, sp)
     os      := w.os
     fs_base := w.fs_base
   }
@@ -90,8 +81,8 @@ view[Machine] world(sp: Addr) : World {
 //  Machine code in memory
 
 // The bytes `code` are loaded at `a`: fetchable, and not writable (so no
-// store of the program changes them), and not on the stack (no callee's
-// scratch space: what a callee leaves there is arbitrary).
+// store of the program changes them), and not on the stack (where callees
+// leave arbitrary bytes).
 pred code_at(vm: Vm, a: nat, code: List[bits[8]]) =
   all i: nat. i < len(code) ->
     fetchable(vm, bits[64](a + i)) && !can_access(vm, bits[64](a + i), write) && !stack_page(vm, page_of(bits[64](a + i))) &&
@@ -202,8 +193,8 @@ pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
 
 // The parts of a normal return (separate, so that proofs can take them one
 // at a time): the spec run on the world, its result in rax:rdx
-proc[Machine & G] abi_call[G](spec: CFun2[World & G], args: Args, sp: Addr) -> (bits[64], bits[64]) {
-  let (r0, r1) = with world(sp) { return spec(args) }
+proc[Machine & G] abi_call[G](spec: CFun2[World & G], args: Args, sp: Addr, objs: Set[nat]) -> (bits[64], bits[64]) {
+  let (r0, r1) = with world(sp, objs) { return spec(args) }
   return (r0, r1)
 }
 
@@ -221,26 +212,33 @@ proc[Machine] abi_set_result(sp: Addr, ret: Addr, r0: bits[64], r1: bits[64]) {
   rip       := ret
 }
 
-// From entry to return: the function behaves like `spec` on the world;
+// From entry to return: the function behaves like `spec` on the world (with
+// the stack objects `objs` of its callers it may reach, above sp);
 // callee-saved registers and rsp are restored, rax holds the result, other
-// registers (including all XMM registers) and flags are clobbered. Or it runs out of stack (see above: also right at the call, before any I/O).
+// registers (including all XMM registers) and flags are clobbered. Or it runs
+// out of stack (see above: also right at the call, before any I/O): a
+// fault of a stack access -- a page the stack cannot grow to, or a
+// non-canonical address (the stack's address wrapped).
 // If the spec may raise (undefined behavior), anything.
-proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
+proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat]) {
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
+  require all a: nat. a in objs -> uint(sp) <= a
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
-  let w0    = with world(sp) { return self }    // the world, with ghost state
+  let w0    = with world(sp, objs) { return self }    // the world, with ghost state
   require !spec_raises(w0, spec, args)
   either {
-    let (r0, r1) = abi_call(spec, args, sp)
+    let (r0, r1) = abi_call(spec, args, sp, objs)
     havoc gpr, xmm, flags
     abi_restore(saved)
     abi_set_result(sp, ret, r0, r1)
   } or {
     havoc self where overflow_ok(w0, spec, args, os)
-    let a = any Addr where overflow_at(vm, gpr[rsp], sp, a)
-    either { raise segv(a, maperr) } or { raise segv(a, accerr) }
+    either {
+      let a = any Addr where overflow_at(vm, gpr[rsp], sp, a)
+      either { raise segv(a, maperr) } or { raise segv(a, accerr) }
+    } or { raise stack_fault }
   }
 }
 
@@ -250,7 +248,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args) {
 // each machine outcome is matched by a spec outcome for *some* final ghost
 // value (the proof chooses it; a forward simulation).
 pred implements2[G](f: Addr, spec: CFun2[World & G]) =
-  all args: Args. run_to_return() refines abi_function(f, spec, args)
+  all args: Args, objs: Set[nat]. run_to_return() refines abi_function(f, spec, args, objs)
 
 pred implements[G](f: Addr, spec: CFun[World & G]) = implements2(f, wide(spec))
 
@@ -268,7 +266,7 @@ pred loaded(vm: Vm, base: nat, code: List[bits[8]], statics: Set[nat]) =
 // assumes the same, so callers and callees have the same precondition;
 // the program's entry points (e.g. malloc) show it from their own spec.
 pred implements2_at[G](f: Addr, spec: CFun2[World & G], base: nat, code: List[bits[8]], statics: Set[nat]) =
-  all args: Args. run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function(f, spec, args) }
+  all args: Args, objs: Set[nat]. run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function(f, spec, args, objs) }
 
 // A spec keeps the program loaded: from a world where it is, every outcome
 // still has it (a frame property, proven for each function at the C level;
@@ -288,12 +286,12 @@ pred keeps_code[S](spec: CFun2[S], base: nat, code: List[bits[8]], statics: Set[
 // The call rule: at a call site `call f` (after the arguments are set up),
 // the machine may be reasoned about as the spec. Follows from the
 // definitions; proven once, used at every call site.
-theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args):
+theorem call_rule[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat]):
   implements2(f, spec) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args) }
+    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { push(rip); rip := f; abi_function(f, spec, args, objs) }
 
 // ... for a function inside the program: at the call, the program must be
 // loaded.
-theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, base: nat, code: List[bits[8]], statics: Set[nat]):
+theorem call_rule_at[G](f: Addr, spec: CFun2[World & G], args: Args, objs: Set[nat], base: nat, code: List[bits[8]], statics: Set[nat]):
   implements2_at(f, spec, base, code, statics) ->
-    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require loaded(vm, base, code, statics); push(rip); rip := f; abi_function(f, spec, args) }
+    do[Machine] { call_abs(f); run_to_return() } refines do[Machine & G] { require loaded(vm, base, code, statics); push(rip); rip := f; abi_function(f, spec, args, objs) }

@@ -9,9 +9,8 @@ layer gimple uses abi, x86_64_linux
 //     implements2(address, gimple_fun(f, callees))
 //
 // ("the compiled function behaves like its GIMPLE"), and a proof about the
-// GIMPLE (it refines e.g. `malloc_fun()`) carries over to the machine code.
-// For proving that relation function by function, `coupled` below relates a
-// running GIMPLE function to the machine at corresponding program points.
+// GIMPLE (it refines e.g. `malloc_fun()`) carries over to the machine code
+// (proven function by function by the bridge, proofs/translate*.core).
 //
 // Nothing here is trusted: a wrong detail can make a proof fail, never make
 // a false claim provable. Programs are given in a normalized form produced
@@ -181,12 +180,16 @@ record Frame { vals: Name -> nat, objs: List[Addr], bb: nat, prev: nat }
 fn operand(fr: Frame, o: Opnd) -> nat =
   match o { ssa(x) => fr.vals[x], cst(v) => v, obj(k) => uint(fr.objs[k]) }
 
-// The memory a GIMPLE access may use: readable / writable (C objects are
-// never write-only), and aligned. Anything else is undefined (GCC may
-// remove, reorder or speculate accesses that are valid in C).
-pred usable(vm: Vm, a: nat, n: nat, w: bool) =
-  all i: nat. i < n -> mapped(vm, (a + i) / PAGE) &&
-    (if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r })
+// The memory a GIMPLE access may use: the world's (its domain: the stack
+// objects, or mapped pages that are not the stack's), readable / writable
+// (C objects are never write-only), and aligned. Anything else is undefined
+// (GCC may remove, reorder or speculate accesses that are valid in C):
+// also the stack outside the stack objects, where the machine keeps what C
+// does not see -- reached only by a dangling pointer.
+pred usable(vm: Vm, objs: Set[nat], a: nat, n: nat, w: bool) =
+  all i: nat. i < n -> a + i in objs ||
+    (mapped(vm, (a + i) / PAGE) && vm.pages[(a + i) / PAGE].value.kind != stack &&
+     (if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }))
 
 // An access through a null base pointer is undefined, whatever is mapped at
 // page 0: no C object is there, and GCC relies on it (a dereferenced pointer
@@ -196,7 +199,7 @@ pred usable(vm: Vm, a: nat, n: nat, w: bool) =
 proc[World] address(fr: Frame, loc: Loc, w: bool) -> Addr {
   if operand(fr, loc.base) = 0 { undefined }
   let a = binop(ptr_add, Ty { prec: 64, signed: false }, operand(fr, loc.base), uint(loc.off))
-  if a % loc.align != 0 || !usable(vm, a, loc.size, w) { undefined }
+  if a % loc.align != 0 || !usable(vm, objs, a, loc.size, w) { undefined }
   return bits[64](a)
 }
 
@@ -207,35 +210,23 @@ proc[World] write_bytes(a: Addr, n: nat, v: nat) {
   for i in 0..n { vm.bytes[a + bits[64](i)] := bits[8](v / 256^i) }
 }
 
-// Stack objects are placed in the scratch space below `sp` (anywhere GCC's
-// frame layout may put them), disjoint and aligned; their contents are
-// arbitrary. The stack grows as needed (running out of stack is the ABI's
-// crash case). `sp` then is the lowest object: the objects are the
-// function's, no longer scratch (calls go below them).
-proc[World] alloc_objs(objs: List[(nat, nat)]) -> List[Addr] {
-  let addrs = any l: List[Addr] where len(l) = len(objs) &&
-    (all k: nat. k < len(objs) ->
-       uint(l[k]) % objs[k][1] = 0 &&
-       (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + objs[k][0] -> scratch(vm, sp, a))) &&
-    (all j: nat, k: nat. j < k && k < len(objs) ->
-       uint(l[j]) + objs[j][0] <= uint(l[k]) || uint(l[k]) + objs[k][0] <= uint(l[j]))
-  for k in 0..len(objs) {
-    for a in uint(addrs[k]) .. uint(addrs[k]) + objs[k][0] { grow_to(a) }
-    for i in 0..objs[k][0] { vm.bytes[addrs[k] + bits[64](i)] := any bits[8] }
+// Stack objects (address-taken locals) are placed on the stack (anywhere
+// GCC's frame layout may put them: outside the world's domain), disjoint
+// and aligned; their contents are arbitrary. They join the world's domain
+// (`objs`) for the rest of the function: its `_fun` wrapper drops them at
+// the return.
+proc[World] alloc_objs(sizes: List[(nat, nat)]) -> List[Addr] {
+  let addrs = any l: List[Addr] where len(l) = len(sizes) &&
+    (all k: nat. k < len(sizes) ->
+       uint(l[k]) % sizes[k][1] = 0 &&
+       (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> !in_domain(vm, objs, a))) &&
+    (all j: nat, k: nat. j < k && k < len(sizes) ->
+       uint(l[j]) + sizes[j][0] <= uint(l[k]) || uint(l[k]) + sizes[k][0] <= uint(l[j]))
+  for k in 0..len(sizes) {
+    for i in 0..sizes[k][0] { vm.bytes[addrs[k] + bits[64](i)] := any bits[8] }
   }
-  sp := bits[64](min({a: nat | a = uint(sp) || (ex j: nat. j < len(addrs) && a = uint(addrs[j]))}))
+  objs := {a: nat | a in objs || ex k: nat. k < len(sizes) && uint(addrs[k]) <= a && a < uint(addrs[k]) + sizes[k][0]}
   return addrs
-}
-
-// the stack now reaches down to address a: unmapped pages from a up to sp
-// become stack pages
-proc[World] grow_to(a: nat) {
-  for p in a / PAGE .. uint(sp) / PAGE {
-    if !mapped(vm, p) {
-      vm.pages[p] := some(Page { prot: Prot { r: true, w: true, x: false }, kind: stack })
-      for i in p * PAGE .. (p + 1) * PAGE { vm.bytes[bits[64](i)] := 0 }
-    }
-  }
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -294,16 +285,10 @@ proc[World] padd(p: Addr, off: bits[64]) -> Addr {
 
 // the address of `size` bytes of a C object at p + off: p is not null, the
 // bytes are usable (readable; writable for `w`)
-// Scratch memory (below the stack pointer: the function's own stack, where
-// the machine keeps the values C does not see) holds no C object but the
-// function's stack objects, which `alloc_objs` puts above `sp`: an access
-// there is through a dangling pointer, undefined.
-pred unscratched(vm: Vm, sp: Addr, a: nat, n: nat) = all i: nat. i < n -> !scratch(vm, sp, a + i)
-
 proc[World] mem(p: Addr, off: bits[64], size: nat, w: bool) -> Addr {
   if p = 0 { undefined }
   let a = padd(p, off)
-  if !usable(vm, uint(a), size, w) || !unscratched(vm, sp, uint(a), size) { undefined }
+  if !usable(vm, objs, uint(a), size, w) { undefined }
   return a
 }
 
@@ -339,21 +324,6 @@ proc[World] stbf(p: Addr, off: bits[64], size: nat, pos: nat, bits: nat, v: nat)
 ///////////////////////////////////////////////////////////////////////
 //  Calls and inline assembly
 
-// A called function sees the world with its own stack pointer (below the
-// caller's stack objects); afterwards the stack below it is arbitrary.
-view[World] callee_world(sp2: Addr) : World {
-  get {
-    let v = any Vm where scratch_view(v, vm, sp2)
-    return World { vm: v, os, fs_base, cpu, sp: sp2 }
-  }
-  set(w) {
-    let old = vm
-    havoc vm where world_matches(old, vm, w.vm, sp2)
-    os      := w.os
-    fs_base := w.fs_base
-  }
-}
-
 // The machine inline assembly runs on: the world, and registers (the
 // operands in theirs, everything else arbitrary).
 view[World] asm_machine(regs: Reg -> bits[64], xregs: Reg -> bits[128], fl: Flags, gs: Addr) : Machine {
@@ -383,80 +353,34 @@ proc[Machine] run_code(code: List[bits[8]]) -> Reg -> bits[64] {
 // a value passed in a 64-bit register: the upper bits are unspecified
 fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec = v % 2^ty.prec}
 
-// The caller's frame at a call to a callee with stack pointer sp2: the
-// stack may have grown down to the return address's slot below sp2 (free
-// pages mapped, their bytes new; the call checks they are stack pages),
-// and the bytes from that slot up to `hi` --
-// the caller's private frame [sp2, hi), below its stack pointer and
-// holding none of its C objects -- are arbitrary: the caller's machine
-// code keeps values there that C does not see.
-pred frame_at_call(old: Vm, new: Vm, sp2: Addr, hi: nat) =
-  new.stack_top = old.stack_top && new.stack_limit = old.stack_limit &&
-  new.brk_start = old.brk_start && new.brk = old.brk &&
-  (all a: Addr. !(uint(sp2) - 8 <= uint(a) && uint(a) < hi) && mapped(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
-  (all p: PageNo. new.pages[p] = old.pages[p] ||
-     ((uint(sp2) - 8) / PAGE <= p && p * PAGE < hi && old.pages[p] = none))
+// No mapping but the stack's lies within the guard gap below a stack page
+// (abi.stack_gap_free): what the ABI needs of the world at a call, so that
+// the callee's stack, below the caller's, stays clear of the world's
+// memory.
 
-// Calling g: the arguments (values with their types) in registers, g on
-// its own stack below `low` (the stack pointer, or the lowest stack object
-// of the caller); the result registers rax, rdx. The caller's private
-// frame [sp2, hi) is the caller's own: a callee that changes it (its bytes
-// or its pages) is undefined (C: none of the caller's objects it may
-// access is there). A
-// call with the thread pointer broken (the word at fs:0 not pointing to
-// itself, as the ABI requires at every call) or the stack unsound (the
-// return address's slot not a writable stack page, a mapping in the guard
-// gap: the ABI's entry conditions) is undefined. Every call may
-// overflow the stack (`stack_overflow`, the ABI's: no undefined behavior),
-// before the callee runs and after it returns.
-proc[World] call_at(low: nat, hi: nat, g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
-  let (regs, sp2) = call_enter(low, hi, args)
-  let mid = vm.bytes
-  let mid_pages = vm.pages
-  let (r0, r1) = call_callee(sp2, g, regs)
-  return call_leave(sp2, hi, mid, mid_pages, r0, r1)
-}
-
-// (the callee on its world, the caller's memory below sp2)
-proc[World] call_callee(sp2: Addr, g: CFun2[World], regs: List[bits[64]]) -> (bits[64], bits[64]) {
-  let (r0, r1) = with callee_world(sp2) { return g(regs) }
-  return (r0, r1)
-}
-
-// (the call's way in: the arguments in registers, the callee's stack
-// pointer, the caller's frame, the thread pointer and the stack checked)
-proc[World] call_enter(low: nat, hi: nat, args: List[(nat, Ty)]) -> (List[bits[64]], Addr) {
-  // (a call may overflow the stack: here, the world as it is)
+// Calling g: the arguments (values with their types) in registers, the
+// result registers rax, rdx. The callee runs on the caller's world (with
+// its stack objects, which it may reach; the caller's frame is not in the
+// world). A call with the thread pointer broken (the word at fs:0 not
+// pointing to itself, as the ABI requires at every call) or a mapping in a
+// stack's guard gap is undefined. Every call may overflow the stack
+// (`stack_overflow`, the ABI's: no undefined behavior), before the callee
+// runs and after it returns.
+proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   either { raise stack_overflow } or { }
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
-  let sp2 = any s: Addr where uint(s) <= low && uint(s) % 16 = 0
-  let old = vm
-  havoc vm where frame_at_call(old, vm, sp2, hi)
-  // (the ABI's thread pointer at a call: the word at fs:0 points to itself;
-  // the stack sound at the return address's slot)
-  if !(thread_ok(vm, fs_base) && stack_ok(vm, sp2 - 8)) { undefined }
-  return (regs, sp2)
-}
-
-// (... and its way back: the private frame [sp2, hi) as it was before the
-// callee (mid, mid_pages))
-proc[World] call_leave(sp2: Addr, hi: nat, mid: Addr -> bits[8], mid_pages: PageNo -> Option[Page], r0: bits[64], r1: bits[64]) -> (bits[64], bits[64]) {
+  if !(thread_ok(vm, fs_base) && stack_gap_free(vm)) { undefined }
+  let (r0, r1) = g(regs)
   // (the callee may crash after its last I/O -- its spec then returns,
   // with the I/O the crash has)
   either { raise stack_overflow } or { }
-  if !(all a: Addr. uint(sp2) <= uint(a) && uint(a) < hi -> vm.bytes[a] = mid[a] && vm.pages[page_of(a)] = mid_pages[page_of(a)]) { undefined }
   return (r0, r1)
 }
 
-// (readable GIMPLE) an argument, a call from a function without stack
-// objects, and from one with them (the private frame then only below the
-// lowest object: the objects' sizes are not passed here)
+// (readable GIMPLE) an argument; a call from a function with stack objects
+// (the same: the objects are in the world)
 fn arg[n: nat](x: bits[n]) -> (nat, Ty) = (uint(x), Ty { prec: n, signed: false })
-proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call_at(uint(sp), uint(sp), g, args) }
-proc[World] call_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
-  let low = min({a: nat | a = uint(sp) || (ex j: nat. j < len(objs) && a = uint(objs[j]))})
-  return call_at(low, low, g, args)
-}
+proc[World] call_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call(g, args) }
 
 // ... with the value in rax only
 proc[World] call1(g: CFun2[World], args: List[(nat, Ty)]) -> bits[64] {
@@ -523,8 +447,7 @@ proc[World] exec_stmt(fr: Frame, s: Stmt, callees: nat -> CFun2[World]) -> Frame
       return fr
     }
     call(dsts, k, args) => {
-      let low = min({a: nat | a = uint(sp) || (ex j: nat. j < len(fr.objs) && a = uint(fr.objs[j]))})
-      let (r0, r1) = call_at(low, low, callees[k], [(operand(fr, args[i][0]), args[i][1]) for i in 0..len(args)])
+      let (r0, r1) = call(callees[k], [(operand(fr, args[i][0]), args[i][1]) for i in 0..len(args)])
       let rs = [r0, r1]
       var vals = fr.vals
       for i in 0..len(dsts) { vals := set_val(vals, dsts[i][0], uint(rs[i]) % 2^dsts[i][1].prec) }
@@ -581,55 +504,3 @@ proc[World] run_fun(f: Function, callees: nat -> CFun2[World], args: Args) -> (b
 
 fn gimple_fun(f: Function, callees: nat -> CFun2[World]) -> CFun2[World] =
   (args: Args) => run_fun(f, callees, args)
-
-///////////////////////////////////////////////////////////////////////
-//  Relating a running function to the machine (for proofs)
-
-// Where compiled code keeps a value at a program point.
-type Home = in_reg(r: Reg)        // in a register (the value in its low bits)
-          | in_slot(off: int)     // in the stack slot at entry sp + off (8 bytes)
-          | known(v: nat)         // not kept: the code has the constant built in
-          | dead                  // not needed any more
-
-// A program point of the compiled function: the machine address where
-// GIMPLE block `bb` begins (after its phis), the stack pointer relative to
-// the stack pointer at entry, the homes of names, the offsets of the stack
-// objects, and where the caller's callee-saved registers are.
-record Point {
-  addr   : Addr
-  bb     : nat
-  rsp_at : int
-  homes  : Name -> Home
-  objs   : List[int]
-  saved  : Reg -> Home
-}
-
-pred holds(m: Machine, sp: Addr, h: Home, v: nat, ty: Ty) = match h {
-  in_reg(r)   => uint(m.gpr[r]) % 2^ty.prec = v % 2^ty.prec
-  in_slot(o)  => bytes_at(m.vm, bits[64](uint(sp) + o), 8) % 2^ty.prec = v % 2^ty.prec
-  known(c)    => c % 2^ty.prec = v % 2^ty.prec
-  dead        => true
-}
-
-// The machine `m` is at point `pt` of the compiled function, called with
-// stack pointer `sp` (the return address `ret` is at sp - 8) by a caller
-// whose callee-saved registers were `entry`, and the running GIMPLE function is in
-// frame `fr` with world `w`:
-// - memory, OS state and thread pointer agree, except for the machine's
-//   scratch contents that are not GIMPLE stack objects (spills, saved
-//   registers, the frames of callees) and stack pages only it has;
-// - each name's value is in its home, each stack object where the frame says;
-// - the caller's callee-saved registers can be restored.
-pred coupled(f: Function, pt: Point, sp: Addr, ret: Addr, entry: Reg -> bits[64], fr: Frame, w: World, m: Machine) =
-  m.rip = pt.addr && fr.bb = pt.bb &&
-  uint(m.gpr[rsp]) = uint(sp) + pt.rsp_at &&
-  m.os = w.os && m.fs_base = w.fs_base && m.cpu = w.cpu && w.sp = sp &&
-  (all p: PageNo. m.vm.pages[p] = w.vm.pages[p] ||             // the machine's stack may be
-     (scratch_page(w.vm, sp, p) && w.vm.pages[p] = none && stack_page(m.vm, p))) &&   // deeper (spills)
-  (all a: Addr. (!scratch(w.vm, sp, uint(a)) || (ex k: nat. k < len(fr.objs) &&
-       uint(fr.objs[k]) <= uint(a) && uint(a) < uint(fr.objs[k]) + f.objs[k][0])) ->
-     m.vm.bytes[a] = w.vm.bytes[a]) &&
-  (all k: nat. k < len(fr.objs) -> uint(fr.objs[k]) = uint(sp) + pt.objs[k]) &&
-  (all x: Name. holds(m, sp, pt.homes[x], fr.vals[x], f.types[x])) &&
-  (all r: Reg. r in CALLEE_SAVED -> holds(m, sp, pt.saved[r], uint(entry[r]), Ty { prec: 64, signed: false })) &&
-  bytes_at(m.vm, sp - 8, 8) = uint(ret)
