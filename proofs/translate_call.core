@@ -351,7 +351,7 @@ qed
 // (the coupling at a call from a frame of 8 bytes: its parts)
 theorem tr.inv_call: all s base code m w. tr.inv(s, base, code, 8, m, w) ->
   sM: s in x86_64_linux.Machine && mM: m in x86_64_linux.Machine && mu: m in univ(1) && wW: w in abi.World && wu: w in univ(1) &&
-  wst: (all p. abi.stack_page(app(s, "vm"), p) -> app(app(app(w, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)) && wcpu: app(w, "cpu") = app(s, "cpu") && mos: app(m, "os") = app(w, "os") && mfs: app(m, "fs_base") = app(w, "fs_base") &&
+  wst: (all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> app(app(app(w, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p)) && wcpu: app(w, "cpu") = app(s, "cpu") && mos: app(m, "os") = app(w, "os") && mfs: app(m, "fs_base") = app(w, "fs_base") &&
   er4: app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), 8) && sb: app(app(s, "gpr"), 4) in bits(64) && slt: int_lt(app(app(s, "gpr"), 4), 140737488355328) &&
   sal: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 && hsps: abi.stack_page(app(s, "vm"), int_div(app(app(s, "gpr"), 4), 4096)) &&
   sgf: abi.stack_gap_free(app(s, "vm")) && winp: app(app(w, "os"), "input") = app(app(s, "os"), "input") &&
@@ -1165,7 +1165,7 @@ proof
   assume hi hmm hp hs
   have {wst} := hi
   have {pages} := expand(hmm, tr.mem).wm
-  have e1 := mp(all_elim(wst, {p}), hs)
+  have e1 := mp(all_elim(wst, {p}), hp, hs)
   have sm := expand(hs, abi.stack_page, x86_64_linux.mapped)
   have pp: p in gc.PN by simp(hp, sm)
   have pc := mp(all_elim(pages, {p}), pp)
@@ -1459,6 +1459,255 @@ proof
     show by simp()
   qed
   show := apply(tr.loaded_xfer, {wv}, {fn_update(wv, "pages", pg)}, {gb}, {gc}, {st}, pp, bb, hl)
+qed
+
+
+// The callee returned (x, its world w2, from C at the world grown W1):
+// the caller's coupling at the return address with the world W4 (w2 with
+// the caller's stack objects, its pages the machine's), rax the result
+theorem tr.post_call: all s base code m w ds RA T m1 e1 C x w2. tr.inv(s, base, code, 8, m, w) -> tr.mem(s, m, w, ds) -> base in omega -> RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
+    "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
+  tr.returns_valid(gc.gw(w, app(app(C, "vm"), "pages")), w2) -> gc.keeps_stack(gc.gw(w, app(app(C, "vm"), "pages")), w2) ->
+  x in x86_64_linux.Machine -> x in univ(1) -> w2 in abi.World -> w2 in univ(1) ->
+  abi.world_matches(app(C, "vm"), app(x, "vm"), app(w2, "vm"), ds, abi.sp(C)) -> app(x, "os") = app(w2, "os") -> app(x, "fs_base") = app(w2, "fs_base") ->
+  app(x, "cpu") = app(C, "cpu") -> app(x, "gs_base") = app(C, "gs_base") -> app(x, "rip") = abi.ret(C) -> app(app(x, "gpr"), 4) = abi.sp(C) ->
+  abi.callee_saved(x, C) -> !app(app(x, "flags"), "df") ->
+  tr.inv(s, base, code, 8, x, gc.gw(gc.back(w2, gc.gw(w, app(app(C, "vm"), "pages"))), app(app(x, "vm"), "pages"))) &&
+  tr.mem(s, x, gc.gw(gc.back(w2, gc.gw(w, app(app(C, "vm"), "pages"))), app(app(x, "vm"), "pages")), ds) &&
+  tr.homes(s, x, empty) && tr.regs(x, fn_update(empty, 0, pair(8, app(app(x, "gpr"), 0)))) && app(x, "rip") = RA
+proof
+  fix s base code m w ds RA T m1 e1 C x w2
+  assume hi hmm hbo hra ht htr hC hrv hks xM xu w2W w2u hwm xos xfs xcpu xgs xrip xr4 xcs xdf
+  let S := app(app(s, "gpr"), 4)
+  let PG := app(app(C, "vm"), "pages")
+  let W1 := gc.gw(w, PG)
+  let XV := app(x, "vm")
+  let W4 := gc.gw(gc.back(w2, W1), app(XV, "pages"))
+  have {sM, mM, mu, wW, wu, wst, wcpu, mos, mfs, er4, sb, slt, sal, hsps, sgf, winp, sws, mcpu, mgs, mdf} := apply(tr.inv_call, hi)
+  have {cd, kc, ra8, mcs, sacc} := hi
+  have s16 := apply(tr.inv_gap, hi)
+  have h16: int_le(16, S) by arith(s16)
+  have so: S in omega by simp(sb)
+  have cM cu co cf cc0 cgs cfl cgpr crip ckc cvf cle cpi cby cstk cacc := apply(tr.push_ok, {s}, {base}, {code}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, h16, hra, ht, htr, hC)
+  have cv: app(C, "vm") in x86_64_linux.Vm := apply(x86i.parts, cM).4
+  have gr := apply(tr.push_grown, {s}, {m}, {w}, {ds}, {app(C, "vm")}, {int_div(int_sub(S, 16), 4096)}, {int_div(S, 4096)}, hmm, cv, cpi, cstk)
+  have rinp rev rld rcpu := expand(hrv, tr.returns_valid)
+  have {top, limit, brk0, brk, bytes, frames, pages} := hwm
+  have {wob, wm} := hmm
+  have xv: XV in x86_64_linux.Vm := apply(x86i.parts, xM).4
+  // (x's pages: w2's stack grown)
+  have gr2: gc.grown(app(w2, "vm"), app(XV, "pages")) proof
+    have f: app(XV, "pages") in fn_space(gc.PN, option(x86_64_linux.Page)) := apply(x86.vm_pages_typed, xv)
+    have g: all p. p in gc.PN -> app(app(XV, "pages"), p) = app(app(app(w2, "vm"), "pages"), p) ||
+        (app(app(app(w2, "vm"), "pages"), p) = none && !(app(app(XV, "pages"), p) = none) && app(snd(app(app(XV, "pages"), p)), "kind") = 2) proof
+      fix p
+      assume hp
+      have c := mp(all_elim(pages, {p}), hp)
+      show by simp(c, expand(c, abi.stack_page, x86_64_linux.mapped))
+    qed
+    show by taut(f, g)
+  qed
+  // the program loaded at x: loaded at m, the world, the world grown, the callee's world
+  have chain: all gb gc st. gb in omega -> abi.loaded(app(m, "vm"), gb, gc, st) -> abi.loaded(XV, gb, gc, st) proof
+    fix gb gc st
+    assume hb l1
+    have l2 := apply(tr.wm_back, wm, l1)
+    have l3 := apply(tr.grown_loaded, gr, l2)
+    have l3b: abi.loaded(app(W1, "vm"), gb, gc, st) by simp(l3)
+    have l4 := mp(all_elim(rld, {gb}, {gc}, {st}), hb, l3b)
+    show := apply(tr.wm_fwd, hwm, l4)
+  qed
+  have kcx: tr.keeps_code(app(s, "vm"), XV) proof
+    have g: all gb gc st. gb in omega -> abi.loaded(app(s, "vm"), gb, gc, st) -> abi.loaded(XV, gb, gc, st) proof
+      fix gb gc st
+      assume hb hl
+      have l1 := mp(all_elim(expand(kc, tr.keeps_code), {gb}, {gc}, {st}), hb, hl)
+      show := mp(all_elim(chain, {gb}, {gc}, {st}), hb, l1)
+    qed
+    show by defs(g, tr.keeps_code)
+  qed
+  have lm: abi.loaded(app(m, "vm"), base, code, empty) by defs(simp(cd), abi.loaded)
+  have lx := mp(all_elim(chain, {base}, {code}, {empty}), hbo, lm)
+  have cdx := expand(lx, abi.loaded).1
+  // (the entry's stack pages: x's, w2's, C's as s's)
+  have pst: all p. p in omega -> abi.stack_page(app(s, "vm"), p) ->
+      app(app(app(C, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) && app(app(app(w2, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) &&
+      app(app(XV, "pages"), p) = app(app(app(s, "vm"), "pages"), p) proof
+    fix p
+    assume hp hsp
+    show := apply(tr.post_stack, {s}, {base}, {code}, {m}, {w}, {ds}, {RA}, {T}, {m1}, {e1}, {C}, {x}, {w2}, {p}, hi, hmm, hra, ht, htr, hC, hks, hwm, hp, hsp)
+  qed
+  have p0o: int_div(S, 4096) in omega by simp(so)
+  have ps0 := mp(all_elim(pst, {int_div(S, 4096)}), p0o, hsps)
+  have spc: abi.sp(C) = int_sub(S, 8) by simp(cgpr, sb, h16, slt)
+  have pp4 := apply(tr.push_pages, {S}, sb, h16, slt, sal).4
+  // (a byte of the entry's stack pages, at or above sp(C), not an object: x's as C's, as m's)
+  have xc: all a. a in bits(64) -> int_le(int_sub(S, 8), a) -> !(a in ds) -> abi.stack_page(app(s, "vm"), int_div(a, 4096)) ->
+      app(app(XV, "bytes"), a) = app(app(app(m, "vm"), "bytes"), a) proof
+    fix a
+    assume ha hl hn hsp
+    have ao: a in omega by simp(ha)
+    have po: int_div(a, 4096) in omega by simp(ha)
+    have e1 e2 _ := mp(all_elim(pst, {int_div(a, 4096)}), po, hsp)
+    have pe: x86_64_linux.page_of(a) = int_div(a, 4096) by defs(simp(), x86_64_linux.page_of, x86_64_linux.PAGE)
+    have sm := expand(hsp, abi.stack_page, x86_64_linux.mapped)
+    have nd: !abi.in_domain(app(w2, "vm"), ds, a) by defs(simp(hn, e2, sm), abi.in_domain, x86_64_linux.mapped, x86_64_linux.PAGE)
+    have sc: abi.stack_page(app(C, "vm"), x86_64_linux.page_of(a)) by defs(simp(pe, e1, sm), abi.stack_page, x86_64_linux.mapped)
+    have l2: int_le(abi.sp(C), a) by simp(spc, hl)
+    have lns: (int_le(abi.sp(C), a) && !abi.in_domain(app(w2, "vm"), ds, a)) && abi.stack_page(app(C, "vm"), x86_64_linux.page_of(a)) by taut(l2, nd, sc)
+    have f := mp(all_elim(frames, {a}), ha, lns)
+    have nr: !(int_le(int_sub(S, 16), a) && int_lt(a, int_sub(S, 8))) by arith(hl, so, ao)
+    have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(a, 4096)}, hi, hmm, po, hsp)
+    have mm: x86_64_linux.mapped(app(m, "vm"), x86_64_linux.page_of(a)) by defs(simp(pe, k2, sm), x86_64_linux.mapped)
+    have cb := mp(all_elim(cby, {a}), ha, nr, mm)
+    show := trans(f, cb)
+  qed
+  // the invariant
+  have x4: app(app(x, "gpr"), 4) = int_sub(S, 8) := trans(xr4, spc)
+  have z8: int_sub(S, 8) = int_sub(app(app(s, "gpr"), 4), 8) := refl({int_sub(S, 8)})
+  have kpx: tr.kept(app(s, "vm"), XV, S) proof
+    have g: all a. a in omega -> int_le(int_sub(S, 8), a) -> int_lt(a, int_add(S, 8)) ->
+        app(app(XV, "pages"), x86_64_linux.page_of(a)) = app(app(app(s, "vm"), "pages"), x86_64_linux.page_of(a)) proof
+      fix a
+      assume h1 h2 h3
+      have pn := apply(tr.page_near, {S}, {a}, sb, sal, slt, h2, h3)
+      have pe: x86_64_linux.page_of(a) = int_div(S, 4096) by defs(simp(pn), x86_64_linux.page_of, x86_64_linux.PAGE)
+      show by simp(pe, ps0.3)
+    qed
+    show by defs(g, tr.kept)
+  qed
+  have rax: x86_64_linux.le(app(XV, "bytes"), S, 8) = abi.ret(s) proof
+    have bs: all j. j in omega -> int_lt(j, 8) -> app(app(XV, "bytes"), bits_add(64, S, bits_of_int(64, j))) = app(app(app(m, "vm"), "bytes"), bits_add(64, S, bits_of_int(64, j))) proof
+      fix j
+      assume j1 j2
+      have rb := apply(tr.ret_range, {S}, {j}, sb, slt, j1, j2)
+      have pn := apply(tr.page_near, {S}, {bits_add(64, S, bits_of_int(64, j))}, sb, sal, slt, rb.2, rb.3)
+      have sp1: abi.stack_page(app(s, "vm"), int_div(bits_add(64, S, bits_of_int(64, j)), 4096)) := rewrite(sym(pn), hsps)
+      have {oacc} := hmm
+      have nd: !(bits_add(64, S, bits_of_int(64, j)) in ds) proof
+        have c: bits_add(64, S, bits_of_int(64, j)) in ds -> false proof
+          assume hd
+          have o := mp(all_elim(oacc, {bits_add(64, S, bits_of_int(64, j))}), rb.1, hd)
+          have sa: int_le(abi.sp(s), bits_add(64, S, bits_of_int(64, j))) by taut(o)
+          show by arith(sa, pp4, rb.3)
+        qed
+        show by taut(c)
+      qed
+      show := mp(all_elim(xc, {bits_add(64, S, bits_of_int(64, j))}), simp(), (int_le(int_sub(S, 8), bits_add(64, S, bits_of_int(64, j))) by arith(rb.2)), nd, sp1)
+    qed
+    have ls := apply(tr.le_same, {app(XV, "bytes")}, {app(app(m, "vm"), "bytes")}, {S}, {8}, simp(), bs)
+    show := trans(ls, ra8)
+  qed
+  have xcs2: abi.callee_saved(x, s) by simp(xcs, cgpr, mcs)
+  have xcpu2: app(x, "cpu") = app(s, "cpu") by simp(xcpu, cc0, mcpu)
+  have xgs2: app(x, "gs_base") = app(s, "gs_base") by simp(xgs, cgs, mgs)
+  have w4os: app(W4, "os") = app(w2, "os") by simp()
+  have w4fs: app(W4, "fs_base") = app(w2, "fs_base") by simp()
+  have w4in: app(app(W4, "os"), "input") = app(app(s, "os"), "input") by simp(rinp, winp)
+  have w4ev: subset(app(app(s, "os"), "events"), app(app(W4, "os"), "events")) proof
+    have e1: subset(app(app(s, "os"), "events"), app(app(W1, "os"), "events")) by simp(sws)
+    have e2 := apply(tr.subset_trans, e1, rev)
+    show by simp(e2)
+  qed
+  have w4cpu: app(W4, "cpu") = app(s, "cpu") by simp(rcpu, wcpu)
+  // (W4: a world)
+  have w2f := expand(w2W, abi.World)
+  have wf := expand(wW, abi.World)
+  have w2v: app(w2, "vm") in x86_64_linux.Vm by simp(w2f)
+  have w2vu := mp(app_univ[u := 1, f := w2, k := "vm"], w2u)
+  have xpu := mp(app_univ[u := 1, f := XV, k := "pages"], mp(app_univ[u := 1, f := x, k := "vm"], xu))
+  have vt := apply(x86.vm_pages_put, {app(w2, "vm")}, {app(XV, "pages")}, w2v, w2vu, apply(x86.vm_pages_typed, xv), xpu)
+  have wou := mp(app_univ[u := 1, f := w, k := "objs"], wu)
+  have w4W: W4 in abi.World by defs(simp(w2f, wf, vt, w2u, wou), abi.World)
+  have w4u: W4 in univ(1) by simp(w2u, vt, wou)
+  have w4st: all p. p in omega -> abi.stack_page(app(s, "vm"), p) -> app(app(app(W4, "vm"), "pages"), p) = app(app(app(s, "vm"), "pages"), p) proof
+    fix p
+    assume po hsp
+    show by simp(mp(all_elim(pst, {p}), po, hsp).3)
+  qed
+  have invx: tr.inv(s, base, code, 8, x, W4) by defs(simp(xM, xu, cdx, kcx, (app(app(x, "gpr"), 4) = int_sub(S, 8) by simp(x4)), (8 in omega by simp()), kpx, rax, xcs2, xcpu2, xgs2,
+    (app(x, "os") = app(W4, "os") by simp(xos)), (app(x, "fs_base") = app(W4, "fs_base") by simp(xfs)), xdf, w4in, w4ev, w4W, w4u, w4cpu, w4st, sM, sacc, sal, hsps, slt, sgf, keep(abi.code_at, tr.keeps_code, tr.kept, x86_64_linux.Machine, abi.World, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access)), tr.inv)
+  // the coupling
+  have {oacc} := hmm
+  have {wm} := hmm
+  have mby := expand(wm, abi.world_matches)
+  have mframes: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(app(w, "vm"), ds, x0)) && abi.stack_page(app(s, "vm"), x86_64_linux.page_of(x0)) ->
+      app(app(app(m, "vm"), "bytes"), x0) = app(app(app(s, "vm"), "bytes"), x0) := expand(wm, abi.world_matches).frames
+  have by4: all a. a in bits(64) -> abi.in_domain(app(W4, "vm"), ds, a) -> app(app(XV, "bytes"), a) = app(app(app(W4, "vm"), "bytes"), a) proof
+    fix a
+    assume ha hd
+    have hd2: abi.in_domain(fn_update(app(w2, "vm"), "pages", app(XV, "pages")), ds, a) by simp(hd)
+    have d0 := apply(tr.dom_grown, {app(w2, "vm")}, {app(XV, "pages")}, {ds}, {a}, ha, gr2, hd2)
+    have b := mp(all_elim(bytes, {a}), ha, d0)
+    show by simp(b)
+  qed
+  have fr4: all a. a in bits(64) -> (int_le(abi.sp(s), a) && !abi.in_domain(app(W4, "vm"), ds, a)) && abi.stack_page(app(s, "vm"), x86_64_linux.page_of(a)) ->
+      app(app(XV, "bytes"), a) = app(app(app(s, "vm"), "bytes"), a) proof
+    fix a
+    assume ha hf
+    have ao: a in omega by simp(ha)
+    have pe: x86_64_linux.page_of(a) = int_div(a, 4096) by defs(simp(), x86_64_linux.page_of, x86_64_linux.PAGE)
+    have hn: !abi.in_domain(app(W4, "vm"), ds, a) by taut(hf)
+    have nd: !(a in ds) by taut(expand(hn, abi.in_domain))
+    have sp0: abi.stack_page(app(s, "vm"), x86_64_linux.page_of(a)) by taut(hf)
+    have sp1: abi.stack_page(app(s, "vm"), int_div(a, 4096)) := rewrite(pe, sp0)
+    have la: int_le(abi.sp(s), a) by taut(hf)
+    have l1: int_le(int_sub(S, 8), a) by arith(la, pp4, so, ao)
+    have xm := mp(all_elim(xc, {a}), ha, l1, nd, sp1)
+    // (m's: s's -- the world's page there s's stack page)
+    have po: int_div(a, 4096) in omega by simp(ha)
+    have k1 _ := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(a, 4096)}, hi, hmm, po, sp1)
+    have sm := expand(sp1, abi.stack_page, x86_64_linux.mapped)
+    have ndw: !abi.in_domain(app(w, "vm"), ds, a) by defs(simp(nd, k1, sm), abi.in_domain, x86_64_linux.mapped, x86_64_linux.PAGE)
+    have pre: (int_le(abi.sp(s), a) && !abi.in_domain(app(w, "vm"), ds, a)) && abi.stack_page(app(s, "vm"), x86_64_linux.page_of(a)) by taut(hf, ndw)
+    have ms := mp(all_elim(mframes, {a}), ha, pre)
+    show := trans(xm, ms)
+  qed
+  have pg4: all x0. x0 in gc.PN -> app(app(XV, "pages"), x0) = app(app(app(W4, "vm"), "pages"), x0) || (app(app(app(W4, "vm"), "pages"), x0) = none && abi.stack_page(XV, x0)) proof
+    fix x0
+    assume h
+    show by simp()
+  qed
+  have wm4: abi.world_matches(app(s, "vm"), XV, app(W4, "vm"), ds, abi.sp(s)) by defs(simp(top, limit, brk0, brk, by4, fr4, pg4, keep(abi.in_domain, abi.stack_page)), abi.world_matches)
+  have oa4: all y. y in omega -> y in ds -> (int_le(abi.sp(s), y) && abi.stack_page(app(s, "vm"), int_div(y, x86_64_linux.PAGE))) && x86_64_linux.can_access(XV, bits_of_int(64, y), 1) proof
+    fix y
+    assume h1 h2
+    have o := mp(all_elim(oacc, {y}), h1, h2)
+    have sp1: abi.stack_page(app(s, "vm"), int_div(y, x86_64_linux.PAGE)) by taut(o)
+    have ca: x86_64_linux.can_access(app(m, "vm"), bits_of_int(64, y), 1) by taut(o)
+    have sm := expand(sp1, abi.stack_page, x86_64_linux.mapped)
+    have yl: int_lt(y, 18446744073709551616) by simp(h1, expand(sm, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+    have yb: bits_of_int(64, y) = y by simp(h1, yl)
+    have po: int_div(y, x86_64_linux.PAGE) in omega by defs(simp(h1), x86_64_linux.PAGE)
+    have k1 k2 := apply(tr.inv_stack, {s}, {base}, {code}, {8}, {m}, {w}, {ds}, {int_div(y, x86_64_linux.PAGE)}, hi, hmm, po, sp1)
+    have xp := mp(all_elim(pst, {int_div(y, x86_64_linux.PAGE)}), po, sp1).3
+    have pe: x86_64_linux.page_of(y) = int_div(y, x86_64_linux.PAGE) by defs(simp(), x86_64_linux.page_of)
+    have eqp: app(app(XV, "pages"), x86_64_linux.page_of(y)) = app(app(app(m, "vm"), "pages"), x86_64_linux.page_of(y)) by simp(pe, xp, k2)
+    have ca2 := rewrite(yb, ca)
+    have cc := apply(tr.access_page, {XV}, {app(m, "vm")}, {y}, {y}, {1}, refl({x86_64_linux.page_of(y)}), eqp)
+    have cx: x86_64_linux.can_access(XV, y, 1) by taut(cc, ca2)
+    have cx2 := rewrite(sym(yb), cx)
+    show by taut(o, cx2)
+  qed
+  have wob4: app(W4, "objs") = ds by simp(wob)
+  have mem4: tr.mem(s, x, W4, ds) by defs(taut(wob4, wm4, oa4), tr.mem)
+  // the homes, rax, the return address
+  have hom: tr.homes(s, x, empty) by defs(simp(dom_empty), tr.homes)
+  have r0R: 0 in x86_64_linux.Reg by simp()
+  have r0 := mp(mp(all_elim(x86i.reg_typed, {x}, {0}), xM), r0R)
+  have re0: tr.regs(x, empty) by defs(simp(dom_empty), tr.regs)
+  have rs1 := apply(tr.regs_set, {x}, {empty}, {0}, {8}, {app(app(x, "gpr"), 0)}, re0, simp(r0))
+  have _ xg _ _ := apply(x86i.parts, xM)
+  have gfd: is_fun(app(x, "gpr")) && dom(app(x, "gpr")) = x86_64_linux.Reg by simp(expand(xg, fn_space))
+  have xfd: is_fun(x) && "gpr" in dom(x) by simp(expand(xM, x86_64_linux.Machine))
+  have g0 := mp(mp(fn_update_same[f := app(x, "gpr"), k := 0], gfd.1), simp(gfd))
+  have x0 := mp(mp(fn_update_same[f := x, k := "gpr"], xfd.1), xfd.2)
+  have rs2 := rewrite(x0, rewrite(g0, rs1))
+  have rg: tr.regs(x, fn_update(empty, 0, pair(8, app(app(x, "gpr"), 0)))) := rs2
+  have rip: app(x, "rip") = RA by simp(xrip, cgpr, cle, sb, h16)
+  show by taut(invx, mem4, hom, rg, rip)
 qed
 
 // ----------------------------------------------------------------------
