@@ -105,5 +105,7 @@ item is a short summary of finished work; details are in the files named.
     and as a C function value (`ms.free_meta_fun_c2`); the malloc
     context's address a parameter of the spec.
 
-  The generic call lemmas (monotonicity, inversion under a contract) are
-  in `proofs/gimple_inv.core`.
+  The generic call lemmas (monotonicity, inversion under a contract, and
+  `gc.contract_call`: a call under a callee's contract in one step, its
+  outcomes folded into an overflow or the contract's return) are in
+  `proofs/gimple_inv.core`.

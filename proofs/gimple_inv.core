@@ -586,3 +586,99 @@ proof
   have e: r = v by arith(m, hr1, hv)
   show by simp(ho, e)
 qed
+
+// ----------------------------------------------------------------------
+//  A call under a callee's contract, in one step
+
+// The call g(args) at w, g refining F (as C function values), F's
+// contract at w: an overflow (the memory any) or the return with the
+// memory V. The call's continuation (k, x, d of its bind) then holds of an
+// overflow with some memory, or of the return with V -- the call's other
+// outcomes (the push's or the return's overflow, the callee's exceptions,
+// divergence) folded into these two.
+theorem gc.contract_call(s1 v. k, s1 e. x, t. d): all g F args w V. gc.sound(w) -> w in abi.World -> V in x86_64_linux.Vm ->
+  (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g, regs), s, o) -> runs(app(F, regs), s, o)) ->
+  (all regs o. gc.regs_ok(regs, args) -> runs(app(F, regs), w, o) ->
+     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. o = ok(fn_update(w, "vm", V), r))) ->
+  bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
+  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. k(fn_update(w, "vm", V), r))
+proof
+  fix g F args w V
+  assume ths hw hV rex hl hg hq hb
+  let OVF := exc_val("stack_overflow", empty)
+  let W := fn_update(w, "vm", V)
+  let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(w, "vm", v), OVF)) || (ex r. o2 = ok(W, r))
+  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex r. k(W, r))
+  // (the callee refines F at w: so does the call)
+  have hm: all regs o2. gc.regs_ok(regs, args) -> runs(app(g, regs), w, o2) -> runs(app(F, regs), w, o2) proof
+    fix regs o2
+    assume hro h2
+    have rl rn _ := hro
+    show := mp(all_elim(hg, {regs}, {w}, {o2}), rl, rewrite(sym(rn), hl), hw, h2)
+  qed
+  have cm: all o2. runs(gimple.call(g, args), w, o2) -> runs(gimple.call(F, args), w, o2) proof
+    fix o2
+    assume h2
+    show := apply(gc.call_mono2, ths, hm, h2)
+  qed
+  obtain o1, hr1 hk1 from expand(apply(g.bind_mono, cm, hb), bind_rel)
+  have ci := apply(gc.call_inv[Q := o2. Q(o2)], ths, rex, hq, hr1)
+  // (w's parts: the memory, the objects)
+  have vV: app(w, "vm") in x86_64_linux.Vm by simp(expand(hw, abi.World))
+  have vfun: is_fun(w) by simp(expand(hw, abi.World))
+  have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
+  have od: "objs" in dom(w) by simp(expand(hw, abi.World))
+  have ws: fn_update(w, "vm", app(w, "vm")) = w := mp(fn_update_same[f := w, k := "vm"], vfun, vdom)
+  have fW := mp(fn_update_fun[f := w, k := "vm", v := V], vfun)
+  have dW := mp(fn_update_dom[f := w, k := "vm", v := V], vfun, vdom)
+  have oW: "objs" in dom(W) := rewrite(sym(dW), od)
+  have aW := mp(app_update_other[f := w, k := "vm", v := V, x := "objs"], simp())
+  have bW: gc.back(W, w) = W := rewrite(aW, mp(fn_update_same[f := W, k := "objs"], fW, oW))
+  // (an overflow at s1: its exception's continuation)
+  have xo: all s1. o1 = exc(s1, OVF) -> x(s1, OVF) proof
+    fix s1
+    assume e
+    show by simp(rewrite(e, hk1))
+  qed
+  have c1: o1 = exc(w, OVF) -> G proof
+    assume e
+    have x0 := rewrite(sym(ws), mp(all_elim(xo, {w}), e))
+    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({app(w, "vm")}, taut(vV, x0))
+    show by taut(l)
+  qed
+  have c2: (ex w4 r. Q(ok(w4, r)) && (o1 = ok(gc.back(w4, w), pair(fst(r), snd(r))) || o1 = exc(gc.back(w4, w), OVF))) -> G proof
+    assume h
+    obtain w4 r, hq2 ho from h
+    have ew: w4 = W by simp(hq2)
+    have ho2 := rewrite(bW, rewrite(ew, ho))
+    have a: o1 = ok(W, pair(fst(r), snd(r))) -> G proof
+      assume e
+      have kk: k(W, pair(fst(r), snd(r))) by simp(rewrite(e, hk1))
+      have l: ex r. k(W, r) by ex_intro({pair(fst(r), snd(r))}, kk)
+      show by taut(l)
+    qed
+    have b: o1 = exc(W, OVF) -> G proof
+      assume e
+      have x1 := mp(all_elim(xo, {W}), e)
+      have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({V}, taut(hV, x1))
+      show by taut(l)
+    qed
+    show by taut(ho2, a, b)
+  qed
+  have c3: (ex x0 e. Q(exc(x0, e)) && o1 = exc(x0, e)) -> G proof
+    assume h
+    obtain x0 e, hq2 ho from h
+    obtain v, hv hx he2 from simp(hq2)
+    have x1 := mp(all_elim(xo, {fn_update(w, "vm", v)}), rewrite(hx, rewrite(he2, ho)))
+    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    show by taut(l)
+  qed
+  have c4: (ex t. Q(diverge(t)) && o1 = diverge(t)) -> G proof
+    assume h
+    obtain t, hq2 _ from h
+    have f: false by simp(hq2)
+    show by taut(f)
+  qed
+  show by taut(ci, c1, c2, c3, c4)
+qed

@@ -56,13 +56,13 @@ Ongoing: how could the languages make progress more efficient?
 - Review the code base (slc, proofs, layers) for bad code practices.
 - A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
   arith. Plan it before building it.
-- One lemma per contract call that folds the call's outcome shapes
-  (overflow before, the callee's outcomes, overflow after).
 - Inversion lemmas for the remaining GIMPLE operations (8-, 16-, 32-bit
   loads and stores, arithmetic).
 - Possibly rename `rsimp` to `simp` once the old `simp` is not needed.
 - `conj` building to the goal's grouping; one way of instantiating
   (`name[x := t]` instead of positional `all_elim`).
+- Smaller frictions: `defs` unfolds in the goal only; `arith` ignores an
+  equation whose sides are not known integers (`pow2(..) = ..`) silently.
 
 ## Later
 
