@@ -3,7 +3,7 @@
 // function's spec) runs the implementation backwards with these: from a
 // run of the code, the outcome it must be.
 //
-//   checked after proofs/gimple.core
+//   checked after proofs/gimple.core (the calls' part: after proofs/translate_call.core)
 
 // (a program's run: its relation)
 theorem g.runs_elim(x y. r): all s o. runs(mkprog(x y. r(x, y)), s, o) -> r(s, o)
@@ -319,4 +319,241 @@ proof
   fix s v
   assume hv hu
   show by simp(hv, hu)
+qed
+
+// ----------------------------------------------------------------------
+//  Calls: monotone in the callee, inverted under the callee's contract
+
+// (a bind whose first step is refined: refined)
+theorem g.bind_mono(p, q, s1 v. k, s1 e. x, t. d): all s. (all o. runs(p, s, o) -> runs(q, s, o)) ->
+  bind_rel(p, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) -> bind_rel(q, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t))
+proof
+  fix s
+  assume hm hb
+  obtain o, hr hc from expand(hb, bind_rel)
+  have hq := mp(all_elim(hm, {o}), hr)
+  show by defs(ex_intro({o}, conj(hq, hc)), bind_rel)
+qed
+
+// GIMPLE's call (gimple.call), its callee's part c a parameter
+abbrev gc.crel(c, x0, x1) := ex x2. (x2 = exc(pair(x0, empty), pair("raise", exc_val("stack_overflow", empty))) || x2 = ok(pair(x0, empty), empty)) && ((fst(x2) = 0 && bind_rel(c, fst(out_state(x2)), x3 x4. letin(x4, x5. ex x6. (x6 = exc(pair(x3, empty), pair("raise", exc_val("stack_overflow", empty))) || x6 = ok(pair(x3, empty), empty)) && ((fst(x6) = 0 && x1 = ok(fst(out_state(x6)), pair(fst(x5), snd(x5)))) || ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && x1 = ok(fst(out_state(x6)), snd(out_value(x6)))) || ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && x1 = exc(fst(out_state(x6)), snd(out_value(x6))))) || (fst(x6) = 2 && x1 = diverge(snd(x6)))))), x3 x4. x1 = exc(x3, x4), x3. x1 = diverge(x3))) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) || ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2)))))
+
+// (the call's relation: monotone in the callee's part)
+theorem gc.crel_mono(c1, c2): all s o. (all o2. runs(c1, s, o2) -> runs(c2, s, o2)) -> gc.crel(c1, s, o) -> gc.crel(c2, s, o)
+proof
+  fix s o
+  assume hm h
+  obtain x2, ha hb from h
+  have run: fst(x2) = 0 && bind_rel(c1, fst(out_state(x2)), x3 x4. letin(x4, x5. ex x6. (x6 = exc(pair(x3, empty), pair("raise", exc_val("stack_overflow", empty))) || x6 = ok(pair(x3, empty), empty)) && ((fst(x6) = 0 && o = ok(fst(out_state(x6)), pair(fst(x5), snd(x5)))) || ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && o = ok(fst(out_state(x6)), snd(out_value(x6)))) || ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && o = exc(fst(out_state(x6)), snd(out_value(x6))))) || (fst(x6) = 2 && o = diverge(snd(x6)))))), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) ->
+      fst(x2) = 0 && bind_rel(c2, fst(out_state(x2)), x3 x4. letin(x4, x5. ex x6. (x6 = exc(pair(x3, empty), pair("raise", exc_val("stack_overflow", empty))) || x6 = ok(pair(x3, empty), empty)) && ((fst(x6) = 0 && o = ok(fst(out_state(x6)), pair(fst(x5), snd(x5)))) || ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && o = ok(fst(out_state(x6)), snd(out_value(x6)))) || ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && o = exc(fst(out_state(x6)), snd(out_value(x6))))) || (fst(x6) = 2 && o = diverge(snd(x6)))))), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume hr
+    have h0 hb1 := hr
+    have es: fst(out_state(x2)) = s by simp(ha, h0)
+    have hm2 := rewrite(sym(es), hm)
+    have b2 := apply(g.bind_mono, hm2, hb1)
+    show conj(h0, b2)
+  qed
+  show by ex_intro({x2}, taut(ha, hb, run))
+qed
+
+theorem gc.call_mono: all g G args s o. (all o2. runs(gimple.call_callee(g, args), s, o2) -> runs(gimple.call_callee(G, args), s, o2)) ->
+  runs(gimple.call(g, args), s, o) -> runs(gimple.call(G, args), s, o)
+proof
+  fix g G args s o
+  assume hm h
+  have pu := apply(g.runs_univ, h)
+  have r: gc.crel(gimple.call_callee(g, args), s, o) := apply(g.runs_elim, h)
+  have r2 := apply(gc.crel_mono, hm, r)
+  show by apply(tr.runs_intro, pu, r2)
+qed
+
+// (the callee's part of a call, the world sound: monotone in the callee,
+// on the call's world)
+theorem gc.cc_mono: all g G args s o. gc.sound(s) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(app(g, regs), s, o2) -> runs(app(G, regs), s, o2)) ->
+  runs(gimple.call_callee(g, args), s, o) -> runs(gimple.call_callee(G, args), s, o)
+proof
+  fix g G args s o
+  assume hs hm h
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), any_rel)
+  have c1: !(ex x2. x2 in list_type(bits(64)) && (seq_len(x2) = seq_len(args) && (all x3. x3 in omega -> int_lt(x3, seq_len(args)) -> app(x2, x3) in gimple.in_reg(fst(app(args, x3)), snd(app(args, x3)))))) -> runs(gimple.call_callee(G, args), s, o) proof
+    assume hn
+    show by apply(tr.runs_intro, pu, defs(taut(hn), any_rel))
+  qed
+  have c2: (ex x2. x2 in list_type(bits(64)) && (seq_len(x2) = seq_len(args) && (all x3. x3 in omega -> int_lt(x3, seq_len(args)) -> app(x2, x3) in gimple.in_reg(fst(app(args, x3)), snd(app(args, x3))))) && letin(x2, x3. ex x4. (!abi.thread_ok(app(s, "vm"), app(s, "fs_base")) || (!!abi.thread_ok(app(s, "vm"), app(s, "fs_base")) && x4 = ok(pair(s, empty), empty))) && ((fst(x4) = 0 && letin(app(fst(out_state(x4)), "objs"), x5. bind_rel(app(g, x3), fst(out_state(x4)), x6 x7. letin(x7, x8. letin(fn_update(x6, "objs", x5), x9. o = ok(x9, pair(fst(x8), snd(x8))))), x6 x7. o = exc(x6, x7), x6. o = diverge(x6)))) || ((((fst(x4) = 1 && fst(out_value(x4)) = "ret") && o = ok(fst(out_state(x4)), snd(out_value(x4)))) || ((fst(x4) = 1 && fst(out_value(x4)) = "raise") && o = exc(fst(out_state(x4)), snd(out_value(x4))))) || (fst(x4) = 2 && o = diverge(snd(x4))))))) -> runs(gimple.call_callee(G, args), s, o) proof
+    assume he
+    obtain rg, hd1 hd2 hl from he
+    have hb := apply(g.letin_e, hl)
+    obtain x4, ha hc from hb
+    have e4: x4 = ok(pair(s, empty), empty) by taut(ha, hs)
+    have bg: bind_rel(app(g, rg), s, x6 x7. letin(x7, x8. letin(fn_update(x6, "objs", app(s, "objs")), x9. o = ok(x9, pair(fst(x8), snd(x8))))), x6 x7. o = exc(x6, x7), x6. o = diverge(x6)) by simp(rewrite(e4, hc), keep(bind_rel))
+    have ro: gc.regs_ok(rg, args) by taut(hd1, hd2)
+    have hm2: all o2. runs(app(g, rg), s, o2) -> runs(app(G, rg), s, o2) proof
+      fix o2
+      assume h2
+      show := mp(all_elim(hm, {rg}, {o2}), ro, h2)
+    qed
+    have bG := apply(g.bind_mono, hm2, bg)
+    show by defs(simp(pu, hd1, hd2, bG, hs, keep(bind_rel, abi.thread_ok)), gimple.call_callee)
+  qed
+  show by taut(r, c1, c2)
+qed
+
+// GIMPLE's call, the world sound: monotone in the callee
+theorem gc.call_mono2: all g G args s o. gc.sound(s) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(app(g, regs), s, o2) -> runs(app(G, regs), s, o2)) ->
+  runs(gimple.call(g, args), s, o) -> runs(gimple.call(G, args), s, o)
+proof
+  fix g G args s o
+  assume hs hm h
+  have cm: all o2. runs(gimple.call_callee(g, args), s, o2) -> runs(gimple.call_callee(G, args), s, o2) proof
+    fix o2
+    assume h2
+    show := apply(gc.cc_mono, hs, hm, h2)
+  qed
+  show := apply(gc.call_mono, cm, h)
+qed
+
+// (a call: an overflow at it, or the callee's part on)
+theorem gc.call_cases: all g args s o. runs(gimple.call(g, args), s, o) -> o = exc(s, exc_val("stack_overflow", empty)) || gc.cc(g, args, s, o)
+proof
+  fix g args s o
+  assume h
+  show by simp(h, keep(gimple.call_callee, bind_rel))
+qed
+
+// (the callee's part, the world sound: the callee run on the world with
+// some registers; its return with the caller's objects back, its raise,
+// its divergence)
+theorem gc.cc_inv: all g args s o. gc.sound(s) -> runs(gimple.call_callee(g, args), s, o) ->
+  (ex regs. gc.regs_ok(regs, args)) ->
+  ex regs o2. gc.regs_ok(regs, args) && runs(app(g, regs), s, o2) &&
+    ((ex w4 r. o2 = ok(w4, r) && o = ok(gc.back(w4, s), pair(fst(r), snd(r)))) || (ex x e. o2 = exc(x, e) && o = exc(x, e)) || (ex t. o2 = diverge(t) && o = diverge(t)))
+proof
+  fix g args s o
+  assume hs h he
+  show by simp(h, hs, he, keep(abi.thread_ok))
+qed
+
+// (after the callee: the return, or an overflow)
+theorem gc.aft_inv: all s1 v o. gc.aft(s1, v, o) -> o = ok(s1, pair(fst(v), snd(v))) || o = exc(s1, exc_val("stack_overflow", empty))
+proof
+  fix s1 v o
+  assume h
+  show by simp(h)
+qed
+
+// A call, the world sound and the callee's outcomes all satisfying Q (its
+// contract, on the call's world): an overflow at the call; or the callee's
+// return (Q of it) and then the caller's objects back, the return or an
+// overflow; or its raise or divergence (Q of them)
+theorem gc.call_inv(o2. Q): all g args s o. gc.sound(s) -> (ex regs. gc.regs_ok(regs, args)) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(app(g, regs), s, o2) -> Q(o2)) ->
+  runs(gimple.call(g, args), s, o) ->
+  o = exc(s, exc_val("stack_overflow", empty)) ||
+  (ex w4 r. Q(ok(w4, r)) && (o = ok(gc.back(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back(w4, s), exc_val("stack_overflow", empty)))) ||
+  (ex x e. Q(exc(x, e)) && o = exc(x, e)) || (ex t. Q(diverge(t)) && o = diverge(t))
+proof
+  fix g args s o
+  assume hs he hq h
+  have c := apply(gc.call_cases, h)
+  have k: gc.cc(g, args, s, o) ->
+      (ex w4 r. Q(ok(w4, r)) && (o = ok(gc.back(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back(w4, s), exc_val("stack_overflow", empty)))) ||
+      (ex x e. Q(exc(x, e)) && o = exc(x, e)) || (ex t. Q(diverge(t)) && o = diverge(t)) proof
+    assume hc
+    obtain o1, hr hk from expand(hc, bind_rel)
+    have ci := apply(gc.cc_inv, hs, hr, he)
+    obtain regs o2, r1 r2 r3 hrun hcs from ci
+    have hro: gc.regs_ok(regs, args) by taut(r1, r2, r3)
+    have q := mp(all_elim(hq, {regs}, {o2}), hro, hrun)
+    let OVF := exc_val("stack_overflow", empty)
+    have ca: (ex w4 r. o2 = ok(w4, r) && o1 = ok(gc.back(w4, s), pair(fst(r), snd(r)))) ->
+        (ex w4 r. Q(ok(w4, r)) && (o = ok(gc.back(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back(w4, s), OVF))) proof
+      assume ha
+      obtain w4 r, e2 e1 from ha
+      have qa := rewrite(e2, q)
+      have oo: o = ok(gc.back(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back(w4, s), OVF) by simp(hk, e1)
+      show by ex_intro({w4}, {r}, taut(qa, oo))
+    qed
+    have cb: (ex x e. o2 = exc(x, e) && o1 = exc(x, e)) -> (ex x e. Q(exc(x, e)) && o = exc(x, e)) proof
+      assume hb
+      obtain x e, e2 e1 from hb
+      have qb := rewrite(e2, q)
+      have oo: o = exc(x, e) by simp(hk, e1)
+      show by ex_intro({x}, {e}, taut(qb, oo))
+    qed
+    have cc: (ex t. o2 = diverge(t) && o1 = diverge(t)) -> (ex t. Q(diverge(t)) && o = diverge(t)) proof
+      assume hd
+      obtain t, e2 e1 from hd
+      have qd := rewrite(e2, q)
+      have oo: o = diverge(t) by simp(hk, e1)
+      show by ex_intro({t}, taut(qd, oo))
+    qed
+    show by taut(hcs, ca, cb, cc)
+  qed
+  show by taut(c, k)
+qed
+
+// (the registers of a call with two 64-bit words a, b: a, b)
+theorem gc.regs2: all regs a b. a in bits(64) -> b in bits(64) -> gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b)))) ->
+  regs in list_type(bits(64)) && seq_len(regs) = 2 && app(regs, 0) = a && app(regs, 1) = b
+proof
+  fix regs a b
+  assume ha hb h
+  have r1 r2 r3 := h
+  have l2: seq_len(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b)))) = 2 by simp()
+  have z0 := mp(all_elim(r3, {0}), simp(), (int_lt(0, seq_len(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))))) by simp(l2)))
+  have z1 := mp(all_elim(r3, {1}), simp(), (int_lt(1, seq_len(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))))) by simp(l2)))
+  have q0 := at({app(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))), 0)})
+  have q1 := at({app(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))), 1)})
+  have e0: app(regs, 0) = a by simp(expand(rewrite(q0, z0), gimple.in_reg, gimple.arg), ha)
+  have e1: app(regs, 1) = b by simp(expand(rewrite(q1, z1), gimple.in_reg, gimple.arg), hb)
+  show by taut(r1, trans(r2, l2), e0, e1)
+qed
+
+// ... and such registers exist
+theorem gc.regs2_ex: all a b. a in bits(64) -> b in bits(64) ->
+  ex regs. gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))))
+proof
+  fix a b
+  assume ha hb
+  let R := fn_build(2, i. ite(i = 0, a, b))
+  let ARGS := seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b)))
+  have vt: all i. i in 2 -> ite(i = 0, a, b) in bits(64) proof
+    fix i
+    assume hi
+    show by apply(ite_in, ha, hb)
+  qed
+  have rl := apply(tr.build_list, (2 in omega by simp()), vt)
+  have ln: seq_len(R) = 2 by defs(simp(fn_build_dom[d := 2, v := i. ite(i = 0, a, b)]), seq_len)
+  have l2: seq_len(ARGS) = 2 by simp()
+  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> app(R, i) in gimple.in_reg(fst(app(ARGS, i)), snd(app(ARGS, i))) proof
+    fix i
+    assume hi hl
+    have c: i = 0 || i = 1 by arith(hi, hl, l2)
+    have c0: i = 0 -> app(R, i) in gimple.in_reg(fst(app(ARGS, i)), snd(app(ARGS, i))) proof
+      assume e
+      have q := at({app(ARGS, 0)})
+      have r := mp(app_fn_build[d := 2, v := i. ite(i = 0, a, b), a := 0], simp())
+      have g: a in gimple.in_reg(fst(gimple.arg(64, a)), snd(gimple.arg(64, a))) by defs(simp(ha), gimple.in_reg, gimple.arg)
+      show by simp(e, q, r, g)
+    qed
+    have c1: i = 1 -> app(R, i) in gimple.in_reg(fst(app(ARGS, i)), snd(app(ARGS, i))) proof
+      assume e
+      have q := at({app(ARGS, 1)})
+      have r := mp(app_fn_build[d := 2, v := i. ite(i = 0, a, b), a := 1], simp())
+      have g: b in gimple.in_reg(fst(gimple.arg(64, b)), snd(gimple.arg(64, b))) by defs(simp(hb), gimple.in_reg, gimple.arg)
+      show by simp(e, q, r, g)
+    qed
+    show by taut(c, c0, c1)
+  qed
+  show by ex_intro({R}, simp(rl, ln, l2, el))
+qed
+
+// (a choice from a nonempty domain: some value of it)
+theorem g.any_e(x. d, x. k): (ex x. d(x)) -> any_rel(x. d(x), x. k(x)) -> ex x. d(x) && k(x)
+proof
+  assume hn h
+  show by taut(hn, expand(h, any_rel))
 qed

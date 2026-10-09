@@ -56,3 +56,30 @@ proc[World] dequeue_spec(phead: bits[64], m: bits[64]) {
   require dequeue_pre(vm, objs, phead, m)
   either { overflow() } or { vm := dequeue_vm(vm, phead, m) }
 }
+
+// ... as a C function value (its register wrapper, as readable GIMPLE has
+// C functions: c_mallocng_malloc's dequeue_fun): what its callers' calls
+// rely on
+fn dequeue_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 2
+  dequeue_spec(bits[64](args[0]), bits[64](args[1]))
+  return (any bits[64], any bits[64])
+}
+
+// dequeue_head(phead): the list's head, dequeued (if any), returned. The
+// call to dequeue needs the thread pointer sound (the ABI's, at every
+// call).
+pred dequeue_head_pre(vm: Vm, objs: Set[nat], fs: Addr, phead: Addr) =
+  word_ok(vm, objs, phead, 0) &&
+  (rd64(vm, phead) != 0 -> dequeue_pre(vm, objs, phead, rd64(vm, phead)) && thread_ok(vm, fs))
+fn dequeue_head_vm(vm: Vm, phead: Addr) -> Vm =
+  if rd64(vm, phead) != 0 { dequeue_vm(vm, phead, rd64(vm, phead)) } else { vm }
+
+proc[World] dequeue_head_spec(phead: bits[64]) -> bits[64] {
+  require dequeue_head_pre(vm, objs, fs_base, phead)
+  either { overflow() } or {
+    let m = rd64(vm, phead)
+    vm := dequeue_head_vm(vm, phead)
+    return m
+  }
+}

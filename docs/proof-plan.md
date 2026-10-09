@@ -959,5 +959,14 @@ early return) is the first function with both halves:
 7. Open: a memory normalizer (rd/wr rules for rsimp with apartness by
    arith) -- to be planned.
 8. Done: messages fold abbreviations (a proof's `let`s) back.
-9. Open: inversion lemmas for the remaining GIMPLE operations; calls (the
-   caller's C2 from the callee's C2 only).
+9. Open: inversion lemmas for the remaining GIMPLE operations. Calls done
+   (2026-10-09): `gc.call_mono2` (a call is monotone in its callee) and
+   `gc.call_inv` (a call's outcomes under any contract Q of the callee's
+   runs) in gimple_inv.core. `ms.dequeue_head_c2` proves dequeue_head's
+   contract for every callee refining `dequeue_spec_fun` (dequeue's
+   contract as a C function value), using dequeue's contract only;
+   `ms.dequeue_head_c2_dq` instantiates it with musl's dequeue
+   (`ms.dequeue_fun_c2`). The main case is about 130 lines; most of it
+   is the four outcome shapes of the call (overflow before, the callee's
+   overflow or return, overflow after), which a generic "contract call"
+   lemma could fold into one.
