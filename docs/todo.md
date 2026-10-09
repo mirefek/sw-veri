@@ -8,11 +8,14 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 dequeue_head as a callee (current)
+### 1.1 queue (current)
 
-C1, C2 and its `tr.callee_io` are done. For its callers it still needs
-`dequeue_head_fun` as a C function value refining a
-`dequeue_head_spec_fun` (as `ms.dequeue_fun_c2` does for dequeue).
+1. `a_crash` (inline assembly `hlt`, called by most functions): C1 by
+   showing GIMPLE's run of the instruction raises (the model's decode and
+   execute through `inline_asm`, `run_code`); its contract.
+2. Calls with no arguments (`a_crash()`).
+3. `queue`'s C1, its spec (linking a meta into a list; the `a_crash`
+   paths excluded by its precondition), C2.
 
 ### 1.2 The remaining functions
 

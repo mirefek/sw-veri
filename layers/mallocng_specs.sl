@@ -83,3 +83,10 @@ proc[World] dequeue_head_spec(phead: bits[64]) -> bits[64] {
     return m
   }
 }
+
+// ... as a C function value: the head in rax (rdx clobbered)
+fn dequeue_head_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = dequeue_head_spec(bits[64](args[0]))
+  return (r, any bits[64])
+}

@@ -716,3 +716,125 @@ proof
   assume hph
   show := mp(all_elim(ms.dequeue_head_c2, {phead}, {c_src_malloc_mallocng_malloc.dequeue_fun}), hph, ms.dequeue_fun_c2)
 qed
+
+// dequeue_head as a C function value: its register wrapper refines the spec's
+// (dequeue_head's spec returns a word, under its precondition)
+theorem ms.dqh_word: all phead s s1 v. s in abi.World -> runs(mallocng_specs.dequeue_head_spec(phead), s, ok(s1, v)) ->
+  mallocng_specs.dequeue_head_pre(app(s, "vm"), app(s, "objs"), app(s, "fs_base"), phead) -> v in bits(64)
+proof
+  fix phead s s1 v
+  assume hw h hp
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(s, "vm")}, simp(expand(hw, abi.World)))
+  have no: all x. !runs(abi.overflow, s, ok(s1, x)) proof
+    fix x
+    have c: runs(abi.overflow, s, ok(s1, x)) -> false proof
+      assume ho
+      show by simp(ho, vv)
+    qed
+    show by taut(c)
+  qed
+  have e: v = mallocng_specs.rd64(app(s, "vm"), phead) by simp(h, hp, no, keep(abi.overflow, mallocng_specs.dequeue_head_pre, mallocng_specs.dequeue_head_vm, mallocng_specs.rd64))
+  have b: mallocng_specs.rd64(app(s, "vm"), phead) in bits(64) by defs(simp(), mallocng_specs.rd64)
+  show := rewrite(sym(e), b)
+qed
+
+theorem ms.dequeue_head_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.dequeue_head_fun(c_src_malloc_mallocng_malloc.dequeue_fun()), regs), s, o) -> runs(app(mallocng_specs.dequeue_head_spec_fun, regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.dequeue_head_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.dequeue_head_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have su: s in univ(1) by simp(pu)
+  have r := apply(g.runs_elim, h)
+  have a0: bits_of_int(64, app(regs, 0)) in bits(64) by simp()
+  have c1: !ord_le(1, seq_len(regs)) -> runs(mkprog(x0 x1. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), x0, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. x1 = ok(x2, pair(x4, x5)))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, o) proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  // the precondition: the spec's run is the code's (C2), its result a word
+  have c2: mallocng_specs.dequeue_head_pre(app(s, "vm"), app(s, "objs"), app(s, "fs_base"), bits_of_int(64, app(regs, 0))) -> bind_rel(c_src_malloc_mallocng_malloc.dequeue_head(bits_of_int(64, app(regs, 0)), c_src_malloc_mallocng_malloc.dequeue_fun), s, x2 x3. letin(x3, x4. bind_rel(gimple.result(64, x4), x2, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) -> runs(mkprog(x0 x1. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), x0, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. x1 = ok(x2, pair(x4, x5)))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, o) proof
+    assume hp hb
+    have dc := expand(all_elim(ms.dequeue_head_c2_dq, {bits_of_int(64, app(regs, 0))}), refines)
+    have hm: all o2. runs(c_src_malloc_mallocng_malloc.dequeue_head(bits_of_int(64, app(regs, 0)), c_src_malloc_mallocng_malloc.dequeue_fun), s, o2) -> runs(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, o2) proof
+      fix o2
+      assume h2
+      show := mp(all_elim(mp(dc, a0), {s}, {o2}), hw, h2)
+    qed
+    have b2 := apply(g.bind_mono, hm, hb)
+    have kk: all s1 v. runs(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, ok(s1, v)) -> letin(v, x4. bind_rel(gimple.result(64, x4), s1, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5))) ->
+        letin(v, x4. any_rel(x5. x5 in bits(64), x5. o = ok(s1, pair(x4, x5)))) proof
+      fix s1 v
+      assume hs hk
+      have vb := apply(ms.dqh_word, hw, hs, hp)
+      obtain o3, h3 hc from expand(apply(g.letin_e, hk), bind_rel)
+      have e3 := apply(g.result64_inv, vb, h3)
+      have hc2 := rewrite(e3, hc)
+      have k: any_rel(x7. x7 in bits(64), x7. o = ok(s1, pair(v, x7))) by simp(hc2, keep(any_rel))
+      show by defs(k, letin)
+    qed
+    have b3 := apply(g.bind_cont, kk, b2)
+    show by apply(tr.runs_intro, pu, taut(b3))
+  qed
+  // no precondition: the spec allows every outcome, the code's too
+  have c3: !mallocng_specs.dequeue_head_pre(app(s, "vm"), app(s, "objs"), app(s, "fs_base"), bits_of_int(64, app(regs, 0))) -> bind_rel(c_src_malloc_mallocng_malloc.dequeue_head(bits_of_int(64, app(regs, 0)), c_src_malloc_mallocng_malloc.dequeue_fun), s, x2 x3. letin(x3, x4. bind_rel(gimple.result(64, x4), x2, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) -> runs(mkprog(x0 x1. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), x0, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. x1 = ok(x2, pair(x4, x5)))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, o) proof
+    assume hn hb
+    have any: all o2. pair(s, o2) in univ(1) -> runs(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, o2) proof
+      fix o2
+      assume hu
+      show by simp(hu, hn, keep(abi.overflow, mallocng_specs.dequeue_head_pre, mallocng_specs.dequeue_head_vm, mallocng_specs.rd64))
+    qed
+    obtain o1, h1 hc from expand(hb, bind_rel, {1})
+    have pu1 := apply(g.runs_univ, expand(h1, c_src_malloc_mallocng_malloc.dequeue_head))
+    // (the first step's outcome o1 is the spec's: but for a return, whose
+    // value the result step turns into rax)
+    have q1: (ex s1 v. o1 = ok(s1, v) && letin(v, x4. bind_rel(gimple.result(64, x4), s1, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5)))) ->
+        bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+      assume e
+      obtain s1 v, eo hk from e
+      obtain o3, h3 hc3 from expand(apply(g.letin_e, hk), bind_rel)
+      have pu3 := apply(g.runs_univ, expand(h3, gimple.result))
+      have r1: (ex x5 x6. o3 = ok(x5, x6) && any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7)))) -> bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+        assume e2
+        obtain x5 x6, eo3 ha from e2
+        have u: pair(s, ok(x5, x6)) in univ(1) by simp(rewrite(eo3, pu3), su)
+        have sr := mp(all_elim(any, {ok(x5, x6)}), u)
+        show by defs(ex_intro({ok(x5, x6)}, simp(sr, ha, keep(mallocng_specs.dequeue_head_spec, any_rel))), bind_rel)
+      qed
+      have r2: (ex x5 x6. o3 = exc(x5, x6) && o = exc(x5, x6)) -> bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+        assume e2
+        obtain x5 x6, eo3 eo from e2
+        have u: pair(s, exc(x5, x6)) in univ(1) by simp(rewrite(eo3, pu3), su)
+        have sr := mp(all_elim(any, {exc(x5, x6)}), u)
+        show by defs(ex_intro({exc(x5, x6)}, simp(sr, eo, keep(mallocng_specs.dequeue_head_spec))), bind_rel)
+      qed
+      have r3: (ex t. o3 = diverge(t) && o = diverge(t)) -> bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+        assume e2
+        obtain t, eo3 eo from e2
+        have u: pair(s, diverge(t)) in univ(1) by simp(rewrite(eo3, pu3), su)
+        have sr := mp(all_elim(any, {diverge(t)}), u)
+        show by defs(ex_intro({diverge(t)}, simp(sr, eo, keep(mallocng_specs.dequeue_head_spec))), bind_rel)
+      qed
+      show by taut(hc3, r1, r2, r3)
+    qed
+    have q2: (ex s1 e. o1 = exc(s1, e) && o = exc(s1, e)) -> bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+      assume e
+      obtain s1 e1, eo eo2 from e
+      have sr := mp(all_elim(any, {o1}), pu1)
+      show by defs(ex_intro({o1}, simp(sr, eo, eo2, keep(mallocng_specs.dequeue_head_spec))), bind_rel)
+    qed
+    have q3: (ex t. o1 = diverge(t) && o = diverge(t)) -> bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+      assume e
+      obtain t, eo eo2 from e
+      have sr := mp(all_elim(any, {o1}), pu1)
+      show by defs(ex_intro({o1}, simp(sr, eo, eo2, keep(mallocng_specs.dequeue_head_spec))), bind_rel)
+    qed
+    have b3: bind_rel(mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) by taut(hc, q1, q2, q3)
+    show by apply(tr.runs_intro, pu, taut(b3))
+  qed
+  show by taut(r, c1, c2, c3)
+qed

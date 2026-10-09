@@ -88,7 +88,8 @@ item is a short summary of finished work; details are in the files named.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),
-    and with musl's dequeue (`ms.dequeue_head_c2_dq`).
+    and with musl's dequeue (`ms.dequeue_head_c2_dq`); as a C function
+    value (`ms.dequeue_head_fun_c2`).
 
   The generic call lemmas (monotonicity, inversion under a contract) are
   in `proofs/gimple_inv.core`.

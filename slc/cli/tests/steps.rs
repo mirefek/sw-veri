@@ -163,8 +163,8 @@ fn translations_are_generated_and_check() {
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 10 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 27 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 31 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple]) {
         let _ = std::fs::remove_file(f);
