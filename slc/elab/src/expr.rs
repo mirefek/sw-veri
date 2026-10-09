@@ -49,6 +49,17 @@ impl<'s> Elab<'s> {
                     Some(Ty::Param(..)) => exp.unwrap().clone(),
                     _ => Ty::Nat,
                 };
+                // (a literal of a word of a literal width: in range -- a
+                // larger one would be kept, not wrapped)
+                if let Ty::Bits(w) = t.strip() {
+                    if let sl_kernel::Node::Nat(w) = self.b.norm(w).node() {
+                        if let Some(w) = w.to_u64().filter(|w| *w < 128) {
+                            if n.to_u128().is_none_or(|v| v >> w != 0) {
+                                return err(span, format!("the literal does not fit in bits[{}]", w));
+                            }
+                        }
+                    }
+                }
                 Ok((self.b.natn(n.clone()), t))
             }
             ExprKind::Bool(v) => Ok((if *v { self.b.tru() } else { self.b.fls() }, Ty::Bool)),
@@ -402,6 +413,11 @@ impl<'s> Elab<'s> {
         }
         let (ta, tya) = self.expr(cx, a, exp_num)?;
         let (tb, tyb) = self.expr(cx, b, Some(&tya))?;
+        // (two words: of one width -- an 8-bit and a 16-bit operand are not
+        // one operation's)
+        if matches!((tya.strip(), tyb.strip()), (Ty::Bits(_), Ty::Bits(_))) {
+            self.check_width(&tya, &tyb, b.span);
+        }
         let ty = match (tya.strip(), tyb.strip()) {
             (Ty::Nat, Ty::Int) | (Ty::Int, Ty::Nat) => Ty::Int,
             (Ty::Unknown, t) => t.clone(),
@@ -883,6 +899,10 @@ impl<'s> Elab<'s> {
             for p in &arm.pats {
                 let (c, bs) = self.pattern(cx, p, &st, &sty)?;
                 alts.push(c);
+                // (alternatives binding names: each would bind them otherwise)
+                if !bs.is_empty() && arm.pats.len() > 1 {
+                    return err(arm.span, "alternatives of an arm cannot bind names");
+                }
                 if binds.is_empty() {
                     binds = bs;
                 }
@@ -986,7 +1006,7 @@ impl<'s> Elab<'s> {
         for l in cx.locals.iter_mut() {
             l.mutable = false;
         }
-        let _ = ret;
+        cx.ret = Some(ret.clone());
         let f = self.block_formula(&mut cx, body, span)?;
         Ok(self.b.bind_app("mkprog", vec![], &[s, o], &f))
     }
@@ -1381,6 +1401,13 @@ impl<'s> Elab<'s> {
                 }
                 let (x, xty) = self.expr(cx, &args[0], None)?;
                 let out = Ty::Bits(w.clone());
+                // (a zero extension does not narrow: x of more bits would be
+                // kept as is)
+                if let (Ty::Bits(m), sl_kernel::Node::Nat(wv)) = (xty.strip(), w.node()) {
+                    if n.name == "zext" && matches!(self.b.norm(m).node(), sl_kernel::Node::Nat(mv) if mv > wv) {
+                        return err(span, "`zext[n]` to fewer bits: use `bits[n]` to truncate");
+                    }
+                }
                 let t = match (n.name.as_str(), xty.strip()) {
                     ("zext", Ty::Bits(_)) => x,
                     ("sext", Ty::Bits(m)) => self.b.app("bits_sext", vec![m.clone(), w, x]),
@@ -1405,11 +1432,19 @@ impl<'s> Elab<'s> {
         };
         Ok(Some(match name.name.as_str() {
             "uint" => {
-                let (t, _) = one(self, cx, None)?;
+                let (t, ty) = one(self, cx, None)?;
+                // (of a word: its value, a natural)
+                if !matches!(ty.strip(), Ty::Bits(_) | Ty::Enum(_) | Ty::Nat | Ty::Unknown | Ty::Param(..)) {
+                    return err(span, format!("`uint` of {}: a word expected", ty.describe()));
+                }
                 (t, Ty::Nat)
             }
             "sint" => {
                 let (t, ty) = one(self, cx, None)?;
+                // (of a word of a known width: no default width)
+                if !matches!(ty.strip(), Ty::Bits(_)) {
+                    return err(span, format!("`sint` of {}: a word expected", ty.describe()));
+                }
                 let w = self.width(&ty);
                 (self.b.app("sint", vec![w, t]), Ty::Int)
             }
@@ -1523,6 +1558,21 @@ impl<'s> Elab<'s> {
                 if let Some(c) = self.constant_pattern(cx, &n.name, ty)? {
                     return Ok((self.b.eq(t.clone(), c), vec![]));
                 }
+                // (an exception by its name: matched, not bound)
+                if matches!(ty.strip(), Ty::Exc) {
+                    if let Some(i) = self.g.find_decl(&cx.module, &n.name) {
+                        if matches!(self.g.decls[i].decl.kind, DeclKind::Exception { .. }) {
+                            return Ok((self.b.eq(self.b.fst(t.clone()), self.b.str(&n.name)), vec![]));
+                        }
+                    }
+                }
+                // (a global constant of another type: an error, not a
+                // binding that would match everything)
+                let constant = self.global_candidates(&cx.module, &n.name).iter().any(|c| matches!(c, GName::EnumVal(..) | GName::Ctor(..)))
+                    || self.g.find_decl(&cx.module, &n.name).is_some_and(|i| matches!(self.g.decls[i].decl.kind, DeclKind::Exception { .. }));
+                if constant {
+                    return err(n.span, format!("`{}` is a constant, not one of {}: a pattern cannot bind it", n.name, ty.describe()));
+                }
                 Ok((self.b.tru(), vec![(n.name.clone(), t.clone(), ty.clone())]))
             }
             Pattern::Ctor(n, ps) => self.ctor_pattern(cx, n, ps, t, ty),
@@ -1594,6 +1644,9 @@ impl<'s> Elab<'s> {
         if matches!(ty.strip(), Ty::Exc) {
             if let Some(i) = self.g.find_decl(&cx.module, &n.name) {
                 if let DeclKind::Exception { params, .. } = self.g.decls[i].decl.kind.clone() {
+                    if params.len() != ps.len() {
+                        return err(n.span, format!("`{}` has {} arguments", n.name, params.len()));
+                    }
                     let module = self.module_of(i);
                     let mut conds = vec![self.b.eq(self.b.fst(t.clone()), self.b.str(&n.name))];
                     let mut binds = Vec::new();

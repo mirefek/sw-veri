@@ -29,6 +29,8 @@ pub struct Parser<'n> {
     toks: Vec<Token>,
     pos: usize,
     no_struct: bool,
+    /// inside an index's brackets: `x[hi:lo]` is a slice, not a label `hi:`
+    no_label: bool,
     /// notation blocks known so far (by block name)
     pub notations: &'n mut HashMap<String, Vec<Notation>>,
     pub errors: Vec<ParseError>,
@@ -40,7 +42,7 @@ fn join(a: Span, b: Span) -> Span {
 
 impl<'n> Parser<'n> {
     pub fn new(toks: Vec<Token>, notations: &'n mut HashMap<String, Vec<Notation>>) -> Self {
-        Parser { toks, pos: 0, no_struct: false, notations, errors: Vec::new() }
+        Parser { toks, pos: 0, no_struct: false, no_label: false, notations, errors: Vec::new() }
     }
 
     // ------------------------------------------------------------------
@@ -1240,7 +1242,7 @@ impl<'n> Parser<'n> {
 
     /// an `&&` operand, optionally labelled: `name: P`
     fn expr_labeled(&mut self) -> PResult<Expr> {
-        if matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1).is_punct(":") {
+        if !self.no_label && matches!(self.peek(), Tok::Ident(_)) && self.peek_at(1).is_punct(":") {
             let start = self.span();
             let l = self.ident()?;
             self.expect(":")?;
@@ -1428,7 +1430,11 @@ impl<'n> Parser<'n> {
     }
 
     fn index_suffix(&mut self, e: Expr, start: Span) -> PResult<Expr> {
-        let a = self.expr()?;
+        let saved = self.no_label;
+        self.no_label = true;
+        let a = self.expr();
+        self.no_label = saved;
+        let a = a?;
         if self.eat(":") {
             let b = self.expr()?;
             self.expect("]")?;

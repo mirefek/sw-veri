@@ -166,6 +166,7 @@ impl<'s> Elab<'s> {
                 if !crate::expr::compatible(&sig.ret, &ty) {
                     return err(e.span, format!("`{}` returns {}, but its body is {}", sig.core, sig.ret.describe(), ty.describe()));
                 }
+                self.check_width(&sig.ret, &ty, e.span);
                 t
             }
             // statements, deterministic: evaluated to the returned value (a
@@ -219,6 +220,10 @@ impl<'s> Elab<'s> {
                     for p in &arm.pats {
                         let (c, bs) = self.pattern(cx, p, &sv, &sty)?;
                         conds.push(c);
+                        // (alternatives binding names: each would bind them otherwise)
+                        if !bs.is_empty() && arm.pats.len() > 1 {
+                            return err(arm.span, "alternatives of an arm cannot bind names");
+                        }
                         if binds.is_empty() {
                             binds = bs;
                         }
@@ -240,6 +245,7 @@ impl<'s> Elab<'s> {
                 if !crate::expr::compatible(ret, &ty) {
                     return err(e.span, format!("`{}` returns {}, but this is {}", name, ret.describe(), ty.describe()));
                 }
+                self.check_width(ret, &ty, e.span);
                 Ok(t)
             }
             _ => nondet(),

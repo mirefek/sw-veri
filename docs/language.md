@@ -85,7 +85,8 @@ The type decides the arithmetic; nothing converts implicitly.
   two's complement.
 - Signedness belongs to the operation:
   - `<` `<=` `/` `%` `>>` are unsigned;
-  - `<s` `<=s` `/s` `%s` `>>s` are signed.
+  - `<s` `<=s` `>>s` are signed (signed division: on `sint` values, as
+    spec/x86_64's `idiv` does).
 - Conversions are explicit:
   - `uint(x)`, `sint(x)`;
   - `bits[n](e)` (wraps; the width is always written);
@@ -213,7 +214,7 @@ not followed by a name character.
 10. `&`;
 11. `<< >> >>s`;
 12. `+ - ++`;
-13. `* / % /s %s`;
+13. `* / %`;
 14. unary `! - ~`;
 15. `^` (right);
 16. postfix: calls, indexing, slices, fields, `x.{f, g}`, `with`.

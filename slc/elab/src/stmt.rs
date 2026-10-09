@@ -216,6 +216,13 @@ impl<'s> Elab<'s> {
                     (ExprKind::Any { els: Some(_), .. }, _) => return err(span, "`any ... else` binds a single name"),
                     _ => self.expr(cx, value, declared.as_ref())?,
                 };
+                // (a declared type: the value's)
+                if let Some(d) = &declared {
+                    if !crate::expr::compatible(d, &vty) {
+                        return err(value.span, format!("a value of {} for a `let` of {}", vty.describe(), d.describe()));
+                    }
+                    self.check_width(d, &vty, value.span);
+                }
                 let vty = declared.unwrap_or(vty);
                 let x = self.fresh(match pat {
                     Pattern::Name(n) => &n.name,
@@ -237,6 +244,12 @@ impl<'s> Elab<'s> {
                     None => None,
                 };
                 let (t, vty) = self.expr(cx, value, declared.as_ref())?;
+                if let Some(d) = &declared {
+                    if !crate::expr::compatible(d, &vty) {
+                        return err(value.span, format!("a value of {} for a `var` of {}", vty.describe(), d.describe()));
+                    }
+                    self.check_width(d, &vty, value.span);
+                }
                 let x = self.fresh(&name.name);
                 cx.frames.push(Frame::Let { var: x, value: t });
                 cx.push_local(&name.name, self.b.v(x), declared.unwrap_or(vty), true);
@@ -288,6 +301,10 @@ impl<'s> Elab<'s> {
                     for p in &arm.pats {
                         let (c, bs) = self.pattern(cx, p, &st, &sty)?;
                         alts.push(c);
+                        // (alternatives binding names: each would bind them otherwise)
+                        if !bs.is_empty() && arm.pats.len() > 1 {
+                            return err(arm.span, "alternatives of an arm cannot bind names");
+                        }
                         if binds.is_empty() {
                             binds = bs;
                         }
@@ -319,10 +336,19 @@ impl<'s> Elab<'s> {
                 Ok(())
             }
             StmtKind::Return(v) => {
-                let (t, _) = match v {
-                    Some(e) => self.expr(cx, e, None)?,
+                // (the value checked against the program's return type, and
+                // read at it: a literal -1 of bits[8] is 255)
+                let ret = cx.ret.clone();
+                let (t, ty) = match v {
+                    Some(e) => self.expr(cx, e, ret.as_ref())?,
                     None => (self.b.empty(), Ty::Unit),
                 };
+                if let Some(r) = &ret {
+                    if !crate::expr::compatible(r, &ty) {
+                        return err(span, format!("returns {}, but this is {}", r.describe(), ty.describe()));
+                    }
+                    self.check_width(r, &ty, span);
+                }
                 let f = self.exit_ret(cx, t);
                 cx.frames.push(Frame::Terminal(f));
                 Ok(())

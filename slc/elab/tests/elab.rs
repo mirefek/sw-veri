@@ -67,6 +67,26 @@ fn rejects_bool_into_bits() {
     assert!(e.iter().any(|m| m.contains("cannot assign")), "{:?}", e);
 }
 
+/// Cases a review found elaborated with a different meaning than written.
+#[test]
+fn rejects_what_would_change_meaning() {
+    let cases = [
+        // a procedure's `return`: of its return type, in range
+        ("proc r() -> bits[8] { return true }", "returns"),
+        ("proc r() -> bits[8] { return 300 }", "does not fit"),
+        // operands of one width; a declared `let` type
+        ("proc p() { x := x + bits[16](1) }", "width mismatch"),
+        ("proc p() { let z: bits[8] = b; x := z }", "for a `let`"),
+        // a zero extension does not narrow; `sint` of a word only
+        ("proc p() { let z = zext[4](x); y := uint(z) }", "fewer bits"),
+        ("proc p() { y := uint(sint(y)) }", "a word expected"),
+    ];
+    for (body, want) in cases {
+        let e = errors_of(&format!("{}{}\n", HEADER, body));
+        assert!(e.iter().any(|m| m.contains(want)), "{}: {:?}", body, e);
+    }
+}
+
 #[test]
 fn rejects_nondeterminism_in_functions() {
     let e = errors_of(&format!("{}fn f() -> nat = any nat\n", HEADER));

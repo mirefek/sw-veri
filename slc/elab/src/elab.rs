@@ -84,6 +84,8 @@ pub struct Cx {
     pub gvals: HashMap<String, (Term, Ty)>,
     pub gtys: HashMap<String, (Ty, Term)>,
     pub exits: Vec<Exit>,
+    /// the enclosing program's return type (`return e` is checked against it)
+    pub ret: Option<Ty>,
 }
 
 impl Cx {
@@ -99,6 +101,7 @@ impl Cx {
             gvals: HashMap::new(),
             gtys: HashMap::new(),
             exits: Vec::new(),
+            ret: None,
         }
     }
 

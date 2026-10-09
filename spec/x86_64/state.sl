@@ -101,7 +101,8 @@ proc ea(m: MemOp) -> Addr {
   let s = match m.seg   { flat, cs => 0, fs => fs_base, gs => gs_base }
   let b = match m.base  { nobase => 0, rip_rel => rip, base(r) => gpr[r] }
   let i = match m.index { none => 0, some(r) => gpr[r] * bits[64](m.scale) }
-  return s + b + i + m.disp
+  // (64-bit address arithmetic: mod 2^64)
+  return bits[64](s + b + i + m.disp)
 }
 
 // The operand (accessed with n bytes) with its effective address computed

@@ -565,6 +565,13 @@ impl<'g> Interp<'g> {
                 if let Some(c) = self.constant(env, &n.name, Some(v))? {
                     return Ok(same(&c, v) == Some(true));
                 }
+                // (an exception's name: matched by name, not bound -- as the
+                // elaborator reads it)
+                if let (Some(i), V::Tag(name, _, _)) = (self.g.find_decl(&env.module, &n.name), v) {
+                    if matches!(self.g.decls[i].decl.kind, DeclKind::Exception { .. }) {
+                        return Ok(*name == n.name);
+                    }
+                }
                 env.locals.push((n.name.clone(), v.clone()));
                 Ok(true)
             }
