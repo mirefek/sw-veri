@@ -438,6 +438,7 @@ have {sM, x = mM} := P    the conjuncts labelled sM, mM
 obtain x y, h1 h2 from P  witnesses of `ex x y. ...`, the body's conjuncts named
 show P / show φ by R(..)  the result (else the last `have`)
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
+have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
 let N := t / let N(a) := t   an abbreviation to the end of the block
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)
 flip [in h]               turn the equation / disequation around

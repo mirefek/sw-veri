@@ -1164,3 +1164,1367 @@ proof
   qed
   show by taut(r, c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  size_to_class: from a_clz_32's contract (a_clz_32's and a_ctz_32's own C2
+//  wait for a library of bit lemmas)
+
+// (a word not 0 has a leading-zero count: the least k with x < 2^k, then r = 32 - k)
+theorem ms.clz_exists: all x. x in bits(32) -> !(x = 0) -> ex r. r in bits(32) && mallocng_specs.clz_of(x, r)
+proof
+  fix x
+  assume hx hnz
+  have p32: int_lt(x, pow2(32)) by simp(hx)
+  have ex0: ex k. k in omega && int_lt(x, pow2(k)) by ex_intro({32}, taut((32 in omega by simp()), p32))
+  obtain k, ko kl kmin from mp(nat_least[p := k. int_lt(x, pow2(k))], ex0)
+  have k32: int_le(k, 32) := mp(all_elim(kmin, {32}), simp(), p32)
+  have k1: int_le(1, k) proof
+    have c: k = 0 -> false proof
+      assume e
+      have l := rewrite(e, kl)
+      have p0: pow2(0) = 1 by simp()
+      show by arith(rewrite(p0, l), hx, hnz)
+    qed
+    show by arith(c, ko)
+  qed
+  let j := int_sub(k, 1)
+  have jo: j in omega by arith(ko, k1)
+  have nj: !int_lt(x, pow2(j)) proof
+    have c: int_lt(x, pow2(j)) -> false proof
+      assume h
+      have le := mp(all_elim(kmin, {j}), jo, h)
+      show by arith(le, k1)
+    qed
+    show by taut(c)
+  qed
+  let r := int_sub(32, k)
+  have e1: int_sub(31, r) = j by arith(ko)
+  have e2: int_sub(32, r) = k by arith(ko)
+  have rb: r in bits(32) by arith(ko, k1, k32)
+  have g1: int_lt(r, 32) by arith(k1, ko)
+  have g2: int_le(int_pow(2, int_sub(k, 1)), x) by arith(expand(nj, pow2))
+  have g3: int_lt(x, int_pow(2, k)) := expand(kl, pow2)
+  have c: mallocng_specs.clz_of(x, r) by defs(simp(e1, e2, g1, g2, g3), mallocng_specs.clz_of)
+  show by ex_intro({r}, taut(rb, c))
+qed
+
+// a_clz_32's spec, its precondition holding: an overflow, or x's leading
+// zeros returned, the world as it was
+theorem ms.clz_spec_inv: all tbl x s o. x in bits(32) -> s in abi.World -> !(x = 0) ->
+  mallocng_specs.table_ok(app(s, "vm"), app(s, "objs"), tbl, 1, mallocng_specs.debruijn32_tab) ->
+  runs(mallocng_specs.a_clz_32_spec(tbl, x), s, o) ->
+  (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) || (ex r. r in bits(32) && mallocng_specs.clz_of(x, r) && o = ok(s, r))
+proof
+  fix tbl x s o
+  assume hx hw hnz htb h
+  have ce := apply(ms.clz_exists, hx, hnz)
+  have vv: ex y. y in x86_64_linux.Vm by ex_intro({app(s, "vm")}, simp(expand(hw, abi.World)))
+  show by simp(h, hnz, htb, ce, vv, keep(mallocng_specs.table_ok, mallocng_specs.clz_of))
+qed
+
+// a_clz_32's contract at a call a_clz_32(x) (its spec's register wrapper,
+// on a world where its precondition holds): an overflow (the memory any),
+// or the return, the memory as it was, the first register's low half x's
+// leading zeros
+theorem ms.clzs_q: all regs s tbl x o2. x in bits(32) -> s in abi.World -> s in univ(1) ->
+  !(x = 0) -> mallocng_specs.table_ok(app(s, "vm"), app(s, "objs"), tbl, 1, mallocng_specs.debruijn32_tab) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(32, x))) ->
+  runs(app(mallocng_specs.a_clz_32_spec_fun(tbl), regs), s, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && mallocng_specs.clz_of(x, bits_of_int(32, fst(r))))
+proof
+  fix regs s tbl x o2
+  assume hx hw hu hnz htb hr h
+  let OVF := exc_val("stack_overflow", empty)
+  have rl rn r0 := apply(gc.regs1_32, hx, hr)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_specs.a_clz_32_spec_fun, app_fn_build, ra in h
+  have vfun: is_fun(s) by simp(expand(hw, abi.World))
+  have vdom: "vm" in dom(s) by simp(expand(hw, abi.World))
+  have ss: fn_update(s, "vm", app(s, "vm")) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && mallocng_specs.clz_of(x, bits_of_int(32, fst(r))))
+  // (one argument: the spec's run)
+  have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(r0, apply(g.runs_elim, h))
+  have b2: bind_rel(mallocng_specs.a_clz_32_spec(tbl, x), s, x3 x4. letin(x4, x5. bind_rel(gimple.result(32, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have ci := apply(ms.clz_spec_inv, hx, hw, hnz, htb, hs3)
+  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+    assume e
+    obtain v, hv he from e
+    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(he, hk3))
+    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    show by taut(l)
+  qed
+  have c2: (ex r. r in bits(32) && mallocng_specs.clz_of(x, r) && o3 = ok(s, r)) -> G proof
+    assume e
+    obtain r, hr32 hc he from e
+    have k1: bind_rel(gimple.result(32, r), s, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+      by simp(expand(rewrite(he, hk3), letin), keep(bind_rel, gimple.result))
+    obtain o4, hr4 hk4 from expand(k1, bind_rel)
+    obtain u, hu64 hlow ho4 from apply(g.result32_inv, hr32, hr4)
+    have k2: any_rel(x9. x9 in bits(64), x9. o2 = ok(s, pair(u, x9))) by simp(expand(rewrite(ho4, hk4), letin), keep(any_rel))
+    have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+    obtain y, hy hoy from apply(g.any_e, ne, k2)
+    have cl: mallocng_specs.clz_of(x, bits_of_int(32, fst(pair(u, y)))) by simp(hlow, hc)
+    have l: ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && mallocng_specs.clz_of(x, bits_of_int(32, fst(r))) by ex_intro({pair(u, y)}, taut(rewrite(sym(ss), hoy), cl))
+    show by taut(l)
+  qed
+  show by taut(ci, c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  A table's entry i (2 bytes each, at t; table_ok): its address
+//  (GIMPLE's elem with the index sign-extended) and the load's one
+//  outcome, the list's entry
+
+theorem ms.tab_rd: all s t I tab. s in univ(1) -> t in bits(64) -> !(t = 0) -> I in bits(32) -> int_le(0, sint(32, I)) -> int_lt(sint(32, I), seq_len(tab)) ->
+  mallocng_specs.table_ok(app(s, "vm"), app(s, "objs"), t, 2, tab) ->
+  g.det(gimple.elem(t, bits_sext(32, 64, I), 2), s, ok(s, bits_add(64, t, bits_add(64, bits_sext(32, 64, I), bits_sext(32, 64, I))))) &&
+  g.det(gimple.ld16(bits_add(64, t, bits_add(64, bits_sext(32, 64, I), bits_sext(32, 64, I))), 0), s, ok(s, bits_of_int(16, app(tab, sint(32, I)))))
+proof
+  fix s t I tab
+  assume hs ht hnz hI h0 hl htab
+  let i := sint(32, I)
+  let A := bits_add(64, t, bits_add(64, bits_sext(32, 64, I), bits_sext(32, 64, I)))
+  have io: i in omega by arith(h0)
+  have tu tb := mp(all_elim(expand(htab, mallocng_specs.table_ok), {i}), io, hl)
+  // (the entry's address: in range, t + 2i)
+  have t0: int_le(0, t) by simp(ht)
+  have ud := apply(tr.usable_dom, {app(s, "vm")}, {app(s, "objs")}, {int_add(t, int_mul(2, i))}, {2}, {false}, {1}, tu, arith(t0, h0), simp(), simp())
+  have rng: int_lt(int_add(int_add(t, int_mul(2, i)), 1), 18446744073709551616) by taut(ud)
+  have sv := mp(tr.sext_vals, {I}, hI)
+  have xd: bits_sext(32, 64, I) = int_mod(i, 18446744073709551616) by defs(simp(), bits_sext, bits_of_int, pow2)
+  have ea: A = int_add(t, int_mul(2, i)) by defs(arith(xd, rng, h0, t0, ht), bits_add, pow2)
+  have def: tr.elem2_sx_def(t, I) by arith(rng, h0, t0)
+  have ed := apply(g.elem2_sx_det, {s}, {t}, {I}, hs, ht, hI, def)
+  // (the load: its bytes the entry's)
+  have ab: A in bits(64) by simp()
+  have e0: int_add(A, 0) = int_add(t, int_mul(2, i)) by arith(ea)
+  have md: g.mem_defined(s, A, 0, 2, false) by simp(e0, tu, rng, hnz, ea, t0, h0, ht)
+  have ld := apply(g.ld16_det, {s}, {A}, {0}, hs, ab, simp(), md)
+  have be: bits_of_int(64, int_add(t, int_mul(2, i))) = int_add(A, 0) by defs(arith(e0, rng, h0, t0), bits_of_int, pow2)
+  have tb2 := rewrite(be, tb)
+  have ld2 := rewrite(tb2, ld)
+  show by taut(ed, ld2)
+qed
+
+// ----------------------------------------------------------------------
+//  The size classes (layers/mallocng.sl's size_classes): their values,
+//  increasing
+
+theorem ms.sc_lit: mallocng.size_classes = seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191))
+proof
+  show by defs(refl({seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191))}), mallocng.size_classes)
+qed
+theorem ms.sc_vals: app(mallocng.size_classes, 0) = 1 && app(mallocng.size_classes, 1) = 2 && app(mallocng.size_classes, 2) = 3 && app(mallocng.size_classes, 3) = 4 && app(mallocng.size_classes, 4) = 5 && app(mallocng.size_classes, 5) = 6 && app(mallocng.size_classes, 6) = 7 && app(mallocng.size_classes, 7) = 8 && app(mallocng.size_classes, 8) = 9 && app(mallocng.size_classes, 9) = 10 && app(mallocng.size_classes, 10) = 12 && app(mallocng.size_classes, 11) = 15 && app(mallocng.size_classes, 12) = 18 && app(mallocng.size_classes, 13) = 20 && app(mallocng.size_classes, 14) = 25 && app(mallocng.size_classes, 15) = 31 && app(mallocng.size_classes, 16) = 36 && app(mallocng.size_classes, 17) = 42 && app(mallocng.size_classes, 18) = 50 && app(mallocng.size_classes, 19) = 63 && app(mallocng.size_classes, 20) = 72 && app(mallocng.size_classes, 21) = 84 && app(mallocng.size_classes, 22) = 102 && app(mallocng.size_classes, 23) = 127 && app(mallocng.size_classes, 24) = 146 && app(mallocng.size_classes, 25) = 170 && app(mallocng.size_classes, 26) = 204 && app(mallocng.size_classes, 27) = 255 && app(mallocng.size_classes, 28) = 292 && app(mallocng.size_classes, 29) = 340 && app(mallocng.size_classes, 30) = 409 && app(mallocng.size_classes, 31) = 511 && app(mallocng.size_classes, 32) = 584 && app(mallocng.size_classes, 33) = 682 && app(mallocng.size_classes, 34) = 818 && app(mallocng.size_classes, 35) = 1023 && app(mallocng.size_classes, 36) = 1169 && app(mallocng.size_classes, 37) = 1364 && app(mallocng.size_classes, 38) = 1637 && app(mallocng.size_classes, 39) = 2047 && app(mallocng.size_classes, 40) = 2340 && app(mallocng.size_classes, 41) = 2730 && app(mallocng.size_classes, 42) = 3276 && app(mallocng.size_classes, 43) = 4095 && app(mallocng.size_classes, 44) = 4680 && app(mallocng.size_classes, 45) = 5460 && app(mallocng.size_classes, 46) = 6552 && app(mallocng.size_classes, 47) = 8191
+proof
+  have a0 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 0)}))
+  have a1 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 1)}))
+  have a2 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 2)}))
+  have a3 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 3)}))
+  have a4 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 4)}))
+  have a5 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 5)}))
+  have a6 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 6)}))
+  have a7 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 7)}))
+  have a8 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 8)}))
+  have a9 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 9)}))
+  have a10 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 10)}))
+  have a11 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 11)}))
+  have a12 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 12)}))
+  have a13 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 13)}))
+  have a14 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 14)}))
+  have a15 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 15)}))
+  have a16 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 16)}))
+  have a17 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 17)}))
+  have a18 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 18)}))
+  have a19 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 19)}))
+  have a20 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 20)}))
+  have a21 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 21)}))
+  have a22 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 22)}))
+  have a23 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 23)}))
+  have a24 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 24)}))
+  have a25 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 25)}))
+  have a26 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 26)}))
+  have a27 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 27)}))
+  have a28 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 28)}))
+  have a29 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 29)}))
+  have a30 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 30)}))
+  have a31 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 31)}))
+  have a32 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 32)}))
+  have a33 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 33)}))
+  have a34 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 34)}))
+  have a35 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 35)}))
+  have a36 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 36)}))
+  have a37 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 37)}))
+  have a38 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 38)}))
+  have a39 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 39)}))
+  have a40 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 40)}))
+  have a41 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 41)}))
+  have a42 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 42)}))
+  have a43 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 43)}))
+  have a44 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 44)}))
+  have a45 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 45)}))
+  have a46 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 46)}))
+  have a47 := rewrite(sym(ms.sc_lit), at({app(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(1), seq_one(2)), seq_one(3)), seq_one(4)), seq_one(5)), seq_one(6)), seq_one(7)), seq_one(8)), seq_one(9)), seq_one(10)), seq_one(12)), seq_one(15)), seq_one(18)), seq_one(20)), seq_one(25)), seq_one(31)), seq_one(36)), seq_one(42)), seq_one(50)), seq_one(63)), seq_one(72)), seq_one(84)), seq_one(102)), seq_one(127)), seq_one(146)), seq_one(170)), seq_one(204)), seq_one(255)), seq_one(292)), seq_one(340)), seq_one(409)), seq_one(511)), seq_one(584)), seq_one(682)), seq_one(818)), seq_one(1023)), seq_one(1169)), seq_one(1364)), seq_one(1637)), seq_one(2047)), seq_one(2340)), seq_one(2730)), seq_one(3276)), seq_one(4095)), seq_one(4680)), seq_one(5460)), seq_one(6552)), seq_one(8191)), 47)}))
+  show by taut(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31, a32, a33, a34, a35, a36, a37, a38, a39, a40, a41, a42, a43, a44, a45, a46, a47)
+qed
+
+theorem ms.sc_step: all j. j in omega -> int_lt(j, 47) -> int_lt(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(j, 1)))
+proof
+  fix j
+  assume hj hl
+  have k0: int_le(0, j) && int_lt(j, 11) -> int_lt(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(j, 1))) proof
+    assume hc
+    have d: j = 0 || j = 1 || j = 2 || j = 3 || j = 4 || j = 5 || j = 6 || j = 7 || j = 8 || j = 9 || j = 10 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k11: int_le(11, j) && int_lt(j, 22) -> int_lt(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(j, 1))) proof
+    assume hc
+    have d: j = 11 || j = 12 || j = 13 || j = 14 || j = 15 || j = 16 || j = 17 || j = 18 || j = 19 || j = 20 || j = 21 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k22: int_le(22, j) && int_lt(j, 33) -> int_lt(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(j, 1))) proof
+    assume hc
+    have d: j = 22 || j = 23 || j = 24 || j = 25 || j = 26 || j = 27 || j = 28 || j = 29 || j = 30 || j = 31 || j = 32 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k33: int_le(33, j) && int_lt(j, 44) -> int_lt(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(j, 1))) proof
+    assume hc
+    have d: j = 33 || j = 34 || j = 35 || j = 36 || j = 37 || j = 38 || j = 39 || j = 40 || j = 41 || j = 42 || j = 43 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k44: int_le(44, j) && int_lt(j, 47) -> int_lt(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(j, 1))) proof
+    assume hc
+    have d: j = 44 || j = 45 || j = 46 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have cs: (int_le(0, j) && int_lt(j, 11)) || (int_le(11, j) && int_lt(j, 22)) || (int_le(22, j) && int_lt(j, 33)) || (int_le(33, j) && int_lt(j, 44)) || (int_le(44, j) && int_lt(j, 47)) by arith(hj, hl)
+  show by taut(cs, k0, k11, k22, k33, k44)
+qed
+
+// (so a class's size is at most a later one's)
+theorem ms.sc_mono: all j k. j in omega -> k in omega -> int_le(j, k) -> int_lt(k, 48) -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, k))
+proof
+  fix j
+  have base: int_le(j, 0) -> int_lt(0, 48) -> j in omega -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, 0)) proof
+    assume h1 _ hj
+    have e: j = 0 by arith(h1, hj)
+    show by simp(e)
+  qed
+  have step: all k. k in omega -> (int_le(j, k) -> int_lt(k, 48) -> j in omega -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, k))) ->
+      (int_le(j, int_add(k, 1)) -> int_lt(int_add(k, 1), 48) -> j in omega -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(k, 1)))) proof
+    fix k
+    assume hk ih h1 h2 hj
+    have c1: j = int_add(k, 1) -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(k, 1))) proof
+      assume e
+      show by simp(e)
+    qed
+    have c2: int_le(j, k) -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, int_add(k, 1))) proof
+      assume h
+      have a := mp(ih, h, (int_lt(k, 48) by arith(h2)), hj)
+      have b := mp(all_elim(ms.sc_step, {k}), hk, (int_lt(k, 47) by arith(h2)))
+      show by arith(a, b)
+    qed
+    have cs: j = int_add(k, 1) || int_le(j, k) by arith(h1, hj, hk)
+    show by taut(c1, c2, cs)
+  qed
+  have all := mp(nat_ind[p := k. int_le(j, k) -> int_lt(k, 48) -> j in omega -> int_le(app(mallocng.size_classes, j), app(mallocng.size_classes, k))], base, step)
+  fix k
+  assume hj hk hjk hk48
+  show := mp(all_elim(all, {k}), hk, hjk, hk48, hj)
+qed
+
+// (powers of 2: increasing in the exponent)
+theorem ms.pow2_mono: all k l. k in omega -> l in omega -> int_le(k, l) -> int_le(pow2(k), pow2(l))
+proof
+  fix k
+  have base: int_le(k, 0) -> k in omega -> int_le(pow2(k), pow2(0)) proof
+    assume h hk
+    have e: k = 0 by arith(h, hk)
+    show by simp(e)
+  qed
+  have step: all l. l in omega -> (int_le(k, l) -> k in omega -> int_le(pow2(k), pow2(l))) -> (int_le(k, int_add(l, 1)) -> k in omega -> int_le(pow2(k), pow2(int_add(l, 1)))) proof
+    fix l
+    assume hl ih h hk
+    have c1: k = int_add(l, 1) -> int_le(pow2(k), pow2(int_add(l, 1))) proof
+      assume e
+      show by simp(e)
+    qed
+    have c2: int_le(k, l) -> int_le(pow2(k), pow2(int_add(l, 1))) proof
+      assume h2
+      have a := mp(ih, h2, hk)
+      show by arith(a, hl, hk)
+    qed
+    have cs: k = int_add(l, 1) || int_le(k, l) by arith(h, hk, hl)
+    show by taut(c1, c2, cs)
+  qed
+  have all := mp(nat_ind[p := l. int_le(k, l) -> k in omega -> int_le(pow2(k), pow2(l))], base, step)
+  fix l
+  assume hk hl hkl
+  show := mp(all_elim(all, {l}), hl, hkl, hk)
+qed
+
+// (the classes: naturals, at most 8191)
+theorem ms.sc_nat: all j. j in omega -> int_lt(j, 48) -> app(mallocng.size_classes, j) in omega && int_le(app(mallocng.size_classes, j), 8191)
+proof
+  fix j
+  assume hj hl
+  have k0: int_le(0, j) && int_lt(j, 11) -> app(mallocng.size_classes, j) in omega && int_le(app(mallocng.size_classes, j), 8191) proof
+    assume hc
+    have d: j = 0 || j = 1 || j = 2 || j = 3 || j = 4 || j = 5 || j = 6 || j = 7 || j = 8 || j = 9 || j = 10 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k11: int_le(11, j) && int_lt(j, 22) -> app(mallocng.size_classes, j) in omega && int_le(app(mallocng.size_classes, j), 8191) proof
+    assume hc
+    have d: j = 11 || j = 12 || j = 13 || j = 14 || j = 15 || j = 16 || j = 17 || j = 18 || j = 19 || j = 20 || j = 21 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k22: int_le(22, j) && int_lt(j, 33) -> app(mallocng.size_classes, j) in omega && int_le(app(mallocng.size_classes, j), 8191) proof
+    assume hc
+    have d: j = 22 || j = 23 || j = 24 || j = 25 || j = 26 || j = 27 || j = 28 || j = 29 || j = 30 || j = 31 || j = 32 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k33: int_le(33, j) && int_lt(j, 44) -> app(mallocng.size_classes, j) in omega && int_le(app(mallocng.size_classes, j), 8191) proof
+    assume hc
+    have d: j = 33 || j = 34 || j = 35 || j = 36 || j = 37 || j = 38 || j = 39 || j = 40 || j = 41 || j = 42 || j = 43 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have k44: int_le(44, j) && int_lt(j, 48) -> app(mallocng.size_classes, j) in omega && int_le(app(mallocng.size_classes, j), 8191) proof
+    assume hc
+    have d: j = 44 || j = 45 || j = 46 || j = 47 by arith(hj, hc)
+    show by simp(d, ms.sc_vals)
+  qed
+  have cs: (int_le(0, j) && int_lt(j, 11)) || (int_le(11, j) && int_lt(j, 22)) || (int_le(22, j) && int_lt(j, 33)) || (int_le(33, j) && int_lt(j, 44)) || (int_le(44, j) && int_lt(j, 48)) by arith(hj, hl)
+  show by taut(cs, k0, k11, k22, k33, k44)
+qed
+
+// (class_of from the class's size and the one before: the earlier ones
+// smaller still)
+theorem ms.class_from: all n c. n in omega -> c in omega -> int_lt(c, 48) -> int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, c)) ->
+  (c = 0 || int_lt(app(mallocng.size_classes, int_sub(c, 1)), int_div(int_add(n, 19), 16))) -> mallocng_specs.class_of(n, c)
+proof
+  fix n c
+  assume hn hc h48 hle hprev
+  have lt: all j. j in omega -> int_lt(j, c) -> int_lt(app(mallocng.size_classes, j), int_div(int_add(n, 19), 16)) proof
+    fix j
+    assume hj hjc
+    have c0: !(c = 0) by arith(hj, hjc, hc)
+    have hp: int_lt(app(mallocng.size_classes, int_sub(c, 1)), int_div(int_add(n, 19), 16)) by taut(hprev, c0)
+    have m := mp(all_elim(ms.sc_mono, {j}, {int_sub(c, 1)}), hj, (int_sub(c, 1) in omega by arith(hc, hjc, hj)), (int_le(j, int_sub(c, 1)) by arith(hjc, hj, hc)), (int_lt(int_sub(c, 1), 48) by arith(h48, hjc, hc)))
+    show by arith(m, hp)
+  qed
+  show by defs(taut(h48, hle, lt), mallocng_specs.class_of)
+qed
+
+// a small size: at most 10 units, the class units - 1
+theorem ms.stc_small: all n. n in omega -> int_le(int_div(int_add(n, 3), 16), 9) -> mallocng_specs.class_of(n, int_div(int_add(n, 3), 16))
+proof
+  fix n
+  assume hn hq
+  let Q := int_div(int_add(n, 3), 16)
+  have qo: Q in omega by arith(hn)
+  have u: int_div(int_add(n, 19), 16) = int_add(Q, 1) by arith(hn)
+  have d: Q = 0 || Q = 1 || Q = 2 || Q = 3 || Q = 4 || Q = 5 || Q = 6 || Q = 7 || Q = 8 || Q = 9 by arith(qo, hq)
+  have v: app(mallocng.size_classes, Q) = int_add(Q, 1) by simp(d, ms.sc_vals)
+  have pv: Q = 0 || int_lt(app(mallocng.size_classes, int_sub(Q, 1)), int_add(Q, 1)) by simp(d, ms.sc_vals)
+  have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, Q)) by arith(u, v)
+  have pv2: Q = 0 || int_lt(app(mallocng.size_classes, int_sub(Q, 1)), int_div(int_add(n, 19), 16)) := rewrite(sym(u), pv)
+  show := apply(ms.class_from, hn, qo, (int_lt(Q, 48) by arith(hq, qo)), le, pv2)
+qed
+
+// (a large size: its units' leading-zero count, 19 to 28)
+theorem ms.stc_bounds: all u c. u in omega -> int_le(11, u) -> int_le(u, 8191) -> c in omega -> mallocng_specs.clz_of(u, c) -> int_le(19, c) && int_le(c, 28)
+proof
+  fix u c
+  assume hu h11 h8k hc hz
+  have c32 lo hi := expand(hz, mallocng_specs.clz_of)
+  have a: int_lt(c, 19) -> false proof
+    assume h
+    have m := mp(all_elim(ms.pow2_mono, {13}, {int_sub(31, c)}), (13 in omega by simp()), (int_sub(31, c) in omega by arith(hc, c32)), (int_le(13, int_sub(31, c)) by arith(h, hc)))
+    have p13: pow2(13) = 8192 by simp()
+    show by arith(expand(rewrite(p13, m), pow2), lo, h8k)
+  qed
+  have b: int_lt(28, c) -> false proof
+    assume h
+    have m := mp(all_elim(ms.pow2_mono, {int_sub(32, c)}, {3}), (int_sub(32, c) in omega by arith(hc, c32)), (3 in omega by simp()), (int_le(int_sub(32, c), 3) by arith(h, hc)))
+    have p3: pow2(3) = 8 by simp()
+    show by arith(expand(rewrite(p3, m), pow2), hi, h11)
+  qed
+  show by arith(a, b, hc)
+qed
+
+// a large size (more than 10 units u): the class the code picks -- from
+// u's leading-zero count c the bucket's four classes at 4 * (30 - c), two
+// comparisons -- is u's
+theorem ms.stc_big: all n c i1 i2. n in omega -> int_le(n, 131052) -> !int_le(int_div(int_add(n, 3), 16), 9) -> c in omega -> mallocng_specs.clz_of(int_add(int_div(int_add(n, 3), 16), 1), c) ->
+  (int_lt(app(mallocng.size_classes, int_add(int_mul(4, int_sub(30, c)), 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> i1 = int_add(int_mul(4, int_sub(30, c)), 2)) -> (!int_lt(app(mallocng.size_classes, int_add(int_mul(4, int_sub(30, c)), 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> i1 = int_mul(4, int_sub(30, c))) ->
+  (int_lt(app(mallocng.size_classes, i1), int_add(int_div(int_add(n, 3), 16), 1)) -> i2 = int_add(i1, 1)) -> (!int_lt(app(mallocng.size_classes, i1), int_add(int_div(int_add(n, 3), 16), 1)) -> i2 = i1) ->
+  mallocng_specs.class_of(n, i2)
+proof
+  fix n c i1 i2
+  assume hn h131 hbig hc hz ha1 ha2 hb1 hb2
+  have uo: int_add(int_div(int_add(n, 3), 16), 1) in omega by arith(hn)
+  have u11: int_le(11, int_add(int_div(int_add(n, 3), 16), 1)) by arith(hn, hbig)
+  have u8k: int_le(int_add(int_div(int_add(n, 3), 16), 1), 8191) by arith(hn, h131)
+  have ue: int_div(int_add(n, 19), 16) = int_add(int_div(int_add(n, 3), 16), 1) by arith(hn)
+  have b19 b28 := apply(ms.stc_bounds, uo, u11, u8k, hc, hz)
+  have d: c = 19 || c = 20 || c = 21 || c = 22 || c = 23 || c = 24 || c = 25 || c = 26 || c = 27 || c = 28 by arith(hc, b19, b28)
+  have k19: c = 19 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(4096, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 8192) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 44 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v43: app(mallocng.size_classes, 43) = 4095 by simp(ms.sc_vals)
+    have v44: app(mallocng.size_classes, 44) = 4680 by simp(ms.sc_vals)
+    have v45: app(mallocng.size_classes, 45) = 5460 by simp(ms.sc_vals)
+    have v46: app(mallocng.size_classes, 46) = 6552 by simp(ms.sc_vals)
+    have v47: app(mallocng.size_classes, 47) = 8191 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(44, 1)) = 5460 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(44, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 46), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 46 by simp(hA, a1)
+      have ei2: i2 = 47 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(47, 1)) = 6552 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 47)) by arith(ue, hi, lo, hA, hB, w1, v47, v46)
+      have pr: 47 = 0 || int_lt(app(mallocng.size_classes, int_sub(47, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v46)
+      have cl := apply(ms.class_from, hn, (47 in omega by simp()), (int_lt(47, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(44, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 46), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 46 by simp(hA, a1)
+      have ei2: i2 = 46 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(46, 1)) = 5460 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 46)) by arith(ue, hi, lo, hA, hB, w1, v46, v46)
+      have pr: 46 = 0 || int_lt(app(mallocng.size_classes, int_sub(46, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v46)
+      have cl := apply(ms.class_from, hn, (46 in omega by simp()), (int_lt(46, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(44, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 44), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 44 by simp(hA, a2)
+      have ei2: i2 = 45 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(45, 1)) = 4680 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 45)) by arith(ue, hi, lo, hA, hB, w1, v45, v44)
+      have pr: 45 = 0 || int_lt(app(mallocng.size_classes, int_sub(45, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v44)
+      have cl := apply(ms.class_from, hn, (45 in omega by simp()), (int_lt(45, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(44, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 44), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 44 by simp(hA, a2)
+      have ei2: i2 = 44 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(44, 1)) = 4095 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 44)) by arith(ue, hi, lo, hA, hB, w1, v44, v44)
+      have pr: 44 = 0 || int_lt(app(mallocng.size_classes, int_sub(44, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v44)
+      have cl := apply(ms.class_from, hn, (44 in omega by simp()), (int_lt(44, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(44, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(44, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 46), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 46), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 44), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 44), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k20: c = 20 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(2048, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 4096) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 40 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v39: app(mallocng.size_classes, 39) = 2047 by simp(ms.sc_vals)
+    have v40: app(mallocng.size_classes, 40) = 2340 by simp(ms.sc_vals)
+    have v41: app(mallocng.size_classes, 41) = 2730 by simp(ms.sc_vals)
+    have v42: app(mallocng.size_classes, 42) = 3276 by simp(ms.sc_vals)
+    have v43: app(mallocng.size_classes, 43) = 4095 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(40, 1)) = 2730 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(40, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 42), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 42 by simp(hA, a1)
+      have ei2: i2 = 43 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(43, 1)) = 3276 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 43)) by arith(ue, hi, lo, hA, hB, w1, v43, v42)
+      have pr: 43 = 0 || int_lt(app(mallocng.size_classes, int_sub(43, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v42)
+      have cl := apply(ms.class_from, hn, (43 in omega by simp()), (int_lt(43, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(40, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 42), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 42 by simp(hA, a1)
+      have ei2: i2 = 42 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(42, 1)) = 2730 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 42)) by arith(ue, hi, lo, hA, hB, w1, v42, v42)
+      have pr: 42 = 0 || int_lt(app(mallocng.size_classes, int_sub(42, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v42)
+      have cl := apply(ms.class_from, hn, (42 in omega by simp()), (int_lt(42, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(40, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 40), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 40 by simp(hA, a2)
+      have ei2: i2 = 41 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(41, 1)) = 2340 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 41)) by arith(ue, hi, lo, hA, hB, w1, v41, v40)
+      have pr: 41 = 0 || int_lt(app(mallocng.size_classes, int_sub(41, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v40)
+      have cl := apply(ms.class_from, hn, (41 in omega by simp()), (int_lt(41, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(40, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 40), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 40 by simp(hA, a2)
+      have ei2: i2 = 40 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(40, 1)) = 2047 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 40)) by arith(ue, hi, lo, hA, hB, w1, v40, v40)
+      have pr: 40 = 0 || int_lt(app(mallocng.size_classes, int_sub(40, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v40)
+      have cl := apply(ms.class_from, hn, (40 in omega by simp()), (int_lt(40, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(40, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(40, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 42), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 42), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 40), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 40), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k21: c = 21 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(1024, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 2048) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 36 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v35: app(mallocng.size_classes, 35) = 1023 by simp(ms.sc_vals)
+    have v36: app(mallocng.size_classes, 36) = 1169 by simp(ms.sc_vals)
+    have v37: app(mallocng.size_classes, 37) = 1364 by simp(ms.sc_vals)
+    have v38: app(mallocng.size_classes, 38) = 1637 by simp(ms.sc_vals)
+    have v39: app(mallocng.size_classes, 39) = 2047 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(36, 1)) = 1364 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(36, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 38), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 38 by simp(hA, a1)
+      have ei2: i2 = 39 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(39, 1)) = 1637 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 39)) by arith(ue, hi, lo, hA, hB, w1, v39, v38)
+      have pr: 39 = 0 || int_lt(app(mallocng.size_classes, int_sub(39, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v38)
+      have cl := apply(ms.class_from, hn, (39 in omega by simp()), (int_lt(39, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(36, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 38), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 38 by simp(hA, a1)
+      have ei2: i2 = 38 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(38, 1)) = 1364 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 38)) by arith(ue, hi, lo, hA, hB, w1, v38, v38)
+      have pr: 38 = 0 || int_lt(app(mallocng.size_classes, int_sub(38, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v38)
+      have cl := apply(ms.class_from, hn, (38 in omega by simp()), (int_lt(38, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(36, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 36), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 36 by simp(hA, a2)
+      have ei2: i2 = 37 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(37, 1)) = 1169 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 37)) by arith(ue, hi, lo, hA, hB, w1, v37, v36)
+      have pr: 37 = 0 || int_lt(app(mallocng.size_classes, int_sub(37, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v36)
+      have cl := apply(ms.class_from, hn, (37 in omega by simp()), (int_lt(37, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(36, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 36), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 36 by simp(hA, a2)
+      have ei2: i2 = 36 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(36, 1)) = 1023 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 36)) by arith(ue, hi, lo, hA, hB, w1, v36, v36)
+      have pr: 36 = 0 || int_lt(app(mallocng.size_classes, int_sub(36, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v36)
+      have cl := apply(ms.class_from, hn, (36 in omega by simp()), (int_lt(36, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(36, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(36, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 38), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 38), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 36), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 36), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k22: c = 22 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(512, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 1024) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 32 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v31: app(mallocng.size_classes, 31) = 511 by simp(ms.sc_vals)
+    have v32: app(mallocng.size_classes, 32) = 584 by simp(ms.sc_vals)
+    have v33: app(mallocng.size_classes, 33) = 682 by simp(ms.sc_vals)
+    have v34: app(mallocng.size_classes, 34) = 818 by simp(ms.sc_vals)
+    have v35: app(mallocng.size_classes, 35) = 1023 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(32, 1)) = 682 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(32, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 34), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 34 by simp(hA, a1)
+      have ei2: i2 = 35 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(35, 1)) = 818 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 35)) by arith(ue, hi, lo, hA, hB, w1, v35, v34)
+      have pr: 35 = 0 || int_lt(app(mallocng.size_classes, int_sub(35, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v34)
+      have cl := apply(ms.class_from, hn, (35 in omega by simp()), (int_lt(35, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(32, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 34), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 34 by simp(hA, a1)
+      have ei2: i2 = 34 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(34, 1)) = 682 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 34)) by arith(ue, hi, lo, hA, hB, w1, v34, v34)
+      have pr: 34 = 0 || int_lt(app(mallocng.size_classes, int_sub(34, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v34)
+      have cl := apply(ms.class_from, hn, (34 in omega by simp()), (int_lt(34, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(32, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 32), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 32 by simp(hA, a2)
+      have ei2: i2 = 33 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(33, 1)) = 584 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 33)) by arith(ue, hi, lo, hA, hB, w1, v33, v32)
+      have pr: 33 = 0 || int_lt(app(mallocng.size_classes, int_sub(33, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v32)
+      have cl := apply(ms.class_from, hn, (33 in omega by simp()), (int_lt(33, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(32, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 32), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 32 by simp(hA, a2)
+      have ei2: i2 = 32 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(32, 1)) = 511 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 32)) by arith(ue, hi, lo, hA, hB, w1, v32, v32)
+      have pr: 32 = 0 || int_lt(app(mallocng.size_classes, int_sub(32, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v32)
+      have cl := apply(ms.class_from, hn, (32 in omega by simp()), (int_lt(32, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(32, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(32, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 34), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 34), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 32), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 32), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k23: c = 23 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(256, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 512) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 28 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v27: app(mallocng.size_classes, 27) = 255 by simp(ms.sc_vals)
+    have v28: app(mallocng.size_classes, 28) = 292 by simp(ms.sc_vals)
+    have v29: app(mallocng.size_classes, 29) = 340 by simp(ms.sc_vals)
+    have v30: app(mallocng.size_classes, 30) = 409 by simp(ms.sc_vals)
+    have v31: app(mallocng.size_classes, 31) = 511 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(28, 1)) = 340 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(28, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 30), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 30 by simp(hA, a1)
+      have ei2: i2 = 31 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(31, 1)) = 409 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 31)) by arith(ue, hi, lo, hA, hB, w1, v31, v30)
+      have pr: 31 = 0 || int_lt(app(mallocng.size_classes, int_sub(31, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v30)
+      have cl := apply(ms.class_from, hn, (31 in omega by simp()), (int_lt(31, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(28, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 30), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 30 by simp(hA, a1)
+      have ei2: i2 = 30 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(30, 1)) = 340 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 30)) by arith(ue, hi, lo, hA, hB, w1, v30, v30)
+      have pr: 30 = 0 || int_lt(app(mallocng.size_classes, int_sub(30, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v30)
+      have cl := apply(ms.class_from, hn, (30 in omega by simp()), (int_lt(30, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(28, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 28), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 28 by simp(hA, a2)
+      have ei2: i2 = 29 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(29, 1)) = 292 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 29)) by arith(ue, hi, lo, hA, hB, w1, v29, v28)
+      have pr: 29 = 0 || int_lt(app(mallocng.size_classes, int_sub(29, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v28)
+      have cl := apply(ms.class_from, hn, (29 in omega by simp()), (int_lt(29, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(28, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 28), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 28 by simp(hA, a2)
+      have ei2: i2 = 28 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(28, 1)) = 255 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 28)) by arith(ue, hi, lo, hA, hB, w1, v28, v28)
+      have pr: 28 = 0 || int_lt(app(mallocng.size_classes, int_sub(28, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v28)
+      have cl := apply(ms.class_from, hn, (28 in omega by simp()), (int_lt(28, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(28, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(28, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 30), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 30), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 28), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 28), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k24: c = 24 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(128, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 256) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 24 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v23: app(mallocng.size_classes, 23) = 127 by simp(ms.sc_vals)
+    have v24: app(mallocng.size_classes, 24) = 146 by simp(ms.sc_vals)
+    have v25: app(mallocng.size_classes, 25) = 170 by simp(ms.sc_vals)
+    have v26: app(mallocng.size_classes, 26) = 204 by simp(ms.sc_vals)
+    have v27: app(mallocng.size_classes, 27) = 255 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(24, 1)) = 170 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(24, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 26), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 26 by simp(hA, a1)
+      have ei2: i2 = 27 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(27, 1)) = 204 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 27)) by arith(ue, hi, lo, hA, hB, w1, v27, v26)
+      have pr: 27 = 0 || int_lt(app(mallocng.size_classes, int_sub(27, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v26)
+      have cl := apply(ms.class_from, hn, (27 in omega by simp()), (int_lt(27, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(24, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 26), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 26 by simp(hA, a1)
+      have ei2: i2 = 26 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(26, 1)) = 170 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 26)) by arith(ue, hi, lo, hA, hB, w1, v26, v26)
+      have pr: 26 = 0 || int_lt(app(mallocng.size_classes, int_sub(26, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v26)
+      have cl := apply(ms.class_from, hn, (26 in omega by simp()), (int_lt(26, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(24, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 24), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 24 by simp(hA, a2)
+      have ei2: i2 = 25 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(25, 1)) = 146 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 25)) by arith(ue, hi, lo, hA, hB, w1, v25, v24)
+      have pr: 25 = 0 || int_lt(app(mallocng.size_classes, int_sub(25, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v24)
+      have cl := apply(ms.class_from, hn, (25 in omega by simp()), (int_lt(25, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(24, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 24), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 24 by simp(hA, a2)
+      have ei2: i2 = 24 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(24, 1)) = 127 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 24)) by arith(ue, hi, lo, hA, hB, w1, v24, v24)
+      have pr: 24 = 0 || int_lt(app(mallocng.size_classes, int_sub(24, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v24)
+      have cl := apply(ms.class_from, hn, (24 in omega by simp()), (int_lt(24, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(24, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(24, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 26), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 26), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 24), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 24), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k25: c = 25 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(64, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 128) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 20 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v19: app(mallocng.size_classes, 19) = 63 by simp(ms.sc_vals)
+    have v20: app(mallocng.size_classes, 20) = 72 by simp(ms.sc_vals)
+    have v21: app(mallocng.size_classes, 21) = 84 by simp(ms.sc_vals)
+    have v22: app(mallocng.size_classes, 22) = 102 by simp(ms.sc_vals)
+    have v23: app(mallocng.size_classes, 23) = 127 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(20, 1)) = 84 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(20, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 22), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 22 by simp(hA, a1)
+      have ei2: i2 = 23 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(23, 1)) = 102 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 23)) by arith(ue, hi, lo, hA, hB, w1, v23, v22)
+      have pr: 23 = 0 || int_lt(app(mallocng.size_classes, int_sub(23, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v22)
+      have cl := apply(ms.class_from, hn, (23 in omega by simp()), (int_lt(23, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(20, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 22), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 22 by simp(hA, a1)
+      have ei2: i2 = 22 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(22, 1)) = 84 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 22)) by arith(ue, hi, lo, hA, hB, w1, v22, v22)
+      have pr: 22 = 0 || int_lt(app(mallocng.size_classes, int_sub(22, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v22)
+      have cl := apply(ms.class_from, hn, (22 in omega by simp()), (int_lt(22, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(20, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 20), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 20 by simp(hA, a2)
+      have ei2: i2 = 21 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(21, 1)) = 72 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 21)) by arith(ue, hi, lo, hA, hB, w1, v21, v20)
+      have pr: 21 = 0 || int_lt(app(mallocng.size_classes, int_sub(21, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v20)
+      have cl := apply(ms.class_from, hn, (21 in omega by simp()), (int_lt(21, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(20, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 20), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 20 by simp(hA, a2)
+      have ei2: i2 = 20 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(20, 1)) = 63 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 20)) by arith(ue, hi, lo, hA, hB, w1, v20, v20)
+      have pr: 20 = 0 || int_lt(app(mallocng.size_classes, int_sub(20, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v20)
+      have cl := apply(ms.class_from, hn, (20 in omega by simp()), (int_lt(20, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(20, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(20, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 22), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 22), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 20), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 20), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k26: c = 26 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(32, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 64) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 16 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v15: app(mallocng.size_classes, 15) = 31 by simp(ms.sc_vals)
+    have v16: app(mallocng.size_classes, 16) = 36 by simp(ms.sc_vals)
+    have v17: app(mallocng.size_classes, 17) = 42 by simp(ms.sc_vals)
+    have v18: app(mallocng.size_classes, 18) = 50 by simp(ms.sc_vals)
+    have v19: app(mallocng.size_classes, 19) = 63 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(16, 1)) = 42 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(16, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 18), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 18 by simp(hA, a1)
+      have ei2: i2 = 19 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(19, 1)) = 50 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 19)) by arith(ue, hi, lo, hA, hB, w1, v19, v18)
+      have pr: 19 = 0 || int_lt(app(mallocng.size_classes, int_sub(19, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v18)
+      have cl := apply(ms.class_from, hn, (19 in omega by simp()), (int_lt(19, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(16, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 18), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 18 by simp(hA, a1)
+      have ei2: i2 = 18 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(18, 1)) = 42 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 18)) by arith(ue, hi, lo, hA, hB, w1, v18, v18)
+      have pr: 18 = 0 || int_lt(app(mallocng.size_classes, int_sub(18, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v18)
+      have cl := apply(ms.class_from, hn, (18 in omega by simp()), (int_lt(18, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(16, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 16), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 16 by simp(hA, a2)
+      have ei2: i2 = 17 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(17, 1)) = 36 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 17)) by arith(ue, hi, lo, hA, hB, w1, v17, v16)
+      have pr: 17 = 0 || int_lt(app(mallocng.size_classes, int_sub(17, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v16)
+      have cl := apply(ms.class_from, hn, (17 in omega by simp()), (int_lt(17, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(16, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 16), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 16 by simp(hA, a2)
+      have ei2: i2 = 16 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(16, 1)) = 31 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 16)) by arith(ue, hi, lo, hA, hB, w1, v16, v16)
+      have pr: 16 = 0 || int_lt(app(mallocng.size_classes, int_sub(16, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v16)
+      have cl := apply(ms.class_from, hn, (16 in omega by simp()), (int_lt(16, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(16, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(16, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 18), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 18), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 16), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 16), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k27: c = 27 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(16, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 32) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 12 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v11: app(mallocng.size_classes, 11) = 15 by simp(ms.sc_vals)
+    have v12: app(mallocng.size_classes, 12) = 18 by simp(ms.sc_vals)
+    have v13: app(mallocng.size_classes, 13) = 20 by simp(ms.sc_vals)
+    have v14: app(mallocng.size_classes, 14) = 25 by simp(ms.sc_vals)
+    have v15: app(mallocng.size_classes, 15) = 31 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(12, 1)) = 20 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(12, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 14), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 14 by simp(hA, a1)
+      have ei2: i2 = 15 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(15, 1)) = 25 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 15)) by arith(ue, hi, lo, hA, hB, w1, v15, v14)
+      have pr: 15 = 0 || int_lt(app(mallocng.size_classes, int_sub(15, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v14)
+      have cl := apply(ms.class_from, hn, (15 in omega by simp()), (int_lt(15, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(12, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 14), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 14 by simp(hA, a1)
+      have ei2: i2 = 14 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(14, 1)) = 20 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 14)) by arith(ue, hi, lo, hA, hB, w1, v14, v14)
+      have pr: 14 = 0 || int_lt(app(mallocng.size_classes, int_sub(14, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v14)
+      have cl := apply(ms.class_from, hn, (14 in omega by simp()), (int_lt(14, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(12, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 12), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 12 by simp(hA, a2)
+      have ei2: i2 = 13 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(13, 1)) = 18 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 13)) by arith(ue, hi, lo, hA, hB, w1, v13, v12)
+      have pr: 13 = 0 || int_lt(app(mallocng.size_classes, int_sub(13, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v12)
+      have cl := apply(ms.class_from, hn, (13 in omega by simp()), (int_lt(13, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(12, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 12), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 12 by simp(hA, a2)
+      have ei2: i2 = 12 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(12, 1)) = 15 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 12)) by arith(ue, hi, lo, hA, hB, w1, v12, v12)
+      have pr: 12 = 0 || int_lt(app(mallocng.size_classes, int_sub(12, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v12)
+      have cl := apply(ms.class_from, hn, (12 in omega by simp()), (int_lt(12, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(12, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(12, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 14), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 14), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 12), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 12), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  have k28: c = 28 -> mallocng_specs.class_of(n, i2) proof
+    assume e
+    have zl zlo zhi := expand(rewrite(e, hz), mallocng_specs.clz_of)
+    have lo: int_le(8, int_add(int_div(int_add(n, 3), 16), 1)) by simp(zlo)
+    have hi: int_lt(int_add(int_div(int_add(n, 3), 16), 1), 16) by simp(zhi)
+    have e0: int_mul(4, int_sub(30, c)) = 8 by simp(e)
+    have a1 := rewrite(e0, ha1)
+    have a2 := rewrite(e0, ha2)
+    have v7: app(mallocng.size_classes, 7) = 8 by simp(ms.sc_vals)
+    have v8: app(mallocng.size_classes, 8) = 9 by simp(ms.sc_vals)
+    have v9: app(mallocng.size_classes, 9) = 10 by simp(ms.sc_vals)
+    have v10: app(mallocng.size_classes, 10) = 12 by simp(ms.sc_vals)
+    have v11: app(mallocng.size_classes, 11) = 15 by simp(ms.sc_vals)
+    have w1: app(mallocng.size_classes, int_add(8, 1)) = 10 by simp(ms.sc_vals)
+    have sAB: int_lt(app(mallocng.size_classes, int_add(8, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 10), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 10 by simp(hA, a1)
+      have ei2: i2 = 11 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(11, 1)) = 12 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 11)) by arith(ue, hi, lo, hA, hB, w1, v11, v10)
+      have pr: 11 = 0 || int_lt(app(mallocng.size_classes, int_sub(11, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v10)
+      have cl := apply(ms.class_from, hn, (11 in omega by simp()), (int_lt(11, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sAb: int_lt(app(mallocng.size_classes, int_add(8, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 10), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 10 by simp(hA, a1)
+      have ei2: i2 = 10 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(10, 1)) = 10 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 10)) by arith(ue, hi, lo, hA, hB, w1, v10, v10)
+      have pr: 10 = 0 || int_lt(app(mallocng.size_classes, int_sub(10, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v10)
+      have cl := apply(ms.class_from, hn, (10 in omega by simp()), (int_lt(10, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have saB: !int_lt(app(mallocng.size_classes, int_add(8, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> int_lt(app(mallocng.size_classes, 8), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 8 by simp(hA, a2)
+      have ei2: i2 = 9 by simp(rewrite(ei1, hb1), hB)
+      have pv: app(mallocng.size_classes, int_sub(9, 1)) = 9 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 9)) by arith(ue, hi, lo, hA, hB, w1, v9, v8)
+      have pr: 9 = 0 || int_lt(app(mallocng.size_classes, int_sub(9, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v8)
+      have cl := apply(ms.class_from, hn, (9 in omega by simp()), (int_lt(9, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have sab: !int_lt(app(mallocng.size_classes, int_add(8, 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> !int_lt(app(mallocng.size_classes, 8), int_add(int_div(int_add(n, 3), 16), 1)) -> mallocng_specs.class_of(n, i2) proof
+      assume hA hB
+      have ei1: i1 = 8 by simp(hA, a2)
+      have ei2: i2 = 8 by simp(rewrite(ei1, hb2), hB)
+      have pv: app(mallocng.size_classes, int_sub(8, 1)) = 8 by simp(ms.sc_vals)
+      have le: int_le(int_div(int_add(n, 19), 16), app(mallocng.size_classes, 8)) by arith(ue, hi, lo, hA, hB, w1, v8, v8)
+      have pr: 8 = 0 || int_lt(app(mallocng.size_classes, int_sub(8, 1)), int_div(int_add(n, 19), 16)) by arith(ue, hi, lo, u11, hA, hB, w1, pv, v8)
+      have cl := apply(ms.class_from, hn, (8 in omega by simp()), (int_lt(8, 48) by simp()), le, pr)
+      show := rewrite(sym(ei2), cl)
+    qed
+    have cA: int_lt(app(mallocng.size_classes, int_add(8, 1)), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, int_add(8, 1)), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB1: int_lt(app(mallocng.size_classes, 10), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 10), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    have cB2: int_lt(app(mallocng.size_classes, 8), int_add(int_div(int_add(n, 3), 16), 1)) || !int_lt(app(mallocng.size_classes, 8), int_add(int_div(int_add(n, 3), 16), 1)) by taut()
+    show by taut(cA, cB1, cB2, sAB, sAb, saB, sab)
+  qed
+  show by taut(d, k19, k20, k21, k22, k23, k24, k25, k26, k27, k28)
+qed
+
+theorem ms.sc_len: seq_len(mallocng.size_classes) = 48
+proof
+  show by defs(arith(), mallocng.size_classes)
+qed
+
+// (ms.stc_big with the code's choices as outcomes: the first i1, the
+// class K)
+theorem ms.stc_fin: all n c i1 k. n in omega -> int_le(n, 131052) -> !int_le(int_div(int_add(n, 3), 16), 9) -> c in omega ->
+  mallocng_specs.clz_of(int_add(int_div(int_add(n, 3), 16), 1), c) ->
+  (i1 = int_add(int_mul(4, int_sub(30, c)), 2) && int_lt(app(mallocng.size_classes, int_add(int_mul(4, int_sub(30, c)), 1)), int_add(int_div(int_add(n, 3), 16), 1))) ||
+  (i1 = int_mul(4, int_sub(30, c)) && !int_lt(app(mallocng.size_classes, int_add(int_mul(4, int_sub(30, c)), 1)), int_add(int_div(int_add(n, 3), 16), 1))) ->
+  (k = int_add(i1, 1) && int_lt(app(mallocng.size_classes, i1), int_add(int_div(int_add(n, 3), 16), 1))) ||
+  (k = i1 && !int_lt(app(mallocng.size_classes, i1), int_add(int_div(int_add(n, 3), 16), 1))) ->
+  mallocng_specs.class_of(n, k)
+proof
+  fix n c i1 k
+  assume hn h131 hbig hc hz h1 h2
+  have a1: int_lt(app(mallocng.size_classes, int_add(int_mul(4, int_sub(30, c)), 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> i1 = int_add(int_mul(4, int_sub(30, c)), 2) by taut(h1)
+  have a2: !int_lt(app(mallocng.size_classes, int_add(int_mul(4, int_sub(30, c)), 1)), int_add(int_div(int_add(n, 3), 16), 1)) -> i1 = int_mul(4, int_sub(30, c)) by taut(h1)
+  have b1: int_lt(app(mallocng.size_classes, i1), int_add(int_div(int_add(n, 3), 16), 1)) -> k = int_add(i1, 1) by taut(h2)
+  have b2: !int_lt(app(mallocng.size_classes, i1), int_add(int_div(int_add(n, 3), 16), 1)) -> k = i1 by taut(h2)
+  show := apply(ms.stc_big, hn, h131, hbig, hc, hz, a1, a2, b1, b2)
+qed
+
+// (multiplying by 4: GIMPLE's signed product's low half, the unsigned one)
+theorem ms.imul_4: tr.imul_by(4)
+proof
+  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, 4)), 0) = bits_mul(32, y, 4) proof
+    fix y
+    assume hy: y in bits(32)
+    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 4), 0) = bits_mul(32, y, 4) proof
+      assume hl: int_lt(y, 2147483648)
+      show by defs(simp(hy, hl), bits_add, bits_mul, sint)
+    qed
+    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 4), 0) = bits_mul(32, y, 4) proof
+      assume hl: !int_lt(y, 2147483648)
+      have e: int_mod(int_mul(int_sub(y, 4294967296), 4), 4294967296) = int_mod(int_mul(y, 4), 4294967296) by arith(hy)
+      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)
+    qed
+    have e: bits_add(32, int_mul(sint(32, y), 4), 0) = bits_mul(32, y, 4) by taut(c1, c2)
+    show by simp(e)
+  qed
+  show by defs(g, tr.imul_by)
+qed
+
+// (a small non-negative word: its signed value itself)
+theorem ms.sint_small: all v. v in omega -> int_lt(v, 2147483648) -> sint(32, v) = v
+proof
+  fix v
+  assume hv hl
+  have b: bits_of_int(32, v) = v by defs(arith(hv, hl), bits_of_int, pow2)
+  show by defs(simp(b, hv, hl), sint, pow2)
+qed
+
+// size_to_class's contract from a_clz_32's: for every callee refining
+// a_clz_32's spec (as a C function value), size_to_class's readable GIMPLE
+// refines its spec
+theorem ms.size_to_class_c2: all n g tbl. n in bits(64) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g, regs), s, o) -> runs(app(mallocng_specs.a_clz_32_spec_fun(tbl), regs), s, o)) ->
+  refines(c_src_malloc_mallocng_malloc.size_to_class(n, g), mallocng_specs.size_to_class_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, tbl, n), abi.World)
+proof
+  fix n g tbl
+  assume hn hg
+  show proof
+    fix s o
+    assume hw hr
+    let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
+    let SC := mallocng.size_classes
+    let SPEC := mallocng_specs.size_to_class_spec(SCT, tbl, n)
+    let OVF := exc_val("stack_overflow", empty)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have vV vfun vdom .. := apply(ms.world_parts, hw)
+    have ss: fn_update(s, "vm", app(s, "vm")) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+    have no: n in omega by simp(hn)
+    let PRE := ((int_le(n, 131052) && mallocng_specs.table_ok(app(s, "vm"), app(s, "objs"), SCT, 2, SC)) && mallocng_specs.table_ok(app(s, "vm"), app(s, "objs"), tbl, 1, mallocng_specs.debruijn32_tab)) &&
+      abi.thread_ok(app(s, "vm"), app(s, "fs_base"))
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume hn2
+      show by simp(pu, hn2, keep(abi.overflow, mallocng_specs.table_ok, mallocng_specs.class_of, abi.thread_ok))
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume hp
+      have h131 hsct htbl hth := hp
+      // (the spec's outcomes: an overflow, any memory; a class of n)
+      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
+        fix v
+        assume hv
+        have vu := apply(x86.vm_univ, hv)
+        have eu: OVF in univ(1) by defs(simp(), exc_val)
+        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
+        have ovi := apply(ct.overflow_intro, hv, pu2)
+        show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.table_ok, mallocng_specs.class_of, abi.thread_ok))
+      qed
+      have sret: all c. c in bits(32) -> mallocng_specs.class_of(n, c) -> runs(SPEC, s, ok(s, c)) proof
+        fix c
+        assume hc hcl
+        have pu2: pair(s, ok(s, c)) in univ(1) by simp(hu, hc)
+        show by simp(hp, hc, hcl, pu2, keep(abi.overflow, mallocng_specs.table_ok, mallocng_specs.class_of, abi.thread_ok))
+      qed
+      // the locals' choices, then n's units Q
+      have ne32: ex x. x in bits(32) by ex_intro({0}, simp())
+      obtain a3, _ h3 from apply(g.any_e, ne32, apply(g.letin_e, apply(g.runs_elim, hr)))
+      obtain a5, _ h5 from apply(g.any_e, ne32, apply(g.letin_e, h3))
+      obtain a7, _ h7 from apply(g.any_e, ne32, apply(g.letin_e, h5))
+      obtain a9, _ h9 from apply(g.any_e, ne32, apply(g.letin_e, h7))
+      obtain x13, hx13 hk13 from apply(g.letin_e, apply(g.letin_e, apply(g.letin_e, h9)))
+      let Q := bits_shr(64, bits_add(64, n, 3), 4)
+      have p64: pow2(64) = 18446744073709551616 by simp()
+      have p4: pow2(4) = 16 by simp()
+      have m3: int_mod(int_add(n, 3), 18446744073709551616) = int_add(n, 3) by arith(no, h131)
+      have ba: bits_add(64, n, 3) = int_add(n, 3) by defs(rewrite(sym(p64), m3), bits_add)
+      have bo: bits_of_int(64, int_add(n, 3)) = int_add(n, 3) by defs(rewrite(sym(p64), m3), bits_of_int)
+      have qe: Q = int_div(int_add(n, 3), 16) by defs(simp(ba, bo, p4), bits_shr)
+      have qo: Q in omega by arith(qe, no)
+      // at most 10 units: the class Q
+      have small: int_le(Q, 9) -> runs(SPEC, s, o) proof
+        assume hq
+        have l := apply(g.pick, hx13, hq, (!!int_le(Q, 9) by taut(hq)))
+        have e13: x13 = exc(pair(s, pair(Q, pair(a3, pair(bits_of_int(32, Q), pair(a7, bits_of_int(32, Q)))))), pair("ret", bits_of_int(32, Q))) by simp(expand(l, letin))
+        have oe: o = ok(s, bits_of_int(32, Q)) by simp(rewrite(e13, hk13))
+        have bq: bits_of_int(32, Q) = Q by defs(arith(qo, hq), bits_of_int, pow2)
+        have cl := apply(ms.stc_small, no, rewrite(qe, hq))
+        have r := mp(all_elim(sret, {Q}), arith(qo, hq), rewrite(sym(qe), cl))
+        show := rewrite(sym(rewrite(bq, oe)), r)
+      qed
+      // more: a_clz_32 of the units N = Q + 1, the bucket's classes
+      have big: !int_le(Q, 9) -> runs(SPEC, s, o) proof
+        assume hq
+        have e13 := apply(g.pick2, hx13, hq, (!int_le(Q, 9) by taut(hq)))
+        have os := all_elim(g.ok_state, {pair(s, pair(Q, pair(a3, pair(a5, pair(a7, a9)))))}, {empty})
+        have k1 := apply(g.pick0, rewrite(e13, hk13), simp(os), simp(os))
+        let N := bits_add(64, Q, 1)
+        have q131: int_le(Q, 8190) by arith(qe, no, h131)
+        have mq: int_mod(int_add(Q, 1), 18446744073709551616) = int_add(Q, 1) by arith(qo, q131)
+        have nq: N = int_add(Q, 1) by defs(rewrite(sym(p64), mq), bits_add)
+        let X := bits_of_int(32, N)
+        have p32: pow2(32) = 4294967296 by simp()
+        have mx: int_mod(N, 4294967296) = N by arith(nq, qo, q131)
+        have xn: X = N by defs(rewrite(sym(p32), mx), bits_of_int)
+        have xb: X in bits(32) by simp()
+        have xo: X in omega by simp()
+        have x11: int_le(11, X) by arith(xn, nq, hq)
+        have x8k: int_le(X, 8191) by arith(xn, nq, q131)
+        have xnz: !(X = 0) by arith(x11, xo)
+        have fq: fst(snd(out_state(ok(pair(s, pair(Q, pair(a3, pair(a5, pair(a7, a9))))), empty)))) = Q by simp(os)
+        have fs: fst(out_state(ok(pair(s, pair(Q, pair(a3, pair(a5, pair(a7, a9))))), empty))) = s by simp(os)
+        have b := apply(g.letin_e, apply(g.letin_e, rewrite(fs, rewrite(fq, k1))))
+        // the call: a_clz_32's contract
+        have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(32, X))) -> runs(app(mallocng_specs.a_clz_32_spec_fun(tbl), regs), s, o2) ->
+            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && mallocng_specs.clz_of(X, bits_of_int(32, fst(r)))) proof
+          fix regs o2
+          assume hro h2
+          show := apply(ms.clzs_q, xb, hw, hu, xnz, htbl, hro, h2)
+        qed
+        have ths: gc.sound(s) by simp(hth)
+        have cc := apply(gc.contract_call1[R := r. mallocng_specs.clz_of(X, bits_of_int(32, fst(r)))], {g}, {mallocng_specs.a_clz_32_spec_fun(tbl)}, {seq_one(gimple.arg(32, X))}, {s}, {app(s, "vm")},
+          ths, hw, vV, apply(gc.regs1_32_ex, xb), (int_le(seq_len(seq_one(gimple.arg(32, X))), 6) by simp()), hg, qa, b)
+        have cov: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) -> runs(SPEC, s, o) proof
+          assume h
+          obtain v, hv ho from h
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+        qed
+        // the count C returned: the bucket's index I, its two lookups
+        have cok: case 2 of cc proof
+          assume h
+          obtain r, hR hk from h
+          let C := bits_of_int(32, fst(r))
+          let I0 := int_mul(4, int_sub(30, C))
+          let U := int_add(int_div(int_add(n, 3), 16), 1)
+          have hk2 := rewrite(ss, hk)
+          have cb: C in bits(32) by simp()
+          have co: C in omega by simp()
+          have c19 c28 := apply(ms.stc_bounds, xo, x11, x8k, co, hR)
+          have ue: N = U by simp(nq, qe)
+          have hRU: mallocng_specs.clz_of(U, C) := rewrite(ue, rewrite(xn, hR))
+          have sctb: SCT in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+          have sctnz: !(SCT = 0) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+          // 30 - C
+          have b30: bits_of_int(32, 30) = 30 by simp()
+          have sC := apply(ms.sint_small, co, (int_lt(C, 2147483648) by arith(c28, co)))
+          have f1: tr.s32_fits(int_sub(sint(32, bits_of_int(32, 30)), sint(32, C))) by defs(simp(b30, sC, c19, c28, co), gimple.fits)
+          have sd := apply(g.ssub32_det, {s}, {bits_of_int(32, 30)}, {C}, hu, simp(), cb, f1)
+          have l2 := apply(g.letin_e, apply(g.bind_inv, apply(g.letin_e, hk2), sd))
+          let T4 := bits_sub(32, bits_of_int(32, 30), C)
+          have m4: int_mod(int_sub(30, C), 4294967296) = int_sub(30, C) by arith(c28, co)
+          have t4e: T4 = int_sub(30, C) by defs(simp(b30, rewrite(sym(p32), m4)), bits_sub)
+          have t4b: T4 in bits(32) by simp()
+          have sT0 := apply(ms.sint_small, (int_sub(30, C) in omega by arith(c28, co)), (int_lt(int_sub(30, C), 2147483648) by arith(co)))
+          have sT: sint(32, T4) = int_sub(30, C) by simp(t4e, sT0)
+          // I = 4 (30 - C)
+          have f2: tr.s32_fits(int_mul(sint(32, T4), sint(32, 4))) by defs(simp(sT, c19, c28, co), gimple.fits)
+          have md := apply(g.smul32_det, {s}, {T4}, {4}, hu, t4b, simp(), ms.imul_4, f2)
+          have l3 := apply(g.letin_e, apply(g.bind_inv, l2, md))
+          let I := bits_mul(32, T4, 4)
+          have mI: int_mod(int_mul(int_sub(30, C), 4), 4294967296) = I0 by arith(c19, c28, co)
+          have ie: I = I0 by defs(simp(t4e, rewrite(sym(p32), mI)), bits_mul)
+          have ib: I in bits(32) by simp()
+          have sI0 := apply(ms.sint_small, (I0 in omega by arith(c28, co)), (int_lt(I0, 2147483648) by arith(co)))
+          have sI: sint(32, I) = I0 by simp(ie, sI0)
+          // I + 1, the first lookup
+          have f3: tr.s32_fits(int_add(sint(32, I), sint(32, 1))) by defs(simp(sI, c19, c28, co), gimple.fits)
+          have ad := apply(g.sadd32_det, {s}, {I}, {1}, hu, ib, simp(), f3)
+          have l4 := apply(g.letin_e, apply(g.bind_inv, l3, ad))
+          let I1 := bits_add(32, I, 1)
+          have m1: int_mod(int_add(I0, 1), 4294967296) = int_add(I0, 1) by arith(c19, c28, co)
+          have i1e: I1 = int_add(I0, 1) by defs(simp(ie, rewrite(sym(p32), m1)), bits_add)
+          have i1b: I1 in bits(32) by simp()
+          have sI10 := apply(ms.sint_small, (int_add(I0, 1) in omega by arith(c28, co)), (int_lt(int_add(I0, 1), 2147483648) by arith(co)))
+          have sI1: sint(32, I1) = int_add(I0, 1) by simp(i1e, sI10)
+          have rd1 ld1 := apply(ms.tab_rd, {s}, {SCT}, {I1}, {SC}, hu, sctb, sctnz, i1b, (int_le(0, sint(32, I1)) by arith(sI1, co, c28)),
+            (int_lt(sint(32, I1), seq_len(SC)) by arith(sI1, ms.sc_len, c19, co)), hsct)
+          have l5 := apply(g.bind_inv, apply(g.bind_inv, l4, rd1), ld1)
+          obtain x17, hx17 hk17 from apply(g.letin_e, apply(g.letin_e, l5))
+          // (a table entry: a 16-bit value, itself)
+          have p16: pow2(16) = 65536 by simp()
+          have ent: all j. j in omega -> int_lt(j, 48) -> bits_of_int(16, app(SC, j)) = app(SC, j) proof
+            fix j
+            assume hj hj48
+            have so sl := apply(ms.sc_nat, hj, hj48)
+            have m: int_mod(app(SC, j), 65536) = app(SC, j) by arith(so, sl)
+            show by defs(rewrite(sym(p16), m), bits_of_int)
+          qed
+          // the second lookup at J, and the class: J + 1 or J
+          have fin: all J. J in bits(32) -> int_le(0, sint(32, J)) -> int_lt(sint(32, J), 48) -> x17 = ok(pair(s, pair(N, pair(J, pair(a5, pair(a7, a9))))), empty) ->
+              (int_lt(app(SC, sint(32, J)), U) && o = ok(s, bits_add(32, J, 1))) || (!int_lt(app(SC, sint(32, J)), U) && o = ok(s, J)) proof
+            fix J
+            assume hJ hJ0 hJ48 hx
+            let P := pair(s, pair(N, pair(J, pair(a5, pair(a7, a9)))))
+            have os2 := all_elim(g.ok_state, {P}, {empty})
+            have k1 := apply(g.pick0, rewrite(hx, hk17), simp(os2), simp(os2))
+            have g0: fst(out_state(ok(P, empty))) = s by simp(os2)
+            have g1: fst(snd(out_state(ok(P, empty)))) = N by simp(os2)
+            have g2: fst(snd(snd(out_state(ok(P, empty))))) = J by simp(os2)
+            have k2 := rewrite(g2, rewrite(g1, rewrite(g0, k1)))
+            have rd2 ld2 := apply(ms.tab_rd, {s}, {SCT}, {J}, {SC}, hu, sctb, sctnz, hJ, hJ0, (int_lt(sint(32, J), seq_len(SC)) by arith(hJ48, ms.sc_len)), hsct)
+            have l6 := apply(g.bind_inv, apply(g.bind_inv, k2, rd2), ld2)
+            obtain x24, hx24 hk24 from apply(g.letin_e, apply(g.letin_e, l6))
+            have ve := mp(all_elim(ent, {sint(32, J)}), (sint(32, J) in omega by arith(hJ0)), hJ48)
+            have ve2: bits_of_int(16, app(SC, sint(32, J))) = app(SC, sint(32, J)) := ve
+            have bB: int_lt(app(SC, sint(32, J)), U) -> o = ok(s, bits_add(32, J, 1)) proof
+              assume hb
+              have hb2: int_lt(bits_of_int(16, app(SC, sint(32, J))), N) by simp(hb, ve2, ue)
+              have p1 := apply(g.pick, hx24, hb2, (!!int_lt(bits_of_int(16, app(SC, sint(32, J))), N) by taut(hb2)))
+              have f4: tr.s32_fits(int_add(sint(32, J), sint(32, 1))) by defs(simp(hJ0, hJ48), gimple.fits)
+              have ad2 := apply(g.sadd32_det, {s}, {J}, {1}, hu, hJ, simp(), f4)
+              have e24 := apply(g.letin_e, apply(g.bind_inv, p1, ad2))
+              show by simp(rewrite(e24, hk24))
+            qed
+            have bb: !int_lt(app(SC, sint(32, J)), U) -> o = ok(s, J) proof
+              assume hb
+              have hb2: !int_lt(bits_of_int(16, app(SC, sint(32, J))), N) by simp(hb, ve2, ue)
+              have e24 := apply(g.pick2, hx24, hb2, hb2)
+              show by simp(rewrite(e24, hk24))
+            qed
+            have cs: int_lt(app(SC, sint(32, J)), U) || !int_lt(app(SC, sint(32, J)), U) by taut()
+            show by taut(cs, bB, bb)
+          qed
+          // the first comparison: J = I + 2 or I
+          have v1: bits_of_int(16, app(SC, sint(32, I1))) = app(SC, int_add(I0, 1)) by simp(sI1, mp(all_elim(ent, {int_add(I0, 1)}), arith(co, c28), arith(co, c19)))
+          have os := all_elim(g.ok_state, {pair(s, pair(Q, pair(a3, pair(a5, pair(a7, a9)))))}, {empty})
+          // (the class K: J's outcome, a class of n)
+          have done: all J. J in bits(32) -> int_le(0, sint(32, J)) -> int_lt(sint(32, J), 48) ->
+              ((sint(32, J) = int_add(I0, 2) && int_lt(app(SC, int_add(I0, 1)), U)) || (sint(32, J) = I0 && !int_lt(app(SC, int_add(I0, 1)), U))) ->
+              x17 = ok(pair(s, pair(N, pair(J, pair(a5, pair(a7, a9))))), empty) -> runs(SPEC, s, o) proof
+            fix J
+            assume hJ hJ0 hJ48 hj hx
+            have fr := apply(fin, hJ, hJ0, hJ48, hx)
+            have kA: int_lt(app(SC, sint(32, J)), U) && o = ok(s, bits_add(32, J, 1)) -> runs(SPEC, s, o) proof
+              assume hc
+              have hl ho := hc
+              have mk: int_mod(int_add(sint(32, J), 1), 4294967296) = int_add(sint(32, J), 1) by arith(hJ0, hJ48)
+              have sv: sint(32, J) = J || sint(32, J) = int_sub(J, 4294967296) by defs(simp(hJ), sint)
+              have sJ: sint(32, J) = J by arith(sv, hJ0, hJ)
+              have kv: bits_add(32, J, 1) = int_add(sint(32, J), 1) by defs(simp(sJ, rewrite(sym(p32), mk)), bits_add)
+              have cl := apply(ms.stc_fin, {n}, {C}, {sint(32, J)}, {int_add(sint(32, J), 1)}, no, h131, rewrite(qe, hq), co, hRU, hj, (int_add(sint(32, J), 1) = int_add(sint(32, J), 1) && int_lt(app(SC, sint(32, J)), U) || (int_add(sint(32, J), 1) = sint(32, J) && !int_lt(app(SC, sint(32, J)), U)) by taut(hl, refl({int_add(sint(32, J), 1)}))))
+              have r2 := mp(all_elim(sret, {bits_add(32, J, 1)}), simp(), rewrite(sym(kv), cl))
+              show := rewrite(sym(ho), r2)
+            qed
+            have kB: !int_lt(app(SC, sint(32, J)), U) && o = ok(s, J) -> runs(SPEC, s, o) proof
+              assume hc
+              have hl ho := hc
+              have sv: sint(32, J) = J || sint(32, J) = int_sub(J, 4294967296) by defs(simp(hJ), sint)
+              have sJ: sint(32, J) = J by arith(sv, hJ0, hJ)
+              have cl := apply(ms.stc_fin, {n}, {C}, {sint(32, J)}, {sint(32, J)}, no, h131, rewrite(qe, hq), co, hRU, hj, (sint(32, J) = int_add(sint(32, J), 1) && int_lt(app(SC, sint(32, J)), U) || (sint(32, J) = sint(32, J) && !int_lt(app(SC, sint(32, J)), U)) by taut(hl, refl({sint(32, J)}))))
+              have r2 := mp(all_elim(sret, {J}), hJ, rewrite(sJ, cl))
+              show := rewrite(sym(ho), r2)
+            qed
+            show by taut(fr, kA, kB)
+          qed
+          have bA: int_lt(app(SC, int_add(I0, 1)), U) -> runs(SPEC, s, o) proof
+            assume hA
+            have hA2: int_lt(bits_of_int(16, app(SC, sint(32, I1))), N) by simp(hA, v1, ue)
+            have p1 := apply(g.pick, hx17, hA2, (!!int_lt(bits_of_int(16, app(SC, sint(32, I1))), N) by taut(hA2)))
+            have f5: tr.s32_fits(int_add(sint(32, I), sint(32, 2))) by defs(simp(sI, c19, c28, co), gimple.fits)
+            have ad3 := apply(g.sadd32_det, {s}, {I}, {2}, hu, ib, simp(), f5)
+            let I2 := bits_add(32, I, 2)
+            have e17 := apply(g.letin_e, apply(g.bind_inv, p1, ad3))
+            have e17b: x17 = ok(pair(s, pair(N, pair(I2, pair(a5, pair(a7, a9))))), empty) by simp(e17, os)
+            have m2: int_mod(int_add(I0, 2), 4294967296) = int_add(I0, 2) by arith(c19, c28, co)
+            have i2e: I2 = int_add(I0, 2) by defs(simp(ie, rewrite(sym(p32), m2)), bits_add)
+            have sI20 := apply(ms.sint_small, (int_add(I0, 2) in omega by arith(c28, co)), (int_lt(int_add(I0, 2), 2147483648) by arith(co)))
+            have sI2: sint(32, I2) = int_add(I0, 2) by simp(i2e, sI20)
+            show := apply(done, {I2}, simp(), arith(sI2, co, c28), arith(sI2, co, c19), (sint(32, I2) = int_add(I0, 2) && int_lt(app(SC, int_add(I0, 1)), U) || (sint(32, I2) = I0 && !int_lt(app(SC, int_add(I0, 1)), U)) by taut(sI2, hA)), e17b)
+          qed
+          have ba: !int_lt(app(SC, int_add(I0, 1)), U) -> runs(SPEC, s, o) proof
+            assume ha
+            have ha2: !int_lt(bits_of_int(16, app(SC, sint(32, I1))), N) by simp(ha, v1, ue)
+            have e17 := apply(g.pick2, hx17, ha2, ha2)
+            have e17b: x17 = ok(pair(s, pair(N, pair(I, pair(a5, pair(a7, a9))))), empty) by simp(e17, os)
+            show := apply(done, {I}, ib, arith(sI, co, c28), arith(sI, co, c19), (sint(32, I) = int_add(I0, 2) && int_lt(app(SC, int_add(I0, 1)), U) || (sint(32, I) = I0 && !int_lt(app(SC, int_add(I0, 1)), U)) by taut(sI, ha)), e17b)
+          qed
+          have cA: int_lt(app(SC, int_add(I0, 1)), U) || !int_lt(app(SC, int_add(I0, 1)), U) by taut()
+          show by taut(cA, bA, ba)
+        qed
+        show by taut(cc, cov, cok)
+      qed
+      have cq: int_le(Q, 9) || !int_le(Q, 9) by taut()
+      show by taut(cq, small, big)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// size_to_class as a C function value: its register wrapper refines the
+// spec's (for every callee refining a_clz_32's)
+theorem ms.size_to_class_fun_c2: all g tbl. (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g, regs), s, o) -> runs(app(mallocng_specs.a_clz_32_spec_fun(tbl), regs), s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+    runs(app(c_src_malloc_mallocng_malloc.size_to_class_fun(g), regs), s, o) -> runs(app(mallocng_specs.size_to_class_spec_fun(c_src_malloc_mallocng_malloc.__malloc_size_classes, tbl), regs), s, o))
+proof
+  fix g tbl
+  assume hg
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.size_to_class_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.size_to_class_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  let A0 := bits_of_int(64, app(regs, 0))
+  let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
+  have a0: A0 in bits(64) by simp()
+  have dc := expand(all_elim(ms.size_to_class_c2, {A0}, {g}, {tbl}), refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.size_to_class(A0, g), s, o2) -> runs(mallocng_specs.size_to_class_spec(SCT, tbl, A0), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(mp(dc, a0, hg), {s}, {o2}), hw, h2)
+  qed
+  // (fewer than one argument: the spec allows anything; else the spec's run)
+  have k1: case 1 of r proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  have k2: case 2 of r proof
+    assume hb
+    have b2 := apply(g.bind_mono, hm, hb)
+    show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+  qed
+  show by taut(r, k1, k2)
+qed

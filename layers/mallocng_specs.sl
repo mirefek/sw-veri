@@ -1,4 +1,4 @@
-layer mallocng_specs uses gimple, abi
+layer mallocng_specs uses gimple, abi, mallocng
 
 // Specs of mallocng's internal functions on the C world (readable GIMPLE's
 // world: memory a partial byte map, `usable` its domain), as contracts
@@ -149,4 +149,72 @@ fn dequeue_head_spec_fun() -> CFun2[World] = (args: Args) => {
 // a caller's spec excludes the calls by its precondition
 fn a_crash_spec_fun() -> CFun2[World] = (args: Args) => {
   undefined
+}
+
+///////////////////////////////////////////////////////////////////////
+//  Read-only tables: a function reading one requires its bytes in the
+//  world to be the program's (callers show it from the loaded program)
+
+// n-byte entries, little-endian, at t: the list's
+pred table_ok(vm: Vm, objs: Set[nat], t: Addr, n: nat, tab: List[nat]) =
+  all i: nat. i < len(tab) ->
+    usable(vm, objs, uint(t) + n * i, n, false) && bytes_at(vm, bits[64](uint(t) + n * i), n) = tab[i]
+
+// malloc.c's debruijn32 (a_ctz_32's, at a de Bruijn sequence's positions)
+const debruijn32_tab : List[nat] = [
+  0, 1, 23, 2, 29, 24, 19, 3, 30, 27, 25, 11, 20, 8, 4, 13,
+  31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14]
+
+///////////////////////////////////////////////////////////////////////
+//  Bit counts. Their C2 waits for a library of bit lemmas (docs/todo.md);
+//  their callers' C2 use these contracts.
+
+// a_ctz_32(x): x's trailing zeros (x not 0); tbl: debruijn32's address
+proc[World] a_ctz_32_spec(tbl: bits[64], x: bits[32]) -> bits[32] {
+  require x != 0 && table_ok(vm, objs, tbl, 1, debruijn32_tab)
+  either { overflow() } or { return bits[32](tz(uint(x))) }
+}
+
+fn a_ctz_32_spec_fun(tbl: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = a_ctz_32_spec(tbl, bits[32](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+// a_clz_32(x): x's leading zeros r (x not 0): 2^(31 - r) <= x < 2^(32 - r)
+pred clz_of(x: nat, r: nat) = r < 32 && 2^(31 - r) <= x && x < 2^(32 - r)
+
+proc[World] a_clz_32_spec(tbl: bits[64], x: bits[32]) -> bits[32] {
+  require x != 0 && table_ok(vm, objs, tbl, 1, debruijn32_tab)
+  either { overflow() } or { return any r: bits[32] where clz_of(uint(x), uint(r)) }
+}
+
+fn a_clz_32_spec_fun(tbl: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = a_clz_32_spec(tbl, bits[32](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+///////////////////////////////////////////////////////////////////////
+//  Size classes
+
+// size_to_class(n): the least size class whose slots hold n bytes and the
+// slot's 4-byte header (in 16-byte units: size_classes[c] >= (n + 4) / 16,
+// rounded up), for n up to the largest class (131052 bytes); sct, tbl:
+// the tables' addresses (and the thread pointer, for its call)
+pred class_of(n: nat, c: nat) =
+  c < 48 && (n + 19) / 16 <= size_classes[c] && (all j: nat. j < c -> size_classes[j] < (n + 19) / 16)
+
+proc[World] size_to_class_spec(sct: bits[64], tbl: bits[64], n: bits[64]) -> bits[32] {
+  require uint(n) <= 131052 && table_ok(vm, objs, sct, 2, size_classes) && table_ok(vm, objs, tbl, 1, debruijn32_tab) && thread_ok(vm, fs_base)
+  either { overflow() } or { return any c: bits[32] where class_of(uint(n), uint(c)) }
+}
+
+fn size_to_class_spec_fun(sct: bits[64], tbl: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = size_to_class_spec(sct, tbl, bits[64](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
 }

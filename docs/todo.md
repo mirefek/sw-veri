@@ -8,23 +8,22 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 size_to_class (current)
+### 1.1 set_size (current)
 
-`n = (n + 3) >> 4; if (n < 10) return n; n++; i = (28 - a_clz_32(n)) * 4 + 8;
-...` -- two lookups in the read-only table `__malloc_size_classes`.
+A leaf: a slot's size recorded in its header (byte stores, one 32-bit
+store, a byte load).
 
-1. C1: a call with a 32-bit result (`call1`) used in signed arithmetic
-   (`ssub`, `smul`, `sadd`); 16-bit loads from a static table (its bytes
-   fixed: the program text's data, or an object of the C world?).
-2. Its spec (the size class: the least class whose size covers n), C2 from
-   a_clz_32's contract.
+1. C1: whatever the generator lacks (stores at computed offsets).
+2. Its spec on the slot's header bytes, C2.
 
 ### 1.2 The remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
+- a_ctz_32's and a_clz_32's C2 (their specs are contracts already; they
+  need the bit library, section 4).
 - `activate_group`, `get_meta`, `get_nominal_size`,
-  `set_size`, `enframe`, `size_to_class`, `account_bounce`, `record_seq`,
+  `enframe`, `account_bounce`, `record_seq`,
   `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
   `__malloc_alloc_meta`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`,
@@ -54,10 +53,16 @@ descriptor and the auxiliary vector.
 Ongoing: how could the languages make progress more efficient?
 
 - Review the code base (slc, proofs, layers) for bad code practices.
+- A bit library (a_ctz_32's `x & -x = 2^tz(x)`, a_clz_32's bit smearing,
+  the mask-heavy functions): `arith` reading products of non-literals in a
+  polynomial normal form (a trusted extension: the ring facts it already
+  relies on), then lemmas -- bit extensionality, `bits_and` / `or` / `not`
+  bit by bit, bits under shifts and powers of 2, two's complement. Plan
+  it before building it.
 - A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
   arith. Plan it before building it.
-- Inversion lemmas for the remaining GIMPLE operations (8-, 16-, 32-bit
-  loads and stores, arithmetic).
+- Inversion lemmas for the remaining GIMPLE operations (8-bit and 32-bit
+  loads and stores, more arithmetic), on demand.
 - Possibly rename `rsimp` to `simp` once the old `simp` is not needed.
 - `conj` building to the goal's grouping; one way of instantiating
   (`name[x := t]` instead of positional `all_elim`).

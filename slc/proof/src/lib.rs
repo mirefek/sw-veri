@@ -759,7 +759,23 @@ impl State {
             let (name, goal) = match kw {
                 "have" => {
                     let (n, g) = rest.split_once(':').ok_or_else(|| KernelError("expected `have name: φ proof`".into()))?;
-                    (Some(n.trim().to_string()), self.term(env, g)?)
+                    // `have c: case k of P proof`: P's k-th disjunct (as
+                    // written, from 1) implies the current goal
+                    let g = g.trim();
+                    let goal = match g.strip_prefix("case ").and_then(|r| r.split_once(" of ")) {
+                        Some((k, p)) => {
+                            let k: usize = k.trim().parse().map_err(|_| KernelError(format!("`case {} of ..`: not a number", k.trim())))?;
+                            let f = self.eval(env, lg, &parse_pe(p.trim())?)?;
+                            let ds = disj_parts(env, f.concl());
+                            let d = ds.get(k.wrapping_sub(1)).cloned().ok_or_else(|| {
+                                KernelError(format!("`case {} of {}`: {} disjuncts in `{}`", k, p.trim(), ds.len(), Printer::new(env).short(f.concl())))
+                            })?;
+                            let cur = self.goal.clone().ok_or_else(|| KernelError("`case k of P`: no current goal here".into()))?;
+                            Term::app(env.builtins.imp, vec![d, cur])
+                        }
+                        None => self.term(env, g)?,
+                    };
+                    (Some(n.trim().to_string()), goal)
                 }
                 "show" if rest.trim().is_empty() => {
                     (None, self.goal.clone().ok_or_else(|| KernelError("no current goal here: write `show φ proof`".into()))?)
@@ -1971,6 +1987,23 @@ fn conj_parts(env: &Env, t: &Term) -> Vec<Term> {
             }
             _ => break,
         }
+    }
+    out.push(t);
+    out.reverse();
+    out
+}
+
+/// a disjunction's disjuncts as written (`a || b || c`: three)
+fn disj_parts(env: &Env, t: &Term) -> Vec<Term> {
+    let or = env.sym_by_name.get("or").copied();
+    let mut out = Vec::new();
+    let mut t = t.clone();
+    while let Node::App(a, x) = t.node() {
+        if Some(*a) != or {
+            break;
+        }
+        out.push(x[1].clone());
+        t = x[0].clone();
     }
     out.push(t);
     out.reverse();

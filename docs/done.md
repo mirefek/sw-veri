@@ -33,7 +33,8 @@ item is a short summary of finished work; details are in the files named.
   - the path simplifier `simp` and the rewriting simplifier `rsimp`.
 - **The proof language** (docs/language.md). It has implicit unfolding at
   mismatches, destructuring by position or label, `apply` with
-  higher-order matching, `flip` and `unfold`. Error messages show the
+  higher-order matching, `flip` and `unfold`, and cases of a disjunction
+  taken from the fact (`have c: case k of P proof`). Error messages show the
   first difference, with the proof's abbreviations folded back.
 - **Libraries** (`core/`): logic, sets, naturals and words (a word is
   determined by its bits), records, lists, and loops. For loops, `while_inv`, `while_var` and
@@ -69,13 +70,14 @@ item is a short summary of finished work; details are in the files named.
 - **C1 by translation**, generated certificates (`proofs/*_tr.core`) for
   a_ctz_32, a_clz_32, get_slot_index, is_bouncing, get_stride, step_seq
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
-  decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue and
-  free_meta. The rules cover:
+  decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
+  free_meta and size_to_class. The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;
-  - 8- to 64-bit loads and stores;
-  - branches;
+  - 8- to 64-bit loads and stores, 32- and 64-bit arithmetic on registers
+    and homes;
+  - signed and unsigned branches;
   - an aggregate's zero-initialization (`pxor` and SSE stores against
     GIMPLE's `st_bytes`, `proofs/translate_zero.core`).
 - **Calls in C1** (`tr.call`, `tr.call1` in `proofs/translate_call.core`):
@@ -92,8 +94,8 @@ item is a short summary of finished work; details are in the files named.
   generated from its callees' (`tr.eff_call`). `a_crash` (`hlt`) has the
   undefined contract (`proofs/a_crash.core`); callers' specs exclude it by
   their preconditions. `proofs/mallocng_link.core` links a_clz_32 with
-  a_ctz_32, dequeue_head with dequeue, queue with a_crash, and free_meta
-  with queue.
+  a_ctz_32, dequeue_head with dequeue, queue with a_crash, free_meta with
+  queue, and size_to_class with a_clz_32.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),
@@ -103,9 +105,15 @@ item is a short summary of finished work; details are in the files named.
     (`ms.queue_fun_c2`);
   - free_meta from queue's contract (`ms.free_meta_c2`), with musl's queue,
     and as a C function value (`ms.free_meta_fun_c2`); the malloc
-    context's address a parameter of the spec.
+    context's address a parameter of the spec;
+  - size_to_class from a_clz_32's contract (`ms.size_to_class_c2`, the
+    least class covering n, checked case by case of the leading-zero
+    count), and as a C function value. a_ctz_32's and a_clz_32's specs are
+    contracts; read-only tables are a precondition on the world's bytes
+    (`table_ok`).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
-  `gc.contract_call`: a call under a callee's contract in one step, its
-  outcomes folded into an overflow or the contract's return) are in
+  `gc.contract_call` / `gc.contract_call1`: a call under a callee's
+  contract in one step, its outcomes folded into an overflow or the
+  contract's return) and the operations' one-outcome lemmas are in
   `proofs/gimple_inv.core`.
