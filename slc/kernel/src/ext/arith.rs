@@ -612,6 +612,10 @@ fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize) -> bool {
 /// * for r = `int_mod(x, m)`, m not a numeral: `int_lt(0, m) -> int_le(0, r)
 ///   && int_lt(r, m)`, and `int_le(0, x) && int_lt(x, m) -> r = x`
 ///   (Euclidean division; the remainder of a value in 0 .. m - 1 is itself);
+/// * for q = `int_div(x, m)`, m not a numeral: `int_le(0, x) && int_lt(x, m)
+///   -> q = 0`, `int_lt(0, m) && int_le(m, x) && int_lt(x, 2 * m) -> q = 1`
+///   (Euclidean division: x = m * 0 + x, x = m * 1 + (x - m));
+/// * `k in omega -> pow2(k + 1) = 2 * pow2(k)` (`int_pow`'s recursion);
 /// * `x in bits(n) <-> x in omega && int_lt(x, pow2(n))` (`bits`'s definition).
 fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
     let g = |n: &str| env.sym_by_name.get(n).copied();
@@ -620,10 +624,10 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
     else {
         return Vec::new();
     };
-    let (badd, bsub, boi) = (g("bits_add"), g("bits_sub"), g("bits_of_int"));
+    let (badd, bsub, boi, idiv, imul) = (g("bits_add"), g("bits_sub"), g("bits_of_int"), g("int_div"), g("int_mul"));
     let bf = env.binders_fn();
     // (the closed subterms with these heads, each once)
-    let heads: Vec<SymId> = [Some(imod), Some(pow2), Some(inn), badd, bsub, boi].into_iter().flatten().collect();
+    let heads: Vec<SymId> = [Some(imod), Some(pow2), Some(inn), badd, bsub, boi, idiv].into_iter().flatten().collect();
     let mut seen = std::collections::HashSet::new();
     let mut terms: Vec<Term> = Vec::new();
     fn collect(t: &Term, heads: &[SymId], bf: &dyn Fn(SymId, usize) -> u32, seen: &mut std::collections::HashSet<Term>, out: &mut Vec<Term>) {
@@ -660,6 +664,27 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
             mods.push(m);
         } else if *f == pow2 && a.len() == 1 && wide(&a[0]) {
             out.push(imp(app(inn, vec![a[0].clone(), app(omega, vec![])]), app(lt, vec![zero.clone(), t.clone()])));
+            // (pow2(k + 1): twice pow2(k))
+            if let (Node::App(p, s), Some(mul)) = (a[0].node(), imul) {
+                if *p == iadd && s.len() == 2 && small(&s[1]) == Some(1) {
+                    let k = s[0].clone();
+                    let two = Term::nat(crate::nat::Nat::from_u64(2));
+                    // (as two comparisons: values, pow2(..) not read as an integer in an equation)
+                    let d = app(mul, vec![two, app(pow2, vec![k.clone()])]);
+                    let both = app(and, vec![app(le, vec![t.clone(), d.clone()]), app(le, vec![d, t.clone()])]);
+                    out.push(imp(app(inn, vec![k, app(omega, vec![])]), both));
+                }
+            }
+        } else if Some(*f) == idiv && a.len() == 2 && small(&a[1]).is_none() {
+            let (x, m) = (a[0].clone(), a[1].clone());
+            let one = Term::nat(crate::nat::Nat::from_u64(1));
+            let two = Term::nat(crate::nat::Nat::from_u64(2));
+            let below = app(and, vec![app(le, vec![zero.clone(), x.clone()]), app(lt, vec![x.clone(), m.clone()])]);
+            out.push(imp(below, eq(t.clone(), zero.clone())));
+            if let Some(mul) = imul {
+                let once = app(and, vec![app(lt, vec![zero.clone(), m.clone()]), app(and, vec![app(le, vec![m.clone(), x.clone()]), app(lt, vec![x.clone(), app(mul, vec![two, m.clone()])])])]);
+                out.push(imp(once, eq(t.clone(), one)));
+            }
         } else if *f == imod && a.len() == 2 && small(&a[1]).is_none() {
             mods.push(t.clone());
         } else if *f == inn && a.len() == 2 {

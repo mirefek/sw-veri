@@ -79,6 +79,10 @@ struct St {
     /// the facts in scope: a branch's condition (or its negation), a
     /// defined operation's condition, by name
     hyps: Vec<(Term, String)>,
+    /// in a zero-initialization (`tr.ptz`): the zero xmm register, the
+    /// address of the bytes still to be stored (a base, an offset), their
+    /// count
+    z: Option<(u128, Term, u128, u128)>,
 }
 
 /// A proof of a point claim: `have` lines, then its expression.
@@ -118,6 +122,8 @@ struct StoreOp {
     inner: Term,
     helper: Option<String>,
     ub: String,
+    /// st_bytes of zeros: its list (the stored value 0, n its length)
+    data: Option<Term>,
 }
 
 /// One step towards a disjunct whose guard holds.
@@ -948,7 +954,9 @@ impl<'e> Gen<'e> {
     /// or a helper's call whose body is one (`mkprog(x0 x1. bind_rel(st8(..),
     /// x0, x2 x3. x1 = ok(x2, empty), ..))`)
     fn store_op(&mut self, op: &Term) -> Result<Option<StoreOp>, String> {
-        let is_store = |g: &Gen, t: &Term| g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some();
+        let is_store = |g: &Gen, t: &Term| {
+            g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some() || g.app(t, "gimple.st_bytes", 3).is_some()
+        };
         let (inner, helper) = if is_store(self, op) {
             (op.clone(), None)
         } else {
@@ -972,16 +980,26 @@ impl<'e> Gen<'e> {
             let Some(inner) = inner else { return Ok(None) };
             (inner, Some(fname))
         };
-        let (n, x) = match (self.app(&inner, "gimple.st8", 3), self.app(&inner, "gimple.st32", 3)) {
-            (Some(x), _) => (1, x.to_vec()),
-            (_, Some(x)) => (4, x.to_vec()),
+        // (constant bytes: all zero, else not covered)
+        let mut data = None;
+        let (n, x) = match (self.app(&inner, "gimple.st8", 3), self.app(&inner, "gimple.st32", 3), self.app(&inner, "gimple.st_bytes", 3)) {
+            (Some(x), _, _) => (1, x.to_vec()),
+            (_, Some(x), _) => (4, x.to_vec()),
+            (_, _, Some(x)) => {
+                let items = self.list_items(&x[2]).ok_or("st_bytes of a list that is not a literal")?;
+                if items.is_empty() || items.iter().any(|t| nat(t) != Some(0)) {
+                    return Err(format!("st_bytes of {}: only zeros covered", self.print(&x[2])));
+                }
+                data = Some(x[2].clone());
+                (items.len() as u128, vec![x[0].clone(), x[1].clone(), lit(0)])
+            }
             _ => (8, self.app(&inner, "gimple.st64", 3).unwrap().to_vec()),
         };
         let (p, off, v) = (x[0].clone(), x[1].clone(), x[2].clone());
         let addr = match (self.eval_lit(&p), self.eval_lit(&off)) {
             (Some(pv), Some(ov)) => lit((pv + ov) % P64),
             // (a 64-bit field: at p + off, as the machine's [b + d])
-            _ if n == 8 && nat(&off).is_some() => self.mk("bits_add", vec![lit(64), p.clone(), off.clone()]),
+            _ if (n == 8 || data.is_some()) && nat(&off).is_some() => self.mk("bits_add", vec![lit(64), p.clone(), off.clone()]),
             _ if nat(&off) == Some(0) => p.clone(),
             _ => return Err(format!("a store at {} + {}: not covered yet", self.print(&p), self.print(&off))),
         };
@@ -989,7 +1007,10 @@ impl<'e> Gen<'e> {
         let hv = self.hvu.clone();
         let (ps, os, vs) = (self.print(&p), self.print(&off), self.print(&v));
         let cond = self.parse(&format!("g.mem_defined({w}, {ps}, {os}, {n}, true)"))?;
-        let inner_ub = format!("mp(g.st{}_at_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{vs}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})", 8 * n);
+        let inner_ub = match &data {
+            Some(d) => format!("mp(g.stz_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{}}}, {{W}}, {{empty}}, {{{n}}}, {hv}, hvu, simp(), simp(L), simp(L), arith(), {{HN}})", self.print(d)),
+            None => format!("mp(g.st{}_at_ub, {{{w}}}, {{{ps}}}, {{{os}}}, {{{vs}}}, {{W}}, {{empty}}, {hv}, hvu, simp(), simp(L), simp(L), {{HN}})", 8 * n),
+        };
         let ub = match &helper {
             None => inner_ub,
             Some(fname) => {
@@ -997,7 +1018,7 @@ impl<'e> Gen<'e> {
                 format!("defs(mp({ubl}, {{{w}}}, {hv}, hvu, simp(), {inner_ub}), {fname})")
             }
         };
-        Ok(Some(StoreOp { n, cond, p, off, v, addr, inner, helper, ub }))
+        Ok(Some(StoreOp { n, cond, p, off, v, addr, inner, helper, ub, data }))
     }
 
     /// The spec's store at the head of `st`'s rest, the machine storing n
@@ -1005,6 +1026,13 @@ impl<'e> Gen<'e> {
     /// after (its lines: its definition, its facts), the state after, the
     /// reduction `tr.red(WRAP(q), w, WRAP(q2), w2)`'s proof, the address
     fn spec_store(&mut self, st: &St, addr: &Term, n: u128) -> Result<(String, Term, Vec<String>, St, String, Term), String> {
+        let (hc, v, pre, st2, red, sa, _) = self.spec_store_x(st, Some(addr), Some(n))?;
+        Ok((hc, v, pre, st2, red, sa))
+    }
+
+    /// the same, the machine's address and size not known yet (any): also
+    /// the store
+    fn spec_store_x(&mut self, st: &St, addr: Option<&Term>, n: Option<u128>) -> Result<(String, Term, Vec<String>, St, String, Term, StoreOp), String> {
         let Spec::Proc(qi) = st.spec else { return Err(format!("{:x}: a store after the procedure's result", st.a)) };
         let q = self.qs[qi].1.clone();
         let badm = format!("{:x}: a store the spec does not make here (its rest: {})", st.a, self.print(&q));
@@ -1014,12 +1042,15 @@ impl<'e> Gen<'e> {
         let (a, k) = (ex[0].clone(), ex[1].clone());
         let x = self.app(&a, "bind_rel", 5).ok_or_else(bad)?.to_vec();
         let so = self.store_op(&x[0])?.ok_or_else(bad)?;
+        let n = n.unwrap_or(so.n);
         if so.n != n {
             return Err(format!("{:x}: the machine stores {} bytes, the spec {}", st.a, n, so.n));
         }
         let hc = st.hyps.iter().find(|h| h.0 == so.cond).map(|h| h.1.clone()).ok_or_else(bad)?;
-        if self.canon(&so.addr) != self.canon(addr) && !(self.eval_lit(&so.addr).is_some() && self.eval_lit(&so.addr) == self.eval_lit(addr)) {
-            return Err(format!("{:x}: the machine stores at {}, the spec at {}", st.a, self.print(addr), self.print(&so.addr)));
+        if let Some(addr) = addr {
+            if self.canon(&so.addr) != self.canon(addr) && !(self.eval_lit(&so.addr).is_some() && self.eval_lit(&so.addr) == self.eval_lit(addr)) {
+                return Err(format!("{:x}: the machine stores at {}, the spec at {}", st.a, self.print(addr), self.print(&so.addr)));
+            }
         }
         let ctx = ["x0", "x1", "x8"];
         let kl = self.lam(&k, &ctx, &["x8", "x1"]).ok_or("a block's rest reads the world")?;
@@ -1044,7 +1075,13 @@ impl<'e> Gen<'e> {
         ];
         // the store's run: ok, to the world after
         let (ps, os) = (self.print(&so.p), self.print(&so.off));
-        let st8ok = format!("mp(tr.st{}_at_ok, {{{wn}}}, {{{ps}}}, {{{os}}}, {{{vp}}}, {{{ap}}}, taut({}), {}, simp(L), simp(L), simp(L), simp(L), {hc})", 8 * n, st.hw, st.hvu);
+        let st8ok = match &so.data {
+            Some(d) => format!(
+                "mp(tr.stz_at_ok, {{{wn}}}, {{{ps}}}, {{{os}}}, {{{}}}, {{{ap}}}, {{{n}}}, taut({}), {}, simp(L), simp(L), {}, simp(L), arith(), {hc})",
+                self.print(d), st.hw, st.hvu, self.zeros_proof(d)?
+            ),
+            None => format!("mp(tr.st{}_at_ok, {{{wn}}}, {{{ps}}}, {{{os}}}, {{{vp}}}, {{{ap}}}, taut({}), {}, simp(L), simp(L), simp(L), simp(L), {hc})", 8 * n, st.hw, st.hvu),
+        };
         let okp = match &so.helper {
             None => st8ok,
             Some(fname) => {
@@ -1066,7 +1103,17 @@ impl<'e> Gen<'e> {
         st2.hw = hw2;
         st2.spec = Spec::Proc(j);
         let _ = &so.cond;
-        Ok((hc, so.v.clone(), pre, st2, red, so.addr.clone()))
+        Ok((hc, so.v.clone(), pre, st2, red, so.addr.clone(), so))
+    }
+
+    /// `l in list_type(omega) && tr.zeros(l)` for a list literal of zeros
+    /// (left-nested, as GIMPLE's): tr.zeros_one, then tr.zeros_snoc
+    fn zeros_proof(&self, l: &Term) -> Result<String, String> {
+        if self.app(l, "seq_one", 1).is_some() {
+            return Ok("tr.zeros_one".into());
+        }
+        let x = self.app(l, "seq_concat", 2).filter(|x| self.app(&x[1], "seq_one", 1).is_some()).ok_or("a list of zeros not left-nested")?;
+        Ok(format!("apply(tr.zeros_snoc, {})", self.zeros_proof(&x[0])?))
     }
 
     /// a term from text, the placeholders by their names
@@ -1363,6 +1410,10 @@ impl<'e> Gen<'e> {
         };
         if let Some(pf) = self.loop_point(&st)? {
             return Ok(pf);
+        }
+        // (in a zero-initialization: the machine's stores only, the spec's made)
+        if st.z.is_some() {
+            return self.insn(st);
         }
         if let Spec::Proc(qi) = st.spec {
             match self.reduce(qi, &st.hyps)? {
@@ -1753,6 +1804,7 @@ impl<'e> Gen<'e> {
             lp: Some(idx),
             spec: Spec::Proc(jh),
             hyps: st.hyps.clone(),
+            z: None,
         };
         let mut st_body = st_head.clone();
         st_body.spec = Spec::Proc(ju);
@@ -2018,7 +2070,70 @@ impl<'e> Gen<'e> {
                 _ => Err(format!("{:x}: no 4-byte home at rsp{:+}", a, d as i128 - if d >= P64 / 2 { P64 as i128 } else { 0 })),
             }
         };
+        // (in a zero-initialization: its stores only)
+        if st.z.is_some() && insn.row != 145 && insn.row != 150 {
+            return Err(bad("in a zero-initialization: not a store of the zero register"));
+        }
         match insn.row {
+            // pxor x, x: a zero-initialization begun -- the spec's store of
+            // zeros made at once (tr.ptz_red), the machine's by the stores of x
+            135 => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                let xr = reg(&x[0])?;
+                if self.tag(&x[1]).map(|(k, r)| (k, nat(&r))) != Some((0, Some(xr))) {
+                    return Err(bad("pxor of two registers"));
+                }
+                let (hc, _, pre, st2, red, sa, so) = self.spec_store_x(st, None, None)?;
+                if so.data.is_none() {
+                    return Err(bad("pxor before a spec's store that is not of zeros"));
+                }
+                let o = nat(&so.off).ok_or_else(|| bad("a zero-initialization at an offset that is not a literal"))?;
+                let t = self.head("pxor_z", a, insn) + &self.terms(&[&x[0], &x[2], &x[3], &sa]) + &self.tail(st, insn, 3, &[]);
+                let rd = format!(
+                    "mp(tr.ptz_red, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{a2}}}, {{HS}}, {{{}}}, {{{}}}, {{{xr}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{{}}}, simp(L), simp(L), simp(L), simp(L), simp(L), {hc}, simp(), {red}, {{NEXT}})",
+                    self.base, self.code, st.fr, st.ds, st.rs, self.print(&sa), so.n, self.print(&so.p), self.print(&so.off), self.p(&st.spec), self.p(&st2.spec), st2.wn
+                );
+                let mut st3 = st2;
+                st3.a = a2;
+                st3.z = Some((xr, so.p.clone(), o, so.n));
+                return self.then_pre(t.replace("{NEXT}", &rd), st3, pre);
+            }
+            // movups / movq [b + d], x (x zero): the next c of the bytes
+            145 | 150 => {
+                let Some((xr, bz, o, k)) = st.z.clone() else { return Err(bad("a store of an xmm register outside a zero-initialization")) };
+                let (c, nf) = if insn.row == 145 { (16u128, 4) } else { (8u128, 5) };
+                let x = self.pairs(&f, nf).ok_or_else(|| bad("fields"))?;
+                if reg(&x[0])? != xr {
+                    return Err(bad("a store of an xmm register not zeroed"));
+                }
+                let (bn, b, d) = self.base_disp(&x[1]).ok_or_else(|| bad("not [b + d]"))?;
+                let bv = self.need_reg(st, bn, 8)?;
+                if self.canon(&bv) != self.canon(&bz) || nat(&d) != Some(o) || c > k {
+                    return Err(format!("{:x}: the machine stores {} bytes at {} + {}, the zero-initialization's rest: {} bytes at {} + {}", a, c, self.print(&bv), self.print(&d), k, self.print(&bz), o));
+                }
+                let at = |g: &Gen, o: u128| g.mk("bits_add", vec![lit(64), bz.clone(), lit(o)]);
+                let (aa, a2t) = (at(self, o), at(self, o + c));
+                let mut ts: Vec<&Term> = vec![&x[0], &b, &d];
+                ts.extend(x[2..].iter());
+                let (kt, k2t) = (lit(k), lit(k - c));
+                ts.extend([&bv, &aa, &kt, &a2t, &k2t]);
+                let rule = if insn.row == 145 { "zst_ups" } else { "zst_q" };
+                let mut t = self.head(rule, a, insn) + &self.terms(&ts) + &self.tail(st, insn, 11, &["arith()".into(), "arith()".into()]);
+                let mut st2 = st.clone();
+                st2.a = a2;
+                if k == c {
+                    // (all stored: the plain claim on)
+                    let ex = format!(
+                        "mp(tr.ptz_exit, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{a2}}}, {{HS}}, {{{}}}, {{{}}}, {{{xr}}}, {{{}}}, {{{}}}, {{W}}, simp(L), {{NEXT}})",
+                        self.base, self.code, st.fr, st.ds, st.rs, self.print(&a2t), self.p(&st.spec)
+                    );
+                    t = t.replace("{NEXT}", &ex);
+                    st2.z = None;
+                } else {
+                    st2.z = Some((xr, bz, o + c, k - c));
+                }
+                return self.then(t, st2);
+            }
             // mov r32/r64, [rsp + d]: the home's value
             76 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
@@ -3617,6 +3732,7 @@ pub fn translate(args: &[String]) -> CResult {
         lp: None,
         spec: Spec::Proc(i0),
         hyps: Vec::new(),
+        z: None,
     };
     // (the registers' map, as a function of the arguments x0)
     let mut rs_maps = vec!["empty".to_string()];

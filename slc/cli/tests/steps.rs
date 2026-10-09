@@ -108,7 +108,7 @@ fn translations_are_generated_and_check() {
         .args(["steps"])
         .arg(&elf)
         .arg(&claim)
-        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "-o"])
+        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "-o"])
         .arg(&steps)
         .arg("--text")
         .arg(&text)
@@ -126,14 +126,14 @@ fn translations_are_generated_and_check() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core"]
             .iter()
             .map(|f| f.into()),
     );
     // (the program text: the code every contract assumes loaded)
     files.push(text.clone().into());
     let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht"), ("queue", "qut")] {
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht"), ("queue", "qut"), ("free_meta", "fmt")] {
         let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
         let t = Command::new(slc)
             .current_dir(&root)
@@ -175,9 +175,11 @@ fn translations_are_generated_and_check() {
         ("dequeue", "0 definitions, 10 theorems"),
         ("dequeue_head", "0 definitions, 6 theorems"),
         ("queue", "0 definitions, 10 theorems"),
+        ("free_meta", "0 definitions, 6 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
-        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 12 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 16 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 18 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 31 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 32 theorems, 0 conditional theorems, 0 open lemmas");

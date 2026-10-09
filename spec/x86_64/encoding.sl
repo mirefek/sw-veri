@@ -374,6 +374,8 @@ table x86 using intel {
   P66 0x0F 0x73 /7 ib  if rm is gp(g)    => xmm[g] := xmm[g] << (8 * uint(ib))      // pslldq
   P66 REX.W 0x0F 0x7E /r                 => at(rm, 8) := xmm[r][63:0]               // movq r/m64, xmm
   P66 0x0F 0x7E /r                       => at(rm, 4) := xmm[r][31:0]               // movd r/m32, xmm
+  P66 0x0F 0xD6 /r  if rm is ref(m)      => at(rm, 8) := xmm[r][63:0]               // movq m64, xmm
+  P66 0x0F 0xD6 /r  if rm is gp(g)       => xmm[g] := zext[128](xmm[r][63:0])       // movq xmm, xmm
   P66 REX.W 0x0F 0x6E /r                 => xmm[r] := zext[128](at(rm, 8))          // movq xmm, r/m64
   P66 0x0F 0x6E /r                       => xmm[r] := zext[128](at(rm, 4))          // movd xmm, r/m32
 
