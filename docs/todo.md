@@ -50,8 +50,11 @@ musl's `_start` … `__libc_start_main` reaches `main` with the invariant
 holding for the empty heap, owning only static data, the thread
 descriptor and the auxiliary vector.
 
-## 4. Proof language
+## 4. Proof language and the code base
 
+Ongoing: how could the languages make progress more efficient?
+
+- Review the code base (slc, proofs, layers) for bad code practices.
 - A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
   arith. Plan it before building it.
 - One lemma per contract call that folds the call's outcome shapes
@@ -64,14 +67,28 @@ descriptor and the auxiliary vector.
 
 ## Later
 
-- Optimized code: an optimization layer (GIMPLE ⊑ GIMPLE), DWARF location
-  maps in the bridge.
-- Model: signal handlers, threads, file mappings, recursion (general
-  fixpoints), fault ordering across two pages, instruction fetch across
-  into an unmapped page, other external kills in `overflow_ok`.
+With malloc still as the test bed:
+
+- Multi-threading: threads in the model, TLS, malloc's locking.
+- Optimized code and an updated compiler: an optimization layer (GIMPLE ⊑
+  GIMPLE), DWARF location maps in the bridge.
+- Other compilers' layers: LLVM IR from clang, alongside GIMPLE.
+
+Beyond malloc:
+
+- Signal catching (handlers, `sigaltstack`, `rt_sigreturn`), varargs,
+  stack-passed and floating-point arguments, realloc.
+- Filesystem, process communication, networking.
+- Higher-level understanding of types: C types and objects above raw
+  memory.
+- Whole executables: busybox.
+
+Smaller items:
+
+- Model: file mappings, recursion (general fixpoints), fault ordering
+  across two pages, instruction fetch across into an unmapped page, other
+  external kills in `overflow_ok`.
 - SL: syntax of properties, qualified names and ambiguity errors in name
   resolution, the language's name.
 - Checker speed, if needed: generated step theorems, memoised normal forms
   in `taut` / `simp`, parallel checking.
-- Beyond malloc: realloc, varargs, stack-passed and floating-point
-  arguments, busybox.
