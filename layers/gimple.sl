@@ -196,7 +196,7 @@ pred usable(vm: Vm, objs: Set[nat], a: nat, n: nat, w: bool) =
 // An access through a null base pointer is undefined, whatever is mapped at
 // page 0: no C object is there, and GCC relies on it (a dereferenced pointer
 // is non-null: `-fdelete-null-pointer-checks` removes later null tests). The
-// Linux model never maps page 0 on its own (docs/spec-language.md, 12), so
+// Linux model never maps page 0 on its own (spec/linux/process.sl), so
 // programs can show they avoid this.
 proc[World] address(fr: Frame, loc: Loc, w: bool) -> Addr {
   if operand(fr, loc.base) = 0 { undefined }

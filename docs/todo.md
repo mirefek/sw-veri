@@ -1,38 +1,77 @@
-# To do: ideas for later
+# To do
 
-Long-term ideas not scheduled yet, by area. Open design questions of the
-spec language: docs/spec-language.md §14; the proof's milestones:
-docs/proof-plan.md §5.
+The big steps first. Only the current one is expanded. When an item is
+done it is deleted here and summarized in docs/done.md.
 
-## Proof checker: speed
+## 1. Every allocator function at -O0: C1 and C2
 
-Not needed at the current times (docs/proof-checker.md §5); in order of
-expected gain:
+The functions reachable from malloc, free and calloc, bottom-up over the
+call graph.
 
-- **Step theorem generation.** The generated step theorems are now most
-  of an uncached check (build/leaf_steps.core 3.5 s, the a_ctz/a_clz
-  steps 1.4 s, proofs/x86_insn.core 1.0 s). Look there first if a full
-  uncached check (CI) gets slow.
-- **Memoised normal forms** of hypotheses inside `taut` / `simp`: the same
-  hypothesis is re-normalised in every call.
-- **Parallel checking**: statements first, then the proofs independently.
+### 1.1 dequeue_head (current)
 
-## C1 certificates
+C2 is done. C1 is next:
 
-- **`tr.callee_io` for callers** (slc/cli/src/effects.rs): a call's
-  effect from the callee's own `FN.io` (`gimple.call1`), so that callers
-  can be callees too; then the program-level `while` (so far loops occur
-  as statements).
+1. The call rule for any frame size and any number of register arguments.
+   It currently covers only an 8-byte frame and one argument.
+2. `slc translate`: emit such calls; then generate `proofs/dequeue_head_tr.core`.
+3. `dequeue_head_fun` as a C function value refining a
+   `dequeue_head_spec_fun`, for its callers (as `ms.dequeue_fun_c2` does
+   for dequeue).
 
-## Proof language
+### 1.2 The remaining functions
 
-- **Grouped conjunctions with `conj`.** `conj(p1, .., pn)` builds the flat
-  left-nested conjunction; a differently grouped goal still uses `taut`
-  (`tr.push_ok`'s conclusion in translate_call.core; `tr.ok_abi` dropping
-  a conjunct, `tr.sim_red` replacing one). Building to the goal's shape
-  would cover them.
-- **One way to instantiate.** `name[x := t]` covers parameters and leading
-  `all`s by name; positional `all_elim(p, {t})` and `mp(p, {t}, ..)` are
-  still used (~550 `all_elim` in proofs/). Migrate where it reads better.
-- **More labels** in the large definitions and SL predicates the proofs
-  take apart, as the need shows up.
+- The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
+  C2, possibly generated.
+- `queue`, `free_meta`, `activate_group`, `get_meta`, `get_nominal_size`,
+  `set_size`, `enframe`, `size_to_class`, `account_bounce`, `record_seq`,
+  `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
+  `__malloc_alloc_meta`, `nontrivial_free`.
+- The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`,
+  `__malloc_allzerop`, and the `lite_malloc` / `free.c` wrappers.
+- Leaves at machine level (inline assembly with operands, syscalls):
+  `a_cas`, `a_or`, `__syscall*`, `__mmap`, `munmap`, `__mprotect`,
+  `memset`, `memcpy`, `__lock` / `__unlock`, `___errno_location`.
+- C1 bookkeeping for callers that are callees themselves (`tr.callee_io`
+  from the callee's own effects), and a program-level `while`.
+
+## 2. The invariant and the laws
+
+- Specs of the internal functions in terms of `layers/mallocng.sl`'s
+  abstract state; the entry points' C2 against the malloc layer.
+- `mallocng.abs_unique` (the abstract state is determined by memory): the
+  laws rest on it.
+- The C world: let it own only its statics, its heap and its stack objects
+  (TLS and errno included; hinted mmap and `MAP_FIXED` at C level).
+
+## 3. Init: startup to main
+
+musl's `_start` … `__libc_start_main` reaches `main` with the invariant
+holding for the empty heap, owning only static data, the thread
+descriptor and the auxiliary vector.
+
+## 4. Proof language
+
+- A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
+  arith. Plan it before building it.
+- One lemma per contract call that folds the call's outcome shapes
+  (overflow before, the callee's outcomes, overflow after).
+- Inversion lemmas for the remaining GIMPLE operations (8-, 16-, 32-bit
+  loads and stores, arithmetic).
+- Possibly rename `rsimp` to `simp` once the old `simp` is not needed.
+- `conj` building to the goal's grouping; one way of instantiating
+  (`name[x := t]` instead of positional `all_elim`).
+
+## Later
+
+- Optimized code: an optimization layer (GIMPLE ⊑ GIMPLE), DWARF location
+  maps in the bridge.
+- Model: signal handlers, threads, file mappings, recursion (general
+  fixpoints), fault ordering across two pages, instruction fetch across
+  into an unmapped page, other external kills in `overflow_ok`.
+- SL: syntax of properties, qualified names and ambiguity errors in name
+  resolution, the language's name.
+- Checker speed, if needed: generated step theorems, memoised normal forms
+  in `taut` / `simp`, parallel checking.
+- Beyond malloc: realloc, varargs, stack-passed and floating-point
+  arguments, busybox.

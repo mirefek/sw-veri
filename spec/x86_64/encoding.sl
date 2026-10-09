@@ -9,7 +9,7 @@ spec x86_64_linux
 //   5. fetch & execute
 //
 // The language knows only generic decoders, tables and notations
-// (docs/spec-language.md, section 8); everything x86-specific is here.
+// (docs/language.md, section 8); everything x86-specific is here.
 
 ///////////////////////////////////////////////////////////////////////
 //  1. Decoding context
