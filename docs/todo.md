@@ -10,12 +10,9 @@ call graph.
 
 ### 1.1 dequeue_head as a callee (current)
 
-C1 and C2 are done. For its callers it still needs:
-
-1. `dequeue_head_fun` as a C function value refining a
-   `dequeue_head_spec_fun` (as `ms.dequeue_fun_c2` does for dequeue).
-2. Its `tr.callee_io`. A caller's must come from its callees' (see below),
-   which the generator does not derive yet.
+C1, C2 and its `tr.callee_io` are done. For its callers it still needs
+`dequeue_head_fun` as a C function value refining a
+`dequeue_head_spec_fun` (as `ms.dequeue_fun_c2` does for dequeue).
 
 ### 1.2 The remaining functions
 
@@ -30,8 +27,7 @@ C1 and C2 are done. For its callers it still needs:
 - Leaves at machine level (inline assembly with operands, syscalls):
   `a_cas`, `a_or`, `__syscall*`, `__mmap`, `munmap`, `__mprotect`,
   `memset`, `memcpy`, `__lock` / `__unlock`, `___errno_location`.
-- C1 bookkeeping for callers that are callees themselves (`tr.callee_io`
-  from the callee's own effects), and a program-level `while`.
+- C1 bookkeeping: a program-level `while`.
 
 ## 2. The invariant and the laws
 

@@ -81,6 +81,8 @@ item is a short summary of finished work; details are in the files named.
   - the push's fault is a stack overflow by the guard gap;
   - the homes and the whole frame survive the callee.
 
+  A caller's `tr.callee_io` (its returns keep the world valid for GIMPLE)
+  is generated from its callees' (`tr.eff_call`).
   `proofs/mallocng_link.core` links a_clz_32 with a_ctz_32 and
   dequeue_head with dequeue.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:

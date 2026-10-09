@@ -3810,11 +3810,11 @@ pub fn translate(args: &[String]) -> CResult {
     o.push_str(&format!(
         "theorem {p}.implements_abi: all statics. {cfix}{cprem}abi.implements2_at(single(empty), {b}, {spec_app}, {lb}, {lc}, statics)\nproof\n  fix statics\n{cass}  show := apply(tr.implements_abi, {imp})\nqed\n"
     ));
-    // (as a callee: tr.callee_io from the spec's structure; a caller's
-    // waits for its callees')
-    if callee_text.is_none() {
+    // (as a callee: tr.callee_io from the spec's structure -- a caller's
+    // from its callee's)
+    {
         let known: HashSet<String> = g.env.claims.iter().map(|(n, _)| n.clone()).chain(g.lemmas.keys().cloned()).collect();
-        match crate::effects::Eff::new(&mut *g.env, &prefix, known).callee_io(ssym) {
+        match crate::effects::Eff::new(&mut *g.env, &prefix, known).callee_io(ssym, cn) {
             Ok(t) => {
                 o.push('\n');
                 o.push_str(&t);

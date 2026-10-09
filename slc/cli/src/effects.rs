@@ -13,11 +13,14 @@
 //! - `o = ok(S, v)`: tr.eff_ret;
 //! - `letin(a, x. R)`: R with a (unfolded by `defs(.., letin)`);
 //! - `runs(P(args), S, o)`: GIMPLE's primitive P (tr.eff_P), or a procedure
-//!   of the program (its own lemma, emitted first).
+//!   of the program (its own lemma, emitted first);
+//! - `runs(call(G, args), S, o)` (or call1) of a callee G: tr.eff_call (or
+//!   tr.eff_call1) from G's own `tr.callee_io` -- a hypothesis of the
+//!   lemma, so a caller's lemmas hold for every callee with that property.
 
 use sl_kernel::syntax::Printer;
 use sl_kernel::{Env, Node, SymId, SymKind, Term, VarId};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub struct Eff<'e> {
     env: &'e mut Env,
@@ -30,13 +33,18 @@ pub struct Eff<'e> {
     out: Vec<String>,
     /// the lemmas loaded
     known: HashSet<String>,
+    /// the callees in scope (variables): their `tr.callee_io` hypothesis'
+    /// name and their number of arguments
+    hios: HashMap<VarId, (String, usize)>,
+    /// a procedure's parameters that are callees (their indices)
+    callee_params: HashMap<SymId, Vec<usize>>,
 }
 
 type R<T> = Result<T, String>;
 
 impl<'e> Eff<'e> {
     pub fn new(env: &'e mut Env, prefix: &str, known: HashSet<String>) -> Eff<'e> {
-        Eff { env, prefix: prefix.to_string(), n: 0, procs: BTreeSet::new(), out: Vec::new(), known }
+        Eff { env, prefix: prefix.to_string(), n: 0, procs: BTreeSet::new(), out: Vec::new(), known, hios: HashMap::new(), callee_params: HashMap::new() }
     }
 
     fn app<'t>(&self, t: &'t Term, name: &str, n: usize) -> Option<&'t [Term]> {
@@ -250,6 +258,18 @@ impl<'e> Eff<'e> {
         let name = self.env.syms[*f as usize].name.clone();
         let mut terms = vec![format!("{{{}}}", self.print(s))];
         terms.extend(args.iter().map(|a| format!("{{{}}}", self.print(a))));
+        // a call of a callee: its tr.callee_io
+        if name == "gimple.call" || name == "gimple.call1" {
+            let Node::Var(g, _) = args[0].node() else { return Err(format!("a call of other than a callee: {}", self.print(p))) };
+            let (h, k) = self.hios.get(g).cloned().ok_or_else(|| format!("a call of an unknown callee: {}", self.print(p)))?;
+            let rule = if name == "gimple.call" { "tr.eff_call" } else { "tr.eff_call1" };
+            return Ok(format!(
+                "mp(all_elim({rule}, {{{}}}, {{{}}}, {{{k}}}, {{{}}}), {h}, defs(arith(), ord_le))",
+                self.print(&args[0]),
+                self.print(&args[1]),
+                self.print(s)
+            ));
+        }
         let lemma = if let Some(prim) = name.strip_prefix("gimple.") {
             let l = format!("tr.eff_{}", prim);
             if !self.known.contains(&l) {
@@ -259,7 +279,40 @@ impl<'e> Eff<'e> {
         } else {
             self.proc_lemma(*f)?
         };
-        Ok(format!("all_elim({}, {})", lemma, terms.join(", ")))
+        // (a procedure taking callees: their hypotheses)
+        let mut hs = Vec::new();
+        for &i in self.callee_params.get(f).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let Node::Var(g, _) = args[i].node() else { return Err(format!("a callee argument not a callee: {}", self.print(p))) };
+            hs.push(self.hios.get(g).ok_or_else(|| format!("a callee argument not in scope: {}", self.print(p)))?.0.clone());
+        }
+        if hs.is_empty() {
+            Ok(format!("all_elim({}, {})", lemma, terms.join(", ")))
+        } else {
+            Ok(format!("mp(all_elim({}, {}), {})", lemma, terms.join(", "), hs.join(", ")))
+        }
+    }
+
+    /// the variables called in t (`call(g, args)`, `call1(g, args)`), with
+    /// their calls' numbers of arguments (the least)
+    fn called(&self, t: &Term) -> HashMap<VarId, usize> {
+        let mut m: HashMap<VarId, usize> = HashMap::new();
+        self.called_in(t, &mut m);
+        m
+    }
+
+    fn called_in(&self, t: &Term, m: &mut HashMap<VarId, usize>) {
+        for name in ["gimple.call", "gimple.call1"] {
+            if let Some(c) = self.app(t, name, 2) {
+                if let (Node::Var(g, _), Some(k)) = (c[0].node(), list_len(self, &c[1])) {
+                    let e = m.entry(*g).or_insert(k);
+                    *e = (*e).min(k);
+                }
+            }
+        }
+        match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => a.iter().for_each(|x| self.called_in(x, m)),
+            _ => {}
+        }
     }
 
     /// The program's procedure `f` (a definition `mkprog(x0 x1. B)`): its
@@ -276,11 +329,23 @@ impl<'e> Eff<'e> {
         let (wn, wv) = self.fresh("ws");
         let mut pnames = Vec::new();
         let mut body = body;
-        for p in &params {
+        // (its callees: the parameters called, with their numbers of arguments)
+        let called = self.called(&body);
+        let mut hyps = Vec::new();
+        let mut cps = Vec::new();
+        for (i, p) in params.iter().enumerate() {
             if self.env.vars[*p as usize].arity > 0 {
                 return Err(format!("`{}`: a procedure taking a function", name));
             }
             let (pn, pv) = self.fresh("as");
+            if let Some(&k) = called.get(p) {
+                let Node::Var(v, _) = pv.node() else { unreachable!() };
+                let h = format!("hio{}", self.n);
+                self.hios.insert(*v, (h.clone(), k));
+                hyps.push(format!("tr.callee_io({pn}, {k})"));
+                cps.push((h, format!("tr.callee_io({pn}, {k})")));
+                self.callee_params.entry(f).or_default().push(i);
+            }
             body = body.subst_var(*p, &pv, &self.env.binders_fn());
             pnames.push((pn, pv));
         }
@@ -291,13 +356,13 @@ impl<'e> Eff<'e> {
         let b = self.open(&m[0], &[wv.clone(), ov.clone()]);
         let call = self.mk(&name, pnames.iter().map(|(_, v)| v.clone()).collect())?;
         let runs = self.mk("runs", vec![call, wv.clone(), ov.clone()])?;
-        let stmt = format!("all {wn}{}. {}", pnames.iter().map(|(n, _)| format!(" {}", n)).collect::<String>(), self.eff(false, &wv, &runs, o)?);
-        let mut lines = vec![
-            format!("theorem {lemma}: {stmt}"),
-            "proof".into(),
-            format!("  fix {wn}{}", pnames.iter().map(|(n, _)| format!(" {}", n)).collect::<String>()),
-            format!("  have kb: {} proof", self.eff(false, &wv, &b, o)?),
-        ];
+        let prem: String = hyps.iter().map(|h| format!("{h} -> ")).collect();
+        let stmt = format!("all {wn}{}. {prem}{}", pnames.iter().map(|(n, _)| format!(" {}", n)).collect::<String>(), self.eff(false, &wv, &runs, o)?);
+        let mut lines = vec![format!("theorem {lemma}: {stmt}"), "proof".into(), format!("  fix {wn}{}", pnames.iter().map(|(n, _)| format!(" {}", n)).collect::<String>())];
+        for (h, t) in &cps {
+            lines.push(format!("  assume {h}: {t}"));
+        }
+        lines.push(format!("  have kb: {} proof", self.eff(false, &wv, &b, o)?));
         lines.extend(self.prove(false, &wv, &b, o, "    ")?);
         lines.push("  qed".into());
         lines.push(format!("  show by defs(apply(tr.eff_prog, {{{wn}}}, kb), {name}, letin)"));
@@ -306,15 +371,27 @@ impl<'e> Eff<'e> {
         Ok(lemma)
     }
 
-    /// For the spec `spec` (a `_fun` wrapper of one argument, no callee
-    /// parameters): its effect lemmas, `{prefix}.io` (tr.callee_io) and
-    /// `{prefix}.typed`; Err with the reason if a construct has no rule.
-    pub fn callee_io(&mut self, spec: SymId) -> R<String> {
+    /// For the spec `spec` (a `_fun` wrapper; its parameters callees G0, ..,
+    /// called with `callee_n` arguments): its effect lemmas, `{prefix}.io`
+    /// (tr.callee_io, from the callees') and `{prefix}.typed`; Err with the
+    /// reason if a construct has no rule.
+    pub fn callee_io(&mut self, spec: SymId, callee_n: usize) -> R<String> {
         let name = self.env.syms[spec as usize].name.clone();
         let SymKind::Defined { params, body } = self.env.syms[spec as usize].kind.clone() else { return Err(format!("`{}` is not a definition", name)) };
-        if !params.is_empty() {
-            return Err("a spec with callees: not yet".into());
+        // (the callees: G0, .., with their tr.callee_io hypotheses)
+        let mut body = body;
+        let mut gs = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let gn = format!("G{i}");
+            let gv = self.env.new_var(&gn, 0);
+            body = body.subst_var(*p, &Term::var(gv, vec![]), &self.env.binders_fn());
+            self.hios.insert(gv, (format!("hio{i}"), callee_n));
+            gs.push(gn);
         }
+        let app = if gs.is_empty() { format!("{name}()") } else { format!("{name}({})", gs.join(", ")) };
+        let gall: String = if gs.is_empty() { String::new() } else { format!("all {}. ", gs.join(" ")) };
+        let gprem: String = gs.iter().map(|g| format!("tr.callee_io({g}, {callee_n}) -> ")).collect();
+        let gfix: Vec<String> = gs.iter().enumerate().map(|(i, g)| format!("  fix {g}\n  assume hio{i}: tr.callee_io({g}, {callee_n})")).collect();
         for l in ["tr.eff", "tr.callee_io_fun", "tr.fun_typed"] {
             if !self.env.sym_by_name.contains_key(l) && !self.known.contains(l) {
                 return Err(format!("`{}` not loaded (proofs/translate_effects.core)", l));
@@ -340,9 +417,9 @@ impl<'e> Eff<'e> {
             None => ("0".to_string(), wrapper.clone()),
         };
         let runs = self.mk("runs", vec![m.clone(), wv.clone(), ov.clone()])?;
-        let mut lines = vec![
-            format!("theorem {}.io: tr.callee_io({name}(), {n})", self.prefix),
-            "proof".into(),
+        let mut lines = vec![format!("theorem {}.io: {gall}{gprem}tr.callee_io({app}, {n})", self.prefix), "proof".into()];
+        lines.extend(gfix.iter().cloned());
+        lines.extend([
             format!(
                 "  have g: all {an} {wn}. {an} in abi.ARGS -> ord_le({n}, seq_len({an})) -> {} proof",
                 self.eff(false, &wv, &runs, o)?
@@ -350,7 +427,7 @@ impl<'e> Eff<'e> {
             format!("    fix {an} {wn}"),
             "    assume _ hn".into(),
             format!("    have kb: {} proof", self.eff(false, &wv, &body, o)?),
-        ];
+        ]);
         lines.extend(self.prove(false, &wv, &body, o, "      ")?);
         lines.push("    qed".into());
         lines.push(if guard.is_some() {
@@ -367,8 +444,9 @@ impl<'e> Eff<'e> {
             text.push('\n');
         }
         text.push_str(&(lines.join("\n") + "\n\n"));
+        let gfix2: String = gs.iter().map(|g| format!("  fix {g}\n")).collect();
         text.push_str(&format!(
-            "theorem {p}.typed: {name}() in fn_space(abi.ARGS, powerset(univ(1)))\nproof\n  show by defs(tr.fun_typed, {name})\nqed\n",
+            "theorem {p}.typed: {gall}{app} in fn_space(abi.ARGS, powerset(univ(1)))\nproof\n{gfix2}  show by defs(tr.fun_typed, {name})\nqed\n",
             p = self.prefix
         ));
         Ok(text)
@@ -395,4 +473,13 @@ fn mentions_bytes(t: &Term, b: &[u8]) -> bool {
         Node::App(_, a) | Node::Var(_, a) => a.iter().any(|x| mentions_bytes(x, b)),
         _ => false,
     }
+}
+
+/// the length of a list literal (`seq_one`s concatenated)
+fn list_len(e: &Eff, t: &Term) -> Option<usize> {
+    if e.app(t, "seq_one", 1).is_some() {
+        return Some(1);
+    }
+    let x = e.app(t, "seq_concat", 2)?;
+    Some(list_len(e, &x[0])? + list_len(e, &x[1])?)
 }

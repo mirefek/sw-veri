@@ -115,7 +115,7 @@ fn translations_are_generated_and_check() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/translate_effects.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -142,7 +142,7 @@ fn translations_are_generated_and_check() {
         .args(["kernel-check", "--no-cache"])
         .args(&files)
         .args(&certs)
-        .args(["proofs/mallocng_link.core", "proofs/gimple_inv.core", "proofs/mallocng_c2.core"])
+        .args(["proofs/mallocng_link.core", "proofs/mallocng_c2.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
@@ -157,12 +157,12 @@ fn translations_are_generated_and_check() {
         ("upgradelock", "0 definitions, 6 theorems"),
         ("resetlock", "0 definitions, 6 theorems"),
         ("decay_bounces", "0 definitions, 6 theorems"),
-        ("a_clz_32", "0 definitions, 3 theorems"),
+        ("a_clz_32", "0 definitions, 6 theorems"),
         ("dequeue", "0 definitions, 10 theorems"),
-        ("dequeue_head", "0 definitions, 3 theorems"),
+        ("dequeue_head", "0 definitions, 6 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
-        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 10 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 27 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
