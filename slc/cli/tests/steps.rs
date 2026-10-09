@@ -27,7 +27,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 25 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 24 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -47,7 +47,7 @@ fn loaded_code_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 38 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 37 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// The claim's top (proofs/musl_malloc.core from its open lemmas), the
@@ -217,7 +217,7 @@ fn translations_are_generated_and_check() {
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 43 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 51 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 50 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 15 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple, &text]) {

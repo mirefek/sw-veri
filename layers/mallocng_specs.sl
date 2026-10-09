@@ -5,7 +5,7 @@ layer mallocng_specs uses gimple, abi, mallocng
 // (layers/abi.sl): a named precondition (`require`: outside it the spec
 // allows anything), then a stack overflow or the effect, stated as a
 // function of the world. C2 shows the function's readable GIMPLE refines
-// its spec (proofs/*_c2.core).
+// its spec (proofs/mallocng_c2.core, proofs/mallocng_bits.core).
 
 ///////////////////////////////////////////////////////////////////////
 //  Words
@@ -166,8 +166,8 @@ const debruijn32_tab : List[nat] = [
   31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14]
 
 ///////////////////////////////////////////////////////////////////////
-//  Bit counts. Their C2 waits for a library of bit lemmas (docs/todo.md);
-//  their callers' C2 use these contracts.
+//  Bit counts (C2: proofs/mallocng_bits.core); their callers' C2 use
+//  these contracts.
 
 // a_ctz_32(x): x's trailing zeros (x not 0); tbl: debruijn32's address
 proc[World] a_ctz_32_spec(tbl: bits[64], x: bits[32]) -> bits[32] {
