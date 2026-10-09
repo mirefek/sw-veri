@@ -4,6 +4,12 @@
 use std::path::Path;
 use std::process::Command;
 
+/// A test without its build: skipped, or (SLC_REQUIRE_BUILD set) failed.
+fn skip(why: &str) {
+    assert!(std::env::var_os("SLC_REQUIRE_BUILD").is_none(), "SLC_REQUIRE_BUILD set, but: {}", why);
+    eprintln!("skipped: {}", why);
+}
+
 /// The facts about the x86 model (proofs/x86.core) check, among them that
 /// the closed-form memory write means the same as the byte loop.
 #[test]
@@ -11,8 +17,7 @@ fn x86_model_facts_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let claim = root.join("build/musl_malloc_O0.core");
     if !claim.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 first");
-        return;
+        return skip("run scripts/build-musl.sh -O0 first");
     }
     let c = Command::new(env!("CARGO_BIN_EXE_slc"))
         .current_dir(&root)
@@ -32,8 +37,7 @@ fn loaded_code_facts_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let claim = root.join("build/musl_malloc_O0.core");
     if !claim.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 first");
-        return;
+        return skip("run scripts/build-musl.sh -O0 first");
     }
     let c = Command::new(env!("CARGO_BIN_EXE_slc"))
         .current_dir(&root)
@@ -54,8 +58,7 @@ fn claim_proofs_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let claim = root.join("build/musl_malloc.core");
     if !claim.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh first");
-        return;
+        return skip("run scripts/build-musl.sh first");
     }
     let slc = env!("CARGO_BIN_EXE_slc");
     for files in [
@@ -81,8 +84,7 @@ fn step_theorems_of_get_slot_index_prove() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (elf, claim) = (root.join("build/test_malloc_O0"), root.join("build/musl_malloc_O0.core"));
     if !elf.exists() || !claim.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 first");
-        return;
+        return skip("run scripts/build-musl.sh -O0 first");
     }
     let out = std::env::temp_dir().join(format!("slc-steps-{}.core", std::process::id()));
     let slc = env!("CARGO_BIN_EXE_slc");
@@ -125,8 +127,7 @@ fn translations_are_generated_and_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (elf, claim, sl) = (root.join("build/test_malloc_O0"), root.join("build/musl_malloc_O0.core"), root.join("build/gimple-O0/sl/c_mallocng_malloc.sl"));
     if !elf.exists() || !claim.exists() || !sl.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 and slc gimple --readable first");
-        return;
+        return skip("run scripts/build-musl.sh -O0 and slc gimple --readable first");
     }
     let slc = env!("CARGO_BIN_EXE_slc");
     let tmp = std::env::temp_dir();

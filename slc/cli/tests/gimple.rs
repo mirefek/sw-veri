@@ -5,14 +5,19 @@
 use std::path::Path;
 use std::process::Command;
 
+/// A test without its build: skipped, or (SLC_REQUIRE_BUILD set) failed.
+fn skip(why: &str) {
+    assert!(std::env::var_os("SLC_REQUIRE_BUILD").is_none(), "SLC_REQUIRE_BUILD set, but: {}", why);
+    eprintln!("skipped: {}", why);
+}
+
 #[test]
 fn mallocng_free_translates_and_elaborates() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let g = root.join("build/gimple");
     let (dump, obj, elf) = (g.join("src_malloc_mallocng_free.c.optimized"), g.join("src_malloc_mallocng_free.c.o"), root.join("build/test_malloc"));
     if !dump.exists() || !obj.exists() || !elf.exists() {
-        eprintln!("skipped: run scripts/dump-gimple.sh src/malloc/mallocng/free.c first");
-        return;
+        return skip("run scripts/dump-gimple.sh src/malloc/mallocng/free.c first");
     }
     let out = std::env::temp_dir().join(format!("slc-gimple-free-{}.sl", std::process::id()));
     let slc = env!("CARGO_BIN_EXE_slc");
@@ -36,8 +41,7 @@ fn mallocng_at_o0_has_a_readable_form() {
     let g = root.join("build/gimple-O0");
     let (dump, obj, elf) = (g.join("src_malloc_mallocng_malloc.c.optimized"), g.join("src_malloc_mallocng_malloc.c.o"), root.join("build/test_malloc_O0"));
     if !dump.exists() || !obj.exists() || !elf.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 and BUILD=-O0 scripts/dump-gimple.sh src/malloc/mallocng/malloc.c first");
-        return;
+        return skip("run scripts/build-musl.sh -O0 and BUILD=-O0 scripts/dump-gimple.sh src/malloc/mallocng/malloc.c first");
     }
     let out = std::env::temp_dir().join(format!("slc-readable-o0-malloc-{}.sl", std::process::id()));
     let slc = env!("CARGO_BIN_EXE_slc");
@@ -67,8 +71,7 @@ fn mallocng_malloc_at_o0_translates_and_elaborates() {
     let g = root.join("build/gimple-O0");
     let (dump, obj, elf) = (g.join("src_malloc_mallocng_malloc.c.optimized"), g.join("src_malloc_mallocng_malloc.c.o"), root.join("build/test_malloc_O0"));
     if !dump.exists() || !obj.exists() || !elf.exists() {
-        eprintln!("skipped: run scripts/build-musl.sh -O0 and BUILD=-O0 scripts/dump-gimple.sh src/malloc/mallocng/malloc.c first");
-        return;
+        return skip("run scripts/build-musl.sh -O0 and BUILD=-O0 scripts/dump-gimple.sh src/malloc/mallocng/malloc.c first");
     }
     let out = std::env::temp_dir().join(format!("slc-gimple-o0-malloc-{}.sl", std::process::id()));
     let slc = env!("CARGO_BIN_EXE_slc");

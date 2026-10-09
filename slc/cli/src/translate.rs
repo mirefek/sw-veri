@@ -3494,8 +3494,8 @@ impl<'e> Gen<'e> {
 /// The files' statements: a theorem becomes a claim (its statement); a
 /// schematic one is returned as (name, parameters, statement), to be read
 /// with its parameters -- the generator reads statements only, and checks
-/// nothing.
-fn statements(src: &str) -> (String, Vec<(String, String, String)>) {
+/// nothing (a malformed theorem is an error, not a silently wrong text).
+fn statements(src: &str) -> Result<(String, Vec<(String, String, String)>), String> {
     let code = |l: &str| l.split("//").next().unwrap_or("").trim().to_string();
     let mut out = String::new();
     let mut schem = Vec::new();
@@ -3506,8 +3506,9 @@ fn statements(src: &str) -> (String, Vec<(String, String, String)>) {
             continue;
         };
         let mut head = rest.to_string();
+        let name = rest.split(|c: char| c == ':' || c == '(').next().unwrap_or("").trim().to_string();
         loop {
-            let Some(n) = lines.next() else { break };
+            let Some(n) = lines.next() else { return Err(format!("theorem {}: no `proof`", name)) };
             if code(n) == "proof" {
                 break;
             }
@@ -3515,7 +3516,7 @@ fn statements(src: &str) -> (String, Vec<(String, String, String)>) {
         }
         let mut nest = 1;
         while nest > 0 {
-            let Some(n) = lines.next() else { break };
+            let Some(n) = lines.next() else { return Err(format!("theorem {}: its proof not closed by `qed`", name)) };
             let t = code(n);
             if t == "qed" {
                 nest -= 1;
@@ -3523,7 +3524,7 @@ fn statements(src: &str) -> (String, Vec<(String, String, String)>) {
                 nest += 1;
             }
         }
-        let i = head.find(|c: char| c == ':' || c == '(').unwrap_or(0);
+        let Some(i) = head.find(|c: char| c == ':' || c == '(') else { return Err(format!("theorem {}: no statement", name)) };
         if head[i..].starts_with('(') {
             // NAME(params): statement (the parameters' parentheses balanced)
             let mut depth = 0;
@@ -3541,14 +3542,17 @@ fn statements(src: &str) -> (String, Vec<(String, String, String)>) {
                     _ => {}
                 }
             }
-            let stmt = head[end + 1..].trim_start().strip_prefix(':').unwrap_or("").to_string();
+            let Some(stmt) = head[end + 1..].trim_start().strip_prefix(':').filter(|_| end > i) else {
+                return Err(format!("theorem {}: expected `NAME(params): statement`", name));
+            };
+            let stmt = stmt.to_string();
             schem.push((head[..i].to_string(), head[i + 1..end].to_string(), stmt));
         } else {
             out.push_str("claim ");
             out.push_str(&head);
         }
     }
-    (out, schem)
+    Ok((out, schem))
 }
 
 pub fn translate(args: &[String]) -> CResult {
@@ -3568,7 +3572,7 @@ pub fn translate(args: &[String]) -> CResult {
     let mut schem = Vec::new();
     for (i, f) in pos[3..].iter().enumerate() {
         let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f, e))?;
-        let (text, s) = statements(&src);
+        let (text, s) = statements(&src).map_err(|e| format!("{}: {}", f, e))?;
         syntax::load(&mut env, &text, i == 0).map_err(|e| format!("{}: {}", f, e))?;
         schem.extend(s);
     }
@@ -3765,6 +3769,7 @@ pub fn translate(args: &[String]) -> CResult {
             _ => None,
         }
     }
+    // (no `gimple.result`: a void function, no result bytes)
     g.rbytes = result_bits(&g, &kw).unwrap_or(0) / 8;
 
     // the frame: `sub rsp, k` at the entry (or none); fd, the deepest byte
@@ -3881,6 +3886,7 @@ pub fn translate(args: &[String]) -> CResult {
     // (the callee: its contract on the code with the function's, its spec
     // typed and keeping I/O and code -- premises)
     let (lb, lc) = (g.lbase.clone(), g.lcode.clone());
+    // (no callee: cn, cimp unused)
     let cn = g.callees.first().map(|c| c.2).unwrap_or(1);
     let cimp = if g.callees.first().is_some_and(|c| c.3) { "tr.implements_at_u" } else { "tr.implements_at" };
     let cprem = match &callee_text {

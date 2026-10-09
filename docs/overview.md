@@ -150,4 +150,6 @@ slc decode / coverage / cputest / heapcheck model and invariant testing
 ```
 
 `cargo test --release --manifest-path slc/Cargo.toml` runs everything,
-including regenerating and checking the certificates.
+including regenerating and checking the certificates. The tests that need
+the musl build (`scripts/build-musl.sh -O0`) skip without it; with
+`SLC_REQUIRE_BUILD=1` they fail instead.
