@@ -639,6 +639,17 @@ modus ponens: the fact does not match the premise `tr.implements_at(...)`
     given:    4205681
 ```
 
+A failed `arith` shows a consistent case, one atom per line, as it read
+them (equals substituted). An atom it did not read arithmetically -- a
+mere proposition to it -- is marked with why:
+
+```
+arith: not shown; a consistent case:
+  int_le(k, 3) = true
+  int_le(3, k) = true
+  k = 3 = false    [an equation, not arithmetic: `k` not known to be an integer (give `k in omega` / ...)]
+```
+
 | variable | effect |
 |---|---|
 | `SLC_FULL_ERRORS=1` | terms uncut (default: 400 characters) |

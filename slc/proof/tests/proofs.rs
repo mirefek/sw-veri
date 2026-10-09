@@ -382,6 +382,14 @@ fn arithmetic_is_proven() {
 }
 
 #[test]
+fn arithmetic_failures_name_what_was_not_read() {
+    // an equation of a term not known to be an integer: a mere proposition
+    let r = arith_ok("int_le(a, 3) -> int_le(3, a) -> a = 3", &[("h1", "int_le(a, 3)"), ("h2", "int_le(3, a)")]);
+    let e = r.unwrap_err();
+    assert!(e.contains("a = 3 = false") && e.contains("`a` not known to be an integer"), "{}", e);
+}
+
+#[test]
 fn arithmetic_with_many_atoms() {
     // a chain of 80 comparisons: no limit on the atoms, cases split as needed
     let n = 80;

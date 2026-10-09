@@ -535,6 +535,50 @@ impl Reader {
         let (x, y) = (self.lin(&a[0])?, self.lin(&a[1])?);
         Some(Atom::Cmp(x, rel, y))
     }
+
+    /// (diagnostics) why `atom` did not read t arithmetically: t is then a
+    /// mere proposition to the check
+    fn unread_reason(&self, env: &Env, t: &Term) -> String {
+        let s = self.s;
+        let pr = crate::syntax::Printer::new(env);
+        let not_int = |x: &Term| format!("`{}` not known to be an integer (give `{} in omega` / `in bits(n)` / `in int`, or an equation with an integer)", pr.short(x), pr.short(x));
+        let Node::App(f, a) = t.node() else { return "not arithmetic: a variable proposition".into() };
+        if a.len() != 2 {
+            return "not arithmetic: a proposition".into();
+        }
+        if is(*f, s.bit) {
+            return match small(&a[1]) {
+                Some(_) => "not arithmetic: a bit beyond 2^100".into(),
+                None => "not arithmetic: a bit at a symbolic index (core/bits.core's lemmas, `bitwise`)".into(),
+            };
+        }
+        if *f == s.eq {
+            return match (self.is_int(&a[0]), self.is_int(&a[1])) {
+                (false, _) => format!("an equation, not arithmetic: {}", not_int(&a[0])),
+                (_, false) => format!("an equation, not arithmetic: {}", not_int(&a[1])),
+                _ => "an equation of integers whose terms arith cannot read (a coefficient too large?)".into(),
+            };
+        }
+        if *f == s.lit_lt {
+            return "not arithmetic: `lit_lt` of non-numerals".into();
+        }
+        if *f == s.in_ {
+            let Node::App(o, ob) = a[1].node() else { return "not arithmetic: membership in a variable set".into() };
+            if !(is(*o, s.omega) || is(*o, s.bits) || is(*o, s.int)) {
+                return "not arithmetic: membership in a set other than omega, int, bits(k)".into();
+            }
+            if !self.is_int(&a[0]) {
+                return format!("a membership, not arithmetic: {}", not_int(&a[0]));
+            }
+            if is(*o, s.bits) && small(&ob[0]).is_none_or(|k| !(0..=100).contains(&k)) {
+                return "a membership in bits(n), n not a numeral up to 100: read only through `x in bits(n) <-> x in omega && x < pow2(n)`".into();
+            }
+        }
+        if is(*f, s.int_lt) || is(*f, s.int_le) || *f == s.in_ {
+            return "a comparison whose terms arith cannot read (a coefficient too large?)".into();
+        }
+        "not arithmetic: a proposition".into()
+    }
 }
 
 /// Fourier-Motzkin: is `{ l >= 0 : l in cs }` infeasible over the integers?
@@ -1060,21 +1104,36 @@ impl Logic {
         // (splits left to right first; if that takes too many cases, splits
         // connected to the case at hand first)
         let mut budget = 500usize;
-        let mut r = falsify(&tree, &read, &base, vec![None; atoms.len()], &[], false, &mut budget);
-        if matches!(r, Err(None)) {
+        let mut res = falsify(&tree, &read, &base, vec![None; atoms.len()], &[], false, &mut budget);
+        if matches!(res, Err(None)) {
             let mut budget = 100_000usize;
-            r = falsify(&tree, &read, &base, vec![None; atoms.len()], &[], true, &mut budget);
+            res = falsify(&tree, &read, &base, vec![None; atoms.len()], &[], true, &mut budget);
         }
-        match r {
+        match res {
             Ok(()) => Ok(()),
             Err(None) => err("arith: too many cases"),
             Err(Some(asg)) => {
-                let atoms_s: Vec<String> = atoms
+                // (the case's atoms, one per line; those not read
+                // arithmetically marked, with why: the usual cause of a
+                // surprise)
+                let pr = crate::syntax::Printer::new(env);
+                let lines: Vec<String> = atoms
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, a)| asg[i].map(|v| format!("{}={}", crate::syntax::Printer::new(env).term(a), v as u8)))
+                    .filter_map(|(i, a)| {
+                        let v = asg[i]?;
+                        // (an equation made trivial by the equals substituted: not shown)
+                        if matches!(a.node(), Node::App(e, x) if *e == env.builtins.eq && x.len() == 2 && x[0] == x[1]) {
+                            return None;
+                        }
+                        let why = match read[i] {
+                            None => format!("    [{}]", r.unread_reason(env, a)),
+                            Some(_) => String::new(),
+                        };
+                        Some(format!("  {} = {}{}", pr.term(a), if v { "true" } else { "false" }, why))
+                    })
                     .collect();
-                err(format!("arith: not shown (a consistent case: {})", atoms_s.join(", ")))
+                err(format!("arith: not shown; a consistent case:\n{}", lines.join("\n")))
             }
         }
     }

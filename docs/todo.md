@@ -50,8 +50,6 @@ descriptor and the auxiliary vector.
 
 Ongoing: how could the languages make progress more efficient?
 
-- `arith` diagnostics: when it fails, list the equations it could not
-  read (sides not known integers).
 - Review the code base (slc, proofs, layers) for bad code practices, a
   bounded pass (e.g. `translate.rs`).
 
