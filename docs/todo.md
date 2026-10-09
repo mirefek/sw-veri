@@ -30,6 +30,8 @@ store, a byte load).
   `a_cas`, `a_or`, `__syscall*`, `__mmap`, `munmap`, `__mprotect`,
   `memset`, `memcpy`, `__lock` / `__unlock`, `___errno_location`.
 - C1 bookkeeping: a program-level `while`.
+- Composition: per function, machine code ⊑ spec from C1 and C2 (a lemma
+  like `tr.implements_refine`), instead of chaining them by hand.
 
 ## 2. The invariant and the laws
 
@@ -37,6 +39,8 @@ store, a byte load).
   abstract state; the entry points' C2 against the malloc layer.
 - `mallocng.abs_unique` (the abstract state is determined by memory): the
   laws rest on it.
+- `musl.free_step` (free always has a step), open in
+  proofs/musl_malloc.core.
 - The C world: let it own only its statics, its heap and its stack objects
   (TLS and errno included; hinted mmap and `MAP_FIXED` at C level).
 
@@ -75,5 +79,8 @@ Smaller items:
   external kills in `overflow_ok`.
 - SL: syntax of properties, qualified names and ambiguity errors in name
   resolution, the language's name.
+- Code: translate.rs's instruction rows by name, not number, and its
+  `simp(L, ..)` counts derived; the kernel `Env`'s fields private; the
+  interpreter checking literal widths as the elaborator does.
 - Checker speed, if needed: generated step theorems, memoised normal forms
   in `taut` / `simp`, parallel checking.

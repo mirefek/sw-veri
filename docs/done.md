@@ -57,6 +57,12 @@ item is a short summary of finished work; details are in the files named.
   shifts, `and` / `or` / `xor` / `not` bit by bit, the complement, `x - 1`
   and `-x` around the lowest set bit, bit extensionality. For loops, `while_inv`, `while_var` and
   `while_exists` are proven by induction, with no open lemmas.
+- **Codebase review**: the extensions' soundness holes closed
+  (arith overflow and widths, simp's matching and literal substitution,
+  names read by meaning: pinned prelude, definitions and loop lemmas),
+  each with a regression test; the elaborator rejects what would change a
+  program's meaning; the cache keyed by source and checker hashes; unused
+  lemmas deleted.
 - **The checker**: a per-file cache. The main chain checks in about 5 s
   uncached and 0.2 s cached.
 
