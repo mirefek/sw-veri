@@ -58,24 +58,32 @@ Ongoing: how could the languages make progress more efficient?
   `ms.rd_wr_far` / `ms.rd_wr_same` with apartness facts), nested
   `fn_update(s, "vm", ..)`, and each operation's lemma instantiated by
   hand (queue's linked case: ~45 of its 55 lines).
-  1. Memory equations, proven and registered for rsimp
-     (proofs/mallocng_mem.core): a read of the word just written; a read
-     past a write whose 8 bytes are apart (`a + 8 <= b || b + 8 <= a` as
-     integers: arith decides it, no alignment facts); `word_ok` of a
-     written memory is the memory's (bytes do not matter); a written world
-     is a world; `fn_update` of `vm` twice. An apartness arith cannot
-     derive (m != P from a precondition) comes as a fact; undecided, the
-     read stays.
-  2. `step` with lemmas: `with ms.setnext_det, ms.prev_det, ..` -- each
-     bind's operation matched with the lemma's conclusion, its premises
-     discharged by rsimp with the memory rules and the facts after a new
-     `using`; after each operation what was read normalized (`mnext(V3,
-     m)` to `H`).
-  3. Measure on queue's linked case (~55 lines to ~10 expected), then
-     dequeue's; set_size written with it.
-  Risks: rsimp's speed on nested memory terms (else: normalize the value
-  read only); conditional rules' premises found reliably (tested first on
-  queue).
+  A procedure of its own, not rsimp: the decision is which write a read
+  hits, made by a fixed algorithm.
+  1. Two canonical primitives on byte maps, `store_le(B, a, n, v)` and
+     `le(B, a, n)`; what specs and GIMPLE use are views of them,
+     registered with the lemma that connects them (the extension point):
+     `mem write mallocng_specs.wr64 ms.wr64_store`, `mem read
+     mallocng_specs.mnext ms.mnext_rd`, `mem frame mallocng_specs.word_ok
+     ms.word_ok_bytes` (a predicate the bytes do not matter to), ..
+  2. A read of m bytes at b in w_k(..w_1(M0)..), the writes from the
+     outermost in, each of n bytes at a, in this order: apart (`a + n <= b
+     || b + m <= a`): past it; the same (a = b, n = m): its value;
+     contained: its bytes from that offset (zero_meta's zeros); else stop,
+     naming the write undecided. Each test one arith call on the integer
+     facts given (bounds, `al8` -- a literal modulus --, `m != P`); each
+     decision one canonical lemma: a checked proof, no search, nothing
+     trusted. A frame predicate of M: of M0, a step per write.
+  3. Interfaces: `mem(f..)` a goal rule (`read = v`, `word_ok(V3, ..)`);
+     `mem_read({t}, f..)` the equation `t = value`, the value computed;
+     `step .. with ms.setnext_det, .. using f..`: operations' lemmas
+     matched with the operations, their premises (world, words'
+     usability) by `mem`, each value read resolved by `mem_read`.
+  4. Measure on queue's linked case (~55 lines to ~10 expected) and
+     `ms.dq_linked`; set_size written with it.
+  The user gives the aliasing facts a precondition provides (`m != P`,
+  alignment, bounds); a failure names the write and the cases unproven.
+
 - A bit library (a_ctz_32's `x & -x = 2^tz(x)`, a_clz_32's bit smearing,
   the mask-heavy functions): `arith` reading products of non-literals in a
   polynomial normal form (a trusted extension: the ring facts it already
