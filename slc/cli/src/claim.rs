@@ -28,13 +28,14 @@ pub fn claim(args: &[String]) -> CResult {
     }
     let mut elf_path = None;
     let mut out = None;
-    let mut owned: Vec<String> = MUSL_OWNED.iter().map(|s| s.to_string()).collect();
+    // (musl's data symbols: owned if present; those given: required)
+    let mut owned: Vec<(String, bool)> = MUSL_OWNED.iter().map(|s| (s.to_string(), false)).collect();
     let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--elf" => elf_path = it.next().cloned(),
             "-o" => out = it.next().map(PathBuf::from),
-            "--owned" => owned.extend(it.next().cloned()),
+            "--owned" => owned.push((it.next().ok_or("--owned needs a symbol")?.clone(), true)),
             other => return Err(format!("unknown argument `{}`", other)),
         }
     }
@@ -54,10 +55,13 @@ pub fn claim(args: &[String]) -> CResult {
             ranges.push((s.vaddr, s.vaddr + s.memsz, what.into()));
         }
     }
-    for n in &owned {
-        match elf.symbols.iter().find(|s| &s.name == n) {
-            Some(s) if s.size > 0 => ranges.push((s.value, s.value + s.size, n.clone())),
-            _ => eprintln!("note: owned symbol `{}` not in the binary, skipped", n),
+    for (n, required) in &owned {
+        let found: Vec<_> = elf.symbols.iter().filter(|s| &s.name == n && s.size > 0).collect();
+        match found.as_slice() {
+            [s] => ranges.push((s.value, s.value + s.size, n.clone())),
+            [] if !required => eprintln!("note: musl's symbol `{}` not in the binary, skipped", n),
+            [] => return Err(format!("owned symbol `{}` not in {}", n, elf_path)),
+            _ => return Err(format!("owned symbol `{}`: {} symbols of that name in {}", n, found.len(), elf_path)),
         }
     }
 
@@ -123,17 +127,17 @@ pub fn claim(args: &[String]) -> CResult {
     let statement = el.b.ex(&[inv, own], inner);
     el.claims.push(("musl_malloc".into(), statement));
 
-    // write, then re-check with the kernel from the text
+    // re-check with the kernel from the text, then write
     let text = el.core_text();
-    std::fs::write(&out, &text).map_err(|e| e.to_string())?;
     let mut env = Env::new();
     syntax::load(&mut env, &prelude, true).map_err(|e| format!("prelude: {}", e))?;
-    let rep = syntax::load(&mut env, &text, false).map_err(|e| format!("kernel rejected {}: {}", out.display(), e))?;
+    let rep = syntax::load(&mut env, &text, false).map_err(|e| format!("kernel rejected the claim text: {}", e))?;
+    std::fs::write(&out, &text).map_err(|e| e.to_string())?;
     println!("wrote {} ({} bytes): {} definitions, claims: {}", out.display(), text.len(), rep.defs, rep.claims.join(", "));
     println!("kernel check: ok (definitions conservative, claims closed, no axioms outside the prelude)");
 
     // human-readable summary of everything the claim rests on
-    let summary = summary(&root, &elf_path, &bytes, &elf, (main_at, malloc_at, free_at, calloc_at), &ranges, &env, &sm, &el);
+    let summary = summary(&root, &prelude, &elf_path, &bytes, &elf, (main_at, malloc_at, free_at, calloc_at), &ranges, &env, &sm, &el);
     let spath = out.with_extension("summary.txt");
     std::fs::write(&spath, &summary).map_err(|e| e.to_string())?;
     println!("wrote {}", spath.display());
@@ -143,6 +147,7 @@ pub fn claim(args: &[String]) -> CResult {
 #[allow(clippy::too_many_arguments)]
 fn summary(
     root: &std::path::Path,
+    prelude: &str,
     elf_path: &str,
     bytes: &[u8],
     elf: &Elf,
@@ -156,8 +161,15 @@ fn summary(
     let rel = |p: &std::path::Path| p.strip_prefix(root).unwrap_or(p).display().to_string();
     s.push_str("CLAIM musl_malloc\n================\n\n");
     s.push_str("Statement (in the logic of core/prelude.core; full text in the .core file):\n\n");
+    // (the laws as declared in layers/malloc.sl)
+    let laws: Vec<String> = sm
+        .files
+        .iter()
+        .filter(|(p, _)| rel(p) == "layers/malloc.sl")
+        .flat_map(|(_, t)| t.lines().filter_map(|l| l.strip_prefix("law ")).map(|l| l.split('(').next().unwrap_or("").trim().to_string()).collect::<Vec<_>>())
+        .collect();
     s.push_str("  ex alloc_inv, alloc_owned.\n");
-    s.push_str("    laws(alloc_inv, alloc_owned)                        -- layers/malloc.sl: inv_wf, owned_private, owned_mapped, frame\n");
+    s.push_str(&format!("    laws(alloc_inv, alloc_owned)                        -- layers/malloc.sl: {}\n", laws.join(", ")));
     s.push_str("    && init_at_main(FILE, main, STATIC)                 -- invariant holds, no blocks, when main starts\n");
     s.push_str("                                                           (for runs started without privileges:\n");
     s.push_str("                                                           claim_malloc.unprivileged)\n");
@@ -174,15 +186,15 @@ fn summary(
     s.push_str("\nTrusted base:\n");
     s.push_str("  1. The kernel (slc/kernel): terms, modus ponens, instantiation, conservative definitions,\n");
     s.push_str("     literal arithmetic; it re-read and accepted the .core file.\n");
-    let prelude = std::fs::read(root.join("core/prelude.core")).unwrap_or_default();
-    s.push_str(&format!("  2. Logic axioms: core/prelude.core (sha256 {}):\n     ", sha256::hex(&prelude)));
+    s.push_str(&format!("  2. Logic axioms: core/prelude.core (sha256 {}):\n     ", sha256::hex(prelude.as_bytes())));
     s.push_str(&env.axioms.iter().map(|a| a.0.clone()).collect::<Vec<_>>().join(", "));
     s.push_str("\n  3. The model of x86_64 + Linux (module x86_64_linux) is assumed to describe the\n");
     s.push_str("     real machine and kernel. Its files:\n");
     let mut layers = Vec::new();
     for (path, text) in &sm.files {
         let line = format!("       {:<32} sha256 {}\n", rel(path), sha256::hex(text.as_bytes()));
-        if text.trim_start().starts_with("spec ") {
+        // (the model: the files under spec/)
+        if rel(path).starts_with("spec/") {
             s.push_str(&line);
         } else {
             layers.push(line);

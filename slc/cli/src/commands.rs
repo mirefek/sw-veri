@@ -5,20 +5,29 @@ pub type CResult = Result<(), String>;
 
 /// The file cache of `kernel-check`: per checked file, its statements (the
 /// file with its proofs replaced by `cached`, `sl_kernel::ext::cache`),
-/// in build/kernel-cache. A file's entry is used when the file is not
-/// newer than it and it was written by the same checker after the same
-/// statements of the files before (their hash, `prefix`); otherwise the
-/// file is checked and its entry written again.
+/// in build/kernel-cache. A file's entry is used when it was written for
+/// the same contents of the file (their hash), by the same checker (its
+/// executable's hash), after the same statements of the files before
+/// (their hash, `prefix`); otherwise the file is checked and its entry
+/// written again. (No modification times: a file restored with an older
+/// date, or changed within one clock tick, is checked again.)
 struct Cache {
     dir: PathBuf,
-    /// the checker's identity: its executable's modification time
+    /// the checker's identity: a hash of its executable's bytes
     checker: String,
 }
 
 impl Cache {
     fn new() -> Cache {
-        let exe = std::env::current_exe().ok().and_then(|e| std::fs::metadata(e).ok()).and_then(|m| m.modified().ok());
-        let checker = exe.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos().to_string()).unwrap_or_default();
+        use std::hash::{Hash, Hasher};
+        let exe = std::env::current_exe().ok().and_then(|e| std::fs::read(e).ok());
+        let checker = exe
+            .map(|b| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                b.hash(&mut h);
+                format!("{:016x}-{}", h.finish(), b.len())
+            })
+            .unwrap_or_default();
         Cache { dir: repo_root().join("build/kernel-cache"), checker }
     }
 
@@ -29,34 +38,33 @@ impl Cache {
         self.dir.join(format!("{}-{}", &key[..16], base))
     }
 
-    fn header(&self, prefix: &str, first: bool) -> String {
-        format!("// slc kernel-check cache (statements only; see `slc kernel-check --no-cache`)\n// checker {}\n// prefix {}\n// first {}\n", self.checker, prefix, first)
+    fn header(&self, src: &str, prefix: &str, first: bool) -> String {
+        format!(
+            "// slc kernel-check cache (statements only; see `slc kernel-check --no-cache`)\n// checker {}\n// source {}\n// prefix {}\n// first {}\n",
+            self.checker,
+            crate::sha256::hex(src.as_bytes()),
+            prefix,
+            first
+        )
     }
 
-    /// f's statements, if its entry holds
-    fn lookup(&self, f: &std::path::Path, prefix: &str, first: bool) -> Option<String> {
+    /// f's statements, if its entry holds for f's contents `src`
+    fn lookup(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool) -> Option<String> {
         if self.checker.is_empty() {
             return None;
         }
-        let e = self.entry(f);
-        let (tf, te) = (std::fs::metadata(f).ok()?.modified().ok()?, std::fs::metadata(&e).ok()?.modified().ok()?);
-        if tf > te {
-            return None;
-        }
-        let text = std::fs::read_to_string(&e).ok()?;
-        text.strip_prefix(&self.header(prefix, first)).map(|s| s.to_string())
+        let text = std::fs::read_to_string(self.entry(f)).ok()?;
+        text.strip_prefix(&self.header(src, prefix, first)).map(|s| s.to_string())
     }
 
-    /// writes f's entry, dated as f when read (`modified`): a change of f
-    /// while it was checked makes f newer
-    fn store(&self, f: &std::path::Path, prefix: &str, first: bool, stmts: &str, modified: std::time::SystemTime) {
+    /// writes f's entry for its contents `src` (as read before checking)
+    fn store(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool, stmts: &str) {
         if self.checker.is_empty() || std::fs::create_dir_all(&self.dir).is_err() {
             return;
         }
         let e = self.entry(f);
         let tmp = e.with_extension(format!("tmp{}", std::process::id()));
-        let ok = std::fs::write(&tmp, format!("{}{}", self.header(prefix, first), stmts)).is_ok()
-            && std::fs::File::options().write(true).open(&tmp).and_then(|h| h.set_modified(modified)).is_ok();
+        let ok = std::fs::write(&tmp, format!("{}{}", self.header(src, prefix, first), stmts)).is_ok();
         if !ok || std::fs::rename(&tmp, &e).is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
@@ -92,6 +100,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
     let mut prover = sl_proof::ScriptProver;
     // (the hash of the statements of the files so far)
     let mut prefix = String::new();
+    let mut n_cached = 0;
     for (i, f) in files.iter().enumerate() {
         let first = i == 0;
         let t0 = std::time::Instant::now();
@@ -99,8 +108,12 @@ pub fn kernel_check(args: &[String]) -> CResult {
         if std::env::var("SLC_TIDY").is_ok() {
             eprintln!("tidy-file\t{}", f.display());
         }
-        let hit = cache.as_ref().and_then(|c| c.lookup(f, &prefix, first));
+        let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
+        let hit = cache.as_ref().and_then(|c| c.lookup(f, &src, &prefix, first));
         let cached = hit.is_some();
+        if cached {
+            n_cached += 1;
+        }
         let (rep, stmts) = match hit {
             Some(stmts) => {
                 let rep = syntax::load_cached(&mut env, &stmts, first)
@@ -108,12 +121,10 @@ pub fn kernel_check(args: &[String]) -> CResult {
                 (rep, stmts)
             }
             None => {
-                let modified = std::fs::metadata(f).and_then(|m| m.modified()).map_err(|e| format!("{}: {}", f.display(), e))?;
-                let src = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f.display(), e))?;
                 let rep = syntax::load_with(&mut env, &src, first, Some(&mut prover)).map_err(|e| format!("{}: {}", f.display(), e))?;
                 let stmts = statements(&env, &src, &rep);
                 if let Some(c) = &cache {
-                    c.store(f, &prefix, first, &stmts, modified);
+                    c.store(f, &src, &prefix, first, &stmts);
                 }
                 (rep, stmts)
             }
@@ -161,6 +172,9 @@ pub fn kernel_check(args: &[String]) -> CResult {
         }
     }
     println!("ok: all declarations well-formed, definitions conservative, proofs checked, claims closed");
+    if n_cached > 0 {
+        println!("  ({} of {} files from the cache: their proofs as checked before; --no-cache checks them all)", n_cached, files.len());
+    }
     Ok(())
 }
 

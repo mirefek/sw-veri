@@ -39,6 +39,16 @@ ex inv owned. Laws(inv, owned) && Init(inv, owned)
               && Impl(malloc) && Impl(free) && Impl(calloc)
 ```
 
+`Init` (`init_at_main` in layers/claim_malloc.sl) is about the runs that
+reach `main`:
+- of unprivileged processes only;
+- the allocator may own, at `main`, its `static` bytes (all non-writable
+  loaded segments -- the client's code and read-only data included -- and
+  musl's data symbols), the thread descriptor up to errno (`fs_base ..
+  +0x34`), and the auxiliary vector and AT_RANDOM bytes.
+If the model could not reach `main` at all, `Init` would hold vacuously;
+the startup proof (docs/todo.md §3) has to show that it does.
+
 ## The levels
 
 Each level sees the state as its own world. A program at a level is a
