@@ -410,6 +410,40 @@ def tr.implements_at(f, spec, base, code, statics) :=
   all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) ->
     app(s, "rip") = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, objs, mem, s, o)
 
+// The same for an entry whose stack need not be 16-byte aligned: GCC calls
+// a local function that needs no alignment (IPA stack alignment, e.g. a
+// trap) with rsp as its caller's frame leaves it. The ABI's entry
+// conditions but the alignment:
+def tr.entry_ok_u(m, args) := ((((abi.stack_page(app(m, "vm"), int_div(app(app(m, "gpr"), 4), x86_64_linux.PAGE)) && x86_64_linux.can_access(app(m, "vm"), app(app(m, "gpr"), 4), 1)) &&
+  abi.stack_reserve(app(m, "vm"))) && !app(app(m, "flags"), "df")) && (all x0. x0 in omega -> int_lt(x0, seq_len(args)) -> app(app(m, "gpr"), app(abi.ARG_REGS, x0)) = app(args, x0))) &&
+  abi.thread_ok(app(m, "vm"), app(m, "fs_base"))
+
+def tr.implements_at_u(f, spec, base, code, statics) :=
+  all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) ->
+    app(s, "rip") = f -> tr.entry_ok_u(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, objs, mem, s, o)
+
+// (the ABI's entry: the alignment-free one)
+theorem tr.entry_ok_u_of: all m args. abi.entry_ok(m, args) -> tr.entry_ok_u(m, args)
+proof
+  fix m args
+  assume h
+  show by defs(taut(expand(h, abi.entry_ok)), tr.entry_ok_u)
+qed
+
+// (the contract for any entry: the contract)
+theorem tr.implements_u: all f spec base code statics. tr.implements_at_u(f, spec, base, code, statics) -> tr.implements_at(f, spec, base, code, statics)
+proof
+  fix f spec base code statics
+  assume h
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(app(s, "vm"), base, code, statics) ->
+      app(s, "rip") = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, objs, mem, s, o) proof
+    fix args objs mem s o
+    assume h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11
+    show := mp(all_elim(expand(h, tr.implements_at_u), {args}, {objs}, {mem}, {s}, {o}), h1, h2, h3, h4, h5, h6, h7, apply(tr.entry_ok_u_of, h8), h9, h10, h11)
+  qed
+  show by defs(g, tr.implements_at)
+qed
+
 // (an outcome the spec matches only by raising: so is every outcome)
 theorem tr.matches_raise: all spec args objs mem s x o. abi.matches(spec, args, objs, mem, s, exc(x, exc_val("disc", empty))) -> abi.matches(spec, args, objs, mem, s, o)
 proof

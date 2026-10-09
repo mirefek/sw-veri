@@ -477,6 +477,9 @@ fn mentions_bytes(t: &Term, b: &[u8]) -> bool {
 
 /// the length of a list literal (`seq_one`s concatenated)
 fn list_len(e: &Eff, t: &Term) -> Option<usize> {
+    if e.app(t, "empty", 0).is_some() {
+        return Some(0);
+    }
     if e.app(t, "seq_one", 1).is_some() {
         return Some(1);
     }

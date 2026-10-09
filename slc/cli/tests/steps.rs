@@ -101,8 +101,19 @@ fn translations_are_generated_and_check() {
     let slc = env!("CARGO_BIN_EXE_slc");
     let tmp = std::env::temp_dir();
     let id = std::process::id();
-    let (steps, gimple) = (tmp.join(format!("slc-tr-steps-{}.core", id)), tmp.join(format!("slc-tr-gimple-{}.core", id)));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "-o"]).arg(&steps).output().unwrap();
+    let (steps, gimple, text) = (tmp.join(format!("slc-tr-steps-{}.core", id)), tmp.join(format!("slc-tr-gimple-{}.core", id)), tmp.join(format!("slc-tr-text-{}.core", id)));
+    // (malloc.c's copies of the static functions also in other files: by address)
+    let g = Command::new(slc)
+        .current_dir(&root)
+        .args(["steps"])
+        .arg(&elf)
+        .arg(&claim)
+        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "-o"])
+        .arg(&steps)
+        .arg("--text")
+        .arg(&text)
+        .output()
+        .unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
@@ -119,8 +130,10 @@ fn translations_are_generated_and_check() {
             .iter()
             .map(|f| f.into()),
     );
+    // (the program text: the code every contract assumes loaded)
+    files.push(text.clone().into());
     let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht")] {
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht"), ("queue", "qut")] {
         let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
         let t = Command::new(slc)
             .current_dir(&root)
@@ -141,6 +154,7 @@ fn translations_are_generated_and_check() {
         .current_dir(&root)
         .args(["kernel-check", "--no-cache"])
         .args(&files)
+        .arg("proofs/a_crash.core")
         .args(&certs)
         .args(["proofs/mallocng_link.core", "proofs/mallocng_c2.core"])
         .output()
@@ -160,13 +174,15 @@ fn translations_are_generated_and_check() {
         ("a_clz_32", "0 definitions, 6 theorems"),
         ("dequeue", "0 definitions, 10 theorems"),
         ("dequeue_head", "0 definitions, 6 theorems"),
+        ("queue", "0 definitions, 10 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
-        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 10 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 12 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 31 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
-    for f in certs.iter().chain([&steps, &gimple]) {
+    for f in certs.iter().chain([&steps, &gimple, &text]) {
         let _ = std::fs::remove_file(f);
     }
 }

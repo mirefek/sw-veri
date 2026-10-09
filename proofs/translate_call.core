@@ -762,16 +762,18 @@ proof
 qed
 
 // ----------------------------------------------------------------------
-//  A call from a frame of fr bytes (fr = 8 mod 16, at most tr.FMAX): rsp R
-//  = S - fr (S the entry's rsp), 16-byte aligned; the return address to the
-//  8 bytes from R - 8, on one page, at most 17 pages below S's
+//  A call from a frame of fr bytes (a multiple of 8, at most tr.FMAX): rsp
+//  R = S - fr (S the entry's rsp) -- 16-byte aligned if fr = 8 mod 16, as
+//  the ABI wants; GCC calls a local function that needs no alignment
+//  without (IPA stack alignment) --; the return address to the 8 bytes from
+//  R - 8, on one page, at most 17 pages below S's
 
-def tr.cfr(fr) := fr in omega && int_mod(fr, 16) = 8 && int_le(fr, tr.FMAX)
+def tr.cfr(fr) := fr in omega && int_mod(fr, 8) = 0 && int_le(8, fr) && int_le(int_add(fr, 8), tr.FMAX)
 
 // (rsp at a call: R)
 theorem tr.call_rsp: all s base code fr m w. tr.inv(s, base, code, fr, m, w) -> tr.cfr(fr) ->
   rb: app(app(m, "gpr"), 4) in bits(64) && r16: int_le(16, app(app(m, "gpr"), 4)) && rlt: int_lt(app(app(m, "gpr"), 4), 140737488355328) &&
-  ral: int_mod(app(app(m, "gpr"), 4), 16) = 0 && rs: int_le(app(app(m, "gpr"), 4), int_sub(app(app(s, "gpr"), 4), 8)) &&
+  ral: int_mod(app(app(m, "gpr"), 4), 8) = 0 && rs: int_le(app(app(m, "gpr"), 4), int_sub(app(app(s, "gpr"), 4), 8)) &&
   rS: int_le(int_sub(app(app(s, "gpr"), 4), tr.FMAX), app(app(m, "gpr"), 4)) && sb: app(app(s, "gpr"), 4) in bits(64) &&
   slt: int_lt(app(app(s, "gpr"), 4), 140737488355328) && sal: int_mod(bits_add(64, app(app(s, "gpr"), 4), 8), 16) = 0 && sg: int_le(1048576, app(app(s, "gpr"), 4))
 proof
@@ -779,24 +781,24 @@ proof
   assume hi hc
   let S := app(app(s, "gpr"), 4)
   have {sM, rspm, slt, sal} := hi
-  have fo f16 fm := expand(hc, tr.cfr)
+  have fo f16 f8 fm := expand(hc, tr.cfr)
   have sb := apply(x86i.rsp_typed, sM)
   have sg := apply(tr.inv_gap, hi)
   have so: S in omega by simp(sb)
   have m1: int_mod(int_add(S, 8), 16) = 0 by simp(sb, sal, slt)
   have rb: int_sub(S, fr) in bits(64) by arith(sb, sg, fo, fm)
-  have ra: int_mod(int_sub(S, fr), 16) = 0 by arith(m1, f16, so, fo)
+  have ra: int_mod(int_sub(S, fr), 8) = 0 by arith(m1, f16, so, fo)
   have r1 := rewrite(sym(rspm), rb)
   have r2: int_le(16, app(app(m, "gpr"), 4)) by arith(rspm, sg, fm, fo)
   have r3: int_lt(app(app(m, "gpr"), 4), 140737488355328) by arith(rspm, slt, fo)
   have r4 := rewrite(sym(rspm), ra)
-  have r5: int_le(app(app(m, "gpr"), 4), int_sub(S, 8)) by arith(rspm, f16, fo)
+  have r5: int_le(app(app(m, "gpr"), 4), int_sub(S, 8)) by arith(rspm, f8, fo)
   have r6: int_le(int_sub(S, tr.FMAX), app(app(m, "gpr"), 4)) by arith(rspm, fm)
   show := conj(r1, r2, r3, r4, r5, r6, sb, slt, sal, sg)
 qed
 
 // the push's bytes: R - 8 + j, on R - 8's page
-theorem tr.push_at: all R j. R in bits(64) -> int_le(16, R) -> int_lt(R, 140737488355328) -> int_mod(R, 16) = 0 ->
+theorem tr.push_at: all R j. R in bits(64) -> int_le(16, R) -> int_lt(R, 140737488355328) -> int_mod(R, 8) = 0 ->
   j in omega -> int_lt(j, 8) ->
   bits_add(64, bits_sub(64, R, 8), bits_of_int(64, j)) = int_add(int_sub(R, 8), j) &&
   int_div(int_add(int_sub(R, 8), j), 4096) = int_div(int_sub(R, 8), 4096)
@@ -808,13 +810,13 @@ proof
   have e0: int_mod(int_add(int_mod(int_sub(R, 8), 18446744073709551616), int_mod(j, 18446744073709551616)), 18446744073709551616) = int_add(int_sub(R, 8), j)
     by arith(sb, h16, hl, hj, hj8)
   have e: bits_add(64, bits_sub(64, R, 8), bits_of_int(64, j)) = int_add(int_sub(R, 8), j) by defs(rewrite(sym(p64), e0), bits_add, bits_sub, bits_of_int)
-  have m2: int_le(8, int_mod(int_sub(R, 8), 4096)) && int_le(int_mod(int_sub(R, 8), 4096), 4088) by simp(hr, ha, h16)
+  have m2: int_le(int_mod(int_sub(R, 8), 4096), 4088) by simp(hr, ha, h16)
   have d: int_div(int_add(int_sub(R, 8), j), 4096) = int_div(int_sub(R, 8), 4096) by simp(hr, h16, m2, hj, hj8)
   show by taut(e, d)
 qed
 
 // the pages: R - 8's (L), R's, S's (P0) in order, within the guard gap
-theorem tr.call_pages: all S R. R in bits(64) -> int_le(16, R) -> int_mod(R, 16) = 0 -> int_le(R, int_sub(S, 8)) -> int_le(int_sub(S, tr.FMAX), R) -> S in bits(64) ->
+theorem tr.call_pages: all S R. R in bits(64) -> int_le(16, R) -> int_mod(R, 8) = 0 -> int_le(R, int_sub(S, 8)) -> int_le(int_sub(S, tr.FMAX), R) -> S in bits(64) ->
   lr: int_le(int_div(int_sub(R, 8), 4096), int_div(R, 4096)) && rl: int_le(int_div(R, 4096), int_add(int_div(int_sub(R, 8), 4096), 1)) &&
   rp: int_le(int_div(R, 4096), int_div(S, 4096)) && gap: int_le(int_mul(int_sub(int_div(S, 4096), int_div(int_sub(R, 8), 4096)), 4096), 1048576)
 proof
@@ -823,8 +825,7 @@ proof
   have ro: R in omega by simp(hr)
   have so: S in omega by simp(hs)
   have d1: int_le(int_div(int_sub(R, 8), 4096), int_div(R, 4096)) by simp(hr, h16)
-  have m2: int_le(8, int_mod(int_sub(R, 8), 4096)) by simp(hr, ha, h16)
-  have d2: int_le(int_div(R, 4096), int_add(int_div(int_sub(R, 8), 4096), 1)) by simp(hr, h16, m2)
+  have d2: int_le(int_div(R, 4096), int_add(int_div(int_sub(R, 8), 4096), 1)) by simp(hr, h16)
   have d3: int_le(int_div(R, 4096), int_div(S, 4096)) by simp(hr, hs, hrs)
   have d4: int_le(int_mul(int_sub(int_div(S, 4096), int_div(int_sub(R, 8), 4096)), 4096), 1048576) by arith(hrs, hsr, ro, so, h16)
   show := conj(d1, d2, d3, d4)
@@ -1330,7 +1331,7 @@ qed
 
 // (the push's slot, R - 8, accessible: on a stack page -- the guard gap
 // below S's leaves it to the stack)
-theorem tr.push_page_stack: all cv S R. R in bits(64) -> int_le(16, R) -> int_mod(R, 16) = 0 -> int_le(R, int_sub(S, 8)) -> int_le(int_sub(S, tr.FMAX), R) -> S in bits(64) ->
+theorem tr.push_page_stack: all cv S R. R in bits(64) -> int_le(16, R) -> int_mod(R, 8) = 0 -> int_le(R, int_sub(S, 8)) -> int_le(int_sub(S, tr.FMAX), R) -> S in bits(64) ->
   abi.stack_gap_free(cv) -> abi.stack_page(cv, int_div(S, 4096)) -> x86_64_linux.can_access(cv, int_sub(R, 8), 1) ->
   abi.stack_page(cv, int_div(int_sub(R, 8), 4096))
 proof
@@ -1447,7 +1448,7 @@ theorem tr.callee_ready: all s base code fr m w ds RA T m1 e1 C n. tr.inv(s, bas
   C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
     "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
   gc.sound(w) ->
-  abi.entry_ok(C, tr.aregs(m, n)) && abi.view_ok(C, ds, app(w, "vm")) && tr.objs_ok(C, ds) &&
+  tr.entry_ok_u(C, tr.aregs(m, n)) && (int_mod(fr, 16) = 8 -> abi.entry_ok(C, tr.aregs(m, n))) && abi.view_ok(C, ds, app(w, "vm")) && tr.objs_ok(C, ds) &&
   abi.view(C, ds, app(w, "vm")) = w && app(w, "vm") in x86_64_linux.Vm && ds in set_type(omega)
 proof
   fix s base code fr m w ds RA T m1 e1 C n
@@ -1504,7 +1505,6 @@ proof
   // the ABI's entry
   have c4: app(app(C, "gpr"), 4) = int_sub(R, 8) by simp(cgpr)
   have cdf: !app(app(C, "flags"), "df") by simp(cfl, mdf)
-  have al: int_mod(bits_add(64, int_sub(R, 8), 8), 16) = 0 by simp(rb, r16, rlt, ral)
   have aln aat := apply(tr.aregs_at, {m}, {n}, hno)
   have ar: all x0. x0 in omega -> int_lt(x0, seq_len(tr.aregs(m, n))) -> app(app(C, "gpr"), app(abi.ARG_REGS, x0)) = app(tr.aregs(m, n), x0) proof
     fix x0
@@ -1519,8 +1519,18 @@ proof
   have tC2 := rewrite(sym(cfs), tC)
   have spC2: abi.stack_page(app(C, "vm"), int_div(app(app(C, "gpr"), 4), x86_64_linux.PAGE)) by defs(simp(c4, spC), x86_64_linux.PAGE)
   have acc2: x86_64_linux.can_access(app(C, "vm"), app(app(C, "gpr"), 4), 1) by simp(c4, acc0)
-  have al2: int_mod(bits_add(64, app(app(C, "gpr"), 4), 8), 16) = 0 by simp(c4, al)
-  have eok: abi.entry_ok(C, tr.aregs(m, n)) by defs(taut(spC2, acc2, rsvC, al2, cdf, ar, tC2), abi.entry_ok)
+  have eoku: tr.entry_ok_u(C, tr.aregs(m, n)) by defs(taut(spC2, acc2, rsvC, cdf, ar, tC2), tr.entry_ok_u)
+  // (aligned as the ABI wants: a frame of 8 mod 16)
+  have eok: int_mod(fr, 16) = 8 -> abi.entry_ok(C, tr.aregs(m, n)) proof
+    assume h8
+    have {er4, sal} := apply(tr.inv_call, hi)
+    have m1: int_mod(int_add(S, 8), 16) = 0 by simp(sb, sal, slt)
+    have fo: fr in omega := expand(hcf, tr.cfr).1
+    have ra16: int_mod(R, 16) = 0 by arith(er4, m1, h8, so, fo)
+    have al: int_mod(bits_add(64, int_sub(R, 8), 8), 16) = 0 by simp(rb, r16, rlt, ra16)
+    have al2: int_mod(bits_add(64, app(app(C, "gpr"), 4), 8), 16) = 0 by simp(c4, al)
+    show by defs(taut(spC2, acc2, rsvC, al2, cdf, ar, tC2), abi.entry_ok)
+  qed
   // the view
   have vf := expand(cvf, x86.vm_fields)
   have wmC: abi.world_matches(app(C, "vm"), app(C, "vm"), WV, ds, abi.sp(C)) proof
@@ -1586,8 +1596,12 @@ proof
   have veq: abi.view(C, ds, WV) = w by simp(we, cow, cfs, ccw, wob)
   have wvv: WV in x86_64_linux.Vm by simp(expand(wW, abi.World))
   have dso: ds in set_type(omega) by simp(expand(wW, abi.World), wob)
-  show by taut(eok, vok, ook, veq, wvv, dso)
+  show by taut(eoku, eok, vok, ook, veq, wvv, dso)
 qed
+
+// A callee's contract at a call from a frame of fr bytes: the ABI's (its
+// entry aligned), or one for any entry
+def tr.callee_contract(fr, f, g, cb, cc, st) := (int_mod(fr, 16) = 8 && tr.implements_at(f, g, cb, cc, st)) || tr.implements_at_u(f, g, cb, cc, st)
 
 // the homes: within the frame (at or above the call's rsp, S - fr)
 def tr.hin(hs, fr) := all c. c in dom(hs) -> int_le(int_sub(18446744073709551616, fr), c)
@@ -2136,7 +2150,7 @@ theorem tr.callee_sim(g, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k,
   runs(x86_64_linux.touch_range(bits_sub(64, app(app(m, "gpr"), 4), 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
   C = fn_update(fn_update(fn_update(m1, "vm", fn_update(app(m1, "vm"), "bytes", x86_64_linux.store_le(app(app(m1, "vm"), "bytes"), bits_sub(64, app(app(m, "gpr"), 4), 8), 8, RA))),
     "gpr", fn_update(app(m1, "gpr"), 4, bits_sub(64, app(app(m, "gpr"), 4), 8))), "rip", T) ->
-  tr.implements_at(T, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
+  tr.callee_contract(fr, T, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
   tr.homes(s, m, hs) -> tr.hin(hs, fr) -> fd in omega -> int_le(fd, int_add(fr, 8)) ->
   g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
   (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> (all t. t in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t, x8) && k(x8, x1)), w, diverge(t))) ->
@@ -2177,14 +2191,22 @@ proof
   // ... holding: the callee's entry, its contract
   have good: gc.sound(W1) -> tr.sim(s, v, P, w, C) proof
     assume hs
-    have eok vok ook veq wvv dso := apply(tr.callee_ready, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {RA}, {T}, {m1}, {e1}, {C}, {n}, hi, hcf, hmm, hra, ht, hno, hn6, htr, hC, hs)
+    have eoku eok vok ook veq wvv dso := apply(tr.callee_ready, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {RA}, {T}, {m1}, {e1}, {C}, {n}, hi, hcf, hmm, hra, ht, hno, hn6, htr, hC, hs)
     have l1 := mp(all_elim(expand(kc, tr.keeps_code), {cb}, {cc}, {st}), hcb, hld)
     have lC := mp(all_elim(expand(ckc, tr.keeps_code), {cb}, {cc}, {st}), hcb, l1)
     let WV := app(W1, "vm")
     have ctr: all oc. tr.run_d(C, C, oc) -> tr.matches_t(g, regs, v, WV, C, oc) proof
       fix oc
       assume hrd
-      show := mp(all_elim(expand(himp, tr.implements_at), {regs}, {v}, {WV}, {C}, {oc}), hA, dso, wvv, cM, cu, lC, crip, eok, ook, vok, hrd)
+      have a8: (int_mod(fr, 16) = 8 && tr.implements_at(T, g, cb, cc, st)) -> tr.matches_t(g, regs, v, WV, C, oc) proof
+        assume h8
+        show := mp(all_elim(expand(h8.2, tr.implements_at), {regs}, {v}, {WV}, {C}, {oc}), hA, dso, wvv, cM, cu, lC, crip, mp(eok, h8.1), ook, vok, hrd)
+      qed
+      have au: tr.implements_at_u(T, g, cb, cc, st) -> tr.matches_t(g, regs, v, WV, C, oc) proof
+        assume hu0
+        show := mp(all_elim(expand(hu0, tr.implements_at_u), {regs}, {v}, {WV}, {C}, {oc}), hA, dso, wvv, cM, cu, lC, crip, eoku, ook, vok, hrd)
+      qed
+      show by taut(expand(himp, tr.callee_contract), a8, au)
     qed
     // (W1: a world)
     have ou := apply(abi.objs_univ, dso)
@@ -2412,7 +2434,7 @@ qed
 theorem tr.call(s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st, hs, ds, fd2, rs, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw):
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
   a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega ->
-  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.implements_at(f, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
+  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.callee_contract(fr, f, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
   tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
   g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
   (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
@@ -2424,7 +2446,7 @@ theorem tr.call(s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
 proof
   assume hat ha2 hoff hb hf himp0 hld hcb hcf hln hno hn6 hgt hio hreg hhin hfo hfd hk hd hpost
-  have himp: tr.implements_at(bits_add(64, a2, bits_sext(32, 64, off)), g, cb, cc, st) by rewrite(hf, himp0)
+  have himp: tr.callee_contract(fr, bits_add(64, a2, bits_sext(32, 64, off)), g, cb, cc, st) by rewrite(hf, himp0)
   let P := mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call(g, args), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
     x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have g0: all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) -> tr.sim(s, v, P, w, m) proof
@@ -2557,6 +2579,23 @@ proof
   qed
   have x64: x in bits(64) by taut(hk, k1, k2, k4, k8)
   show by defs(simp(e, x64), gimple.in_reg, gimple.arg)
+qed
+
+// (no arguments)
+theorem tr.args0: all rs. (all m. tr.regs(m, rs) -> tr.args_in(m, empty))
+proof
+  fix rs
+  fix m
+  assume hr
+  have g: all i. i in omega -> int_lt(i, seq_len(empty)) ->
+      app(app(m, "gpr"), app(abi.ARG_REGS, i)) in gimple.in_reg(fst(app(empty, i)), snd(app(empty, i))) proof
+    fix i
+    assume hi hl
+    have l0: seq_len(empty) = 0 by arith()
+    have f: false by arith(hi, hl, l0)
+    show by taut(f)
+  qed
+  show by defs(g, tr.args_in)
 qed
 
 // (1 argument(s): in rdi, rsi, rdx, rcx, r8, r9 in order)
@@ -2915,7 +2954,7 @@ qed
 theorem tr.call1(s, v, base, code, fr, a, a2, len, off, f, g, args, n, cb, cc, st, hs, ds, fd2, rs, w, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw):
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
   a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> base in omega ->
-  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.implements_at(f, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
+  f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.callee_contract(fr, f, g, cb, cc, st) -> abi.loaded(app(s, "vm"), cb, cc, st) -> cb in omega ->
   tr.cfr(fr) -> seq_len(args) = n -> n in omega -> int_le(n, 6) ->
   g in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(g, n) ->
   (all m. tr.regs(m, rs) -> tr.args_in(m, args)) -> tr.hin(hs, fr) -> fd2 in omega -> int_le(fd2, int_add(fr, 8)) ->
@@ -3104,4 +3143,244 @@ proof
   have sl: seq_len(bytes_seq(b1)) = bytes_len(b1) by defs(fdm, bytes_seq, seq_len)
   have r: abi.loaded(vm, int_add(lb, seq_len(bytes_seq(b1))), bytes_seq(b2), st) by taut(lc)
   show := rewrite(sl, r)
+qed
+
+// ----------------------------------------------------------------------
+//  Lists of code: concatenated, peeled (the program text's pieces)
+
+// (a pair in a list: its index below the length)
+theorem tr.list_idx: all l t i x. l in list_type(t) -> pair(i, x) in l -> i in omega && int_lt(i, seq_len(l)) && x in t
+proof
+  fix l t i x
+  assume hl hp
+  have sub: subset(l, cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := l], simp(expand(hl, list_type, seq_type)))
+  have c := mp(subset_elim[a := l, b := cart(omega, t), z := pair(i, x)], sub, hp)
+  obtain i2 x2, hi hx he from mp(cart_elim[a := omega, b := t, z := pair(i, x)], c)
+  have e1: i = i2 && x = x2 by simp(he)
+  have io: i in omega by simp(e1, hi)
+  have xt: x in t by simp(e1, hx)
+  have dm: i in dom(l) proof
+    have si := set_image_def[s := l, f := z. fst(z), y := i]
+    have ex1: ex z. z in l && fst(z) = i by ex_intro({pair(i, x)}, simp(hp))
+    show by defs(taut(si, ex1), dom)
+  qed
+  have lo: dom(l) in omega by simp(expand(hl, list_type))
+  have lt: int_lt(i, seq_len(l)) by defs(arith(dm, lo, io), seq_len)
+  show conj(io, lt, xt)
+qed
+
+// (two lists, one after the other: a list)
+theorem tr.concat_list: all a b t. a in list_type(t) -> b in list_type(t) -> seq_concat(a, b) in list_type(t)
+proof
+  fix a b t
+  assume ha hb
+  let C := seq_concat(a, b)
+  have mem: all z. z in C -> z in a || (ex y. y in b && z = pair(int_add(dom(a), fst(y)), snd(y))) proof
+    fix z
+    assume hz
+    have u := union2_iff[a := a, b := set_image(b, y. pair(int_add(dom(a), fst(y)), snd(y))), z := z]
+    have si := set_image_def[s := b, f := y. pair(int_add(dom(a), fst(y)), snd(y)), y := z]
+    have hz2: z in union2(a, set_image(b, y. pair(int_add(dom(a), fst(y)), snd(y)))) by defs(hz, seq_concat)
+    have c: z in a || (ex y. y in b && pair(int_add(dom(a), fst(y)), snd(y)) = z) by taut(u, si, hz2)
+    have c2: (ex y. y in b && pair(int_add(dom(a), fst(y)), snd(y)) = z) -> (ex y. y in b && z = pair(int_add(dom(a), fst(y)), snd(y))) proof
+      assume e
+      obtain y, hy ey from e
+      show by ex_intro({y}, conj(hy, sym(ey)))
+    qed
+    show by taut(c, c2)
+  qed
+  have lao: dom(a) in omega by simp(expand(ha, list_type))
+  // (each element: a pair (i, x), i natural, x in t; from a: i below dom(a), from b: at or above)
+  have el: all z. z in C -> ex i x. z = pair(i, x) && i in omega && x in t && ((pair(i, x) in a && int_lt(i, dom(a))) || int_le(dom(a), i)) proof
+    fix z
+    assume hz
+    have m := mp(all_elim(mem, {z}), hz)
+    have k1: z in a -> ex i x. z = pair(i, x) && i in omega && x in t && ((pair(i, x) in a && int_lt(i, dom(a))) || int_le(dom(a), i)) proof
+      assume hza
+      have sub: subset(a, cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := a], simp(expand(ha, list_type, seq_type)))
+      have c := mp(subset_elim[a := a, b := cart(omega, t), z := z], sub, hza)
+      obtain i x, hi hx he from mp(cart_elim[a := omega, b := t, z := z], c)
+      have pa := rewrite(he, hza)
+      have li := apply(tr.list_idx, ha, pa)
+      have lt: int_lt(i, dom(a)) by defs(li.2, seq_len)
+      show by ex_intro({i}, {x}, taut(he, hi, hx, pa, lt))
+    qed
+    have k2: (ex y. y in b && z = pair(int_add(dom(a), fst(y)), snd(y))) -> ex i x. z = pair(i, x) && i in omega && x in t && ((pair(i, x) in a && int_lt(i, dom(a))) || int_le(dom(a), i)) proof
+      assume e
+      obtain y, hy ez from e
+      have subb: subset(b, cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := b], simp(expand(hb, list_type, seq_type)))
+      have c := mp(subset_elim[a := b, b := cart(omega, t), z := y], subb, hy)
+      obtain j x, hj hx ey from mp(cart_elim[a := omega, b := t, z := y], c)
+      have ez2: z = pair(int_add(dom(a), j), x) by simp(ez, ey)
+      have io: int_add(dom(a), j) in omega by arith(lao, hj)
+      have ge: int_le(dom(a), int_add(dom(a), j)) by arith(lao, hj)
+      show by ex_intro({int_add(dom(a), j)}, {x}, taut(ez2, io, hx, ge))
+    qed
+    show by taut(m, k1, k2)
+  qed
+  // (a pair of C at or above dom(a): b's, shifted)
+  have hi: all i x. pair(i, x) in C -> int_le(dom(a), i) -> pair(int_sub(i, dom(a)), x) in b proof
+    fix i x
+    assume hp hge
+    have m := mp(all_elim(mem, {pair(i, x)}), hp)
+    have k1: pair(i, x) in a -> pair(int_sub(i, dom(a)), x) in b proof
+      assume hpa
+      have li := apply(tr.list_idx, ha, hpa)
+      have f: false by arith(expand(li.2, seq_len), hge)
+      show by taut(f)
+    qed
+    have k2: (ex y. y in b && pair(i, x) = pair(int_add(dom(a), fst(y)), snd(y))) -> pair(int_sub(i, dom(a)), x) in b proof
+      assume e
+      obtain y, hy ey from e
+      have subb: subset(b, cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := b], simp(expand(hb, list_type, seq_type)))
+      have c := mp(subset_elim[a := b, b := cart(omega, t), z := y], subb, hy)
+      obtain j x2, hj hx ey2 from mp(cart_elim[a := omega, b := t, z := y], c)
+      have e3: i = int_add(dom(a), j) && x = x2 by simp(rewrite(ey2, ey))
+      have ia: int_add(dom(a), j) in omega by arith(lao, hj)
+      have io: i in omega := rewrite(sym(e3.1), ia)
+      have ij: int_sub(i, dom(a)) = j by arith(e3, lao, hj, io)
+      have yy: y = pair(int_sub(i, dom(a)), x) by simp(ey2, ij, e3)
+      show := rewrite(yy, hy)
+    qed
+    show by taut(m, k1, k2)
+  qed
+  have fb: all p q r. pair(p, q) in b -> pair(p, r) in b -> q = r by simp(expand(hb, list_type, seq_type, is_seq, is_fun))
+  have fa: all p q r. pair(p, q) in a -> pair(p, r) in a -> q = r by simp(expand(ha, list_type, seq_type, is_seq, is_fun))
+  have f1: all z. z in C -> (ex p q. z = pair(p, q)) proof
+    fix z
+    assume hz
+    obtain i x, ez .. from mp(all_elim(el, {z}), hz)
+    show by ex_intro({i}, {x}, ez)
+  qed
+  have f2: all p q r. pair(p, q) in C -> pair(p, r) in C -> q = r proof
+    fix p q r
+    assume h1 h2
+    obtain i1 x1, e1 io1 xt1 w1 from mp(all_elim(el, {pair(p, q)}), h1)
+    obtain i2 x2, e2 io2 xt2 w2 from mp(all_elim(el, {pair(p, r)}), h2)
+    have pi: p = i1 && q = x1 by simp(e1)
+    have pj: p = i2 && r = x2 by simp(e2)
+    have lo: int_lt(p, dom(a)) -> q = r proof
+      assume hl
+      have a1: pair(p, q) in a by simp(w1, pi, hl)
+      have a2: pair(p, r) in a by simp(w2, pj, hl)
+      show := mp(all_elim(fa, {p}, {q}, {r}), a1, a2)
+    qed
+    have up: int_le(dom(a), p) -> q = r proof
+      assume hl
+      have b1 := mp(all_elim(hi, {p}, {q}), h1, hl)
+      have b2 := mp(all_elim(hi, {p}, {r}), h2, hl)
+      show := mp(all_elim(fb, {int_sub(p, dom(a))}, {q}, {r}), b1, b2)
+    qed
+    have cs: int_lt(p, dom(a)) || int_le(dom(a), p) by arith(lao, io1, pi)
+    show by taut(cs, lo, up)
+  qed
+  have fu: is_fun(C) by defs(conj(f1, f2), is_fun)
+  have ss: all z. z in C -> z in cart(omega, t) proof
+    fix z
+    assume hz
+    obtain i x, ez io xt .. from mp(all_elim(el, {z}), hz)
+    have c := mp(mp(cart_intro[a := omega, b := t, x := i, y := x], io), xt)
+    show := rewrite(sym(ez), c)
+  qed
+  have sb: subset(C, cart(omega, t)) by defs(ss, subset)
+  have pw: C in powerset(cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := C], sb)
+  have lc: seq_len(C) = int_add(seq_len(a), seq_len(b)) by arith(ha, hb)
+  have lbo: seq_len(b) in omega by defs(simp(expand(hb, list_type)), seq_len)
+  have dc: dom(C) in omega by arith(expand(lc, seq_len), lao, expand(lbo, seq_len))
+  show by defs(simp(pw, fu, dc), list_type, seq_type, is_seq)
+qed
+
+// (a list of elements of t: of any superset)
+theorem tr.list_mono: all l t u. l in list_type(t) -> subset(t, u) -> l in list_type(u)
+proof
+  fix l t u
+  assume hl hs
+  have sub: subset(l, cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := l], simp(expand(hl, list_type, seq_type)))
+  have g: all z. z in l -> z in cart(omega, u) proof
+    fix z
+    assume hz
+    have c := mp(subset_elim[a := l, b := cart(omega, t), z := z], sub, hz)
+    obtain i x, hi hx he from mp(cart_elim[a := omega, b := t, z := z], c)
+    have xu := mp(subset_elim[a := t, b := u, z := x], hs, hx)
+    have c2 := mp(mp(cart_intro[a := omega, b := u, x := i, y := x], hi), xu)
+    show := rewrite(sym(he), c2)
+  qed
+  have sb: subset(l, cart(omega, u)) by defs(g, subset)
+  have pw: l in powerset(cart(omega, u)) by taut(powerset_def[s := cart(omega, u), a := l], sb)
+  show by defs(simp(pw, expand(hl, list_type, seq_type, is_seq)), list_type, seq_type, is_seq)
+qed
+
+// (a byte string's list: of its bytes)
+theorem tr.bytes_list_img: all b. bytes_len(b) in omega -> bytes_seq(b) in list_type(set_image(bytes_len(b), i. bytes_at(b, i)))
+proof
+  fix b
+  assume hb
+  have m: all i. i in bytes_len(b) -> bytes_at(b, i) in set_image(bytes_len(b), j. bytes_at(b, j)) proof
+    fix i
+    assume hi
+    have si := set_image_def[s := bytes_len(b), f := j. bytes_at(b, j), y := bytes_at(b, i)]
+    have ex: ex j. j in bytes_len(b) && bytes_at(b, j) = bytes_at(b, i) by ex_intro({i}, taut(hi, refl({bytes_at(b, i)})))
+    show by taut(si, ex)
+  qed
+  show := apply(tr.bytes_list, {b}, {set_image(bytes_len(b), j. bytes_at(b, j))}, m, hb)
+qed
+
+// (subsets of a union)
+theorem tr.sub_union_l: all a b. subset(a, union2(a, b))
+proof
+  fix a b
+  have g: all z. z in a -> z in union2(a, b) proof
+    fix z
+    assume h
+    show by taut(union2_iff[a := a, b := b, z := z], h)
+  qed
+  show by defs(g, subset)
+qed
+
+theorem tr.sub_union_r: all a b. subset(b, union2(a, b))
+proof
+  fix a b
+  have g: all z. z in b -> z in union2(a, b) proof
+    fix z
+    assume h
+    show by taut(union2_iff[a := a, b := b, z := z], h)
+  qed
+  show by defs(g, subset)
+qed
+
+// (two lists of different elements, concatenated: a list of either's)
+theorem tr.concat_list2: all a b t1 t2. a in list_type(t1) -> b in list_type(t2) -> seq_concat(a, b) in list_type(union2(t1, t2))
+proof
+  fix a b t1 t2
+  assume ha hb
+  have a2 := apply(tr.list_mono, ha, all_elim(tr.sub_union_l, {t1}, {t2}))
+  have b2 := apply(tr.list_mono, hb, all_elim(tr.sub_union_r, {t1}, {t2}))
+  show := apply(tr.concat_list, a2, b2)
+qed
+
+// code loaded as two pieces (lists of any elements): the first, the second at its place
+theorem tr.peel_left: all vm b x p t1 t2 st. x in list_type(t1) -> p in list_type(t2) -> b in omega -> abi.loaded(vm, b, seq_concat(x, p), st) -> abi.loaded(vm, b, x, st)
+proof
+  fix vm b x p t1 t2 st
+  assume hx hp hb h
+  have x2 := apply(tr.list_mono, hx, all_elim(tr.sub_union_l, {t1}, {t2}))
+  have p2 := apply(tr.list_mono, hp, all_elim(tr.sub_union_r, {t1}, {t2}))
+  show := apply(tr.loaded_concat, x2, p2, hb, h).1
+qed
+
+theorem tr.peel_right: all vm b x p t1 t2 st. x in list_type(t1) -> p in list_type(t2) -> b in omega -> abi.loaded(vm, b, seq_concat(x, p), st) -> abi.loaded(vm, int_add(b, seq_len(x)), p, st)
+proof
+  fix vm b x p t1 t2 st
+  assume hx hp hb h
+  have x2 := apply(tr.list_mono, hx, all_elim(tr.sub_union_l, {t1}, {t2}))
+  have p2 := apply(tr.list_mono, hp, all_elim(tr.sub_union_r, {t1}, {t2}))
+  show := apply(tr.loaded_concat, x2, p2, hb, h).2
+qed
+
+// (a code piece defined as a byte string: a list of its bytes)
+theorem tr.code_list: all c b. c = bytes_seq(b) -> bytes_len(b) in omega -> c in list_type(set_image(bytes_len(b), i. bytes_at(b, i)))
+proof
+  fix c b
+  assume e hb
+  show := rewrite(sym(e), apply(tr.bytes_list_img, hb))
 qed

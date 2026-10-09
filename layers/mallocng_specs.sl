@@ -90,3 +90,9 @@ fn dequeue_head_spec_fun() -> CFun2[World] = (args: Args) => {
   let r = dequeue_head_spec(bits[64](args[0]))
   return (r, any bits[64])
 }
+
+// a_crash (a trap: hlt): calling it is a bug -- its contract undefined, so
+// a caller's spec excludes the calls by its precondition
+fn a_crash_spec_fun() -> CFun2[World] = (args: Args) => {
+  undefined
+}

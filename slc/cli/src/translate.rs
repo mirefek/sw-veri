@@ -175,8 +175,9 @@ struct Gen<'e> {
     /// register, the value pair
     rmaps: HashMap<String, (String, u128, String)>,
     /// the calls met: the callee (a spec parameter), its address, the
-    /// call's number of arguments
-    callees: Vec<(Term, u128, usize)>,
+    /// call's number of arguments, whether a call enters it with the stack
+    /// not aligned (its contract then for any entry: tr.implements_at_u)
+    callees: Vec<(Term, u128, usize, bool)>,
     /// the contract's code: the function's own, or with its callees'
     lbase: String,
     lcode: String,
@@ -1462,6 +1463,9 @@ impl<'e> Gen<'e> {
 
     /// the items of a list literal (`seq_one`s concatenated)
     fn list_items(&self, t: &Term) -> Option<Vec<Term>> {
+        if self.app(t, "empty", 0).is_some() {
+            return Some(Vec::new());
+        }
         if let Some(x) = self.app(t, "seq_one", 1) {
             return Some(vec![x[0].clone()]);
         }
@@ -1477,22 +1481,7 @@ impl<'e> Gen<'e> {
         if hs == "empty" {
             return Ok(format!("all_elim(tr.hin_empty, {{{fr}}})"));
         }
-        let inner = hs.strip_prefix("fn_update(").and_then(|x| x.strip_suffix(')')).ok_or_else(|| format!("homes' map `{}`: not an update", hs))?;
-        // (its three arguments: split at the top level's commas)
-        let (mut depth, mut parts, mut last) = (0i32, Vec::new(), 0usize);
-        for (k, ch) in inner.char_indices() {
-            match ch {
-                '(' => depth += 1,
-                ')' => depth -= 1,
-                ',' if depth == 0 => {
-                    parts.push(inner[last..k].trim().to_string());
-                    last = k + 1;
-                }
-                _ => {}
-            }
-        }
-        parts.push(inner[last..].trim().to_string());
-        let [h, c, x] = <[String; 3]>::try_from(parts).map_err(|_| format!("homes' map `{}`: not an update", hs))?;
+        let [h, c, x] = split_update(hs).ok_or_else(|| format!("homes' map `{}`: not an update", hs))?;
         let ph = self.hin_proof(&h, fr)?;
         Ok(format!("mp(all_elim(tr.hin_upd, {{{h}}}, {{{fr}}}, {{{c}}}, {{{x}}}), {ph}, simp())"))
     }
@@ -1510,12 +1499,13 @@ impl<'e> Gen<'e> {
         if insn.row != 120 {
             return Err(format!("{:x}: the spec calls, the machine does not", a));
         }
-        if st.fr % 16 != 8 || st.fr > 65536 {
-            return Err(format!("{:x}: a call from a frame of {} bytes (8 mod 16, at most 64 KiB expected)", a, st.fr));
+        if st.fr % 8 != 0 || st.fr < 8 || st.fr + 8 > 65536 {
+            return Err(format!("{:x}: a call from a frame of {} bytes (a multiple of 8, at most 64 KiB expected)", a, st.fr));
         }
+        let aligned = st.fr % 16 == 8;
         let nargs = args.len();
-        if nargs == 0 || nargs > 6 {
-            return Err(format!("{:x}: a call with {} arguments (1 to 6 so far)", a, nargs));
+        if nargs > 6 {
+            return Err(format!("{:x}: a call with {} arguments (at most 6 so far)", a, nargs));
         }
         let off = nat(&insn.fields).ok_or_else(|| format!("{:x}: the call's displacement", a))?;
         let a2 = (a + insn.len) % P64;
@@ -1534,12 +1524,15 @@ impl<'e> Gen<'e> {
             }
             aps.push(format!("apply(tr.argv_reg, {{{}}}, {{{r}}}, {{{k}}}, {{{nb}}}, {{{}}}, simp(L), simp(L), simp())", st.rs, self.print(&x)));
         }
-        let hreg = format!("apply(tr.args{nargs}, {})", aps.join(", "));
+        let hreg = if nargs == 0 { format!("all_elim(tr.args0, {{{}}})", st.rs) } else { format!("apply(tr.args{nargs}, {})", aps.join(", ")) };
         let hin = self.hin_proof(&st.hst, st.fr)?;
         let gi = self.callees.iter().position(|c| c.0 == g && c.1 == f).unwrap_or_else(|| {
-            self.callees.push((g.clone(), f, nargs));
+            self.callees.push((g.clone(), f, nargs, false));
             self.callees.len() - 1
         });
+        self.callees[gi].3 |= !aligned;
+        // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
+        let hcon = if aligned { format!("defs(taut(hcall{gi}, (int_mod({}, 16) = 8 by simp())), tr.callee_contract)", st.fr) } else { format!("defs(taut(hcall{gi}), tr.callee_contract)") };
         let (gn, wn) = (self.print(&g), st.wn.clone());
         let hv = st.hvu.clone();
         // the continuation's raise and divergence: the function's
@@ -1599,13 +1592,16 @@ impl<'e> Gen<'e> {
         for (v, t) in lvals {
             local.push(format!("let {} := {}", self.env.vars[v as usize].name, self.print(&t)));
         }
+        // (but those a nested call's proof already holds)
         for i in nq0..self.qs.len() {
-            local.push(format!("let {} := {}", self.qs[i].0, self.print(&self.qs[i].1)));
-            self.scoped_q.insert(i);
+            if self.scoped_q.insert(i) {
+                local.push(format!("let {} := {}", self.qs[i].0, self.print(&self.qs[i].1)));
+            }
         }
         for i in nl0..self.lets.len() {
-            local.push(format!("let {} := {}", self.lets[i].0, self.lets[i].1));
-            self.scoped_l.insert(i);
+            if self.scoped_l.insert(i) {
+                local.push(format!("let {} := {}", self.lets[i].0, self.lets[i].1));
+            }
         }
         let (rv, rh) = if one { (rc.clone(), format!("{rc} in bits(64) ->")) } else { (format!("{rc} {rd}"), format!("{rc} in bits(64) -> {rd} in bits(64) ->")) };
         lines.push(format!("have pc{n}: all {wc} {rv}. {wc} in abi.World && {wc} in univ(1) -> {rh} {pt2} proof"));
@@ -1651,7 +1647,7 @@ impl<'e> Gen<'e> {
         );
         let _ = qi;
         let expr = format!(
-            "mp({rule}, {}, simp(L), simp(L), simp(L), simp(L), hcall{gi}, hl, simp(), defs(simp(), tr.cfr), simp(), simp(), simp(), htyp{gi}, hio{gi}, {hreg}, {hin}, simp(), simp(), hk{n}, hd{n}, pc{n})",
+            "mp({rule}, {}, simp(L), simp(L), simp(L), simp(L), {hcon}, hl, simp(), defs(simp(), tr.cfr), simp(), simp(), simp(), htyp{gi}, hio{gi}, {hreg}, {hin}, simp(), simp(), hk{n}, hd{n}, pc{n})",
             insn.name,
         );
         Ok(Pf { lines, expr })
@@ -1998,8 +1994,8 @@ impl<'e> Gen<'e> {
             Some(l) => format!("L, {}", self.loops[l].ci),
             None => "L".into(),
         };
-        // (registers deep in the map: their `in dom` facts, determined)
-        for d in self.deep_doms(&st.rs) {
+        // (registers and homes deep in their maps: their `in dom` facts, determined)
+        for d in self.deep_doms(&st.rs).into_iter().chain(deep_hdoms(&st.hst)) {
             self.lf = format!("{}, {}", self.lf, d);
         }
         pf.expr = self.lfacts(&pf.expr.replace("{HS}", &format!("{{{}}}", st.hst)).replace("{W}", &format!("{{{}}}", st.wn)));
@@ -3505,19 +3501,23 @@ pub fn translate(args: &[String]) -> CResult {
         gnames.push(gn);
     }
     let spec_app = format!("{}({})", spec_name, gnames.join(", "));
-    // (the contract's code: the callee's then the function's)
-    let callee_text = match &callee {
-        None => {
-            g.lbase = g.base.clone();
-            g.lcode = g.code.clone();
-            None
-        }
-        Some((f, cc)) => {
-            g.lbase = f.to_string();
-            g.lcode = format!("seq_concat({}, {})", g.print(cc), g.code);
-            Some((*f, g.print(cc)))
-        }
-    };
+    // (the contract's code: the program text, which holds the function's
+    // and its callees' -- FN.in_text)
+    let text_base = (|| -> Option<String> {
+        let sym = *g.env.sym_by_name.get("text.code")?;
+        let SymKind::Defined { .. } = &g.env.syms[sym as usize].kind else { return None };
+        // (its base: the lowest function's, the first piece's address)
+        g.env.claims.iter().find(|(n, _)| n == &format!("{}.in_text", fname)).and_then(|(_, t)| {
+            let t = g.app(t, "all", 1)?;
+            let t = g.app(&t[0], "all", 1)?;
+            let (p, _) = Gen0(&*g.env).imp(&t[0])?;
+            Some(g.print(&g.app(&p, "abi.loaded", 4)?[1]))
+        })
+    })()
+    .ok_or_else(|| format!("no program text with {} (slc steps --text)", fname))?;
+    g.lbase = text_base;
+    g.lcode = "text.code".to_string();
+    let callee_text = callee.as_ref().map(|(f, cc)| (*f, g.print(cc)));
     let parts = (|| -> Option<(u128, Term, Term, Term)> {
         let fb = g.app(&sbody, "fn_build", 2)?;
         let mp = g.app(&fb[1], "mkprog", 1)?;
@@ -3671,8 +3671,9 @@ pub fn translate(args: &[String]) -> CResult {
     // typed and keeping I/O and code -- premises)
     let (lb, lc) = (g.lbase.clone(), g.lcode.clone());
     let cn = g.callees.first().map(|c| c.2).unwrap_or(1);
+    let cimp = if g.callees.first().is_some_and(|c| c.3) { "tr.implements_at_u" } else { "tr.implements_at" };
     let cprem = match &callee_text {
-        Some((f, _)) => format!("tr.implements_at({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0, {cn}) -> "),
+        Some((f, _)) => format!("{cimp}({f}, G0, {lb}, {lc}, statics) -> G0 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G0, {cn}) -> "),
         None => String::new(),
     };
     let call = if callee_text.is_some() { "all G0. " } else { "" };
@@ -3695,7 +3696,7 @@ pub fn translate(args: &[String]) -> CResult {
     o.push_str("  fix statics\n");
     if let Some((f, _)) = &callee_text {
         o.push_str(&format!(
-            "  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, {cn})\n"
+            "  fix G0\n  assume hcall0: {cimp}({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, {cn})\n"
         ));
     }
     o.push_str("  fix args\n  fix v\n  fix mem\n  fix s\n  assume hA: args in abi.ARGS\n  assume hvo: v in set_type(omega)\n  assume hmv: mem in x86_64_linux.Vm\n  assume hM: s in x86_64_linux.Machine\n");
@@ -3746,29 +3747,16 @@ pub fn translate(args: &[String]) -> CResult {
     }
     o.push_str(&format!("  show := {}\nqed\n\n", pf.expr));
     let ql = g.lambda(1, &proc);
-    // (the code the contract holds: the function's own, a callee's before it)
-    let hsub = match &callee_text {
-        None => format!("  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    show by taut(expand(h, abi.loaded))\n  qed\n"),
-        Some((_, cc)) => {
-            // (a code's bytes: its definition's literal)
-            let lit_of = |g: &Gen, code: &str| -> Result<String, String> {
-                let name = code.strip_suffix("()").unwrap_or(code);
-                let sym = *g.env.sym_by_name.get(name).ok_or_else(|| format!("no code `{}`", name))?;
-                let SymKind::Defined { body, .. } = &g.env.syms[sym as usize].kind else { return Err(format!("`{}` is not a definition", name)) };
-                let a = g.app(body, "bytes_seq", 1).ok_or_else(|| format!("`{}`: not bytes", name))?;
-                Ok(g.print(&a[0]))
-            };
-            let (bf, bo) = (lit_of(&g, cc)?, lit_of(&g, &g.code)?);
-            let (cname, oname) = (cc.strip_suffix("()").unwrap_or(cc).to_string(), g.code.strip_suffix("()").unwrap_or(&g.code).to_string());
-            format!(
-                "  // the function's own code: after its callee's\n  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have h2: abi.loaded(vm, {lb}, seq_concat(bytes_seq({bf}), bytes_seq({bo})), statics) by defs(h, {cname}, {oname})\n    have l := apply(tr.loaded_after, {{vm}}, {{{bf}}}, {{{bo}}}, {{{lb}}}, {{statics}}, simp(), simp(), simp(), h2)\n    show by defs(simp(expand(l, abi.loaded)), {oname})\n  qed\n"
-            )
-        }
-    };
+    // (the code the contract holds: the program text, the function's piece of it)
+    let fcode = g.code.strip_suffix("()").unwrap_or(&g.code);
+    let fcode = fcode.strip_suffix(".code").unwrap_or(fcode).to_string();
+    let hsub = format!(
+        "  have hsub: all vm. abi.loaded(vm, {lb}, {lc}, statics) -> abi.code_at(vm, {b}, {c}) proof\n    fix vm\n    assume h: abi.loaded(vm, {lb}, {lc}, statics)\n    have l := mp(all_elim({fcode}.in_text, {{vm}}, {{statics}}), h)\n    show by taut(expand(l, abi.loaded))\n  qed\n"
+    );
     let (cfix, cass, bodyc) = match &callee_text {
         Some((f, _)) => (
             "all G0. ".to_string(),
-            format!("  fix G0\n  assume hcall0: tr.implements_at({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, {cn})\n"),
+            format!("  fix G0\n  assume hcall0: {cimp}({f}, G0, {lb}, {lc}, statics)\n  assume htyp0: G0 in fn_space(abi.ARGS, powerset(univ(1)))\n  assume hio0: tr.callee_io(G0, {cn})\n"),
             format!("mp(all_elim({p}.body, {{statics}}, {{G0}}), hcall0, htyp0, hio0)"),
         ),
         None => (String::new(), String::new(), format!("all_elim({p}.body, {{statics}})")),
@@ -3797,7 +3785,7 @@ pub fn translate(args: &[String]) -> CResult {
             return Err("a caller without arguments: not covered yet".into());
         }
         let q0p = g.print(&q0raw);
-        o.push_str(&format!("  have m0 := mp(tr.entry0[base := {b}, code := {c}, statics := statics, f := {b}, fd := {fd}, q := {q0p}, kw := {kwl}],\n    simp(), {bodyc})\n"));
+        o.push_str(&format!("  have m0 := mp(tr.entry0[lb := {lb}, lc := {lc}, base := {b}, code := {c}, statics := statics, f := {b}, fd := {fd}, q := {q0p}, kw := {kwl}],\n    simp(), hsub, {bodyc})\n"));
     }
     o.push_str(&format!(
         "  have m: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->\n      abi.loaded(app(s, \"vm\"), {lb}, {lc}, statics) -> app(s, \"rip\") = {b} -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->\n      tr.matches_t({spec_app}, args, objs, mem, s, o) by defs(m0, {spec_name})\n  show by defs(m, tr.implements_at)\nqed\n\n"
@@ -3846,4 +3834,46 @@ impl Gen0<'_> {
             _ => None,
         }
     }
+}
+
+/// a map's text `fn_update(f, k, v)`: f, k, v
+fn split_update(t: &str) -> Option<[String; 3]> {
+    let inner = t.strip_prefix("fn_update(")?.strip_suffix(')')?;
+    let (mut depth, mut parts, mut last) = (0i32, Vec::new(), 0usize);
+    for (k, ch) in inner.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(inner[last..k].trim().to_string());
+                last = k + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(inner[last..].trim().to_string());
+    <[String; 3]>::try_from(parts).ok()
+}
+
+/// `c in dom(hs)` for the homes' map text hs, by its updates: c's own
+/// (`tr.dom_upd`) under the later ones (`tr.dom_keep`)
+fn hdom_pf(hs: &str, c: &str) -> Option<String> {
+    let [h, k, x] = split_update(hs)?;
+    if k == c {
+        return Some(format!("all_elim(tr.dom_upd, {{{h}}}, {{{k}}}, {{{x}}})"));
+    }
+    let inner = hdom_pf(&h, c)?;
+    Some(format!("mp(all_elim(tr.dom_keep, {{{h}}}, {{{c}}}, {{{k}}}, {{{x}}}), {inner}, simp())"))
+}
+
+/// the homes two updates or more below the top of the map hs: their `in
+/// dom` facts (simp(L) shows the others)
+fn deep_hdoms(hs: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut cur = hs.to_string();
+    while let Some([h, k, _]) = split_update(&cur) {
+        keys.push(k);
+        cur = h;
+    }
+    keys.iter().skip(2).filter_map(|k| hdom_pf(hs, k)).collect()
 }
