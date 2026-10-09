@@ -126,7 +126,12 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
     // (STEP_SLOW=secs: the steps taking longer, reported -- a nested
     // block's with it)
     let slow = std::env::var("STEP_SLOW").ok().and_then(|v| v.parse::<f64>().ok());
-    for (line_no, body_no, step) in steps(text) {
+    let all = steps(text);
+    // (`show` ends its block: a step after it would replace the result)
+    if let Some((line_no, _, _)) = all.iter().rev().skip(1).find(|(_, _, s)| s.split_whitespace().next() == Some("show")) {
+        return Err(KernelError(format!("line {}: `show` before the block's last step (it ends the block)", line + line_no)));
+    }
+    for (line_no, body_no, step) in all {
         let t0 = std::time::Instant::now();
         res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }

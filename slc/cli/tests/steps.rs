@@ -46,6 +46,36 @@ fn loaded_code_facts_check() {
     assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 38 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
+/// The claim's top (proofs/musl_malloc.core from its open lemmas), the
+/// invariant's laws (proofs/mallocng.core) and the client facts
+/// (proofs/malloc_client.core) check against the claim.
+#[test]
+fn claim_proofs_check() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let claim = root.join("build/musl_malloc.core");
+    if !claim.exists() {
+        eprintln!("skipped: run scripts/build-musl.sh first");
+        return;
+    }
+    let slc = env!("CARGO_BIN_EXE_slc");
+    for files in [
+        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "CLAIM", "proofs/mallocng.core", "proofs/musl_malloc.core"],
+        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/list.core", "core/loop.core", "core/records.core", "CLAIM", "proofs/malloc_client.core"],
+    ] {
+        let mut c = Command::new(slc);
+        c.current_dir(&root).args(["kernel-check", "--no-cache"]);
+        for f in files {
+            if f == "CLAIM" {
+                c.arg(&claim);
+            } else {
+                c.arg(f);
+            }
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    }
+}
+
 #[test]
 fn step_theorems_of_get_slot_index_prove() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

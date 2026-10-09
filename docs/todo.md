@@ -63,6 +63,15 @@ Ongoing: how could the languages make progress more efficient?
   arith. Plan it before building it.
 - Inversion lemmas for the remaining GIMPLE operations (8-bit and 32-bit
   loads and stores, more arithmetic), on demand.
+- A forward-execution step for C2 proofs: `run h with d1, ..` advancing a
+  program run through `letin`, `bind_rel` (by an operation's one-outcome
+  fact), `if` (by its condition) and a local's choice, leaving the next
+  open point as a fact -- the stepping that is now half of a C2 proof
+  (`letin_e`, `bind_inv`, `pick` / `pick2` / `pick0`, `any_e`). Design it
+  first (what it stops at, how it names what it obtains).
+- A case split over a literal range (`cases j in 0..48`: one subgoal per
+  value), for table facts and bounded counts; `arith` stops at about a
+  dozen cases.
 - Possibly rename `rsimp` to `simp` once the old `simp` is not needed.
 - `conj` building to the goal's grouping; one way of instantiating
   (`name[x := t]` instead of positional `all_elim`).

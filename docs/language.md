@@ -436,7 +436,7 @@ have h: φ by R(args)      a fact by a goal rule (below)
 have a b c := P           P's conjuncts, named (`_` skips one, `..` ignores the rest, `r..` names it)
 have {sM, x = mM} := P    the conjuncts labelled sM, mM
 obtain x y, h1 h2 from P  witnesses of `ex x y. ...`, the body's conjuncts named
-show P / show φ by R(..)  the result (else the last `have`)
+show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
 let N := t / let N(a) := t   an abbreviation to the end of the block
@@ -500,7 +500,7 @@ premise they stand for.
 | rule | proves the goal by |
 |---|---|
 | `taut(p..)` | a propositional tautology from the premises; `a = b` is also `b = a`, and `a != b` is `!(a = b)` |
-| `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants, `pow2` / `int_pow` of numerals |
+| `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`) |
 | `rsimp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules |
 | `simp(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier, below |
 | `defs(p, D..)` | p proves the goal with D unfolded |
@@ -526,6 +526,8 @@ excludes the registered ones).
   2. nested rsimp;
   3. arith on the relevant facts.
 - Ground arithmetic and literal (in)equalities are evaluated.
+- A program outcome's parts are registered rules (`out_state` / `out_value`
+  of `ok` and `exc`, `fst` of `ok` / `exc` / `diverge`; core/records.core).
 - `RSIMP_TRACE=1` prints every rewrite.
 
 **simp** is the path simplifier, used for symbolic execution of programs.

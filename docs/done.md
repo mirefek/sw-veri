@@ -34,7 +34,10 @@ item is a short summary of finished work; details are in the files named.
 - **The proof language** (docs/language.md). It has implicit unfolding at
   mismatches, destructuring by position or label, `apply` with
   higher-order matching, `flip` and `unfold`, and cases of a disjunction
-  taken from the fact (`have c: case k of P proof`). Error messages show the
+  taken from the fact (`have c: case k of P proof`). Goal rules prove
+  `mp` / `apply` premises in place; `arith` reads powers of numerals as
+  constants; `rsimp` reduces program outcomes' parts; a `show` must end
+  its block. Error messages show the
   first difference, with the proof's abbreviations folded back.
 - **Libraries** (`core/`): logic, sets, naturals and words (a word is
   determined by its bits), records, lists, and loops. For loops, `while_inv`, `while_var` and
@@ -64,6 +67,7 @@ item is a short summary of finished work; details are in the files named.
   - `slc heapcheck` evaluates the invariant on real heaps under ptrace,
     with a self-test that corrupts heaps eight ways.
 - `proofs/malloc_client.core`: client facts derived from the specs alone.
+  These files and the laws are checked by the tests (`claim_proofs_check`).
 
 ## Functions
 

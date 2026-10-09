@@ -195,6 +195,19 @@ fn small(t: &Term) -> Option<i128> {
 }
 
 impl Reader {
+    /// a numeral's value, or a power of numerals' (`pow2(64)`, `int_pow(2, 32)`)
+    fn konst(&self, t: &Term) -> Option<i128> {
+        let s = self.s;
+        match t.node() {
+            Node::App(f, a) if is(*f, s.pow2) && a.len() == 1 => small(&a[0]).filter(|k| (0..=120).contains(k)).map(|k| 1i128 << k),
+            Node::App(f, a) if is(*f, s.int_pow) && a.len() == 2 => {
+                let (b, k) = (small(&a[0])?, small(&a[1]).filter(|k| (0..=120).contains(k))?);
+                b.checked_pow(k as u32)
+            }
+            _ => small(t),
+        }
+    }
+
     fn var_of(&mut self, t: &Term) -> usize {
         match self.vars.iter().position(|x| x == t) {
             Some(i) => i,
@@ -351,16 +364,16 @@ impl Reader {
                 return self.lin(&a[0])?.add(&self.lin(&a[1])?, 1);
             }
             Node::App(f, a) if is(*f, s.int_mul) => {
-                // linear only if one factor is a numeral
-                if let Some(k) = small(&a[0]) {
+                // linear only if one factor is a numeral (or a power of numerals)
+                if let Some(k) = self.konst(&a[0]) {
                     return self.lin(&a[1])?.scale(k);
                 }
-                if let Some(k) = small(&a[1]) {
+                if let Some(k) = self.konst(&a[1]) {
                     return self.lin(&a[0])?.scale(k);
                 }
             }
             Node::App(f, a) if is(*f, s.int_div) || is(*f, s.int_mod) => {
-                if let Some(k) = small(&a[1]).filter(|k| *k > 0) {
+                if let Some(k) = self.konst(&a[1]).filter(|k| *k > 0) {
                     let x = self.lin(&a[0])?;
                     let m = Term::app(s.int_mod.unwrap(), vec![a[0].clone(), a[1].clone()]);
                     let (q, r) = self.modulo(&m, x, k)?;
