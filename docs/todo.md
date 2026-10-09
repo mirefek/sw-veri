@@ -52,31 +52,21 @@ descriptor and the auxiliary vector.
 
 Ongoing: how could the languages make progress more efficient?
 
-- Review the code base (slc, proofs, layers) for bad code practices.
+- A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
+  arith -- what remains of a C2 proof after `step` (queue's: a read after
+  writes, the words' usability kept, per store). Plan it before building
+  it.
 - A bit library (a_ctz_32's `x & -x = 2^tz(x)`, a_clz_32's bit smearing,
   the mask-heavy functions): `arith` reading products of non-literals in a
   polynomial normal form (a trusted extension: the ring facts it already
   relies on), then lemmas -- bit extensionality, `bits_and` / `or` / `not`
-  bit by bit, bits under shifts and powers of 2, two's complement. Plan
-  it before building it.
-- A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
-  arith. Plan it before building it.
-- Inversion lemmas for the remaining GIMPLE operations (8-bit and 32-bit
-  loads and stores, more arithmetic), on demand.
-- A forward-execution step for C2 proofs: `run h with d1, ..` advancing a
-  program run through `letin`, `bind_rel` (by an operation's one-outcome
-  fact), `if` (by its condition) and a local's choice, leaving the next
-  open point as a fact -- the stepping that is now half of a C2 proof
-  (`letin_e`, `bind_inv`, `pick` / `pick2` / `pick0`, `any_e`). Design it
-  first (what it stops at, how it names what it obtains).
-- A case split over a literal range (`cases j in 0..48`: one subgoal per
-  value), for table facts and bounded counts; `arith` stops at about a
-  dozen cases.
-- Possibly rename `rsimp` to `simp` once the old `simp` is not needed.
-- `conj` building to the goal's grouping; one way of instantiating
-  (`name[x := t]` instead of positional `all_elim`).
-- Smaller frictions: `defs` unfolds in the goal only; `arith` ignores an
-  equation whose sides are not known integers (`pow2(..) = ..`) silently.
+  bit by bit, bits under shifts and powers of 2, two's complement -- and a
+  case split over a literal range (`cases j in 0..32`, for the de Bruijn
+  table). Plan it before building it.
+- `arith` diagnostics: when it fails, list the equations it could not
+  read (sides not known integers).
+- Review the code base (slc, proofs, layers) for bad code practices, a
+  bounded pass (e.g. `translate.rs`).
 
 ## Later
 

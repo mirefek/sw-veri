@@ -960,6 +960,7 @@ impl State {
                     eprintln!("  goal: {}", Printer::new(env).term(g));
                 }
             }
+            "step" => self.step_run(env, lg, rest)?,
             "obtain" => {
                 // obtain x, h from P   (P: ex y. ψ(y); h: ψ(x) for a new x);
                 // obtain x1 .. xn, h from P   (P: ex y1 .. yn. ψ);
@@ -1565,6 +1566,213 @@ impl State {
             s = Seq::gen(env, lg, &s, v)?;
         }
         Ok(s)
+    }
+
+    /// `lemma` (a theorem, by name) applied to the facts `args`, by `apply`
+    fn lemma(&mut self, env: &mut Env, lg: &Logic, lemma: &str, args: &[Seq]) -> KResult<Seq> {
+        let n0 = self.facts.len();
+        let mut pa = vec![Arg::Proof(PE::Ref(lemma.to_string()))];
+        for (i, a) in args.iter().enumerate() {
+            let name = format!("__step{}", i);
+            self.facts.push((name.clone(), a.clone()));
+            pa.push(Arg::Proof(PE::Ref(name)));
+        }
+        let r = self.apply_to(env, lg, &pa, None);
+        self.facts.truncate(n0);
+        r
+    }
+
+    /// `step x.., h.. from P with f1, ..`: P (a run of readable GIMPLE, or a
+    /// fact on a program's outcome) inverted step by step -- the program's
+    /// relation, `letin`s, binds by the `with` facts' one outcomes
+    /// (`g.det`), the locals' choices and the `if`s' outcomes named by the
+    /// names, the `if`s' branches by the `with` facts' conditions -- up to
+    /// what it cannot step (a call, a loop, a branch or choice it has
+    /// nothing for); that fact named h (or its conjuncts h..). Composes the
+    /// lemmas of proofs/gimple_inv.core.
+    fn step_run(&mut self, env: &mut Env, lg: &Logic, rest: &str) -> KResult<()> {
+        let bad = || KernelError("expected `step [x.., ] h.. from P [with f1, ..]`".into());
+        let (names, rest) = rest.split_once(" from ").ok_or_else(bad)?;
+        let (p, with) = match rest.split_once(" with ") {
+            Some((p, w)) => (p, split_top(w, ',')),
+            None => (rest, Vec::new()),
+        };
+        let (xs, hs): (Vec<String>, Vec<String>) = match names.split_once(',') {
+            Some((x, h)) => (x.split_whitespace().map(String::from).collect(), h.split_whitespace().map(String::from).collect()),
+            None => (Vec::new(), names.split_whitespace().map(String::from).collect()),
+        };
+        if hs.is_empty() {
+            return Err(bad());
+        }
+        let mut xs: std::collections::VecDeque<String> = xs.into();
+        let mut withs = std::collections::VecDeque::new();
+        for w in &with {
+            withs.push_back(self.eval(env, lg, &parse_pe(w.trim())?)?);
+        }
+        let sym = |n: &str| env.sym_by_name.get(n).copied();
+        let (runs, mkprog, letin, bind, any, and, or, not, det) =
+            (sym("runs"), sym("mkprog"), sym("letin"), sym("bind_rel"), sym("any_rel"), sym("and"), sym("or"), sym("not"), sym("g.det"));
+        let head = |t: &Term| match t.node() {
+            Node::App(f, a) => Some((*f, a.to_vec())),
+            _ => None,
+        };
+        // an `if`'s outcome: ((c && T) || (c2 && E)) && K(x)
+        let if_shape = |s: &Seq| {
+            head(s.concl()).filter(|(g, _)| Some(*g) == and).and_then(|(_, ka)| {
+                let (o, oa) = head(&ka[0])?;
+                (Some(o) == or).then_some(())?;
+                let (l, _) = head(&oa[0])?;
+                let (r, _) = head(&oa[1])?;
+                (Some(l) == and && Some(r) == and).then_some(())
+            }).is_some()
+        };
+        let mut cur = self.eval(env, lg, &parse_pe(p.trim())?)?;
+        for _ in 0..10000 {
+            let Some((f, a)) = head(cur.concl()) else { break };
+            if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == mkprog) {
+                cur = self.lemma(env, lg, "g.runs_elim", &[cur])?;
+            } else if let (true, Some((g, _))) = (Some(f) == runs, head(&a[0])) {
+                // (a defined program: its definition)
+                if !matches!(env.syms[g as usize].kind, sl_kernel::env::SymKind::Defined { .. }) {
+                    break;
+                }
+                let name = env.syms[g as usize].name.clone();
+                self.facts.push(("__stepc".into(), cur.clone()));
+                let r = self.eval(env, lg, &parse_pe(&format!("expand(__stepc, {})", name))?);
+                self.facts.pop();
+                cur = r?;
+            } else if Some(f) == letin {
+                cur = self.lemma(env, lg, "g.letin_e", &[cur])?;
+            } else if Some(f) == bind {
+                // (an operation's one outcome: the next `with` fact)
+                match withs.front() {
+                    Some(w) if head(w.concl()).is_some_and(|(g, _)| Some(g) == det) => {
+                        let w = withs.pop_front().unwrap();
+                        cur = self.lemma(env, lg, "g.bind_inv", &[cur, w])?;
+                    }
+                    _ => break,
+                }
+            } else if Some(f) == any {
+                // (a local's choice: a word, named)
+                if xs.is_empty() {
+                    break;
+                }
+                let ex_t = Term::app(lg.ex, vec![a[0].clone()]);
+                let Ok(ne) = self.by(env, lg, &ex_t, &parse_pe("ex_intro({0}, simp())")?) else { break };
+                let e = self.lemma(env, lg, "g.any_e", &[ne, cur])?;
+                let h = self.obtain_one(env, lg, e, &xs.pop_front().unwrap())?;
+                cur = and_part(env, &h, true)?;
+            } else if f == lg.ex {
+                if xs.is_empty() {
+                    break;
+                }
+                cur = self.obtain_one(env, lg, cur, &xs.pop_front().unwrap())?;
+            } else if if_shape(&cur) {
+                let h = cur.clone();
+                // an `if`'s outcome: ((c && T) || (c2 && E)) && K(x)
+                let branch = head(h.concl()).filter(|(g, _)| Some(*g) == and).and_then(|(_, ka)| {
+                    let (o, oa) = head(&ka[0])?;
+                    (Some(o) == or).then_some(())?;
+                    let (l, la) = head(&oa[0])?;
+                    let (r, ra) = head(&oa[1])?;
+                    (Some(l) == and && Some(r) == and).then(|| (la[0].clone(), ra[0].clone()))
+                });
+                let Some((c, c2)) = branch else { unreachable!() };
+                // (the branch: the next `with` fact implies its condition,
+                // propositionally)
+                let side = withs.front().and_then(|w| {
+                    if let Ok(x) = Seq::taut(env, lg, &[w], &c) {
+                        Some((true, x))
+                    } else {
+                        Seq::taut(env, lg, &[w], &c2).ok().map(|x| (false, x))
+                    }
+                });
+                let Some((then, w)) = side else {
+                    cur = h;
+                    break;
+                };
+                withs.pop_front();
+                let not = not.ok_or_else(|| KernelError("step: no `not`".into()))?;
+                let (hif, hk) = (and_part(env, &h, false)?, and_part(env, &h, true)?);
+                let mut t = if then {
+                    let nn = Seq::taut(env, lg, &[&w], &Term::app(not, vec![c2.clone()]))?;
+                    self.lemma(env, lg, "g.pick", &[hif, w, nn])?
+                } else {
+                    let nn = Seq::taut(env, lg, &[&w], &Term::app(not, vec![c.clone()]))?;
+                    self.lemma(env, lg, "g.pick2", &[hif, w, nn])?
+                };
+                loop {
+                    match head(t.concl()) {
+                        Some((g, _)) if Some(g) == letin => t = self.lemma(env, lg, "g.letin_e", &[t])?,
+                        Some((g, _)) if Some(g) == bind && withs.front().is_some_and(|w| head(w.concl()).is_some_and(|(d, _)| Some(d) == det)) => {
+                            let w = withs.pop_front().unwrap();
+                            t = self.lemma(env, lg, "g.bind_inv", &[t, w])?;
+                        }
+                        _ => break,
+                    }
+                }
+                // (the branch's outcome x = V: K at V, its dispatch simplified)
+                match head(t.concl()) {
+                    Some((g, ta)) if g == lg.eq && matches!(ta[0].node(), Node::Var(..)) => {
+                        let k = Seq::rewrite(env, &t, &hk)?;
+                        cur = self.step_simp(env, lg, k)?;
+                    }
+                    _ => {
+                        let both = Term::app(and.unwrap(), vec![t.concl().clone(), hk.concl().clone()]);
+                        cur = Seq::taut(env, lg, &[&t, &hk], &both)?;
+                        break;
+                    }
+                }
+            } else {
+                // (an outcome's dispatch on a known outcome: simplified)
+                let k = self.step_simp(env, lg, cur.clone())?;
+                if k.concl() == cur.concl() {
+                    break;
+                }
+                cur = k;
+            }
+        }
+        if !withs.is_empty() {
+            return err(format!("step: {} `with` facts not used (it stopped at `{}`)", withs.len(), Printer::new(env).short(cur.concl())));
+        }
+        if !xs.is_empty() {
+            return err(format!("step: names not used: {} (it stopped at `{}`)", xs.into_iter().collect::<Vec<_>>().join(" "), Printer::new(env).short(cur.concl())));
+        }
+        if hs.len() == 1 {
+            self.facts.push((hs[0].clone(), cur.clone()));
+        } else {
+            let hr: Vec<&str> = hs.iter().map(|x| x.as_str()).collect();
+            let named = conj_named(env, &cur, &hr, "step")?;
+            self.facts.extend(named);
+        }
+        self.last = Some(cur);
+        Ok(())
+    }
+
+    /// a run's outcome simplified: the outcome's parts and the propositional
+    /// rules only (the program's terms as they are)
+    fn step_simp(&mut self, env: &mut Env, lg: &Logic, k: Seq) -> KResult<Seq> {
+        let rules = "rsimp(eq_self, not_true, not_false, not_not, true_and, and_true, false_and, and_false, true_or, or_true, false_or, or_false, \
+            fst_pair, snd_pair, letin_eq, out_state_ok, out_value_ok, out_state_exc, out_value_exc, fst_ok, fst_exc, fst_diverge, only)";
+        let args = match parse_pe(rules)? {
+            PE::Rule(_, a) => a,
+            _ => unreachable!(),
+        };
+        let rs = self.rsimp_rules(env, lg, &args)?;
+        self.rsimp_fact(env, lg, k, &rs)
+    }
+
+    /// `obtain x, h from e` (e: `ex y. ψ(y)`): h, ψ(x) for a new x
+    fn obtain_one(&mut self, env: &mut Env, lg: &Logic, e: Seq, x: &str) -> KResult<Seq> {
+        let body = match e.concl().node() {
+            Node::App(f, a) if *f == lg.ex => a[0].clone(),
+            _ => return err("step: not `ex y. ...`"),
+        };
+        let v = env.new_var(x, 0);
+        self.scope.push((x.to_string(), v));
+        let pv = body.instantiate_params(&[Term::var(v, vec![])], &env.binders_fn());
+        self.frames.push(Frame::Obtain(v, pv.clone(), e));
+        Seq::assume(env, pv)
     }
 
     fn eval(&self, env: &mut Env, lg: &Logic, p: &PE) -> KResult<Seq> {

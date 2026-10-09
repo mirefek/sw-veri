@@ -436,6 +436,7 @@ have h: φ by R(args)      a fact by a goal rule (below)
 have a b c := P           P's conjuncts, named (`_` skips one, `..` ignores the rest, `r..` names it)
 have {sM, x = mM} := P    the conjuncts labelled sM, mM
 obtain x y, h1 h2 from P  witnesses of `ex x y. ...`, the body's conjuncts named
+step x.., h.. from P with f..   a run of readable GIMPLE inverted step by step (below)
 show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
@@ -462,6 +463,27 @@ not search.
 
 Arguments are proof expressions, terms `{t}`, occurrence selections
 `{1, 3}` (numbered from 1, outer before inner, left to right), or symbols.
+
+**step** (C2 proofs; needs proofs/gimple_inv.core). From P -- a run
+`runs(prog, s, o)`, or a fact on a program's outcome -- it goes, in order:
+- through the program's definition and relation (`g.runs_elim`) and
+  `letin`s (`g.letin_e`);
+- through `bind_rel(p, s, ..)` by the next `with` fact `g.det(p, s, ok(s1,
+  v1))`, an operation's one outcome (`g.bind_inv`);
+- through a local's choice of a word (`any_rel`), and an `if`'s outcome
+  (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
+- into the `if`'s branch the next `with` fact decides (it implies c or !c
+  propositionally), through the branch's `letin`s and binds; a branch
+  ending in `x = V` is substituted into K, and K's dispatch on V (an `ok`:
+  on with the rest; a return: the outcome) simplified;
+- and it stops at anything else -- a call, a loop, a bind or branch with
+  no `with` fact for it, a choice with no name -- naming the fact there
+  `h` (or its conjuncts `h..`). Unused names or `with` facts are an error.
+
+```
+step a3 a5 a7 a9 x13, oe from hr with hq     // oe: o = ok(s, bits_of_int(32, Q))
+step x17, hx17 hk17 from hk2 with sd, md, ad, rd1, ld1
+```
 
 ### Rules without a goal
 

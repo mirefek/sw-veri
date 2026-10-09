@@ -34,7 +34,9 @@ item is a short summary of finished work; details are in the files named.
 - **The proof language** (docs/language.md). It has implicit unfolding at
   mismatches, destructuring by position or label, `apply` with
   higher-order matching, `flip` and `unfold`, and cases of a disjunction
-  taken from the fact (`have c: case k of P proof`). Goal rules prove
+  taken from the fact (`have c: case k of P proof`), and `step`: a run of
+  readable GIMPLE inverted step by step (binds by one-outcome facts,
+  branches by conditions, the choices named). Goal rules prove
   `mp` / `apply` premises in place; `arith` reads powers of numerals as
   constants; `rsimp` reduces program outcomes' parts; a `show` must end
   its block. Error messages show the
