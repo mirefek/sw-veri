@@ -2075,6 +2075,42 @@ impl<'e> Gen<'e> {
             return Err(bad("in a zero-initialization: not a store of the zero register"));
         }
         match insn.row {
+            // cmp r64, qword [rsp + d]; jae t: on to a3 when u < x (unsigned)
+            57 => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let g = reg(&x[1])?;
+                let d = self.rsp_mem(&x[2]).filter(|_| nat(&x[0]) == Some(8) && x[3] == x[2]).ok_or_else(|| bad("not cmp r64, qword [rsp + d]"))?;
+                let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let cn = self.hkey(dn);
+                let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
+                // (the register's whole word: its value, of any width)
+                let (ng, u) = self.reg(st, g).ok_or_else(|| bad("an empty register"))?;
+                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
+                if cc != 3 {
+                    return Err(bad("cmp r64, home not followed by jae"));
+                }
+                let c = self.mk("int_lt", vec![u.clone(), xv.clone()]);
+                let text = format!(
+                    "mp(tr.cmp64_r_home_jae, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                    self.base,
+                    self.code,
+                    self.fr,
+                    a,
+                    a2,
+                    a3,
+                    tt,
+                    insn.len,
+                    jn,
+                    self.terms(&[&x[1], &d, &lit(cn), &j, &lit(ng), &u, &xv]),
+                    st.ds,
+                    st.rs,
+                    self.p(&st.spec),
+                    insn.name,
+                    self.insns[&a2].name,
+                    ", simp(L)".repeat(11)
+                );
+                return self.branch(st, c, a3, tt, text);
+            }
             // pxor x, x: a zero-initialization begun -- the spec's store of
             // zeros made at once (tr.ptz_red), the machine's by the stores of x
             135 => {
@@ -2349,6 +2385,17 @@ impl<'e> Gen<'e> {
                 let hn = reg(&h)?;
                 // (mov r32, r32 / mov r64, r64)
                 let n = if nat(&x[0]) == Some(8) { 8 } else { 4 };
+                // (mov r32, r32 of a 64-bit word: its low half)
+                if n == 4 {
+                    if let Some((8, u)) = self.reg(st, g) {
+                        let t = self.head("mov32_rr8", a, insn) + &self.terms(&[&x[1], &h, &x[3], &x[4], &u]) + &self.tail(st, insn, 5, &[]);
+                        self.scratch.insert(hn);
+                        let r = self.mk("bits_of_int", vec![lit(32), u]);
+                        let r = self.value(&r);
+                        let st2 = self.set_reg(st, a2, hn, 4, r);
+                        return self.then(t, st2);
+                    }
+                }
                 let u = self.need_reg(st, g, n)?;
                 let t = self.head(if n == 8 { "mov64_rr" } else { "mov32_rr" }, a, insn) + &self.terms(&[&x[1], &h, &x[3], &x[4], &u]) + &self.tail(st, insn, 5, &[]);
                 self.scratch.insert(hn);
@@ -2480,12 +2527,14 @@ impl<'e> Gen<'e> {
                         let cn = self.hkey(dn);
                         let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
                         let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                        if cc != 4 {
-                            return Err(bad("cmp qword of a home not followed by je"));
-                        }
-                        let c = self.mk("not", vec![self.mk("eq", vec![xv.clone(), kk.clone()])]);
+                        // (je: on when not equal; ja: on when x <= kk, unsigned)
+                        let (rule, c) = match cc {
+                            4 => ("cmp64i_home_je", self.mk("not", vec![self.mk("eq", vec![xv.clone(), kk.clone()])])),
+                            7 => ("cmp64i_home_ja", self.mk("int_le", vec![xv.clone(), kk.clone()])),
+                            _ => return Err(bad("cmp qword of a home not followed by je or ja")),
+                        };
                         let text = format!(
-                            "mp(tr.cmp64i_home_je, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
+                            "mp(tr.{rule}, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}{}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {}, {}{}, {{T}}, {{F}})",
                             self.base,
                             self.code,
                             self.fr,
@@ -2504,6 +2553,18 @@ impl<'e> Gen<'e> {
                             ", simp(L)".repeat(11)
                         );
                         return self.branch(st, c, a3, tt, text);
+                    }
+                    // add qword [rsp + d], imm8: the 8-byte home's u + kk
+                    if nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&x[1]) == Some(0) {
+                        let kk = lit(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm });
+                        let cn = self.hkey(dn);
+                        let Some((8, u)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
+                        let (_, hs2, hk) = self.hkeep(st, cn, 8);
+                        let t = self.head("add64_home", a, insn) + &self.terms(&[&d, &lit(cn), &x[4], &kk, &u]) + &self.tail_h(st, insn, &hs2, 8, &[hk]);
+                        let r = self.mk("bits_add", vec![lit(64), u, kk]);
+                        let r = self.value(&r);
+                        let st2 = self.set_home(st, a2, cn, 8, r);
+                        return self.then(t, st2);
                     }
                     let kk = lit(if imm >= 128 { imm + 0xffff_ff00 } else { imm });
                     if nat(&x[0]) != Some(4) || x[3] != x[2] {
@@ -2644,6 +2705,16 @@ impl<'e> Gen<'e> {
                 }
                 let u = self.need_reg(st, gn, size)?;
                 match (size, nat(&x[1])) {
+                    // add r64, imm8: GIMPLE's u + k
+                    (8, Some(0)) => {
+                        let kk = if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm };
+                        let t = self.head("add64_imm", a, insn) + &self.terms(&[&g, &x[3], &x[4], &lit(kk), &u]) + &self.tail(st, insn, 6, &[]);
+                        let r = self.mk("bits_add", vec![lit(64), u, lit(kk)]);
+                        let r = self.value(&r);
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 8, r);
+                        self.then(t, st2)
+                    }
                     // sub r64, imm8: GIMPLE's p + -k
                     (8, Some(5)) => {
                         let kk = if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm };
@@ -2795,6 +2866,17 @@ impl<'e> Gen<'e> {
                 if nat(&x[0]) == Some(4) {
                     let (bk, b) = m.get("base").and_then(|b| self.tag(b)).ok_or_else(|| bad("fields"))?;
                     let d = m.get("disp").and_then(nat).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    // lea r32, [i * k]: u * k, 32 bits (GIMPLE's product)
+                    if let (0, Some(idx), Some(k), 0) = (bk, m.get("index").and_then(|i| self.app(i, "some", 1)).map(|i| i[0].clone()), m.get("scale").and_then(nat), d) {
+                        let i = reg(&idx)?;
+                        let u = self.need_reg(st, i, 4)?;
+                        let t = self.head("lea32_is", a, insn) + &self.terms(&[&x[1], &idx, &lit(k), &x[2], &x[3], &x[4], &u]) + &self.tail(st, insn, 6, &[]);
+                        let r = self.mk("bits_mul", vec![lit(32), u, lit(k)]);
+                        let r = self.value(&r);
+                        self.scratch.insert(g);
+                        let st2 = self.set_reg(st, a2, g, 4, r);
+                        return self.then(t, st2);
+                    }
                     if bk != 2 || m.get("index").map_or(true, |i| self.app(i, "none", 0).is_none()) || m.get("scale").and_then(nat) != Some(1) {
                         return Err(bad("not lea r32, [b + d]"));
                     }
@@ -3082,6 +3164,19 @@ impl<'e> Gen<'e> {
                     return Ok(Pf { lines: vec![], expr });
                 }
                 let n = self.rbytes;
+                // (a 32-bit result in a 64-bit rax: its low half)
+                if n == 4 {
+                    if let Some((8, u)) = self.reg(st, 0) {
+                        let low = self.mk("bits_of_int", vec![lit(32), u.clone()]);
+                        if self.canon(&low) == self.canon(val) {
+                            let expr = format!(
+                                "mp(tr.ret_insn, {{s}}, {{V}}, {{{}}}, {{{}}}, {{{}}}, {{{}}}, {{HS}}, {{{}}}, {{{}}}, {{{}}}, {{W}}, {{8}}, {{{}}}, {}, simp(L), simp(L), mp(tr.result32w, {{W}}, {{{}}}))",
+                                self.base, self.code, a, insn.len, st.ds, st.rs, pr, self.print(&u), insn.name, self.print(&u)
+                            );
+                            return Ok(Pf { lines: vec![], expr });
+                        }
+                    }
+                }
                 let v = self.need_reg(st, 0, n)?;
                 if &v != val {
                     return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))));
