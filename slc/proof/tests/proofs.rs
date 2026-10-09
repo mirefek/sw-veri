@@ -370,6 +370,13 @@ fn arithmetic_is_proven() {
     assert_eq!(arith_ok("x = 3 -> int_lt(x, 4)", &[("h", "x = 3")]), Ok(1));
     // numbers built from numbers are in omega
     assert_eq!(arith_ok("a in omega -> int_add(int_mul(3, a), 2) in omega", &[na]), Ok(1));
+    // products as monomials (the ring laws), nonnegative products
+    assert_eq!(arith_ok("int_mul(a, int_add(b, x)) = int_add(int_mul(x, a), int_mul(b, a))", &[]), Ok(1));
+    assert_eq!(arith_ok("a in omega -> b in omega -> int_le(0, int_mul(a, b))", &[na, nb]), Ok(1));
+    // division by a symbolic divisor: x = m q + r
+    assert_eq!(arith_ok("a in omega -> int_lt(0, b) -> a = int_add(int_mul(b, int_div(a, b)), int_mod(a, b))", &[na, ("h", "int_lt(0, b)")]), Ok(1));
+    // pow2(k + 1) is 2 pow2(k)
+    assert_eq!(arith_ok("a in omega -> int_mul(x, pow2(int_add(a, 1))) = int_mul(2, int_mul(pow2(a), x))", &[na]), Ok(1));
 }
 
 #[test]
@@ -390,8 +397,11 @@ fn unsound_arithmetic_is_rejected() {
     bad("a in omega -> b in omega -> int_sub(a, b) in omega", &[na, nb]);
     // division facts that do not hold
     bad("a in omega -> int_lt(int_mod(a, 4), 3)", &[na]);
-    // products of variables are not linear: this true fact is not proven
-    bad("a in omega -> int_le(0, int_mul(a, a))", &[na]);
+    // a square's sign needs its factor's: this true fact is not proven
+    bad("int_le(0, int_mul(x, x))", &[]);
+    // products: no ordering of factors assumed
+    bad("a in omega -> b in omega -> int_le(int_mul(a, b), int_mul(a, a))", &[na, nb]);
+    bad("int_mul(a, b) = int_mul(a, a)", &[]);
 }
 
 #[test]
@@ -544,6 +554,12 @@ fn the_record_library_checks() {
     }
     let n = load_with(&mut env, &core_file("records.core"), false, Some(&mut ScriptProver)).unwrap().theorems.len();
     assert!(n >= 10, "{}", n);
+}
+
+#[test]
+fn the_bit_library_checks() {
+    let n = check_nat(&core_file("bits.core")).unwrap();
+    assert_eq!(n, 33);
 }
 
 #[test]

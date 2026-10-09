@@ -289,6 +289,35 @@ impl PTree {
         Some(rows)
     }
 
+    /// The value under a partial assignment (`mask`: the atoms assigned,
+    /// `val` their values), if it is determined.
+    pub(crate) fn eval3(&self, mask: u64, val: u64) -> Option<bool> {
+        match self {
+            PTree::Atom(i) => (mask >> i & 1 == 1).then_some(val >> i & 1 == 1),
+            PTree::False => Some(false),
+            PTree::Imp(a, b) => match (a.eval3(mask, val), b.eval3(mask, val)) {
+                (Some(false), _) | (_, Some(true)) => Some(true),
+                (Some(true), Some(false)) => Some(false),
+                _ => None,
+            },
+        }
+    }
+
+    /// An unassigned atom the value depends on (the first, left to right,
+    /// in an undetermined part).
+    pub(crate) fn pick(&self, mask: u64, val: u64) -> Option<usize> {
+        match self {
+            PTree::Atom(i) => (mask >> i & 1 == 0).then_some(*i),
+            PTree::False => None,
+            PTree::Imp(a, b) => {
+                if self.eval3(mask, val).is_some() {
+                    return None;
+                }
+                a.pick(mask, val).or_else(|| b.pick(mask, val))
+            }
+        }
+    }
+
     pub(crate) fn eval(&self, row: u64) -> bool {
         match self {
             PTree::Atom(i) => row >> i & 1 == 1,

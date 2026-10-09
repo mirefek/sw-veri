@@ -19,13 +19,24 @@
 //!   `0 <= int_mod(a, k) < k` (Euclidean division);
 //! * `omega` is the integers `>= 0`; `bits(n)` those in `0 .. 2^n - 1`;
 //!   `bits_add(n, a, b) = int_mod(a + b, 2^n)` (and `bits_sub`, `bits_neg`,
-//!   `bits_of_int` likewise); the length of a list is in omega.
+//!   `bits_of_int` likewise); the length of a list is in omega; a power
+//!   (`int_pow`, `pow2`) is an integer (its definition: a product, or 0).
+//!
+//! Products of non-constants are read as monomials: the products of their
+//! factors' values (sorted), a polynomial normal form (the commutative ring
+//! laws). Facts of symbolic divisors and powers are added as premises (see
+//! `symbolic_facts`); `pow2(k + c)` (c a numeral, k a known natural) is
+//! read as `2^c * pow2(k)` (`int_pow`'s recursion).
 //!
 //! `arith(premises, goal)` checks that `premises -> goal` holds whenever
 //! each atom is read as true or false and the arithmetic atoms are
 //! consistent: for every assignment falsifying it, the arithmetic literals
 //! are infeasible over the integers (Fourier-Motzkin elimination with
-//! integer tightening: sound, not complete). Every term in an arithmetic
+//! integer tightening: sound, not complete). The assignments are searched
+//! by case splits on the atoms the formula still depends on; a branch
+//! closes when the formula is true there or its literals so far are
+//! infeasible (every falsifying assignment extends a branch searched, or
+//! one closed). Every term in an arithmetic
 //! position stands for its value `int_val(t)`: arithmetic terms exactly,
 //! other terms as integer variables. Comparisons `int_lt`, `int_le` are
 //! comparisons of values. An equation `a = b`, and membership in `omega`
@@ -194,7 +205,43 @@ fn small(t: &Term) -> Option<i128> {
     }
 }
 
+/// the key of a monomial's variable: its factors (variables), sorted
+const MONO: SymId = u32::MAX - 1;
+
 impl Reader {
+    /// the factors of variable v (v itself, or a monomial's)
+    fn factors(&mut self, v: usize) -> Vec<usize> {
+        match self.vars[v].node() {
+            Node::App(f, a) if *f == MONO => a.to_vec().iter().map(|t| self.var_of(t)).collect(),
+            _ => vec![v],
+        }
+    }
+
+    /// x * y, a polynomial (each product of variables a monomial's
+    /// variable); None if too large (degree above 4, many terms)
+    fn mul(&mut self, x: &Lin, y: &Lin) -> Option<Lin> {
+        if x.coeffs.len() * y.coeffs.len() > 64 {
+            return None;
+        }
+        let mut r = Lin::konst(x.c.checked_mul(y.c)?);
+        r = r.add(&Lin { coeffs: y.coeffs.clone(), c: 0 }, x.c)?;
+        r = r.add(&Lin { coeffs: x.coeffs.clone(), c: 0 }, y.c)?;
+        for (v, a) in x.coeffs.clone() {
+            for (w, b) in y.coeffs.clone() {
+                let mut fs = self.factors(v);
+                fs.extend(self.factors(w));
+                if fs.len() > 4 {
+                    return None;
+                }
+                fs.sort();
+                let key = Term::app(MONO, fs.iter().map(|i| self.vars[*i].clone()).collect());
+                let m = self.var_of(&key);
+                r = r.add(&Lin::var(m), a.checked_mul(b)?)?;
+            }
+        }
+        Some(r)
+    }
+
     /// a numeral's value, or a power of numerals' (`pow2(64)`, `int_pow(2, 32)`)
     fn konst(&self, t: &Term) -> Option<i128> {
         let s = self.s;
@@ -244,7 +291,7 @@ impl Reader {
             // the length of a list expression (a natural)
             Node::App(f, a) if is(*f, self.ls.len) && super::list::flatten(&self.ls, &a[0], &self.lists).is_some() => true,
             Node::App(f, _) => {
-                [s.int_add, s.int_sub, s.int_neg, s.int_mul, s.int_div, s.int_mod, s.int_succ, s.int_pred].iter().any(|g| is(*f, *g))
+                [s.int_add, s.int_sub, s.int_neg, s.int_mul, s.int_div, s.int_mod, s.int_succ, s.int_pred, s.pow2, s.int_pow].iter().any(|g| is(*f, *g))
                     || self.bits_op(t).is_some()
                     // (a signed value, the other word operations: integers)
                     || is(*f, s.sint)
@@ -322,6 +369,14 @@ impl Reader {
                 let (b, k) = (small(&a[0])?, small(&a[1])? as u32);
                 return b.checked_pow(k).map(Lin::konst);
             }
+            // pow2(k + c), k a natural: 2^c pow2(k)
+            Node::App(f, a) if is(*f, s.pow2) && matches!(a[0].node(), Node::App(p, b) if is(*p, s.int_add) && b.len() == 2
+                && small(&b[1]).is_some_and(|c| (0..=64).contains(&c)) && self.natural(&b[0])) =>
+            {
+                let Node::App(_, b) = a[0].node() else { unreachable!() };
+                let p = Term::app(*f, vec![b[0].clone()]);
+                return self.lin(&p)?.scale(1i128 << small(&b[1])?);
+            }
             Node::App(f, a) if is(*f, s.int_pred) => return self.lin(&a[0])?.add(&Lin::konst(1), -1),
             // the length of a list expression: its singletons plus the
             // lengths of the lists in it (each >= 0)
@@ -370,6 +425,11 @@ impl Reader {
                 }
                 if let Some(k) = self.konst(&a[1]) {
                     return self.lin(&a[0])?.scale(k);
+                }
+                // (else a polynomial: monomials)
+                let (x, y) = (self.lin(&a[0])?, self.lin(&a[1])?);
+                if let Some(p) = self.mul(&x, &y) {
+                    return Some(p);
                 }
             }
             Node::App(f, a) if is(*f, s.int_div) || is(*f, s.int_mod) => {
@@ -472,7 +532,7 @@ impl Reader {
 
 /// Fourier-Motzkin: is `{ l >= 0 : l in cs }` infeasible over the integers?
 /// (Unknown is reported as feasible.)
-fn infeasible(mut cs: Vec<Lin>) -> bool {
+fn infeasible(mut cs: Vec<Lin>, limit: usize) -> bool {
     fn gcd(a: i128, b: i128) -> i128 {
         if b == 0 { a.abs() } else { gcd(b, a % b) }
     }
@@ -570,7 +630,7 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
                 rest.push(l);
             }
         }
-        if rest.len() > 20_000 {
+        if rest.len() > limit {
             return false;
         }
         cs = rest;
@@ -579,14 +639,14 @@ fn infeasible(mut cs: Vec<Lin>) -> bool {
 
 /// The literals of one assignment (with `!=` and ranges split into cases)
 /// are infeasible.
-fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize) -> bool {
+fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize, limit: usize) -> bool {
     if k == lits.len() {
-        return infeasible(base.to_vec());
+        return infeasible(base.to_vec(), limit);
     }
     let add = |extra: Vec<Lin>| {
         let mut b = base.to_vec();
         b.extend(extra);
-        refuted(lits, &b, k + 1)
+        refuted(lits, &b, k + 1, limit)
     };
     let minus1 = |l: &Lin| l.add(&Lin::konst(1), -1).unwrap_or(l.clone());
     match &lits[k] {
@@ -612,8 +672,48 @@ fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize) -> bool {
                 add(vec![minus1(&above.scale(-1).unwrap_or(Lin::konst(0)))]) && below.is_none_or(|b| add(vec![minus1(&b.scale(-1).unwrap_or(Lin::konst(0)))]))
             }
         }
-        (Atom::True, _) => refuted(lits, base, k + 1),
+        (Atom::True, _) => refuted(lits, base, k + 1, limit),
     }
+}
+
+/// No assignment extending (mask, val) falsifies the tree with feasible
+/// arithmetic literals; else such a (partial) assignment, or None when the
+/// budget of cases runs out.
+fn falsify(tree: &super::prop::PTree, read: &[Option<Atom>], base: &[Lin], mask: u64, val: u64, last: Option<usize>, budget: &mut usize) -> Result<(), Option<(u64, u64)>> {
+    if *budget == 0 {
+        return Err(None);
+    }
+    *budget -= 1;
+    let det = tree.eval3(mask, val);
+    if det == Some(true) {
+        return Ok(());
+    }
+    // the literals so far: infeasible closes the branch (checked again when
+    // the last split added one; before a leaf, within a small budget)
+    let new_lit = last.is_none_or(|i| read[i].is_some());
+    let pick = tree.pick(mask, val);
+    let mut lits = Vec::new();
+    for (i, a) in read.iter().enumerate() {
+        if mask >> i & 1 == 0 {
+            continue;
+        }
+        let v = val >> i & 1 == 1;
+        match a {
+            Some(Atom::True) if !v => return Ok(()),
+            Some(a) => lits.push((a.clone(), v)),
+            None => {}
+        }
+    }
+    let limit = if pick.is_some() { 200 } else { 20_000 };
+    if (new_lit || pick.is_none()) && refuted(&lits, base, 0, limit) {
+        return Ok(());
+    }
+    let Some(i) = pick else {
+        return Err(Some((mask, val)));
+    };
+    let bit = 1u64 << i;
+    falsify(tree, read, base, mask | bit, val | bit, Some(i), budget)?;
+    falsify(tree, read, base, mask | bit, val, Some(i), budget)
 }
 
 /// Facts about word operations of a symbolic width n (arith reads only
@@ -628,6 +728,10 @@ fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize) -> bool {
 /// * for q = `int_div(x, m)`, m not a numeral: `int_le(0, x) && int_lt(x, m)
 ///   -> q = 0`, `int_lt(0, m) && int_le(m, x) && int_lt(x, 2 * m) -> q = 1`
 ///   (Euclidean division: x = m * 0 + x, x = m * 1 + (x - m));
+/// * for q = `int_div(x, m)`, r = `int_mod(x, m)`, m not a constant:
+///   `int_lt(0, m) -> x = m * q + r` (Euclidean division);
+/// * for a product `int_mul(a, b)` of non-constants: `int_le(0, a) &&
+///   int_le(0, b) -> int_le(0, int_mul(a, b))` (the ordered ring);
 /// * `k in omega -> pow2(k + 1) = 2 * pow2(k)` (`int_pow`'s recursion);
 /// * `x in bits(n) <-> x in omega && int_lt(x, pow2(n))` (`bits`'s definition).
 fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
@@ -639,8 +743,15 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
     };
     let (badd, bsub, boi, idiv, imul) = (g("bits_add"), g("bits_sub"), g("bits_of_int"), g("int_div"), g("int_mul"));
     let bf = env.binders_fn();
+    // (a numeral, or a power of numerals: what arith reads as a constant)
+    let ipow = g("int_pow");
+    let constant = |t: &Term| match t.node() {
+        Node::Nat(_) => true,
+        Node::App(f, a) if (*f == pow2 || Some(*f) == ipow) && a.iter().all(|x| small(x).is_some()) => small(a.last().unwrap()).is_some_and(|k| k <= 120),
+        _ => false,
+    };
     // (the closed subterms with these heads, each once)
-    let heads: Vec<SymId> = [Some(imod), Some(pow2), Some(inn), badd, bsub, boi, idiv].into_iter().flatten().collect();
+    let heads: Vec<SymId> = [Some(imod), Some(pow2), Some(inn), badd, bsub, boi, idiv, imul].into_iter().flatten().collect();
     let mut seen = std::collections::HashSet::new();
     let mut terms: Vec<Term> = Vec::new();
     fn collect(t: &Term, heads: &[SymId], bf: &dyn Fn(SymId, usize) -> u32, seen: &mut std::collections::HashSet<Term>, out: &mut Vec<Term>) {
@@ -688,8 +799,14 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
                     out.push(imp(app(inn, vec![k, app(omega, vec![])]), both));
                 }
             }
+        } else if Some(*f) == imul && a.len() == 2 && !constant(&a[0]) && !constant(&a[1]) {
+            let both = app(and, vec![app(le, vec![zero.clone(), a[0].clone()]), app(le, vec![zero.clone(), a[1].clone()])]);
+            out.push(imp(both, app(le, vec![zero.clone(), t.clone()])));
         } else if Some(*f) == idiv && a.len() == 2 && small(&a[1]).is_none() {
             let (x, m) = (a[0].clone(), a[1].clone());
+            if !constant(&m) {
+                mods.push(app(imod, vec![x.clone(), m.clone()]));
+            }
             let one = Term::nat(crate::nat::Nat::from_u64(1));
             let two = Term::nat(crate::nat::Nat::from_u64(2));
             let below = app(and, vec![app(le, vec![zero.clone(), x.clone()]), app(lt, vec![x.clone(), m.clone()])]);
@@ -704,15 +821,28 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
             if let Node::App(b, w) = a[1].node() {
                 if *b == bits && w.len() == 1 && wide(&w[0]) {
                     let p2 = app(pow2, vec![w[0].clone()]);
-                    let rhs = app(and, vec![app(inn, vec![a[0].clone(), app(omega, vec![])]), app(lt, vec![a[0].clone(), p2])]);
+                    let rhs = app(and, vec![app(inn, vec![a[0].clone(), app(omega, vec![])]), app(lt, vec![a[0].clone(), p2.clone()])]);
                     out.push(app(iff, vec![t.clone(), rhs]));
+                    if seen.insert(p2.clone()) {
+                        out.push(imp(app(inn, vec![w[0].clone(), app(omega, vec![])]), app(lt, vec![zero.clone(), p2])));
+                    }
                 }
             }
         }
     }
+    let mut done = std::collections::HashSet::new();
     for r in mods {
+        if !done.insert(r.clone()) {
+            continue;
+        }
         let Node::App(_, a) = r.node() else { continue };
         let (x, m) = (a[0].clone(), a[1].clone());
+        // (x = m q + r, as two comparisons of values)
+        if let (Some(mul), false) = (imul, constant(&m)) {
+            let e = app(iadd, vec![app(mul, vec![m.clone(), app(idiv.unwrap(), vec![x.clone(), m.clone()])]), r.clone()]);
+            let both = app(and, vec![app(le, vec![x.clone(), e.clone()]), app(le, vec![e, x.clone()])]);
+            out.push(imp(app(lt, vec![zero.clone(), m.clone()]), both));
+        }
         if let Node::App(p, w) = m.node() {
             if *p == pow2 && wide(&w[0]) {
                 out.push(imp(app(inn, vec![w[0].clone(), app(omega, vec![])]), app(lt, vec![zero.clone(), m.clone()])));
@@ -787,35 +917,28 @@ impl Logic {
         }
         let mut atoms: Vec<Term> = Vec::new();
         let tree = self.prop_tree(env, &f, &mut atoms, 0)?;
-        let Some(rows) = tree.falsifying_rows(atoms.len(), 20) else {
+        if atoms.len() > 63 {
             return err("arith: too many atoms");
-        };
+        }
         let read: Vec<Option<Atom>> = atoms.iter().map(|a| r.atom(a)).collect();
         let base: Vec<Lin> = r.side.clone();
-        for row in rows {
-            let mut lits = Vec::new();
-            let mut contradiction = false;
-            for (i, a) in read.iter().enumerate() {
-                let val = row >> i & 1 == 1;
-                match a {
-                    Some(Atom::True) if !val => contradiction = true,
-                    Some(a) => lits.push((a.clone(), val)),
-                    None => {}
-                }
-            }
-            if contradiction {
-                continue;
-            }
-            if !refuted(&lits, &base, 0) {
+        // the assignments falsifying the formula, by case splits on the atoms
+        // it depends on: each branch closed when the formula is true there,
+        // or when its arithmetic literals are infeasible
+        let mut budget = 100_000usize;
+        match falsify(&tree, &read, &base, 0, 0, None, &mut budget) {
+            Ok(()) => Ok(()),
+            Err(None) => err("arith: too many cases"),
+            Err(Some((mask, row))) => {
                 let atoms_s: Vec<String> = atoms
                     .iter()
                     .enumerate()
+                    .filter(|(i, _)| mask >> i & 1 == 1)
                     .map(|(i, a)| format!("{}={}", crate::syntax::Printer::new(env).term(a), row >> i & 1))
                     .collect();
-                return err(format!("arith: not shown (a consistent case: {})", atoms_s.join(", ")));
+                err(format!("arith: not shown (a consistent case: {})", atoms_s.join(", ")))
             }
         }
-        Ok(())
     }
 
     /// The recursion equations of `nat_rec` for `t = nat_rec(z, k v. s, n)`:

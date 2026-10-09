@@ -560,7 +560,7 @@ premise they stand for.
 | rule | proves the goal by |
 |---|---|
 | `taut(p..)` | a propositional tautology from the premises; `a = b` is also `b = a`, and `a != b` is `!(a = b)` |
-| `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`) |
+| `arith(p..)` | propositional logic plus linear arithmetic over integers: words mod 2^n with symbolic widths, `*`, `/`, `%` by constants (numerals, or powers of numerals: `pow2(64)`, `int_pow(2, 32)`); products of non-constants as monomials (`a * (b + c)` is `a b + a c`), a product of nonnegatives nonnegative, `x = m q + r` for `/`, `%` by a symbolic m > 0, `pow2(k + 1)` as `2 pow2(k)` |
 | `rsimp(e.., D.., [only])` | left-to-right rewriting to `true` with the facts, definitions and registered `simp` rules |
 | `simp(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier, below |
 | `defs(p, D..)` | p proves the goal with D unfolded |
@@ -570,6 +570,13 @@ premise they stand for.
 | `induct(base, step)` | `all n. n in omega -> P(n)` |
 | `eval(p..)` | evaluation on concrete data |
 | `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact) |
+
+In `arith`, an equation of two factors is not substituted into a product
+(from `q = Q`, `m q = m Q` does not follow): rewrite the product first
+(`rewrite(e, refl({int_mul(m, q)}), {2})`). A sign fact comes with each
+product in the facts or the goal, so a product term given as a hint
+(`refl({int_mul(m, int_sub(q, 1))})`) brings `m >= 0 && q - 1 >= 0 -> m
+(q - 1) >= 0` in (core/bits.core's `div_unique`).
 
 **Implicit unfolding.** A fact proves a goal that differs from it only by
 definitions. The checker unfolds at the mismatches, newer definitions

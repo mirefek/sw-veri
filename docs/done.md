@@ -27,8 +27,10 @@ item is a short summary of finished work; details are in the files named.
 - **The kernel and trusted extensions:**
   - propositional and quantifier rules, equality and rewriting under
     binders;
-  - linear arithmetic over integers and words, with symbolic widths
-    (and division by a symbolic divisor below twice it);
+  - linear arithmetic over integers and words, with symbolic widths,
+    products as monomials, Euclidean division by a symbolic divisor and
+    nonnegative products, its cases searched by splits pruned by
+    infeasibility;
   - lists;
   - memory reads through writes (`mem_read`: apart / the same / inside,
     each decided by arith);
@@ -47,7 +49,10 @@ item is a short summary of finished work; details are in the files named.
   its block. Error messages show the
   first difference, with the proof's abbreviations folded back.
 - **Libraries** (`core/`): logic, sets, naturals and words (a word is
-  determined by its bits), records, lists, and loops. For loops, `while_inv`, `while_var` and
+  determined by its bits), records, lists, and loops. `core/bits.core`:
+  division by powers of 2, a word's bits under `/`, `mod` and `*` by 2^k,
+  shifts, `and` / `or` / `xor` / `not` bit by bit, the complement, `x - 1`
+  and `-x` around the lowest set bit, bit extensionality. For loops, `while_inv`, `while_var` and
   `while_exists` are proven by induction, with no open lemmas.
 - **The checker**: a per-file cache. The main chain checks in about 5 s
   uncached and 0.2 s cached.
