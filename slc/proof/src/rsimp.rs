@@ -492,7 +492,7 @@ impl State {
             _ => t.clone(),
         };
         let s = self.normalize(env, lg, s, &rhs, rs, depth)?;
-        let s = Seq::inst(env, &s.discharge(env, &e0), v, goal)?;
+        let s = Seq::inst(env, &s.discharge(env, &e0)?, v, goal)?;
         Seq::mp(env, &s, &Seq::refl(env, goal)?)
     }
 

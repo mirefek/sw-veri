@@ -47,7 +47,7 @@ impl State {
         let iff = env.sym_by_name.get("iff").copied().unwrap();
         let g2 = Term::app(iff, vec![Term::app(bit, vec![l.clone(), i.clone()]), Term::app(bit, vec![r.clone(), i.clone()])]);
         let p = self.bitwise_prop(env, lg, &g2, &fs)?;
-        let p = Seq::gen(env, lg, &p.discharge(env, &al).discharge(env, &ai), v)?;
+        let p = Seq::gen(env, lg, &p.discharge(env, &al)?.discharge(env, &ai)?, v)?;
         let ext = facts::seq_of(env, "bits_ext").ok_or_else(|| KernelError("bitwise: needs `bits_ext` (core/bits.core)".into()))?;
         let e = Seq::mp(env, &Seq::all_elim(env, lg, &ext, &n)?, &hn)?;
         let e = Seq::all_elim(env, lg, &Seq::all_elim(env, lg, &e, &l)?, &r)?;
@@ -252,7 +252,7 @@ impl State {
             s = Seq::rewrite(env, &pe, &s).ok()?;
         }
         for h in assumed.iter().rev() {
-            s = s.discharge(env, h);
+            s = s.discharge(env, h).ok()?;
         }
         Some(s)
     }
@@ -444,7 +444,7 @@ impl State {
             let pc = self.by(env, lg, &gc, &rc).map_err(|e| KernelError(format!("cases: the case {}: {}", c, e.0)))?;
             let eq = Term::app(env.builtins.eq, vec![nat(c), k.clone()]);
             let he = Seq::assume(env, eq.clone())?;
-            let ec = Seq::subst(env, &he, &body, &pc)?.discharge(env, &eq);
+            let ec = Seq::subst(env, &he, &body, &pc)?.discharge(env, &eq)?;
             let lc = le(nat(c), k.clone());
             let split = Term::app(env.builtins.imp, vec![lc.clone(), Term::app(or, vec![eq.clone(), le(nat(c + 1), k.clone())])]);
             let d = Seq::arith(env, lg, &refs, &split)?;

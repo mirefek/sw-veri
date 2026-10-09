@@ -76,7 +76,7 @@ impl Logic {
             "omega", "not", "and", "or",
         ]
         .iter()
-        .filter_map(|n| env.sym_by_name.get(*n).copied())
+        .filter_map(|n| env.ksym(*n))
         .chain([env.builtins.eq, env.builtins.imp, self.in_])
         .collect();
         let mut gn = Vec::new();
@@ -93,7 +93,7 @@ impl Logic {
     /// `t = r`, t = `gimple.bytes_at(M, b, m)` resolved through M's writes
     /// (see the module docs).
     pub fn mem_read(&self, env: &Env, premises: &[Term], t: &Term) -> KResult<Term> {
-        let g = |n: &str| env.sym_by_name.get(n).copied();
+        let g = |n: &str| env.ksym(n);
         let (Some(bytes_at), Some(fn_update), Some(store_le), Some(app), Some(int_add), Some(int_sub), Some(int_le), Some(int_mod), Some(int_div), Some(int_pow), Some(and), Some(or)) = (
             g("gimple.bytes_at"),
             g("fn_update"),

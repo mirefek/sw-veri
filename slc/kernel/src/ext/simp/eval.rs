@@ -102,7 +102,7 @@ impl<'s, 'a> Ev<'s, 'a> {
     }
 
     fn name(&self, f: SymId) -> &str {
-        &self.sp.env.syms[f as usize].name
+        self.sp.env.kname(f)
     }
 
     /// A closed term in normal form: `simp`'s term rules, and definitions
@@ -485,21 +485,21 @@ impl<'s, 'a> Ev<'s, 'a> {
                 return Ok(Some(true));
             }
         }
-        // constructors: the same one, argument by argument
+        // constructors, each read as the pair it is (`tag(k, v)` is `pair(k,
+        // v)`, `ok(s, v)` is `pair(0, pair(s, v))`, `exc` tag 1, `diverge`
+        // tag 2): argument by argument
         let s = &self.sp.s;
-        let ctor = |t: &Term| -> Option<(u8, Vec<Term>)> {
+        let ctor = |t: &Term| -> Option<Vec<Term>> {
+            let nat = |k: u64| Term::nat(crate::nat::Nat::from_u64(k));
             match t.node() {
-                Node::App(g, b) if is(*g, s.pair) || is(*g, s.tag) => Some((10, b.to_vec())),
-                Node::App(g, b) if is(*g, s.ok) => Some((0, b.to_vec())),
-                Node::App(g, b) if is(*g, s.exc) => Some((1, b.to_vec())),
-                Node::App(g, b) if is(*g, s.diverge) => Some((2, b.to_vec())),
+                Node::App(g, b) if (is(*g, s.pair) || is(*g, s.tag)) && b.len() == 2 => Some(b.to_vec()),
+                Node::App(g, b) if is(*g, s.ok) && b.len() == 2 => Some(vec![nat(0), Term::app(s.pair?, b.to_vec())]),
+                Node::App(g, b) if is(*g, s.exc) && b.len() == 2 => Some(vec![nat(1), Term::app(s.pair?, b.to_vec())]),
+                Node::App(g, b) if is(*g, s.diverge) && b.len() == 1 => Some(vec![nat(2), b[0].clone()]),
                 _ => None,
             }
         };
-        let (Some((kp, ap)), Some((kv, av))) = (ctor(&pat), ctor(v)) else { return Ok(None) };
-        if kp != kv || ap.len() != av.len() {
-            return Ok(Some(false));
-        }
+        let (Some(ap), Some(av)) = (ctor(&pat), ctor(v)) else { return Ok(None) };
         for (x, y) in ap.iter().zip(&av) {
             match self.unify(x, y, us, a)? {
                 Some(true) => {}
@@ -691,7 +691,7 @@ impl Logic {
         if std::env::var("EVAL_STATS").is_ok() {
             eprintln!("eval stats [subst, norm, truth, structural, outcomes, truth input size]: {:?}", ev.stats.borrow());
         }
-        let iff = env.sym_by_name.get("iff").copied().ok_or_else(|| crate::env::KernelError("no iff".into()))?;
+        let iff = env.ksym("iff").ok_or_else(|| crate::env::KernelError("no iff".into()))?;
         let mut rhs = sp.ff();
         for m in &ms {
             rhs = sp.or(rhs, Term::app(sp.s.eq, vec![Term::bvar(0), m.shift(1, 0, &env.binders_fn())]));

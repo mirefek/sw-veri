@@ -167,7 +167,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
             s = match fr {
                 // an assumption already discharged by a step is not discharged again
                 Frame::Assume(t) if st.discharged.borrow().contains(t) && !s.hyps().contains(t) => s,
-                Frame::Assume(t) => s.discharge(env, t),
+                Frame::Assume(t) => s.discharge(env, t)?,
                 // generalize over x only if it still occurs (a `gen` step may have done it)
                 Frame::Fix(v) => {
                     let mut vs = Vec::new();
@@ -177,7 +177,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                 // ∃-elimination: ψ(x) ⊢ Q becomes ψ(c) -> Q with c the choice
                 // witness of P, then modus ponens with `witness(P)`
                 Frame::Obtain(v, prop, ex) => {
-                    let s1 = s.discharge(env, prop);
+                    let s1 = s.discharge(env, prop)?;
                     if has_var(s.concl(), *v) {
                         return Err(KernelError(format!("the obtained `{}` occurs in the result", env.vars[*v as usize].name)));
                     }
@@ -373,7 +373,7 @@ fn flip_seq(env: &mut Env, lg: &Logic, s: &Seq) -> KResult<Seq> {
         Node::App(q, a) if *q == env.builtins.imp => {
             let h = a[0].clone();
             let f = flip_seq(env, lg, &Seq::mp(env, s, &Seq::assume(env, h.clone())?)?)?;
-            Ok(f.discharge(env, &h))
+            f.discharge(env, &h)
         }
         Node::App(q, _) if *q == env.builtins.eq => Seq::sym(env, s),
         _ => {
@@ -448,8 +448,8 @@ fn sym_facts(env: &Env, ps: &[Seq], goal: &Term) -> KResult<Vec<Seq>> {
     for t in nes.into_iter().filter(|t| t.loose_depth(&env.binders_fn()) == 0) {
         let ne = ne.unwrap();
         let u = unfold_all(env, &t, &[ne]);
-        let f = Seq::conv(env, &Seq::assume(env, t.clone())?, &u, &[ne])?.discharge(env, &t);
-        let g = Seq::conv(env, &Seq::assume(env, u.clone())?, &t, &[ne])?.discharge(env, &u);
+        let f = Seq::conv(env, &Seq::assume(env, t.clone())?, &u, &[ne])?.discharge(env, &t)?;
+        let g = Seq::conv(env, &Seq::assume(env, u.clone())?, &t, &[ne])?.discharge(env, &u)?;
         out.extend([f, g]);
     }
     for (a, b) in &all {
@@ -2061,7 +2061,7 @@ impl State {
                             return err(format!("`{}` is not an assumption", h));
                         }
                         self.discharged.borrow_mut().push(t.clone());
-                        Ok(p.discharge(env, &t))
+                        p.discharge(env, &t)
                     }
                     "gen" => {
                         // gen(p, x): generalize over a variable introduced by `fix`

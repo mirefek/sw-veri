@@ -31,6 +31,7 @@ pub mod facts;
 pub(crate) mod inventory;
 pub mod list;
 pub mod mem;
+pub(crate) mod pinned;
 pub mod prop;
 pub mod simp;
 pub mod seq;

@@ -211,12 +211,13 @@ impl Seq {
 
     /// From `Γ ⊢ φ`: `Γ \ {a} ⊢ a -> φ` (the deduction theorem; if `a` is not
     /// among `Γ`, `imp_weaken`).
-    pub fn discharge(&self, env: &Env, a: &Term) -> Seq {
-        Seq {
+    pub fn discharge(&self, env: &Env, a: &Term) -> KResult<Seq> {
+        env.check_wf(a, 0)?;
+        Ok(Seq {
             hyps: self.hyps.iter().filter(|h| *h != a).cloned().collect(),
             concl: env.mk_imp(a.clone(), self.concl.clone()),
             open: self.open.clone(),
-        }
+        })
     }
 
     /// From `Γ ⊢ a -> b` and `Δ ⊢ a`: `Γ, Δ ⊢ b` (modus ponens under
@@ -555,6 +556,10 @@ impl Seq {
         // the library facts the step relied on: proven, or open lemmas this
         // sequent rests on (never silently assumed)
         for name in used {
+            // (its statement the one simp relies on: `ext::pinned`)
+            if !super::pinned::thm_ok(env, &name) {
+                return err(format!("simp relies on `{}` (core/loop.core) with its statement there; this one differs", name));
+            }
             if env.theorems.iter().any(|(n, _)| *n == name) {
                 continue;
             }

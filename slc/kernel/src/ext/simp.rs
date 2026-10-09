@@ -2,7 +2,10 @@
 //! execution of `runs(P, s, o)`.
 //!
 //! Trusted extension. It rewrites with a fixed set of rules, each a theorem
-//! of the prelude:
+//! of the prelude (or of the pinned definitions of `x86_64_linux.store_le`,
+//! `x86_64_linux.le`, `x86.apart`): the symbols are read by name only as
+//! `Env::ksym` / `Env::kname` resolve them -- the canonical prelude's, or a
+//! definition with its pinned body (`ext::pinned`):
 //!
 //! Equations (used anywhere):
 //! * `letin(a, x. f(x)) = f(a)` (definition);
@@ -560,7 +563,7 @@ fn wrap_n(sp: &Simp, x: SInt, n: u64) -> Option<Term> {
 
 impl<'a> Simp<'a> {
     fn new(env: &'a Env, lg: &Logic) -> Simp<'a> {
-        let g = |n: &str| env.sym_by_name.get(n).copied();
+        let g = |n: &str| env.ksym(n);
         let unfold = ["bind_rel", "any_rel", "is_ok"].iter().filter_map(|n| g(n)).collect();
         let arith = ARITH.iter().filter_map(|n| g(n).map(|s| (s, *n))).collect();
         Simp {
@@ -634,7 +637,7 @@ impl<'a> Simp<'a> {
     /// unspecified; None then.
     fn offset(&self, t: &Term, n: u32) -> Option<(Option<Term>, u128)> {
         let m = if n >= 128 { u128::MAX } else { (1u128 << n) - 1 };
-        let name = |g: SymId| self.env.syms[g as usize].name.as_str();
+        let name = |g: SymId| self.env.kname(g);
         match t.node() {
             Node::Nat(v) => {
                 // (the low bits directly when it fits: no division)
@@ -771,7 +774,7 @@ impl<'a> Simp<'a> {
             match t.node() {
                 Node::Var(v, xa) => *v != p && xa.iter().all(|x| walk(sp, x, p, w)),
                 Node::App(g, xs) => {
-                    let name = sp.env.syms[*g as usize].name.as_str();
+                    let name = sp.env.kname(*g);
                     let word = matches!((name, xs.len()), ("bits_add" | "bits_sub", 3) | ("bits_of_int", 2));
                     for (j, x) in xs.iter().enumerate() {
                         if bare(x) {
@@ -840,8 +843,8 @@ impl<'a> Simp<'a> {
                 if is(*i, s.in_) {
                     match ab[1].node() {
                         Node::App(o, x) if x.is_empty() && is(*o, s.omega) => out.push((ab[0].clone(), Ty::Nat)),
-                        Node::App(o, x) if x.is_empty() && self.env.syms[*o as usize].name == "int" => out.push((ab[0].clone(), Ty::Int)),
-                        Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => {
+                        Node::App(o, x) if x.is_empty() && self.env.ksym("int") == Some(*o) => out.push((ab[0].clone(), Ty::Int)),
+                        Node::App(b, x) if self.env.ksym("bits") == Some(*b) && x.len() == 1 => {
                             if let Node::Nat(k) = x[0].node() {
                                 if let Some(k) = k.to_u64() {
                                     out.push((ab[0].clone(), Ty::Bits(k)));
@@ -880,7 +883,7 @@ impl<'a> Simp<'a> {
             self.memo.borrow_mut().clear();
             *self.runs_facts.borrow_mut() = rf;
         }
-        let ap: Vec<(Term, u128, Term, u128)> = match self.env.sym_by_name.get("x86.apart") {
+        let ap: Vec<(Term, u128, Term, u128)> = match self.env.ksym("x86.apart").as_ref() {
             Some(apart) => lits
                 .iter()
                 .filter_map(|l| match l.node() {
@@ -911,10 +914,10 @@ impl<'a> Simp<'a> {
             if *f == sp.s.all || *f == sp.s.ex {
                 return;
             }
-            let name = sp.env.syms[*f as usize].name.as_str();
+            let name = sp.env.kname(*f);
             let opaque = !sp.arith.contains_key(f) && !name.starts_with("bits_") && name != "bit" && matches!(sp.env.syms[*f as usize].kind, SymKind::Defined { .. } | SymKind::Primitive);
             if opaque && !out.contains(t) {
-                if let (Some(n), Some(b), Some(i)) = ([8u64, 16, 32, 64].into_iter().find(|&n| sp.bits_term(t, n)), sp.env.sym_by_name.get("bits"), sp.s.in_) {
+                if let (Some(n), Some(b), Some(i)) = ([8u64, 16, 32, 64].into_iter().find(|&n| sp.bits_term(t, n)), sp.env.ksym("bits").as_ref(), sp.s.in_) {
                     out.push(Term::app(i, vec![t.clone(), Term::app(*b, vec![Term::nat(crate::nat::Nat::from_u64(n))])]));
                 }
             }
@@ -947,7 +950,7 @@ impl<'a> Simp<'a> {
             if b.len() != 2 {
                 continue;
             }
-            let strict = match self.env.syms[*f as usize].name.as_str() {
+            let strict = match self.env.kname(*f) {
                 "int_lt" => true,
                 "int_le" => false,
                 _ => continue,
@@ -994,11 +997,12 @@ impl<'a> Simp<'a> {
             return true;
         }
         let Node::App(f, a) = t.node() else { return false };
-        match self.env.syms[*f as usize].name.as_str() {
+        match self.env.kname(*f) {
             "bits_add" | "bits_mul" | "bits_sub" | "bits_shl" | "bits_shr" | "bits_and" | "bits_or" | "bits_xor" | "bits_sar" if a.len() == 3 => {
                 width(&a[0]).is_some_and(|k| k <= n)
-                    // (`and` with a mask below 2^n)
-                    || (self.env.syms[*f as usize].name == "bits_and" && [&a[1], &a[2]].iter().any(|c| matches!(c.node(), Node::Nat(v) if n >= 128 || v.to_u128().is_some_and(|v| v < (1u128 << n)))))
+                    // (`and` of a numeral width with a mask below 2^n: a
+                    // bits_build of a natural width, its bits the mask's)
+                    || (self.env.ksym("bits_and") == Some(*f) && width(&a[0]).is_some() && [&a[1], &a[2]].iter().any(|c| matches!(c.node(), Node::Nat(v) if n >= 128 || v.to_u128().is_some_and(|v| v < (1u128 << n)))))
             }
             "bits_neg" | "bits_of_int" | "bits_not" if a.len() == 2 => width(&a[0]).is_some_and(|k| k <= n),
             "bits_sext" if a.len() == 3 => width(&a[1]).is_some_and(|k| k <= n),
@@ -1031,7 +1035,7 @@ impl<'a> Simp<'a> {
             // `le(b, a, n) := bits_of_int(8 * n, ..)`)
             _ => match &self.env.syms[*f as usize].kind {
                 SymKind::Defined { params, body } if params.len() == a.len() => match body.node() {
-                    Node::App(g, gb) if self.env.syms[*g as usize].name == "bits_of_int" && gb.len() == 2 => {
+                    Node::App(g, gb) if self.env.ksym("bits_of_int") == Some(*g) && gb.len() == 2 => {
                         let mut wt = gb[0].clone();
                         for (p, x) in params.iter().zip(a) {
                             if self.env.vars[*p as usize].arity != 0 {
@@ -1057,7 +1061,7 @@ impl<'a> Simp<'a> {
             return true;
         }
         let Node::App(f, a) = t.node() else { return false };
-        match self.env.syms[*f as usize].name.as_str() {
+        match self.env.kname(*f) {
             "int_abs" => true,
             "int_mod" if a.len() == 2 => matches!(a[1].node(), Node::Nat(k) if !k.is_zero()),
             _ => false,
@@ -1075,12 +1079,12 @@ impl<'a> Simp<'a> {
             "int_val", "int_abs", "int_neg", "int_succ", "int_pred", "int_add", "int_sub", "int_mul", "int_pow", "int_div", "int_mod", "int_sum", "pow2",
             "sint",
         ];
-        if INT_OPS.contains(&self.env.syms[*f as usize].name.as_str()) || self.nat_term(t) {
+        if INT_OPS.contains(&self.env.kname(*f)) || self.nat_term(t) {
             return true;
         }
         // a definition whose body is an integer operation (`bytes_at`, a sum)
         match &self.env.syms[*f as usize].kind {
-            SymKind::Defined { body, .. } => matches!(body.node(), Node::App(g, _) if INT_OPS.contains(&self.env.syms[*g as usize].name.as_str())),
+            SymKind::Defined { body, .. } => matches!(body.node(), Node::App(g, _) if INT_OPS.contains(&self.env.kname(*g))),
             _ => false,
         }
     }
@@ -1160,7 +1164,7 @@ impl<'a> Simp<'a> {
     /// commute: disjoint bytes); a store of the same n bytes at the same
     /// address replaces an earlier one.
     fn store_order(&self, args: &[Term]) -> Option<Term> {
-        let store = self.env.sym_by_name.get("x86_64_linux.store_le").copied()?;
+        let store = self.env.ksym("x86_64_linux.store_le")?;
         let Node::App(g, inner) = args[0].node() else { return None };
         if *g != store || inner.len() != 4 {
             return None;
@@ -1183,7 +1187,7 @@ impl<'a> Simp<'a> {
     }
 
     fn read_store(&self, f: SymId, args: &[Term]) -> Option<Term> {
-        let name = |g: SymId| self.env.syms[g as usize].name.as_str();
+        let name = |g: SymId| self.env.kname(g);
         let store = |t: &Term| -> Option<Vec<Term>> {
             match t.node() {
                 Node::App(g, b) if name(*g) == "x86_64_linux.store_le" && b.len() == 4 => Some(b.to_vec()),
@@ -1197,8 +1201,12 @@ impl<'a> Simp<'a> {
         let nat = |v: u128| Term::nat(crate::nat::Nat::from_u128(v));
         let (bits_of_int, int_div, pow) = (self.s.bits_of_int?, self.s.int_div?, self.s.int_pow?);
         if is(f, self.s.app) {
-            // app(store_le(b, a, n, v), x)
+            // app(store_le(b, a, n, v), x), x an address (store_le is a
+            // function on bits(64): elsewhere it is no byte)
             let st = store(&args[0])?;
+            if !self.bits_term(&args[1], 64) {
+                return None;
+            }
             let n = lit(&st[2])?;
             // (x in a region apart from the store's: b's byte)
             if self.disjoint(&args[1], 1, &st[1], n) {
@@ -1234,7 +1242,7 @@ impl<'a> Simp<'a> {
     /// bytes_at(B, i))`): its length `seq_len` (the domain) and its byte at
     /// a numeral index in range.
     fn bytes(&self, f: SymId, args: &[Term]) -> Option<Term> {
-        let name = self.env.syms[f as usize].name.as_str();
+        let name = self.env.kname(f);
         let lit = |t: &Term| -> Option<std::rc::Rc<[u8]>> {
             match t.node() {
                 Node::Bytes(b) => Some(b.clone()),
@@ -1243,7 +1251,7 @@ impl<'a> Simp<'a> {
         };
         let seq = |t: &Term| -> Option<std::rc::Rc<[u8]>> {
             match t.node() {
-                Node::App(g, b) if self.env.syms[*g as usize].name == "bytes_seq" && b.len() == 1 => lit(&b[0]),
+                Node::App(g, b) if self.env.ksym("bytes_seq") == Some(*g) && b.len() == 1 => lit(&b[0]),
                 _ => None,
             }
         };
@@ -1347,7 +1355,7 @@ impl<'a> Simp<'a> {
         }
         let mut args: Vec<Term> = a.iter().map(|x| self.term(x)).collect();
         // a bit of a numeral, as a value (`c = bit(7, 0)`): the proposition
-        if self.env.syms[f as usize].name == "bit" && args.len() == 2 {
+        if self.env.ksym("bit") == Some(f) && args.len() == 2 {
             if let Some(b) = self.literal_prop(&t.with_args(args.clone())) {
                 return if b { self.tt() } else { self.ff() };
             }
@@ -1376,12 +1384,12 @@ impl<'a> Simp<'a> {
         if matches!(self.env.syms[f as usize].kind, SymKind::Defined { .. }) {
             for i in 0..args.len() {
                 let Some(n) = self.word_param(f, i) else { continue };
-                if !matches!(args[i].node(), Node::App(g, _) if matches!(self.env.syms[*g as usize].name.as_str(), "int_add" | "int_sub")) {
+                if !matches!(args[i].node(), Node::App(g, _) if matches!(self.env.kname(*g), "int_add" | "int_sub")) {
                     continue;
                 }
                 let Some(boi) = self.s.bits_of_int else { continue };
                 let w = self.term(&Term::app(boi, vec![Term::nat(crate::nat::Nat::from_u64(n)), args[i].clone()]));
-                if matches!(w.node(), Node::Nat(_)) || matches!(w.node(), Node::App(g, _) if self.env.syms[*g as usize].name == "bits_add") {
+                if matches!(w.node(), Node::Nat(_)) || matches!(w.node(), Node::App(g, _) if self.env.ksym("bits_add") == Some(*g)) {
                     args[i] = w;
                 }
             }
@@ -1439,12 +1447,12 @@ impl<'a> Simp<'a> {
         }
         // a sum over numeral bounds, term by term (`int_sum`'s definition and
         // the recursion equations of `nat_rec`): f(a) + .. + f(b - 1)
-        if self.env.syms[f as usize].name == "int_sum" && args.len() == 3 {
+        if self.env.ksym("int_sum") == Some(f) && args.len() == 3 {
             if let (Node::Nat(a0), Node::Nat(b0)) = (args[0].node(), args[1].node()) {
                 if let (Some(a0), Some(b0)) = (a0.to_u64(), b0.to_u64()) {
                     if a0 <= b0 && b0 - a0 <= 64 {
-                        let add = self.env.sym_by_name.get("int_add").copied();
-                        let empty = self.env.sym_by_name.get("empty").copied();
+                        let add = self.env.ksym("int_add");
+                        let empty = self.env.ksym("empty");
                         if let (Some(add), Some(empty)) = (add, empty) {
                             let mut r = Term::app(empty, vec![]);
                             for k in a0..b0 {
@@ -1579,7 +1587,7 @@ impl<'a> Simp<'a> {
             }
             // x + x: 2 * x (an index scaled by `lea (x, x)`)
             if *op == "int_add" && args.len() == 2 && args[0] == args[1] && self.int_term(&args[0]) {
-                if let Some(m) = self.env.sym_by_name.get("int_mul") {
+                if let Some(m) = self.env.ksym("int_mul").as_ref() {
                     return self.term(&Term::app(*m, vec![args[0].clone(), Term::nat(crate::nat::Nat::from_u64(2))]));
                 }
             }
@@ -1651,17 +1659,18 @@ impl<'a> Simp<'a> {
                         return self.term(&t.with_args(new));
                     }
                     let zero = *op == "bits_of_int" || (*op == "bits_add" && self.int_lit(&args[2]).is_some_and(|c| c.m.is_zero()));
-                    if let (true, Some((m, y)), Some(sx)) = (zero, sint_of(&args[1]), self.env.sym_by_name.get("bits_sext")) {
+                    if let (true, Some((m, y)), Some(sx)) = (zero, sint_of(&args[1]), self.env.ksym("bits_sext").as_ref()) {
                         if m < *n {
                             return self.term(&Term::app(*sx, vec![Term::nat(m), args[0].clone(), y]));
                         }
                     }
                 }
             }
-            // the sign extension of a non-negative m-bit x (x below 2^(m-1)): x
+            // the sign extension (m <= n) of a non-negative m-bit x (x below
+            // 2^(m-1)): x
             if *op == "bits_sext" && args.len() == 3 {
-                if let Node::Nat(m) = args[0].node() {
-                    if m.to_u64().is_some_and(|m| (2..=129).contains(&m) && self.bits_term(&args[2], m - 1)) {
+                if let (Node::Nat(m), Node::Nat(n)) = (args[0].node(), args[1].node()) {
+                    if m <= n && m.to_u64().is_some_and(|m| (2..=129).contains(&m) && self.bits_term(&args[2], m - 1)) {
                         return args[2].clone();
                     }
                 }
@@ -1710,7 +1719,7 @@ impl<'a> Simp<'a> {
         if let Some(v) = self.read_store(f, &args) {
             return v;
         }
-        if args.len() == 4 && self.env.syms[f as usize].name == "x86_64_linux.store_le" {
+        if args.len() == 4 && self.env.ksym("x86_64_linux.store_le") == Some(f) {
             if let Some(v) = self.store_order(&args) {
                 return v;
             }
@@ -1718,7 +1727,7 @@ impl<'a> Simp<'a> {
         if let Some(v) = self.bytes(f, &args) {
             return v;
         }
-        if self.env.syms[f as usize].name == "bits_set_slice" && args.len() == 5 {
+        if self.env.ksym("bits_set_slice") == Some(f) && args.len() == 5 {
             let num = |x: &Term| match x.node() {
                 Node::Nat(v) => v.to_u64(),
                 _ => None,
@@ -1727,9 +1736,9 @@ impl<'a> Simp<'a> {
                 if n >= 1 && hi == n - 1 && self.bits_term(&args[4], n) {
                     return args[4].clone();
                 }
-                // (all the bits x has, written: x and v of hi + 1 bits, a
-                // 16-bit write to a register holding a 16-bit value)
-                if hi < 128 && self.bits_term(&args[1], hi + 1) && self.bits_term(&args[4], hi + 1) {
+                // (all the bits x has, written: x and v of hi + 1 bits, hi <
+                // n -- a 16-bit write to a register holding a 16-bit value)
+                if hi < 128 && hi < n && self.bits_term(&args[1], hi + 1) && self.bits_term(&args[4], hi + 1) {
                     return args[4].clone();
                 }
             }
@@ -1765,7 +1774,7 @@ impl<'a> Simp<'a> {
                     Some((g, b))
                         if is(g, s.fn_build)
                             && (self.known_mems.borrow().iter().any(|l| matches!(l.node(), Node::App(_, ab) if ab[0] == args[1] && ab[1] == b[0]))
-                                || matches!(b[0].node(), Node::App(bt, w) if self.env.syms[*bt as usize].name == "bits" && w.len() == 1
+                                || matches!(b[0].node(), Node::App(bt, w) if self.env.ksym("bits") == Some(*bt) && w.len() == 1
                                     && matches!(w[0].node(), Node::Nat(k) if k.to_u64().is_some_and(|k| self.bits_term(&args[1], k))))) =>
                     {
                         return self.term(&inst_k(self.env, &b[1], &[args[1].clone()]));
@@ -1773,7 +1782,7 @@ impl<'a> Simp<'a> {
                     // records through restriction, ghost parts and merges
                     // (`app_ext`: the pairs with first element k are the same)
                     Some((g, b)) => {
-                        let name = self.env.syms[g as usize].name.as_str();
+                        let name = self.env.kname(g);
                         let k = &args[1];
                         match name {
                             // no pair at all: `empty` (app's default)
@@ -1817,7 +1826,7 @@ impl<'a> Simp<'a> {
         // at one of its keys; a restriction keeps it (outside); merging
         // with `empty` changes nothing
         {
-            let name = self.env.syms[f as usize].name.as_str();
+            let name = self.env.kname(f);
             let is_empty = |t: &Term| matches!(t.node(), Node::App(e, b) if b.is_empty() && is(*e, s.empty));
             if (name == "ghost_part" || name == "restrict") && args.len() == 2 {
                 if is_empty(&args[0]) {
@@ -2096,7 +2105,7 @@ impl<'a> Simp<'a> {
         }
         // in the goal, with `unroll`: a loop whose condition is decided, an
         // iteration at a time
-        if pol == Pol::Goal && self.goal_loops && self.env.syms[f as usize].name == "while_rel" && a.len() == 5 {
+        if pol == Pol::Goal && self.goal_loops && self.env.ksym("while_rel") == Some(f) && a.len() == 5 {
             if let Some(r) = self.goal_loop(a) {
                 return r;
             }
@@ -2211,7 +2220,7 @@ impl<'a> Simp<'a> {
 
     /// `{a, b}` is `{false, true}`.
     fn is_bool_pair(&self, a: &Term, b: &Term) -> bool {
-        let named = |t: &Term, n: &str| matches!(t.node(), Node::App(g, x) if x.is_empty() && self.env.syms[*g as usize].name == n);
+        let named = |t: &Term, n: &str| matches!(t.node(), Node::App(g, x) if x.is_empty() && self.env.kname(*g) == n);
         let is_true = |t: &Term| named(t, "true") || self.is_true(t);
         let is_false = |t: &Term| named(t, "false") || self.is_false(t);
         (is_false(a) && is_true(b)) || (is_true(a) && is_false(b))
@@ -2226,7 +2235,7 @@ impl<'a> Simp<'a> {
         if *g == self.s.eq || *g == self.env.builtins.imp || *g == self.s.ex || is(*g, self.s.in_) || self.is_false(t) || self.is_true(t) {
             return true;
         }
-        if self.env.syms[*g as usize].name == "false" {
+        if self.env.ksym("false") == Some(*g) {
             return true;
         }
         if depth == 0 {
@@ -2242,7 +2251,7 @@ impl<'a> Simp<'a> {
     fn key_in(&self, k: &Term, d: &Term) -> Option<bool> {
         // (a word of the domain's width: an address in bits(64))
         if let Node::App(b, x) = d.node() {
-            if self.env.syms[*b as usize].name == "bits" && x.len() == 1 {
+            if self.env.ksym("bits") == Some(*b) && x.len() == 1 {
                 if let Node::Nat(n) = x[0].node() {
                     if n.to_u64().is_some_and(|n| self.bits_term(k, n)) {
                         return Some(true);
@@ -2263,7 +2272,7 @@ impl<'a> Simp<'a> {
     /// `x` has no pair with first element k (a record without the field k).
     fn lacks(&self, x: &Term, k: &Term) -> bool {
         let Node::App(g, b) = x.node() else { return false };
-        match self.env.syms[*g as usize].name.as_str() {
+        match self.env.kname(*g) {
             "empty" => b.is_empty(),
             "ghost_part" => self.key_in(k, &b[1]) == Some(true),
             "restrict" => self.key_in(k, &b[1]) == Some(false),
@@ -2359,7 +2368,7 @@ impl<'a> Simp<'a> {
             // integer literals: integers; the negative ones in no set of naturals
             if let Some(v) = self.int_lit(&b[0]) {
                 if let Node::App(o, ob) = b[1].node() {
-                    let set = self.env.syms[*o as usize].name.as_str();
+                    let set = self.env.kname(*o);
                     if set == "int" && ob.is_empty() {
                         return Some(true);
                     }
@@ -2374,7 +2383,7 @@ impl<'a> Simp<'a> {
                     return Some(true);
                 }
                 // x in bits(n): x < 2^n
-                if self.env.syms.get(*o as usize).is_some_and(|y| y.name == "bits") {
+                if self.env.ksym("bits") == Some(*o) {
                     let n = lit(&ob[0])?.to_u64()?;
                     return Some(x < crate::nat::Nat::pow2(n));
                 }
@@ -2447,8 +2456,8 @@ impl<'a> Simp<'a> {
         if only.is_empty() {
             return None;
         }
-        let is_fun = self.env.sym_by_name.get("is_fun").copied()?;
-        let dom = self.env.sym_by_name.get("dom").copied()?;
+        let is_fun = self.env.ksym("is_fun")?;
+        let dom = self.env.ksym("dom")?;
         let (appf, in_) = (s.app?, s.in_?);
         let app = |r: &Term, k: &Term| self.term(&Term::app(appf, vec![r.clone(), k.clone()]));
         let mut r = self.prop(&Term::app(is_fun, vec![bx.clone()]), Pol::Goal);
@@ -2607,13 +2616,16 @@ impl<'a> Simp<'a> {
         if !has_bvar(self.env, body, 0) {
             return lower(self.env, body, 0);
         }
-        // a member of a set that has one: `ex x. x in bits(n)` (0), omega,
-        // int, bool (false)
+        // a member of a set that has one: `ex x. x in bits(n)` (0; n a
+        // natural -- bits of a negative width is empty), omega, int, bool
+        // (false)
         if let Node::App(i, ab) = body.node() {
             if is(*i, self.s.in_) && matches!(ab[0].node(), Node::BVar(0)) && !has_bvar(self.env, &ab[1], 0) {
                 if let Node::App(set, sa) = ab[1].node() {
-                    let name = self.env.syms[*set as usize].name.as_str();
-                    if (name == "bits" && sa.len() == 1) || (matches!(name, "omega" | "int" | "bool") && sa.is_empty()) {
+                    let name = self.env.kname(*set);
+                    if (name == "bits" && sa.len() == 1 && (matches!(sa[0].node(), Node::Nat(_)) || self.nat_term(&sa[0])))
+                        || (matches!(name, "omega" | "int" | "bool") && sa.is_empty())
+                    {
                         return self.tt();
                     }
                 }
@@ -2701,9 +2713,13 @@ impl<'a> Simp<'a> {
             // several values that exists: `any (bool, bool)`); otherwise
             // kept, so facts do not multiply
             // (the goal's steps: equivalences, kept only when decided)
+            // (as a fact: no goal-only strengthening of a run -- `ex x.
+            // runs(..x) && K(x)` read as K(o) -- a stronger statement found
+            // false says nothing of this one; without a run, none applies)
             if let Some(nb) = self.proj_split(body, 0) {
-                let inner = self.ex(&self.prop(&nb, Pol::Other), true);
-                let r = self.ex(&inner, true);
+                let mode = !mentions_sym(&nb, self.s.runs);
+                let inner = self.ex(&self.prop(&nb, Pol::Other), mode);
+                let r = self.ex(&inner, mode);
                 if self.is_true(&r) || self.is_false(&r) {
                     return r;
                 }
@@ -3081,7 +3097,7 @@ impl Simp<'_> {
         if self.no_hold.get() {
             return Vec::new();
         }
-        let wr = self.env.sym_by_name.get("while_rel").copied();
+        let wr = self.env.ksym("while_rel");
         let mut out = Vec::new();
         for l in lits {
             let Node::App(f, a) = l.node() else { continue };
@@ -3525,7 +3541,7 @@ impl Simp<'_> {
                     if !vars.iter().any(|v| has_var(p, *v)) {
                         return true;
                     }
-                    let name = sp.env.syms[*f as usize].name.as_str();
+                    let name = sp.env.kname(*f);
                     let ctor = [sp.s.pair, sp.s.tag, sp.s.ok, sp.s.exc, sp.s.diverge, sp.s.some].iter().any(|c| is(*f, *c)) || name == "fn_update" || name == "insert";
                     ctor && a.iter().all(|x| injective(sp, x, vars))
                 }
@@ -3543,7 +3559,7 @@ impl Simp<'_> {
                 for (p, t) in [(&a, &b), (&b, &a)] {
                     if unbound(p, binds) && !unbound(t, binds) && injective(self, p, vars) {
                         let mut bs = binds.clone();
-                        if pmatch(p, &self.term(t), vars, &mut bs) {
+                        if pmatch(self.env, p, &self.term(t), vars, &mut bs) {
                             *binds = bs;
                             break;
                         }
@@ -3785,7 +3801,7 @@ impl Simp<'_> {
                                     continue;
                                 }
                                 if let (Node::Var(v, va), Node::App(set, sa)) = (ab[0].node(), ab[1].node()) {
-                                    let zero_in = is(*set, self.s.omega) || (self.env.syms[*set as usize].name == "bits" && sa.len() == 1);
+                                    let zero_in = is(*set, self.s.omega) || (self.env.ksym("bits") == Some(*set) && sa.len() == 1);
                                     if va.is_empty() && zero_in && gp.vars.contains(v) && !more.iter().any(|(w, _)| w == v) {
                                         more.push((*v, Term::nat(crate::nat::Nat::zero())));
                                     }
@@ -3820,9 +3836,9 @@ impl Simp<'_> {
                     }
                     for pl in lits.iter().rev() {
                         let mut b = binds.clone();
-                        if pmatch(&pat, pl, &gp.vars, &mut b) && b.len() > binds.len() {
+                        if pmatch(self.env, &pat, pl, &gp.vars, &mut b) && b.len() > binds.len() {
                             stack.push((i + 1, b, start));
-                        } else if debug && std::env::var("WITNESS_HEAD").is_ok_and(|h| matches!((pat.node(), pl.node()), (Node::App(f, _), Node::App(g, _)) if f == g && self.env.syms[*f as usize].name == h)) {
+                        } else if debug && std::env::var("WITNESS_HEAD").is_ok_and(|h| matches!((pat.node(), pl.node()), (Node::App(f, _), Node::App(g, _)) if f == g && self.env.kname(*f) == h)) {
                             let pr = crate::syntax::Printer::new(self.env);
                             eprintln!("witness: no match\n  pattern {}\n  literal {}", pr.term(&pat), pr.term(pl));
                         }
@@ -3888,7 +3904,7 @@ impl Simp<'_> {
         for c in &cs {
             for pl in lits {
                 let mut bd = binds.clone();
-                if pmatch(c, pl, &vs, &mut bd) {
+                if pmatch(self.env, c, pl, &vs, &mut bd) {
                     binds = bd;
                     break;
                 }
@@ -3972,6 +3988,7 @@ const MAX_INSTANCES: usize = 64;
 /// `hyps[i..]` matches a literal; a hypothesis matching none is left for
 /// checking (its index in the second component).
 fn instances(
+    env: &Env,
     hyps: &[Term],
     i: usize,
     lits: &[Term],
@@ -3990,15 +4007,15 @@ fn instances(
     let mut any = false;
     for pl in lits {
         let mut b = binds.clone();
-        if pmatch(&hyps[i], pl, vs, &mut b) {
+        if pmatch(env, &hyps[i], pl, vs, &mut b) {
             any = true;
-            instances(hyps, i + 1, lits, vs, b, open.clone(), out);
+            instances(env, hyps, i + 1, lits, vs, b, open.clone(), out);
         }
     }
     if !any {
         let mut o = open;
         o.push(i);
-        instances(hyps, i + 1, lits, vs, binds, o, out);
+        instances(env, hyps, i + 1, lits, vs, binds, o, out);
     }
 }
 
@@ -4039,7 +4056,7 @@ impl Simp<'_> {
     fn typed(&self, lits: &[Term], g: &Term) -> bool {
         let Node::App(i, ab) = g.node() else { return false };
         let name = |t: &Term| match t.node() {
-            Node::App(h, _) => self.env.syms[*h as usize].name.clone(),
+            Node::App(h, _) => self.env.kname(*h).to_string(),
             _ => String::new(),
         };
         // the domain of a function the path types: a record type's keys,
@@ -4050,12 +4067,12 @@ impl Simp<'_> {
                     return Some(rt.keys);
                 }
                 match ty.node() {
-                    Node::App(fs, fa) if self.env.syms[*fs as usize].name == "fn_space" && fa.len() == 2 => Some(fa[0].clone()),
+                    Node::App(fs, fa) if self.env.ksym("fn_space") == Some(*fs) && fa.len() == 2 => Some(fa[0].clone()),
                     _ => None,
                 }
             })
         };
-        if self.env.syms[*i as usize].name == "is_fun" && ab.len() == 1 {
+        if self.env.ksym("is_fun") == Some(*i) && ab.len() == 1 {
             return domain(&ab[0]).is_some();
         }
         // `dom(b) = A` for b of a type with the domain A
@@ -4099,8 +4116,8 @@ impl Simp<'_> {
         self.set_nats(lits);
         let by_form = match ab[1].node() {
             Node::App(o, x) if x.is_empty() && is(*o, self.s.omega) => self.nat_term(&ab[0]),
-            Node::App(o, x) if x.is_empty() && self.env.syms[*o as usize].name == "int" => self.int_term(&ab[0]),
-            Node::App(b, x) if self.env.syms[*b as usize].name == "bits" && x.len() == 1 => match x[0].node() {
+            Node::App(o, x) if x.is_empty() && self.env.ksym("int") == Some(*o) => self.int_term(&ab[0]),
+            Node::App(b, x) if self.env.ksym("bits") == Some(*b) && x.len() == 1 => match x[0].node() {
                 Node::Nat(k) => k.to_u64().is_some_and(|k| self.bits_term(&ab[0], k)),
                 _ => false,
             },
@@ -4109,7 +4126,7 @@ impl Simp<'_> {
         // (or a field of a record of a known record type)
         // (or stores to bytes: bytes)
         by_form
-            || matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app) || self.env.syms[*a as usize].name == "x86_64_linux.store_le" || is(*a, self.s.fn_update))
+            || matches!(ab[0].node(), Node::App(a, _) if is(*a, self.s.app) || self.env.ksym("x86_64_linux.store_le") == Some(*a) || is(*a, self.s.fn_update))
                 && self.types_of(lits, &ab[0], 3).contains(&ab[1])
     }
 
@@ -4129,11 +4146,11 @@ impl Simp<'_> {
             // key: fn_update in the function space)
             if let Node::App(st, sa) = t.node() {
                 let byte_update = is(*st, self.s.fn_update) && sa.len() == 3 && self.bits_term(&sa[1], 64) && self.bits_term(&sa[2], 8);
-                if (self.env.syms[*st as usize].name == "x86_64_linux.store_le" && sa.len() == 4) || byte_update {
+                if (self.env.ksym("x86_64_linux.store_le") == Some(*st) && sa.len() == 4) || byte_update {
                     for r in self.types_of(lits, &sa[0], depth) {
                         if let Node::App(fs, fa) = r.node() {
-                            let bits_k = |x: &Term, k: u64| matches!(x.node(), Node::App(b, ba) if self.env.syms[*b as usize].name == "bits" && ba.len() == 1 && matches!(ba[0].node(), Node::Nat(n) if n.to_u64() == Some(k)));
-                            if self.env.syms[*fs as usize].name == "fn_space" && fa.len() == 2 && bits_k(&fa[0], 64) && bits_k(&fa[1], 8) && !out.contains(&r) {
+                            let bits_k = |x: &Term, k: u64| matches!(x.node(), Node::App(b, ba) if self.env.ksym("bits") == Some(*b) && ba.len() == 1 && matches!(ba[0].node(), Node::Nat(n) if n.to_u64() == Some(k)));
+                            if self.env.ksym("fn_space") == Some(*fs) && fa.len() == 2 && bits_k(&fa[0], 64) && bits_k(&fa[1], 8) && !out.contains(&r) {
                                 out.push(r.clone());
                                 // (a set of pairs of naturals: in univ(1))
                                 if let Some(u) = self.s.univ {
@@ -4154,7 +4171,7 @@ impl Simp<'_> {
                         }
                         // an argument of a function in fn_space(A, B) (`fn_space_app`)
                         if let Node::App(fs, fa) = r.node() {
-                            if self.env.syms[*fs as usize].name == "fn_space" && fa.len() == 2 && self.key_in(&ab[1], &fa[0]) == Some(true) {
+                            if self.env.ksym("fn_space") == Some(*fs) && fa.len() == 2 && self.key_in(&ab[1], &fa[0]) == Some(true) {
                                 out.push(fa[1].clone());
                             }
                         }
@@ -4170,7 +4187,7 @@ impl Simp<'_> {
     /// `app(x, "k") in T` (T closed), possibly a constant defined as one
     /// (`x86_64_linux.Machine`).
     fn rec_type(&self, set: &Term) -> Option<RecType> {
-        let name = |g: SymId| self.env.syms[g as usize].name.as_str();
+        let name = |g: SymId| self.env.kname(g);
         let mut set = set.clone();
         if let Node::App(g, a) = set.node() {
             if a.is_empty() {
@@ -4256,7 +4273,7 @@ impl Simp<'_> {
             if !keys.iter().all(|k| self.key_in(k, &rt.keys) == Some(true)) {
                 return None;
             }
-            let base_empty = matches!(b.node(), Node::App(e, ea) if ea.is_empty() && self.env.syms[*e as usize].name == "empty");
+            let base_empty = matches!(b.node(), Node::App(e, ea) if ea.is_empty() && self.env.ksym("empty") == Some(*e));
             let mut r = if base_empty {
                 // every key updated (and only keys: checked above)
                 let n = self.key_count(&rt.keys)?;
@@ -4277,7 +4294,7 @@ impl Simp<'_> {
             return Some(self.and(r, self.prop(&Term::app(in_, vec![w.clone(), univ]), Pol::Goal)));
         }
         let Node::App(fs, fa) = set.node() else { return None };
-        if self.env.syms[*fs as usize].name != "fn_space" || fa.len() != 2 {
+        if self.env.kname(*fs) != "fn_space" || fa.len() != 2 {
             return None;
         }
         let mut r = self.prop(&Term::app(in_, vec![b.clone(), set.clone()]), Pol::Goal);
@@ -4295,7 +4312,7 @@ impl Simp<'_> {
         loop {
             let next = {
                 let Node::App(g, a) = d.node() else { return None };
-                match self.env.syms[*g as usize].name.as_str() {
+                match self.env.kname(*g) {
                     "empty" if a.is_empty() => return Some(out),
                     "insert" if matches!(a[0].node(), Node::Bytes(_) | Node::Nat(_)) => {
                         if !out.contains(&a[0]) {
@@ -4318,7 +4335,7 @@ impl Simp<'_> {
         let mut d = d;
         loop {
             let Node::App(g, a) = d.node() else { return None };
-            match self.env.syms[*g as usize].name.as_str() {
+            match self.env.kname(*g) {
                 "empty" if a.is_empty() => return Some(n),
                 "insert" => {
                     if !matches!(a[0].node(), Node::Bytes(_) | Node::Nat(_)) {
@@ -4395,7 +4412,7 @@ impl Simp<'_> {
                 fresh += 1;
                 b = inst_k(self.env, &a[0], &[Term::var(fresh - 1, vec![])]);
                 // (t may itself be universal: matched at each depth)
-                if !matches!(b.node(), Node::App(i, _) if *i == self.s.imp) && pmatch(&b, t, &vs, &mut Vec::new()) {
+                if !matches!(b.node(), Node::App(i, _) if *i == self.s.imp) && pmatch(self.env, &b, t, &vs, &mut Vec::new()) {
                     return true;
                 }
             }
@@ -4419,7 +4436,7 @@ impl Simp<'_> {
         if let (Some(in_), Some(omega)) = (self.s.in_, self.s.omega) {
             for l in &p.lits {
                 if let Node::App(i, ab) = l.node() {
-                    if is(*i, Some(in_)) && ab.len() == 2 && matches!(ab[1].node(), Node::App(b, _) if self.env.syms[*b as usize].name == "bits") {
+                    if is(*i, Some(in_)) && ab.len() == 2 && matches!(ab[1].node(), Node::App(b, _) if self.env.ksym("bits") == Some(*b)) {
                         let t = Term::app(in_, vec![ab[0].clone(), Term::app(omega, vec![])]);
                         if !match_lits.contains(&t) {
                             match_lits.push(t);
@@ -4451,8 +4468,8 @@ impl Simp<'_> {
                 }
                 for u in &gs {
                     let mut b = Vec::new();
-                    if pmatch(&concl, u, &vs, &mut b) && !b.is_empty() {
-                        instances(&hyps, 0, &match_lits, &vs, b, Vec::new(), &mut insts);
+                    if pmatch(self.env, &concl, u, &vs, &mut b) && !b.is_empty() {
+                        instances(self.env, &hyps, 0, &match_lits, &vs, b, Vec::new(), &mut insts);
                     }
                 }
             }
@@ -4466,12 +4483,12 @@ impl Simp<'_> {
             if let Some(lhs) = &lhs {
                 for u in &subs {
                     let mut b = Vec::new();
-                    if pmatch(lhs, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
-                        instances(&hyps, 0, &match_lits, &vs, b, Vec::new(), &mut insts);
+                    if pmatch(self.env, lhs, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                        instances(self.env, &hyps, 0, &match_lits, &vs, b, Vec::new(), &mut insts);
                     }
                 }
             }
-            instances(&hyps, 0, &match_lits, &vs, Vec::new(), Vec::new(), &mut insts);
+            instances(self.env, &hyps, 0, &match_lits, &vs, Vec::new(), Vec::new(), &mut insts);
             let mut all_insts = Vec::new();
             for (mut binds, mut open) in insts {
                 // an open hypothesis may match once instantiated and
@@ -4486,7 +4503,7 @@ impl Simp<'_> {
                         let h = self.prop(&h, Pol::Other);
                         let hit = p.lits.iter().find_map(|l| {
                             let mut b = binds.clone();
-                            pmatch(&h, l, &vs, &mut b).then_some(b)
+                            pmatch(self.env, &h, l, &vs, &mut b).then_some(b)
                         });
                         match hit {
                             Some(b) => {
@@ -4502,7 +4519,7 @@ impl Simp<'_> {
                 } else if let Some(lhs) = &lhs {
                     for u in &subs {
                         let mut b = binds.clone();
-                        if pmatch(lhs, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                        if pmatch(self.env, lhs, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
                             all_insts.push((b, open.clone()));
                         }
                     }
@@ -4512,7 +4529,7 @@ impl Simp<'_> {
                     self.conjuncts(goal, &mut gs);
                     for u in &gs {
                         let mut b = binds.clone();
-                        if pmatch(&concl, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
+                        if pmatch(self.env, &concl, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) {
                             all_insts.push((b, open.clone()));
                         }
                     }
@@ -4529,7 +4546,7 @@ impl Simp<'_> {
                 self.conjuncts(goal, &mut gs);
                 for u in &gs {
                     let mut b = Vec::new();
-                    if pmatch(&concl, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) && !all_insts.iter().any(|(x, _)| *x == b) {
+                    if pmatch(self.env, &concl, u, &vs, &mut b) && vs.iter().all(|v| b.iter().any(|(w, _)| w == v)) && !all_insts.iter().any(|(x, _)| *x == b) {
                         all_insts.push((b, (0..hyps.len()).collect()));
                     }
                 }
@@ -4675,7 +4692,7 @@ impl Simp<'_> {
     /// for the first loop and hint whose premises `simp` shows on the path
     /// (the other literals); why the hints failed goes to `why`.
     fn loop_step(&self, lg: &Logic, p: &Path, hints: &[LoopHint], fresh: &mut u32, why: &mut String) -> crate::env::KResult<Option<Vec<Path>>> {
-        let Some(wr) = self.env.sym_by_name.get("while_rel").copied() else { return Ok(None) };
+        let Some(wr) = self.env.ksym("while_rel") else { return Ok(None) };
         for (i, l) in p.lits.iter().enumerate() {
             let Node::App(f, a) = l.node() else { continue };
             if *f != wr {
@@ -4726,9 +4743,9 @@ impl Simp<'_> {
     /// some l1 from which the loop gives r (`while_step`).
     fn goal_loop(&self, a: &[Term]) -> Option<Term> {
         let env = self.env;
-        let wr = env.sym_by_name.get("while_rel").copied()?;
-        let is_ok = env.sym_by_name.get("is_ok").copied()?;
-        let empty = Term::app(env.sym_by_name.get("empty").copied()?, vec![]);
+        let wr = env.ksym("while_rel")?;
+        let is_ok = env.ksym("is_ok")?;
+        let empty = Term::app(env.ksym("empty")?, vec![]);
         let (l0, r) = (self.term(&a[0]), &a[4]);
         // (from a known state: not one bound inside the goal, which one-point
         // fixes first; an iteration per round of the goal's simplification)
@@ -4774,9 +4791,9 @@ impl Simp<'_> {
     /// diverges).
     fn unroll(&self, a: &[Term], fresh: &mut u32) -> crate::env::KResult<Term> {
         let env = self.env;
-        let wr = env.sym_by_name.get("while_rel").copied().ok_or_else(|| crate::env::KernelError("no while_rel".into()))?;
-        let is_ok = env.sym_by_name.get("is_ok").copied().ok_or_else(|| crate::env::KernelError("no is_ok".into()))?;
-        let empty = Term::app(env.sym_by_name.get("empty").copied().ok_or_else(|| crate::env::KernelError("no empty".into()))?, vec![]);
+        let wr = env.ksym("while_rel").ok_or_else(|| crate::env::KernelError("no while_rel".into()))?;
+        let is_ok = env.ksym("is_ok").ok_or_else(|| crate::env::KernelError("no is_ok".into()))?;
+        let empty = Term::app(env.ksym("empty").ok_or_else(|| crate::env::KernelError("no empty".into()))?, vec![]);
         let (l0, r) = (&a[0], &a[4]);
         let cond = |x: &Term| inst_k(env, &a[1], &[x.clone()]);
         let body = |x: &Term, o: &Term| inst_k(env, &a[2], &[x.clone(), o.clone()]);
@@ -4810,7 +4827,7 @@ impl Simp<'_> {
     /// unless the hint has a variant.
     fn loop_rule(&self, lg: &Logic, others: &[Term], a: &[Term], h: &LoopHint, hints: &[LoopHint], fresh: &mut u32) -> crate::env::KResult<Term> {
         let env = self.env;
-        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| crate::env::KernelError(format!("loops need `{}`", n)));
+        let sym = |n: &str| env.ksym(n).ok_or_else(|| crate::env::KernelError(format!("loops need `{}`", n)));
         let c0 = |n: &str| sym(n).map(|s| Term::app(s, vec![]));
         let (l0, r) = (&a[0], &a[4]);
         let inv = |x: &Term| inst_k(env, &h.inv, &[l0.clone(), x.clone()]);
@@ -4864,18 +4881,46 @@ impl Simp<'_> {
 
 /// Matches `pat` (whose variables `pvars` are pattern variables) against
 /// `t`, extending `binds`.
-fn pmatch(pat: &Term, t: &Term, pvars: &[crate::term::VarId], binds: &mut Vec<(crate::term::VarId, Term)>) -> bool {
+fn pmatch(env: &Env, pat: &Term, t: &Term, pvars: &[crate::term::VarId], binds: &mut Vec<(crate::term::VarId, Term)>) -> bool {
     match (pat.node(), t.node()) {
+        // (a closed subterm only: one under a binder of the matched term may
+        // refer to it, and a pattern variable's value is substituted as is)
         (Node::Var(v, a), _) if a.is_empty() && pvars.contains(v) => match binds.iter().find(|(w, _)| w == v) {
             Some((_, b)) => b == t,
-            None => {
+            None if t.loose_depth(&env.binders_fn()) == 0 => {
                 binds.push((*v, t.clone()));
                 true
             }
+            None => false,
         },
-        (Node::App(f, a), Node::App(g, b)) => f == g && a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| pmatch(x, y, pvars, binds)),
-        (Node::Var(v, a), Node::Var(w, b)) => v == w && a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| pmatch(x, y, pvars, binds)),
+        (Node::App(f, a), Node::App(g, b)) => f == g && a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
+        (Node::Var(v, a), Node::Var(w, b)) => v == w && a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| pmatch(env, x, y, pvars, binds)),
         _ => pat == t,
+    }
+}
+
+/// t with the closed term `atom` replaced by `val` where it stands as a
+/// proposition (`pos`): the operands of the connectives, quantifier bodies,
+/// an `ite`'s condition (and its branches where the `ite` is one) -- what
+/// only its truth matters to
+fn subst_prop_pos(sp: &Simp, t: &Term, atom: &Term, val: &Term, pos: bool) -> Term {
+    if pos && t == atom {
+        return val.clone();
+    }
+    let Node::App(f, a) = t.node() else { return t.clone() };
+    let s = &sp.s;
+    let conn = *f == s.imp || *f == s.ex || *f == s.all || is(*f, s.not) || is(*f, s.and) || is(*f, s.or);
+    let ite = is(*f, s.ite) && a.len() == 3;
+    // (an `ite`'s condition anywhere, e.g. in an equation's side)
+    t.with_args(a.iter().enumerate().map(|(i, x)| subst_prop_pos(sp, x, atom, val, conn || (ite && (i == 0 || pos)))).collect())
+}
+
+/// whether t mentions the symbol f
+fn mentions_sym(t: &Term, f: Option<SymId>) -> bool {
+    match t.node() {
+        Node::App(g, a) => Some(*g) == f || a.iter().any(|x| mentions_sym(x, f)),
+        Node::Var(_, a) => a.iter().any(|x| mentions_sym(x, f)),
+        _ => false,
     }
 }
 
@@ -5202,6 +5247,19 @@ impl Logic {
                     _ => (l, sp.tt()),
                 };
                 if matches!(atom.node(), Node::App(o, _) if is(*o, sp.s.or) || is(*o, sp.s.and) || *o == sp.s.imp) {
+                    continue;
+                }
+                // (a proposition: `true` (`false`) in any position; another
+                // term only where it stands as a proposition -- a set x that
+                // holds need not equal `true`)
+                if !self.prop_valued(env, atom) {
+                    if atom.loose_depth(&bf) == 0 {
+                        let g2 = subst_prop_pos(&sp, &g, atom, &val, true);
+                        if g2 != g {
+                            g = g2;
+                            known = true;
+                        }
+                    }
                     continue;
                 }
                 let body = super::seq::abstract_term(&g, atom, 0, &bf);

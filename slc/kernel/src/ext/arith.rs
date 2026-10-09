@@ -165,7 +165,7 @@ struct Syms {
 
 impl Syms {
     fn new(env: &Env) -> Syms {
-        let s = |n: &str| env.sym_by_name.get(n).copied();
+        let s = |n: &str| env.ksym(n);
         Syms {
             eq: env.builtins.eq,
             in_: s("in").unwrap_or(u32::MAX),
@@ -803,7 +803,7 @@ fn falsify(tree: &super::prop::PTree, read: &[Option<Atom>], base: &[Lin], mut a
 /// * `k in omega -> pow2(k + 1) = 2 * pow2(k)` (`int_pow`'s recursion);
 /// * `x in bits(n) <-> x in omega && int_lt(x, pow2(n))` (`bits`'s definition).
 fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
-    let g = |n: &str| env.sym_by_name.get(n).copied();
+    let g = |n: &str| env.ksym(n);
     let (Some(imod), Some(lt), Some(le), Some(pow2), Some(and), Some(iff), Some(inn), Some(omega), Some(bits), Some(iadd), Some(isub)) =
         (g("int_mod"), g("int_lt"), g("int_le"), g("pow2"), g("and"), g("iff"), g("in"), g("omega"), g("bits"), g("int_add"), g("int_sub"))
     else {
@@ -1156,7 +1156,7 @@ impl Logic {
     /// `t = z` if n is 0; `t = s(m, nat_rec(z, k v. s, m))` if n is
     /// `m + 1`, `int_succ(m)` or `succ(m)`, given `m in omega` (`m_nat`).
     pub fn nat_rec_eq(&self, env: &Env, t: &Term, m_nat: Option<&Term>) -> KResult<Term> {
-        let rec = env.sym_by_name.get("nat_rec").copied();
+        let rec = env.ksym("nat_rec");
         let s = Syms::new(env);
         let Node::App(f, a) = t.node() else { return err("rec: not nat_rec(...)") };
         if Some(*f) != rec || a.len() != 3 {

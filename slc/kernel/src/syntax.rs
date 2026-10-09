@@ -144,6 +144,9 @@ impl<'a> Lexer<'a> {
             if s == "bytes" && self.src.get(self.pos) == Some(&b'"') {
                 let raw = self.string()?;
                 let hex = std::str::from_utf8(&raw).map_err(|_| KernelError("bad bytes literal".into()))?;
+                if !hex.is_ascii() {
+                    return self.error("bad hex in bytes literal");
+                }
                 if hex.len() % 2 != 0 {
                     return self.error("odd number of hex digits in bytes literal");
                 }
@@ -385,6 +388,10 @@ impl<'a, 'e> Parser<'a, 'e> {
             if arg_binders.iter().any(|&b| b > 0) {
                 return self.error("arguments of a schematic variable cannot bind variables");
             }
+            let arity = self.env.vars[v as usize].arity as usize;
+            if args.len() != arity {
+                return self.error(&format!("`{}` takes {} arguments, got {}", name, arity, args.len()));
+            }
             return Ok(Term::var(v, args));
         }
         if let Some((k, body)) = self.env.abbrevs.get(&name) {
@@ -538,7 +545,13 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
     let mut rep = LoadReport::default();
     loop {
         let kw = match p.bump()? {
-            Tok::Eof => return Ok(rep),
+            Tok::Eof => {
+                // (the canonical prelude: its symbols the extensions' -- `ext::pinned`)
+                if allow_axioms && src == crate::ext::pinned::PRELUDE && p.env.prelude_end.is_none() {
+                    p.env.prelude_end = Some(p.env.syms.len());
+                }
+                return Ok(rep);
+            }
             Tok::Ident(k) => k,
             t => return p.error(&format!("expected a declaration, found {:?}", t)),
         };
@@ -1093,17 +1106,25 @@ impl<'e> Printer<'e> {
                     if prec > 5 {
                         out.push('(');
                     }
-                    self.go(&args[0], scope, 6, out);
+                    // (operands at 7: a `!` there in parentheses -- `!a = b`
+                    // reads as `!(a = b)`)
+                    self.go(&args[0], scope, 7, out);
                     out.push_str(&format!(" {} ", op));
-                    self.go(&args[1], scope, 6, out);
+                    self.go(&args[1], scope, 7, out);
                     if prec > 5 {
                         out.push(')');
                     }
                     return;
                 }
                 if name == "not" && args.len() == 1 {
+                    if prec > 6 {
+                        out.push('(');
+                    }
                     out.push('!');
                     self.go(&args[0], scope, 6, out);
+                    if prec > 6 {
+                        out.push(')');
+                    }
                     return;
                 }
                 let binders = &self.env.syms[*s as usize].binders;

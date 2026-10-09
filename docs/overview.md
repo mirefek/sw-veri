@@ -18,7 +18,11 @@ Related files:
 - Its trusted extensions (`slc/kernel/src/ext/`): derived rules and
   decision procedures such as natural deduction, tautologies, linear
   arithmetic, lists, memory reads through writes and the simplifiers. Each one documents how it reduces
-  to the kernel's rules.
+  to the kernel's rules. The symbols they read by name are pinned
+  (`ext/pinned.rs`): the canonical prelude's (its text embedded in the
+  kernel), a few layer definitions with fixed bodies (`store_le`, `le`,
+  `bytes_at`, `x86.apart`), and the loop theorems simp relies on with fixed
+  statements.
 - The model (`spec/`): x86-64 and Linux, written in SL, assumed to describe
   the real machine.
 

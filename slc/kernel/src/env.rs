@@ -114,9 +114,29 @@ pub struct Env {
     /// the bit rules (`bit_rule NAME`: `H.. -> (bit(P, i) <-> φ)`, a word
     /// P's bit), in order. Hints for the proof checker's `bitwise`.
     pub bit_rules: Vec<String>,
+    /// the symbols defined by the canonical prelude: those numbered below
+    /// this (`ext::pinned`), if it was loaded
+    pub prelude_end: Option<usize>,
+    /// the layer definitions with their pinned bodies (`ext::pinned`)
+    pub pinned: std::collections::HashSet<SymId>,
 }
 
 impl Env {
+    /// A symbol a trusted extension relies on by name: a symbol of the
+    /// canonical prelude, or a pinned definition (`ext::pinned`); else
+    /// none (another file's symbol of that name means something else).
+    pub fn ksym(&self, name: &str) -> Option<SymId> {
+        let s = *self.sym_by_name.get(name)?;
+        (self.pinned.contains(&s) || self.prelude_end.is_some_and(|e| (s as usize) < e)).then_some(s)
+    }
+
+    /// A symbol's name, for dispatch in a trusted extension: the name only
+    /// if the symbol is what `ksym` resolves it to, else "" (no rule's).
+    pub fn kname(&self, s: SymId) -> &str {
+        let name = self.syms[s as usize].name.as_str();
+        if self.ksym(name) == Some(s) { name } else { "" }
+    }
+
     pub fn new() -> Env {
         let mut env = Env {
             syms: Vec::new(),
@@ -134,6 +154,8 @@ impl Env {
             mem_frames: Vec::new(),
             mem_closures: Vec::new(),
             bit_rules: Vec::new(),
+            prelude_end: None,
+            pinned: Default::default(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,
@@ -167,6 +189,11 @@ impl Env {
     fn add_sym(&mut self, name: &str, binders: Vec<u32>, kind: SymKind) -> KResult<SymId> {
         if self.sym_by_name.contains_key(name) {
             return err(format!("symbol `{}` already declared", name));
+        }
+        // (an abbreviation is read before symbols: a symbol of its name
+        // would never be what a statement mentions)
+        if self.abbrevs.contains_key(name) {
+            return err(format!("`{}` is an abbreviation", name));
         }
         let id = self.syms.len() as SymId;
         self.syms.push(SymInfo { name: name.to_string(), binders, kind });
@@ -215,11 +242,12 @@ impl Env {
         Ok(())
     }
 
-    pub fn declare_const(&mut self, name: &str, binders: Vec<u32>) -> KResult<SymId> {
+    // (constants and axioms: the prelude's, through `syntax::load` only)
+    pub(crate) fn declare_const(&mut self, name: &str, binders: Vec<u32>) -> KResult<SymId> {
         self.add_sym(name, binders, SymKind::Primitive)
     }
 
-    pub fn add_axiom(&mut self, name: &str, prop: Term) -> KResult<Thm> {
+    pub(crate) fn add_axiom(&mut self, name: &str, prop: Term) -> KResult<Thm> {
         self.check_wf(&prop, 0)?;
         let thm = Thm(prop);
         self.axioms.push((name.to_string(), thm.clone()));
@@ -243,8 +271,13 @@ impl Env {
                 return err(format!("definition of `{}`: repeated parameter", name));
             }
         }
+        // (a name the extensions rely on: only with its pinned body)
+        let pinned = crate::ext::pinned::check_def(self, name, &params, &body)?;
         let binders: Vec<u32> = params.iter().map(|p| self.vars[*p as usize].arity).collect();
         let sym = self.add_sym(name, binders.clone(), SymKind::Defined { params: params.clone(), body: body.clone() })?;
+        if pinned {
+            self.pinned.insert(sym);
+        }
         let args: Vec<Term> = params
             .iter()
             .zip(&binders)

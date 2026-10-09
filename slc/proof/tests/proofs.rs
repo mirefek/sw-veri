@@ -381,6 +381,43 @@ fn arithmetic_is_proven() {
     assert_eq!(arith_ok("a = b -> int_mul(x, a) = int_mul(x, b)", &[("h", "a = b")]), Ok(1));
 }
 
+/// With the libraries up to core/loop.core: `src`'s error, if any.
+fn check_all(src: &str) -> Result<usize, String> {
+    let mut env = Env::new();
+    load(&mut env, &core_file("prelude.core"), true).unwrap();
+    for f in ["logic.core", "sets.core", "nat.core", "records.core", "list.core", "loop.core"] {
+        load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
+    }
+    load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| r.theorems.len()).map_err(|e| e.0)
+}
+
+#[test]
+fn extension_soundness_holes_stay_closed() {
+    // (each found in a review: a derivation of `false`, or of a false statement)
+    let bad = [
+        // a name the extensions rely on, redefined: rejected
+        "def x86_64_linux.store_le(b, a, n, v) := empty\n",
+        "def gimple.bytes_at(vm, a, n) := 7\n",
+        // simp's matching: no bound variable escapes
+        "theorem cap(x y. r): (all x. ex y. r(x, y)) -> ex y. r(y, y)\nproof\n  assume h\n  show by simp(h)\nqed\n",
+        "theorem refl_le: all z. int_le(z, z)\nproof\n  fix z\n  show by arith()\nqed\ntheorem c2: ex x. all z. int_le(x, z)\nproof\n  show by simp(refl_le)\nqed\n",
+        // bits of a negative width: empty
+        "theorem b: ex x. x in bits(int_neg(1))\nproof\n  show by simp()\nqed\n",
+        // a store's bytes: at addresses (64 bits) only
+        "def x86_64_linux.store_le(b, a, n, v) := fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)))\ntheorem r: app(x86_64_linux.store_le(empty, 0, 1, 1), 18446744073709551616) = 1\nproof\n  show by simp()\nqed\n",
+        // sign extension to fewer bits, a slice beyond the word
+        "theorem s: bits_sext(16, 8, 300) = 300\nproof\n  show by simp()\nqed\n",
+        "theorem s: bits_set_slice(8, 0, 15, 0, 300) = 300\nproof\n  show by simp()\nqed\n",
+        // a set that holds is not `true`
+        "theorem l(x): x -> x = true\nproof\n  assume h\n  show by simp(h)\nqed\n",
+        // ok(s, v) is a pair (members' matching)
+        "theorem m: false\nproof\n  have m := members({set_select(omega, n. n = 0 && (ex a b. ok(5, 6) = pair(a, b)))})\n  have i := all_elim(m, {0})\n  have e: ok(5, 6) = pair(0, pair(5, 6)) by defs(refl({pair(0, pair(5, 6))}), ok, tag)\n  have x: ex a b. ok(5, 6) = pair(a, b) by ex_intro({0}, {pair(5, 6)}, e)\n  have o: 0 in omega by simp()\n  have z: 0 in set_select(omega, n. n = 0 && (ex a b. ok(5, 6) = pair(a, b))) by sel(taut(o, refl({0}), x))\n  show by taut(i, z)\nqed\n",
+    ];
+    for src in bad {
+        assert!(check_all(src).is_err(), "accepted:\n{}", src);
+    }
+}
+
 #[test]
 fn arithmetic_failures_name_what_was_not_read() {
     // an equation of a term not known to be an integer: a mere proposition

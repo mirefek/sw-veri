@@ -40,7 +40,7 @@ impl Logic {
     /// Finds the prelude's logical symbols and checks that the axioms the
     /// extensions rely on are present.
     pub fn new(env: &Env) -> KResult<Logic> {
-        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("extensions need `{}` (the prelude)", n)));
+        let sym = |n: &str| env.ksym(n).ok_or_else(|| KernelError(format!("extensions need `{}` (the prelude)", n)));
         for a in ["imp_prop", "eq_prop", "ex_prop", "in_prop", "ex_intro", "choose_spec", "eq_refl", "eq_subst", "false_elim"] {
             if !env.axioms.iter().any(|(n, _)| n == a) {
                 return err(format!("extensions need the prelude axiom `{}`", a));

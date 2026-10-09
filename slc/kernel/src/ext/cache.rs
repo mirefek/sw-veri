@@ -18,7 +18,7 @@ use crate::term::Term;
 
 /// Records the cached theorem `name: prop` (resting on the open lemmas
 /// `open`, if any) as the checker had proven it.
-pub fn admit(env: &mut Env, name: &str, prop: Term, open: Vec<String>) -> KResult<()> {
+pub(crate) fn admit(env: &mut Env, name: &str, prop: Term, open: Vec<String>) -> KResult<()> {
     env.check_wf(&prop, 0)?;
     if open.is_empty() {
         if env.open.conditional.iter().any(|(n, _)| n == name) {

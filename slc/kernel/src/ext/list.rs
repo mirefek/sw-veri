@@ -42,7 +42,7 @@ pub(crate) struct LSyms {
 
 impl LSyms {
     pub(crate) fn new(env: &Env) -> LSyms {
-        let s = |n: &str| env.sym_by_name.get(n).copied();
+        let s = |n: &str| env.ksym(n);
         LSyms {
             concat: s("seq_concat"),
             one: s("seq_one"),
@@ -134,7 +134,7 @@ impl Logic {
             _ => return err("at: not `app(L, i)`"),
         };
         let pieces = flatten(&s, l, &known).ok_or_else(|| KernelError("at: not a list expression over known lists".into()))?;
-        let g = |n: &str| env.sym_by_name.get(n).copied();
+        let g = |n: &str| env.ksym(n);
         let (Some(int_add), Some(int_sub), Some(int_le), Some(int_lt), Some(and), Some(omega), Some(len)) =
             (g("int_add"), g("int_sub"), g("int_le"), g("int_lt"), g("and"), g("omega"), s.len)
         else {
@@ -204,8 +204,8 @@ impl Logic {
         };
         let (Some(a), Some(b)) = (member(ha), member(hb)) else { return err("list_ext: the first two premises are `A in list_type(T)`, `B in list_type(T')`") };
         let (len, app) = (s.len.unwrap(), s.app.unwrap());
-        let omega = env.sym_by_name.get("omega").copied().ok_or_else(|| KernelError("no omega".into()))?;
-        let int_lt = env.sym_by_name.get("int_lt").copied().ok_or_else(|| KernelError("no int_lt".into()))?;
+        let omega = env.ksym("omega").ok_or_else(|| KernelError("no omega".into()))?;
+        let int_lt = env.ksym("int_lt").ok_or_else(|| KernelError("no int_lt".into()))?;
         let want_len = env.mk_eq(Term::app(len, vec![a.clone()]), Term::app(len, vec![b.clone()]));
         if hlen != &want_len {
             return err("list_ext: the third premise is `seq_len(A) = seq_len(B)`");
