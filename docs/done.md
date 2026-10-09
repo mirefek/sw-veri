@@ -68,15 +68,21 @@ item is a short summary of finished work; details are in the files named.
 - **C1 by translation**, generated certificates (`proofs/*_tr.core`) for
   a_ctz_32, a_clz_32, get_slot_index, is_bouncing, get_stride, step_seq
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
-  decay_bounces and dequeue. The rules cover:
+  decay_bounces, dequeue (malloc.c's copy) and dequeue_head. The rules
+  cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;
   - 8- to 64-bit loads and stores;
   - branches.
-- **Calls in C1**: the call rule (`proofs/translate_call.core`), so far
-  for an 8-byte frame and one argument. `proofs/mallocng_link.core` links
-  a_clz_32 with a_ctz_32.
+- **Calls in C1** (`tr.call`, `tr.call1` in `proofs/translate_call.core`):
+  - any frame of at most 64 KiB, 1 to 6 register arguments, the result in
+    rax:rdx (or rax);
+  - the push's fault is a stack overflow by the guard gap;
+  - the homes and the whole frame survive the callee.
+
+  `proofs/mallocng_link.core` links a_clz_32 with a_ctz_32 and
+  dequeue_head with dequeue.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),

@@ -102,7 +102,7 @@ fn translations_are_generated_and_check() {
     let tmp = std::env::temp_dir();
     let id = std::process::id();
     let (steps, gimple) = (tmp.join(format!("slc-tr-steps-{}.core", id)), tmp.join(format!("slc-tr-gimple-{}.core", id)));
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue", "-o"]).arg(&steps).output().unwrap();
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "-o"]).arg(&steps).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
@@ -120,7 +120,7 @@ fn translations_are_generated_and_check() {
             .map(|f| f.into()),
     );
     let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt")] {
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht")] {
         let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
         let t = Command::new(slc)
             .current_dir(&root)
@@ -135,7 +135,7 @@ fn translations_are_generated_and_check() {
         assert!(made == k, "{} differs from the generated {}", kept, cert.display());
         certs.push(cert);
     }
-    // and a_clz_32 linked with a_ctz_32 (proofs/mallocng_link.core)
+    // and the callers linked with their callees (proofs/mallocng_link.core)
     // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl)
     let c = Command::new(slc)
         .current_dir(&root)
@@ -159,9 +159,10 @@ fn translations_are_generated_and_check() {
         ("decay_bounces", "0 definitions, 6 theorems"),
         ("a_clz_32", "0 definitions, 3 theorems"),
         ("dequeue", "0 definitions, 10 theorems"),
+        ("dequeue_head", "0 definitions, 3 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
-        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 3 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 27 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));

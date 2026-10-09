@@ -8,16 +8,14 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 dequeue_head (current)
+### 1.1 dequeue_head as a callee (current)
 
-C2 is done. C1 is next:
+C1 and C2 are done. For its callers it still needs:
 
-1. The call rule for any frame size and any number of register arguments.
-   It currently covers only an 8-byte frame and one argument.
-2. `slc translate`: emit such calls; then generate `proofs/dequeue_head_tr.core`.
-3. `dequeue_head_fun` as a C function value refining a
-   `dequeue_head_spec_fun`, for its callers (as `ms.dequeue_fun_c2` does
-   for dequeue).
+1. `dequeue_head_fun` as a C function value refining a
+   `dequeue_head_spec_fun` (as `ms.dequeue_fun_c2` does for dequeue).
+2. Its `tr.callee_io`. A caller's must come from its callees' (see below),
+   which the generator does not derive yet.
 
 ### 1.2 The remaining functions
 
