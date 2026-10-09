@@ -8,20 +8,22 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 queue (current)
+### 1.1 free_meta (current)
 
-1. `a_crash` (inline assembly `hlt`, called by most functions): C1 by
-   showing GIMPLE's run of the instruction raises (the model's decode and
-   execute through `inline_asm`, `run_code`); its contract.
-2. Calls with no arguments (`a_crash()`).
-3. `queue`'s C1, its spec (linking a meta into a list; the `a_crash`
-   paths excluded by its precondition), C2.
+`*m = (struct meta){0}; queue(&ctx.free_meta_head, m);`
+
+1. C1 of the 40-byte zero store (`st_bytes`): look at GCC's -O0 code
+   first (five 8-byte stores, or a `rep stos`), then a rule for it.
+2. A static's address as a call argument (`padd(__malloc_context, 16)`,
+   RIP-relative at machine level): the statics' map in the coupling.
+3. `free_meta`'s C1 linked with queue's contract, its spec (a zeroed meta
+   queued on the free list), C2 from queue's contract.
 
 ### 1.2 The remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
-- `queue`, `free_meta`, `activate_group`, `get_meta`, `get_nominal_size`,
+- `activate_group`, `get_meta`, `get_nominal_size`,
   `set_size`, `enframe`, `size_to_class`, `account_bounce`, `record_seq`,
   `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
   `__malloc_alloc_meta`, `nontrivial_free`.

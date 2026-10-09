@@ -66,6 +66,38 @@ fn dequeue_spec_fun() -> CFun2[World] = (args: Args) => {
   return (any bits[64], any bits[64])
 }
 
+// queue(phead, m): m, unlinked (its links 0 -- else a_crash, a bug),
+// joins the list *phead: before its head H (at the circular list's end,
+// after H's prev P), or as the list's only element. The words involved:
+// usable, 8-aligned, and the ones written apart from those read after.
+pred queue_pre(vm: Vm, objs: Set[nat], phead: Addr, m: Addr) =
+  word_ok(vm, objs, phead, 0) && word_ok(vm, objs, m, 0) && word_ok(vm, objs, m, 8) && al8(phead) && al8(m) &&
+  mnext(vm, m) = 0 && mprev(vm, m) = 0 &&
+  (rd64(vm, phead) != 0 ->
+     word_ok(vm, objs, rd64(vm, phead), 0) && al8(rd64(vm, phead)) &&
+     word_ok(vm, objs, mprev(vm, rd64(vm, phead)), 8) && al8(mprev(vm, rd64(vm, phead))) &&
+     uint(rd64(vm, phead)) != uint(m) + 8 && mprev(vm, rd64(vm, phead)) != m)
+
+// (its effect: m between P and H; or m alone, the head)
+fn queue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm =
+  if rd64(vm, phead) != 0 {
+    wr64(wr64(wr64(wr64(vm, m + 8, rd64(vm, phead)), m, mprev(vm, rd64(vm, phead))), mprev(vm, rd64(vm, phead)) + 8, m), rd64(vm, phead), m)
+  } else {
+    wr64(wr64(wr64(vm, m + 8, m), m, m), phead, m)
+  }
+
+proc[World] queue_spec(phead: bits[64], m: bits[64]) {
+  require queue_pre(vm, objs, phead, m)
+  either { overflow() } or { vm := queue_vm(vm, phead, m) }
+}
+
+// ... as a C function value
+fn queue_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 2
+  queue_spec(bits[64](args[0]), bits[64](args[1]))
+  return (any bits[64], any bits[64])
+}
+
 // dequeue_head(phead): the list's head, dequeued (if any), returned. The
 // call to dequeue needs the thread pointer sound (the ABI's, at every
 // call).
