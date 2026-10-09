@@ -98,6 +98,28 @@ fn queue_spec_fun() -> CFun2[World] = (args: Args) => {
   return (any bits[64], any bits[64])
 }
 
+// free_meta(m): m's 40 bytes (its struct meta) zeroed, then m queued on the
+// free metas' list, ctx.free_meta_head (at ctx + 16; ctx the malloc
+// context's address, layers/mallocng.sl's Cfg.ctx). The bytes: usable;
+// queue's precondition, and the thread pointer for its call, on the memory
+// zeroed.
+fn zero_meta(vm: Vm, m: Addr) -> Vm = vm with { bytes: store_le(vm.bytes, m, 40, 0) }
+
+pred free_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, m: Addr) =
+  m != 0 && usable(vm, objs, uint(m), 40, true) && uint(ctx) + 16 < 2^64 &&
+  queue_pre(zero_meta(vm, m), objs, ctx + 16, m) && thread_ok(zero_meta(vm, m), fs)
+
+proc[World] free_meta_spec(ctx: bits[64], m: bits[64]) {
+  require free_meta_pre(vm, objs, fs_base, ctx, m)
+  either { overflow() } or { vm := queue_vm(zero_meta(vm, m), ctx + 16, m) }
+}
+
+fn free_meta_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  free_meta_spec(ctx, bits[64](args[0]))
+  return (any bits[64], any bits[64])
+}
+
 // dequeue_head(phead): the list's head, dequeued (if any), returned. The
 // call to dequeue needs the thread pointer sound (the ABI's, at every
 // call).

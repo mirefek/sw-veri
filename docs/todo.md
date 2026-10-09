@@ -8,16 +8,16 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 free_meta (current)
+### 1.1 size_to_class (current)
 
-`*m = (struct meta){0}; queue(&ctx.free_meta_head, m);`
+`n = (n + 3) >> 4; if (n < 10) return n; n++; i = (28 - a_clz_32(n)) * 4 + 8;
+...` -- two lookups in the read-only table `__malloc_size_classes`.
 
-1. C1 of the 40-byte zero store (`st_bytes`): look at GCC's -O0 code
-   first (five 8-byte stores, or a `rep stos`), then a rule for it.
-2. A static's address as a call argument (`padd(__malloc_context, 16)`,
-   RIP-relative at machine level): the statics' map in the coupling.
-3. `free_meta`'s C1 linked with queue's contract, its spec (a zeroed meta
-   queued on the free list), C2 from queue's contract.
+1. C1: a call with a 32-bit result (`call1`) used in signed arithmetic
+   (`ssub`, `smul`, `sadd`); 16-bit loads from a static table (its bytes
+   fixed: the program text's data, or an object of the C world?).
+2. Its spec (the size class: the least class whose size covers n), C2 from
+   a_clz_32's contract.
 
 ### 1.2 The remaining functions
 

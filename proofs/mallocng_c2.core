@@ -1040,3 +1040,252 @@ proof
   qed
   show by taut(r, c1, c2)
 qed
+
+// ----------------------------------------------------------------------
+//  free_meta: from queue's contract
+
+// queue's contract at a call queue(phead, m) (its spec's register wrapper,
+// on a world where its precondition holds): an overflow (the memory any),
+// or the return with queue's effect
+theorem ms.qus_q: all regs s phead m o2. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.queue_pre(app(s, "vm"), app(s, "objs"), phead, m) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, phead)), seq_one(gimple.arg(64, m)))) ->
+  runs(app(mallocng_specs.queue_spec_fun, regs), s, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(s, "vm", mallocng_specs.queue_vm(app(s, "vm"), phead, m)), r))
+proof
+  fix regs s phead m o2
+  assume hp hm hw hu hpre hr h
+  have rl rn r0 r1 := apply(gc.regs2, hp, hm, hr)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_specs.queue_spec_fun, app_fn_build, ra in h
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(s, "vm")}, simp(expand(hw, abi.World)))
+  show by simp(h, r0, r1, rn, hp, hm, hpre, vv, keep(mallocng_specs.queue_pre, mallocng_specs.queue_vm))
+qed
+
+// (queue's memory after: a memory)
+theorem ms.quvm_vm: all vm phead m. vm in x86_64_linux.Vm -> vm in univ(1) -> phead in bits(64) -> m in bits(64) ->
+  mallocng_specs.queue_vm(vm, phead, m) in x86_64_linux.Vm && mallocng_specs.queue_vm(vm, phead, m) in univ(1)
+proof
+  fix vm phead m
+  assume hv hu hph hm
+  let H := mallocng_specs.rd64(vm, phead)
+  let P := mallocng_specs.mprev(vm, H)
+  have hH: H in bits(64) by defs(simp(), mallocng_specs.rd64)
+  have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+  have hP8: bits_add(64, P, 8) in bits(64) by arith(hP)
+  have hm8: bits_add(64, m, 8) in bits(64) by arith(hm)
+  have a1 a2 := apply(ms.wr_vm, {vm}, {bits_add(64, m, 8)}, {H}, hv, hu, hm8)
+  have b1 b2 := apply(ms.wr_vm, {mallocng_specs.wr64(vm, bits_add(64, m, 8), H)}, {m}, {P}, a1, a2, hm)
+  have c1 c2 := apply(ms.wr_vm, {mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, m, 8), H), m, P)}, {bits_add(64, P, 8)}, {m}, b1, b2, hP8)
+  have d1 d2 := apply(ms.wr_vm, {mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, m, 8), H), m, P), bits_add(64, P, 8), m)}, {H}, {m}, c1, c2, hH)
+  have e1 e2 := apply(ms.wr_vm, {vm}, {bits_add(64, m, 8)}, {m}, hv, hu, hm8)
+  have f1 f2 := apply(ms.wr_vm, {mallocng_specs.wr64(vm, bits_add(64, m, 8), m)}, {m}, {m}, e1, e2, hm)
+  have g1 g2 := apply(ms.wr_vm, {mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, m, 8), m), m, m)}, {phead}, {m}, f1, f2, hph)
+  have q1: mallocng_specs.queue_vm(vm, phead, m) in x86_64_linux.Vm by defs(apply(ite_in, d1, g1), mallocng_specs.queue_vm)
+  have q2: mallocng_specs.queue_vm(vm, phead, m) in univ(1) by defs(apply(ite_in, d2, g2), mallocng_specs.queue_vm)
+  show conj(q1, q2)
+qed
+
+// free_meta's contract from queue's: for every callee refining queue's
+// spec (as a C function value), free_meta's readable GIMPLE refines its
+// spec (ctx: the malloc context's address)
+theorem ms.free_meta_c2: all m g. m in bits(64) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g, regs), s, o) -> runs(app(mallocng_specs.queue_spec_fun, regs), s, o)) ->
+  refines(c_src_malloc_mallocng_malloc.free_meta(m, g), mallocng_specs.free_meta_spec(c_src_malloc_mallocng_malloc.__malloc_context, m), abi.World)
+proof
+  fix m g
+  assume hm hg
+  show proof
+    fix s o
+    assume hw hr
+    let V0 := app(s, "vm")
+    let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+    let PH := bits_add(64, CTX, 16)
+    let ZV := mallocng_specs.zero_meta(V0, m)
+    let W1 := fn_update(s, "vm", ZV)
+    let QV := mallocng_specs.queue_vm(ZV, PH, m)
+    let SPEC := mallocng_specs.free_meta_spec(CTX, m)
+    let OVF := exc_val("stack_overflow", empty)
+    let Z := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(0), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0)), seq_one(0))
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have vV vfun vdom .. := apply(ms.world_parts, hw)
+    have np: !mallocng_specs.free_meta_pre(V0, app(s, "objs"), app(s, "fs_base"), CTX, m) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.free_meta_pre, mallocng_specs.queue_vm, mallocng_specs.zero_meta))
+    qed
+    have yp: mallocng_specs.free_meta_pre(V0, app(s, "objs"), app(s, "fs_base"), CTX, m) -> runs(SPEC, s, o) proof
+      assume hp
+      have hnz hus hctx hq hth := expand(hp, mallocng_specs.free_meta_pre)
+      // (the spec's outcomes: an overflow, any memory; m zeroed and queued)
+      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
+        fix v
+        assume hv
+        have vu := apply(x86.vm_univ, hv)
+        have eu: OVF in univ(1) by defs(simp(), exc_val)
+        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
+        have ovi := apply(ct.overflow_intro, hv, pu2)
+        show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.free_meta_pre, mallocng_specs.queue_vm, mallocng_specs.zero_meta))
+      qed
+      // m's 40 bytes zeroed: the world W1
+      have zl := apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, apply(tr.zeros_snoc, tr.zeros_one)))))))))))))))))))))))))))))))))))))))
+      have ln: seq_len(Z) = 40 by arith()
+      have md: g.mem_defined(s, m, 0, seq_len(Z), true) by simp(ln, hnz, hus, hm)
+      have sd := apply(g.stz_det, {s}, {m}, {0}, {Z}, hu, hm, simp(), zl, md, vV, vfun, vdom)
+      have ez: fn_update(s, "vm", fn_update(V0, "bytes", x86_64_linux.store_le(app(V0, "bytes"), int_add(m, 0), seq_len(Z), 0))) = W1 by defs(simp(ln, hm), mallocng_specs.zero_meta)
+      have b1 := apply(g.bind_inv, apply(g.runs_elim, expand(hr, c_src_malloc_mallocng_malloc.free_meta)), rewrite(ez, sd))
+      have w1W w1u := apply(tr.world_store, {s}, {m}, {40}, {0}, hw, hu, hm)
+      have zw: fn_update(s, "vm", fn_update(V0, "bytes", x86_64_linux.store_le(app(V0, "bytes"), m, 40, 0))) = W1 by defs(simp(), mallocng_specs.zero_meta)
+      have hw1 := rewrite(zw, w1W)
+      have hu1 := rewrite(zw, w1u)
+      // ctx + 16
+      have cb: CTX in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+      have sv: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 16) = 16 by defs(simp(), gimple.sval)
+      have pd := rewrite(sv, apply(g.padd_det, {W1}, {CTX}, {16}, hu1, cb, simp(), simp(sv, cb), simp(sv, hctx)))
+      have ep: int_add(CTX, 16) = PH by simp(hctx, cb)
+      have b2 := apply(g.bind_inv, b1, rewrite(ep, pd))
+      have phb: PH in bits(64) by simp()
+      // the call: queue's contract on W1
+      let ARGS2 := seq_concat(seq_one(gimple.arg(64, PH)), seq_one(gimple.arg(64, m)))
+      let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W1, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(W1, "vm", QV), r))
+      have ths: gc.sound(W1) by simp(hth)
+      have qpre: mallocng_specs.queue_pre(app(W1, "vm"), app(W1, "objs"), PH, m) by simp(hq)
+      have hcm: all regs o2. gc.regs_ok(regs, ARGS2) -> runs(app(g, regs), W1, o2) -> runs(app(mallocng_specs.queue_spec_fun, regs), W1, o2) proof
+        fix regs o2
+        assume hro h2
+        have rl rn .. := apply(gc.regs2, phb, hm, hro)
+        show := mp(all_elim(hg, {regs}, {W1}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn)), hw1, h2)
+      qed
+      have cm: all o2. runs(gimple.call(g, ARGS2), W1, o2) -> runs(gimple.call(mallocng_specs.queue_spec_fun, ARGS2), W1, o2) proof
+        fix o2
+        assume h2
+        show := apply(gc.call_mono2, ths, hcm, h2)
+      qed
+      have b3 := apply(g.bind_mono, cm, b2)
+      obtain o1, hr1 hk1 from expand(b3, bind_rel)
+      have rex := apply(gc.regs2_ex, phb, hm)
+      have qa: all regs o2. gc.regs_ok(regs, ARGS2) -> runs(app(mallocng_specs.queue_spec_fun, regs), W1, o2) -> Q(o2) proof
+        fix regs o2
+        assume hro h2
+        have c := apply(ms.qus_q, phb, hm, hw1, hu1, qpre, hro, h2)
+        show by simp(c)
+      qed
+      have ci := apply(gc.call_inv[Q := o2. Q(o2)], ths, rex, qa, hr1)
+      // (the caller's objects back: queue's world)
+      let W := fn_update(W1, "vm", QV)
+      have v1V v1fun v1dom .. := apply(ms.world_parts, hw1)
+      have od: "objs" in dom(W1) by simp(expand(hw1, abi.World))
+      have fW := mp(fn_update_fun[f := W1, k := "vm", v := QV], v1fun)
+      have dW := mp(fn_update_dom[f := W1, k := "vm", v := QV], v1fun, v1dom)
+      have oW: "objs" in dom(W) := rewrite(sym(dW), od)
+      have aW := mp(app_update_other[f := W1, k := "vm", v := QV, x := "objs"], simp())
+      have bW: gc.back(W, W1) = W := rewrite(aW, mp(fn_update_same[f := W, k := "objs"], fW, oW))
+      have ws: W = fn_update(s, "vm", QV) by simp()
+      // (the rest: a return)
+      have kok: all w r. o1 = ok(w, r) -> o = ok(w, empty) proof
+        fix w r
+        assume e
+        show by simp(rewrite(e, hk1))
+      qed
+      have kex: all x e. o1 = exc(x, e) -> o = exc(x, e) proof
+        fix x e
+        assume h1
+        show by simp(rewrite(h1, hk1))
+      qed
+      have zV: ZV in x86_64_linux.Vm by simp(expand(hw1, abi.World))
+      have qV qU := apply(ms.quvm_vm, zV, apply(x86.vm_univ, zV), phb, hm)
+      have sok: runs(SPEC, s, ok(fn_update(s, "vm", QV), empty)) by simp(pu, hp, qU, keep(abi.overflow, mallocng_specs.free_meta_pre, mallocng_specs.queue_vm, mallocng_specs.zero_meta))
+      have c1: o1 = exc(W1, OVF) -> runs(SPEC, s, o) proof
+        assume e
+        have oe := mp(all_elim(kex, {W1}, {OVF}), e)
+        show := rewrite(sym(oe), mp(all_elim(sov, {ZV}), zV))
+      qed
+      have c2: (ex w4 r. Q(ok(w4, r)) && (o1 = ok(gc.back(w4, W1), pair(fst(r), snd(r))) || o1 = exc(gc.back(w4, W1), OVF))) -> runs(SPEC, s, o) proof
+        assume h
+        obtain w4 r, hq2 ho from h
+        have ew: w4 = W by simp(hq2)
+        have ho2 := rewrite(bW, rewrite(ew, ho))
+        have a: o1 = ok(W, pair(fst(r), snd(r))) -> runs(SPEC, s, o) proof
+          assume e
+          have oe := mp(all_elim(kok, {W}, {pair(fst(r), snd(r))}), e)
+          show := rewrite(sym(oe), rewrite(sym(ws), sok))
+        qed
+        have b: o1 = exc(W, OVF) -> runs(SPEC, s, o) proof
+          assume e
+          have oe := mp(all_elim(kex, {W}, {OVF}), e)
+          show := rewrite(sym(oe), rewrite(sym(ws), mp(all_elim(sov, {QV}), qV)))
+        qed
+        show by taut(ho2, a, b)
+      qed
+      have c3: (ex x e. Q(exc(x, e)) && o1 = exc(x, e)) -> runs(SPEC, s, o) proof
+        assume h
+        obtain x e, hq2 ho from h
+        obtain v, hv hx he2 from simp(hq2)
+        have oe := mp(all_elim(kex, {x}, {e}), ho)
+        have r2 := mp(all_elim(sov, {v}), hv)
+        show := rewrite(sym(rewrite(hx, rewrite(he2, oe))), r2)
+      qed
+      have c4: (ex t. Q(diverge(t)) && o1 = diverge(t)) -> runs(SPEC, s, o) proof
+        assume h
+        obtain t, hq2 ho from h
+        have f: false by simp(hq2)
+        show by taut(f)
+      qed
+      show by taut(ci, c1, c2, c3, c4)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// ... with musl's queue (with a_crash's contract) as the callee
+theorem ms.free_meta_c2_qu: all m. m in bits(64) ->
+  refines(c_src_malloc_mallocng_malloc.free_meta(m, c_src_malloc_mallocng_malloc.queue_fun(mallocng_specs.a_crash_spec_fun())),
+    mallocng_specs.free_meta_spec(c_src_malloc_mallocng_malloc.__malloc_context, m), abi.World)
+proof
+  fix m
+  assume hm
+  show := mp(all_elim(ms.free_meta_c2, {m}, {c_src_malloc_mallocng_malloc.queue_fun(mallocng_specs.a_crash_spec_fun())}), hm, ms.queue_fun_c2)
+qed
+
+// free_meta as a C function value: its register wrapper refines the spec's
+theorem ms.free_meta_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.free_meta_fun(c_src_malloc_mallocng_malloc.queue_fun(mallocng_specs.a_crash_spec_fun())), regs), s, o) ->
+  runs(app(mallocng_specs.free_meta_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.free_meta_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.free_meta_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := apply(g.runs_elim, h)
+  let A0 := bits_of_int(64, app(regs, 0))
+  let QF := c_src_malloc_mallocng_malloc.queue_fun(mallocng_specs.a_crash_spec_fun())
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  have a0: A0 in bits(64) by simp()
+  have dc := expand(all_elim(ms.free_meta_c2_qu, {A0}), refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.free_meta(A0, QF), s, o2) -> runs(mallocng_specs.free_meta_spec(CTX, A0), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(mp(dc, a0), {s}, {o2}), hw, h2)
+  qed
+  have c1: !ord_le(1, seq_len(regs)) -> runs(mkprog(x1 x2. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.free_meta_spec(CTX, A0), x1,
+      x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x3, pair(x5, x6)))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), s, o) proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  have c2: bind_rel(c_src_malloc_mallocng_malloc.free_meta(A0, QF), s,
+      x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o = ok(x3, pair(x5, x6)))), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) ->
+      runs(mkprog(x1 x2. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.free_meta_spec(CTX, A0), x1,
+      x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x3, pair(x5, x6)))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), s, o) proof
+    assume hb
+    have b2 := apply(g.bind_mono, hm, hb)
+    show by apply(tr.runs_intro, pu, taut(b2))
+  qed
+  show by taut(r, c1, c2)
+qed

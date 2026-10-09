@@ -7,7 +7,7 @@ item is a short summary of finished work; details are in the files named.
 
 - **x86-64 and Linux in SL** (`spec/`). The instruction table and
   decoders cover all 2426 instructions reachable from malloc, free, calloc
-  and the startup code. The model also has:
+  and the startup code, and all reachable at -O0. The model also has:
   - the Linux memory model: pages with kinds, faults as in `siginfo`,
     stack growth;
   - the syscalls the allocator and startup need;
@@ -27,15 +27,16 @@ item is a short summary of finished work; details are in the files named.
 - **The kernel and trusted extensions:**
   - propositional and quantifier rules, equality and rewriting under
     binders;
-  - linear arithmetic over integers and words, with symbolic widths;
+  - linear arithmetic over integers and words, with symbolic widths
+    (and division by a symbolic divisor below twice it);
   - lists;
   - the path simplifier `simp` and the rewriting simplifier `rsimp`.
 - **The proof language** (docs/language.md). It has implicit unfolding at
   mismatches, destructuring by position or label, `apply` with
   higher-order matching, `flip` and `unfold`. Error messages show the
   first difference, with the proof's abbreviations folded back.
-- **Libraries** (`core/`): logic, sets, naturals and words, records,
-  lists, and loops. For loops, `while_inv`, `while_var` and
+- **Libraries** (`core/`): logic, sets, naturals and words (a word is
+  determined by its bits), records, lists, and loops. For loops, `while_inv`, `while_var` and
   `while_exists` are proven by induction, with no open lemmas.
 - **The checker**: a per-file cache. The main chain checks in about 5 s
   uncached and 0.2 s cached.
@@ -68,13 +69,15 @@ item is a short summary of finished work; details are in the files named.
 - **C1 by translation**, generated certificates (`proofs/*_tr.core`) for
   a_ctz_32, a_clz_32, get_slot_index, is_bouncing, get_stride, step_seq
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
-  decay_bounces, dequeue (malloc.c's copy), dequeue_head and queue. The rules
-  cover:
+  decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue and
+  free_meta. The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;
   - 8- to 64-bit loads and stores;
-  - branches.
+  - branches;
+  - an aggregate's zero-initialization (`pxor` and SSE stores against
+    GIMPLE's `st_bytes`, `proofs/translate_zero.core`).
 - **Calls in C1** (`tr.call`, `tr.call1` in `proofs/translate_call.core`):
   - any frame of at most 64 KiB, 0 to 6 register arguments, the result in
     rax:rdx (or rax);
@@ -89,14 +92,18 @@ item is a short summary of finished work; details are in the files named.
   generated from its callees' (`tr.eff_call`). `a_crash` (`hlt`) has the
   undefined contract (`proofs/a_crash.core`); callers' specs exclude it by
   their preconditions. `proofs/mallocng_link.core` links a_clz_32 with
-  a_ctz_32, dequeue_head with dequeue, and queue with a_crash.
+  a_ctz_32, dequeue_head with dequeue, queue with a_crash, and free_meta
+  with queue.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),
     and with musl's dequeue (`ms.dequeue_head_c2_dq`); as a C function
     value (`ms.dequeue_head_fun_c2`);
   - queue, for any a_crash (`ms.queue_c2`), and as a C function value
-    (`ms.queue_fun_c2`).
+    (`ms.queue_fun_c2`);
+  - free_meta from queue's contract (`ms.free_meta_c2`), with musl's queue,
+    and as a C function value (`ms.free_meta_fun_c2`); the malloc
+    context's address a parameter of the spec.
 
   The generic call lemmas (monotonicity, inversion under a contract) are
   in `proofs/gimple_inv.core`.
