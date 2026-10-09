@@ -32,6 +32,7 @@ impl State {
     fn mem_rules(&self, env: &mut Env, lg: &Logic, frames: bool) -> KResult<Rc<Rules>> {
         let k = frames as u8;
         if let Some(r) = self.mem_cache.borrow().rules.get(&k) {
+            r.reset();
             return Ok(r.clone());
         }
         let mut names: Vec<String> = env.mem_views.clone();
@@ -283,7 +284,7 @@ impl State {
     /// premises discharged (`mem_discharge`)
     pub(crate) fn mem_lemma_inst(&self, env: &mut Env, lg: &Logic, lemma: &Seq, p: &Term, s: &Term, using: &[Seq]) -> KResult<Seq> {
         let det = env.sym_by_name.get("g.det").copied();
-        let (inst, _, concl) = open_lemma(env, lg, lemma)?;
+        let (inst, concl) = open_lemma(env, lg, lemma)?;
         let (pp, sp) = match concl.node() {
             Node::App(f, a) if Some(*f) == det && a.len() == 3 => (a[0].clone(), a[1].clone()),
             _ => return err("step: a `with` lemma not concluding `g.det(P, S, O)`"),
@@ -400,7 +401,7 @@ impl State {
         if depth < 40 {
             for name in env.mem_closures.clone() {
                 let Some(l) = facts::seq_of(env, &name) else { continue };
-                let (inst, _, concl) = open_lemma(env, lg, &l)?;
+                let (inst, concl) = open_lemma(env, lg, &l)?;
                 // (a conjunct of its conclusion)
                 for (k, part) in conj_parts(env, &concl).iter().enumerate() {
                     let mut binds = Vec::new();
@@ -430,28 +431,9 @@ impl State {
     }
 }
 
-/// a lemma's leading `all`s as fresh variables: (the instance, its
-/// variables), its premises, its conclusion
-#[allow(clippy::type_complexity)]
-fn open_lemma(env: &mut Env, lg: &Logic, l: &Seq) -> KResult<((Seq, Vec<VarId>), Vec<Term>, Term)> {
-    let mut s = l.clone();
-    let mut vs = Vec::new();
-    while let Node::App(q, _) = s.concl().node() {
-        if *q != lg.all {
-            break;
-        }
-        let v = env.new_var(s.concl().binder_name().unwrap_or("x"), 0);
-        s = Seq::all_elim(env, lg, &s, &Term::var(v, vec![]))?;
-        vs.push(v);
-    }
-    let mut prems = Vec::new();
-    let mut c = s.concl().clone();
-    while let Node::App(i, a) = c.node() {
-        if *i != env.builtins.imp {
-            break;
-        }
-        prems.push(a[0].clone());
-        c = a[1].clone();
-    }
-    Ok(((s, vs), prems, c))
+/// a lemma's parameters and leading `all`s as fresh variables (bits.rs's
+/// opener): (the instance, its variables), its conclusion after the premises
+fn open_lemma(env: &mut Env, lg: &Logic, l: &Seq) -> KResult<((Seq, Vec<VarId>), Term)> {
+    let (s, vs, c) = super::bits::open_rule(env, lg, l)?;
+    Ok(((s, vs), c))
 }

@@ -59,6 +59,15 @@ pub(crate) struct Rules {
     premises: std::cell::RefCell<std::collections::HashMap<(Term, usize), Option<Seq>>>,
 }
 
+impl Rules {
+    /// The rules for another call: what failed and the premises tried
+    /// forgotten (the facts may have grown since).
+    pub(crate) fn reset(&self) {
+        self.failed.borrow_mut().clear();
+        self.premises.borrow_mut().clear();
+    }
+}
+
 /// `name`'s instance at `ts` (its schematic variables in the order they
 /// appear)
 fn lemma(env: &Env, name: &str, ts: &[Term]) -> KResult<Seq> {

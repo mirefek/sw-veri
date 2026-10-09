@@ -44,7 +44,7 @@ impl State {
         let mut fs = facts.to_vec();
         fs.push(Seq::assume(env, ai.clone())?);
         fs.push(Seq::assume(env, al.clone())?);
-        let iff = env.sym_by_name.get("iff").copied().unwrap();
+        let iff = env.sym_by_name.get("iff").copied().ok_or_else(|| KernelError("bitwise: no `iff`".into()))?;
         let g2 = Term::app(iff, vec![Term::app(bit, vec![l.clone(), i.clone()]), Term::app(bit, vec![r.clone(), i.clone()])]);
         let p = self.bitwise_prop(env, lg, &g2, &fs)?;
         let p = Seq::gen(env, lg, &p.discharge(env, &al)?.discharge(env, &ai)?, v)?;
@@ -186,8 +186,10 @@ impl State {
         let mut fs = facts.to_vec();
         fs.push(r);
         // (all premises but the last, n <= i)
-        for _ in 0..4 {
-            let h = imp_parts(env, s.concl())?.0;
+        while let Ok((h, rest)) = imp_parts(env, s.concl()) {
+            if imp_parts(env, &rest).is_err() {
+                break;
+            }
             let p = self.bit_premise(env, lg, &h, &fs)?;
             s = Seq::mp(env, &s, &p)?;
         }
@@ -270,7 +272,7 @@ impl State {
         // t in bits(n): the operation's lemma; t in omega: from t in bits(n)
         if let Node::App(f, a) = h.node() {
             if *f == lg.in_ {
-                if let Node::App(op, oa) = a[0].node() {
+                if let Node::App(op, _) = a[0].node() {
                     let lemma = match env.syms[*op as usize].name.as_str() {
                         "bits_and" => Some("bits_and_in"),
                         "bits_or" => Some("bits_or_in"),
@@ -278,12 +280,20 @@ impl State {
                         "bits_not" => Some("bits_not_in"),
                         _ => None,
                     };
-                    if let (Some(name), Some(l)) = (lemma, lemma.and_then(|n| facts::seq_of(env, n))) {
-                        let _ = name;
-                        let (s, pv, _) = open_rule(env, lg, &l)?;
+                    if let Some(l) = lemma.and_then(|n| facts::seq_of(env, n)) {
+                        // (its variables by matching its conclusion's word)
+                        let (s, pv, c) = open_rule(env, lg, &l)?;
+                        let mut binds = Vec::new();
+                        let pat = match c.node() {
+                            Node::App(g, ca) if *g == lg.in_ => ca[0].clone(),
+                            _ => return err("bitwise: a range lemma not `op(..) in bits(n)`"),
+                        };
+                        if !super::pmatch(env, &pat, &a[0], &pv, &mut binds) || pv.iter().any(|v| !binds.iter().any(|(w, _)| w == v)) {
+                            return err(format!("bitwise: `{}` not an instance of its range lemma", Printer::new(env).short(&a[0])));
+                        }
                         let mut s = s;
-                        for (k, v) in pv.iter().enumerate() {
-                            s = Seq::inst(env, &s, *v, &oa[k])?;
+                        for (v, t) in binds {
+                            s = Seq::inst(env, &s, v, &t)?;
                         }
                         let hn = self.bit_premise(env, lg, &imp_parts(env, s.concl())?.0, facts)?;
                         let m = Seq::mp(env, &s, &hn)?;
@@ -334,7 +344,7 @@ fn mentions_sym(t: &Term, f: Option<SymId>) -> bool {
 
 /// a rule's parameters and leading `all`s as fresh variables: (the
 /// instance, its variables, its conclusion after the premises)
-fn open_rule(env: &mut Env, lg: &Logic, l: &Seq) -> KResult<(Seq, Vec<VarId>, Term)> {
+pub(crate) fn open_rule(env: &mut Env, lg: &Logic, l: &Seq) -> KResult<(Seq, Vec<VarId>, Term)> {
     let mut s = l.clone();
     let mut vs: Vec<VarId> = Vec::new();
     let mut fv = Vec::new();
@@ -475,19 +485,21 @@ fn pe_at(p: &PE, name: &str, by: &str) -> PE {
 fn replace_ident(t: &str, name: &str, by: &str) -> String {
     let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '$';
     let mut out = String::new();
-    let mut rest = t;
-    while let Some(i) = rest.find(name) {
-        let before = rest[..i].chars().last();
-        let after = rest[i + name.len()..].chars().next();
-        out.push_str(&rest[..i]);
+    // (positions in t: the character before a match is t's, not a cut rest's)
+    let mut at = 0;
+    while let Some(j) = t[at..].find(name) {
+        let i = at + j;
+        let before = t[..i].chars().last();
+        let after = t[i + name.len()..].chars().next();
+        out.push_str(&t[at..i]);
         if before.is_some_and(ident) || after.is_some_and(ident) {
             out.push_str(name);
         } else {
             out.push_str(by);
         }
-        rest = &rest[i + name.len()..];
+        at = i + name.len();
     }
-    out.push_str(rest);
+    out.push_str(&t[at..]);
     out
 }
 

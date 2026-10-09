@@ -642,6 +642,9 @@ fn occurrence(a: &Arg) -> Option<usize> {
 fn split_top_kw<'a>(s: &'a str, kw: &str) -> Option<(&'a str, &'a str)> {
     let mut depth = 0i32;
     let mut found = None;
+    // (a word keyword, `in`: not inside an identifier like `hin`)
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+    let word = kw.chars().next().is_some_and(ident) || kw.chars().last().is_some_and(ident);
     for (i, c) in s.char_indices() {
         match c {
             '(' | '[' | '{' => depth += 1,
@@ -649,7 +652,10 @@ fn split_top_kw<'a>(s: &'a str, kw: &str) -> Option<(&'a str, &'a str)> {
             _ => {}
         }
         if depth == 0 && s[i..].starts_with(kw) {
-            found = Some(i);
+            let bounded = !word || (!s[..i].chars().last().is_some_and(ident) && !s[i + kw.len()..].chars().next().is_some_and(ident));
+            if bounded {
+                found = Some(i);
+            }
         }
     }
     found.map(|i| (&s[..i], &s[i + kw.len()..]))
@@ -1020,7 +1026,7 @@ impl State {
             }
             // have h1 .. hk [: φ] (:= P | by R): its k conjuncts as written
             // (`_` names none; a last `..` ignores the rest, `r..` names it)
-            "have" if rest.split(':').next().is_some_and(|l| l.split_whitespace().count() > 1) => {
+            "have" if rest.contains(':') && rest.split(':').next().is_some_and(|l| l.split_whitespace().count() > 1) => {
                 let k = rest.find(':').unwrap();
                 let hs: Vec<&str> = rest[..k].split_whitespace().collect();
                 self.step(env, lg, &format!("have __parts{}", &rest[k..]), line, line)?;
@@ -1040,7 +1046,7 @@ impl State {
                     // show by R: the current goal
                     let goal = self.goal.clone().ok_or_else(|| KernelError("no current goal here: write `show φ by ...`".into()))?;
                     self.by(env, lg, &goal, &parse_pe(by)?)?
-                } else if let Some((goal, by)) = rsplit_kw(body, " by ") {
+                } else if let Some((goal, by)) = split_top_kw(body, " by ") {
                     let goal = goal.trim().trim_start_matches(':').trim();
                     let goal = self.term(env, goal)?;
                     self.by(env, lg, &goal, &parse_pe(by.trim())?)?
@@ -1629,11 +1635,11 @@ impl State {
     fn step_run(&mut self, env: &mut Env, lg: &Logic, rest: &str) -> KResult<()> {
         let bad = || KernelError("expected `step [x.., ] h.. from P [with f1, ..] [using u1, ..]`".into());
         let (names, rest) = rest.split_once(" from ").ok_or_else(bad)?;
-        let (rest, using_t) = match rest.split_once(" using ") {
+        let (rest, using_t) = match split_top_kw(rest, " using ") {
             Some((r, u)) => (r, split_top(u, ',')),
             None => (rest, Vec::new()),
         };
-        let (p, with) = match rest.split_once(" with ") {
+        let (p, with) = match split_top_kw(rest, " with ") {
             Some((p, w)) => (p, split_top(w, ',')),
             None => (rest, Vec::new()),
         };
@@ -1783,7 +1789,7 @@ impl State {
                         cur = self.step_simp(env, lg, k)?;
                     }
                     _ => {
-                        let both = Term::app(and.unwrap(), vec![t.concl().clone(), hk.concl().clone()]);
+                        let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![t.concl().clone(), hk.concl().clone()]);
                         cur = Seq::taut(env, lg, &[&t, &hk], &both)?;
                         break;
                     }
@@ -1803,7 +1809,7 @@ impl State {
             }
         }
         while let Some(r) = pending.pop() {
-            let both = Term::app(and.unwrap(), vec![cur.concl().clone(), r.concl().clone()]);
+            let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
             cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
         }
         if !withs.is_empty() {
@@ -1869,6 +1875,7 @@ impl State {
     /// fields
     pub(crate) fn step_rules(&self, env: &mut Env, lg: &Logic) -> KResult<std::rc::Rc<rsimp::Rules>> {
         if let Some(r) = self.mem_cache.borrow().rules.get(&2) {
+            r.reset();
             return Ok(r.clone());
         }
         let rules = "rsimp(eq_self, not_true, not_false, not_not, true_and, and_true, false_and, and_false, true_or, or_true, false_or, or_false, \
@@ -2200,8 +2207,11 @@ impl State {
                                         _ => return r,
                                     };
                                     let t2 = Term::app(*f, vec![body, a[1].clone()]);
-                                    let r2 = Seq::list_at(env, lg, &refs, &t2)?;
-                                    Seq::rewrite(env, &Seq::sym(env, &d)?, &r2)
+                                    // (else the first error: the one about the term written)
+                                    match Seq::list_at(env, lg, &refs, &t2) {
+                                        Ok(r2) => Seq::rewrite(env, &Seq::sym(env, &d)?, &r2),
+                                        Err(_) => r,
+                                    }
                                 }
                                 _ => r,
                             },
@@ -2229,7 +2239,7 @@ impl State {
                         let rs = self.rsimp_rules(env, lg, &args[1.min(args.len())..])?;
                         self.rsimp_fact(env, lg, h, &rs)
                     }
-                    "taut" | "arith" | "simp" | "lists" | "induct" | "defs" | "sel" | "eval" => err(format!("{} needs a goal: `have h: φ by {}(...)`, or inline `(φ by {}(...))`", name, name, name)),
+                    n if GOAL_RULES.contains(&n) => err(format!("{} needs a goal: `have h: φ by {}(...)`, or inline `(φ by {}(...))`", name, name, name)),
                     other => err(format!("unknown rule `{}`", other)),
                 }
             }
@@ -2527,25 +2537,8 @@ fn lit(env: &Env, t: &Term) -> KResult<Seq> {
 }
 
 /// `goal by rule`: splits at the last top-level ` by `.
-fn rsplit_kw<'a>(s: &'a str, kw: &str) -> Option<(&'a str, &'a str)> {
-    let mut depth = 0i32;
-    let bytes = s.as_bytes();
-    let mut found = None;
-    for i in 0..s.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            _ => {}
-        }
-        if depth == 0 && s[i..].starts_with(kw) {
-            found = Some(i);
-        }
-    }
-    found.map(|i| (&s[..i], &s[i + kw.len()..]))
-}
-
 /// `φ := P` -> (φ, P), at the top-level `:=`.
 fn split_assign(s: &str) -> Option<(String, &str)> {
-    let (g, p) = rsplit_kw(s, ":=")?;
+    let (g, p) = split_top_kw(s, ":=")?;
     Some((g.trim().to_string(), p.trim()))
 }
