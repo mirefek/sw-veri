@@ -83,6 +83,10 @@ impl Lin {
             }
         }
         r.c = r.c.checked_add(o.c.checked_mul(k)?)?;
+        // (i128::MIN excluded: every form can be negated without overflow)
+        if r.c == i128::MIN || r.coeffs.values().any(|c| *c == i128::MIN) {
+            return None;
+        }
         Some(r)
     }
     fn scale(&self, k: i128) -> Option<Lin> {
@@ -296,13 +300,17 @@ impl Reader {
             Node::App(f, a) if is(*f, s.succ) => small(&a[0]).is_some() || self.nats.contains(&a[0]),
             // the length of a list expression (a natural)
             Node::App(f, a) if is(*f, self.ls.len) && super::list::flatten(&self.ls, &a[0], &self.lists).is_some() => true,
-            Node::App(f, _) => {
+            Node::App(f, a) => {
                 [s.int_add, s.int_sub, s.int_neg, s.int_mul, s.int_div, s.int_mod, s.int_succ, s.int_pred, s.pow2, s.int_pow].iter().any(|g| is(*f, *g))
                     || self.bits_op(t).is_some()
-                    // (a signed value, the other word operations: integers)
+                    // (a signed value, the other word operations: integers --
+                    // a `bits_build(n, ..)` (and, or, xor, not) only of a
+                    // natural width n: of bits(n) empty, a choice of nothing)
                     || is(*f, s.sint)
                     || is(*f, s.bits_shr)
-                    || s.words.iter().flatten().any(|(g, _, _)| g == f)
+                    || s.words.iter().enumerate().any(|(k, w)| {
+                        w.is_some_and(|(g, i, _)| g == *f && (!(3..=6).contains(&k) || a.get(i).is_some_and(|n| self.natural(n))))
+                    })
                     || self.ints.contains(t)
             }
             _ => self.ints.contains(t),
@@ -584,6 +592,7 @@ impl Reader {
 /// Fourier-Motzkin: is `{ l >= 0 : l in cs }` infeasible over the integers?
 /// (Unknown is reported as feasible.)
 fn infeasible(mut cs: Vec<Lin>, limit: usize) -> bool {
+    // (coefficients are never i128::MIN: `Lin::add`)
     fn gcd(a: i128, b: i128) -> i128 {
         if b == 0 { a.abs() } else { gcd(b, a % b) }
     }
@@ -621,7 +630,7 @@ fn infeasible(mut cs: Vec<Lin>, limit: usize) -> bool {
                 }
                 match m.coeffs.get(&v) {
                     // m + (-(m_v / cv)) l removes v
-                    Some(&mv) => match m.add(&l, -mv * cv) {
+                    Some(&mv) => match mv.checked_neg().and_then(|n| n.checked_mul(cv)).and_then(|f| m.add(&l, f)) {
                         Some(mut r) => {
                             r.coeffs.remove(&v);
                             norm(&mut r);
@@ -699,28 +708,30 @@ fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize, limit: usize) -> bool 
         b.extend(extra);
         refuted(lits, &b, k + 1, limit)
     };
-    let minus1 = |l: &Lin| l.add(&Lin::konst(1), -1).unwrap_or(l.clone());
+    // (a constraint whose form overflows: none -- weaker, never wrong)
+    let minus1 = |l: Option<Lin>| l.and_then(|l| l.add(&Lin::konst(1), -1));
+    let some = |ls: Vec<Option<Lin>>| ls.into_iter().flatten().collect::<Vec<Lin>>();
     match &lits[k] {
         (Atom::Cmp(x, rel, y), val) => {
-            let d = y.add(x, -1).unwrap_or(Lin::konst(0)); // y - x
-            let dn = x.add(y, -1).unwrap_or(Lin::konst(0)); // x - y
+            let d = || y.add(x, -1); // y - x
+            let dn = || x.add(y, -1); // x - y
             match (rel, val) {
-                (Rel::Lt, true) => add(vec![minus1(&d)]),
-                (Rel::Lt, false) => add(vec![dn]),
-                (Rel::Le, true) => add(vec![d]),
-                (Rel::Le, false) => add(vec![minus1(&dn)]),
-                (Rel::Eq, true) => add(vec![d, dn]),
-                (Rel::Eq, false) => add(vec![minus1(&d)]) && add(vec![minus1(&dn)]),
+                (Rel::Lt, true) => add(some(vec![minus1(d())])),
+                (Rel::Lt, false) => add(some(vec![dn()])),
+                (Rel::Le, true) => add(some(vec![d()])),
+                (Rel::Le, false) => add(some(vec![minus1(dn())])),
+                (Rel::Eq, true) => add(some(vec![d(), dn()])),
+                (Rel::Eq, false) => add(some(vec![minus1(d())])) && add(some(vec![minus1(dn())])),
             }
         }
         (Atom::Range(x, lo, hi), val) => {
-            let above = x.add(&Lin::konst(*lo), -1).unwrap_or(Lin::konst(0)); // x - lo
-            let below = hi.map(|h| Lin::konst(h).add(x, -1).unwrap_or(Lin::konst(0))); // hi - x
+            let above = || x.add(&Lin::konst(*lo), -1); // x - lo
+            let below = |h: i128| Lin::konst(h).add(x, -1); // hi - x
             if *val {
-                add([Some(above), below].into_iter().flatten().collect())
+                add(some(vec![above(), hi.and_then(below)]))
             } else {
                 // x < lo, or x > hi
-                add(vec![minus1(&above.scale(-1).unwrap_or(Lin::konst(0)))]) && below.is_none_or(|b| add(vec![minus1(&b.scale(-1).unwrap_or(Lin::konst(0)))]))
+                add(some(vec![minus1(above().and_then(|a| a.scale(-1)))])) && hi.is_none_or(|h| add(some(vec![minus1(below(h).and_then(|b| b.scale(-1)))])))
             }
         }
         (Atom::True, _) => refuted(lits, base, k + 1, limit),
@@ -779,8 +790,9 @@ fn falsify(tree: &super::prop::PTree, read: &[Option<Atom>], base: &[Lin], mut a
 ///   `bits_sub`, `bits_of_int`: their definitions);
 /// * `n in omega -> int_lt(0, pow2(n))`;
 /// * for r = `int_mod(x, m)`, m not a numeral: `int_lt(0, m) -> int_le(0, r)
-///   && int_lt(r, m)`, and `int_le(0, x) && int_lt(x, m) -> r = x`
-///   (Euclidean division; the remainder of a value in 0 .. m - 1 is itself);
+///   && int_lt(r, m)`, and `int_le(0, x) && int_lt(x, m) -> int_le(r, x) &&
+///   int_le(x, r)` (Euclidean division; the remainder of a value in 0 .. m
+///   - 1 is that value -- compared as values: x need not be an integer);
 /// * for q = `int_div(x, m)`, m not a numeral: `int_le(0, x) && int_lt(x, m)
 ///   -> q = 0`, `int_lt(0, m) && int_le(m, x) && int_lt(x, 2 * m) -> q = 1`
 ///   (Euclidean division: x = m * 0 + x, x = m * 1 + (x - m));
@@ -906,8 +918,10 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
         }
         let range = app(and, vec![app(le, vec![zero.clone(), r.clone()]), app(lt, vec![r.clone(), m.clone()])]);
         out.push(imp(app(lt, vec![zero.clone(), m.clone()]), range));
+        // (on values: x need not be an integer, the remainder is its value)
         let small_x = app(and, vec![app(le, vec![zero.clone(), x.clone()]), app(lt, vec![x.clone(), m.clone()])]);
-        out.push(imp(small_x, eq(r.clone(), x)));
+        let same = app(and, vec![app(le, vec![r.clone(), x.clone()]), app(le, vec![x, r.clone()])]);
+        out.push(imp(small_x, same));
     }
     out
 }

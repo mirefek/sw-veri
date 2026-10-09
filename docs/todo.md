@@ -46,12 +46,9 @@ musl's `_start` … `__libc_start_main` reaches `main` with the invariant
 holding for the empty heap, owning only static data, the thread
 descriptor and the auxiliary vector.
 
-## 4. Proof language and the code base
+## 4. Proof language
 
-Ongoing: how could the languages make progress more efficient?
-
-- Review the code base (slc, proofs, layers) for bad code practices, a
-  bounded pass (e.g. `translate.rs`).
+Tactic ideas, collected as proofs suggest them and done in batches.
 
 ## Later
 

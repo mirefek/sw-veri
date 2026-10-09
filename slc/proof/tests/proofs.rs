@@ -427,6 +427,14 @@ fn unsound_arithmetic_is_rejected() {
     bad("int_mul(a, b) = int_mul(a, a)", &[]);
     // equals for equals only: other products not equal
     bad("a = b -> int_mul(x, a) = int_mul(a, b)", &[("h", "a = b")]);
+    // coefficients beyond i128: no constraint (not a contradiction)
+    bad("!int_lt(int_neg(int_pow(4, 63)), int_pow(4, 63))", &[]);
+    let big = "int_add(int_mul(int_neg(int_pow(4, 63)), int_mul(2, x)), int_neg(b)) in omega";
+    bad(&format!("{} -> false", big), &[("h", big)]);
+    // a remainder is a value: x itself only if x is an integer
+    bad("int_le(0, x) -> int_lt(x, a) -> int_mod(x, a) = x", &[("h1", "int_le(0, x)"), ("h2", "int_lt(x, a)")]);
+    // a bits_build word of a width not known natural: not known an integer
+    bad("bits_and(a, x, b) = int_add(bits_and(a, x, b), 0)", &[]);
 }
 
 #[test]
