@@ -574,12 +574,15 @@ premise they stand for.
 | `cases({k}, {a}, {b}, R, p..)` | the goal for each value c of the variable k, a <= k < b (numerals; the bounds from p.. by arith), each by R with k read as c in R's terms |
 | `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact) |
 
-In `arith`, an equation of two factors is not substituted into a product
-(from `q = Q`, `m q = m Q` does not follow): rewrite the product first
-(`rewrite(e, refl({int_mul(m, q)}), {2})`). A sign fact comes with each
-product in the facts or the goal, so a product term given as a hint
-(`refl({int_mul(m, int_sub(q, 1))})`) brings `m >= 0 && q - 1 >= 0 -> m
-(q - 1) >= 0` in (core/bits.core's `div_unique`).
+In `arith`, the facts' equations substitute equals for equals: each term
+is read with its subterms replaced by their class's representative (the
+smallest; from `q = Q`, `m q = m Q`), and the equations count as given
+too. An equation assumed in one case of the search (not a fact) is used
+arithmetically only. The cases are split on the atoms the goal still
+depends on, with unit propagation; there is no limit on the atoms. A
+sign fact comes with each product in the facts or the goal, so a product
+term given as a hint (`refl({int_mul(m, int_sub(q, 1))})`) brings `m >= 0
+&& q - 1 >= 0 -> m (q - 1) >= 0` in (core/bits.core's `div_unique`).
 
 **Bits** (core/bits.core). `bitwise` reduces a word equation `L = R` to
 `bit(L, i) <-> bit(R, i)` at a fresh i < n (`bits_ext`), the width n from

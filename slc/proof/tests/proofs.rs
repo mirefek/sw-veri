@@ -377,6 +377,21 @@ fn arithmetic_is_proven() {
     assert_eq!(arith_ok("a in omega -> int_lt(0, b) -> a = int_add(int_mul(b, int_div(a, b)), int_mod(a, b))", &[na, ("h", "int_lt(0, b)")]), Ok(1));
     // pow2(k + 1) is 2 pow2(k)
     assert_eq!(arith_ok("a in omega -> int_mul(x, pow2(int_add(a, 1))) = int_mul(2, int_mul(pow2(a), x))", &[na]), Ok(1));
+    // equals for equals (the premises' equations), also inside products
+    assert_eq!(arith_ok("a = b -> int_mul(x, a) = int_mul(x, b)", &[("h", "a = b")]), Ok(1));
+}
+
+#[test]
+fn arithmetic_with_many_atoms() {
+    // a chain of 80 comparisons: no limit on the atoms, cases split as needed
+    let n = 80;
+    let hyps: Vec<(String, String)> = (0..n).map(|k| (format!("h{}", k), format!("int_le(a{}, a{})", k, k + 1))).collect();
+    let params: Vec<String> = (0..=n).map(|k| format!("a{}", k)).collect();
+    let stmt = format!("{} -> int_le(a0, a{})", hyps.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" -> "), n);
+    let assumes: String = hyps.iter().map(|(h, t)| format!("  assume {}: {}\n", h, t)).collect();
+    let names: Vec<&str> = hyps.iter().map(|(h, _)| h.as_str()).collect();
+    let src = format!("theorem t({}): {}\nproof\n{}  show by arith({})\nqed\n", params.join(", "), stmt, assumes, names.join(", "));
+    assert_eq!(check_nat(&src), Ok(1));
 }
 
 #[test]
@@ -402,6 +417,8 @@ fn unsound_arithmetic_is_rejected() {
     // products: no ordering of factors assumed
     bad("a in omega -> b in omega -> int_le(int_mul(a, b), int_mul(a, a))", &[na, nb]);
     bad("int_mul(a, b) = int_mul(a, a)", &[]);
+    // equals for equals only: other products not equal
+    bad("a = b -> int_mul(x, a) = int_mul(a, b)", &[("h", "a = b")]);
 }
 
 #[test]

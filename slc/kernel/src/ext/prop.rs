@@ -289,13 +289,13 @@ impl PTree {
         Some(rows)
     }
 
-    /// The value under a partial assignment (`mask`: the atoms assigned,
-    /// `val` their values), if it is determined.
-    pub(crate) fn eval3(&self, mask: u64, val: u64) -> Option<bool> {
+    /// The value under a partial assignment (`asg[i]`: atom i's value, if
+    /// assigned), if it is determined.
+    pub(crate) fn eval3(&self, asg: &[Option<bool>]) -> Option<bool> {
         match self {
-            PTree::Atom(i) => (mask >> i & 1 == 1).then_some(val >> i & 1 == 1),
+            PTree::Atom(i) => asg[*i],
             PTree::False => Some(false),
-            PTree::Imp(a, b) => match (a.eval3(mask, val), b.eval3(mask, val)) {
+            PTree::Imp(a, b) => match (a.eval3(asg), b.eval3(asg)) {
                 (Some(false), _) | (_, Some(true)) => Some(true),
                 (Some(true), Some(false)) => Some(false),
                 _ => None,
@@ -305,16 +305,85 @@ impl PTree {
 
     /// An unassigned atom the value depends on (the first, left to right,
     /// in an undetermined part).
-    pub(crate) fn pick(&self, mask: u64, val: u64) -> Option<usize> {
+    pub(crate) fn pick(&self, asg: &[Option<bool>]) -> Option<usize> {
         match self {
-            PTree::Atom(i) => (mask >> i & 1 == 0).then_some(*i),
+            PTree::Atom(i) => asg[*i].is_none().then_some(*i),
             PTree::False => None,
             PTree::Imp(a, b) => {
-                if self.eval3(mask, val).is_some() {
+                if self.eval3(asg).is_some() {
                     return None;
                 }
-                a.pick(mask, val).or_else(|| b.pick(mask, val))
+                a.pick(asg).or_else(|| b.pick(asg))
             }
+        }
+    }
+
+    /// A split for the chain `p1 -> .. -> pk -> g`: first an atom of an
+    /// undetermined pi (or g) that has an assigned atom (connected to the
+    /// case at hand), else any (`pick`).
+    pub(crate) fn pick_connected(&self, asg: &[Option<bool>]) -> Option<usize> {
+        let mut t = self;
+        loop {
+            let (part, rest) = match t {
+                PTree::Imp(p, rest) => (&**p, Some(&**rest)),
+                other => (other, None),
+            };
+            if part.eval3(asg).is_none() && part.has_assigned(asg) {
+                if let Some(i) = part.pick(asg) {
+                    return Some(i);
+                }
+            }
+            match rest {
+                Some(r) => t = r,
+                None => return self.pick(asg),
+            }
+        }
+    }
+
+    fn has_assigned(&self, asg: &[Option<bool>]) -> bool {
+        match self {
+            PTree::Atom(i) => asg[*i].is_some(),
+            PTree::False => false,
+            PTree::Imp(a, b) => a.has_assigned(asg) || b.has_assigned(asg),
+        }
+    }
+
+    /// Unit propagation towards the tree false: the values forced on
+    /// atoms by it (`a -> b` false: a true, b false; true with a true: b
+    /// true, with b false: a false), to a fixpoint, the atoms assigned
+    /// pushed to `newly`; false on a conflict (no assignment extending
+    /// `asg` makes the tree false).
+    pub(crate) fn propagate(&self, asg: &mut [Option<bool>], newly: &mut Vec<usize>) -> bool {
+        loop {
+            let before = newly.len();
+            if !self.force(false, asg, newly) {
+                return false;
+            }
+            if newly.len() == before {
+                return true;
+            }
+        }
+    }
+
+    /// the tree made `want` where forced; false on a conflict
+    fn force(&self, want: bool, asg: &mut [Option<bool>], newly: &mut Vec<usize>) -> bool {
+        match self {
+            PTree::Atom(i) => match asg[*i] {
+                None => {
+                    asg[*i] = Some(want);
+                    newly.push(*i);
+                    true
+                }
+                Some(v) => v == want,
+            },
+            PTree::False => !want,
+            PTree::Imp(a, b) if !want => a.force(true, asg, newly) && b.force(false, asg, newly),
+            PTree::Imp(a, b) => match (a.eval3(asg), b.eval3(asg)) {
+                (Some(false), _) | (_, Some(true)) => true,
+                (Some(true), _) => b.force(true, asg, newly),
+                (_, Some(false)) => a.force(false, asg, newly),
+                _ => true,
+            },
         }
     }
 

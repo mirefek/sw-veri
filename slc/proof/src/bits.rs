@@ -146,10 +146,17 @@ impl State {
                     _ => None,
                 })
                 .collect();
-            for t in leaves.clone() {
+            // (the facts' words; and every word operation met, its width)
+            for t in leaves.iter().chain(seen.iter()).cloned().collect::<Vec<_>>() {
                 let Node::App(_, ta) = t.node() else { continue };
-                for (x, n) in widths.iter().filter(|(x, _)| *x == ta[0]) {
-                    if let Ok(s) = self.bit_high_at(env, lg, &high, x, n, &ta[1], facts) {
+                let mut ws: Vec<Term> = widths.iter().filter(|(x, _)| *x == ta[0]).map(|(_, n)| n.clone()).collect();
+                if let Some(n) = op_width(env, &ta[0]) {
+                    if !ws.contains(&n) {
+                        ws.push(n);
+                    }
+                }
+                for n in ws {
+                    if let Ok(s) = self.bit_high_at(env, lg, &high, &ta[0], &n, &ta[1], facts) {
                         extra.push(s);
                     }
                 }
@@ -173,10 +180,15 @@ impl State {
         for (v, t) in [(vx, x), (vn, n), (vi, i)] {
             s = Seq::inst(env, &s, v, t)?;
         }
+        // (x's range first: a fact, or its operation's lemma)
+        let bits_s = env.sym_by_name.get("bits").copied().ok_or_else(|| KernelError("bitwise: no `bits`".into()))?;
+        let r = self.bit_premise(env, lg, &Term::app(lg.in_, vec![x.clone(), Term::app(bits_s, vec![n.clone()])]), facts)?;
+        let mut fs = facts.to_vec();
+        fs.push(r);
         // (all premises but the last, n <= i)
         for _ in 0..4 {
             let h = imp_parts(env, s.concl())?.0;
-            let p = self.bit_premise(env, lg, &h, facts)?;
+            let p = self.bit_premise(env, lg, &h, &fs)?;
             s = Seq::mp(env, &s, &p)?;
         }
         Ok(s)

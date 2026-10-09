@@ -29,8 +29,9 @@ item is a short summary of finished work; details are in the files named.
     binders;
   - linear arithmetic over integers and words, with symbolic widths,
     products as monomials, Euclidean division by a symbolic divisor and
-    nonnegative products, its cases searched by splits pruned by
-    infeasibility;
+    nonnegative products, equals for equals (congruence closure of the
+    facts' equations), its cases searched by splits with unit propagation,
+    pruned by infeasibility, with no limit on the atoms;
   - lists;
   - memory reads through writes (`mem_read`: apart / the same / inside,
     each decided by arith);

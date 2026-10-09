@@ -217,7 +217,7 @@ fn translations_are_generated_and_check() {
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 51 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 16 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 15 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple, &text]) {
         let _ = std::fs::remove_file(f);

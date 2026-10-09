@@ -28,15 +28,21 @@
 //! `symbolic_facts`); `pow2(k + c)` (c a numeral, k a known natural) is
 //! read as `2^c * pow2(k)` (`int_pow`'s recursion).
 //!
+//! Equals for equals: the premises' equations between closed terms are
+//! merged into classes (congruence closure), and every term is read with
+//! each subterm replaced by its class's representative (`eq_subst`); the
+//! equations are kept as given too (their arithmetic).
+//!
 //! `arith(premises, goal)` checks that `premises -> goal` holds whenever
 //! each atom is read as true or false and the arithmetic atoms are
 //! consistent: for every assignment falsifying it, the arithmetic literals
 //! are infeasible over the integers (Fourier-Motzkin elimination with
 //! integer tightening: sound, not complete). The assignments are searched
-//! by case splits on the atoms the formula still depends on; a branch
-//! closes when the formula is true there or its literals so far are
-//! infeasible (every falsifying assignment extends a branch searched, or
-//! one closed). Every term in an arithmetic
+//! by case splits on the atoms the formula still depends on, the values its
+//! falsity forces propagated (unit propagation); a branch closes when the
+//! formula is true there, a forced value conflicts, or its literals so far
+//! are infeasible (every falsifying assignment extends a branch searched,
+//! or one closed). Every term in an arithmetic
 //! position stands for its value `int_val(t)`: arithmetic terms exactly,
 //! other terms as integer variables. Comparisons `int_lt`, `int_le` are
 //! comparisons of values. An equation `a = b`, and membership in `omega`
@@ -677,28 +683,30 @@ fn refuted(lits: &[(Atom, bool)], base: &[Lin], k: usize, limit: usize) -> bool 
     }
 }
 
-/// No assignment extending (mask, val) falsifies the tree with feasible
+/// No assignment extending `asg` falsifies the tree with feasible
 /// arithmetic literals; else such a (partial) assignment, or None when the
-/// budget of cases runs out.
-fn falsify(tree: &super::prop::PTree, read: &[Option<Atom>], base: &[Lin], mask: u64, val: u64, last: Option<usize>, budget: &mut usize) -> Result<(), Option<(u64, u64)>> {
+/// budget of cases runs out. `newly`: the atoms assigned since the last
+/// arithmetic check.
+fn falsify(tree: &super::prop::PTree, read: &[Option<Atom>], base: &[Lin], mut asg: Vec<Option<bool>>, newly: &[usize], connected: bool, budget: &mut usize) -> Result<(), Option<Vec<Option<bool>>>> {
     if *budget == 0 {
         return Err(None);
     }
     *budget -= 1;
-    let det = tree.eval3(mask, val);
-    if det == Some(true) {
+    // the values the tree's falsity forces
+    let mut new = newly.to_vec();
+    if !tree.propagate(&mut asg, &mut new) {
+        return Ok(());
+    }
+    if tree.eval3(&asg) == Some(true) {
         return Ok(());
     }
     // the literals so far: infeasible closes the branch (checked again when
-    // the last split added one; before a leaf, within a small budget)
-    let new_lit = last.is_none_or(|i| read[i].is_some());
-    let pick = tree.pick(mask, val);
+    // an arithmetic atom was assigned; before a leaf, within a small budget)
+    let new_lit = new.iter().any(|&i| read[i].is_some());
+    let pick = if connected { tree.pick_connected(&asg) } else { tree.pick(&asg) };
     let mut lits = Vec::new();
     for (i, a) in read.iter().enumerate() {
-        if mask >> i & 1 == 0 {
-            continue;
-        }
-        let v = val >> i & 1 == 1;
+        let Some(v) = asg[i] else { continue };
         match a {
             Some(Atom::True) if !v => return Ok(()),
             Some(a) => lits.push((a.clone(), v)),
@@ -710,11 +718,14 @@ fn falsify(tree: &super::prop::PTree, read: &[Option<Atom>], base: &[Lin], mask:
         return Ok(());
     }
     let Some(i) = pick else {
-        return Err(Some((mask, val)));
+        return Err(Some(asg));
     };
-    let bit = 1u64 << i;
-    falsify(tree, read, base, mask | bit, val | bit, Some(i), budget)?;
-    falsify(tree, read, base, mask | bit, val, Some(i), budget)
+    for b in [true, false] {
+        let mut a2 = asg.clone();
+        a2[i] = Some(b);
+        falsify(tree, read, base, a2, &[i], connected, budget)?;
+    }
+    Ok(())
 }
 
 /// Facts about word operations of a symbolic width n (arith reads only
@@ -857,6 +868,118 @@ fn symbolic_facts(env: &Env, premises: &[Term], goal: &Term) -> Vec<Term> {
     out
 }
 
+/// `l = r` between closed terms: (l, r)
+fn equation(env: &Env, t: &Term) -> Option<(Term, Term)> {
+    match t.node() {
+        Node::App(e, a) if *e == env.builtins.eq && a.len() == 2 => {
+            let bf = env.binders_fn();
+            (a[0].loose_depth(&bf) == 0 && a[1].loose_depth(&bf) == 0).then(|| (a[0].clone(), a[1].clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Equal terms: classes of the premises' equations between closed terms,
+/// each with a representative (the smallest, a numeral first); a term read
+/// with each subterm replaced by its class's representative (bottom up, so
+/// that f(a) and f(b) are one class when a and b are).
+struct Congruence {
+    rep: std::collections::HashMap<Term, Term>,
+    /// the heads of the classes' members (only terms with one are looked up)
+    heads: std::collections::HashSet<(bool, u32)>,
+    /// canon's results by node identity (the terms read share subterms)
+    memo: std::cell::RefCell<std::collections::HashMap<usize, (Term, Term)>>,
+}
+
+impl Congruence {
+    fn of(env: &Env, premises: &[Term]) -> Congruence {
+        let eqs: Vec<(Term, Term)> = premises.iter().filter_map(|p| equation(env, p)).collect();
+        let mut cc = Congruence { rep: Default::default(), heads: Default::default(), memo: Default::default() };
+        for _ in 0..20 {
+            cc.memo.borrow_mut().clear();
+            let mut changed = false;
+            for (l, r) in &eqs {
+                let (a, b) = (cc.canon(l), cc.canon(r));
+                if a != b {
+                    let (big, small) = if size(&a) < size(&b) { (b, a) } else { (a, b) };
+                    cc.heads.insert(head_key(&big));
+                    cc.rep.insert(big, small);
+                    cc.memo.borrow_mut().clear();
+                    changed = true;
+                }
+            }
+            // (an entry whose arguments' classes changed: also under its
+            // arguments' representatives -- f(a), f(b) one class)
+            let entries: Vec<(Term, Term)> = cc.rep.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            for (k, v) in entries {
+                let k2 = match k.node() {
+                    Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => k.with_args(a.iter().map(|x| cc.canon(x)).collect()),
+                    _ => continue,
+                };
+                let v2 = cc.canon(&v);
+                if k2 != k && k2 != v2 && !cc.rep.contains_key(&k2) {
+                    cc.heads.insert(head_key(&k2));
+                    cc.rep.insert(k2, v2);
+                    cc.memo.borrow_mut().clear();
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        cc
+    }
+
+    fn find(&self, t: &Term) -> Term {
+        let mut t = t.clone();
+        for _ in 0..1000 {
+            match self.rep.get(&t) {
+                Some(r) => t = r.clone(),
+                None => break,
+            }
+        }
+        t
+    }
+
+    fn canon(&self, t: &Term) -> Term {
+        if self.rep.is_empty() {
+            return t.clone();
+        }
+        if let Some((k, v)) = self.memo.borrow().get(&t.ptr_id()) {
+            // (the same node: its key kept alive, so the address is its)
+            if k.ptr_eq(t) {
+                return v.clone();
+            }
+        }
+        let t2 = match t.node() {
+            Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => t.with_args(a.iter().map(|x| self.canon(x)).collect()),
+            _ => t.clone(),
+        };
+        let r = if self.heads.contains(&head_key(&t2)) { self.find(&t2) } else { t2 };
+        self.memo.borrow_mut().insert(t.ptr_id(), (t.clone(), r.clone()));
+        r
+    }
+}
+
+/// a term's head: (a variable?, its symbol or variable); a numeral (0, u32::MAX)
+fn head_key(t: &Term) -> (bool, u32) {
+    match t.node() {
+        Node::App(f, _) => (false, *f),
+        Node::Var(v, _) => (true, *v),
+        _ => (false, u32::MAX),
+    }
+}
+
+/// a term's size (a numeral smallest: preferred as a representative)
+fn size(t: &Term) -> usize {
+    match t.node() {
+        Node::Nat(_) => 0,
+        Node::App(_, a) | Node::Var(_, a) => 1 + a.iter().map(size).sum::<usize>(),
+        _ => 1,
+    }
+}
+
 fn wide(w: &Term) -> bool {
     small(w).is_none()
 }
@@ -869,9 +992,20 @@ impl Logic {
     }
 
     fn arith_(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        // (equals for equals: the terms read by their classes' representatives,
+        // the equations also as given)
+        let cc = Congruence::of(env, premises);
+        let mut ps: Vec<Term> = premises.iter().map(|p| cc.canon(p)).collect();
+        for p in premises {
+            if equation(env, p).is_some() && !ps.contains(p) {
+                ps.push(p.clone());
+            }
+        }
+        let goal = &cc.canon(goal);
         // (words of a symbolic width: the standard facts, as premises)
-        let mut ext = premises.to_vec();
-        ext.extend(symbolic_facts(env, premises, goal));
+        let sf: Vec<Term> = symbolic_facts(env, &ps, goal).iter().map(|f| cc.canon(f)).collect();
+        let mut ext = ps;
+        ext.extend(sf);
         let premises = &ext[..];
         let s = Syms::new(env);
         let mut r = Reader {
@@ -918,24 +1052,27 @@ impl Logic {
         }
         let mut atoms: Vec<Term> = Vec::new();
         let tree = self.prop_tree(env, &f, &mut atoms, 0)?;
-        if atoms.len() > 63 {
-            return err("arith: too many atoms");
-        }
         let read: Vec<Option<Atom>> = atoms.iter().map(|a| r.atom(a)).collect();
         let base: Vec<Lin> = r.side.clone();
         // the assignments falsifying the formula, by case splits on the atoms
         // it depends on: each branch closed when the formula is true there,
         // or when its arithmetic literals are infeasible
-        let mut budget = 100_000usize;
-        match falsify(&tree, &read, &base, 0, 0, None, &mut budget) {
+        // (splits left to right first; if that takes too many cases, splits
+        // connected to the case at hand first)
+        let mut budget = 500usize;
+        let mut r = falsify(&tree, &read, &base, vec![None; atoms.len()], &[], false, &mut budget);
+        if matches!(r, Err(None)) {
+            let mut budget = 100_000usize;
+            r = falsify(&tree, &read, &base, vec![None; atoms.len()], &[], true, &mut budget);
+        }
+        match r {
             Ok(()) => Ok(()),
             Err(None) => err("arith: too many cases"),
-            Err(Some((mask, row))) => {
+            Err(Some(asg)) => {
                 let atoms_s: Vec<String> = atoms
                     .iter()
                     .enumerate()
-                    .filter(|(i, _)| mask >> i & 1 == 1)
-                    .map(|(i, a)| format!("{}={}", crate::syntax::Printer::new(env).term(a), row >> i & 1))
+                    .filter_map(|(i, a)| asg[i].map(|v| format!("{}={}", crate::syntax::Printer::new(env).term(a), v as u8)))
                     .collect();
                 err(format!("arith: not shown (a consistent case: {})", atoms_s.join(", ")))
             }

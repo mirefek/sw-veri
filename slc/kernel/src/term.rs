@@ -127,6 +127,11 @@ impl Term {
         Rc::ptr_eq(&self.0, &other.0)
     }
 
+    /// The node's identity (its address), for memo tables of one pass.
+    pub fn ptr_id(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
     /// This application (or variable) with the arguments `args`: the term
     /// itself, not a rebuilt copy, when every argument is the old one (so
     /// unchanged terms stay shared, and equal terms often pointer-equal).
