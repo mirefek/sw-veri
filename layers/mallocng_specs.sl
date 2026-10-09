@@ -183,10 +183,11 @@ fn a_ctz_32_spec_fun(tbl: bits[64]) -> CFun2[World] = (args: Args) => {
 }
 
 // a_clz_32(x): x's leading zeros r (x not 0): 2^(31 - r) <= x < 2^(32 - r)
+// (it calls a_ctz_32: the thread pointer valid)
 pred clz_of(x: nat, r: nat) = r < 32 && 2^(31 - r) <= x && x < 2^(32 - r)
 
 proc[World] a_clz_32_spec(tbl: bits[64], x: bits[32]) -> bits[32] {
-  require x != 0 && table_ok(vm, objs, tbl, 1, debruijn32_tab)
+  require x != 0 && table_ok(vm, objs, tbl, 1, debruijn32_tab) && thread_ok(vm, fs_base)
   either { overflow() } or { return any r: bits[32] where clz_of(uint(x), uint(r)) }
 }
 

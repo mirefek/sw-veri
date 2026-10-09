@@ -627,3 +627,150 @@ proof
   have b := mp(bit_mul[x := x, k := k, i := i], hx, hk, hi)
   show by taut(rewrite(sym(e), a), b)
 qed
+
+// ----------------------------------------------------------------------
+//  More bits: masks, words of an integer; equal indices
+
+// (equal indices: the same bit)
+theorem bit_cong(x, a, b): a = b -> (bit(x, a) <-> bit(x, b))
+proof
+  assume e
+  show subst({w. bit(x, a) <-> bit(x, w)}, e, (bit(x, a) <-> bit(x, a) by taut()))
+qed
+
+// a word of an integer: its bits below n
+theorem bit_of_int(n, x, i): n in omega -> x in omega -> i in omega -> (bit(bits_of_int(n, x), i) <-> int_lt(i, n) && bit(x, i))
+proof
+  assume hn hx hi
+  have e: bits_of_int(n, x) = int_mod(x, pow2(n)) by defs(refl({int_mod(x, pow2(n))}), bits_of_int)
+  show rewrite(sym(e), mp(bit_mod[x := x, k := n, i := i], hx, hn, hi))
+qed
+
+// 2^k - 1: the bits below k
+theorem bit_mask(k, i): k in omega -> i in omega -> (bit(int_sub(pow2(k), 1), i) <-> int_lt(i, k))
+proof
+  assume hk hi
+  have zo: 0 in bits(k) by arith(hk)
+  have e0: int_sub(int_sub(pow2(k), 1), 0) = int_sub(pow2(k), 1) by arith()
+  have lo: int_lt(i, k) -> bit(int_sub(pow2(k), 1), i) proof
+    assume il
+    have c := mp(all_elim(mp(all_elim(mp(all_elim(bit_compl, {k}), hk), {0}), zo), {i}), hi, il)
+    show by taut(rewrite(e0, c), mp(bit_zero_none[j := i], hi))
+  qed
+  have hi2: !int_lt(i, k) -> !bit(int_sub(pow2(k), 1), i) proof
+    assume il
+    have pk := mp(pow2_pos[k := k], hk)
+    show mp(bit_high[x := int_sub(pow2(k), 1), n := k, i := i], arith(pk), hk, hi, arith(pk), arith(il, hi, hk))
+  qed
+  show by taut(lo, hi2)
+qed
+
+// 0: no bits
+theorem bit_zero(i): i in omega -> (bit(0, i) <-> false)
+proof
+  assume hi
+  show by taut(mp(bit_zero_none[j := i], hi))
+qed
+
+// (the bitwise operations: n-bit words)
+theorem bits_and_in(n, x, y): n in omega -> bits_and(n, x, y) in bits(n)
+proof
+  assume hn
+  show by defs(mp(bits_build_in[n := n, p := j. bit(x, j) && bit(y, j)], hn), bits_and)
+qed
+
+theorem bits_or_in(n, x, y): n in omega -> bits_or(n, x, y) in bits(n)
+proof
+  assume hn
+  show by defs(mp(bits_build_in[n := n, p := j. bit(x, j) || bit(y, j)], hn), bits_or)
+qed
+
+theorem bits_xor_in(n, x, y): n in omega -> bits_xor(n, x, y) in bits(n)
+proof
+  assume hn
+  show by defs(mp(bits_build_in[n := n, p := j. !(bit(x, j) <-> bit(y, j))], hn), bits_xor)
+qed
+
+theorem bits_not_in(n, x): n in omega -> bits_not(n, x) in bits(n)
+proof
+  assume hn
+  show by defs(mp(bits_build_in[n := n, p := j. !bit(x, j)], hn), bits_not)
+qed
+
+// ----------------------------------------------------------------------
+//  The rules of `bitwise`: a word's bit i by its operation's
+
+bit_rule bit_and
+bit_rule bit_or
+bit_rule bit_xor
+bit_rule bit_not
+bit_rule bit_shr
+bit_rule bit_shl
+bit_rule bit_of_int
+bit_rule bit_div
+bit_rule bit_mod
+bit_rule bit_mul
+bit_rule bit_mask
+bit_rule bit_pow2
+bit_rule bit_one
+bit_rule bit_zero
+
+// ----------------------------------------------------------------------
+//  The allocator's idioms
+
+// x & -x: x's lowest set bit t
+theorem lowest_bit(n, x, t): n in omega -> x in bits(n) -> t in omega -> int_lt(t, n) -> bit(x, t) -> (all j. j in omega -> int_lt(j, t) -> !bit(x, j)) ->
+  bits_and(n, x, bits_neg(n, x)) = pow2(t)
+proof
+  assume hn hx ht hl hb hz
+  have bn: all i. i in omega -> int_lt(i, n) -> (bit(bits_neg(n, x), i) <-> i = t || (int_lt(t, i) && !bit(x, i))) proof
+    fix i
+    assume hi hin
+    show mp(bit_neg[n := n, x := x, t := t, i := i], hn, hx, ht, hb, hz, hi, hin)
+  qed
+  have pl := mp(pow2_le[a := int_add(t, 1), b := n], arith(ht), hn, arith(hl))
+  have pb: pow2(t) in bits(n) by arith(ht, hn, pl)
+  show by bitwise({n}, hn, hx, ht, hl, hb, hz, bn, pb)
+qed
+
+// smearing, one step: y's bits k - m + 1 .. k set and none above k (below
+// n): those of y | y >> m from k - m2 + 1, m2 = 2m
+theorem smear_step(n, y, k, m, m2): n in omega -> y in bits(n) -> k in omega -> int_lt(k, n) -> m in omega -> m2 = int_add(m, m) ->
+  (all j. j in omega -> int_le(j, k) -> int_lt(k, int_add(j, m)) -> bit(y, j)) -> (all j. j in omega -> int_lt(k, j) -> int_lt(j, n) -> !bit(y, j)) ->
+  (all j. j in omega -> int_le(j, k) -> int_lt(k, int_add(j, m2)) -> bit(bits_or(n, y, bits_shr(n, y, m)), j)) &&
+  (all j. j in omega -> int_lt(k, j) -> int_lt(j, n) -> !bit(bits_or(n, y, bits_shr(n, y, m)), j))
+proof
+  assume hn hy hk hkn hm h2 hs hc
+  have set: all j. j in omega -> int_le(j, k) -> int_lt(k, int_add(j, m2)) -> bit(bits_or(n, y, bits_shr(n, y, m)), j) proof
+    fix j
+    assume hj h1 h3
+    show by bitwise(hn, hy, hk, hkn, hm, h2, hs, hc, hj, h1, h3)
+  qed
+  have clear: all j. j in omega -> int_lt(k, j) -> int_lt(j, n) -> !bit(bits_or(n, y, bits_shr(n, y, m)), j) proof
+    fix j
+    assume hj h1 h3
+    show by bitwise(hn, hy, hk, hkn, hm, hs, hc, hj, h1, h3)
+  qed
+  show conj(set, clear)
+qed
+
+// all bits up to k set, none above (below n): 2^(k+1) - 1
+theorem smear_done(n, y, k): n in omega -> y in bits(n) -> k in omega -> int_lt(k, n) ->
+  (all j. j in omega -> int_le(j, k) -> bit(y, j)) -> (all j. j in omega -> int_lt(k, j) -> int_lt(j, n) -> !bit(y, j)) ->
+  y = int_sub(pow2(int_add(k, 1)), 1)
+proof
+  assume hn hy hk hkn hs hc
+  have pl := mp(pow2_le[a := int_add(k, 1), b := n], arith(hk), hn, arith(hkn))
+  have mb: int_sub(pow2(int_add(k, 1)), 1) in bits(n) by arith(hk, hn, pl)
+  show by bitwise({n}, hn, hy, hk, hkn, hs, hc, mb)
+qed
+
+// 2 << k (n bits, k + 1 < n): 2^(k+1)
+theorem shl_two(n, k): n in omega -> k in omega -> int_lt(int_add(k, 1), n) -> bits_shl(n, 2, k) = pow2(int_add(k, 1))
+proof
+  assume hn hk hl
+  have pl := mp(pow2_le[a := int_add(int_add(k, 1), 1), b := n], arith(hk), hn, arith(hl))
+  have pb: pow2(int_add(k, 1)) in bits(n) by arith(hk, hn, pl)
+  have sb: bits_shl(n, 2, k) in bits(n) by defs(arith(hn, hk), bits_shl)
+  show by bitwise({n}, hn, hk, hl, pb, sb)
+qed

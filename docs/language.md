@@ -393,6 +393,7 @@ simp name                      registers an equation for rsimp
 mem_view name                  registers a memory view (below, "Memory")
 mem_frame name                 registers a memory frame
 mem_closure name               registers a memory closure
+bit_rule name                  registers a bit rule (below, "Bits")
 ```
 
 Terms:
@@ -540,7 +541,7 @@ mentioning its terms.
 | `part(p, {k})`, `unsel(h)` | a conjunct; `z in S && P(z)` from `z in set_select(S, x. P)` |
 | `prop({t})`, `lit({t})` | `t` is a proposition; a literal fact |
 | `rec({t}[, h])` | the recursion equations of `nat_rec` |
-| `at({L[i]}, p..)` | the element at i of a list expression |
+| `at({L[i]}, p..)` | the element at i of a list expression (or of a defined list constant's) |
 | `list_ext(ha, hb, hl, he)` | list extensionality |
 | `members({S}, h..)` | the members of S on concrete data |
 | `rsimp(h, e.., [only])` | h simplified |
@@ -569,6 +570,8 @@ premise they stand for.
 | `lists(p..)` | equal list expressions (same pieces) |
 | `induct(base, step)` | `all n. n in omega -> P(n)` |
 | `eval(p..)` | evaluation on concrete data |
+| `bitwise([{n},] p..)` | bits: a word equation of n-bit words bit by bit (extensionality), or a proposition about bits; see "Bits" |
+| `cases({k}, {a}, {b}, R, p..)` | the goal for each value c of the variable k, a <= k < b (numerals; the bounds from p.. by arith), each by R with k read as c in R's terms |
 | `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact) |
 
 In `arith`, an equation of two factors is not substituted into a product
@@ -577,6 +580,20 @@ In `arith`, an equation of two factors is not substituted into a product
 product in the facts or the goal, so a product term given as a hint
 (`refl({int_mul(m, int_sub(q, 1))})`) brings `m >= 0 && q - 1 >= 0 -> m
 (q - 1) >= 0` in (core/bits.core's `div_unique`).
+
+**Bits** (core/bits.core). `bitwise` reduces a word equation `L = R` to
+`bit(L, i) <-> bit(R, i)` at a fresh i < n (`bits_ext`), the width n from
+the words' operations or given. Each `bit(W, I)` met is explained by the
+first registered rule (`bit_rule NAME`: `H.. -> (bit(P, j) <-> φ)`) whose P
+matches W -- a numeral read as `pow2(k)` or `pow2(k) - 1`, a product
+either way round --, its premises shown from the facts (a fact, arith),
+else kept as hypotheses for the case they hold in; the bits of φ in turn.
+One `arith` call then decides the goal from the facts, the explanations,
+the facts' `all`s at the indices met, `bit_cong` (equal indices) and
+`bit_high` (none at or above a word's width). No rewriting, no search.
+The rules: `and` / `or` / `xor` / `not`, shifts, `bits_of_int`, `/`, `mod`,
+`*` by 2^k, masks 2^k - 1, 2^k, 1, 0. The idioms: `lowest_bit` (`x & -x`),
+`smear_step` / `smear_done` (`x | x >> m`), `shl_two` (`2 << k`).
 
 **Implicit unfolding.** A fact proves a goal that differs from it only by
 definitions. The checker unfolds at the mismatches, newer definitions

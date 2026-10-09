@@ -43,7 +43,9 @@ item is a short summary of finished work; details are in the files named.
   lemmas, branches by conditions, the choices named), and the memory
   rules (`mem`, `mem_read`; views, frames and closures registered per
   layer, proofs/mallocng_mem.core): with them queue's and dequeue's runs
-  went from about 300 to 110 lines. Goal rules prove
+  went from about 300 to 110 lines. `bitwise` decides bits by registered
+  bit rules and one arith call; `cases` takes a literal range case by
+  case. Goal rules prove
   `mp` / `apply` premises in place; `arith` reads powers of numerals as
   constants; `rsimp` reduces program outcomes' parts; a `show` must end
   its block. Error messages show the
@@ -124,9 +126,13 @@ item is a short summary of finished work; details are in the files named.
     context's address a parameter of the spec;
   - size_to_class from a_clz_32's contract (`ms.size_to_class_c2`, the
     least class covering n, checked case by case of the leading-zero
-    count), and as a C function value. a_ctz_32's and a_clz_32's specs are
-    contracts; read-only tables are a precondition on the world's bytes
-    (`table_ok`).
+    count), and as a C function value; read-only tables are a
+    precondition on the world's bytes (`table_ok`);
+  - a_ctz_32 (`ms.a_ctz_32_c2`: x & -x, the de Bruijn index, the table
+    entry tz(x)) and a_clz_32 from a_ctz_32's contract (`ms.a_clz_32_c2`:
+    smearing to 2^p, p x's top bit), proofs/mallocng_bits.core; with them
+    size_to_class with musl's a_clz_32 and a_ctz_32
+    (`ms.size_to_class_c2_linked`).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
   `gc.contract_call` / `gc.contract_call1`: a call under a callee's

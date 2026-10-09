@@ -435,7 +435,8 @@ impl Reader {
             Node::App(f, a) if is(*f, s.int_div) || is(*f, s.int_mod) => {
                 if let Some(k) = self.konst(&a[1]).filter(|k| *k > 0) {
                     let x = self.lin(&a[0])?;
-                    let m = Term::app(s.int_mod.unwrap(), vec![a[0].clone(), a[1].clone()]);
+                    // (keyed by the divisor's value: `pow2(32)` is 4294967296)
+                    let m = Term::app(s.int_mod.unwrap(), vec![a[0].clone(), Term::nat(crate::nat::Nat::from_u128(k as u128))]);
                     let (q, r) = self.modulo(&m, x, k)?;
                     return Some(Lin::var(if is(*f, s.int_div) { q } else { r }));
                 }

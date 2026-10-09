@@ -621,6 +621,12 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                     p.env.mem_closures.push(name);
                 }
             }
+            // bit_rule NAME: a word's bit, for the proof checker's `bitwise`
+            "bit_rule" => {
+                if !p.env.bit_rules.contains(&name) {
+                    p.env.bit_rules.push(name);
+                }
+            }
             "claim" => {
                 p.params.clear();
                 p.expect(":")?;

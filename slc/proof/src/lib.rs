@@ -89,6 +89,7 @@ use sl_kernel::ext::{facts, Logic, Seq};
 use sl_kernel::syntax::{parse_term, parse_value, Printer, ProofRequest, Prover};
 use sl_kernel::{Env, KResult, KernelError, Node, SymId, Term, VarId};
 
+mod bits;
 mod mem;
 mod rsimp;
 
@@ -574,7 +575,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem", "bitwise", "cases"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -1153,6 +1154,31 @@ impl State {
                 let ps = self.proofs(env, lg, args)?;
                 let ps = split_conj(env, ps)?;
                 self.mem_goal(env, lg, goal, &ps)
+            }
+            // cases({k}, {a}, {b}, R, p1, ..): the goal for each value of the
+            // variable k in a .. b - 1 (a <= k < b from p.. by arith), by R
+            "cases" => {
+                let k = self.term_arg(env, args.first(), 0)?;
+                let num = |t: Term| match t.node() {
+                    Node::Nat(n) => n.to_u128().ok_or_else(|| KernelError("cases: a range bound too large".into())),
+                    _ => err("cases: the range bounds must be numerals"),
+                };
+                let a = num(self.term_arg(env, args.get(1), 0)?)?;
+                let b = num(self.term_arg(env, args.get(2), 0)?)?;
+                let Some(Arg::Proof(r)) = args.get(3) else { return err("cases: expected a rule for each case, `cases({k}, {a}, {b}, R, ..)`") };
+                let ps = self.proofs(env, lg, &args[4..])?;
+                self.cases_goal(env, lg, goal, &k, a, b, r, &ps)
+            }
+            // bitwise([{n},] p1, ..): the goal bit by bit (a word equation
+            // by extensionality), the bits explained by the bit rules
+            "bitwise" => {
+                let (width, rest) = match args.first() {
+                    Some(Arg::Term(_)) => (Some(self.term_arg(env, args.first(), 0)?), &args[1..]),
+                    _ => (None, &args[..]),
+                };
+                let ps = self.proofs(env, lg, rest)?;
+                let ps = split_conj(env, ps)?;
+                self.bitwise_goal(env, lg, goal, &ps, width)
             }
             // simp(p1, ..): the goal, simplified, from the simplified premises
             // (symbolic execution of `runs`), then taut or arith
@@ -2162,7 +2188,25 @@ impl State {
                         let t = self.term_arg(env, a0, 0)?;
                         let ps = self.proofs(env, lg, &args[1.min(args.len())..])?;
                         let refs: Vec<&Seq> = ps.iter().collect();
-                        Seq::list_at(env, lg, &refs, &t)
+                        let r = Seq::list_at(env, lg, &refs, &t);
+                        // (a defined list constant: its definition's list)
+                        let app_s = env.sym_by_name.get("app").copied();
+                        match (&r, t.node()) {
+                            (Err(_), Node::App(f, a)) if Some(*f) == app_s && a.len() == 2 => match a[0].node() {
+                                Node::App(c, ca) if ca.is_empty() && matches!(env.syms[*c as usize].kind, sl_kernel::env::SymKind::Defined { .. }) => {
+                                    let d = Seq::def_eq(env, *c)?;
+                                    let body = match d.concl().node() {
+                                        Node::App(_, e) if e.len() == 2 => e[1].clone(),
+                                        _ => return r,
+                                    };
+                                    let t2 = Term::app(*f, vec![body, a[1].clone()]);
+                                    let r2 = Seq::list_at(env, lg, &refs, &t2)?;
+                                    Seq::rewrite(env, &Seq::sym(env, &d)?, &r2)
+                                }
+                                _ => r,
+                            },
+                            _ => r,
+                        }
                     }
                     // list_ext(A in list_type(_), B in list_type(_), len A = len B,
                     //          all i. i in omega -> i < len A -> A[i] = B[i]): A = B

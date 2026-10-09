@@ -111,6 +111,9 @@ pub struct Env {
     /// closure facts (`mem_closure NAME`: a property of a written state from
     /// the state's, applied backward to discharge a premise)
     pub mem_closures: Vec<String>,
+    /// the bit rules (`bit_rule NAME`: `H.. -> (bit(P, i) <-> φ)`, a word
+    /// P's bit), in order. Hints for the proof checker's `bitwise`.
+    pub bit_rules: Vec<String>,
 }
 
 impl Env {
@@ -130,6 +133,7 @@ impl Env {
             mem_views: Vec::new(),
             mem_frames: Vec::new(),
             mem_closures: Vec::new(),
+            bit_rules: Vec::new(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,
