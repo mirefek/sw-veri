@@ -52,10 +52,30 @@ descriptor and the auxiliary vector.
 
 Ongoing: how could the languages make progress more efficient?
 
-- A memory normalizer: `rd64` / `wr64` rules for rsimp, apartness by
-  arith -- what remains of a C2 proof after `step` (queue's: a read after
-  writes, the words' usability kept, per store). Plan it before building
-  it.
+- **A memory normalizer (current)** -- what remains of a C2 proof after
+  `step`: per load or store, the world kept a world, each word's
+  usability kept (nested `ms.word_wr`), a read after writes (chains of
+  `ms.rd_wr_far` / `ms.rd_wr_same` with apartness facts), nested
+  `fn_update(s, "vm", ..)`, and each operation's lemma instantiated by
+  hand (queue's linked case: ~45 of its 55 lines).
+  1. Memory equations, proven and registered for rsimp
+     (proofs/mallocng_mem.core): a read of the word just written; a read
+     past a write whose 8 bytes are apart (`a + 8 <= b || b + 8 <= a` as
+     integers: arith decides it, no alignment facts); `word_ok` of a
+     written memory is the memory's (bytes do not matter); a written world
+     is a world; `fn_update` of `vm` twice. An apartness arith cannot
+     derive (m != P from a precondition) comes as a fact; undecided, the
+     read stays.
+  2. `step` with lemmas: `with ms.setnext_det, ms.prev_det, ..` -- each
+     bind's operation matched with the lemma's conclusion, its premises
+     discharged by rsimp with the memory rules and the facts after a new
+     `using`; after each operation what was read normalized (`mnext(V3,
+     m)` to `H`).
+  3. Measure on queue's linked case (~55 lines to ~10 expected), then
+     dequeue's; set_size written with it.
+  Risks: rsimp's speed on nested memory terms (else: normalize the value
+  read only); conditional rules' premises found reliably (tested first on
+  queue).
 - A bit library (a_ctz_32's `x & -x = 2^tz(x)`, a_clz_32's bit smearing,
   the mask-heavy functions): `arith` reading products of non-literals in a
   polynomial normal form (a trusted extension: the ring facts it already
