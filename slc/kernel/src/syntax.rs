@@ -604,6 +604,23 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                     p.env.simp_set.push(name);
                 }
             }
+            // mem_view NAME / mem_frame NAME: the fact NAME a view or a frame
+            // equation of the proof checker's memory rules (hints, like simp)
+            "mem_view" => {
+                if !p.env.mem_views.contains(&name) {
+                    p.env.mem_views.push(name);
+                }
+            }
+            "mem_frame" => {
+                if !p.env.mem_frames.contains(&name) {
+                    p.env.mem_frames.push(name);
+                }
+            }
+            "mem_closure" => {
+                if !p.env.mem_closures.contains(&name) {
+                    p.env.mem_closures.push(name);
+                }
+            }
             "claim" => {
                 p.params.clear();
                 p.expect(":")?;

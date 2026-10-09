@@ -89,6 +89,7 @@ use sl_kernel::ext::{facts, Logic, Seq};
 use sl_kernel::syntax::{parse_term, parse_value, Printer, ProofRequest, Prover};
 use sl_kernel::{Env, KResult, KernelError, Node, SymId, Term, VarId};
 
+mod mem;
 mod rsimp;
 
 fn err<T>(m: impl Into<String>) -> KResult<T> {
@@ -214,7 +215,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
 
 impl State {
     fn new(scope: Vec<(String, VarId)>, facts: Vec<(String, Seq)>, goal: Option<Term>) -> State {
-        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new() }
+        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new(), mem_cache: Default::default() }
     }
 }
 
@@ -568,10 +569,12 @@ struct State {
     goal: Option<Term>,
     /// the block's `let`s, with the abbreviation each shadowed
     lets: Vec<(String, Option<(usize, Term)>)>,
+    /// the memory rules' rule sets and unfolded facts
+    mem_cache: std::cell::RefCell<mem::MemCache>,
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -1144,6 +1147,13 @@ impl State {
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::arith(env, lg, &refs, goal)
             }
+            // mem(p1, ..): the goal by the memory rules (reads through writes,
+            // frames), the writes' places by arith from the facts
+            "mem" => {
+                let ps = self.proofs(env, lg, args)?;
+                let ps = split_conj(env, ps)?;
+                self.mem_goal(env, lg, goal, &ps)
+            }
             // simp(p1, ..): the goal, simplified, from the simplified premises
             // (symbolic execution of `runs`), then taut or arith
             // Loops need invariants: a term `{l0 l. I}` (the loop's first
@@ -1591,12 +1601,21 @@ impl State {
     /// nothing for); that fact named h (or its conjuncts h..). Composes the
     /// lemmas of proofs/gimple_inv.core.
     fn step_run(&mut self, env: &mut Env, lg: &Logic, rest: &str) -> KResult<()> {
-        let bad = || KernelError("expected `step [x.., ] h.. from P [with f1, ..]`".into());
+        let bad = || KernelError("expected `step [x.., ] h.. from P [with f1, ..] [using u1, ..]`".into());
         let (names, rest) = rest.split_once(" from ").ok_or_else(bad)?;
+        let (rest, using_t) = match rest.split_once(" using ") {
+            Some((r, u)) => (r, split_top(u, ',')),
+            None => (rest, Vec::new()),
+        };
         let (p, with) = match rest.split_once(" with ") {
             Some((p, w)) => (p, split_top(w, ',')),
             None => (rest, Vec::new()),
         };
+        let mut using = Vec::new();
+        for u in &using_t {
+            using.push(self.eval(env, lg, &parse_pe(u.trim())?)?);
+        }
+        let using = split_conj(env, using)?;
         let (xs, hs): (Vec<String>, Vec<String>) = match names.split_once(',') {
             Some((x, h)) => (x.split_whitespace().map(String::from).collect(), h.split_whitespace().map(String::from).collect()),
             None => (Vec::new(), names.split_whitespace().map(String::from).collect()),
@@ -1616,6 +1635,18 @@ impl State {
             Node::App(f, a) => Some((*f, a.to_vec())),
             _ => None,
         };
+        let (all_s, imp_s) = (lg.all, env.builtins.imp);
+        let op_fact = |t: &Term| {
+            let mut t = t.clone();
+            loop {
+                match t.node() {
+                    Node::App(q, a) if *q == all_s => t = a[0].clone(),
+                    Node::App(i, a) if *i == imp_s => t = a[1].clone(),
+                    Node::App(d, _) => return Some(*d) == det,
+                    _ => return false,
+                }
+            }
+        };
         // an `if`'s outcome: ((c && T) || (c2 && E)) && K(x)
         let if_shape = |s: &Seq| {
             head(s.concl()).filter(|(g, _)| Some(*g) == and).and_then(|(_, ka)| {
@@ -1627,8 +1658,16 @@ impl State {
             }).is_some()
         };
         let mut cur = self.eval(env, lg, &parse_pe(p.trim())?)?;
+        // (`L && R` stepped in L, R pending: on L's outcome `x = V`, R at V)
+        let mut pending: Vec<Seq> = Vec::new();
         for _ in 0..10000 {
             let Some((f, a)) = head(cur.concl()) else { break };
+            if f == lg.eq && matches!(a[0].node(), Node::Var(..)) && !pending.is_empty() {
+                let r = pending.pop().unwrap();
+                let k = Seq::rewrite(env, &cur, &r)?;
+                cur = self.step_simp(env, lg, k)?;
+                continue;
+            }
             if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == mkprog) {
                 cur = self.lemma(env, lg, "g.runs_elim", &[cur])?;
             } else if let (true, Some((g, _))) = (Some(f) == runs, head(&a[0])) {
@@ -1646,9 +1685,9 @@ impl State {
             } else if Some(f) == bind {
                 // (an operation's one outcome: the next `with` fact)
                 match withs.front() {
-                    Some(w) if head(w.concl()).is_some_and(|(g, _)| Some(g) == det) => {
+                    Some(w) if op_fact(w.concl()) => {
                         let w = withs.pop_front().unwrap();
-                        cur = self.lemma(env, lg, "g.bind_inv", &[cur, w])?;
+                        cur = self.step_bind(env, lg, cur, w, &using)?;
                     }
                     _ => break,
                 }
@@ -1704,9 +1743,9 @@ impl State {
                 loop {
                     match head(t.concl()) {
                         Some((g, _)) if Some(g) == letin => t = self.lemma(env, lg, "g.letin_e", &[t])?,
-                        Some((g, _)) if Some(g) == bind && withs.front().is_some_and(|w| head(w.concl()).is_some_and(|(d, _)| Some(d) == det)) => {
+                        Some((g, _)) if Some(g) == bind && withs.front().is_some_and(|w| op_fact(w.concl())) => {
                             let w = withs.pop_front().unwrap();
-                            t = self.lemma(env, lg, "g.bind_inv", &[t, w])?;
+                            t = self.step_bind(env, lg, t, w, &using)?;
                         }
                         _ => break,
                     }
@@ -1723,6 +1762,11 @@ impl State {
                         break;
                     }
                 }
+            } else if Some(f) == and && (!withs.is_empty() || !xs.is_empty())
+                && head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == and || Some(g) == bind || Some(g) == letin || Some(g) == runs)
+            {
+                pending.push(and_part(env, &cur, true)?);
+                cur = and_part(env, &cur, false)?;
             } else {
                 // (an outcome's dispatch on a known outcome: simplified)
                 let k = self.step_simp(env, lg, cur.clone())?;
@@ -1731,6 +1775,10 @@ impl State {
                 }
                 cur = k;
             }
+        }
+        while let Some(r) = pending.pop() {
+            let both = Term::app(and.unwrap(), vec![cur.concl().clone(), r.concl().clone()]);
+            cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
         }
         if !withs.is_empty() {
             return err(format!("step: {} `with` facts not used (it stopped at `{}`)", withs.len(), Printer::new(env).short(cur.concl())));
@@ -1749,17 +1797,64 @@ impl State {
         Ok(())
     }
 
+    /// a bind of `b` (`bind_rel(p, s, k, ..)`) by the operation's one
+    /// outcome: a fact `g.det(p, s, ok(s1, v1))`, or a lemma concluding one
+    /// (matched, its premises discharged from `using`: `mem_lemma_inst`);
+    /// then the value read resolved (if it resolves) and the states
+    /// simplified
+    fn step_bind(&mut self, env: &mut Env, lg: &Logic, b: Seq, w: Seq, using: &[Seq]) -> KResult<Seq> {
+        let det = env.sym_by_name.get("g.det").copied();
+        let is_det = matches!(w.concl().node(), Node::App(d, _) if Some(*d) == det);
+        let w = if is_det {
+            w
+        } else {
+            let (p, s) = match b.concl().node() {
+                Node::App(_, a) if a.len() == 5 => (a[0].clone(), a[1].clone()),
+                _ => return err("step: not a bind"),
+            };
+            self.mem_lemma_inst(env, lg, &w, &p, &s, using)?
+        };
+        // (the value: ok(s1, v1)'s v1)
+        let v1 = match w.concl().node() {
+            Node::App(_, a) if a.len() == 3 => match a[2].node() {
+                Node::App(_, o) if o.len() == 2 => Some(o[1].clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut cur = self.lemma(env, lg, "g.bind_inv", &[b, w])?;
+        if !is_det {
+            if let Some(e) = v1.and_then(|v1| self.mem_value(env, lg, &v1, using)) {
+                cur = Seq::rewrite(env, &e, &cur)?;
+            }
+            cur = self.step_simp(env, lg, cur)?;
+        }
+        Ok(cur)
+    }
+
     /// a run's outcome simplified: the outcome's parts and the propositional
     /// rules only (the program's terms as they are)
     fn step_simp(&mut self, env: &mut Env, lg: &Logic, k: Seq) -> KResult<Seq> {
+        let rs = self.step_rules(env, lg)?;
+        self.rsimp_fact(env, lg, k, &rs)
+    }
+
+    /// step's simplification rules: propositional, outcome parts, record
+    /// fields
+    pub(crate) fn step_rules(&self, env: &mut Env, lg: &Logic) -> KResult<std::rc::Rc<rsimp::Rules>> {
+        if let Some(r) = self.mem_cache.borrow().rules.get(&2) {
+            return Ok(r.clone());
+        }
         let rules = "rsimp(eq_self, not_true, not_false, not_not, true_and, and_true, false_and, and_false, true_or, or_true, false_or, or_false, \
-            fst_pair, snd_pair, letin_eq, out_state_ok, out_value_ok, out_state_exc, out_value_exc, fst_ok, fst_exc, fst_diverge, only)";
+            fst_pair, snd_pair, letin_eq, out_state_ok, out_value_ok, out_state_exc, out_value_exc, fst_ok, fst_exc, fst_diverge, \
+            app_update_same, app_update_other, fn_update_twice, only)";
         let args = match parse_pe(rules)? {
             PE::Rule(_, a) => a,
             _ => unreachable!(),
         };
-        let rs = self.rsimp_rules(env, lg, &args)?;
-        self.rsimp_fact(env, lg, k, &rs)
+        let r = std::rc::Rc::new(self.rsimp_rules(env, lg, &args)?);
+        self.mem_cache.borrow_mut().rules.insert(2, r.clone());
+        Ok(r)
     }
 
     /// `obtain x, h from e` (e: `ex y. ψ(y)`): h, ψ(x) for a new x
@@ -2047,6 +2142,22 @@ impl State {
                     }
                     // at({app(L, i)}, p1, ..): the element of a list expression at
                     // i, its bounds shown by arith from the premises
+                    // mem_read({t}, p..): `t = r`, t's reads resolved (views,
+                    // the kernel's mem_read, the value cleaned)
+                    "mem_read" => {
+                        let t = self.term_arg(env, a0, 0)?;
+                        let ps = self.proofs(env, lg, &args[1.min(args.len())..])?;
+                        let ps = split_conj(env, ps)?;
+                        self.mem_read_eq(env, lg, &t, &ps, false)
+                    }
+                    // mem_bytes({bytes_at(M, b, m)}, p..): the read through M's
+                    // writes (the kernel's `mem_read`, facts p..)
+                    "mem_bytes" => {
+                        let t = self.term_arg(env, a0, 0)?;
+                        let ps = self.proofs(env, lg, &args[1.min(args.len())..])?;
+                        let refs: Vec<&Seq> = ps.iter().collect();
+                        Seq::mem_read(env, lg, &refs, &t)
+                    }
                     "at" => {
                         let t = self.term_arg(env, a0, 0)?;
                         let ps = self.proofs(env, lg, &args[1.min(args.len())..])?;
@@ -2204,6 +2315,22 @@ fn conj_parts(env: &Env, t: &Term) -> Vec<Term> {
     out.push(t);
     out.reverse();
     out
+}
+
+/// facts with their conjunctions split, in order (the memory rules' facts)
+fn split_conj(env: &Env, facts: Vec<Seq>) -> KResult<Vec<Seq>> {
+    let and_s = env.sym_by_name.get("and").copied();
+    let mut out = Vec::new();
+    let mut todo: Vec<Seq> = facts.into_iter().rev().collect();
+    while let Some(u) = todo.pop() {
+        if matches!(u.concl().node(), Node::App(f, a) if Some(*f) == and_s && a.len() == 2) {
+            todo.push(and_part(env, &u, true)?);
+            todo.push(and_part(env, &u, false)?);
+        } else {
+            out.push(u);
+        }
+    }
+    Ok(out)
 }
 
 /// a disjunction's disjuncts as written (`a || b || c`: three)

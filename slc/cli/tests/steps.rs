@@ -179,14 +179,15 @@ fn translations_are_generated_and_check() {
         certs.push(cert);
     }
     // and the callers linked with their callees (proofs/mallocng_link.core)
-    // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl)
+    // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl;
+    // the memory rules' views and frames, proofs/mallocng_mem.core)
     let c = Command::new(slc)
         .current_dir(&root)
         .args(["kernel-check", "--no-cache"])
         .args(&files)
         .arg("proofs/a_crash.core")
         .args(&certs)
-        .args(["proofs/mallocng_link.core", "proofs/mallocng_c2.core"])
+        .args(["proofs/mallocng_link.core", "proofs/mallocng_mem.core", "proofs/mallocng_c2.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
@@ -213,7 +214,8 @@ fn translations_are_generated_and_check() {
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 43 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 57 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 51 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in certs.iter().chain([&steps, &gimple, &text]) {
         let _ = std::fs::remove_file(f);

@@ -507,6 +507,16 @@ impl Seq {
         Ok(Seq { hyps, concl, open })
     }
 
+    /// `⋃Γi ⊢ bytes_at(M, b, m) = r`: a memory read through M's writes,
+    /// their places decided by `arith` from the premises (see `ext::mem`).
+    pub fn mem_read(env: &Env, lg: &Logic, premises: &[&Seq], t: &Term) -> KResult<Seq> {
+        env.check_wf(t, 0)?;
+        let (hyps, open) = Self::gather(premises);
+        let ps: Vec<Term> = premises.iter().map(|p| p.concl.clone()).collect();
+        let concl = lg.mem_read(env, &ps, t)?;
+        Ok(Seq { hyps, concl, open })
+    }
+
     /// List extensionality (see `Logic::list_ext`).
     pub fn list_ext(env: &Env, lg: &Logic, ha: &Seq, hb: &Seq, hlen: &Seq, hel: &Seq) -> KResult<Seq> {
         let (hyps, open) = Self::gather(&[ha, hb, hlen, hel]);

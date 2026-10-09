@@ -52,38 +52,6 @@ descriptor and the auxiliary vector.
 
 Ongoing: how could the languages make progress more efficient?
 
-- **A memory normalizer (current)** -- what remains of a C2 proof after
-  `step`: per load or store, the world kept a world, each word's
-  usability kept (nested `ms.word_wr`), a read after writes (chains of
-  `ms.rd_wr_far` / `ms.rd_wr_same` with apartness facts), nested
-  `fn_update(s, "vm", ..)`, and each operation's lemma instantiated by
-  hand (queue's linked case: ~45 of its 55 lines).
-  A procedure of its own, not rsimp: the decision is which write a read
-  hits, made by a fixed algorithm.
-  1. Two canonical primitives on byte maps, `store_le(B, a, n, v)` and
-     `le(B, a, n)`; what specs and GIMPLE use are views of them,
-     registered with the lemma that connects them (the extension point):
-     `mem write mallocng_specs.wr64 ms.wr64_store`, `mem read
-     mallocng_specs.mnext ms.mnext_rd`, `mem frame mallocng_specs.word_ok
-     ms.word_ok_bytes` (a predicate the bytes do not matter to), ..
-  2. A read of m bytes at b in w_k(..w_1(M0)..), the writes from the
-     outermost in, each of n bytes at a, in this order: apart (`a + n <= b
-     || b + m <= a`): past it; the same (a = b, n = m): its value;
-     contained: its bytes from that offset (zero_meta's zeros); else stop,
-     naming the write undecided. Each test one arith call on the integer
-     facts given (bounds, `al8` -- a literal modulus --, `m != P`); each
-     decision one canonical lemma: a checked proof, no search, nothing
-     trusted. A frame predicate of M: of M0, a step per write.
-  3. Interfaces: `mem(f..)` a goal rule (`read = v`, `word_ok(V3, ..)`);
-     `mem_read({t}, f..)` the equation `t = value`, the value computed;
-     `step .. with ms.setnext_det, .. using f..`: operations' lemmas
-     matched with the operations, their premises (world, words'
-     usability) by `mem`, each value read resolved by `mem_read`.
-  4. Measure on queue's linked case (~55 lines to ~10 expected) and
-     `ms.dq_linked`; set_size written with it.
-  The user gives the aliasing facts a precondition provides (`m != P`,
-  alignment, bounds); a failure names the write and the cases unproven.
-
 - A bit library (a_ctz_32's `x & -x = 2^tz(x)`, a_clz_32's bit smearing,
   the mask-heavy functions): `arith` reading products of non-literals in a
   polynomial normal form (a trusted extension: the ring facts it already

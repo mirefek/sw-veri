@@ -17,7 +17,7 @@ Related files:
   definitions and the 38 axioms of `core/prelude.core`.
 - Its trusted extensions (`slc/kernel/src/ext/`): derived rules and
   decision procedures such as natural deduction, tautologies, linear
-  arithmetic, lists and the simplifiers. Each one documents how it reduces
+  arithmetic, lists, memory reads through writes and the simplifiers. Each one documents how it reduces
   to the kernel's rules.
 - The model (`spec/`): x86-64 and Linux, written in SL, assumed to describe
   the real machine.

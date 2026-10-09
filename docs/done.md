@@ -30,13 +30,18 @@ item is a short summary of finished work; details are in the files named.
   - linear arithmetic over integers and words, with symbolic widths
     (and division by a symbolic divisor below twice it);
   - lists;
+  - memory reads through writes (`mem_read`: apart / the same / inside,
+    each decided by arith);
   - the path simplifier `simp` and the rewriting simplifier `rsimp`.
 - **The proof language** (docs/language.md). It has implicit unfolding at
   mismatches, destructuring by position or label, `apply` with
   higher-order matching, `flip` and `unfold`, and cases of a disjunction
   taken from the fact (`have c: case k of P proof`), and `step`: a run of
-  readable GIMPLE inverted step by step (binds by one-outcome facts,
-  branches by conditions, the choices named). Goal rules prove
+  readable GIMPLE inverted step by step (binds by one-outcome facts or
+  lemmas, branches by conditions, the choices named), and the memory
+  rules (`mem`, `mem_read`; views, frames and closures registered per
+  layer, proofs/mallocng_mem.core): with them queue's and dequeue's runs
+  went from about 300 to 110 lines. Goal rules prove
   `mp` / `apply` premises in place; `arith` reads powers of numerals as
   constants; `rsimp` reduces program outcomes' parts; a `show` must end
   its block. Error messages show the

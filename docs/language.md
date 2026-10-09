@@ -390,6 +390,9 @@ theorem name(params): φ proof ... qed
 theorem name proof ... qed     proves an earlier claim or lemma
 irreducible name               implicit unfolding keeps `name` folded
 simp name                      registers an equation for rsimp
+mem_view name                  registers a memory view (below, "Memory")
+mem_frame name                 registers a memory frame
+mem_closure name               registers a memory closure
 ```
 
 Terms:
@@ -436,7 +439,7 @@ have h: φ by R(args)      a fact by a goal rule (below)
 have a b c := P           P's conjuncts, named (`_` skips one, `..` ignores the rest, `r..` names it)
 have {sM, x = mM} := P    the conjuncts labelled sM, mM
 obtain x y, h1 h2 from P  witnesses of `ex x y. ...`, the body's conjuncts named
-step x.., h.. from P with f..   a run of readable GIMPLE inverted step by step (below)
+step x.., h.. from P with f.. [using u..]   a run of readable GIMPLE inverted step by step (below)
 show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
@@ -469,21 +472,54 @@ Arguments are proof expressions, terms `{t}`, occurrence selections
 - through the program's definition and relation (`g.runs_elim`) and
   `letin`s (`g.letin_e`);
 - through `bind_rel(p, s, ..)` by the next `with` fact `g.det(p, s, ok(s1,
-  v1))`, an operation's one outcome (`g.bind_inv`);
+  v1))`, an operation's one outcome (`g.bind_inv`). The `with` item may
+  instead be a lemma `all xs. H1 -> .. -> g.det(P, S, O)`: its variables
+  come from matching P and S with the operation and the state, and its
+  premises are discharged from the `using` facts (see "Memory"). Then the
+  value read is resolved, if it resolves -- to a value written, or to the
+  same read before the writes (`mnext(wr64(V0, ..), m)` to `mnext(V0, m)`)
+  --, and the state's record fields are simplified;
 - through a local's choice of a word (`any_rel`), and an `if`'s outcome
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
 - into the `if`'s branch the next `with` fact decides (it implies c or !c
   propositionally), through the branch's `letin`s and binds; a branch
   ending in `x = V` is substituted into K, and K's dispatch on V (an `ok`:
   on with the rest; a return: the outcome) simplified;
+- into L of `L && R` (while there are names or `with` items left), R
+  waiting for L's outcome `x = V`;
 - and it stops at anything else -- a call, a loop, a bind or branch with
   no `with` fact for it, a choice with no name -- naming the fact there
   `h` (or its conjuncts `h..`). Unused names or `with` facts are an error.
+  `using` facts that are conjunctions are split.
 
 ```
 step a3 a5 a7 a9 x13, oe from hr with hq     // oe: o = ok(s, bits_of_int(32, Q))
 step x17, hx17 hk17 from hk2 with sd, md, ad, rd1, ld1
+step c9 from conj(hc3, hrest3) with nn, d2, ms.setnext_det, ms.prev_det, ms.setprev_det, .. using F
 ```
+
+**Memory.** A procedure of its own, not rewriting search: which write a
+read hits is decided by a fixed algorithm.
+- Views (`mem_view`): equations giving a spec's or GIMPLE's reads and
+  writes in two canonical forms -- a write `fn_update(M, "bytes",
+  store_le(app(M, "bytes"), a, n, v))`, a read `gimple.bytes_at(M, b, m)`
+  (`ms.v_wr64`, `ms.v_rd64`, `ms.v_mnext` in proofs/mallocng_mem.core).
+- A read through writes: the kernel's `mem_read` walks the writes from the
+  outermost in. For each it tests, by `arith` on the facts given: apart
+  (past it), the same place and size (its value), the read inside it (its
+  digits); else it stops, naming the write. A word's value is then
+  cleaned back from its digits.
+- Frames (`mem_frame`): predicates the bytes do not matter to,
+  `P(fn_update(vm, "bytes", X), ..) = P(vm, ..)` (`word_ok`).
+- Closures (`mem_closure`): lemmas `H.. -> C1 && ..`, used backward for a
+  premise matching a conjunct (`ms.world_wr`, `ms.sw`: a world written is
+  a world).
+- A `step` lemma's premise is discharged by a `using` fact, its record
+  fields simplified, a closure, `mem`, or `arith` on the facts.
+
+The facts are what a precondition provides: bounds, alignment (`al8`
+expanded to `x % 8 = 0`), disequalities. Each `arith` check gets the facts
+mentioning its terms.
 
 ### Rules without a goal
 
@@ -508,6 +544,8 @@ step x17, hx17 hk17 from hk2 with sd, md, ad, rd1, ld1
 | `list_ext(ha, hb, hl, he)` | list extensionality |
 | `members({S}, h..)` | the members of S on concrete data |
 | `rsimp(h, e.., [only])` | h simplified |
+| `mem_read({t}, p..)` | `t = r`: t's reads resolved through their memories' writes (facts p..) |
+| `mem_bytes({bytes_at(M, b, m)}, p..)` | the kernel's `mem_read`: one read through M's writes |
 | `simp(h, ..)` | h's paths (symbolic execution) |
 
 A higher-order parameter applied to distinct bound variables (`k(s1, v)`)
@@ -531,6 +569,7 @@ premise they stand for.
 | `lists(p..)` | equal list expressions (same pieces) |
 | `induct(base, step)` | `all n. n in omega -> P(n)` |
 | `eval(p..)` | evaluation on concrete data |
+| `mem(p..)` | memory: an equation of reads (both sides resolved, then equal or by arith), or a predicate of a written memory (views and frames, then a fact) |
 
 **Implicit unfolding.** A fact proves a goal that differs from it only by
 definitions. The checker unfolds at the mismatches, newer definitions

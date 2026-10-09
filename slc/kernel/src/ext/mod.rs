@@ -22,12 +22,15 @@
 //!   nothing resting on an open lemma becomes a `Thm`).
 //! - `cache`: theorems from `slc kernel-check`'s file cache, recorded
 //!   without their proofs (trusting the cache; `--no-cache` avoids it).
+//! - `mem`: a memory read through its writes (`gimple.bytes_at` of
+//!   `store_le`s), the writes' places decided by `arith`.
 
 pub mod arith;
 pub mod cache;
 pub mod facts;
 pub(crate) mod inventory;
 pub mod list;
+pub mod mem;
 pub mod prop;
 pub mod simp;
 pub mod seq;

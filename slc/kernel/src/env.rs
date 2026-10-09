@@ -102,6 +102,15 @@ pub struct Env {
     /// NAME`: a proven fact, an equation or equivalence possibly under
     /// premises), in order. A hint for proof search only.
     pub simp_set: Vec<String>,
+    /// the memory procedure's views (`mem_view NAME`: an equation unfolding
+    /// a read or a write into `gimple.bytes_at` / `store_le`) and frame
+    /// equations (`mem_frame NAME`: a predicate the bytes do not matter
+    /// to), in order. Hints for the proof checker's `mem` rules.
+    pub mem_views: Vec<String>,
+    pub mem_frames: Vec<String>,
+    /// closure facts (`mem_closure NAME`: a property of a written state from
+    /// the state's, applied backward to discharge a premise)
+    pub mem_closures: Vec<String>,
 }
 
 impl Env {
@@ -118,6 +127,9 @@ impl Env {
             abbrevs: HashMap::new(),
             irreducible: Default::default(),
             simp_set: Vec::new(),
+            mem_views: Vec::new(),
+            mem_frames: Vec::new(),
+            mem_closures: Vec::new(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,
