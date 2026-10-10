@@ -130,6 +130,11 @@ item is a short summary of finished work; details are in the files named.
     (`tr.cas32_b`, its store and register write in one step:
     `tr.store_reg_step`), at -O0 inside the function `a_cas`, inlined
     alike once optimized.
+- **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
+  never ends by a divergence of the spec (`tr.div`, its trace not compared
+  yet), through steps, spec reductions and calls (a callee's divergence is
+  its caller's); the ABI's contract from the bridge's for a spec that
+  diverges only where it raises (`tr.div_raises`, e.g. a_crash's).
 - **Calls in C1** (`tr.call`, `tr.call1` in `proofs/translate_call.core`):
   - any frame of at most 64 KiB, 0 to 6 register arguments, the result in
     rax:rdx (or rax);

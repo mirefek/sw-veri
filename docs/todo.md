@@ -24,13 +24,14 @@ call graph.
   `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
   `___errno_location`.
 - C1 of loops without a counter (activate_group's compare-and-swap retry,
-  try_avail's): the C1 claim (`tr.sim`) admits a diverging machine run
-  only where the spec is undefined, so a loop whose GIMPLE may itself run
-  forever under its callees' contracts (a_cas's says nothing about
-  success) cannot be shown as is. To decide: divergence matched by the
-  spec's (a coinductive simulation), or the callee's full contract in the
-  caller's C1 (the loop then terminating at GIMPLE level), or a fuel
-  bound.
+  try_avail's): the claim now admits a divergence the spec may also make
+  (`tr.div`), but a loop with no variant needs an induction the rules do
+  not expose. A rule concludes `tr.pt` at a point from `tr.pt` at its
+  successors as a black box, so the loop's claim cannot be had from the
+  body's proof (the induction hypothesis used after at least one step) by
+  the variant-free argument: it needs the claim indexed by the run's
+  length (`tr.pt` with a step budget each rule decreases), or another way
+  to see the body's proof as guarded.
 
 ## 2. The invariant and the laws
 
@@ -79,6 +80,16 @@ from the proof writer's side. Taken up in batches between functions.
 With malloc still as the test bed:
 
 - Multi-threading: threads in the model, TLS, malloc's locking.
+- Traces of infinite runs: C1 matches a machine's divergence by one of the
+  spec's (`tr.div`) without comparing their traces; the ABI's contract
+  needs the same trace, so it is now had only for specs that diverge only
+  where they raise (`tr.div_raises`, the contracts). Transferring traces
+  needs the machine's events growing along every run (a theorem over the
+  whole machine step: only `sys_write` / `sys_read` emit, and an
+  undecodable instruction is undefined), callees' contracts keeping it
+  during the call, and the per-step and loop arguments carrying the
+  limit; then specs that run forever doing I/O (and a waiting malloc under
+  threads) can be verified with their traces.
 - Optimized code and an updated compiler: an optimization layer (GIMPLE ⊑
   GIMPLE), DWARF location maps in the bridge.
 - Other compilers' layers: LLVM IR from clang, alongside GIMPLE.

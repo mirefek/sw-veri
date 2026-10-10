@@ -292,7 +292,11 @@ def tr.crash(s, p, w, o) :=
     sev: subset(app(app(s, "os"), "events"), app(app(m1, "os"), "events")) && inp: app(app(s, "os"), "input") = app(app(m1, "os"), "input") &&
     io: (tr.ovf(p, w, app(m1, "os")) || app(app(s, "os"), "events") = app(app(m1, "os"), "events"))
 
-def tr.sim(s, v, p, w, m) := all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o)
+// a divergence matched by one of the spec's (its trace not compared yet:
+// docs/todo.md)
+def tr.div(p, w, o) := (ex t. o = diverge(t)) && (ex t2. runs(p, w, diverge(t2)))
+
+def tr.sim(s, v, p, w, m) := all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o)
 
 // (at the entry: the claim's crash is the ABI's)
 theorem tr.crash_at: all spec args s v mem o. tr.crash(s, app(spec, args), abi.view(s, v, mem), o) -> abi.crashes_at(spec, args, v, mem, s, o)
@@ -362,9 +366,8 @@ proof
   show by ex_intro({m1}, {w2}, taut(h2))
 qed
 
-// abi.matches without its divergence case: the machine diverges only
-// where the spec raises (the claim has no divergence; every loop has a
-// variant), so a caller's run through a call ends or raises
+// abi.matches, its divergence case without the trace: the machine diverges
+// where the spec may (tr.div)
 def tr.matches_t(spec, args, objs, mem, s, o) :=
   abi.raises_at(spec, args, objs, mem, s) ||
   (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine && m1 in univ(1) &&
@@ -372,16 +375,31 @@ def tr.matches_t(spec, args, objs, mem, s, o) :=
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), objs, abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
     app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
     abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) ||
-  abi.crashes_at(spec, args, objs, mem, s, o)
+  abi.crashes_at(spec, args, objs, mem, s, o) || tr.div(app(spec, args), abi.view(s, objs, mem), o)
 
-theorem tr.matches_t_abi: all spec args objs mem s o. tr.matches_t(spec, args, objs, mem, s, o) -> abi.matches(spec, args, objs, mem, s, o)
+// a spec diverges only where it raises (undefined): so for a contract,
+// whose effect has no loop -- the ABI's claim then has no divergence to
+// match
+def tr.div_raises(spec) := all args w t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> runs(app(spec, args), w, diverge(t)) ->
+  (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(x) && runs(app(spec, args), w, exc(x, e)))
+
+theorem tr.matches_t_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
+  tr.matches_t(spec, args, objs, mem, s, o) -> abi.matches(spec, args, objs, mem, s, o)
 proof
   fix spec args objs mem s o
-  assume mt
-  have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, app(spec, args), abi.view(s, objs, mem), o) || abi.crashes_at(spec, args, objs, mem, s, o)
+  assume hd hA hvW hvu mt
+  // (a divergence: the spec raises there too)
+  have dr: tr.div(app(spec, args), abi.view(s, objs, mem), o) -> abi.raises_at(spec, args, objs, mem, s) proof
+    assume d
+    obtain t2, rd from expand(d, tr.div).2
+    have r := mp(all_elim(expand(hd, tr.div_raises), {args}, {abi.view(s, objs, mem)}, {t2}), hA, hvW, hvu, rd)
+    show by defs(r, abi.raises_at)
+  qed
+  have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, app(spec, args), abi.view(s, objs, mem), o) || abi.crashes_at(spec, args, objs, mem, s, o) ||
+      tr.div(app(spec, args), abi.view(s, objs, mem), o)
     by defs(taut(expand(mt, tr.matches_t)), tr.ok)
   have oa := all_elim(tr.ok_abi, {s}, {objs}, {app(spec, args)}, {abi.view(s, objs, mem)}, {o})
-  show by defs(taut(mt2, oa), abi.matches)
+  show by defs(taut(mt2, oa, dr), abi.matches)
 qed
 
 // ... for the disciplined run itself
@@ -473,10 +491,10 @@ proof
 qed
 
 // the bridge's contract gives the ABI's
-theorem tr.implements_abi: all f spec base code statics. tr.implements_at(f, spec, base, code, statics) -> abi.implements2_at(single(empty), f, spec, base, code, statics)
+theorem tr.implements_abi: all f spec base code statics. tr.div_raises(spec) -> tr.implements_at(f, spec, base, code, statics) -> abi.implements2_at(single(empty), f, spec, base, code, statics)
 proof
   fix f spec base code statics
-  assume hi
+  assume hdr hi
   have m: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
       abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
       runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, objs, mem, s, o) proof
@@ -484,18 +502,22 @@ proof
     assume hA hot hmv hM hl hrip he hob hwm hr
     have su: s in univ(1) by simp(apply(abi.run_univ, hr))
     have ok: tr.objs_ok(s, objs) by defs(hob, tr.objs_ok)
+    have ou := apply(abi.objs_univ, hot)
+    have mu := apply(x86.vm_univ, hmv)
+    have hvu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu)
+    have hvW := apply(abi.world_typed, hM, hot, hmv, hvu)
     have c := expand(hi, tr.implements_at)
     have d := apply(tr.run_disc, {s}, {o}, hr)
     have c1: tr.run_d(s, s, o) -> abi.matches(spec, args, objs, mem, s, o) proof
       assume rd
       have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rd)
-      show := apply(tr.matches_t_abi, mt)
+      show := apply(tr.matches_t_abi, hdr, hA, hvW, hvu, mt)
     qed
     have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches(spec, args, objs, mem, s, o) proof
       assume e
       obtain x, rd from e
       have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {exc(x, exc_val("disc", empty))}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rd)
-      have mx := apply(tr.matches_t_abi, mt)
+      have mx := apply(tr.matches_t_abi, hdr, hA, hvW, hvu, mt)
       show := apply(tr.matches_raise, {spec}, {args}, {objs}, {mem}, {s}, {x}, {o}, mx)
     qed
     show by taut(d, c1, c2)
@@ -539,11 +561,20 @@ proof
     qed
     show by defs(ex_intro({m1}, {a}, {k0}, taut(c3, o2)), tr.crash)
   qed
-  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+  have dv: all o. tr.div(p2, w2, o) -> tr.div(p, w, o) proof
+    fix o
+    assume hd
+    have hd1 hd2 := expand(hd, tr.div)
+    obtain t2, rd from hd2
+    have r1 := mp(all_elim(r, {diverge(t2)}), rd)
+    have e2: ex t3. runs(p, w, diverge(t3)) by ex_intro({t2}, r1)
+    show by defs(taut(hd1, e2), tr.div)
+  qed
+  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
     fix o
     assume ho
     have c := mp(all_elim(expand(h, tr.sim), {o}), ho)
-    show by taut(c, u, all_elim(k, {o}), all_elim(cr, {o}))
+    show by taut(c, u, all_elim(k, {o}), all_elim(cr, {o}), all_elim(dv, {o}))
   qed
   show by defs(g, tr.sim)
 qed
@@ -561,6 +592,39 @@ proof
     show by simp(k2.1)
   qed
   show by taut(n)
+qed
+
+// (a raise, a return: no divergence)
+theorem tr.div_exc: all p w x e. !tr.div(p, w, exc(x, e))
+proof
+  fix p w x e
+  have n: tr.div(p, w, exc(x, e)) -> false proof
+    assume d
+    obtain t, q from expand(d, tr.div).1
+    show by simp(q)
+  qed
+  show by taut(n)
+qed
+
+theorem tr.div_ok: all p w x e. !tr.div(p, w, ok(x, e))
+proof
+  fix p w x e
+  have n: tr.div(p, w, ok(x, e)) -> false proof
+    assume d
+    obtain t, q from expand(d, tr.div).1
+    show by simp(q)
+  qed
+  show by taut(n)
+qed
+
+// (a disciplined run's outcome tagged 2: a divergence)
+theorem tr.run_d_div: all s m o. tr.run_d(s, m, o) -> fst(o) = 2 -> (ex t. o = diverge(t))
+proof
+  fix s m o
+  assume h hf
+  obtain r, _ hm from expand(h, tr.run_d)
+  have c: fst(r) = 2 && o = diverge(snd(r)) by simp(expand(hm, tr.rmap), hf)
+  show by ex_intro({snd(r)}, taut(c))
 qed
 
 // (the steps from m end in states with q: an instruction's effect, its
@@ -610,13 +674,13 @@ proof
     show := mp(mp(all_elim(hb_nok, {r}), mp(all_elim(hbd, {r}), hb)), hn2)
   qed
   // the claim at an m2 with q, for the loop's runs from it
-  have hk: all m2 r o2. q(m2) -> tr.rwd(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o2) || tr.crash(s, p, w, o2) proof
+  have hk: all m2 r o2. q(m2) -> tr.rwd(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o2) || tr.crash(s, p, w, o2) || tr.div(p, w, o2) proof
     fix m2 r o2
     assume hq hw hm
     have rf: tr.run_d(s, m2, o2) by defs(ex_intro({r}, taut(hw, hm)), tr.run_d)
     show := mp(all_elim(expand(mp(all_elim(h, {m2}), hq), tr.sim), {o2}), rf)
   qed
-  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
     fix o
     assume ho
     obtain x4, hw hm from expand(ho, tr.run_d)
@@ -625,25 +689,33 @@ proof
       tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rwd))
     // (the loop goes on from m2)
     have on: (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
-        tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+        tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
       assume e
       obtain l1, rbd1 e1b from e
       have rb1 := mp(all_elim(hbd, {ok(l1, empty)}), rbd1)
       obtain m2, l1e hq from mp(all_elim(hb_ok, {l1}), rb1)
       obtain r1, w0 f4 re4 from e1b
       have w1: tr.rwd(s, pair(m2, empty), r1) by defs(rewrite(l1e, w0), tr.rwd)
-      have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+      have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
         assume nd
         have re := mp(re4, nd)
         show := mp(mp(mp(all_elim(hk, {m2}, {r1}, {o}), hq), w1), rewrite(sym(re), hm))
       qed
-      have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+      have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
         assume d
         have d1: fst(r1) = 2 by simp(f4, d)
         have c := mp(mp(mp(all_elim(hk, {m2}, {r1}, {diverge(snd(r1))}), hq), w1), defs(simp(d1), tr.rmap))
         have nk := all_elim(tr.ok_not_div, {s}, {v}, {p}, {w}, {snd(r1)})
         have nc := all_elim(tr.crash_not_div, {s}, {p}, {w}, {snd(r1)})
-        show by taut(c, nk, nc)
+        // (the spec's divergence from m2's: also from m's run)
+        have od: o = diverge(snd(x4)) by simp(expand(hm, tr.rmap), d)
+        have dd: tr.div(p, w, diverge(snd(r1))) -> tr.div(p, w, o) proof
+          assume h2
+          have s2 := expand(h2, tr.div).2
+          have e1: ex t. o = diverge(t) by ex_intro({snd(x4)}, od)
+          show by defs(taut(e1, s2), tr.div)
+        qed
+        show by taut(c, nk, nc, dd)
       qed
       show by taut(same, div)
     qed
@@ -705,7 +777,7 @@ proof
     assume e
     show by defs(ex_intro({m}, {w2}, simp(e, hM, hmu, hr, h1, h2, h3, h4, h5, h6, h7, h8, h9, ha, keep(abi.world_pages, abi.world_matches, abi.World, x86_64_linux.Machine))), tr.ok)
   qed
-  have all_o: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+  have all_o: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
     fix o
     assume ho
     have e := mp(all_elim(g, {o}), ho)
@@ -771,13 +843,13 @@ proof
     qed
     show by taut(e, k1, k2)
   qed
-  have hk: all m2 r o2. q(m2) -> tr.rwd(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o2) || tr.crash(s, p, w, o2) proof
+  have hk: all m2 r o2. q(m2) -> tr.rwd(s, pair(m2, empty), r) -> tr.rmap(r, o2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o2) || tr.crash(s, p, w, o2) || tr.div(p, w, o2) proof
     fix m2 r o2
     assume hq hw hm
     have rf: tr.run_d(s, m2, o2) by defs(ex_intro({r}, taut(hw, hm)), tr.run_d)
     show := mp(all_elim(expand(mp(all_elim(h, {m2}), hq), tr.sim), {o2}), rf)
   qed
-  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+  have g: all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
     fix o
     assume ho
     obtain x4, hw hm from expand(ho, tr.run_d)
@@ -785,7 +857,7 @@ proof
     have u := mp(while_unroll[l0 := pair(m, empty), c := l. true, b := l o. tr.rbd(s, l, o),
       tr := l. fn_update(empty, "os.events", app(app(fst(l), "os"), "events")), r := x4], expand(hw, tr.rwd))
     // (the first pass faults: the run's outcome that fault)
-    have fl: tr.rbd(s, pair(m, empty), x4) && !is_ok(x4) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+    have fl: tr.rbd(s, pair(m, empty), x4) && !is_ok(x4) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
       assume hf
       have rb := mp(all_elim(hbd, {x4}), hf.1)
       have ef := mp(all_elim(hb_nok, {x4}), rb, hf.2)
@@ -793,30 +865,38 @@ proof
       have hm2 := rewrite(xe, hm)
       have oe: o = exc(x, e) by simp(expand(hm2, tr.rmap))
       have c := mp(all_elim(hx, {x}, {e}), q3)
-      have c2: tr.ub(s, v, p, w) || tr.ok(s, v, p, w, exc(x, e)) || tr.crash(s, p, w, exc(x, e)) by taut(c)
+      have c2: tr.ub(s, v, p, w) || tr.ok(s, v, p, w, exc(x, e)) || tr.crash(s, p, w, exc(x, e)) || tr.div(p, w, exc(x, e)) by taut(c)
       show := rewrite(sym(oe), c2)
     qed
     // (the loop goes on from m2)
     have on: (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && (ex r1. W(l1, r1) && fst(r1) = fst(x4) && (!(fst(x4) = 2) -> r1 = x4))) ->
-        tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+        tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
       assume e
       obtain l1, rbd1 e1b from e
       have rb1 := mp(all_elim(hbd, {ok(l1, empty)}), rbd1)
       obtain m2, l1e hq from mp(all_elim(hb_ok, {l1}), rb1)
       obtain r1, w0 f4 re4 from e1b
       have w1: tr.rwd(s, pair(m2, empty), r1) by defs(rewrite(l1e, w0), tr.rwd)
-      have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+      have same: !(fst(x4) = 2) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
         assume nd
         have re := mp(re4, nd)
         show := mp(mp(mp(all_elim(hk, {m2}, {r1}, {o}), hq), w1), rewrite(sym(re), hm))
       qed
-      have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) proof
+      have div: fst(x4) = 2 -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o) proof
         assume d
         have d1: fst(r1) = 2 by simp(f4, d)
         have c := mp(mp(mp(all_elim(hk, {m2}, {r1}, {diverge(snd(r1))}), hq), w1), defs(simp(d1), tr.rmap))
         have nk := all_elim(tr.ok_not_div, {s}, {v}, {p}, {w}, {snd(r1)})
         have nc := all_elim(tr.crash_not_div, {s}, {p}, {w}, {snd(r1)})
-        show by taut(c, nk, nc)
+        // (the spec's divergence from m2's: also from m's run)
+        have od: o = diverge(snd(x4)) by simp(expand(hm, tr.rmap), d)
+        have dd: tr.div(p, w, diverge(snd(r1))) -> tr.div(p, w, o) proof
+          assume h2
+          have s2 := expand(h2, tr.div).2
+          have e1: ex t. o = diverge(t) by ex_intro({snd(x4)}, od)
+          show by defs(taut(e1, s2), tr.div)
+        qed
+        show by taut(c, nk, nc, dd)
       qed
       show by taut(same, div)
     qed

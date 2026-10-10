@@ -416,9 +416,14 @@ impl<'e> Gen<'e> {
         let imp_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec!["tr.implements_at".into()]), &imp_goal, &[])?;
         let imp = self.close(imp_in.clone(), &cprem, &gvs)?;
         out.push((format!("{p}.implements"), imp));
-        // the ABI's contract, from the bridge's
-        let abi_in = self.run(&R::Apply(Box::new(f("tr.implements_abi")), vec![s_(&imp_in)]), &[])?;
-        let abi = self.close(abi_in, &cprem, &gvs)?;
+        // the ABI's contract, from the bridge's: given the spec diverges
+        // only where it raises (C1 matches a divergence without its trace)
+        let dr_t = self.mk("tr.div_raises", vec![spec_app.clone()]);
+        let dr = self.assume(&dr_t)?;
+        let abi_in = self.run(&R::Apply(Box::new(f("tr.implements_abi")), vec![s_(&dr), s_(&imp_in)]), &[])?;
+        let mut aprem = cprem.clone();
+        aprem.push(dr_t);
+        let abi = self.close(abi_in, &aprem, &gvs)?;
         out.push((format!("{p}.implements_abi"), abi));
         // as a callee: tr.callee_io from the spec's structure
         let mut eff = super::eff::Eff::new(self.env, &p)?;
