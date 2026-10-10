@@ -8,15 +8,7 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 set_size (current)
-
-A leaf: a slot's size recorded in its header (byte stores, one 32-bit
-store, a byte load).
-
-1. C1: whatever the generator lacks (stores at computed offsets).
-2. Its spec on the slot's header bytes, C2.
-
-### 1.2 The remaining functions
+### 1.1 The remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.

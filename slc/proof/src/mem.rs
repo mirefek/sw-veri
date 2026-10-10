@@ -90,7 +90,7 @@ impl State {
                 break;
             };
             let r = Seq::mem_read(env, lg, &refs, &u)?;
-            e = Seq::rewrite(env, &r, &e)?;
+            e = rewrite_rhs(env, &r, &e)?;
             // (cleaned at once: the value may be another read's address)
             e = self.mem_clean(env, lg, e, facts)?;
         }
@@ -161,7 +161,7 @@ impl State {
             for c in cands {
                 let goal = Term::app(env.builtins.eq, vec![w.clone(), c]);
                 if let Ok(p) = rel_arith(env, lg, &refs, &goal) {
-                    e = Seq::rewrite(env, &p, &e)?;
+                    e = rewrite_rhs(env, &p, &e)?;
                     break;
                 }
             }
@@ -215,6 +215,28 @@ impl State {
         };
         Seq::rewrite(env, &Seq::sym(env, &e)?, &p)
     }
+}
+
+/// e: `t = rhs` rewritten by r: `u = v` in rhs only (t may be u itself, a
+/// read resolved)
+fn rewrite_rhs(env: &Env, r: &Seq, e: &Seq) -> KResult<Seq> {
+    fn count(t: &Term, pat: &Term) -> usize {
+        if t == pat {
+            return 1;
+        }
+        match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => a.iter().map(|x| count(x, pat)).sum(),
+            _ => 0,
+        }
+    }
+    let (u, _) = eq_sides(env, r.concl()).ok_or_else(|| KernelError("mem: not an equation".into()))?;
+    let (l, rr) = eq_sides(env, e.concl()).ok_or_else(|| KernelError("mem: not an equation".into()))?;
+    let (cl, cr) = (count(&l, &u), count(&rr, &u));
+    if cl == 0 || cr == 0 {
+        return Seq::rewrite(env, r, e);
+    }
+    let occ: Vec<usize> = (cl + 1..=cl + cr).collect();
+    Seq::rewrite_at(env, r, e, &occ)
 }
 
 /// `goal` by arith from the facts mentioning its terms
@@ -390,13 +412,15 @@ impl State {
         if let Some(f) = using.iter().find(|f| f.concl() == h) {
             return Ok(f.clone());
         }
-        // (its record fields first)
+        // (its record fields first; else as written -- the facts' terms may
+        // be the unsimplified ones)
         let srs = self.step_rules(env, lg)?;
         let e = self.rsimp_eq(env, lg, h, &srs, 0)?;
         let h2 = rhs_of(env, e.concl());
         if &h2 != h {
-            let p = self.mem_discharge(env, lg, &h2, using, depth)?;
-            return Seq::rewrite(env, &Seq::sym(env, &e)?, &p);
+            if let Ok(p) = self.mem_discharge(env, lg, &h2, using, depth) {
+                return Seq::rewrite(env, &Seq::sym(env, &e)?, &p);
+            }
         }
         if depth < 40 {
             for name in env.mem_closures.clone() {

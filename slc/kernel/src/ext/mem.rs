@@ -69,10 +69,11 @@ fn names(t: &Term, arith: &[crate::term::SymId], out: &mut Vec<Term>) {
 impl Logic {
     /// the premises (their positions) mentioning a term of the goal, as
     /// `arith` reads terms: its maximal subterms not headed by an arithmetic
-    /// or propositional symbol
+    /// or propositional symbol -- and, transitively, of those premises (an
+    /// address's equation, then the bounds of its terms)
     pub fn arith_relevant(&self, env: &Env, premises: &[Term], goal: &Term) -> Vec<usize> {
         let arith_syms: Vec<_> = [
-            "int_add", "int_sub", "int_mul", "int_div", "int_mod", "int_pow", "pow2", "int_le", "int_lt", "bits_add", "bits_sub", "bits_of_int", "bits",
+            "int_add", "int_sub", "int_neg", "int_mul", "int_div", "int_mod", "int_pow", "pow2", "int_le", "int_lt", "bits_add", "bits_sub", "bits_of_int", "bits",
             "omega", "not", "and", "or",
         ]
         .iter()
@@ -81,13 +82,33 @@ impl Logic {
         .collect();
         let mut gn = Vec::new();
         names(goal, &arith_syms, &mut gn);
-        (0..premises.len())
-            .filter(|&i| {
+        let pns: Vec<Vec<Term>> = premises
+            .iter()
+            .map(|p| {
                 let mut pn = Vec::new();
-                names(&premises[i], &arith_syms, &mut pn);
-                pn.iter().any(|x| gn.contains(x))
+                names(p, &arith_syms, &mut pn);
+                pn
             })
-            .collect()
+            .collect();
+        let mut sel: Vec<bool> = pns.iter().map(|pn| pn.iter().any(|x| gn.contains(x))).collect();
+        // (through the equations selected: their other sides' terms)
+        let eq = env.builtins.eq;
+        let mut en = Vec::new();
+        for (i, p) in premises.iter().enumerate() {
+            if sel[i] && matches!(p.node(), Node::App(f, _) if *f == eq) {
+                for x in &pns[i] {
+                    if !gn.contains(x) && !en.contains(x) {
+                        en.push(x.clone());
+                    }
+                }
+            }
+        }
+        for (i, pn) in pns.iter().enumerate() {
+            if !sel[i] && pn.iter().any(|x| en.contains(x)) {
+                sel[i] = true;
+            }
+        }
+        (0..premises.len()).filter(|&i| sel[i]).collect()
     }
 
     /// `t = r`, t = `gimple.bytes_at(M, b, m)` resolved through M's writes

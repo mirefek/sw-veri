@@ -96,13 +96,16 @@ item is a short summary of finished work; details are in the files named.
   a_ctz_32, a_clz_32, get_slot_index, is_bouncing, get_stride, step_seq
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
-  free_meta and size_to_class. The rules cover:
+  free_meta, size_to_class and set_size. The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;
   - 8- to 64-bit loads and stores, 32- and 64-bit arithmetic on registers
     and homes;
   - signed and unsigned branches;
+  - stores through a register's pointer, a register holding fewer bytes
+    used as a wider one, the stored low byte of 32-bit arithmetic (by the
+    words' arithmetic modulo 2^8);
   - an aggregate's zero-initialization (`pxor` and SSE stores against
     GIMPLE's `st_bytes`, `proofs/translate_zero.core`).
 - **Calls in C1** (`tr.call`, `tr.call1` in `proofs/translate_call.core`):
@@ -139,7 +142,10 @@ item is a short summary of finished work; details are in the files named.
     entry tz(x)) and a_clz_32 from a_ctz_32's contract (`ms.a_clz_32_c2`:
     smearing to 2^p, p x's top bit), proofs/mallocng_bits.core; with them
     size_to_class with musl's a_clz_32 and a_ctz_32
-    (`ms.size_to_class_c2_linked`).
+    (`ms.size_to_class_c2_linked`);
+  - set_size (`ms.set_size_c2`, and as a C function value): the reserved
+    count in the slot's header byte, its word at the slot's end, case by
+    case of the count (0, below 5, 5 and more), proofs/mallocng_slots.core.
 
   The generic call lemmas (monotonicity, inversion under a contract, and
   `gc.contract_call` / `gc.contract_call1`: a call under a callee's

@@ -521,7 +521,9 @@ read hits is decided by a fixed algorithm.
 
 The facts are what a precondition provides: bounds, alignment (`al8`
 expanded to `x % 8 = 0`), disequalities. Each `arith` check gets the facts
-mentioning its terms.
+mentioning its terms, and through the equations among them, the facts on
+their other sides' terms (an address `e + sval(d)` given as `sval(d) = -r`,
+then r's bounds).
 
 ### Rules without a goal
 

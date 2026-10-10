@@ -120,6 +120,45 @@ fn free_meta_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
   return (any bits[64], any bits[64])
 }
 
+///////////////////////////////////////////////////////////////////////
+//  Slots
+
+// a byte, a 32-bit word written
+fn wr8(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 1, v) }
+fn wr32(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 4, v) }
+
+// set_size(p, end, n): a slot's n bytes at p, its end at end; the r = end -
+// p - n bytes after them reserved, recorded: the header byte at p - 3 keeps
+// its low 5 bits, its top 3 the count -- r, or 5 for r >= 5, the count then
+// the 32-bit word at end - 4 and a 0 byte before it; the first reserved
+// byte (at p + n), if any, 0. The pointers: below 2^63 (their difference
+// signed), p past its header; r below 2^31 (an int).
+fn reserved(p: Addr, end: Addr, n: bits[64]) -> int = uint(end) - uint(p) - uint(n)
+
+pred set_size_pre(vm: Vm, objs: Set[nat], p: Addr, end: Addr, n: bits[64]) =
+  4 <= uint(p) && uint(p) + uint(n) <= uint(end) && uint(end) < 2^63 && reserved(p, end, n) < 2^31 &&
+  usable(vm, objs, uint(p) - 3, 1, false) && usable(vm, objs, uint(p) - 3, 1, true) &&
+  (reserved(p, end, n) > 0 -> usable(vm, objs, uint(p) + uint(n), 1, true)) &&
+  (reserved(p, end, n) >= 5 -> usable(vm, objs, uint(end) - 5, 5, true))
+
+fn set_size_vm(vm: Vm, p: Addr, end: Addr, n: bits[64]) -> Vm {
+  let r = reserved(p, end, n)
+  let v1 = if r > 0 { wr8(vm, p + n, 0) } else { vm }
+  let v2 = if r >= 5 { wr8(wr32(v1, end - 4, r), end - 5, 0) } else { v1 }
+  return wr8(v2, p - 3, bytes_at(vm, p - 3, 1) % 32 + 32 * (if r >= 5 { 5 } else { r }))
+}
+
+proc[World] set_size_spec(p: bits[64], end: bits[64], n: bits[64]) {
+  require set_size_pre(vm, objs, p, end, n)
+  either { overflow() } or { vm := set_size_vm(vm, p, end, n) }
+}
+
+fn set_size_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  set_size_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  return (any bits[64], any bits[64])
+}
+
 // dequeue_head(phead): the list's head, dequeued (if any), returned. The
 // call to dequeue needs the thread pointer sound (the ABI's, at every
 // call).
