@@ -45,8 +45,6 @@ descriptor and the auxiliary vector.
 Frictions met while writing the proofs, and the features they ask for,
 from the proof writer's side. Taken up in batches between functions.
 
-- `rewrite` / `rsimp` under binders (now a fact whose terms sit inside
-  `letin`s needs a detour: ms.enframe_c2).
 - The C function value wrappers (`*_fun_c2`) and the compositions are
   boilerplate, one template each: a generic lemma, or generated with the
   C1 certificates.
