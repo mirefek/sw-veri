@@ -40,26 +40,33 @@ musl's `_start` … `__libc_start_main` reaches `main` with the invariant
 holding for the empty heap, owning only static data, the thread
 descriptor and the auxiliary vector.
 
-## 4. Proof language
+## 4. Usability and speed: the proof language and the pipeline
 
-Tactic ideas, collected as proofs suggest them and done in batches.
+Frictions met while writing the proofs, and the features they ask for,
+from the proof writer's side. Taken up in batches between functions.
 
-## 5. The pipeline: usability and speed
-
-Open items, to take up between functions when one gets in the way.
-
+- `step`:
+  - accept its `with` facts in any order (now each must come in the order
+    used);
+  - take a branch condition in any equivalent form (now the exact one,
+    e.g. `!!(x = 0)` for an else branch);
+  - go on into an `if` nested in a branch (now the inner `ex` is left as
+    the left conjunct of the branch's continuation, opened by `obtain` and
+    its branch picked by hand: ms.is_bouncing_c2);
+  - a loop rule: from a `while_rel` reached by `step`, an invariant and a
+    variant, the loop's exit (now `while_var` is instantiated by hand, the
+    loop body copied out as a `let`: ms.step_seq_c2).
+- `rewrite` / `rsimp` under binders (now a fact whose terms sit inside
+  `letin`s needs a detour: ms.enframe_c2).
+- The C function value wrappers (`*_fun_c2`) and the compositions are
+  boilerplate, one template each: a generic lemma, or generated with the
+  C1 certificates.
 - SL: design a syntax for properties; add qualified names and ambiguity
   errors to name resolution; choose the language's name.
 - Code: name the C1 engine's instruction rows instead of numbering them,
   and derive its `simp(L, ..)` counts; make the kernel `Env`'s fields
   private; make the interpreter check literal widths as the elaborator
   does.
-- `step`: accept its `with` facts in any order (now each must come in the
-  order used); take a branch condition in any equivalent form (now the
-  exact one, e.g. `!!(x = 0)` for an else branch); go on into an `if`
-  nested in a branch (now the inner `ex` is left as the left conjunct of
-  the branch's continuation, opened by `obtain` and its branch picked by
-  hand: ms.is_bouncing_c2).
 - Checker speed, if it becomes a problem: generate step theorems, memoise
   normal forms in `taut` / `simp`, check files in parallel.
 - C1 joins (`slc/cli/src/c1/join.rs`): cut the repeated walks. Each
