@@ -982,10 +982,17 @@ impl State {
             }
             // print P: shows what P proves (and the current goal), for writing proofs
             "print" => {
+                // (the fact first, then what it rests on and the goal, each on
+                // its own line: a cut line keeps the fact)
                 let s = self.eval(env, lg, &parse_pe(rest)?)?;
-                eprintln!("line {}: {}", line, s.show(env));
+                let p = Printer::new(env);
+                eprintln!("line {}: {}", line, p.term(s.concl()));
+                if !s.hyps().is_empty() {
+                    let hs: Vec<String> = s.hyps().iter().map(|h| p.term(h)).collect();
+                    eprintln!("  from: {}", hs.join(", "));
+                }
                 if let Some(g) = &self.goal {
-                    eprintln!("  goal: {}", Printer::new(env).term(g));
+                    eprintln!("  goal: {}", p.term(g));
                 }
             }
             "step" => self.step_run(env, lg, rest)?,

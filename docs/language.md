@@ -449,7 +449,7 @@ let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_b
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)
 flip [in h]               turn the equation / disequation around
 rsimp e1, .. [in h]       simplify the goal (or h) with rsimp
-print P                   show what P proves, and the goal
+print P                   show what P proves, then (on their own lines) its hypotheses and the goal
 ```
 
 `assume` and `fix` take formulas from the goal, so write a formula only
