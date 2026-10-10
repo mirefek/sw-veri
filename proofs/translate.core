@@ -280,12 +280,13 @@ qed
 
 // A crash (the stack overflowing): the machine faults where its stack could
 // not grow (abi.overflow_at, at the fault), its I/O so far (input kept, events grown since s) that of
-// an outcome of the spec from w where the I/O stops -- a stack overflow, a
-// return, a divergence (abi.overflow_ok, from the spec's point w)
-def tr.ovf(p, w, os) := ex x0. x0 in outcome_type(rec_and(abi.World, single(empty)), cart(bits(64), bits(64))) && (runs(p, w, x0) &&
-  ite(fst(x0) = 0, app(app(fst(snd(x0)), "os"), "events") = app(os, "events"),
-    ite(fst(x0) = 1, snd(snd(x0)) = exc_val("stack_overflow", empty) && app(app(fst(snd(x0)), "os"), "events") = app(os, "events"),
-      app(snd(x0), "os.events") = app(os, "events"))))
+// an outcome of the spec from w where the I/O stops -- a stack overflow, or
+// a divergence (abi.overflow_ok's, from the spec's point w; a divergence's
+// trace not compared, as tr.div's; no return: the rules' crashes come
+// from overflows)
+def tr.ovf(p, w, os) :=
+  (ex x. x in rec_and(abi.World, single(empty)) && runs(p, w, exc(x, exc_val("stack_overflow", empty))) && app(app(x, "os"), "events") = app(os, "events")) ||
+  (ex t. runs(p, w, diverge(t)))
 def tr.crash(s, p, w, o) :=
   ex m1 a k. oe: (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a) ||
       o = exc(m1, exc_val("stack_fault", empty))) && m1M: m1 in x86_64_linux.Machine && ab: a in bits(64) &&
@@ -298,8 +299,18 @@ def tr.div(p, w, o) := (ex t. o = diverge(t)) && (ex t2. runs(p, w, diverge(t2))
 
 def tr.sim(s, v, p, w, m) := all o. tr.run_d(s, m, o) -> tr.ub(s, v, p, w) || tr.ok(s, v, p, w, o) || tr.crash(s, p, w, o) || tr.div(p, w, o)
 
-// (at the entry: the claim's crash is the ABI's)
-theorem tr.crash_at: all spec args s v mem o. tr.crash(s, app(spec, args), abi.view(s, v, mem), o) -> abi.crashes_at(spec, args, v, mem, s, o)
+// a crash as the ABI's (abi.crashes_at), its I/O by tr.ovf (a divergence's
+// trace not compared)
+def tr.overflow_t(w, spec, args, os) := input: app(app(w, "os"), "input") = app(os, "input") &&
+  events: (app(app(w, "os"), "events") = app(os, "events") || tr.ovf(app(spec, args), w, os))
+def tr.crashes_t(spec, args, objs, mem, s, o) :=
+  ex m1 a k. oe: (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a) ||
+      o = exc(m1, exc_val("stack_fault", empty))) && m1M: m1 in x86_64_linux.Machine && ab: a in bits(64) &&
+    sev: subset(app(app(s, "os"), "events"), app(app(m1, "os"), "events")) &&
+    ovk: tr.overflow_t(abi.view(s, objs, mem), spec, args, app(m1, "os"))
+
+// (at the entry: the claim's crash)
+theorem tr.crash_at: all spec args s v mem o. tr.crash(s, app(spec, args), abi.view(s, v, mem), o) -> tr.crashes_t(spec, args, v, mem, s, o)
 proof
   fix spec args s v mem o
   assume h
@@ -313,8 +324,8 @@ proof
     have eev: app(app(abi.view(s, v, mem), "os"), "events") = app(app(s, "os"), "events") by simp()
     show := trans(eev, e)
   qed
-  have ov: abi.overflow_ok(rec_and(abi.World, single(empty)), abi.view(s, v, mem), spec, args, app(m1, "os")) by defs(taut(hin, expand(ho, tr.ovf), c2), abi.overflow_ok)
-  show by defs(ex_intro({m1}, {a}, {k}, taut(h3, ov)), abi.crashes_at)
+  have ov: tr.overflow_t(abi.view(s, v, mem), spec, args, app(m1, "os")) by defs(taut(hin, ho, c2), tr.overflow_t)
+  show by defs(ex_intro({m1}, {a}, {k}, taut(h3, ov)), tr.crashes_t)
 qed
 
 // (at the entry: the claim's raise is the ABI's)
@@ -375,7 +386,7 @@ def tr.matches_t(spec, args, objs, mem, s, o) :=
     abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), objs, abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
     app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
     abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) ||
-  abi.crashes_at(spec, args, objs, mem, s, o) || tr.div(app(spec, args), abi.view(s, objs, mem), o)
+  tr.crashes_t(spec, args, objs, mem, s, o) || tr.div(app(spec, args), abi.view(s, objs, mem), o)
 
 // a spec diverges only where it raises (undefined): so for a contract,
 // whose effect has no loop -- the ABI's claim then has no divergence to
@@ -383,11 +394,67 @@ def tr.matches_t(spec, args, objs, mem, s, o) :=
 def tr.div_raises(spec) := all args w t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> runs(app(spec, args), w, diverge(t)) ->
   (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(x) && runs(app(spec, args), w, exc(x, e)))
 
+// (the claim's crash is the ABI's, or the spec diverges where the I/O
+// stops -- so it raises, for a spec that diverges only so)
+theorem tr.crashes_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
+  tr.crashes_t(spec, args, objs, mem, s, o) -> abi.crashes_at(spec, args, objs, mem, s, o) || abi.raises_at(spec, args, objs, mem, s)
+proof
+  fix spec args objs mem s o
+  assume hd hA hvW hvu h
+  obtain m1 a k, {oe, m1M, ab, sev, ovk} from expand(h, tr.crashes_t)
+  have inp ev := expand(ovk, tr.overflow_t)
+  let W := abi.view(s, objs, mem)
+  have cr: abi.overflow_ok(rec_and(abi.World, single(empty)), W, spec, args, app(m1, "os")) -> abi.crashes_at(spec, args, objs, mem, s, o) proof
+    assume ov
+    show by defs(ex_intro({m1}, {a}, {k}, taut(oe, m1M, ab, sev, ov)), abi.crashes_at)
+  qed
+  have e1: app(app(W, "os"), "events") = app(app(m1, "os"), "events") -> abi.overflow_ok(rec_and(abi.World, single(empty)), W, spec, args, app(m1, "os")) proof
+    assume e
+    show by defs(taut(inp, e), abi.overflow_ok)
+  qed
+  // (an overflow: the ABI's witness)
+  have e2: (ex x. x in rec_and(abi.World, single(empty)) && runs(app(spec, args), W, exc(x, exc_val("stack_overflow", empty))) && app(app(x, "os"), "events") = app(app(m1, "os"), "events")) ->
+      abi.crashes_at(spec, args, objs, mem, s, o) proof
+    assume e
+    obtain x, hx hr hev from e
+    have ou: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
+    have ot := mp(mp(exc_outcome_type[s := rec_and(abi.World, single(empty)), v := cart(bits(64), bits(64)), x := x, e := exc_val("stack_overflow", empty)], hx), ou)
+    have it1 := apply(tr.ite_f, {fst(exc(x, exc_val("stack_overflow", empty))) = 0}, {app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(app(m1, "os"), "events")},
+      {ite(fst(exc(x, exc_val("stack_overflow", empty))) = 1, snd(snd(exc(x, exc_val("stack_overflow", empty)))) = exc_val("stack_overflow", empty) && app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(app(m1, "os"), "events"),
+        app(snd(exc(x, exc_val("stack_overflow", empty))), "os.events") = app(app(m1, "os"), "events"))}, simp())
+    have it2 := apply(tr.ite_t, {fst(exc(x, exc_val("stack_overflow", empty))) = 1}, {snd(snd(exc(x, exc_val("stack_overflow", empty)))) = exc_val("stack_overflow", empty) && app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(app(m1, "os"), "events")},
+      {app(snd(exc(x, exc_val("stack_overflow", empty))), "os.events") = app(app(m1, "os"), "events")}, simp())
+    have cc: snd(snd(exc(x, exc_val("stack_overflow", empty)))) = exc_val("stack_overflow", empty) && app(app(fst(snd(exc(x, exc_val("stack_overflow", empty)))), "os"), "events") = app(app(m1, "os"), "events") by simp(hev)
+    have iv := rewrite(sym(trans(it1, it2)), cc)
+    have ex1: ex x1. x1 in outcome_type(rec_and(abi.World, single(empty)), cart(bits(64), bits(64))) && (runs(app(spec, args), W, x1) &&
+        ite(fst(x1) = 0, app(app(fst(snd(x1)), "os"), "events") = app(app(m1, "os"), "events"),
+          ite(fst(x1) = 1, snd(snd(x1)) = exc_val("stack_overflow", empty) && app(app(fst(snd(x1)), "os"), "events") = app(app(m1, "os"), "events"),
+            app(snd(x1), "os.events") = app(app(m1, "os"), "events"))))
+      by ex_intro({exc(x, exc_val("stack_overflow", empty))}, taut(ot, hr, iv))
+    have ov: abi.overflow_ok(rec_and(abi.World, single(empty)), W, spec, args, app(m1, "os")) by defs(taut(inp, ex1), abi.overflow_ok)
+    show := mp(cr, ov)
+  qed
+  // (a divergence: the spec raises there)
+  have e3: (ex t. runs(app(spec, args), W, diverge(t))) -> abi.raises_at(spec, args, objs, mem, s) proof
+    assume e
+    obtain t, hr from e
+    have r := mp(all_elim(expand(hd, tr.div_raises), {args}, {W}, {t}), hA, hvW, hvu, hr)
+    show by defs(r, abi.raises_at)
+  qed
+  have e4: tr.ovf(app(spec, args), W, app(m1, "os")) -> (ex x. x in rec_and(abi.World, single(empty)) && runs(app(spec, args), W, exc(x, exc_val("stack_overflow", empty))) &&
+      app(app(x, "os"), "events") = app(app(m1, "os"), "events")) || (ex t. runs(app(spec, args), W, diverge(t))) proof
+    assume hv
+    show by taut(expand(hv, tr.ovf))
+  qed
+  show by taut(ev, e1, cr, e2, e3, e4)
+qed
+
 theorem tr.matches_t_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
   tr.matches_t(spec, args, objs, mem, s, o) -> abi.matches(spec, args, objs, mem, s, o)
 proof
   fix spec args objs mem s o
   assume hd hA hvW hvu mt
+  have ca := apply(tr.crashes_abi, {spec}, {args}, {objs}, {mem}, {s}, {o}, hd, hA, hvW, hvu)
   // (a divergence: the spec raises there too)
   have dr: tr.div(app(spec, args), abi.view(s, objs, mem), o) -> abi.raises_at(spec, args, objs, mem, s) proof
     assume d
@@ -395,11 +462,11 @@ proof
     have r := mp(all_elim(expand(hd, tr.div_raises), {args}, {abi.view(s, objs, mem)}, {t2}), hA, hvW, hvu, rd)
     show by defs(r, abi.raises_at)
   qed
-  have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, app(spec, args), abi.view(s, objs, mem), o) || abi.crashes_at(spec, args, objs, mem, s, o) ||
+  have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, app(spec, args), abi.view(s, objs, mem), o) || tr.crashes_t(spec, args, objs, mem, s, o) ||
       tr.div(app(spec, args), abi.view(s, objs, mem), o)
     by defs(taut(expand(mt, tr.matches_t)), tr.ok)
   have oa := all_elim(tr.ok_abi, {s}, {objs}, {app(spec, args)}, {abi.view(s, objs, mem)}, {o})
-  show by defs(taut(mt2, oa, dr), abi.matches)
+  show by defs(taut(mt2, oa, dr, ca), abi.matches)
 qed
 
 // ... for the disciplined run itself
@@ -555,9 +622,7 @@ proof
     obtain m1 a k0, c3 from expand(hc, tr.crash)
     have o2: tr.ovf(p2, w2, app(m1, "os")) -> tr.ovf(p, w, app(m1, "os")) proof
       assume hv
-      obtain x0, c4 from expand(hv, tr.ovf)
-      have r1 := mp(all_elim(r, {x0}), c4.2.1)
-      show by defs(ex_intro({x0}, taut(c4, r1)), tr.ovf)
+      show by defs(simp(r, expand(hv, tr.ovf)), tr.ovf)
     qed
     show by defs(ex_intro({m1}, {a}, {k0}, taut(c3, o2)), tr.crash)
   qed
