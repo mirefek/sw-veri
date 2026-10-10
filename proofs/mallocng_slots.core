@@ -1,4 +1,5 @@
-// C2 of malloc.c's slot functions (layers/mallocng_specs.sl): set_size.
+// C2 of malloc.c's slot functions (layers/mallocng_specs.sl): set_size,
+// get_stride.
 // Checked after proofs/mallocng_c2.core.
 
 // ----------------------------------------------------------------------
@@ -276,4 +277,395 @@ proof
     show by apply(tr.runs_intro, pu, taut(b2))
   qed
   show by taut(r, c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  get_stride: a group's slot size, from struct meta's bitfield word at
+//  g + 32 (read in parts by GIMPLE: its byte, 2 bytes, the word, 7 bytes
+//  from g + 33) and the size classes' table
+
+// get_stride's reads of struct meta's bitfield word at g + 32 (the byte, 2
+// bytes, the word, 7 bytes from g + 33), as the spec's word W (mword)
+theorem ms.gs_word: all vm g. app(vm, "bytes") in fn_space(bits(64), bits(8)) -> g in bits(64) -> int_le(int_add(g, 40), int_pow(2, 64)) ->
+  int_add(g, 32) = bits_add(64, g, 32) &&
+  gimple.bytes_at(vm, int_add(g, 32), 8) in bits(64) &&
+  bits_and(8, bits_of_int(8, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 8))), 31) = int_mod(gimple.bytes_at(vm, int_add(g, 32), 8), 32) &&
+  bits_and(64, bits_of_int(64, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 8), int_pow(2, 0)), int_pow(2, 64))), bits_neg(64, 4096)) =
+    int_mul(int_div(gimple.bytes_at(vm, int_add(g, 32), 8), 4096), 4096) &&
+  bits_of_int(52, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 33), 7), int_pow(2, 4)), int_pow(2, 52))) = int_div(gimple.bytes_at(vm, int_add(g, 32), 8), 4096) &&
+  bits_of_int(6, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 2), int_pow(2, 6)), int_pow(2, 6))) = int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 8), 64), 64)
+proof
+  fix vm g
+  assume hb hg h40
+  let A := int_add(g, 32)
+  let W := gimple.bytes_at(vm, A, 8)
+  let B1 := gimple.bytes_at(vm, A, 1)
+  let B2 := gimple.bytes_at(vm, A, 2)
+  let B7 := gimple.bytes_at(vm, int_add(g, 33), 7)
+  let B6 := gimple.bytes_at(vm, int_add(g, 34), 6)
+  have a32: A = bits_add(64, g, 32) by defs(arith(hg, h40), bits_add, pow2)
+  have ab: A in bits(64) by arith(hg, h40)
+  have a33: bits_add(64, A, 1) = int_add(g, 33) by defs(arith(hg, h40), bits_add, pow2)
+  have a34: bits_add(64, A, 2) = int_add(g, 34) by defs(arith(hg, h40), bits_add, pow2)
+  // (the word: the byte and 7 above it; 2 bytes and 6 above them)
+  have s17 := mp(all_elim(g.bytes_split, {vm}, {A}, {1}, {7}), ab, simp(), simp())
+  have s26 := mp(all_elim(g.bytes_split, {vm}, {A}, {2}, {6}), ab, simp(), simp())
+  have w17: W = int_add(B1, int_mul(256, B7)) by simp(s17, a33)
+  have w26: W = int_add(B2, int_mul(65536, B6)) by simp(s26, a34)
+  have b1o b1l := mp(all_elim(g.bytes_bound, {vm}, {A}, {1}), hb, simp())
+  have b2o b2l := mp(all_elim(g.bytes_bound, {vm}, {A}, {2}), hb, simp())
+  have b7o b7l := mp(all_elim(g.bytes_bound, {vm}, {int_add(g, 33)}, {7}), hb, simp())
+  have b6o b6l := mp(all_elim(g.bytes_bound, {vm}, {int_add(g, 34)}, {6}), hb, simp())
+  have wo wl := mp(all_elim(g.bytes_bound, {vm}, {A}, {8}), hb, simp())
+  have b1v: int_lt(B1, 256) by simp(b1l)
+  have b2v: int_lt(B2, 65536) by simp(b2l)
+  have b7v: int_lt(B7, 72057594037927936) by simp(b7l)
+  have b6v: int_lt(B6, 281474976710656) by simp(b6l)
+  have wv: int_lt(W, 18446744073709551616) by simp(wl)
+  have pw: int_pow(2, 0) = 1 && int_pow(2, 4) = 16 && int_pow(2, 6) = 64 && int_pow(2, 8) = 256 && int_pow(2, 52) = 4503599627370496 && int_pow(2, 64) = 18446744073709551616
+    by simp()
+  // (the byte's low 5 bits: W's)
+  have bb1: B1 in bits(8) by arith(b1o, b1v)
+  have e1L: int_mod(int_div(B1, 1), 256) = B1 by arith(b1o, b1v)
+  have e1: bits_of_int(8, int_mod(int_div(B1, int_pow(2, 0)), int_pow(2, 8))) = B1 by simp(pw, e1L, bb1)
+  have m1: bits_and(8, B1, 31) = int_mod(B1, 32) by bitwise({8}, bb1)
+  have m1w: int_mod(B1, 32) = int_mod(W, 32) by arith(w17, b1o, b1v, b7o, b7v)
+  have g1: bits_and(8, bits_of_int(8, int_mod(int_div(B1, int_pow(2, 0)), int_pow(2, 8))), 31) = int_mod(W, 32) by simp(e1, m1, m1w)
+  // (the word above its low 12 bits)
+  have wb: W in bits(64) by arith(wo, wv)
+  have e2L: int_mod(int_div(W, 1), 18446744073709551616) = W by arith(wo, wv)
+  have e2: bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64))) = W by simp(pw, e2L, wb)
+  have nm: bits_neg(64, 4096) = bits_not(64, 4095) by simp()
+  have m2: bits_and(64, W, bits_not(64, 4095)) = int_mul(int_div(W, 4096), 4096) by bitwise({64}, wb)
+  have g2: bits_and(64, bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64))), bits_neg(64, 4096)) = int_mul(int_div(W, 4096), 4096) by simp(e2, nm, m2)
+  // (maplen: 7 bytes from g + 33 shifted by 4 -- W's bits from 12)
+  have g3L: int_mod(int_div(B7, 16), 4503599627370496) = int_div(W, 4096) by arith(w17, b1o, b1v, b7o, b7v)
+  have g3b: int_div(W, 4096) in bits(52) by arith(wo, wv)
+  have g3: bits_of_int(52, int_mod(int_div(B7, int_pow(2, 4)), int_pow(2, 52))) = int_div(W, 4096) by simp(pw, g3L, g3b)
+  // (sizeclass: 2 bytes' bits 6..11 -- W's)
+  have g4L: int_mod(int_div(B2, 64), 64) = int_mod(int_div(W, 64), 64) by arith(w26, b2o, b2v, b6o, b6v)
+  have g4b: int_mod(int_div(W, 64), 64) in bits(6) by arith(wo, wv)
+  have g4: bits_of_int(6, int_mod(int_div(B2, int_pow(2, 6)), int_pow(2, 6))) = int_mod(int_div(W, 64), 64) by simp(pw, g4L, g4b)
+  show by taut(a32, wb, g1, g2, g3, g4)
+qed
+
+theorem ms.sizeclass_det: all s p. s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 32, 2, false) ->
+  g.det(c_src_malloc_mallocng_malloc.meta_sizeclass(p), s, ok(s, bits_of_int(6, int_mod(int_div(gimple.bytes_at(app(s, "vm"), int_add(p, 32), 2), int_pow(2, 6)), int_pow(2, 6)))))
+proof
+  fix s p
+  assume hs hp hd
+  have ld := apply(g.ldbf_det, {s}, {p}, {32}, {2}, {6}, {6}, hs, hp, simp(), hd)
+  show proof
+    fix o
+    assume hr
+    step oe from hr with ld
+    show oe
+  qed
+qed
+
+theorem ms.maplen_det: all s p. s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 33, 7, false) ->
+  g.det(c_src_malloc_mallocng_malloc.meta_maplen(p), s, ok(s, bits_of_int(52, int_mod(int_div(gimple.bytes_at(app(s, "vm"), int_add(p, 33), 7), int_pow(2, 4)), int_pow(2, 52)))))
+proof
+  fix s p
+  assume hs hp hd
+  have ld := apply(g.ldbf_det, {s}, {p}, {33}, {7}, {4}, {52}, hs, hp, simp(), hd)
+  show proof
+    fix o
+    assume hr
+    step oe from hr with ld
+    show oe
+  qed
+qed
+
+theorem ms.imul_16: tr.imul_by(16)
+proof
+  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, 16)), 0) = bits_mul(32, y, 16) proof
+    fix y
+    assume hy: y in bits(32)
+    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 16), 0) = bits_mul(32, y, 16) proof
+      assume hl: int_lt(y, 2147483648)
+      show by defs(simp(hy, hl), bits_add, bits_mul, sint)
+    qed
+    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), 16), 0) = bits_mul(32, y, 16) proof
+      assume hl: !int_lt(y, 2147483648)
+      have e: int_mod(int_mul(int_sub(y, 4294967296), 16), 4294967296) = int_mod(int_mul(y, 16), 4294967296) by arith(hy)
+      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)
+    qed
+    have e: bits_add(32, int_mul(sint(32, y), 16), 0) = bits_mul(32, y, 16) by taut(c1, c2)
+    show by simp(e)
+  qed
+  show by defs(g, tr.imul_by)
+qed
+
+// (a unit times a class's entry, as GIMPLE computes it: a 32-bit product,
+// sign-extended)
+theorem ms.sext_mul16: all x. x in omega -> int_le(x, 8191) -> bits_sext(32, 64, bits_mul(32, x, 16)) = int_mul(16, x)
+proof
+  fix x
+  assume ho hl
+  have m: bits_mul(32, x, 16) = int_mul(16, x) by defs(arith(ho, hl), bits_mul, pow2)
+  have sx := apply(ms.sint_small, (int_mul(16, x) in omega by arith(ho)), (int_lt(int_mul(16, x), 2147483648) by arith(ho, hl)))
+  have t31: int_mul(16, x) in bits(31) by arith(ho, hl)
+  show by simp(m, t31)
+qed
+
+theorem ms.gs_run: all g s o. g in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.get_stride_pre(app(s, "vm"), app(s, "objs"), c_src_malloc_mallocng_malloc.__malloc_size_classes, g) ->
+  runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(app(s, "vm"), g)))
+proof
+  fix g s o
+  assume hg hw hu hpre hr
+  let V0 := app(s, "vm")
+  let O := app(s, "objs")
+  let W := gimple.bytes_at(V0, int_add(g, 32), 8)
+  have gnz g40 u8 rest := expand(hpre, mallocng_specs.get_stride_pre)
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have a32 wb g1 g2 g3 g4 := mp(all_elim(ms.gs_word, {V0}, {g}), pb, hg, g40)
+  have g32: int_lt(int_add(g, 32), pow2(64)) by defs(arith(g40), pow2)
+  have g33: int_lt(int_add(g, 33), pow2(64)) by defs(arith(g40), pow2)
+  have u1 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(g, 32)}, {8}, {int_add(g, 32)}, {1}, {false}), arith(hg), arith(hg), arith(), arith(), u8)
+  have u2 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(g, 32)}, {8}, {int_add(g, 32)}, {2}, {false}), arith(hg), arith(hg), arith(), arith(), u8)
+  have u7 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(g, 32)}, {8}, {int_add(g, 33)}, {7}, {false}), arith(hg), arith(hg), arith(), arith(), u8)
+  have md1: g.mem_defined(s, g, 32, 1, false) by simp(gnz, u1, g32)
+  have md2: g.mem_defined(s, g, 32, 2, false) by simp(gnz, u2, g32)
+  have md7: g.mem_defined(s, g, 33, 7, false) by simp(gnz, u7, g33)
+  have md8: g.mem_defined(s, g, 32, 8, false) by simp(gnz, u8, g32)
+  have ld1 := apply(g.ldbf_det, {s}, {g}, {32}, {1}, {0}, {8}, hu, hg, simp(), md1)
+  have ld8 := apply(g.ldbf_det, {s}, {g}, {32}, {8}, {0}, {64}, hu, hg, simp(), md8)
+  have mld := apply(ms.maplen_det, {s}, {g}, hu, hg, md7)
+  have scd := apply(ms.sizeclass_det, {s}, {g}, hu, hg, md2)
+  // (the spec's word: W)
+  have mw: mallocng_specs.mword(V0, g) = W by defs(simp(a32), mallocng_specs.mword)
+  // a single slot mapped on its own
+  have cm: int_mod(W, 32) = 0 -> !(int_div(W, 4096) = 0) -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(V0, g))) proof
+    assume h1 h2
+    have G1: bits_and(8, bits_of_int(8, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 8))), 31) = 0 by simp(g1, h1)
+    have T4: !(bits_and(64, bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64))), bits_neg(64, 4096)) = 0) by simp(g2, h2)
+    step x2 x4 x6 i1, c1 from hr with ld1, G1, ld8
+    have cL cR := c1
+    step i3, c2 from cL with T4, mld
+    let M := bits_of_int(52, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 33), 7), int_pow(2, 4)), int_pow(2, 52)))
+    let VAL := bits_add(64, bits_mul(64, M, 4096), bits_neg(64, 16))
+    have r2 := rewrite(c2, cR)
+    have c3: o = ok(s, VAL) by simp(r2)
+    // (the value: maplen pages less a unit)
+    let Q := int_div(W, 4096)
+    have qb: Q in omega && int_lt(Q, 4503599627370496) by arith(wb)
+    have v1: VAL = bits_add(64, bits_mul(64, Q, 4096), bits_neg(64, 16)) by simp(g3)
+    have v2: bits_add(64, bits_mul(64, Q, 4096), bits_neg(64, 16)) = int_sub(int_mul(Q, 4096), 16) by defs(arith(qb, h2), bits_add, bits_mul, bits_neg, bits_of_int, pow2)
+    have ms1: mallocng_specs.mapped_single(V0, g) by defs(simp(mw, h1, h2), mallocng_specs.mapped_single)
+    have sw: mallocng_specs.stride_w(V0, g) = int_sub(int_mul(Q, 4096), 16) by defs(simp(ms1, mw), mallocng_specs.stride_w, mallocng.UNIT)
+    have sb: bits_of_int(64, int_sub(int_mul(Q, 4096), 16)) = int_sub(int_mul(Q, 4096), 16) by defs(arith(qb, h2), bits_of_int, pow2)
+    show by simp(c3, v1, v2, sw, sb)
+  qed
+  // the class's entry (the group not a single slot mapped on its own)
+  let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
+  let SC6 := bits_of_int(6, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 2), int_pow(2, 6)), int_pow(2, 6)))
+  let C := int_mod(int_div(W, 64), 64)
+  let A16 := bits_of_int(16, app(mallocng.size_classes, sint(32, SC6)))
+  have sctb: SCT in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+  have sctnz: !(SCT = 0) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+  have ccl: !mallocng_specs.mapped_single(V0, g) -> runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(V0, g))) proof
+    assume hnm hr2
+    have c48 tok := mp(rest, hnm)
+    have c48w: int_lt(C, 48) by simp(c48, mw)
+    have co: C in omega by arith(wb)
+    have e6: SC6 = C by simp(g4)
+    have sC := apply(ms.sint_small, co, (int_lt(C, 2147483648) by arith(c48w, co)))
+    have sI: sint(32, SC6) = C by simp(e6, sC)
+    have I32: SC6 in bits(32) by simp(e6, co, c48w)
+    have rd ld := apply(ms.tab_rd, {s}, {SCT}, {SC6}, {mallocng.size_classes}, hu, sctb, sctnz, I32, (int_le(0, sint(32, SC6)) by simp(sI, co)),
+      (int_lt(sint(32, SC6), seq_len(mallocng.size_classes)) by simp(sI, c48w, ms.sc_len)), tok)
+    have eo el := apply(ms.sc_nat, co, c48w)
+    have a16: A16 = app(mallocng.size_classes, C) by defs(simp(sI, eo, el), bits_of_int, pow2)
+    have a32b: A16 in bits(32) by simp(a16, eo, el)
+    have sA := apply(ms.sint_small, (A16 in omega by simp(a16, eo)), (int_lt(A16, 2147483648) by simp(a16, eo, el)))
+    have f: tr.s32_fits(int_mul(sint(32, A16), sint(32, 16))) by defs(simp(sA, a16, eo, el), gimple.fits)
+    have sm := apply(g.smul32_det, {s}, {A16}, {16}, hu, a32b, simp(), ms.imul_16, f)
+    // (the value: a unit times the class's entry)
+    let E := app(mallocng.size_classes, C)
+    have vc0 := mp(all_elim(ms.sext_mul16, {E}), eo, el)
+    have vc := rewrite(sym(a16), vc0, {1})
+    have sw: mallocng_specs.stride_w(V0, g) = int_mul(16, E) by defs(simp(hnm, mw), mallocng_specs.stride_w, mallocng.UNIT)
+    have sb: bits_of_int(64, int_mul(16, E)) = int_mul(16, E) by defs(arith(eo, el), bits_of_int, pow2)
+    have val: bits_sext(32, 64, bits_mul(32, A16, 16)) = bits_of_int(64, mallocng_specs.stride_w(V0, g)) by simp(vc, sw, sb)
+    // (no last_idx 0: on to the class)
+    have ca: !(int_mod(W, 32) = 0) -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(V0, g))) proof
+      assume h1
+      have G1n: !(bits_and(8, bits_of_int(8, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 8))), 31) = 0) by simp(g1, h1)
+      step x2 x4 x6 i1, c1 from hr2 with ld1, G1n, scd, rd, ld, sm
+      show := rewrite(val, c1)
+    qed
+    // (last_idx 0, no mapping of its own: the word tested, then the class)
+    have cb: int_mod(W, 32) = 0 -> int_div(W, 4096) = 0 -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(V0, g))) proof
+      assume h1 h2
+      have G1: bits_and(8, bits_of_int(8, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 8))), 31) = 0 by simp(g1, h1)
+      have T4z: !!(bits_and(64, bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64))), bits_neg(64, 4096)) = 0) by simp(g2, h2)
+      step x2 x4 x6 i1, c1 from hr2 with ld1, G1, ld8
+      have cL cR := c1
+      step i3, c2 from cL with T4z
+      have r2 := rewrite(c2, cR)
+      step c3 from r2 with scd, rd, ld, sm
+      show := rewrite(val, c3)
+    qed
+    have hm: !mallocng_specs.mapped_single(V0, g) -> !(int_mod(W, 32) = 0) || int_div(W, 4096) = 0 by defs(simp(mw), mallocng_specs.mapped_single)
+    show by taut(ca, cb, mp(hm, hnm))
+  qed
+  have hm2: mallocng_specs.mapped_single(V0, g) -> int_mod(W, 32) = 0 && !(int_div(W, 4096) = 0) by defs(simp(mw), mallocng_specs.mapped_single)
+  have cms: mallocng_specs.mapped_single(V0, g) -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(V0, g))) proof
+    assume hms
+    have h1 h2 := mp(hm2, hms)
+    show := mp(cm, h1, h2)
+  qed
+  have cnm: !mallocng_specs.mapped_single(V0, g) -> o = ok(s, bits_of_int(64, mallocng_specs.stride_w(V0, g))) proof
+    assume hn
+    show := mp(ccl, hn, hr)
+  qed
+  show by taut(cms, cnm)
+qed
+
+// C2 of get_stride: its readable GIMPLE refines its spec, on every world
+theorem ms.get_stride_c2: all g. g in bits(64) ->
+  refines(c_src_malloc_mallocng_malloc.get_stride(g), mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, g), abi.World)
+proof
+  fix g
+  assume hg
+  have c: all s o. s in abi.World -> runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, g), s, o) proof
+    fix s o
+    assume hw hr
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have np: !mallocng_specs.get_stride_pre(app(s, "vm"), app(s, "objs"), c_src_malloc_mallocng_malloc.__malloc_size_classes, g) -> runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, g), s, o) proof
+      assume hn0
+      show by simp(pu, hn0, keep(abi.overflow, mallocng_specs.get_stride_pre, mallocng_specs.stride_w))
+    qed
+    have yp: mallocng_specs.get_stride_pre(app(s, "vm"), app(s, "objs"), c_src_malloc_mallocng_malloc.__malloc_size_classes, g) -> runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, g), s, o) proof
+      assume hpre
+      have oe := apply(ms.gs_run, {g}, {s}, {o}, hg, hw, hu, hpre, hr)
+      show by simp(oe, pu, hpre, keep(abi.overflow, mallocng_specs.get_stride_pre, mallocng_specs.stride_w))
+    qed
+    show by taut(np, yp)
+  qed
+  show by defs(c, refines)
+qed
+
+// get_stride as a C function value: its register wrapper refines the spec's
+// (get_stride's spec returns a word, under its precondition)
+theorem ms.gs_ret_word: all g s s1 v. s in abi.World -> runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, g), s, ok(s1, v)) ->
+  mallocng_specs.get_stride_pre(app(s, "vm"), app(s, "objs"), c_src_malloc_mallocng_malloc.__malloc_size_classes, g) -> v in bits(64)
+proof
+  fix g s s1 v
+  assume hw h hp
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(s, "vm")}, simp(expand(hw, abi.World)))
+  have no: all x. !runs(abi.overflow, s, ok(s1, x)) proof
+    fix x
+    have c: runs(abi.overflow, s, ok(s1, x)) -> false proof
+      assume ho
+      show by simp(ho, vv)
+    qed
+    show by taut(c)
+  qed
+  have e: v = bits_of_int(64, mallocng_specs.stride_w(app(s, "vm"), g)) by simp(h, hp, no, keep(abi.overflow, mallocng_specs.get_stride_pre, mallocng_specs.stride_w))
+  show := rewrite(sym(e), (bits_of_int(64, mallocng_specs.stride_w(app(s, "vm"), g)) in bits(64) by simp()))
+qed
+
+theorem ms.get_stride_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.get_stride_fun(), regs), s, o) -> runs(app(mallocng_specs.get_stride_spec_fun(c_src_malloc_mallocng_malloc.__malloc_size_classes), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.get_stride_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.get_stride_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have su: s in univ(1) by simp(pu)
+  have r := apply(g.runs_elim, h)
+  have a0: bits_of_int(64, app(regs, 0)) in bits(64) by simp()
+  have c1: !ord_le(1, seq_len(regs)) -> runs(mkprog(x0 x1. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), x0, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. x1 = ok(x2, pair(x4, x5)))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, o) proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  // the precondition: the spec's run is the code's (C2), its result a word
+  have c2: mallocng_specs.get_stride_pre(app(s, "vm"), app(s, "objs"), c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))) -> bind_rel(c_src_malloc_mallocng_malloc.get_stride(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. bind_rel(gimple.result(64, x4), x2, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) -> runs(mkprog(x0 x1. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), x0, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. x1 = ok(x2, pair(x4, x5)))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, o) proof
+    assume hp hb
+    have dc := expand(all_elim(ms.get_stride_c2, {bits_of_int(64, app(regs, 0))}), refines)
+    have hm: all o2. runs(c_src_malloc_mallocng_malloc.get_stride(bits_of_int(64, app(regs, 0))), s, o2) -> runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, o2) proof
+      fix o2
+      assume h2
+      show := mp(all_elim(mp(dc, a0), {s}, {o2}), hw, h2)
+    qed
+    have b2 := apply(g.bind_mono, hm, hb)
+    have kk: all s1 v. runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, ok(s1, v)) -> letin(v, x4. bind_rel(gimple.result(64, x4), s1, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5))) ->
+        letin(v, x4. any_rel(x5. x5 in bits(64), x5. o = ok(s1, pair(x4, x5)))) proof
+      fix s1 v
+      assume hs hk
+      have vb := apply(ms.gs_ret_word, hw, hs, hp)
+      obtain o3, h3 hc from expand(apply(g.letin_e, hk), bind_rel)
+      have e3 := apply(g.result64_inv, vb, h3)
+      have hc2 := rewrite(e3, hc)
+      have k: any_rel(x7. x7 in bits(64), x7. o = ok(s1, pair(v, x7))) by simp(hc2, keep(any_rel))
+      show by defs(k, letin)
+    qed
+    have b3 := apply(g.bind_cont, kk, b2)
+    show by apply(tr.runs_intro, pu, taut(b3))
+  qed
+  // no precondition: the spec allows every outcome, the code's too
+  have c3: !mallocng_specs.get_stride_pre(app(s, "vm"), app(s, "objs"), c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))) -> bind_rel(c_src_malloc_mallocng_malloc.get_stride(bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. bind_rel(gimple.result(64, x4), x2, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) -> runs(mkprog(x0 x1. !ord_le(1, seq_len(regs)) || bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), x0, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. x1 = ok(x2, pair(x4, x5)))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), s, o) proof
+    assume hn hb
+    have any: all o2. pair(s, o2) in univ(1) -> runs(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, o2) proof
+      fix o2
+      assume hu
+      show by simp(hu, hn, keep(abi.overflow, mallocng_specs.get_stride_pre, mallocng_specs.stride_w))
+    qed
+    obtain o1, h1 hc from expand(hb, bind_rel, {1})
+    have pu1 := apply(g.runs_univ, expand(h1, c_src_malloc_mallocng_malloc.get_stride))
+    // (the first step's outcome o1 is the spec's: but for a return, whose
+    // value the result step turns into rax)
+    have q1: (ex s1 v. o1 = ok(s1, v) && letin(v, x4. bind_rel(gimple.result(64, x4), s1, x5 x6. any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7))), x5 x6. o = exc(x5, x6), x5. o = diverge(x5)))) ->
+        bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+      assume e
+      obtain s1 v, eo hk from e
+      obtain o3, h3 hc3 from expand(apply(g.letin_e, hk), bind_rel)
+      have pu3 := apply(g.runs_univ, expand(h3, gimple.result))
+      have r1: (ex x5 x6. o3 = ok(x5, x6) && any_rel(x7. x7 in bits(64), x7. o = ok(x5, pair(x6, x7)))) -> bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+        assume e2
+        obtain x5 x6, eo3 ha from e2
+        have u: pair(s, ok(x5, x6)) in univ(1) by simp(rewrite(eo3, pu3), su)
+        have sr := mp(all_elim(any, {ok(x5, x6)}), u)
+        show by defs(ex_intro({ok(x5, x6)}, simp(sr, ha, keep(mallocng_specs.get_stride_spec, any_rel))), bind_rel)
+      qed
+      have r2: (ex x5 x6. o3 = exc(x5, x6) && o = exc(x5, x6)) -> bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+        assume e2
+        obtain x5 x6, eo3 eo from e2
+        have u: pair(s, exc(x5, x6)) in univ(1) by simp(rewrite(eo3, pu3), su)
+        have sr := mp(all_elim(any, {exc(x5, x6)}), u)
+        show by defs(ex_intro({exc(x5, x6)}, simp(sr, eo, keep(mallocng_specs.get_stride_spec))), bind_rel)
+      qed
+      have r3: (ex t. o3 = diverge(t) && o = diverge(t)) -> bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+        assume e2
+        obtain t, eo3 eo from e2
+        have u: pair(s, diverge(t)) in univ(1) by simp(rewrite(eo3, pu3), su)
+        have sr := mp(all_elim(any, {diverge(t)}), u)
+        show by defs(ex_intro({diverge(t)}, simp(sr, eo, keep(mallocng_specs.get_stride_spec))), bind_rel)
+      qed
+      show by taut(hc3, r1, r2, r3)
+    qed
+    have q2: (ex s1 e. o1 = exc(s1, e) && o = exc(s1, e)) -> bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+      assume e
+      obtain s1 e1, eo eo2 from e
+      have sr := mp(all_elim(any, {o1}), pu1)
+      show by defs(ex_intro({o1}, simp(sr, eo, eo2, keep(mallocng_specs.get_stride_spec))), bind_rel)
+    qed
+    have q3: (ex t. o1 = diverge(t) && o = diverge(t)) -> bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) proof
+      assume e
+      obtain t, eo eo2 from e
+      have sr := mp(all_elim(any, {o1}), pu1)
+      show by defs(ex_intro({o1}, simp(sr, eo, eo2, keep(mallocng_specs.get_stride_spec))), bind_rel)
+    qed
+    have b3: bind_rel(mallocng_specs.get_stride_spec(c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), s, x2 x3. letin(x3, x4. any_rel(x5. x5 in bits(64), x5. o = ok(x2, pair(x4, x5)))), x2 x3. o = exc(x2, x3), x2. o = diverge(x2)) by taut(hc, q1, q2, q3)
+    show by apply(tr.runs_intro, pu, taut(b3))
+  qed
+  show by taut(r, c1, c2, c3)
 qed

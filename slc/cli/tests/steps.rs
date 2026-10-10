@@ -181,13 +181,13 @@ fn c1_engine_checks() {
     let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 114 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 20 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 48 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 51 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 5 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 50 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 14 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_compose.core: 0 constants, 0 axioms, 0 definitions, 8 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 18 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_compose.core: 0 constants, 0 axioms, 0 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text] {
         let _ = std::fs::remove_file(f);

@@ -13,8 +13,7 @@ call graph.
 - `enframe`: its spec and C2 (its C1 is done), then its composition
   (`proofs/mallocng_compose.core`).
 - C2 (and composition) for the functions with C1 only: is_bouncing,
-  get_slot_index, get_stride, step_seq, upgradelock, resetlock,
-  decay_bounces.
+  get_slot_index, step_seq, upgradelock, resetlock, decay_bounces.
 
 ### 1.2 The remaining functions
 

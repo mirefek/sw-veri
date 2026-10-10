@@ -1016,3 +1016,105 @@ proof
   have e: bits_of_int(32, r) = v by defs(simp(m, mv), bits_of_int, pow2)
   show by ex_intro({r}, simp(hr1, e, ho))
 qed
+
+// ----------------------------------------------------------------------
+//  Reads of several bytes: a natural below 256^n; a read split in two (the
+//  bitfields of a word read in parts); a bitfield's load
+
+// (a read of n bytes: a natural below 256^n)
+theorem g.bytes_bound: all vm a n. app(vm, "bytes") in fn_space(bits(64), bits(8)) -> n in omega ->
+  gimple.bytes_at(vm, a, n) in omega && int_lt(gimple.bytes_at(vm, a, n), int_pow(256, n))
+proof
+  fix vm a n
+  assume hb hn
+  let B := app(vm, "bytes")
+  let F(j) := int_mul(app(B, bits_add(64, a, bits_of_int(64, j))), int_pow(256, j))
+  have s: all i. i in omega -> int_sum(0, i, j. F(j)) in omega && int_lt(int_sum(0, i, j. F(j)), int_pow(256, i)) proof
+    have base: int_sum(0, 0, j. F(j)) in omega && int_lt(int_sum(0, 0, j. F(j)), int_pow(256, 0)) proof
+      have r0 := rec({nat_rec(empty, k v. int_add(v, F(int_add(0, k))), 0)})
+      have z: int_sum(0, 0, j. F(j)) = 0 by defs(simp(r0), int_sum)
+      show by simp(z)
+    qed
+    have step: all i. i in omega -> int_sum(0, i, j. F(j)) in omega && int_lt(int_sum(0, i, j. F(j)), int_pow(256, i)) ->
+        int_sum(0, int_add(i, 1), j. F(j)) in omega && int_lt(int_sum(0, int_add(i, 1), j. F(j)), int_pow(256, int_add(i, 1))) proof
+      fix i
+      assume hi ih
+      have uF: int_sum(0, int_add(i, 1), j. F(j)) = int_add(int_sum(0, i, j. F(j)), F(i))
+        by defs(simp(hi, rec({nat_rec(empty, k v. int_add(v, F(int_add(0, k))), int_add(i, 1))}, hi)), int_sum)
+      have by8 := apply(fn_space_app, hb, (bits_add(64, a, bits_of_int(64, i)) in bits(64) by simp()))
+      let X := app(B, bits_add(64, a, bits_of_int(64, i)))
+      have xb: X in omega && int_lt(X, 256) by simp(by8)
+      let P := int_pow(256, i)
+      have pp := apply(pow256_pos, hi)
+      have po: P in omega by arith(pp)
+      have p1 := mp(all_elim(mp(all_elim(pow256_add, {i}), hi), {1}), simp())
+      have p1b: int_pow(256, int_add(i, 1)) = int_mul(P, 256) by simp(p1)
+      have m0: int_mul(X, P) in omega by simp(xb, po)
+      have m1: int_le(int_mul(X, P), int_mul(255, P)) by arith(xb, pp, refl({int_mul(int_sub(255, X), P)}))
+      have so: int_sum(0, int_add(i, 1), j. F(j)) in omega by simp(uF, ih, m0)
+      have sl: int_lt(int_sum(0, int_add(i, 1), j. F(j)), int_pow(256, int_add(i, 1))) by arith(uF, ih, m0, m1, p1b)
+      show by taut(so, sl)
+    qed
+    show by induct(base, step)
+  qed
+  have sn := mp(all_elim(s, {n}), hn)
+  show by defs(simp(sn), gimple.bytes_at)
+qed
+
+// (a read of n + m bytes: the first n, then m more above them)
+theorem g.bytes_split: all vm a n m. a in bits(64) -> n in omega -> m in omega ->
+  gimple.bytes_at(vm, a, int_add(n, m)) = int_add(gimple.bytes_at(vm, a, n), int_mul(int_pow(256, n), gimple.bytes_at(vm, bits_add(64, a, n), m)))
+proof
+  fix vm a n m
+  assume ha hn hm
+  let B := app(vm, "bytes")
+  let F(j) := int_mul(app(B, bits_add(64, a, bits_of_int(64, j))), int_pow(256, j))
+  let G(j) := int_mul(app(B, bits_add(64, bits_add(64, a, n), bits_of_int(64, j))), int_pow(256, j))
+  let SN := int_sum(0, n, j. F(j))
+  have s: all i. i in omega -> int_sum(0, int_add(n, i), j. F(j)) = int_add(SN, int_mul(int_pow(256, n), int_sum(0, i, j. G(j)))) proof
+    have base: int_sum(0, int_add(n, 0), j. F(j)) = int_add(SN, int_mul(int_pow(256, n), int_sum(0, 0, j. G(j)))) proof
+      have r0 := rec({nat_rec(empty, k v. int_add(v, G(int_add(0, k))), 0)})
+      have z: int_sum(0, 0, j. G(j)) = 0 by defs(simp(r0), int_sum)
+      have pn := apply(pow256_pos, hn)
+      have m0: int_mul(int_pow(256, n), empty) = 0 by arith(pn)
+      show by simp(z, hn, m0)
+    qed
+    have step: all i. i in omega -> int_sum(0, int_add(n, i), j. F(j)) = int_add(SN, int_mul(int_pow(256, n), int_sum(0, i, j. G(j)))) ->
+        int_sum(0, int_add(n, int_add(i, 1)), j. F(j)) = int_add(SN, int_mul(int_pow(256, n), int_sum(0, int_add(i, 1), j. G(j)))) proof
+      fix i
+      assume hi ih
+      have ni: int_add(n, i) in omega by simp(hn, hi)
+      have e1: int_add(n, int_add(i, 1)) = int_add(int_add(n, i), 1) by arith(hn, hi)
+      have uF: int_sum(0, int_add(int_add(n, i), 1), j. F(j)) = int_add(int_sum(0, int_add(n, i), j. F(j)), F(int_add(n, i)))
+        by defs(simp(ni, rec({nat_rec(empty, k v. int_add(v, F(int_add(0, k))), int_add(int_add(n, i), 1))}, ni)), int_sum)
+      have uG: int_sum(0, int_add(i, 1), j. G(j)) = int_add(int_sum(0, i, j. G(j)), G(i))
+        by defs(simp(hi, rec({nat_rec(empty, k v. int_add(v, G(int_add(0, k))), int_add(i, 1))}, hi)), int_sum)
+      // (the byte's address and its weight, from a or from a + n)
+      have ad: bits_add(64, a, bits_of_int(64, int_add(n, i))) = bits_add(64, bits_add(64, a, n), bits_of_int(64, i)) by defs(arith(ha, hn, hi), bits_add, bits_of_int)
+      have pw := mp(all_elim(mp(all_elim(pow256_add, {n}), hn), {i}), hi)
+      have fg0: F(int_add(n, i)) = int_mul(app(B, bits_add(64, bits_add(64, a, n), bits_of_int(64, i))), int_mul(int_pow(256, n), int_pow(256, i))) by simp(ad, pw)
+      have fg: F(int_add(n, i)) = int_mul(int_pow(256, n), G(i)) by arith(fg0)
+      let SI := int_sum(0, i, j. G(j))
+      have dist: int_mul(int_pow(256, n), int_add(SI, G(i))) = int_add(int_mul(int_pow(256, n), SI), int_mul(int_pow(256, n), G(i))) by arith()
+      have g0: int_sum(0, int_add(int_add(n, i), 1), j. F(j)) = int_add(SN, int_mul(int_pow(256, n), int_add(SI, G(i)))) by arith(uF, ih, fg, dist)
+      show by simp(e1, uG, g0)
+    qed
+    show by induct(base, step)
+  qed
+  have sm := mp(all_elim(s, {m}), hm)
+  show by defs(simp(sm), gimple.bytes_at)
+qed
+
+theorem g.ldbf_det: all s p off size pos nb. s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, size, false) ->
+  g.det(gimple.ldbf(p, off, size, pos, nb), s, ok(s, int_mod(int_div(gimple.bytes_at(app(s, "vm"), int_add(p, off), size), int_pow(2, pos)), int_pow(2, nb))))
+proof
+  fix s p off size pos nb
+  assume hs hp ho hd
+  have md := apply(g.mem_det, {s}, {p}, {off}, {size}, {false}, hs, hp, ho, hd)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.runs_elim, hr)
+    show := apply(g.bind_inv, b, md)
+  qed
+qed

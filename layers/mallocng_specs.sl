@@ -258,3 +258,35 @@ fn size_to_class_spec_fun(sct: bits[64], tbl: bits[64]) -> CFun2[World] = (args:
   let w = result[32](r)
   return (w, any bits[64])
 }
+
+///////////////////////////////////////////////////////////////////////
+//  A group's slots
+
+// struct meta's bitfield word at g + 32: last_idx (bits 0-4), freeable (5),
+// sizeclass (6-11), maplen (12-63)
+fn mword(vm: Vm, g: Addr) -> nat = bytes_at(vm, g + 32, 8)
+
+// a group of one slot in a mapping of its own (last_idx 0, maplen not 0)
+pred mapped_single(vm: Vm, g: Addr) = mword(vm, g) % 32 = 0 && mword(vm, g) / 4096 != 0
+
+// get_stride(g): the slot size of g's group (mallocng's `stride` of the
+// meta at g): its mapping less the group's header (a unit) for a group of
+// one slot mapped on its own, else a unit times its size class's entry
+// (the class one of the 48); sct: the class table's address
+pred get_stride_pre(vm: Vm, objs: Set[nat], sct: Addr, g: Addr) =
+  g != 0 && uint(g) + 40 <= 2^64 && usable(vm, objs, uint(g) + 32, 8, false) &&
+  (!mapped_single(vm, g) -> mword(vm, g) / 64 % 64 < 48 && table_ok(vm, objs, sct, 2, size_classes))
+
+fn stride_w(vm: Vm, g: Addr) -> nat =
+  if mapped_single(vm, g) { mword(vm, g) / 4096 * 4096 - UNIT } else { UNIT * size_classes[mword(vm, g) / 64 % 64] }
+
+proc[World] get_stride_spec(sct: bits[64], g: bits[64]) -> bits[64] {
+  require get_stride_pre(vm, objs, sct, g)
+  either { overflow() } or { return bits[64](stride_w(vm, g)) }
+}
+
+fn get_stride_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = get_stride_spec(sct, bits[64](args[0]))
+  return (r, any bits[64])
+}
