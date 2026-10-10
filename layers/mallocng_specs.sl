@@ -290,3 +290,56 @@ fn get_stride_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
   let r = get_stride_spec(sct, bits[64](args[0]))
   return (r, any bits[64])
 }
+
+// a 16-bit word written
+fn wr16(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 2, v) }
+
+// the start of slot idx of the group of meta g (its storage a unit past the
+// group's header, at the meta's mem word)
+fn eslot(vm: Vm, g: Addr, idx: bits[32]) -> nat = uint(rd64(vm, g + 16)) + UNIT + stride_w(vm, g) * uint(idx)
+
+// enframe(g, idx, n, ctr): slot idx of g's group framed for n bytes at some
+// p (mallocng's frame_ok): 16-byte aligned from the slot's start, the n
+// bytes before the slot's end (IB bytes short of the next slot). The code's
+// p is an offset cycled from the slot's previous one (or ctr) and reduced
+// to fit; any such p meets the spec. The frame: past the slot's start, the
+// slot's header records the offset (in units, tag 7 << 5) and p's check
+// byte is 0; p's header its offset from the storage (in units) and idx;
+// then set_size's reserved count. The whole slot, its header included, is
+// usable, apart from the meta's mem word (read again after the writes) and
+// the thread pointer's word (sound for the calls), and past null; its check
+// byte is 0 (else the code traps).
+pred enframe_pre(vm: Vm, objs: Set[nat], fs: Addr, sct: Addr, g: Addr, idx: bits[32], n: bits[64]) =
+  get_stride_pre(vm, objs, sct, g) && usable(vm, objs, uint(g) + 16, 8, false) &&
+  uint(idx) < 2^31 && uint(n) + IB <= stride_w(vm, g) && stride_w(vm, g) < 2^31 &&
+  IB < eslot(vm, g, idx) && eslot(vm, g, idx) + stride_w(vm, g) < 2^63 &&
+  (uint(g) + 24 <= eslot(vm, g, idx) - IB || eslot(vm, g, idx) - IB + stride_w(vm, g) <= uint(g) + 16) &&
+  (uint(fs) + 8 <= eslot(vm, g, idx) - IB || eslot(vm, g, idx) - IB + stride_w(vm, g) <= uint(fs)) &&
+  usable(vm, objs, eslot(vm, g, idx) - IB, stride_w(vm, g), false) &&
+  usable(vm, objs, eslot(vm, g, idx) - IB, stride_w(vm, g), true) &&
+  bytes_at(vm, bits[64](eslot(vm, g, idx) - IB), 1) = 0 && thread_ok(vm, fs)
+
+pred enframe_at(vm: Vm, g: Addr, idx: bits[32], n: bits[64], p: nat) =
+  eslot(vm, g, idx) <= p && (p - eslot(vm, g, idx)) % UNIT = 0 && p + uint(n) + IB <= eslot(vm, g, idx) + stride_w(vm, g)
+
+fn enframe_vm(vm: Vm, g: Addr, idx: bits[32], n: bits[64], p: Addr) -> Vm {
+  let s = eslot(vm, g, idx)
+  let v1 = if uint(p) > s { wr8(wr8(wr16(vm, bits[64](s - 2), (uint(p) - s) / UNIT), bits[64](s - 3), 7 * 32), p - 4, 0) } else { vm }
+  let v2 = wr8(wr16(v1, p - 2, (uint(p) - (uint(rd64(vm, g + 16)) + UNIT)) / UNIT % 2^16), p - 3, uint(idx) % 256)
+  return set_size_vm(v2, p, bits[64](s + stride_w(vm, g) - IB), n)
+}
+
+proc[World] enframe_spec(sct: bits[64], g: bits[64], idx: bits[32], n: bits[64]) -> bits[64] {
+  require enframe_pre(vm, objs, fs_base, sct, g, idx, n)
+  either { overflow() } or {
+    let p = any q: bits[64] where enframe_at(vm, g, idx, n, uint(q))
+    vm := enframe_vm(vm, g, idx, n, p)
+    return p
+  }
+}
+
+fn enframe_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 4
+  let r = enframe_spec(sct, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
+  return (r, any bits[64])
+}

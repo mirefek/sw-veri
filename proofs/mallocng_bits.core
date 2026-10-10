@@ -1,6 +1,6 @@
 // C2 of malloc.c's bit counts a_ctz_32 and a_clz_32 (layers/mallocng_specs.sl):
 // a de Bruijn multiplication and table lookup, and bit smearing, by the bit
-// library (core/bits.core: `bitwise`, `cases`).
+// library (core/bits.core: `bitwise`, `cases`); enframe's offset mask.
 //
 //   checked after proofs/mallocng_c2.core (and core/bits.core)
 
@@ -451,6 +451,154 @@ proof
     qed
     show by taut(np, yp)
   qed
+qed
+
+// ----------------------------------------------------------------------
+//  enframe's offset: the smeared slack's mask; words without wrapping
+
+// (one smearing step of enframe's code, 64-bit: y | y >> m)
+abbrev ms.sm64(y, m) := bits_or(64, y, bits_shr(64, y, m))
+
+// enframe's mask: slack smeared by 1, 2, 4 -- for a slack below 256, all its
+// bits up to its top one, 2^(K+1) - 1 with 2^K <= slack; an offset masked
+// by it: at most 2 slack + 1
+theorem ms.ef_mask: all x y. x in bits(64) -> int_lt(x, 256) -> y in bits(32) ->
+  int_le(bits_and(32, bits_of_int(32, ms.sm64(ms.sm64(ms.sm64(x, 1), 2), 4)), y), int_add(int_mul(2, x), 1))
+proof
+  fix x y
+  assume hx h256 hy
+  have xo: x in omega by arith(hx)
+  have zero: x = 0 -> int_le(bits_and(32, bits_of_int(32, ms.sm64(ms.sm64(ms.sm64(x, 1), 2), 4)), y), int_add(int_mul(2, x), 1)) proof
+    assume h0
+    have z: bits_and(32, bits_of_int(32, ms.sm64(ms.sm64(ms.sm64(0, 1), 2), 4)), y) = 0 by bitwise({64}, hy)
+    have zx := subst({w. bits_and(32, bits_of_int(32, ms.sm64(ms.sm64(ms.sm64(w, 1), 2), 4)), y) = 0}, sym(h0), z)
+    show by arith(zx, h0)
+  qed
+  have pos: !(x = 0) -> int_le(bits_and(32, bits_of_int(32, ms.sm64(ms.sm64(ms.sm64(x, 1), 2), 4)), y), int_add(int_mul(2, x), 1)) proof
+    assume hnz
+    // K: x's top bit, the least with x < 2^(K+1)
+    have w7: int_lt(x, pow2(int_add(7, 1))) by arith(h256)
+    have mo ml mle := mp(int_min_spec[p := k. int_lt(x, pow2(int_add(k, 1))), a := 7], arith(), w7)
+    let K := int_min(set_select(omega, k. int_lt(x, pow2(int_add(k, 1)))))
+    have k7: int_le(K, 7) := mp(all_elim(mle, {7}), arith(), w7)
+    // 2^K <= x (else K - 1 had x < 2^K; for K = 0, x >= 1)
+    have lo: int_le(pow2(K), x) proof
+      have c0: K = 0 -> int_le(pow2(K), x) proof
+        assume e
+        show by arith(e, xo, hnz)
+      qed
+      have c1: !(K = 0) -> int_le(pow2(K), x) proof
+        assume hk0
+        let J := int_sub(K, 1)
+        have hj: J in omega by arith(mo, hk0)
+        have ej: int_add(J, 1) = K by arith(mo)
+        have lt: int_lt(x, pow2(int_add(J, 1))) -> int_le(K, J) := mp(all_elim(mle, {J}), hj)
+        show by arith(rewrite(ej, lt), mo, hk0)
+      qed
+      show by taut(c0, c1)
+    qed
+    have pp := mp(pow2_pos[k := K], mo)
+    have bk: bit(x, K) by defs(arith(lo, ml, mo, xo, pp), bit)
+    have hiq: all j. j in omega -> int_lt(K, j) -> !bit(x, j) proof
+      fix j
+      assume hj hkj
+      show mp(bit_high[x := x, n := int_add(K, 1), i := j], xo, arith(mo), hj, ml, arith(hkj, hj, mo))
+    qed
+    have k64: int_lt(K, 64) by arith(k7, mo)
+    have s0: all j. j in omega -> int_le(j, K) -> int_lt(K, int_add(j, 1)) -> bit(x, j) proof
+      fix j
+      assume hj h1 h2
+      have e: j = K by arith(hj, h1, h2, mo)
+      show := subst({i. bit(x, i)}, sym(e), bk)
+    qed
+    have c0: all j. j in omega -> int_lt(K, j) -> int_lt(j, 64) -> !bit(x, j) proof
+      fix j
+      assume hj h1 h2
+      show mp(all_elim(hiq, {j}), hj, h1)
+    qed
+    // the three steps: bits K - 7 .. K set, none above
+    have s1 c1 := mp(smear_step[n := 64, y := x, k := K, m := 1, m2 := 2], arith(), hx, mo, k64, arith(), arith(), s0, c0)
+    let Y1 := ms.sm64(x, 1)
+    have s2 c2 := mp(smear_step[n := 64, y := Y1, k := K, m := 2, m2 := 4], arith(), mp(bits_or_in[n := 64, x := x, y := bits_shr(64, x, 1)], arith()), mo, k64, arith(), arith(), s1, c1)
+    let Y2 := ms.sm64(Y1, 2)
+    have s3 c3 := mp(smear_step[n := 64, y := Y2, k := K, m := 4, m2 := 8], arith(), mp(bits_or_in[n := 64, x := Y1, y := bits_shr(64, Y1, 2)], arith()), mo, k64, arith(), arith(), s2, c2)
+    let Y3 := ms.sm64(Y2, 4)
+    have all3: all j. j in omega -> int_le(j, K) -> bit(Y3, j) proof
+      fix j
+      assume hj h1
+      show mp(all_elim(s3, {j}), hj, h1, arith(hj, h1, k7, mo))
+    qed
+    have y3b := mp(bits_or_in[n := 64, x := Y2, y := bits_shr(64, Y2, 4)], arith())
+    have d := mp(smear_done[n := 64, y := Y3, k := K], arith(), y3b, mo, k64, all3, c3)
+    // 2^(K+1) - 1 <= 2x + 1
+    have pa := mp(all_elim(mp(all_elim(pow2_add, {K}), mo), {1}), arith())
+    have p1: pow2(1) = 2 by simp()
+    // the mask keeps y's bits below K + 1: y mod 2^(K+1)
+    have p8 := mp(pow2_le[a := int_add(K, 1), b := 8], arith(mo), arith(), arith(k7, mo))
+    have p8v: pow2(8) = 256 by simp()
+    have pk1 := mp(pow2_pos[k := int_add(K, 1)], arith(mo))
+    have mb: int_mod(y, pow2(int_add(K, 1))) in bits(32) by arith(hy, pk1, p8, p8v)
+    have em: bits_and(32, bits_of_int(32, int_sub(pow2(int_add(K, 1)), 1)), y) = int_mod(y, pow2(int_add(K, 1))) by bitwise({32}, mo, hy, mb)
+    have ed := subst({w. bits_and(32, bits_of_int(32, w), y) = int_mod(y, pow2(int_add(K, 1)))}, sym(d), em)
+    show by arith(ed, pa, p1, lo, hy, pk1)
+  qed
+  show by taut(zero, pos)
+qed
+
+// a 32-bit word's low byte (& 255): below 256
+theorem ms.and255: all y. y in bits(32) -> bits_and(32, y, 255) in bits(32) && int_lt(bits_and(32, y, 255), 256)
+proof
+  fix y
+  assume hy
+  have p8: pow2(8) = 256 by simp()
+  have m8: int_sub(pow2(8), 1) = 255 by simp()
+  have mb: int_mod(y, pow2(8)) in bits(32) by arith(hy, p8)
+  have e0: bits_and(32, y, int_sub(pow2(8), 1)) = int_mod(y, pow2(8)) by bitwise({32}, hy, mb)
+  have e := rewrite(m8, e0)
+  have i := mp(bits_and_in[n := 32, x := y, y := 255], simp())
+  show by arith(e, i, hy, p8)
+qed
+
+// (32-bit a - b, a + -1 without wrapping)
+theorem ms.sub32: all a b. a in bits(32) -> b in omega -> int_le(b, a) -> bits_sub(32, a, b) = int_sub(a, b)
+proof
+  fix a b
+  assume ha hb hl
+  have p32: pow2(32) = 4294967296 by simp()
+  show by defs(arith(ha, hb, hl, p32), bits_sub, pow2)
+qed
+
+theorem ms.dec32: all x. x in omega -> int_le(1, x) -> int_lt(x, 4294967296) -> bits_add(32, x, bits_neg(32, 1)) = int_sub(x, 1)
+proof
+  fix x
+  assume hx h1 h2
+  show by defs(simp(hx, h1, h2), bits_add, bits_neg)
+qed
+
+theorem ms.sext_small: all x. x in bits(32) -> int_lt(x, 2147483648) -> bits_sext(32, 64, x) = x
+proof
+  fix x
+  assume hx hl
+  show by defs(simp(hx, hl), bits_sext, sint)
+qed
+
+// (64-bit a - b without wrapping; x >> 4)
+theorem ms.sub64: all a b. a in bits(64) -> b in omega -> int_le(b, a) -> bits_sub(64, a, b) = int_sub(a, b)
+proof
+  fix a b
+  assume ha hb hl
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  show by defs(arith(ha, hb, hl, p64), bits_sub, pow2)
+qed
+
+theorem ms.shr4: all x. x in bits(64) -> bits_shr(64, x, 4) = int_div(x, 16)
+proof
+  fix x
+  assume hx
+  have p4: pow2(4) = 16 by simp()
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have m: int_mod(x, 18446744073709551616) = x by arith(hx)
+  show by defs(simp(p4, rewrite(sym(p64), m), hx), bits_shr, bits_of_int)
 qed
 
 // ----------------------------------------------------------------------

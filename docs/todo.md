@@ -8,10 +8,8 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 Now: enframe, the missing C2s
+### 1.1 Now: the missing C2s
 
-- `enframe`: its spec and C2 (its C1 is done), then its composition
-  (`proofs/mallocng_compose.core`).
 - C2 (and composition) for the functions with C1 only: is_bouncing,
   get_slot_index, step_seq, upgradelock, resetlock, decay_bounces.
 
