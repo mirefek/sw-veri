@@ -51,21 +51,26 @@ Tactic ideas, collected as proofs suggest them and done in batches.
 
 ## 5. The pipeline: usability and speed
 
-Done alongside the functions, as they need it.
+Open items, to take up between functions when one gets in the way.
 
-- SL: syntax of properties, qualified names and ambiguity errors in name
-  resolution, the language's name.
-- Code: the C1 engine's instruction rows by name, not number, and its
-  `simp(L, ..)` counts derived; the kernel `Env`'s fields private; the
-  interpreter checking literal widths as the elaborator does.
-- Checker speed, if needed: generated step theorems, memoised normal forms
-  in `taut` / `simp`, parallel checking.
-- C1 joins (`slc/cli/src/c1/join.rs`): each instruction of enframe is
-  walked 1-4 times (~3.4k steps, ~27 s): the first path at a join walks on
-  concretely, and a claim is generalized again (each time walking on) as
-  paths from other contexts differ in a home or the world. Widening (every
-  home's value a variable) fails: a home holds the code's form of a value,
-  the spec its own.
+- SL: design a syntax for properties; add qualified names and ambiguity
+  errors to name resolution; choose the language's name.
+- Code: name the C1 engine's instruction rows instead of numbering them,
+  and derive its `simp(L, ..)` counts; make the kernel `Env`'s fields
+  private; make the interpreter check literal widths as the elaborator
+  does.
+- `step`: accept its `with` facts in any order (now each must come in the
+  order used); take a branch condition in any equivalent form (now the
+  exact one, e.g. `!!(x = 0)` for an else branch).
+- Checker speed, if it becomes a problem: generate step theorems, memoise
+  normal forms in `taut` / `simp`, check files in parallel.
+- C1 joins (`slc/cli/src/c1/join.rs`): cut the repeated walks. Each
+  instruction of enframe is now walked 1-4 times (~3.4k steps, ~27 s),
+  because the first path at a join walks on concretely and a claim is
+  generalized again (walking on each time) as paths from other contexts
+  differ in a home or the world. Widening every home's value to a
+  variable does not work (a home holds the code's form of a value, the
+  spec its own), so this needs another way to generalize.
 
 ## Later
 
