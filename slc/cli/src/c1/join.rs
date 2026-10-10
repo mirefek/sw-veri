@@ -113,8 +113,8 @@ impl<'e> Gen<'e> {
                 Some(r) => vec![(a2 + if r & 0x80 != 0 { r + 0xffff_ffff_ffff_ff00 } else { r }) % P64],
                 None => Vec::new(),
             },
-            // jcc rel8
-            127 => match self.jcc(a) {
+            // jcc rel8, rel32
+            127 | 128 => match self.jcc(a) {
                 Ok((_, _, a3, tt, _)) => vec![a3, tt],
                 Err(_) => vec![a2],
             },

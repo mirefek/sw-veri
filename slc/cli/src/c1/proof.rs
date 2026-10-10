@@ -1001,11 +1001,18 @@ impl<'e> Gen<'e> {
     /// length, the fall-through, the target, the condition code
     pub(super) fn jcc(&self, a2: u128) -> Result<(Term, u128, u128, u128, u128), String> {
         let j = self.insns.get(&a2).ok_or_else(|| format!("no decode fact at {:x}", a2))?;
-        let x = (j.row == 127).then(|| self.pairs(&j.fields, 2)).flatten().ok_or_else(|| format!("{:x}: not a conditional jump", a2))?;
+        // (row 127: rel8; 128: rel32)
+        let x = (j.row == 127 || j.row == 128).then(|| self.pairs(&j.fields, 2)).flatten().ok_or_else(|| format!("{:x}: not a conditional jump", a2))?;
         let (cc, r) = (nat(&x[0]).ok_or("jcc")?, nat(&x[1]).ok_or("jcc")?);
         let a3 = (a2 + j.len) % P64;
-        let r8 = r & 0xff;
-        let tt = (a3 + if r8 >= 128 { r8 + P64 - 256 } else { r8 }) % P64;
+        let d = if j.row == 127 {
+            let r8 = r & 0xff;
+            if r8 >= 128 { r8 + P64 - 256 } else { r8 }
+        } else {
+            let r32 = r & 0xffff_ffff;
+            if r32 >= 1 << 31 { r32 + P64 - (1 << 32) } else { r32 }
+        };
+        let tt = (a3 + d) % P64;
         Ok((x[1].clone(), j.len, a3, tt, cc))
     }
 
@@ -1014,10 +1021,13 @@ impl<'e> Gen<'e> {
     /// n literal facts, extra.., T, F)`
     #[allow(clippy::too_many_arguments)]
     pub(super) fn jstep(&self, rule: &str, st: &St, a: u128, a2: u128, a3: u128, tt: u128, len1: u128, len2: u128, ts: &[&Term], insn: &Insn, n: usize, extra: Vec<RA>) -> R {
-        let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt)), t(&lit(len1)), t(&lit(len2))];
+        // (the jump's row and displacement width: 127 / 8, 128 / 32 -- one
+        // more literal premise of the rule, theirs)
+        let (jn, jw) = if self.insns[&a2].row == 128 { (128, 32) } else { (127, 8) };
+        let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt)), t(&lit(len1)), t(&lit(len2)), t(&lit(jn)), t(&lit(jw))];
         v.extend(ts.iter().map(|x| t(x)));
         v.extend([t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w), p(f(&insn.name)), p(f(&self.insns[&a2].name))]);
-        v.extend((0..n).map(|_| simp_l()));
+        v.extend((0..n + 1).map(|_| simp_l()));
         v.extend(extra);
         v.push(p(R::Slot("T")));
         v.push(p(R::Slot("F")));

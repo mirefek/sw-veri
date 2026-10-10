@@ -158,16 +158,18 @@ impl<'e> Gen<'e> {
             76 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
-                // mov r64, [b + d] (b holding a pointer): the spec's field load
-                if self.rsp_mem(&x[2]).is_none() && nat(&x[0]) == Some(8) {
+                // mov r64 / r32, [b + d] (b holding a pointer): the spec's field load
+                if self.rsp_mem(&x[2]).is_none() && matches!(nat(&x[0]), Some(8) | Some(4)) {
+                    let n = nat(&x[0]).unwrap();
                     let (bn, b, d) = self.base_disp(&x[2]).ok_or_else(|| bad("not [b + d]"))?;
                     let bp = self.need_reg(st, bn, 8)?;
-                    let hc = self.mem_hyp(st, &bp, &d, 8)?;
-                    let tr = self.step("load64_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp], self.tail(st, insn, 6, vec![s(&hc)]));
-                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&bp), self.print(&d)))?;
+                    let hc = self.mem_hyp(st, &bp, &d, n)?;
+                    let rule = if n == 8 { "load64_bd" } else { "load32_bd" };
+                    let tr = self.step(rule, a, insn, &[&x[1], &b, &d, &x[4], &bp], self.tail(st, insn, 6, vec![s(&hc)]));
+                    let v = self.parse(&format!("bits_of_int({}, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), {}))", 8 * n, self.print(&bp), self.print(&d), n))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
-                    let st2 = self.set_reg(st, a2, g, 8, v);
+                    let st2 = self.set_reg(st, a2, g, n, v);
                     return self.then(tr, st2);
                 }
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
@@ -233,6 +235,21 @@ impl<'e> Gen<'e> {
                 let tr = self.step("imul64_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 8, r);
+                self.then(tr, st2)
+            }
+            // sub r32, [rsp + d]
+            51 if self.pairs(&f, 5).is_some_and(|x| nat(&x[0]) == Some(4)) => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
+                let g = reg(&x[1])?;
+                let v = home(&st.hsm, &d)?;
+                let u = self.need_reg(st, g, 4)?;
+                let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
+                let tr = self.step("sub32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u], self.tail(st, insn, 8, vec![]));
+                let r = self.mk("bits_sub", vec![lit(32), u, v]);
+                let r = self.value(&r);
+                self.scratch.insert(g);
+                let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
             }
             // sub r64, [rsp + d]
@@ -785,6 +802,15 @@ impl<'e> Gen<'e> {
                             (nat(&ba[2])? == 2).then_some(())?;
                             Some((ba[1].clone(), nat(&sh[2])?))
                         })();
+                        // (a plain mask below 128: the 64-bit and, the upper half cleared)
+                        if shape.is_none() && nat(&x[4]).is_some_and(|k| k < 128) {
+                            let tr = self.step("and32_imm_w", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 6, vec![]));
+                            let r = self.mk("bits_and", vec![lit(64), u, x[4].clone()]);
+                            let r = self.value(&r);
+                            self.scratch.insert(gn);
+                            let st2 = self.set_reg(st, a2, gn, 8, r);
+                            return self.then(tr, st2);
+                        }
                         let (q, pos) = shape.ok_or_else(|| bad("and of a 64-bit value not a shifted word"))?;
                         let kb = (0..16).find(|kb| (1u128 << kb) - 1 == kk).ok_or_else(|| bad("a field mask not 2^k - 1"))?;
                         self.fields.insert((pos, kb, kk));
@@ -855,14 +881,15 @@ impl<'e> Gen<'e> {
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         self.then(tr, st2)
                     }
-                    // cmp r32, imm8; ja t
+                    // cmp r32, imm8; ja t / jg t (unsigned / signed)
                     (4, Some(7)) => {
                         let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                        if cc != 7 {
-                            return Err(bad("cmp not followed by ja"));
-                        }
-                        let c = self.mk("int_le", vec![u.clone(), lit(kk)]);
-                        let text = self.jstep("cmp32_ja", st, a, a2, a3, tt, insn.len, jn, &[&g, &x[3], &x[4], &lit(kk), &j, &u], insn, 9, vec![]);
+                        let (rule, c) = match cc {
+                            7 => ("cmp32_ja", self.mk("int_le", vec![u.clone(), lit(kk)])),
+                            15 => ("cmp32_jg", self.mk("int_le", vec![self.mk("sint", vec![lit(32), u.clone()]), self.mk("sint", vec![lit(32), lit(kk)])])),
+                            _ => return Err(bad("cmp not followed by ja or jg")),
+                        };
+                        let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&g, &x[3], &x[4], &lit(kk), &j, &u], insn, 9, vec![]);
                         self.branch(st, c, a3, tt, text)
                     }
                     _ => Err(bad("unknown operation")),
@@ -881,8 +908,14 @@ impl<'e> Gen<'e> {
                     let text = self.jstep("cmp8_jne", st, a, a2, a3, tt, insn.len, jn, &[&f, &kk, &j, &b], insn, 8, vec![]);
                     return self.branch(st, c, a3, tt, text);
                 }
+                // cmp al, imm8; ja tr: on to a3 when al <= k
+                if cc == 7 {
+                    let c = self.mk("int_le", vec![b.clone(), lit(k)]);
+                    let text = self.jstep("cmp8_ja", st, a, a2, a3, tt, insn.len, jn, &[&f, &j, &b], insn, 7, vec![]);
+                    return self.branch(st, c, a3, tt, text);
+                }
                 if cc != 6 {
-                    return Err(bad("cmp not followed by jbe or jne"));
+                    return Err(bad("cmp not followed by jbe, ja or jne"));
                 }
                 let c = self.mk("int_lt", vec![lit(k), b.clone()]);
                 let text = self.jstep("cmp8_jbe", st, a, a2, a3, tt, insn.len, jn, &[&f, &j, &b], insn, 7, vec![]);

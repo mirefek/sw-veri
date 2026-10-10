@@ -244,11 +244,20 @@ fn one_member(fact: &Term) -> Option<Term> {
 fn program_text(elf: &Elf, mut fns: Vec<(String, u64, u64)>) -> Result<String, String> {
     fns.sort_by_key(|f| f.1);
     fns.dedup_by_key(|f| f.1);
-    // the pieces: name, address, length; and which is whose
+    // the pieces: name, address, length; and which is whose -- from the
+    // start of the executable segment, so that the text's address does not
+    // move as functions are added
     let mut pieces: Vec<(String, u64, u64)> = Vec::new();
     let mut gaps = String::new();
+    let a0 = fns.first().map(|f| f.1).ok_or("no functions")?;
+    let start = elf.segments.iter().find(|s| s.flags & 1 != 0 && s.vaddr <= a0 && a0 < s.vaddr + s.memsz).map(|s| s.vaddr).unwrap_or(a0);
+    if start < a0 {
+        let b = elf.bytes_at(start, (a0 - start) as usize).ok_or_else(|| format!("{:x}: no bytes", start))?;
+        gaps.push_str(&format!("def text.gap1() := bytes_seq(bytes\"{}\")\n", b.iter().map(|x| format!("{:02x}", x)).collect::<String>()));
+        pieces.push(("text.gap1".to_string(), start, a0 - start));
+    }
     for (i, (ns, a, n)) in fns.iter().enumerate() {
-        if i > 0 {
+        if i > 0 || !pieces.is_empty() {
             let end = pieces.last().map(|p| p.1 + p.2).unwrap_or(*a);
             if *a < end {
                 return Err(format!("{} overlaps the function before it", ns));

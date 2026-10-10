@@ -398,6 +398,17 @@ impl<'e> Gen<'e> {
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
+        // a 4-byte load
+        if let Some(x) = self.app(op, "gimple.ld32", 2) {
+            if nat(&x[1]) == Some(0) {
+                let a = x[0].clone();
+                let cond = self.mem_defined(&self.w.clone(), &a, &lit(0), 4, false);
+                let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
+                let r = self.mk("bits_of_int", vec![lit(32), self.mk("gimple.bytes_at", vec![vm, a.clone(), lit(4)])]);
+                let (ok, ub) = self.ok_ub("g.ld32_ok", "g.ld32_ub", &[a], vec![simp_l(), hc()], vec![simp_l()]);
+                return Ok((Some(cond), r, ok, Some(ub)));
+            }
+        }
         // an array's 2-byte element at a sign-extended 32-bit index
         if let Some(x) = self.app(op, "gimple.elem", 3) {
             let ix = self.expand(&x[1]);
