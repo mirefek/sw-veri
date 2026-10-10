@@ -153,3 +153,9 @@ item is a short summary of finished work; details are in the files named.
   contract in one step, its outcomes folded into an overflow or the
   contract's return) and the operations' one-outcome lemmas are in
   `proofs/gimple_inv.core`.
+- **Composition**: machine code implements the spec, from C1 and C2 by one
+  lemma (`tr.implements_refine`; every case of matching is of the spec's
+  runs, `tr.matches_t_mono`), for a_ctz_32, a_clz_32, size_to_class,
+  dequeue, dequeue_head, queue, free_meta and set_size
+  (`proofs/mallocng_compose.core`, a caller's with its linked C1 and its
+  callees' C2).

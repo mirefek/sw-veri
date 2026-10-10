@@ -8,14 +8,13 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 Now: composition, enframe
+### 1.1 Now: enframe, the missing C2s
 
-- Composition per function: machine code ⊑ spec from its C1 and its C2 by
-  one general lemma (like `tr.implements_refine`), not chained by hand.
-  First on a_ctz_32, to fit the two halves' shapes (the procedure's
-  wrapper, the world, the arguments, a callee's contract); then for every
-  function with both halves.
-- `enframe`: its spec and C2 (its C1 is done), then its composition.
+- `enframe`: its spec and C2 (its C1 is done), then its composition
+  (`proofs/mallocng_compose.core`).
+- C2 (and composition) for the functions with C1 only: is_bouncing,
+  get_slot_index, get_stride, step_seq, upgradelock, resetlock,
+  decay_bounces.
 
 ### 1.2 The remaining functions
 

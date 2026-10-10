@@ -1630,3 +1630,48 @@ proof
   qed
   show by defs(taut(g), tr.seff)
 qed
+
+// ---------------------------------------------------------------------
+//  Composition: a function's C1 (its machine code implements its
+//  readable GIMPLE's procedure F) and its C2 (F refines the spec S, for
+//  the ABI's arguments and every world) -- the machine code implements S
+
+// (a run matching F matches S: each case -- a raise, a return, a crash
+// the spec allows -- is of F's runs)
+theorem tr.matches_t_mono: all F S args objs mem s o. (all x. runs(app(F, args), abi.view(s, objs, mem), x) -> runs(app(S, args), abi.view(s, objs, mem), x)) ->
+  tr.matches_t(F, args, objs, mem, s, o) -> tr.matches_t(S, args, objs, mem, s, o)
+proof
+  fix F S args objs mem s o
+  assume hr mt
+  show by defs(simp(hr, expand(mt, tr.matches_t, abi.raises_at, abi.crashes_at, abi.overflow_ok)), tr.matches_t, abi.raises_at, abi.crashes_at, abi.overflow_ok)
+qed
+
+theorem tr.implements_refine: all f F S base code statics. tr.implements_at(f, F, base, code, statics) ->
+  (all regs w o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> w in abi.World -> runs(app(F, regs), w, o) -> runs(app(S, regs), w, o)) ->
+  tr.implements_at(f, S, base, code, statics)
+proof
+  fix f F S base code statics
+  assume hi hc
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->
+      abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) ->
+      tr.run_d(s, s, o) -> tr.matches_t(S, args, objs, mem, s, o) proof
+    fix args objs mem s o
+    assume hA hvo hmv hM su hl hrip he hob hvw hrd
+    have m := mp(all_elim(expand(hi, tr.implements_at), {args}, {objs}, {mem}, {s}, {o}), hA, hvo, hmv, hM, su, hl, hrip, he, hob, hvw, hrd)
+    // (the entry's view a world; the arguments the ABI's)
+    have ou := apply(abi.objs_univ, hvo)
+    have mu := apply(x86.vm_univ, hmv)
+    have hvu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu)
+    have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
+    have al: args in list_type(bits(64)) by simp(hA)
+    have lo: seq_len(args) in omega by simp(al)
+    have o6: ord_le(seq_len(args), 6) by simp(hA)
+    have ll: int_le(seq_len(args), 6) by arith(expand(o6, ord_le), lo)
+    have r: all x. runs(app(F, args), abi.view(s, objs, mem), x) -> runs(app(S, args), abi.view(s, objs, mem), x) proof
+      fix x
+      show := mp(all_elim(hc, {args}, {abi.view(s, objs, mem)}, {x}), al, ll, wt)
+    qed
+    show := mp(all_elim(tr.matches_t_mono, {F}, {S}, {args}, {objs}, {mem}, {s}, {o}), r, m)
+  qed
+  show by defs(g, tr.implements_at)
+qed

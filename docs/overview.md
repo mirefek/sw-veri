@@ -127,8 +127,9 @@ For a function F, two halves:
     from any contract the callee refines.
   - A caller proves the callee's precondition at the call.
 
-Transitivity gives machine code ⊑ spec. The functions are composed
-bottom-up over the call graph. A callee is a parameter of its caller's
+Transitivity gives machine code ⊑ spec: one lemma composes a function's
+two halves (`tr.implements_refine`, `proofs/mallocng_compose.core`). The
+functions are composed bottom-up over the call graph. A callee is a parameter of its caller's
 GIMPLE, so each function is checked against its callees' specs.
 
 ## Repository
