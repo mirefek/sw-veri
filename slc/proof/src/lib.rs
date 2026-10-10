@@ -1886,7 +1886,84 @@ impl State {
                 }
             }
         }
+        // (a defined procedure -- an accessor, a helper -- with no fact for
+        // it: its one outcome from its body, stepped with the same facts)
+        if let Some(d) = self.step_inline_det(env, lg, b, withs, is_op, used, using, why)? {
+            return Ok(Some(self.step_bind(env, lg, b.clone(), d, using)?));
+        }
         Ok(None)
+    }
+
+    /// `g.det(P, s, O)` for a bind's program P, a defined procedure outside
+    /// GIMPLE's own operations: a run of P from s assumed, stepped through
+    /// P's body (its definition, `letin`s, binds by the `with` facts or so
+    /// again, its outcome's dispatch) to `o = O`; None if it does not get
+    /// there
+    #[allow(clippy::too_many_arguments)]
+    fn step_inline_det(&mut self, env: &mut Env, lg: &Logic, b: &Seq, withs: &[Seq], is_op: &[bool], used: &mut [bool], using: &[Seq], why: &mut Option<String>) -> KResult<Option<Seq>> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied();
+        let (runs, mkprog, letin, bind, det) = (sym("runs"), sym("mkprog"), sym("letin"), sym("bind_rel"), sym("g.det"));
+        let (Some(runs), Some(det)) = (runs, det) else { return Ok(None) };
+        let (p, s) = match b.concl().node() {
+            Node::App(_, a) if a.len() == 5 => (a[0].clone(), a[1].clone()),
+            _ => return Ok(None),
+        };
+        let Node::App(g, _) = p.node() else { return Ok(None) };
+        let g = *g;
+        if !matches!(env.syms[g as usize].kind, sl_kernel::env::SymKind::Defined { .. }) || env.syms[g as usize].name.starts_with("gimple.") {
+            return Ok(None);
+        }
+        let v = env.new_var("o", 0);
+        let o = Term::var(v, vec![]);
+        let hyp = Term::app(runs, vec![p.clone(), s.clone(), o.clone()]);
+        let mut cur = Seq::assume(env, hyp.clone())?;
+        let head = |t: &Term| match t.node() {
+            Node::App(f, a) => Some((*f, a.to_vec())),
+            _ => None,
+        };
+        for _ in 0..1000 {
+            let Some((f, a)) = head(cur.concl()) else { return Ok(None) };
+            if f == lg.eq && a[0] == o {
+                break;
+            }
+            if f == runs && head(&a[0]).is_some_and(|(h, _)| Some(h) == mkprog) {
+                cur = self.lemma(env, lg, "g.runs_elim", &[cur])?;
+            } else if let (true, Some((h, _))) = (f == runs, head(&a[0])) {
+                if !matches!(env.syms[h as usize].kind, sl_kernel::env::SymKind::Defined { .. }) {
+                    return Ok(None);
+                }
+                let name = env.syms[h as usize].name.clone();
+                self.facts.push(("__stepi".into(), cur.clone()));
+                let r = self.eval(env, lg, &parse_pe(&format!("expand(__stepi, {})", name))?);
+                self.facts.pop();
+                cur = r?;
+            } else if Some(f) == letin {
+                cur = self.lemma(env, lg, "g.letin_e", &[cur])?;
+            } else if Some(f) == bind {
+                match self.step_bind_any(env, lg, &cur, withs, is_op, used, using, why)? {
+                    Some(n) => cur = n,
+                    None => return Ok(None),
+                }
+            } else {
+                let k = self.step_simp(env, lg, cur.clone())?;
+                if k.concl() == cur.concl() {
+                    return Ok(None);
+                }
+                cur = k;
+            }
+        }
+        // (o = O, O free of o: runs(P, s, o) -> o = O for every o)
+        let out = match cur.concl().node() {
+            Node::App(f, a) if *f == lg.eq && a[0] == o && {
+                let mut vs = Vec::new();
+                a[1].vars(&mut vs);
+                !vs.contains(&v)
+            } => a[1].clone(),
+            _ => return Ok(None),
+        };
+        let d = Seq::gen(env, lg, &cur.discharge(env, &hyp)?, v)?;
+        let goal = Term::app(det, vec![p, s, out]);
+        Ok(Some(Seq::conv(env, &d, &goal, &[det])?))
     }
 
     /// a branch's condition `c` from the `with` facts: one implying it
@@ -1914,6 +1991,23 @@ impl State {
                 if let Ok(p) = Seq::taut(env, lg, &[&withs[i]], g) {
                     mark_used(withs, used, i);
                     return back(env, p);
+                }
+            }
+        }
+        // (a view of memory in the fact, another in the condition -- `mnext(vm,
+        // m)`, `rd64(vm, m + 8)` --: both unfolded by the registered views)
+        if let Ok(ev) = self.mem_unfold_eq(env, lg, c) {
+            let cv = mem::rhs(env, ev.concl());
+            for i in 0..withs.len() {
+                if is_op[i] {
+                    continue;
+                }
+                let wv = self.mem_unfold(env, lg, &withs[i]);
+                if let Ok(p) = Seq::taut(env, lg, &[&wv], &cv) {
+                    if let Ok(q) = Seq::sym(env, &ev).and_then(|e| Seq::rewrite(env, &e, &p)) {
+                        mark_used(withs, used, i);
+                        return Some(q);
+                    }
                 }
             }
         }

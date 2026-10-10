@@ -51,7 +51,7 @@ impl State {
     }
 
     /// `t = u`, t unfolded by the views (remembered)
-    fn mem_unfold_eq(&self, env: &mut Env, lg: &Logic, t: &Term) -> KResult<Seq> {
+    pub(crate) fn mem_unfold_eq(&self, env: &mut Env, lg: &Logic, t: &Term) -> KResult<Seq> {
         if let Some(e) = self.mem_cache.borrow().unfold.get(t) {
             return Ok(e.clone());
         }
@@ -62,7 +62,7 @@ impl State {
     }
 
     /// a fact unfolded by the views
-    fn mem_unfold(&self, env: &mut Env, lg: &Logic, f: &Seq) -> Seq {
+    pub(crate) fn mem_unfold(&self, env: &mut Env, lg: &Logic, f: &Seq) -> Seq {
         let Ok(e) = self.mem_unfold_eq(env, lg, f.concl()) else { return f.clone() };
         if rhs_of(env, e.concl()) == *f.concl() {
             return f.clone();

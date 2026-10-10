@@ -477,15 +477,19 @@ Arguments are proof expressions, terms `{t}`, occurrence selections
   v1))`, an operation's one outcome (`g.bind_inv`). The `with` item may
   instead be a lemma `all xs. H1 -> .. -> g.det(P, S, O)`: its variables
   come from matching P and S with the operation and the state, and its
-  premises are discharged from the `using` facts (see "Memory"). Then the
+  premises are discharged from the `using` facts (see "Memory"). A call of
+  a defined procedure no `with` fact covers (an accessor such as
+  `meta_mem_(g)`, `ld64(g, 16)`) is stepped through: its body with the
+  same facts, to its one outcome (`g.det`, derived on the spot). Then the
   value read is resolved, if it resolves -- to a value written, or to the
   same read before the writes (`mnext(wr64(V0, ..), m)` to `mnext(V0, m)`)
   --, and the state's record fields are simplified;
 - through a local's choice of a word (`any_rel`), and an `if`'s outcome
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
 - into the `if`'s branch that is decided: by a `with` fact implying c or
-  its negation propositionally (c as written, or simplified by step's own
-  rules: `snd(pair(a, b))` to b ..), else by arith from a `with` fact and
+  its negation propositionally (c as written, simplified by step's own
+  rules: `snd(pair(a, b))` to b .., or both with the memory views unfolded:
+  `mnext(vm, m)` as `rd64(vm, m + 8)`), else by arith from a `with` fact and
   the `using` facts, else from the `using` facts alone; through the
   branch's `letin`s and binds; a branch ending in `x = V` is substituted
   into K, and K's dispatch on V (an `ok`: on with the rest; a return: the

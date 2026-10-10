@@ -187,8 +187,8 @@ fn c1_engine_checks() {
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 49 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 36 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_ctx.core: 0 constants, 0 axioms, 0 definitions, 14 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 35 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_ctx.core: 0 constants, 0 axioms, 0 definitions, 12 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_compose.core: 0 constants, 0 axioms, 0 definitions, 16 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text] {

@@ -49,7 +49,8 @@ item is a short summary of finished work; details are in the files named.
   went from about 300 to 110 lines. `step` takes its `with` facts in any
   order (an operation's lemma for every operation it matches), decides a
   branch also on its simplified condition or by arith from the facts, and
-  steps on into nested `if`s; a loop by `let B(l, o) := loop_body(h)` and
+  steps on into nested `if`s and through the accessors' bodies (no lemma per
+  accessor: the operations' generic ones); a loop by `let B(l, o) := loop_body(h)` and
   `g.loop` (invariant, variant: the exit). `bitwise` decides bits by registered
   bit rules and one arith call; `cases` takes a literal range case by
   case. Goal rules prove
