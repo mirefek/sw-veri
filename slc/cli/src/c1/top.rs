@@ -119,6 +119,8 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         steps: 0,
         joins: Vec::new(),
         arrivals: Vec::new(),
+        picked: Default::default(),
+        spent_now: Default::default(),
         preds: None,
         ambient: Vec::new(),
     };
@@ -303,6 +305,8 @@ impl<'e> Gen<'e> {
             hyps: Vec::new(),
             facts: Vec::new(),
             lfx: Vec::new(),
+            bconds: Vec::new(),
+            spent: Vec::new(),
             splits: Vec::new(),
             no_join: None,
             z: None,

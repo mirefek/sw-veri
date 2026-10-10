@@ -24,6 +24,11 @@ use super::*;
 /// the claims made at one join point at most
 const MAX_CLAIMS: usize = 8;
 
+/// widening (a claim's every home value a variable, though the same in
+/// both paths): off -- a home holds the code's form of a value, the spec
+/// its own, and only where the paths differ do both get the variable
+const WIDEN: bool = false;
+
 /// a branch on the path: the other side's target, the facts and calls'
 /// results then (their counts), the variables then (those made after are
 /// the branch's own)
@@ -55,6 +60,18 @@ pub(super) struct Arrival {
     spec: SpecX,
     hyps: Vec<Term>,
     facts: Vec<Term>,
+    /// a claim's (its terms patterns): a path generalized with it widens it
+    pattern: bool,
+}
+
+/// a claim's premise: its world a world, a home's value a word, a fact
+/// of the facts in scope, a call's result's
+#[derive(Clone)]
+enum Prem {
+    World,
+    Bits(VarId),
+    Hyp,
+    Fact,
 }
 
 /// a join's claim: at `a` (its frame, depth, loop), over the variables
@@ -70,10 +87,8 @@ pub(super) struct Join {
     homes: Vec<(u128, u128, Term)>,
     w: Term,
     spec: SpecX,
-    kept: Vec<Term>,
-    bits: usize,
-    prem_h: Vec<Term>,
-    prem_f: Vec<Term>,
+    /// the claim's premises, in order (those its proof used)
+    prems: Vec<(Prem, Term)>,
     claim: Seq,
     /// the claim's state as an arrival (its patterns; its facts the kept
     /// and the premises): what a path it does not fit is generalized with
@@ -191,6 +206,7 @@ impl<'e> Gen<'e> {
             spec,
             hyps: st.hyps.iter().map(|h| self.expand(&h.0)).collect(),
             facts: st.facts.iter().map(|f| self.expand(f.concl())).collect(),
+            pattern: false,
         })
     }
 
@@ -198,6 +214,11 @@ impl<'e> Gen<'e> {
     /// each pair of closed subterms where they differ (a new one unless
     /// `fixed`); none where they differ under a binder's variable
     fn au(&mut self, t1: &Term, t2: &Term, tab: &mut Vec<(Term, Term, Term)>, fixed: bool, name: &str) -> Option<Term> {
+        // (a pair abstracted already -- or seeded: a value abstracted though
+        // the same in both)
+        if let Some((_, _, y)) = tab.iter().find(|(x1, x2, _)| x1 == t1 && x2 == t2) {
+            return Some(y.clone());
+        }
         if t1 == t2 {
             return Some(t1.clone());
         }
@@ -289,6 +310,18 @@ impl<'e> Gen<'e> {
         let n = self.fresh("");
         let name = format!("j{n}_");
         let mut tab = Vec::new();
+        // (widening: a claim generalized again -- the point reached from
+        // more contexts -- has every home's value a variable, but a literal)
+        if WIDEN && a1.pattern {
+            for (k, nb, x1) in &a1.homes {
+                let Some((_, _, x2)) = a2.homes.iter().find(|h| h.0 == *k && h.1 == *nb) else { continue };
+                let literal = |x: &Term| matches!(x.node(), Node::Nat(_)) || matches!(x.node(), Node::App(_, args) if args.is_empty());
+                if !literal(x1) && !literal(x2) && !tab.iter().any(|(u, v, _)| u == x1 && v == x2) {
+                    let y = self.var(&format!("{}{}", name, tab.len()));
+                    tab.push((x1.clone(), x2.clone(), y));
+                }
+            }
+        }
         let spec = match (&a1.spec, &a2.spec) {
             (SpecX::Proc(q1), SpecX::Proc(q2)) => self.au(q1, q2, &mut tab, false, &name).map(SpecX::Proc),
             (SpecX::Ret(v1, p1), SpecX::Ret(v2, p2)) => match (self.au(v1, v2, &mut tab, false, &name), self.au(p1, p2, &mut tab, false, &name)) {
@@ -336,9 +369,30 @@ impl<'e> Gen<'e> {
             return Ok(None);
         };
         let vars: Vec<VarId> = tab.iter().map(|x| Self::var_id(&x.2)).collect();
-        // the premises: the facts both assumed after the branch, alike
+        // the premises: the facts both assumed after the branch, alike; and
+        // those before it about a value abstracted (the others kept)
         let mut prem_h = Vec::new();
         let mut prem_hi = Vec::new();
+        let mut kept_hi = Vec::new();
+        // (a fact of the second path, its values the variables they are)
+        fn abstract2(t: &Term, tab: &[(Term, Term, Term)]) -> Term {
+            if let Some((_, _, y)) = tab.iter().find(|(_, x2, _)| x2 == t) {
+                return y.clone();
+            }
+            match t.node() {
+                Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => t.with_args(a.iter().map(|x| abstract2(x, tab)).collect()),
+                _ => t.clone(),
+            }
+        }
+        for i in 0..sp.hyps {
+            let p = abstract2(&a2.hyps[i], &tab);
+            if p != a2.hyps[i] {
+                prem_h.push(p);
+                prem_hi.push(i);
+            } else {
+                kept_hi.push(i);
+            }
+        }
         for (i, h2) in a2.hyps.iter().enumerate().skip(sp.hyps) {
             if let Some(p) = a1.hyps[sp.hyps.min(a1.hyps.len())..].iter().find_map(|h1| self.au(h1, h2, &mut tab, true, &name)) {
                 prem_h.push(p);
@@ -346,6 +400,15 @@ impl<'e> Gen<'e> {
             }
         }
         let mut prem_f = Vec::new();
+        let mut kept_fi = Vec::new();
+        for i in 0..sp.facts {
+            let p = abstract2(&a2.facts[i], &tab);
+            if p != a2.facts[i] {
+                prem_f.push(p);
+            } else {
+                kept_fi.push(i);
+            }
+        }
         for f2 in a2.facts.iter().skip(sp.facts) {
             if let Some(p) = a1.facts[sp.facts.min(a1.facts.len())..].iter().find_map(|f1| self.au(f1, f2, &mut tab, true, &name)) {
                 prem_f.push(p);
@@ -374,29 +437,29 @@ impl<'e> Gen<'e> {
         let hw_t = self.mk("and", vec![self.mk("in", vec![w.clone(), self.mk("abi.World", vec![])]), univ1.clone()]);
         let hw = self.assume(&hw_t)?;
         let hvu = self.evp(&RP::Taut(vec![R::S(hw.clone())]), &univ1, &[])?;
-        let mut hs = vec![hw_t];
-        let mut facts = st.facts[..sp.facts].to_vec();
+        let mut prems: Vec<(Prem, Term)> = vec![(Prem::World, hw_t)];
+        let mut facts: Vec<Seq> = kept_fi.iter().map(|&i| st.facts[i].clone()).collect();
         let mut lfx = st.lfx.clone();
-        let mut bits = 0;
         for (_, nb, x) in &homes {
-            if matches!(x.node(), Node::Var(v, a) if a.is_empty() && vars.contains(v)) {
-                let b = self.mk("in", vec![x.clone(), self.mk("bits", vec![lit(8 * nb)])]);
-                let hb = self.assume(&b)?;
-                facts.push(hb.clone());
-                lfx.push(hb);
-                hs.push(b);
-                bits += 1;
+            if let Node::Var(v, a) = x.node() {
+                if a.is_empty() && vars.contains(v) {
+                    let b = self.mk("in", vec![x.clone(), self.mk("bits", vec![lit(8 * nb)])]);
+                    let hb = self.assume(&b)?;
+                    facts.push(hb.clone());
+                    lfx.push(hb);
+                    prems.push((Prem::Bits(*v), b));
+                }
             }
         }
-        let mut hyps: Vec<(Term, Seq)> = st.hyps[..sp.hyps].to_vec();
+        let mut hyps: Vec<(Term, Seq)> = kept_hi.iter().map(|&i| st.hyps[i].clone()).collect();
         for p in &prem_h {
             let pc = self.canon(p);
             hyps.push((pc, self.assume(p)?));
-            hs.push(p.clone());
+            prems.push((Prem::Hyp, p.clone()));
         }
         for p in &prem_f {
             facts.push(self.assume(p)?);
-            hs.push(p.clone());
+            prems.push((Prem::Fact, p.clone()));
         }
         let mut hst = self.mk("empty", vec![]);
         let mut hsm = BTreeMap::new();
@@ -428,12 +491,15 @@ impl<'e> Gen<'e> {
             hyps,
             facts,
             lfx,
+            // (its facts renumbered: a branch's condition here unspent)
+            bconds: Vec::new(),
+            spent: Vec::new(),
             splits: st.splits[..si].to_vec(),
             no_join: Some(a),
             z: None,
         };
         let _ = prem_hi;
-        self.trace(|| format!("join at {:x}: its claim, over {} variables, {} premises", a, vars.len(), prem_h.len() + prem_f.len()));
+        self.trace(|| format!("join at {:x}: its claim, over {} variables, {} premises", a, vars.len(), prems.len()));
         let pf = match self.prove_kept(stg) {
             Ok(pf) => pf,
             Err(e) => {
@@ -441,6 +507,10 @@ impl<'e> Gen<'e> {
                 return Ok(None);
             }
         };
+        // (the premises its proof used)
+        let used: Vec<Term> = pf.hyps().to_vec();
+        let prems: Vec<(Prem, Term)> = prems.into_iter().filter(|(_, t)| used.contains(&self.expand(t))).collect();
+        let hs: Vec<Term> = prems.iter().map(|p| p.1.clone()).collect();
         let claim = match self.close(pf, &hs, &vars) {
             Ok(c) => c,
             Err(e) => {
@@ -448,7 +518,7 @@ impl<'e> Gen<'e> {
                 return Ok(None);
             }
         };
-        let kept = a2.hyps[..sp.hyps].to_vec();
+        let kept: Vec<Term> = kept_hi.iter().map(|&i| a2.hyps[i].clone()).collect();
         let pattern = Arrival {
             a,
             fr: st.fr,
@@ -458,10 +528,11 @@ impl<'e> Gen<'e> {
             homes: homes.clone(),
             w: w.clone(),
             spec: spec.clone(),
-            hyps: kept.iter().chain(prem_h.iter()).cloned().collect(),
-            facts: a2.facts[..sp.facts].iter().chain(prem_f.iter()).cloned().collect(),
+            hyps: kept.iter().chain(prems.iter().filter(|p| matches!(p.0, Prem::Hyp)).map(|p| &p.1)).cloned().collect(),
+            facts: kept_fi.iter().map(|&i| a2.facts[i].clone()).chain(prems.iter().filter(|p| matches!(p.0, Prem::Fact)).map(|p| p.1.clone())).collect(),
+            pattern: true,
         };
-        self.joins.push(Join { a, fr: st.fr, ds: a2.ds.clone(), lp: st.lp, vars, homes, w, spec, kept, bits, prem_h, prem_f, claim, pattern });
+        self.joins.push(Join { a, fr: st.fr, ds: a2.ds.clone(), lp: st.lp, vars, homes, w, spec, prems, claim, pattern });
         Ok(Some(self.joins.len() - 1))
     }
 
@@ -478,17 +549,31 @@ impl<'e> Gen<'e> {
         // the variables' values: st's state an instance of the claim's (its
         // homes among st's)
         let mut sub = Vec::new();
-        let mut ok = self.matches(&j.w, &arr.w, &j.vars, &mut sub);
-        for (k, nb, px) in &j.homes {
-            ok = ok && arr.homes.iter().find(|h| h.0 == *k && h.1 == *nb).is_some_and(|h| self.matches(px, &h.2, &j.vars, &mut sub));
+        let mut why = None;
+        if !self.matches(&j.w, &arr.w, &j.vars, &mut sub) {
+            why = Some("the world".to_string());
         }
-        ok = ok
-            && match (&j.spec, &arr.spec) {
+        for (k, nb, px) in &j.homes {
+            if why.is_none() && !arr.homes.iter().find(|h| h.0 == *k && h.1 == *nb).is_some_and(|h| self.matches(px, &h.2, &j.vars, &mut sub)) {
+                why = Some(format!("the home {:x}", k));
+            }
+        }
+        let spec_ok = why.is_some()
+            || match (&j.spec, &arr.spec) {
                 (SpecX::Proc(pq), SpecX::Proc(q)) => self.matches(pq, q, &j.vars, &mut sub),
                 (SpecX::Ret(pv, pp), SpecX::Ret(v, p)) => self.matches(pv, v, &j.vars, &mut sub) && self.matches(pp, p, &j.vars, &mut sub),
                 _ => false,
             };
-        if !ok || sub.len() != j.vars.len() || !j.kept.iter().all(|h| arr.hyps.contains(h)) {
+        if !spec_ok {
+            why = Some("the spec".into());
+        }
+        if why.is_none() && sub.len() != j.vars.len() {
+            why = Some("a variable unbound".into());
+        }
+        // (the facts the claim kept: those its proof used, its sequent's
+        // hypotheses -- in st's scope, below)
+        if let Some(why) = why {
+            self.trace(|| format!("join at {:x}: not an instance of claim {} ({})", st.a, i, why));
             return Ok(None);
         }
         // (the claim's own assumptions in st's scope: a claim made within
@@ -506,31 +591,36 @@ impl<'e> Gen<'e> {
                 return Ok(None);
             }
         }
-        // the premises: st's facts, its words, its world
-        let mut prem = Vec::new();
-        {
-            let bf = self.env.binders_fn();
-            let inst = |t: &Term| sub.iter().fold(t.clone(), |x, (v, val)| x.subst_var(*v, val, &bf));
-            for p in &j.prem_h {
-                let pi = inst(p);
-                match arr.hyps.iter().position(|h| *h == pi) {
-                    Some(k) => prem.push(s(&st.hyps[k].1)),
-                    None => return Ok(None),
-                }
-            }
-            for p in &j.prem_f {
-                let pi = inst(p);
-                match arr.facts.iter().position(|f| *f == pi) {
-                    Some(k) => prem.push(s(&st.facts[k])),
-                    None => return Ok(None),
-                }
-            }
-        }
+        // the premises: its world, a home's word (by the facts about its
+        // value), st's facts
         let mut args: Vec<RA> = j.vars.iter().map(|v| t(&sub.iter().find(|x| x.0 == *v).unwrap().1)).collect();
-        args.push(s(&st.hw));
-        let facts: Vec<R> = st.facts.iter().cloned().map(R::S).collect();
-        args.extend((0..j.bits).map(|_| simp_lw(facts.clone())));
-        args.extend(prem);
+        for (kind, p) in &j.prems {
+            let a = match kind {
+                Prem::World => s(&st.hw),
+                Prem::Bits(v) => {
+                    let x = sub.iter().find(|s| s.0 == *v).map(|s| s.1.clone()).unwrap();
+                    simp_lw(self.facts_about(&st.facts, &x))
+                }
+                Prem::Hyp | Prem::Fact => {
+                    let pi = {
+                        let bf = self.env.binders_fn();
+                        sub.iter().fold(p.clone(), |x, (v, val)| x.subst_var(*v, val, &bf))
+                    };
+                    let found = match kind {
+                        Prem::Hyp => arr.hyps.iter().position(|h| *h == pi).map(|k| st.hyps[k].1.clone()),
+                        _ => arr.facts.iter().position(|f| *f == pi).map(|k| st.facts[k].clone()),
+                    };
+                    match found {
+                        Some(q) => s(&q),
+                        None => {
+                            self.trace(|| format!("join at {:x}: not an instance of claim {} (a premise not here)", st.a, i));
+                            return Ok(None);
+                        }
+                    }
+                }
+            };
+            args.push(a);
+        }
         let c0 = match self.run(&mp(R::S(j.claim.clone()), args), &[]) {
             Ok(c) => c,
             Err(e) => {

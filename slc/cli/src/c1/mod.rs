@@ -81,6 +81,12 @@ struct St {
     /// the facts in scope: a branch's condition (or its negation), a
     /// defined operation's condition (assumed)
     hyps: Vec<(Term, Seq)>,
+    /// the facts that are the code's branch conditions (indices into hyps),
+    /// and those of them that decided a spec's `if` already: each decides
+    /// one (at -O0 each `if` has its own test; a later `if` on the same
+    /// condition waits for its own, as every path does)
+    bconds: Vec<usize>,
+    spent: Vec<usize>,
     /// the path's assumed facts: a call's results in bits(64) (for a
     /// result's store, which takes it whole)
     facts: Vec<Seq>,
@@ -217,6 +223,10 @@ struct Gen<'e> {
     /// predecessor counts
     joins: Vec<join::Join>,
     arrivals: Vec<join::Arrival>,
+    /// the facts the last reduction's guard was decided by; the point's
+    /// spent branch conditions (St::spent)
+    picked: std::cell::RefCell<Vec<Term>>,
+    spent_now: std::cell::RefCell<Vec<Term>>,
     preds: Option<BTreeMap<u128, usize>>,
     /// the entry's assumptions (in scope at every point)
     ambient: Vec<Term>,
@@ -408,6 +418,23 @@ impl<'e> Gen<'e> {
             Node::Var(_, a) => t.with_args(a.iter().map(|x| self.expand(x)).collect()),
             _ => t.clone(),
         }
+    }
+
+    /// the facts among `facts` about t (sharing a variable with it): a simp
+    /// sequent rests on every fact it is given
+    fn facts_about(&self, facts: &[Seq], t: &Term) -> Vec<R> {
+        let mut tv = Vec::new();
+        self.expand(t).vars(&mut tv);
+        facts
+            .iter()
+            .filter(|f| {
+                let mut fv = Vec::new();
+                f.concl().vars(&mut fv);
+                fv.iter().any(|v| tv.contains(v))
+            })
+            .cloned()
+            .map(R::S)
+            .collect()
     }
 
     /// the fact in scope `t` (the same term, or the same expanded: a join's

@@ -47,6 +47,24 @@ descriptor and the auxiliary vector.
 
 Tactic ideas, collected as proofs suggest them and done in batches.
 
+## 5. The pipeline: usability and speed
+
+Done alongside the functions, as they need it.
+
+- SL: syntax of properties, qualified names and ambiguity errors in name
+  resolution, the language's name.
+- Code: the C1 engine's instruction rows by name, not number, and its
+  `simp(L, ..)` counts derived; the kernel `Env`'s fields private; the
+  interpreter checking literal widths as the elaborator does.
+- Checker speed, if needed: generated step theorems, memoised normal forms
+  in `taut` / `simp`, parallel checking.
+- C1 joins (`slc/cli/src/c1/join.rs`): each instruction of enframe is
+  walked 1-4 times (~3.4k steps, ~27 s): the first path at a join walks on
+  concretely, and a claim is generalized again (each time walking on) as
+  paths from other contexts differ in a home or the world. Widening (every
+  home's value a variable) fails: a home holds the code's form of a value,
+  the spec its own.
+
 ## Later
 
 With malloc still as the test bed:
@@ -70,15 +88,3 @@ Smaller items:
 - Model: file mappings, recursion (general fixpoints), fault ordering
   across two pages, instruction fetch across into an unmapped page, other
   external kills in `overflow_ok`.
-- SL: syntax of properties, qualified names and ambiguity errors in name
-  resolution, the language's name.
-- Code: the C1 engine's instruction rows by name, not number, and its
-  `simp(L, ..)` counts derived; the kernel `Env`'s fields private; the
-  interpreter checking literal widths as the elaborator does.
-- Checker speed, if needed: generated step theorems, memoised normal forms
-  in `taut` / `simp`, parallel checking.
-- C1 joins (`slc/cli/src/c1/join.rs`): where the spec has already decided
-  a later `if` from one path's facts, the paths' rests differ in shape and
-  are not joined (enframe at 0x40358a); a claim is generalized again as
-  paths from other contexts come (up to 8 per point), each time walking on
-  from it. enframe: ~4.6k steps (~35 s), from ~10k.

@@ -257,11 +257,22 @@ impl<'e> Gen<'e> {
             return self.insn(st);
         }
         if let Spec::Proc(qi) = st.spec {
+            // (the branch conditions spent: not to choose between an `if`'s
+            // alternatives)
+            *self.spent_now.borrow_mut() = st.spent.iter().map(|&i| self.expand(&st.hyps[i].0)).collect();
+            self.picked.borrow_mut().clear();
             match self.reduce(qi, &st.hyps)? {
                 Some(Red::Q(j, r)) => {
                     let rs = self.run(&r, &[])?;
                     let mut st2 = st.clone();
                     st2.spec = Spec::Proc(j);
+                    // (a branch condition that decided an `if`: spent)
+                    let used = std::mem::take(&mut *self.picked.borrow_mut());
+                    for &i in &st.bconds {
+                        if !st2.spent.contains(&i) && used.contains(&self.expand(&st.hyps[i].0)) {
+                            st2.spent.push(i);
+                        }
+                    }
                     let rest = self.prove_kept(st2)?;
                     let wr = self.wred(&st, qi, j);
                     return self.run(&mp(wr, vec![s(&rs), s(&rest)]), &[]);
@@ -743,6 +754,8 @@ impl<'e> Gen<'e> {
             hyps: st.hyps.clone(),
             facts: st.facts.clone(),
             lfx: st.lfx.clone(),
+            bconds: st.bconds.clone(),
+            spent: st.spent.clone(),
             splits: st.splits.clone(),
             no_join: None,
             z: None,
@@ -895,6 +908,7 @@ impl<'e> Gen<'e> {
                 let goal = self.pt(&st2, to);
                 self.evp(&RP::Taut(vec![R::S(hn), R::S(h.1.clone())]), &goal, &[])?
             } else {
+                st2.bconds.push(st2.hyps.len());
                 st2.hyps.push((cond.clone(), hn));
                 self.prove_kept(st2)?
             };

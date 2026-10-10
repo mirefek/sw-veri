@@ -379,7 +379,7 @@ impl<'e> Gen<'e> {
                     let (_, hs2, hk) = self.hkeep(st, cn, n);
                     // (x = bits_of_int(8n, u): of a call's result, by its
                     // being in bits(64))
-                    let hx = simp_lw(st.facts.iter().cloned().map(R::S).collect());
+                    let hx = simp_lw(self.facts_about(&st.facts, &u));
                     let tr = self.step(
                         "store_home_r",
                         a,

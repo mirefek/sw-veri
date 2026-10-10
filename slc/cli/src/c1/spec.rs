@@ -52,6 +52,10 @@ impl<'e> Gen<'e> {
     /// a guard's value: a literal comparison, a fact in scope
     fn guard(&self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
         let (v, facts) = self.guard_facts(g, hyps)?;
+        // (the facts it was decided by: a branch condition among them spent)
+        if v {
+            self.picked.borrow_mut().extend(facts.iter().map(|f| f.concl().clone()));
+        }
         // (the fact itself, or simp from the facts it rests on)
         if v && facts.len() == 1 && self.hyp_find(hyps, g).is_some() {
             return Some((v, s(&facts[0])));
@@ -114,11 +118,14 @@ impl<'e> Gen<'e> {
             return None;
         }
         if let Some(a) = self.app(t, "or", 2) {
-            if let Some(mut p) = self.pick(&a[0], hyps) {
+            // (choosing an alternative: not by a branch condition spent)
+            let spent = self.spent_now.borrow().clone();
+            let usable: Vec<(Term, Seq)> = hyps.iter().filter(|h| !spent.contains(&self.expand(&h.0))).cloned().collect();
+            if let Some(mut p) = self.pick(&a[0], &usable) {
                 p.insert(0, Pick::L);
                 return Some(p);
             }
-            if let Some(mut p) = self.pick(&a[1], hyps) {
+            if let Some(mut p) = self.pick(&a[1], &usable) {
                 p.insert(0, Pick::R);
                 return Some(p);
             }
