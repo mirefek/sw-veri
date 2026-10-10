@@ -159,7 +159,12 @@ item is a short summary of finished work; details are in the files named.
     offset (cycled, a byte) is reduced below the slack by the smeared mask
     (`ms.ef_mask`); the header writes, then set_size on the memory they
     leave (the meta's mem word and the thread pointer's word apart from the
-    slot, in the precondition).
+    slot, in the precondition);
+  - get_slot_index (proofs/mallocng_slots.core); is_bouncing and
+    decay_bounces (a size class's bounce counter in the malloc context),
+    step_seq (its sequence byte; at 255 the first C2 of a loop, by
+    `while_var`: invariant the first i unmap sequence bytes zeroed, variant
+    32 - i), resetlock and upgradelock (proofs/mallocng_ctx.core).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
   `gc.contract_call` / `gc.contract_call1`: a call under a callee's
@@ -169,6 +174,7 @@ item is a short summary of finished work; details are in the files named.
 - **Composition**: machine code implements the spec, from C1 and C2 by one
   lemma (`tr.implements_refine`; every case of matching is of the spec's
   runs, `tr.matches_t_mono`), for a_ctz_32, a_clz_32, size_to_class,
-  dequeue, dequeue_head, queue, free_meta, set_size, get_stride and
-  enframe (`proofs/mallocng_compose.core`, a caller's with its linked C1
-  and its callees' C2).
+  dequeue, dequeue_head, queue, free_meta, set_size, get_stride, enframe,
+  get_slot_index, is_bouncing, decay_bounces, step_seq, resetlock and
+  upgradelock -- every function with a C1 (`proofs/mallocng_compose.core`,
+  a caller's with its linked C1 and its callees' C2).

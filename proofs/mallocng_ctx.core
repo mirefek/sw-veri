@@ -1,0 +1,643 @@
+// C2 of malloc.c's functions on the malloc context's counters and the lock
+// (layers/mallocng_specs.sl): is_bouncing and decay_bounces (a size
+// class's bounce counter), step_seq (the sequence byte; at 255 a loop
+// zeroing the unmap sequence bytes, by an invariant and a variant),
+// resetlock and upgradelock; each also as a C function value.
+// Checked after proofs/mallocng_slots.core.
+
+// ----------------------------------------------------------------------
+//  The lock
+
+// C2 of upgradelock: nothing done
+theorem ms.upgradelock_c2: refines(c_src_malloc_mallocng_malloc.upgradelock(), mallocng_specs.upgradelock_spec(), abi.World)
+proof
+  show proof
+    fix s o
+    assume hw hr
+    have pu := apply(g.runs_univ, hr)
+    have vV vfun vdom .. := apply(ms.world_parts, hw)
+    have ss: fn_update(s, "vm", app(s, "vm")) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+    step oe from hr
+    show by simp(oe, pu, ss, keep(abi.overflow))
+  qed
+qed
+
+// upgradelock as a C function value: its register wrapper refines the spec's
+theorem ms.upgradelock_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.upgradelock_fun(), regs), s, o) -> runs(app(mallocng_specs.upgradelock_spec_fun(), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.upgradelock_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.upgradelock_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  have dc := expand(ms.upgradelock_c2, refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.upgradelock(), s, o2) -> runs(mallocng_specs.upgradelock_spec(), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(dc, {s}, {o2}), hw, h2)
+  qed
+  have b2 := apply(g.bind_mono, hm, r)
+  show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+qed
+
+// C2 of resetlock: the lock word 0
+theorem ms.resetlock_c2: refines(c_src_malloc_mallocng_malloc.resetlock(), mallocng_specs.resetlock_spec(c_src_malloc_mallocng_malloc.__malloc_lock), abi.World)
+proof
+  show proof
+    fix s o
+    assume hw hr
+    let LK := c_src_malloc_mallocng_malloc.__malloc_lock
+    let SPEC := mallocng_specs.resetlock_spec(LK)
+    let V0 := app(s, "vm")
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have np: !mallocng_specs.resetlock_pre(V0, app(s, "objs"), LK) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.resetlock_pre))
+    qed
+    have yp: mallocng_specs.resetlock_pre(V0, app(s, "objs"), LK) -> runs(SPEC, s, o) proof
+      assume hp
+      have lnz lr lu := expand(hp, mallocng_specs.resetlock_pre)
+      have lb: LK in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_lock)
+      have md: g.mem_defined(s, LK, 0, 4, true) by simp(lnz, lu, lr, lb)
+      step oe from hr with ms.st32_det using conj(hw, hu, lb, md)
+      show by simp(oe, pu, hp, ms.v_wr32, keep(abi.overflow, mallocng_specs.resetlock_pre))
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// resetlock as a C function value: its register wrapper refines the spec's
+theorem ms.resetlock_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.resetlock_fun(), regs), s, o) -> runs(app(mallocng_specs.resetlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.resetlock_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.resetlock_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  have dc := expand(ms.resetlock_c2, refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.resetlock(), s, o2) -> runs(mallocng_specs.resetlock_spec(c_src_malloc_mallocng_malloc.__malloc_lock), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(dc, {s}, {o2}), hw, h2)
+  qed
+  have b2 := apply(g.bind_mono, hm, r)
+  show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+qed
+
+// ----------------------------------------------------------------------
+//  The bounce counters
+
+// (size class sc's bounce counter: sc - 7 in 32 bits, its address)
+theorem ms.bounce_idx: all sc. sc in bits(32) ->
+  (mallocng_specs.bouncing_class(sc) -> bits_add(32, sc, bits_neg(32, 7)) = int_sub(sc, 7) && int_le(bits_add(32, sc, bits_neg(32, 7)), 31) &&
+     tr.s32_fits(int_add(sint(32, sc), sint(32, bits_neg(32, 7)))) && bits_sext(32, 64, int_sub(sc, 7)) = int_sub(sc, 7)) &&
+  (!mallocng_specs.bouncing_class(sc) -> !int_le(bits_add(32, sc, bits_neg(32, 7)), 31))
+proof
+  fix sc
+  assume hsc
+  have p32: pow2(32) = 4294967296 by simp()
+  have bn: bits_neg(32, 7) = 4294967289 by defs(simp(), bits_neg)
+  have ba: bits_add(32, sc, bits_neg(32, 7)) = int_mod(int_add(sc, 4294967289), 4294967296) by defs(simp(bn, p32), bits_add)
+  have c1: mallocng_specs.bouncing_class(sc) -> bits_add(32, sc, bits_neg(32, 7)) = int_sub(sc, 7) && int_le(bits_add(32, sc, bits_neg(32, 7)), 31) &&
+      tr.s32_fits(int_add(sint(32, sc), sint(32, bits_neg(32, 7)))) && bits_sext(32, 64, int_sub(sc, 7)) = int_sub(sc, 7) proof
+    assume h
+    have lo hi := expand(h, mallocng_specs.bouncing_class)
+    have e: bits_add(32, sc, bits_neg(32, 7)) = int_sub(sc, 7) by arith(ba, lo, hi, hsc)
+    have ssc: sint(32, sc) = sc by defs(simp(hsc, hi), sint)
+    have s7: sint(32, bits_neg(32, 7)) = int_neg(7) by defs(simp(bn), sint)
+    have f: tr.s32_fits(int_add(sint(32, sc), sint(32, bits_neg(32, 7)))) by defs(simp(ssc, s7, lo, hi), gimple.fits)
+    have xb: int_sub(sc, 7) in bits(32) by arith(lo, hi, hsc)
+    have x := apply(ms.sext_small, xb, arith(lo, hi))
+    show by taut(e, (int_le(bits_add(32, sc, bits_neg(32, 7)), 31) by arith(e, hi)), f, x)
+  qed
+  have c2: !mallocng_specs.bouncing_class(sc) -> !int_le(bits_add(32, sc, bits_neg(32, 7)), 31) proof
+    assume h
+    have h2: !(int_le(7, sc) && int_le(sc, 38)) by defs(h, mallocng_specs.bouncing_class)
+    show by arith(ba, h2, hsc)
+  qed
+  show conj(c1, c2)
+qed
+
+// C2 of is_bouncing: a class out of 7 .. 38, 0; else whether its counter
+// (read at the address the code forms, A) is above 99
+theorem ms.is_bouncing_c2: all sc. sc in bits(32) -> refines(c_src_malloc_mallocng_malloc.is_bouncing(sc), mallocng_specs.is_bouncing_spec(c_src_malloc_mallocng_malloc.__malloc_context, sc), abi.World)
+proof
+  fix sc
+  assume hsc
+  show proof
+    fix s o
+    assume hw hr
+    let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+    let SPEC := mallocng_specs.is_bouncing_spec(CTX, sc)
+    let V0 := app(s, "vm")
+    let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have np: !mallocng_specs.bounce_pre(V0, app(s, "objs"), CTX, sc, false) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+    qed
+    have yp: mallocng_specs.bounce_pre(V0, app(s, "objs"), CTX, sc, false) -> runs(SPEC, s, o) proof
+      assume hp
+      have cnz c913 cu := expand(hp, mallocng_specs.bounce_pre)
+      have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+      have bi1 bi2 := apply(ms.bounce_idx, hsc)
+      // no counter: 0
+      have out: !mallocng_specs.bouncing_class(sc) -> runs(SPEC, s, o) proof
+        assume h
+        have nl := mp(bi2, h)
+        step x1 x2 x3, oe from hr with nl
+        show by simp(oe, pu, hp, h, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+      qed
+      // a counter: its byte, as the code addresses it (A)
+      have inr: mallocng_specs.bouncing_class(sc) -> runs(SPEC, s, o) proof
+        assume h
+        have be ble bf bsx := mp(bi1, h)
+        have lo hi := expand(h, mallocng_specs.bouncing_class)
+        have ur := mp(cu, h)
+        have sv: gimple.sval(T64, 880) = 880 by defs(simp(), gimple.sval)
+        have bsx2: bits_sext(32, 64, bits_add(32, sc, bits_neg(32, 7))) = int_sub(sc, 7) := rewrite(sym(be), bsx, {1})
+        let A := int_add(int_add(int_add(CTX, gimple.sval(T64, 880)), bits_sext(32, 64, bits_add(32, sc, bits_neg(32, 7)))), 0)
+        have p64: pow2(64) = 18446744073709551616 by simp()
+        have ab: mallocng_specs.bounce_at(CTX, sc) = A by defs(arith(sv, bsx2, cv, lo, hi, p64), mallocng_specs.bounce_at, bits_of_int)
+        have ur1 _ := ur
+        have ua := rewrite(ab, ur1)
+        have _ _ _ pb := apply(ms.world_parts, hw)
+        have bo bl := mp(all_elim(g.bytes_bound, {V0}, {A}, {1}), pb, arith())
+        let B := gimple.bytes_at(V0, A, 1)
+        have xb: bits_of_int(8, B) = B by defs(arith(bo, bl), bits_of_int, pow2)
+        let X := bits_of_int(8, B)
+        have F := conj(hu, hsc, cv, sv, bsx2, be, lo, hi, ua, p64, bf)
+        step x1 x2 x3, c from hr with ble, g.sadd32_det, g.padd_det, g.elem1_det, g.ld8_det using F
+        have c1 c2 := c
+        obtain x4, cdis crest from c1
+        have big: int_lt(99, X) -> runs(SPEC, s, o) proof
+          assume hb
+          have e := apply(g.letin_e, apply(g.pick, cdis, hb, (!!int_lt(99, X) by taut(hb))))
+          step e3 from rewrite(e, crest)
+          step oe from rewrite(e3, c2)
+          show by simp(oe, pu, hp, h, ab, xb, hb, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+        qed
+        have small: !int_lt(99, X) -> runs(SPEC, s, o) proof
+          assume hb
+          have e := apply(g.letin_e, apply(g.pick2, cdis, hb, hb))
+          step e3 from rewrite(e, crest)
+          step oe from rewrite(e3, c2)
+          show by simp(oe, pu, hp, h, ab, xb, hb, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+        qed
+        show by taut(big, small)
+      qed
+      show by taut(out, inr)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// is_bouncing as a C function value: its register wrapper refines the spec's
+theorem ms.is_bouncing_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.is_bouncing_fun(), regs), s, o) -> runs(app(mallocng_specs.is_bouncing_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.is_bouncing_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.is_bouncing_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  let A0 := bits_of_int(32, app(regs, 0))
+  have a0: A0 in bits(32) by simp()
+  have dc := expand(all_elim(ms.is_bouncing_c2, {A0}), refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.is_bouncing(A0), s, o2) -> runs(mallocng_specs.is_bouncing_spec(c_src_malloc_mallocng_malloc.__malloc_context, A0), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(mp(dc, a0), {s}, {o2}), hw, h2)
+  qed
+  // (fewer than one argument: the spec allows anything; else the spec's run)
+  have k1: case 1 of r proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  have k2: case 2 of r proof
+    assume hb
+    have b2 := apply(g.bind_mono, hm, hb)
+    show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+  qed
+  show by taut(r, k1, k2)
+qed
+
+// C2 of decay_bounces: the counter less 1 unless 0 (or no counter)
+theorem ms.decay_bounces_c2: all sc. sc in bits(32) -> refines(c_src_malloc_mallocng_malloc.decay_bounces(sc), mallocng_specs.decay_bounces_spec(c_src_malloc_mallocng_malloc.__malloc_context, sc), abi.World)
+proof
+  fix sc
+  assume hsc
+  show proof
+    fix s o
+    assume hw hr
+    let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+    let SPEC := mallocng_specs.decay_bounces_spec(CTX, sc)
+    let V0 := app(s, "vm")
+    let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have vV vfun vdom .. := apply(ms.world_parts, hw)
+    have ss: fn_update(s, "vm", app(s, "vm")) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+    have np: !mallocng_specs.bounce_pre(V0, app(s, "objs"), CTX, sc, true) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+    qed
+    have yp: mallocng_specs.bounce_pre(V0, app(s, "objs"), CTX, sc, true) -> runs(SPEC, s, o) proof
+      assume hp
+      have cnz c913 cu := expand(hp, mallocng_specs.bounce_pre)
+      have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+      have bi1 bi2 := apply(ms.bounce_idx, hsc)
+      // no counter: nothing
+      have out: !mallocng_specs.bouncing_class(sc) -> runs(SPEC, s, o) proof
+        assume h
+        have nl := mp(bi2, h)
+        step x1, oe from hr with nl
+        show by simp(oe, pu, hp, h, ss, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+      qed
+      // a counter: its byte, as the code addresses it (A); decremented unless 0
+      have inr: mallocng_specs.bouncing_class(sc) -> runs(SPEC, s, o) proof
+        assume h
+        have be ble bf bsx := mp(bi1, h)
+        have lo hi := expand(h, mallocng_specs.bouncing_class)
+        have ur := mp(cu, h)
+        have sv: gimple.sval(T64, 880) = 880 by defs(simp(), gimple.sval)
+        have bsx2: bits_sext(32, 64, bits_add(32, sc, bits_neg(32, 7))) = int_sub(sc, 7) := rewrite(sym(be), bsx, {1})
+        let A := int_add(int_add(int_add(CTX, gimple.sval(T64, 880)), bits_sext(32, 64, bits_add(32, sc, bits_neg(32, 7)))), 0)
+        have p64: pow2(64) = 18446744073709551616 by simp()
+        have ab: mallocng_specs.bounce_at(CTX, sc) = A by defs(arith(sv, bsx2, cv, lo, hi, p64), mallocng_specs.bounce_at, bits_of_int)
+        have ur1 ur2 := ur
+        have ua := rewrite(ab, ur1)
+        have uw := rewrite(ab, mp(ur2, taut()))
+        have _ _ _ pb := apply(ms.world_parts, hw)
+        have bo bl := mp(all_elim(g.bytes_bound, {V0}, {A}, {1}), pb, arith())
+        let B := gimple.bytes_at(V0, A, 1)
+        have xb: bits_of_int(8, B) = B by defs(arith(bo, bl), bits_of_int, pow2)
+        let X := bits_of_int(8, B)
+        have F := conj(hu, hw, hsc, cv, sv, bsx2, be, lo, hi, ua, uw, p64, bf)
+        step x1, c from hr with ble, g.sadd32_det, g.padd_det, g.elem1_det, g.ld8_det using F
+        have c1 c2 := c
+        obtain x2, cdis crest from c1
+        have nz: !(X = 0) -> runs(SPEC, s, o) proof
+          assume hz
+          have b := apply(g.pick, cdis, hz, hz)
+          step e2 from b with g.sadd32_det, g.padd_det, g.elem1_det, g.ld8_det, g.padd_det, g.elem1_det, ms.st8_det using F
+          step e3 from rewrite(e2, crest)
+          step oe from rewrite(e3, c2)
+          have b1: int_le(1, B) by arith(hz, xb, bo)
+          have dec: bits_add(8, X, bits_neg(8, 1)) = int_sub(B, 1) by defs(simp(xb, b1, bl), bits_add, bits_neg)
+          show by simp(oe, pu, hp, h, ab, xb, hz, dec, ms.v_wr8, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+        qed
+        have zr: X = 0 -> runs(SPEC, s, o) proof
+          assume hz
+          have e2 := apply(g.pick2, cdis, hz, (!!(X = 0) by taut(hz)))
+          step e3 from rewrite(e2, crest)
+          step oe from rewrite(e3, c2)
+          show by simp(oe, pu, hp, h, ab, xb, hz, ss, keep(abi.overflow, mallocng_specs.bounce_pre, mallocng_specs.bouncing_class, mallocng_specs.bounce_at))
+        qed
+        have cz: X = 0 || !(X = 0) by taut()
+        show by taut(cz, zr, nz)
+      qed
+      show by taut(out, inr)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// decay_bounces as a C function value: its register wrapper refines the spec's
+theorem ms.decay_bounces_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.decay_bounces_fun(), regs), s, o) -> runs(app(mallocng_specs.decay_bounces_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.decay_bounces_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.decay_bounces_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  let A0 := bits_of_int(32, app(regs, 0))
+  have a0: A0 in bits(32) by simp()
+  have dc := expand(all_elim(ms.decay_bounces_c2, {A0}), refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.decay_bounces(A0), s, o2) -> runs(mallocng_specs.decay_bounces_spec(c_src_malloc_mallocng_malloc.__malloc_context, A0), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(mp(dc, a0), {s}, {o2}), hw, h2)
+  qed
+  // (fewer than one argument: the spec allows anything; else the spec's run)
+  have k1: case 1 of r proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  have k2: case 2 of r proof
+    assume hb
+    have b2 := apply(g.bind_mono, hm, hb)
+    show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+  qed
+  show by taut(r, k1, k2)
+qed
+
+// ----------------------------------------------------------------------
+//  The sequence byte
+
+// zeroing i bytes at a, then the byte at a + i: zeroing i + 1 bytes
+theorem ms.zero_grow: all b a i. a in bits(64) -> i in omega -> int_le(int_add(int_add(a, i), 1), pow2(64)) ->
+  x86_64_linux.store_le(x86_64_linux.store_le(b, a, i, 0), int_add(a, i), 1, 0) = x86_64_linux.store_le(b, a, int_add(i, 1), 0)
+proof
+  fix b a i
+  assume ha hi hl
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  let IN := x86_64_linux.store_le(b, a, i, 0)
+  have pt: all x. x in bits(64) ->
+      ite(int_lt(bits_sub(64, x, int_add(a, i)), 1), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))), app(IN, x)) =
+      ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+    fix x
+    assume hx
+    have ai: app(IN, x) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x))
+      by defs(simp(hx), x86_64_linux.store_le)
+    have y1: bits_sub(64, x, int_add(a, i)) in omega by defs(arith(p64), bits_sub)
+    have y2: bits_sub(64, x, a) in omega by defs(arith(p64), bits_sub)
+    have q1 := mp(all_elim(pow256_pos, {bits_sub(64, x, int_add(a, i))}), y1)
+    have q2 := mp(all_elim(pow256_pos, {bits_sub(64, x, a)}), y2)
+    have d1: int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i)))) = 0 by arith(q1)
+    have d2: int_div(0, int_pow(256, bits_sub(64, x, a))) = 0 by arith(q2)
+    have b0: bits_of_int(8, 0) = 0 by simp()
+    have z1: bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))) = 0 := rewrite(sym(d1), b0, {1})
+    have z2: bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))) = 0 := rewrite(sym(d2), b0, {1})
+    have s1: bits_sub(64, x, int_add(a, i)) = int_mod(int_sub(x, int_add(a, i)), 18446744073709551616) by defs(simp(p64), bits_sub)
+    have s2: bits_sub(64, x, a) = int_mod(int_sub(x, a), 18446744073709551616) by defs(simp(p64), bits_sub)
+    have at: x = int_add(a, i) -> int_lt(bits_sub(64, x, int_add(a, i)), 1) && int_lt(bits_sub(64, x, a), int_add(i, 1)) by arith(s1, s2, hx, ha, hi, hl, p64)
+    have nt: !(x = int_add(a, i)) -> !int_lt(bits_sub(64, x, int_add(a, i)), 1) && (int_lt(bits_sub(64, x, a), int_add(i, 1)) <-> int_lt(bits_sub(64, x, a), i)) by arith(s1, s2, hx, ha, hi, hl, p64)
+    have c1: x = int_add(a, i) -> ite(int_lt(bits_sub(64, x, int_add(a, i)), 1), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))), app(IN, x)) =
+        ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+      assume e
+      have t1 t2 := mp(at, e)
+      show by simp(t1, t2, z1, z2)
+    qed
+    have c2: !(x = int_add(a, i)) -> ite(int_lt(bits_sub(64, x, int_add(a, i)), 1), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))), app(IN, x)) =
+        ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+      assume e
+      have t1 t2 := mp(nt, e)
+      have cs: int_lt(bits_sub(64, x, a), i) || !int_lt(bits_sub(64, x, a), i) by taut()
+      have k1: int_lt(bits_sub(64, x, a), i) -> ite(int_lt(bits_sub(64, x, int_add(a, i)), 1), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))), app(IN, x)) =
+          ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+        assume h
+        have h2: int_lt(bits_sub(64, x, a), int_add(i, 1)) by taut(t2, h)
+        show by simp(t1, h, h2, ai, z2)
+      qed
+      have k2: !int_lt(bits_sub(64, x, a), i) -> ite(int_lt(bits_sub(64, x, int_add(a, i)), 1), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))), app(IN, x)) =
+          ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+        assume h
+        have h2: !int_lt(bits_sub(64, x, a), int_add(i, 1)) by taut(t2, h)
+        show by simp(t1, h, h2, ai)
+      qed
+      show by taut(cs, k1, k2)
+    qed
+    have cx: x = int_add(a, i) || !(x = int_add(a, i)) by taut()
+    show by taut(cx, c1, c2)
+  qed
+  have fe := mp(fn_build_ext[d := bits(64), f := x. ite(int_lt(bits_sub(64, x, int_add(a, i)), 1), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, int_add(a, i))))), app(IN, x)),
+    g := x. ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(0, int_pow(256, bits_sub(64, x, a)))), app(b, x))], pt)
+  show by defs(fe, x86_64_linux.store_le)
+qed
+
+// the context's sequence byte (at p + 912), read
+theorem ms.seq_det: all s p. s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 912, 1, false) ->
+  g.det(c_src_malloc_mallocng_malloc.malloc_context_seq(p), s, ok(s, bits_of_int(8, gimple.bytes_at(app(s, "vm"), int_add(p, 912), 1))))
+proof
+  fix s p
+  assume hs hp hd
+  have ld := apply(g.ld8_det, {s}, {p}, {912}, hs, hp, simp(), hd)
+  show proof
+    fix o
+    assume hr
+    step oe from hr with ld
+    show oe
+  qed
+qed
+
+// ... written
+theorem ms.setseq_det: all s p v. s in abi.World -> s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 912, 1, true) ->
+  g.det(c_src_malloc_mallocng_malloc.set_malloc_context_seq(p, v), s, ok(fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", x86_64_linux.store_le(app(app(s, "vm"), "bytes"), int_add(p, 912), 1, v))), empty))
+proof
+  fix s p v
+  assume hw hs hp hd
+  have sd := apply(ms.st8_det, {s}, {p}, {912}, {v}, hw, hs, hp, simp(), hd)
+  show proof
+    fix o
+    assume hr
+    step oe from hr with sd
+    show oe
+  qed
+qed
+
+// C2 of step_seq: below 255 the byte counted up; at 255 the loop over
+// i = 0 .. 32 (invariant: the first i unmap sequence bytes zeroed; variant
+// 32 - i; it leaves by the break at 32), then the byte 1
+theorem ms.step_seq_c2: refines(c_src_malloc_mallocng_malloc.step_seq(), mallocng_specs.step_seq_spec(c_src_malloc_mallocng_malloc.__malloc_context), abi.World)
+proof
+  show proof
+    fix s o
+    assume hw hr
+    let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+    let V0 := app(s, "vm")
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have cb: CTX in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+    let SPEC := mallocng_specs.step_seq_spec(CTX)
+    have np: !mallocng_specs.step_seq_pre(V0, app(s, "objs"), CTX) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.step_seq_pre, mallocng_specs.step_seq_vm))
+    qed
+    have yp: mallocng_specs.step_seq_pre(V0, app(s, "objs"), CTX) -> runs(SPEC, s, o) proof
+      assume hp
+      have cnz c913 ur uw u848 := expand(hp, mallocng_specs.step_seq_pre)
+      have p64: pow2(64) = 18446744073709551616 by simp()
+      have mr: g.mem_defined(s, CTX, 912, 1, false) by simp(cnz, c913, ur, p64)
+      have mw: g.mem_defined(s, CTX, 912, 1, true) by simp(cnz, c913, uw, p64)
+      let B := gimple.bytes_at(V0, int_add(CTX, 912), 1)
+      let X := bits_of_int(8, B)
+      have _ _ _ pb := apply(ms.world_parts, hw)
+      have bo bb := mp(all_elim(g.bytes_bound, {V0}, {int_add(CTX, 912)}, {1}), pb, arith())
+      have xb: X = B by defs(arith(bo, bb), bits_of_int, pow2)
+      have n255: bits_neg(8, 1) = 255 by defs(simp(), bits_neg)
+      have a912: bits_add(64, CTX, 912) = int_add(CTX, 912) by defs(arith(cb, c913, p64), bits_add, pow2)
+      have F := conj(hw, hu, cb, mr, mw)
+      // counted up
+      have up: !(X = bits_neg(8, 1)) -> runs(SPEC, s, o) proof
+        assume hx
+        step x1 x2, oe from hr with ms.seq_det, hx, ms.seq_det, ms.setseq_det using F
+        have bl: int_lt(B, 255) by arith(hx, xb, bo, bb, n255)
+        have inc: bits_add(8, X, 1) = int_add(B, 1) by defs(arith(xb, bl, bo), bits_add, pow2)
+        have ev: mallocng_specs.step_seq_vm(V0, CTX) = fn_update(V0, "bytes", x86_64_linux.store_le(app(V0, "bytes"), int_add(CTX, 912), 1, bits_add(8, X, 1)))
+          by defs(simp(a912, xb, bl, inc, ms.v_wr8), mallocng_specs.step_seq_vm, mallocng_specs.seq_at)
+        have oe2 := rewrite(sym(ev), oe)
+        show by simp(oe2, pu, hp, keep(abi.overflow, mallocng_specs.step_seq_pre, mallocng_specs.step_seq_vm))
+      qed
+      // at 255: the loop zeroing the unmap sequence bytes, then 1
+      have wrap: X = bits_neg(8, 1) -> runs(SPEC, s, o) proof
+        assume hx
+        step x1 x2 x3, c from hr with ms.seq_det, hx using F
+        have wl c2 := c
+        let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+        let A := int_add(CTX, gimple.sval(T64, 848))
+        let B0 := app(V0, "bytes")
+        let ST(i) := fn_update(s, "vm", fn_update(V0, "bytes", x86_64_linux.store_le(B0, A, i, 0)))
+        let P(l) := ex i. i in omega && int_le(i, 32) && l = pair(ST(i), i)
+        let M(l) := int_sub(32, snd(l))
+        let BODY(x0, x1) := ex x2. ((int_lt(sint(32, 31), sint(32, snd(x0))) && x2 = exc(pair(fst(x0), snd(x0)), pair("brk", empty))) || (!int_lt(sint(32, 31), sint(32, snd(x0))) && x2 = ok(pair(fst(x0), snd(x0)), empty))) && ((fst(x2) = 0 && bind_rel(gimple.padd(c_src_malloc_mallocng_malloc.__malloc_context, 848), fst(out_state(x2)), x3 x4. bind_rel(gimple.elem(x4, bits_sext(32, 64, snd(out_state(x2))), 1), x3, x5 x6. bind_rel(gimple.st8(x6, 0, 0), x5, x7 x8. bind_rel(gimple.sadd(32, snd(out_state(x2)), 1), x7, x9 x10. letin(x10, x11. x1 = ok(pair(x9, x11), empty)), x9 x10. x1 = exc(pair(x9, snd(out_state(x2))), pair("raise", x10)), x9. x1 = diverge(x9)), x7 x8. x1 = exc(pair(x7, snd(out_state(x2))), pair("raise", x8)), x7. x1 = diverge(x7)), x5 x6. x1 = exc(pair(x5, snd(out_state(x2))), pair("raise", x6)), x5. x1 = diverge(x5)), x3 x4. x1 = exc(pair(x3, snd(out_state(x2))), pair("raise", x4)), x3. x1 = diverge(x3))) || (((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = exc(pair(fst(out_state(x2)), snd(out_state(x2))), pair("ret", snd(out_value(x2))))) || ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(pair(fst(out_state(x2)), snd(out_state(x2))), pair("raise", snd(out_value(x2)))))) || ((fst(x2) = 1 && fst(out_value(x2)) = "brk") && x1 = exc(pair(fst(out_state(x2)), snd(out_state(x2))), pair("brk", empty)))) || (fst(x2) = 2 && x1 = diverge(snd(x2)))))
+        have sv: gimple.sval(T64, 848) = 848 by defs(simp(), gimple.sval)
+        have ae: A = int_add(CTX, 848) by simp(sv)
+        have ab: A in bits(64) by arith(ae, cb, c913, p64)
+        have vV vf vd .. := apply(ms.world_parts, hw)
+        have bf: is_fun(B0) && dom(B0) = bits(64) by simp(vV)
+        have z := apply(x86.store_zero, {B0}, {A}, {0}, taut(bf), taut(bf), ab)
+        have e0v := mp(fn_update_same[f := V0, k := "bytes"], simp(vV), simp(vV))
+        have e0s := mp(fn_update_same[f := s, k := "vm"], vf, vd)
+        have s0: ST(0) = s by simp(z, e0v, e0s)
+        have p0: P(pair(s, 0)) by ex_intro({0}, simp(s0))
+        have pm: all l. P(l) -> M(l) in omega proof
+          fix l
+          assume hp2
+          obtain i, hi from hp2
+          show by simp(hi)
+        qed
+        // (the bytes zeroed: usable, as the sequence byte is 255)
+        have b255: gimple.bytes_at(V0, mallocng_specs.seq_at(CTX), 1) = 255 by defs(simp(a912, hx, xb, n255), mallocng_specs.seq_at)
+        have u32 := mp(u848, b255)
+        have s31: sint(32, 31) = 31 by defs(simp(), sint)
+        // a step from the invariant: the next byte zeroed, the invariant again, closer to 32
+        have nx: all l l2. P(l) -> true -> BODY(l, ok(l2, empty)) -> P(l2) && int_lt(M(l2), M(l)) proof
+          fix l l2
+          assume hp2 ht hb
+          obtain i, io il le from hp2
+          have hb2 := rewrite(le, hb)
+          have ib: i in bits(32) by arith(io, il)
+          have si: sint(32, i) = i by defs(simp(io, il), sint)
+          have more: int_le(i, 31) -> P(l2) && int_lt(M(l2), M(l)) proof
+            assume hl
+            have nb: !int_lt(sint(32, 31), sint(32, snd(pair(ST(i), i)))) by simp(si, s31, hl)
+            have wW wU := apply(tr.world_store, {s}, {A}, {i}, {0}, hw, hu, ab)
+            have sx := apply(ms.sext_small, ib, arith(hl, io))
+            have ui := mp(all_elim(ms.usable_part, {V0}, {app(s, "objs")}, {int_add(CTX, 848)}, {32}, {int_add(int_add(A, bits_sext(32, 64, i)), 0)}, {1}, {true}),
+              arith(cb), arith(ae, sx, cb, io), arith(ae, sx), arith(ae, sx, hl), u32)
+            have fi: tr.s32_fits(int_add(sint(32, i), sint(32, 1))) by defs(simp(si, hl, io), gimple.fits, sint)
+            step x2, e from hb2 with nb, g.padd_det, g.elem1_det, ms.st8_det, g.sadd32_det using conj(hu, wW, wU, ab, sv, ae, sx, ui, ib, fi, cb, c913, p64, io, il, hl)
+            have ad: int_add(int_add(A, bits_sext(32, 64, i)), 0) = int_add(A, i) by simp(sx)
+            have zg := mp(all_elim(ms.zero_grow, {B0}, {A}, {i}), ab, io, arith(ae, c913, cb, p64, hl, io))
+            have inc: bits_add(32, i, 1) = int_add(i, 1) by defs(arith(io, hl), bits_add, pow2)
+            have e2: l2 = pair(ST(int_add(i, 1)), int_add(i, 1)) by simp(e, ad, zg, inc)
+            have p2: P(l2) by ex_intro({int_add(i, 1)}, simp(io, hl, e2))
+            have m2: int_lt(M(l2), M(l)) by simp(e2, le, io)
+            show by taut(p2, m2)
+          qed
+          // (past 31: the break, not an ok step)
+          have stop: !int_le(i, 31) -> P(l2) && int_lt(M(l2), M(l)) proof
+            assume hl
+            have bb: int_lt(sint(32, 31), sint(32, snd(pair(ST(i), i)))) by simp(si, s31, hl)
+            step x2, e from hb2 with bb
+            have f: false by defs(simp(e), ok, exc)
+            show by taut(f)
+          qed
+          show by taut(more, stop)
+        qed
+        have ps: all l l2. P(l) -> true -> BODY(l, ok(l2, empty)) -> P(l2) proof
+          fix l l2
+          assume hp2 ht hb
+          show by taut(mp(all_elim(nx, {l}, {l2}), hp2, ht, hb))
+        qed
+        have md: all l l2. P(l) -> true -> BODY(l, ok(l2, empty)) -> int_lt(M(l2), M(l)) proof
+          fix l l2
+          assume hp2 ht hb
+          show by taut(mp(all_elim(nx, {l}, {l2}), hp2, ht, hb))
+        qed
+        have wv := mp(while_var[l0 := pair(s, 0), c := l. true, b := x0 x1. BODY(x0, x1), tr := x0. fn_update(empty, "os.events", app(app(fst(x0), "os"), "events")), r := x3, p := l. P(l), m := l. M(l)],
+          p0, ps, pm, md, wl)
+        obtain l, hpl hcase from wv
+        obtain i, io il le from hpl
+        // (the loop left by the body: not an ok step, so the break at 32)
+        have hb: BODY(pair(ST(i), i), x3) && !is_ok(x3) proof
+          have k1: (!true && x3 = ok(l, empty)) -> BODY(pair(ST(i), i), x3) && !is_ok(x3) by taut()
+          have k2: (true && BODY(l, x3) && !is_ok(x3)) -> BODY(pair(ST(i), i), x3) && !is_ok(x3) proof
+            assume h
+            have _ hb3 hnk := h
+            show by taut(rewrite(le, hb3), hnk)
+          qed
+          show by taut(hcase, k1, k2)
+        qed
+        have bb nk := hb
+        have si: sint(32, i) = i by defs(simp(io, il), sint)
+        have i32: i = 32 proof
+          have c1: int_le(i, 31) -> false proof
+            assume hl
+            have nb: !int_lt(sint(32, 31), sint(32, snd(pair(ST(i), i)))) by simp(si, s31, hl)
+            have ib: i in bits(32) by arith(io, il)
+            have wW wU := apply(tr.world_store, {s}, {A}, {i}, {0}, hw, hu, ab)
+            have sx := apply(ms.sext_small, ib, arith(hl, io))
+            have ui := mp(all_elim(ms.usable_part, {V0}, {app(s, "objs")}, {int_add(CTX, 848)}, {32}, {int_add(int_add(A, bits_sext(32, 64, i)), 0)}, {1}, {true}),
+              arith(cb), arith(ae, sx, cb, io), arith(ae, sx), arith(ae, sx, hl), u32)
+            have fi: tr.s32_fits(int_add(sint(32, i), sint(32, 1))) by defs(simp(si, hl, io), gimple.fits, sint)
+            step x2, e from bb with nb, g.padd_det, g.elem1_det, ms.st8_det, g.sadd32_det using conj(hu, wW, wU, ab, sv, ae, sx, ui, ib, fi, cb, c913, p64, io, il, hl)
+            have k: is_ok(x3) by defs(simp(e), is_ok)
+            show by taut(k, nk)
+          qed
+          show by arith(c1, il, io)
+        qed
+        have bk: int_lt(sint(32, 31), sint(32, snd(pair(ST(i), i)))) by simp(si, s31, i32)
+        step x2, re from bb with bk
+        have re2 := rewrite(i32, re)
+        // then the sequence byte 1
+        have wW wU := apply(tr.world_store, {s}, {A}, {32}, {0}, hw, hu, ab)
+        step oe from rewrite(re2, c2) with ms.setseq_det using conj(wW, wU, cb, cnz, c913, uw, p64)
+        have bB: B = 255 by simp(hx, xb, n255)
+        have a848: bits_add(64, CTX, 848) = A by defs(arith(ae, cb, c913, p64), bits_add, pow2)
+        have ev: mallocng_specs.step_seq_vm(V0, CTX) = fn_update(V0, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(B0, A, 32, 0), int_add(CTX, 912), 1, 1))
+          by defs(simp(bB, a912, a848, sv, ms.v_wr8), mallocng_specs.step_seq_vm, mallocng_specs.seq_at, mallocng_specs.unmap_seqs_at)
+        have oe2: o = ok(fn_update(s, "vm", mallocng_specs.step_seq_vm(V0, CTX)), empty) by simp(oe, ev)
+        show by simp(oe2, pu, hp, keep(abi.overflow, mallocng_specs.step_seq_pre, mallocng_specs.step_seq_vm))
+      qed
+      have cw: X = bits_neg(8, 1) || !(X = bits_neg(8, 1)) by taut()
+      show by taut(cw, wrap, up)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// step_seq as a C function value: its register wrapper refines the spec's
+theorem ms.step_seq_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.step_seq_fun(), regs), s, o) -> runs(app(mallocng_specs.step_seq_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.step_seq_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.step_seq_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  have dc := expand(ms.step_seq_c2, refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.step_seq(), s, o2) -> runs(mallocng_specs.step_seq_spec(c_src_malloc_mallocng_malloc.__malloc_context), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(dc, {s}, {o2}), hw, h2)
+  qed
+  have b2 := apply(g.bind_mono, hm, r)
+  show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+qed

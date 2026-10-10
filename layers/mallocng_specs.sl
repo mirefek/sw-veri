@@ -343,3 +343,110 @@ fn enframe_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
   let r = enframe_spec(sct, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
   return (r, any bits[64])
 }
+
+// get_slot_index(p): the index of p's slot in its group, the low 5 bits
+// of p's header byte at p - 3
+pred get_slot_index_pre(vm: Vm, objs: Set[nat], p: Addr) = 3 < uint(p) && usable(vm, objs, uint(p) - 3, 1, false)
+
+proc[World] get_slot_index_spec(p: bits[64]) -> bits[32] {
+  require get_slot_index_pre(vm, objs, p)
+  either { overflow() } or { return bits[32](bytes_at(vm, p - 3, 1) % 32) }
+}
+
+fn get_slot_index_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = get_slot_index_spec(bits[64](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+///////////////////////////////////////////////////////////////////////
+//  The malloc context's counters (struct malloc_context at ctx: the
+//  classes' unmap sequence bytes at ctx + 848, their bounce counters at
+//  ctx + 880, both for the size classes 7 .. 38, and the sequence byte at
+//  ctx + 912); the lock word
+
+// size class sc's bounce counter: for sc 7 .. 38
+pred bouncing_class(sc: bits[32]) = 7 <= uint(sc) && uint(sc) <= 38
+fn bounce_at(ctx: Addr, sc: bits[32]) -> Addr = bits[64](uint(ctx) + 880 + uint(sc) - 7)
+
+// (its byte usable: for reading, and for writing if w)
+pred bounce_pre(vm: Vm, objs: Set[nat], ctx: Addr, sc: bits[32], w: bool) =
+  ctx != 0 && uint(ctx) + 913 <= 2^64 &&
+  (bouncing_class(sc) -> usable(vm, objs, uint(bounce_at(ctx, sc)), 1, false) && (w -> usable(vm, objs, uint(bounce_at(ctx, sc)), 1, true)))
+
+// is_bouncing(sc): whether sc's counter is above 99 (no counter: not)
+proc[World] is_bouncing_spec(ctx: bits[64], sc: bits[32]) -> bits[32] {
+  require bounce_pre(vm, objs, ctx, sc, false)
+  either { overflow() } or { return if bouncing_class(sc) && bytes_at(vm, bounce_at(ctx, sc), 1) > 99 { 1 } else { 0 } }
+}
+
+fn is_bouncing_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = is_bouncing_spec(ctx, bits[32](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+// decay_bounces(sc): sc's counter, if not 0, less 1
+proc[World] decay_bounces_spec(ctx: bits[64], sc: bits[32]) {
+  require bounce_pre(vm, objs, ctx, sc, true)
+  either { overflow() } or {
+    if bouncing_class(sc) && bytes_at(vm, bounce_at(ctx, sc), 1) != 0 {
+      vm := wr8(vm, bounce_at(ctx, sc), bytes_at(vm, bounce_at(ctx, sc), 1) - 1)
+    }
+  }
+}
+
+fn decay_bounces_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  decay_bounces_spec(ctx, bits[32](args[0]))
+  return (any bits[64], any bits[64])
+}
+
+// step_seq(): the sequence byte counted up -- at 255, the unmap sequence
+// bytes zeroed and the count restarted at 1
+fn seq_at(ctx: Addr) -> Addr = ctx + 912
+fn unmap_seqs_at(ctx: Addr) -> Addr = ctx + 848
+
+pred step_seq_pre(vm: Vm, objs: Set[nat], ctx: Addr) =
+  ctx != 0 && uint(ctx) + 913 <= 2^64 &&
+  usable(vm, objs, uint(ctx) + 912, 1, false) && usable(vm, objs, uint(ctx) + 912, 1, true) &&
+  (bytes_at(vm, seq_at(ctx), 1) = 255 -> usable(vm, objs, uint(ctx) + 848, 32, true))
+
+fn step_seq_vm(vm: Vm, ctx: Addr) -> Vm =
+  if bytes_at(vm, seq_at(ctx), 1) != 255 { wr8(vm, seq_at(ctx), bytes_at(vm, seq_at(ctx), 1) + 1) }
+  else { wr8(vm with { bytes: store_le(vm.bytes, unmap_seqs_at(ctx), 32, 0) }, seq_at(ctx), 1) }
+
+proc[World] step_seq_spec(ctx: bits[64]) {
+  require step_seq_pre(vm, objs, ctx)
+  either { overflow() } or { vm := step_seq_vm(vm, ctx) }
+}
+
+fn step_seq_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
+  step_seq_spec(ctx)
+  return (any bits[64], any bits[64])
+}
+
+// resetlock(): the lock word (at lk) 0
+pred resetlock_pre(vm: Vm, objs: Set[nat], lk: Addr) = lk != 0 && uint(lk) + 4 <= 2^64 && usable(vm, objs, uint(lk), 4, true)
+
+proc[World] resetlock_spec(lk: bits[64]) {
+  require resetlock_pre(vm, objs, lk)
+  either { overflow() } or { vm := wr32(vm, lk, 0) }
+}
+
+fn resetlock_spec_fun(lk: bits[64]) -> CFun2[World] = (args: Args) => {
+  resetlock_spec(lk)
+  return (any bits[64], any bits[64])
+}
+
+// upgradelock(): nothing (single-threaded)
+proc[World] upgradelock_spec() {
+  either { overflow() } or { vm := vm }
+}
+
+fn upgradelock_spec_fun() -> CFun2[World] = (args: Args) => {
+  upgradelock_spec()
+  return (any bits[64], any bits[64])
+}

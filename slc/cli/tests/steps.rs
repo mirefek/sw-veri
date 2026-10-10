@@ -164,7 +164,8 @@ fn c1_engine_checks() {
     // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl;
     // the memory rules' views and frames, proofs/mallocng_mem.core; the bit
     // counts' C2 on the bit library, proofs/mallocng_bits.core; the slots',
-    // proofs/mallocng_slots.core), and the two composed per function
+    // proofs/mallocng_slots.core; the context's counters' and the lock's,
+    // proofs/mallocng_ctx.core), and the two composed per function
     // (proofs/mallocng_compose.core)
     let c = Command::new(slc)
         .current_dir(&root)
@@ -172,7 +173,7 @@ fn c1_engine_checks() {
         .args(&files)
         .arg("proofs/a_crash.core")
         .arg("proofs/mallocng_c1.core")
-        .args(["proofs/mallocng_link.core", "proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_compose.core"])
+        .args(["proofs/mallocng_link.core", "proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_ctx.core", "proofs/mallocng_compose.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
@@ -186,8 +187,9 @@ fn c1_engine_checks() {
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 50 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 34 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_compose.core: 0 constants, 0 axioms, 0 definitions, 10 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 37 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_ctx.core: 0 constants, 0 axioms, 0 definitions, 14 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_compose.core: 0 constants, 0 axioms, 0 definitions, 16 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text] {
         let _ = std::fs::remove_file(f);

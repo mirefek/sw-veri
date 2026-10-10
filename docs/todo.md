@@ -8,12 +8,7 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 Now: the missing C2s
-
-- C2 (and composition) for the functions with C1 only: is_bouncing,
-  get_slot_index, step_seq, upgradelock, resetlock, decay_bounces.
-
-### 1.2 The remaining functions
+### 1.1 Now: the remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
@@ -61,7 +56,10 @@ Open items, to take up between functions when one gets in the way.
   does.
 - `step`: accept its `with` facts in any order (now each must come in the
   order used); take a branch condition in any equivalent form (now the
-  exact one, e.g. `!!(x = 0)` for an else branch).
+  exact one, e.g. `!!(x = 0)` for an else branch); go on into an `if`
+  nested in a branch (now the inner `ex` is left as the left conjunct of
+  the branch's continuation, opened by `obtain` and its branch picked by
+  hand: ms.is_bouncing_c2).
 - Checker speed, if it becomes a problem: generate step theorems, memoise
   normal forms in `taut` / `simp`, check files in parallel.
 - C1 joins (`slc/cli/src/c1/join.rs`): cut the repeated walks. Each

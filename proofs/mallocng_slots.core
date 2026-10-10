@@ -1,5 +1,5 @@
 // C2 of malloc.c's slot functions (layers/mallocng_specs.sl): set_size,
-// get_stride, enframe.
+// get_stride, enframe, get_slot_index.
 // Checked after proofs/mallocng_c2.core and proofs/mallocng_bits.core.
 
 // ----------------------------------------------------------------------
@@ -1525,4 +1525,91 @@ proof
     show by apply(tr.runs_intro, pu, taut(b3))
   qed
   show by taut(r, c1, c2, c3)
+qed
+
+// ----------------------------------------------------------------------
+//  get_slot_index: the low 5 bits of p's header byte
+
+// a byte's low 5 bits, in 32 bits
+theorem ms.low5: all x. x in omega -> bits_and(32, bits_of_int(8, x), 31) = int_mod(x, 32)
+proof
+  fix x
+  assume hx
+  have p5: pow2(5) = 32 by simp()
+  have m31: int_sub(pow2(5), 1) = 31 by simp()
+  have mb: int_mod(x, pow2(5)) in bits(32) by arith(hx, p5)
+  have e0: bits_and(32, bits_of_int(8, x), int_sub(pow2(5), 1)) = int_mod(x, pow2(5)) by bitwise({32}, hx, mb)
+  show := rewrite(p5, rewrite(m31, e0))
+qed
+
+// C2 of get_slot_index
+theorem ms.get_slot_index_c2: all p. p in bits(64) -> refines(c_src_malloc_mallocng_malloc.get_slot_index(p), mallocng_specs.get_slot_index_spec(p), abi.World)
+proof
+  fix p
+  assume hp
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := mallocng_specs.get_slot_index_spec(p)
+    let V0 := app(s, "vm")
+    let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have np: !mallocng_specs.get_slot_index_pre(V0, app(s, "objs"), p) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.get_slot_index_pre))
+    qed
+    have yp: mallocng_specs.get_slot_index_pre(V0, app(s, "objs"), p) -> runs(SPEC, s, o) proof
+      assume hpre
+      have p3 ur := expand(hpre, mallocng_specs.get_slot_index_pre)
+      have sv: gimple.sval(T64, bits_neg(64, 3)) = int_neg(3) by defs(simp(), gimple.sval)
+      let P3 := int_add(p, gimple.sval(T64, bits_neg(64, 3)))
+      have e3: P3 = int_sub(p, 3) by arith(sv)
+      have ur3: gimple.usable(V0, app(s, "objs"), int_add(P3, 0), 1, false) by simp(ur, e3)
+      have p64: pow2(64) = 18446744073709551616 by simp()
+      step x1, oe from hr with g.padd_det, g.ld8_det using conj(hu, hp, sv, e3, p3, ur3, p64)
+      let X := gimple.bytes_at(V0, int_add(P3, 0), 1)
+      have a3: int_add(P3, 0) = bits_sub(64, p, 3) by defs(arith(e3, hp, p3, p64), bits_sub, pow2)
+      have _ _ _ pb := apply(ms.world_parts, hw)
+      have xo _ := mp(all_elim(g.bytes_bound, {V0}, {int_add(P3, 0)}, {1}), pb, arith())
+      have lv := apply(ms.low5, xo)
+      have bm: bits_of_int(32, int_mod(X, 32)) = int_mod(X, 32) by defs(arith(xo), bits_of_int, pow2)
+      show by simp(oe, pu, hpre, lv, bm, a3, keep(abi.overflow, mallocng_specs.get_slot_index_pre))
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// get_slot_index as a C function value: its register wrapper refines the spec's
+theorem ms.get_slot_index_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), regs), s, o) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o)
+proof
+  fix regs s o
+  assume hr hl hw h
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(hr, ol, keep(ord_le))
+  rsimp only, c_src_malloc_mallocng_malloc.get_slot_index_fun, app_fn_build, ra in h
+  rsimp only, mallocng_specs.get_slot_index_spec_fun, app_fn_build, ra
+  have pu := apply(g.runs_univ, h)
+  have r := expand(apply(g.runs_elim, h), letin)
+  let A0 := bits_of_int(64, app(regs, 0))
+  have a0: A0 in bits(64) by simp()
+  have dc := expand(all_elim(ms.get_slot_index_c2, {A0}), refines)
+  have hm: all o2. runs(c_src_malloc_mallocng_malloc.get_slot_index(A0), s, o2) -> runs(mallocng_specs.get_slot_index_spec(A0), s, o2) proof
+    fix o2
+    assume h2
+    show := mp(all_elim(mp(dc, a0), {s}, {o2}), hw, h2)
+  qed
+  // (fewer than one argument: the spec allows anything; else the spec's run)
+  have k1: case 1 of r proof
+    assume hn
+    show by apply(tr.runs_intro, pu, taut(hn))
+  qed
+  have k2: case 2 of r proof
+    assume hb
+    have b2 := apply(g.bind_mono, hm, hb)
+    show by defs(apply(tr.runs_intro, pu, taut(b2)), letin)
+  qed
+  show by taut(r, k1, k2)
 qed
