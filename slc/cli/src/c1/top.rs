@@ -117,6 +117,10 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         lbase: empty.clone(),
         lcode: empty,
         steps: 0,
+        joins: Vec::new(),
+        arrivals: Vec::new(),
+        preds: None,
+        ambient: Vec::new(),
     };
     g.top(fname, spec_name, ssym, sbody, sparams, entry)
 }
@@ -265,6 +269,8 @@ impl<'e> Gen<'e> {
         for h in &inner_h {
             hseqs.push(self.assume(h)?);
         }
+        // (in scope everywhere: a join's claim may rest on them)
+        self.ambient = inner_h.iter().map(|h| self.expand(h)).collect();
         let (s_hvo, s_hmv, s_hm, s_hl, s_hvu) = (hseqs[1].clone(), hseqs[2].clone(), hseqs[3].clone(), self.assume(&h_l)?, self.assume(&h_vu)?);
         self.hl = Some(s_hl);
         // the literal facts: a map's keys, the scratch registers
@@ -296,6 +302,9 @@ impl<'e> Gen<'e> {
             spec: Spec::Proc(i0),
             hyps: Vec::new(),
             facts: Vec::new(),
+            lfx: Vec::new(),
+            splits: Vec::new(),
+            no_join: None,
             z: None,
         };
         let x0 = self.var("x0");

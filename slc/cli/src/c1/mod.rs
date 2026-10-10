@@ -22,6 +22,7 @@
 
 mod eff;
 mod insn;
+mod join;
 mod proof;
 pub mod rec;
 mod spec;
@@ -83,6 +84,12 @@ struct St {
     /// the path's assumed facts: a call's results in bits(64) (for a
     /// result's store, which takes it whole)
     facts: Vec<Seq>,
+    /// the literal facts `simp(L)` also has here: a join's variables words
+    lfx: Vec<Seq>,
+    /// the branches the path took (innermost last), for joins
+    splits: Vec<join::Split>,
+    /// a join's claim being proven at this address: not joined again
+    no_join: Option<u128>,
     /// in a zero-initialization (`tr.ptz`): the zero xmm register, the
     /// address of the bytes still to be stored (a base, an offset), their
     /// count
@@ -206,6 +213,13 @@ struct Gen<'e> {
     lcode: Term,
     /// steps made (for the summary)
     steps: usize,
+    /// the join points' claims, the paths recorded there; the code's
+    /// predecessor counts
+    joins: Vec<join::Join>,
+    arrivals: Vec<join::Arrival>,
+    preds: Option<BTreeMap<u128, usize>>,
+    /// the entry's assumptions (in scope at every point)
+    ambient: Vec<Term>,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,
@@ -394,6 +408,16 @@ impl<'e> Gen<'e> {
             Node::Var(_, a) => t.with_args(a.iter().map(|x| self.expand(x)).collect()),
             _ => t.clone(),
         }
+    }
+
+    /// the fact in scope `t` (the same term, or the same expanded: a join's
+    /// premise holds raw what the code names later)
+    fn hyp_find<'h>(&self, hyps: &'h [(Term, Seq)], t: &Term) -> Option<&'h (Term, Seq)> {
+        if let Some(h) = hyps.iter().find(|h| h.0 == *t) {
+            return Some(h);
+        }
+        let te = self.expand(t);
+        hyps.iter().find(|h| self.expand(&h.0) == te)
     }
 
     /// `t` with each subterm that is a named value replaced by its name

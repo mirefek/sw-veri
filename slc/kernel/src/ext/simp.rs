@@ -982,6 +982,14 @@ impl<'a> Simp<'a> {
         self.nats.borrow().iter().any(|(u, k)| u == t && ok(*k))
     }
 
+    /// `bits_term` by the term's form alone (not the path's typing)
+    fn bits_form(&self, t: &Term, n: u64) -> bool {
+        let saved = std::mem::take(&mut *self.nats.borrow_mut());
+        let r = self.bits_term(t, n);
+        *self.nats.borrow_mut() = saved;
+        r
+    }
+
     /// `t` is an n-bit word (in bits(n)): a numeral below 2^n, known on the
     /// path, or a word operation of width at most n (their results are
     /// always words: arithmetic is total).
@@ -1526,8 +1534,10 @@ impl<'a> Simp<'a> {
                     }
                 }
             }
-            // addresses in canonical form: base + offset
-            if ((*op == "bits_add" || *op == "bits_sub") && args.len() == 3) || (*op == "bits_of_int" && args.len() == 2 && !self.bits_term(&args[1], 64)) {
+            // addresses in canonical form: base + offset (`bits_of_int` of
+            // a term not a word by its form -- not by the typing, which a
+            // premise and the goal need not share: one normal form for both)
+            if ((*op == "bits_add" || *op == "bits_sub") && args.len() == 3) || (*op == "bits_of_int" && args.len() == 2 && !self.bits_form(&args[1], 64)) {
                 if let Node::Nat(w) = args[0].node() {
                     if let Some(n) = w.to_u64().filter(|&n| n <= 128) {
                         if let Some(c) = self.canonical_addr(&t.with_args(args.clone()), n) {

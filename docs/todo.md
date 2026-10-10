@@ -77,6 +77,8 @@ Smaller items:
   interpreter checking literal widths as the elaborator does.
 - Checker speed, if needed: generated step theorems, memoised normal forms
   in `taut` / `simp`, parallel checking.
-- The C1 engine's speed: each branch proves the rest of the function after
-  it again (no joins), so enframe's C1 takes ~10k steps (~100 s); joins at
-  the spec's block ends would make it linear.
+- C1 joins (`slc/cli/src/c1/join.rs`): where the spec has already decided
+  a later `if` from one path's facts, the paths' rests differ in shape and
+  are not joined (enframe at 0x40358a); a claim is generalized again as
+  paths from other contexts come (up to 8 per point), each time walking on
+  from it. enframe: ~4.6k steps (~35 s), from ~10k.

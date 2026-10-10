@@ -25,7 +25,7 @@ impl<'e> Gen<'e> {
     }
 
     /// the point claim at st2 proven, the context kept
-    fn prove_kept(&mut self, st2: St) -> Result<Seq, String> {
+    pub(super) fn prove_kept(&mut self, st2: St) -> Result<Seq, String> {
         let c = self.save();
         let r = self.prove(st2);
         self.restore(c);
@@ -57,7 +57,7 @@ impl<'e> Gen<'e> {
         if so.n != n {
             return Err(format!("{:x}: the machine stores {} bytes, the spec {}", st.a, n, so.n));
         }
-        let hc = st.hyps.iter().find(|h| h.0 == so.cond).map(|h| h.1.clone()).ok_or_else(bad)?;
+        let hc = self.hyp_find(&st.hyps, &so.cond).map(|h| h.1.clone()).ok_or_else(bad)?;
         if let Some(addr) = addr {
             if self.canon(&so.addr) != self.canon(addr) && !(self.eval_lit(&so.addr).is_some() && self.eval_lit(&so.addr) == self.eval_lit(addr)) {
                 return Err(format!("{:x}: the machine stores at {}, the spec at {}", st.a, self.print(addr), self.print(&so.addr)));
@@ -233,6 +233,11 @@ impl<'e> Gen<'e> {
 
     /// The proof of the point claim at `st`.
     pub(super) fn prove(&mut self, st: St) -> Result<Seq, String> {
+        // (a join's own claim: not joined at its address, joins after it)
+        let mut st = st;
+        if st.no_join.is_some_and(|j| j != st.a) {
+            st.no_join = None;
+        }
         self.trace(|| {
             let q = match &st.spec {
                 Spec::Proc(i) => format!("q{}: {}", i, Printer::new(self.env).short(&self.qs[*i])),
@@ -287,6 +292,7 @@ impl<'e> Gen<'e> {
                     return self.run(&mp(inst, vec![simpw(vec![R::S(st.hvu.clone())]), s(&rest)]), &[]);
                 }
                 Some(Red::Split { cond, ok, ub }) => {
+                    self.trace(|| format!("split at {:x} on {}", st.a, self.print(&cond)));
                     let u = self.raise_when_not(&cond, &ub)?;
                     // defined: on with the condition
                     let hc = self.assume(&cond)?;
@@ -319,6 +325,10 @@ impl<'e> Gen<'e> {
                 None => {}
             }
         }
+        // (where branches meet: the claim proven once, for all of them)
+        if let Some(pf) = self.join(&st)? {
+            return Ok(pf);
+        }
         self.insn(st)
     }
 
@@ -326,6 +336,7 @@ impl<'e> Gen<'e> {
     /// `in dom` facts
     fn set_lf(&mut self, st: &St) -> Result<(), String> {
         let mut lf = vec![self.lf0.clone().expect("the literal facts")];
+        lf.extend(st.lfx.iter().cloned());
         if let Some(l) = st.lp {
             lf.push(self.loops[l].ci.clone());
         }
@@ -731,6 +742,9 @@ impl<'e> Gen<'e> {
             spec: Spec::Proc(jh),
             hyps: st.hyps.clone(),
             facts: st.facts.clone(),
+            lfx: st.lfx.clone(),
+            splits: st.splits.clone(),
+            no_join: None,
             z: None,
         };
         let mut st_body = st_head.clone();
@@ -787,7 +801,7 @@ impl<'e> Gen<'e> {
         // the invariant at (W', T'), the variant smaller: by the counter's step
         let k = lp.k;
         let g = self.mk("not", vec![self.mk("int_lt", vec![self.mk("sint", vec![lit(32), lit(k)]), self.mk("sint", vec![lit(32), lp.li.clone()])])]);
-        let hg = st.hyps.iter().find(|h| h.0 == g).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: the loop's condition not in scope", st.a))?;
+        let hg = self.hyp_find(&st.hyps, &g).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: the loop's condition not in scope", st.a))?;
         let cs = self.run(&R::Apply(Box::new(f("tr.count_step")), vec![t(&lit(k)), t(&lp.li), simp0(), s(&lp.cc), simp0(), s(&hg)]), &[])?;
         let c = self.run(&mp(R::S(lp.ih.clone()), vec![t(&st.w), t(&tp), taut(vec![R::S(cs.clone()), R::S(st.hw.clone())]), taut(vec![R::S(cs)])]), &[])?;
         let rs = mpf(
@@ -867,16 +881,17 @@ impl<'e> Gen<'e> {
     pub(super) fn branch(&mut self, st: &St, c: Term, a3: u128, tt: u128, rule: R) -> Result<Seq, String> {
         let nc = self.mk("not", vec![c.clone()]);
         let mut bs = Vec::new();
-        for (cond, to) in [(c.clone(), a3), (nc, tt)] {
+        for (cond, to, other) in [(c.clone(), a3, tt), (nc, tt, a3)] {
             let mut st2 = st.clone();
             st2.a = to;
+            st2.splits.push(self.split(st, other));
             let hn = self.assume(&cond)?;
             // (a branch its earlier tests exclude: by their contradiction)
             let opp = match self.app(&cond, "not", 1) {
                 Some(x) => x[0].clone(),
                 None => self.mk("not", vec![cond.clone()]),
             };
-            let body = if let Some(h) = st.hyps.iter().find(|h| h.0 == opp) {
+            let body = if let Some(h) = self.hyp_find(&st.hyps, &opp) {
                 let goal = self.pt(&st2, to);
                 self.evp(&RP::Taut(vec![R::S(hn), R::S(h.1.clone())]), &goal, &[])?
             } else {

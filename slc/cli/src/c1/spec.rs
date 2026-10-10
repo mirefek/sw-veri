@@ -53,7 +53,7 @@ impl<'e> Gen<'e> {
     fn guard(&self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
         let (v, facts) = self.guard_facts(g, hyps)?;
         // (the fact itself, or simp from the facts it rests on)
-        if v && facts.len() == 1 && hyps.iter().any(|h| h.0 == *g) {
+        if v && facts.len() == 1 && self.hyp_find(hyps, g).is_some() {
             return Some((v, s(&facts[0])));
         }
         Some((v, simpw(facts.into_iter().map(R::S).collect())))
@@ -61,7 +61,7 @@ impl<'e> Gen<'e> {
 
     /// a guard's value, and the facts in scope it rests on
     fn guard_facts(&self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, Vec<Seq>)> {
-        if let Some(h) = hyps.iter().find(|h| h.0 == *g) {
+        if let Some(h) = self.hyp_find(hyps, g) {
             return Some((true, vec![h.1.clone()]));
         }
         if self.app(g, "true", 0).is_some() {
@@ -590,7 +590,7 @@ impl<'e> Gen<'e> {
     /// the fact in scope that the spec's n-byte load at p + d is defined
     pub(super) fn mem_hyp(&mut self, st: &St, pp: &Term, d: &Term, n: u128) -> Result<Seq, String> {
         let cond = self.mem_defined(&st.w, pp, d, n, false);
-        st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| {
+        self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
             let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
             format!("{:x}: a load of {} bytes at {} + {} the spec does not make (the facts: {})", st.a, n, self.print(pp), self.print(d), facts.join(", "))
         })
@@ -748,7 +748,7 @@ impl<'e> Gen<'e> {
                 // a store: its definedness split here, the store itself at
                 // the machine's
                 if let Some(so) = self.store_op(&x[0])? {
-                    if hyps.iter().any(|h| h.0 == so.cond) {
+                    if self.hyp_find(hyps, &so.cond).is_some() {
                         return Ok(None);
                     }
                     let ra = vec![("op", x[0].clone()), ("s2", self.vw.clone()), ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone()), ("e", empty)];

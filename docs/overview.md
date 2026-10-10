@@ -110,6 +110,10 @@ For a function F, two halves:
     through the kernel; no proof text is written and nothing is searched.
     The engine is untrusted: the kernel records only the theorems its rules
     made, without hypotheses.
+  - Where the paths of a branch meet, the point's claim is proven once,
+    generalized over what the paths' states differ in (anti-unification:
+    the spec's rest, the homes, the world), and used for each path that is
+    its instance (`tr.pt_rs`, `tr.pt_hs` forget registers and homes).
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
   - Programs and states are related by a coupling at each point:

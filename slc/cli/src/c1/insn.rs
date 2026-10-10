@@ -1068,7 +1068,10 @@ impl<'e> Gen<'e> {
                     let bn = reg(&b)?;
                     let bv = self.need_reg(st, bn, 8)?;
                     let cond = self.ld8_cond(&bv);
-                    let hc = st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: a byte load at {} the spec does not load", a, self.print(&bv)))?;
+                    let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
+                        let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
+                        format!("{:x}: a byte load at {} the spec does not load ({}; the facts: {})", a, self.print(&bv), self.print(&cond), facts.join(", "))
+                    })?;
                     let tr = self.step("movzx8_b", a, insn, &[&x[1], &b, &x[4], &bv], self.tail(st, insn, 5, vec![taut(vec![R::S(hc.clone())])]));
                     let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                     let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, bv, lit(1)])]);
@@ -1087,7 +1090,7 @@ impl<'e> Gen<'e> {
                 let ad = self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]);
                 let ad = self.canon(&ad);
                 let cond = self.ld8_cond(&ad);
-                let hc = st.hyps.iter().find(|h| h.0 == cond).map(|h| h.1.clone()).ok_or_else(|| {
+                let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
                     let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
                     let vals: Vec<String> = self.vals.iter().map(|(v, tr)| format!("{} = {}", self.env.vars[*v as usize].name, self.print(tr))).collect();
                     format!("{:x}: a byte load at {} the spec does not load (the facts: {}; the values: {})", a, self.print(&ad), facts.join(", "), vals.join(", "))
@@ -1252,7 +1255,7 @@ impl<'e> Gen<'e> {
                     }
                 }
                 let v = self.need_reg(st, 0, n)?;
-                if &v != val {
+                if self.expand(&v) != self.expand(val) {
                     return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))));
                 }
                 let r = self.ret_step("tr.ret_insn", a, insn, pr, vec![t(&lit(n)), t(val)], mpf(&format!("tr.result{}", 8 * n), vec![t(&st.w), t(val)]), st);
