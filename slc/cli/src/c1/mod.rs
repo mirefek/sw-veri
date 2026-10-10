@@ -233,6 +233,12 @@ struct Gen<'e> {
     preds: Option<BTreeMap<u128, usize>>,
     /// the entry's assumptions (in scope at every point)
     ambient: Vec<Term>,
+    /// the claim's breakpoints (`tr.sim`'s bkp, a predicate of a machine
+    /// state) and their arrival condition (bka, of a state, a program and a
+    /// world): none (`false`) but in a loop's body walk -- every rule's
+    /// instance takes them
+    bkp: Term,
+    bka: Term,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,
@@ -610,11 +616,35 @@ impl<'e> Gen<'e> {
         self.kw.clone()
     }
 
-    /// the point claim `tr.pt(s, V, base, code, fr, a, hs, ds, rs, p, w)`
+    /// the claim reaching a point `tr.pt(s, bkp, bka, V, base, code, fr, a,
+    /// hs, ds, rs, p, w)` (a successor's)
     fn pt(&self, st: &St, a: u128) -> Term {
+        self.claim_t("tr.pt", st, a)
+    }
+
+    /// the claim leaving a point, `tr.lv(..)` (the walk's at each point)
+    fn lv(&self, st: &St, a: u128) -> Term {
+        self.claim_t("tr.lv", st, a)
+    }
+
+    fn claim_t(&self, name: &str, st: &St, a: u128) -> Term {
         self.mk(
-            "tr.pt",
-            vec![self.s.clone(), self.v.clone(), self.base.clone(), self.code.clone(), lit(st.fr), lit(a), st.hst.clone(), st.ds.clone(), st.rs.clone(), self.p(&st.spec), st.w.clone()],
+            name,
+            vec![
+                self.s.clone(),
+                self.bkp.clone(),
+                self.bka.clone(),
+                self.v.clone(),
+                self.base.clone(),
+                self.code.clone(),
+                lit(st.fr),
+                lit(a),
+                st.hst.clone(),
+                st.ds.clone(),
+                st.rs.clone(),
+                self.p(&st.spec),
+                st.w.clone(),
+            ],
         )
     }
 

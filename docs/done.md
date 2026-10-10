@@ -130,6 +130,20 @@ item is a short summary of finished work; details are in the files named.
     (`tr.cas32_b`, its store and register write in one step:
     `tr.store_reg_step`), at -O0 inside the function `a_cas`, inlined
     alike once optimized.
+- **The claim with breakpoints** (`tr.sim`, proofs/translate.core): about
+  the run from a point -- a step, then on -- to the first state where the
+  function has returned (rsp at or above the entry's sp: set by rsp alone,
+  a deeper activation never stops it) or that is a breakpoint (a loop's
+  head, a (rip, rsp) of this activation), with an arrival condition there
+  (the return's: the spec returns as the machine; a breakpoint's: its
+  relation). Every rule takes the breakpoints as binders; a stepping rule
+  goes from the claim reaching its successors (`tr.pt`: the arrival
+  condition at a breakpoint, else the claim leaving it) to the claim
+  leaving its point (`tr.lv`); a rule with an intermediate state, the
+  zero-store step and the call have the premise that it (the callee's
+  states) are no breakpoint. The contract stays the ABI's run to the
+  return (`tr.entry_d`, `tr.run_d_k`); a call splits the caller's run at
+  the callee's return (`tr.run_split_k`).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

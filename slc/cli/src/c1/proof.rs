@@ -561,7 +561,7 @@ impl<'e> Gen<'e> {
         if !one {
             st2 = self.set_reg(&st2, a2, 2, 8, r1.clone());
         }
-        let rest = self.prove_kept(st2)?;
+        let rest = self.prove_pt(st2)?;
         let pc = self.close(rest, &hs_after, &vs_after)?;
         let inst = R::Inst(
             if one { "tr.call1" } else { "tr.call" }.into(),
@@ -622,6 +622,7 @@ impl<'e> Gen<'e> {
                     s(&hk),
                     s(&hd),
                     s(&pc),
+                    self.nobp(),
                 ],
             ),
             &[],
@@ -710,8 +711,22 @@ impl<'e> Gen<'e> {
         let hst = self.upd(&self.mk("empty", vec![]), d, 4, &li);
         // the claim, the invariant, the variant (of lw, li)
         let cl_t = self.mk(
-            "tr.pt",
-            vec![self.s.clone(), self.v.clone(), self.base.clone(), self.code.clone(), lit(st.fr), lit(h), hst.clone(), lit(self.fd), self.mk("empty", vec![]), self.wrap_of(&self.qs[jh].clone()), lw.clone()],
+            "tr.lv",
+            vec![
+                self.s.clone(),
+                self.bkp.clone(),
+                self.bka.clone(),
+                self.v.clone(),
+                self.base.clone(),
+                self.code.clone(),
+                lit(st.fr),
+                lit(h),
+                hst.clone(),
+                lit(self.fd),
+                self.mk("empty", vec![]),
+                self.wrap_of(&self.qs[jh].clone()),
+                lw.clone(),
+            ],
         );
         let inv_t = self.mk("tr.count_inv", vec![lit(kv), li.clone()]);
         let pi_t = self.mk("and", vec![inv_t.clone(), self.mk("and", vec![self.mk("in", vec![lw.clone(), self.mk("abi.World", vec![])]), self.mk("in", vec![lw.clone(), self.mk("univ", vec![lit(1)])])])]);
@@ -845,12 +860,57 @@ impl<'e> Gen<'e> {
         Some(vec![wr[0].clone(), wr[2].clone(), wr[3].clone(), y[1].clone()])
     }
 
+    /// a premise that no state there is a breakpoint (an address no loop's
+    /// head of the walk; a callee's states, below the frame): by its form
+    pub(super) fn nobp(&self) -> RA {
+        defs(RP::Simp(false, vec![], vec![], false), &["tr.hd"])
+    }
+
+    /// the claim reaching st's point (no breakpoint) from the claim leaving it
+    pub(super) fn to_pt(&mut self, st: &St, lv: Seq) -> Result<Seq, String> {
+        let args = vec![
+            t(&self.s.clone()),
+            t(&self.v.clone()),
+            t(&self.base.clone()),
+            t(&self.code.clone()),
+            t(&lit(st.fr)),
+            t(&lit(st.a)),
+            t(&st.hst),
+            t(&st.ds),
+            t(&st.rs),
+            t(&self.p(&st.spec)),
+            t(&st.w),
+            self.nobp(),
+            s(&lv),
+        ];
+        self.run(&mpf("tr.lv_pt", args), &[])
+    }
+
+    /// the claim reaching st's point: the walk's from there (leaving it), or
+    /// in a zero-initialization its own (`tr.ptz`)
+    pub(super) fn prove_pt(&mut self, st2: St) -> Result<Seq, String> {
+        if st2.z.is_some() {
+            return self.prove_kept(st2);
+        }
+        let lv = self.prove_kept(st2.clone())?;
+        self.to_pt(&st2, lv)
+    }
+
     /// a linear step: the rule's instance (the slot `NEXT` the next point's
     /// claim), the state after
     pub(super) fn then(&mut self, r: R, st2: St) -> Result<Seq, String> {
+        self.then_x(r, st2, true)
+    }
+
+    /// ... the next state at the same point (its claim leaving it)
+    pub(super) fn then_lv(&mut self, r: R, st2: St) -> Result<Seq, String> {
+        self.then_x(r, st2, false)
+    }
+
+    fn then_x(&mut self, r: R, st2: St, reached: bool) -> Result<Seq, String> {
         let a2 = st2.a;
         let (rs2, regs2) = (st2.rs.clone(), st2.regs.clone());
-        let rest = self.prove_kept(st2)?;
+        let rest = if reached { self.prove_pt(st2)? } else { self.prove_kept(st2)? };
         self.run(&r, &[("NEXT", rest)]).map_err(|e| {
             self.trace(|| {
                 let regs: Vec<String> = regs2.iter().map(|(r, n, v)| format!("r{} ({} bytes) = {}", r, n, self.print(v))).collect();
@@ -894,7 +954,7 @@ impl<'e> Gen<'e> {
             ],
         );
         let st2 = self.set_reg(st, st.a, r, n, u);
-        Ok(Some(self.then(rule, st2)?))
+        Ok(Some(self.then_lv(rule, st2)?))
     }
 
     /// a branch on c: on to a3 when c, to t when not (the rule's slots `T`,
@@ -918,7 +978,7 @@ impl<'e> Gen<'e> {
             } else {
                 st2.bconds.push(st2.hyps.len());
                 st2.hyps.push((cond.clone(), hn));
-                self.prove_kept(st2)?
+                self.prove_pt(st2)?
             };
             bs.push(self.close(body, &[cond], &[])?);
         }
@@ -1037,6 +1097,8 @@ impl<'e> Gen<'e> {
         v.extend([t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w), p(f(&insn.name)), p(f(&self.insns[&a2].name))]);
         v.extend((0..n + 1).map(|_| simp_l()));
         v.extend(extra);
+        // (the jump's address: no breakpoint)
+        v.push(self.nobp());
         v.push(p(R::Slot("T")));
         v.push(p(R::Slot("F")));
         mpf(&format!("tr.{}", rule), v)

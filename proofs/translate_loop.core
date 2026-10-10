@@ -1,10 +1,8 @@
-// C1 of loops: breakpoints and the loop rule.
+// C1 of loops: the loop rule.
 //
-// The claim at a point (tr.simk) is about the machine's run from there --
-// at least one step -- to the first state that is a breakpoint: the
-// function's return, or a point of bp (a loop's head). There the arrival
-// condition holds: at the return, the spec returns as the machine does; at
-// a point of bp, the relation ar of the state and the spec reached. The
+// The claim with breakpoints (tr.sim, proofs/translate.core: the run to the
+// first state, after a step, where the function has returned or that is a
+// point of bp, with an arrival condition there). The
 // loop rule (tr.loop) has the claim for a loop at its head from the claim
 // for one iteration (the head a breakpoint, arrived at coupled, the
 // iteration's spec returning the next locals marked) -- by induction along
@@ -101,26 +99,12 @@ qed
 //  return, the spec returns as the machine does (tr.retok); at a point of
 //  bp, ar of the state and of the spec reached (up to a reduction)
 
-def tr.stopk(s, z. bp, m) := tr.at_ret(s, m) || bp(m)
-def tr.rbk(s, z. bp, l, o) := (tr.stopk(s, z. bp(z), fst(l)) && o = exc(pair(fst(l), empty), pair("brk", empty))) ||
-  (!tr.stopk(s, z. bp(z), fst(l)) && tr.rbd(s, l, o))
-def tr.rwk(s, z. bp, l, r) := while_rel(l, x5. true, x5 x6. tr.rbk(s, z. bp(z), x5, x6), x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r)
-def tr.rk(s, z. bp, m, r) := (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && tr.rwk(s, z. bp(z), l1, r)) || (tr.rbd(s, pair(m, empty), r) && !is_ok(r))
-def tr.run_k(s, z. bp, m, o) := ex r. tr.rk(s, z. bp(z), m, r) && tr.rmap(r, o)
 
-def tr.retok(s, v, p, w, m1) := m1 in x86_64_linux.Machine && m1 in univ(1) &&
-  (ex w2. runs(p, w, ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
-    abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), v, abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base")) &&
-  app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
-  abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")
-def tr.arr(s, z. bp, z p w. ar, v, m, p, w) := (tr.at_ret(s, m) -> tr.retok(s, v, p, w, m)) && (bp(m) -> (ex p2 w2. tr.red(p, w, p2, w2) && ar(m, p2, w2)))
-def tr.simk(s, z. bp, z p w. ar, v, p, w, m) := all o. tr.run_k(s, z. bp(z), m, o) ->
-  tr.ub(s, v, p, w) || tr.crash(s, p, w, o) || tr.div(p, w, o) || (ex m1. o = ok(m1, empty) && tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, p, w))
 
 // the outcome o as the spec's: undefined, a crash, a divergence, or the
 // return (no point of bp)
 def tr.lg(s, z. bp, v, p, w, o) := tr.ub(s, v, p, w) || tr.crash(s, p, w, o) || tr.div(p, w, o) ||
-  (ex m1. o = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, p, w, m1))
+  (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, p, w, m1))
 
 // (... carried to a spec with those outcomes: its exceptions, divergences,
 // returns of a 64-bit word)
@@ -170,10 +154,10 @@ proof
     have e2: ex t1. runs(p, w, diverge(t1)) by ex_intro({t}, r)
     show by defs(taut(d1, e2), tr.div)
   qed
-  have c4: (ex m1. o = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, p2, w2, m1)) ->
-      (ex m1. o = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, p, w, m1)) proof
+  have c4: (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, p2, w2, m1)) ->
+      (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, p, w, m1)) proof
     assume e
-    obtain m1, oe ar nb rt from e
+    obtain m1, oe ar rt from e
     have rx := expand(rt, tr.retok)
     have mM: m1 in x86_64_linux.Machine by taut(rx)
     have ew: ex w3. runs(p2, w2, ok(w3, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w3 in abi.World && w3 in univ(1) &&
@@ -186,98 +170,9 @@ proof
         abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w4, "vm"), v, abi.sp(s)) && app(m1, "os") = app(w4, "os") && app(m1, "fs_base") = app(w4, "fs_base")
       by ex_intro({w3}, taut(r, h3))
     have rt2: tr.retok(s, v, p, w, m1) by defs(taut(rx, ew2), tr.retok)
-    show by ex_intro({m1}, taut(oe, ar, nb, rt2))
+    show by ex_intro({m1}, taut(oe, ar, rt2))
   qed
   show by defs(taut(expand(h, tr.lg), c1, c2, c3, c4), tr.lg)
-qed
-
-// (a pass that does not go on: a raise, a divergence, or the return
-// reached)
-theorem tr.rbd_out: all s l r. tr.rbd(s, l, r) -> !is_ok(r) ->
-  (fst(r) = 1 && fst(out_value(r)) = "raise") || fst(r) = 2 || (r = exc(pair(fst(l), empty), pair("brk", empty)) && tr.at_ret(s, fst(l)))
-proof
-  fix s l r
-  assume h hn
-  show by simp(hn, expand(h, tr.rbd, tr.rb, bind_rel), keep(x86_64_linux.step))
-qed
-
-// (a pass that goes on: to a loop state, at a state that is no stop)
-theorem tr.rbk_ok(z. bp): all s l l2 e. tr.rbk(s, z. bp(z), l, ok(l2, e)) -> !tr.stopk(s, z. bp(z), fst(l)) && tr.rbd(s, l, ok(l2, e)) && l2 = pair(fst(l2), empty)
-proof
-  fix s l l2 e
-  assume h
-  have c: !tr.stopk(s, z. bp(z), fst(l)) && tr.rbd(s, l, ok(l2, e)) by simp(expand(h, tr.rbk))
-  have q: l2 = pair(fst(l2), empty) by simp(expand(c.2, tr.rbd, tr.rb), keep(x86_64_linux.step))
-  show by taut(c, q)
-qed
-
-// (the run's return: at a stop)
-theorem tr.run_k_stop(z. bp): all s m m1 e. tr.run_k(s, z. bp(z), m, ok(m1, e)) -> tr.stopk(s, z. bp(z), m1)
-proof
-  fix s m m1 e
-  assume h
-  obtain r, rk rm from expand(h, tr.run_k)
-  // (the run leaving with r at the loop state l: a stop where it is a break)
-  have lv: all l. (tr.rbd(s, l, r) && !is_ok(r)) || (tr.stopk(s, z. bp(z), fst(l)) && r = exc(pair(fst(l), empty), pair("brk", empty))) ->
-      tr.stopk(s, z. bp(z), m1) proof
-    fix l
-    assume hl
-    have o1: (fst(r) = 1 && fst(out_value(r)) = "raise") -> false proof
-      assume e1
-      have rm2 := rewrite(e1.2, expand(rm, tr.rmap))
-      show by simp(rm2, e1.1)
-    qed
-    have o2: fst(r) = 2 -> false proof
-      assume e1
-      show by simp(expand(rm, tr.rmap), e1)
-    qed
-    have o3: r = exc(pair(fst(l), empty), pair("brk", empty)) -> m1 = fst(l) proof
-      assume e1
-      have rm2 := rewrite(e1, expand(rm, tr.rmap))
-      show by simp(rm2)
-    qed
-    have c1: tr.rbd(s, l, r) && !is_ok(r) -> tr.stopk(s, z. bp(z), m1) proof
-      assume hb
-      have ro := apply(tr.rbd_out, {s}, {l}, {r}, hb.1, hb.2)
-      have ar: r = exc(pair(fst(l), empty), pair("brk", empty)) && tr.at_ret(s, fst(l)) by taut(ro, o1, o2)
-      have me := mp(o3, ar.1)
-      have st: tr.stopk(s, z. bp(z), fst(l)) by defs(taut(ar.2), tr.stopk)
-      show := rewrite(sym(me), st)
-    qed
-    have c2: tr.stopk(s, z. bp(z), fst(l)) && r = exc(pair(fst(l), empty), pair("brk", empty)) -> tr.stopk(s, z. bp(z), m1) proof
-      assume hb
-      have me := mp(o3, hb.2)
-      show := rewrite(sym(me), hb.1)
-    qed
-    show by taut(hl, c1, c2)
-  qed
-  // the first pass leaves
-  have f1: tr.rbd(s, pair(m, empty), r) && !is_ok(r) -> tr.stopk(s, z. bp(z), m1) proof
-    assume hb
-    show := mp(all_elim(lv, {pair(m, empty)}), taut(hb))
-  qed
-  // the loop leaves (it cannot stop: its condition is true), or diverges
-  have f2: (ex l1. tr.rbd(s, pair(m, empty), ok(l1, empty)) && tr.rwk(s, z. bp(z), l1, r)) -> tr.stopk(s, z. bp(z), m1) proof
-    assume e
-    obtain l1, _ hw from e
-    have cs := mp(while_cases[l0 := l1, c := x5. true, b := x5 x6. tr.rbk(s, z. bp(z), x5, x6), tr := x5. fn_update(empty, "os.events", app(app(fst(x5), "os"), "events")), r := r],
-      expand(hw, tr.rwk))
-    have d: (ex t. r = diverge(t)) -> tr.stopk(s, z. bp(z), m1) proof
-      assume ed
-      obtain t, rt from ed
-      have rm2 := rewrite(rt, expand(rm, tr.rmap))
-      show by simp(rm2)
-    qed
-    have b: (ex l. (!true && r = ok(l, empty)) || (true && tr.rbk(s, z. bp(z), l, r) && !is_ok(r))) -> tr.stopk(s, z. bp(z), m1) proof
-      assume el
-      obtain l, hl from el
-      have hb: tr.rbk(s, z. bp(z), l, r) && !is_ok(r) by taut(hl)
-      have hb2: (tr.rbd(s, l, r) && !is_ok(r)) || (tr.stopk(s, z. bp(z), fst(l)) && r = exc(pair(fst(l), empty), pair("brk", empty))) by taut(expand(hb.1, tr.rbk), hb.2)
-      show := mp(all_elim(lv, {l}), hb2)
-    qed
-    show by taut(cs, d, b)
-  qed
-  show by taut(expand(rk, tr.rk), f1, f2)
 qed
 
 // ----------------------------------------------------------------------
@@ -292,7 +187,7 @@ def tr.hd(x) := pair(app(x, "rip"), app(app(x, "gpr"), 4))
 // (an iteration: as the loop's run ends, or back at the head after one
 // pass of the body)
 theorem tr.loop_d(s, v, h, z. bp, l o. b, x8 x1. k, x y w. q):
-  (all x y w. q(x, y, w) -> tr.simk(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.sim(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1)), w, x)) ->
   all x y w o. q(x, y, w) -> tr.run_k(s, z. tr.hd(z) = h || bp(z), x, o) ->
     tr.lg(s, z. bp(z), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1)), w, o) ||
@@ -303,7 +198,7 @@ proof
   assume hq hr
   let P := tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1))
   let G := tr.lg(s, z. bp(z), v, P, w, o) || (ex m1 y2 w2. o = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)))
-  have c := mp(all_elim(expand(mp(all_elim(hb, {x}, {y}, {w}), hq), tr.simk), {o}), hr)
+  have c := mp(all_elim(expand(mp(all_elim(hb, {x}, {y}, {w}), hq), tr.sim), {o}), hr)
   have u: tr.ub(s, v, P, w) || tr.crash(s, P, w, o) || tr.div(P, w, o) -> G proof
     assume e
     have l: tr.lg(s, z. bp(z), v, P, w, o) by defs(taut(e), tr.lg)
@@ -314,30 +209,30 @@ proof
     assume e
     obtain m1, oe ha from e
     have ar1 ar2 := expand(ha, tr.arr)
-    have st := apply(tr.run_k_stop[bp := z. tr.hd(z) = h || bp(z)], {s}, {x}, {m1}, {empty}, rewrite(oe, hr))
-    // at the head or a point of bp: the head, after a pass of the body
-    have c1: tr.hd(m1) = h || bp(m1) -> G proof
-      assume hp
-      obtain p2 w2, rd hy from mp(ar2, hp)
+    have st := apply(tr.run_k_stop[bkp := z. tr.hd(z) = h || bp(z)], {s}, {x}, {m1}, {empty}, rewrite(oe, hr))
+    // not returned: at the head or a point of bp -- the head, after a pass
+    // of the body
+    have c1: !tr.out(s, m1) -> G proof
+      assume no
+      have hp: tr.hd(m1) = h || bp(m1) by taut(expand(st, tr.stopk), no)
+      obtain p2 w2, rd hy from mp(ar2, no, hp)
       obtain y2, q2 r2 from hy.2
       have r1 := mp(all_elim(expand(rd, tr.red), {ok(w2, pair(18446744073709551616, y2))}), r2)
       have bs := apply(tr.lone_mk[b := l o. b(l, o), k := x8 x1. k(x8, x1)], {w}, {y}, {w2}, {y2}, r1)
       have e2: ex m2 y3 w3. o = ok(m2, empty) && q(m2, y3, w3) && b(pair(w, y), ok(pair(w3, y3), empty)) by ex_intro({m1}, {y2}, {w2}, taut(oe, q2, bs))
       show by taut(e2)
     qed
-    // else the return
-    have c2: !(tr.hd(m1) = h || bp(m1)) -> G proof
-      assume np
-      have at: tr.at_ret(s, m1) by taut(expand(st, tr.stopk), np)
+    // returned
+    have c2: tr.out(s, m1) -> G proof
+      assume at
       have rt := mp(ar1, at)
-      have nb: !bp(m1) by taut(np)
-      have e2: ex m2. o = ok(m2, empty) && tr.at_ret(s, m2) && !bp(m2) && tr.retok(s, v, P, w, m2) by ex_intro({m1}, taut(oe, at, nb, rt))
+      have e2: ex m2. o = ok(m2, empty) && tr.out(s, m2) && tr.retok(s, v, P, w, m2) by ex_intro({m1}, taut(oe, at, rt))
       have l: tr.lg(s, z. bp(z), v, P, w, o) by defs(taut(e2), tr.lg)
       show by taut(l)
     qed
     show by taut(c1, c2)
   qed
-  show by taut(c, u, a)
+  show by taut(expand(c, tr.gk), u, a)
 qed
 
 // (an iteration's outcome at y, w -- reached from y0, w0 by finitely many
@@ -393,17 +288,17 @@ proof
 qed
 
 // (a state at the head: not the return)
-theorem tr.hd_nret(s, h, x y w. q): (all x y w. q(x, y, w) -> tr.hd(x) = h && !tr.at_ret(s, x)) ->
-  all x y w m. q(x, y, w) -> tr.hd(m) = h -> !tr.at_ret(s, m)
+theorem tr.hd_nret(s, h, x y w. q): (all x y w. q(x, y, w) -> tr.hd(x) = h && !tr.out(s, x)) ->
+  all x y w m. q(x, y, w) -> tr.hd(m) = h -> !tr.out(s, m)
 proof
   assume hq
   fix x y w m
   assume q0 hm
   have c := mp(all_elim(hq, {x}, {y}, {w}), q0)
   have e: app(m, "rip") = app(x, "rip") && app(app(m, "gpr"), 4) = app(app(x, "gpr"), 4) by simp(expand(hm, tr.hd), expand(c.1, tr.hd))
-  have n: tr.at_ret(s, m) -> false proof
+  have n: tr.out(s, m) -> false proof
     assume a
-    have a2: tr.at_ret(s, x) := rewrite(e.2, rewrite(e.1, a))
+    have a2: tr.out(s, x) := rewrite(e.2, a)
     show by taut(a2, c.2)
   qed
   show by taut(n)
@@ -411,8 +306,8 @@ qed
 
 // The loop's finite runs: each as the spec's from the loop
 theorem tr.loop_fin(s, v, h, z. bp, l o. b, l. tr, x8 x1. k, x y w. q):
-  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.at_ret(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.simk(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
+  (all x y w. q(x, y, w) -> tr.sim(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1)), w, x)) ->
   all x0 y0 w0 r o. q(x0, y0, w0) -> tr.rk(s, z. bp(z), x0, r) -> tr.rmap(r, o) -> !(fst(r) = 2) ->
     tr.lg(s, z. bp(z), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1)), w0, o)
@@ -427,7 +322,7 @@ proof
   let MR(x, l) := all r1. !(fst(r1) = 2) -> tr.rwk(s, z. tr.hd(z) = h || bp(z), l, r1) -> tr.rk(s, z. tr.hd(z) = h || bp(z), x, r1)
   let TR(x5) := fn_update(empty, "os.events", app(app(fst(x5), "os"), "events"))
   have hd := mp(tr.loop_d[s := s, v := v, h := h, bp := z. bp(z), b := l o. b(l, o), k := x8 x1. k(x8, x1), q := x y w. q(x, y, w)], hb)
-  have hq2: all x y w. q(x, y, w) -> tr.hd(x) = h && !tr.at_ret(s, x) proof
+  have hq2: all x y w. q(x, y, w) -> tr.hd(x) = h && !tr.out(s, x) proof
     fix x y w
     assume q1
     have c := mp(all_elim(hq, {x}, {y}, {w}), q1)
@@ -439,7 +334,7 @@ proof
   have fo: all m1 y w. o = ok(m1, empty) -> q(m1, y, w) -> false proof
     fix m1 y w
     assume oe q1
-    have st := apply(tr.run_k_stop[bp := z. bp(z)], {s}, {x0}, {m1}, {empty}, rewrite(oe, hrun))
+    have st := apply(tr.run_k_stop[bkp := z. bp(z)], {s}, {x0}, {m1}, {empty}, rewrite(oe, hrun))
     have c := mp(all_elim(hq, {m1}, {y}, {w}), q1)
     show by taut(expand(st, tr.stopk), c)
   qed
@@ -486,11 +381,11 @@ proof
         obtain t, te from expand(c, tr.div).1
         show by simp(te)
       qed
-      have rt: (ex m1. ok(fst(l), empty) = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, P1, w, m1)) -> false proof
+      have rt: (ex m1. ok(fst(l), empty) = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, P1, w, m1)) -> false proof
         assume e
-        obtain m1, oe at _ _ from e
+        obtain m1, oe at _ from e
         have me: m1 = fst(l) by simp(oe)
-        have at2: tr.at_ret(s, fst(l)) := rewrite(me, at)
+        have at2: tr.out(s, fst(l)) := rewrite(me, at)
         have na := mp(all_elim(hnr, {x}, {y}, {w}, {fst(l)}), q1, hh)
         show by taut(at2, na)
       qed
@@ -546,8 +441,8 @@ proof
       assume q1 rc
       have c := mp(all_elim(hq, {fst(l)}, {y}, {w}), q1)
       have nst: !tr.stopk(s, z. bp(z), fst(l)) by defs(taut(c), tr.stopk)
-      have rd: tr.rbd(s, l, r) by taut(expand(hb1.1, tr.rbk), nst)
-      have rd2: tr.rbd(s, pair(fst(l), empty), r) := rewrite(ql, rd)
+      have rd: tr.rst(l, r) by taut(expand(hb1.1, tr.rbk), nst)
+      have rd2: tr.rst(pair(fst(l), empty), r) := rewrite(ql, rd)
       have rk: tr.rk(s, z. tr.hd(z) = h || bp(z), fst(l), r) by defs(taut(rd2, hb1.2), tr.rk)
       have hr: tr.run_k(s, z. tr.hd(z) = h || bp(z), fst(l), o) by defs(ex_intro({r}, taut(rk, hrm)), tr.run_k)
       show := mp(all_elim(h1, {fst(l)}, {y}, {w}), q1, rc, hr)
@@ -576,16 +471,16 @@ proof
   have zs: all l l1. true -> tr.rbk(s, z. bp(z), l, ok(l1, empty)) -> Z(l1) -> Z(l) proof
     fix l l1
     assume _ hb1 z1 ql
-    have nst rd q1 := apply(tr.rbk_ok[bp := z. bp(z)], {s}, {l}, {l1}, {empty}, hb1)
+    have nst rd q1 := apply(tr.rbk_ok[bkp := z. bp(z)], {s}, {l}, {l1}, {empty}, hb1)
     have z2 := mp(z1, q1)
-    have rd2: tr.rbd(s, pair(fst(l), empty), ok(l1, empty)) := rewrite(ql, rd)
+    have rd2: tr.rst(pair(fst(l), empty), ok(l1, empty)) := rewrite(ql, rd)
     have p2: all y w. q(fst(l), y, w) -> RCH(y, w) -> LG proof
       fix y w
       assume q2 rc
       have mr: MR(fst(l), l1) proof
         fix r1
         assume nd rw
-        have e: ex l2. tr.rbd(s, pair(fst(l), empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, r1) by ex_intro({l1}, taut(rd2, rw))
+        have e: ex l2. tr.rst(pair(fst(l), empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, r1) by ex_intro({l1}, taut(rd2, rw))
         show by defs(taut(e), tr.rk)
       qed
       show := mp(all_elim(z2.1, {fst(l)}, {y}, {w}), q2, rc, mr)
@@ -619,20 +514,20 @@ proof
     show := r2
   qed
   // the first pass: on to l1, then the loop of passes; or it leaves
-  have i1: (ex l1. tr.rbd(s, pair(x0, empty), ok(l1, empty)) && tr.rwk(s, z. bp(z), l1, r)) -> LG proof
+  have i1: (ex l1. tr.rst(pair(x0, empty), ok(l1, empty)) && tr.rwk(s, z. bp(z), l1, r)) -> LG proof
     assume e
     obtain l1, rb0 rw from e
-    have q1: l1 = pair(fst(l1), empty) by simp(expand(rb0, tr.rbd, tr.rb), keep(x86_64_linux.step))
+    have q1: l1 = pair(fst(l1), empty) by simp(expand(rb0, tr.rst), keep(x86_64_linux.step))
     have zl := mp(while_run_ind[l0 := l1, c := x5. true, b := x5 x6. tr.rbk(s, z. bp(z), x5, x6), tr := x5. TR(x5), r := r, z := l. Z(l)], zb, zs, expand(rw, tr.rwk), hnd)
     have mr: MR(x0, l1) proof
       fix r1
       assume nd rw1
-      have e2: ex l2. tr.rbd(s, pair(x0, empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, r1) by ex_intro({l1}, taut(rb0, rw1))
+      have e2: ex l2. tr.rst(pair(x0, empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, r1) by ex_intro({l1}, taut(rb0, rw1))
       show by defs(taut(e2), tr.rk)
     qed
     show := mp(all_elim(mp(zl, q1).1, {x0}, {y0}, {w0}), hq0, rc0, mr)
   qed
-  have i2: tr.rbd(s, pair(x0, empty), r) && !is_ok(r) -> LG proof
+  have i2: tr.rst(pair(x0, empty), r) && !is_ok(r) -> LG proof
     assume e
     have rk: tr.rk(s, z. tr.hd(z) = h || bp(z), x0, r) by defs(taut(e), tr.rk)
     have hr: tr.run_k(s, z. tr.hd(z) = h || bp(z), x0, o) by defs(ex_intro({r}, taut(rk, hrm)), tr.run_k)
@@ -697,8 +592,8 @@ qed
 // own divergence or undefined behaviour, or infinitely many of them: the
 // spec's loop then runs forever too)
 theorem tr.loop_div(s, v, h, z. bp, l o. b, l. tr, x8 x1. k, x y w. q):
-  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.at_ret(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.simk(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
+  (all x y w. q(x, y, w) -> tr.sim(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1)), w, x)) ->
   (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
   all x0 y0 w0 r o. q(x0, y0, w0) -> tr.rk(s, z. bp(z), x0, r) -> tr.rmap(r, o) -> fst(r) = 2 ->
@@ -743,9 +638,9 @@ proof
           obtain m1 a k0, {oe} from expand(c, tr.crash)
           show by simp(oe)
         qed
-        have rt: (ex m1. diverge(t) = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, P1, w, m1)) -> false proof
+        have rt: (ex m1. diverge(t) = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, P1, w, m1)) -> false proof
           assume e
-          obtain m1, oe _ _ _ from e
+          obtain m1, oe _ _ from e
           show by simp(oe)
         qed
         show by taut(expand(l1, tr.lg), u, cr, rt)
@@ -766,7 +661,7 @@ proof
       obtain r1, rk1 f1 from dv
       have rmd: tr.rmap(r1, diverge(snd(r1))) by defs(simp(f1), tr.rmap)
       // the first pass diverges
-      have k2: tr.rbd(s, pair(x, empty), r1) && !is_ok(r1) -> (ex x2 y2 w2. q(x2, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)) && DV(x2)) proof
+      have k2: tr.rst(pair(x, empty), r1) && !is_ok(r1) -> (ex x2 y2 w2. q(x2, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)) && DV(x2)) proof
         assume e
         have rk: tr.rk(s, z. tr.hd(z) = h || bp(z), x, r1) by defs(taut(e), tr.rk)
         have hr: tr.run_k(s, z. tr.hd(z) = h || bp(z), x, diverge(snd(r1))) by defs(ex_intro({r1}, taut(rk, rmd)), tr.run_k)
@@ -774,10 +669,10 @@ proof
         show by taut(f)
       qed
       // the loop of passes: cut where it first reaches the head
-      have k1: (ex l1. tr.rbd(s, pair(x, empty), ok(l1, empty)) && tr.rwk(s, z. bp(z), l1, r1)) -> (ex x2 y2 w2. q(x2, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)) && DV(x2)) proof
+      have k1: (ex l1. tr.rst(pair(x, empty), ok(l1, empty)) && tr.rwk(s, z. bp(z), l1, r1)) -> (ex x2 y2 w2. q(x2, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)) && DV(x2)) proof
         assume e
         obtain l1, rb0 rw from e
-        have q1s: l1 = pair(fst(l1), empty) by simp(expand(rb0, tr.rbd, tr.rb), keep(x86_64_linux.step))
+        have q1s: l1 = pair(fst(l1), empty) by simp(expand(rb0, tr.rst), keep(x86_64_linux.step))
         have he: all l. !is_ok(BRK(l)) proof
           fix l
           show by defs(simp(), is_ok)
@@ -785,7 +680,7 @@ proof
         have hqs: all l l2. l = pair(fst(l), empty) -> tr.rbk(s, z. bp(z), l, ok(l2, empty)) -> l2 = pair(fst(l2), empty) proof
           fix l l2
           assume _ hb1
-          have c := apply(tr.rbk_ok[bp := z. bp(z)], {s}, {l}, {l2}, {empty}, hb1)
+          have c := apply(tr.rbk_ok[bkp := z. bp(z)], {s}, {l}, {l2}, {empty}, hb1)
           show by taut(c)
         qed
         have sp := mp(while_split[l0 := l1, b := x5 x6. tr.rbk(s, z. bp(z), x5, x6), tr := x5. TR(x5), p := l. !(tr.hd(fst(l)) = h), e := l. BRK(l), r := r1, q := l. l = pair(fst(l), empty)],
@@ -812,7 +707,7 @@ proof
           have w2 := mp(while_mono[l0 := l1, c := l. true, b1 := l o2. (!(tr.hd(fst(l)) = h) && tr.rbk(s, z. bp(z), l, o2)) || (!!(tr.hd(fst(l)) = h) && o2 = BRK(l)),
             b2 := l o2. tr.rbk(s, z. tr.hd(z) = h || bp(z), l, o2), tr := l. TR(l), r := r1], gb, wg)
           have rw2: tr.rwk(s, z. tr.hd(z) = h || bp(z), l1, r1) by defs(w2, tr.rwk)
-          have e2: ex l2. tr.rbd(s, pair(x, empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, r1) by ex_intro({l1}, taut(rb0, rw2))
+          have e2: ex l2. tr.rst(pair(x, empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, r1) by ex_intro({l1}, taut(rb0, rw2))
           have rk: tr.rk(s, z. tr.hd(z) = h || bp(z), x, r1) by defs(taut(e2), tr.rk)
           have hr: tr.run_k(s, z. tr.hd(z) = h || bp(z), x, diverge(snd(r1))) by defs(ex_intro({r1}, taut(rk, rmd)), tr.run_k)
           have f := mp(all_elim(h3, {x}, {y}, {w}, {snd(r1)}), q1, rc, hr)
@@ -829,7 +724,7 @@ proof
           have w2 := mp(while_mono[l0 := l1, c := l. true, b1 := l o2. (!(tr.hd(fst(l)) = h) && tr.rbk(s, z. bp(z), l, o2)) || (!!(tr.hd(fst(l)) = h) && o2 = BRK(l)),
             b2 := l o2. tr.rbk(s, z. tr.hd(z) = h || bp(z), l, o2), tr := l. TR(l), r := BRK(l)], gb, wg)
           have rw2: tr.rwk(s, z. tr.hd(z) = h || bp(z), l1, BRK(l)) by defs(w2, tr.rwk)
-          have e3: ex l2. tr.rbd(s, pair(x, empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, BRK(l)) by ex_intro({l1}, taut(rb0, rw2))
+          have e3: ex l2. tr.rst(pair(x, empty), ok(l2, empty)) && tr.rwk(s, z. tr.hd(z) = h || bp(z), l2, BRK(l)) by ex_intro({l1}, taut(rb0, rw2))
           have rk: tr.rk(s, z. tr.hd(z) = h || bp(z), x, BRK(l)) by defs(taut(e3), tr.rk)
           have rmb: tr.rmap(BRK(l), ok(fst(l), empty)) by defs(simp(), tr.rmap)
           have hr: tr.run_k(s, z. tr.hd(z) = h || bp(z), x, ok(fst(l), empty)) by defs(ex_intro({BRK(l)}, taut(rk, rmb)), tr.run_k)
@@ -848,7 +743,7 @@ proof
                   fst(r3) = fst(r2) && (!(fst(r2) = 2) -> r3 = r2))) -> false proof
                 assume e4
                 obtain l3, hb3 _ from e4
-                have c := apply(tr.rbk_ok[bp := z. bp(z)], {s}, {l}, {l3}, {empty}, hb3)
+                have c := apply(tr.rbk_ok[bkp := z. bp(z)], {s}, {l}, {l3}, {empty}, hb3)
                 show by taut(c, st)
               qed
               show by taut(un, u1, u2)
@@ -858,8 +753,8 @@ proof
           have dvl: DV(fst(l)) proof
             have v1: tr.rbk(s, z. bp(z), l, r2) && !is_ok(r2) -> DV(fst(l)) proof
               assume e4
-              have rd: tr.rbd(s, l, r2) by taut(expand(e4.1, tr.rbk), nst)
-              have rd2: tr.rbd(s, pair(fst(l), empty), r2) := rewrite(ql, rd)
+              have rd: tr.rst(l, r2) by taut(expand(e4.1, tr.rbk), nst)
+              have rd2: tr.rst(pair(fst(l), empty), r2) := rewrite(ql, rd)
               have rk2: tr.rk(s, z. bp(z), fst(l), r2) by defs(taut(rd2, e4.2), tr.rk)
               show by ex_intro({r2}, taut(rk2, f22))
             qed
@@ -868,10 +763,10 @@ proof
               assume e4
               obtain l3, hb3 er3 from e4
               obtain r3, wr3 f3 _ from er3
-              have c := apply(tr.rbk_ok[bp := z. bp(z)], {s}, {l}, {l3}, {empty}, hb3)
-              have rd2: tr.rbd(s, pair(fst(l), empty), ok(l3, empty)) := rewrite(ql, c.2)
+              have c := apply(tr.rbk_ok[bkp := z. bp(z)], {s}, {l}, {l3}, {empty}, hb3)
+              have rd2: tr.rst(pair(fst(l), empty), ok(l3, empty)) := rewrite(ql, c.2)
               have rw3: tr.rwk(s, z. bp(z), l3, r3) by defs(wr3, tr.rwk)
-              have e5: ex l4. tr.rbd(s, pair(fst(l), empty), ok(l4, empty)) && tr.rwk(s, z. bp(z), l4, r3) by ex_intro({l3}, taut(rd2, rw3))
+              have e5: ex l4. tr.rst(pair(fst(l), empty), ok(l4, empty)) && tr.rwk(s, z. bp(z), l4, r3) by ex_intro({l3}, taut(rd2, rw3))
               have rk2: tr.rk(s, z. bp(z), fst(l), r3) by defs(taut(e5), tr.rk)
               have f33: fst(r3) = 2 by simp(f3, f22)
               show by ex_intro({r3}, taut(rk2, f33))
@@ -903,11 +798,11 @@ proof
               obtain t, te from expand(c, tr.div).1
               show by simp(te)
             qed
-            have rt: (ex m1. ok(fst(l), empty) = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, P1, w, m1)) -> false proof
+            have rt: (ex m1. ok(fst(l), empty) = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, P1, w, m1)) -> false proof
               assume e4
-              obtain m1, oe at _ _ from e4
+              obtain m1, oe at _ from e4
               have me: m1 = fst(l) by simp(oe)
-              have at2: tr.at_ret(s, fst(l)) := rewrite(me, at)
+              have at2: tr.out(s, fst(l)) := rewrite(me, at)
               have st: tr.stopk(s, z. bp(z), fst(l)) by defs(taut(at2), tr.stopk)
               show by taut(st, nst)
             qed
@@ -992,18 +887,17 @@ qed
 // loop -- from the claim for one iteration (the head a breakpoint, arrived
 // at coupled, with the iteration's spec returning the next locals marked)
 theorem tr.loop(s, v, h, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x y w. q):
-  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.at_ret(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
+  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
   (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.simk(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.sim(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1)), w, x)) ->
-  all x y w. q(x, y, w) -> tr.simk(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1)), w, x)
+  all x y w. q(x, y, w) -> tr.sim(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1)), w, x)
 proof
   assume hq hk2 htr hb
   fix x y w
   assume q0
   let P := tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1))
-  have g: all o. tr.run_k(s, z. bp(z), x, o) -> tr.ub(s, v, P, w) || tr.crash(s, P, w, o) || tr.div(P, w, o) ||
-      (ex m1. o = ok(m1, empty) && tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w)) proof
+  have g: all o. tr.run_k(s, z. bp(z), x, o) -> tr.gk(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) proof
     fix o
     assume hr
     obtain r, rk rm from expand(hr, tr.run_k)
@@ -1019,14 +913,14 @@ proof
     qed
     have lg: tr.lg(s, z. bp(z), v, P, w, o) by taut(f, d)
     // (the return: no point of bp, so the arrival is the return's)
-    have rt: (ex m1. o = ok(m1, empty) && tr.at_ret(s, m1) && !bp(m1) && tr.retok(s, v, P, w, m1)) ->
+    have rt: (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, P, w, m1)) ->
         (ex m1. o = ok(m1, empty) && tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w)) proof
       assume e
-      obtain m1, oe at nb rt0 from e
-      have a: tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w) by defs(taut(rt0, nb), tr.arr)
+      obtain m1, oe at rt0 from e
+      have a: tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w) by defs(taut(rt0, at), tr.arr)
       show by ex_intro({m1}, taut(oe, a))
     qed
-    show by taut(expand(lg, tr.lg), rt)
+    show by defs(taut(expand(lg, tr.lg), rt), tr.gk)
   qed
-  show by defs(g, tr.simk)
+  show by defs(g, tr.sim)
 qed

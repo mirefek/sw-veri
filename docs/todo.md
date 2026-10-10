@@ -29,14 +29,14 @@ call graph.
   the run to the first breakpoint after a step, the return or a loop's
   head, with an arrival condition there) for a loop at its head, from the
   claim for one iteration (the head a breakpoint, the iteration's spec
-  `tr.lone` returning the next locals marked). To do:
-  - the rules on `tr.simk`: each stepping rule from the claim at its
-    successors (the arrival condition at a breakpoint, else the claim
-    leaving it) to the claim leaving its point, the breakpoints a binder
-    of every rule (now `tr.pt` / `tr.sim`: the return the only one);
-  - the engine: the breakpoints threaded through, a loop's head walked
-    once with the iteration's spec, the loop's exit into the rest with the
-    marked returns dropped;
+  `tr.lone` returning the next locals marked). The rules and the engine are
+  on the claim with breakpoints (`tr.sim`, its binders in every rule). To
+  do:
+  - the loop rule with the function's result wrapper (the iteration's
+    marked return outside it, the wrapper on the exit only), the
+    iteration's ends as reductions, the marked returns dropped after the
+    exit (the arrival condition then none), the head's arrival;
+  - the engine: a loop's head walked once with the iteration's spec;
   - nested loops (the inner loop's iterations arriving at the outer head).
 
 ## 2. The invariant and the laws

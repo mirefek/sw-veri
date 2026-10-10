@@ -72,6 +72,7 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
     }
     let api = Api::new(env, Vec::new()).map_err(|e| e.0)?;
     let empty = Term::app(env.sym_by_name["empty"], vec![]);
+    let no_bk = Term::app(env.sym_by_name["false"], vec![]);
     let mut g = Gen {
         env,
         api: Some(api),
@@ -123,6 +124,8 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         spent_now: Default::default(),
         preds: None,
         ambient: Vec::new(),
+        bkp: no_bk.clone(),
+        bka: no_bk,
     };
     g.top(fname, spec_name, ssym, sbody, sparams, entry)
 }
@@ -322,7 +325,7 @@ impl<'e> Gen<'e> {
         }
         let rs_args = st0.rs.clone();
         // the proof
-        let pt = self.prove(st0)?;
+        let pt = self.prove_pt(st0)?;
         // (the callees' premises, as their calls had them)
         let mut cprem = Vec::new();
         let mut cns = Vec::new();

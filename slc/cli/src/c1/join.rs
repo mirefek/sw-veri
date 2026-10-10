@@ -13,7 +13,7 @@
 //! - the facts of the branch's time kept, and of those both paths assumed
 //!   after it the ones alike under the variables: premises;
 //! - a home's whole value a variable: a word of its size, a premise.
-//! The claim `all ys. W(ys) a world -> premises -> tr.pt(.. at the join ..)`
+//! The claim `all ys. W(ys) a world -> premises -> tr.lv(.. at the join ..)`
 //! is proven by walking on from the point, then used, by matching, for this
 //! path and any later one it fits. Nothing is trusted here: a claim the
 //! walk cannot prove, or a path it does not fit, only loses the sharing.
@@ -641,7 +641,7 @@ impl<'e> Gen<'e> {
         // (st's homes: the claim's, and more -- tr.pt_hs, by tr.hsub_upd per
         // home of the claim's)
         let hs1 = c0.concl().clone();
-        let hs1 = self.app(&hs1, "tr.pt", 11).map(|x| x[6].clone()).ok_or("join: the claim's homes")?;
+        let hs1 = self.app(&hs1, "tr.lv", 13).map(|x| x[8].clone()).ok_or("join: the claim's homes")?;
         let empty = self.mk("empty", vec![]);
         let mut sub_pf = mpf("tr.hsub_empty", vec![t(&st.hst)]);
         let mut f = empty.clone();

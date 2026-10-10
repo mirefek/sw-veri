@@ -122,7 +122,10 @@ impl<'e> Gen<'e> {
                 let (kt, k2t) = (lit(k), lit(k - c));
                 ts.extend([&bv, &aa, &kt, &a2t, &k2t]);
                 let rule = if insn.row == 145 { "zst_ups" } else { "zst_q" };
-                let mut tr = self.step(rule, a, insn, &ts, self.tail(st, insn, 11, vec![arith(vec![]), arith(vec![])]));
+                // (mid-sequence: its address no breakpoint, after the decode fact)
+                let mut tl = self.tail(st, insn, 11, vec![arith(vec![]), arith(vec![])]);
+                tl.insert(6, self.nobp());
+                let mut tr = self.step(rule, a, insn, &ts, tl);
                 let mut st2 = st.clone();
                 st2.a = a2;
                 if k == c {

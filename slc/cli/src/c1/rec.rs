@@ -153,10 +153,14 @@ impl<'e> Gen<'e> {
     fn ev_in(&mut self, api: &sl_proof::api::Api, r: &R, slots: Slots) -> Result<Seq, String> {
         match r {
             R::S(x) => Ok(x.clone()),
-            R::F(n) => api.fact(self.env, n).map_err(|e| e.0),
+            R::F(n) => {
+                let s = api.fact(self.env, n).map_err(|e| e.0)?;
+                self.bk_inst(api, s, n)
+            }
             R::Slot(n) => slots.iter().find(|x| x.0 == *n).map(|x| x.1.clone()).ok_or_else(|| format!("no fact for the slot {}", n)),
             R::Inst(n, binds) => {
                 let s = api.fact(self.env, n).map_err(|e| e.0)?;
+                let s = if binds.iter().any(|b| b.0 == "bkp") { s } else { self.bk_inst(api, s, n)? };
                 let bs: Vec<(&str, Term)> = binds.iter().map(|(k, v)| (*k, self.expand(v))).collect();
                 api.inst(self.env, s, &bs).map_err(|e| format!("{}: {}", n, e.0))
             }
@@ -176,6 +180,18 @@ impl<'e> Gen<'e> {
                 api.expand(self.env, s, &syms).map_err(|e| e.0)
             }
         }
+    }
+
+    /// a rule over the claim (its binders bkp, bka): at the walk's
+    /// breakpoints
+    fn bk_inst(&mut self, api: &sl_proof::api::Api, s: Seq, n: &str) -> Result<Seq, String> {
+        let mut vs = Vec::new();
+        s.concl().vars(&mut vs);
+        if !vs.iter().any(|v| self.env.vars[*v as usize].name == "bkp") {
+            return Ok(s);
+        }
+        let bs = [("bkp", self.bkp.clone()), ("bka", self.bka.clone())];
+        api.inst(self.env, s, &bs).map_err(|e| format!("{}: {}", n, e.0))
     }
 
     pub fn head_name(&self, r: &R) -> String {
