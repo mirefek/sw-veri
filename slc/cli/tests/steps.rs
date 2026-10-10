@@ -182,7 +182,7 @@ fn c1_engine_checks() {
     let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 153 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 24 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 6 definitions, 13 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 9 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 52 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
