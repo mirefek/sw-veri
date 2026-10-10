@@ -8,11 +8,19 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 The remaining functions
+### 1.1 Now: composition, enframe
+
+- Composition per function: machine code ⊑ spec from its C1 and its C2 by
+  one general lemma (like `tr.implements_refine`), not chained by hand.
+  First on a_ctz_32, to fit the two halves' shapes (the procedure's
+  wrapper, the world, the arguments, a callee's contract); then for every
+  function with both halves.
+- `enframe`: its spec and C2 (its C1 is done), then its composition.
+
+### 1.2 The remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
-- `enframe`: C2 (its C1 is done).
 - `activate_group`, `get_meta`, `get_nominal_size`,
   `account_bounce`, `record_seq`,
   `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
@@ -23,8 +31,6 @@ call graph.
   `a_cas`, `a_or`, `__syscall*`, `__mmap`, `munmap`, `__mprotect`,
   `memset`, `memcpy`, `__lock` / `__unlock`, `___errno_location`.
 - C1 bookkeeping: a program-level `while`.
-- Composition: per function, machine code ⊑ spec from C1 and C2 (a lemma
-  like `tr.implements_refine`), instead of chaining them by hand.
 
 ## 2. The invariant and the laws
 
