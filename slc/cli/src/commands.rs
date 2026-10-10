@@ -28,6 +28,9 @@ impl Cache {
                 format!("{:016x}-{}", h.finish(), b.len())
             })
             .unwrap_or_default();
+        // (SLC_CACHE_AS=ID, while developing the checker: its entries as
+        // the checker ID's -- trusting that the changes left them valid)
+        let checker = std::env::var("SLC_CACHE_AS").unwrap_or(checker);
         Cache { dir: repo_root().join("build/kernel-cache"), checker }
     }
 
@@ -72,21 +75,55 @@ impl Cache {
 }
 
 /// A checked file's statements: its proofs replaced by `cached` (with the
-/// open lemmas a conditional theorem rests on)
+/// open lemmas a conditional theorem rests on), its `c1` lines by the
+/// theorems they proved, stated and `cached`
 fn statements(env: &Env, src: &str, rep: &syntax::LoadReport) -> String {
+    let rests = |name: &str| match env.open.conditional.iter().find(|(n, _)| n == name) {
+        Some((_, q)) => format!(" rests({})", q.open().join(", ")),
+        None => String::new(),
+    };
+    // (the replaced parts: byte ranges and their text)
+    let mut parts: Vec<(usize, usize, String)> = rep.proofs.iter().map(|(name, s, e)| (*s, *e, format!("cached{}\n", rests(name)))).collect();
+    let line_starts: Vec<usize> = std::iter::once(0).chain(src.match_indices('\n').map(|(i, _)| i + 1)).collect();
+    for (line, names) in &rep.c1s {
+        let s = line_starts[line - 1];
+        let e = line_starts.get(*line).copied().unwrap_or(src.len());
+        let mut text = String::new();
+        for n in names {
+            if let Some(t) = sl_kernel::ext::facts::seq_of(env, n).map(|s| s.concl().clone()) {
+                text.push_str(&format!("theorem {}{} : {} cached{}\n", n, params_of(env, &t), syntax::Printer::new(env).term(&t), rests(n)));
+            }
+        }
+        parts.push((s, e, text));
+    }
+    parts.sort_by_key(|x| x.0);
     let mut out = String::new();
     let mut at = 0;
-    for (name, s, e) in &rep.proofs {
-        out.push_str(&src[at..*s]);
-        out.push_str("cached");
-        if let Some((_, q)) = env.open.conditional.iter().find(|(n, _)| n == name) {
-            out.push_str(&format!(" rests({})", q.open().join(", ")));
-        }
-        out.push('\n');
-        at = *e;
+    for (s, e, text) in parts {
+        out.push_str(&src[at..s]);
+        out.push_str(&text);
+        at = e;
     }
     out.push_str(&src[at..]);
     out
+}
+
+/// `t`'s schematic variables as a theorem's parameter list
+fn params_of(env: &Env, t: &sl_kernel::Term) -> String {
+    let mut vs = Vec::new();
+    t.vars(&mut vs);
+    if vs.is_empty() {
+        return String::new();
+    }
+    let ps: Vec<String> = vs
+        .iter()
+        .map(|v| {
+            let x = &env.vars[*v as usize];
+            let bs: Vec<String> = (0..x.arity).map(|i| format!("x{}", i)).collect();
+            if bs.is_empty() { x.name.clone() } else { format!("{}. {}", bs.join(" "), x.name) }
+        })
+        .collect();
+    format!("({})", ps.join(", "))
 }
 
 pub fn kernel_check(args: &[String]) -> CResult {
@@ -97,7 +134,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
     }
     let cache = if no_cache { None } else { Some(Cache::new()) };
     let mut env = Env::new();
-    let mut prover = sl_proof::ScriptProver;
+    let mut prover = crate::c1::Checker;
     // (the hash of the statements of the files so far)
     let mut prefix = String::new();
     let mut n_cached = 0;

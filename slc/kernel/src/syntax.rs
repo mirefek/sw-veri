@@ -472,6 +472,8 @@ pub struct LoadReport {
     /// each proof's text in the source, `proof` to the line of its `qed`
     /// (byte offsets), with its theorem's name
     pub proofs: Vec<(String, usize, usize)>,
+    /// each `c1` declaration: its line, with the theorems it proved
+    pub c1s: Vec<(usize, Vec<String>)>,
 }
 
 /// A proof checker for `theorem ... proof ... qed`, supplied by the caller of
@@ -481,6 +483,14 @@ pub struct LoadReport {
 /// only if it names them; see `ext::facts`).
 pub trait Prover {
     fn prove(&mut self, env: &mut Env, req: &ProofRequest) -> KResult<Seq>;
+
+    /// `c1 FN SPEC PREFIX`: the theorems of a function's C1 (its decode
+    /// facts `FN.at_*` against the spec `SPEC`), named `PREFIX.*`, proven by
+    /// a procedure. Not trusted either: sequents made by the kernel's rules,
+    /// each recorded only without hypotheses.
+    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str) -> KResult<Vec<(String, Seq)>> {
+        Err(KernelError("`c1`: this checker has no C1 engine".into()))
+    }
 }
 
 /// What a proof has to establish.
@@ -632,6 +642,31 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
             "mem_closure" => {
                 if !p.env.mem_closures.contains(&name) {
                     p.env.mem_closures.push(name);
+                }
+            }
+            // c1 FN SPEC PREFIX: the function FN's C1 theorems (`PREFIX.body`,
+            // `.implements`, ..), proven by the checker's C1 engine
+            "c1" => {
+                let spec = p.ident()?;
+                let prefix = p.ident()?;
+                let Some(pr) = prover.as_deref_mut() else {
+                    return Err(ctx(KernelError("`c1` needs a proof checker".into())));
+                };
+                let ths = pr.c1(p.env, &name, &spec, &prefix).map_err(ctx)?;
+                rep.c1s.push((line, ths.iter().map(|x| x.0.clone()).collect()));
+                for (n, sq) in ths {
+                    if !sq.hyps().is_empty() {
+                        let pp = Printer::new(p.env);
+                        return Err(ctx(KernelError(format!("`{}`: hypotheses left: {}", n, sq.hyps().iter().map(|h| pp.short(h)).collect::<Vec<_>>().join(", ")))));
+                    }
+                    facts::check_new(p.env, &n).map_err(ctx)?;
+                    let conditional = !sq.open().is_empty();
+                    facts::record(p.env, &n, sq).map_err(ctx)?;
+                    if conditional {
+                        rep.conditional.push(n);
+                    } else {
+                        rep.theorems.push(n);
+                    }
                 }
             }
             // bit_rule NAME: a word's bit, for the proof checker's `bitwise`

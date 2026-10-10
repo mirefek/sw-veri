@@ -2015,6 +2015,28 @@ impl<'a> Simp<'a> {
             return r;
         }
         if f == s.ex {
+            // (one-point first: a leading conjunct that simplifies to `x =
+            // t` instantiates the rest before it is simplified -- a
+            // program's block form, whose rest may be all of the program
+            // after it, and whose outcome the head decides)
+            if let Node::App(c, b) = a[0].node() {
+                if is(*c, s.and) {
+                    let x = self.prop(&b[0], pol);
+                    if let Node::App(e, eb) = x.node() {
+                        if *e == s.eq {
+                            for (v, t) in [(&eb[0], &eb[1]), (&eb[1], &eb[0])] {
+                                if matches!(v.node(), Node::BVar(0)) && !has_bvar(self.env, t, 0) {
+                                    let r = inst_k(self.env, &b[1], &[lower(self.env, t, 0)]);
+                                    return self.prop(&r, if pol == Pol::Goal && self.eager_runs.get() { Pol::Goal } else { Pol::Other });
+                                }
+                            }
+                        }
+                    }
+                    // (else as a conjunction, then the binder)
+                    let body = if self.is_false(&x) { x } else { self.and(x, self.prop(&b[1], pol)) };
+                    return self.ex(&body, pol == Pol::Goal);
+                }
+            }
             return self.ex(&self.prop(&a[0], pol), pol == Pol::Goal);
         }
         if f == s.all {

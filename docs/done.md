@@ -92,11 +92,12 @@ item is a short summary of finished work; details are in the files named.
 
 ## Functions
 
-- **C1 by translation**, generated certificates (`proofs/*_tr.core`) for
+- **C1 by the checker's engine** (`c1` lines, `proofs/mallocng_c1.core`;
+  no proof text: rule instances applied through the kernel, untrusted) for
   a_ctz_32, a_clz_32, get_slot_index, is_bouncing, get_stride, step_seq
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
-  free_meta, size_to_class and set_size. The rules cover:
+  free_meta, size_to_class, set_size and enframe. The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;

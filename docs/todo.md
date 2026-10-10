@@ -12,8 +12,9 @@ call graph.
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
+- `enframe`: C2 (its C1 is done).
 - `activate_group`, `get_meta`, `get_nominal_size`,
-  `enframe`, `account_bounce`, `record_seq`,
+  `account_bounce`, `record_seq`,
   `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
   `__malloc_alloc_meta`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`,
@@ -71,8 +72,11 @@ Smaller items:
   external kills in `overflow_ok`.
 - SL: syntax of properties, qualified names and ambiguity errors in name
   resolution, the language's name.
-- Code: translate.rs's instruction rows by name, not number, and its
+- Code: the C1 engine's instruction rows by name, not number, and its
   `simp(L, ..)` counts derived; the kernel `Env`'s fields private; the
   interpreter checking literal widths as the elaborator does.
 - Checker speed, if needed: generated step theorems, memoised normal forms
   in `taut` / `simp`, parallel checking.
+- The C1 engine's speed: each branch proves the rest of the function after
+  it again (no joins), so enframe's C1 takes ~10k steps (~100 s); joins at
+  the spec's block ends would make it linear.

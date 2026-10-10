@@ -89,6 +89,7 @@ use sl_kernel::ext::{facts, Logic, Seq};
 use sl_kernel::syntax::{parse_term, parse_value, Printer, ProofRequest, Prover};
 use sl_kernel::{Env, KResult, KernelError, Node, SymId, Term, VarId};
 
+pub mod api;
 mod bits;
 mod mem;
 mod rsimp;

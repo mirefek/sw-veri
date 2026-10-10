@@ -14,7 +14,7 @@
 //! Then, per function `F` (its bytes `F.code`, loaded at its address):
 //! for the instruction at each address A, `F.at_A` (with the code loaded
 //! and `rip = A`, a step runs the instruction's body: its fetch succeeds)
-//! -- the decode facts `slc translate`'s certificates use, the body's
+//! -- the decode facts the C1 engine (`c1` lines) walks, the body's
 //! semantics then by the instruction forms of proofs/x86_insn.core.
 
 use crate::commands::{load_spec_globals, CResult};

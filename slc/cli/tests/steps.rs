@@ -27,7 +27,7 @@ fn x86_model_facts_check() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 24 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 25 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -114,16 +114,13 @@ fn step_theorems_of_get_slot_index_prove() {
     let _ = std::fs::remove_file(&out);
 }
 
-/// C1 for a_ctz_32, is_bouncing, get_slot_index, get_stride, step_seq,
-/// upgradelock, resetlock, decay_bounces, dequeue and a_clz_32 (calling a_ctz_32, its
-/// contract a premise; linked with a_ctz_32's in proofs/mallocng_link.core)
-/// by translation: `slc translate` writes the
-/// certificates (the committed proofs/FN_tr.core, unchanged), and they
-/// check with proofs/translate.core's, proofs/translate_frame.core's, proofs/translate_store_loop.core's
-/// and proofs/translate_call.core's rules. Needs the -O0 build and its
-/// readable GIMPLE.
+/// C1 of the -O0 functions by the checker's C1 engine: the `c1` lines of
+/// proofs/mallocng_c1.core, each function's theorems from its decode facts
+/// and its spec by proofs/translate*.core's rules (a caller's callee
+/// contracts premises, linked in proofs/mallocng_link.core). Needs the -O0
+/// build and its readable GIMPLE.
 #[test]
-fn translations_are_generated_and_check() {
+fn c1_engine_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (elf, claim, sl) = (root.join("build/test_malloc_O0"), root.join("build/musl_malloc_O0.core"), root.join("build/gimple-O0/sl/c_mallocng_malloc.sl"));
     if !elf.exists() || !claim.exists() || !sl.exists() {
@@ -139,7 +136,7 @@ fn translations_are_generated_and_check() {
         .args(["steps"])
         .arg(&elf)
         .arg(&claim)
-        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "-o"])
+        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride=403350", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "-o"])
         .arg(&steps)
         .arg("--text")
         .arg(&text)
@@ -163,22 +160,6 @@ fn translations_are_generated_and_check() {
     );
     // (the program text: the code every contract assumes loaded)
     files.push(text.clone().into());
-    let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht"), ("queue", "qut"), ("free_meta", "fmt"), ("size_to_class", "stct"), ("set_size", "ssz")] {
-        let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
-        let t = Command::new(slc)
-            .current_dir(&root)
-            .args(["translate", f, &format!("c_src_malloc_mallocng_malloc.{}_fun", f), prefix, "-o"])
-            .arg(&cert)
-            .args(&files)
-            .output()
-            .unwrap();
-        assert!(t.status.success(), "{}", String::from_utf8_lossy(&t.stderr));
-        let kept = format!("proofs/{}_tr.core", f);
-        let (made, k) = (std::fs::read_to_string(&cert).unwrap(), std::fs::read_to_string(root.join(&kept)).unwrap());
-        assert!(made == k, "{} differs from the generated {}", kept, cert.display());
-        certs.push(cert);
-    }
     // and the callers linked with their callees (proofs/mallocng_link.core)
     // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl;
     // the memory rules' views and frames, proofs/mallocng_mem.core; the bit
@@ -189,31 +170,14 @@ fn translations_are_generated_and_check() {
         .args(["kernel-check", "--no-cache"])
         .args(&files)
         .arg("proofs/a_crash.core")
-        .args(&certs)
+        .arg("proofs/mallocng_c1.core")
         .args(["proofs/mallocng_link.core", "proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    // each certificate's theorems unconditional: nothing in the chain rests
-    // on an open lemma (the storing functions' statics' range defined)
-    let expect = [
-        ("a_ctz_32", "0 definitions, 7 theorems"),
-        ("is_bouncing", "0 definitions, 6 theorems"),
-        ("get_slot_index", "0 definitions, 6 theorems"),
-        ("get_stride", "0 definitions, 10 theorems"),
-        ("step_seq", "0 definitions, 8 theorems"),
-        ("upgradelock", "0 definitions, 6 theorems"),
-        ("resetlock", "0 definitions, 6 theorems"),
-        ("decay_bounces", "0 definitions, 6 theorems"),
-        ("a_clz_32", "0 definitions, 6 theorems"),
-        ("dequeue", "0 definitions, 10 theorems"),
-        ("dequeue_head", "0 definitions, 6 theorems"),
-        ("queue", "0 definitions, 10 theorems"),
-        ("free_meta", "0 definitions, 6 theorems"),
-        ("size_to_class", "0 definitions, 7 theorems"),
-        ("set_size", "0 definitions, 6 theorems"),
-    ];
-    let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
+    // the C1 theorems unconditional: nothing in the chain rests on an open
+    // lemma (the storing functions' statics' range defined)
+    let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 114 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 20 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 48 theorems, 0 conditional theorems, 0 open lemmas")
@@ -223,7 +187,7 @@ fn translations_are_generated_and_check() {
         && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 14 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 0 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
-    for f in certs.iter().chain([&steps, &gimple, &text]) {
+    for f in [&steps, &gimple, &text] {
         let _ = std::fs::remove_file(f);
     }
 }

@@ -104,9 +104,12 @@ For a function F, two halves:
 - **C1, machine code ⊑ readable GIMPLE.** This is compilation correctness:
   no function-specific assumptions, and anything is allowed where GIMPLE is
   undefined.
-  - `slc translate` walks F's code and its readable GIMPLE side by side and
-    emits a certificate (`proofs/F_tr.core`). The certificate is a chain of
-    rule instances, checked by the kernel without search.
+  - A `c1 F SPEC PREFIX` line (`proofs/mallocng_c1.core`) has the
+    checker's C1 engine (`slc/cli/src/c1/`) walk F's code (its decode facts)
+    and its readable GIMPLE side by side. Each step applies a rule instance
+    through the kernel; no proof text is written and nothing is searched.
+    The engine is untrusted: the kernel records only the theorems its rules
+    made, without hypotheses.
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
   - Programs and states are related by a coupling at each point:
@@ -131,7 +134,7 @@ GIMPLE, so each function is checked against its callees' specs.
 | `spec/` | the trusted model (x86-64 encoding and semantics, Linux processes and exec) |
 | `layers/` | ABI, GIMPLE, malloc, mallocng, the claim |
 | `core/` | prelude (axioms) and the logic library (sets, naturals, records, lists, loops) |
-| `proofs/` | machine and ABI lemmas, the bridge rules, generated certificates, C2 proofs, the top of the claim |
+| `proofs/` | machine and ABI lemmas, the bridge rules, the C1 lines, C2 proofs, the top of the claim |
 | `slc/` | the toolchain: kernel, syntax, elaborator, interpreter, proof language, CLI |
 | `scripts/` | building musl (`build-musl.sh -O0`), dumping GIMPLE |
 | `tests/` | C test programs, cputest limits |
@@ -145,11 +148,10 @@ slc kernel-check [--no-cache] FILE.core..   check core files and their proofs
 slc claim malloc --elf ELF -o OUT.core      state the claim
 slc gimple --readable ...                   GIMPLE dump to readable GIMPLE
 slc steps ELF CLAIM F -o OUT.core           decode facts of F's instructions
-slc translate FN SPEC PREFIX -o OUT FILES   C1 certificate of FN
 slc decode / coverage / cputest / heapcheck model and invariant testing
 ```
 
 `cargo test --release --manifest-path slc/Cargo.toml` runs everything,
-including regenerating and checking the certificates. The tests that need
+including the C1 engine on every function. The tests that need
 the musl build (`scripts/build-musl.sh -O0`) skip without it; with
 `SLC_REQUIRE_BUILD=1` they fail instead.
