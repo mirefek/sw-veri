@@ -635,7 +635,7 @@ fn the_bit_library_checks() {
 #[test]
 fn the_loop_library_checks() {
     let n = check_nat(&core_file("loop.core")).unwrap();
-    assert_eq!(n, 26);
+    assert_eq!(n, 27);
 }
 
 /// A loop counting to 3 (the loop state: the program state and the counter).
