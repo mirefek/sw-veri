@@ -362,24 +362,14 @@ qed
 
 // (the run from l1 is finite -- its outcome not a divergence -- so l0
 // prepended: l0, then its states)
-theorem while_step(l0, l1, l. c, l o. b, l. tr, r):
-  c(l0) -> b(l0, ok(l1, empty)) -> while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r) -> !(fst(r) = 2) ->
+// (a finite run from l1, l0 prepended)
+theorem while_step_fin(l0, l1, l. c, l o. b, l. tr, r):
+  c(l0) -> b(l0, ok(l1, empty)) -> (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l1 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)))) ->
   while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
 proof
-  assume hc hb hw hnd
-  // not infinitely many iterations from l1: r would be a divergence
-  have ninf: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l1 &&
-      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
-      r = diverge(trace_limit(i. tr(app(f, i))))) -> false proof
-    assume e
-    obtain f, hf from e
-    have rd: r = diverge(trace_limit(i. tr(app(f, i)))) by taut(hf)
-    have f2: fst(r) = 2 by simp(rd)
-    show by taut(f2, hnd)
-  qed
-  have fin: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l1 &&
-      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
-      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r))) by taut(expand(hw, while_rel), ninf)
+  assume hc hb fin
   obtain n, h1 from fin
   obtain f, hf from h1
   have hn: n in omega by taut(hf)
@@ -464,6 +454,27 @@ proof
       ((!c(app(g, m)) && r = ok(app(g, m), empty)) || (c(app(g, m)) && b(app(g, m), r) && !is_ok(r)))
     by ex_intro({N}, e1)
   show by defs(taut(e2), while_rel)
+qed
+
+theorem while_step(l0, l1, l. c, l o. b, l. tr, r):
+  c(l0) -> b(l0, ok(l1, empty)) -> while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), r) -> !(fst(r) = 2) ->
+  while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r)
+proof
+  assume hc hb hw hnd
+  // not infinitely many iterations from l1: r would be a divergence
+  have ninf: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l1 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) -> false proof
+    assume e
+    obtain f, hf from e
+    have rd: r = diverge(trace_limit(i. tr(app(f, i)))) by taut(hf)
+    have f2: fst(r) = 2 by simp(rd)
+    show by taut(f2, hnd)
+  qed
+  have fin: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l1 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r))) by taut(expand(hw, while_rel), ninf)
+  show := mp(while_step_fin[l0 := l0, l1 := l1, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := r], hc, hb, fin)
 qed
 
 // ----------------------------------------------------------------------
@@ -1204,4 +1215,199 @@ proof
     show by defs(taut(e1), while_rel)
   qed
   show by taut(expand(hw, while_rel), fcase, icase)
+qed
+
+// ----------------------------------------------------------------------
+//  Divergence by a set of states that always goes on (a coinduction):
+//  from a state of s the condition holds and the body can continue to a
+//  state of s -- the loop has an infinite run (the states chosen one
+//  iteration at a time)
+
+theorem while_coind(l0, l. c, l o. b, l. tr, l. s):
+  s(l0) -> (all l. s(l) -> c(l) && (ex l2. b(l, ok(l2, empty)) && s(l2))) ->
+  ex t. while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), diverge(t))
+proof
+  assume h0 hs
+  let N(v) := choose(l2. b(v, ok(l2, empty)) && s(l2))
+  let G(n) := nat_rec(l0, k v. N(v), n)
+  let F := fn_build(omega, n. G(n))
+  // (the next state of a state of s: a step of the body, in s)
+  have hn: all v. s(v) -> b(v, ok(N(v), empty)) && s(N(v)) proof
+    fix v
+    assume sv
+    have e: ex l2. b(v, ok(l2, empty)) && s(l2) by taut(mp(all_elim(hs, {v}), sv))
+    show := mp(choose_spec[p := l2. b(v, ok(l2, empty)) && s(l2)], e)
+  qed
+  // every G(n) in s
+  have gs: all n. n in omega -> s(G(n)) proof
+    have base: s(G(0)) proof
+      have r: G(0) = l0 := rec({nat_rec(l0, k v. N(v), 0)})
+      show := rewrite(sym(r), h0)
+    qed
+    have step: all n. n in omega -> s(G(n)) -> s(G(int_add(n, 1))) proof
+      fix n
+      assume hn0 ih
+      have r: G(int_add(n, 1)) = N(G(n)) := rec({nat_rec(l0, k v. N(v), int_add(n, 1))}, hn0)
+      have c := mp(all_elim(hn, {G(n)}), ih)
+      show := rewrite(sym(r), c.2)
+    qed
+    show by induct(base, step)
+  qed
+  // F's values: G's
+  have fa: all n. n in omega -> app(F, n) = G(n) proof
+    fix n
+    assume hn0
+    show := mp(app_fn_build[d := omega, v := n. G(n), a := n], hn0)
+  qed
+  have ff := fn_build_fun[d := omega, v := n. G(n)]
+  have fd := fn_build_dom[d := omega, v := n. G(n)]
+  have f0: app(F, empty) = l0 proof
+    have z: 0 in omega by simp()
+    have a0 := mp(all_elim(fa, {0}), z)
+    have r: G(0) = l0 := rec({nat_rec(l0, k v. N(v), 0)})
+    show := rewrite(lit_zero, trans(a0, r))
+  qed
+  have fstep: all i. i in omega -> c(app(F, i)) && b(app(F, i), ok(app(F, succ(i)), empty)) proof
+    fix i
+    assume hi
+    have si: succ(i) in omega by simp(hi)
+    have e1: succ(i) = int_add(i, 1) by arith(hi)
+    have ai := mp(all_elim(fa, {i}), hi)
+    have as0 := mp(all_elim(fa, {succ(i)}), si)
+    have q: app(F, succ(i)) = G(int_add(i, 1)) := rewrite(e1, as0, {2})
+    have r: G(int_add(i, 1)) = N(G(i)) := rec({nat_rec(l0, k v. N(v), int_add(i, 1))}, hi)
+    have gi := mp(all_elim(gs, {i}), hi)
+    have c1 := mp(all_elim(hs, {G(i)}), gi)
+    have n1 := mp(all_elim(hn, {G(i)}), gi)
+    have cc: c(app(F, i)) := rewrite(sym(ai), c1.1)
+    have bb0: b(G(i), ok(G(int_add(i, 1)), empty)) := rewrite(sym(r), n1.1)
+    have bb1: b(app(F, i), ok(G(int_add(i, 1)), empty)) := rewrite(sym(ai), bb0)
+    have bb: b(app(F, i), ok(app(F, succ(i)), empty)) := rewrite(sym(q), bb1)
+    show by taut(cc, bb)
+  qed
+  have inf: ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      diverge(trace_limit(i. tr(app(F, i)))) = diverge(trace_limit(i. tr(app(f, i))))
+    by ex_intro({F}, taut(ff, fd, f0, fstep, refl({diverge(trace_limit(i. tr(app(F, i))))})))
+  have w: while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), diverge(trace_limit(i. tr(app(F, i))))) by defs(taut(inf), while_rel)
+  show by ex_intro({trace_limit(i. tr(app(F, i)))}, w)
+qed
+
+// (a divergence from l1, l0 prepended: a divergence -- its trace another)
+theorem while_step_div(l0, l1, l. c, l o. b, l. tr, t):
+  c(l0) -> b(l0, ok(l1, empty)) -> while_rel(l1, l. c(l), l o. b(l, o), l. tr(l), diverge(t)) ->
+  ex t2. while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), diverge(t2))
+proof
+  assume hc hb hw
+  // finitely many iterations, the body diverging
+  have c1: (ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l1 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && diverge(t) = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), diverge(t)) && !is_ok(diverge(t))))) ->
+      ex t2. while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), diverge(t2)) proof
+    assume e
+    have w := mp(while_step_fin[l0 := l0, l1 := l1, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := diverge(t)], hc, hb, e)
+    show by ex_intro({t}, w)
+  qed
+  // infinitely many: l0, then the states of f
+  have c2: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l1 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      diverge(t) = diverge(trace_limit(i. tr(app(f, i))))) ->
+      ex t2. while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), diverge(t2)) proof
+    assume e
+    obtain f, ff fd f0 fs _ from e
+    let S(l) := l = l0 || (ex k. k in omega && app(f, k) = l)
+    have s0: S(l0) by taut(refl({l0}))
+    have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+    have f00: app(f, 0) = l1 := rewrite(sym(lit_zero), f0)
+    have s1: S(l1) proof
+      have e1: ex k. k in omega && app(f, k) = l1 by ex_intro({0}, taut(zo, f00))
+      show by taut(e1)
+    qed
+    have ss: all l. S(l) -> c(l) && (ex l2. b(l, ok(l2, empty)) && S(l2)) proof
+      fix l
+      assume hs
+      have a0: l = l0 -> c(l) && (ex l2. b(l, ok(l2, empty)) && S(l2)) proof
+        assume e0
+        have cl: c(l) := rewrite(sym(e0), hc)
+        have bl: b(l, ok(l1, empty)) := rewrite(sym(e0), hb)
+        have e2: ex l2. b(l, ok(l2, empty)) && S(l2) by ex_intro({l1}, taut(bl, s1))
+        show by taut(cl, e2)
+      qed
+      have a1: (ex k. k in omega && app(f, k) = l) -> c(l) && (ex l2. b(l, ok(l2, empty)) && S(l2)) proof
+        assume ek
+        obtain k, ko fk from ek
+        have st := mp(all_elim(fs, {k}), ko)
+        have st2 := rewrite(fk, st)
+        have so: succ(k) in omega by simp(ko)
+        have e3: ex k2. k2 in omega && app(f, k2) = app(f, succ(k)) by ex_intro({succ(k)}, taut(so, refl({app(f, succ(k))})))
+        have s2: S(app(f, succ(k))) by taut(e3)
+        have e2: ex l2. b(l, ok(l2, empty)) && S(l2) by ex_intro({app(f, succ(k))}, taut(st2, s2))
+        show by taut(st2, e2)
+      qed
+      show by taut(hs, a0, a1)
+    qed
+    show := mp(while_coind[l0 := l0, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), s := l. S(l)], s0, ss)
+  qed
+  show by taut(expand(hw, while_rel), c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  Induction along a run (the machine's loop, cut at a loop's head)
+
+// A finite run, backward: z holds where the loop ends (it stops, or its
+// body leaves with r), and at a state whose step leads to a state with z --
+// so at every state of the run, its first among them
+theorem while_run_ind(l0, l. c, l o. b, l. tr, r, l. z):
+  (all l. ((!c(l) && r = ok(l, empty)) || (c(l) && b(l, r) && !is_ok(r))) -> z(l)) ->
+  (all l l1. c(l) -> b(l, ok(l1, empty)) -> z(l1) -> z(l)) ->
+  while_rel(l0, l. c(l), l o. b(l, o), l. tr(l), r) -> !(fst(r) = 2) -> z(l0)
+proof
+  assume he hst0 hw hnd
+  // not infinitely many iterations: r would be a divergence
+  have ninf: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l0 &&
+      (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) -> false proof
+    assume e
+    obtain f, hf from e
+    have rd: r = diverge(trace_limit(i. tr(app(f, i)))) by taut(hf)
+    have f2: fst(r) = 2 by simp(rd)
+    show by taut(f2, hnd)
+  qed
+  have fin: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l0 &&
+      (all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r))) by taut(expand(hw, while_rel), ninf)
+  obtain n, h1 from fin
+  obtain f, hf from h1
+  have hn: n in omega by taut(hf)
+  have hf0: app(f, empty) = l0 by taut(hf)
+  have hst: all i. i in n -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty)) by taut(hf)
+  have hend: (!c(app(f, n)) && r = ok(app(f, n), empty)) || (c(app(f, n)) && b(app(f, n), r) && !is_ok(r)) by taut(hf)
+  // z at f(n - j), j up to n
+  have all_z: all j. j in omega -> int_le(j, n) -> z(app(f, int_sub(n, j))) proof
+    have base: int_le(0, n) -> z(app(f, int_sub(n, 0))) proof
+      assume h0
+      have e: int_sub(n, 0) = n by arith(hn)
+      have zn := mp(all_elim(he, {app(f, n)}), hend)
+      show := rewrite(sym(e), zn)
+    qed
+    have step: all j. j in omega -> (int_le(j, n) -> z(app(f, int_sub(n, j)))) ->
+        int_le(int_add(j, 1), n) -> z(app(f, int_sub(n, int_add(j, 1)))) proof
+      fix j
+      assume hj ih hle
+      have le: int_le(j, n) by arith(hj, hn, hle)
+      have zj := mp(ih, le)
+      have io: int_sub(n, int_add(j, 1)) in omega by arith(hj, hn, hle)
+      have lt: int_sub(n, int_add(j, 1)) in n by arith(hj, hn, hle, io)
+      have cb := mp(all_elim(hst, {int_sub(n, int_add(j, 1))}), lt)
+      have es: succ(int_sub(n, int_add(j, 1))) = int_sub(n, j) by arith(io, hj, hn, hle)
+      have cb2 := rewrite(es, cb)
+      show := mp(all_elim(hst0, {app(f, int_sub(n, int_add(j, 1)))}, {app(f, int_sub(n, j))}), cb2.1, cb2.2, zj)
+    qed
+    show by induct(base, step)
+  qed
+  have nn: int_le(n, n) by arith(hn)
+  have z0 := mp(mp(all_elim(all_z, {n}), hn), nn)
+  have e0: int_sub(n, n) = 0 by arith(hn)
+  have e := rewrite(lit_zero, e0)
+  show := rewrite(hf0, rewrite(e, z0))
 qed
