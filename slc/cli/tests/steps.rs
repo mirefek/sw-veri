@@ -139,7 +139,7 @@ fn translations_are_generated_and_check() {
         .args(["steps"])
         .arg(&elf)
         .arg(&claim)
-        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "-o"])
+        .args(["a_ctz_32", "is_bouncing", "get_slot_index", "get_stride", "step_seq", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "-o"])
         .arg(&steps)
         .arg("--text")
         .arg(&text)
@@ -149,7 +149,7 @@ fn translations_are_generated_and_check() {
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
     // the libraries, the spec, the decode facts, the rules
-    let mut files: Vec<std::ffi::OsString> = ["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core"]
+    let mut files: Vec<std::ffi::OsString> = ["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "core/bits.core"]
         .iter()
         .map(|f| f.into())
         .collect();
@@ -164,7 +164,7 @@ fn translations_are_generated_and_check() {
     // (the program text: the code every contract assumes loaded)
     files.push(text.clone().into());
     let mut certs = Vec::new();
-    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht"), ("queue", "qut"), ("free_meta", "fmt"), ("size_to_class", "stct")] {
+    for (f, prefix) in [("a_ctz_32", "act"), ("is_bouncing", "ibt"), ("get_slot_index", "gsit"), ("get_stride", "gst"), ("step_seq", "sst"), ("upgradelock", "ugt"), ("resetlock", "rlt"), ("decay_bounces", "dbt"), ("a_clz_32", "aclz"), ("dequeue", "dqt"), ("dequeue_head", "dqht"), ("queue", "qut"), ("free_meta", "fmt"), ("size_to_class", "stct"), ("set_size", "ssz")] {
         let cert = tmp.join(format!("slc-tr-{}-{}.core", f, id));
         let t = Command::new(slc)
             .current_dir(&root)
@@ -189,7 +189,7 @@ fn translations_are_generated_and_check() {
         .args(&files)
         .arg("proofs/a_crash.core")
         .args(&certs)
-        .args(["proofs/mallocng_link.core", "core/bits.core", "proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core"])
+        .args(["proofs/mallocng_link.core", "proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
@@ -199,7 +199,7 @@ fn translations_are_generated_and_check() {
         ("a_ctz_32", "0 definitions, 7 theorems"),
         ("is_bouncing", "0 definitions, 6 theorems"),
         ("get_slot_index", "0 definitions, 6 theorems"),
-        ("get_stride", "0 definitions, 11 theorems"),
+        ("get_stride", "0 definitions, 10 theorems"),
         ("step_seq", "0 definitions, 8 theorems"),
         ("upgradelock", "0 definitions, 6 theorems"),
         ("resetlock", "0 definitions, 6 theorems"),
@@ -210,6 +210,7 @@ fn translations_are_generated_and_check() {
         ("queue", "0 definitions, 10 theorems"),
         ("free_meta", "0 definitions, 6 theorems"),
         ("size_to_class", "0 definitions, 7 theorems"),
+        ("set_size", "0 definitions, 6 theorems"),
     ];
     let each = expect.iter().all(|(f, n)| checked.contains(&format!("slc-tr-{}-{}.core: 0 constants, 0 axioms, {}, 0 conditional theorems, 0 open lemmas", f, id, n)))
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 20 theorems, 0 conditional theorems, 0 open lemmas")
