@@ -9,7 +9,9 @@
 //! cleaned (a word's own value back from its digits). A predicate of a
 //! written memory is unfolded the same way and rewritten by the registered
 //! frames (`mem_frame NAME`: `P(fn_update(vm, "bytes", X), ..) = P(vm,
-//! ..)`), then closed by the facts.
+//! ..)`), then closed by the facts. A read that does not resolve (a write
+//! not placed, bytes of an unknown memory) stays as it is: the goal may
+//! not need it (a read in a value written), else its reason is reported.
 //!
 //! Untrusted: views and frames are proven facts applied by rsimp's
 //! rewriting; the reads are the kernel's `mem_read`; the clean-up is
@@ -25,6 +27,8 @@ use std::rc::Rc;
 pub(crate) struct MemCache {
     pub(crate) rules: std::collections::HashMap<u8, Rc<Rules>>,
     unfold: std::collections::HashMap<Term, Seq>,
+    /// the reads left unresolved (why), for a failing goal's message
+    skipped: Vec<String>,
 }
 
 impl State {
@@ -67,8 +71,9 @@ impl State {
     }
 
     /// `t = r`: t's reads resolved through their memories' writes (see the
-    /// module docs); r is t if nothing applies
-    pub(crate) fn mem_read_eq(&self, env: &mut Env, lg: &Logic, t: &Term, facts: &[Seq], frames: bool) -> KResult<Seq> {
+    /// module docs); r is t if nothing applies. Lenient (a `mem` goal): a
+    /// read that does not resolve left as it is; else an error
+    pub(crate) fn mem_read_eq(&self, env: &mut Env, lg: &Logic, t: &Term, facts: &[Seq], frames: bool, lenient: bool) -> KResult<Seq> {
         let rs = self.mem_rules(env, lg, frames)?;
         let mut e = self.rsimp_eq(env, lg, t, &rs, 0)?;
         // (the facts in the same terms: unfolded too)
@@ -80,16 +85,31 @@ impl State {
         let refs: Vec<&Seq> = facts.iter().collect();
         let g = |n: &str| env.sym_by_name.get(n).copied();
         let (bytes_at, fn_update) = (g("gimple.bytes_at"), g("fn_update"));
-        // each read of a written memory, through its writes
+        // each read of a written memory, through its writes (those that do
+        // not resolve left as they are)
+        let mut left: Vec<Term> = Vec::new();
         for _ in 0..1000 {
             let rhs = rhs_of(env, e.concl());
             let Some(u) = find(env, &rhs, &|x: &Term| match x.node() {
-                Node::App(f, a) if Some(*f) == bytes_at && a.len() == 3 => matches!(a[0].node(), Node::App(h, _) if Some(*h) == fn_update),
+                Node::App(f, a) if Some(*f) == bytes_at && a.len() == 3 => {
+                    !left.contains(x) && matches!(a[0].node(), Node::App(h, _) if Some(*h) == fn_update)
+                }
                 _ => false,
             }) else {
                 break;
             };
-            let r = Seq::mem_read(env, lg, &refs, &u)?;
+            let r = match Seq::mem_read(env, lg, &refs, &u) {
+                Ok(r) => r,
+                Err(e) if !lenient => return Err(e),
+                Err(KernelError(why)) => {
+                    let mut c = self.mem_cache.borrow_mut();
+                    if !c.skipped.contains(&why) {
+                        c.skipped.push(why);
+                    }
+                    left.push(u);
+                    continue;
+                }
+            };
             e = rewrite_rhs(env, &r, &e)?;
             // (cleaned at once: the value may be another read's address)
             e = self.mem_clean(env, lg, e, facts)?;
@@ -173,10 +193,22 @@ impl State {
     /// then equal, or equal by `arith`), or a predicate of written memories
     /// (views and frames to the facts' memories, then by the facts)
     pub(crate) fn mem_goal(&self, env: &mut Env, lg: &Logic, goal: &Term, facts: &[Seq]) -> KResult<Seq> {
+        self.mem_cache.borrow_mut().skipped.clear();
+        self.mem_goal_1(env, lg, goal, facts).map_err(|KernelError(m)| {
+            let sk = &self.mem_cache.borrow().skipped;
+            if sk.is_empty() {
+                KernelError(m)
+            } else {
+                KernelError(format!("{m}\n  reads left unresolved:\n    {}", sk.join("\n    ")))
+            }
+        })
+    }
+
+    fn mem_goal_1(&self, env: &mut Env, lg: &Logic, goal: &Term, facts: &[Seq]) -> KResult<Seq> {
         let refs: Vec<&Seq> = facts.iter().collect();
         if let Some((l, r)) = eq_sides(env, goal) {
-            let el = self.mem_read_eq(env, lg, &l, facts, false)?;
-            let er = self.mem_read_eq(env, lg, &r, facts, false)?;
+            let el = self.mem_read_eq(env, lg, &l, facts, false, true)?;
+            let er = self.mem_read_eq(env, lg, &r, facts, false, true)?;
             let (l2, r2) = (rhs_of(env, el.concl()), rhs_of(env, er.concl()));
             let mid = if l2 == r2 {
                 Seq::refl(env, &l2)?
@@ -191,14 +223,14 @@ impl State {
             let s = Seq::trans(env, &el, &mid)?;
             return Seq::trans(env, &s, &Seq::sym(env, &er)?);
         }
-        let e = self.mem_read_eq(env, lg, goal, facts, true)?;
+        let e = self.mem_read_eq(env, lg, goal, facts, true, true)?;
         let g2 = rhs_of(env, e.concl());
         let mut p = facts.iter().find(|f| f.concl() == &g2).cloned();
         // (a fact of the same normal form)
         if p.is_none() {
             for f in facts {
                 if matches!(f.concl().node(), Node::App(h, _) if Some(*h) == head_sym(&g2)) {
-                    if let Ok(ef) = self.mem_read_eq(env, lg, f.concl(), facts, true) {
+                    if let Ok(ef) = self.mem_read_eq(env, lg, f.concl(), facts, true, true) {
                         if rhs_of(env, ef.concl()) == g2 {
                             p = Some(Seq::rewrite(env, &ef, f)?);
                             break;
@@ -240,11 +272,17 @@ fn rewrite_rhs(env: &Env, r: &Seq, e: &Seq) -> KResult<Seq> {
 }
 
 /// `goal` by arith from the facts mentioning its terms
-/// (`Logic::arith_relevant`)
+/// (`Logic::arith_relevant`: the narrow choice, else the wide one)
 fn rel_arith(env: &Env, lg: &Logic, facts: &[&Seq], goal: &Term) -> KResult<Seq> {
     let cs: Vec<Term> = facts.iter().map(|f| f.concl().clone()).collect();
-    let rel: Vec<&Seq> = lg.arith_relevant(env, &cs, goal).into_iter().map(|i| facts[i]).collect();
-    Seq::arith(env, lg, &rel, goal)
+    let narrow: Vec<&Seq> = lg.arith_relevant(env, &cs, goal, false).into_iter().map(|i| facts[i]).collect();
+    Seq::arith(env, lg, &narrow, goal).or_else(|e| {
+        let wide: Vec<&Seq> = lg.arith_relevant(env, &cs, goal, true).into_iter().map(|i| facts[i]).collect();
+        if wide.len() == narrow.len() {
+            return Err(e);
+        }
+        Seq::arith(env, lg, &wide, goal).map_err(|_| e)
+    })
 }
 
 /// whether t mentions the symbol f
@@ -334,7 +372,7 @@ impl State {
         let srs = self.step_rules(env, lg).ok()?;
         let es = self.rsimp_eq(env, lg, v, &srs, 0).ok()?;
         let vs = rhs_of(env, es.concl());
-        let er = self.mem_read_eq(env, lg, &vs, using, false).ok()?;
+        let er = self.mem_read_eq(env, lg, &vs, using, false, false).ok()?;
         let r = rhs_of(env, er.concl());
         let bytes_at = env.sym_by_name.get("gimple.bytes_at").copied();
         if r == vs {
@@ -352,7 +390,7 @@ impl State {
         let e = Seq::trans(env, &es, &er).ok()?;
         let v0 = Term::app(*f, a0);
         if v0 != vs {
-            if let Ok(e0) = self.mem_read_eq(env, lg, &v0, using, false) {
+            if let Ok(e0) = self.mem_read_eq(env, lg, &v0, using, false, false) {
                 if rhs_of(env, e0.concl()) == r {
                     return Seq::trans(env, &e, &Seq::sym(env, &e0).ok()?).ok();
                 }

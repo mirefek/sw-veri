@@ -507,10 +507,16 @@ read hits is decided by a fixed algorithm.
   store_le(app(M, "bytes"), a, n, v))`, a read `gimple.bytes_at(M, b, m)`
   (`ms.v_wr64`, `ms.v_rd64`, `ms.v_mnext` in proofs/mallocng_mem.core).
 - A read through writes: the kernel's `mem_read` walks the writes from the
-  outermost in. For each it tests, by `arith` on the facts given: apart
-  (past it), the same place and size (its value), the read inside it (its
-  digits); else it stops, naming the write. A word's value is then
-  cleaned back from its digits.
+  outermost in -- also a chain of writes on bytes of any form,
+  `fn_update(M, "bytes", store_le(store_le(B, ..), ..))`, ending at bytes
+  B it does not know (the read is then of `fn_update(M, "bytes", B)`).
+  For each it tests, by `arith` on the facts given: apart (past it), the
+  same place and size (its value), the read inside it (its digits); else
+  it stops, naming the write. A read of a size not a numeral passes apart
+  writes only. A word's value is then cleaned back from its digits.
+- In a `mem` goal a read that does not resolve (inside a value written,
+  or of bytes not known) is left as it is: the goal may not need it (a
+  fact about it may), else the failure lists such reads and why.
 - Frames (`mem_frame`): predicates the bytes do not matter to,
   `P(fn_update(vm, "bytes", X), ..) = P(vm, ..)` (`word_ok`).
 - Closures (`mem_closure`): lemmas `H.. -> C1 && ..`, used backward for a
@@ -520,10 +526,14 @@ read hits is decided by a fixed algorithm.
   fields simplified, a closure, `mem`, or `arith` on the facts.
 
 The facts are what a precondition provides: bounds, alignment (`al8`
-expanded to `x % 8 = 0`), disequalities. Each `arith` check gets the facts
-mentioning its terms, and through the equations among them, the facts on
-their other sides' terms (an address `e + sval(d)` given as `sval(d) = -r`,
-then r's bounds).
+expanded to `x % 8 = 0`), disequalities, either-or placements (a slot
+before or after a word). Each `arith` check gets the facts mentioning its
+terms, and through the equations among them, the facts on their other
+sides' terms (an address `e + sval(d)` given as `sval(d) = -r`, then r's
+bounds); if that does not do, the facts connected to its terms by any
+chain of shared terms (a membership's type not counted), those with cases
+(disjunctions, disequalities) only when about its own terms -- so a
+bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 
 ### Rules without a goal
 

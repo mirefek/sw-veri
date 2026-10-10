@@ -34,7 +34,9 @@ item is a short summary of finished work; details are in the files named.
     pruned by infeasibility, with no limit on the atoms;
   - lists;
   - memory reads through writes (`mem_read`: apart / the same / inside,
-    each decided by arith);
+    each decided by arith; writes on bytes of any form; a read of any
+    size past apart writes; the facts for each check widened to those
+    connected to its terms when the nearest do not do);
   - the path simplifier `simp` and the rewriting simplifier `rsimp`.
 - **The proof language** (docs/language.md). It has implicit unfolding at
   mismatches, destructuring by position or label, `apply` with

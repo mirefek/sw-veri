@@ -2182,7 +2182,7 @@ impl State {
                         let t = self.term_arg(env, a0, 0)?;
                         let ps = self.proofs(env, lg, &args[1.min(args.len())..])?;
                         let ps = split_conj(env, ps)?;
-                        self.mem_read_eq(env, lg, &t, &ps, false)
+                        self.mem_read_eq(env, lg, &t, &ps, false, false)
                     }
                     // mem_bytes({bytes_at(M, b, m)}, p..): the read through M's
                     // writes (the kernel's `mem_read`, facts p..)
