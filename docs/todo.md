@@ -24,14 +24,20 @@ call graph.
   `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
   `___errno_location`.
 - C1 of loops without a counter (activate_group's compare-and-swap retry,
-  try_avail's): the claim now admits a divergence the spec may also make
-  (`tr.div`), but a loop with no variant needs an induction the rules do
-  not expose. A rule concludes `tr.pt` at a point from `tr.pt` at its
-  successors as a black box, so the loop's claim cannot be had from the
-  body's proof (the induction hypothesis used after at least one step) by
-  the variant-free argument: it needs the claim indexed by the run's
-  length (`tr.pt` with a step budget each rule decreases), or another way
-  to see the body's proof as guarded.
+  try_avail's). The loop rule is proven (`tr.loop`,
+  `proofs/translate_loop.core`): the claim with breakpoints (`tr.simk`:
+  the run to the first breakpoint after a step, the return or a loop's
+  head, with an arrival condition there) for a loop at its head, from the
+  claim for one iteration (the head a breakpoint, the iteration's spec
+  `tr.lone` returning the next locals marked). To do:
+  - the rules on `tr.simk`: each stepping rule from the claim at its
+    successors (the arrival condition at a breakpoint, else the claim
+    leaving it) to the claim leaving its point, the breakpoints a binder
+    of every rule (now `tr.pt` / `tr.sim`: the return the only one);
+  - the engine: the breakpoints threaded through, a loop's head walked
+    once with the iteration's spec, the loop's exit into the rest with the
+    marked returns dropped;
+  - nested loops (the inner loop's iterations arriving at the outer head).
 
 ## 2. The invariant and the laws
 

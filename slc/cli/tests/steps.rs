@@ -154,7 +154,7 @@ fn c1_engine_checks() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -182,6 +182,7 @@ fn c1_engine_checks() {
     let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 153 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 24 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 14 definitions, 16 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 52 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
