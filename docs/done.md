@@ -181,4 +181,8 @@ item is a short summary of finished work; details are in the files named.
   dequeue, dequeue_head, queue, free_meta, set_size, get_stride, enframe,
   get_slot_index, is_bouncing, decay_bounces, step_seq, resetlock and
   upgradelock -- every function with a C1 (`proofs/mallocng_compose.core`,
-  a caller's with its linked C1 and its callees' C2).
+  a caller's with its linked C1 and its callees' C2). A function-level C2
+  (the register wrappers) from the procedure's by one lemma per wrapper
+  shape (`g.fun_void`, `g.fun_void0`, `g.fun_res`,
+  proofs/translate_effects.core), the specs' wrappers returning a word as
+  the code's do (`result[64]`).

@@ -45,9 +45,10 @@ descriptor and the auxiliary vector.
 Frictions met while writing the proofs, and the features they ask for,
 from the proof writer's side. Taken up in batches between functions.
 
-- The C function value wrappers (`*_fun_c2`) and the compositions are
-  boilerplate, one template each: a generic lemma, or generated with the
-  C1 certificates.
+- The function-level C2s and the compositions: each now a few lines, one
+  instance of `g.fun_void` / `g.fun_void0` / `g.fun_res` and of
+  `tr.implements_refine`; they could be generated with the C1
+  certificates (the wrapper's shape and arguments are known there).
 - SL: design a syntax for properties; add qualified names and ambiguity
   errors to name resolution; choose the language's name.
 - Code: name the C1 engine's instruction rows instead of numbering them,

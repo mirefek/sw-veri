@@ -59,7 +59,9 @@ proc[World] dequeue_spec(phead: bits[64], m: bits[64]) {
 
 // ... as a C function value (its register wrapper, as readable GIMPLE has
 // C functions: c_mallocng_malloc's dequeue_fun): what its callers' calls
-// rely on
+// rely on. The wrappers are written as the code's are (a result through
+// `result[w]`), so one lemma per shape relates the two
+// (proofs/translate_effects.core, `g.fun_*`)
 fn dequeue_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 2
   dequeue_spec(bits[64](args[0]), bits[64](args[1]))
@@ -181,7 +183,8 @@ proc[World] dequeue_head_spec(phead: bits[64]) -> bits[64] {
 fn dequeue_head_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 1
   let r = dequeue_head_spec(bits[64](args[0]))
-  return (r, any bits[64])
+  let w = result[64](r)
+  return (w, any bits[64])
 }
 
 // a_crash (a trap: hlt): calling it is a bug -- its contract undefined, so
@@ -288,7 +291,8 @@ proc[World] get_stride_spec(sct: bits[64], g: bits[64]) -> bits[64] {
 fn get_stride_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
   require len(args) >= 1
   let r = get_stride_spec(sct, bits[64](args[0]))
-  return (r, any bits[64])
+  let w = result[64](r)
+  return (w, any bits[64])
 }
 
 // a 16-bit word written
@@ -341,7 +345,8 @@ proc[World] enframe_spec(sct: bits[64], g: bits[64], idx: bits[32], n: bits[64])
 fn enframe_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
   require len(args) >= 4
   let r = enframe_spec(sct, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
-  return (r, any bits[64])
+  let w = result[64](r)
+  return (w, any bits[64])
 }
 
 // get_slot_index(p): the index of p's slot in its group, the low 5 bits
