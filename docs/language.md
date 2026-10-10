@@ -445,7 +445,7 @@ step x.., h.. from P with f.. [using u..]   a run of readable GIMPLE inverted st
 show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
-let N := t / let N(a) := t   an abbreviation to the end of the block
+let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_body(h)`: h's loop's body)
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)
 flip [in h]               turn the equation / disequation around
 rsimp e1, .. [in h]       simplify the goal (or h) with rsimp
@@ -473,7 +473,7 @@ Arguments are proof expressions, terms `{t}`, occurrence selections
 `runs(prog, s, o)`, or a fact on a program's outcome -- it goes, in order:
 - through the program's definition and relation (`g.runs_elim`) and
   `letin`s (`g.letin_e`);
-- through `bind_rel(p, s, ..)` by the next `with` fact `g.det(p, s, ok(s1,
+- through `bind_rel(p, s, ..)` by a `with` fact `g.det(p, s, ok(s1,
   v1))`, an operation's one outcome (`g.bind_inv`). The `with` item may
   instead be a lemma `all xs. H1 -> .. -> g.det(P, S, O)`: its variables
   come from matching P and S with the operation and the state, and its
@@ -483,16 +483,39 @@ Arguments are proof expressions, terms `{t}`, occurrence selections
   --, and the state's record fields are simplified;
 - through a local's choice of a word (`any_rel`), and an `if`'s outcome
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
-- into the `if`'s branch the next `with` fact decides (it implies c or !c
-  propositionally), through the branch's `letin`s and binds; a branch
-  ending in `x = V` is substituted into K, and K's dispatch on V (an `ok`:
-  on with the rest; a return: the outcome) simplified;
+- into the `if`'s branch that is decided: by a `with` fact implying c or
+  its negation propositionally (c as written, or simplified by step's own
+  rules: `snd(pair(a, b))` to b ..), else by arith from a `with` fact and
+  the `using` facts, else from the `using` facts alone; through the
+  branch's `letin`s and binds; a branch ending in `x = V` is substituted
+  into K, and K's dispatch on V (an `ok`: on with the rest; a return: the
+  outcome) simplified; a branch with more steps (a nested `if`, a choice)
+  is stepped on, K waiting for its outcome;
 - into L of `L && R` (while there are names or `with` items left), R
   waiting for L's outcome `x = V`;
 - and it stops at anything else -- a call, a loop, a bind or branch with
   no `with` fact for it, a choice with no name -- naming the fact there
-  `h` (or its conjuncts `h..`). Unused names or `with` facts are an error.
+  `h` (or its conjuncts `h..`). Unused names or `with` facts are an error
+  (for an operation's lemma that matched but did not apply, why).
   `using` facts that are conjunctions are split.
+
+The `with` facts are used wherever they fit, in any order; an operation's
+lemma applies to every operation it matches (`g.padd_det` once for all
+the pointer additions). Give an instance instead to keep `step` from
+going on past a point.
+
+**Loops.** `step` stops at a loop, `while_rel(l0, l. true, l o. B(l, o),
+.., r) && K(r)`. `let B(l, o) := loop_body(h)` names its body (from the
+fact h, as it is); `g.loop` (proofs/gimple_inv.core) takes an invariant p
+with p(l0), a variant m with p(l) -> m(l) in omega, and the step
+`all l l2. p(l) -> B(l, ok(l2, empty)) -> p(l2) && m(l2) < m(l)` to the
+loop's exit: `ex l. p(l) && B(l, r) && !is_ok(r)` -- a break, a return or
+a failure from a state with the invariant (ms.step_seq_c2):
+
+```
+let BODY(l, o) := loop_body(wl)
+have wv := apply(g.loop[b := l o. BODY(l, o), p := l. P(l), m := l. M(l)], p0, pm, nx, wl)
+```
 
 ```
 step a3 a5 a7 a9 x13, oe from hr with hq     // oe: o = ok(s, bits_of_int(32, Q))

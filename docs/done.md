@@ -46,7 +46,11 @@ item is a short summary of finished work; details are in the files named.
   lemmas, branches by conditions, the choices named), and the memory
   rules (`mem`, `mem_read`; views, frames and closures registered per
   layer, proofs/mallocng_mem.core): with them queue's and dequeue's runs
-  went from about 300 to 110 lines. `bitwise` decides bits by registered
+  went from about 300 to 110 lines. `step` takes its `with` facts in any
+  order (an operation's lemma for every operation it matches), decides a
+  branch also on its simplified condition or by arith from the facts, and
+  steps on into nested `if`s; a loop by `let B(l, o) := loop_body(h)` and
+  `g.loop` (invariant, variant: the exit). `bitwise` decides bits by registered
   bit rules and one arith call; `cases` takes a literal range case by
   case. Goal rules prove
   `mp` / `apply` premises in place; `arith` reads powers of numerals as

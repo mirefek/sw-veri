@@ -45,17 +45,6 @@ descriptor and the auxiliary vector.
 Frictions met while writing the proofs, and the features they ask for,
 from the proof writer's side. Taken up in batches between functions.
 
-- `step`:
-  - accept its `with` facts in any order (now each must come in the order
-    used);
-  - take a branch condition in any equivalent form (now the exact one,
-    e.g. `!!(x = 0)` for an else branch);
-  - go on into an `if` nested in a branch (now the inner `ex` is left as
-    the left conjunct of the branch's continuation, opened by `obtain` and
-    its branch picked by hand: ms.is_bouncing_c2);
-  - a loop rule: from a `while_rel` reached by `step`, an invariant and a
-    variant, the loop's exit (now `while_var` is instantiated by hand, the
-    loop body copied out as a `let`: ms.step_seq_c2).
 - `rewrite` / `rsimp` under binders (now a fact whose terms sit inside
   `letin`s needs a detour: ms.enframe_c2).
 - The C function value wrappers (`*_fun_c2`) and the compositions are

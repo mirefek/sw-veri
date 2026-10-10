@@ -273,7 +273,7 @@ fn rewrite_rhs(env: &Env, r: &Seq, e: &Seq) -> KResult<Seq> {
 
 /// `goal` by arith from the facts mentioning its terms
 /// (`Logic::arith_relevant`: the narrow choice, else the wide one)
-fn rel_arith(env: &Env, lg: &Logic, facts: &[&Seq], goal: &Term) -> KResult<Seq> {
+pub(crate) fn rel_arith(env: &Env, lg: &Logic, facts: &[&Seq], goal: &Term) -> KResult<Seq> {
     let cs: Vec<Term> = facts.iter().map(|f| f.concl().clone()).collect();
     let narrow: Vec<&Seq> = lg.arith_relevant(env, &cs, goal, false).into_iter().map(|i| facts[i]).collect();
     Seq::arith(env, lg, &narrow, goal).or_else(|e| {
@@ -312,6 +312,11 @@ fn head_sym(t: &Term) -> Option<SymId> {
         Node::App(h, _) => Some(*h),
         _ => None,
     }
+}
+
+/// the right side of an equation
+pub(crate) fn rhs(env: &Env, t: &Term) -> Term {
+    rhs_of(env, t)
 }
 
 /// the right side of an equation

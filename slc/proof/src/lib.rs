@@ -822,8 +822,25 @@ impl State {
                     None => (head, Vec::new()),
                 };
                 let k = params.len();
-                let text = if k == 0 { body.trim().to_string() } else { format!("{}. {}", params.join(" "), body.trim()) };
-                let t = parse_value(env, &text, &self.scope, k as u32)?;
+                // (`let B(l, o) := loop_body(F)` / `let C(l) := loop_cond(F)`:
+                // the body or condition of the loop `while_rel(..)` in the
+                // fact F, as it is -- not written out)
+                let part = body.trim().strip_prefix("loop_body(").map(|r| (r, 2usize)).or_else(|| body.trim().strip_prefix("loop_cond(").map(|r| (r, 1usize)));
+                let t = if let Some((r, ar)) = part {
+                    let fname = r.strip_suffix(')').ok_or_else(|| KernelError("expected `loop_body(F)` / `loop_cond(F)`".into()))?.trim();
+                    if k != ar {
+                        return err(format!("`{}`: a loop's {} has {} parameters", name, if ar == 2 { "body" } else { "condition" }, ar));
+                    }
+                    let f = self.eval(env, lg, &parse_pe(fname)?)?;
+                    let wr = env.sym_by_name.get("while_rel").copied();
+                    let w = find_closed(env, f.concl(), &|x: &Term| matches!(x.node(), Node::App(g, a) if Some(*g) == wr && a.len() == 5))
+                        .ok_or_else(|| KernelError(format!("`{}`: no loop (`while_rel`) in `{}`", fname, Printer::new(env).short(f.concl()))))?;
+                    let Node::App(_, a) = w.node() else { unreachable!() };
+                    a[if ar == 2 { 2 } else { 1 }].clone()
+                } else {
+                    let text = if k == 0 { body.trim().to_string() } else { format!("{}. {}", params.join(" "), body.trim()) };
+                    parse_value(env, &text, &self.scope, k as u32)?
+                };
                 let prev = env.abbrevs.get(name).cloned();
                 sl_kernel::syntax::define_abbrev(env, name, k, t)?;
                 self.lets.push((name.to_string(), prev));
@@ -1657,10 +1674,14 @@ impl State {
             return Err(bad());
         }
         let mut xs: std::collections::VecDeque<String> = xs.into();
-        let mut withs = std::collections::VecDeque::new();
+        // (the `with` facts: each used wherever it fits, in any order -- an
+        // operation's lemma as often as it applies)
+        let mut withs: Vec<Seq> = Vec::new();
         for w in &with {
-            withs.push_back(self.eval(env, lg, &parse_pe(w.trim())?)?);
+            withs.push(self.eval(env, lg, &parse_pe(w.trim())?)?);
         }
+        let mut used = vec![false; withs.len()];
+        let mut why: Option<String> = None;
         let sym = |n: &str| env.sym_by_name.get(n).copied();
         let (runs, mkprog, letin, bind, any, and, or, not, det) =
             (sym("runs"), sym("mkprog"), sym("letin"), sym("bind_rel"), sym("any_rel"), sym("and"), sym("or"), sym("not"), sym("g.det"));
@@ -1690,6 +1711,7 @@ impl State {
                 (Some(l) == and && Some(r) == and).then_some(())
             }).is_some()
         };
+        let is_op: Vec<bool> = withs.iter().map(|w| op_fact(w.concl())).collect();
         let mut cur = self.eval(env, lg, &parse_pe(p.trim())?)?;
         // (`L && R` stepped in L, R pending: on L's outcome `x = V`, R at V)
         let mut pending: Vec<Seq> = Vec::new();
@@ -1716,13 +1738,10 @@ impl State {
             } else if Some(f) == letin {
                 cur = self.lemma(env, lg, "g.letin_e", &[cur])?;
             } else if Some(f) == bind {
-                // (an operation's one outcome: the next `with` fact)
-                match withs.front() {
-                    Some(w) if op_fact(w.concl()) => {
-                        let w = withs.pop_front().unwrap();
-                        cur = self.step_bind(env, lg, cur, w, &using)?;
-                    }
-                    _ => break,
+                // (an operation's one outcome: a `with` fact for it)
+                match self.step_bind_any(env, lg, &cur, &withs, &is_op, &mut used, &using, &mut why)? {
+                    Some(n) => cur = n,
+                    None => break,
                 }
             } else if Some(f) == any {
                 // (a local's choice: a word, named)
@@ -1750,36 +1769,32 @@ impl State {
                     (Some(l) == and && Some(r) == and).then(|| (la[0].clone(), ra[0].clone()))
                 });
                 let Some((c, c2)) = branch else { unreachable!() };
-                // (the branch: the next `with` fact implies its condition,
-                // propositionally)
-                let side = withs.front().and_then(|w| {
-                    if let Ok(x) = Seq::taut(env, lg, &[w], &c) {
-                        Some((true, x))
-                    } else {
-                        Seq::taut(env, lg, &[w], &c2).ok().map(|x| (false, x))
-                    }
-                });
-                let Some((then, w)) = side else {
+                // (the branch: its condition, or the other's, decided by a
+                // `with` fact -- propositionally, its terms simplified -- or
+                // by arith from the facts)
+                let not = not.ok_or_else(|| KernelError("step: no `not`".into()))?;
+                let nc = Term::app(not, vec![c.clone()]);
+                let nc2 = Term::app(not, vec![c2.clone()]);
+                let side = match self.step_decide(env, lg, &c, &withs, &is_op, &mut used, &using) {
+                    Some(w) => self.step_decide(env, lg, &nc2, &withs, &is_op, &mut used, &using).or_else(|| Seq::taut(env, lg, &[&w], &nc2).ok()).map(|nn| (true, w, nn)),
+                    None => match self.step_decide(env, lg, &c2, &withs, &is_op, &mut used, &using) {
+                        Some(w) => self.step_decide(env, lg, &nc, &withs, &is_op, &mut used, &using).or_else(|| Seq::taut(env, lg, &[&w], &nc).ok()).map(|nn| (false, w, nn)),
+                        None => None,
+                    },
+                };
+                let Some((then, w, nn)) = side else {
                     cur = h;
                     break;
                 };
-                withs.pop_front();
-                let not = not.ok_or_else(|| KernelError("step: no `not`".into()))?;
                 let (hif, hk) = (and_part(env, &h, false)?, and_part(env, &h, true)?);
-                let mut t = if then {
-                    let nn = Seq::taut(env, lg, &[&w], &Term::app(not, vec![c2.clone()]))?;
-                    self.lemma(env, lg, "g.pick", &[hif, w, nn])?
-                } else {
-                    let nn = Seq::taut(env, lg, &[&w], &Term::app(not, vec![c.clone()]))?;
-                    self.lemma(env, lg, "g.pick2", &[hif, w, nn])?
-                };
+                let mut t = if then { self.lemma(env, lg, "g.pick", &[hif, w, nn])? } else { self.lemma(env, lg, "g.pick2", &[hif, w, nn])? };
                 loop {
                     match head(t.concl()) {
                         Some((g, _)) if Some(g) == letin => t = self.lemma(env, lg, "g.letin_e", &[t])?,
-                        Some((g, _)) if Some(g) == bind && withs.front().is_some_and(|w| op_fact(w.concl())) => {
-                            let w = withs.pop_front().unwrap();
-                            t = self.step_bind(env, lg, t, w, &using)?;
-                        }
+                        Some((g, _)) if Some(g) == bind => match self.step_bind_any(env, lg, &t, &withs, &is_op, &mut used, &using, &mut why)? {
+                            Some(n) => t = n,
+                            None => break,
+                        },
                         _ => break,
                     }
                 }
@@ -1788,6 +1803,12 @@ impl State {
                     Some((g, ta)) if g == lg.eq && matches!(ta[0].node(), Node::Var(..)) => {
                         let k = Seq::rewrite(env, &t, &hk)?;
                         cur = self.step_simp(env, lg, k)?;
+                    }
+                    // (the branch's own steps -- a nested `if`, a choice --
+                    // stepped on, K pending till its outcome)
+                    Some((g, _)) if g == lg.ex || Some(g) == and || Some(g) == bind || Some(g) == any || Some(g) == runs => {
+                        pending.push(hk);
+                        cur = t;
                     }
                     _ => {
                         let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![t.concl().clone(), hk.concl().clone()]);
@@ -1813,8 +1834,15 @@ impl State {
             let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
             cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
         }
-        if !withs.is_empty() {
-            return err(format!("step: {} `with` facts not used (it stopped at `{}`)", withs.len(), Printer::new(env).short(cur.concl())));
+        let unused: Vec<usize> = (0..withs.len()).filter(|&i| !used[i]).map(|i| i + 1).collect();
+        if !unused.is_empty() {
+            let pos: Vec<String> = unused.iter().map(|i| i.to_string()).collect();
+            return err(format!(
+                "step: `with` facts not used: number {} (it stopped at `{}`){}",
+                pos.join(", "),
+                Printer::new(env).short(cur.concl()),
+                why.map(|w| format!("\n  an operation's lemma that matched but did not apply: {w}")).unwrap_or_default()
+            ));
         }
         if !xs.is_empty() {
             return err(format!("step: names not used: {} (it stopped at `{}`)", xs.into_iter().collect::<Vec<_>>().join(" "), Printer::new(env).short(cur.concl())));
@@ -1828,6 +1856,83 @@ impl State {
         }
         self.last = Some(cur);
         Ok(())
+    }
+
+    /// a bind stepped by a `with` fact for its operation: the first that
+    /// applies (marked used, with its copies); None if none does (`why`:
+    /// a lemma's failure, for the report)
+    #[allow(clippy::too_many_arguments)]
+    fn step_bind_any(&mut self, env: &mut Env, lg: &Logic, b: &Seq, withs: &[Seq], is_op: &[bool], used: &mut [bool], using: &[Seq], why: &mut Option<String>) -> KResult<Option<Seq>> {
+        for i in 0..withs.len() {
+            if !is_op[i] {
+                continue;
+            }
+            match self.step_bind(env, lg, b.clone(), withs[i].clone(), using) {
+                Ok(n) => {
+                    mark_used(withs, used, i);
+                    return Ok(Some(n));
+                }
+                Err(KernelError(m)) => {
+                    if !m.contains("does not match") && !m.starts_with("bind_inv") {
+                        *why = Some(m);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// a branch's condition `c` from the `with` facts: one implying it
+    /// propositionally (c as written, or simplified by step's rules), or by
+    /// arith from it and the `using` facts; else by arith from the `using`
+    /// facts alone
+    #[allow(clippy::too_many_arguments)]
+    fn step_decide(&mut self, env: &mut Env, lg: &Logic, c: &Term, withs: &[Seq], is_op: &[bool], used: &mut [bool], using: &[Seq]) -> Option<Seq> {
+        let rs = self.step_rules(env, lg).ok()?;
+        // (c = c2, c2 simplified)
+        let e = self.rsimp_eq(env, lg, c, &rs, 0).ok();
+        let c2 = e.as_ref().map(|e| mem::rhs(env, e.concl())).filter(|c2| c2 != c);
+        let back = |env: &Env, p: Seq| -> Option<Seq> {
+            match (&e, &c2) {
+                (Some(e), Some(c2)) if p.concl() == c2 => Seq::rewrite(env, &Seq::sym(env, e).ok()?, &p).ok(),
+                _ => Some(p),
+            }
+        };
+        let goals: Vec<Term> = std::iter::once(c.clone()).chain(c2.clone()).collect();
+        for i in 0..withs.len() {
+            if is_op[i] {
+                continue;
+            }
+            for g in &goals {
+                if let Ok(p) = Seq::taut(env, lg, &[&withs[i]], g) {
+                    mark_used(withs, used, i);
+                    return back(env, p);
+                }
+            }
+        }
+        for i in 0..withs.len() {
+            if is_op[i] {
+                continue;
+            }
+            let mut fs: Vec<&Seq> = vec![&withs[i]];
+            fs.extend(using.iter());
+            for g in &goals {
+                if let Ok(p) = mem::rel_arith(env, lg, &fs, g) {
+                    mark_used(withs, used, i);
+                    return back(env, p);
+                }
+            }
+        }
+        let fs: Vec<&Seq> = using.iter().collect();
+        if fs.is_empty() {
+            return None;
+        }
+        for g in &goals {
+            if let Ok(p) = mem::rel_arith(env, lg, &fs, g) {
+                return back(env, p);
+            }
+        }
+        None
     }
 
     /// a bind of `b` (`bind_rel(p, s, k, ..)`) by the operation's one
@@ -2403,6 +2508,26 @@ fn disj_parts(env: &Env, t: &Term) -> Vec<Term> {
     out.push(t);
     out.reverse();
     out
+}
+
+/// with fact i used (and its copies: the same statement)
+fn mark_used(withs: &[Seq], used: &mut [bool], i: usize) {
+    for j in 0..withs.len() {
+        if withs[j].concl() == withs[i].concl() {
+            used[j] = true;
+        }
+    }
+}
+
+/// a closed subterm of t with property p, outermost first
+fn find_closed(env: &Env, t: &Term, p: &dyn Fn(&Term) -> bool) -> Option<Term> {
+    if p(t) && t.loose_depth(&env.binders_fn()) == 0 {
+        return Some(t.clone());
+    }
+    match t.node() {
+        Node::App(_, a) => a.iter().find_map(|x| find_closed(env, x, p)),
+        _ => None,
+    }
 }
 
 /// `and_left` / `and_right` (core/logic.core) applied to `s`
