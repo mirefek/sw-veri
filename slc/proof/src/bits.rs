@@ -314,7 +314,7 @@ impl State {
 fn op_width(env: &Env, t: &Term) -> Option<Term> {
     let Node::App(f, a) = t.node() else { return None };
     let name = env.syms[*f as usize].name.as_str();
-    matches!(name, "bits_and" | "bits_or" | "bits_xor" | "bits_not" | "bits_neg" | "bits_shl" | "bits_shr" | "bits_of_int" | "bits_add" | "bits_sub" | "bits_mul")
+    matches!(name, "bits_and" | "bits_or" | "bits_xor" | "bits_not" | "bits_neg" | "bits_shl" | "bits_shr" | "bits_of_int" | "bits_add" | "bits_sub" | "bits_mul" | "bits_set_slice")
         .then(|| a[0].clone())
 }
 

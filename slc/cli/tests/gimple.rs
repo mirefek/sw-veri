@@ -50,11 +50,12 @@ fn mallocng_at_o0_has_a_readable_form() {
         .output()
         .unwrap();
     let msg = String::from_utf8_lossy(&t.stdout);
-    assert!(t.status.success() && msg.contains("33 of 35 functions"), "{}{}", msg, String::from_utf8_lossy(&t.stderr));
-    // what is left: inline assembly with operands (a_cas, __syscall1)
+    assert!(t.status.success() && msg.contains("34 of 35 functions"), "{}{}", msg, String::from_utf8_lossy(&t.stderr));
+    // what is left: inline assembly with operands (__syscall1; a_cas's is
+    // the primitive cas32)
     assert_eq!(msg.matches("not translated").count(), msg.matches("inline assembly with operands").count(), "{}", msg);
     let text = std::fs::read_to_string(&out).unwrap();
-    assert!(text.contains("meta := group_meta(base)") && text.contains("if offset <=s 65535 {"), "{}", text);
+    assert!(text.contains("meta := group_meta(base)") && text.contains("if offset <=s 65535 {") && text.contains("t := cas32(p, t, s)"), "{}", text);
     let c = Command::new(slc).current_dir(&root).args(["check", "spec", "layers"]).arg(&out).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     assert!(c.status.success() && checked.contains(" 0 errors"), "{}{}", checked, String::from_utf8_lossy(&c.stderr));

@@ -71,6 +71,19 @@ impl<'e> Gen<'e> {
         if self.app(g, "true", 0).is_some() {
             return Some((true, vec![]));
         }
+        // (an order the other way round: x < y false by y <= x, true by
+        // !(y <= x); x <= y the same by y < x)
+        for (op, dual) in [("int_lt", "int_le"), ("int_le", "int_lt")] {
+            if let Some(a) = self.app(g, op, 2) {
+                let d = self.mk(dual, vec![a[1].clone(), a[0].clone()]);
+                if let Some(h) = self.hyp_find(hyps, &d) {
+                    return Some((false, vec![h.1.clone()]));
+                }
+                if let Some(h) = self.hyp_find(hyps, &self.mk("not", vec![d])) {
+                    return Some((true, vec![h.1.clone()]));
+                }
+            }
+        }
         let join = |mut x: Vec<Seq>, y: Vec<Seq>| {
             for f in y {
                 if !x.iter().any(|z| z.concl() == f.concl()) {
@@ -285,6 +298,16 @@ impl<'e> Gen<'e> {
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
+        // a shift by k: defined for k below the width
+        for h in ["shr", "shl"] {
+            if let Some(x) = self.app(op, &format!("gimple.{h}"), 3) {
+                let (n, a, k) = (x[0].clone(), x[1].clone(), x[2].clone());
+                let cond = self.mk("int_lt", vec![k.clone(), n.clone()]);
+                let r = self.mk(&format!("bits_{h}"), vec![n.clone(), a.clone(), k.clone()]);
+                let (ok, ub) = self.ok_ub(&format!("tr.{h}_ok"), &format!("tr.{h}_ub"), &[n, a, k], vec![simp_l(), simp_l(), simp_l(), hc()], vec![]);
+                return Ok((Some(cond), r, ok, Some(ub)));
+            }
+        }
         if let Some(x) = self.app(op, "gimple.ssub", 3) {
             if nat(&x[0]) == Some(32) {
                 let (a, b) = (x[1].clone(), x[2].clone());
@@ -408,6 +431,15 @@ impl<'e> Gen<'e> {
                 let (ok, ub) = self.ok_ub("g.ld32_ok", "g.ld32_ub", &[a], vec![simp_l(), hc()], vec![simp_l()]);
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
+            // (at p + off, off a literal)
+            if nat(&x[1]).is_some() {
+                let (pp, off) = (x[0].clone(), x[1].clone());
+                let cond = self.mem_defined(&self.w.clone(), &pp, &off, 4, false);
+                let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
+                let r = self.mk("bits_of_int", vec![lit(32), self.mk("gimple.bytes_at", vec![vm, self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]), lit(4)])]);
+                let (ok, ub) = self.ok_ub("tr.ld32_ok", "tr.ld32_ub", &[pp, off], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
+                return Ok((Some(cond), r, ok, Some(ub)));
+            }
         }
         // an array's 2-byte element at a sign-extended 32-bit index
         if let Some(x) = self.app(op, "gimple.elem", 3) {
@@ -459,6 +491,15 @@ impl<'e> Gen<'e> {
                     let (ok, ub) = self.ok_ub("tr.smul32_ok", "tr.smul32_ub", &[a, lit(k)], vec![simp_l(), simp_l(), s(&ib), hc()], vec![]);
                     return Ok((Some(cond), r, ok, Some(ub)));
                 }
+            }
+            // (of two values)
+            if nat(&x[0]) == Some(32) && nat(&x[2]).is_none() {
+                let (a, b) = (x[1].clone(), x[2].clone());
+                let cond = self.mk("gimple.fits", vec![self.sty(32), self.mk("int_mul", vec![self.mk("sint", vec![lit(32), a.clone()]), self.mk("sint", vec![lit(32), b.clone()])])]);
+                let r = self.mk("bits_mul", vec![lit(32), a.clone(), b.clone()]);
+                let (ok, _) = self.ok_ub("tr.smul32v_ok", "", &[a.clone(), b.clone()], vec![simp_l(), simp_l(), hc()], vec![]);
+                let (_, ub) = self.ok_ub("", "tr.smul32_ub", &[a, b], vec![], vec![]);
+                return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
         // a call of a one-operation helper (a field's accessor): its
@@ -514,6 +555,19 @@ impl<'e> Gen<'e> {
     /// or a helper's call whose body is one (`mkprog(x0 x1. bind_rel(st8(..),
     /// x0, x2 x3. x1 = ok(x2, empty), ..))`)
     pub(super) fn store_op(&mut self, op: &Term) -> Result<Option<StoreOp>, String> {
+        // a compare-and-swap: a 4-byte store at p (of s if the old dword D is
+        // t, else of D), D its result
+        if let Some(x) = self.app(op, "gimple.cas32", 3) {
+            let (pp, tv, sv) = (x[0].clone(), x[1].clone(), x[2].clone());
+            let w = self.w.clone();
+            let cond = self.mk("and", vec![self.mem_defined(&w, &pp, &lit(0), 4, true), self.mem_defined(&w, &pp, &lit(0), 4, false)]);
+            let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
+            let d = self.mk("bits_of_int", vec![lit(32), self.mk("gimple.bytes_at", vec![vm, pp.clone(), lit(4)])]);
+            let v = self.mk("ite", vec![self.mk("eq", vec![d.clone(), tv.clone()]), sv.clone(), d.clone()]);
+            let empty = self.mk("empty", vec![]);
+            let ub = p(mpf("tr.cas32_ub", vec![t(&w), t(&pp), t(&tv), t(&sv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
+            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)) }));
+        }
         let is_store = |g: &Gen, t: &Term| {
             g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st16", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some() || g.app(t, "gimple.st_bytes", 3).is_some()
         };
@@ -584,7 +638,7 @@ impl<'e> Gen<'e> {
                 RA::P(RP::Defs(Box::new(RP::Mp(ubl, vec![t(&w), p(self.hv()), p(self.hvu_w()), simp0(), p(inner_ub)])), vec![fname.clone()]))
             }
         };
-        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data }))
+        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None }))
     }
 
     /// `l in list_type(omega) && tr.zeros(l)` for a list literal of zeros
@@ -610,7 +664,8 @@ impl<'e> Gen<'e> {
         let cond = self.mem_defined(&st.w, pp, d, n, false);
         self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
             let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
-            format!("{:x}: a load of {} bytes at {} + {} the spec does not make (the facts: {})", st.a, n, self.print(pp), self.print(d), facts.join(", "))
+            let vals: Vec<String> = self.vals.iter().map(|(v, x)| format!("{} := {}", self.env.vars[*v as usize].name, self.print(x))).collect();
+            format!("{:x}: a load of {} bytes at {} + {} the spec does not make (the facts: {}; values {})", st.a, n, self.print(pp), self.print(d), facts.join(", "), vals.join(", "))
         })
     }
 
@@ -643,6 +698,30 @@ impl<'e> Gen<'e> {
             }
         }
         Err(format!("{:x}: an access at the static {:x} the spec does not make", st.a, a))
+    }
+
+    /// the fact in scope that the spec's n-byte load at a static's p + off
+    /// (literals, the address a) is defined: p, off, it
+    pub(super) fn static_mem_hyp(&self, st: &St, a: u128, n: u128) -> Result<(Term, Term, Seq), String> {
+        // (the fact as `g.mem_defined` unfolds: its usable part at p + off)
+        for (h, _) in &st.hyps {
+            let Some(x) = self.app(h, "and", 2) else { continue };
+            let Some(u) = self.app(&x[1], "gimple.usable", 5) else { continue };
+            let Some(s) = self.app(&u[2], "int_add", 2) else { continue };
+            if nat(&u[3]) != Some(n) {
+                continue;
+            }
+            if let (Some(pv), Some(ov)) = (self.eval_lit(&s[0]), self.eval_lit(&s[1])) {
+                if (pv + ov) % P64 == a {
+                    let cond = self.mem_defined(&st.w, &s[0], &s[1], n, false);
+                    if let Some(hf) = self.hyp_find(&st.hyps, &cond) {
+                        return Ok((s[0].clone(), s[1].clone(), hf.1.clone()));
+                    }
+                }
+            }
+        }
+        let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
+        Err(format!("{:x}: a load of {} bytes at the static {:x} the spec does not make (the facts: {})", st.a, n, a, facts.join(", ")))
     }
 
     /// a byte load's definedness at a

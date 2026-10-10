@@ -84,7 +84,12 @@ outcome.
   - locals are values, not memory;
   - undefined behaviour is as GCC assumes it;
   - nondeterminism covers what C leaves unspecified;
-  - a call may overflow the stack before and after the callee.
+  - a call may overflow the stack before and after the callee;
+  - inline assembly GCC keeps opaque (`asm volatile` with a memory
+    clobber) is a primitive with its own meaning (`cas32`: one atomic
+    step), its instructions shown to implement it in C1 wherever they are
+    (an out-of-line function or inlined). Under threads later, the
+    primitives are where the per-thread simulation meets the memory model.
 
   The -O0 build is the first target. Optimized code can later be added as
   a GIMPLE ⊑ GIMPLE layer.

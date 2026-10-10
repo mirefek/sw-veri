@@ -136,6 +136,9 @@ struct StoreOp {
     ub: rec::RA,
     /// st_bytes of zeros: its list (the stored value 0, n its length)
     data: Option<Term>,
+    /// a compare-and-swap (gimple.cas32): its operands t, s; its result
+    /// (the old dword)
+    cas: Option<(Term, Term, Term)>,
 }
 
 /// One step towards a disjunct whose guard holds.

@@ -86,8 +86,12 @@ impl<'e> Gen<'e> {
         let hv2 = self.evp(&RP::Taut(vec![R::S(hw2.clone())]), &w2u, &[])?;
         // the store's run: ok, to the world after
         let empty = self.mk("empty", vec![]);
-        let st8ok = match &so.data {
-            Some(d) => mpf(
+        let st8ok = match (&so.data, &so.cas) {
+            (_, Some((tv, sv, _))) => mpf(
+                "tr.cas32_at_ok",
+                vec![t(&w), t(&so.p), t(tv), t(sv), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(&hc)],
+            ),
+            (Some(d), _) => mpf(
                 "tr.stz_at_ok",
                 vec![
                     t(&w),
@@ -106,7 +110,7 @@ impl<'e> Gen<'e> {
                     s(&hc),
                 ],
             ),
-            None => mpf(
+            (None, None) => mpf(
                 &format!("tr.st{}_at_ok", 8 * n),
                 vec![t(&w), t(&so.p), t(&so.off), t(&so.v), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(&hc)],
             ),
@@ -118,7 +122,9 @@ impl<'e> Gen<'e> {
                 RA::P(RP::Defs(Box::new(RP::Mp(okl, vec![t(&w), t(&w2), s(&st.hvu), s(&hv2), p(st8ok)])), vec![fname.clone()]))
             }
         };
-        let (j, inst) = self.by(qi, "tr.qs_opw", &[("op", x[0].clone()), ("r", empty), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+        // (the op's result: a compare-and-swap's old dword, else none)
+        let res = so.cas.as_ref().map_or(empty.clone(), |c| c.2.clone());
+        let (j, inst) = self.by(qi, "tr.qs_opw", &[("op", x[0].clone()), ("r", res), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
         let qred = mp(inst, vec![t(&w), t(&w2), s(&st.hvu), okp]);
         let wredw = R::Inst("tr.wredw".into(), vec![("w", w.clone()), ("w2", w2.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone()), ("kw", self.kw3())]);
         // (evaluated here: its literal facts are this point's)
@@ -537,9 +543,11 @@ impl<'e> Gen<'e> {
             vs_after.push(Self::var_id(&r1));
         }
         let mut st0 = st.clone();
+        // (also for simp(L): a result used as a pointer, its word)
         for h in &hs_after[1..] {
             let hf = self.assume(h)?;
-            st0.facts.push(hf);
+            st0.facts.push(hf.clone());
+            st0.lfx.push(hf);
         }
         st0.a = a2;
         st0.regs = Vec::new();

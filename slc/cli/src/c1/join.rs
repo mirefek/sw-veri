@@ -451,6 +451,15 @@ impl<'e> Gen<'e> {
                 }
             }
         }
+        // (only facts about the claim's state: a fact of this path's own --
+        // a call's result not in the state -- would bind the claim to it)
+        let in_state = |f: &Seq| {
+            let mut fv = Vec::new();
+            f.concl().vars(&mut fv);
+            fv.iter().all(|v| vs.contains(v) || vars.contains(v))
+        };
+        facts.retain(|f| in_state(f));
+        lfx.retain(|f| in_state(f));
         let mut hyps: Vec<(Term, Seq)> = kept_hi.iter().map(|&i| st.hyps[i].clone()).collect();
         for p in &prem_h {
             let pc = self.canon(p);

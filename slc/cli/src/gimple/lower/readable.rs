@@ -836,6 +836,23 @@ impl<'a> Lower<'a> {
                 self.line(rx, format!("inline_asm([{}], [])", bytes.join(", ")));
                 Ok(())
             }
+            // the atomic primitives (layers/gimple.sl): x86_64's a_cas, a
+            // 32-bit compare-and-swap -- "=a"(t), "=m"(*p) : "a"(t), "r"(s)
+            S::Asm { tmpl, outs, ins } if tmpl.split_whitespace().collect::<Vec<_>>().join(" ") == "lock ; cmpxchg %3, %1" => {
+                let shape = || -> Option<(&String, &E, &E, &E)> {
+                    let [(c0, E::Name(t)), (c1, E::Deref(p))] = outs.as_slice() else { return None };
+                    let [(c2, t_in), (c3, s)] = ins.as_slice() else { return None };
+                    (c0 == "=a" && c1 == "=m" && c2 == "a" && c3 == "r").then_some((t, &**p, t_in, s))
+                };
+                let (t, p, t_in, s) = shape().ok_or("lock cmpxchg with other operands")?;
+                for e in [t_in, s] {
+                    if self.scalar(&self.type_of(&rx.fx, e)?)?.0 != 32 {
+                        return Err("lock cmpxchg of other than 32 bits".into());
+                    }
+                }
+                let v = format!("cas32({}, {}, {})", self.val(rx, sh, p, 64)?, self.val(rx, sh, t_in, 32)?, self.val(rx, sh, s, 32)?);
+                self.set(rx, t, v)
+            }
             S::Asm { .. } => Err("inline assembly with operands (not yet in readable form)".into()),
             S::Return(None) => {
                 self.line(rx, "return".into());

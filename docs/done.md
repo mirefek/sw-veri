@@ -104,8 +104,8 @@ item is a short summary of finished work; details are in the files named.
   a_ctz_32, a_clz_32, get_slot_index, is_bouncing, get_stride, step_seq
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
-  free_meta, size_to_class, set_size, enframe and account_bounce. The rules
-  cover:
+  free_meta, size_to_class, set_size, enframe, account_bounce, get_meta,
+  __malloc_allzerop and a_cas. The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;
@@ -117,7 +117,19 @@ item is a short summary of finished work; details are in the files named.
     used as a wider one, the stored low byte of 32-bit arithmetic (by the
     words' arithmetic modulo 2^8);
   - an aggregate's zero-initialization (`pxor` and SSE stores against
-    GIMPLE's `st_bytes`, `proofs/translate_zero.core`).
+    GIMPLE's `st_bytes`, `proofs/translate_zero.core`);
+  - 16-bit fields and compares, shifts by `cl` (the spec's count below the
+    width), signed products, rip-relative loads of statics, compares of
+    registers with homes and registers (all signed and unsigned jumps
+    met), a value in the spec's form where both are possible (a low
+    bitfield's mask, a load at offset 0);
+  - the atomic primitive `cas32` (`layers/gimple.sl`): inline assembly GCC
+    keeps opaque (`asm volatile`, a memory clobber) given a meaning at
+    GIMPLE level -- the readable translation maps x86_64's `a_cas` template
+    to it -- and `lock cmpxchg` shown to implement it
+    (`tr.cas32_b`, its store and register write in one step:
+    `tr.store_reg_step`), at -O0 inside the function `a_cas`, inlined
+    alike once optimized.
 - **Calls in C1** (`tr.call`, `tr.call1` in `proofs/translate_call.core`):
   - any frame of at most 64 KiB, 0 to 6 register arguments, the result in
     rax:rdx (or rax);

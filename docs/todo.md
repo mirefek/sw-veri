@@ -12,16 +12,25 @@ call graph.
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
-- `activate_group`, `get_meta`, `get_nominal_size`,
-  `account_bounce`, `record_seq`,
+- Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
+  `__malloc_allzerop`, `a_cas`.
+- `activate_group`, `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
   `__malloc_alloc_meta`, `nontrivial_free`.
-- The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`,
-  `__malloc_allzerop`, and the `lite_malloc` / `free.c` wrappers.
+- The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
+  the `lite_malloc` / `free.c` wrappers.
 - Leaves at machine level (inline assembly with operands, syscalls):
-  `a_cas`, `a_or`, `__syscall*`, `__mmap`, `munmap`, `__mprotect`,
-  `memset`, `memcpy`, `__lock` / `__unlock`, `___errno_location`.
-- C1 bookkeeping: a program-level `while`.
+  `a_or`, `__syscall*` (a `syscall` primitive, as `cas32`), `__mmap`,
+  `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
+  `___errno_location`.
+- C1 of loops without a counter (activate_group's compare-and-swap retry,
+  try_avail's): the C1 claim (`tr.sim`) admits a diverging machine run
+  only where the spec is undefined, so a loop whose GIMPLE may itself run
+  forever under its callees' contracts (a_cas's says nothing about
+  success) cannot be shown as is. To decide: divergence matched by the
+  spec's (a coinductive simulation), or the callee's full contract in the
+  caller's C1 (the loop then terminating at GIMPLE level), or a fuel
+  bound.
 
 ## 2. The invariant and the laws
 

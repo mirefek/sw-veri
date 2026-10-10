@@ -306,6 +306,22 @@ proc[World] st32(p: Addr, off: bits[64], v: bits[32]) { write_bytes(mem(p, off, 
 proc[World] st64(p: Addr, off: bits[64], v: bits[64]) { write_bytes(mem(p, off, 8, true), 8, uint(v)) }
 proc[World] st128(p: Addr, off: bits[64], v: bits[128]) { write_bytes(mem(p, off, 16, true), 16, uint(v)) }
 
+// Atomic primitives: inline assembly GCC keeps opaque (`asm volatile`
+// with a "memory" clobber: emitted verbatim, no access moved across it),
+// given its meaning at this level -- one step (atomic: the world has one
+// thread so far); C1 shows the instruction implements it, wherever it is
+// (an out-of-line function or inlined).
+//
+// lock cmpxchg [p], s (rax t): compare-and-swap of the 32-bit word at p --
+// s written if it holds t; its old value returned. The word is read and
+// written either way (a locked read-modify-write: the old value written
+// back).
+proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
+  let old = ld32(p, 0)
+  st32(p, 0, if old = t { s } else { old })
+  return old
+}
+
 // constant bytes (aggregate initializers)
 proc[World] st_bytes(p: Addr, off: bits[64], data: List[bits[8]]) {
   let a = mem(p, off, len(data), true)
