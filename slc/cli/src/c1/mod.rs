@@ -119,6 +119,26 @@ enum Red {
     /// a call of `g` (the machine's `call` makes it): the block's
     /// continuation, handlers and rest (`one`: call1, the result's rax only)
     Call { g: Term, args: Vec<Term>, list: Term, one: bool, a: Term, xx: Term, dd: Term, k: Term },
+    /// a loop's iteration ended by the body leaving with `e` (`tr.lcont`):
+    /// the rest `k` in the wrapper `kw`
+    Exit { e: Term, k: Term, kw: Term },
+}
+
+/// A loop walked by the loop rule (`tr.loop_lv`): its head, the homes there
+/// as a function of the locals, the walk's state outside it (the
+/// breakpoints, the wrapper) to restore at its exit
+#[derive(Clone)]
+struct LoopG {
+    head: u128,
+    hs: Term,
+    bkp: Term,
+    bka: Term,
+    wrap: Term,
+    kw: Term,
+    /// the iteration's world and locals in the universe
+    hu: Seq,
+    /// the frame at the head
+    fd: Term,
 }
 
 /// A store of the spec: st8 / st16 / st32 / st64 / st_bytes (or a helper
@@ -239,6 +259,8 @@ struct Gen<'e> {
     /// instance takes them
     bkp: Term,
     bka: Term,
+    /// the loop whose iteration is being walked (its head the breakpoint)
+    lpg: Option<LoopG>,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,
@@ -620,11 +642,6 @@ impl<'e> Gen<'e> {
     /// hs, ds, rs, p, w)` (a successor's)
     fn pt(&self, st: &St, a: u128) -> Term {
         self.claim_t("tr.pt", st, a)
-    }
-
-    /// the claim leaving a point, `tr.lv(..)` (the walk's at each point)
-    fn lv(&self, st: &St, a: u128) -> Term {
-        self.claim_t("tr.lv", st, a)
     }
 
     fn claim_t(&self, name: &str, st: &St, a: u128) -> Term {

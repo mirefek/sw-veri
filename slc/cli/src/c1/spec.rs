@@ -235,7 +235,16 @@ impl<'e> Gen<'e> {
 
     /// `t` (at depth d below the body) with `r` (at the body) abstracted:
     /// the body as a value of x0 x1 y
-    fn abstract_(&self, t: &Term, r: &Term, depth: u32) -> Term {
+    /// r (closed) a subterm of t
+    pub(super) fn mentions(&self, t: &Term, r: &Term) -> bool {
+        t == r
+            || match t.node() {
+                Node::Var(_, a) | Node::App(_, a) => a.iter().any(|x| self.mentions(x, r)),
+                _ => false,
+            }
+    }
+
+    pub(super) fn abstract_(&self, t: &Term, r: &Term, depth: u32) -> Term {
         let bf = self.env.binders_fn();
         if *t == r.shift(depth, 0, &bf) {
             return Term::bvar(depth);
@@ -616,6 +625,8 @@ impl<'e> Gen<'e> {
             // (a 64-bit field: at p + off, as the machine's [b + d])
             _ if (n == 8 || data.is_some()) && nat(&off).is_some() => self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]),
             _ if nat(&off) == Some(0) => pp.clone(),
+            // (a narrower field: likewise)
+            _ if nat(&off).is_some() => self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]),
             _ => return Err(format!("a store at {} + {}: not covered yet", self.print(&pp), self.print(&off))),
         };
         let w = self.w.clone();
@@ -776,6 +787,25 @@ impl<'e> Gen<'e> {
             }
         }
         let body = self.app(&q, "mkprog", 1).ok_or_else(|| format!("the spec's rest is not a program: {}", self.print(&q)))?[0].clone();
+        // a loop's iteration ended (tr.lcont): the body went on (its marked
+        // return), or it left (the rest in the wrapper)
+        if let Some(x) = self.app(&body, "tr.lcont", 4).map(|x| x.to_vec()) {
+            let closed = x[0].loose_depth(&self.env.binders_fn()) == 0;
+            if matches!(x[1].node(), Node::BVar(0)) && closed {
+                let (e, k, kw) = (x[0].clone(), x[2].clone(), x[3].clone());
+                if let Some(o) = self.app(&e, "ok", 2) {
+                    let pr = self.app(&o[0], "pair", 2).ok_or("an iteration's end: not the world and the locals")?.to_vec();
+                    let (j, inst) = self.by(qi, "tr.lcont_ok", &[("k", k), ("kw", kw), ("w", w.clone()), ("w2", pr[0].clone()), ("y2", pr[1].clone())])?;
+                    return Ok(Some(Red::Q(j, inst)));
+                }
+                return Ok(Some(Red::Exit { e, k, kw }));
+            }
+            // (the body's outcome of the start world: that the point's)
+            if matches!(x[1].node(), Node::BVar(0)) && !closed && x[0].loose_depth(&self.env.binders_fn()) <= 2 {
+                let (j, inst) = self.by(qi, "tr.q_at", &[("b", body.clone()), ("w", w.clone())])?;
+                return Ok(Some(Red::Q(j, inst)));
+            }
+        }
         // a whole field's value: the bytes themselves
         if let Some((r, n, bytes)) = self.whole_field(&body) {
             let b = self.abstract_(&body, &r, 0);

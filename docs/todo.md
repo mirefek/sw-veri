@@ -13,8 +13,8 @@ call graph.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
-  `__malloc_allzerop`, `a_cas`.
-- `activate_group`, `get_nominal_size`, `record_seq`,
+  `__malloc_allzerop`, `a_cas`, `activate_group`.
+- `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `alloc_group`, `try_avail`, `alloc_slot`,
   `__malloc_alloc_meta`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
@@ -23,21 +23,8 @@ call graph.
   `a_or`, `__syscall*` (a `syscall` primitive, as `cas32`), `__mmap`,
   `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
   `___errno_location`.
-- C1 of loops without a counter (activate_group's compare-and-swap retry,
-  try_avail's). The loop rule is proven (`tr.loop`,
-  `proofs/translate_loop.core`): the claim with breakpoints (`tr.simk`:
-  the run to the first breakpoint after a step, the return or a loop's
-  head, with an arrival condition there) for a loop at its head, from the
-  claim for one iteration (the head a breakpoint, the iteration's spec
-  `tr.lone` returning the next locals marked). The rules and the engine are
-  on the claim with breakpoints (`tr.sim`, its binders in every rule). To
-  do:
-  - the loop rule with the function's result wrapper (the iteration's
-    marked return outside it, the wrapper on the exit only), the
-    iteration's ends as reductions, the marked returns dropped after the
-    exit (the arrival condition then none), the head's arrival;
-  - the engine: a loop's head walked once with the iteration's spec;
-  - nested loops (the inner loop's iterations arriving at the outer head).
+- C1 of nested loops (the inner loop's iterations arriving at the outer
+  head).
 
 ## 2. The invariant and the laws
 

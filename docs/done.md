@@ -105,7 +105,8 @@ item is a short summary of finished work; details are in the files named.
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
   free_meta, size_to_class, set_size, enframe, account_bounce, get_meta,
-  __malloc_allzerop and a_cas. The rules cover:
+  __malloc_allzerop, a_cas and activate_group (a loop without a counter).
+  The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
   - the prologue as instructions;
@@ -144,6 +145,16 @@ item is a short summary of finished work; details are in the files named.
   states) are no breakpoint. The contract stays the ABI's run to the
   return (`tr.entry_d`, `tr.run_d_k`); a call splits the caller's run at
   the callee's return (`tr.run_split_k`).
+- **Loops without a counter in C1** (`tr.loop_lv`,
+  proofs/translate_loop.core): the claim at a loop's head from the claim
+  for one iteration, walked once by the engine for every world and locals
+  -- the head a breakpoint of this activation (at its frame: a callee's
+  states are none, `tr.nobp_hd`), the back edge arriving there with the
+  iteration's next locals marked (`tr.pt_head`; with more of the frame
+  than at the head, `tr.pt_fd`), the exit into the function's rest in its
+  own wrapper (`tr.lv_exit`, `tr.lcont`). Also a call's 32-bit result
+  compared as its low half (`tr.cmp32_hrw_jne`) and 4-byte field stores
+  (`tr.store32_bd`).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

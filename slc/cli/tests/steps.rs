@@ -179,10 +179,10 @@ fn c1_engine_checks() {
     let checked = String::from_utf8_lossy(&c.stdout);
     // the C1 theorems unconditional: nothing in the chain rests on an open
     // lemma (the storing functions' statics' range defined)
-    let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 153 theorems, 0 conditional theorems, 0 open lemmas")
+    let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 164 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 24 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 9 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 11 definitions, 33 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 52 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")

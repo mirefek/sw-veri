@@ -26,11 +26,16 @@ def tr.lprog(y, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw) :=
   mkprog(x1 x2. bind_rel(tr.lp0(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
 def tr.lpf(y, l o. b, x8 x1. k, x3 x4 x2. kw) :=
   mkprog(x1 x2. bind_rel(tr.lf0(y, l o. b(l, o), x8 x1. k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+// (an outcome)
+def tr.isout(o) := (ex a b. o = ok(a, b)) || (ex a b. o = exc(a, b)) || (ex t. o = diverge(t))
 // (an iteration's end with the body's outcome r: marked on, or the rest in
 // the wrapper from r's world, its marked returns dropped)
 def tr.lcont(r, o, x8 x1. k, x3 x4 x2. kw) := (ex w2 y2. r = ok(pair(w2, y2), empty) && o = ok(w2, pair(18446744073709551616, y2))) ||
-  (!is_ok(r) && bind_rel(mkprog(x0 x3. k(r, x3)), fst(out_state(r)), x4 x5. kw(x4, x5, o), x4 x5. o = exc(x4, x5), x4. o = diverge(x4)) && !tr.mk(o))
-def tr.lone(y, l o. b, x8 x1. k, x3 x4 x2. kw) := mkprog(x1 x2. ex x8. b(pair(x1, y), x8) && tr.lcont(x8, x2, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)))
+  (!is_ok(r) && bind_rel(mkprog(x0 x3. k(r, x3)), fst(out_state(r)), x4 x5. kw(x4, x5, o), x4 x5. o = exc(x4, x5), x4. o = diverge(x4)) && !tr.mk(o) && tr.isout(o))
+// (the iteration as a procedure, and in the identity wrapper -- as the
+// engine walks a point's rest, in a wrapper)
+def tr.liter(y, l o. b, x8 x1. k, x3 x4 x2. kw) := mkprog(x0 x3. ex x8. b(pair(x0, y), x8) && tr.lcont(x8, x3, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)))
+def tr.lone(y, l o. b, x8 x1. k, x3 x4 x2. kw) := mkprog(x1 x2. bind_rel(tr.liter(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
 
 // (the wrapper around a program with fewer runs: fewer runs)
 theorem tr.wrap_mono(x3 x4 x2. kw): all q1 q2 w w2 o. w in univ(1) -> (all o1. runs(q2, w2, o1) -> runs(q1, w, o1)) ->
@@ -48,16 +53,69 @@ proof
   show := apply(tr.runs_intro[r := x1 x2. bind_rel(q1, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {o}, u, b1)
 qed
 
+// (the identity wrapper: the program's runs -- of its outcomes)
+theorem tr.wrap_id_out(x y. r): all w o. runs(mkprog(x1 x2. bind_rel(mkprog(x y. r(x, y)), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) -> runs(mkprog(x y. r(x, y)), w, o)
+proof
+  fix w o
+  assume hr
+  have b := apply(g.runs_elim, hr)
+  obtain o1, r1 c1 from expand(b, bind_rel)
+  have k1: (ex s1 v1. o1 = ok(s1, v1) && o = ok(s1, v1)) -> o = o1 proof
+    assume e
+    obtain s1 v1, e1 e2 from e
+    show := trans(e2, sym(e1))
+  qed
+  have k2: (ex s1 e0. o1 = exc(s1, e0) && o = exc(s1, e0)) -> o = o1 proof
+    assume e
+    obtain s1 e0, e1 e2 from e
+    show := trans(e2, sym(e1))
+  qed
+  have k3: (ex t0. o1 = diverge(t0) && o = diverge(t0)) -> o = o1 proof
+    assume e
+    obtain t0, e1 e2 from e
+    show := trans(e2, sym(e1))
+  qed
+  have oe: o = o1 by taut(c1, k1, k2, k3)
+  show := rewrite(sym(oe), r1)
+qed
+
+theorem tr.wrap_id_in(x y. r): all w o. runs(mkprog(x y. r(x, y)), w, o) -> tr.isout(o) -> runs(mkprog(x1 x2. bind_rel(mkprog(x y. r(x, y)), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o)
+proof
+  fix w o
+  assume hr io
+  have pu := apply(g.runs_univ, hr)
+  have k1: (ex a b. o = ok(a, b)) -> (ex s1 v1. o = ok(s1, v1) && o = ok(s1, v1)) proof
+    assume e
+    obtain a b, e1 from e
+    show by ex_intro({a}, {b}, taut(e1))
+  qed
+  have k2: (ex a b. o = exc(a, b)) -> (ex s1 e0. o = exc(s1, e0) && o = exc(s1, e0)) proof
+    assume e
+    obtain a b, e1 from e
+    show by ex_intro({a}, {b}, taut(e1))
+  qed
+  have k3: (ex t0. o = diverge(t0)) -> (ex t1. o = diverge(t1) && o = diverge(t1)) proof
+    assume e
+    obtain t0, e1 from e
+    show by ex_intro({t0}, taut(e1))
+  qed
+  have cs: (ex s1 v1. o = ok(s1, v1) && o = ok(s1, v1)) || (ex s1 e0. o = exc(s1, e0) && o = exc(s1, e0)) || (ex t1. o = diverge(t1) && o = diverge(t1))
+    by taut(expand(io, tr.isout), k1, k2, k3)
+  have b: bind_rel(mkprog(x y. r(x, y)), w, x3 x4. o = ok(x3, x4), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by defs(ex_intro({o}, taut(hr, cs)), bind_rel)
+  show := apply(tr.runs_intro[r := x1 x2. bind_rel(mkprog(x y. r(x, y)), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {o}, pu, b)
+qed
+
 // (an iteration's outcome, unmarked: the loop's, of no further iteration)
 theorem tr.lone_f(l o. b, x8 x1. k, x3 x4 x2. kw): all w y o. runs(tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) -> !tr.mk(o) ->
   runs(tr.lpf(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o)
 proof
   fix w y o
   assume hr hm
+  have hq := apply(tr.wrap_id_out[r := x0 x3. ex x8. b(pair(x0, y), x8) && tr.lcont(x8, x3, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))], {w}, {o}, expand(hr, tr.lone, tr.liter))
   have tt: true by taut()
-  have pu := apply(g.runs_univ, expand(hr, tr.lone))
+  have pu := apply(g.runs_univ, hq)
   have wu: w in univ(1) by simp(pu)
-  obtain x8, br cr0 from apply(g.runs_elim, expand(hr, tr.lone))
+  obtain x8, br cr0 from apply(g.runs_elim, hq)
   have cr := expand(cr0, tr.lcont)
   have go: (ex w2 y2. x8 = ok(pair(w2, y2), empty) && o = ok(w2, pair(18446744073709551616, y2))) -> false proof
     assume e
@@ -85,7 +143,8 @@ theorem tr.lone_mk(l o. b, x8 x1. k, x3 x4 x2. kw): all w y w2 y2. runs(tr.lone(
 proof
   fix w y w2 y2
   assume hr
-  obtain x8, br cr0 from apply(g.runs_elim, expand(hr, tr.lone))
+  have hq := apply(tr.wrap_id_out[r := x0 x3. ex x8. b(pair(x0, y), x8) && tr.lcont(x8, x3, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))], {w}, {ok(w2, pair(18446744073709551616, y2))}, expand(hr, tr.lone, tr.liter))
+  obtain x8, br cr0 from apply(g.runs_elim, hq)
   have cr := expand(cr0, tr.lcont)
   have m: tr.mk(ok(w2, pair(18446744073709551616, y2))) by defs(ex_intro({w2}, {y2}, refl({ok(w2, pair(18446744073709551616, y2))})), tr.mk)
   have c1: ex w3 y3. x8 = ok(pair(w3, y3), empty) && ok(w2, pair(18446744073709551616, y2)) = ok(w3, pair(18446744073709551616, y3)) by taut(cr, m)
@@ -986,6 +1045,43 @@ qed
 //  point claims (tr.loop_lv), the head's arrival (tr.pt_head)
 
 // (the body went on: the marked return)
+// (a callee's states, below the frame x: not at a loop's head h there)
+theorem tr.nobp_hd(z. bkp): all x h. (all z. int_lt(app(app(z, "gpr"), 4), x) -> !bkp(z)) ->
+  all z. int_lt(app(app(z, "gpr"), 4), x) -> !(tr.hd(z) = pair(h, x) || bkp(z))
+proof
+  fix x h
+  assume hb
+  fix z
+  assume hl
+  have nb := mp(all_elim(hb, {z}), hl)
+  have n: tr.hd(z) = pair(h, x) -> false proof
+    assume e
+    have e2: app(app(z, "gpr"), 4) = x by simp(expand(e, tr.hd))
+    show by arith(e2, hl)
+  qed
+  show by taut(n, nb)
+qed
+
+// (a rest run from w: its start world w)
+theorem tr.q_at(x0 x1. b): all w o. runs(mkprog(x0 x1. b(w, x1)), w, o) -> runs(mkprog(x0 x1. b(x0, x1)), w, o)
+proof
+  fix w o
+  assume hr
+  have pu := apply(g.runs_univ, hr)
+  have c := apply(g.runs_elim, hr)
+  show := apply(tr.runs_intro[r := x0 x1. b(x0, x1)], {w}, {o}, pu, c)
+qed
+
+// (and back: the start world w in a rest run from w, its start world)
+theorem tr.q_from(x0 x1 y. b): all w o. runs(mkprog(x0 x1. b(x0, x1, x0)), w, o) -> runs(mkprog(x0 x1. b(x0, x1, w)), w, o)
+proof
+  fix w o
+  assume hr
+  have pu := apply(g.runs_univ, hr)
+  have c := apply(g.runs_elim, hr)
+  show := apply(tr.runs_intro[r := x0 x1. b(x0, x1, w)], {w}, {o}, pu, c)
+qed
+
 theorem tr.lcont_ok(x8 x1. k, x3 x4 x2. kw): all w w2 y2 o. runs(mkprog(x0 x1. x1 = ok(w2, pair(18446744073709551616, y2))), w, o) ->
   runs(mkprog(x0 x1. tr.lcont(ok(pair(w2, y2), empty), x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), w, o)
 proof
@@ -1002,15 +1098,15 @@ qed
 // (the body left with e: the rest in the wrapper from e's world, its
 // marked returns dropped)
 theorem tr.lcont_exit(x8 x1. k, x3 x4 x2. kw): all w e o. !is_ok(e) -> fst(out_state(e)) = w ->
-  runs(mkprog(x1 x2. bind_rel(mkprog(x0 x3. k(e, x3)), x1, x4 x5. kw(x4, x5, x2), x4 x5. x2 = exc(x4, x5), x4. x2 = diverge(x4)) && !tr.mk(x2)), w, o) ->
+  runs(mkprog(x1 x2. bind_rel(mkprog(x0 x3. k(e, x3)), x1, x4 x5. kw(x4, x5, x2), x4 x5. x2 = exc(x4, x5), x4. x2 = diverge(x4)) && !tr.mk(x2) && tr.isout(x2)), w, o) ->
   runs(mkprog(x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), w, o)
 proof
   fix w e o
   assume hn hw hr
   have pu := apply(g.runs_univ, hr)
-  have b nm := apply(g.runs_elim, hr)
+  have b nm io := apply(g.runs_elim, hr)
   have b2 := rewrite(sym(hw), b)
-  have c: tr.lcont(e, o, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)) by defs(taut(hn, b2, nm), tr.lcont)
+  have c: tr.lcont(e, o, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)) by defs(taut(hn, b2, nm, io), tr.lcont)
   show := apply(tr.runs_intro[r := x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))], {w}, {o}, pu, c)
 qed
 
@@ -1021,20 +1117,35 @@ qed
 theorem tr.lv_unmark(zb. bkp, zb pb wb. bka, x3 x4 x2. kw): all s v base code fr a hs ds rs q w.
   tr.lv(s, zb. bkp(zb), zb pb wb. false, v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w) ->
   tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs,
-    mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)) && !tr.mk(x2)), w)
+    mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)) && !tr.mk(x2) && tr.isout(x2)), w)
 proof
   fix s v base code fr a hs ds rs q w
   assume h
   let P := mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
-  let PF := mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)) && !tr.mk(x2))
+  let PF := mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)) && !tr.mk(x2) && tr.isout(x2))
   // (the filtered program's runs: the program's, unmarked)
-  have rf: all o. runs(P, w, o) -> !tr.mk(o) -> runs(PF, w, o) proof
+  have rf: all o. runs(P, w, o) -> !tr.mk(o) -> tr.isout(o) -> runs(PF, w, o) proof
     fix o
-    assume hr nm
+    assume hr nm io
     have pu := apply(g.runs_univ, hr)
     have b := apply(g.runs_elim, hr)
-    have c: bind_rel(q, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) && !tr.mk(o) by taut(b, nm)
-    show := apply(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)) && !tr.mk(x2)], {w}, {o}, pu, c)
+    have c: bind_rel(q, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) && !tr.mk(o) && tr.isout(o) by taut(b, nm, io)
+    show := apply(tr.runs_intro[r := x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)) && !tr.mk(x2) && tr.isout(x2)], {w}, {o}, pu, c)
+  qed
+  have iox: all x e. tr.isout(exc(x, e)) proof
+    fix x e
+    have e1: ex a0 b0. exc(x, e) = exc(a0, b0) by ex_intro({x}, {e}, refl({exc(x, e)}))
+    show by defs(taut(e1), tr.isout)
+  qed
+  have iod: all t. tr.isout(diverge(t)) proof
+    fix t
+    have e1: ex t0. diverge(t) = diverge(t0) by ex_intro({t}, refl({diverge(t)}))
+    show by defs(taut(e1), tr.isout)
+  qed
+  have iok: all a1 b1. tr.isout(ok(a1, b1)) proof
+    fix a1 b1
+    have e1: ex a0 b0. ok(a1, b1) = ok(a0, b0) by ex_intro({a1}, {b1}, refl({ok(a1, b1)}))
+    show by defs(taut(e1), tr.isout)
   qed
   have nmx: all x e. !tr.mk(exc(x, e)) proof
     fix x e
@@ -1066,7 +1177,7 @@ proof
       have c1: tr.ub(s, v, P, w) -> tr.ub(s, v, PF, w) proof
         assume u
         obtain e x, eu en rs0 rr from expand(u, tr.ub)
-        have r := mp(all_elim(rf, {exc(x, e)}), rr, all_elim(nmx, {x}, {e}))
+        have r := mp(all_elim(rf, {exc(x, e)}), rr, all_elim(nmx, {x}, {e}), all_elim(iox, {x}, {e}))
         show by defs(ex_intro({e}, {x}, taut(eu, en, rs0, r)), tr.ub)
       qed
       have c2: tr.crash(s, P, w, o) -> tr.crash(s, PF, w, o) proof
@@ -1078,7 +1189,7 @@ proof
               tr.ovf(PF, w, app(m1, "os")) proof
             assume e
             obtain x, xa xr xe from e
-            have r := mp(all_elim(rf, {exc(x, exc_val("stack_overflow", empty))}), xr, all_elim(nmx, {x}, {exc_val("stack_overflow", empty)}))
+            have r := mp(all_elim(rf, {exc(x, exc_val("stack_overflow", empty))}), xr, all_elim(nmx, {x}, {exc_val("stack_overflow", empty)}), all_elim(iox, {x}, {exc_val("stack_overflow", empty)}))
             have e2: ex x1. x1 in rec_and(abi.World, single(empty)) && runs(PF, w, exc(x1, exc_val("stack_overflow", empty))) && app(app(x1, "os"), "events") = app(app(m1, "os"), "events")
               by ex_intro({x}, taut(xa, r, xe))
             show by defs(taut(e2), tr.ovf)
@@ -1086,7 +1197,7 @@ proof
           have e3: (ex t. runs(P, w, diverge(t))) -> tr.ovf(PF, w, app(m1, "os")) proof
             assume e
             obtain t, rt from e
-            have r := mp(all_elim(rf, {diverge(t)}), rt, all_elim(nmd, {t}))
+            have r := mp(all_elim(rf, {diverge(t)}), rt, all_elim(nmd, {t}), all_elim(iod, {t}))
             have e2: ex t1. runs(PF, w, diverge(t1)) by ex_intro({t}, r)
             show by defs(taut(e2), tr.ovf)
           qed
@@ -1098,7 +1209,7 @@ proof
         assume d
         have d1 d2 := expand(d, tr.div)
         obtain t, rt from d2
-        have r := mp(all_elim(rf, {diverge(t)}), rt, all_elim(nmd, {t}))
+        have r := mp(all_elim(rf, {diverge(t)}), rt, all_elim(nmd, {t}), all_elim(iod, {t}))
         have e2: ex t1. runs(PF, w, diverge(t1)) by ex_intro({t}, r)
         show by defs(taut(d1, e2), tr.div)
       qed
@@ -1125,7 +1236,7 @@ proof
             qed
             show by taut(n)
           qed
-          have r := mp(all_elim(rf, {ok(w3, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))}), h3.1, nm)
+          have r := mp(all_elim(rf, {ok(w3, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))}), h3.1, nm, all_elim(iok, {w3}, {pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2))}))
           have ew2: ex w4. runs(PF, w, ok(w4, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w4 in abi.World && w4 in univ(1) &&
               abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w4, "vm"), v, abi.sp(s)) && app(m1, "os") = app(w4, "os") && app(m1, "fs_base") = app(w4, "fs_base")
             by ex_intro({w3}, taut(r, h3))
@@ -1169,7 +1280,7 @@ qed
 // them marked
 theorem tr.loop_lv(s, v, base, code, fr, ha, fd, y. hs, z. bkp, z p w. bka, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw):
   (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) -> (all z. app(z, "rip") = ha -> !bkp(z)) ->
-  (all y w. pair(w, y) in univ(1) -> tr.lv(s, z. tr.hd(z) = pair(ha, int_sub(app(app(s, "gpr"), 4), fr)) || bkp(z),
+  (all y w. pair(w, y) in univ(1) -> w in abi.World && w in univ(1) -> tr.lv(s, z. tr.hd(z) = pair(ha, int_sub(app(app(s, "gpr"), 4), fr)) || bkp(z),
     z p2 w2. tr.hd(z) = pair(ha, int_sub(app(app(s, "gpr"), 4), fr)) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ha && tr.homes(s, z, hs(y2)) &&
       tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
     v, base, code, fr, ha, hs(y), fd, empty, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)) ->
@@ -1195,7 +1306,9 @@ proof
     fix x y w
     assume q
     have hi hr hh hm hf hu := q
-    have l := mp(all_elim(hb, {y}, {w}), hu)
+    have wW := hi.wW
+    have wu := hi.wu
+    have l := mp(all_elim(hb, {y}, {w}), hu, conj(wW, wu))
     show := mp(all_elim(expand(l, tr.lv), {x}), hi, hr, hh, all_elim(tr.regs_empty, {x}), hm, hf)
   qed
   have lp := mp(tr.loop[s := s, v := v, h := H, bp := z. bkp(z), ar := z p w. bka(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1),
@@ -1214,6 +1327,59 @@ qed
 
 // (back at the head, coupled to the locals y2, the spec's marked return of
 // them: the arrival)
+// (the frame of fd bytes: of fewer too)
+theorem tr.frame_le: all s base code fr m w fd fd2. tr.inv(s, base, code, fr, m, w) -> fd in omega -> fd2 in omega -> int_lt(0, fd2) -> int_le(fd2, fd) -> int_le(fd, tr.FMAX) ->
+  tr.frame(s, m, fd) -> tr.frame(s, m, fd2)
+proof
+  fix s base code fr m w fd fd2
+  assume hi fo h2o hpos hle hmax hf
+  have {sM} := hi
+  have r4 := apply(x86i.rsp_typed, sM)
+  have g8 := apply(tr.inv_gap, hi)
+  let R := app(app(s, "gpr"), 4)
+  let C := int_sub(18446744073709551616, fd)
+  let C2 := int_sub(18446744073709551616, fd2)
+  have hr: tr.hrange(C, fd) by defs(arith(fo, hpos, hle, hmax), tr.hrange)
+  have hr2: tr.hrange(C2, fd2) by defs(arith(h2o, hpos, hle, hmax), tr.hrange)
+  have c: tr.hacc(s, app(m, "vm"), C, fd) -> tr.hacc(s, app(m, "vm"), C2, fd2) proof
+    assume ha
+    have g: all i. i in omega -> int_lt(i, fd2) ->
+        x86_64_linux.can_access(app(m, "vm"), bits_add(64, tr.ha(s, C2), bits_of_int(64, i)), 1) &&
+        abi.stack_page(app(m, "vm"), int_div(bits_add(64, tr.ha(s, C2), bits_of_int(64, i)), 4096)) proof
+      fix i
+      assume i1 i2
+      let J := int_add(i, int_sub(fd, fd2))
+      have j1: J in omega by arith(i1, hle, h2o)
+      have j2: int_lt(J, fd) by arith(i2, hle)
+      have aj := mp(all_elim(expand(ha, tr.hacc), {J}), j1, j2)
+      have e1 .. := apply(tr.ha_byte, {R}, {C}, {fd}, {J}, r4, g8, hr, j1, j2)
+      have e2 .. := apply(tr.ha_byte, {R}, {C2}, {fd2}, {i}, r4, g8, hr2, i1, i2)
+      have ee: int_add(int_sub(R, int_sub(18446744073709551616, C)), J) = int_add(int_sub(R, int_sub(18446744073709551616, C2)), i) by arith(fo, h2o)
+      have aj2 := rewrite(ee, rewrite(e1, aj))
+      show by simp(e2, aj2)
+    qed
+    show by defs(g, tr.hacc)
+  qed
+  have f0 := expand(hf, tr.frame)
+  show by defs(taut(f0, c), tr.frame)
+qed
+
+// (a claim at a frame of fd2 bytes: at one of more)
+theorem tr.pt_fd(zb. bkp, zb pb wb. bka): all s v base code fr a hs fd fd2 rs p w. fd in omega -> fd2 in omega -> int_lt(0, fd2) -> int_le(fd2, fd) -> int_le(fd, tr.FMAX) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd2, rs, p, w) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd, rs, p, w)
+proof
+  fix s v base code fr a hs fd fd2 rs p w
+  assume fo h2o hpos hle hmax h
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) ->
+      tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have f2 := apply(tr.frame_le, {s}, {base}, {code}, {fr}, {m}, {w}, {fd}, {fd2}, hi, fo, h2o, hpos, hle, hmax, hfr)
+    show := mp(all_elim(expand(h, tr.pt), {m}), hi, hr, hh, hrs, hmm, f2)
+  qed
+  show by defs(g, tr.pt)
+qed
+
 theorem tr.pt_head(s, v, base, code, fr, ha, fd, y. hs, z. bkp): all hs2 rs p w y2. tr.hsub(hs(y2), hs2) -> pair(w, y2) in univ(1) ->
   runs(p, w, ok(w, pair(18446744073709551616, y2))) ->
   tr.pt(s, z. tr.hd(z) = pair(ha, int_sub(app(app(s, "gpr"), 4), fr)) || bkp(z),
@@ -1251,4 +1417,92 @@ proof
     show by defs(taut(st, a), tr.cl)
   qed
   show by defs(g, tr.pt)
+qed
+
+// (the loop state's trace, GIMPLE's: of the universe)
+theorem tr.tr_univ: all l. l in univ(1) -> fn_update(empty, "os.events", app(app(fst(l), "os"), "events")) in univ(1)
+proof
+  fix l
+  assume h
+  have f := apply(tr.fst_univ, {l}, h)
+  have a1 := mp(app_univ[u := 1, f := fst(l), k := "os"], f)
+  have a2 := mp(app_univ[u := 1, f := app(fst(l), "os"), k := "events"], a1)
+  show by simp(a2)
+qed
+
+// (the claim leaving a point, for a spec with more runs)
+theorem tr.lv_red(zb. bkp, zb pb wb. bka): all s v base code fr a hs ds rs p p2 w. (all o. runs(p2, w, o) -> runs(p, w, o)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p2, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a hs ds rs p p2 w
+  assume hr h
+  have rd: tr.red(p, w, p2, w) by defs(hr, tr.red)
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) ->
+      tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr2 hh hrs hmm hfr
+    have c := mp(all_elim(expand(h, tr.lv), {m}), hi, hr2, hh, hrs, hmm, hfr)
+    show := apply(tr.sim_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {p}, {w}, {p2}, {w}, {m}, rd, c)
+  qed
+  show by defs(g, tr.lv)
+qed
+
+// The loop's exit (the body leaving with e, at its world): the claim with
+// no arrival on the rest in the wrapper gives the iteration's end's
+theorem tr.lv_exit(zb. bkp, zb pb wb. bka, x8 x1. k, x3 x4 x2. kw): all s v base code fr a hs ds rs e w. !is_ok(e) -> fst(out_state(e)) = w ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. false, v, base, code, fr, a, hs, ds, rs,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x3. k(e, x3)), x1, x4 x5. kw(x4, x5, x2), x4 x5. x2 = exc(x4, x5), x4. x2 = diverge(x4))), w) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, mkprog(x1 x2. bind_rel(mkprog(x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  fix s v base code fr a hs ds rs e w
+  assume hn hw h
+  have u := apply(tr.lv_unmark[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), kw := x3 x4 x2. kw(x3, x4, x2)],
+    {s}, {v}, {base}, {code}, {fr}, {a}, {hs}, {ds}, {rs}, {mkprog(x0 x3. k(e, x3))}, {w}, h)
+  have r: all o. runs(mkprog(x1 x2. bind_rel(mkprog(x0 x3. k(e, x3)), x1, x4 x5. kw(x4, x5, x2), x4 x5. x2 = exc(x4, x5), x4. x2 = diverge(x4)) && !tr.mk(x2) && tr.isout(x2)), w, o) ->
+      runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) proof
+    fix o
+    assume hr
+    have io := apply(g.runs_elim, hr).3
+    have c := apply(tr.lcont_exit[k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {e}, {o}, hn, hw, hr)
+    show := apply(tr.wrap_id_in[r := x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))], {w}, {o}, c, io)
+  qed
+  show := apply(tr.lv_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {hs}, {ds}, {rs},
+    {mkprog(x1 x2. bind_rel(mkprog(x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))},
+    {mkprog(x1 x2. bind_rel(mkprog(x0 x3. k(e, x3)), x1, x4 x5. kw(x4, x5, x2), x4 x5. x2 = exc(x4, x5), x4. x2 = diverge(x4)) && !tr.mk(x2) && tr.isout(x2))}, {w}, r, u)
+qed
+
+// (a return: an outcome)
+theorem tr.isout_ok: all a b. tr.isout(ok(a, b))
+proof
+  fix a b
+  have e1: ex a0 b0. ok(a, b) = ok(a0, b0) by ex_intro({a}, {b}, refl({ok(a, b)}))
+  show by defs(taut(e1), tr.isout)
+qed
+
+// (the body left with e, the rest raising (it reads no world): the
+// iteration's end raises)
+theorem tr.lcont_raise(x8 x1. k, x3 x4 x2. kw): all w e x y. !is_ok(e) -> fst(out_state(e)) in univ(1) -> runs(mkprog(x0 x3. k(e, x3)), w, exc(x, y)) ->
+  runs(mkprog(x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), w, exc(x, y))
+proof
+  fix w e x y
+  assume hn hw1 hr
+  have pu := apply(g.runs_univ, hr)
+  have kr := apply(g.runs_elim, hr)
+  have u1: pair(fst(out_state(e)), exc(x, y)) in univ(1) by simp(pu, hw1)
+  have hr2 := apply(tr.runs_intro[r := x0 x3. k(e, x3)], {fst(out_state(e))}, {exc(x, y)}, u1, kr)
+  have ec: ex s1 e1. exc(x, y) = exc(s1, e1) && exc(x, y) = exc(s1, e1) by ex_intro({x}, {y}, taut(refl({exc(x, y)})))
+  have b: bind_rel(mkprog(x0 x3. k(e, x3)), fst(out_state(e)), x4 x5. kw(x4, x5, exc(x, y)), x4 x5. exc(x, y) = exc(x4, x5), x4. exc(x, y) = diverge(x4))
+    by defs(ex_intro({exc(x, y)}, taut(hr2, ec)), bind_rel)
+  have nm: !tr.mk(exc(x, y)) proof
+    have n: tr.mk(exc(x, y)) -> false proof
+      assume m
+      obtain a0 b0, me from expand(m, tr.mk)
+      show by simp(me)
+    qed
+    show by taut(n)
+  qed
+  have e1: ex a0 b0. exc(x, y) = exc(a0, b0) by ex_intro({x}, {y}, refl({exc(x, y)}))
+  have io: tr.isout(exc(x, y)) by defs(taut(e1), tr.isout)
+  have c: tr.lcont(e, exc(x, y), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)) by defs(taut(hn, b, nm, io), tr.lcont)
+  show := apply(tr.runs_intro[r := x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))], {w}, {exc(x, y)}, pu, c)
 qed

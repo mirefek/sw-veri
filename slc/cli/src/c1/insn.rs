@@ -214,13 +214,14 @@ impl<'e> Gen<'e> {
             64 => {
                 let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
                 let (k, g) = self.tag(&x[2]).ok_or_else(|| bad("fields"))?;
-                if nat(&x[1]) != Some(3) || k != 0 {
-                    return Err(bad("not neg r32"));
+                let op = nat(&x[1]);
+                if !(op == Some(3) || op == Some(2)) || k != 0 {
+                    return Err(bad("not neg / not r32"));
                 }
                 let gn = reg(&g)?;
                 let u = self.need_reg(st, gn, 4)?;
-                let tr = self.step("neg32", a, insn, &[&g, &x[3], &u], self.tail(st, insn, 4, vec![]));
-                let r = self.mk("bits_sub", vec![lit(32), lit(0), u]);
+                let (rule, r) = if op == Some(2) { ("not32", self.mk("bits_not", vec![lit(32), u.clone()])) } else { ("neg32", self.mk("bits_sub", vec![lit(32), lit(0), u.clone()])) };
+                let tr = self.step(rule, a, insn, &[&g, &x[3], &u], self.tail(st, insn, 4, vec![]));
                 let r = self.value(&r);
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
@@ -234,9 +235,11 @@ impl<'e> Gen<'e> {
                 let v = home(&st.hsm, &d)?;
                 let u = self.need_reg(st, g, 4)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
-                let tr = self.step("and32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u], self.tail(st, insn, 8, vec![]));
-                let r = self.mk("bits_and", vec![lit(32), v, u]);
-                let r = self.value(&r);
+                // (the result as the spec orders it)
+                let op = self.mk("bits_and", vec![lit(32), v.clone(), u.clone()]);
+                let r = self.value_comm(&op);
+                let hr = self.comm_premise(&r, &op);
+                let tr = self.step("and32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
@@ -532,11 +535,20 @@ impl<'e> Gen<'e> {
                 }
                 // mov [b], r32 (b holding a pointer): the spec's 4-byte store at it
                 if let (Some((bn, b, d)), Some(4)) = (self.base_disp(&x[2]).filter(|z| z.0 != 4), nat(&x[0])) {
-                    if nat(&d) != Some(0) {
-                        return Err(bad("a 4-byte store at [b + d], d not 0"));
-                    }
                     let bv = self.need_reg(st, bn, 8)?;
                     let u = self.need_reg(st, g, 4)?;
+                    // mov [b + d], r32: the spec's 4-byte field store
+                    if nat(&d) != Some(0) {
+                        let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
+                        let (hc, v, st2, red, _) = self.spec_store(st, &ad, 4)?;
+                        if self.canon(&v) != self.canon(&u) {
+                            return Err(format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))));
+                        }
+                        let tr = self.step("store32_bd", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u], self.tail_s(st, &st2, insn, 10, vec![], &hc, &red));
+                        let mut st3 = st2;
+                        st3.a = a2;
+                        return self.then(tr, st3);
+                    }
                     let (hc, v, st2, red, _) = self.spec_store(st, &bv, 4)?;
                     if self.canon(&v) != self.canon(&u) {
                         return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&u), self.print(&v)));
@@ -674,8 +686,18 @@ impl<'e> Gen<'e> {
                 if nat(&x[0]) == Some(4) && x[3] == x[2] && self.tag(&x[4]) == Some((0, x[1].clone())) {
                     let cn = self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?);
                     let u = home(&st.hsm, &d)?;
-                    let xr = self.need_reg(st, reg(&x[1])?, 4)?;
                     let (j, jn, a3, tt, cc) = self.jcc(a2)?;
+                    // (g holding more: its low 32 bits, a call's result); jne
+                    if let Some((ng, x0)) = self.reg(st, reg(&x[1])?).filter(|r| r.0 > 4) {
+                        if cc != 5 {
+                            return Err(bad("cmp dword with a wide register not followed by jne"));
+                        }
+                        let xr = self.value(&self.mk("bits_of_int", vec![lit(32), x0.clone()]));
+                        let c = self.mk("eq", vec![u.clone(), xr.clone()]);
+                        let text = self.jstep("cmp32_hrw_jne", st, a, a2, a3, tt, insn.len, jn, &[&x[1], &d, &lit(cn), &j, &lit(ng), &x0, &xr, &u], insn, 12, vec![]);
+                        return self.branch(st, c, a3, tt, text);
+                    }
+                    let xr = self.need_reg(st, reg(&x[1])?, 4)?;
                     let si = |y: &Term| self.mk("sint", vec![lit(32), y.clone()]);
                     let (rule, c) = match cc {
                         14 => ("cmp32_hr_jle", self.mk("int_lt", vec![si(&xr), si(&u)])),

@@ -126,6 +126,7 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         ambient: Vec::new(),
         bkp: no_bk.clone(),
         bka: no_bk,
+        lpg: None,
     };
     g.top(fname, spec_name, ssym, sbody, sparams, entry)
 }

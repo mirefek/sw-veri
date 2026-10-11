@@ -160,9 +160,11 @@ impl<'e> Gen<'e> {
             R::Slot(n) => slots.iter().find(|x| x.0 == *n).map(|x| x.1.clone()).ok_or_else(|| format!("no fact for the slot {}", n)),
             R::Inst(n, binds) => {
                 let s = api.fact(self.env, n).map_err(|e| e.0)?;
-                let s = if binds.iter().any(|b| b.0 == "bkp") { s } else { self.bk_inst(api, s, n)? };
+                // (the breakpoints last: theirs mention the function's own
+                // variables, s among them)
                 let bs: Vec<(&str, Term)> = binds.iter().map(|(k, v)| (*k, self.expand(v))).collect();
-                api.inst(self.env, s, &bs).map_err(|e| format!("{}: {}", n, e.0))
+                let s = api.inst(self.env, s, &bs).map_err(|e| format!("{}: {}", n, e.0))?;
+                if binds.iter().any(|b| b.0 == "bkp") { Ok(s) } else { self.bk_inst(api, s, n) }
             }
             R::Mp(h, args) => {
                 let s = self.ev_in(api, h, slots)?;

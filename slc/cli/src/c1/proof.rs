@@ -172,6 +172,11 @@ impl<'e> Gen<'e> {
             })
         };
         let mut n = 0;
+        let w = self.w.clone();
+        let empty = self.mk("empty", vec![]);
+        let ex = self.mk("exc", vec![self.vw.clone(), empty.clone()]);
+        // (a loop's iteration left raising: the rest after it raises)
+        let mut base: Option<Seq> = None;
         while !exc_end(self, &self.qs[cur].clone()) {
             n += 1;
             if n > 10000 {
@@ -182,13 +187,23 @@ impl<'e> Gen<'e> {
                     steps.push(r);
                     cur = j;
                 }
+                Some(Red::Exit { e, k, kw }) => {
+                    let kb = k.instantiate_params(&[e.clone(), Term::bvar(0)], &self.env.binders_fn());
+                    let qk = self.canon(&self.mk("mkprog", vec![kb]));
+                    let jk = self.new_q(qk);
+                    let rk = self.raise_chain(jk)?;
+                    let inst = R::Inst("tr.lcont_raise".into(), vec![("k", k), ("kw", kw)]);
+                    let args = vec![t(&w), t(&e), t(&self.vw.clone()), t(&empty), defs(RP::Simp(false, vec![], vec![], false), &["is_ok"]), simpw(vec![self.hvu0_r(), self.hv_r()]), s(&rk)];
+                    base = Some(self.run(&mp(inst, args), &[])?);
+                    break;
+                }
                 _ => return Err(format!("a raise that does not reach the result: {}", self.print(&self.qs[cur]))),
             }
         }
-        let w = self.w.clone();
-        let empty = self.mk("empty", vec![]);
-        let mut r = self.run(&mpf("tr.q_exc_runs", vec![t(&w), t(&self.vw), t(&empty), p(self.hv_r()), p(self.hvu0_r()), simp0()]), &[])?;
-        let ex = self.mk("exc", vec![self.vw.clone(), empty]);
+        let mut r = match base {
+            Some(b) => b,
+            None => self.run(&mpf("tr.q_exc_runs", vec![t(&w), t(&self.vw), t(&empty), p(self.hv_r()), p(self.hvu0_r()), simp0()]), &[])?,
+        };
         for st in steps.into_iter().rev() {
             r = self.run(&mp(st, vec![t(&ex), s(&r)]), &[])?;
         }
@@ -329,6 +344,46 @@ impl<'e> Gen<'e> {
                         return self.call_at(&st, qi, g, &args, list, one, a, xx, dd, k);
                     }
                 }
+                // the loop's exit: the rest in the function's wrapper, no
+                // arrival (tr.lv_exit)
+                Some(Red::Exit { e, k, kw }) => {
+                    let lg = self.lpg.clone().ok_or_else(|| format!("{:x}: an iteration's end outside its loop's walk", st.a))?;
+                    let kb = k.instantiate_params(&[e.clone(), Term::bvar(0)], &self.env.binders_fn());
+                    let qk = self.canon(&self.mk("mkprog", vec![kb]));
+                    let jk = self.new_q(qk);
+                    let mut st2 = st.clone();
+                    st2.spec = Spec::Proc(jk);
+                    let (bka, wrap, kw0) = (self.bka.clone(), self.wrap.clone(), self.kw.clone());
+                    self.bka = self.mk("false", vec![]);
+                    self.wrap = lg.wrap.clone();
+                    self.kw = lg.kw.clone();
+                    self.lpg = None;
+                    self.trace(|| format!("loop at {:x}: its exit at {:x}", lg.head, st.a));
+                    let rest = self.exit_rest(st2, jk);
+                    self.bka = bka;
+                    self.wrap = wrap;
+                    self.kw = kw0;
+                    self.lpg = Some(lg);
+                    let rest = rest?;
+                    let inst = R::Inst("tr.lv_exit".into(), vec![("bkp", self.bkp.clone()), ("bka", self.bka.clone()), ("k", k), ("kw", kw)]);
+                    let args = vec![
+                        t(&self.s.clone()),
+                        t(&self.v.clone()),
+                        t(&self.base.clone()),
+                        t(&self.code.clone()),
+                        t(&lit(st.fr)),
+                        t(&lit(st.a)),
+                        t(&st.hst),
+                        t(&st.ds),
+                        t(&st.rs),
+                        t(&e),
+                        t(&st.w),
+                        defs(RP::Simp(false, vec![], vec![], false), &["is_ok"]),
+                        simp_l(),
+                        s(&rest),
+                    ];
+                    return self.run(&mp(inst, args), &[]);
+                }
                 Some(Red::Guard { cond, ub }) => {
                     let u = self.raise_when_not(&cond, &ub)?;
                     // defined: the same rest, with the condition
@@ -456,7 +511,15 @@ impl<'e> Gen<'e> {
             let r = ARGREGS[i];
             let (k, v) = self.reg(st, r).ok_or_else(|| format!("{:x}: register {} holds no value at the call", a, r))?;
             if ![1, 2, 4, 8].contains(&k) || self.canon(&v) != self.canon(&x) {
-                return Err(format!("{:x}: register {} holds {}, the spec passes {}", a, r, self.print(&v), self.print(&x)));
+                return Err(format!(
+                    "{:x}: register {} holds {} ({}), the spec passes {} ({})",
+                    a,
+                    r,
+                    self.print(&v),
+                    self.print(&self.expand(&v)),
+                    self.print(&x),
+                    self.print(&self.expand(&x))
+                ));
             }
             aps.push(p(R::Apply(Box::new(f("tr.argv_reg")), vec![t(&st.rs), t(&lit(r)), t(&lit(k)), t(&lit(nb)), t(&x), simp_l(), simp_l(), simp0()])));
         }
@@ -517,13 +580,16 @@ impl<'e> Gen<'e> {
         let (hx, he) = (univ(self, &xv), univ(self, &ev));
         let (hxs, hes) = (self.assume(&hx)?, self.assume(&he)?);
         let gk = self.mk("runs", vec![qx, w.clone(), self.mk("exc", vec![xv.clone(), ev.clone()])]);
-        let k0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hxs), R::S(hes), R::S(hv.clone())], vec![], false)), vec!["runs".into(), "mkprog".into()]), &gk, &[])?;
+        // (in a loop's body, the rest ends in the iteration's end)
+        // (its inner run of the rest kept for simp's own `runs(mkprog ..)`)
+        let kd: Vec<String> = if self.lpg.is_some() { ["tr.lcont", "tr.isout", "tr.mk"].map(String::from).to_vec() } else { vec!["runs".into(), "mkprog".into()] };
+        let k0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hxs), R::S(hes), R::S(hv.clone())], vec![], false)), kd.clone()), &gk, &[])?;
         let hk = self.close(k0, &[hx, he], &[Self::var_id(&xv), Self::var_id(&ev)])?;
         // hd: all T. T in univ(1) -> runs(qd, w, diverge(T))
         let ht = univ(self, &tv);
         let hts = self.assume(&ht)?;
         let gd = self.mk("runs", vec![qd, w.clone(), self.mk("diverge", vec![tv.clone()])]);
-        let d0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hts), R::S(hv.clone())], vec![], false)), vec!["runs".into(), "mkprog".into()]), &gd, &[])?;
+        let d0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hts), R::S(hv.clone())], vec![], false)), kd), &gd, &[])?;
         let hd = self.close(d0, &[ht], &[Self::var_id(&tv)])?;
         // the claim after the call, for every world W4 and result R0 (:R1)
         let (w4, r0, r1) = (self.var(&format!("WC{n}")), self.var(&format!("RC{n}")), self.var(&format!("RD{n}")));
@@ -622,17 +688,61 @@ impl<'e> Gen<'e> {
                     s(&hk),
                     s(&hd),
                     s(&pc),
-                    self.nobp(),
+                    self.nobp_below(&self.bkp.clone()),
                 ],
             ),
             &[],
         )
     }
 
+    /// The rest after a loop's exit (st's spec the rest jk): the exit's
+    /// world in it (the body's outcome's) as the rest's start world
+    /// (tr.q_from)
+    fn exit_rest(&mut self, st: St, jk: usize) -> Result<Seq, String> {
+        let w = st.w.clone();
+        let body = self.app(&self.qs[jk], "mkprog", 1).ok_or("the loop's rest: not a program")?[0].clone();
+        if !self.mentions(&body, &w) {
+            return self.prove_kept(st);
+        }
+        let b = self.abstract_(&body, &w, 0);
+        let (j2, r) = self.by(jk, "tr.q_from", &[("b", b), ("w", w)])?;
+        let rs = self.run(&r, &[])?;
+        let mut st2 = st.clone();
+        st2.spec = Spec::Proc(j2);
+        let rest = self.prove_kept(st2)?;
+        let wr = self.wred(&st, jk, j2);
+        self.run(&mp(wr, vec![s(&rs), s(&rest)]), &[])
+    }
+
+    /// the callee's states (below the frame) no breakpoints of bkp: a
+    /// loop's head (`tr.hd(z) = pair(h, x) || ..`) by tr.nobp_hd, at the
+    /// frame x itself; the rest likewise
+    fn nobp_below(&self, bkp: &Term) -> RA {
+        let hd = (|| {
+            let o = self.app(bkp, "or", 2)?;
+            let e = self.app(&o[0], "eq", 2)?;
+            let z = self.app(&e[0], "tr.hd", 1)?;
+            matches!(z[0].node(), Node::BVar(0)).then_some(())?;
+            let pr = self.app(&e[1], "pair", 2)?;
+            Some((pr[0].clone(), pr[1].clone(), o[1].clone()))
+        })();
+        match hd {
+            Some((h, x, outer)) => p(R::Mp(Box::new(R::Inst("tr.nobp_hd".into(), vec![("bkp", outer.clone())])), vec![t(&x), t(&h), self.nobp_below(&outer)])),
+            None => simp0(),
+        }
+    }
+
     /// a loop's head (the spec's loop there): its claim, by induction
     fn loop_point(&mut self, st: &St) -> Result<Option<Seq>, String> {
         let Spec::Proc(qi) = st.spec else { return Ok(None) };
-        if self.loop_head(qi).is_none() || !self.is_loop_test(st.a) {
+        if self.loop_head(qi).is_none() {
+            return Ok(None);
+        }
+        if !self.is_loop_test(st.a) {
+            // (a loop with no counter: at the head the code jumps back to)
+            if self.is_back_target(st.a) {
+                return self.loop_general(st, qi).map(Some);
+            }
             return Ok(None);
         }
         if let Some(l) = st.lp {
@@ -641,6 +751,325 @@ impl<'e> Gen<'e> {
             }
         }
         self.loop_start(st, qi).map(Some)
+    }
+
+    /// the target of a later jump back to a (a loop's head)
+    fn is_back_target(&self, a: u128) -> bool {
+        self.insns.range(a + 1..).any(|(&b, i)| (i.row == 127 || i.row == 128) && matches!(self.jcc(b), Ok((_, _, _, tt, _)) if tt == a))
+    }
+
+    /// A loop met at its head h, by the loop rule (tr.loop_lv): the homes
+    /// there as a function of the locals y (a home holding one of the
+    /// locals' first values holds that local), one iteration walked from h
+    /// for every y and world -- h a breakpoint, arrived at with the next
+    /// locals marked (tr.pt_head), the exit into the rest with no arrival
+    /// (tr.lv_exit) --, the rule's claim at h for the locals now.
+    fn loop_general(&mut self, st: &St, qi: usize) -> Result<Seq, String> {
+        let h = st.a;
+        let bad = |m: &str| format!("{:x}: a loop {}: not covered yet", h, m);
+        if self.lpg.is_some() {
+            return Err(bad("in a loop's body"));
+        }
+        let q = self.qs[qi].clone();
+        let body = self.app(&q, "mkprog", 1).ok_or_else(|| bad("rest"))?[0].clone();
+        let y = self.app(&self.app(&body, "ex", 1).ok_or_else(|| bad("rest"))?[0], "and", 2).ok_or_else(|| bad("rest"))?.to_vec();
+        let ctx = ["x0", "x1", "x8"];
+        let al = self.lam(&y[0], &ctx, &["x0", "x8"]).ok_or_else(|| bad("whose head reads the outcome"))?;
+        let kl = self.lam(&y[1], &ctx, &["x8", "x1"]).ok_or_else(|| bad("whose rest reads the world"))?;
+        let wr = self.app(&al, "while_rel", 5).ok_or_else(|| bad("not a while"))?.to_vec();
+        let l0 = self.app(&wr[0], "pair", 2).ok_or_else(|| bad("whose state is not the world and the locals"))?.to_vec();
+        let true_c = self.app(&wr[1], "true", 0).is_some();
+        let other = {
+            let bf = self.env.binders_fn();
+            !matches!(l0[0].node(), Node::BVar(1)) || l0[1].loose_depth(&bf) > 0 || !true_c || wr[2].loose_depth(&bf) > 2 || wr[3].loose_depth(&bf) > 1
+        };
+        if other {
+            return Err(bad("of another form (a condition, the body reading the outer state)"));
+        }
+        let y0 = l0[1].clone();
+        // the locals' parts, and their projections of a locals variable
+        let mut comps = Vec::new();
+        let mut cur = y0.clone();
+        while let Some(pa) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
+            comps.push(pa[0].clone());
+            cur = pa[1].clone();
+        }
+        comps.push(cur);
+        let n = self.fresh("");
+        let yv = self.var(&format!("ly{n}"));
+        let wv = self.var(&format!("lw{n}"));
+        let proj = |g: &Gen, i: usize| -> Term {
+            let mut t = yv.clone();
+            for _ in 0..i {
+                t = g.mk("snd", vec![t]);
+            }
+            if i + 1 < comps.len() { g.mk("fst", vec![t]) } else { t }
+        };
+        // (a home holding a local's first value: the same term, or one the
+        // facts make equal -- the code's form of the spec's value; not a
+        // literal, a choice's placeholder)
+        self.set_lf(st)?;
+        let mut hsm_y = BTreeMap::new();
+        for (c, (nb, x)) in &st.hsm {
+            let xc = self.canon(x);
+            let mut v = x.clone();
+            for (i, ci) in comps.iter().enumerate() {
+                if nat(ci).is_some() {
+                    continue;
+                }
+                let same = self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok();
+                if same {
+                    v = proj(self, i);
+                    break;
+                }
+            }
+            hsm_y.insert(*c, (*nb, v));
+        }
+        let hst_y = self.hs_term(&hsm_y);
+        let hs_lam = self.abs(&hst_y, &[Self::var_id(&yv)]);
+        // the rule's instance: its premises, the iteration's breakpoints
+        let (lr, stmt) = self.inst(
+            "tr.loop_lv",
+            &[
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("ha", lit(h)),
+                ("fd", st.ds.clone()),
+                ("hs", hs_lam.clone()),
+                ("bkp", self.bkp.clone()),
+                ("bka", self.bka.clone()),
+                ("b", wr[2].clone()),
+                ("tr", wr[3].clone()),
+                ("k", kl.clone()),
+                ("kw", self.kw.clone()),
+            ],
+        )?;
+        let imp = self.env.builtins.imp;
+        let mut prems = Vec::new();
+        let mut t0 = stmt.clone();
+        while let Node::App(s, a) = t0.node() {
+            if *s != imp {
+                break;
+            }
+            prems.push(a[0].clone());
+            t0 = a[1].clone();
+        }
+        let lv_b = (|| {
+            let a1 = self.app(prems.get(3)?, "all", 1)?[0].clone();
+            let a2 = self.app(&a1, "all", 1)?[0].clone();
+            let Node::App(_, i1) = a2.node() else { return None };
+            let Node::App(_, i2) = i1[1].node() else { return None };
+            self.app(&i2[1], "tr.lv", 13).map(|x| x.to_vec())
+        })()
+        .ok_or("tr.loop_lv: its body premise")?;
+        let (bkp2, bka2) = (lv_b[1].clone(), lv_b[2].clone());
+        // the iteration's walk, for every locals y and world w
+        let univ = |g: &Gen, x: &Term| g.mk("in", vec![x.clone(), g.mk("univ", vec![lit(1)])]);
+        let hu_t = univ(self, &self.mk("pair", vec![wv.clone(), yv.clone()]));
+        let hw_t = self.mk("and", vec![self.mk("in", vec![wv.clone(), self.mk("abi.World", vec![])]), univ(self, &wv)]);
+        let hw = self.assume(&hw_t)?;
+        let hu = self.assume(&hu_t)?;
+        let hv = self.evp(&RP::Taut(vec![R::S(hw.clone())]), &univ(self, &wv), &[])?;
+        let qit = self.mk("tr.liter", vec![yv.clone(), wr[2].clone(), kl.clone(), self.kw.clone()]);
+        let jq = self.new_q(qit);
+        // (in the identity wrapper)
+        let qv = self.var(&format!("lq{n}"));
+        let wid = self.parse(&format!("mkprog(x1 x2. bind_rel(lq{n}, x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))"))?;
+        let wrap_id = self.abs(&wid, &[Self::var_id(&qv)]);
+        let kw_id = self.mk("eq", vec![Term::bvar(0), self.mk("ok", vec![Term::bvar(2), Term::bvar(1)])]);
+        let saved = LoopG { head: h, hs: hs_lam.clone(), bkp: self.bkp.clone(), bka: self.bka.clone(), wrap: self.wrap.clone(), kw: self.kw.clone(), hu, fd: st.ds.clone() };
+        let st_body = St {
+            a: h,
+            fr: st.fr,
+            regs: Vec::new(),
+            rs: self.mk("empty", vec![]),
+            ds: st.ds.clone(),
+            w: wv.clone(),
+            hvu: hv,
+            hw,
+            hsm: hsm_y,
+            hst: hst_y,
+            lp: st.lp,
+            spec: Spec::Proc(jq),
+            hyps: st.hyps.clone(),
+            facts: st.facts.clone(),
+            lfx: st.lfx.clone(),
+            bconds: Vec::new(),
+            spent: Vec::new(),
+            splits: Vec::new(),
+            no_join: Some(h),
+            z: None,
+        };
+        self.bkp = bkp2;
+        self.bka = bka2;
+        self.wrap = wrap_id;
+        self.kw = kw_id;
+        self.lpg = Some(saved.clone());
+        self.trace(|| format!("loop at {:x}: its iteration", h));
+        let res = self.prove(st_body);
+        self.bkp = saved.bkp.clone();
+        self.bka = saved.bka.clone();
+        self.wrap = saved.wrap.clone();
+        self.kw = saved.kw.clone();
+        self.lpg = None;
+        let body_lv = res?;
+        let body_c = self.close(body_lv, &[hu_t, hw_t], &[Self::var_id(&yv), Self::var_id(&wv)])?;
+        // the rule: its claim at h for the locals and world now
+        self.fr = st.fr;
+        self.w = st.w.clone();
+        self.hvu = Some(st.hvu.clone());
+        self.set_lf(st)?;
+        let r = mp(lr, vec![simp0(), p(f("tr.tr_univ")), self.nobp(), s(&body_c)]);
+        let r = mp(r, vec![t(&y0), t(&st.w), simp_lw(vec![R::S(st.hvu.clone())])]);
+        let c0 = self.run(&R::Expand(Box::new(r), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
+        // (the point's homes and registers: the claim's, and more)
+        let hs1 = self.app(c0.concl(), "tr.lv", 13).map(|x| x[8].clone()).ok_or("the loop's claim")?;
+        let empty = self.mk("empty", vec![]);
+        let mut sub_pf = mpf("tr.hsub_empty", vec![t(&st.hst)]);
+        let mut fm = empty.clone();
+        for (k, nb, x) in self.home_entries(&hs1).ok_or("the loop's claim's homes")? {
+            let v = self.mk("pair", vec![lit(nb), x.clone()]);
+            sub_pf = mpf("tr.hsub_upd", vec![t(&st.hst), t(&fm), t(&lit(k)), t(&v), p(sub_pf), simp_l(), simp_l()]);
+            fm = self.upd(&fm, k, nb, &x);
+        }
+        let pcl = self.p(&st.spec);
+        let c1 = self.run(
+            &mpf(
+                "tr.pt_hs",
+                vec![
+                    t(&self.s.clone()),
+                    t(&self.v.clone()),
+                    t(&self.base.clone()),
+                    t(&self.code.clone()),
+                    t(&lit(st.fr)),
+                    t(&lit(h)),
+                    t(&hs1),
+                    t(&st.hst),
+                    t(&st.ds),
+                    t(&empty),
+                    t(&pcl),
+                    t(&st.w),
+                    p(sub_pf),
+                    s(&c0),
+                ],
+            ),
+            &[],
+        )?;
+        let rs = mpf(
+            "tr.pt_rs",
+            vec![t(&self.s.clone()), t(&self.v.clone()), t(&self.base.clone()), t(&self.code.clone()), t(&lit(st.fr)), t(&lit(h)), t(&st.hst), t(&st.ds), t(&st.rs), t(&pcl), t(&st.w), s(&c1)],
+        );
+        self.run(&rs, &[])
+    }
+
+    /// Back at the loop's head in its iteration's walk: the arrival -- the
+    /// rest reduced to the marked return of the next locals Y2, the homes
+    /// at Y2 among st's (tr.pt_head)
+    fn arrive(&mut self, st: &St, lg: &LoopG) -> Result<Seq, String> {
+        self.fr = st.fr;
+        self.w = st.w.clone();
+        self.hvu = Some(st.hvu.clone());
+        self.set_lf(st)?;
+        let Spec::Proc(qi) = st.spec else { return Err(format!("{:x}: back at the loop's head after its result", st.a)) };
+        // the reductions to the marked return
+        let mut cur = qi;
+        let mut steps: Vec<R> = Vec::new();
+        let marker = |g: &Gen, q: &Term| -> Option<(Term, Term)> {
+            let b = g.app(q, "mkprog", 1)?[0].clone();
+            let x = g.app(&b, "eq", 2)?.to_vec();
+            if !matches!(x[0].node(), Node::BVar(0)) {
+                return None;
+            }
+            let o = g.app(&x[1], "ok", 2)?.to_vec();
+            let pr = g.app(&o[1], "pair", 2)?.to_vec();
+            let bf = g.env.binders_fn();
+            (nat(&pr[0]) == Some(1u128 << 64) && o[0].loose_depth(&bf) == 0 && pr[1].loose_depth(&bf) == 0).then(|| (o[0].clone(), pr[1].clone()))
+        };
+        let mut n = 0;
+        let (w2, y2) = loop {
+            if let Some(m) = marker(self, &self.qs[cur].clone()) {
+                break m;
+            }
+            n += 1;
+            if n > 10000 {
+                return Err(format!("{:x}: the iteration's rest does not end", st.a));
+            }
+            match self.reduce(cur, &st.hyps)? {
+                Some(Red::Q(j, r)) => {
+                    steps.push(r);
+                    cur = j;
+                }
+                _ => return Err(format!("{:x}: back at the loop's head, the iteration's rest not its marked return: {}", st.a, self.print(&self.qs[cur]))),
+            }
+        };
+        if self.canon(&w2) != self.canon(&st.w) {
+            return Err(format!("{:x}: the iteration's marked return of another world", st.a));
+        }
+        let o = self.mk("ok", vec![st.w.clone(), self.mk("pair", vec![lit(1u128 << 64), y2.clone()])]);
+        let goal = self.mk("runs", vec![self.qs[cur].clone(), st.w.clone(), o.clone()]);
+        // (the locals in the universe: the iteration's)
+        let mut rr = self.evp(&RP::Defs(Box::new(RP::Simp(true, vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())], vec![], false)), vec!["runs".into(), "mkprog".into()]), &goal, &[])?;
+        for stp in steps.into_iter().rev() {
+            rr = self.run(&mp(stp, vec![t(&o), s(&rr)]), &[])?;
+        }
+        // (in the identity wrapper)
+        let qb = self.app(&self.qs[qi], "mkprog", 1).ok_or("the iteration's rest")?[0].clone();
+        let io = R::Apply(Box::new(f("tr.isout_ok")), vec![t(&st.w), t(&self.mk("pair", vec![lit(1u128 << 64), y2.clone()]))]);
+        let rw = R::Apply(Box::new(R::Inst("tr.wrap_id_in".into(), vec![("r", qb)])), vec![t(&st.w), t(&o), s(&rr), p(io)]);
+        // the homes at Y2 among st's
+        let hs2 = lg.hs.instantiate_params(std::slice::from_ref(&y2), &self.env.binders_fn());
+        let mut sub_pf = mpf("tr.hsub_empty", vec![t(&st.hst)]);
+        let mut fm = self.mk("empty", vec![]);
+        for (k, nb, x) in self.home_entries(&hs2).ok_or("the loop's homes")? {
+            let v = self.mk("pair", vec![lit(nb), x.clone()]);
+            sub_pf = mpf("tr.hsub_upd", vec![t(&st.hst), t(&fm), t(&lit(k)), t(&v), p(sub_pf), simp_l(), simp_l()]);
+            fm = self.upd(&fm, k, nb, &x);
+        }
+        let inst = R::Inst(
+            "tr.pt_head".into(),
+            vec![
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("ha", lit(lg.head)),
+                ("fd", lg.fd.clone()),
+                ("hs", lg.hs.clone()),
+                ("bkp", lg.bkp.clone()),
+            ],
+        );
+        let pcl = self.p(&st.spec);
+        self.trace(|| format!("loop at {:x}: arrived", st.a));
+        let r = mp(inst, vec![t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), p(sub_pf), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(rw)]);
+        // (more of the frame here than at the head: the claim with the head's)
+        if self.canon(&st.ds) == self.canon(&lg.fd) {
+            return self.run(&r, &[]);
+        }
+        let args = vec![
+            t(&self.s.clone()),
+            t(&self.v.clone()),
+            t(&self.base.clone()),
+            t(&self.code.clone()),
+            t(&lit(st.fr)),
+            t(&lit(st.a)),
+            t(&st.hst),
+            t(&st.ds),
+            t(&lg.fd),
+            t(&st.rs),
+            t(&pcl),
+            t(&st.w),
+            simp0(),
+            simp0(),
+            arith(vec![]),
+            arith(vec![]),
+            arith(vec![]),
+            p(r),
+        ];
+        self.run(&mpf("tr.pt_fd", args), &[])
     }
 
     /// the machine's loop test at a: an instruction followed by a backward
@@ -891,6 +1320,15 @@ impl<'e> Gen<'e> {
     pub(super) fn prove_pt(&mut self, st2: St) -> Result<Seq, String> {
         if st2.z.is_some() {
             return self.prove_kept(st2);
+        }
+        // (back at the head of the loop walked: its arrival)
+        if let Some(lg) = self.lpg.clone() {
+            if st2.a == lg.head {
+                let c = self.save();
+                let r = self.arrive(&st2, &lg);
+                self.restore(c);
+                return r;
+            }
         }
         let lv = self.prove_kept(st2.clone())?;
         self.to_pt(&st2, lv)

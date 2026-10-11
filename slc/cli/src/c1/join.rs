@@ -176,7 +176,7 @@ impl<'e> Gen<'e> {
     }
 
     /// the homes' map term `hst`: its entries in order (key, bytes, value)
-    fn home_entries(&self, hst: &Term) -> Option<Vec<(u128, u128, Term)>> {
+    pub(super) fn home_entries(&self, hst: &Term) -> Option<Vec<(u128, u128, Term)>> {
         let mut out = Vec::new();
         let mut m = hst.clone();
         while let Some((parent, k, pv)) = upd_parts(self, &m) {
