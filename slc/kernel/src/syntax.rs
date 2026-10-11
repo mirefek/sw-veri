@@ -489,11 +489,12 @@ pub struct LoadReport {
 pub trait Prover {
     fn prove(&mut self, env: &mut Env, req: &ProofRequest) -> KResult<Seq>;
 
-    /// `c1 FN SPEC PREFIX`: the theorems of a function's C1 (its decode
-    /// facts `FN.at_*` against the spec `SPEC`), named `PREFIX.*`, proven by
-    /// a procedure. Not trusted either: sequents made by the kernel's rules,
-    /// each recorded only without hypotheses.
-    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str) -> KResult<Vec<(String, Seq)>> {
+    /// `c1 FN SPEC PREFIX [using L, ..]`: the theorems of a function's C1
+    /// (its decode facts `FN.at_*` against the spec `SPEC`), named
+    /// `PREFIX.*`, proven by a procedure (the facts L its hints). Not
+    /// trusted either: sequents made by the kernel's rules, each recorded
+    /// only without hypotheses.
+    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
         Err(KernelError("`c1`: this checker has no C1 engine".into()))
     }
 }
@@ -649,15 +650,27 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                     p.env.mem_closures.push(name);
                 }
             }
-            // c1 FN SPEC PREFIX: the function FN's C1 theorems (`PREFIX.body`,
-            // `.implements`, ..), proven by the checker's C1 engine
+            // c1 FN SPEC PREFIX [using L, ..]: the function FN's C1 theorems
+            // (`PREFIX.body`, `.implements`, ..), proven by the checker's C1
+            // engine, the facts L (theorems) its hints
             "c1" => {
                 let spec = p.ident()?;
                 let prefix = p.ident()?;
+                let mut hints = Vec::new();
+                if matches!(&p.tok, Tok::Ident(s) if s == "using") {
+                    p.bump()?;
+                    loop {
+                        hints.push(p.ident()?);
+                        if !p.is_sym(",") {
+                            break;
+                        }
+                        p.bump()?;
+                    }
+                }
                 let Some(pr) = prover.as_deref_mut() else {
                     return Err(ctx(KernelError("`c1` needs a proof checker".into())));
                 };
-                let ths = pr.c1(p.env, &name, &spec, &prefix).map_err(ctx)?;
+                let ths = pr.c1(p.env, &name, &spec, &prefix, &hints).map_err(ctx)?;
                 rep.c1s.push((line, ths.iter().map(|x| x.0.clone()).collect()));
                 for (n, sq) in ths {
                     if !sq.hyps().is_empty() {

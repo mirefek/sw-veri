@@ -118,6 +118,15 @@ impl<'e> Gen<'e> {
                     continue;
                 }
                 let eq = self.mk("eq", vec![a.clone(), b.clone()]);
+                // (by the hints' equations, their premises facts in scope:
+                // rewriting, no search)
+                let heqs = self.hint_eqs(&eq, hyps);
+                if !heqs.is_empty() {
+                    if let Ok(q) = self.evp(&RP::Simp(true, heqs.into_iter().map(R::S).collect(), vec![], false), &eq, &[]) {
+                        eqs.push(q);
+                        continue;
+                    }
+                }
                 let mut fs = facts.clone();
                 fs.extend(self.pow_facts(&eq));
                 match self.evp(&RP::Defs(Box::new(RP::Arith(fs)), defs.clone()), &eq, &[]) {
@@ -1018,6 +1027,94 @@ impl<'e> Gen<'e> {
 
     /// `pow2(k) = 2^k` for the literal widths and shift counts of t's word
     /// operations (arith's modulus and factors numbers)
+    /// the hints' instances at t's subterms matching their patterns
+    pub(super) fn hint_facts(&self, q: &Term) -> Vec<R> {
+        let logical = ["imp", "and", "or", "not", "iff", "eq", "in", "int_lt", "int_le", "all", "ex"];
+        let bf = self.env.binders_fn();
+        // (t's subterms, each once)
+        let mut subs: Vec<Term> = Vec::new();
+        fn collect(t: &Term, out: &mut Vec<Term>) {
+            if let Node::App(_, a) | Node::Var(_, a) = t.node() {
+                if a.is_empty() || out.contains(t) {
+                    return;
+                }
+                out.push(t.clone());
+                a.iter().for_each(|x| collect(x, out));
+            }
+        }
+        collect(&self.expand(q), &mut subs);
+        // (p, BVar(j) for j < n the variables, against x)
+        fn mat(p: &Term, x: &Term, n: u32, bs: &mut Vec<Option<Term>>) -> bool {
+            match (p.node(), x.node()) {
+                (Node::BVar(j), _) if *j < n => match &bs[*j as usize] {
+                    Some(y) => y == x,
+                    None => {
+                        bs[*j as usize] = Some(x.clone());
+                        true
+                    }
+                },
+                (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b.iter()).all(|(p, x)| mat(p, x, n, bs)),
+                (Node::Var(f, a), Node::Var(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b.iter()).all(|(p, x)| mat(p, x, n, bs)),
+                _ => p == x,
+            }
+        }
+        let mut out = Vec::new();
+        for h in &self.hints {
+            // (its leading `all`s, its body)
+            let (mut n, mut b) = (0u32, h.concl().clone());
+            while let Some(a) = self.app(&b, "all", 1) {
+                b = a[0].clone();
+                n += 1;
+            }
+            // (the pattern: the first non-logical subterm with all n variables)
+            fn find(g: &Gen, t: &Term, n: u32, logical: &[&str], bf: &dyn Fn(u32, usize) -> u32) -> Option<Term> {
+                let Node::App(f, a) = t.node() else { return None };
+                let all = (0..n).all(|j| super::spec::bvar_in(t, j, 0, bf));
+                if all && !logical.contains(&g.env.syms[*f as usize].name.as_str()) {
+                    return Some(t.clone());
+                }
+                a.iter().find_map(|x| find(g, x, n, logical, bf))
+            }
+            let Some(pat) = find(self, &b, n, &logical, &bf) else { continue };
+            for x in &subs {
+                let mut bs = vec![None; n as usize];
+                if mat(&pat, x, n, &mut bs) && bs.iter().all(|b| b.is_some()) {
+                    // (the outermost `all` first: BVar(n - 1))
+                    let args: Vec<RA> = (0..n).rev().map(|j| t(bs[j as usize].as_ref().unwrap())).collect();
+                    out.push(R::Mp(Box::new(R::S(h.clone())), args));
+                }
+            }
+        }
+        out
+    }
+
+    /// the hints' instances at q's subterms, their premises discharged by
+    /// facts in scope (or arithmetic on them): the conclusions
+    pub(super) fn hint_eqs(&mut self, q: &Term, hyps: &[(Term, Seq)]) -> Vec<Seq> {
+        let mut out = Vec::new();
+        'inst: for r in self.hint_facts(q) {
+            let Ok(mut sq) = self.run(&r, &[]) else { continue };
+            while let Some(x) = self.app(sq.concl(), "imp", 2).map(|x| x.to_vec()) {
+                let pf = match self.hyp_find(hyps, &x[0]) {
+                    Some(h) => h.1.clone(),
+                    None => {
+                        let facts: Vec<R> = self.lf.iter().cloned().chain(hyps.iter().map(|h| h.1.clone())).map(R::S).collect();
+                        match self.evp(&RP::Simp(true, facts, vec![], false), &x[0], &[]) {
+                            Ok(p) => p,
+                            Err(_) => continue 'inst,
+                        }
+                    }
+                };
+                match self.run(&rec::mp(R::S(sq.clone()), vec![rec::s(&pf)]), &[]) {
+                    Ok(s2) => sq = s2,
+                    Err(_) => continue 'inst,
+                }
+            }
+            out.push(sq);
+        }
+        out
+    }
+
     pub(super) fn pow_facts(&mut self, t: &Term) -> Vec<R> {
         let mut ks: BTreeSet<u128> = BTreeSet::new();
         fn go(g: &Gen, t: &Term, ks: &mut BTreeSet<u128>) {
@@ -1304,5 +1401,15 @@ impl<'e> Gen<'e> {
             return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
         }
         Ok(None)
+    }
+}
+
+/// whether the bound variable j (at depth d: BVar(j + d)) occurs in t
+pub(super) fn bvar_in(t: &Term, j: u32, d: u32, bf: &dyn Fn(u32, usize) -> u32) -> bool {
+    match t.node() {
+        Node::BVar(i) => *i == j + d,
+        Node::App(f, a) => a.iter().enumerate().any(|(i, x)| bvar_in(x, j, d + bf(*f, i), bf)),
+        Node::Var(_, a) => a.iter().any(|x| bvar_in(x, j, d, bf)),
+        _ => false,
     }
 }

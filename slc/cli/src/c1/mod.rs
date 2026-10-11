@@ -257,6 +257,10 @@ struct Gen<'e> {
     /// deep `in dom` facts)
     lf: Vec<Seq>,
     lf0: Option<Seq>,
+    /// the hints (`c1 .. using L, ..`): facts `all xs. H.. -> C`, each
+    /// instantiated where its pattern (C's first non-logical subterm with
+    /// all the xs) occurs in an arithmetic question
+    hints: Vec<Seq>,
     /// the calls met: the callee (a spec parameter), its address, the
     /// call's number of arguments, whether a call enters it with the stack
     /// not aligned (its contract then for any entry: tr.implements_at_u)
@@ -857,7 +861,7 @@ impl syntax::Prover for Checker {
         sl_proof::ScriptProver.prove(env, req)
     }
 
-    fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str) -> sl_kernel::KResult<Vec<(String, Seq)>> {
-        c1(env, fname, spec, prefix).map_err(sl_kernel::KernelError)
+    fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
+        c1(env, fname, spec, prefix, hints).map_err(sl_kernel::KernelError)
     }
 }

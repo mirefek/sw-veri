@@ -37,7 +37,7 @@ fn decode_fact(env: &Env, name: &str, t: &Term) -> Option<(u128, Insn)> {
 
 /// The C1 theorems of the function `fname` (its decode facts `fname.at_*`)
 /// against the spec `spec_name` (a `_fun` wrapper), named `prefix.*`.
-pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<Vec<(String, Seq)>, String> {
+pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[String]) -> Result<Vec<(String, Seq)>, String> {
     let _rep = super::prof::Rep(fname.to_string());
     let _p = super::prof::g("c1");
     // the decode facts
@@ -72,6 +72,8 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
             return Err(format!("no decode fact of the callee at {:x}", f));
         }
     }
+    // (the hints: proven facts)
+    let hint_seqs: Vec<Seq> = hints.iter().map(|h| sl_kernel::ext::facts::seq_of(env, h).ok_or_else(|| format!("no fact `{}` (a hint)", h))).collect::<Result<_, _>>()?;
     let api = Api::new(env, Vec::new()).map_err(|e| e.0)?;
     let empty = Term::app(env.sym_by_name["empty"], vec![]);
     let no_bk = Term::app(env.sym_by_name["false"], vec![]);
@@ -120,6 +122,7 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         loops: Vec::new(),
         nval: 0,
         lf: Vec::new(),
+        hints: hint_seqs,
         lf0: None,
         callees: Vec::new(),
         lbase: empty.clone(),

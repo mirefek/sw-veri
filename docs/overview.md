@@ -112,9 +112,20 @@ For a function F, two halves:
   - A `c1 F SPEC PREFIX` line (`proofs/mallocng_c1.core`) has the
     checker's C1 engine (`slc/cli/src/c1/`) walk F's code (its decode facts)
     and its readable GIMPLE side by side. Each step applies a rule instance
-    through the kernel; no proof text is written and nothing is searched.
-    The engine is untrusted: the kernel records only the theorems its rules
-    made, without hypotheses.
+    through the kernel; no proof text is written. The engine is untrusted:
+    the kernel records only the theorems its rules made, without
+    hypotheses.
+  - One place still searches: a spec condition that is not literally
+    among the path's facts, but is one with an operand written otherwise,
+    goes to `arith` with the path's facts (slow when it fails). Hints
+    replace that: `c1 F SPEC PREFIX using L, ..` names proven equations
+    (`all xs. H.. -> l = r`), which the engine instantiates where l occurs
+    in such a condition, their premises from the path's facts, and uses by
+    rewriting (`simp`) before any `arith`. E.g. a division as GIMPLE writes
+    it, `bits_of_int(64, int_div(bits_of_int(64, 4080), s)) = int_div(4080,
+    s)` for s a 64-bit word not 0, the machine's form: alloc_group's
+    conditions on it went from about 2 s each (a failing `arith`) to
+    immediate.
   - Where the paths of a branch meet, at the end of a block of the spec,
     the claim for the rest is proven once, for every world and locals (the
     homes that hold locals as those locals), and used for each path that
