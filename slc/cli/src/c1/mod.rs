@@ -476,6 +476,66 @@ impl<'e> Gen<'e> {
         self.canon_memo.borrow_mut().clear();
     }
 
+    /// A world after a store, named v (t its definition, of the world w
+    /// before): its kernel term `letin(W, x. body)`, the world before bound
+    /// once -- not copied into the new one, nor into the stored value that
+    /// read it (a run of stores would grow its term 4-fold per store); and
+    /// `letin(W, x. body) = body(W)` (`letin_eq`), the equation from the
+    /// world as the lemmas state it (substituted) to it -- None if no let
+    /// is needed (W an atom)
+    fn push_world(&mut self, v: VarId, t: Term, w: &Term) -> Option<R> {
+        let ew = self.expand(w);
+        if !matches!(ew.node(), Node::App(_, a) | Node::Var(_, a) if !a.is_empty()) || self.env.loose_depth_m(&ew) > 0 {
+            self.push_val(v, t);
+            return None;
+        }
+        let e2 = self.expand(&t);
+        let body = self.abstract_sub(&e2, &ew);
+        let e = self.mk("letin", vec![ew.clone(), body.clone()]);
+        if self.is_value(v) && !self.zs.contains(&v) {
+            self.val_of.entry(e.clone()).or_insert(v);
+        }
+        self.vexp.insert(v, e);
+        self.vals.push((v, t));
+        self.canon_memo.borrow_mut().clear();
+        Some(R::Inst("letin_eq".into(), vec![("a", ew), ("f", body)]))
+    }
+
+    /// the closed term t with each occurrence of the closed term `x` a
+    /// variable bound at t's top (the body of a binder of one): its shared
+    /// parts visited once
+    fn abstract_sub(&self, t: &Term, x: &Term) -> Term {
+        fn go(g: &Gen, t: &Term, x: &Term, d: u32, memo: &mut std::collections::HashMap<(usize, u32), Term>) -> Term {
+            if t == x {
+                return Term::bvar(d);
+            }
+            let key = (t.node() as *const Node as usize, d);
+            if let Some(r) = memo.get(&key) {
+                return r.clone();
+            }
+            let r = match t.node() {
+                Node::App(s, a) if !a.is_empty() => t.with_args(a.iter().enumerate().map(|(i, y)| go(g, y, x, d + g.env.binders_fn()(*s, i), memo)).collect()),
+                Node::Var(_, a) if !a.is_empty() => t.with_args(a.iter().map(|y| go(g, y, x, d, memo)).collect()),
+                _ => t.clone(),
+            };
+            memo.insert(key, r.clone());
+            r
+        }
+        go(self, t, x, 0, &mut std::collections::HashMap::new())
+    }
+
+    /// the fact f about the world as the lemmas state it (`e2`, the
+    /// substituted form) as one about its let form, by `eq_subst` and the
+    /// equation `eq` (`letin(..) = e2`)
+    fn world_conv(&mut self, f: Seq, eq: &R) -> Result<Seq, String> {
+        let eqs = self.run(eq, &[])?;
+        let x = self.app(eqs.concl(), "eq", 2).ok_or("world_conv: not an equation")?.to_vec();
+        let (e_let, e2) = (x[0].clone(), x[1].clone());
+        let pl = self.abstract_sub(f.concl(), &e2);
+        let back = self.run(&rec::mp(R::Inst("eq_sym".into(), vec![("a", e_let.clone()), ("b", e2.clone())]), vec![rec::s(&eqs)]), &[])?;
+        self.run(&rec::mp(R::Inst("eq_subst".into(), vec![("a", e2), ("b", e_let), ("p", pl)]), vec![rec::s(&back), rec::s(&f)]), &[])
+    }
+
     /// `t` with its names expanded (to the kernel's terms)
     fn expand(&self, t: &Term) -> Term {
         match t.node() {

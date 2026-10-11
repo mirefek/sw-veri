@@ -77,11 +77,16 @@ impl<'e> Gen<'e> {
         let bytes = self.mk("app", vec![vm.clone(), Term::bytes(b"bytes")]);
         let stored = self.mk("x86_64_linux.store_le", vec![bytes, so.addr.clone(), lit(n), so.v.clone()]);
         let w2term = self.mk("fn_update", vec![w.clone(), Term::bytes(b"vm"), self.mk("fn_update", vec![vm, Term::bytes(b"bytes"), stored])]);
-        self.push_val(Self::var_id(&w2), w2term);
+        // (the world before bound once in its term, a let)
+        let weq = self.push_world(Self::var_id(&w2), w2term, &w);
         let hw2 = self.run(
             &R::Apply(Box::new(f("tr.world_store")), vec![t(&w), t(&so.addr), t(&lit(n)), t(&so.v), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), simp_l()]),
             &[],
         )?;
+        let hw2 = match &weq {
+            Some(eq) => self.world_conv(hw2, eq)?,
+            None => hw2,
+        };
         let w2u = self.mk("in", vec![w2.clone(), self.mk("univ", vec![lit(1)])]);
         let hv2 = self.evp(&RP::Taut(vec![R::S(hw2.clone())]), &w2u, &[])?;
         // the store's run: ok, to the world after
@@ -141,6 +146,14 @@ impl<'e> Gen<'e> {
                 &format!("tr.st{}_at_ok", 8 * n),
                 vec![t(&w), t(&so.p), t(&so.off), t(&so.v), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(&hc)],
             ),
+        };
+        // (the store's run to the world as its lemma states it: to the let)
+        let st8ok = match &weq {
+            Some(eq) => {
+                let ok = self.run(&st8ok, &[])?;
+                R::S(self.world_conv(ok, eq)?)
+            }
+            None => st8ok,
         };
         let okp = match &so.helper {
             None => p(st8ok),

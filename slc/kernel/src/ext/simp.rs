@@ -2036,11 +2036,6 @@ impl<'a> Simp<'a> {
 
     fn prop(&self, t: &Term, pol: Pol) -> Term {
         let r = self.prop_(t, pol);
-        if self.let_env.borrow().is_empty() {
-            return r;
-        }
-        // (an atom mentioning a let's constant: with its value, if the atom
-        // is then decided or a rule fires)
         let s = &self.s;
         let atom = match r.node() {
             Node::App(f, _) => ![s.and, s.or, s.not].iter().any(|g| is(*f, *g)) && *f != s.ex && *f != s.all && *f != self.env.builtins.imp && !is(*f, s.letin),
@@ -2049,6 +2044,21 @@ impl<'a> Simp<'a> {
         if !atom {
             return r;
         }
+        // (an atom with a let kept in it: with its lets reduced, if the atom
+        // is then decided -- a local expansion for a decision)
+        if s.letin.is_some_and(|l| has_sym(self.env, &r, l)) && !LET_EAGER.with(|e| e.get()) {
+            let prev = LET_EAGER.with(|e| e.replace(true));
+            let r2 = self.prop_(&r, pol);
+            LET_EAGER.with(|e| e.set(prev));
+            if self.is_true(&r2) || self.is_false(&r2) {
+                return r2;
+            }
+        }
+        if self.let_env.borrow().is_empty() {
+            return r;
+        }
+        // (an atom mentioning a let's constant: with its value, if the atom
+        // is then decided or a rule fires)
         let env = self.let_env.borrow().clone();
         let bf = self.env.binders_fn();
         let mut formed = r.clone();
@@ -3152,6 +3162,24 @@ thread_local! {
 /// the local constants of the lets simp is in (above any variable of a
 /// goal, below the paths' fresh ones)
 const LET_FRESH0: u32 = 3_000_000_000;
+
+/// whether the symbol f occurs in t (its shared parts looked at once)
+fn has_sym(env: &Env, t: &Term, f: SymId) -> bool {
+    fn go(t: &Term, f: SymId, seen: &mut std::collections::HashSet<usize>) -> bool {
+        let Node::App(g, a) = t.node() else {
+            return matches!(t.node(), Node::Var(_, a) if a.iter().any(|x| go(x, f, seen)));
+        };
+        if *g == f {
+            return true;
+        }
+        if a.is_empty() || !seen.insert(t.node() as *const Node as usize) {
+            return false;
+        }
+        a.iter().any(|x| go(x, f, seen))
+    }
+    let _ = env;
+    go(t, f, &mut std::collections::HashSet::new())
+}
 
 /// the occurrences of the variable c in t, up to cap
 fn var_uses(t: &Term, c: crate::term::VarId, cap: usize) -> usize {

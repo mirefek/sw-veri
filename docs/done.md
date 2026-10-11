@@ -201,6 +201,13 @@ item is a short summary of finished work; details are in the files named.
   a literal local too (a loop's counter starting at 0, a flag) -- and
   leaves a home whose locals' scopes have ended out of a join's claim.
   Untrusted guidance: the kernel checks every step.
+- **Worlds as lets in C1**: the world after a store is the kernel term
+  `letin(W, x. body)`, the world before bound once (copied into the new
+  world and the stored value that read it, it grew about 4-fold per
+  store: 3e8 tree nodes for a DAG of 146 in `__malloc_alloc_meta`, and
+  definitional unfolding walks the tree). The store lemmas' facts are
+  moved to that form by `letin_eq` and `eq_subst`. The world's tree now
+  stays at ~3e3 nodes, the slowest step under 0.4 s.
 - **Bitfield stores** (GIMPLE's `stbf`, a read-modify-write: at bit 0 of a
   byte so far): the machine reads the byte (a pending store's
   write-definedness lets it, `tr.reads_wr`), merges, stores

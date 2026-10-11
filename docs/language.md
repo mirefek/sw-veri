@@ -674,7 +674,10 @@ excludes the registered ones).
   a key, ..), or an atom mentioning it, is tried with the value there and
   kept so if a rule fires. Then the let stays if the variable is still
   used twice or more (a large value used many times is not copied), is
-  substituted if once, dropped if not. A goal that attempt leaves open is
+  substituted if once, dropped if not. An atom with a let kept in it is
+  tried once more with its lets reduced, kept so if that decides it (an
+  equation between a let-bound world and its substituted form). A goal
+  that attempt leaves open is
   tried again with every let reduced (`SIMP_LET_TRACE=1` reports when
   that was needed: once in the whole chain, a let inside an arithmetic
   term that only the closing arithmetic needs).
