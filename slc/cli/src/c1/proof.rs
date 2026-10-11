@@ -734,6 +734,80 @@ impl<'e> Gen<'e> {
         )
     }
 
+    /// An equation by arith over the definitions defs, its sides' largest
+    /// common parts made variables first (in omega: shown of them by simp)
+    /// -- their insides arith need not unfold; as it is when there are none,
+    /// or that fails
+    pub(super) fn arith_gen(&mut self, goal: &Term, defs: &[&str]) -> Result<Seq, String> {
+        let ds: Vec<String> = defs.iter().map(|d| d.to_string()).collect();
+        let plain = |g: &mut Gen| g.evp(&RP::Defs(Box::new(RP::Arith(vec![])), ds.clone()), goal, &[]);
+        let ge = self.expand(goal);
+        let Some(x) = self.app(&ge, "eq", 2).map(|x| x.to_vec()) else { return plain(self) };
+        let mut rset = std::collections::HashSet::new();
+        fn all(t: &Term, out: &mut std::collections::HashSet<Term>) {
+            if let Node::App(_, a) | Node::Var(_, a) = t.node() {
+                if out.insert(t.clone()) {
+                    a.iter().for_each(|y| all(y, out));
+                }
+            }
+        }
+        all(&x[1], &mut rset);
+        let mut commons: Vec<Term> = Vec::new();
+        fn find(t: &Term, top: bool, rs: &std::collections::HashSet<Term>, out: &mut Vec<Term>) {
+            let Node::App(_, a) = t.node() else { return };
+            if a.is_empty() {
+                return;
+            }
+            if !top && rs.contains(t) {
+                if !out.contains(t) {
+                    out.push(t.clone());
+                }
+                return;
+            }
+            a.iter().for_each(|y| find(y, false, rs, out));
+        }
+        find(&x[0], true, &rset, &mut commons);
+        // (not a constant: its value arith reads)
+        commons.retain(|c| {
+            let mut vs = Vec::new();
+            c.vars(&mut vs);
+            *c != x[1] && !vs.is_empty()
+        });
+        if commons.is_empty() {
+            return plain(self);
+        }
+        let n = self.fresh("");
+        let vars: Vec<Term> = (0..commons.len()).map(|i| self.var(&format!("AX{n}_{i}"))).collect();
+        let map: std::collections::HashMap<Term, Term> = commons.iter().cloned().zip(vars.iter().cloned()).collect();
+        fn repl(t: &Term, m: &std::collections::HashMap<Term, Term>) -> Term {
+            if let Some(v) = m.get(t) {
+                return v.clone();
+            }
+            match t.node() {
+                Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => t.with_args(a.iter().map(|y| repl(y, m)).collect()),
+                _ => t.clone(),
+            }
+        }
+        let g2 = repl(&ge, &map);
+        let omega = self.mk("omega", vec![]);
+        let hs: Vec<Term> = vars.iter().map(|v| self.mk("in", vec![v.clone(), omega.clone()])).collect();
+        let res = (|| -> Result<Seq, String> {
+            let hseqs: Vec<R> = hs.iter().map(|h| self.assume(h).map(R::S)).collect::<Result<_, _>>()?;
+            let pf = self.evp(&RP::Defs(Box::new(RP::Arith(hseqs)), ds.clone()), &g2, &[])?;
+            let closed = self.close(pf, &hs, &vars.iter().map(Self::var_id).collect::<Vec<_>>())?;
+            let mut args: Vec<RA> = commons.iter().map(t).collect();
+            args.extend(commons.iter().map(|_| simp_l()));
+            self.run(&mp(R::S(closed), args), &[])
+        })();
+        match res {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                self.trace(|| format!("arith_gen: {}", e));
+                plain(self)
+            }
+        }
+    }
+
     /// The rest after a loop's exit (st's spec the rest jk): the exit's
     /// world in it (the body's outcome's) as the rest's start world
     /// (tr.q_from)

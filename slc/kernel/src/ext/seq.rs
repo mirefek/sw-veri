@@ -240,10 +240,9 @@ impl Seq {
     pub fn inst(env: &Env, s: &Seq, v: VarId, value: &Term) -> KResult<Seq> {
         let arity = env.vars.get(v as usize).ok_or_else(|| KernelError("unknown variable".into()))?.arity;
         env.check_wf(value, arity)?;
-        let b = env.binders_fn();
         Ok(Seq {
-            hyps: s.hyps.iter().map(|h| h.subst_var(v, value, &b)).collect(),
-            concl: s.concl.subst_var(v, value, &b),
+            hyps: s.hyps.iter().map(|h| env.subst_var_m(h, v, value)).collect(),
+            concl: env.subst_var_m(&s.concl, v, value),
             open: s.open.clone(),
         })
     }
@@ -276,7 +275,7 @@ impl Seq {
             Node::App(a, args) if *a == lg.all => &args[0],
             _ => return err(format!("not a universal statement: {}", Printer::new(env).term(&s.concl))),
         };
-        let inst = body.instantiate_params(std::slice::from_ref(t), &env.binders_fn());
+        let inst = env.instantiate_params_m(body, std::slice::from_ref(t));
         Ok(Seq { hyps: s.hyps.clone(), concl: inst, open: s.open.clone() })
     }
 

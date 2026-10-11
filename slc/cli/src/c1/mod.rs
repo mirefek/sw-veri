@@ -144,6 +144,8 @@ struct LoopG {
     hy: Seq,
 }
 
+pub(super) use sl_kernel::prof;
+
 /// The flags a compare sets (proofs/translate_flags.core): of `cmp a, b`
 /// at a width (x86i.subf), of a test's result (x86i.logf)
 enum Flags {
@@ -191,6 +193,16 @@ struct Gen<'e> {
     /// (their expansions; the values' names by their expansions, for canon)
     vexp: std::collections::HashMap<VarId, Term>,
     val_of: std::collections::HashMap<Term, VarId>,
+    /// (memo tables: a term's expansion -- for good, a value's name being
+    /// new to the terms before it; a term's canonical form -- until a value
+    /// is named)
+    exp_memo: std::cell::RefCell<std::collections::HashMap<Term, Term>>,
+    canon_memo: std::cell::RefCell<std::collections::HashMap<Term, Term>>,
+    /// (the subterms searched for a redex -- at a depth --, an equation of
+    /// a term with itself, a whole field: none there, for good)
+    no_redex: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
+    no_refl: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
+    no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
     zs: Vec<VarId>,
     qs: Vec<Term>,
     insns: BTreeMap<u128, Insn>,
@@ -427,6 +439,7 @@ impl<'e> Gen<'e> {
     /// `t` under the binders `ctx` (outermost first) as a value of the
     /// parameters `params`; None if it uses a binder that is not one
     fn lam(&self, t: &Term, ctx: &[&str], params: &[&str]) -> Option<Term> {
+        let _p = prof::g("lam");
         let (c, p) = (ctx.len() as u32, params.len() as u32);
         self.remap(t, 0, &|i| {
             if i >= c {
@@ -448,6 +461,7 @@ impl<'e> Gen<'e> {
         }
         self.vexp.insert(v, e);
         self.vals.push((v, t));
+        self.canon_memo.borrow_mut().clear();
     }
 
     /// `t` with its names expanded (to the kernel's terms)
@@ -457,8 +471,14 @@ impl<'e> Gen<'e> {
                 Some(e) => e.clone(),
                 None => t.clone(),
             },
-            Node::App(_, a) if !a.is_empty() => t.with_args(a.iter().map(|x| self.expand(x)).collect()),
-            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.expand(x)).collect()),
+            Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => {
+                if let Some(e) = self.exp_memo.borrow().get(t) {
+                    return e.clone();
+                }
+                let e = t.with_args(a.iter().map(|x| self.expand(x)).collect());
+                self.exp_memo.borrow_mut().insert(t.clone(), e.clone());
+                e
+            }
             _ => t.clone(),
         }
     }
@@ -493,6 +513,7 @@ impl<'e> Gen<'e> {
     /// `t` with each subterm that is a named value replaced by its name
     /// (compared expanded: a value named before its parts were)
     fn canon(&self, t: &Term) -> Term {
+        let _p = prof::g("canon");
         self.canon_in(&self.expand(t))
     }
 
@@ -506,7 +527,14 @@ impl<'e> Gen<'e> {
             return Term::var(*v, vec![]);
         }
         match t.node() {
-            Node::App(_, a) if !a.is_empty() => t.with_args(a.iter().map(|x| self.canon_in(x)).collect()),
+            Node::App(_, a) if !a.is_empty() => {
+                if let Some(c) = self.canon_memo.borrow().get(t) {
+                    return c.clone();
+                }
+                let c = t.with_args(a.iter().map(|x| self.canon_in(x)).collect());
+                self.canon_memo.borrow_mut().insert(t.clone(), c.clone());
+                c
+            }
             _ => t.clone(),
         }
     }
@@ -514,6 +542,7 @@ impl<'e> Gen<'e> {
     /// A value's name (a new one for a new value); literals, constants and
     /// names stand for themselves.
     fn value(&mut self, t: &Term) -> Term {
+        let _p = prof::g("value");
         let t = self.canon(t);
         match t.node() {
             Node::Nat(_) | Node::Var(..) => return t,

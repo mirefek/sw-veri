@@ -26,8 +26,8 @@ call graph.
   `___errno_location`.
 - C1 of nested loops (the inner loop's iterations arriving at the outer
   head); bitfield stores off bit 0 or wider than a byte.
-- The C1 walk's speed: try_avail takes about 8 minutes (its loop's
-  iteration and the spec's reductions).
+- The C1 walk joins paths before a loop (try_avail's loop is walked once
+  per path reaching it: six times).
 
 ## 2. The invariant and the laws
 

@@ -27,6 +27,12 @@ pub struct Term(Rc<Inner>);
 #[derive(Debug)]
 struct Inner {
     node: Node,
+    /// the node's hash, computed once (its children's are theirs): equal
+    /// terms hash alike, unequal hashes are unequal terms
+    hash: u64,
+    /// the variables in it, as bits v mod 64 (none set: no variable v in
+    /// it -- a substitution or a search for variables skips it)
+    vbits: u64,
     label: Option<Rc<str>>,
     /// (metadata too) the name written at an `all`/`ex` binder, for
     /// instantiating it by name
@@ -35,7 +41,7 @@ struct Inner {
 
 impl PartialEq for Term {
     fn eq(&self, other: &Term) -> bool {
-        Rc::ptr_eq(&self.0, &other.0) || self.0.node == other.0.node
+        Rc::ptr_eq(&self.0, &other.0) || (self.0.hash == other.0.hash && self.0.node == other.0.node)
     }
 }
 
@@ -43,7 +49,7 @@ impl Eq for Term {}
 
 impl std::hash::Hash for Term {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.node.hash(state)
+        state.write_u64(self.0.hash)
     }
 }
 
@@ -58,7 +64,15 @@ pub enum Node {
 
 impl Term {
     fn mk(node: Node) -> Term {
-        Term(Rc::new(Inner { node, label: None, bind: None }))
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        node.hash(&mut h);
+        let vbits = match &node {
+            Node::Var(v, args) => args.iter().fold(1u64 << (v % 64), |b, a| b | a.0.vbits),
+            Node::App(_, args) => args.iter().fold(0, |b, a| b | a.0.vbits),
+            _ => 0,
+        };
+        Term(Rc::new(Inner { node, hash: h.finish(), vbits, label: None, bind: None }))
     }
     pub fn app(s: SymId, args: Vec<Term>) -> Term {
         Term::mk(Node::App(s, args.into_boxed_slice()))
@@ -89,7 +103,7 @@ impl Term {
         if self.0.label == label {
             return self.clone();
         }
-        Term(Rc::new(Inner { node: self.0.node.clone(), label, bind: self.0.bind.clone() }))
+        Term(Rc::new(Inner { node: self.0.node.clone(), hash: self.0.hash, vbits: self.0.vbits, label, bind: self.0.bind.clone() }))
     }
 
     /// The name written at this `all`/`ex` binder (metadata, see `Term`).
@@ -102,7 +116,7 @@ impl Term {
         if self.0.bind == bind {
             return self.clone();
         }
-        Term(Rc::new(Inner { node: self.0.node.clone(), label: self.0.label.clone(), bind }))
+        Term(Rc::new(Inner { node: self.0.node.clone(), hash: self.0.hash, vbits: self.0.vbits, label: self.0.label.clone(), bind }))
     }
 
     /// `self` with `outer`'s label, if it has one (the outer label wins).
@@ -174,6 +188,9 @@ impl Term {
 
     /// Collects schematic variables occurring in the term.
     pub fn vars(&self, out: &mut Vec<VarId>) {
+        if self.0.vbits == 0 {
+            return;
+        }
         match self.node() {
             Node::Var(v, args) => {
                 if !out.contains(v) {
@@ -230,8 +247,17 @@ impl Term {
         }
     }
 
+    /// v possibly in it (false: certainly not)
+    pub fn may_contain_var(&self, v: VarId) -> bool {
+        self.0.vbits & (1u64 << (v % 64)) != 0
+    }
+
     /// Substitutes schematic variable `v` (arity k) by `value` (k parameters).
     pub fn subst_var(&self, v: VarId, value: &Term, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
+        // (no variable v in it: itself)
+        if self.0.vbits & (1u64 << (v % 64)) == 0 {
+            return self.clone();
+        }
         match self.node() {
             Node::Var(w, args) => {
                 let args: Vec<Term> = args.iter().map(|a| a.subst_var(v, value, binders)).collect();

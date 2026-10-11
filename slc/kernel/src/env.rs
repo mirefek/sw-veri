@@ -119,6 +119,12 @@ pub struct Env {
     pub prelude_end: Option<usize>,
     /// the layer definitions with their pinned bodies (`ext::pinned`)
     pub pinned: std::collections::HashSet<SymId>,
+    /// (terms checked well-formed, at a depth: they stay so, the
+    /// environment only growing -- each checked once)
+    wf_ok: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
+    /// (terms' loose depths under this environment's binders, computed
+    /// once)
+    ld_memo: std::cell::RefCell<HashMap<Term, u32>>,
 }
 
 impl Env {
@@ -156,6 +162,8 @@ impl Env {
             bit_rules: Vec::new(),
             prelude_end: None,
             pinned: Default::default(),
+            wf_ok: Default::default(),
+            ld_memo: Default::default(),
             builtins: Builtins {
                 imp: 0,
                 eq: 0,
@@ -213,6 +221,84 @@ impl Env {
     /// Well-formedness: arities of symbols and variables, no loose bound
     /// variables (at the given outer depth).
     pub fn check_wf(&self, t: &Term, depth: u32) -> KResult<()> {
+        let big = matches!(t.node(), Node::App(_, a) | Node::Var(_, a) if !a.is_empty());
+        if big && self.wf_ok.borrow().contains(&(t.clone(), depth)) {
+            return Ok(());
+        }
+        self.check_wf_node(t, depth)?;
+        if big {
+            self.wf_ok.borrow_mut().insert((t.clone(), depth));
+        }
+        Ok(())
+    }
+
+    /// `t.loose_depth(..)` under this environment's binders, each compound
+    /// term's computed once
+    pub fn loose_depth_m(&self, t: &Term) -> u32 {
+        match t.node() {
+            Node::BVar(i) => i + 1,
+            Node::Var(_, a) | Node::App(_, a) if a.is_empty() => 0,
+            Node::Var(_, a) | Node::App(_, a) => {
+                if let Some(d) = self.ld_memo.borrow().get(t) {
+                    return *d;
+                }
+                let d = match t.node() {
+                    Node::App(s, _) => a.iter().enumerate().map(|(i, x)| self.loose_depth_m(x).saturating_sub(self.syms[*s as usize].binders[i])).max().unwrap_or(0),
+                    _ => a.iter().map(|x| self.loose_depth_m(x)).max().unwrap_or(0),
+                };
+                self.ld_memo.borrow_mut().insert(t.clone(), d);
+                d
+            }
+            _ => 0,
+        }
+    }
+
+    /// `t.instantiate_params(args, ..)` (the same term): its parts without
+    /// a parameter kept as they are, a closed argument not shifted
+    pub fn instantiate_params_m(&self, t: &Term, args: &[Term]) -> Term {
+        self.inst_m(t, args, 0)
+    }
+
+    fn inst_m(&self, t: &Term, args: &[Term], depth: u32) -> Term {
+        if self.loose_depth_m(t) <= depth {
+            return t.clone();
+        }
+        let k = args.len() as u32;
+        match t.node() {
+            Node::BVar(i) if *i >= depth => {
+                let a = &args[(k - 1 - (i - depth)) as usize];
+                if self.loose_depth_m(a) == 0 { a.clone().labelled_as(t) } else { a.shift(depth, 0, &self.binders_fn()).labelled_as(t) }
+            }
+            Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
+            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.inst_m(x, args, depth)).collect()),
+            Node::App(s, a) => {
+                let bs = &self.syms[*s as usize].binders;
+                t.with_args(a.iter().enumerate().map(|(i, x)| self.inst_m(x, args, depth + bs[i])).collect())
+            }
+        }
+    }
+
+    /// `t.subst_var(v, value, ..)` (the same term): the value's instances
+    /// as `instantiate_params_m` makes them
+    pub fn subst_var_m(&self, t: &Term, v: VarId, value: &Term) -> Term {
+        if !t.may_contain_var(v) {
+            return t.clone();
+        }
+        match t.node() {
+            Node::Var(w, args) => {
+                let args: Vec<Term> = args.iter().map(|a| self.subst_var_m(a, v, value)).collect();
+                if *w == v {
+                    self.instantiate_params_m(value, &args).labelled_as(t)
+                } else {
+                    t.with_args(args)
+                }
+            }
+            Node::App(_, args) => t.with_args(args.iter().map(|a| self.subst_var_m(a, v, value)).collect()),
+            _ => t.clone(),
+        }
+    }
+
+    fn check_wf_node(&self, t: &Term, depth: u32) -> KResult<()> {
         match t.node() {
             Node::BVar(i) => {
                 if *i >= depth {

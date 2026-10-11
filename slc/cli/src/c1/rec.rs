@@ -147,6 +147,7 @@ impl<'e> Gen<'e> {
         let api = self.api.take().expect("the proving context");
         let g = self.expand(goal);
         let t0 = std::time::Instant::now();
+        let _p = super::prof::g("evp");
         let res = self.g_of(&api, rp, slots).and_then(|g2| api.by(self.env, &g, g2).map_err(|e| e.0));
         self.api = Some(api);
         self.trace(|| format!("by {:.3}s: {}", t0.elapsed().as_secs_f64(), Printer::new(self.env).short(goal)));
@@ -162,21 +163,42 @@ impl<'e> Gen<'e> {
             }
             R::Slot(n) => slots.iter().find(|x| x.0 == *n).map(|x| x.1.clone()).ok_or_else(|| format!("no fact for the slot {}", n)),
             R::Inst(n, binds) => {
+                let _p = super::prof::g("ev inst");
                 let s = api.fact(self.env, n).map_err(|e| e.0)?;
+                // (its breakpoint binders, found in its own statement)
+                let bk: Vec<(VarId, Term)> = if binds.iter().any(|b| b.0 == "bkp") {
+                    Vec::new()
+                } else {
+                    let mut vs = Vec::new();
+                    s.concl().vars(&mut vs);
+                    let by = |nm: &str, t: &Term| vs.iter().find(|v| self.env.vars[**v as usize].name == nm).map(|v| (*v, t.clone()));
+                    by("bkp", &self.bkp).into_iter().chain(by("bka", &self.bka)).collect()
+                };
                 // (the breakpoints last: theirs mention the function's own
                 // variables, s among them)
                 let bs: Vec<(&str, Term)> = binds.iter().map(|(k, v)| (*k, self.expand(v))).collect();
-                let s = api.inst(self.env, s, &bs).map_err(|e| format!("{}: {}", n, e.0))?;
-                if binds.iter().any(|b| b.0 == "bkp") { Ok(s) } else { self.bk_inst(api, s, n) }
+                let s = {
+                    let _p = super::prof::g("inst api");
+                    api.inst(self.env, s, &bs).map_err(|e| format!("{}: {}", n, e.0))?
+                };
+                let _p = super::prof::g("inst bk");
+                let mut s = s;
+                for (v, t) in bk {
+                    let te = self.expand(&t);
+                    s = api.inst_var(self.env, s, v, &te).map_err(|e| format!("{}: {}", n, e.0))?;
+                }
+                Ok(s)
             }
             R::Mp(h, args) => {
                 let s = self.ev_in(api, h, slots)?;
                 let a = self.args_of(api, args, slots)?;
+                let _p = super::prof::g("ev mp");
                 api.mp(self.env, s, a).map_err(|e| format!("{}: {}", self.head_name(h), e.0))
             }
             R::Apply(h, args) => {
                 let s = self.ev_in(api, h, slots)?;
                 let a = self.args_of(api, args, slots)?;
+                let _p = super::prof::g("ev apply");
                 api.apply(self.env, s, a, None).map_err(|e| format!("{}: {}", self.head_name(h), e.0))
             }
             R::Expand(h, names) => {

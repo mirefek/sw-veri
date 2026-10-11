@@ -1771,11 +1771,7 @@ impl<'e> Gen<'e> {
         // bits the spec's, by arith modulo 2^k)
         let fm = self.bf_field(&self.expand(u), k).unwrap_or_else(|| fv.clone());
         let mk_mod = |g: &Gen, x: &Term| g.mk("int_mod", vec![x.clone(), g.mk("pow2", vec![k.clone()])]);
-        let hm = self.evp(
-            &RP::Defs(Box::new(RP::Arith(vec![])), ["bits_add", "bits_of_int", "bits_neg", "pow2"].iter().map(|x| x.to_string()).collect()),
-            &self.mk("eq", vec![mk_mod(self, fv), mk_mod(self, &fm)]),
-            &[],
-        )?;
+        let hm = self.arith_gen(&self.mk("eq", vec![mk_mod(self, fv), mk_mod(self, &fm)]), &["bits_add", "bits_of_int", "bits_neg", "pow2"])?;
         let field = self.mk("int_mul", vec![self.mk("int_mod", vec![fm.clone(), pk]), lit(1)]);
         let low = self.mk("bits_slice", vec![u.clone(), lit(7), lit(0)]);
         let rhs = self.mk("int_add", vec![hi, field]);

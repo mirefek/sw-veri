@@ -102,13 +102,29 @@ impl Api {
         for a in args {
             match a {
                 A::T(t) => {
+                    let _p = sl_kernel::prof::g("mp all_elim");
                     s = head_to(env, s, |t| matches!(t.node(), Node::App(e, _) if *e == lg.all))?;
                     s = Seq::all_elim(env, lg, &s, &t)?;
                 }
-                A::G(G::By(x)) => s = mp_u(env, &s, &x)?,
+                A::G(G::By(x)) => {
+                    let _p = sl_kernel::prof::g("mp premise");
+                    s = mp_u(env, &s, &x)?
+                }
                 A::G(g) => {
+                    let kind = match &g {
+                        G::Simp(..) => "mp by simp",
+                        G::Taut(..) => "mp by taut",
+                        G::Arith(..) => "mp by arith",
+                        G::Defs(..) => "mp by defs",
+                        G::Apply(..) | G::Mp(..) => "mp by mp",
+                        _ => "mp by other",
+                    };
                     let (prem, _) = imp_parts(env, s.concl())?;
-                    let x = self.by(env, &prem, g)?;
+                    let x = {
+                        let _p = sl_kernel::prof::g(kind);
+                        self.by(env, &prem, g)?
+                    };
+                    let _p = sl_kernel::prof::g("mp premise");
                     s = mp_u(env, &s, &x)?;
                 }
             }
@@ -150,6 +166,11 @@ impl Api {
             s = self.inst_bound_terms(env, s, &bound)?;
         }
         Ok(s)
+    }
+
+    /// the variable v instantiated by value (a variable found before)
+    pub fn inst_var(&self, env: &mut Env, s: Seq, v: VarId, value: &Term) -> KResult<Seq> {
+        Seq::inst(env, &s, v, value)
     }
 
     /// leading `all` binders instantiated by name (the ones before kept

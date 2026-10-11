@@ -64,6 +64,14 @@ item is a short summary of finished work; details are in the files named.
   shifts, `and` / `or` / `xor` / `not` bit by bit, the complement, `x - 1`
   and `-x` around the lowest set bit, bit extensionality. For loops, `while_inv`, `while_var` and
   `while_exists` are proven by induction, with no open lemmas.
+- **Speed of the kernel and the C1 engine** (try_avail's C1 from 433 s to
+  26 s): terms cache their hash and which variables occur in them; the
+  kernel checks a term's well-formedness once and instantiates (`all`
+  elimination, a variable's substitution) past the parts without the
+  parameters, by loose depths computed once per term; the engine
+  memoizes expansions, canonical forms and the searches of a spec's rest,
+  and abstracts each subterm once. `C1_PROF=1` prints the engine's and the
+  kernel's time per part.
 - **Codebase review**: the extensions' soundness holes closed
   (arith overflow and widths, simp's matching and literal substitution,
   names read by meaning: pinned prelude, definitions and loop lemmas),

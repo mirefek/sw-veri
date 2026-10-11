@@ -159,7 +159,11 @@ pub fn kernel_check(args: &[String]) -> CResult {
             }
             None => {
                 let rep = syntax::load_with(&mut env, &src, first, Some(&mut prover)).map_err(|e| format!("{}: {}", f.display(), e))?;
+                let t1 = std::time::Instant::now();
                 let stmts = statements(&env, &src, &rep);
+                if std::env::var("C1_PROF").is_ok() {
+                    eprintln!("prof {}: loaded {:.1}s, statements {:.1}s ({} bytes)", f.display(), (t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64(), stmts.len());
+                }
                 if let Some(c) = &cache {
                     c.store(f, &src, &prefix, first, &stmts);
                 }

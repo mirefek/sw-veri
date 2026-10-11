@@ -3,6 +3,7 @@
 pub mod env;
 pub mod ext;
 pub mod nat;
+pub mod prof;
 pub mod syntax;
 pub mod term;
 

@@ -38,6 +38,8 @@ fn decode_fact(env: &Env, name: &str, t: &Term) -> Option<(u128, Insn)> {
 /// The C1 theorems of the function `fname` (its decode facts `fname.at_*`)
 /// against the spec `spec_name` (a `_fun` wrapper), named `prefix.*`.
 pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<Vec<(String, Seq)>, String> {
+    let _rep = super::prof::Rep(fname.to_string());
+    let _p = super::prof::g("c1");
     // the decode facts
     let mut insns: BTreeMap<u128, Insn> = BTreeMap::new();
     let pre = format!("{}.at_", fname);
@@ -79,6 +81,11 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         names: Vec::new(),
         vals: Vec::new(),
         vexp: Default::default(),
+        exp_memo: Default::default(),
+        canon_memo: Default::default(),
+        no_redex: Default::default(),
+        no_refl: Default::default(),
+        no_field: Default::default(),
         val_of: Default::default(),
         zs: Vec::new(),
         qs: Vec::new(),

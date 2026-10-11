@@ -8,6 +8,7 @@ impl<'e> Gen<'e> {
     /// A rule's instance by its parameters' names (a sequent), its
     /// statement.
     pub(super) fn inst(&mut self, lemma: &str, args: &[(&'static str, Term)]) -> Result<(R, Term), String> {
+        let _p = super::prof::g("spec inst");
         let r = R::Inst(lemma.to_string(), args.to_vec());
         let s = self.ev(&r, &[])?;
         let stmt = s.concl().clone();
@@ -39,6 +40,7 @@ impl<'e> Gen<'e> {
     /// The reduction by `lemma` at `args` of the rest `qi`: the reduced
     /// rest (checked: the instance's rest is `qi`'s), the instance
     pub(super) fn by(&mut self, qi: usize, lemma: &str, args: &[(&'static str, Term)]) -> Result<(usize, R), String> {
+        let _p = super::prof::g("spec by");
         let (r, stmt) = self.inst(lemma, args)?;
         let (q, q2) = self.qparts(&stmt).ok_or_else(|| format!("{}: not a reduction", lemma))?;
         let (q, q2) = (self.canon(&q), self.canon(&q2));
@@ -122,6 +124,7 @@ impl<'e> Gen<'e> {
 
     /// the way to a disjunct whose guard holds
     fn pick(&self, t: &Term, hyps: &[(Term, Seq)]) -> Option<Vec<Pick>> {
+        let _p = super::prof::g("pick");
         if let Some(a) = self.app(t, "and", 2) {
             if a[0].loose_depth(&self.env.binders_fn()) == 0 {
                 if let Some((true, pf)) = self.guard(&a[0], hyps) {
@@ -164,6 +167,18 @@ impl<'e> Gen<'e> {
     /// A projection of a constructed outcome (or pair) in the rest's body
     /// (of x0 only): its lemma, and its parts (at the body)
     fn redex(&self, t: &Term, depth: u32) -> Option<(&'static str, Term, Term, Term)> {
+        let _p = super::prof::g("redex");
+        if self.no_redex.borrow().contains(&(t.clone(), depth)) {
+            return None;
+        }
+        let r = self.redex_in(t, depth);
+        if r.is_none() && matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
+            self.no_redex.borrow_mut().insert((t.clone(), depth));
+        }
+        r
+    }
+
+    fn redex_in(&self, t: &Term, depth: u32) -> Option<(&'static str, Term, Term, Term)> {
         let kinds: [(&str, &str, &'static str); 8] = [
             ("fst", "ok", "tr.qe_fst_ok"),
             ("fst", "exc", "tr.qe_fst_exc"),
@@ -199,6 +214,17 @@ impl<'e> Gen<'e> {
     /// An equation of a term (of x0 only) with itself in the rest's body:
     /// it, its side (at the body)
     fn refl_redex(&self, t: &Term, depth: u32) -> Option<(Term, Term)> {
+        if self.no_refl.borrow().contains(&(t.clone(), depth)) {
+            return None;
+        }
+        let r = self.refl_redex_in(t, depth);
+        if r.is_none() && matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
+            self.no_refl.borrow_mut().insert((t.clone(), depth));
+        }
+        r
+    }
+
+    fn refl_redex_in(&self, t: &Term, depth: u32) -> Option<(Term, Term)> {
         let lift = |x: &Term| self.remap(x, 0, &|j| (j == depth + 1).then_some(1));
         if let Some(e) = self.app(t, "eq", 2) {
             if e[0] == e[1] {
@@ -221,6 +247,18 @@ impl<'e> Gen<'e> {
     /// `bits_of_int(n, x)` (closed) with x a whole n-bit field
     /// (`int_mod(int_div(b, int_pow(2, 0)), int_pow(2, n))`): it, n, b
     fn whole_field(&self, t: &Term) -> Option<(Term, u128, Term)> {
+        let _p = super::prof::g("whole_field");
+        if self.no_field.borrow().contains(t) {
+            return None;
+        }
+        let r = self.whole_field_in(t);
+        if r.is_none() && matches!(t.node(), Node::App(_, a) if !a.is_empty()) {
+            self.no_field.borrow_mut().insert(t.clone());
+        }
+        r
+    }
+
+    fn whole_field_in(&self, t: &Term) -> Option<(Term, u128, Term)> {
         if let Some(a) = self.app(t, "bits_of_int", 2) {
             if let Some(n) = nat(&a[0]) {
                 if [8, 16, 32, 64].contains(&n) && t.loose_depth(&self.env.binders_fn()) == 0 {
@@ -260,19 +298,36 @@ impl<'e> Gen<'e> {
     }
 
     pub(super) fn abstract_(&self, t: &Term, r: &Term, depth: u32) -> Term {
-        let bf = self.env.binders_fn();
-        if *t == r.shift(depth, 0, &bf) {
-            return Term::bvar(depth);
-        }
-        match t.node() {
-            Node::BVar(i) if *i >= depth => Term::bvar(i + 1),
-            Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
-            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.abstract_(x, r, depth)).collect()),
-            Node::App(s, a) => {
-                let bs = self.env.syms[*s as usize].binders.clone();
-                t.with_args(a.iter().zip(bs).map(|(x, k)| self.abstract_(x, r, depth + k)).collect())
+        let _p = super::prof::g("abstract_");
+        // (r at each depth, shifted once; each shared part done once)
+        type M = std::collections::HashMap<(Term, u32), Term>;
+        fn go(g: &Gen, t: &Term, r: &Term, d: u32, sh: &mut std::collections::HashMap<u32, Term>, memo: &mut M) -> Term {
+            let bf = g.env.binders_fn();
+            let rd = sh.entry(d).or_insert_with(|| r.shift(d, 0, &bf)).clone();
+            if *t == rd {
+                return Term::bvar(d);
             }
+            let compound = matches!(t.node(), Node::App(_, a) | Node::Var(_, a) if !a.is_empty());
+            if compound {
+                if let Some(x) = memo.get(&(t.clone(), d)) {
+                    return x.clone();
+                }
+            }
+            let out = match t.node() {
+                Node::BVar(i) if *i >= d => Term::bvar(i + 1),
+                Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
+                Node::Var(_, a) => t.with_args(a.iter().map(|x| go(g, x, r, d, sh, memo)).collect()),
+                Node::App(s, a) => {
+                    let bs = g.env.syms[*s as usize].binders.clone();
+                    t.with_args(a.iter().zip(bs).map(|(x, k)| go(g, x, r, d + k, sh, memo)).collect())
+                }
+            };
+            if compound {
+                memo.insert((t.clone(), d), out.clone());
+            }
+            out
         }
+        go(self, t, r, depth, &mut Default::default(), &mut M::new())
     }
 
     /// the signed type of n bits
@@ -311,6 +366,7 @@ impl<'e> Gen<'e> {
     /// defined), its value, its run's justification (`HC`), its raise's
     /// (`HN`).
     pub(super) fn op(&mut self, op: &Term) -> Result<(Option<Term>, Term, RA, Option<RA>), String> {
+        let _p = super::prof::g("op");
         let hc = || p(R::Slot("HC"));
         if let Some(x) = self.app(op, "gimple.sadd", 3) {
             if nat(&x[0]) == Some(32) {
@@ -590,6 +646,7 @@ impl<'e> Gen<'e> {
     /// or a helper's call whose body is one (`mkprog(x0 x1. bind_rel(st8(..),
     /// x0, x2 x3. x1 = ok(x2, empty), ..))`)
     pub(super) fn store_op(&mut self, op: &Term) -> Result<Option<StoreOp>, String> {
+        let _p = super::prof::g("store_op");
         // a compare-and-swap: a 4-byte store at p (of s if the old dword D is
         // t, else of D), D its result
         if let Some(x) = self.app(op, "gimple.cas32", 3) {
@@ -827,6 +884,7 @@ impl<'e> Gen<'e> {
 
     /// One reduction of the rest `qi` (None: the head waits for the machine).
     pub(super) fn reduce(&mut self, qi: usize, hyps: &[(Term, Seq)]) -> Result<Option<Red>, String> {
+        let _p = super::prof::g("reduce");
         let q = self.qs[qi].clone();
         let w = self.w.clone();
         // a procedure's definition: its body (`all o. runs(B, W, o) ->
