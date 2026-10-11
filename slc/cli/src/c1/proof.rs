@@ -905,6 +905,12 @@ impl<'e> Gen<'e> {
         self.is_loop_test(a) && self.insns.get(&a).is_some_and(|i| i.row == 60 && self.pairs(&i.fields, 5).is_some_and(|x| self.rsp_mem(&x[2]).is_some()))
     }
 
+    /// the local whose home is the key c at the address a (the location
+    /// map; the innermost scope)
+    pub(super) fn local_at(&self, c: u128, a: u128) -> Option<usize> {
+        self.locmap.iter().filter(|e| e.1 == c && e.2 <= a && a < e.3).min_by_key(|e| e.3 - e.2).map(|e| e.0)
+    }
+
     /// The homes at st as a function of the locals y (the variable yv; the
     /// locals' values now y0): a home holding a local's value -- the same
     /// term, or one the facts make equal (the code's form of the spec's
@@ -931,6 +937,16 @@ impl<'e> Gen<'e> {
         for (c, (nb, x)) in &st.hsm {
             let xc = self.canon(x);
             let mut v = x.clone();
+            // (the local the location map has there: holding its value; else
+            // the home as it is -- not another local of the same value)
+            if let Some(i) = self.local_at(*c, st.a).filter(|&i| i < comps.len()) {
+                let ci = &comps[i];
+                if self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok() {
+                    v = proj(self, i);
+                }
+                hsm_y.insert(*c, (*nb, v));
+                continue;
+            }
             for (i, ci) in comps.iter().enumerate() {
                 if nat(ci).is_some() {
                     continue;

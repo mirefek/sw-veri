@@ -277,6 +277,10 @@ struct Gen<'e> {
     hus: Vec<Seq>,
     /// the variables made before the walk (the function's fixed ones)
     vmark0: usize,
+    /// the locals' homes (scripts/locmap.py, the -O0 build's DWARF): the
+    /// local's position in the locals, its home's key, the addresses
+    /// where it lives there
+    locmap: Vec<(usize, u128, u128, u128)>,
     /// the facts the last reduction's guard was decided by; the point's
     /// spent branch conditions (St::spent)
     picked: std::cell::RefCell<Vec<Term>>,

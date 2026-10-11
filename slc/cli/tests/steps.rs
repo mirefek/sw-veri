@@ -158,8 +158,12 @@ fn c1_engine_checks() {
             .iter()
             .map(|f| f.into()),
     );
-    // (the program text: the code every contract assumes loaded)
+    // (the program text: the code every contract assumes loaded; the
+    // locals' homes, scripts/locmap.py, if made: the C1 engine's guide)
     files.push(text.clone().into());
+    if root.join("build/locmap_O0.core").exists() {
+        files.push("build/locmap_O0.core".into());
+    }
     // and the callers linked with their callees (proofs/mallocng_link.core)
     // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl;
     // the memory rules' views and frames, proofs/mallocng_mem.core; the bit

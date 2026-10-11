@@ -15,9 +15,8 @@ call graph.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- C1 of `alloc_group` (its decode facts made; next: a load from a base
-  and an index register, `mov rax, [rdx + rax]`, at the address the spec
-  computes otherwise; then bitfield stores off bit 0).
+- C1 of `alloc_group` (walked to its first bitfield store off bit 0:
+  `stbf(p, 33, 7, 4, 52, v)`; next those, then the rest of its code).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
@@ -68,11 +67,9 @@ from the proof writer's side. Taken up in batches between functions.
   - the function's end, where an early return's path (spec
     `exc(.., "ret")`) and the normal one (`ok(..)`) meet: a claim whose
     spec covers both outcomes, and that carries rax;
-  - a block's end where the paths' locals differ in a literal (a flag
-    set to 0 on one path, 1 on another): a claim keeps literal locals
-    literal, so each combination has its own (__malloc_alloc_meta: 13
-    claims at one point, 8.6k points walked). Generalizing them needs the
-    home of each local: a location map, from the -O0 build's DWARF.
+  - a block's end where a local without a home in the location map (a
+    GIMPLE temporary) holds a literal that differs between paths: a claim
+    keeps it literal, so each value has its own.
 
 ## Later
 

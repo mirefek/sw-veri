@@ -56,7 +56,10 @@ impl<'e> Gen<'e> {
     fn guard(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
         let (v, facts) = match self.guard_facts(g, hyps) {
             Some(x) => x,
-            None => self.guard_arith(g, hyps)?,
+            None => {
+                let r = self.guard_arith(g, hyps);
+                r?
+            }
         };
         // (the facts it was decided by: a branch condition among them spent)
         if v {
@@ -82,28 +85,50 @@ impl<'e> Gen<'e> {
             }
             (neg, e)
         };
-        let (neg, e) = strip(self, g);
-        let x = self.app(&e, "eq", 2)?.to_vec();
         if g.loose_depth(&self.env.binders_fn()) > 0 {
             return None;
         }
+        let (neg, e) = strip(self, g);
+        // (the guard's comparison: an equation or an order)
+        let ops = ["eq", "int_lt", "int_le"];
+        let (op, x) = ops.iter().find_map(|o| self.app(&e, o, 2).map(|x| (*o, x.to_vec())))?;
         let (x0, x1) = (self.expand(&x[0]), self.expand(&x[1]));
-        for (h, hs) in hyps {
+        // (the latest facts first: a branch just taken)
+        for (h, hs) in hyps.iter().rev() {
             let (hneg, he2) = strip(self, &self.expand(h));
-            let Some(y) = self.app(&he2, "eq", 2).map(|y| y.to_vec()) else { continue };
-            // (one side the same, the other equal by arithmetic)
-            let other = if y[0] == x0 && y[1] != x1 {
-                (y[1].clone(), x1.clone())
-            } else if y[1] == x1 && y[0] != x0 {
-                (y[0].clone(), x0.clone())
-            } else {
-                continue;
+            let Some((hop, y)) = ops.iter().find_map(|o| self.app(&he2, o, 2).map(|y| (*o, y.to_vec()))) else { continue };
+            // (the same comparison, or an order's dual: x < y as !(y <= x),
+            // x <= y as !(y < x); an equation either way round)
+            let (pairs, flip): (Vec<(Term, Term)>, bool) = match (op, hop) {
+                ("eq", "eq") => (vec![(y[0].clone(), x0.clone()), (y[1].clone(), x1.clone())], false),
+                ("int_lt", "int_lt") | ("int_le", "int_le") => (vec![(y[0].clone(), x0.clone()), (y[1].clone(), x1.clone())], false),
+                ("int_lt", "int_le") | ("int_le", "int_lt") => (vec![(y[1].clone(), x0.clone()), (y[0].clone(), x1.clone())], true),
+                _ => continue,
             };
+            // (the sides the same, or equal by arithmetic -- one at least
+            // otherwise: the plain fact is guard_facts')
+            if pairs.iter().all(|(a, b)| a == b) {
+                continue;
+            }
             let facts: Vec<R> = self.lf.iter().cloned().chain(hyps.iter().map(|h| h.1.clone())).map(R::S).collect();
-            let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext", "bits_sub", "bits_neg"].iter().map(|d| d.to_string()).collect();
-            let eq = self.mk("eq", vec![other.0, other.1]);
-            if let Ok(q) = self.evp(&RP::Defs(Box::new(RP::Arith(facts)), defs), &eq, &[]) {
-                return Some((hneg == neg, vec![hs.clone(), q]));
+            let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext", "bits_sub", "bits_neg", "bits_shl"].iter().map(|d| d.to_string()).collect();
+            let mut eqs = Vec::new();
+            for (a, b) in &pairs {
+                if a == b {
+                    continue;
+                }
+                let eq = self.mk("eq", vec![a.clone(), b.clone()]);
+                let mut fs = facts.clone();
+                fs.extend(self.pow_facts(&eq));
+                match self.evp(&RP::Defs(Box::new(RP::Arith(fs)), defs.clone()), &eq, &[]) {
+                    Ok(q) => eqs.push(q),
+                    Err(_) => break,
+                }
+            }
+            if eqs.len() == pairs.iter().filter(|(a, b)| a != b).count() {
+                let mut fs = vec![hs.clone()];
+                fs.extend(eqs);
+                return Some(((hneg == neg) != flip, fs));
             }
         }
         None
@@ -578,14 +603,14 @@ impl<'e> Gen<'e> {
                     return Ok((Some(cond), r, ok, Some(ub)));
                 }
             }
-            // (an 8-byte element: the index times 8)
-            if let (Some(8), Some(y)) = (nat(&x[2]), self.app(&ix, "bits_sext", 3)) {
+            // (a 3- or 8-byte element: the index times the size)
+            if let (Some(k @ (3 | 8)), Some(y)) = (nat(&x[2]), self.app(&ix, "bits_sext", 3)) {
                 if nat(&y[0]) == Some(32) && nat(&y[1]) == Some(64) {
                     let (pp, i) = (x[0].clone(), self.canon(&y[2]));
-                    let cond = self.mk("tr.elem8_sx_def", vec![pp.clone(), i.clone()]);
+                    let cond = self.mk(&format!("tr.elem{k}_sx_def"), vec![pp.clone(), i.clone()]);
                     let sx = self.mk("bits_sext", vec![lit(32), lit(64), i.clone()]);
-                    let r = self.mk("bits_add", vec![lit(64), pp.clone(), self.mk("bits_mul", vec![lit(64), sx, lit(8)])]);
-                    let (ok, ub) = self.ok_ub("tr.elem8_sx_ok", "tr.elem8_sx_ub", &[pp, i], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
+                    let r = self.mk("bits_add", vec![lit(64), pp.clone(), self.mk("bits_mul", vec![lit(64), sx, lit(k)])]);
+                    let (ok, ub) = self.ok_ub(&format!("tr.elem{k}_sx_ok"), &format!("tr.elem{k}_sx_ub"), &[pp, i], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
                     return Ok((Some(cond), r, ok, Some(ub)));
                 }
             }
@@ -901,6 +926,119 @@ impl<'e> Gen<'e> {
         }
         let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
         Err(format!("{:x}: a load of {} bytes at the static {:x} the spec does not make (the facts: {})", st.a, n, a, facts.join(", ")))
+    }
+
+    /// the fact in scope that the spec's n-byte load at p + off is
+    /// defined, its address the machine's ea computed otherwise: p, off,
+    /// the fact, the address equation (by arith, from the facts in scope)
+    pub(super) fn mem_hyp_eq(&mut self, st: &St, ea: &Term, n: u128) -> Result<(Term, Term, Seq, Seq), String> {
+        let mut cands = Vec::new();
+        for (h, _) in &st.hyps {
+            let Some(x) = self.app(h, "and", 2) else { continue };
+            let Some(u) = self.app(&x[1], "gimple.usable", 5) else { continue };
+            let Some(sp) = self.app(&u[2], "int_add", 2) else { continue };
+            if nat(&u[3]) == Some(n) {
+                cands.push((sp[0].clone(), sp[1].clone()));
+            }
+        }
+        for (pp, off) in cands {
+            let cond = self.mem_defined(&st.w, &pp, &off, n, false);
+            let Some(hf) = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()) else { continue };
+            let ad = self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]);
+            if let Ok(q) = self.addr_eq(st, ea, &ad) {
+                return Ok((pp, off, hf, q));
+            }
+        }
+        Err(format!("{:x}: a load of {} bytes at {} the spec does not make", st.a, n, self.print(ea)))
+    }
+
+    /// an equation of two addresses by arith, from the facts in scope (the
+    /// statics' addresses, the modulus a number)
+    pub(super) fn addr_eq(&mut self, st: &St, x: &Term, y: &Term) -> Result<Seq, String> {
+        let eq = self.mk("eq", vec![x.clone(), y.clone()]);
+        let mut facts: Vec<R> = st.lfx.iter().chain(st.hyps.iter().map(|h| &h.1)).cloned().map(R::S).collect();
+        facts.extend(self.pow_facts(&eq));
+        for nm in self.static_names(&self.expand(&eq)) {
+            let sym = self.env.sym_by_name[&nm];
+            let SymKind::Defined { body, .. } = self.env.syms[sym as usize].kind.clone() else { continue };
+            let e = self.mk("eq", vec![Term::app(sym, vec![]), body]);
+            if let Ok(q) = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec![nm.clone()]), &e, &[]) {
+                facts.push(R::S(q));
+            }
+        }
+        let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext", "bits_shl"].iter().map(|d| d.to_string()).collect();
+        self.evp(&RP::Defs(Box::new(RP::Arith(facts)), defs), &eq, &[])
+    }
+
+    /// the fact in scope that the spec's byte load at A is defined, A the
+    /// machine's address ea computed otherwise: A, the fact, `ea = A`
+    pub(super) fn byte_hyp_eq(&mut self, st: &St, ea: &Term) -> Result<(Term, Seq, Seq), String> {
+        let mut cands = Vec::new();
+        for (h, hs) in &st.hyps {
+            let Some(x) = self.app(h, "and", 2) else { continue };
+            let Some(u) = self.app(&x[1], "gimple.usable", 5) else { continue };
+            if nat(&u[3]) == Some(1) && self.app(&u[4], "false", 0).is_some() && self.ld8_cond(&u[2]) == *h {
+                cands.push((u[2].clone(), hs.clone()));
+            }
+        }
+        for (ad, hc) in cands {
+            if let Ok(q) = self.addr_eq(st, ea, &ad) {
+                return Ok((ad, hc, q));
+            }
+        }
+        let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
+        Err(format!("{:x}: a byte load at {} the spec does not load (the facts: {})", st.a, self.print(ea), facts.join(", ")))
+    }
+
+    /// `pow2(k) = 2^k` for the literal widths and shift counts of t's word
+    /// operations (arith's modulus and factors numbers)
+    pub(super) fn pow_facts(&mut self, t: &Term) -> Vec<R> {
+        let mut ks: BTreeSet<u128> = BTreeSet::new();
+        fn go(g: &Gen, t: &Term, ks: &mut BTreeSet<u128>) {
+            if let Node::App(f, a) = t.node() {
+                let name = g.env.syms[*f as usize].name.as_str();
+                if name.starts_with("bits_") && !a.is_empty() {
+                    if let Some(n) = nat(&a[0]) {
+                        ks.insert(n);
+                    }
+                }
+                if name == "bits_shl" || name == "bits_shr" {
+                    if let Some(k) = a.get(2).and_then(nat) {
+                        ks.insert(k);
+                    }
+                }
+                a.iter().for_each(|x| go(g, x, ks));
+            }
+        }
+        go(self, &self.expand(t), &mut ks);
+        let mut out = Vec::new();
+        for k in ks.into_iter().filter(|k| *k <= 64) {
+            let e = self.mk("eq", vec![self.mk("pow2", vec![lit(k)]), lit(1u128 << k)]);
+            if let Ok(q) = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec!["pow2".into()]), &e, &[]) {
+                out.push(R::S(q));
+            }
+        }
+        out
+    }
+
+    /// the statics in t: constants defined as a literal (their addresses)
+    pub(super) fn static_names(&self, t: &Term) -> Vec<String> {
+        let mut out = Vec::new();
+        fn go(g: &Gen, t: &Term, out: &mut Vec<String>) {
+            if let Node::App(f, a) = t.node() {
+                if a.is_empty() {
+                    if let SymKind::Defined { body, .. } = &g.env.syms[*f as usize].kind {
+                        let name = &g.env.syms[*f as usize].name;
+                        if matches!(body.node(), Node::Nat(_)) && !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                }
+                a.iter().for_each(|x| go(g, x, out));
+            }
+        }
+        go(self, t, &mut out);
+        out
     }
 
     /// a byte load's definedness at a

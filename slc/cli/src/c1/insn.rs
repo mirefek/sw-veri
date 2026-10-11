@@ -169,6 +169,30 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_reg(st, a2, g, n, v);
                     return self.then(tr, st2);
                 }
+                // mov r64, [b + i]: the spec's load at the address computed
+                // otherwise
+                if let Some(m) = self.memop(&x[2]).filter(|m| matches!(self.app(&m["index"], "some", 1), Some(_)) && nat(&m["scale"]) == Some(1) && nat(&m["disp"]) == Some(0)) {
+                    let (Some((2, b)), Some(iv)) = (self.tag(&m["base"]), self.app(&m["index"], "some", 1).map(|x| x[0].clone())) else { return Err(bad("not [b + i]")) };
+                    if nat(&x[0]) != Some(8) {
+                        return Err(bad("not mov r64, [b + i]"));
+                    }
+                    let (bn, inn) = (reg(&b)?, reg(&iv)?);
+                    for r in [bn, inn] {
+                        if let Some(pf) = self.widen(st, r, 8)? {
+                            return Ok(pf);
+                        }
+                    }
+                    let bv = self.need_reg(st, bn, 8)?;
+                    let ixv = self.need_reg(st, inn, 8)?;
+                    let ea = self.mk("bits_add", vec![lit(64), self.mk("int_add", vec![bv.clone(), self.mk("bits_mul", vec![lit(64), ixv.clone(), lit(1)])]), lit(0)]);
+                    let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ea, 8)?;
+                    let tr = self.step("load64_bi", a, insn, &[&x[1], &b, &iv, &x[4], &bv, &ixv, &pp, &off], self.tail(st, insn, 10, vec![s(&heq), s(&hc)]));
+                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&pp), self.print(&off)))?;
+                    let v = self.value(&v);
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, v);
+                    return self.then(tr, st2);
+                }
                 // mov r64 / r32, [b + d] (b holding a pointer): the spec's field load
                 if self.rsp_mem(&x[2]).is_none() && matches!(nat(&x[0]), Some(8) | Some(4)) {
                     let n = nat(&x[0]).unwrap();
@@ -469,6 +493,19 @@ impl<'e> Gen<'e> {
                 let gn = reg(&g)?;
                 match (size, op) {
                     (4, 5) => {}
+                    // shl r64, c
+                    (8, 4) if c != 12 || !self.reg(st, gn).is_some_and(|(_, u)| self.app(&self.expand(&u), "bits_shr", 3).is_some()) => {
+                        if let Some(pf) = self.widen(st, gn, 8)? {
+                            return Ok(pf);
+                        }
+                        let u = self.need_reg(st, gn, 8)?;
+                        let tr = self.step("shl64_imm", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 7, vec![]));
+                        let r = self.mk("bits_shl", vec![lit(64), u, x[4].clone()]);
+                        let r = self.value(&r);
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 8, r);
+                        return self.then(tr, st2);
+                    }
                     // shr r64, c
                     (8, 5) => {
                         let u = self.need_reg(st, gn, 8)?;
@@ -481,7 +518,7 @@ impl<'e> Gen<'e> {
                     }
                     // shl r64, 12 of a word shifted down by 12: the field above
                     // its first byte, times 4096
-                    (8, 4) if c == 12 => {
+                    (8, 4) if c == 12 && self.reg(st, gn).is_some_and(|(_, u)| self.app(&self.expand(&u), "bits_shr", 3).is_some()) => {
                         let (_, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
                         let shape = (|| {
                             let s = self.expand(&u);
@@ -1391,10 +1428,17 @@ impl<'e> Gen<'e> {
                     let bn = reg(&b)?;
                     let bv = self.need_reg(st, bn, 8)?;
                     let cond = self.ld8_cond(&bv);
-                    let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
-                        let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
-                        format!("{:x}: a byte load at {} the spec does not load ({}; the facts: {})", a, self.print(&bv), self.print(&cond), facts.join(", "))
-                    })?;
+                    let Some(hc) = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()) else {
+                        // (the spec's byte at the address computed otherwise)
+                        let (ad, hc, heq) = self.byte_hyp_eq(st, &bv)?;
+                        let tr = self.step("movzx8_beq", a, insn, &[&x[1], &b, &x[4], &bv, &ad], self.tail(st, insn, 5, vec![s(&heq), taut(vec![R::S(hc)])]));
+                        let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
+                        let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, ad, lit(1)])]);
+                        let by = self.value(&by);
+                        self.scratch.insert(g);
+                        let st2 = self.set_reg(st, a2, g, 1, by);
+                        return self.then(tr, st2);
+                    };
                     let tr = self.step("movzx8_b", a, insn, &[&x[1], &b, &x[4], &bv], self.tail(st, insn, 5, vec![taut(vec![R::S(hc.clone())])]));
                     let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                     let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, bv, lit(1)])]);

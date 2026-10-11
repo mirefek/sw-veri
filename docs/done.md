@@ -194,6 +194,13 @@ item is a short summary of finished work; details are in the files named.
   mallocng's 23 functions went from 18076 to about 4700 (try_avail 8038
   to 1612, get_meta 6209 to 672, enframe 1363 to 556), its check from
   60 s to about 20 s.
+- **Location maps for C1** (`scripts/locmap.py`, `build/locmap_O0.core`):
+  each readable-GIMPLE local's home in the -O0 frame and the addresses
+  where it lives, from DWARF (the sources compiled once more with `-g`,
+  the code the same). The engine links a home to its local by the map --
+  a literal local too (a loop's counter starting at 0, a flag) -- and
+  leaves a home whose locals' scopes have ended out of a join's claim.
+  Untrusted guidance: the kernel checks every step.
 - **Bitfield stores** (GIMPLE's `stbf`, a read-modify-write: at bit 0 of a
   byte so far): the machine reads the byte (a pending store's
   write-definedness lets it, `tr.reads_wr`), merges, stores

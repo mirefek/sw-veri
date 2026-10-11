@@ -125,7 +125,8 @@ For a function F, two halves:
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
   - Programs and states are related by a coupling at each point:
-    - a location map says where each GIMPLE value lives;
+    - a location map says where each GIMPLE value lives (the engine is
+      guided by the -O0 build's DWARF, `scripts/locmap.py`);
     - the memories agree on the world's domain;
     - the ABI's frame facts hold.
   - Calls use the call rule (`proofs/translate_call.core`).

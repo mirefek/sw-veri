@@ -269,10 +269,19 @@ impl<'e> Gen<'e> {
         // the locals: a variable for each that is no literal (a literal one
         // kept: its home, if any, holds the literal too)
         let comps = self.locals_of(y0);
+        // (a literal local whose home the location map has, holding it)
+        let mut homed: BTreeMap<usize, u128> = BTreeMap::new();
+        for (c, (_, x)) in &st.hsm {
+            if let Some(i) = self.local_at(*c, st.a).filter(|&i| i < comps.len()) {
+                if nat(&comps[i]).is_some() && self.eval_lit(x) == nat(&comps[i]) {
+                    homed.insert(i, *c);
+                }
+            }
+        }
         let mut ys = Vec::new();
         let mut gen = Vec::new();
         for (i, ci) in comps.iter().enumerate() {
-            if nat(ci).is_some() {
+            if nat(ci).is_some() && !homed.contains_key(&i) {
                 gen.push(ci.clone());
             } else {
                 let v = self.var(&format!("sy{n}_{i}"));
@@ -287,8 +296,33 @@ impl<'e> Gen<'e> {
         let mut hsm_y = BTreeMap::new();
         let mut yts = Vec::new();
         for (c, (nb, x)) in &st.hsm {
+            // (a home whose locals' scopes all end before here: dead, not
+            // the claim's)
+            if self.locmap.iter().any(|e| e.1 == *c) && self.local_at(*c, st.a).is_none() {
+                continue;
+            }
             let xc = self.canon(x);
             let mut v = x.clone();
+            if let Some((_, vi)) = ys.iter().find(|(i, _)| homed.get(i) == Some(c)) {
+                v = Term::var(*vi, vec![]);
+                yts.push(self.mk("in", vec![v.clone(), self.mk("bits", vec![lit(8 * nb)])]));
+                hsm_y.insert(*c, (*nb, v));
+                continue;
+            }
+            // (the local the location map has there: its variable, if the
+            // home holds its value; else the home as it is -- not another
+            // local of the same value)
+            if let Some(i) = self.local_at(*c, st.a).filter(|&i| i < comps.len()) {
+                if let Some(&(_, vi)) = ys.iter().find(|(j, _)| *j == i) {
+                    let ci = &comps[i];
+                    if self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok() {
+                        v = Term::var(vi, vec![]);
+                        yts.push(self.mk("in", vec![v.clone(), self.mk("bits", vec![lit(8 * nb)])]));
+                    }
+                }
+                hsm_y.insert(*c, (*nb, v));
+                continue;
+            }
             for &(i, vi) in &ys {
                 let ci = &comps[i];
                 let same = self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok();

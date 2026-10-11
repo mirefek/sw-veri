@@ -129,6 +129,7 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         stmt_fail: BTreeSet::new(),
         hus: Vec::new(),
         vmark0: 0,
+        locmap: Vec::new(),
         loop_claims: Vec::new(),
         picked: Default::default(),
         spent_now: Default::default(),
@@ -145,6 +146,21 @@ impl<'e> Gen<'e> {
     #[allow(clippy::too_many_arguments)]
     fn top(&mut self, fname: &str, spec_name: &str, ssym: u32, sbody: Term, sparams: Vec<VarId>, entry: u128) -> Result<Vec<(String, Seq)>, String> {
         let p = self.prefix.clone();
+        // the locals' homes, if the location map has them
+        let pname = spec_name.strip_suffix("_fun").unwrap_or(spec_name);
+        if let Some(&ls) = self.env.sym_by_name.get(&format!("loc.{pname}")) {
+            if let SymKind::Defined { body, .. } = &self.env.syms[ls as usize].kind {
+                let mut cur = body.clone();
+                while let Some(x) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
+                    if let Some(e) = self.pairs(&x[0], 4) {
+                        if let (Some(k), Some(key), Some(lo), Some(hi)) = (nat(&e[0]), nat(&e[1]), nat(&e[2]), nat(&e[3])) {
+                            self.locmap.push((k as usize, key, entry + lo, entry + hi));
+                        }
+                    }
+                    cur = x[1].clone();
+                }
+            }
+        }
         // the fixed variables: the program's statics, the callees, the
         // arguments, the view's objects, its memory, the entry's machine
         let statics = self.var("statics");
