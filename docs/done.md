@@ -79,7 +79,10 @@ item is a short summary of finished work; details are in the files named.
   program's meaning; the cache keyed by source and checker hashes; unused
   lemmas deleted.
 - **The checker**: a per-file cache. The main chain checks in about 5 s
-  uncached and 0.2 s cached.
+  uncached and 0.2 s cached. An entry rests on the parts of the checker it
+  uses (hashes of their sources, slc/cli/build.rs): the kernel with the
+  cache's format and the proof scripts' automation always, the C1 engine
+  for files with `c1` lines -- other changes keep it.
 
 ## The levels
 

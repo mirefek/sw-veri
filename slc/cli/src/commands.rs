@@ -6,32 +6,33 @@ pub type CResult = Result<(), String>;
 /// The file cache of `kernel-check`: per checked file, its statements (the
 /// file with its proofs replaced by `cached`, `sl_kernel::ext::cache`),
 /// in build/kernel-cache. A file's entry is used when it was written for
-/// the same contents of the file (their hash), by the same checker (its
-/// executable's hash), after the same statements of the files before
-/// (their hash, `prefix`); otherwise the file is checked and its entry
-/// written again. (No modification times: a file restored with an older
-/// date, or changed within one clock tick, is checked again.)
+/// the same contents of the file (their hash), by the same checker parts
+/// it rests on, after the same statements of the files before (their hash,
+/// `prefix`); otherwise the file is checked and its entry written again.
+/// The parts (build.rs: hashes of their sources): the trusted kernel and
+/// this cache's format, always; the proof scripts' automation (sl_proof),
+/// always; the C1 engine, for a file with `c1` lines. A change to other
+/// code -- or to the C1 engine, for files without `c1` lines -- keeps the
+/// entries. (No modification times: a file restored with an older date, or
+/// changed within one clock tick, is checked again.)
 struct Cache {
     dir: PathBuf,
-    /// the checker's identity: a hash of its executable's bytes
+    /// the checker's identity for files without `c1` lines, and with
     checker: String,
+    checker_c1: String,
 }
 
 impl Cache {
     fn new() -> Cache {
-        use std::hash::{Hash, Hasher};
-        let exe = std::env::current_exe().ok().and_then(|e| std::fs::read(e).ok());
-        let checker = exe
-            .map(|b| {
-                let mut h = std::collections::hash_map::DefaultHasher::new();
-                b.hash(&mut h);
-                format!("{:016x}-{}", h.finish(), b.len())
-            })
-            .unwrap_or_default();
+        let base = format!("k{}-p{}", env!("SLC_ID_KERNEL"), env!("SLC_ID_PROOF"));
+        let c1 = format!("{}-c{}", base, env!("SLC_ID_C1"));
         // (SLC_CACHE_AS=ID, while developing the checker: its entries as
         // the checker ID's -- trusting that the changes left them valid)
-        let checker = std::env::var("SLC_CACHE_AS").unwrap_or(checker);
-        Cache { dir: repo_root().join("build/kernel-cache"), checker }
+        let (checker, checker_c1) = match std::env::var("SLC_CACHE_AS") {
+            Ok(id) => (id.clone(), id),
+            Err(_) => (base, c1),
+        };
+        Cache { dir: repo_root().join("build/kernel-cache"), checker, checker_c1 }
     }
 
     fn entry(&self, f: &std::path::Path) -> PathBuf {
@@ -42,9 +43,11 @@ impl Cache {
     }
 
     fn header(&self, src: &str, prefix: &str, first: bool) -> String {
+        // (a file with `c1` lines: the C1 engine's identity too)
+        let c1 = src.lines().any(|l| l.trim_start().starts_with("c1 "));
         format!(
             "// slc kernel-check cache (statements only; see `slc kernel-check --no-cache`)\n// checker {}\n// source {}\n// prefix {}\n// first {}\n",
-            self.checker,
+            if c1 { &self.checker_c1 } else { &self.checker },
             crate::sha256::hex(src.as_bytes()),
             prefix,
             first
