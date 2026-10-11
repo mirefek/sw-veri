@@ -169,6 +169,8 @@ struct StoreOp {
     /// a compare-and-swap (gimple.cas32): its operands t, s; its result
     /// (the old dword)
     cas: Option<(Term, Term, Term)>,
+    /// a bitfield (gimple.stbf): its size, position, width, field
+    bf: Option<(Term, Term, Term, Term)>,
 }
 
 /// One step towards a disjunct whose guard holds.

@@ -590,9 +590,10 @@ impl<'e> Gen<'e> {
             let v = self.mk("ite", vec![self.mk("eq", vec![d.clone(), tv.clone()]), sv.clone(), d.clone()]);
             let empty = self.mk("empty", vec![]);
             let ub = p(mpf("tr.cas32_ub", vec![t(&w), t(&pp), t(&tv), t(&sv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
-            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)) }));
+            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)), bf: None }));
         }
         let is_store = |g: &Gen, t: &Term| {
+            g.app(t, "gimple.stbf", 6).is_some() ||
             g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st16", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some() || g.app(t, "gimple.st_bytes", 3).is_some()
         };
         let (inner, helper) = if is_store(self, op) {
@@ -618,6 +619,26 @@ impl<'e> Gen<'e> {
             let Some(inner) = inner else { return Ok(None) };
             (inner, Some(fname))
         };
+        // a bitfield: the size bytes read and written back, the field at bit
+        // 0 merged in (the value GIMPLE writes, of the bytes now)
+        if let Some(x) = self.app(&inner, "gimple.stbf", 6).map(|x| x.to_vec()) {
+            let (pp, off, size, pos, k, fv) = (x[0].clone(), x[1].clone(), x[2].clone(), x[3].clone(), x[4].clone(), x[5].clone());
+            let n = nat(&size).ok_or("a bitfield of a size not a literal")?;
+            if nat(&pos) != Some(0) || nat(&k).is_none_or(|k| k > 8) || n != 1 {
+                return Err(format!("a bitfield store {}: only at bit 0 of a byte covered yet", self.print(&inner)));
+            }
+            let addr = if nat(&off) == Some(0) { pp.clone() } else { self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]) };
+            let w = self.w.clone();
+            let v = self.bf_value(&w, &addr, &size, &pos, &k, &fv);
+            let cond = self.mem_defined(&w, &pp, &off, n, true);
+            let empty = self.mk("empty", vec![]);
+            let inner_ub = mpf(
+                "g.stbf_at_ub",
+                vec![t(&w), t(&pp), t(&off), t(&size), t(&pos), t(&k), t(&fv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
+            );
+            let ub = self.helper_ub(&helper, &inner, inner_ub)?;
+            return Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data: None, cas: None, bf: Some((size, pos, k, fv)) }));
+        }
         // (constant bytes: all zero, else not covered)
         let mut data = None;
         let (n, x) = match (self.app(&inner, "gimple.st8", 3), self.app(&inner, "gimple.st32", 3), self.app(&inner, "gimple.st_bytes", 3)) {
@@ -657,14 +678,34 @@ impl<'e> Gen<'e> {
                 vec![t(&w), t(&pp), t(&off), t(&v), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
             ),
         };
-        let ub = match &helper {
+        let ub = self.helper_ub(&helper, &inner, inner_ub)?;
+        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None, bf: None }))
+    }
+
+    /// a store's raise when undefined: its operation's, through the helper
+    /// that makes it if any
+    fn helper_ub(&mut self, helper: &Option<String>, inner: &Term, inner_ub: R) -> Result<RA, String> {
+        Ok(match helper {
             None => p(inner_ub),
             Some(fname) => {
-                let (ubl, _) = self.inst("tr.call1_ub", &[("op", inner.clone()), ("s2", self.vw.clone()), ("e", empty.clone()), ("f", empty.clone())])?;
+                let empty = self.mk("empty", vec![]);
+                let w = self.w.clone();
+                let (ubl, _) = self.inst("tr.call1_ub", &[("op", inner.clone()), ("s2", self.vw.clone()), ("e", empty.clone()), ("f", empty)])?;
                 RA::P(RP::Defs(Box::new(RP::Mp(ubl, vec![t(&w), p(self.hv()), p(self.hvu_w()), simp0(), p(inner_ub)])), vec![fname.clone()]))
             }
-        };
-        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None }))
+        })
+    }
+
+    /// the value GIMPLE's stbf writes at a in w (gimple.stbf's: the bytes
+    /// there, the field's bits cleared, the field added)
+    pub(super) fn bf_value(&self, w: &Term, a: &Term, size: &Term, pos: &Term, k: &Term, fv: &Term) -> Term {
+        let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
+        let old = self.mk("gimple.bytes_at", vec![vm, a.clone(), size.clone()]);
+        let pw = |g: &Gen, e: &Term| g.mk("int_pow", vec![lit(2), e.clone()]);
+        let m = self.mk("int_mul", vec![pw(self, pos), self.mk("int_sub", vec![pw(self, k), lit(1)])]);
+        let cleared = self.mk("bits_and", vec![lit(128), self.mk("gimple.b128", vec![old]), self.mk("bits_not", vec![lit(128), self.mk("gimple.b128", vec![m])])]);
+        let field = self.mk("int_mul", vec![self.mk("int_mod", vec![fv.clone(), pw(self, k)]), pw(self, pos)]);
+        self.mk("int_add", vec![cleared, field])
     }
 
     /// `l in list_type(omega) && tr.zeros(l)` for a list literal of zeros
@@ -819,6 +860,18 @@ impl<'e> Gen<'e> {
             if matches!(x[1].node(), Node::BVar(0)) && !closed && x[0].loose_depth(&self.env.binders_fn()) <= 2 {
                 let (j, inst) = self.by(qi, "tr.q_at", &[("b", body.clone()), ("w", w.clone())])?;
                 return Ok(Some(Red::Q(j, inst)));
+            }
+        }
+        // a loop's iteration ended (its marked return, the next locals): it
+        // waits for the machine at the loop's head
+        if self.lpg.is_some() {
+            let marked = |g: &Gen, b: &Term| -> bool {
+                let Some(x) = g.app(b, "eq", 2) else { return false };
+                let Some(o) = g.app(&x[1], "ok", 2) else { return false };
+                matches!(x[0].node(), Node::BVar(0)) && g.app(&o[1], "pair", 2).is_some_and(|pr| nat(&pr[0]) == Some(1u128 << 64))
+            };
+            if marked(self, &body) {
+                return Ok(None);
             }
         }
         // a whole field's value: the bytes themselves

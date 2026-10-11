@@ -105,7 +105,8 @@ item is a short summary of finished work; details are in the files named.
   (a loop, by invariant and variant at its head), upgradelock, resetlock,
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
   free_meta, size_to_class, set_size, enframe, account_bounce, get_meta,
-  __malloc_allzerop, a_cas and activate_group (a loop without a counter).
+  __malloc_allzerop, a_cas, activate_group and try_avail (loops without a
+  counter).
   The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
@@ -156,9 +157,16 @@ item is a short summary of finished work; details are in the files named.
   states are none, `tr.nobp_hd`), the back edge arriving there with the
   iteration's next locals marked (`tr.pt_head`; with more of the frame
   than at the head, `tr.pt_fd`), the exit into the function's rest in its
-  own wrapper (`tr.lv_exit`, `tr.lcont`). Also a call's 32-bit result
-  compared as its low half (`tr.cmp32_hrw_jne`) and 4-byte field stores
-  (`tr.store32_bd`).
+  own wrapper (`tr.lv_exit`, `tr.lcont`). The locals carry an invariant
+  (a local a home holds: a word of its width), assumed in the iteration and
+  owed at the head; a loop is met at the first point of a cycle of the
+  code the walk reaches (try_avail's, entered at its test).
+- **Bitfield stores** (GIMPLE's `stbf`, a read-modify-write: at bit 0 of a
+  byte so far): the machine reads the byte (a pending store's
+  write-definedness lets it, `tr.reads_wr`), merges, stores
+  (`tr.store8_bd`); the merged byte is GIMPLE's value by `bitwise`
+  (`tr.bf0_val`; a sum of disjoint bits, `bit_addmul`; a mask's high bits
+  read as a product), the field compared modulo 2^k by arith.
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

@@ -383,7 +383,8 @@ fn log2(t: &Term) -> Option<u32> {
 }
 
 /// p matches t, binding pvars: numerals read as `pow2(k)` or `pow2(k) - 1`,
-/// a product either way round
+/// or a product x * 2^k (a mask's high bits: x its value above them), a
+/// product either way round
 fn bmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>) -> bool {
     let name = |s: SymId| env.syms[s as usize].name.as_str();
     let nat = |k: u32| Term::nat(sl_kernel::Nat::from_u128(k as u128));
@@ -405,6 +406,22 @@ fn bmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId
             let Some(v) = n.to_u128().and_then(|v| v.checked_add(1)) else { return false };
             let t1 = Term::nat(sl_kernel::Nat::from_u128(v));
             matches!(a[0].node(), Node::App(g, _) if name(*g) == "pow2") && bmatch(env, &a[0], &t1, pvars, binds)
+        }
+        // x * pow2(k) against c * 2^k (c odd, k > 0)
+        (Node::App(f, a), Node::Nat(n)) if name(*f) == "int_mul" && a.len() == 2 => {
+            let Some(v) = n.to_u128().filter(|v| *v > 0 && v.trailing_zeros() > 0) else { return false };
+            let tz = v.trailing_zeros();
+            let (hi, p2) = (Term::nat(sl_kernel::Nat::from_u128(v >> tz)), Term::nat(sl_kernel::Nat::from_u128(1u128 << tz)));
+            let save = binds.clone();
+            if bmatch(env, &a[0], &hi, pvars, binds) && bmatch(env, &a[1], &p2, pvars, binds) {
+                return true;
+            }
+            *binds = save.clone();
+            if bmatch(env, &a[1], &hi, pvars, binds) && bmatch(env, &a[0], &p2, pvars, binds) {
+                return true;
+            }
+            *binds = save;
+            false
         }
         (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => {
             let save = binds.clone();

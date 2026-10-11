@@ -654,6 +654,26 @@ impl<'e> Gen<'e> {
             // or dword [rsp + d], r32
             38 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                // or r32, r32
+                if let (Some(4), Some((0, g))) = (nat(&x[0]), self.tag(&x[2])) {
+                    if x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                        return Err(bad("not or r32, r32"));
+                    }
+                    let (gn, hn) = (reg(&g)?, reg(&x[1])?);
+                    for r in [gn, hn] {
+                        if let Some(pf) = self.widen(st, r, 4)? {
+                            return Ok(pf);
+                        }
+                    }
+                    let u = self.need_reg(st, gn, 4)?;
+                    let xv = self.need_reg(st, hn, 4)?;
+                    let op = self.mk("bits_or", vec![lit(32), u.clone(), xv.clone()]);
+                    let r = self.value(&op);
+                    let tr = self.step("or32_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![simp_l()]));
+                    self.scratch.insert(gn);
+                    let st2 = self.set_reg(st, a2, gn, 4, r);
+                    return self.then(tr, st2);
+                }
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not or [rsp + d], r32"))?;
                 let g = reg(&x[1])?;
                 let n = nat(&x[0]).unwrap_or(0);
@@ -765,20 +785,24 @@ impl<'e> Gen<'e> {
             // add r32, r32 / add r64, r64 (the source holding as many bits)
             35 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
-                // add qword [rsp + d], r64: the home := its word + g's (as the spec orders it)
+                // add dword / qword [rsp + d], r: the home := its word + g's (as the spec orders it)
                 if let Some(d) = self.rsp_mem(&x[2]) {
-                    if nat(&x[0]) != Some(8) || x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
-                        return Err(bad("not add qword [rsp + d], r64"));
+                    let n = nat(&x[0]).filter(|n| *n == 4 || *n == 8).ok_or_else(|| bad("not add dword / qword [rsp + d], r"))?;
+                    if x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                        return Err(bad("not add [rsp + d], r"));
                     }
                     let g = reg(&x[1])?;
                     let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
-                    let u = home_n(&st.hsm, &d, 8)?;
-                    let v = self.need_reg(st, g, 8)?;
+                    let u = home_n(&st.hsm, &d, n)?;
+                    let v = self.need_reg(st, g, n)?;
                     let cn = self.hkey(dn);
-                    let (_, hs2, hk) = self.hkeep(st, cn, 8);
-                    let r = self.value_comm(&self.mk("bits_add", vec![lit(64), u.clone(), v.clone()]));
-                    let tr = self.step("add64_home_r", a, insn, &[&d, &lit(cn), &x[1], &v, &u, &r], self.tail_h(st, insn, &hs2, 10, vec![p(hk.clone())]));
-                    let st2 = self.set_home(st, a2, cn, 8, r);
+                    let (_, hs2, hk) = self.hkeep(st, cn, n);
+                    let op = self.mk("bits_add", vec![lit(8 * n), u.clone(), v.clone()]);
+                    let r = self.value_comm(&op);
+                    let hr = self.comm_premise(&r, &op);
+                    let rule = if n == 8 { "add64_home_r" } else { "add32_home_r" };
+                    let tr = self.step(rule, a, insn, &[&d, &lit(cn), &x[1], &v, &u, &r], self.tail_h(st, insn, &hs2, 9, vec![hr, p(hk.clone())]));
+                    let st2 = self.set_home(st, a2, cn, n, r);
                     return self.then(tr, st2);
                 }
                 let Some((0, g)) = self.tag(&x[2]) else { return Err(bad("not add r, r")) };
@@ -1209,8 +1233,16 @@ impl<'e> Gen<'e> {
                 if self.app(&m["index"], "none", 0).is_some() && nat(&m["disp"]) != Some(0) {
                     let (bn, b, d) = self.base_disp(&x[2]).ok_or_else(|| bad("not [b + d]"))?;
                     let bp = self.need_reg(st, bn, 8)?;
-                    let hc = self.mem_hyp(st, &bp, &d, 1)?;
-                    let tr = self.step("movzx8_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp], self.tail(st, insn, 6, vec![s(&hc)]));
+                    // (defined for reading, or for the spec's store there)
+                    let (hc, wr) = match self.mem_hyp(st, &bp, &d, 1) {
+                        Ok(h) => (h, false),
+                        Err(e) => match self.hyp_find(&st.hyps, &self.mem_defined(&st.w, &bp, &d, 1, true)) {
+                            Some(h) => (h.1.clone(), true),
+                            None => return Err(e),
+                        },
+                    };
+                    let wt = self.mk(if wr { "true" } else { "false" }, vec![]);
+                    let tr = self.step("movzx8_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt], self.tail(st, insn, 6, vec![s(&hc)]));
                     let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 1))", self.print(&bp), self.print(&d)))?;
                     let v = self.value(&v);
                     self.scratch.insert(g);
@@ -1486,6 +1518,12 @@ impl<'e> Gen<'e> {
                     // [b]: the address b's value
                     let bv = self.need_reg(st, reg(&b)?, 8)?;
                     ("store8_b", vec![g.clone(), b.clone(), x[0].clone(), x[1].clone(), bv.clone(), lit(n), u.clone()], 10, bv)
+                } else if bk == 2 && self.app(&m["index"], "some", 1).is_none() {
+                    // [b + d]: b's value + d
+                    let d = m["disp"].clone();
+                    let bv = self.need_reg(st, reg(&b)?, 8)?;
+                    let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
+                    ("store8_bd", vec![g.clone(), b.clone(), d, x[0].clone(), x[1].clone(), bv, lit(n), u.clone()], 11, ad)
                 } else {
                     let i = self.app(&m["index"], "some", 1).ok_or_else(|| bad("no index"))?[0].clone();
                     if bk != 2 || nat(&m["disp"]) != Some(0) || nat(&m["scale"]) != Some(1) {
@@ -1497,7 +1535,8 @@ impl<'e> Gen<'e> {
                     let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
                     ("store8_bi", vec![g.clone(), b.clone(), i.clone(), x[0].clone(), x[1].clone(), lit(nb), bv, iv, lit(n), u.clone()], 12, ad)
                 };
-                let (hc, v, st2, red, sa) = self.spec_store(st, &ad, 1)?;
+                let w0 = st.w.clone();
+                let (hc, v, st2, red, sa, so) = self.spec_store_x(st, Some(&ad), Some(1))?;
                 // (the register's low byte: the spec's value, u + k against v + k)
                 let (ue, ve) = (self.expand(&u), self.expand(&v));
                 // (a constant: a literal, or bits_neg(n, k) -- 2^n - k)
@@ -1514,7 +1553,11 @@ impl<'e> Gen<'e> {
                     (nat(&x[0])? == 32 && nat(&y[0])? == 8 && self.canon(&x[1]) == self.canon(&y[1]) && konst(&x[2])? % 256 == konst(&y[2])? % 256)
                         .then(|| (x[1].clone(), x[2].clone(), y[2].clone()))
                 })();
-                let lp = match low8 {
+                // (a bitfield's: the bytes merged with the field, bit by bit)
+                let lp = if let Some((_, _, k, fv)) = &so.bf {
+                    self.bf_merge(st, &w0, &sa, k, fv, &u)?
+                } else {
+                    match low8 {
                     Some((bb, kk, kk2)) if self.eval_lit(&kk).is_some() && self.eval_lit(&kk) == self.eval_lit(&kk2) => {
                         p(mpf("tr.low8_add", vec![t(&bb), t(&kk), simp_l(), simp_l()]))
                     }
@@ -1522,6 +1565,7 @@ impl<'e> Gen<'e> {
                     // (else: the low byte of a sum of words, shifts, bytes --
                     // their arithmetic modulo 2^8, the words' definitions)
                     None => RA::P(RP::Defs(Box::new(RP::Simp(true, vec![], vec![], false)), ["bits_slice", "bits_add", "bits_shl", "bits_mul", "bits_of_int"].iter().map(|x| x.to_string()).collect())),
+                    }
                 };
                 let _ = &sa;
                 let mut terms: Vec<&Term> = terms.iter().collect();
@@ -1680,6 +1724,62 @@ impl<'e> Gen<'e> {
                 Err(bad("no rule for the instruction"))
             }
         }
+    }
+
+    /// A bitfield store's byte (k bits at bit 0, the field fv; at a in w):
+    /// the register u's low byte is GIMPLE's value -- bit by bit (`bitwise`)
+    /// against the bytes' cleared word as a multiple of 2^k plus the field
+    /// (tr.bf0_val, its facts tr.bf0_facts)
+    fn bf_merge(&mut self, st: &St, w: &Term, a: &Term, k: &Term, fv: &Term, u: &Term) -> Result<RA, String> {
+        let pk = self.mk("pow2", vec![k.clone()]);
+        let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
+        let old = self.mk("gimple.bytes_at", vec![vm, a.clone(), lit(1)]);
+        let mask = self.mk("bits_not", vec![lit(128), self.mk("int_sub", vec![pk.clone(), lit(1)])]);
+        let cleared = self.mk("bits_and", vec![lit(128), self.mk("bits_of_int", vec![lit(128), old]), mask]);
+        let hi = self.mk("int_mul", vec![self.mk("int_div", vec![cleared, pk.clone()]), pk.clone()]);
+        // (the field as the machine has it: under its masks in u -- its
+        // bits the spec's, by arith modulo 2^k)
+        let fm = self.bf_field(&self.expand(u), k).unwrap_or_else(|| fv.clone());
+        let mk_mod = |g: &Gen, x: &Term| g.mk("int_mod", vec![x.clone(), g.mk("pow2", vec![k.clone()])]);
+        let hm = self.evp(
+            &RP::Defs(Box::new(RP::Arith(vec![])), ["bits_add", "bits_of_int", "bits_neg", "pow2"].iter().map(|x| x.to_string()).collect()),
+            &self.mk("eq", vec![mk_mod(self, fv), mk_mod(self, &fm)]),
+            &[],
+        )?;
+        let field = self.mk("int_mul", vec![self.mk("int_mod", vec![fm.clone(), pk]), lit(1)]);
+        let low = self.mk("bits_slice", vec![u.clone(), lit(7), lit(0)]);
+        let rhs = self.mk("int_add", vec![hi, field]);
+        let facts = self.run(&mpf("tr.bf0_facts", vec![t(w), t(a), t(k), taut(vec![R::S(st.hw.clone())]), simp_l(), simp_l(), simp_l()]), &[])?;
+        // (the low byte as an 8-bit word of u)
+        let omega = self.mk("omega", vec![]);
+        let uo = self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("in", vec![u.clone(), omega]), &[])?;
+        let b8 = self.mk("bits_of_int", vec![lit(8), u.clone()]);
+        let sl = self.evp(&RP::Defs(Box::new(RP::Simp(true, vec![R::S(uo.clone())], vec![], false)), vec!["bits_slice".into(), "bits_of_int".into()]), &self.mk("eq", vec![low.clone(), b8.clone()]), &[])?;
+        let fo = self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("in", vec![fm.clone(), self.mk("omega", vec![])]), &[])?;
+        let m0 = self.evp(&RP::Bitwise(vec![R::S(facts), R::S(uo), R::S(fo)], 8), &self.mk("eq", vec![b8, rhs.clone()]), &[])?;
+        let m = self.evp(&RP::Arith(vec![R::S(sl), R::S(m0)]), &self.mk("eq", vec![low.clone(), rhs]), &[])?;
+        Ok(p(mpf("tr.bf0_val", vec![t(w), t(a), t(fv), t(&fm), t(k), t(&low), taut(vec![R::S(st.hw.clone())]), simp_l(), simp_l(), simp_l(), s(&hm), s(&m)])))
+    }
+
+    /// a merge's field: an operand of its `or` under `and`s with 2^k - 1
+    fn bf_field(&self, u: &Term, k: &Term) -> Option<Term> {
+        let mask = (1u128 << nat(k)?) - 1;
+        let o = self.app(u, "bits_or", 3)?.to_vec();
+        for x in [&o[2], &o[1]] {
+            let mut cur = x.clone();
+            let mut n = 0;
+            while let Some(y) = self.app(&cur, "bits_and", 3).map(|y| y.to_vec()) {
+                if nat(&y[2]) != Some(mask) {
+                    break;
+                }
+                cur = y[1].clone();
+                n += 1;
+            }
+            if n > 0 {
+                return Some(cur);
+            }
+        }
+        None
     }
 
     /// A register's low w bits as a compare reads them (tr.reg_low*): its

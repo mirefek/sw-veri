@@ -15,6 +15,8 @@ pub enum G {
     Taut(Vec<Seq>),
     Arith(Vec<Seq>),
     Mem(Vec<Seq>),
+    /// `bitwise([{n},] facts)`: a word equation bit by bit (n its width)
+    Bitwise(Vec<Seq>, Option<Term>),
     /// `defs(g, D..)`: g proves it with the definitions unfolded
     Defs(Box<G>, Vec<SymId>),
     /// `apply(f, ..)` against it
@@ -71,6 +73,7 @@ impl Api {
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::arith(env, lg, &refs, goal)
             }
+            G::Bitwise(ps, width) => self.st.bitwise_goal(env, lg, goal, &ps, width),
             G::Mem(ps) => {
                 let ps = split_conj(env, ps)?;
                 self.st.mem_goal(env, lg, goal, &ps)

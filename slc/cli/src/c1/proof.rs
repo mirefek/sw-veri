@@ -87,6 +87,33 @@ impl<'e> Gen<'e> {
         // the store's run: ok, to the world after
         let empty = self.mk("empty", vec![]);
         let st8ok = match (&so.data, &so.cas) {
+            _ if so.bf.is_some() => {
+                let (size, pos, k, fv) = so.bf.clone().unwrap();
+                mpf(
+                    "tr.stbf_at_ok",
+                    vec![
+                        t(&w),
+                        t(&so.p),
+                        t(&so.off),
+                        t(&size),
+                        t(&pos),
+                        t(&k),
+                        t(&fv),
+                        t(&so.addr),
+                        taut(vec![R::S(st.hw.clone())]),
+                        s(&st.hvu),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        s(&hc),
+                    ],
+                )
+            }
             (_, Some((tv, sv, _))) => mpf(
                 "tr.cas32_at_ok",
                 vec![t(&w), t(&so.p), t(tv), t(sv), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(&hc)],
