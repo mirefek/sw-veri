@@ -346,7 +346,6 @@ impl<'e> Gen<'e> {
             cprem.extend(hs);
             cns.push(n);
         }
-        let has_callees = !cns.is_empty();
         let mut out = Vec::new();
         for (n, sq) in std::mem::take(&mut self.facts_made) {
             out.push((n, sq));
@@ -406,9 +405,6 @@ impl<'e> Gen<'e> {
             );
             self.run(&mp(inst, vec![simp0(), s_(&hsub), s_(&hregs), s_(&body_in)]), &[])?
         } else {
-            if has_callees {
-                return Err("a caller without arguments: not covered yet".into());
-            }
             let inst = R::Inst(
                 "tr.entry0".into(),
                 vec![("lb", lb.clone()), ("lc", lc.clone()), ("base", b.clone()), ("code", c.clone()), ("statics", statics.clone()), ("f", b.clone()), ("fd", lit(fd)), ("q", q0raw.clone()), ("kw", kwl)],

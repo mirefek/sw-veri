@@ -352,7 +352,8 @@ impl<'e> Gen<'e> {
                             ("kw", self.kw3()),
                         ],
                     );
-                    let univ = [&st.hvu].into_iter().chain(self.hus.iter()).map(|x| R::S(x.clone())).collect();
+                    // (the value's facts: a call's result a word)
+                    let univ = [&st.hvu].into_iter().chain(self.hus.iter()).chain(st.lfx.iter()).map(|x| R::S(x.clone())).collect();
                     return self.run(&mp(inst, vec![simpw(univ), s(&rest)]), &[]);
                 }
                 Some(Red::Split { cond, ok, ub }) => {
@@ -436,7 +437,7 @@ impl<'e> Gen<'e> {
 
     /// the literal facts at st: `L`, a loop step's counter, the maps' deep
     /// `in dom` facts
-    fn set_lf(&mut self, st: &St) -> Result<(), String> {
+    pub(super) fn set_lf(&mut self, st: &St) -> Result<(), String> {
         let mut lf = vec![self.lf0.clone().expect("the literal facts")];
         lf.extend(st.lfx.iter().cloned());
         if let Some(l) = st.lp {
@@ -1096,7 +1097,9 @@ impl<'e> Gen<'e> {
         let hw_t = self.mk("and", vec![self.mk("in", vec![wv.clone(), self.mk("abi.World", vec![])]), univ(self, &wv)]);
         let hw = self.assume(&hw_t)?;
         let hu = self.assume(&hu_t)?;
-        let hy = self.assume(&yt_t)?;
+        // (no local in a home: the invariant true, proven, not assumed --
+        // an assumption of true would be every enclosing walk's too)
+        let hy = if self.app(&yt_t, "true", 0).is_some() { self.evp(&RP::Taut(vec![]), &yt_t, &[])? } else { self.assume(&yt_t)? };
         let hv = self.evp(&RP::Taut(vec![R::S(hw.clone())]), &univ(self, &wv), &[])?;
         let qit = self.mk("tr.liter", vec![yv.clone(), wr[2].clone(), kl.clone(), self.kw.clone()]);
         let jq = self.new_q(qit);
@@ -1642,9 +1645,14 @@ impl<'e> Gen<'e> {
                 Some(x) => x[0].clone(),
                 None => self.mk("not", vec![cond.clone()]),
             };
+            // (or a literal comparison false: by simp)
+            let lit_false = self.lit_value(&self.canon(&cond)) == Some(false);
             let body = if let Some(h) = self.hyp_find(&st.hyps, &opp) {
                 let goal = self.pt(&st2, to);
                 self.evp(&RP::Taut(vec![R::S(hn), R::S(h.1.clone())]), &goal, &[])?
+            } else if lit_false {
+                let goal = self.pt(&st2, to);
+                self.evp(&RP::Simp(false, vec![R::S(hn)], vec![], false), &goal, &[])?
             } else {
                 st2.bconds.push(st2.hyps.len());
                 st2.hyps.push((cond.clone(), hn));
@@ -1655,6 +1663,22 @@ impl<'e> Gen<'e> {
         let fb = bs.pop().unwrap();
         let tb = bs.pop().unwrap();
         self.run(&rule, &[("T", tb), ("F", fb)])
+    }
+
+    /// a condition's value where it is a comparison of literals (or of a
+    /// term with itself), under negations
+    fn lit_value(&self, c: &Term) -> Option<bool> {
+        if let Some(x) = self.app(c, "not", 1) {
+            return self.lit_value(&x[0]).map(|v| !v);
+        }
+        let y = self.app(c, "eq", 2)?;
+        if y[0] == y[1] {
+            return Some(true);
+        }
+        match (y[0].node(), y[1].node()) {
+            (Node::Nat(p), Node::Nat(q)) => Some(p == q),
+            _ => None,
+        }
     }
 
     /// the instance's common head: `s, V, base, code, fr, a, a2, len`

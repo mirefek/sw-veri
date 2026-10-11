@@ -117,9 +117,15 @@ item is a short summary of finished work; details are in the files named.
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
   free_meta, size_to_class, set_size, enframe, account_bounce, get_meta,
   __malloc_allzerop, a_cas, activate_group and try_avail (loops without a
-  counter), and alloc_slot (an array's 8-byte element, `tr.elem8_sx_*`; a
+  counter), alloc_slot (an array's 8-byte element, `tr.elem8_sx_*`; a
   call's argument, a return value the spec computes otherwise: equal by
-  arith).
+  arith), size_overflows (`movabs`, a 4-byte store through errno's
+  pointer) and __malloc_alloc_meta (no arguments; 64-bit stores, loads
+  and compares of statics and homes, `neg`, `and`, `imul`, `shl r64, cl`,
+  `add rax, imm32`; an `if` decided by a branch condition on a value
+  the code computed otherwise -- `x + x` for `x * 2` -- equal by arith;
+  a branch whose condition is a false literal comparison closed; a
+  32-bit result widened to the 64-bit return).
   The rules cover:
   - frames of any size;
   - a generic entry with register arguments;

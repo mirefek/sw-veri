@@ -51,9 +51,13 @@ impl<'e> Gen<'e> {
         Ok((j, r))
     }
 
-    /// a guard's value: a literal comparison, a fact in scope
-    fn guard(&self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
-        let (v, facts) = self.guard_facts(g, hyps)?;
+    /// a guard's value: a literal comparison, a fact in scope (or one of
+    /// an operand the spec computes otherwise: equal by arithmetic)
+    fn guard(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
+        let (v, facts) = match self.guard_facts(g, hyps) {
+            Some(x) => x,
+            None => self.guard_arith(g, hyps)?,
+        };
         // (the facts it was decided by: a branch condition among them spent)
         if v {
             self.picked.borrow_mut().extend(facts.iter().map(|f| f.concl().clone()));
@@ -63,6 +67,46 @@ impl<'e> Gen<'e> {
             return Some((v, s(&facts[0])));
         }
         Some((v, simpw(facts.into_iter().map(R::S).collect())))
+    }
+
+    /// an equation guard `x = y` (or its negation) by a fact in scope of the
+    /// same equation but for an operand the machine computed otherwise (its
+    /// value the spec's by arithmetic, from the facts in scope)
+    fn guard_arith(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, Vec<Seq>)> {
+        // (a term under its negations: their parity, the term)
+        let strip = |g: &Gen, t: &Term| {
+            let (mut neg, mut e) = (false, t.clone());
+            while let Some(a) = g.app(&e, "not", 1).map(|a| a[0].clone()) {
+                neg = !neg;
+                e = a;
+            }
+            (neg, e)
+        };
+        let (neg, e) = strip(self, g);
+        let x = self.app(&e, "eq", 2)?.to_vec();
+        if g.loose_depth(&self.env.binders_fn()) > 0 {
+            return None;
+        }
+        let (x0, x1) = (self.expand(&x[0]), self.expand(&x[1]));
+        for (h, hs) in hyps {
+            let (hneg, he2) = strip(self, &self.expand(h));
+            let Some(y) = self.app(&he2, "eq", 2).map(|y| y.to_vec()) else { continue };
+            // (one side the same, the other equal by arithmetic)
+            let other = if y[0] == x0 && y[1] != x1 {
+                (y[1].clone(), x1.clone())
+            } else if y[1] == x1 && y[0] != x0 {
+                (y[0].clone(), x0.clone())
+            } else {
+                continue;
+            };
+            let facts: Vec<R> = self.lf.iter().cloned().chain(hyps.iter().map(|h| h.1.clone())).map(R::S).collect();
+            let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext", "bits_sub", "bits_neg"].iter().map(|d| d.to_string()).collect();
+            let eq = self.mk("eq", vec![other.0, other.1]);
+            if let Ok(q) = self.evp(&RP::Defs(Box::new(RP::Arith(facts)), defs), &eq, &[]) {
+                return Some((hneg == neg, vec![hs.clone(), q]));
+            }
+        }
+        None
     }
 
     /// a guard's value, and the facts in scope it rests on
@@ -123,7 +167,7 @@ impl<'e> Gen<'e> {
     }
 
     /// the way to a disjunct whose guard holds
-    fn pick(&self, t: &Term, hyps: &[(Term, Seq)]) -> Option<Vec<Pick>> {
+    fn pick(&mut self, t: &Term, hyps: &[(Term, Seq)]) -> Option<Vec<Pick>> {
         let _p = super::prof::g("pick");
         if let Some(a) = self.app(t, "and", 2) {
             if a[0].loose_depth(&self.env.binders_fn()) == 0 {

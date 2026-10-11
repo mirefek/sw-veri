@@ -99,9 +99,10 @@ impl<'e> Gen<'e> {
 }
 
 /// a statement claim: at `a` (its frame, loop, and the walk's breakpoints
-/// and wrapper), over the world wv and the locals yv: the rest `q`, the
-/// homes `hs`, the frame depth `ds`; `all yv wv. yv in univ(1) -> wv a
-/// world -> yt(yv) -> tr.lv(..)`
+/// and wrapper), over the locals that are no literal (`ys`: a variable per
+/// such component of the locals' `ny`) and the world wv: the rest `q`, the
+/// homes `hs`, the frame depth `ds`; `all ys wv. Y in univ(1) && .. -> wv
+/// a world -> yt(ys) -> tr.lv(..)`
 #[derive(Clone)]
 pub(super) struct StmtClaim {
     a: u128,
@@ -109,7 +110,8 @@ pub(super) struct StmtClaim {
     lp: Option<usize>,
     ctx: [Term; 4],
     wv: VarId,
-    yv: VarId,
+    ys: Vec<(usize, VarId)>,
+    ny: usize,
     q: Term,
     hs: Term,
     ds: Term,
@@ -243,6 +245,18 @@ impl<'e> Gen<'e> {
         (hyps, facts, lfx)
     }
 
+    /// the locals' components: `pair(a, pair(b, .. z))` as a, b, .. z
+    fn locals_of(&self, y: &Term) -> Vec<Term> {
+        let mut comps = Vec::new();
+        let mut cur = y.clone();
+        while let Some(pa) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
+            comps.push(pa[0].clone());
+            cur = pa[1].clone();
+        }
+        comps.push(cur);
+        comps
+    }
+
     fn stmt_ctx(&self) -> [Term; 4] {
         [self.bkp.clone(), self.bka.clone(), self.wrap.clone(), self.kw.clone()]
     }
@@ -251,18 +265,53 @@ impl<'e> Gen<'e> {
     fn stmt_make(&mut self, st: &St, q: &Term, w0: &Term, y0: &Term, e0: &Term) -> Result<Option<usize>, String> {
         let a = st.a;
         let n = self.fresh("");
-        let yv = self.var(&format!("sy{n}"));
         let wv = self.var(&format!("sw{n}"));
-        let (hsm_y, yt_t) = self.link_homes(st, y0, &yv)?;
+        // the locals: a variable for each that is no literal (a literal one
+        // kept: its home, if any, holds the literal too)
+        let comps = self.locals_of(y0);
+        let mut ys = Vec::new();
+        let mut gen = Vec::new();
+        for (i, ci) in comps.iter().enumerate() {
+            if nat(ci).is_some() {
+                gen.push(ci.clone());
+            } else {
+                let v = self.var(&format!("sy{n}_{i}"));
+                ys.push((i, Self::var_id(&v)));
+                gen.push(v);
+            }
+        }
+        let y_gen = gen.iter().rev().cloned().reduce(|acc, x| self.mk("pair", vec![x, acc])).ok_or("no locals")?;
+        // (a home holding a local's value -- the same term, or one the facts
+        // make equal -- holds its variable)
+        self.set_lf(st)?;
+        let mut hsm_y = BTreeMap::new();
+        let mut yts = Vec::new();
+        for (c, (nb, x)) in &st.hsm {
+            let xc = self.canon(x);
+            let mut v = x.clone();
+            for &(i, vi) in &ys {
+                let ci = &comps[i];
+                let same = self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok();
+                if same {
+                    v = Term::var(vi, vec![]);
+                    yts.push(self.mk("in", vec![v.clone(), self.mk("bits", vec![lit(8 * nb)])]));
+                    break;
+                }
+            }
+            hsm_y.insert(*c, (*nb, v));
+        }
+        let yt_t = yts.into_iter().reduce(|a, b| self.mk("and", vec![a, b])).unwrap_or_else(|| self.mk("true", vec![]));
         let hst_y = self.hs_term(&hsm_y);
-        let q_gen = self.stmt_with(q, if matches!(w0.node(), Node::BVar(2)) { w0 } else { &wv }, &yv, e0);
+        let q_gen = self.stmt_with(q, if matches!(w0.node(), Node::BVar(2)) { w0 } else { &wv }, &y_gen, e0);
         // (the values of the path's own: made after its first branch)
         let mark = st.splits.first().map(|sp| sp.mark).unwrap_or(self.env.vars.len());
-        let (yid, wid) = (Self::var_id(&yv), Self::var_id(&wv));
+        let wid = Self::var_id(&wv);
+        let mut vids: Vec<VarId> = ys.iter().map(|x| x.1).collect();
+        vids.push(wid);
         let own = |t: &Term| {
             let mut vs = Vec::new();
             t.vars(&mut vs);
-            vs.iter().any(|v| (*v as usize) >= mark && *v != yid && *v != wid)
+            vs.iter().any(|v| (*v as usize) >= mark && !vids.contains(v))
         };
         if own(&self.expand(&q_gen)) || own(&self.expand(&hst_y)) {
             self.trace(|| format!("stmt at {:x}: a value of the path's own not abstracted", a));
@@ -274,13 +323,16 @@ impl<'e> Gen<'e> {
             _ => st.ds.clone(),
         };
         // the facts every path here has; the claim's premises
-        let (hyps, mut facts, mut lfx) = self.shared_facts(st, y0, &[yid, wid], &[&q_gen, &hst_y]);
+        let (hyps, mut facts, mut lfx) = self.shared_facts(st, y0, &vids, &[&q_gen, &hst_y]);
         let univ = |g: &Gen, x: &Term| g.mk("in", vec![x.clone(), g.mk("univ", vec![lit(1)])]);
-        let hu_t = univ(self, &yv);
+        // (the locals in the universe, and each variable)
+        let hu_t = ys.iter().fold(univ(self, &y_gen), |acc, (_, v)| self.mk("and", vec![acc, univ(self, &Term::var(*v, vec![]))]));
         let hw_t = self.mk("and", vec![self.mk("in", vec![wv.clone(), self.mk("abi.World", vec![])]), univ(self, &wv)]);
         let hw = self.assume(&hw_t)?;
         let hu = self.assume(&hu_t)?;
-        let hy = self.assume(&yt_t)?;
+        // (no local in a home: the invariant true, proven, not assumed --
+        // an assumption of true would be every enclosing walk's too)
+        let hy = if self.app(&yt_t, "true", 0).is_some() { self.evp(&RP::Taut(vec![]), &yt_t, &[])? } else { self.assume(&yt_t)? };
         let hvu = self.evp(&RP::Taut(vec![R::S(hw.clone())]), &univ(self, &wv), &[])?;
         facts.push(hy.clone());
         facts.push(hu.clone());
@@ -322,7 +374,7 @@ impl<'e> Gen<'e> {
                 return Ok(None);
             }
         };
-        let claim = match self.close(pf, &[hu_t, hw_t, yt_t], &[yid, wid]) {
+        let claim = match self.close(pf, &[hu_t, hw_t, yt_t], &vids) {
             Ok(c) => c,
             Err(e) => {
                 self.trace(|| format!("stmt at {:x}: its claim not closed ({})", a, e));
@@ -330,7 +382,7 @@ impl<'e> Gen<'e> {
             }
         };
         let ctx = self.stmt_ctx();
-        self.stmts.push(StmtClaim { a, fr: st.fr, lp: st.lp, ctx, wv: wid, yv: yid, q: q_gen, hs: hst_y, ds, claim });
+        self.stmts.push(StmtClaim { a, fr: st.fr, lp: st.lp, ctx, wv: wid, ys, ny: comps.len(), q: q_gen, hs: hst_y, ds, claim });
         Ok(Some(self.stmts.len() - 1))
     }
 
@@ -341,8 +393,13 @@ impl<'e> Gen<'e> {
         if c.a != st.a || c.fr != st.fr || c.lp != st.lp || c.ctx != self.stmt_ctx() {
             return Ok(None);
         }
+        let comps = self.locals_of(y0);
+        if comps.len() != c.ny {
+            return Ok(None);
+        }
+        let vals: Vec<Term> = c.ys.iter().map(|(i, _)| comps[*i].clone()).collect();
         let bf = self.env.binders_fn();
-        let inst = |x: &Term| x.subst_var(c.wv, &st.w, &bf).subst_var(c.yv, y0, &bf);
+        let inst = |x: &Term| c.ys.iter().zip(vals.iter()).fold(x.subst_var(c.wv, &st.w, &bf), |t, ((_, v), val)| t.subst_var(*v, val, &bf));
         let (q1, q2) = (self.expand(&inst(&c.q)), self.expand(q));
         if q1 != q2 {
             self.trace(|| {
@@ -376,7 +433,10 @@ impl<'e> Gen<'e> {
             return Ok(None);
         }
         let res = (|| -> Result<Seq, String> {
-            let c0 = self.run(&mp(R::S(c.claim.clone()), vec![t(y0), t(&st.w), simp_lw([&st.hvu].into_iter().chain(self.hus.iter()).map(|x| R::S(x.clone())).collect()), s(&st.hw), simp_l()]), &[])?;
+            let mut args: Vec<RA> = vals.iter().map(t).collect();
+            args.push(t(&st.w));
+            args.extend([simp_lw([&st.hvu].into_iter().chain(self.hus.iter()).chain(st.lfx.iter()).map(|x| R::S(x.clone())).collect()), s(&st.hw), simp_l()]);
+            let c0 = self.run(&mp(R::S(c.claim.clone()), args), &[])?;
             // (st's homes: the claim's, and more)
             let empty = self.mk("empty", vec![]);
             let mut sub_pf = mpf("tr.hsub_empty", vec![t(&st.hst)]);
