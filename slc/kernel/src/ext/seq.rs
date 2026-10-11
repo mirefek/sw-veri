@@ -446,6 +446,19 @@ impl Seq {
         Ok(Seq { hyps: s.hyps.clone(), concl: goal.clone(), open: s.open.clone() })
     }
 
+    /// From `Γ ⊢ φ`: `Γ ⊢ ψ`, where φ and ψ are the same up to lets
+    /// (`letin`, see `lets`): what `conv` with `letin` accepts, the lets
+    /// reduced only where the two differ.
+    pub fn conv_lets(env: &Env, s: &Seq, goal: &Term) -> KResult<Seq> {
+        env.check_wf(goal, 0)?;
+        let l = super::lets::letin_sym(env).ok_or_else(|| KernelError("`letin` is not the prelude's `letin(a, x. f) := f(a)`".into()))?;
+        if !super::lets::LetEq::new(env, l).eq(&s.concl, goal) {
+            let p = Printer::new(env);
+            return err(format!("the fact and the goal `{}` differ up to lets\n  {}", p.short(goal), p.mismatch(goal, &s.concl)));
+        }
+        Ok(Seq { hyps: s.hyps.clone(), concl: goal.clone(), open: s.open.clone() })
+    }
+
     /// `⊢ is_prop(t)` for a term known syntactically to be a proposition
     /// (see `Logic::prop_valued`).
     pub fn prop(env: &Env, lg: &Logic, t: &Term) -> KResult<Seq> {

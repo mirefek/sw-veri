@@ -12,6 +12,8 @@
 //! - `seq`: natural deduction with hypotheses, quantifiers, equality,
 //!   definitions; rewriting with an equation under `all`s at its instances
 //!   under binders (`rewrite_under`, by the binders' extensionality).
+//! - `lets`: equality up to lets, a let reduced only where two terms
+//!   differ (`Seq::conv_lets`).
 //! - `arith`: linear arithmetic over the naturals; `nat_rec`'s recursion
 //!   equations.
 //! - `list`: lists up to associativity of `++`, their lengths (for
@@ -29,6 +31,7 @@ pub mod arith;
 pub mod cache;
 pub mod facts;
 pub(crate) mod inventory;
+pub mod lets;
 pub mod list;
 pub mod mem;
 pub(crate) mod pinned;

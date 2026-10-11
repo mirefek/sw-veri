@@ -52,7 +52,11 @@
 //! side, or the k-th ones: numbered from 1, outer before inner, left to
 //! right; e may be `all x... l = r`, rewriting its instances, also under
 //! binders), `expand(p, c.. [, {k}..])` (c's occurrences unfolded once),
-//! `unfold(sym)`,
+//! `unfold(sym)`, `zeta(p, x [, {k}..])` (the let x's variable its value at
+//! its k-th occurrences, all: the let dropped), `fold_let(p, x [, {t}] [,
+//! {k}..])` (the let x's value back to x; with no let x, p as the let
+//! `letin(t, x. ..)` of t's occurrences) -- also as steps `zeta x, {k}..
+//! [in h]`, `fold_let x, .. [in h]` on the goal or a fact h,
 //! `all_elim(p, {t1}, ..)`, `ex_intro({w}, {x. φ}, p)`, `witness(p)`,
 //! `prop({t})`, `lit({t})`; `apply(f, a1, ..)`: f's leading `all`s and
 //! schematic variables instantiated -- by the terms `{t}` among the ai, in
@@ -71,7 +75,8 @@
 //! `fix` unfold a defined goal's head to the implication / `all` they
 //! need. `irreducible NAME` (a declaration) keeps NAME folded there; the
 //! step `unfold [D..] [in h]` unfolds explicitly (the goal, or fact h; no
-//! D: the goal's head).
+//! D: the goal's head). Lets likewise: a fact proves a goal the same up to
+//! lets, a let reduced only where the two differ (`Seq::conv_lets`).
 //!
 //! Simplification: `rsimp(e1, .., D1, .. [, only])` (Lean-like, see
 //! rsimp.rs): rewriting left to right with the facts and definitions given
@@ -91,6 +96,7 @@ use sl_kernel::{Env, KResult, KernelError, Node, SymId, Term, VarId};
 
 pub mod api;
 mod bits;
+mod lets;
 mod mem;
 mod rsimp;
 
@@ -195,6 +201,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                     Seq::mp(env, &s2, &w)?
                 }
                 Frame::Unfold(g, syms) => conv_to(env, s, g, syms)?,
+                Frame::Lets(g) => Seq::conv_lets(env, &s, g)?,
                 Frame::Flip(g) => {
                     let s = conv_to(env, s, &flip_term(env, lg, g)?, &[])?;
                     let s = flip_seq(env, lg, &s)?;
@@ -295,6 +302,12 @@ fn conv_to(env: &Env, s: Seq, goal: &Term, start: &[SymId]) -> KResult<Seq> {
     if s.concl() == goal && start.is_empty() {
         return Ok(s);
     }
+    // (the same up to lets: reduced where they differ)
+    if start.is_empty() {
+        if let Some(r) = lets::conv_try(env, &s, goal) {
+            return Ok(r);
+        }
+    }
     match unfold_match(env, s.concl(), goal, start) {
         Some(syms) if syms.is_empty() => Ok(s),
         Some(syms) => Seq::conv(env, &s, goal, &syms),
@@ -309,6 +322,9 @@ fn conv_to(env: &Env, s: Seq, goal: &Term, start: &[SymId]) -> KResult<Seq> {
 fn mp_u(env: &Env, imp: &Seq, a: &Seq) -> KResult<Seq> {
     if let Node::App(i, c) = imp.concl().node() {
         if *i == env.builtins.imp && c[0] != *a.concl() {
+            if let Some(r) = lets::conv_try(env, a, &c[0]) {
+                return Seq::mp(env, imp, &r);
+            }
             if let Some(syms) = unfold_match(env, a.concl(), &c[0], &[]) {
                 return Seq::mp(env, imp, &Seq::conv(env, a, &c[0], &syms)?);
             }
@@ -557,6 +573,8 @@ enum Frame {
     Rewrite(Term, Seq),
     /// the goal flipped (`flip`): the goal before
     Flip(Term),
+    /// the goal's lets changed (`zeta`, `fold_let`): the goal before
+    Lets(Term),
 }
 
 struct State {
@@ -927,6 +945,33 @@ impl State {
                     }
                 }
             }
+            // zeta x [, {k}..] [in h] / fold_let x [, {t}] [, {k}..] [in h]:
+            // the goal (or the fact h) with the let x changed (see the
+            // rules `zeta`, `fold_let`)
+            "zeta" | "fold_let" => {
+                let (a, h) = match split_top_kw(rest, "in") {
+                    Some((a, b)) => (a.trim(), Some(b.trim())),
+                    None => (rest.trim(), None),
+                };
+                let args = match parse_pe(&format!("{}({})", kw, a))? {
+                    PE::Rule(_, a) => a,
+                    _ => unreachable!(),
+                };
+                match h {
+                    Some(h) => {
+                        let f = self.fact(env, h)?;
+                        let t = self.let_target(env, kw, f.concl(), &args)?;
+                        let s = Seq::conv_lets(env, &f, &t)?;
+                        self.facts.push((h.to_string(), s));
+                    }
+                    None => {
+                        let g = self.goal.clone().ok_or_else(|| KernelError(format!("{}: no current goal here", kw)))?;
+                        let u = self.let_target(env, kw, &g, &args)?;
+                        self.frames.push(Frame::Lets(g));
+                        self.goal = Some(u);
+                    }
+                }
+            }
             // flip [in h]: the goal's (or the fact h's) equation or
             // disequation the other way round (under `all`s and premises)
             "flip" => match rest.trim().strip_prefix("in ") {
@@ -1221,8 +1266,27 @@ impl State {
                 let mut facts = Vec::new();
                 let mut loops: Vec<LoopHint> = Vec::new();
                 let mut keep = Vec::new();
+                let mut lets: (Vec<String>, Vec<String>) = Default::default();
                 for a in args {
                     match a {
+                        // lets(keep(x, ..), expand(y, ..)): the lets named x
+                        // kept, those named y reduced (whatever their values'
+                        // sizes and uses)
+                        Arg::Proof(PE::Rule(r, xs)) if r == "lets" => {
+                            for x in xs {
+                                let (which, ns) = match x {
+                                    Arg::Proof(PE::Rule(w, ns)) if w == "keep" => (&mut lets.0, ns),
+                                    Arg::Proof(PE::Rule(w, ns)) if w == "expand" => (&mut lets.1, ns),
+                                    _ => return err("lets(..) takes keep(x, ..) and expand(y, ..)"),
+                                };
+                                for n in ns {
+                                    match n {
+                                        Arg::Proof(PE::Ref(n)) => which.push(n.clone()),
+                                        _ => return err("keep(..) / expand(..) in lets(..) take names of lets"),
+                                    }
+                                }
+                            }
+                        }
                         // keep(P): runs of program P stay folded
                         Arg::Proof(PE::Rule(r, xs)) if r == "keep" => {
                             for x in xs {
@@ -1250,7 +1314,11 @@ impl State {
                     }
                 }
                 let refs: Vec<&Seq> = facts.iter().collect();
-                Seq::simp_goal(env, lg, &refs, goal, &loops, &keep)
+                *lg.simp_lets.borrow_mut() = lets;
+                let r = Seq::simp_goal(env, lg, &refs, goal, &loops, &keep);
+                lg.simp_lets.borrow_mut().0.clear();
+                lg.simp_lets.borrow_mut().1.clear();
+                r
             }
             // lists(p1, ..): `A = B` for list expressions with the same pieces
             // (the premises say which terms are lists)
@@ -1516,6 +1584,29 @@ impl State {
                 _ => err("expected the name of a definition"),
             })
             .collect()
+    }
+
+    /// `t` changed by `zeta` / `fold_let` (`kw`) with the arguments `args`:
+    /// the let's name, then (fold_let, no let so named) its value `{t}`,
+    /// then occurrences `{k}`
+    fn let_target(&self, env: &mut Env, kw: &str, t: &Term, args: &[Arg]) -> KResult<Term> {
+        let name = match args.first() {
+            Some(Arg::Proof(PE::Ref(n))) => n.clone(),
+            _ => return err(format!("{} takes the name of a let", kw)),
+        };
+        let mut rest = &args[1..];
+        if kw == "zeta" {
+            return lets::zeta(env, t, &name, &self.occs(rest));
+        }
+        let val = match rest.first() {
+            Some(Arg::Term(_)) if !lets::has_let(env, t, &name) => {
+                let v = self.term_arg(env, rest.first(), 0)?;
+                rest = &rest[1..];
+                Some(v)
+            }
+            _ => None,
+        };
+        lets::fold_let(env, t, &name, val.as_ref(), &self.occs(rest))
     }
 
     /// the occurrence numbers among `args` (`{2}`)
@@ -2355,6 +2446,17 @@ impl State {
                         let occ = self.occs(&args[1.min(args.len())..]);
                         let goal = self.unfold_sel(env, p.concl(), &syms, &occ)?;
                         Seq::conv(env, &p, &goal, &syms)
+                    }
+                    // zeta(p, x [, {k}..]): p with the let x's variable its
+                    // value at its k-th occurrences in the let's body (all:
+                    // the let dropped); fold_let(p, x [, {k}..]): the let
+                    // x's value back to x (at its k-th occurrences), or with
+                    // no let x, fold_let(p, x, {t} [, {k}..]): p as the let
+                    // `letin(t, x. ..)` of t's (k-th) occurrences
+                    "zeta" | "fold_let" => {
+                        let p = self.proof_arg(env, lg, a0)?;
+                        let t = self.let_target(env, name, p.concl(), &args[1.min(args.len())..])?;
+                        Seq::conv_lets(env, &p, &t)
                     }
                     // unsel(h): from `z in set_select(S, x. P)`, `z in S && P(z)`
                     "unsel" => {

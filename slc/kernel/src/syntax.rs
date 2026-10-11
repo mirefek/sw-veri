@@ -365,12 +365,14 @@ impl<'a, 'e> Parser<'a, 'e> {
         }
         let mut args = Vec::new();
         let mut arg_binders = Vec::new();
+        let mut bound: Vec<String> = Vec::new();
         if self.is_sym("(") {
             self.bump()?;
             if !self.is_sym(")") {
                 loop {
                     let names = self.binding_names()?.unwrap_or_default();
                     let n = names.len();
+                    bound.extend(names.iter().cloned());
                     self.scopes.extend(names);
                     args.push(self.term()?);
                     self.scopes.truncate(self.scopes.len() - n);
@@ -408,7 +410,10 @@ impl<'a, 'e> Parser<'a, 'e> {
                 name, expected, arg_binders
             ));
         }
-        Ok(Term::app(s, args))
+        // (the names its arguments bind, in order: metadata, for printing
+        // and for naming a let)
+        let t = Term::app(s, args);
+        Ok(if bound.is_empty() { t } else { t.with_binder_name(Some(bound.join(" ").into())) })
     }
 
     /// `(a, x. p, x y. q)` -> names with arities
@@ -1178,6 +1183,10 @@ impl<'e> Printer<'e> {
                     return;
                 }
                 out.push_str(&name);
+                // (in messages: the names written at its binders, where they
+                // shadow none -- else, text to be read again, the made-up
+                // ones: the same text for equal terms)
+                let mut written = t.binder_name().filter(|_| self.fold.get()).map(|n| n.split(' ').map(str::to_string).collect::<Vec<_>>()).unwrap_or_default().into_iter();
                 if !args.is_empty() {
                     out.push('(');
                     for (i, a) in args.iter().enumerate() {
@@ -1186,7 +1195,11 @@ impl<'e> Printer<'e> {
                         }
                         let k = binders[i] as usize;
                         for _ in 0..k {
-                            let v = self.fresh(scope);
+                            let v = match written.next() {
+                                // (not one like the made-up `x3`s)
+                                Some(n) if !n.is_empty() && !scope.contains(&n) && !(n.len() > 1 && n.starts_with('x') && n[1..].bytes().all(|c| c.is_ascii_digit())) => n,
+                                _ => self.fresh(scope),
+                            };
                             out.push_str(&v);
                             out.push(' ');
                             scope.push(v);

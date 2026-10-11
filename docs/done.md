@@ -58,6 +58,16 @@ item is a short summary of finished work; details are in the files named.
   constants; `rsimp` reduces program outcomes' parts; a `show` must end
   its block. Error messages show the
   first difference, with the proof's abbreviations folded back.
+- **Lets** (terms that share instead of copying): `fn_modify(f, k, y. g)`
+  with its lemmas (core/records.core); simp keeps a let whose value is
+  large and used twice or more, looks through it only where a rule needs
+  the value (once more with every let reduced if that fails); the kernel's
+  `conv_lets` (ext/lets.rs) matches a fact with a goal up to lets,
+  reducing a let only where the two differ, used implicitly wherever a
+  fact meets its goal; `zeta` / `fold_let` (rules and steps) expand or fold
+  a named let at chosen occurrences; `simp(.., lets(keep(..),
+  expand(..)))`; binder names kept on any binder argument and shown in
+  messages.
 - **Libraries** (`core/`): logic, sets, naturals and words (a word is
   determined by its bits), records, lists, and loops. `core/bits.core`:
   division by powers of 2, a word's bits under `/`, `mod` and `*` by 2^k,

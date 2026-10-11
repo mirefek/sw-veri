@@ -35,7 +35,8 @@ struct Inner {
     vbits: u64,
     label: Option<Rc<str>>,
     /// (metadata too) the name written at an `all`/`ex` binder, for
-    /// instantiating it by name
+    /// instantiating it by name; at another binding symbol (`letin(a, x.
+    /// f)`), the names its arguments bind, in order, separated by spaces
     bind: Option<Rc<str>>,
 }
 

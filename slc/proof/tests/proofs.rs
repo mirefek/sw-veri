@@ -937,3 +937,47 @@ theorem t3(v): (ex z. all y. z = y) -> (ex z. letin(v, x. all y. letin(y, u. z =
     // the variables kept apart: z = v is not v = z
     rejected("theorem b(v): (ex z. z = v) -> (ex z. letin(v, x. x = z))\nproof\n  assume h\n  show by defs(h, letin)\nqed\n", "differ after unfolding");
 }
+
+/// Lets by name: `zeta` (the variable its value at chosen occurrences, the
+/// let dropped when none is left), `fold_let` (back, or a new let), as
+/// rules and as steps on the goal or a fact; a fact matching its goal up
+/// to lets, a let reduced only where the two differ (a chain of 40 lets
+/// doubling a pair: 2^40 nodes, unfolded).
+#[test]
+fn lets_by_name_and_matching_up_to_lets() {
+    let ok = "theorem z1(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  have h2 := zeta(h, x)\n  show := h2.1\nqed\n\
+theorem z2(a, b): letin(a, x. x = b && x = x) -> letin(a, x. a = b && x = x)\nproof\n  assume h\n  show := zeta(h, x, {1})\nqed\n\
+theorem z3(a, b): a = b && a = a -> letin(a, y. y = b && y = y)\nproof\n  assume h\n  show := fold_let(h, y, {a})\nqed\n\
+theorem z4(a, b): letin(a, x. a = b && x = a) -> letin(a, x. x = b && x = a)\nproof\n  assume h\n  show := fold_let(h, x, {1})\nqed\n\
+theorem z5(a, b, c): a = b -> letin(c, z. letin(a, x. x = b))\nproof\n  assume h\n  zeta z\n  zeta x\n  show := h\nqed\n\
+theorem z6(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  zeta x in h\n  show := h.1\nqed\n\
+theorem z7(a, b): letin(a, x. x = b) -> a = b\nproof\n  assume h\n  show := h\nqed\n\
+theorem z8(v): (all y. ex z. app(z, y) = v) -> (all y. ex z. letin(v, x. letin(y, u. app(z, u) = x)))\nproof\n  assume h\n  show := h\nqed\n\
+theorem s1(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  show by simp(h, lets(expand(x), keep(y)))\nqed\n";
+    assert_eq!(check_all(ok), Ok(9));
+    let n = 40;
+    let chain = |last: &str, upto: usize| {
+        let mut s = "letin(pair(a, a), x1. ".to_string();
+        for i in 2..=upto {
+            s += &format!("letin(pair(x{}, x{}), x{}. ", i - 1, i - 1, i);
+        }
+        s + last + &")".repeat(upto)
+    };
+    let p = chain(&format!("fst(x{}) = b", n), n);
+    let p2 = chain(&format!("fst(pair(x{}, x{})) = b", n - 1, n - 1), n - 1);
+    let big = format!(
+        "theorem c1(a, b): {p} -> {p}\nproof\n  assume h\n  zeta x39, {{1}} in h\n  fold_let x39, {{1}} in h\n  show := h\nqed\n\
+theorem c2(a, b): {p} -> {p2}\nproof\n  assume h\n  show := h\nqed\n\
+theorem c3(a, b): {p2} -> {p}\nproof\n  assume h\n  show := h\nqed\n"
+    );
+    assert_eq!(check_all(&big), Ok(3));
+    // kept apart: z = v is not v = z; no let so named; no such occurrence;
+    // a kept let is not looked through
+    rejected("theorem b(v): (ex z. z = v) -> (ex z. letin(v, x. x = z))\nproof\n  assume h\n  show := h\nqed\n", "not");
+    rejected("theorem b(a, b): letin(a, x. x = b) -> a = b\nproof\n  assume h\n  show := zeta(h, q)\nqed\n", "no let `q`");
+    rejected("theorem b(a, b): letin(a, x. x = b) -> a = b\nproof\n  assume h\n  show := zeta(h, x, {2})\nqed\n", "no occurrence 2");
+    match check_all("theorem b(a, b): letin(a, x. x = b && x = x) -> a = b\nproof\n  assume h\n  show by simp(h, lets(keep(x)))\nqed\n") {
+        Ok(_) => panic!("a kept let looked through"),
+        Err(e) => assert!(e.contains("path left"), "{}", e),
+    }
+}

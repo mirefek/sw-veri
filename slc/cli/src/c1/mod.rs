@@ -491,7 +491,12 @@ impl<'e> Gen<'e> {
         }
         let e2 = self.expand(&t);
         let body = self.abstract_sub(&e2, &ew);
+        // (named as the world before, in messages and for `zeta`)
         let e = self.mk("letin", vec![ew.clone(), body.clone()]);
+        let e = match w.node() {
+            Node::Var(x, a) if a.is_empty() => e.with_binder_name(Some(self.env.vars[*x as usize].name.as_str().into())),
+            _ => e,
+        };
         if self.is_value(v) && !self.zs.contains(&v) {
             self.val_of.entry(e.clone()).or_insert(v);
         }

@@ -320,6 +320,8 @@ struct Simp<'a> {
     memo: std::cell::RefCell<FxMap<usize, (Term, Term)>>,
     /// programs kept folded (`Logic::simp_keep`)
     keep: Vec<SymId>,
+    /// lets kept / reduced by name (`Logic::simp_lets`)
+    lets: (Vec<String>, Vec<String>),
     /// symbols unfolded by premises `all xs. f(xs) = rhs` (`Logic::simp_rewrites`)
     rewrites: Vec<(SymId, usize, Term)>,
     /// run loops in the goal (`Logic::simp_goal_loops`)
@@ -585,6 +587,7 @@ impl<'a> Simp<'a> {
             env,
             arith,
             keep: lg.simp_keep.borrow().clone(),
+            lets: lg.simp_lets.borrow().clone(),
             rewrites: lg.simp_rewrites.borrow().clone(),
             goal_loops: lg.simp_goal_loops.get(),
             used: Default::default(),
@@ -1384,6 +1387,20 @@ impl<'a> Simp<'a> {
         }
     }
 
+    /// the let t (its value simplified v) reduced at once: v small, or
+    /// open, or the let named in `simp(.., lets(expand(..)))` -- and not
+    /// one named in `lets(keep(..))`
+    fn let_reduced(&self, t: &Term, v: &Term) -> bool {
+        if self.env.loose_depth_m(v) > 0 {
+            return true;
+        }
+        match t.binder_name().and_then(|n| n.split(' ').next()) {
+            Some(n) if self.lets.0.iter().any(|k| k == n) => false,
+            Some(n) if self.lets.1.iter().any(|k| k == n) => true,
+            _ => let_inline(v),
+        }
+    }
+
     /// a let's body simplified with its variable a local constant bound to
     /// the value v (`simp` the body's simplifier): the result, with the let
     /// as it ends up (kept, substituted, dropped)
@@ -1393,9 +1410,11 @@ impl<'a> Simp<'a> {
         self.let_env.borrow_mut().push((c, v.clone()));
         let b = simp(&open);
         self.let_env.borrow_mut().pop();
+        // (a let named in `lets(keep(..))` kept used once too)
+        let kept = t.binder_name().and_then(|n| n.split(' ').next()).is_some_and(|n| self.lets.0.iter().any(|k| k == n));
         match var_uses(&b, c, 2) {
             0 => b,
-            1 => simp(&b.subst_var(c, &v, &self.env.binders_fn())),
+            1 if !kept => simp(&b.subst_var(c, &v, &self.env.binders_fn())),
             _ => t.with_args(vec![v, let_abstract(self.env, &b, c)]),
         }
     }
@@ -1433,7 +1452,7 @@ impl<'a> Simp<'a> {
         // `letin(a, x. body)`: β for a small value, else lazily
         if is(f, s.letin) {
             let v = self.term(&a[0]);
-            if let_inline(&v) || self.env.loose_depth_m(&v) > 0 {
+            if self.let_reduced(t, &v) {
                 return self.term(&inst_k(self.env, &a[1], &[v]));
             }
             return self.let_body(t, v, &a[1], &|b| self.term(b));
@@ -2201,7 +2220,7 @@ impl<'a> Simp<'a> {
         }
         if is(f, s.letin) {
             let v = self.term(&a[0]);
-            if let_inline(&v) || self.env.loose_depth_m(&v) > 0 {
+            if self.let_reduced(t, &v) {
                 return self.prop(&inst_k(self.env, &a[1], &[v]), pol);
             }
             return self.let_body(t, v, &a[1], &|b| self.prop(b, pol));

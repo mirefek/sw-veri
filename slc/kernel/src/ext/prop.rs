@@ -25,6 +25,9 @@ pub struct Logic {
     /// programs `simp` keeps folded (`runs(P, ..)` not unfolded), for the
     /// duration of one `simp` step
     pub simp_keep: std::cell::RefCell<Vec<SymId>>,
+    /// lets (by their written names) `simp` keeps / reduces whatever their
+    /// values' sizes and uses, for one `simp` step
+    pub simp_lets: std::cell::RefCell<(Vec<String>, Vec<String>)>,
     /// library facts a `simp` step relied on (e.g. `while_unroll` for
     /// unrolling a loop): its sequent rests on them unless proven
     pub simp_used: std::cell::RefCell<Vec<String>>,
@@ -56,6 +59,7 @@ impl Logic {
             in_: sym("in")?,
             is_prop: sym("is_prop")?,
             simp_keep: Default::default(),
+            simp_lets: Default::default(),
             simp_used: Default::default(),
             simp_goal_loops: Default::default(),
             simp_rewrites: Default::default(),

@@ -447,6 +447,8 @@ show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proo
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
 let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_body(h)`: h's loop's body)
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)
+zeta x [, {k}..] [in h]   the let x's variable its value (all or the k-th occurrences)
+fold_let x [, {t}] [, {k}..] [in h]   the let x's value back to x, or a new let x of t
 flip [in h]               turn the equation / disequation around
 rsimp e1, .. [in h]       simplify the goal (or h) with rsimp
 print P                   show what P proves, then (on their own lines) its hypotheses and the goal
@@ -468,6 +470,17 @@ not search.
 
 Arguments are proof expressions, terms `{t}`, occurrence selections
 `{1, 3}` (numbered from 1, outer before inner, left to right), or symbols.
+
+**Lets.** `letin(a, x. f)` keeps the name written at its binder (term
+metadata, like labels): messages print it, and `zeta` / `fold_let` /
+`simp(.., lets(..))` select a let by it. A let without a written name is
+selected by the name it is printed with (`x3`); the first let so named
+counts (outer before inner, left to right). A new let made by `fold_let`
+goes around the whole statement, so its value must be closed. A fact proves a goal
+that is the same up to lets: the two are compared node by node, a let
+reduced only where they differ (`Seq::conv_lets`; a long chain of lets
+is never unfolded as a whole). This holds wherever a fact meets its goal:
+`show`, a premise of `mp` / `apply`, the steps above.
 
 **step** (C2 proofs; needs proofs/gimple_inv.core). From P -- a run
 `runs(prog, s, o)`, or a fact on a program's outcome -- it goes, in order:
@@ -576,6 +589,8 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | `rewrite(e, p [, {k}..])` | rewrite e's left side in p (all occurrences or the selected); e may be `all x.. l = r`, also under binders |
 | `expand(p, D.. [, {k}..])` | unfold D in p once |
 | `unfold(D)` | D's defining equation |
+| `zeta(p, x [, {k}..])` | the let x's variable its value at the k-th occurrences in the let's body (none given: all, the let dropped) |
+| `fold_let(p, x [, {k}..])`, `fold_let(p, x, {t} [, {k}..])` | the let x's value back to x (at the k-th occurrences); with no let x, p as `letin(t, x. ..)` of t's (k-th) occurrences |
 | `discharge(p, h)`, `gen(p, x)` | `h -> p`; `all x. p` |
 | `witness(p)` | the choice witness of `ex x. φ` |
 | `part(p, {k})`, `unsel(h)` | a conjunct; `z in S && P(z)` from `z in set_select(S, x. P)` |
@@ -664,6 +679,9 @@ excludes the registered ones).
 - It closes each path by taut / arith. It finds witnesses for the goal's
   existentials by matching.
 - `keep(P)` keeps runs of P folded.
+- `lets(keep(x, ..), expand(y, ..))` overrides the let strategy below for
+  the lets named so: x kept (not substituted, also used once; not looked
+  through for a decision), y reduced at once.
 - `fn_modify(f, k, y. g(y))` (core/prelude.core: f's value at k changed
   by g of the old one; lemmas in core/records.core) is simplified as
   `fn_update` of f bound by a let, so f is not copied into the new value.
