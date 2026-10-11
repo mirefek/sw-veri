@@ -112,18 +112,22 @@ item is a short summary of finished work; details are in the files named.
   - the prologue as instructions;
   - 8- to 64-bit loads and stores, 32- and 64-bit arithmetic on registers
     and homes;
-  - signed and unsigned branches, with 8- or 32-bit displacements (one
-    rule per condition, the displacement's width a parameter);
+  - compares and conditional jumps by the flags
+    (`proofs/translate_flags.core`): a compare's or test's step sets them
+    as x86 does (`x86i.subf`, `x86i.logf`; a rule per operand shape,
+    `tr.fs_*`, a register read at its low bits), a lemma per condition
+    code reads them (`tr.ccs_*`, `tr.ccl_*`), one jump rule branches
+    (`tr.jcc`, 8- or 32-bit displacements) -- shapes and conditions
+    combined, not multiplied;
   - stores through a register's pointer, a register holding fewer bytes
     used as a wider one, the stored low byte of 32-bit arithmetic (by the
     words' arithmetic modulo 2^8);
   - an aggregate's zero-initialization (`pxor` and SSE stores against
     GIMPLE's `st_bytes`, `proofs/translate_zero.core`);
   - 16-bit fields and compares, shifts by `cl` (the spec's count below the
-    width), signed products, rip-relative loads of statics, compares of
-    registers with homes and registers (all signed and unsigned jumps
-    met), a value in the spec's form where both are possible (a low
-    bitfield's mask, a load at offset 0);
+    width), signed products, rip-relative loads of statics, a value in the
+    spec's form where both are possible (a low bitfield's mask, a load at
+    offset 0, a commuted operation, a shifted literal);
   - the atomic primitive `cas32` (`layers/gimple.sl`): inline assembly GCC
     keeps opaque (`asm volatile`, a memory clobber) given a meaning at
     GIMPLE level -- the readable translation maps x86_64's `a_cas` template

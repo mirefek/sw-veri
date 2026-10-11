@@ -33,7 +33,7 @@ impl<'e> Gen<'e> {
             return Err(bad("in a zero-initialization: not a store of the zero register"));
         }
         match insn.row {
-            // cmp r64, qword [rsp + d]; jae tr: on to a3 when u < x (unsigned)
+            // cmp r64, qword [rsp + d]: g (u) against the home's word
             57 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
@@ -43,13 +43,7 @@ impl<'e> Gen<'e> {
                 let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
                 // (the register's whole word: its value, of any width)
                 let (ng, u) = self.reg(st, g).ok_or_else(|| bad("an empty register"))?;
-                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                if cc != 3 {
-                    return Err(bad("cmp r64, home not followed by jae"));
-                }
-                let c = self.mk("int_lt", vec![u.clone(), xv.clone()]);
-                let text = self.jstep("cmp64_r_home_jae", st, a, a2, a3, tt, insn.len, jn, &[&x[1], &d, &lit(cn), &j, &lit(ng), &u, &xv], insn, 11, vec![]);
-                return self.branch(st, c, a3, tt, text);
+                return self.compare(st, a, a2, insn, "fs64_rh", &[&x[1], &d, &lit(cn), &lit(ng), &xv, &u], 8, Flags::Sub(64, u.clone(), xv.clone()));
             }
             // pxor x, x: a zero-initialization begun -- the spec's store of
             // zeros made at once (tr.ptz_red), the machine's by the stores of x
@@ -244,6 +238,21 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
             }
+            // xor r32, [rsp + d]
+            54 => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
+                let g = reg(&x[1])?;
+                let v = home(&st.hsm, &d)?;
+                let u = self.need_reg(st, g, 4)?;
+                let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
+                let op = self.mk("bits_xor", vec![lit(32), u.clone(), v.clone()]);
+                let r = self.value(&op);
+                let tr = self.step("xor32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![simp_l()]));
+                self.scratch.insert(g);
+                let st2 = self.set_reg(st, a2, g, 4, r);
+                self.then(tr, st2)
+            }
             // imul r64, [rsp + d]: the product (as the spec orders it)
             70 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
@@ -365,20 +374,17 @@ impl<'e> Gen<'e> {
                 let st3 = self.set_reg(&st2, a2, 0, 4, dv);
                 self.then(tr, st3)
             }
-            // cmp ax, imm16; je tr: on to a3 when ax's value is not k
+            // cmp ax / eax, imm16 / imm32: rax's low bits (u) against k
             58 => {
                 let x = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
-                if nat(&x[0]) != Some(2) {
-                    return Err(bad("not cmp ax, imm16"));
-                }
-                let (n, u) = self.reg(st, 0).ok_or_else(|| bad("an empty register"))?;
-                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                if cc != 4 {
-                    return Err(bad("cmp ax, imm16 not followed by je"));
-                }
-                let c = self.mk("not", vec![self.mk("eq", vec![u.clone(), x[1].clone()])]);
-                let text = self.jstep("cmp16_ax_je", st, a, a2, a3, tt, insn.len, jn, &[&x[1], &j, &lit(n), &u], insn, 8, vec![]);
-                self.branch(st, c, a3, tt, text)
+                let (fs, w) = match nat(&x[0]) {
+                    Some(2) => ("fs16_ax", 16),
+                    Some(4) => ("fs32_eax", 32),
+                    _ => return Err(bad("not cmp ax / eax, imm")),
+                };
+                let (n, x0, u) = self.low(st, 0, w)?;
+                let k = x[1].clone();
+                self.compare(st, a, a2, insn, fs, &[&k, &k, &lit(n), &x0, &u], 6, Flags::Sub(w, u.clone(), k.clone()))
             }
             // shr / shl r32, cl: by the spec's count (below 32, a fact in scope)
             74 => {
@@ -397,9 +403,17 @@ impl<'e> Gen<'e> {
                 let c = self.need_reg(st, 1, 4)?;
                 let lt = self.mk("int_lt", vec![c.clone(), lit(32)]);
                 let hc = self.hyp_find(&st.hyps, &lt).map(|h| h.1.clone()).ok_or_else(|| bad("a shift by cl not known below 32"))?;
-                let tr = self.step(&format!("{h}32_cl"), a, insn, &[&g, &x[3], &c, &u], self.tail(st, insn, 6, vec![s(&hc)]));
-                let r = self.mk(&format!("bits_{h}"), vec![lit(32), u, c]);
-                let r = self.value(&r);
+                // (a literal shifted: the spec's value, its literal as bits_of_int(32, k), if it has one)
+                let op = self.mk(&format!("bits_{h}"), vec![lit(32), u.clone(), c.clone()]);
+                let spec_form = nat(&u).and_then(|_| {
+                    let alt = self.canon(&self.mk(&format!("bits_{h}"), vec![lit(32), self.mk("bits_of_int", vec![lit(32), u.clone()]), c.clone()]));
+                    matches!(alt.node(), Node::Var(v, _) if self.vals.iter().any(|x| x.0 == *v)).then_some(alt)
+                });
+                let (r, hr) = match spec_form {
+                    Some(r) => (r, RA::P(RP::Defs(Box::new(RP::Simp(true, vec![], vec![], false)), vec!["bits_of_int".into()]))),
+                    None => (self.value(&op), simp_l()),
+                };
+                let tr = self.step(&format!("{h}32_cl"), a, insn, &[&g, &x[3], &c, &u, &r], self.tail(st, insn, 6, vec![s(&hc), hr]));
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
                 self.then(tr, st2)
@@ -657,79 +671,37 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_home(st, a2, cn, n, r);
                 self.then(tr, st2)
             }
-            // cmp [rsp + d], r64 (the home's word against g's); je / jne tr
+            // cmp r64, r64 / cmp [rsp + d], r32 / r64: the first operand
+            // against the second
             56 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
-                // cmp r64 (u), r64 (xh); je tr: on to a3 when u != xh
+                // cmp r64 (u), r64 (xh)
                 if let (Some(8), Some((0, g))) = (nat(&x[0]), self.tag(&x[2])) {
                     if x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
                         return Err(bad("not cmp r64, r64"));
                     }
-                    let u = self.need_reg(st, reg(&g)?, 8)?;
-                    let xh = self.need_reg(st, reg(&x[1])?, 8)?;
-                    let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                    // jae tr: on to a3 when u < xh (unsigned)
-                    if cc == 3 {
-                        let c = self.mk("int_lt", vec![u.clone(), xh.clone()]);
-                        let text = self.jstep("cmp64_rr_jae", st, a, a2, a3, tt, insn.len, jn, &[&g, &x[1], &j, &u, &xh], insn, 10, vec![]);
-                        return self.branch(st, c, a3, tt, text);
-                    }
-                    if cc != 4 {
-                        return Err(bad("cmp r64, r64 not followed by je or jae"));
-                    }
-                    let c = self.mk("not", vec![self.mk("eq", vec![u.clone(), xh.clone()])]);
-                    let text = self.jstep("cmp64_rr_je", st, a, a2, a3, tt, insn.len, jn, &[&g, &x[1], &j, &u, &xh], insn, 12, vec![]);
-                    return self.branch(st, c, a3, tt, text);
+                    let (n1, u) = self.reg(st, reg(&g)?).ok_or_else(|| bad("an empty register"))?;
+                    let (n2, xh) = self.reg(st, reg(&x[1])?).ok_or_else(|| bad("an empty register"))?;
+                    return self.compare(st, a, a2, insn, "fs64_rr", &[&g, &x[1], &lit(n1), &lit(n2), &u, &xh], 7, Flags::Sub(64, u.clone(), xh.clone()));
                 }
-                let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not cmp [rsp + d], r64"))?;
-                // cmp dword [rsp + d] (u), r32 (xr); jle / jge / jl tr (signed)
-                if nat(&x[0]) == Some(4) && x[3] == x[2] && self.tag(&x[4]) == Some((0, x[1].clone())) {
-                    let cn = self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?);
+                let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not cmp [rsp + d], r"))?;
+                if x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                    return Err(bad("not cmp [rsp + d], r"));
+                }
+                let cn = self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?);
+                let g = reg(&x[1])?;
+                // cmp dword [rsp + d] (u), r32 (xr: g's low 32 bits)
+                if nat(&x[0]) == Some(4) {
                     let u = home(&st.hsm, &d)?;
-                    let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                    // (g holding more: its low 32 bits, a call's result); jne
-                    if let Some((ng, x0)) = self.reg(st, reg(&x[1])?).filter(|r| r.0 > 4) {
-                        if cc != 5 {
-                            return Err(bad("cmp dword with a wide register not followed by jne"));
-                        }
-                        let xr = self.value(&self.mk("bits_of_int", vec![lit(32), x0.clone()]));
-                        let c = self.mk("eq", vec![u.clone(), xr.clone()]);
-                        let text = self.jstep("cmp32_hrw_jne", st, a, a2, a3, tt, insn.len, jn, &[&x[1], &d, &lit(cn), &j, &lit(ng), &x0, &xr, &u], insn, 12, vec![]);
-                        return self.branch(st, c, a3, tt, text);
-                    }
-                    let xr = self.need_reg(st, reg(&x[1])?, 4)?;
-                    let si = |y: &Term| self.mk("sint", vec![lit(32), y.clone()]);
-                    let (rule, c) = match cc {
-                        14 => ("cmp32_hr_jle", self.mk("int_lt", vec![si(&xr), si(&u)])),
-                        13 => ("cmp32_hr_jge", self.mk("int_lt", vec![si(&u), si(&xr)])),
-                        12 => ("cmp32_hr_jl", self.mk("int_le", vec![si(&xr), si(&u)])),
-                        _ => return Err(bad("cmp dword not followed by jle, jge or jl")),
-                    };
-                    let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&x[1], &d, &lit(cn), &j, &xr, &u], insn, 11, vec![]);
-                    return self.branch(st, c, a3, tt, text);
+                    let (n, x0, xr) = self.low(st, g, 32)?;
+                    return self.compare(st, a, a2, insn, "fs32_hr", &[&x[1], &d, &lit(cn), &lit(n), &x0, &xr, &u], 9, Flags::Sub(32, u.clone(), xr.clone()));
                 }
-                if nat(&x[0]) != Some(8) || x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                if nat(&x[0]) != Some(8) {
                     return Err(bad("not cmp qword [rsp + d], r64"));
                 }
-                let g = reg(&x[1])?;
-                let cn = self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?);
                 let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
-                let u = self.need_reg(st, g, 8)?;
-                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                // jae tr: on to a3 when x < u (unsigned)
-                if cc == 3 {
-                    let c = self.mk("int_lt", vec![xv.clone(), u.clone()]);
-                    let text = self.jstep("cmp64_hr_jae", st, a, a2, a3, tt, insn.len, jn, &[&x[1], &d, &lit(cn), &j, &lit(8), &u, &xv], insn, 11, vec![]);
-                    return self.branch(st, c, a3, tt, text);
-                }
-                let eq = self.mk("eq", vec![xv.clone(), u.clone()]);
-                let (rule, c) = match cc {
-                    4 => ("cmp64_hr_je", self.mk("not", vec![eq])),
-                    5 => ("cmp64_hr_jne", eq),
-                    _ => return Err(bad("cmp not followed by je, jne or jae")),
-                };
-                let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&x[1], &d, &lit(cn), &j, &xv, &u], insn, 13, vec![]);
-                self.branch(st, c, a3, tt, text)
+                let (n, u) = self.reg(st, g).ok_or_else(|| bad("an empty register"))?;
+                self.compare(st, a, a2, insn, "fs64_hr", &[&x[1], &d, &lit(cn), &lit(n), &u, &xv], 8, Flags::Sub(64, xv.clone(), u.clone()))
             }
             // sub r32, r32 (the source's low 32 bits)
             50 => {
@@ -847,7 +819,7 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, g, 4, x[1].clone());
                 self.then(tr, st2)
             }
-            // cmp dword [rsp + d], imm32; jg tr
+            // cmp dword [rsp + d], imm32: the home (u) against k
             59 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("an imm32 operation not on a home"))?;
@@ -858,10 +830,7 @@ impl<'e> Gen<'e> {
                 }
                 let u = home(&st.hsm, &d)?;
                 let cn = self.hkey(dn);
-                if self.jcc(a2)?.4 != 15 {
-                    return Err(bad("cmp of a home with imm32 not followed by jg"));
-                }
-                self.cmp32_home_jg(st, a, a2, insn, &d, cn, &x[4], 59, 32, &lit(imm), &u)
+                self.compare(st, a, a2, insn, "fs32_hi32", &[&d, &lit(cn), &x[4], &lit(imm), &u], 7, Flags::Sub(32, u.clone(), lit(imm)))
             }
             // sub r32, imm8: GIMPLE's x + -k
             60 => {
@@ -870,20 +839,12 @@ impl<'e> Gen<'e> {
                 if let Some(d) = self.rsp_mem(&x[2]) {
                     let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;
-                    // cmp qword [rsp + d], imm8; je tr: the home's word against the immediate
+                    // cmp qword [rsp + d], imm8: the home's word against the immediate
                     if nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&x[1]) == Some(7) {
                         let kk = lit(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm });
                         let cn = self.hkey(dn);
                         let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
-                        let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                        // (je: on when not equal; ja: on when x <= kk, unsigned)
-                        let (rule, c) = match cc {
-                            4 => ("cmp64i_home_je", self.mk("not", vec![self.mk("eq", vec![xv.clone(), kk.clone()])])),
-                            7 => ("cmp64i_home_ja", self.mk("int_le", vec![xv.clone(), kk.clone()])),
-                            _ => return Err(bad("cmp qword of a home not followed by je or ja")),
-                        };
-                        let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&d, &lit(cn), &x[4], &kk, &j, &xv], insn, 11, vec![]);
-                        return self.branch(st, c, a3, tt, text);
+                        return self.compare(st, a, a2, insn, "fs64_hi8", &[&d, &lit(cn), &x[4], &kk, &xv], 7, Flags::Sub(64, xv.clone(), kk.clone()));
                     }
                     // add qword [rsp + d], imm8: the 8-byte home's u + kk
                     if nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&x[1]) == Some(0) {
@@ -913,21 +874,8 @@ impl<'e> Gen<'e> {
                             let st2 = self.set_home(st, a2, cn, 4, r);
                             self.then(tr, st2)
                         }
-                        // cmp; jle tr: on to a3 (the loop's leaving) when kk <s u;
-                        // je tr: when u is not kk
-                        Some(7) => {
-                            let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                            if cc == 15 {
-                                return self.cmp32_home_jg(st, a, a2, insn, &d, cn, &x[4], 60, 8, &kk, &u);
-                            }
-                            let (rule, c) = match cc {
-                                14 => ("cmp32_home_jle", self.mk("int_lt", vec![self.mk("sint", vec![lit(32), kk.clone()]), self.mk("sint", vec![lit(32), u.clone()])])),
-                                4 => ("cmp32_home_je", self.mk("not", vec![self.mk("eq", vec![u.clone(), kk.clone()])])),
-                                _ => return Err(bad("cmp of a home not followed by jle or je")),
-                            };
-                            let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&d, &ck, &x[4], &kk, &j, &u], insn, 10, vec![]);
-                            self.branch(st, c, a3, tt, text)
-                        }
+                        // cmp: the home (u) against kk
+                        Some(7) => self.compare(st, a, a2, insn, "fs32_hi8", &[&d, &ck, &x[4], &kk, &u], 7, Flags::Sub(32, u.clone(), kk.clone())),
                         _ => Err(bad("an operation on a home other than add, cmp")),
                     };
                 }
@@ -1075,47 +1023,22 @@ impl<'e> Gen<'e> {
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         self.then(tr, st2)
                     }
-                    // cmp r32, imm8; ja t / jg t (unsigned / signed)
+                    // cmp r32, imm8: g's low 32 bits (u) against kk
                     (4, Some(7)) => {
-                        let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                        let (rule, c) = match cc {
-                            7 => ("cmp32_ja", self.mk("int_le", vec![u.clone(), lit(kk)])),
-                            15 => ("cmp32_jg", self.mk("int_le", vec![self.mk("sint", vec![lit(32), u.clone()]), self.mk("sint", vec![lit(32), lit(kk)])])),
-                            _ => return Err(bad("cmp not followed by ja or jg")),
-                        };
-                        let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&g, &x[3], &x[4], &lit(kk), &j, &u], insn, 9, vec![]);
-                        self.branch(st, c, a3, tt, text)
+                        let (n, x0, u) = self.low(st, gn, 32)?;
+                        self.compare(st, a, a2, insn, "fs32_ri8", &[&g, &x[3], &x[4], &lit(kk), &lit(n), &x0, &u], 7, Flags::Sub(32, u.clone(), lit(kk)))
                     }
                     _ => Err(bad("unknown operation")),
                 }
             }
-            // cmp al, imm8; jbe tr
+            // cmp al, imm8: al (b, rax's low byte) against k (for je / jne as
+            // GIMPLE writes it: a negative byte bits_neg(8, -k))
             23 => {
                 let k = nat(&f).ok_or_else(|| bad("an immediate that is not a literal"))?;
-                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                // cmp al, imm8; ja tr: on to a3 when al <= k (rax holding a
-                // byte, of any width)
-                if cc == 7 {
-                    let (n, b) = self.reg(st, 0).ok_or_else(|| bad("an empty register"))?;
-                    let c = self.mk("int_le", vec![b.clone(), lit(k)]);
-                    let text = self.jstep("cmp8_ja", st, a, a2, a3, tt, insn.len, jn, &[&f, &j, &lit(n), &b], insn, 8, vec![]);
-                    return self.branch(st, c, a3, tt, text);
-                }
-                let b = self.need_reg(st, 0, 1)?;
-                // cmp al, imm8; jne tr: on to a3 when al = k (k as GIMPLE writes
-                // it: a negative byte bits_neg(8, -k))
-                if cc == 5 {
-                    let kk = if k >= 128 { self.mk("bits_neg", vec![lit(8), lit(256 - k)]) } else { lit(k) };
-                    let c = self.mk("eq", vec![b.clone(), kk.clone()]);
-                    let text = self.jstep("cmp8_jne", st, a, a2, a3, tt, insn.len, jn, &[&f, &kk, &j, &b], insn, 8, vec![]);
-                    return self.branch(st, c, a3, tt, text);
-                }
-                if cc != 6 {
-                    return Err(bad("cmp not followed by jbe, ja or jne"));
-                }
-                let c = self.mk("int_lt", vec![lit(k), b.clone()]);
-                let text = self.jstep("cmp8_jbe", st, a, a2, a3, tt, insn.len, jn, &[&f, &j, &b], insn, 7, vec![]);
-                self.branch(st, c, a3, tt, text)
+                let cc = self.jcc(a2)?.4;
+                let kk = if k >= 128 && (cc == 4 || cc == 5) { self.mk("bits_neg", vec![lit(8), lit(256 - k)]) } else { lit(k) };
+                let (n, x0, b) = self.low(st, 0, 8)?;
+                self.compare(st, a, a2, insn, "fs8_al", &[&f, &kk, &lit(n), &x0, &b], 6, Flags::Sub(8, b.clone(), kk.clone()))
             }
             // movsxd r64, r32: g := h's 32 bits sign-extended
             113 => {
@@ -1422,7 +1345,7 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, 0, 8, r);
                 self.then(tr, st2)
             }
-            // test r8, r8; jne tr / je tr; test r64 / r32, itself; je tr
+            // test r8 / r32 / r64, itself: g's value (u, its low bits)
             25 | 61 => {
                 let (g, size) = if insn.row == 25 {
                     let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
@@ -1432,20 +1355,13 @@ impl<'e> Gen<'e> {
                     (x[1].clone(), if nat(&x[0]) == Some(4) { 4 } else { 8 })
                 };
                 let gn = reg(&g)?;
-                let u = self.need_reg(st, gn, size)?;
-                let (j, jn, a3, tt, cc) = self.jcc(a2)?;
-                let (rule, nprem) = match (size, cc) {
-                    (1, 5) => ("test8_jne", 8),
-                    (1, 4) => ("test8_je", 8),
-                    (8, 4) => ("test64_je", 7),
-                    (4, 4) => ("test32_je", 7),
-                    _ => return Err(bad("test not followed by the matched jump")),
-                };
-                // (the fall-through's condition: jne falls through on u = 0)
-                let z = self.mk("eq", vec![u.clone(), lit(0)]);
-                let c = if cc == 5 { z } else { self.mk("not", vec![z]) };
-                let text = self.jstep(rule, st, a, a2, a3, tt, insn.len, jn, &[&g, &j, &u], insn, nprem, vec![]);
-                self.branch(st, c, a3, tt, text)
+                if size == 8 {
+                    let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
+                    return self.compare(st, a, a2, insn, "fs_test64", &[&g, &lit(n), &u], 4, Flags::Log(64, u.clone()));
+                }
+                let (n, x0, u) = self.low(st, gn, 8 * size)?;
+                let (fs, np) = if size == 1 { ("fs_test8", 6) } else { ("fs_test32", 5) };
+                self.compare(st, a, a2, insn, fs, &[&g, &lit(n), &x0, &u], np, Flags::Log(8 * size, u.clone()))
             }
             // movsx r32, r8
             81 => {
@@ -1641,13 +1557,19 @@ impl<'e> Gen<'e> {
                 st2.a = a2;
                 self.then(tr, st2)
             }
-            // jmp rel8
-            125 => {
+            // jmp rel8 / rel32
+            124 | 125 => {
                 let r = nat(&f).ok_or_else(|| bad("a displacement that is not a literal"))?;
-                let sx = if r & 0x80 != 0 { r + 0xffff_ffff_ffff_ff00 } else { r };
+                let sx = if insn.row == 124 {
+                    if r & 0x8000_0000 != 0 { r + 0xffff_ffff_0000_0000 } else { r }
+                } else if r & 0x80 != 0 {
+                    r + 0xffff_ffff_ffff_ff00
+                } else {
+                    r
+                };
                 let tt = (a2 + sx) % P64;
                 let tr = mpf(
-                    "tr.jmp8",
+                    if insn.row == 124 { "tr.jmp32" } else { "tr.jmp8" },
                     vec![
                         t(&self.s.clone()),
                         t(&self.v.clone()),
@@ -1755,14 +1677,17 @@ impl<'e> Gen<'e> {
         }
     }
 
-    /// cmp dword [rsp + d], imm (the home cn holding u; k the immediate
-    /// field of the row rn, iw bits wide, kk its sign extension); jg tr
-    #[allow(clippy::too_many_arguments)]
-    fn cmp32_home_jg(&mut self, st: &St, a: u128, a2: u128, insn: &Insn, d: &Term, cn: u128, k: &Term, rn: u128, iw: u128, kk: &Term, u: &Term) -> Result<Seq, String> {
-        let (j, jn, a3, tt, _) = self.jcc(a2)?;
-        let c = self.mk("int_le", vec![self.mk("sint", vec![lit(32), u.clone()]), self.mk("sint", vec![lit(32), kk.clone()])]);
-        let text = self.jstep("cmp32_home_jg", st, a, a2, a3, tt, insn.len, jn, &[&lit(rn), &lit(iw), d, &lit(cn), k, kk, &j, u], insn, 11, vec![]);
-        self.branch(st, c, a3, tt, text)
+    /// A register's low w bits as a compare reads them (tr.reg_low*): its
+    /// entry's width, its value x0, and the operand -- x0 itself (at its own
+    /// width, or known to fit), a 64-bit word's low half as a value of its
+    /// own (a call's 32-bit result)
+    fn low(&mut self, st: &St, g: u128, w: u128) -> Result<(u128, Term, Term), String> {
+        let (n, x0) = self.reg(st, g).ok_or_else(|| format!("{:x}: register {} holds no value of the procedure", st.a, g))?;
+        if w == 32 && n == 8 {
+            let x = self.value(&self.mk("bits_of_int", vec![lit(32), x0.clone()]));
+            return Ok((n, x0, x));
+        }
+        Ok((n, x0.clone(), x0))
     }
 
     /// a return's rule: `mp(RULE, s, V, base, code, a, len, hs, ds, rs, pr, w, ts.., decode, [simp(L), simp(L)], result)`

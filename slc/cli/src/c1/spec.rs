@@ -132,8 +132,23 @@ impl<'e> Gen<'e> {
         }
         if let Some(a) = self.app(t, "or", 2) {
             // (choosing an alternative: not by a branch condition spent)
-            let spent = self.spent_now.borrow().clone();
-            let usable: Vec<(Term, Seq)> = hyps.iter().filter(|h| !spent.contains(&self.expand(&h.0))).cloned().collect();
+            // (each spent once: the same condition tested again by the
+            // machine, usable)
+            let mut spent = self.spent_now.borrow().clone();
+            let usable: Vec<(Term, Seq)> = hyps
+                .iter()
+                .filter(|h| {
+                    let e = self.expand(&h.0);
+                    match spent.iter().position(|x| *x == e) {
+                        Some(i) => {
+                            spent.remove(i);
+                            false
+                        }
+                        None => true,
+                    }
+                })
+                .cloned()
+                .collect();
             if let Some(mut p) = self.pick(&a[0], &usable) {
                 p.insert(0, Pick::L);
                 return Some(p);

@@ -141,6 +141,13 @@ struct LoopG {
     fd: Term,
 }
 
+/// The flags a compare sets (proofs/translate_flags.core): of `cmp a, b`
+/// at a width (x86i.subf), of a test's result (x86i.logf)
+enum Flags {
+    Sub(u128, Term, Term),
+    Log(u128, Term),
+}
+
 /// A store of the spec: st8 / st16 / st32 / st64 / st_bytes (or a helper
 /// whose body is one, named), its width, its definedness, its address
 struct StoreOp {

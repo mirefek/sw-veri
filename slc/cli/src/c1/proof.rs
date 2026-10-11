@@ -1522,24 +1522,59 @@ impl<'e> Gen<'e> {
         Ok((x[1].clone(), j.len, a3, tt, cc))
     }
 
-    /// a branch's rule instance (cmp; jcc): `mp(tr.RULE, s, V, base, code,
-    /// fr, a, a2, a3, t, len1, len2, ts.., hs, ds, rs, p, w, insn1, insn2,
-    /// n literal facts, extra.., T, F)`
+    /// A compare at a and the conditional jump after it
+    /// (proofs/translate_flags.core): the compare's flags step (`tr.FS` at
+    /// the operands ts, its n literal premises), the condition code's lemma
+    /// on its flags (the fall-through's condition c), the jump (tr.jcc) --
+    /// both branches walked
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn jstep(&self, rule: &str, st: &St, a: u128, a2: u128, a3: u128, tt: u128, len1: u128, len2: u128, ts: &[&Term], insn: &Insn, n: usize, extra: Vec<RA>) -> R {
-        // (the jump's row and displacement width: 127 / 8, 128 / 32 -- one
-        // more literal premise of the rule, theirs)
-        let (jn, jw) = if self.insns[&a2].row == 128 { (128, 32) } else { (127, 8) };
-        let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt)), t(&lit(len1)), t(&lit(len2)), t(&lit(jn)), t(&lit(jw))];
+    pub(super) fn compare(&mut self, st: &St, a: u128, a2: u128, insn: &Insn, fs: &str, ts: &[&Term], n: usize, fl: Flags) -> Result<Seq, String> {
+        let (j, len2, a3, tt, cc) = self.jcc(a2)?;
+        let mut v = vec![t(&self.s), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(insn.len))];
         v.extend(ts.iter().map(|x| t(x)));
-        v.extend([t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w), p(f(&insn.name)), p(f(&self.insns[&a2].name))]);
-        v.extend((0..n + 1).map(|_| simp_l()));
-        v.extend(extra);
-        // (the jump's address: no breakpoint)
-        v.push(self.nobp());
-        v.push(p(R::Slot("T")));
-        v.push(p(R::Slot("F")));
-        mpf(&format!("tr.{}", rule), v)
+        v.extend([t(&st.hst), t(&st.rs), t(&st.w), p(f(&insn.name))]);
+        v.extend((0..n).map(|_| simp_l()));
+        let step = mpf(&format!("tr.{fs}"), v);
+        let si = |g: &Gen, x: &Term| g.mk("sint", vec![lit(32), x.clone()]);
+        let (lemma, c, args, ff) = match &fl {
+            Flags::Sub(w, x, y) => {
+                let (l, c) = match (cc, *w) {
+                    (4, _) => ("ccs_e", self.mk("not", vec![self.mk("eq", vec![x.clone(), y.clone()])])),
+                    (5, _) => ("ccs_ne", self.mk("eq", vec![x.clone(), y.clone()])),
+                    (2, _) => ("ccs_b", self.mk("int_le", vec![y.clone(), x.clone()])),
+                    (3, _) => ("ccs_ae", self.mk("int_lt", vec![x.clone(), y.clone()])),
+                    (6, _) => ("ccs_be", self.mk("int_lt", vec![y.clone(), x.clone()])),
+                    (7, _) => ("ccs_a", self.mk("int_le", vec![x.clone(), y.clone()])),
+                    (12, 32) => ("ccs32_l", self.mk("int_le", vec![si(self, y), si(self, x)])),
+                    (13, 32) => ("ccs32_ge", self.mk("int_lt", vec![si(self, x), si(self, y)])),
+                    (14, 32) => ("ccs32_le", self.mk("int_lt", vec![si(self, y), si(self, x)])),
+                    (15, 32) => ("ccs32_g", self.mk("int_le", vec![si(self, x), si(self, y)])),
+                    _ => return Err(format!("{:x}: a {}-bit compare's jump on condition {}: no lemma", a, w, cc)),
+                };
+                (l, c, vec![lit(*w), x.clone(), y.clone()], self.mk("x86i.subf", vec![lit(*w), x.clone(), y.clone(), Term::bvar(0)]))
+            }
+            Flags::Log(w, r) => {
+                let z = self.mk("eq", vec![r.clone(), lit(0)]);
+                let (l, c) = match cc {
+                    4 => ("ccl_e", self.mk("not", vec![z])),
+                    5 => ("ccl_ne", z),
+                    _ => return Err(format!("{:x}: a test's jump on condition {}: no lemma", a, cc)),
+                };
+                (l, c, vec![lit(*w), r.clone()], self.mk("x86i.logf", vec![lit(*w), r.clone(), Term::bvar(0)]))
+            }
+        };
+        let mut ca: Vec<RA> = args.iter().map(t).collect();
+        ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
+        let ccf = mpf(&format!("tr.{lemma}"), ca);
+        // (the jump's row and displacement width: 127 / 8, 128 / 32)
+        let (jn, jw) = if self.insns[&a2].row == 128 { (128, 32) } else { (127, 8) };
+        let mut jv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt))];
+        jv.extend([t(&lit(len2)), t(&lit(jn)), t(&lit(jw)), t(&lit(cc)), t(&j), t(&c), t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w)]);
+        jv.extend([p(step), p(ccf), p(f(&self.insns[&a2].name))]);
+        jv.extend((0..6).map(|_| simp_l()));
+        jv.extend([self.nobp(), p(R::Slot("T")), p(R::Slot("F"))]);
+        let rule = mp(R::Inst("tr.jcc".into(), vec![("ff", ff)]), jv);
+        self.branch(st, c, a3, tt, rule)
     }
 
     /// the statics' variable
