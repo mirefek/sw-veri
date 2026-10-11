@@ -232,6 +232,16 @@ item is a short summary of finished work; details are in the files named.
   2^pos + L` (nested `bit_addmul`; `bit_slice`), that form GIMPLE's
   (`tr.bf_val`, by `tr.bf_clear`), the field compared modulo 2^k by
   arith.
+- **C1 joins and resources**: a block end's claim gives locals of the
+  same value one variable (the equation kept: `needed = req` where both
+  sides of GIMPLE's `||` set it); `jns` after a compare with 0 as GIMPLE
+  writes the condition (`tr.ccs32_ns0`). A resource guard stops a walk
+  past `C1_MAX_MB` (default 3000) with the addresses walked most often --
+  where paths do not join -- instead of running the machine out of
+  memory. `bitwise` reads an odd numeral as its low ones plus the rest
+  (masks like `0xf03f`) and words' products by 2^k (`bit_bits_mul`);
+  indexed 8-byte stores (`tr.store64_bi`, the address by an equation),
+  `or r32, imm8`, a stored value up to a commutative operation's order.
 - **Division in C1**: GIMPLE's unsigned 64-bit `cdiv`, as the machine
   computes it (`tr.cdiv64u_ok` / `_ub`: the quotient of the dividend's
   value, a literal's number, its cast dropped -- both sides the same term,

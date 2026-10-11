@@ -15,10 +15,15 @@ call graph.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- C1 of `alloc_group` (walked past its first bitfield store, `maplen`,
-  the division `4080 / size` with its clamps, and `ctx.usage_by_class[sc]
-  += cnt`'s load, to its store, `mov [rdx + rax], rcx`; its other
-  bitfield stores -- `maplen = 0`, `freeable`, `sizeclass` -- come after).
+- C1 of `alloc_group`: every instruction has its rule (all bitfield
+  stores included), but its paths still do not join enough -- the walk
+  stops at the memory guard (3000 MB, about 6300 points). Its block ends'
+  claims are proven, yet often not reused: GIMPLE duplicates a block that
+  the machine shares (`cnt = 1; needed = req` on both sides of an `||`),
+  so arriving paths have different rests; a claim made with two locals
+  sharing a variable (`needed = req`) does not fit a path where they
+  differ; some uses fail at `tr.hsub_upd` (the claim's homes against the
+  path's). About 0.4 MB of memory per point walked.
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and

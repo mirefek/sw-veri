@@ -292,8 +292,33 @@ impl<'e> Gen<'e> {
         self.close(u, &[nc], &[])
     }
 
+    /// The resource guard: past `C1_MAX_MB` of resident memory (default
+    /// 3000), the check stops at once -- not an error a walk recovers from
+    /// (by walking the paths on their own, which is how it would run on):
+    /// where it was, how many points, the addresses walked most often
+    /// (where paths do not join).
+    fn guard_resources(&mut self, a: u128) {
+        *self.visits.entry(a).or_insert(0) += 1;
+        let n: usize = self.visits.values().sum();
+        if n % 64 != 0 {
+            return;
+        }
+        let max_mb: u64 = std::env::var("C1_MAX_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(3000);
+        let rss_mb = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map(|p| p * 4096 / (1 << 20));
+        let Some(mb) = rss_mb.filter(|mb| *mb > max_mb) else { return };
+        let mut top: Vec<(u128, usize)> = self.visits.iter().map(|(a, k)| (*a, *k)).collect();
+        top.sort_by(|x, y| y.1.cmp(&x.1));
+        let top: Vec<String> = top.iter().take(8).map(|(a, k)| format!("{:x} ({}x)", a, k)).collect();
+        eprintln!(
+            "error: C1 of `{}` stopped: {} MB of memory (C1_MAX_MB {}) at {:x} after {} points; the addresses walked most often (paths not joined there): {}",
+            self.fname, mb, max_mb, a, n, top.join(", ")
+        );
+        std::process::exit(1);
+    }
+
     /// The proof of the point claim at `st`.
     pub(super) fn prove(&mut self, st: St) -> Result<Seq, String> {
+        self.guard_resources(st.a);
         // (a join's own claim: not joined at its address, joins after it)
         let mut st = st;
         if st.no_join.is_some_and(|j| j != st.a) {
@@ -1834,11 +1859,15 @@ impl<'e> Gen<'e> {
                     (13, 32) => ("ccs32_ge", self.mk("int_lt", vec![si(self, x), si(self, y)])),
                     (14, 32) => ("ccs32_le", self.mk("int_lt", vec![si(self, y), si(self, x)])),
                     (15, 32) => ("ccs32_g", self.mk("int_le", vec![si(self, x), si(self, y)])),
-                    // (jns: x - y's sign -- after a compare with 0, x's)
+                    // (jns after a compare with 0: x's sign, as GIMPLE writes
+                    // `x <s 0`; else x - y's)
+                    (9, 32) if nat(y) == Some(0) => ("ccs32_ns0", self.mk("int_lt", vec![si(self, x), si(self, y)])),
                     (9, 32) => ("ccs32_ns", self.mk("int_lt", vec![si(self, &self.mk("bits_sub", vec![lit(32), x.clone(), y.clone()])), lit(0)])),
                     _ => return Err(format!("{:x}: a {}-bit compare's jump on condition {}: no lemma", a, w, cc)),
                 };
-                (l, c, vec![lit(*w), x.clone(), y.clone()], self.mk("x86i.subf", vec![lit(*w), x.clone(), y.clone(), Term::bvar(0)]))
+                // (ccs32_ns0: no y, a compare with 0)
+                let args = if l == "ccs32_ns0" { vec![lit(*w), x.clone()] } else { vec![lit(*w), x.clone(), y.clone()] };
+                (l, c, args, self.mk("x86i.subf", vec![lit(*w), x.clone(), y.clone(), Term::bvar(0)]))
             }
             Flags::Log(w, r) => {
                 let z = self.mk("eq", vec![r.clone(), lit(0)]);

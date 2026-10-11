@@ -121,6 +121,8 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[St
         n: 0,
         loops: Vec::new(),
         nval: 0,
+        visits: BTreeMap::new(),
+        fname: fname.to_string(),
         lf: Vec::new(),
         hints: hint_seqs,
         lf0: None,

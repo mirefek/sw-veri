@@ -280,14 +280,25 @@ impl<'e> Gen<'e> {
         }
         let mut ys = Vec::new();
         let mut gen = Vec::new();
+        // (each local's variable; a local of the same value as an earlier
+        // one shares its variable -- the equation kept: `needed = req` on
+        // every path arriving; a path without it is no instance)
+        let mut var_of: Vec<Option<VarId>> = vec![None; comps.len()];
         for (i, ci) in comps.iter().enumerate() {
             if nat(ci).is_some() && !homed.contains_key(&i) {
                 gen.push(ci.clone());
-            } else {
-                let v = self.var(&format!("sy{n}_{i}"));
-                ys.push((i, Self::var_id(&v)));
-                gen.push(v);
+                continue;
             }
+            let same = (0..i).find(|&j| nat(&comps[j]).is_none() && var_of[j].is_some() && nat(ci).is_none() && self.canon(&comps[j]) == self.canon(ci));
+            if let Some(j) = same {
+                var_of[i] = var_of[j];
+                gen.push(Term::var(var_of[j].unwrap(), vec![]));
+                continue;
+            }
+            let v = self.var(&format!("sy{n}_{i}"));
+            ys.push((i, Self::var_id(&v)));
+            var_of[i] = Some(Self::var_id(&v));
+            gen.push(v);
         }
         let y_gen = gen.iter().rev().cloned().reduce(|acc, x| self.mk("pair", vec![x, acc])).ok_or("no locals")?;
         // (a home holding a local's value -- the same term, or one the facts
@@ -313,7 +324,7 @@ impl<'e> Gen<'e> {
             // home holds its value; else the home as it is -- not another
             // local of the same value)
             if let Some(i) = self.local_at(*c, st.a).filter(|&i| i < comps.len()) {
-                if let Some(&(_, vi)) = ys.iter().find(|(j, _)| *j == i) {
+                if let Some(vi) = var_of[i] {
                     let ci = &comps[i];
                     if self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok() {
                         v = Term::var(vi, vec![]);

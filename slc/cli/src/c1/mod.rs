@@ -253,6 +253,10 @@ struct Gen<'e> {
     /// the loops met: their heads and claims
     loops: Vec<Loop>,
     nval: usize,
+    /// the walk's points, by address (the resource guard's report), and
+    /// the function's name
+    visits: BTreeMap<u128, usize>,
+    fname: String,
     /// the literal facts for simp (`L`, a loop step's counter, the maps'
     /// deep `in dom` facts)
     lf: Vec<Seq>,
@@ -684,6 +688,31 @@ impl<'e> Gen<'e> {
             None => rec::simp_l(),
         };
         Some((sw, pf))
+    }
+
+    /// `u = v` for a value u that is v up to its operands' order (a
+    /// commutative operation's): the commutation (simp's arithmetic for
+    /// `bits_add`); simp(L) for v itself
+    fn comm_eq(&self, u: &Term, v: &Term) -> Option<rec::RA> {
+        if self.canon(u) == self.canon(v) {
+            return Some(rec::simp_l());
+        }
+        let e = self.expand(u);
+        let Node::App(f, a) = e.node() else { return None };
+        let name = self.env.syms[*f as usize].name.as_str();
+        if a.len() != 3 || !["bits_add", "bits_mul", "bits_and", "bits_xor"].contains(&name) {
+            return None;
+        }
+        let sw = e.with_args(vec![a[0].clone(), a[2].clone(), a[1].clone()]);
+        if self.canon(&sw) != self.canon(v) {
+            return None;
+        }
+        Some(match name {
+            "bits_and" => rec::p(R::Inst("x86.and_comm".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
+            "bits_mul" => rec::p(R::Inst("x86.mul_comm".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
+            "bits_xor" => rec::p(R::Inst("x86i.xor_comm".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
+            _ => rec::simp_l(),
+        })
     }
 
     /// the premise `r = op(n, a, b)` for value_comm's r: simp(L) for the

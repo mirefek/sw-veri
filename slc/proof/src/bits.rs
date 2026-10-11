@@ -6,7 +6,8 @@
 //! bit rule (`bit_rule NAME`: `H.. -> (bit(P, j) <-> φ)`), the first whose
 //! P matches W: its instance's premises shown from the facts (a fact, or
 //! `arith`), its φ's bits explained in turn. Matching reads a numeral as
-//! `pow2(k)` or `pow2(k) - 1` where the rule has one, and a product either
+//! `pow2(k)`, `pow2(k) - 1` or (odd) `x * 2^t + (2^j - 1)` where the rule has
+//! one, and a product either
 //! way round; the instance's word is shown equal to W by `arith`. No
 //! rewriting: the explanations, instances of the facts' `all`s at the
 //! indices met, and of `bit_cong` (equal indices, the same bit) for the
@@ -247,6 +248,23 @@ impl State {
         let Node::App(_, sa) = s.concl().node() else { return None };
         let Node::App(_, sb) = sa[0].node() else { return None };
         let pw = sb[0].clone();
+        // (a power read from a numeral: pow2(k) = 2^k, rewritten)
+        if pw != w {
+            let mut pows = Vec::new();
+            pow2_lits(env, &pw, &mut pows);
+            for k in pows {
+                let p2 = Term::app(env.sym_by_name["pow2"], vec![Term::nat(sl_kernel::Nat::from_u128(k as u128))]);
+                if k >= 127 {
+                    continue;
+                }
+                let e = Term::app(env.builtins.eq, vec![p2, Term::nat(sl_kernel::Nat::from_u128(1u128 << k))]);
+                let pe = Seq::arith(env, lg, &[], &e).ok()?;
+                s = Seq::rewrite(env, &pe, &s).ok()?;
+            }
+        }
+        let Node::App(_, sa) = s.concl().node() else { return None };
+        let Node::App(_, sb) = sa[0].node() else { return None };
+        let pw = sb[0].clone();
         if pw != w {
             let e = Term::app(env.builtins.eq, vec![pw.clone(), w.clone()]);
             let refs: Vec<&Seq> = facts.iter().collect();
@@ -383,7 +401,8 @@ fn log2(t: &Term) -> Option<u32> {
 }
 
 /// p matches t, binding pvars: numerals read as `pow2(k)` or `pow2(k) - 1`,
-/// or a product x * 2^k (a mask's high bits: x its value above them), a
+/// a product x * 2^k (a mask's high bits: x its value above them), or a
+/// sum x * 2^t + (2^j - 1) (an odd mask: its low ones, the rest), a
 /// product either way round
 fn bmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId, Term)>) -> bool {
     let name = |s: SymId| env.syms[s as usize].name.as_str();
@@ -406,6 +425,18 @@ fn bmatch(env: &Env, p: &Term, t: &Term, pvars: &[VarId], binds: &mut Vec<(VarId
             let Some(v) = n.to_u128().and_then(|v| v.checked_add(1)) else { return false };
             let t1 = Term::nat(sl_kernel::Nat::from_u128(v));
             matches!(a[0].node(), Node::App(g, _) if name(*g) == "pow2") && bmatch(env, &a[0], &t1, pvars, binds)
+        }
+        // x * 2^t + r against an odd numeral c not 2^k - 1: r its run of low
+        // ones (2^j - 1), x * 2^t the rest (a mask's bits in runs)
+        (Node::App(f, a), Node::Nat(n)) if name(*f) == "int_add" && a.len() == 2 => {
+            let Some(v) = n.to_u128().filter(|v| v % 2 == 1 && !(v + 1).is_power_of_two()) else { return false };
+            let r = (1u128 << v.trailing_ones()) - 1;
+            let save = binds.clone();
+            if bmatch(env, &a[1], &Term::nat(sl_kernel::Nat::from_u128(r)), pvars, binds) && bmatch(env, &a[0], &Term::nat(sl_kernel::Nat::from_u128(v - r)), pvars, binds) {
+                return true;
+            }
+            *binds = save;
+            false
         }
         // x * pow2(k) against c * 2^k (c odd, k > 0)
         (Node::App(f, a), Node::Nat(n)) if name(*f) == "int_mul" && a.len() == 2 => {
@@ -528,5 +559,22 @@ fn abstract_var(t: &Term, v: VarId, depth: u32, binders: &dyn Fn(SymId, usize) -
         Node::Var(_, a) => t.with_args(a.iter().map(|x| abstract_var(x, v, depth, binders)).collect()),
         Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| abstract_var(x, v, depth + binders(*s, i), binders)).collect()),
         _ => t.clone(),
+    }
+}
+
+/// the exponents k of the `pow2(k)` in t, k a numeral
+fn pow2_lits(env: &Env, t: &Term, out: &mut Vec<u32>) {
+    if let Node::App(f, a) = t.node() {
+        if env.syms[*f as usize].name == "pow2" && a.len() == 1 {
+            if let Some(k) = match a[0].node() {
+                Node::Nat(n) => n.to_u128().and_then(|k| u32::try_from(k).ok()),
+                _ => None,
+            } {
+                if !out.contains(&k) {
+                    out.push(k);
+                }
+            }
+        }
+        a.iter().for_each(|x| pow2_lits(env, x, out));
     }
 }
