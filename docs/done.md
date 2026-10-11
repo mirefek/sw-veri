@@ -218,12 +218,20 @@ item is a short summary of finished work; details are in the files named.
   definitional unfolding walks the tree). The store lemmas' facts are
   moved to that form by `letin_eq` and `eq_subst`. The world's tree now
   stays at ~3e3 nodes, the slowest step under 0.4 s.
-- **Bitfield stores** (GIMPLE's `stbf`, a read-modify-write: at bit 0 of a
-  byte so far): the machine reads the byte (a pending store's
-  write-definedness lets it, `tr.reads_wr`), merges, stores
-  (`tr.store8_bd`); the merged byte is GIMPLE's value by `bitwise`
-  (`tr.bf0_val`; a sum of disjoint bits, `bit_addmul`; a mask's high bits
-  read as a product), the field compared modulo 2^k by arith.
+- **Bitfield stores** (GIMPLE's `stbf(p, off, n, pos, k, v)`, a
+  read-modify-write of n = 1, 2, 4 or 8 bytes, the field at any bit pos):
+  a field's bytes are the smallest aligned unit holding it, as GCC
+  accesses it (within the field's C memory location, the run of adjacent
+  bitfields: `maplen` the word at 32, bits 12..; the translator once took
+  the bytes the field spans, which the machine's access exceeded). The
+  machine reads the bytes (a pending store's write-definedness lets it,
+  `tr.reads_wr`, loads of 1, 2 and 8 bytes), clears, merges, stores
+  (`tr.store8_bd`, `tr.store16_bd`, `tr.store64_bd_eq`); the merged word
+  is GIMPLE's value (proofs/translate_bitfield.core): bit by bit
+  (`bitwise`) the old bytes with the field replaced, `(H * 2^k + F) *
+  2^pos + L` (nested `bit_addmul`; `bit_slice`), that form GIMPLE's
+  (`tr.bf_val`, by `tr.bf_clear`), the field compared modulo 2^k by
+  arith.
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

@@ -1,0 +1,79 @@
+// Bitfield stores in C1: GIMPLE's `stbf(p, off, n, pos, k, v)` against the
+// machine's read-merge-write of the n bytes. The machine's merged word is
+// shown bit by bit (`bitwise`) to be the old word o with the field's bits
+// replaced, in the form `(H * 2^k + F) * 2^pos + L` -- o's bits above the
+// field (H = o / 2^pos / 2^k), the field (F), o's bits below it (L) --,
+// and that is GIMPLE's value (tr.bf_val).
+
+// (o with the field's bits cleared: its bits above and below)
+theorem tr.bf_clear: all o pos k. o in omega -> int_lt(o, pow2(64)) -> pos in omega -> k in omega -> int_le(int_add(pos, k), 64) ->
+  bits_and(128, bits_of_int(128, o), bits_not(128, int_mul(int_sub(pow2(k), 1), pow2(pos)))) =
+    int_add(int_mul(int_mul(int_div(int_div(o, pow2(pos)), pow2(k)), pow2(k)), pow2(pos)), int_mod(o, pow2(pos)))
+proof
+  fix o pos k
+  assume ho hl hp hk hpk
+  have pp := mp(pow2_pos[k := pos], hp)
+  have pk := mp(pow2_pos[k := k], hk)
+  let Q := int_div(o, pow2(pos))
+  let L := int_mod(o, pow2(pos))
+  let H := int_div(Q, pow2(k))
+  let FO := int_mod(Q, pow2(k))
+  have qn ln := mp(div_nat[x := o, m := pow2(pos)], ho, pp)
+  have hn fn := mp(div_nat[x := Q, m := pow2(k)], qn, pk)
+  // (o = 2^pos * (2^k * H + FO) + L: H's part below o)
+  have eo: o = int_add(int_mul(pow2(pos), Q), L) by arith(ho, pp)
+  have eq: Q = int_add(int_mul(pow2(k), H), FO) by arith(qn, pk)
+  have eo2 := rewrite(eq, eo)
+  have lb: int_lt(L, pow2(pos)) by arith(ho, pp)
+  have fb: int_lt(FO, pow2(k)) by arith(qn, pk)
+  have hk2: int_mul(H, pow2(k)) in omega by arith(hn, pk)
+  have m1: int_mul(int_sub(pow2(k), 1), pow2(pos)) in omega by arith(pk, pp)
+  have nn: int_le(0, int_mul(pow2(pos), FO)) by arith(pp, fn)
+  // (both sides 64-bit words: o's bits, some cleared)
+  have o64: o in bits(64) by arith(ho, hl)
+  have l64 := apply(tr.and_in, {64}, {o}, {bits_not(128, int_mul(int_sub(pow2(k), 1), pow2(pos)))}, simp(), simp(), o64)
+  have r64: int_add(int_mul(int_mul(H, pow2(k)), pow2(pos)), L) in bits(64) by arith(eo2, ho, hl, hn, ln, nn, pp, pk)
+  show by bitwise({64}, ho, hp, hk, qn, hn, ln, lb, hk2, m1, r64, l64, pp, pk)
+qed
+
+// GIMPLE's stbf value (the old word o, the field v, k bits at pos) is the
+// merged word in the machine's form, its field fv (equal to v mod 2^k)
+theorem tr.bf_val: all o pos k v fv x. o in omega -> int_lt(o, pow2(64)) -> pos in omega -> k in omega -> int_le(int_add(pos, k), 64) ->
+  int_mod(v, pow2(k)) = int_mod(fv, pow2(k)) ->
+  x = int_add(int_mul(int_add(int_mul(int_div(int_div(o, pow2(pos)), pow2(k)), pow2(k)), int_mod(fv, pow2(k))), pow2(pos)), int_mod(o, pow2(pos))) ->
+  x = int_add(bits_and(128, gimple.b128(o), bits_not(128, gimple.b128(int_mul(int_pow(2, pos), int_sub(int_pow(2, k), 1))))), int_mul(int_mod(v, int_pow(2, k)), int_pow(2, pos)))
+proof
+  fix o pos k v fv x
+  assume ho hl hp hk hpk hm hx
+  have c := apply(tr.bf_clear, {o}, {pos}, {k}, ho, hl, hp, hk, hpk)
+  have pp := mp(pow2_pos[k := pos], hp)
+  have pk := mp(pow2_pos[k := k], hk)
+  have pl2 := mp(pow2_le[a := int_add(pos, k), b := 64], arith(hp, hk), simp(), hpk)
+  have pa := mp(all_elim(mp(all_elim(pow2_add, {pos}), hp), {k}), hk)
+  have mb: int_mul(int_sub(pow2(k), 1), pow2(pos)) in bits(128) proof
+    have m64: int_mul(int_sub(pow2(k), 1), pow2(pos)) in bits(64) by arith(pk, pp, pa, pl2)
+    show by simp(m64)
+  qed
+  have e1: gimple.b128(o) = bits_of_int(128, o) by defs(refl({bits_of_int(128, o)}), gimple.b128)
+  let X := int_mul(int_pow(2, pos), int_sub(int_pow(2, k), 1))
+  have eqm: X = int_mul(int_sub(pow2(k), 1), pow2(pos)) by defs(arith(), pow2)
+  have mbx := rewrite(sym(eqm), mb)
+  have e2a: gimple.b128(X) = X by defs(simp(mbx), gimple.b128)
+  have e2 := trans(e2a, eqm)
+  have ek: pow2(k) = int_pow(2, k) by defs(refl({int_pow(2, k)}), pow2)
+  have ep: pow2(pos) = int_pow(2, pos) by defs(refl({int_pow(2, pos)}), pow2)
+  have e3: int_mul(int_mod(v, int_pow(2, k)), int_pow(2, pos)) = int_mul(int_mod(fv, pow2(k)), pow2(pos)) by arith(hm, ek, ep)
+  show by arith(hx, c, e1, e2, e3)
+qed
+
+// (the old bytes of a world: a number below 256^n)
+theorem tr.bf_old: all w a n. w in abi.World -> n in omega ->
+  gimple.bytes_at(app(w, "vm"), a, n) in omega && int_lt(gimple.bytes_at(app(w, "vm"), a, n), int_pow(256, n))
+proof
+  fix w a n
+  assume hW hn
+  have wf := expand(hW, abi.World)
+  have vV: app(w, "vm") in x86_64_linux.Vm by simp(wf)
+  have bt: app(app(w, "vm"), "bytes") in fn_space(bits(64), bits(8)) by simp(expand(vV, x86_64_linux.Vm))
+  show := apply(g.bytes_bound, {app(w, "vm")}, {a}, {n}, bt, hn)
+qed

@@ -670,17 +670,28 @@ impl<'a> Lower<'a> {
         let (p, _) = self.scalar(&mt)?;
         let name = if store { format!("set_{}", base) } else { base };
         if !sh.accessors.contains_key(&name) {
-            let byte = bit / 8;
+            // (a bitfield's bytes: the smallest aligned unit of 1, 2, 4 or 8
+            // bytes holding it, as GCC accesses it -- within the field's
+            // memory location, the run of adjacent bitfields, which C lets
+            // the access touch; else the bytes it spans)
+            let unit = |n: u64| {
+                [1u64, 2, 4, 8]
+                    .iter()
+                    .map(|s| (bit / 8 / s * s, *s))
+                    .find(|(o, s)| 8 * (o + s) >= bit + n)
+                    .unwrap_or((bit / 8, (bit % 8 + n + 7) / 8))
+            };
             let def = match (bf, store) {
-                (Some(n), false) => format!(
-                    "proc[World] {}(p: Addr) -> bits[{}] {{ return bits[{}](ldbf(p, {}, {}, {}, {})) }}",
-                    name, n, n, byte, (bit % 8 + n + 7) / 8, bit % 8, n
-                ),
-                (Some(n), true) => format!(
-                    "proc[World] {}(p: Addr, v: bits[{}]) {{ stbf(p, {}, {}, {}, {}, uint(v)) }}",
-                    name, n, byte, (bit % 8 + n + 7) / 8, bit % 8, n
-                ),
+                (Some(n), false) => {
+                    let (byte, size) = unit(n);
+                    format!("proc[World] {}(p: Addr) -> bits[{}] {{ return bits[{}](ldbf(p, {}, {}, {}, {})) }}", name, n, n, byte, size, bit - 8 * byte, n)
+                }
+                (Some(n), true) => {
+                    let (byte, size) = unit(n);
+                    format!("proc[World] {}(p: Addr, v: bits[{}]) {{ stbf(p, {}, {}, {}, {}, uint(v)) }}", name, n, byte, size, bit - 8 * byte, n)
+                }
                 (None, _) => {
+                    let byte = bit / 8;
                     let size = self.size(&mt)?;
                     if ![1, 2, 4, 8, 16].contains(&size) {
                         return Err(format!("field `{}` of {} bytes", field, size));

@@ -761,8 +761,9 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.app(&inner, "gimple.stbf", 6).map(|x| x.to_vec()) {
             let (pp, off, size, pos, k, fv) = (x[0].clone(), x[1].clone(), x[2].clone(), x[3].clone(), x[4].clone(), x[5].clone());
             let n = nat(&size).ok_or("a bitfield of a size not a literal")?;
-            if nat(&pos) != Some(0) || nat(&k).is_none_or(|k| k > 8) || n != 1 {
-                return Err(format!("a bitfield store {}: only at bit 0 of a byte covered yet", self.print(&inner)));
+            let fits = matches!((nat(&pos), nat(&k)), (Some(ps), Some(kb)) if kb > 0 && ps + kb <= 8 * n);
+            if !fits || ![1, 2, 4, 8].contains(&n) {
+                return Err(format!("a bitfield store {}: its field not within 1, 2, 4 or 8 bytes", self.print(&inner)));
             }
             let addr = if nat(&off) == Some(0) { pp.clone() } else { self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]) };
             let w = self.w.clone();
@@ -861,6 +862,19 @@ impl<'e> Gen<'e> {
         let (bk, b) = self.tag(m.get("base")?)?;
         (bk == 2 && nat(m.get("seg")?)? == 0 && self.app(m.get("index")?, "none", 0).is_some() && nat(m.get("scale")?)? == 1).then_some(())?;
         Some((nat(&b)?, b, m["disp"].clone()))
+    }
+
+    /// the fact that n bytes at p + d are defined for reading, else for
+    /// writing (the spec's store there: a bitfield's bytes, read before
+    /// merged), and which (`false` / `true`, as the rules' `wr`)
+    pub(super) fn mem_hyp_rw(&mut self, st: &St, pp: &Term, d: &Term, n: u128) -> Result<(Seq, Term), String> {
+        match self.mem_hyp(st, pp, d, n) {
+            Ok(h) => Ok((h, self.mk("false", vec![]))),
+            Err(e) => match self.hyp_find(&st.hyps, &self.mem_defined(&st.w, pp, d, n, true)) {
+                Some(h) => Ok((h.1.clone(), self.mk("true", vec![]))),
+                None => Err(e),
+            },
+        }
     }
 
     /// the fact in scope that the spec's n-byte load at p + d is defined

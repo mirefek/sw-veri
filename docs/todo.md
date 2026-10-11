@@ -15,8 +15,10 @@ call graph.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- C1 of `alloc_group` (walked to its first bitfield store off bit 0:
-  `stbf(p, 33, 7, 4, 52, v)`; next those, then the rest of its code).
+- C1 of `alloc_group` (walked past its first bitfield store, `maplen`, to
+  GIMPLE's unsigned 64-bit division `4080 / size`, the machine's `div`;
+  its other bitfield stores -- `maplen = 0`, `freeable`, `sizeclass` --
+  come after).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
@@ -26,7 +28,7 @@ call graph.
   `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
   `___errno_location`.
 - C1 of nested loops (the inner loop's iterations arriving at the outer
-  head); bitfield stores off bit 0 or wider than a byte.
+  head).
 
 ## 2. The invariant and the laws
 
