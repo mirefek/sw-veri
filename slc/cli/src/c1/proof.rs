@@ -738,9 +738,11 @@ impl<'e> Gen<'e> {
         if self.loop_head(qi).is_none() {
             return Ok(None);
         }
-        if !self.is_loop_test(st.a) {
-            // (a loop with no counter: at the head the code jumps back to)
-            if self.is_back_target(st.a) {
+        if !self.is_counting_test(st.a) {
+            // (a loop with no counter: at the first point of the code's
+            // cycle the walk meets -- not inside a counting loop, met at its
+            // test)
+            if self.on_cycle(st.a) && !self.in_counting_loop(st.a) {
                 return self.loop_general(st, qi).map(Some);
             }
             return Ok(None);
@@ -753,9 +755,37 @@ impl<'e> Gen<'e> {
         self.loop_start(st, qi).map(Some)
     }
 
-    /// the target of a later jump back to a (a loop's head)
-    fn is_back_target(&self, a: u128) -> bool {
-        self.insns.range(a + 1..).any(|(&b, i)| (i.row == 127 || i.row == 128) && matches!(self.jcc(b), Ok((_, _, _, tt, _)) if tt == a))
+    /// a on a cycle of the code (a loop's head when the walk meets it
+    /// first)
+    fn on_cycle(&self, a: u128) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut todo = self.succs(a);
+        while let Some(b) = todo.pop() {
+            if b == a {
+                return true;
+            }
+            if self.insns.contains_key(&b) && seen.insert(b) {
+                todo.extend(self.succs(b));
+            }
+        }
+        false
+    }
+
+    /// a inside a counting loop: between its test and the target of the
+    /// jump back
+    fn in_counting_loop(&self, a: u128) -> bool {
+        self.insns.keys().any(|&b| {
+            self.is_counting_test(b) && {
+                let a2 = (b + self.insns[&b].len) % P64;
+                matches!(self.jcc(a2), Ok((_, _, _, tt, _)) if tt <= a && a <= b)
+            }
+        })
+    }
+
+    /// a counting loop's test at a: `cmp dword [rsp + d], imm8` before the
+    /// jump back
+    fn is_counting_test(&self, a: u128) -> bool {
+        self.is_loop_test(a) && self.insns.get(&a).is_some_and(|i| i.row == 60 && self.pairs(&i.fields, 5).is_some_and(|x| self.rsp_mem(&x[2]).is_some()))
     }
 
     /// A loop met at its head h, by the loop rule (tr.loop_lv): the homes
@@ -827,6 +857,15 @@ impl<'e> Gen<'e> {
         }
         let hst_y = self.hs_term(&hsm_y);
         let hs_lam = self.abs(&hst_y, &[Self::var_id(&yv)]);
+        // the locals' invariant: a local a home holds, a word of its width
+        let mut yts = Vec::new();
+        for (c, (nb, v)) in &hsm_y {
+            if st.hsm.get(c).is_some_and(|x| x.1 != *v) {
+                yts.push(self.mk("in", vec![v.clone(), self.mk("bits", vec![lit(8 * nb)])]));
+            }
+        }
+        let yt_t = yts.into_iter().reduce(|a, b| self.mk("and", vec![a, b])).unwrap_or_else(|| self.mk("true", vec![]));
+        let yt_lam = self.abs(&yt_t, &[Self::var_id(&yv)]);
         // the rule's instance: its premises, the iteration's breakpoints
         let (lr, stmt) = self.inst(
             "tr.loop_lv",
@@ -839,6 +878,7 @@ impl<'e> Gen<'e> {
                 ("ha", lit(h)),
                 ("fd", st.ds.clone()),
                 ("hs", hs_lam.clone()),
+                ("yt", yt_lam.clone()),
                 ("bkp", self.bkp.clone()),
                 ("bka", self.bka.clone()),
                 ("b", wr[2].clone()),
@@ -859,10 +899,17 @@ impl<'e> Gen<'e> {
         }
         let lv_b = (|| {
             let a1 = self.app(prems.get(3)?, "all", 1)?[0].clone();
-            let a2 = self.app(&a1, "all", 1)?[0].clone();
-            let Node::App(_, i1) = a2.node() else { return None };
-            let Node::App(_, i2) = i1[1].node() else { return None };
-            self.app(&i2[1], "tr.lv", 13).map(|x| x.to_vec())
+            let mut c = self.app(&a1, "all", 1)?[0].clone();
+            loop {
+                if let Some(x) = self.app(&c, "tr.lv", 13) {
+                    return Some(x.to_vec());
+                }
+                let Node::App(f, i) = c.node() else { return None };
+                if *f != imp {
+                    return None;
+                }
+                c = i[1].clone();
+            }
         })()
         .ok_or("tr.loop_lv: its body premise")?;
         let (bkp2, bka2) = (lv_b[1].clone(), lv_b[2].clone());
@@ -872,6 +919,7 @@ impl<'e> Gen<'e> {
         let hw_t = self.mk("and", vec![self.mk("in", vec![wv.clone(), self.mk("abi.World", vec![])]), univ(self, &wv)]);
         let hw = self.assume(&hw_t)?;
         let hu = self.assume(&hu_t)?;
+        let hy = self.assume(&yt_t)?;
         let hv = self.evp(&RP::Taut(vec![R::S(hw.clone())]), &univ(self, &wv), &[])?;
         let qit = self.mk("tr.liter", vec![yv.clone(), wr[2].clone(), kl.clone(), self.kw.clone()]);
         let jq = self.new_q(qit);
@@ -880,7 +928,7 @@ impl<'e> Gen<'e> {
         let wid = self.parse(&format!("mkprog(x1 x2. bind_rel(lq{n}, x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))"))?;
         let wrap_id = self.abs(&wid, &[Self::var_id(&qv)]);
         let kw_id = self.mk("eq", vec![Term::bvar(0), self.mk("ok", vec![Term::bvar(2), Term::bvar(1)])]);
-        let saved = LoopG { head: h, hs: hs_lam.clone(), bkp: self.bkp.clone(), bka: self.bka.clone(), wrap: self.wrap.clone(), kw: self.kw.clone(), hu, fd: st.ds.clone() };
+        let saved = LoopG { head: h, hs: hs_lam.clone(), bkp: self.bkp.clone(), bka: self.bka.clone(), wrap: self.wrap.clone(), kw: self.kw.clone(), hu, fd: st.ds.clone(), yt: yt_lam.clone(), hy: hy.clone() };
         let st_body = St {
             a: h,
             fr: st.fr,
@@ -895,8 +943,8 @@ impl<'e> Gen<'e> {
             lp: st.lp,
             spec: Spec::Proc(jq),
             hyps: st.hyps.clone(),
-            facts: st.facts.clone(),
-            lfx: st.lfx.clone(),
+            facts: st.facts.iter().cloned().chain([hy.clone()]).collect(),
+            lfx: st.lfx.iter().cloned().chain([hy.clone()]).collect(),
             bconds: Vec::new(),
             spent: Vec::new(),
             splits: Vec::new(),
@@ -916,14 +964,14 @@ impl<'e> Gen<'e> {
         self.kw = saved.kw.clone();
         self.lpg = None;
         let body_lv = res?;
-        let body_c = self.close(body_lv, &[hu_t, hw_t], &[Self::var_id(&yv), Self::var_id(&wv)])?;
+        let body_c = self.close(body_lv, &[hu_t, yt_t, hw_t], &[Self::var_id(&yv), Self::var_id(&wv)])?;
         // the rule: its claim at h for the locals and world now
         self.fr = st.fr;
         self.w = st.w.clone();
         self.hvu = Some(st.hvu.clone());
         self.set_lf(st)?;
         let r = mp(lr, vec![simp0(), p(f("tr.tr_univ")), self.nobp(), s(&body_c)]);
-        let r = mp(r, vec![t(&y0), t(&st.w), simp_lw(vec![R::S(st.hvu.clone())])]);
+        let r = mp(r, vec![t(&y0), t(&st.w), simp_lw(vec![R::S(st.hvu.clone())]), simp_l()]);
         let c0 = self.run(&R::Expand(Box::new(r), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
         // (the point's homes and registers: the claim's, and more)
         let hs1 = self.app(c0.concl(), "tr.lv", 13).map(|x| x[8].clone()).ok_or("the loop's claim")?;
@@ -1039,12 +1087,13 @@ impl<'e> Gen<'e> {
                 ("ha", lit(lg.head)),
                 ("fd", lg.fd.clone()),
                 ("hs", lg.hs.clone()),
+                ("yt", lg.yt.clone()),
                 ("bkp", lg.bkp.clone()),
             ],
         );
         let pcl = self.p(&st.spec);
         self.trace(|| format!("loop at {:x}: arrived", st.a));
-        let r = mp(inst, vec![t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), p(sub_pf), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(rw)]);
+        let r = mp(inst, vec![t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), p(sub_pf), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), simp_lw(vec![R::S(lg.hy.clone())]), p(rw)]);
         // (more of the frame here than at the head: the claim with the head's)
         if self.canon(&st.ds) == self.canon(&lg.fd) {
             return self.run(&r, &[]);

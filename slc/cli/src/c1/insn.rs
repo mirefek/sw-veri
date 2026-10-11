@@ -247,8 +247,9 @@ impl<'e> Gen<'e> {
                 let u = self.need_reg(st, g, 4)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
                 let op = self.mk("bits_xor", vec![lit(32), u.clone(), v.clone()]);
-                let r = self.value(&op);
-                let tr = self.step("xor32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![simp_l()]));
+                let r = self.value_comm(&op);
+                let hr = self.comm_premise(&r, &op);
+                let tr = self.step("xor32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
@@ -797,8 +798,12 @@ impl<'e> Gen<'e> {
                     return Err(bad("add of a register not holding the operation's width"));
                 }
                 let (tr, r) = if n == 4 {
-                    let tr = self.step("add32_rr", a, insn, &[&g, &x[1], &u, &xv], self.tail(st, insn, 7, vec![]));
-                    (tr, self.mk("bits_add", vec![lit(32), u, xv.clone()]))
+                    // (the sum as the spec orders it)
+                    let op = self.mk("bits_add", vec![lit(32), u.clone(), xv.clone()]);
+                    let r = self.value_comm(&op);
+                    let hr = self.comm_premise(&r, &op);
+                    let tr = self.step("add32_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
+                    (tr, r)
                 } else {
                     let r = self.value_comm(&self.mk("bits_add", vec![lit(64), u.clone(), xv.clone()]));
                     let tr = self.step("add64_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 8, vec![]));

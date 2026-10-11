@@ -102,7 +102,7 @@ impl<'e> Gen<'e> {
     }
 
     /// the code's successors of the instruction at a
-    fn succs(&self, a: u128) -> Vec<u128> {
+    pub(super) fn succs(&self, a: u128) -> Vec<u128> {
         let Some(i) = self.insns.get(&a) else { return Vec::new() };
         let a2 = (a + i.len) % P64;
         match i.row {
@@ -111,6 +111,11 @@ impl<'e> Gen<'e> {
             // jmp rel8
             125 => match nat(&i.fields) {
                 Some(r) => vec![(a2 + if r & 0x80 != 0 { r + 0xffff_ffff_ffff_ff00 } else { r }) % P64],
+                None => Vec::new(),
+            },
+            // jmp rel32
+            124 => match nat(&i.fields) {
+                Some(r) => vec![(a2 + if r & 0x8000_0000 != 0 { r + 0xffff_ffff_0000_0000 } else { r }) % P64],
                 None => Vec::new(),
             },
             // jcc rel8, rel32

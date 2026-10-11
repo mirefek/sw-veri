@@ -857,6 +857,13 @@ impl<'e> Gen<'e> {
             if x[0].loose_depth(&self.env.binders_fn()) > 0 {
                 return Err(format!("a let of the state: {}", self.lambda(3, &x[0])));
             }
+            // (a commutative operation the machine has computed with its
+            // operands the other way: that order, by the commutation)
+            if let Some((sw, eq)) = self.comm_swap(&x[0]) {
+                let bb = self.abstract_(&body, &x[0], 0);
+                let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", bb), ("e", x[0].clone()), ("e2", sw)])?;
+                return Ok(Some(Red::Q(j, mp(inst, vec![eq, t(&w)]))));
+            }
             let e = self.value(&x[0]);
             let al = self.lam(&x[1], &["x0", "x1", "x8", "x"], &["x0", "x8", "x"]).ok_or("a let's body reads the outcome")?;
             let (j, inst) = self.by(qi, "tr.qs_let", &[("e", e), ("a", al), ("k", kl)])?;

@@ -139,6 +139,9 @@ struct LoopG {
     hu: Seq,
     /// the frame at the head
     fd: Term,
+    /// the locals' invariant, and its assumption in the iteration
+    yt: Term,
+    hy: Seq,
 }
 
 /// The flags a compare sets (proofs/translate_flags.core): of `cmp a, b`
@@ -541,6 +544,36 @@ impl<'e> Gen<'e> {
         self.value(t)
     }
 
+    /// A commutative operation op(n, a, b) without a value of its own whose
+    /// swapped op(n, b, a) has one: that, and the proof of op(n, a, b) =
+    /// op(n, b, a)
+    fn comm_swap(&self, t: &Term) -> Option<(Term, rec::RA)> {
+        let Node::App(f, a) = t.node() else { return None };
+        let name = self.env.syms[*f as usize].name.as_str();
+        if a.len() != 3 || !["bits_add", "bits_mul", "bits_and", "bits_xor"].contains(&name) {
+            return None;
+        }
+        let known = |x: &Term| matches!(x.node(), Node::Var(v, _) if self.vals.iter().any(|y| y.0 == *v));
+        if known(&self.canon(t)) {
+            return None;
+        }
+        let sw = t.with_args(vec![a[0].clone(), a[2].clone(), a[1].clone()]);
+        if !known(&self.canon(&sw)) {
+            return None;
+        }
+        let pf = match name {
+            "bits_and" => Some("x86.and_comm"),
+            "bits_mul" => Some("x86.mul_comm"),
+            "bits_xor" => Some("x86i.xor_comm"),
+            _ => None,
+        };
+        let pf = match pf {
+            Some(l) => rec::p(R::Inst(l.into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
+            None => rec::simp_l(),
+        };
+        Some((sw, pf))
+    }
+
     /// the premise `r = op(n, a, b)` for value_comm's r: simp(L) for the
     /// spec's value itself; with its operands swapped, the commutation
     /// (x86.and_comm, x86.mul_comm; simp's arithmetic for `bits_add`)
@@ -550,6 +583,7 @@ impl<'e> Gen<'e> {
                 let lemma = match self.env.syms[*f as usize].name.as_str() {
                     "bits_and" => Some("x86.and_comm"),
                     "bits_mul" => Some("x86.mul_comm"),
+                    "bits_xor" => Some("x86i.xor_comm"),
                     _ => None,
                 };
                 if let Some(l) = lemma {
