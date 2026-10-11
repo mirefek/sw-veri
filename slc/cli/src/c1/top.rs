@@ -125,8 +125,11 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str) -> Result<V
         lbase: empty.clone(),
         lcode: empty,
         steps: 0,
-        joins: Vec::new(),
-        arrivals: Vec::new(),
+        stmts: Vec::new(),
+        stmt_fail: BTreeSet::new(),
+        hus: Vec::new(),
+        vmark0: 0,
+        loop_claims: Vec::new(),
         picked: Default::default(),
         spent_now: Default::default(),
         preds: None,
@@ -333,6 +336,7 @@ impl<'e> Gen<'e> {
         }
         let rs_args = st0.rs.clone();
         // the proof
+        self.vmark0 = self.env.vars.len();
         let pt = self.prove_pt(st0)?;
         // (the callees' premises, as their calls had them)
         let mut cprem = Vec::new();

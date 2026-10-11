@@ -174,6 +174,20 @@ item is a short summary of finished work; details are in the files named.
   (a local a home holds: a word of its width), assumed in the iteration and
   owed at the head; a loop is met at the first point of a cycle of the
   code the walk reaches (try_avail's, entered at its test).
+- **Joins by the spec's structure** (`slc/cli/src/c1/join.rs`): where a
+  block of the spec ends at a point paths meet, the claim for the rest is
+  made from the spec, not from the paths: for every world and locals (the
+  block's outcome `ok(pair(w, y), E)`), the homes holding locals as those
+  locals (`link_homes`, shared with the loop rule), the function's own
+  frame (`tr.lv_fd`), no registers, the facts every path arriving has
+  (`shared_facts`: none of a path's own values, nor of values the claim
+  does not mention); where an enclosing block ends at the same point, the
+  outer one's. A loop's rule (`tr.loop_lv`) is proven once per loop and
+  context for every locals and world (`loop_claims`). This replaced the
+  anti-unification of two paths' states: the points walked by the C1 of
+  mallocng's 23 functions went from 18076 to about 4700 (try_avail 8038
+  to 1612, get_meta 6209 to 672, enframe 1363 to 556), its check from
+  60 s to about 20 s.
 - **Bitfield stores** (GIMPLE's `stbf`, a read-modify-write: at bit 0 of a
   byte so far): the machine reads the byte (a pending store's
   write-definedness lets it, `tr.reads_wr`), merges, stores

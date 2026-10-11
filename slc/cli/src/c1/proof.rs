@@ -309,6 +309,10 @@ impl<'e> Gen<'e> {
             // alternatives)
             *self.spent_now.borrow_mut() = st.spent.iter().map(|&i| self.expand(&st.hyps[i].0)).collect();
             self.picked.borrow_mut().clear();
+            // (a block's end where paths meet: the rest's claim proven once)
+            if let Some(pf) = self.stmt_join(&st)? {
+                return Ok(pf);
+            }
             match self.reduce(qi, &st.hyps)? {
                 Some(Red::Q(j, r)) => {
                     let rs = self.run(&r, &[])?;
@@ -348,7 +352,8 @@ impl<'e> Gen<'e> {
                             ("kw", self.kw3()),
                         ],
                     );
-                    return self.run(&mp(inst, vec![simpw(vec![R::S(st.hvu.clone())]), s(&rest)]), &[]);
+                    let univ = [&st.hvu].into_iter().chain(self.hus.iter()).map(|x| R::S(x.clone())).collect();
+                    return self.run(&mp(inst, vec![simpw(univ), s(&rest)]), &[]);
                 }
                 Some(Red::Split { cond, ok, ub }) => {
                     self.trace(|| format!("split at {:x} on {}", st.a, self.print(&cond)));
@@ -386,7 +391,9 @@ impl<'e> Gen<'e> {
                     self.kw = lg.kw.clone();
                     self.lpg = None;
                     self.trace(|| format!("loop at {:x}: its exit at {:x}", lg.head, st.a));
+                    self.hus.push(lg.hu.clone());
                     let rest = self.exit_rest(st2, jk);
+                    self.hus.pop();
                     self.bka = bka;
                     self.wrap = wrap;
                     self.kw = kw0;
@@ -423,10 +430,6 @@ impl<'e> Gen<'e> {
                 }
                 None => {}
             }
-        }
-        // (where branches meet: the claim proven once, for all of them)
-        if let Some(pf) = self.join(&st)? {
-            return Ok(pf);
         }
         self.insn(st)
     }
@@ -901,6 +904,54 @@ impl<'e> Gen<'e> {
         self.is_loop_test(a) && self.insns.get(&a).is_some_and(|i| i.row == 60 && self.pairs(&i.fields, 5).is_some_and(|x| self.rsp_mem(&x[2]).is_some()))
     }
 
+    /// The homes at st as a function of the locals y (the variable yv; the
+    /// locals' values now y0): a home holding a local's value -- the same
+    /// term, or one the facts make equal (the code's form of the spec's
+    /// value; not a literal, a choice's placeholder) -- holds that local
+    /// (its projection of yv); the locals' invariant: such a home's local a
+    /// word of its width
+    pub(super) fn link_homes(&mut self, st: &St, y0: &Term, yv: &Term) -> Result<(BTreeMap<u128, (u128, Term)>, Term), String> {
+        // the locals' parts, and their projections of a locals variable
+        let mut comps = Vec::new();
+        let mut cur = y0.clone();
+        while let Some(pa) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
+            comps.push(pa[0].clone());
+            cur = pa[1].clone();
+        }
+        comps.push(cur);
+        let proj = |g: &Gen, i: usize| -> Term {
+            let mut t = yv.clone();
+            for _ in 0..i {
+                t = g.mk("snd", vec![t]);
+            }
+            if i + 1 < comps.len() { g.mk("fst", vec![t]) } else { t }
+        };
+        let mut hsm_y = BTreeMap::new();
+        for (c, (nb, x)) in &st.hsm {
+            let xc = self.canon(x);
+            let mut v = x.clone();
+            for (i, ci) in comps.iter().enumerate() {
+                if nat(ci).is_some() {
+                    continue;
+                }
+                let same = self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok();
+                if same {
+                    v = proj(self, i);
+                    break;
+                }
+            }
+            hsm_y.insert(*c, (*nb, v));
+        }
+        let mut yts = Vec::new();
+        for (c, (nb, v)) in &hsm_y {
+            if st.hsm.get(c).is_some_and(|x| x.1 != *v) {
+                yts.push(self.mk("in", vec![v.clone(), self.mk("bits", vec![lit(8 * nb)])]));
+            }
+        }
+        let yt_t = yts.into_iter().reduce(|a, b| self.mk("and", vec![a, b])).unwrap_or_else(|| self.mk("true", vec![]));
+        Ok((hsm_y, yt_t))
+    }
+
     /// A loop met at its head h, by the loop rule (tr.loop_lv): the homes
     /// there as a function of the locals y (a home holding one of the
     /// locals' first values holds that local), one iteration walked from h
@@ -930,54 +981,13 @@ impl<'e> Gen<'e> {
             return Err(bad("of another form (a condition, the body reading the outer state)"));
         }
         let y0 = l0[1].clone();
-        // the locals' parts, and their projections of a locals variable
-        let mut comps = Vec::new();
-        let mut cur = y0.clone();
-        while let Some(pa) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
-            comps.push(pa[0].clone());
-            cur = pa[1].clone();
-        }
-        comps.push(cur);
         let n = self.fresh("");
         let yv = self.var(&format!("ly{n}"));
         let wv = self.var(&format!("lw{n}"));
-        let proj = |g: &Gen, i: usize| -> Term {
-            let mut t = yv.clone();
-            for _ in 0..i {
-                t = g.mk("snd", vec![t]);
-            }
-            if i + 1 < comps.len() { g.mk("fst", vec![t]) } else { t }
-        };
-        // (a home holding a local's first value: the same term, or one the
-        // facts make equal -- the code's form of the spec's value; not a
-        // literal, a choice's placeholder)
         self.set_lf(st)?;
-        let mut hsm_y = BTreeMap::new();
-        for (c, (nb, x)) in &st.hsm {
-            let xc = self.canon(x);
-            let mut v = x.clone();
-            for (i, ci) in comps.iter().enumerate() {
-                if nat(ci).is_some() {
-                    continue;
-                }
-                let same = self.canon(ci) == xc || self.evp(&RP::Simp(true, vec![], vec![], false), &self.mk("eq", vec![x.clone(), ci.clone()]), &[]).is_ok();
-                if same {
-                    v = proj(self, i);
-                    break;
-                }
-            }
-            hsm_y.insert(*c, (*nb, v));
-        }
+        let (hsm_y, yt_t) = self.link_homes(st, &y0, &yv)?;
         let hst_y = self.hs_term(&hsm_y);
         let hs_lam = self.abs(&hst_y, &[Self::var_id(&yv)]);
-        // the locals' invariant: a local a home holds, a word of its width
-        let mut yts = Vec::new();
-        for (c, (nb, v)) in &hsm_y {
-            if st.hsm.get(c).is_some_and(|x| x.1 != *v) {
-                yts.push(self.mk("in", vec![v.clone(), self.mk("bits", vec![lit(8 * nb)])]));
-            }
-        }
-        let yt_t = yts.into_iter().reduce(|a, b| self.mk("and", vec![a, b])).unwrap_or_else(|| self.mk("true", vec![]));
         let yt_lam = self.abs(&yt_t, &[Self::var_id(&yv)]);
         // the rule's instance: its premises, the iteration's breakpoints
         let (lr, stmt) = self.inst(
@@ -1026,7 +1036,61 @@ impl<'e> Gen<'e> {
         })()
         .ok_or("tr.loop_lv: its body premise")?;
         let (bkp2, bka2) = (lv_b[1].clone(), lv_b[2].clone());
-        // the iteration's walk, for every locals y and world w
+        // (the rule's claim for every locals and world: made once per loop
+        // and context, whichever path arrives)
+        let key = self.expand(&stmt);
+        let mut cached = self.loop_claims.iter().find(|(k, _)| *k == key).map(|x| x.1.clone());
+        if let Some(h0) = cached.as_ref().and_then(|c| self.out_of_scope(st, c)) {
+            self.trace(|| format!("loop at {:x}: its claim rests on {}, not here", h, self.print(&h0)));
+            cached = None;
+        }
+        let rule = match cached {
+            Some(c) => {
+                self.trace(|| format!("loop at {:x}: by its claim", h));
+                c
+            }
+            None => {
+                let c = self.loop_rule(st, h, n, lr, &key, &wr, &kl, &y0, &yv, &wv, &yt_t, &hs_lam, &yt_lam, hsm_y, hst_y, bkp2, bka2)?;
+                self.loop_claims.push((key, c.clone()));
+                c
+            }
+        };
+        // the rule: its claim at h for the locals and world now
+        self.fr = st.fr;
+        self.w = st.w.clone();
+        self.hvu = Some(st.hvu.clone());
+        self.set_lf(st)?;
+        let r = mp(R::S(rule), vec![t(&y0), t(&st.w), simp_lw(vec![R::S(st.hvu.clone())]), simp_l()]);
+        let c0 = self.run(&R::Expand(Box::new(r), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
+        self.loop_at(st, h, c0)
+    }
+
+    /// the loop rule's claim at h, for every locals and world: one
+    /// iteration walked from h for every y and world
+    #[allow(clippy::too_many_arguments)]
+    fn loop_rule(
+        &mut self,
+        st: &St,
+        h: u128,
+        n: String,
+        lr: R,
+        key: &Term,
+        wr: &[Term],
+        kl: &Term,
+        y0: &Term,
+        yv: &Term,
+        wv: &Term,
+        yt_t: &Term,
+        hs_lam: &Term,
+        yt_lam: &Term,
+        hsm_y: BTreeMap<u128, (u128, Term)>,
+        hst_y: Term,
+        bkp2: Term,
+        bka2: Term,
+    ) -> Result<Seq, String> {
+        // the iteration's walk, for every locals y and world w (with the
+        // facts every path arriving has)
+        let (hyps, facts, lfx) = self.shared_facts(st, y0, &[Self::var_id(yv), Self::var_id(wv)], &[&key]);
         let univ = |g: &Gen, x: &Term| g.mk("in", vec![x.clone(), g.mk("univ", vec![lit(1)])]);
         let hu_t = univ(self, &self.mk("pair", vec![wv.clone(), yv.clone()]));
         let hw_t = self.mk("and", vec![self.mk("in", vec![wv.clone(), self.mk("abi.World", vec![])]), univ(self, &wv)]);
@@ -1055,9 +1119,9 @@ impl<'e> Gen<'e> {
             hst: hst_y,
             lp: st.lp,
             spec: Spec::Proc(jq),
-            hyps: st.hyps.clone(),
-            facts: st.facts.iter().cloned().chain([hy.clone()]).collect(),
-            lfx: st.lfx.iter().cloned().chain([hy.clone()]).collect(),
+            hyps,
+            facts: facts.into_iter().chain([hy.clone()]).collect(),
+            lfx: lfx.into_iter().chain([hy.clone()]).collect(),
             bconds: Vec::new(),
             spent: Vec::new(),
             splits: Vec::new(),
@@ -1070,22 +1134,28 @@ impl<'e> Gen<'e> {
         self.kw = kw_id;
         self.lpg = Some(saved.clone());
         self.trace(|| format!("loop at {:x}: its iteration", h));
+        // (its universe facts its own: an enclosing walk's are not every
+        // path's)
+        let hus = std::mem::take(&mut self.hus);
         let res = self.prove(st_body);
+        self.hus = hus;
         self.bkp = saved.bkp.clone();
         self.bka = saved.bka.clone();
         self.wrap = saved.wrap.clone();
         self.kw = saved.kw.clone();
         self.lpg = None;
         let body_lv = res?;
-        let body_c = self.close(body_lv, &[hu_t, yt_t, hw_t], &[Self::var_id(&yv), Self::var_id(&wv)])?;
-        // the rule: its claim at h for the locals and world now
+        let body_c = self.close(body_lv, &[hu_t, yt_t.clone(), hw_t], &[Self::var_id(yv), Self::var_id(wv)])?;
         self.fr = st.fr;
         self.w = st.w.clone();
         self.hvu = Some(st.hvu.clone());
         self.set_lf(st)?;
-        let r = mp(lr, vec![simp0(), p(f("tr.tr_univ")), self.nobp(), s(&body_c)]);
-        let r = mp(r, vec![t(&y0), t(&st.w), simp_lw(vec![R::S(st.hvu.clone())]), simp_l()]);
-        let c0 = self.run(&R::Expand(Box::new(r), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
+        self.run(&mp(lr, vec![simp0(), p(f("tr.tr_univ")), self.nobp(), s(&body_c)]), &[])
+    }
+
+    /// the loop's claim at its head h for st's locals and world (c0): st's
+    /// homes and registers, the claim's and more
+    fn loop_at(&mut self, st: &St, h: u128, c0: Seq) -> Result<Seq, String> {
         // (the point's homes and registers: the claim's, and more)
         let hs1 = self.app(c0.concl(), "tr.lv", 13).map(|x| x[8].clone()).ok_or("the loop's claim")?;
         let empty = self.mk("empty", vec![]);
@@ -1562,10 +1632,10 @@ impl<'e> Gen<'e> {
     pub(super) fn branch(&mut self, st: &St, c: Term, a3: u128, tt: u128, rule: R) -> Result<Seq, String> {
         let nc = self.mk("not", vec![c.clone()]);
         let mut bs = Vec::new();
-        for (cond, to, other) in [(c.clone(), a3, tt), (nc, tt, a3)] {
+        for (cond, to) in [(c.clone(), a3), (nc, tt)] {
             let mut st2 = st.clone();
             st2.a = to;
-            st2.splits.push(self.split(st, other));
+            st2.splits.push(self.split(st));
             let hn = self.assume(&cond)?;
             // (a branch its earlier tests exclude: by their contradiction)
             let opp = match self.app(&cond, "not", 1) {

@@ -266,14 +266,22 @@ struct Gen<'e> {
     lcode: Term,
     /// steps made (for the summary)
     steps: usize,
-    /// the join points' claims, the paths recorded there; the code's
-    /// predecessor counts
-    joins: Vec<join::Join>,
-    arrivals: Vec<join::Arrival>,
+    /// the join points' claims made (join.rs), the points where one was
+    /// not; the loop rule's claims made (for every locals and world), by
+    /// the rule's instance
+    stmts: Vec<join::StmtClaim>,
+    stmt_fail: BTreeSet<u128>,
+    loop_claims: Vec<(Term, Seq)>,
+    /// the universe facts of the walk's own variables set aside (a loop's
+    /// locals, in its exit's walk; a join claim's)
+    hus: Vec<Seq>,
+    /// the variables made before the walk (the function's fixed ones)
+    vmark0: usize,
     /// the facts the last reduction's guard was decided by; the point's
     /// spent branch conditions (St::spent)
     picked: std::cell::RefCell<Vec<Term>>,
     spent_now: std::cell::RefCell<Vec<Term>>,
+    /// the code's predecessor counts
     preds: Option<BTreeMap<u128, usize>>,
     /// the entry's assumptions (in scope at every point)
     ambient: Vec<Term>,
