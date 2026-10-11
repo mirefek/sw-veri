@@ -21,6 +21,8 @@
 //!   for the outcome constructors `ok(s, v) = pair(0, pair(s, v))`,
 //!   `exc(s, e) = pair(1, pair(s, e))`, `diverge(t) = pair(2, t)`: their
 //!   `fst`, `snd`, `out_state`, `out_value`;
+//! * `fn_modify(f, k, y. g(y)) = letin(f, F. fn_update(F, k, g(app(F, k))))`
+//!   (definitions: f bound once, a let as above -- not copied);
 //! * `app(fn_update(f, k, v), k) = v`; `app(fn_update(f, k, v), k2) =
 //!   app(f, k2)` for distinct literals k, k2 (`fn_update` keeps the other
 //!   pairs);
@@ -231,6 +233,7 @@ struct Syms {
     out_value: Option<SymId>,
     app: Option<SymId>,
     fn_update: Option<SymId>,
+    fn_modify: Option<SymId>,
     fn_build: Option<SymId>,
     ite: Option<SymId>,
     runs: Option<SymId>,
@@ -623,6 +626,7 @@ impl<'a> Simp<'a> {
                 out_value: g("out_value"),
                 app: g("app"),
                 fn_update: g("fn_update"),
+                fn_modify: g("fn_modify"),
                 fn_build: g("fn_build"),
                 ite: g("ite"),
                 runs: g("runs"),
@@ -1400,6 +1404,32 @@ impl<'a> Simp<'a> {
         let s = &self.s;
         let Node::App(f, a) = t.node() else { return t.clone() };
         let f = *f;
+        // `fn_modify(f, k, y. g)`: `fn_update` of f bound by a let (f a local
+        // constant while the update is simplified)
+        if is(f, s.fn_modify) && a.len() == 3 {
+            if let (Some(upd), Some(app)) = (s.fn_update, s.app) {
+                let fv = self.term(&a[0]);
+                let mk = |x: &Term| {
+                    let old = Term::app(app, vec![x.clone(), a[1].clone()]);
+                    Term::app(upd, vec![x.clone(), a[1].clone(), inst_k(self.env, &a[2], &[old])])
+                };
+                if let_inline(&fv) || self.env.loose_depth_m(&fv) > 0 || self.env.loose_depth_m(&a[1]) > 0 {
+                    return self.term(&mk(&fv));
+                }
+                let c = self.let_var();
+                self.let_env.borrow_mut().push((c, fv.clone()));
+                let b = self.term(&mk(&Term::var(c, vec![])));
+                self.let_env.borrow_mut().pop();
+                return match var_uses(&b, c, 2) {
+                    0 => b,
+                    1 => self.term(&b.subst_var(c, &fv, &self.env.binders_fn())),
+                    _ => match s.letin {
+                        Some(l) => Term::app(l, vec![fv, let_abstract(self.env, &b, c)]),
+                        None => self.term(&b.subst_var(c, &fv, &self.env.binders_fn())),
+                    },
+                };
+            }
+        }
         // `letin(a, x. body)`: β for a small value, else lazily
         if is(f, s.letin) {
             let v = self.term(&a[0]);

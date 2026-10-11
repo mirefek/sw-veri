@@ -664,6 +664,9 @@ excludes the registered ones).
 - It closes each path by taut / arith. It finds witnesses for the goal's
   existentials by matching.
 - `keep(P)` keeps runs of P folded.
+- `fn_modify(f, k, y. g(y))` (core/prelude.core: f's value at k changed
+  by g of the old one; lemmas in core/records.core) is simplified as
+  `fn_update` of f bound by a let, so f is not copied into the new value.
 - A `let` is reduced lazily. A small value (32 nodes at most, as a tree)
   goes into the body. Otherwise the body is simplified with the variable
   a local constant bound to the value, looked through only where it
