@@ -478,6 +478,17 @@ impl<'e> Gen<'e> {
                     return Ok((Some(cond), r, ok, Some(ub)));
                 }
             }
+            // (an 8-byte element: the index times 8)
+            if let (Some(8), Some(y)) = (nat(&x[2]), self.app(&ix, "bits_sext", 3)) {
+                if nat(&y[0]) == Some(32) && nat(&y[1]) == Some(64) {
+                    let (pp, i) = (x[0].clone(), self.canon(&y[2]));
+                    let cond = self.mk("tr.elem8_sx_def", vec![pp.clone(), i.clone()]);
+                    let sx = self.mk("bits_sext", vec![lit(32), lit(64), i.clone()]);
+                    let r = self.mk("bits_add", vec![lit(64), pp.clone(), self.mk("bits_mul", vec![lit(64), sx, lit(8)])]);
+                    let (ok, ub) = self.ok_ub("tr.elem8_sx_ok", "tr.elem8_sx_ub", &[pp, i], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
+                    return Ok((Some(cond), r, ok, Some(ub)));
+                }
+            }
         }
         // a 64-bit field load at p + off (off a literal)
         if let Some(x) = self.app(op, "gimple.ld64", 2) {

@@ -136,7 +136,7 @@ fn c1_engine_checks() {
         .args(["steps"])
         .arg(&elf)
         .arg(&claim)
-        .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "a_cas=402c47", "-o"])
+        .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "alloc_group=403ee6", "a_cas=402c47", "-o"])
         .arg(&steps)
         .arg("--text")
         .arg(&text)
@@ -179,7 +179,7 @@ fn c1_engine_checks() {
     let checked = String::from_utf8_lossy(&c.stdout);
     // the C1 theorems unconditional: nothing in the chain rests on an open
     // lemma (the storing functions' statics' range defined)
-    let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 169 theorems, 0 conditional theorems, 0 open lemmas")
+    let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 177 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_link.core: 0 constants, 0 axioms, 0 definitions, 24 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 11 definitions, 33 theorems, 0 conditional theorems, 0 open lemmas")

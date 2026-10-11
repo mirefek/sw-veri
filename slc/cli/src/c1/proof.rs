@@ -537,7 +537,19 @@ impl<'e> Gen<'e> {
             let x = ax[1].clone();
             let r = ARGREGS[i];
             let (k, v) = self.reg(st, r).ok_or_else(|| format!("{:x}: register {} holds no value at the call", a, r))?;
-            if ![1, 2, 4, 8].contains(&k) || self.canon(&v) != self.canon(&x) {
+            // (the same value computed otherwise: equal by arithmetic modulo
+            // the width, from the facts in scope)
+            let mut eqf = Vec::new();
+            if [1, 2, 4, 8].contains(&k) && self.canon(&v) != self.canon(&x) {
+                let facts: Vec<R> = st.lfx.iter().chain(st.hyps.iter().map(|h| &h.1)).cloned().map(R::S).collect();
+                let e = self.mk("eq", vec![v.clone(), x.clone()]);
+                let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext"].iter().map(|d| d.to_string()).collect();
+                match self.evp(&RP::Defs(Box::new(RP::Arith(facts)), defs), &e, &[]) {
+                    Ok(q) => eqf.push(R::S(q)),
+                    Err(er) => self.trace(|| format!("{:x}: argument {} not shown equal: {}", a, i, er)),
+                }
+            }
+            if ![1, 2, 4, 8].contains(&k) || (self.canon(&v) != self.canon(&x) && eqf.is_empty()) {
                 return Err(format!(
                     "{:x}: register {} holds {} ({}), the spec passes {} ({})",
                     a,
@@ -548,7 +560,7 @@ impl<'e> Gen<'e> {
                     self.print(&self.expand(&x))
                 ));
             }
-            aps.push(p(R::Apply(Box::new(f("tr.argv_reg")), vec![t(&st.rs), t(&lit(r)), t(&lit(k)), t(&lit(nb)), t(&x), simp_l(), simp_l(), simp0()])));
+            aps.push(p(R::Apply(Box::new(f("tr.argv_reg")), vec![t(&st.rs), t(&lit(r)), t(&lit(k)), t(&lit(nb)), t(&x), simp_l(), simp_lw(eqf), simp0()])));
         }
         let hreg = if nargs == 0 { mpf("tr.args0", vec![t(&st.rs)]) } else { R::Apply(Box::new(f(&format!("tr.args{nargs}"))), aps) };
         let hin = self.hin_proof(&st.hst, st.fr)?;

@@ -13,9 +13,10 @@ call graph.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
-  `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`.
+  `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
+  `alloc_slot`.
 - `get_nominal_size`, `record_seq`,
-  `okay_to_free`, `free_group`, `alloc_group`, `alloc_slot`,
+  `okay_to_free`, `free_group`, `alloc_group`,
   `__malloc_alloc_meta`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
   the `lite_malloc` / `free.c` wrappers.

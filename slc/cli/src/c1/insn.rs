@@ -1120,12 +1120,29 @@ impl<'e> Gen<'e> {
                     }
                     let bn = reg(&b)?;
                     let (nb, u) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
-                    let kk = lit(d % (1 << 32));
-                    let tr = self.step("lea32_bd", a, insn, &[&x[1], &b, &lit(d), &x[2], &x[3], &x[4], &lit(nb), &u, &kk], self.tail(st, insn, 7, vec![]));
+                    // (a negative displacement as GIMPLE writes it: bits_neg(32, -d))
+                    let k32 = d % (1 << 32);
+                    let (kk, hk) = if k32 >= 1 << 31 {
+                        (self.mk("bits_neg", vec![lit(32), lit((1 << 32) - k32)]), defs(RP::Arith(vec![]), &["bits_neg", "pow2"]))
+                    } else {
+                        (lit(k32), simp_l())
+                    };
+                    let tr = self.step("lea32_bd", a, insn, &[&x[1], &b, &lit(d), &x[2], &x[3], &x[4], &lit(nb), &u, &kk], self.tail(st, insn, 6, vec![hk]));
                     let r = self.mk("bits_add", vec![lit(32), u, kk]);
                     let r = self.value(&r);
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 4, r);
+                    return self.then(tr, st2);
+                }
+                // lea r64, [i * k]: u * k
+                if let (Some((0, _)), Some(idx), Some(k), Some(0)) = (m.get("base").and_then(|b| self.tag(b)), m.get("index").and_then(|i| self.app(i, "some", 1)).map(|i| i[0].clone()), m.get("scale").and_then(nat), m.get("disp").and_then(nat)) {
+                    let i = reg(&idx)?;
+                    let (n, u) = self.reg(st, i).ok_or_else(|| bad("an empty index register"))?;
+                    let tr = self.step("lea64_is", a, insn, &[&x[1], &idx, &lit(k), &x[2], &x[3], &x[4], &lit(n), &u], self.tail(st, insn, 6, vec![]));
+                    let r = self.mk("bits_mul", vec![lit(64), u, lit(k)]);
+                    let r = self.value(&r);
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, r);
                     return self.then(tr, st2);
                 }
                 // lea r64, [b + i]: iv + bv
@@ -1448,10 +1465,23 @@ impl<'e> Gen<'e> {
                     }
                 }
                 let v = self.need_reg(st, 0, n)?;
+                // (the same number written otherwise: equal by arithmetic)
+                let mut eqf = None;
                 if self.expand(&v) != self.expand(val) {
-                    return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))));
+                    let defs: Vec<String> = ["bits_neg", "bits_add", "bits_sub", "pow2"].iter().map(|d| d.to_string()).collect();
+                    match self.evp(&RP::Defs(Box::new(RP::Arith(vec![])), defs), &self.mk("eq", vec![v.clone(), val.clone()]), &[]) {
+                        Ok(q) => eqf = Some(q),
+                        Err(_) => {
+                            return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))))
+                        }
+                    }
                 }
-                let r = self.ret_step("tr.ret_insn", a, insn, pr, vec![t(&lit(n)), t(val)], mpf(&format!("tr.result{}", 8 * n), vec![t(&st.w), t(val)]), st);
+                let mut r = self.ret_step("tr.ret_insn", a, insn, pr, vec![t(&lit(n)), t(val)], mpf(&format!("tr.result{}", 8 * n), vec![t(&st.w), t(val)]), st);
+                if let (Some(q), R::Mp(_, args)) = (eqf, &mut r) {
+                    // (rax's entry: the spec's value, by the equation)
+                    let i = args.len() - 2;
+                    args[i] = simp_lw(vec![R::S(q)]);
+                }
                 self.run(&r, &[])
             }
             // mov byte [b + i], imm8 / mov byte [rip + d], imm8: the spec's store

@@ -106,7 +106,9 @@ item is a short summary of finished work; details are in the files named.
   decay_bounces, dequeue (malloc.c's copy), dequeue_head, queue,
   free_meta, size_to_class, set_size, enframe, account_bounce, get_meta,
   __malloc_allzerop, a_cas, activate_group and try_avail (loops without a
-  counter).
+  counter), and alloc_slot (an array's 8-byte element, `tr.elem8_sx_*`; a
+  call's argument, a return value the spec computes otherwise: equal by
+  arith).
   The rules cover:
   - frames of any size;
   - a generic entry with register arguments;
