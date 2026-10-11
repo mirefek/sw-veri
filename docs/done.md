@@ -232,8 +232,10 @@ item is a short summary of finished work; details are in the files named.
   2^pos + L` (nested `bit_addmul`; `bit_slice`), that form GIMPLE's
   (`tr.bf_val`, by `tr.bf_clear`), the field compared modulo 2^k by
   arith.
-- **Division in C1**: GIMPLE's unsigned 64-bit `cdiv` (`tr.udiv64_ok` /
-  `_ub`: undefined for 0) against the machine's `div qword [rsp + d]`
+- **Division in C1**: GIMPLE's unsigned 64-bit `cdiv`, as the machine
+  computes it (`tr.cdiv64u_ok` / `_ub`: the quotient of the dividend's
+  value, a literal's number, its cast dropped -- both sides the same term,
+  no search at the conditions on it; undefined for 0) against the machine's `div qword [rsp + d]`
   with rdx 0 (`x86i.div64_rsp`: no divide error -- the divisor not 0, the
   quotient at most rax; `tr.div64_home`, rax and rdx written in one step,
   `tr.reg_step2`); the quotient's low half (`tr.sub32_imm_w`), `cmp r32,

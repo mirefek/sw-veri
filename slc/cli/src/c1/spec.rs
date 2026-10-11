@@ -648,15 +648,17 @@ impl<'e> Gen<'e> {
             let (ok, ub) = self.ok_ub("tr.ldbf_ok", "g.ldbf_ub", &x, vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
             return Ok((Some(cond), r, ok, Some(ub)));
         }
-        // an unsigned 64-bit division (`cdiv(a, b, false)`): a / b, undefined
-        // for b = 0
-        if let Some(x) = self.app(op, "gimple.binop", 4) {
-            let uty = self.mk("fn_update", vec![self.mk("fn_update", vec![self.mk("empty", vec![]), Term::bytes(b"prec"), lit(64)]), Term::bytes(b"signed"), self.mk("false", vec![])]);
-            if nat(&x[0]) == Some(3) && x[1] == uty {
-                let (a, b) = (x[2].clone(), x[3].clone());
+        // an unsigned 64-bit division (`cdiv(a, b, false)`), undefined for b
+        // = 0: as the machine computes it, the quotient of a's value (a
+        // literal's number), its cast dropped (tr.cdiv64u_ok)
+        if let Some(x) = self.app(op, "gimple.cdiv", 4) {
+            if nat(&x[0]) == Some(64) && self.app(&x[3], "false", 0).is_some() {
+                let (a, b) = (x[1].clone(), x[2].clone());
+                let k = self.eval_lit(&self.lit_bits(&self.expand(&a))).map(lit).unwrap_or_else(|| a.clone());
                 let cond = self.mk("not", vec![self.mk("eq", vec![b.clone(), lit(0)])]);
-                let r = self.mk("int_div", vec![a.clone(), b.clone()]);
-                let (ok, ub) = self.ok_ub("tr.udiv64_ok", "tr.udiv64_ub", &[a, b], vec![simp_l(), simp_l(), hc()], vec![]);
+                let r = self.mk("int_div", vec![k.clone(), b.clone()]);
+                let (ok, _) = self.ok_ub("tr.cdiv64u_ok", "", &[a.clone(), b.clone(), k], vec![simp_l(), simp_l(), simp_l(), hc()], vec![]);
+                let (_, ub) = self.ok_ub("", "tr.cdiv64u_ub", &[a, b], vec![], vec![]);
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
