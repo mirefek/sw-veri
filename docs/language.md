@@ -664,11 +664,17 @@ excludes the registered ones).
 - It closes each path by taut / arith. It finds witnesses for the goal's
   existentials by matching.
 - `keep(P)` keeps runs of P folded.
-- A `let` is reduced lazily: its value goes into the body if it is small
-  (32 nodes at most, as a tree) or used at most once; otherwise the let
-  stays and its value and body are simplified apart, so a large value
-  used many times is not copied. A goal that attempt leaves open is tried
-  again with every let reduced.
+- A `let` is reduced lazily. A small value (32 nodes at most, as a tree)
+  goes into the body. Otherwise the body is simplified with the variable
+  a local constant bound to the value, looked through only where it
+  helps: a node with the constant as an argument (a projection, `app` at
+  a key, ..), or an atom mentioning it, is tried with the value there and
+  kept so if a rule fires. Then the let stays if the variable is still
+  used twice or more (a large value used many times is not copied), is
+  substituted if once, dropped if not. A goal that attempt leaves open is
+  tried again with every let reduced (`SIMP_LET_TRACE=1` reports when
+  that was needed: once in the whole chain, a let inside an arithmetic
+  term that only the closing arithmetic needs).
 - Loops take an invariant `{l0 l. I}` and optionally a variant `{l. m}`.
 - Leftover paths are reported as facts ready to prove and pass back.
 

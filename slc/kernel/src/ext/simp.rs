@@ -8,12 +8,15 @@
 //! definition with its pinned body (`ext::pinned`):
 //!
 //! Equations (used anywhere):
-//! * `letin(a, x. f(x)) = f(a)` (definition) -- lazily: first where copying
-//!   a is cheap (a small, `LET_SMALL` nodes at most as a tree, or x used at
-//!   most once in f, simplified), else the let kept, its value and body
-//!   simplified (a large value used many times is not copied: the term
-//!   stays as small as it was); a goal that attempt does not prove, again
-//!   with every let reduced;
+//! * `letin(a, x. f(x)) = f(a)` (definition) -- lazily: a small value
+//!   (`LET_SMALL` nodes at most, as a tree) is copied in; else f is
+//!   simplified with x a local constant bound to a, looked through where
+//!   it helps -- a node with x as an argument, or a proposition's atom
+//!   mentioning x, is tried with a in its place, kept so if a rule fires
+//!   there --, then the let is kept if x is still used twice or more (a
+//!   large value used many times is not copied: the term stays as small
+//!   as it was), substituted if once, dropped if not; a goal that attempt
+//!   does not prove, again with every let reduced;
 //! * `fst(pair(a, b)) = a`, `snd(pair(a, b)) = b` (pair injectivity), and
 //!   for the outcome constructors `ok(s, v) = pair(0, pair(s, v))`,
 //!   `exc(s, e) = pair(1, pair(s, e))`, `diverge(t) = pair(2, t)`: their
@@ -337,6 +340,10 @@ struct Simp<'a> {
     aparts: std::cell::RefCell<Vec<(Term, u128, Term, u128)>>,
     /// (only for a goal too large to search a witness in otherwise)
     eager_runs: std::cell::Cell<bool>,
+    /// the lets being simplified: their local constants and values (a
+    /// constant looked through to its value where a rule needs it)
+    let_env: std::cell::RefCell<Vec<(crate::term::VarId, Term)>>,
+    let_fresh: std::cell::Cell<u32>,
     /// the path's literals (with `eager_runs`: a goal's atom that is one
     /// holds, its negation fails)
     lit_facts: std::cell::RefCell<Vec<Term>>,
@@ -580,6 +587,8 @@ impl<'a> Simp<'a> {
             used: Default::default(),
             no_hold: Default::default(),
             memo: Default::default(),
+            let_env: Default::default(),
+            let_fresh: std::cell::Cell::new(LET_FRESH0),
             nats: std::cell::RefCell::new(Vec::new()),
             known_mems: std::cell::RefCell::new(Vec::new()),
             bounds: std::cell::RefCell::new(Vec::new()),
@@ -1327,22 +1336,77 @@ impl<'a> Simp<'a> {
             return r.clone();
         }
         let r = self.term_uncached(t);
+        let r = self.let_look_term(r);
         self.memo.borrow_mut().insert(key, (t.clone(), r.clone()));
         r
+    }
+
+    /// a fresh local constant for a let's variable
+    fn let_var(&self) -> crate::term::VarId {
+        let v = self.let_fresh.get();
+        self.let_fresh.set(v + 1);
+        v
+    }
+
+    /// a node r with a let's constant as an argument: with the value
+    /// there, if a rule then fires (the result not the node so formed)
+    fn let_look_term(&self, r: Term) -> Term {
+        if self.let_env.borrow().is_empty() {
+            return r;
+        }
+        let Node::App(_, a) = r.node() else { return r };
+        let env = self.let_env.borrow().clone();
+        let mut args = a.to_vec();
+        let mut any = false;
+        for x in args.iter_mut() {
+            if let Node::Var(v, va) = x.node() {
+                if va.is_empty() {
+                    if let Some((_, val)) = env.iter().rev().find(|(c, _)| c == v) {
+                        *x = val.clone();
+                        any = true;
+                    }
+                }
+            }
+        }
+        if !any {
+            return r;
+        }
+        let formed = r.with_args(args);
+        let r2 = self.term_uncached(&formed);
+        if r2 != formed {
+            r2
+        } else {
+            r
+        }
+    }
+
+    /// a let's body simplified with its variable a local constant bound to
+    /// the value v (`simp` the body's simplifier): the result, with the let
+    /// as it ends up (kept, substituted, dropped)
+    fn let_body(&self, t: &Term, v: Term, body: &Term, simp: &dyn Fn(&Term) -> Term) -> Term {
+        let c = self.let_var();
+        let open = inst_k(self.env, body, &[Term::var(c, vec![])]);
+        self.let_env.borrow_mut().push((c, v.clone()));
+        let b = simp(&open);
+        self.let_env.borrow_mut().pop();
+        match var_uses(&b, c, 2) {
+            0 => b,
+            1 => simp(&b.subst_var(c, &v, &self.env.binders_fn())),
+            _ => t.with_args(vec![v, let_abstract(self.env, &b, c)]),
+        }
     }
 
     fn term_uncached(&self, t: &Term) -> Term {
         let s = &self.s;
         let Node::App(f, a) = t.node() else { return t.clone() };
         let f = *f;
-        // `letin(a, x. body)`: β where it costs nothing, else kept
+        // `letin(a, x. body)`: β for a small value, else lazily
         if is(f, s.letin) {
             let v = self.term(&a[0]);
-            let body = self.term(&a[1]);
-            if let_inline(self.env, &v, &body) {
-                return self.term(&inst_k(self.env, &body, &[v]));
+            if let_inline(&v) || self.env.loose_depth_m(&v) > 0 {
+                return self.term(&inst_k(self.env, &a[1], &[v]));
             }
-            return t.with_args(vec![v, body]);
+            return self.let_body(t, v, &a[1], &|b| self.term(b));
         }
         if is(f, s.ite) {
             let c = self.prop(&a[0], Pol::Other);
@@ -1941,6 +2005,40 @@ impl<'a> Simp<'a> {
     }
 
     fn prop(&self, t: &Term, pol: Pol) -> Term {
+        let r = self.prop_(t, pol);
+        if self.let_env.borrow().is_empty() {
+            return r;
+        }
+        // (an atom mentioning a let's constant: with its value, if the atom
+        // is then decided or a rule fires)
+        let s = &self.s;
+        let atom = match r.node() {
+            Node::App(f, _) => ![s.and, s.or, s.not].iter().any(|g| is(*f, *g)) && *f != s.ex && *f != s.all && *f != self.env.builtins.imp && !is(*f, s.letin),
+            _ => false,
+        };
+        if !atom {
+            return r;
+        }
+        let env = self.let_env.borrow().clone();
+        let bf = self.env.binders_fn();
+        let mut formed = r.clone();
+        for (c, v) in env.iter().rev() {
+            if formed.may_contain_var(*c) {
+                formed = formed.subst_var(*c, v, &bf);
+            }
+        }
+        if formed == r {
+            return r;
+        }
+        let r2 = self.prop_(&formed, pol);
+        if r2 != formed {
+            r2
+        } else {
+            r
+        }
+    }
+
+    fn prop_(&self, t: &Term, pol: Pol) -> Term {
         let s = &self.s;
         let Node::App(f, a) = t.node() else { return t.clone() };
         let f = *f;
@@ -2063,11 +2161,10 @@ impl<'a> Simp<'a> {
         }
         if is(f, s.letin) {
             let v = self.term(&a[0]);
-            let body = self.prop(&a[1], pol);
-            if let_inline(self.env, &v, &body) {
-                return self.prop(&inst_k(self.env, &body, &[v]), pol);
+            if let_inline(&v) || self.env.loose_depth_m(&v) > 0 {
+                return self.prop(&inst_k(self.env, &a[1], &[v]), pol);
             }
-            return t.with_args(vec![v, body]);
+            return self.let_body(t, v, &a[1], &|b| self.prop(b, pol));
         }
         if s.unfold.contains(&f) {
             if let Some(u) = self.unfold(f, a) {
@@ -3022,9 +3119,51 @@ thread_local! {
     static LET_EAGER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// whether a let's value v goes into its body (x the body's loose
-/// variable 0): v small, or used at most once -- no term grows much
-fn let_inline(env: &Env, v: &Term, body: &Term) -> bool {
+/// the local constants of the lets simp is in (above any variable of a
+/// goal, below the paths' fresh ones)
+const LET_FRESH0: u32 = 3_000_000_000;
+
+/// the occurrences of the variable c in t, up to cap
+fn var_uses(t: &Term, c: crate::term::VarId, cap: usize) -> usize {
+    fn go(t: &Term, c: crate::term::VarId, cap: usize, n: &mut usize) {
+        if *n >= cap || !t.may_contain_var(c) {
+            return;
+        }
+        match t.node() {
+            Node::Var(v, a) => {
+                if *v == c {
+                    *n += 1;
+                }
+                a.iter().for_each(|x| go(x, c, cap, n));
+            }
+            Node::App(_, a) => a.iter().for_each(|x| go(x, c, cap, n)),
+            _ => {}
+        }
+    }
+    let mut n = 0;
+    go(t, c, cap, &mut n);
+    n
+}
+
+/// t with the variable c a bound variable (the body of a binder of one)
+fn let_abstract(env: &Env, t: &Term, c: crate::term::VarId) -> Term {
+    fn go(env: &Env, t: &Term, c: crate::term::VarId, d: u32) -> Term {
+        if !t.may_contain_var(c) {
+            return t.clone();
+        }
+        match t.node() {
+            Node::Var(v, a) if *v == c && a.is_empty() => Term::bvar(d),
+            Node::Var(_, a) => t.with_args(a.iter().map(|x| go(env, x, c, d)).collect()),
+            Node::App(s, a) => t.with_args(a.iter().enumerate().map(|(i, x)| go(env, x, c, d + env.binders_fn()(*s, i))).collect()),
+            _ => t.clone(),
+        }
+    }
+    go(env, &t.shift(1, 0, &env.binders_fn()), c, 0)
+}
+
+/// whether a let's value v is copied into its body: v small (or every let
+/// reduced)
+fn let_inline(v: &Term) -> bool {
     fn size(t: &Term, cap: usize, n: &mut usize) {
         *n += 1;
         if *n > cap {
@@ -3044,25 +3183,7 @@ fn let_inline(env: &Env, v: &Term, body: &Term) -> bool {
     }
     let mut n = 0;
     size(v, LET_SMALL, &mut n);
-    n <= LET_SMALL || bvar_uses(env, body, 0, 2) <= 1
-}
-
-/// the occurrences of the bound variable d (at t's depth), up to cap
-fn bvar_uses(env: &Env, t: &Term, d: u32, cap: usize) -> usize {
-    fn go(env: &Env, t: &Term, d: u32, cap: usize, n: &mut usize) {
-        if *n >= cap || env.loose_depth_m(t) <= d {
-            return;
-        }
-        match t.node() {
-            Node::BVar(j) if *j == d => *n += 1,
-            Node::Var(_, a) => a.iter().for_each(|x| go(env, x, d, cap, n)),
-            Node::App(s, a) => a.iter().enumerate().for_each(|(i, x)| go(env, x, d + env.binders_fn()(*s, i), cap, n)),
-            _ => {}
-        }
-    }
-    let mut n = 0;
-    go(env, t, d, cap, &mut n);
-    n
+    n <= LET_SMALL
 }
 
 fn inst_k(env: &Env, body: &Term, args: &[Term]) -> Term {
@@ -5078,7 +5199,13 @@ impl Logic {
             r
         };
         let r = crate::ext::inventory::measure("simp", env, goal, || match attempt(LET_EAGER.with(|e| e.get())) {
-            Err(_) if !LET_EAGER.with(|e| e.get()) => attempt(true),
+            Err(_) if !LET_EAGER.with(|e| e.get()) => {
+                let r = attempt(true);
+                if r.is_ok() && std::env::var("SIMP_LET_TRACE").is_ok() {
+                    eprintln!("simp: proven only with every let reduced: {}", crate::syntax::Printer::new(env).term(goal).chars().take(300).collect::<String>());
+                }
+                r
+            }
             r => r,
         });
         if let Some(th) = slow {
