@@ -26,8 +26,6 @@ call graph.
   `___errno_location`.
 - C1 of nested loops (the inner loop's iterations arriving at the outer
   head); bitfield stores off bit 0 or wider than a byte.
-- The C1 walk joins paths before a loop (try_avail's loop is walked once
-  per path reaching it: six times).
 
 ## 2. The invariant and the laws
 
@@ -69,7 +67,22 @@ from the proof writer's side. Taken up in batches between functions.
   generalized again (walking on each time) as paths from other contexts
   differ in a home or the world. Widening every home's value to a
   variable does not work (a home holds the code's form of a value, the
-  spec its own), so this needs another way to generalize.
+  spec its own), so this needs another way to generalize. What blocks
+  sharing in try_avail, by weight:
+  - Paths before a loop are not joined, so the loop is walked once per
+    path reaching it (six times). Each walk brings its own call results
+    (`RCc4`, `RCc17`, ..) into the homes, and a claim made on one walk
+    fits no other: most of the failed matches.
+  - An early return's path (spec `exc(.., "ret")`) and a normal one
+    (`ok(..)`) meeting: the specs differ in shape, which no variable
+    abstracts; it needs a claim whose spec covers both outcomes.
+  - Joins just before the return: claims drop the registers, the return
+    needs rax.
+  Higher-order anti-unification (a difference under the spec's binders
+  abstracted as `F(x0)`, kept schematic in the claim) is on the branch
+  `join-higher-order`. It works, but on mallocng no such claim is proven:
+  the same paths always differ in shape too. Worth reviving once the
+  points above are done, or for optimized code (see Later).
 
 ## Later
 
