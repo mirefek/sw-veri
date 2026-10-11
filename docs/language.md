@@ -664,6 +664,11 @@ excludes the registered ones).
 - It closes each path by taut / arith. It finds witnesses for the goal's
   existentials by matching.
 - `keep(P)` keeps runs of P folded.
+- A `let` is reduced lazily: its value goes into the body if it is small
+  (32 nodes at most, as a tree) or used at most once; otherwise the let
+  stays and its value and body are simplified apart, so a large value
+  used many times is not copied. A goal that attempt leaves open is tried
+  again with every let reduced.
 - Loops take an invariant `{l0 l. I}` and optionally a variant `{l. m}`.
 - Leftover paths are reported as facts ready to prove and pass back.
 

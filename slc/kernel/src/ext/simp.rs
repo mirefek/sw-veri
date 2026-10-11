@@ -8,7 +8,12 @@
 //! definition with its pinned body (`ext::pinned`):
 //!
 //! Equations (used anywhere):
-//! * `letin(a, x. f(x)) = f(a)` (definition);
+//! * `letin(a, x. f(x)) = f(a)` (definition) -- lazily: first where copying
+//!   a is cheap (a small, `LET_SMALL` nodes at most as a tree, or x used at
+//!   most once in f, simplified), else the let kept, its value and body
+//!   simplified (a large value used many times is not copied: the term
+//!   stays as small as it was); a goal that attempt does not prove, again
+//!   with every let reduced;
 //! * `fst(pair(a, b)) = a`, `snd(pair(a, b)) = b` (pair injectivity), and
 //!   for the outcome constructors `ok(s, v) = pair(0, pair(s, v))`,
 //!   `exc(s, e) = pair(1, pair(s, e))`, `diverge(t) = pair(2, t)`: their
@@ -1330,10 +1335,14 @@ impl<'a> Simp<'a> {
         let s = &self.s;
         let Node::App(f, a) = t.node() else { return t.clone() };
         let f = *f;
-        // `letin(a, x. body)`: β
+        // `letin(a, x. body)`: β where it costs nothing, else kept
         if is(f, s.letin) {
             let v = self.term(&a[0]);
-            return self.term(&inst_k(self.env, &a[1], &[v]));
+            let body = self.term(&a[1]);
+            if let_inline(self.env, &v, &body) {
+                return self.term(&inst_k(self.env, &body, &[v]));
+            }
+            return t.with_args(vec![v, body]);
         }
         if is(f, s.ite) {
             let c = self.prop(&a[0], Pol::Other);
@@ -2054,7 +2063,11 @@ impl<'a> Simp<'a> {
         }
         if is(f, s.letin) {
             let v = self.term(&a[0]);
-            return self.prop(&inst_k(self.env, &a[1], &[v]), pol);
+            let body = self.prop(&a[1], pol);
+            if let_inline(self.env, &v, &body) {
+                return self.prop(&inst_k(self.env, &body, &[v]), pol);
+            }
+            return t.with_args(vec![v, body]);
         }
         if s.unfold.contains(&f) {
             if let Some(u) = self.unfold(f, a) {
@@ -3001,6 +3014,57 @@ impl<'a> Simp<'a> {
 /// `body` with its k parameters (`BVar(k-1-i)` = parameter i at the top)
 /// replaced by `args`, where body may also refer to enclosing binders
 /// (`BVar(>= k)`) and args live in that enclosing context.
+/// a let's value copied into its body: at most this many nodes (as a tree)
+const LET_SMALL: usize = 32;
+
+thread_local! {
+    /// every let reduced (the second attempt at a goal)
+    static LET_EAGER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// whether a let's value v goes into its body (x the body's loose
+/// variable 0): v small, or used at most once -- no term grows much
+fn let_inline(env: &Env, v: &Term, body: &Term) -> bool {
+    fn size(t: &Term, cap: usize, n: &mut usize) {
+        *n += 1;
+        if *n > cap {
+            return;
+        }
+        if let Node::Var(_, a) | Node::App(_, a) = t.node() {
+            for x in a.iter() {
+                size(x, cap, n);
+                if *n > cap {
+                    return;
+                }
+            }
+        }
+    }
+    if LET_EAGER.with(|e| e.get()) {
+        return true;
+    }
+    let mut n = 0;
+    size(v, LET_SMALL, &mut n);
+    n <= LET_SMALL || bvar_uses(env, body, 0, 2) <= 1
+}
+
+/// the occurrences of the bound variable d (at t's depth), up to cap
+fn bvar_uses(env: &Env, t: &Term, d: u32, cap: usize) -> usize {
+    fn go(env: &Env, t: &Term, d: u32, cap: usize, n: &mut usize) {
+        if *n >= cap || env.loose_depth_m(t) <= d {
+            return;
+        }
+        match t.node() {
+            Node::BVar(j) if *j == d => *n += 1,
+            Node::Var(_, a) => a.iter().for_each(|x| go(env, x, d, cap, n)),
+            Node::App(s, a) => a.iter().enumerate().for_each(|(i, x)| go(env, x, d + env.binders_fn()(*s, i), cap, n)),
+            _ => {}
+        }
+    }
+    let mut n = 0;
+    go(env, t, d, cap, &mut n);
+    n
+}
+
 fn inst_k(env: &Env, body: &Term, args: &[Term]) -> Term {
     fn go(env: &Env, t: &Term, args: &[Term], dep: u32) -> Term {
         let k = args.len() as u32;
@@ -5005,7 +5069,18 @@ impl Logic {
         // (SIMP_SLOW=secs: the calls taking longer, reported)
         let slow = std::env::var("SIMP_SLOW").ok().and_then(|v| v.parse::<f64>().ok());
         let t0 = std::time::Instant::now();
-        let r = crate::ext::inventory::measure("simp", env, goal, || self.simp_prove_loops_(env, premises, goal, hints));
+        // (large lets kept; else, as the goal may need their values, all
+        // reduced)
+        let attempt = |eager: bool| {
+            let prev = LET_EAGER.with(|e| e.replace(eager));
+            let r = self.simp_prove_loops_(env, premises, goal, hints);
+            LET_EAGER.with(|e| e.set(prev));
+            r
+        };
+        let r = crate::ext::inventory::measure("simp", env, goal, || match attempt(LET_EAGER.with(|e| e.get())) {
+            Err(_) if !LET_EAGER.with(|e| e.get()) => attempt(true),
+            r => r,
+        });
         if let Some(th) = slow {
             let dt = t0.elapsed().as_secs_f64();
             if dt > th {
