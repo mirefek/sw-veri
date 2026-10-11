@@ -169,6 +169,28 @@ proof
   show by ex_intro({f}, simp(hf2, hr, ha2, keep(x86i.flags_ok, x86i.subf, x86i.logf)))
 qed
 
+// cmp r32, dword [rsp + d]: g (x, its low 32 bits) against the home c (u)
+theorem tr.fs32_rh: all s base code fr a a2 len g d c n x0 x u hs rs w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
+    runs(x86_64_linux.exec_body(len, tag(57, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(x86i.rsp_mem(d), tag(0, g))))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> g in x86_64_linux.Reg -> d in bits(64) -> c = int_mod(int_sub(d, fr), 18446744073709551616) -> c in dom(hs) -> app(hs, c) = pair(4, u) -> g in dom(rs) -> app(rs, g) = pair(n, x0) -> (x = bits_of_int(32, x0) || (x = x0 && n = 4) || (x = x0 && x0 in bits(32))) ->
+  all m o. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+    (ex f. x86i.flags_ok(m, f) && x86i.subf(32, x, u, f) && o = ok(fn_update(fn_update(m, "rip", a2), "flags", f), empty))
+proof
+  fix s base code fr a a2 len g d c n x0 x u hs rs w
+  assume hat ha2 hg hd hcd hdd hu hgd hgu hx
+  fix m o
+  assume hi hr hh hrs ho
+  have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+  have ac := apply(tr.home_acc, {s}, {base}, {code}, {fr}, {m}, {w}, {hs}, {d}, {c}, {4}, {u}, hi, hh, hd, hcd, hdd, hu)
+  have hm := apply(tr.home_read, {s}, {base}, {code}, {fr}, {m}, {w}, {hs}, {d}, {c}, {4}, {u}, hi, hh, hd, hcd, hdd, hu)
+  have sl := apply(tr.reg_low32, {m}, {rs}, {g}, {n}, {x0}, {x}, ipM, hg, hrs, hgd, hgu, hx)
+  have e := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+  obtain f, hf from apply(x86i.cmpf32_r_rsp, {m}, {o}, {g}, {d}, {len}, ipM, ipU, hg, hd, taut(ac), e)
+  have hf2 := rewrite(sl, rewrite(hm, hf))
+  show by ex_intro({f}, simp(hf2, hr, ha2, keep(x86i.flags_ok, x86i.subf, x86i.logf)))
+qed
+
 // cmp qword [rsp + d], r64: the home c (u) against g (x)
 theorem tr.fs64_hr: all s base code fr a a2 len g d c n x u hs rs w.
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(app(m, "vm"), base, code) -> app(m, "rip") = a ->
@@ -608,6 +630,30 @@ proof
   have jf := apply(tr.jl_flags, {a}, {b}, ha, hb)
   have si: int_lt(sint(32, a), sint(32, b)) <-> !int_le(sint(32, b), sint(32, a)) by arith(apply(tr.sint32_int, ha), apply(tr.sint32_int, hb))
   show by taut(ca, pe, jf, si)
+qed
+
+// jns after a 32-bit compare: on when a - b, signed, is not negative (a
+// compare with 0: a's sign)
+theorem tr.ccs32_ns: all n a b. n = 32 -> all f. x86i.subf(n, a, b, f) -> (x86_64_linux.cond(f, 9) <-> !int_lt(sint(32, bits_sub(32, a, b)), 0))
+proof
+  fix n a b
+  assume hn
+  fix f
+  assume h0
+  have h := rewrite(hn, h0)
+  have ha hb hz hc hs ho := expand(h, x86i.subf)
+  let D := bits_sub(32, a, b)
+  have hs2: app(f, "sf") = bit(D, 31) by simp(hs)
+  have pb1: bit(D, 31) = false || bit(D, 31) = true by defs(eq_prop[a := int_mod(int_div(D, pow2(31)), 2), b := 1], is_prop, bit)
+  have e3 := mp(tr.prop_true, {bit(D, 31)}, pb1)
+  have e4 := mp(tr.prop_false, {bit(D, 31)}, pb1)
+  have ca: x86_64_linux.cond(f, 9) <-> !bit(D, 31) by simp(hs2, e3, e4, all_elim(x86.cond_eval, {f}, {9}))
+  // (the sign bit: D at least 2^31, sint(32, D) negative)
+  have d32: D in bits(32) by simp()
+  have db: bit(D, 31) <-> !int_lt(D, 2147483648) by defs(arith(d32), bit, pow2)
+  have sd: (int_lt(D, 2147483648) && sint(32, D) = D) || (!int_lt(D, 2147483648) && sint(32, D) = int_sub(D, 4294967296)) by defs(simp(d32), sint, letin, pow2)
+  have ng: int_lt(sint(32, D), 0) <-> !int_lt(D, 2147483648) by arith(d32, sd)
+  show by taut(ca, db, ng)
 qed
 
 // jge (signed, 32 bits): on when a < b

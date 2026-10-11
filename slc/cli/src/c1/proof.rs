@@ -1834,6 +1834,8 @@ impl<'e> Gen<'e> {
                     (13, 32) => ("ccs32_ge", self.mk("int_lt", vec![si(self, x), si(self, y)])),
                     (14, 32) => ("ccs32_le", self.mk("int_lt", vec![si(self, y), si(self, x)])),
                     (15, 32) => ("ccs32_g", self.mk("int_le", vec![si(self, x), si(self, y)])),
+                    // (jns: x - y's sign -- after a compare with 0, x's)
+                    (9, 32) => ("ccs32_ns", self.mk("int_lt", vec![si(self, &self.mk("bits_sub", vec![lit(32), x.clone(), y.clone()])), lit(0)])),
                     _ => return Err(format!("{:x}: a {}-bit compare's jump on condition {}: no lemma", a, w, cc)),
                 };
                 (l, c, vec![lit(*w), x.clone(), y.clone()], self.mk("x86i.subf", vec![lit(*w), x.clone(), y.clone(), Term::bvar(0)]))

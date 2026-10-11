@@ -32,7 +32,24 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
+/// The commands run on a thread with a large stack (reserved, not used up
+/// front): the C1 engine's proof of a path nests one step's in the next,
+/// so its depth grows with the path (alloc_group's: over a thousand frames
+/// of the proof builder).
+const STACK: usize = 1 << 30;
+
 fn main() -> ExitCode {
+    match std::thread::Builder::new().name("main".into()).stack_size(STACK).spawn(run).map(|h| h.join()) {
+        Ok(Ok(code)) => code,
+        Ok(Err(p)) => std::panic::resume_unwind(p),
+        Err(e) => {
+            eprintln!("error: no thread for the command: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = args.first() else { return usage() };
     let rest: Vec<String> = args[1..].to_vec();

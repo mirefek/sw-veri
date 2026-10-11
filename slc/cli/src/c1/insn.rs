@@ -37,6 +37,13 @@ impl<'e> Gen<'e> {
             57 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
+                // cmp r32 (xr: g's low 32 bits), dword [rsp + d] (u)
+                if let (Some(d), Some(4)) = (self.rsp_mem(&x[2]).filter(|_| x[3] == x[2]), nat(&x[0])) {
+                    let cn = self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?);
+                    let u = home(&st.hsm, &d)?;
+                    let (n, x0, xr) = self.low(st, g, 32)?;
+                    return self.compare(st, a, a2, insn, "fs32_rh", &[&x[1], &d, &lit(cn), &lit(n), &x0, &xr, &u], 9, Flags::Sub(32, xr.clone(), u.clone()));
+                }
                 let d = self.rsp_mem(&x[2]).filter(|_| nat(&x[0]) == Some(8) && x[3] == x[2]).ok_or_else(|| bad("not cmp r64, qword [rsp + d]"))?;
                 let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
                 let cn = self.hkey(dn);
@@ -277,6 +284,33 @@ impl<'e> Gen<'e> {
                 let tr = self.step("and32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
+                self.then(tr, st2)
+            }
+            // div qword [rsp + d] (rdx 0, the slot's word not 0 -- the spec's
+            // division defined): rax := rax / x, rdx := rax mod x
+            68 => {
+                let x = self.pairs(&f, 3).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&x[1]).ok_or_else(|| bad("a division not by a home"))?;
+                if nat(&x[0]) != Some(8) {
+                    return Err(bad("a division not of 64 bits"));
+                }
+                let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let c = lit(self.hkey(dn));
+                let xv = home_n(&st.hsm, &d, 8)?;
+                let (n0, u) = self.reg(st, 0).ok_or_else(|| bad("rax holds no value"))?;
+                let (n2, z) = self.reg(st, 2).ok_or_else(|| bad("rdx holds no value"))?;
+                if self.eval_lit(&z) != Some(0) {
+                    return Err(bad("rdx not 0 (a 128-bit dividend)"));
+                }
+                let nz = self.mk("not", vec![self.mk("eq", vec![xv.clone(), lit(0)])]);
+                let hnz = self.hyp_find(&st.hyps, &nz).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: a division by {}, not known to be not 0", a, self.print(&xv)))?;
+                let tr = self.step("div64_home", a, insn, &[&d, &c, &x[2], &xv, &lit(n0), &u, &lit(n2)], self.tail(st, insn, 9, vec![s(&hnz)]));
+                let q = self.value(&self.mk("int_div", vec![u.clone(), xv.clone()]));
+                let r = self.value(&self.mk("int_mod", vec![u, xv]));
+                self.scratch.insert(0);
+                self.scratch.insert(2);
+                let st2 = self.set_reg(st, a2, 0, 8, q);
+                let st2 = self.set_reg(&st2, a2, 2, 8, r);
                 self.then(tr, st2)
             }
             // xor r32, [rsp + d]
@@ -1228,7 +1262,9 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
                 }
-                let u = self.need_reg(st, gn, size)?;
+                // (sub r32 of a 64-bit word: its own arm, on the low half)
+                let low_sub = size == 4 && nat(&x[1]) == Some(5) && matches!(self.reg(st, gn), Some((8, _)));
+                let u = if low_sub { lit(0) } else { self.need_reg(st, gn, size)? };
                 match (size, nat(&x[1])) {
                     // add r64, imm8: GIMPLE's u + k
                     (8, Some(0)) => {
@@ -1255,6 +1291,17 @@ impl<'e> Gen<'e> {
                     (4, Some(4)) => {
                         let tr = self.step("and32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u], self.tail(st, insn, 6, vec![]));
                         let r = self.mk("bits_and", vec![lit(32), u, lit(kk)]);
+                        let r = self.value(&r);
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 4, r);
+                        self.then(tr, st2)
+                    }
+                    // sub r32, imm8 of a 64-bit word: its low half
+                    (4, Some(5)) if low_sub => {
+                        let (_, w8) = self.reg(st, gn).unwrap();
+                        let tr = self.step("sub32_imm_w", a, insn, &[&g, &x[3], &x[4], &lit(kk), &w8], self.tail(st, insn, 6, vec![]));
+                        let lo = self.mk("bits_of_int", vec![lit(32), w8]);
+                        let r = self.mk("bits_add", vec![lit(32), lo, self.mk("bits_neg", vec![lit(32), lit(kk)])]);
                         let r = self.value(&r);
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 4, r);

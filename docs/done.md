@@ -232,6 +232,14 @@ item is a short summary of finished work; details are in the files named.
   2^pos + L` (nested `bit_addmul`; `bit_slice`), that form GIMPLE's
   (`tr.bf_val`, by `tr.bf_clear`), the field compared modulo 2^k by
   arith.
+- **Division in C1**: GIMPLE's unsigned 64-bit `cdiv` (`tr.udiv64_ok` /
+  `_ub`: undefined for 0) against the machine's `div qword [rsp + d]`
+  with rdx 0 (`x86i.div64_rsp`: no divide error -- the divisor not 0, the
+  quotient at most rax; `tr.div64_home`, rax and rdx written in one step,
+  `tr.reg_step2`); the quotient's low half (`tr.sub32_imm_w`), `cmp r32,
+  [rsp + d]` and `jns` after a compare (`tr.ccs32_ns`). The checker runs
+  on a 1 GiB stack: a path's proof nests step in step (alloc_group's over
+  a thousand frames deep).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

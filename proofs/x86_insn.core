@@ -1589,6 +1589,37 @@ proof
   show by defs(simp(h, hu, pt, apply(x86i.reg_typed, hM, hg), hd, apply(x86i.rsp_typed, hM), a0, k0, x86.touch_range_access, x86i.bool_univ, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok)
 qed
 
+// div qword [rsp + d] (REX.W F7 /6), rdx 0 and the divisor not: rax := rax /
+// D, rdx := rax mod D (no divide error: the quotient at most rax)
+theorem x86i.div64_rsp: all m o d z len. m in x86_64_linux.Machine -> m in univ(1) -> d in bits(64) ->
+  x86i.acc(m, x86i.rsp_ea(m, d), 8, 0) -> app(app(m, "gpr"), 2) = 0 -> !(x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 8) = 0) ->
+  runs(x86_64_linux.exec_body(len, tag(68, pair(8, pair(x86i.rsp_mem(d), z)))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), "gpr",
+    fn_update(fn_update(app(m, "gpr"), 0, int_div(app(app(m, "gpr"), 0), x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 8))), 2,
+      int_mod(app(app(m, "gpr"), 0), x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 8)))), empty)
+proof
+  fix m o d z len
+  assume hM hu hd a0 hdx hnz h
+  have pt := apply(x86i.parts, hM)
+  have k0: all i. i in omega -> int_lt(i, 8) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
+    fix i
+    assume i1 i2
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  // (the quotient and the remainder 64-bit words: q at most A, r below D)
+  let A := app(app(m, "gpr"), 0)
+  let D := x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 8)
+  have ab := mp(x86i.reg_typed, {m}, {0}, hM, simp())
+  have db: D in bits(64) by defs(simp(), x86_64_linux.le)
+  have dp: int_lt(0, D) by arith(db, hnz)
+  have qn rn := mp(div_nat[x := A, m := D], arith(ab), dp)
+  have e: A = int_add(int_mul(D, int_div(A, D)), int_mod(A, D)) by arith(ab, dp)
+  have nn: int_le(0, int_mul(int_sub(D, 1), int_div(A, D))) by arith(dp, qn)
+  have qb: int_div(A, D) in bits(64) by arith(ab, qn, rn, e, nn)
+  have rb: int_mod(A, D) in bits(64) by arith(db, dp, rn)
+  show by defs(simp(h, hu, pt, hd, hdx, hnz, apply(x86i.rsp_typed, hM), ab, qb, rb, a0, k0, x86.touch_range_access, x86i.bool_univ, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok)
+qed
+
 // imul r32, r32 (0F AF /r)
 theorem x86i.imul32_rr: all m o g h z1 z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> h in x86_64_linux.Reg ->
   runs(x86_64_linux.exec_body(len, tag(70, pair(4, pair(g, pair(tag(0, h), pair(z1, z2)))))), m, o) ->
@@ -1696,6 +1727,23 @@ proof
   assume hM hu hg hd a0 h
   have pt := apply(x86i.parts, hM)
   have k0: all i. i in omega -> int_lt(i, 8) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
+    fix i
+    assume i1 i2
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  show by defs(simp(h, hu, pt, hd, apply(x86i.reg_typed, hM, hg), apply(x86i.rsp_typed, hM), a0, k0, x86.touch_range_access, x86i.bool_univ, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok, x86i.subf)
+qed
+
+// cmp r32, dword [rsp + d]
+theorem x86i.cmpf32_r_rsp: all m o g d len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  x86i.acc(m, x86i.rsp_ea(m, d), 4, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(57, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(x86i.rsp_mem(d), tag(0, g))))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && x86i.subf(32, bits_slice(app(app(m, "gpr"), g), 31, 0), x86_64_linux.le(app(app(m, "vm"), "bytes"), x86i.rsp_ea(m, d), 4), f) && o = ok(fn_update(fn_update(m, "rip", bits_add(64, app(m, "rip"), len)), "flags", f), empty)
+proof
+  fix m o g d len
+  assume hM hu hg hd a0 h
+  have pt := apply(x86i.parts, hM)
+  have k0: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
     fix i
     assume i1 i2
     show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {app(m, "vm")}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))

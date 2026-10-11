@@ -15,10 +15,11 @@ call graph.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- C1 of `alloc_group` (walked past its first bitfield store, `maplen`, to
-  GIMPLE's unsigned 64-bit division `4080 / size`, the machine's `div`;
-  its other bitfield stores -- `maplen = 0`, `freeable`, `sizeclass` --
-  come after).
+- C1 of `alloc_group` (walked past its first bitfield store, `maplen`,
+  and the division `4080 / size` with its clamps, to the 8-byte load of
+  `ctx.usage_by_class[sc]`: an address the engine does not match to the
+  spec's element yet; its other bitfield stores -- `maplen = 0`,
+  `freeable`, `sizeclass` -- come after).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
