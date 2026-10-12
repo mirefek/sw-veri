@@ -91,8 +91,18 @@ outcome.
     (an out-of-line function or inlined). Under threads later, the
     primitives are where the per-thread simulation meets the memory model.
 
+  It comes in two forms of the same blocks:
+  - structured (`--readable`): nested `if`s and loops, close to C -- what
+    the C2 proofs are about;
+  - the control-flow graph (`--readable --cfg`): GCC's basic blocks as
+    they are, `bb` the block to run, a `loop` running it; each block ends
+    with `bb := next` or a `return`. Every C control flow (gotos, any
+    loop nesting) has it. C1 is moving to it (docs/todo.md 1.0): a claim
+    at each block's entry, each block walked once (`tr.cfg_lv`,
+    `proofs/translate_cfg.core`).
+
   The -O0 build is the first target. Optimized code can later be added as
-  a GIMPLE ⊑ GIMPLE layer.
+  a GIMPLE ⊑ GIMPLE layer: the same cut-point theorem between two CFGs.
 - **The malloc layer** (`layers/malloc.sl`): the abstract heap (live blocks
   as ghost state) and the specs of `malloc`, `free` and `calloc`.
   - The allocator's invariant and owned memory are parameters, constrained
@@ -207,7 +217,7 @@ slc check [PATH..]                          parse, type-check, elaborate SL
 slc elab PATH.. -o OUT.core                 elaborate to core definitions
 slc kernel-check [--no-cache] FILE.core..   check core files and their proofs
 slc claim malloc --elf ELF -o OUT.core      state the claim
-slc gimple --readable ...                   GIMPLE dump to readable GIMPLE
+slc gimple --readable [--cfg] ...           GIMPLE dump to readable GIMPLE
 slc steps ELF CLAIM F -o OUT.core           decode facts of F's instructions
 slc decode / coverage / cputest / heapcheck model and invariant testing
 ```

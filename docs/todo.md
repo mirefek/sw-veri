@@ -8,7 +8,56 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.0 Now: the rest of the rules' standard form (docs/overview.md)
+### 1.0 Now: GIMPLE as a CFG, C1 per basic block
+
+GIMPLE -> CPU program translation verification moves from the spec's
+nesting (blocks of `if`s, loops, joins) to GCC's control-flow graph: a
+claim at each basic block's entry (a cut point), for every world and
+locals, each block's code walked once up to the cut point it goes on at.
+Any control flow (loops in branches, nested loops, gotos, shared tails)
+is blocks and jumps; the check is linear by construction, with no joins.
+
+In place:
+- The readable CFG (`slc gimple --readable --cfg`): `var bb = entry;
+  loop { .. }`, the block found by a tree of comparisons of `bb` (log n
+  of them), each block its statements, then its phis' copies and `bb :=
+  next`, or a `return`. SL's own `loop` and `if`: nothing new trusted.
+  All 34 translatable functions of mallocng's malloc.c (alloc_group
+  included) elaborate and check.
+- The theorem (`proofs/translate_cfg.core`): `tr.cfg_lv`, the claim at
+  every block's entry address `ad(y)` (y the label and the locals, homes
+  `hs(y)`) from each block's claim up to any cut point; from
+  `tr.loop_cut` (`proofs/translate_loop.core`), the loop rule over a set
+  of cut points (`tr.loop` its one-head instance).
+
+Next, in order:
+1. Engine (`slc/cli/src/c1`): a function's claim by `tr.cfg_lv` on the
+   readable CFG. The cut points' addresses: where each block's walk ends
+   (its marked return, `bb := k`), the same on every arrival or the check
+   fails; their homes by the location map. Each block walked once.
+2. Cut-point couplings beyond homes: a value living in a register at a
+   block's entry (a phi's value in eax, `__malloc_allzerop`'s `a || b`):
+   the claim with registers per label (tr.lv's `rs`).
+3. The structured readable form as a view of the CFG: compositions
+   (proofs/mallocng_compose.core) need machine ⊑ the GIMPLE the C2 proofs
+   are about. A generic structuring theorem (a structured function's
+   outcomes are its CFG's, where the CFG is reducible) and a linear
+   per-function check; or C2 directly on the CFG (item 5).
+4. Switch the `c1` lines to the CFG form, all functions; then
+   `alloc_group`. Measure against the structured baseline (214 theorems,
+   104 s, 1.2 GB), then retire what only the structured walk needs
+   (`block.rs`, `join.rs`, the loop and block points,
+   `proofs/translate_block.core`).
+5. User proofs on a CFG (proving GIMPLE spec): an invariant per label, one
+   obligation per block (Floyd style), as a lemma over the `loop` of the
+   readable CFG; for functions with no structured view (gotos).
+6. Later, for optimized code (proving optimization steps): the same
+   cut-point theorem between two CFGs, with a mapping of cut points (not
+   1:1: unrolling, duplication, tail merging), stuttering with a measure
+   (divergence kept), and couplings beyond the location map (registers,
+   SSA names).
+
+### 1.1 The rest of the rules' standard form (docs/overview.md)
 
 In place: N with the ring modulo 2^n, every value named in normal form,
 conditions, stores and addresses matched after N, no form-matching
@@ -19,40 +68,15 @@ translation verification, the engine):
   field, `[p + 0]` as `[p]`: each an equation of N or gone;
 - a subtraction stays one.
 
-### 1.1 Then: the remaining functions
+### 1.2 Then: the remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- GIMPLE -> CPU program translation verification of `alloc_group`: it
-  stops at 403faf (87 s, 345 MB), the exit of `while (i<2 && ..)` inside
-  `if (sc<9)`. The spec reads `small_cnt_tab` (read-only) on its own and
-  so is at its block's end there, while the machine has yet to load it
-  and store `cnt`: the join there is at the wrong point. The block's end
-  is 404036, but `if (sc<9)` can not be a block: a loop inside one is not
-  supported. Needed, in the translation theory (`proofs/translate_loop.core`):
-  - `tr.loop` / `tr.loop_fin` / `tr.loop_div` with the outer breakpoints'
-    arrival (`tr.lg` has none: after a loop's exit the walk runs to the
-    function's end, any outer breakpoint unreachable);
-  - a block's marked return distinct from a loop iteration's (both
-    `ok(w, pair(2^64, y))` now), so a block's end after a loop's exit is
-    not read as the loop going on. Nested loops need the same.
-- Per-block simulation's other limits (all C1 theorems: 45 blocks, 7 by
-  the join claims instead): a block's end where a value lives in a
-  register, not a home (`__malloc_allzerop`'s `a || b` in eax); a tail
-  the compiler shares between branches (`dequeue`); blocks whose rest
-  needs facts proven in the block (`try_avail` 403c9f); `try_avail`
-  403d18, 403e41 (homes' subset in the lemma). A block whose `return`s
-  and end are the same code (a void function's `if` with `return` as its
-  last statement) is no block; the block theory with outcomes other than
-  normal arriving at J would cover it.
-- C1's joins elsewhere: a code point with two predecessors where the
-  spec is not at a block's end is still walked once per path (no claim
-  there); the check should join or fail there too. The readable GIMPLE still copies one
-  small block (`cnt = 1; needed = req`: an `||` whose second part has a
-  signed product, not evaluated outside its guard).
+- `alloc_group` (C1 after 1.0; its structured walk stops at 403faf, a
+  loop inside an `if`).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and
@@ -61,8 +85,6 @@ translation verification, the engine):
   `a_or`, `__syscall*` (a `syscall` primitive, as `cas32`), `__mmap`,
   `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
   `___errno_location`.
-- C1 of nested loops (the inner loop's iterations arriving at the outer
-  head).
 
 ## 2. The invariant and the laws
 
@@ -98,14 +120,6 @@ from the proof writer's side. Taken up in batches between functions.
   does.
 - Checker speed, if it becomes a problem: generate step theorems, memoise
   normal forms in `taut` / `simp`, check files in parallel.
-- C1 joins (`slc/cli/src/c1/join.rs`): the claims at a block's end and a
-  loop's rule are shared; what is still walked once per path:
-  - the function's end, where an early return's path (spec
-    `exc(.., "ret")`) and the normal one (`ok(..)`) meet: a claim whose
-    spec covers both outcomes, and that carries rax;
-  - a block's end where a local without a home in the location map (a
-    GIMPLE temporary) holds a literal that differs between paths: a claim
-    keeps it literal, so each value has its own.
 
 ## Later
 

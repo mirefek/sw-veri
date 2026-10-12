@@ -1,0 +1,84 @@
+// GIMPLE as a CFG, translated: the claim at the entry of each basic block
+// (a cut point), for every world and locals, from the claim for the block
+// alone -- walked once, up to the cut point it goes on at.
+//
+// A function's readable CFG (docs/overview.md): its body iterated (`while
+// true`, tr.lprog's), one basic block per iteration, the label of the
+// block to run in the locals y; a block goes on with the next label and
+// locals (its marked return), or returns. Each label's block starts at a
+// code address ad(y), the cut point, its homes hs(y): the claim at each is
+// by tr.loop_cut, the cut points all block entries at the function's
+// frame. Nothing here depends on how the blocks are laid out or nested: any
+// control flow (loops in branches, nested loops, gotos) is blocks and
+// jumps between them.
+
+// (the cut points: a block's entry, at the frame)
+def tr.cut(s, fr, y. ad, y. yt, z) := ex y3. yt(y3) && tr.hd(z) = pair(ad(y3), int_sub(app(app(s, "gpr"), 4), fr))
+
+// (a cut point is not a return: the frame's rsp below the caller's)
+theorem tr.cut_nret(s, base, code, fr, y. ad, y. yt): all x w m. tr.inv(s, base, code, fr, x, w) -> tr.cut(s, fr, y. ad(y), y. yt(y), m) -> !tr.out(s, m)
+proof
+  fix x w m
+  assume hi hc
+  obtain y3, hy he from expand(hc, tr.cut)
+  have rm: app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) by simp(expand(he, tr.hd))
+  have rx := apply(tr.inv_parts, hi).4
+  have nr := apply(tr.inv_nr, hi)
+  have e: app(app(m, "gpr"), 4) = app(app(x, "gpr"), 4) by simp(rm, rx)
+  show by taut(rewrite(sym(e), nr))
+qed
+
+theorem tr.cfg_lv(s, v, base, code, fr, fd, y. ad, y. hs, y. yt, z. bkp, z p w. bka, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw):
+  (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
+  (all z y. yt(y) -> app(z, "rip") = ad(y) -> !bkp(z)) ->
+  (all y w. pair(w, y) in univ(1) -> yt(y) -> w in abi.World && w in univ(1) -> tr.lv(s, z. tr.cut(s, fr, y. ad(y), y. yt(y), z) || bkp(z),
+    z p2 w2. tr.cut(s, fr, y. ad(y), y. yt(y), z) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(y2) && tr.homes(s, z, hs(y2)) &&
+      tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1) && yt(y2)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+    v, base, code, fr, ad(y), hs(y), fd, empty, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)) ->
+  all y w. pair(w, y) in univ(1) -> yt(y) ->
+    tr.lv(s, z. bkp(z), z p w. bka(z, p, w), v, base, code, fr, ad(y), hs(y), fd, empty, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)
+proof
+  assume hk2 htr hbo hb
+  let Q(x, y, w) := tr.inv(s, base, code, fr, x, w) && app(x, "rip") = ad(y) && tr.homes(s, x, hs(y)) && tr.mem(s, x, w, v) && tr.frame(s, x, fd) && pair(w, y) in univ(1) && yt(y)
+  let C(z) := tr.cut(s, fr, y. ad(y), y. yt(y), z)
+  have hq: all x y w. Q(x, y, w) -> C(x) && !bkp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1) proof
+    fix x y w
+    assume q
+    have hi hr hh hm hf hu hy := q
+    have rspm := apply(tr.inv_parts, hi).4
+    have hd: tr.hd(x) = pair(ad(y), int_sub(app(app(s, "gpr"), 4), fr)) by defs(simp(hr, rspm), tr.hd)
+    have c: C(x) by defs(ex_intro({y}, taut(hy, hd)), tr.cut)
+    have nb := mp(all_elim(hbo, {x}, {y}), hy, hr)
+    have nr := apply(tr.inv_nr, hi)
+    have wu := hi.wu
+    show by taut(c, nb, nr, wu, hu)
+  qed
+  have hnr: all x y w m. Q(x, y, w) -> C(m) -> !tr.out(s, m) proof
+    fix x y w m
+    assume q hc
+    have hi := q.1
+    show := apply(tr.cut_nret[s := s, base := base, code := code, fr := fr, ad := y. ad(y), yt := y. yt(y)], {x}, {w}, {m}, hi, hc)
+  qed
+  have hb2: all x y w. Q(x, y, w) -> tr.sim(s, z. C(z) || bkp(z), z p2 w2. C(z) && (ex y2. Q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+      v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x) proof
+    fix x y w
+    assume q
+    have hi hr hh hm hf hu hy := q
+    have wW := hi.wW
+    have wu := hi.wu
+    have l := mp(all_elim(hb, {y}, {w}), hu, hy, conj(wW, wu))
+    show := mp(all_elim(expand(l, tr.lv), {x}), hi, hr, hh, all_elim(tr.regs_empty, {x}), hm, hf)
+  qed
+  have lp := mp(tr.loop_cut[s := s, v := v, hp := z. C(z), bp := z. bkp(z), ar := z p w. bka(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1),
+    kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. Q(x, y, w)], hq, hnr, hk2, htr, hb2)
+  fix y w
+  assume hu hy
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = ad(y) -> tr.homes(s, m, hs(y)) -> tr.regs(m, empty) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) ->
+      tr.sim(s, z. bkp(z), z p w. bka(z, p, w), v, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, m) proof
+    fix m
+    assume hi hr hh _ hm hf
+    have q: Q(m, y, w) by taut(hi, hr, hh, hm, hf, hu, hy)
+    show := mp(all_elim(lp, {m}, {y}, {w}), q)
+  qed
+  show by defs(g, tr.lv)
+qed

@@ -17,6 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Shared {
     pub globals: BTreeMap<String, u64>,
     pub accessors: BTreeMap<String, String>,
+    /// the control-flow graph as it is (`--cfg`), not structured
+    pub cfg: bool,
 }
 
 /// Names the readable code must not shadow (gimple.sl's operations, SL
@@ -255,7 +257,11 @@ impl<'a> Lower<'a> {
             emitted: 0,
         };
         self.names(&mut rx)?;
-        self.emit(&mut rx, sh, 0, None, &[])?;
+        if sh.cfg {
+            self.emit_cfg(&mut rx, sh)?;
+        } else {
+            self.emit(&mut rx, sh, 0, None, &[])?;
+        }
         let total: usize = f.blocks.iter().map(|b| b.stmts.len()).sum();
         if rx.emitted > 4 * total + 8 {
             return Err("unstructured control flow (too much duplication)".into());
@@ -402,6 +408,86 @@ impl<'a> Lower<'a> {
 
     fn line(&self, rx: &mut Rx, l: String) {
         rx.out.push(format!("{}{}", "  ".repeat(rx.depth), l));
+    }
+
+    /// The control-flow graph as it is: `bb` the number of the block to
+    /// run (GCC's), a `loop` running it -- found by `bb`'s bits, a tree of
+    /// comparisons (the block of n among m by log m of them) -- each block
+    /// its statements, then the next block's number (its phis' copies on
+    /// the edge first), or a `return`.
+    fn emit_cfg(&mut self, rx: &mut Rx, sh: &mut Shared) -> Result<(), String> {
+        if rx.vars.contains_key("bb") || rx.params.iter().any(|(p, _, _)| p == "bb") {
+            return Err("a variable named bb".into());
+        }
+        let mut bs: Vec<usize> = (0..rx.f.blocks.len()).collect();
+        bs.sort_by_key(|&i| rx.f.blocks[i].num);
+        self.line(rx, format!("var bb: nat = {}", rx.f.blocks[0].num));
+        self.line(rx, "loop {".into());
+        rx.depth += 1;
+        self.dispatch(rx, sh, &bs)?;
+        rx.depth -= 1;
+        self.line(rx, "}".into());
+        Ok(())
+    }
+
+    /// the blocks bs (by number): which one, by comparisons of `bb`
+    fn dispatch(&mut self, rx: &mut Rx, sh: &mut Shared, bs: &[usize]) -> Result<(), String> {
+        if let [b] = bs {
+            return self.cfg_block(rx, sh, *b);
+        }
+        let m = bs.len() / 2;
+        self.line(rx, format!("if bb < {} {{", rx.f.blocks[bs[m]].num));
+        rx.depth += 1;
+        self.dispatch(rx, sh, &bs[..m])?;
+        rx.depth -= 1;
+        self.line(rx, "} else {".into());
+        rx.depth += 1;
+        self.dispatch(rx, sh, &bs[m..])?;
+        rx.depth -= 1;
+        self.line(rx, "}".into());
+        Ok(())
+    }
+
+    /// one block: its statements, then where it goes
+    fn cfg_block(&mut self, rx: &mut Rx, sh: &mut Shared, b: usize) -> Result<(), String> {
+        let blk = &rx.f.blocks[b];
+        self.line(rx, format!("// <bb {}>", blk.num));
+        let k = blk.stmts.len();
+        for (i, s) in blk.stmts.iter().enumerate() {
+            if i + 1 == k && matches!(s, S::Goto(_) | S::If { .. }) {
+                break;
+            }
+            rx.emitted += 1;
+            self.rstmt(rx, sh, s).map_err(|e| format!("block {}: {}: {:?}", blk.num, e, s))?;
+        }
+        let go = |g: &mut Self, rx: &mut Rx, sh: &mut Shared, to: usize| -> Result<(), String> {
+            for l in g.phi_copies(rx, sh, b, to)? {
+                g.line(rx, l);
+            }
+            g.line(rx, format!("bb := {}", rx.f.blocks[to].num));
+            Ok(())
+        };
+        match blk.stmts.last().cloned() {
+            Some(S::Return(_)) => Ok(()),
+            Some(S::If { op, a, b: c, .. }) => {
+                let cond = self.cond(rx, sh, &op, &a, &c)?;
+                let (yes, no) = (rx.succ[b][0], rx.succ[b][1]);
+                self.line(rx, format!("if {} {{", cond));
+                rx.depth += 1;
+                go(self, rx, sh, yes)?;
+                rx.depth -= 1;
+                self.line(rx, "} else {".into());
+                rx.depth += 1;
+                go(self, rx, sh, no)?;
+                rx.depth -= 1;
+                self.line(rx, "}".into());
+                Ok(())
+            }
+            _ => {
+                let to = rx.succ[b][0];
+                go(self, rx, sh, to)
+            }
+        }
     }
 
     /// Emit blocks from `b` until `stop` (structured), inside the loops
