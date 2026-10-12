@@ -8,21 +8,24 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.0 Now: the rules' standard form (docs/overview.md)
+### 1.0 Now: the rest of the rules' standard form (docs/overview.md)
 
-The GIMPLE -> CPU rules and the GIMPLE operations' lemmas state values in
-forms of their own (72 register-producing rules: 25 with the result a
-variable, 47 an expression; the operations' lemmas likewise), so the two
-sides meet in different forms and the engine falls back to `arith`.
-Stages, each checked under the memory cap:
-- (a) the normalizer N and its equations (a core file), a test that the
-  rules' conclusions are in normal form;
-- (b) the 47 expression-style instruction rules to `r` + `r = E`;
-- (c) the GIMPLE operations' lemmas likewise, the spec's values named
-  through N;
-- (d) the consuming rules (stores, compares, calls) on `u = x`;
-- (e) `guard_arith` and the form-matching `arith` calls removed;
-- (f) all C1 theorems, then alloc_group, measured.
+In place: N, every value named in normal form, conditions and stores
+matched after N, `guard_arith` gone. What still recognizes a form of its
+own (GIMPLE -> CPU program translation verification, the engine):
+- addresses computed otherwise (`addr_eq`: `b + i*1 + 0` against the
+  spec's `p + off`, by `arith` with the statics' values): N equations for
+  the effective address (`x*1`, `+ 0`) and the statics' addresses as
+  numerals;
+- the immediates' forms (`imm_form`, `bits_neg(n, k)` "as GIMPLE writes
+  it", lea's negative displacement), the statics' names (`lea [rip + d]`),
+  `and r8, 2^k - 1` as the spec's field, `[p + 0]` as `[p]`: each an
+  equation of N or gone (N folds the literals);
+- N's equations for a subtraction of a literal as an addition and for
+  gathering constants: their proofs need a congruence modulo 2^n that
+  `arith` does not find (a lemma `x + m*y = x (mod m)` for integers).
+
+Then alloc_group, measured.
 
 ### 1.1 Then: the remaining functions
 

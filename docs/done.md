@@ -264,6 +264,16 @@ item is a short summary of finished work; details are in the files named.
   [rsp + d]` and `jns` after a compare (`tr.ccs32_ns`). The checker runs
   on a 1 GiB stack: a path's proof nests step in step (alloc_group's over
   a thousand frames deep).
+- **The rules' standard form** (docs/overview.md): one normalizer N
+  (`slc/cli/src/c1/nf.rs`; its equations `proofs/translate_nf.core`, each
+  step a kernel rewrite). The 60 instruction rules writing an expression
+  to a register or home restated with the result a variable and `r = E`
+  (their proofs rewrite the claim back: one line each), the indexed loads'
+  and stores' addresses likewise, `tr.qs_op` with `r = e`; both sides name
+  every value in normal form, so they meet as one name. Stores compare
+  values and conditions compare operands after N; `guard_arith` (and the
+  operand-order and literal special cases) removed: the 214 C1 theorems
+  from 120 s to 113 s. Hints (`using`) are N's extra equations.
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

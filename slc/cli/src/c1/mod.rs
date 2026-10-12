@@ -23,6 +23,7 @@
 mod eff;
 mod insn;
 mod join;
+mod nf;
 mod proof;
 pub mod rec;
 mod spec;
@@ -203,6 +204,8 @@ struct Gen<'e> {
     no_redex: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_refl: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
+    /// (the normal forms made, nf.rs: for good -- a name's meaning is fixed)
+    nf_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
     zs: Vec<VarId>,
     qs: Vec<Term>,
     insns: BTreeMap<u128, Insn>,
@@ -261,9 +264,9 @@ struct Gen<'e> {
     /// deep `in dom` facts)
     lf: Vec<Seq>,
     lf0: Option<Seq>,
-    /// the hints (`c1 .. using L, ..`): facts `all xs. H.. -> C`, each
-    /// instantiated where its pattern (C's first non-logical subterm with
-    /// all the xs) occurs in an arithmetic question
+    /// the hints (`c1 .. using L, ..`): N's equations beyond its own
+    /// (nf.rs), facts `all xs. H.. -> l = r`, l's instances rewritten to
+    /// r's (the premises closed facts, by evaluation)
     hints: Vec<Seq>,
     /// the calls met: the callee (a spec parameter), its address, the
     /// call's number of arguments, whether a call enters it with the stack
@@ -634,115 +637,17 @@ impl<'e> Gen<'e> {
             Node::App(_, a) if a.is_empty() => return t,
             _ => {}
         }
+        if std::env::var("C1_NF_CHECK").is_ok() {
+            if let Ok((n, Some(_))) = self.norm(&t) {
+                eprintln!("c1 nf: {} named not normal: {} (N: {})", self.fname, self.print(&t), self.print(&n));
+            }
+        }
         let name = format!("T{}", self.nval);
         self.nval += 1;
         let v = self.env.new_var(&name, 0);
         self.names.push((name, v));
         self.push_val(v, t);
         Term::var(v, vec![])
-    }
-
-    /// A commutative operation's value: the spec's name for it with its
-    /// operands in the other order, if it has one (the rule's premise `r =
-    /// op(..)` by simp), else a name as `value`
-    fn value_comm(&mut self, t: &Term) -> Term {
-        if let Node::App(f, a) = t.node() {
-            let comm = ["bits_add", "bits_mul", "bits_and", "bits_or", "bits_xor"].contains(&self.env.syms[*f as usize].name.as_str());
-            if comm && a.len() == 3 {
-                let sw = self.canon(&t.with_args(vec![a[0].clone(), a[2].clone(), a[1].clone()]));
-                if let Node::Var(v, _) = sw.node() {
-                    if self.vals.iter().any(|x| x.0 == *v) {
-                        return sw;
-                    }
-                }
-            }
-        }
-        self.value(t)
-    }
-
-    /// A commutative operation op(n, a, b) without a value of its own whose
-    /// swapped op(n, b, a) has one: that, and the proof of op(n, a, b) =
-    /// op(n, b, a)
-    fn comm_swap(&self, t: &Term) -> Option<(Term, rec::RA)> {
-        let Node::App(f, a) = t.node() else { return None };
-        let name = self.env.syms[*f as usize].name.as_str();
-        if a.len() != 3 || !["bits_add", "bits_mul", "bits_and", "bits_xor"].contains(&name) {
-            return None;
-        }
-        let known = |x: &Term| matches!(x.node(), Node::Var(v, _) if self.vals.iter().any(|y| y.0 == *v));
-        if known(&self.canon(t)) {
-            return None;
-        }
-        let sw = t.with_args(vec![a[0].clone(), a[2].clone(), a[1].clone()]);
-        if !known(&self.canon(&sw)) {
-            return None;
-        }
-        let pf = match name {
-            "bits_and" => Some("x86.and_comm"),
-            "bits_mul" => Some("x86.mul_comm"),
-            "bits_xor" => Some("x86i.xor_comm"),
-            _ => None,
-        };
-        let pf = match pf {
-            Some(l) => rec::p(R::Inst(l.into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
-            None => rec::simp_l(),
-        };
-        Some((sw, pf))
-    }
-
-    /// `u = v` for a value u that is v up to its operands' order (a
-    /// commutative operation's): the commutation (simp's arithmetic for
-    /// `bits_add`); simp(L) for v itself; for two terms of literals only,
-    /// by evaluation (simp)
-    fn comm_eq(&mut self, u: &Term, v: &Term) -> Option<rec::RA> {
-        if self.canon(u) == self.canon(v) {
-            return Some(rec::simp_l());
-        }
-        // (two closed terms, literals only: equal by evaluation)
-        let (eu, ev) = (self.expand(u), self.expand(v));
-        let (mut vs, mut ws) = (Vec::new(), Vec::new());
-        eu.vars(&mut vs);
-        ev.vars(&mut ws);
-        if vs.is_empty() && ws.is_empty() {
-            let eq = self.mk("eq", vec![u.clone(), v.clone()]);
-            return self.evp(&rec::RP::Simp(true, vec![], vec![], false), &eq, &[]).ok().map(|q| rec::s(&q));
-        }
-        let e = self.expand(u);
-        let Node::App(f, a) = e.node() else { return None };
-        let name = self.env.syms[*f as usize].name.as_str();
-        if a.len() != 3 || !["bits_add", "bits_mul", "bits_and", "bits_xor"].contains(&name) {
-            return None;
-        }
-        let sw = e.with_args(vec![a[0].clone(), a[2].clone(), a[1].clone()]);
-        if self.canon(&sw) != self.canon(v) {
-            return None;
-        }
-        Some(match name {
-            "bits_and" => rec::p(R::Inst("x86.and_comm".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
-            "bits_mul" => rec::p(R::Inst("x86.mul_comm".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
-            "bits_xor" => rec::p(R::Inst("x86i.xor_comm".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())])),
-            _ => rec::simp_l(),
-        })
-    }
-
-    /// the premise `r = op(n, a, b)` for value_comm's r: simp(L) for the
-    /// spec's value itself; with its operands swapped, the commutation
-    /// (x86.and_comm, x86.mul_comm; simp's arithmetic for `bits_add`)
-    fn comm_premise(&self, r: &Term, op: &Term) -> rec::RA {
-        if self.expand(r) != self.expand(op) {
-            if let Node::App(f, a) = op.node() {
-                let lemma = match self.env.syms[*f as usize].name.as_str() {
-                    "bits_and" => Some("x86.and_comm"),
-                    "bits_mul" => Some("x86.mul_comm"),
-                    "bits_xor" => Some("x86i.xor_comm"),
-                    _ => None,
-                };
-                if let Some(l) = lemma {
-                    return rec::p(R::Inst(l.into(), vec![("n", a[0].clone()), ("a", a[2].clone()), ("b", a[1].clone())]));
-                }
-            }
-        }
-        rec::simp_l()
     }
 
     /// a literal's value (a constant defined as one, a sum of them)

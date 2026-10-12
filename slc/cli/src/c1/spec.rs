@@ -52,7 +52,7 @@ impl<'e> Gen<'e> {
     }
 
     /// a guard's value: a literal comparison, a fact in scope (or one of
-    /// an operand the spec computes otherwise: equal by arithmetic)
+    /// operands of the same normal forms)
     fn guard(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
         let (v, facts) = self.guard_val(g, hyps)?;
         // (the facts it was decided by: a branch condition among them spent)
@@ -68,8 +68,8 @@ impl<'e> Gen<'e> {
 
     /// a guard's value and the facts it rests on: `&&`, `||`, `!` part by
     /// part (short-circuit, as the machine branches), each part by a fact
-    /// in scope (`guard_facts`), else by one of an operand computed
-    /// otherwise (`guard_arith`)
+    /// in scope (`guard_facts`), else by one of operands of the same normal
+    /// forms (`guard_nf`), else by evaluation (literals only)
     pub(super) fn guard_val(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, Vec<Seq>)> {
         let join = |mut x: Vec<Seq>, y: Vec<Seq>| {
             for f in y {
@@ -98,6 +98,10 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.guard_facts(g, hyps) {
             return Some(x);
         }
+        // (a fact of the same comparison of operands of the same normal forms)
+        if let Some(x) = self.guard_nf(g, hyps) {
+            return Some(x);
+        }
         // (a part of literals only, `sint(32, 2) <= sint(32, 7)`: computed)
         let mut vs = Vec::new();
         self.expand(g).vars(&mut vs);
@@ -108,77 +112,6 @@ impl<'e> Gen<'e> {
             }
             if let Ok(p) = self.evp(&simp, &self.mk("not", vec![g.clone()]), &[]) {
                 return Some((false, vec![p]));
-            }
-        }
-        self.guard_arith(g, hyps)
-    }
-
-    /// an equation guard `x = y` (or its negation) by a fact in scope of the
-    /// same equation but for an operand the machine computed otherwise (its
-    /// value the spec's by arithmetic, from the facts in scope)
-    fn guard_arith(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, Vec<Seq>)> {
-        // (a term under its negations: their parity, the term)
-        let strip = |g: &Gen, t: &Term| {
-            let (mut neg, mut e) = (false, t.clone());
-            while let Some(a) = g.app(&e, "not", 1).map(|a| a[0].clone()) {
-                neg = !neg;
-                e = a;
-            }
-            (neg, e)
-        };
-        if g.loose_depth(&self.env.binders_fn()) > 0 {
-            return None;
-        }
-        let (neg, e) = strip(self, g);
-        // (the guard's comparison: an equation or an order)
-        let ops = ["eq", "int_lt", "int_le"];
-        let (op, x) = ops.iter().find_map(|o| self.app(&e, o, 2).map(|x| (*o, x.to_vec())))?;
-        let (x0, x1) = (self.expand(&x[0]), self.expand(&x[1]));
-        // (the latest facts first: a branch just taken)
-        for (h, hs) in hyps.iter().rev() {
-            let (hneg, he2) = strip(self, &self.expand(h));
-            let Some((hop, y)) = ops.iter().find_map(|o| self.app(&he2, o, 2).map(|y| (*o, y.to_vec()))) else { continue };
-            // (the same comparison, or an order's dual: x < y as !(y <= x),
-            // x <= y as !(y < x); an equation either way round)
-            let (pairs, flip): (Vec<(Term, Term)>, bool) = match (op, hop) {
-                ("eq", "eq") => (vec![(y[0].clone(), x0.clone()), (y[1].clone(), x1.clone())], false),
-                ("int_lt", "int_lt") | ("int_le", "int_le") => (vec![(y[0].clone(), x0.clone()), (y[1].clone(), x1.clone())], false),
-                ("int_lt", "int_le") | ("int_le", "int_lt") => (vec![(y[1].clone(), x0.clone()), (y[0].clone(), x1.clone())], true),
-                _ => continue,
-            };
-            // (the sides the same, or equal by arithmetic -- one at least
-            // otherwise: the plain fact is guard_facts')
-            if pairs.iter().all(|(a, b)| a == b) {
-                continue;
-            }
-            let facts: Vec<R> = self.lf.iter().cloned().chain(hyps.iter().map(|h| h.1.clone())).map(R::S).collect();
-            let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext", "bits_sub", "bits_neg", "bits_shl"].iter().map(|d| d.to_string()).collect();
-            let mut eqs = Vec::new();
-            for (a, b) in &pairs {
-                if a == b {
-                    continue;
-                }
-                let eq = self.mk("eq", vec![a.clone(), b.clone()]);
-                // (by the hints' equations, their premises facts in scope:
-                // rewriting, no search)
-                let heqs = self.hint_eqs(&eq, hyps);
-                if !heqs.is_empty() {
-                    if let Ok(q) = self.evp(&RP::Simp(true, heqs.into_iter().map(R::S).collect(), vec![], false), &eq, &[]) {
-                        eqs.push(q);
-                        continue;
-                    }
-                }
-                let mut fs = facts.clone();
-                fs.extend(self.pow_facts(&eq));
-                match self.evp(&RP::Defs(Box::new(RP::Arith(fs)), defs.clone()), &eq, &[]) {
-                    Ok(q) => eqs.push(q),
-                    Err(_) => break,
-                }
-            }
-            if eqs.len() == pairs.iter().filter(|(a, b)| a != b).count() {
-                let mut fs = vec![hs.clone()];
-                fs.extend(eqs);
-                return Some(((hneg == neg) != flip, fs));
             }
         }
         None
@@ -372,7 +305,7 @@ impl<'e> Gen<'e> {
     }
 
     /// `bits_of_int(n, x)` (closed) with x a whole n-bit field
-    /// (`int_mod(int_div(b, int_pow(2, 0)), int_pow(2, n))`): it, n, b
+    /// (`int_mod(int_div(b, 1), 2^n)`, the normal form): it, n, b
     fn whole_field(&self, t: &Term) -> Option<(Term, u128, Term)> {
         let _p = super::prof::g("whole_field");
         if self.no_field.borrow().contains(t) {
@@ -393,9 +326,7 @@ impl<'e> Gen<'e> {
                     let field = (|| {
                         let m = self.app(&x, "int_mod", 2)?;
                         let d = self.app(&m[0], "int_div", 2)?;
-                        let p0 = self.app(&d[1], "int_pow", 2)?;
-                        let pn = self.app(&m[1], "int_pow", 2)?;
-                        (nat(&p0[0])? == 2 && nat(&p0[1])? == 0 && nat(&pn[0])? == 2 && nat(&pn[1])? == n).then(|| d[0].clone())
+                        (nat(&d[1])? == 1 && nat(&m[1])? == 1 << n).then(|| d[0].clone())
                     })();
                     if let Some(b) = field {
                         return Some((t.clone(), n, b));
@@ -1078,94 +1009,6 @@ impl<'e> Gen<'e> {
 
     /// `pow2(k) = 2^k` for the literal widths and shift counts of t's word
     /// operations (arith's modulus and factors numbers)
-    /// the hints' instances at t's subterms matching their patterns
-    pub(super) fn hint_facts(&self, q: &Term) -> Vec<R> {
-        let logical = ["imp", "and", "or", "not", "iff", "eq", "in", "int_lt", "int_le", "all", "ex"];
-        let bf = self.env.binders_fn();
-        // (t's subterms, each once)
-        let mut subs: Vec<Term> = Vec::new();
-        fn collect(t: &Term, out: &mut Vec<Term>) {
-            if let Node::App(_, a) | Node::Var(_, a) = t.node() {
-                if a.is_empty() || out.contains(t) {
-                    return;
-                }
-                out.push(t.clone());
-                a.iter().for_each(|x| collect(x, out));
-            }
-        }
-        collect(&self.expand(q), &mut subs);
-        // (p, BVar(j) for j < n the variables, against x)
-        fn mat(p: &Term, x: &Term, n: u32, bs: &mut Vec<Option<Term>>) -> bool {
-            match (p.node(), x.node()) {
-                (Node::BVar(j), _) if *j < n => match &bs[*j as usize] {
-                    Some(y) => y == x,
-                    None => {
-                        bs[*j as usize] = Some(x.clone());
-                        true
-                    }
-                },
-                (Node::App(f, a), Node::App(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b.iter()).all(|(p, x)| mat(p, x, n, bs)),
-                (Node::Var(f, a), Node::Var(g, b)) if f == g && a.len() == b.len() => a.iter().zip(b.iter()).all(|(p, x)| mat(p, x, n, bs)),
-                _ => p == x,
-            }
-        }
-        let mut out = Vec::new();
-        for h in &self.hints {
-            // (its leading `all`s, its body)
-            let (mut n, mut b) = (0u32, h.concl().clone());
-            while let Some(a) = self.app(&b, "all", 1) {
-                b = a[0].clone();
-                n += 1;
-            }
-            // (the pattern: the first non-logical subterm with all n variables)
-            fn find(g: &Gen, t: &Term, n: u32, logical: &[&str], bf: &dyn Fn(u32, usize) -> u32) -> Option<Term> {
-                let Node::App(f, a) = t.node() else { return None };
-                let all = (0..n).all(|j| super::spec::bvar_in(t, j, 0, bf));
-                if all && !logical.contains(&g.env.syms[*f as usize].name.as_str()) {
-                    return Some(t.clone());
-                }
-                a.iter().find_map(|x| find(g, x, n, logical, bf))
-            }
-            let Some(pat) = find(self, &b, n, &logical, &bf) else { continue };
-            for x in &subs {
-                let mut bs = vec![None; n as usize];
-                if mat(&pat, x, n, &mut bs) && bs.iter().all(|b| b.is_some()) {
-                    // (the outermost `all` first: BVar(n - 1))
-                    let args: Vec<RA> = (0..n).rev().map(|j| t(bs[j as usize].as_ref().unwrap())).collect();
-                    out.push(R::Mp(Box::new(R::S(h.clone())), args));
-                }
-            }
-        }
-        out
-    }
-
-    /// the hints' instances at q's subterms, their premises discharged by
-    /// facts in scope (or arithmetic on them): the conclusions
-    pub(super) fn hint_eqs(&mut self, q: &Term, hyps: &[(Term, Seq)]) -> Vec<Seq> {
-        let mut out = Vec::new();
-        'inst: for r in self.hint_facts(q) {
-            let Ok(mut sq) = self.run(&r, &[]) else { continue };
-            while let Some(x) = self.app(sq.concl(), "imp", 2).map(|x| x.to_vec()) {
-                let pf = match self.hyp_find(hyps, &x[0]) {
-                    Some(h) => h.1.clone(),
-                    None => {
-                        let facts: Vec<R> = self.lf.iter().cloned().chain(hyps.iter().map(|h| h.1.clone())).map(R::S).collect();
-                        match self.evp(&RP::Simp(true, facts, vec![], false), &x[0], &[]) {
-                            Ok(p) => p,
-                            Err(_) => continue 'inst,
-                        }
-                    }
-                };
-                match self.run(&rec::mp(R::S(sq.clone()), vec![rec::s(&pf)]), &[]) {
-                    Ok(s2) => sq = s2,
-                    Err(_) => continue 'inst,
-                }
-            }
-            out.push(sq);
-        }
-        out
-    }
-
     pub(super) fn pow_facts(&mut self, t: &Term) -> Vec<R> {
         let mut ks: BTreeSet<u128> = BTreeSet::new();
         fn go(g: &Gen, t: &Term, ks: &mut BTreeSet<u128>) {
@@ -1335,12 +1178,13 @@ impl<'e> Gen<'e> {
             if x[0].loose_depth(&self.env.binders_fn()) > 0 {
                 return Err(format!("a let of the state: {}", self.lambda(3, &x[0])));
             }
-            // (a commutative operation the machine has computed with its
-            // operands the other way: that order, by the commutation)
-            if let Some((sw, eq)) = self.comm_swap(&x[0]) {
+            // (its value in the normal form first: the rest of N(e), by N's
+            // rewrites)
+            let (n, pf) = self.norm(&x[0])?;
+            if let Some(pf) = pf {
                 let bb = self.abstract_(&body, &x[0], 0);
-                let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", bb), ("e", x[0].clone()), ("e2", sw)])?;
-                return Ok(Some(Red::Q(j, mp(inst, vec![eq, t(&w)]))));
+                let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", bb), ("e", x[0].clone()), ("e2", n)])?;
+                return Ok(Some(Red::Q(j, mp(inst, vec![s(&pf), t(&w)]))));
             }
             let e = self.value(&x[0]);
             let al = self.lam(&x[1], &["x0", "x1", "x8", "x"], &["x0", "x8", "x"]).ok_or("a let's body reads the outcome")?;
@@ -1390,11 +1234,13 @@ impl<'e> Gen<'e> {
                         return Ok(Some(Red::Call { g: c[0].clone(), args: items, list: c[1].clone(), one, a: al, xx: xl, dd: dl, k: kl }));
                     }
                 }
-                let (cond, r, okf, ubf) = self.op(&x[0])?;
-                let r = self.value(&r);
+                let (cond, e, okf, ubf) = self.op(&x[0])?;
+                let (r, hr) = self.result(&e)?;
                 let args = |r2: (&'static str, Term)| vec![("op", x[0].clone()), r2, ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())];
-                let (j, inst) = self.by(qi, "tr.qs_op", &args(("r", r.clone())))?;
-                let okr = mp(inst, vec![t(&w), okf]);
+                let mut oa = args(("r", r.clone()));
+                oa.push(("e", e));
+                let (j, inst) = self.by(qi, "tr.qs_op", &oa)?;
+                let okr = mp(inst, vec![t(&w), okf, hr]);
                 let Some(cond) = cond else { return Ok(Some(Red::Q(j, okr))) };
                 let mut ra = args(("s2", self.vw.clone()));
                 ra.push(("e", empty));
@@ -1452,15 +1298,5 @@ impl<'e> Gen<'e> {
             return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
         }
         Ok(None)
-    }
-}
-
-/// whether the bound variable j (at depth d: BVar(j + d)) occurs in t
-pub(super) fn bvar_in(t: &Term, j: u32, d: u32, bf: &dyn Fn(u32, usize) -> u32) -> bool {
-    match t.node() {
-        Node::BVar(i) => *i == j + d,
-        Node::App(f, a) => a.iter().enumerate().any(|(i, x)| bvar_in(x, j, d + bf(*f, i), bf)),
-        Node::Var(_, a) => a.iter().any(|x| bvar_in(x, j, d, bf)),
-        _ => false,
     }
 }

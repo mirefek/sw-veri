@@ -115,17 +115,6 @@ For a function F, two halves:
     through the kernel; no proof text is written. The engine is untrusted:
     the kernel records only the theorems its rules made, without
     hypotheses.
-  - One place still searches: a spec condition that is not literally
-    among the path's facts, but is one with an operand written otherwise,
-    goes to `arith` with the path's facts (slow when it fails). Hints
-    replace that: `c1 F SPEC PREFIX using L, ..` names proven equations
-    (`all xs. H.. -> l = r`), which the engine instantiates where l occurs
-    in such a condition, their premises from the path's facts, and uses by
-    rewriting (`simp`) before any `arith`. E.g. a division as GIMPLE writes
-    it, `bits_of_int(64, int_div(bits_of_int(64, 4080), s)) = int_div(4080,
-    s)` for s a 64-bit word not 0, the machine's form: alloc_group's
-    conditions on it went from about 2 s each (a failing `arith`) to
-    immediate.
   - Where the paths of a branch meet, at the end of a block of the spec,
     the claim for the rest is proven once, for every world and locals (the
     homes that hold locals as those locals), and used for each path that
@@ -135,25 +124,37 @@ For a function F, two halves:
     structure, so a function's proof grows with its code, not its paths.
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
-  - **The rules' standard form** (being introduced): every comparison of
-    the two sides is a match, `arith` only for facts (bounds,
-    definedness), never for recognizing a value written otherwise.
-    - One normal form of values, by one normalizer N: a fixed list of
-      proven, oriented equations (a core file; extensible -- a `using`
-      hint becomes one), applied innermost first in a fixed order, each
-      step a kernel rewrite by an instance of one equation. Closed literal
-      terms are numerals, a cast of a value of its width is the value,
-      commutative operands in one order (literals last), a shift by a
-      constant a product by 2^k, constants gathered.
-    - A rule producing a value has it as a variable r with a premise
-      `r = E` (E the instruction's or operation's own expression); the
-      engine takes r := N(E), the premise by N's rewrites. So do the
-      GIMPLE operations' lemmas.
-    - A rule consuming a value (a store, a compare against the spec, a
-      call's argument) takes the machine's value u and the spec's x with a
-      premise `u = x`, by N (equal normal forms: a match).
-    - The condition lemmas state their relation in the normal form, so a
-      spec condition is decided by a match after N.
+  - **The rules' standard form**: every comparison of the two sides is a
+    match; `arith` only for facts (bounds, definedness), never for
+    recognizing a value written otherwise.
+    - One normal form of values, by one normalizer N
+      (`slc/cli/src/c1/nf.rs`): a fixed list of proven, oriented equations
+      (`proofs/translate_nf.core`), applied innermost first, each step a
+      kernel rewrite by an instance of one equation. Closed literal terms
+      are numerals (evaluated: GIMPLE's `bits[64](-16)` and the machine's
+      sign-extended immediate the same numeral), a cast of a word of its
+      width (or narrower) is the word, a shift by a constant is a product
+      by 2^k, commutative operands are in one order (values by their
+      names, operations, literals last).
+    - A rule producing a value has it as a variable r with a premise `r =
+      E` (E the instruction's own expression): the register- and
+      home-writing instruction rules, the loads (an indexed one's address
+      too, `ad = iv + bv`), and the spec's operations (`tr.qs_op`: `r =
+      e`, e the operation's lemma's value). The engine takes r := N(E), the
+      premise by N's rewrites; a let's value is rewritten to its normal
+      form first (`tr.qe_eq`). Every value is named in normal form (the
+      check `C1_NF_CHECK=1` reports one that is not).
+    - A rule consuming a value (a store) takes the machine's value u and
+      the spec's x with a premise `u = x`, by N (equal normal forms: a
+      match); an indexed store's address likewise.
+    - A condition is decided by a fact in scope: the same, or one of the
+      same comparison of operands with the same normal forms, rewritten to
+      the condition's operands by N's proofs; lemmas the engine matches
+      against state their terms in the normal form (`tr.bits_field0_n`).
+    - Hints extend N: `c1 F SPEC PREFIX using L, ..` names proven equations
+      (`all xs. H.. -> l = r`, H closed facts, by evaluation), applied
+      after N's own at each node. An equation undoing another's (a hint
+      against N's order) fails with the term, not loops.
   - Programs and states are related by a coupling at each point:
     - a location map says where each GIMPLE value lives (the engine is
       guided by the -O0 build's DWARF, `scripts/locmap.py`);

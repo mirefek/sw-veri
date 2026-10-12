@@ -169,9 +169,9 @@ impl<'e> Gen<'e> {
                     let biga = (a2 + d) % P64;
                     let (pp, off, hc) = self.static_mem_hyp(st, biga, n)?;
                     let rule = if n == 8 { "load64_rip" } else { "load32_rip" };
-                    let tr = self.step(rule, a, insn, &[&x[1], &lit(d), &x[4], &pp, &off], self.tail(st, insn, 6, vec![s(&hc)]));
                     let v = self.parse(&format!("bits_of_int({}, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), {}))", 8 * n, self.print(&pp), self.print(&off), n))?;
-                    let v = self.value(&v);
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step(rule, a, insn, &[&x[1], &lit(d), &x[4], &pp, &off, &v], self.tail(st, insn, 6, vec![s(&hc), hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, n, v);
                     return self.then(tr, st2);
@@ -193,9 +193,9 @@ impl<'e> Gen<'e> {
                     let ixv = self.need_reg(st, inn, 8)?;
                     let ea = self.mk("bits_add", vec![lit(64), self.mk("int_add", vec![bv.clone(), self.mk("bits_mul", vec![lit(64), ixv.clone(), lit(1)])]), lit(0)]);
                     let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ea, 8)?;
-                    let tr = self.step("load64_bi", a, insn, &[&x[1], &b, &iv, &x[4], &bv, &ixv, &pp, &off], self.tail(st, insn, 10, vec![s(&heq), s(&hc)]));
                     let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&pp), self.print(&off)))?;
-                    let v = self.value(&v);
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step("load64_bi", a, insn, &[&x[1], &b, &iv, &x[4], &bv, &ixv, &pp, &off, &v], self.tail(st, insn, 10, vec![s(&heq), s(&hc), hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, v);
                     return self.then(tr, st2);
@@ -211,15 +211,16 @@ impl<'e> Gen<'e> {
                     let (tr, v) = if n == 8 {
                         // (also the bytes of the spec's store there: a bitfield's)
                         let (hc, wt) = self.mem_hyp_rw(st, &bp, &d, 8)?;
-                        (self.step("load64_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt], self.tail(st, insn, 6, vec![s(&hc)])), v)
+                        let (v, hr) = self.result(&v)?;
+                        (self.step("load64_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt, &v], self.tail(st, insn, 6, vec![s(&hc), hr])), v)
                     } else {
                         let hc = self.mem_hyp(st, &bp, &d, n)?;
                         // (at offset 0: the address as the spec read it, p or p + 0)
                         let v0 = self.parse(&rd(&self.print(&bp)))?;
                         let (ea, v) = if nat(&d) == Some(0) && self.val_of.contains_key(&self.expand(&v0)) { (bp.clone(), v0) } else { (self.parse(&eb)?, v) };
-                        (self.step("load32_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &ea], self.tail(st, insn, 7, vec![s(&hc)])), v)
+                        let (v, hr) = self.result(&v)?;
+                        (self.step("load32_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &ea, &v], self.tail(st, insn, 7, vec![s(&hc), hr])), v)
                     };
-                    let v = self.value(&v);
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, n, v);
                     return self.then(tr, st2);
@@ -254,17 +255,16 @@ impl<'e> Gen<'e> {
                         return Ok(pf);
                     }
                     let u = self.need_reg(st, gn, 8)?;
-                    let tr = self.step("neg64", a, insn, &[&g, &x[3], &u], self.tail(st, insn, 4, vec![]));
-                    let r = self.mk("bits_sub", vec![lit(64), lit(0), u]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(64), lit(0), u.clone()]))?;
+                    let tr = self.step("neg64", a, insn, &[&g, &x[3], &u, &r], self.tail(st, insn, 4, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, r);
                     return self.then(tr, st2);
                 }
                 let u = self.need_reg(st, gn, 4)?;
                 let (rule, r) = if op == Some(2) { ("not32", self.mk("bits_not", vec![lit(32), u.clone()])) } else { ("neg32", self.mk("bits_sub", vec![lit(32), lit(0), u.clone()])) };
-                let tr = self.step(rule, a, insn, &[&g, &x[3], &u], self.tail(st, insn, 4, vec![]));
-                let r = self.value(&r);
+                let (r, hr) = self.result(&r)?;
+                let tr = self.step(rule, a, insn, &[&g, &x[3], &u, &r], self.tail(st, insn, 4, vec![hr]));
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
                 self.then(tr, st2)
@@ -279,8 +279,7 @@ impl<'e> Gen<'e> {
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
                 // (the result as the spec orders it)
                 let op = self.mk("bits_and", vec![lit(32), v.clone(), u.clone()]);
-                let r = self.value_comm(&op);
-                let hr = self.comm_premise(&r, &op);
+                let (r, hr) = self.result(&op)?;
                 let tr = self.step("and32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
@@ -304,9 +303,9 @@ impl<'e> Gen<'e> {
                 }
                 let nz = self.mk("not", vec![self.mk("eq", vec![xv.clone(), lit(0)])]);
                 let hnz = self.hyp_find(&st.hyps, &nz).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: a division by {}, not known to be not 0", a, self.print(&xv)))?;
-                let tr = self.step("div64_home", a, insn, &[&d, &c, &x[2], &xv, &lit(n0), &u, &lit(n2)], self.tail(st, insn, 9, vec![s(&hnz)]));
-                let q = self.value(&self.mk("int_div", vec![u.clone(), xv.clone()]));
-                let r = self.value(&self.mk("int_mod", vec![u, xv]));
+                let (q, hq) = self.result(&self.mk("int_div", vec![u.clone(), xv.clone()]))?;
+                let (r, hr) = self.result(&self.mk("int_mod", vec![u.clone(), xv.clone()]))?;
+                let tr = self.step("div64_home", a, insn, &[&d, &c, &x[2], &xv, &lit(n0), &u, &lit(n2), &q, &r], self.tail(st, insn, 9, vec![s(&hnz), hq, hr]));
                 self.scratch.insert(0);
                 self.scratch.insert(2);
                 let st2 = self.set_reg(st, a2, 0, 8, q);
@@ -322,8 +321,7 @@ impl<'e> Gen<'e> {
                 let u = self.need_reg(st, g, 4)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
                 let op = self.mk("bits_xor", vec![lit(32), u.clone(), v.clone()]);
-                let r = self.value_comm(&op);
-                let hr = self.comm_premise(&r, &op);
+                let (r, hr) = self.result(&op)?;
                 let tr = self.step("xor32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
@@ -344,8 +342,7 @@ impl<'e> Gen<'e> {
                         ("imul32_home", home(&st.hsm, &d)?, vec![d, c])
                     };
                     let op = self.mk("bits_mul", vec![lit(32), u.clone(), v.clone()]);
-                    let r = self.value_comm(&op);
-                    let hr = self.comm_premise(&r, &op);
+                    let (r, hr) = self.result(&op)?;
                     let mut ts: Vec<&Term> = vec![&x[1]];
                     ts.extend(mid.iter());
                     ts.extend([&x[3], &x[4], &v, &u, &r]);
@@ -369,8 +366,7 @@ impl<'e> Gen<'e> {
                     let u = self.need_reg(st, g, 8)?;
                     let v = self.need_reg(st, hn, 8)?;
                     let op = self.mk("bits_mul", vec![lit(64), u.clone(), v.clone()]);
-                    let r = self.value_comm(&op);
-                    let hr = self.comm_premise(&r, &op);
+                    let (r, hr) = self.result(&op)?;
                     let tr = self.step("imul64_rr", a, insn, &[&x[1], &h, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, r);
@@ -382,8 +378,7 @@ impl<'e> Gen<'e> {
                 let u = self.need_reg(st, g, 8)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
                 let op = self.mk("bits_mul", vec![lit(64), u.clone(), v.clone()]);
-                let r = self.value_comm(&op);
-                let hr = self.comm_premise(&r, &op);
+                let (r, hr) = self.result(&op)?;
                 let tr = self.step("imul64_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 8, r);
@@ -397,9 +392,8 @@ impl<'e> Gen<'e> {
                 let v = home(&st.hsm, &d)?;
                 let u = self.need_reg(st, g, 4)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
-                let tr = self.step("sub32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u], self.tail(st, insn, 8, vec![]));
-                let r = self.mk("bits_sub", vec![lit(32), u, v]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), u.clone(), v.clone()]))?;
+                let tr = self.step("sub32_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
@@ -415,9 +409,8 @@ impl<'e> Gen<'e> {
                 let v = home_n(&st.hsm, &d, 8)?;
                 let u = self.need_reg(st, g, 8)?;
                 let c = lit(self.hkey(nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?));
-                let tr = self.step("sub64_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u], self.tail(st, insn, 8, vec![]));
-                let r = self.mk("bits_sub", vec![lit(64), u, v]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(64), u.clone(), v.clone()]))?;
+                let tr = self.step("sub64_home", a, insn, &[&x[1], &d, &c, &x[3], &x[4], &v, &u, &r], self.tail(st, insn, 8, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 8, r);
                 self.then(tr, st2)
@@ -437,9 +430,8 @@ impl<'e> Gen<'e> {
                 }
                 let u = self.need_reg(st, hn, 4)?;
                 let by = self.imul_fact(c)?;
-                let tr = self.step("imul32", a, insn, &[&x[1], &h, &x[3], &x[4], &x[5], &u], self.tail(st, insn, 4, vec![s(&by), simp_l(), simp_l()]));
-                let r = self.mk("bits_mul", vec![lit(32), u, x[5].clone()]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_mul", vec![lit(32), u.clone(), x[5].clone()]))?;
+                let tr = self.step("imul32", a, insn, &[&x[1], &h, &x[3], &x[4], &x[5], &u, &r], self.tail(st, insn, 4, vec![s(&by), simp_l(), simp_l(), hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
@@ -462,8 +454,8 @@ impl<'e> Gen<'e> {
                 if self.canon(&t2) != self.canon(&tv) || self.canon(&s2) != self.canon(&sv) {
                     return Err(format!("{:x}: the machine's compare-and-swap of {}, {}; the spec's of {}, {}", a, self.print(&tv), self.print(&sv), self.print(&t2), self.print(&s2)));
                 }
-                let tr = self.step("cas32_b", a, insn, &[&x[1], &b, &x[3], &x[4], &x[5], &bv, &tv, &sv], self.tail_s(st, &st2, insn, 11, vec![], &hc, &red));
-                let dv = self.value(&dv);
+                let (dv, hr) = self.result(&dv)?;
+                let tr = self.step("cas32_b", a, insn, &[&x[1], &b, &x[3], &x[4], &x[5], &bv, &tv, &sv, &dv], self.tail_s(st, &st2, insn, 11, vec![hr], &hc, &red));
                 self.scratch.insert(0);
                 let st3 = self.set_reg(&st2, a2, 0, 4, dv);
                 self.then(tr, st3)
@@ -511,16 +503,7 @@ impl<'e> Gen<'e> {
                         _ => return Err(bad("a shift by cl not known below the width")),
                     },
                 };
-                // (a literal shifted: the spec's value, its literal as bits_of_int(w, k), if it has one)
-                let op = self.mk(&format!("bits_{h}"), vec![lit(w), u.clone(), c.clone()]);
-                let spec_form = nat(&u).and_then(|_| {
-                    let alt = self.canon(&self.mk(&format!("bits_{h}"), vec![lit(w), self.mk("bits_of_int", vec![lit(w), u.clone()]), c.clone()]));
-                    matches!(alt.node(), Node::Var(v, _) if self.vals.iter().any(|x| x.0 == *v)).then_some(alt)
-                });
-                let (r, hr) = match spec_form {
-                    Some(r) => (r, RA::P(RP::Defs(Box::new(RP::Simp(true, vec![], vec![], false)), vec!["bits_of_int".into()]))),
-                    None => (self.value(&op), simp_l()),
-                };
+                let (r, hr) = self.result(&self.mk(&format!("bits_{h}"), vec![lit(w), u.clone(), c.clone()]))?;
                 let tr = self.step(&format!("{h}{w}_cl"), a, insn, &[&g, &x[3], &c, &u, &r], self.tail(st, insn, 6, vec![s(&hc), hr]));
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, n, r);
@@ -543,9 +526,8 @@ impl<'e> Gen<'e> {
                             return Ok(pf);
                         }
                         let u = self.need_reg(st, gn, 8)?;
-                        let tr = self.step("shl64_imm", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 7, vec![]));
-                        let r = self.mk("bits_shl", vec![lit(64), u, x[4].clone()]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_shl", vec![lit(64), u.clone(), x[4].clone()]))?;
+                        let tr = self.step("shl64_imm", a, insn, &[&g, &x[3], &x[4], &u, &r], self.tail(st, insn, 7, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
@@ -553,9 +535,8 @@ impl<'e> Gen<'e> {
                     // shr r64, c
                     (8, 5) => {
                         let u = self.need_reg(st, gn, 8)?;
-                        let tr = self.step("shr64_imm", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 7, vec![]));
-                        let r = self.mk("bits_shr", vec![lit(64), u, x[4].clone()]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_shr", vec![lit(64), u.clone(), x[4].clone()]))?;
+                        let tr = self.step("shr64_imm", a, insn, &[&g, &x[3], &x[4], &u, &r], self.tail(st, insn, 7, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
@@ -578,13 +559,13 @@ impl<'e> Gen<'e> {
                         })();
                         let (bp, off) = shape.ok_or_else(|| bad("shl 12 of a value not a word's field"))?;
                         let bp = self.canon(&bp);
-                        let tr = self.step("shl12_field", a, insn, &[&g, &x[3], &bp, &lit(off)], self.tail(st, insn, 4, vec![]));
                         let r = self.parse(&format!(
                             "bits_mul(64, bits_of_int(52, int_mod(int_div(gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8), int_pow(2, 12)), int_pow(2, 52))), 4096)",
                             self.print(&bp),
                             off
                         ))?;
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&r)?;
+                        let tr = self.step("shl12_field", a, insn, &[&g, &x[3], &bp, &lit(off), &r], self.tail(st, insn, 4, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
@@ -592,8 +573,9 @@ impl<'e> Gen<'e> {
                     // shr r16, c: the machine's value (a field rule reads it)
                     (2, 5) => {
                         let u = self.need_reg(st, gn, 2)?;
-                        let tr = self.step("shr16_imm", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 7, vec![]));
                         let r = self.parse(&format!("bits_set_slice(64, {u}, 15, 0, bits_shr(16, bits_slice({u}, 15, 0), {c}))", u = self.print(&u)))?;
+                        let (r, hr) = self.result(&r)?;
+                        let tr = self.step("shr16_imm", a, insn, &[&g, &x[3], &x[4], &u, &r], self.tail(st, insn, 7, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
@@ -602,9 +584,8 @@ impl<'e> Gen<'e> {
                     (4, 4) => {
                         let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
                         let mk = 1u128 << c;
-                        let tr = self.step("shl32_imm", a, insn, &[&g, &x[3], &x[4], &lit(mk), &lit(n), &u], self.tail(st, insn, 9, vec![]));
-                        let r = self.mk("bits_mul", vec![lit(32), u, lit(mk)]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_mul", vec![lit(32), u.clone(), lit(mk)]))?;
+                        let tr = self.step("shl32_imm", a, insn, &[&g, &x[3], &x[4], &lit(mk), &lit(n), &u, &r], self.tail(st, insn, 9, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         return self.then(tr, st2);
@@ -612,9 +593,8 @@ impl<'e> Gen<'e> {
                     _ => return Err(bad("no rule for the shift")),
                 }
                 let u = self.need_reg(st, gn, 4)?;
-                let tr = self.step("shr32", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 7, vec![]));
-                let r = self.mk("bits_shr", vec![lit(32), u, x[4].clone()]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_shr", vec![lit(32), u.clone(), x[4].clone()]))?;
+                let tr = self.step("shr32", a, insn, &[&g, &x[3], &x[4], &u, &r], self.tail(st, insn, 7, vec![hr]));
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
                 self.then(tr, st2)
@@ -695,7 +675,7 @@ impl<'e> Gen<'e> {
                         let tr = if self.canon(&v) == self.canon(&u) {
                             self.step("store32_bd", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u], self.tail_s(st, &st2, insn, 10, vec![], &hc, &red))
                         } else {
-                            let hux = self.comm_eq(&u, &v).ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
+                            let hux = self.eq_nf(&u, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
                             self.step("store32_bd_eq", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u, &v], self.tail_s(st, &st2, insn, 10, vec![hux], &hc, &red))
                         };
                         let mut st3 = st2;
@@ -719,9 +699,8 @@ impl<'e> Gen<'e> {
                             let (bv, iv) = (self.need_reg(st, reg(&b)?, 8)?, self.need_reg(st, reg(&ix)?, 8)?);
                             let u = self.need_reg(st, g, 8)?;
                             let (hc, v, st2, red, _, so) = self.spec_store_x(st, None, Some(8))?;
-                            // (the spec's value, or it with a commutative
-                            // operation's operands swapped)
-                            let hux = self.comm_eq(&u, &v).ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
+                            // (the spec's value: the same normal form)
+                            let hux = self.eq_nf(&u, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
                             let ea = self.mk("bits_add", vec![lit(64), self.mk("int_add", vec![bv.clone(), self.mk("bits_mul", vec![lit(64), iv.clone(), lit(1)])]), lit(0)]);
                             let ad = self.mk("bits_add", vec![lit(64), so.p.clone(), so.off.clone()]);
                             let q = self.addr_eq(st, &ea, &ad)?;
@@ -798,10 +777,9 @@ impl<'e> Gen<'e> {
                 // (mov r32, r32 of a 64-bit word: its low half)
                 if n == 4 {
                     if let Some((8, u)) = self.reg(st, g) {
-                        let tr = self.step("mov32_rr8", a, insn, &[&x[1], &h, &x[3], &x[4], &u], self.tail(st, insn, 5, vec![]));
+                        let (r, hr) = self.result(&self.mk("bits_of_int", vec![lit(32), u.clone()]))?;
+                        let tr = self.step("mov32_rr8", a, insn, &[&x[1], &h, &x[3], &x[4], &u, &r], self.tail(st, insn, 5, vec![hr]));
                         self.scratch.insert(hn);
-                        let r = self.mk("bits_of_int", vec![lit(32), u]);
-                        let r = self.value(&r);
                         let st2 = self.set_reg(st, a2, hn, 4, r);
                         return self.then(tr, st2);
                     }
@@ -823,9 +801,8 @@ impl<'e> Gen<'e> {
                     if x[2] == x[3] {
                         let gn = reg(&g)?;
                         let u = self.need_reg(st, gn, 8)?;
-                        let tr = self.step("shr64_1", a, insn, &[&g, &u], self.tail(st, insn, 4, vec![]));
-                        let r = self.mk("bits_shr", vec![lit(64), u, lit(1)]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_shr", vec![lit(64), u.clone(), lit(1)]))?;
+                        let tr = self.step("shr64_1", a, insn, &[&g, &u, &r], self.tail(st, insn, 4, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
@@ -839,18 +816,16 @@ impl<'e> Gen<'e> {
                     let u = home(&st.hsm, &d)?;
                     let cn = self.hkey(dn);
                     let (_, hs2, hk) = self.hkeep(st, cn, 4);
-                    let tr = self.step("shr32_1_home", a, insn, &[&d, &lit(cn), &u], self.tail_h(st, insn, &hs2, 6, vec![p(hk.clone())]));
-                    let r = self.mk("bits_shr", vec![lit(32), u, lit(1)]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_shr", vec![lit(32), u.clone(), lit(1)]))?;
+                    let tr = self.step("shr32_1_home", a, insn, &[&d, &lit(cn), &u, &r], self.tail_h(st, insn, &hs2, 6, vec![p(hk.clone()), hr]));
                     let st2 = self.set_home(st, a2, cn, 4, r);
                     return self.then(tr, st2);
                 }
                 let Some((0, g)) = self.tag(&x[2]) else { return Err(bad("not shr r/m32, 1")) };
                 let gn = reg(&g)?;
                 let u = self.need_reg(st, gn, 4)?;
-                let tr = self.step("shr32_1", a, insn, &[&g, &u], self.tail(st, insn, 4, vec![]));
-                let r = self.mk("bits_shr", vec![lit(32), u, lit(1)]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_shr", vec![lit(32), u.clone(), lit(1)]))?;
+                let tr = self.step("shr32_1", a, insn, &[&g, &u, &r], self.tail(st, insn, 4, vec![hr]));
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
                 self.then(tr, st2)
@@ -866,9 +841,8 @@ impl<'e> Gen<'e> {
                     let (gn, hn) = (reg(&g)?, reg(&x[1])?);
                     let (n1, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
                     let (n2, xv) = self.reg(st, hn).ok_or_else(|| bad("an empty register"))?;
-                    let tr = self.step("or64_rr", a, insn, &[&g, &x[1], &lit(n1), &u, &lit(n2), &xv], self.tail(st, insn, 7, vec![]));
-                    let r = self.mk("bits_or", vec![lit(64), u, xv]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_or", vec![lit(64), u.clone(), xv.clone()]))?;
+                    let tr = self.step("or64_rr", a, insn, &[&g, &x[1], &lit(n1), &u, &lit(n2), &xv, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, r);
                     return self.then(tr, st2);
@@ -886,9 +860,8 @@ impl<'e> Gen<'e> {
                     }
                     let u = self.need_reg(st, gn, 4)?;
                     let xv = self.need_reg(st, hn, 4)?;
-                    let op = self.mk("bits_or", vec![lit(32), u.clone(), xv.clone()]);
-                    let r = self.value(&op);
-                    let tr = self.step("or32_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![simp_l()]));
+                    let (r, hr) = self.result(&self.mk("bits_or", vec![lit(32), u.clone(), xv.clone()]))?;
+                    let tr = self.step("or32_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
@@ -905,9 +878,8 @@ impl<'e> Gen<'e> {
                 let cn = self.hkey(dn);
                 let (_, hs2, hk) = self.hkeep(st, cn, n);
                 let rule = if n == 8 { "or64_home" } else { "or32_home" };
-                let tr = self.step(rule, a, insn, &[&d, &lit(cn), &x[1], &v, &u], self.tail_h(st, insn, &hs2, 9, vec![p(hk.clone())]));
-                let r = self.mk("bits_or", vec![lit(8 * n), u, v]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_or", vec![lit(8 * n), u.clone(), v.clone()]))?;
+                let tr = self.step(rule, a, insn, &[&d, &lit(cn), &x[1], &v, &u, &r], self.tail_h(st, insn, &hs2, 9, vec![p(hk.clone()), hr]));
                 let st2 = self.set_home(st, a2, cn, n, r);
                 self.then(tr, st2)
             }
@@ -952,9 +924,8 @@ impl<'e> Gen<'e> {
                     let (gn, hn) = (reg(&g)?, reg(&x[1])?);
                     let u = self.need_reg(st, gn, 8)?;
                     let xv = self.need_reg(st, hn, 8)?;
-                    let tr = self.step("sub64_rr", a, insn, &[&g, &x[1], &u, &xv], self.tail(st, insn, 7, vec![]));
-                    let r = self.mk("bits_sub", vec![lit(64), u, xv]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(64), u.clone(), xv.clone()]))?;
+                    let tr = self.step("sub64_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, r);
                     return self.then(tr, st2);
@@ -967,13 +938,12 @@ impl<'e> Gen<'e> {
                 let (nh, xv) = self.reg(st, hn).ok_or_else(|| bad("an empty register"))?;
                 // (h holding 32 bits: its value itself)
                 let (tr, r) = if nh == 4 {
-                    let tr = self.step("sub32_rr4", a, insn, &[&g, &x[1], &u, &xv], self.tail(st, insn, 7, vec![]));
-                    (tr, self.mk("bits_sub", vec![lit(32), u, xv.clone()]))
+                    let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), u.clone(), xv.clone()]))?;
+                    (self.step("sub32_rr4", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr])), r)
                 } else {
-                    let tr = self.step("sub32_rr", a, insn, &[&g, &x[1], &u, &lit(nh), &xv], self.tail(st, insn, 7, vec![]));
-                    (tr, self.mk("bits_sub", vec![lit(32), u, self.mk("bits_of_int", vec![lit(32), xv.clone()])]))
+                    let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), u.clone(), self.mk("bits_of_int", vec![lit(32), xv.clone()])]))?;
+                    (self.step("sub32_rr", a, insn, &[&g, &x[1], &u, &lit(nh), &xv, &r], self.tail(st, insn, 7, vec![hr])), r)
                 };
-                let r = self.value(&r);
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
                 self.then(tr, st2)
@@ -996,8 +966,7 @@ impl<'e> Gen<'e> {
                     let u = self.need_reg(st, gn, 8)?;
                     let xv = self.need_reg(st, hn, 8)?;
                     let op = self.mk("bits_and", vec![lit(64), u.clone(), xv.clone()]);
-                    let r = self.value_comm(&op);
-                    let hr = self.comm_premise(&r, &op);
+                    let (r, hr) = self.result(&op)?;
                     let tr = self.step("and64_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, r);
@@ -1014,8 +983,7 @@ impl<'e> Gen<'e> {
                 let u = self.need_reg(st, gn, 4)?;
                 let xv = self.need_reg(st, hn, 4)?;
                 let op = self.mk("bits_and", vec![lit(32), u.clone(), xv.clone()]);
-                let r = self.value_comm(&op);
-                let hr = self.comm_premise(&r, &op);
+                let (r, hr) = self.result(&op)?;
                 let tr = self.step("and32_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
@@ -1037,8 +1005,7 @@ impl<'e> Gen<'e> {
                     let cn = self.hkey(dn);
                     let (_, hs2, hk) = self.hkeep(st, cn, n);
                     let op = self.mk("bits_add", vec![lit(8 * n), u.clone(), v.clone()]);
-                    let r = self.value_comm(&op);
-                    let hr = self.comm_premise(&r, &op);
+                    let (r, hr) = self.result(&op)?;
                     let rule = if n == 8 { "add64_home_r" } else { "add32_home_r" };
                     let tr = self.step(rule, a, insn, &[&d, &lit(cn), &x[1], &v, &u, &r], self.tail_h(st, insn, &hs2, 9, vec![hr, p(hk.clone())]));
                     let st2 = self.set_home(st, a2, cn, n, r);
@@ -1063,16 +1030,14 @@ impl<'e> Gen<'e> {
                 let (tr, r) = if n == 4 {
                     // (the sum as the spec orders it)
                     let op = self.mk("bits_add", vec![lit(32), u.clone(), xv.clone()]);
-                    let r = self.value_comm(&op);
-                    let hr = self.comm_premise(&r, &op);
+                    let (r, hr) = self.result(&op)?;
                     let tr = self.step("add32_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
                     (tr, r)
                 } else {
-                    let r = self.value_comm(&self.mk("bits_add", vec![lit(64), u.clone(), xv.clone()]));
-                    let tr = self.step("add64_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 8, vec![]));
+                    let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), xv.clone()]))?;
+                    let tr = self.step("add64_rr", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr]));
                     (tr, r)
                 };
-                let r = self.value(&r);
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, n, r);
                 self.then(tr, st2)
@@ -1089,9 +1054,8 @@ impl<'e> Gen<'e> {
                     return Ok(pf);
                 }
                 let u = self.need_reg(st, 0, 8)?;
-                let tr = self.step("add64_rax_imm", a, insn, &[&x[1], &lit(kk), &u], self.tail(st, insn, 5, vec![]));
-                let r = self.mk("bits_add", vec![lit(64), u, lit(kk)]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), lit(kk)]))?;
+                let tr = self.step("add64_rax_imm", a, insn, &[&x[1], &lit(kk), &u, &r], self.tail(st, insn, 5, vec![hr]));
                 self.scratch.insert(0);
                 let st2 = self.set_reg(st, a2, 0, 8, r);
                 self.then(tr, st2)
@@ -1125,9 +1089,8 @@ impl<'e> Gen<'e> {
                     let gn = reg(&g)?;
                     let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
                     let k = x[4].clone();
-                    let tr = self.step("and32_imm32", a, insn, &[&g, &x[3], &k, &lit(n), &u], self.tail(st, insn, 5, vec![]));
-                    let r = self.mk("bits_and", vec![lit(32), self.mk("bits_slice", vec![u, lit(31), lit(0)]), k]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_and", vec![lit(32), self.mk("bits_slice", vec![u.clone(), lit(31), lit(0)]), k.clone()]))?;
+                    let tr = self.step("and32_imm32", a, insn, &[&g, &x[3], &k, &lit(n), &u, &r], self.tail(st, insn, 5, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
@@ -1140,7 +1103,7 @@ impl<'e> Gen<'e> {
                 if nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&x[1]) == Some(7) {
                     let u = home_n(&st.hsm, &d, 8)?;
                     let cn = self.hkey(dn);
-                    let kk = self.imm_form(if imm >= 1 << 31 { imm + (P64 - (1 << 32)) } else { imm }, 64, a2)?;
+                    let kk = lit(if imm >= 1 << 31 { imm + (P64 - (1 << 32)) } else { imm });
                     return self.compare(st, a, a2, insn, "fs64_hi32", &[&d, &lit(cn), &x[4], &kk, &u], 7, Flags::Sub(64, u.clone(), kk.clone()));
                 }
                 if nat(&x[0]) != Some(4) || x[3] != x[2] || nat(&x[1]) != Some(7) {
@@ -1159,7 +1122,7 @@ impl<'e> Gen<'e> {
                     let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;
                     // cmp qword [rsp + d], imm8: the home's word against the immediate
                     if nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&x[1]) == Some(7) {
-                        let kk = self.imm_form(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm }, 64, a2)?;
+                        let kk = lit(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm });
                         let cn = self.hkey(dn);
                         let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
                         return self.compare(st, a, a2, insn, "fs64_hi8", &[&d, &lit(cn), &x[4], &kk, &xv], 7, Flags::Sub(64, xv.clone(), kk.clone()));
@@ -1170,9 +1133,8 @@ impl<'e> Gen<'e> {
                         let cn = self.hkey(dn);
                         let Some((8, u)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
                         let (_, hs2, hk) = self.hkeep(st, cn, 8);
-                        let tr = self.step("add64_home", a, insn, &[&d, &lit(cn), &x[4], &kk, &u], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone())]));
-                        let r = self.mk("bits_add", vec![lit(64), u, kk]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), kk.clone()]))?;
+                        let tr = self.step("add64_home", a, insn, &[&d, &lit(cn), &x[4], &kk, &u, &r], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone()), hr]));
                         let st2 = self.set_home(st, a2, cn, 8, r);
                         return self.then(tr, st2);
                     }
@@ -1186,9 +1148,8 @@ impl<'e> Gen<'e> {
                     return match nat(&x[1]) {
                         Some(0) => {
                             let (_, hs2, hk) = self.hkeep(st, cn, 4);
-                            let tr = self.step("add32_home", a, insn, &[&d, &ck, &x[4], &kk, &u], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone())]));
-                            let r = self.mk("bits_add", vec![lit(32), u, kk]);
-                            let r = self.value(&r);
+                            let (r, hr) = self.result(&self.mk("bits_add", vec![lit(32), u.clone(), kk.clone()]))?;
+                            let tr = self.step("add32_home", a, insn, &[&d, &ck, &x[4], &kk, &u, &r], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone()), hr]));
                             let st2 = self.set_home(st, a2, cn, 4, r);
                             self.then(tr, st2)
                         }
@@ -1240,6 +1201,7 @@ impl<'e> Gen<'e> {
                         let mut r = self.mk("bits_and", vec![lit(8), u.clone(), lit(kk)]);
                         if let (Some(kb), Some(b)) = ((1..8).find(|kb| (1u128 << kb) - 1 == kk), self.app(&self.expand(&u), "bits_of_int", 2).filter(|b| nat(&b[0]) == Some(8)).map(|b| b[1].clone())) {
                             let fd = self.parse(&format!("bits_of_int({kb}, int_mod(int_div({}, int_pow(2, 0)), int_pow(2, {kb})))", self.print(&b)))?;
+                            let fd = self.norm(&fd)?.0;
                             if self.val_of.contains_key(&self.expand(&fd)) {
                                 r = fd;
                             }
@@ -1264,9 +1226,8 @@ impl<'e> Gen<'e> {
                         })();
                         // (a plain mask below 128: the 64-bit and, the upper half cleared)
                         if shape.is_none() && nat(&x[4]).is_some_and(|k| k < 128) {
-                            let tr = self.step("and32_imm_w", a, insn, &[&g, &x[3], &x[4], &u], self.tail(st, insn, 6, vec![]));
-                            let r = self.mk("bits_and", vec![lit(64), u, x[4].clone()]);
-                            let r = self.value(&r);
+                            let (r, hr) = self.result(&self.mk("bits_and", vec![lit(64), u.clone(), x[4].clone()]))?;
+                            let tr = self.step("and32_imm_w", a, insn, &[&g, &x[3], &x[4], &u, &r], self.tail(st, insn, 6, vec![hr]));
                             self.scratch.insert(gn);
                             let st2 = self.set_reg(st, a2, gn, 8, r);
                             return self.then(tr, st2);
@@ -1276,12 +1237,12 @@ impl<'e> Gen<'e> {
                         self.fields.insert((pos, kb, kk));
                         let q = self.canon(&q);
                         let ff = self.field_fact(pos, kb, kk)?;
-                        let tr = self.step("and_field16", a, insn, &[&g, &x[3], &x[4], &lit(kk), &q, &lit(pos), &lit(kb)], self.tail(st, insn, 4, vec![s(&ff), simp_l(), simp_l(), simp_l()]));
                         let r = self.parse(&format!(
                             "bits_of_int({kb}, int_mod(int_div(gimple.bytes_at(app({wn}, \"vm\"), {}, 2), int_pow(2, {pos})), int_pow(2, {kb})))",
                             self.print(&q)
                         ))?;
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&r)?;
+                        let tr = self.step("and_field16", a, insn, &[&g, &x[3], &x[4], &lit(kk), &q, &lit(pos), &lit(kb), &r], self.tail(st, insn, 4, vec![s(&ff), simp_l(), simp_l(), simp_l(), hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         return self.then(tr, st2);
@@ -1293,9 +1254,8 @@ impl<'e> Gen<'e> {
                     if n > 4 {
                         return Err(bad("or r32 of a wider value"));
                     }
-                    let tr = self.step("or32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &lit(n), &u], self.tail(st, insn, 7, vec![]));
-                    let r = self.mk("bits_or", vec![lit(32), u, lit(kk)]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_or", vec![lit(32), u.clone(), lit(kk)]))?;
+                    let tr = self.step("or32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &lit(n), &u, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
@@ -1306,9 +1266,8 @@ impl<'e> Gen<'e> {
                     if n > 4 {
                         return Err(bad("add r32 of a wider value"));
                     }
-                    let tr = self.step("add32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &lit(n), &u], self.tail(st, insn, 7, vec![]));
-                    let r = self.mk("bits_add", vec![lit(32), u, lit(kk)]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_add", vec![lit(32), u.clone(), lit(kk)]))?;
+                    let tr = self.step("add32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &lit(n), &u, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
@@ -1320,9 +1279,8 @@ impl<'e> Gen<'e> {
                     // add r64, imm8: GIMPLE's u + k
                     (8, Some(0)) => {
                         let kk = if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm };
-                        let tr = self.step("add64_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u], self.tail(st, insn, 6, vec![]));
-                        let r = self.mk("bits_add", vec![lit(64), u, lit(kk)]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), lit(kk)]))?;
+                        let tr = self.step("add64_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         self.then(tr, st2)
@@ -1330,19 +1288,17 @@ impl<'e> Gen<'e> {
                     // sub r64, imm8: GIMPLE's p + -k
                     (8, Some(5)) => {
                         let kk = if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm };
-                        let tr = self.step("sub64_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u], self.tail(st, insn, 6, vec![]));
                         let neg = self.mk("bits_neg", vec![lit(64), lit(kk)]);
-                        let r = self.mk("bits_add", vec![lit(64), u, neg]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), neg]))?;
+                        let tr = self.step("sub64_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         self.then(tr, st2)
                     }
                     // and r32, imm8
                     (4, Some(4)) => {
-                        let tr = self.step("and32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u], self.tail(st, insn, 6, vec![]));
-                        let r = self.mk("bits_and", vec![lit(32), u, lit(kk)]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_and", vec![lit(32), u.clone(), lit(kk)]))?;
+                        let tr = self.step("and32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         self.then(tr, st2)
@@ -1350,19 +1306,17 @@ impl<'e> Gen<'e> {
                     // sub r32, imm8 of a 64-bit word: its low half
                     (4, Some(5)) if low_sub => {
                         let (_, w8) = self.reg(st, gn).unwrap();
-                        let tr = self.step("sub32_imm_w", a, insn, &[&g, &x[3], &x[4], &lit(kk), &w8], self.tail(st, insn, 6, vec![]));
-                        let lo = self.mk("bits_of_int", vec![lit(32), w8]);
-                        let r = self.mk("bits_add", vec![lit(32), lo, self.mk("bits_neg", vec![lit(32), lit(kk)])]);
-                        let r = self.value(&r);
+                        let lo = self.mk("bits_of_int", vec![lit(32), w8.clone()]);
+                        let (r, hr) = self.result(&self.mk("bits_add", vec![lit(32), lo, self.mk("bits_neg", vec![lit(32), lit(kk)])]))?;
+                        let tr = self.step("sub32_imm_w", a, insn, &[&g, &x[3], &x[4], &lit(kk), &w8, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         self.then(tr, st2)
                     }
                     (4, Some(5)) => {
-                        let tr = self.step("sub32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u], self.tail(st, insn, 6, vec![]));
                         let neg = self.mk("bits_neg", vec![lit(32), lit(kk)]);
-                        let r = self.mk("bits_add", vec![lit(32), u, neg]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_add", vec![lit(32), u.clone(), neg]))?;
+                        let tr = self.step("sub32_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 4, r);
                         self.then(tr, st2)
@@ -1370,7 +1324,7 @@ impl<'e> Gen<'e> {
                     // cmp r64, imm8: g (u) against kk (for je / jne as GIMPLE
                     // writes it: a negative one bits_neg(64, -k))
                     (8, Some(7)) => {
-                        let kk = self.imm_form(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm }, 64, a2)?;
+                        let kk = lit(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm });
                         self.compare(st, a, a2, insn, "fs64_ri8", &[&g, &x[3], &x[4], &kk, &u], 6, Flags::Sub(64, u.clone(), kk.clone()))
                     }
                     // cmp r32, imm8: g's low 32 bits (u) against kk
@@ -1381,12 +1335,10 @@ impl<'e> Gen<'e> {
                     _ => Err(bad("unknown operation")),
                 }
             }
-            // cmp al, imm8: al (b, rax's low byte) against k (for je / jne as
-            // GIMPLE writes it: a negative byte bits_neg(8, -k))
+            // cmp al, imm8: al (b, rax's low byte) against k
             23 => {
                 let k = nat(&f).ok_or_else(|| bad("an immediate that is not a literal"))?;
-                let cc = self.jcc(a2)?.4;
-                let kk = if k >= 128 && (cc == 4 || cc == 5) { self.mk("bits_neg", vec![lit(8), lit(256 - k)]) } else { lit(k) };
+                let kk = lit(k);
                 let (n, x0, b) = self.low(st, 0, 8)?;
                 self.compare(st, a, a2, insn, "fs8_al", &[&f, &kk, &lit(n), &x0, &b], 6, Flags::Sub(8, b.clone(), kk.clone()))
             }
@@ -1399,9 +1351,8 @@ impl<'e> Gen<'e> {
                 }
                 let (g, hn) = (reg(&x[0])?, reg(&h)?);
                 let u = self.need_reg(st, hn, 4)?;
-                let tr = self.step("movsxd", a, insn, &[&x[0], &h, &x[2], &x[3], &u], self.tail(st, insn, 5, vec![]));
-                let r = self.mk("bits_sext", vec![lit(32), lit(64), u]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), u.clone()]))?;
+                let tr = self.step("movsxd", a, insn, &[&x[0], &h, &x[2], &x[3], &u, &r], self.tail(st, insn, 5, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 8, r);
                 self.then(tr, st2)
@@ -1409,9 +1360,8 @@ impl<'e> Gen<'e> {
             // cdqe
             91 => {
                 let u = self.need_reg(st, 0, 4)?;
-                let tr = self.step("cdqe", a, insn, &[&u], self.tail(st, insn, 3, vec![]));
-                let r = self.mk("bits_sext", vec![lit(32), lit(64), u]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), u.clone()]))?;
+                let tr = self.step("cdqe", a, insn, &[&u, &r], self.tail(st, insn, 3, vec![hr]));
                 self.scratch.insert(0);
                 let st2 = self.set_reg(st, a2, 0, 8, r);
                 self.then(tr, st2)
@@ -1429,9 +1379,8 @@ impl<'e> Gen<'e> {
                     if let (0, Some(idx), Some(k), 0) = (bk, m.get("index").and_then(|i| self.app(i, "some", 1)).map(|i| i[0].clone()), m.get("scale").and_then(nat), d) {
                         let i = reg(&idx)?;
                         let u = self.need_reg(st, i, 4)?;
-                        let tr = self.step("lea32_is", a, insn, &[&x[1], &idx, &lit(k), &x[2], &x[3], &x[4], &u], self.tail(st, insn, 6, vec![]));
-                        let r = self.mk("bits_mul", vec![lit(32), u, lit(k)]);
-                        let r = self.value(&r);
+                        let (r, hr) = self.result(&self.mk("bits_mul", vec![lit(32), u.clone(), lit(k)]))?;
+                        let tr = self.step("lea32_is", a, insn, &[&x[1], &idx, &lit(k), &x[2], &x[3], &x[4], &u, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(g);
                         let st2 = self.set_reg(st, a2, g, 4, r);
                         return self.then(tr, st2);
@@ -1441,16 +1390,9 @@ impl<'e> Gen<'e> {
                     }
                     let bn = reg(&b)?;
                     let (nb, u) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
-                    // (a negative displacement as GIMPLE writes it: bits_neg(32, -d))
-                    let k32 = d % (1 << 32);
-                    let (kk, hk) = if k32 >= 1 << 31 {
-                        (self.mk("bits_neg", vec![lit(32), lit((1 << 32) - k32)]), defs(RP::Arith(vec![]), &["bits_neg", "pow2"]))
-                    } else {
-                        (lit(k32), simp_l())
-                    };
-                    let tr = self.step("lea32_bd", a, insn, &[&x[1], &b, &lit(d), &x[2], &x[3], &x[4], &lit(nb), &u, &kk], self.tail(st, insn, 6, vec![hk]));
-                    let r = self.mk("bits_add", vec![lit(32), u, kk]);
-                    let r = self.value(&r);
+                    let (kk, hk) = (lit(d % (1 << 32)), simp_l());
+                    let (r, hr) = self.result(&self.mk("bits_add", vec![lit(32), u.clone(), kk.clone()]))?;
+                    let tr = self.step("lea32_bd", a, insn, &[&x[1], &b, &lit(d), &x[2], &x[3], &x[4], &lit(nb), &u, &kk, &r], self.tail(st, insn, 6, vec![hk, hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 4, r);
                     return self.then(tr, st2);
@@ -1459,9 +1401,8 @@ impl<'e> Gen<'e> {
                 if let (Some((0, _)), Some(idx), Some(k), Some(0)) = (m.get("base").and_then(|b| self.tag(b)), m.get("index").and_then(|i| self.app(i, "some", 1)).map(|i| i[0].clone()), m.get("scale").and_then(nat), m.get("disp").and_then(nat)) {
                     let i = reg(&idx)?;
                     let (n, u) = self.reg(st, i).ok_or_else(|| bad("an empty index register"))?;
-                    let tr = self.step("lea64_is", a, insn, &[&x[1], &idx, &lit(k), &x[2], &x[3], &x[4], &lit(n), &u], self.tail(st, insn, 6, vec![]));
-                    let r = self.mk("bits_mul", vec![lit(64), u, lit(k)]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_mul", vec![lit(64), u.clone(), lit(k)]))?;
+                    let tr = self.step("lea64_is", a, insn, &[&x[1], &idx, &lit(k), &x[2], &x[3], &x[4], &lit(n), &u, &r], self.tail(st, insn, 6, vec![hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, r);
                     return self.then(tr, st2);
@@ -1475,24 +1416,21 @@ impl<'e> Gen<'e> {
                     let (bn, inn) = (reg(&b)?, reg(&idx)?);
                     let (nb, bv) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
                     let iv = self.need_reg(st, inn, 8)?;
-                    let tr = self.step("lea_bi", a, insn, &[&x[1], &b, &idx, &x[2], &x[3], &x[4], &lit(nb), &bv, &iv], self.tail(st, insn, 8, vec![]));
-                    let r = self.mk("bits_add", vec![lit(64), iv, bv]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]))?;
+                    let tr = self.step("lea_bi", a, insn, &[&x[1], &b, &idx, &x[2], &x[3], &x[4], &lit(nb), &bv, &iv, &r], self.tail(st, insn, 8, vec![hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, r);
                     return self.then(tr, st2);
                 }
-                // lea r64, [b + d]: u + d (a negative d as GIMPLE writes it:
-                // bits_neg(64, -d))
+                // lea r64, [b + d]: u + d
                 if let (Some((2, b)), Some(d), Some(1)) = (m.get("base").and_then(|b| self.tag(b)), m.get("disp").and_then(nat), m.get("scale").and_then(nat)) {
                     let (nb, u) = self.reg(st, reg(&b)?).ok_or_else(|| bad("an empty base register"))?;
                     if nb != 8 {
                         return Err(bad("a base register not holding 64 bits"));
                     }
-                    let dd = if d >= 1 << 63 { self.mk("bits_neg", vec![lit(64), lit(P64 - d)]) } else { lit(d) };
-                    let tr = self.step("lea64_bd", a, insn, &[&x[1], &b, &lit(d), &dd, &x[2], &x[3], &x[4], &u], self.tail(st, insn, 7, vec![]));
-                    let r = self.mk("bits_add", vec![lit(64), u, dd]);
-                    let r = self.value(&r);
+                    let dd = lit(d);
+                    let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), dd.clone()]))?;
+                    let tr = self.step("lea64_bd", a, insn, &[&x[1], &b, &lit(d), &dd, &x[2], &x[3], &x[4], &u, &r], self.tail(st, insn, 7, vec![hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, r);
                     return self.then(tr, st2);
@@ -1536,9 +1474,10 @@ impl<'e> Gen<'e> {
                     let (n, b) = self.reg(st, hn).ok_or_else(|| bad("an empty register"))?;
                     // (a word, the spec masking it: u & 255)
                     let masked = self.mk("bits_and", vec![lit(32), b.clone(), lit(255)]);
-                    if n > 1 && n <= 4 && matches!(self.canon(&masked).node(), Node::Var(..)) {
-                        let r = self.canon(&masked);
-                        let tr = self.step("movzx8_rrm", a, insn, &[&x[1], &h, &x[4], &lit(n), &b], self.tail(st, insn, 7, vec![]));
+                    let nm = self.norm(&masked)?.0;
+                    if n > 1 && n <= 4 && matches!(nm.node(), Node::Var(..)) {
+                        let (r, hr) = self.result(&masked)?;
+                        let tr = self.step("movzx8_rrm", a, insn, &[&x[1], &h, &x[4], &lit(n), &b, &r], self.tail(st, insn, 7, vec![hr]));
                         self.scratch.insert(g);
                         let st2 = self.set_reg(st, a2, g, 4, r);
                         return self.then(tr, st2);
@@ -1560,9 +1499,9 @@ impl<'e> Gen<'e> {
                     let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let biga = (a2 + d) % P64;
                     let hc = self.static_hyp(st, biga, false)?;
-                    let tr = self.step("movzx8_rip", a, insn, &[&x[1], &lit(d), &x[4], &lit(biga)], self.tail(st, insn, 4, vec![simp_lw(vec![R::S(hc.clone())])]));
                     let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), {biga}, 1))"))?;
-                    let v = self.value(&v);
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step("movzx8_rip", a, insn, &[&x[1], &lit(d), &x[4], &lit(biga), &v], self.tail(st, insn, 4, vec![simp_lw(vec![R::S(hc.clone())]), hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 1, v);
                     return self.then(tr, st2);
@@ -1573,9 +1512,9 @@ impl<'e> Gen<'e> {
                     let bp = self.need_reg(st, bn, 8)?;
                     // (defined for reading, or for the spec's store there)
                     let (hc, wt) = self.mem_hyp_rw(st, &bp, &d, 1)?;
-                    let tr = self.step("movzx8_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt], self.tail(st, insn, 6, vec![s(&hc)]));
                     let v = self.parse(&format!("bits_of_int(8, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 1))", self.print(&bp), self.print(&d)))?;
-                    let v = self.value(&v);
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step("movzx8_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt, &v], self.tail(st, insn, 6, vec![s(&hc), hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 1, v);
                     return self.then(tr, st2);
@@ -1591,18 +1530,16 @@ impl<'e> Gen<'e> {
                     let Some(hc) = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()) else {
                         // (the spec's byte at the address computed otherwise)
                         let (ad, hc, heq) = self.byte_hyp_eq(st, &bv)?;
-                        let tr = self.step("movzx8_beq", a, insn, &[&x[1], &b, &x[4], &bv, &ad], self.tail(st, insn, 5, vec![s(&heq), taut(vec![R::S(hc)])]));
                         let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
-                        let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, ad, lit(1)])]);
-                        let by = self.value(&by);
+                        let (by, hr) = self.result(&self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, ad.clone(), lit(1)])]))?;
+                        let tr = self.step("movzx8_beq", a, insn, &[&x[1], &b, &x[4], &bv, &ad, &by], self.tail(st, insn, 5, vec![s(&heq), taut(vec![R::S(hc)]), hr]));
                         self.scratch.insert(g);
                         let st2 = self.set_reg(st, a2, g, 1, by);
                         return self.then(tr, st2);
                     };
-                    let tr = self.step("movzx8_b", a, insn, &[&x[1], &b, &x[4], &bv], self.tail(st, insn, 5, vec![taut(vec![R::S(hc.clone())])]));
                     let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
-                    let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, bv, lit(1)])]);
-                    let by = self.value(&by);
+                    let (by, hr) = self.result(&self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, bv.clone(), lit(1)])]))?;
+                    let tr = self.step("movzx8_b", a, insn, &[&x[1], &b, &x[4], &bv, &by], self.tail(st, insn, 5, vec![taut(vec![R::S(hc.clone())]), hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 1, by);
                     return self.then(tr, st2);
@@ -1614,18 +1551,16 @@ impl<'e> Gen<'e> {
                 let (bn, inn) = (reg(&b)?, reg(&i)?);
                 let (nb, bv) = self.reg(st, bn).ok_or_else(|| format!("{:x}: register {} holds no value of the procedure", a, bn))?;
                 let iv = self.need_reg(st, inn, 8)?;
-                let ad = self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]);
-                let ad = self.canon(&ad);
+                let (ad, had) = self.result(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]))?;
                 let cond = self.ld8_cond(&ad);
                 let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
                     let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
                     let vals: Vec<String> = self.vals.iter().map(|(v, tr)| format!("{} = {}", self.env.vars[*v as usize].name, self.print(tr))).collect();
                     format!("{:x}: a byte load at {} the spec does not load (the facts: {}; the values: {})", a, self.print(&ad), facts.join(", "), vals.join(", "))
                 })?;
-                let tr = self.step("movzx8_ld", a, insn, &[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv], self.tail(st, insn, 8, vec![taut(vec![R::S(hc.clone())])]));
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
-                let by = self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, ad, lit(1)])]);
-                let by = self.value(&by);
+                let (by, hr) = self.result(&self.mk("bits_of_int", vec![lit(8), self.mk("gimple.bytes_at", vec![vm, ad.clone(), lit(1)])]))?;
+                let tr = self.step("movzx8_ld", a, insn, &[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv, &ad, &by], self.tail(st, insn, 8, vec![had, taut(vec![R::S(hc.clone())]), hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 1, by);
                 self.then(tr, st2)
@@ -1670,11 +1605,11 @@ impl<'e> Gen<'e> {
                 let (bn, inn) = (reg(&b)?, reg(&i)?);
                 let (nb, bv) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
                 let iv = self.need_reg(st, inn, 8)?;
-                let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
+                let (ad, had) = self.result(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]))?;
                 let hc = self.mem_hyp(st, &ad, &lit(0), 2)?;
-                let tr = self.step("movzx16_ld", a, insn, &[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv], self.tail(st, insn, 8, vec![s(&hc)]));
                 let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app({wn}, \"vm\"), {}, 2))", self.print(&ad)))?;
-                let v = self.value(&v);
+                let (v, hr) = self.result(&v)?;
+                let tr = self.step("movzx16_ld", a, insn, &[&x[1], &b, &i, &x[4], &lit(nb), &bv, &iv, &ad, &v], self.tail(st, insn, 8, vec![had, s(&hc), hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 2, v);
                 self.then(tr, st2)
@@ -1686,9 +1621,8 @@ impl<'e> Gen<'e> {
                 // and ax, imm16 (rax holding a 16-bit value)
                 if nat(&x[0]) == Some(2) {
                     let (n, u) = self.reg(st, 0).ok_or_else(|| bad("an empty register"))?;
-                    let tr = self.step("and16_ax", a, insn, &[&x[1], &lit(n), &u], self.tail(st, insn, 5, vec![]));
-                    let r = self.mk("bits_and", vec![lit(16), u, x[1].clone()]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_and", vec![lit(16), u.clone(), x[1].clone()]))?;
+                    let tr = self.step("and16_ax", a, insn, &[&x[1], &lit(n), &u, &r], self.tail(st, insn, 5, vec![hr]));
                     self.scratch.insert(0);
                     let st2 = self.set_reg(st, a2, 0, 2, r);
                     return self.then(tr, st2);
@@ -1699,9 +1633,8 @@ impl<'e> Gen<'e> {
                         return Ok(pf);
                     }
                     let u = self.need_reg(st, 0, 4)?;
-                    let tr = self.step("and32_imm_ax", a, insn, &[&x[1], &u], self.tail(st, insn, 4, vec![]));
-                    let r = self.mk("bits_and", vec![lit(32), u, x[1].clone()]);
-                    let r = self.value(&r);
+                    let (r, hr) = self.result(&self.mk("bits_and", vec![lit(32), u.clone(), x[1].clone()]))?;
+                    let tr = self.step("and32_imm_ax", a, insn, &[&x[1], &u, &r], self.tail(st, insn, 4, vec![hr]));
                     self.scratch.insert(0);
                     let st2 = self.set_reg(st, a2, 0, 4, r);
                     return self.then(tr, st2);
@@ -1711,11 +1644,9 @@ impl<'e> Gen<'e> {
                 }
                 let u = self.need_reg(st, 0, 8)?;
                 let kk64 = if k >= 1 << 31 { k + 0xffff_ffff_0000_0000 } else { k };
-                // (a negative immediate as GIMPLE writes it: bits_neg(64, -k))
-                let kk = if kk64 >= 1 << 63 { self.mk("bits_neg", vec![lit(64), lit(P64 - kk64)]) } else { lit(kk64) };
-                let tr = self.step("and64_imm", a, insn, &[&x[1], &kk, &u], self.tail(st, insn, 5, vec![]));
-                let r = self.mk("bits_and", vec![lit(64), u, kk]);
-                let r = self.value(&r);
+                let kk = lit(kk64);
+                let (r, hr) = self.result(&self.mk("bits_and", vec![lit(64), u.clone(), kk.clone()]))?;
+                let tr = self.step("and64_imm", a, insn, &[&x[1], &kk, &u, &r], self.tail(st, insn, 5, vec![hr]));
                 self.scratch.insert(0);
                 let st2 = self.set_reg(st, a2, 0, 8, r);
                 self.then(tr, st2)
@@ -1751,9 +1682,8 @@ impl<'e> Gen<'e> {
                     return Err(bad("a high byte register"));
                 }
                 let b = self.need_reg(st, hn, 1)?;
-                let tr = self.step("movsx8", a, insn, &[&x[1], &h, &x[4], &b], self.tail(st, insn, 6, vec![]));
-                let r = self.mk("bits_sext", vec![lit(8), lit(32), b]);
-                let r = self.value(&r);
+                let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(8), lit(32), b.clone()]))?;
+                let tr = self.step("movsx8", a, insn, &[&x[1], &h, &x[4], &b, &r], self.tail(st, insn, 6, vec![hr]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
@@ -1818,6 +1748,7 @@ impl<'e> Gen<'e> {
                 if x[1] != x[0] {
                     return Err(bad("not mov byte [m], imm8"));
                 }
+                let mut extra = vec![];
                 let (rule, terms, n, ad) = if bk == 1 {
                     let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let biga = lit((a2 + d) % P64);
@@ -1837,8 +1768,9 @@ impl<'e> Gen<'e> {
                     let (bn, inn) = (reg(&b)?, reg(&i)?);
                     let (nb, bv) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
                     let iv = self.need_reg(st, inn, 8)?;
-                    let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
-                    ("store8i_bi", vec![b.clone(), i.clone(), k.clone(), lit(nb), bv, iv], 9, ad)
+                    let (ad, had) = self.result(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]))?;
+                    extra.push(had);
+                    ("store8i_bi", vec![b.clone(), i.clone(), k.clone(), lit(nb), bv, iv, ad.clone()], 9, ad)
                 };
                 let (hc, v, st2, red, sa) = self.spec_store(st, &ad, 1)?;
                 if self.eval_lit(&v) != nat(&k) {
@@ -1846,7 +1778,7 @@ impl<'e> Gen<'e> {
                 }
                 let _ = &sa;
                 let tr: Vec<&Term> = terms.iter().collect();
-                let tr = self.step(rule, a, insn, &tr, self.tail_s(st, &st2, insn, n, vec![], &hc, &red));
+                let tr = self.step(rule, a, insn, &tr, self.tail_s(st, &st2, insn, n, extra, &hc, &red));
                 let mut st3 = st2;
                 st3.a = a2;
                 self.then(tr, st3)
@@ -1865,6 +1797,7 @@ impl<'e> Gen<'e> {
                 let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
                 // (the address: a static's, or b + i; the rule's terms and
                 // its literal facts' count)
+                let mut hads = vec![];
                 let (rule, terms, nlit, ad) = if bk == 1 {
                     let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let biga = lit((a2 + d) % P64);
@@ -1887,8 +1820,9 @@ impl<'e> Gen<'e> {
                     let (bn, inn) = (reg(&b)?, reg(&i)?);
                     let (nb, bv) = self.reg(st, bn).ok_or_else(|| bad("an empty base register"))?;
                     let iv = self.need_reg(st, inn, 8)?;
-                    let ad = self.canon(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]));
-                    ("store8_bi", vec![g.clone(), b.clone(), i.clone(), x[0].clone(), x[1].clone(), lit(nb), bv, iv, lit(n), u.clone()], 12, ad)
+                    let (ad, had) = self.result(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]))?;
+                    hads.push(had);
+                    ("store8_bi", vec![g.clone(), b.clone(), i.clone(), x[0].clone(), x[1].clone(), lit(nb), bv, iv, ad.clone(), lit(n), u.clone()], 12, ad)
                 };
                 let w0 = st.w.clone();
                 let (hc, v, st2, red, sa, so) = self.spec_store_x(st, Some(&ad), Some(1))?;
@@ -1929,7 +1863,9 @@ impl<'e> Gen<'e> {
                 if rule == "store8_rip" {
                     terms.push(&ad);
                 }
-                let tr = self.step(rule, a, insn, &terms, self.tail_s(st, &st2, insn, nlit, vec![lp], &hc, &red));
+                let mut extra = vec![lp];
+                extra.extend(hads);
+                let tr = self.step(rule, a, insn, &terms, self.tail_s(st, &st2, insn, nlit, extra, &hc, &red));
                 let mut st3 = st2;
                 st3.a = a2;
                 self.then(tr, st3)
@@ -2078,14 +2014,12 @@ impl<'e> Gen<'e> {
             // mov dword [rsp + d], imm32: the home d := k (the frame written)
             77 => {
                 let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
-                // mov r64, simm32: the constant as GIMPLE writes it (a
-                // negative one bits[64](-k): bits_of_int(64, int_neg(k)))
+                // mov r64, simm32: the constant sign-extended (its numeral, N)
                 if let (Some(8), Some((0, g))) = (nat(&x[0]), self.tag(&x[1])) {
                     let gn = reg(&g)?;
                     let k = nat(&x[3]).ok_or_else(|| bad("an immediate that is not a literal"))?;
-                    let kk = if k >= 1 << 31 { self.mk("bits_of_int", vec![lit(64), self.mk("int_neg", vec![lit((1 << 32) - k)])]) } else { lit(k) };
-                    let tr = self.step("mov64_simm", a, insn, &[&g, &x[2], &x[3], &kk], self.tail(st, insn, 4, vec![]));
-                    let kk = self.value(&kk);
+                    let (kk, hkk) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), lit(k)]))?;
+                    let tr = self.step("mov64_simm", a, insn, &[&g, &x[2], &x[3], &kk], self.tail(st, insn, 3, vec![hkk]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, kk);
                     return self.then(tr, st2);
@@ -2121,18 +2055,6 @@ impl<'e> Gen<'e> {
                 Err(bad("no rule for the instruction"))
             }
         }
-    }
-
-    /// a compare's immediate k (a w-bit word): for je / jne, a negative one
-    /// as GIMPLE writes it, bits_neg(w, -k)
-    fn imm_form(&self, k: u128, w: u128, a2: u128) -> Result<Term, String> {
-        let cc = self.jcc(a2)?.4;
-        let top = 1u128 << (w - 1);
-        if k >= top && (cc == 4 || cc == 5) {
-            let m = if w == 128 { 0u128.wrapping_sub(k) } else { (1u128 << w) - k };
-            return Ok(self.mk("bits_neg", vec![lit(w), lit(m)]));
-        }
-        Ok(lit(k))
     }
 
     /// A bitfield store's merged word (k bits at bit pos of the n bytes at
