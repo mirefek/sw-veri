@@ -302,6 +302,16 @@ item is a short summary of finished work; details are in the files named.
   map's innermost scope). All 214 C1 theorems on the CFG (111 s); the
   spec's projections of constructed tuples reduced in one step
   (`tr.q_same`: the structured walk's 214 from 1.2 GB to 770 MB).
+- **The CFG form refines the structured form** (`refines NAME LOW HIGH`,
+  `slc/cli/src/c1/gref.rs`, `proofs/gimple_cfg.core`,
+  `proofs/mallocng_cfg.core`): per point (a label and its structured
+  remainder) the CFG's block walked beside the remainder by congruence
+  (`g.ref_op` / `g.ref_if` / `g.ref_ifn` / `g.ref_any`), each side's own
+  steps by determined lemmas, the CFG-layer callees by the structured
+  layer's (`g.low_op`), the loop by `g.cfg_ref` with a rank. 20 loop-free
+  functions (get_meta: 28 points, ~40 s); get_stride, a_ctz_32, dequeue,
+  set_size and get_slot_index composed machine ⊑ CFG ⊑ structured ⊑ spec
+  (`tr.implements_refine` twice).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is
