@@ -958,15 +958,20 @@ impl<'e> Gen<'e> {
                 cands.push((sp[0].clone(), sp[1].clone()));
             }
         }
+        let mut tried = Vec::new();
         for (pp, off) in cands {
             let cond = self.mem_defined(&st.w, &pp, &off, n, false);
-            let Some(hf) = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()) else { continue };
+            let Some(hf) = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()) else {
+                tried.push(format!("{} + {}: no definedness fact", self.print(&pp), self.print(&off)));
+                continue;
+            };
             let ad = self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]);
-            if let Ok(q) = self.addr_eq(st, ea, &ad) {
-                return Ok((pp, off, hf, q));
+            match self.addr_eq(st, ea, &ad) {
+                Ok(q) => return Ok((pp, off, hf, q)),
+                Err(e) => tried.push(format!("{} = {}: {}", self.print(&ad), self.print(&self.expand(&ad)), e.lines().next().unwrap_or(""))),
             }
         }
-        Err(format!("{:x}: a load of {} bytes at {} the spec does not make", st.a, n, self.print(ea)))
+        Err(format!("{:x}: a load of {} bytes at {} = {} the spec does not make (tried: {})", st.a, n, self.print(ea), self.print(&self.expand(ea)), tried.join("; ")))
     }
 
     /// an equation of two addresses by arith, from the facts in scope (the

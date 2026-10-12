@@ -1699,11 +1699,16 @@ impl<'e> Gen<'e> {
                 Some(x) => x[0].clone(),
                 None => self.mk("not", vec![cond.clone()]),
             };
-            // (or a literal comparison false: by simp)
+            // (or a literal comparison false: by simp; a closed condition
+            // false: by its negation evaluated)
             let lit_false = self.lit_value(&self.canon(&cond)) == Some(false);
+            let closed_false = if lit_false { None } else { self.eval_closed(&opp) };
             let body = if let Some(h) = self.hyp_find(&st.hyps, &opp) {
                 let goal = self.pt(&st2, to);
                 self.evp(&RP::Taut(vec![R::S(hn), R::S(h.1.clone())]), &goal, &[])?
+            } else if let Some(o) = closed_false {
+                let goal = self.pt(&st2, to);
+                self.evp(&RP::Taut(vec![R::S(hn), R::S(o)]), &goal, &[])?
             } else if lit_false {
                 let goal = self.pt(&st2, to);
                 self.evp(&RP::Simp(false, vec![R::S(hn)], vec![], false), &goal, &[])?
@@ -1717,6 +1722,20 @@ impl<'e> Gen<'e> {
         let fb = bs.pop().unwrap();
         let tb = bs.pop().unwrap();
         self.run(&rule, &[("T", tb), ("F", fb)])
+    }
+
+    /// a closed condition (no variables) true by evaluation: its proof
+    fn eval_closed(&self, c: &Term) -> Option<Seq> {
+        let e = self.expand(c);
+        let mut vs = Vec::new();
+        e.vars(&mut vs);
+        if !vs.is_empty() || e.loose_depth(&self.env.binders_fn()) > 0 {
+            return None;
+        }
+        let lg = &self.api.as_ref()?.lg;
+        let r = Seq::eval_goal(self.env, lg, &[], &e);
+        self.trace(|| format!("eval_closed {}: {}", self.print(&e), r.as_ref().map(|_| "true".to_string()).unwrap_or_else(|x| x.0.clone())));
+        r.ok()
     }
 
     /// a condition's value where it is a comparison of literals (or of a

@@ -10,7 +10,8 @@
 //!   kernel's evaluation);
 //! - a cast of a word of its width (or narrower): the word (`nf.boi_in`,
 //!   the word's width by its operation's `*_in` lemma, `nf.bits_le`);
-//! - a shift by a literal: a product by 2^k (`nf.shl_mul`);
+//! - a shift by a literal: a product by 2^k (`nf.shl_mul`); a value added
+//!   to itself: twice it (`nf.add_self`);
 //! - a commutative operation: its operands in one order, literals last
 //!   (`nf.add_comm`, `x86.mul_comm`, `x86.and_comm`, `nf.or_comm`,
 //!   `x86i.xor_comm`).
@@ -233,6 +234,11 @@ impl<'e> Gen<'e> {
             let e = self.run(&r, &[])?;
             let next = self.mk("bits_mul", vec![a[0].clone(), a[1].clone(), self.mk("pow2", vec![a[2].clone()])]);
             return Ok(Some((next, e)));
+        }
+        // a value added to itself: twice it
+        if name == "bits_add" && a.len() == 3 && a[1] == a[2] {
+            let e = self.run(&R::Inst("nf.add_self".into(), vec![("n", a[0].clone()), ("x", a[1].clone())]), &[])?;
+            return Ok(Some((self.mk("bits_mul", vec![a[0].clone(), a[1].clone(), lit(2)]), e)));
         }
         // a commutative operation: its operands ordered
         if let Some((_, lemma)) = COMM.iter().find(|c| c.0 == name) {

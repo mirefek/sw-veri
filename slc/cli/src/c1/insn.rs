@@ -2071,7 +2071,7 @@ impl<'e> Gen<'e> {
         // (the field as the machine has it: shifted to pos, under its masks
         // in u -- its bits the spec's, by arith modulo 2^k)
         let old1 = self.mk("gimple.bytes_at", vec![self.mk("app", vec![w.clone(), Term::bytes(b"vm")]), a.clone(), lit(1)]);
-        let fm = self.bf_field(&self.expand(u), &self.expand(&old1), pos, k).ok_or_else(|| format!("{:x}: a bitfield's merge {} not read", st.a, self.print(&self.expand(u))))?;
+        let fm = self.bf_field(&self.expand(u), &[self.expand(&old1), self.expand(&old)], pos, k).ok_or_else(|| format!("{:x}: a bitfield's merge {} not read", st.a, self.print(&self.expand(u))))?;
         let mk_mod = |g: &Gen, x: &Term| g.mk("int_mod", vec![x.clone(), g.mk("pow2", vec![k.clone()])]);
         let hm = self.arith_gen(&self.mk("eq", vec![mk_mod(self, fv), mk_mod(self, &fm)]), &["bits_add", "bits_of_int", "bits_neg", "bits_slice", "pow2"])?;
         // (H * 2^k + F) * 2^pos + L
@@ -2097,14 +2097,14 @@ impl<'e> Gen<'e> {
         Ok(p(mpf("tr.bf_val", vec![t(&old), t(pos), t(k), t(fv), t(&fm), t(low), s(&oo), lt64, simp_l(), simp_l(), simp_l(), s(&hm), s(&m)])))
     }
 
-    /// a merge's field (k bits at pos): of its `or`, the operand without
-    /// the old bytes (their first, `old1`), below its shift by pos and its
-    /// `and`s with 2^k - 1 (a literal: shifted down); no `or` -- the field
-    /// cleared: 0
-    fn bf_field(&self, u: &Term, old1: &Term, pos: &Term, k: &Term) -> Option<Term> {
+    /// a merge's field (k bits at pos): of its `or` (operands in N's order),
+    /// the operand without the old bytes (their first, or all n: `olds`),
+    /// below its shift by pos and its `and`s with 2^k - 1 (a literal:
+    /// shifted down); no `or` -- the field cleared: 0
+    fn bf_field(&self, u: &Term, olds: &[Term], pos: &Term, k: &Term) -> Option<Term> {
         let (ps, mask) = (nat(pos)?, (1u128 << nat(k)?) - 1);
         let Some(o) = self.app(u, "bits_or", 3).map(|o| o.to_vec()) else { return Some(lit(0)) };
-        let x = [&o[2], &o[1]].into_iter().find(|x| !self.mentions(x, old1))?.clone();
+        let x = [&o[2], &o[1]].into_iter().find(|x| !olds.iter().any(|old| self.mentions(x, old)))?.clone();
         if let Some(c) = nat(&x) {
             return (c % (1u128 << ps) == 0).then(|| lit(c >> ps));
         }
