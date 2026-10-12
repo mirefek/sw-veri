@@ -463,10 +463,17 @@ impl<'e> Gen<'e> {
             // cmp ax / eax, imm16 / imm32: rax's low bits (u) against k
             58 => {
                 let x = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
+                // cmp rax, imm32: rax against the immediate sign-extended
+                if nat(&x[0]) == Some(8) {
+                    let imm = nat(&x[1]).ok_or_else(|| bad("an immediate that is not a literal"))?;
+                    let (n, u) = self.reg(st, 0).ok_or_else(|| bad("rax holds no value of the procedure"))?;
+                    let kk = lit(if imm >= 1 << 31 { imm + (P64 - (1 << 32)) } else { imm });
+                    return self.compare(st, a, a2, insn, "fs64_rax", &[&x[1], &kk, &lit(n), &u], 5, Flags::Sub(64, u.clone(), kk.clone()));
+                }
                 let (fs, w) = match nat(&x[0]) {
                     Some(2) => ("fs16_ax", 16),
                     Some(4) => ("fs32_eax", 32),
-                    _ => return Err(bad("not cmp ax / eax, imm")),
+                    _ => return Err(bad("not cmp ax / eax / rax, imm")),
                 };
                 let (n, x0, u) = self.low(st, 0, w)?;
                 let k = x[1].clone();
@@ -697,6 +704,10 @@ impl<'e> Gen<'e> {
                     if let (Some((2, b)), Some(ix)) = (self.tag(&m["base"]), self.app(&m["index"], "some", 1).map(|y| y[0].clone())) {
                         if nat(&m["scale"]) == Some(1) && nat(&m["disp"]) == Some(0) {
                             let (bv, iv) = (self.need_reg(st, reg(&b)?, 8)?, self.need_reg(st, reg(&ix)?, 8)?);
+                            // (a 4-byte value zero-extended: the register's 8 bytes)
+                            if let Some(pf) = self.widen(st, g, 8)? {
+                                return Ok(pf);
+                            }
                             let u = self.need_reg(st, g, 8)?;
                             let (hc, v, st2, red, _, so) = self.spec_store_x(st, None, Some(8))?;
                             // (the spec's value: the same normal form)
@@ -720,6 +731,10 @@ impl<'e> Gen<'e> {
                 // mov [b + d], r64 (b holding a pointer): the spec's 8-byte field store
                 if let (Some((bn, b, d)), Some(8)) = (self.base_disp(&x[2]).filter(|z| z.0 != 4), nat(&x[0])) {
                     let bv = self.need_reg(st, bn, 8)?;
+                    // (a 4-byte value zero-extended: the register's 8 bytes)
+                    if let Some(pf) = self.widen(st, g, 8)? {
+                        return Ok(pf);
+                    }
                     let u = self.need_reg(st, g, 8)?;
                     let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
                     let w0 = st.w.clone();
@@ -745,6 +760,10 @@ impl<'e> Gen<'e> {
                 if let (Some(m), Some(8)) = (self.memop(&x[2]).filter(|m| self.tag(&m["base"]).is_some_and(|b| b.0 == 1)), nat(&x[0])) {
                     let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let biga = lit((a2 + d) % P64);
+                    // (a 4-byte value zero-extended: the register's 8 bytes)
+                    if let Some(pf) = self.widen(st, g, 8)? {
+                        return Ok(pf);
+                    }
                     let u = self.need_reg(st, g, 8)?;
                     let (hc, v, st2, red, _) = self.spec_store(st, &biga, 8)?;
                     if self.canon(&v) != self.canon(&u) {
@@ -808,8 +827,19 @@ impl<'e> Gen<'e> {
                         return self.then(tr, st2);
                     }
                 }
+                // sar dword [rsp + d], 1: the home's value shifted, signed
+                if let (Some(4), Some(7), Some(d)) = (nat(&x[0]), nat(&x[1]), self.rsp_mem(&x[2]).filter(|_| x[2] == x[3])) {
+                    let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let u = home(&st.hsm, &d)?;
+                    let cn = self.hkey(dn);
+                    let (_, hs2, hk) = self.hkeep(st, cn, 4);
+                    let (r, hr) = self.result(&self.mk("bits_sar", vec![lit(32), u.clone(), lit(1)]))?;
+                    let tr = self.step("sar32_1_home", a, insn, &[&d, &lit(cn), &u, &r], self.tail_h(st, insn, &hs2, 6, vec![p(hk.clone()), hr]));
+                    let st2 = self.set_home(st, a2, cn, 4, r);
+                    return self.then(tr, st2);
+                }
                 if nat(&x[0]) != Some(4) || nat(&x[1]) != Some(5) || x[2] != x[3] {
-                    return Err(bad("not shr r/m32, 1"));
+                    return Err(bad("not shr / sar r/m32, 1"));
                 }
                 if let Some(d) = self.rsp_mem(&x[2]) {
                     let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;

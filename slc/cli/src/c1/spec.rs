@@ -226,6 +226,51 @@ impl<'e> Gen<'e> {
 
     /// A projection of a constructed outcome (or pair) in the rest's body
     /// (of x0 only): its lemma, and its parts (at the body)
+    /// t with its projections of constructed pairs and outcomes taken
+    /// (`fst(pair(a, b))` a, `out_state(ok(s, v))` s, `fst(exc(..))` 1, ..)
+    fn proj_simp(&self, t: &Term, memo: &mut std::collections::HashMap<Term, Term>) -> Term {
+        if let Some(r) = memo.get(t) {
+            return r.clone();
+        }
+        let r = match t.node() {
+            Node::App(_, a) if !a.is_empty() => {
+                let t2 = t.with_args(a.iter().map(|x| self.proj_simp(x, memo)).collect());
+                let one = |f: &str| self.app(&t2, f, 1).map(|x| x[0].clone());
+                let take = || -> Option<Term> {
+                    if let Some(x) = one("fst") {
+                        if let Some(p) = self.app(&x, "pair", 2) {
+                            return Some(p[0].clone());
+                        }
+                        if self.app(&x, "ok", 2).is_some() {
+                            return Some(lit(0));
+                        }
+                        if self.app(&x, "exc", 2).is_some() {
+                            return Some(lit(1));
+                        }
+                        if self.app(&x, "diverge", 1).is_some() {
+                            return Some(lit(2));
+                        }
+                    }
+                    if let Some(x) = one("snd") {
+                        return self.app(&x, "pair", 2).map(|p| p[1].clone());
+                    }
+                    for (f, i) in [("out_state", 0), ("out_value", 1)] {
+                        if let Some(x) = one(f) {
+                            if let Some(o) = self.app(&x, "ok", 2).or_else(|| self.app(&x, "exc", 2)) {
+                                return Some(o[i].clone());
+                            }
+                        }
+                    }
+                    None
+                };
+                take().unwrap_or(t2)
+            }
+            _ => t.clone(),
+        };
+        memo.insert(t.clone(), r.clone());
+        r
+    }
+
     fn redex(&self, t: &Term, depth: u32) -> Option<(&'static str, Term, Term, Term)> {
         let _p = super::prof::g("redex");
         if self.no_redex.borrow().contains(&(t.clone(), depth)) {
@@ -1093,6 +1138,19 @@ impl<'e> Gen<'e> {
             let e2 = self.mk("bits_of_int", vec![lit(n), bytes.clone()]);
             let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", b), ("e", r), ("e2", e2)])?;
             return Ok(Some(Red::Q(j, mp(inst, vec![p(mpf(&format!("tr.bits_field0_{}", n), vec![t(&bytes)])), t(&w)]))));
+        }
+        // the projections of constructed pairs and outcomes, all at once
+        // (one step, the equation by simp: not one redex a step)
+        if self.redex(&body, 0).is_some() {
+            let q2 = self.proj_simp(&q, &mut std::collections::HashMap::new());
+            if q2 != q {
+                let rules = ["fst_pair", "snd_pair", "out_state_ok", "out_value_ok", "out_state_exc", "out_value_exc", "fst_ok", "fst_exc", "fst_diverge"];
+                let eq = self.mk("eq", vec![q.clone(), q2.clone()]);
+                if let Ok(pf) = self.evp(&RP::Simp(false, rules.iter().map(|r| f(r)).collect(), vec![], false), &eq, &[]) {
+                    let (j, inst) = self.by(qi, "tr.q_same", &[("q", q.clone()), ("q2", q2)])?;
+                    return Ok(Some(Red::Q(j, mp(inst, vec![s(&pf), t(&w)]))));
+                }
+            }
         }
         // a projection of a constructed outcome
         if let Some((lemma, r, st, vv)) = self.redex(&body, 0) {

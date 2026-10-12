@@ -351,8 +351,10 @@ impl<'e> Gen<'e> {
             *self.spent_now.borrow_mut() = st.spent.iter().map(|&i| self.expand(&st.hyps[i].0)).collect();
             self.picked.borrow_mut().clear();
             // (a block's end where paths meet: the rest's claim proven once)
-            if let Some(pf) = self.stmt_join(&st)? {
-                return Ok(pf);
+            if self.cfg_meta.is_none() {
+                if let Some(pf) = self.stmt_join(&st)? {
+                    return Ok(pf);
+                }
             }
             match self.reduce(qi, &st.hyps)? {
                 Some(Red::Q(j, r)) => {
@@ -474,8 +476,10 @@ impl<'e> Gen<'e> {
             }
             // (the spec waiting for the machine's branch on its `if`: the
             // block, proven on its own, the rest from its end)
-            if let Some(pf) = self.block_point(&st)? {
-                return Ok(pf);
+            if self.cfg_meta.is_none() {
+                if let Some(pf) = self.block_point(&st)? {
+                    return Ok(pf);
+                }
             }
         }
         self.insn(st)
@@ -892,6 +896,16 @@ impl<'e> Gen<'e> {
             let pr = self.app(&e[1], "pair", 2)?;
             Some((pr[0].clone(), pr[1].clone(), o[1].clone()))
         })();
+        // (a CFG's cut points, at the frame: `tr.cut(s, fr, ct, z) || ..`)
+        let cut = (|| {
+            let o = self.app(bkp, "or", 2)?;
+            let c = self.app(&o[0], "tr.cut", 4)?;
+            matches!(c[3].node(), Node::BVar(0)).then_some(())?;
+            Some((c[0].clone(), c[1].clone(), c[2].clone(), o[1].clone()))
+        })();
+        if let Some((s0, fr, ct, outer)) = cut {
+            return p(R::Mp(Box::new(R::Inst("tr.nobp_cut".into(), vec![("s", s0), ("fr", fr), ("ct", ct), ("bkp", outer.clone())])), vec![self.nobp_below(&outer)]));
+        }
         match hd {
             Some((h, x, outer)) => p(R::Mp(Box::new(R::Inst("tr.nobp_hd".into(), vec![("bkp", outer.clone())])), vec![t(&x), t(&h), self.nobp_below(&outer)])),
             None => simp0(),
@@ -902,6 +916,13 @@ impl<'e> Gen<'e> {
     fn loop_point(&mut self, st: &St) -> Result<Option<Seq>, String> {
         let Spec::Proc(qi) = st.spec else { return Ok(None) };
         if self.loop_head(qi).is_none() {
+            return Ok(None);
+        }
+        // (the readable CFG: its loop at the body's start, by tr.cfg_lvk)
+        if self.cfg_meta.is_some() {
+            if self.cfg.is_none() && st.a == self.cfg_start {
+                return self.cfg_function(st, qi).map(Some);
+            }
             return Ok(None);
         }
         if !self.is_counting_test(st.a) {
@@ -1224,7 +1245,7 @@ impl<'e> Gen<'e> {
 
     /// the loop's claim at its head h for st's locals and world (c0): st's
     /// homes and registers, the claim's and more
-    fn loop_at(&mut self, st: &St, h: u128, c0: Seq) -> Result<Seq, String> {
+    pub(super) fn loop_at(&mut self, st: &St, h: u128, c0: Seq) -> Result<Seq, String> {
         // (the point's homes and registers: the claim's, and more)
         let hs1 = self.app(c0.concl(), "tr.lv", 13).map(|x| x[8].clone()).ok_or("the loop's claim")?;
         let empty = self.mk("empty", vec![]);
@@ -1594,7 +1615,7 @@ impl<'e> Gen<'e> {
     /// a premise that no state there is a breakpoint (an address no loop's
     /// head of the walk; a callee's states, below the frame): by its form
     pub(super) fn nobp(&self) -> RA {
-        defs(RP::Simp(false, vec![], vec![], false), &["tr.hd"])
+        defs(RP::Simp(false, vec![], vec![], false), &["tr.hd", "tr.cut"])
     }
 
     /// the claim reaching st's point (no breakpoint) from the claim leaving it
@@ -1622,6 +1643,16 @@ impl<'e> Gen<'e> {
     pub(super) fn prove_pt(&mut self, st2: St) -> Result<Seq, String> {
         if st2.z.is_some() {
             return self.prove_kept(st2);
+        }
+        // (a CFG walk at a cut point: its arrival)
+        if self.cfg.as_ref().is_some_and(|c| c.cuts.contains(&st2.a)) && self.lpg.as_ref().is_some_and(|l| l.head == u128::MAX) {
+            let c = self.save();
+            let r = self.cfg_arrive(&st2);
+            self.restore(c);
+            match r? {
+                Some(pf) => return Ok(pf),
+                None => return Err(format!("{:x}: a cut point (a block's start), the spec not at a block's end: {}", st2.a, self.print(&self.p(&st2.spec)))),
+            }
         }
         // (back at the head of the loop walked: its arrival)
         if let Some(lg) = self.lpg.clone() {

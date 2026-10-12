@@ -670,7 +670,15 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 let Some(pr) = prover.as_deref_mut() else {
                     return Err(ctx(KernelError("`c1` needs a proof checker".into())));
                 };
-                let ths = pr.c1(p.env, &name, &spec, &prefix, &hints).map_err(ctx)?;
+                // (C1_KEEP_GOING=1, for debugging: a function whose C1
+                // fails reported, its theorems not made, the file going on)
+                let ths = match pr.c1(p.env, &name, &spec, &prefix, &hints) {
+                    Err(e) if std::env::var("C1_KEEP_GOING").is_ok_and(|v| v == "1") => {
+                        eprintln!("C1 failed (going on): {}: {}", name, e.0.lines().next().unwrap_or(""));
+                        continue;
+                    }
+                    r => r.map_err(ctx)?,
+                };
                 rep.c1s.push((line, ths.iter().map(|x| x.0.clone()).collect()));
                 for (n, sq) in ths {
                     if !sq.hyps().is_empty() {

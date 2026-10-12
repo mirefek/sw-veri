@@ -17,37 +17,43 @@ locals, each block's code walked once up to the cut point it goes on at.
 Any control flow (loops in branches, nested loops, gotos, shared tails)
 is blocks and jumps; the check is linear by construction, with no joins.
 
-In place:
-- The readable CFG (`slc gimple --readable --cfg`): `var bb = entry;
-  loop { .. }`, the block found by a tree of comparisons of `bb` (log n
-  of them), each block its statements, then its phis' copies and `bb :=
-  next`, or a `return`. SL's own `loop` and `if`: nothing new trusted.
-  All 34 translatable functions of mallocng's malloc.c (alloc_group
-  included) elaborate and check.
-- The theorem (`proofs/translate_cfg.core`): `tr.cfg_lv`, the claim at
-  every block's entry address `ad(y)` (y the label and the locals, homes
-  `hs(y)`) from each block's claim up to any cut point; from
-  `tr.loop_cut` (`proofs/translate_loop.core`), the loop rule over a set
-  of cut points (`tr.loop` its one-head instance).
+In place (C1 on the CFG: all 214 C1 theorems, 111 s, 2.4 GB; the test
+`c1_cfg_engine_checks`):
+- The readable CFG (`slc gimple --readable --cfg`; `var bb` first among
+  the locals). Blocks with no code of their own written in place: a lone
+  jump's (forwarder) by its target, a returning tail (copies, casts, then
+  `return`) at each jump to it. Per function the guide `F_cfg_live` (each
+  block's live locals) and `F_cfg_widths`.
+- The theorems (`proofs/translate_cfg.core`): `tr.cfg_lvk`, the claim at
+  every label's address `ad(c)` from each label's claim up to any cut
+  point; `tr.pt_cut` the arrival, `tr.nobp_cut` a callee's states.
+- The engine (`slc/cli/src/c1/cfg.rs`): the cut points are the code's
+  blocks' first instructions (not the epilogue, not a lone `jmp`); each
+  label's address found as the walks arrive (`app(AD, c) = a` assumed,
+  AD the table found at the end); each label walked once; its homes the
+  live locals' (a local of several homes -- nested scopes' variables of
+  one name -- the innermost scope's at the address); labels no walk
+  reaches (a constant condition the compiler decided) left out.
 
 Next, in order:
-1. Engine (`slc/cli/src/c1`): a function's claim by `tr.cfg_lv` on the
-   readable CFG. The cut points' addresses: where each block's walk ends
-   (its marked return, `bb := k`), the same on every arrival or the check
-   fails; their homes by the location map. Each block walked once.
-2. Cut-point couplings beyond homes: a value living in a register at a
-   block's entry (a phi's value in eax, `__malloc_allzerop`'s `a || b`):
+1. `alloc_group` on the CFG: its control flow walks (10 labels); next the
+   per-instruction gaps -- 404413, a byte store of `dl` (`tr.store8_b`'s
+   premise); then the rest of its blocks.
+2. Cut-point couplings beyond homes: a value in a register at a block's
+   entry (none in mallocng now, the returning tails written in place);
    the claim with registers per label (tr.lv's `rs`).
 3. The structured readable form as a view of the CFG: compositions
    (proofs/mallocng_compose.core) need machine ⊑ the GIMPLE the C2 proofs
    are about. A generic structuring theorem (a structured function's
    outcomes are its CFG's, where the CFG is reducible) and a linear
    per-function check; or C2 directly on the CFG (item 5).
-4. Switch the `c1` lines to the CFG form, all functions; then
-   `alloc_group`. Measure against the structured baseline (214 theorems,
-   104 s, 1.2 GB), then retire what only the structured walk needs
-   (`block.rs`, `join.rs`, the loop and block points,
-   `proofs/translate_block.core`).
+4. Switch the `c1` lines to the CFG form (then the C2 proofs by 3), and
+   retire what only the structured walk needs (`block.rs`, `join.rs`, the
+   loop and block points, `proofs/translate_block.core`). Memory: the CFG
+   form's 2.4 GB peak (a function walked twice when a label is not
+   reached) against the structured 770 MB -- the walks' terms carry the
+   label table; make the homes' and invariant's tables smaller (by label,
+   not an `ite` chain over all).
 5. User proofs on a CFG (proving GIMPLE spec): an invariant per label, one
    obligation per block (Floyd style), as a lemma over the `loop` of the
    readable CFG; for functions with no structured view (gotos).
@@ -75,8 +81,7 @@ translation verification, the engine):
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- `alloc_group` (C1 after 1.0; its structured walk stops at 403faf, a
-  loop inside an `if`).
+- `alloc_group` (C1 by 1.0 item 1).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and

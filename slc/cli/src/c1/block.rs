@@ -52,7 +52,7 @@ impl<'e> Gen<'e> {
     /// the function's epilogue: the frame's code (`nop`, `add rsp, k`)
     /// straight on to a `ret`, from where paths jump to it (the `return`s'
     /// target, and the end's)
-    fn epilogue(&mut self) -> BTreeSet<u128> {
+    pub(super) fn epilogue(&mut self) -> BTreeSet<u128> {
         let frame_only = |g: &Gen, a: u128| {
             let Some(i) = g.insns.get(&a) else { return false };
             let rsp = || g.pairs(&i.fields, 5).and_then(|x| g.tag(&x[2])).is_some_and(|(k, r)| k == 0 && nat(&r) == Some(4));

@@ -257,7 +257,9 @@ impl<'a> Lower<'a> {
             emitted: 0,
         };
         self.names(&mut rx)?;
-        if sh.cfg {
+        // (a function of a return alone: as it is, no CFG)
+        let cfg = sh.cfg && !self.return_only(&rx, self.past(&rx, 0));
+        if cfg {
             self.emit_cfg(&mut rx, sh)?;
         } else {
             self.emit(&mut rx, sh, 0, None, &[])?;
@@ -287,6 +289,15 @@ impl<'a> Lower<'a> {
         let mut s = String::new();
         writeln!(s, "// {} {}", f.ret, f.name).unwrap();
         writeln!(s, "proc[World] {}({}){} {{", fname, ps.join(", "), ret_ty.as_ref().map(|t| format!(" -> {}", t)).unwrap_or_default()).unwrap();
+        // (the CFG: the block to run first among the locals, and one more
+        // local where it would be the only one -- the locals a pair)
+        let order = self.var_order(&rx);
+        if cfg {
+            writeln!(s, "  var bb: nat = {}", rx.f.blocks[self.past(&rx, 0)].num).unwrap();
+            if order.is_empty() {
+                writeln!(s, "  var bb_none: nat = 0").unwrap();
+            }
+        }
         for (name, w, reassigned) in &rx.params {
             if *reassigned {
                 writeln!(s, "  var {}: bits[{}] = {}_in", name, w, name).unwrap();
@@ -305,6 +316,15 @@ impl<'a> Lower<'a> {
             writeln!(s, "{}", l).unwrap();
         }
         writeln!(s, "}}").unwrap();
+        // (the CFG's guide for C1, untrusted: each block's live locals, by
+        // their positions after bb, a bit each; the locals' widths)
+        if cfg {
+            let live = self.cfg_live(&rx, &order)?;
+            let items: Vec<String> = live.iter().map(|(b, m)| format!("({}, {})", b, m)).collect();
+            writeln!(s, "fn {}_cfg_live() -> List[(nat, nat)] = [{}]", fname, items.join(", ")).unwrap();
+            let ws: Vec<String> = order.iter().map(|(_, w)| w.to_string()).collect();
+            writeln!(s, "fn {}_cfg_widths() -> List[nat] = [{}]", fname, ws.join(", ")).unwrap();
+        }
         // the C function spec: arguments and result in registers
         let cps: Vec<String> = rx.callees.iter().map(|c| format!("{}: CFun2[World]", c)).collect();
         let mut call_args: Vec<String> = rx.params.iter().enumerate().map(|(i, (_, w, _))| format!("bits[{}](args[{}])", w, i)).collect();
@@ -410,6 +430,157 @@ impl<'a> Lower<'a> {
         rx.out.push(format!("{}{}", "  ".repeat(rx.depth), l));
     }
 
+    /// a block with no statements of its own and no phis (just its jump):
+    /// the CFG goes past it, to its target -- no code of its own either
+    fn forwarder(&self, rx: &Rx, b: usize) -> bool {
+        let blk = &rx.f.blocks[b];
+        blk.phis.is_empty() && rx.succ[b].len() == 1 && blk.stmts.iter().all(|s| matches!(s, S::Goto(_)))
+    }
+
+    /// a block of a `return` (values copied before it, maybe in blocks on
+    /// the way): written in place of the jumps to it
+    /// (the compiler's code returns there too, or loads the value and
+    /// joins the epilogue)
+    fn return_only(&self, rx: &Rx, b: usize) -> bool {
+        self.tail_of(rx, b, 0)
+    }
+
+    /// b a returning tail: values copied (names, numbers, their casts), then a
+    /// `return`, or on to a returning tail (its one way)
+    fn tail_of(&self, rx: &Rx, b: usize, depth: usize) -> bool {
+        if depth > rx.f.blocks.len() {
+            return false;
+        }
+        let stmts = &rx.f.blocks[b].stmts;
+        let val = |e: &E| matches!(e, E::Name(_) | E::Num(_));
+        let copy = |s: &S| matches!(s, S::Assign(E::Name(_), e) if val(e) || matches!(e, E::Cast(_, x) if val(x)));
+        match stmts.last() {
+            Some(S::Return(_)) => stmts[..stmts.len() - 1].iter().all(copy),
+            _ => stmts.iter().all(|s| copy(s) || matches!(s, S::Goto(_))) && rx.succ[b].len() == 1 && self.tail_of(rx, rx.succ[b][0], depth + 1),
+        }
+    }
+
+    /// a returning tail written in place: its copies, its way's phis'
+    /// copies, on to the `return`
+    fn emit_tail(&mut self, rx: &mut Rx, sh: &mut Shared, b: usize) -> Result<(), String> {
+        let mut b = b;
+        for _ in 0..=rx.f.blocks.len() {
+            for st in rx.f.blocks[b].stmts.clone() {
+                if !matches!(st, S::Goto(_)) {
+                    self.rstmt(rx, sh, &st)?;
+                }
+            }
+            if matches!(rx.f.blocks[b].stmts.last(), Some(S::Return(_))) {
+                return Ok(());
+            }
+            let s = rx.succ[b][0];
+            for l in self.phi_copies(rx, sh, b, s)? {
+                self.line(rx, l);
+            }
+            b = s;
+        }
+        Err("a returning tail without its return".into())
+    }
+
+    /// where a jump to b goes: past forwarders
+    fn past(&self, rx: &Rx, mut b: usize) -> usize {
+        for _ in 0..rx.f.blocks.len() {
+            if !self.forwarder(rx, b) {
+                break;
+            }
+            b = rx.succ[b][0];
+        }
+        b
+    }
+
+    /// the locals in their order (the vars: reassigned parameters, then
+    /// the others by name), with their widths
+    fn var_order(&self, rx: &Rx) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = rx.params.iter().filter(|p| p.2).map(|(n, w, _)| (n.clone(), *w)).collect();
+        for (v, w) in &rx.vars {
+            if !rx.params.iter().any(|(p, _, _)| p == v) {
+                out.push((v.clone(), *w));
+            }
+        }
+        out
+    }
+
+    /// The locals live at each block's entry (read before written on some
+    /// way on; the phis' copies on the edges as the CFG writes them): per
+    /// block number, a bit per local position
+    fn cfg_live(&self, rx: &Rx, order: &[(String, u64)]) -> Result<Vec<(u64, u128)>, String> {
+        if order.len() > 120 {
+            return Err("more than 120 locals".into());
+        }
+        let pos = |g: &str| rx.rn.get(g).and_then(|r| order.iter().position(|(x, _)| x == r));
+        let bit = |i: usize| 1u128 << i;
+        let n = rx.f.blocks.len();
+        // per block: used before written, written (its statements)
+        let mut uses = vec![0u128; n];
+        let mut defs = vec![0u128; n];
+        for b in 0..n {
+            for st in &rx.f.blocks[b].stmts {
+                let (d, u) = defs_uses(st);
+                for x in u {
+                    if let Some(i) = pos(&x) {
+                        if defs[b] & bit(i) == 0 {
+                            uses[b] |= bit(i);
+                        }
+                    }
+                }
+                for x in d {
+                    if let Some(i) = pos(&x) {
+                        defs[b] |= bit(i);
+                    }
+                }
+            }
+        }
+        // per edge: its copies (target, what they read), in order
+        let edge = |from: usize, to: usize| -> Vec<(Option<usize>, u128)> {
+            let from_num = rx.f.blocks[from].num;
+            let mut cs = Vec::new();
+            for p in &rx.f.blocks[to].phis {
+                let Some((e, _)) = p.args.iter().find(|(_, b)| *b == from_num) else { continue };
+                if let E::Name(nm) = e {
+                    if rx.rn.get(nm).is_some() && rx.rn.get(nm) == rx.rn.get(&p.dst) {
+                        continue;
+                    }
+                }
+                let mut u = Vec::new();
+                walk_e(e, &mut u);
+                let m = u.iter().filter_map(|x| pos(x)).fold(0u128, |a, i| a | bit(i));
+                cs.push((pos(&p.dst), m));
+            }
+            cs
+        };
+        let mut live = vec![0u128; n];
+        loop {
+            let mut changed = false;
+            for b in (0..n).rev() {
+                let mut out = 0u128;
+                for &s in &rx.succ[b] {
+                    let mut l = live[s];
+                    for (d, u) in edge(b, s).into_iter().rev() {
+                        if let Some(i) = d {
+                            l &= !bit(i);
+                        }
+                        l |= u;
+                    }
+                    out |= l;
+                }
+                let li = uses[b] | (out & !defs[b]);
+                if li != live[b] {
+                    live[b] = li;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        Ok((0..n).filter(|&b| !self.forwarder(rx, b) && !self.return_only(rx, b)).map(|b| (rx.f.blocks[b].num, live[b])).collect())
+    }
+
     /// The control-flow graph as it is: `bb` the number of the block to
     /// run (GCC's), a `loop` running it -- found by `bb`'s bits, a tree of
     /// comparisons (the block of n among m by log m of them) -- each block
@@ -419,9 +590,8 @@ impl<'a> Lower<'a> {
         if rx.vars.contains_key("bb") || rx.params.iter().any(|(p, _, _)| p == "bb") {
             return Err("a variable named bb".into());
         }
-        let mut bs: Vec<usize> = (0..rx.f.blocks.len()).collect();
+        let mut bs: Vec<usize> = (0..rx.f.blocks.len()).filter(|&b| !self.forwarder(rx, b) && !self.return_only(rx, b)).collect();
         bs.sort_by_key(|&i| rx.f.blocks[i].num);
-        self.line(rx, format!("var bb: nat = {}", rx.f.blocks[0].num));
         self.line(rx, "loop {".into());
         rx.depth += 1;
         self.dispatch(rx, sh, &bs)?;
@@ -461,8 +631,20 @@ impl<'a> Lower<'a> {
             self.rstmt(rx, sh, s).map_err(|e| format!("block {}: {}: {:?}", blk.num, e, s))?;
         }
         let go = |g: &mut Self, rx: &mut Rx, sh: &mut Shared, to: usize| -> Result<(), String> {
-            for l in g.phi_copies(rx, sh, b, to)? {
-                g.line(rx, l);
+            // (past forwarders: each edge's phis' copies)
+            let (mut from, mut to) = (b, to);
+            for _ in 0..rx.f.blocks.len() {
+                for l in g.phi_copies(rx, sh, from, to)? {
+                    g.line(rx, l);
+                }
+                if !g.forwarder(rx, to) {
+                    break;
+                }
+                from = to;
+                to = rx.succ[to][0];
+            }
+            if g.return_only(rx, to) {
+                return g.emit_tail(rx, sh, to);
             }
             g.line(rx, format!("bb := {}", rx.f.blocks[to].num));
             Ok(())

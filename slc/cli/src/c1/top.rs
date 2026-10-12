@@ -147,6 +147,9 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[St
         bkp: no_bk.clone(),
         bka: no_bk,
         lpg: None,
+        cfg_meta: None,
+        cfg_start: 0,
+        cfg: None,
     };
     g.top(fname, spec_name, ssym, sbody, sparams, entry)
 }
@@ -168,6 +171,21 @@ impl<'e> Gen<'e> {
                     }
                     cur = x[1].clone();
                 }
+            }
+        }
+        // the readable CFG's guide (cfg.rs): each block's live locals, the
+        // locals' widths
+        let meta = |g: &Gen, nm: &str| -> Option<Vec<Term>> {
+            let &sy = g.env.sym_by_name.get(&format!("{pname}_cfg_{nm}"))?;
+            let SymKind::Defined { body, .. } = &g.env.syms[sy as usize].kind else { return None };
+            g.list_items(body)
+        };
+        if let (Some(live), Some(ws)) = (meta(self, "live"), meta(self, "widths")) {
+            let live: Option<Vec<(u128, u128)>> = live.iter().map(|x| self.app(x, "pair", 2).and_then(|p| Some((nat(&p[0])?, nat(&p[1])?)))).collect();
+            let ws: Option<Vec<u64>> = ws.iter().map(|x| nat(x).map(|v| v as u64)).collect();
+            if let (Some(live), Some(ws)) = (live, ws) {
+                self.cfg_meta = Some((live, ws));
+                self.cfg_start = self.cfg_body_start(entry);
             }
         }
         // the fixed variables: the program's statics, the callees, the

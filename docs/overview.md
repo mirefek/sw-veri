@@ -97,9 +97,14 @@ outcome.
   - the control-flow graph (`--readable --cfg`): GCC's basic blocks as
     they are, `bb` the block to run, a `loop` running it; each block ends
     with `bb := next` or a `return`. Every C control flow (gotos, any
-    loop nesting) has it. C1 is moving to it (docs/todo.md 1.0): a claim
-    at each block's entry, each block walked once (`tr.cfg_lv`,
-    `proofs/translate_cfg.core`).
+    loop nesting) has it. C1 on it (`slc/cli/src/c1/cfg.rs`,
+    `proofs/translate_cfg.core`): a claim at each block's entry (a cut
+    point: the code's blocks' first instructions, known from the code),
+    for every world and the block's live locals in their homes, each
+    block walked once to the cut point it goes on at, gathered by one
+    theorem (`tr.cfg_lvk`, from the loop rule over a set of cut points).
+    The labels' addresses are found as the walks arrive. C1 is moving to
+    it (docs/todo.md 1.0); the C2 proofs are about the structured form.
 
   The -O0 build is the first target. Optimized code can later be added as
   a GIMPLE ⊑ GIMPLE layer: the same cut-point theorem between two CFGs.

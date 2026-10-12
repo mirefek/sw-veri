@@ -2,52 +2,52 @@
 // (a cut point), for every world and locals, from the claim for the block
 // alone -- walked once, up to the cut point it goes on at.
 //
-// A function's readable CFG (docs/overview.md): its body iterated (`while
-// true`, tr.lprog's), one basic block per iteration, the label of the
-// block to run in the locals y; a block goes on with the next label and
-// locals (its marked return), or returns. Each label's block starts at a
-// code address ad(y), the cut point, its homes hs(y): the claim at each is
-// by tr.loop_cut, the cut points all block entries at the function's
-// frame. Nothing here depends on how the blocks are laid out or nested: any
-// control flow (loops in branches, nested loops, gotos) is blocks and
-// jumps between them.
+// A function's readable CFG (docs/overview.md): its body iterated (`loop`,
+// tr.lprog's), one basic block per iteration, the label of the block to
+// run first among the locals y = pair(c, ys); a block goes on with the
+// next label and locals (its marked return), or returns. The cut points:
+// the code's addresses ct (the machine's blocks' first instructions, known
+// from the code alone, so that no other point is one), at the function's
+// frame; each label's block starts at one of them, ad(c), its homes hs(y).
+// The claim at each by tr.loop_cut, the cut points its heads. Nothing here
+// depends on how the blocks are laid out or nested: any control flow
+// (loops in branches, nested loops, gotos) is blocks and jumps.
 
-// (the cut points: a block's entry, at the frame)
-def tr.cut(s, fr, y. ad, y. yt, z) := ex y3. yt(y3) && tr.hd(z) = pair(ad(y3), int_sub(app(app(s, "gpr"), 4), fr))
+// (the cut points: at an address of ct, at the frame)
+def tr.cut(s, fr, a. ct, z) := ct(app(z, "rip")) && app(app(z, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr)
 
 // (a cut point is not a return: the frame's rsp below the caller's)
-theorem tr.cut_nret(s, base, code, fr, y. ad, y. yt): all x w m. tr.inv(s, base, code, fr, x, w) -> tr.cut(s, fr, y. ad(y), y. yt(y), m) -> !tr.out(s, m)
+theorem tr.cut_nret(s, base, code, fr, a. ct): all x w m. tr.inv(s, base, code, fr, x, w) -> tr.cut(s, fr, a. ct(a), m) -> !tr.out(s, m)
 proof
   fix x w m
   assume hi hc
-  obtain y3, hy he from expand(hc, tr.cut)
-  have rm: app(app(m, "gpr"), 4) = int_sub(app(app(s, "gpr"), 4), fr) by simp(expand(he, tr.hd))
+  have rm := expand(hc, tr.cut).2
   have rx := apply(tr.inv_parts, hi).4
   have nr := apply(tr.inv_nr, hi)
   have e: app(app(m, "gpr"), 4) = app(app(x, "gpr"), 4) by simp(rm, rx)
   show by taut(rewrite(sym(e), nr))
 qed
 
-theorem tr.cfg_lv(s, v, base, code, fr, fd, y. ad, y. hs, y. yt, z. bkp, z p w. bka, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw):
+theorem tr.cfg_lv(s, v, base, code, fr, fd, a. ct, y. ad, y. hs, y. yt, z. bkp, z p w. bka, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw):
   (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
-  (all z y. yt(y) -> app(z, "rip") = ad(y) -> !bkp(z)) ->
-  (all y w. pair(w, y) in univ(1) -> yt(y) -> w in abi.World && w in univ(1) -> tr.lv(s, z. tr.cut(s, fr, y. ad(y), y. yt(y), z) || bkp(z),
-    z p2 w2. tr.cut(s, fr, y. ad(y), y. yt(y), z) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(y2) && tr.homes(s, z, hs(y2)) &&
+  (all y. yt(y) -> ct(ad(y))) -> (all z y. yt(y) -> app(z, "rip") = ad(y) -> !bkp(z)) ->
+  (all y w. pair(w, y) in univ(1) -> yt(y) -> w in abi.World && w in univ(1) -> tr.lv(s, z. tr.cut(s, fr, a. ct(a), z) || bkp(z),
+    z p2 w2. tr.cut(s, fr, a. ct(a), z) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(y2) && tr.homes(s, z, hs(y2)) &&
       tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1) && yt(y2)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
     v, base, code, fr, ad(y), hs(y), fd, empty, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)) ->
   all y w. pair(w, y) in univ(1) -> yt(y) ->
     tr.lv(s, z. bkp(z), z p w. bka(z, p, w), v, base, code, fr, ad(y), hs(y), fd, empty, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)
 proof
-  assume hk2 htr hbo hb
+  assume hk2 htr hct hbo hb
   let Q(x, y, w) := tr.inv(s, base, code, fr, x, w) && app(x, "rip") = ad(y) && tr.homes(s, x, hs(y)) && tr.mem(s, x, w, v) && tr.frame(s, x, fd) && pair(w, y) in univ(1) && yt(y)
-  let C(z) := tr.cut(s, fr, y. ad(y), y. yt(y), z)
+  let C(z) := tr.cut(s, fr, a. ct(a), z)
   have hq: all x y w. Q(x, y, w) -> C(x) && !bkp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1) proof
     fix x y w
     assume q
     have hi hr hh hm hf hu hy := q
     have rspm := apply(tr.inv_parts, hi).4
-    have hd: tr.hd(x) = pair(ad(y), int_sub(app(app(s, "gpr"), 4), fr)) by defs(simp(hr, rspm), tr.hd)
-    have c: C(x) by defs(ex_intro({y}, taut(hy, hd)), tr.cut)
+    have ca: ct(app(x, "rip")) := rewrite(sym(hr), mp(all_elim(hct, {y}), hy))
+    have c: C(x) by defs(taut(ca, rspm), tr.cut)
     have nb := mp(all_elim(hbo, {x}, {y}), hy, hr)
     have nr := apply(tr.inv_nr, hi)
     have wu := hi.wu
@@ -57,7 +57,7 @@ proof
     fix x y w m
     assume q hc
     have hi := q.1
-    show := apply(tr.cut_nret[s := s, base := base, code := code, fr := fr, ad := y. ad(y), yt := y. yt(y)], {x}, {w}, {m}, hi, hc)
+    show := apply(tr.cut_nret[s := s, base := base, code := code, fr := fr, ct := a. ct(a)], {x}, {w}, {m}, hi, hc)
   qed
   have hb2: all x y w. Q(x, y, w) -> tr.sim(s, z. C(z) || bkp(z), z p2 w2. C(z) && (ex y2. Q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
       v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x) proof
@@ -81,4 +81,163 @@ proof
     show := mp(all_elim(lp, {m}, {y}, {w}), q)
   qed
   show by defs(g, tr.lv)
+qed
+
+// The claim by labels: the locals y = pair(c, ys), c the label of the
+// block to run (one of kk), ys the rest; each label's address ad(c); each
+// label's claim on its own (tr.cfg_kk_cons gathers them).
+def tr.cyt(y. yt, c. kk, y) := ex c ys. y = pair(c, ys) && kk(c) && yt(pair(c, ys))
+
+theorem tr.cyt_intro(y. yt, c. kk): all c ys. kk(c) -> yt(pair(c, ys)) -> tr.cyt(y. yt(y), c. kk(c), pair(c, ys))
+proof
+  fix c ys
+  assume kc yc
+  show by defs(ex_intro({c}, {ys}, taut(refl({pair(c, ys)}), kc, yc)), tr.cyt)
+qed
+
+theorem tr.cfg_lvk(s, v, base, code, fr, fd, a. ct, c. ad, y. hs, y. yt, c. kk, z. bkp, z p w. bka, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw):
+  (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
+  (all c. kk(c) -> ct(ad(c))) -> (all z c. kk(c) -> app(z, "rip") = ad(c) -> !bkp(z)) ->
+  (all c. kk(c) -> (all ys w. pair(w, pair(c, ys)) in univ(1) -> yt(pair(c, ys)) -> w in abi.World && w in univ(1) ->
+    tr.lv(s, z. tr.cut(s, fr, a. ct(a), z) || bkp(z),
+      z p2 w2. tr.cut(s, fr, a. ct(a), z) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(fst(y2)) && tr.homes(s, z, hs(y2)) &&
+        tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1) && tr.cyt(y. yt(y), c. kk(c), y2)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+      v, base, code, fr, ad(c), hs(pair(c, ys)), fd, empty, mkprog(x1 x2. bind_rel(tr.liter(pair(c, ys), l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w))) ->
+  all c ys w. kk(c) -> pair(w, pair(c, ys)) in univ(1) -> yt(pair(c, ys)) ->
+    tr.lv(s, z. bkp(z), z p w. bka(z, p, w), v, base, code, fr, ad(c), hs(pair(c, ys)), fd, empty, tr.lprog(pair(c, ys), l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)
+proof
+  assume hk2 htr hct hbo hb
+  let YT(y) := tr.cyt(y. yt(y), c. kk(c), y)
+  have hct2: all y. YT(y) -> ct(ad(fst(y))) proof
+    fix y
+    assume hy
+    obtain c ys, e kc yc from expand(hy, tr.cyt)
+    have ef: fst(y) = c by simp(e)
+    show := rewrite(sym(ef), mp(all_elim(hct, {c}), kc))
+  qed
+  have hbo2: all z y. YT(y) -> app(z, "rip") = ad(fst(y)) -> !bkp(z) proof
+    fix z y
+    assume hy hr
+    obtain c ys, e kc yc from expand(hy, tr.cyt)
+    have ef: fst(y) = c by simp(e)
+    have hr2: app(z, "rip") = ad(c) := rewrite(ef, hr)
+    show := mp(all_elim(hbo, {z}, {c}), kc, hr2)
+  qed
+  have hb2: all y w. pair(w, y) in univ(1) -> YT(y) -> w in abi.World && w in univ(1) ->
+      tr.lv(s, z. tr.cut(s, fr, a. ct(a), z) || bkp(z),
+        z p2 w2. tr.cut(s, fr, a. ct(a), z) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(fst(y2)) && tr.homes(s, z, hs(y2)) &&
+          tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1) && YT(y2)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+        v, base, code, fr, ad(fst(y)), hs(y), fd, empty, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w) proof
+    fix y w
+    assume hu hy hw
+    obtain c ys, e kc yc from expand(hy, tr.cyt)
+    have hu2: pair(w, pair(c, ys)) in univ(1) := rewrite(e, hu)
+    have l := mp(all_elim(mp(all_elim(hb, {c}), kc), {ys}, {w}), hu2, yc, hw)
+    have ef: fst(y) = c by simp(e)
+    have l2 := subst({x. tr.lv(s, z. tr.cut(s, fr, a. ct(a), z) || bkp(z),
+        z p2 w2. tr.cut(s, fr, a. ct(a), z) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(fst(y2)) && tr.homes(s, z, hs(y2)) &&
+          tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1) && YT(y2)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+        v, base, code, fr, ad(x), hs(pair(c, ys)), fd, empty, mkprog(x1 x2. bind_rel(tr.liter(pair(c, ys), l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)}, sym(ef), l)
+    have l3 := rewrite(sym(e), l2)
+    show by defs(l3, tr.lone)
+  qed
+  have lp := mp(tr.cfg_lv[s := s, v := v, base := base, code := code, fr := fr, fd := fd, ct := a. ct(a), ad := y. ad(fst(y)), hs := y. hs(y), yt := y. YT(y), bkp := z. bkp(z), bka := z p w. bka(z, p, w),
+    b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], hk2, htr, hct2, hbo2, hb2)
+  fix c ys w
+  assume kc hu yc
+  have y2 := apply(tr.cyt_intro[yt := y. yt(y), kk := c. kk(c)], {c}, {ys}, kc, yc)
+  have l := mp(all_elim(lp, {pair(c, ys)}, {w}), hu, y2)
+  show := subst({x. tr.lv(s, z. bkp(z), z p w. bka(z, p, w), v, base, code, fr, ad(x), hs(pair(c, ys)), fd, empty, tr.lprog(pair(c, ys), l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)},
+    fst_pair[a := c, b := ys], l)
+qed
+
+// (the labels' claims gathered: none, then one more)
+theorem tr.cfg_kk_nil(c. P): all c. false -> P(c)
+proof
+  fix c
+  assume h
+  show by taut(h)
+qed
+
+theorem tr.cfg_kk_cons(c. P, d, c. kk): P(d) -> (all c. kk(c) -> P(c)) -> all c. (c = d || kk(c)) -> P(c)
+proof
+  assume hd hk
+  fix c
+  assume h
+  have a: c = d -> P(c) proof
+    assume e
+    show := subst({x. P(x)}, sym(e), hd)
+  qed
+  have b := all_elim(hk, {c})
+  show by taut(h, a, b)
+qed
+
+// (a block's claim at its address and homes as the walk has them)
+theorem tr.lv_conv(zb. bkp, zb pb wb. bka): all s v base code fr a a2 hs hs2 fd rs p w. a = a2 -> hs = hs2 ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs2, fd, rs, p, w) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd, rs, p, w)
+proof
+  fix s v base code fr a a2 hs hs2 fd rs p w
+  assume ea eh h
+  have h1 := subst({x. tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, x, hs2, fd, rs, p, w)}, sym(ea), h)
+  show := subst({x. tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, x, fd, rs, p, w)}, sym(eh), h1)
+qed
+
+// Arriving at a cut point a (the next label's address) with the next
+// locals y2 marked: the homes at y2 among the point's (as tr.pt_head)
+theorem tr.pt_cut(s, v, base, code, fr, fd, a. ct, y. ad, y. hs, y. yt, z. bkp): all a hs2 rs p w y2. ct(a) -> ad(y2) = a -> tr.hsub(hs(y2), hs2) ->
+  pair(w, y2) in univ(1) -> yt(y2) -> runs(p, w, ok(w, pair(18446744073709551616, y2))) ->
+  tr.pt(s, z. tr.cut(s, fr, a. ct(a), z) || bkp(z),
+    z p2 w2. tr.cut(s, fr, a. ct(a), z) && (ex y3. (tr.inv(s, base, code, fr, z, w2) && app(z, "rip") = ad(y3) && tr.homes(s, z, hs(y3)) &&
+      tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y3) in univ(1) && yt(y3)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y3)))),
+    v, base, code, fr, a, hs2, fd, rs, p, w)
+proof
+  fix a hs2 rs p w y2
+  assume hca ha hsb hu hy hr
+  let Q(x, y, w) := tr.inv(s, base, code, fr, x, w) && app(x, "rip") = ad(y) && tr.homes(s, x, hs(y)) && tr.mem(s, x, w, v) && tr.frame(s, x, fd) && pair(w, y) in univ(1) && yt(y)
+  let C(z) := tr.cut(s, fr, a. ct(a), z)
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> app(m, "rip") = a -> tr.homes(s, m, hs2) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) ->
+      tr.cl(s, z. C(z) || bkp(z), z p2 w2. C(z) && (ex y3. Q(z, y3, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y3)))), v, p, w, m) proof
+    fix m
+    assume hi hr2 hh hrs hm hf
+    have hh1 := apply(tr.homes_sub, hsb, hh)
+    have rspm := apply(tr.inv_parts, hi).4
+    have cm: ct(app(m, "rip")) := rewrite(sym(hr2), hca)
+    have hc: C(m) by defs(taut(cm, rspm), tr.cut)
+    have nr := apply(tr.inv_nr, hi)
+    have st: tr.stopk(s, z. C(z) || bkp(z), m) by defs(taut(hc), tr.stopk)
+    have rd: tr.red(p, w, p, w) proof
+      have g3: all o. runs(p, w, o) -> runs(p, w, o) proof
+        fix o
+        assume h
+        show := h
+      qed
+      show by defs(g3, tr.red)
+    qed
+    have ra: app(m, "rip") = ad(y2) by simp(hr2, ha)
+    have q: Q(m, y2, w) by taut(hi, ra, hh1, hm, hf, hu, hy)
+    have ey: ex y3. Q(m, y3, w) && runs(p, w, ok(w, pair(18446744073709551616, y3))) by ex_intro({y2}, taut(q, hr))
+    have ex2: ex p2 w2. tr.red(p, w, p2, w2) && (C(m) && (ex y3. Q(m, y3, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y3)))))
+      by ex_intro({p}, {w}, taut(rd, hc, ey))
+    have ar: tr.arr(s, z. C(z) || bkp(z), z p2 w2. C(z) && (ex y3. Q(z, y3, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y3)))), v, m, p, w)
+      by defs(taut(nr, ex2), tr.arr)
+    show by defs(taut(st, ar), tr.cl)
+  qed
+  show by defs(g, tr.pt)
+qed
+
+// (a callee's states, below the frame: no cut point)
+theorem tr.nobp_cut(s, fr, a. ct, z. bkp): (all z. int_lt(app(app(z, "gpr"), 4), int_sub(app(app(s, "gpr"), 4), fr)) -> !bkp(z)) ->
+  all z. int_lt(app(app(z, "gpr"), 4), int_sub(app(app(s, "gpr"), 4), fr)) -> !(tr.cut(s, fr, a. ct(a), z) || bkp(z))
+proof
+  assume hb
+  fix z
+  assume hl
+  have nb := mp(all_elim(hb, {z}), hl)
+  have n: tr.cut(s, fr, a. ct(a), z) -> false proof
+    assume c
+    have e := expand(c, tr.cut).2
+    show by arith(e, hl)
+  qed
+  show by taut(nb, n)
 qed

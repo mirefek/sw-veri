@@ -21,6 +21,7 @@
 //! error naming the address.
 
 mod block;
+mod cfg;
 mod eff;
 mod insn;
 mod join;
@@ -323,6 +324,11 @@ struct Gen<'e> {
     bka: Term,
     /// the loop whose iteration is being walked (its head the breakpoint)
     lpg: Option<LoopG>,
+    /// the readable CFG's guide (cfg.rs): each block's live locals, the
+    /// locals' widths; the body's start; the CFG walk going on
+    cfg_meta: Option<(Vec<(u128, u128)>, Vec<u64>)>,
+    cfg_start: u128,
+    cfg: Option<cfg::Cfg>,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,

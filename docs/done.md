@@ -292,6 +292,16 @@ item is a short summary of finished work; details are in the files named.
   `return`s the branches' meeting point outside the epilogue), a failed
   one falling back to the join claims, reported. All 214 C1 theorems: 45
   blocks, 104 s, 1.2 GB.
+- **C1 on GIMPLE's control-flow graph** (`slc gimple --readable --cfg`,
+  `slc/cli/src/c1/cfg.rs`, `proofs/translate_cfg.core`): the loop rule
+  over a set of cut points (`tr.loop_cut`, the one-head `tr.loop` its
+  instance), the claim at every block's entry from each block's claim
+  (`tr.cfg_lv`, by labels `tr.cfg_lvk`); the cut points from the code,
+  the labels' addresses found as walks arrive, each label walked once,
+  its homes its live locals' (the generator's liveness, the location
+  map's innermost scope). All 214 C1 theorems on the CFG (111 s); the
+  spec's projections of constructed tuples reduced in one step
+  (`tr.q_same`: the structured walk's 214 from 1.2 GB to 770 MB).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is
