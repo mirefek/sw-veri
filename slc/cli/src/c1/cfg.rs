@@ -229,7 +229,7 @@ impl<'e> Gen<'e> {
     }
 
     /// premises `p1 -> p2 -> .. -> c` as [p1, ..], c
-    fn imps(&self, t: &Term) -> (Vec<Term>, Term) {
+    pub(super) fn imps(&self, t: &Term) -> (Vec<Term>, Term) {
         let imp = self.env.builtins.imp;
         let mut ps = Vec::new();
         let mut t = t.clone();

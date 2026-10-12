@@ -228,7 +228,7 @@ impl<'e> Gen<'e> {
     /// (of x0 only): its lemma, and its parts (at the body)
     /// t with its projections of constructed pairs and outcomes taken
     /// (`fst(pair(a, b))` a, `out_state(ok(s, v))` s, `fst(exc(..))` 1, ..)
-    fn proj_simp(&self, t: &Term, memo: &mut std::collections::HashMap<Term, Term>) -> Term {
+    pub(super) fn proj_simp(&self, t: &Term, memo: &mut std::collections::HashMap<Term, Term>) -> Term {
         if let Some(r) = memo.get(t) {
             return r.clone();
         }

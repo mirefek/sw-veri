@@ -497,6 +497,12 @@ pub trait Prover {
     fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
         Err(KernelError("`c1`: this checker has no C1 engine".into()))
     }
+
+    /// `refines NAME LOW HIGH`: the function spec LOW refines HIGH, proven
+    /// by a procedure (not trusted either)
+    fn refines(&mut self, _env: &mut Env, _name: &str, _low: &str, _high: &str) -> KResult<Seq> {
+        Err(KernelError("`refines`: this checker has no refinement procedure".into()))
+    }
 }
 
 /// What a proof has to establish.
@@ -648,6 +654,31 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
             "mem_closure" => {
                 if !p.env.mem_closures.contains(&name) {
                     p.env.mem_closures.push(name);
+                }
+            }
+            // refines NAME LOW HIGH: the theorem NAME that the function spec
+            // LOW refines HIGH (`all G.. regs w o. .. runs(app(LOW(G..),
+            // regs), w, o) -> runs(app(HIGH(G..), regs), w, o)`: a
+            // function's readable CFG its structured form), proven by the
+            // checker's procedure
+            "refines" => {
+                let low = p.ident()?;
+                let high = p.ident()?;
+                let Some(pr) = prover.as_deref_mut() else {
+                    return Err(ctx(KernelError("`refines` needs a proof checker".into())));
+                };
+                let sq = pr.refines(p.env, &name, &low, &high).map_err(ctx)?;
+                if !sq.hyps().is_empty() {
+                    let pp = Printer::new(p.env);
+                    return Err(ctx(KernelError(format!("`{}`: hypotheses left: {}", name, sq.hyps().iter().map(|h| pp.short(h)).collect::<Vec<_>>().join(", ")))));
+                }
+                facts::check_new(p.env, &name).map_err(ctx)?;
+                let conditional = !sq.open().is_empty();
+                facts::record(p.env, &name, sq).map_err(ctx)?;
+                if conditional {
+                    rep.conditional.push(name);
+                } else {
+                    rep.theorems.push(name);
                 }
             }
             // c1 FN SPEC PREFIX [using L, ..]: the function FN's C1 theorems

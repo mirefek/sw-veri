@@ -23,6 +23,7 @@
 mod block;
 mod cfg;
 mod eff;
+mod gref;
 mod insn;
 mod join;
 mod nf;
@@ -832,5 +833,9 @@ impl syntax::Prover for Checker {
 
     fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
         c1(env, fname, spec, prefix, hints).map_err(sl_kernel::KernelError)
+    }
+
+    fn refines(&mut self, env: &mut Env, name: &str, low: &str, high: &str) -> sl_kernel::KResult<Seq> {
+        gref::refines(env, name, low, high).map_err(sl_kernel::KernelError)
     }
 }
