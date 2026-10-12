@@ -83,6 +83,9 @@ struct Rx<'f> {
     out: Vec<String>,
     depth: usize,
     emitted: usize,
+    /// writing a block as its procedure: a jump to block n the tail call
+    /// `{0}__b{n}({1})` (`{2}`: no result)
+    tail: Option<(String, String, bool)>,
 }
 
 /// A branch's condition: a block's, or an `&&` / `||` of them
@@ -255,6 +258,7 @@ impl<'a> Lower<'a> {
             out: Vec::new(),
             depth: 1,
             emitted: 0,
+            tail: None,
         };
         self.names(&mut rx)?;
         // (a function of a return alone: as it is, no CFG)
@@ -316,6 +320,12 @@ impl<'a> Lower<'a> {
             writeln!(s, "{}", l).unwrap();
         }
         writeln!(s, "}}").unwrap();
+        // (the CFG's blocks as procedures, a jump a tail call -- the form
+        // the structured form is proven from; loop-free functions without
+        // stack objects, of a result in one word or none)
+        if cfg && rx.loops.is_empty() && rx.fx.obj_list.is_empty() && !two_words {
+            self.block_procs(&mut rx, sh, &fname, ret_ty.as_deref(), &order, &ps, &mut s)?;
+        }
         // (the CFG's guide for C1, untrusted: each block's live locals, by
         // their positions after bb, a bit each; the locals' widths)
         if cfg {
@@ -600,6 +610,76 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// Each block of the CFG as its procedure `F__bN`: the function's
+    /// fixed parameters and callees, then its locals (`order`) as
+    /// parameters; its statements, a jump the next block's procedure
+    /// called with them, its result returned. The successors first (each
+    /// called after its definition). Then `F__entry`: the function's
+    /// parameters and locals as it starts, the first block's procedure
+    /// called.
+    fn block_procs(&mut self, rx: &mut Rx, sh: &mut Shared, fname: &str, ret_ty: Option<&str>, order: &[(String, u64)], main_ps: &[String], s: &mut String) -> Result<(), String> {
+        let blocks: Vec<usize> = (0..rx.f.blocks.len()).filter(|&b| !self.forwarder(rx, b) && !self.return_only(rx, b)).collect();
+        // (where a block goes: past forwarders, not to a returning tail)
+        let nexts: Vec<Vec<usize>> = (0..rx.f.blocks.len()).map(|b| rx.succ[b].iter().map(|&t| self.past(rx, t)).filter(|&t| !self.return_only(rx, t)).collect()).collect();
+        let mut post: Vec<usize> = Vec::new();
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        fn dfs(b: usize, nexts: &[Vec<usize>], seen: &mut BTreeSet<usize>, post: &mut Vec<usize>) {
+            if !seen.insert(b) {
+                return;
+            }
+            for &t in &nexts[b] {
+                dfs(t, nexts, seen, post);
+            }
+            post.push(b);
+        }
+        dfs(self.past(rx, 0), &nexts, &mut seen, &mut post);
+        let fixed: Vec<(String, u64)> = rx.params.iter().filter(|p| !p.2).map(|(n, w, _)| (n.clone(), *w)).collect();
+        let mut ps: Vec<String> = fixed.iter().map(|(n, w)| format!("{}: bits[{}]", n, w)).collect();
+        ps.extend(rx.callees.iter().map(|c| format!("{}: CFun2[World]", c)));
+        ps.extend(order.iter().map(|(n, w)| format!("{}_in: bits[{}]", n, w)));
+        let mut args: Vec<String> = fixed.iter().map(|(n, _)| n.clone()).collect();
+        args.extend(rx.callees.iter().cloned());
+        args.extend(order.iter().map(|(n, _)| n.clone()));
+        let saved = (std::mem::take(&mut rx.out), rx.depth);
+        rx.tail = Some((fname.to_string(), args.join(", "), ret_ty.is_none()));
+        for b in post.into_iter().filter(|b| blocks.contains(b)) {
+            rx.out.clear();
+            rx.depth = 1;
+            self.cfg_block(rx, sh, b)?;
+            writeln!(s, "proc[World] {}__b{}({}){} {{", fname, rx.f.blocks[b].num, ps.join(", "), ret_ty.map(|t| format!(" -> {}", t)).unwrap_or_default()).unwrap();
+            for (n, w) in order {
+                writeln!(s, "  var {}: bits[{}] = {}_in", n, w, n).unwrap();
+            }
+            for l in &rx.out {
+                writeln!(s, "{}", l).unwrap();
+            }
+            writeln!(s, "}}").unwrap();
+        }
+        // (the entry: the parameters and locals as the function's, then its
+        // first block)
+        let (tf, targs, void) = rx.tail.take().expect("the tail call");
+        writeln!(s, "proc[World] {}__entry({}){} {{", fname, main_ps.join(", "), ret_ty.map(|t| format!(" -> {}", t)).unwrap_or_default()).unwrap();
+        for (name, w, reassigned) in &rx.params {
+            if *reassigned {
+                writeln!(s, "  var {}: bits[{}] = {}_in", name, w, name).unwrap();
+            }
+        }
+        for (v, w) in &rx.vars {
+            if !rx.params.iter().any(|(p, _, _)| p == v) {
+                writeln!(s, "  var {}: bits[{}] = any bits[{}]", v, w, w).unwrap();
+            }
+        }
+        let first = rx.f.blocks[self.past(rx, 0)].num;
+        if void {
+            writeln!(s, "  {}__b{}({})\n  return", tf, first, targs).unwrap();
+        } else {
+            writeln!(s, "  let r = {}__b{}({})\n  return r", tf, first, targs).unwrap();
+        }
+        writeln!(s, "}}").unwrap();
+        (rx.out, rx.depth) = saved;
+        Ok(())
+    }
+
     /// the blocks bs (by number): which one, by comparisons of `bb`
     fn dispatch(&mut self, rx: &mut Rx, sh: &mut Shared, bs: &[usize]) -> Result<(), String> {
         if let [b] = bs {
@@ -646,7 +726,20 @@ impl<'a> Lower<'a> {
             if g.return_only(rx, to) {
                 return g.emit_tail(rx, sh, to);
             }
-            g.line(rx, format!("bb := {}", rx.f.blocks[to].num));
+            match rx.tail.clone() {
+                // (a block as its procedure: the next block's, a tail call)
+                Some((f, args, void)) => {
+                    let num = rx.f.blocks[to].num;
+                    if void {
+                        g.line(rx, format!("{}__b{}({})", f, num, args));
+                        g.line(rx, "return".into());
+                    } else {
+                        g.line(rx, format!("let r = {}__b{}({})", f, num, args));
+                        g.line(rx, "return r".into());
+                    }
+                }
+                None => g.line(rx, format!("bb := {}", rx.f.blocks[to].num)),
+            }
             Ok(())
         };
         match blk.stmts.last().cloned() {

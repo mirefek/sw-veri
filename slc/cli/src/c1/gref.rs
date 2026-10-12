@@ -61,6 +61,10 @@ impl<'e> Gen<'e> {
             bl = bl.subst_var(pl[i], gv, &self.env.binders_fn());
             bh = bh.subst_var(ph[i], gv, &self.env.binders_fn());
         }
+        // (two procedures: their refinement for every argument)
+        if self.app(&bl, "mkprog", 1).is_some() && self.app(&bh, "mkprog", 1).is_some() {
+            return self.proc_ref_any(low, high, pl.len());
+        }
         let fl = self.app(&bl, "fn_build", 2).ok_or("the low function: not fn_build")?.to_vec();
         let fh = self.app(&bh, "fn_build", 2).ok_or("the high function: not fn_build")?.to_vec();
         if self.canon(&fl[0]) != self.canon(&fh[0]) {
@@ -87,7 +91,7 @@ impl<'e> Gen<'e> {
         }
         let (nl, nh) = (self.env.syms[*sl as usize].name.clone(), self.env.syms[*sh as usize].name.clone());
         // the procedures' refinement, for every argument
-        let pr = self.proc_ref(&nl, &nh, al.len())?;
+        let pr = self.proc_ref_any(&nl, &nh, al.len())?;
         self.trace(|| format!("refines: {} refines {}", nl, nh));
         // the wrapper's, for an argument list a (x0 in the program), every
         // world and outcome
@@ -141,10 +145,60 @@ impl<'e> Gen<'e> {
         self.close(r3, &[h1, h2, h3, prem_t], &vs)
     }
 
+    /// The procedures' refinement: a CFG procedure with its blocks'
+    /// procedures (`PL__entry`, slc gimple --cfg) through them -- the CFG
+    /// against them (its loop's points their labels), they against PH
+    /// (each call of one unfolded); else by the walk
+    fn proc_ref_any(&mut self, pl: &str, ph: &str, n: usize) -> Result<Seq, String> {
+        if pl.ends_with("__entry") {
+            self.unfold_blocks = true;
+            let r = self.proc_ref(pl, ph, n);
+            self.unfold_blocks = false;
+            return r;
+        }
+        let entry = format!("{pl}__entry");
+        // (C1_BLOCKS=1: through the blocks' procedures -- in progress, void
+        // functions and joins not yet, docs/todo.md)
+        if !self.env.sym_by_name.contains_key(&entry) || std::env::var("C1_BLOCKS").map_or(true, |v| v != "1") {
+            return self.proc_ref(pl, ph, n);
+        }
+        if ph == entry {
+            // (the CFG procedure's parameters among its blocks': all but
+            // those reassigned -- locals there)
+            let (dl, _) = self.def_of(pl)?;
+            let fixed: Vec<usize> = (0..dl.len()).filter(|&i| !self.env.vars[dl[i] as usize].name.split('$').next().unwrap_or("").ends_with("_in")).collect();
+            self.gblocks = Some((pl.to_string(), fixed, Vec::new()));
+            let r = self.proc_ref(pl, ph, n);
+            self.gblocks = None;
+            return r;
+        }
+        let pa = self.proc_ref_any(pl, &entry, n)?;
+        let pb = self.proc_ref_any(&entry, ph, n)?;
+        // (the two composed)
+        let ps: Vec<Term> = (0..n).map(|i| self.var(&format!("pa{i}"))).collect();
+        let (w, o) = (self.var("pw"), self.var("po"));
+        let rl = |g: &Gen, nm: &str| g.mk("runs", vec![g.mk(nm, ps.clone()), w.clone(), o.clone()]);
+        let h = rl(self, pl);
+        let hs = self.assume(&h)?;
+        let mut args: Vec<RA> = ps.iter().map(t).collect();
+        args.extend([t(&w), t(&o)]);
+        let mut a1 = args.clone();
+        a1.push(s(&hs));
+        let r1 = self.run(&mp(R::S(pa), a1), &[])?;
+        args.push(s(&r1));
+        let r2 = self.run(&mp(R::S(pb), args), &[])?;
+        let mut vs: Vec<VarId> = ps.iter().map(Self::var_id).collect();
+        vs.extend([Self::var_id(&w), Self::var_id(&o)]);
+        self.close(r2, &[h], &vs)
+    }
+
     /// The procedures' refinement: `all ps s r. runs(PL(ps), s, r) ->
     /// runs(PH(ps), s, r)` by the walk
     fn proc_ref(&mut self, pl: &str, ph: &str, n: usize) -> Result<Seq, String> {
         let ps: Vec<Term> = (0..n).map(|i| self.var(&format!("pa{i}"))).collect();
+        if let Some(g) = self.gblocks.as_mut() {
+            g.2 = g.1.iter().map(|&i| ps[i].clone()).collect();
+        }
         let w = self.var("pw");
         let o = self.var("po");
         self.w = w.clone();
@@ -277,6 +331,44 @@ impl<'e> Gen<'e> {
         self.proj_step_in(lo, &lo0)
     }
 
+    /// A block's procedure called on the CFG side (`F__bN(..)`, the
+    /// generator's block procedures, slc/cli/src/gimple/lower/readable.rs):
+    /// the call by its definition's body (its equation), then the body in
+    /// place of the call (g.low_call). x: the bind_rel's arguments, kl the
+    /// block's rest.
+    fn block_call(&mut self, lo: &Term, x: &[Term], kl: &Term) -> Result<Option<(Term, Seq)>, String> {
+        if !self.unfold_blocks {
+            return Ok(None);
+        }
+        let lctx = ["o", "x8"];
+        let Some(op) = self.lam(&x[0], &lctx, &[]) else { return Ok(None) };
+        // (the body in place)
+        if let Some(r) = self.app(&op, "mkprog", 1).map(|m| m[0].clone()) {
+            let st = self.lam(&x[1], &lctx, &[]).ok_or("a block's call's world reads the block")?;
+            let ka = self.lam(&x[2], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("a call's rest")?;
+            let xa = self.lam(&x[3], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("a call's handler")?;
+            let da = self.lam(&x[4], &["o", "x8", "x9"], &["x9", "x8"]).ok_or("a call's handler")?;
+            return self.low_by(R::Inst("g.low_call".into(), vec![("r", r), ("s", st), ("ka", ka), ("xa", xa), ("da", da), ("kl", kl.clone())])).map(Some);
+        }
+        let Node::App(f0, args) = op.node() else { return Ok(None) };
+        let name = self.env.syms[*f0 as usize].name.clone();
+        let is_block = name.rsplit_once("__b").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
+        if !is_block {
+            return Ok(None);
+        }
+        // (the call by its definition)
+        let (ps, body) = self.def_of(&name)?;
+        let mut b = body;
+        for (p, a) in ps.iter().zip(args.iter()) {
+            b = b.subst_var(*p, a, &self.env.binders_fn());
+        }
+        let eq = self.mk("eq", vec![op.clone(), b.clone()]);
+        let pf = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec![name.clone()]), &eq, &[])?;
+        let ab = self.abstract_(lo, &op, 0);
+        let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a call's context")?;
+        self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", op), ("b", b)]), vec![s(&pf)])).map(Some)
+    }
+
     /// ... one in the part `sub` of it (a value about to be substituted, the
     /// block's head: not the other blocks of the dispatch)
     fn proj_step_in(&mut self, lo: &Term, sub: &Term) -> Result<Option<(Term, Seq)>, String> {
@@ -321,6 +413,12 @@ impl<'e> Gen<'e> {
             return self.low_by(R::Inst("g.low_intro".into(), vec![("l", lo.clone())])).map(Some);
         };
         let kl = self.lam(&k, &lctx, &["x8", "o"]).ok_or("the lower block's rest")?;
+        // (a block's procedure called: its body in place, g.low_call)
+        if let Some(x) = self.app(&a, "bind_rel", 5).map(|x| x.to_vec()) {
+            if let Some(r) = self.block_call(lo, &x, &kl)? {
+                return Ok(Some(r));
+            }
+        }
         if let Some(x) = self.app(&a, "letin", 2).map(|x| x.to_vec()) {
             let e = self.lam(&x[0], &lctx, &[]).ok_or("a let's value reads the block")?;
             // (its projections taken first)
@@ -710,7 +808,7 @@ impl<'e> Gen<'e> {
         // (the structured side's lets before it: run, as the CFG's block ran
         // them into its locals -- its point's template then on the same
         // values)
-        let ub = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone());
+        let ub = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()).filter(|_| self.gblocks.is_none());
         if let Some((ua, _)) = ub.as_ref().and_then(|b| block(self, b)) {
             if self.app(&ua, "letin", 2).is_some() {
                 if let Some(Red::Q(j, r)) = self.reduce(qi, &[])? {
@@ -734,6 +832,14 @@ impl<'e> Gen<'e> {
             let fls = self.mk("false", vec![]);
             let h = self.assume(&fls)?;
             return self.run(&mp(R::Inst("g.efq".into(), vec![("a", goal)]), vec![s(&h)]), &[]);
+        }
+        // (against the blocks' procedures: the next block's, P, called by
+        // the rest r -- P's runs r's)
+        if self.gblocks.is_some() {
+            let pr = self.block_prog(x)?;
+            let ip = self.inv_at(x, &pr)?;
+            let trn = self.tail_runs(&pr, &r, w)?;
+            return self.run(&mp(R::Inst("g.ref_jump_tail".into(), vec![("inv", inv)]), vec![t(x), t(&pr), t(&r), t(w), s(&ip), simp0(), s(&trn)]), &[]);
         }
         let ip = self.inv_at(x, &r)?;
         self.run(&mp(R::Inst("g.ref_jump".into(), vec![("inv", inv)]), vec![t(x), t(&r), t(w), s(&ip), simp0()]), &[])
@@ -1004,6 +1110,11 @@ impl<'e> Gen<'e> {
     /// the point of the label k at locals comps and program r: its index
     /// (found here in the first pass)
     fn point_at(&mut self, k: u128, comps: &[Term], r: &Term) -> Result<usize, String> {
+        // (against the blocks' procedures: the label's)
+        if self.gblocks.is_some() {
+            let g = self.gref.as_ref().expect("the points");
+            return g.points.iter().position(|p| p.label == k).ok_or_else(|| format!("label {}: no block's procedure", k));
+        }
         let pt = self.point_of(k, comps, r)?;
         let g = self.gref.as_ref().expect("the points");
         let found = g.points.iter().position(|p| p.label == k && p.shape == pt.shape && p.tmpl == pt.tmpl);
@@ -1080,8 +1191,17 @@ impl<'e> Gen<'e> {
         let comps = self.locals_of(&xs[1]);
         let q0 = self.qs[qi].clone();
         let fls = self.mk("false", vec![]);
-        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls, b: b.clone(), cur: k_e });
-        self.point_at(k_e, &comps, &q0)?;
+        // (against the blocks' procedures: a point per block, its locals
+        // free, its procedure there; else the points found)
+        let preset = match self.gblocks.clone() {
+            Some((f, _, fixed)) => self.block_points(&f, &fixed, comps.len())?,
+            None => Vec::new(),
+        };
+        let blocks = !preset.is_empty();
+        self.gref = Some(GRef { m: comps.len(), points: preset, edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls, b: b.clone(), cur: k_e });
+        if !blocks {
+            self.point_at(k_e, &comps, &q0)?;
+        }
         // the first pass: each point's walk, its points found
         let mut i = 0;
         while i < self.gref.as_ref().unwrap().points.len() {
@@ -1114,12 +1234,14 @@ impl<'e> Gen<'e> {
         let pd = self.combine(&prems[1], 1)?;
         let pm = self.combine(&prems[2], 2)?;
         let main = self.run(&mp(rr, vec![s(&ps), s(&pd), s(&pm)]), &[])?;
-        // at the loop's start: its point
-        let i0 = self.inv_at(&l0, &q0)?;
+        // at the loop's start: its point (against the blocks' procedures:
+        // the first block's, P0, called by the rest q0)
+        let qs0 = if blocks { self.block_prog(&l0)? } else { q0.clone() };
+        let i0 = self.inv_at(&l0, &qs0)?;
         let (rv, ov) = (self.var("lr"), self.var("lo"));
-        let c1 = self.run(&mp(R::S(main), vec![t(&l0), t(&q0), t(&rv), t(&ov), s(&i0)]), &[])?;
+        let c1 = self.run(&mp(R::S(main), vec![t(&l0), t(&qs0), t(&rv), t(&ov), s(&i0)]), &[])?;
         let c1 = self.close(c1, &[], &[Self::var_id(&rv), Self::var_id(&ov)])?;
-        let c2 = self.run(&mp(R::Inst("g.ref_cfg".into(), vec![("l", l0.clone()), ("q", q0.clone()), ("b", b), ("tr", tr), ("k", kk)]), vec![s(&c1)]), &[])?;
+        let c2 = self.run(&mp(R::Inst("g.ref_cfg".into(), vec![("l", l0.clone()), ("q", qs0.clone()), ("b", b), ("tr", tr), ("k", kk)]), vec![s(&c1)]), &[])?;
         self.gref = None;
         // (its world fst(l0): the walk's, w)
         let l0p = self.app(&l0, "pair", 2).ok_or("the loop's start not a pair")?.to_vec();
@@ -1128,7 +1250,95 @@ impl<'e> Gen<'e> {
         }
         let fe = R::Inst("fst_pair".into(), vec![("a", l0p[0].clone()), ("b", l0p[1].clone())]);
         let fl0 = self.mk("fst", vec![l0.clone()]);
-        self.run(&mp(R::Inst("g.ref_ws".into(), vec![("l", lo.clone()), ("q", q0), ("a", fl0), ("b", w.clone())]), vec![p(fe), s(&c2)]), &[])
+        let c3 = self.run(&mp(R::Inst("g.ref_ws".into(), vec![("l", lo.clone()), ("q", qs0.clone()), ("a", fl0), ("b", w.clone())]), vec![p(fe), s(&c2)]), &[])?;
+        if !blocks {
+            return Ok(c3);
+        }
+        let tr0 = self.tail_runs(&qs0, &q0, w)?;
+        self.run(&mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", q0), ("q2", qs0)]), vec![t(w), s(&c3), s(&tr0)]), &[])
+    }
+
+    /// The blocks' procedures' points (`F__bN`): each label's, its locals
+    /// free (all m, or none when the procedures take none), its program
+    /// the procedure on the fixed parameters and the locals
+    fn block_points(&mut self, f: &str, fixed: &[Term], m: usize) -> Result<Vec<GPoint>, String> {
+        let pre = format!("{f}__b");
+        let mut labels: Vec<(u128, String)> = self
+            .env
+            .sym_by_name
+            .keys()
+            .filter_map(|n| n.strip_prefix(&pre).and_then(|k| k.parse::<u128>().ok()).map(|k| (k, n.clone())))
+            .collect();
+        labels.sort();
+        let mut out = Vec::new();
+        for (k, name) in labels {
+            let (ps, _) = self.def_of(&name)?;
+            let nloc = ps.len().checked_sub(fixed.len()).ok_or("a block's procedure of fewer parameters")?;
+            let yv = self.var("gby");
+            let mut args = fixed.to_vec();
+            if nloc == m {
+                args.extend((0..m).map(|j| self.cfg_proj(&yv, j, m)));
+            } else if nloc != 0 {
+                return Err(format!("`{}`: {} locals, the CFG's {}", name, nloc, m));
+            }
+            let tmpl = self.abs(&self.mk(&name, args), &[Self::var_id(&yv)]);
+            out.push(GPoint { label: k, shape: vec![Sh::Free; m], tmpl });
+        }
+        Ok(out)
+    }
+
+    /// the program of the CFG's state x by the blocks' procedures: its
+    /// label's on its locals
+    fn block_prog(&mut self, x: &Term) -> Result<Term, String> {
+        let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
+        let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
+        let g = self.gref.as_ref().ok_or("the CFG's points")?;
+        let p = g.points.iter().find(|p| p.label == k).ok_or_else(|| format!("label {}: no block's procedure", k))?;
+        Ok(p.tmpl.instantiate_params(std::slice::from_ref(&xs[1]), &self.env.binders_fn()))
+    }
+
+    /// `all o. runs(P, w, o) -> runs(R, w, o)`: R calls P (a block's
+    /// procedure), its outcome passed on -- the call walked with its
+    /// outcome as it is (g.id_runs), P's universe and outcomes' kinds
+    fn tail_runs(&mut self, pr: &Term, r: &Term, w: &Term) -> Result<Seq, String> {
+        let (rr, stmt) = self.inst("g.id_runs", &[("p", pr.clone()), ("s", w.clone()), ("r", r.clone())])?;
+        let (prems, _) = self.imps(&stmt);
+        let x = self.app(&prems[0], "g.ref", 3).ok_or("g.id_runs's premise")?.to_vec();
+        let qj = self.new_q(x[1].clone());
+        let (saved, sg) = (self.w.clone(), self.gref.take());
+        let wk = self.walk(&x[0], qj, w);
+        (self.w, self.gref) = (saved, sg);
+        let wk = wk?;
+        let u = self.op_univ(pr, w)?;
+        let sh = self.shape_of(pr, w)?;
+        self.run(&mp(rr, vec![s(&wk), s(&u), s(&sh)]), &[])
+    }
+
+    /// `all o. runs(P, w, o) -> g.shaped(o)`: P a procedure's call, its
+    /// body's leaves (g.proc_shaped, the body walked alone)
+    fn shape_of(&mut self, pr: &Term, w: &Term) -> Result<Seq, String> {
+        let Node::App(f0, args) = pr.node() else { return Err("a call not a procedure's".into()) };
+        let name = self.env.syms[*f0 as usize].name.clone();
+        let (ps, body) = self.def_of(&name)?;
+        let mut b = body;
+        for (p0, a) in ps.iter().zip(args.iter()) {
+            b = b.subst_var(*p0, a, &self.env.binders_fn());
+        }
+        let r = self.app(&b, "mkprog", 1).ok_or("a procedure not a program")?[0].clone();
+        let (rr, stmt) = self.inst("g.proc_shaped", &[("r", r), ("s", w.clone())])?;
+        let (prems, _) = self.imps(&stmt);
+        let x = self.app(&prems[0], "g.post", 2).ok_or("g.proc_shaped's premise")?.to_vec();
+        let sg = self.gref.take();
+        let pf = self.post(&x[0], &x[1], w);
+        self.gref = sg;
+        let sh = self.run(&mp(rr, vec![s(&pf?)]), &[])?;
+        // (the call by its definition)
+        let ov = self.var("so");
+        let concl = self.mk("g.shaped", vec![ov.clone()]);
+        let hr = self.mk("runs", vec![pr.clone(), w.clone(), ov.clone()]);
+        let goal0 = Term::app(self.env.builtins.imp, vec![hr, concl]);
+        let goal = self.mk("all", vec![self.abs(&goal0, &[Self::var_id(&ov)])]);
+        self.evp(&RP::Defs(Box::new(RP::By(R::S(sh))), vec![name]), &goal, &[])
     }
 
     /// a premise `all l q. inv(l, q) -> G(l, q)`: G (`l q. ..`)
@@ -1322,6 +1532,17 @@ impl<'e> Gen<'e> {
 
     /// the leaf's p(e): going on at x related, of a lower rank; leaving
     fn post_leaf(&mut self, e: &Term, pp: &Term, l1: &Term) -> Result<Seq, String> {
+        // (the outcome's kind: its constructor)
+        if self.app(pp, "g.shaped", 1).is_some_and(|x| matches!(x[0].node(), Node::BVar(0))) {
+            if let Some(x) = self.app(e, "ok", 2).map(|x| x.to_vec()) {
+                return self.run(&R::Inst("g.shaped_ok".into(), vec![("m", x[0].clone()), ("v", x[1].clone())]), &[]);
+            }
+            if let Some(x) = self.app(e, "exc", 2).map(|x| x.to_vec()) {
+                return self.run(&R::Inst("g.shaped_exc".into(), vec![("m", x[0].clone()), ("e", x[1].clone())]), &[]);
+            }
+            let x = self.app(e, "diverge", 1).ok_or_else(|| format!("a procedure's outcome {}: not ok, exc, diverge", self.print(e)))?.to_vec();
+            return self.run(&R::Inst("g.shaped_div".into(), vec![("t", x[0].clone())]), &[]);
+        }
         let ql = {
             let b = self.app(pp, "all", 1).ok_or("the ways' condition")?[0].clone();
             let (_, q) = self.imps(&b);

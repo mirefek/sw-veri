@@ -957,6 +957,124 @@ proof
   show by ex_intro({x8}, taut(b2, hk))
 qed
 
+// (a block's procedure called on the CFG side: its body there, its outcome
+// dispatched as the elaborator dispatches a nested block's)
+theorem g.low_call(x0 x1. r, s, s1 v x8. ka, s1 e x8. xa, t x8. da, x8 o. kl): all o.
+  (ex x8. bind_rel(mkprog(x0 x1. r(x0, x1)), s, x9 x10. ka(x9, x10, x8), x9 x10. xa(x9, x10, x8), x9. da(x9, x8)) && kl(x8, o)) ->
+  ex x8. (ex y. r(s, y) && ((fst(y) = 0 && ka(out_state(y), out_value(y), x8)) || (fst(y) = 1 && xa(out_state(y), out_value(y), x8)) || (fst(y) = 2 && da(snd(y), x8)))) && kl(x8, o)
+proof
+  fix o
+  assume h
+  obtain x8, hb hk from h
+  obtain y, hr hc from expand(hb, bind_rel)
+  have e := apply(g.runs_elim, hr)
+  have c1: (ex s1 v. y = ok(s1, v) && ka(s1, v, x8)) -> (fst(y) = 0 && ka(out_state(y), out_value(y), x8)) proof
+    assume a
+    obtain s1 v, ey k1 from a
+    have k2 := subst({z. ka(z, v, x8)}, sym(out_state_ok[s := s1, v := v]), k1)
+    have k3 := subst({z. ka(out_state(ok(s1, v)), z, x8)}, sym(out_value_ok[s := s1, v := v]), k2)
+    have f: fst(ok(s1, v)) = 0 && ka(out_state(ok(s1, v)), out_value(ok(s1, v)), x8) by taut(fst_ok[s := s1, v := v], k3)
+    show := rewrite(sym(ey), f)
+  qed
+  have c2: (ex s1 e. y = exc(s1, e) && xa(s1, e, x8)) -> (fst(y) = 1 && xa(out_state(y), out_value(y), x8)) proof
+    assume a
+    obtain s1 e1, ey k1 from a
+    have k2 := subst({z. xa(z, e1, x8)}, sym(out_state_exc[s := s1, e := e1]), k1)
+    have k3 := subst({z. xa(out_state(exc(s1, e1)), z, x8)}, sym(out_value_exc[s := s1, e := e1]), k2)
+    have f: fst(exc(s1, e1)) = 1 && xa(out_state(exc(s1, e1)), out_value(exc(s1, e1)), x8) by taut(fst_exc[s := s1, e := e1], k3)
+    show := rewrite(sym(ey), f)
+  qed
+  have c3: (ex t. y = diverge(t) && da(t, x8)) -> (fst(y) = 2 && da(snd(y), x8)) proof
+    assume a
+    obtain t, ey k1 from a
+    have k2 := subst({z. da(z, x8)}, sym(g.snd_diverge[t := t]), k1)
+    have f: fst(diverge(t)) = 2 && da(snd(diverge(t)), x8) by taut(fst_diverge[t := t], k2)
+    show := rewrite(sym(ey), f)
+  qed
+  have d: ex y. r(s, y) && ((fst(y) = 0 && ka(out_state(y), out_value(y), x8)) || (fst(y) = 1 && xa(out_state(y), out_value(y), x8)) || (fst(y) = 2 && da(snd(y), x8))) by ex_intro({y}, taut(e, hc, c1, c2, c3))
+  show by ex_intro({x8}, taut(d, hk))
+qed
+
+// The CFG and its blocks' procedures (`F__bN`, slc gimple --cfg): the
+// CFG's loop from label k is the procedure of block k on the locals. A
+// jump of the CFG is a tail call of the next block's procedure, its outcome
+// passed on: an outcome of one of the three kinds (every procedure's,
+// syntactically -- its body's leaves).
+def g.shaped(o) := (ex m v. o = ok(m, v)) || (ex m e. o = exc(m, e)) || (ex t. o = diverge(t))
+
+theorem g.shaped_ok(m, v): g.shaped(ok(m, v))
+proof
+  have e: ex m2 v2. ok(m, v) = ok(m2, v2) by ex_intro({m}, {v}, refl({ok(m, v)}))
+  show by defs(taut(e), g.shaped)
+qed
+
+theorem g.shaped_exc(m, e): g.shaped(exc(m, e))
+proof
+  have x: ex m2 e2. exc(m, e) = exc(m2, e2) by ex_intro({m}, {e}, refl({exc(m, e)}))
+  show by defs(taut(x), g.shaped)
+qed
+
+theorem g.shaped_div(t): g.shaped(diverge(t))
+proof
+  have x: ex t2. diverge(t) = diverge(t2) by ex_intro({t}, refl({diverge(t)}))
+  show by defs(taut(x), g.shaped)
+qed
+
+// (a procedure's outcomes: of its body's)
+theorem g.proc_shaped(x0 x1. r, s): g.post(o. r(s, o), o. g.shaped(o)) -> all o. runs(mkprog(x0 x1. r(x0, x1)), s, o) -> g.shaped(o)
+proof
+  assume h
+  fix o
+  assume hr
+  have e := apply(g.runs_elim, hr)
+  show := mp(all_elim(expand(h, g.post), {o}), e)
+qed
+
+// (P's runs R's: R calls P, its outcome passed on -- the walk of the
+// call with its outcome as it is)
+theorem g.id_runs(p, s, r): g.ref(o. ex x8. bind_rel(p, s, s1 v. x8 = ok(s1, v), s1 e. x8 = exc(s1, e), t. x8 = diverge(t)) && x8 = o, r, s) ->
+  (all o. runs(p, s, o) -> pair(s, o) in univ(1)) -> (all o. runs(p, s, o) -> g.shaped(o)) -> all o. runs(p, s, o) -> runs(r, s, o)
+proof
+  assume h hu hs
+  fix o
+  assume hr
+  have sh := expand(mp(all_elim(hs, {o}), hr), g.shaped)
+  have c1: (ex m v. o = ok(m, v)) -> ex s1 v. o = ok(s1, v) && o = ok(s1, v) proof
+    assume a
+    obtain m v, e from a
+    show by ex_intro({m}, {v}, taut(e))
+  qed
+  have c2: (ex m e. o = exc(m, e)) -> ex s1 e. o = exc(s1, e) && o = exc(s1, e) proof
+    assume a
+    obtain m e1, e from a
+    show by ex_intro({m}, {e1}, taut(e))
+  qed
+  have c3: (ex t. o = diverge(t)) -> ex t. o = diverge(t) && o = diverge(t) proof
+    assume a
+    obtain t, e from a
+    show by ex_intro({t}, taut(e))
+  qed
+  have b: bind_rel(p, s, s1 v. o = ok(s1, v), s1 e. o = exc(s1, e), t. o = diverge(t)) by defs(ex_intro({o}, taut(hr, sh, c1, c2, c3)), bind_rel)
+  have l: ex x8. bind_rel(p, s, s1 v. x8 = ok(s1, v), s1 e. x8 = exc(s1, e), t. x8 = diverge(t)) && x8 = o by ex_intro({o}, taut(b, refl({o})))
+  show := mp(all_elim(expand(h, g.ref), {o}), l, mp(all_elim(hu, {o}), hr))
+qed
+
+// (a jump of the CFG against the tail call of its block's procedure p:
+// p's runs the rest's)
+theorem g.ref_jump_tail(l q. inv): all l2 p r s. inv(l2, p) -> s = fst(l2) -> (all o. runs(p, s, o) -> runs(r, s, o)) ->
+  g.ref(o. all q2. inv(l2, q2) -> pair(fst(l2), o) in univ(1) -> runs(q2, fst(l2), o), r, s)
+proof
+  fix l2 p r s
+  assume hi hs hpr
+  have g: all o. (all q2. inv(l2, q2) -> pair(fst(l2), o) in univ(1) -> runs(q2, fst(l2), o)) -> pair(s, o) in univ(1) -> runs(r, s, o) proof
+    fix o
+    assume hj hu
+    have r1 := mp(all_elim(hj, {p}), hi, rewrite(hs, hu))
+    show := mp(all_elim(hpr, {o}), rewrite(sym(hs), r1))
+  qed
+  show by defs(g, g.ref)
+qed
+
 // (the world, by an equation)
 theorem g.ref_ws(o. l, q, a, b): a = b -> g.ref(o. l(o), q, a) -> g.ref(o. l(o), q, b)
 proof

@@ -13,22 +13,29 @@ call graph.
 C1 on GCC's control-flow graph, the CFG form refining the structured
 form, the structured form's C2: composed per function.
 
-1. The CFG ⊑ structured check (`slc/cli/src/c1/gref.rs`), the remaining
-   functions:
-   - `__malloc_alloc_meta`: its points multiply (a label reached at two
-     structured positions -- in an `if`'s branch and after its join; a
-     local a literal on one path, any value on another). A point relates
-     the CFG's locals to the structured side by value: the template finds
-     a local's value in the remainder by syntax, so a literal cannot be
-     made free. Relate them by binding instead: each assignment carries
-     its GIMPLE statement's identity in both readable forms (the
-     generator), printed as the binder's name by the elaborator (the
-     kernel keeps binder names); a point's local j is the structured
-     side's current binding of that variable.
-   - The loops (step_seq, activate_group, try_avail, ...): the divergence
+1. The CFG ⊑ structured check through the blocks' procedures
+   (`C1_BLOCKS=1`, get_stride so far): the generator writes each CFG
+   block as a procedure `F__bN` (a jump its tail call) and `F__entry`;
+   (A) the CFG's loop ⊑ `F__entry`, a point per block (its procedure on
+   the locals, nothing found by search); (B) `F__entry` ⊑ the structured
+   procedure, a walk with each block's call unfolded. Next:
+   - void functions: a void tail call drops the callee's value -- a
+     callee's outcome `ok(w, empty)` (its leaves, as the outcomes' kinds
+     by g.proc_shaped);
+   - joins in (B): a block reached on two ways is walked once per way
+     (enframe 3 GB, get_meta out of memory). A tail call's wrappers
+     nest differently on each way: turn a tail call into a jump (a lemma:
+     the wrapper and dispatch pass the outcome on), so the CFG side at a
+     block's start is its body alone, and walk each (block, structured
+     join -- the `if`'s rest on its locals' tuple) once;
+   - then all functions by it, the switch removed, and the old points
+     (`point_of`, discovery, templates by value) retired;
+   - the structured form generated and checked in one run (`slc gimple`
+     running the refinement), and `refines` again in the checked chain;
+   - the loops (step_seq, activate_group, try_avail, ...): the divergence
      theorem for nested loops (an infinite run of the CFG a diverging run
-     of the structured loops, the same trace).
-   - Functions the generator does not structure: C2 on the CFG (item 6).
+     of the structured loops, the same trace);
+   - functions the generator does not structure: C2 on the CFG (item 6).
 2. The callers composed (`proofs/mallocng_cfg.core`): the CFG C1 linked
    with its callees' contracts (as `proofs/mallocng_link.core`); a
    callee's refinement a theorem of its own (now walked again in each
