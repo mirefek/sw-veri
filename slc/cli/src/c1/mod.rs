@@ -204,6 +204,8 @@ struct Gen<'e> {
     no_redex: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_refl: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
+    /// (why the last join failed, join.rs: its error's reasons)
+    join_why: std::cell::RefCell<Vec<String>>,
     /// (the normal forms made, nf.rs: for good -- a name's meaning is fixed)
     nf_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
     zs: Vec<VarId>,

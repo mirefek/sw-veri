@@ -20,8 +20,9 @@
 //! homes among the path's). Where an enclosing block ends at the same
 //! point, the claim is the outer one's. A loop's rule is shared the same
 //! way: its claim is for every locals and world (`loop_claims`). Nothing
-//! is trusted here: a claim the walk cannot prove, or a path it does not
-//! fit, only loses the sharing.
+//! is trusted here. A claim the walk cannot prove, or a path it does not
+//! fit, stops the check at the block's end with why (the paths are never
+//! walked on one by one: the walk stays linear in the code, or fails).
 
 use super::rec::*;
 use super::*;
@@ -65,6 +66,13 @@ impl<'e> Gen<'e> {
             },
             _ => vec![a2],
         }
+    }
+
+    /// a join's failure: traced, and kept for the error
+    fn why(&self, m: impl FnOnce() -> String) {
+        let m = m();
+        self.trace(|| m.clone());
+        self.join_why.borrow_mut().push(m);
     }
 
     /// the number of a's predecessors in the code
@@ -156,9 +164,14 @@ impl<'e> Gen<'e> {
         let Spec::Proc(qi) = st.spec else { return Ok(None) };
         let q = self.qs[qi].clone();
         let Some((w0, y0, e0)) = self.stmt_end(&q) else { return Ok(None) };
+        // (paths meeting at a block's end are joined, or the check fails
+        // here: never walked on one by one)
+        self.join_why.borrow_mut().clear();
+        let preds = self.preds_of(st.a);
+        let fail = |g: &Gen| Err(format!("{:x}: paths meet here ({} predecessors, a block's end of the spec) and are not joined: {}", st.a, preds, g.join_why.borrow().join("; ")));
         if !matches!(w0.node(), Node::BVar(2)) && self.expand(&w0) != self.expand(&st.w) {
-            self.trace(|| format!("stmt at {:x}: the block's world not the point's", st.a));
-            return Ok(None);
+            self.why(|| format!("stmt at {:x}: the block's world not the point's", st.a));
+            return fail(self);
         }
         // (an enclosing block ending here too -- the rest's reductions reach
         // its end before the machine's next step: the claim there, the same
@@ -172,15 +185,18 @@ impl<'e> Gen<'e> {
             }
         }
         if self.stmt_fail.contains(&st.a) {
-            return Ok(None);
+            self.why(|| format!("stmt at {:x}: no claim could be made here", st.a));
+            return fail(self);
         }
         let Some(i) = self.stmt_make(st, &q, &w0, &y0, &e0)? else {
             self.stmt_fail.insert(st.a);
-            return Ok(None);
+            self.why(|| format!("stmt at {:x}: no claim made", st.a));
+            return fail(self);
         };
         let pf = self.stmt_use(i, st, &q, &y0)?;
         if pf.is_none() {
-            self.trace(|| format!("stmt at {:x}: its claim does not fit the path it was made from", st.a));
+            self.why(|| format!("stmt at {:x}: its claim does not fit the path it was made from", st.a));
+            return fail(self);
         }
         Ok(pf)
     }
@@ -359,7 +375,7 @@ impl<'e> Gen<'e> {
             vs.iter().any(|v| (*v as usize) >= mark && !vids.contains(v))
         };
         if own(&self.expand(&q_gen)) || own(&self.expand(&hst_y)) {
-            self.trace(|| format!("stmt at {:x}: a value of the path's own not abstracted", a));
+            self.why(|| format!("stmt at {:x}: a value of the path's own not abstracted", a));
             return Ok(None);
         }
         // the frame: the function's own (the least a path has here)
@@ -415,14 +431,14 @@ impl<'e> Gen<'e> {
         let pf = match pf {
             Ok(pf) => pf,
             Err(e) => {
-                self.trace(|| format!("stmt at {:x}: its claim not proven ({}), the paths on their own", a, e.replace('\n', " / ")));
+                self.why(|| format!("stmt at {:x}: its claim not proven ({}), the paths on their own", a, e.replace('\n', " / ")));
                 return Ok(None);
             }
         };
         let claim = match self.close(pf, &[hu_t, hw_t, yt_t], &vids) {
             Ok(c) => c,
             Err(e) => {
-                self.trace(|| format!("stmt at {:x}: its claim not closed ({})", a, e));
+                self.why(|| format!("stmt at {:x}: its claim not closed ({})", a, e));
                 return Ok(None);
             }
         };
@@ -447,7 +463,7 @@ impl<'e> Gen<'e> {
         let inst = |x: &Term| c.ys.iter().zip(vals.iter()).fold(x.subst_var(c.wv, &st.w, &bf), |t, ((_, v), val)| t.subst_var(*v, val, &bf));
         let (q1, q2) = (self.expand(&inst(&c.q)), self.expand(q));
         if q1 != q2 {
-            self.trace(|| {
+            self.why(|| {
                 // (where: the first subterms that differ)
                 fn diff(x: &Term, y: &Term, d: usize, env: &Env) -> (Term, Term, usize) {
                     match (x.node(), y.node()) {
@@ -469,12 +485,12 @@ impl<'e> Gen<'e> {
         let (dc, dp) = (nat(&self.expand(&c.ds)), nat(&self.expand(&st.ds)));
         let fd_ok = self.expand(&c.ds) == self.expand(&st.ds) || matches!((dc, dp), (Some(x), Some(y)) if 0 < x && x <= y && y <= 65536);
         if !fd_ok {
-            self.trace(|| format!("stmt at {:x}: not an instance of claim {} (the frame)", st.a, i));
+            self.why(|| format!("stmt at {:x}: not an instance of claim {} (the frame)", st.a, i));
             return Ok(None);
         }
         // (the claim's own assumptions in st's scope)
         if let Some(h) = self.out_of_scope(st, &c.claim) {
-            self.trace(|| format!("stmt at {:x}: its claim rests on {}, not here", st.a, self.print(&h)));
+            self.why(|| format!("stmt at {:x}: its claim rests on {}, not here", st.a, self.print(&h)));
             return Ok(None);
         }
         let res = (|| -> Result<Seq, String> {
@@ -512,7 +528,7 @@ impl<'e> Gen<'e> {
                 Ok(Some(pf))
             }
             Err(e) => {
-                self.trace(|| format!("stmt at {:x}: claim {} not used ({})", st.a, i, e.replace('\n', " / ")));
+                self.why(|| format!("stmt at {:x}: claim {} not used ({})", st.a, i, e.replace('\n', " / ")));
                 Ok(None)
             }
         }

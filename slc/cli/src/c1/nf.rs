@@ -283,15 +283,27 @@ impl<'e> Gen<'e> {
             }
             if let Some(l) = self.app(&a[1], "bits_add", 3).filter(|l| l[0] == n).map(|l| l.to_vec()) {
                 let (x, b, c) = (l[1].clone(), l[2].clone(), a[2].clone());
-                if nat(&b).is_some() && nat(&c).is_some() {
+                // (two literals, or two like terms, last: together -- then
+                // gathered, combined)
+                if (nat(&b).is_some() && nat(&c).is_some()) || self.like(&n, &b, &c).is_some() {
                     let e = inst(self, "nf.add_lits", vec![("n", n.clone()), ("x", x.clone()), ("k1", b.clone()), ("k2", c.clone())])?;
                     return Ok(Some((self.mk("bits_add", vec![n.clone(), x, self.mk("bits_add", vec![n, b, c])]), e)));
                 }
-                if self.term_cmp(&b, &c) == Ordering::Greater {
+                if self.sum_cmp(&n, &b, &c) == Ordering::Greater {
                     let e = inst(self, "nf.add_swap", vec![("n", n.clone()), ("x", x.clone()), ("b", b.clone()), ("c", c.clone())])?;
                     return Ok(Some((self.mk("bits_add", vec![n.clone(), self.mk("bits_add", vec![n, x, c]), b]), e)));
                 }
-                return Ok(None);
+            } else {
+                // (two terms: like ones combined, a*c1 + a*c2 = a*(c1 + c2);
+                // else ordered -- their bases, literals last)
+                if let Some((lemma, bs, next)) = self.like(&n, &a[1], &a[2]) {
+                    let e = inst(self, lemma, bs)?;
+                    return Ok(Some((next, e)));
+                }
+                if self.sum_cmp(&n, &a[1], &a[2]) == Ordering::Greater {
+                    let e = self.run(&R::Inst("nf.add_comm".into(), vec![("n", n.clone()), ("a", a[1].clone()), ("b", a[2].clone())]), &[])?;
+                    return Ok(Some((t.with_args(vec![n, a[2].clone(), a[1].clone()]), e)));
+                }
             }
         }
         // a product by a literal: distributed over a sum, literal factors
@@ -329,8 +341,8 @@ impl<'e> Gen<'e> {
                 }
             }
         }
-        // a commutative operation: its operands ordered
-        if let Some((_, lemma)) = COMM.iter().find(|c| c.0 == name) {
+        // a commutative operation: its operands ordered (a sum's: above)
+        if let Some((_, lemma)) = COMM.iter().find(|c| c.0 == name && name != "bits_add") {
             if a.len() == 3 && self.term_cmp(&a[1], &a[2]) == Ordering::Greater {
                 let r = R::Inst(lemma.to_string(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())]);
                 let e = self.run(&r, &[])?;
@@ -509,6 +521,39 @@ fn struct_cmp(a: &Term, b: &Term) -> Ordering {
 }
 
 impl<'e> Gen<'e> {
+    /// a sum's term without its literal factor (at width n)
+    fn base(&self, n: &Term, t: &Term) -> Term {
+        match self.app(t, "bits_mul", 3) {
+            Some(m) if m[0] == *n && nat(&m[2]).is_some() => m[1].clone(),
+            _ => t.clone(),
+        }
+    }
+
+    /// a sum's terms' order: literals last, by their bases, then themselves
+    /// (like terms next to each other)
+    fn sum_cmp(&self, n: &Term, a: &Term, b: &Term) -> Ordering {
+        rank(&self.expand(a)).cmp(&rank(&self.expand(b))).then_with(|| self.term_cmp(&self.base(n, a), &self.base(n, b))).then_with(|| self.term_cmp(a, b))
+    }
+
+    /// two like terms (not literals) b + c: the equation combining them, its
+    /// instance, the result
+    #[allow(clippy::type_complexity)]
+    fn like(&self, n: &Term, b: &Term, c: &Term) -> Option<(&'static str, Vec<(&'static str, Term)>, Term)> {
+        if nat(b).is_some() || nat(c).is_some() || self.expand(&self.base(n, b)) != self.expand(&self.base(n, c)) {
+            return None;
+        }
+        let k = |t: &Term| self.app(t, "bits_mul", 3).filter(|m| m[0] == *n && nat(&m[2]).is_some()).map(|m| m[2].clone());
+        let mul = |a: &Term, x: Term| self.mk("bits_mul", vec![n.clone(), a.clone(), x]);
+        let add = |x: Term, y: Term| self.mk("bits_add", vec![n.clone(), x, y]);
+        let a = self.base(n, b);
+        Some(match (k(b), k(c)) {
+            (Some(c1), Some(c2)) => ("nf.add_like", vec![("n", n.clone()), ("a", a.clone()), ("c1", c1.clone()), ("c2", c2.clone())], mul(&a, add(c1, c2))),
+            (None, Some(c2)) => ("nf.add_like1", vec![("n", n.clone()), ("a", a.clone()), ("c", c2.clone())], mul(&a, add(lit(1), c2))),
+            (Some(c1), None) => ("nf.add_like2", vec![("n", n.clone()), ("a", a.clone()), ("c", c1.clone())], mul(&a, add(c1, lit(1)))),
+            (None, None) => ("nf.add_self", vec![("n", n.clone()), ("x", a.clone())], mul(&a, lit(2))),
+        })
+    }
+
     /// the operands' order: by the kernel terms (the names expanded: the
     /// same order whatever was named when), literals last
     fn term_cmp(&self, a: &Term, b: &Term) -> Ordering {

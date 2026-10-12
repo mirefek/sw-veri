@@ -276,9 +276,12 @@ item is a short summary of finished work; details are in the files named.
   from 120 s to 113 s. Hints (`using`) are N's extra equations. N includes
   the ring of words modulo 2^n for any width (from integer congruences,
   `mod_add_mod` / `mod_mul_mod` in core/bits.core): the machine's `(i +
-  58) * 8 + ctx` and GIMPLE's `(ctx + 464) + i * 8` one normal form, so
-  addresses computed otherwise match without `arith`; alloc_group's walk
-  from about 4900 points to 8640.
+  58) * 8 + ctx` and GIMPLE's `(ctx + 464) + i * 8` one normal form, like
+  terms combined (`3·x` against `x + 2·x`), so addresses computed
+  otherwise match without `arith`. Paths meeting at a block's end are
+  joined or the check fails there with why -- never walked on one by one
+  (alloc_group: from 3 GB at the memory guard to a stop at 403faf in 76
+  s).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

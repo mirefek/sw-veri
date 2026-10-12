@@ -27,10 +27,16 @@ translation verification, the engine):
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
 - GIMPLE -> CPU program translation verification of `alloc_group`: it
-  walks 8640 points and stops at the memory guard (3 GB) where paths do
-  not join -- 404241 (1104 times), 404294, 404303, 404575: the remaining
-  non-reused block-end claims (a claim with two locals sharing a variable
-  does not fit a path where they differ). The readable GIMPLE still copies one
+  stops at its first block end not joined, 403faf (76 s, 343 MB): the
+  claim there (for every world and locals) is not proven -- at 403fd4 a
+  byte load at an address the spec's facts do not cover in the claim's
+  context. Then the other block ends where paths did not join (before the
+  strict policy the walk went on path by path: 404241 1104 times, 404294,
+  404303, 404575, to 3 GB); a claim with two locals sharing a variable
+  does not fit a path where they differ.
+- C1's joins elsewhere: a code point with two predecessors where the
+  spec is not at a block's end is still walked once per path (no claim
+  there); the check should join or fail there too. The readable GIMPLE still copies one
   small block (`cnt = 1; needed = req`: an `||` whose second part has a
   signed product, not evaluated outside its guard).
 - `get_nominal_size`, `record_seq`,

@@ -89,6 +89,7 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[St
         no_refl: Default::default(),
         no_field: Default::default(),
         nf_memo: Default::default(),
+        join_why: Default::default(),
         val_of: Default::default(),
         zs: Vec::new(),
         qs: Vec::new(),

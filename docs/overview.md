@@ -121,7 +121,9 @@ For a function F, two halves:
     arrives (`tr.pt_rs`, `tr.pt_hs`, `tr.lv_fd` forget registers, homes
     and frame). A loop's rule is likewise proven once for every world and
     locals, whichever path enters it. The claims come from the spec's
-    structure, so a function's proof grows with its code, not its paths.
+    structure, so a function's proof grows with its code, not its paths:
+    where the paths meet at a block's end and no claim joins them, the
+    check fails there, saying why.
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
   - **The rules' standard form**: every comparison of the two sides is a
