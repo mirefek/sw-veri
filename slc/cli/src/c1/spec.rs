@@ -974,22 +974,13 @@ impl<'e> Gen<'e> {
         Err(format!("{:x}: a load of {} bytes at {} = {} the spec does not make (tried: {})", st.a, n, self.print(ea), self.print(&self.expand(ea)), tried.join("; ")))
     }
 
-    /// an equation of two addresses by arith, from the facts in scope (the
-    /// statics' addresses, the modulus a number)
-    pub(super) fn addr_eq(&mut self, st: &St, x: &Term, y: &Term) -> Result<Seq, String> {
-        let eq = self.mk("eq", vec![x.clone(), y.clone()]);
-        let mut facts: Vec<R> = st.lfx.iter().chain(st.hyps.iter().map(|h| &h.1)).cloned().map(R::S).collect();
-        facts.extend(self.pow_facts(&eq));
-        for nm in self.static_names(&self.expand(&eq)) {
-            let sym = self.env.sym_by_name[&nm];
-            let SymKind::Defined { body, .. } = self.env.syms[sym as usize].kind.clone() else { continue };
-            let e = self.mk("eq", vec![Term::app(sym, vec![]), body]);
-            if let Ok(q) = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec![nm.clone()]), &e, &[]) {
-                facts.push(R::S(q));
-            }
+    /// an equation of two addresses: their normal forms the same (N)
+    pub(super) fn addr_eq(&mut self, _st: &St, x: &Term, y: &Term) -> Result<Seq, String> {
+        if let Some(q) = self.eq_nf_seq(x, y)? {
+            return Ok(q);
         }
-        let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext", "bits_shl"].iter().map(|d| d.to_string()).collect();
-        self.evp(&RP::Defs(Box::new(RP::Arith(facts)), defs), &eq, &[])
+        let (nx, ny) = (self.norm(x)?.0, self.norm(y)?.0);
+        Err(format!("not the same normal form: {} and {}", self.print(&self.expand(&nx)), self.print(&self.expand(&ny))))
     }
 
     /// the fact in scope that the spec's byte load at A is defined, A the
@@ -1010,57 +1001,6 @@ impl<'e> Gen<'e> {
         }
         let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
         Err(format!("{:x}: a byte load at {} the spec does not load (the facts: {})", st.a, self.print(ea), facts.join(", ")))
-    }
-
-    /// `pow2(k) = 2^k` for the literal widths and shift counts of t's word
-    /// operations (arith's modulus and factors numbers)
-    pub(super) fn pow_facts(&mut self, t: &Term) -> Vec<R> {
-        let mut ks: BTreeSet<u128> = BTreeSet::new();
-        fn go(g: &Gen, t: &Term, ks: &mut BTreeSet<u128>) {
-            if let Node::App(f, a) = t.node() {
-                let name = g.env.syms[*f as usize].name.as_str();
-                if name.starts_with("bits_") && !a.is_empty() {
-                    if let Some(n) = nat(&a[0]) {
-                        ks.insert(n);
-                    }
-                }
-                if name == "bits_shl" || name == "bits_shr" {
-                    if let Some(k) = a.get(2).and_then(nat) {
-                        ks.insert(k);
-                    }
-                }
-                a.iter().for_each(|x| go(g, x, ks));
-            }
-        }
-        go(self, &self.expand(t), &mut ks);
-        let mut out = Vec::new();
-        for k in ks.into_iter().filter(|k| *k <= 64) {
-            let e = self.mk("eq", vec![self.mk("pow2", vec![lit(k)]), lit(1u128 << k)]);
-            if let Ok(q) = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec!["pow2".into()]), &e, &[]) {
-                out.push(R::S(q));
-            }
-        }
-        out
-    }
-
-    /// the statics in t: constants defined as a literal (their addresses)
-    pub(super) fn static_names(&self, t: &Term) -> Vec<String> {
-        let mut out = Vec::new();
-        fn go(g: &Gen, t: &Term, out: &mut Vec<String>) {
-            if let Node::App(f, a) = t.node() {
-                if a.is_empty() {
-                    if let SymKind::Defined { body, .. } = &g.env.syms[*f as usize].kind {
-                        let name = &g.env.syms[*f as usize].name;
-                        if matches!(body.node(), Node::Nat(_)) && !out.contains(name) {
-                            out.push(name.clone());
-                        }
-                    }
-                }
-                a.iter().for_each(|x| go(g, x, out));
-            }
-        }
-        go(self, t, &mut out);
-        out
     }
 
     /// a byte load's definedness at a

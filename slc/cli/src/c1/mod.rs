@@ -661,6 +661,10 @@ impl<'e> Gen<'e> {
         if let Some(a) = self.app(t, "int_add", 2) {
             return Some(self.eval_lit(&a[0])? + self.eval_lit(&a[1])?);
         }
+        if let Some(a) = self.app(t, "bits_add", 3) {
+            let n = nat(&a[0]).filter(|n| *n <= 64)?;
+            return Some((self.eval_lit(&a[1])? + self.eval_lit(&a[2])?) % (1u128 << n));
+        }
         // (a negative constant as GIMPLE writes it: 2^n - k)
         if let Some(a) = self.app(t, "bits_neg", 2) {
             let (n, k) = (nat(&a[0])?, self.eval_lit(&a[1])?);

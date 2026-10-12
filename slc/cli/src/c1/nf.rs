@@ -3,7 +3,8 @@
 //! applied innermost first, each step a kernel rewrite (`eq_subst`) by an
 //! instance of one equation. A rule producing a value takes N of its
 //! expression; one consuming a value compares normal forms (a match). Values'
-//! names are atoms (their definitions are normal already).
+//! names are atoms (their definitions are normal already), but for a name of
+//! a sum or product: its definition (the ring's terms seen through names).
 //!
 //! At a node, its arguments normal, the first that applies of:
 //! - a closed literal term: its numeral (evaluated; the equation by the
@@ -12,9 +13,18 @@
 //!   the word's width by its operation's `*_in` lemma, `nf.bits_le`);
 //! - a shift by a literal: a product by 2^k (`nf.shl_mul`); a value added
 //!   to itself: twice it (`nf.add_self`);
+//! - the ring of words modulo 2^n: a sum nested to the left
+//!   (`nf.add_assoc`), its terms in order (`nf.add_swap`), its literals
+//!   gathered last (`nf.add_lits`); a product by a literal distributed over a
+//!   sum (`nf.mul_distr`), literal factors gathered (`nf.mul_mul`);
+//!   GIMPLE's sum of two literals (a static's field) the word sum
+//!   (`nf.int_add_bits`);
 //! - a commutative operation: its operands in one order, literals last
 //!   (`nf.add_comm`, `x86.mul_comm`, `x86.and_comm`, `nf.or_comm`,
 //!   `x86i.xor_comm`).
+//!
+//! The order of operands is the kernel terms' (by their hash, the names
+//! expanded): the same whatever was named when.
 
 use super::rec::{self, R, RA};
 use super::{lit, nat, Gen};
@@ -51,6 +61,11 @@ impl<'e> Gen<'e> {
     /// A consumer's `u = v` (the machine's value, the spec's): their normal
     /// forms the same (a match), the proof by N's rewrites
     pub(super) fn eq_nf(&mut self, u: &Term, v: &Term) -> Result<Option<RA>, String> {
+        Ok(self.eq_nf_seq(u, v)?.map(|e| rec::s(&e)))
+    }
+
+    /// the same, the equation's proof
+    pub(super) fn eq_nf_seq(&mut self, u: &Term, v: &Term) -> Result<Option<Seq>, String> {
         let (nu, pu) = self.norm(u)?;
         let (nv, pv) = self.norm(v)?;
         if self.canon(&nu) != self.canon(&nv) {
@@ -64,7 +79,7 @@ impl<'e> Gen<'e> {
             Some(e) => Seq::trans(self.env, &pu, &Seq::sym(self.env, &e).map_err(|e| e.0)?).map_err(|e| e.0)?,
             None => pu,
         };
-        Ok(Some(rec::s(&e)))
+        Ok(Some(e))
     }
 
     /// A condition decided by a match after N: the comparison g (`=`, `<`,
@@ -143,11 +158,23 @@ impl<'e> Gen<'e> {
     /// (depth: the rules applied on the way here -- bounded: a hint's
     /// equation undoing another's fails, not loops)
     fn nf(&mut self, t: &Term, depth: usize) -> Result<(Term, Option<Seq>), String> {
-        if depth > 64 {
+        if depth > 256 {
             return Err(format!("N: no normal form of {} (an equation undoing another's: a hint against N's order?)", self.print(t)));
         }
         if let Some(r) = self.nf_memo.get(t) {
             return Ok(r.clone());
+        }
+        // (a name of a sum or product: its definition -- the ring's terms
+        // seen through names; the same kernel term, no step)
+        if let Node::Var(v, a) = t.node() {
+            if a.is_empty() {
+                let def = self.vals.iter().rev().find(|x| x.0 == *v).map(|x| x.1.clone());
+                if let Some(d) = def.filter(|d| ["bits_add", "bits_mul"].iter().any(|o| self.app(d, o, 3).is_some())) {
+                    let r = self.nf(&d, depth)?;
+                    self.nf_memo.insert(t.clone(), r.clone());
+                    return Ok(r);
+                }
+            }
         }
         let Node::App(f, args) = t.node() else { return Ok((t.clone(), None)) };
         if args.is_empty() || self.env.syms[*f as usize].binders.iter().any(|k| *k > 0) {
@@ -158,15 +185,19 @@ impl<'e> Gen<'e> {
         let mut pf: Option<Seq> = None;
         for i in 0..args.len() {
             let (a2, e) = self.nf(&args[i], depth)?;
+            if e.is_none() && a2 == args[i] {
+                continue;
+            }
+            let Node::App(_, ca) = cur.node() else { unreachable!() };
+            let mut ca2 = ca.to_vec();
+            ca2[i] = a2;
+            let next = cur.with_args(ca2);
+            // (a name unfolded: the same kernel term)
             if let Some(e) = e {
-                let Node::App(_, ca) = cur.node() else { unreachable!() };
-                let mut ca2 = ca.to_vec();
-                ca2[i] = a2;
-                let next = cur.with_args(ca2);
                 let c = self.cong(&cur, i, &e)?;
                 pf = Some(self.chain(pf, c)?);
-                cur = next;
             }
+            cur = next;
         }
         // (a rule at the node: then the result's normal form)
         if let Some((next, e)) = self.nf_top(&cur)? {
@@ -240,9 +271,67 @@ impl<'e> Gen<'e> {
             let e = self.run(&R::Inst("nf.add_self".into(), vec![("n", a[0].clone()), ("x", a[1].clone())]), &[])?;
             return Ok(Some((self.mk("bits_mul", vec![a[0].clone(), a[1].clone(), lit(2)]), e)));
         }
+        // a sum: nested to the left, its terms in order, literals gathered
+        // last (the ring modulo 2^n)
+        let inst = |g: &mut Gen, l: &str, bs: Vec<(&'static str, Term)>| g.run(&rec::mp(R::Inst(l.into(), bs), vec![rec::simp0()]), &[]);
+        if name == "bits_add" && a.len() == 3 {
+            let n = a[0].clone();
+            if let Some(r) = self.app(&a[2], "bits_add", 3).filter(|r| r[0] == n).map(|r| r.to_vec()) {
+                let e = inst(self, "nf.add_assoc", vec![("n", n.clone()), ("a", a[1].clone()), ("b", r[1].clone()), ("c", r[2].clone())])?;
+                let next = self.mk("bits_add", vec![n.clone(), self.mk("bits_add", vec![n, a[1].clone(), r[1].clone()]), r[2].clone()]);
+                return Ok(Some((next, e)));
+            }
+            if let Some(l) = self.app(&a[1], "bits_add", 3).filter(|l| l[0] == n).map(|l| l.to_vec()) {
+                let (x, b, c) = (l[1].clone(), l[2].clone(), a[2].clone());
+                if nat(&b).is_some() && nat(&c).is_some() {
+                    let e = inst(self, "nf.add_lits", vec![("n", n.clone()), ("x", x.clone()), ("k1", b.clone()), ("k2", c.clone())])?;
+                    return Ok(Some((self.mk("bits_add", vec![n.clone(), x, self.mk("bits_add", vec![n, b, c])]), e)));
+                }
+                if self.term_cmp(&b, &c) == Ordering::Greater {
+                    let e = inst(self, "nf.add_swap", vec![("n", n.clone()), ("x", x.clone()), ("b", b.clone()), ("c", c.clone())])?;
+                    return Ok(Some((self.mk("bits_add", vec![n.clone(), self.mk("bits_add", vec![n, x, c]), b]), e)));
+                }
+                return Ok(None);
+            }
+        }
+        // a product by a literal: distributed over a sum, literal factors
+        // gathered
+        if name == "bits_mul" && a.len() == 3 && nat(&a[2]).is_some() {
+            let n = a[0].clone();
+            if let Some(s) = self.app(&a[1], "bits_add", 3).filter(|s| s[0] == n).map(|s| s.to_vec()) {
+                let e = inst(self, "nf.mul_distr", vec![("n", n.clone()), ("a", s[1].clone()), ("b", s[2].clone()), ("c", a[2].clone())])?;
+                let m = |g: &Gen, x: &Term| g.mk("bits_mul", vec![n.clone(), x.clone(), a[2].clone()]);
+                return Ok(Some((self.mk("bits_add", vec![n.clone(), m(self, &s[1]), m(self, &s[2])]), e)));
+            }
+            if let Some(m) = self.app(&a[1], "bits_mul", 3).filter(|m| m[0] == n && nat(&m[2]).is_some()).map(|m| m.to_vec()) {
+                let e = inst(self, "nf.mul_mul", vec![("n", n.clone()), ("a", m[1].clone()), ("c1", m[2].clone()), ("c2", a[2].clone())])?;
+                return Ok(Some((self.mk("bits_mul", vec![n.clone(), m[1].clone(), self.mk("bits_mul", vec![n, m[2].clone(), a[2].clone()])]), e)));
+            }
+        }
+        // GIMPLE's sum of two literals (a static's field's address): the
+        // word sum, in the address range by evaluation
+        if name == "int_add" && a.len() == 2 {
+            if let (Some(x), Some(y)) = (self.eval_lit(&a[0]), self.eval_lit(&a[1])) {
+                if x.checked_add(y).is_some_and(|s| s < 1u128 << 64) {
+                    let lg = &self.api.as_ref().expect("the proving context").lg;
+                    let omega = self.mk("omega", vec![]);
+                    let goals = [
+                        self.mk("in", vec![self.expand(&a[0]), omega.clone()]),
+                        self.mk("in", vec![self.expand(&a[1]), omega]),
+                        self.mk("int_lt", vec![self.expand(t), self.mk("pow2", vec![lit(64)])]),
+                    ];
+                    let mut ps = Vec::new();
+                    for g in &goals {
+                        ps.push(rec::s(&Seq::eval_goal(self.env, lg, &[], g).map_err(|e| format!("N: {}: {}", self.print(g), e.0))?));
+                    }
+                    let e = self.run(&rec::mp(R::Inst("nf.int_add_bits".into(), vec![("a", a[0].clone()), ("b", a[1].clone())]), ps), &[])?;
+                    return Ok(Some((self.mk("bits_add", vec![lit(64), a[0].clone(), a[1].clone()]), e)));
+                }
+            }
+        }
         // a commutative operation: its operands ordered
         if let Some((_, lemma)) = COMM.iter().find(|c| c.0 == name) {
-            if a.len() == 3 && term_cmp(&a[1], &a[2]) == Ordering::Greater {
+            if a.len() == 3 && self.term_cmp(&a[1], &a[2]) == Ordering::Greater {
                 let r = R::Inst(lemma.to_string(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())]);
                 let e = self.run(&r, &[])?;
                 return Ok(Some((t.with_args(vec![a[0].clone(), a[2].clone(), a[1].clone()]), e)));
@@ -382,30 +471,54 @@ impl<'e> Gen<'e> {
     }
 }
 
-/// the operands' order: values (by their names), operations, literals last
-fn term_cmp(a: &Term, b: &Term) -> Ordering {
-    fn rank(t: &Term) -> u8 {
-        match t.node() {
-            Node::Var(..) => 0,
-            Node::App(..) | Node::BVar(_) | Node::Bytes(_) => 1,
-            Node::Nat(_) => 2,
-        }
+/// a term's place in the operands' order apart from its kernel term's
+/// hash: literals last
+fn rank(t: &Term) -> u8 {
+    match t.node() {
+        Node::Nat(_) => 1,
+        _ => 0,
     }
+}
+
+/// the structural order of kernel terms (a hash's tie)
+fn struct_cmp(a: &Term, b: &Term) -> Ordering {
+    let args_cmp = |xa: &[Term], ya: &[Term]| {
+        for (x, y) in xa.iter().zip(ya) {
+            let c = struct_cmp(x, y);
+            if c != Ordering::Equal {
+                return c;
+            }
+        }
+        xa.len().cmp(&ya.len())
+    };
+    let k = |t: &Term| match t.node() {
+        Node::Var(..) => 0,
+        Node::App(..) => 1,
+        Node::BVar(_) => 2,
+        Node::Bytes(_) => 3,
+        Node::Nat(_) => 4,
+    };
     match (a.node(), b.node()) {
         (Node::Var(x, xa), Node::Var(y, ya)) => x.cmp(y).then_with(|| args_cmp(xa, ya)),
         (Node::App(f, xa), Node::App(g, ya)) => f.cmp(g).then_with(|| args_cmp(xa, ya)),
         (Node::Nat(x), Node::Nat(y)) => x.cmp(y),
         (Node::BVar(x), Node::BVar(y)) => x.cmp(y),
-        _ => rank(a).cmp(&rank(b)),
+        (Node::Bytes(x), Node::Bytes(y)) => x.cmp(y),
+        _ => k(a).cmp(&k(b)),
     }
 }
 
-fn args_cmp(a: &[Term], b: &[Term]) -> Ordering {
-    for (x, y) in a.iter().zip(b) {
-        let c = term_cmp(x, y);
-        if c != Ordering::Equal {
-            return c;
-        }
+impl<'e> Gen<'e> {
+    /// the operands' order: by the kernel terms (the names expanded: the
+    /// same order whatever was named when), literals last
+    fn term_cmp(&self, a: &Term, b: &Term) -> Ordering {
+        use std::hash::{Hash, Hasher};
+        let (ea, eb) = (self.expand(a), self.expand(b));
+        let h = |t: &Term| {
+            let mut s = std::collections::hash_map::DefaultHasher::new();
+            t.hash(&mut s);
+            s.finish()
+        };
+        rank(&ea).cmp(&rank(&eb)).then_with(|| h(&ea).cmp(&h(&eb))).then_with(|| struct_cmp(&ea, &eb))
     }
-    a.len().cmp(&b.len())
 }

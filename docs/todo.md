@@ -10,27 +10,14 @@ call graph.
 
 ### 1.0 Now: the rest of the rules' standard form (docs/overview.md)
 
-In place: N, every value named in normal form, conditions and stores
-matched after N, `guard_arith` gone. What still recognizes a form of its
-own (GIMPLE -> CPU program translation verification, the engine):
-- addresses computed otherwise (`addr_eq`: `b + i*1 + 0` against the
-  spec's `p + off`, by `arith` with the statics' values): N equations for
-  the effective address (`x*1`, `+ 0`), a product distributed over a
-  literal sum and constants gathered, and the statics' addresses as
-  numerals. alloc_group stops here now (403f51: the machine's `(i + 58) * 8
-  + ctx` against the spec's `(ctx + 464) + i * 8`, beyond `arith`'s
-  linear reasoning); before it, it got past the maplen store (the
-  bitfield's operands read in N's order) to 404275, the walk at most 2.3
-  GB;
-- the immediates' forms (`imm_form`, `bits_neg(n, k)` "as GIMPLE writes
-  it", lea's negative displacement), the statics' names (`lea [rip + d]`),
-  `and r8, 2^k - 1` as the spec's field, `[p + 0]` as `[p]`: each an
-  equation of N or gone (N folds the literals);
-- N's equations for a subtraction of a literal as an addition and for
-  gathering constants: their proofs need a congruence modulo 2^n that
-  `arith` does not find (a lemma `x + m*y = x (mod m)` for integers).
-
-Then alloc_group, measured.
+In place: N with the ring modulo 2^n, every value named in normal form,
+conditions, stores and addresses matched after N, no form-matching
+`arith`. What still recognizes a form of its own (GIMPLE -> CPU program
+translation verification, the engine):
+- the statics' names (`lea [rip + d]`: the literal address named by a
+  spec value or static of that value), `and r8, 2^k - 1` as the spec's
+  field, `[p + 0]` as `[p]`: each an equation of N or gone;
+- like terms (`a*c1 + a*c2`) not combined yet; a subtraction stays one.
 
 ### 1.1 Then: the remaining functions
 
@@ -39,10 +26,11 @@ Then alloc_group, measured.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- GIMPLE -> CPU program translation verification of `alloc_group`: see
-  1.0 (an address computed otherwise); then the remaining non-reused
-  block-end claims (a claim with two locals sharing a variable does not
-  fit a path where they differ). The readable GIMPLE still copies one
+- GIMPLE -> CPU program translation verification of `alloc_group`: it
+  walks 8640 points and stops at the memory guard (3 GB) where paths do
+  not join -- 404241 (1104 times), 404294, 404303, 404575: the remaining
+  non-reused block-end claims (a claim with two locals sharing a variable
+  does not fit a path where they differ). The readable GIMPLE still copies one
   small block (`cnt = 1; needed = req`: an `||` whose second part has a
   signed product, not evaluated outside its guard).
 - `get_nominal_size`, `record_seq`,

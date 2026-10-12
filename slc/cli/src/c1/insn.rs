@@ -191,7 +191,7 @@ impl<'e> Gen<'e> {
                     }
                     let bv = self.need_reg(st, bn, 8)?;
                     let ixv = self.need_reg(st, inn, 8)?;
-                    let ea = self.mk("bits_add", vec![lit(64), self.mk("int_add", vec![bv.clone(), self.mk("bits_mul", vec![lit(64), ixv.clone(), lit(1)])]), lit(0)]);
+                    let ea = self.mk("bits_add", vec![lit(64), bv.clone(), ixv.clone()]);
                     let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ea, 8)?;
                     let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&pp), self.print(&off)))?;
                     let (v, hr) = self.result(&v)?;
@@ -701,7 +701,7 @@ impl<'e> Gen<'e> {
                             let (hc, v, st2, red, _, so) = self.spec_store_x(st, None, Some(8))?;
                             // (the spec's value: the same normal form)
                             let hux = self.eq_nf(&u, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
-                            let ea = self.mk("bits_add", vec![lit(64), self.mk("int_add", vec![bv.clone(), self.mk("bits_mul", vec![lit(64), iv.clone(), lit(1)])]), lit(0)]);
+                            let ea = self.mk("bits_add", vec![lit(64), bv.clone(), iv.clone()]);
                             let ad = self.mk("bits_add", vec![lit(64), so.p.clone(), so.off.clone()]);
                             let q = self.addr_eq(st, &ea, &ad)?;
                             let tr = self.step(

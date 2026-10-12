@@ -629,7 +629,7 @@ fn the_record_library_checks() {
 #[test]
 fn the_bit_library_checks() {
     let n = check_nat(&core_file("bits.core")).unwrap();
-    assert_eq!(n, 51);
+    assert_eq!(n, 55);
 }
 
 #[test]

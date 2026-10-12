@@ -134,8 +134,13 @@ For a function F, two halves:
       are numerals (evaluated: GIMPLE's `bits[64](-16)` and the machine's
       sign-extended immediate the same numeral), a cast of a word of its
       width (or narrower) is the word, a shift by a constant is a product
-      by 2^k, commutative operands are in one order (values by their
-      names, operations, literals last).
+      by 2^k, sums and products by literals are in the ring's normal form
+      modulo 2^n (sums nested to the left, terms ordered, literals gathered
+      last, products by literals distributed; seen through the names of
+      sums and products), commutative operands are in one order (by the
+      kernel terms, literals last). The ring's equations rest on two
+      integer congruences in `core/bits.core` (`mod_add_mod`,
+      `mod_mul_mod`), so they hold for any width.
     - A rule producing a value has it as a variable r with a premise `r =
       E` (E the instruction's own expression): the register- and
       home-writing instruction rules, the loads (an indexed one's address
@@ -146,7 +151,7 @@ For a function F, two halves:
       check `C1_NF_CHECK=1` reports one that is not).
     - A rule consuming a value (a store) takes the machine's value u and
       the spec's x with a premise `u = x`, by N (equal normal forms: a
-      match); an indexed store's address likewise.
+      match); a load's or store's address computed otherwise likewise.
     - A condition is decided by a fact in scope: the same, or one of the
       same comparison of operands with the same normal forms, rewritten to
       the condition's operands by N's proofs; lemmas the engine matches
