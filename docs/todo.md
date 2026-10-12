@@ -42,11 +42,26 @@ Next, in order:
 2. Cut-point couplings beyond homes: a value in a register at a block's
    entry (none in mallocng now, the returning tails written in place);
    the claim with registers per label (tr.lv's `rs`).
-3. The structured readable form as a view of the CFG: compositions
-   (proofs/mallocng_compose.core) need machine ⊑ the GIMPLE the C2 proofs
-   are about. A generic structuring theorem (a structured function's
-   outcomes are its CFG's, where the CFG is reducible) and a linear
-   per-function check; or C2 directly on the CFG (item 5).
+3. Now: the CFG ⊑ the structured form, per function (proving the chain
+   machine ⊑ CFG ⊑ structured ⊑ spec; the composition by
+   tr.implements_refine twice). In place: the CFG its own layer (`M_cfg`,
+   both forms elaborated together), `g.cfg_fin` / `g.cfg_acyclic`
+   (proofs/gimple_cfg.core: a simulation `inv` of CFG states by
+   structured programs; finite runs, and no divergence with a rank).
+   Next:
+   - the checker, a refinement walk per point (a label and its structured
+     remainder; a label written in place twice has two points): the CFG's
+     block and the remainder side by side -- the same op, let, `if` on
+     both by congruence lemmas (no op semantics: the same terms); the
+     CFG's dispatch on its literal label, the structured loops' unfolding
+     and `return` / `break` handlers one-sided; at the block's end, the
+     remainder the next label's point (found as walks arrive, as C1's cut
+     points). Its rules a GIMPLE-level library (`g.ref_*`);
+   - loop-free functions first (g.cfg_acyclic, the rank by the labels'
+     order); then the divergence theorem for nested loops (an infinite
+     run of the CFG a diverging run of the structured loops, the same
+     trace);
+   - functions the generator does not structure: C2 on the CFG (item 5).
 4. Switch the `c1` lines to the CFG form (then the C2 proofs by 3), and
    retire what only the structured walk needs (`block.rs`, `join.rs`, the
    loop and block points, `proofs/translate_block.core`). Memory: the CFG
