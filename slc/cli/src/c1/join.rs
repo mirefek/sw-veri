@@ -76,7 +76,7 @@ impl<'e> Gen<'e> {
     }
 
     /// the number of a's predecessors in the code
-    fn preds_of(&mut self, a: u128) -> usize {
+    pub(super) fn preds_of(&mut self, a: u128) -> usize {
         if self.preds.is_none() {
             let mut m: BTreeMap<u128, usize> = BTreeMap::new();
             for &x in self.insns.keys() {
@@ -184,13 +184,16 @@ impl<'e> Gen<'e> {
                 return Ok(Some(pf));
             }
         }
-        if self.stmt_fail.contains(&st.a) {
-            self.why(|| format!("stmt at {:x}: no claim could be made here", st.a));
+        // (a claim not made here before, in this walk's context: why)
+        let key = (st.a, self.stmt_ctx_key());
+        if let Some(w) = self.stmt_fail.get(&key).cloned() {
+            self.why(|| format!("stmt at {:x}: no claim could be made here ({})", st.a, w));
             return fail(self);
         }
         let Some(i) = self.stmt_make(st, &q, &w0, &y0, &e0)? else {
-            self.stmt_fail.insert(st.a);
             self.why(|| format!("stmt at {:x}: no claim made", st.a));
+            let w = self.join_why.borrow().join("; ");
+            self.stmt_fail.insert(key, w);
             return fail(self);
         };
         let pf = self.stmt_use(i, st, &q, &y0)?;
@@ -262,7 +265,7 @@ impl<'e> Gen<'e> {
     }
 
     /// the locals' components: `pair(a, pair(b, .. z))` as a, b, .. z
-    fn locals_of(&self, y: &Term) -> Vec<Term> {
+    pub(super) fn locals_of(&self, y: &Term) -> Vec<Term> {
         let mut comps = Vec::new();
         let mut cur = y.clone();
         while let Some(pa) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
@@ -271,6 +274,16 @@ impl<'e> Gen<'e> {
         }
         comps.push(cur);
         comps
+    }
+
+    /// the walk's context (stmt_ctx) as a key
+    fn stmt_ctx_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for t in self.stmt_ctx() {
+            self.expand(&t).hash(&mut h);
+        }
+        h.finish()
     }
 
     fn stmt_ctx(&self) -> [Term; 4] {
@@ -420,6 +433,7 @@ impl<'e> Gen<'e> {
             spent: Vec::new(),
             splits: Vec::new(),
             no_join: Some(a),
+            no_block: None,
             z: None,
         };
         self.trace(|| format!("stmt at {:x}: its claim, for every world and locals", a));

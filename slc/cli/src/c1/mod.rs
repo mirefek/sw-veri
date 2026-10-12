@@ -20,6 +20,7 @@
 //! a reduction, a machine value the spec does not have, stop it with an
 //! error naming the address.
 
+mod block;
 mod eff;
 mod insn;
 mod join;
@@ -97,6 +98,8 @@ struct St {
     splits: Vec<join::Split>,
     /// a join's claim being proven at this address: not joined again
     no_join: Option<u128>,
+    /// a block's lemma being proven from this address: no block again
+    no_block: Option<u128>,
     /// in a zero-initialization (`tr.ptz`): the zero xmm register, the
     /// address of the bytes still to be stored (a base, an offset), their
     /// count
@@ -125,12 +128,17 @@ enum Red {
     Exit { e: Term, k: Term, kw: Term },
 }
 
-/// A loop walked by the loop rule (`tr.loop_lv`): its head, the homes there
+/// A loop walked by the loop rule (`tr.loop_lv`), or a block by the block
+/// rule (`tr.block_lv`, block.rs): its head (a block's end), the homes there
 /// as a function of the locals, the walk's state outside it (the
 /// breakpoints, the wrapper) to restore at its exit
 #[derive(Clone)]
 struct LoopG {
     head: u128,
+    /// a block's (its end the head), not a loop's
+    is_block: bool,
+    /// the loop or block walked around it
+    outer: Option<Box<LoopG>>,
     hs: Term,
     bkp: Term,
     bka: Term,
@@ -204,6 +212,11 @@ struct Gen<'e> {
     no_redex: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_refl: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
+    /// the blocks not proven as blocks (block.rs: their paths joined by the
+    /// join claims instead), reported
+    block_fb: Vec<u128>,
+    /// (the code's post-dominators, block.rs)
+    pdoms: Option<BTreeMap<u128, BTreeSet<u128>>>,
     /// (why the last join failed, join.rs: its error's reasons)
     join_why: std::cell::RefCell<Vec<String>>,
     /// (the normal forms made, nf.rs: for good -- a name's meaning is fixed)
@@ -283,7 +296,7 @@ struct Gen<'e> {
     /// not; the loop rule's claims made (for every locals and world), by
     /// the rule's instance
     stmts: Vec<join::StmtClaim>,
-    stmt_fail: BTreeSet<u128>,
+    stmt_fail: BTreeMap<(u128, u64), String>,
     loop_claims: Vec<(Term, Seq)>,
     /// the universe facts of the walk's own variables set aside (a loop's
     /// locals, in its exit's walk; a join claim's)

@@ -282,6 +282,16 @@ item is a short summary of finished work; details are in the files named.
   joined or the check fails there with why -- never walked on one by one
   (alloc_group: from 3 GB at the memory guard to a stop at 403faf in 76
   s).
+- **Per-block simulation** (`proofs/translate_block.core`,
+  `slc/cli/src/c1/block.rs`): a claim up to an extra breakpoint and the
+  claim from each state arriving there compose (`tr.bk_seq`); a block's
+  own program (`tr.bone`: the `if`, then a marked return of its locals)
+  with its lemma to its end J and the rest's claim from J give the claim
+  at the jump (`tr.block_lv`). The engine makes a block at each
+  conditional jump on the spec's `if` (its end the post-dominator, or with
+  `return`s the branches' meeting point outside the epilogue), a failed
+  one falling back to the join claims, reported. All 214 C1 theorems: 45
+  blocks, 104 s, 1.2 GB.
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

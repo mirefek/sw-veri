@@ -17,7 +17,7 @@ translation verification, the engine):
 - the statics' names (`lea [rip + d]`: the literal address named by a
   spec value or static of that value), `and r8, 2^k - 1` as the spec's
   field, `[p + 0]` as `[p]`: each an equation of N or gone;
-- like terms (`a*c1 + a*c2`) not combined yet; a subtraction stays one.
+- a subtraction stays one.
 
 ### 1.1 Then: the remaining functions
 
@@ -27,13 +27,27 @@ translation verification, the engine):
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
 - GIMPLE -> CPU program translation verification of `alloc_group`: it
-  stops at its first block end not joined, 403faf (76 s, 343 MB): the
-  claim there (for every world and locals) is not proven -- at 403fd4 a
-  byte load at an address the spec's facts do not cover in the claim's
-  context. Then the other block ends where paths did not join (before the
-  strict policy the walk went on path by path: 404241 1104 times, 404294,
-  404303, 404575, to 3 GB); a claim with two locals sharing a variable
-  does not fit a path where they differ.
+  stops at 403faf (87 s, 345 MB), the exit of `while (i<2 && ..)` inside
+  `if (sc<9)`. The spec reads `small_cnt_tab` (read-only) on its own and
+  so is at its block's end there, while the machine has yet to load it
+  and store `cnt`: the join there is at the wrong point. The block's end
+  is 404036, but `if (sc<9)` can not be a block: a loop inside one is not
+  supported. Needed, in the translation theory (`proofs/translate_loop.core`):
+  - `tr.loop` / `tr.loop_fin` / `tr.loop_div` with the outer breakpoints'
+    arrival (`tr.lg` has none: after a loop's exit the walk runs to the
+    function's end, any outer breakpoint unreachable);
+  - a block's marked return distinct from a loop iteration's (both
+    `ok(w, pair(2^64, y))` now), so a block's end after a loop's exit is
+    not read as the loop going on. Nested loops need the same.
+- Per-block simulation's other limits (all C1 theorems: 45 blocks, 7 by
+  the join claims instead): a block's end where a value lives in a
+  register, not a home (`__malloc_allzerop`'s `a || b` in eax); a tail
+  the compiler shares between branches (`dequeue`); blocks whose rest
+  needs facts proven in the block (`try_avail` 403c9f); `try_avail`
+  403d18, 403e41 (homes' subset in the lemma). A block whose `return`s
+  and end are the same code (a void function's `if` with `return` as its
+  last statement) is no block; the block theory with outcomes other than
+  normal arriving at J would cover it.
 - C1's joins elsewhere: a code point with two predecessors where the
   spec is not at a block's end is still walked once per path (no claim
   there); the check should join or fail there too. The readable GIMPLE still copies one

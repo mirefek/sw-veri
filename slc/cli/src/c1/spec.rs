@@ -1110,6 +1110,20 @@ impl<'e> Gen<'e> {
                         let val = self.value(&o[1]);
                         return Ok(Some(Red::Ret(val)));
                     }
+                    // (the result's world the point's, by its name: the
+                    // start world x0, tr.q_from)
+                    if matches!(x[0].node(), Node::BVar(0)) && o[0].loose_depth(&self.env.binders_fn()) == 0 {
+                        let ow = self.expand(&o[0]);
+                        if ow != self.expand(&w) {
+                            return Err(format!("the result's world {} is not the point's {}", self.print(&o[0]), self.print(&w)));
+                        }
+                        let b = self.abstract_(&body, &o[0], 0);
+                        let (j, inst) = self.by(qi, "tr.q_from", &[("b", b), ("w", o[0].clone())])?;
+                        return Ok(Some(Red::Q(j, inst)));
+                    }
+                }
+                if matches!(x[0].node(), Node::BVar(0)) {
+                    return Err(format!("the spec's result is not a result: {}", self.print(&body)));
                 }
             }
             let (j, inst) = self.by(qi, "tr.qs_intro", &[("a", body.clone())])?;

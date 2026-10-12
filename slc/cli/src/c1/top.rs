@@ -90,6 +90,8 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[St
         no_field: Default::default(),
         nf_memo: Default::default(),
         join_why: Default::default(),
+        pdoms: None,
+        block_fb: Vec::new(),
         val_of: Default::default(),
         zs: Vec::new(),
         qs: Vec::new(),
@@ -133,7 +135,7 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[St
         lcode: empty,
         steps: 0,
         stmts: Vec::new(),
-        stmt_fail: BTreeSet::new(),
+        stmt_fail: BTreeMap::new(),
         hus: Vec::new(),
         vmark0: 0,
         locmap: Vec::new(),
@@ -346,6 +348,7 @@ impl<'e> Gen<'e> {
             spent: Vec::new(),
             splits: Vec::new(),
             no_join: None,
+            no_block: None,
             z: None,
         };
         let x0 = self.var("x0");
@@ -459,6 +462,10 @@ impl<'e> Gen<'e> {
         aprem.push(dr_t);
         let abi = self.close(abi_in, &aprem, &gvs)?;
         out.push((format!("{p}.implements_abi"), abi));
+        if !self.block_fb.is_empty() {
+            let at: Vec<String> = self.block_fb.iter().map(|a| format!("{:x}", a)).collect();
+            eprintln!("{}: {} block(s) by the join claims, not as blocks (their ends not the spec's): {}", p, at.len(), at.join(", "));
+        }
         // as a callee: tr.callee_io from the spec's structure
         let mut eff = super::eff::Eff::new(self.env, &p)?;
         match eff.callee_io(ssym, &cns) {

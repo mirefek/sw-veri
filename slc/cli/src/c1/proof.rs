@@ -324,6 +324,9 @@ impl<'e> Gen<'e> {
         if st.no_join.is_some_and(|j| j != st.a) {
             st.no_join = None;
         }
+        if st.no_block.is_some_and(|j| j != st.a) {
+            st.no_block = None;
+        }
         self.trace(|| {
             let q = match &st.spec {
                 Spec::Proc(i) => format!("q{}: {}", i, Printer::new(self.env).short(&self.qs[*i])),
@@ -428,7 +431,7 @@ impl<'e> Gen<'e> {
                     self.bka = self.mk("false", vec![]);
                     self.wrap = lg.wrap.clone();
                     self.kw = lg.kw.clone();
-                    self.lpg = None;
+                    self.lpg = lg.outer.clone().map(|b| *b);
                     self.trace(|| format!("loop at {:x}: its exit at {:x}", lg.head, st.a));
                     self.hus.push(lg.hu.clone());
                     let rest = self.exit_rest(st2, jk);
@@ -468,6 +471,11 @@ impl<'e> Gen<'e> {
                     return self.wsplit(&st, qi, &cond, u, d);
                 }
                 None => {}
+            }
+            // (the spec waiting for the machine's branch on its `if`: the
+            // block, proven on its own, the rest from its end)
+            if let Some(pf) = self.block_point(&st)? {
+                return Ok(pf);
             }
         }
         self.insn(st)
@@ -856,6 +864,9 @@ impl<'e> Gen<'e> {
     fn exit_rest(&mut self, st: St, jk: usize) -> Result<Seq, String> {
         let w = st.w.clone();
         let body = self.app(&self.qs[jk], "mkprog", 1).ok_or("the loop's rest: not a program")?[0].clone();
+        // (the world by its name or expanded: W, the view)
+        let we = self.expand(&w);
+        let w = if self.mentions(&body, &we) { we } else { w };
         if !self.mentions(&body, &w) {
             return self.prove_kept(st);
         }
@@ -912,7 +923,7 @@ impl<'e> Gen<'e> {
 
     /// a on a cycle of the code (a loop's head when the walk meets it
     /// first)
-    fn on_cycle(&self, a: u128) -> bool {
+    pub(super) fn on_cycle(&self, a: u128) -> bool {
         let mut seen = BTreeSet::new();
         let mut todo = self.succs(a);
         while let Some(b) = todo.pop() {
@@ -1162,7 +1173,7 @@ impl<'e> Gen<'e> {
         let wid = self.parse(&format!("mkprog(x1 x2. bind_rel(lq{n}, x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))"))?;
         let wrap_id = self.abs(&wid, &[Self::var_id(&qv)]);
         let kw_id = self.mk("eq", vec![Term::bvar(0), self.mk("ok", vec![Term::bvar(2), Term::bvar(1)])]);
-        let saved = LoopG { head: h, hs: hs_lam.clone(), bkp: self.bkp.clone(), bka: self.bka.clone(), wrap: self.wrap.clone(), kw: self.kw.clone(), hu, fd: st.ds.clone(), yt: yt_lam.clone(), hy: hy.clone() };
+        let saved = LoopG { head: h, is_block: false, outer: self.lpg.clone().map(Box::new), hs: hs_lam.clone(), bkp: self.bkp.clone(), bka: self.bka.clone(), wrap: self.wrap.clone(), kw: self.kw.clone(), hu, fd: st.ds.clone(), yt: yt_lam.clone(), hy: hy.clone() };
         let st_body = St {
             a: h,
             fr: st.fr,
@@ -1183,6 +1194,7 @@ impl<'e> Gen<'e> {
             spent: Vec::new(),
             splits: Vec::new(),
             no_join: Some(h),
+            no_block: None,
             z: None,
         };
         self.bkp = bkp2;
@@ -1200,7 +1212,7 @@ impl<'e> Gen<'e> {
         self.bka = saved.bka.clone();
         self.wrap = saved.wrap.clone();
         self.kw = saved.kw.clone();
-        self.lpg = None;
+        self.lpg = saved.outer.clone().map(|b| *b);
         let body_lv = res?;
         let body_c = self.close(body_lv, &[hu_t, yt_t.clone(), hw_t], &[Self::var_id(yv), Self::var_id(wv)])?;
         self.fr = st.fr;
@@ -1332,7 +1344,7 @@ impl<'e> Gen<'e> {
             ],
         );
         let pcl = self.p(&st.spec);
-        self.trace(|| format!("loop at {:x}: arrived", st.a));
+        self.trace(|| format!("{} at {:x}: arrived", if lg.is_block { "block" } else { "loop" }, st.a));
         let r = mp(inst, vec![t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), p(sub_pf), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), simp_lw(vec![R::S(lg.hy.clone())]), p(rw)]);
         // (more of the frame here than at the head: the claim with the head's)
         if self.canon(&st.ds) == self.canon(&lg.fd) {
@@ -1499,6 +1511,7 @@ impl<'e> Gen<'e> {
             spent: st.spent.clone(),
             splits: st.splits.clone(),
             no_join: None,
+            no_block: None,
             z: None,
         };
         let mut st_body = st_head.clone();
