@@ -1,0 +1,90 @@
+// A function's readable CFG (`slc gimple --readable --cfg`) refines its
+// structured form (`--readable`): the C2 proofs, about the structured
+// form, carried to the CFG, which C1 relates to the machine code
+// (proofs/translate_cfg.core).
+//
+// The CFG is a loop over its blocks (`while_rel` with condition true, the
+// state l = pair(world, locals), the block to run among the locals); its
+// rest k after the loop (a return, a raise: the loop only leaves that
+// way). A simulation inv relates each CFG state to a program of the
+// structured form (the rest of it from the matching point): from a
+// related state, a block going on reaches a related state whose program's
+// runs are the first one's; a block leaving gives a run of the related
+// program. Then every run of the CFG from a related state is one of its
+// program.
+
+// The CFG's finite runs.
+theorem g.cfg_fin(l o. b, r o. k, l q. inv):
+  (all l q l2. inv(l, q) -> b(l, ok(l2, empty)) -> ex q2. inv(l2, q2) && (all o. runs(q2, fst(l2), o) -> runs(q, fst(l), o))) ->
+  (all l q r o. inv(l, q) -> b(l, r) -> !is_ok(r) -> k(r, o) -> runs(q, fst(l), o)) ->
+  all l q r o. inv(l, q) -> while_fin_rel(l, x. true, x y. b(x, y), r) -> k(r, o) -> runs(q, fst(l), o)
+proof
+  assume hc he
+  fix l q r o
+  assume hi hw hk
+  let P(x) := ex q2. inv(x, q2) && (all o2. runs(q2, fst(x), o2) -> runs(q, fst(l), o2))
+  have same: all o2. runs(q, fst(l), o2) -> runs(q, fst(l), o2) proof
+    fix o2
+    assume h
+    show := h
+  qed
+  have p0: P(l) by ex_intro({q}, taut(hi, same))
+  have ps: all x x2. P(x) -> true -> b(x, ok(x2, empty)) -> P(x2) proof
+    fix x x2
+    assume px _ hb
+    obtain q2, i2 s2 from px
+    obtain q3, i3 s3 from mp(all_elim(hc, {x}, {q2}, {x2}), i2, hb)
+    have s4: all o2. runs(q3, fst(x2), o2) -> runs(q, fst(l), o2) proof
+      fix o2
+      assume h
+      show := mp(all_elim(s2, {o2}), mp(all_elim(s3, {o2}), h))
+    qed
+    show by ex_intro({q3}, taut(i3, s4))
+  qed
+  have e := mp(while_fin[l0 := l, c := x. true, b := x y. b(x, y), r := r, p := x. P(x)], p0, ps, expand(hw, while_fin_rel))
+  obtain x, px hx from e
+  obtain q2, i2 s2 from px
+  have hb: b(x, r) by taut(hx)
+  have hn: !is_ok(r) by taut(hx)
+  have r2 := mp(all_elim(he, {x}, {q2}, {r}, {o}), i2, hb, hn, hk)
+  show := mp(all_elim(s2, {o}), r2)
+qed
+
+// A CFG with no cycle (a loop-free function): a rank each block going on
+// lowers (the longest way on to a return) -- no infinite run; every run of
+// the CFG from a related state is one of its program.
+theorem g.cfg_acyclic(l o. b, l. tr, r o. k, l q. inv, l. m):
+  (all l q l2. inv(l, q) -> b(l, ok(l2, empty)) -> ex q2. inv(l2, q2) && (all o. runs(q2, fst(l2), o) -> runs(q, fst(l), o))) ->
+  (all l q r o. inv(l, q) -> b(l, r) -> !is_ok(r) -> k(r, o) -> runs(q, fst(l), o)) ->
+  (all l q. inv(l, q) -> m(l) in omega) ->
+  (all l q l2. inv(l, q) -> b(l, ok(l2, empty)) -> int_lt(m(l2), m(l))) ->
+  all l q r o. inv(l, q) -> while_rel(l, x. true, x y. b(x, y), x. tr(x), r) -> k(r, o) -> runs(q, fst(l), o)
+proof
+  assume hc he hm hd
+  fix l q r o
+  assume hi hw hk
+  let P(x) := ex q2. inv(x, q2)
+  have p0: P(l) by ex_intro({q}, hi)
+  have ps: all x x2. P(x) -> true -> b(x, ok(x2, empty)) -> P(x2) proof
+    fix x x2
+    assume px _ hb
+    obtain q2, i2 from px
+    obtain q3, i3 s3 from mp(all_elim(hc, {x}, {q2}, {x2}), i2, hb)
+    show by ex_intro({q3}, i3)
+  qed
+  have pm: all x. P(x) -> m(x) in omega proof
+    fix x
+    assume px
+    obtain q2, i2 from px
+    show := mp(all_elim(hm, {x}, {q2}), i2)
+  qed
+  have pd: all x x2. P(x) -> true -> b(x, ok(x2, empty)) -> int_lt(m(x2), m(x)) proof
+    fix x x2
+    assume px _ hb
+    obtain q2, i2 from px
+    show := mp(all_elim(hd, {x}, {q2}, {x2}), i2, hb)
+  qed
+  have ninf := mp(while_no_inf[l0 := l, c := x. true, b := x y. b(x, y), tr := x. tr(x), r := r, p := x. P(x), m := x. m(x)], p0, ps, pm, pd)
+  have fin: while_fin_rel(l, x. true, x y. b(x, y), r) by defs(taut(expand(hw, while_rel), ninf), while_fin_rel)
+  show := mp(all_elim(mp(g.cfg_fin[b := x y. b(x, y), k := x y. k(x, y), inv := x y. inv(x, y)], hc, he), {l}, {q}, {r}, {o}), hi, fin, hk)
+qed

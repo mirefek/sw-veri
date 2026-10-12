@@ -160,7 +160,12 @@ impl<'e> Gen<'e> {
         let p = self.prefix.clone();
         // the locals' homes, if the location map has them
         let pname = spec_name.strip_suffix("_fun").unwrap_or(spec_name);
-        if let Some(&ls) = self.env.sym_by_name.get(&format!("loc.{pname}")) {
+        // (the CFG's layer `M_cfg`: the location map of M's functions)
+        let lname = match pname.split_once('.') {
+            Some((m, f)) => format!("loc.{}.{}", m.strip_suffix("_cfg").unwrap_or(m), f),
+            None => format!("loc.{pname}"),
+        };
+        if let Some(&ls) = self.env.sym_by_name.get(&lname) {
             if let SymKind::Defined { body, .. } = &self.env.syms[ls as usize].kind {
                 let mut cur = body.clone();
                 while let Some(x) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
