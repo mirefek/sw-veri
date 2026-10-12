@@ -502,7 +502,15 @@ impl<'e> Gen<'e> {
                 let u = self.need_reg(st, gn, n)?;
                 let c = self.need_reg(st, 1, 4)?;
                 let lt = self.mk("int_lt", vec![c.clone(), lit(w)]);
-                let hc = self.hyp_find(&st.hyps, &lt).map(|h| h.1.clone()).ok_or_else(|| bad("a shift by cl not known below the width"))?;
+                // (a fact in scope, or one of the count computed otherwise:
+                // as a condition is decided)
+                let hc = match self.hyp_find(&st.hyps, &lt).map(|h| h.1.clone()) {
+                    Some(h) => h,
+                    None => match self.guard_val(&lt, &st.hyps) {
+                        Some((true, fs)) => self.evp(&RP::Simp(true, fs.into_iter().map(R::S).collect(), vec![], false), &lt, &[])?,
+                        _ => return Err(bad("a shift by cl not known below the width")),
+                    },
+                };
                 // (a literal shifted: the spec's value, its literal as bits_of_int(w, k), if it has one)
                 let op = self.mk(&format!("bits_{h}"), vec![lit(w), u.clone(), c.clone()]);
                 let spec_form = nat(&u).and_then(|_| {
@@ -683,10 +691,13 @@ impl<'e> Gen<'e> {
                     if nat(&d) != Some(0) {
                         let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
                         let (hc, v, st2, red, _) = self.spec_store(st, &ad, 4)?;
-                        if self.canon(&v) != self.canon(&u) {
-                            return Err(format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))));
-                        }
-                        let tr = self.step("store32_bd", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u], self.tail_s(st, &st2, insn, 10, vec![], &hc, &red));
+                        // (the spec's value, or the same written otherwise)
+                        let tr = if self.canon(&v) == self.canon(&u) {
+                            self.step("store32_bd", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u], self.tail_s(st, &st2, insn, 10, vec![], &hc, &red))
+                        } else {
+                            let hux = self.comm_eq(&u, &v).ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
+                            self.step("store32_bd_eq", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u, &v], self.tail_s(st, &st2, insn, 10, vec![hux], &hc, &red))
+                        };
                         let mut st3 = st2;
                         st3.a = a2;
                         return self.then(tr, st3);

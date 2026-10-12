@@ -232,6 +232,18 @@ item is a short summary of finished work; details are in the files named.
   2^pos + L` (nested `bit_addmul`; `bit_slice`), that form GIMPLE's
   (`tr.bf_val`, by `tr.bf_clear`), the field compared modulo 2^k by
   arith.
+- **Readable GIMPLE keeps GCC's blocks** (`slc gimple --readable`): the
+  join of a branch whose way runs through a loop found (post-dominators on
+  the whole graph: a loop's latch is not an end of its own), and
+  short-circuit conditions written as `&&` / `||` when their second part is
+  defined whatever it computes (no load, division, pointer or signed
+  arithmetic) -- no block copied into both ways: alloc_group's readable
+  GIMPLE from 769 lines to 300 (the `sc & 3` cascade an `else if` chain,
+  as in C), try_avail's from 266 to 207. The engine decides `&&`, `||`, `!`
+  part by part, as the machine branches (each part by a fact, a literal
+  computation, or an operand computed otherwise), a shift's count bound
+  likewise, and a stored value written otherwise (literals only) by
+  evaluation (`tr.store32_bd_eq`).
 - **C1 joins and resources**: a block end's claim gives locals of the
   same value one variable (the equation kept: `needed = req` where both
   sides of GIMPLE's `||` set it); `jns` after a compare with 0 as GIMPLE

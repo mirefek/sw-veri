@@ -15,15 +15,14 @@ call graph.
 - Specs and C2 (C1 done): `account_bounce` (spec written), `get_meta`,
   `__malloc_allzerop`, `a_cas`, `activate_group`, `try_avail`,
   `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
-- C1 of `alloc_group`: every instruction has its rule (all bitfield
-  stores included), but its paths still do not join enough -- the walk
-  stops at the memory guard (3000 MB, about 6300 points). Its block ends'
-  claims are proven, yet often not reused: GIMPLE duplicates a block that
-  the machine shares (`cnt = 1; needed = req` on both sides of an `||`),
-  so arriving paths have different rests; a claim made with two locals
-  sharing a variable (`needed = req`) does not fit a path where they
-  differ; some uses fail at `tr.hsub_upd` (the claim's homes against the
-  path's). About 0.4 MB of memory per point walked.
+- GIMPLE -> CPU program translation verification of `alloc_group`: on the
+  readable GIMPLE that now keeps GCC's blocks it walks about 4900 points
+  (84 s, 1.7 GB) and stops at an `arith` step that names no place --
+  next: that step, then the remaining non-reused block-end claims (a claim
+  with two locals sharing a variable does not fit a path where they
+  differ). The readable GIMPLE still copies one small block (`cnt = 1;
+  needed = req`: an `||` whose second part has a signed product, not
+  evaluated outside its guard).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
 - The entry points: `__libc_malloc_impl`, `__libc_free`, `calloc`, and

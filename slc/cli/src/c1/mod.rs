@@ -692,10 +692,20 @@ impl<'e> Gen<'e> {
 
     /// `u = v` for a value u that is v up to its operands' order (a
     /// commutative operation's): the commutation (simp's arithmetic for
-    /// `bits_add`); simp(L) for v itself
-    fn comm_eq(&self, u: &Term, v: &Term) -> Option<rec::RA> {
+    /// `bits_add`); simp(L) for v itself; for two terms of literals only,
+    /// by evaluation (simp)
+    fn comm_eq(&mut self, u: &Term, v: &Term) -> Option<rec::RA> {
         if self.canon(u) == self.canon(v) {
             return Some(rec::simp_l());
+        }
+        // (two closed terms, literals only: equal by evaluation)
+        let (eu, ev) = (self.expand(u), self.expand(v));
+        let (mut vs, mut ws) = (Vec::new(), Vec::new());
+        eu.vars(&mut vs);
+        ev.vars(&mut ws);
+        if vs.is_empty() && ws.is_empty() {
+            let eq = self.mk("eq", vec![u.clone(), v.clone()]);
+            return self.evp(&rec::RP::Simp(true, vec![], vec![], false), &eq, &[]).ok().map(|q| rec::s(&q));
         }
         let e = self.expand(u);
         let Node::App(f, a) = e.node() else { return None };

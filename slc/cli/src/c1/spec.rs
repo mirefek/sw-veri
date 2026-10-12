@@ -54,13 +54,7 @@ impl<'e> Gen<'e> {
     /// a guard's value: a literal comparison, a fact in scope (or one of
     /// an operand the spec computes otherwise: equal by arithmetic)
     fn guard(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
-        let (v, facts) = match self.guard_facts(g, hyps) {
-            Some(x) => x,
-            None => {
-                let r = self.guard_arith(g, hyps);
-                r?
-            }
-        };
+        let (v, facts) = self.guard_val(g, hyps)?;
         // (the facts it was decided by: a branch condition among them spent)
         if v {
             self.picked.borrow_mut().extend(facts.iter().map(|f| f.concl().clone()));
@@ -70,6 +64,53 @@ impl<'e> Gen<'e> {
             return Some((v, s(&facts[0])));
         }
         Some((v, simpw(facts.into_iter().map(R::S).collect())))
+    }
+
+    /// a guard's value and the facts it rests on: `&&`, `||`, `!` part by
+    /// part (short-circuit, as the machine branches), each part by a fact
+    /// in scope (`guard_facts`), else by one of an operand computed
+    /// otherwise (`guard_arith`)
+    pub(super) fn guard_val(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, Vec<Seq>)> {
+        let join = |mut x: Vec<Seq>, y: Vec<Seq>| {
+            for f in y {
+                if !x.iter().any(|z| z.concl() == f.concl()) {
+                    x.push(f);
+                }
+            }
+            x
+        };
+        if let Some(a) = self.app(g, "not", 1).map(|a| a[0].clone()) {
+            if self.app(&a, "and", 2).is_some() || self.app(&a, "or", 2).is_some() {
+                let (v, f) = self.guard_val(&a, hyps)?;
+                return Some((!v, f));
+            }
+        }
+        for (op, short) in [("and", false), ("or", true)] {
+            if let Some(a) = self.app(g, op, 2).map(|a| a.to_vec()) {
+                let (x, f) = self.guard_val(&a[0], hyps)?;
+                if x == short {
+                    return Some((short, f));
+                }
+                let (y, f2) = self.guard_val(&a[1], hyps)?;
+                return Some((y, join(f, f2)));
+            }
+        }
+        if let Some(x) = self.guard_facts(g, hyps) {
+            return Some(x);
+        }
+        // (a part of literals only, `sint(32, 2) <= sint(32, 7)`: computed)
+        let mut vs = Vec::new();
+        self.expand(g).vars(&mut vs);
+        if vs.is_empty() {
+            let simp = RP::Simp(true, vec![], vec![], false);
+            if let Ok(p) = self.evp(&simp, g, &[]) {
+                return Some((true, vec![p]));
+            }
+            if let Ok(p) = self.evp(&simp, &self.mk("not", vec![g.clone()]), &[]) {
+                return Some((false, vec![p]));
+            }
+        }
+        self.guard_arith(g, hyps)
     }
 
     /// an equation guard `x = y` (or its negation) by a fact in scope of the
@@ -176,15 +217,23 @@ impl<'e> Gen<'e> {
             let (v, f) = self.guard_facts(&a[0], hyps)?;
             return Some((!v, f));
         }
+        // (`&&` / `||` short-circuit, as the machine branches: decided by the
+        // first operand alone when it settles the value)
         if let Some(a) = self.app(g, "and", 2) {
             let (x, f) = self.guard_facts(&a[0], hyps)?;
+            if !x {
+                return Some((false, f));
+            }
             let (y, f2) = self.guard_facts(&a[1], hyps)?;
-            return Some((x && y, join(f, f2)));
+            return Some((y, join(f, f2)));
         }
         if let Some(a) = self.app(g, "or", 2) {
             let (x, f) = self.guard_facts(&a[0], hyps)?;
+            if x {
+                return Some((true, f));
+            }
             let (y, f2) = self.guard_facts(&a[1], hyps)?;
-            return Some((x || y, join(f, f2)));
+            return Some((y, join(f, f2)));
         }
         if let Some(a) = self.app(g, "eq", 2) {
             if a[0] == a[1] && g.loose_depth(&self.env.binders_fn()) == 0 {
