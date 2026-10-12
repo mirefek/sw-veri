@@ -8,7 +8,23 @@ done it is deleted here and summarized in docs/done.md.
 The functions reachable from malloc, free and calloc, bottom-up over the
 call graph.
 
-### 1.1 Now: the remaining functions
+### 1.0 Now: the rules' standard form (docs/overview.md)
+
+The GIMPLE -> CPU rules and the GIMPLE operations' lemmas state values in
+forms of their own (72 register-producing rules: 25 with the result a
+variable, 47 an expression; the operations' lemmas likewise), so the two
+sides meet in different forms and the engine falls back to `arith`.
+Stages, each checked under the memory cap:
+- (a) the normalizer N and its equations (a core file), a test that the
+  rules' conclusions are in normal form;
+- (b) the 47 expression-style instruction rules to `r` + `r = E`;
+- (c) the GIMPLE operations' lemmas likewise, the spec's values named
+  through N;
+- (d) the consuming rules (stores, compares, calls) on `u = x`;
+- (e) `guard_arith` and the form-matching `arith` calls removed;
+- (f) all C1 theorems, then alloc_group, measured.
+
+### 1.1 Then: the remaining functions
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.

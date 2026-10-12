@@ -135,6 +135,25 @@ For a function F, two halves:
     structure, so a function's proof grows with its code, not its paths.
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
+  - **The rules' standard form** (being introduced): every comparison of
+    the two sides is a match, `arith` only for facts (bounds,
+    definedness), never for recognizing a value written otherwise.
+    - One normal form of values, by one normalizer N: a fixed list of
+      proven, oriented equations (a core file; extensible -- a `using`
+      hint becomes one), applied innermost first in a fixed order, each
+      step a kernel rewrite by an instance of one equation. Closed literal
+      terms are numerals, a cast of a value of its width is the value,
+      commutative operands in one order (literals last), a shift by a
+      constant a product by 2^k, constants gathered.
+    - A rule producing a value has it as a variable r with a premise
+      `r = E` (E the instruction's or operation's own expression); the
+      engine takes r := N(E), the premise by N's rewrites. So do the
+      GIMPLE operations' lemmas.
+    - A rule consuming a value (a store, a compare against the spec, a
+      call's argument) takes the machine's value u and the spec's x with a
+      premise `u = x`, by N (equal normal forms: a match).
+    - The condition lemmas state their relation in the normal form, so a
+      spec condition is decided by a match after N.
   - Programs and states are related by a coupling at each point:
     - a location map says where each GIMPLE value lives (the engine is
       guided by the -O0 build's DWARF, `scripts/locmap.py`);
