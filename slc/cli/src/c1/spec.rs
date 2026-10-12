@@ -405,6 +405,11 @@ impl<'e> Gen<'e> {
         // (r at each depth, shifted once; each shared part done once)
         type M = std::collections::HashMap<(Term, u32), Term>;
         fn go(g: &Gen, t: &Term, r: &Term, d: u32, sh: &mut std::collections::HashMap<u32, Term>, memo: &mut M) -> Term {
+            // (a part that cannot hold r, with no bound variable from
+            // outside it: as it is)
+            if !t.may_contain_vars_of(r) && g.env.loose_depth_m(t) <= d {
+                return t.clone();
+            }
             let bf = g.env.binders_fn();
             let rd = sh.entry(d).or_insert_with(|| r.shift(d, 0, &bf)).clone();
             if *t == rd {

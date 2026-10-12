@@ -667,7 +667,15 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 let Some(pr) = prover.as_deref_mut() else {
                     return Err(ctx(KernelError("`refines` needs a proof checker".into())));
                 };
-                let sq = pr.refines(p.env, &name, &low, &high).map_err(ctx)?;
+                // (C1_KEEP_GOING=1: as a `c1` line's, reported, the file
+                // going on)
+                let sq = match pr.refines(p.env, &name, &low, &high) {
+                    Err(e) if std::env::var("C1_KEEP_GOING").is_ok_and(|v| v == "1") => {
+                        eprintln!("refines failed (going on): {}: {}", name, e.0.lines().next().unwrap_or(""));
+                        continue;
+                    }
+                    r => r.map_err(ctx)?,
+                };
                 if !sq.hyps().is_empty() {
                     let pp = Printer::new(p.env);
                     return Err(ctx(KernelError(format!("`{}`: hypotheses left: {}", name, sq.hyps().iter().map(|h| pp.short(h)).collect::<Vec<_>>().join(", ")))));

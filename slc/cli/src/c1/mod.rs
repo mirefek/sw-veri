@@ -474,15 +474,36 @@ impl<'e> Gen<'e> {
     /// The bound variables of `t` (at `depth`) renumbered by `f`; None if
     /// one has no image.
     fn remap(&self, t: &Term, depth: u32, f: &dyn Fn(u32) -> Option<u32>) -> Option<Term> {
-        Some(match t.node() {
-            Node::BVar(i) if *i >= depth => Term::bvar(f(i - depth)? + depth),
-            Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
-            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.remap(x, depth, f)).collect::<Option<_>>()?),
-            Node::App(s, a) => {
-                let bs = &self.env.syms[*s as usize].binders;
-                t.with_args(a.iter().zip(bs).map(|(x, &k)| self.remap(x, depth + k, f)).collect::<Option<_>>()?)
+        // (a part with no bound variable from outside it as it is; each
+        // shared part once)
+        type M = std::collections::HashMap<(Term, u32), Option<Term>>;
+        fn go(g: &Gen, t: &Term, depth: u32, f: &dyn Fn(u32) -> Option<u32>, memo: &mut M) -> Option<Term> {
+            if g.env.loose_depth_m(t) <= depth {
+                return Some(t.clone());
             }
-        })
+            let compound = matches!(t.node(), Node::App(_, a) | Node::Var(_, a) if !a.is_empty());
+            if compound {
+                if let Some(x) = memo.get(&(t.clone(), depth)) {
+                    return x.clone();
+                }
+            }
+            let out = (|| {
+                Some(match t.node() {
+                    Node::BVar(i) if *i >= depth => Term::bvar(f(i - depth)? + depth),
+                    Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
+                    Node::Var(_, a) => t.with_args(a.iter().map(|x| go(g, x, depth, f, memo)).collect::<Option<_>>()?),
+                    Node::App(s, a) => {
+                        let bs = &g.env.syms[*s as usize].binders;
+                        t.with_args(a.iter().zip(bs).map(|(x, &k)| go(g, x, depth + k, f, memo)).collect::<Option<_>>()?)
+                    }
+                })
+            })();
+            if compound {
+                memo.insert((t.clone(), depth), out.clone());
+            }
+            out
+        }
+        go(self, t, depth, f, &mut M::new())
     }
 
     /// `t` under the binders `ctx` (outermost first) as a value of the

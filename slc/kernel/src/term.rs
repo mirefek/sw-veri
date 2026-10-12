@@ -253,6 +253,12 @@ impl Term {
         self.0.vbits & (1u64 << (v % 64)) != 0
     }
 
+    /// every variable of `other` possibly in it (false: `other` certainly
+    /// not a part of it)
+    pub fn may_contain_vars_of(&self, other: &Term) -> bool {
+        self.0.vbits & other.0.vbits == other.0.vbits
+    }
+
     /// Substitutes schematic variable `v` (arity k) by `value` (k parameters).
     pub fn subst_var(&self, v: VarId, value: &Term, binders: &dyn Fn(SymId, usize) -> u32) -> Term {
         // (no variable v in it: itself)

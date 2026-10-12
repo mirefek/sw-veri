@@ -12,8 +12,16 @@ use super::*;
 
 pub fn refines(env: &mut Env, name: &str, low: &str, high: &str) -> Result<Seq, String> {
     let empty = Term::app(env.sym_by_name["empty"], vec![]);
+    let t0 = std::time::Instant::now();
+    let _rep = super::prof::Rep(name.to_string());
     let mut g = Gen::new(env, BTreeMap::new(), empty.clone(), empty, name, name, Vec::new())?;
-    g.refines(low, high)
+    let r = g.refines(low, high);
+    // (C1_STATS=1: each refinement's time and the resident memory after it)
+    if std::env::var("C1_STATS").is_ok_and(|v| v == "1") {
+        let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |p| p * 4096 / (1 << 20));
+        eprintln!("refines {}: {:.1} s, {} MB resident{}", name, t0.elapsed().as_secs_f64(), rss, if r.is_err() { " (failed)" } else { "" });
+    }
+    r
 }
 
 /// A lower side's block `ex x8. A && K` (under the outcome o): A, K
@@ -185,10 +193,12 @@ impl<'e> Gen<'e> {
         Ok(mp(R::S(pr), al.iter().map(t).collect()))
     }
 
-    /// a closed condition decided by evaluation (no variables in it)
+    /// a closed condition decided by evaluation (no variables in it once
+    /// its projections are taken: the label's test on a point's state)
     fn decide(&mut self, c: &Term) -> Option<(bool, Seq)> {
         let mut vs = Vec::new();
-        self.expand(c).vars(&mut vs);
+        let cp = self.proj_simp(c, &mut std::collections::HashMap::new());
+        self.expand(&cp).vars(&mut vs);
         if !vs.is_empty() || c.loose_depth(&self.env.binders_fn()) > 0 {
             return None;
         }
@@ -205,7 +215,8 @@ impl<'e> Gen<'e> {
         let st = sq.concl().clone();
         let body = self.app(&st, "all", 1).ok_or("a lower step: not all o")?[0].clone();
         let (_, rhs) = self.imps(&body);
-        Ok((rhs, sq))
+        // (its values by their names, as the structured side's)
+        Ok((self.canon(&rhs), sq))
     }
 
     /// the walk on after a lower step `lo -> lo2` (its proof imp)
@@ -254,20 +265,60 @@ impl<'e> Gen<'e> {
         self.close(r?, &[], &vs)
     }
 
-    /// One step of the CFG's side on its own: its projections at once, a
-    /// block's let, nesting, named outcome, a guard decided, the
-    /// iteration's end; into a block -- the next lower side and its proof
-    /// `all o. lo(o) -> lo2(o)`; None at a leaf or a congruence's head
-    fn low_step(&mut self, lo: &Term) -> Result<Option<(Term, Seq)>, String> {
-        // (a closed projection of a constructed tuple or outcome: by its
-        // equation, one at a time)
-        if let Some((r, eq)) = self.closed_redex(lo) {
-            let ab = self.abstract_(lo, &r, 0);
-            let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a projection's context")?;
-            let eqc = self.run(&eq, &[])?.concl().clone();
-            let v = self.app(&eqc, "eq", 2).ok_or("a projection's equation")?[1].clone();
-            return self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", r), ("b", v)]), vec![p(eq)])).map(Some);
+    /// a closed projection of a constructed tuple or outcome in the CFG
+    /// side taken, by its equation (each occurrence of it at once)
+    fn proj_step(&mut self, lo: &Term) -> Result<Option<(Term, Seq)>, String> {
+        let lo0 = lo.clone();
+        self.proj_step_in(lo, &lo0)
+    }
+
+    /// the CFG side's comparison c and the structured side's cu (both
+    /// closed) of the same operation, an operand not the same term but of
+    /// the same normal form: the CFG side's rewritten to the structured
+    /// side's (N's equation, each occurrence at once)
+    fn cond_match_step(&mut self, lo: &Term, c: &Term, cu: &Term) -> Result<Option<(Term, Seq)>, String> {
+        let strip = |g: &Gen, t: &Term| {
+            let mut t = t.clone();
+            while let Some(x) = g.app(&t, "not", 1).map(|x| x[0].clone()) {
+                t = x;
+            }
+            t
+        };
+        let (c0, u0) = (strip(self, c), strip(self, cu));
+        let (Node::App(f1, a1), Node::App(f2, a2)) = (c0.node(), u0.node()) else { return Ok(None) };
+        if f1 != f2 || a1.len() != a2.len() {
+            return Ok(None);
         }
+        for (al, au) in a1.to_vec().into_iter().zip(a2.to_vec()) {
+            if self.canon(&al) == self.canon(&au) {
+                continue;
+            }
+            let Some(pf) = self.eq_nf_seq(&al, &au)? else { return Ok(None) };
+            let ab = self.abstract_(lo, &al, 0);
+            let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a condition's context")?;
+            return self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", al), ("b", au)]), vec![s(&pf)])).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// ... one in the part `sub` of it (a value about to be substituted, the
+    /// block's head: not the other blocks of the dispatch)
+    fn proj_step_in(&mut self, lo: &Term, sub: &Term) -> Result<Option<(Term, Seq)>, String> {
+        let Some((r, eq)) = self.closed_redex(sub) else { return Ok(None) };
+        let ab = self.abstract_(lo, &r, 0);
+        let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a projection's context")?;
+        let eqc = self.run(&eq, &[])?.concl().clone();
+        let v = self.app(&eqc, "eq", 2).ok_or("a projection's equation")?[1].clone();
+        self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", r), ("b", v)]), vec![p(eq)])).map(Some)
+    }
+
+    /// One step of the CFG's side on its own: a block's let, nesting,
+    /// named outcome, a guard decided (the dispatch on the label first: the
+    /// other blocks gone before the projections are taken), a projection,
+    /// the iteration's end; into a block -- the next lower side and its
+    /// proof `all o. lo(o) -> lo2(o)`; None at a leaf or a congruence's
+    /// head
+    fn low_step(&mut self, lo: &Term) -> Result<Option<(Term, Seq)>, String> {
         // (the result written e = o)
         if let Some(x) = self.app(lo, "eq", 2).map(|x| x.to_vec()) {
             if matches!(x[1].node(), Node::BVar(0)) && !matches!(x[0].node(), Node::BVar(0)) {
@@ -278,7 +329,13 @@ impl<'e> Gen<'e> {
         }
         let lctx = ["o", "x8"];
         let Some((a, k)) = block(self, lo) else {
-            if self.leaf_of(lo).is_some() || self.jump_of(lo).is_some() {
+            if self.jump_of(lo).is_some() {
+                return Ok(None);
+            }
+            if let Some(r) = self.proj_step(lo)? {
+                return Ok(Some(r));
+            }
+            if self.leaf_of(lo).is_some() {
                 return Ok(None);
             }
             // (the CFG's iteration ending: going on, or leaving)
@@ -290,6 +347,10 @@ impl<'e> Gen<'e> {
         let kl = self.lam(&k, &lctx, &["x8", "o"]).ok_or("the lower block's rest")?;
         if let Some(x) = self.app(&a, "letin", 2).map(|x| x.to_vec()) {
             let e = self.lam(&x[0], &lctx, &[]).ok_or("a let's value reads the block")?;
+            // (its projections taken first)
+            if let Some(r) = self.proj_step_in(lo, &e)? {
+                return Ok(Some(r));
+            }
             // (its value in the normal form first, as the structured side's)
             let (n, pf) = self.norm(&e)?;
             if let Some(pf) = pf {
@@ -297,6 +358,9 @@ impl<'e> Gen<'e> {
                 let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a let's context")?;
                 return self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", e), ("b", n)]), vec![s(&pf)])).map(Some);
             }
+            // (named, as the structured side's values: N then sees the same
+            // terms on both)
+            let e = self.value(&e);
             let al = self.lam(&x[1], &["o", "x8", "x"], &["x", "x8"]).ok_or("a let")?;
             return self.low_by(R::Inst("g.low_let".into(), vec![("e", e), ("a", al), ("k", kl)])).map(Some);
         }
@@ -308,12 +372,19 @@ impl<'e> Gen<'e> {
             }
         }
         if let Some(x) = self.app(&a, "eq", 2).map(|x| x.to_vec()) {
+            // (the outcome's projections taken before it is substituted)
             if matches!(x[0].node(), Node::BVar(0)) {
                 let e = self.lam(&x[1], &lctx, &[]).ok_or("a block's outcome reads its rest")?;
+                if let Some(r) = self.proj_step_in(lo, &e)? {
+                    return Ok(Some(r));
+                }
                 return self.low_by(R::Inst("g.low_eq".into(), vec![("e", e), ("k", kl)])).map(Some);
             }
             if matches!(x[1].node(), Node::BVar(0)) {
                 let e = self.lam(&x[0], &lctx, &[]).ok_or("a block's outcome reads its rest")?;
+                if let Some(r) = self.proj_step_in(lo, &e)? {
+                    return Ok(Some(r));
+                }
                 return self.low_by(R::Inst("g.low_eqr".into(), vec![("e", e), ("k", kl)])).map(Some);
             }
         }
@@ -354,7 +425,8 @@ impl<'e> Gen<'e> {
                 }
             }
         }
-        Ok(None)
+        // (the head's projections: before a congruence)
+        self.proj_step_in(lo, &a)
     }
 
     /// `!t`: t a tree of disjunctions whose leaves are conjunctions led by
@@ -526,11 +598,18 @@ impl<'e> Gen<'e> {
                 return self.run(&rr, &[]);
             }
         }
-        if let Some(e) = self.leaf_of(lo) {
-            return self.leaf_eq(&e, qi, w);
-        }
+        // (a jump, as the rule states it; a result: its projections taken
+        // first)
         if let Some(x) = self.jump_of(lo) {
             return self.leaf_jump(lo, &x, qi, w);
+        }
+        if block(self, lo).is_none() {
+            if let Some((lo2, imp)) = self.proj_step(lo)? {
+                return self.after_low(lo, lo2, imp, qi, w);
+            }
+        }
+        if let Some(e) = self.leaf_of(lo) {
+            return self.leaf_eq(&e, qi, w);
         }
         if let Some((lo2, imp)) = self.low_step(lo)? {
             return self.after_low(lo, lo2, imp, qi, w);
@@ -615,13 +694,32 @@ impl<'e> Gen<'e> {
                 let cu2 = self.lam(&cu, &uctx, &[]).ok_or("a condition reads the world")?;
                 let ncl = self.lam(&nc, &lctx, &[]).ok_or("a condition")?;
                 let ncu2 = self.lam(&ncu, &uctx, &[]).ok_or("a condition")?;
-                self.trace(|| format!("ref: if low {} / high {}", self.print(&self.canon(&cl)), self.print(&self.expand(&cu2))));
-                if self.canon(&cl) == self.canon(&cu2) && self.canon(&ncl) == self.canon(&ncu2) && self.canon(&ncl) == self.canon(&self.mk("not", vec![cl.clone()])) {
+                let (c0, n0, nn0) = (self.canon(&cl), self.canon(&self.mk("not", vec![cl.clone()])), self.canon(&self.mk("not", vec![self.mk("not", vec![cl.clone()])])));
+                let (cu0, ncu0) = (self.canon(&cu2), self.canon(&ncu2));
+                // (the structured side's ways in the same order, or the
+                // other way round -- its first under the negation)
+                let way = if self.canon(&ncl) != n0 {
+                    None
+                } else if cu0 == c0 && ncu0 == n0 {
+                    Some(("g.ref_if", b1, b2))
+                } else if cu0 == n0 && ncu0 == nn0 {
+                    Some(("g.ref_ifn", b2, b1))
+                } else {
+                    None
+                };
+                // (not the same: the CFG side's operands of the same normal
+                // form as the structured side's made its)
+                if way.is_none() {
+                    if let Some((lo2, imp)) = self.cond_match_step(lo, &cl, &cu2)? {
+                        return self.after_low(lo, lo2, imp, qi, w);
+                    }
+                }
+                if let Some((lemma, b1, b2)) = way {
                     let a1l = self.lam(&a1, &lctx, &["x8"]).ok_or("a way")?;
                     let a2l = self.lam(&a2, &lctx, &["x8"]).ok_or("a way")?;
                     let b1l = self.lam(&b1, &uctx, &["x0", "x8"]).ok_or("a way")?;
                     let b2l = self.lam(&b2, &uctx, &["x0", "x8"]).ok_or("a way")?;
-                    let (rr, stmt) = self.inst("g.ref_if", &[("c", cl.clone()), ("a1", a1l), ("a2", a2l), ("kl", kl), ("b1", b1l), ("b2", b2l), ("ku", ku)])?;
+                    let (rr, stmt) = self.inst(lemma, &[("c", cl.clone()), ("a1", a1l), ("a2", a2l), ("kl", kl), ("b1", b1l), ("b2", b2l), ("ku", ku)])?;
                     let body = self.app(&stmt, "all", 1).ok_or("g.ref_if")?[0].clone().instantiate_params(std::slice::from_ref(w), &self.env.binders_fn());
                     let (prems, _) = self.imps(&body);
                     let mut pfs = Vec::new();
@@ -645,6 +743,19 @@ impl<'e> Gen<'e> {
     /// The CFG going on at x, the structured side at qi: x's point (found in
     /// the first pass; in the second, `inv(x, q)` and g.ref_jump)
     fn leaf_jump(&mut self, lo: &Term, x: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
+        // (the structured side's lets before it: run, as the CFG's block ran
+        // them into its locals -- its point's template then on the same
+        // values)
+        let ub = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone());
+        if let Some((ua, _)) = ub.as_ref().and_then(|b| block(self, b)) {
+            if self.app(&ua, "letin", 2).is_some() {
+                if let Some(Red::Q(j, r)) = self.reduce(qi, &[])? {
+                    let rest = self.leaf_jump(lo, x, j, w)?;
+                    let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(r)]);
+                    return self.run(&rr, &[]);
+                }
+            }
+        }
         let r = self.qs[qi].clone();
         let g = self.gref.as_ref().ok_or("the CFG going on outside its loop")?;
         let (discover, cur, inv) = (g.discover, g.cur, g.inv.clone());
@@ -669,6 +780,13 @@ impl<'e> Gen<'e> {
         // (a procedure's name: its definition, by the reducer)
         let ub = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()).unwrap_or_else(|| Term::bvar(0));
         if let Some((ua, _)) = block(self, &ub) {
+            // (the head's projections and constants first, as the CFG
+            // side's)
+            if let Some((j, r)) = self.up_proj_in(qi, w, Some(&ua))? {
+                let rest = self.walk(lo, j, w)?;
+                let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(r)]);
+                return self.run(&rr, &[]).map(Some);
+            }
             if self.app(&ua, "any_rel", 2).is_some() {
                 return Ok(None);
             }
@@ -703,8 +821,13 @@ impl<'e> Gen<'e> {
     /// outcome taken (`fst(diverge(t)) = 0`: decided after it): its next
     /// program, the step's proof
     fn up_proj(&mut self, qi: usize, w: &Term) -> Result<Option<(usize, R)>, String> {
+        self.up_proj_in(qi, w, None)
+    }
+
+    /// ... one in the part `sub` of it (its head)
+    fn up_proj_in(&mut self, qi: usize, w: &Term, sub: Option<&Term>) -> Result<Option<(usize, R)>, String> {
         let Some(ub) = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
-        let Some((r, eq)) = self.closed_redex(&ub) else { return Ok(None) };
+        let Some((r, eq)) = self.closed_redex(sub.unwrap_or(&ub)) else { return Ok(None) };
         let eqc = self.run(&eq, &[])?.concl().clone();
         let v = self.app(&eqc, "eq", 2).ok_or("a projection's equation")?[1].clone();
         let bb = self.abstract_(&ub, &r, 0);
@@ -715,7 +838,8 @@ impl<'e> Gen<'e> {
     /// the result o = e: the structured side's the same
     fn leaf_eq(&mut self, e: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
         let lo = self.mk("eq", vec![Term::bvar(0), e.clone()]);
-        let ub = self.app(&self.qs[qi], "mkprog", 1).ok_or("the structured side: not a program")?[0].clone();
+        // (a procedure's name: unfolded by the reducer below)
+        let ub = self.app(&self.qs[qi], "mkprog", 1).map_or_else(|| Term::bvar(0), |x| x[0].clone());
         if let Some(x) = self.app(&ub, "eq", 2) {
             if matches!(x[0].node(), Node::BVar(0)) {
                 // (its world the start's: x0 the world here)
@@ -783,20 +907,45 @@ pub(super) struct GRef {
 impl<'e> Gen<'e> {
     /// t with `from` (a closed term) written `to`
     fn replace_t(&self, t: &Term, from: &Term, to: &Term) -> Term {
-        if t == from {
-            return to.clone();
+        // (a part that cannot hold `from` as it is; each shared part once)
+        fn go(t: &Term, from: &Term, to: &Term, memo: &mut std::collections::HashMap<Term, Term>) -> Term {
+            if t == from {
+                return to.clone();
+            }
+            if !t.may_contain_vars_of(from) {
+                return t.clone();
+            }
+            match t.node() {
+                Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => {
+                    if let Some(x) = memo.get(t) {
+                        return x.clone();
+                    }
+                    let out = t.with_args(a.iter().map(|x| go(x, from, to, memo)).collect());
+                    memo.insert(t.clone(), out.clone());
+                    out
+                }
+                _ => t.clone(),
+            }
         }
-        match t.node() {
-            Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => t.with_args(a.iter().map(|x| self.replace_t(x, from, to)).collect()),
-            _ => t.clone(),
-        }
+        go(t, from, to, &mut std::collections::HashMap::new())
     }
 
+    /// t's size as a tree (saturating; each shared part counted once)
     fn term_size(t: &Term) -> usize {
-        match t.node() {
-            Node::App(_, a) | Node::Var(_, a) => 1 + a.iter().map(Self::term_size).sum::<usize>(),
-            _ => 1,
+        fn go(t: &Term, memo: &mut std::collections::HashMap<Term, usize>) -> usize {
+            match t.node() {
+                Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => {
+                    if let Some(n) = memo.get(t) {
+                        return *n;
+                    }
+                    let n = a.iter().fold(1usize, |s, x| s.saturating_add(go(x, memo)));
+                    memo.insert(t.clone(), n);
+                    n
+                }
+                _ => 1,
+            }
         }
+        go(t, &mut std::collections::HashMap::new())
     }
 
     /// the shape of the locals comps (literals, the same values), the
@@ -818,7 +967,8 @@ impl<'e> Gen<'e> {
         let yv = self.var(&n);
         let mut t = self.expand(r);
         let mut order: Vec<usize> = (0..m).filter(|&j| shape[j] == Sh::Free).collect();
-        order.sort_by_key(|&j| std::cmp::Reverse(Self::term_size(&ce[j])));
+        let sizes: Vec<usize> = ce.iter().map(Self::term_size).collect();
+        order.sort_by_key(|&j| std::cmp::Reverse(sizes[j]));
         for j in order {
             let pj = self.cfg_proj(&yv, j, m);
             t = self.replace_t(&t, &ce[j], &pj);
@@ -1124,6 +1274,11 @@ impl<'e> Gen<'e> {
     /// state, for the rank)
     fn post(&mut self, lo: &Term, pp: &Term, l1: &Term) -> Result<Seq, String> {
         self.trace(|| format!("post: low {}", self.lambda(1, lo)));
+        let proj = if block(self, lo).is_none() { self.proj_step(lo)? } else { None };
+        if let Some((lo2, imp)) = proj {
+            let rest = self.post(&lo2, pp, l1)?;
+            return self.run(&mp(R::Inst("g.post_low".into(), vec![("l", lo.clone()), ("l2", lo2), ("p", pp.clone())]), vec![s(&imp), s(&rest)]), &[]);
+        }
         if let Some(e) = self.leaf_of(lo) {
             let pe = self.post_leaf(&e, pp, l1)?;
             return self.run(&mp(R::Inst("g.post_eq".into(), vec![("e", e), ("p", pp.clone())]), vec![s(&pe)]), &[]);

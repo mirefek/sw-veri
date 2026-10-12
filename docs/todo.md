@@ -44,21 +44,31 @@ Next, in order:
    the claim with registers per label (tr.lv's `rs`).
 3. Now: the CFG ⊑ the structured form, per function (proving the chain
    machine ⊑ CFG ⊑ structured ⊑ spec; the composition by
-   tr.implements_refine twice). In place: `get_stride` end to end
-   (`proofs/mallocng_cfg.core`: `refines gst_ref ..`, 2.1 s, 5 points;
-   `gstc.composed` its spec from the CFG C1 and `ms.get_stride_fun_c2`;
-   the test `c1_cfg_engine_checks`, 148 s). The checker
-   (`slc/cli/src/c1/gref.rs`, rules in `proofs/gimple_cfg.core`): per
-   point (a label and its structured remainder) a walk of the CFG's block
-   beside the remainder -- the same op, choice, `if` on both by
-   congruence; the CFG side's own steps (projections, lets in N, decided
-   or refuted disjuncts, the iteration's end), the structured side's by
-   the spec reducer; a callee of the CFG layer by the structured layer's,
-   its procedures walked once (`g.low_op`); points found in a first pass,
-   the rank the longest path. Next:
-   - the other loop-free functions (a `refines` line and a composition
-     each); a callee's refinement as a theorem of its own (now walked
-     again in each caller's check);
+   tr.implements_refine twice). In place (`proofs/mallocng_cfg.core`, the
+   test `c1_cfg_engine_checks`, 237 s): 20 loop-free functions refine
+   (get_meta the largest, 28 points, ~40 s; the rest 0-2 s each), five
+   composed with their C2 (get_stride, a_ctz_32, dequeue, set_size,
+   get_slot_index). The checker (`slc/cli/src/c1/gref.rs`, rules in
+   `proofs/gimple_cfg.core`): per point (a label and its structured
+   remainder) a walk of the CFG's block beside the remainder -- the same
+   op, choice, `if` on both by congruence (also the ways swapped,
+   `g.ref_ifn`); the CFG side's own steps (the label's dispatch decided
+   first, then projections only where a value is used; lets in N and
+   named as the reducer names; decided or refuted disjuncts, the
+   iteration's end), the structured side's by the spec reducer (its lets
+   run before a jump); a callee of the CFG layer by the structured
+   layer's, its procedures walked once (`g.low_op`); points found in a
+   first pass, the rank the longest path. Next:
+   - enframe, __malloc_alloc_meta (proving GIMPLE spec level, the CFG ⊑
+     structured check): a value the CFG keeps in a local against the
+     structured side's computation of it, the two in different normal
+     forms (N's operand order follows the names, the two sides name in
+     their own order) -- the point's template matches by syntax. Relate
+     a point's local to a value by N (`eq_nf_seq`) instead; also
+     __malloc_alloc_meta's memory (over 6 GB);
+   - the callers composed: the CFG C1 linked with its callees'
+     contracts (as proofs/mallocng_link.core); a callee's refinement as
+     a theorem of its own (now walked again in each caller's check);
    - the divergence theorem for nested loops (an infinite run of the CFG
      a diverging run of the structured loops, the same trace), then the
      functions with loops;
