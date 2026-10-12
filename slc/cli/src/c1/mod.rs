@@ -332,6 +332,9 @@ struct Gen<'e> {
     cfg: Option<cfg::Cfg>,
     /// the CFG ⊑ structured walk's points (gref.rs)
     gref: Option<gref::GRef>,
+    /// the reducer's lets as written, not in N (two translations of the
+    /// same statements compared: `refines`)
+    raw_lets: bool,
     /// callees' refinements found (CFG layer's, structured layer's)
     grefs: std::collections::HashMap<(String, String), Seq>,
 }

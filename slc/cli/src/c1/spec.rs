@@ -1201,8 +1201,8 @@ impl<'e> Gen<'e> {
                 return Err(format!("a let of the state: {}", self.lambda(3, &x[0])));
             }
             // (its value in the normal form first: the rest of N(e), by N's
-            // rewrites)
-            let (n, pf) = self.norm(&x[0])?;
+            // rewrites -- unless as written, `raw_lets`)
+            let (n, pf) = if self.raw_lets { (x[0].clone(), None) } else { self.norm(&x[0])? };
             if let Some(pf) = pf {
                 let bb = self.abstract_(&body, &x[0], 0);
                 let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", bb), ("e", x[0].clone()), ("e2", n)])?;

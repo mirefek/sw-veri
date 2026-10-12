@@ -15,11 +15,16 @@ form, the structured form's C2: composed per function.
 
 1. The CFG ⊑ structured check (`slc/cli/src/c1/gref.rs`), the remaining
    functions:
-   - enframe, `__malloc_alloc_meta`: a value the CFG keeps in a local
-     against the structured side's computation of it, in another normal
-     form (N's operand order follows the values' names, and each side
-     names in its own order); a point's template matches by syntax.
-     `__malloc_alloc_meta` also needs over 6 GB.
+   - `__malloc_alloc_meta`: its points multiply (a label reached at two
+     structured positions -- in an `if`'s branch and after its join; a
+     local a literal on one path, any value on another). A point relates
+     the CFG's locals to the structured side by value: the template finds
+     a local's value in the remainder by syntax, so a literal cannot be
+     made free. Relate them by binding instead: each assignment carries
+     its GIMPLE statement's identity in both readable forms (the
+     generator), printed as the binder's name by the elaborator (the
+     kernel keeps binder names); a point's local j is the structured
+     side's current binding of that variable.
    - The loops (step_seq, activate_group, try_avail, ...): the divergence
      theorem for nested loops (an infinite run of the CFG a diverging run
      of the structured loops, the same trace).

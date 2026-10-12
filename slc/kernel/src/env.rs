@@ -232,6 +232,13 @@ impl Env {
         Ok(())
     }
 
+    /// the caches of terms (well-formed, loose depths) emptied: a large
+    /// check's terms not kept alive after it (they are only caches)
+    pub fn clear_term_caches(&self) {
+        self.wf_ok.borrow_mut().clear();
+        self.ld_memo.borrow_mut().clear();
+    }
+
     /// `t.loose_depth(..)` under this environment's binders, each compound
     /// term's computed once
     pub fn loose_depth_m(&self, t: &Term) -> u32 {

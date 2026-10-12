@@ -15,7 +15,12 @@ pub fn refines(env: &mut Env, name: &str, low: &str, high: &str) -> Result<Seq, 
     let t0 = std::time::Instant::now();
     let _rep = super::prof::Rep(name.to_string());
     let mut g = Gen::new(env, BTreeMap::new(), empty.clone(), empty, name, name, Vec::new())?;
+    // (the same statements on both sides: their values as written)
+    g.raw_lets = true;
     let r = g.refines(low, high);
+    drop(g);
+    // (its terms not kept alive by the environment's caches)
+    env.clear_term_caches();
     // (C1_STATS=1: each refinement's time and the resident memory after it)
     if std::env::var("C1_STATS").is_ok_and(|v| v == "1") {
         let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |p| p * 4096 / (1 << 20));
@@ -272,35 +277,6 @@ impl<'e> Gen<'e> {
         self.proj_step_in(lo, &lo0)
     }
 
-    /// the CFG side's comparison c and the structured side's cu (both
-    /// closed) of the same operation, an operand not the same term but of
-    /// the same normal form: the CFG side's rewritten to the structured
-    /// side's (N's equation, each occurrence at once)
-    fn cond_match_step(&mut self, lo: &Term, c: &Term, cu: &Term) -> Result<Option<(Term, Seq)>, String> {
-        let strip = |g: &Gen, t: &Term| {
-            let mut t = t.clone();
-            while let Some(x) = g.app(&t, "not", 1).map(|x| x[0].clone()) {
-                t = x;
-            }
-            t
-        };
-        let (c0, u0) = (strip(self, c), strip(self, cu));
-        let (Node::App(f1, a1), Node::App(f2, a2)) = (c0.node(), u0.node()) else { return Ok(None) };
-        if f1 != f2 || a1.len() != a2.len() {
-            return Ok(None);
-        }
-        for (al, au) in a1.to_vec().into_iter().zip(a2.to_vec()) {
-            if self.canon(&al) == self.canon(&au) {
-                continue;
-            }
-            let Some(pf) = self.eq_nf_seq(&al, &au)? else { return Ok(None) };
-            let ab = self.abstract_(lo, &al, 0);
-            let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a condition's context")?;
-            return self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", al), ("b", au)]), vec![s(&pf)])).map(Some);
-        }
-        Ok(None)
-    }
-
     /// ... one in the part `sub` of it (a value about to be substituted, the
     /// block's head: not the other blocks of the dispatch)
     fn proj_step_in(&mut self, lo: &Term, sub: &Term) -> Result<Option<(Term, Seq)>, String> {
@@ -351,15 +327,7 @@ impl<'e> Gen<'e> {
             if let Some(r) = self.proj_step_in(lo, &e)? {
                 return Ok(Some(r));
             }
-            // (its value in the normal form first, as the structured side's)
-            let (n, pf) = self.norm(&e)?;
-            if let Some(pf) = pf {
-                let ab = self.abstract_(lo, &e, 0);
-                let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a let's context")?;
-                return self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", e), ("b", n)]), vec![s(&pf)])).map(Some);
-            }
-            // (named, as the structured side's values: N then sees the same
-            // terms on both)
+            // (named, as the structured side's values; as written on both)
             let e = self.value(&e);
             let al = self.lam(&x[1], &["o", "x8", "x"], &["x", "x8"]).ok_or("a let")?;
             return self.low_by(R::Inst("g.low_let".into(), vec![("e", e), ("a", al), ("k", kl)])).map(Some);
@@ -707,12 +675,8 @@ impl<'e> Gen<'e> {
                 } else {
                     None
                 };
-                // (not the same: the CFG side's operands of the same normal
-                // form as the structured side's made its)
                 if way.is_none() {
-                    if let Some((lo2, imp)) = self.cond_match_step(lo, &cl, &cu2)? {
-                        return self.after_low(lo, lo2, imp, qi, w);
-                    }
+                    self.trace(|| format!("ref: if differs: low {} / high {}", self.print(&self.expand(&cl)), self.print(&self.expand(&cu2))));
                 }
                 if let Some((lemma, b1, b2)) = way {
                     let a1l = self.lam(&a1, &lctx, &["x8"]).ok_or("a way")?;
@@ -974,6 +938,15 @@ impl<'e> Gen<'e> {
             t = self.replace_t(&t, &ce[j], &pj);
         }
         let tmpl = self.abs(&t, &[Self::var_id(&yv)]);
+        {
+            let mut vs = Vec::new();
+            tmpl.vars(&mut vs);
+            let names: Vec<String> = vs.iter().map(|v| self.env.vars[*v as usize].name.clone()).filter(|n| !n.starts_with("pa") && !n.starts_with('G')).collect();
+            if !names.is_empty() {
+                let cs: Vec<String> = comps.iter().map(|c| self.print(&self.expand(c))).collect();
+                self.trace(|| format!("ref: template of label {} keeps {:?}; locals {}", label, names, cs.join(" ; ")));
+            }
+        }
         Ok(GPoint { label, shape, tmpl })
     }
 
@@ -1039,6 +1012,10 @@ impl<'e> Gen<'e> {
         }
         if !g.discover {
             return Err(format!("label {}: a point not found in the first pass", k));
+        }
+        if let Some(p0) = g.points.iter().find(|p| p.label == k) {
+            let why = if p0.shape != pt.shape { "its shape".to_string() } else { Printer::new(self.env).mismatch(&p0.tmpl, &pt.tmpl) };
+            self.trace(|| format!("ref: label {} again, another point: {}", k, why));
         }
         let g = self.gref.as_mut().unwrap();
         g.points.push(pt);

@@ -160,6 +160,7 @@ impl<'e> Gen<'e> {
             cfg_start: 0,
             cfg: None,
             gref: None,
+            raw_lets: false,
             grefs: std::collections::HashMap::new(),
         })
     }
