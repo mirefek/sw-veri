@@ -159,6 +159,8 @@ impl<'e> Gen<'e> {
             cfg_meta: None,
             cfg_start: 0,
             cfg: None,
+            gref: None,
+            grefs: std::collections::HashMap::new(),
         })
     }
 }

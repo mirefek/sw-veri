@@ -106,6 +106,17 @@ outcome.
     The labels' addresses are found as the walks arrive. C1 is moving to
     it (docs/todo.md 1.0); the C2 proofs are about the structured form.
 
+  The two meet by a GIMPLE-level refinement, the CFG form ⊑ the
+  structured form per function (`refines NAME LOW HIGH`,
+  `slc/cli/src/c1/gref.rs`, rules in `proofs/gimple_cfg.core`): a
+  simulation of the CFG's states by structured remainders, one per point
+  (a label and its remainder), each point's block walked beside its
+  remainder by congruence (the same terms, no operation's meaning), with a
+  rank for the loop's termination. The structuring is untrusted: a
+  function it fails on keeps C2 on the CFG. A function's spec then comes
+  from its CFG C1, this refinement and its structured C2, by
+  `tr.implements_refine` twice (`proofs/mallocng_cfg.core`).
+
   The -O0 build is the first target. Optimized code can later be added as
   a GIMPLE ⊑ GIMPLE layer: the same cut-point theorem between two CFGs.
 - **The malloc layer** (`layers/malloc.sl`): the abstract heap (live blocks

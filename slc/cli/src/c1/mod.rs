@@ -330,6 +330,10 @@ struct Gen<'e> {
     cfg_meta: Option<(Vec<(u128, u128)>, Vec<u64>)>,
     cfg_start: u128,
     cfg: Option<cfg::Cfg>,
+    /// the CFG ⊑ structured walk's points (gref.rs)
+    gref: Option<gref::GRef>,
+    /// callees' refinements found (CFG layer's, structured layer's)
+    grefs: std::collections::HashMap<(String, String), Seq>,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,

@@ -154,7 +154,7 @@ fn c1_engine_checks() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -188,6 +188,7 @@ fn c1_engine_checks() {
         && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 11 definitions, 35 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 59 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 52 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
@@ -204,8 +205,10 @@ fn c1_engine_checks() {
 
 /// C1 of the -O0 functions on GIMPLE's control-flow graph (`slc gimple
 /// --readable --cfg`; slc/cli/src/c1/cfg.rs, proofs/translate_cfg.core):
-/// the same `c1` lines, each block walked once from its cut point. (The C2
-/// proofs are about the structured form: not here.)
+/// the `c1` lines on the CFG form (proofs/mallocng_c1_cfg.core), each block
+/// walked once from its cut point; the CFG form refining the structured
+/// one and composed with the structured form's C2 (proofs/mallocng_cfg.core;
+/// both forms elaborated together).
 #[test]
 fn c1_cfg_engine_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -246,7 +249,7 @@ fn c1_cfg_engine_checks() {
         .output()
         .unwrap();
     assert!(gc.status.success(), "{}", String::from_utf8_lossy(&gc.stderr));
-    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&cfg_sl).arg("-o").arg(&gimple).output().unwrap();
+    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg(&cfg_sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
     // the libraries, the spec, the decode facts, the rules
     let mut files: Vec<std::ffi::OsString> = ["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "core/bits.core"]
@@ -257,7 +260,7 @@ fn c1_cfg_engine_checks() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -267,26 +270,25 @@ fn c1_cfg_engine_checks() {
     if root.join("build/locmap_O0.core").exists() {
         files.push("build/locmap_O0.core".into());
     }
-    // and the callers linked with their callees (proofs/mallocng_link.core)
-    // and the C2 proofs (readable GIMPLE refines the specs of layers/mallocng_specs.sl;
-    // the memory rules' views and frames, proofs/mallocng_mem.core; the bit
-    // counts' C2 on the bit library, proofs/mallocng_bits.core; the slots',
-    // proofs/mallocng_slots.core; the context's counters' and the lock's,
-    // proofs/mallocng_ctx.core), and the two composed per function
-    // (proofs/mallocng_compose.core)
+    // and the structured form's C2 proofs up to the slots'
+    // (proofs/mallocng_slots.core), the CFG form refining the structured
+    // one and the three composed (proofs/mallocng_cfg.core)
     let c = Command::new(slc)
         .current_dir(&root)
         .args(["kernel-check", "--no-cache"])
         .args(&files)
         .arg("proofs/a_crash.core")
-        .arg("proofs/mallocng_c1.core")
+        .arg("proofs/mallocng_c1_cfg.core")
+        .args(["proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_cfg.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // the C1 theorems unconditional: nothing in the chain rests on an open
     // lemma (the storing functions' statics' range defined)
-    let each = checked.contains("proofs/mallocng_c1.core: 0 constants, 0 axioms, 0 definitions, 214 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas");
+    let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 214 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 2 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 59 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text, &cfg_sl] {
         let _ = std::fs::remove_file(f);

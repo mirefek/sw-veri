@@ -134,7 +134,7 @@ impl<'e> Gen<'e> {
     }
 
     /// local j of the locals ys (m of them): its projection
-    fn cfg_proj(&self, ys: &Term, j: usize, m: usize) -> Term {
+    pub(super) fn cfg_proj(&self, ys: &Term, j: usize, m: usize) -> Term {
         // (a pair's parts taken: `fst(pair(a, b))` is a)
         let part = |t: &Term, i: usize, nm: &str| self.app(t, "pair", 2).map(|x| x[i].clone()).unwrap_or_else(|| self.mk(nm, vec![t.clone()]));
         let mut t = ys.clone();

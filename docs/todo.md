@@ -44,23 +44,24 @@ Next, in order:
    the claim with registers per label (tr.lv's `rs`).
 3. Now: the CFG ⊑ the structured form, per function (proving the chain
    machine ⊑ CFG ⊑ structured ⊑ spec; the composition by
-   tr.implements_refine twice). In place: the CFG its own layer (`M_cfg`,
-   both forms elaborated together), `g.cfg_fin` / `g.cfg_acyclic`
-   (proofs/gimple_cfg.core: a simulation `inv` of CFG states by
-   structured programs; finite runs, and no divergence with a rank).
-   Next:
-   - the checker, a refinement walk per point (a label and its structured
-     remainder; a label written in place twice has two points): the CFG's
-     block and the remainder side by side -- the same op, let, `if` on
-     both by congruence lemmas (no op semantics: the same terms); the
-     CFG's dispatch on its literal label, the structured loops' unfolding
-     and `return` / `break` handlers one-sided; at the block's end, the
-     remainder the next label's point (found as walks arrive, as C1's cut
-     points). Its rules a GIMPLE-level library (`g.ref_*`);
-   - loop-free functions first (g.cfg_acyclic, the rank by the labels'
-     order); then the divergence theorem for nested loops (an infinite
-     run of the CFG a diverging run of the structured loops, the same
-     trace);
+   tr.implements_refine twice). In place: `get_stride` end to end
+   (`proofs/mallocng_cfg.core`: `refines gst_ref ..`, 2.1 s, 5 points;
+   `gstc.composed` its spec from the CFG C1 and `ms.get_stride_fun_c2`;
+   the test `c1_cfg_engine_checks`, 148 s). The checker
+   (`slc/cli/src/c1/gref.rs`, rules in `proofs/gimple_cfg.core`): per
+   point (a label and its structured remainder) a walk of the CFG's block
+   beside the remainder -- the same op, choice, `if` on both by
+   congruence; the CFG side's own steps (projections, lets in N, decided
+   or refuted disjuncts, the iteration's end), the structured side's by
+   the spec reducer; a callee of the CFG layer by the structured layer's,
+   its procedures walked once (`g.low_op`); points found in a first pass,
+   the rank the longest path. Next:
+   - the other loop-free functions (a `refines` line and a composition
+     each); a callee's refinement as a theorem of its own (now walked
+     again in each caller's check);
+   - the divergence theorem for nested loops (an infinite run of the CFG
+     a diverging run of the structured loops, the same trace), then the
+     functions with loops;
    - functions the generator does not structure: C2 on the CFG (item 5).
 4. Switch the `c1` lines to the CFG form (then the C2 proofs by 3), and
    retire what only the structured walk needs (`block.rs`, `join.rs`, the
