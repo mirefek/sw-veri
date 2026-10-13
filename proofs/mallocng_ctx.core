@@ -64,6 +64,88 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  The compare-and-swap
+
+// cas32's one outcome: the word read, written back (x if it held t), its
+// old value
+theorem ms.cas32_det: all s p t x. s in abi.World -> s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 0, 4, false) -> g.mem_defined(s, p, 0, 4, true) ->
+  g.det(gimple.cas32(p, t, x), s, ok(fn_update(s, "vm", fn_update(app(s, "vm"), "bytes", x86_64_linux.store_le(app(app(s, "vm"), "bytes"), int_add(p, 0), 4,
+    ite(bits_of_int(32, gimple.bytes_at(app(s, "vm"), int_add(p, 0), 4)) = t, x, bits_of_int(32, gimple.bytes_at(app(s, "vm"), int_add(p, 0), 4)))))),
+    bits_of_int(32, gimple.bytes_at(app(s, "vm"), int_add(p, 0), 4))))
+proof
+  fix s p t x
+  assume hw hs hp hr hwr
+  let OLD := bits_of_int(32, gimple.bytes_at(app(s, "vm"), int_add(p, 0), 4))
+  have z: 0 in bits(32) by simp()
+  have ld := apply(g.ld32_det, {s}, {p}, {0}, hs, hp, z, hr)
+  have st := apply(ms.st32_det, {s}, {p}, {0}, {ite(OLD = t, x, OLD)}, hw, hs, hp, z, hwr)
+  show proof
+    fix o
+    assume h
+    have b1 := apply(g.bind_inv, apply(g.runs_elim, expand(h, gimple.cas32)), ld)
+    show := apply(g.bind_inv, expand(b1, letin), st)
+  qed
+qed
+
+// C2 of a_cas: the word read, written (s if it held t, else itself), its
+// old value returned
+theorem ms.a_cas_c2: all p t x. p in bits(64) -> t in bits(32) -> x in bits(32) ->
+  refines(c_src_malloc_mallocng_malloc.a_cas(p, t, x), mallocng_specs.a_cas_spec(p, t, x), abi.World)
+proof
+  fix p t x
+  assume hp ht hx
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := mallocng_specs.a_cas_spec(p, t, x)
+    let V0 := app(s, "vm")
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have np: !mallocng_specs.a_cas_pre(V0, app(s, "objs"), p) -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.a_cas_pre))
+    qed
+    have yp: mallocng_specs.a_cas_pre(V0, app(s, "objs"), p) -> runs(SPEC, s, o) proof
+      assume hpre
+      have pnz p4 ur uw := expand(hpre, mallocng_specs.a_cas_pre)
+      have p64: pow2(64) = 18446744073709551616 by simp()
+      have mr: g.mem_defined(s, p, 0, 4, false) by simp(pnz, p4, ur, p64, hp)
+      have mw: g.mem_defined(s, p, 0, 4, true) by simp(pnz, p4, uw, p64, hp)
+      have _ _ _ pb := apply(ms.world_parts, hw)
+      have bo bl := mp(all_elim(g.bytes_bound, {V0}, {int_add(p, 0)}, {4}), pb, arith())
+      let B := gimple.bytes_at(V0, int_add(p, 0), 4)
+      have xb: bits_of_int(32, B) = B by defs(arith(bo, bl), bits_of_int, pow2)
+      step x1, oe from hr with ms.cas32_det using conj(hw, hu, hp, ht, hx, mr, mw)
+      // (the address p + 0, the word its bytes)
+      have e1: bits_add(64, p, 0) = p by defs(arith(hp), bits_add, pow2)
+      have co cl := mp(all_elim(g.bytes_bound, {V0}, {p}, {4}), pb, arith())
+      have e2g: all b. b in omega -> int_lt(b, int_pow(256, 4)) -> bits_add(32, b, 0) = b proof
+        fix b
+        assume h1 h2
+        have p32: int_pow(2, 32) = 4294967296 by simp()
+        have p4: int_pow(256, 4) = 4294967296 by simp()
+        show by defs(arith(h1, h2, p32, p4), bits_add, pow2)
+      qed
+      have e2 := mp(all_elim(e2g, {gimple.bytes_at(V0, p, 4)}), co, cl)
+      show by simp(oe, pu, hpre, xb, e1, e2, ms.v_wr32, keep(abi.overflow, mallocng_specs.a_cas_pre))
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// a_cas as a C function value: its register wrapper refines the spec's
+theorem ms.a_cas_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.a_cas_fun(), regs), s, o) -> runs(app(mallocng_specs.a_cas_spec_fun(), regs), s, o)
+proof
+  have hm: all regs. refines(c_src_malloc_mallocng_malloc.a_cas(bits_of_int(64, app(regs, 0)), bits_of_int(32, app(regs, 1)), bits_of_int(32, app(regs, 2))),
+      mallocng_specs.a_cas_spec(bits_of_int(64, app(regs, 0)), bits_of_int(32, app(regs, 1)), bits_of_int(32, app(regs, 2))), abi.World) proof
+    fix regs
+    show := mp(all_elim(ms.a_cas_c2, {bits_of_int(64, app(regs, 0))}, {bits_of_int(32, app(regs, 1))}, {bits_of_int(32, app(regs, 2))}), simp(), simp(), simp())
+  qed
+  show by defs(apply(g.fun_res[n := 3, w := 32], hm), c_src_malloc_mallocng_malloc.a_cas_fun, mallocng_specs.a_cas_spec_fun, letin)
+qed
+
+// ----------------------------------------------------------------------
 //  The bounce counters
 
 // (size class sc's bounce counter: sc - 7 in 32 bits, its address)

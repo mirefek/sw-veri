@@ -193,6 +193,29 @@ fn a_crash_spec_fun() -> CFun2[World] = (args: Args) => {
   undefined
 }
 
+// a_cas(p, t, s): the 4-byte word at p, s written if it holds t; its old
+// value returned (a locked compare-and-swap: one thread, so one step). The
+// word usable for reading and writing: the instruction writes it either
+// way (its old value back when it is not t).
+pred a_cas_pre(vm: Vm, objs: Set[nat], p: Addr) =
+  p != 0 && uint(p) + 4 <= 2^64 && usable(vm, objs, uint(p), 4, false) && usable(vm, objs, uint(p), 4, true)
+
+proc[World] a_cas_spec(p: bits[64], t: bits[32], s: bits[32]) -> bits[32] {
+  require a_cas_pre(vm, objs, p)
+  either { overflow() } or {
+    let old = bytes_at(vm, p, 4)
+    vm := wr32(vm, p, if old = uint(t) { uint(s) } else { old })
+    return bits[32](old)
+  }
+}
+
+fn a_cas_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = a_cas_spec(bits[64](args[0]), bits[32](args[1]), bits[32](args[2]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
 ///////////////////////////////////////////////////////////////////////
 //  Read-only tables: a function reading one requires its bytes in the
 //  world to be the program's (callers show it from the loaded program)
