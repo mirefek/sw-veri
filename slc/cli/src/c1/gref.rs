@@ -10,6 +10,8 @@
 use super::rec::*;
 use super::*;
 
+mod gloop;
+
 pub fn refines(env: &mut Env, name: &str, low: &str, high: &str) -> Result<Seq, String> {
     let empty = Term::app(env.sym_by_name["empty"], vec![]);
     let t0 = std::time::Instant::now();
@@ -262,6 +264,36 @@ impl<'e> Gen<'e> {
         let a1 = b.with_args(vec![e1, a[1].clone()]);
         let b1 = m.with_args(vec![a1]);
         Some(q.with_args(vec![b1]))
+    }
+
+    /// a program at a loop, `mkprog(x0 x1. ex x9. while_rel(pair(x0, T),
+    /// c, b, tr, x9) && K)`: T (closed)
+    fn loop_tuple(&self, q: &Term) -> Option<Term> {
+        let m = self.app(q, "mkprog", 1)?[0].clone();
+        let (a, _) = block(self, &m)?;
+        let wr = self.app(&a, "while_rel", 5)?;
+        if !matches!(wr[4].node(), Node::BVar(0)) {
+            return None;
+        }
+        let st = self.app(&wr[0], "pair", 2)?;
+        (matches!(st[0].node(), Node::BVar(2)) && st[1].loose_depth(&self.env.binders_fn()) == 0).then(|| st[1].clone())
+    }
+
+    /// the loop's program q with its tuple T (loop_tuple) the closed term
+    /// `tup`
+    fn set_loop_tuple(&self, q: &Term, tup: &Term) -> Option<Term> {
+        let m = self.app(q, "mkprog", 1)?[0].clone();
+        let b = self.app(&m, "ex", 1)?[0].clone();
+        let a = self.app(&b, "and", 2)?.to_vec();
+        let wr = self.app(&a[0], "while_rel", 5)?.to_vec();
+        let st = self.app(&wr[0], "pair", 2)?.to_vec();
+        let st1 = wr[0].with_args(vec![st[0].clone(), tup.clone()]);
+        let mut wr1 = wr.clone();
+        wr1[0] = st1;
+        let a0 = a[0].with_args(wr1);
+        let b1 = b.with_args(vec![a0, a[1].clone()]);
+        let m1 = m.with_args(vec![b1]);
+        Some(q.with_args(vec![m1]))
     }
 
     /// q a join's program whose rest first passes the locals on as its own
@@ -787,6 +819,21 @@ impl<'e> Gen<'e> {
     /// The CFG going on at x, the structured side at qi: x's cut point (made
     /// when first reached), `inv(x, q)` by its hypothesis, g.ref_jump
     fn leaf_jump(&mut self, lo: &Term, x: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
+        // (to a loop head: the structured side on to its loop)
+        let kx = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).and_then(|q| nat(&q[0])));
+        if kx.is_some_and(|k| self.gref.as_ref().is_some_and(|g| g.loop_heads.contains(&k))) && self.loop_tuple(&self.expand(&self.qs[qi])).is_none() {
+            let red = match self.up_proj(qi, w)? {
+                Some((j, r)) => Some(Red::Q(j, r)),
+                None => self.reduce(qi, &[])?,
+            };
+            let Some(Red::Q(j, r)) = red else {
+                let ub = self.app(&self.qs[qi], "mkprog", 1).map_or_else(|| self.qs[qi].clone(), |m| m[0].clone());
+                return Err(format!("at a loop head: the structured side not at a loop: {}", self.lambda(2, &ub)));
+            };
+            let rest = self.leaf_jump(lo, x, j, w)?;
+            let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(r)]);
+            return self.run(&rr, &[]);
+        }
         // (the structured side's lets before it: run, as the CFG's block ran
         // them into its locals -- its point's template then on the same
         // values)
@@ -983,6 +1030,9 @@ pub(super) struct GRef {
     inv_var: Option<VarId>,
     hyps: Vec<Option<Term>>,
     walked: Vec<Seq>,
+    /// the loop heads (g.cut_loops): a jump there goes on to the
+    /// structured loop, its point's template the loop
+    loop_heads: BTreeSet<u128>,
 }
 
 /// The cut points' walk (g.cut_acyclic): the CFG's labels (`v`, its
@@ -1059,6 +1109,29 @@ impl<'e> Gen<'e> {
         // the branch's assigned locals from x2 alone -- those locals free,
         // their components of T the projections: whatever each way assigned)
         let mut muts = vec![false; m];
+        // (at a loop -- `ex x9. while_rel(pair(x0, T), ..) && K` -- the same,
+        // T the loop's state's locals; every local free: a head's claims
+        // for every state there)
+        if let Some(tup) = self.loop_tuple(&t) {
+            let tc = self.locals_of(&tup);
+            let mut tc2 = Vec::new();
+            let same = |g: &Self, a: &Term, b: &Term| {
+                a == b || g.canon(a) == g.canon(b) || matches!((g.eval_lit(&g.lit_bits(a)), g.eval_lit(&g.lit_bits(b))), (Some(x), Some(y)) if x == y)
+            };
+            for c in &tc {
+                match (0..m).find(|&j| !muts[j] && same(self, &ce[j], c)) {
+                    Some(j) => {
+                        muts[j] = true;
+                        tc2.push(self.cfg_proj(&yv, j, m));
+                    }
+                    None => return Err(format!("label {}: the loop's local {} no CFG local's", label, self.print(c))),
+                }
+            }
+            let tup2 = self.tuple_of(&tc2);
+            t = self.set_loop_tuple(&t, &tup2).ok_or("a loop's tuple")?;
+            let tmpl = self.abs(&t, &[Self::var_id(&yv)]);
+            return Ok(GPoint { label, shape: vec![Sh::Free; m], tmpl });
+        }
         if let Some(tup) = self.join_tuple(&t) {
             let tc = self.locals_of(&tup);
             let mut tc2 = Vec::new();
@@ -1460,7 +1533,7 @@ impl<'e> Gen<'e> {
         // are walked)
         let (vv, mv) = (self.env.new_var("gv", 1), self.env.new_var("gm", 1));
         let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), vm: Some((vv, mv)), hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new() };
-        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), inv: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new() });
+        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), inv: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new(), loop_heads: BTreeSet::new() });
         // the labels: each block walked alone, its leaves found and its ways
         // on proven
         let mut work = vec![k_e];
@@ -1489,7 +1562,8 @@ impl<'e> Gen<'e> {
             }
         }
         if labels.iter().any(|kl| succ.get(kl).into_iter().flatten().flatten().any(|s| rank[s] >= rank[kl])) {
-            return Err("the CFG's labels go round a loop (not yet: g.cut_acyclic)".into());
+            // (the labels go round a loop: g.cut_loops)
+            return self.cfg_loops(lo, &l0, &b, &tr, &kk, &comps, k_e, &labels, &succ, &cuts, &q0, w);
         }
         let lv = self.var("gl");
         let mut table = self.mk("empty", vec![]);
