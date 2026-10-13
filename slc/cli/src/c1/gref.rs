@@ -1233,6 +1233,15 @@ pub(super) struct GCut {
     labels: Vec<u128>,
     succ: BTreeMap<u128, Vec<Option<u128>>>,
     discover: bool,
+    /// the labels' walks proving their ways on as they find them: v and m
+    /// free relations V, M meanwhile, a leaf at label k2 by `hv[k2]` (`all
+    /// w y. V(pair(w, pair(k2, y)))`), its rank by `hm[(k, k2)]` (`all w y
+    /// w2 y2. int_lt(M(pair(w2, pair(k2, y2))), M(pair(w, pair(k, y))))`);
+    /// each label's claim kept
+    vm: Option<(VarId, VarId)>,
+    hv: BTreeMap<u128, Term>,
+    hm: BTreeMap<(u128, u128), Term>,
+    ways: BTreeMap<u128, Seq>,
 }
 
 impl<'e> Gen<'e> {
@@ -1983,10 +1992,21 @@ impl<'e> Gen<'e> {
                 if let Some(l) = leaf {
                     self.gref.as_mut().unwrap().cut.as_mut().unwrap().succ.entry(cur).or_default().push(l);
                 }
-                let goal = pp.instantiate_params(std::slice::from_ref(e), &self.env.binders_fn());
-                let fls = self.mk("false", vec![]);
-                let h = self.assume(&fls)?;
-                return self.run(&mp(R::Inst("g.efq".into(), vec![("a", goal)]), vec![s(&h)]), &[]);
+                // (going on at label k2: V there and M lower, by their
+                // hypotheses)
+                if let (Some(Some(k2)), Some(o)) = (leaf, self.app(e, "ok", 2).map(|o| o.to_vec())) {
+                    let (vv, mv) = self.gref.as_ref().unwrap().cut.as_ref().unwrap().vm.ok_or("the labels' relations")?;
+                    let parts = |g: &Self, x: &Term| g.app(x, "pair", 2).and_then(|p| g.app(&p[1], "pair", 2).map(|q| (p[0].clone(), q[1].clone())));
+                    let (w2, y2) = parts(self, &o[0]).ok_or("a block going on: not at a label")?;
+                    let (w1, y1) = parts(self, l1).ok_or("the label's state")?;
+                    let hv = self.label_hyp(k2, None)?;
+                    let hm = self.label_hyp(cur, Some(k2))?;
+                    let (hvs, hms) = (self.assume(&hv)?, self.assume(&hm)?);
+                    let vx = self.run(&mp(R::S(hvs), vec![t(&w2), t(&y2)]), &[])?;
+                    let mx = self.run(&mp(R::S(hms), vec![t(&w1), t(&y1), t(&w2), t(&y2)]), &[])?;
+                    let (vl, ml) = (Term::var(vv, vec![Term::bvar(0)]), Term::var(mv, vec![Term::bvar(0)]));
+                    return self.run(&mp(R::Inst("g.post_leaf_v".into(), vec![("v", vl), ("m", ml)]), vec![t(l1), t(&o[0]), s(&vx), s(&mx)]), &[]);
+                }
             }
             if let Some(o) = self.app(e, "ok", 2).map(|o| o.to_vec()) {
                 let vx = self.v_at(&o[0])?;
@@ -2049,17 +2069,22 @@ impl<'e> Gen<'e> {
         let comps = self.locals_of(&xs[1]);
         let q0 = self.qs[qi].clone();
         let fls = self.mk("false", vec![]);
-        let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), discover: true };
+        // (the labels' set and rank free relations V, M while their blocks
+        // are walked)
+        let (vv, mv) = (self.env.new_var("gv", 1), self.env.new_var("gm", 1));
+        let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), discover: true, vm: Some((vv, mv)), hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new() };
         self.gref = Some(GRef { m: comps.len(), points: Vec::new(), edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new() });
-        // the labels: each block walked alone, its leaves
+        // the labels: each block walked alone, its leaves found and its ways
+        // on proven
         let mut work = vec![k_e];
         let mut seen: BTreeSet<u128> = BTreeSet::new();
+        let mut ways: BTreeMap<u128, Seq> = BTreeMap::new();
         while let Some(kl) = work.pop() {
             if !seen.insert(kl) {
                 continue;
             }
             self.gref.as_mut().unwrap().cur = kl;
-            self.label_ways(kl, None)?;
+            ways.insert(kl, self.label_ways(kl)?);
             self.drop_caches();
             let succ = self.gref.as_ref().unwrap().cut.as_ref().unwrap().succ.get(&kl).cloned().unwrap_or_default();
             work.extend(succ.into_iter().flatten());
@@ -2106,6 +2131,54 @@ impl<'e> Gen<'e> {
             let c = g.cut.as_mut().unwrap();
             (c.v, c.labels, c.discover) = (v_l.clone(), labels.clone(), false);
         }
+        // (V, M the labels' set and rank: each hypothesis proven -- a
+        // label's state by its disjunct, a rank's step by evaluation -- and
+        // each label's ways on discharged)
+        let (hv, hm) = {
+            let c = self.gref.as_ref().unwrap().cut.as_ref().unwrap();
+            (c.hv.clone(), c.hm.clone())
+        };
+        let at = |g: &mut Self, h: &Term| -> Result<Term, String> {
+            let a = g.assume(h)?;
+            let a = Seq::inst(g.env, &a, vv, &v_l).map_err(|e| e.0)?;
+            Ok(Seq::inst(g.env, &a, mv, &rank_l).map_err(|e| e.0)?.concl().clone())
+        };
+        let mut hps: Vec<(Term, Seq)> = Vec::new();
+        for (k2, h) in hv {
+            let hi = at(self, &h)?;
+            let (w, y) = (self.var("vw"), self.var("vy"));
+            let x = self.mk("pair", vec![w.clone(), self.mk("pair", vec![lit(k2), y.clone()])]);
+            let pf = self.v_at(&x)?;
+            hps.push((hi, self.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])?));
+        }
+        for (_, h) in hm {
+            let hi = at(self, &h)?;
+            let mut body = hi.clone();
+            let mut vs = Vec::new();
+            for nm in ["mw", "my", "mw2", "my2"] {
+                let v = self.var(nm);
+                body = self.app(&body, "all", 1).ok_or("a rank's hypothesis")?[0].clone().instantiate_params(std::slice::from_ref(&v), &self.env.binders_fn());
+                vs.push(Self::var_id(&v));
+            }
+            let pf = self.evp(&RP::Simp(false, vec![], vec![], false), &body, &[])?;
+            hps.push((hi, self.close(pf, &[], &vs)?));
+        }
+        let mut done = BTreeMap::new();
+        for (kl, pf) in ways {
+            let s0 = Seq::inst(self.env, &pf, vv, &v_l).map_err(|e| e.0)?;
+            let mut s0 = Seq::inst(self.env, &s0, mv, &rank_l).map_err(|e| e.0)?;
+            for (hi, hp) in &hps {
+                if s0.hyps().contains(hi) {
+                    let d = s0.discharge(self.env, hi).map_err(|e| e.0)?;
+                    s0 = Seq::mp(self.env, &d, hp).map_err(|e| e.0)?;
+                }
+            }
+            if !s0.hyps().is_empty() {
+                return Err(format!("label {}'s ways on: {} hypotheses left", kl, s0.hyps().len()));
+            }
+            done.insert(kl, s0);
+        }
+        self.gref.as_mut().unwrap().cut.as_mut().unwrap().ways = done;
         let inst = |g: &mut Self, inv: Term| g.inst("g.cut_acyclic", &[("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone()), ("pt", pt_l.clone()), ("v", v_l.clone()), ("inv", inv), ("m", rank_l.clone())]);
         // each cut point's segments walked once, the cut points found as
         // they are reached: inv a free relation INV meanwhile, a jump by its
@@ -2251,24 +2324,66 @@ impl<'e> Gen<'e> {
 
     /// Label k's block walked alone, at any world and locals: `all l2. b(L,
     /// ok(l2, empty)) -> Q(l2)` (Q None: its leaves found, no proof)
-    fn label_ways(&mut self, kl: u128, q: Option<(&Term, &Term)>) -> Result<Option<Seq>, String> {
+    fn label_ways(&mut self, kl: u128) -> Result<Seq, String> {
         let bb = self.gref.as_ref().unwrap().b.clone();
-        let (l1, ql) = match q {
-            Some((l1, ql)) => (l1.clone(), ql.clone()),
-            None => {
-                let (wv, yv) = (self.var("lw"), self.var("ly"));
-                (self.mk("pair", vec![wv, self.mk("pair", vec![lit(kl), yv])]), self.mk("true", vec![]))
-            }
+        let (vv, mv) = self.gref.as_ref().unwrap().cut.as_ref().unwrap().vm.ok_or("the labels' relations")?;
+        let (wv, yv) = (self.var("lw"), self.var("ly"));
+        let l1 = self.mk("pair", vec![wv.clone(), self.mk("pair", vec![lit(kl), yv.clone()])]);
+        // (Q: `l2. V(l2) && int_lt(M(l2), M(L))`)
+        let ql = {
+            let l2 = self.var("ll2");
+            let c = self.mk("and", vec![Term::var(vv, vec![l2.clone()]), self.mk("int_lt", vec![Term::var(mv, vec![l2.clone()]), Term::var(mv, vec![l1.clone()])])]);
+            self.abs(&c, &[Self::var_id(&l2)])
         };
         let bx = bb.instantiate_params(&[l1.clone(), Term::bvar(0)], &self.env.binders_fn());
         let (r, st) = self.inst("g.post_use", &[("b", bx), ("Q", ql)])?;
         let (ps, _) = self.imps(&st);
         let gp = self.app(&ps[0], "g.post", 2).ok_or("g.post_use's premise")?.to_vec();
         let pf = self.post(&gp[0], &gp[1], &l1)?;
-        if q.is_none() {
-            return Ok(None);
+        let one = self.run(&mp(r, vec![s(&pf)]), &[])?;
+        self.close(one, &[], &[Self::var_id(&wv), Self::var_id(&yv)])
+    }
+
+    /// a label's hypothesis (its walk): `all w y. V(pair(w, pair(k, y)))`
+    /// (`hm`: None), or the rank's from k to k2
+    fn label_hyp(&mut self, k: u128, hm: Option<u128>) -> Result<Term, String> {
+        {
+            let c = self.gref.as_ref().unwrap().cut.as_ref().unwrap();
+            let have = match hm {
+                None => c.hv.get(&k),
+                Some(k2) => c.hm.get(&(k, k2)),
+            };
+            if let Some(h) = have {
+                return Ok(h.clone());
+            }
         }
-        self.run(&mp(r, vec![s(&pf)]), &[]).map(Some)
+        let (vv, mv) = self.gref.as_ref().unwrap().cut.as_ref().unwrap().vm.ok_or("the labels' relations")?;
+        let st = |g: &mut Self, k: u128| {
+            let (w, y) = (g.var("hw"), g.var("hy"));
+            (g.mk("pair", vec![w.clone(), g.mk("pair", vec![lit(k), y.clone()])]), vec![Self::var_id(&w), Self::var_id(&y)])
+        };
+        let (body, vs) = match hm {
+            None => {
+                let (l, vs) = st(self, k);
+                (Term::var(vv, vec![l]), vs)
+            }
+            Some(k2) => {
+                let (l, mut vs) = st(self, k);
+                let (l2, vs2) = st(self, k2);
+                vs.extend(vs2);
+                (self.mk("int_lt", vec![Term::var(mv, vec![l2]), Term::var(mv, vec![l])]), vs)
+            }
+        };
+        let mut h = body;
+        for v in vs.iter().rev() {
+            h = self.mk("all", vec![self.abs(&h, &[*v])]);
+        }
+        let c = self.gref.as_mut().unwrap().cut.as_mut().unwrap();
+        match hm {
+            None => c.hv.insert(k, h.clone()),
+            Some(k2) => c.hm.insert((k, k2), h.clone()),
+        };
+        Ok(h)
     }
 
     /// `all l. v(l) -> G(l)` from each label's claim (which: 1 the ways on,
@@ -2297,7 +2412,10 @@ impl<'e> Gen<'e> {
             let (r, st) = self.inst("g.lab_pt", &[("G", gl.clone()), ("k", lit(labels[i]))])?;
             let (ps, _) = self.imps(&st);
             self.gref.as_mut().unwrap().cur = labels[i];
+            let walked = self.gref.as_ref().unwrap().cut.as_ref().unwrap().ways.get(&labels[i]).cloned();
             let pf = match which {
+                // (walked already, as its leaves were found)
+                1 if walked.is_some() => walked.unwrap(),
                 1 => self.ways_on(&ps[0])?,
                 _ => self.rank_ok(&ps[0])?,
             };
