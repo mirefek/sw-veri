@@ -13,18 +13,24 @@ call graph.
 C1 on GCC's control-flow graph, the CFG form refining the structured
 form, the structured form's C2: composed per function.
 
-1. The CFG ⊑ structured check through the blocks' procedures (all 22
-   loop-free functions; `__malloc_alloc_meta` the slowest, ~120 s). Next:
+1. The CFG ⊑ structured check by cut points (`g.cut_acyclic`,
+   `proofs/gimple_cut.core`; the cut labels the structuring routine's,
+   `slc/cli/src/gimple/structure.rs`, on the label graph the checker finds
+   in the CFG term). Next:
+   - all 22 loop-free functions this way, then the blocks' procedures
+     retired (`F__bN`/`F__entry`, the (A)/(B) split, `g.low_goto*`,
+     `g.ref_jump_tail`, the join memo, `tail_runs`/`shape_of`);
    - the structured form generated and checked in one run (`slc gimple`
      running the refinement), and `refines` again in the checked chain;
-   - `__malloc_alloc_meta`'s time: its points' walks begin at the whole
-     CFG dispatch (28 blocks) -- each block's walk from its procedure
-     instead (the CFG loop's body at label k equal to block k's code);
-   - the old points (`point_of`, discovery, templates by value) retired
-     once the loops go through the blocks too;
-   - the loops (step_seq, activate_group, try_avail, ...): the divergence
-     theorem for nested loops (an infinite run of the CFG a diverging run
-     of the structured loops, the same trace);
+   - the loops (step_seq, activate_group, try_avail, ...): loop heads cut
+     points, the CFG's back edges by `while_rel` unfolding on the
+     structured side, the divergence theorem by coinduction at the heads
+     (an infinite run of the CFG a diverging run of the structured loops,
+     the same trace);
+   - the cut labels on the label graph differ from the generator's where
+     returning tails share a block (lite_malloc's `traverses_stack_p`: an
+     extra cut point, harmless); the shared tails visible to the checker
+     would make them equal;
    - functions the generator does not structure: C2 on the CFG (item 6).
 2. The callers composed (`proofs/mallocng_cfg.core`): the CFG C1 linked
    with its callees' contracts (as `proofs/mallocng_link.core`); a

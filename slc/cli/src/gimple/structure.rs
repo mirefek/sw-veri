@@ -16,6 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Graph {
     pub blocks: Vec<Block>,
     pub entry: usize,
+    /// the blocks of labels: the first ones (the rest returning tails the
+    /// CFG form writes in place)
+    pub labels: usize,
 }
 
 pub struct Block {
@@ -171,9 +174,92 @@ pub fn graph_of_cfg(text: &str, name: &str) -> Result<Graph, String> {
         let total = stmts.iter().all(|s| total_text(s));
         blocks.push(Block { num: r.num, stmts, total, term });
     }
+    let labels = blocks.len();
     blocks.extend(tails.blocks);
     let entry = *index.get(&entry_num).ok_or("the first block")?;
-    Ok(Graph { blocks, entry })
+    Ok(Graph { blocks, entry, labels })
+}
+
+/// The cut labels of a tree: its joins' and loop heads' labels, and the
+/// first block's
+pub fn cuts(g: &Graph, nodes: &[Node]) -> BTreeSet<u64> {
+    fn go(g: &Graph, ns: &[Node], out: &mut BTreeSet<u64>) {
+        for x in ns {
+            match x {
+                Node::Join(i) if *i < g.labels => {
+                    out.insert(g.blocks[*i].num);
+                }
+                Node::Loop { head, body } => {
+                    out.insert(g.blocks[*head].num);
+                    go(g, body, out);
+                }
+                Node::If { yes, no, .. } => {
+                    go(g, yes, out);
+                    go(g, no, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = BTreeSet::from([g.blocks[g.entry].num]);
+    go(g, nodes, &mut out);
+    out
+}
+
+/// Each label's leaves (a jump's label, None a `return`): the graph as the
+/// checker finds it in the CFG form's term (each label's block walked
+/// alone)
+pub fn label_leaves(g: &Graph) -> BTreeMap<u64, Vec<Option<u64>>> {
+    let mut out = BTreeMap::new();
+    for b in &g.blocks[..g.labels] {
+        let mut leaves: Vec<Option<u64>> = edges(b).iter().map(|e| (e.to < g.labels).then(|| g.blocks[e.to].num)).collect();
+        // (a block returning: its `return` a leaf)
+        if leaves.is_empty() {
+            leaves.push(None);
+        }
+        out.insert(b.num, leaves);
+    }
+    out
+}
+
+/// The cut labels of the label graph (each label's leaves; no statements,
+/// each `return` a block of its own): the structuring's on it
+pub fn label_cuts(succ: &BTreeMap<u64, Vec<Option<u64>>>, entry: u64) -> Result<BTreeSet<u64>, String> {
+    let labels: Vec<u64> = succ.keys().copied().collect();
+    let index: BTreeMap<u64, usize> = labels.iter().enumerate().map(|(i, &k)| (k, i)).collect();
+    let n = labels.len();
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut rets: Vec<Block> = Vec::new();
+    // (a statement each: the structuring's count of what it writes)
+    let one = || vec![String::new()];
+    for &k in &labels {
+        let mut edge = |l: &Option<u64>| -> Result<Edge, String> {
+            let to = match l {
+                Some(k2) => *index.get(k2).ok_or_else(|| format!("label {}: no block", k2))?,
+                None => {
+                    rets.push(Block { num: 0, stmts: one(), total: false, term: Jump::Return });
+                    n + rets.len() - 1
+                }
+            };
+            Ok(Edge { to, copies: Vec::new() })
+        };
+        // (a `return` a block of its own: as the CFG form's returning tails)
+        let term = match succ[&k].as_slice() {
+            [] => Jump::Return,
+            [l] => Jump::Goto(edge(l)?),
+            [l1, l2] => {
+                let (yes, no) = (edge(l1)?, edge(l2)?);
+                Jump::If { cond: Cond { text: String::new(), neg: String::new() }, yes, no }
+            }
+            ls => return Err(format!("label {}: {} ways on", k, ls.len())),
+        };
+        blocks.push(Block { num: k, stmts: one(), total: false, term });
+    }
+    blocks.extend(rets);
+    let entry = *index.get(&entry).ok_or("the first label: no block")?;
+    let g = Graph { blocks, entry, labels: n };
+    let nodes = structure(&g)?;
+    Ok(cuts(&g, &nodes))
 }
 
 fn indent(l: &str) -> usize {

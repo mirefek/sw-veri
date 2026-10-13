@@ -286,6 +286,15 @@ impl<'a> Lower<'a> {
             render(&ga, &structure(&ga)?, 1, &mut ta);
             match graph_of_cfg(&s, &fname).and_then(|gb| structure(&gb).map(|t| (gb, t))) {
                 Ok((gb, t)) => {
+                    // (the cut labels: as the checker finds them, on the
+                    // label graph alone)
+                    use crate::gimple::structure::{cuts, label_cuts, label_leaves};
+                    let c1 = cuts(&gb, &t);
+                    match label_cuts(&label_leaves(&gb), gb.blocks[gb.entry].num) {
+                        Ok(c2) if c2 == c1 => {}
+                        Ok(c2) => eprintln!("structure check: {}: cut labels {:?}, on the label graph {:?}", fname, c1, c2),
+                        Err(e) => eprintln!("structure check: {}: the label graph: {}", fname, e),
+                    }
                     render(&gb, &t, 1, &mut tb);
                     if ta != tb {
                         let i = ta.iter().zip(tb.iter()).position(|(a, b)| a != b).unwrap_or(ta.len().min(tb.len()));
@@ -647,7 +656,8 @@ impl<'a> Lower<'a> {
             blocks.push(Block { num: blk.num, stmts, total, term });
         }
         (rx.out, rx.depth) = saved;
-        Ok(Graph { blocks, entry: self.past(rx, 0) })
+        let labels = blocks.len();
+        Ok(Graph { blocks, entry: self.past(rx, 0), labels })
     }
 
     /// Each block of the CFG as its procedure `F__bN`: the function's
