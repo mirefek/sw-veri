@@ -309,7 +309,8 @@ impl<'e> Gen<'e> {
             let x = self.mk("pair", vec![w2.clone(), self.mk("pair", vec![lit(k2), y2.clone()])]);
             let d = self.v_at(&x)?;
             let body = self.inst_alls(&hi, &[w2.clone(), y2.clone()])?;
-            let pf = self.evp(&RP::Taut(vec![R::S(d)]), &body, &[])?;
+            let pf = self.run(&mp(R::Inst("g.v_intro".into(), vec![("D", rels.d.clone()), ("x", x.clone())]), vec![s(&d)]), &[])?;
+            let _ = body;
             hps.push((hi, self.close(pf, &[], &[Self::var_id(&w2), Self::var_id(&y2)])?));
         }
         for (_, h) in hnm {
@@ -408,15 +409,15 @@ impl<'e> Gen<'e> {
         }
         pfs.push(self.all_simp(&prems[7], 2)?);
         self.trace(|| "ref: phase: the points' states".into());
-        let rels_pt = rels.pt.clone();
+        let (rels_pt, rels_d) = (rels.pt.clone(), rels.d.clone());
         pfs.push(self.pts_all(&prems[8], |g, i, pk| {
             let (w, y) = (g.var("vw"), g.var("vy"));
-            let body = g.inst_alls(pk, &[w.clone(), y.clone()])?;
             let st = g.point_state(i, &w, &y);
             let d = g.v_at(&st)?;
             let ptt = rels_pt.instantiate_params(std::slice::from_ref(&st), &g.env.binders_fn());
             let pp = g.evp(&RP::Simp(false, vec![], vec![], false), &ptt, &[])?;
-            let pf = g.evp(&RP::Taut(vec![R::S(d), R::S(pp)]), &body, &[])?;
+            let pf = g.run(&mp(R::Inst("g.vpt_intro".into(), vec![("D", rels_d.clone()), ("P", rels_pt.clone()), ("x", st.clone())]), vec![s(&d), s(&pp)]), &[])?;
+            let _ = pk;
             g.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
         })?);
         pfs.push(self.pts_all(&prems[9], |g, _, pk| g.lab_simp(pk))?);
@@ -716,7 +717,8 @@ impl<'e> Gen<'e> {
         let (hs, c) = self.imps(&body);
         let hv = self.assume(&hs[0])?;
         let xu_t = self.mk("in", vec![x.clone(), self.mk("univ", vec![lit(1)])]);
-        let xu = self.evp(&RP::Taut(vec![R::S(hv)]), &xu_t, &[])?;
+        let xu = self.v_univ(&x, &hv)?;
+        let _ = xu_t;
         self.gref.as_mut().unwrap().cut.as_mut().unwrap().ufacts = vec![(x.clone(), xu)];
         let mut fs = Vec::new();
         for part in self.app(&c, "and", 2).ok_or("hu: not a conjunction")?.to_vec() {
@@ -734,10 +736,17 @@ impl<'e> Gen<'e> {
         let (hs, c) = self.imps(&body);
         let hv = self.assume(&hs[0])?;
         let xu_t = self.mk("in", vec![x.clone(), self.mk("univ", vec![lit(1)])]);
-        let xu = self.evp(&RP::Taut(vec![R::S(hv)]), &xu_t, &[])?;
-        let tu = self.run(&mp(f("tr.tr_univ"), vec![t(&x), s(&xu)]), &[])?;
+        let xu = self.v_univ(&x, &hv)?;
+        let _ = xu_t;
+        let tu =self.run(&mp(f("tr.tr_univ"), vec![t(&x), s(&xu)]), &[])?;
         let pf = self.evp(&RP::Taut(vec![R::S(tu)]), &c, &[])?;
         self.close(pf, &[hs[0].clone()], &[Self::var_id(&x)])
+    }
+
+    /// `x in univ(1)` from v(x) (g.v_univ)
+    fn v_univ(&mut self, x: &Term, hv: &Seq) -> Result<Seq, String> {
+        let d = self.gref.as_ref().unwrap().cut.as_ref().unwrap().v.clone();
+        self.run(&mp(R::Inst("g.v_univ".into(), vec![("D", d), ("x", x.clone())]), vec![s(hv)]), &[])
     }
 
     /// a head point's program the structured loop (hq): `all w y. hd(st)

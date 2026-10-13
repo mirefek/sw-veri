@@ -1622,6 +1622,98 @@ proof
   show by defs(taut(a1, a2, a3), tr.eff)
 qed
 
+// a store of n bytes of a value of the state and address (stbf: the old
+// bytes' other bits kept)
+theorem tr.eff_storef(s a. V): all w p off n. tr.eff(w, o. runs(mkprog(x0 x1. bind_rel(gimple.mem(p, off, n, true), x0, x2 x3. bind_rel(gimple.write_bytes(x3, n, V(x2, x3)), x2,
+  x4 x5. x1 = ok(x4, empty), x4 x5. x1 = exc(x4, x5), x4. x1 = diverge(x4)), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), w, o))
+proof
+  fix w p off n
+  let ST := mkprog(x0 x1. bind_rel(gimple.mem(p, off, n, true), x0, x2 x3. bind_rel(gimple.write_bytes(x3, n, V(x2, x3)), x2,
+    x4 x5. x1 = ok(x4, empty), x4 x5. x1 = exc(x4, x5), x4. x1 = diverge(x4)), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2)))
+  let AD := bits_add(64, int_add(p, gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), off)), 0)
+  // defined: only bytes w may write changed
+  have a1: tr.mem_def(w, p, off, n, true) -> (all w2 r. runs(ST, w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hd
+    fix w2 r
+    assume h
+    obtain o1, hm hc from expand(apply(g.runs_elim, h), bind_rel)
+    have c1: (ex s1 a1. o1 = ok(s1, a1) && (ex o2. runs(gimple.write_bytes(a1, n, V(s1, a1)), s1, o2) && (((ex s3 r3. o2 = ok(s3, r3) && ok(w2, r) = ok(s3, empty)) ||
+        (ex s3 e3. o2 = exc(s3, e3) && ok(w2, r) = exc(s3, e3))) || (ex t. o2 = diverge(t) && ok(w2, r) = diverge(t))))) ->
+        tr.returns_valid(w, w2) proof
+      assume e1
+      obtain s1 a1, eo hb from e1
+      have m := mp(all_elim(tr.mem_fwd, {w}, {p}, {off}, {n}, {true}, {s1}, {a1}), rewrite(eo, hm), hd)
+      have es ea := m
+      obtain o2, hw hc2 from hb
+      have d2: (ex s3 r3. o2 = ok(s3, r3) && ok(w2, r) = ok(s3, empty)) -> tr.returns_valid(w, w2) proof
+        assume e2
+        obtain s3 r3, eo2 ee from e2
+        have e3: w2 = s3 by simp(ee)
+        have hw2 := rewrite(es, rewrite(ea, rewrite(eo2, hw)))
+        have hu: gimple.usable(app(w, "vm"), app(w, "objs"), AD, n, true) by taut(expand(hd, tr.mem_def))
+        have ab: AD in bits(64) by simp()
+        have wo := mp(all_elim(tr.write_wr, {w}, {AD}, {n}, {V(w, AD)}, {s3}, {r3}), hw2, hu, ab)
+        show := rewrite(sym(e3), mp(all_elim(tr.wr_only_valid, {w}, {s3}), wo))
+      qed
+      have d3: (ex s3 e3. o2 = exc(s3, e3) && ok(w2, r) = exc(s3, e3)) -> tr.returns_valid(w, w2) proof
+        assume e2
+        obtain s3 e3, _ ee from e2
+        show by simp(ee)
+      qed
+      have d4: (ex t. o2 = diverge(t) && ok(w2, r) = diverge(t)) -> tr.returns_valid(w, w2) proof
+        assume e2
+        obtain t, _ ee from e2
+        show by simp(ee)
+      qed
+      show by taut(hc2, d2, d3, d4)
+    qed
+    have c2: (ex s1 e1. o1 = exc(s1, e1) && ok(w2, r) = exc(s1, e1)) -> tr.returns_valid(w, w2) proof
+      assume e2
+      obtain s1 e1, _ ee from e2
+      show by simp(ee)
+    qed
+    have c3: (ex t. o1 = diverge(t) && ok(w2, r) = diverge(t)) -> tr.returns_valid(w, w2) proof
+      assume e2
+      obtain t, _ ee from e2
+      show by simp(ee)
+    qed
+    show by taut(hc, c1, c2, c3)
+  qed
+  // undefined: every exception and divergence (the address's)
+  have a2: w in univ(1) -> !tr.mem_def(w, p, off, n, true) -> tr.undef(o. runs(ST, w, o)) proof
+    assume hw hn
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(ST, w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      have mu := mp(all_elim(tr.mem_ub, {w}, {p}, {off}, {n}, {true}, {x}, {e}), hw, hx, he, hn)
+      show by simp(hw, hx, he, mu, keep(gimple.mem, gimple.write_bytes))
+    qed
+    have dv: all t. t in univ(1) -> runs(ST, w, diverge(t)) proof
+      fix t
+      assume ht
+      have mu := mp(all_elim(tr.mem_ub_div, {w}, {p}, {off}, {n}, {true}, {t}), hw, ht, hn)
+      show by simp(hw, ht, mu, keep(gimple.mem, gimple.write_bytes))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
+  qed
+  have a3: !(w in univ(1)) -> (all w2 r. runs(ST, w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hn
+    fix w2 r
+    assume h
+    show by taut(hn, apply(tr.runs_univ, h))
+  qed
+  show by defs(taut(a1, a2, a3), tr.eff)
+qed
+
+theorem tr.eff_stbf: all w p off size pos bits v. tr.eff(w, o. runs(gimple.stbf(p, off, size, pos, bits, v), w, o))
+proof
+  fix w p off size pos bits v
+  have e := all_elim(tr.eff_storef[V := s a. int_add(bits_and(128, gimple.b128(gimple.bytes_at(app(s, "vm"), a, size)),
+      bits_not(128, gimple.b128(int_mul(int_pow(2, pos), int_sub(int_pow(2, bits), 1))))), int_mul(int_mod(v, int_pow(2, bits)), int_pow(2, pos)))],
+    {w}, {p}, {off}, {size})
+  show by defs(e, gimple.stbf, letin)
+qed
+
 theorem tr.eff_st8: all w p off v. tr.eff(w, o. runs(gimple.st8(p, off, v), w, o))
 proof
   fix w p off v

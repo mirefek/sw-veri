@@ -568,6 +568,16 @@ impl<'e> Gen<'e> {
                         return self.run(&mp(R::Inst("g.ex_eq_n".into(), vec![("A", c[0].clone()), ("e", e[0].clone())]), vec![s(&pf)]), &[]).map(Some);
                     }
                 }
+                // (`ex x. A(x) && K(x)`: K refuted at every x, g.ex_nr; else A,
+                // g.ex_nl)
+                for (i, lemma) in [(1usize, "g.ex_nr"), (0, "g.ex_nl")] {
+                    let xv = self.var("rx");
+                    let part = c[i].instantiate_params(std::slice::from_ref(&xv), &self.env.binders_fn());
+                    if let Some(pf) = self.refute(&part)? {
+                        let all = self.close(pf, &[], &[Self::var_id(&xv)])?;
+                        return self.run(&mp(R::Inst(lemma.into(), vec![("A", c[0].clone()), ("K", c[1].clone())]), vec![s(&all)]), &[]).map(Some);
+                    }
+                }
             }
         }
         // (an operation's sequence: each way on refuted, g.bind_nk)
