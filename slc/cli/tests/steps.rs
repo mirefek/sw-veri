@@ -270,8 +270,8 @@ fn c1_cfg_engine_checks() {
     if root.join("build/locmap_O0.core").exists() {
         files.push("build/locmap_O0.core".into());
     }
-    // and the structured form's C2 proofs up to the slots'
-    // (proofs/mallocng_slots.core), the CFG form refining the structured
+    // and the structured form's C2 proofs up to the context's
+    // (proofs/mallocng_ctx.core), the CFG form refining the structured
     // one and the three composed (proofs/mallocng_cfg.core)
     let c = Command::new(slc)
         .current_dir(&root)
@@ -279,14 +279,14 @@ fn c1_cfg_engine_checks() {
         .args(&files)
         .arg("proofs/a_crash.core")
         .arg("proofs/mallocng_c1_cfg.core")
-        .args(["proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_cfg.core"])
+        .args(["proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_ctx.core", "proofs/mallocng_cfg.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // the C1 theorems unconditional: nothing in the chain rests on an open
     // lemma (the storing functions' statics' range defined)
     let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 214 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 27 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 31 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 4 definitions, 79 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas");

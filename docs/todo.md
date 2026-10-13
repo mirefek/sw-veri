@@ -20,9 +20,6 @@ form, the structured form's C2: composed per function.
      `g.id_runs*`, `g.shaped*`, the join memo, `tail_runs`/`shape_of`,
      `block_points`), and the old point path (`g.cfg_ref`, the discovery
      pass's leftovers);
-   - the four leaves with C1 on the CFG, a refinement and a C2 composed
-     on the CFG path too: is_bouncing, decay_bounces, upgradelock,
-     resetlock (the CFG chain does not load `proofs/mallocng_ctx.core`);
    - the structured form generated and checked in one run (`slc gimple`
      running the refinement), and `refines` again in the checked chain;
    - the loops (step_seq, activate_group, try_avail, ...): loop heads cut

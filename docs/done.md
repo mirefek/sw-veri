@@ -310,7 +310,8 @@ item is a short summary of finished work; details are in the files named.
   steps by determined lemmas, the CFG-layer callees by the structured
   layer's (`g.low_op`), the loop by `g.cfg_ref` with a rank. 20 loop-free
   functions (get_meta: 28 points, ~40 s); get_stride, a_ctz_32, dequeue,
-  set_size and get_slot_index composed machine ⊑ CFG ⊑ structured ⊑ spec
+  set_size, get_slot_index, is_bouncing, decay_bounces, upgradelock and
+  resetlock composed machine ⊑ CFG ⊑ structured ⊑ spec
   (`tr.implements_refine` twice).
 - **... through the blocks' procedures**: the generator writes each CFG
   block as a procedure (`F__bN`, a jump its tail call) and `F__entry`;
