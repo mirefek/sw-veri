@@ -193,6 +193,48 @@ fn a_crash_spec_fun() -> CFun2[World] = (args: Args) => {
   undefined
 }
 
+// errno: this libc's, a 4-byte cell in the thread descriptor (musl on
+// x86_64: `errno_val`, the thread pointer + 0x34; layers/malloc.sl's
+// errno_offset). Not the kernel's: library code writes it (a syscall
+// wrapper on failure, size_overflows on a size too large).
+fn errno_at(fs: Addr) -> Addr = fs + 0x34
+
+// ___errno_location(): errno's address (the thread pointer's), nothing
+// changed
+proc[World] errno_location_spec() -> Addr {
+  either { overflow() } or { return errno_at(fs_base) }
+}
+
+fn errno_location_spec_fun() -> CFun2[World] = (args: Args) => {
+  let r = errno_location_spec()
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
+// size_overflows(n): a size beyond the allocator's (n > 2^63 - 4098):
+// errno ENOMEM (12), 1; else 0. Errno's cell writable then, the thread
+// pointer sound (the call to ___errno_location).
+pred size_overflows_pre(vm: Vm, objs: Set[nat], fs: Addr, n: bits[64]) =
+  uint(n) > 0x7fffffffffffeffe -> uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
+
+proc[World] size_overflows_spec(n: bits[64]) -> bits[32] {
+  require size_overflows_pre(vm, objs, fs_base, n)
+  either { overflow() } or {
+    if uint(n) > 0x7fffffffffffeffe {
+      vm := wr32(vm, errno_at(fs_base), 12)
+      return 1
+    }
+    return 0
+  }
+}
+
+fn size_overflows_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = size_overflows_spec(bits[64](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
 // a_cas(p, t, s): the 4-byte word at p, s written if it holds t; its old
 // value returned (a locked compare-and-swap: one thread, so one step). The
 // word usable for reading and writing: the instruction writes it either

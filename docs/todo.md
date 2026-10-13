@@ -68,7 +68,7 @@ translation verification, the engine):
   C2, possibly generated.
 - Specs and C2 (C1 done): `get_meta`,
   `__malloc_allzerop`, `activate_group`, `try_avail`,
-  `alloc_slot`, `size_overflows`, `__malloc_alloc_meta`.
+  `alloc_slot`, `__malloc_alloc_meta`.
 - `alloc_group` (C1 by 1.0 item 1).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
@@ -77,7 +77,8 @@ translation verification, the engine):
 - Leaves at machine level (inline assembly with operands, syscalls):
   `a_or`, `__syscall*` (a `syscall` primitive, as `cas32`), `__mmap`,
   `munmap`, `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
-  `___errno_location`.
+  `___errno_location` (meeting `errno_location_spec`: size_overflows'
+  composition, `sotc.composed`, then without its premise).
 
 ## 2. The invariant and the laws
 

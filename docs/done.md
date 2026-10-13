@@ -422,7 +422,10 @@ item is a short summary of finished work; details are in the files named.
     32 - i), resetlock and upgradelock, account_bounce (a counter whose
     class was unmapped lately up by 1 below 99, else 150; composed through
     the CFG, `acbtc.composed`), a_cas (the word read and written back, x
-    if it held t: `ms.cas32_det`; `acstc.composed`)
+    if it held t: `ms.cas32_det`; `acstc.composed`), size_overflows (errno,
+    musl's cell at the thread pointer + 0x34, set to ENOMEM through
+    ___errno_location's contract: `ms.size_overflows_c2` for any callee
+    meeting it; `sotc.composed` given such a callee's code)
     (proofs/mallocng_ctx.core).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
