@@ -390,6 +390,25 @@ impl<'e> Eff<'e> {
         Ok(s)
     }
 
+    /// A CFG's loop body b (`l o. B`): `all l. tr.seff(fst(l), x. b(l,
+    /// x))`; its callees' `tr.callee_io` (called with at least their
+    /// fewest arguments) hypotheses of the result
+    pub fn body_seff(&mut self, b: &Term) -> R<Seq> {
+        let (ln, lv) = self.fresh("ls");
+        let (o, ov) = self.fresh("os");
+        let body = self.open(b, &[lv.clone(), ov.clone()]);
+        for (g, k) in self.called(&body) {
+            if !self.hios.contains_key(&g) {
+                let h = self.mk("tr.callee_io", vec![Term::var(g, vec![]), Term::nat(sl_kernel::Nat::from_u128(k as u128))])?;
+                let hs = Seq::assume(self.env, h).map_err(e)?;
+                self.hios.insert(g, (hs, k));
+            }
+        }
+        let s = self.mk("fst", vec![lv])?;
+        let kb = self.prove(true, &s, &body, o)?;
+        self.close(kb, &[], &[ln])
+    }
+
     /// For the spec `spec` (a `_fun` wrapper; its parameters callees G0, ..,
     /// called with `callee_ns[i]` arguments): its effect lemmas, `{prefix}.io`
     /// (tr.callee_io, from the callees') and `{prefix}.typed` (in `out`);
