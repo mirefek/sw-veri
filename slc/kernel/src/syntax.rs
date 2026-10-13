@@ -683,6 +683,8 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 facts::check_new(p.env, &name).map_err(ctx)?;
                 let conditional = !sq.open().is_empty();
                 facts::record(p.env, &name, sq).map_err(ctx)?;
+                // (its line, as a `c1` line's: the cache keeps the theorem)
+                rep.c1s.push((line, vec![name.clone()]));
                 if conditional {
                     rep.conditional.push(name);
                 } else {
