@@ -66,8 +66,6 @@ struct Rx<'f> {
     f: &'f Func,
     fx: Fx,
     succ: Vec<Vec<usize>>,
-    /// immediate post-dominators, in the graph without back edges
-    ipdom: Vec<Option<usize>>,
     /// loops: header -> (its blocks, the exit `break` goes to)
     loops: HashMap<usize, (BTreeSet<usize>, Option<usize>)>,
     /// readable names of GIMPLE value names
@@ -86,27 +84,6 @@ struct Rx<'f> {
     /// writing a block as its procedure: a jump to block n the tail call
     /// `{0}__b{n}({1})` (`{2}`: no result)
     tail: Option<(String, String, bool)>,
-}
-
-/// A branch's condition: a block's, or an `&&` / `||` of them
-#[derive(Clone, Debug)]
-enum CT {
-    Leaf(usize),
-    And(Box<CT>, Box<CT>),
-    Or(Box<CT>, Box<CT>),
-    Not(Box<CT>),
-}
-
-/// A branch with the condition blocks it combines: its condition, the
-/// combined blocks (their statements before it), each way's target and
-/// the block it is taken from
-struct Chain {
-    tree: CT,
-    hoist: Vec<usize>,
-    yes: usize,
-    yes_from: usize,
-    no: usize,
-    no_from: usize,
 }
 
 fn walk_e(e: &E, out: &mut Vec<String>) {
@@ -216,39 +193,10 @@ impl<'a> Lower<'a> {
             }
             *exit = count.iter().max_by_key(|(_, &c)| c).map(|(&s, _)| s);
         }
-        // post-dominators, on the whole graph (a loop's latch reaches the
-        // loop's exit through its head -- not an end of its own, as it would
-        // be without the back edge), by iteration to the fixpoint
-        let all: BTreeSet<usize> = (0..n).collect();
-        let mut pdom: Vec<BTreeSet<usize>> = (0..n).map(|i| if succ[i].is_empty() { BTreeSet::from([i]) } else { all.clone() }).collect();
-        loop {
-            let mut changed = false;
-            for i in (0..n).rev() {
-                if succ[i].is_empty() {
-                    continue;
-                }
-                let mut s = succ[i].iter().map(|&j| pdom[j].clone()).reduce(|a, b| a.intersection(&b).copied().collect()).unwrap_or_default();
-                s.insert(i);
-                if s != pdom[i] {
-                    pdom[i] = s;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let ipdom: Vec<Option<usize>> = (0..n)
-            .map(|i| {
-                let rest: BTreeSet<usize> = pdom[i].iter().copied().filter(|&j| j != i).collect();
-                rest.iter().copied().find(|&j| pdom[j] == rest)
-            })
-            .collect();
         let mut rx = Rx {
             f,
             fx,
             succ,
-            ipdom,
             loops,
             rn: HashMap::new(),
             lets: BTreeSet::new(),
@@ -266,7 +214,12 @@ impl<'a> Lower<'a> {
         if cfg {
             self.emit_cfg(&mut rx, sh)?;
         } else {
-            self.emit(&mut rx, sh, 0, None, &[])?;
+            // (the structuring: its routine on the blocks and their jumps)
+            let g = self.graph(&mut rx, sh)?;
+            let nodes = crate::gimple::structure::structure(&g)?;
+            let mut lines = Vec::new();
+            crate::gimple::structure::render(&g, &nodes, rx.depth, &mut lines);
+            rx.out.extend(lines);
         }
         let total: usize = f.blocks.iter().map(|b| b.stmts.len()).sum();
         if rx.emitted > 4 * total + 8 {
@@ -610,6 +563,50 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// The function's blocks and jumps for the structuring
+    /// (crate::gimple::structure): each block's statements as lines, a
+    /// branch's condition and its negation, each edge's copies (its
+    /// target's phis).
+    fn graph(&mut self, rx: &mut Rx, sh: &mut Shared) -> Result<crate::gimple::structure::Graph, String> {
+        use crate::gimple::structure::{Block, Cond, Edge, Graph, Jump};
+        let saved = (std::mem::take(&mut rx.out), rx.depth);
+        rx.depth = 0;
+        let mut blocks = Vec::new();
+        for b in 0..rx.f.blocks.len() {
+            let blk = rx.f.blocks[b].clone();
+            let k = blk.stmts.len();
+            let mut total = true;
+            rx.out.clear();
+            for (i, s) in blk.stmts.iter().enumerate() {
+                if i + 1 == k && matches!(s, S::Goto(_) | S::If { .. }) {
+                    break;
+                }
+                total &= self.total_stmt(rx, s);
+                rx.emitted += 1;
+                self.rstmt(rx, sh, s).map_err(|e| format!("block {}: {}: {:?}", blk.num, e, s))?;
+            }
+            let stmts = std::mem::take(&mut rx.out);
+            let edge = |g: &mut Self, rx: &mut Rx, sh: &mut Shared, to: usize| -> Result<Edge, String> { Ok(Edge { to, copies: g.phi_copies(rx, sh, b, to)? }) };
+            let term = match blk.stmts.last() {
+                Some(S::Return(_)) => Jump::Return,
+                Some(S::If { op, a, b: c, .. }) => {
+                    let (op, a, c) = (op.clone(), a.clone(), c.clone());
+                    let text = self.cond(rx, sh, &op, &a, &c)?;
+                    let neg = self.cond(rx, sh, &negate(&op), &a, &c)?;
+                    let (yes, no) = (rx.succ[b][0], rx.succ[b][1]);
+                    Jump::If { cond: Cond { text, neg }, yes: edge(self, rx, sh, yes)?, no: edge(self, rx, sh, no)? }
+                }
+                _ => {
+                    let to = rx.succ[b][0];
+                    Jump::Goto(edge(self, rx, sh, to)?)
+                }
+            };
+            blocks.push(Block { num: blk.num, stmts, total, term });
+        }
+        (rx.out, rx.depth) = saved;
+        Ok(Graph { blocks, entry: 0 })
+    }
+
     /// Each block of the CFG as its procedure `F__bN`: the function's
     /// fixed parameters and callees, then its locals (`order`) as
     /// parameters; its statements, a jump the next block's procedure
@@ -765,178 +762,6 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// Emit blocks from `b` until `stop` (structured), inside the loops
-    /// `ctx` (their headers, innermost last).
-    fn emit(&mut self, rx: &mut Rx, sh: &mut Shared, mut b: usize, stop: Option<usize>, ctx: &[usize]) -> Result<(), String> {
-        loop {
-            if Some(b) == stop {
-                return Ok(());
-            }
-            if rx.emitted > 20 * rx.f.blocks.iter().map(|b| b.stmts.len()).sum::<usize>() + 100 {
-                return Err("unstructured control flow".into());
-            }
-            // entering a loop
-            if rx.loops.contains_key(&b) && ctx.last() != Some(&b) {
-                let exit = rx.loops[&b].1;
-                self.line(rx, "loop {".into());
-                rx.depth += 1;
-                let inner: Vec<usize> = ctx.iter().copied().chain([b]).collect();
-                self.emit(rx, sh, b, None, &inner)?;
-                rx.depth -= 1;
-                self.line(rx, "}".into());
-                match exit {
-                    Some(x) => {
-                        b = x;
-                        continue;
-                    }
-                    None => return Ok(()),
-                }
-            }
-            let blk = &rx.f.blocks[b];
-            let k = blk.stmts.len();
-            for (i, s) in blk.stmts.iter().enumerate() {
-                let last = i + 1 == k;
-                if last && matches!(s, S::Goto(_) | S::If { .. }) {
-                    break;
-                }
-                rx.emitted += 1;
-                self.rstmt(rx, sh, s).map_err(|e| format!("block {}: {}: {:?}", blk.num, e, s))?;
-            }
-            if let Some(S::Return(_)) = blk.stmts.last() {
-                return Ok(());
-            }
-            match blk.stmts.last() {
-                Some(S::If { .. }) => {
-                    // (a short-circuit condition: the condition blocks of an
-                    // `&&` / `||` it combines, their statements first)
-                    let ch = self.chain(rx, b);
-                    for &h in &ch.hoist {
-                        let hb = &rx.f.blocks[h];
-                        for st in &hb.stmts[..hb.stmts.len() - 1] {
-                            rx.emitted += 1;
-                            self.rstmt(rx, sh, st).map_err(|e| format!("block {}: {}: {:?}", hb.num, e, st))?;
-                        }
-                    }
-                    let (yes, no) = (ch.yes, ch.no);
-                    // the join, if in the current loop (else each way ends
-                    // by itself: the next iteration, `break`, or `return`)
-                    let mut join = rx.ipdom[b].filter(|j| ctx.last().is_none_or(|h| rx.loops[h].0.contains(j)));
-                    // an early return: when the ways only meet at a return,
-                    // but one way leads to the other or returns, the other
-                    // is the join (the return is written in place)
-                    let returns = |j: &usize| matches!(rx.f.blocks[*j].stmts.last(), Some(S::Return(_)));
-                    let in_loop = |j: usize| ctx.last().is_none_or(|h| j != *h && rx.loops[h].0.contains(&j));
-                    if join.is_none_or(|j| returns(&j)) {
-                        if in_loop(no) && self.early(rx, yes, no) {
-                            join = Some(no);
-                        } else if in_loop(yes) && self.early(rx, no, yes) {
-                            join = Some(yes);
-                        }
-                    }
-                    let cond = self.render(rx, sh, &ch.tree, false)?;
-                    // both arms rendered first: an empty one is left out
-                    let yes_lines = self.arm(rx, sh, ch.yes_from, yes, join, ctx)?;
-                    let no_lines = self.arm(rx, sh, ch.no_from, no, join, ctx)?;
-                    match (yes_lines.is_empty(), no_lines.is_empty()) {
-                        (true, true) => {}
-                        (true, false) => {
-                            let ncond = self.render(rx, sh, &ch.tree, true)?;
-                            self.line(rx, format!("if {} {{", ncond));
-                            rx.out.extend(no_lines);
-                            self.line(rx, "}".into());
-                        }
-                        (false, no_empty) => {
-                            self.line(rx, format!("if {} {{", cond));
-                            rx.out.extend(yes_lines);
-                            if !no_empty {
-                                self.line(rx, "} else {".into());
-                                rx.out.extend(no_lines);
-                            }
-                            self.line(rx, "}".into());
-                        }
-                    }
-                    match join {
-                        Some(j) => b = j,
-                        None => return Ok(()),
-                    }
-                }
-                _ => {
-                    let s = rx.succ[b][0];
-                    match self.edge(rx, sh, b, s, ctx)? {
-                        Some(s) => b = s,
-                        None => return Ok(()),
-                    }
-                }
-            }
-        }
-    }
-
-    /// The branch at b with the condition blocks it combines: an `&&` (its
-    /// yes way a condition block whose other way is b's no way) or an `||`
-    /// (its no way one whose other way is b's yes way), recursively -- each
-    /// combined block b's alone (its only predecessor), no loop head, its
-    /// statements defined whatever they compute (evaluated before the
-    /// condition, as they are not in GIMPLE), the shared way's phis the same
-    /// from both blocks. No duplication of the blocks after them.
-    fn chain(&self, rx: &Rx, b: usize) -> Chain {
-        let mut ch = Chain { tree: CT::Leaf(b), hoist: Vec::new(), yes: rx.succ[b][0], yes_from: b, no: rx.succ[b][1], no_from: b };
-        loop {
-            // (an `&&`: the yes way's block)
-            let c = ch.yes;
-            if self.combinable(rx, c, ch.yes_from) {
-                let sub = self.chain(rx, c);
-                if sub.no == ch.no && self.same_phis(rx, ch.no, ch.no_from, sub.no_from) {
-                    ch.tree = CT::And(Box::new(ch.tree), Box::new(sub.tree));
-                    ch.hoist.push(c);
-                    ch.hoist.extend(sub.hoist);
-                    (ch.yes, ch.yes_from) = (sub.yes, sub.yes_from);
-                    continue;
-                }
-                if sub.yes == ch.no && self.same_phis(rx, ch.no, ch.no_from, sub.yes_from) {
-                    ch.tree = CT::And(Box::new(ch.tree), Box::new(CT::Not(Box::new(sub.tree))));
-                    ch.hoist.push(c);
-                    ch.hoist.extend(sub.hoist);
-                    (ch.yes, ch.yes_from) = (sub.no, sub.no_from);
-                    continue;
-                }
-            }
-            // (an `||`: the no way's block)
-            let c = ch.no;
-            if self.combinable(rx, c, ch.no_from) {
-                let sub = self.chain(rx, c);
-                if sub.yes == ch.yes && self.same_phis(rx, ch.yes, ch.yes_from, sub.yes_from) {
-                    ch.tree = CT::Or(Box::new(ch.tree), Box::new(sub.tree));
-                    ch.hoist.push(c);
-                    ch.hoist.extend(sub.hoist);
-                    (ch.no, ch.no_from) = (sub.no, sub.no_from);
-                    continue;
-                }
-                if sub.no == ch.yes && self.same_phis(rx, ch.yes, ch.yes_from, sub.no_from) {
-                    ch.tree = CT::Or(Box::new(ch.tree), Box::new(CT::Not(Box::new(sub.tree))));
-                    ch.hoist.push(c);
-                    ch.hoist.extend(sub.hoist);
-                    (ch.no, ch.no_from) = (sub.yes, sub.yes_from);
-                    continue;
-                }
-            }
-            return ch;
-        }
-    }
-
-    /// c a condition block a branch at `from` may combine: from's alone, no
-    /// loop head, no phis, its statements defined whatever they compute
-    fn combinable(&self, rx: &Rx, c: usize, from: usize) -> bool {
-        let blk = &rx.f.blocks[c];
-        let preds = (0..rx.succ.len()).filter(|&i| rx.succ[i].contains(&c)).count();
-        preds == 1
-            && rx.succ[from].contains(&c)
-            && !rx.loops.contains_key(&c)
-            && blk.phis.is_empty()
-            && matches!(blk.stmts.last(), Some(S::If { .. }))
-            && rx.succ[c].len() == 2
-            && blk.stmts[..blk.stmts.len() - 1].iter().all(|st| self.total_stmt(rx, st))
-    }
-
     /// an assignment to a GIMPLE temporary of a value defined whatever it
     /// computes: names, numbers, casts, comparisons, bitwise operations,
     /// and unsigned (wrapping) arithmetic -- no load, division, pointer or
@@ -965,93 +790,6 @@ impl<'a> Lower<'a> {
             }
             _ => false,
         }
-    }
-
-    /// the phis of `to` the same on the edges from f1 and f2
-    fn same_phis(&self, rx: &Rx, to: usize, f1: usize, f2: usize) -> bool {
-        let (n1, n2) = (rx.f.blocks[f1].num, rx.f.blocks[f2].num);
-        rx.f.blocks[to].phis.iter().all(|p| {
-            let arg = |n: u64| p.args.iter().find(|(_, b)| *b == n).map(|(e, _)| format!("{:?}", e));
-            arg(n1) == arg(n2)
-        })
-    }
-
-    /// a combined condition as SL (`!` pushed to the comparisons)
-    fn render(&mut self, rx: &mut Rx, sh: &mut Shared, t: &CT, neg: bool) -> Result<String, String> {
-        Ok(match t {
-            CT::Leaf(b) => {
-                let Some(S::If { op, a, b: c, .. }) = rx.f.blocks[*b].stmts.last().cloned() else { return Err("a condition block without its condition".into()) };
-                let op = if neg { negate(&op) } else { op };
-                self.cond(rx, sh, &op, &a, &c)?
-            }
-            CT::Not(x) => self.render(rx, sh, x, !neg)?,
-            CT::And(x, y) | CT::Or(x, y) => {
-                let and = matches!(t, CT::And(..)) != neg;
-                format!("({}) {} ({})", self.render(rx, sh, x, neg)?, if and { "&&" } else { "||" }, self.render(rx, sh, y, neg)?)
-            }
-        })
-    }
-
-    /// Every path from `from` reaches `to` or ends in a `return` (without
-    /// going round a loop).
-    fn early(&self, rx: &Rx, from: usize, to: usize) -> bool {
-        if from == to {
-            return false;
-        }
-        let mut seen = BTreeSet::new();
-        let mut work = vec![from];
-        while let Some(b) = work.pop() {
-            if b == to || !seen.insert(b) {
-                continue;
-            }
-            if rx.loops.contains_key(&b) {
-                return false;
-            }
-            let s = &rx.succ[b];
-            if s.is_empty() && !matches!(rx.f.blocks[b].stmts.last(), Some(S::Return(_))) {
-                return false;
-            }
-            work.extend(s.iter().copied());
-        }
-        true
-    }
-
-    /// The edge from `from` to `to`: the phi assignments, then (in a loop)
-    /// the next iteration, `break`, or an exit emitted in place; otherwise
-    /// `to` is where emission continues.
-    fn edge(&mut self, rx: &mut Rx, sh: &mut Shared, from: usize, to: usize, ctx: &[usize]) -> Result<Option<usize>, String> {
-        for l in self.phi_copies(rx, sh, from, to)? {
-            self.line(rx, l);
-        }
-        let Some(&h) = ctx.last() else { return Ok(Some(to)) };
-        if to == h {
-            return Ok(None);
-        }
-        let (body, exit) = &rx.loops[&h];
-        if body.contains(&to) {
-            return Ok(Some(to));
-        }
-        if Some(to) == *exit {
-            self.line(rx, "break".into());
-            return Ok(None);
-        }
-        // another exit (a `return` from inside the loop): in place
-        self.emit(rx, sh, to, None, &ctx[..ctx.len() - 1])?;
-        Ok(None)
-    }
-
-    /// The lines of one way of a branch (indented one level more).
-    fn arm(&mut self, rx: &mut Rx, sh: &mut Shared, from: usize, to: usize, join: Option<usize>, ctx: &[usize]) -> Result<Vec<String>, String> {
-        let saved = std::mem::take(&mut rx.out);
-        rx.depth += 1;
-        let r = match self.edge(rx, sh, from, to, ctx) {
-            Ok(Some(to)) => self.emit(rx, sh, to, join, ctx),
-            Ok(None) => Ok(()),
-            Err(e) => Err(e),
-        };
-        rx.depth -= 1;
-        let lines = std::mem::replace(&mut rx.out, saved);
-        r.map(|_| lines)
     }
 
     /// Assignments of the phis of `to` on the edge from `from` (none when

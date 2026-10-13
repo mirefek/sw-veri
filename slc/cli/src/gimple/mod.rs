@@ -16,6 +16,7 @@
 mod dump;
 mod dwarf;
 mod lower;
+pub(crate) mod structure;
 
 use crate::commands::CResult;
 
