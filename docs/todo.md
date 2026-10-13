@@ -27,10 +27,9 @@ form, the structured form's C2: composed per function.
      extra cut point, harmless); the shared tails visible to the checker
      would make them equal;
    - functions the generator does not structure: C2 on the CFG (item 6).
-2. The callers composed (`proofs/mallocng_cfg.core`): the CFG C1 linked
-   with its callees' contracts (as `proofs/mallocng_link.core`); a
-   callee's refinement a theorem of its own (now walked again in each
-   caller's check).
+2. A callee's refinement a theorem of its own: now walked again inside
+   each caller's `refines` (the CFG layer's callee against the structured
+   layer's, `g.low_op`).
 3. `alloc_group` on the CFG: its control flow walks (10 labels); next the
    per-instruction gaps -- 404413, a byte store of `dl` (`tr.store8_b`'s
    premise); then the rest of its blocks.

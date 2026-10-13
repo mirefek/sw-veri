@@ -312,7 +312,12 @@ item is a short summary of finished work; details are in the files named.
   functions (get_meta: 28 points, ~40 s); get_stride, a_ctz_32, dequeue,
   set_size, get_slot_index, is_bouncing, decay_bounces, upgradelock and
   resetlock composed machine ⊑ CFG ⊑ structured ⊑ spec
-  (`tr.implements_refine` twice).
+  (`tr.implements_refine` twice); the callers too (a_clz_32,
+  dequeue_head, queue, free_meta, size_to_class, enframe): the CFG C1
+  linked with the callees' CFG functions, each function's chain `cc.F`
+  (its refinement at those callees, its C2 generic in the callee with the
+  callees' chains) -- 15 functions on the CFG path alone, all with a C2
+  but step_seq (a loop).
 - **... through the blocks' procedures**: the generator writes each CFG
   block as a procedure (`F__bN`, a jump its tail call) and `F__entry`;
   (A) the CFG's loop against them, a point per block, nothing found by
