@@ -15,11 +15,6 @@ form, the structured form's C2: composed per function.
 
 1. The CFG ⊑ structured check by cut points (all 22 loop-free functions,
    ~75 s; `__malloc_alloc_meta` 45 s). Next:
-   - the blocks' procedures retired (`F__bN`/`F__entry` in the generator,
-     `C1_BLOCKS`, the (A)/(B) split, `g.low_goto*`, `g.ref_jump_tail`,
-     `g.id_runs*`, `g.shaped*`, the join memo, `tail_runs`/`shape_of`,
-     `block_points`), and the old point path (`g.cfg_ref`, the discovery
-     pass's leftovers);
    - the structured form generated and checked in one run (`slc gimple`
      running the refinement), and `refines` again in the checked chain;
    - the loops (step_seq, activate_group, try_avail, ...): loop heads cut

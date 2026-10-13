@@ -323,7 +323,8 @@ item is a short summary of finished work; details are in the files named.
   locals' tuple. All 22 loop-free functions (`__malloc_alloc_meta`
   included), the term caches emptied per point (peak ~600 MB).
 - **... by cut points, the structuring's** (`g.cut_acyclic`,
-  `proofs/gimple_cut.core`; the default path): one routine structures the
+  `proofs/gimple_cut.core`; the blocks' procedures and the old points
+  retired, with their 26 lemmas): one routine structures the
   CFG (`slc/cli/src/gimple/structure.rs`) -- the generator's, and the
   checker's on the label graph it finds in the CFG term, its joins and
   the entry the cut points. Between cut points the CFG unrolled

@@ -161,11 +161,6 @@ impl<'e> Gen<'e> {
             cfg: None,
             gref: None,
             raw_lets: false,
-            gblocks: None,
-            unfold_blocks: false,
-            gcall: None,
-            gjumped: None,
-            gjoins: std::collections::HashMap::new(),
             grefs: std::collections::HashMap::new(),
         })
     }

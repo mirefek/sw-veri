@@ -63,7 +63,7 @@ impl<'e> Gen<'e> {
         }
         // (two procedures: their refinement for every argument)
         if self.app(&bl, "mkprog", 1).is_some() && self.app(&bh, "mkprog", 1).is_some() {
-            return self.proc_ref_any(low, high, pl.len());
+            return self.proc_ref(low, high, pl.len());
         }
         let fl = self.app(&bl, "fn_build", 2).ok_or("the low function: not fn_build")?.to_vec();
         let fh = self.app(&bh, "fn_build", 2).ok_or("the high function: not fn_build")?.to_vec();
@@ -91,7 +91,7 @@ impl<'e> Gen<'e> {
         }
         let (nl, nh) = (self.env.syms[*sl as usize].name.clone(), self.env.syms[*sh as usize].name.clone());
         // the procedures' refinement, for every argument
-        let pr = self.proc_ref_any(&nl, &nh, al.len())?;
+        let pr = self.proc_ref(&nl, &nh, al.len())?;
         self.trace(|| format!("refines: {} refines {}", nl, nh));
         // the wrapper's, for an argument list a (x0 in the program), every
         // world and outcome
@@ -145,63 +145,10 @@ impl<'e> Gen<'e> {
         self.close(r3, &[h1, h2, h3, prem_t], &vs)
     }
 
-    /// The procedures' refinement: a CFG procedure with its blocks'
-    /// procedures (`PL__entry`, slc gimple --cfg) through them -- the CFG
-    /// against them (its loop's points their labels), they against PH
-    /// (each call of one unfolded); else by the walk
-    fn proc_ref_any(&mut self, pl: &str, ph: &str, n: usize) -> Result<Seq, String> {
-        // (by cut points, the CFG procedure itself; C1_BLOCKS=1: through
-        // the blocks' procedures)
-        if !std::env::var("C1_BLOCKS").is_ok_and(|v| v == "1") {
-            return self.proc_ref(pl, ph, n);
-        }
-        if pl.ends_with("__entry") {
-            self.unfold_blocks = true;
-            let r = self.proc_ref(pl, ph, n);
-            self.unfold_blocks = false;
-            return r;
-        }
-        let entry = format!("{pl}__entry");
-        if !self.env.sym_by_name.contains_key(&entry) {
-            return self.proc_ref(pl, ph, n);
-        }
-        if ph == entry {
-            // (the CFG procedure's parameters among its blocks': all but
-            // those reassigned -- locals there)
-            let (dl, _) = self.def_of(pl)?;
-            let fixed: Vec<usize> = (0..dl.len()).filter(|&i| !self.env.vars[dl[i] as usize].name.split('$').next().unwrap_or("").ends_with("_in")).collect();
-            self.gblocks = Some((pl.to_string(), fixed, Vec::new()));
-            let r = self.proc_ref(pl, ph, n);
-            self.gblocks = None;
-            return r;
-        }
-        let pa = self.proc_ref_any(pl, &entry, n)?;
-        let pb = self.proc_ref_any(&entry, ph, n)?;
-        // (the two composed)
-        let ps: Vec<Term> = (0..n).map(|i| self.var(&format!("pa{i}"))).collect();
-        let (w, o) = (self.var("pw"), self.var("po"));
-        let rl = |g: &Gen, nm: &str| g.mk("runs", vec![g.mk(nm, ps.clone()), w.clone(), o.clone()]);
-        let h = rl(self, pl);
-        let hs = self.assume(&h)?;
-        let mut args: Vec<RA> = ps.iter().map(t).collect();
-        args.extend([t(&w), t(&o)]);
-        let mut a1 = args.clone();
-        a1.push(s(&hs));
-        let r1 = self.run(&mp(R::S(pa), a1), &[])?;
-        args.push(s(&r1));
-        let r2 = self.run(&mp(R::S(pb), args), &[])?;
-        let mut vs: Vec<VarId> = ps.iter().map(Self::var_id).collect();
-        vs.extend([Self::var_id(&w), Self::var_id(&o)]);
-        self.close(r2, &[h], &vs)
-    }
-
     /// The procedures' refinement: `all ps s r. runs(PL(ps), s, r) ->
     /// runs(PH(ps), s, r)` by the walk
     fn proc_ref(&mut self, pl: &str, ph: &str, n: usize) -> Result<Seq, String> {
         let ps: Vec<Term> = (0..n).map(|i| self.var(&format!("pa{i}"))).collect();
-        if let Some(g) = self.gblocks.as_mut() {
-            g.2 = g.1.iter().map(|&i| ps[i].clone()).collect();
-        }
         let w = self.var("pw");
         let o = self.var("po");
         self.w = w.clone();
@@ -283,73 +230,9 @@ impl<'e> Gen<'e> {
 
     /// the walk on after a lower step `lo -> lo2` (its proof imp)
     fn after_low(&mut self, lo: &Term, lo2: Term, imp: Seq, qi: usize, w: &Term) -> Result<Seq, String> {
-        let rest = match self.gjumped.take() {
-            Some((name, args)) => self.join_walk(&lo2, qi, w, &name, &args)?,
-            None => self.walk(&lo2, qi, w)?,
-        };
+        let rest = self.walk(&lo2, qi, w)?;
         let r = mp(R::Inst("g.ref_low".into(), vec![("l", lo.clone()), ("l2", lo2), ("q", self.qs[qi].clone())]), vec![t(w), s(&imp), s(&rest)]);
         self.run(&r, &[])
-    }
-
-    /// The CFG side just jumped to a block's procedure `name(args)` (lo2
-    /// its body), the structured side at a join -- `ex x2. x2 = ok(pair(x0,
-    /// T), empty) && K`, T its locals' tuple, the call's locals: the block
-    /// walked once for every world and tuple (`all w ys. g.ref(..)`, kept
-    /// by the block and K), here its instance. Else the walk on.
-    fn join_walk(&mut self, lo2: &Term, qi: usize, w: &Term, name: &str, args: &[Term]) -> Result<Seq, String> {
-        let q = self.qs[qi].clone();
-        let tup = self
-            .app(&q, "mkprog", 1)
-            .and_then(|m| block(self, &m[0]))
-            .and_then(|(a, _)| self.app(&a, "eq", 2).map(|e| e.to_vec()))
-            .filter(|e| matches!(e[0].node(), Node::BVar(0)))
-            .and_then(|e| self.app(&e[1], "ok", 2).map(|o| o[0].clone()))
-            .and_then(|p0| self.app(&p0, "pair", 2).map(|p| p[1].clone()))
-            .filter(|t| t.loose_depth(&self.env.binders_fn()) == 0);
-        // (the tuple's components: the call's last arguments)
-        let comps = tup.as_ref().map(|t| self.locals_of(t)).unwrap_or_default();
-        let m = comps.len();
-        let (Some(tup), true) = (tup, m > 0 && m <= args.len()) else { return self.walk(lo2, qi, w) };
-        let nf = args.len() - m;
-        if (0..m).any(|i| self.canon(&comps[i]) != self.canon(&args[nf + i])) {
-            return self.walk(lo2, qi, w);
-        }
-        // (the key: the structured side, its tuple abstracted)
-        let keys: Vec<Term> = (0..m).map(|i| self.var(&format!("gjk{i}"))).collect();
-        let ktup = self.tuple_of(&keys);
-        let kq = self.canon(&self.replace_t(&q, &tup, &ktup));
-        let key = (name.to_string(), self.abs(&kq, &keys.iter().map(Self::var_id).collect::<Vec<_>>()));
-        let th = match self.gjoins.get(&key) {
-            Some(th) => th.clone(),
-            None => {
-                // (the block for every world and tuple)
-                let wv = self.var("gjw");
-                let ys: Vec<Term> = (0..m).map(|i| self.var(&format!("gjy{i}"))).collect();
-                let mut cargs = args[..nf].to_vec();
-                cargs.extend(ys.iter().cloned());
-                let (ps, body) = self.def_of(name)?;
-                let mut b = body;
-                for (p0, a) in ps.iter().zip(cargs.iter()) {
-                    b = b.subst_var(*p0, a, &self.env.binders_fn());
-                }
-                let mb = self.app(&b, "mkprog", 1).ok_or("a block's procedure not a program")?[0].clone();
-                let lt = mb.instantiate_params(&[wv.clone(), Term::bvar(0)], &self.env.binders_fn());
-                let ut = self.replace_t(&q, &tup, &self.tuple_of(&ys));
-                let qj = self.new_q(ut);
-                let saved = self.w.clone();
-                self.trace(|| format!("ref: join at {}", name));
-                let r = self.walk(&lt, qj, &wv);
-                self.w = saved;
-                let mut vs = vec![Self::var_id(&wv)];
-                vs.extend(ys.iter().map(Self::var_id));
-                let th = self.close(r?, &[], &vs)?;
-                self.gjoins.insert(key, th.clone());
-                th
-            }
-        };
-        let mut ins = vec![t(w)];
-        ins.extend(comps.iter().map(t));
-        self.run(&mp(R::S(th), ins), &[])
     }
 
     /// a program at a join, `mkprog(x0 x1. ex x2. x2 = ok(pair(x0, T),
@@ -455,93 +338,6 @@ impl<'e> Gen<'e> {
         self.proj_step_in(lo, &lo0)
     }
 
-    /// A block's procedure called on the CFG side (`F__bN(..)`, the
-    /// generator's block procedures, slc/cli/src/gimple/lower/readable.rs):
-    /// the call by its definition's body (its equation); then a tail call
-    /// as a jump (the callee's body alone: g.low_goto, g.low_goto0 a void
-    /// one, at the top g.low_goto_top, g.low_goto0_top), else the body in
-    /// place of the call (g.low_call). x: the bind_rel's arguments; kl the
-    /// block's rest (None: the call the CFG side's whole, at the top).
-    fn block_call(&mut self, lo: &Term, x: &[Term], kl: Option<&Term>) -> Result<Option<(Term, Seq)>, String> {
-        if !self.unfold_blocks {
-            return Ok(None);
-        }
-        let lctx: &[&str] = if kl.is_some() { &["o", "x8"] } else { &["o"] };
-        let Some(op) = self.lam(&x[0], lctx, &[]) else { return Ok(None) };
-        if let Some(r) = self.app(&op, "mkprog", 1).map(|m| m[0].clone()) {
-            let st = self.lam(&x[1], lctx, &[]).ok_or("a block's call's world reads the block")?;
-            // (as a jump)
-            let mut cands: Vec<(&str, Vec<(&'static str, Term)>, bool)> = Vec::new();
-            match kl {
-                None => {
-                    cands.push(("g.low_goto_top", vec![("r", r.clone()), ("s", st.clone())], false));
-                    cands.push(("g.low_goto0_top", vec![("r", r.clone()), ("s", st.clone())], true));
-                }
-                Some(_) => {
-                    // (at the top, its rest the outcome itself)
-                    cands.push(("g.low_goto_id", vec![("r", r.clone()), ("s", st.clone())], false));
-                    cands.push(("g.low_goto0_id", vec![("r", r.clone()), ("s", st.clone())], true));
-                    // (the locals' tuple: in the raise handler's state)
-                    let lt = self.app(&x[3], "eq", 2).and_then(|e| self.app(&e[1], "exc", 2).map(|c| c[0].clone())).and_then(|p0| self.app(&p0, "pair", 2).map(|p| p[1].clone()));
-                    if let Some(l) = lt.and_then(|l| self.lam(&l, &["o", "x8", "x9", "x10"], &[])) {
-                        cands.push(("g.low_goto", vec![("r", r.clone()), ("s", st.clone()), ("l", l.clone())], false));
-                        cands.push(("g.low_goto0", vec![("r", r.clone()), ("s", st.clone()), ("l", l)], true));
-                    }
-                }
-            }
-            let want = self.expand(lo);
-            for (lemma, binds, void) in cands {
-                let (rr, stmt) = self.inst(lemma, &binds)?;
-                let (hs, rest) = if void { self.imps(&stmt) } else { (Vec::new(), stmt.clone()) };
-                let Some(rest) = (if void { (hs.len() == 1).then(|| rest) } else { Some(rest) }) else { continue };
-                let Some(body) = self.app(&rest, "all", 1).map(|b| b[0].clone()) else { continue };
-                let (lhs, _) = self.imps(&body);
-                if lhs.len() != 1 || self.expand(&lhs[0]) != want {
-                    continue;
-                }
-                self.trace(|| format!("ref: a call as a jump, {}", lemma));
-                self.gjumped = self.gcall.take();
-                let r0 = if void {
-                    // (the callee's value empty: its body's leaves)
-                    let x2 = self.app(&hs[0], "g.post", 2).ok_or("g.low_goto0's premise")?.to_vec();
-                    let (sg, su) = (self.gref.take(), self.unfold_blocks);
-                    self.unfold_blocks = false;
-                    let pf = self.post(&x2[0], &x2[1], &st);
-                    (self.gref, self.unfold_blocks) = (sg, su);
-                    mp(rr, vec![s(&pf?)])
-                } else {
-                    rr
-                };
-                return self.low_by(r0).map(Some);
-            }
-            let Some(kl) = kl else { return Ok(None) };
-            // (in place)
-            let ka = self.lam(&x[2], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("a call's rest")?;
-            let xa = self.lam(&x[3], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("a call's handler")?;
-            let da = self.lam(&x[4], &["o", "x8", "x9"], &["x9", "x8"]).ok_or("a call's handler")?;
-            return self.low_by(R::Inst("g.low_call".into(), vec![("r", r), ("s", st), ("ka", ka), ("xa", xa), ("da", da), ("kl", kl.clone())])).map(Some);
-        }
-        let Node::App(f0, args) = op.node() else { return Ok(None) };
-        let name = self.env.syms[*f0 as usize].name.clone();
-        let is_block = name.rsplit_once("__b").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
-        if !is_block {
-            return Ok(None);
-        }
-        // (the call by its definition)
-        self.trace(|| format!("ref: call {}", name));
-        self.gcall = Some((name.clone(), args.to_vec()));
-        let (ps, body) = self.def_of(&name)?;
-        let mut b = body;
-        for (p, a) in ps.iter().zip(args.iter()) {
-            b = b.subst_var(*p, a, &self.env.binders_fn());
-        }
-        let eq = self.mk("eq", vec![op.clone(), b.clone()]);
-        let pf = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec![name.clone()]), &eq, &[])?;
-        let ab = self.abstract_(lo, &op, 0);
-        let l = self.lam(&ab, &["o", "x"], &["o", "x"]).ok_or("a call's context")?;
-        self.low_by(mp(R::Inst("g.low_rw".into(), vec![("l", l), ("a", op), ("b", b)]), vec![s(&pf)])).map(Some)
-    }
-
     /// ... one in the part `sub` of it (a value about to be substituted, the
     /// block's head: not the other blocks of the dispatch)
     fn proj_step_in(&mut self, lo: &Term, sub: &Term) -> Result<Option<(Term, Seq)>, String> {
@@ -573,12 +369,6 @@ impl<'e> Gen<'e> {
             if self.jump_of(lo).is_some() {
                 return Ok(None);
             }
-            // (a block's procedure called, the CFG side's whole)
-            if let Some(x) = self.app(lo, "bind_rel", 5).map(|x| x.to_vec()) {
-                if let Some(r) = self.block_call(lo, &x, None)? {
-                    return Ok(Some(r));
-                }
-            }
             if let Some(r) = self.proj_step(lo)? {
                 return Ok(Some(r));
             }
@@ -609,12 +399,6 @@ impl<'e> Gen<'e> {
                         return self.low_by(R::Inst("g.low_kid".into(), vec![("a", al), ("k", k9)])).map(Some);
                     }
                 }
-            }
-        }
-        // (a block's procedure called: its body in place, g.low_call)
-        if let Some(x) = self.app(&a, "bind_rel", 5).map(|x| x.to_vec()) {
-            if let Some(r) = self.block_call(lo, &x, Some(&kl))? {
-                return Ok(Some(r));
             }
         }
         if let Some(x) = self.app(&a, "letin", 2).map(|x| x.to_vec()) {
@@ -1000,13 +784,13 @@ impl<'e> Gen<'e> {
         Err(format!("no step: low {} / high {}", self.lambda(1, lo), self.lambda(2, &ub)))
     }
 
-    /// The CFG going on at x, the structured side at qi: x's point (found in
-    /// the first pass; in the second, `inv(x, q)` and g.ref_jump)
+    /// The CFG going on at x, the structured side at qi: x's cut point (made
+    /// when first reached), `inv(x, q)` by its hypothesis, g.ref_jump
     fn leaf_jump(&mut self, lo: &Term, x: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
         // (the structured side's lets before it: run, as the CFG's block ran
         // them into its locals -- its point's template then on the same
         // values)
-        let ub = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()).filter(|_| self.gblocks.is_none());
+        let ub = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone());
         if let Some((ua, _)) = ub.as_ref().and_then(|b| block(self, b)) {
             if self.app(&ua, "letin", 2).is_some() {
                 if let Some(Red::Q(j, r)) = self.reduce(qi, &[])? {
@@ -1019,7 +803,7 @@ impl<'e> Gen<'e> {
         // (at an inner join whose rest passes the locals on to the
         // enclosing one's: on to that one -- a join's cut point the same
         // however deep the way to it came)
-        if self.gblocks.is_none() && self.passes_on(&self.qs[qi]) {
+        if self.passes_on(&self.qs[qi]) {
             let mut steps: Vec<(usize, usize, R)> = Vec::new();
             let mut cur = qi;
             let mut done = None;
@@ -1048,42 +832,21 @@ impl<'e> Gen<'e> {
                 None => self.trace(|| format!("ref: no enclosing join reached ({} steps)", steps.len())),
             }
         }
+        // (the point found or made here, related by its hypothesis)
         let r = self.qs[qi].clone();
         let g = self.gref.as_ref().ok_or("the CFG going on outside its loop")?;
-        let (discover, cur, inv) = (g.discover, g.cur, g.inv.clone());
-        // (one pass: the point found or made here, related by its hypothesis)
-        if self.gref.as_ref().unwrap().inv_var.is_some() {
-            let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
-            let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
-            let comps = self.locals_of(&xs[1]);
-            let i = self.point_at(k, &comps, &r)?;
-            self.trace(|| format!("ref: jump to point {} (label {}, from {})", i, k, cur));
-            let h = self.point_hyp(i)?;
-            let hs = self.assume(&h)?;
-            let ip = self.run(&mp(R::S(hs), vec![t(x), t(&r), t(&xs[1]), simp0(), simp0()]), &[])?;
-            return self.run(&mp(R::Inst("g.ref_jump".into(), vec![("inv", inv)]), vec![t(x), t(&r), t(w), s(&ip), simp0()]), &[]);
+        let (cur, inv) = (g.cur, g.inv.clone());
+        if g.inv_var.is_none() {
+            return Err("the CFG going on outside its cut points' walks".into());
         }
-        if discover {
-            let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
-            let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
-            let comps = self.locals_of(&xs[1]);
-            self.point_at(k, &comps, &r)?;
-            self.gref.as_mut().unwrap().edges.insert((cur, k));
-            self.trace(|| format!("ref: point at label {} (from {})", k, cur));
-            let goal = self.mk("g.ref", vec![lo.clone(), r, w.clone()]);
-            let fls = self.mk("false", vec![]);
-            let h = self.assume(&fls)?;
-            return self.run(&mp(R::Inst("g.efq".into(), vec![("a", goal)]), vec![s(&h)]), &[]);
-        }
-        // (against the blocks' procedures: the next block's, P, called by
-        // the rest r -- P's runs r's)
-        if self.gblocks.is_some() {
-            let pr = self.block_prog(x)?;
-            let ip = self.inv_at(x, &pr)?;
-            let trn = self.tail_runs(&pr, &r, w)?;
-            return self.run(&mp(R::Inst("g.ref_jump_tail".into(), vec![("inv", inv)]), vec![t(x), t(&pr), t(&r), t(w), s(&ip), simp0(), s(&trn)]), &[]);
-        }
-        let ip = self.inv_at(x, &r)?;
+        let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
+        let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
+        let comps = self.locals_of(&xs[1]);
+        let i = self.point_at(k, &comps, &r)?;
+        self.trace(|| format!("ref: jump to point {} (label {}, from {})", i, k, cur));
+        let h = self.point_hyp(i)?;
+        let hs = self.assume(&h)?;
+        let ip = self.run(&mp(R::S(hs), vec![t(x), t(&r), t(&xs[1]), simp0(), simp0()]), &[])?;
         self.run(&mp(R::Inst("g.ref_jump".into(), vec![("inv", inv)]), vec![t(x), t(&r), t(w), s(&ip), simp0()]), &[])
     }
     /// the structured side's own reduction (its head neither an operation,
@@ -1201,15 +964,12 @@ struct GPoint {
     tmpl: Term,
 }
 
-/// The CFG's loop being walked: its points (found in a first pass), the
-/// labels' ways on, the locals' number; the rule's parameters
+/// The CFG's loop being walked: its locals' number, its cut points (made
+/// as walks reach them), their relation inv
 pub(super) struct GRef {
     m: usize,
     points: Vec<GPoint>,
-    edges: BTreeSet<(u128, u128)>,
-    discover: bool,
     inv: Term,
-    rank: Term,
     /// the loop's body (`l o. b`)
     b: Term,
     /// the label of the point walked
@@ -1227,12 +987,11 @@ pub(super) struct GRef {
 
 /// The cut points' walk (g.cut_acyclic): the CFG's labels (`v`, its
 /// disjuncts' labels), each label's leaves (a jump's label, None a
-/// `return`) -- found by its block's walk alone first (`discover`)
+/// `return`) -- found by its block's walk alone
 pub(super) struct GCut {
     v: Term,
     labels: Vec<u128>,
     succ: BTreeMap<u128, Vec<Option<u128>>>,
-    discover: bool,
     /// the labels' walks proving their ways on as they find them: v and m
     /// free relations V, M meanwhile, a leaf at label k2 by `hv[k2]` (`all
     /// w y. V(pair(w, pair(k2, y)))`), its rank by `hm[(k, k2)]` (`all w y
@@ -1361,10 +1120,11 @@ impl<'e> Gen<'e> {
         t
     }
 
-    /// the points' relation inv (`l q. ..`) and rank (`l. ..`)
-    fn gref_params(&mut self) -> (Term, Term) {
+    /// the cut points' relation inv (`l q. ..`): a disjunct per point, its
+    /// label's states of its locals' shape and its program there
+    fn points_inv(&mut self) -> Term {
         let g = self.gref.as_ref().expect("the points");
-        let (m, points, edges) = (g.m, g.points.clone(), g.edges.clone());
+        let (m, points) = (g.m, g.points.clone());
         let lv = self.var("gl");
         let qv = self.var("gq");
         let yv = self.var("gyy");
@@ -1377,41 +1137,21 @@ impl<'e> Gen<'e> {
             let body = self.abs(&self.mk("and", vec![e1, e2]), &[Self::var_id(&yv)]);
             inv = self.mk("or", vec![self.mk("ex", vec![body]), inv]);
         }
-        let inv_l = self.abs(&inv, &[Self::var_id(&lv), Self::var_id(&qv)]);
-        // (the rank: the longest way on, the labels' ways acyclic)
-        let labels: BTreeSet<u128> = points.iter().map(|p| p.label).collect();
-        let mut rank: BTreeMap<u128, u128> = BTreeMap::new();
-        for _ in 0..=labels.len() {
-            for &k in &labels {
-                let r = edges.iter().filter(|e| e.0 == k).map(|e| rank.get(&e.1).copied().unwrap_or(0) + 1).max().unwrap_or(0);
-                rank.insert(k, r);
-            }
-        }
-        let mut table = self.mk("empty", vec![]);
-        for (k, r) in &rank {
-            table = self.mk("fn_update", vec![table, lit(*k), lit(*r)]);
-        }
-        let rk = self.mk("app", vec![table, self.mk("fst", vec![self.mk("snd", vec![lv.clone()])])]);
-        let rank_l = self.abs(&rk, &[Self::var_id(&lv)]);
-        (inv_l, rank_l)
+        self.abs(&inv, &[Self::var_id(&lv), Self::var_id(&qv)])
     }
 
     /// the point of the label k at locals comps and program r: its index
     /// (found here in the first pass)
     fn point_at(&mut self, k: u128, comps: &[Term], r: &Term) -> Result<usize, String> {
-        // (against the blocks' procedures: the label's)
-        if self.gblocks.is_some() {
-            let g = self.gref.as_ref().expect("the points");
-            return g.points.iter().position(|p| p.label == k).ok_or_else(|| format!("label {}: no block's procedure", k));
-        }
         let pt = self.point_of(k, comps, r)?;
         let g = self.gref.as_ref().expect("the points");
         let found = g.points.iter().position(|p| p.label == k && p.shape == pt.shape && p.tmpl == pt.tmpl);
         if let Some(i) = found {
             return Ok(i);
         }
-        if !g.discover {
-            return Err(format!("label {}: a point not found in the first pass", k));
+        // (made only while the cut points are walked)
+        if g.inv_var.is_none() {
+            return Err(format!("label {}: not among the cut points", k));
         }
         // (C1_TRACE: how a label's new point differs from its others)
         if std::env::var("C1_TRACE").is_ok() {
@@ -1499,252 +1239,6 @@ fn mpf_inst(lemma: &str, binds: Vec<(&'static str, Term)>, args: Vec<RA>) -> R {
 }
 
 impl<'e> Gen<'e> {
-    /// The CFG's loop (lo = `ex x8. while_rel(l0, true, b, tr, x8) && k(x8,
-    /// o)`), the structured side's program qs[qi] from w: by g.cfg_ref, its
-    /// points found in a first pass (the walks' proofs set aside), proven
-    /// in a second
-    fn cfg_loop(&mut self, lo: &Term, a: &Term, k: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
-        if self.gblocks.is_none() {
-            return self.cut_loop(lo, a, k, qi, w);
-        }
-        let x = self.app(a, "while_rel", 5).ok_or("the CFG's loop")?.to_vec();
-        let lctx = ["o", "x8"];
-        let l0 = self.lam(&x[0], &lctx, &[]).ok_or("the loop's start reads the block")?;
-        let b = self.lam(&x[2], &["o", "x8", "x9", "x10"], &["x9", "x10"]).ok_or("the loop's body")?;
-        let tr = self.lam(&x[3], &["o", "x8", "x9"], &["x9"]).ok_or("the loop's trace")?;
-        let kk = self.lam(k, &lctx, &["x8", "o"]).ok_or("the loop's rest")?;
-        let xs = self.app(&l0, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("the loop's start not a world, a label and locals")?;
-        let k_e = nat(&xs[0]).ok_or("the first label not a literal")?;
-        let comps = self.locals_of(&xs[1]);
-        let q0 = self.qs[qi].clone();
-        let fls = self.mk("false", vec![]);
-        // (against the blocks' procedures: a point per block, its locals
-        // free, its procedure there; else the points found)
-        let preset = match self.gblocks.clone() {
-            Some((f, _, fixed)) => self.block_points(&f, &fixed, comps.len())?,
-            None => Vec::new(),
-        };
-        let blocks = !preset.is_empty();
-        self.gref = Some(GRef { m: comps.len(), points: preset, edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls, b: b.clone(), cur: k_e, cut: None, inv_var: None, hyps: Vec::new(), walked: Vec::new() });
-        if !blocks {
-            self.point_at(k_e, &comps, &q0)?;
-        }
-        // the first pass: each point's walk, its points found
-        let mut i = 0;
-        while i < self.gref.as_ref().unwrap().points.len() {
-            let (inv, rank) = self.gref_params();
-            {
-                let g = self.gref.as_mut().unwrap();
-                g.inv = inv.clone();
-                g.rank = rank.clone();
-            }
-            let (_, stmt) = self.inst("g.cfg_ref", &[("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone()), ("inv", inv), ("m", rank)])?;
-            let (prems, _) = self.imps(&stmt);
-            let gl = self.claim_lam(&prems[0])?;
-            let prem = self.pt_prem(&gl, i)?.1;
-            self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
-            self.sub_walk(&prem, &["pw", "py"])?;
-            self.drop_caches();
-            i += 1;
-        }
-        self.trace(|| format!("ref: {} points", self.gref.as_ref().unwrap().points.len()));
-        // the second: the rule's premises, point by point
-        let (inv, rank) = self.gref_params();
-        {
-            let g = self.gref.as_mut().unwrap();
-            g.discover = false;
-            g.inv = inv.clone();
-            g.rank = rank.clone();
-        }
-        let (rr, stmt) = self.inst("g.cfg_ref", &[("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone()), ("inv", inv.clone()), ("m", rank)])?;
-        let (prems, _) = self.imps(&stmt);
-        let rss = || std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |p| p * 4096 / (1 << 20));
-        self.trace(|| format!("ref: the points' walks, {} MB", rss()));
-        let ps = self.combine(&prems[0], 0)?;
-        self.trace(|| format!("ref: the ways on, {} MB", rss()));
-        let pd = self.combine(&prems[1], 1)?;
-        self.trace(|| format!("ref: the rank, {} MB", rss()));
-        let pm = self.combine(&prems[2], 2)?;
-        let main = self.run(&mp(rr, vec![s(&ps), s(&pd), s(&pm)]), &[])?;
-        // at the loop's start: its point (against the blocks' procedures:
-        // the first block's, P0, called by the rest q0)
-        let qs0 = if blocks { self.block_prog(&l0)? } else { q0.clone() };
-        let i0 = self.inv_at(&l0, &qs0)?;
-        let (rv, ov) = (self.var("lr"), self.var("lo"));
-        let c1 = self.run(&mp(R::S(main), vec![t(&l0), t(&qs0), t(&rv), t(&ov), s(&i0)]), &[])?;
-        let c1 = self.close(c1, &[], &[Self::var_id(&rv), Self::var_id(&ov)])?;
-        let c2 = self.run(&mp(R::Inst("g.ref_cfg".into(), vec![("l", l0.clone()), ("q", qs0.clone()), ("b", b), ("tr", tr), ("k", kk)]), vec![s(&c1)]), &[])?;
-        self.gref = None;
-        // (its world fst(l0): the walk's, w)
-        let l0p = self.app(&l0, "pair", 2).ok_or("the loop's start not a pair")?.to_vec();
-        if l0p[0] != *w {
-            return Err(format!("the loop's start world {}: not the walk's", self.print(&l0p[0])));
-        }
-        let fe = R::Inst("fst_pair".into(), vec![("a", l0p[0].clone()), ("b", l0p[1].clone())]);
-        let fl0 = self.mk("fst", vec![l0.clone()]);
-        let c3 = self.run(&mp(R::Inst("g.ref_ws".into(), vec![("l", lo.clone()), ("q", qs0.clone()), ("a", fl0), ("b", w.clone())]), vec![p(fe), s(&c2)]), &[])?;
-        if !blocks {
-            return Ok(c3);
-        }
-        let tr0 = self.tail_runs(&qs0, &q0, w)?;
-        self.run(&mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", q0), ("q2", qs0)]), vec![t(w), s(&c3), s(&tr0)]), &[])
-    }
-
-    /// The blocks' procedures' points (`F__bN`): each label's, its locals
-    /// free (all m, or none when the procedures take none), its program
-    /// the procedure on the fixed parameters and the locals
-    fn block_points(&mut self, f: &str, fixed: &[Term], m: usize) -> Result<Vec<GPoint>, String> {
-        let pre = format!("{f}__b");
-        let mut labels: Vec<(u128, String)> = self
-            .env
-            .sym_by_name
-            .keys()
-            .filter_map(|n| n.strip_prefix(&pre).and_then(|k| k.parse::<u128>().ok()).map(|k| (k, n.clone())))
-            .collect();
-        labels.sort();
-        let mut out = Vec::new();
-        for (k, name) in labels {
-            let (ps, _) = self.def_of(&name)?;
-            let nloc = ps.len().checked_sub(fixed.len()).ok_or("a block's procedure of fewer parameters")?;
-            let yv = self.var("gby");
-            let mut args = fixed.to_vec();
-            if nloc == m {
-                args.extend((0..m).map(|j| self.cfg_proj(&yv, j, m)));
-            } else if nloc != 0 {
-                return Err(format!("`{}`: {} locals, the CFG's {}", name, nloc, m));
-            }
-            let tmpl = self.abs(&self.mk(&name, args), &[Self::var_id(&yv)]);
-            out.push(GPoint { label: k, shape: vec![Sh::Free; m], tmpl });
-        }
-        Ok(out)
-    }
-
-    /// the program of the CFG's state x by the blocks' procedures: its
-    /// label's on its locals
-    fn block_prog(&mut self, x: &Term) -> Result<Term, String> {
-        let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
-        let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
-        let g = self.gref.as_ref().ok_or("the CFG's points")?;
-        let p = g.points.iter().find(|p| p.label == k).ok_or_else(|| format!("label {}: no block's procedure", k))?;
-        Ok(p.tmpl.instantiate_params(std::slice::from_ref(&xs[1]), &self.env.binders_fn()))
-    }
-
-    /// `all o. runs(P, w, o) -> runs(R, w, o)`: R calls P (a block's
-    /// procedure), its outcome passed on -- the call walked with its
-    /// outcome as it is (g.id_runs), P's universe and outcomes' kinds
-    fn tail_runs(&mut self, pr: &Term, r: &Term, w: &Term) -> Result<Seq, String> {
-        // (a void call: its value dropped -- g.id_runs0, P's value empty)
-        let void = self.void_call(r);
-        let lemma = if void { "g.id_runs0" } else { "g.id_runs" };
-        let (rr, stmt) = self.inst(lemma, &[("p", pr.clone()), ("s", w.clone()), ("r", r.clone())])?;
-        let (prems, _) = self.imps(&stmt);
-        let x = self.app(&prems[0], "g.ref", 3).ok_or("g.id_runs's premise")?.to_vec();
-        let qj = self.new_q(x[1].clone());
-        let (saved, sg) = (self.w.clone(), self.gref.take());
-        let wk = self.walk(&x[0], qj, w);
-        (self.w, self.gref) = (saved, sg);
-        let wk = wk?;
-        let u = self.op_univ(pr, w)?;
-        let sh = self.shape_of(pr, w, "g.shaped")?;
-        let mut args = vec![s(&wk), s(&u), s(&sh)];
-        if void {
-            args.push(s(&self.shape_of(pr, w, "g.shaped0")?));
-        }
-        self.run(&mp(rr, args), &[])
-    }
-
-    /// the program r (a call at its head) drops the call's value: its ok
-    /// handler does not read it
-    fn void_call(&self, r: &Term) -> bool {
-        // (a procedure's name: its definition)
-        let mut r = r.clone();
-        if let Node::App(f0, args) = r.node() {
-            if let SymKind::Defined { params, body } = &self.env.syms[*f0 as usize].kind {
-                if params.len() == args.len() && self.app(body, "mkprog", 1).is_some() {
-                    let mut b = body.clone();
-                    for (p0, a) in params.iter().zip(args.iter()) {
-                        b = b.subst_var(*p0, a, &self.env.binders_fn());
-                    }
-                    r = b;
-                }
-            }
-        }
-        let Some(mut b) = self.app(&r, "mkprog", 1).map(|m| m[0].clone()) else { return false };
-        // (the call at the head: past a block's opening and lets)
-        loop {
-            if let Some((a, _)) = block(self, &b) {
-                b = a;
-            } else if let Some(x) = self.app(&b, "letin", 2).map(|x| x.to_vec()) {
-                b = x[1].clone();
-            } else {
-                break;
-            }
-        }
-        let Some(x) = self.app(&b, "bind_rel", 5).map(|x| x.to_vec()) else { return false };
-        // (its ok handler `s v. ..`: v its innermost bound variable)
-        !self.uses_bvar(&x[2], 0)
-    }
-
-    /// the bound variable k (at t's top) occurs in t
-    fn uses_bvar(&self, t: &Term, k: u32) -> bool {
-        match t.node() {
-            Node::BVar(i) => *i == k,
-            Node::Var(_, a) => a.iter().any(|x| self.uses_bvar(x, k)),
-            Node::App(s0, a) => {
-                let bs = &self.env.syms[*s0 as usize].binders;
-                a.iter().zip(bs).any(|(x, &n)| self.uses_bvar(x, k + n))
-            }
-            _ => false,
-        }
-    }
-
-    /// `all o. runs(P, w, o) -> pred(o)`: P a procedure's call, pred an
-    /// outcomes' kind (g.shaped, g.shaped0), its body's leaves (g.proc_post,
-    /// the body walked alone)
-    fn shape_of(&mut self, pr: &Term, w: &Term, pred: &str) -> Result<Seq, String> {
-        let Node::App(f0, args) = pr.node() else { return Err("a call not a procedure's".into()) };
-        let name = self.env.syms[*f0 as usize].name.clone();
-        let args = args.to_vec();
-        // (for every argument and world, once per procedure)
-        let key = (name.clone(), pred.to_string());
-        let th = match self.grefs.get(&key) {
-            Some(th) => th.clone(),
-            None => {
-                let (ps, body) = self.def_of(&name)?;
-                let avs: Vec<Term> = (0..ps.len()).map(|i| self.var(&format!("gsa{i}"))).collect();
-                let wv = self.var("gsw");
-                let mut b = body;
-                for (p0, a) in ps.iter().zip(avs.iter()) {
-                    b = b.subst_var(*p0, a, &self.env.binders_fn());
-                }
-                let r = self.app(&b, "mkprog", 1).ok_or("a procedure not a program")?[0].clone();
-                let pl = self.mk(pred, vec![Term::bvar(0)]);
-                let (rr, stmt) = self.inst("g.proc_post", &[("r", r), ("s", wv.clone()), ("p", pl)])?;
-                let (prems, _) = self.imps(&stmt);
-                let x = self.app(&prems[0], "g.post", 2).ok_or("g.proc_post's premise")?.to_vec();
-                let (sg, su) = (self.gref.take(), self.unfold_blocks);
-                self.unfold_blocks = false;
-                let pf = self.post(&x[0], &x[1], &wv);
-                (self.gref, self.unfold_blocks) = (sg, su);
-                let sh = self.run(&mp(rr, vec![s(&pf?)]), &[])?;
-                // (the call by its definition)
-                let ov = self.var("so");
-                let concl = self.mk(pred, vec![ov.clone()]);
-                let hr = self.mk("runs", vec![self.mk(&name, avs.clone()), wv.clone(), ov.clone()]);
-                let goal0 = Term::app(self.env.builtins.imp, vec![hr, concl]);
-                let goal = self.mk("all", vec![self.abs(&goal0, &[Self::var_id(&ov)])]);
-                let one = self.evp(&RP::Defs(Box::new(RP::By(R::S(sh))), vec![name.clone()]), &goal, &[])?;
-                let mut vs: Vec<VarId> = avs.iter().map(Self::var_id).collect();
-                vs.push(Self::var_id(&wv));
-                let th = self.close(one, &[], &vs)?;
-                self.grefs.insert(key, th.clone());
-                th
-            }
-        };
-        let mut ins: Vec<RA> = args.iter().map(t).collect();
-        ins.push(t(w));
-        self.run(&mp(R::S(th), ins), &[])
-    }
 
     /// a premise `all l q. inv(l, q) -> G(l, q)`: G (`l q. ..`)
     fn claim_lam(&self, prem: &Term) -> Result<Term, String> {
@@ -1775,7 +1269,7 @@ impl<'e> Gen<'e> {
     }
 
     /// `all l q. inv(l, q) -> G(l, q)` from each point's claim (which: 0
-    /// the walks, 1 the ways on, 2 the rank), by g.inv_or
+    /// its segments' walk, else its label's state in v), by g.inv_or
     fn combine(&mut self, prem: &Term, which: u8) -> Result<Seq, String> {
         let gl = self.claim_lam(prem)?;
         let inv = self.gref.as_ref().unwrap().inv.clone();
@@ -1794,14 +1288,10 @@ impl<'e> Gen<'e> {
         for i in (0..n).rev() {
             let (r, prem_i) = self.pt_prem(&gl, i)?;
             self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
-            let walked = self.gref.as_ref().unwrap().walked.get(i).cloned();
             let pf = match which {
-                // (walked already: the one pass's)
-                0 if walked.is_some() => walked.unwrap(),
-                0 => self.sub_walk(&prem_i, &["pw", "py"])?,
-                1 => self.ways_on(&prem_i)?,
-                3 => self.point_v(&prem_i)?,
-                _ => self.rank_ok(&prem_i)?,
+                // (walked already, in the one pass)
+                0 => self.gref.as_ref().unwrap().walked.get(i).cloned().ok_or("a cut point not walked")?,
+                _ => self.point_v(&prem_i)?,
             };
             self.trace(|| format!("ref: phase: point {} (label {}) proven", i, self.gref.as_ref().unwrap().points[i].label));
             let pt = self.run(&mp(r, vec![s(&pf)]), &[])?;
@@ -1826,54 +1316,6 @@ impl<'e> Gen<'e> {
         let b = self.app(&b, "all", 1).ok_or("the rank's premise")?[0].clone().instantiate_params(std::slice::from_ref(&yv), &self.env.binders_fn());
         let pf = self.evp(&RP::Simp(false, vec![], vec![], false), &b, &[])?;
         self.close(pf, &[], &[Self::var_id(&wv), Self::var_id(&yv)])
-    }
-
-    /// a point's block going on: to a related state, of a lower rank (the
-    /// CFG's side alone, g.post_use)
-    fn ways_on(&mut self, prem: &Term) -> Result<Seq, String> {
-        let (wv, yv) = (self.var("dw"), self.var("dy"));
-        let b = self.app(prem, "all", 1).ok_or("the ways' premise")?[0].clone().instantiate_params(std::slice::from_ref(&wv), &self.env.binders_fn());
-        let b = self.app(&b, "all", 1).ok_or("the ways' premise")?[0].clone().instantiate_params(std::slice::from_ref(&yv), &self.env.binders_fn());
-        // all l2. b(L, ok(l2, empty)) -> Q(l2)
-        let inner = self.app(&b, "all", 1).ok_or("the ways' claim")?[0].clone();
-        let (hs, ql) = self.imps(&inner);
-        let bl = self.app(&hs[0], "bind_rel", 5).map(|_| ()).map(|_| hs[0].clone());
-        let _ = bl;
-        let bb = self.gref.as_ref().unwrap().b.clone();
-        let l1 = self.ways_state(&hs[0])?;
-        let bx = bb.instantiate_params(&[l1.clone(), Term::bvar(0)], &self.env.binders_fn());
-        let (r, st) = self.inst("g.post_use", &[("b", bx), ("Q", ql)])?;
-        let (ps, _) = self.imps(&st);
-        let gp = self.app(&ps[0], "g.post", 2).ok_or("g.post_use's premise")?.to_vec();
-        let pf = self.post(&gp[0], &gp[1], &l1)?;
-        let r1 = self.run(&mp(r, vec![s(&pf)]), &[])?;
-        self.close(r1, &[], &[Self::var_id(&wv), Self::var_id(&yv)])
-    }
-
-    /// `b(L, ok(l2, empty))` (under l2): L
-    fn ways_state(&self, h: &Term) -> Result<Term, String> {
-        // (the loop's body applied: its first argument, the state)
-        let bb = self.gref.as_ref().unwrap().b.clone();
-        let _ = bb;
-        let mut found = None;
-        fn walk_t(g: &Gen, t: &Term, out: &mut Option<Term>) {
-            if out.is_some() {
-                return;
-            }
-            if let Some(x) = g.app(t, "pair", 2) {
-                if g.app(&x[1], "pair", 2).is_some_and(|y| nat(&y[0]).is_some()) && x[0].loose_depth(&g.env.binders_fn()) == 0 && t.loose_depth(&g.env.binders_fn()) == 0 {
-                    *out = Some(t.clone());
-                    return;
-                }
-            }
-            if let Node::App(_, a) = t.node() {
-                for y in a.iter() {
-                    walk_t(g, y, out);
-                }
-            }
-        }
-        walk_t(self, h, &mut found);
-        found.ok_or_else(|| "the ways' state".into())
     }
 
     /// The CFG's side alone: `g.post(o. lo, o. pp)` (l1 the iteration's
@@ -1949,70 +1391,35 @@ impl<'e> Gen<'e> {
         self.close(r, &[], &vs)
     }
 
-    /// the leaf's p(e): going on at x related, of a lower rank; leaving
+    /// A label's walk's leaf e (its block's outcome; l1 the label's state):
+    /// its way on found (a jump's label, a `return`); going on at label k2
+    /// -- V there and M lower, by their hypotheses (g.post_leaf_v); leaving,
+    /// no state (g.post_exc, g.post_div)
     fn post_leaf(&mut self, e: &Term, pp: &Term, l1: &Term) -> Result<Seq, String> {
-        // (a void procedure's outcome: its value empty, by its constructor)
-        if self.app(pp, "g.shaped0", 1).is_some_and(|x| matches!(x[0].node(), Node::BVar(0))) {
-            if let Some(x) = self.app(e, "ok", 2).map(|x| x.to_vec()) {
-                if self.app(&x[1], "empty", 0).is_none() {
-                    return Err(format!("a void procedure's outcome {}: of a value", self.print(e)));
-                }
-                return self.run(&R::Inst("g.shaped0_ok".into(), vec![("m", x[0].clone())]), &[]);
-            }
-            if let Some(x) = self.app(e, "exc", 2).map(|x| x.to_vec()) {
-                return self.run(&R::Inst("g.shaped0_exc".into(), vec![("m", x[0].clone()), ("e", x[1].clone())]), &[]);
-            }
-            let x = self.app(e, "diverge", 1).ok_or_else(|| format!("a procedure's outcome {}: not ok, exc, diverge", self.print(e)))?.to_vec();
-            return self.run(&R::Inst("g.shaped0_div".into(), vec![("t", x[0].clone())]), &[]);
+        let (vv, mv) = self.gref.as_ref().and_then(|g| g.cut.as_ref()).and_then(|c| c.vm).ok_or("a leaf outside a label's walk")?;
+        let cur = self.gref.as_ref().unwrap().cur;
+        let leaf = if let Some(o) = self.app(e, "ok", 2) {
+            let k = self.app(&o[0], "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).and_then(|q| nat(&q[0]))).ok_or("a block going on: not at a label")?;
+            Some(Some(k))
+        } else if let Some(x) = self.app(e, "exc", 2) {
+            self.app(&x[1], "pair", 2).filter(|p| matches!(p[0].node(), Node::Bytes(b) if &b[..] == b"ret")).map(|_| None)
+        } else {
+            None
+        };
+        if let Some(l) = leaf {
+            self.gref.as_mut().unwrap().cut.as_mut().unwrap().succ.entry(cur).or_default().push(l);
         }
-        // (the outcome's kind: its constructor)
-        if self.app(pp, "g.shaped", 1).is_some_and(|x| matches!(x[0].node(), Node::BVar(0))) {
-            if let Some(x) = self.app(e, "ok", 2).map(|x| x.to_vec()) {
-                return self.run(&R::Inst("g.shaped_ok".into(), vec![("m", x[0].clone()), ("v", x[1].clone())]), &[]);
-            }
-            if let Some(x) = self.app(e, "exc", 2).map(|x| x.to_vec()) {
-                return self.run(&R::Inst("g.shaped_exc".into(), vec![("m", x[0].clone()), ("e", x[1].clone())]), &[]);
-            }
-            let x = self.app(e, "diverge", 1).ok_or_else(|| format!("a procedure's outcome {}: not ok, exc, diverge", self.print(e)))?.to_vec();
-            return self.run(&R::Inst("g.shaped_div".into(), vec![("t", x[0].clone())]), &[]);
-        }
-        // (by cut points: the label's leaves found, no proof yet; going on
-        // at a label's state, of a lower rank)
-        if let Some((discover, v)) = self.gref.as_ref().and_then(|g| g.cut.as_ref()).map(|c| (c.discover, c.v.clone())) {
-            if discover {
-                let leaf = if let Some(o) = self.app(e, "ok", 2) {
-                    let k = self.app(&o[0], "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).and_then(|q| nat(&q[0]))).ok_or("a block going on: not at a label")?;
-                    Some(Some(k))
-                } else if let Some(x) = self.app(e, "exc", 2) {
-                    self.app(&x[1], "pair", 2).filter(|p| matches!(p[0].node(), Node::Bytes(b) if &b[..] == b"ret")).map(|_| None)
-                } else {
-                    None
-                };
-                let cur = self.gref.as_ref().unwrap().cur;
-                if let Some(l) = leaf {
-                    self.gref.as_mut().unwrap().cut.as_mut().unwrap().succ.entry(cur).or_default().push(l);
-                }
-                // (going on at label k2: V there and M lower, by their
-                // hypotheses)
-                if let (Some(Some(k2)), Some(o)) = (leaf, self.app(e, "ok", 2).map(|o| o.to_vec())) {
-                    let (vv, mv) = self.gref.as_ref().unwrap().cut.as_ref().unwrap().vm.ok_or("the labels' relations")?;
-                    let parts = |g: &Self, x: &Term| g.app(x, "pair", 2).and_then(|p| g.app(&p[1], "pair", 2).map(|q| (p[0].clone(), q[1].clone())));
-                    let (w2, y2) = parts(self, &o[0]).ok_or("a block going on: not at a label")?;
-                    let (w1, y1) = parts(self, l1).ok_or("the label's state")?;
-                    let hv = self.label_hyp(k2, None)?;
-                    let hm = self.label_hyp(cur, Some(k2))?;
-                    let (hvs, hms) = (self.assume(&hv)?, self.assume(&hm)?);
-                    let vx = self.run(&mp(R::S(hvs), vec![t(&w2), t(&y2)]), &[])?;
-                    let mx = self.run(&mp(R::S(hms), vec![t(&w1), t(&y1), t(&w2), t(&y2)]), &[])?;
-                    let (vl, ml) = (Term::var(vv, vec![Term::bvar(0)]), Term::var(mv, vec![Term::bvar(0)]));
-                    return self.run(&mp(R::Inst("g.post_leaf_v".into(), vec![("v", vl), ("m", ml)]), vec![t(l1), t(&o[0]), s(&vx), s(&mx)]), &[]);
-                }
-            }
-            if let Some(o) = self.app(e, "ok", 2).map(|o| o.to_vec()) {
-                let vx = self.v_at(&o[0])?;
-                let m = self.gref.as_ref().unwrap().rank.clone();
-                return self.run(&mp(R::Inst("g.post_leaf_v".into(), vec![("v", v), ("m", m)]), vec![t(l1), t(&o[0]), s(&vx), simp0()]), &[]);
-            }
+        if let (Some(Some(k2)), Some(o)) = (leaf, self.app(e, "ok", 2).map(|o| o.to_vec())) {
+            let parts = |g: &Self, x: &Term| g.app(x, "pair", 2).and_then(|p| g.app(&p[1], "pair", 2).map(|q| (p[0].clone(), q[1].clone())));
+            let (w2, y2) = parts(self, &o[0]).ok_or("a block going on: not at a label")?;
+            let (w1, y1) = parts(self, l1).ok_or("the label's state")?;
+            let hv = self.label_hyp(k2, None)?;
+            let hm = self.label_hyp(cur, Some(k2))?;
+            let (hvs, hms) = (self.assume(&hv)?, self.assume(&hm)?);
+            let vx = self.run(&mp(R::S(hvs), vec![t(&w2), t(&y2)]), &[])?;
+            let mx = self.run(&mp(R::S(hms), vec![t(&w1), t(&y1), t(&w2), t(&y2)]), &[])?;
+            let (vl, ml) = (Term::var(vv, vec![Term::bvar(0)]), Term::var(mv, vec![Term::bvar(0)]));
+            return self.run(&mp(R::Inst("g.post_leaf_v".into(), vec![("v", vl), ("m", ml)]), vec![t(l1), t(&o[0]), s(&vx), s(&mx)]), &[]);
         }
         let ql = {
             let b = self.app(pp, "all", 1).ok_or("the ways' condition")?[0].clone();
@@ -2025,27 +1432,7 @@ impl<'e> Gen<'e> {
         if let Some(x) = self.app(e, "diverge", 1).map(|x| x.to_vec()) {
             return self.run(&R::Inst("g.post_div".into(), vec![("a", x[0].clone()), ("Q", ql)]), &[]);
         }
-        let o = self.app(e, "ok", 2).ok_or("an iteration's outcome")?.to_vec();
-        let x = o[0].clone();
-        let xs = self.app(&x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state")?;
-        let k = nat(&xs[0]).ok_or("a CFG state's label")?;
-        let comps = self.locals_of(&xs[1]);
-        // (a point of the label and the locals' shape: its program there --
-        // against the blocks' procedures, the label's)
-        let i = if self.gblocks.is_some() {
-            self.gref.as_ref().unwrap().points.iter().position(|p| p.label == k).ok_or_else(|| format!("label {}: no block's procedure", k))?
-        } else {
-            let shape = self.point_of(k, &comps, &self.mk("empty", vec![]))?.shape;
-            self.gref.as_ref().unwrap().points.iter().position(|p| p.label == k && p.shape == shape).ok_or_else(|| format!("label {}: no point of the locals' shape", k))?
-        };
-        let tmpl = self.gref.as_ref().unwrap().points[i].tmpl.clone();
-        let q = tmpl.instantiate_params(std::slice::from_ref(&xs[1]), &self.env.binders_fn());
-        let ip = self.inv_at_pt(&x, &q, i)?;
-        let (inv, rank) = {
-            let g = self.gref.as_ref().unwrap();
-            (g.inv.clone(), g.rank.clone())
-        };
-        self.run(&mp(R::Inst("g.post_leaf".into(), vec![("inv", inv), ("m", rank)]), vec![t(l1), t(&x), t(&q), s(&ip), simp0()]), &[])
+        Err(format!("a block's outcome {}: not ok, exc, diverge", self.print(e)))
     }
 }
 
@@ -2057,7 +1444,7 @@ impl<'e> Gen<'e> {
     /// all labels; the cut points (a cut label, its locals' shape, the
     /// structured side's program there) found in a first pass of their
     /// segments' walks, proven in a second
-    fn cut_loop(&mut self, lo: &Term, a: &Term, k: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
+    fn cfg_loop(&mut self, lo: &Term, a: &Term, k: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
         let x = self.app(a, "while_rel", 5).ok_or("the CFG's loop")?.to_vec();
         let lctx = ["o", "x8"];
         let l0 = self.lam(&x[0], &lctx, &[]).ok_or("the loop's start reads the block")?;
@@ -2072,8 +1459,8 @@ impl<'e> Gen<'e> {
         // (the labels' set and rank free relations V, M while their blocks
         // are walked)
         let (vv, mv) = (self.env.new_var("gv", 1), self.env.new_var("gm", 1));
-        let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), discover: true, vm: Some((vv, mv)), hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new() };
-        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new() });
+        let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), vm: Some((vv, mv)), hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new() };
+        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), inv: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new() });
         // the labels: each block walked alone, its leaves found and its ways
         // on proven
         let mut work = vec![k_e];
@@ -2126,10 +1513,8 @@ impl<'e> Gen<'e> {
         }
         let pt_l = self.abs(&pt, &[Self::var_id(&lv)]);
         {
-            let g = self.gref.as_mut().unwrap();
-            g.rank = rank_l.clone();
-            let c = g.cut.as_mut().unwrap();
-            (c.v, c.labels, c.discover) = (v_l.clone(), labels.clone(), false);
+            let c = self.gref.as_mut().unwrap().cut.as_mut().unwrap();
+            (c.v, c.labels) = (v_l.clone(), labels.clone());
         }
         // (V, M the labels' set and rank: each hypothesis proven -- a
         // label's state by its disjunct, a rank's step by evaluation -- and
@@ -2207,10 +1592,9 @@ impl<'e> Gen<'e> {
         self.trace(|| format!("ref: {} cut points", self.gref.as_ref().unwrap().points.len()));
         // INV the points' disjunction: each hypothesis proven, each walk's
         // discharged
-        let (inv, _) = self.gref_params();
+        let inv = self.points_inv();
         {
             let g = self.gref.as_mut().unwrap();
-            g.discover = false;
             g.inv = inv.clone();
             g.inv_var = None;
         }
@@ -2412,11 +1796,9 @@ impl<'e> Gen<'e> {
             let (r, st) = self.inst("g.lab_pt", &[("G", gl.clone()), ("k", lit(labels[i]))])?;
             let (ps, _) = self.imps(&st);
             self.gref.as_mut().unwrap().cur = labels[i];
-            let walked = self.gref.as_ref().unwrap().cut.as_ref().unwrap().ways.get(&labels[i]).cloned();
             let pf = match which {
                 // (walked already, as its leaves were found)
-                1 if walked.is_some() => walked.unwrap(),
-                1 => self.ways_on(&ps[0])?,
+                1 => self.gref.as_ref().unwrap().cut.as_ref().unwrap().ways.get(&labels[i]).cloned().ok_or("a label's block not walked")?,
                 _ => self.rank_ok(&ps[0])?,
             };
             let one = self.run(&mp(r, vec![s(&pf)]), &[])?;
