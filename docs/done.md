@@ -321,6 +321,19 @@ item is a short summary of finished work; details are in the files named.
   callee's empty value) and each join walked once for every world and
   locals' tuple. All 22 loop-free functions (`__malloc_alloc_meta`
   included), the term caches emptied per point (peak ~600 MB).
+- **... by cut points, the structuring's** (`g.cut_acyclic`,
+  `proofs/gimple_cut.core`; the default path): one routine structures the
+  CFG (`slc/cli/src/gimple/structure.rs`) -- the generator's, and the
+  checker's on the label graph it finds in the CFG term, its joins and
+  the entry the cut points. Between cut points the CFG unrolled
+  (`g.seg_step`, `g.seg_cut`); a join's template from the structured
+  side's tuple (its assigned locals free, whatever each way assigned), an
+  inner join carried on to the enclosing one (one cut point per join);
+  each cut point and each label's block walked once (inv, the label set
+  and the rank free relations meanwhile, `Seq::inst` then the
+  hypotheses discharged). All 22 in ~75 s (`__malloc_alloc_meta` 45 s,
+  from 652 s at first). The generator reads its CFG form back and
+  structures it the same (`SLC_STRUCT_CHECK=1`).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is
