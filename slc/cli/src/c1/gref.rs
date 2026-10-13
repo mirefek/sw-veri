@@ -352,6 +352,54 @@ impl<'e> Gen<'e> {
         self.run(&mp(R::S(th), ins), &[])
     }
 
+    /// a program at a join, `mkprog(x0 x1. ex x2. x2 = ok(pair(x0, T),
+    /// empty) && K)`: T (closed)
+    fn join_tuple(&self, q: &Term) -> Option<Term> {
+        self.app(q, "mkprog", 1)
+            .and_then(|m| block(self, &m[0]))
+            .and_then(|(a, _)| self.app(&a, "eq", 2).map(|e| e.to_vec()))
+            .filter(|e| matches!(e[0].node(), Node::BVar(0)))
+            .and_then(|e| self.app(&e[1], "ok", 2).map(|o| o[0].clone()))
+            .and_then(|p0| self.app(&p0, "pair", 2).map(|p| p[1].clone()))
+            .filter(|t| t.loose_depth(&self.env.binders_fn()) == 0)
+    }
+
+    /// the join's program q with its tuple T (join_tuple) the closed term
+    /// `tup` -- there alone
+    fn set_join_tuple(&self, q: &Term, tup: &Term) -> Option<Term> {
+        let m = self.app(q, "mkprog", 1)?[0].clone();
+        let b = self.app(&m, "ex", 1)?[0].clone();
+        let a = self.app(&b, "and", 2)?.to_vec();
+        let e = self.app(&a[0], "eq", 2)?.to_vec();
+        let o = self.app(&e[1], "ok", 2)?.to_vec();
+        let p0 = self.app(&o[0], "pair", 2)?.to_vec();
+        let p1 = o[0].with_args(vec![p0[0].clone(), tup.clone()]);
+        let o1 = e[1].with_args(vec![p1, o[1].clone()]);
+        let e1 = a[0].with_args(vec![e[0].clone(), o1]);
+        let a1 = b.with_args(vec![e1, a[1].clone()]);
+        let b1 = m.with_args(vec![a1]);
+        Some(q.with_args(vec![b1]))
+    }
+
+    /// q a join's program whose rest first passes the locals on as its own
+    /// outcome (`ex x3. ((fst(x2) = 0 && x3 = ok(..)) || ..) && K`: the
+    /// end of an enclosing branch's way)
+    fn passes_on(&self, q: &Term) -> bool {
+        let q = self.expand(q);
+        if self.join_tuple(&q).is_none() {
+            return false;
+        }
+        let Some((_, k)) = self.app(&q, "mkprog", 1).and_then(|m| block(self, &m[0])) else { return false };
+        let Some((a3, _)) = block(self, &k) else { return false };
+        let mut d = a3;
+        while let Some(o) = self.app(&d, "or", 2).map(|o| o[0].clone()) {
+            d = o;
+        }
+        let Some(c) = self.app(&d, "and", 2).map(|c| c.to_vec()) else { return false };
+        self.app(&c[0], "eq", 2).is_some_and(|e| self.app(&e[0], "fst", 1).is_some() && nat(&e[1]) == Some(0))
+            && self.app(&c[1], "eq", 2).is_some_and(|e| matches!(e[0].node(), Node::BVar(0)) && self.app(&e[1], "ok", 2).is_some())
+    }
+
     /// the locals' tuple of the terms cs (a right-nested pair)
     fn tuple_of(&self, cs: &[Term]) -> Term {
         let mut t = cs[cs.len() - 1].clone();
@@ -968,6 +1016,38 @@ impl<'e> Gen<'e> {
                 }
             }
         }
+        // (at an inner join whose rest passes the locals on to the
+        // enclosing one's: on to that one -- a join's cut point the same
+        // however deep the way to it came)
+        if self.gblocks.is_none() && self.passes_on(&self.qs[qi]) {
+            let mut steps: Vec<(usize, usize, R)> = Vec::new();
+            let mut cur = qi;
+            let mut done = None;
+            for _ in 0..256 {
+                let red = match self.up_proj(cur, w)? {
+                    Some((j, r)) => Some(Red::Q(j, r)),
+                    None => self.reduce(cur, &[])?,
+                };
+                let Some(Red::Q(j, r)) = red else { break };
+                steps.push((cur, j, r));
+                cur = j;
+                if self.join_tuple(&self.expand(&self.qs[cur])).is_some() && !self.passes_on(&self.qs[cur]) {
+                    done = Some(cur);
+                    break;
+                }
+            }
+            match done {
+                Some(fin) => {
+                    let mut pf = self.leaf_jump(lo, x, fin, w)?;
+                    for (a, b, r) in steps.into_iter().rev() {
+                        let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[a].clone()), ("q2", self.qs[b].clone())]), vec![t(w), s(&pf), p(r)]);
+                        pf = self.run(&rr, &[])?;
+                    }
+                    return Ok(pf);
+                }
+                None => self.trace(|| format!("ref: no enclosing join reached ({} steps)", steps.len())),
+            }
+        }
         let r = self.qs[qi].clone();
         let g = self.gref.as_ref().ok_or("the CFG going on outside its loop")?;
         let (discover, cur, inv) = (g.discover, g.cur, g.inv.clone());
@@ -1185,20 +1265,48 @@ impl<'e> Gen<'e> {
     fn point_of(&mut self, label: u128, comps: &[Term], r: &Term) -> Result<GPoint, String> {
         let m = comps.len();
         let ce: Vec<Term> = comps.iter().map(|c| self.expand(c)).collect();
+        let n = self.fresh("gy");
+        let yv = self.var(&n);
+        let mut t = self.expand(r);
+        // (at a join -- `ex x2. x2 = ok(pair(x0, T), empty) && K`, K reading
+        // the branch's assigned locals from x2 alone -- those locals free,
+        // their components of T the projections: whatever each way assigned)
+        let mut muts = vec![false; m];
+        if let Some(tup) = self.join_tuple(&t) {
+            let tc = self.locals_of(&tup);
+            let mut tc2 = Vec::new();
+            // (the same value: as written, by its names, or the same literal)
+            let same = |g: &Self, a: &Term, b: &Term| {
+                a == b || g.canon(a) == g.canon(b) || matches!((g.eval_lit(&g.lit_bits(a)), g.eval_lit(&g.lit_bits(b))), (Some(x), Some(y)) if x == y)
+            };
+            for c in &tc {
+                match (0..m).find(|&j| !muts[j] && same(self, &ce[j], c)) {
+                    Some(j) => {
+                        muts[j] = true;
+                        tc2.push(self.cfg_proj(&yv, j, m));
+                    }
+                    None => {
+                        self.trace(|| format!("ref: label {}: a join's component {} no local's ({})", label, self.print(c), ce.iter().map(|x| self.print(x)).collect::<Vec<_>>().join(", ")));
+                        tc2.push(c.clone())
+                    }
+                }
+            }
+            let tup2 = self.tuple_of(&tc2);
+            t = self.set_join_tuple(&t, &tup2).ok_or("a join's tuple")?;
+        }
         let mut shape = Vec::new();
         for j in 0..m {
-            if nat(&ce[j]).is_some() || self.app(&ce[j], "empty", 0).is_some() {
+            if muts[j] {
+                shape.push(Sh::Free);
+            } else if nat(&ce[j]).is_some() || self.app(&ce[j], "empty", 0).is_some() {
                 shape.push(Sh::Lit(ce[j].clone()));
-            } else if let Some(i) = (0..j).find(|&i| ce[i] == ce[j] && shape[i] == Sh::Free) {
+            } else if let Some(i) = (0..j).find(|&i| !muts[i] && ce[i] == ce[j] && shape[i] == Sh::Free) {
                 shape.push(Sh::Same(i));
             } else {
                 shape.push(Sh::Free);
             }
         }
-        let n = self.fresh("gy");
-        let yv = self.var(&n);
-        let mut t = self.expand(r);
-        let mut order: Vec<usize> = (0..m).filter(|&j| shape[j] == Sh::Free).collect();
+        let mut order: Vec<usize> = (0..m).filter(|&j| shape[j] == Sh::Free && !muts[j]).collect();
         let sizes: Vec<usize> = ce.iter().map(Self::term_size).collect();
         order.sort_by_key(|&j| std::cmp::Reverse(sizes[j]));
         for j in order {
@@ -1276,6 +1384,45 @@ impl<'e> Gen<'e> {
         }
         if !g.discover {
             return Err(format!("label {}: a point not found in the first pass", k));
+        }
+        // (C1_TRACE: how a label's new point differs from its others)
+        if std::env::var("C1_TRACE").is_ok() {
+            for p in g.points.iter().filter(|p| p.label == k) {
+                let sh = |s: &Sh| match s {
+                    Sh::Free => "free".to_string(),
+                    Sh::Lit(c) => format!("lit {}", self.print(c)),
+                    Sh::Same(i) => format!("same as {}", i),
+                };
+                let diff: Vec<String> = (0..pt.shape.len()).filter(|&j| p.shape[j] != pt.shape[j]).map(|j| format!("local {}: {} / {}", j, sh(&p.shape[j]), sh(&pt.shape[j]))).collect();
+                // (the templates' first differing parts)
+                fn first_diff(a: &Term, b: &Term) -> Option<(Term, Term)> {
+                    if a == b {
+                        return None;
+                    }
+                    if let (Node::App(s, x), Node::App(t, y)) = (a.node(), b.node()) {
+                        if s == t && x.len() == y.len() {
+                            return x.iter().zip(y.iter()).find_map(|(u, v)| first_diff(u, v));
+                        }
+                    }
+                    Some((a.clone(), b.clone()))
+                }
+                let shown = |t: &Term| match t.node() {
+                    _ if t.loose_depth(&self.env.binders_fn()) == 0 => self.print(t),
+                    Node::App(s, _) => format!("<open {}>", self.env.syms[*s as usize].name),
+                    _ => "<open>".into(),
+                };
+                let td = first_diff(&p.tmpl, &pt.tmpl).map(|(a, b)| format!("; the template: {} / {}", shown(&a), shown(&b))).unwrap_or_default();
+                eprintln!("c1 ref: point differs at label {}: {}{}", k, diff.join(", "), td);
+                // (C1_DUMP=dir: the two templates, instantiated at a variable)
+                if let Ok(d) = std::env::var("C1_DUMP") {
+                    let yv = Term::var(self.env.vars.len() as u32 - 1, vec![]);
+                    let n = std::fs::read_dir(&d).map(|r| r.count()).unwrap_or(0);
+                    for (i, tm) in [&p.tmpl, &pt.tmpl].into_iter().enumerate() {
+                        let x = tm.instantiate_params(std::slice::from_ref(&yv), &self.env.binders_fn());
+                        let _ = std::fs::write(format!("{}/l{}_{}_{}.txt", d, k, n, i), self.print(&x));
+                    }
+                }
+            }
         }
         let g = self.gref.as_mut().unwrap();
         g.points.push(pt);
@@ -1625,6 +1772,7 @@ impl<'e> Gen<'e> {
                 3 => self.point_v(&prem_i)?,
                 _ => self.rank_ok(&prem_i)?,
             };
+            self.trace(|| format!("ref: phase: point {} (label {}) proven", i, self.gref.as_ref().unwrap().points[i].label));
             let pt = self.run(&mp(r, vec![s(&pf)]), &[])?;
             acc = self.run(&mp(R::Inst("g.inv_or".into(), vec![("G", gl.clone()), ("A", disj[i].0.clone()), ("B", disj[i].1.clone())]), vec![s(&pt), s(&acc)]), &[])?;
             self.drop_caches();
@@ -1951,6 +2099,7 @@ impl<'e> Gen<'e> {
             self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
             self.sub_walk(&prem, &["pw", "py"])?;
             self.drop_caches();
+            self.trace(|| format!("ref: phase: point {} (label {}) found its segments", i, self.gref.as_ref().unwrap().points[i].label));
             i += 1;
         }
         self.trace(|| format!("ref: {} cut points", self.gref.as_ref().unwrap().points.len()));
@@ -1963,10 +2112,15 @@ impl<'e> Gen<'e> {
         }
         let (rr, stmt) = inst(self, inv)?;
         let (prems, _) = self.imps(&stmt);
+        self.trace(|| "ref: phase: the ways on".into());
         let pd = self.lab_combine(&prems[0], 1)?;
+        self.trace(|| "ref: phase: the rank".into());
         let pm = self.lab_combine(&prems[1], 2)?;
+        self.trace(|| "ref: phase: the points' labels".into());
         let pv = self.combine(&prems[2], 3)?;
+        self.trace(|| "ref: phase: the points' walks".into());
         let ps = self.combine(&prems[3], 0)?;
+        self.trace(|| "ref: phase: done".into());
         let main = self.run(&mp(rr, vec![s(&pd), s(&pm), s(&pv), s(&ps)]), &[])?;
         // at the loop's start: its point
         let i0 = self.inv_at(&l0, &q0)?;
