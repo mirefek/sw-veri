@@ -1873,6 +1873,146 @@ proof
   show by taut(runs, fin, inf2)
 qed
 
+// ----------------------------------------------------------------------
+//  The walk's steps for the loops' premises
+
+// (the records of two worlds' events: growing with the events)
+theorem g.tr_le_ev(a, b): subset(a, b) -> g.tr_le(fn_update(empty, "os.events", a), fn_update(empty, "os.events", b))
+proof
+  assume h
+  have fe: is_fun(empty) by taut(dom_empty)
+  have de: dom(empty) = empty by taut(dom_empty)
+  have da := mp(dom_update[f := empty, k := "os.events", v := a], fe)
+  have db := mp(dom_update[f := empty, k := "os.events", v := b], fe)
+  have d: dom(fn_update(empty, "os.events", b)) = dom(fn_update(empty, "os.events", a)) := trans(db, sym(da))
+  have s: all x. x in dom(fn_update(empty, "os.events", a)) -> subset(app(fn_update(empty, "os.events", a), x), app(fn_update(empty, "os.events", b), x)) proof
+    fix x
+    assume hx
+    have hx2 := rewrite(de, rewrite(da, hx))
+    have e: x = "os.events" by simp(hx2)
+    have s1: subset(app(fn_update(empty, "os.events", a), "os.events"), app(fn_update(empty, "os.events", b), "os.events")) by simp(h)
+    show := subst({y. subset(app(fn_update(empty, "os.events", a), y), app(fn_update(empty, "os.events", b), y))}, sym(e), s1)
+  qed
+  show by defs(taut(d, s), g.tr_le)
+qed
+
+// (a step of a body whose effect keeps the world valid: the records grow;
+// else the body undefined there, every divergence among its outcomes)
+theorem g.grow_seff(l o. b): all x y. tr.seff(fst(x), z. b(x, z)) -> b(x, ok(y, empty)) ->
+  g.tr_le(fn_update(empty, "os.events", app(app(fst(x), "os"), "events")), fn_update(empty, "os.events", app(app(fst(y), "os"), "events"))) ||
+  (all t. t in univ(1) -> b(x, diverge(t)))
+proof
+  fix x y
+  assume he hb
+  have e := expand(he, tr.seff)
+  have c1: (all z. b(x, z) -> (fst(z) = 0 || (fst(z) = 1 && !(fst(out_value(z)) = "raise"))) -> tr.returns_valid(fst(x), fst(out_state(z)))) ->
+      g.tr_le(fn_update(empty, "os.events", app(app(fst(x), "os"), "events")), fn_update(empty, "os.events", app(app(fst(y), "os"), "events"))) proof
+    assume hv
+    have z0: fst(ok(y, empty)) = 0 || (fst(ok(y, empty)) = 1 && !(fst(out_value(ok(y, empty))) = "raise")) by simp()
+    have rv := mp(all_elim(hv, {ok(y, empty)}), hb, z0)
+    have os: fst(out_state(ok(y, empty))) = fst(y) by simp()
+    have rv2 := rewrite(os, rv)
+    have ev: subset(app(app(fst(x), "os"), "events"), app(app(fst(y), "os"), "events")) by taut(expand(rv2, tr.returns_valid))
+    show := mp(g.tr_le_ev[a := app(app(fst(x), "os"), "events"), b := app(app(fst(y), "os"), "events")], ev)
+  qed
+  have c2: tr.sundef(z. b(x, z)) -> (all t. t in univ(1) -> b(x, diverge(t))) proof
+    assume hu
+    show by taut(expand(hu, tr.sundef))
+  qed
+  show by taut(e, c1, c2)
+qed
+
+// (the labels' walks: each step's state in v and the labels' facts N; the
+// body's effect: the records grow -- g.cut_loops' premises on the steps)
+theorem g.ways_split(l o. b, l. v, l. pt, l. hd, h l. xp, l. lp, l. m):
+  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && (((hd(y) && lp(x) = fst(snd(y))) || int_lt(m(y), m(x))) &&
+     (!(lp(x) = 0) -> pt(y) -> (hd(y) && fst(snd(y)) = lp(x)) || xp(lp(x), y)) && (!pt(y) -> lp(y) = lp(x)))) ->
+  (all x. tr.seff(fst(x), z. b(x, z))) ->
+  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && (g.tr_le(fn_update(empty, "os.events", app(app(fst(x), "os"), "events")), fn_update(empty, "os.events", app(app(fst(y), "os"), "events"))) ||
+     (all t. t in univ(1) -> b(x, diverge(t))))) &&
+  (all x y. v(x) -> b(x, ok(y, empty)) -> (hd(y) && lp(x) = fst(snd(y))) || int_lt(m(y), m(x))) &&
+  (all x y. v(x) -> !(lp(x) = 0) -> b(x, ok(y, empty)) -> pt(y) -> (hd(y) && fst(snd(y)) = lp(x)) || xp(lp(x), y)) &&
+  (all x y. v(x) -> b(x, ok(y, empty)) -> !pt(y) -> lp(y) = lp(x))
+proof
+  assume hw hse
+  have a1: all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && (g.tr_le(fn_update(empty, "os.events", app(app(fst(x), "os"), "events")), fn_update(empty, "os.events", app(app(fst(y), "os"), "events"))) ||
+      (all t. t in univ(1) -> b(x, diverge(t)))) proof
+    fix x y
+    assume vx bx
+    have w := mp(all_elim(hw, {x}, {y}), vx, bx)
+    have g := mp(all_elim(g.grow_seff[b := l o. b(l, o)], {x}, {y}), all_elim(hse, {x}), bx)
+    show by taut(w, g)
+  qed
+  have a2: all x y. v(x) -> b(x, ok(y, empty)) -> (hd(y) && lp(x) = fst(snd(y))) || int_lt(m(y), m(x)) proof
+    fix x y
+    assume vx bx
+    show by taut(mp(all_elim(hw, {x}, {y}), vx, bx))
+  qed
+  have a3: all x y. v(x) -> !(lp(x) = 0) -> b(x, ok(y, empty)) -> pt(y) -> (hd(y) && fst(snd(y)) = lp(x)) || xp(lp(x), y) proof
+    fix x y
+    assume vx hl bx py
+    show by taut(mp(all_elim(hw, {x}, {y}), vx, bx), hl, py)
+  qed
+  have a4: all x y. v(x) -> b(x, ok(y, empty)) -> !pt(y) -> lp(y) = lp(x) proof
+    fix x y
+    assume vx bx py
+    show by taut(mp(all_elim(hw, {x}, {y}), vx, bx), py)
+  qed
+  show by taut(a1, a2, a3, a4)
+qed
+
+// (an operation in a label's walk: its returns with their runs -- the
+// state's parts in univ(1))
+theorem g.post_op_r(op, s v x8. ka, s e x8. xa, t x8. da, x8 o. kl, o. p): all s.
+  (all s1 v. runs(op, s, ok(s1, v)) -> g.post(o. ex x8. ka(s1, v, x8) && kl(x8, o), o. p(o))) ->
+  (all s1 e. g.post(o. ex x8. xa(s1, e, x8) && kl(x8, o), o. p(o))) ->
+  (all t. g.post(o. ex x8. da(t, x8) && kl(x8, o), o. p(o))) ->
+  g.post(o. ex x8. bind_rel(op, s, x9 x10. ka(x9, x10, x8), x9 x10. xa(x9, x10, x8), x9. da(x9, x8)) && kl(x8, o), o. p(o))
+proof
+  fix s
+  assume hok hex hdv
+  have g: all o. (ex x8. bind_rel(op, s, x9 x10. ka(x9, x10, x8), x9 x10. xa(x9, x10, x8), x9. da(x9, x8)) && kl(x8, o)) -> p(o) proof
+    fix o
+    assume hl
+    obtain x8, hb hk from hl
+    obtain r, hr hc from expand(hb, bind_rel)
+    have c1: (ex s1 v. r = ok(s1, v) && ka(s1, v, x8)) -> p(o) proof
+      assume e
+      obtain s1 v, er k1 from e
+      have l1: ex x8. ka(s1, v, x8) && kl(x8, o) by ex_intro({x8}, taut(k1, hk))
+      show := mp(all_elim(expand(mp(all_elim(hok, {s1}, {v}), rewrite(er, hr)), g.post), {o}), l1)
+    qed
+    have c2: (ex s1 e. r = exc(s1, e) && xa(s1, e, x8)) -> p(o) proof
+      assume e
+      obtain s1 e1, er k1 from e
+      have l1: ex x8. xa(s1, e1, x8) && kl(x8, o) by ex_intro({x8}, taut(k1, hk))
+      show := mp(all_elim(expand(all_elim(hex, {s1}, {e1}), g.post), {o}), l1)
+    qed
+    have c3: (ex t. r = diverge(t) && da(t, x8)) -> p(o) proof
+      assume e
+      obtain t, er k1 from e
+      have l1: ex x8. da(t, x8) && kl(x8, o) by ex_intro({x8}, taut(k1, hk))
+      show := mp(all_elim(expand(all_elim(hdv, {t}), g.post), {o}), l1)
+    qed
+    show by taut(hc, c1, c2, c3)
+  qed
+  show by defs(g, g.post)
+qed
+
+// (a label's walk's leaf going on at x: x in v, the labels' facts N)
+theorem g.post_leaf_n(l. v, l1 l2. N): all l1 x. v(x) -> N(l1, x) ->
+  all l2. ok(x, empty) = ok(l2, empty) -> v(l2) && N(l1, l2)
+proof
+  fix l1 x
+  assume hv hn
+  fix l2
+  assume e
+  have e2: x = l2 by simp(e)
+  have v2: v(l2) := rewrite(e2, hv)
+  have n2: N(l1, l2) := rewrite(e2, hn)
+  show by taut(v2, n2)
+qed
+
 // (a trip's claim with its stop's outcome as a cut's: J at the stop's
 // state, the head's mark 4 or else 5 -- as g.loop_head's trips)
 theorem g.trip_j(l o. b, l. pt, l. A, l. H, r o. k, x. v, x. hd, x o. G):
