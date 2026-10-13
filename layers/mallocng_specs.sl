@@ -482,6 +482,41 @@ fn get_meta_spec_fun(ctx: bits[64], sct: bits[64]) -> CFun2[World] = (args: Args
   return (w, any bits[64])
 }
 
+// activate_group(m): the slots of m's group up to its active index idx
+// (act: the low idx + 1 bits; idx the low 5 bits of the byte at the
+// group's header + 8, the header at m's mem word) leave the freed mask and
+// become the available one (0 before: else a_crash). The masks at m + 24
+// (available) and m + 28 (freed), the mem word at m + 16; the freed mask
+// changed by a_cas (one thread: in one step), the thread pointer sound
+// for that call.
+fn ag_act(vm: Vm, m: Addr) -> bits[32] = bits[32](2 * 2^(bytes_at(vm, rd64(vm, m + 16) + 8, 1) % 32) - 1)
+fn ag_freed(vm: Vm, m: Addr) -> bits[32] = bits[32](bytes_at(vm, m + 28, 4))
+
+pred activate_group_pre(vm: Vm, objs: Set[nat], fs: Addr, m: Addr) =
+  m != 0 && uint(m) + 32 <= 2^64 && usable(vm, objs, uint(m) + 16, 16, false) && usable(vm, objs, uint(m) + 24, 8, true) &&
+  bytes_at(vm, m + 24, 4) = 0 &&
+  rd64(vm, m + 16) != 0 && uint(rd64(vm, m + 16)) + 9 <= 2^64 && usable(vm, objs, uint(rd64(vm, m + 16)) + 8, 1, false) &&
+  thread_ok(vm, fs)
+
+fn activate_group_vm(vm: Vm, m: Addr) -> Vm =
+  wr32(wr32(vm, m + 28, uint(ag_freed(vm, m) & ~ag_act(vm, m))), m + 24, uint(ag_freed(vm, m) & ag_act(vm, m)))
+
+proc[World] activate_group_spec(m: bits[64]) -> bits[32] {
+  require activate_group_pre(vm, objs, fs_base, m)
+  either { overflow() } or {
+    let r = ag_freed(vm, m) & ag_act(vm, m)
+    vm := activate_group_vm(vm, m)
+    return r
+  }
+}
+
+fn activate_group_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = activate_group_spec(bits[64](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
 // __malloc_allzerop(p): whether p's slot is known zero-filled (calloc then
 // skips zeroing it): its group without a size class (63: mapped on its
 // own), or its stride below its class's (a group of one slot mapped on its

@@ -430,7 +430,11 @@ item is a short summary of finished work; details are in the files named.
     if it held t: `ms.cas32_det`; `acstc.composed`), size_overflows (errno,
     musl's cell at the thread pointer + 0x34, set to ENOMEM through
     ___errno_location's contract: `ms.size_overflows_c2` for any callee
-    meeting it; `sotc.composed` given such a callee's code)
+    meeting it; `sotc.composed` given such a callee's code), activate_group
+    (act, the active index's low bits, moved from the freed mask to the
+    available one; its CAS loop by `g.loop` with an invariant under which
+    the body only breaks -- a_cas returns the word just read, one thread --
+    or overflows; `agtc.composed`)
     (proofs/mallocng_ctx.core).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
