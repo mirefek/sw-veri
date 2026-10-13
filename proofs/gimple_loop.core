@@ -696,6 +696,56 @@ proof
   show by simp(expand(e, ok, tag))
 qed
 
+// (an infinite run whose state at j may end with r, not ok -- an undefined
+// step, its records then not growing: the finite run to j ending there)
+theorem g.inf_fin(l o. b, f, j, r): (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) ->
+  j in omega -> b(app(f, j), r) -> !is_ok(r) ->
+  ex n g. n in omega && is_fun(g) && dom(g) = succ(n) && app(g, empty) = app(f, empty) &&
+    (all i. i in n -> true && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+    ((!true && r = ok(app(g, n), empty)) || (true && b(app(g, n), r) && !is_ok(r)))
+proof
+  assume hst hj hb hr
+  let G := fn_build(succ(j), i. app(f, i))
+  have gf := fn_build_fun[d := succ(j), v := i. app(f, i)]
+  have gd := fn_build_dom[d := succ(j), v := i. app(f, i)]
+  have ej: succ(j) = int_add(j, 1) by arith(hj)
+  have j1: int_add(j, 1) in omega by arith(hj)
+  have gi: all i. i in omega -> int_le(i, j) -> app(G, i) = app(f, i) proof
+    fix i
+    assume io il
+    have mm: i in int_add(j, 1) by arith(io, il, hj, j1)
+    show := mp(app_fn_build[d := succ(j), v := i. app(f, i), a := i], rewrite(sym(ej), mm))
+  qed
+  have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+  have z0: int_le(0, j) by arith(hj)
+  have g0a := mp(mp(all_elim(gi, {0}), zo), z0)
+  have g0: app(G, empty) = app(f, empty) := subst({y. app(G, y) = app(f, y)}, lit_zero, g0a)
+  have st: all i. i in j -> true && b(app(G, i), ok(app(G, succ(i)), empty)) proof
+    fix i
+    assume hi
+    have io := mp(mp(nat_elem[k := j, i := i], hj), hi)
+    have il: int_le(i, j) by arith(io, hj, hi)
+    have i1o: int_add(i, 1) in omega by arith(io)
+    have i1l: int_le(int_add(i, 1), j) by arith(io, hj, hi)
+    have ga := mp(mp(all_elim(gi, {i}), io), il)
+    have gb := mp(mp(all_elim(gi, {int_add(i, 1)}), i1o), i1l)
+    have es: succ(i) = int_add(i, 1) by arith(io)
+    have gs: app(G, succ(i)) = app(f, succ(i)) := subst({y. app(G, y) = app(f, y)}, sym(es), gb)
+    have s0 := mp(all_elim(hst, {i}), io)
+    have s1 := rewrite(sym(ga), s0)
+    have s2 := rewrite(sym(gs), s1)
+    show by taut(s2)
+  qed
+  have jj: int_le(j, j) by arith(hj)
+  have gm := mp(mp(all_elim(gi, {j}), hj), jj)
+  have bm: b(app(G, j), r) := rewrite(sym(gm), hb)
+  have e1: ex g. j in omega && is_fun(g) && dom(g) = succ(j) && app(g, empty) = app(f, empty) &&
+      (all i. i in j -> true && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+      ((!true && r = ok(app(g, j), empty)) || (true && b(app(g, j), r) && !is_ok(r)))
+    by ex_intro({G}, taut(hj, gf, gd, g0, st, bm, hr))
+  show by ex_intro({j}, e1)
+qed
+
 // ----------------------------------------------------------------------
 //  The loop theorem: the CFG's runs from a loop head (hd, its states;
 //  stops pt, the head's among them; H a head's or exit's state the
@@ -705,9 +755,11 @@ qed
 //  at an exit, its `break` there (5); else the rest's outcome -- and the
 //  claim at the exits. Trip by trip: finitely many trips by induction, the
 //  structured loop's finite run; infinitely many, its infinite run over
-//  the head visits, the same trace (the records growing: g.limit_up).
+//  the head visits, the same trace (the records growing: g.limit_up) -- or
+//  a step undefined (its records not growing; its state then diverging
+//  with any trace, the run's among them: a finite run).
 theorem g.loop_head(l o. b, l. tr, r o. k, l. pt, l. hd, l. xp, l. w, l. v, l. m, mh, l. H, x y. bs, x. trs, x9 o. ks):
-  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && g.tr_le(tr(x), tr(y))) ->
+  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && (g.tr_le(tr(x), tr(y)) || (all t. t in univ(1) -> b(x, diverge(t))))) ->
   (all x y. v(x) -> w(x) -> b(x, ok(y, empty)) -> !hd(y) -> int_lt(m(y), m(x))) ->
   (all x. v(x) -> m(x) in omega) ->
   (all x. v(x) -> hd(x) -> pt(x) && m(x) = mh && w(x)) ->
@@ -728,10 +780,11 @@ theorem g.loop_head(l o. b, l. tr, r o. k, l. pt, l. hd, l. xp, l. w, l. v, l. m
   (all t o. k(diverge(t), o) -> ks(diverge(t), o)) ->
   (all x. v(x) -> trs(H(x)) = tr(x)) ->
   (all x. v(x) -> fst(x) in univ(1) && H(x) in univ(1)) ->
+  (all x. v(x) -> tr(x) in univ(1)) ->
   all l r o. v(l) -> hd(l) -> while_rel(l, l. true, l y. b(l, y), l. tr(l), r) -> k(r, o) -> pair(fst(l), o) in univ(1) ->
     ex x9. while_rel(H(l), x. true, x y. bs(x, y), x. trs(x), x9) && ks(x9, o)
 proof
-  assume h1 h2 hm hh hwc hxp hb hex hko hk45 hkd htr hu
+  assume h1 h2 hm hh hwc hxp hb hex hko hk45 hkd htr hu htu
   fix l r o
   assume vl hl hw hk hU
   let B(x, y) := (pt(x) && y = pair(3, x)) || (!pt(x) && b(x, y))
@@ -1063,14 +1116,14 @@ proof
     have w := mp(while_fin_while[l0 := H(l), c := x. true, b := x y. bs(x, y), tr := x. trs(x), r := x9], w9)
     show by ex_intro({x9}, taut(w, k9))
   qed
-  // infinitely many: an exit reached (then trip by trip to it), or the
-  // head forever (the structured loop's infinite run)
+  // infinitely many, the records growing: an exit reached (then trip by
+  // trip to it), or the head forever (the structured loop's infinite run)
   have zinf: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l &&
       (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
-      r = diverge(trace_limit(i. tr(app(f, i))))) ->
+      r = diverge(trace_limit(i. tr(app(f, i)))) && (all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))))) ->
       ex x9. while_rel(H(l), x. true, x y. bs(x, y), x. trs(x), x9) && ks(x9, o) proof
     assume e
-    obtain f, hfun hdom hf0 hst hr from e
+    obtain f, hfun hdom hf0 hst hr ch1 from e
     have inv: all x y. v(x) -> b(x, ok(y, empty)) -> v(y) proof
       fix x y
       assume vx bx
@@ -1090,12 +1143,6 @@ proof
       show := rewrite(es, bi)
     qed
     // (the records along the run: a chain)
-    have ch1: all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))) proof
-      fix i
-      assume io
-      have bi: b(app(f, i), ok(app(f, succ(i)), empty)) by taut(mp(all_elim(hst, {i}), io))
-      show by taut(mp(all_elim(h1, {app(f, i)}, {app(f, succ(i))}), mp(all_elim(vf, {i}), io), bi))
-    qed
     have chain := mp(g.chain_succ[T := i. tr(app(f, i))], ch1)
     have hkr: k(diverge(trace_limit(i. tr(app(f, i)))), o) := rewrite(hr, hk)
     // (a stretch from a head to the next stop: the rank falls, to an exit)
@@ -1406,7 +1453,71 @@ proof
     qed
     show by taut(withexit, noexit)
   qed
-  show by taut(runs, zfin, zinf)
+  // infinitely many: the records growing (above), or a step undefined --
+  // the finite run to it, diverging there with the run's trace (above)
+  have zinf2: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l &&
+      (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) ->
+      ex x9. while_rel(H(l), x. true, x y. bs(x, y), x. trs(x), x9) && ks(x9, o) proof
+    assume e
+    obtain f, hfun hdom hf0 hst hr from e
+    have inv: all x y. v(x) -> b(x, ok(y, empty)) -> v(y) proof
+      fix x y
+      assume vx bx
+      show by taut(mp(all_elim(h1, {x}, {y}), vx, bx))
+    qed
+    have q0: v(app(f, empty)) := rewrite(sym(hf0), vl)
+    have vf: all i. i in omega -> v(app(f, i)) proof
+      fix i
+      assume io
+      show := mp(while_path_inv_inf[c := l. true, b := l y. b(l, y), q := l. v(l), f := f, k := i], hst, q0, inv, io)
+    qed
+    have gr1: all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))) || (all t. t in univ(1) -> b(app(f, i), diverge(t))) proof
+      fix i
+      assume io
+      have bi: b(app(f, i), ok(app(f, succ(i)), empty)) by taut(mp(all_elim(hst, {i}), io))
+      show by taut(mp(all_elim(h1, {app(f, i)}, {app(f, succ(i))}), mp(all_elim(vf, {i}), io), bi))
+    qed
+    have ub: (ex j. j in omega && (all t. t in univ(1) -> b(app(f, j), diverge(t)))) ->
+        ex x9. while_rel(H(l), x. true, x y. bs(x, y), x. trs(x), x9) && ks(x9, o) proof
+      assume ej
+      obtain j, hj from ej
+      have jo: j in omega by taut(hj)
+      have uj: all t. t in univ(1) -> b(app(f, j), diverge(t)) by taut(hj)
+      have tu0: all i. i in omega -> tr(app(f, i)) in univ(1) proof
+        fix i
+        assume io
+        show := mp(all_elim(htu, {app(f, i)}), mp(all_elim(vf, {i}), io))
+      qed
+      have tu := mp(tr.tl_univ[t := i. tr(app(f, i))], tu0)
+      have bj0 := mp(all_elim(uj, {trace_limit(i. tr(app(f, i)))}), tu)
+      have bj: b(app(f, j), r) := rewrite(sym(hr), bj0)
+      have nr: !is_ok(r) := rewrite(sym(hr), all_elim(g.not_ok_div, {trace_limit(i. tr(app(f, i)))}))
+      have fw := mp(g.inf_fin[b := x y. b(x, y), f := f, j := j, r := r], hst, jo, bj, nr)
+      show := mp(zfin, rewrite(hf0, fw))
+    qed
+    have gro: !(ex j. j in omega && (all t. t in univ(1) -> b(app(f, j), diverge(t)))) ->
+        ex x9. while_rel(H(l), x. true, x y. bs(x, y), x. trs(x), x9) && ks(x9, o) proof
+      assume ne
+      have ch1: all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))) proof
+        fix i
+        assume io
+        have nu: !(all t. t in univ(1) -> b(app(f, i), diverge(t))) proof
+          assume u
+          have e2: ex j. j in omega && (all t. t in univ(1) -> b(app(f, j), diverge(t))) by ex_intro({i}, taut(io, u))
+          show by taut(ne, e2)
+        qed
+        show by taut(mp(all_elim(gr1, {i}), io), nu)
+      qed
+      have e3: ex f2. is_fun(f2) && dom(f2) = omega && app(f2, empty) = l &&
+          (all i. i in omega -> true && b(app(f2, i), ok(app(f2, succ(i)), empty))) &&
+          r = diverge(trace_limit(i. tr(app(f2, i)))) && (all i. i in omega -> g.tr_le(tr(app(f2, i)), tr(app(f2, succ(i)))))
+        by ex_intro({f}, taut(hfun, hdom, hf0, hst, hr, ch1))
+      show := mp(zinf, e3)
+    qed
+    show by taut(ub, gro)
+  qed
+  show by taut(runs, zfin, zinf2)
 qed
 
 // ----------------------------------------------------------------------
@@ -1452,16 +1563,17 @@ qed
 // segment running to the end without a stop, or reaching a stop x of a
 // lower rank -- the run from x the same outcome)
 theorem g.seg_split(l o. b, l. tr, l. pt, l. q, l. v, l. m, l, r):
-  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && g.tr_le(tr(x), tr(y))) ->
+  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && (g.tr_le(tr(x), tr(y)) || (all t. t in univ(1) -> b(x, diverge(t))))) ->
   (all x y. v(x) -> q(x) -> b(x, ok(y, empty)) -> int_lt(m(y), m(x)) && (!pt(y) -> q(y))) ->
   (all x. v(x) -> m(x) in omega) ->
+  (all x. v(x) -> tr(x) in univ(1)) ->
   v(l) -> q(l) -> while_rel(l, l. true, l y. b(l, y), l. tr(l), r) ->
   (b(l, r) && !is_ok(r)) ||
   (ex l2. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. (pt(l) && y = pair(3, l)) || (!pt(l) && b(l, y)), r) && !is_ok(r)) ||
   (ex l2 x. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. (pt(l) && y = pair(3, l)) || (!pt(l) && b(l, y)), pair(3, x)) &&
     pt(x) && v(x) && int_lt(m(x), m(l)) && while_rel(x, l. true, l y. b(l, y), l. tr(l), r))
 proof
-  assume h1 hq hm vl ql hw
+  assume h1 hq hm htu vl ql hw
   let B(x, y) := (pt(x) && y = pair(3, x)) || (!pt(x) && b(x, y))
   have inv: all x y. v(x) -> b(x, ok(y, empty)) -> v(y) proof
     fix x y
@@ -1605,15 +1717,15 @@ proof
     qed
     show by taut(z, s, (n = 0 || int_lt(0, n) by arith(hn)))
   qed
-  // infinitely many: a stop reached (the rank falls on the way), its rest
-  // the same divergence
+  // infinitely many, the records growing: a stop reached (the rank falls on
+  // the way), its rest the same divergence
   have inf: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l &&
       (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
-      r = diverge(trace_limit(i. tr(app(f, i))))) ->
+      r = diverge(trace_limit(i. tr(app(f, i)))) && (all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))))) ->
       ex l2 x. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. B(l, y), pair(3, x)) &&
         pt(x) && v(x) && int_lt(m(x), m(l)) && while_rel(x, l. true, l y. b(l, y), l. tr(l), r) proof
     assume e
-    obtain f, hfun hdom hf0 hst hr from e
+    obtain f, hfun hdom hf0 hst hr ch1 from e
     have q0v: v(app(f, empty)) := rewrite(sym(hf0), vl)
     have vf: all i. i in omega -> v(app(f, i)) proof
       fix i
@@ -1687,18 +1799,78 @@ proof
       assume io ic
       show := mp(all_elim(stp, {i}), io)
     qed
-    have ch1: all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))) proof
-      fix i
-      assume io
-      have bi: b(app(f, i), ok(app(f, succ(i)), empty)) by taut(mp(all_elim(hst, {i}), io))
-      show by taut(mp(all_elim(h1, {app(f, i)}, {app(f, succ(i))}), mp(all_elim(vf, {i}), io), bi))
-    qed
     have chain := mp(g.chain_succ[T := i. tr(app(f, i))], ch1)
     have rest0 := mp(g.run_suffix_exact[c := l. true, b := l y. b(l, y), tr := l. tr(l), f := f, k := c], hst, chain, co)
     have rest := rewrite(sym(hr), rest0)
     show := mp(all_elim(atstop, {f}, {c}), hf0, co, c0, pc, hst2, nb, mp(all_elim(vf, {c}), co), rest)
   qed
-  show by taut(runs, fin, inf)
+  // infinitely many: the records growing (above), or a step undefined --
+  // the finite run to it, diverging there with the run's trace (above)
+  have inf2: (ex f. is_fun(f) && dom(f) = omega && app(f, empty) = l &&
+      (all i. i in omega -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      r = diverge(trace_limit(i. tr(app(f, i))))) ->
+      (b(l, r) && !is_ok(r)) ||
+      (ex l2. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. B(l, y), r) && !is_ok(r)) ||
+      (ex l2 x. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. B(l, y), pair(3, x)) &&
+        pt(x) && v(x) && int_lt(m(x), m(l)) && while_rel(x, l. true, l y. b(l, y), l. tr(l), r)) proof
+    assume e
+    obtain f, hfun hdom hf0 hst hr from e
+    have q0v: v(app(f, empty)) := rewrite(sym(hf0), vl)
+    have vf: all i. i in omega -> v(app(f, i)) proof
+      fix i
+      assume io
+      show := mp(while_path_inv_inf[c := l. true, b := l y. b(l, y), q := l. v(l), f := f, k := i], hst, q0v, inv, io)
+    qed
+    have gr1: all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))) || (all t. t in univ(1) -> b(app(f, i), diverge(t))) proof
+      fix i
+      assume io
+      have bi: b(app(f, i), ok(app(f, succ(i)), empty)) by taut(mp(all_elim(hst, {i}), io))
+      show by taut(mp(all_elim(h1, {app(f, i)}, {app(f, succ(i))}), mp(all_elim(vf, {i}), io), bi))
+    qed
+    have ub: (ex j. j in omega && (all t. t in univ(1) -> b(app(f, j), diverge(t)))) ->
+        (b(l, r) && !is_ok(r)) ||
+        (ex l2. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. B(l, y), r) && !is_ok(r)) ||
+        (ex l2 x. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. B(l, y), pair(3, x)) &&
+          pt(x) && v(x) && int_lt(m(x), m(l)) && while_rel(x, l. true, l y. b(l, y), l. tr(l), r)) proof
+      assume ej
+      obtain j, hj from ej
+      have jo: j in omega by taut(hj)
+      have uj: all t. t in univ(1) -> b(app(f, j), diverge(t)) by taut(hj)
+      have tu0: all i. i in omega -> tr(app(f, i)) in univ(1) proof
+        fix i
+        assume io
+        show := mp(all_elim(htu, {app(f, i)}), mp(all_elim(vf, {i}), io))
+      qed
+      have tu := mp(tr.tl_univ[t := i. tr(app(f, i))], tu0)
+      have bj0 := mp(all_elim(uj, {trace_limit(i. tr(app(f, i)))}), tu)
+      have bj: b(app(f, j), r) := rewrite(sym(hr), bj0)
+      have nr: !is_ok(r) := rewrite(sym(hr), all_elim(g.not_ok_div, {trace_limit(i. tr(app(f, i)))}))
+      have fw := mp(g.inf_fin[b := x y. b(x, y), f := f, j := j, r := r], hst, jo, bj, nr)
+      show := mp(fin, rewrite(hf0, fw))
+    qed
+    have gro: !(ex j. j in omega && (all t. t in univ(1) -> b(app(f, j), diverge(t)))) ->
+        ex l2 x. b(l, ok(l2, empty)) && while_fin_rel(l2, l. true, l y. B(l, y), pair(3, x)) &&
+          pt(x) && v(x) && int_lt(m(x), m(l)) && while_rel(x, l. true, l y. b(l, y), l. tr(l), r) proof
+      assume ne
+      have ch1: all i. i in omega -> g.tr_le(tr(app(f, i)), tr(app(f, succ(i)))) proof
+        fix i
+        assume io
+        have nu: !(all t. t in univ(1) -> b(app(f, i), diverge(t))) proof
+          assume u
+          have e2: ex j. j in omega && (all t. t in univ(1) -> b(app(f, j), diverge(t))) by ex_intro({i}, taut(io, u))
+          show by taut(ne, e2)
+        qed
+        show by taut(mp(all_elim(gr1, {i}), io), nu)
+      qed
+      have e3: ex f2. is_fun(f2) && dom(f2) = omega && app(f2, empty) = l &&
+          (all i. i in omega -> true && b(app(f2, i), ok(app(f2, succ(i)), empty))) &&
+          r = diverge(trace_limit(i. tr(app(f2, i)))) && (all i. i in omega -> g.tr_le(tr(app(f2, i)), tr(app(f2, succ(i)))))
+        by ex_intro({f}, taut(hfun, hdom, hf0, hst, hr, ch1))
+      show := mp(inf, e3)
+    qed
+    show by taut(ub, gro)
+  qed
+  show by taut(runs, fin, inf2)
 qed
 
 // ----------------------------------------------------------------------
@@ -1712,7 +1884,7 @@ qed
 //  each trip's claim (hb) and the exits' claims (hxk, by the induction),
 //  the structured loop the head's program (hq).
 theorem g.cut_loops(l o. b, l. tr, r o. k, l. pt, l. hd, h l. xp, l. lp, l. v, l. m, l q. inv, h l. H, h x y. bs, x. trs, h x9 o. ks):
-  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && g.tr_le(tr(x), tr(y))) ->
+  (all x y. v(x) -> b(x, ok(y, empty)) -> v(y) && (g.tr_le(tr(x), tr(y)) || (all t. t in univ(1) -> b(x, diverge(t))))) ->
   (all x y. v(x) -> b(x, ok(y, empty)) -> (hd(y) && lp(x) = fst(snd(y))) || int_lt(m(y), m(x))) ->
   (all x. v(x) -> m(x) in omega) ->
   (all x y. v(x) -> v(y) -> fst(snd(x)) = fst(snd(y)) -> m(x) = m(y)) ->
@@ -1744,9 +1916,10 @@ theorem g.cut_loops(l o. b, l. tr, r o. k, l. pt, l. hd, h l. xp, l. lp, l. v, l
   (all h t o. k(diverge(t), o) -> ks(h, diverge(t), o)) ->
   (all h x. v(x) -> trs(H(h, x)) = tr(x)) ->
   (all h x. v(x) -> fst(x) in univ(1) && H(h, x) in univ(1)) ->
+  (all x. v(x) -> tr(x) in univ(1)) ->
   all l q r o. inv(l, q) -> while_rel(l, x. true, x y. b(x, y), x. tr(x), r) -> k(r, o) -> pair(fst(l), o) in univ(1) -> runs(q, fst(l), o)
 proof
-  assume hl1 hl2 hm hml hh hcl hxs hxp hv hout hs hq hb hxk hko hk45 hkd htr hu
+  assume hl1 hl2 hm hml hh hcl hxs hxp hv hout hs hq hb hxk hko hk45 hkd htr hu htu
   let J(l) := all q r o. inv(l, q) -> while_rel(l, x. true, x y. b(x, y), x. tr(x), r) -> k(r, o) -> pair(fst(l), o) in univ(1) -> runs(q, fst(l), o)
   // one step: J at l from J at every state of a lower rank
   have core: all l. v(l) -> (all x. v(x) -> int_lt(m(x), m(l)) -> J(x)) -> J(l) proof
@@ -1814,7 +1987,7 @@ proof
       qed
       have lh := mp(g.loop_head[b := x y. b(x, y), tr := x. tr(x), k := r o. k(r, o), pt := x. pt(x), hd := x. hd(x) && fst(snd(x)) = h, xp := x. xp(h, x),
           w := x. lp(x) = h, v := x. v(x), m := x. m(x), mh := m(l), H := x. H(h, x), bs := x y. bs(h, x, y), trs := x. trs(x), ks := x9 o. ks(h, x9, o)],
-        hl1, p2, hm, p4, p5, p6, p7, p8, all_elim(hko, {h}), hk45, all_elim(hkd, {h}), all_elim(htr, {h}), all_elim(hu, {h}))
+        hl1, p2, hm, p4, p5, p6, p7, p8, all_elim(hko, {h}), hk45, all_elim(hkd, {h}), all_elim(htr, {h}), all_elim(hu, {h}), htu)
       have st := mp(all_elim(lh, {l}, {r}, {o}), vl, (hd(l) && fst(snd(l)) = h by taut(hl, refl({h}))), hw, hk, hU)
       show := mp(all_elim(hq, {l}, {q}, {o}), hi, hl, st, hU)
     qed
@@ -1840,7 +2013,7 @@ proof
         qed
         show by taut(a1, a2)
       qed
-      have sp := mp(g.seg_split[b := x y. b(x, y), tr := x. tr(x), pt := x. pt(x), q := x. lp(x) = 0, v := x. v(x), m := x. m(x), l := l, r := r], hl1, hq0, hm, vl, l0, hw)
+      have sp := mp(g.seg_split[b := x y. b(x, y), tr := x. tr(x), pt := x. pt(x), q := x. lp(x) = 0, v := x. v(x), m := x. m(x), l := l, r := r], hl1, hq0, hm, htu, vl, l0, hw)
       have g := expand(mp(all_elim(hs, {l}, {q}), hi, nhl), g.ref)
       let B(x, y) := (pt(x) && y = pair(3, x)) || (!pt(x) && b(x, y))
       let K(x9) := (fst(x9) = 3 && (all q2. inv(snd(x9), q2) -> pair(fst(snd(x9)), o) in univ(1) -> runs(q2, fst(snd(x9)), o))) || k(x9, o)
