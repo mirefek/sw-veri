@@ -162,6 +162,7 @@ impl<'e> Gen<'e> {
             gref: None,
             raw_lets: false,
             grefs: std::collections::HashMap::new(),
+            gtyped: Vec::new(),
         })
     }
 }

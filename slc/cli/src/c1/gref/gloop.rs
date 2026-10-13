@@ -344,8 +344,129 @@ impl<'e> Gen<'e> {
         let pse = self.evp(&RP::Defs(Box::new(RP::By(R::S(se))), vec!["letin".into()]), &wps[1], &[])?;
         let steps = self.run(&mp(wsr, vec![s(&pw), s(&pse)]), &[])?;
         self.trace(|| "ref: phase: the steps".into());
-        let _ = (lo, l0, w, walked, sl, steps);
-        Err("loops: not yet".into())
+        // INV the points' disjunction: each hypothesis proven, each walk's
+        // discharged
+        if sl.len() != 1 {
+            return Err(format!("{} loops (not yet: one)", sl.len()));
+        }
+        let (h0, x0l) = sl.into_iter().next().unwrap();
+        let inv = self.points_inv();
+        {
+            let g = self.gref.as_mut().unwrap();
+            g.inv = inv.clone();
+            g.inv_var = None;
+        }
+        let n = self.gref.as_ref().unwrap().points.len();
+        let mut hps: Vec<(Term, Seq)> = Vec::new();
+        for j in 0..n {
+            let Some(Some(h)) = self.gref.as_ref().unwrap().hyps.get(j).cloned() else { continue };
+            let a = self.assume(&h)?;
+            let hj = Seq::inst(self.env, &a, iv, &inv).map_err(|e| e.0)?.concl().clone();
+            hps.push((hj, self.hyp_proof(j, &inv)?));
+        }
+        let mut walked2: Vec<Option<Seq>> = Vec::new();
+        for w0 in walked {
+            let Some(w0) = w0 else {
+                walked2.push(None);
+                continue;
+            };
+            let mut s0 = Seq::inst(self.env, &w0, iv, &inv).map_err(|e| e.0)?;
+            for (hj, pf) in &hps {
+                if s0.hyps().contains(hj) {
+                    let d = s0.discharge(self.env, hj).map_err(|e| e.0)?;
+                    s0 = Seq::mp(self.env, &d, pf).map_err(|e| e.0)?;
+                }
+            }
+            if !s0.hyps().is_empty() {
+                return Err(format!("a cut point's walk: {} hypotheses left", s0.hyps().len()));
+            }
+            walked2.push(Some(s0));
+        }
+        // the structured loop: H a state's (its world, the loop's locals),
+        // its body, trace, rest
+        let (hv, xv, y2, x9v, ov) = (self.var("lh"), self.var("lx"), self.var("ly"), self.var("lx9"), self.var("lo"));
+        let ssx = self.mk("snd", vec![self.mk("snd", vec![xv.clone()])]);
+        let tx = x0l.t.subst_var(Self::var_id(&x0l.y), &ssx, &self.env.binders_fn());
+        let h_l = self.abs(&self.mk("pair", vec![self.mk("fst", vec![xv.clone()]), tx]), &[Self::var_id(&hv), Self::var_id(&xv)]);
+        let bs_l = self.abs(&x0l.bs.instantiate_params(&[xv.clone(), y2.clone()], &self.env.binders_fn()), &[Self::var_id(&hv), Self::var_id(&xv), Self::var_id(&y2)]);
+        let ks_l = self.abs(&x0l.ks.instantiate_params(&[x9v.clone(), ov.clone()], &self.env.binders_fn()), &[Self::var_id(&hv), Self::var_id(&x9v), Self::var_id(&ov)]);
+        let (rr, stmt) = self.inst("g.cut_loops", &binds(inv.clone(), h_l, bs_l, x0l.trs.clone(), ks_l))?;
+        let (prems, _) = self.imps(&stmt);
+        let mut pfs: Vec<Seq> = Vec::new();
+        for i in [0, 1] {
+            pfs.push(self.evp(&RP::Taut(vec![R::S(steps.clone())]), &prems[i], &[])?);
+        }
+        self.trace(|| "ref: phase: the rank".into());
+        pfs.push(self.lab_all(&prems[2], |g, _, pk| g.lab_simp(pk))?);
+        let mt = self.app(&rels.m, "app", 2).ok_or("the rank's table")?[0].clone();
+        let ml = self.run(&R::Inst("g.ml_label".into(), vec![("v", rels.v.clone()), ("t", mt)]), &[])?;
+        pfs.push(self.evp(&RP::Taut(vec![R::S(ml)]), &prems[3], &[])?);
+        self.trace(|| "ref: phase: the heads".into());
+        pfs.push(self.lab_all(&prems[4], |g, _, pk| g.lab_simp(pk))?);
+        for i in [5, 6] {
+            pfs.push(self.evp(&RP::Taut(vec![R::S(steps.clone())]), &prems[i], &[])?);
+        }
+        pfs.push(self.all_simp(&prems[7], 2)?);
+        self.trace(|| "ref: phase: the points' states".into());
+        let rels_pt = rels.pt.clone();
+        pfs.push(self.pts_all(&prems[8], |g, i, pk| {
+            let (w, y) = (g.var("vw"), g.var("vy"));
+            let body = g.inst_alls(pk, &[w.clone(), y.clone()])?;
+            let st = g.point_state(i, &w, &y);
+            let d = g.v_at(&st)?;
+            let ptt = rels_pt.instantiate_params(std::slice::from_ref(&st), &g.env.binders_fn());
+            let pp = g.evp(&RP::Simp(false, vec![], vec![], false), &ptt, &[])?;
+            let pf = g.evp(&RP::Taut(vec![R::S(d), R::S(pp)]), &body, &[])?;
+            g.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
+        })?);
+        pfs.push(self.pts_all(&prems[9], |g, _, pk| g.lab_simp(pk))?);
+        self.trace(|| "ref: phase: the points' walks".into());
+        pfs.push(self.pts_all(&prems[10], |g, i, pk| match &walked2[i] {
+            Some(s0) => g.evp(&RP::Taut(vec![R::S(s0.clone())]), pk, &[]),
+            None => g.sub_walk_hd(pk),
+        })?);
+        self.trace(|| "ref: phase: the heads' programs".into());
+        pfs.push(self.pts_all(&prems[11], |g, i, pk| if g.gref.as_ref().unwrap().points[i].label == h0 { g.head_prog(i, pk) } else { g.vacuous(pk, 2, 0) })?);
+        self.trace(|| "ref: phase: the trips".into());
+        pfs.push(self.lab_all(&prems[12], |g, k, pk| if k == h0 { g.trip_claim(pk, h0) } else { g.vacuous(pk, 2, 1) })?);
+        self.trace(|| "ref: phase: the exits".into());
+        let exits = lps.exits[&h0].clone();
+        pfs.push(self.lab_all(&prems[13], |g, k, pk| if exits.contains(&k) { g.exit_claim(pk, k) } else { g.vacuous(pk, 2, 1) })?);
+        self.trace(|| "ref: phase: the rests".into());
+        for i in [14, 15] {
+            pfs.push(self.all_refute(&prems[i])?);
+        }
+        pfs.push(self.all_simp(&prems[16], 3)?);
+        pfs.push(self.all_simp(&prems[17], 2)?);
+        pfs.push(self.univ_hu(&prems[18])?);
+        pfs.push(self.univ_htu(&prems[19])?);
+        let main = self.run(&mp(rr, pfs.iter().map(s).collect()), &[])?;
+        self.trace(|| "ref: phase: done".into());
+        // at the loop's start: its point, its state in univ(1) (its world the
+        // outcome's, its locals the walk's choices)
+        let i0 = self.inv_at(l0, q0)?;
+        let (rv, ov) = (self.var("lr"), self.var("lo"));
+        let fl0 = self.mk("fst", vec![l0.clone()]);
+        let hu_t = self.mk("in", vec![self.mk("pair", vec![fl0.clone(), ov.clone()]), self.mk("univ", vec![lit(1)])]);
+        let hu = self.assume(&hu_t)?;
+        let fu = self.run(&mp(f("g.univ_fst"), vec![t(&fl0), t(&ov), s(&hu)]), &[])?;
+        let l0p = self.app(l0, "pair", 2).ok_or("the loop's start not a pair")?.to_vec();
+        let wu_t = self.mk("in", vec![l0p[0].clone(), self.mk("univ", vec![lit(1)])]);
+        let wu = self.evp(&RP::Simp(false, vec![R::S(fu)], vec![], false), &wu_t, &[])?;
+        self.gref.as_mut().unwrap().cut.as_mut().unwrap().ufacts = vec![(l0p[0].clone(), wu)];
+        let ul0 = self.univ_of(l0)?;
+        let c1 = self.run(&mp(R::S(main), vec![t(l0), t(q0), t(&rv), t(&ov), s(&i0), s(&ul0)]), &[])?;
+        let target = c1.concl().clone();
+        let c1 = self.close(c1, &[hu_t], &[])?;
+        let c1 = self.evp(&RP::Taut(vec![R::S(c1)]), &target, &[])?;
+        let c1 = self.close(c1, &[], &[Self::var_id(&rv), Self::var_id(&ov)])?;
+        let c2 = self.run(&mp(R::Inst("g.ref_cfg".into(), vec![("l", l0.clone()), ("q", q0.clone()), ("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone())]), vec![s(&c1)]), &[])?;
+        self.gref = None;
+        if l0p[0] != *w {
+            return Err(format!("the loop's start world {}: not the walk's", self.print(&l0p[0])));
+        }
+        let fe = R::Inst("fst_pair".into(), vec![("a", l0p[0].clone()), ("b", l0p[1].clone())]);
+        self.run(&mp(R::Inst("g.ref_ws".into(), vec![("l", lo.clone()), ("q", q0.clone()), ("a", fl0), ("b", w.clone())]), vec![p(fe), s(&c2)]), &[])
     }
 
     /// The structured loop at head point i (`y. mkprog(x0 x1. ex x2.
@@ -385,6 +506,14 @@ impl<'e> Gen<'e> {
     pub(super) fn univ_of(&mut self, x: &Term) -> Result<Seq, String> {
         if let Some((_, pf)) = self.gref.as_ref().and_then(|g| g.cut.as_ref()).and_then(|c| c.ufacts.iter().find(|(u, _)| u == x)) {
             return Ok(pf.clone());
+        }
+        // (a choice of the walk: in its domain, a word's bits)
+        if let Some((_, fact)) = self.gtyped.iter().find(|(v, _)| v == x).cloned() {
+            if let Some(n) = self.app(fact.concl(), "in", 2).and_then(|i| self.app(&i[1], "bits", 1).map(|b| b[0].clone())) {
+                let set = self.mk("bits", vec![n.clone()]);
+                let i = fact;
+                return self.run(&mp(R::Inst("univ_trans".into(), vec![("u", lit(1)), ("a", x.clone()), ("b", set)]), vec![p(R::Inst("bits_univ".into(), vec![("n", n)])), s(&i)]), &[]);
+            }
         }
         if let Some(pr) = self.app(x, "pair", 2).map(|p| p.to_vec()) {
             let (a, b) = (self.univ_of(&pr[0])?, self.univ_of(&pr[1])?);
@@ -453,8 +582,12 @@ impl<'e> Gen<'e> {
     fn lab_all(&mut self, prem: &Term, mut per: impl FnMut(&mut Self, u128, &Term) -> Result<Seq, String>) -> Result<Seq, String> {
         let body = self.app(prem, "all", 1).ok_or("a premise over the labels")?[0].clone();
         let (hs, gl) = self.imps(&body);
-        if hs.len() != 1 {
+        if hs.is_empty() {
             return Err("a premise over the labels: not v -> ..".into());
+        }
+        let mut gl = gl;
+        for h in hs[1..].iter().rev() {
+            gl = Term::app(self.env.builtins.imp, vec![h.clone(), gl]);
         }
         let u = self.mk("in", vec![Term::bvar(0), self.mk("univ", vec![lit(1)])]);
         let gp = Term::app(self.env.builtins.imp, vec![u, gl.clone()]);
@@ -484,12 +617,269 @@ impl<'e> Gen<'e> {
         self.evp(&RP::Taut(vec![R::S(r)]), prem, &[])
     }
 
+    /// `all l q. inv(l, q) -> .. -> G(l, q)` from each point's claim (`per`,
+    /// given point i and its premise `all w y. G(pair(w, pair(k, sh(y))),
+    /// u(y))`), by g.inv_or
+    fn pts_all(&mut self, prem: &Term, mut per: impl FnMut(&mut Self, usize, &Term) -> Result<Seq, String>) -> Result<Seq, String> {
+        let gl = self.claim_g(prem)?;
+        let inv = self.gref.as_ref().unwrap().inv.clone();
+        let mut disj = Vec::new();
+        let mut cur = inv.clone();
+        while let Some(o) = self.app(&cur, "or", 2).map(|o| o.to_vec()) {
+            disj.push((o[0].clone(), o[1].clone()));
+            cur = o[1].clone();
+        }
+        let n = self.gref.as_ref().unwrap().points.len();
+        if disj.len() != n {
+            return Err("inv's disjuncts not the points".into());
+        }
+        let mut acc = self.run(&R::Inst("g.inv_none".into(), vec![("G", gl.clone())]), &[])?;
+        for i in (0..n).rev() {
+            let (r, prem_i) = self.pt_prem(&gl, i)?;
+            self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
+            let pf = per(self, i, &prem_i)?;
+            let pt = self.run(&mp(r, vec![s(&pf)]), &[])?;
+            acc = self.run(&mp(R::Inst("g.inv_or".into(), vec![("G", gl.clone()), ("A", disj[i].0.clone()), ("B", disj[i].1.clone())]), vec![s(&pt), s(&acc)]), &[])?;
+            self.drop_caches();
+        }
+        self.evp(&RP::Taut(vec![R::S(acc)]), prem, &[])
+    }
+
+    /// point i's state at world w, locals y
+    fn point_state(&self, i: usize, w: &Term, y: &Term) -> Term {
+        let g = self.gref.as_ref().unwrap();
+        let p = &g.points[i];
+        self.mk("pair", vec![w.clone(), self.mk("pair", vec![lit(p.label), self.shape_t(p, y, g.m)])])
+    }
+
+    /// a claim `all v1 .. vn. A -> ..` (k = 0) or `all v1 .. vn. U -> all
+    /// h. A(h) -> ..` (k = 1) whose A fails (by evaluation)
+    fn vacuous(&mut self, pk: &Term, n: usize, k: usize) -> Result<Seq, String> {
+        let vs: Vec<Term> = (0..n).map(|i| self.var(&format!("vv{i}"))).collect();
+        let body = self.inst_alls(pk, &vs)?;
+        let (hs, c) = self.imps(&body);
+        let simp = RP::Simp(false, vec![], vec![], false);
+        let pf = if k == 0 {
+            let neg = self.evp(&simp, &self.mk("not", vec![hs[0].clone()]), &[])?;
+            self.evp(&RP::Taut(vec![R::S(neg)]), &body, &[])?
+        } else {
+            let hv = self.var("vh");
+            let ch = self.inst_alls(&c, std::slice::from_ref(&hv))?;
+            let (hs2, _) = self.imps(&ch);
+            let neg = self.evp(&simp, &self.mk("not", vec![hs2[0].clone()]), &[])?;
+            let pc = self.evp(&RP::Taut(vec![R::S(neg)]), &ch, &[])?;
+            let pc = self.close(pc, &[], &[Self::var_id(&hv)])?;
+            self.evp(&RP::Taut(vec![R::S(pc)]), &body, &[])?
+        };
+        self.close(pf, &[], &vs.iter().map(Self::var_id).collect::<Vec<_>>())
+    }
+
+    /// `all v1 .. vn. B` by evaluation
+    fn all_simp(&mut self, prem: &Term, n: usize) -> Result<Seq, String> {
+        let vs: Vec<Term> = (0..n).map(|i| self.var(&format!("av{i}"))).collect();
+        let body = self.inst_alls(prem, &vs)?;
+        let pf = self.evp(&RP::Simp(false, vec![], vec![], false), &body, &[])?;
+        self.close(pf, &[], &vs.iter().map(Self::var_id).collect::<Vec<_>>())
+    }
+
+    /// `all .. . !A && !B`: each refuted (a rest never marked 4 or 5)
+    fn all_refute(&mut self, prem: &Term) -> Result<Seq, String> {
+        let mut vs = Vec::new();
+        let mut body = prem.clone();
+        while let Some(b) = self.app(&body, "all", 1).map(|b| b[0].clone()) {
+            let v = self.var(&format!("rv{}", vs.len()));
+            body = b.instantiate_params(std::slice::from_ref(&v), &self.env.binders_fn());
+            vs.push(v);
+        }
+        let c = self.app(&body, "and", 2).ok_or("not !A && !B")?.to_vec();
+        let mut fs = Vec::new();
+        for x in &c {
+            let a = self.app(x, "not", 1).ok_or("not !A && !B")?[0].clone();
+            fs.push(R::S(self.refute(&a)?.ok_or_else(|| format!("a rest marked: not refuted: {}", self.print(&a)))?));
+        }
+        let pf = self.evp(&RP::Taut(fs), &body, &[])?;
+        self.close(pf, &[], &vs.iter().map(Self::var_id).collect::<Vec<_>>())
+    }
+
+    /// `all h x. v(x) -> fst(x) in univ(1) && H(h, x) in univ(1)`
+    fn univ_hu(&mut self, prem: &Term) -> Result<Seq, String> {
+        let (h, x) = (self.var("uh"), self.var("ux"));
+        let body = self.inst_alls(prem, &[h.clone(), x.clone()])?;
+        let (hs, c) = self.imps(&body);
+        let hv = self.assume(&hs[0])?;
+        let xu_t = self.mk("in", vec![x.clone(), self.mk("univ", vec![lit(1)])]);
+        let xu = self.evp(&RP::Taut(vec![R::S(hv)]), &xu_t, &[])?;
+        self.gref.as_mut().unwrap().cut.as_mut().unwrap().ufacts = vec![(x.clone(), xu)];
+        let mut fs = Vec::new();
+        for part in self.app(&c, "and", 2).ok_or("hu: not a conjunction")?.to_vec() {
+            let e = self.app(&part, "in", 2).ok_or("hu: not in")?[0].clone();
+            fs.push(R::S(self.univ_of(&e)?));
+        }
+        let pf = self.evp(&RP::Taut(fs), &c, &[])?;
+        self.close(pf, &[hs[0].clone()], &[Self::var_id(&h), Self::var_id(&x)])
+    }
+
+    /// `all x. v(x) -> tr(x) in univ(1)` (tr.tr_univ)
+    fn univ_htu(&mut self, prem: &Term) -> Result<Seq, String> {
+        let x = self.var("tx");
+        let body = self.inst_alls(prem, std::slice::from_ref(&x))?;
+        let (hs, c) = self.imps(&body);
+        let hv = self.assume(&hs[0])?;
+        let xu_t = self.mk("in", vec![x.clone(), self.mk("univ", vec![lit(1)])]);
+        let xu = self.evp(&RP::Taut(vec![R::S(hv)]), &xu_t, &[])?;
+        let tu = self.run(&mp(f("tr.tr_univ"), vec![t(&x), s(&xu)]), &[])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(tu)]), &c, &[])?;
+        self.close(pf, &[hs[0].clone()], &[Self::var_id(&x)])
+    }
+
+    /// a head point's program the structured loop (hq): `all w y. hd(st)
+    /// -> all o. E -> U -> runs(u(y), fst(st), o)`, E u(y)'s relation there
+    fn head_prog(&mut self, _i: usize, pk: &Term) -> Result<Seq, String> {
+        let (w, y, o) = (self.var("qw"), self.var("qy"), self.var("qo"));
+        let body = self.inst_alls(pk, &[w.clone(), y.clone()])?;
+        let (_, c) = self.imps(&body);
+        let co = self.inst_alls(&c, std::slice::from_ref(&o))?;
+        let (hs, g) = self.imps(&co);
+        let r = self.app(&g, "runs", 3).ok_or("hq: not runs")?.to_vec();
+        let rl = self.app(&r[0], "mkprog", 1).ok_or("hq: not a program")?[0].clone();
+        let (ae, au) = (self.assume(&hs[0])?, self.assume(&hs[1])?);
+        // (the relation there: E at the locals y, not snd(snd(st)))
+        let goal_r = rl.instantiate_params(&[r[1].clone(), o.clone()], &self.env.binders_fn());
+        let st = self.app(&r[1], "fst", 1).ok_or("hq: not at fst(st)")?[0].clone();
+        let ss = self.mk("snd", vec![self.mk("snd", vec![st.clone()])]);
+        let er = self.at_eq_y(&goal_r, &y, &ss, ae, &st)?;
+        let pf = self.run(&mp(R::Inst("tr.runs_intro".into(), vec![("r", rl)]), vec![t(&r[1]), t(&o), s(&au), s(&er)]), &[])?;
+        let pf = self.close(pf, &hs, &[Self::var_id(&o)])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(pf)]), &body, &[])?;
+        self.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
+    }
+
+    /// a head's trips (hb at its label): `all w y. U -> all h. hd(st) &&
+    /// fst(snd(st)) = h -> all o. TRIP(h, st, o) -> U2 -> C(h, st, o)` --
+    /// at h the head's label, the CFG's trip walked with the structured
+    /// body (`mkprog(x0 x1. C)`); at any h equal to it (g.at_eq)
+    fn trip_claim(&mut self, pk: &Term, h0: u128) -> Result<Seq, String> {
+        let (w, y, o) = (self.var("bw"), self.var("by"), self.var("bo"));
+        let body = self.inst_alls(pk, &[w.clone(), y.clone()])?;
+        let (_, c) = self.imps(&body);
+        let plam = self.app(&c, "all", 1).ok_or("hb: not all h")?[0].clone();
+        let ph0 = plam.instantiate_params(&[lit(h0)], &self.env.binders_fn());
+        let (_, c3) = self.imps(&ph0);
+        let co = self.inst_alls(&c3, std::slice::from_ref(&o))?;
+        let (hs, concl) = self.imps(&co);
+        let ob = self.app(&c3, "all", 1).ok_or("hb: not all o")?[0].clone();
+        let (hsb, _) = self.imps(&ob);
+        let lo = hsb[0].clone();
+        let q = self.mk("mkprog", vec![self.abs(&concl, &[Self::var_id(&w), Self::var_id(&o)])]);
+        let qj = self.new_q(q);
+        let saved = self.w.clone();
+        let r = self.walk(&lo, qj, &w);
+        self.w = saved;
+        let gr = self.run(&R::Expand(Box::new(R::S(r?)), vec!["g.ref".into()]), &[])?;
+        let (tj, uu) = (self.assume(&hs[0])?, self.assume(&hs[1])?);
+        let uw_t = self.mk("in", vec![self.mk("pair", vec![w.clone(), o.clone()]), self.mk("univ", vec![lit(1)])]);
+        let uw = self.evp(&RP::Simp(false, vec![R::S(uu)], vec![], false), &uw_t, &[])?;
+        let rr = self.run(&mp(R::S(gr), vec![t(&o), s(&tj), s(&uw)]), &[])?;
+        let ce = self.run(&R::Apply(Box::new(f("g.runs_elim")), vec![s(&rr)]), &[])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(ce)]), &concl, &[])?;
+        let pf = self.close(pf, &hs, &[Self::var_id(&o)])?;
+        let p0 = self.evp(&RP::Taut(vec![R::S(pf)]), &ph0, &[])?;
+        // (at h: h the head's label)
+        let hv = self.var("bh");
+        let ph = plam.instantiate_params(std::slice::from_ref(&hv), &self.env.binders_fn());
+        let (hs5, _) = self.imps(&ph);
+        let ah = self.assume(&hs5[0])?;
+        let eq_t = self.mk("eq", vec![hv.clone(), lit(h0)]);
+        let eq = self.evp(&RP::Simp(false, vec![R::S(ah)], vec![], false), &eq_t, &[])?;
+        let at = self.run(&mp(R::Inst("g.at_eq".into(), vec![("P", plam), ("a", hv.clone()), ("b", lit(h0))]), vec![s(&eq), s(&p0)]), &[])?;
+        let at = self.close(at, &[hs5[0].clone()], &[])?;
+        let at = self.evp(&RP::Taut(vec![R::S(at)]), &ph, &[])?;
+        let at = self.close(at, &[], &[Self::var_id(&hv)])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(at)]), &body, &[])?;
+        self.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
+    }
+
+    /// an exit's claim (hxk at its label): `all w y. U -> all h. xp(h, st)
+    /// -> all o. (all q. inv(st, q) -> U2 -> runs(q, ..)) -> U2 -> ks(h,
+    /// exc(H(h, st), brk), o)` -- by the exit point's program
+    fn exit_claim(&mut self, pk: &Term, e: u128) -> Result<Seq, String> {
+        let ie = self.gref.as_ref().unwrap().points.iter().position(|p| p.label == e).ok_or("an exit not a point")?;
+        let (w, y, h, o) = (self.var("xw"), self.var("xy"), self.var("xh"), self.var("xo"));
+        let body = self.inst_alls(pk, &[w.clone(), y.clone()])?;
+        let (_, c) = self.imps(&body);
+        let ch = self.inst_alls(&c, std::slice::from_ref(&h))?;
+        let (_, c2) = self.imps(&ch);
+        let co = self.inst_alls(&c2, std::slice::from_ref(&o))?;
+        let (hs, goal) = self.imps(&co);
+        let st = self.point_state(ie, &w, &y);
+        let tm = self.gref.as_ref().unwrap().points[ie].tmpl.clone();
+        let q = tm.instantiate_params(std::slice::from_ref(&y), &self.env.binders_fn());
+        let iq = self.inv_at_pt(&st, &q, ie)?;
+        let (hj, u2) = (self.assume(&hs[0])?, self.assume(&hs[1])?);
+        let rr = self.run(&mp(R::S(hj), vec![t(&q), s(&iq), s(&u2)]), &[])?;
+        let ce = self.run(&R::Apply(Box::new(f("g.runs_elim")), vec![s(&rr)]), &[])?;
+        // (the rest at the locals snd(snd(st)), the program's at y)
+        let ss = self.mk("snd", vec![self.mk("snd", vec![st.clone()])]);
+        let ce_t = ce.concl().clone();
+        let kv = self.var("ek");
+        let ps = self.replace_t(&ce_t, &st, &kv);
+        let ps = self.replace_t(&ps, &y, &ss);
+        let ps = self.replace_t(&ps, &kv, &st);
+        let pf = self.at_eq_y(&ps, &ss, &y, ce, &st)?;
+        if ps != goal && std::env::var("C1_DUMP").is_ok() {
+            let d = std::env::var("C1_DUMP").unwrap();
+            let _ = std::fs::write(format!("{}/exit_ps.txt", d), self.print(&ps));
+            let _ = std::fs::write(format!("{}/exit_goal.txt", d), self.print(&goal));
+        }
+        let pf = self.evp(&RP::Taut(vec![R::S(pf)]), &goal, &[])?;
+        let pf = self.close(pf, &hs, &[Self::var_id(&o)])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(pf)]), &ch, &[])?;
+        let pf = self.close(pf, &[], &[Self::var_id(&h)])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(pf)]), &body, &[])?;
+        self.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
+    }
+
+    /// `goal` (P(a), a a variable or term written there) from `fact` (P(b)),
+    /// a = b by evaluation (g.at_eq; P the goal over a)
+    fn at_eq_y(&mut self, goal: &Term, a: &Term, b: &Term, fact: Seq, keep: &Term) -> Result<Seq, String> {
+        // (`keep`, a's other occurrences: as they are)
+        let (zv, kv) = (self.var("az"), self.var("ak"));
+        let pz = if self.replace_t(a, keep, &kv) != *a {
+            // (a holds `keep`: a first)
+            self.replace_t(goal, a, &zv)
+        } else {
+            let pz = self.replace_t(goal, keep, &kv);
+            let pz = self.replace_t(&pz, a, &zv);
+            self.replace_t(&pz, &kv, keep)
+        };
+        let plam = self.abs(&pz, &[Self::var_id(&zv)]);
+        let eq_t = self.mk("eq", vec![a.clone(), b.clone()]);
+        let eq = self.evp(&RP::Simp(false, vec![], vec![], false), &eq_t, &[])?;
+        let pb = plam.instantiate_params(std::slice::from_ref(b), &self.env.binders_fn());
+        let fb = self.evp(&RP::Taut(vec![R::S(fact)]), &pb, &[])?;
+        let r = self.run(&mp(R::Inst("g.at_eq".into(), vec![("P", plam), ("a", a.clone()), ("b", b.clone())]), vec![s(&eq), s(&fb)]), &[])?;
+        self.evp(&RP::Taut(vec![R::S(r)]), goal, &[])
+    }
+
     /// a label's claim (lab_all's) by evaluation
     fn lab_simp(&mut self, pk: &Term) -> Result<Seq, String> {
         let (w, y) = (self.var("sw"), self.var("sy"));
         let body = self.inst_alls(pk, &[w.clone(), y.clone()])?;
         let pf = self.evp(&RP::Simp(false, vec![], vec![], false), &body, &[])?;
         self.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
+    }
+
+    /// `x in int`: a signed word (g.sint_int), a number
+    pub(super) fn int_of(&mut self, x: &Term) -> Result<Seq, String> {
+        let goal = self.mk("in", vec![x.clone(), self.mk("int", vec![])]);
+        if let Some(a) = self.app(x, "sint", 2).map(|a| a.to_vec()) {
+            let r = self.run(&mp(R::Inst("g.sint_int".into(), vec![("n", a[0].clone()), ("a", a[1].clone())]), vec![simp0()]), &[])?;
+            return self.evp(&RP::Taut(vec![R::S(r)]), &goal, &[]);
+        }
+        if nat(x).is_some() {
+            return self.evp(&RP::Simp(false, vec![], vec![], false), &goal, &[]);
+        }
+        Err(format!("not known an integer: {}", self.print(x)))
     }
 
     fn head_is(&self, x: &Term, name: &str) -> bool {

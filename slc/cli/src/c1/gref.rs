@@ -518,19 +518,62 @@ impl<'e> Gen<'e> {
         }
         if let Some(x) = self.app(t, "and", 2).map(|x| x.to_vec()) {
             let pf = match self.decide(&x[0]) {
-                Some((false, pf)) => pf,
-                Some((true, _)) => return Ok(None),
-                None => match self.refute(&x[0])? {
-                    Some(pf) => pf,
-                    None => return Ok(None),
-                },
+                Some((false, pf)) => Some(pf),
+                Some((true, _)) => None,
+                None => self.refute(&x[0])?,
             };
-            return self.run(&mp(R::Inst("g.nand".into(), vec![("p", x[0].clone()), ("a", x[1].clone())]), vec![s(&pf)]), &[]).map(Some);
+            if let Some(pf) = pf {
+                return self.run(&mp(R::Inst("g.nand".into(), vec![("p", x[0].clone()), ("a", x[1].clone())]), vec![s(&pf)]), &[]).map(Some);
+            }
+            // (else its second part: g.nand_r)
+            let Some(pf) = self.refute(&x[1])? else { return Ok(None) };
+            return self.run(&mp(R::Inst("g.nand_r".into(), vec![("p", x[0].clone()), ("a", x[1].clone())]), vec![s(&pf)]), &[]).map(Some);
         }
-        Ok(match self.decide(t) {
-            Some((false, pf)) => Some(pf),
-            _ => None,
-        })
+        // (`ex x. A(x) && e = x`: A(e), g.ex_eq_n)
+        if let Some(b) = self.app(t, "ex", 1).map(|b| b[0].clone()) {
+            if let Some(c) = self.app(&b, "and", 2).map(|c| c.to_vec()) {
+                if let Some(e) = self.app(&c[1], "eq", 2).map(|e| e.to_vec()) {
+                    if matches!(e[1].node(), Node::BVar(0)) && e[0].loose_depth(&self.env.binders_fn()) == 0 {
+                        let ae = c[0].instantiate_params(std::slice::from_ref(&e[0]), &self.env.binders_fn());
+                        let Some(pf) = self.refute(&ae)? else { return Ok(None) };
+                        return self.run(&mp(R::Inst("g.ex_eq_n".into(), vec![("A", c[0].clone()), ("e", e[0].clone())]), vec![s(&pf)]), &[]).map(Some);
+                    }
+                }
+            }
+        }
+        // (an operation's sequence: each way on refuted, g.bind_nk)
+        if let Some(x) = self.app(t, "bind_rel", 5).map(|x| x.to_vec()) {
+            let mut pfs = Vec::new();
+            for (i, n) in [(2usize, 2usize), (3, 2), (4, 1)] {
+                let vs: Vec<Term> = (0..n).map(|j| self.var(&format!("bn{j}"))).collect();
+                let body = x[i].instantiate_params(&vs, &self.env.binders_fn());
+                let Some(pf) = self.refute(&body)? else { return Ok(None) };
+                pfs.push(self.close(pf, &[], &vs.iter().map(Self::var_id).collect::<Vec<_>>())?);
+            }
+            let r = mp(R::Inst("g.bind_nk".into(), vec![("p", x[0].clone()), ("s", x[1].clone()), ("k", x[2].clone()), ("x", x[3].clone()), ("d", x[4].clone())]), pfs.iter().map(s).collect());
+            return self.run(&r, &[]).map(Some);
+        }
+        // (a let: its body at the value)
+        if let Some(x) = self.app(t, "letin", 2).map(|x| x.to_vec()) {
+            let body = x[1].instantiate_params(std::slice::from_ref(&x[0]), &self.env.binders_fn());
+            let Some(pf) = self.refute(&body)? else { return Ok(None) };
+            let goal = self.mk("not", vec![t.clone()]);
+            return self.evp(&RP::Defs(Box::new(RP::By(R::S(pf))), vec!["letin".into()]), &goal, &[]).map(Some);
+        }
+        if let Some((false, pf)) = self.decide(t) {
+            return Ok(Some(pf));
+        }
+        // (an equation of constructed outcomes and pairs: by their tags)
+        if let Some(e) = self.app(t, "eq", 2).map(|e| e.to_vec()) {
+            let ctor = |g: &Self, x: &Term| ["ok", "exc", "pair"].iter().any(|c| g.app(x, c, 2).is_some()) || g.app(x, "diverge", 1).is_some();
+            if ctor(self, &e[0]) && ctor(self, &e[1]) {
+                let goal = self.mk("not", vec![t.clone()]);
+                if let Ok(pf) = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec!["ok".into(), "exc".into(), "diverge".into(), "tag".into()]), &goal, &[]) {
+                    return Ok(Some(pf));
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// an innermost closed projection of a constructed tuple or outcome
@@ -754,11 +797,13 @@ impl<'e> Gen<'e> {
             let cv = self.var(&cn);
             let b1 = b0.instantiate_params(std::slice::from_ref(&cv), &self.env.binders_fn());
             let (hs, g0) = self.imps(&b1);
-            let _hd = self.assume(&hs[0])?;
+            let hd = self.assume(&hs[0])?;
             let x2 = self.app(&g0, "g.ref", 3).ok_or("g.ref_any's premise")?.to_vec();
             let qj = self.new_q(x2[1].clone());
             let saved = self.w.clone();
+            self.gtyped.push((cv.clone(), hd));
             let r = self.walk(&x2[0], qj, &x2[2]);
+            self.gtyped.pop();
             self.w = saved;
             let p1 = self.close(r?, &[hs[0].clone()], &[Self::var_id(&cv)])?;
             return self.run(&mp(rr, vec![t(w), s(&ne), s(&p1)]), &[]);
@@ -788,6 +833,43 @@ impl<'e> Gen<'e> {
                     None
                 };
                 if way.is_none() {
+                    // (the structured side's condition the CFG's negated with
+                    // its order the other way round, `int_lt(b, a)` for
+                    // `!int_le(a, b)`: written so, tr.qe_eq)
+                    let flip = |g: &Self, c: &Term| -> Option<Term> {
+                        let c = g.expand(c);
+                        if let Some(x) = g.app(&c, "int_le", 2) {
+                            return Some(g.mk("int_lt", vec![x[1].clone(), x[0].clone()]));
+                        }
+                        g.app(&c, "int_lt", 2).map(|x| g.mk("int_le", vec![x[1].clone(), x[0].clone()]))
+                    };
+                    let fl = flip(self, &cl);
+                    self.trace(|| format!("ref: if flipped: {} / {}", fl.as_ref().map_or("-".into(), |x| self.print(&self.canon(x))), self.print(&cu0)));
+                    if fl.is_some_and(|fc| self.canon(&fc) == cu0) {
+                        // (cu2 = int_lt(b, a): `!int_le(a, b)`, g.lt_flip; or
+                        // int_le(b, a): `!int_lt(a, b)`, g.le_flip)
+                        let cx = self.expand(&cu2);
+                        let (lemma, other) = if self.app(&cx, "int_lt", 2).is_some() { ("g.lt_flip", "int_le") } else { ("g.le_flip", "int_lt") };
+                        let ab = self.app(&cx, if lemma == "g.lt_flip" { "int_lt" } else { "int_le" }, 2).ok_or("a flipped condition")?.to_vec();
+                        let (a, bb0) = (ab[1].clone(), ab[0].clone());
+                        let e2 = self.mk("not", vec![self.mk(other, vec![a.clone(), bb0.clone()])]);
+                        let eq = (|| -> Result<Seq, String> {
+                            let (ia, ib) = (self.int_of(&a)?, self.int_of(&bb0)?);
+                            let e = self.run(&mp(R::Inst(lemma.into(), vec![("a", a.clone()), ("b", bb0.clone())]), vec![s(&ia), s(&ib)]), &[])?;
+                            let eq_t = self.mk("eq", vec![cu2.clone(), e2.clone()]);
+                            self.evp(&RP::Taut(vec![R::S(e)]), &eq_t, &[])
+                        })();
+                        if let Err(e) = &eq {
+                            self.trace(|| format!("ref: if flipped: {}", e));
+                        }
+                        if let Ok(eq) = eq {
+                            let bb = self.abstract_(&ub, &cu2, 0);
+                            let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", bb), ("e", cu2.clone()), ("e2", e2)])?;
+                            let rest = self.walk(lo, j, w)?;
+                            let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(mp(inst, vec![s(&eq), t(w)]))]);
+                            return self.run(&rr, &[]);
+                        }
+                    }
                     self.trace(|| format!("ref: if differs: low {} / high {}", self.print(&self.expand(&cl)), self.print(&self.expand(&cu2))));
                 }
                 if let Some((lemma, b1, b2)) = way {
@@ -1183,6 +1265,11 @@ impl<'e> Gen<'e> {
 
     /// a point's shape as a function of y: its locals' tuple
     fn shape_t(&self, p: &GPoint, y: &Term, m: usize) -> Term {
+        // (with loops, every local free: the locals themselves -- the point
+        // every state of its label, as a head's or exit's claims are)
+        if p.shape.iter().all(|s| *s == Sh::Free) && self.gref.as_ref().and_then(|g| g.cut.as_ref()).is_some_and(|c| c.nmode) {
+            return y.clone();
+        }
         let comps: Vec<Term> = (0..m)
             .map(|j| match &p.shape[j] {
                 Sh::Free => self.cfg_proj(y, j, m),
@@ -2027,6 +2114,18 @@ impl<'e> Gen<'e> {
         let Some(o) = self.app(lo, "or", 2).map(|o| o.to_vec()) else { return Ok(None) };
         let Some(l) = self.app(&o[0], "and", 2).map(|l| l.to_vec()) else { return Ok(None) };
         let Some(pc) = self.lam(&l[0], &["o"], &[]) else { return Ok(None) };
+        // (`(p && a(o)) || (!p && r(o))`, p decided: a stop's J -- the head's
+        // mark or the exit's)
+        if let Some(r2) = self.app(&o[1], "and", 2).map(|r| r.to_vec()) {
+            if self.app(&r2[0], "not", 1).is_some_and(|n| n[0] == l[0]) {
+                if let Some((v, pf)) = self.decide(&pc) {
+                    let al = self.lam(&l[1], &["o"], &["o"]).ok_or("a disjunct")?;
+                    let rl = self.lam(&r2[1], &["o"], &["o"]).ok_or("a disjunct")?;
+                    let (lemma, pf) = if v { ("g.low_ory", pf) } else { ("g.low_orn2", pf) };
+                    return self.low_by(mp(R::Inst(lemma.into(), vec![("p", pc), ("a", al), ("r", rl)]), vec![s(&pf)])).map(Some);
+                }
+            }
+        }
         let Some((false, pf)) = self.decide(&pc) else { return Ok(None) };
         let al = self.lam(&l[1], &["o"], &["o"]).ok_or("a disjunct")?;
         let rl = self.lam(&o[1], &["o"], &["o"]).ok_or("a disjunct")?;

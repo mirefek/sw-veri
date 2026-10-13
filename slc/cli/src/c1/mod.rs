@@ -337,6 +337,9 @@ struct Gen<'e> {
     raw_lets: bool,
     /// callees' refinements found (CFG layer's, structured layer's)
     grefs: std::collections::HashMap<(String, String), Seq>,
+    /// the refinement walk's choices in scope, with their domains' facts
+    /// (`x in S`, assumed): a loop's start state in univ(1)
+    gtyped: Vec<(Term, Seq)>,
 }
 
 /// A loop of the spec met at a machine address (its head): the claim there,

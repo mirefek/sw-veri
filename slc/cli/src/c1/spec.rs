@@ -271,6 +271,68 @@ impl<'e> Gen<'e> {
         r
     }
 
+    /// an equation of two constructed outcomes decided: the same term, other
+    /// constructors (ok, exc, diverge), raises of other literal labels
+    pub(super) fn ctor_eq(&self, a: &Term, b: &Term) -> Option<bool> {
+        if a == b {
+            return Some(true);
+        }
+        let ctor = |t: &Term| ["ok", "exc", "diverge"].into_iter().find(|c| self.app(t, c, if *c == "diverge" { 1 } else { 2 }).is_some());
+        let (ca, cb) = (ctor(a)?, ctor(b)?);
+        if ca != cb {
+            return Some(false);
+        }
+        if ca == "exc" {
+            let lab = |t: &Term| self.app(t, "exc", 2).and_then(|x| self.app(&x[1], "pair", 2).map(|p| p[0].clone())).filter(|l| matches!(l.node(), Node::Bytes(_)));
+            if let (Some(la), Some(lb)) = (lab(a), lab(b)) {
+                if la != lb {
+                    return Some(false);
+                }
+            }
+        }
+        None
+    }
+
+    /// an equation of constructed outcomes in the program's body t (of its
+    /// world x0 alone, t at `depth` binders within the body) false by
+    /// g.exc_ne_ok, g.ok_ne_exc, g.exc_raise_brk or g.exc_ret_brk: it
+    /// (at the body), the lemma
+    fn ctor_false(&self, t: &Term, depth: u32) -> Option<(Term, &'static str)> {
+        if let Some(e) = self.app(t, "eq", 2) {
+            if self.ctor_eq(&e[0], &e[1]) == Some(false) {
+                let lab = |x: &Term| self.app(x, "exc", 2).and_then(|y| self.app(&y[1], "pair", 2).map(|p| p[0].clone()));
+                let lemma = match (self.app(&e[0], "exc", 2).is_some(), self.app(&e[1], "exc", 2).is_some()) {
+                    _ if self.app(&e[0], "diverge", 1).is_some() && self.app(&e[1], "ok", 2).is_some() => Some("g.div_ne_ok"),
+                    _ if self.app(&e[0], "diverge", 1).is_some() && self.app(&e[1], "exc", 2).is_some() => Some("g.div_ne_exc"),
+                    (true, false) if self.app(&e[1], "ok", 2).is_some() => Some("g.exc_ne_ok"),
+                    (false, true) if self.app(&e[0], "ok", 2).is_some() => Some("g.ok_ne_exc"),
+                    (true, true) => match (lab(&e[0]), lab(&e[1])) {
+                        (Some(a), Some(b)) if matches!(b.node(), Node::Bytes(x) if &x[..] == b"brk") => match a.node() {
+                            Node::Bytes(x) if &x[..] == b"raise" => Some("g.exc_raise_brk"),
+                            Node::Bytes(x) if &x[..] == b"ret" => Some("g.exc_ret_brk"),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let lifted = self.remap(t, 0, &|j| (j == depth + 1).then_some(1));
+                if let (Some(l), Some(r)) = (lemma, lifted) {
+                    return Some((r, l));
+                }
+            }
+        }
+        if let Node::App(s, a) = t.node() {
+            let bs = self.env.syms[*s as usize].binders.clone();
+            for (x, k) in a.iter().zip(bs) {
+                if let Some(r) = self.ctor_false(x, depth + k) {
+                    return Some(r);
+                }
+            }
+        }
+        None
+    }
+
     fn redex(&self, t: &Term, depth: u32) -> Option<(&'static str, Term, Term, Term)> {
         let _p = super::prof::g("redex");
         if self.no_redex.borrow().contains(&(t.clone(), depth)) {
@@ -1156,6 +1218,34 @@ impl<'e> Gen<'e> {
                     return Ok(Some(Red::Q(j, mp(inst, vec![s(&pf), t(&w)]))));
                 }
             }
+        }
+        // an equation of constructed outcomes false by their constructors
+        // (or a raise's label) at every world: false (g.qe_false)
+        if let Some((r, lemma)) = self.ctor_false(&body, 0) {
+            let b = self.abstract_(&body, &r, 0);
+            let el = self.lam(&r, &["x0", "x1"], &["x0"]).ok_or("redex")?;
+            let xv = self.var("cx");
+            let ex = el.instantiate_params(std::slice::from_ref(&xv), &self.env.binders_fn());
+            let e = self.app(&ex, "eq", 2).ok_or("redex")?.to_vec();
+            let pb = self.app(&e[1], "exc", 2).or_else(|| self.app(&e[1], "ok", 2)).ok_or("redex")?.to_vec();
+            let pa = match self.app(&e[0], "diverge", 1) {
+                Some(d) => vec![d[0].clone()],
+                None => self.app(&e[0], "exc", 2).or_else(|| self.app(&e[0], "ok", 2)).ok_or("redex")?.to_vec(),
+            };
+            let binds: Vec<(&'static str, Term)> = if lemma.starts_with("g.div_") {
+                vec![("t", pa[0].clone()), ("c", pb[0].clone()), ("d", pb[1].clone())]
+            } else if lemma == "g.exc_ne_ok" || lemma == "g.ok_ne_exc" {
+                vec![("a", pa[0].clone()), ("b", pa[1].clone()), ("c", pb[0].clone()), ("d", pb[1].clone())]
+            } else {
+                let (va, vb) = (self.app(&pa[1], "pair", 2).ok_or("redex")?[1].clone(), self.app(&pb[1], "pair", 2).ok_or("redex")?[1].clone());
+                vec![("a", pa[0].clone()), ("b", pb[0].clone()), ("x", va), ("y", vb)]
+            };
+            let one = self.run(&R::Inst(lemma.into(), binds), &[])?;
+            let goal = self.mk("eq", vec![ex.clone(), self.mk("false", vec![])]);
+            let one = self.evp(&RP::Taut(vec![R::S(one)]), &goal, &[])?;
+            let allf = self.close(one, &[], &[Self::var_id(&xv)])?;
+            let (j, inst) = self.by(qi, "g.qe_false", &[("b", b), ("e", el)])?;
+            return Ok(Some(Red::Q(j, mp(inst, vec![s(&allf), t(&w)]))));
         }
         // a projection of a constructed outcome
         if let Some((lemma, r, st, vv)) = self.redex(&body, 0) {
