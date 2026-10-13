@@ -341,6 +341,23 @@ item is a short summary of finished work; details are in the files named.
   hypotheses discharged). All 22 in ~75 s (`__malloc_alloc_meta` 45 s,
   from 652 s at first). The generator reads its CFG form back and
   structures it the same (`SLC_STRUCT_CHECK=1`).
+- **... with loops, the infinite runs' traces matched** (`g.cut_loops`,
+  `proofs/gimple_loop.core`; `slc/cli/src/c1/gref/gloop.rs`): a loop a
+  node of the structured form. The loop heads and exits cut points (no
+  cut point inside a loop but its head); a rank falling at every step but
+  a back edge; each trip from a head walked against the structured loop's
+  body (the stop's outcome: the head again, a break, or the rest's); each
+  exit's claim the loop's rest after a break. An infinite run is the
+  structured loop's infinite run with the same trace: the records
+  (`os.events`) grow along it (`g.tr_le`, `g.limit_up`) -- each step by
+  the body's effect, `tr.seff` from the C1 bookkeeping's lemmas, callees
+  by their `tr.callee_io` (premises of the `refines` theorem) -- or a step
+  is undefined, and undefined behaviour diverges with any trace
+  (`tr.undef`: every exception and divergence, in `tr.eff`, `tr.seff`,
+  `tr.may_raise`), so the run is a finite one (`g.inf_fin`). States in
+  univ(1) by their parts (the operations' runs, words' widths).
+  step_seq, activate_group (a call in its loop) and try_avail refined
+  (< 1 s, 1 s, 110 s).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

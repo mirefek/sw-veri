@@ -17,11 +17,13 @@ form, the structured form's C2: composed per function.
    ~75 s; `__malloc_alloc_meta` 45 s). Next:
    - the structured form generated and checked in one run (`slc gimple`
      running the refinement), and `refines` again in the checked chain;
-   - the loops (step_seq, activate_group, try_avail, ...): loop heads cut
-     points, the CFG's back edges by `while_rel` unfolding on the
-     structured side, the divergence theorem by coinduction at the heads
-     (an infinite run of the CFG a diverging run of the structured loops,
-     the same trace);
+   - the loop functions (step_seq, activate_group, try_avail refined,
+     `g.cut_loops`): their `refines` lines and compositions in
+     proofs/mallocng_cfg.core (activate_group's with a_cas's
+     `tr.callee_io`); try_avail's 110 s (its labels' and points' walks);
+     several loops in one function (H, bs, ks per head), nested loops, a
+     head reached at two structured loops, a callee refined inside a walk
+     with callees of its own in loops -- for alloc_group;
    - the cut labels on the label graph differ from the generator's where
      returning tails share a block (lite_malloc's `traverses_stack_p`: an
      extra cut point, harmless); the shared tails visible to the checker
