@@ -418,7 +418,9 @@ item is a short summary of finished work; details are in the files named.
   - get_slot_index; get_meta (its checks the precondition, a_crash never
     reached, for any a_crash; the offset 16- or 32-bit as one value, then
     the class and mapping cases: eight paths, each one `step`;
-    `gmtc.composed`) (proofs/mallocng_slots.core); is_bouncing and
+    `gmtc.composed`); __malloc_allzerop (no class, or a stride below the
+    class's; get_meta's checks its precondition, get_stride's following
+    from them; `aztc.composed`) (proofs/mallocng_slots.core); is_bouncing and
     decay_bounces (a size class's bounce counter in the malloc context),
     step_seq (its sequence byte; at 255 the first C2 of a loop, by
     `while_var`: invariant the first i unmap sequence bytes zeroed, variant

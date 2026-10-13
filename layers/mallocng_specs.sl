@@ -482,6 +482,25 @@ fn get_meta_spec_fun(ctx: bits[64], sct: bits[64]) -> CFun2[World] = (args: Args
   return (w, any bits[64])
 }
 
+// __malloc_allzerop(p): whether p's slot is known zero-filled (calloc then
+// skips zeroing it): its group without a size class (63: mapped on its
+// own), or its stride below its class's (a group of one slot mapped on its
+// own). get_meta's checks; with them get_stride's precondition holds.
+pred allzero(vm: Vm, m: Addr) =
+  48 <= mword(vm, m) / 64 % 64 || stride_w(vm, m) < UNIT * size_classes[mword(vm, m) / 64 % 64]
+
+proc[World] allzerop_spec(ctx: bits[64], sct: bits[64], p: bits[64]) -> bits[32] {
+  require get_meta_pre(vm, objs, fs_base, ctx, sct, p)
+  either { overflow() } or { return if allzero(vm, gm_meta(vm, p)) { 1 } else { 0 } }
+}
+
+fn allzerop_spec_fun(ctx: bits[64], sct: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = allzerop_spec(ctx, sct, bits[64](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
 ///////////////////////////////////////////////////////////////////////
 //  The malloc context's counters (struct malloc_context at ctx: the
 //  classes' unmap sequence bytes at ctx + 848, their bounce counters at
