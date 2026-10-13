@@ -154,7 +154,7 @@ fn c1_engine_checks() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/gimple_cut.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -260,7 +260,7 @@ fn c1_cfg_engine_checks() {
     files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
     files.push(steps.clone().into());
     files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
+        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/gimple_cut.core", "proofs/translate_bitfield.core", "proofs/translate_block.core"]
             .iter()
             .map(|f| f.into()),
     );
@@ -288,7 +288,8 @@ fn c1_cfg_engine_checks() {
     let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 214 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 27 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 4 definitions, 79 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 4 definitions, 79 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 3 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text, &cfg_sl] {
         let _ = std::fs::remove_file(f);

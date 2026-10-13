@@ -1,0 +1,249 @@
+// The CFG ⊑ its structured form by cut points (docs/overview.md): the
+// CFG's loop (`while_rel` over its states -- a world, a label, the
+// locals), related to structured programs at its cut states (the
+// structuring's joins and loop heads: `inv`), each cut state's segment --
+// one block, then the blocks after it up to the next cut state or the
+// loop's end -- proven against its program (the walk, in the checker:
+// slc/cli/src/c1/gref.rs); the claim at a cut state reached the hypothesis
+// `all q2. inv(l2, q2) -> .. runs(q2, ..)`.
+//
+// A segment's run: the CFG's loop with its body stopped at a cut state, its
+// outcome then `pair(3, l)` (a tag of its own: ok, exc, diverge 0, 1, 2 --
+// the loop's rest decides it out).
+//
+// Loop-free (`g.cut_acyclic`): a rank each block lowers; every run finite.
+// Check after proofs/gimple_cfg.core.
+
+// (the cut's outcome: not ok)
+theorem g.cut_not_ok(x): !is_ok(pair(3, x))
+proof
+  have h: is_ok(pair(3, x)) -> false proof
+    assume a
+    obtain s v, e from expand(a, is_ok)
+    show by simp(expand(e, ok, tag))
+  qed
+  show by taut(h)
+qed
+
+// (a finite run unrolled: its outcome the same -- `while_unroll` exact)
+theorem g.while_fin_unroll(l0, l. c, l o. b, r):
+  while_fin_rel(l0, l. c(l), l o. b(l, o), r) ->
+  (!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r)) ||
+  (c(l0) && (ex l1. b(l0, ok(l1, empty)) && while_fin_rel(l1, l. c(l), l o. b(l, o), r)))
+proof
+  assume hw
+  have s0 := succ_zero
+  have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+  obtain n f, hn hfun hdom hf0 hst hend from expand(hw, while_fin_rel)
+  // no iteration: the loop stops at l0, or its body leaves
+  have z: n = 0 -> (!c(l0) && r = ok(l0, empty)) || (c(l0) && b(l0, r) && !is_ok(r)) proof
+    assume e0
+    have ee: n = empty := rewrite(lit_zero, e0)
+    have fn: app(f, n) = l0 := subst({y. app(f, y) = l0}, sym(ee), hf0)
+    show := rewrite(fn, hend)
+  qed
+  // an iteration to l1 = f(1), then the run from there: f shifted
+  have s: !(n = 0) -> c(l0) && (ex l1. b(l0, ok(l1, empty)) && while_fin_rel(l1, l. c(l), l o. b(l, o), r)) proof
+    assume nz
+    have m0: 0 in n by arith(hn, nz)
+    have st0 := mp(all_elim(hst, {empty}), rewrite(lit_zero, m0))
+    have st0l: c(l0) && b(l0, ok(app(f, succ(empty)), empty)) := rewrite(hf0, st0)
+    let M := int_sub(n, 1)
+    let F := fn_build(succ(M), i. app(f, int_add(i, 1)))
+    have hM: M in omega by arith(hn, nz)
+    have hM1: int_add(M, 1) in omega by arith(hM)
+    have eM: succ(M) = int_add(M, 1) by arith(hM)
+    have ff := fn_build_fun[d := succ(M), v := i. app(f, int_add(i, 1))]
+    have fd := fn_build_dom[d := succ(M), v := i. app(f, int_add(i, 1))]
+    have fs: all j. j in omega -> int_le(j, M) -> app(F, j) = app(f, int_add(j, 1)) proof
+      fix j
+      assume j1 j2
+      have m: j in int_add(M, 1) by arith(hM1, j1, j2, hM)
+      show := mp(app_fn_build[d := succ(M), v := i. app(f, int_add(i, 1)), a := j], rewrite(sym(eM), m))
+    qed
+    // F(0) = f(1)
+    have z0: int_le(0, M) by arith(hM)
+    have fz := mp(mp(all_elim(fs, {0}), zo), z0)
+    have fz2 := subst({y. app(F, y) = app(f, int_add(0, 1))}, lit_zero, fz)
+    have f0: app(F, empty) = app(f, succ(empty)) := subst({y. app(F, empty) = app(f, y)}, sym(s0), fz2)
+    // F's iterations: f's from the second
+    have fst1: all i. i in M -> c(app(F, i)) && b(app(F, i), ok(app(F, succ(i)), empty)) proof
+      fix i
+      assume hi
+      have io := mp(mp(nat_elem[k := M, i := i], hM), hi)
+      have i1o: int_add(i, 1) in omega by arith(io)
+      have il: int_le(i, M) by arith(io, hM, hi)
+      have i1l: int_le(int_add(i, 1), M) by arith(io, hM, hi)
+      have i1n: int_add(i, 1) in n by arith(i1o, hn, io, hi, hM, nz)
+      have st := mp(all_elim(hst, {int_add(i, 1)}), i1n)
+      have e2: succ(int_add(i, 1)) = int_add(int_add(i, 1), 1) by arith(i1o)
+      have st2 := rewrite(e2, st)
+      have fi := mp(mp(all_elim(fs, {i}), io), il)
+      have fi1 := mp(mp(all_elim(fs, {int_add(i, 1)}), i1o), i1l)
+      have es: succ(i) = int_add(i, 1) by arith(io)
+      have fsi: app(F, succ(i)) = app(f, int_add(int_add(i, 1), 1)) := subst({y. app(F, y) = app(f, int_add(int_add(i, 1), 1))}, sym(es), fi1)
+      have st3 := rewrite(sym(fi), st2)
+      show := rewrite(sym(fsi), st3)
+    qed
+    // its end: F(M) = f(n)
+    have mm: int_le(M, M) by arith(hM)
+    have fM := mp(mp(all_elim(fs, {M}), hM), mm)
+    have eMn: int_add(M, 1) = n by arith(hn, nz)
+    have fMn: app(F, M) = app(f, n) := rewrite(eMn, fM)
+    have hend2: (!c(app(F, M)) && r = ok(app(F, M), empty)) || (c(app(F, M)) && b(app(F, M), r) && !is_ok(r)) := rewrite(sym(fMn), hend)
+    have e1: ex g. M in omega && is_fun(g) && dom(g) = succ(M) && app(g, empty) = app(f, succ(empty)) &&
+        (all i. i in M -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+        ((!c(app(g, M)) && r = ok(app(g, M), empty)) || (c(app(g, M)) && b(app(g, M), r) && !is_ok(r)))
+      by ex_intro({F}, taut(hM, ff, fd, f0, fst1, hend2))
+    have e2: ex m g. m in omega && is_fun(g) && dom(g) = succ(m) && app(g, empty) = app(f, succ(empty)) &&
+        (all i. i in m -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+        ((!c(app(g, m)) && r = ok(app(g, m), empty)) || (c(app(g, m)) && b(app(g, m), r) && !is_ok(r)))
+      by ex_intro({M}, e1)
+    have w1: while_fin_rel(app(f, succ(empty)), l. c(l), l o. b(l, o), r) by defs(taut(e2), while_fin_rel)
+    have el: ex l1. b(l0, ok(l1, empty)) && while_fin_rel(l1, l. c(l), l o. b(l, o), r)
+      by ex_intro({app(f, succ(empty))}, taut(st0l, w1))
+    show by taut(st0l, el)
+  qed
+  show by taut(z, s)
+qed
+
+theorem g.cut_acyclic(l o. b, l. tr, r o. k, l. pt, l. v, l q. inv, l. m):
+  (all l l2. v(l) -> b(l, ok(l2, empty)) -> v(l2) && int_lt(m(l2), m(l))) ->
+  (all l. v(l) -> m(l) in omega) ->
+  (all l q. inv(l, q) -> v(l)) ->
+  (all l q. inv(l, q) -> g.ref(o. ex x8. b(l, x8) &&
+     ((ex l2. x8 = ok(l2, empty) && (ex x9. while_fin_rel(l2, x. true, x y. (pt(x) && y = pair(3, x)) || (!pt(x) && b(x, y)), x9) &&
+        ((fst(x9) = 3 && (all q2. inv(snd(x9), q2) -> pair(fst(snd(x9)), o) in univ(1) -> runs(q2, fst(snd(x9)), o))) || k(x9, o)))) ||
+      (!is_ok(x8) && k(x8, o))), q, fst(l))) ->
+  all l q r o. inv(l, q) -> while_rel(l, x. true, x y. b(x, y), x. tr(x), r) -> k(r, o) -> pair(fst(l), o) in univ(1) -> runs(q, fst(l), o)
+proof
+  assume hd hm hv hs
+  fix l q r o
+  assume hi hw hk hu
+  have vl := mp(all_elim(hv, {l}, {q}), hi)
+  // (no infinite run: the rank)
+  have ps: all x x2. v(x) -> true -> b(x, ok(x2, empty)) -> v(x2) proof
+    fix x x2
+    assume vx _ hb
+    show by taut(mp(all_elim(hd, {x}, {x2}), vx, hb))
+  qed
+  have pd: all x x2. v(x) -> true -> b(x, ok(x2, empty)) -> int_lt(m(x2), m(x)) proof
+    fix x x2
+    assume vx _ hb
+    show by taut(mp(all_elim(hd, {x}, {x2}), vx, hb))
+  qed
+  have ninf := mp(while_no_inf[l0 := l, c := x. true, b := x y. b(x, y), tr := x. tr(x), r := r, p := x. v(x), m := x. m(x)], vl, ps, hm, pd)
+  have fin: ex n f. n in omega && is_fun(f) && dom(f) = succ(n) && app(f, empty) = l &&
+      (all i. i in n -> true && b(app(f, i), ok(app(f, succ(i)), empty))) &&
+      ((!true && r = ok(app(f, n), empty)) || (true && b(app(f, n), r) && !is_ok(r))) by taut(expand(hw, while_rel), ninf)
+  obtain n f, hn hfun hdom hf0 hst hend from fin
+  // the segment's body, the claims at cut states, the segment's rest
+  let B(x, y) := (pt(x) && y = pair(3, x)) || (!pt(x) && b(x, y))
+  let J(x) := all q2. inv(x, q2) -> pair(fst(x), o) in univ(1) -> runs(q2, fst(x), o)
+  let K(x9) := (fst(x9) = 3 && J(snd(x9))) || k(x9, o)
+  let H(x) := ex x9. while_fin_rel(x, l. true, l y. B(l, y), x9) && K(x9)
+  // (a state's claim from its segment: its block on to x2, the segment's
+  // run from x2)
+  have jseg: all x x2. b(x, ok(x2, empty)) -> H(x2) -> J(x) proof
+    fix x x2
+    assume hb hh
+    fix q2
+    assume i2 u2
+    have e2: ex l2. ok(x2, empty) = ok(l2, empty) && (ex x9. while_fin_rel(l2, x. true, x y. B(x, y), x9) && K(x9)) by ex_intro({x2}, taut(refl({ok(x2, empty)}), hh))
+    have l1: ex x8. b(x, x8) && ((ex l2. x8 = ok(l2, empty) && (ex x9. while_fin_rel(l2, x. true, x y. B(x, y), x9) && K(x9))) || (!is_ok(x8) && k(x8, o)))
+      by ex_intro({ok(x2, empty)}, taut(hb, e2))
+    show := mp(all_elim(expand(mp(all_elim(hs, {x}, {q2}), i2), g.ref), {o}), l1, u2)
+  qed
+  // (... and the loop's end)
+  have jend: all x. b(x, r) -> J(x) proof
+    fix x
+    assume hb
+    fix q2
+    assume i2 u2
+    have nr: !is_ok(r) by taut(hend)
+    have l1: ex x8. b(x, x8) && ((ex l2. x8 = ok(l2, empty) && (ex x9. while_fin_rel(l2, x. true, x y. B(x, y), x9) && K(x9))) || (!is_ok(x8) && k(x8, o)))
+      by ex_intro({r}, taut(hb, nr, hk))
+    show := mp(all_elim(expand(mp(all_elim(hs, {x}, {q2}), i2), g.ref), {o}), l1, u2)
+  qed
+  // (a cut state: its segment's run stops at once, its claim)
+  have hcut: all x. pt(x) -> J(x) -> H(x) proof
+    fix x
+    assume p j
+    have nc := g.cut_not_ok[x := x]
+    have bx: B(x, pair(3, x)) by taut(p, refl({pair(3, x)}))
+    have w := mp(while_fin_one[l0 := x, c := l. true, b := l y. B(l, y), r := pair(3, x)], taut(bx, nc))
+    have f3: fst(pair(3, x)) = 3 by simp()
+    have s3: snd(pair(3, x)) = x by simp()
+    have kk: K(pair(3, x)) by taut(f3, rewrite(sym(s3), j))
+    show by ex_intro({pair(3, x)}, taut(w, kk))
+  qed
+  // from the last state back
+  have back: all j. j in omega -> int_le(j, n) -> H(app(f, int_sub(n, j))) proof
+    have base: int_le(0, n) -> H(app(f, int_sub(n, 0))) proof
+      assume _
+      have e: int_sub(n, 0) = n by arith(hn)
+      have hbn: b(app(f, n), r) by taut(hend)
+      have nr: !is_ok(r) by taut(hend)
+      have c1: pt(app(f, n)) -> H(app(f, n)) proof
+        assume p
+        show := mp(all_elim(hcut, {app(f, n)}), p, mp(all_elim(jend, {app(f, n)}), hbn))
+      qed
+      have c2: !pt(app(f, n)) -> H(app(f, n)) proof
+        assume np
+        have bx: B(app(f, n), r) by taut(np, hbn)
+        have w := mp(while_fin_one[l0 := app(f, n), c := l. true, b := l y. B(l, y), r := r], taut(bx, nr))
+        show by ex_intro({r}, taut(w, hk))
+      qed
+      have hn2: H(app(f, n)) by taut(c1, c2)
+      show := rewrite(sym(e), hn2)
+    qed
+    have step: all j. j in omega -> (int_le(j, n) -> H(app(f, int_sub(n, j)))) -> int_le(int_add(j, 1), n) -> H(app(f, int_sub(n, int_add(j, 1)))) proof
+      fix j
+      assume hj ih hle
+      let i := int_sub(n, int_add(j, 1))
+      have iom: i in omega by arith(hj, hn, hle)
+      have lt: i in n by arith(iom, hj, hn, hle)
+      have bi: b(app(f, i), ok(app(f, succ(i)), empty)) by taut(mp(all_elim(hst, {i}), lt))
+      have s1: succ(i) = int_add(i, 1) by arith(iom)
+      have es: succ(i) = int_sub(n, j) by arith(s1, hj, hn, hle)
+      have jle: int_le(j, n) by arith(hj, hn, hle)
+      have hs1 := rewrite(sym(es), mp(ih, jle))
+      have c1: pt(app(f, i)) -> H(app(f, i)) proof
+        assume p
+        show := mp(all_elim(hcut, {app(f, i)}), p, mp(all_elim(jseg, {app(f, i)}, {app(f, succ(i))}), bi, hs1))
+      qed
+      have c2: !pt(app(f, i)) -> H(app(f, i)) proof
+        assume np
+        obtain x9, w9 k9 from hs1
+        have bx: B(app(f, i), ok(app(f, succ(i)), empty)) by taut(np, bi)
+        have w := mp(while_step_fin[l0 := app(f, i), l1 := app(f, succ(i)), c := l. true, b := l y. B(l, y), r := x9], taut(bx), bx, w9)
+        show by ex_intro({x9}, taut(w, k9))
+      qed
+      show by taut(c1, c2)
+    qed
+    show by induct(base, step)
+  qed
+  // at l: its block, then the segment's run from the next state
+  have z: n = 0 -> J(l) proof
+    assume e0
+    have ee: n = empty := rewrite(lit_zero, e0)
+    have fn: app(f, n) = l := subst({y. app(f, y) = l}, sym(ee), hf0)
+    have hbn: b(app(f, n), r) by taut(hend)
+    have hbl: b(l, r) := rewrite(fn, hbn)
+    show := mp(all_elim(jend, {l}), hbl)
+  qed
+  have s: !(n = 0) -> J(l) proof
+    assume nz
+    have m0: 0 in n by arith(hn, nz)
+    have b0: b(app(f, empty), ok(app(f, succ(empty)), empty)) by taut(mp(all_elim(hst, {empty}), rewrite(lit_zero, m0)))
+    have b0l: b(l, ok(app(f, succ(empty)), empty)) := rewrite(hf0, b0)
+    let j1 := int_sub(n, 1)
+    have j1o: j1 in omega by arith(hn, nz)
+    have j1l: int_le(j1, n) by arith(hn, nz)
+    have h1 := mp(all_elim(back, {j1}), j1o, j1l)
+    have e1: int_sub(n, j1) = succ(empty) by arith(hn, nz, succ_zero)
+    show := mp(all_elim(jseg, {l}, {app(f, succ(empty))}), b0l, rewrite(e1, h1))
+  qed
+  have jl: J(l) by taut(z, s)
+  show := mp(all_elim(jl, {q}), hi, hu)
+qed

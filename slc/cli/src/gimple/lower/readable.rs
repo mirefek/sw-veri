@@ -81,6 +81,9 @@ struct Rx<'f> {
     out: Vec<String>,
     depth: usize,
     emitted: usize,
+    /// the statement written: its block's number, its index (names fresh
+    /// by place, the same in every form)
+    at: (u64, usize),
     /// writing a block as its procedure: a jump to block n the tail call
     /// `{0}__b{n}({1})` (`{2}`: no result)
     tail: Option<(String, String, bool)>,
@@ -206,6 +209,7 @@ impl<'a> Lower<'a> {
             out: Vec::new(),
             depth: 1,
             emitted: 0,
+            at: (0, 0),
             tail: None,
         };
         self.names(&mut rx)?;
@@ -273,6 +277,28 @@ impl<'a> Lower<'a> {
             writeln!(s, "{}", l).unwrap();
         }
         writeln!(s, "}}").unwrap();
+        // (SLC_STRUCT_CHECK=1: the structuring of the CFG form read back
+        // the same as of the blocks themselves)
+        if cfg && std::env::var("SLC_STRUCT_CHECK").is_ok_and(|v| v == "1") {
+            use crate::gimple::structure::{graph_of_cfg, render, structure};
+            let ga = self.graph(&mut rx, sh)?;
+            let (mut ta, mut tb) = (Vec::new(), Vec::new());
+            render(&ga, &structure(&ga)?, 1, &mut ta);
+            match graph_of_cfg(&s, &fname).and_then(|gb| structure(&gb).map(|t| (gb, t))) {
+                Ok((gb, t)) => {
+                    render(&gb, &t, 1, &mut tb);
+                    if ta != tb {
+                        let i = ta.iter().zip(tb.iter()).position(|(a, b)| a != b).unwrap_or(ta.len().min(tb.len()));
+                        eprintln!("structure check: {}: differs at line {}: {:?} / {:?}", fname, i, ta.get(i), tb.get(i));
+                        if let Ok(d) = std::env::var("SLC_STRUCT_DIR") {
+                            let _ = std::fs::write(format!("{}/{}.ir", d, fname), ta.join("\n"));
+                            let _ = std::fs::write(format!("{}/{}.cfg", d, fname), tb.join("\n"));
+                        }
+                    }
+                }
+                Err(e) => eprintln!("structure check: {}: {}", fname, e),
+            }
+        }
         // (the CFG's blocks as procedures, a jump a tail call -- the form
         // the structured form is proven from; loop-free functions without
         // stack objects, of a result in one word or none)
@@ -428,8 +454,12 @@ impl<'a> Lower<'a> {
     fn emit_tail(&mut self, rx: &mut Rx, sh: &mut Shared, b: usize) -> Result<(), String> {
         let mut b = b;
         for _ in 0..=rx.f.blocks.len() {
-            for st in rx.f.blocks[b].stmts.clone() {
+            // (the block's mark: one block, wherever written -- for the
+            // structuring of this form, crate::gimple::structure)
+            self.line(rx, format!("// <tail bb {}>", rx.f.blocks[b].num));
+            for (i, st) in rx.f.blocks[b].stmts.clone().into_iter().enumerate() {
                 if !matches!(st, S::Goto(_)) {
+                    rx.at = (rx.f.blocks[b].num, i);
                     self.rstmt(rx, sh, &st)?;
                 }
             }
@@ -583,10 +613,23 @@ impl<'a> Lower<'a> {
                 }
                 total &= self.total_stmt(rx, s);
                 rx.emitted += 1;
+                rx.at = (blk.num, i);
                 self.rstmt(rx, sh, s).map_err(|e| format!("block {}: {}: {:?}", blk.num, e, s))?;
             }
             let stmts = std::mem::take(&mut rx.out);
-            let edge = |g: &mut Self, rx: &mut Rx, sh: &mut Shared, to: usize| -> Result<Edge, String> { Ok(Edge { to, copies: g.phi_copies(rx, sh, b, to)? }) };
+            // (past forwarders, as the CFG form: each edge's copies)
+            let edge = |g: &mut Self, rx: &mut Rx, sh: &mut Shared, to: usize| -> Result<Edge, String> {
+                let (mut from, mut to, mut copies) = (b, to, Vec::new());
+                for _ in 0..rx.f.blocks.len() {
+                    copies.extend(g.phi_copies(rx, sh, from, to)?);
+                    if !g.forwarder(rx, to) {
+                        break;
+                    }
+                    from = to;
+                    to = rx.succ[to][0];
+                }
+                Ok(Edge { to, copies })
+            };
             let term = match blk.stmts.last() {
                 Some(S::Return(_)) => Jump::Return,
                 Some(S::If { op, a, b: c, .. }) => {
@@ -604,7 +647,7 @@ impl<'a> Lower<'a> {
             blocks.push(Block { num: blk.num, stmts, total, term });
         }
         (rx.out, rx.depth) = saved;
-        Ok(Graph { blocks, entry: 0 })
+        Ok(Graph { blocks, entry: self.past(rx, 0) })
     }
 
     /// Each block of the CFG as its procedure `F__bN`: the function's
@@ -705,6 +748,7 @@ impl<'a> Lower<'a> {
                 break;
             }
             rx.emitted += 1;
+            rx.at = (blk.num, i);
             self.rstmt(rx, sh, s).map_err(|e| format!("block {}: {}: {:?}", blk.num, e, s))?;
         }
         let go = |g: &mut Self, rx: &mut Rx, sh: &mut Shared, to: usize| -> Result<(), String> {
@@ -1076,8 +1120,7 @@ impl<'a> Lower<'a> {
                         if size <= 8 || ![1, 2, 4, 8].contains(&rest) {
                             return Err(format!("a struct result of {} bytes", size));
                         }
-                        rx.emitted += 1;
-                        let (w0, w1) = (format!("w{}_0", rx.emitted), format!("w{}_1", rx.emitted));
+                        let (w0, w1) = (format!("w{}_{}_0", rx.at.0, rx.at.1), format!("w{}_{}_1", rx.at.0, rx.at.1));
                         self.line(rx, format!("let ({}, {}) = {}{}, [{}])", w0, w1, c2, fname, av.join(", ")));
                         let (b, o) = self.raddr(rx, sh, m)?;
                         self.line(rx, format!("st64({}, {}, {})", b, lit(o, 64), w0));

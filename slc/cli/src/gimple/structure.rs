@@ -97,6 +97,158 @@ pub fn structure(g: &Graph) -> Result<Vec<Node>, String> {
     Ok(out)
 }
 
+/// The graph of the CFG form of procedure `name` (readable GIMPLE text,
+/// `slc gimple --readable --cfg`): its blocks by their `// <bb N>` lines,
+/// each its statements, then `bb := k` (a jump), a `return`, or an `if`
+/// whose ways are a jump (after the edge's copies); a returning tail written
+/// in place (`// <tail bb N>`, at each block on it) the blocks it is, one
+/// each however often written. A block's statements total: `let`s of
+/// operators and casts only (no call, load, shift or division -- as the
+/// generator's test on GIMPLE).
+pub fn graph_of_cfg(text: &str, name: &str) -> Result<Graph, String> {
+    let head = format!("proc[World] {}(", name);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|l| l.starts_with(&head)).ok_or_else(|| format!("no procedure `{}`", name))?;
+    let end = (start + 1..lines.len()).find(|&i| lines[i] == "}").ok_or("the procedure's end")?;
+    let body = &lines[start + 1..end];
+    let entry_num: u64 = body
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("var bb: nat = "))
+        .and_then(|v| v.parse().ok())
+        .ok_or("no `var bb`")?;
+    // (each block's lines: its own, at its indentation, and its ways')
+    struct Raw<'a> {
+        num: u64,
+        d: usize,
+        lines: Vec<&'a str>,
+    }
+    let mut raws: Vec<Raw> = Vec::new();
+    for (i, l) in body.iter().enumerate() {
+        let Some(n) = l.trim().strip_prefix("// <bb ").and_then(|r| r.strip_suffix('>')) else { continue };
+        let d = indent(l);
+        let mut ls = Vec::new();
+        for m in &body[i + 1..] {
+            if m.trim().is_empty() || indent(m) < d {
+                break;
+            }
+            ls.push(*m);
+        }
+        raws.push(Raw { num: n.parse().map_err(|_| format!("a block number `{}`", n))?, d, lines: ls });
+    }
+    let index: BTreeMap<u64, usize> = raws.iter().enumerate().map(|(i, r)| (r.num, i)).collect();
+    let target = |s: &str| -> Option<u64> { s.trim().strip_prefix("bb := ").and_then(|k| k.parse().ok()) };
+    let goto = |k: u64| -> Result<usize, String> { index.get(&k).copied().ok_or_else(|| format!("no block {}", k)) };
+    let mut tails = Tails { n: raws.len(), blocks: Vec::new(), at: BTreeMap::new() };
+    let mut blocks: Vec<Block> = Vec::new();
+    for r in &raws {
+        let ls = &r.lines;
+        let base: Vec<usize> = (0..ls.len()).filter(|&i| indent(ls[i]) == r.d).collect();
+        let last = *base.last().ok_or_else(|| format!("block {}: empty", r.num))?;
+        let (stmts, term) = if let Some(k) = target(ls[last]) {
+            (strip(&ls[..last], r.d), Jump::Goto(Edge { to: goto(k)?, copies: Vec::new() }))
+        } else if ls[last].trim() == "}" && base.len() >= 3 && ls[base[base.len() - 2]].trim() == "} else {" {
+            let (i_if, i_else) = (base[base.len() - 3], base[base.len() - 2]);
+            let c = ls[i_if].trim().strip_prefix("if ").and_then(|c| c.strip_suffix(" {")).ok_or_else(|| format!("block {}: its branch", r.num))?;
+            let mut way = |arm: &[&str]| -> Result<Edge, String> {
+                let d1 = r.d + 2;
+                match arm.last().and_then(|l| target(l)) {
+                    Some(k) => Ok(Edge { to: goto(k)?, copies: strip(&arm[..arm.len() - 1], d1) }),
+                    None => match tails.split(arm, d1)? {
+                        (copies, Some(t)) => Ok(Edge { to: t, copies }),
+                        _ => Err(format!("block {}: a way neither a jump nor a returning tail", r.num)),
+                    },
+                }
+            };
+            let yes = way(&ls[i_if + 1..i_else])?;
+            let no = way(&ls[i_else + 1..last])?;
+            (strip(&ls[..i_if], r.d), Jump::If { cond: Cond { text: c.to_string(), neg: negate_text(c)? }, yes, no })
+        } else {
+            match tails.split(ls, r.d)? {
+                (st, Some(t)) => (st, Jump::Goto(Edge { to: t, copies: Vec::new() })),
+                (st, None) => (st, Jump::Return),
+            }
+        };
+        let total = stmts.iter().all(|s| total_text(s));
+        blocks.push(Block { num: r.num, stmts, total, term });
+    }
+    blocks.extend(tails.blocks);
+    let entry = *index.get(&entry_num).ok_or("the first block")?;
+    Ok(Graph { blocks, entry })
+}
+
+fn indent(l: &str) -> usize {
+    l.len() - l.trim_start().len()
+}
+
+fn strip(ls: &[&str], d: usize) -> Vec<String> {
+    ls.iter().map(|l| l[d.min(indent(l))..].to_string()).collect()
+}
+
+/// The returning tails' blocks (after the n others), by their numbers
+struct Tails {
+    n: usize,
+    blocks: Vec<Block>,
+    at: BTreeMap<u64, usize>,
+}
+
+impl Tails {
+    /// lines at indentation d: those before a tail's mark, and the tail's
+    /// block (its lines up to the next mark, a jump there, or a return)
+    fn split(&mut self, ls: &[&str], d: usize) -> Result<(Vec<String>, Option<usize>), String> {
+        let mark = |l: &str| l.trim().strip_prefix("// <tail bb ").and_then(|r| r.strip_suffix('>')).and_then(|k| k.parse::<u64>().ok());
+        let Some(i) = ls.iter().position(|l| mark(l).is_some()) else { return Ok((strip(ls, d), None)) };
+        let num = mark(ls[i]).unwrap();
+        let (stmts, next) = self.split(&ls[i + 1..], d)?;
+        let term = match next {
+            Some(t) => Jump::Goto(Edge { to: t, copies: Vec::new() }),
+            None => Jump::Return,
+        };
+        let to = match self.at.get(&num) {
+            Some(&t) => {
+                if self.blocks[t - self.n].stmts != stmts {
+                    return Err(format!("the returning tail {} written two ways", num));
+                }
+                t
+            }
+            None => {
+                let t = self.n + self.blocks.len();
+                self.blocks.push(Block { num, stmts, total: false, term });
+                self.at.insert(num, t);
+                t
+            }
+        };
+        Ok((strip(&ls[..i], d), Some(to)))
+    }
+}
+
+/// A condition's negation, as the generator writes it (`a = b` / `a != b`,
+/// `a < b` / `b <= a`, signed `<s` / `<=s` alike)
+fn negate_text(c: &str) -> Result<String, String> {
+    for (op, neg, swap) in [(" != ", " = ", false), (" <=s ", " <s ", true), (" <s ", " <=s ", true), (" <= ", " < ", true), (" < ", " <= ", true), (" = ", " != ", false)] {
+        if let Some((a, b)) = c.split_once(op) {
+            return Ok(if swap { format!("{}{}{}", b, neg, a) } else { format!("{}{}{}", a, neg, b) });
+        }
+    }
+    Err(format!("a condition `{}`", c))
+}
+
+/// a statement total: a `let` of operators and casts only
+fn total_text(s: &str) -> bool {
+    let Some(v) = s.strip_prefix("let ").and_then(|r| r.split_once(" = ")).map(|(_, v)| v) else { return false };
+    // (a name followed by `(` a call -- but casts `bits[n](`, `zext[n](`,
+    // `sext[n](`; no shift, division)
+    if v.contains(">>") || v.contains("<<") || v.contains(" / ") || v.contains(" % ") {
+        return false;
+    }
+    let b = v.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        if c == b'(' && i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_') {
+            return false;
+        }
+    }
+    true
+}
+
 /// The tree's readable text, at indentation depth `depth`
 pub fn render(g: &Graph, nodes: &[Node], depth: usize, out: &mut Vec<String>) {
     let ind = |d: usize| "  ".repeat(d);
@@ -248,9 +400,12 @@ impl<'g> St<'g> {
                 let mut body = Vec::new();
                 self.emit(&mut body, b, None, &inner)?;
                 out.push(Node::Loop { head: b, body });
-                match exit {
-                    Some(x) => {
-                        b = x;
+                // (on at the exit -- as a jump there: the enclosing loop's
+                // next iteration, its `break`, ...)
+                let Some(x) = exit else { return Ok(()) };
+                match self.edge(out, &Edge { to: x, copies: Vec::new() }, ctx)? {
+                    Some(s) => {
+                        b = s;
                         continue;
                     }
                     None => return Ok(()),
@@ -428,6 +583,11 @@ impl<'g> St<'g> {
         if Some(e.to) == *exit {
             out.push(Node::Lines(vec!["break".into()]));
             return Ok(None);
+        }
+        // (an outer loop's next iteration: not written -- no labelled
+        // `continue`)
+        if ctx[..ctx.len() - 1].contains(&e.to) {
+            return Err("unstructured control flow (a jump to an outer loop's head)".into());
         }
         // another exit (a `return` from inside the loop): in place
         self.emit(out, e.to, None, &ctx[..ctx.len() - 1])?;
