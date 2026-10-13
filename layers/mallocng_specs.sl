@@ -430,6 +430,58 @@ fn get_slot_index_spec_fun() -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
+// get_meta(p): the meta of p's group. p's offset from the group's storage,
+// in units: the 16-bit word at p - 2, or the 32-bit one at p - 8 when the
+// byte at p - 4 is set; the group's header a unit before the storage, its
+// first word the meta.
+fn gm_off(vm: Vm, p: Addr) -> nat =
+  if bytes_at(vm, p - 4, 1) != 0 { bytes_at(vm, p - 8, 4) } else { bytes_at(vm, p - 2, 2) }
+fn gm_base(vm: Vm, p: Addr) -> nat = uint(p) - UNIT * gm_off(vm, p) - UNIT
+fn gm_meta(vm: Vm, p: Addr) -> bits[64] = rd64(vm, bits[64](gm_base(vm, p)))
+fn gm_idx(vm: Vm, p: Addr) -> nat = bytes_at(vm, p - 3, 1) % 32
+
+// malloc's checks there (a failed one: a_crash, undefined -- excluded
+// here): p 16-byte aligned, its 8 header bytes usable; a 32-bit offset
+// past 16 bits (the 16-bit one then 0), small enough for the code's
+// 32-bit product with a unit; the header within the address space, its
+// meta's mem word, mask words and bitfield word usable, the mem word the
+// header; p's index (get_slot_index's) within the group's last, its slot
+// neither available nor freed; the meta's page's first word (its meta
+// area's check) the context's secret (its first word); the offset within
+// slot idx for a size class (else the class 63), within the mapping when
+// there is one (maplen); the thread pointer sound for the call.
+pred get_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, sct: Addr, p: Addr) =
+  uint(p) % 16 = 0 && 16 <= uint(p) && usable(vm, objs, uint(p) - 8, 8, false) &&
+  (bytes_at(vm, p - 4, 1) != 0 -> bytes_at(vm, p - 2, 2) = 0 && 65535 < bytes_at(vm, p - 8, 4) && bytes_at(vm, p - 8, 4) < 2^27) &&
+  UNIT * gm_off(vm, p) + UNIT < uint(p) && usable(vm, objs, gm_base(vm, p), 8, false) &&
+  gm_meta(vm, p) != 0 && uint(gm_meta(vm, p)) + 40 <= 2^64 && usable(vm, objs, uint(gm_meta(vm, p)) + 16, 24, false) &&
+  uint(rd64(vm, gm_meta(vm, p) + 16)) = gm_base(vm, p) &&
+  gm_idx(vm, p) <= mword(vm, gm_meta(vm, p)) % 32 &&
+  bytes_at(vm, gm_meta(vm, p) + 24, 4) / 2^gm_idx(vm, p) % 2 = 0 &&
+  bytes_at(vm, gm_meta(vm, p) + 28, 4) / 2^gm_idx(vm, p) % 2 = 0 &&
+  uint(gm_meta(vm, p)) / 4096 * 4096 != 0 && usable(vm, objs, uint(gm_meta(vm, p)) / 4096 * 4096, 8, false) &&
+  ctx != 0 && uint(ctx) + 8 <= 2^64 && usable(vm, objs, uint(ctx), 8, false) &&
+  rd64(vm, bits[64](uint(gm_meta(vm, p)) / 4096 * 4096)) = rd64(vm, ctx) &&
+  (mword(vm, gm_meta(vm, p)) / 64 % 64 < 48 ->
+     table_ok(vm, objs, sct, 2, size_classes) &&
+     size_classes[mword(vm, gm_meta(vm, p)) / 64 % 64] * gm_idx(vm, p) <= gm_off(vm, p) &&
+     gm_off(vm, p) < size_classes[mword(vm, gm_meta(vm, p)) / 64 % 64] * (gm_idx(vm, p) + 1)) &&
+  (48 <= mword(vm, gm_meta(vm, p)) / 64 % 64 -> mword(vm, gm_meta(vm, p)) / 64 % 64 = 63) &&
+  (mword(vm, gm_meta(vm, p)) / 4096 != 0 -> gm_off(vm, p) < mword(vm, gm_meta(vm, p)) / 4096 * 256) &&
+  thread_ok(vm, fs)
+
+proc[World] get_meta_spec(ctx: bits[64], sct: bits[64], p: bits[64]) -> bits[64] {
+  require get_meta_pre(vm, objs, fs_base, ctx, sct, p)
+  either { overflow() } or { return gm_meta(vm, p) }
+}
+
+fn get_meta_spec_fun(ctx: bits[64], sct: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = get_meta_spec(ctx, sct, bits[64](args[0]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
 ///////////////////////////////////////////////////////////////////////
 //  The malloc context's counters (struct malloc_context at ctx: the
 //  classes' unmap sequence bytes at ctx + 848, their bounce counters at

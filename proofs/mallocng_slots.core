@@ -1,5 +1,5 @@
 // C2 of malloc.c's slot functions (layers/mallocng_specs.sl): set_size,
-// get_stride, enframe, get_slot_index.
+// get_stride, enframe, get_slot_index, get_meta.
 // Checked after proofs/mallocng_c2.core and proofs/mallocng_bits.core.
 
 // ----------------------------------------------------------------------
@@ -1358,4 +1358,619 @@ proof
     show := mp(all_elim(ms.get_slot_index_c2, {bits_of_int(64, app(regs, 0))}), simp())
   qed
   show by defs(apply(g.fun_res[n := 1, w := 32], hm), c_src_malloc_mallocng_malloc.get_slot_index_fun, mallocng_specs.get_slot_index_spec_fun, letin)
+qed
+
+// get_slot_index's contract at a call: an overflow, or the index returned,
+// the memory as it was
+theorem ms.gsi_q: all regs s p o2. p in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.get_slot_index_pre(app(s, "vm"), app(s, "objs"), p) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, p))) ->
+  runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && bits_of_int(32, fst(r)) = bits_of_int(32, int_mod(gimple.bytes_at(app(s, "vm"), bits_sub(64, p, 3), 1), 32)))
+proof
+  fix regs s p o2
+  assume hp hw hu hpre hr h
+  let OVF := exc_val("stack_overflow", empty)
+  let V := bits_of_int(32, int_mod(gimple.bytes_at(app(s, "vm"), bits_sub(64, p, 3), 1), 32))
+  have rl rn r0 := apply(gc.regs1, hp, hr)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_specs.get_slot_index_spec_fun, app_fn_build, ra in h
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", app(s, "vm")) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && bits_of_int(32, fst(r)) = V)
+  have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, p) = p by defs(arith(hp), bits_of_int, pow2)
+  have b := rewrite(bp, rewrite(r0, apply(g.runs_elim, h)))
+  have b2: bind_rel(mallocng_specs.get_slot_index_spec(p), s, x3 x4. letin(x4, x5. bind_rel(gimple.result(32, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(s, "vm")}, simp(pv))
+  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) || o3 = ok(s, V) by simp(hs3, hpre, vv, ss, keep(mallocng_specs.get_slot_index_pre))
+  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+    assume e
+    obtain v, hv he from e
+    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(he, hk3))
+    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    show by taut(l)
+  qed
+  have c2: o3 = ok(s, V) -> G proof
+    assume he
+    have k1: bind_rel(gimple.result(32, V), s, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+      by simp(expand(rewrite(he, hk3), letin), keep(bind_rel, gimple.result))
+    obtain o4, hr4 hk4 from expand(k1, bind_rel)
+    obtain u, hu64 hlow ho4 from apply(g.result32_inv, (V in bits(32) by simp()), hr4)
+    have k2: any_rel(x9. x9 in bits(64), x9. o2 = ok(s, pair(u, x9))) by simp(expand(rewrite(ho4, hk4), letin), keep(any_rel))
+    have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+    obtain y, hy hoy from apply(g.any_e, ne, k2)
+    have cl: bits_of_int(32, fst(pair(u, y))) = V by simp(hlow)
+    have l: ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && bits_of_int(32, fst(r)) = V by ex_intro({pair(u, y)}, taut(rewrite(sym(ss), hoy), cl))
+    show by taut(l)
+  qed
+  show by taut(ci, c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  get_meta: the meta of p's group, malloc's checks passing
+
+// (a 32-bit shift right below the width: one outcome)
+theorem ms.shr32_det: all s a k. s in univ(1) -> a in bits(32) -> k in omega -> int_lt(k, 32) ->
+  g.det(gimple.shr(32, a, k), s, ok(s, bits_shr(32, a, k)))
+proof
+  fix s a k
+  assume hs ha hk hl
+  show proof
+    fix o
+    assume hr
+    show by simp(expand(hr, gimple.shr, runs, mkprog), hs, ha, hk, hl)
+  qed
+qed
+
+// (a 32-bit product by a nonnegative k below 2^31: the signed product's
+// low bits)
+theorem ms.imul_small: all k. k in omega -> int_lt(k, 2147483648) -> tr.imul_by(k)
+proof
+  fix k
+  assume ko kl
+  have sk: sint(32, k) = k := apply(ms.sint_small, ko, kl)
+  have g: all y. y in bits(32) -> bits_add(32, int_mul(sint(32, y), sint(32, k)), 0) = bits_mul(32, y, k) proof
+    fix y
+    assume hy: y in bits(32)
+    have c1: int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), k), 0) = bits_mul(32, y, k) proof
+      assume hl: int_lt(y, 2147483648)
+      show by defs(simp(hy, hl), bits_add, bits_mul, sint)
+    qed
+    have c2: !int_lt(y, 2147483648) -> bits_add(32, int_mul(sint(32, y), k), 0) = bits_mul(32, y, k) proof
+      assume hl: !int_lt(y, 2147483648)
+      have e: int_mod(int_mul(int_sub(y, 4294967296), k), 4294967296) = int_mod(int_mul(y, k), 4294967296) by arith(hy, ko)
+      show by defs(simp(hy, hl, e), bits_add, bits_mul, sint)
+    qed
+    have e: bits_add(32, int_mul(sint(32, y), k), 0) = bits_mul(32, y, k) by taut(c1, c2)
+    show by simp(e, sk)
+  qed
+  show by defs(g, tr.imul_by)
+qed
+
+// (products of bounded naturals: bounded)
+theorem ms.mul_le: all a b A B. a in omega -> b in omega -> A in int -> B in int -> int_le(a, A) -> int_le(b, B) -> int_le(int_mul(a, b), int_mul(A, B))
+proof
+  fix a b A B
+  assume ha hb iA iB hA hB
+  have d1: int_mul(a, int_sub(B, b)) in omega by simp(ha, (int_sub(B, b) in omega by arith(hb, hB)))
+  have d2: int_mul(int_sub(A, a), B) in omega by simp((int_sub(A, a) in omega by arith(ha, hA)), (B in omega by arith(hb, hB, iB)))
+  show by arith(d1, d2)
+qed
+
+// (a mask's bit k, as the code tests it)
+theorem ms.bit_k: all a k. a in bits(32) -> k in omega -> int_lt(k, 32) ->
+  bits_and(32, bits_shr(32, a, k), 1) = int_mod(int_div(a, int_pow(2, k)), 2)
+proof
+  fix a k
+  assume ha hk hl
+  let X := int_div(a, int_pow(2, k))
+  have e: bits_shr(32, a, k) = X by defs(simp(ha, hk), bits_shr, pow2)
+  have pp0 := mp(pow2_pos[k := k], hk)
+  have pe: pow2(k) = int_pow(2, k) by defs(simp(), pow2)
+  have pp: int_le(1, int_pow(2, k)) by arith(rewrite(pe, pp0))
+  have xo _ := mp(div_nat[x := a, m := int_pow(2, k)], arith(ha), arith(pp))
+  have m: bits_and(32, X, 1) = int_mod(X, 2) by bitwise({32}, xo)
+  show by simp(e, m)
+qed
+
+// (struct meta's bitfield word W at g + 32, as get_meta reads it: the low
+// 5 bits of its first byte -- W's --, its first 2 bytes, the whole word;
+// the 2 bytes' bits 6..11 -- W's)
+theorem ms.gm_word: all vm g. app(vm, "bytes") in fn_space(bits(64), bits(8)) -> g in bits(64) -> int_le(int_add(g, 40), int_pow(2, 64)) ->
+  bits_of_int(5, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 5))) = int_mod(gimple.bytes_at(vm, int_add(g, 32), 8), 32) &&
+  bits_of_int(16, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 2), int_pow(2, 0)), int_pow(2, 16))) = gimple.bytes_at(vm, int_add(g, 32), 2) &&
+  bits_of_int(64, int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 8), int_pow(2, 0)), int_pow(2, 64))) = gimple.bytes_at(vm, int_add(g, 32), 8) &&
+  bits_and(16, gimple.bytes_at(vm, int_add(g, 32), 2), 4032) = int_mul(int_mod(int_div(gimple.bytes_at(vm, int_add(g, 32), 8), 64), 64), 64)
+proof
+  fix vm g
+  assume hb hg h40
+  let A := int_add(g, 32)
+  let W := gimple.bytes_at(vm, A, 8)
+  let B1 := gimple.bytes_at(vm, A, 1)
+  let B2 := gimple.bytes_at(vm, A, 2)
+  let B7 := gimple.bytes_at(vm, int_add(g, 33), 7)
+  let B6 := gimple.bytes_at(vm, int_add(g, 34), 6)
+  have ab: A in bits(64) by arith(hg, h40)
+  have a33: bits_add(64, A, 1) = int_add(g, 33) by defs(arith(hg, h40), bits_add, pow2)
+  have a34: bits_add(64, A, 2) = int_add(g, 34) by defs(arith(hg, h40), bits_add, pow2)
+  have s17 := mp(all_elim(g.bytes_split, {vm}, {A}, {1}, {7}), ab, simp(), simp())
+  have s26 := mp(all_elim(g.bytes_split, {vm}, {A}, {2}, {6}), ab, simp(), simp())
+  have w17: W = int_add(B1, int_mul(256, B7)) by simp(s17, a33)
+  have w26: W = int_add(B2, int_mul(65536, B6)) by simp(s26, a34)
+  have b1o b1l := mp(all_elim(g.bytes_bound, {vm}, {A}, {1}), hb, simp())
+  have b2o b2l := mp(all_elim(g.bytes_bound, {vm}, {A}, {2}), hb, simp())
+  have b7o b7l := mp(all_elim(g.bytes_bound, {vm}, {int_add(g, 33)}, {7}), hb, simp())
+  have b6o b6l := mp(all_elim(g.bytes_bound, {vm}, {int_add(g, 34)}, {6}), hb, simp())
+  have wo wl := mp(all_elim(g.bytes_bound, {vm}, {A}, {8}), hb, simp())
+  have b1v: int_lt(B1, 256) by simp(b1l)
+  have b2v: int_lt(B2, 65536) by simp(b2l)
+  have b7v: int_lt(B7, 72057594037927936) by simp(b7l)
+  have b6v: int_lt(B6, 281474976710656) by simp(b6l)
+  have wv: int_lt(W, 18446744073709551616) by simp(wl)
+  have pw: int_pow(2, 0) = 1 && int_pow(2, 5) = 32 && int_pow(2, 16) = 65536 && int_pow(2, 64) = 18446744073709551616 by simp()
+  // (the first byte's low 5 bits)
+  have e1L: int_mod(int_div(B1, 1), 32) = int_mod(W, 32) by arith(w17, b1o, b1v, b7o, b7v)
+  have m5: int_mod(W, 32) in bits(5) by arith(wo)
+  have g1: bits_of_int(5, int_mod(int_div(B1, int_pow(2, 0)), int_pow(2, 5))) = int_mod(W, 32) by simp(pw, e1L, m5)
+  // (the 2 bytes; the word)
+  have bb2: B2 in bits(16) by arith(b2o, b2v)
+  have e2L: int_mod(int_div(B2, 1), 65536) = B2 by arith(b2o, b2v)
+  have g2: bits_of_int(16, int_mod(int_div(B2, int_pow(2, 0)), int_pow(2, 16))) = B2 by simp(pw, e2L, bb2)
+  have wb: W in bits(64) by arith(wo, wv)
+  have e3L: int_mod(int_div(W, 1), 18446744073709551616) = W by arith(wo, wv)
+  have g3: bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64))) = W by simp(pw, e3L, wb)
+  // (bits 6..11)
+  have m4: bits_and(16, B2, 4032) = int_mul(int_mod(int_div(B2, 64), 64), 64) by bitwise({16}, bb2)
+  have m4w: int_mod(int_div(B2, 64), 64) = int_mod(int_div(W, 64), 64) by arith(w26, b2o, b2v, b6o, b6v)
+  have g4: bits_and(16, B2, 4032) = int_mul(int_mod(int_div(W, 64), 64), 64) by simp(m4, m4w)
+  show by taut(g1, g2, g3, g4)
+qed
+
+// C2 of get_meta, for any a_crash (never called: its checks pass) and any
+// callee refining get_slot_index's spec
+theorem ms.get_meta_c2: all p g0 g1. p in bits(64) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g1, regs), s, o) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o)) ->
+  refines(c_src_malloc_mallocng_malloc.get_meta(p, g0, g1),
+    mallocng_specs.get_meta_spec(c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes, p), abi.World)
+proof
+  fix p g0 g1
+  assume hp hg1
+  show proof
+    fix s o
+    assume hw hr
+    let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+    let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
+    let SPEC := mallocng_specs.get_meta_spec(CTX, SCT, p)
+    let V0 := app(s, "vm")
+    let O := app(s, "objs")
+    let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+    let OVF := exc_val("stack_overflow", empty)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have vV vfun vdom vb := apply(ms.world_parts, hw)
+    have ss: fn_update(s, "vm", V0) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+    let PRE := mallocng_specs.get_meta_pre(V0, O, app(s, "fs_base"), CTX, SCT, p)
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume hpre
+      have a16 p16 u8 hb4 hbase ubase mnz m40 um mmem hix hav hfr anz ua cnz c8 uc hsec hsc h63 hml hth := expand(hpre, mallocng_specs.get_meta_pre)
+      have p64: pow2(64) = 18446744073709551616 by simp()
+      // p aligned
+      have m16: int_mod(p, pow2(4)) in bits(64) by arith(hp)
+      have e15: bits_and(64, p, int_sub(pow2(4), 1)) = int_mod(p, pow2(4)) by bitwise({64}, hp, m16)
+      have hal: bits_and(64, p, 15) = 0 by simp(e15, a16)
+      // the 16-bit offset at p - 2
+      have sv2: gimple.sval(T64, bits_neg(64, 2)) = int_neg(2) by defs(simp(), gimple.sval)
+      let P2 := int_add(p, gimple.sval(T64, bits_neg(64, 2)))
+      have e2: P2 = int_sub(p, 2) by arith(sv2)
+      have u2 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_add(P2, 0)}, {2}, {false}), arith(hp), arith(hp, e2), arith(e2), arith(e2), u8)
+      have md2: g.mem_defined(s, P2, 0, 2, false) by simp(u2, e2, p16, hp, p64)
+      have pd2 := apply(g.padd_det, {s}, {p}, {bits_neg(64, 2)}, hu, hp, simp(), arith(sv2, p16), arith(sv2, hp, p64))
+      have ld2 := apply(g.ld16_det, {s}, {P2}, {0}, hu, arith(e2, p16, hp, p64), simp(), md2)
+      step x2 x4 x6 x8 x10 x12 x16, c1 from hr with hal, pd2, ld2
+      // the call: get_slot_index's contract, the index IDX
+      let IDX := int_mod(gimple.bytes_at(V0, bits_sub(64, p, 3), 1), 32)
+      have u3 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_sub(p, 3)}, {1}, {false}), arith(hp), arith(hp), arith(), arith(), u8)
+      have gpre: mallocng_specs.get_slot_index_pre(V0, O, p) by defs(simp(u3, p16), mallocng_specs.get_slot_index_pre)
+      have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o2) ->
+          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+          (ex r. o2 = ok(fn_update(s, "vm", V0), r) && bits_of_int(32, fst(r)) = bits_of_int(32, IDX)) proof
+        fix regs o2
+        assume hro h2
+        show := apply(ms.gsi_q, hp, hw, hu, gpre, hro, h2)
+      qed
+      have ths: gc.sound(s) by simp(hth)
+      have cc := apply(gc.contract_call1[R := r. bits_of_int(32, fst(r)) = bits_of_int(32, IDX)], {g1}, {mallocng_specs.get_slot_index_spec_fun()}, {seq_one(gimple.arg(64, p))}, {s}, {V0},
+        ths, hw, vV, apply(gc.regs1_ex, hp), (int_le(seq_len(seq_one(gimple.arg(64, p))), 6) by simp()), hg1, qa, c1)
+      // (the spec's outcomes: an overflow, any memory)
+      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
+        fix v
+        assume hv
+        have vu := apply(x86.vm_univ, hv)
+        have eu: OVF in univ(1) by defs(simp(), exc_val)
+        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
+        have ovi := apply(ct.overflow_intro, hv, pu2)
+        show by simp(hpre, ovi, pu2, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+      qed
+      have cov: case 1 of cc proof
+        assume h
+        obtain v, hv hx from h
+        have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(hx)
+        show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+      qed
+      have cok: case 2 of cc proof
+        assume h
+        obtain r, hR hk from h
+        have ib: bits_of_int(32, IDX) = IDX by defs(arith(), bits_of_int, pow2)
+        have hk2 := rewrite(ib, rewrite(hR, rewrite(ss, hk)))
+        // the byte at p - 4: a 32-bit offset or not
+        have sv4: gimple.sval(T64, bits_neg(64, 4)) = int_neg(4) by defs(simp(), gimple.sval)
+        let P4 := int_add(p, gimple.sval(T64, bits_neg(64, 4)))
+        have e4: P4 = int_sub(p, 4) by arith(sv4)
+        have u4 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_add(P4, 0)}, {1}, {false}), arith(hp), arith(hp, e4), arith(e4), arith(e4), u8)
+        have md4: g.mem_defined(s, P4, 0, 1, false) by simp(u4, e4, p16, hp, p64)
+        have pd4 := apply(g.padd_det, {s}, {p}, {bits_neg(64, 4)}, hu, hp, simp(), arith(sv4, p16), arith(sv4, hp, p64))
+        have ld4 := apply(g.ld8_det, {s}, {P4}, {0}, hu, arith(e4, p16, hp, p64), simp(), md4)
+        step x9, k4 from hk2 with pd4, ld4
+        // (the header's bytes as the spec reads them)
+        let SB4 := gimple.bytes_at(V0, bits_sub(64, p, 4), 1)
+        let W2 := gimple.bytes_at(V0, bits_sub(64, p, 2), 2)
+        let W4 := gimple.bytes_at(V0, bits_sub(64, p, 8), 4)
+        let GO := mallocng_specs.gm_off(V0, p)
+        have a4: int_add(P4, 0) = bits_sub(64, p, 4) by defs(arith(e4, hp, p16, p64), bits_sub, pow2)
+        have a2: int_add(P2, 0) = bits_sub(64, p, 2) by defs(arith(e2, hp, p16, p64), bits_sub, pow2)
+        have b4o b4l := mp(all_elim(g.bytes_bound, {V0}, {bits_sub(64, p, 4)}, {1}), vb, arith())
+        have w2o w2l := mp(all_elim(g.bytes_bound, {V0}, {bits_sub(64, p, 2)}, {2}), vb, arith())
+        have w4o w4l := mp(all_elim(g.bytes_bound, {V0}, {bits_sub(64, p, 8)}, {4}), vb, arith())
+        have cb: bits_of_int(8, gimple.bytes_at(V0, int_add(P4, 0), 1)) = SB4 by defs(arith(a4, b4o, b4l), bits_of_int, pow2)
+        have ca: bits_of_int(16, gimple.bytes_at(V0, int_add(P2, 0), 2)) = W2 by defs(arith(a2, w2o, w2l), bits_of_int, pow2)
+        have k4b := rewrite(ca, rewrite(cb, k4))
+        // (the offset GO, below 2^27 either way)
+        have gA: SB4 = 0 -> GO = W2 proof
+          assume h
+          show by defs(simp(h), mallocng_specs.gm_off)
+        qed
+        have gB: !(SB4 = 0) -> GO = W4 proof
+          assume h
+          show by defs(simp(h), mallocng_specs.gm_off)
+        qed
+        have go: GO in omega proof
+          have c1: SB4 = 0 -> GO in omega proof
+            assume h
+            show by simp(mp(gA, h), w2o)
+          qed
+          have c2: !(SB4 = 0) -> GO in omega proof
+            assume h
+            show by simp(mp(gB, h), w4o)
+          qed
+          show by taut(c1, c2)
+        qed
+        have gl: int_lt(GO, 134217728) proof
+          have c1: SB4 = 0 -> int_lt(GO, 134217728) proof
+            assume h
+            show by arith(mp(gA, h), w2l)
+          qed
+          have c2: !(SB4 = 0) -> int_lt(GO, 134217728) proof
+            assume h
+            have _ _ w4b := mp(hb4, h)
+            show by arith(mp(gB, h), w4b)
+          qed
+          show by taut(c1, c2)
+        qed
+        // (its product with a unit, sign-extended; the group's header at
+        // BASE, the spec's gm_base)
+        have go32: GO in bits(32) by arith(go, gl)
+        have sg: sint(32, GO) = GO := apply(ms.sint_small, go, arith(gl))
+        have s16: sint(32, 16) = 16 by defs(simp(), sint)
+        have f1: int_lt(int_mul(GO, 16), 2147483648) by arith(go, gl)
+        have f0: int_le(0, int_mul(GO, 16)) by arith(go)
+        have fit: tr.s32_fits(int_mul(sint(32, GO), sint(32, 16))) by defs(simp(sg, s16, f0, f1), gimple.fits)
+        have smd := apply(g.smul32_det, {s}, {GO}, {16}, hu, go32, simp(), ms.imul_16, fit)
+        have mg: bits_mul(32, GO, 16) = int_mul(16, GO) by defs(arith(go, gl), bits_mul, pow2)
+        have sxs := apply(ms.sint_small, (int_mul(16, GO) in omega by arith(go)), (int_lt(int_mul(16, GO), 2147483648) by arith(go, gl)))
+        have t31: int_mul(16, GO) in bits(31) by arith(go, gl)
+        have sx: bits_sext(32, 64, bits_mul(32, GO, 16)) = int_mul(16, GO) by simp(mg, t31, sxs)
+        let DD := bits_sub(64, bits_of_int(64, int_neg(16)), bits_sext(32, 64, bits_mul(32, GO, 16)))
+        have dd: DD = int_sub(18446744073709551600, int_mul(16, GO)) by defs(arith(sx, go, gl), bits_sub, bits_of_int, pow2)
+        have hge: int_le(9223372036854775808, int_sub(18446744073709551600, int_mul(16, GO))) by arith(go, gl)
+        have hng: int_sub(int_sub(18446744073709551600, int_mul(16, GO)), 18446744073709551616) = int_neg(int_add(16, int_mul(16, GO))) by arith()
+        have svD: gimple.sval(T64, DD) = int_neg(int_add(16, int_mul(16, GO))) by defs(simp(dd, hge, hng), gimple.sval)
+        let BASE := int_add(p, gimple.sval(T64, DD))
+        have uu: mallocng.UNIT = 16 by defs(simp(), mallocng.UNIT)
+        have eBase: BASE = mallocng_specs.gm_base(V0, p) by defs(arith(svD, uu), mallocng_specs.gm_base)
+        have hb2: int_lt(int_add(int_mul(16, GO), 16), p) by simp(rewrite(uu, hbase))
+        have pdB := apply(g.padd_det, {s}, {p}, {DD}, hu, hp, simp(), arith(svD, hb2), arith(svD, hp, p64, go))
+        have Bb: BASE in bits(64) by arith(svD, hb2, hp, p64, go)
+        have bl: int_lt(int_add(BASE, 0), pow2(64)) by arith(svD, hp, p64, go)
+        have bnz: !(BASE = 0) by arith(svD, hb2)
+        have mdB: g.mem_defined(s, BASE, 0, 8, false) by simp(rewrite(sym(eBase), ubase), bl, bnz)
+        have ldB := apply(g.ld64_det, {s}, {BASE}, {0}, hu, Bb, simp(), mdB)
+        // (its first word: the meta M; M's mem word BASE)
+        let M := mallocng_specs.gm_meta(V0, p)
+        have gbb: mallocng_specs.gm_base(V0, p) in bits(64) := rewrite(eBase, Bb)
+        have bB: bits_of_int(64, mallocng_specs.gm_base(V0, p)) = BASE by simp(gbb, eBase)
+        have eM: bits_of_int(64, gimple.bytes_at(V0, int_add(BASE, 0), 8)) = M by defs(simp(bB), mallocng_specs.gm_meta, mallocng_specs.rd64)
+        have ldB2 := rewrite(eM, ldB)
+        have Mb: M in bits(64) by defs(simp(), mallocng_specs.gm_meta, mallocng_specs.rd64)
+        have um16 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(M, 16)}, {24}, {int_add(M, 16)}, {8}, {false}), arith(Mb), arith(Mb), arith(), arith(), um)
+        have md16: g.mem_defined(s, M, 16, 8, false) by simp(mnz, um16, m40, p64)
+        have ldM := apply(g.ld64_det, {s}, {M}, {16}, hu, Mb, simp(), md16)
+        have a16m: bits_add(64, M, 16) = int_add(M, 16) by defs(arith(m40, Mb), bits_add, pow2)
+        have cmem: BASE = bits_of_int(64, gimple.bytes_at(V0, int_add(M, 16), 8)) by simp(eBase, rewrite(a16m, expand(mmem, mallocng_specs.rd64)))
+        // (M's bitfield word W: its last index within, IDX)
+        let W := gimple.bytes_at(V0, int_add(M, 32), 8)
+        have a32 _ _ gs2 gs3 gs4 := mp(all_elim(ms.gs_word, {V0}, {M}), vb, Mb, m40)
+        have gw1 gw2 gw3 gw4 := mp(all_elim(ms.gm_word, {V0}, {M}), vb, Mb, m40)
+        have mw: mallocng_specs.mword(V0, M) = W by defs(simp(sym(a32)), mallocng_specs.mword)
+        have gi: mallocng_specs.gm_idx(V0, p) = IDX by defs(simp(), mallocng_specs.gm_idx)
+        have u1 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(M, 16)}, {24}, {int_add(M, 32)}, {1}, {false}), arith(Mb), arith(Mb), arith(), arith(), um)
+        have md1: g.mem_defined(s, M, 32, 1, false) by simp(mnz, u1, m40, p64)
+        have ldL := apply(g.ldbf_det, {s}, {M}, {32}, {1}, {0}, {5}, hu, Mb, simp(), md1)
+        have io: IDX in omega by arith()
+        have il: int_lt(IDX, 32) by arith()
+        have wo _ := mp(all_elim(g.bytes_bound, {V0}, {int_add(M, 32)}, {8}), vb, arith())
+        have sW: sint(32, int_mod(W, 32)) = int_mod(W, 32) := apply(ms.sint_small, (int_mod(W, 32) in omega by arith(wo)), (int_lt(int_mod(W, 32), 2147483648) by arith(wo)))
+        have sI: sint(32, IDX) = IDX := apply(ms.sint_small, io, (int_lt(IDX, 2147483648) by arith(il)))
+        have clast0: !int_lt(sint(32, int_mod(W, 32)), sint(32, IDX)) by arith(sW, sI, rewrite(mw, rewrite(gi, hix)))
+        have clast := rewrite(sym(gw1), clast0)
+        // (the slot neither available nor freed: bit IDX of the masks at
+        // M + 24, M + 28)
+        let AV := gimple.bytes_at(V0, int_add(M, 24), 4)
+        let FR := gimple.bytes_at(V0, int_add(M, 28), 4)
+        have u24 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(M, 16)}, {24}, {int_add(M, 24)}, {4}, {false}), arith(Mb), arith(Mb), arith(), arith(), um)
+        have u28 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(M, 16)}, {24}, {int_add(M, 28)}, {4}, {false}), arith(Mb), arith(Mb), arith(), arith(), um)
+        have md24: g.mem_defined(s, M, 24, 4, false) by simp(mnz, u24, m40, p64)
+        have md28: g.mem_defined(s, M, 28, 4, false) by simp(mnz, u28, m40, p64)
+        have avo avl := mp(all_elim(g.bytes_bound, {V0}, {int_add(M, 24)}, {4}), vb, arith())
+        have fro frl := mp(all_elim(g.bytes_bound, {V0}, {int_add(M, 28)}, {4}), vb, arith())
+        have avb: AV in bits(32) by arith(avo, avl)
+        have frb: FR in bits(32) by arith(fro, frl)
+        have eav: bits_of_int(32, AV) = AV by simp(avb)
+        have efr: bits_of_int(32, FR) = FR by simp(frb)
+        have ld24 := rewrite(eav, apply(g.ld32_det, {s}, {M}, {24}, hu, Mb, simp(), md24))
+        have ld28 := rewrite(efr, apply(g.ld32_det, {s}, {M}, {28}, hu, Mb, simp(), md28))
+        have sh24 := apply(ms.shr32_det, {s}, {AV}, {IDX}, hu, avb, io, il)
+        have sh28 := apply(ms.shr32_det, {s}, {FR}, {IDX}, hu, frb, io, il)
+        have a24m: bits_add(64, M, 24) = int_add(M, 24) by defs(arith(m40, Mb), bits_add, pow2)
+        have a28m: bits_add(64, M, 28) = int_add(M, 28) by defs(arith(m40, Mb), bits_add, pow2)
+        have cav: bits_and(32, bits_shr(32, AV, IDX), 1) = 0 by simp(apply(ms.bit_k, avb, io, il), rewrite(a24m, rewrite(gi, hav)))
+        have cfr: bits_and(32, bits_shr(32, FR, IDX), 1) = 0 by simp(apply(ms.bit_k, frb, io, il), rewrite(a28m, rewrite(gi, hfr)))
+        // (M's page's first word: the context's secret)
+        let AR := bits_and(64, M, bits_neg(64, 4096))
+        have nm: bits_neg(64, 4096) = bits_not(64, 4095) by simp()
+        have ar0: bits_and(64, M, bits_not(64, 4095)) = int_mul(int_div(M, 4096), 4096) by bitwise({64}, Mb)
+        have ear: AR = int_mul(int_div(M, 4096), 4096) by simp(nm, ar0)
+        have arl: int_le(int_mul(int_div(M, 4096), 4096), M) by arith(Mb)
+        have mdA: g.mem_defined(s, AR, 0, 8, false) by simp(ear, anz, ua, arl, m40, p64)
+        have arb: AR in bits(64) by simp(ear, arl, Mb)
+        have ldA := apply(g.ld64_det, {s}, {AR}, {0}, hu, arb, simp(), mdA)
+        have cb64: CTX in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+        have mdC: g.mem_defined(s, CTX, 0, 8, false) by simp(cnz, uc, c8, p64)
+        have ldC := apply(g.ld64_det, {s}, {CTX}, {0}, hu, cb64, simp(), mdC)
+        have bar: bits_of_int(64, int_mul(int_div(M, 4096), 4096)) = int_add(AR, 0) by simp(ear, arb)
+        have csec: bits_of_int(64, gimple.bytes_at(V0, int_add(AR, 0), 8)) = bits_of_int(64, gimple.bytes_at(V0, int_add(CTX, 0), 8))
+          by simp(rewrite(bar, expand(hsec, mallocng_specs.rd64)))
+        // (the size class SC: W's bits 6..11)
+        let SC := int_mod(int_div(W, 64), 64)
+        have u2 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(M, 16)}, {24}, {int_add(M, 32)}, {2}, {false}), arith(Mb), arith(Mb), arith(), arith(), um)
+        have u8m := mp(all_elim(ms.usable_part, {V0}, {O}, {int_add(M, 16)}, {24}, {int_add(M, 32)}, {8}, {false}), arith(Mb), arith(Mb), arith(), arith(), um)
+        have md2m: g.mem_defined(s, M, 32, 2, false) by simp(mnz, u2, m40, p64)
+        have md8m: g.mem_defined(s, M, 32, 8, false) by simp(mnz, u8m, m40, p64)
+        have scd := rewrite(gs4, apply(ms.sizeclass_det, {s}, {M}, hu, Mb, md2m))
+        have sco: SC in omega by arith(wo)
+        // (a class below 48: offset within slot IDX's units, as the code
+        // computes it: the class's entry CL, IDX * CL, (IDX + 1) * CL)
+        let CL := app(mallocng.size_classes, SC)
+        let SCX := bits_add(64, SCT, bits_add(64, bits_sext(32, 64, SC), bits_sext(32, 64, SC)))
+        have F48: int_le(SC, 47) ->
+            g.det(gimple.elem(SCT, bits_sext(32, 64, SC), 2), s, ok(s, SCX)) && g.det(gimple.ld16(SCX, 0), s, ok(s, CL)) &&
+            g.det(gimple.smul(32, IDX, CL), s, ok(s, int_mul(IDX, CL))) && !int_lt(sint(32, GO), sint(32, int_mul(IDX, CL))) &&
+            g.det(gimple.sadd(32, IDX, 1), s, ok(s, int_add(IDX, 1))) &&
+            g.det(gimple.smul(32, CL, int_add(IDX, 1)), s, ok(s, int_mul(CL, int_add(IDX, 1)))) &&
+            !int_le(sint(32, int_mul(CL, int_add(IDX, 1))), sint(32, GO)) proof
+          assume h47
+          have tok c1l c2l := mp(rewrite(mw, rewrite(gi, hsc)), arith(h47))
+          have ssc: sint(32, SC) = SC := apply(ms.sint_small, sco, (int_lt(SC, 2147483648) by arith(h47)))
+          have scb: SC in bits(32) by arith(sco, h47)
+          have sb: SCT in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+          have snz: !(SCT = 0) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
+          have ed ldt := apply(ms.tab_rd, {s}, {SCT}, {SC}, {mallocng.size_classes}, hu, sb, snz, scb, arith(ssc, sco), arith(ssc, h47, ms.sc_len), tok)
+          have clo cll := mp(all_elim(ms.sc_nat, {SC}), sco, arith(h47))
+          have c16: bits_of_int(16, CL) = CL by defs(arith(clo, cll), bits_of_int, pow2)
+          have ldt2 := rewrite(c16, rewrite(ssc, ldt))
+          have clb: CL in bits(32) by arith(clo, cll)
+          have scl: sint(32, CL) = CL := apply(ms.sint_small, clo, (int_lt(CL, 2147483648) by arith(cll)))
+          // (IDX * CL, (IDX + 1) * CL: 32-bit, fitting)
+          have ib32: IDX in bits(32) by arith(io, il)
+          have p1: int_le(int_mul(IDX, CL), 253921) by arith(mp(all_elim(ms.mul_le, {IDX}, {CL}, {31}, {8191}), io, clo, simp(), simp(), arith(il), cll))
+          have f1a: tr.s32_fits(int_mul(sint(32, IDX), sint(32, CL))) by defs(simp(sI, scl, (int_le(0, int_mul(IDX, CL)) by arith(io, clo)), (int_lt(int_mul(IDX, CL), 2147483648) by arith(p1))), gimple.fits)
+          have sm1 := apply(g.smul32_det, {s}, {IDX}, {CL}, hu, ib32, clb, apply(ms.imul_small, clo, (int_lt(CL, 2147483648) by arith(cll))), f1a)
+          have bm1: bits_mul(32, IDX, CL) = int_mul(IDX, CL) by defs(arith(p1, io, clo), bits_mul, pow2)
+          have sm1b := rewrite(bm1, sm1)
+          have sp1: sint(32, int_mul(IDX, CL)) = int_mul(IDX, CL) := apply(ms.sint_small, (int_mul(IDX, CL) in omega by arith(io, clo)), (int_lt(int_mul(IDX, CL), 2147483648) by arith(p1)))
+          have k1: !int_lt(sint(32, GO), sint(32, int_mul(IDX, CL))) by arith(sg, sp1, c1l)
+          have f2: tr.s32_fits(int_add(sint(32, IDX), sint(32, 1))) by defs(simp(sI, (sint(32, 1) = 1 by defs(simp(), sint)), (int_lt(int_add(IDX, 1), 2147483648) by arith(il)), (int_le(0, int_add(IDX, 1)) by arith(io))), gimple.fits)
+          have sa := apply(g.sadd32_det, {s}, {IDX}, {1}, hu, ib32, simp(), f2)
+          have ba: bits_add(32, IDX, 1) = int_add(IDX, 1) by defs(arith(io, il), bits_add, pow2)
+          have sab := rewrite(ba, sa)
+          have p2: int_le(int_mul(CL, int_add(IDX, 1)), 262112) by arith(mp(all_elim(ms.mul_le, {CL}, {int_add(IDX, 1)}, {8191}, {32}), clo, arith(io), simp(), simp(), cll, arith(il)))
+          have f3: tr.s32_fits(int_mul(sint(32, CL), sint(32, int_add(IDX, 1)))) by defs(simp(scl, apply(ms.sint_small, (int_add(IDX, 1) in omega by arith(io)), (int_lt(int_add(IDX, 1), 2147483648) by arith(il))), (int_le(0, int_mul(CL, int_add(IDX, 1))) by arith(io, clo)), (int_lt(int_mul(CL, int_add(IDX, 1)), 2147483648) by arith(p2))), gimple.fits)
+          have sm2 := apply(g.smul32_det, {s}, {CL}, {int_add(IDX, 1)}, hu, clb, (int_add(IDX, 1) in bits(32) by arith(io, il)), apply(ms.imul_small, (int_add(IDX, 1) in omega by arith(io)), (int_lt(int_add(IDX, 1), 2147483648) by arith(il))), f3)
+          have bm2: bits_mul(32, CL, int_add(IDX, 1)) = int_mul(CL, int_add(IDX, 1)) by defs(arith(p2, io, clo), bits_mul, pow2)
+          have sm2b := rewrite(bm2, sm2)
+          have sp2: sint(32, int_mul(CL, int_add(IDX, 1))) = int_mul(CL, int_add(IDX, 1)) := apply(ms.sint_small, (int_mul(CL, int_add(IDX, 1)) in omega by arith(io, clo)), (int_lt(int_mul(CL, int_add(IDX, 1)), 2147483648) by arith(p2)))
+          have k2: !int_le(sint(32, int_mul(CL, int_add(IDX, 1))), sint(32, GO)) by arith(sg, sp2, c2l)
+          show by taut(ed, ldt2, sm1b, k1, sab, sm2b, k2)
+        qed
+        // (class 63 otherwise: its bits 6..11 all set)
+        have ldS := apply(g.ldbf_det, {s}, {M}, {32}, {2}, {0}, {16}, hu, Mb, simp(), md2m)
+        have F63: !int_le(SC, 47) -> !int_le(SC, 47) && bits_and(16, bits_of_int(16, int_mod(int_div(gimple.bytes_at(V0, int_add(M, 32), 2), int_pow(2, 0)), int_pow(2, 16))), 4032) = 4032 proof
+          assume h
+          have e63: SC = 63 by simp(mp(rewrite(mw, h63), arith(h)))
+          show by simp(h, gw2, gw4, e63)
+        qed
+        // (the mapping, ML pages: the offset within it)
+        let ML := int_div(W, 4096)
+        let RW := bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64)))
+        have ldW := apply(g.ldbf_det, {s}, {M}, {32}, {8}, {0}, {64}, hu, Mb, simp(), md8m)
+        have mld := rewrite(gs3, apply(ms.maplen_det, {s}, {M}, hu, Mb, md8m))
+        have FML: !(int_mul(ML, 4096) = 0) -> !(bits_and(64, RW, bits_neg(64, 4096)) = 0) &&
+            !int_lt(bits_add(64, bits_shr(64, bits_mul(64, ML, 4096), 4), bits_neg(64, 1)), bits_sext(32, 64, GO)) proof
+          assume h
+          have mlo: ML in omega by arith(wo)
+          have ml1: int_le(1, ML) by arith(h, mlo)
+          have mlw: int_le(int_mul(ML, 4096), W) by arith(wo)
+          have wl2 := mp(all_elim(g.bytes_bound, {V0}, {int_add(M, 32)}, {8}), vb, arith())
+          have wv: int_lt(W, 18446744073709551616) by simp(wl2)
+          have e1: bits_mul(64, ML, 4096) = int_mul(ML, 4096) by defs(arith(mlo, mlw, wv), bits_mul, pow2)
+          have mb4: int_mul(ML, 4096) in bits(64) by arith(mlo, mlw, wv)
+          have bo: bits_of_int(64, int_mul(ML, 4096)) = int_mul(ML, 4096) by simp(mb4)
+          have e2: bits_shr(64, int_mul(ML, 4096), 4) = int_mul(ML, 256) by defs(arith(mlo, bo), bits_shr, pow2)
+          have e3: bits_add(64, int_mul(ML, 256), bits_neg(64, 1)) = int_sub(int_mul(ML, 256), 1) by defs(arith(mlo, ml1, mlw, wv), bits_add, bits_neg, pow2)
+          have t31g: GO in bits(31) by arith(go, gl)
+          have e4: bits_sext(32, 64, GO) = GO by simp(t31g, sg)
+          have lt: int_lt(GO, int_mul(ML, 256)) by arith(mp(rewrite(mw, hml), arith(h)))
+          have c1: !(bits_and(64, RW, bits_neg(64, 4096)) = 0) by simp(gs2, h)
+          have c2: !int_lt(bits_add(64, bits_shr(64, bits_mul(64, ML, 4096), 4), bits_neg(64, 1)), bits_sext(32, 64, GO)) by arith(e1, e2, e3, e4, lt)
+          show by taut(c1, c2)
+        qed
+        have F0: int_mul(ML, 4096) = 0 -> bits_and(64, RW, bits_neg(64, 4096)) = 0 proof
+          assume h
+          show by simp(gs2, h)
+        qed
+        // (every path: M returned, the memory as it was)
+        have fin: o = ok(s, M) -> runs(SPEC, s, o) proof
+          assume oe
+          show by simp(oe, pu, hpre, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+        qed
+        // the 16-bit offset
+        have z: SB4 = 0 -> runs(SPEC, s, o) proof
+          assume hz
+          have eA: W2 = GO by defs(simp(hz), mallocng_specs.gm_off)
+          step kz from k4b with hz
+          have kz2 := rewrite(eA, kz)
+          have c48: int_le(SC, 47) -> runs(SPEC, s, o) proof
+            assume h47
+            have ed ldt sm1 k1 sa sm2 k2 := mp(F48, h47)
+            have m1: !(int_mul(ML, 4096) = 0) -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 q2 := mp(FML, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49 x54 x59, oe from kz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ed, ldt, sm1, k1, sa, sm2, k2, ldW, q1, mld, q2
+              show := mp(fin, oe)
+            qed
+            have m0: int_mul(ML, 4096) = 0 -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 := mp(F0, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49 x54, oe from kz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ed, ldt, sm1, k1, sa, sm2, k2, ldW, q1
+              show := mp(fin, oe)
+            qed
+            show by taut(m1, m0)
+          qed
+          have c63: !int_le(SC, 47) -> runs(SPEC, s, o) proof
+            assume h47
+            have _ c40 := mp(F63, h47)
+            have m1: !(int_mul(ML, 4096) = 0) -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 q2 := mp(FML, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49 x54, oe from kz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ldS, c40, ldW, q1, mld, q2
+              show := mp(fin, oe)
+            qed
+            have m0: int_mul(ML, 4096) = 0 -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 := mp(F0, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49, oe from kz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ldS, c40, ldW, q1
+              show := mp(fin, oe)
+            qed
+            show by taut(m1, m0)
+          qed
+          show by taut(c48, c63)
+        qed
+        // the 32-bit offset at p - 8, past 16 bits (the 16-bit one 0)
+        have nz: !(SB4 = 0) -> runs(SPEC, s, o) proof
+          assume hz
+          have w0 w4a w4b := mp(hb4, hz)
+          have sv8: gimple.sval(T64, bits_neg(64, 8)) = int_neg(8) by defs(simp(), gimple.sval)
+          let P8 := int_add(p, gimple.sval(T64, bits_neg(64, 8)))
+          have e8: P8 = int_sub(p, 8) by arith(sv8)
+          have u84 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_add(P8, 0)}, {4}, {false}), arith(hp), arith(hp, e8), arith(e8), arith(e8), u8)
+          have md8: g.mem_defined(s, P8, 0, 4, false) by simp(u84, e8, p16, hp, p64)
+          have pd8 := apply(g.padd_det, {s}, {p}, {bits_neg(64, 8)}, hu, hp, simp(), arith(sv8, p16), arith(sv8, hp, p64))
+          have ld8 := apply(g.ld32_det, {s}, {P8}, {0}, hu, arith(e8, p16, hp, p64), simp(), md8)
+          have a8: int_add(P8, 0) = bits_sub(64, p, 8) by defs(arith(e8, hp, p16, p64), bits_sub, pow2)
+          have c8b: bits_of_int(32, gimple.bytes_at(V0, int_add(P8, 0), 4)) = W4 by defs(arith(a8, w4o, w4l), bits_of_int, pow2)
+          have ld8b := rewrite(c8b, ld8)
+          have s4: sint(32, W4) = W4 := apply(ms.sint_small, w4o, (int_lt(W4, 2147483648) by arith(w4b)))
+          have s65: sint(32, 65535) = 65535 by defs(simp(), sint)
+          have ngt: !int_le(sint(32, W4), sint(32, 65535)) by arith(s4, s65, w4a)
+          have eB: W4 = GO by defs(simp(hz), mallocng_specs.gm_off)
+          step x10 x18, knz from k4b with hz, w0, pd8, ld8b, ngt
+          have knz2 := rewrite(eB, knz)
+          have c48: int_le(SC, 47) -> runs(SPEC, s, o) proof
+            assume h47
+            have ed ldt sm1 k1 sa sm2 k2 := mp(F48, h47)
+            have m1: !(int_mul(ML, 4096) = 0) -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 q2 := mp(FML, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49 x54 x59, oe from knz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ed, ldt, sm1, k1, sa, sm2, k2, ldW, q1, mld, q2
+              show := mp(fin, oe)
+            qed
+            have m0: int_mul(ML, 4096) = 0 -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 := mp(F0, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49 x54, oe from knz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ed, ldt, sm1, k1, sa, sm2, k2, ldW, q1
+              show := mp(fin, oe)
+            qed
+            show by taut(m1, m0)
+          qed
+          have c63: !int_le(SC, 47) -> runs(SPEC, s, o) proof
+            assume h47
+            have _ c40 := mp(F63, h47)
+            have m1: !(int_mul(ML, 4096) = 0) -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 q2 := mp(FML, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49 x54, oe from knz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ldS, c40, ldW, q1, mld, q2
+              show := mp(fin, oe)
+            qed
+            have m0: int_mul(ML, 4096) = 0 -> runs(SPEC, s, o) proof
+              assume hm
+              have q1 := mp(F0, hm)
+              step x14 x19 x24 x29 x34 x39 x44 x49, oe from knz2 with smd, pdB, ldB2, ldM, cmem, ldL, clast, ld24, sh24, cav, ld28, sh28, cfr, ldA, ldC, csec, scd, h47, ldS, c40, ldW, q1
+              show := mp(fin, oe)
+            qed
+            show by taut(m1, m0)
+          qed
+          show by taut(c48, c63)
+        qed
+        show by taut(z, nz)
+      qed
+      show by taut(cc, cov, cok)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// get_meta as a C function value, for such callees
+theorem ms.get_meta_fun_c2: all g0 g1.
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g1, regs), s, o) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o)) ->
+  all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(app(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1), regs), s, o) ->
+  runs(app(mallocng_specs.get_meta_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes), regs), s, o)
+proof
+  fix g0 g1
+  assume hg1
+  have hm: all regs. refines(c_src_malloc_mallocng_malloc.get_meta(bits_of_int(64, app(regs, 0)), g0, g1),
+      mallocng_specs.get_meta_spec(c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes, bits_of_int(64, app(regs, 0))), abi.World) proof
+    fix regs
+    show := mp(all_elim(ms.get_meta_c2, {bits_of_int(64, app(regs, 0))}, {g0}, {g1}), simp(), hg1)
+  qed
+  show by defs(apply(g.fun_res[n := 1, w := 64], hm), c_src_malloc_mallocng_malloc.get_meta_fun, mallocng_specs.get_meta_spec_fun, letin)
 qed

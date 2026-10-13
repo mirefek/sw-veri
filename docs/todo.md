@@ -66,7 +66,7 @@ translation verification, the engine):
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
-- Specs and C2 (C1 done): `get_meta`,
+- Specs and C2 (C1 done):
   `__malloc_allzerop`, `activate_group`, `try_avail`,
   `alloc_slot`, `__malloc_alloc_meta`.
 - `alloc_group` (C1 by 1.0 item 1).
