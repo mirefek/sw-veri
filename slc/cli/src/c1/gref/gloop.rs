@@ -200,7 +200,7 @@ impl<'e> Gen<'e> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn cfg_loops(&mut self, lo: &Term, l0: &Term, b: &Term, tr: &Term, kk: &Term, comps: &[Term], k_e: u128, labels: &[u128], succ: &BTreeMap<u128, Vec<Option<u128>>>, cuts0: &BTreeSet<u128>, q0: &Term, w: &Term) -> Result<Seq, String> {
         let lps = loops_of(labels, succ, k_e, cuts0)?;
-        self.trace(|| format!("ref: loops at {:?}, exits {:?}, cut at {:?}", lps.heads, lps.exits, lps.cuts));
+        self.phase(|| format!("ref: loops at {:?}, exits {:?}, cut at {:?}", lps.heads, lps.exits, lps.cuts));
         let rels = self.loop_rels(&lps, labels);
         let fls = self.mk("false", vec![]);
         let cut = GCut { v: rels.d.clone(), labels: labels.to_vec(), succ: succ.clone(), vm: None, hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new(), nmode: true, ufacts: Vec::new() };
@@ -267,7 +267,7 @@ impl<'e> Gen<'e> {
                 walked.push(Some(self.sub_walk_hd(&prem)?));
                 self.drop_caches();
             }
-            self.trace(|| format!("ref: phase: point {} (label {}) walked", i, p.label));
+            self.phase(|| format!("ref: phase: point {} (label {}) walked", i, p.label));
             i += 1;
         }
         // the labels' ways: each label's block walked alone, its leaves' states
@@ -335,7 +335,7 @@ impl<'e> Gen<'e> {
             }
             done.insert(kl, s0);
         }
-        self.trace(|| "ref: phase: the ways".into());
+        self.phase(|| "ref: phase: the ways".into());
         let pw = self.lab_all(&wps[0], |g, k, pk| g.evp(&RP::Taut(vec![R::S(done[&k].clone())]), pk, &[]))?;
         // the body's effect (the C1 bookkeeping's lemmas)
         let se = {
@@ -344,7 +344,7 @@ impl<'e> Gen<'e> {
         };
         let pse = self.evp(&RP::Defs(Box::new(RP::By(R::S(se))), vec!["letin".into()]), &wps[1], &[])?;
         let steps = self.run(&mp(wsr, vec![s(&pw), s(&pse)]), &[])?;
-        self.trace(|| "ref: phase: the steps".into());
+        self.phase(|| "ref: phase: the steps".into());
         // INV the points' disjunction: each hypothesis proven, each walk's
         // discharged
         if sl.len() != 1 {
@@ -397,18 +397,18 @@ impl<'e> Gen<'e> {
         for i in [0, 1] {
             pfs.push(self.evp(&RP::Taut(vec![R::S(steps.clone())]), &prems[i], &[])?);
         }
-        self.trace(|| "ref: phase: the rank".into());
+        self.phase(|| "ref: phase: the rank".into());
         pfs.push(self.lab_all(&prems[2], |g, _, pk| g.lab_simp(pk))?);
         let mt = self.app(&rels.m, "app", 2).ok_or("the rank's table")?[0].clone();
         let ml = self.run(&R::Inst("g.ml_label".into(), vec![("v", rels.v.clone()), ("t", mt)]), &[])?;
         pfs.push(self.evp(&RP::Taut(vec![R::S(ml)]), &prems[3], &[])?);
-        self.trace(|| "ref: phase: the heads".into());
+        self.phase(|| "ref: phase: the heads".into());
         pfs.push(self.lab_all(&prems[4], |g, _, pk| g.lab_simp(pk))?);
         for i in [5, 6] {
             pfs.push(self.evp(&RP::Taut(vec![R::S(steps.clone())]), &prems[i], &[])?);
         }
         pfs.push(self.all_simp(&prems[7], 2)?);
-        self.trace(|| "ref: phase: the points' states".into());
+        self.phase(|| "ref: phase: the points' states".into());
         let (rels_pt, rels_d) = (rels.pt.clone(), rels.d.clone());
         pfs.push(self.pts_all(&prems[8], |g, i, pk| {
             let (w, y) = (g.var("vw"), g.var("vy"));
@@ -421,19 +421,19 @@ impl<'e> Gen<'e> {
             g.close(pf, &[], &[Self::var_id(&w), Self::var_id(&y)])
         })?);
         pfs.push(self.pts_all(&prems[9], |g, _, pk| g.lab_simp(pk))?);
-        self.trace(|| "ref: phase: the points' walks".into());
+        self.phase(|| "ref: phase: the points' walks".into());
         pfs.push(self.pts_all(&prems[10], |g, i, pk| match &walked2[i] {
             Some(s0) => g.evp(&RP::Taut(vec![R::S(s0.clone())]), pk, &[]),
             None => g.sub_walk_hd(pk),
         })?);
-        self.trace(|| "ref: phase: the heads' programs".into());
+        self.phase(|| "ref: phase: the heads' programs".into());
         pfs.push(self.pts_all(&prems[11], |g, i, pk| if g.gref.as_ref().unwrap().points[i].label == h0 { g.head_prog(i, pk) } else { g.vacuous(pk, 2, 0) })?);
-        self.trace(|| "ref: phase: the trips".into());
+        self.phase(|| "ref: phase: the trips".into());
         pfs.push(self.lab_all(&prems[12], |g, k, pk| if k == h0 { g.trip_claim(pk, h0) } else { g.vacuous(pk, 2, 1) })?);
-        self.trace(|| "ref: phase: the exits".into());
+        self.phase(|| "ref: phase: the exits".into());
         let exits = lps.exits[&h0].clone();
         pfs.push(self.lab_all(&prems[13], |g, k, pk| if exits.contains(&k) { g.exit_claim(pk, k) } else { g.vacuous(pk, 2, 1) })?);
-        self.trace(|| "ref: phase: the rests".into());
+        self.phase(|| "ref: phase: the rests".into());
         for i in [14, 15] {
             pfs.push(self.all_refute(&prems[i])?);
         }
@@ -442,7 +442,7 @@ impl<'e> Gen<'e> {
         pfs.push(self.univ_hu(&prems[18])?);
         pfs.push(self.univ_htu(&prems[19])?);
         let main = self.run(&mp(rr, pfs.iter().map(s).collect()), &[])?;
-        self.trace(|| "ref: phase: done".into());
+        self.phase(|| "ref: phase: done".into());
         // at the loop's start: its point, its state in univ(1) (its world the
         // outcome's, its locals the walk's choices)
         let i0 = self.inv_at(l0, q0)?;

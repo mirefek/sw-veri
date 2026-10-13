@@ -342,6 +342,12 @@ struct Gen<'e> {
     gtyped: Vec<(Term, Seq)>,
 }
 
+/// the seconds since the first trace line
+fn trace_t0() -> f64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
+}
+
 /// A loop of the spec met at a machine address (its head): the claim there,
 /// for every world and local with the invariant, by induction on the variant
 #[derive(Clone)]
@@ -827,9 +833,15 @@ impl<'e> Gen<'e> {
 
     /// (C1_TRACE: a message)
     fn trace(&self, m: impl FnOnce() -> String) {
+        if std::env::var("C1_TRACE").is_ok_and(|v| v != "phase") {
+            eprintln!("c1 {} [{:.2}]", m(), trace_t0());
+        }
+    }
+
+    /// (C1_TRACE, `phase` too: a walk's phase -- no terms printed)
+    fn phase(&self, m: impl FnOnce() -> String) {
         if std::env::var("C1_TRACE").is_ok() {
-            static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-            eprintln!("c1 {} [{:.2}]", m(), T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f64());
+            eprintln!("c1 {} [{:.2}]", m(), trace_t0());
         }
     }
 

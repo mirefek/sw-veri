@@ -1501,7 +1501,7 @@ impl<'e> Gen<'e> {
                 0 => self.gref.as_ref().unwrap().walked.get(i).cloned().ok_or("a cut point not walked")?,
                 _ => self.point_v(&prem_i)?,
             };
-            self.trace(|| format!("ref: phase: point {} (label {}) proven", i, self.gref.as_ref().unwrap().points[i].label));
+            self.phase(|| format!("ref: phase: point {} (label {}) proven", i, self.gref.as_ref().unwrap().points[i].label));
             let pt = self.run(&mp(r, vec![s(&pf)]), &[])?;
             acc = self.run(&mp(R::Inst("g.inv_or".into(), vec![("G", gl.clone()), ("A", disj[i].0.clone()), ("B", disj[i].1.clone())]), vec![s(&pt), s(&acc)]), &[])?;
             self.drop_caches();
@@ -1731,7 +1731,7 @@ impl<'e> Gen<'e> {
         let labels: Vec<u128> = seen.into_iter().collect();
         let succ = self.gref.as_ref().unwrap().cut.as_ref().unwrap().succ.clone();
         let cuts = cut_labels(&labels, &succ, k_e)?;
-        self.trace(|| format!("ref: {} labels, cut at {:?}", labels.len(), cuts));
+        self.phase(|| format!("ref: {} labels, cut at {:?}", labels.len(), cuts));
         // (a rank: the longest way on)
         let mut rank: BTreeMap<u128, u128> = BTreeMap::new();
         for _ in 0..=labels.len() {
@@ -1839,7 +1839,7 @@ impl<'e> Gen<'e> {
             let pf = self.sub_walk(&prem, &["pw", "py"])?;
             self.gref.as_mut().unwrap().walked.push(pf);
             self.drop_caches();
-            self.trace(|| format!("ref: phase: point {} (label {}) walked", i, self.gref.as_ref().unwrap().points[i].label));
+            self.phase(|| format!("ref: phase: point {} (label {}) walked", i, self.gref.as_ref().unwrap().points[i].label));
             i += 1;
         }
         self.trace(|| format!("ref: {} cut points", self.gref.as_ref().unwrap().points.len()));
@@ -1877,15 +1877,15 @@ impl<'e> Gen<'e> {
         self.gref.as_mut().unwrap().walked = done;
         let (rr, stmt) = inst(self, inv)?;
         let (prems, _) = self.imps(&stmt);
-        self.trace(|| "ref: phase: the ways on".into());
+        self.phase(|| "ref: phase: the ways on".into());
         let pd = self.lab_combine(&prems[0], 1)?;
-        self.trace(|| "ref: phase: the rank".into());
+        self.phase(|| "ref: phase: the rank".into());
         let pm = self.lab_combine(&prems[1], 2)?;
-        self.trace(|| "ref: phase: the points' labels".into());
+        self.phase(|| "ref: phase: the points' labels".into());
         let pv = self.combine(&prems[2], 3)?;
-        self.trace(|| "ref: phase: the points' walks".into());
+        self.phase(|| "ref: phase: the points' walks".into());
         let ps = self.combine(&prems[3], 0)?;
-        self.trace(|| "ref: phase: done".into());
+        self.phase(|| "ref: phase: done".into());
         let main = self.run(&mp(rr, vec![s(&pd), s(&pm), s(&pv), s(&ps)]), &[])?;
         // at the loop's start: its point
         let i0 = self.inv_at(&l0, &q0)?;
