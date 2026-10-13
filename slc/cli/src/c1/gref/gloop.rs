@@ -507,6 +507,14 @@ impl<'e> Gen<'e> {
         if let Some((_, pf)) = self.gref.as_ref().and_then(|g| g.cut.as_ref()).and_then(|c| c.ufacts.iter().find(|(u, _)| u == x)) {
             return Ok(pf.clone());
         }
+        // (a value's name: its value)
+        if let Node::Var(v, a) = x.node() {
+            if a.is_empty() {
+                if let Some(e) = self.vexp.get(v).cloned() {
+                    return self.univ_of(&e);
+                }
+            }
+        }
         // (a choice of the walk: in its domain, a word's bits)
         if let Some((_, fact)) = self.gtyped.iter().find(|(v, _)| v == x).cloned() {
             if let Some(n) = self.app(fact.concl(), "in", 2).and_then(|i| self.app(&i[1], "bits", 1).map(|b| b[0].clone())) {

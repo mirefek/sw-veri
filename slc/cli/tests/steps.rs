@@ -290,7 +290,7 @@ fn c1_cfg_engine_checks() {
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_loop.core: 0 constants, 0 axioms, 1 definitions, 46 theorems, 0 conditional theorems, 0 open lemmas");
+        && checked.contains("proofs/gimple_loop.core: 0 constants, 0 axioms, 1 definitions, 47 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text, &cfg_sl] {
         let _ = std::fs::remove_file(f);

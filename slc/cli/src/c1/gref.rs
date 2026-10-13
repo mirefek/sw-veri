@@ -106,7 +106,8 @@ impl<'e> Gen<'e> {
             Node::App(_, a) => a.to_vec(),
             _ => Vec::new(),
         };
-        let prr = mp(R::S(pr), args.iter().map(t).collect());
+        let (prs, cio) = self.proc_ref_at(pr, &args)?;
+        let prr = R::S(prs);
         let k = self.lam(&br[2], &["x1", "x2", "y", "v"], &["y", "v", "x2"]).ok_or("the wrapper's continuation")?;
         let x = self.lam(&br[3], &["x1", "x2", "y", "e"], &["y", "e", "x2"]).ok_or("the wrapper's handler")?;
         let d = self.lam(&br[4], &["x1", "x2", "t"], &["t", "x2"]).ok_or("the wrapper's handler")?;
@@ -142,9 +143,10 @@ impl<'e> Gen<'e> {
         let hpl = self.run(&R::Expand(Box::new(R::S(hp)), vec![low.to_string()]), &[])?;
         let r1 = self.run(&mp(R::S(fun), vec![t(&regs), t(&w), t(&o), s(&hpl)]), &[])?;
         let r3 = self.evp(&RP::Defs(Box::new(RP::By(R::S(r1))), vec![high.to_string()]), &concl, &[])?;
-        let mut vs: Vec<VarId> = gs.iter().map(Self::var_id).collect();
-        vs.extend([Self::var_id(&regs), Self::var_id(&w), Self::var_id(&o)]);
-        self.close(r3, &[h1, h2, h3, prem_t], &vs)
+        let r4 = self.close(r3, &[h1, h2, h3, prem_t], &[Self::var_id(&regs), Self::var_id(&w), Self::var_id(&o)])?;
+        // (the callees' tr.callee_io the loops' records need: premises after
+        // the callees)
+        self.close(r4, &cio, &gs.iter().map(Self::var_id).collect::<Vec<_>>())
     }
 
     /// The procedures' refinement: `all ps s r. runs(PL(ps), s, r) ->
@@ -174,9 +176,32 @@ impl<'e> Gen<'e> {
         let u = self.run(&R::Apply(Box::new(f("g.runs_univ")), vec![s(&hb)]), &[])?;
         let wr = self.run(&R::Expand(Box::new(R::S(walk)), vec!["g.ref".into()]), &[])?;
         let r = self.run(&mp(R::S(wr), vec![t(&o), s(&e), s(&u)]), &[])?;
-        let mut vs: Vec<VarId> = ps.iter().map(Self::var_id).collect();
-        vs.extend([Self::var_id(&w), Self::var_id(&o)]);
-        self.close(r, &[hr_t], &vs)
+        let r = self.close(r, &[hr_t], &[Self::var_id(&w), Self::var_id(&o)])?;
+        // (with loops calling callees: their tr.callee_io -- premises after
+        // the parameters)
+        let extra: Vec<Term> = r.hyps().iter().cloned().collect();
+        let vs: Vec<VarId> = ps.iter().map(Self::var_id).collect();
+        self.close(r, &extra, &vs)
+    }
+
+    /// a procedures' refinement `all ps. H1 -> .. -> all s r. ..` at the
+    /// arguments: its premises assumed (tr.callee_io of the callees given),
+    /// `all s r. ..`; the premises
+    fn proc_ref_at(&mut self, pr: Seq, args: &[Term]) -> Result<(Seq, Vec<Term>), String> {
+        let a = self.run(&mp(R::S(pr), args.iter().map(t).collect()), &[])?;
+        let mut cur = a;
+        let mut hs = Vec::new();
+        loop {
+            let c = cur.concl().clone();
+            let Node::App(sy, x) = c.node() else { break };
+            if *sy != self.env.builtins.imp {
+                break;
+            }
+            let h = self.assume(&x[0])?;
+            cur = self.run(&mp(R::S(cur), vec![s(&h)]), &[])?;
+            hs.push(x[0].clone());
+        }
+        Ok((cur, hs))
     }
 
     /// a callee's refinement `all s r. runs(PL(as), s, r) -> runs(PH(as),
@@ -201,7 +226,11 @@ impl<'e> Gen<'e> {
                 pr
             }
         };
-        Ok(mp(R::S(pr), al.iter().map(t).collect()))
+        let (prs, cio) = self.proc_ref_at(pr, al)?;
+        if !cio.is_empty() {
+            return Err(format!("callee {}: its refinement needs its callees' tr.callee_io (not yet inside a walk)", nl));
+        }
+        Ok(R::S(prs))
     }
 
     /// a closed condition decided by evaluation (no variables in it once
@@ -829,6 +858,10 @@ impl<'e> Gen<'e> {
                     Some(("g.ref_if", b1, b2))
                 } else if cu0 == n0 && ncu0 == nn0 {
                     Some(("g.ref_ifn", b2, b1))
+                } else if self.app(&cl, "not", 1).is_some_and(|n| self.canon(&n[0]) == cu0) && ncu0 == c0 {
+                    // (the CFG's condition `!c` -- an `if a != b` -- the
+                    // structured side's c: its ways the other way round)
+                    Some(("g.ref_ifnn", b2, b1))
                 } else {
                     None
                 };
@@ -877,7 +910,8 @@ impl<'e> Gen<'e> {
                     let a2l = self.lam(&a2, &lctx, &["x8"]).ok_or("a way")?;
                     let b1l = self.lam(&b1, &uctx, &["x0", "x8"]).ok_or("a way")?;
                     let b2l = self.lam(&b2, &uctx, &["x0", "x8"]).ok_or("a way")?;
-                    let (rr, stmt) = self.inst(lemma, &[("c", cl.clone()), ("a1", a1l), ("a2", a2l), ("kl", kl), ("b1", b1l), ("b2", b2l), ("ku", ku)])?;
+                    let c = if lemma == "g.ref_ifnn" { self.app(&cl, "not", 1).unwrap()[0].clone() } else { cl.clone() };
+                    let (rr, stmt) = self.inst(lemma, &[("c", c), ("a1", a1l), ("a2", a2l), ("kl", kl), ("b1", b1l), ("b2", b2l), ("ku", ku)])?;
                     let body = self.app(&stmt, "all", 1).ok_or("g.ref_if")?[0].clone().instantiate_params(std::slice::from_ref(w), &self.env.binders_fn());
                     let (prems, _) = self.imps(&body);
                     let mut pfs = Vec::new();
