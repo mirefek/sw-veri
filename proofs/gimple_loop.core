@@ -1,0 +1,503 @@
+// The CFG ⊑ its structured form with loops (docs/overview.md): a loop a
+// node of the structuring's tree -- the CFG's runs from its head, trip by
+// trip, are the structured loop's iterations; finitely many by induction,
+// infinitely many by coinduction, the divergence's trace the same.
+//
+// Traces only grow: a trace is the record of the events so far (each
+// field a set), a run's later states' records above its earlier ones;
+// then a divergence's trace -- the union over the run's states -- is the
+// union over any states of it from which every later one is reached
+// (`g.limit_up`): the CFG's over all its states, the structured loop's
+// over its iterations' states.
+//
+// Check after proofs/gimple_cut.core.
+
+// (a trace record below another: the same fields, each a subset)
+def g.tr_le(a, b) := dom(b) = dom(a) && (all x. x in dom(a) -> subset(app(a, x), app(b, x)))
+
+theorem g.tr_le_refl(a): g.tr_le(a, a)
+proof
+  have s: all x. x in dom(a) -> subset(app(a, x), app(a, x)) proof
+    fix x
+    assume _
+    have ss: all z. z in app(a, x) -> z in app(a, x) proof
+      fix z
+      assume h
+      show := h
+    qed
+    show by defs(ss, subset)
+  qed
+  have d: dom(a) = dom(a) := refl({dom(a)})
+  show by defs(taut(d, s), g.tr_le)
+qed
+
+theorem g.tr_le_trans(a, b, c): g.tr_le(a, b) -> g.tr_le(b, c) -> g.tr_le(a, c)
+proof
+  assume h1 h2
+  have d1: dom(b) = dom(a) by taut(expand(h1, g.tr_le))
+  have d2: dom(c) = dom(b) by taut(expand(h2, g.tr_le))
+  have s1: all x. x in dom(a) -> subset(app(a, x), app(b, x)) by taut(expand(h1, g.tr_le))
+  have s2: all x. x in dom(b) -> subset(app(b, x), app(c, x)) by taut(expand(h2, g.tr_le))
+  have s: all x. x in dom(a) -> subset(app(a, x), app(c, x)) proof
+    fix x
+    assume hx
+    have hxb: x in dom(b) := rewrite(sym(d1), hx)
+    have a1 := expand(mp(all_elim(s1, {x}), hx), subset)
+    have a2 := expand(mp(all_elim(s2, {x}), hxb), subset)
+    have g: all z. z in app(a, x) -> z in app(c, x) proof
+      fix z
+      assume hz
+      show := mp(all_elim(a2, {z}), mp(all_elim(a1, {z}), hz))
+    qed
+    show by defs(g, subset)
+  qed
+  have dc: dom(c) = dom(a) := trans(d2, d1)
+  show by defs(taut(dc, s), g.tr_le)
+qed
+
+// (a chain of records, each below the next: every one below every later)
+theorem g.chain_le(i. T): (all i. i in omega -> g.tr_le(T(i), T(int_add(i, 1)))) ->
+  all i j. i in omega -> j in omega -> int_le(i, j) -> g.tr_le(T(i), T(j))
+proof
+  assume hs
+  have up: all k. k in omega -> (all i. i in omega -> g.tr_le(T(i), T(int_add(i, k)))) proof
+    have base: all i. i in omega -> g.tr_le(T(i), T(int_add(i, 0))) proof
+      fix i
+      assume hi
+      have e: int_add(i, 0) = i by arith(hi)
+      show := subst({y. g.tr_le(T(i), T(y))}, sym(e), g.tr_le_refl[a := T(i)])
+    qed
+    have step: all k. k in omega -> (all i. i in omega -> g.tr_le(T(i), T(int_add(i, k)))) -> (all i. i in omega -> g.tr_le(T(i), T(int_add(i, int_add(k, 1))))) proof
+      fix k
+      assume hk ih
+      fix i
+      assume hi
+      have a := mp(all_elim(ih, {i}), hi)
+      have io: int_add(i, k) in omega by arith(hi, hk)
+      have b0 := mp(all_elim(hs, {int_add(i, k)}), io)
+      have e: int_add(int_add(i, k), 1) = int_add(i, int_add(k, 1)) by arith(hi, hk)
+      have b1 := subst({y. g.tr_le(T(int_add(i, k)), T(y))}, e, b0)
+      show := mp(g.tr_le_trans[a := T(i), b := T(int_add(i, k)), c := T(int_add(i, int_add(k, 1)))], a, b1)
+    qed
+    show by induct(base, step)
+  qed
+  fix i j
+  assume hi hj hle
+  have ko: int_sub(j, i) in omega by arith(hi, hj, hle)
+  have e: int_add(i, int_sub(j, i)) = j by arith(hi, hj, hle)
+  show := subst({y. g.tr_le(T(i), T(y))}, e, mp(all_elim(mp(all_elim(up, {int_sub(j, i)}), ko), {i}), hi))
+qed
+
+// (the limit over the records at positions p(i), never before i: the
+// limit over all)
+theorem g.limit_up(i. T, i. p): (all i j. i in omega -> j in omega -> int_le(i, j) -> g.tr_le(T(i), T(j))) ->
+  (all i. i in omega -> p(i) in omega && int_le(i, p(i))) ->
+  trace_limit(i. T(p(i))) = trace_limit(i. T(i))
+proof
+  assume hm hp
+  have p0 := mp(all_elim(hp, {empty}), omega_zero)
+  have p0o: p(empty) in omega by taut(p0)
+  have p0l: int_le(empty, p(empty)) by taut(p0)
+  have t0 := mp(all_elim(hm, {empty}, {p(empty)}), omega_zero, p0o, p0l)
+  have d0: dom(T(p(empty))) = dom(T(empty)) by taut(expand(t0, g.tr_le))
+  // each field's union: the same
+  have u: all f. f in dom(T(empty)) -> union(set_image(omega, i. app(T(p(i)), f))) = union(set_image(omega, i. app(T(i), f))) proof
+    fix f
+    assume hf
+    have l2r: all z. z in union(set_image(omega, i. app(T(p(i)), f))) -> z in union(set_image(omega, i. app(T(i), f))) proof
+      fix z
+      assume hz
+      have e1: ex y. z in y && y in set_image(omega, i. app(T(p(i)), f)) by taut(union_def[s := set_image(omega, i. app(T(p(i)), f)), a := z], hz)
+      obtain y, zy yi from e1
+      have e2: ex i. i in omega && app(T(p(i)), f) = y by taut(set_image_def[s := omega, f := i. app(T(p(i)), f), y := y], yi)
+      obtain i, io ey from e2
+      have pi := mp(all_elim(hp, {i}), io)
+      have pio: p(i) in omega by taut(pi)
+      have e3: ex j. j in omega && app(T(j), f) = y by ex_intro({p(i)}, taut(pio, ey))
+      have yi2: y in set_image(omega, i. app(T(i), f)) by taut(set_image_def[s := omega, f := i. app(T(i), f), y := y], e3)
+      have e4: ex y. z in y && y in set_image(omega, i. app(T(i), f)) by ex_intro({y}, taut(zy, yi2))
+      show by taut(union_def[s := set_image(omega, i. app(T(i), f)), a := z], e4)
+    qed
+    have r2l: all z. z in union(set_image(omega, i. app(T(i), f))) -> z in union(set_image(omega, i. app(T(p(i)), f))) proof
+      fix z
+      assume hz
+      have e1: ex y. z in y && y in set_image(omega, i. app(T(i), f)) by taut(union_def[s := set_image(omega, i. app(T(i), f)), a := z], hz)
+      obtain y, zy yi from e1
+      have e2: ex n. n in omega && app(T(n), f) = y by taut(set_image_def[s := omega, f := i. app(T(i), f), y := y], yi)
+      obtain n, no ey from e2
+      have pn := mp(all_elim(hp, {n}), no)
+      have pno: p(n) in omega by taut(pn)
+      have pnl: int_le(n, p(n)) by taut(pn)
+      have tn := mp(all_elim(hm, {n}, {p(n)}), no, pno, pnl)
+      have l0n: int_le(0, n) by arith(no)
+      have le0n: int_le(empty, n) := rewrite(lit_zero, l0n)
+      have t0n := mp(all_elim(hm, {empty}, {n}), omega_zero, no, le0n)
+      have dn: dom(T(n)) = dom(T(empty)) by taut(expand(t0n, g.tr_le))
+      have fn: f in dom(T(n)) := rewrite(sym(dn), hf)
+      have sn: all x. x in dom(T(n)) -> subset(app(T(n), x), app(T(p(n)), x)) by taut(expand(tn, g.tr_le))
+      have sb := expand(mp(all_elim(sn, {f}), fn), subset)
+      have zy2: z in app(T(n), f) := rewrite(sym(ey), zy)
+      have zp: z in app(T(p(n)), f) := mp(all_elim(sb, {z}), zy2)
+      have e3: ex i. i in omega && app(T(p(i)), f) = app(T(p(n)), f) by ex_intro({n}, taut(no, refl({app(T(p(n)), f)})))
+      have yi2: app(T(p(n)), f) in set_image(omega, i. app(T(p(i)), f)) by taut(set_image_def[s := omega, f := i. app(T(p(i)), f), y := app(T(p(n)), f)], e3)
+      have e4: ex y. z in y && y in set_image(omega, i. app(T(p(i)), f)) by ex_intro({app(T(p(n)), f)}, taut(zp, yi2))
+      show by taut(union_def[s := set_image(omega, i. app(T(p(i)), f)), a := z], e4)
+    qed
+    have iff: all z. z in union(set_image(omega, i. app(T(p(i)), f))) <-> z in union(set_image(omega, i. app(T(i), f))) proof
+      fix z
+      show by taut(all_elim(l2r, {z}), all_elim(r2l, {z}))
+    qed
+    show := mp(set_ext[a := union(set_image(omega, i. app(T(p(i)), f))), b := union(set_image(omega, i. app(T(i), f)))], iff)
+  qed
+  have fe := mp(fn_build_ext[d := dom(T(empty)), f := f. union(set_image(omega, i. app(T(p(i)), f))), g := f. union(set_image(omega, i. app(T(i), f)))], u)
+  have fe2 := subst({d. fn_build(d, f. union(set_image(omega, i. app(T(p(i)), f)))) = fn_build(dom(T(empty)), f. union(set_image(omega, i. app(T(i), f))))}, sym(d0), fe)
+  show by defs(fe2, trace_limit)
+qed
+
+// (the same records at every position: the same limit)
+theorem g.limit_cong(i. T1, i. T2): (all i. i in omega -> T1(i) = T2(i)) -> trace_limit(i. T1(i)) = trace_limit(i. T2(i))
+proof
+  assume he
+  have e0 := mp(all_elim(he, {empty}), omega_zero)
+  have u: all f. f in dom(T1(empty)) -> union(set_image(omega, i. app(T1(i), f))) = union(set_image(omega, i. app(T2(i), f))) proof
+    fix f
+    assume _
+    have ea: all i. i in omega -> app(T1(i), f) = app(T2(i), f) proof
+      fix i
+      assume io
+      have e := mp(all_elim(he, {i}), io)
+      show := subst({y. app(T1(i), f) = app(y, f)}, e, refl({app(T1(i), f)}))
+    qed
+    have eb: all i. i in omega -> app(T2(i), f) = app(T1(i), f) proof
+      fix i
+      assume io
+      show := sym(mp(all_elim(ea, {i}), io))
+    qed
+    have iff: all y. y in set_image(omega, i. app(T1(i), f)) <-> y in set_image(omega, i. app(T2(i), f)) proof
+      fix y
+      have a := mp(image_sub[d := omega, f := i. app(T1(i), f), g := i. app(T2(i), f), y := y], ea)
+      have b := mp(image_sub[d := omega, f := i. app(T2(i), f), g := i. app(T1(i), f), y := y], eb)
+      show by taut(a, b)
+    qed
+    have se := mp(set_ext[a := set_image(omega, i. app(T1(i), f)), b := set_image(omega, i. app(T2(i), f))], iff)
+    show := subst({y. union(set_image(omega, i. app(T1(i), f))) = union(y)}, se, refl({union(set_image(omega, i. app(T1(i), f)))}))
+  qed
+  have fe := mp(fn_build_ext[d := dom(T1(empty)), f := f. union(set_image(omega, i. app(T1(i), f))), g := f. union(set_image(omega, i. app(T2(i), f)))], u)
+  have fe2 := subst({y. fn_build(dom(T1(empty)), f. union(set_image(omega, i. app(T1(i), f)))) = fn_build(dom(y), f. union(set_image(omega, i. app(T2(i), f))))}, e0, fe)
+  show by defs(fe2, trace_limit)
+qed
+
+// (a run's records each below the next: a chain)
+theorem g.chain_succ(i. T): (all i. i in omega -> g.tr_le(T(i), T(succ(i)))) ->
+  all i j. i in omega -> j in omega -> int_le(i, j) -> g.tr_le(T(i), T(j))
+proof
+  assume hs
+  have h1: all i. i in omega -> g.tr_le(T(i), T(int_add(i, 1))) proof
+    fix i
+    assume io
+    have es: succ(i) = int_add(i, 1) by arith(io)
+    show := rewrite(es, mp(all_elim(hs, {i}), io))
+  qed
+  show := mp(g.chain_le[T := i. T(i)], h1)
+qed
+
+// (an infinite run, its records a chain: from every state f(k) a
+// divergence of the same trace)
+theorem g.run_suffix_exact(l. c, l o. b, l. tr, f, k):
+  (all i. i in omega -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) ->
+  (all i j. i in omega -> j in omega -> int_le(i, j) -> g.tr_le(tr(app(f, i)), tr(app(f, j)))) -> k in omega ->
+  while_rel(app(f, k), l. c(l), l o. b(l, o), l. tr(l), diverge(trace_limit(i. tr(app(f, i)))))
+proof
+  assume hst hm hk
+  let G := fn_build(omega, i. app(f, int_add(i, k)))
+  have gf := fn_build_fun[d := omega, v := i. app(f, int_add(i, k))]
+  have gd := fn_build_dom[d := omega, v := i. app(f, int_add(i, k))]
+  have gi: all i. i in omega -> app(G, i) = app(f, int_add(i, k)) proof
+    fix i
+    assume io
+    show := mp(app_fn_build[d := omega, v := i. app(f, int_add(i, k)), a := i], io)
+  qed
+  have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+  have g0a := mp(all_elim(gi, {0}), zo)
+  have ek: int_add(0, k) = k by arith(hk)
+  have g0b := rewrite(ek, g0a)
+  have g0: app(G, empty) = app(f, k) := subst({y. app(G, y) = app(f, k)}, lit_zero, g0b)
+  have st: all i. i in omega -> c(app(G, i)) && b(app(G, i), ok(app(G, succ(i)), empty)) proof
+    fix i
+    assume io
+    have i1o: int_add(i, 1) in omega by arith(io)
+    have ga := mp(all_elim(gi, {i}), io)
+    have gb := mp(all_elim(gi, {int_add(i, 1)}), i1o)
+    have es: succ(i) = int_add(i, 1) by arith(io)
+    have jo: int_add(i, k) in omega by arith(io, hk)
+    have ej1: succ(int_add(i, k)) = int_add(int_add(i, k), 1) by arith(jo)
+    have ej2: int_add(int_add(i, k), 1) = int_add(int_add(i, 1), k) by arith(io, hk)
+    have ej := trans(ej1, ej2)
+    have gs0: app(G, succ(i)) = app(f, int_add(int_add(i, 1), k)) := subst({y. app(G, y) = app(f, int_add(int_add(i, 1), k))}, sym(es), gb)
+    have gs: app(G, succ(i)) = app(f, succ(int_add(i, k))) := rewrite(sym(ej), gs0)
+    have s0 := mp(all_elim(hst, {int_add(i, k)}), jo)
+    have s1 := rewrite(sym(ga), s0)
+    show := rewrite(sym(gs), s1)
+  qed
+  // (its trace: the records at positions i + k, the run's)
+  have tg: all i. i in omega -> tr(app(G, i)) = tr(app(f, int_add(i, k))) proof
+    fix i
+    assume io
+    have e := mp(all_elim(gi, {i}), io)
+    show := subst({y. tr(app(G, i)) = tr(y)}, e, refl({tr(app(G, i))}))
+  qed
+  have t1 := mp(g.limit_cong[T1 := i. tr(app(G, i)), T2 := i. tr(app(f, int_add(i, k)))], tg)
+  have pk: all i. i in omega -> int_add(i, k) in omega && int_le(i, int_add(i, k)) proof
+    fix i
+    assume io
+    have a: int_add(i, k) in omega by arith(io, hk)
+    have b0: int_le(i, int_add(i, k)) by arith(io, hk)
+    show by taut(a, b0)
+  qed
+  have t2 := mp(g.limit_up[T := i. tr(app(f, i)), p := i. int_add(i, k)], hm, pk)
+  have t3 := trans(t1, t2)
+  have e1: ex g. is_fun(g) && dom(g) = omega && app(g, empty) = app(f, k) &&
+      (all i. i in omega -> c(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))) &&
+      diverge(trace_limit(i. tr(app(f, i)))) = diverge(trace_limit(i. tr(app(g, i))))
+    by ex_intro({G}, taut(gf, gd, g0, st, subst({y. diverge(y) = diverge(trace_limit(i. tr(app(G, i))))}, t3, refl({diverge(trace_limit(i. tr(app(G, i))))}))))
+  show by defs(taut(e1), while_rel)
+qed
+
+// ----------------------------------------------------------------------
+//  A run's stretches as stopped runs (the body stopped at p, its outcome
+//  then the cut's mark pair(3, l))
+
+// (from position a to the first stop c: the stopped run to c's mark)
+theorem g.seg_wfr(l. p, l o. b, f, a, c): a in omega -> c in omega -> int_le(a, c) ->
+  (all i. i in omega -> int_le(a, i) -> int_lt(i, c) -> !p(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) -> p(app(f, c)) ->
+  while_fin_rel(app(f, a), l. true, l y. (p(l) && y = pair(3, l)) || (!p(l) && b(l, y)), pair(3, app(f, c)))
+proof
+  assume ha hc hac hst hp
+  let m := int_sub(c, a)
+  let G := fn_build(succ(m), i. app(f, int_add(i, a)))
+  have mo: m in omega by arith(ha, hc, hac)
+  have gf := fn_build_fun[d := succ(m), v := i. app(f, int_add(i, a))]
+  have gd := fn_build_dom[d := succ(m), v := i. app(f, int_add(i, a))]
+  have em: succ(m) = int_add(m, 1) by arith(mo)
+  have m1: int_add(m, 1) in omega by arith(mo)
+  have gi: all i. i in omega -> int_le(i, m) -> app(G, i) = app(f, int_add(i, a)) proof
+    fix i
+    assume io il
+    have mm: i in int_add(m, 1) by arith(io, il, mo, m1)
+    show := mp(app_fn_build[d := succ(m), v := i. app(f, int_add(i, a)), a := i], rewrite(sym(em), mm))
+  qed
+  have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+  have z0: int_le(0, m) by arith(mo)
+  have g0a := mp(mp(all_elim(gi, {0}), zo), z0)
+  have ea: int_add(0, a) = a by arith(ha)
+  have g0b := rewrite(ea, g0a)
+  have g0: app(G, empty) = app(f, a) := subst({y. app(G, y) = app(f, a)}, lit_zero, g0b)
+  have st: all i. i in m -> true && ((p(app(G, i)) && ok(app(G, succ(i)), empty) = pair(3, app(G, i))) || (!p(app(G, i)) && b(app(G, i), ok(app(G, succ(i)), empty)))) proof
+    fix i
+    assume hi
+    have io := mp(mp(nat_elem[k := m, i := i], mo), hi)
+    have il: int_le(i, m) by arith(io, mo, hi)
+    have i1o: int_add(i, 1) in omega by arith(io)
+    have i1l: int_le(int_add(i, 1), m) by arith(io, mo, hi)
+    have ga := mp(mp(all_elim(gi, {i}), io), il)
+    have gb := mp(mp(all_elim(gi, {int_add(i, 1)}), i1o), i1l)
+    have es: succ(i) = int_add(i, 1) by arith(io)
+    have jo: int_add(i, a) in omega by arith(io, ha)
+    have ej1: succ(int_add(i, a)) = int_add(int_add(i, a), 1) by arith(jo)
+    have ej2: int_add(int_add(i, a), 1) = int_add(int_add(i, 1), a) by arith(io, ha)
+    have ej := trans(ej1, ej2)
+    have gs0: app(G, succ(i)) = app(f, int_add(int_add(i, 1), a)) := subst({y. app(G, y) = app(f, int_add(int_add(i, 1), a))}, sym(es), gb)
+    have gs: app(G, succ(i)) = app(f, succ(int_add(i, a))) := rewrite(sym(ej), gs0)
+    have l1: int_le(a, int_add(i, a)) by arith(io, ha)
+    have l2: int_lt(int_add(i, a), c) by arith(io, ha, hi, mo, hc)
+    have s0 := mp(all_elim(hst, {int_add(i, a)}), jo, l1, l2)
+    have s1 := rewrite(sym(ga), s0)
+    have s2 := rewrite(sym(gs), s1)
+    show by taut(s2)
+  qed
+  have ec: int_add(m, a) = c by arith(ha, hc, hac)
+  have mm: int_le(m, m) by arith(mo)
+  have gma := mp(mp(all_elim(gi, {m}), mo), mm)
+  have gm: app(G, m) = app(f, c) := rewrite(ec, gma)
+  have pm: p(app(G, m)) := rewrite(sym(gm), hp)
+  have nc := g.cut_not_ok[x := app(G, m)]
+  have em3: pair(3, app(f, c)) = pair(3, app(G, m)) := subst({y. pair(3, y) = pair(3, app(G, m))}, gm, refl({pair(3, app(G, m))}))
+  have bm: (p(app(G, m)) && pair(3, app(f, c)) = pair(3, app(G, m))) || (!p(app(G, m)) && b(app(G, m), pair(3, app(f, c)))) by taut(pm, em3)
+  have nc2: !is_ok(pair(3, app(f, c))) := rewrite(gm, nc)
+  have e1: ex g. m in omega && is_fun(g) && dom(g) = succ(m) && app(g, empty) = app(f, a) &&
+      (all i. i in m -> true && ((p(app(g, i)) && ok(app(g, succ(i)), empty) = pair(3, app(g, i))) || (!p(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))))) &&
+      ((!true && pair(3, app(f, c)) = ok(app(g, m), empty)) || (true && ((p(app(g, m)) && pair(3, app(f, c)) = pair(3, app(g, m))) || (!p(app(g, m)) && b(app(g, m), pair(3, app(f, c))))) && !is_ok(pair(3, app(f, c)))))
+    by ex_intro({G}, taut(mo, gf, gd, g0, st, bm, nc2))
+  have e2: ex n g. n in omega && is_fun(g) && dom(g) = succ(n) && app(g, empty) = app(f, a) &&
+      (all i. i in n -> true && ((p(app(g, i)) && ok(app(g, succ(i)), empty) = pair(3, app(g, i))) || (!p(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))))) &&
+      ((!true && pair(3, app(f, c)) = ok(app(g, n), empty)) || (true && ((p(app(g, n)) && pair(3, app(f, c)) = pair(3, app(g, n))) || (!p(app(g, n)) && b(app(g, n), pair(3, app(f, c))))) && !is_ok(pair(3, app(f, c)))))
+    by ex_intro({m}, e1)
+  show by defs(taut(e2), while_fin_rel)
+qed
+
+// (from position a to the run's end at n, no stop on the way: the stopped
+// run to the end's outcome)
+theorem g.seg_end_wfr(l. p, l o. b, f, a, n, r): a in omega -> n in omega -> int_le(a, n) ->
+  (all i. i in omega -> int_le(a, i) -> int_lt(i, n) -> !p(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) ->
+  !p(app(f, n)) -> b(app(f, n), r) -> !is_ok(r) ->
+  while_fin_rel(app(f, a), l. true, l y. (p(l) && y = pair(3, l)) || (!p(l) && b(l, y)), r)
+proof
+  assume ha hn han hst hp hb hr
+  let m := int_sub(n, a)
+  let G := fn_build(succ(m), i. app(f, int_add(i, a)))
+  have mo: m in omega by arith(ha, hn, han)
+  have gf := fn_build_fun[d := succ(m), v := i. app(f, int_add(i, a))]
+  have gd := fn_build_dom[d := succ(m), v := i. app(f, int_add(i, a))]
+  have em: succ(m) = int_add(m, 1) by arith(mo)
+  have m1: int_add(m, 1) in omega by arith(mo)
+  have gi: all i. i in omega -> int_le(i, m) -> app(G, i) = app(f, int_add(i, a)) proof
+    fix i
+    assume io il
+    have mm: i in int_add(m, 1) by arith(io, il, mo, m1)
+    show := mp(app_fn_build[d := succ(m), v := i. app(f, int_add(i, a)), a := i], rewrite(sym(em), mm))
+  qed
+  have zo: 0 in omega := rewrite(sym(lit_zero), omega_zero)
+  have z0: int_le(0, m) by arith(mo)
+  have g0a := mp(mp(all_elim(gi, {0}), zo), z0)
+  have ea: int_add(0, a) = a by arith(ha)
+  have g0b := rewrite(ea, g0a)
+  have g0: app(G, empty) = app(f, a) := subst({y. app(G, y) = app(f, a)}, lit_zero, g0b)
+  have st: all i. i in m -> true && ((p(app(G, i)) && ok(app(G, succ(i)), empty) = pair(3, app(G, i))) || (!p(app(G, i)) && b(app(G, i), ok(app(G, succ(i)), empty)))) proof
+    fix i
+    assume hi
+    have io := mp(mp(nat_elem[k := m, i := i], mo), hi)
+    have il: int_le(i, m) by arith(io, mo, hi)
+    have i1o: int_add(i, 1) in omega by arith(io)
+    have i1l: int_le(int_add(i, 1), m) by arith(io, mo, hi)
+    have ga := mp(mp(all_elim(gi, {i}), io), il)
+    have gb := mp(mp(all_elim(gi, {int_add(i, 1)}), i1o), i1l)
+    have es: succ(i) = int_add(i, 1) by arith(io)
+    have jo: int_add(i, a) in omega by arith(io, ha)
+    have ej1: succ(int_add(i, a)) = int_add(int_add(i, a), 1) by arith(jo)
+    have ej2: int_add(int_add(i, a), 1) = int_add(int_add(i, 1), a) by arith(io, ha)
+    have ej := trans(ej1, ej2)
+    have gs0: app(G, succ(i)) = app(f, int_add(int_add(i, 1), a)) := subst({y. app(G, y) = app(f, int_add(int_add(i, 1), a))}, sym(es), gb)
+    have gs: app(G, succ(i)) = app(f, succ(int_add(i, a))) := rewrite(sym(ej), gs0)
+    have l1: int_le(a, int_add(i, a)) by arith(io, ha)
+    have l2: int_lt(int_add(i, a), n) by arith(io, ha, hi, mo, hn)
+    have s0 := mp(all_elim(hst, {int_add(i, a)}), jo, l1, l2)
+    have s1 := rewrite(sym(ga), s0)
+    have s2 := rewrite(sym(gs), s1)
+    show by taut(s2)
+  qed
+  have en: int_add(m, a) = n by arith(ha, hn, han)
+  have mm: int_le(m, m) by arith(mo)
+  have gma := mp(mp(all_elim(gi, {m}), mo), mm)
+  have gm: app(G, m) = app(f, n) := rewrite(en, gma)
+  have pm: !p(app(G, m)) := rewrite(sym(gm), hp)
+  have bm: b(app(G, m), r) := rewrite(sym(gm), hb)
+  have e1: ex g. m in omega && is_fun(g) && dom(g) = succ(m) && app(g, empty) = app(f, a) &&
+      (all i. i in m -> true && ((p(app(g, i)) && ok(app(g, succ(i)), empty) = pair(3, app(g, i))) || (!p(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))))) &&
+      ((!true && r = ok(app(g, m), empty)) || (true && ((p(app(g, m)) && r = pair(3, app(g, m))) || (!p(app(g, m)) && b(app(g, m), r))) && !is_ok(r)))
+    by ex_intro({G}, taut(mo, gf, gd, g0, st, pm, bm, hr))
+  have e2: ex n2 g. n2 in omega && is_fun(g) && dom(g) = succ(n2) && app(g, empty) = app(f, a) &&
+      (all i. i in n2 -> true && ((p(app(g, i)) && ok(app(g, succ(i)), empty) = pair(3, app(g, i))) || (!p(app(g, i)) && b(app(g, i), ok(app(g, succ(i)), empty))))) &&
+      ((!true && r = ok(app(g, n2), empty)) || (true && ((p(app(g, n2)) && r = pair(3, app(g, n2))) || (!p(app(g, n2)) && b(app(g, n2), r))) && !is_ok(r)))
+    by ex_intro({m}, e1)
+  show by defs(taut(e2), while_fin_rel)
+qed
+
+// (an infinite run whose steps between states off p lower a rank: after
+// every position, a state on p)
+theorem g.stop_exists_inf(l o. b, l. p, l. v, l. m, f, j):
+  (all i. i in omega -> v(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) ->
+  (all x y. v(x) -> !p(x) -> b(x, ok(y, empty)) -> !p(y) -> int_lt(m(y), m(x))) ->
+  (all x. v(x) -> m(x) in omega) -> j in omega ->
+  ex c. c in omega && int_lt(j, c) && p(app(f, c))
+proof
+  assume hst hd hm hj
+  have nn: (all c. c in omega -> int_lt(j, c) -> !p(app(f, c))) -> false proof
+    assume hn
+    let s := int_add(j, 1)
+    have so: s in omega by arith(hj)
+    have ms := mp(all_elim(hm, {app(f, s)}), taut(mp(all_elim(hst, {s}), so)))
+    // m falls by one at least each step after s
+    have down: all k. k in omega -> int_le(int_add(m(app(f, int_add(s, k))), k), m(app(f, s))) proof
+      have base: int_le(int_add(m(app(f, int_add(s, 0))), 0), m(app(f, s))) proof
+        have e: int_add(s, 0) = s by arith(so)
+        have r0: int_le(int_add(m(app(f, s)), 0), m(app(f, s))) by arith(ms)
+        show := subst({y. int_le(int_add(m(app(f, y)), 0), m(app(f, s)))}, sym(e), r0)
+      qed
+      have step: all k. k in omega -> int_le(int_add(m(app(f, int_add(s, k))), k), m(app(f, s))) ->
+          int_le(int_add(m(app(f, int_add(s, int_add(k, 1)))), int_add(k, 1)), m(app(f, s))) proof
+        fix k
+        assume ko ih
+        let i := int_add(s, k)
+        have io: i in omega by arith(so, ko)
+        have i1o: int_add(i, 1) in omega by arith(io)
+        have si := mp(all_elim(hst, {i}), io)
+        have vi: v(app(f, i)) by taut(si)
+        have bi: b(app(f, i), ok(app(f, succ(i)), empty)) by taut(si)
+        have es: succ(i) = int_add(i, 1) by arith(io)
+        have bi2 := rewrite(es, bi)
+        have lt1: int_lt(j, i) by arith(hj, ko)
+        have lt2: int_lt(j, int_add(i, 1)) by arith(hj, ko)
+        have npi := mp(all_elim(hn, {i}), io, lt1)
+        have npi1 := mp(all_elim(hn, {int_add(i, 1)}), i1o, lt2)
+        have dec := mp(all_elim(hd, {app(f, i)}, {app(f, int_add(i, 1))}), vi, npi, bi2, npi1)
+        have mi := mp(all_elim(hm, {app(f, i)}), vi)
+        have vi1: v(app(f, int_add(i, 1))) by taut(mp(all_elim(hst, {int_add(i, 1)}), i1o))
+        have mi1 := mp(all_elim(hm, {app(f, int_add(i, 1))}), vi1)
+        have e2: int_add(s, int_add(k, 1)) = int_add(i, 1) by arith(so, ko)
+        have r1: int_le(int_add(m(app(f, int_add(i, 1))), int_add(k, 1)), m(app(f, s))) by arith(ih, dec, mi, mi1, ko)
+        show := subst({y. int_le(int_add(m(app(f, y)), int_add(k, 1)), m(app(f, s)))}, sym(e2), r1)
+      qed
+      show by induct(base, step)
+    qed
+    let K := int_add(m(app(f, s)), 1)
+    have ko: K in omega by arith(ms)
+    have dk := mp(all_elim(down, {K}), ko)
+    have io: int_add(s, K) in omega by arith(so, ko)
+    have vk: v(app(f, int_add(s, K))) by taut(mp(all_elim(hst, {int_add(s, K)}), io))
+    have mk := mp(all_elim(hm, {app(f, int_add(s, K))}), vk)
+    show by arith(dk, mk, ms)
+  qed
+  have imp: !(ex c. c in omega && int_lt(j, c) && p(app(f, c))) -> false proof
+    assume ng
+    have hn: all c. c in omega -> int_lt(j, c) -> !p(app(f, c)) proof
+      fix c
+      assume co jc
+      have h1: p(app(f, c)) -> false proof
+        assume pc
+        have e: ex c. c in omega && int_lt(j, c) && p(app(f, c)) by ex_intro({c}, taut(co, jc, pc))
+        show by taut(e, ng)
+      qed
+      show by taut(h1)
+    qed
+    show := mp(nn, hn)
+  qed
+  show by taut(imp)
+qed
+
+// (the first position after j on p, given one: no state on p between)
+theorem g.first_stop(l. p, f, j): j in omega -> (ex c. c in omega && int_lt(j, c) && p(app(f, c))) ->
+  ex c. c in omega && int_lt(j, c) && p(app(f, c)) && (all i. i in omega -> int_lt(j, i) -> int_lt(i, c) -> !p(app(f, i)))
+proof
+  assume hj he
+  have he2: ex a. a in omega && (int_lt(j, a) && p(app(f, a))) proof
+    obtain a, ha from he
+    show by ex_intro({a}, taut(ha))
+  qed
+  have l := mp(nat_least[p := x. int_lt(j, x) && p(app(f, x))], he2)
+  obtain c, hc from l
+  have co: c in omega by taut(hc)
+  have cl: int_lt(j, c) && p(app(f, c)) by taut(hc)
+  have cm: all y. y in omega -> int_lt(j, y) && p(app(f, y)) -> int_le(c, y) by taut(hc)
+  have mn: all i. i in omega -> int_lt(j, i) -> int_lt(i, c) -> !p(app(f, i)) proof
+    fix i
+    assume io ji ic
+    have h1: p(app(f, i)) -> false proof
+      assume pi
+      have jp: int_lt(j, i) && p(app(f, i)) by taut(ji, pi)
+      have le := mp(all_elim(cm, {i}), io, jp)
+      show by arith(le, ic, io, co)
+    qed
+    show by taut(h1)
+  qed
+  show by ex_intro({c}, taut(co, cl, mn))
+qed
