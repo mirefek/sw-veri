@@ -483,7 +483,9 @@ is never unfolded as a whole). This holds wherever a fact meets its goal:
 `show`, a premise of `mp` / `apply`, the steps above.
 
 **step** (C2 proofs; needs proofs/gimple_inv.core). From P -- a run
-`runs(prog, s, o)`, or a fact on a program's outcome -- it goes, in order:
+`runs(prog, s, o)`, or a fact on a program's outcome, first simplified by
+step's own rules (`fst(pair(s, ..))` to s: a loop body at a state) -- it
+goes, in order:
 - through the program's definition and relation (`g.runs_elim`) and
   `letin`s (`g.letin_e`);
 - through `bind_rel(p, s, ..)` by a `with` fact `g.det(p, s, ok(s1,
@@ -509,7 +511,8 @@ is never unfolded as a whole). This holds wherever a fact meets its goal:
   outcome) simplified; a branch with more steps (a nested `if`, a choice)
   is stepped on, K waiting for its outcome;
 - into L of `L && R` (while there are names or `with` items left), R
-  waiting for L's outcome `x = V`;
+  waiting for L's outcome `x = V`; an L that is already `x = V` (an `if`
+  step's rules decided) substituted into R;
 - and it stops at anything else -- a call, a loop, a bind or branch with
   no `with` fact for it, a choice with no name -- naming the fact there
   `h` (or its conjuncts `h..`). Unused names or `with` facts are an error

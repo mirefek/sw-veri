@@ -1810,7 +1810,10 @@ impl State {
             }).is_some()
         };
         let is_op: Vec<bool> = withs.iter().map(|w| op_fact(w.concl())).collect();
-        let mut cur = self.eval(env, lg, &parse_pe(p.trim())?)?;
+        // (the fact simplified by step's own rules first: a loop body at a
+        // state `pair(s, ..)` reads `fst(pair(s, ..))` as s)
+        let cur0 = self.eval(env, lg, &parse_pe(p.trim())?)?;
+        let mut cur = self.step_simp(env, lg, cur0)?;
         // (`L && R` stepped in L, R pending: on L's outcome `x = V`, R at V)
         let mut pending: Vec<Seq> = Vec::new();
         for _ in 0..10000 {
@@ -1914,6 +1917,12 @@ impl State {
                         break;
                     }
                 }
+            } else if Some(f) == and && head(&a[0]).is_some_and(|(g, ga)| g == lg.eq && matches!(ga[0].node(), Node::Var(..))) {
+                // (an outcome x = V already known -- an `if` its rules
+                // decided: K at V, its dispatch simplified)
+                let (t, hk) = (and_part(env, &cur, false)?, and_part(env, &cur, true)?);
+                let k = Seq::rewrite(env, &t, &hk)?;
+                cur = self.step_simp(env, lg, k)?;
             } else if Some(f) == and && (!withs.is_empty() || !xs.is_empty())
                 && head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == and || Some(g) == bind || Some(g) == letin || Some(g) == runs)
             {
