@@ -286,7 +286,7 @@ fn c1_cfg_engine_checks() {
     // the C1 theorems unconditional: nothing in the chain rests on an open
     // lemma (the storing functions' statics' range defined)
     let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 226 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 59 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 63 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")
