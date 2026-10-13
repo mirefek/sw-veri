@@ -419,7 +419,9 @@ item is a short summary of finished work; details are in the files named.
     decay_bounces (a size class's bounce counter in the malloc context),
     step_seq (its sequence byte; at 255 the first C2 of a loop, by
     `while_var`: invariant the first i unmap sequence bytes zeroed, variant
-    32 - i), resetlock and upgradelock (proofs/mallocng_ctx.core).
+    32 - i), resetlock and upgradelock, account_bounce (a counter whose
+    class was unmapped lately up by 1 below 99, else 150; composed through
+    the CFG, `acbtc.composed`) (proofs/mallocng_ctx.core).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
   `gc.contract_call` / `gc.contract_call1`: a call under a callee's
