@@ -1051,6 +1051,10 @@ pub(super) struct GCut {
     hv: BTreeMap<u128, Term>,
     hm: BTreeMap<(u128, u128), Term>,
     ways: BTreeMap<u128, Seq>,
+    /// with loops (g.cut_loops): M a relation N of two states (the labels'
+    /// facts), V's states in univ(1) -- the walk's terms known there
+    nmode: bool,
+    ufacts: Vec<(Term, Seq)>,
 }
 
 impl<'e> Gen<'e> {
@@ -1417,12 +1421,16 @@ impl<'e> Gen<'e> {
             let ka = self.lam(&x[2], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("an operation's rest")?;
             let xa = self.lam(&x[3], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("an operation's handler")?;
             let da = self.lam(&x[4], &["o", "x8", "x9"], &["x9", "x8"]).ok_or("an operation's handler")?;
-            let (rr, stmt) = self.inst("g.post_op", &[("op", op), ("ka", ka), ("xa", xa), ("da", da), ("kl", kl), ("p", pp.clone())])?;
+            // (with loops: an operation's returns with their runs -- the
+            // state's parts in univ(1))
+            let nm = self.gref.as_ref().and_then(|g| g.cut.as_ref()).is_some_and(|c| c.nmode);
+            let lemma = if nm { "g.post_op_r" } else { "g.post_op" };
+            let (rr, stmt) = self.inst(lemma, &[("op", op.clone()), ("ka", ka), ("xa", xa), ("da", da), ("kl", kl), ("p", pp.clone())])?;
             let body = self.app(&stmt, "all", 1).ok_or("g.post_op")?[0].clone().instantiate_params(std::slice::from_ref(&sw), &self.env.binders_fn());
             let (prems, _) = self.imps(&body);
             let mut pfs = Vec::new();
-            for (pr, names) in prems.iter().zip([&["ps", "pv"][..], &["ps", "pe"][..], &["pt"][..]]) {
-                pfs.push(self.sub_post(pr, names, l1)?);
+            for (i, (pr, names)) in prems.iter().zip([&["ps", "pv"][..], &["ps", "pe"][..], &["pt"][..]]).enumerate() {
+                pfs.push(if nm && i == 0 { self.sub_post_r(pr, &op, &sw, l1)? } else { self.sub_post(pr, names, l1)? });
             }
             return self.run(&mp(rr, vec![t(&sw), s(&pfs[0]), s(&pfs[1]), s(&pfs[2])]), &[]);
         }
@@ -1447,6 +1455,38 @@ impl<'e> Gen<'e> {
             }
         }
         Err(format!("the CFG side alone: no step at {}", self.lambda(1, lo)))
+    }
+
+    /// g.post_op_r's premise `all s1 v. runs(op, s, ok(s1, v)) -> g.post(..)`:
+    /// s1, v in univ(1) while walking
+    fn sub_post_r(&mut self, prem: &Term, op: &Term, s0: &Term, l1: &Term) -> Result<Seq, String> {
+        let mut cur = prem.clone();
+        let mut vs = Vec::new();
+        let mut xs = Vec::new();
+        for nm in ["ps", "pv"] {
+            let b = self.app(&cur, "all", 1).ok_or("a rule's premise: not all")?[0].clone();
+            let n = self.fresh(nm);
+            let v = self.var(&n);
+            cur = b.instantiate_params(std::slice::from_ref(&v), &self.env.binders_fn());
+            vs.push(Self::var_id(&v));
+            xs.push(v);
+        }
+        let (hs, g) = self.imps(&cur);
+        let hr = self.assume(&hs[0])?;
+        let ou = self.op_univ(op, s0)?;
+        let okv = self.mk("ok", vec![xs[0].clone(), xs[1].clone()]);
+        let uu = self.run(&mp(R::S(ou), vec![t(&okv), s(&hr)]), &[])?;
+        let u2 = self.run(&mp(f("g.ok_univ2"), vec![t(s0), t(&xs[0]), t(&xs[1]), s(&uu)]), &[])?;
+        let n0 = self.gref.as_ref().unwrap().cut.as_ref().unwrap().ufacts.len();
+        for x in &xs {
+            let goal = self.mk("in", vec![x.clone(), self.mk("univ", vec![lit(1)])]);
+            let pf = self.evp(&RP::Taut(vec![R::S(u2.clone())]), &goal, &[])?;
+            self.gref.as_mut().unwrap().cut.as_mut().unwrap().ufacts.push((x.clone(), pf));
+        }
+        let x = self.app(&g, "g.post", 2).ok_or("a rule's premise: not g.post")?.to_vec();
+        let r = self.post(&x[0], &x[1], l1);
+        self.gref.as_mut().unwrap().cut.as_mut().unwrap().ufacts.truncate(n0);
+        self.close(r?, &[hs[0].clone()], &vs)
     }
 
     fn sub_post(&mut self, prem: &Term, names: &[&str], l1: &Term) -> Result<Seq, String> {
@@ -1489,6 +1529,14 @@ impl<'e> Gen<'e> {
             let hv = self.label_hyp(k2, None)?;
             let hm = self.label_hyp(cur, Some(k2))?;
             let (hvs, hms) = (self.assume(&hv)?, self.assume(&hm)?);
+            // (with loops: the state in univ(1), the labels' facts N)
+            if self.gref.as_ref().unwrap().cut.as_ref().unwrap().nmode {
+                let u = self.univ_of(&o[0])?;
+                let vx = self.run(&mp(R::S(hvs), vec![t(&w2), t(&y2), s(&u)]), &[])?;
+                let nx = self.run(&mp(R::S(hms), vec![t(&w1), t(&y1), t(&w2), t(&y2)]), &[])?;
+                let (vl, nl) = (Term::var(vv, vec![Term::bvar(0)]), Term::var(mv, vec![Term::bvar(1), Term::bvar(0)]));
+                return self.run(&mp(R::Inst("g.post_leaf_n".into(), vec![("v", vl), ("N", nl)]), vec![t(l1), t(&o[0]), s(&vx), s(&nx)]), &[]);
+            }
             let vx = self.run(&mp(R::S(hvs), vec![t(&w2), t(&y2)]), &[])?;
             let mx = self.run(&mp(R::S(hms), vec![t(&w1), t(&y1), t(&w2), t(&y2)]), &[])?;
             let (vl, ml) = (Term::var(vv, vec![Term::bvar(0)]), Term::var(mv, vec![Term::bvar(0)]));
@@ -1532,7 +1580,7 @@ impl<'e> Gen<'e> {
         // (the labels' set and rank free relations V, M while their blocks
         // are walked)
         let (vv, mv) = (self.env.new_var("gv", 1), self.env.new_var("gm", 1));
-        let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), vm: Some((vv, mv)), hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new() };
+        let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), vm: Some((vv, mv)), hv: BTreeMap::new(), hm: BTreeMap::new(), ways: BTreeMap::new(), nmode: false, ufacts: Vec::new() };
         self.gref = Some(GRef { m: comps.len(), points: Vec::new(), inv: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new(), loop_heads: BTreeSet::new() });
         // the labels: each block walked alone, its leaves found and its ways
         // on proven
@@ -1787,19 +1835,33 @@ impl<'e> Gen<'e> {
         let (vv, mv) = self.gref.as_ref().unwrap().cut.as_ref().unwrap().vm.ok_or("the labels' relations")?;
         let (wv, yv) = (self.var("lw"), self.var("ly"));
         let l1 = self.mk("pair", vec![wv.clone(), self.mk("pair", vec![lit(kl), yv.clone()])]);
-        // (Q: `l2. V(l2) && int_lt(M(l2), M(L))`)
+        // (Q: `l2. V(l2) && int_lt(M(l2), M(L))`; with loops `l2. V(l2) &&
+        // N(L, l2)`, L in univ(1))
+        let nm = self.gref.as_ref().unwrap().cut.as_ref().unwrap().nmode;
         let ql = {
             let l2 = self.var("ll2");
-            let c = self.mk("and", vec![Term::var(vv, vec![l2.clone()]), self.mk("int_lt", vec![Term::var(mv, vec![l2.clone()]), Term::var(mv, vec![l1.clone()])])]);
+            let r = if nm { Term::var(mv, vec![l1.clone(), l2.clone()]) } else { self.mk("int_lt", vec![Term::var(mv, vec![l2.clone()]), Term::var(mv, vec![l1.clone()])]) };
+            let c = self.mk("and", vec![Term::var(vv, vec![l2.clone()]), r]);
             self.abs(&c, &[Self::var_id(&l2)])
         };
+        let mut hs = Vec::new();
+        if nm {
+            let u = self.mk("in", vec![l1.clone(), self.mk("univ", vec![lit(1)])]);
+            let hu = self.assume(&u)?;
+            let rest = self.mk("pair", vec![lit(kl), yv.clone()]);
+            let wu = self.run(&mp(f("g.univ_fst"), vec![t(&wv), t(&rest), s(&hu)]), &[])?;
+            let ru = self.run(&mp(f("g.univ_snd"), vec![t(&wv), t(&rest), s(&hu)]), &[])?;
+            let yu = self.run(&mp(f("g.univ_snd"), vec![t(&lit(kl)), t(&yv), s(&ru)]), &[])?;
+            self.gref.as_mut().unwrap().cut.as_mut().unwrap().ufacts = vec![(wv.clone(), wu), (yv.clone(), yu)];
+            hs.push(u);
+        }
         let bx = bb.instantiate_params(&[l1.clone(), Term::bvar(0)], &self.env.binders_fn());
         let (r, st) = self.inst("g.post_use", &[("b", bx), ("Q", ql)])?;
         let (ps, _) = self.imps(&st);
         let gp = self.app(&ps[0], "g.post", 2).ok_or("g.post_use's premise")?.to_vec();
         let pf = self.post(&gp[0], &gp[1], &l1)?;
         let one = self.run(&mp(r, vec![s(&pf)]), &[])?;
-        self.close(one, &[], &[Self::var_id(&wv), Self::var_id(&yv)])
+        self.close(one, &hs, &[Self::var_id(&wv), Self::var_id(&yv)])
     }
 
     /// a label's hypothesis (its walk): `all w y. V(pair(w, pair(k, y)))`
@@ -1820,16 +1882,28 @@ impl<'e> Gen<'e> {
             let (w, y) = (g.var("hw"), g.var("hy"));
             (g.mk("pair", vec![w.clone(), g.mk("pair", vec![lit(k), y.clone()])]), vec![Self::var_id(&w), Self::var_id(&y)])
         };
+        // (with loops: a state of V in univ(1); N the labels' facts)
+        let nm = self.gref.as_ref().unwrap().cut.as_ref().unwrap().nmode;
         let (body, vs) = match hm {
             None => {
                 let (l, vs) = st(self, k);
-                (Term::var(vv, vec![l]), vs)
+                let vl = Term::var(vv, vec![l.clone()]);
+                if nm {
+                    let u = self.mk("in", vec![l, self.mk("univ", vec![lit(1)])]);
+                    (Term::app(self.env.builtins.imp, vec![u, vl]), vs)
+                } else {
+                    (vl, vs)
+                }
             }
             Some(k2) => {
                 let (l, mut vs) = st(self, k);
                 let (l2, vs2) = st(self, k2);
                 vs.extend(vs2);
-                (self.mk("int_lt", vec![Term::var(mv, vec![l2]), Term::var(mv, vec![l])]), vs)
+                if nm {
+                    (Term::var(mv, vec![l, l2]), vs)
+                } else {
+                    (self.mk("int_lt", vec![Term::var(mv, vec![l2]), Term::var(mv, vec![l])]), vs)
+                }
             }
         };
         let mut h = body;
