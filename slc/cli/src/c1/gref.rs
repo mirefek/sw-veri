@@ -157,9 +157,7 @@ impl<'e> Gen<'e> {
             return r;
         }
         let entry = format!("{pl}__entry");
-        // (C1_BLOCKS=1: through the blocks' procedures -- in progress, void
-        // functions and joins not yet, docs/todo.md)
-        if !self.env.sym_by_name.contains_key(&entry) || std::env::var("C1_BLOCKS").map_or(true, |v| v != "1") {
+        if !self.env.sym_by_name.contains_key(&entry) {
             return self.proc_ref(pl, ph, n);
         }
         if ph == entry {
@@ -280,9 +278,82 @@ impl<'e> Gen<'e> {
 
     /// the walk on after a lower step `lo -> lo2` (its proof imp)
     fn after_low(&mut self, lo: &Term, lo2: Term, imp: Seq, qi: usize, w: &Term) -> Result<Seq, String> {
-        let rest = self.walk(&lo2, qi, w)?;
+        let rest = match self.gjumped.take() {
+            Some((name, args)) => self.join_walk(&lo2, qi, w, &name, &args)?,
+            None => self.walk(&lo2, qi, w)?,
+        };
         let r = mp(R::Inst("g.ref_low".into(), vec![("l", lo.clone()), ("l2", lo2), ("q", self.qs[qi].clone())]), vec![t(w), s(&imp), s(&rest)]);
         self.run(&r, &[])
+    }
+
+    /// The CFG side just jumped to a block's procedure `name(args)` (lo2
+    /// its body), the structured side at a join -- `ex x2. x2 = ok(pair(x0,
+    /// T), empty) && K`, T its locals' tuple, the call's locals: the block
+    /// walked once for every world and tuple (`all w ys. g.ref(..)`, kept
+    /// by the block and K), here its instance. Else the walk on.
+    fn join_walk(&mut self, lo2: &Term, qi: usize, w: &Term, name: &str, args: &[Term]) -> Result<Seq, String> {
+        let q = self.qs[qi].clone();
+        let tup = self
+            .app(&q, "mkprog", 1)
+            .and_then(|m| block(self, &m[0]))
+            .and_then(|(a, _)| self.app(&a, "eq", 2).map(|e| e.to_vec()))
+            .filter(|e| matches!(e[0].node(), Node::BVar(0)))
+            .and_then(|e| self.app(&e[1], "ok", 2).map(|o| o[0].clone()))
+            .and_then(|p0| self.app(&p0, "pair", 2).map(|p| p[1].clone()))
+            .filter(|t| t.loose_depth(&self.env.binders_fn()) == 0);
+        // (the tuple's components: the call's last arguments)
+        let comps = tup.as_ref().map(|t| self.locals_of(t)).unwrap_or_default();
+        let m = comps.len();
+        let (Some(tup), true) = (tup, m > 0 && m <= args.len()) else { return self.walk(lo2, qi, w) };
+        let nf = args.len() - m;
+        if (0..m).any(|i| self.canon(&comps[i]) != self.canon(&args[nf + i])) {
+            return self.walk(lo2, qi, w);
+        }
+        // (the key: the structured side, its tuple abstracted)
+        let keys: Vec<Term> = (0..m).map(|i| self.var(&format!("gjk{i}"))).collect();
+        let ktup = self.tuple_of(&keys);
+        let kq = self.canon(&self.replace_t(&q, &tup, &ktup));
+        let key = (name.to_string(), self.abs(&kq, &keys.iter().map(Self::var_id).collect::<Vec<_>>()));
+        let th = match self.gjoins.get(&key) {
+            Some(th) => th.clone(),
+            None => {
+                // (the block for every world and tuple)
+                let wv = self.var("gjw");
+                let ys: Vec<Term> = (0..m).map(|i| self.var(&format!("gjy{i}"))).collect();
+                let mut cargs = args[..nf].to_vec();
+                cargs.extend(ys.iter().cloned());
+                let (ps, body) = self.def_of(name)?;
+                let mut b = body;
+                for (p0, a) in ps.iter().zip(cargs.iter()) {
+                    b = b.subst_var(*p0, a, &self.env.binders_fn());
+                }
+                let mb = self.app(&b, "mkprog", 1).ok_or("a block's procedure not a program")?[0].clone();
+                let lt = mb.instantiate_params(&[wv.clone(), Term::bvar(0)], &self.env.binders_fn());
+                let ut = self.replace_t(&q, &tup, &self.tuple_of(&ys));
+                let qj = self.new_q(ut);
+                let saved = self.w.clone();
+                self.trace(|| format!("ref: join at {}", name));
+                let r = self.walk(&lt, qj, &wv);
+                self.w = saved;
+                let mut vs = vec![Self::var_id(&wv)];
+                vs.extend(ys.iter().map(Self::var_id));
+                let th = self.close(r?, &[], &vs)?;
+                self.gjoins.insert(key, th.clone());
+                th
+            }
+        };
+        let mut ins = vec![t(w)];
+        ins.extend(comps.iter().map(t));
+        self.run(&mp(R::S(th), ins), &[])
+    }
+
+    /// the locals' tuple of the terms cs (a right-nested pair)
+    fn tuple_of(&self, cs: &[Term]) -> Term {
+        let mut t = cs[cs.len() - 1].clone();
+        for c in cs[..cs.len() - 1].iter().rev() {
+            t = self.mk("pair", vec![c.clone(), t]);
+        }
+        t
     }
 
     /// `all r. runs(op, s, r) -> pair(s, r) in univ(1)`: op a procedure
@@ -333,18 +404,65 @@ impl<'e> Gen<'e> {
 
     /// A block's procedure called on the CFG side (`F__bN(..)`, the
     /// generator's block procedures, slc/cli/src/gimple/lower/readable.rs):
-    /// the call by its definition's body (its equation), then the body in
-    /// place of the call (g.low_call). x: the bind_rel's arguments, kl the
-    /// block's rest.
-    fn block_call(&mut self, lo: &Term, x: &[Term], kl: &Term) -> Result<Option<(Term, Seq)>, String> {
+    /// the call by its definition's body (its equation); then a tail call
+    /// as a jump (the callee's body alone: g.low_goto, g.low_goto0 a void
+    /// one, at the top g.low_goto_top, g.low_goto0_top), else the body in
+    /// place of the call (g.low_call). x: the bind_rel's arguments; kl the
+    /// block's rest (None: the call the CFG side's whole, at the top).
+    fn block_call(&mut self, lo: &Term, x: &[Term], kl: Option<&Term>) -> Result<Option<(Term, Seq)>, String> {
         if !self.unfold_blocks {
             return Ok(None);
         }
-        let lctx = ["o", "x8"];
-        let Some(op) = self.lam(&x[0], &lctx, &[]) else { return Ok(None) };
-        // (the body in place)
+        let lctx: &[&str] = if kl.is_some() { &["o", "x8"] } else { &["o"] };
+        let Some(op) = self.lam(&x[0], lctx, &[]) else { return Ok(None) };
         if let Some(r) = self.app(&op, "mkprog", 1).map(|m| m[0].clone()) {
-            let st = self.lam(&x[1], &lctx, &[]).ok_or("a block's call's world reads the block")?;
+            let st = self.lam(&x[1], lctx, &[]).ok_or("a block's call's world reads the block")?;
+            // (as a jump)
+            let mut cands: Vec<(&str, Vec<(&'static str, Term)>, bool)> = Vec::new();
+            match kl {
+                None => {
+                    cands.push(("g.low_goto_top", vec![("r", r.clone()), ("s", st.clone())], false));
+                    cands.push(("g.low_goto0_top", vec![("r", r.clone()), ("s", st.clone())], true));
+                }
+                Some(_) => {
+                    // (at the top, its rest the outcome itself)
+                    cands.push(("g.low_goto_id", vec![("r", r.clone()), ("s", st.clone())], false));
+                    cands.push(("g.low_goto0_id", vec![("r", r.clone()), ("s", st.clone())], true));
+                    // (the locals' tuple: in the raise handler's state)
+                    let lt = self.app(&x[3], "eq", 2).and_then(|e| self.app(&e[1], "exc", 2).map(|c| c[0].clone())).and_then(|p0| self.app(&p0, "pair", 2).map(|p| p[1].clone()));
+                    if let Some(l) = lt.and_then(|l| self.lam(&l, &["o", "x8", "x9", "x10"], &[])) {
+                        cands.push(("g.low_goto", vec![("r", r.clone()), ("s", st.clone()), ("l", l.clone())], false));
+                        cands.push(("g.low_goto0", vec![("r", r.clone()), ("s", st.clone()), ("l", l)], true));
+                    }
+                }
+            }
+            let want = self.expand(lo);
+            for (lemma, binds, void) in cands {
+                let (rr, stmt) = self.inst(lemma, &binds)?;
+                let (hs, rest) = if void { self.imps(&stmt) } else { (Vec::new(), stmt.clone()) };
+                let Some(rest) = (if void { (hs.len() == 1).then(|| rest) } else { Some(rest) }) else { continue };
+                let Some(body) = self.app(&rest, "all", 1).map(|b| b[0].clone()) else { continue };
+                let (lhs, _) = self.imps(&body);
+                if lhs.len() != 1 || self.expand(&lhs[0]) != want {
+                    continue;
+                }
+                self.trace(|| format!("ref: a call as a jump, {}", lemma));
+                self.gjumped = self.gcall.take();
+                let r0 = if void {
+                    // (the callee's value empty: its body's leaves)
+                    let x2 = self.app(&hs[0], "g.post", 2).ok_or("g.low_goto0's premise")?.to_vec();
+                    let (sg, su) = (self.gref.take(), self.unfold_blocks);
+                    self.unfold_blocks = false;
+                    let pf = self.post(&x2[0], &x2[1], &st);
+                    (self.gref, self.unfold_blocks) = (sg, su);
+                    mp(rr, vec![s(&pf?)])
+                } else {
+                    rr
+                };
+                return self.low_by(r0).map(Some);
+            }
+            let Some(kl) = kl else { return Ok(None) };
+            // (in place)
             let ka = self.lam(&x[2], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("a call's rest")?;
             let xa = self.lam(&x[3], &["o", "x8", "x9", "x10"], &["x9", "x10", "x8"]).ok_or("a call's handler")?;
             let da = self.lam(&x[4], &["o", "x8", "x9"], &["x9", "x8"]).ok_or("a call's handler")?;
@@ -357,6 +475,8 @@ impl<'e> Gen<'e> {
             return Ok(None);
         }
         // (the call by its definition)
+        self.trace(|| format!("ref: call {}", name));
+        self.gcall = Some((name.clone(), args.to_vec()));
         let (ps, body) = self.def_of(&name)?;
         let mut b = body;
         for (p, a) in ps.iter().zip(args.iter()) {
@@ -400,6 +520,12 @@ impl<'e> Gen<'e> {
             if self.jump_of(lo).is_some() {
                 return Ok(None);
             }
+            // (a block's procedure called, the CFG side's whole)
+            if let Some(x) = self.app(lo, "bind_rel", 5).map(|x| x.to_vec()) {
+                if let Some(r) = self.block_call(lo, &x, None)? {
+                    return Ok(Some(r));
+                }
+            }
             if let Some(r) = self.proj_step(lo)? {
                 return Ok(Some(r));
             }
@@ -413,9 +539,20 @@ impl<'e> Gen<'e> {
             return self.low_by(R::Inst("g.low_intro".into(), vec![("l", lo.clone())])).map(Some);
         };
         let kl = self.lam(&k, &lctx, &["x8", "o"]).ok_or("the lower block's rest")?;
+        // (the rest's last step the outcome itself: without it)
+        if let Some(b9) = self.app(&k, "ex", 1).map(|b| b[0].clone()) {
+            if let Some(c) = self.app(&b9, "and", 2).map(|c| c.to_vec()) {
+                let id = self.app(&c[1], "eq", 2).is_some_and(|e| matches!(e[0].node(), Node::BVar(0)) && matches!(e[1].node(), Node::BVar(2)));
+                if id {
+                    if let (Some(al), Some(k9)) = (self.lam(&a, &lctx, &["x8"]), self.lam(&c[0], &["o", "x8", "x9"], &["x8", "x9"])) {
+                        return self.low_by(R::Inst("g.low_kid".into(), vec![("a", al), ("k", k9)])).map(Some);
+                    }
+                }
+            }
+        }
         // (a block's procedure called: its body in place, g.low_call)
         if let Some(x) = self.app(&a, "bind_rel", 5).map(|x| x.to_vec()) {
-            if let Some(r) = self.block_call(lo, &x, &kl)? {
+            if let Some(r) = self.block_call(lo, &x, Some(&kl))? {
                 return Ok(Some(r));
             }
         }
@@ -1044,15 +1181,6 @@ impl<'e> Gen<'e> {
             t = self.replace_t(&t, &ce[j], &pj);
         }
         let tmpl = self.abs(&t, &[Self::var_id(&yv)]);
-        {
-            let mut vs = Vec::new();
-            tmpl.vars(&mut vs);
-            let names: Vec<String> = vs.iter().map(|v| self.env.vars[*v as usize].name.clone()).filter(|n| !n.starts_with("pa") && !n.starts_with('G')).collect();
-            if !names.is_empty() {
-                let cs: Vec<String> = comps.iter().map(|c| self.print(&self.expand(c))).collect();
-                self.trace(|| format!("ref: template of label {} keeps {:?}; locals {}", label, names, cs.join(" ; ")));
-            }
-        }
         Ok(GPoint { label, shape, tmpl })
     }
 
@@ -1123,10 +1251,6 @@ impl<'e> Gen<'e> {
         }
         if !g.discover {
             return Err(format!("label {}: a point not found in the first pass", k));
-        }
-        if let Some(p0) = g.points.iter().find(|p| p.label == k) {
-            let why = if p0.shape != pt.shape { "its shape".to_string() } else { Printer::new(self.env).mismatch(&p0.tmpl, &pt.tmpl) };
-            self.trace(|| format!("ref: label {} again, another point: {}", k, why));
         }
         let g = self.gref.as_mut().unwrap();
         g.points.push(pt);
@@ -1217,6 +1341,7 @@ impl<'e> Gen<'e> {
             let prem = self.pt_prem(&gl, i)?.1;
             self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
             self.sub_walk(&prem, &["pw", "py"])?;
+            self.drop_caches();
             i += 1;
         }
         self.trace(|| format!("ref: {} points", self.gref.as_ref().unwrap().points.len()));
@@ -1230,8 +1355,12 @@ impl<'e> Gen<'e> {
         }
         let (rr, stmt) = self.inst("g.cfg_ref", &[("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone()), ("inv", inv.clone()), ("m", rank)])?;
         let (prems, _) = self.imps(&stmt);
+        let rss = || std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |p| p * 4096 / (1 << 20));
+        self.trace(|| format!("ref: the points' walks, {} MB", rss()));
         let ps = self.combine(&prems[0], 0)?;
+        self.trace(|| format!("ref: the ways on, {} MB", rss()));
         let pd = self.combine(&prems[1], 1)?;
+        self.trace(|| format!("ref: the rank, {} MB", rss()));
         let pm = self.combine(&prems[2], 2)?;
         let main = self.run(&mp(rr, vec![s(&ps), s(&pd), s(&pm)]), &[])?;
         // at the loop's start: its point (against the blocks' procedures:
@@ -1301,7 +1430,10 @@ impl<'e> Gen<'e> {
     /// procedure), its outcome passed on -- the call walked with its
     /// outcome as it is (g.id_runs), P's universe and outcomes' kinds
     fn tail_runs(&mut self, pr: &Term, r: &Term, w: &Term) -> Result<Seq, String> {
-        let (rr, stmt) = self.inst("g.id_runs", &[("p", pr.clone()), ("s", w.clone()), ("r", r.clone())])?;
+        // (a void call: its value dropped -- g.id_runs0, P's value empty)
+        let void = self.void_call(r);
+        let lemma = if void { "g.id_runs0" } else { "g.id_runs" };
+        let (rr, stmt) = self.inst(lemma, &[("p", pr.clone()), ("s", w.clone()), ("r", r.clone())])?;
         let (prems, _) = self.imps(&stmt);
         let x = self.app(&prems[0], "g.ref", 3).ok_or("g.id_runs's premise")?.to_vec();
         let qj = self.new_q(x[1].clone());
@@ -1310,35 +1442,105 @@ impl<'e> Gen<'e> {
         (self.w, self.gref) = (saved, sg);
         let wk = wk?;
         let u = self.op_univ(pr, w)?;
-        let sh = self.shape_of(pr, w)?;
-        self.run(&mp(rr, vec![s(&wk), s(&u), s(&sh)]), &[])
+        let sh = self.shape_of(pr, w, "g.shaped")?;
+        let mut args = vec![s(&wk), s(&u), s(&sh)];
+        if void {
+            args.push(s(&self.shape_of(pr, w, "g.shaped0")?));
+        }
+        self.run(&mp(rr, args), &[])
     }
 
-    /// `all o. runs(P, w, o) -> g.shaped(o)`: P a procedure's call, its
-    /// body's leaves (g.proc_shaped, the body walked alone)
-    fn shape_of(&mut self, pr: &Term, w: &Term) -> Result<Seq, String> {
+    /// the program r (a call at its head) drops the call's value: its ok
+    /// handler does not read it
+    fn void_call(&self, r: &Term) -> bool {
+        // (a procedure's name: its definition)
+        let mut r = r.clone();
+        if let Node::App(f0, args) = r.node() {
+            if let SymKind::Defined { params, body } = &self.env.syms[*f0 as usize].kind {
+                if params.len() == args.len() && self.app(body, "mkprog", 1).is_some() {
+                    let mut b = body.clone();
+                    for (p0, a) in params.iter().zip(args.iter()) {
+                        b = b.subst_var(*p0, a, &self.env.binders_fn());
+                    }
+                    r = b;
+                }
+            }
+        }
+        let Some(mut b) = self.app(&r, "mkprog", 1).map(|m| m[0].clone()) else { return false };
+        // (the call at the head: past a block's opening and lets)
+        loop {
+            if let Some((a, _)) = block(self, &b) {
+                b = a;
+            } else if let Some(x) = self.app(&b, "letin", 2).map(|x| x.to_vec()) {
+                b = x[1].clone();
+            } else {
+                break;
+            }
+        }
+        let Some(x) = self.app(&b, "bind_rel", 5).map(|x| x.to_vec()) else { return false };
+        // (its ok handler `s v. ..`: v its innermost bound variable)
+        !self.uses_bvar(&x[2], 0)
+    }
+
+    /// the bound variable k (at t's top) occurs in t
+    fn uses_bvar(&self, t: &Term, k: u32) -> bool {
+        match t.node() {
+            Node::BVar(i) => *i == k,
+            Node::Var(_, a) => a.iter().any(|x| self.uses_bvar(x, k)),
+            Node::App(s0, a) => {
+                let bs = &self.env.syms[*s0 as usize].binders;
+                a.iter().zip(bs).any(|(x, &n)| self.uses_bvar(x, k + n))
+            }
+            _ => false,
+        }
+    }
+
+    /// `all o. runs(P, w, o) -> pred(o)`: P a procedure's call, pred an
+    /// outcomes' kind (g.shaped, g.shaped0), its body's leaves (g.proc_post,
+    /// the body walked alone)
+    fn shape_of(&mut self, pr: &Term, w: &Term, pred: &str) -> Result<Seq, String> {
         let Node::App(f0, args) = pr.node() else { return Err("a call not a procedure's".into()) };
         let name = self.env.syms[*f0 as usize].name.clone();
-        let (ps, body) = self.def_of(&name)?;
-        let mut b = body;
-        for (p0, a) in ps.iter().zip(args.iter()) {
-            b = b.subst_var(*p0, a, &self.env.binders_fn());
-        }
-        let r = self.app(&b, "mkprog", 1).ok_or("a procedure not a program")?[0].clone();
-        let (rr, stmt) = self.inst("g.proc_shaped", &[("r", r), ("s", w.clone())])?;
-        let (prems, _) = self.imps(&stmt);
-        let x = self.app(&prems[0], "g.post", 2).ok_or("g.proc_shaped's premise")?.to_vec();
-        let sg = self.gref.take();
-        let pf = self.post(&x[0], &x[1], w);
-        self.gref = sg;
-        let sh = self.run(&mp(rr, vec![s(&pf?)]), &[])?;
-        // (the call by its definition)
-        let ov = self.var("so");
-        let concl = self.mk("g.shaped", vec![ov.clone()]);
-        let hr = self.mk("runs", vec![pr.clone(), w.clone(), ov.clone()]);
-        let goal0 = Term::app(self.env.builtins.imp, vec![hr, concl]);
-        let goal = self.mk("all", vec![self.abs(&goal0, &[Self::var_id(&ov)])]);
-        self.evp(&RP::Defs(Box::new(RP::By(R::S(sh))), vec![name]), &goal, &[])
+        let args = args.to_vec();
+        // (for every argument and world, once per procedure)
+        let key = (name.clone(), pred.to_string());
+        let th = match self.grefs.get(&key) {
+            Some(th) => th.clone(),
+            None => {
+                let (ps, body) = self.def_of(&name)?;
+                let avs: Vec<Term> = (0..ps.len()).map(|i| self.var(&format!("gsa{i}"))).collect();
+                let wv = self.var("gsw");
+                let mut b = body;
+                for (p0, a) in ps.iter().zip(avs.iter()) {
+                    b = b.subst_var(*p0, a, &self.env.binders_fn());
+                }
+                let r = self.app(&b, "mkprog", 1).ok_or("a procedure not a program")?[0].clone();
+                let pl = self.mk(pred, vec![Term::bvar(0)]);
+                let (rr, stmt) = self.inst("g.proc_post", &[("r", r), ("s", wv.clone()), ("p", pl)])?;
+                let (prems, _) = self.imps(&stmt);
+                let x = self.app(&prems[0], "g.post", 2).ok_or("g.proc_post's premise")?.to_vec();
+                let (sg, su) = (self.gref.take(), self.unfold_blocks);
+                self.unfold_blocks = false;
+                let pf = self.post(&x[0], &x[1], &wv);
+                (self.gref, self.unfold_blocks) = (sg, su);
+                let sh = self.run(&mp(rr, vec![s(&pf?)]), &[])?;
+                // (the call by its definition)
+                let ov = self.var("so");
+                let concl = self.mk(pred, vec![ov.clone()]);
+                let hr = self.mk("runs", vec![self.mk(&name, avs.clone()), wv.clone(), ov.clone()]);
+                let goal0 = Term::app(self.env.builtins.imp, vec![hr, concl]);
+                let goal = self.mk("all", vec![self.abs(&goal0, &[Self::var_id(&ov)])]);
+                let one = self.evp(&RP::Defs(Box::new(RP::By(R::S(sh))), vec![name.clone()]), &goal, &[])?;
+                let mut vs: Vec<VarId> = avs.iter().map(Self::var_id).collect();
+                vs.push(Self::var_id(&wv));
+                let th = self.close(one, &[], &vs)?;
+                self.grefs.insert(key, th.clone());
+                th
+            }
+        };
+        let mut ins: Vec<RA> = args.iter().map(t).collect();
+        ins.push(t(w));
+        self.run(&mp(R::S(th), ins), &[])
     }
 
     /// a premise `all l q. inv(l, q) -> G(l, q)`: G (`l q. ..`)
@@ -1396,8 +1598,17 @@ impl<'e> Gen<'e> {
             };
             let pt = self.run(&mp(r, vec![s(&pf)]), &[])?;
             acc = self.run(&mp(R::Inst("g.inv_or".into(), vec![("G", gl.clone()), ("A", disj[i].0.clone()), ("B", disj[i].1.clone())]), vec![s(&pt), s(&acc)]), &[])?;
+            self.drop_caches();
         }
         Ok(acc)
+    }
+
+    /// the term caches (the environment's, canonical forms', expansions')
+    /// emptied: a point's walk's terms not kept alive after it
+    fn drop_caches(&self) {
+        self.env.clear_term_caches();
+        self.exp_memo.borrow_mut().clear();
+        self.canon_memo.borrow_mut().clear();
     }
 
     /// a point's rank a number: `all w y. m(..) in omega`
@@ -1532,6 +1743,20 @@ impl<'e> Gen<'e> {
 
     /// the leaf's p(e): going on at x related, of a lower rank; leaving
     fn post_leaf(&mut self, e: &Term, pp: &Term, l1: &Term) -> Result<Seq, String> {
+        // (a void procedure's outcome: its value empty, by its constructor)
+        if self.app(pp, "g.shaped0", 1).is_some_and(|x| matches!(x[0].node(), Node::BVar(0))) {
+            if let Some(x) = self.app(e, "ok", 2).map(|x| x.to_vec()) {
+                if self.app(&x[1], "empty", 0).is_none() {
+                    return Err(format!("a void procedure's outcome {}: of a value", self.print(e)));
+                }
+                return self.run(&R::Inst("g.shaped0_ok".into(), vec![("m", x[0].clone())]), &[]);
+            }
+            if let Some(x) = self.app(e, "exc", 2).map(|x| x.to_vec()) {
+                return self.run(&R::Inst("g.shaped0_exc".into(), vec![("m", x[0].clone()), ("e", x[1].clone())]), &[]);
+            }
+            let x = self.app(e, "diverge", 1).ok_or_else(|| format!("a procedure's outcome {}: not ok, exc, diverge", self.print(e)))?.to_vec();
+            return self.run(&R::Inst("g.shaped0_div".into(), vec![("t", x[0].clone())]), &[]);
+        }
         // (the outcome's kind: its constructor)
         if self.app(pp, "g.shaped", 1).is_some_and(|x| matches!(x[0].node(), Node::BVar(0))) {
             if let Some(x) = self.app(e, "ok", 2).map(|x| x.to_vec()) {
@@ -1559,9 +1784,14 @@ impl<'e> Gen<'e> {
         let xs = self.app(&x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state")?;
         let k = nat(&xs[0]).ok_or("a CFG state's label")?;
         let comps = self.locals_of(&xs[1]);
-        // (a point of the label and the locals' shape: its program there)
-        let shape = self.point_of(k, &comps, &self.mk("empty", vec![]))?.shape;
-        let i = self.gref.as_ref().unwrap().points.iter().position(|p| p.label == k && p.shape == shape).ok_or_else(|| format!("label {}: no point of the locals' shape", k))?;
+        // (a point of the label and the locals' shape: its program there --
+        // against the blocks' procedures, the label's)
+        let i = if self.gblocks.is_some() {
+            self.gref.as_ref().unwrap().points.iter().position(|p| p.label == k).ok_or_else(|| format!("label {}: no block's procedure", k))?
+        } else {
+            let shape = self.point_of(k, &comps, &self.mk("empty", vec![]))?.shape;
+            self.gref.as_ref().unwrap().points.iter().position(|p| p.label == k && p.shape == shape).ok_or_else(|| format!("label {}: no point of the locals' shape", k))?
+        };
         let tmpl = self.gref.as_ref().unwrap().points[i].tmpl.clone();
         let q = tmpl.instantiate_params(std::slice::from_ref(&xs[1]), &self.env.binders_fn());
         let ip = self.inv_at_pt(&x, &q, i)?;

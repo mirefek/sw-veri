@@ -342,6 +342,13 @@ struct Gen<'e> {
     /// `refines`, the blocks' procedures against the structured form: a
     /// block's procedure called on the CFG side unfolded
     unfold_blocks: bool,
+    /// ... the block's procedure being called (its name, arguments), and
+    /// the one just jumped to
+    gcall: Option<(String, Vec<Term>)>,
+    gjumped: Option<(String, Vec<Term>)>,
+    /// ... the joins walked: (a block, the structured side there, its
+    /// locals' tuple abstracted) -> `all w ys. g.ref(..)`
+    gjoins: std::collections::HashMap<(String, Term), Seq>,
     /// callees' refinements found (CFG layer's, structured layer's)
     grefs: std::collections::HashMap<(String, String), Seq>,
 }

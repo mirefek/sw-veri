@@ -312,6 +312,15 @@ item is a short summary of finished work; details are in the files named.
   functions (get_meta: 28 points, ~40 s); get_stride, a_ctz_32, dequeue,
   set_size and get_slot_index composed machine ⊑ CFG ⊑ structured ⊑ spec
   (`tr.implements_refine` twice).
+- **... through the blocks' procedures**: the generator writes each CFG
+  block as a procedure (`F__bN`, a jump its tail call) and `F__entry`;
+  (A) the CFG's loop against them, a point per block, nothing found by
+  search (a jump by `g.ref_jump_tail`, the callee's outcomes' kinds from
+  its body, `g.proc_post`); (B) `F__entry` against the structured
+  procedure, each tail call a jump (`g.low_goto*`, void ones by the
+  callee's empty value) and each join walked once for every world and
+  locals' tuple. All 22 loop-free functions (`__malloc_alloc_meta`
+  included), the term caches emptied per point (peak ~600 MB).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

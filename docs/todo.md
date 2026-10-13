@@ -13,25 +13,15 @@ call graph.
 C1 on GCC's control-flow graph, the CFG form refining the structured
 form, the structured form's C2: composed per function.
 
-1. The CFG ⊑ structured check through the blocks' procedures
-   (`C1_BLOCKS=1`, get_stride so far): the generator writes each CFG
-   block as a procedure `F__bN` (a jump its tail call) and `F__entry`;
-   (A) the CFG's loop ⊑ `F__entry`, a point per block (its procedure on
-   the locals, nothing found by search); (B) `F__entry` ⊑ the structured
-   procedure, a walk with each block's call unfolded. Next:
-   - void functions: a void tail call drops the callee's value -- a
-     callee's outcome `ok(w, empty)` (its leaves, as the outcomes' kinds
-     by g.proc_shaped);
-   - joins in (B): a block reached on two ways is walked once per way
-     (enframe 3 GB, get_meta out of memory). A tail call's wrappers
-     nest differently on each way: turn a tail call into a jump (a lemma:
-     the wrapper and dispatch pass the outcome on), so the CFG side at a
-     block's start is its body alone, and walk each (block, structured
-     join -- the `if`'s rest on its locals' tuple) once;
-   - then all functions by it, the switch removed, and the old points
-     (`point_of`, discovery, templates by value) retired;
+1. The CFG ⊑ structured check through the blocks' procedures (all 22
+   loop-free functions; `__malloc_alloc_meta` the slowest, ~120 s). Next:
    - the structured form generated and checked in one run (`slc gimple`
      running the refinement), and `refines` again in the checked chain;
+   - `__malloc_alloc_meta`'s time: its points' walks begin at the whole
+     CFG dispatch (28 blocks) -- each block's walk from its procedure
+     instead (the CFG loop's body at label k equal to block k's code);
+   - the old points (`point_of`, discovery, templates by value) retired
+     once the loops go through the blocks too;
    - the loops (step_seq, activate_group, try_avail, ...): the divergence
      theorem for nested loops (an infinite run of the CFG a diverging run
      of the structured loops, the same trace);
