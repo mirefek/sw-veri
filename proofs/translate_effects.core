@@ -43,9 +43,9 @@ qed
 // ---------------------------------------------------------------------
 //  Effects: the outcomes r(o) of a program run from w
 
-// every return keeps the world valid, or every exception is allowed (the
-// program is undefined from w)
-def tr.eff(w, o. r) := (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w, w2)) || (all x e. x in univ(1) -> e in univ(1) -> r(exc(x, e)))
+// every return keeps the world valid, or every exception and divergence is
+// allowed (the program is undefined from w)
+def tr.eff(w, o. r) := (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w, w2)) || tr.undef(o. r(o))
 
 // a return in the state it started from
 theorem tr.eff_ret: all w v. tr.eff(w, o. o = ok(w, v))
@@ -68,26 +68,47 @@ proof
   assume hp hk
   let B(o) := bind_rel(p, w, s1 v. k(s1, v, o), s1 e. o = exc(s1, e), t. o = diverge(t))
   // p undefined: so is the sequence
-  have ua: (all x e. x in univ(1) -> e in univ(1) -> runs(p, w, exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> B(exc(x, e))) proof
-    assume hu
-    fix x e
-    assume hx he
-    have r := mp(all_elim(hu, {x}, {e}), hx, he)
-    show by defs(ex_intro({exc(x, e)}, simp(r)), bind_rel)
+  have ua: tr.undef(o. runs(p, w, o)) -> tr.undef(o. B(o)) proof
+    assume hu0
+    have hu: all x e. x in univ(1) -> e in univ(1) -> runs(p, w, exc(x, e)) by taut(expand(hu0, tr.undef))
+    have hd: all t. t in univ(1) -> runs(p, w, diverge(t)) by taut(expand(hu0, tr.undef))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> B(exc(x, e)) proof
+      fix x e
+      assume hx he
+      have r := mp(all_elim(hu, {x}, {e}), hx, he)
+      show by defs(ex_intro({exc(x, e)}, simp(r)), bind_rel)
+    qed
+    have dv: all t. t in univ(1) -> B(diverge(t)) proof
+      fix t
+      assume ht
+      have r := mp(all_elim(hd, {t}), ht)
+      show by defs(ex_intro({diverge(t)}, simp(r)), bind_rel)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // a return of p after which k is undefined: so is the sequence
-  have ub: (ex s1 v. runs(p, w, ok(s1, v)) && (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e)))) ->
-      (all x e. x in univ(1) -> e in univ(1) -> B(exc(x, e))) proof
+  have ub: (ex s1 v. runs(p, w, ok(s1, v)) && tr.undef(o. k(s1, v, o))) -> tr.undef(o. B(o)) proof
     assume h
-    obtain s1 v, hr hu from h
-    fix x e
-    assume hx he
-    have kx := mp(all_elim(hu, {x}, {e}), hx, he)
-    show by defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel)
+    obtain s1 v, hr hu0 from h
+    have hu: all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e)) by taut(expand(hu0, tr.undef))
+    have hd: all t. t in univ(1) -> k(s1, v, diverge(t)) by taut(expand(hu0, tr.undef))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> B(exc(x, e)) proof
+      fix x e
+      assume hx he
+      have kx := mp(all_elim(hu, {x}, {e}), hx, he)
+      show by defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel)
+    qed
+    have dv: all t. t in univ(1) -> B(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hd, {t}), ht)
+      show by defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // otherwise every return is valid: p's, then k's
   have uc: (all w2 v. runs(p, w, ok(w2, v)) -> tr.returns_valid(w, w2)) ->
-      !(ex s1 v. runs(p, w, ok(s1, v)) && (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e)))) ->
+      !(ex s1 v. runs(p, w, ok(s1, v)) && tr.undef(o. k(s1, v, o))) ->
       (all w2 r. B(ok(w2, r)) -> tr.returns_valid(w, w2)) proof
     assume hv hn
     fix w2 r
@@ -98,9 +119,9 @@ proof
       obtain s1 v, eo ko from e1
       have r1 := rewrite(eo, hr1)
       have ek := expand(mp(all_elim(hk, {s1}, {v}), r1), tr.eff)
-      have nu: (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e))) -> false proof
+      have nu: tr.undef(o. k(s1, v, o)) -> false proof
         assume hu
-        have ex: ex s1 v. runs(p, w, ok(s1, v)) && (all x e. x in univ(1) -> e in univ(1) -> k(s1, v, exc(x, e))) by ex_intro({s1}, {v}, taut(r1, hu))
+        have ex: ex s1 v. runs(p, w, ok(s1, v)) && tr.undef(o. k(s1, v, o)) by ex_intro({s1}, {v}, taut(r1, hu))
         show by taut(hn, ex)
       qed
       have kv: all w3 v3. k(s1, v, ok(w3, v3)) -> tr.returns_valid(s1, w3) by taut(ek, nu)
@@ -130,24 +151,42 @@ proof
   fix w
   assume hk
   // nothing to choose: anything
-  have ua: !(ex x. d(x)) -> (all y e. y in univ(1) -> e in univ(1) -> any_rel(x. d(x), x. k(x, exc(y, e)))) proof
+  have ua: !(ex x. d(x)) -> tr.undef(o. any_rel(x. d(x), x. k(x, o))) proof
     assume hn
-    fix y e
-    assume _ _
-    show by defs(taut(hn), any_rel)
+    have ex: all y e. y in univ(1) -> e in univ(1) -> any_rel(x. d(x), x. k(x, exc(y, e))) proof
+      fix y e
+      assume _ _
+      show by defs(taut(hn), any_rel)
+    qed
+    have dv: all t. t in univ(1) -> any_rel(x. d(x), x. k(x, diverge(t))) proof
+      fix t
+      assume _
+      show by defs(taut(hn), any_rel)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // a choice after which k is undefined: so is the whole
-  have ub: (ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) ->
-      (all y e. y in univ(1) -> e in univ(1) -> any_rel(x. d(x), x. k(x, exc(y, e)))) proof
+  have ub: (ex x. d(x) && tr.undef(o. k(x, o))) -> tr.undef(o. any_rel(x. d(x), x. k(x, o))) proof
     assume h
-    obtain x, hd hu from h
-    fix y e
-    assume hy he
-    have kx := mp(all_elim(hu, {y}, {e}), hy, he)
-    show by defs(taut(((ex x. d(x) && k(x, exc(y, e))) by ex_intro({x}, taut(hd, kx)))), any_rel)
+    obtain x, hd hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)) by taut(expand(hu0, tr.undef))
+    have hv: all t. t in univ(1) -> k(x, diverge(t)) by taut(expand(hu0, tr.undef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> any_rel(x. d(x), x. k(x, exc(y, e))) proof
+      fix y e
+      assume hy he
+      have kx := mp(all_elim(hu, {y}, {e}), hy, he)
+      show by defs(taut(((ex x. d(x) && k(x, exc(y, e))) by ex_intro({x}, taut(hd, kx)))), any_rel)
+    qed
+    have dv: all t. t in univ(1) -> any_rel(x. d(x), x. k(x, diverge(t))) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hv, {t}), ht)
+      show by defs(taut(((ex x. d(x) && k(x, diverge(t))) by ex_intro({x}, taut(hd, kx)))), any_rel)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // otherwise every return is valid: the chosen one's
-  have uc: (ex x. d(x)) -> !(ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) ->
+  have uc: (ex x. d(x)) -> !(ex x. d(x) && tr.undef(o. k(x, o))) ->
       (all w2 r. any_rel(x. d(x), x. k(x, ok(w2, r))) -> tr.returns_valid(w, w2)) proof
     assume hd0 hn
     fix w2 r
@@ -157,9 +196,9 @@ proof
       assume e1
       obtain x, hd kx from e1
       have ek := expand(mp(all_elim(hk, {x}), hd), tr.eff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) -> false proof
+      have nu: tr.undef(o. k(x, o)) -> false proof
         assume hu
-        have ex: ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) by ex_intro({x}, taut(hd, hu))
+        have ex: ex x. d(x) && tr.undef(o. k(x, o)) by ex_intro({x}, taut(hd, hu))
         show by taut(hn, ex)
       qed
       have kv: all w3 v3. k(x, ok(w3, v3)) -> tr.returns_valid(w, w3) by taut(ek, nu)
@@ -182,11 +221,21 @@ proof
     assume g
     show := mp(all_elim(h, {w2}, {v}), (r(ok(w2, v)) by taut(g, hc)))
   qed
-  have a2: (all x e. x in univ(1) -> e in univ(1) -> r(exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> !c || r(exc(x, e))) proof
-    assume h
-    fix x e
-    assume hx he2
-    show by taut(mp(all_elim(h, {x}, {e}), hx, he2))
+  have a2: tr.undef(o. r(o)) -> tr.undef(o. !c || r(o)) proof
+    assume h0
+    have h: all x e. x in univ(1) -> e in univ(1) -> r(exc(x, e)) by taut(expand(h0, tr.undef))
+    have hv: all t. t in univ(1) -> r(diverge(t)) by taut(expand(h0, tr.undef))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> !c || r(exc(x, e)) proof
+      fix x e
+      assume hx he2
+      show by taut(mp(all_elim(h, {x}, {e}), hx, he2))
+    qed
+    have dv: all t. t in univ(1) -> !c || r(diverge(t)) proof
+      fix t
+      assume ht
+      show by taut(mp(all_elim(hv, {t}), ht))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   show by defs(taut(e, a1, a2), tr.eff)
 qed
@@ -204,12 +253,23 @@ proof
     assume g
     show := mp(all_elim(h, {w2}, {v}), (r(w, ok(w2, v)) by simp(g)))
   qed
-  have a2: w in univ(1) -> (all x e. x in univ(1) -> e in univ(1) -> r(w, exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 o. r(x0, o)), w, exc(x, e))) proof
-    assume hw h
-    fix x e
-    assume hx hy
-    have rx := mp(all_elim(h, {x}, {e}), hx, hy)
-    show by simp(hw, hx, hy, rx)
+  have a2: w in univ(1) -> tr.undef(o. r(w, o)) -> tr.undef(o. runs(mkprog(x0 o. r(x0, o)), w, o)) proof
+    assume hw h0
+    have h: all x e. x in univ(1) -> e in univ(1) -> r(w, exc(x, e)) by taut(expand(h0, tr.undef))
+    have hv: all t. t in univ(1) -> r(w, diverge(t)) by taut(expand(h0, tr.undef))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 o. r(x0, o)), w, exc(x, e)) proof
+      fix x e
+      assume hx hy
+      have rx := mp(all_elim(h, {x}, {e}), hx, hy)
+      show by simp(hw, hx, hy, rx)
+    qed
+    have dv: all t. t in univ(1) -> runs(mkprog(x0 o. r(x0, o)), w, diverge(t)) proof
+      fix t
+      assume ht
+      have rx := mp(all_elim(hv, {t}), ht)
+      show by simp(hw, ht, rx)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // (no runs from a w outside univ(1))
   have a3: !(w in univ(1)) -> (all w2 v. runs(mkprog(x0 o. r(x0, o)), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
@@ -236,21 +296,40 @@ proof
   let Q(o) := ex x2. (c || (!c && x2 = ok(pair(w, empty), empty))) && ((fst(x2) = 0 && k(fst(out_state(x2)), o)) ||
     ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
       ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o = diverge(snd(x2)))))
-  // undefined: a raise as the first statement's outcome
-  have ua: c -> (all x e. x in univ(1) -> e in univ(1) -> Q(exc(x, e))) proof
+  // undefined: a raise or a divergence as the first statement's outcome
+  have ua: c -> tr.undef(o. Q(o)) proof
     assume hc
-    fix x e
-    assume _ _
-    show by ex_intro({exc(pair(x, empty), pair("raise", e))}, simp(hc))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> Q(exc(x, e)) proof
+      fix x e
+      assume _ _
+      show by ex_intro({exc(pair(x, empty), pair("raise", e))}, simp(hc))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume _
+      show by ex_intro({diverge(t)}, simp(hc))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // defined: the rest, from w
-  have ub: !c -> (all x e. x in univ(1) -> e in univ(1) -> k(w, exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> Q(exc(x, e))) proof
-    assume hn hu
-    fix x e
-    assume hx he
-    have kx := mp(all_elim(hu, {x}, {e}), hx, he)
+  have ub: !c -> tr.undef(o. k(w, o)) -> tr.undef(o. Q(o)) proof
+    assume hn hu0
+    have hu: all x e. x in univ(1) -> e in univ(1) -> k(w, exc(x, e)) by taut(expand(hu0, tr.undef))
+    have hv: all t. t in univ(1) -> k(w, diverge(t)) by taut(expand(hu0, tr.undef))
     have os: fst(out_state(ok(pair(w, empty), empty))) = w by simp()
-    show by ex_intro({ok(pair(w, empty), empty)}, simp(hn, rewrite(sym(os), kx)))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> Q(exc(x, e)) proof
+      fix x e
+      assume hx he
+      have kx := mp(all_elim(hu, {x}, {e}), hx, he)
+      show by ex_intro({ok(pair(w, empty), empty)}, simp(hn, rewrite(sym(os), kx)))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hv, {t}), ht)
+      show by ex_intro({ok(pair(w, empty), empty)}, simp(hn, rewrite(sym(os), kx)))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   have uc: !c -> (all w2 v. k(w, ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
     assume hn hv
@@ -263,7 +342,7 @@ proof
     have kk := rewrite(os, k0)
     show := mp(all_elim(hv, {w2}, {v}), kk)
   qed
-  have ek: !c -> (all w2 v. k(w, ok(w2, v)) -> tr.returns_valid(w, w2)) || (all x e. x in univ(1) -> e in univ(1) -> k(w, exc(x, e))) proof
+  have ek: !c -> (all w2 v. k(w, ok(w2, v)) -> tr.returns_valid(w, w2)) || tr.undef(o. k(w, o)) proof
     assume hn
     show := expand(mp(hk, hn), tr.eff)
   qed
@@ -307,11 +386,19 @@ proof
     have e: w2 = w by simp(expand(h, gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap), hd)
     show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
   qed
-  have a2: w in univ(1) -> !(int_le(0, A) && int_lt(A, 18446744073709551616)) -> (all x e. x in univ(1) -> e in univ(1) -> runs(gimple.padd(p, d), w, exc(x, e))) proof
+  have a2: w in univ(1) -> !(int_le(0, A) && int_lt(A, 18446744073709551616)) -> tr.undef(o. runs(gimple.padd(p, d), w, o)) proof
     assume hw hn
-    fix x e
-    assume hx he
-    show by defs(simp(hw, hx, he, hn), gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap)
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.padd(p, d), w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      show by defs(simp(hw, hx, he, hn), gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap)
+    qed
+    have dv: all t. t in univ(1) -> runs(gimple.padd(p, d), w, diverge(t)) proof
+      fix t
+      assume ht
+      show by defs(simp(hw, ht, hn), gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   have a3: !(w in univ(1)) -> (all w2 v. runs(gimple.padd(p, d), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
     assume hn
@@ -409,7 +496,7 @@ proof
       assume hv
       show := mp(all_elim(hv, {w2}, {rr}), hp)
     qed
-    have c2: (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x1 x2. r(args, x1, x2)), w, exc(x, e))) ->
+    have c2: tr.undef(o. runs(mkprog(x1 x2. r(args, x1, x2)), w, o)) ->
         tr.may_raise(fn_build(abi.ARGS, x0. mkprog(x1 x2. r(x0, x1, x2))), args, w) proof
       assume hu
       show by defs(rewrite(sym(ap), hu), tr.may_raise)
@@ -443,6 +530,26 @@ proof
   show := apply(gc.call_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), b)
 qed
 
+theorem tr.call_noregs_div: all g args w t. w in univ(1) -> t in univ(1) -> !(ex regs. gc.regs_ok(regs, args)) ->
+  runs(gimple.call(g, args), w, diverge(t))
+proof
+  fix g args w t
+  assume hw ht hn
+  have hn2: !(ex x0. x0 in list_type(bits(64)) && (seq_len(x0) = seq_len(args) && (all x1. x1 in omega -> int_lt(x1, seq_len(args)) -> app(x0, x1) in gimple.in_reg(fst(app(args, x1)), snd(app(args, x1)))))) proof
+    have c0: (ex x0. x0 in list_type(bits(64)) && (seq_len(x0) = seq_len(args) && (all x1. x1 in omega -> int_lt(x1, seq_len(args)) -> app(x0, x1) in gimple.in_reg(fst(app(args, x1)), snd(app(args, x1)))))) -> false proof
+      assume he0
+      obtain r0, h1 h23 from he0
+      have h2 h3 := h23
+      have ex1: ex regs. gc.regs_ok(regs, args) by ex_intro({r0}, conj(h1, h2, h3))
+      show by taut(ex1, hn)
+    qed
+    show by taut(c0)
+  qed
+  have c: runs(gimple.call_callee(g, args), w, diverge(t)) by defs(simp(hw, ht, hn2), gimple.call_callee)
+  have b := apply(gc.bind_div[p := gimple.call_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, diverge(t))), x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], c, refl({diverge(t)}))
+  show := apply(gc.call_from, hw, (pair(w, diverge(t)) in univ(1) by simp(hw, ht)), b)
+qed
+
 // (the callee's stack objects replaced: the world as valid)
 theorem tr.rv_back: all w w4 z. tr.returns_valid(w, w4) -> tr.returns_valid(w, fn_update(w4, "objs", z))
 proof
@@ -465,8 +572,8 @@ proof
   fix g args n w
   assume hio hn
   let C := gimple.call(g, args)
-  // (all exceptions: the call undefined)
-  let U := all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e))
+  // (all exceptions and divergences: the call undefined)
+  let U := tr.undef(o. runs(C, w, o))
   have toE: U -> tr.eff(w, o. runs(C, w, o)) proof
     assume hu
     show by defs(taut(hu), tr.eff)
@@ -489,33 +596,55 @@ proof
     // undefined for some registers: the call undefined
     have u0: !(ex regs. gc.regs_ok(regs, args)) -> tr.eff(w, o. runs(C, w, o)) proof
       assume hr
-      have hu: U proof
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e)) proof
         fix x e
         assume hx he
         show := apply(tr.call_noregs, {g}, {args}, {w}, {x}, {e}, hw, hx, he, hr)
       qed
+      have dv: all t. t in univ(1) -> runs(C, w, diverge(t)) proof
+        fix t
+        assume ht
+        show := apply(tr.call_noregs_div, {g}, {args}, {w}, {t}, hw, ht, hr)
+      qed
+      have hu: U by defs(taut(ex, dv), tr.undef)
       show := mp(toE, hu)
     qed
     have u1: (ex regs. gc.regs_ok(regs, args)) -> !gc.sound(w) -> tr.eff(w, o. runs(C, w, o)) proof
       assume hr hs
       obtain regs, rg from hr
-      have hu: U proof
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e)) proof
         fix x e
         assume hx he
         show := apply(gc.call_ub, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, rg, hs)
       qed
+      have dv: all t. t in univ(1) -> runs(C, w, diverge(t)) proof
+        fix t
+        assume ht
+        show := apply(gc.call_ub_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, rg, hs)
+      qed
+      have hu: U by defs(taut(ex, dv), tr.undef)
       show := mp(toE, hu)
     qed
     have u2: (ex regs. gc.regs_ok(regs, args) && tr.may_raise(g, regs, w)) -> gc.sound(w) -> tr.eff(w, o. runs(C, w, o)) proof
       assume hr hs
       obtain regs, r1 r2 r3 hm from hr
       have rg: gc.regs_ok(regs, args) := conj(r1, r2, r3)
-      have hu: U proof
+      have hm2 := expand(expand(hm, tr.may_raise), tr.undef)
+      have mx: all x e. x in univ(1) -> e in univ(1) -> runs(app(g, regs), w, exc(x, e)) by taut(hm2)
+      have md: all t. t in univ(1) -> runs(app(g, regs), w, diverge(t)) by taut(hm2)
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e)) proof
         fix x e
         assume hx he
-        have c := mp(all_elim(expand(hm, tr.may_raise), {x}, {e}), hx, he)
+        have c := mp(all_elim(mx, {x}, {e}), hx, he)
         show := apply(gc.call_exc, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, rg, hs, c)
       qed
+      have dv: all t. t in univ(1) -> runs(C, w, diverge(t)) proof
+        fix t
+        assume ht
+        have c := mp(all_elim(md, {t}), ht)
+        show := apply(gc.call_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, rg, hs, c)
+      qed
+      have hu: U by defs(taut(ex, dv), tr.undef)
       show := mp(toE, hu)
     qed
     // otherwise every return of the call is the callee's, which keeps the world valid
@@ -612,11 +741,14 @@ qed
 //  locals (out_state(x) = pair(world, locals)); a normal outcome (fst = 0)
 //  goes on with the next statement, a "ret" returns, a "raise" raises
 
+// a statement's outcomes a undefined: every raise and every divergence
+def tr.sundef(x. a) := (all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e))))) && (all t. t in univ(1) -> a(diverge(t)))
+
 // every outcome but a raise (a normal one, a return, a loop's exit)
-// keeps the world valid, or every raise is allowed (the statement is
-// undefined from w)
+// keeps the world valid, or every raise and divergence is allowed (the
+// statement is undefined from w)
 def tr.seff(w, x. a) := (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ||
-  (all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e)))))
+  tr.sundef(x. a(x))
 
 // a block, as the program's body: its statement's outcome dispatched
 theorem tr.eff_seq(x. a, x o. k): all w. tr.seff(w, x. a(x)) -> (all x. a(x) -> fst(x) = 0 -> tr.eff(fst(out_state(x)), o. k(x, o))) ->
@@ -627,26 +759,48 @@ proof
   assume ha hk
   let Q(o) := ex x. a(x) && ((fst(x) = 0 && k(x, o)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && o = ok(fst(out_state(x)), snd(out_value(x)))) ||
     ((fst(x) = 1 && fst(out_value(x)) = "raise") && o = exc(fst(out_state(x)), snd(out_value(x))))) || (fst(x) = 2 && o = diverge(snd(x)))))
-  // the statement undefined: a raise of anything
-  have ua: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e))))) -> (all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e))) proof
-    assume hu
-    fix y e
-    assume hy he
-    obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({exc(pair(y, l), pair("raise", e))}, simp(hl))
+  // the statement undefined: a raise of anything, any divergence
+  have ua: tr.sundef(x. a(x)) -> tr.undef(o. Q(o)) proof
+    assume hu0
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> a(diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e)) proof
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({exc(pair(y, l), pair("raise", e))}, simp(hl))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have hl := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({diverge(t)}, simp(hl))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // a normal outcome after which the rest is undefined
-  have ub: (ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) -> (all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e))) proof
+  have ub: (ex x. a(x) && fst(x) = 0 && tr.undef(o. k(x, o))) -> tr.undef(o. Q(o)) proof
     assume h
-    obtain x, hx h0 hu from h
-    fix y e
-    assume hy he
-    have kx := mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({x}, taut(hx, h0, kx))
+    obtain x, hx h0 hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)) by taut(expand(hu0, tr.undef))
+    have hd: all t. t in univ(1) -> k(x, diverge(t)) by taut(expand(hu0, tr.undef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e)) proof
+      fix y e
+      assume hy he
+      have kx := mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({x}, taut(hx, h0, kx))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({x}, taut(hx, h0, kx))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // otherwise: every return valid
   have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ->
-      !(ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+      !(ex x. a(x) && fst(x) = 0 && tr.undef(o. k(x, o))) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
     assume hv hn
     fix w2 v
     assume hq
@@ -655,9 +809,9 @@ proof
       assume h1
       have h0 kx := h1
       have ek := expand(mp(all_elim(hk, {x}), hx, h0), tr.eff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) -> false proof
+      have nu: tr.undef(o. k(x, o)) -> false proof
         assume hu
-        have ex: ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) by ex_intro({x}, taut(hx, h0, hu))
+        have ex: ex x. a(x) && fst(x) = 0 && tr.undef(o. k(x, o)) by ex_intro({x}, taut(hx, h0, hu))
         show by taut(hn, ex)
       qed
       have kv: all w3 v3. k(x, ok(w3, v3)) -> tr.returns_valid(fst(out_state(x)), w3) by taut(ek, nu)
@@ -715,11 +869,19 @@ qed
 theorem tr.seff_undef_if(c): all w. tr.seff(w, x. c || (!c && x = ok(pair(w, empty), empty)))
 proof
   fix w
-  have ua: c -> (all y e. y in univ(1) -> e in univ(1) -> (ex l. c || (!c && exc(pair(y, l), pair("raise", e)) = ok(pair(w, empty), empty)))) proof
+  have ua: c -> tr.sundef(x. c || (!c && x = ok(pair(w, empty), empty))) proof
     assume hc
-    fix y e
-    assume _ _
-    show by ex_intro({empty}, taut(hc))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. c || (!c && exc(pair(y, l), pair("raise", e)) = ok(pair(w, empty), empty))) proof
+      fix y e
+      assume _ _
+      show by ex_intro({empty}, taut(hc))
+    qed
+    have dv: all t. t in univ(1) -> c || (!c && diverge(t) = ok(pair(w, empty), empty)) proof
+      fix t
+      assume _
+      show by taut(hc)
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
   have uc: !c -> (all x. c || (!c && x = ok(pair(w, empty), empty)) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) proof
     assume hn
@@ -746,13 +908,22 @@ proof
       assume ha hr
       show := mp(all_elim(hv, {x}), (a1(x) by taut(ha, hc)), hr)
     qed
-    have u: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a1(exc(pair(y, l), pair("raise", e))))) ->
-        (all y e. y in univ(1) -> e in univ(1) -> (ex l. (c && a1(exc(pair(y, l), pair("raise", e)))) || (!c && a2(exc(pair(y, l), pair("raise", e)))))) proof
-      assume hu
-      fix y e
-      assume hy he
-      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-      show by ex_intro({l}, taut(hc, hl))
+    have u: tr.sundef(y. a1(y)) -> tr.sundef(y. (c && a1(y)) || (!c && a2(y))) proof
+      assume hu0
+      have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. a1(exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+      have hd: all t. t in univ(1) -> a1(diverge(t)) by taut(expand(hu0, tr.sundef))
+      have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. (c && a1(exc(pair(y, l), pair("raise", e)))) || (!c && a2(exc(pair(y, l), pair("raise", e))))) proof
+        fix y e
+        assume hy he
+        obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+        show by ex_intro({l}, taut(hc, hl))
+      qed
+      have dv: all t. t in univ(1) -> (c && a1(diverge(t))) || (!c && a2(diverge(t))) proof
+        fix t
+        assume ht
+        show by taut(hc, mp(all_elim(hd, {t}), ht))
+      qed
+      show by defs(taut(ex, dv), tr.sundef)
     qed
     show by defs(taut(e, v, u), tr.seff)
   qed
@@ -766,13 +937,22 @@ proof
       assume ha hr
       show := mp(all_elim(hv, {x}), (a2(x) by taut(ha, hc)), hr)
     qed
-    have u: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a2(exc(pair(y, l), pair("raise", e))))) ->
-        (all y e. y in univ(1) -> e in univ(1) -> (ex l. (c && a1(exc(pair(y, l), pair("raise", e)))) || (!c && a2(exc(pair(y, l), pair("raise", e)))))) proof
-      assume hu
-      fix y e
-      assume hy he
-      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-      show by ex_intro({l}, taut(hc, hl))
+    have u: tr.sundef(y. a2(y)) -> tr.sundef(y. (c && a1(y)) || (!c && a2(y))) proof
+      assume hu0
+      have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. a2(exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+      have hd: all t. t in univ(1) -> a2(diverge(t)) by taut(expand(hu0, tr.sundef))
+      have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. (c && a1(exc(pair(y, l), pair("raise", e)))) || (!c && a2(exc(pair(y, l), pair("raise", e))))) proof
+        fix y e
+        assume hy he
+        obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+        show by ex_intro({l}, taut(hc, hl))
+      qed
+      have dv: all t. t in univ(1) -> (c && a1(diverge(t))) || (!c && a2(diverge(t))) proof
+        fix t
+        assume ht
+        show by taut(hc, mp(all_elim(hd, {t}), ht))
+      qed
+      show by defs(taut(ex, dv), tr.sundef)
     qed
     show by defs(taut(e, v, u), tr.seff)
   qed
@@ -784,22 +964,40 @@ theorem tr.seff_any(x. d, x y. k): all w. (all x. d(x) -> tr.seff(w, y. k(x, y))
 proof
   fix w
   assume hk
-  have ua: !(ex x. d(x)) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l. any_rel(x. d(x), x. k(x, exc(pair(y, l), pair("raise", e)))))) proof
+  have ua: !(ex x. d(x)) -> tr.sundef(y. any_rel(x. d(x), x. k(x, y))) proof
     assume hn
-    fix y e
-    assume _ _
-    show by ex_intro({empty}, defs(taut(hn), any_rel))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. any_rel(x. d(x), x. k(x, exc(pair(y, l), pair("raise", e))))) proof
+      fix y e
+      assume _ _
+      show by ex_intro({empty}, defs(taut(hn), any_rel))
+    qed
+    have dv: all t. t in univ(1) -> any_rel(x. d(x), x. k(x, diverge(t))) proof
+      fix t
+      assume _
+      show by defs(taut(hn), any_rel)
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
-  have ub: (ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e)))))) ->
-      (all y e. y in univ(1) -> e in univ(1) -> (ex l. any_rel(x. d(x), x. k(x, exc(pair(y, l), pair("raise", e)))))) proof
+  have ub: (ex x. d(x) && tr.sundef(y. k(x, y))) -> tr.sundef(y. any_rel(x. d(x), x. k(x, y))) proof
     assume h
-    obtain x, hd hu from h
-    fix y e
-    assume hy he
-    obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l}, defs(taut(((ex x. d(x) && k(x, exc(pair(y, l), pair("raise", e)))) by ex_intro({x}, taut(hd, hl)))), any_rel))
+    obtain x, hd hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hv: all t. t in univ(1) -> k(x, diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. any_rel(x. d(x), x. k(x, exc(pair(y, l), pair("raise", e))))) proof
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l}, defs(taut(((ex x. d(x) && k(x, exc(pair(y, l), pair("raise", e)))) by ex_intro({x}, taut(hd, hl)))), any_rel))
+    qed
+    have dv: all t. t in univ(1) -> any_rel(x. d(x), x. k(x, diverge(t))) proof
+      fix t
+      assume ht
+      have hl := mp(all_elim(hv, {t}), ht)
+      show by defs(taut(((ex x. d(x) && k(x, diverge(t))) by ex_intro({x}, taut(hd, hl)))), any_rel)
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
-  have uc: (ex x. d(x)) -> !(ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e)))))) ->
+  have uc: (ex x. d(x)) -> !(ex x. d(x) && tr.sundef(y. k(x, y))) ->
       (all z. any_rel(x. d(x), x. k(x, z)) -> (fst(z) = 0 || (fst(z) = 1 && !(fst(out_value(z)) = "raise"))) -> tr.returns_valid(w, fst(out_state(z)))) proof
     assume hd0 hn
     fix z
@@ -809,9 +1007,9 @@ proof
       assume e1
       obtain x, hd kx from e1
       have ek := expand(mp(all_elim(hk, {x}), hd), tr.seff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e))))) -> false proof
+      have nu: tr.sundef(y. k(x, y)) -> false proof
         assume hu
-        have ex: ex x. d(x) && (all y e. y in univ(1) -> e in univ(1) -> (ex l. k(x, exc(pair(y, l), pair("raise", e))))) by ex_intro({x}, taut(hd, hu))
+        have ex: ex x. d(x) && tr.sundef(y. k(x, y)) by ex_intro({x}, taut(hd, hu))
         show by taut(hn, ex)
       qed
       have kv: all z2. k(x, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && !(fst(out_value(z2)) = "raise"))) -> tr.returns_valid(w, fst(out_state(z2))) by taut(ek, nu)
@@ -830,24 +1028,45 @@ proof
   fix w
   assume hp hk
   let B(y) := bind_rel(p, w, s1 v. k(s1, v, y), s1 e. y = exc(pair(s1, l(s1)), pair("raise", e)), t. y = diverge(t))
-  have ua: (all x e. x in univ(1) -> e in univ(1) -> runs(p, w, exc(x, e))) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l2. B(exc(pair(y, l2), pair("raise", e))))) proof
-    assume hu
-    fix y e
-    assume hy he
-    have r := mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l(y)}, defs(ex_intro({exc(y, e)}, simp(r)), bind_rel))
+  have ua: tr.undef(o. runs(p, w, o)) -> tr.sundef(y. B(y)) proof
+    assume hu0
+    have hu: all x e. x in univ(1) -> e in univ(1) -> runs(p, w, exc(x, e)) by taut(expand(hu0, tr.undef))
+    have hd: all t. t in univ(1) -> runs(p, w, diverge(t)) by taut(expand(hu0, tr.undef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. B(exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      have r := mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l(y)}, defs(ex_intro({exc(y, e)}, simp(r)), bind_rel))
+    qed
+    have dv: all t. t in univ(1) -> B(diverge(t)) proof
+      fix t
+      assume ht
+      have r := mp(all_elim(hd, {t}), ht)
+      show by defs(ex_intro({diverge(t)}, simp(r)), bind_rel)
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
-  have ub: (ex s1 v. runs(p, w, ok(s1, v)) && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e)))))) ->
-      (all y e. y in univ(1) -> e in univ(1) -> (ex l2. B(exc(pair(y, l2), pair("raise", e))))) proof
+  have ub: (ex s1 v. runs(p, w, ok(s1, v)) && tr.sundef(y. k(s1, v, y))) -> tr.sundef(y. B(y)) proof
     assume h
-    obtain s1 v, hr hu from h
-    fix y e
-    assume hy he
-    obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l2}, defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel))
+    obtain s1 v, hr hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> k(s1, v, diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. B(exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l2}, defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel))
+    qed
+    have dv: all t. t in univ(1) -> B(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hd, {t}), ht)
+      show by defs(ex_intro({ok(s1, v)}, simp(hr, kx)), bind_rel)
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
   have uc: (all w2 v. runs(p, w, ok(w2, v)) -> tr.returns_valid(w, w2)) ->
-      !(ex s1 v. runs(p, w, ok(s1, v)) && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e)))))) ->
+      !(ex s1 v. runs(p, w, ok(s1, v)) && tr.sundef(y. k(s1, v, y))) ->
       (all z. B(z) -> (fst(z) = 0 || (fst(z) = 1 && !(fst(out_value(z)) = "raise"))) -> tr.returns_valid(w, fst(out_state(z)))) proof
     assume hv hn
     fix z
@@ -858,9 +1077,9 @@ proof
       obtain s1 v, eo ko from e1
       have r1 := rewrite(eo, hr1)
       have ek := expand(mp(all_elim(hk, {s1}, {v}), r1), tr.seff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e))))) -> false proof
+      have nu: tr.sundef(y. k(s1, v, y)) -> false proof
         assume hu
-        have ex: ex s1 v. runs(p, w, ok(s1, v)) && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(s1, v, exc(pair(y, l2), pair("raise", e))))) by ex_intro({s1}, {v}, taut(r1, hu))
+        have ex: ex s1 v. runs(p, w, ok(s1, v)) && tr.sundef(y. k(s1, v, y)) by ex_intro({s1}, {v}, taut(r1, hu))
         show by taut(hn, ex)
       qed
       have kv: all z2. k(s1, v, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && !(fst(out_value(z2)) = "raise"))) -> tr.returns_valid(s1, fst(out_state(z2))) by taut(ek, nu)
@@ -894,24 +1113,45 @@ proof
   assume ha hk
   let Q(y) := ex x. a(x) && ((fst(x) = 0 && k(x, y)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && y = exc(pair(fst(out_state(x)), l(x)), pair("ret", snd(out_value(x))))) ||
     ((fst(x) = 1 && fst(out_value(x)) = "raise") && y = exc(pair(fst(out_state(x)), l(x)), pair("raise", snd(out_value(x)))))) || (fst(x) = 2 && y = diverge(snd(x)))))
-  have ua: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. a(exc(pair(y, l2), pair("raise", e))))) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e))))) proof
-    assume hu
-    fix y e
-    assume hy he
-    obtain l2, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l(exc(pair(y, l2), pair("raise", e)))}, ex_intro({exc(pair(y, l2), pair("raise", e))}, simp(hl)))
+  have ua: tr.sundef(x. a(x)) -> tr.sundef(y. Q(y)) proof
+    assume hu0
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l2. a(exc(pair(y, l2), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> a(diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l2, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l(exc(pair(y, l2), pair("raise", e)))}, ex_intro({exc(pair(y, l2), pair("raise", e))}, simp(hl)))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have hl := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({diverge(t)}, simp(hl))
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
-  have ub: (ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))))) ->
-      (all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e))))) proof
+  have ub: (ex x. a(x) && fst(x) = 0 && tr.sundef(y. k(x, y))) -> tr.sundef(y. Q(y)) proof
     assume h
-    obtain x, hx h0 hu from h
-    fix y e
-    assume hy he
-    obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l2}, ex_intro({x}, taut(hx, h0, kx)))
+    obtain x, hx h0 hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> k(x, diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l2}, ex_intro({x}, taut(hx, h0, kx)))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({x}, taut(hx, h0, kx))
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
   have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ->
-      !(ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))))) ->
+      !(ex x. a(x) && fst(x) = 0 && tr.sundef(y. k(x, y))) ->
       (all z. Q(z) -> (fst(z) = 0 || (fst(z) = 1 && !(fst(out_value(z)) = "raise"))) -> tr.returns_valid(w, fst(out_state(z)))) proof
     assume hv hn
     fix z
@@ -921,9 +1161,9 @@ proof
       assume h1
       have h0 kx := h1
       have ek := expand(mp(all_elim(hk, {x}), hx, h0), tr.seff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e))))) -> false proof
+      have nu: tr.sundef(y. k(x, y)) -> false proof
         assume hu
-        have ex: ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e))))) by ex_intro({x}, taut(hx, h0, hu))
+        have ex: ex x. a(x) && fst(x) = 0 && tr.sundef(y. k(x, y)) by ex_intro({x}, taut(hx, h0, hu))
         show by taut(hn, ex)
       qed
       have kv: all z2. k(x, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && !(fst(out_value(z2)) = "raise"))) -> tr.returns_valid(fst(out_state(x)), fst(out_state(z2))) by taut(ek, nu)
@@ -965,11 +1205,21 @@ proof
       assume ha
       show := mp(all_elim(hv, {w2}, {v}), (r1(ok(w2, v)) by taut(ha, hc)))
     qed
-    have u: (all x e. x in univ(1) -> e in univ(1) -> r1(exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> (c && r1(exc(x, e))) || (!c && r2(exc(x, e)))) proof
-      assume hu
-      fix x e
-      assume hx he
-      show by taut(hc, mp(all_elim(hu, {x}, {e}), hx, he))
+    have u: tr.undef(o. r1(o)) -> tr.undef(o. (c && r1(o)) || (!c && r2(o))) proof
+      assume hu0
+      have hu: all x e. x in univ(1) -> e in univ(1) -> r1(exc(x, e)) by taut(expand(hu0, tr.undef))
+      have hd: all t. t in univ(1) -> r1(diverge(t)) by taut(expand(hu0, tr.undef))
+      have ex: all x e. x in univ(1) -> e in univ(1) -> (c && r1(exc(x, e))) || (!c && r2(exc(x, e))) proof
+        fix x e
+        assume hx he
+        show by taut(hc, mp(all_elim(hu, {x}, {e}), hx, he))
+      qed
+      have dv: all t. t in univ(1) -> (c && r1(diverge(t))) || (!c && r2(diverge(t))) proof
+        fix t
+        assume ht
+        show by taut(hc, mp(all_elim(hd, {t}), ht))
+      qed
+      show by defs(taut(ex, dv), tr.undef)
     qed
     show by defs(taut(e, v, u), tr.eff)
   qed
@@ -982,11 +1232,21 @@ proof
       assume ha
       show := mp(all_elim(hv, {w2}, {v}), (r2(ok(w2, v)) by taut(ha, hc)))
     qed
-    have u: (all x e. x in univ(1) -> e in univ(1) -> r2(exc(x, e))) -> (all x e. x in univ(1) -> e in univ(1) -> (c && r1(exc(x, e))) || (!c && r2(exc(x, e)))) proof
-      assume hu
-      fix x e
-      assume hx he
-      show by taut(hc, mp(all_elim(hu, {x}, {e}), hx, he))
+    have u: tr.undef(o. r2(o)) -> tr.undef(o. (c && r1(o)) || (!c && r2(o))) proof
+      assume hu0
+      have hu: all x e. x in univ(1) -> e in univ(1) -> r2(exc(x, e)) by taut(expand(hu0, tr.undef))
+      have hd: all t. t in univ(1) -> r2(diverge(t)) by taut(expand(hu0, tr.undef))
+      have ex: all x e. x in univ(1) -> e in univ(1) -> (c && r1(exc(x, e))) || (!c && r2(exc(x, e))) proof
+        fix x e
+        assume hx he
+        show by taut(hc, mp(all_elim(hu, {x}, {e}), hx, he))
+      qed
+      have dv: all t. t in univ(1) -> (c && r1(diverge(t))) || (!c && r2(diverge(t))) proof
+        fix t
+        assume ht
+        show by taut(hc, mp(all_elim(hd, {t}), ht))
+      qed
+      show by defs(taut(ex, dv), tr.undef)
     qed
     show by defs(taut(e, v, u), tr.eff)
   qed
@@ -1273,6 +1533,13 @@ proof
   show by defs(simp(hw, hx, he, expand(hn, tr.mem_def)), gimple.mem, gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap)
 qed
 
+theorem tr.mem_ub_div: all w p off n wr t. w in univ(1) -> t in univ(1) -> !tr.mem_def(w, p, off, n, wr) -> runs(gimple.mem(p, off, n, wr), w, diverge(t))
+proof
+  fix w p off n wr t
+  assume hw ht hn
+  show by defs(simp(hw, ht, expand(hn, tr.mem_def)), gimple.mem, gimple.padd, gimple.binop, gimple.arith, gimple.fits, gimple.wrap)
+qed
+
 // a store of n bytes (st8, st32, ..): its address, then the bytes written
 theorem tr.eff_storen: all w p off n v. tr.eff(w, o. runs(mkprog(x0 x1. bind_rel(gimple.mem(p, off, n, true), x0, x2 x3. bind_rel(gimple.write_bytes(x3, n, v), x2,
   x4 x5. x1 = ok(x4, empty), x4 x5. x1 = exc(x4, x5), x4. x1 = diverge(x4)), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))), w, o))
@@ -1329,13 +1596,22 @@ proof
     qed
     show by taut(hc, c1, c2, c3)
   qed
-  // undefined: every exception (the address's)
-  have a2: w in univ(1) -> !tr.mem_def(w, p, off, n, true) -> (all x e. x in univ(1) -> e in univ(1) -> runs(ST, w, exc(x, e))) proof
+  // undefined: every exception and divergence (the address's)
+  have a2: w in univ(1) -> !tr.mem_def(w, p, off, n, true) -> tr.undef(o. runs(ST, w, o)) proof
     assume hw hn
-    fix x e
-    assume hx he
-    have mu := mp(all_elim(tr.mem_ub, {w}, {p}, {off}, {n}, {true}, {x}, {e}), hw, hx, he, hn)
-    show by simp(hw, hx, he, mu, keep(gimple.mem, gimple.write_bytes))
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(ST, w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      have mu := mp(all_elim(tr.mem_ub, {w}, {p}, {off}, {n}, {true}, {x}, {e}), hw, hx, he, hn)
+      show by simp(hw, hx, he, mu, keep(gimple.mem, gimple.write_bytes))
+    qed
+    have dv: all t. t in univ(1) -> runs(ST, w, diverge(t)) proof
+      fix t
+      assume ht
+      have mu := mp(all_elim(tr.mem_ub_div, {w}, {p}, {off}, {n}, {true}, {t}), hw, ht, hn)
+      show by simp(hw, ht, mu, keep(gimple.mem, gimple.write_bytes))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   have a3: !(w in univ(1)) -> (all w2 r. runs(ST, w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
     assume hn
@@ -1380,18 +1656,30 @@ proof
   fix w
   assume hb
   let L0 := pair(w, loc)
-  let UB(l) := all y e. y in univ(1) -> e in univ(1) -> (ex l2. b(l, exc(pair(y, l2), pair("raise", e))))
+  let UB(l) := tr.sundef(o. b(l, o))
   let U := ex f k. k in omega && app(f, empty) = L0 && (all i. i in k -> c(app(f, i)) && b(app(f, i), ok(app(f, succ(i)), empty))) && c(app(f, k)) && UB(app(f, k))
   // undefined at a state of a run: the loop undefined
-  have ua: U -> (all y e. y in univ(1) -> e in univ(1) -> (ex l2. while_rel(L0, l. c(l), l o. b(l, o), l. tr(l), exc(pair(y, l2), pair("raise", e))))) proof
+  have ua: U -> tr.sundef(x. while_rel(L0, l. c(l), l o. b(l, o), l. tr(l), x)) proof
     assume hu
-    obtain f k, hk h0 hst hc hub from hu
-    fix y e
-    assume hy he
-    obtain l2, bx from mp(all_elim(hub, {y}, {e}), hy, he)
-    have nk: !is_ok(exc(pair(y, l2), pair("raise", e))) by defs(simp(), is_ok)
-    have wp := mp(while_prefix[l0 := L0, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := exc(pair(y, l2), pair("raise", e)), f := f, k := k], hk, h0, hst, hc, bx, nk)
-    show by ex_intro({l2}, wp)
+    obtain f k, hk h0 hst hc hub0 from hu
+    have hub: all y e. y in univ(1) -> e in univ(1) -> (ex l2. b(app(f, k), exc(pair(y, l2), pair("raise", e)))) by taut(expand(hub0, tr.sundef))
+    have hud: all t. t in univ(1) -> b(app(f, k), diverge(t)) by taut(expand(hub0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. while_rel(L0, l. c(l), l o. b(l, o), l. tr(l), exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l2, bx from mp(all_elim(hub, {y}, {e}), hy, he)
+      have nk: !is_ok(exc(pair(y, l2), pair("raise", e))) by defs(simp(), is_ok)
+      have wp := mp(while_prefix[l0 := L0, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := exc(pair(y, l2), pair("raise", e)), f := f, k := k], hk, h0, hst, hc, bx, nk)
+      show by ex_intro({l2}, wp)
+    qed
+    have dv: all t. t in univ(1) -> while_rel(L0, l. c(l), l o. b(l, o), l. tr(l), diverge(t)) proof
+      fix t
+      assume ht
+      have bx := mp(all_elim(hud, {t}), ht)
+      have nk: !is_ok(diverge(t)) by defs(simp(), is_ok)
+      show := mp(while_prefix[l0 := L0, c := l. c(l), b := l o. b(l, o), tr := l. tr(l), r := diverge(t), f := f, k := k], hk, h0, hst, hc, bx, nk)
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
   // otherwise: along a run, the world valid
   have uc: !U -> (all x. while_rel(L0, l. c(l), l o. b(l, o), l. tr(l), x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) proof
@@ -1485,26 +1773,48 @@ proof
   assume ha hk
   let Q(o) := ex x. a(x) && (((fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && k(x, o)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && o = ok(fst(out_state(x)), snd(out_value(x)))) ||
     ((fst(x) = 1 && fst(out_value(x)) = "raise") && o = exc(fst(out_state(x)), snd(out_value(x))))) || (fst(x) = 2 && o = diverge(snd(x)))))
-  // the statement undefined: a raise of anything
-  have ua: (all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e))))) -> (all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e))) proof
-    assume hu
-    fix y e
-    assume hy he
-    obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({exc(pair(y, l), pair("raise", e))}, simp(hl))
+  // the statement undefined: a raise of anything, any divergence
+  have ua: tr.sundef(x. a(x)) -> tr.undef(o. Q(o)) proof
+    assume hu0
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> a(diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e)) proof
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({exc(pair(y, l), pair("raise", e))}, simp(hl))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have hl := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({diverge(t)}, simp(hl))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // a normal outcome after which the rest is undefined
-  have ub: (ex x. a(x) && (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) -> (all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e))) proof
+  have ub: (ex x. a(x) && (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && tr.undef(o. k(x, o))) -> tr.undef(o. Q(o)) proof
     assume h
-    obtain x, hx h0 hu from h
-    fix y e
-    assume hy he
-    have kx := mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({x}, taut(hx, h0, kx))
+    obtain x, hx h0 hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)) by taut(expand(hu0, tr.undef))
+    have hd: all t. t in univ(1) -> k(x, diverge(t)) by taut(expand(hu0, tr.undef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> Q(exc(y, e)) proof
+      fix y e
+      assume hy he
+      have kx := mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({x}, taut(hx, h0, kx))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({x}, taut(hx, h0, kx))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   // otherwise: every return valid
   have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ->
-      !(ex x. a(x) && (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e)))) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+      !(ex x. a(x) && (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && tr.undef(o. k(x, o))) -> (all w2 v. Q(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
     assume hv hn
     fix w2 v
     assume hq
@@ -1513,9 +1823,9 @@ proof
       assume h1
       have h0 kx := h1
       have ek := expand(mp(all_elim(hk, {x}), hx, h0), tr.eff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) -> false proof
+      have nu: tr.undef(o. k(x, o)) -> false proof
         assume hu
-        have ex: ex x. a(x) && (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && (all y e. y in univ(1) -> e in univ(1) -> k(x, exc(y, e))) by ex_intro({x}, taut(hx, h0, hu))
+        have ex: ex x. a(x) && (fst(x) = 0 || (fst(x) = 1 && fst(out_value(x)) = "brk")) && tr.undef(o. k(x, o)) by ex_intro({x}, taut(hx, h0, hu))
         show by taut(hn, ex)
       qed
       have kv: all w3 v3. k(x, ok(w3, v3)) -> tr.returns_valid(fst(out_state(x)), w3) by taut(ek, nu)
@@ -1554,24 +1864,45 @@ proof
   let Q(y) := ex x. a(x) && ((fst(x) = 0 && k(x, y)) || (((((fst(x) = 1 && fst(out_value(x)) = "ret") && y = exc(pair(fst(out_state(x)), l(x)), pair("ret", snd(out_value(x))))) ||
     ((fst(x) = 1 && fst(out_value(x)) = "raise") && y = exc(pair(fst(out_state(x)), l(x)), pair("raise", snd(out_value(x)))))) ||
     ((fst(x) = 1 && fst(out_value(x)) = "brk") && y = exc(pair(fst(out_state(x)), l(x)), pair("brk", empty)))) || (fst(x) = 2 && y = diverge(snd(x)))))
-  have ua: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. a(exc(pair(y, l2), pair("raise", e))))) -> (all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e))))) proof
-    assume hu
-    fix y e
-    assume hy he
-    obtain l2, hl from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l(exc(pair(y, l2), pair("raise", e)))}, ex_intro({exc(pair(y, l2), pair("raise", e))}, simp(hl)))
+  have ua: tr.sundef(x. a(x)) -> tr.sundef(y. Q(y)) proof
+    assume hu0
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l2. a(exc(pair(y, l2), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> a(diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l2, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l(exc(pair(y, l2), pair("raise", e)))}, ex_intro({exc(pair(y, l2), pair("raise", e))}, simp(hl)))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have hl := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({diverge(t)}, simp(hl))
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
-  have ub: (ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))))) ->
-      (all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e))))) proof
+  have ub: (ex x. a(x) && fst(x) = 0 && tr.sundef(y. k(x, y))) -> tr.sundef(y. Q(y)) proof
     assume h
-    obtain x, hx h0 hu from h
-    fix y e
-    assume hy he
-    obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
-    show by ex_intro({l2}, ex_intro({x}, taut(hx, h0, kx)))
+    obtain x, hx h0 hu0 from h
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> k(x, diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l2. Q(exc(pair(y, l2), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l2, kx from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l2}, ex_intro({x}, taut(hx, h0, kx)))
+    qed
+    have dv: all t. t in univ(1) -> Q(diverge(t)) proof
+      fix t
+      assume ht
+      have kx := mp(all_elim(hd, {t}), ht)
+      show by ex_intro({x}, taut(hx, h0, kx))
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
   qed
   have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ->
-      !(ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e)))))) ->
+      !(ex x. a(x) && fst(x) = 0 && tr.sundef(y. k(x, y))) ->
       (all z. Q(z) -> (fst(z) = 0 || (fst(z) = 1 && !(fst(out_value(z)) = "raise"))) -> tr.returns_valid(w, fst(out_state(z)))) proof
     assume hv hn
     fix z
@@ -1581,9 +1912,9 @@ proof
       assume h1
       have h0 kx := h1
       have ek := expand(mp(all_elim(hk, {x}), hx, h0), tr.seff)
-      have nu: (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e))))) -> false proof
+      have nu: tr.sundef(y. k(x, y)) -> false proof
         assume hu
-        have ex: ex x. a(x) && fst(x) = 0 && (all y e. y in univ(1) -> e in univ(1) -> (ex l2. k(x, exc(pair(y, l2), pair("raise", e))))) by ex_intro({x}, taut(hx, h0, hu))
+        have ex: ex x. a(x) && fst(x) = 0 && tr.sundef(y. k(x, y)) by ex_intro({x}, taut(hx, h0, hu))
         show by taut(hn, ex)
       qed
       have kv: all z2. k(x, z2) -> (fst(z2) = 0 || (fst(z2) = 1 && !(fst(out_value(z2)) = "raise"))) -> tr.returns_valid(fst(out_state(x)), fst(out_state(z2))) by taut(ek, nu)
@@ -1794,11 +2125,19 @@ proof
     have e: w2 = w by simp(expand(h, gimple.shr), hd)
     show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
   qed
-  have a2: w in univ(1) -> !int_lt(k, n) -> (all x e. x in univ(1) -> e in univ(1) -> runs(gimple.shr(n, a, k), w, exc(x, e))) proof
+  have a2: w in univ(1) -> !int_lt(k, n) -> tr.undef(o. runs(gimple.shr(n, a, k), w, o)) proof
     assume hw hn
-    fix x e
-    assume hx he
-    show by defs(simp(hw, hx, he, hn), gimple.shr)
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.shr(n, a, k), w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      show by defs(simp(hw, hx, he, hn), gimple.shr)
+    qed
+    have dv: all t. t in univ(1) -> runs(gimple.shr(n, a, k), w, diverge(t)) proof
+      fix t
+      assume ht
+      show by defs(simp(hw, ht, hn), gimple.shr)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   have a3: !(w in univ(1)) -> (all w2 v. runs(gimple.shr(n, a, k), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
     assume hn
@@ -1833,11 +2172,19 @@ proof
     have e: w2 = w by simp(expand(h, gimple.shl), hd)
     show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
   qed
-  have a2: w in univ(1) -> !int_lt(k, n) -> (all x e. x in univ(1) -> e in univ(1) -> runs(gimple.shl(n, a, k), w, exc(x, e))) proof
+  have a2: w in univ(1) -> !int_lt(k, n) -> tr.undef(o. runs(gimple.shl(n, a, k), w, o)) proof
     assume hw hn
-    fix x e
-    assume hx he
-    show by defs(simp(hw, hx, he, hn), gimple.shl)
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.shl(n, a, k), w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      show by defs(simp(hw, hx, he, hn), gimple.shl)
+    qed
+    have dv: all t. t in univ(1) -> runs(gimple.shl(n, a, k), w, diverge(t)) proof
+      fix t
+      assume ht
+      show by defs(simp(hw, ht, hn), gimple.shl)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
   qed
   have a3: !(w in univ(1)) -> (all w2 v. runs(gimple.shl(n, a, k), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
     assume hn
