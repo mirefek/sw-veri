@@ -1051,6 +1051,18 @@ impl<'e> Gen<'e> {
         let r = self.qs[qi].clone();
         let g = self.gref.as_ref().ok_or("the CFG going on outside its loop")?;
         let (discover, cur, inv) = (g.discover, g.cur, g.inv.clone());
+        // (one pass: the point found or made here, related by its hypothesis)
+        if self.gref.as_ref().unwrap().inv_var.is_some() {
+            let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
+            let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
+            let comps = self.locals_of(&xs[1]);
+            let i = self.point_at(k, &comps, &r)?;
+            self.trace(|| format!("ref: jump to point {} (label {}, from {})", i, k, cur));
+            let h = self.point_hyp(i)?;
+            let hs = self.assume(&h)?;
+            let ip = self.run(&mp(R::S(hs), vec![t(x), t(&r), t(&xs[1]), simp0(), simp0()]), &[])?;
+            return self.run(&mp(R::Inst("g.ref_jump".into(), vec![("inv", inv)]), vec![t(x), t(&r), t(w), s(&ip), simp0()]), &[]);
+        }
         if discover {
             let xs = self.app(x, "pair", 2).and_then(|p| self.app(&p[1], "pair", 2).map(|q| q.to_vec())).ok_or("a CFG state not a world, a label and locals")?;
             let k = nat(&xs[0]).ok_or("a CFG state's label not a literal")?;
@@ -1204,6 +1216,13 @@ pub(super) struct GRef {
     cur: u128,
     /// by cut points (g.cut_acyclic): the labels' sets and ways
     cut: Option<GCut>,
+    /// one pass (the cut points): inv a free relation `INV` while walking,
+    /// a jump to point i by its hypothesis `hyps[i]` (`all l q y. l =
+    /// pair(fst(l), pair(k, sh(y))) -> q = u(y) -> INV(l, q)`); each
+    /// point's walk kept (`walked`), INV then the points' disjunction
+    inv_var: Option<VarId>,
+    hyps: Vec<Option<Term>>,
+    walked: Vec<Seq>,
 }
 
 /// The cut points' walk (g.cut_acyclic): the CFG's labels (`v`, its
@@ -1497,7 +1516,7 @@ impl<'e> Gen<'e> {
             None => Vec::new(),
         };
         let blocks = !preset.is_empty();
-        self.gref = Some(GRef { m: comps.len(), points: preset, edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls, b: b.clone(), cur: k_e, cut: None });
+        self.gref = Some(GRef { m: comps.len(), points: preset, edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls, b: b.clone(), cur: k_e, cut: None, inv_var: None, hyps: Vec::new(), walked: Vec::new() });
         if !blocks {
             self.point_at(k_e, &comps, &q0)?;
         }
@@ -1766,7 +1785,10 @@ impl<'e> Gen<'e> {
         for i in (0..n).rev() {
             let (r, prem_i) = self.pt_prem(&gl, i)?;
             self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
+            let walked = self.gref.as_ref().unwrap().walked.get(i).cloned();
             let pf = match which {
+                // (walked already: the one pass's)
+                0 if walked.is_some() => walked.unwrap(),
                 0 => self.sub_walk(&prem_i, &["pw", "py"])?,
                 1 => self.ways_on(&prem_i)?,
                 3 => self.point_v(&prem_i)?,
@@ -2028,7 +2050,7 @@ impl<'e> Gen<'e> {
         let q0 = self.qs[qi].clone();
         let fls = self.mk("false", vec![]);
         let cut = GCut { v: fls.clone(), labels: Vec::new(), succ: BTreeMap::new(), discover: true };
-        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut) });
+        self.gref = Some(GRef { m: comps.len(), points: Vec::new(), edges: BTreeSet::new(), discover: true, inv: fls.clone(), rank: fls.clone(), b: b.clone(), cur: k_e, cut: Some(cut), inv_var: None, hyps: Vec::new(), walked: Vec::new() });
         // the labels: each block walked alone, its leaves
         let mut work = vec![k_e];
         let mut seen: BTreeSet<u128> = BTreeSet::new();
@@ -2085,31 +2107,64 @@ impl<'e> Gen<'e> {
             (c.v, c.labels, c.discover) = (v_l.clone(), labels.clone(), false);
         }
         let inst = |g: &mut Self, inv: Term| g.inst("g.cut_acyclic", &[("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone()), ("pt", pt_l.clone()), ("v", v_l.clone()), ("inv", inv), ("m", rank_l.clone())]);
-        // the first pass: each cut point's segments walked, the cut points
-        // found
+        // each cut point's segments walked once, the cut points found as
+        // they are reached: inv a free relation INV meanwhile, a jump by its
+        // point's hypothesis
+        let iv = self.env.new_var("ginv", 2);
+        let inv_v = Term::var(iv, vec![Term::bvar(1), Term::bvar(0)]);
+        {
+            let g = self.gref.as_mut().unwrap();
+            g.inv = inv_v.clone();
+            g.inv_var = Some(iv);
+        }
         self.point_at(k_e, &comps, &q0)?;
+        let (_, stmt) = inst(self, inv_v)?;
+        let (prems, _) = self.imps(&stmt);
+        let gl = self.claim_lam(&prems[3])?;
         let mut i = 0;
         while i < self.gref.as_ref().unwrap().points.len() {
-            let (inv, _) = self.gref_params();
-            self.gref.as_mut().unwrap().inv = inv.clone();
-            let (_, stmt) = inst(self, inv)?;
-            let (prems, _) = self.imps(&stmt);
-            let gl = self.claim_lam(&prems[3])?;
             let prem = self.pt_prem(&gl, i)?.1;
             self.gref.as_mut().unwrap().cur = self.gref.as_ref().unwrap().points[i].label;
-            self.sub_walk(&prem, &["pw", "py"])?;
+            let pf = self.sub_walk(&prem, &["pw", "py"])?;
+            self.gref.as_mut().unwrap().walked.push(pf);
             self.drop_caches();
-            self.trace(|| format!("ref: phase: point {} (label {}) found its segments", i, self.gref.as_ref().unwrap().points[i].label));
+            self.trace(|| format!("ref: phase: point {} (label {}) walked", i, self.gref.as_ref().unwrap().points[i].label));
             i += 1;
         }
         self.trace(|| format!("ref: {} cut points", self.gref.as_ref().unwrap().points.len()));
-        // the second: the theorem's premises
+        // INV the points' disjunction: each hypothesis proven, each walk's
+        // discharged
         let (inv, _) = self.gref_params();
         {
             let g = self.gref.as_mut().unwrap();
             g.discover = false;
             g.inv = inv.clone();
+            g.inv_var = None;
         }
+        let n = self.gref.as_ref().unwrap().points.len();
+        let mut hps: Vec<(Term, Seq)> = Vec::new();
+        for j in 0..n {
+            let Some(Some(h)) = self.gref.as_ref().unwrap().hyps.get(j).cloned() else { continue };
+            let a = self.assume(&h)?;
+            let hj = Seq::inst(self.env, &a, iv, &inv).map_err(|e| e.0)?.concl().clone();
+            hps.push((hj, self.hyp_proof(j, &inv)?));
+        }
+        let walked = std::mem::take(&mut self.gref.as_mut().unwrap().walked);
+        let mut done = Vec::new();
+        for w0 in walked {
+            let mut s0 = Seq::inst(self.env, &w0, iv, &inv).map_err(|e| e.0)?;
+            for (hj, pf) in &hps {
+                if s0.hyps().contains(hj) {
+                    let d = s0.discharge(self.env, hj).map_err(|e| e.0)?;
+                    s0 = Seq::mp(self.env, &d, pf).map_err(|e| e.0)?;
+                }
+            }
+            if !s0.hyps().is_empty() {
+                return Err(format!("a cut point's walk: {} hypotheses left", s0.hyps().len()));
+            }
+            done.push(s0);
+        }
+        self.gref.as_mut().unwrap().walked = done;
         let (rr, stmt) = inst(self, inv)?;
         let (prems, _) = self.imps(&stmt);
         self.trace(|| "ref: phase: the ways on".into());
@@ -2137,6 +2192,61 @@ impl<'e> Gen<'e> {
         let fe = R::Inst("fst_pair".into(), vec![("a", l0p[0].clone()), ("b", l0p[1].clone())]);
         let fl0 = self.mk("fst", vec![l0.clone()]);
         self.run(&mp(R::Inst("g.ref_ws".into(), vec![("l", lo.clone()), ("q", q0), ("a", fl0), ("b", w.clone())]), vec![p(fe), s(&c2)]), &[])
+    }
+
+    /// point i's claim `l = pair(fst(l), pair(k, sh(y)))`, `q = u(y)`, and
+    /// the relation R at l, q (l, q, y given)
+    fn point_rel(&self, i: usize, l: &Term, q: &Term, y: &Term, rel: &Term) -> (Term, Term, Term) {
+        let g = self.gref.as_ref().unwrap();
+        let p = g.points[i].clone();
+        let sh = self.shape_t(&p, y, g.m);
+        let u = p.tmpl.instantiate_params(std::slice::from_ref(y), &self.env.binders_fn());
+        let e1 = self.mk("eq", vec![l.clone(), self.mk("pair", vec![self.mk("fst", vec![l.clone()]), self.mk("pair", vec![lit(p.label), sh])])]);
+        let e2 = self.mk("eq", vec![q.clone(), u]);
+        let c = rel.instantiate_params(&[l.clone(), q.clone()], &self.env.binders_fn());
+        (e1, e2, c)
+    }
+
+    /// point i's hypothesis (one pass): `all l q y. l = pair(fst(l), pair(k,
+    /// sh(y))) -> q = u(y) -> INV(l, q)`
+    fn point_hyp(&mut self, i: usize) -> Result<Term, String> {
+        if let Some(Some(h)) = self.gref.as_ref().unwrap().hyps.get(i) {
+            return Ok(h.clone());
+        }
+        let iv = self.gref.as_ref().unwrap().inv_var.ok_or("a point's hypothesis outside one pass")?;
+        let rel = Term::var(iv, vec![Term::bvar(1), Term::bvar(0)]);
+        let (lv, qv, yv) = (self.var("hl"), self.var("hq"), self.var("hy"));
+        let (e1, e2, c) = self.point_rel(i, &lv, &qv, &yv, &rel);
+        let imp = |a: Term, b: Term| Term::app(self.env.builtins.imp, vec![a, b]);
+        let body = imp(e1, imp(e2, c));
+        let mut h = body;
+        for v in [&yv, &qv, &lv] {
+            h = self.mk("all", vec![self.abs(&h, &[Self::var_id(v)])]);
+        }
+        let g = self.gref.as_mut().unwrap();
+        if g.hyps.len() <= i {
+            g.hyps.resize(i + 1, None);
+        }
+        g.hyps[i] = Some(h.clone());
+        Ok(h)
+    }
+
+    /// point i's hypothesis at the relation inv (`l q. ..`, the points'
+    /// disjunction): by its disjunct (g.inv_intro)
+    fn hyp_proof(&mut self, i: usize, inv: &Term) -> Result<Seq, String> {
+        let (lv, qv, yv) = (self.var("pl"), self.var("pq"), self.var("py"));
+        let (e1, e2, c) = self.point_rel(i, &lv, &qv, &yv, inv);
+        let (a1, a2) = (self.assume(&e1)?, self.assume(&e2)?);
+        let p = self.gref.as_ref().unwrap().points[i].clone();
+        let m = self.gref.as_ref().unwrap().m;
+        let y2 = self.var("py2");
+        let shl = {
+            let s0 = self.shape_t(&p, &y2, m);
+            self.abs(&s0, &[Self::var_id(&y2)])
+        };
+        let one = self.run(&mpf_inst("g.inv_intro", vec![("k", lit(p.label)), ("sh", shl), ("u", p.tmpl.clone())], vec![t(&lv), t(&qv), t(&yv), s(&a1), s(&a2)]), &[])?;
+        let pf = self.evp(&RP::Taut(vec![R::S(one)]), &c, &[])?;
+        self.close(pf, &[e1, e2], &[Self::var_id(&lv), Self::var_id(&qv), Self::var_id(&yv)])
     }
 
     /// Label k's block walked alone, at any world and locals: `all l2. b(L,
