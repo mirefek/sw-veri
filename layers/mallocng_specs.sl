@@ -363,13 +363,14 @@ pred get_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, sct: Addr, p: Add
   (mword(vm, gm_meta(vm, p)) / 4096 != 0 -> gm_off(vm, p) < mword(vm, gm_meta(vm, p)) / 4096 * 256) &&
   thread_ok(vm, fs)
 
-// activate_group(m): the slots of m's group up to its active index idx
-// (act: the low idx + 1 bits; idx the low 5 bits of the byte at the
-// group's header + 8, the header at m's mem word) leave the freed mask and
-// become the available one (0 before: else a_crash). The masks at m + 24
-// (available) and m + 28 (freed), the mem word at m + 16; the freed mask
-// changed by a_cas (one thread: in one step), the thread pointer sound
-// for that call.
+// activate_group's effect (`ms.ag_run`; its spec by purpose in
+// layers/mallocng_purpose.sl): the slots of m's group up to its active
+// index idx (act: the low idx + 1 bits; idx the low 5 bits of the byte at
+// the group's header + 8, the header at m's mem word) leave the freed mask
+// and become the available one (0 before: else a_crash). The masks at
+// m + 24 (available) and m + 28 (freed), the mem word at m + 16; the freed
+// mask changed by a_cas (one thread: in one step), the thread pointer
+// sound for that call.
 fn ag_act(vm: Vm, m: Addr) -> bits[32] = bits[32](2 * 2^(bytes_at(vm, rd64(vm, m + 16) + 8, 1) % 32) - 1)
 fn ag_freed(vm: Vm, m: Addr) -> bits[32] = bits[32](bytes_at(vm, m + 28, 4))
 
@@ -381,22 +382,6 @@ pred activate_group_pre(vm: Vm, objs: Set[nat], fs: Addr, m: Addr) =
 
 fn activate_group_vm(vm: Vm, m: Addr) -> Vm =
   wr32(wr32(vm, m + 28, uint(ag_freed(vm, m) & ~ag_act(vm, m))), m + 24, uint(ag_freed(vm, m) & ag_act(vm, m)))
-
-proc[World] activate_group_spec(m: bits[64]) -> bits[32] {
-  require activate_group_pre(vm, objs, fs_base, m)
-  either { overflow() } or {
-    let r = ag_freed(vm, m) & ag_act(vm, m)
-    vm := activate_group_vm(vm, m)
-    return r
-  }
-}
-
-fn activate_group_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = activate_group_spec(bits[64](args[0]))
-  let w = result[32](r)
-  return (w, any bits[64])
-}
 
 // __malloc_allzerop's effect (`ms.az_run`; its spec by purpose in
 // layers/mallocng_purpose.sl): whether p's slot is known zero-filled

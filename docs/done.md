@@ -434,7 +434,7 @@ item is a short summary of finished work; details are in the files named.
     (act, the active index's low bits, moved from the freed mask to the
     available one; its CAS loop by `g.loop` with an invariant under which
     the body only breaks -- a_cas returns the word just read, one thread --
-    or overflows; `agtc.composed`)
+    or overflows; now its effect summary `ms.ag_run`)
     (proofs/mallocng_ctx.core).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
@@ -577,3 +577,21 @@ item is a short summary of finished work; details are in the files named.
   `mp.qu_q`. The memory-level specs, C2s and compositions of queue and
   free_meta retired; `queue_pre`/`queue_vm` and `zero_meta` kept as
   effect summaries (`ms.qu_run`).
+- **activate_group at the meaning level** (`mp.ag`, `mp.ag_implements`):
+  the first spec updating A -- m's freed slots up to its active index made
+  available, the rest still freed (`activated`; `masks_only`: A changed in
+  the masks only), the invariant kept, nothing outside the allocator
+  touched. Its precondition from the invariant (`mp.ag_pre`); the code's
+  masks as the freed bits split at the index (`mp.ag_bits`); the new state
+  built and activated (`mp.act_state`; records updated: `mp.abs_upd`,
+  `mp.meta_upd`); its masks sound (`mp.act_masks`); the invariant kept by
+  a used meta's mask words written (`mp.holds_masks` per conjunct on the
+  views, `mp.holds_in_act` on the memory). `holds_in` states the
+  footprint mapped, as `rep` does: no address wraps (`mp.fp_low`). The
+  contract rule choosing the final ghost part (`ct.refines_contract_g`),
+  the ghost record updated (`mp.g_upd`). activate_group's memory-level
+  spec, C2 and compositions retired; `activate_group_pre`/`_vm` kept as
+  its effect summary (`ms.ag_run`).
+- **A proof cache** (`slc kernel-check`, `syntax::ProofCache`): within a
+  changed file, a proof unchanged in the same context is not checked
+  again; `scripts/check.sh` checks the chain with the caches.

@@ -16,7 +16,6 @@ needs it (`ms.gm_run`). The invariant composed of more basic definitions,
 so a function that breaks it in part still states its exact contract and
 keeps the lower-level properties. Bottom-up:
 
-- activate_group (with a_cas): the group's inactive slots made available.
 - The list specs' callers' rules still missing (`mp.dqh_q`, free_meta's,
   for `__malloc_alloc_meta` and free_group); the lists tied to the
   invariant's (`cyclic` on the footprint's view: the active lists, the
@@ -31,10 +30,9 @@ keeps the lower-level properties. Bottom-up:
 Along the way:
 - `tr.div_raises` of loop-free code once, structurally (it diverges only
   where an operation is undefined, and raises there too), instead of per
-  function (get_meta's, get_stride's, allzerop's now premises of their
-  `*_implements`).
-- A variant of `ct.refines_contract` choosing the final ghost part, for
-  specs that update A (try_avail, alloc_slot).
+  function (get_meta's, get_stride's, allzerop's, activate_group's now
+  premises of their `*_implements`; activate_group's code has a loop:
+  its divergence too).
 - What enframe's callers owe: alloc_slot's postcondition the reserved
   slot's access (`slot_rw`); malloc's the class bound (its n within the
   class), the thread pointer's word apart from the slot (the C world's

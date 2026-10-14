@@ -201,7 +201,7 @@ fn c1_engine_checks() {
         && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 38 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 2 definitions, 32 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_ctx.core: 0 constants, 0 axioms, 0 definitions, 31 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_ctx.core: 0 constants, 0 axioms, 0 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_compose.core: 0 constants, 0 axioms, 0 definitions, 8 theorems, 0 conditional theorems, 0 open lemmas");
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text] {
@@ -282,8 +282,8 @@ fn c1_cfg_engine_checks() {
     // contract with ghost state (proofs/abi_ghost.core); specs with ghost
     // state refined (proofs/gimple_ghost.core) and the machine code of
     // set_size, enframe, dequeue, dequeue_head, queue, free_meta,
-    // get_slot_index, get_meta, get_stride and __malloc_allzerop
-    // implementing their purpose specs
+    // get_slot_index, get_meta, get_stride, __malloc_allzerop and
+    // activate_group implementing their purpose specs
     // (proofs/mallocng_purpose.core)
     let c = Command::new(slc)
         .current_dir(&root)
@@ -299,11 +299,11 @@ fn c1_cfg_engine_checks() {
     // the C1 theorems unconditional: nothing in the chain rests on an open
     // lemma (the storing functions' statics' range defined)
     let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 226 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 57 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 55 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/abi_ghost.core: 0 constants, 0 axioms, 0 definitions, 28 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_ghost.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_abs.core: 0 constants, 0 axioms, 0 definitions, 150 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_purpose.core: 0 constants, 0 axioms, 0 definitions, 50 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_abs.core: 0 constants, 0 axioms, 0 definitions, 157 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_purpose.core: 0 constants, 0 axioms, 0 definitions, 54 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")
