@@ -201,9 +201,11 @@ fn footprint(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
 // every byte (memory as a whole, seen as the invariant sees it)
 fn all_bytes() -> Set[nat] = {a: nat | true}
 
-// the interior of slot i accessible: readable and writable, not the stack
+// the bytes of slot i (its check byte, its interior) accessible: readable
+// and writable, not the stack
 pred slot_rw(vm: Vm, v: MetaV, i: nat) =
-  all a: nat. in_slot(v, i, a) -> m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack
+  all a: nat. slot_start(v, i) - IB <= a && a < slot_end(v, i) ->
+    m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack
 
 ///////////////////////////////////////////////////////////////////////
 //  Memory agrees with the abstract state
@@ -351,7 +353,13 @@ pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
   slots: (all i: nat. i < len(A.slots[g]) -> slot_ok(A, m, blocks, g, i, A.slots[g][i])) &&
   // the byte after the last slot 0 (its end check: the next slot's header
   // byte for the others; `alloc_group` writes it for a nested group)
-  sentinel: b8(m, slot_end(A.metas[g], A.metas[g].last_idx)) = 0
+  sentinel: b8(m, slot_end(A.metas[g], A.metas[g].last_idx)) = 0 &&
+  // each slot's check byte (its in-band header's first, the previous
+  // slot's end), the last's end too: no client's
+  chk_own: (all i: nat. i <= A.metas[g].last_idx + 1 -> slot_start(A.metas[g], i) - IB notin live_of(blocks)) &&
+  // a group of several slots: their offsets in units within 16 bits (the
+  // in-band header's; `alloc_group` keeps it so)
+  offs: (A.metas[g].last_idx > 0 -> stride(A.metas[g]) * (A.metas[g].last_idx + 1) <= 2^16 * UNIT)
 
 pred used_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
   all k: nat. k < len(A.used) -> group_ok(A, m, blocks, A.used[k])

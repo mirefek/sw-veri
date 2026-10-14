@@ -794,6 +794,115 @@ proof
   show by taut(c, r1)
 qed
 
+// A call under a callee's contract that gives its memory by a property P
+// (`havoc vm where P`): the continuation holds of an overflow, or of the
+// return with some memory V having P (as `gc.contract_callR`, V not fixed)
+theorem gc.contract_callV(v. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
+  (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g, regs), s, o) -> runs(app(F, regs), s, o)) ->
+  (all regs o. gc.regs_ok(regs, args) -> runs(app(F, regs), w, o) ->
+     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     (ex V r. (V in x86_64_linux.Vm && P(V)) && o = ok(fn_update(w, "vm", V), r))) ->
+  bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
+  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && P(V)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
+proof
+  fix g F args w
+  assume ths hw rex hl hg hq hb
+  let OVF := exc_val("stack_overflow", empty)
+  let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V)) && o2 = ok(fn_update(w, "vm", V), r))
+  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
+  // (the callee refines F at w: so does the call)
+  have hm: all regs o2. gc.regs_ok(regs, args) -> runs(app(g, regs), w, o2) -> runs(app(F, regs), w, o2) proof
+    fix regs o2
+    assume hro h2
+    have rl rn _ := hro
+    show := mp(all_elim(hg, {regs}, {w}, {o2}), rl, rewrite(sym(rn), hl), hw, h2)
+  qed
+  have cm: all o2. runs(gimple.call(g, args), w, o2) -> runs(gimple.call(F, args), w, o2) proof
+    fix o2
+    assume h2
+    show := apply(gc.call_mono2, ths, hm, h2)
+  qed
+  obtain o1, hr1 hk1 from expand(apply(g.bind_mono, cm, hb), bind_rel)
+  have ci := apply(gc.call_inv[Q := o2. Q(o2)], ths, rex, hq, hr1)
+  // (w's parts: the memory, the objects)
+  have vV: app(w, "vm") in x86_64_linux.Vm by simp(expand(hw, abi.World))
+  have vfun: is_fun(w) by simp(expand(hw, abi.World))
+  have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
+  have od: "objs" in dom(w) by simp(expand(hw, abi.World))
+  have ws: fn_update(w, "vm", app(w, "vm")) = w := mp(fn_update_same[f := w, k := "vm"], vfun, vdom)
+  // (a world with another memory: its objects w's)
+  have bk: all V. gc.back(fn_update(w, "vm", V), w) = fn_update(w, "vm", V) proof
+    fix V
+    have fW := mp(fn_update_fun[f := w, k := "vm", v := V], vfun)
+    have dW := mp(fn_update_dom[f := w, k := "vm", v := V], vfun, vdom)
+    have oW: "objs" in dom(fn_update(w, "vm", V)) := rewrite(sym(dW), od)
+    have aW := mp(app_update_other[f := w, k := "vm", v := V, x := "objs"], simp())
+    show := rewrite(aW, mp(fn_update_same[f := fn_update(w, "vm", V), k := "objs"], fW, oW))
+  qed
+  // (an overflow at s1: its exception's continuation)
+  have xo: all s1. o1 = exc(s1, OVF) -> x(s1, OVF) proof
+    fix s1
+    assume e
+    show by simp(rewrite(e, hk1))
+  qed
+  have c1: o1 = exc(w, OVF) -> G proof
+    assume e
+    have x0 := rewrite(sym(ws), mp(all_elim(xo, {w}), e))
+    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({app(w, "vm")}, taut(vV, x0))
+    show by taut(l)
+  qed
+  have c2: (ex w4 r. Q(ok(w4, r)) && (o1 = ok(gc.back(w4, w), pair(fst(r), snd(r))) || o1 = exc(gc.back(w4, w), OVF))) -> G proof
+    assume h
+    obtain w4 r, hq2 ho from h
+    have ev: ex V. (V in x86_64_linux.Vm && P(V)) && w4 = fn_update(w, "vm", V) proof
+      have k0: (ex V r2. (V in x86_64_linux.Vm && P(V)) && ok(w4, r) = ok(fn_update(w, "vm", V), r2)) -> ex V. (V in x86_64_linux.Vm && P(V)) && w4 = fn_update(w, "vm", V) proof
+        assume e
+        obtain V r2, hV hP he from e
+        show by ex_intro({V}, taut(hV, hP, (w4 = fn_update(w, "vm", V) by simp(he))))
+      qed
+      have n0: !(ex v. v in x86_64_linux.Vm && ok(w4, r) = exc(fn_update(w, "vm", v), OVF)) by simp()
+      show by taut(hq2, k0, n0)
+    qed
+    obtain V, hV hP ew from ev
+    have ho2 := rewrite(all_elim(bk, {V}), rewrite(ew, ho))
+    have a: o1 = ok(fn_update(w, "vm", V), pair(fst(r), snd(r))) -> G proof
+      assume e
+      have kk: k(fn_update(w, "vm", V), pair(fst(r), snd(r))) by simp(rewrite(e, hk1))
+      have l: ex V2 r2. (V2 in x86_64_linux.Vm && P(V2)) && k(fn_update(w, "vm", V2), pair(fst(r2), snd(r2))) by ex_intro({V}, {r}, taut(hV, hP, kk))
+      show by taut(l)
+    qed
+    have b: o1 = exc(fn_update(w, "vm", V), OVF) -> G proof
+      assume e
+      have x1 := mp(all_elim(xo, {fn_update(w, "vm", V)}), e)
+      have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({V}, taut(hV, x1))
+      show by taut(l)
+    qed
+    show by taut(ho2, a, b)
+  qed
+  have c3: (ex x0 e. Q(exc(x0, e)) && o1 = exc(x0, e)) -> G proof
+    assume h
+    obtain x0 e, hq2 ho from h
+    have n1: !(ex V r. (V in x86_64_linux.Vm && P(V)) && exc(x0, e) = ok(fn_update(w, "vm", V), r)) by simp()
+    have q1: ex v. v in x86_64_linux.Vm && exc(x0, e) = exc(fn_update(w, "vm", v), OVF) by taut(hq2, n1)
+    obtain v, hv hx from q1
+    have he2: x0 = fn_update(w, "vm", v) && e = OVF by simp(hx)
+    have x1 := mp(all_elim(xo, {fn_update(w, "vm", v)}), (o1 = exc(fn_update(w, "vm", v), OVF) by simp(ho, he2)))
+    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    show by taut(l)
+  qed
+  have c4: (ex t. Q(diverge(t)) && o1 = diverge(t)) -> G proof
+    assume h
+    obtain t, hq2 _ from h
+    have n1: !(ex V r. (V in x86_64_linux.Vm && P(V)) && diverge(t) = ok(fn_update(w, "vm", V), r)) by simp()
+    have n2: !(ex v. v in x86_64_linux.Vm && diverge(t) = exc(fn_update(w, "vm", v), OVF)) by simp()
+    have f: false by taut(hq2, n1, n2)
+    show by taut(f)
+  qed
+  show by taut(ci, c1, c2, c3, c4)
+qed
+
 // ... a call of one result (call1: the first register): the continuation
 // holds of an overflow, or of the return with V and a first register r0 of
 // some return r with R

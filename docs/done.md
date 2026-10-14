@@ -533,3 +533,18 @@ item is a short summary of finished work; details are in the files named.
   get_slot_index, get_meta and allzerop require `no_reserved` (their
   callers' context). `holds`' and `group_ok`'s conjuncts labelled; the
   proofs take them by label (`have {uo = used, po = perms} := ..`).
+- **enframe at the meaning level** (`mp.ef`, `mp.ef_implements`): slot idx
+  of g, the one reserved, framed for a block of n bytes at some p
+  (`framed`: `frame_ok`, only the slot's interior written), p's offset a
+  byte. Its run an effect summary with its callees as parameters
+  (`ms.ef_run`: set_size's contract any relation Q, here `size_set`); the
+  invariant read as its memory-level conditions (`mp.ef_pre`: the meta
+  word apart from the slot because the slot's interior is not the
+  allocator's); the effect read as the frame (`mp.ef_hdr`, `mp.ef_frame`).
+  Invariant facts musl keeps, added: each slot's check byte no client's
+  (`chk_own`), a multi-slot group's offsets within 16 bits (`offs`).
+  set_size's contract named (`size_set`, the header byte and the slack
+  its only writes), its callers' rule `mp.ss_q`. Generic: a call whose
+  callee gives its memory by a property (`gc.contract_callV`), a
+  contract's run inverted (`ct.contract_inv`). The memory-level specs,
+  C2s and compositions of set_size, get_stride and enframe retired.

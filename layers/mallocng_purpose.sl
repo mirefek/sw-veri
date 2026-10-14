@@ -17,17 +17,21 @@ state MallocAbs extends Heap {
 
 // set_size(p, end, n), the n bytes at p a block's (or a nested group's) in
 // a slot ending at end: the slack after them recorded (`size_ok`), the
-// header byte's low 5 bits (the slot's index) kept, no other byte written.
-// The bytes it writes accessible (`set_size_pre`, as its code writes them).
+// header byte's low 5 bits (the slot's index) kept, no byte but the header
+// byte and the slack written. The bytes it writes accessible
+// (`set_size_pre`, as its code writes them).
+pred size_set(before: Vm, vm: Vm, p: bits[64], end: bits[64], n: bits[64]) =
+  (vm with { bytes: before.bytes }) = before &&
+  size_ok(mview(vm, all_bytes()), uint(p), uint(end), uint(n)) &&
+  bytes_at(vm, p - 3, 1) % 32 = bytes_at(before, p - 3, 1) % 32 &&
+  (all a: nat. a < 2^64 && a != uint(p) - 3 && !(uint(p) + uint(n) <= a && a < uint(end)) ->
+     vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+
 proc[World] set_size_purpose(p: bits[64], end: bits[64], n: bits[64]) {
   require set_size_pre(vm, objs, p, end, n)
   either { overflow() } or {
     let before = vm
-    havoc vm where (vm with { bytes: before.bytes }) = before &&
-      size_ok(mview(vm, all_bytes()), uint(p), uint(end), uint(n)) &&
-      bytes_at(vm, p - 3, 1) % 32 = bytes_at(before, p - 3, 1) % 32 &&
-      (all a: nat. a < 2^64 && a != uint(p) - 3 && a != uint(p) + uint(n) && !(uint(end) - 5 <= a && a < uint(end)) ->
-         vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+    havoc vm where size_set(before, vm, p, end, n)
   }
 }
 
@@ -57,6 +61,37 @@ proc[MallocAbs] allzerop_purpose(c: Cfg, p: bits[64]) -> bits[32] {
   either { overflow() } or {
     return any r: bits[32] where ex g: nat, i: nat. starts_at(A, g, i, uint(p)) &&
       (own_mapping(A.metas[g]) && r = 1 || !own_mapping(A.metas[g]) && r = 0)
+  }
+}
+
+// slot i of the group v framed for n bytes at p: the frame (`frame_ok`),
+// no byte outside the slot's interior written, nothing else changed
+pred framed(before: Vm, vm: Vm, v: MetaV, i: nat, p: nat, n: nat) =
+  (vm with { bytes: before.bytes }) = before &&
+  frame_ok(mview(vm, all_bytes()), v, i, p, n, 0) &&
+  (all a: nat. a < 2^64 && !in_slot(v, i, a) -> vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+
+// enframe(g, idx, n, ctr), slot idx of the group g the one reserved, its
+// bytes accessible to the caller (`slot_rw`), room in it for n bytes and
+// the in-band header: the slot framed for a block of n bytes at some p in
+// it (`frame_ok`), p returned; only the slot's interior written. Which p
+// -- the offset, in units, a byte musl cycles -- left free. The caller's
+// part: for a size class, p within the class's slot wherever it lies; the
+// thread pointer's word apart from the slot; a stride below 2^31.
+proc[MallocAbs] enframe_purpose(c: Cfg, g: bits[64], idx: bits[32], n: bits[64]) -> bits[64] {
+  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(g)) && reserved_only(A, uint(g), uint(idx)) &&
+    slot_rw(vm, A.metas[uint(g)], uint(idx)) &&
+    uint(n) + IB <= stride(A.metas[uint(g)]) && stride(A.metas[uint(g)]) < 2^31 &&
+    (A.metas[uint(g)].sizeclass < 48 ->
+       slot_end(A.metas[uint(g)], uint(idx)) - uint(n) - storage(A.metas[uint(g)]) < UNIT * size_classes[A.metas[uint(g)].sizeclass] * (uint(idx) + 1)) &&
+    (uint(fs_base) + 8 <= slot_start(A.metas[uint(g)], uint(idx)) - IB || slot_end(A.metas[uint(g)], uint(idx)) <= uint(fs_base))
+  either { overflow() } or {
+    let before = vm
+    let p = any q: bits[64] where slot_start(A.metas[uint(g)], uint(idx)) <= uint(q) &&
+      (uint(q) - slot_start(A.metas[uint(g)], uint(idx))) % UNIT = 0 && uint(q) < slot_start(A.metas[uint(g)], uint(idx)) + 256 * UNIT &&
+      uint(q) + uint(n) <= slot_end(A.metas[uint(g)], uint(idx))
+    havoc vm where framed(before, vm, A.metas[uint(g)], uint(idx), uint(p), uint(n))
+    return p
   }
 }
 
@@ -136,6 +171,13 @@ fn allzerop_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = allzerop_purpose(c, bits[64](args[0]))
   let w = result[32](r)
+  return (w, any bits[64])
+}
+
+fn enframe_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 4
+  let r = enframe_purpose(c, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
+  let w = result[64](r)
   return (w, any bits[64])
 }
 

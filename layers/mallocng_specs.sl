@@ -129,7 +129,8 @@ fn free_meta_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
 fn wr8(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 1, v) }
 fn wr32(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 4, v) }
 
-// set_size(p, end, n): a slot's n bytes at p, its end at end; the r = end -
+// set_size's conditions and effect (`ms.ss_run`; its spec by purpose in
+// layers/mallocng_purpose.sl). set_size(p, end, n): a slot's n bytes at p, its end at end; the r = end -
 // p - n bytes after them reserved, recorded: the header byte at p - 3 keeps
 // its low 5 bits, its top 3 the count -- r, or 5 for r >= 5, the count then
 // the 32-bit word at end - 4 and a 0 byte before it; the first reserved
@@ -148,17 +149,6 @@ fn set_size_vm(vm: Vm, p: Addr, end: Addr, n: bits[64]) -> Vm {
   let v1 = if r > 0 { wr8(vm, p + n, 0) } else { vm }
   let v2 = if r >= 5 { wr8(wr32(v1, end - 4, r), end - 5, 0) } else { v1 }
   return wr8(v2, p - 3, bytes_at(vm, p - 3, 1) % 32 + 32 * (if r >= 5 { 5 } else { r }))
-}
-
-proc[World] set_size_spec(p: bits[64], end: bits[64], n: bits[64]) {
-  require set_size_pre(vm, objs, p, end, n)
-  either { overflow() } or { vm := set_size_vm(vm, p, end, n) }
-}
-
-fn set_size_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 3
-  set_size_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
-  return (any bits[64], any bits[64])
 }
 
 // dequeue_head(phead): the list's head, dequeued (if any), returned. The
@@ -337,7 +327,8 @@ fn mword(vm: Vm, g: Addr) -> nat = bytes_at(vm, g + 32, 8)
 // a group of one slot in a mapping of its own (last_idx 0, maplen not 0)
 pred mapped_single(vm: Vm, g: Addr) = mword(vm, g) % 32 = 0 && mword(vm, g) / 4096 != 0
 
-// get_stride(g): the slot size of g's group (mallocng's `stride` of the
+// get_stride's conditions and effect (`ms.gs_run`; its spec by purpose in
+// layers/mallocng_purpose.sl). get_stride(g): the slot size of g's group (mallocng's `stride` of the
 // meta at g): its mapping less the group's header (a unit) for a group of
 // one slot mapped on its own, else a unit times its size class's entry
 // (the class one of the 48); sct: the class table's address
@@ -348,18 +339,6 @@ pred get_stride_pre(vm: Vm, objs: Set[nat], sct: Addr, g: Addr) =
 fn stride_w(vm: Vm, g: Addr) -> nat =
   if mapped_single(vm, g) { mword(vm, g) / 4096 * 4096 - UNIT } else { UNIT * size_classes[mword(vm, g) / 64 % 64] }
 
-proc[World] get_stride_spec(sct: bits[64], g: bits[64]) -> bits[64] {
-  require get_stride_pre(vm, objs, sct, g)
-  either { overflow() } or { return bits[64](stride_w(vm, g)) }
-}
-
-fn get_stride_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = get_stride_spec(sct, bits[64](args[0]))
-  let w = result[64](r)
-  return (w, any bits[64])
-}
-
 // a 16-bit word written
 fn wr16(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 2, v) }
 
@@ -367,7 +346,8 @@ fn wr16(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 
 // group's header, at the meta's mem word)
 fn eslot(vm: Vm, g: Addr, idx: bits[32]) -> nat = uint(rd64(vm, g + 16)) + UNIT + stride_w(vm, g) * uint(idx)
 
-// enframe(g, idx, n, ctr): slot idx of g's group framed for n bytes at some
+// enframe's conditions and effect (`ms.ef_run`; its spec by purpose in
+// layers/mallocng_purpose.sl). enframe(g, idx, n, ctr): slot idx of g's group framed for n bytes at some
 // p (mallocng's frame_ok): 16-byte aligned from the slot's start, the n
 // bytes before the slot's end (IB bytes short of the next slot). The code's
 // p is an offset cycled from the slot's previous one (or ctr) and reduced
@@ -391,28 +371,16 @@ pred enframe_pre(vm: Vm, objs: Set[nat], fs: Addr, sct: Addr, g: Addr, idx: bits
 pred enframe_at(vm: Vm, g: Addr, idx: bits[32], n: bits[64], p: nat) =
   eslot(vm, g, idx) <= p && (p - eslot(vm, g, idx)) % UNIT = 0 && p + uint(n) + IB <= eslot(vm, g, idx) + stride_w(vm, g)
 
-fn enframe_vm(vm: Vm, g: Addr, idx: bits[32], n: bits[64], p: Addr) -> Vm {
+// enframe's header writes before its set_size call: the slot's offset
+// record (past its start), p's offset from the storage and its index
+fn enframe_hdr(vm: Vm, g: Addr, idx: bits[32], p: Addr) -> Vm {
   let s = eslot(vm, g, idx)
   let v1 = if uint(p) > s { wr8(wr8(wr16(vm, bits[64](s - 2), (uint(p) - s) / UNIT), bits[64](s - 3), 7 * 32), p - 4, 0) } else { vm }
-  let v2 = wr8(wr16(v1, p - 2, (uint(p) - (uint(rd64(vm, g + 16)) + UNIT)) / UNIT % 2^16), p - 3, uint(idx) % 256)
-  return set_size_vm(v2, p, bits[64](s + stride_w(vm, g) - IB), n)
+  return wr8(wr16(v1, p - 2, (uint(p) - (uint(rd64(vm, g + 16)) + UNIT)) / UNIT % 2^16), p - 3, uint(idx) % 256)
 }
 
-proc[World] enframe_spec(sct: bits[64], g: bits[64], idx: bits[32], n: bits[64]) -> bits[64] {
-  require enframe_pre(vm, objs, fs_base, sct, g, idx, n)
-  either { overflow() } or {
-    let p = any q: bits[64] where enframe_at(vm, g, idx, n, uint(q))
-    vm := enframe_vm(vm, g, idx, n, p)
-    return p
-  }
-}
-
-fn enframe_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 4
-  let r = enframe_spec(sct, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
-  let w = result[64](r)
-  return (w, any bits[64])
-}
+// the slot's end, set_size's `end`
+fn eend(vm: Vm, g: Addr, idx: bits[32]) -> bits[64] = bits[64](eslot(vm, g, idx) + stride_w(vm, g) - IB)
 
 // get_meta's effect (proofs/mallocng_slots.core's `ms.gm_run`; its spec
 // by purpose in layers/mallocng_purpose.sl): the meta of p's group. p's

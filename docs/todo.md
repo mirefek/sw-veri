@@ -16,9 +16,6 @@ needs it (`ms.gm_run`). The invariant composed of more basic definitions,
 so a function that breaks it in part still states its exact contract and
 keeps the lower-level properties. Bottom-up:
 
-- set_size and enframe: a reserved slot framed as a block of n bytes (the
-  group and the slot, not `holds_in`: enframe runs on a reserved slot);
-  then get_stride's memory-level spec retired.
 - The list operations dequeue, queue, dequeue_head: on a class's active
   list as a list of groups, relative to the list's well-formedness (they
   run inside try_avail, the invariant not holding there).
@@ -37,7 +34,14 @@ Along the way:
   function (get_meta's, get_stride's, allzerop's now premises of their
   `*_implements`).
 - A variant of `ct.refines_contract` choosing the final ghost part, for
-  specs that update A (enframe, then try_avail, alloc_slot).
+  specs that update A (try_avail, alloc_slot).
+- What enframe's callers owe: alloc_slot's postcondition the reserved
+  slot's access (`slot_rw`); malloc's the class bound (its n within the
+  class), the thread pointer's word apart from the slot (the C world's
+  TLS), a stride below 2^31.
+- The spec bookkeeping: a contract's body (`letin`, `any_rel`) spelled
+  out in each refinement (`mp.ef`, `mp.ss`); a generic lemma per spec shape
+  (havoc, then return) would take it.
 
 ## 2. Next: alloc_group, loops on the CFG and loops by their purpose
 
