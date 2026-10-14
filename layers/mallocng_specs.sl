@@ -30,6 +30,8 @@ pred al8(p: Addr) = uint(p) % 8 = 0
 fn mprev(vm: Vm, m: Addr) -> bits[64] = rd64(vm, m)
 fn mnext(vm: Vm, m: Addr) -> bits[64] = rd64(vm, m + 8)
 
+// dequeue's effect as its code has it (`ms.dq_run`; its spec, by its
+// purpose: layers/mallocng_purpose.sl's dequeue_purpose).
 // dequeue(phead, m): m leaves the list *phead -- its neighbours linked to
 // each other (if it has any), the head moved past it, its links cleared.
 // The words involved: usable, 8-aligned, and apart (the head pointer, m's
@@ -51,22 +53,6 @@ fn dq_links(vm: Vm, phead: Addr, m: Addr) -> Vm =
 fn dq_head(v1: Vm, vm: Vm, phead: Addr, m: Addr) -> Vm =
   if mnext(vm, m) != m && rd64(v1, phead) = m { wr64(v1, phead, mnext(vm, m)) } else { v1 }
 fn dequeue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm = wr64(wr64(dq_head(dq_links(vm, phead, m), vm, phead, m), m + 8, 0), m, 0)
-
-proc[World] dequeue_spec(phead: bits[64], m: bits[64]) {
-  require dequeue_pre(vm, objs, phead, m)
-  either { overflow() } or { vm := dequeue_vm(vm, phead, m) }
-}
-
-// ... as a C function value (its register wrapper, as readable GIMPLE has
-// C functions: c_mallocng_malloc's dequeue_fun): what its callers' calls
-// rely on. The wrappers are written as the code's are (a result through
-// `result[w]`), so one lemma per shape relates the two
-// (proofs/translate_effects.core, `g.fun_*`)
-fn dequeue_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 2
-  dequeue_spec(bits[64](args[0]), bits[64](args[1]))
-  return (any bits[64], any bits[64])
-}
 
 // queue(phead, m): m, unlinked (its links 0 -- else a_crash, a bug),
 // joins the list *phead: before its head H (at the circular list's end,
@@ -93,7 +79,11 @@ proc[World] queue_spec(phead: bits[64], m: bits[64]) {
   either { overflow() } or { vm := queue_vm(vm, phead, m) }
 }
 
-// ... as a C function value
+// ... as a C function value (its register wrapper, as readable GIMPLE has
+// C functions: c_mallocng_malloc's queue_fun): what its callers' calls
+// rely on. The wrappers are written as the code's are (a result through
+// `result[w]`), so one lemma per shape relates the two
+// (proofs/translate_effects.core, `g.fun_*`)
 fn queue_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 2
   queue_spec(bits[64](args[0]), bits[64](args[1]))
@@ -149,32 +139,6 @@ fn set_size_vm(vm: Vm, p: Addr, end: Addr, n: bits[64]) -> Vm {
   let v1 = if r > 0 { wr8(vm, p + n, 0) } else { vm }
   let v2 = if r >= 5 { wr8(wr32(v1, end - 4, r), end - 5, 0) } else { v1 }
   return wr8(v2, p - 3, bytes_at(vm, p - 3, 1) % 32 + 32 * (if r >= 5 { 5 } else { r }))
-}
-
-// dequeue_head(phead): the list's head, dequeued (if any), returned. The
-// call to dequeue needs the thread pointer sound (the ABI's, at every
-// call).
-pred dequeue_head_pre(vm: Vm, objs: Set[nat], fs: Addr, phead: Addr) =
-  word_ok(vm, objs, phead, 0) &&
-  (rd64(vm, phead) != 0 -> dequeue_pre(vm, objs, phead, rd64(vm, phead)) && thread_ok(vm, fs))
-fn dequeue_head_vm(vm: Vm, phead: Addr) -> Vm =
-  if rd64(vm, phead) != 0 { dequeue_vm(vm, phead, rd64(vm, phead)) } else { vm }
-
-proc[World] dequeue_head_spec(phead: bits[64]) -> bits[64] {
-  require dequeue_head_pre(vm, objs, fs_base, phead)
-  either { overflow() } or {
-    let m = rd64(vm, phead)
-    vm := dequeue_head_vm(vm, phead)
-    return m
-  }
-}
-
-// ... as a C function value: the head in rax (rdx clobbered)
-fn dequeue_head_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = dequeue_head_spec(bits[64](args[0]))
-  let w = result[64](r)
-  return (w, any bits[64])
 }
 
 // a_crash (a trap: hlt): calling it is a bug -- its contract undefined, so

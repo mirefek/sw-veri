@@ -15,6 +15,59 @@ state MallocAbs extends Heap {
   ghost A : Abs
 }
 
+// The lists (a class's active groups, the free metas): cyclic through the
+// metas' first two words (`cyclic`)
+
+// l without its k-th element, the others' order kept
+fn rm_at(l: List[nat], k: nat) -> List[nat] = [l[if j < k { j } else { j + 1 }] for j in 0..len(l) - 1]
+
+// the list l at *phead: linked cyclically, its elements' links accessible,
+// 8-aligned, apart from each other and from the head word
+pred list_at(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat]) =
+  word_ok(vm, objs, phead, 0) && al8(phead) &&
+  cyclic(mview(vm, all_bytes()), uint(rd64(vm, phead)), l) &&
+  (all i: nat. i < len(l) -> l[i] + 16 <= 2^64 && word_ok(vm, objs, bits[64](l[i]), 0) && word_ok(vm, objs, bits[64](l[i]), 8) && l[i] % 8 = 0 &&
+     (uint(phead) + 8 <= l[i] || l[i] + 16 <= uint(phead))) &&
+  (all i: nat, j: nat. i < len(l) && j < len(l) && i != j -> l[i] + 16 <= l[j] || l[j] + 16 <= l[i])
+
+// no byte but the head word and l's link words changed, nothing else
+pred links_only(before: Vm, vm: Vm, phead: bits[64], l: List[nat]) =
+  (vm with { bytes: before.bytes }) = before &&
+  (all a: nat. a < 2^64 && !(uint(phead) <= a && a < uint(phead) + 8) && (all i: nat. i < len(l) -> !(l[i] <= a && a < l[i] + 16)) ->
+     vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+
+// dequeue(phead, m), m in the list at phead: m out of it, the others'
+// order kept, m's links cleared
+pred dequeued(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
+  all l: List[nat], k: nat. list_at(before, objs, phead, l) && k < len(l) && l[k] = uint(m) ->
+    list_at(vm, objs, phead, rm_at(l, k)) && rd64(vm, m) = 0 && rd64(vm, m + 8) = 0 && links_only(before, vm, phead, l)
+
+proc[World] dequeue_purpose(phead: bits[64], m: bits[64]) {
+  require ex l: List[nat], k: nat. list_at(vm, objs, phead, l) && k < len(l) && l[k] = uint(m)
+  either { overflow() } or {
+    let before = vm
+    havoc vm where dequeued(before, vm, objs, phead, m)
+  }
+}
+
+// dequeue_head(phead): the list at *phead's first element (0 for an empty
+// list) out of it and returned. Its call to dequeue needs the thread
+// pointer sound (the ABI's, at every call).
+pred is_head(vm: Vm, objs: Set[nat], phead: bits[64], h: bits[64]) =
+  all l: List[nat]. list_at(vm, objs, phead, l) -> uint(h) = (if len(l) = 0 { 0 } else { l[0] })
+pred head_taken(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], h: bits[64]) =
+  (h = 0 -> vm = before) && (h != 0 -> dequeued(before, vm, objs, phead, h))
+
+proc[World] dequeue_head_purpose(phead: bits[64]) -> bits[64] {
+  require (ex l: List[nat]. list_at(vm, objs, phead, l)) && thread_ok(vm, fs_base)
+  either { overflow() } or {
+    let before = vm
+    let h = any bits[64] where is_head(before, objs, phead, h)
+    havoc vm where head_taken(before, vm, objs, phead, h)
+    return h
+  }
+}
+
 // set_size(p, end, n), the n bytes at p a block's (or a nested group's) in
 // a slot ending at end: the slack after them recorded (`size_ok`), the
 // header byte's low 5 bits (the slot's index) kept, no byte but the header
@@ -151,6 +204,19 @@ fn set_size_purpose_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
   set_size_purpose(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
   return (any bits[64], any bits[64])
+}
+
+fn dequeue_purpose_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 2
+  dequeue_purpose(bits[64](args[0]), bits[64](args[1]))
+  return (any bits[64], any bits[64])
+}
+
+fn dequeue_head_purpose_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = dequeue_head_purpose(bits[64](args[0]))
+  let w = result[64](r)
+  return (w, any bits[64])
 }
 
 fn get_slot_index_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {

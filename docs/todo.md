@@ -16,9 +16,11 @@ needs it (`ms.gm_run`). The invariant composed of more basic definitions,
 so a function that breaks it in part still states its exact contract and
 keeps the lower-level properties. Bottom-up:
 
-- The list operations dequeue, queue, dequeue_head: on a class's active
-  list as a list of groups, relative to the list's well-formedness (they
-  run inside try_avail, the invariant not holding there).
+- queue: m joins the list at the end (`list_at` of l ++ [m]), as
+  dequeue's (`dequeued`); then its memory-level spec retired (free_meta's
+  C2 its caller). dequeue_head's callers' rule (`mp.dqh_q`, for
+  `__malloc_alloc_meta`). The lists tied to the invariant's (`cyclic` on
+  the footprint's view, the active lists and the free metas).
 - activate_group (with a_cas): the group's inactive slots made available.
 - free_meta: a meta returned to the free metas.
 - The context's counters and the lock (is_bouncing, decay_bounces,

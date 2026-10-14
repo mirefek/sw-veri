@@ -2278,3 +2278,1223 @@ proof
   qed
   show by defs(taut(c1, fok, c3), mallocng_purpose.framed)
 qed
+
+// ----------------------------------------------------------------------
+//  Words: 8-aligned words apart, one read through a 64-bit write
+
+// two 8-aligned words: the same, or apart
+theorem mp.al8_ne(a, c): a in omega -> c in omega -> int_mod(a, 8) = 0 -> int_mod(c, 8) = 0 -> !(a = c) ->
+  int_le(int_add(c, 8), a) || int_le(int_add(a, 8), c)
+proof
+  assume ha hc ma mc hne
+  show by arith(ha, hc, ma, mc, hne)
+qed
+
+// a 64-bit store read back (as `mp.rd_at4`)
+theorem mp.rd_at8(vm, c, v): app(vm, "bytes") in fn_space(bits(64), bits(8)) -> c in bits(64) -> v in bits(64) ->
+  gimple.bytes_at(mallocng_specs.wr64(vm, c, v), c, 8) = v
+proof
+  assume hb hc hv
+  let V := fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), c, 8, v))
+  have le8 := mp(all_elim(tr.le_store8, {app(vm, "bytes")}, {c}, {v}), hb, hc, simp(hv))
+  have lb := all_elim(tr.le_bytes, {V}, {c}, {8})
+  have w: bits_of_int(64, gimple.bytes_at(V, c, 8)) = bits_of_int(64, v) by simp(le8, lb)
+  have vb: app(V, "bytes") in fn_space(bits(64), bits(8)) by simp(mp(all_elim(x86.store_typed, {app(vm, "bytes")}, {c}, {8}, {v}), hb))
+  have bn bl := mp(all_elim(g.bytes_bound, {V}, {c}, {8}), vb, simp())
+  have id: bits_of_int(64, gimple.bytes_at(V, c, 8)) = gimple.bytes_at(V, c, 8) by defs(simp(bn, bl), bits_of_int, pow2)
+  have iv: bits_of_int(64, v) = v by defs(simp(hv), bits_of_int, pow2)
+  show by defs(trans(sym(id), trans(w, iv)), mallocng_specs.wr64)
+qed
+
+// a word w read through a 64-bit write at c (both 8-aligned): the value
+// written there, else the old word
+theorem mp.w64(V, c, v, w): app(V, "bytes") in fn_space(bits(64), bits(8)) -> c in bits(64) -> v in bits(64) -> w in omega ->
+  int_le(int_add(w, 8), 18446744073709551616) -> int_le(int_add(c, 8), 18446744073709551616) -> int_mod(c, 8) = 0 -> int_mod(w, 8) = 0 ->
+  gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = ite(w = c, v, gimple.bytes_at(V, w, 8))
+proof
+  assume hb hc hv hw hwl hcl mc mw
+  have co: c in omega by simp(hc)
+  have c1: w = c -> gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = ite(w = c, v, gimple.bytes_at(V, w, 8)) proof
+    assume e
+    have r := apply(mp.rd_at8[vm := V, c := c, v := v], hb, hc, hv)
+    show by simp(e, r)
+  qed
+  have c2: !(w = c) -> gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = ite(w = c, v, gimple.bytes_at(V, w, 8)) proof
+    assume e
+    have ap := apply(mp.al8_ne[a := w, c := c], hw, co, mw, mc, e)
+    have r: gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = gimple.bytes_at(V, w, 8)
+      by defs(apply(mp.rd_out[vm := V, c := c, k := 8, v := v, a := w, n := 8], hw, simp(), hc, simp(), hwl, hcl, ap), mallocng_specs.wr64)
+    show by simp(e, r)
+  qed
+  show by taut(c1, c2)
+qed
+
+// ----------------------------------------------------------------------
+//  Lists: a cyclic list's successor and predecessor indices, and after an
+//  element's removal (`rm_at`)
+
+// x's successor and predecessor modulo L
+theorem mp.mod_succ(x, L): x in omega -> L in omega -> int_lt(x, L) ->
+  int_mod(int_add(x, 1), L) = ite(int_lt(int_add(x, 1), L), int_add(x, 1), 0)
+proof
+  assume hx hL hl
+  have c1: int_lt(int_add(x, 1), L) -> int_mod(int_add(x, 1), L) = int_add(x, 1) proof
+    assume k
+    have _ r := apply(div_unique[x := int_add(x, 1), m := L, q := 0, r := int_add(x, 1)], simp(hx), simp(), simp(hx), arith(hl, hx), k, arith(hx))
+    show r
+  qed
+  have c2: !int_lt(int_add(x, 1), L) -> int_mod(int_add(x, 1), L) = 0 proof
+    assume k
+    have _ r := apply(div_unique[x := int_add(x, 1), m := L, q := 1, r := 0], simp(hx), simp(), simp(), arith(hl, hx), arith(hl, hx), arith(k, hl, hx, hL))
+    show r
+  qed
+  show by simp(c1, c2)
+qed
+
+theorem mp.mod_pred(x, L): x in omega -> L in omega -> int_lt(x, L) ->
+  int_mod(int_sub(int_add(x, L), 1), L) = ite(x = 0, int_sub(L, 1), int_sub(x, 1))
+proof
+  assume hx hL hl
+  have c1: x = 0 -> int_mod(int_sub(int_add(x, L), 1), L) = int_sub(L, 1) proof
+    assume k
+    have _ r := apply(div_unique[x := int_sub(int_add(x, L), 1), m := L, q := 0, r := int_sub(L, 1)], arith(k, hl, hL), simp(), arith(hl, hL, hx), arith(hl, hx), arith(), arith(k))
+    show r
+  qed
+  have c2: !(x = 0) -> int_mod(int_sub(int_add(x, L), 1), L) = int_sub(x, 1) proof
+    assume k
+    have _ r := apply(div_unique[x := int_sub(int_add(x, L), 1), m := L, q := 1, r := int_sub(x, 1)], arith(k, hl, hL, hx), simp(), arith(k, hx), arith(hl, hx), arith(hl), arith())
+    show r
+  qed
+  show by simp(c1, c2)
+qed
+
+// l without element k (`rm_at`): its j-th element l's F(j)-th
+// (F(j) = j below k, j + 1 from k on). Its successor in the shorter list:
+// the successor's in l -- but for k's predecessor, whose is k's successor
+theorem mp.rm_next(L, k, j): L in omega -> k in omega -> j in omega -> int_le(2, L) -> int_lt(k, L) -> int_lt(j, int_sub(L, 1)) ->
+  (!(ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_sub(int_add(k, L), 1), L)) ->
+     ite(int_lt(int_mod(int_add(j, 1), int_sub(L, 1)), k), int_mod(int_add(j, 1), int_sub(L, 1)), int_add(int_mod(int_add(j, 1), int_sub(L, 1)), 1)) =
+       int_mod(int_add(ite(int_lt(j, k), j, int_add(j, 1)), 1), L)) &&
+  (ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_sub(int_add(k, L), 1), L) ->
+     ite(int_lt(int_mod(int_add(j, 1), int_sub(L, 1)), k), int_mod(int_add(j, 1), int_sub(L, 1)), int_add(int_mod(int_add(j, 1), int_sub(L, 1)), 1)) = int_mod(int_add(k, 1), L))
+proof
+  assume hL hk hj h2 hkl hjl
+  have l1: int_sub(L, 1) in omega by arith(hL, h2)
+  have ae := apply(mp.mod_succ[x := j, L := int_sub(L, 1)], hj, l1, hjl)
+  have pe := apply(mp.mod_pred[x := k, L := L], hk, hL, hkl)
+  have se := apply(mp.mod_succ[x := k, L := L], hk, hL, hkl)
+  let G := (!(ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_sub(int_add(k, L), 1), L)) ->
+     ite(int_lt(int_mod(int_add(j, 1), int_sub(L, 1)), k), int_mod(int_add(j, 1), int_sub(L, 1)), int_add(int_mod(int_add(j, 1), int_sub(L, 1)), 1)) =
+       int_mod(int_add(ite(int_lt(j, k), j, int_add(j, 1)), 1), L)) &&
+    (ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_sub(int_add(k, L), 1), L) ->
+     ite(int_lt(int_mod(int_add(j, 1), int_sub(L, 1)), k), int_mod(int_add(j, 1), int_sub(L, 1)), int_add(int_mod(int_add(j, 1), int_sub(L, 1)), 1)) = int_mod(int_add(k, 1), L))
+  // j below k's predecessor: j and its successor kept
+  have ca: int_lt(j, k) -> int_lt(int_add(j, 1), int_sub(L, 1)) -> int_lt(int_add(j, 1), k) -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_add(j, 1), int_sub(L, 1)) = int_add(j, 1) by simp(ae, c2)
+    have k0: !(k = 0) by arith(c1, hj, hk)
+    have epk: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, k0)
+    have jl: int_lt(int_add(j, 1), L) by arith(c2, hj, hL)
+    have esf := apply(mp.mod_succ[x := j, L := L], hj, hL, arith(c2, hj, hL))
+    have esf2: int_mod(int_add(j, 1), L) = int_add(j, 1) by simp(esf, jl)
+    have ne: !(j = int_sub(k, 1)) by arith(c3, hj, hk)
+    show by simp(eA, epk, esf2, c1, c3, ne)
+  qed
+  // j k's predecessor (k inside): its successor k's
+  have cb: int_lt(j, k) -> int_lt(int_add(j, 1), int_sub(L, 1)) -> !int_lt(int_add(j, 1), k) -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_add(j, 1), int_sub(L, 1)) = int_add(j, 1) by simp(ae, c2)
+    have k0: !(k = 0) by arith(c1, hj, hk)
+    have epk: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, k0)
+    have eq: j = int_sub(k, 1) by arith(c1, c3, hj, hk)
+    have kl: int_lt(int_add(k, 1), L) by arith(c1, c2, c3, hj, hk, hL)
+    have se2: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, kl)
+    show by simp(eA, epk, se2, c1, c3, eq)
+  qed
+  // j k's predecessor, k the last: its successor the first
+  have cc: int_lt(j, k) -> !int_lt(int_add(j, 1), int_sub(L, 1)) -> G proof
+    assume c1 c2
+    have eA: int_mod(int_add(j, 1), int_sub(L, 1)) = 0 by simp(ae, c2)
+    have k0: !(k = 0) by arith(c1, hj, hk)
+    have z: int_lt(0, k) by arith(k0, hk)
+    have epk: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, k0)
+    have eq: j = int_sub(k, 1) by arith(c1, c2, hjl, hkl, hj, hk, hL)
+    have kl: !int_lt(int_add(k, 1), L) by arith(c1, c2, hjl, hkl, hj, hk, hL)
+    have se2: int_mod(int_add(k, 1), L) = 0 by simp(se, kl)
+    show by simp(eA, epk, se2, c1, z, eq)
+  qed
+  // j past k, inside: j + 1 and its successor kept
+  have cd: !int_lt(j, k) -> int_lt(int_add(j, 1), int_sub(L, 1)) -> G proof
+    assume c1 c2
+    have eA: int_mod(int_add(j, 1), int_sub(L, 1)) = int_add(j, 1) by simp(ae, c2)
+    have c3: !int_lt(int_add(j, 1), k) by arith(c1, hj, hk)
+    have esf := apply(mp.mod_succ[x := int_add(j, 1), L := L], (int_add(j, 1) in omega by simp(hj)), hL, arith(c2, hj, hL))
+    have jl: int_lt(int_add(int_add(j, 1), 1), L) by arith(c2, hj, hL)
+    have esf2: int_mod(int_add(int_add(j, 1), 1), L) = int_add(int_add(j, 1), 1) by simp(esf, jl)
+    have ne: !(int_add(j, 1) = int_mod(int_sub(int_add(k, L), 1), L)) proof
+      have n0: k = 0 -> !(int_add(j, 1) = int_mod(int_sub(int_add(k, L), 1), L)) proof
+        assume z
+        have p: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(L, 1) by simp(pe, z)
+        show by simp(p, (!(int_add(j, 1) = int_sub(L, 1)) by arith(c2, hj, hL)))
+      qed
+      have n1: !(k = 0) -> !(int_add(j, 1) = int_mod(int_sub(int_add(k, L), 1), L)) proof
+        assume z
+        have p: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, z)
+        show by simp(p, (!(int_add(j, 1) = int_sub(k, 1)) by arith(c1, hj, hk)))
+      qed
+      show by taut(n0, n1)
+    qed
+    show by simp(eA, esf2, c1, c3, ne)
+  qed
+  // j the last, k the first: its successor (the shorter list's first) l's second
+  have ce: !int_lt(j, k) -> !int_lt(int_add(j, 1), int_sub(L, 1)) -> k = 0 -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_add(j, 1), int_sub(L, 1)) = 0 by simp(ae, c2)
+    have eq: int_add(j, 1) = int_sub(L, 1) by arith(c2, hjl, hj, hL)
+    have one: int_lt(1, L) by arith(h2)
+    have p: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(L, 1) by simp(pe, c3)
+    have se2: int_mod(int_add(k, 1), L) = 1 by simp(se, c3, one)
+    show by simp(eA, p, se2, c1, c3, eq)
+  qed
+  // j the last, k inside: its successor the first, as l's last's
+  have cf: !int_lt(j, k) -> !int_lt(int_add(j, 1), int_sub(L, 1)) -> !(k = 0) -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_add(j, 1), int_sub(L, 1)) = 0 by simp(ae, c2)
+    have z: int_lt(0, k) by arith(c3, hk)
+    have eq: int_add(j, 1) = int_sub(L, 1) by arith(c2, hjl, hj, hL)
+    have esf := apply(mp.mod_succ[x := int_add(j, 1), L := L], (int_add(j, 1) in omega by simp(hj)), hL, arith(eq, hL, h2))
+    have nl: !int_lt(int_add(int_add(j, 1), 1), L) by arith(eq, hL)
+    have esf2: int_mod(int_add(int_add(j, 1), 1), L) = 0 by simp(esf, nl)
+    have p: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, c3)
+    have ne: !(int_add(j, 1) = int_sub(k, 1)) by arith(c1, hj, hk)
+    show by simp(eA, p, esf2, c1, c3, z, ne)
+  qed
+  show by taut(ca, cb, cc, cd, ce, cf)
+qed
+
+// ... its predecessor: the predecessor's in l -- but for k's successor,
+// whose is k's predecessor
+theorem mp.rm_prev(L, k, j): L in omega -> k in omega -> j in omega -> int_le(2, L) -> int_lt(k, L) -> int_lt(j, int_sub(L, 1)) ->
+  (!(ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_add(k, 1), L)) ->
+     ite(int_lt(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), k), int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)),
+       int_add(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), 1)) =
+       int_mod(int_sub(int_add(ite(int_lt(j, k), j, int_add(j, 1)), L), 1), L)) &&
+  (ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_add(k, 1), L) ->
+     ite(int_lt(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), k), int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)),
+       int_add(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), 1)) = int_mod(int_sub(int_add(k, L), 1), L))
+proof
+  assume hL hk hj h2 hkl hjl
+  have l1: int_sub(L, 1) in omega by arith(hL, h2)
+  have ae := apply(mp.mod_pred[x := j, L := int_sub(L, 1)], hj, l1, hjl)
+  have pe := apply(mp.mod_pred[x := k, L := L], hk, hL, hkl)
+  have se := apply(mp.mod_succ[x := k, L := L], hk, hL, hkl)
+  let G := (!(ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_add(k, 1), L)) ->
+     ite(int_lt(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), k), int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)),
+       int_add(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), 1)) =
+       int_mod(int_sub(int_add(ite(int_lt(j, k), j, int_add(j, 1)), L), 1), L)) &&
+    (ite(int_lt(j, k), j, int_add(j, 1)) = int_mod(int_add(k, 1), L) ->
+     ite(int_lt(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), k), int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)),
+       int_add(int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)), 1)) = int_mod(int_sub(int_add(k, L), 1), L))
+  // j the first, k the first: its predecessor (the last) l's last, k's
+  have ca: j = 0 -> k = 0 -> G proof
+    assume c1 c2
+    have eA: int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)) = int_sub(L, 2) by simp(ae, c1)
+    have nl: !int_lt(int_sub(L, 2), k) by arith(c2, h2)
+    have one: int_lt(1, L) by arith(h2)
+    have s2: int_mod(int_add(k, 1), L) = 1 by simp(se, c2, one)
+    have p2: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(L, 1) by simp(pe, c2)
+    have e1: int_add(int_sub(L, 2), 1) = int_sub(L, 1) by arith(h2)
+    show by simp(eA, nl, s2, p2, e1, c1, c2)
+  qed
+  // j the first, k the last: j k's successor, its predecessor k's
+  have cb: j = 0 -> !(k = 0) -> int_add(k, 1) = L -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)) = int_sub(L, 2) by simp(ae, c1)
+    have z: int_lt(0, k) by arith(c2, hk)
+    have lt: int_lt(int_sub(L, 2), k) by arith(c3)
+    have s2: int_mod(int_add(k, 1), L) = 0 by simp(se, c3)
+    have p2: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, c2)
+    have e1: int_sub(L, 2) = int_sub(k, 1) by arith(c3)
+    show by simp(eA, z, lt, s2, p2, e1, c1)
+  qed
+  // j the first, k inside: its predecessor l's last
+  have cc: j = 0 -> !(k = 0) -> !(int_add(k, 1) = L) -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)) = int_sub(L, 2) by simp(ae, c1)
+    have z: int_lt(0, k) by arith(c2, hk)
+    have nl: !int_lt(int_sub(L, 2), k) by arith(c3, hkl, hk, hL)
+    have kl: int_lt(int_add(k, 1), L) by arith(c3, hkl, hk, hL)
+    have s2: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, kl)
+    have ne: !(0 = int_add(k, 1)) by arith(hk)
+    have p0 := apply(mp.mod_pred[x := 0, L := L], simp(), hL, arith(h2))
+    have p02: int_mod(int_sub(int_add(0, L), 1), L) = int_sub(L, 1) by simp(p0)
+    have e1: int_add(int_sub(L, 2), 1) = int_sub(L, 1) by arith(h2)
+    show by simp(eA, z, nl, s2, ne, p02, e1, c1)
+  qed
+  // j inside, below k: j and its predecessor kept
+  have cd: !(j = 0) -> int_lt(j, k) -> G proof
+    assume c1 c2
+    have eA: int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)) = int_sub(j, 1) by simp(ae, c1)
+    have lt: int_lt(int_sub(j, 1), k) by arith(c2, hj)
+    have ne: !(j = int_mod(int_add(k, 1), L)) proof
+      have n0: int_lt(int_add(k, 1), L) -> !(j = int_mod(int_add(k, 1), L)) proof
+        assume q
+        have s2: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, q)
+        show by simp(s2, (!(j = int_add(k, 1)) by arith(c2, hj, hk)))
+      qed
+      have n1: !int_lt(int_add(k, 1), L) -> !(j = int_mod(int_add(k, 1), L)) proof
+        assume q
+        have s2: int_mod(int_add(k, 1), L) = 0 by simp(se, q)
+        show by simp(s2, c1)
+      qed
+      show by taut(n0, n1)
+    qed
+    have pj := apply(mp.mod_pred[x := j, L := L], hj, hL, arith(hjl, hj, hL))
+    have pj2: int_mod(int_sub(int_add(j, L), 1), L) = int_sub(j, 1) by simp(pj, c1)
+    show by simp(eA, lt, ne, pj2, c2)
+  qed
+  // j k's successor (j = k, after the removal): its predecessor k's
+  have ce: !(j = 0) -> !int_lt(j, k) -> j = k -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)) = int_sub(j, 1) by simp(ae, c1)
+    have lt: int_lt(int_sub(j, 1), k) by arith(c3, hj)
+    have kl: int_lt(int_add(k, 1), L) by arith(c3, hjl, hj)
+    have s2: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, kl)
+    have k0: !(k = 0) by arith(c1, c3)
+    have p2: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, k0)
+    have e1: int_sub(j, 1) = int_sub(k, 1) by arith(c3)
+    have e2: int_add(j, 1) = int_add(k, 1) by arith(c3)
+    show by simp(eA, lt, s2, p2, e1, e2, c2)
+  qed
+  // j inside, past k: j + 1 and its predecessor kept
+  have cf: !(j = 0) -> !int_lt(j, k) -> !(j = k) -> G proof
+    assume c1 c2 c3
+    have eA: int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1)) = int_sub(j, 1) by simp(ae, c1)
+    have nl: !int_lt(int_sub(j, 1), k) by arith(c2, c3, hj, hk)
+    have e1: int_add(int_sub(j, 1), 1) = j by arith(c1, hj)
+    have ne: !(int_add(j, 1) = int_mod(int_add(k, 1), L)) proof
+      have n0: int_lt(int_add(k, 1), L) -> !(int_add(j, 1) = int_mod(int_add(k, 1), L)) proof
+        assume q
+        have s2: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, q)
+        show by simp(s2, (!(int_add(j, 1) = int_add(k, 1)) by arith(c2, c3, hj, hk)))
+      qed
+      have n1: !int_lt(int_add(k, 1), L) -> !(int_add(j, 1) = int_mod(int_add(k, 1), L)) proof
+        assume q
+        have s2: int_mod(int_add(k, 1), L) = 0 by simp(se, q)
+        show by simp(s2, (!(int_add(j, 1) = 0) by arith(hj)))
+      qed
+      show by taut(n0, n1)
+    qed
+    have pj := apply(mp.mod_pred[x := int_add(j, 1), L := L], (int_add(j, 1) in omega by simp(hj)), hL, arith(hjl, hj, hL))
+    have pj2: int_mod(int_sub(int_add(int_add(j, 1), L), 1), L) = j by simp(pj, hj, (!(int_add(j, 1) = 0) by arith(hj)))
+    show by simp(eA, nl, e1, ne, pj2, c2)
+  qed
+  show by taut(ca, cb, cc, cd, ce, cf)
+qed
+
+// ----------------------------------------------------------------------
+//  Lists at a head word (`list_at`): read word by word, built from
+//  words; dequeue's effect on them
+
+// l without its k-th element: its length, its type, its elements
+theorem mp.rm_at_app(l, k, j): l in list_type(omega) -> k in omega -> int_lt(k, seq_len(l)) ->
+  (seq_len(mallocng_purpose.rm_at(l, k)) = int_sub(seq_len(l), 1) && mallocng_purpose.rm_at(l, k) in list_type(omega)) &&
+  (j in omega -> int_lt(j, int_sub(seq_len(l), 1)) -> app(mallocng_purpose.rm_at(l, k), j) = app(l, ite(int_lt(j, k), j, int_add(j, 1))))
+proof
+  assume hl hk hkl
+  let D := int_sub(int_sub(seq_len(l), 1), 0)
+  have lo: seq_len(l) in omega by arith(hl)
+  have dd: D in omega by arith(hl, hk, hkl)
+  // an index of the result: one of l's
+  have ix: all x. x in omega -> int_lt(x, D) -> ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)) in omega &&
+      int_lt(ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)), seq_len(l)) proof
+    fix x
+    assume hx hxl
+    have c1: int_lt(int_add(0, x), k) -> ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)) = x by simp(hx)
+    have c2: !int_lt(int_add(0, x), k) -> ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)) = int_add(x, 1) by simp(hx)
+    have r1: int_lt(int_add(0, x), k) -> ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)) in omega &&
+        int_lt(ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)), seq_len(l)) proof
+      assume h
+      have e := mp(c1, h)
+      have xl2: int_lt(x, seq_len(l)) by arith(hx, hxl, lo)
+      show by simp(e, hx, xl2)
+    qed
+    have r2: !int_lt(int_add(0, x), k) -> ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)) in omega &&
+        int_lt(ite(int_lt(int_add(0, x), k), int_add(0, x), int_add(int_add(0, x), 1)), seq_len(l)) proof
+      assume h
+      have e := mp(c2, h)
+      have x1o: int_add(x, 1) in omega by simp(hx)
+      have x1l: int_lt(int_add(x, 1), seq_len(l)) by arith(hx, hxl, lo)
+      show by simp(e, x1o, x1l)
+    qed
+    show by taut(r1, r2)
+  qed
+  have vt: all x0. x0 in D -> app(l, ite(int_lt(int_add(0, x0), k), int_add(0, x0), int_add(int_add(0, x0), 1))) in omega proof
+    fix x0
+    assume hx
+    have xo := mp(nat_elem[k := D, i := x0], dd, hx)
+    have xl := mp(nat_mem_lt[k := D, i := x0], dd, hx)
+    have io il := mp(all_elim(ix, {x0}), xo, xl)
+    show := apply(at_type[l := l, t := omega, i := ite(int_lt(int_add(0, x0), k), int_add(0, x0), int_add(int_add(0, x0), 1))], hl, io, il)
+  qed
+  have rl: mallocng_purpose.rm_at(l, k) in list_type(omega) by defs(apply(build_list, dd, vt), mallocng_purpose.rm_at)
+  have dl: seq_len(mallocng_purpose.rm_at(l, k)) = D
+    by defs(fn_build_dom[d := D, v := x0. app(l, ite(int_lt(int_add(0, x0), k), int_add(0, x0), int_add(int_add(0, x0), 1)))], seq_len, mallocng_purpose.rm_at)
+  have dl2: seq_len(mallocng_purpose.rm_at(l, k)) = int_sub(seq_len(l), 1) by arith(dl, lo)
+  have ap: j in omega -> int_lt(j, int_sub(seq_len(l), 1)) -> app(mallocng_purpose.rm_at(l, k), j) = app(l, ite(int_lt(j, k), j, int_add(j, 1))) proof
+    assume hj hjl
+    have jd := mp(nat_lt_mem[k := j, n := D], hj, dd, arith(hj, hjl, lo))
+    have a := mp(app_fn_build[d := D, v := x0. app(l, ite(int_lt(int_add(0, x0), k), int_add(0, x0), int_add(int_add(0, x0), 1))), a := j], jd)
+    have z: int_add(0, j) = j by arith(hj)
+    show by defs(simp(a, z), mallocng_purpose.rm_at)
+  qed
+  show by taut(dl2, rl, ap)
+qed
+
+// a word read through the view of all bytes
+theorem mp.view_w8(vm, a): a in omega -> int_le(int_add(a, 8), 18446744073709551616) ->
+  mallocng.rd(mallocng.mview(vm, mallocng.all_bytes), a, 8) = gimple.bytes_at(vm, a, 8)
+proof
+  assume ha hl
+  have ie: all i. i in omega -> int_lt(i, 8) -> int_add(a, i) in mallocng.all_bytes proof
+    fix i
+    assume hi _
+    show by defs(simp(ha, hi), mallocng.all_bytes)
+  qed
+  show := sym(apply(mp.view_read[vm := vm, fp := mallocng.all_bytes, a := a, n := 8], ha, simp(), simp(), ie))
+qed
+
+// the list at *phead read word by word: the head word its first element,
+// each element's links its neighbours
+theorem mp.list_rd(vm, objs, phead, l, i): app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> l in list_type(omega) ->
+  mallocng_purpose.list_at(vm, objs, phead, l) ->
+  gimple.bytes_at(vm, phead, 8) = ite(seq_len(l) = 0, 0, app(l, 0)) &&
+  (i in omega -> int_lt(i, seq_len(l)) ->
+     gimple.bytes_at(vm, int_add(app(l, i), 8), 8) = app(l, int_mod(int_add(i, 1), seq_len(l))) &&
+     gimple.bytes_at(vm, app(l, i), 8) = app(l, int_mod(int_sub(int_add(i, seq_len(l)), 1), seq_len(l))))
+proof
+  assume hb hp hl H
+  have _ _ cy el _ := expand(H, mallocng_purpose.list_at)
+  have ch _ cw := expand(cy, mallocng.cyclic)
+  have bo bl := mp(all_elim(g.bytes_bound, {vm}, {phead}, {8}), hb, simp())
+  have rv: mallocng_specs.rd64(vm, phead) = gimple.bytes_at(vm, phead, 8) by defs(simp(bo, bl), mallocng_specs.rd64, bits_of_int, pow2)
+  have hd := trans(sym(rv), ch)
+  have ws: i in omega -> int_lt(i, seq_len(l)) ->
+      gimple.bytes_at(vm, int_add(app(l, i), 8), 8) = app(l, int_mod(int_add(i, 1), seq_len(l))) &&
+      gimple.bytes_at(vm, app(l, i), 8) = app(l, int_mod(int_sub(int_add(i, seq_len(l)), 1), seq_len(l))) proof
+    assume hi hil
+    have lo := apply(at_type[l := l, t := omega, i := i], hl, hi, hil)
+    have lb .. := mp(all_elim(el, {i}), hi, hil)
+    have rn rp := mp(all_elim(cw, {i}), hi, hil)
+    have vn := apply(mp.view_w8[vm := vm, a := int_add(app(l, i), 8)], simp(lo), arith(lo, lb))
+    have vp := apply(mp.view_w8[vm := vm, a := app(l, i)], lo, arith(lo, lb))
+    show by taut(trans(sym(vn), rn), trans(sym(vp), rp))
+  qed
+  show by taut(hd, ws)
+qed
+
+// k's predecessor and successor in a cyclic list of 2 or more: not k; k
+// the first, its successor the second
+theorem mp.nb_idx(L, k): L in omega -> k in omega -> int_le(2, L) -> int_lt(k, L) ->
+  (!(int_mod(int_sub(int_add(k, L), 1), L) = k) && !(int_mod(int_add(k, 1), L) = k)) && (k = 0 -> int_mod(int_add(k, 1), L) = 1)
+proof
+  assume hL hk h2 hkl
+  have pe := apply(mp.mod_pred[x := k, L := L], hk, hL, hkl)
+  have se := apply(mp.mod_succ[x := k, L := L], hk, hL, hkl)
+  have c0: k = 0 -> (!(int_mod(int_sub(int_add(k, L), 1), L) = k) && !(int_mod(int_add(k, 1), L) = k)) && int_mod(int_add(k, 1), L) = 1 proof
+    assume h
+    have l1: int_lt(int_add(k, 1), L) by arith(h, h2)
+    have ep: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(L, 1) by simp(pe, h)
+    have en: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, l1)
+    show by arith(ep, en, h, h2, hL)
+  qed
+  have c1: !(k = 0) -> !(int_mod(int_sub(int_add(k, L), 1), L) = k) && !(int_mod(int_add(k, 1), L) = k) proof
+    assume h
+    have ep: int_mod(int_sub(int_add(k, L), 1), L) = int_sub(k, 1) by simp(pe, h)
+    have n1: int_lt(int_add(k, 1), L) -> !(int_mod(int_add(k, 1), L) = k) proof
+      assume l1
+      have en: int_mod(int_add(k, 1), L) = int_add(k, 1) by simp(se, l1)
+      show by arith(en, hk)
+    qed
+    have n2: !int_lt(int_add(k, 1), L) -> !(int_mod(int_add(k, 1), L) = k) proof
+      assume l1
+      have en: int_mod(int_add(k, 1), L) = 0 by simp(se, l1)
+      show by arith(en, h, hk)
+    qed
+    have np: !(int_mod(int_sub(int_add(k, L), 1), L) = k) by arith(ep, hk)
+    show by taut(np, n1, n2)
+  qed
+  show by taut(c0, c1)
+qed
+
+// a word, or a byte, outside a 64-bit write: as before
+theorem mp.w64_out(V, c, v, w): c in bits(64) -> w in omega -> int_le(int_add(w, 8), 18446744073709551616) -> int_le(int_add(c, 8), 18446744073709551616) ->
+  (int_le(int_add(c, 8), w) || int_le(int_add(w, 8), c)) ->
+  gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = gimple.bytes_at(V, w, 8)
+proof
+  assume hc hw hwl hcl ho
+  show by defs(apply(mp.rd_out[vm := V, c := c, k := 8, v := v, a := w, n := 8], hw, simp(), hc, simp(), hwl, hcl, ho), mallocng_specs.wr64)
+qed
+
+theorem mp.wb_out(V, c, v, x): x in bits(64) -> c in bits(64) -> int_le(int_add(c, 8), 18446744073709551616) ->
+  (int_le(int_add(c, 8), x) || int_lt(x, c)) ->
+  app(app(mallocng_specs.wr64(V, c, v), "bytes"), x) = app(app(V, "bytes"), x)
+proof
+  assume hx hc hcl ho
+  have s := apply(mp.st_out[B := app(V, "bytes"), c := c, k := 8, v := v, x := x], hx, hc, simp(), hcl, ho)
+  show by defs(simp(s, app_update_same[f := V, k := "bytes", v := x86_64_linux.store_le(app(V, "bytes"), c, 8, v)]), mallocng_specs.wr64)
+qed
+
+// ... and back: a list at *phead from its words
+theorem mp.list_mk(vm, objs, phead, l): app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> l in list_type(omega) ->
+  mallocng_specs.word_ok(vm, objs, phead, 0) -> mallocng_specs.al8(phead) ->
+  (all x0. x0 in omega -> int_lt(x0, seq_len(l)) -> ((((int_le(int_add(app(l, x0), 16), int_pow(2, 64)) && mallocng_specs.word_ok(vm, objs, bits_of_int(64, app(l, x0)), 0)) &&
+     mallocng_specs.word_ok(vm, objs, bits_of_int(64, app(l, x0)), 8)) && int_mod(app(l, x0), 8) = 0) && (int_le(int_add(phead, 8), app(l, x0)) || int_le(int_add(app(l, x0), 16), phead)))) ->
+  (all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(l)) && int_lt(x1, seq_len(l))) && !(x0 = x1) ->
+     int_le(int_add(app(l, x0), 16), app(l, x1)) || int_le(int_add(app(l, x1), 16), app(l, x0))) ->
+  gimple.bytes_at(vm, phead, 8) = ite(seq_len(l) = 0, 0, app(l, 0)) ->
+  (all i. i in omega -> int_lt(i, seq_len(l)) ->
+     gimple.bytes_at(vm, int_add(app(l, i), 8), 8) = app(l, int_mod(int_add(i, 1), seq_len(l))) &&
+     gimple.bytes_at(vm, app(l, i), 8) = app(l, int_mod(int_sub(int_add(i, seq_len(l)), 1), seq_len(l)))) ->
+  mallocng_purpose.list_at(vm, objs, phead, l)
+proof
+  assume hb hp hl hok hal el ap hd ws
+  have bo bl := mp(all_elim(g.bytes_bound, {vm}, {phead}, {8}), hb, simp())
+  have rv: mallocng_specs.rd64(vm, phead) = gimple.bytes_at(vm, phead, 8) by defs(simp(bo, bl), mallocng_specs.rd64, bits_of_int, pow2)
+  have ch := trans(rv, hd)
+  // apart, so distinct
+  have cd: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(l)) && int_lt(x1, seq_len(l))) && app(l, x0) = app(l, x1) -> x0 = x1 proof
+    fix x0 x1
+    assume ho hq
+    have o0: x0 in omega by taut(ho)
+    have l0: int_lt(x0, seq_len(l)) by taut(hq)
+    have e: app(l, x0) = app(l, x1) by taut(hq)
+    have lo := apply(at_type[l := l, t := omega, i := x0], hl, o0, l0)
+    have ne: !(x0 = x1) -> false proof
+      assume h
+      have a := mp(all_elim(ap, {x0}, {x1}), ho, taut(hq, h))
+      show by arith(a, e, lo)
+    qed
+    show by taut(ne)
+  qed
+  have cw: all x0. x0 in omega -> int_lt(x0, seq_len(l)) ->
+      mallocng.rd(mallocng.mview(vm, mallocng.all_bytes), int_add(app(l, x0), 8), 8) = app(l, int_mod(int_add(x0, 1), seq_len(l))) &&
+      mallocng.rd(mallocng.mview(vm, mallocng.all_bytes), app(l, x0), 8) = app(l, int_mod(int_sub(int_add(x0, seq_len(l)), 1), seq_len(l))) proof
+    fix x0
+    assume hi hil
+    have lo := apply(at_type[l := l, t := omega, i := x0], hl, hi, hil)
+    have lb .. := mp(all_elim(el, {x0}), hi, hil)
+    have rn rp := mp(all_elim(ws, {x0}), hi, hil)
+    have vn := apply(mp.view_w8[vm := vm, a := int_add(app(l, x0), 8)], simp(lo), arith(lo, lb))
+    have vp := apply(mp.view_w8[vm := vm, a := app(l, x0)], lo, arith(lo, lb))
+    show by taut(trans(vn, rn), trans(vp, rp))
+  qed
+  have cy: mallocng.cyclic(mallocng.mview(vm, mallocng.all_bytes), mallocng_specs.rd64(vm, phead), l) by defs(taut(ch, cd, cw), mallocng.cyclic)
+  show by defs(taut(hok, hal, cy, el, ap), mallocng_purpose.list_at)
+qed
+
+theorem mp.wr64_typed(V, c, v): app(V, "bytes") in fn_space(bits(64), bits(8)) -> app(mallocng_specs.wr64(V, c, v), "bytes") in fn_space(bits(64), bits(8))
+proof
+  assume hb
+  show by defs(simp(mp(all_elim(x86.store_typed, {app(V, "bytes")}, {c}, {8}, {v}), hb)), mallocng_specs.wr64)
+qed
+
+// a 64-bit write changes only the bytes
+theorem mp.wr64_only(V, c, v, W): fn_update(V, "bytes", app(W, "bytes")) = W -> fn_update(mallocng_specs.wr64(V, c, v), "bytes", app(W, "bytes")) = W
+proof
+  assume h
+  have t := fn_update_twice[f := V, k := "bytes", a := x86_64_linux.store_le(app(V, "bytes"), c, 8, v), b := app(W, "bytes")]
+  show by defs(trans(t, h), mallocng_specs.wr64)
+qed
+
+// dequeue's effect on the list at *phead holding m, of 2 or more: m out
+// of it, its neighbours linked, the head moved past it; m's links cleared;
+// no byte but the head word and the links written
+theorem mp.dq_list2(vm, objs, phead, m, l, k): vm in x86_64_linux.Vm -> app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> m in bits(64) ->
+  l in list_type(omega) -> k in omega -> int_lt(k, seq_len(l)) -> int_le(2, seq_len(l)) -> app(l, k) = m ->
+  mallocng_purpose.list_at(vm, objs, phead, l) ->
+  ((mallocng_purpose.list_at(mallocng_specs.dequeue_vm(vm, phead, m), objs, phead, mallocng_purpose.rm_at(l, k)) &&
+     mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), m) = 0) && mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), bits_add(64, m, 8)) = 0) &&
+  mallocng_purpose.links_only(vm, mallocng_specs.dequeue_vm(vm, phead, m), phead, l)
+proof
+  assume hvm hb hp hm hl hk hkl h2 hlk H
+  let L := seq_len(l)
+  let IP := int_mod(int_sub(int_add(k, L), 1), L)
+  let IN := int_mod(int_add(k, 1), L)
+  let P := app(l, IP)
+  let N := app(l, IN)
+  have hok hal _ el ap := expand(H, mallocng_purpose.list_at)
+  have lo: L in omega by arith(hl)
+  have ipk ink in0 := apply(mp.nb_idx[L := L, k := k], lo, hk, h2, hkl)
+  have ipo: IP in omega by arith(hk, lo, h2)
+  have ipl: int_lt(IP, L) by arith(hk, lo, h2)
+  have ino: IN in omega by arith(hk, lo, h2)
+  have inl: int_lt(IN, L) by arith(hk, lo, h2)
+  have pho: phead in omega by simp(hp)
+  have _ phl0 .. := expand(hok, mallocng_specs.word_ok)
+  have phl: int_le(int_add(phead, 8), 18446744073709551616) by arith(phl0, pho)
+
+  // l's elements: naturals, apart from the head word and from each other
+  have ef: all i. i in omega -> int_lt(i, L) -> (app(l, i) in omega && int_le(int_add(app(l, i), 16), 18446744073709551616)) &&
+      (int_le(int_add(phead, 8), app(l, i)) || int_le(int_add(app(l, i), 16), phead)) proof
+    fix i
+    assume hi hil
+    have lo2 := apply(at_type[l := l, t := omega, i := i], hl, hi, hil)
+    have lb _ _ _ lp := mp(all_elim(el, {i}), hi, hil)
+    have lb2: int_le(int_add(app(l, i), 16), 18446744073709551616) by arith(lb)
+    show by taut(lo2, lb2, lp)
+  qed
+  have ea: all i. all j. i in omega -> j in omega -> int_lt(i, L) -> int_lt(j, L) -> !(i = j) ->
+      int_le(int_add(app(l, i), 16), app(l, j)) || int_le(int_add(app(l, j), 16), app(l, i)) proof
+    fix i j
+    assume hi hj hil hjl hne
+    show := mp(all_elim(ap, {i}, {j}), taut(hi, hj), taut(hil, hjl, hne))
+  qed
+  have po pb pa := mp(all_elim(ef, {IP}), ipo, ipl)
+  have no nb na := mp(all_elim(ef, {IN}), ino, inl)
+  have mo0 mb0 ma0 := mp(all_elim(ef, {k}), hk, hkl)
+  have mo := rewrite(hlk, mo0)
+  have mb := rewrite(hlk, mb0)
+  have ma := rewrite(hlk, ma0)
+  have pm := rewrite(hlk, mp(all_elim(ea, {IP}, {k}), ipo, hk, ipl, hkl, ipk))
+  have nm := rewrite(hlk, mp(all_elim(ea, {IN}, {k}), ino, hk, inl, hkl, ink))
+
+  // the words read: m's links its neighbours, the head word the first
+  have hd0 ws0 := apply(mp.list_rd[vm := vm, objs := objs, phead := phead, l := l, i := k], hb, hp, hl, H)
+  have rn0 rp0 := mp(ws0, hk, hkl)
+  have rn := rewrite(hlk, rn0)
+  have rp := rewrite(hlk, rp0)
+  have h0: gimple.bytes_at(vm, phead, 8) = app(l, 0) by simp(hd0, (!(L = 0) by arith(h2, lo)))
+  have z0 := apply(at_type[l := l, t := omega, i := 0], hl, simp(), (int_lt(0, L) by arith(h2, lo)))
+  have zo zb za := mp(all_elim(ef, {0}), simp(), (int_lt(0, L) by arith(h2, lo)))
+  have bm8: bits_add(64, m, 8) = int_add(m, 8) by defs(arith(mo, mb), bits_add, bits_of_int, pow2)
+  have bp8: bits_add(64, P, 8) = int_add(P, 8) by defs(arith(po, pb), bits_add, bits_of_int, pow2)
+  have nlt: int_lt(N, 18446744073709551616) by arith(nb)
+  have plt: int_lt(P, 18446744073709551616) by arith(pb)
+  have eN: mallocng_specs.mnext(vm, m) = N by defs(simp(bm8, rn, no, nlt), mallocng_specs.mnext, mallocng_specs.rd64, bits_of_int, pow2)
+  have eP: mallocng_specs.mprev(vm, m) = P by defs(simp(rp, po, plt), mallocng_specs.mprev, mallocng_specs.rd64, bits_of_int, pow2)
+  have nnm: !(N = m) by arith(nm, mo, no)
+  have nbits: N in bits(64) by simp(no, nlt)
+  have pbits: P in bits(64) by simp(po, plt)
+  have p8b: int_add(P, 8) in bits(64) by simp(po, (int_lt(int_add(P, 8), 18446744073709551616) by arith(pb)))
+  have m8b: int_add(m, 8) in bits(64) by simp(mo, (int_lt(int_add(m, 8), 18446744073709551616) by arith(mb)))
+  have zbits: 0 in bits(64) by simp()
+
+  // the writes: m's neighbours linked, the head moved (m the first), m's links cleared
+  let V1 := mallocng_specs.wr64(vm, int_add(P, 8), N)
+  let V2 := mallocng_specs.wr64(V1, N, P)
+  have e2: mallocng_specs.dq_links(vm, phead, m) = V2 by defs(simp(eN, eP, nnm, bp8), mallocng_specs.dq_links)
+  have tb1 := apply(mp.wr64_typed[V := vm, c := int_add(P, 8), v := N], hb)
+  have tb2 := apply(mp.wr64_typed[V := V1, c := N, v := P], tb1)
+  have v2h: gimple.bytes_at(V2, phead, 8) = app(l, 0) :=
+    trans(apply(mp.w64_out[V := V1, c := N, v := P, w := phead], nbits, pho, phl, arith(nb), arith(na, no, pho)),
+      trans(apply(mp.w64_out[V := vm, c := int_add(P, 8), v := N, w := phead], p8b, pho, phl, arith(pb), arith(pa, po, pho)), h0))
+  have rv2: mallocng_specs.rd64(V2, phead) = app(l, 0) by defs(simp(v2h, zo, (int_lt(app(l, 0), 18446744073709551616) by arith(zb))), mallocng_specs.rd64, bits_of_int, pow2)
+  let V3 := mallocng_specs.dq_head(V2, vm, phead, m)
+  have c0: k = 0 -> V3 = mallocng_specs.wr64(V2, phead, N) proof
+    assume h
+    have e0: app(l, 0) = m := rewrite(h, hlk)
+    show by defs(simp(eN, nnm, rv2, e0), mallocng_specs.dq_head)
+  qed
+  have c1: !(k = 0) -> V3 = V2 proof
+    assume h
+    have a := rewrite(hlk, mp(all_elim(ea, {0}, {k}), simp(), hk, (int_lt(0, L) by arith(h2, lo)), hkl, (!(0 = k) by taut(h))))
+    have ne: !(app(l, 0) = m) by arith(a, zo, mo)
+    show by defs(simp(rv2, ne), mallocng_specs.dq_head)
+  qed
+  have tb3: app(V3, "bytes") in fn_space(bits(64), bits(8)) proof
+    have q0: k = 0 -> app(V3, "bytes") in fn_space(bits(64), bits(8)) proof
+      assume h
+      show := subst({y. app(y, "bytes") in fn_space(bits(64), bits(8))}, sym(mp(c0, h)), apply(mp.wr64_typed[V := V2, c := phead, v := N], tb2))
+    qed
+    have q1: !(k = 0) -> app(V3, "bytes") in fn_space(bits(64), bits(8)) proof
+      assume h
+      show := subst({y. app(y, "bytes") in fn_space(bits(64), bits(8))}, sym(mp(c1, h)), tb2)
+    qed
+    show by taut(q0, q1)
+  qed
+  // (V3: V2 but for the head word)
+  have r3: all w. w in omega -> int_le(int_add(w, 8), 18446744073709551616) -> (int_le(int_add(phead, 8), w) || int_le(int_add(w, 8), phead)) ->
+      gimple.bytes_at(V3, w, 8) = gimple.bytes_at(V2, w, 8) proof
+    fix w
+    assume hw hwl ho
+    have q0: k = 0 -> gimple.bytes_at(V3, w, 8) = gimple.bytes_at(V2, w, 8) proof
+      assume h
+      have o := apply(mp.w64_out[V := V2, c := phead, v := N, w := w], hp, hw, hwl, phl, ho)
+      show := subst({y. gimple.bytes_at(y, w, 8) = gimple.bytes_at(V2, w, 8)}, sym(mp(c0, h)), o)
+    qed
+    have q1: !(k = 0) -> gimple.bytes_at(V3, w, 8) = gimple.bytes_at(V2, w, 8) proof
+      assume h
+      show := subst({y. gimple.bytes_at(y, w, 8) = gimple.bytes_at(V2, w, 8)}, sym(mp(c1, h)), refl({gimple.bytes_at(V2, w, 8)}))
+    qed
+    show by taut(q0, q1)
+  qed
+  have r3b: all x. x in bits(64) -> (int_le(int_add(phead, 8), x) || int_lt(x, phead)) -> app(app(V3, "bytes"), x) = app(app(V2, "bytes"), x) proof
+    fix x
+    assume hx ho
+    have q0: k = 0 -> app(app(V3, "bytes"), x) = app(app(V2, "bytes"), x) proof
+      assume h
+      have o := apply(mp.wb_out[V := V2, c := phead, v := N, x := x], hx, hp, phl, ho)
+      show := subst({y. app(app(y, "bytes"), x) = app(app(V2, "bytes"), x)}, sym(mp(c0, h)), o)
+    qed
+    have q1: !(k = 0) -> app(app(V3, "bytes"), x) = app(app(V2, "bytes"), x) proof
+      assume h
+      show := subst({y. app(app(y, "bytes"), x) = app(app(V2, "bytes"), x)}, sym(mp(c1, h)), refl({app(app(V2, "bytes"), x)}))
+    qed
+    show by taut(q0, q1)
+  qed
+  have r3h0: k = 0 -> gimple.bytes_at(V3, phead, 8) = N proof
+    assume h
+    show := subst({y. gimple.bytes_at(y, phead, 8) = N}, sym(mp(c0, h)), apply(mp.rd_at8[vm := V2, c := phead, v := N], tb2, hp, nbits))
+  qed
+  have r3h1: !(k = 0) -> gimple.bytes_at(V3, phead, 8) = app(l, 0) proof
+    assume h
+    show := subst({y. gimple.bytes_at(y, phead, 8) = app(l, 0)}, sym(mp(c1, h)), v2h)
+  qed
+  // only the bytes changed
+  have vf: is_fun(vm) by simp(hvm)
+  have vd: "bytes" in dom(vm) by simp(hvm)
+  have vs := apply(fn_update_same[f := vm, k := "bytes"], vf, vd)
+  have fu2 := apply(mp.wr64_only[V := V1, c := N, v := P, W := vm], apply(mp.wr64_only[V := vm, c := int_add(P, 8), v := N, W := vm], vs))
+  have fu3: fn_update(V3, "bytes", app(vm, "bytes")) = vm proof
+    have q0: k = 0 -> fn_update(V3, "bytes", app(vm, "bytes")) = vm proof
+      assume h
+      have f := apply(mp.wr64_only[V := V2, c := phead, v := N, W := vm], fu2)
+      show := subst({y. fn_update(y, "bytes", app(vm, "bytes")) = vm}, sym(mp(c0, h)), f)
+    qed
+    have q1: !(k = 0) -> fn_update(V3, "bytes", app(vm, "bytes")) = vm proof
+      assume h
+      show := subst({y. fn_update(y, "bytes", app(vm, "bytes")) = vm}, sym(mp(c1, h)), fu2)
+    qed
+    show by taut(q0, q1)
+  qed
+  let V4 := mallocng_specs.wr64(V3, int_add(m, 8), 0)
+  let V5 := mallocng_specs.wr64(V4, m, 0)
+  have e5: mallocng_specs.dequeue_vm(vm, phead, m) = V5 by defs(simp(e2, bm8), mallocng_specs.dequeue_vm)
+  have tb4 := apply(mp.wr64_typed[V := V3, c := int_add(m, 8), v := 0], tb3)
+  have tb5 := apply(mp.wr64_typed[V := V4, c := m, v := 0], tb4)
+  have fu5 := apply(mp.wr64_only[V := V4, c := m, v := 0, W := vm], apply(mp.wr64_only[V := V3, c := int_add(m, 8), v := 0, W := vm], fu3))
+  have r5: all w. w in omega -> int_le(int_add(w, 8), 18446744073709551616) -> (int_le(int_add(m, 16), w) || int_le(int_add(w, 8), m)) ->
+      gimple.bytes_at(V5, w, 8) = gimple.bytes_at(V3, w, 8) proof
+    fix w
+    assume hw hwl ho
+    show := trans(apply(mp.w64_out[V := V4, c := m, v := 0, w := w], hm, hw, hwl, arith(mb), arith(ho, hw, mo)),
+      apply(mp.w64_out[V := V3, c := int_add(m, 8), v := 0, w := w], m8b, hw, hwl, arith(mb), arith(ho, hw, mo)))
+  qed
+  have z5: gimple.bytes_at(V5, m, 8) = 0 := apply(mp.rd_at8[vm := V4, c := m, v := 0], tb4, hm, zbits)
+  have z58: gimple.bytes_at(V5, int_add(m, 8), 8) = 0 :=
+    trans(apply(mp.w64_out[V := V4, c := m, v := 0, w := int_add(m, 8)], hm, simp(mo), arith(mb), arith(mb), arith(mo)),
+      apply(mp.rd_at8[vm := V3, c := int_add(m, 8), v := 0], tb3, m8b, zbits))
+  have q5: mallocng_specs.rd64(V5, m) = 0 by defs(simp(z5), mallocng_specs.rd64, bits_of_int, pow2)
+  have q58: mallocng_specs.rd64(V5, bits_add(64, m, 8)) = 0 by defs(simp(bm8, z58), mallocng_specs.rd64, bits_of_int, pow2)
+
+  // the others' links: as before, but for m's neighbours' links to m
+  have wn: all i. i in omega -> int_lt(i, L) -> !(i = k) ->
+      ((!(i = IP) -> gimple.bytes_at(V5, int_add(app(l, i), 8), 8) = gimple.bytes_at(vm, int_add(app(l, i), 8), 8)) &&
+       (i = IP -> gimple.bytes_at(V5, int_add(app(l, i), 8), 8) = N)) &&
+      ((!(i = IN) -> gimple.bytes_at(V5, app(l, i), 8) = gimple.bytes_at(vm, app(l, i), 8)) &&
+       (i = IN -> gimple.bytes_at(V5, app(l, i), 8) = P)) proof
+    fix i
+    assume hi hil hik
+    have lo2 lb la := mp(all_elim(ef, {i}), hi, hil)
+    have am := rewrite(hlk, mp(all_elim(ea, {i}, {k}), hi, hk, hil, hkl, hik))
+    have l8o: int_add(app(l, i), 8) in omega by simp(lo2)
+    // through m's links and the head word
+    have s1 := trans(mp(all_elim(r5, {int_add(app(l, i), 8)}), l8o, arith(lb), arith(am, lo2, mo)),
+      mp(all_elim(r3, {int_add(app(l, i), 8)}), l8o, arith(lb), arith(la, lo2, pho)))
+    have s2 := trans(mp(all_elim(r5, {app(l, i)}), lo2, arith(lb), arith(am, lo2, mo)),
+      mp(all_elim(r3, {app(l, i)}), lo2, arith(lb), arith(la, lo2, pho)))
+    // l_i: P, or apart from it; N likewise
+    have qp: app(l, i) = P || int_le(int_add(app(l, i), 16), P) || int_le(int_add(P, 16), app(l, i)) proof
+      have a1: i = IP -> app(l, i) = P by simp()
+      have a2: !(i = IP) -> int_le(int_add(app(l, i), 16), P) || int_le(int_add(P, 16), app(l, i)) proof
+        assume h
+        show := mp(all_elim(ea, {i}, {IP}), hi, ipo, hil, ipl, h)
+      qed
+      show by taut(a1, a2)
+    qed
+    have qn: app(l, i) = N || int_le(int_add(app(l, i), 16), N) || int_le(int_add(N, 16), app(l, i)) proof
+      have a1: i = IN -> app(l, i) = N by simp()
+      have a2: !(i = IN) -> int_le(int_add(app(l, i), 16), N) || int_le(int_add(N, 16), app(l, i)) proof
+        assume h
+        show := mp(all_elim(ea, {i}, {IN}), hi, ino, hil, inl, h)
+      qed
+      show by taut(a1, a2)
+    qed
+    // the next link: through N's prev, then P's next
+    have u1 := apply(mp.w64_out[V := V1, c := N, v := P, w := int_add(app(l, i), 8)], nbits, l8o, arith(lb), arith(nb), arith(qn, lo2, no))
+    have n1: !(i = IP) -> gimple.bytes_at(V5, int_add(app(l, i), 8), 8) = gimple.bytes_at(vm, int_add(app(l, i), 8), 8) proof
+      assume h
+      have a := mp(all_elim(ea, {i}, {IP}), hi, ipo, hil, ipl, h)
+      show := trans(s1, trans(u1, apply(mp.w64_out[V := vm, c := int_add(P, 8), v := N, w := int_add(app(l, i), 8)], p8b, l8o, arith(lb), arith(pb), arith(a, lo2, po))))
+    qed
+    have n2: i = IP -> gimple.bytes_at(V5, int_add(app(l, i), 8), 8) = N proof
+      assume h
+      have e: app(l, i) = P by simp(h)
+      have r := subst({y. gimple.bytes_at(V1, int_add(y, 8), 8) = N}, sym(e), apply(mp.rd_at8[vm := vm, c := int_add(P, 8), v := N], hb, p8b, nbits))
+      show := trans(s1, trans(u1, r))
+    qed
+    // the prev link: through N's prev
+    have v1 := apply(mp.w64_out[V := vm, c := int_add(P, 8), v := N, w := app(l, i)], p8b, lo2, arith(lb), arith(pb), arith(qp, lo2, po))
+    have p1: !(i = IN) -> gimple.bytes_at(V5, app(l, i), 8) = gimple.bytes_at(vm, app(l, i), 8) proof
+      assume h
+      have a := mp(all_elim(ea, {i}, {IN}), hi, ino, hil, inl, h)
+      show := trans(s2, trans(apply(mp.w64_out[V := V1, c := N, v := P, w := app(l, i)], nbits, lo2, arith(lb), arith(nb), arith(a, lo2, no)), v1))
+    qed
+    have p2: i = IN -> gimple.bytes_at(V5, app(l, i), 8) = P proof
+      assume h
+      have e: app(l, i) = N by simp(h)
+      have r := subst({y. gimple.bytes_at(V2, y, 8) = P}, sym(e), apply(mp.rd_at8[vm := V1, c := N, v := P], tb1, nbits, pbits))
+      show := trans(s2, r)
+    qed
+    show by taut(n1, n2, p1, p2)
+  qed
+
+  // the list without m
+  let R := mallocng_purpose.rm_at(l, k)
+  have dl2 rl _ := apply(mp.rm_at_app[l := l, k := k, j := 0], hl, hk, hkl)
+  have wo: all p. all off. mallocng_specs.word_ok(V5, objs, p, off) = mallocng_specs.word_ok(vm, objs, p, off) proof
+    fix p off
+    have f := all_elim(ms.f_word_ok, {V5}, {app(vm, "bytes")}, {objs}, {p}, {off})
+    show := sym(rewrite(fu5, f))
+  qed
+  // R's j-th: l's G-th (G = j below k, j + 1 from k on), not m
+  have gi: all j. j in omega -> int_lt(j, int_sub(L, 1)) ->
+      (ite(int_lt(j, k), j, int_add(j, 1)) in omega && int_lt(ite(int_lt(j, k), j, int_add(j, 1)), L)) &&
+      !(ite(int_lt(j, k), j, int_add(j, 1)) = k) && app(R, j) = app(l, ite(int_lt(j, k), j, int_add(j, 1))) proof
+    fix j
+    assume hj hjl
+    have _ _ ra := apply(mp.rm_at_app[l := l, k := k, j := j], hl, hk, hkl)
+    have rj := mp(ra, hj, hjl)
+    have a1: int_lt(j, k) -> (ite(int_lt(j, k), j, int_add(j, 1)) in omega && int_lt(ite(int_lt(j, k), j, int_add(j, 1)), L)) &&
+        !(ite(int_lt(j, k), j, int_add(j, 1)) = k) proof
+      assume h
+      have jl: int_lt(j, L) by arith(hj, hjl, lo)
+      have jk: !(j = k) by arith(h, hj, hk)
+      have kj: !(k = j) by arith(h, hj, hk)
+      show by simp(h, hj, jl, jk, kj)
+    qed
+    have a2: !int_lt(j, k) -> (ite(int_lt(j, k), j, int_add(j, 1)) in omega && int_lt(ite(int_lt(j, k), j, int_add(j, 1)), L)) &&
+        !(ite(int_lt(j, k), j, int_add(j, 1)) = k) proof
+      assume h
+      have j1o: int_add(j, 1) in omega by simp(hj)
+      have jl: int_lt(int_add(j, 1), L) by arith(hj, hjl, lo)
+      have jk: !(int_add(j, 1) = k) by arith(h, hj, hk)
+      have kj: !(k = int_add(j, 1)) by arith(h, hj, hk)
+      show by simp(h, j1o, jl, jk, kj)
+    qed
+    show by taut(a1, a2, rj)
+  qed
+  have el5: all x0. x0 in omega -> int_lt(x0, seq_len(R)) ->
+      ((((int_le(int_add(app(R, x0), 16), int_pow(2, 64)) && mallocng_specs.word_ok(V5, objs, bits_of_int(64, app(R, x0)), 0)) &&
+        mallocng_specs.word_ok(V5, objs, bits_of_int(64, app(R, x0)), 8)) && int_mod(app(R, x0), 8) = 0) &&
+       (int_le(int_add(phead, 8), app(R, x0)) || int_le(int_add(app(R, x0), 16), phead))) proof
+    fix x0
+    assume hx hxl
+    have go gl _ ge := mp(all_elim(gi, {x0}), hx, simp(hxl, dl2))
+    have e := mp(all_elim(el, {ite(int_lt(x0, k), x0, int_add(x0, 1))}), go, gl)
+    have w0 := all_elim(wo, {bits_of_int(64, app(l, ite(int_lt(x0, k), x0, int_add(x0, 1))))}, {0})
+    have w8 := all_elim(wo, {bits_of_int(64, app(l, ite(int_lt(x0, k), x0, int_add(x0, 1))))}, {8})
+    show by simp(ge, w0, w8, e)
+  qed
+  have ap5: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(R)) && int_lt(x1, seq_len(R))) && !(x0 = x1) ->
+      int_le(int_add(app(R, x0), 16), app(R, x1)) || int_le(int_add(app(R, x1), 16), app(R, x0)) proof
+    fix x0 x1
+    assume ho hq
+    have x0o: x0 in omega by taut(ho)
+    have x1o: x1 in omega by taut(ho)
+    have x0l: int_lt(x0, int_sub(L, 1)) by simp(hq, dl2)
+    have x1l: int_lt(x1, int_sub(L, 1)) by simp(hq, dl2)
+    have ne: !(x0 = x1) by taut(hq)
+    have g0o g0l _ g0e := mp(all_elim(gi, {x0}), x0o, x0l)
+    have g1o g1l _ g1e := mp(all_elim(gi, {x1}), x1o, x1l)
+    // G is one-to-one
+    have gne: !(ite(int_lt(x0, k), x0, int_add(x0, 1)) = ite(int_lt(x1, k), x1, int_add(x1, 1))) proof
+      have c00: int_lt(x0, k) -> int_lt(x1, k) -> !(ite(int_lt(x0, k), x0, int_add(x0, 1)) = ite(int_lt(x1, k), x1, int_add(x1, 1))) proof
+        assume a b
+        show by simp(a, b, ne)
+      qed
+      have c01: int_lt(x0, k) -> !int_lt(x1, k) -> !(ite(int_lt(x0, k), x0, int_add(x0, 1)) = ite(int_lt(x1, k), x1, int_add(x1, 1))) proof
+        assume a b
+        have d: !(x0 = int_add(x1, 1)) by arith(a, b, x0o, x1o)
+        show by simp(a, b, d)
+      qed
+      have c10: !int_lt(x0, k) -> int_lt(x1, k) -> !(ite(int_lt(x0, k), x0, int_add(x0, 1)) = ite(int_lt(x1, k), x1, int_add(x1, 1))) proof
+        assume a b
+        have d: !(int_add(x0, 1) = x1) by arith(a, b, x0o, x1o)
+        show by simp(a, b, d)
+      qed
+      have c11: !int_lt(x0, k) -> !int_lt(x1, k) -> !(ite(int_lt(x0, k), x0, int_add(x0, 1)) = ite(int_lt(x1, k), x1, int_add(x1, 1))) proof
+        assume a b
+        have d: !(int_add(x0, 1) = int_add(x1, 1)) by arith(ne, x0o, x1o)
+        show by simp(a, b, d)
+      qed
+      show by taut(c00, c01, c10, c11)
+    qed
+    have a := mp(all_elim(ea, {ite(int_lt(x0, k), x0, int_add(x0, 1))}, {ite(int_lt(x1, k), x1, int_add(x1, 1))}), g0o, g1o, g0l, g1l, gne)
+    show by simp(g0e, g1e, a)
+  qed
+  // the head word: R's first (l's second if m was the first)
+  have hd5: gimple.bytes_at(V5, phead, 8) = ite(seq_len(R) = 0, 0, app(R, 0)) proof
+    have s := trans(mp(all_elim(r5, {phead}), pho, phl, arith(ma, pho, mo)), refl({gimple.bytes_at(V3, phead, 8)}))
+    have nz: !(seq_len(R) = 0) by arith(dl2, h2)
+    have _ _ _ r0 := mp(all_elim(gi, {0}), simp(), (int_lt(0, int_sub(L, 1)) by arith(h2, lo)))
+    have q0: k = 0 -> gimple.bytes_at(V5, phead, 8) = ite(seq_len(R) = 0, 0, app(R, 0)) proof
+      assume h
+      have i1 := mp(in0, h)
+      have a: app(R, 0) = N by simp(r0, h, i1)
+      show by simp(s, mp(r3h0, h), nz, a)
+    qed
+    have q1: !(k = 0) -> gimple.bytes_at(V5, phead, 8) = ite(seq_len(R) = 0, 0, app(R, 0)) proof
+      assume h
+      have kp: int_lt(0, k) by arith(h, hk)
+      have a: app(R, 0) = app(l, 0) by simp(r0, kp)
+      show by simp(s, mp(r3h1, h), nz, a)
+    qed
+    show by taut(q0, q1)
+  qed
+  // the links: l's, but around m
+  have ws5: all i. i in omega -> int_lt(i, seq_len(R)) ->
+      gimple.bytes_at(V5, int_add(app(R, i), 8), 8) = app(R, int_mod(int_add(i, 1), seq_len(R))) &&
+      gimple.bytes_at(V5, app(R, i), 8) = app(R, int_mod(int_sub(int_add(i, seq_len(R)), 1), seq_len(R))) proof
+    fix j
+    assume hj hjl0
+    have hjl: int_lt(j, int_sub(L, 1)) by simp(hjl0, dl2)
+    let G := ite(int_lt(j, k), j, int_add(j, 1))
+    have go gl gk ge := mp(all_elim(gi, {j}), hj, hjl)
+    have wl0 wl1 := apply(mp.rm_next[L := L, k := k, j := j], lo, hk, hj, h2, hkl, hjl)
+    have wp0 wp1 := apply(mp.rm_prev[L := L, k := k, j := j], lo, hk, hj, h2, hkl, hjl)
+    let J1 := int_mod(int_add(j, 1), int_sub(L, 1))
+    let J2 := int_mod(int_sub(int_add(j, int_sub(L, 1)), 1), int_sub(L, 1))
+    have j1o: J1 in omega by arith(lo, h2, hj)
+    have j1l: int_lt(J1, int_sub(L, 1)) by arith(lo, h2, hj)
+    have j2o: J2 in omega by arith(lo, h2, hj)
+    have j2l: int_lt(J2, int_sub(L, 1)) by arith(lo, h2, hj)
+    have _ _ _ r1 := mp(all_elim(gi, {J1}), j1o, j1l)
+    have _ _ _ r2 := mp(all_elim(gi, {J2}), j2o, j2l)
+    have _ lw := apply(mp.list_rd[vm := vm, objs := objs, phead := phead, l := l, i := G], hb, hp, hl, H)
+    have ln lp := mp(lw, go, gl)
+    have wg := mp(all_elim(wn, {G}), go, gl, gk)
+    have wa wb wc wd := wg
+    // the next link
+    have nx0: !(G = IP) -> gimple.bytes_at(V5, int_add(app(l, G), 8), 8) = app(R, J1) proof
+      assume h
+      show by simp(r1, mp(wl0, h), mp(wa, h), ln)
+    qed
+    have nx1: G = IP -> gimple.bytes_at(V5, int_add(app(l, G), 8), 8) = app(R, J1) proof
+      assume h
+      show by simp(r1, mp(wl1, h), mp(wb, h))
+    qed
+    // the prev link
+    have pv0: !(G = IN) -> gimple.bytes_at(V5, app(l, G), 8) = app(R, J2) proof
+      assume h
+      show by simp(r2, mp(wp0, h), mp(wc, h), lp)
+    qed
+    have pv1: G = IN -> gimple.bytes_at(V5, app(l, G), 8) = app(R, J2) proof
+      assume h
+      show by simp(r2, mp(wp1, h), mp(wd, h))
+    qed
+    have nx: gimple.bytes_at(V5, int_add(app(l, G), 8), 8) = app(R, J1) by taut(nx0, nx1)
+    have pv: gimple.bytes_at(V5, app(l, G), 8) = app(R, J2) by taut(pv0, pv1)
+    show by simp(ge, dl2, nx, pv)
+  qed
+  have hal5: mallocng_specs.al8(phead) := hal
+  have hok5: mallocng_specs.word_ok(V5, objs, phead, 0) by simp(all_elim(wo, {phead}, {0}), hok)
+  have la := apply(mp.list_mk[vm := V5, objs := objs, phead := phead, l := R], tb5, hp, rl, hok5, hal5, el5, ap5, hd5, ws5)
+
+  // no byte but the links and the head word written
+  have lo5: all x0. x0 in omega -> (int_lt(x0, int_pow(2, 64)) && !(int_le(phead, x0) && int_lt(x0, int_add(phead, 8)))) &&
+      (all x1. x1 in omega -> int_lt(x1, L) -> !(int_le(app(l, x1), x0) && int_lt(x0, int_add(app(l, x1), 16)))) ->
+      app(app(V5, "bytes"), bits_of_int(64, x0)) = app(app(vm, "bytes"), bits_of_int(64, x0)) proof
+    fix x0
+    assume hx hq
+    have xl: int_lt(x0, 18446744073709551616) by arith(hq)
+    have xp: !(int_le(phead, x0) && int_lt(x0, int_add(phead, 8))) by taut(hq)
+    have xa: all x1. x1 in omega -> int_lt(x1, L) -> !(int_le(app(l, x1), x0) && int_lt(x0, int_add(app(l, x1), 16))) by taut(hq)
+    have xb: x0 in bits(64) by simp(hx, xl)
+    have bx: bits_of_int(64, x0) = x0 by defs(simp(hx, xl), bits_of_int, pow2)
+    have om := rewrite(hlk, mp(all_elim(xa, {k}), hk, hkl))
+    have op := mp(all_elim(xa, {IP}), ipo, ipl)
+    have on := mp(all_elim(xa, {IN}), ino, inl)
+    have b5 := apply(mp.wb_out[V := V4, c := m, v := 0, x := x0], xb, hm, arith(mb), arith(om, hx, mo))
+    have b4 := apply(mp.wb_out[V := V3, c := int_add(m, 8), v := 0, x := x0], xb, m8b, arith(mb), arith(om, hx, mo))
+    have b3 := mp(all_elim(r3b, {x0}), xb, arith(xp, hx, pho))
+    have b2 := apply(mp.wb_out[V := V1, c := N, v := P, x := x0], xb, nbits, arith(nb), arith(on, hx, no))
+    have b1 := apply(mp.wb_out[V := vm, c := int_add(P, 8), v := N, x := x0], xb, p8b, arith(pb), arith(op, hx, po))
+    show by simp(bx, trans(b5, trans(b4, trans(b3, trans(b2, b1)))))
+  qed
+  have lk: mallocng_purpose.links_only(vm, V5, phead, l) by defs(taut(fu5, lo5), mallocng_purpose.links_only)
+  have all5: ((mallocng_purpose.list_at(V5, objs, phead, R) && mallocng_specs.rd64(V5, m) = 0) && mallocng_specs.rd64(V5, bits_add(64, m, 8)) = 0) &&
+    mallocng_purpose.links_only(vm, V5, phead, l) by taut(la, q5, q58, lk)
+  show := subst({y. ((mallocng_purpose.list_at(y, objs, phead, R) && mallocng_specs.rd64(y, m) = 0) && mallocng_specs.rd64(y, bits_add(64, m, 8)) = 0) &&
+    mallocng_purpose.links_only(vm, y, phead, l)}, sym(e5), all5)
+qed
+
+// m in the list at *phead: dequeue's precondition holds (the words it
+// writes usable, aligned, apart); m is its own successor just when alone
+theorem mp.dq_pre(vm, objs, phead, m, l, k): app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> m in bits(64) ->
+  l in list_type(omega) -> k in omega -> int_lt(k, seq_len(l)) -> app(l, k) = m -> mallocng_purpose.list_at(vm, objs, phead, l) ->
+  mallocng_specs.dequeue_pre(vm, objs, phead, m) && (seq_len(l) = 1 <-> mallocng_specs.mnext(vm, m) = m)
+proof
+  assume hb hp hm hl hk hkl hlk H
+  let L := seq_len(l)
+  let IP := int_mod(int_sub(int_add(k, L), 1), L)
+  let IN := int_mod(int_add(k, 1), L)
+  let P := app(l, IP)
+  let N := app(l, IN)
+  have hok hal _ el ap := expand(H, mallocng_purpose.list_at)
+  have lo: L in omega by arith(hl)
+  have mo: m in omega by simp(hm)
+  have pho: phead in omega by simp(hp)
+  have mb0 mw0 mw8 mm ma := rewrite(hlk, mp(all_elim(el, {k}), hk, hkl))
+  have bm: bits_of_int(64, m) = m by defs(simp(hm), bits_of_int, pow2)
+  have mwa := rewrite(bm, mw0)
+  have mwb := rewrite(bm, mw8)
+  have bm8: bits_add(64, m, 8) = int_add(m, 8) by defs(arith(mo, mb0), bits_add, bits_of_int, pow2)
+  have _ ws0 := apply(mp.list_rd[vm := vm, objs := objs, phead := phead, l := l, i := k], hb, hp, hl, H)
+  have rn0 rp0 := mp(ws0, hk, hkl)
+  have rn := rewrite(hlk, rn0)
+  have rp := rewrite(hlk, rp0)
+  have ino: IN in omega by arith(hk, lo, hkl)
+  have inl: int_lt(IN, L) by arith(hk, lo, hkl)
+  have no := apply(at_type[l := l, t := omega, i := IN], hl, ino, inl)
+  have nb nw0 _ nm na := mp(all_elim(el, {IN}), ino, inl)
+  have nlt: int_lt(N, 18446744073709551616) by arith(nb)
+  have eN: mallocng_specs.mnext(vm, m) = N by defs(simp(bm8, rn, no, nlt), mallocng_specs.mnext, mallocng_specs.rd64, bits_of_int, pow2)
+  have al8m: mallocng_specs.al8(m) by defs(mm, mallocng_specs.al8)
+  have pm1: !(phead = m) by arith(ma, mo, pho)
+  have pm2: !(phead = int_add(m, 8)) by arith(ma, mo, pho)
+  // alone: its own successor
+  have a1: L = 1 -> mallocng_specs.mnext(vm, m) = m proof
+    assume h
+    have k0: k = 0 by arith(h, hk, hkl, lo)
+    have i0: IN = 0 by arith(h, hk, lo)
+    have e: N = m by simp(i0, rewrite(k0, hlk))
+    show := trans(eN, e)
+  qed
+  // with others: its neighbours' links apart from its own and the head word
+  have a2: !(L = 1) -> !(mallocng_specs.mnext(vm, m) = m) &&
+      ((((((((mallocng_specs.word_ok(vm, objs, mallocng_specs.mprev(vm, m), 8) && mallocng_specs.word_ok(vm, objs, mallocng_specs.mnext(vm, m), 0)) &&
+        mallocng_specs.al8(mallocng_specs.mprev(vm, m))) && mallocng_specs.al8(mallocng_specs.mnext(vm, m))) && !(mallocng_specs.mprev(vm, m) = m)) &&
+        !(int_add(mallocng_specs.mprev(vm, m), 8) = m)) && !(mallocng_specs.mnext(vm, m) = int_add(m, 8))) && !(int_add(mallocng_specs.mprev(vm, m), 8) = phead)) &&
+        !(mallocng_specs.mnext(vm, m) = phead)) && !(int_add(mallocng_specs.mprev(vm, m), 8) = mallocng_specs.mnext(vm, m)) proof
+    assume h
+    have h2: int_le(2, L) by arith(h, hk, hkl, lo)
+    have ipk ink _ := apply(mp.nb_idx[L := L, k := k], lo, hk, h2, hkl)
+    have ipo: IP in omega by arith(hk, lo, h2)
+    have ipl: int_lt(IP, L) by arith(hk, lo, h2)
+    have po := apply(at_type[l := l, t := omega, i := IP], hl, ipo, ipl)
+    have pb _ pw8 pm pa := mp(all_elim(el, {IP}), ipo, ipl)
+    have plt: int_lt(P, 18446744073709551616) by arith(pb)
+    have eP: mallocng_specs.mprev(vm, m) = P by defs(simp(rp, po, plt), mallocng_specs.mprev, mallocng_specs.rd64, bits_of_int, pow2)
+    have bp: bits_of_int(64, P) = P by defs(simp(po, plt), bits_of_int, pow2)
+    have bn: bits_of_int(64, N) = N by defs(simp(no, nlt), bits_of_int, pow2)
+    have pw := rewrite(bp, pw8)
+    have nw := rewrite(bn, nw0)
+    have pmd := rewrite(hlk, mp(all_elim(ap, {IP}, {k}), taut(ipo, hk), taut(ipl, hkl, ipk)))
+    have nmd := rewrite(hlk, mp(all_elim(ap, {IN}, {k}), taut(ino, hk), taut(inl, hkl, ink)))
+    // P and N: the same element, or apart
+    have qpn: P = N || int_le(int_add(P, 16), N) || int_le(int_add(N, 16), P) proof
+      have b1: IP = IN -> P = N by simp()
+      have b2: !(IP = IN) -> int_le(int_add(P, 16), N) || int_le(int_add(N, 16), P) proof
+        assume hne
+        show := mp(all_elim(ap, {IP}, {IN}), taut(ipo, ino), taut(ipl, inl, hne))
+      qed
+      show by taut(b1, b2)
+    qed
+    have f1: mallocng_specs.al8(P) by defs(pm, mallocng_specs.al8)
+    have f2: mallocng_specs.al8(N) by defs(nm, mallocng_specs.al8)
+    have f3: !(P = m) by arith(pmd, po, mo)
+    have f4: !(int_add(P, 8) = m) by arith(pmd, po, mo)
+    have f5: !(N = int_add(m, 8)) by arith(nmd, no, mo)
+    have f6: !(int_add(P, 8) = phead) by arith(pa, po, pho)
+    have f7: !(N = phead) by arith(na, no, pho)
+    have f8: !(int_add(P, 8) = N) by arith(qpn, po, no)
+    have f9: !(N = m) by arith(nmd, no, mo)
+    show by simp(eN, eP, pw, nw, f1, f2, f3, f4, f5, f6, f7, f8, f9)
+  qed
+  have tl: !(mallocng_specs.mnext(vm, m) = m) ->
+      ((((((((mallocng_specs.word_ok(vm, objs, mallocng_specs.mprev(vm, m), 8) && mallocng_specs.word_ok(vm, objs, mallocng_specs.mnext(vm, m), 0)) &&
+        mallocng_specs.al8(mallocng_specs.mprev(vm, m))) && mallocng_specs.al8(mallocng_specs.mnext(vm, m))) && !(mallocng_specs.mprev(vm, m) = m)) &&
+        !(int_add(mallocng_specs.mprev(vm, m), 8) = m)) && !(mallocng_specs.mnext(vm, m) = int_add(m, 8))) && !(int_add(mallocng_specs.mprev(vm, m), 8) = phead)) &&
+        !(mallocng_specs.mnext(vm, m) = phead)) && !(int_add(mallocng_specs.mprev(vm, m), 8) = mallocng_specs.mnext(vm, m)) by taut(a1, a2)
+  have dp: mallocng_specs.dequeue_pre(vm, objs, phead, m) by defs(taut(hok, mwa, mwb, hal, al8m, pm1, pm2, tl), mallocng_specs.dequeue_pre)
+  have io: seq_len(l) = 1 <-> mallocng_specs.mnext(vm, m) = m by taut(a1, a2)
+  show by taut(dp, io)
+qed
+
+// dequeue's effect on the list at *phead holding only m: the list empty,
+// m's links cleared, nothing else written
+theorem mp.dq_list1(vm, objs, phead, m, l, k): vm in x86_64_linux.Vm -> app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> m in bits(64) ->
+  l in list_type(omega) -> k in omega -> int_lt(k, seq_len(l)) -> seq_len(l) = 1 -> app(l, k) = m ->
+  mallocng_purpose.list_at(vm, objs, phead, l) ->
+  ((mallocng_purpose.list_at(mallocng_specs.dequeue_vm(vm, phead, m), objs, phead, mallocng_purpose.rm_at(l, k)) &&
+     mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), m) = 0) && mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), bits_add(64, m, 8)) = 0) &&
+  mallocng_purpose.links_only(vm, mallocng_specs.dequeue_vm(vm, phead, m), phead, l)
+proof
+  assume hvm hb hp hm hl hk hkl h1 hlk H
+  let L := seq_len(l)
+  let N := mallocng_specs.mnext(vm, m)
+  have hok hal _ el ap := expand(H, mallocng_purpose.list_at)
+  have lo: L in omega by arith(hl)
+  have mo: m in omega by simp(hm)
+  have pho: phead in omega by simp(hp)
+  have _ phl0 .. := expand(hok, mallocng_specs.word_ok)
+  have phl: int_le(int_add(phead, 8), 18446744073709551616) by arith(phl0, pho)
+  have mb0 _ _ _ ma := rewrite(hlk, mp(all_elim(el, {k}), hk, hkl))
+  have mb: int_le(int_add(m, 16), 18446744073709551616) by arith(mb0)
+  have bm8: bits_add(64, m, 8) = int_add(m, 8) by defs(arith(mo, mb), bits_add, bits_of_int, pow2)
+  have m8b: int_add(m, 8) in bits(64) by simp(mo, (int_lt(int_add(m, 8), 18446744073709551616) by arith(mb)))
+  have zbits: 0 in bits(64) by simp()
+  have _ io := apply(mp.dq_pre[vm := vm, objs := objs, phead := phead, m := m, l := l, k := k], hb, hp, hm, hl, hk, hkl, hlk, H)
+  have nm: N = m by taut(io, h1)
+  // dequeue_vm of m alone: the head word cleared, then m's links
+  have nn: !!(N = m) by taut(nm)
+  have nc: !(!(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(vm, phead, 0), phead) = m) by taut(nn)
+  have dl: mallocng_specs.dq_links(vm, phead, m) = mallocng_specs.wr64(vm, phead, 0)
+    by defs(mp(tr.ite_f[c := !(N = m), a := mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, mallocng_specs.mprev(vm, m), 8), N), N, mallocng_specs.mprev(vm, m)),
+      b := mallocng_specs.wr64(vm, phead, 0)], nn), mallocng_specs.dq_links)
+  have dh: mallocng_specs.dq_head(mallocng_specs.wr64(vm, phead, 0), vm, phead, m) = mallocng_specs.wr64(vm, phead, 0)
+    by defs(mp(tr.ite_f[c := !(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(vm, phead, 0), phead) = m, a := mallocng_specs.wr64(mallocng_specs.wr64(vm, phead, 0), phead, N),
+      b := mallocng_specs.wr64(vm, phead, 0)], nc), mallocng_specs.dq_head)
+  let V1 := mallocng_specs.wr64(vm, phead, 0)
+  let V2 := mallocng_specs.wr64(V1, int_add(m, 8), 0)
+  let V3 := mallocng_specs.wr64(V2, m, 0)
+  have d0: mallocng_specs.dequeue_vm(vm, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(vm, phead, m), vm, phead, m), bits_add(64, m, 8), 0), m, 0)
+    by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(vm, phead, m), vm, phead, m), bits_add(64, m, 8), 0), m, 0)}), mallocng_specs.dequeue_vm)
+  have e3: mallocng_specs.dequeue_vm(vm, phead, m) = V3 := rewrite(bm8, rewrite(dh, rewrite(dl, d0)))
+  have tb1 := apply(mp.wr64_typed[V := vm, c := phead, v := 0], hb)
+  have tb2 := apply(mp.wr64_typed[V := V1, c := int_add(m, 8), v := 0], tb1)
+  have tb3 := apply(mp.wr64_typed[V := V2, c := m, v := 0], tb2)
+  have vf: is_fun(vm) by simp(hvm)
+  have vd: "bytes" in dom(vm) by simp(hvm)
+  have vs := apply(fn_update_same[f := vm, k := "bytes"], vf, vd)
+  have fu3 := apply(mp.wr64_only[V := V2, c := m, v := 0, W := vm], apply(mp.wr64_only[V := V1, c := int_add(m, 8), v := 0, W := vm],
+    apply(mp.wr64_only[V := vm, c := phead, v := 0, W := vm], vs)))
+  // the words: all three cleared
+  have hd: gimple.bytes_at(V3, phead, 8) = 0 :=
+    trans(apply(mp.w64_out[V := V2, c := m, v := 0, w := phead], hm, pho, phl, arith(mb), arith(ma, mo, pho)),
+      trans(apply(mp.w64_out[V := V1, c := int_add(m, 8), v := 0, w := phead], m8b, pho, phl, arith(mb), arith(ma, mo, pho)),
+        apply(mp.rd_at8[vm := vm, c := phead, v := 0], hb, hp, zbits)))
+  have z0: gimple.bytes_at(V3, m, 8) = 0 := apply(mp.rd_at8[vm := V2, c := m, v := 0], tb2, hm, zbits)
+  have z8: gimple.bytes_at(V3, int_add(m, 8), 8) = 0 :=
+    trans(apply(mp.w64_out[V := V2, c := m, v := 0, w := int_add(m, 8)], hm, simp(mo), arith(mb), arith(mb), arith(mo)),
+      apply(mp.rd_at8[vm := V1, c := int_add(m, 8), v := 0], tb1, m8b, zbits))
+  have q0: mallocng_specs.rd64(V3, m) = 0 by defs(simp(z0), mallocng_specs.rd64, bits_of_int, pow2)
+  have q8: mallocng_specs.rd64(V3, bits_add(64, m, 8)) = 0 by defs(simp(bm8, z8), mallocng_specs.rd64, bits_of_int, pow2)
+  // the list: empty
+  let R := mallocng_purpose.rm_at(l, k)
+  have dl2 rl _ := apply(mp.rm_at_app[l := l, k := k, j := 0], hl, hk, hkl)
+  have r0: seq_len(R) = 0 by arith(dl2, h1)
+  have wo: all p. all off. mallocng_specs.word_ok(V3, objs, p, off) = mallocng_specs.word_ok(vm, objs, p, off) proof
+    fix p off
+    have f := all_elim(ms.f_word_ok, {V3}, {app(vm, "bytes")}, {objs}, {p}, {off})
+    show := sym(rewrite(fu3, f))
+  qed
+  have hok3: mallocng_specs.word_ok(V3, objs, phead, 0) by simp(all_elim(wo, {phead}, {0}), hok)
+  have el3: all x0. x0 in omega -> int_lt(x0, seq_len(R)) ->
+      ((((int_le(int_add(app(R, x0), 16), int_pow(2, 64)) && mallocng_specs.word_ok(V3, objs, bits_of_int(64, app(R, x0)), 0)) &&
+        mallocng_specs.word_ok(V3, objs, bits_of_int(64, app(R, x0)), 8)) && int_mod(app(R, x0), 8) = 0) &&
+       (int_le(int_add(phead, 8), app(R, x0)) || int_le(int_add(app(R, x0), 16), phead))) proof
+    fix x0
+    assume hx hxl
+    have f: false by arith(hx, hxl, r0)
+    show by taut(f)
+  qed
+  have ap3: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(R)) && int_lt(x1, seq_len(R))) && !(x0 = x1) ->
+      int_le(int_add(app(R, x0), 16), app(R, x1)) || int_le(int_add(app(R, x1), 16), app(R, x0)) proof
+    fix x0 x1
+    assume ho hq
+    have x0o: x0 in omega by taut(ho)
+    have x0l: int_lt(x0, seq_len(R)) by taut(hq)
+    have f: false by arith(x0o, x0l, r0)
+    show by taut(f)
+  qed
+  have hd3: gimple.bytes_at(V3, phead, 8) = ite(seq_len(R) = 0, 0, app(R, 0)) by simp(hd, r0)
+  have ws3: all i. i in omega -> int_lt(i, seq_len(R)) ->
+      gimple.bytes_at(V3, int_add(app(R, i), 8), 8) = app(R, int_mod(int_add(i, 1), seq_len(R))) &&
+      gimple.bytes_at(V3, app(R, i), 8) = app(R, int_mod(int_sub(int_add(i, seq_len(R)), 1), seq_len(R))) proof
+    fix i
+    assume hi hil
+    have f: false by arith(hi, hil, r0)
+    show by taut(f)
+  qed
+  have la := apply(mp.list_mk[vm := V3, objs := objs, phead := phead, l := R], tb3, hp, rl, hok3, hal, el3, ap3, hd3, ws3)
+  // no byte but the head word and m's links written
+  have lo3: all x0. x0 in omega -> (int_lt(x0, int_pow(2, 64)) && !(int_le(phead, x0) && int_lt(x0, int_add(phead, 8)))) &&
+      (all x1. x1 in omega -> int_lt(x1, L) -> !(int_le(app(l, x1), x0) && int_lt(x0, int_add(app(l, x1), 16)))) ->
+      app(app(V3, "bytes"), bits_of_int(64, x0)) = app(app(vm, "bytes"), bits_of_int(64, x0)) proof
+    fix x0
+    assume hx hq
+    have xl: int_lt(x0, 18446744073709551616) by arith(hq)
+    have xp: !(int_le(phead, x0) && int_lt(x0, int_add(phead, 8))) by taut(hq)
+    have xa: all x1. x1 in omega -> int_lt(x1, L) -> !(int_le(app(l, x1), x0) && int_lt(x0, int_add(app(l, x1), 16))) by taut(hq)
+    have xb: x0 in bits(64) by simp(hx, xl)
+    have bx: bits_of_int(64, x0) = x0 by defs(simp(hx, xl), bits_of_int, pow2)
+    have om := rewrite(hlk, mp(all_elim(xa, {k}), hk, hkl))
+    have b3 := apply(mp.wb_out[V := V2, c := m, v := 0, x := x0], xb, hm, arith(mb), arith(om, hx, mo))
+    have b2 := apply(mp.wb_out[V := V1, c := int_add(m, 8), v := 0, x := x0], xb, m8b, arith(mb), arith(om, hx, mo))
+    have b1 := apply(mp.wb_out[V := vm, c := phead, v := 0, x := x0], xb, hp, phl, arith(xp, hx, pho))
+    show by simp(bx, trans(b3, trans(b2, b1)))
+  qed
+  have lk: mallocng_purpose.links_only(vm, V3, phead, l) by defs(taut(fu3, lo3), mallocng_purpose.links_only)
+  have all3: ((mallocng_purpose.list_at(V3, objs, phead, R) && mallocng_specs.rd64(V3, m) = 0) && mallocng_specs.rd64(V3, bits_add(64, m, 8)) = 0) &&
+    mallocng_purpose.links_only(vm, V3, phead, l) by taut(la, q0, q8, lk)
+  show := subst({y. ((mallocng_purpose.list_at(y, objs, phead, R) && mallocng_specs.rd64(y, m) = 0) && mallocng_specs.rd64(y, bits_add(64, m, 8)) = 0) &&
+    mallocng_purpose.links_only(vm, y, phead, l)}, sym(e3), all3)
+qed
+
+// dequeue's effect is what it is for: for any list at *phead holding m
+theorem mp.dq_done(vm, objs, phead, m): vm in x86_64_linux.Vm -> app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> m in bits(64) ->
+  mallocng_purpose.dequeued(vm, mallocng_specs.dequeue_vm(vm, phead, m), objs, phead, m)
+proof
+  assume hvm hb hp hm
+  have a: all x0. all x1. x0 in list_type(omega) && x1 in omega -> (mallocng_purpose.list_at(vm, objs, phead, x0) && int_lt(x1, seq_len(x0))) && app(x0, x1) = m ->
+      ((mallocng_purpose.list_at(mallocng_specs.dequeue_vm(vm, phead, m), objs, phead, mallocng_purpose.rm_at(x0, x1)) &&
+        mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), m) = 0) && mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), bits_add(64, m, 8)) = 0) &&
+      mallocng_purpose.links_only(vm, mallocng_specs.dequeue_vm(vm, phead, m), phead, x0) proof
+    fix l k
+    assume ht hq
+    have hl: l in list_type(omega) by taut(ht)
+    have hk: k in omega by taut(ht)
+    have H: mallocng_purpose.list_at(vm, objs, phead, l) by taut(hq)
+    have hkl: int_lt(k, seq_len(l)) by taut(hq)
+    have hlk: app(l, k) = m by taut(hq)
+    have lo: seq_len(l) in omega by arith(hl)
+    have c1: seq_len(l) = 1 -> ((mallocng_purpose.list_at(mallocng_specs.dequeue_vm(vm, phead, m), objs, phead, mallocng_purpose.rm_at(l, k)) &&
+        mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), m) = 0) && mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), bits_add(64, m, 8)) = 0) &&
+        mallocng_purpose.links_only(vm, mallocng_specs.dequeue_vm(vm, phead, m), phead, l) proof
+      assume h
+      show := apply(mp.dq_list1[vm := vm, objs := objs, phead := phead, m := m, l := l, k := k], hvm, hb, hp, hm, hl, hk, hkl, h, hlk, H)
+    qed
+    have c2: !(seq_len(l) = 1) -> ((mallocng_purpose.list_at(mallocng_specs.dequeue_vm(vm, phead, m), objs, phead, mallocng_purpose.rm_at(l, k)) &&
+        mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), m) = 0) && mallocng_specs.rd64(mallocng_specs.dequeue_vm(vm, phead, m), bits_add(64, m, 8)) = 0) &&
+        mallocng_purpose.links_only(vm, mallocng_specs.dequeue_vm(vm, phead, m), phead, l) proof
+      assume h
+      have h2: int_le(2, seq_len(l)) by arith(h, hk, hkl, lo)
+      show := apply(mp.dq_list2[vm := vm, objs := objs, phead := phead, m := m, l := l, k := k], hvm, hb, hp, hm, hl, hk, hkl, h2, hlk, H)
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(a, mallocng_purpose.dequeued)
+qed
+
+// the head word of a list: its first element (0 for an empty list), for
+// whichever list is there
+theorem mp.head_is(vm, objs, phead, l): app(vm, "bytes") in fn_space(bits(64), bits(8)) -> phead in bits(64) -> l in list_type(omega) ->
+  mallocng_purpose.list_at(vm, objs, phead, l) ->
+  mallocng_specs.rd64(vm, phead) = ite(seq_len(l) = 0, 0, app(l, 0)) && mallocng_purpose.is_head(vm, objs, phead, mallocng_specs.rd64(vm, phead))
+proof
+  assume hb hp hl H
+  have bo bl := mp(all_elim(g.bytes_bound, {vm}, {phead}, {8}), hb, simp())
+  have rv: mallocng_specs.rd64(vm, phead) = gimple.bytes_at(vm, phead, 8) by defs(simp(bo, bl), mallocng_specs.rd64, bits_of_int, pow2)
+  have hd _ := apply(mp.list_rd[vm := vm, objs := objs, phead := phead, l := l, i := 0], hb, hp, hl, H)
+  have ih: all x0. x0 in list_type(omega) -> mallocng_purpose.list_at(vm, objs, phead, x0) -> mallocng_specs.rd64(vm, phead) = ite(seq_len(x0) = 0, 0, app(x0, 0)) proof
+    fix l2
+    assume hl2 H2
+    have hd2 _ := apply(mp.list_rd[vm := vm, objs := objs, phead := phead, l := l2, i := 0], hb, hp, hl2, H2)
+    show := trans(rv, hd2)
+  qed
+  show by defs(taut(trans(rv, hd), ih), mallocng_purpose.is_head)
+qed
+

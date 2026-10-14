@@ -215,88 +215,39 @@ proof
   show by taut(was, wasnt)
 qed
 
-// C2 of dequeue: its readable GIMPLE refines its spec, on every world
-theorem ms.dequeue_c2: all phead m. phead in bits(64) -> m in bits(64) ->
-  refines(c_src_malloc_mallocng_malloc.dequeue(phead, m), mallocng_specs.dequeue_spec(phead, m), abi.World)
-proof
-  fix phead m
-  assume hph hm
-  have g: all s o. s in abi.World -> runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) -> runs(mallocng_specs.dequeue_spec(phead, m), s, o) proof
-    fix s o
-    assume hw hr
-    let V0 := app(s, "vm")
-    let N := mallocng_specs.mnext(V0, m)
-    let M8 := bits_add(64, m, 8)
-    have pu := apply(g.runs_univ, hr)
-    have hu: s in univ(1) by simp(pu)
-    let SPEC := mallocng_specs.dequeue_spec(phead, m)
-    have np: !mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> runs(SPEC, s, o) proof
-      assume hn
-      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.dequeue_pre, mallocng_specs.dequeue_vm))
-    qed
-    have yp: mallocng_specs.dequeue_pre(V0, app(s, "objs"), phead, m) -> runs(SPEC, s, o) proof
-        assume hp
-        have alone: m = N -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
-          assume e
-          have oe := apply(ms.dq_alone, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
-          have nn: !!(N = m) by taut(e)
-          have nc: !(!(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m) by taut(nn)
-          have dl: mallocng_specs.dq_links(V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
-            by defs(mp(tr.ite_f[c := !(N = m), a := mallocng_specs.wr64(mallocng_specs.wr64(V0, bits_add(64, mallocng_specs.mprev(V0, m), 8), N), N, mallocng_specs.mprev(V0, m)),
-              b := mallocng_specs.wr64(V0, phead, 0)], nn), mallocng_specs.dq_links)
-          have dh: mallocng_specs.dq_head(mallocng_specs.wr64(V0, phead, 0), V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
-            by defs(mp(tr.ite_f[c := !(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m, a := mallocng_specs.wr64(mallocng_specs.wr64(V0, phead, 0), phead, N),
-              b := mallocng_specs.wr64(V0, phead, 0)], nc), mallocng_specs.dq_head)
-          have d0: mallocng_specs.dequeue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)
-            by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)}), mallocng_specs.dequeue_vm)
-          have dv := rewrite(dh, rewrite(dl, d0))
-          show := rewrite(sym(dv), oe)
-        qed
-        have linked: !(m = N) -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
-          assume e
-          show := apply(ms.dq_linked, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
-        qed
-        have oe: o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) by taut(alone, linked)
-        show by simp(oe, pu, hp, keep(abi.overflow, mallocng_specs.dequeue_pre, mallocng_specs.dequeue_vm))
-    qed
-    show by taut(np, yp)
-  qed
-  show g
-qed
-
-// ----------------------------------------------------------------------
-//  dequeue_head: from dequeue's contract
-
-// dequeue as a C function value: its register wrapper refines the spec's
-theorem ms.dequeue_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
-  runs(app(c_src_malloc_mallocng_malloc.dequeue_fun, regs), s, o) -> runs(app(mallocng_specs.dequeue_spec_fun, regs), s, o)
-proof
-  have hm: all regs. refines(c_src_malloc_mallocng_malloc.dequeue(bits_of_int(64, app(regs, 0)), bits_of_int(64, app(regs, 1))), mallocng_specs.dequeue_spec(bits_of_int(64, app(regs, 0)), bits_of_int(64, app(regs, 1))), abi.World) proof
-    fix regs
-    show := mp(all_elim(ms.dequeue_c2, {bits_of_int(64, app(regs, 0))}, {bits_of_int(64, app(regs, 1))}), simp(), simp())
-  qed
-  show by defs(apply(g.fun_void[n := 2], hm), c_src_malloc_mallocng_malloc.dequeue_fun, mallocng_specs.dequeue_spec_fun)
-qed
-
-// dequeue's contract at a call dequeue(phead, m) (its spec's register
-// wrapper, on a world where its precondition holds): an overflow (the
-// memory any), or the return with dequeue's effect
-theorem ms.dqs_q: all regs s phead m o2. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+// dequeue's run, its precondition holding: its effect `dequeue_vm` (m
+// alone: the head word cleared, then m's links)
+theorem ms.dq_run: all phead m s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
   mallocng_specs.dequeue_pre(app(s, "vm"), app(s, "objs"), phead, m) ->
-  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, phead)), seq_one(gimple.arg(64, m)))) ->
-  runs(app(mallocng_specs.dequeue_spec_fun, regs), s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
-  (ex r. o2 = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(app(s, "vm"), phead, m)), r))
+  runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(app(s, "vm"), phead, m)), empty)
 proof
-  fix regs s phead m o2
-  assume hp hm hw hu hpre hr h
-  have rl rn r0 r1 := apply(gc.regs2, hp, hm, hr)
-  have lo: seq_len(regs) in omega by simp(rl)
-  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
-  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
-  rsimp only, mallocng_specs.dequeue_spec_fun, app_fn_build, ra in h
-  have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(s, "vm")}, simp(expand(hw, abi.World)))
-  show by simp(h, r0, r1, rn, hp, hm, hpre, vv, keep(mallocng_specs.dequeue_pre, mallocng_specs.dequeue_vm))
+  fix phead m s o
+  assume hph hm hw hu hp hr
+  let V0 := app(s, "vm")
+  let N := mallocng_specs.mnext(V0, m)
+  let M8 := bits_add(64, m, 8)
+  have alone: m = N -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+    assume e
+    have oe := apply(ms.dq_alone, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
+    have nn: !!(N = m) by taut(e)
+    have nc: !(!(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m) by taut(nn)
+    have dl: mallocng_specs.dq_links(V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
+      by defs(mp(tr.ite_f[c := !(N = m), a := mallocng_specs.wr64(mallocng_specs.wr64(V0, bits_add(64, mallocng_specs.mprev(V0, m), 8), N), N, mallocng_specs.mprev(V0, m)),
+        b := mallocng_specs.wr64(V0, phead, 0)], nn), mallocng_specs.dq_links)
+    have dh: mallocng_specs.dq_head(mallocng_specs.wr64(V0, phead, 0), V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
+      by defs(mp(tr.ite_f[c := !(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m, a := mallocng_specs.wr64(mallocng_specs.wr64(V0, phead, 0), phead, N),
+        b := mallocng_specs.wr64(V0, phead, 0)], nc), mallocng_specs.dq_head)
+    have d0: mallocng_specs.dequeue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)
+      by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)}), mallocng_specs.dequeue_vm)
+    have dv := rewrite(dh, rewrite(dl, d0))
+    show := rewrite(sym(dv), oe)
+  qed
+  have linked: !(m = N) -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+    assume e
+    show := apply(ms.dq_linked, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
+  qed
+  show by taut(alone, linked)
 qed
 
 // (memories after words written: memories)
@@ -335,120 +286,6 @@ proof
   have e1 e2 := apply(ms.wr_vm, {H}, {bits_add(64, m, 8)}, {0}, h1, h2, hm8)
   have f1 f2 := apply(ms.wr_vm, {mallocng_specs.wr64(H, bits_add(64, m, 8), 0)}, {m}, {0}, e1, e2, hm)
   show conj(f1, f2)
-qed
-
-// dequeue_head's contract from dequeue's: for every callee refining
-// dequeue's spec (as a C function value), dequeue_head's readable GIMPLE
-// refines its spec
-theorem ms.dequeue_head_c2: all phead g. phead in bits(64) ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g, regs), s, o) -> runs(app(mallocng_specs.dequeue_spec_fun, regs), s, o)) ->
-  refines(c_src_malloc_mallocng_malloc.dequeue_head(phead, g), mallocng_specs.dequeue_head_spec(phead), abi.World)
-proof
-  fix phead g
-  assume hph hg
-  show proof
-    fix s o
-    assume hw hr
-    let V0 := app(s, "vm")
-    let SPEC := mallocng_specs.dequeue_head_spec(phead)
-    let M := mallocng_specs.rd64(V0, phead)
-    let DV := mallocng_specs.dequeue_vm(V0, phead, M)
-    let OVF := exc_val("stack_overflow", empty)
-    have pu := apply(g.runs_univ, hr)
-    have hu: s in univ(1) by simp(pu)
-    have vV vfun vdom .. := apply(ms.world_parts, hw)
-    have ss: fn_update(s, "vm", V0) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
-    have np: !mallocng_specs.dequeue_head_pre(V0, app(s, "objs"), app(s, "fs_base"), phead) -> runs(SPEC, s, o) proof
-      assume hn
-      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.dequeue_head_pre, mallocng_specs.dequeue_head_vm, mallocng_specs.rd64))
-    qed
-    have yp: mallocng_specs.dequeue_head_pre(V0, app(s, "objs"), app(s, "fs_base"), phead) -> runs(SPEC, s, o) proof
-      assume hp
-      have kh hcall := expand(hp, mallocng_specs.dequeue_head_pre)
-      // (the spec's outcomes: an overflow, any memory; the head returned, dequeued)
-      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-        fix v
-        assume hv
-        have vu := apply(x86.vm_univ, hv)
-        have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
-        show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.dequeue_head_pre, mallocng_specs.dequeue_head_vm, mallocng_specs.rd64))
-      qed
-      // the run: the locals' choices, then *phead loaded
-      have ne64: ex x. x in bits(64) by ex_intro({0}, simp())
-      obtain x2, h2b h2l from apply(g.any_e, ne64, apply(g.runs_elim, hr))
-      have l2 := apply(g.letin_e, h2l)
-      obtain x4, h4b h4l from apply(g.any_e, ne64, l2)
-      have l4 := apply(g.letin_e, h4l)
-      have zp: bits_add(64, phead, 0) = phead by simp(hph)
-      have ld := rewrite(zp, apply(ms.ld_det, {s}, {phead}, {0}, hu, hph, simp(), kh))
-      have l6 := apply(g.bind_inv, l4, ld)
-      obtain x9, hd he from apply(g.letin_e, l6)
-      // no head: nothing done, 0 returned
-      have z: M = 0 -> runs(SPEC, s, o) proof
-        assume e0
-        have x9e: x9 = ok(pair(s, pair(M, x4)), empty) by simp(hd, e0)
-        have oe: o = ok(s, M) by simp(rewrite(x9e, he))
-        have dv: mallocng_specs.dequeue_head_vm(V0, phead) = V0 by rsimp(mallocng_specs.dequeue_head_vm, e0)
-        show by simp(pu, oe, hp, dv, ss, e0, keep(abi.overflow, mallocng_specs.dequeue_head_pre, mallocng_specs.dequeue_head_vm, mallocng_specs.rd64))
-      qed
-      // a head: dequeued by the call (its contract: dequeue's), returned
-      have nz: !(M = 0) -> runs(SPEC, s, o) proof
-        assume hn
-        have dpre ths := mp(hcall, hn)
-        have b := apply(g.pick, hd, hn, (!!!(M = 0) by taut(hn)))
-        have mb: M in bits(64) by defs(simp(), mallocng_specs.rd64)
-        // the call: dequeue's contract -- an overflow, or M dequeued
-        have vu0 := apply(x86.vm_univ, vV)
-        have dv1 dv2 := apply(ms.dqvm_vm, vV, vu0, hph, mb)
-        have qa: all regs o2. gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, phead)), seq_one(gimple.arg(64, M)))) -> runs(app(mallocng_specs.dequeue_spec_fun, regs), s, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", DV), r)) proof
-          fix regs o2
-          assume hro h2
-          show := apply(ms.dqs_q, hph, mb, hw, hu, dpre, hro, h2)
-        qed
-        have cc := apply(gc.contract_call, ths, hw, dv1, apply(gc.regs2_ex, hph, mb), arith(), hg, qa, b)
-        // (the rest: M returned)
-        have c1: (ex v. v in x86_64_linux.Vm && x9 = exc(pair(fn_update(s, "vm", v), pair(M, x4)), pair("raise", OVF))) -> runs(SPEC, s, o) proof
-          assume h
-          obtain v, hv hx from h
-          have oe: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, he))
-          show := rewrite(sym(oe), mp(all_elim(sov, {v}), hv))
-        qed
-        have c2: (ex r. x9 = ok(pair(fn_update(s, "vm", DV), pair(M, x4)), empty)) -> runs(SPEC, s, o) proof
-          assume h
-          obtain r, hx from h
-          have oe: o = ok(fn_update(s, "vm", DV), M) by simp(rewrite(hx, he))
-          have dv: mallocng_specs.dequeue_head_vm(V0, phead) = DV by rsimp(mallocng_specs.dequeue_head_vm, hn)
-          have sok: runs(SPEC, s, ok(fn_update(s, "vm", DV), M)) by simp(pu, hp, dv, dv2, mb, keep(abi.overflow, mallocng_specs.dequeue_head_pre, mallocng_specs.dequeue_head_vm, mallocng_specs.rd64, mallocng_specs.dequeue_vm))
-          show := rewrite(sym(oe), sok)
-        qed
-        show by taut(cc, c1, c2)
-      qed
-      show by taut(z, nz)
-    qed
-    show by taut(np, yp)
-  qed
-qed
-
-// ... with musl's dequeue as the callee
-theorem ms.dequeue_head_c2_dq: all phead. phead in bits(64) ->
-  refines(c_src_malloc_mallocng_malloc.dequeue_head(phead, c_src_malloc_mallocng_malloc.dequeue_fun), mallocng_specs.dequeue_head_spec(phead), abi.World)
-proof
-  fix phead
-  assume hph
-  show := mp(all_elim(ms.dequeue_head_c2, {phead}, {c_src_malloc_mallocng_malloc.dequeue_fun}), hph, ms.dequeue_fun_c2)
-qed
-
-theorem ms.dequeue_head_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
-  runs(app(c_src_malloc_mallocng_malloc.dequeue_head_fun(c_src_malloc_mallocng_malloc.dequeue_fun()), regs), s, o) -> runs(app(mallocng_specs.dequeue_head_spec_fun, regs), s, o)
-proof
-  have hm: all regs. refines(c_src_malloc_mallocng_malloc.dequeue_head(bits_of_int(64, app(regs, 0)), c_src_malloc_mallocng_malloc.dequeue_fun), mallocng_specs.dequeue_head_spec(bits_of_int(64, app(regs, 0))), abi.World) proof
-    fix regs
-    show := mp(all_elim(ms.dequeue_head_c2_dq, {bits_of_int(64, app(regs, 0))}), simp())
-  qed
-  show by defs(apply(g.fun_res[n := 1, w := 64], hm), c_src_malloc_mallocng_malloc.dequeue_head_fun, mallocng_specs.dequeue_head_spec_fun, letin)
 qed
 
 // ----------------------------------------------------------------------

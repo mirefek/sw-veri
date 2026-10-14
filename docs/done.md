@@ -548,3 +548,17 @@ item is a short summary of finished work; details are in the files named.
   callee gives its memory by a property (`gc.contract_callV`), a
   contract's run inverted (`ct.contract_inv`). The memory-level specs,
   C2s and compositions of set_size, get_stride and enframe retired.
+- **dequeue and dequeue_head at the meaning level** (`mp.dq`, `mp.dqh`,
+  `mp.dq_implements`, `mp.dqh_implements`): a list at a head word
+  (`list_at`: cyclic through the links, its elements' words accessible,
+  aligned, apart); dequeue takes m out of any such list holding it, the
+  others' order kept (`rm_at`), m's links cleared, no byte but the head
+  word and the links written (`dequeued`, `links_only`); dequeue_head
+  takes the first (0 for an empty list, nothing written). The list read
+  and built word by word (`mp.list_rd`, `mp.list_mk`); its index
+  arithmetic after a removal (`mp.rm_next`, `mp.rm_prev`); dequeue's
+  precondition from the list (`mp.dq_pre`), its effect on it
+  (`mp.dq_list1`, `mp.dq_list2`, `mp.dq_done`); dequeue's run an effect
+  summary (`ms.dq_run`); its callers' rule `mp.dq_q`. Core:
+  `nat_mem_lt`. The memory-level specs, C2s and compositions of dequeue
+  and dequeue_head retired.
