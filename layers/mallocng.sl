@@ -251,6 +251,15 @@ pred metas_partition(A: Abs) =
      !is_used(A, meta_at(A.areas[len(A.areas) - 1], j)) &&
      (all i: nat. i < len(A.free_metas) -> A.free_metas[i] != meta_at(A.areas[len(A.areas) - 1], j)))
 
+// the reserved-size encoding (`set_size`) of the n bytes at p in a slot
+// ending at end: the r = end - p - n bytes after them recorded in the top 3
+// bits of the header byte at p - 3 -- r, or 5 for r >= 5, the count then in
+// the 32-bit word at end - 4 and a 0 byte before it; the first of them 0
+pred size_ok(m: Mem, p: nat, end: nat, n: nat) =
+  (end - p - n >= 5 -> b8(m, p - 3) / 32 = 5 && rd(m, end - 4, 4) = end - p - n && b8(m, end - 5) = 0) &&
+  (end - p - n < 5 -> b8(m, p - 3) / 32 = end - p - n) &&
+  (end - p - n > 0 -> b8(m, p + n) = 0)
+
 // the slot of a client block or nested group starting at p (`enframe`): the
 // in-band header before p, the reserved-size encoding up to the slot end
 pred frame_ok(m: Mem, v: MetaV, i: nat, p: nat, n: nat, tag: nat) =
@@ -261,12 +270,7 @@ pred frame_ok(m: Mem, v: MetaV, i: nat, p: nat, n: nat, tag: nat) =
   (p > slot_start(v, i) ->
      rd(m, slot_start(v, i) - 2, 2) = (p - slot_start(v, i)) / UNIT && b8(m, slot_start(v, i) - 3) = 7 * 32) &&
   (tag = 6 -> b8(m, p - 3) / 32 = 6) &&
-  (tag != 6 ->
-     (slot_end(v, i) - p - n >= 5 ->
-        b8(m, p - 3) / 32 = 5 && rd(m, slot_end(v, i) - 4, 4) = slot_end(v, i) - p - n &&
-        b8(m, slot_end(v, i) - 5) = 0) &&
-     (slot_end(v, i) - p - n < 5 -> b8(m, p - 3) / 32 = slot_end(v, i) - p - n) &&
-     b8(m, p + n) = 0 && b8(m, slot_end(v, i)) = 0) &&
+  (tag != 6 -> size_ok(m, p, slot_end(v, i), n) && b8(m, slot_end(v, i)) = 0) &&
   // (within its class's slot, as get_meta checks: a group of one slot
   // mapped on its own has a larger stride)
   (v.sizeclass < 48 -> p - storage(v) < UNIT * size_classes[v.sizeclass] * (i + 1))

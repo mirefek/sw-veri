@@ -515,3 +515,10 @@ item is a short summary of finished work; details are in the files named.
   compositions (`gsitc/gmtc/aztc/gsit.composed`); their effect
   summaries (`ms.gm_run`, `ms.az_run`) and get_stride's spec (enframe's
   C2 calls it) stay.
+- **set_size at the meaning level** (`mp.ss`, `mp.ss_implements`): the
+  slack after the n bytes recorded in the invariant's own encoding
+  (`size_ok`, now a part of `frame_ok`), the slot index bits kept, no
+  other byte written. Its effect read as the encoding (`mp.ss_post`);
+  reading memory after stores (`mp.st_out`, `mp.st_at`, `mp.rd_out`,
+  `mp.rd_at1`, `mp.rd_at4`, `mp.wr8_out` ...); a contract ending without a
+  value (`ct.contract_done`).

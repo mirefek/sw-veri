@@ -1,4 +1,4 @@
-layer mallocng_purpose uses gimple, abi, mallocng
+layer mallocng_purpose uses gimple, abi, mallocng, mallocng_specs
 
 // Specs of mallocng's internal functions by their purpose: what each is
 // for in the abstract state (layers/mallocng.sl's `Abs`, a ghost of the C
@@ -13,6 +13,25 @@ layer mallocng_purpose uses gimple, abi, mallocng
 // that is.
 state MallocAbs extends Heap {
   ghost A : Abs
+}
+
+// every byte (memory as a whole, seen as the invariant sees it)
+fn all_bytes() -> Set[nat] = {a: nat | true}
+
+// set_size(p, end, n), the n bytes at p a block's (or a nested group's) in
+// a slot ending at end: the slack after them recorded (`size_ok`), the
+// header byte's low 5 bits (the slot's index) kept, no other byte written.
+// The bytes it writes accessible (`set_size_pre`, as its code writes them).
+proc[World] set_size_purpose(p: bits[64], end: bits[64], n: bits[64]) {
+  require set_size_pre(vm, objs, p, end, n)
+  either { overflow() } or {
+    let before = vm
+    havoc vm where (vm with { bytes: before.bytes }) = before &&
+      size_ok(mview(vm, all_bytes()), uint(p), uint(end), uint(n)) &&
+      bytes_at(vm, p - 3, 1) % 32 = bytes_at(before, p - 3, 1) % 32 &&
+      (all a: nat. a < 2^64 && a != uint(p) - 3 && a != uint(p) + uint(n) && !(uint(end) - 5 <= a && a < uint(end)) ->
+         vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+  }
 }
 
 // get_slot_index(p), p where a client block or a nested group starts: the
@@ -96,6 +115,12 @@ proc[MallocAbs] alloc_slot_purpose(c: Cfg, sc: bits[32], req: bits[64]) -> bits[
 }
 
 // ... as C function values (the result as GIMPLE returns it: `result`)
+fn set_size_purpose_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  set_size_purpose(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  return (any bits[64], any bits[64])
+}
+
 fn get_slot_index_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = get_slot_index_purpose(c, bits[64](args[0]))
