@@ -565,13 +565,14 @@ fn is_bouncing_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
 }
 
 // decay_bounces(sc): sc's counter, if not 0, less 1
+fn decay_vm(vm: Vm, ctx: Addr, sc: bits[32]) -> Vm =
+  if bouncing_class(sc) && bytes_at(vm, bounce_at(ctx, sc), 1) != 0 {
+    wr8(vm, bounce_at(ctx, sc), bytes_at(vm, bounce_at(ctx, sc), 1) - 1)
+  } else { vm }
+
 proc[World] decay_bounces_spec(ctx: bits[64], sc: bits[32]) {
   require bounce_pre(vm, objs, ctx, sc, true)
-  either { overflow() } or {
-    if bouncing_class(sc) && bytes_at(vm, bounce_at(ctx, sc), 1) != 0 {
-      vm := wr8(vm, bounce_at(ctx, sc), bytes_at(vm, bounce_at(ctx, sc), 1) - 1)
-    }
-  }
+  either { overflow() } or { vm := decay_vm(vm, ctx, sc) }
 }
 
 fn decay_bounces_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {

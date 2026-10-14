@@ -66,8 +66,9 @@ translation verification, the engine):
 
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`): C1 and
   C2, possibly generated.
-- Specs and C2 (C1 done): `try_avail`,
-  `alloc_slot`, `__malloc_alloc_meta`.
+- `try_avail`, `alloc_slot`, `__malloc_alloc_meta` (C1 done): specs by
+  their purpose, in the abstract state (item 2), not as memory-level
+  restatements of the code.
 - `alloc_group` (C1 by 1.0 item 1).
 - `get_nominal_size`, `record_seq`,
   `okay_to_free`, `free_group`, `nontrivial_free`.
@@ -81,8 +82,21 @@ translation verification, the engine):
 
 ## 2. The invariant and the laws
 
-- Specs of the internal functions in terms of `layers/mallocng.sl`'s
-  abstract state; the entry points' C2 against the malloc layer.
+- Specs of the internal functions by their purpose, in terms of
+  `layers/mallocng.sl`'s abstract state (`Abs`); the entry points' C2
+  against the malloc layer. E.g. try_avail: a slot of the active list's
+  head, unused before, reserved now (else 0: no group of the list with an
+  unused slot), the list the same groups; nothing else changed
+  abstractly -- musl's heuristics (which group, the masks, how many slots
+  active, the bounce counter) left free. Needs: the abstraction from
+  memory (`holds`, `mallocng.abs_unique`); the invariant with slots in
+  between (reserved by try_avail, a block only after alloc_slot).
+- The proof of such a spec: what the code does to memory computed by the
+  system (its run summarized, the callees' contracts applied, each
+  operation's definedness an obligation), not written by hand as a
+  memory-level spec; the user's proof the step from that effect to the
+  abstract one (why the invariant is kept). The written memory-level specs
+  so far (dequeue, queue, enframe, ...) are such summaries, by hand.
 - `mallocng.abs_unique` (the abstract state is determined by memory): the
   laws rest on it.
 - `musl.free_step` (free always has a step), open in
