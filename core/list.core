@@ -1,6 +1,7 @@
-// Lists: examples of `lists`, `arith` on lengths, `at` and `list_ext`.
+// Lists: examples of `lists`, `arith` on lengths, `at` and `list_ext`;
+// lists built elementwise; a predicate holding at an element of a piece.
 //
-//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/list.core
+//   slc kernel-check core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core core/list.core
 //
 // A list literal [a, b, c] is seq_one(a) ++ seq_one(b) ++ seq_one(c)
 // (`seq_concat`); `len` is `seq_len`, `l[i]` is `app(l, i)`.
@@ -49,6 +50,82 @@ proof
   have e := at({app(seq_concat(seq_one(x), l), int_add(i, 1))}, hl, hi, hlt)
   have k: int_sub(int_add(i, 1), 1) = i by arith(hi)
   show rewrite(k, e)
+qed
+
+// an element of a piece is one of the whole list (`ex k < len(l). P(l[k])`,
+// as a predicate over a list's elements is stated)
+theorem ex_at_concat_l(a, b, t, x. p): a in list_type(t) -> b in list_type(t) ->
+  (ex k. k in omega && (int_lt(k, seq_len(a)) && p(app(a, k)))) ->
+  (ex k. k in omega && (int_lt(k, seq_len(seq_concat(a, b))) && p(app(seq_concat(a, b), k))))
+proof
+  assume ha hb he
+  obtain k, hk from he
+  have k1: k in omega by taut(hk)
+  have k2: int_lt(k, seq_len(a)) by taut(hk)
+  have e := at({app(seq_concat(a, b), k)}, ha, hb, k1, k2)
+  have pa: p(app(a, k)) by taut(hk)
+  have pk: p(app(seq_concat(a, b), k)) := rewrite(sym(e), pa)
+  have l: int_lt(k, seq_len(seq_concat(a, b))) by arith(ha, hb, k1, k2)
+  show by ex_intro({k}, taut(k1, l, pk))
+qed
+
+theorem ex_at_concat_r(a, b, t, x. p): a in list_type(t) -> b in list_type(t) ->
+  (ex k. k in omega && (int_lt(k, seq_len(b)) && p(app(b, k)))) ->
+  (ex k. k in omega && (int_lt(k, seq_len(seq_concat(a, b))) && p(app(seq_concat(a, b), k))))
+proof
+  assume ha hb he
+  obtain k, hk from he
+  have k1: k in omega by taut(hk)
+  have k2: int_lt(k, seq_len(b)) by taut(hk)
+  have e := at({app(seq_concat(a, b), int_add(seq_len(a), k))}, ha, hb, k1, k2)
+  have k3: int_sub(int_add(seq_len(a), k), seq_len(a)) = k by arith(ha, k1)
+  have pb: p(app(b, k)) by taut(hk)
+  have pk: p(app(seq_concat(a, b), int_add(seq_len(a), k))) := rewrite(sym(rewrite(k3, e)), pb)
+  have l: int_add(seq_len(a), k) in omega && int_lt(int_add(seq_len(a), k), seq_len(seq_concat(a, b))) by arith(ha, hb, k1, k2)
+  show by ex_intro({int_add(seq_len(a), k)}, taut(l, pk))
+qed
+
+// an element of a list of T's: a T
+theorem at_type(l, t, i): l in list_type(t) -> i in omega -> int_lt(i, seq_len(l)) -> app(l, i) in t
+proof
+  assume hl hi hlt
+  have st: l in seq_type(t) && dom(l) in omega by taut(unsel(expand(hl, list_type)))
+  have ls: l in seq_type(t) by taut(st)
+  have pw: l in powerset(cart(omega, t)) && is_seq(l) by taut(unsel(expand(ls, seq_type)))
+  have sq: is_seq(l) by taut(pw)
+  have lf: is_fun(l) by taut(expand(sq, is_seq))
+  have dlo: dom(l) in omega by taut(st)
+  have id := mp(nat_lt_mem[k := i, n := dom(l)], hi, dlo, (int_lt(i, dom(l)) by defs(hlt, seq_len)))
+  have pr := mp(dom_elim[f := l, k := i], lf, id)
+  have ss: subset(l, cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := l], pw)
+  have pc := mp(subset_elim[a := l, b := cart(omega, t), z := pair(i, app(l, i))], ss, pr)
+  obtain x y, hx hy he from mp(cart_elim[a := omega, b := t, z := pair(i, app(l, i))], pc)
+  have ye: app(l, i) = y by simp(he)
+  show := rewrite(sym(ye), hy)
+qed
+
+// a list built elementwise (`[v(i) for i in 0..n]`) is one
+theorem build_list(d, x. v, t): d in omega -> (all x. x in d -> v(x) in t) -> fn_build(d, x. v(x)) in list_type(t)
+proof
+  assume hd hv
+  have sp := mp(fn_build_space[d := d, v := x. v(x), b := t], hv)
+  have fd: fn_build(d, x. v(x)) in powerset(cart(d, t)) && is_fun(fn_build(d, x. v(x))) && dom(fn_build(d, x. v(x))) = d by simp(expand(sp, fn_space))
+  have ss: subset(fn_build(d, x. v(x)), cart(d, t)) by taut(powerset_def[s := cart(d, t), a := fn_build(d, x. v(x))], fd)
+  have g: all z. z in fn_build(d, x. v(x)) -> z in cart(omega, t) proof
+    fix z
+    assume hz
+    have zc := mp(subset_elim[a := fn_build(d, x. v(x)), b := cart(d, t), z := z], ss, hz)
+    obtain a, ha from mp(cart_elim[a := d, b := t, z := z], zc)
+    obtain b, hb from ha
+    have ao := mp(mp(nat_elem[k := d, i := a], hd), taut(hb))
+    have c := mp(mp(cart_intro[a := omega, b := t, x := a, y := b], ao), taut(hb))
+    have ze: z = pair(a, b) by taut(hb)
+    show := rewrite(sym(ze), c)
+  qed
+  have so: subset(fn_build(d, x. v(x)), cart(omega, t)) by defs(g, subset)
+  have pw: fn_build(d, x. v(x)) in powerset(cart(omega, t)) by taut(powerset_def[s := cart(omega, t), a := fn_build(d, x. v(x))], so)
+  have dd: dom(fn_build(d, x. v(x))) in omega by simp(fd, hd)
+  show by defs(simp(pw, fd, dd), list_type, seq_type, is_seq)
 qed
 
 // extensionality: a list is determined by its length and elements

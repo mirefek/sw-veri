@@ -2666,6 +2666,32 @@ fn conjuncts(t: &Term, and: Option<SymId>, out: &mut Vec<Term>) {
     out.append(&mut inner);
 }
 
+/// The leaves of `t`'s tree of `and`s, left to right.
+fn conj_leaves(t: &Term, and: Option<SymId>, out: &mut Vec<Term>) {
+    match t.node() {
+        Node::App(a, x) if Some(*a) == and && x.len() == 2 => {
+            conj_leaves(&x[0], and, out);
+            conj_leaves(&x[1], and, out);
+        }
+        _ => out.push(t.clone()),
+    }
+}
+
+/// `s` split at every `and` of its statement: its leaves' facts, in order.
+fn split_leaves(env: &Env, s: &Seq, and: Option<SymId>, out: &mut Vec<Seq>) -> KResult<()> {
+    match s.concl().node() {
+        Node::App(a, x) if Some(*a) == and && x.len() == 2 => {
+            // (`and_part(.., false)`: the left conjunct)
+            split_leaves(env, &and_part(env, s, false)?, and, out)?;
+            split_leaves(env, &and_part(env, s, true)?, and, out)
+        }
+        _ => {
+            out.push(s.clone());
+            Ok(())
+        }
+    }
+}
+
 /// `t`'s conjuncts as written: `a && b && c` (`(a && b) && c`) is [a, b, c];
 /// an explicitly grouped `a && (b && c)` is [a, b && c], and so is a
 /// labelled `l: (a && b) && c` [l: a && b, c].
@@ -2830,6 +2856,19 @@ fn conj_named(env: &Env, s: &Seq, names: &[&str], what: &str) -> KResult<Vec<(St
     // one conjunction r)
     let rest = names.last().and_then(|l| l.strip_suffix(".."));
     let m = if rest.is_some() { names.len() - 1 } else { names.len() };
+    // (as many names as the leaves of the whole tree of `and`s: each leaf,
+    // the grouped conjunctions split too -- e.g. a bounded `ex k: nat. P &&
+    // Q`'s body `k in omega && (P && Q)`)
+    if rest.is_none() && n != m {
+        let and = env.sym_by_name.get("and").copied();
+        let mut leaves = Vec::new();
+        conj_leaves(s.concl(), and, &mut leaves);
+        if leaves.len() == m {
+            let mut parts = Vec::new();
+            split_leaves(env, s, and, &mut parts)?;
+            return Ok(names.iter().zip(parts).filter(|(h, _)| **h != "_").map(|(h, p)| (h.to_string(), p)).collect());
+        }
+    }
     if (rest.is_none() && n != m) || (rest.is_some() && n <= m) {
         return err(format!("{}: {} names for {} conjuncts of `{}`", what, names.len(), n, Printer::new(env).short(s.concl())));
     }

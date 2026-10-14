@@ -21,13 +21,13 @@ fn x86_model_facts_check() {
     }
     let c = Command::new(env!("CARGO_BIN_EXE_slc"))
         .current_dir(&root)
-        .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/records.core"])
+        .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core"])
         .arg(&claim)
         .arg("proofs/x86.core")
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&c.stdout);
-    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 25 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
+    assert!(c.status.success() && out.contains("proofs/x86.core: 0 constants, 0 axioms, 1 definitions, 26 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
 /// Loaded code (proofs/x86_code.core): fetched, and kept by every access
@@ -63,7 +63,7 @@ fn claim_proofs_check() {
     let slc = env!("CARGO_BIN_EXE_slc");
     for files in [
         vec!["core/prelude.core", "core/logic.core", "core/sets.core", "CLAIM", "proofs/mallocng.core", "proofs/musl_malloc.core"],
-        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/list.core", "core/loop.core", "core/records.core", "CLAIM", "proofs/malloc_client.core"],
+        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "CLAIM", "proofs/malloc_client.core"],
     ] {
         let mut c = Command::new(slc);
         c.current_dir(&root).args(["kernel-check", "--no-cache"]);
@@ -273,7 +273,9 @@ fn c1_cfg_engine_checks() {
     // and the structured form's C2 proofs up to the context's
     // (proofs/mallocng_ctx.core), the CFG form refining the structured
     // one and the three composed (proofs/mallocng_cfg.core); the ABI's
-    // contract with ghost state (proofs/abi_ghost.core)
+    // contract with ghost state (proofs/abi_ghost.core); specs with ghost
+    // state refined (proofs/gimple_ghost.core) and get_slot_index's
+    // machine code implementing its purpose spec (proofs/mallocng_purpose.core)
     let c = Command::new(slc)
         .current_dir(&root)
         .args(["kernel-check", "--no-cache"])
@@ -281,7 +283,7 @@ fn c1_cfg_engine_checks() {
         .arg("proofs/a_crash.core")
         .arg("proofs/mallocng_c1_cfg.core")
         .args(["proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_ctx.core", "proofs/mallocng_cfg.core"])
-        .arg("proofs/abi_ghost.core")
+        .args(["proofs/abi_ghost.core", "proofs/gimple_ghost.core", "proofs/mallocng_purpose.core"])
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
@@ -289,7 +291,9 @@ fn c1_cfg_engine_checks() {
     // lemma (the storing functions' statics' range defined)
     let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 226 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 79 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/abi_ghost.core: 0 constants, 0 axioms, 0 definitions, 30 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/abi_ghost.core: 0 constants, 0 axioms, 0 definitions, 28 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/gimple_ghost.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_purpose.core: 0 constants, 0 axioms, 0 definitions, 14 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")

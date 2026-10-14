@@ -266,13 +266,18 @@ pred frame_ok(m: Mem, v: MetaV, i: nat, p: nat, n: nat, tag: nat) =
      (slot_end(v, i) - p - n < 5 -> b8(m, p - 3) / 32 = slot_end(v, i) - p - n) &&
      b8(m, p + n) = 0 && b8(m, slot_end(v, i)) = 0)
 
+// the in-band header before p (its IB bytes): no client's
+pred hdr_free(blocks: Addr -> Option[nat], p: nat) = all a: nat. p - IB <= a && a < p -> a notin live_of(blocks)
+
 // what slot i of the group g holds
 pred slot_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat, i: nat, u: Use) =
   match u {
     unused    => true,
-    block(p)  => blocks[bits[64](p)] != none && frame_ok(m, A.metas[g], i, p, blocks[bits[64](p)].value, 0),
+    block(p)  => blocks[bits[64](p)] != none && hdr_free(blocks, p) &&
+                 frame_ok(m, A.metas[g], i, p, blocks[bits[64](p)].value, 0),
     nested(h) => is_used(A, h) && A.metas[h].maplen = 0 && A.metas[h].mem = slot_start(A.metas[g], i) &&
                  UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) <= stride(A.metas[g]) &&
+                 hdr_free(blocks, A.metas[h].mem) &&
                  frame_ok(m, A.metas[g], i, A.metas[h].mem, UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) - IB, 6),
     reserved  => true
   }
@@ -351,13 +356,14 @@ pred ro_segment_ok(f: File, i: nat, sg: Segment, m: Mem) =
     (all p: nat. sg.vaddr / PAGE <= p && p <= (sg.vaddr + sg.memsz - 1) / PAGE && last_on_page(f, i, p) ->
        pg(m, p * PAGE) = some(Page { prot: seg_prot(sg), kind: anon }))
 
-// the allocator's memory can be accessed as the code does
+// the allocator's memory can be accessed as the code does (its groups:
+// not on the stack, where GIMPLE's accesses are to stack objects only)
 pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
   (all k: nat, a: nat. k < 3 && data_ranges(c)[k][0] <= a && a < data_ranges(c)[k][0] + data_ranges(c)[k][1] ->
      m_rw(m, a)) &&
   (all k: nat, a: nat. k < len(A.used) &&
      group_range(A.metas[A.used[k]])[0] <= a && a < group_range(A.metas[A.used[k]])[0] + group_range(A.metas[A.used[k]])[1] &&
-     a notin live_of(blocks) -> m_rw(m, a)) &&
+     a notin live_of(blocks) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
   (all k: nat, a: nat. k < len(auxv_ranges(A)) &&
      auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
        m_mapped(m, a) && pg(m, a).value.prot.r)
@@ -422,6 +428,12 @@ pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g
 
+// slot i of the group g: where what starts at p lies (a client block, or a
+// nested group)
+pred starts_at(A: Abs, g: nat, i: nat, p: nat) =
+  is_used(A, g) && i < len(A.slots[g]) &&
+  (A.slots[g][i] = block(p) || (ex h: nat. A.slots[g][i] = nested(h) && A.metas[h].mem = p))
+
 // the only reserved slot: slot i of g
 pred reserved_only(A: Abs, g: nat, i: nat) =
   i < len(A.slots[g]) && A.slots[g][i] = reserved &&
@@ -450,72 +462,3 @@ pred untouched(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, ext
   (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
      vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
   vm2.brk_start = vm.brk_start
-
-// The state of the allocator's internal functions: the C world, the
-// client's blocks (malloc's ghost), and the abstract state A (a ghost the
-// specs update; the invariant, where a spec requires it, ties it to memory).
-// A spec may read both: the memory where that is its purpose, A where
-// that is.
-state MallocAbs extends Heap {
-  ghost A : Abs
-}
-
-// try_avail(pm), pm class sc's active list: a free slot of a group already
-// there. Its bit (1 << i) returned, slot i of the list's head reserved --
-// the head now, if need be: the list reorganised --; or 0, no group of the
-// list with a free slot (the list then empty). A runs out of stack, if it
-// does, with the memory arbitrary.
-proc[MallocAbs] try_avail_purpose(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
-    sc < 48 && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
-  either { overflow() } or {
-    let A0 = A
-    let before = vm
-    ghost A := any A2: Abs where reorganised(A0, A2, sc)
-    let r = any r: bits[32] where (
-      (r = 0 && len(A.active[sc]) = 0 && (all g: nat. on_list(A0.active[sc], g) -> !has_unused(A0, g))) ||
-      (ex i: nat. i < 32 && uint(r) = 2^i && len(A.active[sc]) > 0 && reserves(A0, A, A.active[sc][0], i)))
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, {})
-    return r
-  }
-}
-
-// alloc_slot(sc, req): a slot for a block of req bytes in class sc. Its
-// index i returned, slot i of the head of class sc's active list reserved
-// (an existing group's free slot, or a new group's: mapped, or nested in a
-// slot of a larger class), room in it for req bytes and the in-band
-// header; or -1, out of memory. The allocator may take memory that was
-// unmapped (a new group, a meta area) and set errno (a failed mmap).
-proc[MallocAbs] alloc_slot_purpose(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
-    uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
-  either { overflow() } or {
-    let A0 = A
-    let before = vm
-    let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
-    ghost A := any A2: Abs where true
-    let r = any r: bits[32] where (
-      (r = bits[32](2^32 - 1) && no_reserved(A)) ||
-      (uint(r) < 32 && len(A.active[uint(sc)]) > 0 && reserved_only(A, A.active[uint(sc)][0], uint(r)) &&
-       A.metas[A.active[uint(sc)][0]].sizeclass = uint(sc) &&
-       uint(req) + IB <= stride(A.metas[A.active[uint(sc)][0]])))
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
-      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
-    return r
-  }
-}
-
-// ... as C function values
-fn try_avail_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
-  require len(args) >= 1 && (uint(args[0]) - c.ctx - C_ACTIVE) % 8 = 0
-  let r = try_avail_purpose(c, (uint(args[0]) - c.ctx - C_ACTIVE) / 8, args[0])
-  let w = any w: bits[64] where uint(w) % 2^32 = uint(r)      // in eax
-  return (w, any bits[64])
-}
-
-fn alloc_slot_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
-  require len(args) >= 2
-  let r = alloc_slot_purpose(c, bits[32](args[0]), args[1])
-  let w = any w: bits[64] where uint(w) % 2^32 = uint(r)      // in eax
-  return (w, any bits[64])
-}

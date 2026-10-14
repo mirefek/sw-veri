@@ -53,8 +53,14 @@
 //!   if not; `app(ghost_part(f, d), k)` is `empty` if k in d, `app(f, k)`
 //!   if not; `app(union2(a, b), k)` (`rec_merge`) is `app(a, k)` when b has
 //!   no pair with first element k (`empty`, a ghost part or restriction
-//!   without k, updates at other keys of such) -- by `app_ext`, the pairs
-//!   at k being the same; `app(empty, k)` is `empty`;
+//!   without k, updates at other keys of such, or a term whose `dom(x) =
+//!   D` is a literal of the path with k not in D: `dom_lacks`) -- by
+//!   `app_ext`, the pairs at k being the same (`app_union2_lacks`);
+//!   `fn_update(union2(a, b), k, v)` is `union2(fn_update(a, k, v), b)`
+//!   when b lacks k, and symmetrically (`fn_update_union_l`/`_r`: a state
+//!   with a ghost part updated in its part); `app(empty, k)` is `empty`;
+//!   `with_ghost(ok(s, v), h)` is `ok(union2(s, h), v)`, likewise `exc`,
+//!   and a divergence is itself (`with_ghost_ok`, `_exc`, `_diverge`);
 //!   `ghost_part(fn_update(f, k, v), d)` is `ghost_part(f, d)` and
 //!   `restrict(fn_update(f, k, v), d)` is `fn_update(restrict(f, d), k, v)`
 //!   if k in d; both are `empty` of `empty`; `union2(a, empty)` and
@@ -231,6 +237,8 @@ struct Syms {
     diverge: Option<SymId>,
     out_state: Option<SymId>,
     out_value: Option<SymId>,
+    with_ghost: Option<SymId>,
+    union2: Option<SymId>,
     app: Option<SymId>,
     fn_update: Option<SymId>,
     fn_modify: Option<SymId>,
@@ -334,6 +342,9 @@ struct Simp<'a> {
     /// in the goal's first simplification: the premises' literals `t in S`
     /// (the typing rule leaves those as they are)
     known_mems: std::cell::RefCell<Vec<Term>>,
+    /// the path's literals `dom(x) = D`: the fields a record x has (a state
+    /// type's, as its membership gives them) -- for `lacks`
+    known_doms: std::cell::RefCell<Vec<(Term, Term)>>,
     /// literal bounds the path's literals give integers: (x, upper, k, the
     /// literal's atom) for x <= k (upper) or x >= k
     bounds: std::cell::RefCell<Vec<(Term, bool, SInt, Term)>>,
@@ -597,6 +608,7 @@ impl<'a> Simp<'a> {
             let_fresh: std::cell::Cell::new(LET_FRESH0),
             nats: std::cell::RefCell::new(Vec::new()),
             known_mems: std::cell::RefCell::new(Vec::new()),
+            known_doms: std::cell::RefCell::new(Vec::new()),
             bounds: std::cell::RefCell::new(Vec::new()),
             runs_facts: std::cell::RefCell::new(Vec::new()),
             aparts: std::cell::RefCell::new(Vec::new()),
@@ -627,6 +639,8 @@ impl<'a> Simp<'a> {
                 diverge: g("diverge"),
                 out_state: g("out_state"),
                 out_value: g("out_value"),
+                with_ghost: g("with_ghost"),
+                union2: g("union2"),
                 app: g("app"),
                 fn_update: g("fn_update"),
                 fn_modify: g("fn_modify"),
@@ -887,11 +901,24 @@ impl<'a> Simp<'a> {
         // the memberships (a function's argument in its domain: `term` applies
         // a built function to it)
         let mems: Vec<Term> = lits.iter().filter(|l| matches!(l.node(), Node::App(i, _) if is(*i, s.in_))).cloned().collect();
+        // the records' known fields: `dom(x) = D`
+        let dom_s = self.env.ksym("dom");
+        let doms: Vec<(Term, Term)> = lits
+            .iter()
+            .filter_map(|l| match l.node() {
+                Node::App(e, ab) if *e == s.eq && ab.len() == 2 => match ab[0].node() {
+                    Node::App(d, x) if dom_s == Some(*d) && x.len() == 1 => Some((x[0].clone(), ab[1].clone())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
         // (`term` depends on the typing: its memo only for this one)
-        if *self.nats.borrow() != out || *self.known_mems.borrow() != mems {
+        if *self.nats.borrow() != out || *self.known_mems.borrow() != mems || *self.known_doms.borrow() != doms {
             self.memo.borrow_mut().clear();
             *self.nats.borrow_mut() = out;
             *self.known_mems.borrow_mut() = mems;
+            *self.known_doms.borrow_mut() = doms;
         }
         // literal bounds of integers: `x <= k`, `k < x`, `!(x < k)`, ..
         let bounds = self.literal_bounds(lits);
@@ -1530,6 +1557,19 @@ impl<'a> Simp<'a> {
             _ => None,
         };
         let nat = |n: u64| Term::nat(crate::nat::Nat::from_u64(n));
+        // an outcome with a ghost part h: its state joined with h
+        // (`with_ghost_ok`, `_exc`, `_diverge`, core/records.core)
+        if is(f, s.with_ghost) && args.len() == 2 {
+            if let (Some((g, b)), Some(u)) = (head(&args[0]), s.union2) {
+                if (is(g, s.ok) || is(g, s.exc)) && b.len() == 2 {
+                    let st = self.term(&Term::app(u, vec![b[0].clone(), args[1].clone()]));
+                    return Term::app(g, vec![st, b[1].clone()]);
+                }
+                if is(g, s.diverge) {
+                    return args[0].clone();
+                }
+            }
+        }
         if is(f, s.fst) || is(f, s.snd) || is(f, s.out_state) || is(f, s.out_value) {
             if let Some((g, b)) = head(&args[0]) {
                 let fst = is(f, s.fst);
@@ -1980,6 +2020,23 @@ impl<'a> Simp<'a> {
                 }
                 if is_empty(&args[0]) {
                     return args[1].clone();
+                }
+            }
+        }
+        // an update of a joined record: in the part with the field, the
+        // other lacking it (`fn_update_union_l`/`_r`, core/records.core)
+        if is(f, s.fn_update) {
+            if let Some((u, ub)) = head(&args[0]) {
+                let un = self.env.kname(u);
+                if (un == "union2" || un == "rec_merge") && ub.len() == 2 {
+                    if self.lacks(&ub[1], &args[1]) {
+                        let inner = self.term(&Term::app(f, vec![ub[0].clone(), args[1].clone(), args[2].clone()]));
+                        return Term::app(u, vec![inner, ub[1].clone()]);
+                    }
+                    if self.lacks(&ub[0], &args[1]) {
+                        let inner = self.term(&Term::app(f, vec![ub[1].clone(), args[1].clone(), args[2].clone()]));
+                        return Term::app(u, vec![ub[0].clone(), inner]);
+                    }
                 }
             }
         }
@@ -2470,8 +2527,13 @@ impl<'a> Simp<'a> {
         }
     }
 
-    /// `x` has no pair with first element k (a record without the field k).
+    /// `x` has no pair with first element k (a record without the field k):
+    /// by its construction, or by a known `dom(x) = D` without k
+    /// (`dom_lacks`, core/records.core).
     fn lacks(&self, x: &Term, k: &Term) -> bool {
+        if self.known_doms.borrow().iter().any(|(t, d)| t == x && self.key_in(k, d) == Some(false)) {
+            return true;
+        }
         let Node::App(g, b) = x.node() else { return false };
         match self.env.kname(*g) {
             "empty" => b.is_empty(),

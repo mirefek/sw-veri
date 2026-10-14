@@ -124,9 +124,12 @@ outcome.
   - The allocator's invariant and owned memory are parameters, constrained
     by laws.
   - The frame law: client writes outside owned memory keep the invariant.
-- **mallocng** (`layers/mallocng.sl`, `layers/mallocng_specs.sl`):
+- **mallocng** (`layers/mallocng.sl`, `layers/mallocng_specs.sl`,
+  `layers/mallocng_purpose.sl`):
   - mallocng's invariant, over an abstract state determined by memory;
-  - the specs of its internal functions, as contracts.
+  - the specs of its internal functions, as contracts: on memory, and by
+    their purpose on the abstract state (a ghost of the C world,
+    `MallocAbs`).
 
 ## How a function is proven
 

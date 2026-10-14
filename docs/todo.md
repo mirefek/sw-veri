@@ -91,10 +91,17 @@ translation verification, the engine):
   active, the bounce counter) left free. Needs: the abstraction from
   memory (`holds`, `mallocng.abs_unique`); the invariant with slots in
   between (reserved by try_avail, a block only after alloc_slot).
-- The specs over `MallocAbs` (the abstract state a ghost of the C world):
-  their C2, `refines_ghost` goals -- `step` on a spec's world with a ghost
-  part; a callee's memory-level contract inside an abstract-level proof
-  (the ghosts unchanged).
+- The specs over `MallocAbs` (layers/mallocng_purpose.sl; get_slot_index
+  done, proofs/mallocng_purpose.core): try_avail's and alloc_slot's, the
+  ghost A updated; a callee's memory-level contract inside an
+  abstract-level proof (the ghosts unchanged); `step` on a spec's world
+  with a ghost part (the code's run, not only a spec-to-spec refinement);
+  a div_raises lemma per contract shape (get_slot_index's by hand,
+  `mp.gsi_div_raises`) instead of one per function.
+- The library's list lemmas still in proofs/translate_call.core
+  (`tr.seq_one_type`, `tr.concat_list`, `tr.list_idx`) to core/list.core;
+  a list's typing (`l in list_type(T)`) of a definition built from pieces
+  derived, not stated per definition (`mp.pre_list`).
 - The proof of such a spec: what the code does to memory computed by the
   system (its run summarized, the callees' contracts applied, each
   operation's definedness an obligation), not written by hand as a

@@ -657,6 +657,31 @@ proof
   show by simp(hf)
 qed
 
+// a function's value at k: in its codomain, or `empty` where undefined
+theorem app_space(f, a, b, k): f in powerset(cart(a, b)) -> app(f, k) in b || app(f, k) = empty
+proof
+  assume hf
+  have ss: subset(f, cart(a, b)) by taut(powerset_def[s := cart(a, b), a := f], hf)
+  have du: app(f, k) = ite(ex y. pair(k, y) in f, choose(y. pair(k, y) in f), empty)
+    by defs(refl({ite(ex y. pair(k, y) in f, choose(y. pair(k, y) in f), empty)}), app)
+  have c1: (ex y. pair(k, y) in f) -> app(f, k) in b proof
+    assume e
+    have cs := mp(choose_spec[p := y. pair(k, y) in f], e)
+    have cc := mp(subset_elim[a := f, b := cart(a, b), z := pair(k, choose(y. pair(k, y) in f))], ss, cs)
+    obtain x, hx from mp(cart_elim[a := a, b := b, z := pair(k, choose(y. pair(k, y) in f))], cc)
+    obtain y, hy from hx
+    have yc: choose(y. pair(k, y) in f) = y by simp(hy)
+    have yb: y in b by taut(hy)
+    have l := trans(trans(du, mp(ite_t[c := ex y. pair(k, y) in f, a := choose(y. pair(k, y) in f), b := empty], e)), yc)
+    show := rewrite(sym(l), yb)
+  qed
+  have c2: !(ex y. pair(k, y) in f) -> app(f, k) = empty proof
+    assume e
+    show := trans(du, mp(ite_f[c := ex y. pair(k, y) in f, a := choose(y. pair(k, y) in f), b := empty], e))
+  qed
+  show by taut(c1, c2)
+qed
+
 // ----------------------------------------------------------------------
 //  Record types: a record (in the universe) whose fields are typed is in
 //  its type; built functions are in their function space
@@ -773,6 +798,29 @@ proof
   qed
   have im := mp(mp(univ_image[u := u, s := a, f := x. set_image(b, y. pair(x, y))], ha), inner)
   show by defs(mp(univ_union[u := u, s := set_image(a, x. set_image(b, y. pair(x, y)))], im), cart)
+qed
+
+// a record over member keys, its fields members: a member
+theorem rec_univ(u, k, r): k in univ(u) -> r in powerset(cart(k, univ(u))) -> is_fun(r) -> dom(r) = k -> r in univ(u)
+proof
+  assume hk hr hf hd
+  have eta := mp(mp(fn_eta[f := r, d := k], hf), hd)
+  have ss: subset(r, cart(k, univ(u))) by taut(powerset_def[s := cart(k, univ(u)), a := r], hr)
+  have vals: all x. x in k -> pair(x, app(r, x)) in univ(u) proof
+    fix x
+    assume hx
+    have xu := mp(mp(univ_trans[u := u, a := x, b := k], hk), hx)
+    have xd: x in dom(r) := rewrite(sym(hd), hx)
+    have pr := mp(dom_elim[f := r, k := x], hf, xd)
+    have pc := mp(subset_elim[a := r, b := cart(k, univ(u)), z := pair(x, app(r, x))], ss, pr)
+    obtain a b, ha hb he from mp(cart_elim[a := k, b := univ(u), z := pair(x, app(r, x))], pc)
+    have ye: app(r, x) = b by simp(he)
+    have yu: app(r, x) in univ(u) := rewrite(sym(ye), hb)
+    show by simp(xu, yu)
+  qed
+  have im := mp(mp(univ_image[u := u, s := k, f := x. pair(x, app(r, x))], hk), vals)
+  have fb: fn_build(k, x. app(r, x)) in univ(u) by defs(im, fn_build)
+  show := rewrite(eta, fb)
 qed
 
 // a record type over the keys k whose fields take values in b (members of
@@ -1003,6 +1051,164 @@ simp app_update_other
 simp letin_eq
 
 // ----------------------------------------------------------------------
+//  Joined records (a state with a ghost part): simp's rules on `union2`
+//  where one part lacks a field -- no element with that first component
+
+// (a record whose domain is known: it lacks every other field)
+theorem dom_lacks(x, d, k): dom(x) = d -> !(k in d) -> (all z. z in x -> fst(z) != k)
+proof
+  assume hd hk
+  fix z
+  assume hz
+  have im := set_image_def[s := x, f := y. fst(y), y := fst(z)]
+  have e: ex y. y in x && fst(y) = fst(z) by ex_intro({z}, taut(hz, refl({fst(z)})))
+  have kd: fst(z) in dom(x) by defs(taut(im, e), dom)
+  have kd2: fst(z) in d := rewrite(hd, kd)
+  show proof
+    assume e2
+    show by taut(hk, rewrite(e2, kd2))
+  qed
+qed
+
+// a field read in the part that has it
+theorem app_union2_lacks(a, b, k): (all z. z in b -> fst(z) != k) -> app(union2(a, b), k) = app(a, k)
+proof
+  assume hz
+  have eq: all y. pair(k, y) in union2(a, b) <-> pair(k, y) in a proof
+    fix y
+    have u := union2_iff[a := a, b := b, z := pair(k, y)]
+    have n: !(pair(k, y) in b) proof
+      assume hb
+      have f := mp(all_elim(hz, {pair(k, y)}), hb)
+      show by simp(f)
+    qed
+    show by taut(u, n)
+  qed
+  have ce := mp(choose_ext[p := y. pair(k, y) in union2(a, b), q := y. pair(k, y) in a], eq)
+  have ee: (ex y. pair(k, y) in union2(a, b)) <-> (ex y. pair(k, y) in a) proof
+    have l: (ex y. pair(k, y) in union2(a, b)) -> (ex y. pair(k, y) in a) proof
+      assume e
+      obtain y, hy from e
+      show by ex_intro({y}, taut(all_elim(eq, {y}), hy))
+    qed
+    have r: (ex y. pair(k, y) in a) -> (ex y. pair(k, y) in union2(a, b)) proof
+      assume e
+      obtain y, hy from e
+      show by ex_intro({y}, taut(all_elim(eq, {y}), hy))
+    qed
+    show by taut(l, r)
+  qed
+  have du: app(union2(a, b), k) = ite(ex y. pair(k, y) in union2(a, b), choose(y. pair(k, y) in union2(a, b)), empty)
+    by defs(refl({ite(ex y. pair(k, y) in union2(a, b), choose(y. pair(k, y) in union2(a, b)), empty)}), app)
+  have da: app(a, k) = ite(ex y. pair(k, y) in a, choose(y. pair(k, y) in a), empty)
+    by defs(refl({ite(ex y. pair(k, y) in a, choose(y. pair(k, y) in a), empty)}), app)
+  have c1: (ex y. pair(k, y) in a) -> app(union2(a, b), k) = app(a, k) proof
+    assume e
+    have e1: ex y. pair(k, y) in union2(a, b) by taut(ee, e)
+    have l := trans(du, mp(ite_t[c := ex y. pair(k, y) in union2(a, b), a := choose(y. pair(k, y) in union2(a, b)), b := empty], e1))
+    have r := trans(da, mp(ite_t[c := ex y. pair(k, y) in a, a := choose(y. pair(k, y) in a), b := empty], e))
+    show := trans(trans(l, ce), sym(r))
+  qed
+  have c2: !(ex y. pair(k, y) in a) -> app(union2(a, b), k) = app(a, k) proof
+    assume e
+    have e1: !(ex y. pair(k, y) in union2(a, b)) by taut(ee, e)
+    have l := trans(du, mp(ite_f[c := ex y. pair(k, y) in union2(a, b), a := choose(y. pair(k, y) in union2(a, b)), b := empty], e1))
+    have r := trans(da, mp(ite_f[c := ex y. pair(k, y) in a, a := choose(y. pair(k, y) in a), b := empty], e))
+    show := trans(l, sym(r))
+  qed
+  show by taut(c1, c2)
+qed
+
+// an option's value, when there is one
+theorem some_val(x, t): x in option(t) -> !(x = none) -> snd(x) in t
+proof
+  assume hx hn
+  have u: x in single(none) || x in set_image(t, y. some(y)) by taut(union2_iff[a := single(none), b := set_image(t, y. some(y)), z := x], expand(hx, option))
+  have c1: x in single(none) -> snd(x) in t proof
+    assume h
+    have e := mp(single_elim[a := none, z := x], h)
+    show by taut(e, hn)
+  qed
+  have c2: x in set_image(t, y. some(y)) -> snd(x) in t proof
+    assume h
+    have si: ex y. y in t && some(y) = x by taut(set_image_def[s := t, f := y. some(y), y := x], h)
+    obtain y, hy he from si
+    show by defs(simp(hy, sym(he)), some)
+  qed
+  show by taut(u, c1, c2)
+qed
+
+// two records over disjoint fields joined: a record
+theorem union2_fun(a, b): is_fun(a) -> is_fun(b) -> (all z w. z in a -> w in b -> fst(z) != fst(w)) -> is_fun(union2(a, b))
+proof
+  assume ha hb hd
+  have pa: all z. z in a -> (ex x y. z = pair(x, y)) by taut(expand(ha, is_fun))
+  have ua: all x y w. pair(x, y) in a -> pair(x, w) in a -> y = w by taut(expand(ha, is_fun))
+  have pb: all z. z in b -> (ex x y. z = pair(x, y)) by taut(expand(hb, is_fun))
+  have ub: all x y w. pair(x, y) in b -> pair(x, w) in b -> y = w by taut(expand(hb, is_fun))
+  have p1: all z. z in union2(a, b) -> (ex x y. z = pair(x, y)) proof
+    fix z
+    assume h
+    show by taut(union2_iff[a := a, b := b, z := z], h, all_elim(pa, {z}), all_elim(pb, {z}))
+  qed
+  have p2: all x y w. pair(x, y) in union2(a, b) -> pair(x, w) in union2(a, b) -> y = w proof
+    fix x y w
+    assume hy hw
+    have my := union2_iff[a := a, b := b, z := pair(x, y)]
+    have mw := union2_iff[a := a, b := b, z := pair(x, w)]
+    have fy: fst(pair(x, y)) = x by simp()
+    have fw: fst(pair(x, w)) = x by simp()
+    have d1 := all_elim(hd, {pair(x, y)}, {pair(x, w)})
+    have d2 := all_elim(hd, {pair(x, w)}, {pair(x, y)})
+    have ne1: !(fst(pair(x, y)) != fst(pair(x, w))) by simp()
+    have ne2: !(fst(pair(x, w)) != fst(pair(x, y))) by simp()
+    show by taut(my, mw, hy, hw, all_elim(ua, {x}, {y}, {w}), all_elim(ub, {x}, {y}, {w}), d1, d2, ne1, ne2)
+  qed
+  show by defs(conj(p1, p2), is_fun)
+qed
+
+// a field update in the part that has it
+theorem fn_update_union_l(a, b, k, v): (all z. z in b -> fst(z) != k) -> fn_update(union2(a, b), k, v) = union2(fn_update(a, k, v), b)
+proof
+  assume hz
+  have all_z: all z. z in fn_update(union2(a, b), k, v) <-> z in union2(fn_update(a, k, v), b) proof
+    fix z
+    have m1 := fn_update_iff[f := union2(a, b), k := k, v := v, z := z]
+    have m2 := fn_update_iff[f := a, k := k, v := v, z := z]
+    have u1 := union2_iff[a := a, b := b, z := z]
+    have u2 := union2_iff[a := fn_update(a, k, v), b := b, z := z]
+    have gk: z in b -> fst(z) != k := all_elim(hz, {z})
+    have pk: z = pair(k, v) -> !(z in b) proof
+      assume e
+      have f: fst(z) = k by simp(e)
+      show by taut(gk, f)
+    qed
+    show by taut(m1, m2, u1, u2, gk, pk)
+  qed
+  show by mp(set_ext[a := fn_update(union2(a, b), k, v), b := union2(fn_update(a, k, v), b)], all_z)
+qed
+
+theorem fn_update_union_r(a, b, k, v): (all z. z in a -> fst(z) != k) -> fn_update(union2(a, b), k, v) = union2(a, fn_update(b, k, v))
+proof
+  assume hz
+  have all_z: all z. z in fn_update(union2(a, b), k, v) <-> z in union2(a, fn_update(b, k, v)) proof
+    fix z
+    have m1 := fn_update_iff[f := union2(a, b), k := k, v := v, z := z]
+    have m2 := fn_update_iff[f := b, k := k, v := v, z := z]
+    have u1 := union2_iff[a := a, b := b, z := z]
+    have u2 := union2_iff[a := a, b := fn_update(b, k, v), z := z]
+    have gk: z in a -> fst(z) != k := all_elim(hz, {z})
+    have pk: z = pair(k, v) -> !(z in a) proof
+      assume e
+      have f: fst(z) = k by simp(e)
+      show by taut(gk, f)
+    qed
+    show by taut(m1, m2, u1, u2, gk, pk)
+  qed
+  show by mp(set_ext[a := fn_update(union2(a, b), k, v), b := union2(a, fn_update(b, k, v))], all_z)
+qed
+
+// ----------------------------------------------------------------------
 //  A program's outcomes: their parts
 
 theorem out_state_ok(s, v): out_state(ok(s, v)) = s
@@ -1040,8 +1246,30 @@ proof
   show by defs(simp(), diverge, tag)
 qed
 
+// an outcome with a ghost part: its state joined with it
+theorem with_ghost_ok(s, v, h): with_ghost(ok(s, v), h) = ok(union2(s, h), v)
+proof
+  have e: ex s2 v2. ok(s, v) = ok(s2, v2) by ex_intro({s}, {v}, refl({ok(s, v)}))
+  have t := mp(ite_t[c := ex s2 v2. ok(s, v) = ok(s2, v2), a := ok(union2(out_state(ok(s, v)), h), out_value(ok(s, v))),
+    b := ite(ex s2 e2. ok(s, v) = exc(s2, e2), exc(union2(out_state(ok(s, v)), h), out_value(ok(s, v))), ok(s, v))], e)
+  show by defs(simp(t, out_state_ok, out_value_ok), with_ghost)
+qed
+
+theorem with_ghost_exc(s, e, h): with_ghost(exc(s, e), h) = exc(union2(s, h), e)
+proof
+  show by defs(simp(out_state_exc, out_value_exc), with_ghost)
+qed
+
+theorem with_ghost_diverge(t, h): with_ghost(diverge(t), h) = diverge(t)
+proof
+  show by defs(simp(), with_ghost)
+qed
+
 simp out_state_ok
 simp out_value_ok
+simp with_ghost_ok
+simp with_ghost_exc
+simp with_ghost_diverge
 simp out_state_exc
 simp out_value_exc
 simp fst_ok

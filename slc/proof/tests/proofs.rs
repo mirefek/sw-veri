@@ -516,7 +516,7 @@ fn sub_proofs_are_closed_at_their_qed() {
 fn check_list(src: &str) -> Result<usize, String> {
     let mut env = Env::new();
     load(&mut env, &core_file("prelude.core"), true).unwrap();
-    for f in ["logic.core", "sets.core", "nat.core", "list.core"] {
+    for f in ["logic.core", "sets.core", "nat.core", "records.core", "list.core"] {
         load_with(&mut env, &core_file(f), false, Some(&mut ScriptProver)).unwrap();
     }
     load_with(&mut env, src, false, Some(&mut ScriptProver)).map(|r| r.theorems.len()).map_err(|e| e.0)
@@ -635,7 +635,7 @@ fn the_bit_library_checks() {
 #[test]
 fn the_loop_library_checks() {
     let n = check_nat(&core_file("loop.core")).unwrap();
-    assert_eq!(n, 28);
+    assert_eq!(n, 27);
 }
 
 /// A loop counting to 3 (the loop state: the program state and the counter).

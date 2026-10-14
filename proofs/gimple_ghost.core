@@ -1,0 +1,228 @@
+// GIMPLE-world programs and a ghost part of the state (proving GIMPLE
+// spec): a spec over `World & G` refined by a program over the world
+// (`refines_ghost`). The ghost part rides along: a step that does not read
+// it runs the same with it joined to its state (`with_ghost` on its
+// outcome); binding (`bind_rel`) carries that through a continuation. The
+// C function values' wrappers: `g.fun_res_ghost`, as `g.fun_res`.
+
+// (an outcome with a ghost part: in the universe if both are)
+theorem g.with_ghost_univ(o, h): o in univ(1) -> h in univ(1) -> with_ghost(o, h) in univ(1)
+proof
+  assume ho hh
+  show by defs(simp(ho, hh), with_ghost)
+qed
+
+// Binding with a ghost part h: a step's outcome o1 from s, run with h
+// joined (S) to `with_ghost(o1, h)`, and continuations that keep h (each
+// of the first's cases one of the second's with h joined): the second
+// binding holds.
+theorem g.bind_ghost(q, S, h, o1, s1 v. k, s1 e. x, t. d, s1 v. k2, s1 e. x2, t. d2):
+  runs(q, S, with_ghost(o1, h)) ->
+  ((ex s1 v. o1 = ok(s1, v) && k(s1, v)) || (ex s1 e. o1 = exc(s1, e) && x(s1, e)) || (ex t. o1 = diverge(t) && d(t))) ->
+  (all s1 v. k(s1, v) -> k2(union2(s1, h), v)) ->
+  (all s1 e. x(s1, e) -> x2(union2(s1, h), e)) ->
+  (all t. d(t) -> d2(t)) ->
+  bind_rel(q, S, s1 v. k2(s1, v), s1 e. x2(s1, e), t. d2(t))
+proof
+  assume hq hc hk hx hd
+  let O := with_ghost(o1, h)
+  have c1: (ex s1 v. o1 = ok(s1, v) && k(s1, v)) -> (ex s1 v. O = ok(s1, v) && k2(s1, v)) proof
+    assume e
+    obtain s1 v, he hkv from e
+    have oe: O = ok(union2(s1, h), v) by defs(simp(he), with_ghost)
+    show by ex_intro({union2(s1, h)}, {v}, taut(oe, mp(all_elim(hk, {s1}, {v}), hkv)))
+  qed
+  have c2: (ex s1 e. o1 = exc(s1, e) && x(s1, e)) -> (ex s1 e. O = exc(s1, e) && x2(s1, e)) proof
+    assume e
+    obtain s1 v, he hxv from e
+    have oe: O = exc(union2(s1, h), v) by defs(simp(he), with_ghost)
+    show by ex_intro({union2(s1, h)}, {v}, taut(oe, mp(all_elim(hx, {s1}, {v}), hxv)))
+  qed
+  have c3: (ex t. o1 = diverge(t) && d(t)) -> (ex t. O = diverge(t) && d2(t)) proof
+    assume e
+    obtain t, he hdt from e
+    have oe: O = diverge(t) by defs(simp(he), with_ghost)
+    show by ex_intro({t}, taut(oe, mp(all_elim(hd, {t}), hdt)))
+  qed
+  have w: runs(q, S, O) && ((ex s1 v. O = ok(s1, v) && k2(s1, v)) || (ex s1 e. O = exc(s1, e) && x2(s1, e)) || (ex t. O = diverge(t) && d2(t)))
+    by taut(hq, hc, c1, c2, c3)
+  show by defs(ex_intro({O}, w), bind_rel)
+qed
+
+// GIMPLE's `result` does not read the state: it runs the same with a
+// ghost part
+theorem g.result_ghost(w, v, s, h, o): h in univ(1) -> runs(gimple.result(w, v), s, o) ->
+  runs(gimple.result(w, v), union2(s, h), with_ghost(o, h))
+proof
+  assume hh hr
+  have pu := apply(g.runs_univ, hr)
+  have ou: o in univ(1) by simp(pu)
+  have gu := apply(g.with_ghost_univ, ou, hh)
+  have r := apply(g.runs_elim, expand(hr, gimple.result))
+  have pu2: pair(union2(s, h), with_ghost(o, h)) in univ(1) by simp(pu, hh, gu)
+  have c1: !(ex x2. x2 in bits(64) && x2 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false))) ->
+      runs(gimple.result(w, v), union2(s, h), with_ghost(o, h)) proof
+    assume n
+    show by defs(apply(tr.runs_intro, pu2, (any_rel(x2. x2 in bits(64) && x2 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false)), x2. with_ghost(o, h) = ok(union2(s, h), x2)) by defs(taut(n), any_rel))), gimple.result)
+  qed
+  have c2: (ex x2. (x2 in bits(64) && x2 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false))) && o = ok(s, x2)) ->
+      runs(gimple.result(w, v), union2(s, h), with_ghost(o, h)) proof
+    assume e
+    obtain x2, hb hd he from e
+    have g: with_ghost(o, h) = ok(union2(s, h), x2) by defs(simp(he), with_ghost)
+    have ee: ex x3. (x3 in bits(64) && x3 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false))) && with_ghost(o, h) = ok(union2(s, h), x3)
+      by ex_intro({x2}, taut(hb, hd, g))
+    have a: any_rel(x3. x3 in bits(64) && x3 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false)), x3. with_ghost(o, h) = ok(union2(s, h), x3))
+      by defs(taut(ee), any_rel)
+    show by defs(apply(tr.runs_intro, pu2, a), gimple.result)
+  qed
+  show by taut(expand(r, any_rel), c1, c2)
+qed
+
+// (a w-bit result; `g.fun_res` with a ghost part G: the procedure's
+// refinement at every register list gives the wrapper's)
+theorem g.fun_res_ghost(x0. p, x0. q, w, n, G): (all h. h in G -> h in univ(1)) ->
+  (all regs. refines_ghost(p(regs), q(regs), abi.World, G)) ->
+  all regs. regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) ->
+  refines_ghost(app(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(p(x0), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), regs),
+    app(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), regs),
+    abi.World, G)
+proof
+  assume hG hc
+  fix regs
+  assume hr
+  rsimp only, app_fn_build, hr
+  let MQ := mkprog(x1 x2. !ord_le(n, seq_len(regs)) || bind_rel(q(regs), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have main: all s h o. s in abi.World -> h in G -> runs(mkprog(x1 x2. !ord_le(n, seq_len(regs)) || bind_rel(p(regs), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), s, o) ->
+      (ex h2. h2 in G && runs(mkprog(x1 x2. !ord_le(n, seq_len(regs)) || bind_rel(q(regs), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), union2(s, h), with_ghost(o, h2))) proof
+    fix s h o
+    assume hs hh ho
+    have pu := apply(g.runs_univ, ho)
+    have ou: o in univ(1) by simp(pu)
+    have su: s in univ(1) by simp(pu)
+    have r := apply(g.runs_elim, ho)
+    // (too few arguments: the spec allows anything, the ghost part kept)
+    have k1: case 1 of r proof
+      assume hn
+      have hu := mp(all_elim(hG, {h}), hh)
+      have gu := apply(g.with_ghost_univ, ou, hu)
+      have pu2: pair(union2(s, h), with_ghost(o, h)) in univ(1) by simp(su, hu, gu)
+      have rq: runs(MQ, union2(s, h), with_ghost(o, h)) by apply(tr.runs_intro, pu2, taut(hn))
+      show by ex_intro({h}, taut(hh, rq))
+    qed
+    // (else the spec's run, with the ghost part it chooses)
+    have k2: case 2 of r proof
+      assume hb
+      obtain o1, h1 hk from expand(hb, bind_rel)
+      obtain h2, hg2 hq from mp(all_elim(expand(all_elim(hc, {regs}), refines_ghost), {s}, {h}, {o1}), hs, hh, h1)
+      have hu2 := mp(all_elim(hG, {h2}), hg2)
+      have gu := apply(g.with_ghost_univ, ou, hu2)
+      have pu2: pair(union2(s, h), with_ghost(o, h2)) in univ(1) by simp(su, mp(all_elim(hG, {h}), hh), gu)
+      // the continuation: the result as returned, the ghost part kept
+      have kk: all s1 v. letin(v, x5. bind_rel(gimple.result(w, x5), s1, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o = ok(x6, pair(x8, x9)))), x6 x7. o = exc(x6, x7), x6. o = diverge(x6))) ->
+          letin(v, x5. bind_rel(gimple.result(w, x5), union2(s1, h2), x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. with_ghost(o, h2) = ok(x6, pair(x8, x9)))), x6 x7. with_ghost(o, h2) = exc(x6, x7), x6. with_ghost(o, h2) = diverge(x6))) proof
+        fix s1 v
+        assume hl
+        obtain o5, h5 hk5 from expand(expand(hl, letin), bind_rel)
+        have q5 := apply(g.result_ghost, hu2, h5)
+        have ka: all s6 x7. any_rel(x9. x9 in bits(64), x9. o = ok(s6, pair(x7, x9))) ->
+            any_rel(x9. x9 in bits(64), x9. with_ghost(o, h2) = ok(union2(s6, h2), pair(x7, x9))) proof
+          fix s6 x7
+          assume ha
+          have a2 := expand(ha, any_rel)
+          have c1: !(ex x9. x9 in bits(64)) -> any_rel(x9. x9 in bits(64), x9. with_ghost(o, h2) = ok(union2(s6, h2), pair(x7, x9))) proof
+            assume n
+            show by defs(taut(n), any_rel)
+          qed
+          have c2: (ex x9. x9 in bits(64) && o = ok(s6, pair(x7, x9))) -> any_rel(x9. x9 in bits(64), x9. with_ghost(o, h2) = ok(union2(s6, h2), pair(x7, x9))) proof
+            assume e
+            obtain x9, hx9 he from e
+            have g: with_ghost(o, h2) = ok(union2(s6, h2), pair(x7, x9)) by defs(simp(he), with_ghost)
+            have ee: ex x9. x9 in bits(64) && with_ghost(o, h2) = ok(union2(s6, h2), pair(x7, x9)) by ex_intro({x9}, taut(hx9, g))
+            show by defs(taut(ee), any_rel)
+          qed
+          show by taut(a2, c1, c2)
+        qed
+        have kx: all s6 e. o = exc(s6, e) -> with_ghost(o, h2) = exc(union2(s6, h2), e) proof
+          fix s6 e
+          assume he
+          show by defs(simp(he), with_ghost)
+        qed
+        have kd: all t. o = diverge(t) -> with_ghost(o, h2) = diverge(t) proof
+          fix t
+          assume he
+          show by defs(simp(he), with_ghost)
+        qed
+        have b := apply(g.bind_ghost[k2 := s9 v9. any_rel(x9. x9 in bits(64), x9. with_ghost(o, h2) = ok(s9, pair(v9, x9))),
+          x2 := s9 e9. with_ghost(o, h2) = exc(s9, e9), d2 := t9. with_ghost(o, h2) = diverge(t9)], q5, hk5, ka, kx, kd)
+        show by defs(b, letin)
+      qed
+      have kx: all s1 e. o = exc(s1, e) -> with_ghost(o, h2) = exc(union2(s1, h2), e) proof
+        fix s1 e
+        assume he
+        show by defs(simp(he), with_ghost)
+      qed
+      have kd: all t. o = diverge(t) -> with_ghost(o, h2) = diverge(t) proof
+        fix t
+        assume he
+        show by defs(simp(he), with_ghost)
+      qed
+      have b := apply(g.bind_ghost[k2 := s9 v9. letin(v9, x5. bind_rel(gimple.result(w, x5), s9, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. with_ghost(o, h2) = ok(x6, pair(x8, x9)))), x6 x7. with_ghost(o, h2) = exc(x6, x7), x6. with_ghost(o, h2) = diverge(x6))),
+        x2 := s9 e9. with_ghost(o, h2) = exc(s9, e9), d2 := t9. with_ghost(o, h2) = diverge(t9)], hq, hk, kk, kx, kd)
+      have rq: runs(MQ, union2(s, h), with_ghost(o, h2)) by apply(tr.runs_intro, pu2, taut(b))
+      show by ex_intro({h2}, taut(hg2, rq))
+    qed
+    show by taut(r, k1, k2)
+  qed
+  show by defs(main, refines_ghost)
+qed
+
+// ----------------------------------------------------------------------
+//  A contract's runs (layers/abi.sl: `require P; either { overflow() } or
+//  { B }`, B's outcome x2 read as the procedure's): a run from s that
+//  overflows, or one that B returns from with v
+
+theorem ct.contract_ovf(x0. P, x0 x2. B, s, v): P(s) -> v in x86_64_linux.Vm ->
+  pair(s, exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) in univ(1) ->
+  runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    s, exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty)))
+proof
+  assume hp hv hu
+  let OVF := exc_val("stack_overflow", empty)
+  let O := exc(fn_update(s, "vm", v), OVF)
+  let X2 := exc(pair(fn_update(s, "vm", v), empty), pair("raise", OVF))
+  have ov := apply(ct.overflow_intro, hv, hu)
+  have bo: bind_rel(abi.overflow, s, x3 x4. X2 = ok(pair(x3, empty), empty), x3 x4. X2 = exc(pair(x3, empty), pair("raise", x4)), x3. X2 = diverge(x3))
+    by defs(ex_intro({O}, taut(ov, (ex x3 x4. O = exc(x3, x4) && X2 = exc(pair(x3, empty), pair("raise", x4)) by ex_intro({fn_update(s, "vm", v)}, {OVF}, simp())))), bind_rel)
+  have mp1: fst(X2) = 1 && fst(out_value(X2)) = "raise" && O = exc(fst(out_state(X2)), snd(out_value(X2))) by simp()
+  have e: (ex x2. (bind_rel(abi.overflow, s, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(s, x2)) &&
+    ((fst(x2) = 0 && O = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && O = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && O = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && O = diverge(snd(x2))))))
+    by ex_intro({X2}, taut(bo, mp1))
+  have r: !P(s) || (ex x2. (bind_rel(abi.overflow, s, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(s, x2)) &&
+    ((fst(x2) = 0 && O = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && O = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && O = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && O = diverge(snd(x2)))))) by taut(e)
+  show by apply(tr.runs_intro, hu, r)
+qed
+
+theorem ct.contract_ret(x0. P, x0 x2. B, s, s1, v): P(s) -> B(s, exc(pair(s1, empty), pair("ret", v))) -> pair(s, ok(s1, v)) in univ(1) ->
+  runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    s, ok(s1, v))
+proof
+  assume hp hb hu
+  let O := ok(s1, v)
+  let X2 := exc(pair(s1, empty), pair("ret", v))
+  have mp1: fst(X2) = 1 && fst(out_value(X2)) = "ret" && O = ok(fst(out_state(X2)), snd(out_value(X2))) by simp()
+  have e: (ex x2. (bind_rel(abi.overflow, s, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(s, x2)) &&
+    ((fst(x2) = 0 && O = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && O = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && O = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && O = diverge(snd(x2))))))
+    by ex_intro({X2}, taut(hb, mp1))
+  have r: !P(s) || (ex x2. (bind_rel(abi.overflow, s, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(s, x2)) &&
+    ((fst(x2) = 0 && O = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && O = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && O = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && O = diverge(snd(x2)))))) by taut(e)
+  show by apply(tr.runs_intro, hu, r)
+qed

@@ -354,7 +354,7 @@ longest match wins, and a literal token beats a hole.
 
 **Specs with ghost state.** A spec may run on the C world extended by
 ghost fields (`state MallocAbs extends Heap { ghost A: Abs }`,
-layers/mallocng.sl): it reads the memory where that is its purpose, the
+layers/mallocng_purpose.sl): it reads the memory where that is its purpose, the
 ghosts where that is, and updates the ghosts by `ghost f := e`. The code
 has no ghosts, so nothing is erased: the refinement says that for every
 initial ghost some final one matches (`refines_ghost(code, spec, abi.World,
@@ -362,6 +362,19 @@ G)`, after any ghost-free refinements: `g.refines_then_ghost`), and the
 machine code then implements the spec, `abi.implements2_at(G, ..)`, from
 its C1 by `tr.implements_abi_g` (proofs/abi_ghost.core; for every G whose
 fields are none of the machine's or the world's, `abi.ghost_ok`).
+
+In such a refinement the ghost part rides along without bookkeeping:
+`simp` reads a field of `union2(s, h)` in the part that has it and pushes
+an update into it (a part lacks a field by its construction or by a known
+`dom(h) = D`), and computes `with_ghost(ok(s, v), h) = ok(union2(s, h), v)`
+(likewise `exc`; a divergence is itself). Binding commutes with a ghost
+extension (`g.bind_ghost`), so a C function value's wrapper refines when
+its procedure does (`g.fun_res_ghost`, as `g.fun_res`), and a contract's
+runs are introduced by its two cases (`ct.contract_ovf`,
+`ct.contract_ret`; proofs/gimple_ghost.core). The user's proof is then the
+spec's idea: get_slot_index's (proofs/mallocng_purpose.core) is that the
+byte it reads is the slot's header, the allocator's, its low bits the
+slot's index (`mp.slot_hdr`, from the invariant).
 
 ## 10. Static semantics
 
@@ -449,9 +462,11 @@ assume h1 h2              the goal's next premises, named
 fix x y                   the goal's next `all`s (generalized at the end)
 have h: φ := P            a fact from a proof expression (φ checked if given)
 have h: φ by R(args)      a fact by a goal rule (below)
-have a b c := P           P's conjuncts, named (`_` skips one, `..` ignores the rest, `r..` names it)
+have a b c := P           P's conjuncts, named (`_` skips one, `..` ignores the rest, `r..` names it;
+                          as many names as the leaves of its tree of `&&`s: every leaf)
 have {sM, x = mM} := P    the conjuncts labelled sM, mM
-obtain x y, h1 h2 from P  witnesses of `ex x y. ...`, the body's conjuncts named
+obtain x y, h1 h2 from P  witnesses of `ex x y. ...`, the body's conjuncts named (as `have`: `ex k: nat.
+                          P && Q`'s body `k in omega && (P && Q)` takes 2 or 3 names)
 step x.., h.. from P with f.. [using u..]   a run of readable GIMPLE inverted step by step (below)
 show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)

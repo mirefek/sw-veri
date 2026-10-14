@@ -460,4 +460,21 @@ item is a short summary of finished work; details are in the files named.
   (raising, return, divergence, crash) for any ghost part
   (proofs/abi_ghost.core); the ghost-free case its instance. The malloc
   layers' state for it: `MallocAbs`, the abstract state a ghost beside
-  malloc's blocks (layers/mallocng.sl).
+  malloc's blocks (layers/mallocng_purpose.sl).
+- **get_slot_index by its purpose**: its machine code implements
+  `get_slot_index_purpose` -- the index of the slot where p's block or
+  nested group starts, in the abstract state (`mp.gsi_implements`,
+  proofs/mallocng_purpose.core). The user's part: the byte read is the
+  slot's header, the allocator's, its low bits the index (`mp.slot_hdr`;
+  the footprint's ranges as lists, `mp.group_fp`). The invariant gained
+  what this needed: a slot's in-band header no client's (`hdr_free`), the
+  groups' pages not the stack's. The ghost part's bookkeeping moved to
+  the language: simp reads and updates a joined record in its part
+  (`dom(h) = D` known: `dom_lacks`, `fn_update_union_l/_r`,
+  `app_union2_lacks`) and computes `with_ghost` on outcomes; generic
+  `g.bind_ghost`, `g.fun_res_ghost`, `ct.contract_ovf/_ret`
+  (proofs/gimple_ghost.core); named conjuncts split to the leaves when
+  the names count them (`obtain k, hk hl he` of `ex k: nat. P && Q`).
+  Library: `nat_lt_mem`, `int_sum_nat`, `at_type`, `build_list`,
+  `ex_at_concat_l/_r`, `app_space`, `rec_univ`, `union2_fun`,
+  `some_val` (core/), `x86.le_at_nat`.
