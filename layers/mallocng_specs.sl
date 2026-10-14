@@ -5,7 +5,11 @@ layer mallocng_specs uses gimple, abi, mallocng
 // (layers/abi.sl): a named precondition (`require`: outside it the spec
 // allows anything), then a stack overflow or the effect, stated as a
 // function of the world. C2 shows the function's readable GIMPLE refines
-// its spec (proofs/mallocng_c2.core, proofs/mallocng_bits.core).
+// its spec (proofs/mallocng_c2.core, proofs/mallocng_bits.core). Each as a
+// C function value too (its register wrapper, as readable GIMPLE has C
+// functions): what its callers' calls rely on. The wrappers are written as
+// the code's are (a result through `result[w]`), so one lemma per shape
+// relates the two (proofs/translate_effects.core, `g.fun_*`).
 
 ///////////////////////////////////////////////////////////////////////
 //  Words
@@ -54,6 +58,8 @@ fn dq_head(v1: Vm, vm: Vm, phead: Addr, m: Addr) -> Vm =
   if mnext(vm, m) != m && rd64(v1, phead) = m { wr64(v1, phead, mnext(vm, m)) } else { v1 }
 fn dequeue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm = wr64(wr64(dq_head(dq_links(vm, phead, m), vm, phead, m), m + 8, 0), m, 0)
 
+// queue's conditions and effect as its code has it (`ms.qu_run`; its spec,
+// by its purpose: mallocng_purpose's queue_purpose).
 // queue(phead, m): m, unlinked (its links 0 -- else a_crash, a bug),
 // joins the list *phead: before its head H (at the circular list's end,
 // after H's prev P), or as the list's only element. The words involved:
@@ -74,43 +80,10 @@ fn queue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm =
     wr64(wr64(wr64(vm, m + 8, m), m, m), phead, m)
   }
 
-proc[World] queue_spec(phead: bits[64], m: bits[64]) {
-  require queue_pre(vm, objs, phead, m)
-  either { overflow() } or { vm := queue_vm(vm, phead, m) }
-}
-
-// ... as a C function value (its register wrapper, as readable GIMPLE has
-// C functions: c_mallocng_malloc's queue_fun): what its callers' calls
-// rely on. The wrappers are written as the code's are (a result through
-// `result[w]`), so one lemma per shape relates the two
-// (proofs/translate_effects.core, `g.fun_*`)
-fn queue_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 2
-  queue_spec(bits[64](args[0]), bits[64](args[1]))
-  return (any bits[64], any bits[64])
-}
-
-// free_meta(m): m's 40 bytes (its struct meta) zeroed, then m queued on the
-// free metas' list, ctx.free_meta_head (at ctx + 16; ctx the malloc
-// context's address, layers/mallocng.sl's Cfg.ctx). The bytes: usable;
-// queue's precondition, and the thread pointer for its call, on the memory
-// zeroed.
+// free_meta's first step as its code has it: m's 40 bytes (its struct
+// meta) zeroed (its spec, by its purpose: mallocng_purpose's
+// free_meta_purpose)
 fn zero_meta(vm: Vm, m: Addr) -> Vm = vm with { bytes: store_le(vm.bytes, m, 40, 0) }
-
-pred free_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, m: Addr) =
-  m != 0 && usable(vm, objs, uint(m), 40, true) && uint(ctx) + 16 < 2^64 &&
-  queue_pre(zero_meta(vm, m), objs, ctx + 16, m) && thread_ok(zero_meta(vm, m), fs)
-
-proc[World] free_meta_spec(ctx: bits[64], m: bits[64]) {
-  require free_meta_pre(vm, objs, fs_base, ctx, m)
-  either { overflow() } or { vm := queue_vm(zero_meta(vm, m), ctx + 16, m) }
-}
-
-fn free_meta_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  free_meta_spec(ctx, bits[64](args[0]))
-  return (any bits[64], any bits[64])
-}
 
 ///////////////////////////////////////////////////////////////////////
 //  Slots

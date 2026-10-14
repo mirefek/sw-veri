@@ -50,6 +50,56 @@ proc[World] dequeue_purpose(phead: bits[64], m: bits[64]) {
   }
 }
 
+// queue(phead, m): m, outside the list at *phead (its words accessible,
+// 8-aligned, apart from the list's and the head word; its links 0 -- else
+// musl's a_crash, a bug), joins it at the end; no byte but the head word
+// and the links written
+pred joinable(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat], m: bits[64]) =
+  uint(m) + 16 <= 2^64 && word_ok(vm, objs, m, 0) && word_ok(vm, objs, m, 8) && uint(m) % 8 = 0 &&
+  (uint(phead) + 8 <= uint(m) || uint(m) + 16 <= uint(phead)) &&
+  (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 16 <= l[i]) &&
+  rd64(vm, m) = 0 && rd64(vm, m + 8) = 0
+pred queued(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
+  all l: List[nat]. list_at(before, objs, phead, l) && joinable(before, objs, phead, l, m) ->
+    list_at(vm, objs, phead, l ++ [uint(m)]) && links_only(before, vm, phead, l ++ [uint(m)])
+
+proc[World] queue_purpose(phead: bits[64], m: bits[64]) {
+  require ex l: List[nat]. list_at(vm, objs, phead, l) && joinable(vm, objs, phead, l, m)
+  either { overflow() } or {
+    let before = vm
+    havoc vm where queued(before, vm, objs, phead, m)
+  }
+}
+
+// free_meta(m): m's meta (its 40 bytes: accessible, 8-aligned, apart from
+// the free metas' list at ctx + 16 and its head word) cleared and m
+// appended to that list -- its links the list's, its other bytes 0; no
+// byte but those, the head word and the list's links written. Its call to
+// queue needs the thread pointer sound, its word not m's.
+pred meta_joinable(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat], m: bits[64]) =
+  m != 0 && uint(m) + 40 <= 2^64 && uint(m) % 8 = 0 &&
+  usable(vm, objs, uint(m), 40, false) && usable(vm, objs, uint(m), 40, true) &&
+  (uint(phead) + 8 <= uint(m) || uint(m) + 40 <= uint(phead)) &&
+  (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 40 <= l[i])
+pred meta_freed(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
+  all l: List[nat]. list_at(before, objs, phead, l) && meta_joinable(before, objs, phead, l, m) ->
+    list_at(vm, objs, phead, l ++ [uint(m)]) &&
+    (all a: nat. uint(m) + 16 <= a && a < uint(m) + 40 -> vm.bytes[bits[64](a)] = 0) &&
+    (vm with { bytes: before.bytes }) = before &&
+    (all a: nat. a < 2^64 && !(uint(phead) <= a && a < uint(phead) + 8) && !(uint(m) <= a && a < uint(m) + 40) &&
+       (all i: nat. i < len(l) -> !(l[i] <= a && a < l[i] + 16)) ->
+       vm.bytes[bits[64](a)] = before.bytes[bits[64](a)])
+
+proc[World] free_meta_purpose(ctx: bits[64], m: bits[64]) {
+  require uint(ctx) + 16 < 2^64 &&
+    (ex l: List[nat]. list_at(vm, objs, ctx + 16, l) && meta_joinable(vm, objs, ctx + 16, l, m)) &&
+    thread_ok(vm, fs_base) && uint(fs_base) + 8 <= 2^64 && (uint(fs_base) + 8 <= uint(m) || uint(m) + 40 <= uint(fs_base))
+  either { overflow() } or {
+    let before = vm
+    havoc vm where meta_freed(before, vm, objs, ctx + 16, m)
+  }
+}
+
 // dequeue_head(phead): the list at *phead's first element (0 for an empty
 // list) out of it and returned. Its call to dequeue needs the thread
 // pointer sound (the ABI's, at every call).
@@ -209,6 +259,18 @@ fn set_size_purpose_fun() -> CFun2[World] = (args: Args) => {
 fn dequeue_purpose_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 2
   dequeue_purpose(bits[64](args[0]), bits[64](args[1]))
+  return (any bits[64], any bits[64])
+}
+
+fn queue_purpose_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 2
+  queue_purpose(bits[64](args[0]), bits[64](args[1]))
+  return (any bits[64], any bits[64])
+}
+
+fn free_meta_purpose_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  free_meta_purpose(ctx, bits[64](args[0]))
   return (any bits[64], any bits[64])
 }
 

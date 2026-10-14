@@ -562,3 +562,18 @@ item is a short summary of finished work; details are in the files named.
   summary (`ms.dq_run`); its callers' rule `mp.dq_q`. Core:
   `nat_mem_lt`. The memory-level specs, C2s and compositions of dequeue
   and dequeue_head retired.
+- **queue and free_meta at the meaning level** (`mp.qu`, `mp.fm`,
+  `mp.qu_implements`, `mp.fm_implements`): queue appends m, its links 0
+  and its words apart from the list's (`joinable`), to any list at the
+  head word (`queued`: `l ++ [m]`, only the links and the head word
+  written); free_meta clears m's meta and appends m to the free metas'
+  list at ctx + 16 (`meta_freed`: its links the list's, its other bytes
+  0, nothing else written; the thread pointer's word not m's). The
+  appended list's elements (`mp.snoc`, `mp.snoc_ok`), queue's
+  precondition and effect on it (`mp.qu_pre`, `mp.qu_list0`,
+  `mp.qu_list1`, `mp.qu_done`); the zeroed meta (`mp.zero_b`,
+  `mp.zero_w`), a list kept by writes apart from it (`mp.list_keep`),
+  free_meta's effect (`mp.fm_pre`, `mp.fm_done`); queue's callers' rule
+  `mp.qu_q`. The memory-level specs, C2s and compositions of queue and
+  free_meta retired; `queue_pre`/`queue_vm` and `zero_meta` kept as
+  effect summaries (`ms.qu_run`).
