@@ -28,11 +28,10 @@ keeps the lower-level properties. Bottom-up:
 - Then the "purpose" name dropped: these are the specs.
 
 Along the way:
-- `tr.div_raises` of loop-free code once, structurally (it diverges only
-  where an operation is undefined, and raises there too), instead of per
-  function (get_meta's, get_stride's, allzerop's, activate_group's now
-  premises of their `*_implements`; activate_group's code has a loop:
-  its divergence too).
+- The memory-level path's `tr.div_raises` premises
+  (proofs/mallocng_link.core's `*.linked_abi`, on the code): as the purpose
+  specs' now are, on the spec (`tr.div_raises_g` by `ct.contract_div`), or
+  gone with those specs.
 - What enframe's callers owe: alloc_slot's postcondition the reserved
   slot's access (`slot_rw`); malloc's the class bound (its n within the
   class), the thread pointer's word apart from the slot (the C world's

@@ -592,6 +592,16 @@ item is a short summary of finished work; details are in the files named.
   the ghost record updated (`mp.g_upd`). activate_group's memory-level
   spec, C2 and compositions retired; `activate_group_pre`/`_vm` kept as
   its effect summary (`ms.ag_run`).
+- **Divergence on the spec's side**: the bridge with a ghost part asks a
+  spec that diverges only where it raises (`tr.div_raises_g`), not the
+  code: the code's divergence (C1 compares no trace) is the spec's by the
+  refinement, and a contract diverges only where it is undefined
+  (`ct.contract_div`; the wrapper `ct.fun_div`, `ct.fun_divg`; bodies by
+  `ct.dv_ret`, `ct.dv_ret2`). The code's loops play no part.
+  `tr.crashes_abi_d`, `tr.matches_t_abi_d`, `tr.implements_matches_d`
+  keep the divergence instead of a premise. get_slot_index, get_meta,
+  get_stride, allzerop, enframe and activate_group's `*_implements`
+  without premises (`mp.*_divg`).
 - **A proof cache** (`slc kernel-check`, `syntax::ProofCache`): within a
   changed file, a proof unchanged in the same context is not checked
   again; `scripts/check.sh` checks the chain with the caches.

@@ -766,15 +766,21 @@ qed
 
 // a run C1 matched with low is one abi_function allows for spec, from the
 // entry with any ghost part h (the final one: spec's)
+// A spec over the world with a ghost part diverges only where it raises
+// (undefined there: a contract's body has no loop), the raise's state a
+// world with a ghost part
+def tr.div_raises_g(G, spec) := all args w h t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> runs(app(spec, args), union2(w, h), diverge(t)) ->
+  (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && x in rec_and(abi.World, G) && runs(app(spec, args), union2(w, h), exc(x, e)))
+
 theorem abi.bridge_run_g: all G f low spec args objs mem s h o. abi.ghost_ok(G) -> h in G ->
-  refines_ghost(app(low, args), app(spec, args), abi.World, G) ->
+  refines_ghost(app(low, args), app(spec, args), abi.World, G) -> tr.div_raises_g(G, spec) -> args in abi.ARGS ->
   s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> objs in set_type(omega) ->
   (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
-  runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) ->
+  runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) || (ex t. runs(app(low, args), abi.view(s, objs, mem), diverge(t))) ->
   ex h2. h2 in G && runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), with_ghost(o, h2))
 proof
   fix G f low spec args objs mem s h o
-  assume hg hh href hM he hot hob hmv hwm hr hm
+  assume hg hh href hdg hA hM he hot hob hmv hwm hr hm
   have hp := apply(abi.run_univ, hr)
   have hsh := apply(abi.run_shape, hr)
   have su: s in univ(1) by simp(hp)
@@ -852,20 +858,32 @@ proof
     qed
     show by taut(oe, k1, k2)
   qed
-  show by taut(expand(hm, abi.matches), c1, c2, c3, c4)
+  // the code diverging (its trace not compared): the spec too, so it raises
+  have c5: (ex t. runs(app(low, args), abi.view(s, objs, mem), diverge(t))) -> GOAL proof
+    assume hc
+    obtain t, rd from hc
+    obtain h2, hh2 r2 from mp(all_elim(rf, {abi.view(s, objs, mem)}, {h}, {diverge(t)}), vW, hh, rd)
+    have r3 := rewrite(all_elim(abi.wg_div, {t}, {h2}), r2)
+    obtain e x, eu eno xg rx from mp(all_elim(expand(hdg, tr.div_raises_g), {args}, {abi.view(s, objs, mem)}, {h}, {t}), hA, vW, vu, hh, r3)
+    have ho: abi.outcome(o) by simp(hsh)
+    have pu ou2 := apply(abi.wg_univ, hp, hu, ho)
+    have r := apply(abi.ub_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {with_ghost(o, h)}, {e}, {x}, hg, hh, hM, su, hot, hmv, hwm, hob, eu, eno, xg, rx, pu, ou2)
+    show by ex_intro({h}, taut(hh, r))
+  qed
+  show by taut(hm, expand(hm, abi.matches), c1, c2, c3, c4, c5)
 qed
 
 // the contract with a ghost: from the runs C1 matched with low, low
 // refining spec (for every arguments) over World & G
 theorem abi.bridge_implements_g: all G f low spec base code statics. abi.ghost_ok(G) ->
-  (all args. args in abi.ARGS -> refines_ghost(app(low, args), app(spec, args), abi.World, G)) ->
+  (all args. args in abi.ARGS -> refines_ghost(app(low, args), app(spec, args), abi.World, G)) -> tr.div_raises_g(G, spec) ->
   (all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
-    runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o)) ->
+    runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) || (ex t. runs(app(low, args), abi.view(s, objs, mem), diverge(t)))) ->
   abi.implements2_at(G, f, spec, base, code, statics)
 proof
   fix G f low spec base code statics
-  assume hg hrf hb
+  assume hg hrf hdg hb
   let ld(m) := abi.loaded(app(m, "vm"), base, code, statics)
   let rel(a, ob, mm) := mkprog(x1 x2. !ld(x1) || bind_rel(abi.abi_function(G, f, spec, a, ob, mm), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have main: all x0. all x1. all x2. (x0 in abi.ARGS && x1 in set_type(omega)) && x2 in x86_64_linux.Vm -> (all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in G && runs(rel(x0, x1, x2), union2(s, h), with_ghost(o, h2)))) proof
@@ -942,7 +960,7 @@ proof
           ex h2. h2 in G && runs(rel(args, objs, mem), S, with_ghost(o, h2)) proof
         assume hc hy hb2 hw
         have hm := mp(all_elim(hb, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, hc, hy.1, hy.2, hb2, hw, hr)
-        obtain h2, hh2 r from apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, mp(all_elim(hrf, {args}), hA), hM, hy.2, hot, hb2, hmv, hw, hr, hm)
+        obtain h2, hh2 r from apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, mp(all_elim(hrf, {args}), hA), hdg, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
         show by ex_intro({h2}, taut(hh2, mp(all_elim(relk, {h2}), hh2, taut(r))))
       qed
       // (the preconditions as of S: s's)
@@ -976,13 +994,13 @@ qed
 
 // the bridge's contract: every run from an entry matched with the spec
 // (tr.implements_abi's first step)
-theorem tr.implements_matches: all f spec base code statics. tr.div_raises(spec) -> tr.implements_at(f, spec, base, code, statics) ->
+theorem tr.implements_matches_d: all f spec base code statics. tr.implements_at(f, spec, base, code, statics) ->
   all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
     abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
-    runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, objs, mem, s, o)
+    runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, objs, mem, s, o) || (ex t. runs(app(spec, args), abi.view(s, objs, mem), diverge(t)))
 proof
   fix f spec base code statics
-  assume hdr hi
+  assume hi
   fix args objs mem s o
   assume hA hot hmv hM hl hrip he hob hwm hr
   have su: s in univ(1) by simp(apply(abi.run_univ, hr))
@@ -993,31 +1011,38 @@ proof
   have hvW := apply(abi.world_typed, hM, hot, hmv, hvu)
   have c := expand(hi, tr.implements_at)
   have d := apply(tr.run_disc, {s}, {o}, hr)
-  have c1: tr.run_d(s, s, o) -> abi.matches(spec, args, objs, mem, s, o) proof
+  let DV := ex t. runs(app(spec, args), abi.view(s, objs, mem), diverge(t))
+  have c1: tr.run_d(s, s, o) -> abi.matches(spec, args, objs, mem, s, o) || DV proof
     assume rd
     have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rd)
-    show := apply(tr.matches_t_abi, hdr, hA, hvW, hvu, mt)
+    show := apply(tr.matches_t_abi_d, {spec}, {args}, {objs}, {mem}, {s}, {o}, mt)
   qed
-  have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches(spec, args, objs, mem, s, o) proof
+  have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches(spec, args, objs, mem, s, o) || DV proof
     assume e
     obtain x, rd from e
     have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {exc(x, exc_val("disc", empty))}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rd)
-    have mx := apply(tr.matches_t_abi, hdr, hA, hvW, hvu, mt)
-    show := apply(tr.matches_raise, {spec}, {args}, {objs}, {mem}, {s}, {x}, {o}, mx)
+    have mx := apply(tr.matches_t_abi_d, {spec}, {args}, {objs}, {mem}, {s}, {exc(x, exc_val("disc", empty))}, mt)
+    have mr: abi.matches(spec, args, objs, mem, s, exc(x, exc_val("disc", empty))) -> abi.matches(spec, args, objs, mem, s, o) proof
+      assume h
+      show := apply(tr.matches_raise, {spec}, {args}, {objs}, {mem}, {s}, {x}, {o}, h)
+    qed
+    show by taut(mx, mr)
   qed
   show by taut(d, c1, c2)
 qed
 
 // Machine code implementing (the bridge's contract) a ghost-free C
 // function value low that refines a spec over World & G implements the
-// spec: the ABI's contract with G.
-theorem tr.implements_abi_g: all G f low spec base code statics. abi.ghost_ok(G) -> tr.div_raises(low) -> tr.implements_at(f, low, base, code, statics) ->
+// spec: the ABI's contract with G. The code's divergence (its trace not
+// compared) is the spec's by the refinement; the spec raises there
+// (`tr.div_raises_g`: a contract diverges only where it is undefined).
+theorem tr.implements_abi_g: all G f low spec base code statics. abi.ghost_ok(G) -> tr.div_raises_g(G, spec) -> tr.implements_at(f, low, base, code, statics) ->
   (all args. args in abi.ARGS -> refines_ghost(app(low, args), app(spec, args), abi.World, G)) ->
   abi.implements2_at(G, f, spec, base, code, statics)
 proof
   fix G f low spec base code statics
-  assume hg hdr hi hrf
-  show := apply(abi.bridge_implements_g, hg, hrf, apply(tr.implements_matches, hdr, hi))
+  assume hg hdg hi hrf
+  show := apply(abi.bridge_implements_g, hg, hrf, hdg, apply(tr.implements_matches_d, hi))
 qed
 
 // (a refinement, then one with ghosts: one with ghosts)

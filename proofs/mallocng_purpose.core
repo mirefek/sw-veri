@@ -120,6 +120,17 @@ proof
   show by taut(u, w)
 qed
 
+// (a world with a ghost part: a member, its memory the world's)
+theorem mp.gS(w, h): w in abi.World -> w in univ(1) -> h in mp.G -> univ: union2(w, h) in univ(1) && vm: app(union2(w, h), "vm") in x86_64_linux.Vm
+proof
+  assume hw hwu hh
+  have hu hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+  have sd: dom(w) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hw, abi.World))
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have ev: app(union2(w, h), "vm") = app(w, "vm") by simp(sd, hd)
+  show by taut(mp(union2_univ[u := 1, a := w, b := h], hwu, hu), rewrite(sym(ev), pv))
+qed
+
 // ----------------------------------------------------------------------
 //  set_size: its code refines its purpose
 
@@ -406,27 +417,34 @@ proof
   show by taut(l)
 qed
 
-// (the code diverges nowhere it does not also raise: only where it allows
-// anything)
-theorem mp.gsi_div_raises: tr.div_raises(c_src_malloc_mallocng_malloc.get_slot_index_fun())
+// (the purpose spec diverges nowhere it does not also raise: only where
+// it allows anything -- no index for p)
+theorem mp.gsi_divg: all c. tr.div_raises_g(mp.G, mallocng_purpose.get_slot_index_purpose_fun(c))
 proof
-  have g: all args w t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), w, diverge(t)) ->
-      (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(x) && runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), w, exc(x, e))) proof
-    fix args w t
-    assume hA hW hu hd
-    have rst: abi.raise_state(w) by defs(apply(tr.world_and, hW), abi.raise_state)
-    have eu: empty in univ(1) by simp()
-    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
-    have pu: pair(w, exc(w, empty)) in univ(1) by simp(hu)
-    have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(w, "vm")}, simp(hW))
-    rsimp only, c_src_malloc_mallocng_malloc.get_slot_index_fun, app_fn_build, hA in hd
-    have rf: runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), w, exc(w, empty)) proof
-      rsimp only, c_src_malloc_mallocng_malloc.get_slot_index_fun, app_fn_build, hA
-      show by simp(hd, pu, vv)
-    qed
-    show by ex_intro({empty}, {w}, taut(eu, eno, rst, rf))
+  fix c
+  have qu: all regs s o. runs(mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(regs, 0))), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_purpose.get_slot_index_purpose))
   qed
-  show by defs(g, tr.div_raises)
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), diverge(t)) ->
+      runs(mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let p := bits_of_int(64, app(regs, 0))
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x4, x3, p)), x3. x = exc(pair(S, empty), pair("ret", x3))) -> fst(x) = 2 ->
+        any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x4, x3, p)), x3. x2 = exc(pair(S, empty), pair("ret", x3))) proof
+      fix x x2
+      assume h1 h2
+      show by apply(ct.dv_ret, h1, h2)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_purpose.get_slot_index_purpose), bp)
+    show by defs(r2, mallocng_purpose.get_slot_index_purpose)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_purpose.get_slot_index_purpose_fun)
 qed
 
 // ... as C function values: the code's wrapper refines the purpose's
@@ -460,7 +478,7 @@ proof
   have st := mp(all_elim(tr.implements_refine, {4206813}, {c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun()}, {c_src_malloc_mallocng_malloc.get_slot_index_fun()},
     {4198400}, {text.code}, {statics}), all_elim(gsitc.implements, {statics}), get_slot_index_ref)
   show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4206813}, {c_src_malloc_mallocng_malloc.get_slot_index_fun()}, {mallocng_purpose.get_slot_index_purpose_fun(c)}, {4198400}, {text.code}, {statics}),
-    mp.g_ok, mp.gsi_div_raises, st, r)
+    mp.g_ok, all_elim(mp.gsi_divg, {c}), st, r)
 qed
 
 // ----------------------------------------------------------------------
@@ -619,15 +637,45 @@ proof
   show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.get_meta_fun, mallocng_purpose.get_meta_purpose_fun, letin)
 qed
 
+// (the purpose spec diverges nowhere it does not also raise: only where
+// it allows anything -- no group for p)
+theorem mp.gm_divg: all c. tr.div_raises_g(mp.G, mallocng_purpose.get_meta_purpose_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_purpose.get_meta_purpose(c, bits_of_int(64, app(regs, 0))), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_purpose.get_meta_purpose))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_purpose.get_meta_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), diverge(t)) ->
+      runs(mallocng_purpose.get_meta_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let p := bits_of_int(64, app(regs, 0))
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. any_rel(x3. x3 in bits(64) && (ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x3, x4, p)), x3. x = exc(pair(S, empty), pair("ret", x3))) -> fst(x) = 2 ->
+        any_rel(x3. x3 in bits(64) && (ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x3, x4, p)), x3. x2 = exc(pair(S, empty), pair("ret", x3))) proof
+      fix x x2
+      assume h1 h2
+      show by apply(ct.dv_ret, h1, h2)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_purpose.get_meta_purpose), bp)
+    show by defs(r2, mallocng_purpose.get_meta_purpose)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_purpose.get_meta_purpose_fun)
+qed
+
 // get_meta's machine code (linked with a_crash's spec and get_slot_index's
-// code) implements its purpose (the code's divergence a raise: a premise)
+// code) implements its purpose
 theorem mp.gm_implements: all c statics. c in mallocng.Cfg ->
   app(c, "ctx") = c_src_malloc_mallocng_malloc.__malloc_context -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  tr.div_raises(c_src_malloc_mallocng_malloc.get_meta_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun())) ->
   abi.implements2_at(mp.G, 4206837, mallocng_purpose.get_meta_purpose_fun(c), 4198400, text.code, statics)
 proof
   fix c statics
-  assume hc hctx hsct hdr
+  assume hc hctx hsct
+  have hdr := all_elim(mp.gm_divg, {c})
   let LOW := c_src_malloc_mallocng_malloc.get_meta_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun())
   have r: all args. args in abi.ARGS -> refines_ghost(app(LOW, args), app(mallocng_purpose.get_meta_purpose_fun(c), args), abi.World, mp.G) proof
     fix args
@@ -745,14 +793,43 @@ proof
   show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.get_stride_fun, mallocng_purpose.get_stride_purpose_fun, letin)
 qed
 
-// (the code's divergence a raise: a premise, as for the functions linked
-// in proofs/mallocng_link.core)
+// (the purpose spec diverges nowhere it does not also raise: only where
+// its precondition fails)
+theorem mp.gst_divg: all c. tr.div_raises_g(mp.G, mallocng_purpose.get_stride_purpose_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_purpose.get_stride_purpose(c, bits_of_int(64, app(regs, 0))), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_purpose.get_stride_purpose))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_purpose.get_stride_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), diverge(t)) ->
+      runs(mallocng_purpose.get_stride_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let g := bits_of_int(64, app(regs, 0))
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. x = exc(pair(S, empty), pair("ret", bits_of_int(64, mallocng.stride(app(app(app(S, "A"), "metas"), g))))) -> fst(x) = 2 ->
+        x2 = exc(pair(S, empty), pair("ret", bits_of_int(64, mallocng.stride(app(app(app(S, "A"), "metas"), g))))) proof
+      fix x x2
+      assume h1 h2
+      have n := apply(ct.exc_not2, h1)
+      show by taut(n, h2)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_purpose.get_stride_purpose), bp)
+    show by defs(r2, mallocng_purpose.get_stride_purpose)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_purpose.get_stride_purpose_fun)
+qed
+
 theorem mp.gst_implements: all c statics. c in mallocng.Cfg -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  tr.div_raises(c_src_malloc_mallocng_malloc.get_stride_fun()) ->
   abi.implements2_at(mp.G, 4207440, mallocng_purpose.get_stride_purpose_fun(c), 4198400, text.code, statics)
 proof
   fix c statics
-  assume hc hsct hdr
+  assume hc hsct
+  have hdr := all_elim(mp.gst_divg, {c})
   have r: all args. args in abi.ARGS -> refines_ghost(app(c_src_malloc_mallocng_malloc.get_stride_fun(), args), app(mallocng_purpose.get_stride_purpose_fun(c), args), abi.World, mp.G) proof
     fix args
     assume ha
@@ -925,16 +1002,49 @@ proof
   show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.__malloc_allzerop_fun, mallocng_purpose.allzerop_purpose_fun, letin)
 qed
 
+// (the purpose spec diverges nowhere it does not also raise: only where
+// it allows anything)
+theorem mp.az_divg: all c. tr.div_raises_g(mp.G, mallocng_purpose.allzerop_purpose_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_purpose.allzerop_purpose(c, bits_of_int(64, app(regs, 0))), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_purpose.allzerop_purpose))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_purpose.allzerop_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), diverge(t)) ->
+      runs(mallocng_purpose.allzerop_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let p := bits_of_int(64, app(regs, 0))
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. any_rel(x3. x3 in bits(32) && (ex x4. ex x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(app(S, "A"), x4, x5, p) &&
+          ((mallocng.own_mapping(app(app(app(S, "A"), "metas"), x4)) && x3 = 1) || (!mallocng.own_mapping(app(app(app(S, "A"), "metas"), x4)) && x3 = 0)))),
+          x3. x = exc(pair(S, empty), pair("ret", x3))) -> fst(x) = 2 ->
+        any_rel(x3. x3 in bits(32) && (ex x4. ex x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(app(S, "A"), x4, x5, p) &&
+          ((mallocng.own_mapping(app(app(app(S, "A"), "metas"), x4)) && x3 = 1) || (!mallocng.own_mapping(app(app(app(S, "A"), "metas"), x4)) && x3 = 0)))),
+          x3. x2 = exc(pair(S, empty), pair("ret", x3))) proof
+      fix x x2
+      assume h1 h2
+      show by apply(ct.dv_ret, h1, h2)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_purpose.allzerop_purpose), bp)
+    show by defs(r2, mallocng_purpose.allzerop_purpose)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_purpose.allzerop_purpose_fun)
+qed
+
 // allzerop's machine code (linked with get_meta's, get_slot_index's and
-// get_stride's) implements its purpose (the code's divergence a raise: a
-// premise)
+// get_stride's) implements its purpose
 theorem mp.az_implements: all c statics. c in mallocng.Cfg ->
   app(c, "ctx") = c_src_malloc_mallocng_malloc.__malloc_context -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  tr.div_raises(c_src_malloc_mallocng_malloc.__malloc_allzerop_fun(c_src_malloc_mallocng_malloc_cfg.get_meta_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun()), c_src_malloc_mallocng_malloc_cfg.get_stride_fun())) ->
   abi.implements2_at(mp.G, 4213261, mallocng_purpose.allzerop_purpose_fun(c), 4198400, text.code, statics)
 proof
   fix c statics
-  assume hc hctx hsct hdr
+  assume hc hctx hsct
+  have hdr := all_elim(mp.az_divg, {c})
   let G1 := c_src_malloc_mallocng_malloc_cfg.get_meta_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun())
   let G2 := c_src_malloc_mallocng_malloc_cfg.get_stride_fun()
   let LOW := c_src_malloc_mallocng_malloc.__malloc_allzerop_fun(G1, G2)
@@ -1208,14 +1318,53 @@ proof
   show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.enframe_fun, mallocng_purpose.enframe_purpose_fun, letin)
 qed
 
+// (the purpose spec diverges nowhere it does not also raise: only where
+// it allows anything)
+theorem mp.ef_divg: all c. tr.div_raises_g(mp.G, mallocng_purpose.enframe_purpose_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_purpose.enframe_purpose(c, bits_of_int(64, app(regs, 0)), bits_of_int(32, app(regs, 1)), bits_of_int(64, app(regs, 2))), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_purpose.enframe_purpose))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_purpose.enframe_purpose(c, bits_of_int(64, app(regs, 0)), bits_of_int(32, app(regs, 1)), bits_of_int(64, app(regs, 2))), union2(w, h), diverge(t)) ->
+      runs(mallocng_purpose.enframe_purpose(c, bits_of_int(64, app(regs, 0)), bits_of_int(32, app(regs, 1)), bits_of_int(64, app(regs, 2))), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let g := bits_of_int(64, app(regs, 0))
+    let idx := bits_of_int(32, app(regs, 1))
+    let n := bits_of_int(64, app(regs, 2))
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. letin(app(S, "vm"), x3. any_rel(x4. x4 in bits(64) && (((int_le(mallocng.slot_start(app(app(app(S, "A"), "metas"), g), idx), x4) &&
+          int_mod(int_sub(x4, mallocng.slot_start(app(app(app(S, "A"), "metas"), g), idx)), mallocng.UNIT) = 0) &&
+          int_lt(x4, int_add(mallocng.slot_start(app(app(app(S, "A"), "metas"), g), idx), int_mul(256, mallocng.UNIT)))) && int_le(int_add(x4, n), mallocng.slot_end(app(app(app(S, "A"), "metas"), g), idx))),
+          x4. letin(x4, x5. any_rel(x6. x6 in x86_64_linux.Vm && mallocng_purpose.framed(x3, app(fn_update(S, "vm", x6), "vm"), app(app(app(fn_update(S, "vm", x6), "A"), "metas"), g), idx, x5, n),
+            x6. letin(fn_update(S, "vm", x6), x7. x = exc(pair(x7, empty), pair("ret", x5))))))) -> fst(x) = 2 ->
+        letin(app(S, "vm"), x3. any_rel(x4. x4 in bits(64) && (((int_le(mallocng.slot_start(app(app(app(S, "A"), "metas"), g), idx), x4) && int_mod(int_sub(x4, mallocng.slot_start(app(app(app(S, "A"), "metas"), g), idx)), mallocng.UNIT) = 0) &&
+          int_lt(x4, int_add(mallocng.slot_start(app(app(app(S, "A"), "metas"), g), idx), int_mul(256, mallocng.UNIT)))) && int_le(int_add(x4, n), mallocng.slot_end(app(app(app(S, "A"), "metas"), g), idx))),
+          x4. letin(x4, x5. any_rel(x6. x6 in x86_64_linux.Vm && mallocng_purpose.framed(x3, app(fn_update(S, "vm", x6), "vm"), app(app(app(fn_update(S, "vm", x6), "A"), "metas"), g), idx, x5, n),
+            x6. letin(fn_update(S, "vm", x6), x7. x2 = exc(pair(x7, empty), pair("ret", x5))))))) proof
+      fix x x2
+      assume h1 h2
+      show by defs(apply(ct.dv_ret2, expand(h1, letin), h2), letin)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_purpose.enframe_purpose), bp)
+    show by defs(r2, mallocng_purpose.enframe_purpose)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_purpose.enframe_purpose_fun)
+qed
+
 // enframe's machine code (linked with get_stride's and set_size's)
-// implements its purpose (the code's divergence a raise: a premise)
+// implements its purpose
 theorem mp.ef_implements: all c statics. c in mallocng.Cfg -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  tr.div_raises(c_src_malloc_mallocng_malloc.enframe_fun(c_src_malloc_mallocng_malloc_cfg.get_stride_fun(), mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.set_size_fun())) ->
   abi.implements2_at(mp.G, 4207700, mallocng_purpose.enframe_purpose_fun(c), 4198400, text.code, statics)
 proof
   fix c statics
-  assume hc hsct hdr
+  assume hc hsct
+  have hdr := all_elim(mp.ef_divg, {c})
   let G0 := c_src_malloc_mallocng_malloc_cfg.get_stride_fun()
   let G1 := mallocng_specs.a_crash_spec_fun()
   let G2 := c_src_malloc_mallocng_malloc_cfg.set_size_fun()
@@ -2211,14 +2360,50 @@ proof
   show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.activate_group_fun, mallocng_purpose.activate_group_purpose_fun, letin)
 qed
 
+// (the purpose spec diverges nowhere it does not also raise: only where
+// it allows anything -- no activated state, no memory holding it)
+theorem mp.ag_divg: all c. tr.div_raises_g(mp.G, mallocng_purpose.activate_group_purpose_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_purpose.activate_group_purpose(c, bits_of_int(64, app(regs, 0))), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_purpose.activate_group_purpose))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_purpose.activate_group_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), diverge(t)) ->
+      runs(mallocng_purpose.activate_group_purpose(c, bits_of_int(64, app(regs, 0))), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let m := bits_of_int(64, app(regs, 0))
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. letin(app(S, "A"), x3. letin(app(S, "vm"), x4. any_rel(x5. x5 in mallocng.Abs && mallocng_purpose.activated(x3, x5, m, mallocng_purpose.active_idx(x4, app(app(x3, "metas"), m))),
+          x5. letin(fn_update(S, "A", x5), x6. any_rel(x7. x7 in x86_64_linux.Vm && (mallocng.holds_in(c, app(fn_update(x6, "vm", x7), "A"), app(fn_update(x6, "vm", x7), "vm"), app(fn_update(x6, "vm", x7), "blocks")) &&
+            mallocng.untouched(c, x3, app(fn_update(x6, "vm", x7), "blocks"), x4, app(fn_update(x6, "vm", x7), "vm"), empty)),
+          x7. letin(fn_update(x6, "vm", x7), x8. x = exc(pair(x8, empty), pair("ret", bits_of_int(32, app(app(app(app(x8, "A"), "metas"), m), "avail")))))))))) -> fst(x) = 2 ->
+        letin(app(S, "A"), x3. letin(app(S, "vm"), x4. any_rel(x5. x5 in mallocng.Abs && mallocng_purpose.activated(x3, x5, m, mallocng_purpose.active_idx(x4, app(app(x3, "metas"), m))),
+          x5. letin(fn_update(S, "A", x5), x6. any_rel(x7. x7 in x86_64_linux.Vm && (mallocng.holds_in(c, app(fn_update(x6, "vm", x7), "A"), app(fn_update(x6, "vm", x7), "vm"), app(fn_update(x6, "vm", x7), "blocks")) &&
+            mallocng.untouched(c, x3, app(fn_update(x6, "vm", x7), "blocks"), x4, app(fn_update(x6, "vm", x7), "vm"), empty)),
+          x7. letin(fn_update(x6, "vm", x7), x8. x2 = exc(pair(x8, empty), pair("ret", bits_of_int(32, app(app(app(app(x8, "A"), "metas"), m), "avail")))))))))) proof
+      fix x x2
+      assume h1 h2
+      show by defs(apply(ct.dv_ret2, expand(h1, letin), h2), letin)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_purpose.activate_group_purpose), bp)
+    show by defs(r2, mallocng_purpose.activate_group_purpose)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_purpose.activate_group_purpose_fun)
+qed
+
 // activate_group's machine code (linked with a_crash's spec and a_cas's
-// code) implements its purpose (the code's divergence a raise: a premise)
+// code) implements its purpose
 theorem mp.ag_implements: all c statics. c in mallocng.Cfg ->
-  tr.div_raises(c_src_malloc_mallocng_malloc.activate_group_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.a_cas_fun())) ->
   abi.implements2_at(mp.G, 4206671, mallocng_purpose.activate_group_purpose_fun(c), 4198400, text.code, statics)
 proof
   fix c statics
-  assume hc hdr
+  assume hc
+  have hdr := all_elim(mp.ag_divg, {c})
   let LOW := c_src_malloc_mallocng_malloc.activate_group_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.a_cas_fun())
   have r: all args. args in abi.ARGS -> refines_ghost(app(LOW, args), app(mallocng_purpose.activate_group_purpose_fun(c), args), abi.World, mp.G) proof
     fix args

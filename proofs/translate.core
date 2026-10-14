@@ -902,11 +902,11 @@ def tr.div_raises(spec) := all args w t. args in abi.ARGS -> w in abi.World -> w
 
 // (the claim's crash is the ABI's, or the spec diverges where the I/O
 // stops -- so it raises, for a spec that diverges only so)
-theorem tr.crashes_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
-  tr.crashes_t(spec, args, objs, mem, s, o) -> abi.crashes_at(spec, args, objs, mem, s, o) || abi.raises_at(spec, args, objs, mem, s)
+theorem tr.crashes_abi_d: all spec args objs mem s o.
+  tr.crashes_t(spec, args, objs, mem, s, o) -> abi.crashes_at(spec, args, objs, mem, s, o) || (ex t. runs(app(spec, args), abi.view(s, objs, mem), diverge(t)))
 proof
   fix spec args objs mem s o
-  assume hd hA hvW hvu h
+  assume h
   obtain m1 a k, {oe, m1M, ab, sev, ovk} from expand(h, tr.crashes_t)
   have inp ev := expand(ovk, tr.overflow_t)
   let W := abi.view(s, objs, mem)
@@ -940,19 +940,53 @@ proof
     have ov: abi.overflow_ok(rec_and(abi.World, single(empty)), W, spec, args, app(m1, "os")) by defs(taut(inp, ex1), abi.overflow_ok)
     show := mp(cr, ov)
   qed
-  // (a divergence: the spec raises there)
-  have e3: (ex t. runs(app(spec, args), W, diverge(t))) -> abi.raises_at(spec, args, objs, mem, s) proof
-    assume e
-    obtain t, hr from e
-    have r := mp(all_elim(expand(hd, tr.div_raises), {args}, {W}, {t}), hA, hvW, hvu, hr)
-    show by defs(r, abi.raises_at)
-  qed
   have e4: tr.ovf(app(spec, args), W, app(m1, "os")) -> (ex x. x in rec_and(abi.World, single(empty)) && runs(app(spec, args), W, exc(x, exc_val("stack_overflow", empty))) &&
       app(app(x, "os"), "events") = app(app(m1, "os"), "events")) || (ex t. runs(app(spec, args), W, diverge(t))) proof
     assume hv
     show by taut(expand(hv, tr.ovf))
   qed
-  show by taut(ev, e1, cr, e2, e3, e4)
+  show by taut(ev, e1, cr, e2, e4)
+qed
+
+// (a divergence of the spec at the view: a raise there, the spec
+// diverging only where it raises)
+theorem tr.div_raise_at: all spec args objs mem s. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
+  (ex t. runs(app(spec, args), abi.view(s, objs, mem), diverge(t))) -> abi.raises_at(spec, args, objs, mem, s)
+proof
+  fix spec args objs mem s
+  assume hd hA hvW hvu e
+  obtain t, hr from e
+  have r := mp(all_elim(expand(hd, tr.div_raises), {args}, {abi.view(s, objs, mem)}, {t}), hA, hvW, hvu, hr)
+  show by defs(r, abi.raises_at)
+qed
+
+theorem tr.crashes_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
+  tr.crashes_t(spec, args, objs, mem, s, o) -> abi.crashes_at(spec, args, objs, mem, s, o) || abi.raises_at(spec, args, objs, mem, s)
+proof
+  fix spec args objs mem s o
+  assume hd hA hvW hvu h
+  have c := apply(tr.crashes_abi_d, {spec}, {args}, {objs}, {mem}, {s}, {o}, h)
+  have d := apply(tr.div_raise_at, {spec}, {args}, {objs}, {mem}, {s}, hd, hA, hvW, hvu)
+  show by taut(c, d)
+qed
+
+// the machine's outcome as the ABI's, or the spec diverging at the view
+// (its trace not compared)
+theorem tr.matches_t_abi_d: all spec args objs mem s o.
+  tr.matches_t(spec, args, objs, mem, s, o) -> abi.matches(spec, args, objs, mem, s, o) || (ex t. runs(app(spec, args), abi.view(s, objs, mem), diverge(t)))
+proof
+  fix spec args objs mem s o
+  assume mt
+  have ca := apply(tr.crashes_abi_d, {spec}, {args}, {objs}, {mem}, {s}, {o})
+  have dr: tr.div(app(spec, args), abi.view(s, objs, mem), o) -> (ex t. runs(app(spec, args), abi.view(s, objs, mem), diverge(t))) proof
+    assume d
+    show by taut(expand(d, tr.div).2)
+  qed
+  have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, app(spec, args), abi.view(s, objs, mem), o) || tr.crashes_t(spec, args, objs, mem, s, o) ||
+      tr.div(app(spec, args), abi.view(s, objs, mem), o)
+    by defs(taut(expand(mt, tr.matches_t)), tr.ok)
+  have oa := all_elim(tr.ok_abi, {s}, {objs}, {app(spec, args)}, {abi.view(s, objs, mem)}, {o})
+  show by defs(taut(mt2, oa, dr, ca), abi.matches)
 qed
 
 theorem tr.matches_t_abi: all spec args objs mem s o. tr.div_raises(spec) -> args in abi.ARGS -> abi.view(s, objs, mem) in abi.World -> abi.view(s, objs, mem) in univ(1) ->
@@ -960,19 +994,9 @@ theorem tr.matches_t_abi: all spec args objs mem s o. tr.div_raises(spec) -> arg
 proof
   fix spec args objs mem s o
   assume hd hA hvW hvu mt
-  have ca := apply(tr.crashes_abi, {spec}, {args}, {objs}, {mem}, {s}, {o}, hd, hA, hvW, hvu)
-  // (a divergence: the spec raises there too)
-  have dr: tr.div(app(spec, args), abi.view(s, objs, mem), o) -> abi.raises_at(spec, args, objs, mem, s) proof
-    assume d
-    obtain t2, rd from expand(d, tr.div).2
-    have r := mp(all_elim(expand(hd, tr.div_raises), {args}, {abi.view(s, objs, mem)}, {t2}), hA, hvW, hvu, rd)
-    show by defs(r, abi.raises_at)
-  qed
-  have mt2: abi.raises_at(spec, args, objs, mem, s) || tr.ok(s, objs, app(spec, args), abi.view(s, objs, mem), o) || tr.crashes_t(spec, args, objs, mem, s, o) ||
-      tr.div(app(spec, args), abi.view(s, objs, mem), o)
-    by defs(taut(expand(mt, tr.matches_t)), tr.ok)
-  have oa := all_elim(tr.ok_abi, {s}, {objs}, {app(spec, args)}, {abi.view(s, objs, mem)}, {o})
-  show by defs(taut(mt2, oa, dr, ca), abi.matches)
+  have m := apply(tr.matches_t_abi_d, {spec}, {args}, {objs}, {mem}, {s}, {o}, mt)
+  have d := apply(tr.div_raise_at, {spec}, {args}, {objs}, {mem}, {s}, hd, hA, hvW, hvu)
+  show by defs(taut(expand(m, abi.matches), d), abi.matches)
 qed
 
 theorem tr.ok_not_div: all s v p w t. !tr.ok(s, v, p, w, diverge(t))

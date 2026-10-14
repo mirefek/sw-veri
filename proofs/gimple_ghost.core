@@ -481,3 +481,227 @@ proof
   qed
   show by defs(main, refines_ghost)
 qed
+
+// ----------------------------------------------------------------------
+//  A contract diverges only where it raises (`tr.div_raises_g`): only
+//  where it is undefined -- its precondition failing, or a choice from
+//  nothing in its body -- and so anything
+
+// (a choice from d, then k: an outcome tagged 2 only where any is)
+theorem ct.dv_any(x. d, y x. k, x, x2): (all y. d(y) -> k(y, x) -> fst(x) = 2 -> k(y, x2)) -> any_rel(y. d(y), y. k(y, x)) -> fst(x) = 2 -> any_rel(y. d(y), y. k(y, x2))
+proof
+  assume hk ha hf
+  have c1: !(ex y. d(y)) -> any_rel(y. d(y), y. k(y, x2)) proof
+    assume hn
+    show by defs(taut(hn), any_rel)
+  qed
+  have c2: (ex y. d(y) && k(y, x)) -> any_rel(y. d(y), y. k(y, x2)) proof
+    assume e
+    obtain y, hd hky from e
+    have k2 := mp(all_elim(hk, {y}), hd, hky, hf)
+    have e2: ex y. d(y) && k(y, x2) by ex_intro({y}, taut(hd, k2))
+    show by defs(taut(e2), any_rel)
+  qed
+  show by taut(expand(ha, any_rel), c1, c2)
+qed
+
+// (an exception: tagged 1, not 2)
+theorem ct.exc_not2(x, a, b): x = exc(a, b) -> !(fst(x) = 2)
+proof
+  assume he
+  have f1: fst(x) = 1 by defs(simp(he), exc, tag)
+  show by arith(f1)
+qed
+
+// (an outcome given: tagged 0 or 1, not 2)
+theorem ct.dv_exc(x, a, b, x2): x = exc(a, b) -> fst(x) = 2 -> x = x2
+proof
+  assume he hf
+  have n := apply(ct.exc_not2[x := x, a := a, b := b], he)
+  show by taut(n, hf)
+qed
+
+// a contract (`require P; either { overflow() } or { B }`) diverging at s:
+// its precondition failing or B undefined there, so it raises at s too
+theorem ct.contract_div(x0. P, x0 x2. B, s, t): s in univ(1) -> app(s, "vm") in x86_64_linux.Vm ->
+  runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    s, diverge(t)) -> (all x x2. B(s, x) -> fst(x) = 2 -> B(s, x2)) ->
+  runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    s, exc(s, empty))
+proof
+  assume hu hv hr hb
+  let OV(x2) := bind_rel(abi.overflow, s, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))
+  let D(x2, o) := (fst(x2) = 0 && o = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o = diverge(snd(x2))))
+  let X2 := exc(pair(s, empty), pair("raise", empty))
+  have r := apply(g.runs_elim, hr)
+  have pu: pair(s, exc(s, empty)) in univ(1) by simp(hu)
+  have c1: !P(s) -> !P(s) || (ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty))) proof
+    assume hn
+    show by taut(hn)
+  qed
+  have c2: (ex x2. (OV(x2) || B(s, x2)) && D(x2, diverge(t))) -> !P(s) || (ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty))) proof
+    assume e
+    obtain x2, hob hd from e
+    // (the dispatch: a divergence only from a value tagged 2)
+    have f2: fst(x2) = 2 by defs(simp(hd), ok, exc, diverge, tag)
+    // (the overflow's outcome: an exception, tagged 1)
+    have nov: !OV(x2) proof
+      assume h
+      obtain o1, hr1 hk1 from expand(h, bind_rel)
+      obtain v, _ ho1 from mp(all_elim(ct.overflow_inv, {s}, {o1}), hv, hr1)
+      have k := rewrite(ho1, hk1)
+      have n2 := ct.exc_not2[x := x2, a := pair(fn_update(s, "vm", v), empty), b := pair("raise", exc_val("stack_overflow", empty))]
+      show by defs(simp(k, f2, n2), ok, exc, diverge, tag)
+    qed
+    have bx := mp(all_elim(hb, {x2}, {X2}), taut(hob, nov), f2)
+    have dx: D(X2, exc(s, empty)) by defs(simp(), exc, tag, out_state, out_value)
+    have ex: ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty)) by ex_intro({X2}, taut(bx, dx))
+    show by taut(ex)
+  qed
+  have rr: !P(s) || (ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty))) by taut(r, c1, c2)
+  show by apply(tr.runs_intro, pu, rr)
+qed
+
+// a function value of a procedure q (GIMPLE's wrapper, its result in a
+// register): it raises where it diverges, if q does
+theorem ct.fun_div(x0. q, n, w, regs, s, t): regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) -> s in univ(1) ->
+  (all o. runs(q(regs), s, o) -> pair(s, o) in univ(1)) -> (all t2. runs(q(regs), s, diverge(t2)) -> runs(q(regs), s, exc(s, empty))) ->
+  runs(app(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), regs), s, diverge(t)) ->
+  runs(app(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), regs), s, exc(s, empty))
+proof
+  assume hr hu hqu hq h
+  let K(s3, v, o) := letin(v, x5. bind_rel(gimple.result(w, x5), s3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o = ok(x6, pair(x8, x9)))), x6 x7. o = exc(x6, x7), x6. o = diverge(x6)))
+  let R(o) := !ord_le(n, seq_len(regs)) || bind_rel(q(regs), s, x3 x4. K(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3))
+  let O := exc(s, empty)
+  have ef := app_fn_build[d := set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), v := x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. K(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), a := regs]
+  have e1 := mp(ef, hr)
+  have r := apply(g.runs_elim, rewrite(e1, h))
+  have pu: pair(s, O) in univ(1) by simp(hu)
+  have g1: !ord_le(n, seq_len(regs)) -> R(O) proof
+    assume hn
+    show by taut(hn)
+  qed
+  have g2: bind_rel(q(regs), s, x3 x4. K(x3, x4, diverge(t)), x3 x4. diverge(t) = exc(x3, x4), x3. diverge(t) = diverge(x3)) -> R(O) proof
+    assume hb
+    have hb2: ex o1. runs(q(regs), s, o1) && ((ex s3 v. o1 = ok(s3, v) && K(s3, v, diverge(t))) || (ex s1 e. o1 = exc(s1, e) && diverge(t) = exc(s1, e)) ||
+        (ex t2. o1 = diverge(t2) && diverge(t) = diverge(t2))) by defs(expand(hb, bind_rel), bind_rel)
+    obtain o1, hr1 hk1 from hb2
+    // q diverging: it raises at s, the wrapper too
+    have d1: (ex t2. o1 = diverge(t2) && diverge(t) = diverge(t2)) -> R(O) proof
+      assume e
+      obtain t2, eo _ from e
+      have rq := mp(all_elim(hq, {t2}), rewrite(eo, hr1))
+      have b: bind_rel(q(regs), s, x3 x4. K(x3, x4, O), x3 x4. O = exc(x3, x4), x3. O = diverge(x3))
+        by defs(ex_intro({O}, taut(rq, (ex s1 e. O = exc(s1, e) && O = exc(s1, e) by ex_intro({s}, {empty}, simp())))), bind_rel)
+      show by taut(b)
+    qed
+    // q returning: the result step diverging, undefined, so anything
+    have d2: (ex s3 v. o1 = ok(s3, v) && K(s3, v, diverge(t))) -> R(O) proof
+      assume e
+      obtain s3 v, eo hk from e
+      have o1u: o1 in univ(1) by simp(mp(all_elim(hqu, {o1}), hr1))
+      have oku := expand(rewrite(eo, o1u), ok, tag)
+      have s3u: s3 in univ(1) by simp(oku)
+      obtain o2, hr2 hk2 from expand(expand(hk, letin), bind_rel)
+      have nok: !(ex x6 x7. o2 = ok(x6, x7) && any_rel(x9. x9 in bits(64), x9. diverge(t) = ok(x6, pair(x7, x9)))) proof
+        assume e2
+        obtain x6 x7, _ ha from e2
+        have z: 0 in bits(64) by simp()
+        show by defs(simp(ha, z), letin, any_rel, ok, diverge, tag)
+      qed
+      have nex: !(ex x6 x7. o2 = exc(x6, x7) && diverge(t) = exc(x6, x7)) by defs(simp(), exc, diverge, tag)
+      have dv: ex t3. o2 = diverge(t3) && diverge(t) = diverge(t3) by taut(hk2, nok, nex)
+      obtain t3, eo2 _ from dv
+      have rr := apply(g.runs_elim, rewrite(eo2, expand(hr2, gimple.result)))
+      have und: !(ex x2. x2 in bits(64) && x2 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false))) by defs(simp(rr), any_rel, ok, diverge, tag)
+      have p3: pair(s3, O) in univ(1) by simp(s3u, hu)
+      have rO: runs(gimple.result(w, v), s3, O) by defs(apply(tr.runs_intro, p3, (any_rel(x2. x2 in bits(64) && x2 in gimple.in_reg(v, fn_update(fn_update(empty, "prec", w), "signed", false)), x2. O = ok(s3, x2)) by defs(taut(und), any_rel))), gimple.result)
+      have xO: ex x6 x7. O = exc(x6, x7) && O = exc(x6, x7) by ex_intro({s}, {empty}, simp())
+      have kOb: bind_rel(gimple.result(w, v), s3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. O = ok(x6, pair(x8, x9)))), x6 x7. O = exc(x6, x7), x6. O = diverge(x6))
+        by defs(ex_intro({O}, taut(rO, xO)), bind_rel)
+      have kO: K(s3, v, O) by defs(expand(kOb, letin), letin)
+      have b: bind_rel(q(regs), s, x3 x4. K(x3, x4, O), x3 x4. O = exc(x3, x4), x3. O = diverge(x3))
+        by defs(ex_intro({o1}, taut(hr1, expand((ex s1 v1. o1 = ok(s1, v1) && K(s1, v1, O) by ex_intro({s3}, {v}, taut(eo, kO))), bind_rel))), bind_rel)
+      show by taut(b)
+    qed
+    have d3: !(ex s1 e. o1 = exc(s1, e) && diverge(t) = exc(s1, e)) by defs(simp(), exc, diverge, tag)
+    show by taut(hk1, d1, d2, d3)
+  qed
+  have rO: R(O) by taut(r, g1, g2)
+  have rm: runs(mkprog(x1 x2. !ord_le(n, seq_len(regs)) || bind_rel(q(regs), x1, x3 x4. K(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), s, O)
+    by apply(tr.runs_intro, pu, rO)
+  show := rewrite(sym(e1), rm)
+qed
+
+// (a contract's body returning a value chosen from d: tagged 2 only where
+// d is empty)
+theorem ct.dv_ret(x. d, s, x, x2): any_rel(y. d(y), y. x = exc(pair(s, empty), pair("ret", y))) -> fst(x) = 2 ->
+  any_rel(y. d(y), y. x2 = exc(pair(s, empty), pair("ret", y)))
+proof
+  assume ha hf
+  have k: all y. d(y) -> x = exc(pair(s, empty), pair("ret", y)) -> fst(x) = 2 -> x2 = exc(pair(s, empty), pair("ret", y)) proof
+    fix y
+    assume _ he hf2
+    have n := apply(ct.exc_not2[x := x, a := pair(s, empty), b := pair("ret", y)], he)
+    show by taut(n, hf2)
+  qed
+  show := apply(ct.dv_any[d := y. d(y), k := y x. x = exc(pair(s, empty), pair("ret", y)), x := x, x2 := x2], k, ha, hf)
+qed
+
+// (two choices, then the return: tagged 2 only where one is from nothing)
+theorem ct.dv_ret2(x. d, y z. e, y z. f, y z. g, x, x2):
+  any_rel(y. d(y), y. any_rel(z. e(y, z), z. x = exc(pair(f(y, z), empty), pair("ret", g(y, z))))) -> fst(x) = 2 ->
+  any_rel(y. d(y), y. any_rel(z. e(y, z), z. x2 = exc(pair(f(y, z), empty), pair("ret", g(y, z)))))
+proof
+  assume ha hf
+  have k: all y. d(y) -> any_rel(z. e(y, z), z. x = exc(pair(f(y, z), empty), pair("ret", g(y, z)))) -> fst(x) = 2 ->
+      any_rel(z. e(y, z), z. x2 = exc(pair(f(y, z), empty), pair("ret", g(y, z)))) proof
+    fix y
+    assume _ hy hf2
+    have k2: all z. e(y, z) -> x = exc(pair(f(y, z), empty), pair("ret", g(y, z))) -> fst(x) = 2 -> x2 = exc(pair(f(y, z), empty), pair("ret", g(y, z))) proof
+      fix z
+      assume _ he hf3
+      have n := apply(ct.exc_not2[x := x, a := pair(f(y, z), empty), b := pair("ret", g(y, z))], he)
+      show by taut(n, hf3)
+    qed
+    show := apply(ct.dv_any[d := z. e(y, z), k := z x. x = exc(pair(f(y, z), empty), pair("ret", g(y, z))), x := x, x2 := x2], k2, hy, hf2)
+  qed
+  show := apply(ct.dv_any[d := y. d(y), k := y x. any_rel(z. e(y, z), z. x = exc(pair(f(y, z), empty), pair("ret", g(y, z)))), x := x, x2 := x2], k, ha, hf)
+qed
+
+// a purpose spec's function value (GIMPLE's wrapper around q, a contract
+// over the world with a ghost part): it raises where it diverges, if q
+// does at each world with a ghost part (`ct.contract_div`)
+theorem ct.fun_divg(G, x0. q, n, w): (all h. h in G -> h in univ(1)) -> (all regs s o. runs(q(regs), s, o) -> pair(s, o) in univ(1)) ->
+  (all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> runs(q(regs), union2(w, h), diverge(t)) -> runs(q(regs), union2(w, h), exc(union2(w, h), empty))) ->
+  tr.div_raises_g(G, fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(w, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. x2 = ok(x6, pair(x8, x9)))), x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))))
+proof
+  assume hgu hqu hq
+  show proof
+    fix args wd h t
+    assume hA hw hwu hh hr
+    let S := union2(wd, h)
+    have hu := mp(all_elim(hgu, {h}), hh)
+    have su := mp(union2_univ[u := 1, a := wd, b := h], hwu, hu)
+    have qd: all t2. runs(q(args), S, diverge(t2)) -> runs(q(args), S, exc(S, empty)) proof
+      fix t2
+      assume h2
+      show := mp(all_elim(hq, {args}, {wd}, {h}, {t2}), hA, hw, hwu, hh, h2)
+    qed
+    have qu: all o. runs(q(args), S, o) -> pair(S, o) in univ(1) proof
+      fix o
+      assume h2
+      show := mp(all_elim(hqu, {args}, {S}, {o}), h2)
+    qed
+    have rx := apply(ct.fun_div[q := x0. q(x0), n := n, w := w, regs := args, s := S, t := t], hA, su, qu, qd, hr)
+    have eu: empty in univ(1) by simp()
+    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+    have xg := apply(rec_and_intro[a := abi.World, b := G, x := wd, y := h], hw, hh)
+    show by ex_intro({empty}, {S}, taut(eu, eno, xg, rx))
+  qed
+qed
