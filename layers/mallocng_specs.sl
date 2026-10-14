@@ -441,8 +441,8 @@ fn gm_meta(vm: Vm, p: Addr) -> bits[64] = rd64(vm, bits[64](gm_base(vm, p)))
 fn gm_idx(vm: Vm, p: Addr) -> nat = bytes_at(vm, p - 3, 1) % 32
 
 // malloc's checks there (a failed one: a_crash, undefined -- excluded
-// here): p 16-byte aligned, its 8 header bytes usable; a 32-bit offset
-// past 16 bits (the 16-bit one then 0), small enough for the code's
+// here): p 16-byte aligned, its 4 header bytes usable; a 32-bit offset
+// (at p - 8, usable then) past 16 bits (the 16-bit one then 0), small enough for the code's
 // 32-bit product with a unit; the header within the address space, its
 // meta's mem word, mask words and bitfield word usable, the mem word the
 // header; p's index (get_slot_index's) within the group's last, its slot
@@ -451,8 +451,9 @@ fn gm_idx(vm: Vm, p: Addr) -> nat = bytes_at(vm, p - 3, 1) % 32
 // slot idx for a size class (else the class 63), within the mapping when
 // there is one (maplen); the thread pointer sound for the call.
 pred get_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, sct: Addr, p: Addr) =
-  uint(p) % 16 = 0 && 16 <= uint(p) && usable(vm, objs, uint(p) - 8, 8, false) &&
-  (bytes_at(vm, p - 4, 1) != 0 -> bytes_at(vm, p - 2, 2) = 0 && 65535 < bytes_at(vm, p - 8, 4) && bytes_at(vm, p - 8, 4) < 2^27) &&
+  uint(p) % 16 = 0 && 16 <= uint(p) && usable(vm, objs, uint(p) - 4, 4, false) &&
+  (bytes_at(vm, p - 4, 1) != 0 -> usable(vm, objs, uint(p) - 8, 4, false) &&
+     bytes_at(vm, p - 2, 2) = 0 && 65535 < bytes_at(vm, p - 8, 4) && bytes_at(vm, p - 8, 4) < 2^27) &&
   UNIT * gm_off(vm, p) + UNIT < uint(p) && usable(vm, objs, gm_base(vm, p), 8, false) &&
   gm_meta(vm, p) != 0 && uint(gm_meta(vm, p)) + 40 <= 2^64 && usable(vm, objs, uint(gm_meta(vm, p)) + 16, 24, false) &&
   uint(rd64(vm, gm_meta(vm, p) + 16)) = gm_base(vm, p) &&

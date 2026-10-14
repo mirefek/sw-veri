@@ -266,7 +266,10 @@ pred frame_ok(m: Mem, v: MetaV, i: nat, p: nat, n: nat, tag: nat) =
         b8(m, p - 3) / 32 = 5 && rd(m, slot_end(v, i) - 4, 4) = slot_end(v, i) - p - n &&
         b8(m, slot_end(v, i) - 5) = 0) &&
      (slot_end(v, i) - p - n < 5 -> b8(m, p - 3) / 32 = slot_end(v, i) - p - n) &&
-     b8(m, p + n) = 0 && b8(m, slot_end(v, i)) = 0)
+     b8(m, p + n) = 0 && b8(m, slot_end(v, i)) = 0) &&
+  // (within its class's slot, as get_meta checks: a group of one slot
+  // mapped on its own has a larger stride)
+  (v.sizeclass < 48 -> p - storage(v) < UNIT * size_classes[v.sizeclass] * (i + 1))
 
 // the in-band header before p (its IB bytes): no client's
 pred hdr_free(blocks: Addr -> Option[nat], p: nat) = all a: nat. p - IB <= a && a < p -> a notin live_of(blocks)
@@ -288,7 +291,7 @@ pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
   meta_in_memory(m, g, A.metas[g]) &&
   (A.metas[g].sizeclass < 48 || A.metas[g].sizeclass = 63) &&
   // the group header points back (and is not client memory); active_idx
-  rd(m, A.metas[g].mem, 8) = g &&
+  (rd(m, A.metas[g].mem, 8) = g && A.metas[g].mem % UNIT = 0 && A.metas[g].mem > 0) &&
   (all a: nat. A.metas[g].mem <= a && a < A.metas[g].mem + UNIT -> a notin live_of(blocks)) &&
   b8(m, A.metas[g].mem + 8) % 32 <= A.metas[g].last_idx &&
   // slots: free ones are in exactly one mask, the active mask only below active_idx
@@ -362,7 +365,7 @@ pred ro_segment_ok(f: File, i: nat, sg: Segment, m: Mem) =
 // not on the stack, where GIMPLE's accesses are to stack objects only)
 pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
   (all k: nat, a: nat. k < 3 && data_ranges(c)[k][0] <= a && a < data_ranges(c)[k][0] + data_ranges(c)[k][1] ->
-     m_rw(m, a)) &&
+     m_rw(m, a) && pg(m, a).value.kind != stack) &&
   (all k: nat, a: nat. k < len(A.used) &&
      group_range(A.metas[A.used[k]])[0] <= a && a < group_range(A.metas[A.used[k]])[0] + group_range(A.metas[A.used[k]])[1] &&
      a notin live_of(blocks) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
@@ -390,10 +393,11 @@ pred classes_ok(c: Cfg, m: Mem) =
   (all i: nat. i < 48 -> rd(m, c.sct + 2 * i, 2) = size_classes[i]) &&
   (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack)
 
-// the meta areas and the class table: no client's bytes
+// the meta areas, the class table and the context: no client's bytes
 pred fixed_free(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) =
   (all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)) &&
-  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks))
+  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks)) &&
+  (all a: nat. c.ctx <= a && a < c.ctx + CTX_SIZE -> a notin live_of(blocks))
 
 pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
   image_ok(c, m) && ctx_ok(c, A, m) && fresh_ok(c, A, m) && areas_ok(c, A, m) &&

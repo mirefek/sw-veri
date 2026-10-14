@@ -25,6 +25,16 @@ proc[MallocAbs] get_slot_index_purpose(c: Cfg, p: bits[64]) -> bits[32] {
   }
 }
 
+// get_meta(p), p where a client block or a nested group starts: the meta
+// of its group (the thread pointer sound: get_meta's checks may call
+// a_crash)
+proc[MallocAbs] get_meta_purpose(c: Cfg, p: bits[64]) -> bits[64] {
+  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  either { overflow() } or {
+    return any m: bits[64] where ex i: nat. starts_at(A, uint(m), i, uint(p))
+  }
+}
+
 // get_stride(g), g a group in use: its slots' size
 proc[MallocAbs] get_stride_purpose(c: Cfg, g: bits[64]) -> bits[64] {
   require holds_in(c, A, vm, blocks) && is_used(A, uint(g))
@@ -81,6 +91,13 @@ fn get_slot_index_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = get_slot_index_purpose(c, bits[64](args[0]))
   let w = result[32](r)
+  return (w, any bits[64])
+}
+
+fn get_meta_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let r = get_meta_purpose(c, bits[64](args[0]))
+  let w = result[64](r)
   return (w, any bits[64])
 }
 

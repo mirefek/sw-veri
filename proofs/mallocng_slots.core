@@ -1533,20 +1533,25 @@ proof
 qed
 
 // C2 of get_meta, for any a_crash (never called: its checks pass) and any
-// callee refining get_slot_index's spec
-theorem ms.get_meta_c2: all p g0 g1. p in bits(64) ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g1, regs), s, o) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o)) ->
-  refines(c_src_malloc_mallocng_malloc.get_meta(p, g0, g1),
-    mallocng_specs.get_meta_spec(c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes, p), abi.World)
+// get_meta's effect, as its code computes it under its precondition: an
+// overflow, or p's meta returned, the world unchanged
+def ms.gm_eff(p) := mkprog(x0 x1. (ex v. v in x86_64_linux.Vm && x1 = exc(fn_update(x0, "vm", v), exc_val("stack_overflow", empty))) ||
+  x1 = ok(x0, mallocng_specs.gm_meta(app(x0, "vm"), p)))
+
+// get_meta's run: under its memory-level precondition and its callee's
+// contract (the slot index returned, the world unchanged), its effect
+theorem ms.gm_run: all p g0 g1 s o. p in bits(64) -> s in abi.World ->
+  mallocng_specs.get_meta_pre(app(s, "vm"), app(s, "objs"), app(s, "fs_base"), c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes, p) ->
+  (all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(app(g1, regs), s, o2) ->
+     (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+     (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && bits_of_int(32, fst(r)) = bits_of_int(32, int_mod(gimple.bytes_at(app(s, "vm"), bits_sub(64, p, 3), 1), 32)))) ->
+  runs(c_src_malloc_mallocng_malloc.get_meta(p, g0, g1), s, o) -> runs(ms.gm_eff(p), s, o)
 proof
-  fix p g0 g1
-  assume hp hg1
-  show proof
-    fix s o
-    assume hw hr
+  fix p g0 g1 s o
+  assume hp hw hpre hqa hr
     let CTX := c_src_malloc_mallocng_malloc.__malloc_context
     let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
-    let SPEC := mallocng_specs.get_meta_spec(CTX, SCT, p)
+    let SPEC := ms.gm_eff(p)
     let V0 := app(s, "vm")
     let O := app(s, "objs")
     let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
@@ -1555,13 +1560,6 @@ proof
     have hu: s in univ(1) by simp(pu)
     have vV vfun vdom vb := apply(ms.world_parts, hw)
     have ss: fn_update(s, "vm", V0) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
-    let PRE := mallocng_specs.get_meta_pre(V0, O, app(s, "fs_base"), CTX, SCT, p)
-    have np: !PRE -> runs(SPEC, s, o) proof
-      assume hn
-      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
-    qed
-    have yp: PRE -> runs(SPEC, s, o) proof
-      assume hpre
       have a16 p16 u8 hb4 hbase ubase mnz m40 um mmem hix hav hfr anz ua cnz c8 uc hsec hsc h63 hml hth := expand(hpre, mallocng_specs.get_meta_pre)
       have p64: pow2(64) = 18446744073709551616 by simp()
       // p aligned
@@ -1572,34 +1570,32 @@ proof
       have sv2: gimple.sval(T64, bits_neg(64, 2)) = int_neg(2) by defs(simp(), gimple.sval)
       let P2 := int_add(p, gimple.sval(T64, bits_neg(64, 2)))
       have e2: P2 = int_sub(p, 2) by arith(sv2)
-      have u2 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_add(P2, 0)}, {2}, {false}), arith(hp), arith(hp, e2), arith(e2), arith(e2), u8)
+      have u2 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 4)}, {4}, {int_add(P2, 0)}, {2}, {false}), arith(hp), arith(hp, e2), arith(e2), arith(e2), u8)
       have md2: g.mem_defined(s, P2, 0, 2, false) by simp(u2, e2, p16, hp, p64)
       have pd2 := apply(g.padd_det, {s}, {p}, {bits_neg(64, 2)}, hu, hp, simp(), arith(sv2, p16), arith(sv2, hp, p64))
       have ld2 := apply(g.ld16_det, {s}, {P2}, {0}, hu, arith(e2, p16, hp, p64), simp(), md2)
       step x2 x4 x6 x8 x10 x12 x16, c1 from hr with hal, pd2, ld2
       // the call: get_slot_index's contract, the index IDX
       let IDX := int_mod(gimple.bytes_at(V0, bits_sub(64, p, 3), 1), 32)
-      have u3 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_sub(p, 3)}, {1}, {false}), arith(hp), arith(hp), arith(), arith(), u8)
-      have gpre: mallocng_specs.get_slot_index_pre(V0, O, p) by defs(simp(u3, p16), mallocng_specs.get_slot_index_pre)
-      have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o2) ->
-          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
-          (ex r. o2 = ok(fn_update(s, "vm", V0), r) && bits_of_int(32, fst(r)) = bits_of_int(32, IDX)) proof
-        fix regs o2
-        assume hro h2
-        show := apply(ms.gsi_q, hp, hw, hu, gpre, hro, h2)
+      have u3 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 4)}, {4}, {int_sub(p, 3)}, {1}, {false}), arith(hp), arith(hp), arith(), arith(), u8)
+      // (the callee: itself, under its contract)
+      have hgg: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g1, regs), s, o) -> runs(app(g1, regs), s, o) proof
+        fix regs s o
+        assume _ _ _ h
+        show := h
       qed
       have ths: gc.sound(s) by simp(hth)
-      have cc := apply(gc.contract_call1[R := r. bits_of_int(32, fst(r)) = bits_of_int(32, IDX)], {g1}, {mallocng_specs.get_slot_index_spec_fun()}, {seq_one(gimple.arg(64, p))}, {s}, {V0},
-        ths, hw, vV, apply(gc.regs1_ex, hp), (int_le(seq_len(seq_one(gimple.arg(64, p))), 6) by simp()), hg1, qa, c1)
-      // (the spec's outcomes: an overflow, any memory)
+      have cc := apply(gc.contract_call1[R := r. bits_of_int(32, fst(r)) = bits_of_int(32, IDX)], {g1}, {g1}, {seq_one(gimple.arg(64, p))}, {s}, {V0},
+        ths, hw, vV, apply(gc.regs1_ex, hp), (int_le(seq_len(seq_one(gimple.arg(64, p))), 6) by simp()), hgg, hqa, c1)
+      // (the effect's outcomes: an overflow, any memory)
       have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
         fix v
         assume hv
         have vu := apply(x86.vm_univ, hv)
         have eu: OVF in univ(1) by defs(simp(), exc_val)
         have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
-        show by simp(hpre, ovi, pu2, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+        have e: ex v2. v2 in x86_64_linux.Vm && exc(fn_update(s, "vm", v), OVF) = exc(fn_update(s, "vm", v2), OVF) by ex_intro({v}, taut(hv, refl({exc(fn_update(s, "vm", v), OVF)})))
+        show by defs(apply(tr.runs_intro, pu2, taut(e)), ms.gm_eff)
       qed
       have cov: case 1 of cc proof
         assume h
@@ -1616,7 +1612,7 @@ proof
         have sv4: gimple.sval(T64, bits_neg(64, 4)) = int_neg(4) by defs(simp(), gimple.sval)
         let P4 := int_add(p, gimple.sval(T64, bits_neg(64, 4)))
         have e4: P4 = int_sub(p, 4) by arith(sv4)
-        have u4 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_add(P4, 0)}, {1}, {false}), arith(hp), arith(hp, e4), arith(e4), arith(e4), u8)
+        have u4 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 4)}, {4}, {int_add(P4, 0)}, {1}, {false}), arith(hp), arith(hp, e4), arith(e4), arith(e4), u8)
         have md4: g.mem_defined(s, P4, 0, 1, false) by simp(u4, e4, p16, hp, p64)
         have pd4 := apply(g.padd_det, {s}, {p}, {bits_neg(64, 4)}, hu, hp, simp(), arith(sv4, p16), arith(sv4, hp, p64))
         have ld4 := apply(g.ld8_det, {s}, {P4}, {0}, hu, arith(e4, p16, hp, p64), simp(), md4)
@@ -1661,7 +1657,7 @@ proof
           qed
           have c2: !(SB4 = 0) -> int_lt(GO, 134217728) proof
             assume h
-            have _ _ w4b := mp(hb4, h)
+            have _ _ _ w4b := mp(hb4, h)
             show by arith(mp(gB, h), w4b)
           qed
           show by taut(c1, c2)
@@ -1850,7 +1846,8 @@ proof
         // (every path: M returned, the memory as it was)
         have fin: o = ok(s, M) -> runs(SPEC, s, o) proof
           assume oe
-          show by simp(oe, pu, hpre, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+          have r: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) || o = ok(s, mallocng_specs.gm_meta(app(s, "vm"), p)) by taut(oe)
+          show by defs(apply(tr.runs_intro, pu, r), ms.gm_eff)
         qed
         // the 16-bit offset
         have z: SB4 = 0 -> runs(SPEC, s, o) proof
@@ -1897,11 +1894,11 @@ proof
         // the 32-bit offset at p - 8, past 16 bits (the 16-bit one 0)
         have nz: !(SB4 = 0) -> runs(SPEC, s, o) proof
           assume hz
-          have w0 w4a w4b := mp(hb4, hz)
+          have u8 w0 w4a w4b := mp(hb4, hz)
           have sv8: gimple.sval(T64, bits_neg(64, 8)) = int_neg(8) by defs(simp(), gimple.sval)
           let P8 := int_add(p, gimple.sval(T64, bits_neg(64, 8)))
           have e8: P8 = int_sub(p, 8) by arith(sv8)
-          have u84 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {8}, {int_add(P8, 0)}, {4}, {false}), arith(hp), arith(hp, e8), arith(e8), arith(e8), u8)
+          have u84 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 8)}, {4}, {int_add(P8, 0)}, {4}, {false}), arith(hp), arith(hp, e8), arith(e8), arith(e8), u8)
           have md8: g.mem_defined(s, P8, 0, 4, false) by simp(u84, e8, p16, hp, p64)
           have pd8 := apply(g.padd_det, {s}, {p}, {bits_neg(64, 8)}, hu, hp, simp(), arith(sv8, p16), arith(sv8, hp, p64))
           have ld8 := apply(g.ld32_det, {s}, {P8}, {0}, hu, arith(e8, p16, hp, p64), simp(), md8)
@@ -1953,6 +1950,60 @@ proof
         show by taut(z, nz)
       qed
       show by taut(cc, cov, cok)
+qed
+
+// C2 of get_meta: its effect within its spec, for a callee refining
+// get_slot_index's spec
+theorem ms.get_meta_c2: all p g0 g1. p in bits(64) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g1, regs), s, o) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), regs), s, o)) ->
+  refines(c_src_malloc_mallocng_malloc.get_meta(p, g0, g1),
+    mallocng_specs.get_meta_spec(c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes, p), abi.World)
+proof
+  fix p g0 g1
+  assume hp hg1
+  show proof
+    fix s o
+    assume hw hr
+    let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+    let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
+    let SPEC := mallocng_specs.get_meta_spec(CTX, SCT, p)
+    let V0 := app(s, "vm")
+    let O := app(s, "objs")
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    let PRE := mallocng_specs.get_meta_pre(V0, O, app(s, "fs_base"), CTX, SCT, p)
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume hpre
+      have _ p16 u4 .. := expand(hpre, mallocng_specs.get_meta_pre)
+      have u3 := mp(all_elim(ms.usable_part, {V0}, {O}, {int_sub(p, 4)}, {4}, {int_sub(p, 3)}, {1}, {false}), arith(hp), arith(hp), arith(), arith(), u4)
+      have gpre: mallocng_specs.get_slot_index_pre(V0, O, p) by defs(simp(u3, p16), mallocng_specs.get_slot_index_pre)
+      // (the callee: under get_slot_index's spec)
+      have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(app(g1, regs), s, o2) ->
+          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+          (ex r. o2 = ok(fn_update(s, "vm", V0), r) && bits_of_int(32, fst(r)) = bits_of_int(32, int_mod(gimple.bytes_at(V0, bits_sub(64, p, 3), 1), 32))) proof
+        fix regs o2
+        assume hro h2
+        have rl rn _ := hro
+        have h3 := mp(all_elim(hg1, {regs}, {s}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hw, h2)
+        show := apply(ms.gsi_q, hp, hw, hu, gpre, hro, h3)
+      qed
+      have ef := apply(ms.gm_run, {p}, {g0}, {g1}, {s}, {o}, hp, hw, hpre, qa, hr)
+      have e2 := apply(g.runs_elim, expand(ef, ms.gm_eff))
+      have c1: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) -> runs(SPEC, s, o) proof
+        assume e
+        obtain v, hv ho from e
+        have ovi := apply(ct.overflow_intro, hv, rewrite(ho, pu))
+        show by simp(ho, hpre, ovi, pu, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+      qed
+      have c2: o = ok(s, mallocng_specs.gm_meta(V0, p)) -> runs(SPEC, s, o) proof
+        assume ho
+        show by simp(ho, pu, hpre, keep(abi.overflow, mallocng_specs.get_meta_pre, mallocng_specs.gm_meta))
+      qed
+      show by taut(e2, c1, c2)
     qed
     show by taut(np, yp)
   qed

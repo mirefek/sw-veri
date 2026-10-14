@@ -491,3 +491,16 @@ item is a short summary of finished work; details are in the files named.
   invariant: the class table (`Cfg.sct`) readable and as the source has
   it, the meta areas and the table no client's, the areas not stack
   pages. Library: `int_sum_ext`, `dom_union2`.
+- **get_meta at the meaning level** (`mp.gm`, `mp.gm_implements`): the
+  meta of p's group. Each function's primary theorem a contract with the
+  ghost part read (`mp.gsi_run`, `mp.gm_run`: the code's outcome under the
+  precondition, the world state exact), the refinement and the callers'
+  rule (`mp.gsi_q`) from it -- so a caller uses its callee's meaning-level
+  contract with the world-level call rule (`gc.contract_call1`). The
+  code's run as an effect summary with the callee's contract a premise
+  (`ms.gm_run`, `ms.gm_eff`), shared by the memory-level C2 and the
+  meaning-level proof. The invariant read (proofs/mallocng_abs.core):
+  `mp.gm_pre` -- under it every one of get_meta's checks passes; a
+  group's start unit-aligned and positive, the offset within the class's
+  slot, the context no client's (invariant additions). get_meta's
+  precondition narrowed to the header bytes the code reads.
