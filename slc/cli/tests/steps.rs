@@ -272,7 +272,8 @@ fn c1_cfg_engine_checks() {
     }
     // and the structured form's C2 proofs up to the context's
     // (proofs/mallocng_ctx.core), the CFG form refining the structured
-    // one and the three composed (proofs/mallocng_cfg.core)
+    // one and the three composed (proofs/mallocng_cfg.core); the ABI's
+    // contract with ghost state (proofs/abi_ghost.core)
     let c = Command::new(slc)
         .current_dir(&root)
         .args(["kernel-check", "--no-cache"])
@@ -280,6 +281,7 @@ fn c1_cfg_engine_checks() {
         .arg("proofs/a_crash.core")
         .arg("proofs/mallocng_c1_cfg.core")
         .args(["proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_ctx.core", "proofs/mallocng_cfg.core"])
+        .arg("proofs/abi_ghost.core")
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
@@ -287,6 +289,7 @@ fn c1_cfg_engine_checks() {
     // lemma (the storing functions' statics' range defined)
     let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 226 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 79 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/abi_ghost.core: 0 constants, 0 axioms, 0 definitions, 30 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")

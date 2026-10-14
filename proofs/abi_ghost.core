@@ -1,0 +1,1100 @@
+// The ABI contract with ghost state: machine code implementing a C function
+// value (its GIMPLE, ghost-free: the bridge's `abi.matches`, C1) that
+// refines a spec over `World & G` (`refines_ghost`) implements the spec
+// (`abi.implements2_at(G, ..)`). The ghost fields are the spec's alone: the
+// machine's state carries them along unchanged, the spec's run chooses
+// the final ones. Proven once, for every G whose fields are apart from the
+// machine's and the world's.
+
+// ----------------------------------------------------------------------
+//  A machine state with a ghost part
+
+// G's values: records whose fields are none of the machine's or the world's
+abbrev abi.ghost_ok(G) := all h. h in G -> h in univ(1) && is_fun(h) && (all z. z in h -> !(fst(z) in abi.KEYS) && !(fst(z) in abi.WKEYS))
+
+// (a record joined with one of other fields: its part on its fields, and
+// the other's off them)
+theorem abi.restrict_union_l(a, b, d): (all z. z in a -> fst(z) in d) -> (all z. z in b -> !(fst(z) in d)) -> restrict(union2(a, b), d) = a
+proof
+  assume ha hb
+  have all_z: all z. z in restrict(union2(a, b), d) <-> z in a proof
+    fix z
+    have sd := set_select_def[s := union2(a, b), p := z. fst(z) in d, z := z]
+    have ui := union2_iff[a := a, b := b, z := z]
+    show by defs(taut(sd, ui, all_elim(ha, {z}), all_elim(hb, {z})), restrict)
+  qed
+  show by mp(set_ext[a := restrict(union2(a, b), d), b := a], all_z)
+qed
+
+theorem abi.ghost_part_union_r(a, b, d): (all z. z in a -> fst(z) in d) -> (all z. z in b -> !(fst(z) in d)) -> ghost_part(union2(a, b), d) = b
+proof
+  assume ha hb
+  have all_z: all z. z in ghost_part(union2(a, b), d) <-> z in b proof
+    fix z
+    have sd := set_select_def[s := union2(a, b), p := z. !(fst(z) in d), z := z]
+    have ui := union2_iff[a := a, b := b, z := z]
+    show by defs(taut(sd, ui, all_elim(ha, {z}), all_elim(hb, {z})), ghost_part)
+  qed
+  show by mp(set_ext[a := ghost_part(union2(a, b), d), b := b], all_z)
+qed
+
+// (a key of none of h's pairs: not in its domain)
+theorem abi.not_dom(h, k): (all z. z in h -> !(fst(z) = k)) -> !(k in dom(h))
+proof
+  assume hz
+  have im := set_image_def[s := h, f := z. fst(z), y := k]
+  have nk: !(ex x. x in h && fst(x) = k) proof
+    assume e
+    obtain x, hx hk from e
+    have n := mp(all_elim(hz, {x}), hx)
+    show by taut(n, hk)
+  qed
+  show by defs(taut(im, nk), dom)
+qed
+
+// a machine state s with a ghost part h: its fields s's, its machine part
+// s, its ghost part h
+theorem abi.ghost_parts: all G s h. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine ->
+  restrict(union2(s, h), abi.KEYS) = s && ghost_part(union2(s, h), abi.KEYS) = h &&
+  (all k. k in abi.KEYS -> app(union2(s, h), k) = app(s, k))
+proof
+  fix G s h
+  assume hg hh hM
+  have hu hf hz := mp(all_elim(hg, {h}), hh)
+  have kf := apply(pow_cart_fst, unsel(expand(hM, x86_64_linux.Machine)))
+  have hk: all z. z in h -> !(fst(z) in abi.KEYS) proof
+    fix z
+    assume hz2
+    have a _ := mp(all_elim(hz, {z}), hz2)
+    show a
+  qed
+  have r := mp(abi.restrict_union_l[a := s, b := h, d := abi.KEYS], kf, hk)
+  have g := mp(abi.ghost_part_union_r[a := s, b := h, d := abi.KEYS], kf, hk)
+  have sf: is_fun(s) && dom(s) = abi.KEYS by simp(expand(hM, x86_64_linux.Machine))
+  have ap: all k. k in abi.KEYS -> app(union2(s, h), k) = app(s, k) proof
+    fix k
+    assume hkk
+    have nz: all z. z in h -> !(fst(z) = k) proof
+      fix z
+      assume hz2
+      have a _ := mp(all_elim(hz, {z}), hz2)
+      show proof
+        assume e
+        have kz: fst(z) in abi.KEYS := rewrite(sym(e), hkk)
+        show by taut(a, kz)
+      qed
+    qed
+    have nd := mp(abi.not_dom[h := h, k := k], nz)
+    show := mp(app_union2_l[w := s, g := h, k := k], sf.1, (k in dom(s) by simp(sf, hkk)), nd)
+  qed
+  show by taut(r, g, ap)
+qed
+
+// (two records merged: from their parts' equations)
+theorem abi.merge_eq(a, b, c, d): a = c -> b = d -> rec_merge(a, b) = union2(c, d)
+proof
+  assume e1 e2
+  show by defs(rewrite(e2, rewrite(e1, refl({rec_merge(a, b)}), {2}), {2}), rec_merge)
+qed
+
+// ----------------------------------------------------------------------
+//  The cases of the bridge, with a ghost part h: the machine state s's
+//  with it (union2(s, h)), the spec run on the entry's world with it
+
+// abi_function's state after reading the world and writing it back, from S
+abbrev abi.gs1(S) := fn_update(fn_update(fn_update(S, "vm", app(S, "vm")), "os", app(S, "os")), "fs_base", app(S, "fs_base"))
+abbrev abi.gmm1(S, objs, mem) := rec_merge(restrict(abi.gs1(S), abi.KEYS), ghost_part(abi.cw(S, objs, mem), abi.WKEYS))
+
+// the entry s with the ghost part h: the world the spec runs on, the
+// entry's with h; the state at the call, S itself; the entry's facts as of S
+theorem abi.ghost_entry: all G s h objs mem. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine -> s in univ(1) -> objs in set_type(omega) -> mem in x86_64_linux.Vm ->
+  abi.view_ok(s, objs, mem) ->
+  (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) ->
+  union2(s, h) in univ(1) &&
+  abi.cw(union2(s, h), objs, mem) = union2(abi.view(s, objs, mem), h) &&
+  abi.gmm1(union2(s, h), objs, mem) = union2(s, h) &&
+  abi.view_ok(union2(s, h), objs, mem) &&
+  (all x. x in omega -> x in objs -> (int_le(abi.sp(union2(s, h)), x) && abi.stack_page(app(union2(s, h), "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(union2(s, h), "vm"), bits_of_int(64, x), 1)) &&
+  app(union2(s, h), "vm") in x86_64_linux.Vm && app(app(union2(s, h), "gpr"), 4) in bits(64) &&
+  (all k. k in abi.KEYS -> app(union2(s, h), k) = app(s, k))
+proof
+  fix G s h objs mem
+  assume hg hh hM su hot hmv hwm hob
+  let S := union2(s, h)
+  have rS gS apS := apply(abi.ghost_parts, hg, hh, hM)
+  have hu hf hz := mp(all_elim(hg, {h}), hh)
+  have a1 := mp(all_elim(apS, {"gpr"}), simp())
+  have a5 := mp(all_elim(apS, {"cpu"}), simp())
+  have a6 := mp(all_elim(apS, {"fs_base"}), simp())
+  have a8 := mp(all_elim(apS, {"vm"}), simp())
+  have a9 := mp(all_elim(apS, {"os"}), simp())
+  have Su: S in univ(1) := mp(union2_univ[u := 1, a := s, b := h], su, hu)
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  have sf: is_fun(s) && dom(s) = abi.KEYS by simp(expand(hM, x86_64_linux.Machine))
+  have hzw: all z. z in h -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz2
+    have _ b := mp(all_elim(hz, {z}), hz2)
+    show b
+  qed
+  have nd: all k. k in abi.KEYS -> !(k in dom(h)) proof
+    fix k
+    assume hkk
+    have nz: all z. z in h -> !(fst(z) = k) proof
+      fix z
+      assume hz2
+      show proof
+        assume e
+        have kz: fst(z) in abi.KEYS := rewrite(sym(e), hkk)
+        have a _ := mp(all_elim(hz, {z}), hz2)
+        show by taut(a, kz)
+      qed
+    qed
+    show := mp(abi.not_dom[h := h, k := k], nz)
+  qed
+  have u8 := mp(fn_update_union[w := s, g := h, k := "vm"], sf.1, simp(sf), mp(all_elim(nd, {"vm"}), simp()))
+  have u9 := mp(fn_update_union[w := s, g := h, k := "os"], sf.1, simp(sf), mp(all_elim(nd, {"os"}), simp()))
+  have u6 := mp(fn_update_union[w := s, g := h, k := "fs_base"], sf.1, simp(sf), mp(all_elim(nd, {"fs_base"}), simp()))
+  have s1e: abi.gs1(S) = S by simp(a8, a9, a6, u8, u9, u6)
+  have wo_s: abi.wo(S, objs, mem) = abi.view(s, objs, mem) by simp(a5, a6, a9)
+  have wkw: all z. z in abi.view(s, objs, mem) -> fst(z) in abi.WKEYS by defs(simp(), fn_update, insert)
+  have gw := mp(abi.ghost_part_union_r[a := abi.view(s, objs, mem), b := h, d := abi.WKEYS], wkw, hzw)
+  have x7e := mp(abi.merge_eq[a := abi.wo(S, objs, mem), b := ghost_part(S, abi.KEYS), c := abi.view(s, objs, mem), d := h], wo_s, gS)
+  have e1: restrict(abi.gs1(S), abi.KEYS) = s := rewrite(sym(s1e), rS)
+  have e2: ghost_part(abi.cw(S, objs, mem), abi.WKEYS) = h := rewrite(sym(x7e), gw)
+  have m1e := mp(abi.merge_eq[a := restrict(abi.gs1(S), abi.KEYS), b := ghost_part(abi.cw(S, objs, mem), abi.WKEYS), c := s, d := h], e1, e2)
+  have hwmS: abi.view_ok(S, objs, mem) := rewrite(sym(a1), rewrite(sym(a8), hwm))
+  have hobS := rewrite(sym(a1), rewrite(sym(a8), hob))
+  have hsvS: app(S, "vm") in x86_64_linux.Vm := rewrite(sym(a8), (app(s, "vm") in x86_64_linux.Vm by simp(hM)))
+  have hspS: app(app(S, "gpr"), 4) in bits(64) := rewrite(sym(a1), (app(app(s, "gpr"), 4) in bits(64) by simp(hM)))
+  show by taut(Su, x7e, m1e, hwmS, hobS, hsvS, hspS, apS)
+qed
+
+// (the spec raises from w: an exception of its run, its state with a ghost
+// part in G)
+theorem abi.raises_intro_g: all G w x spec args e. x in rec_and(abi.World, G) -> e in univ(1) -> !(e = exc_val("stack_overflow", empty)) ->
+  runs(app(spec, args), w, exc(x, e)) -> abi.spec_raises(rec_and(abi.World, G), w, spec, args)
+proof
+  fix G w x spec args e
+  assume hw he hno hr
+  have ot := mp(mp(exc_outcome_type[s := rec_and(abi.World, G), v := cart(bits(64), bits(64)), x := x, e := e], hw), he)
+  show by defs(ex_intro({exc(x, e)}, simp(ot, hr, hno, keep(outcome_type))), abi.spec_raises)
+qed
+
+// a divergence: the spec diverging on the entry's world (with h), with
+// the machine's trace
+theorem abi.div_case_g: all G f spec args objs mem s h t. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine -> pair(s, diverge(t)) in univ(1) -> objs in set_type(omega) ->
+  (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
+  runs(app(spec, args), union2(abi.view(s, objs, mem), h), diverge(t)) ->
+  runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), diverge(t))
+proof
+  fix G f spec args objs mem s h t
+  assume hg hh hM hp hot hob hmv hwm hr
+  let S := union2(s, h)
+  have rS gS apS := apply(abi.ghost_parts, hg, hh, hM)
+  have hu hf hz := mp(all_elim(hg, {h}), hh)
+  // (the machine part's fields: s's)
+  have a1 := mp(all_elim(apS, {"gpr"}), simp())
+  have a2 := mp(all_elim(apS, {"xmm"}), simp())
+  have a3 := mp(all_elim(apS, {"rip"}), simp())
+  have a4 := mp(all_elim(apS, {"flags"}), simp())
+  have a5 := mp(all_elim(apS, {"cpu"}), simp())
+  have a6 := mp(all_elim(apS, {"fs_base"}), simp())
+  have a7 := mp(all_elim(apS, {"gs_base"}), simp())
+  have a8 := mp(all_elim(apS, {"vm"}), simp())
+  have a9 := mp(all_elim(apS, {"os"}), simp())
+  // the states of abi_function's way to the call (as abi.div_case's)
+  let x7 := abi.cw(S, objs, mem)
+  let s1 := fn_update(fn_update(fn_update(S, "vm", app(S, "vm")), "os", app(S, "os")), "fs_base", app(S, "fs_base"))
+  let mm1 := rec_merge(restrict(s1, abi.KEYS), ghost_part(x7, abi.WKEYS))
+  have su: s in univ(1) by simp(hp)
+  have Su: S in univ(1) := mp(union2_univ[u := 1, a := s, b := h], su, hu)
+  have tu: t in univ(1) by simp(hp)
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  have hsv: app(s, "vm") in x86_64_linux.Vm by simp(hM)
+  have vmu: app(s, "vm") in univ(1) by simp(su)
+  have sf: is_fun(s) && dom(s) = abi.KEYS by simp(expand(hM, x86_64_linux.Machine))
+  // (S written back as it was: S)
+  have hzk: all z. z in h -> !(fst(z) in abi.KEYS) proof
+    fix z
+    assume hz2
+    have a _ := mp(all_elim(hz, {z}), hz2)
+    show a
+  qed
+  have hzw: all z. z in h -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz2
+    have _ b := mp(all_elim(hz, {z}), hz2)
+    show b
+  qed
+  have nd: all k. k in abi.KEYS -> !(k in dom(h)) proof
+    fix k
+    assume hkk
+    have nz: all z. z in h -> !(fst(z) = k) proof
+      fix z
+      assume hz2
+      show proof
+        assume e
+        have kz: fst(z) in abi.KEYS := rewrite(sym(e), hkk)
+        show by taut(mp(all_elim(hzk, {z}), hz2), kz)
+      qed
+    qed
+    show := mp(abi.not_dom[h := h, k := k], nz)
+  qed
+  have u8 := mp(fn_update_union[w := s, g := h, k := "vm"], sf.1, simp(sf), mp(all_elim(nd, {"vm"}), simp()))
+  have u9 := mp(fn_update_union[w := s, g := h, k := "os"], sf.1, simp(sf), mp(all_elim(nd, {"os"}), simp()))
+  have u6 := mp(fn_update_union[w := s, g := h, k := "fs_base"], sf.1, simp(sf), mp(all_elim(nd, {"fs_base"}), simp()))
+  have s1e: s1 = S by simp(a8, a9, a6, u8, u9, u6)
+  // (the world at the call: the entry's, with h)
+  have wo_s: abi.wo(S, objs, mem) = abi.view(s, objs, mem) by simp(a5, a6, a9)
+  have wkw: all z. z in abi.view(s, objs, mem) -> fst(z) in abi.WKEYS by defs(simp(), fn_update, insert)
+  have gw := mp(abi.ghost_part_union_r[a := abi.view(s, objs, mem), b := h, d := abi.WKEYS], wkw, hzw)
+  have x7e := mp(abi.merge_eq[a := abi.wo(S, objs, mem), b := ghost_part(S, abi.KEYS), c := abi.view(s, objs, mem), d := h], wo_s, gS)
+  have e1: restrict(s1, abi.KEYS) = s := rewrite(sym(s1e), rS)
+  have e2: ghost_part(x7, abi.WKEYS) = h := rewrite(sym(x7e), gw)
+  have m1e := mp(abi.merge_eq[a := restrict(s1, abi.KEYS), b := ghost_part(x7, abi.WKEYS), c := s, d := h], e1, e2)
+  have ein: abi.cw(mm1, objs, mem) = union2(abi.view(s, objs, mem), h) := rewrite(sym(m1e), x7e)
+  have hspec := rewrite(sym(ein), hr)
+  have wun: abi.view(s, objs, mem) in univ(1) by simp(su, ou, hmu)
+  have x7u: x7 in univ(1) := rewrite(sym(x7e), mp(union2_univ[u := 1, a := abi.view(s, objs, mem), b := h], wun, hu))
+  have gsu: ghost_part(S, abi.KEYS) in univ(1) := rewrite(sym(gS), hu)
+  // (the entry's facts as of S: its fields s's)
+  have hwmS: abi.view_ok(S, objs, mem) := rewrite(sym(a1), rewrite(sym(a8), hwm))
+  have hobS := rewrite(sym(a1), rewrite(sym(a8), hob))
+  have hsvS: app(S, "vm") in x86_64_linux.Vm := rewrite(sym(a8), hsv)
+  have vmuS: app(S, "vm") in univ(1) := rewrite(sym(a8), vmu)
+  have wunS: abi.wo(S, objs, mem) in univ(1) := rewrite(sym(wo_s), wun)
+  // the entry world: read, and written back unchanged
+  have g0 := mp(all_elim(abi.get_ok, {abi.sp(S)}, {objs}, {mem}, {S}), Su, ou, hmu)
+  have wu := mp(restrict_univ[u := 1, f := x7, d := abi.WKEYS], x7u)
+  have hm0: abi.world_matches(app(S, "vm"), app(S, "vm"), app(restrict(x7, abi.WKEYS), "vm"), objs, abi.sp(S)) by simp(hwmS, keep(abi.world_matches))
+  have s0 := mp(all_elim(abi.set_ok, {abi.sp(S)}, {objs}, {mem}, {S}, {restrict(x7, abi.WKEYS)}, {app(S, "vm")}), Su, wu, vmuS, hsvS, hm0)
+  // the spec on the world, from mm1 (= S)
+  have m1u: mm1 in univ(1) := rewrite(sym(m1e), Su)
+  have cl0 := mp(all_elim(abi.call_div, {spec}, {args}, {abi.sp(S)}, {objs}, {mem}, {mm1}, {t}), m1u, ou, hmu, hspec, tu)
+  have cl := rewrite(sym(all_elim(abi.call_ghost, {G}, {spec}, {args}, {abi.sp(S)}, {objs}, {mem})), cl0)
+  have pS: pair(S, diverge(t)) in univ(1) by simp(Su, tu)
+  show by simp(Su, ou, hmu, hwmS, wunS, x7u, gsu, m1u, g0, s0, cl, pS, hobS,
+    keep(abi.world_pages, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore))
+qed
+
+// ----------------------------------------------------------------------
+//  Updates and reads of a record joined with a ghost part of other keys
+
+theorem abi.upd_union(a, g, k, v): (all z. z in g -> fst(z) != k) -> fn_update(union2(a, g), k, v) = union2(fn_update(a, k, v), g)
+proof
+  assume hz
+  have all_z: all z. z in fn_update(union2(a, g), k, v) <-> z in union2(fn_update(a, k, v), g) proof
+    fix z
+    have m1 := fn_update_iff[f := union2(a, g), k := k, v := v, z := z]
+    have m2 := fn_update_iff[f := a, k := k, v := v, z := z]
+    have u1 := union2_iff[a := a, b := g, z := z]
+    have u2 := union2_iff[a := fn_update(a, k, v), b := g, z := z]
+    have gk: z in g -> fst(z) != k := all_elim(hz, {z})
+    have pk: z = pair(k, v) -> !(z in g) proof
+      assume e
+      have f: fst(z) = k by simp(e)
+      show by taut(gk, f)
+    qed
+    show by taut(m1, m2, u1, u2, gk, pk)
+  qed
+  show by mp(set_ext[a := fn_update(union2(a, g), k, v), b := union2(fn_update(a, k, v), g)], all_z)
+qed
+
+theorem abi.app_union_l(a, g, k): (all z. z in g -> fst(z) != k) -> app(union2(a, g), k) = app(a, k)
+proof
+  assume hz
+  have eq: all y. pair(k, y) in union2(a, g) <-> pair(k, y) in a proof
+    fix y
+    have u := union2_iff[a := a, b := g, z := pair(k, y)]
+    have n: !(pair(k, y) in g) proof
+      assume hg
+      have f := mp(all_elim(hz, {pair(k, y)}), hg)
+      show by simp(f)
+    qed
+    show by taut(u, n)
+  qed
+  have ce := mp(choose_ext[p := y. pair(k, y) in union2(a, g), q := y. pair(k, y) in a], eq)
+  have ee: (ex y. pair(k, y) in union2(a, g)) <-> (ex y. pair(k, y) in a) proof
+    have l: (ex y. pair(k, y) in union2(a, g)) -> (ex y. pair(k, y) in a) proof
+      assume e
+      obtain y, hy from e
+      show by ex_intro({y}, taut(all_elim(eq, {y}), hy))
+    qed
+    have r: (ex y. pair(k, y) in a) -> (ex y. pair(k, y) in union2(a, g)) proof
+      assume e
+      obtain y, hy from e
+      show by ex_intro({y}, taut(all_elim(eq, {y}), hy))
+    qed
+    show by taut(l, r)
+  qed
+  have du: app(union2(a, g), k) = ite(ex y. pair(k, y) in union2(a, g), choose(y. pair(k, y) in union2(a, g)), empty)
+    by defs(refl({ite(ex y. pair(k, y) in union2(a, g), choose(y. pair(k, y) in union2(a, g)), empty)}), app)
+  have da: app(a, k) = ite(ex y. pair(k, y) in a, choose(y. pair(k, y) in a), empty)
+    by defs(refl({ite(ex y. pair(k, y) in a, choose(y. pair(k, y) in a), empty)}), app)
+  have c1: (ex y. pair(k, y) in a) -> app(union2(a, g), k) = app(a, k) proof
+    assume e
+    have e1: ex y. pair(k, y) in union2(a, g) by taut(ee, e)
+    have l := trans(du, mp(ite_t[c := ex y. pair(k, y) in union2(a, g), a := choose(y. pair(k, y) in union2(a, g)), b := empty], e1))
+    have r := trans(da, mp(ite_t[c := ex y. pair(k, y) in a, a := choose(y. pair(k, y) in a), b := empty], e))
+    show := trans(trans(l, ce), sym(r))
+  qed
+  have c2: !(ex y. pair(k, y) in a) -> app(union2(a, g), k) = app(a, k) proof
+    assume e
+    have e1: !(ex y. pair(k, y) in union2(a, g)) by taut(ee, e)
+    have l := trans(du, mp(ite_f[c := ex y. pair(k, y) in union2(a, g), a := choose(y. pair(k, y) in union2(a, g)), b := empty], e1))
+    have r := trans(da, mp(ite_f[c := ex y. pair(k, y) in a, a := choose(y. pair(k, y) in a), b := empty], e))
+    show := trans(l, sym(r))
+  qed
+  show by taut(c1, c2)
+qed
+
+// (a record's part on d, joined with one of other keys: its own)
+theorem abi.restrict_union_g(a, b, d): (all z. z in b -> !(fst(z) in d)) -> restrict(union2(a, b), d) = restrict(a, d)
+proof
+  assume hb
+  have all_z: all z. z in restrict(union2(a, b), d) <-> z in restrict(a, d) proof
+    fix z
+    have s1 := set_select_def[s := union2(a, b), p := z. fst(z) in d, z := z]
+    have s2 := set_select_def[s := a, p := z. fst(z) in d, z := z]
+    have ui := union2_iff[a := a, b := b, z := z]
+    show by defs(taut(s1, s2, ui, all_elim(hb, {z})), restrict)
+  qed
+  show by mp(set_ext[a := restrict(union2(a, b), d), b := restrict(a, d)], all_z)
+qed
+
+// (a record's pairs: their first components its domain)
+theorem abi.keys_of(f, d): dom(f) = d -> (all z. z in f -> fst(z) in d)
+proof
+  assume hd
+  fix z
+  assume hz
+  have im := set_image_def[s := f, f := x. fst(x), y := fst(z)]
+  have e: ex x. x in f && fst(x) = fst(z) by ex_intro({z}, taut(hz, refl({fst(z)})))
+  have kd: fst(z) in dom(f) by defs(taut(im, e), dom)
+  show := rewrite(hd, kd)
+qed
+
+// a world w with a ghost part h: its fields w's, its world part w, its
+// ghost part h
+theorem abi.ghost_parts_w: all G w h. abi.ghost_ok(G) -> h in G -> w in abi.World ->
+  restrict(union2(w, h), abi.WKEYS) = w && ghost_part(union2(w, h), abi.WKEYS) = h &&
+  (all k. k in abi.WKEYS -> app(union2(w, h), k) = app(w, k))
+proof
+  fix G w h
+  assume hg hh hw
+  have hu hf hz := mp(all_elim(hg, {h}), hh)
+  have wd: dom(w) = abi.WKEYS by simp(expand(hw, abi.World))
+  have kw := mp(abi.keys_of[f := w, d := abi.WKEYS], wd)
+  have hk: all z. z in h -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz2
+    have _ b := mp(all_elim(hz, {z}), hz2)
+    show b
+  qed
+  have r := mp(abi.restrict_union_l[a := w, b := h, d := abi.WKEYS], kw, hk)
+  have g := mp(abi.ghost_part_union_r[a := w, b := h, d := abi.WKEYS], kw, hk)
+  have ap: all k. k in abi.WKEYS -> app(union2(w, h), k) = app(w, k) proof
+    fix k
+    assume hkk
+    have nz: all z. z in h -> fst(z) != k proof
+      fix z
+      assume hz2
+      show proof
+        assume e
+        have kz: fst(z) in abi.WKEYS := rewrite(sym(e), hkk)
+        show by taut(mp(all_elim(hk, {z}), hz2), kz)
+      qed
+    qed
+    show := mp(abi.app_union_l[a := w, g := h, k := k], nz)
+  qed
+  show by taut(r, g, ap)
+qed
+
+// ----------------------------------------------------------------------
+//  The other cases with a ghost part
+
+// undefined behavior: the spec raises from the entry's world with h
+theorem abi.ub_case_g: all G f spec args objs mem s h o e x. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine -> s in univ(1) -> objs in set_type(omega) -> mem in x86_64_linux.Vm ->
+  abi.view_ok(s, objs, mem) ->
+  (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) ->
+  e in univ(1) -> !(e = exc_val("stack_overflow", empty)) -> x in rec_and(abi.World, G) ->
+  runs(app(spec, args), union2(abi.view(s, objs, mem), h), exc(x, e)) -> pair(union2(s, h), o) in univ(1) -> abi.outcome(o) ->
+  runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), o)
+proof
+  fix G f spec args objs mem s h o e x
+  assume hg hh hM su hot hmv hwm hob he hno hx hr hp ho
+  have Su x7e m1e hwmS hobS hsvS hspS apS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  have hra := apply(abi.raises_intro_g, {G}, {abi.cw(union2(s, h), objs, mem)}, {x}, {spec}, {args}, {e}, hx, he, hno, rewrite(sym(x7e), hr))
+  show := apply(abi.ub_intro_g, {G}, {f}, hp, ho, ou, hmu, hsvS, hspS, hwmS, hra)
+qed
+
+// a crash: the machine faulting on its stack (its ghost part h kept), with
+// I/O the spec allows a stack overflow to have from the world with h
+theorem abi.crash_case_g: all G f spec args objs mem s h m1 c. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine -> pair(s, exc(m1, c)) in univ(1) -> objs in set_type(omega) ->
+  (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
+  ((ex a k. c = exc_val("segv", pair(a, k)) && (k = 0 || k = 1 || k = 3) && a in bits(64) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a)) ||
+    c = exc_val("stack_fault", empty)) ->
+  m1 in x86_64_linux.Machine -> subset(app(app(s, "os"), "events"), app(app(m1, "os"), "events")) ->
+  abi.overflow_ok(rec_and(abi.World, G), union2(abi.view(s, objs, mem), h), spec, args, app(m1, "os")) ->
+  runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), exc(union2(m1, h), c))
+proof
+  fix G f spec args objs mem s h m1 c
+  assume hg hh hM hp hot hob hmv hwm hc hM1 hev hov
+  let S := union2(s, h)
+  let M1 := union2(m1, h)
+  have su: s in univ(1) by simp(hp)
+  have m1u: m1 in univ(1) by simp(hp)
+  have cu: c in univ(1) by simp(hp)
+  have Su x7e m1e hwmS hobS hsvS hspS apS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
+  have _ _ apM := apply(abi.ghost_parts, hg, hh, hM1)
+  have hu _ _ := mp(all_elim(hg, {h}), hh)
+  have a1 := mp(all_elim(apS, {"gpr"}), simp())
+  have a9 := mp(all_elim(apS, {"os"}), simp())
+  have b1 := mp(all_elim(apM, {"gpr"}), simp())
+  have b8 := mp(all_elim(apM, {"vm"}), simp())
+  have b9 := mp(all_elim(apM, {"os"}), simp())
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  have M1u: M1 in univ(1) := mp(union2_univ[u := 1, a := m1, b := h], m1u, hu)
+  // the states of abi_function's way to the crash, from S (as abi.crash_case's)
+  let x7 := abi.cw(S, objs, mem)
+  let mm1 := abi.gmm1(S, objs, mem)
+  have wun: abi.view(s, objs, mem) in univ(1) by simp(su, ou, hmu)
+  have x7u: x7 in univ(1) := rewrite(sym(x7e), mp(union2_univ[u := 1, a := abi.view(s, objs, mem), b := h], wun, hu))
+  have vmuS: app(S, "vm") in univ(1) by simp(Su)
+  have g0 := mp(all_elim(abi.get_ok, {abi.sp(S)}, {objs}, {mem}, {S}), Su, ou, hmu)
+  have wu := mp(restrict_univ[u := 1, f := x7, d := abi.WKEYS], x7u)
+  have hm0: abi.world_matches(app(S, "vm"), app(S, "vm"), app(restrict(x7, abi.WKEYS), "vm"), objs, abi.sp(S)) by simp(hwmS, keep(abi.world_matches))
+  have s0 := mp(all_elim(abi.set_ok, {abi.sp(S)}, {objs}, {mem}, {S}, {restrict(x7, abi.WKEYS)}, {app(S, "vm")}), Su, wu, vmuS, hsvS, hm0)
+  have m1u2: mm1 in univ(1) := rewrite(sym(m1e), Su)
+  // the crash state: M1, a machine with the ghost part h; its I/O as overflow_ok has it
+  have mr: M1 in rec_and(x86_64_linux.Machine, G) := apply(rec_and_intro, hM1, hh)
+  have hcM := rewrite(sym(a1), rewrite(sym(b1), rewrite(sym(b8), hc)))
+  have hevM := rewrite(sym(m1e), rewrite(sym(a9), rewrite(sym(b9), hev)))
+  have hovM := rewrite(sym(x7e), rewrite(sym(b9), hov))
+  have pS: pair(S, exc(M1, c)) in univ(1) by simp(Su, M1u, cu)
+  have gsu := mp(ghost_part_univ[u := 1, f := S, d := abi.KEYS], Su)
+  have wunS: abi.wo(S, objs, mem) in univ(1) by simp(Su, ou, hmu)
+  show by simp(Su, ou, hmu, hwmS, wunS, x7u, gsu, m1u2, g0, s0, pS, hobS, hcM, cu, hevM, hovM, mr, M1u,
+    keep(abi.world_pages, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.overflow_at, abi.overflow_ok))
+qed
+
+// a normal return: the machine's final state m1, the spec's run on the
+// world with h ending in w2 with the ghost part h2, its result in rax:rdx
+// -- the machine's final state m1 with h2
+theorem abi.ret_case_g: all G f spec args objs mem s h m1 w2 h2. abi.ghost_ok(G) -> h in G -> h2 in G ->
+  s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> m1 in x86_64_linux.Machine -> pair(s, ok(m1, empty)) in univ(1) ->
+  objs in set_type(omega) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
+  runs(app(spec, args), union2(abi.view(s, objs, mem), h), ok(union2(w2, h2), pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) -> w2 in abi.World -> w2 in univ(1) ->
+  abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), objs, abi.sp(s)) -> app(m1, "os") = app(w2, "os") -> app(m1, "fs_base") = app(w2, "fs_base") ->
+  app(m1, "cpu") = app(s, "cpu") -> app(m1, "gs_base") = app(s, "gs_base") -> app(m1, "rip") = abi.ret(s) -> app(app(m1, "gpr"), 4) = abi.sp(s) ->
+  abi.callee_saved(m1, s) -> !app(app(m1, "flags"), "df") ->
+  runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), ok(union2(m1, h2), empty))
+proof
+  fix G f spec args objs mem s h m1 w2 h2
+  assume hg hh hh2 hM he hM1 hp hot hob hmv hwm hr hw hwu hnm hos hfs hcpu hgs hrip hrsp hcs hdf
+  let S := union2(s, h)
+  let W2 := union2(w2, h2)
+  have ok0 := apply(abi.ok_univ, hp)
+  have su: s in univ(1) by taut(ok0)
+  have m1u: m1 in univ(1) by taut(ok0)
+  have Su x7e m1e hwmS hobS hsvS hspS apS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
+  have rW gW apW := apply(abi.ghost_parts_w, hg, hh2, hw)
+  have hu2 _ _ := mp(all_elim(hg, {h2}), hh2)
+  have W2u: W2 in univ(1) := mp(union2_univ[u := 1, a := w2, b := h2], hwu, hu2)
+  have a1 := mp(all_elim(apS, {"gpr"}), simp())
+  have a8 := mp(all_elim(apS, {"vm"}), simp())
+  have c8 := mp(all_elim(apW, {"vm"}), simp())
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  // the spec's run, on the world abi_function gives it at the call
+  have ein: abi.cw(abi.gmm1(S, objs, mem), objs, mem) = union2(abi.view(s, objs, mem), h) := rewrite(sym(m1e), x7e)
+  have hspec := rewrite(sym(ein), hr)
+  // the machine's registers, flags and memory: the havoc's choice, the memory written back
+  have h0: app(app(m1, "gpr"), 0) in bits(64) by simp(hM1)
+  have h1: app(app(m1, "gpr"), 2) in bits(64) by simp(hM1)
+  have hnu: app(m1, "vm") in univ(1) by simp(m1u)
+  have hnv: app(m1, "vm") in x86_64_linux.Vm by simp(hM1)
+  have gu: app(m1, "gpr") in univ(1) by simp(m1u)
+  have tg: app(m1, "gpr") in fn_space(x86_64_linux.Reg, bits(64)) by simp(hM1)
+  have xu: app(m1, "xmm") in univ(1) by simp(m1u)
+  have tx: app(m1, "xmm") in fn_space(x86_64_linux.Reg, bits(128)) by simp(hM1)
+  have fu: app(m1, "flags") in univ(1) by simp(m1u)
+  have tf: app(m1, "flags") in x86_64_linux.Flags by simp(hM1)
+  have hnmS := rewrite(sym(a1), rewrite(sym(a8), rewrite(sym(c8), hnm)))
+  have rt := apply(abi.ret_intro_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {S}, {app(m1, "vm")}, {W2}, {app(app(m1, "gpr"), 0)}, {app(app(m1, "gpr"), 2)}, {app(m1, "gpr")}, {app(m1, "xmm")}, {app(m1, "flags")},
+    Su, ou, hmu, hsvS, hspS, hobS, hwmS, hspec, W2u, h0, h1, hnu, hnv, hnmS, gu, tg, xu, tx, fu, tf)
+  have rt2 := rewrite(m1e, rt)
+  // its final state is m1 with h2: the ghost parts carried past the
+  // machine's fields (h at the entry, h2 from the spec's world)
+  have _ _ hz := mp(all_elim(hg, {h}), hh)
+  have _ _ hz2 := mp(all_elim(hg, {h2}), hh2)
+  have nk: all g. (all z. z in g -> !(fst(z) in abi.KEYS) && !(fst(z) in abi.WKEYS)) -> all k. k in abi.KEYS -> (all z. z in g -> fst(z) != k) proof
+    fix g
+    assume hzg
+    fix k
+    assume hk
+    fix z
+    assume hz3
+    have a _ := mp(all_elim(hzg, {z}), hz3)
+    show proof
+      assume e
+      have kz: fst(z) in abi.KEYS := rewrite(sym(e), hk)
+      show by taut(a, kz)
+    qed
+  qed
+  have UH: all X k v. k in abi.KEYS -> fn_update(union2(X, h), k, v) = union2(fn_update(X, k, v), h) proof
+    fix X k v
+    assume hk
+    show := mp(abi.upd_union[a := X, g := h, k := k, v := v], mp(all_elim(mp(all_elim(nk, {h}), hz), {k}), hk))
+  qed
+  have UH2: all X k v. k in abi.KEYS -> fn_update(union2(X, h2), k, v) = union2(fn_update(X, k, v), h2) proof
+    fix X k v
+    assume hk
+    show := mp(abi.upd_union[a := X, g := h2, k := k, v := v], mp(all_elim(mp(all_elim(nk, {h2}), hz2), {k}), hk))
+  qed
+  have AH2: all X k. k in abi.KEYS -> app(union2(X, h2), k) = app(X, k) proof
+    fix X k
+    assume hk
+    show := mp(abi.app_union_l[a := X, g := h2, k := k], mp(all_elim(mp(all_elim(nk, {h2}), hz2), {k}), hk))
+  qed
+  have hkk: all z. z in h -> !(fst(z) in abi.KEYS) proof
+    fix z
+    assume hz3
+    have a _ := mp(all_elim(hz, {z}), hz3)
+    show a
+  qed
+  have RH: all X. restrict(union2(X, h), abi.KEYS) = restrict(X, abi.KEYS) proof
+    fix X
+    show := mp(abi.restrict_union_g[a := X, b := h, d := abi.KEYS], hkk)
+  qed
+  have kf := apply(pow_cart_fst, unsel(expand(hM, x86_64_linux.Machine)))
+  have rs0 := apply(restrict_all, kf)
+  have fbu: false in univ(1) by simp()
+  have bdm: app(app(m1, "flags"), "df") in bool by simp(hM1)
+  have dfm := apply(not_eq_false, bdm, hdf)
+  have a5 := mp(all_elim(apS, {"cpu"}), simp())
+  have a6 := mp(all_elim(apS, {"fs_base"}), simp())
+  have a7 := mp(all_elim(apS, {"gs_base"}), simp())
+  have a9 := mp(all_elim(apS, {"os"}), simp())
+  have a2 := mp(all_elim(apS, {"xmm"}), simp())
+  have a3 := mp(all_elim(apS, {"rip"}), simp())
+  have a4 := mp(all_elim(apS, {"flags"}), simp())
+  have c6 := mp(all_elim(apW, {"fs_base"}), simp())
+  have c9 := mp(all_elim(apW, {"os"}), simp())
+  // (1) the world written back: s's fields updated, h beside them; its
+  // machine part, with the spec's ghost part h2
+  let V := app(m1, "vm")
+  let O := app(W2, "os")
+  let F := app(W2, "fs_base")
+  let m2s := fn_update(fn_update(fn_update(s, "vm", V), "os", O), "fs_base", F)
+  have i1 := mp(all_elim(UH, {s}, {"vm"}, {V}), simp())
+  have i2 := mp(all_elim(UH, {fn_update(s, "vm", V)}, {"os"}, {O}), simp())
+  have i3 := mp(all_elim(UH, {fn_update(fn_update(s, "vm", V), "os", O)}, {"fs_base"}, {F}), simp())
+  have em2 := rewrite(i3, rewrite(i2, rewrite(i1, refl({fn_update(fn_update(fn_update(S, "vm", V), "os", O), "fs_base", F)}), {2}), {1}), {1})
+  have sf: is_fun(s) && dom(s) = abi.KEYS by simp(expand(hM, x86_64_linux.Machine))
+  have d1 := mp(fn_update_fd[f := s, k := "vm", v := V, d := abi.KEYS], sf.1, sf.2, simp())
+  have d2 := mp(fn_update_fd[f := fn_update(s, "vm", V), k := "os", v := O, d := abi.KEYS], d1.1, d1.2, simp())
+  have d3 := mp(fn_update_fd[f := fn_update(fn_update(s, "vm", V), "os", O), k := "fs_base", v := F, d := abi.KEYS], d2.1, d2.2, simp())
+  have km := mp(abi.keys_of[f := m2s, d := abi.KEYS], d3.2)
+  have erm: restrict(union2(m2s, h), abi.KEYS) = m2s := trans(all_elim(RH, {m2s}), mp(restrict_all[f := m2s, d := abi.KEYS], km))
+  have ex12 := mp(abi.merge_eq[a := m2s, b := ghost_part(W2, abi.WKEYS), c := m2s, d := h2], refl({m2s}), gW)
+  have rt3 := rewrite(ex12, rewrite(erm, rewrite(em2, rt2)))
+  // (2) the havoc's registers, flags; each later update and read of the
+  // machine's fields past h2
+  let G1 := app(m1, "gpr")
+  let X1 := app(m1, "xmm")
+  let F1 := app(m1, "flags")
+  let xxs := fn_update(fn_update(fn_update(m2s, "gpr", G1), "xmm", X1), "flags", F1)
+  have j1 := mp(all_elim(UH2, {m2s}, {"gpr"}, {G1}), simp())
+  have j2 := mp(all_elim(UH2, {fn_update(m2s, "gpr", G1)}, {"xmm"}, {X1}), simp())
+  have j3 := mp(all_elim(UH2, {fn_update(fn_update(m2s, "gpr", G1), "xmm", X1)}, {"flags"}, {F1}), simp())
+  have exx := rewrite(j3, rewrite(j2, rewrite(j1, refl({fn_update(fn_update(fn_update(union2(m2s, h2), "gpr", G1), "xmm", X1), "flags", F1)}), {2}), {1}), {1})
+  have rt4 := rewrite(mp(all_elim(AH2, {xxs}, {"gpr"}), simp()), rewrite(exx, rt3))
+  // (3) the callee-saved registers restored
+  let GG := fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(app(xxs, "gpr"), 3, app(app(S, "gpr"), 3)), 5, app(app(S, "gpr"), 5)), 12, app(app(S, "gpr"), 12)), 13, app(app(S, "gpr"), 13)), 14, app(app(S, "gpr"), 14)), 15, app(app(S, "gpr"), 15))
+  let xfs := fn_update(xxs, "gpr", GG)
+  have rt5 := rewrite(mp(all_elim(AH2, {xfs}, {"gpr"}), simp()), rewrite(mp(all_elim(UH2, {xxs}, {"gpr"}, {GG}), simp()), rt4))
+  // (4) rsp, rax, rdx, df, rip
+  let SP := bits_add(64, app(app(S, "gpr"), 4), 8)
+  let aas := fn_update(xfs, "gpr", fn_update(app(xfs, "gpr"), 4, SP))
+  have rt6 := rewrite(mp(all_elim(AH2, {aas}, {"gpr"}), simp()), rewrite(mp(all_elim(UH2, {xfs}, {"gpr"}, {fn_update(app(xfs, "gpr"), 4, SP)}), simp()), rt5))
+  let bbs := fn_update(aas, "gpr", fn_update(app(aas, "gpr"), 0, app(app(m1, "gpr"), 0)))
+  have rt7 := rewrite(mp(all_elim(AH2, {bbs}, {"gpr"}), simp()), rewrite(mp(all_elim(UH2, {aas}, {"gpr"}, {fn_update(app(aas, "gpr"), 0, app(app(m1, "gpr"), 0))}), simp()), rt6))
+  let ccs := fn_update(bbs, "gpr", fn_update(app(bbs, "gpr"), 2, app(app(m1, "gpr"), 2)))
+  have rt8 := rewrite(mp(all_elim(AH2, {ccs}, {"flags"}), simp()), rewrite(mp(all_elim(UH2, {bbs}, {"gpr"}, {fn_update(app(bbs, "gpr"), 2, app(app(m1, "gpr"), 2))}), simp()), rt7))
+  let dds := fn_update(ccs, "flags", fn_update(app(ccs, "flags"), "df", false))
+  let RET := x86_64_linux.le(app(app(S, "vm"), "bytes"), app(app(S, "gpr"), 4), 8)
+  have rt9 := rewrite(mp(all_elim(UH2, {dds}, {"rip"}, {RET}), simp()), rewrite(mp(all_elim(UH2, {ccs}, {"flags"}, {fn_update(app(ccs, "flags"), "df", false)}), simp()), rt8))
+  // (5) the machine part: m1 (as abi.ret_case's)
+  have rs1 := apply(restrict_all, apply(pow_cart_fst, unsel(expand(hM1, x86_64_linux.Machine))))
+  have neq: fn_update(dds, "rip", RET) = m1 by simp(hM, hM1, su, m1u, hwu, hw, fbu, hos, hfs, hcpu, hgs, hrip, hrsp, hcs, dfm, a1, a2, a3, a4, a5, a6, a7, a8, a9, c6, c9)
+  show := rewrite(neq, rt9)
+qed
+
+// ----------------------------------------------------------------------
+//  Outcomes with a ghost part
+
+theorem abi.wg_ok: all s v h. with_ghost(ok(s, v), h) = ok(union2(s, h), v)
+proof
+  fix s v h
+  show by defs(simp(), with_ghost)
+qed
+
+theorem abi.wg_exc: all s e h. with_ghost(exc(s, e), h) = exc(union2(s, h), e)
+proof
+  fix s e h
+  show by defs(simp(), with_ghost)
+qed
+
+theorem abi.wg_div: all t h. with_ghost(diverge(t), h) = diverge(t)
+proof
+  fix t h
+  show by defs(simp(), with_ghost)
+qed
+
+theorem abi.ok_outcome_type(s, v, x, r): x in s -> r in v -> ok(x, r) in outcome_type(s, v)
+proof
+  assume hx hr
+  have c := mp(mp(cart_intro[a := s, b := v, x := x, y := r], hx), hr)
+  have w: ex z. z in cart(s, v) && ok(fst(z), snd(z)) = ok(x, r) by ex_intro({pair(x, r)}, simp(c))
+  show by defs(taut(set_image_def[s := cart(s, v), f := z. ok(fst(z), snd(z)), y := ok(x, r)], w, union2_iff[a := set_image(cart(s, v), z. ok(fst(z), snd(z))), b := union2(set_image(cart(s, univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t. diverge(t))), z := ok(x, r)]), outcome_type)
+qed
+
+theorem abi.div_outcome_type(s, v, t): t in univ(1) -> diverge(t) in outcome_type(s, v)
+proof
+  assume ht
+  have w: ex t2. t2 in univ(1) && diverge(t2) = diverge(t) by ex_intro({t}, taut(ht, refl({diverge(t)})))
+  show by defs(taut(set_image_def[s := univ(1), f := t2. diverge(t2), y := diverge(t)], w,
+    union2_iff[a := set_image(cart(s, v), z. ok(fst(z), snd(z))), b := union2(set_image(cart(s, univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t. diverge(t))), z := diverge(t)],
+    union2_iff[a := set_image(cart(s, univ(1)), z. exc(fst(z), snd(z))), b := set_image(univ(1), t. diverge(t)), z := diverge(t)]), outcome_type)
+qed
+
+// (an outcome of a type: a return, an exception or a divergence, its parts typed)
+theorem abi.outcome_type_elim(s, v, o): o in outcome_type(s, v) ->
+  (ex x r. x in s && r in v && o = ok(x, r)) || (ex x e. x in s && e in univ(1) && o = exc(x, e)) || (ex t. t in univ(1) && o = diverge(t))
+proof
+  assume ho
+  have u1 := union2_iff[a := set_image(cart(s, v), z. ok(fst(z), snd(z))), b := union2(set_image(cart(s, univ(1)), z. exc(fst(z), snd(z))), set_image(univ(1), t. diverge(t))), z := o]
+  have u2 := union2_iff[a := set_image(cart(s, univ(1)), z. exc(fst(z), snd(z))), b := set_image(univ(1), t. diverge(t)), z := o]
+  have i1 := set_image_def[s := cart(s, v), f := z. ok(fst(z), snd(z)), y := o]
+  have i2 := set_image_def[s := cart(s, univ(1)), f := z. exc(fst(z), snd(z)), y := o]
+  have i3 := set_image_def[s := univ(1), f := t. diverge(t), y := o]
+  have m: (ex z. z in cart(s, v) && ok(fst(z), snd(z)) = o) || (ex z. z in cart(s, univ(1)) && exc(fst(z), snd(z)) = o) || (ex t. t in univ(1) && diverge(t) = o)
+    by taut(expand(ho, outcome_type), u1, u2, i1, i2, i3)
+  have c1: (ex z. z in cart(s, v) && ok(fst(z), snd(z)) = o) -> ex x r. x in s && r in v && o = ok(x, r) proof
+    assume e
+    obtain z, hz hzo from e
+    obtain x y, hx hy hp from apply(cart_elim, hz)
+    show by ex_intro({x}, {y}, simp(hx, hy, sym(hzo), hp))
+  qed
+  have c2: (ex z. z in cart(s, univ(1)) && exc(fst(z), snd(z)) = o) -> ex x e. x in s && e in univ(1) && o = exc(x, e) proof
+    assume e
+    obtain z, hz hzo from e
+    obtain x y, hx hy hp from apply(cart_elim, hz)
+    show by ex_intro({x}, {y}, simp(hx, hy, sym(hzo), hp))
+  qed
+  have c3: (ex t. t in univ(1) && diverge(t) = o) -> ex t. t in univ(1) && o = diverge(t) proof
+    assume e
+    obtain t, ht hto from e
+    show by ex_intro({t}, taut(ht, sym(hto)))
+  qed
+  show by taut(m, c1, c2, c3)
+qed
+
+// (a state of the ghost-free spec: a world)
+theorem abi.world_part: all x. x in rec_and(abi.World, single(empty)) -> x in abi.World
+proof
+  fix x
+  assume hx
+  obtain a b, ha hb he from apply(rec_and_elim, hx)
+  have b0 := apply(single_elim, hb)
+  have e2: x = a := trans(rewrite(b0, he), union2_empty[a := a])
+  show := rewrite(sym(e2), ha)
+qed
+
+// I/O of a stack overflow the ghost-free spec allows: the spec over
+// World & G allows it too (from the world with h)
+theorem abi.overflow_ok_g: all G w h low spec args crash. abi.ghost_ok(G) -> h in G -> w in abi.World ->
+  refines_ghost(app(low, args), app(spec, args), abi.World, G) ->
+  abi.overflow_ok(rec_and(abi.World, single(empty)), w, low, args, crash) ->
+  abi.overflow_ok(rec_and(abi.World, G), union2(w, h), spec, args, crash)
+proof
+  fix G w h low spec args crash
+  assume hg hh hw href hov
+  have hin hevs := expand(hov, abi.overflow_ok)
+  have _ _ apW := apply(abi.ghost_parts_w, hg, hh, hw)
+  have aos := mp(all_elim(apW, {"os"}), simp())
+  have hin2 := rewrite(sym(aos), hin)
+  have rf := expand(href, refines_ghost)
+  let CT := cart(bits(64), bits(64))
+  let EXG := ex x0. x0 in outcome_type(rec_and(abi.World, G), CT) && (runs(app(spec, args), union2(w, h), x0) &&
+      ite(fst(x0) = 0, app(app(fst(snd(x0)), "os"), "events") = app(crash, "events"),
+        ite(fst(x0) = 1, snd(snd(x0)) = exc_val("stack_overflow", empty) && app(app(fst(snd(x0)), "os"), "events") = app(crash, "events"),
+          app(snd(x0), "os.events") = app(crash, "events"))))
+  have ev: (app(app(union2(w, h), "os"), "events") = app(crash, "events")) || EXG proof
+    have at: app(app(w, "os"), "events") = app(crash, "events") -> app(app(union2(w, h), "os"), "events") = app(crash, "events") proof
+      assume e
+      show := rewrite(sym(aos), e)
+    qed
+    have ex1: (ex x0. x0 in outcome_type(rec_and(abi.World, single(empty)), CT) && (runs(app(low, args), w, x0) &&
+        ite(fst(x0) = 0, app(app(fst(snd(x0)), "os"), "events") = app(crash, "events"),
+          ite(fst(x0) = 1, snd(snd(x0)) = exc_val("stack_overflow", empty) && app(app(fst(snd(x0)), "os"), "events") = app(crash, "events"),
+            app(snd(x0), "os.events") = app(crash, "events"))))) -> EXG proof
+      assume e
+      obtain x0, hot hrr from e
+      have hrun hite := hrr
+      obtain h2, hh2 hrun2 from mp(all_elim(rf, {w}, {h}, {x0}), hw, hh, hrun)
+      have sh := apply(abi.outcome_type_elim, hot)
+      have k1: (ex x r. x in rec_and(abi.World, single(empty)) && r in CT && x0 = ok(x, r)) -> EXG proof
+        assume e1
+        obtain x r, hx hr hx0 from e1
+        have xw := apply(abi.world_part, hx)
+        have _ _ apX := apply(abi.ghost_parts_w, hg, hh2, xw)
+        have xos := mp(all_elim(apX, {"os"}), simp())
+        have ot := mp(abi.ok_outcome_type[s := rec_and(abi.World, G), v := CT, x := union2(x, h2), r := r], apply(rec_and_intro, xw, hh2), hr)
+        have r2 := rewrite(all_elim(abi.wg_ok, {x}, {r}, {h2}), rewrite(hx0, hrun2))
+        have it2: app(app(x, "os"), "events") = app(crash, "events") by simp(rewrite(hx0, hite))
+        have it3 := rewrite(sym(xos), it2)
+        show by ex_intro({ok(union2(x, h2), r)}, simp(ot, r2, it3))
+      qed
+      have k2: (ex x e. x in rec_and(abi.World, single(empty)) && e in univ(1) && x0 = exc(x, e)) -> EXG proof
+        assume e1
+        obtain x ee, hx he hx0 from e1
+        have xw := apply(abi.world_part, hx)
+        have _ _ apX := apply(abi.ghost_parts_w, hg, hh2, xw)
+        have xos := mp(all_elim(apX, {"os"}), simp())
+        have ot := mp(exc_outcome_type[s := rec_and(abi.World, G), v := CT, x := union2(x, h2), e := ee], apply(rec_and_intro, xw, hh2), he)
+        have r2 := rewrite(all_elim(abi.wg_exc, {x}, {ee}, {h2}), rewrite(hx0, hrun2))
+        have it2: ee = exc_val("stack_overflow", empty) && app(app(x, "os"), "events") = app(crash, "events") by simp(rewrite(hx0, hite))
+        have it3 := rewrite(sym(xos), it2)
+        show by ex_intro({exc(union2(x, h2), ee)}, simp(ot, r2, it3))
+      qed
+      have k3: (ex t. t in univ(1) && x0 = diverge(t)) -> EXG proof
+        assume e1
+        obtain t, ht hx0 from e1
+        have ot := mp(abi.div_outcome_type[s := rec_and(abi.World, G), v := CT, t := t], ht)
+        have r2 := rewrite(all_elim(abi.wg_div, {t}, {h2}), rewrite(hx0, hrun2))
+        have it2: app(t, "os.events") = app(crash, "events") by simp(rewrite(hx0, hite))
+        show by ex_intro({diverge(t)}, simp(ot, r2, it2))
+      qed
+      show by taut(sh, k1, k2, k3)
+    qed
+    show by taut(hevs, at, ex1)
+  qed
+  show by defs(taut(hin2, ev), abi.overflow_ok)
+qed
+
+// (a machine run's outcome with a ghost part: in the universe, an outcome)
+theorem abi.wg_univ: all s o h. pair(s, o) in univ(1) -> h in univ(1) -> abi.outcome(o) ->
+  pair(union2(s, h), with_ghost(o, h)) in univ(1) && abi.outcome(with_ghost(o, h))
+proof
+  fix s o h
+  assume hp hu ho
+  have su: s in univ(1) by simp(hp)
+  have Su := mp(union2_univ[u := 1, a := s, b := h], su, hu)
+  have c1: (ex m1 e. o = ok(m1, e)) -> pair(union2(s, h), with_ghost(o, h)) in univ(1) && abi.outcome(with_ghost(o, h)) proof
+    assume e
+    obtain m1 ee, eo from e
+    have mu: m1 in univ(1) && ee in univ(1) by simp(rewrite(eo, hp))
+    have Mu := mp(union2_univ[u := 1, a := m1, b := h], mu.1, hu)
+    have w := all_elim(abi.wg_ok, {m1}, {ee}, {h})
+    have g1: pair(union2(s, h), ok(union2(m1, h), ee)) in univ(1) && abi.outcome(ok(union2(m1, h), ee)) by simp(Su, Mu, mu)
+    show := rewrite(sym(eo), rewrite(sym(w), g1))
+  qed
+  have c2: (ex m1 e. o = exc(m1, e)) -> pair(union2(s, h), with_ghost(o, h)) in univ(1) && abi.outcome(with_ghost(o, h)) proof
+    assume e
+    obtain m1 ee, eo from e
+    have mu: m1 in univ(1) && ee in univ(1) by simp(rewrite(eo, hp))
+    have Mu := mp(union2_univ[u := 1, a := m1, b := h], mu.1, hu)
+    have w := all_elim(abi.wg_exc, {m1}, {ee}, {h})
+    have g1: pair(union2(s, h), exc(union2(m1, h), ee)) in univ(1) && abi.outcome(exc(union2(m1, h), ee)) by simp(Su, Mu, mu)
+    show := rewrite(sym(eo), rewrite(sym(w), g1))
+  qed
+  have c3: (ex t. o = diverge(t)) -> pair(union2(s, h), with_ghost(o, h)) in univ(1) && abi.outcome(with_ghost(o, h)) proof
+    assume e
+    obtain t, eo from e
+    have tu: t in univ(1) by simp(rewrite(eo, hp))
+    have w := all_elim(abi.wg_div, {t}, {h})
+    have g1: pair(union2(s, h), diverge(t)) in univ(1) && abi.outcome(diverge(t)) by simp(Su, tu)
+    show := rewrite(sym(eo), rewrite(sym(w), g1))
+  qed
+  show by taut(ho, c1, c2, c3)
+qed
+
+// ----------------------------------------------------------------------
+//  The bridge with a ghost: from C1's matching against the ghost-free
+//  function low, and low refining spec over World & G
+
+// a run C1 matched with low is one abi_function allows for spec, from the
+// entry with any ghost part h (the final one: spec's)
+theorem abi.bridge_run_g: all G f low spec args objs mem s h o. abi.ghost_ok(G) -> h in G ->
+  refines_ghost(app(low, args), app(spec, args), abi.World, G) ->
+  s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> objs in set_type(omega) ->
+  (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
+  runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) ->
+  ex h2. h2 in G && runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), with_ghost(o, h2))
+proof
+  fix G f low spec args objs mem s h o
+  assume hg hh href hM he hot hob hmv hwm hr hm
+  have hp := apply(abi.run_univ, hr)
+  have hsh := apply(abi.run_shape, hr)
+  have su: s in univ(1) by simp(hp)
+  have hu _ _ := mp(all_elim(hg, {h}), hh)
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  have vu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, hmu)
+  have vW := apply(abi.world_typed, hM, hot, hmv, vu)
+  have rf := expand(href, refines_ghost)
+  let GOAL := ex h2. h2 in G && runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), with_ghost(o, h2))
+  // the spec raises: anything
+  have c1: abi.raises_at(low, args, objs, mem, s) -> GOAL proof
+    assume hra
+    obtain e x, eu eno hx rx from expand(hra, abi.raises_at)
+    obtain h2, hh2 r2 from mp(all_elim(rf, {abi.view(s, objs, mem)}, {h}, {exc(x, e)}), vW, hh, rx)
+    have r3 := rewrite(all_elim(abi.wg_exc, {x}, {e}, {h2}), r2)
+    have xg: union2(x, h2) in rec_and(abi.World, G) := apply(rec_and_intro, apply(abi.world_part, expand(hx, abi.raise_state)), hh2)
+    have ho: abi.outcome(o) by simp(hsh)
+    have pu ou2 := apply(abi.wg_univ, hp, hu, ho)
+    have r := apply(abi.ub_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {with_ghost(o, h)}, {e}, {union2(x, h2)}, hg, hh, hM, su, hot, hmv, hwm, hob, eu, eno, xg, r3, pu, ou2)
+    show by ex_intro({h}, taut(hh, r))
+  qed
+  // a return
+  have c2: (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
+      runs(app(low, args), abi.view(s, objs, mem), ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))) && w2 in abi.World && w2 in univ(1) &&
+      abi.world_matches(app(s, "vm"), app(m1, "vm"), app(w2, "vm"), objs, abi.sp(s)) && app(m1, "os") = app(w2, "os") && app(m1, "fs_base") = app(w2, "fs_base") &&
+      app(m1, "cpu") = app(s, "cpu") && app(m1, "gs_base") = app(s, "gs_base") && app(m1, "rip") = abi.ret(s) && app(app(m1, "gpr"), 4) = abi.sp(s) &&
+      abi.callee_saved(m1, s) && !app(app(m1, "flags"), "df")) -> GOAL proof
+    assume hc
+    obtain m1 w2, eo m1M rw w2W w2u wm2 xos xfs xcpu xgs xrip xr4 xcs xdf from hc
+    obtain h2, hh2 r2 from mp(all_elim(rf, {abi.view(s, objs, mem)}, {h}, {ok(w2, pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2)))}), vW, hh, rw)
+    have r3 := rewrite(all_elim(abi.wg_ok, {w2}, {pair(app(app(m1, "gpr"), 0), app(app(m1, "gpr"), 2))}, {h2}), r2)
+    have hp1 := rewrite(eo, hp)
+    have rt := apply(abi.ret_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {m1}, {w2}, {h2}, hg, hh, hh2, hM, he, m1M, hp1, hot, hob, hmv, hwm,
+      r3, w2W, w2u, wm2, xos, xfs, xcpu, xgs, xrip, xr4, xcs, xdf)
+    have wo := rewrite(sym(eo), rewrite(sym(all_elim(abi.wg_ok, {m1}, {empty}, {h2})), rt))
+    show by ex_intro({h2}, taut(hh2, wo))
+  qed
+  // a divergence
+  have c3: (ex t. o = diverge(t) && runs(app(low, args), abi.view(s, objs, mem), diverge(t))) -> GOAL proof
+    assume hc
+    obtain t, eo rd from hc
+    obtain h2, hh2 r2 from mp(all_elim(rf, {abi.view(s, objs, mem)}, {h}, {diverge(t)}), vW, hh, rd)
+    have r3 := rewrite(all_elim(abi.wg_div, {t}, {h2}), r2)
+    have hp1 := rewrite(eo, hp)
+    have dv := apply(abi.div_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {t}, hg, hh, hM, hp1, hot, hob, hmv, hwm, r3)
+    have wo := rewrite(sym(eo), rewrite(sym(all_elim(abi.wg_div, {t}, {h2})), dv))
+    show by ex_intro({h2}, taut(hh2, wo))
+  qed
+  // a crash
+  have c4: abi.crashes_at(low, args, objs, mem, s, o) -> GOAL proof
+    assume hc
+    obtain m1 a k, oe m1M ab sev ovk from expand(hc, abi.crashes_at)
+    have ovg := apply(abi.overflow_ok_g, {G}, {abi.view(s, objs, mem)}, {h}, {low}, {spec}, {args}, {app(m1, "os")}, hg, hh, vW, href, ovk)
+    have cr: all cv. o = exc(m1, cv) ->
+        ((ex a2 k2. cv = exc_val("segv", pair(a2, k2)) && (k2 = 0 || k2 = 1 || k2 = 3) && a2 in bits(64) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a2)) ||
+          cv = exc_val("stack_fault", empty)) -> GOAL proof
+      fix cv
+      assume eo hcv
+      have hp1 := rewrite(eo, hp)
+      have r := apply(abi.crash_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {m1}, {cv}, hg, hh, hM, hp1, hot, hob, hmv, hwm, hcv, m1M, sev, ovg)
+      have wo := rewrite(sym(eo), rewrite(sym(all_elim(abi.wg_exc, {m1}, {cv}, {h})), r))
+      show by ex_intro({h}, taut(hh, wo))
+    qed
+    have k1: (o = exc(m1, exc_val("segv", pair(a, k))) && (k = 0 || k = 1 || k = 3) && abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a)) -> GOAL proof
+      assume h1
+      have eo kk ov := h1
+      have ex1: ex a2 k2. exc_val("segv", pair(a, k)) = exc_val("segv", pair(a2, k2)) && (k2 = 0 || k2 = 1 || k2 = 3) && a2 in bits(64) &&
+          abi.overflow_at(app(m1, "vm"), app(app(m1, "gpr"), 4), abi.sp(s), a2) by ex_intro({a}, {k}, taut(refl({exc_val("segv", pair(a, k))}), kk, ab, ov))
+      show := mp(all_elim(cr, {exc_val("segv", pair(a, k))}), eo, taut(ex1))
+    qed
+    have k2: o = exc(m1, exc_val("stack_fault", empty)) -> GOAL proof
+      assume eo
+      show := mp(all_elim(cr, {exc_val("stack_fault", empty)}), eo, taut(refl({exc_val("stack_fault", empty)})))
+    qed
+    show by taut(oe, k1, k2)
+  qed
+  show by taut(expand(hm, abi.matches), c1, c2, c3, c4)
+qed
+
+// the contract with a ghost: from the runs C1 matched with low, low
+// refining spec (for every arguments) over World & G
+theorem abi.bridge_implements_g: all G f low spec base code statics. abi.ghost_ok(G) ->
+  (all args. args in abi.ARGS -> refines_ghost(app(low, args), app(spec, args), abi.World, G)) ->
+  (all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
+    runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o)) ->
+  abi.implements2_at(G, f, spec, base, code, statics)
+proof
+  fix G f low spec base code statics
+  assume hg hrf hb
+  let ld(m) := abi.loaded(app(m, "vm"), base, code, statics)
+  let rel(a, ob, mm) := mkprog(x1 x2. !ld(x1) || bind_rel(abi.abi_function(G, f, spec, a, ob, mm), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have main: all x0. all x1. all x2. (x0 in abi.ARGS && x1 in set_type(omega)) && x2 in x86_64_linux.Vm -> (all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in G && runs(rel(x0, x1, x2), union2(s, h), with_ghost(o, h2)))) proof
+    fix args objs mem
+    assume hAo
+    have hA hot hmv := hAo
+    show all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in G && runs(rel(args, objs, mem), union2(s, h), with_ghost(o, h2))) proof
+      fix s h o
+      assume hM hh hr
+      let S := union2(s, h)
+      have hp := apply(abi.run_univ, hr)
+      have hsh := apply(abi.run_shape, hr)
+      have su: s in univ(1) by simp(hp)
+      have ho: abi.outcome(o) by simp(hsh)
+      have _ _ apS := apply(abi.ghost_parts, hg, hh, hM)
+      have a1 := mp(all_elim(apS, {"gpr"}), simp())
+      have a3 := mp(all_elim(apS, {"rip"}), simp())
+      have a8 := mp(all_elim(apS, {"vm"}), simp())
+      // a run of abi_function from S: one of rel's
+      have hu _ _ := mp(all_elim(hg, {h}), hh)
+      have Su := mp(union2_univ[u := 1, a := s, b := h], su, hu)
+      have relO: all O. pair(S, O) in univ(1) -> ((ex m. O = ok(m, empty)) || (ex m e. O = exc(m, e)) || (ex t. O = diverge(t))) ->
+          (!ld(S) || runs(abi.abi_function(G, f, spec, args, objs, mem), S, O)) -> runs(rel(args, objs, mem), S, O) proof
+        fix O
+        assume hpO hshO hx
+        show by simp(hpO, hshO, hx, keep(abi.abi_function, abi.loaded, abi.run_to_return))
+      qed
+      have relk: all h2. h2 in G -> (!ld(S) || runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h2))) -> runs(rel(args, objs, mem), S, with_ghost(o, h2)) proof
+        fix h2
+        assume hh2 hx
+        have hu2 _ _ := mp(all_elim(hg, {h2}), hh2)
+        have pu _ := apply(abi.wg_univ, hp, hu2, ho)
+        have wu: with_ghost(o, h2) in univ(1) by simp(pu)
+        have pS: pair(S, with_ghost(o, h2)) in univ(1) by simp(Su, wu)
+        have shp: (ex m. with_ghost(o, h2) = ok(m, empty)) || (ex m e. with_ghost(o, h2) = exc(m, e)) || (ex t. with_ghost(o, h2) = diverge(t)) proof
+          have d1: (ex m. o = ok(m, empty)) -> (ex m. with_ghost(o, h2) = ok(m, empty)) proof
+            assume e
+            obtain m, eo from e
+            show by ex_intro({union2(m, h2)}, rewrite(sym(eo), all_elim(abi.wg_ok, {m}, {empty}, {h2}), {1}))
+          qed
+          have d2: (ex m e. o = exc(m, e)) -> (ex m e. with_ghost(o, h2) = exc(m, e)) proof
+            assume e
+            obtain m ee, eo from e
+            show by ex_intro({union2(m, h2)}, {ee}, rewrite(sym(eo), all_elim(abi.wg_exc, {m}, {ee}, {h2}), {1}))
+          qed
+          have d3: (ex t. o = diverge(t)) -> (ex t. with_ghost(o, h2) = diverge(t)) proof
+            assume e
+            obtain t, eo from e
+            show by ex_intro({t}, rewrite(sym(eo), all_elim(abi.wg_div, {t}, {h2}), {1}))
+          qed
+          show by taut(hsh, d1, d2, d3)
+        qed
+        show := mp(all_elim(relO, {with_ghost(o, h2)}), pS, shp, hx)
+      qed
+      // abi_function's preconditions failing: anything (h kept)
+      have pu0 _ := apply(abi.wg_univ, hp, hu, ho)
+      have wu0: with_ghost(o, h) in univ(1) by simp(pu0)
+      have pu: pair(S, with_ghost(o, h)) in univ(1) by simp(Su, wu0)
+      have pre: !(app(S, "rip") = f && abi.entry_ok(S, args)) -> runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) proof
+        assume hn
+        show by simp(pu, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at, with_ghost))
+      qed
+      have pre2: !(all x. x in omega -> x in objs -> (int_le(abi.sp(S), x) && abi.stack_page(app(S, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(S, "vm"), bits_of_int(64, x), 1)) -> runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) proof
+        assume hn
+        show by simp(pu, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at, with_ghost))
+      qed
+      have pre3: !abi.view_ok(S, objs, mem) -> runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) proof
+        assume hn
+        show by simp(pu, hn, keep(abi.world_pages, abi.world_matches, abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at, with_ghost))
+      qed
+      // otherwise: the bridge's run
+      have mc: ld(s) -> app(s, "rip") = f && abi.entry_ok(s, args) ->
+          (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
+          ex h2. h2 in G && runs(rel(args, objs, mem), S, with_ghost(o, h2)) proof
+        assume hc hy hb2 hw
+        have hm := mp(all_elim(hb, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, hc, hy.1, hy.2, hb2, hw, hr)
+        obtain h2, hh2 r from apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, mp(all_elim(hrf, {args}), hA), hM, hy.2, hot, hb2, hmv, hw, hr, hm)
+        show by ex_intro({h2}, taut(hh2, mp(all_elim(relk, {h2}), hh2, taut(r))))
+      qed
+      // (the preconditions as of S: s's)
+      have a2 := mp(all_elim(apS, {"xmm"}), simp())
+      have a4 := mp(all_elim(apS, {"flags"}), simp())
+      have a5 := mp(all_elim(apS, {"cpu"}), simp())
+      have a6 := mp(all_elim(apS, {"fs_base"}), simp())
+      have a7 := mp(all_elim(apS, {"gs_base"}), simp())
+      have a9 := mp(all_elim(apS, {"os"}), simp())
+      have eS1: (app(S, "rip") = f && abi.entry_ok(S, args)) <-> (app(s, "rip") = f && abi.entry_ok(s, args)) by defs(simp(a1, a2, a3, a4, a5, a6, a7, a8, a9), abi.entry_ok)
+      have eS2: (all x. x in omega -> x in objs -> (int_le(abi.sp(S), x) && abi.stack_page(app(S, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(S, "vm"), bits_of_int(64, x), 1)) <->
+          (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) by simp(a1, a8)
+      have eS3: abi.view_ok(S, objs, mem) <-> abi.view_ok(s, objs, mem) by simp(a1, a8)
+      have eL: ld(S) <-> ld(s) by simp(a8)
+      // the cases: not loaded, a precondition failing, or the bridge's run
+      have nl: !ld(S) -> ex h2. h2 in G && runs(rel(args, objs, mem), S, with_ghost(o, h2)) proof
+        assume hn
+        show by ex_intro({h}, taut(hh, mp(all_elim(relk, {h}), hh, taut(hn))))
+      qed
+      have pf: !(app(S, "rip") = f && abi.entry_ok(S, args)) || !(all x. x in omega -> x in objs -> (int_le(abi.sp(S), x) && abi.stack_page(app(S, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(S, "vm"), bits_of_int(64, x), 1)) ||
+          !abi.view_ok(S, objs, mem) -> ex h2. h2 in G && runs(rel(args, objs, mem), S, with_ghost(o, h2)) proof
+        assume hn
+        have r: runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) by taut(hn, pre, pre2, pre3)
+        show by ex_intro({h}, taut(hh, mp(all_elim(relk, {h}), hh, taut(r))))
+      qed
+      show by taut(eS1, eS2, eS3, eL, nl, pf, mc)
+    qed
+  qed
+  show by defs(main, abi.implements2_at, refines_ghost)
+qed
+
+// the bridge's contract: every run from an entry matched with the spec
+// (tr.implements_abi's first step)
+theorem tr.implements_matches: all f spec base code statics. tr.div_raises(spec) -> tr.implements_at(f, spec, base, code, statics) ->
+  all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(app(s, "vm"), base, code, statics) -> app(s, "rip") = f ->
+    abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(app(s, "vm"), int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(app(s, "vm"), bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
+    runs(abi.run_to_return(), s, o) -> abi.matches(spec, args, objs, mem, s, o)
+proof
+  fix f spec base code statics
+  assume hdr hi
+  fix args objs mem s o
+  assume hA hot hmv hM hl hrip he hob hwm hr
+  have su: s in univ(1) by simp(apply(abi.run_univ, hr))
+  have ok: tr.objs_ok(s, objs) by defs(hob, tr.objs_ok)
+  have ou := apply(abi.objs_univ, hot)
+  have mu := apply(x86.vm_univ, hmv)
+  have hvu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu)
+  have hvW := apply(abi.world_typed, hM, hot, hmv, hvu)
+  have c := expand(hi, tr.implements_at)
+  have d := apply(tr.run_disc, {s}, {o}, hr)
+  have c1: tr.run_d(s, s, o) -> abi.matches(spec, args, objs, mem, s, o) proof
+    assume rd
+    have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rd)
+    show := apply(tr.matches_t_abi, hdr, hA, hvW, hvu, mt)
+  qed
+  have c2: (ex x. tr.run_d(s, s, exc(x, exc_val("disc", empty)))) -> abi.matches(spec, args, objs, mem, s, o) proof
+    assume e
+    obtain x, rd from e
+    have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {exc(x, exc_val("disc", empty))}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rd)
+    have mx := apply(tr.matches_t_abi, hdr, hA, hvW, hvu, mt)
+    show := apply(tr.matches_raise, {spec}, {args}, {objs}, {mem}, {s}, {x}, {o}, mx)
+  qed
+  show by taut(d, c1, c2)
+qed
+
+// Machine code implementing (the bridge's contract) a ghost-free C
+// function value low that refines a spec over World & G implements the
+// spec: the ABI's contract with G.
+theorem tr.implements_abi_g: all G f low spec base code statics. abi.ghost_ok(G) -> tr.div_raises(low) -> tr.implements_at(f, low, base, code, statics) ->
+  (all args. args in abi.ARGS -> refines_ghost(app(low, args), app(spec, args), abi.World, G)) ->
+  abi.implements2_at(G, f, spec, base, code, statics)
+proof
+  fix G f low spec base code statics
+  assume hg hdr hi hrf
+  show := apply(abi.bridge_implements_g, hg, hrf, apply(tr.implements_matches, hdr, hi))
+qed
+
+// (a refinement, then one with ghosts: one with ghosts)
+theorem g.refines_then_ghost: all p q r t G. refines(p, q, t) -> refines_ghost(q, r, t, G) -> refines_ghost(p, r, t, G)
+proof
+  fix p q r t G
+  assume h1 h2
+  have a := expand(h1, refines)
+  have b := expand(h2, refines_ghost)
+  fix s h o
+  assume hs hh hr
+  show := mp(all_elim(b, {s}, {h}, {o}), hs, hh, mp(all_elim(a, {s}, {o}), hs, hr))
+qed

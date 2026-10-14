@@ -91,6 +91,10 @@ translation verification, the engine):
   active, the bounce counter) left free. Needs: the abstraction from
   memory (`holds`, `mallocng.abs_unique`); the invariant with slots in
   between (reserved by try_avail, a block only after alloc_slot).
+- The specs over `MallocAbs` (the abstract state a ghost of the C world):
+  their C2, `refines_ghost` goals -- `step` on a spec's world with a ghost
+  part; a callee's memory-level contract inside an abstract-level proof
+  (the ghosts unchanged).
 - The proof of such a spec: what the code does to memory computed by the
   system (its run summarized, the callees' contracts applied, each
   operation's definedness an obligation), not written by hand as a

@@ -352,6 +352,17 @@ longest match wins, and a literal token beats a hole.
 | `param pred p(x)`, `param fn f(x) -> T` | an unknown of the layer |
 | `law name(x): P` | an assumption on the params, discharged by an `instance` |
 
+**Specs with ghost state.** A spec may run on the C world extended by
+ghost fields (`state MallocAbs extends Heap { ghost A: Abs }`,
+layers/mallocng.sl): it reads the memory where that is its purpose, the
+ghosts where that is, and updates the ghosts by `ghost f := e`. The code
+has no ghosts, so nothing is erased: the refinement says that for every
+initial ghost some final one matches (`refines_ghost(code, spec, abi.World,
+G)`, after any ghost-free refinements: `g.refines_then_ghost`), and the
+machine code then implements the spec, `abi.implements2_at(G, ..)`, from
+its C1 by `tr.implements_abi_g` (proofs/abi_ghost.core; for every G whose
+fields are none of the machine's or the world's, `abi.ghost_ok`).
+
 ## 10. Static semantics
 
 - **Names.** A module sees its own declarations and those of the modules

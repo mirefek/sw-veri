@@ -453,3 +453,11 @@ item is a short summary of finished work; details are in the files named.
   shape (`g.fun_void`, `g.fun_void0`, `g.fun_res`,
   proofs/translate_effects.core), the specs' wrappers returning a word as
   the code's do (`result[64]`).
+- **Specs with ghost state**: machine code implements a spec over the C
+  world extended by ghost fields (`abi.implements2_at(G, ..)`) from its
+  C1 and a refinement of its ghost-free GIMPLE function to the spec
+  (`refines_ghost`): `tr.implements_abi_g`, the bridge's four cases
+  (raising, return, divergence, crash) for any ghost part
+  (proofs/abi_ghost.core); the ghost-free case its instance. The malloc
+  layers' state for it: `MallocAbs`, the abstract state a ghost beside
+  malloc's blocks (layers/mallocng.sl).
