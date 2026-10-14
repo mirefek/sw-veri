@@ -1,9 +1,10 @@
 // get_slot_index by its purpose (proving GIMPLE spec): the index of the
 // slot where p's block or nested group starts, in the abstract state
-// (layers/mallocng_purpose.sl), from its memory-level spec (the low 5 bits
-// of the byte at p - 3: proofs/mallocng_slots.core). The idea: that byte is
-// the slot's header, the allocator's, its low bits the slot's index
-// (`mp.slot_hdr`, from the invariant); the rest carried by the ghost
+// (layers/mallocng_purpose.sl), refined by its readable GIMPLE directly:
+// no memory-level spec between, the code's run (`step`) the memory effect.
+// The idea: the byte it reads is the slot's header, the allocator's, its
+// low bits the slot's index (`mp.slot_hdr`, from the invariant); the rest
+// carried by the contract rule (`ct.refines_contract`) and the ghost
 // machinery (proofs/gimple_ghost.core) and the bridge
 // (proofs/abi_ghost.core): the machine code implements the purpose spec
 // (`mp.gsi_implements`).
@@ -284,139 +285,6 @@ proof
   show := rewrite(sym(he), mp(mp(union2_univ[u := 1, a := hb, b := ha], hbu), hau))
 qed
 
-// ----------------------------------------------------------------------
-//  get_slot_index: the memory-level spec refines the purpose
-
-// get_slot_index by its purpose: its memory-level spec (the low 5 bits of
-// the byte at p - 3) gives the index of p's slot, since that byte is the
-// slot's header, the allocator's (`mp.slot_hdr`). The ghost part unchanged.
-theorem mp.gsi_purpose: all c p. c in mallocng.Cfg -> p in bits(64) ->
-  refines_ghost(mallocng_specs.get_slot_index_spec(p), mallocng_purpose.get_slot_index_purpose(c, p), abi.World, mp.G)
-proof
-  fix c p
-  assume hc hp
-  let SPEC := mallocng_specs.get_slot_index_spec(p)
-  let PURP := mallocng_purpose.get_slot_index_purpose(c, p)
-  have main: all s h o. s in abi.World -> h in mp.G -> runs(SPEC, s, o) -> (ex h2. h2 in mp.G && runs(PURP, union2(s, h), with_ghost(o, h2))) proof
-    fix s h o
-    assume hs hh hr
-    obtain hb ha, he hbf hbd hbt hbu haf had hat hau from mp(all_elim(mp.g_parts, {h}), hh)
-    let V0 := app(s, "vm")
-    let A := app(ha, "A")
-    let B := app(hb, "blocks")
-    let OVF := exc_val("stack_overflow", empty)
-    have pu := apply(g.runs_univ, hr)
-    have su: s in univ(1) by simp(pu)
-    have ou: o in univ(1) by simp(pu)
-    let H := union2(hb, ha)
-    have hu: H in univ(1) := rewrite(he, mp(all_elim(mp.g_univ, {h}), hh))
-    have gu := apply(g.with_ghost_univ, ou, hu)
-    have pu2: pair(union2(s, H), with_ghost(o, H)) in univ(1) by simp(su, hu, gu)
-    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
-    // purpose's precondition fails: it allows anything
-    let PRE := mallocng.holds_in(c, A, V0, B) && (ex g i. (g in omega && i in omega) && mallocng.starts_at(A, g, i, p))
-    have n: !PRE -> runs(PURP, union2(s, H), with_ghost(o, H)) proof
-      assume hn
-      show by apply(tr.runs_intro, pu2, simp(hn, sd, hbd, had))
-    qed
-    have y: PRE -> runs(PURP, union2(s, H), with_ghost(o, H)) proof
-      assume hpre
-      have hin: mallocng.holds_in(c, A, V0, B) by taut(hpre)
-      have ex1: ex g i. (g in omega && i in omega) && mallocng.starts_at(A, g, i, p) by taut(hpre)
-      obtain g i, hg hi hst from ex1
-      have hpo: p in omega by simp(hp)
-      have h16 hfp hidx hrw hks := apply(mp.slot_hdr, hc, simp(hau), hat, hbt, hi, hpo, hin, hst)
-      // the memory-level precondition: p - 3 readable
-      let M3 := mallocng.mview(V0, mallocng.footprint(c, A, B))
-      have p3o: int_sub(p, 3) in omega by arith(h16, hpo)
-      have pgx: mallocng.pg(M3, int_sub(p, 3)) = app(app(V0, "pages"), int_div(int_sub(p, 3), x86_64_linux.PAGE))
-        by defs(simp(hfp, p3o, keep(mallocng.footprint)), mallocng.pg, mallocng.mview)
-      have rw2 := expand(expand(hrw, mallocng.m_rw), mallocng.m_mapped)
-      have us: gimple.usable(V0, app(s, "objs"), int_sub(p, 3), 1, false) proof
-        fix x0
-        assume h0 h1
-        have z: x0 = 0 by arith(h0, h1)
-        show by defs(simp(z, pgx, rw2, hks, keep(mallocng.pg)), x86_64_linux.mapped)
-      qed
-      have gpre: mallocng_specs.get_slot_index_pre(V0, app(s, "objs"), p) by defs(simp(h16, us, hpo), mallocng_specs.get_slot_index_pre)
-      // its run: an overflow, or the low bits of the header byte
-      have pv pf pd pb := apply(ms.world_parts, hs)
-      have ss: fn_update(s, "vm", V0) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
-      have vv: ex x. x in x86_64_linux.Vm by ex_intro({V0}, pv)
-      let X := gimple.bytes_at(V0, bits_sub(64, p, 3), 1)
-      let VAL := bits_of_int(32, int_mod(X, 32))
-      have ci: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) || o = ok(s, VAL)
-        by simp(hr, gpre, vv, ss, keep(mallocng_specs.get_slot_index_pre))
-      // the header byte: the slot's index
-      have p64: pow2(64) = 18446744073709551616 by simp()
-      have hb3: bits_add(64, p, 18446744073709551613) = int_sub(p, 3) by defs(arith(hp, h16, p64), bits_add, pow2)
-      have hb0: bits_add(64, int_sub(p, 3), 0) = int_sub(p, 3) by defs(arith(hp, h16, p64), bits_add, pow2)
-      have p3b: int_sub(p, 3) in bits(64) by arith(hp, h16)
-      have bt := mp(fn_space_app[a := bits(64), b := bits(8), f := app(V0, "bytes"), x := int_sub(p, 3)], pb, p3b)
-      have xb: X = mallocng.b8(mallocng.mview(V0, mallocng.footprint(c, A, B)), int_sub(p, 3))
-        by defs(simp(hfp, p3o, hb3, hb0, bt, keep(mallocng.footprint)), gimple.bytes_at, mallocng.b8, mallocng.mview)
-      have vi: VAL = i by defs(simp(xb, hidx, hi), bits_of_int, pow2)
-      // the purpose's precondition at the joined state
-      let S := union2(s, H)
-      have pS: mallocng.holds_in(c, app(S, "A"), app(S, "vm"), app(S, "blocks")) && (ex g i. (g in omega && i in omega) && mallocng.starts_at(app(S, "A"), g, i, p))
-        by simp(hpre, sd, hbd, had)
-      // an overflow: the same, the ghost part along
-      have c1: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) -> runs(PURP, S, with_ghost(o, H)) proof
-        assume e
-        obtain v, hv hov from e
-        have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have ovu: pair(S, exc(fn_update(S, "vm", v), OVF)) in univ(1) by simp(su, hu, hv, eu, x86.vm_univ, sd, hbd, had)
-        have t: runs(PURP, S, exc(fn_update(S, "vm", v), OVF)) by defs(apply(ct.contract_ovf, pS, hv, ovu), mallocng_purpose.get_slot_index_purpose)
-        have eo: with_ghost(o, H) = exc(fn_update(S, "vm", v), OVF) by simp(hov, sd, hbd, had)
-        show := rewrite(sym(eo), t)
-      qed
-      // the index returned: the slot's
-      have c2: o = ok(s, VAL) -> runs(PURP, S, with_ghost(o, H)) proof
-        assume hov
-        have vb: VAL in bits(32) by defs(simp(), bits_of_int, pow2)
-        have sa: mallocng.starts_at(app(S, "A"), g, VAL, p) by simp(vi, hst, sd, hbd, had)
-        have e4: ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x4, VAL, p) by ex_intro({g}, taut(hg, sa))
-        have e3: ex x3. (x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x4, x3, p))) && exc(pair(S, empty), pair("ret", VAL)) = exc(pair(S, empty), pair("ret", x3))
-          by ex_intro({VAL}, taut(vb, e4, refl({exc(pair(S, empty), pair("ret", VAL))})))
-        have bS: any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(S, "A"), x4, x3, p)), x3. exc(pair(S, empty), pair("ret", VAL)) = exc(pair(S, empty), pair("ret", x3)))
-          by defs(taut(e3), any_rel)
-        have ou2: pair(S, ok(S, VAL)) in univ(1) by simp(su, hu, vb)
-        have t: runs(PURP, S, ok(S, VAL)) by defs(apply(ct.contract_ret, pS, bS, ou2), mallocng_purpose.get_slot_index_purpose)
-        have eo: with_ghost(o, H) = ok(S, VAL) by simp(hov)
-        show := rewrite(sym(eo), t)
-      qed
-      show by taut(ci, c1, c2)
-    qed
-    have fin: runs(PURP, union2(s, H), with_ghost(o, H)) by taut(n, y)
-    show by ex_intro({h}, taut(hh, rewrite(sym(he), fin)))
-  qed
-  show by defs(main, refines_ghost)
-qed
-
-// (the memory-level spec diverges nowhere it does not also raise: only
-// where it allows anything)
-theorem mp.gsi_div_raises: tr.div_raises(mallocng_specs.get_slot_index_spec_fun())
-proof
-  have g: all args w t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> runs(app(mallocng_specs.get_slot_index_spec_fun(), args), w, diverge(t)) ->
-      (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(x) && runs(app(mallocng_specs.get_slot_index_spec_fun(), args), w, exc(x, e))) proof
-    fix args w t
-    assume hA hW hu hd
-    have rst: abi.raise_state(w) by defs(apply(tr.world_and, hW), abi.raise_state)
-    have eu: empty in univ(1) by simp()
-    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
-    have pu: pair(w, exc(w, empty)) in univ(1) by simp(hu)
-    have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(w, "vm")}, simp(hW))
-    rsimp only, mallocng_specs.get_slot_index_spec_fun, app_fn_build, hA in hd
-    // (it diverges only where it allows anything: there it raises too)
-    have rf: runs(app(mallocng_specs.get_slot_index_spec_fun(), args), w, exc(w, empty)) proof
-      rsimp only, mallocng_specs.get_slot_index_spec_fun, app_fn_build, hA
-      show by simp(hd, pu, vv, keep(mallocng_specs.get_slot_index_pre))
-    qed
-    show by ex_intro({empty}, {w}, taut(eu, eno, rst, rf))
-  qed
-  show by defs(g, tr.div_raises)
-qed
-
 // (a record of one field k: each pair's first component k)
 theorem mp.one_key(r, k): is_fun(r) -> dom(r) = insert(k, empty) -> (all z. z in r -> fst(z) = k)
 proof
@@ -462,19 +330,150 @@ proof
   show := rewrite(sym(he), conj(rewrite(he, hu), uf, keys))
 qed
 
-// get_slot_index as C function values: the memory-level spec's wrapper
-// refines the purpose's
-theorem mp.gsi_purpose_fun: all c regs. c in mallocng.Cfg -> regs in abi.ARGS ->
-  refines_ghost(app(mallocng_specs.get_slot_index_spec_fun(), regs), app(mallocng_purpose.get_slot_index_purpose_fun(c), regs), abi.World, mp.G)
+// the ghost record's fields: blocks and A
+theorem mp.g_rec: all h. h in mp.G -> h in univ(1) && dom(h) = union2(insert("blocks", empty), insert("A", empty)) &&
+  app(h, "blocks") in fn_space(bits(64), option(omega)) && app(h, "A") in mallocng.Abs
+proof
+  fix h
+  assume hh
+  obtain hb ha, he _ hbd hbt _ _ had hat _ from mp(all_elim(mp.g_parts, {h}), hh)
+  have hu := mp(all_elim(mp.g_univ, {h}), hh)
+  have d: dom(union2(hb, ha)) = union2(insert("blocks", empty), insert("A", empty)) by simp(dom_union2[a := hb, b := ha], hbd, had)
+  have ab: app(union2(hb, ha), "blocks") = app(hb, "blocks") by simp(hbd, had)
+  have aa: app(union2(hb, ha), "A") = app(ha, "A") by simp(hbd, had)
+  have r: dom(union2(hb, ha)) = union2(insert("blocks", empty), insert("A", empty)) && app(union2(hb, ha), "blocks") in fn_space(bits(64), option(omega)) && app(union2(hb, ha), "A") in mallocng.Abs
+    by taut(d, rewrite(sym(ab), hbt), rewrite(sym(aa), hat))
+  show by taut(hu, rewrite(sym(he), r))
+qed
+
+// ----------------------------------------------------------------------
+//  get_slot_index: its code refines its purpose
+
+// get_slot_index's code by its purpose, directly: the byte it reads is
+// the slot's header (`mp.slot_hdr`), its low 5 bits the index
+theorem mp.gsi: all c p. c in mallocng.Cfg -> p in bits(64) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.get_slot_index(p), mallocng_purpose.get_slot_index_purpose(c, p), abi.World, mp.G)
+proof
+  fix c p
+  assume hc hp
+  have gk: all h. h in mp.G -> h in univ(1) && (all z. z in h -> !(fst(z) in abi.WKEYS)) proof
+    fix h
+    assume hh
+    have u _ ks := mp(all_elim(mp.g_ok, {h}), hh)
+    have w: all z. z in h -> !(fst(z) in abi.WKEYS) proof
+      fix z
+      assume hz
+      have k := mp(all_elim(ks, {z}), hz)
+      show by taut(k)
+    qed
+    show by taut(u, w)
+  qed
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.get_slot_index(p), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_slot_index))
+  qed
+  have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.get_slot_index(p), s, o) ->
+      (mallocng.holds_in(c, app(union2(s, h), "A"), app(union2(s, h), "vm"), app(union2(s, h), "blocks")) && (ex g i. (g in omega && i in omega) && mallocng.starts_at(app(union2(s, h), "A"), g, i, p))) ->
+      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(union2(s, h), "A"), x4, x3, p)),
+        x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3)))) proof
+    fix s h o
+    assume hs hh hr hpre
+    have hu hd hbt hat := mp(all_elim(mp.g_rec, {h}), hh)
+    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+    let V0 := app(s, "vm")
+    let A := app(h, "A")
+    let B := app(h, "blocks")
+    have hin: mallocng.holds_in(c, A, V0, B) by simp(hpre, sd, hd)
+    have ex1: ex g i. (g in omega && i in omega) && mallocng.starts_at(A, g, i, p) by simp(hpre, sd, hd)
+    obtain g i, hg hi hst from ex1
+    have hpo: p in omega by simp(hp)
+    have h16 hfp hidx hrw hks := apply(mp.slot_hdr, hc, simp(hu), hat, hbt, hi, hpo, hin, hst)
+    // p - 3: the allocator's, readable
+    let M3 := mallocng.mview(V0, mallocng.footprint(c, A, B))
+    have p3o: int_sub(p, 3) in omega by arith(h16, hpo)
+    have pgx: mallocng.pg(M3, int_sub(p, 3)) = app(app(V0, "pages"), int_div(int_sub(p, 3), x86_64_linux.PAGE))
+      by defs(simp(hfp, p3o, keep(mallocng.footprint)), mallocng.pg, mallocng.mview)
+    have rw2 := expand(expand(hrw, mallocng.m_rw), mallocng.m_mapped)
+    have us: gimple.usable(V0, app(s, "objs"), int_sub(p, 3), 1, false) proof
+      fix x0
+      assume h0 h1
+      have z: x0 = 0 by arith(h0, h1)
+      show by defs(simp(z, pgx, rw2, hks, keep(mallocng.pg)), x86_64_linux.mapped)
+    qed
+    // the code's run: the low 5 bits of that byte
+    have su: s in univ(1) by simp(mp(all_elim(rp, {s}, {o}), hr))
+    let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+    have sv: gimple.sval(T64, bits_neg(64, 3)) = int_neg(3) by defs(simp(), gimple.sval)
+    let P3 := int_add(p, gimple.sval(T64, bits_neg(64, 3)))
+    have e3: P3 = int_sub(p, 3) by arith(sv)
+    have p3: int_lt(3, p) by arith(h16)
+    have ur3: gimple.usable(V0, app(s, "objs"), int_add(P3, 0), 1, false) by simp(us, e3)
+    have p64: pow2(64) = 18446744073709551616 by simp()
+    step x1, oe from hr with g.padd_det, g.ld8_det using conj(su, hp, sv, e3, p3, ur3, p64)
+    let X := gimple.bytes_at(V0, int_add(P3, 0), 1)
+    have _ _ _ pb := apply(ms.world_parts, hs)
+    have xo _ := mp(all_elim(g.bytes_bound, {V0}, {int_add(P3, 0)}, {1}), pb, arith())
+    have lv := apply(ms.low5, xo)
+    // the header byte: the slot's index
+    have hb3: int_add(P3, 0) = int_sub(p, 3) by arith(e3)
+    have p3b: int_sub(p, 3) in bits(64) by arith(hp, h16)
+    have bt := mp(fn_space_app[a := bits(64), b := bits(8), f := app(V0, "bytes"), x := int_sub(p, 3)], pb, p3b)
+    have hb0: bits_add(64, int_sub(p, 3), 0) = int_sub(p, 3) by defs(arith(hp, h16, p64), bits_add, pow2)
+    have xb: X = mallocng.b8(M3, int_sub(p, 3))
+      by defs(simp(hb3, hfp, p3o, hb0, bt, keep(mallocng.footprint)), gimple.bytes_at, mallocng.b8, mallocng.mview)
+    have vi: int_mod(X, 32) = i by simp(xb, hidx)
+    have ib: i in bits(32) by simp(rewrite(vi, (int_mod(X, 32) in bits(32) by arith(xo))))
+    have sa: mallocng.starts_at(app(union2(s, h), "A"), g, i, p) by simp(hst, sd, hd)
+    have e4: ex x4. x4 in omega && mallocng.starts_at(app(union2(s, h), "A"), x4, i, p) by ex_intro({g}, taut(hg, sa))
+    have e3b: ex x3. (x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(union2(s, h), "A"), x4, x3, p))) && exc(pair(union2(s, h), empty), pair("ret", i)) = exc(pair(union2(s, h), empty), pair("ret", x3))
+      by ex_intro({i}, taut(ib, e4, refl({exc(pair(union2(s, h), empty), pair("ret", i))})))
+    have bS: any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(union2(s, h), "A"), x4, x3, p)), x3. exc(pair(union2(s, h), empty), pair("ret", i)) = exc(pair(union2(s, h), empty), pair("ret", x3)))
+      by defs(taut(e3b), any_rel)
+    have oi: o = ok(s, i) by simp(oe, lv, vi)
+    have fin: ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(app(union2(s, h), "A"), x4, x3, p)),
+        x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3))) by ex_intro({s}, {i}, taut(oi, bS))
+    show by taut(fin)
+  qed
+  show by defs(apply(ct.refines_contract, gk, rp, body), mallocng_purpose.get_slot_index_purpose)
+qed
+
+// (the code diverges nowhere it does not also raise: only where it allows
+// anything)
+theorem mp.gsi_div_raises: tr.div_raises(c_src_malloc_mallocng_malloc.get_slot_index_fun())
+proof
+  have g: all args w t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), w, diverge(t)) ->
+      (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && abi.raise_state(x) && runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), w, exc(x, e))) proof
+    fix args w t
+    assume hA hW hu hd
+    have rst: abi.raise_state(w) by defs(apply(tr.world_and, hW), abi.raise_state)
+    have eu: empty in univ(1) by simp()
+    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+    have pu: pair(w, exc(w, empty)) in univ(1) by simp(hu)
+    have vv: ex x. x in x86_64_linux.Vm by ex_intro({app(w, "vm")}, simp(hW))
+    rsimp only, c_src_malloc_mallocng_malloc.get_slot_index_fun, app_fn_build, hA in hd
+    have rf: runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), w, exc(w, empty)) proof
+      rsimp only, c_src_malloc_mallocng_malloc.get_slot_index_fun, app_fn_build, hA
+      show by simp(hd, pu, vv)
+    qed
+    show by ex_intro({empty}, {w}, taut(eu, eno, rst, rf))
+  qed
+  show by defs(g, tr.div_raises)
+qed
+
+// ... as C function values: the code's wrapper refines the purpose's
+theorem mp.gsi_fun: all c regs. c in mallocng.Cfg -> regs in abi.ARGS ->
+  refines_ghost(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), regs), app(mallocng_purpose.get_slot_index_purpose_fun(c), regs), abi.World, mp.G)
 proof
   fix c regs
   assume hc hr
-  have hm: all regs. refines_ghost(mallocng_specs.get_slot_index_spec(bits_of_int(64, app(regs, 0))), mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(regs, 0))), abi.World, mp.G) proof
+  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.get_slot_index(bits_of_int(64, app(regs, 0))), mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(regs, 0))), abi.World, mp.G) proof
     fix regs
-    show := mp(all_elim(mp.gsi_purpose, {c}, {bits_of_int(64, app(regs, 0))}), hc, simp())
+    show := mp(all_elim(mp.gsi, {c}, {bits_of_int(64, app(regs, 0))}), hc, simp())
   qed
-  have w := mp(g.fun_res_ghost[p := x0. mallocng_specs.get_slot_index_spec(bits_of_int(64, app(x0, 0))), q := x0. mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(x0, 0))), w := 32, n := 1, G := mp.G], mp.g_univ, hm)
-  show by defs(mp(all_elim(w, {regs}), hr), mallocng_specs.get_slot_index_spec_fun, mallocng_purpose.get_slot_index_purpose_fun)
+  have w := mp(g.fun_res_ghost[p := x0. c_src_malloc_mallocng_malloc.get_slot_index(bits_of_int(64, app(x0, 0))), q := x0. mallocng_purpose.get_slot_index_purpose(c, bits_of_int(64, app(x0, 0))), w := 32, n := 1, G := mp.G], mp.g_univ, hm)
+  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.get_slot_index_fun, mallocng_purpose.get_slot_index_purpose_fun, letin)
 qed
 
 // ----------------------------------------------------------------------
@@ -485,11 +484,14 @@ theorem mp.gsi_implements: all c statics. c in mallocng.Cfg ->
 proof
   fix c statics
   assume hc
-  have r: all args. args in abi.ARGS -> refines_ghost(app(mallocng_specs.get_slot_index_spec_fun(), args), app(mallocng_purpose.get_slot_index_purpose_fun(c), args), abi.World, mp.G) proof
+  have r: all args. args in abi.ARGS -> refines_ghost(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), args), app(mallocng_purpose.get_slot_index_purpose_fun(c), args), abi.World, mp.G) proof
     fix args
     assume ha
-    show := mp(all_elim(mp.gsi_purpose_fun, {c}, {args}), hc, ha)
+    show := mp(all_elim(mp.gsi_fun, {c}, {args}), hc, ha)
   qed
-  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4206813}, {mallocng_specs.get_slot_index_spec_fun()}, {mallocng_purpose.get_slot_index_purpose_fun(c)}, {4198400}, {text.code}, {statics}),
-    mp.g_ok, mp.gsi_div_raises, all_elim(gsitc.composed, {statics}), r)
+  // (the CFG form's C1, the structured form refined)
+  have st := mp(all_elim(tr.implements_refine, {4206813}, {c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun()}, {c_src_malloc_mallocng_malloc.get_slot_index_fun()},
+    {4198400}, {text.code}, {statics}), all_elim(gsitc.implements, {statics}), get_slot_index_ref)
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4206813}, {c_src_malloc_mallocng_malloc.get_slot_index_fun()}, {mallocng_purpose.get_slot_index_purpose_fun(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, mp.gsi_div_raises, st, r)
 qed
