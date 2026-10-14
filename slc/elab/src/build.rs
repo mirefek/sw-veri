@@ -76,16 +76,22 @@ impl B {
                 Some(j) => Term::bvar(depth + (k - 1 - j as u32)),
                 None => t.clone(),
             },
-            Node::Var(v, args) => Term::var(*v, args.iter().map(|a| self.abs_at(vars, a, depth)).collect()),
+            Node::Var(v, args) => Self::kept(t, Term::var(*v, args.iter().map(|a| self.abs_at(vars, a, depth)).collect())),
             Node::App(s, args) => {
                 if !self.mentions(t, vars) {
                     return t.clone();
                 }
                 let bs = &self.env.syms[*s as usize].binders;
-                Term::app(*s, args.iter().enumerate().map(|(i, a)| self.abs_at(vars, a, depth + bs[i])).collect())
+                Self::kept(t, Term::app(*s, args.iter().enumerate().map(|(i, a)| self.abs_at(vars, a, depth + bs[i])).collect()))
             }
             _ => t.clone(),
         }
+    }
+
+    /// `new`, a rebuilt `old`: its label and binder name kept (a conjunct's
+    /// label under a quantifier)
+    fn kept(old: &Term, new: Term) -> Term {
+        new.with_label(old.label().map(Into::into)).with_binder_name(old.binder_name().map(Into::into))
     }
 
     fn mentions(&self, t: &Term, vars: &[VarId]) -> bool {

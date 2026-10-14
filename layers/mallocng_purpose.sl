@@ -24,11 +24,12 @@ fn rm_at(l: List[nat], k: nat) -> List[nat] = [l[if j < k { j } else { j + 1 }] 
 // the list l at *phead: linked cyclically, its elements' links accessible,
 // 8-aligned, apart from each other and from the head word
 pred list_at(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat]) =
-  word_ok(vm, objs, phead, 0) && al8(phead) &&
-  cyclic(mview(vm, all_bytes()), uint(rd64(vm, phead)), l) &&
-  (all i: nat. i < len(l) -> l[i] + 16 <= 2^64 && word_ok(vm, objs, bits[64](l[i]), 0) && word_ok(vm, objs, bits[64](l[i]), 8) && l[i] % 8 = 0 &&
-     (uint(phead) + 8 <= l[i] || l[i] + 16 <= uint(phead))) &&
-  (all i: nat, j: nat. i < len(l) && j < len(l) && i != j -> l[i] + 16 <= l[j] || l[j] + 16 <= l[i])
+  head: word_ok(vm, objs, phead, 0) && head_al: al8(phead) &&
+  linked: cyclic(mview(vm, all_bytes()), uint(rd64(vm, phead)), l) &&
+  elems: (all i: nat. i < len(l) -> bound: l[i] + 16 <= 2^64 && prev_ok: word_ok(vm, objs, bits[64](l[i]), 0) &&
+     next_ok: word_ok(vm, objs, bits[64](l[i]), 8) && al: l[i] % 8 = 0 &&
+     off_head: (uint(phead) + 8 <= l[i] || l[i] + 16 <= uint(phead))) &&
+  apart: (all i: nat, j: nat. i < len(l) && j < len(l) && i != j -> l[i] + 16 <= l[j] || l[j] + 16 <= l[i])
 
 // no byte but the head word and l's link words changed, nothing else
 pred links_only(before: Vm, vm: Vm, phead: bits[64], l: List[nat]) =
@@ -55,10 +56,10 @@ proc[World] dequeue_purpose(phead: bits[64], m: bits[64]) {
 // musl's a_crash, a bug), joins it at the end; no byte but the head word
 // and the links written
 pred joinable(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat], m: bits[64]) =
-  uint(m) + 16 <= 2^64 && word_ok(vm, objs, m, 0) && word_ok(vm, objs, m, 8) && uint(m) % 8 = 0 &&
-  (uint(phead) + 8 <= uint(m) || uint(m) + 16 <= uint(phead)) &&
-  (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 16 <= l[i]) &&
-  rd64(vm, m) = 0 && rd64(vm, m + 8) = 0
+  bound: uint(m) + 16 <= 2^64 && prev_ok: word_ok(vm, objs, m, 0) && next_ok: word_ok(vm, objs, m, 8) && al: uint(m) % 8 = 0 &&
+  off_head: (uint(phead) + 8 <= uint(m) || uint(m) + 16 <= uint(phead)) &&
+  off_list: (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 16 <= l[i]) &&
+  prev0: rd64(vm, m) = 0 && next0: rd64(vm, m + 8) = 0
 pred queued(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
   all l: List[nat]. list_at(before, objs, phead, l) && joinable(before, objs, phead, l, m) ->
     list_at(vm, objs, phead, l ++ [uint(m)]) && links_only(before, vm, phead, l ++ [uint(m)])
@@ -77,10 +78,10 @@ proc[World] queue_purpose(phead: bits[64], m: bits[64]) {
 // byte but those, the head word and the list's links written. Its call to
 // queue needs the thread pointer sound, its word not m's.
 pred meta_joinable(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat], m: bits[64]) =
-  m != 0 && uint(m) + 40 <= 2^64 && uint(m) % 8 = 0 &&
-  usable(vm, objs, uint(m), 40, false) && usable(vm, objs, uint(m), 40, true) &&
-  (uint(phead) + 8 <= uint(m) || uint(m) + 40 <= uint(phead)) &&
-  (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 40 <= l[i])
+  nonnull: m != 0 && bound: uint(m) + 40 <= 2^64 && al: uint(m) % 8 = 0 &&
+  read: usable(vm, objs, uint(m), 40, false) && write: usable(vm, objs, uint(m), 40, true) &&
+  off_head: (uint(phead) + 8 <= uint(m) || uint(m) + 40 <= uint(phead)) &&
+  off_list: (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 40 <= l[i])
 pred meta_freed(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
   all l: List[nat]. list_at(before, objs, phead, l) && meta_joinable(before, objs, phead, l, m) ->
     list_at(vm, objs, phead, l ++ [uint(m)]) &&
@@ -204,6 +205,41 @@ proc[MallocAbs] get_stride_purpose(c: Cfg, g: bits[64]) -> bits[64] {
   either { overflow() } or { return bits[64](stride(A.metas[uint(g)])) }
 }
 
+// A2: A with its groups' masks (which free slots are available, which
+// freed) changed, nothing else
+pred masks_only(A: Abs, A2: Abs) =
+  others: (A2 with { metas: A.metas }) = A &&
+  groups: (all g: nat. (A2.metas[g] with { avail: 0, freed: 0 }) = (A.metas[g] with { avail: 0, freed: 0 }))
+
+// a group's active index (its header's): the slots above it never handed out
+fn active_idx(vm: Vm, v: MetaV) -> nat = b8(mview(vm, all_bytes()), v.mem + 8) % 32
+
+// A2: A with g's freed slots up to idx made available, its others staying
+// freed
+pred activated(A: Abs, A2: Abs, g: nat, idx: nat) =
+  masks_only(A, A2) && (all h: nat. h != g -> A2.metas[h] = A.metas[h]) &&
+  A2.metas[g].avail < 2^32 && A2.metas[g].freed < 2^32 &&
+  (all i: nat. i < 32 ->
+     bit(A2.metas[g].avail, i) = (if i <= idx { bit(A.metas[g].freed, i) } else { 0 }) &&
+     bit(A2.metas[g].freed, i) = (if i <= idx { 0 } else { bit(A.metas[g].freed, i) }))
+
+// activate_group(m), m a group in use, none of its slots available (else
+// musl's a_crash), on no active list but as its head: its freed slots up to
+// its active index made available (`activated`), the new available mask
+// returned; the memory outside the allocator's untouched. Its call to a_cas
+// needs the thread pointer sound.
+proc[MallocAbs] activate_group_purpose(c: Cfg, m: bits[64]) -> bits[32] {
+  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(m)) && A.metas[uint(m)].avail = 0 &&
+    (all sc: nat, k: nat. sc < 48 && k < len(A.active[sc]) && A.active[sc][k] = uint(m) -> k = 0)
+  either { overflow() } or {
+    let A0 = A
+    let before = vm
+    ghost A := any A2: Abs where activated(A0, A2, uint(m), active_idx(before, A0.metas[uint(m)]))
+    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, {})
+    return bits[32](A.metas[uint(m)].avail)
+  }
+}
+
 // try_avail(pm), pm class sc's active list: a free slot of a group already
 // there. Its bit (1 << i) returned, slot i of the list's head reserved --
 // the head now, if need be: the list reorganised --; or 0, no group of the
@@ -313,6 +349,13 @@ fn get_stride_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = get_stride_purpose(c, bits[64](args[0]))
   let w = result[64](r)
+  return (w, any bits[64])
+}
+
+fn activate_group_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let r = activate_group_purpose(c, bits[64](args[0]))
+  let w = result[32](r)
   return (w, any bits[64])
 }
 

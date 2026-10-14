@@ -211,18 +211,18 @@ pred slot_rw(vm: Vm, v: MetaV, i: nat) =
 //  Memory agrees with the abstract state
 
 pred meta_in_memory(m: Mem, g: nat, v: MetaV) =
-  rd(m, g, 8) = v.prev && rd(m, g + 8, 8) = v.next && rd(m, g + 16, 8) = v.mem &&
-  rd(m, g + 24, 4) = v.avail && rd(m, g + 28, 4) = v.freed &&
-  rd(m, g + 32, 8) = v.last_idx + 32 * v.freeable + 64 * v.sizeclass + 4096 * v.maplen &&
-  v.last_idx < 32 && v.freeable < 2 && v.sizeclass < 64
+  prev: rd(m, g, 8) = v.prev && next: rd(m, g + 8, 8) = v.next && mem: rd(m, g + 16, 8) = v.mem &&
+  avail: rd(m, g + 24, 4) = v.avail && freed: rd(m, g + 28, 4) = v.freed &&
+  word: rd(m, g + 32, 8) = v.last_idx + 32 * v.freeable + 64 * v.sizeclass + 4096 * v.maplen &&
+  last: v.last_idx < 32 && freeable: v.freeable < 2 && sclass: v.sizeclass < 64
 
 fn ctx_word(c: Cfg, m: Mem, off: nat) -> nat = rd(m, c.ctx + off, 8)
 
 // a list linked by `next` (offset 8) and `prev` (offset 0), cyclic, from `head`
 pred cyclic(m: Mem, head: nat, l: List[nat]) =
-  head = (if len(l) = 0 { 0 } else { l[0] }) &&
-  (all i: nat, j: nat. i < len(l) && j < len(l) && l[i] = l[j] -> i = j) &&
-  (all i: nat. i < len(l) ->
+  first: head = (if len(l) = 0 { 0 } else { l[0] }) &&
+  distinct: (all i: nat, j: nat. i < len(l) && j < len(l) && l[i] = l[j] -> i = j) &&
+  links: (all i: nat. i < len(l) ->
      rd(m, l[i] + 8, 8) = l[(i + 1) % len(l)] && rd(m, l[i], 8) = l[(i + len(l) - 1) % len(l)])
 
 pred ctx_ok(c: Cfg, A: Abs, m: Mem) =
@@ -250,28 +250,28 @@ pred fresh_ok(c: Cfg, A: Abs, m: Mem) =
     A.auxv[len(A.auxv) - 1][0] = AT_NULL && (all k: nat. k + 1 < len(A.auxv) -> A.auxv[k][0] != AT_NULL)
 
 pred areas_ok(c: Cfg, A: Abs, m: Mem) =
-  ctx_word(c, m, C_AREA_HEAD) = (if len(A.areas) = 0 { 0 } else { A.areas[0] }) &&
-  ctx_word(c, m, C_AREA_TAIL) = (if len(A.areas) = 0 { 0 } else { A.areas[len(A.areas) - 1] }) &&
-  (all k: nat. k < len(A.areas) ->
+  head: ctx_word(c, m, C_AREA_HEAD) = (if len(A.areas) = 0 { 0 } else { A.areas[0] }) &&
+  tail: ctx_word(c, m, C_AREA_TAIL) = (if len(A.areas) = 0 { 0 } else { A.areas[len(A.areas) - 1] }) &&
+  each: (all k: nat. k < len(A.areas) ->
      A.areas[k] % 4096 = 0 && A.areas[k] > 0 &&
      rd(m, A.areas[k], 8) = A.secret &&
      rd(m, A.areas[k] + 8, 8) = (if k + 1 < len(A.areas) { A.areas[k + 1] } else { 0 }) &&
      rd(m, A.areas[k] + 16, 4) = NSLOTS &&
      (all a: nat. A.areas[k] <= a && a < A.areas[k] + 4096 -> m_rw(m, a) && pg(m, a).value.kind != stack)) &&
-  (all k: nat, l: nat. k < len(A.areas) && l < len(A.areas) && A.areas[k] = A.areas[l] -> k = l) &&
+  distinct: (all k: nat, l: nat. k < len(A.areas) && l < len(A.areas) && A.areas[k] = A.areas[l] -> k = l) &&
   // reserved pages: mapped (maybe PROT_NONE), zero
-  (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> m_mapped(m, a) && b8(m, a) = 0)
+  reserve: (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> m_mapped(m, a) && b8(m, a) = 0)
 
 // every meta slot is used, free, or not yet handed out -- exactly one
 pred metas_partition(A: Abs) =
-  (all k: nat. k + 1 < len(A.used) -> A.used[k] < A.used[k + 1]) &&
-  (all k: nat. k < len(A.used) -> meta_slot(A, A.used[k])) &&
-  (all k: nat. k < len(A.free_metas) -> meta_slot(A, A.free_metas[k]) && !is_used(A, A.free_metas[k])) &&
-  (all k: nat, j: nat. k < len(A.areas) && j < NSLOTS ->
+  sorted: (all k: nat. k + 1 < len(A.used) -> A.used[k] < A.used[k + 1]) &&
+  used_slots: (all k: nat. k < len(A.used) -> meta_slot(A, A.used[k])) &&
+  free_slots: (all k: nat. k < len(A.free_metas) -> meta_slot(A, A.free_metas[k]) && !is_used(A, A.free_metas[k])) &&
+  cover: (all k: nat, j: nat. k < len(A.areas) && j < NSLOTS ->
      is_used(A, meta_at(A.areas[k], j)) ||
      (ex i: nat. i < len(A.free_metas) && A.free_metas[i] = meta_at(A.areas[k], j)) ||
      avail_meta(A, meta_at(A.areas[k], j))) &&
-  (all j: nat. len(A.areas) > 0 && NSLOTS - A.avail_cnt <= j && j < NSLOTS ->
+  fresh: (all j: nat. len(A.areas) > 0 && NSLOTS - A.avail_cnt <= j && j < NSLOTS ->
      !is_used(A, meta_at(A.areas[len(A.areas) - 1], j)) &&
      (all i: nat. i < len(A.free_metas) -> A.free_metas[i] != meta_at(A.areas[len(A.areas) - 1], j)))
 
@@ -287,17 +287,17 @@ pred size_ok(m: Mem, p: nat, end: nat, n: nat) =
 // the slot of a client block or nested group starting at p (`enframe`): the
 // in-band header before p, the reserved-size encoding up to the slot end
 pred frame_ok(m: Mem, v: MetaV, i: nat, p: nat, n: nat, tag: nat) =
-  slot_start(v, i) <= p && (p - slot_start(v, i)) % UNIT = 0 && p + n <= slot_end(v, i) &&
-  b8(m, p - 4) = 0 &&
-  b8(m, p - 3) % 32 = i &&
-  rd(m, p - 2, 2) = (p - storage(v)) / UNIT &&
-  (p > slot_start(v, i) ->
+  start: slot_start(v, i) <= p && unit: (p - slot_start(v, i)) % UNIT = 0 && fits: p + n <= slot_end(v, i) &&
+  check: b8(m, p - 4) = 0 &&
+  index: b8(m, p - 3) % 32 = i &&
+  offset: rd(m, p - 2, 2) = (p - storage(v)) / UNIT &&
+  moved: (p > slot_start(v, i) ->
      rd(m, slot_start(v, i) - 2, 2) = (p - slot_start(v, i)) / UNIT && b8(m, slot_start(v, i) - 3) = 7 * 32) &&
-  (tag = 6 -> b8(m, p - 3) / 32 = 6) &&
-  (tag != 6 -> size_ok(m, p, slot_end(v, i), n) && b8(m, slot_end(v, i)) = 0) &&
+  nested: (tag = 6 -> b8(m, p - 3) / 32 = 6) &&
+  sized: (tag != 6 -> size_ok(m, p, slot_end(v, i), n) && b8(m, slot_end(v, i)) = 0) &&
   // (within its class's slot, as get_meta checks: a group of one slot
   // mapped on its own has a larger stride)
-  (v.sizeclass < 48 -> p - storage(v) < UNIT * size_classes[v.sizeclass] * (i + 1))
+  in_class: (v.sizeclass < 48 -> p - storage(v) < UNIT * size_classes[v.sizeclass] * (i + 1))
 
 // the in-band header before p (its IB bytes): no client's
 pred hdr_free(blocks: Addr -> Option[nat], p: nat) = all a: nat. p - IB <= a && a < p -> a notin live_of(blocks)
@@ -315,6 +315,22 @@ pred slot_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat, i: nat, u: Use
     reserved  => true
   }
 
+// a group's masks: its free slots in exactly one, the available ones up to
+// the active index (the group header's), the slots above it freed (never
+// handed out)
+pred masks_ok(A: Abs, m: Mem, g: nat) =
+  all i: nat. i < 32 ->
+    (bit(A.metas[g].avail, i) = 1 -> i <= b8(m, A.metas[g].mem + 8) % 32 && bit(A.metas[g].freed, i) = 0) &&
+    (bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0 -> i <= A.metas[g].last_idx) &&
+    (i <= A.metas[g].last_idx ->
+       (A.slots[g][i] = unused <-> bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0) &&
+       b8(m, slot_start(A.metas[g], i) - 4) = 0) &&
+    (b8(m, A.metas[g].mem + 8) % 32 < i && i <= A.metas[g].last_idx -> bit(A.metas[g].freed, i) = 1)
+
+// a big allocation's group: one slot, in use
+pred big_ok(A: Abs, g: nat) =
+  A.metas[g].sizeclass = 63 -> A.metas[g].last_idx = 0 && A.metas[g].maplen > 0 && A.metas[g].avail = 0 && A.metas[g].freed = 0
+
 pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
   mim: meta_in_memory(m, g, A.metas[g]) &&
   cls: (A.metas[g].sizeclass < 48 || A.metas[g].sizeclass = 63) &&
@@ -322,28 +338,18 @@ pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
   hdr: (rd(m, A.metas[g].mem, 8) = g && A.metas[g].mem % UNIT = 0 && A.metas[g].mem > 0) &&
   hdr_own: (all a: nat. A.metas[g].mem <= a && a < A.metas[g].mem + UNIT -> a notin live_of(blocks)) &&
   act: b8(m, A.metas[g].mem + 8) % 32 <= A.metas[g].last_idx &&
-  // slots: free ones are in exactly one mask, the active mask only below active_idx
   nslots: len(A.slots[g]) = A.metas[g].last_idx + 1 &&
-  masks: (all i: nat. i < 32 ->
-     (bit(A.metas[g].avail, i) = 1 -> i <= b8(m, A.metas[g].mem + 8) % 32 && bit(A.metas[g].freed, i) = 0) &&
-     (bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0 -> i <= A.metas[g].last_idx) &&
-     (i <= A.metas[g].last_idx ->
-        (A.slots[g][i] = unused <-> bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0) &&
-        b8(m, slot_start(A.metas[g], i) - 4) = 0) &&
-     // slots above the active index never handed out: in the freed mask
-     (b8(m, A.metas[g].mem + 8) % 32 < i && i <= A.metas[g].last_idx -> bit(A.metas[g].freed, i) = 1)) &&
+  masks: masks_ok(A, m, g) &&
   // a group of 16-byte slots fully active (more would never reach a page
   // boundary: try_avail's growth would not end)
   small: (stride(A.metas[g]) = UNIT -> b8(m, A.metas[g].mem + 8) % 32 = A.metas[g].last_idx) &&
   // an individually mapped group, or one nested in a slot of another
   mapped: (A.metas[g].maplen > 0 ->
-     A.metas[g].mem % 4096 = 0 &&
-     UNIT + stride(A.metas[g]) * (A.metas[g].last_idx + 1) <= A.metas[g].maplen * 4096) &&
+     page: A.metas[g].mem % 4096 = 0 &&
+     fits: UNIT + stride(A.metas[g]) * (A.metas[g].last_idx + 1) <= A.metas[g].maplen * 4096) &&
   nested: (A.metas[g].maplen = 0 ->
      ex k: nat, i: nat. k < len(A.used) && i < len(A.slots[A.used[k]]) && A.slots[A.used[k]][i] = nested(g)) &&
-  // big allocations: one slot, in use
-  big: (A.metas[g].sizeclass = 63 ->
-     A.metas[g].last_idx = 0 && A.metas[g].maplen > 0 && A.metas[g].avail = 0 && A.metas[g].freed = 0) &&
+  big: big_ok(A, g) &&
   // on an active list exactly when linked
   linked: (A.metas[g].next != 0 <->
      A.metas[g].sizeclass < 48 &&
@@ -425,16 +431,18 @@ pred separate(rs: List[(nat, nat)]) =
 pred brk_ok(A: Abs, brk: Addr) =
   A.brk = 0 || A.brk = 2^64 - 1 || (A.brk = uint(brk) && A.brk % 4096 = 0)
 
-// the size classes' table (the code reads it): readable, as the source has it
+// the size classes' table (the code reads it): readable, as the source has
+// it, one of the image's constants (in a read-only segment)
 pred classes_ok(c: Cfg, m: Mem) =
   (all i: nat. i < 48 -> rd(m, c.sct + 2 * i, 2) = size_classes[i]) &&
-  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack)
+  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack) &&
+  (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.sct && c.sct + 2 * 48 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1])
 
 // the meta areas, the class table and the context: no client's bytes
 pred fixed_free(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) =
-  (all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)) &&
-  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks)) &&
-  (all a: nat. c.ctx <= a && a < c.ctx + CTX_SIZE -> a notin live_of(blocks))
+  areas: (all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)) &&
+  classes: (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks)) &&
+  context: (all a: nat. c.ctx <= a && a < c.ctx + CTX_SIZE -> a notin live_of(blocks))
 
 // the groups (nested ones too: inside their parent's slot) apart from the
 // fixed regions -- a group's slot written is none of those

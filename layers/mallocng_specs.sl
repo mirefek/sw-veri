@@ -23,7 +23,8 @@ fn wr64(vm: Vm, a: Addr, v: bits[64]) -> Vm = vm with { bytes: store_le(vm.bytes
 // the word at p + off: GIMPLE may read and write it (p not null, in the
 // address space, usable for reading and writing)
 pred word_ok(vm: Vm, objs: Set[nat], p: Addr, off: nat) =
-  p != 0 && uint(p) + off + 8 <= 2^64 && usable(vm, objs, uint(p) + off, 8, false) && usable(vm, objs, uint(p) + off, 8, true)
+  nonnull: p != 0 && bound: uint(p) + off + 8 <= 2^64 &&
+  read: usable(vm, objs, uint(p) + off, 8, false) && write: usable(vm, objs, uint(p) + off, 8, true)
 
 pred al8(p: Addr) = uint(p) % 8 = 0
 
