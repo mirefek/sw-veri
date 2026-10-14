@@ -91,17 +91,32 @@ translation verification, the engine):
   active, the bounce counter) left free. Needs: the abstraction from
   memory (`holds`, `mallocng.abs_unique`); the invariant with slots in
   between (reserved by try_avail, a block only after alloc_slot).
-- The specs over `MallocAbs` (layers/mallocng_purpose.sl; get_slot_index
-  done, proofs/mallocng_purpose.core): try_avail's and alloc_slot's, the
-  ghost A updated; a callee's memory-level contract inside an
-  abstract-level proof (the ghosts unchanged); `step` on a spec's world
-  with a ghost part (the code's run, not only a spec-to-spec refinement);
-  a div_raises lemma per contract shape (get_slot_index's by hand,
-  `mp.gsi_div_raises`) instead of one per function.
+- Migration to meaning-level specs (layers/mallocng_purpose.sl,
+  proofs/mallocng_purpose.core), bottom-up, each function's code refined
+  directly (`ct.refines_contract`; no hand-written memory-level spec
+  between; get_slot_index and get_stride done). Then the "purpose" name
+  dropped: these are the specs. Next:
+  - get_meta: a call under a callee's meaning-level contract (a ghost
+    call rule: the callee's refinement at the caller's ghost part, the
+    ghost part unchanged by a callee that does not update it); then
+    get_slot_index's memory-level spec and C2 retired;
+  - the right level per function: callees called where the invariant does
+    not hold (enframe on a reserved slot, activate_group and the list
+    operations inside try_avail) get a spec relative to a local invariant
+    (the group, the list), not `holds_in`; pure computations (a_ctz_32,
+    size_to_class) keep theirs;
+  - try_avail's and alloc_slot's, the ghost A updated (a variant of
+    `ct.refines_contract` choosing the final ghost part);
+  - `tr.div_raises` of loop-free code once, structurally (it diverges only
+    where an operation is undefined, and raises there too), instead of per
+    function (get_slot_index's by simp; get_stride's a premise of
+    `mp.gst_implements`, as in proofs/mallocng_link.core).
 - The library's list lemmas still in proofs/translate_call.core
   (`tr.seq_one_type`, `tr.concat_list`, `tr.list_idx`) to core/list.core;
   a list's typing (`l in list_type(T)`) of a definition built from pieces
-  derived, not stated per definition (`mp.pre_list`).
+  derived, not stated per definition (`mp.fp_pieces`).
+- Proof-language UI: an `ex_intro({..})` inside `taut(..)` is misparsed as
+  a binder (`expected 1 bound names`); state the existential with `have`.
 - The proof of such a spec: what the code does to memory computed by the
   system (its run summarized, the callees' contracts applied, each
   operation's definedness an obligation), not written by hand as a

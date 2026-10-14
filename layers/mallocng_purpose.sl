@@ -25,6 +25,12 @@ proc[MallocAbs] get_slot_index_purpose(c: Cfg, p: bits[64]) -> bits[32] {
   }
 }
 
+// get_stride(g), g a group in use: its slots' size
+proc[MallocAbs] get_stride_purpose(c: Cfg, g: bits[64]) -> bits[64] {
+  require holds_in(c, A, vm, blocks) && is_used(A, uint(g))
+  either { overflow() } or { return bits[64](stride(A.metas[uint(g)])) }
+}
+
 // try_avail(pm), pm class sc's active list: a free slot of a group already
 // there. Its bit (1 << i) returned, slot i of the list's head reserved --
 // the head now, if need be: the list reorganised --; or 0, no group of the
@@ -75,6 +81,13 @@ fn get_slot_index_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = get_slot_index_purpose(c, bits[64](args[0]))
   let w = result[32](r)
+  return (w, any bits[64])
+}
+
+fn get_stride_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let r = get_stride_purpose(c, bits[64](args[0]))
+  let w = result[64](r)
   return (w, any bits[64])
 }
 

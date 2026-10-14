@@ -390,16 +390,17 @@ pred classes_ok(c: Cfg, m: Mem) =
   (all i: nat. i < 48 -> rd(m, c.sct + 2 * i, 2) = size_classes[i]) &&
   (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack)
 
-// the meta areas: no client's bytes
-pred areas_free(A: Abs, blocks: Addr -> Option[nat]) =
-  all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)
+// the meta areas and the class table: no client's bytes
+pred fixed_free(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) =
+  (all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)) &&
+  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks))
 
 pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
   image_ok(c, m) && ctx_ok(c, A, m) && fresh_ok(c, A, m) && areas_ok(c, A, m) &&
   metas_partition(A) && used_ok(A, m, blocks) && active_ok(A) && blocks_ok(A, blocks) &&
   normal(A) && brk_ok(A, brk) && perms_ok(c, A, m, blocks) && separate(regions(c, A)) &&
   blocks_wf(blocks) &&       // (what the law inv_wf needs, stated directly)
-  classes_ok(c, m) && areas_free(A, blocks)
+  classes_ok(c, m) && fixed_free(c, A, blocks)
 
 ///////////////////////////////////////////////////////////////////////
 //  The invariant and the owned bytes

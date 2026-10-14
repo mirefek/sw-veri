@@ -478,3 +478,16 @@ item is a short summary of finished work; details are in the files named.
   Library: `nat_lt_mem`, `int_sum_nat`, `at_type`, `build_list`,
   `ex_at_concat_l/_r`, `app_space`, `rec_univ`, `union2_fun`,
   `some_val` (core/), `x86.le_at_nat`.
+- **Meaning-level specs refined by the code directly** (no hand-written
+  memory-level spec between): `ct.refines_contract` -- under the
+  precondition at the joined state, the code overflows or returns as the
+  spec allows (proofs/gimple_ghost.core); get_slot_index (`mp.gsi`) and
+  get_stride (`mp.gst`: the meta word read packs the group's fields, so
+  its stride is the group's). Reusable reads of the allocator's memory:
+  `mp.view_read` / `mp.view_usable` (GIMPLE's reads of the allocator's
+  bytes are the invariant's view), `mp.meta_mem` / `mp.meta_word` (a used
+  meta's bytes and word), `mp.classes_table`, the footprint's pieces
+  (`mp.fp_intro`, `mp.area_fp`, `mp.sct_fp`, `mp.group_fp`). The
+  invariant: the class table (`Cfg.sct`) readable and as the source has
+  it, the meta areas and the table no client's, the areas not stack
+  pages. Library: `int_sum_ext`, `dom_union2`.
