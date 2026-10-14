@@ -405,3 +405,79 @@ proof
   qed
   show by defs(main, refines_ghost)
 qed
+
+// A contract spec over the world with a ghost part, refined by a program
+// over the world: under the precondition at the joined state, the program
+// overflows (the ghost part kept) or returns as B allows, the ghost part
+// h2 chosen (B's ghost updates).
+theorem ct.refines_contract_g(p, x0. P, x0 x2. B, G):
+  (all h. h in G -> h in univ(1) && (all z. z in h -> !(fst(z) in abi.WKEYS))) ->
+  (all s o. runs(p, s, o) -> pair(s, o) in univ(1)) ->
+  (all s h o. s in abi.World -> h in G -> runs(p, s, o) -> P(union2(s, h)) ->
+    (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+    (ex s1 v h2. h2 in G && o = ok(s1, v) && B(union2(s, h), exc(pair(union2(s1, h2), empty), pair("ret", v))))) ->
+  refines_ghost(p, mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    abi.World, G)
+proof
+  assume hG hp hc
+  let Q := mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2)))))))
+  let OVF := exc_val("stack_overflow", empty)
+  have main: all s h o. s in abi.World -> h in G -> runs(p, s, o) -> (ex h2. h2 in G && runs(Q, union2(s, h), with_ghost(o, h2))) proof
+    fix s h o
+    assume hs hh hr
+    have hu hk := mp(all_elim(hG, {h}), hh)
+    have pu := mp(all_elim(hp, {s}, {o}), hr)
+    have su: s in univ(1) by simp(pu)
+    have ou: o in univ(1) by simp(pu)
+    let S := union2(s, h)
+    have gu := apply(g.with_ghost_univ, ou, hu)
+    have pu2: pair(S, with_ghost(o, h)) in univ(1) by simp(su, hu, gu)
+    // the precondition fails: anything
+    have n: !P(S) -> runs(Q, S, with_ghost(o, h)) proof
+      assume hn
+      show by apply(tr.runs_intro, pu2, taut(hn))
+    qed
+    have kept: runs(Q, S, with_ghost(o, h)) -> (ex h2. h2 in G && runs(Q, S, with_ghost(o, h2))) proof
+      assume hq
+      show by ex_intro({h}, taut(hh, hq))
+    qed
+    have y: P(S) -> (ex h2. h2 in G && runs(Q, S, with_ghost(o, h2))) proof
+      assume hP
+      have cs := mp(all_elim(hc, {s}, {h}, {o}), hs, hh, hr, hP)
+      // an overflow: its memory in the world's part
+      have c1: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) -> runs(Q, S, with_ghost(o, h)) proof
+        assume e
+        obtain v, hv hov from e
+        have lv: all z. z in h -> fst(z) != "vm" proof
+          fix z
+          assume hz
+          show by simp(mp(all_elim(hk, {z}), hz))
+        qed
+        have eu := mp(fn_update_union_l[a := s, b := h, k := "vm", v := v], lv)
+        have wg0: with_ghost(o, h) = exc(union2(fn_update(s, "vm", v), h), OVF) by simp(hov)
+        have wg: with_ghost(o, h) = exc(fn_update(S, "vm", v), OVF) := trans(wg0, subst({y. exc(union2(fn_update(s, "vm", v), h), OVF) = exc(y, OVF)}, sym(eu), refl({exc(union2(fn_update(s, "vm", v), h), OVF)})))
+        have pu3 := rewrite(wg, pu2)
+        have t: runs(Q, S, exc(fn_update(S, "vm", v), OVF)) by apply(ct.contract_ovf, hP, hv, pu3)
+        show := rewrite(sym(wg), t)
+      qed
+      // a return: as B allows, the ghost part h2
+      have c2: (ex s1 v h2. h2 in G && o = ok(s1, v) && B(S, exc(pair(union2(s1, h2), empty), pair("ret", v)))) -> (ex h2. h2 in G && runs(Q, S, with_ghost(o, h2))) proof
+        assume e
+        obtain s1 v h2, hg2 hov hb from e
+        have hu2 _ := mp(all_elim(hG, {h2}), hg2)
+        have gu2 := apply(g.with_ghost_univ, ou, hu2)
+        have wg: with_ghost(o, h2) = ok(union2(s1, h2), v) by simp(hov)
+        have pu3: pair(S, ok(union2(s1, h2), v)) in univ(1) := rewrite(wg, (pair(S, with_ghost(o, h2)) in univ(1) by simp(su, hu, gu2)))
+        have t: runs(Q, S, ok(union2(s1, h2), v)) by apply(ct.contract_ret, hP, hb, pu3)
+        show by ex_intro({h2}, taut(hg2, rewrite(sym(wg), t)))
+      qed
+      show by taut(cs, c1, c2, kept)
+    qed
+    show by taut(n, y, kept)
+  qed
+  show by defs(main, refines_ghost)
+qed

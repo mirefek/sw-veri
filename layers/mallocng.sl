@@ -488,9 +488,10 @@ fn owned(c: Cfg) -> Heap -> Set[nat] = (s: Heap) => owned_of(c, s)
 // the memory outside the allocator's untouched. Which of musl's choices it
 // makes -- its heuristics -- is left free.
 
-// the allocator's memory, as the invariant sees it
+// the allocator's memory, as the invariant sees it, mapped (user space:
+// no byte's address wraps)
 pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
-  holds(c, A, mview(vm, footprint(c, A, blocks)), blocks, vm.brk)
+  inv: holds(c, A, mview(vm, footprint(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm)
 
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g

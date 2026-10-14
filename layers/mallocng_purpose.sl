@@ -229,7 +229,7 @@ pred activated(A: Abs, A2: Abs, g: nat, idx: nat) =
 // returned; the memory outside the allocator's untouched. Its call to a_cas
 // needs the thread pointer sound.
 proc[MallocAbs] activate_group_purpose(c: Cfg, m: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(m)) && A.metas[uint(m)].avail = 0 &&
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && is_used(A, uint(m)) && A.metas[uint(m)].avail = 0 &&
     (all sc: nat, k: nat. sc < 48 && k < len(A.active[sc]) && A.active[sc][k] = uint(m) -> k = 0)
   either { overflow() } or {
     let A0 = A
