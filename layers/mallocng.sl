@@ -107,6 +107,7 @@ const ZERO_META : MetaV = MetaV { prev: 0, next: 0, mem: 0, avail: 0, freed: 0,
 type Use = unused                 // available or freed slot
          | block(p: nat)          // a client block starting at p
          | nested(g: nat)         // the group of meta g
+         | reserved               // handed out (alloc_slot), its block not yet framed (malloc)
 
 record Abs {
   secret      : nat
@@ -272,7 +273,8 @@ pred slot_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat, i: nat, u: Use
     block(p)  => blocks[bits[64](p)] != none && frame_ok(m, A.metas[g], i, p, blocks[bits[64](p)].value, 0),
     nested(h) => is_used(A, h) && A.metas[h].maplen = 0 && A.metas[h].mem = slot_start(A.metas[g], i) &&
                  UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) <= stride(A.metas[g]) &&
-                 frame_ok(m, A.metas[g], i, A.metas[h].mem, UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) - IB, 6)
+                 frame_ok(m, A.metas[g], i, A.metas[h].mem, UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) - IB, 6),
+    reserved  => true
   }
 
 pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
@@ -289,7 +291,12 @@ pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
      (bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0 -> i <= A.metas[g].last_idx) &&
      (i <= A.metas[g].last_idx ->
         (A.slots[g][i] = unused <-> bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0) &&
-        b8(m, slot_start(A.metas[g], i) - 4) = 0)) &&
+        b8(m, slot_start(A.metas[g], i) - 4) = 0) &&
+     // slots above the active index never handed out: in the freed mask
+     (b8(m, A.metas[g].mem + 8) % 32 < i && i <= A.metas[g].last_idx -> bit(A.metas[g].freed, i) = 1)) &&
+  // a group of 16-byte slots fully active (more would never reach a page
+  // boundary: try_avail's growth would not end)
+  (stride(A.metas[g]) = UNIT -> b8(m, A.metas[g].mem + 8) % 32 = A.metas[g].last_idx) &&
   // an individually mapped group, or one nested in a slot of another
   (A.metas[g].maplen > 0 ->
      A.metas[g].mem % 4096 = 0 &&
@@ -384,8 +391,11 @@ pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
   all k: nat, a: nat. k < len(rs) && rs[k][0] <= a && a < rs[k][0] + rs[k][1] && a notin live_of(blocks) ->
     mapped(vm, a / PAGE)
 
+// no slot handed out and not yet framed (between the allocator's calls)
+pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
+
 pred rep(c: Cfg, A: Abs, s: Heap) =
-  holds(c, A, mview(s.vm, footprint(c, A, s.blocks)), s.blocks, s.vm.brk) &&
+  holds(c, A, mview(s.vm, footprint(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) &&
   fp_mapped(fp_ranges(c, A), s.blocks, s.vm) &&
   live_rw(s)                 // (what the law inv_wf needs, stated directly)
 
@@ -396,3 +406,90 @@ fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
 fn owned_of(c: Cfg, s: Heap) -> Set[nat] = {a: nat | ex A: Abs. rep(c, A, s) && a in footprint(c, A, s.blocks)}
 
 fn owned(c: Cfg) -> Heap -> Set[nat] = (s: Heap) => owned_of(c, s)
+
+///////////////////////////////////////////////////////////////////////
+//  Internal steps by their purpose
+//
+// What an internal function is for, in the abstract state: a step from a
+// state A that holds to one A2 that holds (the client's blocks the same),
+// the memory outside the allocator's untouched. Which of musl's choices it
+// makes -- its heuristics -- is left free.
+
+// the allocator's memory, as the invariant sees it
+pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
+  holds(c, A, mview(vm, footprint(c, A, blocks)), blocks, vm.brk)
+
+pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
+pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g
+
+// the only reserved slot: slot i of g
+pred reserved_only(A: Abs, g: nat, i: nat) =
+  i < len(A.slots[g]) && A.slots[g][i] = reserved &&
+  (all h: nat, j: nat. j < len(A.slots[h]) && A.slots[h][j] = reserved -> h = g && j = i)
+
+// A2: A with class sc's active list reorganised -- its order, its groups'
+// links and masks (which free slots are available, which freed) -- and
+// groups without an unused slot dropped from it; nothing else
+pred reorganised(A: Abs, A2: Abs, sc: nat) =
+  (A2 with { metas: A.metas, active: A.active, slots: A.slots }) = A &&
+  (all g: nat. (A2.metas[g] with { prev: 0, next: 0, avail: 0, freed: 0 }) = (A.metas[g] with { prev: 0, next: 0, avail: 0, freed: 0 })) &&
+  len(A2.active) = len(A.active) && (all s: nat. s != sc -> A2.active[s] = A.active[s]) &&
+  (all g: nat. on_list(A2.active[sc], g) -> on_list(A.active[sc], g)) &&
+  (all g: nat. on_list(A.active[sc], g) && !on_list(A2.active[sc], g) -> !has_unused(A, g))
+
+// A2: A with slot i of g, unused in A, reserved; the other slots the same
+pred reserves(A: Abs, A2: Abs, g: nat, i: nat) =
+  i < len(A.slots[g]) && A.slots[g][i] = unused &&
+  len(A2.slots[g]) = len(A.slots[g]) && A2.slots[g][i] = reserved &&
+  (all j: nat. j != i -> A2.slots[g][j] = A.slots[g][j]) &&
+  (all h: nat. h != g -> A2.slots[h] = A.slots[h])
+
+// the memory outside the allocator's (in A) untouched, but for `extra` and
+// what was unmapped; the program break's start kept
+pred untouched(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, extra: Set[nat]) =
+  (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
+     vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
+  vm2.brk_start = vm.brk_start
+
+// try_avail(pm), pm class sc's active list: a free slot of a group already
+// there. Its bit (1 << i) returned, slot i of the list's head reserved --
+// the head now, if need be: the list reorganised --; or 0, no group of the
+// list with a free slot (the list then empty). A runs out of stack, if it
+// does, with the memory arbitrary.
+proc[World] try_avail_purpose(c: Cfg, A: Abs, blocks: Addr -> Option[nat], sc: nat, pm: bits[64]) -> bits[32] {
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
+    sc < 48 && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
+  either { overflow() } or {
+    let before = vm
+    let A2 = any A2: Abs where reorganised(A, A2, sc)
+    let r = any r: bits[32] where (
+      (r = 0 && len(A2.active[sc]) = 0 && (all g: nat. on_list(A.active[sc], g) -> !has_unused(A, g))) ||
+      (ex i: nat. i < 32 && uint(r) = 2^i && len(A2.active[sc]) > 0 && reserves(A, A2, A2.active[sc][0], i)))
+    havoc vm where holds_in(c, A2, vm, blocks) && untouched(c, A, blocks, before, vm, {})
+    return r
+  }
+}
+
+// alloc_slot(sc, req): a slot for a block of req bytes in class sc. Its
+// index i returned, slot i of the head of class sc's active list reserved
+// (an existing group's free slot, or a new group's: mapped, or nested in a
+// slot of a larger class), room in it for req bytes and the in-band
+// header; or -1, out of memory. The allocator may take memory that was
+// unmapped (a new group, a meta area) and set errno (a failed mmap).
+proc[World] alloc_slot_purpose(c: Cfg, A: Abs, blocks: Addr -> Option[nat], sc: bits[32], req: bits[64]) -> bits[32] {
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
+    uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
+  either { overflow() } or {
+    let before = vm
+    let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
+    let A2 = any A2: Abs where true
+    let r = any r: bits[32] where (
+      (r = bits[32](2^32 - 1) && no_reserved(A2)) ||
+      (uint(r) < 32 && len(A2.active[uint(sc)]) > 0 && reserved_only(A2, A2.active[uint(sc)][0], uint(r)) &&
+       A2.metas[A2.active[uint(sc)][0]].sizeclass = uint(sc) &&
+       uint(req) + IB <= stride(A2.metas[A2.active[uint(sc)][0]])))
+    havoc vm where holds_in(c, A2, vm, blocks) && untouched(c, A, blocks, before, vm, errno) &&
+      (all a: nat. a in footprint(c, A2, blocks) -> a in footprint(c, A, blocks) || !mapped(before, a / PAGE))
+    return r
+  }
+}
