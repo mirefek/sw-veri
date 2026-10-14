@@ -360,6 +360,49 @@ proof
   show by taut(rewrite(egm, e2), gb)
 qed
 
+// get_meta's contract at a call (its C function value)
+theorem mp.gm_q(c, regs, s, h, p, o2, g, i, g0, g1): c in mallocng.Cfg ->
+  app(c, "ctx") = c_src_malloc_mallocng_malloc.__malloc_context -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  p in bits(64) -> s in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, app(h, "A"), app(s, "vm"), app(h, "blocks")) -> abi.thread_ok(app(s, "vm"), app(s, "fs_base")) ->
+  i in omega -> mallocng.starts_at(app(h, "A"), g, i, p) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(app(g1, regs), s, o) -> runs(app(c_src_malloc_mallocng_malloc.get_slot_index_fun(), regs), s, o)) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(app(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1), regs), s, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && bits_of_int(64, fst(r)) = g)
+proof
+  assume hc hctx hsct hp hs hh hin hth hi hst hg1 hro h2
+  have rl rn r0 := apply(gc.regs1, hp, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, app(regs, 0)) = p by defs(simp(r0, hp), bits_of_int, pow2)
+  have gb: g in bits(64) proof
+    have iu _ _ := expand(hst, mallocng.starts_at)
+    have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+    have gtop _ := apply(mp.meta_word, hc, (app(h, "A") in univ(1) by simp(hu)), hat, hin, iu)
+    have go _ _ := apply(mp.meta_mem, hc, (app(h, "A") in univ(1) by simp(hu)), hat, hin, iu)
+    show by arith(gtop, go)
+  qed
+  have pc: all o. runs(c_src_malloc_mallocng_malloc.get_meta(bits_of_int(64, app(regs, 0)), g0, g1), s, o) ->
+      (ex vm. vm in x86_64_linux.Vm && o = exc(fn_update(s, "vm", vm), exc_val("stack_overflow", empty))) || o = ok(s, g) proof
+    fix o
+    assume hr
+    have e _ := apply(mp.gm_run[c := c, p := p, s := s, h := h, o := o, g := g, i := i, g0 := g0, g1 := g1], hc, hctx, hsct, hp, hs, hh, hin, hth, hi, hst, hg1, rewrite(bp, hr))
+    show := e
+  qed
+  have res: all o. runs(gimple.result(64, g), s, o) -> ex u. u in bits(64) && bits_of_int(64, u) = g && o = ok(s, u) proof
+    fix o
+    assume hr
+    have e := mp(all_elim(g.result64_inv, {s}, {g}, {o}), gb, hr)
+    show by ex_intro({g}, taut(gb, (bits_of_int(64, g) = g by simp(gb)), e))
+  qed
+  have hf: runs(app(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(c_src_malloc_mallocng_malloc.get_meta(bits_of_int(64, app(x0, 0)), g0, g1), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. any_rel(x8. x8 in bits(64), x8. x2 = ok(x6, pair(x7, x8))),
+    x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), regs), s, o2) := expand(h2, c_src_malloc_mallocng_malloc.get_meta_fun)
+  show := apply(g.fun_q[p := x0. c_src_malloc_mallocng_malloc.get_meta(bits_of_int(64, app(x0, 0)), g0, g1), w := 64, n := 1, regs := regs, s := s, o2 := o2, v := g], ra, o1, hs, pc, res, hf)
+qed
+
 // get_meta's code by its purpose: its contract, the ghost part kept
 theorem mp.gm: all c p g0 g1. c in mallocng.Cfg ->
   app(c, "ctx") = c_src_malloc_mallocng_malloc.__malloc_context -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes -> p in bits(64) ->
@@ -446,30 +489,23 @@ qed
 
 // get_stride's code by its purpose: the meta word it reads packs the
 // group's fields (`mp.meta_word`), so its stride is the group's
-theorem mp.gst: all c g. c in mallocng.Cfg -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
-  refines_ghost(c_src_malloc_mallocng_malloc.get_stride(g), mallocng_purpose.get_stride_purpose(c, g), abi.World, mp.G)
+// get_stride's contract, the ghost part h read: for g a group in use, the
+// code returns its stride, the world unchanged
+theorem mp.gst_run(c, g, s, h, o): c in mallocng.Cfg -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
+  s in abi.World -> h in mp.G -> mallocng.holds_in(c, app(h, "A"), app(s, "vm"), app(h, "blocks")) -> mallocng.is_used(app(h, "A"), g) ->
+  runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> o = ok(s, bits_of_int(64, mallocng.stride(app(app(app(h, "A"), "metas"), g))))
 proof
-  fix c g
-  assume hc hsct hg
+  assume hc hsct hg hs hh hin hus hr
   have rp: all s o. runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> pair(s, o) in univ(1) proof
     fix s o
     assume hr
     show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_stride))
   qed
-  have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) ->
-      (mallocng.holds_in(c, app(union2(s, h), "A"), app(union2(s, h), "vm"), app(union2(s, h), "blocks")) && mallocng.is_used(app(union2(s, h), "A"), g)) ->
-      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
-      (ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, mallocng.stride(app(app(app(union2(s, h), "A"), "metas"), g)))))) proof
-    fix s h o
-    assume hs hh hr hpre
     have hu hd hbt hat := mp(all_elim(mp.g_rec, {h}), hh)
-    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
     let V0 := app(s, "vm")
     let A := app(h, "A")
     let B := app(h, "blocks")
     let V := app(app(A, "metas"), g)
-    have hin: mallocng.holds_in(c, A, V0, B) by simp(hpre, sd, hd)
-    have hus: mallocng.is_used(A, g) by simp(hpre, sd, hd)
     have au: A in univ(1) by simp(hu)
     have go: g in omega by simp(hg)
     // the meta's word: its fields packed
@@ -510,9 +546,68 @@ proof
     // the code's run: the stride returned
     have su: s in univ(1) by simp(mp(all_elim(rp, {s}, {o}), hr))
     have oe := apply(ms.gs_run, {g}, {s}, {o}, hg, hs, su, gpre, hr)
-    have ra: app(app(app(union2(s, h), "A"), "metas"), g) = V by simp(sd, hd)
+    show by simp(oe, sw)
+qed
+
+// get_stride's contract at a call (its C function value)
+theorem mp.gst_q(c, regs, s, h, g, o2): c in mallocng.Cfg -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
+  s in abi.World -> h in mp.G -> mallocng.holds_in(c, app(h, "A"), app(s, "vm"), app(h, "blocks")) -> mallocng.is_used(app(h, "A"), g) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, g))) -> runs(app(c_src_malloc_mallocng_malloc.get_stride_fun(), regs), s, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(s, "vm", app(s, "vm")), r) && bits_of_int(64, fst(r)) = bits_of_int(64, mallocng.stride(app(app(app(h, "A"), "metas"), g))))
+proof
+  assume hc hsct hg hs hh hin hus hro h2
+  let SV := bits_of_int(64, mallocng.stride(app(app(app(h, "A"), "metas"), g)))
+  have rl rn r0 := apply(gc.regs1, hg, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, app(regs, 0)) = g by defs(simp(r0, hg), bits_of_int, pow2)
+  have pc: all o. runs(c_src_malloc_mallocng_malloc.get_stride(bits_of_int(64, app(regs, 0))), s, o) ->
+      (ex vm. vm in x86_64_linux.Vm && o = exc(fn_update(s, "vm", vm), exc_val("stack_overflow", empty))) || o = ok(s, SV) proof
+    fix o
+    assume hr
+    have e := apply(mp.gst_run[c := c, g := g, s := s, h := h, o := o], hc, hsct, hg, hs, hh, hin, hus, rewrite(bp, hr))
+    show by taut(e)
+  qed
+  have sb: SV in bits(64) by defs(simp(), bits_of_int, pow2)
+  have res: all o. runs(gimple.result(64, SV), s, o) -> ex u. u in bits(64) && bits_of_int(64, u) = SV && o = ok(s, u) proof
+    fix o
+    assume hr
+    have e := mp(all_elim(g.result64_inv, {s}, {SV}, {o}), sb, hr)
+    show by ex_intro({SV}, taut(sb, (bits_of_int(64, SV) = SV by simp(sb)), e))
+  qed
+  have hf: runs(app(fn_build(set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)), x0. mkprog(x1 x2. !ord_le(1, seq_len(x0)) || bind_rel(c_src_malloc_mallocng_malloc.get_stride(bits_of_int(64, app(x0, 0))), x1, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. any_rel(x8. x8 in bits(64), x8. x2 = ok(x6, pair(x7, x8))),
+    x6 x7. x2 = exc(x6, x7), x6. x2 = diverge(x6))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), regs), s, o2) := expand(h2, c_src_malloc_mallocng_malloc.get_stride_fun)
+  show := apply(g.fun_q[p := x0. c_src_malloc_mallocng_malloc.get_stride(bits_of_int(64, app(x0, 0))), w := 64, n := 1, regs := regs, s := s, o2 := o2, v := SV], ra, o1, hs, pc, res, hf)
+qed
+
+// get_stride's code by its purpose: its contract, the ghost part kept
+theorem mp.gst: all c g. c in mallocng.Cfg -> app(c, "sct") = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.get_stride(g), mallocng_purpose.get_stride_purpose(c, g), abi.World, mp.G)
+proof
+  fix c g
+  assume hc hsct hg
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_stride))
+  qed
+  have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) ->
+      (mallocng.holds_in(c, app(union2(s, h), "A"), app(union2(s, h), "vm"), app(union2(s, h), "blocks")) && mallocng.is_used(app(union2(s, h), "A"), g)) ->
+      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, mallocng.stride(app(app(app(union2(s, h), "A"), "metas"), g)))))) proof
+    fix s h o
+    assume hs hh hr hpre
+    have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+    have hin: mallocng.holds_in(c, app(h, "A"), app(s, "vm"), app(h, "blocks")) by simp(hpre, sd, hd)
+    have hus: mallocng.is_used(app(h, "A"), g) by simp(hpre, sd, hd)
+    have oe := apply(mp.gst_run[c := c, g := g, s := s, h := h, o := o], hc, hsct, hg, hs, hh, hin, hus, hr)
+    have ra: app(app(app(union2(s, h), "A"), "metas"), g) = app(app(app(h, "A"), "metas"), g) by simp(sd, hd)
     have fin: ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, mallocng.stride(app(app(app(union2(s, h), "A"), "metas"), g)))))
-      by ex_intro({s}, {bits_of_int(64, mallocng_specs.stride_w(V0, g))}, simp(oe, sw, ra))
+      by ex_intro({s}, {bits_of_int(64, mallocng.stride(app(app(app(h, "A"), "metas"), g)))}, simp(oe, ra))
     show by taut(fin)
   qed
   show by defs(apply(ct.refines_contract, mp.g_world, rp, body), mallocng_purpose.get_stride_purpose)
