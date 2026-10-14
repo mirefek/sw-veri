@@ -96,11 +96,8 @@ translation verification, the engine):
   directly (`ct.refines_contract`; no hand-written memory-level spec
   between; get_slot_index, get_stride, get_meta, `__malloc_allzerop`
   done). Then the "purpose" name dropped: these are the specs. Next:
-  - the memory-level specs and C2s of get_slot_index, get_meta, get_stride
-    and allzerop retired where no caller needs them, with their
-    compositions (proofs/mallocng_cfg.core, proofs/mallocng_compose.core);
-    the effect summaries `ms.gm_run`, `ms.az_run` stay (the run, with the
-    callees' contracts premises);
+  - get_stride's memory-level spec and C2 retired once enframe (its only
+    memory-level caller) is migrated;
   - the right level per function: callees called where the invariant does
     not hold (enframe on a reserved slot, activate_group and the list
     operations inside try_avail) get a spec relative to a local invariant

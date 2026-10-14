@@ -414,23 +414,9 @@ fn enframe_spec_fun(sct: bits[64]) -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
-// get_slot_index(p): the index of p's slot in its group, the low 5 bits
-// of p's header byte at p - 3
-pred get_slot_index_pre(vm: Vm, objs: Set[nat], p: Addr) = 3 < uint(p) && usable(vm, objs, uint(p) - 3, 1, false)
-
-proc[World] get_slot_index_spec(p: bits[64]) -> bits[32] {
-  require get_slot_index_pre(vm, objs, p)
-  either { overflow() } or { return bits[32](bytes_at(vm, p - 3, 1) % 32) }
-}
-
-fn get_slot_index_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = get_slot_index_spec(bits[64](args[0]))
-  let w = result[32](r)
-  return (w, any bits[64])
-}
-
-// get_meta(p): the meta of p's group. p's offset from the group's storage,
+// get_meta's effect (proofs/mallocng_slots.core's `ms.gm_run`; its spec
+// by purpose in layers/mallocng_purpose.sl): the meta of p's group. p's
+// offset from the group's storage,
 // in units: the 16-bit word at p - 2, or the 32-bit one at p - 8 when the
 // byte at p - 4 is set; the group's header a unit before the storage, its
 // first word the meta.
@@ -471,18 +457,6 @@ pred get_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, sct: Addr, p: Add
   (mword(vm, gm_meta(vm, p)) / 4096 != 0 -> gm_off(vm, p) < mword(vm, gm_meta(vm, p)) / 4096 * 256) &&
   thread_ok(vm, fs)
 
-proc[World] get_meta_spec(ctx: bits[64], sct: bits[64], p: bits[64]) -> bits[64] {
-  require get_meta_pre(vm, objs, fs_base, ctx, sct, p)
-  either { overflow() } or { return gm_meta(vm, p) }
-}
-
-fn get_meta_spec_fun(ctx: bits[64], sct: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = get_meta_spec(ctx, sct, bits[64](args[0]))
-  let w = result[64](r)
-  return (w, any bits[64])
-}
-
 // activate_group(m): the slots of m's group up to its active index idx
 // (act: the low idx + 1 bits; idx the low 5 bits of the byte at the
 // group's header + 8, the header at m's mem word) leave the freed mask and
@@ -518,24 +492,13 @@ fn activate_group_spec_fun() -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
-// __malloc_allzerop(p): whether p's slot is known zero-filled (calloc then
-// skips zeroing it): its group without a size class (63: mapped on its
-// own), or its stride below its class's (a group of one slot mapped on its
-// own). get_meta's checks; with them get_stride's precondition holds.
+// __malloc_allzerop's effect (`ms.az_run`; its spec by purpose in
+// layers/mallocng_purpose.sl): whether p's slot is known zero-filled
+// (calloc then skips zeroing it): its group without a size class (63:
+// mapped on its own), or its stride below its class's (a group of one slot
+// mapped on its own).
 pred allzero(vm: Vm, m: Addr) =
   48 <= mword(vm, m) / 64 % 64 || stride_w(vm, m) < UNIT * size_classes[mword(vm, m) / 64 % 64]
-
-proc[World] allzerop_spec(ctx: bits[64], sct: bits[64], p: bits[64]) -> bits[32] {
-  require get_meta_pre(vm, objs, fs_base, ctx, sct, p)
-  either { overflow() } or { return if allzero(vm, gm_meta(vm, p)) { 1 } else { 0 } }
-}
-
-fn allzerop_spec_fun(ctx: bits[64], sct: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = allzerop_spec(ctx, sct, bits[64](args[0]))
-  let w = result[32](r)
-  return (w, any bits[64])
-}
 
 ///////////////////////////////////////////////////////////////////////
 //  The malloc context's counters (struct malloc_context at ctx: the

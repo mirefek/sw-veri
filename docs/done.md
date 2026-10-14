@@ -510,4 +510,8 @@ item is a short summary of finished work; details are in the files named.
   used by their meaning-level callers' rules (`mp.gm_q`, `mp.gst_q`, the
   result typed: `g.fun_q`); its run an effect summary (`ms.az_run`, also
   the memory-level C2's); musl's test the group's by the meta word's
-  fields (`mp.gs_pre`).
+  fields (`mp.gs_pre`). The memory-level specs of get_slot_index,
+  get_meta and allzerop then retired, with their C2s, callers' rules and
+  compositions (`gsitc/gmtc/aztc/gsit.composed`); their effect
+  summaries (`ms.gm_run`, `ms.az_run`) and get_stride's spec (enframe's
+  C2 calls it) stay.

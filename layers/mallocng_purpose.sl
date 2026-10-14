@@ -3,9 +3,8 @@ layer mallocng_purpose uses gimple, abi, mallocng
 // Specs of mallocng's internal functions by their purpose: what each is
 // for in the abstract state (layers/mallocng.sl's `Abs`, a ghost of the C
 // world), not how musl's code does it. Each a contract (layers/abi.sl): a
-// precondition, then a stack overflow or the effect. Their C2: from the
-// function's memory-level spec (layers/mallocng_specs.sl, or the code's
-// effect), `refines_ghost` (proofs/mallocng_purpose.core).
+// precondition, then a stack overflow or the effect. Their C2: the code
+// refines them directly, `refines_ghost` (proofs/mallocng_purpose.core).
 
 // The state of the allocator's internal functions: the C world, the
 // client's blocks (malloc's ghost), and the abstract state A (a ghost the
