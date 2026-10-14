@@ -15,9 +15,6 @@ state MallocAbs extends Heap {
   ghost A : Abs
 }
 
-// every byte (memory as a whole, seen as the invariant sees it)
-fn all_bytes() -> Set[nat] = {a: nat | true}
-
 // set_size(p, end, n), the n bytes at p a block's (or a nested group's) in
 // a slot ending at end: the slack after them recorded (`size_ok`), the
 // header byte's low 5 bits (the slot's index) kept, no other byte written.
@@ -37,7 +34,7 @@ proc[World] set_size_purpose(p: bits[64], end: bits[64], n: bits[64]) {
 // get_slot_index(p), p where a client block or a nested group starts: the
 // index of its slot in its group
 proc[MallocAbs] get_slot_index_purpose(c: Cfg, p: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
   either { overflow() } or {
     return any i: bits[32] where ex g: nat. starts_at(A, g, uint(i), uint(p))
   }
@@ -47,7 +44,7 @@ proc[MallocAbs] get_slot_index_purpose(c: Cfg, p: bits[64]) -> bits[32] {
 // of its group (the thread pointer sound: get_meta's checks may call
 // a_crash)
 proc[MallocAbs] get_meta_purpose(c: Cfg, p: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
   either { overflow() } or {
     return any m: bits[64] where ex i: nat. starts_at(A, uint(m), i, uint(p))
   }
@@ -56,7 +53,7 @@ proc[MallocAbs] get_meta_purpose(c: Cfg, p: bits[64]) -> bits[64] {
 // __malloc_allzerop(p), p where a client block or a nested group starts:
 // whether its group is one slot mapped on its own (`own_mapping`)
 proc[MallocAbs] allzerop_purpose(c: Cfg, p: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
   either { overflow() } or {
     return any r: bits[32] where ex g: nat, i: nat. starts_at(A, g, i, uint(p)) &&
       (own_mapping(A.metas[g]) && r = 1 || !own_mapping(A.metas[g]) && r = 0)

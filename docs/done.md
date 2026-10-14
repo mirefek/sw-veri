@@ -522,3 +522,14 @@ item is a short summary of finished work; details are in the files named.
   reading memory after stores (`mp.st_out`, `mp.st_at`, `mp.rd_out`,
   `mp.rd_at1`, `mp.rd_at4`, `mp.wr8_out` ...); a contract ending without a
   value (`ct.contract_done`).
+- **The invariant with a slot reserved**: a reserved slot's interior
+  (`in_slot`, `in_reserved`) is no longer the allocator's -- out of the
+  footprint and of the permissions conjunct -- so whoever reserved it
+  writes it without touching the invariant; its access a fact of its own
+  (`slot_rw`). New structural facts: the groups apart from the fixed
+  regions (`groups_apart`, `fixed_ranges`), the byte after a group's last
+  slot 0. Reading lemmas: `mp.slot_in_group`, `mp.fixed_unres`
+  (the context, areas and class table in no reserved slot), `mp.nores`;
+  get_slot_index, get_meta and allzerop require `no_reserved` (their
+  callers' context). `holds`' and `group_ok`'s conjuncts labelled; the
+  proofs take them by label (`have {uo = used, po = perms} := ..`).

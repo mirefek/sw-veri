@@ -49,10 +49,21 @@ proof
   show a in app(mallocng.owned(c), s) by rewrite(sym(mp(mallocng.owned_app[c := c, s := s], hs)), m)
 qed
 
+// a byte of the footprint: in its ranges, no client's (and in no reserved
+// slot)
+theorem mallocng.fp_parts(c, A, b, a): a in mallocng.footprint(c, A, b) ->
+  a in omega && mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && !(a in malloc.live_of(b))
+proof
+  assume h
+  have u1 := unsel(expand(h, mallocng.footprint))
+  have i1: a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) by taut(u1)
+  show by taut(unsel(expand(i1, mallocng.fp_set)))
+qed
+
 theorem mallocng.fp_not_live(c, A, b, a): a in mallocng.footprint(c, A, b) -> !(a in malloc.live_of(b))
 proof
   assume h
-  show !(a in malloc.live_of(b)) by taut(unsel(expand(h, mallocng.footprint, mallocng.fp_set)))
+  show !(a in malloc.live_of(b)) by taut(mp(mallocng.fp_parts[c := c, A := A, b := b, a := a], h))
 qed
 
 // ----------------------------------------------------------------------
@@ -110,7 +121,7 @@ proof
   have r: mallocng.rep(c, A, s) by taut(hA)
   have f: a in mallocng.footprint(c, A, app(s, "blocks")) by taut(hA)
   // a is in one of the ranges, and not live
-  have u := unsel(expand(f, mallocng.footprint, mallocng.fp_set))
+  have u := mp(mallocng.fp_parts[c := c, A := A, b := app(s, "blocks"), a := a], f)
   have ir: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) by taut(u)
   have nl: !(a in malloc.live_of(app(s, "blocks"))) by taut(u)
   obtain k, hk from expand(ir, mallocng.in_ranges)
@@ -221,7 +232,16 @@ proof
   have irk: mallocng.in_range(x, app(mallocng.fp_ranges(c, A), k)) by defs(taut(hp), mallocng.in_range)
   have ir: mallocng.in_ranges(x, mallocng.fp_ranges(c, A)) by defs(ex_intro({k}, taut(kin, klt, irk)), mallocng.in_ranges)
   have nl: !(x in malloc.live_of(app(s, "blocks"))) by taut(hp2)
-  have hx: x in mallocng.footprint(c, A, app(s, "blocks")) by defs(sel(taut(ho, ir, nl)), mallocng.footprint, mallocng.fp_set)
+  // (no slot reserved between the allocator's calls: x in none)
+  have NR0: mallocng.no_reserved(A) by taut(rs)
+  have nrx: mallocng.in_reserved(A, x) -> false proof
+    assume h
+    obtain g i, hg hi _ hil hrs _ from expand(h, mallocng.in_reserved)
+    have ne := mp(all_elim(expand(NR0, mallocng.no_reserved), {g}, {i}), conj(hg, hi), hil)
+    show by taut(ne, hrs)
+  qed
+  have hfs: x in mallocng.fp_set(mallocng.fp_ranges(c, A), app(s, "blocks")) by defs(sel(taut(ho, ir, nl)), mallocng.fp_set)
+  have hx: x in mallocng.footprint(c, A, app(s, "blocks")) by defs(sel(taut(ho, hfs, nrx)), mallocng.footprint)
   have eqs := mp(mp(mp(mp(mp(mp(mallocng.agree_fp[c := c, s := s, t := t, A := A, x := x], hs), ha), hr), hg), ho), hx)
   have ep: app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)) by taut(eqs)
   have mt: x86_64_linux.mapped(app(t, "vm"), int_div(x, x86_64_linux.PAGE))

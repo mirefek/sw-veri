@@ -170,18 +170,40 @@ fn auxv_ranges(A: Abs) -> List[(nat, nat)] =
 
 fn data_ranges(c: Cfg) -> List[(nat, nat)] = [(c.ctx, CTX_SIZE), (c.lock, 4), (c.libc, 16)]
 
-// everything the allocator owns (before taking out the live blocks)
-fn fp_ranges(c: Cfg, A: Abs) -> List[(nat, nat)] =
+// the allocator's fixed regions: the image, its data, the auxiliary
+// vector, the meta areas, the reserve, the class table
+fn fixed_ranges(c: Cfg, A: Abs) -> List[(nat, nat)] =
   ro_ranges(c.file) ++ data_ranges(c) ++ auxv_ranges(A) ++
   [(A.areas[k], 4096) for k in 0..len(A.areas)] ++ [(A.reserve, 4096 * A.reserve_cnt)] ++
-  [(c.sct, 2 * 48)] ++
-  [group_range(A.metas[A.used[k]]) for k in 0..len(A.used)]
+  [(c.sct, 2 * 48)]
+
+// everything the allocator owns (before taking out the live blocks): its
+// fixed regions and its groups
+fn fp_ranges(c: Cfg, A: Abs) -> List[(nat, nat)] =
+  fixed_ranges(c, A) ++ [group_range(A.metas[A.used[k]]) for k in 0..len(A.used)]
 
 fn fp_set(rs: List[(nat, nat)], blocks: Addr -> Option[nat]) -> Set[nat] =
   {a: nat | in_ranges(a, rs) && a notin live_of(blocks)}
 
+// the interior of slot i of a group: all but the first of its in-band
+// header's bytes (the previous slot's end check), up to its end
+pred in_slot(v: MetaV, i: nat, a: nat) = slot_start(v, i) - IB < a && a < slot_end(v, i)
+
+// a reserved slot's interior: handed out (`alloc_slot`), whoever reserved
+// it frames it (`enframe`) -- no longer the allocator's
+pred in_reserved(A: Abs, a: nat) =
+  ex g: nat, i: nat. is_used(A, g) && i < len(A.slots[g]) && A.slots[g][i] = reserved && in_slot(A.metas[g], i, a)
+
 // the bytes the allocator owns
-fn footprint(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] = fp_set(fp_ranges(c, A), blocks)
+fn footprint(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
+  {a: nat | a in fp_set(fp_ranges(c, A), blocks) && !in_reserved(A, a)}
+
+// every byte (memory as a whole, seen as the invariant sees it)
+fn all_bytes() -> Set[nat] = {a: nat | true}
+
+// the interior of slot i accessible: readable and writable, not the stack
+pred slot_rw(vm: Vm, v: MetaV, i: nat) =
+  all a: nat. in_slot(v, i, a) -> m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack
 
 ///////////////////////////////////////////////////////////////////////
 //  Memory agrees with the abstract state
@@ -292,15 +314,15 @@ pred slot_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat, i: nat, u: Use
   }
 
 pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
-  meta_in_memory(m, g, A.metas[g]) &&
-  (A.metas[g].sizeclass < 48 || A.metas[g].sizeclass = 63) &&
+  mim: meta_in_memory(m, g, A.metas[g]) &&
+  cls: (A.metas[g].sizeclass < 48 || A.metas[g].sizeclass = 63) &&
   // the group header points back (and is not client memory); active_idx
-  (rd(m, A.metas[g].mem, 8) = g && A.metas[g].mem % UNIT = 0 && A.metas[g].mem > 0) &&
-  (all a: nat. A.metas[g].mem <= a && a < A.metas[g].mem + UNIT -> a notin live_of(blocks)) &&
-  b8(m, A.metas[g].mem + 8) % 32 <= A.metas[g].last_idx &&
+  hdr: (rd(m, A.metas[g].mem, 8) = g && A.metas[g].mem % UNIT = 0 && A.metas[g].mem > 0) &&
+  hdr_own: (all a: nat. A.metas[g].mem <= a && a < A.metas[g].mem + UNIT -> a notin live_of(blocks)) &&
+  act: b8(m, A.metas[g].mem + 8) % 32 <= A.metas[g].last_idx &&
   // slots: free ones are in exactly one mask, the active mask only below active_idx
-  len(A.slots[g]) = A.metas[g].last_idx + 1 &&
-  (all i: nat. i < 32 ->
+  nslots: len(A.slots[g]) = A.metas[g].last_idx + 1 &&
+  masks: (all i: nat. i < 32 ->
      (bit(A.metas[g].avail, i) = 1 -> i <= b8(m, A.metas[g].mem + 8) % 32 && bit(A.metas[g].freed, i) = 0) &&
      (bit(A.metas[g].avail, i) + bit(A.metas[g].freed, i) > 0 -> i <= A.metas[g].last_idx) &&
      (i <= A.metas[g].last_idx ->
@@ -310,23 +332,26 @@ pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
      (b8(m, A.metas[g].mem + 8) % 32 < i && i <= A.metas[g].last_idx -> bit(A.metas[g].freed, i) = 1)) &&
   // a group of 16-byte slots fully active (more would never reach a page
   // boundary: try_avail's growth would not end)
-  (stride(A.metas[g]) = UNIT -> b8(m, A.metas[g].mem + 8) % 32 = A.metas[g].last_idx) &&
+  small: (stride(A.metas[g]) = UNIT -> b8(m, A.metas[g].mem + 8) % 32 = A.metas[g].last_idx) &&
   // an individually mapped group, or one nested in a slot of another
-  (A.metas[g].maplen > 0 ->
+  mapped: (A.metas[g].maplen > 0 ->
      A.metas[g].mem % 4096 = 0 &&
      UNIT + stride(A.metas[g]) * (A.metas[g].last_idx + 1) <= A.metas[g].maplen * 4096) &&
-  (A.metas[g].maplen = 0 ->
+  nested: (A.metas[g].maplen = 0 ->
      ex k: nat, i: nat. k < len(A.used) && i < len(A.slots[A.used[k]]) && A.slots[A.used[k]][i] = nested(g)) &&
   // big allocations: one slot, in use
-  (A.metas[g].sizeclass = 63 ->
+  big: (A.metas[g].sizeclass = 63 ->
      A.metas[g].last_idx = 0 && A.metas[g].maplen > 0 && A.metas[g].avail = 0 && A.metas[g].freed = 0) &&
   // on an active list exactly when linked
-  (A.metas[g].next != 0 <->
+  linked: (A.metas[g].next != 0 <->
      A.metas[g].sizeclass < 48 &&
      (ex k: nat. k < len(A.active[A.metas[g].sizeclass]) && A.active[A.metas[g].sizeclass][k] = g)) &&
-  (A.metas[g].next = 0 -> A.metas[g].prev = 0) &&
+  unlinked: (A.metas[g].next = 0 -> A.metas[g].prev = 0) &&
   // the slots in use
-  (all i: nat. i < len(A.slots[g]) -> slot_ok(A, m, blocks, g, i, A.slots[g][i]))
+  slots: (all i: nat. i < len(A.slots[g]) -> slot_ok(A, m, blocks, g, i, A.slots[g][i])) &&
+  // the byte after the last slot 0 (its end check: the next slot's header
+  // byte for the others; `alloc_group` writes it for a nested group)
+  sentinel: b8(m, slot_end(A.metas[g], A.metas[g].last_idx)) = 0
 
 pred used_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
   all k: nat. k < len(A.used) -> group_ok(A, m, blocks, A.used[k])
@@ -372,7 +397,7 @@ pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
      m_rw(m, a) && pg(m, a).value.kind != stack) &&
   (all k: nat, a: nat. k < len(A.used) &&
      group_range(A.metas[A.used[k]])[0] <= a && a < group_range(A.metas[A.used[k]])[0] + group_range(A.metas[A.used[k]])[1] &&
-     a notin live_of(blocks) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
+     a notin live_of(blocks) && !in_reserved(A, a) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
   (all k: nat, a: nat. k < len(auxv_ranges(A)) &&
      auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
        m_mapped(m, a) && pg(m, a).value.prot.r)
@@ -403,12 +428,17 @@ pred fixed_free(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) =
   (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks)) &&
   (all a: nat. c.ctx <= a && a < c.ctx + CTX_SIZE -> a notin live_of(blocks))
 
+// the groups (nested ones too: inside their parent's slot) apart from the
+// fixed regions -- a group's slot written is none of those
+pred groups_apart(c: Cfg, A: Abs) =
+  all k: nat, a: nat. k < len(A.used) && in_range(a, group_range(A.metas[A.used[k]])) -> !in_ranges(a, fixed_ranges(c, A))
+
 pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
-  image_ok(c, m) && ctx_ok(c, A, m) && fresh_ok(c, A, m) && areas_ok(c, A, m) &&
-  metas_partition(A) && used_ok(A, m, blocks) && active_ok(A) && blocks_ok(A, blocks) &&
-  normal(A) && brk_ok(A, brk) && perms_ok(c, A, m, blocks) && separate(regions(c, A)) &&
-  blocks_wf(blocks) &&       // (what the law inv_wf needs, stated directly)
-  classes_ok(c, m) && fixed_free(c, A, blocks)
+  image: image_ok(c, m) && ctx: ctx_ok(c, A, m) && fresh: fresh_ok(c, A, m) && areas: areas_ok(c, A, m) &&
+  part: metas_partition(A) && used: used_ok(A, m, blocks) && active: active_ok(A) && in_slots: blocks_ok(A, blocks) &&
+  normal: normal(A) && brk: brk_ok(A, brk) && perms: perms_ok(c, A, m, blocks) && sep: separate(regions(c, A)) &&
+  wf: blocks_wf(blocks) &&       // (what the law inv_wf needs, stated directly)
+  classes: classes_ok(c, m) && fixed: fixed_free(c, A, blocks) && apart: groups_apart(c, A)
 
 ///////////////////////////////////////////////////////////////////////
 //  The invariant and the owned bytes
