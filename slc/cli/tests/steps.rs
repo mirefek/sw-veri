@@ -56,11 +56,15 @@ fn loaded_code_facts_check() {
 #[test]
 fn claim_proofs_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let claim = root.join("build/musl_malloc.core");
-    if !claim.exists() {
+    let elf = root.join("build/test_malloc");
+    if !elf.exists() {
         return skip("run scripts/build-musl.sh first");
     }
     let slc = env!("CARGO_BIN_EXE_slc");
+    // (the claim from the current layers)
+    let claim = std::env::temp_dir().join(format!("slc-claim-{}.core", std::process::id()));
+    let g = Command::new(slc).current_dir(&root).args(["claim", "malloc", "--elf"]).arg(&elf).arg("-o").arg(&claim).output().unwrap();
+    assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     for files in [
         vec!["core/prelude.core", "core/logic.core", "core/sets.core", "CLAIM", "proofs/mallocng.core", "proofs/musl_malloc.core"],
         vec!["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "CLAIM", "proofs/malloc_client.core"],
@@ -77,6 +81,8 @@ fn claim_proofs_check() {
         let o = c.output().unwrap();
         assert!(o.status.success(), "{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     }
+    let _ = std::fs::remove_file(&claim);
+    let _ = std::fs::remove_file(claim.with_extension("summary.txt"));
 }
 
 #[test]

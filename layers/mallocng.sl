@@ -33,6 +33,7 @@ record Cfg {
   ctx  : nat      // __malloc_context
   lock : nat      // __malloc_lock
   libc : nat      // __libc
+  sct  : nat      // __malloc_size_classes (read-only)
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -173,6 +174,7 @@ fn data_ranges(c: Cfg) -> List[(nat, nat)] = [(c.ctx, CTX_SIZE), (c.lock, 4), (c
 fn fp_ranges(c: Cfg, A: Abs) -> List[(nat, nat)] =
   ro_ranges(c.file) ++ data_ranges(c) ++ auxv_ranges(A) ++
   [(A.areas[k], 4096) for k in 0..len(A.areas)] ++ [(A.reserve, 4096 * A.reserve_cnt)] ++
+  [(c.sct, 2 * 48)] ++
   [group_range(A.metas[A.used[k]]) for k in 0..len(A.used)]
 
 fn fp_set(rs: List[(nat, nat)], blocks: Addr -> Option[nat]) -> Set[nat] =
@@ -231,7 +233,7 @@ pred areas_ok(c: Cfg, A: Abs, m: Mem) =
      rd(m, A.areas[k], 8) = A.secret &&
      rd(m, A.areas[k] + 8, 8) = (if k + 1 < len(A.areas) { A.areas[k + 1] } else { 0 }) &&
      rd(m, A.areas[k] + 16, 4) = NSLOTS &&
-     (all a: nat. A.areas[k] <= a && a < A.areas[k] + 4096 -> m_rw(m, a))) &&
+     (all a: nat. A.areas[k] <= a && a < A.areas[k] + 4096 -> m_rw(m, a) && pg(m, a).value.kind != stack)) &&
   (all k: nat, l: nat. k < len(A.areas) && l < len(A.areas) && A.areas[k] = A.areas[l] -> k = l) &&
   // reserved pages: mapped (maybe PROT_NONE), zero
   (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> m_mapped(m, a) && b8(m, a) = 0)
@@ -383,11 +385,21 @@ pred separate(rs: List[(nat, nat)]) =
 pred brk_ok(A: Abs, brk: Addr) =
   A.brk = 0 || A.brk = 2^64 - 1 || (A.brk = uint(brk) && A.brk % 4096 = 0)
 
+// the size classes' table (the code reads it): readable, as the source has it
+pred classes_ok(c: Cfg, m: Mem) =
+  (all i: nat. i < 48 -> rd(m, c.sct + 2 * i, 2) = size_classes[i]) &&
+  (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack)
+
+// the meta areas: no client's bytes
+pred areas_free(A: Abs, blocks: Addr -> Option[nat]) =
+  all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)
+
 pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
   image_ok(c, m) && ctx_ok(c, A, m) && fresh_ok(c, A, m) && areas_ok(c, A, m) &&
   metas_partition(A) && used_ok(A, m, blocks) && active_ok(A) && blocks_ok(A, blocks) &&
   normal(A) && brk_ok(A, brk) && perms_ok(c, A, m, blocks) && separate(regions(c, A)) &&
-  blocks_wf(blocks)          // (what the law inv_wf needs, stated directly)
+  blocks_wf(blocks) &&       // (what the law inv_wf needs, stated directly)
+  classes_ok(c, m) && areas_free(A, blocks)
 
 ///////////////////////////////////////////////////////////////////////
 //  The invariant and the owned bytes
