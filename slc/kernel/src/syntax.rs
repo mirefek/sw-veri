@@ -505,6 +505,17 @@ pub trait Prover {
     }
 }
 
+/// The proof cache of `slc kernel-check` (`ext::cache`), supplied by the
+/// caller of `load_checked`: per proof, the open lemmas it rested on when
+/// it was checked, under its key -- the text it is checked in (the file up
+/// to it, earlier proofs cut out: its statement and all it can use) and
+/// its own text (the caller adding the checker's identity and the files
+/// before). Trusted like the file cache: a hit is recorded unchecked.
+pub trait ProofCache {
+    fn lookup(&mut self, context: &str, proof: &str) -> Option<Vec<String>>;
+    fn store(&mut self, context: &str, proof: &str, open: &[String]);
+}
+
 /// What a proof has to establish.
 pub struct ProofRequest {
     pub name: String,
@@ -550,21 +561,38 @@ pub fn load(env: &mut Env, src: &str, allow_axioms: bool) -> KResult<LoadReport>
 /// `load`, also accepting `theorem NAME(params): statement proof ... qed`,
 /// whose proofs `prover` checks.
 pub fn load_with(env: &mut Env, src: &str, allow_axioms: bool, prover: Option<&mut dyn Prover>) -> KResult<LoadReport> {
-    load_mode(env, src, allow_axioms, prover, false)
+    load_mode(env, src, allow_axioms, prover, None, false)
+}
+
+/// `load_with`, a proof found in `pcache` (for the same text, in the same
+/// context) recorded without checking it again, a checked one stored
+pub fn load_checked(env: &mut Env, src: &str, allow_axioms: bool, prover: &mut dyn Prover, pcache: &mut dyn ProofCache) -> KResult<LoadReport> {
+    load_mode(env, src, allow_axioms, Some(prover), Some(pcache), false)
 }
 
 /// Loads a cache file of `slc kernel-check` (`ext::cache`): a checked file
 /// whose theorems end in `cached` (`cached rests(a, b)`: resting on those
 /// open lemmas) instead of their proofs, recorded without them.
 pub fn load_cached(env: &mut Env, src: &str, allow_axioms: bool) -> KResult<LoadReport> {
-    load_mode(env, src, allow_axioms, None, true)
+    load_mode(env, src, allow_axioms, None, None, true)
 }
 
-fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&mut dyn Prover>, cached: bool) -> KResult<LoadReport> {
+fn load_mode(
+    env: &mut Env,
+    src: &str,
+    allow_axioms: bool,
+    mut prover: Option<&mut dyn Prover>,
+    mut pcache: Option<&mut dyn ProofCache>,
+    cached: bool,
+) -> KResult<LoadReport> {
     let mut lex = Lexer { src: src.as_bytes(), pos: 0, line: 1 };
     let tok = lex.next()?;
     let mut p = Parser { lex, tok, env, scopes: Vec::new(), params: HashMap::new() };
     let mut rep = LoadReport::default();
+    // (the proof cache's context: the file so far, its proofs cut out; `at`
+    // where the uncopied text starts)
+    let mut context = String::new();
+    let mut at = 0;
     loop {
         let kw = match p.bump()? {
             Tok::Eof => {
@@ -761,6 +789,7 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
             "theorem" => {
                 // `theorem NAME proof`: proves the open lemma or claim NAME
                 let known = facts::statement_of(p.env, &name);
+                let by_name = known.is_some();
                 let (params, t) = match (&p.tok, known) {
                     (Tok::Ident(k), Some(t)) if k == "proof" || (cached && k == "cached") => {
                         let mut vs = Vec::new();
@@ -837,6 +866,22 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                 p.lex.line += rest[..after].matches('\n').count();
                 p.lex.pos = start + after;
                 p.tok = p.lex.next()?;
+                context.push_str(&src[at..start - "proof".len()]);
+                at = start + after;
+                // (a proof checked before, in this context: recorded as then
+                // -- not a claim's or an open lemma's, proven by name)
+                if !by_name {
+                    if let Some(open) = pcache.as_deref_mut().and_then(|c| c.lookup(&context, &text)) {
+                        let conditional = !open.is_empty();
+                        crate::ext::cache::admit(p.env, &name, t, open).map_err(ctx)?;
+                        if conditional {
+                            rep.conditional.push(name);
+                        } else {
+                            rep.theorems.push(name);
+                        }
+                        continue;
+                    }
+                }
                 let Some(pr) = prover.as_deref_mut() else {
                     return Err(ctx(KernelError("theorems need a proof checker".into())));
                 };
@@ -854,9 +899,15 @@ fn load_mode(env: &mut Env, src: &str, allow_axioms: bool, mut prover: Option<&m
                     let why = if s.hyps().is_empty() { pr.mismatch(&t, s.concl()) } else { format!("hypotheses left: {}", s.hyps().iter().map(|h| pr.short(h)).collect::<Vec<_>>().join(", ")) };
                     return Err(ctx(KernelError(format!("the proof shows `{}`, not the statement `{}`\n  {}", pr.short(s.concl()), pr.short(&t), why))));
                 }
-                let conditional = !s.open().is_empty();
+                let open = s.open().to_vec();
+                let conditional = !open.is_empty();
                 // (recorded as written: its labels and binder names)
                 facts::record(p.env, &name, s.restated(&t)).map_err(ctx)?;
+                if !by_name {
+                    if let Some(c) = pcache.as_deref_mut() {
+                        c.store(&context, &req.text, &open);
+                    }
+                }
                 if conditional {
                     rep.conditional.push(name);
                 } else {

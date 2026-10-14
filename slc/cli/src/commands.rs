@@ -77,6 +77,58 @@ impl Cache {
     }
 }
 
+/// The proof cache of `kernel-check`, for a file not in the file cache:
+/// per proof checked, the open lemmas it rested on, under the hash of the
+/// checker's identity (as the file's entry would have it), the statements
+/// of the files before, the file up to the proof without its earlier proofs
+/// (`syntax::ProofCache`: all the proof can use) and the proof's text. A
+/// proof edited is checked again; one after a changed statement of its
+/// file, too; the others not. In build/kernel-cache/proofs.
+struct ProofStore {
+    dir: PathBuf,
+    salt: String,
+    /// proofs found
+    hits: usize,
+}
+
+impl ProofStore {
+    fn new(cache: &Cache, src: &str, prefix: &str, first: bool) -> ProofStore {
+        let c1 = src.lines().any(|l| l.trim_start().starts_with("c1 "));
+        let checker = if c1 { &cache.checker_c1 } else { &cache.checker };
+        ProofStore { dir: cache.dir.join("proofs"), salt: format!("{}\n{}\n{}\n", checker, prefix, first), hits: 0 }
+    }
+
+    fn entry(&self, context: &str, proof: &str) -> PathBuf {
+        let h = |s: &str| crate::sha256::hex(s.as_bytes());
+        let key = h(&format!("{}{}\n{}\n", self.salt, h(context), h(proof)));
+        self.dir.join(&key[..2]).join(&key)
+    }
+}
+
+const PROVEN: &str = "proven\n";
+
+impl syntax::ProofCache for ProofStore {
+    fn lookup(&mut self, context: &str, proof: &str) -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(self.entry(context, proof)).ok()?;
+        let open = text.strip_prefix(PROVEN)?;
+        self.hits += 1;
+        Some(open.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect())
+    }
+
+    fn store(&mut self, context: &str, proof: &str, open: &[String]) {
+        let e = self.entry(context, proof);
+        let Some(d) = e.parent() else { return };
+        if std::fs::create_dir_all(d).is_err() {
+            return;
+        }
+        let tmp = e.with_extension(format!("tmp{}", std::process::id()));
+        let ok = std::fs::write(&tmp, format!("{}{}", PROVEN, open.iter().map(|o| format!("{}\n", o)).collect::<String>())).is_ok();
+        if !ok || std::fs::rename(&tmp, &e).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
 /// A checked file's statements: its proofs replaced by `cached` (with the
 /// open lemmas a conditional theorem rests on), its `c1` lines by the
 /// theorems they proved, stated and `cached`
@@ -141,6 +193,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
     // (the hash of the statements of the files so far)
     let mut prefix = String::new();
     let mut n_cached = 0;
+    let mut n_proofs_cached = 0;
     for (i, f) in files.iter().enumerate() {
         let first = i == 0;
         let t0 = std::time::Instant::now();
@@ -161,7 +214,18 @@ pub fn kernel_check(args: &[String]) -> CResult {
                 (rep, stmts)
             }
             None => {
-                let rep = syntax::load_with(&mut env, &src, first, Some(&mut prover)).map_err(|e| format!("{}: {}", f.display(), e))?;
+                // (its proofs checked before, in the same context: from the
+                // proof cache)
+                let rep = match &cache {
+                    Some(c) if !c.checker.is_empty() => {
+                        let mut store = ProofStore::new(c, &src, &prefix, first);
+                        let r = syntax::load_checked(&mut env, &src, first, &mut prover, &mut store);
+                        n_proofs_cached += store.hits;
+                        r
+                    }
+                    _ => syntax::load_with(&mut env, &src, first, Some(&mut prover)),
+                }
+                .map_err(|e| format!("{}: {}", f.display(), e))?;
                 let t1 = std::time::Instant::now();
                 let stmts = statements(&env, &src, &rep);
                 if std::env::var("C1_PROF").is_ok() {
@@ -218,6 +282,9 @@ pub fn kernel_check(args: &[String]) -> CResult {
     println!("ok: all declarations well-formed, definitions conservative, proofs checked, claims closed");
     if n_cached > 0 {
         println!("  ({} of {} files from the cache: their proofs as checked before; --no-cache checks them all)", n_cached, files.len());
+    }
+    if n_proofs_cached > 0 {
+        println!("  ({} proofs of the other files from the proof cache: as checked before, in the same context)", n_proofs_cached);
     }
     Ok(())
 }

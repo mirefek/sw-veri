@@ -241,6 +241,14 @@ slc steps ELF CLAIM F -o OUT.core           decode facts of F's instructions
 slc decode / coverage / cputest / heapcheck model and invariant testing
 ```
 
+While editing proofs, `scripts/check.sh [FILE]` checks the proof chain
+(up to FILE) with the caches of `kernel-check` (build/kernel-cache): a
+file unchanged after the same statements is not checked again, nor, in a
+changed file, a proof unchanged in the same context (the file up to it,
+earlier proofs cut out) -- an edited proof is checked alone, in about a
+second. `scripts/check.sh gen` first makes its generated files
+(build/chain). The tests check without the caches.
+
 `cargo test --release --manifest-path slc/Cargo.toml` runs everything,
 including the C1 engine on every function. The tests that need
 the musl build (`scripts/build-musl.sh -O0`) skip without it; with

@@ -10,6 +10,12 @@
 //! statements of the files before it, by the same checker -- the CLI's
 //! conditions for reading it. `slc kernel-check --no-cache` checks every
 //! proof again.
+//!
+//! The proof cache (`syntax::ProofCache`, for a file not in the file
+//! cache) admits single theorems the same way: a proof whose text, and the
+//! text it is checked in (the file up to it, earlier proofs cut out), the
+//! checker had checked before after the same statements of the files
+//! before. Trusted alike: that its entries hold what the checker wrote.
 
 use super::facts;
 use super::seq::Seq;

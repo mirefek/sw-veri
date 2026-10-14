@@ -1,0 +1,47 @@
+#!/bin/sh
+# The proof chain of `c1_cfg_engine_checks` (slc/cli/tests/steps.rs),
+# checked with the caches (build/kernel-cache: a file unchanged, after the
+# same statements, not checked again; in a changed one, a proof unchanged
+# in the same context neither) -- for checking while editing.
+#
+#   scripts/check.sh gen        make the generated files (build/chain/:
+#                               decode facts, program text, readable CFG),
+#                               after a change to the binaries or the spec
+#   scripts/check.sh [FILE]     elaborate the layers, check the chain (up
+#                               to FILE, e.g. proofs/mallocng_abs.core)
+#
+# The test itself checks everything without the caches (--no-cache).
+# Needs the musl build (scripts/build-musl.sh -O0) and slc built
+# (cargo build --release --manifest-path slc/Cargo.toml).
+R=$(cd "$(dirname "$0")/.." && pwd)
+B=$R/build/chain
+S=$R/slc/target/release/slc
+cd "$R" || exit 1
+ulimit -v 6000000
+if [ "$1" = gen ]; then
+  mkdir -p "$B"
+  $S steps build/test_malloc_O0 build/musl_malloc_O0.core a_ctz_32 is_bouncing=403842 get_slot_index=4030dd get_stride=403350 step_seq=40370a upgradelock resetlock decay_bounces a_clz_32 dequeue=402f49 dequeue_head a_crash=402c6e queue=402e8c free_meta=403014 size_to_class set_size enframe account_bounce get_meta=4030f5 activate_group=40304f __malloc_allzerop alloc_slot try_avail alloc_group=403ee6 a_cas=402c47 size_overflows __malloc_alloc_meta get_random_secret __syscall1=402cf9 __mmap __mprotect __errno_location -o "$B/steps.core" --text "$B/text.core" || exit 1
+  $S gimple --readable --cfg --elf build/test_malloc_O0 --obj build/gimple-O0/src_malloc_mallocng_malloc.c.o --source malloc.c build/gimple-O0/src_malloc_mallocng_malloc.c.optimized -o "$B/cfg.sl" || exit 1
+  exit 0
+fi
+[ -e "$B/steps.core" ] || { echo "no build/chain: run scripts/check.sh gen" >&2; exit 1; }
+$S elab spec layers build/gimple-O0/sl/c_mallocng_malloc.sl "$B/cfg.sl" -o "$B/gimple.core" >/dev/null || exit 1
+LOC=""
+[ -e build/locmap_O0.core ] && LOC=build/locmap_O0.core
+FILES="core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core core/list.core core/loop.core core/bits.core $B/gimple.core
+  proofs/x86.core proofs/x86_code.core proofs/x86_stack.core proofs/x86_insn.core $B/steps.core
+  proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core proofs/gimple_call.core proofs/abi_stack.core proofs/abi_loop.core proofs/abi_bridge.core
+  proofs/translate.core proofs/translate_nf.core proofs/translate_frame.core proofs/translate_store_loop.core proofs/translate_flags.core proofs/translate_call.core
+  proofs/gimple_inv.core proofs/translate_effects.core proofs/translate_zero.core proofs/translate_loop.core proofs/translate_cfg.core proofs/gimple_cfg.core
+  proofs/gimple_cut.core proofs/gimple_loop.core proofs/translate_bitfield.core proofs/translate_block.core
+  $B/text.core $LOC proofs/a_crash.core proofs/mallocng_c1_cfg.core
+  proofs/mallocng_mem.core proofs/mallocng_c2.core proofs/mallocng_bits.core proofs/mallocng_slots.core proofs/mallocng_ctx.core proofs/mallocng_cfg.core
+  proofs/abi_ghost.core proofs/gimple_ghost.core proofs/mallocng_abs.core proofs/mallocng_purpose.core"
+if [ -n "$1" ]; then
+  case " $(echo $FILES) " in
+    *" $1 "*) ;;
+    *) echo "$1: not in the chain" >&2; exit 1 ;;
+  esac
+  FILES=$(echo $FILES | sed "s| $1 .*| $1|")
+fi
+$S kernel-check $FILES 2>&1 | grep -v "^core/\|^proofs/[a-z_0-9]*.core: .*(cached)\$\|^$B/\|^build/"
