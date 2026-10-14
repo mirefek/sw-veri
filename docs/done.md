@@ -602,6 +602,11 @@ item is a short summary of finished work; details are in the files named.
   keep the divergence instead of a premise. get_slot_index, get_meta,
   get_stride, allzerop, enframe and activate_group's `*_implements`
   without premises (`mp.*_divg`).
+- **The structured form's C1 chain retired** (proofs/mallocng_c1.core,
+  mallocng_link.core, mallocng_compose.core; the test
+  `c1_engine_checks`): the CFG chain has C1 for the same functions, their
+  links and compositions; the shared files' counts checked by
+  `c1_cfg_engine_checks`.
 - **A proof cache** (`slc kernel-check`, `syntax::ProofCache`): within a
   changed file, a proof unchanged in the same context is not checked
   again; `scripts/check.sh` checks the chain with the caches.

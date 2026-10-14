@@ -28,10 +28,10 @@ keeps the lower-level properties. Bottom-up:
 - Then the "purpose" name dropped: these are the specs.
 
 Along the way:
-- The memory-level path's `tr.div_raises` premises
-  (proofs/mallocng_link.core's `*.linked_abi`, on the code): as the purpose
-  specs' now are, on the spec (`tr.div_raises_g` by `ct.contract_div`), or
-  gone with those specs.
+- The ABI-level form of the functions with World specs (set_size,
+  dequeue, dequeue_head, queue, free_meta, the leaf specs; proved to
+  `tr.implements_at` so far): `tr.div_raises` of the spec by the World
+  variant of `ct.contract_div`.
 - What enframe's callers owe: alloc_slot's postcondition the reserved
   slot's access (`slot_rw`); malloc's the class bound (its n within the
   class), the thread pointer's word apart from the slot (the C world's

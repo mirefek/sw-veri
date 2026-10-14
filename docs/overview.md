@@ -138,7 +138,7 @@ For a function F, two halves:
 - **C1, machine code ⊑ readable GIMPLE.** This is compilation correctness:
   no function-specific assumptions, and anything is allowed where GIMPLE is
   undefined.
-  - A `c1 F SPEC PREFIX` line (`proofs/mallocng_c1.core`) has the
+  - A `c1 F SPEC PREFIX` line (`proofs/mallocng_c1_cfg.core`) has the
     checker's C1 engine (`slc/cli/src/c1/`) walk F's code (its decode facts)
     and its readable GIMPLE side by side. Each step applies a rule instance
     through the kernel; no proof text is written. The engine is untrusted:
@@ -213,7 +213,8 @@ For a function F, two halves:
   - A caller proves the callee's precondition at the call.
 
 Transitivity gives machine code ⊑ spec: one lemma composes a function's
-two halves (`tr.implements_refine`, `proofs/mallocng_compose.core`). The
+two halves (`tr.implements_refine`, `proofs/mallocng_cfg.core`,
+`proofs/mallocng_purpose.core`). The
 functions are composed bottom-up over the call graph. A callee is a parameter of its caller's
 GIMPLE, so each function is checked against its callees' specs.
 
