@@ -504,3 +504,10 @@ item is a short summary of finished work; details are in the files named.
   group's start unit-aligned and positive, the offset within the class's
   slot, the context no client's (invariant additions). get_meta's
   precondition narrowed to the header bytes the code reads.
+- **`__malloc_allzerop` at the meaning level** (`mp.az`,
+  `mp.az_implements`): whether p's group is one slot mapped on its own
+  (`own_mapping`: no class, or a stride below its class's). Its callees
+  used by their meaning-level callers' rules (`mp.gm_q`, `mp.gst_q`, the
+  result typed: `g.fun_q`); its run an effect summary (`ms.az_run`, also
+  the memory-level C2's); musl's test the group's by the meta word's
+  fields (`mp.gs_pre`).

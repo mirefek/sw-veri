@@ -94,13 +94,13 @@ translation verification, the engine):
 - Migration to meaning-level specs (layers/mallocng_purpose.sl,
   proofs/mallocng_purpose.core), bottom-up, each function's code refined
   directly (`ct.refines_contract`; no hand-written memory-level spec
-  between; get_slot_index, get_stride, get_meta done). Then the "purpose"
-  name dropped: these are the specs. Next:
-  - `__malloc_allzerop` (calls get_meta); then the memory-level specs and
-    C2s of get_slot_index and get_meta retired (now only allzerop's proof
-    uses them), with their compositions (proofs/mallocng_cfg.core,
-    proofs/mallocng_compose.core); get_meta's effect summary `ms.gm_run`
-    stays (its run, with the callee's contract a premise);
+  between; get_slot_index, get_stride, get_meta, `__malloc_allzerop`
+  done). Then the "purpose" name dropped: these are the specs. Next:
+  - the memory-level specs and C2s of get_slot_index, get_meta, get_stride
+    and allzerop retired where no caller needs them, with their
+    compositions (proofs/mallocng_cfg.core, proofs/mallocng_compose.core);
+    the effect summaries `ms.gm_run`, `ms.az_run` stay (the run, with the
+    callees' contracts premises);
   - the right level per function: callees called where the invariant does
     not hold (enframe on a reserved slot, activate_group and the list
     operations inside try_avail) get a spec relative to a local invariant

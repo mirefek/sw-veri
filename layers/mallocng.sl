@@ -445,6 +445,11 @@ pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g
 
+// a group that is one slot mapped on its own, the mapping shorter than its
+// class's slots (or no class): musl's test (`__malloc_allzerop`) that a
+// slot's memory came fresh from the kernel, so calloc need not clear it
+pred own_mapping(v: MetaV) = v.sizeclass >= 48 || stride(v) < UNIT * size_classes[v.sizeclass]
+
 // slot i of the group g: where what starts at p lies (a client block, or a
 // nested group)
 pred starts_at(A: Abs, g: nat, i: nat, p: nat) =
