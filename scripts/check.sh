@@ -33,7 +33,7 @@ FILES="core/prelude.core core/logic.core core/sets.core core/nat.core core/recor
   proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core proofs/gimple_call.core proofs/abi_stack.core proofs/abi_loop.core proofs/abi_bridge.core
   proofs/translate.core proofs/translate_nf.core proofs/translate_frame.core proofs/translate_store_loop.core proofs/translate_flags.core proofs/translate_call.core
   proofs/gimple_inv.core proofs/translate_effects.core proofs/translate_zero.core proofs/translate_loop.core proofs/translate_cfg.core proofs/gimple_cfg.core
-  proofs/gimple_cut.core proofs/gimple_loop.core proofs/translate_bitfield.core proofs/translate_block.core
+  proofs/gimple_cut.core proofs/gimple_loop.core proofs/translate_bitfield.core
   $B/text.core $LOC proofs/a_crash.core proofs/mallocng_c1_cfg.core
   proofs/mallocng_mem.core proofs/mallocng_c2.core proofs/mallocng_bits.core proofs/mallocng_slots.core proofs/mallocng_ctx.core proofs/mallocng_cfg.core
   proofs/abi_ghost.core proofs/gimple_ghost.core proofs/mallocng_abs.core proofs/mallocng_purpose.core"

@@ -56,7 +56,7 @@ pub struct Edge {
 /// The structuring's decisions
 pub enum Node {
     /// a block's statements written in place
-    Stmts(usize, Vec<String>),
+    Stmts(Vec<String>),
     /// lines written as they are (an edge's copies, `break`)
     Lines(Vec<String>),
     /// a branch: the combined condition, the blocks it combines (their
@@ -340,7 +340,7 @@ pub fn render(g: &Graph, nodes: &[Node], depth: usize, out: &mut Vec<String>) {
     let ind = |d: usize| "  ".repeat(d);
     for n in nodes {
         match n {
-            Node::Stmts(_, ls) | Node::Lines(ls) => out.extend(ls.iter().map(|l| format!("{}{}", ind(depth), l))),
+            Node::Stmts(ls) | Node::Lines(ls) => out.extend(ls.iter().map(|l| format!("{}{}", ind(depth), l))),
             Node::If { cond, hoist, yes, no } => {
                 for &h in hoist {
                     out.extend(g.blocks[h].stmts.iter().map(|l| format!("{}{}", ind(depth), l)));
@@ -499,7 +499,7 @@ impl<'g> St<'g> {
             }
             let blk = &self.g.blocks[b];
             self.emitted += blk.stmts.len();
-            out.push(Node::Stmts(b, blk.stmts.clone()));
+            out.push(Node::Stmts(blk.stmts.clone()));
             match &blk.term {
                 Jump::Return => return Ok(()),
                 Jump::If { .. } => {

@@ -77,9 +77,6 @@ Along the way:
   walked again in each caller.
 - The loop functions' `refines` lines and compositions in
   proofs/mallocng_cfg.core (step_seq, activate_group, try_avail).
-- Switch the `c1` lines and compositions to the CFG path and retire the
-  structured walk (`block.rs`, `join.rs`, proofs/translate_block.core);
-  its memory (2.4 GB peak against 770 MB).
 - User proofs on a CFG (an invariant per label) for functions with no
   structured view.
 

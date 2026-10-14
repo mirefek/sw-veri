@@ -144,24 +144,11 @@ For a function F, two halves:
     through the kernel; no proof text is written. The engine is untrusted:
     the kernel records only the theorems its rules made, without
     hypotheses.
-  - Per-block simulation (`proofs/translate_block.core`,
-    `slc/cli/src/c1/block.rs`): at a conditional jump on the spec's `if`,
-    the block's own lemma -- its code from the jump to the block's end J
-    against the `if` alone (`tr.bone`: the block, then a marked return of
-    its locals), J a breakpoint arrived at as a loop's head is -- and the
-    claim for the rest from J, proven once for every world and locals (the
-    homes live at J holding them), compose into the claim at the jump
-    (`tr.block_lv`, from `tr.bk_seq`). J is where the branches meet: the
-    jump's post-dominator; with `return`s in the block, the first point
-    both branches reach outside the epilogue (a `return` leaves through
-    it). A loop's rule is likewise proven once for every world and locals,
-    whichever path enters it. Where a block can not be one (its `return`s
-    and its end the same code, a loop inside), paths meeting at a block's
-    end of the spec are joined by the same claim for the rest
-    (`slc/cli/src/c1/join.rs`); a block whose lemma fails falls back to
-    that, reported per function. A function's proof grows with its code,
-    not its paths: where paths meet at a block's end and nothing joins
-    them, the check fails there, saying why.
+  - C1 is against the readable CFG (`slc gimple --readable --cfg`;
+    `slc/cli/src/c1/cfg.rs`, `proofs/translate_cfg.core`): each block is
+    walked once from its cut point, its claim proven for every world and
+    locals, so a function's proof grows with its code, not its paths. A
+    function of a `return` alone has no CFG and is walked straight.
   - The rules are proven once (`proofs/translate*.core`), per statement or
     instruction form.
   - **The rules' standard form**: every comparison of the two sides is a

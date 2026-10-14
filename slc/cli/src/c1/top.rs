@@ -98,9 +98,6 @@ impl<'e> Gen<'e> {
             no_refl: Default::default(),
             no_field: Default::default(),
             nf_memo: Default::default(),
-            join_why: Default::default(),
-            pdoms: None,
-            block_fb: Vec::new(),
             val_of: Default::default(),
             zs: Vec::new(),
             qs: Vec::new(),
@@ -132,7 +129,6 @@ impl<'e> Gen<'e> {
             statics_t: Term::bvar(0),
             gs: Vec::new(),
             n: 0,
-            loops: Vec::new(),
             nval: 0,
             visits: BTreeMap::new(),
             fname: fname.to_string(),
@@ -143,15 +139,11 @@ impl<'e> Gen<'e> {
             lbase: empty.clone(),
             lcode: empty,
             steps: 0,
-            stmts: Vec::new(),
-            stmt_fail: BTreeMap::new(),
             hus: Vec::new(),
             vmark0: 0,
             locmap: Vec::new(),
-            loop_claims: Vec::new(),
             picked: Default::default(),
             spent_now: Default::default(),
-            preds: None,
             ambient: Vec::new(),
             bkp: no_bk.clone(),
             bka: no_bk,
@@ -206,6 +198,8 @@ impl<'e> Gen<'e> {
                 self.cfg_start = self.cfg_body_start(entry);
             }
         }
+        // (no guide: a function of a return alone, walked straight -- C1 is
+        // against the readable CFG, its branches and loops only there)
         // the fixed variables: the program's statics, the callees, the
         // arguments, the view's objects, its memory, the entry's machine
         let statics = self.var("statics");
@@ -375,7 +369,6 @@ impl<'e> Gen<'e> {
             hw,
             hsm: BTreeMap::new(),
             hst: self.mk("empty", vec![]),
-            lp: None,
             spec: Spec::Proc(i0),
             hyps: Vec::new(),
             facts: Vec::new(),
@@ -498,10 +491,6 @@ impl<'e> Gen<'e> {
         aprem.push(dr_t);
         let abi = self.close(abi_in, &aprem, &gvs)?;
         out.push((format!("{p}.implements_abi"), abi));
-        if !self.block_fb.is_empty() {
-            let at: Vec<String> = self.block_fb.iter().map(|a| format!("{:x}", a)).collect();
-            eprintln!("{}: {} block(s) by the join claims, not as blocks (their ends not the spec's): {}", p, at.len(), at.join(", "));
-        }
         // as a callee: tr.callee_io from the spec's structure
         let mut eff = super::eff::Eff::new(self.env, &p)?;
         match eff.callee_io(ssym, &cns) {

@@ -606,7 +606,10 @@ item is a short summary of finished work; details are in the files named.
   mallocng_link.core, mallocng_compose.core; the test
   `c1_engine_checks`): the CFG chain has C1 for the same functions, their
   links and compositions; the shared files' counts checked by
-  `c1_cfg_engine_checks`.
+  `c1_cfg_engine_checks`. With it the engine's structured walk: per-block
+  simulation (block.rs, proofs/translate_block.core), statement joins
+  (most of join.rs), counted loops (tr.qs_loop, tr.wf2, tr.count_*); a
+  function of a `return` alone (no CFG) is walked straight.
 - **A proof cache** (`slc kernel-check`, `syntax::ProofCache`): within a
   changed file, a proof unchanged in the same context is not checked
   again; `scripts/check.sh` checks the chain with the caches.

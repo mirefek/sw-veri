@@ -1,13 +1,11 @@
-// The translation's rules for stores and loops (step_seq's, resetlock's):
-// stores of n bytes both sides make (the world changing with the machine's
-// memory), a write of the frame's slot (outside the world's domain), the 32-bit
-// compare-and-branch on a slot, and a counted loop by an invariant and a
-// variant at its head (tr.wf2, tr.qs_loop) -- never unrolled.
+// The translation's rules for stores (step_seq's, resetlock's): stores of
+// n bytes both sides make (the world changing with the machine's memory),
+// a write of the frame's slot (outside the world's domain), the 32-bit
+// compare-and-branch on a slot. (Loops: on the readable CFG,
+// proofs/translate_cfg.core.)
 //
 //   slc kernel-check <translate.core's chain> proofs/x86_insn.core build/leaf_steps.core \
 //     ... proofs/translate.core proofs/translate_store_loop.core
-//
-// (tr.qs_loop is by core/loop.core's while_step / while_leave.)
 
 // (n bytes stored at a: the memory at t, none of them, as before)
 theorem tr.storen_other: all b a n x t. t in bits(64) ->
@@ -1558,119 +1556,6 @@ proof
   show := apply(tr.entry_d, {SPEC}, {args}, {s}, {v}, {mem}, {o}, hM, ent.4, sim2, hr)
 qed
 
-// ----------------------------------------------------------------------
-//  Loops. At the loop head the rest is the spec's loop (from the state
-//  l0(world)) then its continuation k; the claim there is shown for every
-//  state with the invariant, by induction on the variant (tr.wf2): the
-//  body's iteration, unrolled (tr.qs_loop), returns to the head with a
-//  smaller variant, or leaves.
-
-// (the loop's outcome not a divergence: the machine's runs end)
-theorem tr.qs_nodiv(x0 x8. a, x8 x1. k): all w o. runs(mkprog(x0 x1. ex x8. a(x0, x8) && !(fst(x8) = 2) && k(x8, x1)), w, o) ->
-  runs(mkprog(x0 x1. ex x8. a(x0, x8) && k(x8, x1)), w, o)
-proof
-  fix w
-  have g: all o. (ex x8. a(w, x8) && !(fst(x8) = 2) && k(x8, o)) -> (ex x8. a(w, x8) && k(x8, o)) proof
-    fix o
-    assume h
-    obtain y, hy from h
-    show by ex_intro({y}, taut(hy))
-  qed
-  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. ex x8. a(x0, x8) && k(x8, x1), r2 := x0 x1. ex x8. a(x0, x8) && !(fst(x8) = 2) && k(x8, x1)], g)
-qed
-
-// one iteration: the body from l0, then the loop again from its state
-// (ok), or its leaving (an exception: break, return, raise)
-theorem tr.qs_loop(x0. l0, l o. b, l. tr, x8 x1. k): all w o.
-  runs(mkprog(x0 x1. ex x8. b(l0(x0), x8) && ((x8 = ok(out_state(x8), empty) &&
-      (ex x9. while_rel(out_state(x8), l. true, l o. b(l, o), l. tr(l), x9) && !(fst(x9) = 2) && k(x9, x1))) || (fst(x8) = 1 && k(x8, x1)))), w, o) ->
-  runs(mkprog(x0 x1. ex x8. while_rel(l0(x0), l. true, l o. b(l, o), l. tr(l), x8) && !(fst(x8) = 2) && k(x8, x1)), w, o)
-proof
-  fix w
-  have g: all o. (ex x8. b(l0(w), x8) && ((x8 = ok(out_state(x8), empty) &&
-      (ex x9. while_rel(out_state(x8), l. true, l o. b(l, o), l. tr(l), x9) && !(fst(x9) = 2) && k(x9, o))) || (fst(x8) = 1 && k(x8, o)))) ->
-      (ex x8. while_rel(l0(w), l. true, l o. b(l, o), l. tr(l), x8) && !(fst(x8) = 2) && k(x8, o)) proof
-    fix o
-    assume h
-    obtain y, hy from h
-    have hb: b(l0(w), y) by taut(hy)
-    have c1: (y = ok(out_state(y), empty) && (ex x9. while_rel(out_state(y), l. true, l o. b(l, o), l. tr(l), x9) && !(fst(x9) = 2) && k(x9, o))) ->
-        (ex x8. while_rel(l0(w), l. true, l o. b(l, o), l. tr(l), x8) && !(fst(x8) = 2) && k(x8, o)) proof
-      assume hc
-      have ey: y = ok(out_state(y), empty) by taut(hc)
-      have e9: ex x9. while_rel(out_state(y), l. true, l o. b(l, o), l. tr(l), x9) && !(fst(x9) = 2) && k(x9, o) by taut(hc)
-      obtain z, hz from e9
-      have hb2 := rewrite(ey, hb)
-      have tt: true by simp()
-      have ws := mp(while_step[l0 := l0(w), l1 := out_state(y), c := l. true, b := l o. b(l, o), tr := l. tr(l), r := z], tt, hb2, taut(hz), taut(hz))
-      show by ex_intro({z}, taut(ws, hz))
-    qed
-    have c2: (fst(y) = 1 && k(y, o)) -> (ex x8. while_rel(l0(w), l. true, l o. b(l, o), l. tr(l), x8) && !(fst(x8) = 2) && k(x8, o)) proof
-      assume hc
-      have f1: fst(y) = 1 by taut(hc)
-      have nok0: is_ok(y) -> false proof
-        assume io
-        obtain s1, i1 from expand(io, is_ok)
-        obtain v1, i2 from i1
-        have f0: fst(y) = 0 by simp(i2, keep(ok))
-        have f01 := trans(sym(f0), f1)
-        show by simp(f01)
-      qed
-      have nok: !is_ok(y) by taut(nok0)
-      have n2: !(fst(y) = 2) by simp(f1)
-      have tt: true by simp()
-      have wl := mp(while_leave[l0 := l0(w), c := l. true, b := l o. b(l, o), tr := l. tr(l), r := y], tt, hb, nok)
-      show by ex_intro({y}, taut(wl, n2, hc))
-    qed
-    show by taut(hy, c1, c2)
-  qed
-  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. ex x8. while_rel(l0(x0), l. true, l o. b(l, o), l. tr(l), x8) && !(fst(x8) = 2) && k(x8, x1),
-    r2 := x0 x1. ex x8. b(l0(x0), x8) && ((x8 = ok(out_state(x8), empty) &&
-      (ex x9. while_rel(out_state(x8), l. true, l o. b(l, o), l. tr(l), x9) && !(fst(x9) = 2) && k(x9, x1))) || (fst(x8) = 1 && k(x8, x1)))], g)
-qed
-
-// induction on a variant: the claim at every pair (x, y) with the
-// invariant, from the claim at each such pair given it at those of smaller
-// variant
-theorem tr.wf2(x y. claim, x y. p, x y. mm): (all x y. p(x, y) -> mm(x, y) in omega) ->
-  (all x y. p(x, y) -> (all x2 y2. p(x2, y2) -> int_lt(mm(x2, y2), mm(x, y)) -> claim(x2, y2)) -> claim(x, y)) ->
-  (all x y. p(x, y) -> claim(x, y))
-proof
-  assume hm hs
-  have ind: all n. n in omega -> (all x y. p(x, y) -> int_lt(mm(x, y), n) -> claim(x, y)) proof
-    have base: all x y. p(x, y) -> int_lt(mm(x, y), 0) -> claim(x, y) proof
-      fix x y
-      assume hp hl
-      have mo := mp(all_elim(hm, {x}, {y}), hp)
-      have f: false by arith(mo, hl)
-      show by taut(f)
-    qed
-    have step: all n. n in omega -> (all x y. p(x, y) -> int_lt(mm(x, y), n) -> claim(x, y)) ->
-        (all x y. p(x, y) -> int_lt(mm(x, y), int_add(n, 1)) -> claim(x, y)) proof
-      fix n
-      assume hn ih
-      fix x y
-      assume hp hl
-      have below: all x2 y2. p(x2, y2) -> int_lt(mm(x2, y2), mm(x, y)) -> claim(x2, y2) proof
-        fix x2 y2
-        assume hp2 hl2
-        have mo := mp(all_elim(hm, {x}, {y}), hp)
-        have mo2 := mp(all_elim(hm, {x2}, {y2}), hp2)
-        have l3: int_lt(mm(x2, y2), n) by arith(mo, mo2, hn, hl, hl2)
-        show := mp(all_elim(ih, {x2}, {y2}), hp2, l3)
-      qed
-      show := mp(all_elim(hs, {x}, {y}), hp, below)
-    qed
-    show by induct(base, step)
-  qed
-  fix x y
-  assume hp
-  have mo := mp(all_elim(hm, {x}, {y}), hp)
-  have l1: int_lt(mm(x, y), int_add(mm(x, y), 1)) by arith(mo)
-  have m1: int_add(mm(x, y), 1) in omega by arith(mo)
-  show := mp(all_elim(mp(all_elim(ind, {int_add(mm(x, y), 1)}), m1), {x}, {y}), hp, l1)
-qed
-
 // (the registers forgotten: a weaker claim)
 theorem tr.pt_rs(zb. bkp, zb pb wb. bka): all s v base code fr a hs ds rs p w. tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, empty, p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
 proof
@@ -1787,79 +1672,6 @@ proof
     show := mp(all_elim(expand(h, tr.pt), {m}), hi, hr, hh, re, hmm, hfr)
   qed
   show by defs(c, tr.lv)
-qed
-
-// a counting loop's invariant and variant: i from 0 up by 1, leaving when
-// K <s i (sint(K) + 1 below 2^31)
-def tr.count_inv(k, i) := i in bits(32) && int_le(0, sint(32, i)) && int_le(sint(32, i), int_add(sint(32, k), 1))
-def tr.count_var(k, i) := int_sub(int_add(sint(32, k), 1), sint(32, i))
-
-theorem tr.count_nat: all k i. k in bits(32) -> tr.count_inv(k, i) -> tr.count_var(k, i) in omega
-proof
-  fix k i
-  assume hk32 h
-  have h0 := expand(h, tr.count_inv)
-  have i32: i in bits(32) by taut(h0)
-  have si := apply(tr.sint32_int, i32)
-  have sk := apply(tr.sint32_int, hk32)
-  have l1: int_le(sint(32, i), int_add(sint(32, k), 1)) by taut(h0)
-  have g: int_sub(int_add(sint(32, k), 1), sint(32, i)) in omega by arith(si, sk, l1)
-  show by defs(g, tr.count_var)
-qed
-
-theorem tr.count_step: all k i. k in bits(32) -> tr.count_inv(k, i) -> int_le(sint(32, k), 2147483646) -> !int_lt(sint(32, k), sint(32, i)) ->
-  tr.count_inv(k, bits_add(32, i, 1)) && int_lt(tr.count_var(k, bits_add(32, i, 1)), tr.count_var(k, i))
-proof
-  fix k i
-  assume hk32 h hk hc
-  have h0 := expand(h, tr.count_inv)
-  have i32: i in bits(32) by taut(h0)
-  have l0: int_le(0, sint(32, i)) by taut(h0)
-  have si := apply(tr.sint32_int, i32)
-  have sk := apply(tr.sint32_int, hk32)
-  have ib: int_le(0, i) && int_lt(i, 4294967296) by simp(i32)
-  have ii: i in int by simp(i32)
-  have sx: (int_lt(i, 2147483648) && sint(32, i) = i) || (!int_lt(i, 2147483648) && sint(32, i) = int_sub(i, 4294967296)) by defs(simp(i32), sint, letin, pow2)
-  // (sint(i) >= 0: i below 2^31, sint(i) = i, i + 1 no wrap)
-  have lt: int_lt(i, 2147483648) proof
-    have c2: (!int_lt(i, 2147483648) && sint(32, i) = int_sub(i, 4294967296)) -> int_lt(i, 2147483648) proof
-      assume hh
-      have e: sint(32, i) = int_sub(i, 4294967296) by taut(hh)
-      have l2 := rewrite(e, l0)
-      show by arith(ii, ib, l2)
-    qed
-    show by taut(sx, c2)
-  qed
-  have ei: sint(32, i) = i by taut(sx, lt)
-  have le: int_le(i, 2147483646) proof
-    have l3 := rewrite(ei, hc)
-    show by arith(ii, sk, hk, l3)
-  qed
-  have p32: pow2(32) = 4294967296 by simp()
-  have ea0: int_mod(int_add(i, 1), 4294967296) = int_add(i, 1) by arith(ii, ib, le)
-  have ea: bits_add(32, i, 1) = int_add(i, 1) by defs(rewrite(sym(p32), ea0), bits_add)
-  have n32: int_add(i, 1) in bits(32) by arith(ii, ib, le)
-  have sn0: sint(32, int_add(i, 1)) = int_add(i, 1) by defs(simp(n32, le), sint, letin, pow2)
-  have sni: sint(32, int_add(i, 1)) in int := apply(tr.sint32_int, n32)
-  have b32 := rewrite(sym(ea), n32)
-  have l40: int_le(0, sint(32, int_add(i, 1))) by arith(ii, ib, sni, sn0)
-  have l4 := rewrite(sym(ea), l40)
-  have l3 := rewrite(ei, hc)
-  have l50: int_le(sint(32, int_add(i, 1)), int_add(sint(32, k), 1)) by arith(ii, sk, sni, sn0, l3)
-  have l5 := rewrite(sym(ea), l50)
-  have inv2: tr.count_inv(k, bits_add(32, i, 1)) by defs(taut(b32, l4, l5), tr.count_inv)
-  have dec0: int_lt(int_sub(int_add(sint(32, k), 1), sint(32, int_add(i, 1))), int_sub(int_add(sint(32, k), 1), sint(32, i))) by arith(ii, sk, si, sni, sn0, ei)
-  have dec1 := rewrite(sym(ea), dec0)
-  have dec: int_lt(tr.count_var(k, bits_add(32, i, 1)), tr.count_var(k, i)) by defs(dec1, tr.count_var)
-  show by taut(inv2, dec)
-qed
-
-theorem tr.count_init: all k. int_le(0, int_add(sint(32, k), 1)) -> tr.count_inv(k, 0)
-proof
-  fix k
-  assume h
-  have s0: sint(32, 0) = 0 by defs(simp(), sint, letin, pow2)
-  show by defs(simp(s0, h), tr.count_inv)
 qed
 
 // ----------------------------------------------------------------------
@@ -2208,21 +2020,6 @@ proof
   have g0: int_le(p, int_add(p, i)) && int_lt(int_add(p, i), int_add(p, int_add(k, 1))) by arith(pb, ib, hle)
   have g1 := rewrite(sym(ea), g0)
   show := rewrite(sym(sx), g1)
-qed
-
-// (a rest whose continuation is k then the outcome: k's)
-theorem tr.qs_settle(x0 x8. a, x8 x1. k): all w o. runs(mkprog(x0 x1. ex x8. a(x0, x8) && k(x8, x1)), w, o) ->
-  runs(mkprog(x0 x1. ex x8. a(x0, x8) && (ex x2. k(x8, x2) && x1 = x2)), w, o)
-proof
-  fix w
-  have g: all o. (ex x8. a(w, x8) && k(x8, o)) -> (ex x8. a(w, x8) && (ex x2. k(x8, x2) && o = x2)) proof
-    fix o
-    assume h
-    obtain y, hy from h
-    have e2: ex x2. k(y, x2) && o = x2 by ex_intro({o}, taut(hy, refl({o})))
-    show by ex_intro({y}, taut(hy, e2))
-  qed
-  show := mp(tr.mkprog_mono[s := w, r1 := x0 x1. ex x8. a(x0, x8) && (ex x2. k(x8, x2) && x1 = x2), r2 := x0 x1. ex x8. a(x0, x8) && k(x8, x1)], g)
 qed
 
 // (an equation of a term with itself, anywhere in the rest: true)

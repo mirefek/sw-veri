@@ -20,7 +20,6 @@
 //! a reduction, a machine value the spec does not have, stop it with an
 //! error naming the address.
 
-mod block;
 mod cfg;
 mod eff;
 mod gref;
@@ -79,8 +78,6 @@ struct St {
     /// the homes: offset -> (bytes, value), and their map
     hsm: BTreeMap<u128, (u128, Term)>,
     hst: Term,
-    /// the loop whose body this is (an index into `loops`)
-    lp: Option<usize>,
     spec: Spec,
     /// the facts in scope: a branch's condition (or its negation), a
     /// defined operation's condition (assumed)
@@ -130,20 +127,14 @@ enum Red {
     Exit { e: Term, k: Term, kw: Term },
 }
 
-/// A loop walked by the loop rule (`tr.loop_lv`), or a block by the block
-/// rule (`tr.block_lv`, block.rs): its head (a block's end), the homes there
-/// as a function of the locals, the walk's state outside it (the
-/// breakpoints, the wrapper) to restore at its exit
+/// The CFG's walk under its loop rule (`tr.cfg_lv`, cfg.rs): its head, the
+/// homes there as a function of the locals, the walk's state outside it
+/// (the breakpoints, the wrapper) to restore at its exit
 #[derive(Clone)]
 struct LoopG {
     head: u128,
-    /// a block's (its end the head), not a loop's
-    is_block: bool,
-    /// the loop or block walked around it
-    outer: Option<Box<LoopG>>,
     hs: Term,
     bkp: Term,
-    bka: Term,
     wrap: Term,
     kw: Term,
     /// the iteration's world and locals in the universe
@@ -214,13 +205,6 @@ struct Gen<'e> {
     no_redex: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_refl: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
     no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
-    /// the blocks not proven as blocks (block.rs: their paths joined by the
-    /// join claims instead), reported
-    block_fb: Vec<u128>,
-    /// (the code's post-dominators, block.rs)
-    pdoms: Option<BTreeMap<u128, BTreeSet<u128>>>,
-    /// (why the last join failed, join.rs: its error's reasons)
-    join_why: std::cell::RefCell<Vec<String>>,
     /// (the normal forms made, nf.rs: for good -- a name's meaning is fixed)
     nf_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
     zs: Vec<VarId>,
@@ -270,8 +254,6 @@ struct Gen<'e> {
     statics_t: Term,
     gs: Vec<Term>,
     n: usize,
-    /// the loops met: their heads and claims
-    loops: Vec<Loop>,
     nval: usize,
     /// the walk's points, by address (the resource guard's report), and
     /// the function's name
@@ -294,12 +276,6 @@ struct Gen<'e> {
     lcode: Term,
     /// steps made (for the summary)
     steps: usize,
-    /// the join points' claims made (join.rs), the points where one was
-    /// not; the loop rule's claims made (for every locals and world), by
-    /// the rule's instance
-    stmts: Vec<join::StmtClaim>,
-    stmt_fail: BTreeMap<(u128, u64), String>,
-    loop_claims: Vec<(Term, Seq)>,
     /// the universe facts of the walk's own variables set aside (a loop's
     /// locals, in its exit's walk; a join claim's)
     hus: Vec<Seq>,
@@ -313,8 +289,6 @@ struct Gen<'e> {
     /// spent branch conditions (St::spent)
     picked: std::cell::RefCell<Vec<Term>>,
     spent_now: std::cell::RefCell<Vec<Term>>,
-    /// the code's predecessor counts
-    preds: Option<BTreeMap<u128, usize>>,
     /// the entry's assumptions (in scope at every point)
     ambient: Vec<Term>,
     /// the claim's breakpoints (`tr.sim`'s bkp, a predicate of a machine
@@ -346,26 +320,6 @@ struct Gen<'e> {
 fn trace_t0() -> f64 {
     static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     T0.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
-}
-
-/// A loop of the spec met at a machine address (its head): the claim there,
-/// for every world and local with the invariant, by induction on the variant
-#[derive(Clone)]
-struct Loop {
-    head: u128,
-    /// the induction hypothesis, the bound K of the counting loop, the home
-    /// d of its counter
-    ih: Seq,
-    k: u128,
-    d: u128,
-    /// the rest at the head, the counter abstracted (a term of the counter's
-    /// variable `li`)
-    qh: Term,
-    li: Term,
-    /// in the step: the counter's facts (tr.count_inv expanded), its
-    /// invariant
-    ci: Seq,
-    cc: Seq,
 }
 
 fn nat(t: &Term) -> Option<u128> {

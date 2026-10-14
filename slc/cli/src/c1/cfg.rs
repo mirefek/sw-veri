@@ -41,7 +41,6 @@ pub(super) struct Cfg {
     kk_lam: Term,
     /// the function's breakpoints and arrival (outside the walks)
     bkp0: Term,
-    bka0: Term,
     /// the rule's premise per label (`c. all ys w. ..`), its claims made
     body: Term,
     done: BTreeMap<u128, Seq>,
@@ -314,7 +313,6 @@ impl<'e> Gen<'e> {
             ct_lam: Term::bvar(0),
             kk_lam: Term::bvar(0),
             bkp0: self.bkp.clone(),
-            bka0: self.bka.clone(),
             body: Term::bvar(0),
             done: BTreeMap::new(),
             bkp2: Term::bvar(0),
@@ -505,7 +503,7 @@ impl<'e> Gen<'e> {
         let mask = c.labels.iter().find(|x| x.0 == k).map(|x| x.1).ok_or_else(|| format!("{:x}: the CFG: label {} not among the labels", a, k))?;
         let pk_t = c.body.instantiate_params(&[lit(k)], &self.env.binders_fn());
         let (bkp2, bka2, hs_lam, fr, fd) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fr, c.fd.clone());
-        let (bkp0, bka0) = (c.bkp0.clone(), c.bka0.clone());
+        let bkp0 = c.bkp0.clone();
         let (hyps, facts, lfx) = (c.hyps.clone(), c.facts.clone(), c.lfx.clone());
         let (b, kl, kw, wrap) = (c.b.clone(), c.kl.clone(), c.kw.clone(), c.wrap.clone());
         let n = self.fresh("");
@@ -547,7 +545,6 @@ impl<'e> Gen<'e> {
             hw: hw.clone(),
             hsm,
             hst: hst.clone(),
-            lp: None,
             spec: Spec::Proc(jq),
             hyps,
             bconds: Vec::new(),
@@ -563,7 +560,7 @@ impl<'e> Gen<'e> {
         self.bka = bka2;
         self.wrap = wrap_id;
         self.kw = kw_id;
-        self.lpg = Some(LoopG { head: u128::MAX, is_block: false, outer: None, hs: hs_lam.clone(), bkp: bkp0, bka: bka0, wrap, kw, hu: hu.clone(), fd: fd.clone(), yt: hs_lam, hy: hy.clone() });
+        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, wrap, kw, hu: hu.clone(), fd: fd.clone(), yt: hs_lam, hy: hy.clone() });
         self.trace(|| format!("cfg label {} at {:x}", k, a));
         let hus = std::mem::take(&mut self.hus);
         let res = self.prove(st_body);

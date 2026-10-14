@@ -46,7 +46,6 @@ pub enum RP {
     /// bitwise at the width (a word equation bit by bit)
     Bitwise(Vec<R>, u128),
     Defs(Box<RP>, Vec<String>),
-    Apply(R, Vec<RA>),
     Mp(R, Vec<RA>),
 }
 
@@ -70,7 +69,6 @@ pub fn fill(r: R, name: &str, with: &R) -> R {
             RP::Arith(rs) => RP::Arith(rs.into_iter().map(|r| fill(r, name, with)).collect()),
             RP::Bitwise(rs, n) => RP::Bitwise(rs.into_iter().map(|r| fill(r, name, with)).collect(), n),
             RP::Defs(i, n) => RP::Defs(Box::new(fp(*i, name, with)), n),
-            RP::Apply(r, a) => RP::Apply(fill(r, name, with), a.into_iter().map(|x| fa(x, name, with)).collect()),
             RP::Mp(r, a) => RP::Mp(fill(r, name, with), a.into_iter().map(|x| fa(x, name, with)).collect()),
         }
     }
@@ -254,7 +252,6 @@ impl<'e> Gen<'e> {
             RP::Arith(rs) => G::Arith(rs.iter().map(|r| self.ev_in(api, r, slots)).collect::<Result<_, _>>()?),
             RP::Bitwise(rs, n) => G::Bitwise(rs.iter().map(|r| self.ev_in(api, r, slots)).collect::<Result<_, _>>()?, Some(Term::nat(Nat::from_u128(*n)))),
             RP::Defs(inner, names) => G::Defs(Box::new(self.g_of(api, inner, slots)?), self.syms(names)?),
-            RP::Apply(r, args) => G::Apply(self.ev_in(api, r, slots)?, self.args_of(api, args, slots)?),
             RP::Mp(r, args) => G::Mp(self.ev_in(api, r, slots)?, self.args_of(api, args, slots)?),
         })
     }
