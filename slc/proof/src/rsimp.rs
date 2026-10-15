@@ -459,6 +459,116 @@ impl State {
         Ok(None)
     }
 
+    /// a conditional equation's instance under a binder, its premises'
+    /// variables closed there: the rule at those values, its premises
+    /// discharged, its other variables generalized again -- an
+    /// unconditional equation, applied by `rewrite_under`
+    fn under_conditional(&self, env: &mut Env, lg: &Logic, s: &Seq, rs: &Rules, depth: usize) -> KResult<Option<Seq>> {
+        // (the subterms below binders, with how many binders are above them)
+        fn walk(t: &Term, d: u32, bf: &dyn Fn(SymId, usize) -> u32, out: &mut Vec<(Term, u32)>) {
+            if d > 0 && t.loose_depth(bf) > 0 {
+                out.push((t.clone(), d));
+            }
+            match t.node() {
+                Node::App(s, a) => {
+                    for (i, x) in a.iter().enumerate() {
+                        walk(x, d + bf(*s, i), bf, out);
+                    }
+                }
+                Node::Var(_, a) => {
+                    for x in a.iter() {
+                        walk(x, d, bf, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut sites = Vec::new();
+        {
+            let bf = env.binders_fn();
+            walk(s.concl(), 0, &bf, &mut sites);
+        }
+        if sites.is_empty() {
+            return Ok(None);
+        }
+        // (each site's bound variables as fresh variables, for matching)
+        let mut opened = Vec::new();
+        for (t, d) in &sites {
+            let holes: Vec<Term> = (0..*d).map(|_| Term::var(env.new_var("_b", 0), vec![])).collect();
+            let tc = t.instantiate_params(&holes, &env.binders_fn());
+            let ids: Vec<VarId> = holes.iter().filter_map(|h| match h.node() {
+                Node::Var(v, _) => Some(*v),
+                _ => None,
+            }).collect();
+            opened.push((tc, ids));
+        }
+        if !rs.rules.iter().any(|r| r.prems > 0 && r.kind == Kind::Eq) {
+            return Ok(None);
+        }
+        for rule in rs.rules.iter() {
+            if rule.prems == 0 || rule.kind != Kind::Eq {
+                continue;
+            }
+            // (the variables of its premises)
+            let mut pv = Vec::new();
+            let mut c = rule.seq.concl().clone();
+            for _ in 0..rule.prems {
+                let Ok((h, r)) = imp_parts(env, &c) else { break };
+                h.vars(&mut pv);
+                c = r;
+            }
+            let pv: Vec<VarId> = pv.into_iter().filter(|v| rule.pvars.contains(v)).collect();
+            for (tc, hole_ids) in &opened {
+                let mut binds = Vec::new();
+                if !pmatch_at(env, &rule.lhs, tc, &rule.pvars, &mut binds, 0, false) {
+                    continue;
+                }
+                let closed = |x: &Term| {
+                    let mut vs = Vec::new();
+                    x.vars(&mut vs);
+                    !vs.iter().any(|v| hole_ids.contains(v))
+                };
+                if pv.iter().any(|v| !binds.iter().any(|(w, x)| w == v && closed(x))) {
+                    continue;
+                }
+                let mut sr = rule.seq.clone();
+                for (v, x) in binds.iter().filter(|(w, _)| pv.contains(w)) {
+                    sr = Seq::inst(env, &sr, *v, x)?;
+                }
+                let mut ok = true;
+                for _ in 0..rule.prems {
+                    let (h, _) = imp_parts(env, sr.concl())?;
+                    match self.premise(env, lg, &h, rs, depth)? {
+                        Some(p) => sr = Seq::mp(env, &sr, &p)?,
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                for v in rule.pvars.iter().rev() {
+                    if pv.contains(v) {
+                        continue;
+                    }
+                    let mut vs = Vec::new();
+                    sr.concl().vars(&mut vs);
+                    if vs.contains(v) {
+                        sr = Seq::gen(env, lg, &sr, *v)?;
+                    }
+                }
+                if let Ok(s2) = Seq::rewrite_under(env, lg, &sr, s, &[]) {
+                    if s2.concl() != s.concl() {
+                        return Ok(Some(s2));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// `s` with the part `focus` picks of its conclusion simplified
     fn normalize(&self, env: &mut Env, lg: &Logic, mut s: Seq, focus: &dyn Fn(&Term) -> Term, rs: &Rules, depth: usize) -> KResult<Seq> {
         for _ in 0..LIMIT {
@@ -485,6 +595,12 @@ impl State {
                 }
             }
             if !moved {
+                // (under binders: a conditional equation whose premises are
+                // closed there, specialized to them)
+                if let Some(s2) = self.under_conditional(env, lg, &s, rs, depth)? {
+                    s = s2;
+                    continue;
+                }
                 return Ok(s);
             }
         }

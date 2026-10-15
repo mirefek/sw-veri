@@ -535,6 +535,18 @@ goes, in order:
   --, and the state's record fields are simplified;
 - through a local's choice of a word (`any_rel`), and an `if`'s outcome
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
+  a spec's choice (`havoc .. where d`) by a `with` fact `ex x. d(x)` (d as
+  written or simplified), d of the name kept as a last conjunct;
+- through a spec's run: a function value at its arguments (its definition,
+  `app(fn_build(D, ..), regs)` with `regs in D` discharged), a bind of a
+  program with several outcomes (`ex o. runs(p, s, o) && ..`, o named),
+  a disjunction a side of which is decided false (the precondition, the
+  argument count), a contract's `overflow || body` (the overflow as a
+  call's: carried to the outcome, closed against the goal), a bind's
+  dispatch on its outcome known (`g.disp_ok`, `g.disp_exc`); stopped, an
+  unused `with` equation (or conjunction of them) whose left side occurs
+  rewrites the fact (the arguments' values from the registers), and it
+  goes on;
 - into the `if`'s branch that is decided: by a `with` fact implying c or
   its negation propositionally (c as written, simplified by step's own
   rules: `snd(pair(a, b))` to b .., or both with the memory views unfolded:
@@ -719,6 +731,10 @@ excludes the registered ones).
   2. nested rsimp;
   3. arith on the relevant facts.
 - Ground arithmetic and literal (in)equalities are evaluated.
+- Under binders (`rewrite_under`: each binder's extensionality, choice's
+  by `choose_ext`): the unconditional rules, and a conditional one whose
+  premises' variables are closed at the site (`app(fn_update(f, "vm", v),
+  "objs")` under a choice: `"objs" != "vm"` discharged, the rest general).
 - A program outcome's parts are registered rules (`out_state` / `out_value`
   of `ok` and `exc`, `fst` of `ok` / `exc` / `diverge`; core/records.core).
 - `RSIMP_TRACE=1` prints every rewrite.

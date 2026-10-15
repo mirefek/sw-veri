@@ -1801,6 +1801,7 @@ impl State {
         let sym = |n: &str| env.sym_by_name.get(n).copied();
         let (runs, mkprog, letin, bind, any, and, or, not, det) =
             (sym("runs"), sym("mkprog"), sym("letin"), sym("bind_rel"), sym("any_rel"), sym("and"), sym("or"), sym("not"), sym("g.det"));
+        let (app_s, ovf) = (sym("app"), sym("abi.overflow"));
         let head = |t: &Term| match t.node() {
             Node::App(f, a) => Some((*f, a.to_vec())),
             _ => None,
@@ -1830,6 +1831,12 @@ impl State {
         let is_call: Vec<bool> = withs.iter().map(|w| call_lemma(env, lg, w.concl())).collect();
         // (a call's contract is no operation's fact nor a branch's)
         let is_op: Vec<bool> = withs.iter().zip(&is_call).map(|(w, c)| *c || op_fact(w.concl())).collect();
+        // (the `with` equations: rewriting the fact where their left side occurs)
+        // (equations, or conjunctions of them: their parts)
+        let eqs: Vec<(usize, Vec<Seq>)> = (0..withs.len()).filter(|&i| !is_op[i]).filter_map(|i| {
+            let parts = split_conj(env, vec![withs[i].clone()]).ok()?;
+            parts.iter().all(|p| matches!(p.concl().node(), Node::App(e, x) if *e == lg.eq && !matches!(x[0].node(), Node::Var(..)))).then_some((i, parts))
+        }).collect();
         let mut side: Vec<Seq> = Vec::new();
         // (the fact simplified by step's own rules first: a loop body at a
         // state `pair(s, ..)` reads `fst(pair(s, ..))` as s)
@@ -1837,6 +1844,8 @@ impl State {
         let mut cur = self.step_simp(env, lg, cur0)?;
         // (`L && R` stepped in L, R pending: on L's outcome `x = V`, R at V)
         let mut pending: Vec<Seq> = Vec::new();
+        let mut fallbacks = 0;
+        loop {
         for _ in 0..10000 {
             let Some((f, a)) = head(cur.concl()) else { break };
             if f == lg.eq && matches!(a[0].node(), Node::Var(..)) && !pending.is_empty() {
@@ -1847,6 +1856,13 @@ impl State {
             }
             if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == mkprog) {
                 cur = self.lemma(env, lg, "g.runs_elim", &[cur])?;
+            } else if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == app_s) {
+                // (a function value at its arguments: its definition, its
+                // `fn_build` at them)
+                match self.step_app(env, lg, &cur, &a[0], &using)? {
+                    Some(n) => cur = n,
+                    None => break,
+                }
             } else if let (true, Some((g, _))) = (Some(f) == runs, head(&a[0])) {
                 // (a defined program: its definition)
                 if !matches!(env.syms[g as usize].kind, sl_kernel::env::SymKind::Defined { .. }) {
@@ -1865,19 +1881,51 @@ impl State {
                 match self.step_bind_any(env, lg, &cur, &withs, &is_op, &mut used, &using, &mut why)? {
                     Some(n) => cur = n,
                     None => match self.step_call(env, lg, &cur, &withs, &is_call, &mut used, &using, &mut why)? {
-                        Some(d) => cur = self.step_split_call(env, lg, d, &pending, &mut xs, &mut side)?,
+                        Some(d) => cur = self.step_split_call(env, lg, d, &pending, &mut xs, &mut side, true)?,
+                        // (a bind of a program with several outcomes -- a
+                        // spec --: its run, its outcome named)
+                        None if !xs.is_empty() && head(&a[0]).is_some_and(|(p, _)| {
+                            matches!(env.syms[p as usize].kind, sl_kernel::env::SymKind::Defined { .. }) && !env.syms[p as usize].name.starts_with("gimple.")
+                        }) => {
+                            self.facts.push(("__stepb".into(), cur.clone()));
+                            let r = self.eval(env, lg, &parse_pe("expand(__stepb, bind_rel)")?);
+                            self.facts.pop();
+                            cur = r?;
+                        }
                         None => break,
                     },
                 }
             } else if Some(f) == any {
-                // (a local's choice: a word, named)
+                // (a local's choice: a word, named; a spec's choice: by a
+                // `with` fact that one exists, what it is kept)
                 if xs.is_empty() {
                     break;
                 }
                 let ex_t = Term::app(lg.ex, vec![a[0].clone()]);
-                let Ok(ne) = self.by(env, lg, &ex_t, &parse_pe("ex_intro({0}, simp())")?) else { break };
+                // (a fact of its property as written, or simplified)
+                let rs = self.step_rules(env, lg)?;
+                let ex_e = self.rsimp_eq(env, lg, &ex_t, &rs, 0)?;
+                let ex_s = mem::rhs(env, ex_e.concl());
+                let by_fact = (0..withs.len()).find(|&i| !is_op[i] && (withs[i].concl() == &ex_t || withs[i].concl() == &ex_s));
+                let ne = match by_fact {
+                    Some(i) => {
+                        mark_used(&withs, &mut used, i);
+                        if withs[i].concl() == &ex_t {
+                            withs[i].clone()
+                        } else {
+                            Seq::rewrite(env, &Seq::sym(env, &ex_e)?, &withs[i])?
+                        }
+                    }
+                    None => match self.by(env, lg, &ex_t, &parse_pe("ex_intro({0}, simp())")?) {
+                        Ok(ne) => ne,
+                        Err(_) => break,
+                    },
+                };
                 let e = self.lemma(env, lg, "g.any_e", &[ne, cur])?;
                 let h = self.obtain_one(env, lg, e, &xs.pop_front().unwrap())?;
+                if by_fact.is_some() {
+                    side.push(and_part(env, &h, false)?);
+                }
                 cur = and_part(env, &h, true)?;
             } else if f == lg.ex {
                 if xs.is_empty() {
@@ -1948,8 +1996,45 @@ impl State {
                 let (t, hk) = (and_part(env, &cur, false)?, and_part(env, &cur, true)?);
                 let k = Seq::rewrite(env, &t, &hk)?;
                 cur = self.step_simp(env, lg, k)?;
+            } else if Some(f) == or && head(&a[0]).is_some_and(|(g, ga)| Some(g) == bind && head(&ga[0]).is_some_and(|(p, _)| Some(p) == ovf)) {
+                // (a contract: its overflow, or its body)
+                let d = self.step_ovf(env, lg, &cur, &using)?;
+                cur = self.step_split_call(env, lg, d, &pending, &mut xs, &mut side, false)?;
+            } else if Some(f) == or && ["g.disp_ok", "g.disp_exc"].iter().any(|l| facts::seq_of(env, l).is_some()) && {
+                // (a bind's dispatch on an outcome known: its continuation)
+                let mut hit = None;
+                for l in ["g.disp_ok", "g.disp_exc"] {
+                    if let Ok(n) = self.lemma(env, lg, l, &[cur.clone()]) {
+                        hit = Some(n);
+                        break;
+                    }
+                }
+                match hit {
+                    Some(n) => {
+                        cur = self.step_simp(env, lg, n)?;
+                        true
+                    }
+                    None => false,
+                }
+            } {
+            } else if Some(f) == or {
+                // (a disjunction one side of which is decided false: the other)
+                let neg = |t: &Term| match head(t) {
+                    Some((n, na)) if Some(n) == not => na[0].clone(),
+                    _ => Term::app(not.unwrap(), vec![t.clone()]),
+                };
+                let (l, r) = (a[0].clone(), a[1].clone());
+                if let Some(w) = self.step_decide(env, lg, &neg(&l), &withs, &is_op, &mut used, &using) {
+                    let nl = Seq::taut(env, lg, &[&w], &Term::app(not.unwrap(), vec![l.clone()]))?;
+                    cur = Seq::taut(env, lg, &[&cur, &nl], &r)?;
+                } else if let Some(w) = self.step_decide(env, lg, &neg(&r), &withs, &is_op, &mut used, &using) {
+                    let nr = Seq::taut(env, lg, &[&w], &Term::app(not.unwrap(), vec![r.clone()]))?;
+                    cur = Seq::taut(env, lg, &[&cur, &nr], &l)?;
+                } else {
+                    break;
+                }
             } else if Some(f) == and && (!withs.is_empty() || !xs.is_empty())
-                && head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == and || Some(g) == bind || Some(g) == letin || Some(g) == runs)
+                && head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == and || Some(g) == bind || Some(g) == letin || Some(g) == runs || Some(g) == or || Some(g) == any)
             {
                 pending.push(and_part(env, &cur, true)?);
                 cur = and_part(env, &cur, false)?;
@@ -1961,6 +2046,32 @@ impl State {
                 }
                 cur = k;
             }
+        }
+        // (stopped: an unused `with` equation whose left side occurs --
+        // the arguments' values, say --: the fact rewritten, on)
+        let mut again = false;
+        for (i, parts) in &eqs {
+            if used[*i] {
+                continue;
+            }
+            for e in parts {
+                let Node::App(_, x) = e.concl().node() else { continue };
+                if occurs(&x[0], cur.concl()) {
+                    if let Ok(n) = Seq::rewrite(env, e, &cur) {
+                        cur = n;
+                        again = true;
+                    }
+                }
+            }
+            if again {
+                mark_used(&withs, &mut used, *i);
+                break;
+            }
+        }
+        fallbacks += 1;
+        if !again || fallbacks > 100 {
+            break;
+        }
         }
         while let Some(r) = pending.pop() {
             let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
@@ -2222,13 +2333,17 @@ impl State {
         let (rule, var, value, mem) = match (b1.node(), ex_body(&b1)) {
             (_, Some(b2)) => {
                 // ex V r. (V in Vm && P(V)) && o = ok(fn_update(w, "vm", V), r)
+                // (P of V alone: callV; of V and r, or a call1: callVR / call1VR)
                 let Node::App(a1, x) = b2.node() else { return err("step: the contract's return: unknown shape") };
                 let Node::App(a2, y) = x[0].node() else { return err("step: the contract's return: unknown shape") };
-                if *a1 != and || *a2 != and || one {
-                    return err("step: the contract's return: unknown shape (or `call1` with a memory property)");
+                if *a1 != and || *a2 != and {
+                    return err("step: the contract's return: unknown shape");
                 }
-                let pv = unshift(&y[1], 1, 0, &bf).ok_or_else(|| KernelError("step: the contract's memory property names the return".into()))?;
-                ("gc.contract_callV", "P", pv, None)
+                match (one, unshift(&y[1], 1, 0, &bf)) {
+                    (false, Some(pv)) => ("gc.contract_callV", "P", pv, None),
+                    (false, None) => ("gc.contract_callVR", "P", y[1].clone(), None),
+                    (true, _) => ("gc.contract_call1VR", "P", y[1].clone(), None),
+                }
             }
             (Node::App(a1, x), None) if *a1 == and => {
                 let v = ok_mem(&x[0]).ok_or_else(|| KernelError("step: the contract's return: not `o = ok(fn_update(w, \"vm\", V), r) && R(r)`".into()))?;
@@ -2351,12 +2466,66 @@ impl State {
         self.lemma(env, lg, name, &pre)
     }
 
+    /// `runs(app(F, a), s, o)`: F's definition unfolded (a defined function
+    /// value), or `app(fn_build(D, x. v(x)), a)` as v(a) (a in D
+    /// discharged, `app_fn_build`); None if neither
+    fn step_app(&mut self, env: &mut Env, lg: &Logic, cur: &Seq, fa: &Term, using: &[Seq]) -> KResult<Option<Seq>> {
+        let fb = env.sym_by_name.get("fn_build").copied();
+        let in_ = env.sym_by_name.get("in").copied().ok_or_else(|| KernelError("no `in`".into()))?;
+        let Node::App(_, x) = fa.node() else { return Ok(None) };
+        let (f, arg) = (x[0].clone(), x[1].clone());
+        match f.node() {
+            Node::App(g, ga) if Some(*g) == fb && ga.len() == 2 => {
+                let mem = self.mem_discharge(env, lg, &Term::app(in_, vec![arg.clone(), ga[0].clone()]), using, 0)?;
+                let l = facts::seq_of(env, "app_fn_build").ok_or_else(|| KernelError("`app_fn_build` is not loaded".into()))?;
+                let mut vs = Vec::new();
+                l.concl().vars(&mut vs);
+                let var = |n: &str| vs.iter().copied().find(|v| env.vars[*v as usize].name == n);
+                let (Some(vd), Some(vv), Some(va)) = (var("d"), var("v"), var("a")) else { return err("step: `app_fn_build`'s variables") };
+                let mut e = Seq::inst(env, &l, vd, &ga[0])?;
+                e = Seq::inst(env, &e, vv, &ga[1])?;
+                e = Seq::inst(env, &e, va, &arg)?;
+                let e = Seq::mp(env, &e, &mem)?;
+                Ok(Some(self.step_simp(env, lg, Seq::rewrite(env, &e, cur)?)?))
+            }
+            Node::App(g, _) if matches!(env.syms[*g as usize].kind, sl_kernel::env::SymKind::Defined { .. }) => {
+                let name = env.syms[*g as usize].name.clone();
+                self.facts.push(("__stepa".into(), cur.clone()));
+                let r = self.eval(env, lg, &parse_pe(&format!("expand(__stepa, {})", name))?);
+                self.facts.pop();
+                Ok(Some(r?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// a contract's `bind_rel(abi.overflow, s, ..) || B`: the overflow by
+    /// `ct.bind_ovf` (s's memory a memory), `(ex v. v in Vm && X(v)) || B`
+    fn step_ovf(&mut self, env: &mut Env, lg: &Logic, cur: &Seq, using: &[Seq]) -> KResult<Seq> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("step: `{}` is not loaded", n)));
+        let (or, app, in_, vm_t) = (sym("or")?, sym("app")?, sym("in")?, sym("x86_64_linux.Vm")?);
+        let (ob, b) = match cur.concl().node() {
+            Node::App(f, a) if *f == or => (a[0].clone(), a[1].clone()),
+            _ => return err("step: not a contract's `overflow || body`"),
+        };
+        let st = match ob.node() {
+            Node::App(_, a) if a.len() == 5 => a[1].clone(),
+            _ => return err("step: not a bind of the overflow"),
+        };
+        let hv = self.mem_discharge(env, lg, &Term::app(in_, vec![Term::app(app, vec![st, Term::bytes(b"vm")]), Term::app(vm_t, vec![])]), using, 0)?;
+        let ho = Seq::assume(env, ob.clone())?;
+        let a = self.lemma(env, lg, "ct.bind_ovf", &[hv, ho])?;
+        let imp = a.discharge(env, &ob)?;
+        let goal = Term::app(or, vec![a.concl().clone(), b]);
+        Seq::taut(env, lg, &[cur, &imp], &goal)
+    }
+
     /// a call's `A || B` split: A (the overflow) carried to the outcome
     /// through the pending continuations, A' -- the goal's disjunct, by
     /// the frame `Cases` at the block's end --; B (the return) assumed, its
     /// witnesses named by the next names, what the contract says of them
     /// kept for after (`side`), its continuation returned to step on
-    fn step_split_call(&mut self, env: &mut Env, lg: &Logic, d: Seq, pending: &[Seq], xs: &mut std::collections::VecDeque<String>, side: &mut Vec<Seq>) -> KResult<Seq> {
+    fn step_split_call(&mut self, env: &mut Env, lg: &Logic, d: Seq, pending: &[Seq], xs: &mut std::collections::VecDeque<String>, side: &mut Vec<Seq>, call: bool) -> KResult<Seq> {
         let or = env.sym_by_name.get("or").copied();
         let and = env.sym_by_name.get("and").copied().ok_or_else(|| KernelError("step: no `and`".into()))?;
         let (a, bt) = match d.concl().node() {
@@ -2376,6 +2545,13 @@ impl State {
         let mut t = self.step_simp(env, lg, and_part(env, &sa, true)?)?;
         let mut pend: Vec<Seq> = pending.to_vec();
         loop {
+            // (a dispatch on the exception: its continuation)
+            if matches!(t.concl().node(), Node::App(f, _) if Some(*f) == or) {
+                if let Ok(n) = self.lemma(env, lg, "g.disp_exc", &[t.clone()]) {
+                    t = self.step_simp(env, lg, n)?;
+                    continue;
+                }
+            }
             let is_out = matches!(t.concl().node(), Node::App(f, x) if *f == lg.eq && matches!(x[0].node(), Node::Var(..)));
             if !is_out || pend.is_empty() {
                 break;
@@ -2398,6 +2574,9 @@ impl State {
         let inst = Seq::all_elim(env, lg, &imp, &c)?;
         let a_imp = Seq::mp(env, &inst, &wit)?.discharge(env, &a)?;
         self.frames.push(Frame::Cases(d, a_imp, bt.clone()));
+        if !call {
+            return Seq::assume(env, bt);
+        }
         // (the return: its witnesses named, the contract's facts kept)
         let mut cur = Seq::assume(env, bt)?;
         while matches!(cur.concl().node(), Node::App(e, _) if *e == lg.ex) {
@@ -3234,6 +3413,17 @@ fn unshift(t: &Term, d: u32, cutoff: u32, binders: &dyn Fn(SymId, usize) -> u32)
         Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => Some(t.clone()),
         Node::Var(_, a) => Some(t.with_args(a.iter().map(|x| unshift(x, d, cutoff, binders)).collect::<Option<Vec<_>>>()?)),
         Node::App(s, a) => Some(t.with_args(a.iter().enumerate().map(|(i, x)| unshift(x, d, cutoff + binders(*s, i), binders)).collect::<Option<Vec<_>>>()?)),
+    }
+}
+
+/// `p` occurs in `t`
+fn occurs(p: &Term, t: &Term) -> bool {
+    if p == t {
+        return true;
+    }
+    match t.node() {
+        Node::App(_, a) | Node::Var(_, a) => a.iter().any(|x| occurs(p, x)),
+        _ => false,
     }
 }
 
