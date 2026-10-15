@@ -16,10 +16,6 @@ needs it (`ms.gm_run`). The invariant composed of more basic definitions,
 so a function that breaks it in part still states its exact contract and
 keeps the lower-level properties. Bottom-up:
 
-- The list specs' callers' rules still missing (`mp.dqh_q`, free_meta's,
-  for `__malloc_alloc_meta` and free_group); the lists tied to the
-  invariant's (`cyclic` on the footprint's view: the active lists, the
-  free metas).
 - Already specs by purpose, kept: a_ctz_32, a_clz_32, size_to_class,
   size_overflows, a_cas, errno_location, a_crash, resetlock (the lock word
   0), upgradelock (nothing).

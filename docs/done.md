@@ -635,3 +635,11 @@ item is a short summary of finished work; details are in the files named.
   `ct.fun_divg_v0`). Their memory-level specs, C2s and compositions
   retired; their runs kept as effect summaries (`ms.sq_run`, `ms.ib_run`,
   `ms.db_run`, `ms.ab_run`; account_bounce's effect `account_vm`).
+- **The lists by the invariant**: a cyclic list at a context word the
+  invariant reads, of meta slots, is as the list functions need it
+  (`mp.ctx_list`: `list_at`); so the active lists (`mp.active_at`) and the
+  free metas (`mp.free_metas_at`). A meta slot's bytes accessible
+  (`mp.slot_mem`, `mp.slot_meta`), a context byte not free so
+  (`mp.ctx_acc`); words from read-write bytes (`mp.rw_usable`,
+  `mp.word_rw`). The list functions' callers' rules complete:
+  dequeue_head's (`mp.dqh_q`) and free_meta's (`mp.fm_q`).

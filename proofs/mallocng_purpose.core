@@ -2038,6 +2038,184 @@ proof
     {mallocng_purpose.free_meta_purpose_fun(c_src_malloc_mallocng_malloc.__malloc_context)}, {4198400}, {text.code}, {statics}), all_elim(fmtc.linked, {statics}), r)
 qed
 
+// dequeue_head's contract at a call (its C function value): an overflow,
+// or the list's head h returned and taken out (`head_taken`) -- for its
+// caller `__malloc_alloc_meta`
+theorem mp.dqh_q: all t phead l regs o2. t in abi.World -> t in univ(1) -> phead in bits(64) ->
+  l in list_type(omega) -> mallocng_purpose.list_at(app(t, "vm"), app(t, "objs"), phead, l) -> abi.thread_ok(app(t, "vm"), app(t, "fs_base")) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, phead))) ->
+  runs(app(mallocng_purpose.dequeue_head_purpose_fun(), regs), t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V h r. ((V in x86_64_linux.Vm && mallocng_purpose.is_head(app(t, "vm"), app(t, "objs"), phead, h)) &&
+     mallocng_purpose.head_taken(app(t, "vm"), V, app(t, "objs"), phead, h)) && o2 = ok(fn_update(t, "vm", V), pair(h, r)))
+proof
+  fix t phead l regs o2
+  assume hw htu hp hl H hth hro h
+  let OVF := exc_val("stack_overflow", empty)
+  let T0 := app(t, "vm")
+  let O := app(t, "objs")
+  have hpre: (ex x2. x2 in list_type(omega) && mallocng_purpose.list_at(app(t, "vm"), app(t, "objs"), phead, x2)) && abi.thread_ok(app(t, "vm"), app(t, "fs_base"))
+    by taut((ex x2. x2 in list_type(omega) && mallocng_purpose.list_at(app(t, "vm"), app(t, "objs"), phead, x2) by ex_intro({l}, taut(hl, H))), hth)
+  have rl rn r0 := apply(gc.regs1, hp, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_purpose.dequeue_head_purpose_fun, app_fn_build, ra in h
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, app(regs, 0)) = phead by defs(simp(r0, hp), bits_of_int, pow2)
+  have b := apply(g.runs_elim, h)
+  let K(s3, v, o) := letin(v, x5. bind_rel(gimple.result(64, x5), s3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o = ok(x6, pair(x8, x9)))), x6 x7. o = exc(x6, x7), x6. o = diverge(x6)))
+  have b1: bind_rel(mallocng_purpose.dequeue_head_purpose(bits_of_int(64, app(regs, 0))), t, x3 x4. K(x3, x4, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
+    by taut(b, o1l)
+  have b2 := rewrite(bp, b1)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have {pv = mem, pb = bytes} := apply(ms.world_parts, hw)
+  have ci := apply(ct.contract_inv[P := x0. (ex x2. x2 in list_type(omega) && mallocng_purpose.list_at(app(x0, "vm"), app(x0, "objs"), phead, x2)) && abi.thread_ok(app(x0, "vm"), app(x0, "fs_base")),
+    B := x0 x2. letin(app(x0, "vm"), x3. any_rel(x4. x4 in bits(64) && mallocng_purpose.is_head(x3, app(x0, "objs"), phead, x4),
+      x4. letin(x4, x5. any_rel(x6. x6 in x86_64_linux.Vm && mallocng_purpose.head_taken(x3, app(fn_update(x0, "vm", x6), "vm"), app(fn_update(x0, "vm", x6), "objs"), phead, x5),
+        x6. letin(fn_update(x0, "vm", x6), x7. x2 = exc(pair(x7, empty), pair("ret", x5))))))), s := t, o := o3],
+    hpre, pv, expand(hs3, mallocng_purpose.dequeue_head_purpose))
+  // an overflow: the call's
+  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) ->
+      (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) proof
+    assume hx
+    obtain v, hv ho from hx
+    have e2: o2 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(ho, hk3))
+    show by ex_intro({v}, taut(hv, e2))
+  qed
+  // the head chosen (one exists: the head word's, `mp.head_is`), then a
+  // memory with it taken (one exists: as before for none, else dequeue's
+  // code's, `mp.dq_done`); its value returned
+  have c2: (ex x2. letin(T0, x3. any_rel(x4. x4 in bits(64) && mallocng_purpose.is_head(x3, O, phead, x4),
+        x4. letin(x4, x5. any_rel(x6. x6 in x86_64_linux.Vm && mallocng_purpose.head_taken(x3, app(fn_update(t, "vm", x6), "vm"), app(fn_update(t, "vm", x6), "objs"), phead, x5),
+          x6. letin(fn_update(t, "vm", x6), x7. x2 = exc(pair(x7, empty), pair("ret", x5))))))) &&
+      ((fst(x2) = 0 && o3 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o3 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+        ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o3 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o3 = diverge(snd(x2)))))) ->
+      (ex V h r. ((V in x86_64_linux.Vm && mallocng_purpose.is_head(T0, O, phead, h)) && mallocng_purpose.head_taken(T0, V, O, phead, h)) && o2 = ok(fn_update(t, "vm", V), pair(h, r))) proof
+    assume hx
+    obtain x2, hB hout from hx
+    have {ih = is_head} := apply(mp.head_is[vm := T0, objs := O, phead := phead, l := l], pb, hp, hl, H)
+    have rb: mallocng_specs.rd64(T0, phead) in bits(64) by defs(simp(), mallocng_specs.rd64)
+    have ne1: ex x4. x4 in bits(64) && mallocng_purpose.is_head(T0, O, phead, x4) by ex_intro({mallocng_specs.rd64(T0, phead)}, taut(rb, ih))
+    obtain hd, hhb hhi hk from apply(g.any_e, ne1, expand(hB, letin))
+    // a memory with hd taken
+    have wt: ex x6. x6 in x86_64_linux.Vm && mallocng_purpose.head_taken(T0, app(fn_update(t, "vm", x6), "vm"), app(fn_update(t, "vm", x6), "objs"), phead, hd) proof
+      have z: hd = 0 -> ex x6. x6 in x86_64_linux.Vm && mallocng_purpose.head_taken(T0, app(fn_update(t, "vm", x6), "vm"), app(fn_update(t, "vm", x6), "objs"), phead, hd) proof
+        assume hz
+        have ht: mallocng_purpose.head_taken(T0, app(fn_update(t, "vm", T0), "vm"), app(fn_update(t, "vm", T0), "objs"), phead, hd)
+          by defs(simp(hz), mallocng_purpose.head_taken)
+        show by ex_intro({T0}, taut(pv, ht))
+      qed
+      have nz: !(hd = 0) -> ex x6. x6 in x86_64_linux.Vm && mallocng_purpose.head_taken(T0, app(fn_update(t, "vm", x6), "vm"), app(fn_update(t, "vm", x6), "objs"), phead, hd) proof
+        assume hz
+        let DV := mallocng_specs.dequeue_vm(T0, phead, hd)
+        have q := apply(mp.dq_done[vm := T0, objs := O, phead := phead, m := hd], pv, pb, hp, hhb)
+        have {vt = mem} := apply(ms.dqvm_vm, {T0}, {phead}, {hd}, pv, simp(htu), hp, hhb)
+        have ht: mallocng_purpose.head_taken(T0, app(fn_update(t, "vm", DV), "vm"), app(fn_update(t, "vm", DV), "objs"), phead, hd)
+          by defs(simp(hz, q, keep(mallocng_purpose.dequeued)), mallocng_purpose.head_taken)
+        show by ex_intro({DV}, taut(vt, ht))
+      qed
+      show by taut(z, nz)
+    qed
+    obtain V, hV hT hk2 from apply(g.any_e, wt, hk)
+    have o3e: o3 = ok(fn_update(t, "vm", V), hd) by simp(rewrite(hk2, hout))
+    have k4 := rewrite(o3e, hk3)
+    have k5: bind_rel(gimple.result(64, hd), fn_update(t, "vm", V), x6 x7. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x7, x9))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+      by simp(expand(k4, letin), keep(bind_rel, any_rel, gimple.result))
+    obtain o4, hr4 hc4 from expand(k5, bind_rel)
+    have e4 := mp(all_elim(g.result64_inv, {fn_update(t, "vm", V)}, {hd}, {o4}), hhb, hr4)
+    have k6: any_rel(x9. x9 in bits(64), x9. o2 = ok(fn_update(t, "vm", V), pair(hd, x9))) by simp(rewrite(e4, hc4), keep(any_rel))
+    have nb: ex y. y in bits(64) by ex_intro({0}, simp())
+    obtain y, hy k7 from apply(g.any_e, nb, k6)
+    have hT2: mallocng_purpose.head_taken(T0, V, O, phead, hd) by simp(hT)
+    show by ex_intro({V}, {hd}, {y}, taut(hV, hhi, hT2, k7))
+  qed
+  show by taut(ci, c1, c2)
+qed
+
+// free_meta's contract at a call (its C function value, the context at
+// ctx): an overflow, or m's meta freed onto the list at ctx + 16 -- for its
+// callers (`__malloc_alloc_meta`'s caller alloc_group, free_group)
+theorem mp.fm_q: all t ctx m l regs o2. t in abi.World -> t in univ(1) -> ctx in bits(64) -> m in bits(64) -> int_lt(int_add(ctx, 16), int_pow(2, 64)) ->
+  l in list_type(omega) -> mallocng_purpose.list_at(app(t, "vm"), app(t, "objs"), bits_add(64, ctx, 16), l) ->
+  mallocng_purpose.meta_joinable(app(t, "vm"), app(t, "objs"), bits_add(64, ctx, 16), l, m) ->
+  abi.thread_ok(app(t, "vm"), app(t, "fs_base")) -> int_le(int_add(app(t, "fs_base"), 8), int_pow(2, 64)) ->
+  (int_le(int_add(app(t, "fs_base"), 8), m) || int_le(int_add(m, 40), app(t, "fs_base"))) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, m))) ->
+  runs(app(mallocng_purpose.free_meta_purpose_fun(ctx), regs), t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && mallocng_purpose.meta_freed(app(t, "vm"), V, app(t, "objs"), bits_add(64, ctx, 16), m)) && o2 = ok(fn_update(t, "vm", V), r))
+proof
+  fix t ctx m l regs o2
+  assume hw htu hc hm hcl hl H J hth hfb hfm hro h
+  let OVF := exc_val("stack_overflow", empty)
+  let T0 := app(t, "vm")
+  let PH := bits_add(64, ctx, 16)
+  have hpre: (((int_lt(int_add(ctx, 16), int_pow(2, 64)) && (ex x2. x2 in list_type(omega) && (mallocng_purpose.list_at(app(t, "vm"), app(t, "objs"), PH, x2) &&
+      mallocng_purpose.meta_joinable(app(t, "vm"), app(t, "objs"), PH, x2, m)))) && abi.thread_ok(app(t, "vm"), app(t, "fs_base"))) &&
+      int_le(int_add(app(t, "fs_base"), 8), int_pow(2, 64))) && (int_le(int_add(app(t, "fs_base"), 8), m) || int_le(int_add(m, 40), app(t, "fs_base")))
+    by taut(hcl, (ex x2. x2 in list_type(omega) && (mallocng_purpose.list_at(app(t, "vm"), app(t, "objs"), PH, x2) && mallocng_purpose.meta_joinable(app(t, "vm"), app(t, "objs"), PH, x2, m))
+      by ex_intro({l}, taut(hl, H, J))), hth, hfb, hfm)
+  have rl rn r0 := apply(gc.regs1, hm, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_purpose.free_meta_purpose_fun, app_fn_build, ra in h
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, app(regs, 0)) = m by defs(simp(r0, hm), bits_of_int, pow2)
+  have b := apply(g.runs_elim, h)
+  have b2: bind_rel(mallocng_purpose.free_meta_purpose(ctx, m), t, x3 x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(x3, pair(x5, x6)))),
+      x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by simp(b, o1l, bp, keep(bind_rel, mallocng_purpose.free_meta_purpose))
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have {pv = mem, pb = bytes} := apply(ms.world_parts, hw)
+  have ci := apply(ct.contract_inv[P := x0. (((int_lt(int_add(ctx, 16), int_pow(2, 64)) && (ex x2. x2 in list_type(omega) && (mallocng_purpose.list_at(app(x0, "vm"), app(x0, "objs"), PH, x2) &&
+      mallocng_purpose.meta_joinable(app(x0, "vm"), app(x0, "objs"), PH, x2, m)))) && abi.thread_ok(app(x0, "vm"), app(x0, "fs_base"))) &&
+      int_le(int_add(app(x0, "fs_base"), 8), int_pow(2, 64))) && (int_le(int_add(app(x0, "fs_base"), 8), m) || int_le(int_add(m, 40), app(x0, "fs_base"))),
+    B := x0 x2. letin(app(x0, "vm"), x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_purpose.meta_freed(x3, app(fn_update(x0, "vm", x4), "vm"), app(fn_update(x0, "vm", x4), "objs"), PH, m),
+      x4. letin(fn_update(x0, "vm", x4), x5. x2 = ok(pair(x5, empty), empty)))), s := t, o := o3],
+    hpre, pv, expand(hs3, mallocng_purpose.free_meta_purpose))
+  // an overflow: the call's
+  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) ->
+      (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) proof
+    assume hx
+    obtain v, hv ho from hx
+    have e2: o2 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(ho, hk3))
+    show by ex_intro({v}, taut(hv, e2))
+  qed
+  // free_meta's memory: one it is for (one exists: its code's -- the meta
+  // zeroed, then queued: `mp.qu_done`, `mp.fm_done`)
+  have c2: (ex x2. letin(T0, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_purpose.meta_freed(x3, app(fn_update(t, "vm", x4), "vm"), app(fn_update(t, "vm", x4), "objs"), PH, m),
+        x4. letin(fn_update(t, "vm", x4), x5. x2 = ok(pair(x5, empty), empty)))) &&
+      ((fst(x2) = 0 && o3 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o3 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+        ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o3 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o3 = diverge(snd(x2)))))) ->
+      (ex V r. (V in x86_64_linux.Vm && mallocng_purpose.meta_freed(T0, V, app(t, "objs"), PH, m)) && o2 = ok(fn_update(t, "vm", V), r)) proof
+    assume hx
+    obtain x2, hB hout from hx
+    let ZV := mallocng_specs.zero_meta(T0, m)
+    have phb: PH in bits(64) by defs(simp(), bits_add)
+    have zv: ZV in x86_64_linux.Vm by defs(mp(all_elim(ms.wr_any, {T0}, {m}, {40}, {0}), pv), mallocng_specs.zero_meta)
+    have zb: app(ZV, "bytes") in fn_space(bits(64), bits(8)) by defs(simp(mp(all_elim(x86.store_typed, {app(T0, "bytes")}, {m}, {40}, {0}), pb)), mallocng_specs.zero_meta)
+    have zu: ZV in univ(1) by defs(simp(htu, apply(g.store_univ, {T0}, {m}, {40}, {0}, pv)), mallocng_specs.zero_meta)
+    have qd := apply(mp.qu_done[vm := ZV, objs := app(t, "objs"), phead := PH, m := m], zv, zb, phb, hm)
+    have fd := apply(mp.fm_done[vm := T0, V := mallocng_specs.queue_vm(ZV, PH, m), objs := app(t, "objs"), phead := PH, m := m], pv, pb, phb, hm, qd)
+    have {vt = mem} := apply(ms.quvm_vm, {ZV}, {PH}, {m}, zv, zu, phb, hm)
+    have ne: ex x4. x4 in x86_64_linux.Vm && mallocng_purpose.meta_freed(T0, app(fn_update(t, "vm", x4), "vm"), app(fn_update(t, "vm", x4), "objs"), PH, m)
+      by ex_intro({mallocng_specs.queue_vm(ZV, PH, m)}, taut(vt,
+        (mallocng_purpose.meta_freed(T0, app(fn_update(t, "vm", mallocng_specs.queue_vm(ZV, PH, m)), "vm"), app(fn_update(t, "vm", mallocng_specs.queue_vm(ZV, PH, m)), "objs"), PH, m) by simp(fd))))
+    obtain V, hV hS hk from apply(g.any_e, ne, expand(hB, letin))
+    have x2e: x2 = ok(pair(fn_update(t, "vm", V), empty), empty) by simp(expand(hk, letin))
+    have o3e: o3 = ok(fn_update(t, "vm", V), empty) by simp(rewrite(x2e, hout))
+    have k4 := rewrite(o3e, hk3)
+    have k5: any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(fn_update(t, "vm", V), pair(x5, x6)))) by simp(k4, keep(any_rel))
+    have nb: ex y. y in bits(64) by ex_intro({0}, simp())
+    obtain y1, hy1 k6 from apply(g.any_e, nb, k5)
+    obtain y2, hy2 k7 from apply(g.any_e, nb, k6)
+    have hS2: mallocng_purpose.meta_freed(T0, V, app(t, "objs"), PH, m) by simp(hS)
+    show by ex_intro({V}, {pair(y1, y2)}, taut(hV, hS2, k7))
+  qed
+  show by taut(ci, c1, c2)
+qed
+
 // the ghost record with a new abstract state: a ghost record
 theorem mp.g_upd: all h A2. h in mp.G -> A2 in mallocng.Abs -> A2 in univ(1) -> fn_update(h, "A", A2) in mp.G
 proof
