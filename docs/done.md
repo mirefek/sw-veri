@@ -647,3 +647,14 @@ item is a short summary of finished work; details are in the files named.
   purpose specs joined the leaf specs and the code's effect summaries in
   layers/mallocng_specs.sl (`X_spec`); their refinements in
   proofs/mallocng_refine.core.
+- **The invariant kept by list operations** (for try_avail; queue's and
+  free's later):
+  - the same geometry (`mp.geom`: the lists, the groups' links and masks
+    may differ), the masks frame's lemmas derived from it (`mp.mo_geom_of`,
+    `mp.group_tr_g`);
+  - the links frame (`mp.lframe`, `mp.holds_links`): only the lists' head
+    words and the metas' links written, the invariant kept given the new
+    lists, links and partition;
+  - an active list reorganised (`mp.relist`: class sc's list l2, its
+    groups' links the memory's) after dequeue or a rotation
+    (`mp.holds_relist`: from `links_only` and `list_at`).
