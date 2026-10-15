@@ -402,12 +402,16 @@ pred active_ok(A: Abs) =
 
 // on a class's active list, at most one group with slots never handed out
 // (its active index below its last slot): only alloc_group makes such a
-// group, queued on an empty list (try_avail's `assert(mask)` rests on it)
+// group, queued on an empty list (try_avail's `assert(mask)` rests on it);
+// such a group's slots reach past its first page (alloc_group activates the
+// slots within it; try_avail activates more up to a page's end)
 pred partial(m: Mem, A: Abs, g: nat) = b8(m, A.metas[g].mem + 8) % 32 < A.metas[g].last_idx
 
 pred partial_ok(A: Abs, m: Mem) =
-  all sc: nat, g: nat, g2: nat. sc < 48 && on_list(A.active[sc], g) && on_list(A.active[sc], g2) &&
-    partial(m, A, g) && partial(m, A, g2) -> g = g2
+  (all sc: nat, g: nat, g2: nat. sc < 48 && on_list(A.active[sc], g) && on_list(A.active[sc], g2) &&
+     partial(m, A, g) && partial(m, A, g2) -> g = g2) &&
+  (all sc: nat, g: nat. sc < 48 && on_list(A.active[sc], g) && partial(m, A, g) ->
+     4096 < UNIT + stride(A.metas[g]) * (A.metas[g].last_idx + 1))
 
 // every live block is in a slot (in only one: slots and groups do not overlap)
 pred blocks_ok(A: Abs, blocks: Addr -> Option[nat]) =

@@ -2446,7 +2446,7 @@ impl State {
             if !is_call[i] {
                 continue;
             }
-            let q = match self.step_call_lemma(env, lg, &withs[i], &w, &args, using) {
+            let q = match self.step_call_lemma(env, lg, &withs[i], &g, &w, &args, using) {
                 Ok(q) => q,
                 Err(KernelError(m)) => {
                     *why = Some(m);
@@ -2470,7 +2470,8 @@ impl State {
     /// variables from the call (t as w, ARGS as args), the rest from a
     /// `using` fact matching a premise (the first, in order); its other
     /// premises discharged (`mem_discharge`)
-    fn step_call_lemma(&mut self, env: &mut Env, lg: &Logic, lemma: &Seq, w: &Term, args: &Term, using: &[Seq]) -> KResult<Seq> {
+    #[allow(clippy::too_many_arguments)]
+    fn step_call_lemma(&mut self, env: &mut Env, lg: &Logic, lemma: &Seq, g: &Term, w: &Term, args: &Term, using: &[Seq]) -> KResult<Seq> {
         let runs = env.sym_by_name.get("runs").copied();
         let and = env.sym_by_name.get("and").copied();
         let seq_len = env.sym_by_name.get("seq_len").copied();
@@ -2492,12 +2493,13 @@ impl State {
         if n < 2 {
             return err("step: a call's contract without `gc.regs_ok(..) -> runs(..) ->`");
         }
-        // (the run's state and the registers' arguments: the call's)
-        let (t_pat, r_var, o_var) = match ps[n - 1].node() {
-            Node::App(f, a) if Some(*f) == runs => (a[1].clone(), match a[0].node() {
-                Node::App(_, x) if x.len() == 2 => x[1].clone(),
+        // (the callee, the run's state and the registers' arguments: the
+        // call's)
+        let (f_pat, t_pat, r_var, o_var) = match ps[n - 1].node() {
+            Node::App(f, a) if Some(*f) == runs => match a[0].node() {
+                Node::App(_, x) if x.len() == 2 => (x[0].clone(), a[1].clone(), x[1].clone(), a[2].clone()),
                 _ => return err("step: a call's contract: not `runs(app(F, regs), ..)`"),
-            }, a[2].clone()),
+            },
             _ => return err("step: a call's contract: its last premise not `runs(..)`"),
         };
         let args_pat = (|| {
@@ -2508,7 +2510,12 @@ impl State {
             (Some(*a1) == and && Some(*a2) == and && *e == lg.eq && Some(*l) == seq_len).then(|| u[0].clone())
         })()
         .ok_or_else(|| KernelError("step: a call's contract: its premise before the run not `gc.regs_ok(regs, ARGS)`".into()))?;
+        // (the callee's variables when the contract is of the callee itself;
+        // a contract of a spec the callee refines binds none)
         let mut binds = Vec::new();
+        if !pmatch(env, &f_pat, g, &vs, &mut binds) {
+            binds.clear();
+        }
         if !pmatch(env, &t_pat, w, &vs, &mut binds) {
             let pr = Printer::new(env);
             return err(format!("step: the contract is at `{}`, the call at `{}`", pr.short(&t_pat), pr.short(w)));

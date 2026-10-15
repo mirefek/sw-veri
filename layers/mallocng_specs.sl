@@ -729,13 +729,17 @@ proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
   }
 }
 
+// the thread pointer's word: not the allocator's (a function calling on
+// after writing the allocator's memory needs it intact)
+pred tls_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 8 -> uint(fs) + i notin footprint(c, A, blocks)
+
 // try_avail(pm), pm class sc's active list: a free slot of a group already
 // there. Its bit (1 << i) returned, slot i of the list's head reserved --
 // the head now, if need be: the list reorganised --; or 0, no group of the
 // list with a free slot (the list then empty). A runs out of stack, if it
 // does, with the memory arbitrary.
 proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     sc < 48 && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
   either { overflow() } or {
     let A0 = A

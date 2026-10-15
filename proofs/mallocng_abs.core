@@ -7240,21 +7240,34 @@ proof
 qed
 
 // at most one partially active group per list (`partial_ok`): kept when a
-// group partial on a list after was on it, and partial, before
+// group partial on a list after was on it, and partial, before, its slots
+// in the same places
 abbrev mp.partial_kept(A, A2, M, M2) := all sc g. sc in omega && g in omega -> int_lt(sc, 48) -> mallocng.on_list(A2.active[sc], g) ->
-  mallocng.partial(M2, A2, g) -> mallocng.on_list(A.active[sc], g) && mallocng.partial(M, A, g)
+  mallocng.partial(M2, A2, g) -> mallocng.on_list(A.active[sc], g) && mallocng.partial(M, A, g) &&
+    mallocng.stride(A2.metas[g]) = mallocng.stride(A.metas[g]) && A2.metas[g].last_idx = A.metas[g].last_idx
 
 theorem mp.partial_mono(A, A2, M, M2): mallocng.partial_ok(A, M) -> mp.partial_kept(A, A2, M, M2) -> mallocng.partial_ok(A2, M2)
 proof
   assume P hp
-  have p0 := expand(P, mallocng.partial_ok)
-  unfold mallocng.partial_ok
-  fix sc g g2
-  assume hn hl
-  have l0 o1 o2 q1 q2 := hl
-  have k1 k1p := mp(all_elim(hp, {sc}, {g}), taut(hn), l0, o1, q1)
-  have k2 k2p := mp(all_elim(hp, {sc}, {g2}), taut(hn), l0, o2, q2)
-  show := mp(all_elim(p0, {sc}, {g}, {g2}), hn, taut(l0, k1, k2, k1p, k2p))
+  have p0 p1 := expand(P, mallocng.partial_ok)
+  have u: all sc g g2. sc in omega && g in omega && g2 in omega -> int_lt(sc, 48) && mallocng.on_list(A2.active[sc], g) && mallocng.on_list(A2.active[sc], g2) &&
+      mallocng.partial(M2, A2, g) && mallocng.partial(M2, A2, g2) -> g = g2 proof
+    fix sc g g2
+    assume hn hl
+    have l0 o1 o2 q1 q2 := hl
+    have k1 k1p _ _ := mp(all_elim(hp, {sc}, {g}), taut(hn), l0, o1, q1)
+    have k2 k2p _ _ := mp(all_elim(hp, {sc}, {g2}), taut(hn), l0, o2, q2)
+    show := mp(all_elim(p0, {sc}, {g}, {g2}), hn, taut(l0, k1, k2, k1p, k2p))
+  qed
+  have pg: all sc g. sc in omega && g in omega -> int_lt(sc, 48) && mallocng.on_list(A2.active[sc], g) && mallocng.partial(M2, A2, g) ->
+      int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[g]), int_add(A2.metas[g].last_idx, 1)))) proof
+    fix sc g
+    assume hn hl
+    have l0 o1 q1 := hl
+    have k1 k1p es el := mp(all_elim(hp, {sc}, {g}), taut(hn), l0, o1, q1)
+    show := rewrite(sym(es), rewrite(sym(el), mp(all_elim(p1, {sc}, {g}), hn, taut(l0, k1, k1p))))
+  qed
+  show by defs(taut(u, pg), mallocng.partial_ok)
 qed
 
 // ... the lists as before, no group in use with its active index lowered,
@@ -7273,9 +7286,9 @@ proof
   have iu0 _ _ := mp(all_elim(expand(hac, mallocng.active_ok), {sc}, {k}), taut(hn, hk), taut(hs, hkl))
   have iu := rewrite(hke, iu0)
   have {ho = nat} := apply(mp.used_nat, ha, iu)
-  have {em = mem, el = last} := apply(mp.mo_geom[A := A, A2 := A2, x := g], mo, ho)
+  have {em = mem, el = last, es = stride} := apply(mp.mo_geom[A := A, A2 := A2, x := g], mo, ho)
   have q: mallocng.partial(M, A, g) by defs(arith(rewrite(em, rewrite(el, expand(p2, mallocng.partial))), mp(all_elim(hr, {g}), iu)), mallocng.partial)
-  show by taut(ol1, q)
+  show by taut(ol1, q, es, el)
 qed
 
 // the invariant kept by a used group's masks written (`mp.mframe`): the
@@ -8550,9 +8563,9 @@ proof
   have inr := apply(mp.group_bytes[A := A, M := M, b := b, h := g, a := int_add(A.metas[g].mem, 8)], ha, ho, gok, arith(hmo), g1, g2)
   have ex: ex hh. mallocng.is_used(A, hh) && mallocng.in_range(int_add(A.metas[g].mem, 8), mallocng.group_range(A.metas[hh])) by ex_intro({g}, taut(iu, inr))
   have {eb = byte} := apply(mp.agree_b8, apply(mp.lf_region[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, a := int_add(A.metas[g].mem, 8)], F, arith(hmo), taut(ex)))
-  have {em = mem, el = last} := apply(mp.gm_geom[A := A, A2 := A2, x := g], hg, ho)
+  have {em = mem, el = last, es = stride} := apply(mp.gm_geom[A := A, A2 := A2, x := g], hg, ho)
   have q: mallocng.partial(M, A, g) by defs(arith(rewrite(em, rewrite(el, expand(p2, mallocng.partial))), eb), mallocng.partial)
-  show by taut(ol1, q)
+  show by taut(ol1, q, es, el)
 qed
 
 // The invariant kept by a list operation: the lists given anew (cyclic in
@@ -9246,7 +9259,8 @@ theorem mp.grp_acc(c, A, vm, b, objs, g): c in mallocng.Cfg -> A in univ(1) -> A
     int_mul(64, A.metas[g].sizeclass)), int_mul(4096, A.metas[g].maplen)) &&
   hnz: !(A.metas[g].mem = 0) && htop: int_le(int_add(A.metas[g].mem, 9), int_pow(2, 64)) &&
   hrd: gimple.usable(vm, objs, int_add(A.metas[g].mem, 8), 1, false) && hwr: gimple.usable(vm, objs, int_add(A.metas[g].mem, 8), 1, true) &&
-  hbyte: gimple.bytes_at(vm, int_add(A.metas[g].mem, 8), 1) = mallocng.b8(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(A.metas[g].mem, 8))
+  hbyte: gimple.bytes_at(vm, int_add(A.metas[g].mem, 8), 1) = mallocng.b8(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(A.metas[g].mem, 8)) &&
+  hheld: int_add(A.metas[g].mem, 8) in mallocng.held(c, A, b)
 proof
   assume hc hu ha hvb hh hnr hg
   let V := A.metas[g]
@@ -9348,7 +9362,7 @@ proof
   have bv bvo := apply(mp.b8_view[vm := vm, fp := FP, a := H8], hvb, h8o, h8fp)
   have r81: mallocng.rd(M, H8, 1) = mallocng.b8(M, H8) by defs(simp(bvo), mallocng.rd)
   show by taut(go, top, (!(g = 0) by arith(g24, go)), ub, trans(v8, mnx), trans(v16, mmem), trans(v24, mav), trans(v28, mfr), trans(v32, mwd),
-    (!(V.mem = 0) by arith(hdrp, vmem)), mtop, us8, uw8, trans(vh, r81))
+    (!(V.mem = 0) by arith(hdrp, vmem)), mtop, us8, uw8, trans(vh, r81), h8fp)
 qed
 
 // the layer's bit (a number) by the core's (a proposition)
@@ -11313,9 +11327,9 @@ proof
     have {ho = nat, hmo = mem} := apply(mp.used_nat, ha, iu)
     have {gxh = hdr} := apply(mp.hdr_bytes, ha, ho, apply(mp.used_group, huo, iu))
     have {eb = byte} := apply(mp.agree_b8, mp(all_elim(gbe, {int_add(A.metas[h].mem, 8)}), arith(hmo), mp(all_elim(ingr, {h}, {int_add(A.metas[h].mem, 8)}), iu, gxh)))
-    have {em = mem, el = last} := apply(mp.gs_geom[A := A, A2 := mp.res_abs(A, g, i), x := h], gs, ho)
+    have {em = mem, el = last, es = stride} := apply(mp.gs_geom[A := A, A2 := mp.res_abs(A, g, i), x := h], gs, ho)
     have q: mallocng.partial(M, A, h) by defs(arith(rewrite(em, rewrite(el, expand(p2, mallocng.partial))), eb), mallocng.partial)
-    show by taut(rewrite(eac, ol), q)
+    show by taut(rewrite(eac, ol), q, es, el)
   qed
   have po := apply(mp.partial_mono[A := A, A2 := mp.res_abs(A, g, i), M := M, M2 := M2], hpo, pk)
   show by defs(taut(im, rewrite(sym(sc2), cx), rewrite(sym(sf), fr), rewrite(sym(sa), ar), rewrite(sym(sp), rewrite(sym(ep), hpart)), us, rewrite(sym(sac), ac), po,

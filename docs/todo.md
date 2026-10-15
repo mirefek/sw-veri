@@ -36,8 +36,11 @@ code refining it directly (proofs/mallocng_refine.core). Left over:
 
 ## 3. Then: the remaining functions
 
-- try_avail, alloc_slot (specs written, `try_avail_spec`,
-  `alloc_slot_spec`; C1 done), `__malloc_alloc_meta`.
+- try_avail: its run is proved (`mp.ta_run`); left the refinement with
+  the ghost update (`mp.ta`, as `mp.ag`), its machine code implementing
+  the spec, its contract at a call (for alloc_slot).
+- alloc_slot (spec written, `alloc_slot_spec`; C1 done),
+  `__malloc_alloc_meta`.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
@@ -80,6 +83,9 @@ holding for the empty heap.
 
 - Generate the function-level C2s and compositions (one instance of
   `g.fun_res` / `g.fun_res_ghost` and `tr.implements_refine` each).
+- A call to a callee by its own contract still needs the trivial fact
+  that the callee refines itself (`agself`, `dbself` in `mp.ta_run`): the
+  call rule could take it as given.
 - `ex_intro({..})` inside `taut(..)` misparsed as a binder; the list
   lemmas of proofs/translate_call.core to core/list.core.
 - The rules' standard form: the statics' names, `and r8, 2^k - 1`, `[p + 0]`

@@ -684,3 +684,23 @@ item is a short summary of finished work; details are in the files named.
   (`omega_mem_ind`, the ordinals' induction on omega) in core/sets.core;
   the induction on naturals (`nat_ind`) and strong induction
   (`nat_strong_ind`) derived from it in core/nat.core.
+- **Partially active groups** (`partial_ok` in `holds`): on a class's
+  list at most one group with slots never activated, and such a group's
+  slots reach past its first page (alloc_group activates those within
+  it). Kept by `mp.partial_kept` (the lists, header bytes and geometry as
+  before). Checked on real heaps by `slc heapcheck`.
+- **try_avail's run by its purpose** (`mp.ta_run`,
+  proofs/mallocng_try_avail.core): a slot of the head taken (`take_slot`);
+  else the head dequeued or rotated past, its two ways meeting in one
+  state (`mp.ta_jst`); the head skipped if fully free and freeable
+  (`mp.jst_rot`); the next head's freed slots among its active ones
+  (`mp.ta_act`) -- as it is, the list rotated to a group not partially
+  active (`mp.act_rot`, `partial_ok`), or its index raised (`mp.act_raise`)
+  after the span loop: the span leaves its first page only landing on a
+  page's start exactly, twice would make the stride divide 16
+  (`mp.span_next`, `mp.mul_16`), so `g.loop` with the room left as the
+  variant; then activate_group (`mp.ag_q`, the ghost part's A the joined
+  state), `assert(mask)` unreachable, decay_bounces (`mp.db_q`, context
+  bytes only: `mp.co_unt`), the lowest available slot reserved. The step
+  rule for calls binds the contract's callee from the call (a contract of
+  activate_group_fun(g0, g1) itself).
