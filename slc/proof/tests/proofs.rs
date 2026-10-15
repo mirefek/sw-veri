@@ -45,6 +45,18 @@ theorem t3(p, q): (all x. x -> q) -> p -> q\nproof\n  assume g: all x. x -> q\n 
     );
 }
 
+/// Selections: `t[k]` is `app(t, k)`, `t.f` is `app(t, "f")` (a dotted
+/// name: its longest prefix that is a value, then fields); a name read two
+/// ways is rejected; messages print them so.
+#[test]
+fn fields_and_brackets() {
+    let ok = "theorem t(A, g): A.metas[g].mem = app(app(app(A, \"metas\"), g), \"mem\")\nproof\n  show eq_refl[a := A.metas[g].mem]\nqed\n\
+theorem u(A, x): (A.metas).last = pair(x, x)[A].k.l -> app(app(A, \"metas\"), \"last\") = app(app(app(pair(x, x), A), \"k\"), \"l\")\nproof\n  assume h\n  show h\nqed\n";
+    assert_eq!(check(ok), Ok(2));
+    rejected("def n.k := 0\ntheorem t(n): n.k = n.k\nproof\n  show eq_refl[a := n.k]\nqed\n", "`n.k` reads as `n` and its fields or as `n.k`");
+    rejected("theorem t(A, g): A.metas[g] = A.metas\nproof\n  show eq_refl[a := A.metas]\nqed\n", "A.metas[g]");
+}
+
 /// rsimp: rewriting left to right with the facts given (an equation, a
 /// proposition as `true`, a negation's proposition as `false`), the
 /// definitions given, and the registered rules (core/logic.core's

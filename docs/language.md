@@ -424,7 +424,15 @@ bit_rule name                  registers a bit rule (below, "Bits")
 Terms:
 - the operators are fixed: `-> <-> || && ! = != in`;
 - binders are `all x. P`, `ex x. P`, and `x y. t` as an argument of a
-  binder constant (`set_select(s, x. p)`).
+  binder constant (`set_select(s, x. p)`);
+- selections, as in SL: `t[k]` is `app(t, k)`, `t.f` is `app(t, "f")`
+  (`A.metas[g].mem`, `f(x).k`). A dotted name without arguments is its
+  longest prefix that is a value (a variable, an argument-less constant or
+  abbreviation) and that value's fields (`mallocng.ZERO_META.mem`); a name
+  readable both ways (a variable `n` and a constant `n.k`) is an error,
+  never resolved silently. A dotted name with arguments is always the
+  constant (`g.det(p, s, o)` with a variable `g` in scope). Messages print
+  selections so.
 
 A labelled conjunct `name: φ` is term metadata: no rule reads it, but
 labels survive instantiation and unfolding. SL predicates may label

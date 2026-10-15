@@ -40,7 +40,7 @@ enum Tok {
     Eof,
 }
 
-const SYMS: &[&str] = &[":=", "<->", "->", "||", "&&", "!=", "(", ")", ",", ".", ":", "=", "!"];
+const SYMS: &[&str] = &[":=", "<->", "->", "||", "&&", "!=", "(", ")", "[", "]", ",", ".", ":", "=", "!"];
 
 struct Lexer<'a> {
     src: &'a [u8],
@@ -336,7 +336,42 @@ impl<'a, 'e> Parser<'a, 'e> {
         Ok(body)
     }
 
+    /// An atom with its selections: `t[k]` is `app(t, k)`, `t.f` is
+    /// `app(t, "f")`
     fn atom(&mut self) -> KResult<Term> {
+        let mut t = self.atom0()?;
+        loop {
+            if self.is_sym("[") {
+                self.bump()?;
+                let k = self.term()?;
+                self.expect("]")?;
+                t = self.select(t, k)?;
+            } else if self.is_sym(".") {
+                self.bump()?;
+                let f = self.ident()?;
+                for f in f.split('.') {
+                    t = self.select(t, Term::bytes(f.as_bytes()))?;
+                }
+            } else {
+                return Ok(t);
+            }
+        }
+    }
+
+    fn select(&self, t: Term, k: Term) -> KResult<Term> {
+        Ok(Term::app(self.sym_named("app")?, vec![t, k]))
+    }
+
+    /// A name standing alone (no arguments) as a value: a bound variable, a
+    /// schematic variable or abbreviation of no arguments, a constant
+    fn value_name(&self, name: &str) -> bool {
+        self.scopes.iter().any(|s| s == name)
+            || self.params.get(name).is_some_and(|&v| self.env.vars[v as usize].arity == 0)
+            || self.env.abbrevs.get(name).is_some_and(|(k, _)| *k == 0)
+            || self.env.sym_by_name.get(name).is_some_and(|&s| self.env.syms[s as usize].binders.is_empty())
+    }
+
+    fn atom0(&mut self) -> KResult<Term> {
         match self.bump()? {
             Tok::Num(n) => Ok(Term::nat(n)),
             Tok::Str(s) | Tok::Bytes(s) => Ok(Term::bytes(&s)),
@@ -360,6 +395,27 @@ impl<'a, 'e> Parser<'a, 'e> {
     }
 
     fn name_or_app(&mut self, name: String) -> KResult<Term> {
+        // `x.f.g` without arguments: the value `x` (the longest prefix that
+        // is one) and its fields -- a name read two ways an error
+        if name.contains('.') && !self.is_sym("(") {
+            let whole = self.value_name(&name);
+            let cuts: Vec<usize> = name.match_indices('.').map(|(i, _)| i).filter(|&i| self.value_name(&name[..i])).collect();
+            match (whole, cuts.as_slice()) {
+                (true, []) => {}
+                (false, [i]) => {
+                    let mut t = self.name_or_app(name[..*i].to_string())?;
+                    for f in name[i + 1..].split('.') {
+                        t = self.select(t, Term::bytes(f.as_bytes()))?;
+                    }
+                    return Ok(t);
+                }
+                (false, []) => {}
+                _ => {
+                    let reads: Vec<String> = cuts.iter().map(|&i| format!("`{}` and its fields", &name[..i])).chain(whole.then(|| format!("`{}`", name))).collect();
+                    return self.error(&format!("`{}` reads as {}: rename one", name, reads.join(" or as ")));
+                }
+            }
+        }
         if let Some(i) = self.scopes.iter().rev().position(|s| *s == name) {
             return Ok(Term::bvar(i as u32));
         }
@@ -925,6 +981,11 @@ fn load_mode(
 /// characters of a term in an error message (`Printer::short`)
 const SHORT: usize = 400;
 
+/// a string printable as a field (`t.f`): a name without dots
+fn field_name(f: &[u8]) -> bool {
+    f.first().is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') && f.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+}
+
 const OPS: &[(&str, &str, u8)] =&[("iff", "<->", 1), ("imp", "->", 2), ("or", "||", 3), ("and", "&&", 4)];
 
 pub struct Printer<'e> {
@@ -1234,6 +1295,31 @@ impl<'e> Printer<'e> {
             }
             Node::App(s, args) => {
                 let name = self.name(*s).to_string();
+                // (in messages: `app(t, "f")` as `t.f`, `app(t, k)` as `t[k]`)
+                if name == "app" && args.len() == 2 && self.fold.get() {
+                    let simple = matches!(args[0].node(), Node::BVar(_) | Node::Var(..) | Node::Bytes(_))
+                        || matches!(args[0].node(), Node::App(f, _) if !OPS.iter().any(|o| o.0 == self.name(*f))
+                            && !matches!(self.name(*f), "eq" | "ne" | "in" | "not" | "all" | "ex"));
+                    if !simple || args[0].label().is_some() {
+                        out.push('(');
+                    }
+                    self.go(&args[0], scope, 0, out);
+                    if !simple || args[0].label().is_some() {
+                        out.push(')');
+                    }
+                    match args[1].node() {
+                        Node::Bytes(f) if field_name(f) => {
+                            out.push('.');
+                            out.push_str(std::str::from_utf8(f).unwrap());
+                        }
+                        _ => {
+                            out.push('[');
+                            self.go(&args[1], scope, 0, out);
+                            out.push(']');
+                        }
+                    }
+                    return;
+                }
                 if let Some(&(_, op, p)) = OPS.iter().find(|o| o.0 == name) {
                     if args.len() == 2 {
                         let paren = p < prec || (p == prec && p != 2);
