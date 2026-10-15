@@ -15,7 +15,7 @@ pub mod num;
 use num::Int;
 use sl_elab::globals::{GName, Globals};
 use sl_syntax::ast::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 // ----------------------------------------------------------------------
@@ -26,8 +26,9 @@ pub enum V {
     /// a number; `w` is its bit width when known (bits[w])
     Num(Int, Option<u32>),
     Bool(bool),
-    Tuple(Vec<V>),
-    Rec(BTreeMap<String, V>),
+    /// (lists and records shared: values are copied often, changed seldom)
+    Tuple(Rc<Vec<V>>),
+    Rec(Rc<BTreeMap<String, V>>),
     /// sum values, options (none = 0, some = 1) and exceptions
     Tag(String, u64, Vec<V>),
     Set(Vec<V>),
@@ -39,6 +40,46 @@ pub enum V {
     Closure(Rc<Closure>),
     /// a set too large to list, `{var | cond}`: membership evaluates `cond`
     SetOf(Rc<LazySet>),
+}
+
+/// A value as a memo key: its content, shared parts (maps, lambdas, lazy
+/// sets, large lists and records) by identity (the memo keeps them alive,
+/// so no address is reused); none for a value left open
+fn memo_key(v: &V) -> Option<String> {
+    let all = |vs: &[V]| vs.iter().map(memo_key).collect::<Option<Vec<_>>>().map(|ks| ks.join(","));
+    Some(match v {
+        V::Num(n, w) => format!("{}:{:?}", n.to_string(), w),
+        V::Bool(b) => b.to_string(),
+        V::Tuple(vs) if vs.len() > 8 => format!("@t{:p}", Rc::as_ptr(vs)),
+        V::Rec(m) if m.len() > 8 => format!("@r{:p}", Rc::as_ptr(m)),
+        V::Tuple(vs) => format!("({})", all(vs)?),
+        V::Set(vs) => format!("{{{}}}", all(vs)?),
+        V::Rec(m) => format!("{{{}}}", m.iter().map(|(k, x)| Some(format!("{}={}", k, memo_key(x)?))).collect::<Option<Vec<_>>>()?.join(",")),
+        V::Tag(n, j, vs) => format!("{}#{}({})", n, j, all(vs)?),
+        V::Map(m) => format!("@m{:p}", Rc::as_ptr(m)),
+        V::Closure(c) => format!("@c{:p}", Rc::as_ptr(c)),
+        V::SetOf(s) => format!("@s{:p}", Rc::as_ptr(s)),
+        V::Str(s) => format!("{:?}", s),
+        V::Unit => "()".into(),
+        V::Unknown => return None,
+    })
+}
+
+thread_local! {
+    /// calls by name, when profiling (`profile_start`)
+    static PROFILE: std::cell::RefCell<Option<HashMap<String, u64>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Starts counting the calls of named functions (anew).
+pub fn profile_start() {
+    PROFILE.with(|p| *p.borrow_mut() = Some(HashMap::new()));
+}
+
+/// The calls counted since `profile_start`, most frequent first.
+pub fn profile_take() -> Vec<(String, u64)> {
+    let mut v: Vec<(String, u64)> = PROFILE.with(|p| p.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default()).into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v
 }
 
 #[derive(Debug, PartialEq)]
@@ -143,6 +184,12 @@ impl V {
             V::SetOf(l) => format!("{{{} | ...}}", l.var),
         }
     }
+    pub fn tuple(vs: Vec<V>) -> V {
+        V::Tuple(Rc::new(vs))
+    }
+    pub fn rec(m: BTreeMap<String, V>) -> V {
+        V::Rec(Rc::new(m))
+    }
     pub fn field(&self, f: &str) -> Option<&V> {
         match self {
             V::Rec(m) => m.get(f),
@@ -171,7 +218,7 @@ pub fn same(a: &V, b: &V) -> Option<bool> {
         (V::Tuple(x), V::Tuple(y)) if x.len() == y.len() => same_all(x, y),
         (V::Rec(x), V::Rec(y)) => {
             let mut all = Some(true);
-            for (k, p) in x {
+            for (k, p) in x.iter() {
                 match y.get(k).map(|q| same(p, q)) {
                     Some(Some(false)) | None => return Some(false),
                     Some(None) => all = None,
@@ -316,6 +363,11 @@ pub struct Interp<'g> {
     pub lazy_sets: bool,
     /// results of lambda applications `f[x]`
     memo: std::cell::RefCell<std::collections::HashMap<(usize, String), (Rc<Closure>, V)>>,
+    /// remember the results of (pure) functions and predicates called by
+    /// name, too
+    pub memo_calls: bool,
+    /// ... those results, with the arguments (kept alive: `memo_key`)
+    call_memo: std::cell::RefCell<HashMap<String, (Vec<V>, V)>>,
 }
 
 impl<'g> Interp<'g> {
@@ -331,7 +383,7 @@ impl<'g> Interp<'g> {
             DeclKind::Table(t) => t.clone(),
             _ => unreachable!(),
         };
-        let mut it = Interp { g, table: table.clone(), table_qual: g.decls[idx].qual.clone(), module, rows: Vec::new(), enum_limit: 1 << 12, lazy_sets: false, memo: Default::default() };
+        let mut it = Interp { g, table: table.clone(), table_qual: g.decls[idx].qual.clone(), module, rows: Vec::new(), enum_limit: 1 << 12, lazy_sets: false, memo: Default::default(), memo_calls: false, call_memo: Default::default() };
         let mut rows = Vec::new();
         it.flatten(&table.entries, &mut Vec::new(), &mut Vec::new(), &mut rows)?;
         it.rows = rows;
@@ -420,6 +472,7 @@ impl<'g> Interp<'g> {
     /// Forgets remembered lambda results (and the lambdas kept for them).
     pub fn clear_memo(&self) {
         self.memo.borrow_mut().clear();
+        self.call_memo.borrow_mut().clear();
     }
 
     /// Calls the function or predicate `f` of `module` on values (`fuel`:
@@ -554,7 +607,7 @@ impl<'g> Interp<'g> {
             (Pattern::Num(n, _), _) => Ok(v.int()? == Int::from_i128(n.to_u64().unwrap_or(0) as i128)),
             (Pattern::Bool(b, _), _) => Ok(v.bool()? == *b),
             (Pattern::Tuple(ps, _), V::Tuple(vs)) if ps.len() == vs.len() => {
-                for (p, v) in ps.iter().zip(vs) {
+                for (p, v) in ps.iter().zip(vs.iter()) {
                     if !self.bind(env, p, v)? {
                         return Ok(false);
                     }
@@ -649,7 +702,7 @@ impl<'g> Interp<'g> {
                         if l > h || h > vs.len() {
                             return unsupported("list slice out of range");
                         }
-                        Ok(V::Tuple(vs[l..h].to_vec()))
+                        Ok(V::tuple(vs[l..h].to_vec()))
                     }
                     _ => Ok(V::Unknown),
                 }
@@ -657,13 +710,13 @@ impl<'g> Interp<'g> {
             ExprKind::From(a, i) => {
                 // `xs[a..]`
                 match (self.eval(env, a, run)?, self.eval(env, i, run)?) {
-                    (V::Tuple(vs), V::Num(l, _)) => Ok(V::Tuple(vs[(l.to_u64().unwrap_or(0) as usize).min(vs.len())..].to_vec())),
+                    (V::Tuple(vs), V::Num(l, _)) => Ok(V::tuple(vs[(l.to_u64().unwrap_or(0) as usize).min(vs.len())..].to_vec())),
                     _ => Ok(V::Unknown),
                 }
             }
-            ExprKind::List(es) => Ok(V::Tuple(es.iter().map(|e| self.eval(env, e, run)).collect::<F<Vec<_>>>()?)),
+            ExprKind::List(es) => Ok(V::tuple(es.iter().map(|e| self.eval(env, e, run)).collect::<F<Vec<_>>>()?)),
             ExprKind::ListComp { elem, pat, iter, cond } => {
-                let items = match &iter.kind {
+                let items: Vec<V> = match &iter.kind {
                     ExprKind::Binary(BinOp::Range, a, b) => {
                         let (a, b) = (self.eval(env, a, run)?.num()?, self.eval(env, b, run)?.num()?);
                         if b - a > 1 << 16 {
@@ -672,7 +725,7 @@ impl<'g> Interp<'g> {
                         (a..b).map(V::n).collect()
                     }
                     _ => match self.eval(env, iter, run)? {
-                        V::Tuple(vs) => vs,
+                        V::Tuple(vs) => vs.to_vec(),
                         V::Unknown => return Ok(V::Unknown),
                         v => return unsupported(format!("comprehension over {}", v.render())),
                     },
@@ -703,7 +756,7 @@ impl<'g> Interp<'g> {
                         out.push(r?);
                     }
                 }
-                Ok(V::Tuple(out))
+                Ok(V::tuple(out))
             }
             ExprKind::Index(a, idx) => {
                 let v = self.eval(env, a, run)?;
@@ -755,7 +808,7 @@ impl<'g> Interp<'g> {
                 if xs.is_empty() {
                     return Ok(V::Unit);
                 }
-                Ok(V::Tuple(xs.iter().map(|x| self.eval(env, x, run)).collect::<F<_>>()?))
+                Ok(V::tuple(xs.iter().map(|x| self.eval(env, x, run)).collect::<F<_>>()?))
             }
             ExprKind::Set(xs) => Ok(V::Set(xs.iter().map(|x| self.eval(env, x, run)).collect::<F<_>>()?)),
             ExprKind::SetBuilder { var, cond, .. } => self.set_builder(env, &var.name, cond, run),
@@ -764,7 +817,7 @@ impl<'g> Interp<'g> {
                 for (f, x) in fields {
                     m.insert(f.name.clone(), self.eval(env, x, run)?);
                 }
-                Ok(V::Rec(m))
+                Ok(V::rec(m))
             }
             ExprKind::With(a, fields) => {
                 let mut m = match self.eval(env, a, run)? {
@@ -773,7 +826,7 @@ impl<'g> Interp<'g> {
                 };
                 for (f, x) in fields {
                     let v = self.eval(env, x, run)?;
-                    m.insert(f.name.clone(), v);
+                    Rc::make_mut(&mut m).insert(f.name.clone(), v);
                 }
                 Ok(V::Rec(m))
             }
@@ -813,7 +866,7 @@ impl<'g> Interp<'g> {
                         (lo..hi).map(V::n).collect()
                     }
                     _ => match self.eval(env, d, run)? {
-                        V::Tuple(vs) => vs,
+                        V::Tuple(vs) => vs.to_vec(),
                         V::Unknown => return Ok(V::Unknown),
                         v => return unsupported(format!("sum over {}", v.render())),
                     },
@@ -1009,7 +1062,8 @@ impl<'g> Interp<'g> {
                         out.push(i);
                     }
                 }
-                V::Tuple(vs) | V::Set(vs) | V::Tag(_, _, vs) => vs.iter().for_each(|x| walk(x, out, budget)),
+                V::Tuple(vs) => vs.iter().for_each(|x| walk(x, out, budget)),
+                V::Set(vs) | V::Tag(_, _, vs) => vs.iter().for_each(|x| walk(x, out, budget)),
                 V::Rec(m) => m.values().for_each(|x| walk(x, out, budget)),
                 V::Map(m) => {
                     if m.m.len() <= 4096 {
@@ -1317,7 +1371,7 @@ impl<'g> Interp<'g> {
             return Ok(V::Bool(x.bool()? == y.bool()?));
         }
         if let (Concat, V::Tuple(xs), V::Tuple(ys)) = (op, &x, &y) {
-            return Ok(V::Tuple(xs.iter().chain(ys).cloned().collect()));
+            return Ok(V::tuple(xs.iter().chain(ys.iter()).cloned().collect()));
         }
         let (p, wp) = match x {
             V::Num(n, w) => (n, w),
@@ -1447,7 +1501,7 @@ impl<'g> Interp<'g> {
                 let ev = self.eval(env, event, run)?;
                 let v = match self.eval(env, target, run)? {
                     V::Tuple(mut vs) => {
-                        vs.push(ev);
+                        Rc::make_mut(&mut vs).push(ev);
                         V::Tuple(vs)
                     }
                     _ => V::Unknown,
@@ -1634,7 +1688,7 @@ impl<'g> Interp<'g> {
                     &mut run.dec.as_mut().unwrap().ctx
                 } else {
                     match run.machine.as_mut() {
-                        Some(V::Rec(m)) if m.contains_key(&n.name) => m.get_mut(&n.name).unwrap(),
+                        Some(V::Rec(m)) if m.contains_key(&n.name) => Rc::make_mut(m).get_mut(&n.name).unwrap(),
                         _ => return unsupported(format!("assignment to unknown `{}`", n.name)),
                     }
                 }
@@ -1668,6 +1722,9 @@ impl<'g> Interp<'g> {
             let vals = args.iter().map(|a| self.eval(env, a, run)).collect::<F<Vec<_>>>()?;
             return self.call_closure(&c, vals, run);
         }
+        if PROFILE.with(|p| p.borrow().is_some()) {
+            PROFILE.with(|p| *p.borrow_mut().as_mut().unwrap().entry(name.clone()).or_insert(0) += 1);
+        }
         match name.as_str() {
             "next" => return Ok(V::Num(Int::from_i128(next_byte(run)? as i128), Some(8))),
             "peek" => {
@@ -1685,13 +1742,13 @@ impl<'g> Interp<'g> {
                 return Ok(match self.eval(env, &args[0], run)? {
                     V::Tuple(vs) => {
                         let mut out = Vec::new();
-                        for v in vs {
+                        for v in vs.iter() {
                             match v {
-                                V::Tuple(xs) => out.extend(xs),
+                                V::Tuple(xs) => out.extend(xs.iter().cloned()),
                                 _ => return Ok(V::Unknown),
                             }
                         }
-                        V::Tuple(out)
+                        V::tuple(out)
                     }
                     _ => V::Unknown,
                 })
@@ -1775,6 +1832,9 @@ impl<'g> Interp<'g> {
                     }
                     DeclKind::Fn(fd) => {
                         let fd = fd.clone();
+                        if self.memo_calls && gargs.is_empty() && fd.kind != FnKind::Decoder {
+                            return self.call_memo(env, i, &fd, args, run);
+                        }
                         return self.call_body(env, i, &fd.generics, &fd.params, fd.ret.as_ref(), &fd.body, &gargs, args, run);
                     }
                     DeclKind::Proc(pd) => {
@@ -1795,6 +1855,34 @@ impl<'g> Interp<'g> {
             }
         }
         unsupported(format!("cannot call `{}`", name))
+    }
+
+    /// A function or predicate called (pure: its result remembered for its
+    /// arguments, which the memo keeps alive -- `memo_key`)
+    fn call_memo(&self, env: &mut Env, i: usize, fd: &FnDecl, args: &[Expr], run: &mut Run) -> F<V> {
+        let vals = args.iter().map(|a| self.eval(env, a, run)).collect::<F<Vec<_>>>()?;
+        let key = vals.iter().map(memo_key).collect::<Option<Vec<_>>>().map(|ks| format!("{}({})", i, ks.join(",")));
+        if let Some(k) = &key {
+            if let Some((_, v)) = self.call_memo.borrow().get(k) {
+                return Ok(v.clone());
+            }
+        }
+        // (the values bound in the caller's scope, under names no source has)
+        let n0 = env.locals.len();
+        let sp = Span::default();
+        let names: Vec<Expr> = (0..vals.len())
+            .map(|k| Expr { kind: ExprKind::Name(Ident { name: format!("\u{0}memo{}_{}", n0, k), span: sp }), span: sp })
+            .collect();
+        for (k, v) in vals.iter().enumerate() {
+            env.locals.push((format!("\u{0}memo{}_{}", n0, k), v.clone()));
+        }
+        let r = self.call_body(env, i, &fd.generics, &fd.params, fd.ret.as_ref(), &fd.body, &[], &names, run);
+        env.locals.truncate(n0);
+        let v = r?;
+        if let Some(k) = key {
+            self.call_memo.borrow_mut().insert(k, (vals, v.clone()));
+        }
+        Ok(v)
     }
 
     fn call_closure(&self, c: &Closure, vals: Vec<V>, run: &mut Run) -> F<V> {
@@ -1932,7 +2020,7 @@ impl<'g> Interp<'g> {
                     ms.into_iter()
                         .map(|m| {
                             let rec: BTreeMap<String, V> = m.binds.into_iter().collect();
-                            V::Tuple(vec![V::n(m.len as i128), V::Tag("$insn".into(), m.row as u64, vec![V::Rec(rec)])])
+                            V::tuple(vec![V::n(m.len as i128), V::Tag("$insn".into(), m.row as u64, vec![V::rec(rec)])])
                         })
                         .collect(),
                 ))
@@ -1946,7 +2034,7 @@ impl<'g> Interp<'g> {
                 let mut e2 = self.env0();
                 e2.locals.extend(fr.consts.iter().cloned());
                 if let V::Rec(m) = binds {
-                    e2.locals.extend(m);
+                    e2.locals.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
                 }
                 match self.block(&mut e2, &fr.row.body.clone(), run) {
                     Ok(()) => Ok(V::Unit),
@@ -1972,7 +2060,7 @@ fn put(slot: &mut V, steps: &[Step], v: V) -> F<()> {
     };
     match s {
         Step::Field(f) => match slot {
-            V::Rec(m) => put(m.entry(f.clone()).or_insert(V::Unknown), rest, v),
+            V::Rec(m) => put(Rc::make_mut(m).entry(f.clone()).or_insert(V::Unknown), rest, v),
             V::Unknown => Ok(()),
             other => unsupported(format!("field {} of {}", f, other.render())),
         },

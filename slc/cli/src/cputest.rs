@@ -75,7 +75,7 @@ fn bits(v: u64, w: u32) -> V {
 }
 
 fn rec(fields: Vec<(&str, V)>) -> V {
-    V::Rec(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<BTreeMap<_, _>>())
+    V::rec(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<BTreeMap<_, _>>())
 }
 
 const FLAG_BITS: [(&str, u32); 7] = [("cf", 0), ("pf", 2), ("af", 4), ("zf", 6), ("sf", 7), ("df", 10), ("of", 11)];
@@ -112,7 +112,7 @@ fn features() -> Features {
 fn machine(st: &CpuState, scratch: &[u8], start: u64, insn: &[u8], cpu: Features, env: Option<&sys::SysEnv>) -> V {
     let gpr = map((0..16).map(|i| (V::n(i as i128), bits(st.gpr[i], 64))).collect(), None);
     let xmm = map((0..16).map(|i| (V::n(i as i128), xmm_value(st.xmm[i]))).collect(), None);
-    let flags = V::Rec(FLAG_BITS.iter().map(|(n, b)| (n.to_string(), V::Bool(st.flags >> b & 1 == 1))).collect());
+    let flags = V::rec(FLAG_BITS.iter().map(|(n, b)| (n.to_string(), V::Bool(st.flags >> b & 1 == 1))).collect());
     let pn = |a: u64| V::n((a >> 12) as i128);
     let mut pages = vec![
         (pn(SCRATCH), page(3)),
@@ -141,10 +141,10 @@ fn machine(st: &CpuState, scratch: &[u8], start: u64, insn: &[u8], cpu: Features
         ("brk", bits(brk, 64)),
     ]);
     let input = match env {
-        Some(e) => V::Tuple(e.input.iter().map(|b| bits(*b as u64, 8)).collect()),
+        Some(e) => V::tuple(e.input.iter().map(|b| bits(*b as u64, 8)).collect()),
         None => V::Unknown,
     };
-    let os = rec(vec![("input", input), ("events", V::Tuple(vec![])), ("creds", V::Unknown), ("secure", V::Bool(false))]);
+    let os = rec(vec![("input", input), ("events", V::tuple(vec![])), ("creds", V::Unknown), ("secure", V::Bool(false))]);
     rec(vec![
         ("gpr", gpr),
         ("xmm", xmm),
@@ -214,7 +214,7 @@ fn compare_sys(out: &V, r: &sys::SysResult, env: &sys::SysEnv) -> Vec<String> {
                 _ => None,
             }
         };
-        for e in evs {
+        for e in evs.iter() {
             match e {
                 V::Tag(n, _, a) if n == "read" => consumed = consumed.zip(bytes(&a[0])).map(|(c, d)| c + d.len()),
                 V::Tag(n, _, a) if n == "write" => {
