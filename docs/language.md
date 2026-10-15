@@ -481,6 +481,9 @@ show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proo
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
 let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_body(h)`: h's loop's body)
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)
+refine L [with f..]       the goal by L backward: L's conclusion matched with the goal (its variables,
+                          also higher-order ones: a contract's body), its premises but the last by the
+                          facts f in order (or discharged), the last the new goal
 zeta x [, {k}..] [in h]   the let x's variable its value (all or the k-th occurrences)
 fold_let x [, {t}] [, {k}..] [in h]   the let x's value back to x, or a new let x of t
 flip [in h]               turn the equation / disequation around
@@ -683,6 +686,8 @@ premise they stand for.
 | `simp(p.., keep(P..), {l0 l. I}, {l. m})` | the path simplifier, below |
 | `defs(p, D..)` | p proves the goal with D unfolded |
 | `ex_intro({w}.., p)` | witnesses for `ex` |
+| `disj({k}, p)` | the goal's k-th disjunct (as written, from 1) by p |
+| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice by the next witness, each property, equation and conjunct by taut, else simp, from the facts |
 | `sel(p)` | `z in set_select(S, x. P)` from `z in S && P(z)` |
 | `lists(p..)` | equal list expressions (same pieces) |
 | `induct(base, step)` | `all n. n in omega -> P(n)` |

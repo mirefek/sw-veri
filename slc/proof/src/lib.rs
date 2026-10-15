@@ -202,6 +202,12 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                 }
                 Frame::Unfold(g, syms) => conv_to(env, s, g, syms)?,
                 Frame::Lets(g) => Seq::conv_lets(env, &s, g)?,
+                Frame::Refine(g, l) => {
+                    let (p, _) = imp_parts(env, l.concl())?;
+                    let s = Seq::conv_lets(env, &s, &p)?;
+                    let r = Seq::mp(env, l, &s)?;
+                    Seq::conv_lets(env, &r, g)?
+                }
                 // or-elimination: the return's case proven by the block, the
                 // overflow's by the goal's disjunct
                 Frame::Cases(d, a_imp, b) => {
@@ -593,6 +599,9 @@ enum Frame {
     /// B`, `A -> A'` (A' the overflow as the outcome: a disjunct of the
     /// goal), B (the return, assumed for the rest of the block)
     Cases(Seq, Seq, Term),
+    /// `refine L`: the goal before, and L's instance `P -> goal` (P the
+    /// new goal)
+    Refine(Term, Seq),
 }
 
 struct State {
@@ -612,7 +621,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem", "bitwise", "cases"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -927,6 +936,87 @@ impl State {
                     };
                     self.frames.push(Frame::Fix(v));
                 }
+            }
+            // refine L [with f1, ..]: the goal by the fact L backward -- its
+            // conclusion matched with the goal (its variables, a body
+            // pattern too, from it), its premises but the last by the facts
+            // f (in order) or discharged, the last the new goal
+            "refine" => {
+                let (l, with_t) = match split_top_kw(rest, " with ") {
+                    Some((a, b)) => (a.trim(), split_top(b, ',')),
+                    None => (rest.trim(), Vec::new()),
+                };
+                let g = self.goal.clone().ok_or_else(|| KernelError("refine: no current goal here".into()))?;
+                let lf = self.eval(env, lg, &parse_pe(l)?)?;
+                let mut fs = Vec::new();
+                for w in &with_t {
+                    fs.push(self.eval(env, lg, &parse_pe(w.trim())?)?);
+                }
+                // (its parameters as fresh variables of their arities, its
+                // leading `all`s opened)
+                let mut ls = lf.clone();
+                let mut vs: Vec<VarId> = Vec::new();
+                let mut fv = Vec::new();
+                ls.concl().vars(&mut fv);
+                for v in fv {
+                    if vs.contains(&v) {
+                        continue;
+                    }
+                    let k = env.vars[v as usize].arity;
+                    let w = env.new_var(&env.vars[v as usize].name.clone(), k);
+                    ls = Seq::inst(env, &ls, v, &Term::var(w, (0..k).rev().map(Term::bvar).collect()))?;
+                    vs.push(w);
+                }
+                while let Node::App(q, _) = ls.concl().node() {
+                    if *q != lg.all {
+                        break;
+                    }
+                    let v = env.new_var(ls.concl().binder_name().unwrap_or("x"), 0);
+                    ls = Seq::all_elim(env, lg, &ls, &Term::var(v, vec![]))?;
+                    vs.push(v);
+                }
+                let mut c = ls.concl().clone();
+                while let Ok((_, b)) = imp_parts(env, &c) {
+                    c = b;
+                }
+                let mut binds = Vec::new();
+                if !pmatch(env, &c, &g, &vs, &mut binds) {
+                    let pr = Printer::new(env);
+                    return err(format!("refine: the conclusion `{}` does not match the goal `{}`", pr.short(&c), pr.short(&g)));
+                }
+                for (v, t) in &binds {
+                    ls = Seq::inst(env, &ls, *v, t)?;
+                }
+                // (premises: all but the last by the facts, else discharged)
+                let mut n = 0;
+                let mut c2 = ls.concl().clone();
+                while let Ok((_, b)) = imp_parts(env, &c2) {
+                    n += 1;
+                    c2 = b;
+                }
+                if n == 0 {
+                    return err("refine: the fact has no premise");
+                }
+                let mut fi = fs.into_iter();
+                for _ in 0..n - 1 {
+                    let (h, _) = imp_parts(env, ls.concl())?;
+                    let p = match fi.next() {
+                        Some(f) => self.check(env, f, &h)?,
+                        None => self.mem_discharge(env, lg, &h, &[], 0)?,
+                    };
+                    ls = Seq::mp(env, &ls, &p)?;
+                }
+                if fi.next().is_some() {
+                    return err("refine: more facts than premises before the last");
+                }
+                let (p, _) = imp_parts(env, ls.concl())?;
+                let mut vs2 = Vec::new();
+                p.vars(&mut vs2);
+                if let Some(v) = vs.iter().find(|v| vs2.contains(v)) {
+                    return err(format!("refine: `{}` not determined by the goal", env.vars[*v as usize].name));
+                }
+                self.frames.push(Frame::Refine(g, ls));
+                self.goal = Some(p);
             }
             // unfold [D..] [in h]: the goal (or the fact h) with the
             // definitions D unfolded (every occurrence, repeatedly) -- or the
@@ -1392,6 +1482,51 @@ impl State {
                 }
                 Ok(s)
             }
+            // disj({k}, p): the goal's k-th disjunct (as written, from 1) by p
+            "disj" => {
+                let k: usize = match args.first() {
+                    Some(Arg::Term(t)) => t.trim().parse().map_err(|_| KernelError("disj: `{k}`, a number".into()))?,
+                    _ => return err("disj takes `{k}` and a proof"),
+                };
+                let or = env.sym_by_name.get("or").copied();
+                fn flat(t: &Term, or: Option<SymId>, out: &mut Vec<Term>) {
+                    match t.node() {
+                        Node::App(f, a) if Some(*f) == or => {
+                            flat(&a[0], or, out);
+                            flat(&a[1], or, out);
+                        }
+                        _ => out.push(t.clone()),
+                    }
+                }
+                let mut ds = Vec::new();
+                flat(goal, or, &mut ds);
+                let d = ds.get(k.wrapping_sub(1)).cloned().ok_or_else(|| KernelError(format!("disj: the goal has {} disjuncts", ds.len())))?;
+                let p = match args.get(1) {
+                    Some(Arg::Proof(p)) => p,
+                    _ => return err("disj takes `{k}` and a proof"),
+                };
+                let s = self.by(env, lg, &d, p)?;
+                Seq::taut(env, lg, &[&s], goal)
+            }
+            // spec_ret({w1}, .., f1, ..): a contract body's instance (its
+            // letins, its choices -- each by the next witness --, its
+            // outcome's equation; conjunctions part by part), each
+            // property and equation by taut, else simp, from the facts
+            "spec_ret" => {
+                let mut ws = std::collections::VecDeque::new();
+                let mut fs = Vec::new();
+                for a in args.iter() {
+                    match a {
+                        Arg::Term(_) => ws.push_back(self.term_arg(env, Some(a), 0)?),
+                        Arg::Proof(p) => fs.push(self.eval(env, lg, p)?),
+                    }
+                }
+                let r = self.spec_ret(env, lg, goal, &mut ws, &fs)?;
+                if !ws.is_empty() {
+                    return err(format!("spec_ret: {} witnesses not used", ws.len()));
+                }
+                Ok(r)
+            }
             // sel(p): the goal `z in set_select(S, x. P)`, p a proof of `z in S && P(z)`
             "sel" => {
                 let (ax, rhs) = self.select_def(env, goal)?;
@@ -1424,6 +1559,55 @@ impl State {
             _ => {
                 let s = self.eval(env, lg, pe)?;
                 self.check(env, s, goal)
+            }
+        }
+    }
+
+    /// (see the rule `spec_ret`)
+    fn spec_ret(&self, env: &mut Env, lg: &Logic, goal: &Term, ws: &mut std::collections::VecDeque<Term>, fs: &[Seq]) -> KResult<Seq> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied();
+        let (letin, any, and, or, not) = (sym("letin"), sym("any_rel"), sym("and"), sym("or"), sym("not"));
+        match goal.node() {
+            // letin(a, x. f(x)): f(a)
+            Node::App(l, a) if Some(*l) == letin => {
+                let body = a[1].instantiate_params(std::slice::from_ref(&a[0]), &env.binders_fn());
+                let s = self.spec_ret(env, lg, &body, ws, fs)?;
+                Seq::conv_lets(env, &s, goal)
+            }
+            // any_rel(x. d(x), x. k(x)): the next witness w, d(w) && k(w)
+            Node::App(c, a) if Some(*c) == any => {
+                let w = ws.pop_front().ok_or_else(|| KernelError(format!("spec_ret: a witness for `{}`", Printer::new(env).short(goal))))?;
+                let bf = env.binders_fn();
+                let d = a[0].instantiate_params(std::slice::from_ref(&w), &bf);
+                let k = a[1].instantiate_params(std::slice::from_ref(&w), &bf);
+                drop(bf);
+                let sd = self.spec_ret(env, lg, &d, ws, fs)?;
+                let sk = self.spec_ret(env, lg, &k, ws, fs)?;
+                let (and, or, not) = (and.unwrap(), or.unwrap(), not.unwrap());
+                let both = Term::app(and, vec![d, k]);
+                let sb = Seq::taut(env, lg, &[&sd, &sk], &both)?;
+                let body = Term::app(and, vec![a[0].clone(), a[1].clone()]);
+                let ex = Seq::ex_intro(env, lg, &sb, &w, &body)?;
+                let ne = Term::app(not, vec![Term::app(lg.ex, vec![a[0].clone()])]);
+                let unf = Term::app(or, vec![ne, ex.concl().clone()]);
+                let s = Seq::taut(env, lg, &[&ex], &unf)?;
+                let anys = defined_sym(env, "any_rel")?;
+                Seq::conv(env, &s, goal, &[anys])
+            }
+            // a conjunction: part by part
+            Node::App(c, a) if Some(*c) == and => {
+                let l = self.spec_ret(env, lg, &a[0], ws, fs)?;
+                let r = self.spec_ret(env, lg, &a[1], ws, fs)?;
+                Seq::taut(env, lg, &[&l, &r], goal)
+            }
+            // a property or the outcome's equation: from the facts
+            _ => {
+                let refs: Vec<&Seq> = fs.iter().collect();
+                if let Ok(s) = Seq::taut(env, lg, &refs, goal) {
+                    return Ok(s);
+                }
+                let r = Seq::simp_goal(env, lg, &refs, goal, &[], &[]);
+                r.map_err(|e| KernelError(format!("spec_ret: `{}` not from the facts ({})", Printer::new(env).short(goal), e.0)))
             }
         }
     }
