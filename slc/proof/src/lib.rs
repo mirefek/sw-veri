@@ -1594,6 +1594,13 @@ impl State {
                 let anys = defined_sym(env, "any_rel")?;
                 Seq::conv(env, &s, goal, &[anys])
             }
+            // ex x. P(x): the next witness w, P(w)
+            Node::App(e, a) if *e == lg.ex => {
+                let w = ws.pop_front().ok_or_else(|| KernelError(format!("spec_ret: a witness for `{}`", Printer::new(env).short(goal))))?;
+                let body = a[0].instantiate_params(std::slice::from_ref(&w), &env.binders_fn());
+                let sb = self.spec_ret(env, lg, &body, ws, fs)?;
+                Seq::ex_intro(env, lg, &sb, &w, &a[0])
+            }
             // a conjunction: part by part
             Node::App(c, a) if Some(*c) == and => {
                 let l = self.spec_ret(env, lg, &a[0], ws, fs)?;
@@ -2013,8 +2020,10 @@ impl State {
             }).is_some()
         };
         let is_call: Vec<bool> = withs.iter().map(|w| call_lemma(env, lg, w.concl())).collect();
+        // (a program's run lemma: `all xs. H.. -> runs(P, s, o) -> D`)
+        let is_run: Vec<bool> = withs.iter().zip(&is_call).map(|(w, c)| !*c && run_lemma(env, lg, w.concl())).collect();
         // (a call's contract is no operation's fact nor a branch's)
-        let is_op: Vec<bool> = withs.iter().zip(&is_call).map(|(w, c)| *c || op_fact(w.concl())).collect();
+        let is_op: Vec<bool> = withs.iter().zip(&is_call).zip(&is_run).map(|((w, c), r)| *c || *r || op_fact(w.concl())).collect();
         // (the `with` equations: rewriting the fact where their left side occurs)
         // (equations, or conjunctions of them: their parts)
         let eqs: Vec<(usize, Vec<Seq>)> = (0..withs.len()).filter(|&i| !is_op[i]).filter_map(|i| {
@@ -2038,7 +2047,52 @@ impl State {
                 cur = self.step_simp(env, lg, k)?;
                 continue;
             }
-            if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == mkprog) {
+            if Some(f) == runs && (0..withs.len()).any(|i| is_run[i]) && {
+                // (a run lemma for this program: its outcomes -- the run's
+                // arguments by the unused `with` equations first)
+                for (i, parts) in &eqs {
+                    if used[*i] {
+                        continue;
+                    }
+                    let mut hit = false;
+                    for e in parts {
+                        let Node::App(_, x) = e.concl().node() else { continue };
+                        if occurs(&x[0], cur.concl()) {
+                            if let Ok(n) = Seq::rewrite(env, e, &cur) {
+                                cur = n;
+                                hit = true;
+                            }
+                        }
+                    }
+                    if hit {
+                        mark_used(&withs, &mut used, *i);
+                    }
+                }
+                let mut hit = None;
+                for i in 0..withs.len() {
+                    if !is_run[i] {
+                        continue;
+                    }
+                    match self.step_run_lemma(env, lg, &withs[i], &cur, &using) {
+                        Ok(d) => {
+                            mark_used(&withs, &mut used, i);
+                            hit = Some(d);
+                            break;
+                        }
+                        Err(KernelError(m)) => why = Some(m),
+                    }
+                }
+                match hit {
+                    Some(d) => {
+                        // (an overflow || a return: split as a call's)
+                        let ovf_first = matches!(d.concl().node(), Node::App(o2, x) if Some(*o2) == or && matches!(x[0].node(), Node::App(e, _) if *e == lg.ex));
+                        cur = if ovf_first { self.step_split_call(env, lg, d, &pending, &mut xs, &mut side, true)? } else { d };
+                        true
+                    }
+                    None => false,
+                }
+            } {
+            } else if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == mkprog) {
                 cur = self.lemma(env, lg, "g.runs_elim", &[cur])?;
             } else if Some(f) == runs && head(&a[0]).is_some_and(|(g, _)| Some(g) == app_s) {
                 // (a function value at its arguments: its definition, its
@@ -2059,6 +2113,12 @@ impl State {
                 cur = r?;
             } else if Some(f) == letin {
                 cur = self.lemma(env, lg, "g.letin_e", &[cur])?;
+            } else if Some(f) == bind && !xs.is_empty() && head(&a[0]).is_some_and(|(p, _)| (0..withs.len()).any(|i| is_run[i] && run_lemma_head(env, lg, withs[i].concl()) == Some(p))) {
+                // (a program with a run lemma: its bind opened, its outcome named)
+                self.facts.push(("__stepb".into(), cur.clone()));
+                let r = self.eval(env, lg, &parse_pe("expand(__stepb, bind_rel)")?);
+                self.facts.pop();
+                cur = r?;
             } else if Some(f) == bind {
                 // (an operation's one outcome: a `with` fact for it; a call:
                 // its callee's contract)
@@ -2069,7 +2129,8 @@ impl State {
                         // (a bind of a program with several outcomes -- a
                         // spec --: its run, its outcome named)
                         None if !xs.is_empty() && head(&a[0]).is_some_and(|(p, _)| {
-                            matches!(env.syms[p as usize].kind, sl_kernel::env::SymKind::Defined { .. }) && !env.syms[p as usize].name.starts_with("gimple.")
+                            matches!(env.syms[p as usize].kind, sl_kernel::env::SymKind::Defined { .. })
+                                && (!env.syms[p as usize].name.starts_with("gimple.") || (0..withs.len()).any(|i| is_run[i] && run_lemma_head(env, lg, withs[i].concl()) == Some(p)))
                         }) => {
                             self.facts.push(("__stepb".into(), cur.clone()));
                             let r = self.eval(env, lg, &parse_pe("expand(__stepb, bind_rel)")?);
@@ -2217,6 +2278,12 @@ impl State {
                 } else {
                     break;
                 }
+            } else if Some(f) == and && !pending.is_empty() && head(&a[1]).is_some_and(|(g, ga)| g == lg.eq && matches!(ga[0].node(), Node::Var(..)))
+                && !head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == bind || Some(g) == letin || Some(g) == runs || Some(g) == or || Some(g) == any)
+            {
+                // (facts, then the outcome x = V: the facts kept, V on)
+                side.push(and_part(env, &cur, false)?);
+                cur = and_part(env, &cur, true)?;
             } else if Some(f) == and && (!withs.is_empty() || !xs.is_empty())
                 && head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == and || Some(g) == bind || Some(g) == letin || Some(g) == runs || Some(g) == or || Some(g) == any)
             {
@@ -2463,6 +2530,70 @@ impl State {
             s = Seq::gen(env, lg, &s, *v)?;
         }
         Ok(s)
+    }
+
+    /// a run lemma `all xs. H.. -> runs(P, S, O) -> D` at the run `r`
+    /// (`runs(p, s, o)`): its variables from the run, the rest from the
+    /// `using` facts its premises match; its premises discharged; D
+    fn step_run_lemma(&mut self, env: &mut Env, lg: &Logic, lemma: &Seq, r: &Seq, using: &[Seq]) -> KResult<Seq> {
+        let (mut s, vs, _) = crate::bits::open_rule(env, lg, lemma)?;
+        let prems = |env: &Env, t: &Term| {
+            let mut out = Vec::new();
+            let mut c = t.clone();
+            while let Node::App(i, x) = c.node() {
+                if *i != env.builtins.imp {
+                    break;
+                }
+                out.push(x[0].clone());
+                c = x[1].clone();
+            }
+            out
+        };
+        let ps = prems(env, s.concl());
+        let n = ps.len();
+        if n == 0 {
+            return err("step: a run lemma without premises");
+        }
+        let mut binds = Vec::new();
+        if !pmatch(env, &ps[n - 1], r.concl(), &vs, &mut binds) {
+            let pr = Printer::new(env);
+            return err(format!("step: the run lemma's `{}` does not match `{}`", pr.short(&ps[n - 1]), pr.short(r.concl())));
+        }
+        for (v, t) in &binds {
+            s = Seq::inst(env, &s, *v, t)?;
+        }
+        loop {
+            let mut cv = Vec::new();
+            s.concl().vars(&mut cv);
+            let open: Vec<VarId> = vs.iter().copied().filter(|v| !binds.iter().any(|(w, _)| w == v) && cv.contains(v)).collect();
+            if open.is_empty() {
+                break;
+            }
+            let ps = prems(env, s.concl());
+            let mut found = Vec::new();
+            'p: for p in &ps {
+                for u in using {
+                    let mut b2 = Vec::new();
+                    if pmatch(env, p, u.concl(), &open, &mut b2) && !b2.is_empty() {
+                        found = b2;
+                        break 'p;
+                    }
+                }
+            }
+            if found.is_empty() {
+                return err(format!("step: a run lemma's `{}` from no `using` fact", env.vars[open[0] as usize].name));
+            }
+            for (v, t) in &found {
+                s = Seq::inst(env, &s, *v, t)?;
+            }
+            binds.extend(found);
+        }
+        for _ in 0..n - 1 {
+            let (h, _) = imp_parts(env, s.concl())?;
+            let p = self.mem_discharge(env, lg, &h, using, 0)?;
+            s = Seq::mp(env, &s, &p)?;
+        }
+        Seq::mp(env, &s, r)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3561,6 +3692,55 @@ fn call_lemma(env: &Env, lg: &Logic, t: &Term) -> bool {
     }
     n >= 2 && matches!(t.node(), Node::App(o, _) if Some(*o) == or)
         && last.is_some_and(|r| matches!(r.node(), Node::App(f, a) if Some(*f) == runs && matches!(a[0].node(), Node::App(h, _) if Some(*h) == app)))
+}
+
+/// a run lemma's program's head
+fn run_lemma_head(env: &Env, lg: &Logic, t: &Term) -> Option<SymId> {
+    let runs = env.sym_by_name.get("runs").copied();
+    let mut t = t.clone();
+    while let Node::App(a, x) = t.node() {
+        if *a != lg.all {
+            break;
+        }
+        t = x[0].clone();
+    }
+    let mut last: Option<Term> = None;
+    while let Node::App(i, x) = t.node() {
+        if *i != env.builtins.imp {
+            break;
+        }
+        last = Some(x[0].clone());
+        t = x[1].clone();
+    }
+    match last?.node() {
+        Node::App(f, a) if Some(*f) == runs => match a[0].node() {
+            Node::App(p, _) => Some(*p),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// a program's run lemma: `all xs. H.. -> runs(P, s, o) -> D`, P no
+/// function value at registers (a call's contract)
+fn run_lemma(env: &Env, lg: &Logic, t: &Term) -> bool {
+    let runs = env.sym_by_name.get("runs").copied();
+    let mut t = t.clone();
+    while let Node::App(a, x) = t.node() {
+        if *a != lg.all {
+            break;
+        }
+        t = x[0].clone();
+    }
+    let mut last: Option<Term> = None;
+    while let Node::App(i, x) = t.node() {
+        if *i != env.builtins.imp {
+            break;
+        }
+        last = Some(x[0].clone());
+        t = x[1].clone();
+    }
+    last.is_some_and(|r| matches!(r.node(), Node::App(f, a) if Some(*f) == runs && !matches!(a[0].node(), Node::BVar(_))))
 }
 
 /// a callee's contract at a call: `all regs o. P -> runs(app(F, regs), w,

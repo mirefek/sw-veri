@@ -214,7 +214,7 @@ fn c1_cfg_engine_checks() {
         && checked.contains("proofs/abi_ghost.core: 0 constants, 0 axioms, 1 definitions, 28 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_ghost.core: 0 constants, 0 axioms, 0 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/mallocng_abs.core: 0 constants, 0 axioms, 6 definitions, 283 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_refine.core: 0 constants, 0 axioms, 0 definitions, 90 theorems, 0 conditional theorems, 0 open lemmas")
+        && checked.contains("proofs/mallocng_refine.core: 0 constants, 0 axioms, 0 definitions, 91 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
         && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")

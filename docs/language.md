@@ -540,6 +540,12 @@ goes, in order:
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
   a spec's choice (`havoc .. where d`) by a `with` fact `ex x. d(x)` (d as
   written or simplified), d of the name kept as a last conjunct;
+- through a program by its run lemma: a `with` lemma `all xs. H.. ->
+  runs(P, s, o) -> D` (`mp.ag_run`, `g.result32_inv`): a bind of P opened
+  (its outcome named), the run's arguments rewritten by the unused `with`
+  equations, the lemma's variables from the run and the `using` facts, its
+  premises discharged; D an `overflow || return` split as a call's, a
+  return `facts && o = V` its facts kept, V on;
 - through a spec's run: a function value at its arguments (its definition,
   `app(fn_build(D, ..), regs)` with `regs in D` discharged), a bind of a
   program with several outcomes (`ex o. runs(p, s, o) && ..`, o named),
@@ -687,7 +693,7 @@ premise they stand for.
 | `defs(p, D..)` | p proves the goal with D unfolded |
 | `ex_intro({w}.., p)` | witnesses for `ex` |
 | `disj({k}, p)` | the goal's k-th disjunct (as written, from 1) by p |
-| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice by the next witness, each property, equation and conjunct by taut, else simp, from the facts |
+| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice and `ex` by the next witness, each property, equation and conjunct by taut, else simp, from the facts |
 | `sel(p)` | `z in set_select(S, x. P)` from `z in S && P(z)` |
 | `lists(p..)` | equal list expressions (same pieces) |
 | `induct(base, step)` | `all n. n in omega -> P(n)` |
