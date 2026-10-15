@@ -45,7 +45,7 @@ item is a short summary of finished work; details are in the files named.
   readable GIMPLE inverted step by step (binds by one-outcome facts or
   lemmas, branches by conditions, the choices named), and the memory
   rules (`mem`, `mem_read`; views, frames and closures registered per
-  layer, proofs/mallocng_mem.core): with them queue's and dequeue's runs
+  layer, proofs/mallocng/code/ops.core): with them queue's and dequeue's runs
   went from about 300 to 110 lines. `step` takes its `with` facts in any
   order (an operation's lemma for every operation it matches), decides a
   branch also on its simplified condition or by arith from the facts, and
@@ -107,12 +107,12 @@ item is a short summary of finished work; details are in the files named.
 
 ## Top of the claim and the invariant
 
-- `proofs/musl_malloc.core`: `musl_malloc` is proven from
+- `proofs/mallocng/claim.core`: `musl_malloc` is proven from
   `mallocng.abs_unique`, `musl.init`, and `Impl` of malloc, free and
   calloc.
 - `layers/mallocng.sl`: mallocng's invariant, a first draft.
   - The four laws are proven for any configuration
-    (`proofs/mallocng.core`).
+    (`proofs/mallocng/laws.core`).
   - `slc heapcheck` evaluates the invariant on real heaps under ptrace,
     with a self-test that corrupts heaps eight ways.
 - `proofs/malloc_client.core`: client facts derived from the specs alone.
@@ -304,7 +304,7 @@ item is a short summary of finished work; details are in the files named.
   (`tr.q_same`: the structured walk's 214 from 1.2 GB to 770 MB).
 - **The CFG form refines the structured form** (`refines NAME LOW HIGH`,
   `slc/cli/src/c1/gref.rs`, `proofs/gimple_cfg.core`,
-  `proofs/mallocng_cfg.core`): per point (a label and its structured
+  `proofs/mallocng/machine/cfg.core`): per point (a label and its structured
   remainder) the CFG's block walked beside the remainder by congruence
   (`g.ref_op` / `g.ref_if` / `g.ref_ifn` / `g.ref_any`), each side's own
   steps by determined lemmas, the CFG-layer callees by the structured
@@ -378,7 +378,7 @@ item is a short summary of finished work; details are in the files named.
   does not move with the set of functions), so linking needs no widening. A caller's
   `tr.callee_io` (its returns keep the world valid for GIMPLE) is
   generated from its callees' (`tr.eff_call`). `a_crash` (`hlt`) has the
-  undefined contract (`proofs/a_crash.core`); callers' specs exclude it by
+  undefined contract (`proofs/mallocng/machine/a_crash.core`); callers' specs exclude it by
   their preconditions. `proofs/mallocng_link.core` links a_clz_32 with
   a_ctz_32, dequeue_head with dequeue, queue with a_crash, free_meta with
   queue, and size_to_class with a_clz_32.
@@ -398,12 +398,12 @@ item is a short summary of finished work; details are in the files named.
     precondition on the world's bytes (`table_ok`);
   - a_ctz_32 (`ms.a_ctz_32_c2`: x & -x, the de Bruijn index, the table
     entry tz(x)) and a_clz_32 from a_ctz_32's contract (`ms.a_clz_32_c2`:
-    smearing to 2^p, p x's top bit), proofs/mallocng_bits.core; with them
+    smearing to 2^p, p x's top bit), proofs/mallocng/code/classes.core; with them
     size_to_class with musl's a_clz_32 and a_ctz_32
     (`ms.size_to_class_c2_linked`);
   - set_size (`ms.set_size_c2`, and as a C function value): the reserved
     count in the slot's header byte, its word at the slot's end, case by
-    case of the count (0, below 5, 5 and more), proofs/mallocng_slots.core;
+    case of the count (0, below 5, 5 and more), proofs/mallocng/code/slots.core;
   - get_stride (`ms.get_stride_c2`, and as a C function value): a group's
     slot size from struct meta's bitfield word, which GIMPLE reads in parts
     (`g.bytes_split`, `g.bytes_bound`, `g.ldbf_det` in
@@ -420,7 +420,7 @@ item is a short summary of finished work; details are in the files named.
     the class and mapping cases: eight paths, each one `step`;
     `gmtc.composed`); __malloc_allzerop (no class, or a stride below the
     class's; get_meta's checks its precondition, get_stride's following
-    from them; `aztc.composed`) (proofs/mallocng_slots.core); is_bouncing and
+    from them; `aztc.composed`) (proofs/mallocng/code/slots.core); is_bouncing and
     decay_bounces (a size class's bounce counter in the malloc context),
     step_seq (its sequence byte; at 255 the first C2 of a loop, by
     `while_var`: invariant the first i unmap sequence bytes zeroed, variant
@@ -435,7 +435,7 @@ item is a short summary of finished work; details are in the files named.
     available one; its CAS loop by `g.loop` with an invariant under which
     the body only breaks -- a_cas returns the word just read, one thread --
     or overflows; now its effect summary `ms.ag_run`)
-    (proofs/mallocng_ctx.core).
+    (proofs/mallocng/code/ctx.core).
 
   The generic call lemmas (monotonicity, inversion under a contract, and
   `gc.contract_call` / `gc.contract_call1`: a call under a callee's
@@ -464,7 +464,7 @@ item is a short summary of finished work; details are in the files named.
 - **get_slot_index by its purpose**: its machine code implements
   `get_slot_index_spec` -- the index of the slot where p's block or
   nested group starts, in the abstract state (`mp.gsi_implements`,
-  proofs/mallocng_refine.core). The user's part: the byte read is the
+  proofs/mallocng/fun/). The user's part: the byte read is the
   slot's header, the allocator's, its low bits the index (`mp.slot_hdr`;
   the footprint's ranges as lists, `mp.group_fp`). The invariant gained
   what this needed: a slot's in-band header no client's (`hdr_free`), the
@@ -499,7 +499,7 @@ item is a short summary of finished work; details are in the files named.
   contract with the world-level call rule (`gc.contract_call1`). The
   code's run as an effect summary with the callee's contract a premise
   (`ms.gm_run`, `ms.gm_eff`), shared by the memory-level C2 and the
-  meaning-level proof. The invariant read (proofs/mallocng_abs.core):
+  meaning-level proof. The invariant read (proofs/mallocng/model/):
   `mp.gm_pre` -- under it every one of get_meta's checks passes; a
   group's start unit-aligned and positive, the offset within the class's
   slot, the context no client's (invariant additions). get_meta's
@@ -646,7 +646,7 @@ item is a short summary of finished work; details are in the files named.
 - **One specs layer**: every function's spec states its purpose, so the
   purpose specs joined the leaf specs and the code's effect summaries in
   layers/mallocng_specs.sl (`X_spec`); their refinements in
-  proofs/mallocng_refine.core.
+  proofs/mallocng/fun/.
 - **The invariant kept by list operations** (for try_avail; queue's and
   free's later):
   - the same geometry (`mp.geom`: the lists, the groups' links and masks
@@ -684,13 +684,19 @@ item is a short summary of finished work; details are in the files named.
   (`omega_mem_ind`, the ordinals' induction on omega) in core/sets.core;
   the induction on naturals (`nat_ind`) and strong induction
   (`nat_strong_ind`) derived from it in core/nat.core.
+- **The malloc proofs organised** (proofs/mallocng/): `machine/`, `code/`,
+  `model/` (the invariant's theory, by topic), `fun/` (one file per
+  function or family, everything about it at the GIMPLE level and its
+  machine code implementing it); the chain's order in one manifest
+  (`proofs/chain`), read by the test and `scripts/check.sh`; the test
+  requires every proof file free of axioms and open lemmas.
 - **Partially active groups** (`partial_ok` in `holds`): on a class's
   list at most one group with slots never activated, and such a group's
   slots reach past its first page (alloc_group activates those within
   it). Kept by `mp.partial_kept` (the lists, header bytes and geometry as
   before). Checked on real heaps by `slc heapcheck`.
 - **try_avail's run by its purpose** (`mp.ta_run`,
-  proofs/mallocng_try_avail.core): a slot of the head taken (`take_slot`);
+  proofs/mallocng/fun/try_avail.core): a slot of the head taken (`take_slot`);
   else the head dequeued or rotated past, its two ways meeting in one
   state (`mp.ta_jst`); the head skipped if fully free and freeable
   (`mp.jst_rot`); the next head's freed slots among its active ones

@@ -115,7 +115,7 @@ outcome.
   rank for the loop's termination. The structuring is untrusted: a
   function it fails on keeps C2 on the CFG. A function's spec then comes
   from its CFG C1, this refinement and its structured C2, by
-  `tr.implements_refine` twice (`proofs/mallocng_cfg.core`).
+  `tr.implements_refine` twice (`proofs/mallocng/machine/cfg.core`).
 
   The -O0 build is the first target. Optimized code can later be added as
   a GIMPLE ⊑ GIMPLE layer: the same cut-point theorem between two CFGs.
@@ -137,7 +137,7 @@ For a function F, two halves:
 - **C1, machine code ⊑ readable GIMPLE.** This is compilation correctness:
   no function-specific assumptions, and anything is allowed where GIMPLE is
   undefined.
-  - A `c1 F SPEC PREFIX` line (`proofs/mallocng_c1_cfg.core`) has the
+  - A `c1 F SPEC PREFIX` line (`proofs/mallocng/machine/c1.core`) has the
     checker's C1 engine (`slc/cli/src/c1/`) walk F's code (its decode facts)
     and its readable GIMPLE side by side. Each step applies a rule instance
     through the kernel; no proof text is written. The engine is untrusted:
@@ -193,15 +193,15 @@ For a function F, two halves:
     - the ABI's frame facts hold.
   - Calls use the call rule (`proofs/translate_call.core`).
 - **C2, readable GIMPLE ⊑ F's spec.** Hand proofs run the GIMPLE backwards
-  by inversion lemmas (`proofs/gimple_inv.core`; `proofs/mallocng_refine.core`,
-  the leaf functions' in `proofs/mallocng_c2.core`).
+  by inversion lemmas (`proofs/gimple_inv.core`; `proofs/mallocng/fun/`,
+  the leaf functions' in `proofs/mallocng/code/`).
   - A callee is used only through its contract: the call's outcomes follow
     from any contract the callee refines.
   - A caller proves the callee's precondition at the call.
 
 Transitivity gives machine code ⊑ spec: one lemma composes a function's
-two halves (`tr.implements_refine`, `proofs/mallocng_cfg.core`,
-`proofs/mallocng_refine.core`). The
+two halves (`tr.implements_refine`, `proofs/mallocng/machine/cfg.core`,
+`proofs/mallocng/fun/`). The
 functions are composed bottom-up over the call graph. A callee is a parameter of its caller's
 GIMPLE, so each function is checked against its callees' specs.
 
@@ -212,9 +212,10 @@ GIMPLE, so each function is checked against its callees' specs.
 | `spec/` | the trusted model (x86-64 encoding and semantics, Linux processes and exec) |
 | `layers/` | ABI, GIMPLE, malloc, mallocng, the claim |
 | `core/` | prelude (axioms) and the logic library (sets, naturals, records, lists, loops) |
-| `proofs/` | machine and ABI lemmas, the bridge rules, the C1 lines, C2 proofs, the top of the claim |
+| `proofs/` | machine and ABI lemmas, the bridge rules, GIMPLE's lemmas; the chain's order (`proofs/chain`) |
+| `proofs/mallocng/` | mallocng: `machine/` (its C1 lines, CFG compositions), `code/` (GIMPLE's operations, the functions' runs), `model/` (the invariant read and kept), `fun/` (one file per function or family: its purpose refined, its machine code implementing it), the laws and the top of the claim |
 | `slc/` | the toolchain: kernel, syntax, elaborator, interpreter, proof language, CLI |
-| `scripts/` | building musl (`build-musl.sh -O0`), dumping GIMPLE |
+| `scripts/` | building musl (`build-musl.sh -O0`), dumping GIMPLE, checking the chain while editing (`check.sh`) |
 | `tests/` | C test programs, cputest limits |
 
 Main commands (`slc/target/release/slc`):

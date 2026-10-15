@@ -1,0 +1,564 @@
+// The context's counters by their purpose: step_seq, decay_bounces,
+// account_bounce and is_bouncing change only the context's free bytes.
+
+// ----------------------------------------------------------------------
+//  The context's counters: step_seq, decay_bounces, account_bounce and
+//  is_bouncing -- their code refines their purpose (`counters_spec`:
+//  only the context's free bytes changed; is_bouncing's answer any). What
+//  each code writes (its run: `ms.sq_run`, ...) lies in the free bytes;
+//  what it reads and writes is accessible as they are (`mp.free_usable`).
+// (a byte from the usage counters up to the sequence bytes: a free one;
+// so n bytes from a there; a byte: its one byte)
+theorem mp.free_at(c, a): c.ctx in omega -> int_le(int_add(c.ctx, 464), a) -> int_lt(a, int_add(c.ctx, 920)) -> mallocng.ctx_free(c, a)
+proof
+  assume hc h1 h2
+  have k3: mallocng.C_USAGE = 464 by defs(refl({464}), mallocng.C_USAGE)
+  have k4: mallocng.C_BRK = 920 by defs(refl({920}), mallocng.C_BRK)
+  show by defs(arith(hc, h1, h2, k3, k4), mallocng.ctx_free)
+qed
+
+theorem mp.free_off(c, a, n): c.ctx in omega -> a in omega -> int_le(int_add(c.ctx, 464), a) -> int_le(int_add(a, n), int_add(c.ctx, 920)) ->
+  all i. i in omega -> int_lt(i, n) -> mallocng.ctx_free(c, int_add(a, i))
+proof
+  assume hc ha h1 h2
+  fix i
+  assume hi hl
+  show := apply(mp.free_at[c := c, a := int_add(a, i)], hc, arith(h1, hi, ha), arith(h2, hl, hi))
+qed
+
+theorem mp.free1(c, a): a in omega -> mallocng.ctx_free(c, a) -> all i. i in omega -> int_lt(i, 1) -> mallocng.ctx_free(c, int_add(a, i))
+proof
+  assume ha hf
+  fix i
+  assume hi hl
+  have e: int_add(a, i) = a by arith(hi, hl, ha)
+  show := subst({y. mallocng.ctx_free(c, y)}, sym(e), hf)
+qed
+
+// (a free byte written: only free bytes changed)
+theorem mp.co_wr8(c, vm, a, v): vm in x86_64_linux.Vm -> a in omega -> int_lt(a, 18446744073709551615) -> mallocng.ctx_free(c, a) ->
+  mallocng_specs.ctx_only(c, vm, mallocng_specs.wr8(vm, a, v)) && mallocng_specs.wr8(vm, a, v) in x86_64_linux.Vm
+proof
+  assume hv ha hal hf
+  have co := apply(mp.co_store[c := c, vm := vm, a := a, k := 1, v := v], hv, arith(ha, hal), simp(), arith(hal), apply(mp.free1, ha, hf))
+  have wv := mp(all_elim(ms.wr_any, {vm}, {a}, {1}, {v}), hv)
+  show by defs(taut(co, wv), mallocng_specs.wr8)
+qed
+
+// size class sc's bounce counter and unmap sequence byte: free ones
+theorem mp.bounce_free(c, sc): c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> sc in bits(32) -> mallocng_specs.bouncing_class(sc) ->
+  at: mallocng_specs.bounce_at(c_src_malloc_mallocng_malloc.__malloc_context, sc) in omega &&
+  lt: int_lt(mallocng_specs.bounce_at(c_src_malloc_mallocng_malloc.__malloc_context, sc), 18446744073709551615) &&
+  free: mallocng.ctx_free(c, mallocng_specs.bounce_at(c_src_malloc_mallocng_malloc.__malloc_context, sc)) &&
+  uat: mallocng_specs.unmap_seq_at(c_src_malloc_mallocng_malloc.__malloc_context, sc) in omega &&
+  ufree: mallocng.ctx_free(c, mallocng_specs.unmap_seq_at(c_src_malloc_mallocng_malloc.__malloc_context, sc))
+proof
+  assume hx hsc h
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have lo hi := expand(h, mallocng_specs.bouncing_class)
+  have co: c.ctx in omega by arith(hx, cv)
+  have ab: mallocng_specs.bounce_at(CTX, sc) = int_sub(int_add(int_add(CTX, 880), sc), 7) by defs(arith(cv, lo, hi, hsc, p64), mallocng_specs.bounce_at, bits_of_int)
+  have au: mallocng_specs.unmap_seq_at(CTX, sc) = int_sub(int_add(int_add(CTX, 848), sc), 7) by defs(arith(cv, lo, hi, hsc, p64), mallocng_specs.unmap_seq_at, bits_of_int)
+  have fb := apply(mp.free_at[c := c, a := mallocng_specs.bounce_at(CTX, sc)], co, arith(ab, hx, lo), arith(ab, hx, hi))
+  have fu := apply(mp.free_at[c := c, a := mallocng_specs.unmap_seq_at(CTX, sc)], co, arith(au, hx, lo), arith(au, hx, hi))
+  have bo: mallocng_specs.bounce_at(CTX, sc) in omega := rewrite(sym(ab), (int_sub(int_add(int_add(CTX, 880), sc), 7) in omega by arith(cv, lo, hsc)))
+  have bl: int_lt(mallocng_specs.bounce_at(CTX, sc), 18446744073709551615) := rewrite(sym(ab), (int_lt(int_sub(int_add(int_add(CTX, 880), sc), 7), 18446744073709551615) by arith(cv, hi)))
+  have uo: mallocng_specs.unmap_seq_at(CTX, sc) in omega := rewrite(sym(au), (int_sub(int_add(int_add(CTX, 848), sc), 7) in omega by arith(cv, lo, hsc)))
+  show by taut(bo, bl, fb, uo, fu)
+qed
+
+// the counters' preconditions, from the invariant: their bytes free, so
+// accessible
+theorem mp.sq_pre(c, A, vm, b, objs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  mallocng.holds_in(c, A, vm, b) -> mallocng_specs.step_seq_pre(vm, objs, c_src_malloc_mallocng_malloc.__malloc_context)
+proof
+  assume hc hu ha hx hh
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+  have co: c.ctx in omega by arith(hx, cv)
+  have f912 := apply(mp.free_off[c := c, a := int_add(CTX, 912), n := 1], co, arith(cv), arith(hx, cv), arith(hx, cv))
+  have u1 u2 := apply(mp.free_usable[c := c, A := A, vm := vm, b := b, objs := objs, a := int_add(CTX, 912), n := 1], hc, hu, ha, hh, arith(cv), f912)
+  have f848 := apply(mp.free_off[c := c, a := int_add(CTX, 848), n := 32], co, arith(cv), arith(hx, cv), arith(hx, cv))
+  have _ u3 := apply(mp.free_usable[c := c, A := A, vm := vm, b := b, objs := objs, a := int_add(CTX, 848), n := 32], hc, hu, ha, hh, arith(cv), f848)
+  have nz: !(CTX = 0) by arith(cv)
+  have lim: int_le(int_add(CTX, 913), int_pow(2, 64)) by simp(cv)
+  show by defs(taut(nz, lim, u1, u2, u3), mallocng_specs.step_seq_pre)
+qed
+
+theorem mp.bp_pre(c, A, vm, b, objs, sc, w): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  sc in bits(32) -> mallocng.holds_in(c, A, vm, b) -> mallocng_specs.bounce_pre(vm, objs, c_src_malloc_mallocng_malloc.__malloc_context, sc, w)
+proof
+  assume hc hu ha hx hsc hh
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+  have ub: mallocng_specs.bouncing_class(sc) ->
+      gimple.usable(vm, objs, mallocng_specs.bounce_at(CTX, sc), 1, false) && gimple.usable(vm, objs, mallocng_specs.bounce_at(CTX, sc), 1, true) proof
+    assume h
+    have {at = at, fb = free} := apply(mp.bounce_free[c := c, sc := sc], hx, hsc, h)
+    show := apply(mp.free_usable[c := c, A := A, vm := vm, b := b, objs := objs, a := mallocng_specs.bounce_at(CTX, sc), n := 1], hc, hu, ha, hh, at, apply(mp.free1, at, fb))
+  qed
+  have nz: !(CTX = 0) by arith(cv)
+  have lim: int_le(int_add(CTX, 913), int_pow(2, 64)) by simp(cv)
+  show by defs(taut(nz, lim, ub), mallocng_specs.bounce_pre)
+qed
+
+theorem mp.ab_pre(c, A, vm, b, objs, sc): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  sc in bits(32) -> mallocng.holds_in(c, A, vm, b) -> mallocng_specs.account_bounce_pre(vm, objs, c_src_malloc_mallocng_malloc.__malloc_context, sc)
+proof
+  assume hc hu ha hx hsc hh
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+  have co: c.ctx in omega by arith(hx, cv)
+  have bp := apply(mp.bp_pre[c := c, A := A, vm := vm, b := b, objs := objs, sc := sc, w := true], hc, hu, ha, hx, hsc, hh)
+  have us: mallocng_specs.bouncing_class(sc) ->
+      gimple.usable(vm, objs, mallocng_specs.unmap_seq_at(CTX, sc), 1, false) && gimple.usable(vm, objs, int_add(CTX, 912), 1, false) proof
+    assume h
+    have {uat = uat, fu = ufree} := apply(mp.bounce_free[c := c, sc := sc], hx, hsc, h)
+    have u1 _ := apply(mp.free_usable[c := c, A := A, vm := vm, b := b, objs := objs, a := mallocng_specs.unmap_seq_at(CTX, sc), n := 1], hc, hu, ha, hh, uat, apply(mp.free1, uat, fu))
+    have f912 := apply(mp.free_off[c := c, a := int_add(CTX, 912), n := 1], co, arith(cv), arith(hx, cv), arith(hx, cv))
+    have u2 _ := apply(mp.free_usable[c := c, A := A, vm := vm, b := b, objs := objs, a := int_add(CTX, 912), n := 1], hc, hu, ha, hh, arith(cv), f912)
+    show by taut(u1, u2)
+  qed
+  show by defs(taut(bp, us), mallocng_specs.account_bounce_pre)
+qed
+
+// the counters' effects: free bytes written
+theorem mp.sq_only(c, vm): vm in x86_64_linux.Vm -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  mallocng_specs.ctx_only(c, vm, mallocng_specs.step_seq_vm(vm, c_src_malloc_mallocng_malloc.__malloc_context)) &&
+  mallocng_specs.step_seq_vm(vm, c_src_malloc_mallocng_malloc.__malloc_context) in x86_64_linux.Vm
+proof
+  assume hv hx
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  let B := gimple.bytes_at(vm, mallocng_specs.seq_at(CTX), 1)
+  have cv: CTX = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have sq: mallocng_specs.seq_at(CTX) = int_add(CTX, 912) by defs(arith(cv, p64), mallocng_specs.seq_at, bits_add, pow2)
+  have us: mallocng_specs.unmap_seqs_at(CTX) = int_add(CTX, 848) by defs(arith(cv, p64), mallocng_specs.unmap_seqs_at, bits_add, pow2)
+  have co: c.ctx in omega by arith(hx, cv)
+  have fs: mallocng.ctx_free(c, mallocng_specs.seq_at(CTX)) := apply(mp.free_at[c := c, a := mallocng_specs.seq_at(CTX)], co, arith(sq, hx, cv), arith(sq, hx, cv))
+  // below 255: the byte counted up
+  have up: !(B = 255) -> mallocng_specs.ctx_only(c, vm, mallocng_specs.step_seq_vm(vm, CTX)) && mallocng_specs.step_seq_vm(vm, CTX) in x86_64_linux.Vm proof
+    assume h
+    have e: mallocng_specs.step_seq_vm(vm, CTX) = mallocng_specs.wr8(vm, mallocng_specs.seq_at(CTX), int_add(B, 1))
+      by defs(simp(h, keep(mallocng_specs.wr8, mallocng_specs.seq_at)), mallocng_specs.step_seq_vm)
+    have w := apply(mp.co_wr8[c := c, vm := vm, a := mallocng_specs.seq_at(CTX), v := int_add(B, 1)], hv, arith(sq, cv), arith(sq, cv), fs)
+    show := rewrite(sym(e), w)
+  qed
+  // at 255: the unmap sequence bytes zeroed, then the byte 1
+  have wrap: B = 255 -> mallocng_specs.ctx_only(c, vm, mallocng_specs.step_seq_vm(vm, CTX)) && mallocng_specs.step_seq_vm(vm, CTX) in x86_64_linux.Vm proof
+    assume h
+    let V1 := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, mallocng_specs.unmap_seqs_at(CTX), 32, 0))
+    have e: mallocng_specs.step_seq_vm(vm, CTX) = mallocng_specs.wr8(V1, mallocng_specs.seq_at(CTX), 1)
+      by defs(simp(h, keep(mallocng_specs.wr8, mallocng_specs.seq_at, mallocng_specs.unmap_seqs_at)), mallocng_specs.step_seq_vm)
+    have f848 := apply(mp.free_off[c := c, a := int_add(CTX, 848), n := 32], co, arith(cv), arith(hx, cv), arith(hx, cv))
+    have w1 := apply(mp.co_store[c := c, vm := vm, a := mallocng_specs.unmap_seqs_at(CTX), k := 32, v := 0], hv, arith(us, cv), simp(), arith(us, cv), rewrite(sym(us), f848))
+    have v1 := mp(all_elim(ms.wr_any, {vm}, {mallocng_specs.unmap_seqs_at(CTX)}, {32}, {0}), hv)
+    have w2 wv := apply(mp.co_wr8[c := c, vm := V1, a := mallocng_specs.seq_at(CTX), v := 1], v1, arith(sq, cv), arith(sq, cv), fs)
+    show := rewrite(sym(e), conj(apply(mp.co_trans, w1, w2), wv))
+  qed
+  show by taut(up, wrap)
+qed
+
+theorem mp.db_only(c, vm, sc): vm in x86_64_linux.Vm -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> sc in bits(32) ->
+  mallocng_specs.ctx_only(c, vm, mallocng_specs.decay_vm(vm, c_src_malloc_mallocng_malloc.__malloc_context, sc)) &&
+  mallocng_specs.decay_vm(vm, c_src_malloc_mallocng_malloc.__malloc_context, sc) in x86_64_linux.Vm
+proof
+  assume hv hx hsc
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  let D := gimple.bytes_at(vm, mallocng_specs.bounce_at(CTX, sc), 1)
+  have dn: !(mallocng_specs.bouncing_class(sc) && !(D = 0)) ->
+      mallocng_specs.ctx_only(c, vm, mallocng_specs.decay_vm(vm, CTX, sc)) && mallocng_specs.decay_vm(vm, CTX, sc) in x86_64_linux.Vm proof
+    assume h
+    have e: mallocng_specs.decay_vm(vm, CTX, sc) = vm by defs(simp(h, keep(mallocng_specs.bouncing_class, mallocng_specs.wr8, mallocng_specs.bounce_at)), mallocng_specs.decay_vm)
+    show := subst({y. mallocng_specs.ctx_only(c, vm, y) && y in x86_64_linux.Vm}, sym(e), conj(apply(mp.co_refl[c := c, vm := vm], hv), hv))
+  qed
+  have dy: mallocng_specs.bouncing_class(sc) && !(D = 0) ->
+      mallocng_specs.ctx_only(c, vm, mallocng_specs.decay_vm(vm, CTX, sc)) && mallocng_specs.decay_vm(vm, CTX, sc) in x86_64_linux.Vm proof
+    assume h
+    have hb _ := h
+    have {at = at, lt = lt, fb = free} := apply(mp.bounce_free[c := c, sc := sc], hx, hsc, hb)
+    have e: mallocng_specs.decay_vm(vm, CTX, sc) = mallocng_specs.wr8(vm, mallocng_specs.bounce_at(CTX, sc), int_sub(D, 1))
+      by defs(simp(h, keep(mallocng_specs.bouncing_class, mallocng_specs.wr8, mallocng_specs.bounce_at)), mallocng_specs.decay_vm)
+    show := rewrite(sym(e), apply(mp.co_wr8[c := c, vm := vm, a := mallocng_specs.bounce_at(CTX, sc), v := int_sub(D, 1)], hv, at, lt, fb))
+  qed
+  show by taut(dn, dy)
+qed
+
+theorem mp.ab_only(c, vm, sc): vm in x86_64_linux.Vm -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> sc in bits(32) ->
+  mallocng_specs.ctx_only(c, vm, mallocng_specs.account_vm(vm, c_src_malloc_mallocng_malloc.__malloc_context, sc)) &&
+  mallocng_specs.account_vm(vm, c_src_malloc_mallocng_malloc.__malloc_context, sc) in x86_64_linux.Vm
+proof
+  assume hv hx hsc
+  let CTX := c_src_malloc_mallocng_malloc.__malloc_context
+  let D := gimple.bytes_at(vm, mallocng_specs.bounce_at(CTX, sc), 1)
+  have dn: !mallocng_specs.bounced(vm, CTX, sc) ->
+      mallocng_specs.ctx_only(c, vm, mallocng_specs.account_vm(vm, CTX, sc)) && mallocng_specs.account_vm(vm, CTX, sc) in x86_64_linux.Vm proof
+    assume h
+    have e: mallocng_specs.account_vm(vm, CTX, sc) = vm by defs(simp(h, keep(mallocng_specs.bounced, mallocng_specs.wr8, mallocng_specs.bounce_at)), mallocng_specs.account_vm)
+    show := subst({y. mallocng_specs.ctx_only(c, vm, y) && y in x86_64_linux.Vm}, sym(e), conj(apply(mp.co_refl[c := c, vm := vm], hv), hv))
+  qed
+  have dy: mallocng_specs.bounced(vm, CTX, sc) ->
+      mallocng_specs.ctx_only(c, vm, mallocng_specs.account_vm(vm, CTX, sc)) && mallocng_specs.account_vm(vm, CTX, sc) in x86_64_linux.Vm proof
+    assume h
+    have hb _ _ := expand(h, mallocng_specs.bounced)
+    have {at = at, lt = lt, fb = free} := apply(mp.bounce_free[c := c, sc := sc], hx, hsc, hb)
+    have e: mallocng_specs.account_vm(vm, CTX, sc) = mallocng_specs.wr8(vm, mallocng_specs.bounce_at(CTX, sc), ite(int_le(D, 98), int_add(D, 1), 150))
+      by defs(simp(h, keep(mallocng_specs.bounced, mallocng_specs.wr8, mallocng_specs.bounce_at)), mallocng_specs.account_vm)
+    show := rewrite(sym(e), apply(mp.co_wr8[c := c, vm := vm, a := mallocng_specs.bounce_at(CTX, sc), v := ite(int_le(D, 98), int_add(D, 1), 150)], hv, at, lt, fb))
+  qed
+  show by taut(dn, dy)
+qed
+
+// A program whose runs, under the invariant, change only the context's
+// free bytes: it refines the counters' purpose
+theorem mp.counters_ref(c, p): (all s o. runs(p, s, o) -> pair(s, o) in univ(1)) ->
+  (all s h o. s in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, s.vm, h.blocks) -> runs(p, s, o) ->
+     ex V2. V2 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, s.vm, V2) && o = ok(fn_update(s, "vm", V2), empty)) ->
+  refines_ghost(p, mallocng_specs.counters_spec(c), abi.World, mp.G)
+proof
+  assume rp hrun
+  have body: all s h o. s in abi.World -> h in mp.G -> runs(p, s, o) -> mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).blocks) ->
+      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex s1 v h2. h2 in mp.G && o = ok(s1, v) &&
+        letin(union2(s, h).vm, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, x3, fn_update(union2(s, h), "vm", x4).vm),
+          x4. letin(fn_update(union2(s, h), "vm", x4), x5. exc(pair(union2(s1, h2), empty), pair("ret", v)) = ok(pair(x5, empty), empty))))) ||
+      (ex s1 h2. h2 in mp.G && o = ok(s1, empty) &&
+        letin(union2(s, h).vm, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, x3, fn_update(union2(s, h), "vm", x4).vm),
+          x4. letin(fn_update(union2(s, h), "vm", x4), x5. ok(pair(union2(s1, h2), empty), empty) = ok(pair(x5, empty), empty))))) proof
+    fix s h o
+    assume hs hh hr hpre
+    let S := union2(s, h)
+    have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+    have vS: S.vm = s.vm by simp(sd, hd)
+    have hin: mallocng.holds_in(c, h.A, s.vm, h.blocks) by simp(hpre, sd, hd)
+    obtain V2, hv2 hco ho from mp(all_elim(hrun, {s}, {h}, {o}), hs, hh, hin, hr)
+    // the world's part updated, the ghost part joined: the spec's state
+    have _ hk := mp(all_elim(mp.g_world, {h}), hh)
+    have nv: all z. z in h -> fst(z) != "vm" proof
+      fix z
+      assume hz
+      show by simp(mp(all_elim(hk, {z}), hz))
+    qed
+    have eu := mp(fn_update_union_l[a := s, b := h, k := "vm", v := V2], nv)
+    have d4: V2 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, S.vm, fn_update(S, "vm", V2).vm) by simp(hv2, hco, vS, keep(mallocng_specs.ctx_only))
+    have eq: ok(pair(union2(fn_update(s, "vm", V2), h), empty), empty) = ok(pair(fn_update(S, "vm", V2), empty), empty) by simp(eu)
+    have k4: ex x4. (x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, S.vm, fn_update(S, "vm", x4).vm)) &&
+        ok(pair(union2(fn_update(s, "vm", V2), h), empty), empty) = ok(pair(fn_update(S, "vm", x4), empty), empty) by ex_intro({V2}, taut(d4, eq))
+    have bB: letin(S.vm, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, x3, fn_update(S, "vm", x4).vm),
+        x4. letin(fn_update(S, "vm", x4), x5. ok(pair(union2(fn_update(s, "vm", V2), h), empty), empty) = ok(pair(x5, empty), empty)))) by defs(taut(k4), letin, any_rel)
+    have fin: ex s1 h2. h2 in mp.G && o = ok(s1, empty) &&
+        letin(S.vm, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, x3, fn_update(S, "vm", x4).vm),
+          x4. letin(fn_update(S, "vm", x4), x5. ok(pair(union2(s1, h2), empty), empty) = ok(pair(x5, empty), empty)))) by ex_intro({fn_update(s, "vm", V2)}, {h}, taut(hh, ho, bB))
+    show by taut(fin)
+  qed
+  show by defs(apply(ct.refines_contract_ge, mp.g_world, rp, body), mallocng_specs.counters_spec)
+qed
+
+// step_seq, decay_bounces, account_bounce: their code by their purpose
+theorem mp.sq: all c. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  refines_ghost(c_src_malloc_mallocng_malloc.step_seq(), mallocng_specs.counters_spec(c), abi.World, mp.G)
+proof
+  fix c
+  assume hc hx
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.step_seq(), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.step_seq))
+  qed
+  have eff: all s h o. s in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, s.vm, h.blocks) -> runs(c_src_malloc_mallocng_malloc.step_seq(), s, o) ->
+      ex V2. V2 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, s.vm, V2) && o = ok(fn_update(s, "vm", V2), empty) proof
+    fix s h o
+    assume hs hh hin hr
+    have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+    have pre := apply(mp.sq_pre[c := c, A := h.A, vm := s.vm, b := h.blocks, objs := s.objs], hc, (h.A in univ(1) by simp(hu)), hat, hx, hin)
+    have oe := mp(all_elim(ms.sq_run, {s}, {o}), hs, pre, hr)
+    have pv _ _ _ := apply(ms.world_parts, hs)
+    have co cv := apply(mp.sq_only[c := c, vm := s.vm], pv, hx)
+    show by ex_intro({mallocng_specs.step_seq_vm(s.vm, c_src_malloc_mallocng_malloc.__malloc_context)}, taut(cv, co, oe))
+  qed
+  show := apply(mp.counters_ref[c := c, p := c_src_malloc_mallocng_malloc.step_seq()], rp, eff)
+qed
+
+theorem mp.db: all c sc. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> sc in bits(32) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.decay_bounces(sc), mallocng_specs.counters_spec(c), abi.World, mp.G)
+proof
+  fix c sc
+  assume hc hx hsc
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.decay_bounces(sc), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.decay_bounces))
+  qed
+  have eff: all s h o. s in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, s.vm, h.blocks) -> runs(c_src_malloc_mallocng_malloc.decay_bounces(sc), s, o) ->
+      ex V2. V2 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, s.vm, V2) && o = ok(fn_update(s, "vm", V2), empty) proof
+    fix s h o
+    assume hs hh hin hr
+    have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+    have pre := apply(mp.bp_pre[c := c, A := h.A, vm := s.vm, b := h.blocks, objs := s.objs, sc := sc, w := true], hc, (h.A in univ(1) by simp(hu)), hat, hx, hsc, hin)
+    have oe := mp(all_elim(ms.db_run, {sc}, {s}, {o}), hsc, hs, pre, hr)
+    have pv _ _ _ := apply(ms.world_parts, hs)
+    have co cv := apply(mp.db_only[c := c, vm := s.vm, sc := sc], pv, hx, hsc)
+    show by ex_intro({mallocng_specs.decay_vm(s.vm, c_src_malloc_mallocng_malloc.__malloc_context, sc)}, taut(cv, co, oe))
+  qed
+  show := apply(mp.counters_ref[c := c, p := c_src_malloc_mallocng_malloc.decay_bounces(sc)], rp, eff)
+qed
+
+theorem mp.ab: all c sc. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> sc in bits(32) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.account_bounce(sc), mallocng_specs.counters_spec(c), abi.World, mp.G)
+proof
+  fix c sc
+  assume hc hx hsc
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.account_bounce(sc), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.account_bounce))
+  qed
+  have eff: all s h o. s in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, s.vm, h.blocks) -> runs(c_src_malloc_mallocng_malloc.account_bounce(sc), s, o) ->
+      ex V2. V2 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, s.vm, V2) && o = ok(fn_update(s, "vm", V2), empty) proof
+    fix s h o
+    assume hs hh hin hr
+    have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+    have pre := apply(mp.ab_pre[c := c, A := h.A, vm := s.vm, b := h.blocks, objs := s.objs, sc := sc], hc, (h.A in univ(1) by simp(hu)), hat, hx, hsc, hin)
+    have oe := mp(all_elim(ms.ab_run, {sc}, {s}, {o}), hsc, hs, pre, hr)
+    have pv _ _ _ := apply(ms.world_parts, hs)
+    have co cv := apply(mp.ab_only[c := c, vm := s.vm, sc := sc], pv, hx, hsc)
+    show by ex_intro({mallocng_specs.account_vm(s.vm, c_src_malloc_mallocng_malloc.__malloc_context, sc)}, taut(cv, co, oe))
+  qed
+  show := apply(mp.counters_ref[c := c, p := c_src_malloc_mallocng_malloc.account_bounce(sc)], rp, eff)
+qed
+
+// is_bouncing's code by its purpose: its answer some 32-bit word, the world
+// unchanged
+theorem mp.ib: all c sc. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> sc in bits(32) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.is_bouncing(sc), mallocng_specs.is_bouncing_spec(c, sc), abi.World, mp.G)
+proof
+  fix c sc
+  assume hc hx hsc
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.is_bouncing))
+  qed
+  have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.is_bouncing(sc), s, o) ->
+      mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).blocks) ->
+      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32), x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3)))) proof
+    fix s h o
+    assume hs hh hr hpre
+    have hu hd _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+    have hin: mallocng.holds_in(c, h.A, s.vm, h.blocks) by simp(hpre, sd, hd)
+    have pre := apply(mp.bp_pre[c := c, A := h.A, vm := s.vm, b := h.blocks, objs := s.objs, sc := sc, w := false], hc, (h.A in univ(1) by simp(hu)), hat, hx, hsc, hin)
+    have oe := mp(all_elim(ms.ib_run, {sc}, {s}, {o}), hsc, hs, pre, hr)
+    let R := ite(mallocng_specs.bouncing_class(sc) && int_lt(99, gimple.bytes_at(s.vm, mallocng_specs.bounce_at(c_src_malloc_mallocng_malloc.__malloc_context, sc), 1)), 1, 0)
+    have rb: R in bits(32) by simp()
+    have a3: ex x3. x3 in bits(32) && exc(pair(union2(s, h), empty), pair("ret", R)) = exc(pair(union2(s, h), empty), pair("ret", x3))
+      by ex_intro({R}, taut(rb, refl({exc(pair(union2(s, h), empty), pair("ret", R))})))
+    have ar: any_rel(x3. x3 in bits(32), x3. exc(pair(union2(s, h), empty), pair("ret", R)) = exc(pair(union2(s, h), empty), pair("ret", x3))) by defs(taut(a3), any_rel)
+    have fin: ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32), x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3)))
+      by ex_intro({s}, {R}, taut(oe, ar))
+    show by taut(fin)
+  qed
+  show by defs(apply(ct.refines_contract, mp.g_world, rp, body), mallocng_specs.is_bouncing_spec)
+qed
+
+// ... as C function values
+theorem mp.sq_fun: all c regs. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> regs in abi.ARGS ->
+  refines_ghost(c_src_malloc_mallocng_malloc.step_seq_fun()[regs], mallocng_specs.counters_spec_fun0(c)[regs], abi.World, mp.G)
+proof
+  fix c regs
+  assume hc hx hr
+  have w := apply(g.fun_void0_ghost[p := c_src_malloc_mallocng_malloc.step_seq(), q := mallocng_specs.counters_spec(c), G := mp.G], mp.g_univ, mp(all_elim(mp.sq, {c}), hc, hx))
+  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.step_seq_fun, mallocng_specs.counters_spec_fun0)
+qed
+
+theorem mp.db_fun: all c regs. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> regs in abi.ARGS ->
+  refines_ghost(c_src_malloc_mallocng_malloc.decay_bounces_fun()[regs], mallocng_specs.counters_spec_fun1(c)[regs], abi.World, mp.G)
+proof
+  fix c regs
+  assume hc hx hr
+  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.decay_bounces(bits_of_int(32, regs[0])), mallocng_specs.counters_spec(c), abi.World, mp.G) proof
+    fix regs
+    show := mp(all_elim(mp.db, {c}, {bits_of_int(32, regs[0])}), hc, hx, simp())
+  qed
+  have w := mp(g.fun_void_ghost[p := x0. c_src_malloc_mallocng_malloc.decay_bounces(bits_of_int(32, x0[0])), q := x0. mallocng_specs.counters_spec(c), n := 1, G := mp.G], mp.g_univ, hm)
+  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.decay_bounces_fun, mallocng_specs.counters_spec_fun1)
+qed
+
+theorem mp.ab_fun: all c regs. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> regs in abi.ARGS ->
+  refines_ghost(c_src_malloc_mallocng_malloc.account_bounce_fun()[regs], mallocng_specs.counters_spec_fun1(c)[regs], abi.World, mp.G)
+proof
+  fix c regs
+  assume hc hx hr
+  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.account_bounce(bits_of_int(32, regs[0])), mallocng_specs.counters_spec(c), abi.World, mp.G) proof
+    fix regs
+    show := mp(all_elim(mp.ab, {c}, {bits_of_int(32, regs[0])}), hc, hx, simp())
+  qed
+  have w := mp(g.fun_void_ghost[p := x0. c_src_malloc_mallocng_malloc.account_bounce(bits_of_int(32, x0[0])), q := x0. mallocng_specs.counters_spec(c), n := 1, G := mp.G], mp.g_univ, hm)
+  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.account_bounce_fun, mallocng_specs.counters_spec_fun1)
+qed
+
+theorem mp.ib_fun: all c regs. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> regs in abi.ARGS ->
+  refines_ghost(c_src_malloc_mallocng_malloc.is_bouncing_fun()[regs], mallocng_specs.is_bouncing_spec_fun(c)[regs], abi.World, mp.G)
+proof
+  fix c regs
+  assume hc hx hr
+  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.is_bouncing(bits_of_int(32, regs[0])), mallocng_specs.is_bouncing_spec(c, bits_of_int(32, regs[0])), abi.World, mp.G) proof
+    fix regs
+    show := mp(all_elim(mp.ib, {c}, {bits_of_int(32, regs[0])}), hc, hx, simp())
+  qed
+  have w := mp(g.fun_res_ghost[p := x0. c_src_malloc_mallocng_malloc.is_bouncing(bits_of_int(32, x0[0])), q := x0. mallocng_specs.is_bouncing_spec(c, bits_of_int(32, x0[0])), w := 32, n := 1, G := mp.G], mp.g_univ, hm)
+  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.is_bouncing_fun, mallocng_specs.is_bouncing_spec_fun, letin)
+qed
+
+// (the specs diverge nowhere they do not also raise: the counters' body
+// ends, or nothing; is_bouncing's returns)
+theorem mp.co_div(c, w, h, t): w in abi.World -> w in univ(1) -> h in mp.G ->
+  runs(mallocng_specs.counters_spec(c), union2(w, h), diverge(t)) -> runs(mallocng_specs.counters_spec(c), union2(w, h), exc(union2(w, h), empty))
+proof
+  assume hw hwu hh hr
+  let S := union2(w, h)
+  have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+  have bp: all x x2. letin(S.vm, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, x3, fn_update(S, "vm", x4).vm),
+        x4. letin(fn_update(S, "vm", x4), x5. x = ok(pair(x5, empty), empty)))) -> fst(x) = 2 ->
+      letin(S.vm, x3. any_rel(x4. x4 in x86_64_linux.Vm && mallocng_specs.ctx_only(c, x3, fn_update(S, "vm", x4).vm),
+        x4. letin(fn_update(S, "vm", x4), x5. x2 = ok(pair(x5, empty), empty)))) proof
+    fix x x2
+    assume h1 h2
+    have k: all y. y in x86_64_linux.Vm && mallocng_specs.ctx_only(c, S.vm, fn_update(S, "vm", y).vm) ->
+        x = ok(pair(fn_update(S, "vm", y), empty), empty) -> fst(x) = 2 -> x2 = ok(pair(fn_update(S, "vm", y), empty), empty) proof
+      fix y
+      assume _ he hf
+      have f0: fst(x) = 0 by defs(simp(he), ok, tag)
+      have no: false by arith(f0, hf)
+      show by taut(no)
+    qed
+    show by defs(apply(ct.dv_any[d := y. y in x86_64_linux.Vm && mallocng_specs.ctx_only(c, S.vm, fn_update(S, "vm", y).vm),
+      k := y x. x = ok(pair(fn_update(S, "vm", y), empty), empty), x := x, x2 := x2], k, expand(h1, letin), h2), letin)
+  qed
+  have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_specs.counters_spec), bp)
+  show by defs(r2, mallocng_specs.counters_spec)
+qed
+
+theorem mp.co_divg0: all c. tr.div_raises_g(mp.G, mallocng_specs.counters_spec_fun0(c))
+proof
+  fix c
+  have qd: all w h t. w in abi.World -> w in univ(1) -> h in mp.G -> runs(mallocng_specs.counters_spec(c), union2(w, h), diverge(t)) ->
+      runs(mallocng_specs.counters_spec(c), union2(w, h), exc(union2(w, h), empty)) proof
+    fix w h t
+    assume hw hwu hh hr
+    show := apply(mp.co_div[c := c, w := w, h := h, t := t], hw, hwu, hh, hr)
+  qed
+  show by defs(apply(ct.fun_divg_v0[G := mp.G, q := mallocng_specs.counters_spec(c)], mp.g_univ, qd), mallocng_specs.counters_spec_fun0)
+qed
+
+theorem mp.co_divg1: all c. tr.div_raises_g(mp.G, mallocng_specs.counters_spec_fun1(c))
+proof
+  fix c
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G -> runs(mallocng_specs.counters_spec(c), union2(w, h), diverge(t)) ->
+      runs(mallocng_specs.counters_spec(c), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    show := apply(mp.co_div[c := c, w := w, h := h, t := t], hw, hwu, hh, hr)
+  qed
+  show by defs(apply(ct.fun_divg_v[G := mp.G, q := x0. mallocng_specs.counters_spec(c), n := 1], mp.g_univ, qd), mallocng_specs.counters_spec_fun1)
+qed
+
+theorem mp.ib_divg: all c. tr.div_raises_g(mp.G, mallocng_specs.is_bouncing_spec_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_specs.is_bouncing_spec(c, bits_of_int(32, regs[0])), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_specs.is_bouncing_spec))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_specs.is_bouncing_spec(c, bits_of_int(32, regs[0])), union2(w, h), diverge(t)) ->
+      runs(mallocng_specs.is_bouncing_spec(c, bits_of_int(32, regs[0])), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. any_rel(x3. x3 in bits(32), x3. x = exc(pair(S, empty), pair("ret", x3))) -> fst(x) = 2 ->
+        any_rel(x3. x3 in bits(32), x3. x2 = exc(pair(S, empty), pair("ret", x3))) proof
+      fix x x2
+      assume h1 h2
+      show by apply(ct.dv_ret, h1, h2)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_specs.is_bouncing_spec), bp)
+    show by defs(r2, mallocng_specs.is_bouncing_spec)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_specs.is_bouncing_spec_fun)
+qed
+
+// the machine code implements the purpose specs
+theorem mp.sq_implements: all c statics. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  abi.implements2_at(mp.G, 4208394, mallocng_specs.counters_spec_fun0(c), 4198400, text.code, statics)
+proof
+  fix c statics
+  assume hc hx
+  have hdr := all_elim(mp.co_divg0, {c})
+  have r: all args. args in abi.ARGS -> refines_ghost(c_src_malloc_mallocng_malloc.step_seq_fun()[args], mallocng_specs.counters_spec_fun0(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.sq_fun, {c}, {args}), hc, hx, ha)
+  qed
+  have st := mp(all_elim(tr.implements_refine, {4208394}, {c_src_malloc_mallocng_malloc_cfg.step_seq_fun()}, {c_src_malloc_mallocng_malloc.step_seq_fun()},
+    {4198400}, {text.code}, {statics}), all_elim(sstc.implements, {statics}), step_seq_ref)
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4208394}, {c_src_malloc_mallocng_malloc.step_seq_fun()}, {mallocng_specs.counters_spec_fun0(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, hdr, st, r)
+qed
+
+theorem mp.db_implements: all c statics. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  abi.implements2_at(mp.G, 4208628, mallocng_specs.counters_spec_fun1(c), 4198400, text.code, statics)
+proof
+  fix c statics
+  assume hc hx
+  have hdr := all_elim(mp.co_divg1, {c})
+  have r: all args. args in abi.ARGS -> refines_ghost(c_src_malloc_mallocng_malloc.decay_bounces_fun()[args], mallocng_specs.counters_spec_fun1(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.db_fun, {c}, {args}), hc, hx, ha)
+  qed
+  have st := mp(all_elim(tr.implements_refine, {4208628}, {c_src_malloc_mallocng_malloc_cfg.decay_bounces_fun()}, {c_src_malloc_mallocng_malloc.decay_bounces_fun()},
+    {4198400}, {text.code}, {statics}), all_elim(dbtc.implements, {statics}), decay_bounces_ref)
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4208628}, {c_src_malloc_mallocng_malloc.decay_bounces_fun()}, {mallocng_specs.counters_spec_fun1(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, hdr, st, r)
+qed
+
+theorem mp.ab_implements: all c statics. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  abi.implements2_at(mp.G, 4208471, mallocng_specs.counters_spec_fun1(c), 4198400, text.code, statics)
+proof
+  fix c statics
+  assume hc hx
+  have hdr := all_elim(mp.co_divg1, {c})
+  have r: all args. args in abi.ARGS -> refines_ghost(c_src_malloc_mallocng_malloc.account_bounce_fun()[args], mallocng_specs.counters_spec_fun1(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.ab_fun, {c}, {args}), hc, hx, ha)
+  qed
+  have st := mp(all_elim(tr.implements_refine, {4208471}, {c_src_malloc_mallocng_malloc_cfg.account_bounce_fun()}, {c_src_malloc_mallocng_malloc.account_bounce_fun()},
+    {4198400}, {text.code}, {statics}), all_elim(acbtc.implements, {statics}), account_bounce_ref)
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4208471}, {c_src_malloc_mallocng_malloc.account_bounce_fun()}, {mallocng_specs.counters_spec_fun1(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, hdr, st, r)
+qed
+
+theorem mp.ib_implements: all c statics. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  abi.implements2_at(mp.G, 4208706, mallocng_specs.is_bouncing_spec_fun(c), 4198400, text.code, statics)
+proof
+  fix c statics
+  assume hc hx
+  have hdr := all_elim(mp.ib_divg, {c})
+  have r: all args. args in abi.ARGS -> refines_ghost(c_src_malloc_mallocng_malloc.is_bouncing_fun()[args], mallocng_specs.is_bouncing_spec_fun(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.ib_fun, {c}, {args}), hc, hx, ha)
+  qed
+  have st := mp(all_elim(tr.implements_refine, {4208706}, {c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun()}, {c_src_malloc_mallocng_malloc.is_bouncing_fun()},
+    {4198400}, {text.code}, {statics}), all_elim(ibtc.implements, {statics}), is_bouncing_ref)
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4208706}, {c_src_malloc_mallocng_malloc.is_bouncing_fun()}, {mallocng_specs.is_bouncing_spec_fun(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, hdr, st, r)
+qed

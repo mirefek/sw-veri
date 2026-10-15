@@ -1,116 +1,9 @@
-// C2 of malloc.c's slot functions (layers/mallocng_specs.sl): set_size,
-// get_stride, enframe; the runs of get_meta and __malloc_allzerop as
-// effect summaries (their callees' contracts premises), for their
-// meaning-level proofs (proofs/mallocng_refine.core).
-// Checked after proofs/mallocng_c2.core and proofs/mallocng_bits.core.
-
-// ----------------------------------------------------------------------
-//  Views: the spec's byte and word writes
-
-theorem ms.v_wr8: all vm a v. mallocng_specs.wr8(vm, a, v) = fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 1, v))
-proof
-  fix vm a v
-  show by defs(refl({fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 1, v))}), mallocng_specs.wr8)
-qed
-
-theorem ms.v_wr32: all vm a v. mallocng_specs.wr32(vm, a, v) = fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 4, v))
-proof
-  fix vm a v
-  show by defs(refl({fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 4, v))}), mallocng_specs.wr32)
-qed
-
-theorem ms.v_wr16: all vm a v. mallocng_specs.wr16(vm, a, v) = fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 2, v))
-proof
-  fix vm a v
-  show by defs(refl({fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 2, v))}), mallocng_specs.wr16)
-qed
-
-mem_view ms.v_wr8
-mem_view ms.v_wr32
-mem_view ms.v_wr16
-
-// ----------------------------------------------------------------------
-//  Worlds after n bytes written (the memory procedure's closures, as GIMPLE's
-//  stores leave them)
-
-// (s with its memory M's bytes B, B then written: as the steps keep it)
-theorem ms.sw_st: all s M B a n v. fn_update(s, "vm", fn_update(M, "bytes", B)) in abi.World -> fn_update(s, "vm", fn_update(M, "bytes", B)) in univ(1) -> a in bits(64) ->
-  fn_update(s, "vm", fn_update(M, "bytes", x86_64_linux.store_le(B, a, n, v))) in abi.World &&
-  fn_update(s, "vm", fn_update(M, "bytes", x86_64_linux.store_le(B, a, n, v))) in univ(1)
-proof
-  fix s M B a n v
-  assume hw hu ha
-  have r := apply(tr.world_store, {fn_update(s, "vm", fn_update(M, "bytes", B))}, {a}, {n}, {v}, hw, hu, ha)
-  have t1 := fn_update_twice[f := s, k := "vm", a := fn_update(M, "bytes", B), b := fn_update(fn_update(M, "bytes", B), "bytes", x86_64_linux.store_le(B, a, n, v))]
-  have t2 := fn_update_twice[f := M, k := "bytes", a := B, b := x86_64_linux.store_le(B, a, n, v)]
-  show by simp(t1, t2, r)
-qed
-
-mem_closure tr.world_store
-mem_closure ms.sw_st
-
-// GIMPLE's stores of 1 and 4 bytes in a world
-theorem ms.st8_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 1, true) ->
-  g.det(gimple.st8(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 1, v))), empty))
-proof
-  fix s p off v
-  assume hw hs hp ho hd
-  have pv pf pd .. := apply(ms.world_parts, hw)
-  show := apply(g.st8_det, {s}, {p}, {off}, {v}, hs, hp, ho, hd, pv, pf, pd)
-qed
-
-theorem ms.st32_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 4, true) ->
-  g.det(gimple.st32(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 4, v))), empty))
-proof
-  fix s p off v
-  assume hw hs hp ho hd
-  have pv pf pd .. := apply(ms.world_parts, hw)
-  show := apply(g.st32_det, {s}, {p}, {off}, {v}, hs, hp, ho, hd, pv, pf, pd)
-qed
-
-// ... of 2 bytes
-theorem ms.st16_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 2, true) ->
-  g.det(gimple.st16(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 2, v))), empty))
-proof
-  fix s p off v
-  assume hw hs hp ho hd
-  have hvm hf hdm .. := apply(ms.world_parts, hw)
-  have md := apply(g.mem_det, {s}, {p}, {off}, {2}, {true}, hs, hp, ho, hd)
-  have ab: int_add(p, off) in bits(64) by simp(hd, hp, ho)
-  have wd := apply(g.write_det, {s}, {int_add(p, off)}, {2}, {v}, ab, simp(), simp(), hvm, hf, hdm)
-  show proof
-    fix o
-    assume hr
-    have b := apply(g.runs_elim, hr)
-    have b2 := apply(g.bind_inv, b, md)
-    show := apply(g.bind_inv, b2, wd)
-  qed
-qed
-
-// (bytes within usable ones: usable)
-theorem ms.usable_part: all vm objs a n b m w. a in int -> b in int -> int_le(a, b) -> int_le(int_add(b, m), int_add(a, n)) ->
-  gimple.usable(vm, objs, a, n, w) -> gimple.usable(vm, objs, b, m, w)
-proof
-  fix vm objs a n b m w
-  assume ha hb hle hle2 hu
-  have h := expand(hu, gimple.usable)
-  have g: all i. i in omega -> int_lt(i, m) -> ite(x86_64_linux.mapped(vm, int_div(int_add(b, i), x86_64_linux.PAGE)) &&
-      !(snd(vm.pages[int_div(int_add(b, i), x86_64_linux.PAGE)]).kind = 2),
-      ite(w, snd(vm.pages[int_div(int_add(b, i), x86_64_linux.PAGE)]).prot.w, snd(vm.pages[int_div(int_add(b, i), x86_64_linux.PAGE)]).prot.r),
-      int_lt(int_add(b, i), int_pow(2, 64)) && int_add(b, i) in objs) proof
-    fix i
-    assume hi hlt
-    have hj: int_sub(int_add(b, i), a) in omega by arith(ha, hb, hi, hle)
-    have jl: int_lt(int_sub(int_add(b, i), a), n) by arith(ha, hb, hi, hlt, hle2)
-    have e: int_add(a, int_sub(int_add(b, i), a)) = int_add(b, i) by arith(ha, hb, hi)
-    show := rewrite(e, mp(all_elim(h, {int_sub(int_add(b, i), a)}), hj, jl))
-  qed
-  show by defs(g, gimple.usable)
-qed
+// The slot functions' code: set_size, get_stride, enframe,
+// get_slot_index, get_meta, __malloc_allzerop -- their runs, their
+// memory effect.
 
 // ----------------------------------------------------------------------
 //  set_size
-
 theorem ms.ss_run: all p e n s o. p in bits(64) -> e in bits(64) -> n in bits(64) -> s in abi.World -> s in univ(1) ->
   mallocng_specs.set_size_pre(s.vm, s.objs, p, e, n) ->
   runs(c_src_malloc_mallocng_malloc.set_size(p, e, n), s, o) ->
@@ -247,7 +140,6 @@ qed
 //  get_stride: a group's slot size, from struct meta's bitfield word at
 //  g + 32 (read in parts by GIMPLE: its byte, 2 bytes, the word, 7 bytes
 //  from g + 33) and the size classes' table
-
 // get_stride's reads of struct meta's bitfield word at g + 32 (the byte, 2
 // bytes, the word, 7 bytes from g + 33), as the spec's word W (mword)
 theorem ms.gs_word: all vm g. vm.bytes in fn_space(bits(64), bits(8)) -> g in bits(64) -> int_le(int_add(g, 40), int_pow(2, 64)) ->
@@ -483,117 +375,6 @@ proof
     show := mp(ccl, hn, hr)
   qed
   show by taut(cms, cnm)
-qed
-
-// ----------------------------------------------------------------------
-//  enframe: slot idx of g's group framed for n bytes, calling get_stride
-//  and set_size
-
-// (the registers of a call with one 64-bit word)
-theorem gc.regs1: all regs a. a in bits(64) -> gc.regs_ok(regs, seq_one(gimple.arg(64, a))) ->
-  regs in list_type(bits(64)) && seq_len(regs) = 1 && regs[0] = a
-proof
-  fix regs a
-  assume ha h
-  have r1 r2 r3 := h
-  have l1: seq_len(seq_one(gimple.arg(64, a))) = 1 by simp()
-  have z0 := mp(all_elim(r3, {0}), simp(), (int_lt(0, seq_len(seq_one(gimple.arg(64, a)))) by simp(l1)))
-  have q0 := at({seq_one(gimple.arg(64, a))[0]})
-  have e0: regs[0] = a by simp(expand(rewrite(q0, z0), gimple.in_reg, gimple.arg), ha)
-  show by taut(r1, trans(r2, l1), e0)
-qed
-
-theorem gc.regs1_ex: all a. a in bits(64) -> ex regs. gc.regs_ok(regs, seq_one(gimple.arg(64, a)))
-proof
-  fix a
-  assume ha
-  let R := fn_build(1, i. a)
-  let ARGS := seq_one(gimple.arg(64, a))
-  have vt: all i. i in 1 -> a in bits(64) proof
-    fix i
-    assume hi
-    show ha
-  qed
-  have rl := apply(build_list, (1 in omega by simp()), vt)
-  have ln: seq_len(R) = 1 by defs(simp(fn_build_dom[d := 1, v := i. a]), seq_len)
-  have l1: seq_len(ARGS) = 1 by simp()
-  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-    fix i
-    assume hi hl
-    have e: i = 0 by arith(hi, hl, l1)
-    have q := at({ARGS[0]})
-    have r := mp(app_fn_build[d := 1, v := i. a, a := 0], simp())
-    have g: a in gimple.in_reg(fst(gimple.arg(64, a)), snd(gimple.arg(64, a))) by defs(simp(ha), gimple.in_reg, gimple.arg)
-    show by simp(e, q, r, g)
-  qed
-  show by ex_intro({R}, simp(rl, ln, l1, el))
-qed
-
-// (the registers of a call with three 64-bit words)
-theorem gc.regs3: all regs a b c. a in bits(64) -> b in bits(64) -> c in bits(64) ->
-  gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))), seq_one(gimple.arg(64, c)))) ->
-  regs in list_type(bits(64)) && seq_len(regs) = 3 && regs[0] = a && regs[1] = b && regs[2] = c
-proof
-  fix regs a b c
-  assume ha hb hc h
-  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))), seq_one(gimple.arg(64, c)))
-  have r1 r2 r3 := h
-  have l3: seq_len(ARGS) = 3 by simp()
-  have z0 := mp(all_elim(r3, {0}), simp(), (int_lt(0, seq_len(ARGS)) by simp(l3)))
-  have z1 := mp(all_elim(r3, {1}), simp(), (int_lt(1, seq_len(ARGS)) by simp(l3)))
-  have z2 := mp(all_elim(r3, {2}), simp(), (int_lt(2, seq_len(ARGS)) by simp(l3)))
-  have q0 := at({ARGS[0]})
-  have q1 := at({ARGS[1]})
-  have q2 := at({ARGS[2]})
-  have e0: regs[0] = a by simp(expand(rewrite(q0, z0), gimple.in_reg, gimple.arg), ha)
-  have e1: regs[1] = b by simp(expand(rewrite(q1, z1), gimple.in_reg, gimple.arg), hb)
-  have e2: regs[2] = c by simp(expand(rewrite(q2, z2), gimple.in_reg, gimple.arg), hc)
-  show by taut(r1, trans(r2, l3), e0, e1, e2)
-qed
-
-theorem gc.regs3_ex: all a b c. a in bits(64) -> b in bits(64) -> c in bits(64) ->
-  ex regs. gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))), seq_one(gimple.arg(64, c))))
-proof
-  fix a b c
-  assume ha hb hc
-  let R := fn_build(3, i. ite(i = 0, a, ite(i = 1, b, c)))
-  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b))), seq_one(gimple.arg(64, c)))
-  have vt: all i. i in 3 -> ite(i = 0, a, ite(i = 1, b, c)) in bits(64) proof
-    fix i
-    assume hi
-    show by apply(ite_in, ha, apply(ite_in, hb, hc))
-  qed
-  have rl := apply(build_list, (3 in omega by simp()), vt)
-  have ln: seq_len(R) = 3 by defs(simp(fn_build_dom[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c))]), seq_len)
-  have l3: seq_len(ARGS) = 3 by simp()
-  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-    fix i
-    assume hi hl
-    have c3: i = 0 || i = 1 || i = 2 by arith(hi, hl, l3)
-    have c0: i = 0 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[0]})
-      have r := mp(app_fn_build[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c)), a := 0], simp())
-      have g: a in gimple.in_reg(fst(gimple.arg(64, a)), snd(gimple.arg(64, a))) by defs(simp(ha), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    have c1: i = 1 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[1]})
-      have r := mp(app_fn_build[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c)), a := 1], simp())
-      have g: b in gimple.in_reg(fst(gimple.arg(64, b)), snd(gimple.arg(64, b))) by defs(simp(hb), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    have c2: i = 2 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[2]})
-      have r := mp(app_fn_build[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c)), a := 2], simp())
-      have g: c in gimple.in_reg(fst(gimple.arg(64, c)), snd(gimple.arg(64, c))) by defs(simp(hc), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    show by taut(c3, c0, c1, c2)
-  qed
-  show by ex_intro({R}, simp(rl, ln, l3, el))
 qed
 
 // get_stride's stride: a natural
@@ -1086,7 +867,6 @@ qed
 
 // ----------------------------------------------------------------------
 //  get_slot_index: the low 5 bits of p's header byte
-
 // a byte's low 5 bits, in 32 bits
 theorem ms.low5: all x. x in omega -> bits_and(32, bits_of_int(8, x), 31) = int_mod(x, 32)
 proof
@@ -1101,7 +881,6 @@ qed
 
 // ----------------------------------------------------------------------
 //  get_meta: the meta of p's group, malloc's checks passing
-
 // (a 32-bit shift right below the width: one outcome)
 theorem ms.shr32_det: all s a k. s in univ(1) -> a in bits(32) -> k in omega -> int_lt(k, 32) ->
   g.det(gimple.shr(32, a, k), s, ok(s, bits_shr(32, a, k)))
@@ -1640,7 +1419,6 @@ qed
 
 // ----------------------------------------------------------------------
 //  __malloc_allzerop: p's slot known zero-filled
-
 // __malloc_allzerop's effect: an overflow, or 1 / 0 by the meta of p's
 // group (`allzero`), the world unchanged
 def ms.az_eff(p) := mkprog(x0 x1. (ex v. v in x86_64_linux.Vm && x1 = exc(fn_update(x0, "vm", v), exc_val("stack_overflow", empty))) ||

@@ -1,0 +1,232 @@
+// Memory after stores: the bytes a store covers and those it does not;
+// 8-aligned words.
+
+// ----------------------------------------------------------------------
+//  Memory after stores: a byte a store did not cover, a store's own bytes
+// a byte outside a store (one not wrapping around the address space): the
+// old byte
+theorem mp.st_out(B, c, k, v, x): x in bits(64) -> c in bits(64) -> k in omega -> int_le(int_add(c, k), 18446744073709551616) ->
+  (int_le(int_add(c, k), x) || int_lt(x, c)) ->
+  x86_64_linux.store_le(B, c, k, v)[x] = B[x]
+proof
+  assume hx hc hk hck hout
+  have e1 := mp(app_fn_build[d := bits(64), v := y. ite(int_lt(bits_sub(64, y, c), k), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, y, c)))), B[y]), a := x], hx)
+  have nl: !int_lt(bits_sub(64, x, c), k) by defs(arith(hx, hc, hk, hck, hout), bits_sub, bits, pow2)
+  have f := mp(ite_f[c := int_lt(bits_sub(64, x, c), k), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, c)))), b := B[x]], nl)
+  show by defs(taut(trans(e1, f)), x86_64_linux.store_le)
+qed
+
+// byte j of a store: v's
+theorem mp.st_at(B, c, k, v, j): c in bits(64) -> j in omega -> int_lt(j, k) -> int_le(int_add(c, k), 18446744073709551616) ->
+  x86_64_linux.store_le(B, c, k, v)[int_add(c, j)] = bits_of_int(8, int_div(v, int_pow(256, j)))
+proof
+  assume hc hj hjk hck
+  have cb: int_le(0, c) && int_lt(c, 18446744073709551616) by simp(hc)
+  have xl: int_lt(int_add(c, j), 18446744073709551616) by arith(cb, hj, hjk, hck)
+  have xb: int_add(c, j) in bits(64) by simp(cb, hj, xl)
+  have e1 := mp(app_fn_build[d := bits(64), v := y. ite(int_lt(bits_sub(64, y, c), k), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, y, c)))), B[y]), a := int_add(c, j)], xb)
+  have d: bits_sub(64, int_add(c, j), c) = j by defs(arith(hc, hj, hjk, hck), bits_sub, bits, pow2)
+  have lt: int_lt(bits_sub(64, int_add(c, j), c), k) := rewrite(sym(d), hjk)
+  have t := mp(ite_t[c := int_lt(bits_sub(64, int_add(c, j), c), k), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, int_add(c, j), c)))), b := B[int_add(c, j)]], lt)
+  show by defs(simp(trans(e1, t), d), x86_64_linux.store_le)
+qed
+
+// n bytes outside a store: the old ones
+theorem mp.rd_out(vm, c, k, v, a, n): a in omega -> n in omega -> c in bits(64) -> k in omega ->
+  int_le(int_add(a, n), 18446744073709551616) -> int_le(int_add(c, k), 18446744073709551616) ->
+  (int_le(int_add(c, k), a) || int_le(int_add(a, n), c)) ->
+  gimple.bytes_at(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, k, v)), a, n) = gimple.bytes_at(vm, a, n)
+proof
+  assume ha hn hc hk han hck hout
+  have pw: all i. i in omega -> int_le(0, i) -> int_lt(i, n) ->
+      int_mul(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, k, v)).bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i)) =
+      int_mul(vm.bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i)) proof
+    fix i
+    assume hi _ hil
+    have ba: bits_add(64, a, bits_of_int(64, i)) = int_add(a, i) by defs(arith(ha, hi, hil, han), bits_add, bits_of_int, pow2)
+    have xl: int_lt(int_add(a, i), 18446744073709551616) by arith(ha, hi, hil, han)
+    have xb: int_add(a, i) in bits(64) by simp(ha, hi, xl)
+    have o: int_le(int_add(c, k), int_add(a, i)) || int_lt(int_add(a, i), c) by arith(ha, hi, hil, hout)
+    have s := apply(mp.st_out[B := vm.bytes, c := c, k := k, v := v, x := int_add(a, i)], xb, hc, hk, hck, o)
+    show by simp(ba, s)
+  qed
+  have e := mp(int_sum_ext[a := 0, b := n, f := i. int_mul(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, k, v)).bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i)),
+    g := i. int_mul(vm.bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i))], simp(), hn, pw)
+  show by defs(e, gimple.bytes_at)
+qed
+
+// a 1-byte and a 4-byte store read back
+theorem mp.rd_at1(vm, c, v): c in bits(64) -> v in omega ->
+  gimple.bytes_at(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, 1, v)), c, 1) = int_mod(v, 256)
+proof
+  assume hc hv
+  show by defs(simp(hc, hv), gimple.bytes_at, x86_64_linux.store_le)
+qed
+
+// (as `tr.le_store8`: the bytes as a 32-bit word, then below 2^32)
+theorem mp.rd_at4(vm, c, v): vm.bytes in fn_space(bits(64), bits(8)) -> c in bits(64) -> v in omega ->
+  gimple.bytes_at(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, 4, v)), c, 4) = int_mod(v, 4294967296)
+proof
+  assume hb hc hv
+  let V := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, 4, v))
+  have le4: x86_64_linux.le(x86_64_linux.store_le(vm.bytes, c, 4, v), c, 4) = bits_of_int(32, v) by simp(hb, hc, hv)
+  have lb := all_elim(tr.le_bytes, {V}, {c}, {4})
+  have w: bits_of_int(32, gimple.bytes_at(V, c, 4)) = bits_of_int(32, v) by simp(le4, lb)
+  have vb: V.bytes in fn_space(bits(64), bits(8)) by simp(mp(all_elim(x86.store_typed, {vm.bytes}, {c}, {4}, {v}), hb))
+  have bn bl := mp(all_elim(g.bytes_bound, {V}, {c}, {4}), vb, simp())
+  have id: bits_of_int(32, gimple.bytes_at(V, c, 4)) = gimple.bytes_at(V, c, 4) by defs(simp(bn, bl), bits_of_int, pow2)
+  show by defs(simp(trans(sym(id), w)), bits_of_int, pow2)
+qed
+
+// the same through the specs' byte and word writes (`wr8`, `wr32`)
+theorem mp.wr8_out(V, c, v, x): x in bits(64) -> c in bits(64) -> (int_le(int_add(c, 1), x) || int_lt(x, c)) ->
+  mallocng_specs.wr8(V, c, v).bytes[x] = V.bytes[x]
+proof
+  assume hx hc ho
+  have cl: int_le(int_add(c, 1), 18446744073709551616) by arith(simp(hc))
+  have s := apply(mp.st_out[B := V.bytes, c := c, k := 1, v := v, x := x], hx, hc, simp(), cl, ho)
+  show by defs(simp(s), mallocng_specs.wr8)
+qed
+
+theorem mp.wr32_out(V, c, v, x): x in bits(64) -> c in bits(64) -> int_le(int_add(c, 4), 18446744073709551616) -> (int_le(int_add(c, 4), x) || int_lt(x, c)) ->
+  mallocng_specs.wr32(V, c, v).bytes[x] = V.bytes[x]
+proof
+  assume hx hc cl ho
+  have s := apply(mp.st_out[B := V.bytes, c := c, k := 4, v := v, x := x], hx, hc, simp(), cl, ho)
+  show by defs(simp(s), mallocng_specs.wr32)
+qed
+
+theorem mp.wr16_out(V, c, v, x): x in bits(64) -> c in bits(64) -> int_le(int_add(c, 2), 18446744073709551616) -> (int_le(int_add(c, 2), x) || int_lt(x, c)) ->
+  mallocng_specs.wr16(V, c, v).bytes[x] = V.bytes[x]
+proof
+  assume hx hc cl ho
+  have s := apply(mp.st_out[B := V.bytes, c := c, k := 2, v := v, x := x], hx, hc, simp(), cl, ho)
+  show by defs(simp(s), mallocng_specs.wr16)
+qed
+
+theorem mp.wr16_typed(V, c, v): V.bytes in fn_space(bits(64), bits(8)) -> mallocng_specs.wr16(V, c, v).bytes in fn_space(bits(64), bits(8))
+proof
+  assume hb
+  show by defs(simp(mp(all_elim(x86.store_typed, {V.bytes}, {c}, {2}, {v}), hb)), mallocng_specs.wr16)
+qed
+
+// a 16-bit store read back (as `mp.rd_at4`)
+theorem mp.rd_at2(vm, c, v): vm.bytes in fn_space(bits(64), bits(8)) -> c in bits(64) -> v in omega ->
+  gimple.bytes_at(mallocng_specs.wr16(vm, c, v), c, 2) = int_mod(v, 65536)
+proof
+  assume hb hc hv
+  let V := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, 2, v))
+  have le2: x86_64_linux.le(x86_64_linux.store_le(vm.bytes, c, 2, v), c, 2) = bits_of_int(16, v) by simp(hb, hc, hv)
+  have lb := all_elim(tr.le_bytes, {V}, {c}, {2})
+  have w: bits_of_int(16, gimple.bytes_at(V, c, 2)) = bits_of_int(16, v) by simp(le2, lb)
+  have vb: V.bytes in fn_space(bits(64), bits(8)) by simp(mp(all_elim(x86.store_typed, {vm.bytes}, {c}, {2}, {v}), hb))
+  have bn bl := mp(all_elim(g.bytes_bound, {V}, {c}, {2}), vb, simp())
+  have id: bits_of_int(16, gimple.bytes_at(V, c, 2)) = gimple.bytes_at(V, c, 2) by defs(simp(bn, bl), bits_of_int, pow2)
+  show by defs(simp(trans(sym(id), w)), bits_of_int, pow2, mallocng_specs.wr16)
+qed
+
+// n bytes read through the specs' byte, 16-bit writes not covering them
+theorem mp.wr8_rd(V, c, v, a, n): a in omega -> n in omega -> c in bits(64) -> int_le(int_add(a, n), 18446744073709551616) ->
+  (int_le(int_add(c, 1), a) || int_le(int_add(a, n), c)) ->
+  gimple.bytes_at(mallocng_specs.wr8(V, c, v), a, n) = gimple.bytes_at(V, a, n)
+proof
+  assume ha hn hc hl ho
+  have cl: int_le(int_add(c, 1), 18446744073709551616) by arith(simp(hc))
+  show by defs(apply(mp.rd_out[vm := V, c := c, k := 1, v := v, a := a, n := n], ha, hn, hc, simp(), hl, cl, ho), mallocng_specs.wr8)
+qed
+
+theorem mp.wr16_rd(V, c, v, a, n): a in omega -> n in omega -> c in bits(64) -> int_le(int_add(a, n), 18446744073709551616) -> int_le(int_add(c, 2), 18446744073709551616) ->
+  (int_le(int_add(c, 2), a) || int_le(int_add(a, n), c)) ->
+  gimple.bytes_at(mallocng_specs.wr16(V, c, v), a, n) = gimple.bytes_at(V, a, n)
+proof
+  assume ha hn hc hl cl ho
+  show by defs(apply(mp.rd_out[vm := V, c := c, k := 2, v := v, a := a, n := n], ha, hn, hc, simp(), hl, cl, ho), mallocng_specs.wr16)
+qed
+
+// two memories with the same n bytes at a: the same read there
+theorem mp.rd_same(v1, v2, a, n): a in omega -> n in omega -> int_le(int_add(a, n), 18446744073709551616) ->
+  (all j. j in omega -> int_lt(j, n) -> v1.bytes[int_add(a, j)] = v2.bytes[int_add(a, j)]) ->
+  gimple.bytes_at(v1, a, n) = gimple.bytes_at(v2, a, n)
+proof
+  assume ha hn hl hs
+  have pw: all j. j in omega -> int_le(0, j) -> int_lt(j, n) ->
+      int_mul(v1.bytes[bits_add(64, a, bits_of_int(64, j))], int_pow(256, j)) = int_mul(v2.bytes[bits_add(64, a, bits_of_int(64, j))], int_pow(256, j)) proof
+    fix j
+    assume hj _ hjl
+    have ba: bits_add(64, a, bits_of_int(64, j)) = int_add(a, j) by defs(arith(ha, hj, hjl, hl), bits_add, bits_of_int, pow2)
+    show by simp(ba, mp(all_elim(hs, {j}), hj, hjl))
+  qed
+  have e := mp(int_sum_ext[a := 0, b := n, f := j. int_mul(v1.bytes[bits_add(64, a, bits_of_int(64, j))], int_pow(256, j)),
+    g := j. int_mul(v2.bytes[bits_add(64, a, bits_of_int(64, j))], int_pow(256, j))], simp(), hn, pw)
+  show by defs(e, gimple.bytes_at)
+qed
+
+theorem mp.wr8_typed(V, c, v): V.bytes in fn_space(bits(64), bits(8)) -> mallocng_specs.wr8(V, c, v).bytes in fn_space(bits(64), bits(8))
+proof
+  assume hb
+  show by defs(simp(mp(all_elim(x86.store_typed, {V.bytes}, {c}, {1}, {v}), hb)), mallocng_specs.wr8)
+qed
+
+theorem mp.wr32_typed(V, c, v): V.bytes in fn_space(bits(64), bits(8)) -> mallocng_specs.wr32(V, c, v).bytes in fn_space(bits(64), bits(8))
+proof
+  assume hb
+  show by defs(simp(mp(all_elim(x86.store_typed, {V.bytes}, {c}, {4}, {v}), hb)), mallocng_specs.wr32)
+qed
+
+theorem mp.wr8_at(V, c, v): c in bits(64) -> v in omega ->
+  mallocng_specs.wr8(V, c, v).bytes[c] = int_mod(v, 256)
+proof
+  assume hc hv
+  have cl: int_le(int_add(c, 1), 18446744073709551616) by arith(simp(hc))
+  have s := apply(mp.st_at[B := V.bytes, c := c, k := 1, v := v, j := 0], hc, simp(), simp(), cl)
+  show by defs(simp(s, hc, hv), mallocng_specs.wr8, bits_of_int, pow2)
+qed
+
+// ----------------------------------------------------------------------
+//  Words: 8-aligned words apart, one read through a 64-bit write
+// two 8-aligned words: the same, or apart
+theorem mp.al8_ne(a, c): a in omega -> c in omega -> int_mod(a, 8) = 0 -> int_mod(c, 8) = 0 -> !(a = c) ->
+  int_le(int_add(c, 8), a) || int_le(int_add(a, 8), c)
+proof
+  assume ha hc ma mc hne
+  show by arith(ha, hc, ma, mc, hne)
+qed
+
+// a 64-bit store read back (as `mp.rd_at4`)
+theorem mp.rd_at8(vm, c, v): vm.bytes in fn_space(bits(64), bits(8)) -> c in bits(64) -> v in bits(64) ->
+  gimple.bytes_at(mallocng_specs.wr64(vm, c, v), c, 8) = v
+proof
+  assume hb hc hv
+  let V := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, c, 8, v))
+  have le8 := mp(all_elim(tr.le_store8, {vm.bytes}, {c}, {v}), hb, hc, simp(hv))
+  have lb := all_elim(tr.le_bytes, {V}, {c}, {8})
+  have w: bits_of_int(64, gimple.bytes_at(V, c, 8)) = bits_of_int(64, v) by simp(le8, lb)
+  have vb: V.bytes in fn_space(bits(64), bits(8)) by simp(mp(all_elim(x86.store_typed, {vm.bytes}, {c}, {8}, {v}), hb))
+  have bn bl := mp(all_elim(g.bytes_bound, {V}, {c}, {8}), vb, simp())
+  have id: bits_of_int(64, gimple.bytes_at(V, c, 8)) = gimple.bytes_at(V, c, 8) by defs(simp(bn, bl), bits_of_int, pow2)
+  have iv: bits_of_int(64, v) = v by defs(simp(hv), bits_of_int, pow2)
+  show by defs(trans(sym(id), trans(w, iv)), mallocng_specs.wr64)
+qed
+
+// a word w read through a 64-bit write at c (both 8-aligned): the value
+// written there, else the old word
+theorem mp.w64(V, c, v, w): V.bytes in fn_space(bits(64), bits(8)) -> c in bits(64) -> v in bits(64) -> w in omega ->
+  int_le(int_add(w, 8), 18446744073709551616) -> int_le(int_add(c, 8), 18446744073709551616) -> int_mod(c, 8) = 0 -> int_mod(w, 8) = 0 ->
+  gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = ite(w = c, v, gimple.bytes_at(V, w, 8))
+proof
+  assume hb hc hv hw hwl hcl mc mw
+  have co: c in omega by simp(hc)
+  have c1: w = c -> gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = ite(w = c, v, gimple.bytes_at(V, w, 8)) proof
+    assume e
+    have r := apply(mp.rd_at8[vm := V, c := c, v := v], hb, hc, hv)
+    show by simp(e, r)
+  qed
+  have c2: !(w = c) -> gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = ite(w = c, v, gimple.bytes_at(V, w, 8)) proof
+    assume e
+    have ap := apply(mp.al8_ne[a := w, c := c], hw, co, mw, mc, e)
+    have r: gimple.bytes_at(mallocng_specs.wr64(V, c, v), w, 8) = gimple.bytes_at(V, w, 8)
+      by defs(apply(mp.rd_out[vm := V, c := c, k := 8, v := v, a := w, n := 8], hw, simp(), hc, simp(), hwl, hcl, ap), mallocng_specs.wr64)
+    show by simp(e, r)
+  qed
+  show by taut(c1, c2)
+qed

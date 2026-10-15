@@ -6,7 +6,7 @@ summarized in docs/done.md.
 ## 1. Now: the specs' loose ends
 
 Every function's spec states its purpose (layers/mallocng_specs.sl), its
-code refining it directly (proofs/mallocng_refine.core). Left over:
+code refining it directly (proofs/mallocng/fun/). Left over:
 - The ABI-level form of the functions with World specs (set_size,
   dequeue, dequeue_head, queue, free_meta, the leaf specs; proved to
   `tr.implements_at` so far): `tr.div_raises` of the spec by the World
@@ -58,7 +58,7 @@ code refining it directly (proofs/mallocng_refine.core). Left over:
   running the refinement); a callee's refinement a theorem of its own, not
   walked again in each caller.
 - The loop functions' `refines` lines and compositions in
-  proofs/mallocng_cfg.core (step_seq, activate_group, try_avail).
+  proofs/mallocng/machine/cfg.core (step_seq, activate_group, try_avail).
 - User proofs on a CFG (an invariant per label) for functions with no
   structured view.
 
@@ -67,7 +67,7 @@ code refining it directly (proofs/mallocng_refine.core). Left over:
 - `mallocng.abs_unique` (the abstract state determined by memory): the
   laws rest on it.
 - `musl.free_step` (free always has a step), open in
-  proofs/musl_malloc.core.
+  proofs/mallocng/claim.core.
 - The C world owning only its statics, heap and stack objects.
 - `slc heapcheck` on larger heaps: each byte's view membership (`held`)
   searches every group's slots (`in_reserved`), so a check grows with

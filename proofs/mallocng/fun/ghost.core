@@ -1,0 +1,169 @@
+// The functions by their purpose (proving GIMPLE spec): specs in the
+// abstract state (layers/mallocng_specs.sl), refined by the functions'
+// readable GIMPLE directly, each with its contract with the ghost part
+// read, its refinement, its contract at a call, its machine code
+// implementing it (the bridge, proofs/abi_ghost.core).
+//
+// The ghost part over the world (`mp.G`): malloc's blocks and the
+// abstract state.
+
+// ----------------------------------------------------------------------
+//  The ghost part of MallocAbs over the world: malloc's blocks and the
+//  abstract state
+abbrev mp.G := rec_and(malloc.Heap.ghost, mallocng_specs.MallocAbs.ghost)
+
+// its parts: blocks and A, the record h of them
+theorem mp.g_parts: all h. h in mp.G -> ex hb ha. h = union2(hb, ha) &&
+  is_fun(hb) && dom(hb) = insert("blocks", empty) && hb.blocks in fn_space(bits(64), option(omega)) && hb in univ(1) &&
+  is_fun(ha) && dom(ha) = insert("A", empty) && ha.A in mallocng.Abs && ha in univ(1)
+proof
+  fix h
+  assume hh
+  obtain x y, hx hy he from mp(rec_and_elim[a := malloc.Heap.ghost, b := mallocng_specs.MallocAbs.ghost, s := h], hh)
+  have kb: insert("blocks", empty) in univ(1) by simp(x86.insert_univ)
+  have ka: insert("A", empty) in univ(1) by simp(x86.insert_univ)
+  have xp: x in powerset(cart(insert("blocks", empty), univ(1))) && is_fun(x) && dom(x) = insert("blocks", empty) && x.blocks in fn_space(bits(64), option(omega))
+    by simp(expand(hx, malloc.Heap.ghost))
+  have yp: y in powerset(cart(insert("A", empty), univ(1))) && is_fun(y) && dom(y) = insert("A", empty) && y.A in mallocng.Abs
+    by simp(expand(hy, mallocng_specs.MallocAbs.ghost))
+  have xu := mp(rec_univ[u := 1, k := insert("blocks", empty), r := x], kb, taut(xp), taut(xp), taut(xp))
+  have yu := mp(rec_univ[u := 1, k := insert("A", empty), r := y], ka, taut(yp), taut(yp), taut(yp))
+  show by ex_intro({x}, {y}, taut(he, xp, yp, xu, yu))
+qed
+
+theorem mp.g_univ: all h. h in mp.G -> h in univ(1)
+proof
+  fix h
+  assume hh
+  obtain hb ha, he _ _ _ hbu _ _ _ hau from mp(all_elim(mp.g_parts, {h}), hh)
+  show := rewrite(sym(he), mp(mp(union2_univ[u := 1, a := hb, b := ha], hbu), hau))
+qed
+
+// (a record of one field k: each pair's first component k)
+theorem mp.one_key(r, k): is_fun(r) -> dom(r) = insert(k, empty) -> (all z. z in r -> fst(z) = k)
+proof
+  assume hf hd
+  have pr: all z. z in r -> (ex a b. z = pair(a, b)) by taut(expand(hf, is_fun))
+  fix z
+  assume hz
+  obtain x y, e from mp(all_elim(pr, {z}), hz)
+  have xd := mp(dom_intro[f := r, k := x, v := y], rewrite(e, hz))
+  have xk: x in insert(k, empty) := rewrite(hd, xd)
+  show by simp(e, xk)
+qed
+
+// the ghost part's records: apart from the machine's and the world's fields
+theorem mp.g_ok: abi.ghost_ok(mp.G)
+proof
+  fix h
+  assume hh
+  obtain hb ha, he hbf hbd _ hbu haf had _ hau from mp(all_elim(mp.g_parts, {h}), hh)
+  have kb := apply(mp.one_key, hbf, hbd)
+  have ka := apply(mp.one_key, haf, had)
+  have dj: all z w. z in hb -> w in ha -> fst(z) != fst(w) proof
+    fix z w
+    assume hz hw
+    show by simp(mp(all_elim(kb, {z}), hz), mp(all_elim(ka, {w}), hw))
+  qed
+  have uf := apply(union2_fun, hbf, haf, dj)
+  have keys: all z. z in union2(hb, ha) -> !(fst(z) in abi.KEYS) && !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz
+    have c := union2_iff[a := hb, b := ha, z := z]
+    have c1: z in hb -> !(fst(z) in abi.KEYS) && !(fst(z) in abi.WKEYS) proof
+      assume h1
+      show by simp(mp(all_elim(kb, {z}), h1))
+    qed
+    have c2: z in ha -> !(fst(z) in abi.KEYS) && !(fst(z) in abi.WKEYS) proof
+      assume h2
+      show by simp(mp(all_elim(ka, {z}), h2))
+    qed
+    show by taut(c, hz, c1, c2)
+  qed
+  have hu := mp(all_elim(mp.g_univ, {h}), hh)
+  show := rewrite(sym(he), conj(rewrite(he, hu), uf, keys))
+qed
+
+// the ghost record's fields: blocks and A
+theorem mp.g_rec: all h. h in mp.G -> h in univ(1) && dom(h) = union2(insert("blocks", empty), insert("A", empty)) &&
+  h.blocks in fn_space(bits(64), option(omega)) && h.A in mallocng.Abs
+proof
+  fix h
+  assume hh
+  obtain hb ha, he _ hbd hbt _ _ had hat _ from mp(all_elim(mp.g_parts, {h}), hh)
+  have hu := mp(all_elim(mp.g_univ, {h}), hh)
+  have d: dom(union2(hb, ha)) = union2(insert("blocks", empty), insert("A", empty)) by simp(dom_union2[a := hb, b := ha], hbd, had)
+  have ab: union2(hb, ha).blocks = hb.blocks by simp(hbd, had)
+  have aa: union2(hb, ha).A = ha.A by simp(hbd, had)
+  have r: dom(union2(hb, ha)) = union2(insert("blocks", empty), insert("A", empty)) && union2(hb, ha).blocks in fn_space(bits(64), option(omega)) && union2(hb, ha).A in mallocng.Abs
+    by taut(d, rewrite(sym(ab), hbt), rewrite(sym(aa), hat))
+  show by taut(hu, rewrite(sym(he), r))
+qed
+
+// (the ghost part's records: apart from the world's fields)
+theorem mp.g_world: all h. h in mp.G -> h in univ(1) && (all z. z in h -> !(fst(z) in abi.WKEYS))
+proof
+  fix h
+  assume hh
+  have u _ ks := mp(all_elim(mp.g_ok, {h}), hh)
+  have w: all z. z in h -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz
+    have k := mp(all_elim(ks, {z}), hz)
+    show by taut(k)
+  qed
+  show by taut(u, w)
+qed
+
+// (a world with a ghost part: a member, its memory the world's)
+theorem mp.gS(w, h): w in abi.World -> w in univ(1) -> h in mp.G -> univ: union2(w, h) in univ(1) && vm: union2(w, h).vm in x86_64_linux.Vm
+proof
+  assume hw hwu hh
+  have hu hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+  have sd: dom(w) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hw, abi.World))
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have ev: union2(w, h).vm = w.vm by simp(sd, hd)
+  show by taut(mp(union2_univ[u := 1, a := w, b := h], hwu, hu), rewrite(sym(ev), pv))
+qed
+
+// the ghost record with a new abstract state: a ghost record
+theorem mp.g_upd: all h A2. h in mp.G -> A2 in mallocng.Abs -> A2 in univ(1) -> fn_update(h, "A", A2) in mp.G
+proof
+  fix h A2
+  assume hh ha2 hu2
+  obtain x y, hx hy he from mp(rec_and_elim[a := malloc.Heap.ghost, b := mallocng_specs.MallocAbs.ghost, s := h], hh)
+  have yp yf yd _ := (y in powerset(cart(insert("A", empty), univ(1))) && is_fun(y) && dom(y) = insert("A", empty) && y.A in mallocng.Abs
+    by simp(expand(hy, mallocng_specs.MallocAbs.ghost)))
+  have xf xd := (is_fun(x) && dom(x) = insert("blocks", empty) by simp(expand(hx, malloc.Heap.ghost)))
+  let Y2 := fn_update(y, "A", A2)
+  have y2f y2d := mp(fn_update_fd[f := y, k := "A", v := A2, d := insert("A", empty)], yf, yd, simp())
+  have ys: subset(y, cart(insert("A", empty), univ(1))) by taut(powerset_def[s := cart(insert("A", empty), univ(1)), a := y], yp)
+  have sub: all z. z in Y2 -> z in cart(insert("A", empty), univ(1)) proof
+    fix z
+    assume hz
+    have c := fn_update_iff[f := y, k := "A", v := A2, z := z]
+    have c1: z in y -> z in cart(insert("A", empty), univ(1)) proof
+      assume h1
+      show := mp(subset_elim[a := y, b := cart(insert("A", empty), univ(1)), z := z], ys, h1)
+    qed
+    have c2: z = pair("A", A2) -> z in cart(insert("A", empty), univ(1)) proof
+      assume h2
+      show := rewrite(sym(h2), mp(cart_intro[a := insert("A", empty), b := univ(1), x := "A", y := A2], simp(), hu2))
+    qed
+    show by taut(c, hz, c1, c2)
+  qed
+  have pw: Y2 in powerset(cart(insert("A", empty), univ(1))) by taut(powerset_def[s := cart(insert("A", empty), univ(1)), a := Y2], (subset(Y2, cart(insert("A", empty), univ(1))) by defs(sub, subset)))
+  have ap: Y2.A = A2 := app_update_same[f := y, k := "A", v := A2]
+  have sd := set_select_def[s := powerset(cart(insert("A", empty), univ(1))), p := x0. (is_fun(x0) && dom(x0) = insert("A", empty)) && x0.A in mallocng.Abs, z := Y2]
+  have y2t: Y2 in mallocng_specs.MallocAbs.ghost by defs(taut(sd, pw, y2f, y2d, rewrite(sym(ap), ha2)), mallocng_specs.MallocAbs.ghost)
+  have ri := mp(rec_and_intro[a := malloc.Heap.ghost, b := mallocng_specs.MallocAbs.ghost, x := x, y := Y2], hx, y2t)
+  have xk := apply(mp.one_key, xf, xd)
+  have nk: all z. z in x -> fst(z) != "A" proof
+    fix z
+    assume hz
+    show by simp(mp(all_elim(xk, {z}), hz))
+  qed
+  have eu := mp(fn_update_union_r[a := x, b := y, k := "A", v := A2], nk)
+  have e2: fn_update(h, "A", A2) = union2(x, Y2) := trans(subst({w. fn_update(h, "A", A2) = fn_update(w, "A", A2)}, he, refl({fn_update(h, "A", A2)})), eu)
+  show := rewrite(sym(e2), ri)
+qed

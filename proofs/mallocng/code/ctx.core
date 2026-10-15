@@ -1,15 +1,8 @@
-// C2 of malloc.c's functions on the malloc context's counters and the lock
-// (layers/mallocng_specs.sl): is_bouncing and decay_bounces (a size
-// class's bounce counter), step_seq (the sequence byte; at 255 a loop
-// zeroing the unmap sequence bytes, by an invariant and a variant),
-// resetlock and upgradelock, account_bounce, a_cas, size_overflows (errno),
-// activate_group (a loop around a_cas, left at once: one thread); each
-// also as a C function value.
-// Checked after proofs/mallocng_slots.core.
+// The context's code: the lock, a_cas, the bounce counters, the
+// sequence byte, errno, activate_group's run.
 
 // ----------------------------------------------------------------------
 //  The lock
-
 // C2 of upgradelock: nothing done
 theorem ms.upgradelock_c2: refines(c_src_malloc_mallocng_malloc.upgradelock(), mallocng_specs.upgradelock_spec(), abi.World)
 proof
@@ -67,7 +60,6 @@ qed
 
 // ----------------------------------------------------------------------
 //  The compare-and-swap
-
 // cas32's one outcome: the word read, written back (x if it held t), its
 // old value
 theorem ms.cas32_det: all s p t x. s in abi.World -> s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 0, 4, false) -> g.mem_defined(s, p, 0, 4, true) ->
@@ -149,7 +141,6 @@ qed
 
 // ----------------------------------------------------------------------
 //  The bounce counters
-
 // (size class sc's bounce counter: sc - 7 in 32 bits, its address)
 theorem ms.bounce_idx: all sc. sc in bits(32) ->
   (mallocng_specs.bouncing_class(sc) -> bits_add(32, sc, bits_neg(32, 7)) = int_sub(sc, 7) && int_le(bits_add(32, sc, bits_neg(32, 7)), 31) &&
@@ -241,7 +232,6 @@ proof
   show by taut(out, inr)
 qed
 
-
 // decay_bounces' run, its precondition holding: the counter less 1 unless
 // 0 (or no counter: `decay_vm`)
 theorem ms.db_run: all sc s o. sc in bits(32) -> s in abi.World -> mallocng_specs.bounce_pre(s.vm, s.objs, c_src_malloc_mallocng_malloc.__malloc_context, sc, true) ->
@@ -309,7 +299,6 @@ proof
   qed
   show by taut(out, inr)
 qed
-
 
 // (two bytes' difference, as a signed word: the integers')
 theorem ms.sint_sub_small: all a b. a in omega -> b in omega -> int_lt(a, 256) -> int_lt(b, 256) -> sint(32, bits_sub(32, a, b)) = int_sub(a, b)
@@ -464,10 +453,8 @@ proof
   show by taut(out, inr)
 qed
 
-
 // ----------------------------------------------------------------------
 //  The sequence byte
-
 // zeroing i bytes at a, then the byte at a + i: zeroing i + 1 bytes
 theorem ms.zero_grow: all b a i. a in bits(64) -> i in omega -> int_le(int_add(int_add(a, i), 1), pow2(64)) ->
   x86_64_linux.store_le(x86_64_linux.store_le(b, a, i, 0), int_add(a, i), 1, 0) = x86_64_linux.store_le(b, a, int_add(i, 1), 0)
@@ -676,39 +663,6 @@ proof
   show by taut(cw, wrap, up)
 qed
 
-// ----------------------------------------------------------------------
-//  errno
-
-// (no arguments: no registers, and such registers exist)
-theorem gc.regs0: all regs. gc.regs_ok(regs, empty) -> regs in list_type(bits(64)) && seq_len(regs) = 0
-proof
-  fix regs
-  assume h
-  have r1 r2 r3 := h
-  have l0: seq_len(empty) = 0 by arith()
-  show by taut(r1, trans(r2, l0))
-qed
-
-theorem gc.regs0_ex: ex regs. gc.regs_ok(regs, empty)
-proof
-  let R := fn_build(0, i. 0)
-  have vt: all i. i in 0 -> 0 in bits(64) proof
-    fix i
-    assume hi
-    show by simp()
-  qed
-  have rl := apply(build_list, (0 in omega by simp()), vt)
-  have ln: seq_len(R) = 0 by defs(simp(fn_build_dom[d := 0, v := i. 0]), seq_len)
-  have l0: seq_len(empty) = 0 by arith()
-  have el: all i. i in omega -> int_lt(i, seq_len(empty)) -> R[i] in gimple.in_reg(fst(empty[i]), snd(empty[i])) proof
-    fix i
-    assume hi hl
-    have f: false by arith(hi, hl, l0)
-    show by taut(f)
-  qed
-  show by ex_intro({R}, simp(rl, ln, l0, el))
-qed
-
 // ___errno_location's contract at a call: an overflow, or errno's address
 // returned, the memory as it was
 theorem ms.el_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) ->
@@ -857,79 +811,6 @@ proof
     show := mp(all_elim(ms.size_overflows_c2, {bits_of_int(64, regs[0])}, {g}), simp(), hg)
   qed
   show by defs(apply(g.fun_res[n := 1, w := 32], hm), c_src_malloc_mallocng_malloc.size_overflows_fun, mallocng_specs.size_overflows_spec_fun, letin)
-qed
-
-// ----------------------------------------------------------------------
-//  activate_group: the active slots from freed to available
-
-// (a pointer and two 32-bit words in registers: each register's low bits
-// the word; such registers exist)
-theorem gc.regs3w: all regs a b c. a in bits(64) -> b in bits(32) -> c in bits(32) ->
-  gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(32, b))), seq_one(gimple.arg(32, c)))) ->
-  regs in list_type(bits(64)) && seq_len(regs) = 3 && regs[0] = a && bits_of_int(32, regs[1]) = b && bits_of_int(32, regs[2]) = c
-proof
-  fix regs a b c
-  assume ha hb hc h
-  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(32, b))), seq_one(gimple.arg(32, c)))
-  have r1 r2 r3 := h
-  have l3: seq_len(ARGS) = 3 by simp()
-  have z0 := mp(all_elim(r3, {0}), simp(), (int_lt(0, seq_len(ARGS)) by simp(l3)))
-  have z1 := mp(all_elim(r3, {1}), simp(), (int_lt(1, seq_len(ARGS)) by simp(l3)))
-  have z2 := mp(all_elim(r3, {2}), simp(), (int_lt(2, seq_len(ARGS)) by simp(l3)))
-  have q0 := at({ARGS[0]})
-  have q1 := at({ARGS[1]})
-  have q2 := at({ARGS[2]})
-  have e0: regs[0] = a by simp(expand(rewrite(q0, z0), gimple.in_reg, gimple.arg), ha)
-  have e1: bits_of_int(32, regs[1]) = b by defs(simp(expand(rewrite(q1, z1), gimple.in_reg, gimple.arg), hb), bits_of_int, pow2)
-  have e2: bits_of_int(32, regs[2]) = c by defs(simp(expand(rewrite(q2, z2), gimple.in_reg, gimple.arg), hc), bits_of_int, pow2)
-  show by taut(r1, trans(r2, l3), e0, e1, e2)
-qed
-
-theorem gc.regs3w_ex: all a b c. a in bits(64) -> b in bits(32) -> c in bits(32) ->
-  ex regs. gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(32, b))), seq_one(gimple.arg(32, c))))
-proof
-  fix a b c
-  assume ha hb hc
-  have hb6: b in bits(64) by arith(hb)
-  have hc6: c in bits(64) by arith(hc)
-  let R := fn_build(3, i. ite(i = 0, a, ite(i = 1, b, c)))
-  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(32, b))), seq_one(gimple.arg(32, c)))
-  have vt: all i. i in 3 -> ite(i = 0, a, ite(i = 1, b, c)) in bits(64) proof
-    fix i
-    assume hi
-    show by apply(ite_in, ha, apply(ite_in, hb6, hc6))
-  qed
-  have rl := apply(build_list, (3 in omega by simp()), vt)
-  have ln: seq_len(R) = 3 by defs(simp(fn_build_dom[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c))]), seq_len)
-  have l3: seq_len(ARGS) = 3 by simp()
-  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-    fix i
-    assume hi hl
-    have c3: i = 0 || i = 1 || i = 2 by arith(hi, hl, l3)
-    have c0: i = 0 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[0]})
-      have r := mp(app_fn_build[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c)), a := 0], simp())
-      have g: a in gimple.in_reg(fst(gimple.arg(64, a)), snd(gimple.arg(64, a))) by defs(simp(ha), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    have c1: i = 1 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[1]})
-      have r := mp(app_fn_build[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c)), a := 1], simp())
-      have g: b in gimple.in_reg(fst(gimple.arg(32, b)), snd(gimple.arg(32, b))) by defs(simp(hb6), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    have c2: i = 2 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[2]})
-      have r := mp(app_fn_build[d := 3, v := i. ite(i = 0, a, ite(i = 1, b, c)), a := 2], simp())
-      have g: c in gimple.in_reg(fst(gimple.arg(32, c)), snd(gimple.arg(32, c))) by defs(simp(hc6), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    show by taut(c3, c0, c1, c2)
-  qed
-  show by ex_intro({R}, simp(rl, ln, l3, el))
 qed
 
 // a_cas's contract at a call a_cas(p, t, x): an overflow, or the word at

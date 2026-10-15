@@ -1,14 +1,15 @@
 #!/bin/sh
-# The proof chain of `c1_cfg_engine_checks` (slc/cli/tests/steps.rs),
-# checked with the caches (build/kernel-cache: a file unchanged, after the
-# same statements, not checked again; in a changed one, a proof unchanged
-# in the same context neither) -- for checking while editing.
+# The proof chain (proofs/chain; the test `c1_cfg_engine_checks`,
+# slc/cli/tests/steps.rs), checked with the caches (build/kernel-cache: a
+# file unchanged, after the same statements, not checked again; in a
+# changed one, a proof unchanged in the same context neither) -- for
+# checking while editing.
 #
 #   scripts/check.sh gen        make the generated files (build/chain/:
 #                               decode facts, program text, readable CFG),
 #                               after a change to the binaries or the spec
 #   scripts/check.sh [FILE]     elaborate the layers, check the chain (up
-#                               to FILE, e.g. proofs/mallocng_abs.core)
+#                               to FILE, e.g. proofs/mallocng/fun/try_avail.core)
 #
 # The test itself checks everything without the caches (--no-cache).
 # Needs the musl build (scripts/build-musl.sh -O0) and slc built
@@ -28,15 +29,8 @@ fi
 $S elab spec layers build/gimple-O0/sl/c_mallocng_malloc.sl "$B/cfg.sl" -o "$B/gimple.core" >/dev/null || exit 1
 LOC=""
 [ -e build/locmap_O0.core ] && LOC=build/locmap_O0.core
-FILES="core/prelude.core core/logic.core core/sets.core core/nat.core core/records.core core/list.core core/loop.core core/bits.core $B/gimple.core
-  proofs/x86.core proofs/x86_code.core proofs/x86_stack.core proofs/x86_insn.core $B/steps.core
-  proofs/abi.core proofs/abi_restore.core proofs/abi_glue.core proofs/gimple.core proofs/gimple_call.core proofs/abi_stack.core proofs/abi_loop.core proofs/abi_bridge.core
-  proofs/translate.core proofs/translate_nf.core proofs/translate_frame.core proofs/translate_store_loop.core proofs/translate_flags.core proofs/translate_call.core
-  proofs/gimple_inv.core proofs/translate_effects.core proofs/translate_zero.core proofs/translate_loop.core proofs/translate_cfg.core proofs/gimple_cfg.core
-  proofs/gimple_cut.core proofs/gimple_loop.core proofs/translate_bitfield.core
-  $B/text.core $LOC proofs/a_crash.core proofs/mallocng_c1_cfg.core
-  proofs/mallocng_mem.core proofs/mallocng_c2.core proofs/mallocng_bits.core proofs/mallocng_slots.core proofs/mallocng_ctx.core proofs/mallocng_cfg.core
-  proofs/abi_ghost.core proofs/gimple_ghost.core proofs/mallocng_abs.core proofs/mallocng_refine.core"
+FILES=$(grep -v '^ *#' proofs/chain | grep -v '^ *$' |
+  sed -e "s|^@gimple\$|$B/gimple.core|" -e "s|^@steps\$|$B/steps.core|" -e "s|^@text\$|$B/text.core|" -e "s|^@locmap\$|$LOC|")
 if [ -n "$1" ]; then
   case " $(echo $FILES) " in
     *" $1 "*) ;;
@@ -44,4 +38,4 @@ if [ -n "$1" ]; then
   esac
   FILES=$(echo $FILES | sed "s| $1 .*| $1|")
 fi
-$S kernel-check $FILES 2>&1 | grep -v "^core/\|^proofs/[a-z_0-9]*.core: .*(cached)\$\|^$B/\|^build/"
+$S kernel-check $FILES 2>&1 | grep -v "^core/\|^proofs/[a-z_0-9/]*.core: .*(cached)\$\|^$B/\|^build/"

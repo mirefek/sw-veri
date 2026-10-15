@@ -2769,7 +2769,7 @@ impl State {
     }
 
     /// `ex regs. gc.regs_ok(regs, args)`: by the lemma of the arguments'
-    /// widths (proofs/gimple_inv.core, proofs/mallocng_ctx.core), each
+    /// widths (proofs/gimple_inv.core, proofs/mallocng/code/ctx.core), each
     /// argument a word of its width (`using`)
     fn step_regs_ex(&mut self, env: &mut Env, lg: &Logic, args: &Term, using: &[Seq]) -> KResult<Seq> {
         let sym = |n: &str| env.sym_by_name.get(n).copied();

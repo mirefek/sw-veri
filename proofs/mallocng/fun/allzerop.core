@@ -1,0 +1,219 @@
+// __malloc_allzerop by its purpose.
+
+// ----------------------------------------------------------------------
+//  __malloc_allzerop: its code refines its purpose
+// allzerop's contract, the ghost part h read: where what starts at p lies
+// in slot i of the group g, the code returns whether g is one slot mapped
+// on its own, the world unchanged -- its callees' contracts (`mp.gm_q`,
+// `mp.gst_q`), its run then its effect (`ms.az_run`), musl's test the
+// group's (`mp.gs_pre`: the meta word's fields)
+theorem mp.az_run(c, p, s, h, o, g, i, g0, g1, g1b, g2): c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  p in bits(64) -> s in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) ->
+  i in omega -> mallocng.starts_at(h.A, g, i, p) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1b)[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1b[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g2[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o)) ->
+  runs(c_src_malloc_mallocng_malloc.__malloc_allzerop(p, g1, g2), s, o) ->
+  (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  o = ok(s, ite(mallocng.own_mapping(h.A.metas[g]), 1, 0))
+proof
+  assume hc hctx hsct hp hs hh hin hnr hth hi hst hg1 hg1b hg2 hr
+  let V0 := s.vm
+  let V := h.A.metas[g]
+  have hu hd hbt hat := mp(all_elim(mp.g_rec, {h}), hh)
+  have au: h.A in univ(1) by simp(hu)
+  have pv pf pd pb := apply(ms.world_parts, hs)
+  have pre egm eidx := apply(mp.gm_pre[c := c, A := h.A, vm := V0, b := h.blocks, objs := s.objs, fs := s.fs_base, g := g, i := i, p := p],
+    hc, hctx, hsct, au, hat, hbt, pb, hp, hi, hin, hnr, hth, hst)
+  have iu _ _ := expand(hst, mallocng.starts_at)
+  have gtop _ := apply(mp.meta_word, hc, au, hat, hin, iu)
+  have go _ _ := apply(mp.meta_mem, hc, au, hat, hin, iu)
+  have gb: g in bits(64) by arith(gtop, go)
+  have _ sw w64 := apply(mp.gs_pre[c := c, A := h.A, vm := V0, b := h.blocks, objs := s.objs, g := g], hc, au, hat, gb, hin, iu)
+  // the callees: get_meta returns g, get_stride g's stride
+  have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(g1[regs], s, o2) ->
+      (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = mallocng_specs.gm_meta(V0, p)) proof
+    fix regs o2
+    assume hro h2
+    have rl rn _ := hro
+    have h3 := mp(all_elim(hg1, {regs}, {s}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hs, h2)
+    have q := apply(mp.gm_q[c := c, regs := regs, s := s, h := h, p := p, o2 := o2, g := g, i := i, g0 := g0, g1 := g1b], hc, hctx, hsct, hp, hs, hh, hin, hnr, hth, hi, hst, hg1b, hro, h3)
+    have k: (ex r. o2 = ok(fn_update(s, "vm", V0), r) && bits_of_int(64, fst(r)) = g && fst(r) in bits(64)) ->
+        (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = mallocng_specs.gm_meta(V0, p)) proof
+      assume e
+      obtain r, h1 h2 h3 from e
+      have f: fst(r) = g by simp(h2, h3)
+      show by ex_intro({r}, taut(h1, trans(f, sym(egm))))
+    qed
+    show by taut(q, k)
+  qed
+  have qb: mallocng_specs.get_stride_pre(V0, s.objs, c_src_malloc_mallocng_malloc.__malloc_size_classes, mallocng_specs.gm_meta(V0, p)) ->
+      all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, mallocng_specs.gm_meta(V0, p)))) -> runs(g2[regs], s, o2) ->
+      (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = bits_of_int(64, mallocng_specs.stride_w(V0, mallocng_specs.gm_meta(V0, p)))) proof
+    assume _
+    fix regs o2
+    assume hro h2
+    have rl rn _ := hro
+    have h3 := mp(all_elim(hg2, {regs}, {s}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hs, h2)
+    have q := apply(mp.gst_q[c := c, regs := regs, s := s, h := h, g := g, o2 := o2], hc, hsct, gb, hs, hh, hin, iu, rewrite(egm, hro), h3)
+    have ew0 := subst({y. bits_of_int(64, mallocng_specs.stride_w(V0, g)) = bits_of_int(64, y)}, sw, refl({bits_of_int(64, mallocng_specs.stride_w(V0, g))}))
+    have ew: bits_of_int(64, mallocng_specs.stride_w(V0, mallocng_specs.gm_meta(V0, p))) = bits_of_int(64, mallocng.stride(V)) :=
+      subst({y. bits_of_int(64, mallocng_specs.stride_w(V0, y)) = bits_of_int(64, mallocng.stride(V))}, sym(egm), ew0)
+    have k: (ex r. o2 = ok(fn_update(s, "vm", V0), r) && bits_of_int(64, fst(r)) = bits_of_int(64, mallocng.stride(V)) && fst(r) in bits(64)) ->
+        (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = bits_of_int(64, mallocng_specs.stride_w(V0, mallocng_specs.gm_meta(V0, p)))) proof
+      assume e
+      obtain r, h1 h2 h3 from e
+      have f: fst(r) = bits_of_int(64, mallocng.stride(V)) by simp(h2, h3)
+      show by ex_intro({r}, taut(h1, trans(f, sym(ew))))
+    qed
+    show by taut(q, k)
+  qed
+  // the run: musl's test, the group's own mapping
+  have ef := apply(ms.az_run, {p}, {g1}, {g2}, {s}, {o}, hp, hs, pre, qa, qb, hr)
+  have e2 := apply(g.runs_elim, expand(ef, ms.az_eff))
+  have cu: mallocng.UNIT = 16 by defs(refl({16}), mallocng.UNIT)
+  have az: mallocng_specs.allzero(V0, mallocng_specs.gm_meta(V0, p)) <-> mallocng.own_mapping(V)
+    by defs(simp(egm, w64, sw, cu), mallocng_specs.allzero, mallocng.own_mapping)
+  have ei: ite(mallocng_specs.allzero(V0, mallocng_specs.gm_meta(V0, p)), 1, 0) = ite(mallocng.own_mapping(V), 1, 0) by simp(az)
+  show by taut(rewrite(ei, e2))
+qed
+
+// allzerop's code by its purpose: its contract, the ghost part kept
+theorem mp.az: all c p g0 g1 g1b g2. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> p in bits(64) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1b)[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1b[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g2[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o)) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.__malloc_allzerop(p, g1, g2), mallocng_specs.allzerop_spec(c, p), abi.World, mp.G)
+proof
+  fix c p g0 g1 g1b g2
+  assume hc hctx hsct hp hg1 hg1b hg2
+  have rp: all s o. runs(c_src_malloc_mallocng_malloc.__malloc_allzerop(p, g1, g2), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.__malloc_allzerop))
+  qed
+  have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.__malloc_allzerop(p, g1, g2), s, o) ->
+      (((mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).blocks) && mallocng.no_reserved(union2(s, h).A)) &&
+        abi.thread_ok(union2(s, h).vm, union2(s, h).fs_base)) &&
+        (ex g i. (g in omega && i in omega) && mallocng.starts_at(union2(s, h).A, g, i, p))) ->
+      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+      (ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32) && (ex x4 x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(union2(s, h).A, x4, x5, p) &&
+          ((mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 1) || (!mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 0)))),
+        x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3)))) proof
+    fix s h o
+    assume hs hh hr hpre
+    have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+    have hin: mallocng.holds_in(c, h.A, s.vm, h.blocks) by simp(hpre, sd, hd)
+    have hnr: mallocng.no_reserved(h.A) by simp(hpre, sd, hd)
+    have hth: abi.thread_ok(s.vm, s.fs_base) by simp(hpre, sd, hd)
+    have ex1: ex g i. (g in omega && i in omega) && mallocng.starts_at(h.A, g, i, p) by simp(hpre, sd, hd)
+    obtain g i, hg hi hst from ex1
+    have oc := apply(mp.az_run[c := c, p := p, s := s, h := h, o := o, g := g, i := i, g0 := g0, g1 := g1, g1b := g1b, g2 := g2],
+      hc, hctx, hsct, hp, hs, hh, hin, hnr, hth, hi, hst, hg1, hg1b, hg2, hr)
+    let R := ite(mallocng.own_mapping(h.A.metas[g]), 1, 0)
+    have sa: mallocng.starts_at(union2(s, h).A, g, i, p) by simp(hst, sd, hd)
+    have ra: union2(s, h).A.metas[g] = h.A.metas[g] by simp(sd, hd)
+    have rb: R in bits(32) by simp()
+    have rc: (mallocng.own_mapping(union2(s, h).A.metas[g]) && R = 1) || (!mallocng.own_mapping(union2(s, h).A.metas[g]) && R = 0) by simp(ra)
+    have e4: ex x4 x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(union2(s, h).A, x4, x5, p) &&
+        ((mallocng.own_mapping(union2(s, h).A.metas[x4]) && R = 1) || (!mallocng.own_mapping(union2(s, h).A.metas[x4]) && R = 0)))
+      by ex_intro({g}, {i}, taut(hg, hi, sa, rc))
+    have e3: ex x3. (x3 in bits(32) && (ex x4 x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(union2(s, h).A, x4, x5, p) &&
+        ((mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 1) || (!mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 0))))) &&
+        exc(pair(union2(s, h), empty), pair("ret", R)) = exc(pair(union2(s, h), empty), pair("ret", x3))
+      by ex_intro({R}, taut(rb, e4, refl({exc(pair(union2(s, h), empty), pair("ret", R))})))
+    have bS: any_rel(x3. x3 in bits(32) && (ex x4 x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(union2(s, h).A, x4, x5, p) &&
+        ((mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 1) || (!mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 0)))),
+        x3. exc(pair(union2(s, h), empty), pair("ret", R)) = exc(pair(union2(s, h), empty), pair("ret", x3))) by defs(taut(e3), any_rel)
+    have k: o = ok(s, R) -> (ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32) && (ex x4 x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(union2(s, h).A, x4, x5, p) &&
+          ((mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 1) || (!mallocng.own_mapping(union2(s, h).A.metas[x4]) && x3 = 0)))),
+        x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3)))) proof
+      assume ho
+      show by ex_intro({s}, {R}, taut(ho, bS))
+    qed
+    show by taut(oc, k)
+  qed
+  show by defs(apply(ct.refines_contract, mp.g_world, rp, body), mallocng_specs.allzerop_spec)
+qed
+
+theorem mp.az_fun: all c regs g0 g1 g1b g2. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1b)[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1b[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g2[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o)) ->
+  regs in abi.ARGS ->
+  refines_ghost(c_src_malloc_mallocng_malloc.__malloc_allzerop_fun(g1, g2)[regs], mallocng_specs.allzerop_spec_fun(c)[regs], abi.World, mp.G)
+proof
+  fix c regs g0 g1 g1b g2
+  assume hc hctx hsct hg1 hg1b hg2 hr
+  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.__malloc_allzerop(bits_of_int(64, regs[0]), g1, g2), mallocng_specs.allzerop_spec(c, bits_of_int(64, regs[0])), abi.World, mp.G) proof
+    fix regs
+    show := mp(all_elim(mp.az, {c}, {bits_of_int(64, regs[0])}, {g0}, {g1}, {g1b}, {g2}), hc, hctx, hsct, simp(), hg1, hg1b, hg2)
+  qed
+  have w := mp(g.fun_res_ghost[p := x0. c_src_malloc_mallocng_malloc.__malloc_allzerop(bits_of_int(64, x0[0]), g1, g2), q := x0. mallocng_specs.allzerop_spec(c, bits_of_int(64, x0[0])), w := 32, n := 1, G := mp.G], mp.g_univ, hm)
+  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.__malloc_allzerop_fun, mallocng_specs.allzerop_spec_fun, letin)
+qed
+
+// (the purpose spec diverges nowhere it does not also raise: only where
+// it allows anything)
+theorem mp.az_divg: all c. tr.div_raises_g(mp.G, mallocng_specs.allzerop_spec_fun(c))
+proof
+  fix c
+  have qu: all regs s o. runs(mallocng_specs.allzerop_spec(c, bits_of_int(64, regs[0])), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, mallocng_specs.allzerop_spec))
+  qed
+  have qd: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_specs.allzerop_spec(c, bits_of_int(64, regs[0])), union2(w, h), diverge(t)) ->
+      runs(mallocng_specs.allzerop_spec(c, bits_of_int(64, regs[0])), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let S := union2(w, h)
+    let p := bits_of_int(64, regs[0])
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have bp: all x x2. any_rel(x3. x3 in bits(32) && (ex x4. ex x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(S.A, x4, x5, p) &&
+          ((mallocng.own_mapping(S.A.metas[x4]) && x3 = 1) || (!mallocng.own_mapping(S.A.metas[x4]) && x3 = 0)))),
+          x3. x = exc(pair(S, empty), pair("ret", x3))) -> fst(x) = 2 ->
+        any_rel(x3. x3 in bits(32) && (ex x4. ex x5. (x4 in omega && x5 in omega) && (mallocng.starts_at(S.A, x4, x5, p) &&
+          ((mallocng.own_mapping(S.A.metas[x4]) && x3 = 1) || (!mallocng.own_mapping(S.A.metas[x4]) && x3 = 0)))),
+          x3. x2 = exc(pair(S, empty), pair("ret", x3))) proof
+      fix x x2
+      assume h1 h2
+      show by apply(ct.dv_ret, h1, h2)
+    qed
+    have r2 := apply(ct.contract_div, su, sv, expand(hr, mallocng_specs.allzerop_spec), bp)
+    show by defs(r2, mallocng_specs.allzerop_spec)
+  qed
+  show by defs(apply(ct.fun_divg, mp.g_univ, qu, qd), mallocng_specs.allzerop_spec_fun)
+qed
+
+// allzerop's machine code (linked with get_meta's, get_slot_index's and
+// get_stride's) implements its purpose
+theorem mp.az_implements: all c statics. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  abi.implements2_at(mp.G, 4213261, mallocng_specs.allzerop_spec_fun(c), 4198400, text.code, statics)
+proof
+  fix c statics
+  assume hc hctx hsct
+  have hdr := all_elim(mp.az_divg, {c})
+  let G1 := c_src_malloc_mallocng_malloc_cfg.get_meta_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun())
+  let G2 := c_src_malloc_mallocng_malloc_cfg.get_stride_fun()
+  let LOW := c_src_malloc_mallocng_malloc.__malloc_allzerop_fun(G1, G2)
+  have r: all args. args in abi.ARGS -> refines_ghost(LOW[args], mallocng_specs.allzerop_spec_fun(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.az_fun, {c}, {args}, {mallocng_specs.a_crash_spec_fun()}, {G1}, {c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun()}, {G2}), hc, hctx, hsct,
+      all_elim(get_meta_ref, {mallocng_specs.a_crash_spec_fun()}, {c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun()}), get_slot_index_ref, gst_ref, ha)
+  qed
+  have st := mp(all_elim(tr.implements_refine, {4213261}, {c_src_malloc_mallocng_malloc_cfg.__malloc_allzerop_fun(G1, G2)}, {LOW},
+    {4198400}, {text.code}, {statics}), all_elim(aztc.linked, {statics}), all_elim(__malloc_allzerop_ref, {G1}, {G2}))
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4213261}, {LOW}, {mallocng_specs.allzerop_spec_fun(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, hdr, st, r)
+qed

@@ -50,8 +50,8 @@ fn loaded_code_facts_check() {
     assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 37 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
-/// The claim's top (proofs/musl_malloc.core from its open lemmas), the
-/// invariant's laws (proofs/mallocng.core) and the client facts
+/// The claim's top (proofs/mallocng/claim.core from its open lemmas), the
+/// invariant's laws (proofs/mallocng/laws.core) and the client facts
 /// (proofs/malloc_client.core) check against the claim.
 #[test]
 fn claim_proofs_check() {
@@ -66,7 +66,7 @@ fn claim_proofs_check() {
     let g = Command::new(slc).current_dir(&root).args(["claim", "malloc", "--elf"]).arg(&elf).arg("-o").arg(&claim).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     for files in [
-        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "CLAIM", "proofs/mallocng.core", "proofs/musl_malloc.core"],
+        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "CLAIM", "proofs/mallocng/laws.core", "proofs/mallocng/claim.core"],
         vec!["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "CLAIM", "proofs/malloc_client.core"],
     ] {
         let mut c = Command::new(slc);
@@ -122,10 +122,11 @@ fn step_theorems_of_get_slot_index_prove() {
 
 /// C1 of the -O0 functions on GIMPLE's control-flow graph (`slc gimple
 /// --readable --cfg`; slc/cli/src/c1/cfg.rs, proofs/translate_cfg.core):
-/// the `c1` lines on the CFG form (proofs/mallocng_c1_cfg.core), each block
-/// walked once from its cut point; the CFG form refining the structured
-/// one and composed with the structured form's C2 (proofs/mallocng_cfg.core;
-/// both forms elaborated together).
+/// the `c1` lines on the CFG form (proofs/mallocng/machine/c1.core), each
+/// block walked once from its cut point; the CFG form refining the
+/// structured one and composed with the structured form's C2
+/// (proofs/mallocng/machine/cfg.core; both forms elaborated together); the
+/// rest of the chain (proofs/chain) after them.
 #[test]
 fn c1_cfg_engine_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -168,68 +169,40 @@ fn c1_cfg_engine_checks() {
     assert!(gc.status.success(), "{}", String::from_utf8_lossy(&gc.stderr));
     let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg(&cfg_sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
-    // the libraries, the spec, the decode facts, the rules
-    let mut files: Vec<std::ffi::OsString> = ["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "core/bits.core"]
-        .iter()
-        .map(|f| f.into())
-        .collect();
-    files.push(gimple.clone().into());
-    files.extend(["proofs/x86.core", "proofs/x86_code.core", "proofs/x86_stack.core", "proofs/x86_insn.core"].iter().map(|f| f.into()));
-    files.push(steps.clone().into());
-    files.extend(
-        ["proofs/abi.core", "proofs/abi_restore.core", "proofs/abi_glue.core", "proofs/gimple.core", "proofs/gimple_call.core", "proofs/abi_stack.core", "proofs/abi_loop.core", "proofs/abi_bridge.core", "proofs/translate.core", "proofs/translate_nf.core", "proofs/translate_frame.core", "proofs/translate_store_loop.core", "proofs/translate_flags.core", "proofs/translate_call.core", "proofs/gimple_inv.core", "proofs/translate_effects.core", "proofs/translate_zero.core", "proofs/translate_loop.core", "proofs/translate_cfg.core", "proofs/gimple_cfg.core", "proofs/gimple_cut.core", "proofs/gimple_loop.core", "proofs/translate_bitfield.core"]
-            .iter()
-            .map(|f| f.into()),
-    );
-    // (the program text: the code every contract assumes loaded; the
-    // locals' homes, scripts/locmap.py, if made: the C1 engine's guide)
-    files.push(text.clone().into());
-    if root.join("build/locmap_O0.core").exists() {
-        files.push("build/locmap_O0.core".into());
+    // the chain (proofs/chain): the libraries, the spec, the decode facts,
+    // the rules, the program text (the code every contract assumes loaded),
+    // the locals' homes if made (scripts/locmap.py: the C1 engine's guide),
+    // then mallocng -- its C1 and CFG compositions, its code's runs, its
+    // invariant, its functions by their purpose
+    let chain = std::fs::read_to_string(root.join("proofs/chain")).unwrap();
+    let mut files: Vec<std::ffi::OsString> = Vec::new();
+    let mut proofs: Vec<String> = Vec::new();
+    for l in chain.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        match l {
+            "@gimple" => files.push(gimple.clone().into()),
+            "@steps" => files.push(steps.clone().into()),
+            "@text" => files.push(text.clone().into()),
+            "@locmap" => {
+                if root.join("build/locmap_O0.core").exists() {
+                    files.push("build/locmap_O0.core".into());
+                }
+            }
+            f => {
+                if f.starts_with("proofs/") {
+                    proofs.push(f.to_string());
+                }
+                files.push(f.into());
+            }
+        }
     }
-    // and the structured form's C2 proofs up to the context's
-    // (proofs/mallocng_ctx.core), the CFG form refining the structured
-    // one and the three composed (proofs/mallocng_cfg.core); the ABI's
-    // contract with ghost state (proofs/abi_ghost.core); specs with ghost
-    // state refined (proofs/gimple_ghost.core) and the machine code of
-    // set_size, enframe, dequeue, dequeue_head, queue, free_meta,
-    // get_slot_index, get_meta, get_stride, __malloc_allzerop and
-    // activate_group implementing their purpose specs
-    // (proofs/mallocng_refine.core); try_avail's run by its purpose
-    // (proofs/mallocng_try_avail.core)
-    let c = Command::new(slc)
-        .current_dir(&root)
-        .args(["kernel-check", "--no-cache"])
-        .args(&files)
-        .arg("proofs/a_crash.core")
-        .arg("proofs/mallocng_c1_cfg.core")
-        .args(["proofs/mallocng_mem.core", "proofs/mallocng_c2.core", "proofs/mallocng_bits.core", "proofs/mallocng_slots.core", "proofs/mallocng_ctx.core", "proofs/mallocng_cfg.core"])
-        .args(["proofs/abi_ghost.core", "proofs/gimple_ghost.core", "proofs/mallocng_abs.core", "proofs/mallocng_refine.core", "proofs/mallocng_try_avail.core"])
-        .output()
-        .unwrap();
+    let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    // the C1 theorems unconditional: nothing in the chain rests on an open
-    // lemma (the storing functions' statics' range defined)
-    let each = checked.contains("proofs/mallocng_c1_cfg.core: 0 constants, 0 axioms, 0 definitions, 226 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_cfg.core: 0 constants, 0 axioms, 0 definitions, 51 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/abi_ghost.core: 0 constants, 0 axioms, 1 definitions, 28 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_ghost.core: 0 constants, 0 axioms, 0 definitions, 29 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_abs.core: 0 constants, 0 axioms, 7 definitions, 306 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_refine.core: 0 constants, 0 axioms, 0 definitions, 91 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_try_avail.core: 0 constants, 0 axioms, 0 definitions, 23 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/translate_cfg.core: 0 constants, 0 axioms, 2 definitions, 9 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_cfg.core: 0 constants, 0 axioms, 2 definitions, 53 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_cut.core: 0 constants, 0 axioms, 0 definitions, 11 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_loop.core: 0 constants, 0 axioms, 1 definitions, 52 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/translate_zero.core: 0 constants, 0 axioms, 3 definitions, 19 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/translate_loop.core: 0 constants, 0 axioms, 11 definitions, 34 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/gimple_inv.core: 0 constants, 0 axioms, 1 definitions, 59 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/a_crash.core: 0 constants, 0 axioms, 0 definitions, 6 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_mem.core: 0 constants, 0 axioms, 0 definitions, 7 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_c2.core: 0 constants, 0 axioms, 0 definitions, 38 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_bits.core: 0 constants, 0 axioms, 0 definitions, 21 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_slots.core: 0 constants, 0 axioms, 2 definitions, 32 theorems, 0 conditional theorems, 0 open lemmas")
-        && checked.contains("proofs/mallocng_ctx.core: 0 constants, 0 axioms, 0 definitions, 25 theorems, 0 conditional theorems, 0 open lemmas");
+    // every proof file checked, with no axiom and nothing resting on an open
+    // lemma (the C1 theorems unconditional: the storing functions' statics'
+    // range defined)
+    let each = proofs.iter().all(|f| {
+        checked.lines().any(|l| l.starts_with(&format!("{}: ", f)) && l.contains(" 0 axioms,") && l.contains(" 0 conditional theorems, 0 open lemmas"))
+    });
     assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text, &cfg_sl] {
         let _ = std::fs::remove_file(f);

@@ -6,9 +6,8 @@ layer mallocng_specs uses gimple, abi, mallocng
 // partial byte map, `usable` its domain) -- not how musl's code does it.
 // Each a contract (layers/abi.sl): a precondition (`require`: outside it
 // the spec allows anything), then a stack overflow or the effect. The code
-// refines them directly (proofs/mallocng_refine.core; the leaf functions':
-// proofs/mallocng_c2.core, proofs/mallocng_bits.core,
-// proofs/mallocng_ctx.core). Each as a C function value too (its register
+// refines them directly (proofs/mallocng/fun/; the leaf functions':
+// proofs/mallocng/code/). Each as a C function value too (its register
 // wrapper, as readable GIMPLE has C functions): what its callers' calls
 // rely on; written as the code's are (a result through `result[w]`), so
 // one lemma per shape relates the two (`g.fun_*`). First, what the code
@@ -205,7 +204,7 @@ const debruijn32_tab : List[nat] = [
   31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14]
 
 ///////////////////////////////////////////////////////////////////////
-//  Bit counts (C2: proofs/mallocng_bits.core); their callers' C2 use
+//  Bit counts (C2: proofs/mallocng/code/classes.core); their callers' C2 use
 //  these contracts.
 
 // a_ctz_32(x): x's trailing zeros (x not 0); tbl: debruijn32's address
@@ -324,7 +323,7 @@ fn enframe_hdr(vm: Vm, g: Addr, idx: bits[32], p: Addr) -> Vm {
 // the slot's end, set_size's `end`
 fn eend(vm: Vm, g: Addr, idx: bits[32]) -> bits[64] = bits[64](eslot(vm, g, idx) + stride_w(vm, g) - IB)
 
-// get_meta's effect (proofs/mallocng_slots.core's `ms.gm_run`; its spec
+// get_meta's effect (proofs/mallocng/code/slots.core's `ms.gm_run`; its spec
 // below): the meta of p's group. p's
 // offset from the group's storage,
 // in units: the 16-bit word at p - 2, or the 32-bit one at p - 8 when the

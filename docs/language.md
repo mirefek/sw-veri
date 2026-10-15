@@ -372,7 +372,7 @@ extension (`g.bind_ghost`), so a C function value's wrapper refines when
 its procedure does (`g.fun_res_ghost`, as `g.fun_res`), and a contract's
 runs are introduced by its two cases (`ct.contract_ovf`,
 `ct.contract_ret`; proofs/gimple_ghost.core). The user's proof is then the
-spec's idea: get_slot_index's (proofs/mallocng_refine.core) is that the
+spec's idea: get_slot_index's (proofs/mallocng/fun/) is that the
 byte it reads is the slot's header, the allocator's, its low bits the
 slot's index (`mp.slot_hdr`, from the invariant).
 
@@ -620,7 +620,7 @@ read hits is decided by a fixed algorithm.
 - Views (`mem_view`): equations giving a spec's or GIMPLE's reads and
   writes in two canonical forms -- a write `fn_update(M, "bytes",
   store_le(app(M, "bytes"), a, n, v))`, a read `gimple.bytes_at(M, b, m)`
-  (`ms.v_wr64`, `ms.v_rd64`, `ms.v_mnext` in proofs/mallocng_mem.core).
+  (`ms.v_wr64`, `ms.v_rd64`, `ms.v_mnext` in proofs/mallocng/code/ops.core).
 - A read through writes: the kernel's `mem_read` walks the writes from the
   outermost in -- also a chain of writes on bytes of any form,
   `fn_update(M, "bytes", store_le(store_le(B, ..), ..))`, ending at bytes

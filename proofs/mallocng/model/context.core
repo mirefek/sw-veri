@@ -1,0 +1,512 @@
+// The context's bytes: the footprint in user space, views agreeing,
+// the free bytes (`ctx_only`), the lists in memory by the invariant.
+
+// ----------------------------------------------------------------------
+//  activate_group: the footprint in user space, the views agreeing, its
+//  precondition from the invariant, the masks split at the active index,
+//  the new state (records updated) activated
+// (masks only: the same ranges, the same footprint)
+theorem mp.mo_ranges(c, A, A2): A in mallocng.Abs -> mallocng_specs.masks_only(A, A2) -> mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A)
+proof
+  assume ha hmo
+  show := apply(mp.gm_ranges[c := c, A := A, A2 := A2], ha, apply(mp.mo_geom_of, ha, hmo))
+qed
+
+theorem mp.mo_fp(c, A, A2, b): A in mallocng.Abs -> mallocng_specs.masks_only(A, A2) -> mallocng.footprint(c, A2, b) = mallocng.footprint(c, A, b)
+proof
+  assume ha hmo
+  show := apply(mp.gm_fp[c := c, A := A, A2 := A2, b := b], ha, apply(mp.mo_geom_of, ha, hmo))
+qed
+
+// (masks only: the same bytes the invariant reads)
+theorem mp.mo_held(c, A, A2, b): A in mallocng.Abs -> mallocng_specs.masks_only(A, A2) -> mallocng.held(c, A2, b) = mallocng.held(c, A, b)
+proof
+  assume ha hmo
+  show := apply(mp.gm_held[c := c, A := A, A2 := A2, b := b], ha, apply(mp.mo_geom_of, ha, hmo))
+qed
+
+// the footprint mapped: in user space (below 2^64, no address wraps)
+theorem mp.fp_low(c, A, vm, b, a): mallocng.fp_mapped(mallocng.fp_ranges(c, A), b, vm) -> a in mallocng.footprint(c, A, b) ->
+  int_lt(a, 18446744073709551616)
+proof
+  assume hm ha
+  have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := a]
+  have ao af _ := (a in omega && a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, a) by taut(s1, expand(ha, mallocng.footprint)))
+  have s2 := set_select_def[s := omega, p := y. mallocng.in_ranges(y, mallocng.fp_ranges(c, A)) && !(y in malloc.live_of(b)), z := a]
+  have _ ir nl := (a in omega && mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && !(a in malloc.live_of(b)) by taut(s2, expand(af, mallocng.fp_set)))
+  obtain k, hk hkl hr from expand(ir, mallocng.in_ranges)
+  have r1 r2 := expand(hr, mallocng.in_range)
+  have mp1 := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), taut(hk, ao), taut(hkl, r1, r2, nl))
+  have lt _ := expand(mp1, x86_64_linux.mapped)
+  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  show by arith(lt, ts, pg, ao)
+qed
+
+// two memories with the same pages, a's byte (if a is seen) the same:
+// their views at a
+theorem mp.view_agree(vm, vm2, fp, a): a in omega -> (a in fp -> vm2.bytes[bits_of_int(64, a)] = vm.bytes[bits_of_int(64, a)]) ->
+  vm2.pages = vm.pages -> mallocng.mview(vm2, fp)[a] = mallocng.mview(vm, fp)[a]
+proof
+  assume hao eb ep
+  have a2 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm2.bytes[bits_of_int(64, x)], vm2.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have a1 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm.bytes[bits_of_int(64, x)], vm.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have c1: a in fp -> mallocng.mview(vm2, fp)[a] = mallocng.mview(vm, fp)[a] proof
+    assume h
+    show by defs(simp(a2, a1, mp(eb, h), ep, h), mallocng.mview)
+  qed
+  have c2: !(a in fp) -> mallocng.mview(vm2, fp)[a] = mallocng.mview(vm, fp)[a] proof
+    assume h
+    show by defs(simp(a2, a1, h), mallocng.mview)
+  qed
+  show by taut(c1, c2)
+qed
+
+theorem mp.view_pg(vm, vm2, fp, a): a in omega -> vm2.pages = vm.pages -> mallocng.pg(mallocng.mview(vm2, fp), a) = mallocng.pg(mallocng.mview(vm, fp), a)
+proof
+  assume hao ep
+  have a2 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm2.bytes[bits_of_int(64, x)], vm2.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have a1 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm.bytes[bits_of_int(64, x)], vm.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have v2: mallocng.pg(mallocng.mview(vm2, fp), a) = snd(snd(ite(a in fp, some(pair(vm2.bytes[bits_of_int(64, a)], vm2.pages[int_div(a, x86_64_linux.PAGE)])), none)))
+    by defs(simp(a2), mallocng.pg, mallocng.mview)
+  have v1: mallocng.pg(mallocng.mview(vm, fp), a) = snd(snd(ite(a in fp, some(pair(vm.bytes[bits_of_int(64, a)], vm.pages[int_div(a, x86_64_linux.PAGE)])), none)))
+    by defs(simp(a1), mallocng.pg, mallocng.mview)
+  have c1: a in fp -> mallocng.pg(mallocng.mview(vm2, fp), a) = mallocng.pg(mallocng.mview(vm, fp), a) proof
+    assume h
+    have w2: mallocng.pg(mallocng.mview(vm2, fp), a) = vm2.pages[int_div(a, x86_64_linux.PAGE)] by defs(simp(v2, h), some)
+    have w1: mallocng.pg(mallocng.mview(vm, fp), a) = vm.pages[int_div(a, x86_64_linux.PAGE)] by defs(simp(v1, h), some)
+    show by simp(w2, w1, ep)
+  qed
+  have c2: !(a in fp) -> mallocng.pg(mallocng.mview(vm2, fp), a) = mallocng.pg(mallocng.mview(vm, fp), a) proof
+    assume h
+    show by simp(v2, v1, h)
+  qed
+  show by taut(c1, c2)
+qed
+
+// the context's free bytes accessible: so on a memory with the same pages
+theorem mp.free_rw_pages(c, vm, vm2, F): mallocng.free_rw(c, mallocng.mview(vm, F)) -> vm2.pages = vm.pages -> mallocng.free_rw(c, mallocng.mview(vm2, F))
+proof
+  assume hf ep
+  have r: all a. a in omega -> mallocng.ctx_free(c, a) -> mallocng.m_rw(mallocng.mview(vm2, F), a) &&
+      !(snd(mallocng.pg(mallocng.mview(vm2, F), a)).kind = 2) proof
+    fix a
+    assume hao hfa
+    have h1 := mp(all_elim(expand(hf, mallocng.free_rw), {a}), hao, hfa)
+    have e := apply(mp.view_pg[vm := vm, vm2 := vm2, fp := F, a := a], hao, ep)
+    show by defs(rewrite(sym(e), expand(h1, mallocng.m_rw, mallocng.m_mapped)), mallocng.m_rw, mallocng.m_mapped)
+  qed
+  show by defs(r, mallocng.free_rw)
+qed
+
+// the footprint mapped: so on a memory with the same pages
+theorem mp.fpm_pages(RS, b, vm, vm2): mallocng.fp_mapped(RS, b, vm) -> vm2.pages = vm.pages -> mallocng.fp_mapped(RS, b, vm2)
+proof
+  assume hm ep
+  have mpw: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(RS)) && int_le(fst(RS[x0]), x1)) && int_lt(x1, int_add(fst(RS[x0]), snd(RS[x0])))) &&
+      !(x1 in malloc.live_of(b)) -> x86_64_linux.mapped(vm2, int_div(x1, x86_64_linux.PAGE)) proof
+    fix k a
+    assume ho hr
+    have m1 := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), ho, hr)
+    have l1 l2 := expand(m1, x86_64_linux.mapped)
+    show by defs(taut(l1, rewrite(sym(ep), l2)), x86_64_linux.mapped)
+  qed
+  show by defs(mpw, mallocng.fp_mapped)
+qed
+
+// two views of a memory agreeing at every byte: the same
+theorem mp.view_ext(vm, vm2, fp): (all a. a in omega -> mallocng.mview(vm2, fp)[a] = mallocng.mview(vm, fp)[a]) ->
+  mallocng.mview(vm2, fp) = mallocng.mview(vm, fp)
+proof
+  assume h
+  let F2(y) := ite(y in fp, some(pair(vm2.bytes[bits_of_int(64, y)], vm2.pages[int_div(y, x86_64_linux.PAGE)])), none)
+  let F1(y) := ite(y in fp, some(pair(vm.bytes[bits_of_int(64, y)], vm.pages[int_div(y, x86_64_linux.PAGE)])), none)
+  have pw: all y. y in omega -> F2(y) = F1(y) proof
+    fix y
+    assume hy
+    have a2 := mp(app_fn_build[d := omega, v := x. F2(x), a := y], hy)
+    have a1 := mp(app_fn_build[d := omega, v := x. F1(x), a := y], hy)
+    show := rewrite(a1, rewrite(a2, expand(mp(all_elim(h, {y}), hy), mallocng.mview)))
+  qed
+  have ext := mp(fn_build_ext[d := omega, f := x. F2(x), g := x. F1(x)], pw)
+  show by defs(ext, mallocng.mview)
+qed
+
+// a byte of the context's free ones: the allocator's, accessible
+theorem mp.free_acc(c, A, vm, b, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
+  a in omega -> mallocng.ctx_free(c, a) ->
+  a in mallocng.footprint(c, A, b) && mallocng.m_rw(mallocng.mview(vm, mallocng.footprint(c, A, b)), a) &&
+  !(snd(mallocng.pg(mallocng.mview(vm, mallocng.footprint(c, A, b)), a)).kind = 2)
+proof
+  assume hc hu ha hh hao hf
+  have {hfr = free} := expand(hh, mallocng.holds_in)
+  have k1: mallocng.C_MMAP_CNT = 12 by defs(refl({12}), mallocng.C_MMAP_CNT)
+  have k2: mallocng.C_META_SHIFT = 48 by defs(refl({48}), mallocng.C_META_SHIFT)
+  have k3: mallocng.C_USAGE = 464 by defs(refl({464}), mallocng.C_USAGE)
+  have k4: mallocng.C_BRK = 920 by defs(refl({920}), mallocng.C_BRK)
+  have k5: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have fr := expand(hf, mallocng.ctx_free)
+  have h1: int_le(c.ctx, a) by arith(fr, k1, k2, k3, k4)
+  have h2: int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE)) by arith(fr, k1, k2, k3, k4, k5)
+  have fp := apply(mp.ctx_fp[c := c, A := A, vm := vm, b := b, a := a], hc, hu, ha, hh, hao, h1, h2)
+  have rw := mp(all_elim(expand(hfr, mallocng.free_rw), {a}), hao, hf)
+  show by taut(fp, rw)
+qed
+
+// n bytes read-write in a view (each a page's, not a stack page's):
+// usable, for reading and writing; a word so: accessible
+theorem mp.rw_usable(vm, F, objs, a, n): a in omega ->
+  (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in F && mallocng.m_rw(mallocng.mview(vm, F), int_add(a, i)) &&
+     !(snd(mallocng.pg(mallocng.mview(vm, F), int_add(a, i))).kind = 2)) ->
+  gimple.usable(vm, objs, a, n, false) && gimple.usable(vm, objs, a, n, true)
+proof
+  assume hao each
+  have er: all i. i in omega -> int_lt(i, n) -> int_add(a, i) in F && mallocng.m_mapped(mallocng.mview(vm, F), int_add(a, i)) &&
+      snd(mallocng.pg(mallocng.mview(vm, F), int_add(a, i))).prot.r && !(snd(mallocng.pg(mallocng.mview(vm, F), int_add(a, i))).kind = 2) proof
+    fix i
+    assume hi hl
+    have e1 e2 e3 := mp(all_elim(each, {i}), hi, hl)
+    show by taut(e1, expand(e2, mallocng.m_rw), e3)
+  qed
+  have ew: all i. i in omega -> int_lt(i, n) -> int_add(a, i) in F && mallocng.m_mapped(mallocng.mview(vm, F), int_add(a, i)) &&
+      snd(mallocng.pg(mallocng.mview(vm, F), int_add(a, i))).prot.w && !(snd(mallocng.pg(mallocng.mview(vm, F), int_add(a, i))).kind = 2) proof
+    fix i
+    assume hi hl
+    have e1 e2 e3 := mp(all_elim(each, {i}), hi, hl)
+    show by taut(e1, expand(e2, mallocng.m_rw), e3)
+  qed
+  show by taut(apply(mp.view_usable[vm := vm, fp := F, objs := objs, a := a, n := n], hao, er), apply(mp.view_usable_w[vm := vm, fp := F, objs := objs, a := a, n := n], hao, ew))
+qed
+
+theorem mp.word_rw(vm, F, objs, p, off): p in omega -> off in omega -> !(p = 0) -> int_le(int_add(int_add(p, off), 8), 18446744073709551616) ->
+  (all i. i in omega -> int_lt(i, 8) -> int_add(int_add(p, off), i) in F && mallocng.m_rw(mallocng.mview(vm, F), int_add(int_add(p, off), i)) &&
+     !(snd(mallocng.pg(mallocng.mview(vm, F), int_add(int_add(p, off), i))).kind = 2)) ->
+  mallocng_specs.word_ok(vm, objs, p, off)
+proof
+  assume hp ho hnz hb hr
+  have u1 u2 := apply(mp.rw_usable[vm := vm, F := F, objs := objs, a := int_add(p, off), n := 8], arith(hp, ho), hr)
+  have b2: int_le(int_add(int_add(p, off), 8), int_pow(2, 64)) by simp(hb)
+  show by defs(taut(hnz, b2, u1, u2), mallocng_specs.word_ok)
+qed
+
+// n bytes from a, all the context's free ones: usable, for reading and
+// writing
+theorem mp.free_usable(c, A, vm, b, objs, a, n): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
+  a in omega -> (all i. i in omega -> int_lt(i, n) -> mallocng.ctx_free(c, int_add(a, i))) ->
+  gimple.usable(vm, objs, a, n, false) && gimple.usable(vm, objs, a, n, true)
+proof
+  assume hc hu ha hh hao hf
+  let F := mallocng.footprint(c, A, b)
+  have each: all i. i in omega -> int_lt(i, n) -> int_add(a, i) in F && mallocng.m_rw(mallocng.mview(vm, F), int_add(a, i)) &&
+      !(snd(mallocng.pg(mallocng.mview(vm, F), int_add(a, i))).kind = 2) proof
+    fix i
+    assume hi hl
+    show := apply(mp.free_acc[c := c, A := A, vm := vm, b := b, a := int_add(a, i)], hc, hu, ha, hh, arith(hao, hi), mp(all_elim(hf, {i}), hi, hl))
+  qed
+  show := apply(mp.rw_usable[vm := vm, F := F, objs := objs, a := a, n := n], hao, each)
+qed
+
+// the context's free bytes changed, nothing else: the invariant kept (the
+// invariant's view the same, the pages the same)
+theorem mp.co_holds(c, A, vm, vm2, b): mallocng.holds_in(c, A, vm, b) -> mallocng_specs.ctx_only(c, vm, vm2) -> mallocng.holds_in(c, A, vm2, b)
+proof
+  assume hh hco
+  have {H = inv, hm = mapped, hfr = free} := expand(hh, mallocng.holds_in)
+  have er eb := expand(hco, mallocng_specs.ctx_only)
+  have up := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have ep: vm2.pages = vm.pages := sym(rewrite(er, up))
+  have uk := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "brk"], (!("brk" = "bytes") by simp()))
+  have ek: vm2.brk = vm.brk := sym(rewrite(er, uk))
+  // the invariant's view: its bytes not free, so the same
+  let FP := mallocng.held(c, A, b)
+  have ag: all a. a in omega -> mallocng.mview(vm2, FP)[a] = mallocng.mview(vm, FP)[a] proof
+    fix a
+    assume hao
+    have bt: a in FP -> vm2.bytes[bits_of_int(64, a)] = vm.bytes[bits_of_int(64, a)] proof
+      assume hf
+      have {hff = fp, nfr = free} := apply(mp.held_fp, hf)
+      have lo := apply(mp.fp_low[c := c, A := A, vm := vm, b := b, a := a], hm, hff)
+      have e: bits_of_int(64, a) = a by defs(arith(hao, lo), bits_of_int, pow2)
+      have ab: a in bits(64) by arith(hao, lo)
+      show := rewrite(sym(e), mp(all_elim(eb, {a}), ab, nfr))
+    qed
+    show := apply(mp.view_agree[vm := vm, vm2 := vm2, fp := FP, a := a], hao, bt, ep)
+  qed
+  have ve := apply(mp.view_ext[vm := vm, vm2 := vm2, fp := FP], ag)
+  have i2 := rewrite(sym(ek), rewrite(sym(ve), H))
+  have m2 := apply(mp.fpm_pages, hm, ep)
+  have fr2 := apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep)
+  show by defs(taut(i2, m2, fr2), mallocng.holds_in)
+qed
+
+// (nothing changed; k bytes stored at a, all free; one change, then another)
+theorem mp.co_refl(c, vm): vm in x86_64_linux.Vm -> mallocng_specs.ctx_only(c, vm, vm)
+proof
+  assume hv
+  have e := mp(fn_update_same[f := vm, k := "bytes"], simp(hv), simp(hv))
+  have b: all x. x in bits(64) -> !mallocng.ctx_free(c, x) -> vm.bytes[x] = vm.bytes[x] proof
+    fix x
+    assume _ _
+    show := refl({vm.bytes[x]})
+  qed
+  show by defs(taut(e, b), mallocng_specs.ctx_only)
+qed
+
+theorem mp.co_store(c, vm, a, k, v): vm in x86_64_linux.Vm -> a in bits(64) -> k in omega -> int_le(int_add(a, k), 18446744073709551616) ->
+  (all i. i in omega -> int_lt(i, k) -> mallocng.ctx_free(c, int_add(a, i))) ->
+  mallocng_specs.ctx_only(c, vm, fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, k, v)))
+proof
+  assume hv ha hk hak hf
+  let V2 := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, k, v))
+  have e0 := mp(fn_update_same[f := vm, k := "bytes"], simp(hv), simp(hv))
+  have e: fn_update(V2, "bytes", vm.bytes) = vm := trans(fn_update_twice[f := vm, k := "bytes", a := x86_64_linux.store_le(vm.bytes, a, k, v), b := vm.bytes], e0)
+  have b: all x. x in bits(64) -> !mallocng.ctx_free(c, x) -> V2.bytes[x] = vm.bytes[x] proof
+    fix x
+    assume hx hn
+    // (x outside the store: else x = a + i, free)
+    have o: int_le(int_add(a, k), x) || int_lt(x, a) proof
+      have inr: int_le(a, x) && int_lt(x, int_add(a, k)) -> false proof
+        assume hi
+        have i0: int_sub(x, a) in omega by arith(hi, ha, hx)
+        have il: int_lt(int_sub(x, a), k) by arith(hi)
+        have fx := mp(all_elim(hf, {int_sub(x, a)}), i0, il)
+        have ex: int_add(a, int_sub(x, a)) = x by arith(hx, ha)
+        show by taut(rewrite(ex, fx), hn)
+      qed
+      show by arith(inr)
+    qed
+    have so := apply(mp.st_out[B := vm.bytes, c := a, k := k, v := v, x := x], hx, ha, hk, hak, o)
+    show by simp(so, app_update_same[f := vm, k := "bytes", v := x86_64_linux.store_le(vm.bytes, a, k, v)])
+  qed
+  show by defs(taut(e, b), mallocng_specs.ctx_only)
+qed
+
+theorem mp.co_trans(c, v1, v2, v3): mallocng_specs.ctx_only(c, v1, v2) -> mallocng_specs.ctx_only(c, v2, v3) -> mallocng_specs.ctx_only(c, v1, v3)
+proof
+  assume h1 h2
+  have r1 b1 := expand(h1, mallocng_specs.ctx_only)
+  have r2 b2 := expand(h2, mallocng_specs.ctx_only)
+  // (v3 with v2's bytes is v2; with v1's bytes then v1)
+  have t := fn_update_twice[f := v3, k := "bytes", a := v2.bytes, b := v1.bytes]
+  have r: fn_update(v3, "bytes", v1.bytes) = v1 := trans(sym(rewrite(r2, t)), r1)
+  have b: all x. x in bits(64) -> !mallocng.ctx_free(c, x) -> v3.bytes[x] = v1.bytes[x] proof
+    fix x
+    assume hx hn
+    show := trans(mp(all_elim(b2, {x}), hx, hn), mp(all_elim(b1, {x}), hx, hn))
+  qed
+  show by defs(taut(r, b), mallocng_specs.ctx_only)
+qed
+
+// ----------------------------------------------------------------------
+//  The lists in memory, by the invariant
+// a meta slot: 8-aligned, its 40 bytes the invariant's and accessible,
+// below 2^64; outside the context
+theorem mp.slot_meta(c, A, vm, b, g): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) -> mallocng.meta_slot(A, g) ->
+  nat: g in omega && low: int_le(24, g) && al: int_mod(g, 8) = 0 && bound: int_le(int_add(g, 40), 18446744073709551616) &&
+  acc: (all a. a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) ->
+     a in mallocng.held(c, A, b) && mallocng.m_rw(mallocng.mview(vm, mallocng.held(c, A, b)), a) &&
+     !(snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a)).kind = 2)) &&
+  out: (int_le(int_add(c.ctx, mallocng.CTX_SIZE), g) || int_le(int_add(g, 40), c.ctx))
+proof
+  assume hc hu ha hh ms
+  have {H = inv, hm = mapped} := expand(hh, mallocng.holds_in)
+  have {aok = areas} := expand(H, mallocng.holds)
+  have {each = each} := expand(aok, mallocng.areas_ok)
+  have go g24 inr := apply(mp.slot_mem, hc, hu, ha, hh, ms)
+  // (its last byte the allocator's: below 2^64)
+  have l39 _ _ := mp(all_elim(inr, {int_add(g, 39)}), arith(go), arith(go), arith(go))
+  have {f39 = fp} := apply(mp.held_fp, l39)
+  have lo := apply(mp.fp_low[c := c, A := A, vm := vm, b := b, a := int_add(g, 39)], hm, f39)
+  have gb: int_le(int_add(g, 40), 18446744073709551616) by arith(lo)
+  obtain k j, hk hj hkl hjl he from expand(ms, mallocng.meta_slot)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have aro := mp(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+  have cs: mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS)
+  have ge: g = int_add(int_add(A.areas[k], 24), int_mul(40, j)) by simp(expand(he, mallocng.meta_at), cs)
+  have jl: int_lt(j, 101) by simp(hjl, cs)
+  have am .. := mp(all_elim(each, {k}), hk, hkl)
+  have al: int_mod(g, 8) = 0 by arith(ge, am, aro, hj)
+  // (the meta's first and last bytes in the area, so not the context's)
+  have d0 _ _ := mp.data_at[c := c]
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have {n1 = data} := apply(mp.area_apart[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := k, a := g],
+    hc, hu, ha, H, hk, hkl, go, arith(ge, aro, hj), arith(ge, aro, hj, jl))
+  have {n2 = data} := apply(mp.area_apart[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := k, a := int_add(g, 39)],
+    hc, hu, ha, H, hk, hkl, arith(go), arith(ge, aro, hj), arith(ge, aro, hj, jl))
+  have o1: !(int_le(c.ctx, g) && int_lt(g, int_add(c.ctx, mallocng.CTX_SIZE))) by simp(expand(rewrite(d0, mp(all_elim(n1, {0}), simp(), simp())), mallocng.in_range))
+  have o2: !(int_le(c.ctx, int_add(g, 39)) && int_lt(int_add(g, 39), int_add(c.ctx, mallocng.CTX_SIZE)))
+    by simp(expand(rewrite(d0, mp(all_elim(n2, {0}), simp(), simp())), mallocng.in_range))
+  have co: c.ctx in omega by simp(hc)
+  have out: int_le(int_add(c.ctx, mallocng.CTX_SIZE), g) || int_le(int_add(g, 40), c.ctx) by arith(o1, o2, ks, go, co)
+  show by taut(go, g24, al, gb, inr, out)
+qed
+
+// a list at a word of the context the invariant reads (`off`), cyclic on
+// the invariant's view, of meta slots: as the list functions need it
+// (`list_at`)
+theorem mp.ctx_list(c, A, vm, b, objs, off, L): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> vm.bytes in fn_space(bits(64), bits(8)) ->
+  mallocng.holds_in(c, A, vm, b) -> int_mod(c.ctx, 8) = 0 -> off in omega -> int_mod(off, 8) = 0 ->
+  ((int_le(16, off) && int_le(int_add(off, 8), 48)) || (int_le(56, off) && int_le(int_add(off, 8), 464))) ->
+  L in list_type(omega) -> (all i. i in omega -> int_lt(i, seq_len(L)) -> mallocng.meta_slot(A, L[i])) ->
+  mallocng.cyclic(mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), off), L) ->
+  mallocng_specs.list_at(vm, objs, int_add(c.ctx, off), L)
+proof
+  assume hc hu ha hvb hh hal hoo hoa hor ll hsl hcy
+  let F := mallocng.held(c, A, b)
+  let M := mallocng.mview(vm, F)
+  let PH := int_add(c.ctx, off)
+  have {H = inv, hm = mapped} := expand(hh, mallocng.holds_in)
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have p64: int_pow(2, 64) = 18446744073709551616 by simp()
+  have co: c.ctx in omega by simp(hc)
+  // (the context below 2^64: its last byte the allocator's)
+  have cf := apply(mp.ctx_fp[c := c, A := A, vm := vm, b := b, a := int_add(c.ctx, 927)], hc, hu, ha, hh, arith(co), arith(co), arith(co, ks))
+  have clo := apply(mp.fp_low[c := c, A := A, vm := vm, b := b, a := int_add(c.ctx, 927)], hm, cf)
+  have pho: PH in omega by arith(co, hoo)
+  have phb: PH in bits(64) by arith(co, hoo, hor, clo)
+  // the head word: the context's, not a free one -- accessible
+  have hw: all i. i in omega -> int_lt(i, 8) -> int_add(int_add(PH, 0), i) in F && mallocng.m_rw(M, int_add(int_add(PH, 0), i)) &&
+      !(snd(mallocng.pg(M, int_add(int_add(PH, 0), i))).kind = 2) proof
+    fix i
+    assume hi hil
+    have nf: !mallocng.ctx_free(c, int_add(int_add(PH, 0), i))
+      by defs(arith(hor, hoo, hi, hil, co), mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_META_SHIFT, mallocng.C_USAGE, mallocng.C_BRK)
+    show := apply(mp.ctx_acc[c := c, A := A, vm := vm, b := b, a := int_add(int_add(PH, 0), i)], hc, hu, ha, hh, arith(pho, hi), arith(co, hoo, hi), arith(co, ks, hor, hoo, hi, hil), nf)
+  qed
+  have wh := apply(mp.word_rw[vm := vm, F := F, objs := objs, p := PH, off := 0], pho, simp(), arith(co, hor), arith(co, hor, hoo, clo), hw)
+  have hal8: mallocng_specs.al8(PH) by defs(arith(hal, hoa, hoo, co), mallocng_specs.al8)
+  have f1 f2 f3 := expand(hcy, mallocng.cyclic)
+  // the head word read
+  have hin: all i. i in omega -> int_lt(i, 8) -> int_add(PH, i) in F proof
+    fix i
+    assume hi hil
+    have q _ _ := mp(all_elim(hw, {i}), hi, hil)
+    show by simp(q)
+  qed
+  have rh := apply(mp.view_read[vm := vm, fp := F, a := PH, n := 8], pho, simp(), simp(), hin)
+  have hd: gimple.bytes_at(vm, PH, 8) = ite(seq_len(L) = 0, 0, L[0]) := trans(rh, expand(f1, mallocng.ctx_word))
+  // its elements: metas, outside the context
+  have elV: all x0. x0 in omega -> int_lt(x0, seq_len(L)) -> ((((int_le(int_add(L[x0], 16), int_pow(2, 64)) && mallocng_specs.word_ok(vm, objs, bits_of_int(64, L[x0]), 0)) &&
+      mallocng_specs.word_ok(vm, objs, bits_of_int(64, L[x0]), 8)) && int_mod(L[x0], 8) = 0) && (int_le(int_add(PH, 8), L[x0]) || int_le(int_add(L[x0], 16), PH))) proof
+    fix i
+    assume hi hil
+    let g := L[i]
+    have {go = nat, glo = low, gal = al, gb = bound, inr = acc, gout = out} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := g], hc, hu, ha, hh, mp(all_elim(hsl, {i}), hi, hil))
+    have eb: bits_of_int(64, g) = g by defs(arith(go, gb), bits_of_int, pow2)
+    have w0: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(g, 0), j) in F && mallocng.m_rw(M, int_add(int_add(g, 0), j)) &&
+        !(snd(mallocng.pg(M, int_add(int_add(g, 0), j))).kind = 2) proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(inr, {int_add(int_add(g, 0), j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+    qed
+    have w8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(g, 8), j) in F && mallocng.m_rw(M, int_add(int_add(g, 8), j)) &&
+        !(snd(mallocng.pg(M, int_add(int_add(g, 8), j))).kind = 2) proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(inr, {int_add(int_add(g, 8), j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+    qed
+    have nz: !(g = 0) by arith(glo, go)
+    have k0 := apply(mp.word_rw[vm := vm, F := F, objs := objs, p := g, off := 0], go, simp(), nz, arith(gb), w0)
+    have k8 := apply(mp.word_rw[vm := vm, F := F, objs := objs, p := g, off := 8], go, simp(), nz, arith(gb), w8)
+    have k0b := subst({y. mallocng_specs.word_ok(vm, objs, y, 0)}, sym(eb), k0)
+    have k8b := subst({y. mallocng_specs.word_ok(vm, objs, y, 8)}, sym(eb), k8)
+    have g16: int_le(int_add(g, 16), int_pow(2, 64)) by arith(gb, p64)
+    have off: int_le(int_add(PH, 8), g) || int_le(int_add(g, 16), PH) by arith(gout, ks, hor, hoo, co)
+    show by taut(g16, k0b, k8b, gal, off)
+  qed
+  // apart: distinct metas
+  have apV: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(L)) && int_lt(x1, seq_len(L))) && !(x0 = x1) ->
+      int_le(int_add(L[x0], 16), L[x1]) || int_le(int_add(L[x1], 16), L[x0]) proof
+    fix i j
+    assume ho hr
+    have hi hj := ho
+    have hil hjl hne := hr
+    have ne: !(L[i] = L[j]) proof
+      assume e
+      have q := mp(all_elim(f2, {i}, {j}), conj(hi, hj), conj(conj(hil, hjl), e))
+      show by taut(q, hne)
+    qed
+    have isl := mp(all_elim(hsl, {i}), hi, hil)
+    have jsl := mp(all_elim(hsl, {j}), hj, hjl)
+    have {io = nat} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := L[i]], hc, hu, ha, hh, isl)
+    have {jo = nat} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := L[j]], hc, hu, ha, hh, jsl)
+    have d1 := apply(mp.meta_disj[c := c, A := A, M := M, b := b, brk := vm.brk, g := L[i], l := L[j], a := L[j]],
+      hc, hu, ha, H, isl, jsl, (!(L[j] = L[i]) by taut(ne)), jo, arith(jo), arith(jo))
+    have d2 := apply(mp.meta_disj[c := c, A := A, M := M, b := b, brk := vm.brk, g := L[j], l := L[i], a := L[i]],
+      hc, hu, ha, H, jsl, isl, ne, io, arith(io), arith(io))
+    show by arith(d1, d2, io, jo)
+  qed
+  // its links read
+  have lk: all i. i in omega -> int_lt(i, seq_len(L)) ->
+      gimple.bytes_at(vm, int_add(L[i], 8), 8) = L[int_mod(int_add(i, 1), seq_len(L))] &&
+      gimple.bytes_at(vm, L[i], 8) = L[int_mod(int_sub(int_add(i, seq_len(L)), 1), seq_len(L))] proof
+    fix i
+    assume hi hil
+    let g := L[i]
+    have {go = nat, inr = acc} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := g], hc, hu, ha, hh, mp(all_elim(hsl, {i}), hi, hil))
+    have in8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(g, 8), j) in F proof
+      fix j
+      assume hj hjl
+      have q _ _ := mp(all_elim(inr, {int_add(int_add(g, 8), j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+      show := q
+    qed
+    have in0: all j. j in omega -> int_lt(j, 8) -> int_add(g, j) in F proof
+      fix j
+      assume hj hjl
+      have q _ _ := mp(all_elim(inr, {int_add(g, j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+      show := q
+    qed
+    have r8 := apply(mp.view_read[vm := vm, fp := F, a := int_add(g, 8), n := 8], arith(go), simp(), simp(), in8)
+    have r0 := apply(mp.view_read[vm := vm, fp := F, a := g, n := 8], go, simp(), simp(), in0)
+    have l8 l0 := mp(all_elim(f3, {i}), hi, hil)
+    show by taut(trans(r8, l8), trans(r0, l0))
+  qed
+  show := apply(mp.list_mk[vm := vm, objs := objs, phead := PH, l := L], hvb, phb, ll, wh, hal8, elV, apV, hd, lk)
+qed
+
+// class sc's active list, at its word in the context
+theorem mp.active_at(c, A, vm, b, objs, sc): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> vm.bytes in fn_space(bits(64), bits(8)) ->
+  mallocng.holds_in(c, A, vm, b) -> int_mod(c.ctx, 8) = 0 -> sc in omega -> int_lt(sc, 48) ->
+  mallocng_specs.list_at(vm, objs, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), A.active[sc])
+proof
+  assume hc hu ha hvb hh hal hs hsl
+  let L := A.active[sc]
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {cok = ctx, act = active} := expand(H, mallocng.holds)
+  have ka: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
+  have _ _ _ _ _ _ _ _ _ _ la cy := expand(cok, mallocng.ctx_ok)
+  have al0: A.active in list_type(list_type(omega)) by simp(ha)
+  have ll := mp(at_type[l := A.active, t := list_type(omega), i := sc], al0, hs, (int_lt(sc, seq_len(A.active)) by arith(la, hsl)))
+  have sl: all i. i in omega -> int_lt(i, seq_len(L)) -> mallocng.meta_slot(A, L[i]) proof
+    fix i
+    assume hi hil
+    have gu .. := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {i}), conj(hs, hi), conj(hsl, hil))
+    show := apply(mp.used_slot, H, gu)
+  qed
+  have r := apply(mp.ctx_list[c := c, A := A, vm := vm, b := b, objs := objs, off := int_add(mallocng.C_ACTIVE, int_mul(8, sc)), L := L],
+    hc, hu, ha, hvb, hh, hal, arith(ka, hs), arith(ka, hs), arith(ka, hs, hsl), ll, sl, mp(all_elim(cy, {sc}), hs, hsl))
+  have ea: int_add(c.ctx, int_add(mallocng.C_ACTIVE, int_mul(8, sc))) = int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)) by arith()
+  show := rewrite(ea, r)
+qed
+
+// the free metas' list, at its word in the context
+theorem mp.free_metas_at(c, A, vm, b, objs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> vm.bytes in fn_space(bits(64), bits(8)) ->
+  mallocng.holds_in(c, A, vm, b) -> int_mod(c.ctx, 8) = 0 ->
+  mallocng_specs.list_at(vm, objs, int_add(c.ctx, mallocng.C_FREE_META), A.free_metas)
+proof
+  assume hc hu ha hvb hh hal
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {cok = ctx, mpart = part} := expand(H, mallocng.holds)
+  have {fs = free_slots} := expand(mpart, mallocng.metas_partition)
+  have kf: mallocng.C_FREE_META = 16 by defs(refl({16}), mallocng.C_FREE_META)
+  have _ _ _ _ _ _ _ _ _ cf .. := expand(cok, mallocng.ctx_ok)
+  have ll: A.free_metas in list_type(omega) by simp(ha)
+  have sl: all i. i in omega -> int_lt(i, seq_len(A.free_metas)) -> mallocng.meta_slot(A, A.free_metas[i]) proof
+    fix i
+    assume hi hil
+    have q _ := mp(all_elim(fs, {i}), hi, hil)
+    show := q
+  qed
+  show := apply(mp.ctx_list[c := c, A := A, vm := vm, b := b, objs := objs, off := mallocng.C_FREE_META, L := A.free_metas],
+    hc, hu, ha, hvb, hh, hal, arith(kf), arith(kf), arith(kf), ll, sl, cf)
+qed

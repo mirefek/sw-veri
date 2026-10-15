@@ -1,0 +1,219 @@
+// The list functions' code: dequeue's and queue's runs, their memory
+// effect.
+
+// ----------------------------------------------------------------------
+//  dequeue
+// m alone (its next itself): the head cleared, m's links cleared
+theorem ms.dq_alone: all phead m s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.dequeue_pre(s.vm, s.objs, phead, m) -> m = mallocng_specs.mnext(s.vm, m) ->
+  runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(s.vm, phead, 0), bits_add(64, m, 8), 0), m, 0)), empty)
+proof
+  fix phead m s o
+  assume hph hm hw hu hpre heq hr
+  have kh km0 km8 ah am nhm nhm8 .. := hpre
+  have _ mlt .. := km8
+  have am8 em8 hm8 := apply(ms.al8_add, {m}, hm, am, mlt)
+  have zp: bits_add(64, phead, 0) = phead by simp(hph)
+  // t1 := m.next, the branch not taken; *phead := 0; m.next := 0; t8 := m.next; m.prev := t8
+  have F := conj(hw, hu, hm, hph, hm8, kh, km0, km8, expand(ah, mallocng_specs.al8), expand(am, mallocng_specs.al8), mlt, nhm, nhm8, zp)
+  step x5, c from hr with ms.next_det, heq, ms.st_det, ms.setnext_det, ms.next_det, ms.setprev_det using F
+  show by simp(c, zp)
+qed
+
+// m linked (its next another meta): the neighbours linked to each other,
+// the head moved past m if it was m, m's links cleared
+theorem ms.dq_linked: all phead m s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.dequeue_pre(s.vm, s.objs, phead, m) -> !(m = mallocng_specs.mnext(s.vm, m)) ->
+  runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(s.vm, phead, m)), empty)
+proof
+  fix phead m s o
+  assume hph hm hw hu hpre hne hr
+  let V0 := s.vm
+  let N := mallocng_specs.mnext(V0, m)
+  let P := mallocng_specs.mprev(V0, m)
+  let M8 := bits_add(64, m, 8)
+  let H := mallocng_specs.rd64(V0, phead)
+  have kh km0 km8 ah am nhm nhm8 hl := hpre
+  have nNm: !(N = m) by taut(hne)
+  have kp8 kn0 ap an npm np8m nn8 np8h nnh np8n := mp(hl, nNm)
+  have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+  have hN: N in bits(64) by defs(simp(), mallocng_specs.mnext, mallocng_specs.rd64)
+  have _ plt .. := kp8
+  have _ mlt .. := km8
+  have apa epa hpa := apply(ms.al8_add, {P}, hP, ap, plt)
+  have am8 em8 hm8 := apply(ms.al8_add, {m}, hm, am, mlt)
+  have zp: bits_add(64, phead, 0) = phead by simp(hph)
+  // (the facts the memory steps use)
+  have F := conj(hw, hu, hm, hph, hP, hN, hpa, hm8, kh, km0, km8, kp8, kn0, expand(ah, mallocng_specs.al8), expand(am, mallocng_specs.al8), expand(ap, mallocng_specs.al8), expand(an, mallocng_specs.al8), mlt, plt, nhm, nhm8, npm, np8m, nn8, np8h, nnh, np8n)
+  step x5, c from hr with ms.next_det, hne, ms.prev_det, ms.next_det, ms.setnext_det, ms.next_det, ms.prev_det, ms.setprev_det, ms.ld_det using F
+  let V2 := mallocng_specs.wr64(mallocng_specs.wr64(V0, bits_add(64, P, 8), N), N, P)
+  have r2: mallocng_specs.rd64(V2, phead) = H by mem(F)
+  // the spec's effect: m's neighbours linked, then the head moved past m if it was m
+  have dl: mallocng_specs.dq_links(V0, phead, m) = V2 by defs(mp(tr.ite_t[c := !(N = m), a := V2, b := mallocng_specs.wr64(V0, phead, 0)], nNm), mallocng_specs.dq_links)
+  have d0: mallocng_specs.dequeue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)
+    by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)}), mallocng_specs.dequeue_vm)
+  have dv := rewrite(dl, d0)
+  have was: m = H -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+    assume hmh
+    step x25, d from rewrite(zp, c) with hmh, ms.next_det, ms.st_det, ms.setnext_det, ms.next_det, ms.setprev_det using F, zp
+    have hc: m = mallocng_specs.rd64(V2, phead) := trans(hmh, sym(r2))
+    have dh: mallocng_specs.dq_head(V2, V0, phead, m) = mallocng_specs.wr64(V2, phead, N) by defs(mp(tr.ite_t[c := !(N = m) && mallocng_specs.rd64(V2, phead) = m, a := mallocng_specs.wr64(V2, phead, N), b := V2], conj(nNm, sym(hc))), mallocng_specs.dq_head)
+    have qv := rewrite(dh, dv)
+    show by simp(d, qv, zp)
+  qed
+  have wasnt: !(m = H) -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+    assume hmh
+    step x25, d from rewrite(zp, c) with hmh, ms.setnext_det, ms.next_det, ms.setprev_det using F
+    have hc: !(m = mallocng_specs.rd64(V2, phead)) := rewrite(sym(r2), hmh)
+    have dh: mallocng_specs.dq_head(V2, V0, phead, m) = V2 by defs(mp(tr.ite_f[c := !(N = m) && mallocng_specs.rd64(V2, phead) = m, a := mallocng_specs.wr64(V2, phead, N), b := V2], (!(!(N = m) && mallocng_specs.rd64(V2, phead) = m) by taut(hc))), mallocng_specs.dq_head)
+    have qv := rewrite(dh, dv)
+    show by simp(d, qv)
+  qed
+  show by taut(was, wasnt)
+qed
+
+// dequeue's run, its precondition holding: its effect `dequeue_vm` (m
+// alone: the head word cleared, then m's links)
+theorem ms.dq_run: all phead m s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.dequeue_pre(s.vm, s.objs, phead, m) ->
+  runs(c_src_malloc_mallocng_malloc.dequeue(phead, m), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(s.vm, phead, m)), empty)
+proof
+  fix phead m s o
+  assume hph hm hw hu hp hr
+  let V0 := s.vm
+  let N := mallocng_specs.mnext(V0, m)
+  let M8 := bits_add(64, m, 8)
+  have alone: m = N -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+    assume e
+    have oe := apply(ms.dq_alone, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
+    have nn: !!(N = m) by taut(e)
+    have nc: !(!(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m) by taut(nn)
+    have dl: mallocng_specs.dq_links(V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
+      by defs(mp(tr.ite_f[c := !(N = m), a := mallocng_specs.wr64(mallocng_specs.wr64(V0, bits_add(64, mallocng_specs.mprev(V0, m), 8), N), N, mallocng_specs.mprev(V0, m)),
+        b := mallocng_specs.wr64(V0, phead, 0)], nn), mallocng_specs.dq_links)
+    have dh: mallocng_specs.dq_head(mallocng_specs.wr64(V0, phead, 0), V0, phead, m) = mallocng_specs.wr64(V0, phead, 0)
+      by defs(mp(tr.ite_f[c := !(N = m) && mallocng_specs.rd64(mallocng_specs.wr64(V0, phead, 0), phead) = m, a := mallocng_specs.wr64(mallocng_specs.wr64(V0, phead, 0), phead, N),
+        b := mallocng_specs.wr64(V0, phead, 0)], nc), mallocng_specs.dq_head)
+    have d0: mallocng_specs.dequeue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)
+      by defs(refl({mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.dq_head(mallocng_specs.dq_links(V0, phead, m), V0, phead, m), M8, 0), m, 0)}), mallocng_specs.dequeue_vm)
+    have dv := rewrite(dh, rewrite(dl, d0))
+    show := rewrite(sym(dv), oe)
+  qed
+  have linked: !(m = N) -> o = ok(fn_update(s, "vm", mallocng_specs.dequeue_vm(V0, phead, m)), empty) proof
+    assume e
+    show := apply(ms.dq_linked, {phead}, {m}, {s}, {o}, hph, hm, hw, hu, hp, e, hr)
+  qed
+  show by taut(alone, linked)
+qed
+
+// (memories after words written: memories)
+theorem ms.wr_vm: all vm a v. vm in x86_64_linux.Vm -> vm in univ(1) -> a in bits(64) ->
+  mallocng_specs.wr64(vm, a, v) in x86_64_linux.Vm && mallocng_specs.wr64(vm, a, v) in univ(1)
+proof
+  fix vm a v
+  assume hv hu ha
+  have su := apply(g.store_univ, {vm}, {a}, {8}, {v}, hv)
+  have nu: fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, 8, v)) in univ(1) by simp(hu, su)
+  have nv := apply(x86.store_vm, {vm}, {a}, {8}, {v}, hv, nu)
+  show conj(nv, nu)
+qed
+
+theorem ms.dqvm_vm: all vm phead m. vm in x86_64_linux.Vm -> vm in univ(1) -> phead in bits(64) -> m in bits(64) ->
+  mem: mallocng_specs.dequeue_vm(vm, phead, m) in x86_64_linux.Vm && small: mallocng_specs.dequeue_vm(vm, phead, m) in univ(1)
+proof
+  fix vm phead m
+  assume hv hu hph hm
+  let N := mallocng_specs.mnext(vm, m)
+  let P := mallocng_specs.mprev(vm, m)
+  have hN: N in bits(64) by defs(simp(), mallocng_specs.mnext, mallocng_specs.rd64)
+  have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+  have hP8: bits_add(64, P, 8) in bits(64) by arith(hP)
+  have hm8: bits_add(64, m, 8) in bits(64) by arith(hm)
+  have a1 a2 := apply(ms.wr_vm, {vm}, {bits_add(64, P, 8)}, {N}, hv, hu, hP8)
+  have b1 b2 := apply(ms.wr_vm, {mallocng_specs.wr64(vm, bits_add(64, P, 8), N)}, {N}, {P}, a1, a2, hN)
+  have c1 c2 := apply(ms.wr_vm, {vm}, {phead}, {0}, hv, hu, hph)
+  let L := mallocng_specs.dq_links(vm, phead, m)
+  have l1: L in x86_64_linux.Vm by apply(ite_in, b1, c1)
+  have l2: L in univ(1) by apply(ite_in, b2, c2)
+  have d1 d2 := apply(ms.wr_vm, {L}, {phead}, {N}, l1, l2, hph)
+  let H := mallocng_specs.dq_head(L, vm, phead, m)
+  have h1: H in x86_64_linux.Vm by apply(ite_in, d1, l1)
+  have h2: H in univ(1) by apply(ite_in, d2, l2)
+  have e1 e2 := apply(ms.wr_vm, {H}, {bits_add(64, m, 8)}, {0}, h1, h2, hm8)
+  have f1 f2 := apply(ms.wr_vm, {mallocng_specs.wr64(H, bits_add(64, m, 8), 0)}, {m}, {0}, e1, e2, hm)
+  show conj(f1, f2)
+qed
+
+// ----------------------------------------------------------------------
+//  queue
+// m unlinked (else a_crash, which the precondition excludes): the list
+// empty -- m alone, the head --, or m before the head H, after H's prev P
+theorem ms.qu_run: all phead m g s o. phead in bits(64) -> m in bits(64) -> s in abi.World -> s in univ(1) ->
+  mallocng_specs.queue_pre(s.vm, s.objs, phead, m) ->
+  runs(c_src_malloc_mallocng_malloc.queue(phead, m, g), s, o) ->
+  o = ok(fn_update(s, "vm", mallocng_specs.queue_vm(s.vm, phead, m)), empty)
+proof
+  fix phead m g s o
+  assume hph hm hw hu hpre hr
+  let V0 := s.vm
+  let OB := s.objs
+  let M8 := bits_add(64, m, 8)
+  let H := mallocng_specs.rd64(V0, phead)
+  have kh km0 km8 ah am n0 p0 hl := hpre
+  have hH: H in bits(64) by defs(simp(), mallocng_specs.rd64)
+  have _ mlt .. := km8
+  have am8 em8 hm8 := apply(ms.al8_add, {m}, hm, am, mlt)
+  have zp: bits_add(64, phead, 0) = phead by simp(hph)
+  // m's links 0 (no a_crash), then *phead
+  have d0 := apply(ms.next_det, {s}, {m}, hu, hm, km8)
+  have d1 := apply(ms.prev_det, {s}, {m}, hu, hm, km0)
+  have d2 := rewrite(zp, apply(ms.ld_det, {s}, {phead}, {0}, hu, hph, simp(), kh))
+  step x2 x7 x11 x15, hc3 hrest3 from hr with d0, n0, d1, p0, d2
+  // the list empty: m alone, the head
+  have emp: H = 0 -> o = ok(fn_update(s, "vm", mallocng_specs.queue_vm(V0, phead, m)), empty) proof
+    assume hz
+    step c4 from conj(hc3, hrest3) with hz, ms.setnext_det, ms.next_det, ms.setprev_det, ms.st_det using hw, hu, hm, hph, hm8, km0, km8, kh, expand(am, mallocng_specs.al8), expand(ah, mallocng_specs.al8), mlt, n0, p0, zp
+    have qv: mallocng_specs.queue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(V0, M8, m), m, m), phead, m) by defs(simp(hz), mallocng_specs.queue_vm)
+    show by simp(c4, qv, zp)
+  qed
+  have lnk: !(H = 0) -> o = ok(fn_update(s, "vm", mallocng_specs.queue_vm(V0, phead, m)), empty) proof
+    assume nn
+    let P := mallocng_specs.mprev(V0, H)
+    let PA := bits_add(64, P, 8)
+    have kH0 aH kP8 aP nHm8 nPm := mp(hl, nn)
+    have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+    have _ plt .. := kP8
+    have apa epa hpa := apply(ms.al8_add, {P}, hP, aP, plt)
+    step c9 from conj(hc3, hrest3) with nn, d2, ms.setnext_det, ms.prev_det, ms.setprev_det, ms.prev_det, ms.setnext_det, ms.next_det, ms.next_det, ms.setprev_det using hw, hu, hm, hH, hP, hm8, hpa, km0, km8, kH0, kP8, expand(am, mallocng_specs.al8), expand(aH, mallocng_specs.al8), expand(aP, mallocng_specs.al8), mlt, plt, nHm8, nPm
+    have qv: mallocng_specs.queue_vm(V0, phead, m) = mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(V0, M8, H), m, P), PA, m), H, m) by defs(simp(nn), mallocng_specs.queue_vm)
+    show by simp(c9, qv)
+  qed
+  show by taut(emp, lnk)
+qed
+
+// (queue's memory after: a memory)
+theorem ms.quvm_vm: all vm phead m. vm in x86_64_linux.Vm -> vm in univ(1) -> phead in bits(64) -> m in bits(64) ->
+  mem: mallocng_specs.queue_vm(vm, phead, m) in x86_64_linux.Vm && small: mallocng_specs.queue_vm(vm, phead, m) in univ(1)
+proof
+  fix vm phead m
+  assume hv hu hph hm
+  let H := mallocng_specs.rd64(vm, phead)
+  let P := mallocng_specs.mprev(vm, H)
+  have hH: H in bits(64) by defs(simp(), mallocng_specs.rd64)
+  have hP: P in bits(64) by defs(simp(), mallocng_specs.mprev, mallocng_specs.rd64)
+  have hP8: bits_add(64, P, 8) in bits(64) by arith(hP)
+  have hm8: bits_add(64, m, 8) in bits(64) by arith(hm)
+  have a1 a2 := apply(ms.wr_vm, {vm}, {bits_add(64, m, 8)}, {H}, hv, hu, hm8)
+  have b1 b2 := apply(ms.wr_vm, {mallocng_specs.wr64(vm, bits_add(64, m, 8), H)}, {m}, {P}, a1, a2, hm)
+  have c1 c2 := apply(ms.wr_vm, {mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, m, 8), H), m, P)}, {bits_add(64, P, 8)}, {m}, b1, b2, hP8)
+  have d1 d2 := apply(ms.wr_vm, {mallocng_specs.wr64(mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, m, 8), H), m, P), bits_add(64, P, 8), m)}, {H}, {m}, c1, c2, hH)
+  have e1 e2 := apply(ms.wr_vm, {vm}, {bits_add(64, m, 8)}, {m}, hv, hu, hm8)
+  have f1 f2 := apply(ms.wr_vm, {mallocng_specs.wr64(vm, bits_add(64, m, 8), m)}, {m}, {m}, e1, e2, hm)
+  have g1 g2 := apply(ms.wr_vm, {mallocng_specs.wr64(mallocng_specs.wr64(vm, bits_add(64, m, 8), m), m, m)}, {phead}, {m}, f1, f2, hph)
+  have q1: mallocng_specs.queue_vm(vm, phead, m) in x86_64_linux.Vm by defs(apply(ite_in, d1, g1), mallocng_specs.queue_vm)
+  have q2: mallocng_specs.queue_vm(vm, phead, m) in univ(1) by defs(apply(ite_in, d2, g2), mallocng_specs.queue_vm)
+  show conj(q1, q2)
+qed
