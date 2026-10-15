@@ -12154,3 +12154,169 @@ proof
   qed
   show := apply(mp.list_mk[vm := V, objs := objs, phead := phead, l := R], hbV, hp, rty, hokV, hal, elV, apV, hdV, wsV)
 qed
+
+// (a list: a function on its positions)
+theorem mp.list_fun(l, t): l in list_type(t) -> is_fun(l) && dom(l) = seq_len(l)
+proof
+  assume hl
+  have l1 _ := (l in seq_type(t) && dom(l) in omega by taut(set_select_def[s := seq_type(t), p := y. dom(y) in omega, z := l], expand(hl, list_type)))
+  have _ lsq := (l in powerset(cart(omega, t)) && is_seq(l) by taut(set_select_def[s := powerset(cart(omega, t)), p := y. is_seq(y), z := l], expand(l1, seq_type)))
+  show by defs(taut(expand(lsq, is_seq), refl({dom(l)})), seq_len)
+qed
+
+// (a list operation on class sc's list: a reorganisation of it, when the
+// new list is part of the old one and the groups dropped have no free slot)
+theorem mp.relist_reorg(A, sc, l2, vm): A in mallocng.Abs -> sc in omega -> int_lt(sc, 48) -> seq_len(A.active) = 48 ->
+  (all g. mallocng.on_list(l2, g) -> mallocng.on_list(A.active[sc], g)) ->
+  (all g. g in omega -> mallocng.on_list(A.active[sc], g) && !mallocng.on_list(l2, g) -> !mallocng.has_unused(A, g)) ->
+  mallocng.reorganised(A, mp.relist(A, sc, l2, vm), sc)
+proof
+  assume ha hs hsl h48 hsub hdrop
+  let R := mp.relist(A, sc, l2, vm)
+  let L := A.active[sc]
+  have {ln = len, lt = list, mt = meta} := apply(mp.relist_at[A := A, sc := sc, l2 := l2, vm := vm], ha)
+  have af: ((is_fun(A) && "slots" in dom(A)) && "active" in dom(A)) && "metas" in dom(A) by simp(ha)
+  have s1 := mp(fn_update_same[f := A, k := "metas"], simp(ha), simp(ha))
+  have s2 := mp(fn_update_same[f := A, k := "active"], simp(ha), simp(ha))
+  have s3 := mp(fn_update_same[f := A, k := "slots"], simp(ha), simp(ha))
+  have e: fn_update(fn_update(fn_update(R, "metas", A.metas), "active", A.active), "slots", A.slots) = A by defs(simp(s1, s2, s3, af), mp.relist)
+  have mq: all x. x in omega -> fn_update(fn_update(fn_update(fn_update(R.metas[x], "prev", 0), "next", 0), "avail", 0), "freed", 0) =
+      fn_update(fn_update(fn_update(fn_update(A.metas[x], "prev", 0), "next", 0), "avail", 0), "freed", 0) proof
+    fix x
+    assume hx
+    have m := mp(all_elim(mt, {x}), hx)
+    have c1: mallocng.on_list(L, x) -> fn_update(fn_update(fn_update(fn_update(R.metas[x], "prev", 0), "next", 0), "avail", 0), "freed", 0) =
+        fn_update(fn_update(fn_update(fn_update(A.metas[x], "prev", 0), "next", 0), "avail", 0), "freed", 0) proof
+      assume ol
+      have m1 := trans(m, mp(ite_t[c := mallocng.on_list(L, x), a := fn_update(fn_update(A.metas[x], "prev", gimple.bytes_at(vm, x, 8)), "next", gimple.bytes_at(vm, int_add(x, 8), 8)), b := A.metas[x]], ol))
+      show by simp(m1)
+    qed
+    have c2: !mallocng.on_list(L, x) -> fn_update(fn_update(fn_update(fn_update(R.metas[x], "prev", 0), "next", 0), "avail", 0), "freed", 0) =
+        fn_update(fn_update(fn_update(fn_update(A.metas[x], "prev", 0), "next", 0), "avail", 0), "freed", 0) proof
+      assume ol
+      have m1 := trans(m, mp(ite_f[c := mallocng.on_list(L, x), a := fn_update(fn_update(A.metas[x], "prev", gimple.bytes_at(vm, x, 8)), "next", gimple.bytes_at(vm, int_add(x, 8), 8)), b := A.metas[x]], ol))
+      show by simp(m1)
+    qed
+    show by taut(c1, c2)
+  qed
+  // the lists: sc's l2, the others as before (past the 48: none either way)
+  have al: A.active in list_type(list_type(omega)) by simp(ha)
+  have afun := apply(mp.list_fun[l := A.active, t := list_type(omega)], al)
+  have eta := mp(fn_eta[f := A.active, d := seq_len(A.active)], taut(afun), taut(afun))
+  have ra: R.active = fn_build(seq_len(A.active), s. ite(s = sc, l2, A.active[s])) by defs(simp(), mp.relist)
+  have lo: all x. x in omega -> !(x = sc) -> R.active[x] = A.active[x] proof
+    fix x
+    assume hx hn
+    have inl: int_lt(x, seq_len(A.active)) -> R.active[x] = A.active[x] proof
+      assume xl
+      have r := mp(all_elim(lt, {x}), hx, xl)
+      show := trans(r, mp(ite_f[c := x = sc, a := l2, b := A.active[x]], hn))
+    qed
+    have out: !int_lt(x, seq_len(A.active)) -> R.active[x] = A.active[x] proof
+      assume xl
+      have nm: !(x in seq_len(A.active)) proof
+        assume m
+        show by taut(xl, mp(nat_mem_lt[k := seq_len(A.active), i := x], (seq_len(A.active) in omega by arith(h48)), m))
+      qed
+      have r1 := rewrite(sym(ra), mp(app_fn_build_out[d := seq_len(A.active), v := s. ite(s = sc, l2, A.active[s]), a := x], nm))
+      have r2 := rewrite(eta, mp(app_fn_build_out[d := seq_len(A.active), v := s. A.active[s], a := x], nm))
+      show := trans(r1, sym(r2))
+    qed
+    show by taut(inl, out)
+  qed
+  have rs: R.active[sc] = l2 := trans(mp(all_elim(lt, {sc}), hs, (int_lt(sc, seq_len(A.active)) by arith(hsl, h48))), mp(ite_t[c := sc = sc, a := l2, b := A.active[sc]], refl({sc})))
+  have q1: all x. x in omega -> mallocng.on_list(R.active[sc], x) -> mallocng.on_list(L, x) proof
+    fix x
+    assume _ h
+    show := mp(all_elim(hsub, {x}), rewrite(rs, h))
+  qed
+  have q2: all x. x in omega -> mallocng.on_list(L, x) && !mallocng.on_list(R.active[sc], x) -> !mallocng.has_unused(A, x) proof
+    fix x
+    assume hx h
+    show := mp(all_elim(hdrop, {x}), hx, rewrite(rs, h))
+  qed
+  show by defs(taut(e, mq, ln, lo, q1, q2), mallocng.reorganised)
+qed
+
+// (a list operation: nothing outside the allocator touched -- the head word
+// in the context, the links in the groups' meta records)
+theorem mp.rl_unt(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) -> mallocng.untouched(c, A, b, vm, V2, empty)
+proof
+  assume P
+  let FP := mallocng.footprint(c, A, b)
+  let PH := int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc))
+  have {hc = cfg, hu = univ, ha = abs, hh = inv, hs = scn, hsl = scl, only = only} := P
+  have fo lo := expand(only, mallocng_specs.links_only)
+  have {ep = pages} := apply(mp.rl_pages, P)
+  have {H0 = inv} := expand(hh, mallocng.holds_in)
+  have {hac = active} := expand(H0, mallocng.holds)
+  have ka: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
+  have kz: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have co: c.ctx in omega by simp(hc)
+  have ut: all x0. x0 in omega -> (!(x0 in FP) && !(x0 in empty)) && x86_64_linux.mapped(vm, int_div(x0, x86_64_linux.PAGE)) ->
+      V2.bytes[bits_of_int(64, x0)] = vm.bytes[bits_of_int(64, x0)] &&
+      V2.pages[int_div(x0, x86_64_linux.PAGE)] = vm.pages[int_div(x0, x86_64_linux.PAGE)] proof
+    fix a
+    assume hao hx
+    have nf _ hmp := hx
+    have lt _ := expand(hmp, x86_64_linux.mapped)
+    have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+    have al: int_lt(a, 18446744073709551616) by arith(lt, ts, pg, hao)
+    // (the head word: the context's)
+    have oh: !(int_le(PH, a) && int_lt(a, int_add(PH, 8))) proof
+      assume w
+      have w1 w2 := w
+      have f := apply(mp.ctx_fp[c := c, A := A, vm := vm, b := b, a := a], hc, hu, ha, hh, hao, arith(w1, ka, hs, co), arith(w2, ka, kz, hsl, hs))
+      show by taut(f, nf)
+    qed
+    // (a group's links: its meta record's)
+    have on: all x1. x1 in omega -> int_lt(x1, seq_len(A.active[sc])) -> !(int_le(A.active[sc][x1], a) && int_lt(a, int_add(A.active[sc][x1], 16))) proof
+      fix k
+      assume hk hkl
+      assume w
+      have w1 w2 := w
+      have iu _ _ := mp(all_elim(expand(hac, mallocng.active_ok), {sc}, {k}), conj(hs, hk), conj(hsl, hkl))
+      have go _ inr := apply(mp.meta_mem, hc, hu, ha, hh, iu)
+      have inh _ _ := mp(all_elim(inr, {a}), hao, w1, arith(w2, go))
+      have {inf = fp} := apply(mp.held_fp, inh)
+      show by taut(inf, nf)
+    qed
+    have al2: int_lt(a, int_pow(2, 64)) by arith(al)
+    have bb := mp(all_elim(lo, {a}), hao, taut(al2, oh, on))
+    have pq: V2.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)
+    show by taut(bb, pq)
+  qed
+  have e1 := mp(app_update_other[f := V2, k := "bytes", v := vm.bytes, x := "brk_start"], simp())
+  have es: V2.brk_start = vm.brk_start := sym(rewrite(fo, e1))
+  show by defs(taut(ut, es), mallocng.untouched)
+qed
+
+// A list operation on class sc's list (its memory as `rlpre` has it, the
+// groups past l2's head full, those dropped without a free slot): the
+// state relisted holds, a reorganisation, nothing outside touched, the
+// slots as before, the list l2
+theorem mp.relist_step(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
+  (all k. k in omega -> int_lt(0, k) -> int_lt(k, seq_len(l2)) -> A.metas[l2[k]].avail = 0 && !(A.metas[l2[k]].freed = 0)) ->
+  (all g. g in omega -> mallocng.on_list(A.active[sc], g) && !mallocng.on_list(l2, g) -> !mallocng.has_unused(A, g)) ->
+  !(A.init_done = 0) ->
+  abs: mp.relist(A, sc, l2, V2) in mallocng.Abs && univ: mp.relist(A, sc, l2, V2) in univ(1) &&
+  holds: mallocng.holds_in(c, mp.relist(A, sc, l2, V2), V2, b) && reorg: mallocng.reorganised(A, mp.relist(A, sc, l2, V2), sc) &&
+  unt: mallocng.untouched(c, A, b, vm, V2, empty) && slots: mp.relist(A, sc, l2, V2).slots = A.slots &&
+  list: mp.relist(A, sc, l2, V2).active[sc] = l2
+proof
+  assume P htail hdrop nz
+  let R := mp.relist(A, sc, l2, V2)
+  have {hc = cfg, hu = univ, ha = abs, hh = inv, hs = scn, hsl = scl, vb2 = vb2, l2t = l2t, sub = sub} := P
+  have hr := apply(mp.holds_relist, P, htail, nz)
+  have {a2 = abs, u2 = univ} := apply(mp.relist_abs[A := A, sc := sc, l2 := l2, vm := V2], ha, l2t, vb2)
+  have {H0 = inv} := expand(hh, mallocng.holds_in)
+  have {cok = ctx} := expand(H0, mallocng.holds)
+  have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok, mallocng.ctx_ok)
+  have ro := apply(mp.relist_reorg[A := A, sc := sc, l2 := l2, vm := V2], ha, hs, hsl, c11, sub, hdrop)
+  have ut := apply(mp.rl_unt, P)
+  have rsl: R.slots = A.slots by defs(simp(), mp.relist)
+  have {lt = list} := apply(mp.relist_at[A := A, sc := sc, l2 := l2, vm := V2], ha)
+  have rs: R.active[sc] = l2 := trans(mp(all_elim(lt, {sc}), hs, (int_lt(sc, seq_len(A.active)) by arith(hsl, c11))), mp(ite_t[c := sc = sc, a := l2, b := A.active[sc]], refl({sc})))
+  show by taut(a2, u2, hr, ro, ut, rsl, rs)
+qed
