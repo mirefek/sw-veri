@@ -36,7 +36,7 @@ FILES="core/prelude.core core/logic.core core/sets.core core/nat.core core/recor
   proofs/gimple_cut.core proofs/gimple_loop.core proofs/translate_bitfield.core
   $B/text.core $LOC proofs/a_crash.core proofs/mallocng_c1_cfg.core
   proofs/mallocng_mem.core proofs/mallocng_c2.core proofs/mallocng_bits.core proofs/mallocng_slots.core proofs/mallocng_ctx.core proofs/mallocng_cfg.core
-  proofs/abi_ghost.core proofs/gimple_ghost.core proofs/mallocng_abs.core proofs/mallocng_purpose.core"
+  proofs/abi_ghost.core proofs/gimple_ghost.core proofs/mallocng_abs.core proofs/mallocng_refine.core"
 if [ -n "$1" ]; then
   case " $(echo $FILES) " in
     *" $1 "*) ;;

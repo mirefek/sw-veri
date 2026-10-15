@@ -124,12 +124,11 @@ outcome.
   - The allocator's invariant and owned memory are parameters, constrained
     by laws.
   - The frame law: client writes outside owned memory keep the invariant.
-- **mallocng** (`layers/mallocng.sl`, `layers/mallocng_specs.sl`,
-  `layers/mallocng_purpose.sl`):
+- **mallocng** (`layers/mallocng.sl`, `layers/mallocng_specs.sl`):
   - mallocng's invariant, over an abstract state determined by memory;
-  - the specs of its internal functions, as contracts: on memory, and by
-    their purpose on the abstract state (a ghost of the C world,
-    `MallocAbs`).
+  - the specs of its internal functions, as contracts stating each one's
+    purpose: on the abstract state (a ghost of the C world, `MallocAbs`),
+    or on memory for the list and leaf functions.
 
 ## How a function is proven
 
@@ -194,14 +193,15 @@ For a function F, two halves:
     - the ABI's frame facts hold.
   - Calls use the call rule (`proofs/translate_call.core`).
 - **C2, readable GIMPLE ⊑ F's spec.** Hand proofs run the GIMPLE backwards
-  by inversion lemmas (`proofs/gimple_inv.core`, `proofs/mallocng_c2.core`).
+  by inversion lemmas (`proofs/gimple_inv.core`; `proofs/mallocng_refine.core`,
+  the leaf functions' in `proofs/mallocng_c2.core`).
   - A callee is used only through its contract: the call's outcomes follow
     from any contract the callee refines.
   - A caller proves the callee's precondition at the call.
 
 Transitivity gives machine code ⊑ spec: one lemma composes a function's
 two halves (`tr.implements_refine`, `proofs/mallocng_cfg.core`,
-`proofs/mallocng_purpose.core`). The
+`proofs/mallocng_refine.core`). The
 functions are composed bottom-up over the call graph. A callee is a parameter of its caller's
 GIMPLE, so each function is checked against its callees' specs.
 

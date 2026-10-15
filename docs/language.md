@@ -354,7 +354,7 @@ longest match wins, and a literal token beats a hole.
 
 **Specs with ghost state.** A spec may run on the C world extended by
 ghost fields (`state MallocAbs extends Heap { ghost A: Abs }`,
-layers/mallocng_purpose.sl): it reads the memory where that is its purpose, the
+layers/mallocng_specs.sl): it reads the memory where that is its purpose, the
 ghosts where that is, and updates the ghosts by `ghost f := e`. The code
 has no ghosts, so nothing is erased: the refinement says that for every
 initial ghost some final one matches (`refines_ghost(code, spec, abi.World,
@@ -372,7 +372,7 @@ extension (`g.bind_ghost`), so a C function value's wrapper refines when
 its procedure does (`g.fun_res_ghost`, as `g.fun_res`), and a contract's
 runs are introduced by its two cases (`ct.contract_ovf`,
 `ct.contract_ret`; proofs/gimple_ghost.core). The user's proof is then the
-spec's idea: get_slot_index's (proofs/mallocng_purpose.core) is that the
+spec's idea: get_slot_index's (proofs/mallocng_refine.core) is that the
 byte it reads is the slot's header, the allocator's, its low bits the
 slot's index (`mp.slot_hdr`, from the invariant).
 

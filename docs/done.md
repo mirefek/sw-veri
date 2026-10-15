@@ -460,11 +460,11 @@ item is a short summary of finished work; details are in the files named.
   (raising, return, divergence, crash) for any ghost part
   (proofs/abi_ghost.core); the ghost-free case its instance. The malloc
   layers' state for it: `MallocAbs`, the abstract state a ghost beside
-  malloc's blocks (layers/mallocng_purpose.sl).
+  malloc's blocks (layers/mallocng_specs.sl).
 - **get_slot_index by its purpose**: its machine code implements
-  `get_slot_index_purpose` -- the index of the slot where p's block or
+  `get_slot_index_spec` -- the index of the slot where p's block or
   nested group starts, in the abstract state (`mp.gsi_implements`,
-  proofs/mallocng_purpose.core). The user's part: the byte read is the
+  proofs/mallocng_refine.core). The user's part: the byte read is the
   slot's header, the allocator's, its low bits the index (`mp.slot_hdr`;
   the footprint's ranges as lists, `mp.group_fp`). The invariant gained
   what this needed: a slot's in-band header no client's (`hdr_free`), the
@@ -621,10 +621,10 @@ item is a short summary of finished work; details are in the files named.
   them out). A function writing only those keeps the invariant by the
   view alone (`mp.held_*`, `mp.mo_held`, `mp.free_rw_pages`).
 - **The context's counters by their purpose**: step_seq, decay_bounces
-  and account_bounce refine one spec (`counters_purpose`: the invariant
+  and account_bounce refine one spec (`counters_spec`: the invariant
   required, only the context's free bytes changed -- `ctx_only`; the
   invariant kept by it, `mp.co_holds`), is_bouncing one answering any
-  word (`is_bouncing_purpose`); their machine code implements them
+  word (`is_bouncing_spec`); their machine code implements them
   (`mp.sq_implements`, ...). Their preconditions from the invariant (the
   free bytes accessible: `mp.free_usable`), their writes free bytes
   (`mp.co_store`, `mp.sq_only`, ...); one refinement for the three
@@ -643,3 +643,7 @@ item is a short summary of finished work; details are in the files named.
   (`mp.ctx_acc`); words from read-write bytes (`mp.rw_usable`,
   `mp.word_rw`). The list functions' callers' rules complete:
   dequeue_head's (`mp.dqh_q`) and free_meta's (`mp.fm_q`).
+- **One specs layer**: every function's spec states its purpose, so the
+  purpose specs joined the leaf specs and the code's effect summaries in
+  layers/mallocng_specs.sl (`X_spec`); their refinements in
+  proofs/mallocng_refine.core.

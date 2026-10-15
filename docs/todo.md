@@ -3,25 +3,10 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Now: meaning-level specs for the functions with memory-level ones
+## 1. Now: the specs' loose ends
 
-Each function's code refined directly to a spec by its purpose, over the
-abstract state (layers/mallocng_purpose.sl, proofs/mallocng_purpose.core;
-the pattern of get_slot_index, get_meta, get_stride, `__malloc_allzerop`:
-a contract with the ghost part read, the refinement, the callers' rule,
-the function value, the machine code). Its memory-level spec
-(layers/mallocng_specs.sl), C2 and compositions retired once no caller
-uses them; what the code does kept as an effect summary where a proof
-needs it (`ms.gm_run`). The invariant composed of more basic definitions,
-so a function that breaks it in part still states its exact contract and
-keeps the lower-level properties. Bottom-up:
-
-- Already specs by purpose, kept: a_ctz_32, a_clz_32, size_to_class,
-  size_overflows, a_cas, errno_location, a_crash, resetlock (the lock word
-  0), upgradelock (nothing).
-- Then the "purpose" name dropped: these are the specs.
-
-Along the way:
+Every function's spec states its purpose (layers/mallocng_specs.sl), its
+code refining it directly (proofs/mallocng_refine.core). Left over:
 - The ABI-level form of the functions with World specs (set_size,
   dequeue, dequeue_head, queue, free_meta, the leaf specs; proved to
   `tr.implements_at` so far): `tr.div_raises` of the spec by the World
@@ -51,8 +36,8 @@ Along the way:
 
 ## 3. Then: the remaining functions
 
-- try_avail, alloc_slot (specs written, `try_avail_purpose`,
-  `alloc_slot_purpose`; C1 done), `__malloc_alloc_meta`.
+- try_avail, alloc_slot (specs written, `try_avail_spec`,
+  `alloc_slot_spec`; C1 done), `__malloc_alloc_meta`.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
