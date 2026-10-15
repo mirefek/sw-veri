@@ -670,6 +670,16 @@ item is a short summary of finished work; details are in the files named.
   separation, `mp.reg_nogrp`, `mp.grp_noarea`); the groups transferred one
   by one (`mp.group_tr_g`), the groups nesting the header byte excluding
   their nested slots.
+- **A slot reserved** (try_avail; `mp.holds_in_res`, the state
+  `mp.res_abs`): in two steps -- the reservation on the old view
+  (`mp.holds_reserve`: the masks frame on A with the mask changed, then
+  the slots replaced, `mp.sl_same`, `mp.blocks_res`, `mp.normal_sl`,
+  `mp.perms_sl`, `mp.masks_res`; the group transfer `mp.group_tr_s` over
+  `mp.geoms`, slots allowed from unused to reserved), then the view
+  restricted (`mp.holds_restrict`: the invariant reads no reserved slot's
+  interior, `mp.res_nested`). The masks frame's page premise leaves
+  reserved bytes free (an image page in none: `mp.page_nores`).
+  `bit_clear` (core/bits.core): x - 2^k, bit k set.
 - **Induction from omega's definition**: induction by membership
   (`omega_mem_ind`, the ordinals' induction on omega) in core/sets.core;
   the induction on naturals (`nat_ind`) and strong induction
