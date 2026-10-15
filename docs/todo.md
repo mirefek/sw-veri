@@ -66,10 +66,10 @@ code refining it directly (proofs/mallocng_refine.core). Left over:
 - `musl.free_step` (free always has a step), open in
   proofs/musl_malloc.core.
 - The C world owning only its statics, heap and stack objects.
-- `slc heapcheck` slow since the class table and permission clauses
-  (0991891): a thorough check takes ~35 s in image_ok, ~30 s in perms_ok
-  on a tiny heap, so the ignored test's short run (40 calls) takes far
-  longer than its "minute or two"; the per-byte evaluation to speed up.
+- `slc heapcheck` on larger heaps: each byte's view membership (`held`)
+  searches every group's slots (`in_reserved`), so a check grows with
+  groups x bytes (~2 min at 60 groups; the ignored tests take 3.5 min).
+  An interval form of the footprint per check would make it linear.
 
 ## 6. Init: startup to main
 

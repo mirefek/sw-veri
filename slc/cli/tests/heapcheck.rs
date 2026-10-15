@@ -2,7 +2,7 @@
 //! corruptions it is shown (self-test), and the invariant holds on a short
 //! stress run. Needs `build/stress_malloc`, built with musl:
 //!   build/musl/bin/musl-gcc -static -O2 -o build/stress_malloc tests/stress_malloc.c
-//! Slow (a minute or two): `cargo test --release -- --ignored`.
+//! Slow (three or four minutes): `cargo test --release -- --ignored`.
 
 fn heapcheck(args: &[&str]) -> (bool, String) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
