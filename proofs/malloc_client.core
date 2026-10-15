@@ -15,13 +15,13 @@ qed
 // law free_step rules out the path where no allocator step exists.)
 theorem malloc.free_live(i, o, e, p, s, r):
   malloc.free_step(i, o) -> s in rec_and(abi.World, malloc.Heap.ghost) -> p in bits(64) ->
-  runs(malloc.free(i, o, e, p), s, r) -> !(p = 0) -> s in i -> malloc.errno_ok(e, s) -> !(app(app(s, "blocks"), p) = none) ->
-    ex t. r = ok(t, empty) && app(t, "blocks") = malloc.set_block(app(s, "blocks"), p, none)
+  runs(malloc.free(i, o, e, p), s, r) -> !(p = 0) -> s in i -> malloc.errno_ok(e, s) -> !(s.blocks[p] = none) ->
+    ex t. r = ok(t, empty) && t.blocks = malloc.set_block(s.blocks, p, none)
 proof
   assume hl hs hp h h0 hi he hb
   // a step exists (the law, for s and p)
   have hsp: s in rec_and(abi.World, malloc.Heap.ghost) && p in bits(64) by taut(hs, hp)
-  have hib: s in i && !(app(app(s, "blocks"), p) = none) by taut(hi, hb)
+  have hib: s in i && !(s.blocks[p] = none) by taut(hi, hb)
   have step := mp(mp(all_elim(all_elim(expand(hl, malloc.free_step), {s}), {p}), hsp), hib)
   show by simp(h, h0, hi, he, hb, step)
 qed
@@ -39,12 +39,12 @@ proof
 qed
 
 // reading the block set where it was set
-theorem malloc.set_block_at: all b p z. p in bits(64) -> app(malloc.set_block(b, p, z), p) = z
+theorem malloc.set_block_at: all b p z. p in bits(64) -> malloc.set_block(b, p, z)[p] = z
 proof
   fix b p z
   assume hp
-  have a := mp(app_fn_build[d := bits(64), v := x. ite(x = p, z, app(b, x)), a := p], hp)
-  have it := mp(ite_t[c := p = p, a := z, b := app(b, p)], eq_refl[a := p])
+  have a := mp(app_fn_build[d := bits(64), v := x. ite(x = p, z, b[x]), a := p], hp)
+  have it := mp(ite_t[c := p = p, a := z, b := b[p]], eq_refl[a := p])
   show by defs(taut(trans(a, it)), malloc.set_block)
 qed
 
@@ -53,7 +53,7 @@ qed
 // a rule, closes it.)
 theorem malloc.result_live(i, o, e, n, s, r, t, v):
   runs(malloc.malloc(i, o, e, n), s, r) -> s in i -> malloc.errno_ok(e, s) ->
-  r = ok(t, v) -> !(v = 0) -> int_mod(v, 16) = 0 && !(app(app(t, "blocks"), v) = none)
+  r = ok(t, v) -> !(v = 0) -> int_mod(v, 16) = 0 && !(t.blocks[v] = none)
 proof
   assume h hi he hr h0
   show by simp(h, hi, he, hr, h0, malloc.set_block_at, {l0 l. snd(l) in omega})
@@ -88,15 +88,15 @@ proof
   // updating vm with its value changes nothing
   have fu := rewrite(sym(sw), mp(mp(mp(fn_update_union[w := w, g := g, k := "vm"], fw), vw), ng))
   // a step to s itself: frame and invariant kept, nothing newly owned
-  have own: all a. a in omega -> a in app(o, s) ->
-      (a in app(o, s) || a in x) || !x86_64_linux.mapped(app(s, "vm"), int_div(a, x86_64_linux.PAGE)) proof
+  have own: all a. a in omega -> a in o[s] ->
+      (a in o[s] || a in x) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
     fix a
     show by taut()
   qed
   have st: malloc.step_ok(i, o, s, s, x) by defs(simp(hi, own), malloc.step_ok, malloc.alloc_frame)
   have st2 := subst({t. malloc.step_ok(i, o, s, t, x)}, sym(fu), st)
-  have vm: app(w, "vm") in x86_64_linux.Vm by taut(ww)
-  show by ex_intro({app(w, "vm")}, taut(vm, st2))
+  have vm: w.vm in x86_64_linux.Vm by taut(ww)
+  show by ex_intro({w.vm}, taut(vm, st2))
 qed
 
 // malloc terminates. The loop of set_errno (state: the program state and

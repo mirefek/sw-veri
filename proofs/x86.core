@@ -9,7 +9,7 @@
 // before (`x86.store_bytes_closed`).
 
 // fetching a byte whose page is mapped and executable changes nothing
-theorem x86.touch_fetch: all m a o. x86_64_linux.fetchable(app(m, "vm"), a) -> runs(x86_64_linux.touch(a, 2), m, o) -> o = ok(m, empty)
+theorem x86.touch_fetch: all m a o. x86_64_linux.fetchable(m.vm, a) -> runs(x86_64_linux.touch(a, 2), m, o) -> o = ok(m, empty)
 proof
   fix m a o
   assume hf h
@@ -18,7 +18,7 @@ proof
 qed
 
 // accessing an accessible byte changes nothing (any access kind)
-theorem x86.touch_access: all m a k o. x86_64_linux.can_access(app(m, "vm"), a, k) -> runs(x86_64_linux.touch(a, k), m, o) -> o = ok(m, empty)
+theorem x86.touch_access: all m a k o. x86_64_linux.can_access(m.vm, a, k) -> runs(x86_64_linux.touch(a, k), m, o) -> o = ok(m, empty)
 proof
   fix m a k o
   assume hf h
@@ -28,7 +28,7 @@ qed
 
 // accessing n bytes that are all accessible changes nothing
 theorem x86.touch_range_access: all m a n k o. n in omega ->
-  (all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(app(m, "vm"), bits_add(64, a, bits_of_int(64, i)), k)) ->
+  (all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(m.vm, bits_add(64, a, bits_of_int(64, i)), k)) ->
   runs(x86_64_linux.touch_range(a, n, k), m, o) -> o = ok(m, empty)
 proof
   fix m a n k o
@@ -38,7 +38,7 @@ qed
 
 // fetching n bytes that are all fetchable changes nothing
 theorem x86.touch_range_fetch: all m a n o. n in omega ->
-  (all i. i in omega -> int_lt(i, n) -> x86_64_linux.fetchable(app(m, "vm"), bits_add(64, a, bits_of_int(64, i)))) ->
+  (all i. i in omega -> int_lt(i, n) -> x86_64_linux.fetchable(m.vm, bits_add(64, a, bits_of_int(64, i)))) ->
   runs(x86_64_linux.touch_range(a, n, 2), m, o) -> o = ok(m, empty)
 proof
   fix m a n o
@@ -62,11 +62,11 @@ qed
 theorem x86.store_other: all vm b a n v c. c in bits(64) -> a in bits(64) ->
   (all i. i in omega -> int_lt(i, n) -> x86_64_linux.can_access(vm, bits_add(64, a, bits_of_int(64, i)), 1)) ->
   !x86_64_linux.can_access(vm, c, 1) ->
-  app(x86_64_linux.store_le(b, a, n, v), c) = app(b, c)
+  x86_64_linux.store_le(b, a, n, v)[c] = b[c]
 proof
   fix vm b a n v c
   assume hc ha hw hn
-  have e1 := mp(app_fn_build[d := bits(64), v := x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)), a := c], hc)
+  have e1 := mp(app_fn_build[d := bits(64), v := x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]), a := c], hc)
   have k: bits_sub(64, c, a) in omega by defs(simp(hc, ha), bits_sub, pow2)
   have id := mp(mp(x86.bits_add_sub[a := a, c := c], hc), ha)
   have nlt0: int_lt(bits_sub(64, c, a), n) -> false proof
@@ -75,7 +75,7 @@ proof
     show by taut(rewrite(id, w), hn)
   qed
   have nlt: !int_lt(bits_sub(64, c, a), n) by taut(nlt0)
-  have f := mp(ite_f[c := int_lt(bits_sub(64, c, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, c, a)))), b := app(b, c)], nlt)
+  have f := mp(ite_f[c := int_lt(bits_sub(64, c, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, c, a)))), b := b[c]], nlt)
   show by defs(taut(trans(e1, f)), x86_64_linux.store_le)
 qed
 // storing byte i after bytes 0..i-1 is storing bytes 0..i
@@ -87,9 +87,9 @@ proof
   have kb: bits_add(64, a, bits_of_int(64, i)) in bits(64) by defs(simp(ha, hi, hm), bits_add, bits_of_int, pow2)
   have dk: bits_sub(64, bits_add(64, a, bits_of_int(64, i)), a) = i by defs(simp(ha, hi, hm), bits_add, bits_sub, bits_of_int, pow2)
   have lt1: int_lt(i, int_add(i, 1)) by arith(hi)
-  have gk0 := mp(ite_t[c := int_lt(i, int_add(i, 1)), a := bits_of_int(8, int_div(v, int_pow(256, i))), b := app(b, bits_add(64, a, bits_of_int(64, i)))], lt1)
-  have gk: ite(int_lt(bits_sub(64, bits_add(64, a, bits_of_int(64, i)), a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, bits_add(64, a, bits_of_int(64, i)), a)))), app(b, bits_add(64, a, bits_of_int(64, i)))) = bits_of_int(8, int_div(v, int_pow(256, i))) by simp(dk, gk0)
-  have others: all x. x in bits(64) -> !(x = bits_add(64, a, bits_of_int(64, i))) -> ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+  have gk0 := mp(ite_t[c := int_lt(i, int_add(i, 1)), a := bits_of_int(8, int_div(v, int_pow(256, i))), b := b[bits_add(64, a, bits_of_int(64, i))]], lt1)
+  have gk: ite(int_lt(bits_sub(64, bits_add(64, a, bits_of_int(64, i)), a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, bits_add(64, a, bits_of_int(64, i)), a)))), b[bits_add(64, a, bits_of_int(64, i))]) = bits_of_int(8, int_div(v, int_pow(256, i))) by simp(dk, gk0)
+  have others: all x. x in bits(64) -> !(x = bits_add(64, a, bits_of_int(64, i))) -> ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) proof
     fix x
     assume xb xk
     have db: bits_sub(64, x, a) in omega by defs(simp(xb, ha), bits_sub, pow2)
@@ -99,23 +99,23 @@ proof
       show by taut(sym(rewrite(e, back)), xk)
     qed
     have nei: !(bits_sub(64, x, a) = i) by taut(ne0)
-    have c1: int_lt(bits_sub(64, x, a), i) -> ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+    have c1: int_lt(bits_sub(64, x, a), i) -> ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) proof
       assume l
       have l2: int_lt(bits_sub(64, x, a), int_add(i, 1)) by arith(l, db, hi)
-      have t1 := mp(ite_t[c := int_lt(bits_sub(64, x, a), int_add(i, 1)), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l2)
-      have t2 := mp(ite_t[c := int_lt(bits_sub(64, x, a), i), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l)
+      have t1 := mp(ite_t[c := int_lt(bits_sub(64, x, a), int_add(i, 1)), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], l2)
+      have t2 := mp(ite_t[c := int_lt(bits_sub(64, x, a), i), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], l)
       show by taut(trans(t1, sym(t2)))
     qed
-    have c2: !int_lt(bits_sub(64, x, a), i) -> ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) proof
+    have c2: !int_lt(bits_sub(64, x, a), i) -> ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) = ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) proof
       assume l
       have l2: !int_lt(bits_sub(64, x, a), int_add(i, 1)) by arith(l, db, hi, nei)
-      have t1 := mp(ite_f[c := int_lt(bits_sub(64, x, a), int_add(i, 1)), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l2)
-      have t2 := mp(ite_f[c := int_lt(bits_sub(64, x, a), i), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], l)
+      have t1 := mp(ite_f[c := int_lt(bits_sub(64, x, a), int_add(i, 1)), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], l2)
+      have t2 := mp(ite_f[c := int_lt(bits_sub(64, x, a), i), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], l)
       show by taut(trans(t1, sym(t2)))
     qed
     show by taut(c1, c2)
   qed
-  have fu := mp(mp(mp(fn_update_build[d := bits(64), f := x. ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)), g := x. ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)), k := bits_add(64, a, bits_of_int(64, i)), w := bits_of_int(8, int_div(v, int_pow(256, i)))], kb), gk), others)
+  have fu := mp(mp(mp(fn_update_build[d := bits(64), f := x. ite(int_lt(bits_sub(64, x, a), i), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]), g := x. ite(int_lt(bits_sub(64, x, a), int_add(i, 1)), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]), k := bits_add(64, a, bits_of_int(64, i)), w := bits_of_int(8, int_div(v, int_pow(256, i)))], kb), gk), others)
   show by defs(taut(fu), x86_64_linux.store_le)
 qed
 
@@ -124,13 +124,13 @@ theorem x86.store_zero: all b a v. is_fun(b) -> dom(b) = bits(64) -> a in bits(6
 proof
   fix b a v
   assume hf hd ha
-  have pw: all x. x in bits(64) -> ite(int_lt(bits_sub(64, x, a), 0), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) = app(b, x) proof
+  have pw: all x. x in bits(64) -> ite(int_lt(bits_sub(64, x, a), 0), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) = b[x] proof
     fix x
     assume xb
     have n0: !int_lt(bits_sub(64, x, a), 0) by defs(simp(xb, ha), bits_sub, pow2)
-    show by taut(mp(ite_f[c := int_lt(bits_sub(64, x, a), 0), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], n0))
+    show by taut(mp(ite_f[c := int_lt(bits_sub(64, x, a), 0), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], n0))
   qed
-  have ext := mp(fn_build_ext[d := bits(64), f := x. ite(int_lt(bits_sub(64, x, a), 0), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)), g := x. app(b, x)], pw)
+  have ext := mp(fn_build_ext[d := bits(64), f := x. ite(int_lt(bits_sub(64, x, a), 0), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]), g := x. b[x]], pw)
   have eta := mp(mp(fn_eta[f := b, d := bits(64)], hf), hd)
   show by defs(taut(trans(ext, eta)), x86_64_linux.store_le)
 qed
@@ -148,19 +148,19 @@ qed
 // (the model stores at most 16) and a machine whose memory is a function
 // on 64-bit addresses.
 theorem x86.store_bytes_closed: all m a n v o. n in omega -> int_le(n, 18446744073709551616) -> a in bits(64) ->
-  is_fun(app(app(m, "vm"), "bytes")) -> dom(app(app(m, "vm"), "bytes")) = bits(64) ->
-  is_fun(m) -> "vm" in dom(m) -> is_fun(app(m, "vm")) -> "bytes" in dom(app(m, "vm")) ->
-  runs(x86_checks.store_bytes(a, n, v), m, o) -> o = ok(fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, n, v))), empty)
+  is_fun(m.vm["bytes"]) -> dom(m.vm["bytes"]) = bits(64) ->
+  is_fun(m) -> "vm" in dom(m) -> is_fun(m.vm) -> "bytes" in dom(m.vm) ->
+  runs(x86_checks.store_bytes(a, n, v), m, o) -> o = ok(fn_update(m, "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm["bytes"], a, n, v))), empty)
 proof
   fix m a n v o
   assume hn hm ha hb hd hf hv hf2 hv2 h
   // the start: no bytes stored is m itself
-  have z := mp(mp(mp(all_elim(all_elim(all_elim(x86.store_zero, {app(app(m, "vm"), "bytes")}), {a}), {v}), hb), hd), ha)
-  have s1 := mp(mp(fn_update_same[f := app(m, "vm"), k := "bytes"], hf2), hv2)
+  have z := mp(mp(mp(all_elim(all_elim(all_elim(x86.store_zero, {m.vm["bytes"]}), {a}), {v}), hb), hd), ha)
+  have s1 := mp(mp(fn_update_same[f := m.vm, k := "bytes"], hf2), hv2)
   have s2 := mp(mp(fn_update_same[f := m, k := "vm"], hf), hv)
-  have start: fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, 0, v))) = m by taut(trans(rewrite(sym(z), rewrite(sym(s1), s2)), refl({m})))
+  have start: fn_update(m, "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm["bytes"], a, 0, v))) = m by taut(trans(rewrite(sym(z), rewrite(sym(s1), s2)), refl({m})))
   show by simp(h, hn, hm, ha, start, x86.store_step, x86.le_not_lt,
-    {l0 l. snd(l) in omega && int_le(snd(l), n) && fst(l) = fn_update(m, "vm", fn_update(app(m, "vm"), "bytes", x86_64_linux.store_le(app(app(m, "vm"), "bytes"), a, snd(l), v)))}, {l. int_sub(n, snd(l))})
+    {l0 l. snd(l) in omega && int_le(snd(l), n) && fst(l) = fn_update(m, "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm["bytes"], a, snd(l), v)))}, {l. int_sub(n, snd(l))})
 qed
 
 // access rights are per page
@@ -184,43 +184,43 @@ theorem x86.store_typed: all b a n v. b in fn_space(bits(64), bits(8)) -> x86_64
 proof
   fix b a n v
   assume bt
-  have vals: all x. x in bits(64) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) in bits(8) proof
+  have vals: all x. x in bits(64) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) in bits(8) proof
     fix x
     assume hx
     have ax := mp(mp(fn_space_app[a := bits(64), b := bits(8), f := b, x := x], bt), hx)
-    have c1: int_lt(bits_sub(64, x, a), n) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) in bits(8) proof
+    have c1: int_lt(bits_sub(64, x, a), n) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) in bits(8) proof
       assume hc
-      have e := mp(ite_t[c := int_lt(bits_sub(64, x, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], hc)
+      have e := mp(ite_t[c := int_lt(bits_sub(64, x, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], hc)
       have m: bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))) in bits(8) by simp()
       show := rewrite(sym(e), m)
     qed
-    have c2: !int_lt(bits_sub(64, x, a), n) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)) in bits(8) proof
+    have c2: !int_lt(bits_sub(64, x, a), n) -> ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]) in bits(8) proof
       assume hc
-      have e := mp(ite_f[c := int_lt(bits_sub(64, x, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := app(b, x)], hc)
+      have e := mp(ite_f[c := int_lt(bits_sub(64, x, a), n), a := bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b := b[x]], hc)
       show := rewrite(sym(e), ax)
     qed
     show by taut(c1, c2)
   qed
-  have st := mp(fn_build_space[d := bits(64), v := x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), app(b, x)), b := bits(8)], vals)
+  have st := mp(fn_build_space[d := bits(64), v := x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, a)))), b[x]), b := bits(8)], vals)
   show by defs(st, x86_64_linux.store_le)
 qed
 
 // storing bytes keeps a memory well-typed
-theorem x86.store_vm: all vm a n v. vm in x86_64_linux.Vm -> fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)) in univ(1) ->
-  fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)) in x86_64_linux.Vm
+theorem x86.store_vm: all vm a n v. vm in x86_64_linux.Vm -> fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)) in univ(1) ->
+  fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)) in x86_64_linux.Vm
 proof
   fix vm a n v
   assume h hu
-  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) && app(vm, "bytes") in fn_space(bits(64), bits(8)) by simp(expand(h, x86_64_linux.Vm))
-  have bt: app(vm, "bytes") in fn_space(bits(64), bits(8)) by taut(ht)
-  have st := expand(mp(all_elim(all_elim(all_elim(all_elim(x86.store_typed, {app(vm, "bytes")}), {a}), {n}), {v}), bt), x86_64_linux.store_le)
+  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) && vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(h, x86_64_linux.Vm))
+  have bt: vm.bytes in fn_space(bits(64), bits(8)) by taut(ht)
+  have st := expand(mp(all_elim(all_elim(all_elim(all_elim(x86.store_typed, {vm.bytes}), {a}), {n}), {v}), bt), x86_64_linux.store_le)
   have hf: is_fun(vm) by taut(ht)
   have bd: "bytes" in dom(vm) by simp(ht)
-  have fuf := mp(fn_update_fun[f := vm, k := "bytes", v := x86_64_linux.store_le(app(vm, "bytes"), a, n, v)], hf)
-  have fud := mp(mp(fn_update_dom[f := vm, k := "bytes", v := x86_64_linux.store_le(app(vm, "bytes"), a, n, v)], hf), bd)
+  have fuf := mp(fn_update_fun[f := vm, k := "bytes", v := x86_64_linux.store_le(vm.bytes, a, n, v)], hf)
+  have fud := mp(mp(fn_update_dom[f := vm, k := "bytes", v := x86_64_linux.store_le(vm.bytes, a, n, v)], hf), bd)
   have dv: dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by taut(ht)
-  have pv: ((((((is_fun(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v))) && dom(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v))) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "bytes") in fn_space(bits(64), bits(8))) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "stack_top") in bits(64)) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "stack_limit") in omega) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "brk_start") in bits(64)) && app(fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v)), "brk") in bits(64) by defs(simp(expand(h, x86_64_linux.Vm), st, expand(fuf, x86_64_linux.store_le), expand(fud, x86_64_linux.store_le), dv), x86_64_linux.store_le)
-  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))), p := x0. ((((((is_fun(x0) && dom(x0) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && app(x0, "pages") in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && app(x0, "bytes") in fn_space(bits(64), bits(8))) && app(x0, "stack_top") in bits(64)) && app(x0, "stack_limit") in omega) && app(x0, "brk_start") in bits(64)) && app(x0, "brk") in bits(64), r := fn_update(vm, "bytes", x86_64_linux.store_le(app(vm, "bytes"), a, n, v))], hu), fuf), trans(fud, dv)), pv)
+  have pv: ((((((is_fun(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v))) && dom(fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v))) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)).pages in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)).bytes in fn_space(bits(64), bits(8))) && fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)).stack_top in bits(64)) && fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)).stack_limit in omega) && fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)).brk_start in bits(64)) && fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v)).brk in bits(64) by defs(simp(expand(h, x86_64_linux.Vm), st, expand(fuf, x86_64_linux.store_le), expand(fud, x86_64_linux.store_le), dv), x86_64_linux.store_le)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))), p := x0. ((((((is_fun(x0) && dom(x0) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && x0.pages in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && x0.bytes in fn_space(bits(64), bits(8))) && x0.stack_top in bits(64)) && x0.stack_limit in omega) && x0.brk_start in bits(64)) && x0.brk in bits(64), r := fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, a, n, v))], hu), fuf), trans(fud, dv)), pv)
   show by defs(r, x86_64_linux.Vm)
 qed
 
@@ -279,7 +279,7 @@ qed
 
 // a condition code's test of the flags, computed (a conditional jump's
 // branch condition: `ja` is cc 7, !(cf || zf))
-abbrev x86.cc_test(f, cc) := ite(bits_slice(cc, 3, 1) = 0, app(f, "of"), ite(bits_slice(cc, 3, 1) = 1, app(f, "cf"), ite(bits_slice(cc, 3, 1) = 2, app(f, "zf"), ite(bits_slice(cc, 3, 1) = 3, app(f, "cf") || app(f, "zf"), ite(bits_slice(cc, 3, 1) = 4, app(f, "sf"), ite(bits_slice(cc, 3, 1) = 5, app(f, "pf"), ite(bits_slice(cc, 3, 1) = 6, !(app(f, "sf") = app(f, "of")), app(f, "zf") || !(app(f, "sf") = app(f, "of")))))))))
+abbrev x86.cc_test(f, cc) := ite(bits_slice(cc, 3, 1) = 0, f.of, ite(bits_slice(cc, 3, 1) = 1, f.cf, ite(bits_slice(cc, 3, 1) = 2, f.zf, ite(bits_slice(cc, 3, 1) = 3, f.cf || f.zf, ite(bits_slice(cc, 3, 1) = 4, f.sf, ite(bits_slice(cc, 3, 1) = 5, f.pf, ite(bits_slice(cc, 3, 1) = 6, !(f.sf = f.of), f.zf || !(f.sf = f.of))))))))
 // (bit 0 of the code negates the test)
 abbrev x86.cc_val(f, cc) := (!(x86.cc_test(f, cc) = bit(cc, 0)))
 
@@ -356,12 +356,12 @@ proof
   let K3 := insert("r", insert("w", insert("x", empty)))
   have k3: K3 in univ(1) by simp(x86.insert_univ)
   have bu: bool in univ(1) by defs(simp(), bool)
-  have pr: all r. r in set_select(powerset(cart(K3, univ(1))), x0. (((is_fun(x0) && dom(x0) = K3) && app(x0, "r") in bool) && app(x0, "w") in bool) && app(x0, "x") in bool) ->
-      is_fun(r) && (all y. y in K3 -> app(r, y) in bool) proof
+  have pr: all r. r in set_select(powerset(cart(K3, univ(1))), x0. (((is_fun(x0) && dom(x0) = K3) && x0.r in bool) && x0.w in bool) && x0.x in bool) ->
+      is_fun(r) && (all y. y in K3 -> r[y] in bool) proof
     fix r
     assume h
-    have hp: is_fun(r) && app(r, "r") in bool && app(r, "w") in bool && app(r, "x") in bool by simp(h)
-    have g: all y. y in K3 -> app(r, y) in bool proof
+    have hp: is_fun(r) && r.r in bool && r.w in bool && r.x in bool by simp(h)
+    have g: all y. y in K3 -> r[y] in bool proof
       fix y
       assume hy
       have c: y = "r" || y = "w" || y = "x" by simp(hy)
@@ -374,20 +374,20 @@ proof
   let K2 := insert("prot", insert("kind", empty))
   have k2: K2 in univ(1) by simp(x86.insert_univ)
   have b2 := mp(mp(union2_univ[u := 1, a := x86_64_linux.Prot, b := x86_64_linux.Kind], protu), kindu)
-  have pg: all r. r in set_select(powerset(cart(K2, univ(1))), x0. ((is_fun(x0) && dom(x0) = K2) && app(x0, "prot") in x86_64_linux.Prot) && app(x0, "kind") in x86_64_linux.Kind) ->
-      is_fun(r) && (all y. y in K2 -> app(r, y) in union2(x86_64_linux.Prot, x86_64_linux.Kind)) proof
+  have pg: all r. r in set_select(powerset(cart(K2, univ(1))), x0. ((is_fun(x0) && dom(x0) = K2) && x0.prot in x86_64_linux.Prot) && x0.kind in x86_64_linux.Kind) ->
+      is_fun(r) && (all y. y in K2 -> r[y] in union2(x86_64_linux.Prot, x86_64_linux.Kind)) proof
     fix r
     assume h
-    have hp: is_fun(r) && app(r, "prot") in x86_64_linux.Prot && app(r, "kind") in x86_64_linux.Kind by simp(h)
-    have g: all y. y in K2 -> app(r, y) in union2(x86_64_linux.Prot, x86_64_linux.Kind) proof
+    have hp: is_fun(r) && r.prot in x86_64_linux.Prot && r.kind in x86_64_linux.Kind by simp(h)
+    have g: all y. y in K2 -> r[y] in union2(x86_64_linux.Prot, x86_64_linux.Kind) proof
       fix y
       assume hy
       have c: y = "prot" || y = "kind" by simp(hy)
-      have c1: y = "prot" -> app(r, y) in union2(x86_64_linux.Prot, x86_64_linux.Kind) proof
+      have c1: y = "prot" -> r[y] in union2(x86_64_linux.Prot, x86_64_linux.Kind) proof
         assume e
         show by simp(e, hp, union2_iff)
       qed
-      have c2: y = "kind" -> app(r, y) in union2(x86_64_linux.Prot, x86_64_linux.Kind) proof
+      have c2: y = "kind" -> r[y] in union2(x86_64_linux.Prot, x86_64_linux.Kind) proof
         assume e
         show by simp(e, hp, union2_iff)
       qed
@@ -431,14 +431,14 @@ proof
   have bb := mp(mp(union2_univ[u := 1, a := fn_space(PN, option(x86_64_linux.Page)), b := union2(fn_space(bits(64), bits(8)), union2(bits(64), omega))], f1), bu2)
   let K6 := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))
   have k6: K6 in univ(1) by simp(x86.insert_univ)
-  have pv: all r. r in set_select(powerset(cart(K6, univ(1))), x0. ((((((is_fun(x0) && dom(x0) = K6) && app(x0, "pages") in fn_space(PN, option(x86_64_linux.Page))) &&
-      app(x0, "bytes") in fn_space(bits(64), bits(8))) && app(x0, "stack_top") in bits(64)) && app(x0, "stack_limit") in omega) && app(x0, "brk_start") in bits(64)) && app(x0, "brk") in bits(64)) ->
-      is_fun(r) && (all y. y in K6 -> app(r, y) in B) proof
+  have pv: all r. r in set_select(powerset(cart(K6, univ(1))), x0. ((((((is_fun(x0) && dom(x0) = K6) && x0.pages in fn_space(PN, option(x86_64_linux.Page))) &&
+      x0.bytes in fn_space(bits(64), bits(8))) && x0.stack_top in bits(64)) && x0.stack_limit in omega) && x0.brk_start in bits(64)) && x0.brk in bits(64)) ->
+      is_fun(r) && (all y. y in K6 -> r[y] in B) proof
     fix r
     assume h
-    have hp: is_fun(r) && app(r, "pages") in fn_space(PN, option(x86_64_linux.Page)) && app(r, "bytes") in fn_space(bits(64), bits(8)) &&
-      app(r, "stack_top") in bits(64) && app(r, "stack_limit") in omega && app(r, "brk_start") in bits(64) && app(r, "brk") in bits(64) by simp(h)
-    have g: all y. y in K6 -> app(r, y) in B proof
+    have hp: is_fun(r) && r.pages in fn_space(PN, option(x86_64_linux.Page)) && r.bytes in fn_space(bits(64), bits(8)) &&
+      r.stack_top in bits(64) && r.stack_limit in omega && r.brk_start in bits(64) && r.brk in bits(64) by simp(h)
+    have g: all y. y in K6 -> r[y] in B proof
       fix y
       assume hy
       have c: y = "pages" || y = "bytes" || y = "stack_top" || y = "stack_limit" || y = "brk_start" || y = "brk" by simp(hy)
@@ -458,13 +458,13 @@ theorem x86.le_at_nat(f, off, n): f in seq_type(bits(8)) -> n in omega -> x86_64
 proof
   assume hf hn
   have fp: f in powerset(cart(omega, bits(8))) by taut(unsel(expand(hf, seq_type)))
-  have el: all i. i in omega -> int_mul(app(f, int_add(off, i)), int_pow(256, i)) in omega proof
+  have el: all i. i in omega -> int_mul(f[int_add(off, i)], int_pow(256, i)) in omega proof
     fix i
     assume hi
     have sp := app_space[f := f, a := omega, b := bits(8), k := int_add(off, i)]
-    have c1: app(f, int_add(off, i)) in omega by simp(mp(sp, fp), lit_zero)
+    have c1: f[int_add(off, i)] in omega by simp(mp(sp, fp), lit_zero)
     have pw: int_lt(0, int_pow(256, i)) := mp(all_elim(pow256_pos, {i}), hi)
     show by arith(c1, pw)
   qed
-  show by defs(mp(int_sum_nat[a := 0, b := n, f := i. int_mul(app(f, int_add(off, i)), int_pow(256, i))], simp(), hn, el), x86_64_linux.le_at)
+  show by defs(mp(int_sum_nat[a := 0, b := n, f := i. int_mul(f[int_add(off, i)], int_pow(256, i))], simp(), hn, el), x86_64_linux.le_at)
 qed
