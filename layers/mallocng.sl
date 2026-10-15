@@ -403,10 +403,11 @@ pred active_ok(A: Abs) =
 // on a class's active list, at most one group with slots never handed out
 // (its active index below its last slot): only alloc_group makes such a
 // group, queued on an empty list (try_avail's `assert(mask)` rests on it)
+pred partial(m: Mem, A: Abs, g: nat) = b8(m, A.metas[g].mem + 8) % 32 < A.metas[g].last_idx
+
 pred partial_ok(A: Abs, m: Mem) =
-  all sc: nat, k: nat, k2: nat. sc < 48 && k < len(A.active[sc]) && k2 < len(A.active[sc]) &&
-    b8(m, A.metas[A.active[sc][k]].mem + 8) % 32 < A.metas[A.active[sc][k]].last_idx &&
-    b8(m, A.metas[A.active[sc][k2]].mem + 8) % 32 < A.metas[A.active[sc][k2]].last_idx -> k = k2
+  all sc: nat, g: nat, g2: nat. sc < 48 && on_list(A.active[sc], g) && on_list(A.active[sc], g2) &&
+    partial(m, A, g) && partial(m, A, g2) -> g = g2
 
 // every live block is in a slot (in only one: slots and groups do not overlap)
 pred blocks_ok(A: Abs, blocks: Addr -> Option[nat]) =
@@ -481,7 +482,7 @@ pred groups_apart(c: Cfg, A: Abs) =
 
 pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
   image: image_ok(c, m) && ctx: ctx_ok(c, A, m) && fresh: fresh_ok(c, A, m) && areas: areas_ok(c, A, m) &&
-  part: metas_partition(A) && used: used_ok(A, m, blocks) && active: active_ok(A) && in_slots: blocks_ok(A, blocks) &&
+  part: metas_partition(A) && used: used_ok(A, m, blocks) && active: active_ok(A) && partial: partial_ok(A, m) && in_slots: blocks_ok(A, blocks) &&
   normal: normal(A) && brk: brk_ok(A, brk) && perms: perms_ok(c, A, m, blocks) && sep: separate(regions(c, A)) &&
   wf: blocks_wf(blocks) &&       // (what the law inv_wf needs, stated directly)
   classes: classes_ok(c, m) && fixed: fixed_free(c, A, blocks) && apart: groups_apart(c, A)
