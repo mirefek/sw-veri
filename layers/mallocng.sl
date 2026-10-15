@@ -400,6 +400,14 @@ pred active_ok(A: Abs) =
     is_used(A, A.active[sc][k]) && A.metas[A.active[sc][k]].sizeclass = sc &&
     (k > 0 -> A.metas[A.active[sc][k]].avail = 0 && A.metas[A.active[sc][k]].freed != 0)
 
+// on a class's active list, at most one group with slots never handed out
+// (its active index below its last slot): only alloc_group makes such a
+// group, queued on an empty list (try_avail's `assert(mask)` rests on it)
+pred partial_ok(A: Abs, m: Mem) =
+  all sc: nat, k: nat, k2: nat. sc < 48 && k < len(A.active[sc]) && k2 < len(A.active[sc]) &&
+    b8(m, A.metas[A.active[sc][k]].mem + 8) % 32 < A.metas[A.active[sc][k]].last_idx &&
+    b8(m, A.metas[A.active[sc][k2]].mem + 8) % 32 < A.metas[A.active[sc][k2]].last_idx -> k = k2
+
 // every live block is in a slot (in only one: slots and groups do not overlap)
 pred blocks_ok(A: Abs, blocks: Addr -> Option[nat]) =
   all p: Addr. blocks[p] != none ->

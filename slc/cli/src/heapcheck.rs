@@ -381,11 +381,11 @@ fn n(x: u64) -> V {
 }
 
 fn rec(fields: Vec<(&str, V)>) -> V {
-    V::Rec(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    V::rec(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
 
 fn list(xs: impl IntoIterator<Item = V>) -> V {
-    V::Tuple(xs.into_iter().collect())
+    V::tuple(xs.into_iter().collect())
 }
 
 fn some(v: V) -> V {
@@ -505,6 +505,7 @@ impl Checker<'_> {
             ("areas_ok", "areas_ok", vec![c.clone(), av.clone(), m.clone()]),
             ("metas_partition", "metas_partition", vec![av.clone()]),
             ("active_ok", "active_ok", vec![av.clone()]),
+            ("partial_ok", "partial_ok", vec![av.clone(), m.clone()]),
             ("blocks_ok", "blocks_ok", vec![av.clone(), bl.clone()]),
             ("normal", "normal", vec![av.clone()]),
             ("brk_ok", "brk_ok", vec![av.clone(), vm.field("brk").unwrap().clone()]),
@@ -514,11 +515,19 @@ impl Checker<'_> {
             ("free_rw", "free_rw", vec![c.clone(), mf.clone()]),
         ];
         let timing = std::env::var("HEAPCHECK_TIMES").is_ok();
+        let profile = std::env::var("HEAPCHECK_PROFILE").is_ok();
         for (label, f, args) in parts {
             let t0 = std::time::Instant::now();
+            if profile {
+                sl_interp::profile_start();
+            }
             let r = self.call(f, args);
             if timing {
                 eprintln!("  {:>16}: {:?}", label, t0.elapsed());
+            }
+            if profile {
+                let calls: Vec<String> = sl_interp::profile_take().into_iter().take(8).map(|(n, k)| format!("{} {}", n, k)).collect();
+                eprintln!("  {:>16}  calls: {}", "", calls.join(", "));
             }
             match r {
                 Ok(V::Bool(true)) => {}
@@ -658,8 +667,10 @@ pub fn heapcheck(args: &[String]) -> CResult {
     let mut thorough = Interp::new(&g, "x86")?;
     thorough.enum_limit = 1 << 16;
     thorough.lazy_sets = true;
+    thorough.memo_calls = true;
     let mut fast = Interp::new(&g, "x86")?;
     fast.lazy_sets = true;
+    fast.memo_calls = true;
     let checker = Checker {
         thorough,
         fast,
