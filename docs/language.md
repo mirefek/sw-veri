@@ -556,7 +556,7 @@ fact h, as it is); `g.loop` (proofs/gimple_inv.core) takes an invariant p
 with p(l0), a variant m with p(l) -> m(l) in omega, and the step
 `all l l2. p(l) -> B(l, ok(l2, empty)) -> p(l2) && m(l2) < m(l)` to the
 loop's exit: `ex l. p(l) && B(l, r) && !is_ok(r)` -- a break, a return or
-a failure from a state with the invariant (ms.step_seq_c2):
+a failure from a state with the invariant (ms.sq_run):
 
 ```
 let BODY(l, o) := loop_body(wl)

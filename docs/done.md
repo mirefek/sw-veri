@@ -613,3 +613,25 @@ item is a short summary of finished work; details are in the files named.
 - **A proof cache** (`slc kernel-check`, `syntax::ProofCache`): within a
   changed file, a proof unchanged in the same context is not checked
   again; `scripts/check.sh` checks the chain with the caches.
+- **The context's free bytes** (`ctx_free`: musl's counters and
+  heuristics -- mmap_counter, meta_alloc_shift, usage_by_class to the
+  sequence bytes): in the footprint (owned), out of the invariant's view
+  (`held`: the footprint but those), their access stated on the
+  footprint's view (`free_rw`, in `rep` and `holds_in`; `perms_ok` leaves
+  them out). A function writing only those keeps the invariant by the
+  view alone (`mp.held_*`, `mp.mo_held`, `mp.free_rw_pages`).
+- **The context's counters by their purpose**: step_seq, decay_bounces
+  and account_bounce refine one spec (`counters_purpose`: the invariant
+  required, only the context's free bytes changed -- `ctx_only`; the
+  invariant kept by it, `mp.co_holds`), is_bouncing one answering any
+  word (`is_bouncing_purpose`); their machine code implements them
+  (`mp.sq_implements`, ...). Their preconditions from the invariant (the
+  free bytes accessible: `mp.free_usable`), their writes free bytes
+  (`mp.co_store`, `mp.sq_only`, ...); one refinement for the three
+  (`mp.counters_ref`). Generic rules for functions without a result: the
+  wrapper with a ghost part (`g.fun_void_ghost`, `g.fun_void0_ghost`), the
+  contract rule for a body ending without a value
+  (`ct.refines_contract_ge`), divergence (`ct.fun_divg_v`,
+  `ct.fun_divg_v0`). Their memory-level specs, C2s and compositions
+  retired; their runs kept as effect summaries (`ms.sq_run`, `ms.ib_run`,
+  `ms.db_run`, `ms.ab_run`; account_bounce's effect `account_vm`).

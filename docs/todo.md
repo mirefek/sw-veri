@@ -20,11 +20,9 @@ keeps the lower-level properties. Bottom-up:
   for `__malloc_alloc_meta` and free_group); the lists tied to the
   invariant's (`cyclic` on the footprint's view: the active lists, the
   free metas).
-- The context's counters and the lock (is_bouncing, decay_bounces,
-  account_bounce, step_seq, resetlock, upgradelock): the abstract state
-  unchanged, musl's heuristics left free.
 - Already specs by purpose, kept: a_ctz_32, a_clz_32, size_to_class,
-  size_overflows, a_cas, errno_location, a_crash.
+  size_overflows, a_cas, errno_location, a_crash, resetlock (the lock word
+  0), upgradelock (nothing).
 - Then the "purpose" name dropped: these are the specs.
 
 Along the way:
@@ -87,6 +85,10 @@ Along the way:
 - `musl.free_step` (free always has a step), open in
   proofs/musl_malloc.core.
 - The C world owning only its statics, heap and stack objects.
+- `slc heapcheck` slow since the class table and permission clauses
+  (0991891): a thorough check takes ~35 s in image_ok, ~30 s in perms_ok
+  on a tiny heap, so the ignored test's short run (40 calls) takes far
+  longer than its "minute or two"; the per-byte evaluation to speed up.
 
 ## 6. Init: startup to main
 

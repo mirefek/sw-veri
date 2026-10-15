@@ -205,6 +205,27 @@ proc[MallocAbs] get_stride_purpose(c: Cfg, g: bits[64]) -> bits[64] {
   either { overflow() } or { return bits[64](stride(A.metas[uint(g)])) }
 }
 
+// The context's counters (`ctx_free`: the bounce counters, the sequence
+// bytes): what step_seq, decay_bounces and account_bounce do there is
+// musl's tuning -- by their purpose, those bytes changed anyhow, nothing
+// else (so the invariant kept). is_bouncing(sc) reads them: whether class
+// sc bounces, a heuristic's answer -- any.
+pred ctx_only(c: Cfg, before: Vm, vm: Vm) =
+  (vm with { bytes: before.bytes }) = before && (all x: bits[64]. !ctx_free(c, uint(x)) -> vm.bytes[x] = before.bytes[x])
+
+proc[MallocAbs] counters_purpose(c: Cfg) {
+  require holds_in(c, A, vm, blocks)
+  either { overflow() } or {
+    let before = vm
+    havoc vm where ctx_only(c, before, vm)
+  }
+}
+
+proc[MallocAbs] is_bouncing_purpose(c: Cfg, sc: bits[32]) -> bits[32] {
+  require holds_in(c, A, vm, blocks)
+  either { overflow() } or { return any bits[32] }
+}
+
 // A2: A with its groups' masks (which free slots are available, which
 // freed) changed, nothing else
 pred masks_only(A: Abs, A2: Abs) =
@@ -349,6 +370,26 @@ fn get_stride_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = get_stride_purpose(c, bits[64](args[0]))
   let w = result[64](r)
+  return (w, any bits[64])
+}
+
+// (step_seq: no argument; decay_bounces, account_bounce: the class, not
+// read)
+fn counters_purpose_fun0(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  counters_purpose(c)
+  return (any bits[64], any bits[64])
+}
+
+fn counters_purpose_fun1(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  counters_purpose(c)
+  return (any bits[64], any bits[64])
+}
+
+fn is_bouncing_purpose_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let r = is_bouncing_purpose(c, bits[32](args[0]))
+  let w = result[32](r)
   return (w, any bits[64])
 }
 

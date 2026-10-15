@@ -406,35 +406,11 @@ pred bounce_pre(vm: Vm, objs: Set[nat], ctx: Addr, sc: bits[32], w: bool) =
   ctx != 0 && uint(ctx) + 913 <= 2^64 &&
   (bouncing_class(sc) -> usable(vm, objs, uint(bounce_at(ctx, sc)), 1, false) && (w -> usable(vm, objs, uint(bounce_at(ctx, sc)), 1, true)))
 
-// is_bouncing(sc): whether sc's counter is above 99 (no counter: not)
-proc[World] is_bouncing_spec(ctx: bits[64], sc: bits[32]) -> bits[32] {
-  require bounce_pre(vm, objs, ctx, sc, false)
-  either { overflow() } or { return if bouncing_class(sc) && bytes_at(vm, bounce_at(ctx, sc), 1) > 99 { 1 } else { 0 } }
-}
-
-fn is_bouncing_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  let r = is_bouncing_spec(ctx, bits[32](args[0]))
-  let w = result[32](r)
-  return (w, any bits[64])
-}
-
 // decay_bounces(sc): sc's counter, if not 0, less 1
 fn decay_vm(vm: Vm, ctx: Addr, sc: bits[32]) -> Vm =
   if bouncing_class(sc) && bytes_at(vm, bounce_at(ctx, sc), 1) != 0 {
     wr8(vm, bounce_at(ctx, sc), bytes_at(vm, bounce_at(ctx, sc), 1) - 1)
   } else { vm }
-
-proc[World] decay_bounces_spec(ctx: bits[64], sc: bits[32]) {
-  require bounce_pre(vm, objs, ctx, sc, true)
-  either { overflow() } or { vm := decay_vm(vm, ctx, sc) }
-}
-
-fn decay_bounces_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  decay_bounces_spec(ctx, bits[32](args[0]))
-  return (any bits[64], any bits[64])
-}
 
 fn seq_at(ctx: Addr) -> Addr = ctx + 912
 fn unmap_seqs_at(ctx: Addr) -> Addr = ctx + 848
@@ -451,21 +427,10 @@ pred account_bounce_pre(vm: Vm, objs: Set[nat], ctx: Addr, sc: bits[32]) =
 pred bounced(vm: Vm, ctx: Addr, sc: bits[32]) =
   bouncing_class(sc) && bytes_at(vm, unmap_seq_at(ctx, sc), 1) != 0 && bytes_at(vm, seq_at(ctx), 1) <= bytes_at(vm, unmap_seq_at(ctx, sc), 1) + 9
 
-proc[World] account_bounce_spec(ctx: bits[64], sc: bits[32]) {
-  require account_bounce_pre(vm, objs, ctx, sc)
-  either { overflow() } or {
-    if bounced(vm, ctx, sc) {
-      let b = bytes_at(vm, bounce_at(ctx, sc), 1)
-      vm := wr8(vm, bounce_at(ctx, sc), if b <= 98 { b + 1 } else { 150 })
-    }
-  }
-}
-
-fn account_bounce_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
-  require len(args) >= 1
-  account_bounce_spec(ctx, bits[32](args[0]))
-  return (any bits[64], any bits[64])
-}
+fn account_vm(vm: Vm, ctx: Addr, sc: bits[32]) -> Vm =
+  if bounced(vm, ctx, sc) {
+    wr8(vm, bounce_at(ctx, sc), if bytes_at(vm, bounce_at(ctx, sc), 1) <= 98 { bytes_at(vm, bounce_at(ctx, sc), 1) + 1 } else { 150 })
+  } else { vm }
 
 // step_seq(): the sequence byte counted up -- at 255, the unmap sequence
 // bytes zeroed and the count restarted at 1
@@ -478,16 +443,6 @@ pred step_seq_pre(vm: Vm, objs: Set[nat], ctx: Addr) =
 fn step_seq_vm(vm: Vm, ctx: Addr) -> Vm =
   if bytes_at(vm, seq_at(ctx), 1) != 255 { wr8(vm, seq_at(ctx), bytes_at(vm, seq_at(ctx), 1) + 1) }
   else { wr8(vm with { bytes: store_le(vm.bytes, unmap_seqs_at(ctx), 32, 0) }, seq_at(ctx), 1) }
-
-proc[World] step_seq_spec(ctx: bits[64]) {
-  require step_seq_pre(vm, objs, ctx)
-  either { overflow() } or { vm := step_seq_vm(vm, ctx) }
-}
-
-fn step_seq_spec_fun(ctx: bits[64]) -> CFun2[World] = (args: Args) => {
-  step_seq_spec(ctx)
-  return (any bits[64], any bits[64])
-}
 
 // resetlock(): the lock word (at lk) 0
 pred resetlock_pre(vm: Vm, objs: Set[nat], lk: Addr) = lk != 0 && uint(lk) + 4 <= 2^64 && usable(vm, objs, uint(lk), 4, true)

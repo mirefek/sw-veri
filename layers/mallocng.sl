@@ -13,8 +13,9 @@ layer mallocng uses malloc
 // * `footprint(c, A, blocks)` -- the bytes the allocator owns -- is computed
 //   from `A` (and the live blocks, which it excludes) alone.
 // * `holds(c, A, m, blocks, brk)` states that memory, seen only through
-//   `m = mview(vm, footprint)`, agrees with `A`, and that `A` satisfies
-//   mallocng's structural invariants.
+//   `m = mview(vm, held)` -- the footprint but the context's free bytes,
+//   musl's counters and heuristics (`ctx_free`) -- agrees with `A`, and
+//   that `A` satisfies mallocng's structural invariants.
 // * `inv(c)`: some `A` holds; `owned(c)`: its footprint.
 //
 // Because the invariant reads memory only through the view, it depends only
@@ -76,6 +77,12 @@ const C_AVAIL_AREAS : nat = 72
 const C_ACTIVE      : nat = 80      // struct meta *active[48]
 const C_BRK         : nat = 920
 const CTX_SIZE      : nat = 928
+// (the counters and heuristics: unsigned mmap_counter; size_t
+// meta_alloc_shift; size_t usage_by_class[48], then uint8_t unmap_seq[32],
+// bounces[32], seq up to brk)
+const C_MMAP_CNT    : nat = 12
+const C_META_SHIFT  : nat = 48
+const C_USAGE       : nat = 464
 
 // struct meta: prev, next, mem, avail_mask, freed_mask, then one word with
 // last_idx:5, freeable:1, sizeclass:6, maplen:52
@@ -197,6 +204,21 @@ pred in_reserved(A: Abs, a: nat) =
 // the bytes the allocator owns
 fn footprint(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
   {a: nat | a in fp_set(fp_ranges(c, A), blocks) && !in_reserved(A, a)}
+
+// the context's bytes the invariant leaves free: musl's counters and
+// heuristics -- the allocator's (in the footprint), of any value
+pred ctx_free(c: Cfg, a: nat) =
+  (c.ctx + C_MMAP_CNT <= a && a < c.ctx + C_MMAP_CNT + 4) || (c.ctx + C_META_SHIFT <= a && a < c.ctx + C_META_SHIFT + 8) ||
+  (c.ctx + C_USAGE <= a && a < c.ctx + C_BRK)
+
+// the bytes the invariant reads: the footprint but the free ones
+fn held(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
+  {a: nat | a in footprint(c, A, blocks) && !ctx_free(c, a)}
+
+// the free bytes accessible (out of the invariant's view: on the
+// footprint's, m)
+pred free_rw(c: Cfg, m: Mem) =
+  all a: nat. ctx_free(c, a) -> m_rw(m, a) && pg(m, a).value.kind != stack
 
 // every byte (memory as a whole, seen as the invariant sees it)
 fn all_bytes() -> Set[nat] = {a: nat | true}
@@ -407,7 +429,7 @@ pred ro_segment_ok(f: File, i: nat, sg: Segment, m: Mem) =
 // the allocator's memory can be accessed as the code does (its groups:
 // not on the stack, where GIMPLE's accesses are to stack objects only)
 pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
-  (all k: nat, a: nat. k < 3 && data_ranges(c)[k][0] <= a && a < data_ranges(c)[k][0] + data_ranges(c)[k][1] ->
+  (all k: nat, a: nat. k < 3 && data_ranges(c)[k][0] <= a && a < data_ranges(c)[k][0] + data_ranges(c)[k][1] && !ctx_free(c, a) ->
      m_rw(m, a) && pg(m, a).value.kind != stack) &&
   (all k: nat, a: nat. k < len(A.used) &&
      group_range(A.metas[A.used[k]])[0] <= a && a < group_range(A.metas[A.used[k]])[0] + group_range(A.metas[A.used[k]])[1] &&
@@ -468,8 +490,8 @@ pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
 
 pred rep(c: Cfg, A: Abs, s: Heap) =
-  holds(c, A, mview(s.vm, footprint(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) &&
-  fp_mapped(fp_ranges(c, A), s.blocks, s.vm) &&
+  holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) &&
+  fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
   live_rw(s)                 // (what the law inv_wf needs, stated directly)
 
 fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
@@ -491,7 +513,7 @@ fn owned(c: Cfg) -> Heap -> Set[nat] = (s: Heap) => owned_of(c, s)
 // the allocator's memory, as the invariant sees it, mapped (user space:
 // no byte's address wraps)
 pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
-  inv: holds(c, A, mview(vm, footprint(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm)
+  inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks)))
 
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g

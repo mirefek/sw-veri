@@ -480,13 +480,20 @@ impl Checker<'_> {
         let (av, hv) = (abs_v(a), heap_v(s, blocks));
         let (vm, bl) = (hv.field("vm").unwrap().clone(), hv.field("blocks").unwrap().clone());
         let mut bad: Vec<String> = a.notes.iter().map(|x| format!("abstraction: {}", x)).collect();
-        let fp = match self.call("footprint", vec![self.c.clone(), av.clone(), bl.clone()]) {
+        // (the invariant's view: of `held`, the footprint but the context's
+        // free bytes, as `rep` has it)
+        let fp = match self.call("held", vec![self.c.clone(), av.clone(), bl.clone()]) {
             Ok(v) => v,
-            Err(e) => return vec![format!("footprint: {}", e)],
+            Err(e) => return vec![format!("held: {}", e)],
         };
         let m = match self.call("mview", vec![vm.clone(), fp]) {
             Ok(v) => v,
             Err(e) => return vec![format!("mview: {}", e)],
+        };
+        // (the footprint's view, where the free bytes' access is stated)
+        let mf = match self.call("footprint", vec![self.c.clone(), av.clone(), bl.clone()]).and_then(|f| self.call("mview", vec![vm.clone(), f])) {
+            Ok(v) => v,
+            Err(e) => return vec![format!("footprint view: {}", e)],
         };
         let regions = self.call("regions", vec![self.c.clone(), av.clone()]);
         let fpr = self.call("fp_ranges", vec![self.c.clone(), av.clone()]);
@@ -504,6 +511,7 @@ impl Checker<'_> {
             ("perms_ok", "perms_ok", vec![c.clone(), av.clone(), m.clone(), bl.clone()]),
             ("blocks_wf", "blocks_wf", vec![bl.clone()]),
             ("live_rw", "live_rw", vec![hv.clone()]),
+            ("free_rw", "free_rw", vec![c.clone(), mf.clone()]),
         ];
         let timing = std::env::var("HEAPCHECK_TIMES").is_ok();
         for (label, f, args) in parts {
@@ -640,7 +648,7 @@ pub fn heapcheck(args: &[String]) -> CResult {
     let elf = Elf::parse(bytes.clone())?;
     let sym = |n: &str| elf.symbol(n).map(|s| s.value).ok_or_else(|| format!("symbol `{}` not found", n));
     let (main_at, malloc_at, calloc_at, free_at) = (sym("main")?, sym("malloc")?, sym("calloc")?, sym("free")?);
-    let (ctx, lock, libc) = (sym("__malloc_context")?, sym("__malloc_lock")?, sym("__libc")?);
+    let (ctx, lock, libc, sct) = (sym("__malloc_context")?, sym("__malloc_lock")?, sym("__libc")?, sym("__malloc_size_classes")?);
 
     // the spec and layers, for the interpreter
     let root = repo_root();
@@ -661,6 +669,7 @@ pub fn heapcheck(args: &[String]) -> CResult {
             ("ctx", n(ctx)),
             ("lock", n(lock)),
             ("libc", n(libc)),
+            ("sct", n(sct)),
         ]),
     };
 

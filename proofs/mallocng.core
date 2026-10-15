@@ -175,17 +175,19 @@ proof
   show mp(mp(all_elim(expand(hg, mallocng.agree), {x}), ho), own)
 qed
 
-// the view of the footprint is the same
-theorem mallocng.view_eq(c, s, t, A):
+// the view of bytes of the footprint (the invariant's, `held`; the
+// footprint's) is the same
+theorem mallocng.view_eq(c, s, t, A, S):
   s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> mallocng.rep(c, A, s) -> mallocng.agree(c, s, t) ->
-    mallocng.mview(app(t, "vm"), mallocng.footprint(c, A, app(s, "blocks"))) =
-    mallocng.mview(app(s, "vm"), mallocng.footprint(c, A, app(s, "blocks")))
+    (all x. x in omega -> x in S -> x in mallocng.footprint(c, A, app(s, "blocks"))) ->
+    mallocng.mview(app(t, "vm"), S) = mallocng.mview(app(s, "vm"), S)
 proof
-  assume hs ha hr hg
+  assume hs ha hr hg hS
   fix x
   assume ho: x in omega
-  assume hx: x in mallocng.footprint(c, A, app(s, "blocks"))
-  have eqs := mp(mp(mp(mp(mp(mp(mallocng.agree_fp[c := c, s := s, t := t, A := A, x := x], hs), ha), hr), hg), ho), hx)
+  assume hx: x in S
+  have hxf := mp(mp(all_elim(hS, {x}), ho), hx)
+  have eqs := mp(mp(mp(mp(mp(mp(mallocng.agree_fp[c := c, s := s, t := t, A := A, x := x], hs), ha), hr), hg), ho), hxf)
   have eb: app(app(app(t, "vm"), "bytes"), bits_of_int(64, x)) = app(app(app(s, "vm"), "bytes"), bits_of_int(64, x)) by taut(eqs)
   have ep: app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)) by taut(eqs)
   have q0 := refl({some(pair(app(app(app(t, "vm"), "bytes"), bits_of_int(64, x)), app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE))))})
@@ -193,16 +195,15 @@ proof
                        some(pair(z, app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE))))}, eb, q0)
   have q2 := subst({z. some(pair(app(app(app(t, "vm"), "bytes"), bits_of_int(64, x)), app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)))) =
                        some(pair(app(app(app(s, "vm"), "bytes"), bits_of_int(64, x)), z))}, ep, q1)
-  have ic := mp(ite_cong[c := x in mallocng.footprint(c, A, app(s, "blocks")),
+  have ic := mp(ite_cong[c := x in S,
                          a := some(pair(app(app(app(t, "vm"), "bytes"), bits_of_int(64, x)), app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)))),
                          b := some(pair(app(app(app(s, "vm"), "bytes"), bits_of_int(64, x)), app(app(app(s, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)))),
                          e := none], discharge(q2, hx))
   have pw := gen(discharge(ic, ho), x)
   have ext := mp(fn_build_ext[d := omega,
-     f := y. ite(y in mallocng.footprint(c, A, app(s, "blocks")), some(pair(app(app(app(t, "vm"), "bytes"), bits_of_int(64, y)), app(app(app(t, "vm"), "pages"), int_div(y, x86_64_linux.PAGE)))), none),
-     g := y. ite(y in mallocng.footprint(c, A, app(s, "blocks")), some(pair(app(app(app(s, "vm"), "bytes"), bits_of_int(64, y)), app(app(app(s, "vm"), "pages"), int_div(y, x86_64_linux.PAGE)))), none)], pw)
-  show mallocng.mview(app(t, "vm"), mallocng.footprint(c, A, app(s, "blocks"))) =
-       mallocng.mview(app(s, "vm"), mallocng.footprint(c, A, app(s, "blocks"))) by defs(ext, mallocng.mview)
+     f := y. ite(y in S, some(pair(app(app(app(t, "vm"), "bytes"), bits_of_int(64, y)), app(app(app(t, "vm"), "pages"), int_div(y, x86_64_linux.PAGE)))), none),
+     g := y. ite(y in S, some(pair(app(app(app(s, "vm"), "bytes"), bits_of_int(64, y)), app(app(app(s, "vm"), "pages"), int_div(y, x86_64_linux.PAGE)))), none)], pw)
+  show mallocng.mview(app(t, "vm"), S) = mallocng.mview(app(s, "vm"), S) by defs(ext, mallocng.mview)
 qed
 
 // the representation carries over to a state that agrees on the footprint
@@ -213,9 +214,24 @@ theorem mallocng.rep_frame(c, A, s, t):
       app(app(app(t, "vm"), "pages"), int_div(x, x86_64_linux.PAGE)) = app(app(app(s, "vm"), "pages"), int_div(x, x86_64_linux.PAGE))) -> mallocng.rep(c, A, t)
 proof
   assume hs ha hr hb hk hg hl
-  have ve := mp(mp(mp(mp(mallocng.view_eq[c := c, s := s, t := t, A := A], hs), ha), hr), hg)
   have rs := expand(hr, mallocng.rep)
-  have H: mallocng.holds(c, A, mallocng.mview(app(s, "vm"), mallocng.footprint(c, A, app(s, "blocks"))), app(s, "blocks"), app(app(s, "vm"), "brk"))
+  let HS := mallocng.held(c, A, app(s, "blocks"))
+  let FS := mallocng.footprint(c, A, app(s, "blocks"))
+  have sh: all x. x in omega -> x in HS -> x in FS proof
+    fix x
+    assume ho hx
+    show by taut(set_select_def[s := omega, p := y. y in FS && !mallocng.ctx_free(c, y), z := x], expand(hx, mallocng.held))
+  qed
+  have sf: all x. x in omega -> x in FS -> x in FS proof
+    fix x
+    assume ho hx
+    show := hx
+  qed
+  have ve := mp(mp(mp(mp(mp(mallocng.view_eq[c := c, s := s, t := t, A := A, S := HS], hs), ha), hr), hg), sh)
+  have vf := mp(mp(mp(mp(mp(mallocng.view_eq[c := c, s := s, t := t, A := A, S := FS], hs), ha), hr), hg), sf)
+  have FR: mallocng.free_rw(c, mallocng.mview(app(s, "vm"), FS)) by taut(rs)
+  have FR3 := rewrite(sym(hb), rewrite(sym(vf), FR))
+  have H: mallocng.holds(c, A, mallocng.mview(app(s, "vm"), mallocng.held(c, A, app(s, "blocks"))), app(s, "blocks"), app(app(s, "vm"), "brk"))
     by taut(rs)
   have H3 := rewrite(sym(hk), rewrite(sym(hb), rewrite(sym(ve), H)))
   // the footprint stays mapped: its pages are unchanged
@@ -269,7 +285,7 @@ proof
   have LT: malloc.live_rw(t)
     by defs(gen(discharge(discharge(gen(discharge(discharge(rt_y, hr2), hy), y), hn), hp8), p), malloc.live_rw)
   have NR: mallocng.no_reserved(A) by taut(rs)
-  show mallocng.rep(c, A, t) by defs(taut(H3, NR, MT, LT), mallocng.rep)
+  show mallocng.rep(c, A, t) by defs(taut(H3, NR, MT, FR3, LT), mallocng.rep)
 qed
 
 // with a unique representation, what t owns s owned
