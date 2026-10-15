@@ -633,6 +633,26 @@ pub fn load_cached(env: &mut Env, src: &str, allow_axioms: bool) -> KResult<Load
     load_mode(env, src, allow_axioms, None, None, true)
 }
 
+/// An error naming an unknown fact or name that the file declares further
+/// down: where, and the two ways out (forward references go through `lemma`).
+fn later_hint(src: &str, msg: &str, line: usize) -> String {
+    let Some(n) = ["unknown fact `", "unknown symbol `"].iter().find_map(|k| {
+        let i = msg.find(k)? + k.len();
+        Some(&msg[i..i + msg[i..].find('`')?])
+    }) else {
+        return String::new();
+    };
+    for (i, l) in src.lines().enumerate().skip(line) {
+        let mut ws = l.split_whitespace();
+        if matches!(ws.next(), Some("theorem" | "lemma" | "def" | "abbrev"))
+            && ws.next().is_some_and(|w| w.split(['(', ':']).next() == Some(n))
+        {
+            return format!(" (`{}` is declared later, at line {}: move it above, or declare it first as a `lemma`)", n, i + 1);
+        }
+    }
+    String::new()
+}
+
 fn load_mode(
     env: &mut Env,
     src: &str,
@@ -663,7 +683,7 @@ fn load_mode(
         };
         let line = p.lex.line;
         let name = p.ident()?;
-        let ctx = |e: KernelError| KernelError(format!("line {} (`{}`): {}", line, name, e.0));
+        let ctx = |e: KernelError| KernelError(format!("line {} (`{}`): {}{}", line, name, e.0, later_hint(src, &e.0, line)));
         match kw.as_str() {
             "const" | "axiom" if !allow_axioms => return p.error(&format!("`{}` not allowed in this file", kw)),
             "const" => {

@@ -119,6 +119,8 @@ fn words_and_integers() {
         "theorem t(n, a, b): a in bits(n) -> b in bits(n) -> int_le(b, a) -> bits_sub(n, a, b) = int_sub(a, b)\nproof\n  assume ha hb hl\n  show by arith(ha, hb, hl)\nqed\n",
         "theorem t(p): p in bits(64) -> int_lt(p, 1000) -> bits_add(64, p, 8) = int_add(p, 8)\nproof\n  assume hp hl\n  show by rsimp()\nqed\n",
         "theorem t(p): p in bits(64) -> int_lt(int_add(p, 8), int_pow(2, 64)) -> int_add(p, 8) in bits(64)\nproof\n  assume hp hl\n  show by arith(hp, hl)\nqed\n",
+        // (the block's memberships of the goal's terms: arith's without naming them)
+        "theorem t(x): x in omega -> int_lt(x, 4) -> int_lt(2, x) -> x = 3\nproof\n  assume hx h1 h2\n  show by arith(h1, h2)\nqed\n",
     ];
     for t in ok {
         assert_eq!(check(&format!("{}{}", lib, t)), Ok(base + 1), "{}", t);
@@ -213,6 +215,14 @@ fn non_tautologies_are_rejected() {
 fn wrong_witnesses_and_rewrites_are_rejected() {
     rejected("theorem bad: ex x. x = true\nproof\n  show ex x. x = true by ex_intro({false}, refl({false}))\nqed\n", "not `false = true`");
     rejected("theorem bad(a, b): a = b -> b = b\nproof\n  assume h: a = b\n  show rewrite(h, refl({b}))\nqed\n", "does not occur");
+}
+
+#[test]
+fn a_fact_declared_later_is_pointed_at() {
+    rejected(
+        "theorem t(a): a -> a\nproof\n  show u[a := a]\nqed\n\ntheorem u(a): a -> a\nproof\n  assume h: a\n  show h\nqed\n",
+        "declared later, at line 6",
+    );
 }
 
 #[test]

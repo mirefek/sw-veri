@@ -1327,10 +1327,22 @@ impl State {
                 let refs: Vec<&Seq> = ps.iter().collect();
                 Seq::eval_goal(env, lg, &refs, goal)
             }
+            // (failing, again with the block's facts `t in omega` / `bits(n)`
+            // / `int` for the terms t of the goal and the facts given)
             "arith" => {
-                let ps = self.proofs(env, lg, args)?;
+                let mut ps = self.proofs(env, lg, args)?;
                 let refs: Vec<&Seq> = ps.iter().collect();
-                Seq::arith(env, lg, &refs, goal)
+                let e = match Seq::arith(env, lg, &refs, goal) {
+                    Ok(s) => return Ok(s),
+                    Err(e) => e,
+                };
+                let more = self.memberships(env, goal, &ps);
+                if more.is_empty() {
+                    return Err(e);
+                }
+                ps.extend(more);
+                let refs: Vec<&Seq> = ps.iter().collect();
+                Seq::arith(env, lg, &refs, goal).map_err(|_| e)
             }
             // mem(p1, ..): the goal by the memory rules (reads through writes,
             // frames), the writes' places by arith from the facts
@@ -1561,6 +1573,27 @@ impl State {
                 self.check(env, s, goal)
             }
         }
+    }
+
+    /// the block's facts `t in omega` / `t in bits(n)` / `t in int` whose t
+    /// occurs in the goal or the facts given (and not already given)
+    fn memberships(&self, env: &Env, goal: &Term, given: &[Seq]) -> Vec<Seq> {
+        let Some(in_) = env.sym_by_name.get("in").copied() else { return Vec::new() };
+        let kinds: Vec<SymId> = ["omega", "bits", "int"].iter().filter_map(|n| env.sym_by_name.get(*n).copied()).collect();
+        let mut out: Vec<Seq> = Vec::new();
+        for (_, f) in self.facts.iter().rev() {
+            let Node::App(i, a) = f.concl().node() else { continue };
+            if *i != in_ || !matches!(a[1].node(), Node::App(k, _) if kinds.contains(k)) {
+                continue;
+            }
+            if given.iter().chain(out.iter()).any(|g| g.concl() == f.concl()) {
+                continue;
+            }
+            if occurs(&a[0], goal) || given.iter().any(|g| occurs(&a[0], g.concl())) {
+                out.push(f.clone());
+            }
+        }
+        out
     }
 
     /// (see the rule `spec_ret`)
