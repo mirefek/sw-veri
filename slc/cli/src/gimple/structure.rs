@@ -520,6 +520,10 @@ impl<'g> St<'g> {
                             join = Some(no);
                         } else if in_loop(self, yes) && self.early(no, yes) {
                             join = Some(yes);
+                        } else if let Some(j) = self.meet(yes, no).filter(|&j| in_loop(self, j)) {
+                            // (both ways go on at a third block j unless
+                            // they return before: j the join)
+                            join = Some(j);
                         }
                     }
                     let cond = self.render_cond(&ch.tree, false);
@@ -651,6 +655,28 @@ impl<'g> St<'g> {
             work.extend(s.iter().copied());
         }
         true
+    }
+
+    /// The block nearest to `a` (in breadth-first order) that both a and b
+    /// reach on every way that does not return first (`early`), not a
+    /// return itself.
+    fn meet(&self, a: usize, b: usize) -> Option<usize> {
+        let mut seen = BTreeSet::from([a]);
+        let mut queue = std::collections::VecDeque::from([a]);
+        while let Some(j) = queue.pop_front() {
+            if j != a && j != b && !self.returns(j) && self.early(a, j) && self.early(b, j) {
+                return Some(j);
+            }
+            if self.loops.contains_key(&j) {
+                continue;
+            }
+            for &s in &self.succ[j] {
+                if seen.insert(s) {
+                    queue.push_back(s);
+                }
+            }
+        }
+        None
     }
 
     /// The edge e: its copies, then (in a loop) the next iteration, `break`,
