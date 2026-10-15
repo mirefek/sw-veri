@@ -739,7 +739,7 @@ pred tls_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: n
 // does, with the memory arbitrary.
 proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
   require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
-    sc < 48 && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
+    sc < 48 && uint(pm) >= c.ctx + C_ACTIVE && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
   either { overflow() } or {
     let A0 = A
     let before = vm
@@ -872,8 +872,8 @@ fn activate_group_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
 }
 
 fn try_avail_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
-  require len(args) >= 1 && (uint(args[0]) - c.ctx - C_ACTIVE) % 8 = 0
-  let r = try_avail_spec(c, (uint(args[0]) - c.ctx - C_ACTIVE) / 8, args[0])
+  require len(args) >= 1
+  let r = try_avail_spec(c, (uint(bits[64](args[0])) - c.ctx - C_ACTIVE) / 8, bits[64](args[0]))
   let w = result[32](r)
   return (w, any bits[64])
 }

@@ -710,3 +710,12 @@ item is a short summary of finished work; details are in the files named.
   bytes only: `mp.co_unt`), the lowest available slot reserved. The step
   rule for calls binds the contract's callee from the call (a contract of
   activate_group_fun(g0, g1) itself).
+- **try_avail by its purpose, end to end** (`mp.ta`, `mp.ta_fun`,
+  `mp.ta_divg`, `mp.ta_implements`; its C1 linked, `tatc.linked`). A
+  callee with a ghost-level spec is a parameter of its caller, given by its
+  contract at a call (`mp.ag_call`, `mp.db_call`, `mp.ta_call`: what a
+  caller relies on of a callee called as it); the code has it
+  (`mp.ag_q`, ...), and a callee refining one that has it has it too
+  (`mp.ag_call_ref`, ...: the CFG forms at the machine level).
+  `try_avail_spec` requires the list's head word at or past `active[0]`
+  (no class below 0); `ct.dv_ret3` (three choices before a return).

@@ -562,3 +562,46 @@ proof
   show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4208706}, {c_src_malloc_mallocng_malloc.is_bouncing_fun()}, {mallocng_specs.is_bouncing_spec_fun(c)}, {4198400}, {text.code}, {statics}),
     mp.g_ok, hdr, st, r)
 qed
+
+// what a caller relies on of a callee f called as decay_bounces (its C
+// function value), the ghost part h read: the context's free bytes changed
+// only
+abbrev mp.db_call(c, f) := all x t h regs o2. x in bits(32) -> t in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, t.vm, h.blocks) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(32, x))) ->
+  runs(f[regs], t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && mallocng_specs.ctx_only(c, t.vm, V)) && o2 = ok(fn_update(t, "vm", V), r))
+
+// (a callee refining one called as decay_bounces: called as it too)
+theorem mp.db_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
+  mp.db_call(c, f2) -> mp.db_call(c, f)
+proof
+  assume hf q
+  fix x t h regs o2
+  assume hxb hw hh hin hro hr
+  have rl rn _ := apply(gc.regs1_32, hxb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
+  show := mp(all_elim(q, {x}, {t}, {h}, {regs}, {o2}), hxb, hw, hh, hin, hro, r2)
+qed
+
+// decay_bounces' code called as decay_bounces
+theorem mp.db_q: all c. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  mp.db_call(c, c_src_malloc_mallocng_malloc.decay_bounces_fun())
+proof
+  fix c
+  assume hc hx
+  fix x t h regs o2
+  assume hxb hw hh hin hro hr
+  have rl rn r0 := apply(gc.regs1_32, hxb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+  have pre := apply(mp.bp_pre[c := c, A := h.A, vm := t.vm, b := h.blocks, objs := t.objs, sc := x, w := true], hc, (h.A in univ(1) by simp(hu)), hat, hx, hxb, hin)
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have co cv := apply(mp.db_only[c := c, vm := t.vm, sc := x], pv, hx, hxb)
+  step o3 u y, e from hr with o1l, r0, ms.db_run using ra, hxb, hw, pre
+  show by disj({2}, spec_ret({mallocng_specs.decay_vm(t.vm, c_src_malloc_mallocng_malloc.__malloc_context, x)}, {pair(u, y)}, cv, co, e))
+qed

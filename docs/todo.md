@@ -30,17 +30,14 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   own.
 - alloc_group's CFG C1: stops at 404413, a byte store of `dl`
   (`tr.store8_b`'s premise); then the rest of its blocks.
-- Specs by purpose of the loop functions (alloc_group, try_avail,
-  step_seq, activate_group's caller): the loop's invariant and variant at
-  its head stated over the abstract state, the code's loop refined to it.
+- Specs by purpose of the loop functions (alloc_group, step_seq): the
+  loop's invariant and variant at its head stated over the abstract
+  state, the code's loop refined to it (as try_avail's span loop).
 
 ## 3. Then: the remaining functions
 
-- try_avail: its run is proved (`mp.ta_run`); left the refinement with
-  the ghost update (`mp.ta`, as `mp.ag`), its machine code implementing
-  the spec, its contract at a call (for alloc_slot).
-- alloc_slot (spec written, `alloc_slot_spec`; C1 done),
-  `__malloc_alloc_meta`.
+- alloc_slot (spec written, `alloc_slot_spec`; C1 done; try_avail called
+  as `mp.ta_call`), `__malloc_alloc_meta`.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
@@ -57,8 +54,6 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 - The structured form generated and checked in one run (`slc gimple`
   running the refinement); a callee's refinement a theorem of its own, not
   walked again in each caller.
-- The loop functions' `refines` lines and compositions in
-  proofs/mallocng/machine/cfg.core (step_seq, activate_group, try_avail).
 - User proofs on a CFG (an invariant per label) for functions with no
   structured view.
 
