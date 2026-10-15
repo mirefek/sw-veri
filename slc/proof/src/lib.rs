@@ -85,7 +85,7 @@
 //! simplified, unless it became `true`). The older `simp` (symbolic
 //! execution, closing paths by taut / arith) stays as it is.
 
-use sl_kernel::ext::seq::{defined_sym, unfold_all, unfold_all_bounded};
+use sl_kernel::ext::seq::{abstract_term, defined_sym, unfold_all, unfold_all_bounded};
 
 /// subterms implicit unfolding may visit in a term (per attempt)
 const UNFOLD_BUDGET: usize = 200_000;
@@ -202,6 +202,20 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                 }
                 Frame::Unfold(g, syms) => conv_to(env, s, g, syms)?,
                 Frame::Lets(g) => Seq::conv_lets(env, &s, g)?,
+                // or-elimination: the return's case proven by the block, the
+                // overflow's by the goal's disjunct
+                Frame::Cases(d, a_imp, b) => {
+                    let g = s.concl().clone();
+                    let s1 = s.discharge(env, b)?;
+                    Seq::taut(env, lg, &[d, a_imp, &s1], &g).map_err(|_| {
+                        let pr = Printer::new(env);
+                        let a2 = match a_imp.concl().node() {
+                            Node::App(_, x) => pr.short(&x[1]),
+                            _ => String::new(),
+                        };
+                        KernelError(format!("step: a call's overflow `{}` is not a disjunct of the goal `{}`", a2, pr.short(&g)))
+                    })?
+                }
                 Frame::Flip(g) => {
                     let s = conv_to(env, s, &flip_term(env, lg, g)?, &[])?;
                     let s = flip_seq(env, lg, &s)?;
@@ -575,6 +589,10 @@ enum Frame {
     Flip(Term),
     /// the goal's lets changed (`zeta`, `fold_let`): the goal before
     Lets(Term),
+    /// a call stepped by its callee's contract (`step`): the rule's `A ||
+    /// B`, `A -> A'` (A' the overflow as the outcome: a disjunct of the
+    /// goal), B (the return, assumed for the rest of the block)
+    Cases(Seq, Seq, Term),
 }
 
 struct State {
@@ -1809,7 +1827,10 @@ impl State {
                 (Some(l) == and && Some(r) == and).then_some(())
             }).is_some()
         };
-        let is_op: Vec<bool> = withs.iter().map(|w| op_fact(w.concl())).collect();
+        let is_call: Vec<bool> = withs.iter().map(|w| call_lemma(env, lg, w.concl())).collect();
+        // (a call's contract is no operation's fact nor a branch's)
+        let is_op: Vec<bool> = withs.iter().zip(&is_call).map(|(w, c)| *c || op_fact(w.concl())).collect();
+        let mut side: Vec<Seq> = Vec::new();
         // (the fact simplified by step's own rules first: a loop body at a
         // state `pair(s, ..)` reads `fst(pair(s, ..))` as s)
         let cur0 = self.eval(env, lg, &parse_pe(p.trim())?)?;
@@ -1839,10 +1860,14 @@ impl State {
             } else if Some(f) == letin {
                 cur = self.lemma(env, lg, "g.letin_e", &[cur])?;
             } else if Some(f) == bind {
-                // (an operation's one outcome: a `with` fact for it)
+                // (an operation's one outcome: a `with` fact for it; a call:
+                // its callee's contract)
                 match self.step_bind_any(env, lg, &cur, &withs, &is_op, &mut used, &using, &mut why)? {
                     Some(n) => cur = n,
-                    None => break,
+                    None => match self.step_call(env, lg, &cur, &withs, &is_call, &mut used, &using, &mut why)? {
+                        Some(d) => cur = self.step_split_call(env, lg, d, &pending, &mut xs, &mut side)?,
+                        None => break,
+                    },
                 }
             } else if Some(f) == any {
                 // (a local's choice: a word, named)
@@ -1941,6 +1966,11 @@ impl State {
             let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
             cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
         }
+        // (what the calls' contracts said of their returns: after)
+        for r in side {
+            let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
+            cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
+        }
         let unused: Vec<usize> = (0..withs.len()).filter(|&i| !used[i]).map(|i| i + 1).collect();
         if !unused.is_empty() {
             let pos: Vec<String> = unused.iter().map(|i| i.to_string()).collect();
@@ -1992,6 +2022,400 @@ impl State {
             return Ok(Some(self.step_bind(env, lg, b.clone(), d, using)?));
         }
         Ok(None)
+    }
+
+    /// a call's bind (`bind_rel(gimple.call(g, args), w, ..)`, or `call1`)
+    /// by its callee's contract at the call, a `with` fact `all regs o.
+    /// gc.regs_ok(regs, ARGS) -> runs(app(F, regs), w, o) -> D(o)`: the
+    /// rule of D's shape (`gc.contract_callR`, `_call1`, `_callV`), its
+    /// premises discharged; its conclusion `A || B` (an overflow, the
+    /// return). None if no such fact applies
+    #[allow(clippy::too_many_arguments)]
+    fn step_call(&mut self, env: &mut Env, lg: &Logic, b: &Seq, withs: &[Seq], is_call: &[bool], used: &mut [bool], using: &[Seq], why: &mut Option<String>) -> KResult<Option<Seq>> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied();
+        let (call, call1) = (sym("gimple.call"), sym("gimple.call1"));
+        let (p, w) = match b.concl().node() {
+            Node::App(_, a) if a.len() == 5 => (a[0].clone(), a[1].clone()),
+            _ => return Ok(None),
+        };
+        let Node::App(pf, pa) = p.node() else { return Ok(None) };
+        let one = if Some(*pf) == call && pa.len() == 2 {
+            false
+        } else if Some(*pf) == call1 && pa.len() == 2 {
+            true
+        } else {
+            return Ok(None);
+        };
+        let (g, args) = (pa[0].clone(), pa[1].clone());
+        for i in 0..withs.len() {
+            if !is_call[i] {
+                continue;
+            }
+            let q = match self.step_call_lemma(env, lg, &withs[i], &w, &args, using) {
+                Ok(q) => q,
+                Err(KernelError(m)) => {
+                    *why = Some(m);
+                    continue;
+                }
+            };
+            match self.step_call_by(env, lg, b, &w, one, &g, &args, &q, withs, using) {
+                Ok(d) => {
+                    mark_used(withs, used, i);
+                    return Ok(Some(d));
+                }
+                Err(KernelError(m)) => *why = Some(m),
+            }
+        }
+        Ok(None)
+    }
+
+    /// a callee's contract at this call (`all regs o. gc.regs_ok(regs,
+    /// args) -> runs(app(F, regs), w, o) -> D`) from a lemma `all xs. H.. ->
+    /// gc.regs_ok(regs, ARGS) -> runs(app(F, regs), t, o) -> D`: its
+    /// variables from the call (t as w, ARGS as args), the rest from a
+    /// `using` fact matching a premise (the first, in order); its other
+    /// premises discharged (`mem_discharge`)
+    fn step_call_lemma(&mut self, env: &mut Env, lg: &Logic, lemma: &Seq, w: &Term, args: &Term, using: &[Seq]) -> KResult<Seq> {
+        let runs = env.sym_by_name.get("runs").copied();
+        let and = env.sym_by_name.get("and").copied();
+        let seq_len = env.sym_by_name.get("seq_len").copied();
+        let (mut s, vs, _) = crate::bits::open_rule(env, lg, lemma)?;
+        let prems = |env: &Env, t: &Term| {
+            let mut out = Vec::new();
+            let mut c = t.clone();
+            while let Node::App(i, x) = c.node() {
+                if *i != env.builtins.imp {
+                    break;
+                }
+                out.push(x[0].clone());
+                c = x[1].clone();
+            }
+            out
+        };
+        let ps = prems(env, s.concl());
+        let n = ps.len();
+        if n < 2 {
+            return err("step: a call's contract without `gc.regs_ok(..) -> runs(..) ->`");
+        }
+        // (the run's state and the registers' arguments: the call's)
+        let (t_pat, r_var, o_var) = match ps[n - 1].node() {
+            Node::App(f, a) if Some(*f) == runs => (a[1].clone(), match a[0].node() {
+                Node::App(_, x) if x.len() == 2 => x[1].clone(),
+                _ => return err("step: a call's contract: not `runs(app(F, regs), ..)`"),
+            }, a[2].clone()),
+            _ => return err("step: a call's contract: its last premise not `runs(..)`"),
+        };
+        let args_pat = (|| {
+            let Node::App(a1, x) = ps[n - 2].node() else { return None };
+            let Node::App(a2, y) = x[0].node() else { return None };
+            let Node::App(e, z) = y[1].node() else { return None };
+            let Node::App(l, u) = z[1].node() else { return None };
+            (Some(*a1) == and && Some(*a2) == and && *e == lg.eq && Some(*l) == seq_len).then(|| u[0].clone())
+        })()
+        .ok_or_else(|| KernelError("step: a call's contract: its premise before the run not `gc.regs_ok(regs, ARGS)`".into()))?;
+        let mut binds = Vec::new();
+        if !pmatch(env, &t_pat, w, &vs, &mut binds) {
+            let pr = Printer::new(env);
+            return err(format!("step: the contract is at `{}`, the call at `{}`", pr.short(&t_pat), pr.short(w)));
+        }
+        if !pmatch(env, &args_pat, args, &vs, &mut binds) {
+            let pr = Printer::new(env);
+            return err(format!("step: the contract's arguments `{}`, the call's `{}`", pr.short(&args_pat), pr.short(args)));
+        }
+        for (v, t) in &binds {
+            s = Seq::inst(env, &s, *v, t)?;
+        }
+        let free: Vec<VarId> = [&r_var, &o_var].iter().filter_map(|t| match t.node() {
+            Node::Var(v, _) => Some(*v),
+            _ => None,
+        }).collect();
+        // (the rest of its variables: from `using` facts its premises match)
+        loop {
+            let open: Vec<VarId> = vs.iter().copied().filter(|v| !free.contains(v) && !binds.iter().any(|(w, _)| w == v) && {
+                let mut x = Vec::new();
+                s.concl().vars(&mut x);
+                x.contains(v)
+            }).collect();
+            if open.is_empty() {
+                break;
+            }
+            let ps = prems(env, s.concl());
+            let mut found = Vec::new();
+            'p: for p in &ps {
+                for u in using {
+                    let mut b2 = Vec::new();
+                    if pmatch(env, p, u.concl(), &open, &mut b2) && !b2.is_empty() {
+                        found = b2;
+                        break 'p;
+                    }
+                }
+            }
+            if found.is_empty() {
+                return err(format!("step: a call's contract: `{}` from no `using` fact", env.vars[open[0] as usize].name));
+            }
+            for (v, t) in &found {
+                s = Seq::inst(env, &s, *v, t)?;
+            }
+            binds.extend(found);
+        }
+        // (its premises but the last two discharged)
+        for _ in 0..n - 2 {
+            let (h, _) = imp_parts(env, s.concl())?;
+            let p = self.mem_discharge(env, lg, &h, using, 0)?;
+            s = Seq::mp(env, &s, &p)?;
+        }
+        for v in free.iter().rev() {
+            s = Seq::gen(env, lg, &s, *v)?;
+        }
+        Ok(s)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn step_call_by(&mut self, env: &mut Env, lg: &Logic, b: &Seq, w: &Term, one: bool, g: &Term, args: &Term, q: &Seq, withs: &[Seq], using: &[Seq]) -> KResult<Seq> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("step: `{}` is not loaded", n)));
+        let (runs, app, ok, fnu, and, or, in_, int_le, seq_len) =
+            (sym("runs")?, sym("app")?, sym("ok")?, sym("fn_update")?, sym("and")?, sym("or")?, sym("in")?, sym("int_le")?, sym("seq_len")?);
+        let (world, vm_t, thread_ok) = (sym("abi.World")?, sym("x86_64_linux.Vm")?, sym("abi.thread_ok")?);
+        // (the contract's F, state and D: its `all regs o` opened)
+        let rv = Term::var(env.new_var("regs", 0), vec![]);
+        let ov = Term::var(env.new_var("o", 0), vec![]);
+        let q2 = Seq::all_elim(env, lg, &Seq::all_elim(env, lg, q, &rv)?, &ov)?;
+        let (_, r1) = imp_parts(env, q2.concl())?;
+        let (rn, dd) = imp_parts(env, &r1)?;
+        let (fq, wq) = match rn.node() {
+            Node::App(f, a) if *f == runs => match a[0].node() {
+                Node::App(h, x) if *h == app => (x[0].clone(), a[1].clone()),
+                _ => return err("step: not a call's contract"),
+            },
+            _ => return err("step: not a call's contract"),
+        };
+        let pr = Printer::new(env);
+        if wq != *w {
+            return err(format!("step: the contract is at `{}`, the call at `{}`", pr.short(&wq), pr.short(w)));
+        }
+        let rhs = match dd.node() {
+            Node::App(f, a) if *f == or => a[1].clone(),
+            _ => return err("step: the contract is not `overflow || return`"),
+        };
+        // (D's return: `ex r. o = ok(fn_update(w, "vm", V), r) && R(r)` or
+        // `ex V r. (V in Vm && P(V)) && o = ok(fn_update(w, "vm", V), r)`)
+        let ex_body = |t: &Term| match t.node() {
+            Node::App(e, a) if *e == lg.ex => Some(a[0].clone()),
+            _ => None,
+        };
+        let ok_mem = |t: &Term| -> Option<Term> {
+            let Node::App(e, a) = t.node() else { return None };
+            if *e != lg.eq || a[0] != ov {
+                return None;
+            }
+            let Node::App(k, x) = a[1].node() else { return None };
+            if *k != ok || x[1] != Term::bvar(0) {
+                return None;
+            }
+            match x[0].node() {
+                Node::App(u, y) if *u == fnu && y[0] == *w && y[1] == Term::bytes(b"vm") => Some(y[2].clone()),
+                _ => None,
+            }
+        };
+        let b1 = ex_body(&rhs).ok_or_else(|| KernelError("step: the contract's return is not `ex r. ..`".into()))?;
+        let bf = env.binders_fn();
+        let (rule, var, value, mem) = match (b1.node(), ex_body(&b1)) {
+            (_, Some(b2)) => {
+                // ex V r. (V in Vm && P(V)) && o = ok(fn_update(w, "vm", V), r)
+                let Node::App(a1, x) = b2.node() else { return err("step: the contract's return: unknown shape") };
+                let Node::App(a2, y) = x[0].node() else { return err("step: the contract's return: unknown shape") };
+                if *a1 != and || *a2 != and || one {
+                    return err("step: the contract's return: unknown shape (or `call1` with a memory property)");
+                }
+                let pv = unshift(&y[1], 1, 0, &bf).ok_or_else(|| KernelError("step: the contract's memory property names the return".into()))?;
+                ("gc.contract_callV", "P", pv, None)
+            }
+            (Node::App(a1, x), None) if *a1 == and => {
+                let v = ok_mem(&x[0]).ok_or_else(|| KernelError("step: the contract's return: not `o = ok(fn_update(w, \"vm\", V), r) && R(r)`".into()))?;
+                (if one { "gc.contract_call1" } else { "gc.contract_callR" }, "R", x[1].clone(), Some(v))
+            }
+            _ => return err("step: the contract's return: unknown shape"),
+        };
+        if mem.as_ref().is_some_and(|v| v.loose_depth(&bf) > 0) {
+            return err("step: the contract's memory names the return");
+        }
+        drop(bf);
+        let mut vs = Vec::new();
+        value.vars(&mut vs);
+        for v in [&rv, &ov] {
+            if let Node::Var(x, _) = v.node() {
+                if vs.contains(x) {
+                    return err("step: the contract's property of the return names its outcome");
+                }
+            }
+        }
+        // (the rule, its property instantiated)
+        let r0 = facts::seq_of(env, rule).ok_or_else(|| KernelError(format!("step: `{}` (proofs/gimple_inv.core) is not loaded", rule)))?;
+        let mut rvs = Vec::new();
+        r0.concl().vars(&mut rvs);
+        let pv = *rvs.iter().find(|v| env.vars[**v as usize].name == var).ok_or_else(|| KernelError(format!("step: `{}` has no `{}`", rule, var)))?;
+        let r1 = Seq::inst(env, &r0, pv, &value)?;
+        // (its premises: the world sound, a world, the memory a memory, the
+        // registers, at most 6 arguments, the callee refining F)
+        let s_app = |t: &Term, k: &[u8]| Term::app(app, vec![t.clone(), Term::bytes(k)]);
+        let ths = self.mem_discharge(env, lg, &Term::app(thread_ok, vec![s_app(w, b"vm"), s_app(w, b"fs_base")]), using, 0)?;
+        let hw = self.mem_discharge(env, lg, &Term::app(in_, vec![w.clone(), Term::app(world, vec![])]), using, 0)?;
+        let rex = self.step_regs_ex(env, lg, args, using)?;
+        let hl = self.by(env, lg, &Term::app(int_le, vec![Term::app(seq_len, vec![args.clone()]), Term::nat(sl_kernel::Nat::from_u64(6))]), &parse_pe("simp()")?)?;
+        let mut pre = vec![ths, hw];
+        if let Some(v) = &mem {
+            pre.push(self.mem_discharge(env, lg, &Term::app(in_, vec![v.clone(), Term::app(vm_t, vec![])]), using, 0)?);
+        }
+        pre.push(rex);
+        pre.push(hl);
+        // (the callee's fact: all regs s o. .. runs(app(g, regs), s, o) -> runs(app(F, regs), s, o))
+        let refines = |t: &Term| -> bool {
+            let mut t = t.clone();
+            loop {
+                match t.node() {
+                    Node::App(q, a) if *q == lg.all => t = a[0].clone(),
+                    Node::App(i, a) if *i == env.builtins.imp => {
+                        let is_g = |x: &Term, h: &Term| matches!(x.node(), Node::App(r, y) if *r == runs && matches!(y[0].node(), Node::App(p, z) if *p == app && z[0] == *h));
+                        if is_g(&a[0], g) && is_g(&a[1], &fq) {
+                            return true;
+                        }
+                        t = a[1].clone();
+                    }
+                    _ => return false,
+                }
+            }
+        };
+        let hg = using.iter().chain(withs.iter()).find(|f| refines(f.concl())).cloned().ok_or_else(|| {
+            let pr = Printer::new(env);
+            KernelError(format!("step: no fact that the callee `{}` refines `{}`", pr.short(g), pr.short(&fq)))
+        })?;
+        pre.push(hg);
+        pre.push(q.clone());
+        pre.push(b.clone());
+        self.facts.push(("__callrule".into(), r1));
+        let r = self.lemma(env, lg, "__callrule", &pre);
+        self.facts.pop();
+        r
+    }
+
+    /// `ex regs. gc.regs_ok(regs, args)`: by the lemma of the arguments'
+    /// widths (proofs/gimple_inv.core, proofs/mallocng_ctx.core), each
+    /// argument a word of its width (`using`)
+    fn step_regs_ex(&mut self, env: &mut Env, lg: &Logic, args: &Term, using: &[Seq]) -> KResult<Seq> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied();
+        let (concat, one, arg, empty, in_, bits) = (sym("seq_concat"), sym("seq_one"), sym("gimple.arg"), sym("empty"), sym("in"), sym("bits"));
+        let mut leaves = Vec::new();
+        fn walk(t: &Term, concat: Option<SymId>, one: Option<SymId>, out: &mut Vec<Term>) -> bool {
+            match t.node() {
+                Node::App(c, a) if Some(*c) == concat => walk(&a[0], concat, one, out) && walk(&a[1], concat, one, out),
+                Node::App(o, a) if Some(*o) == one => {
+                    out.push(a[0].clone());
+                    true
+                }
+                _ => false,
+            }
+        }
+        let is_empty = matches!(args.node(), Node::App(e, a) if Some(*e) == empty && a.is_empty());
+        if !is_empty && !walk(args, concat, one, &mut leaves) {
+            return err("step: a call's arguments not a list of `gimple.arg`s");
+        }
+        let mut widths = Vec::new();
+        let mut words = Vec::new();
+        for l in &leaves {
+            match l.node() {
+                Node::App(a, x) if Some(*a) == arg => {
+                    widths.push(x[0].clone());
+                    words.push(x[1].clone());
+                }
+                _ => return err("step: a call's argument not `gimple.arg(w, x)`"),
+            }
+        }
+        let ws: Vec<String> = widths.iter().map(|w| Printer::new(env).term(w)).collect();
+        let name = match ws.iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice() {
+            [] => "gc.regs0_ex",
+            ["64"] => "gc.regs1_ex",
+            ["32"] => "gc.regs1_32_ex",
+            ["64", "64"] => "gc.regs2_ex",
+            ["64", "64", "64"] => "gc.regs3_ex",
+            ["64", "32", "32"] => "gc.regs3w_ex",
+            _ => return err(format!("step: no register lemma for arguments of widths {}", ws.join(", "))),
+        };
+        let (in_, bits) = (in_.ok_or_else(|| KernelError("no `in`".into()))?, bits.ok_or_else(|| KernelError("no `bits`".into()))?);
+        let mut pre = Vec::new();
+        for (w, x) in widths.iter().zip(&words) {
+            pre.push(self.mem_discharge(env, lg, &Term::app(in_, vec![x.clone(), Term::app(bits, vec![w.clone()])]), using, 0)?);
+        }
+        if pre.is_empty() {
+            return facts::seq_of(env, name).ok_or_else(|| KernelError(format!("step: `{}` is not loaded", name)));
+        }
+        self.lemma(env, lg, name, &pre)
+    }
+
+    /// a call's `A || B` split: A (the overflow) carried to the outcome
+    /// through the pending continuations, A' -- the goal's disjunct, by
+    /// the frame `Cases` at the block's end --; B (the return) assumed, its
+    /// witnesses named by the next names, what the contract says of them
+    /// kept for after (`side`), its continuation returned to step on
+    fn step_split_call(&mut self, env: &mut Env, lg: &Logic, d: Seq, pending: &[Seq], xs: &mut std::collections::VecDeque<String>, side: &mut Vec<Seq>) -> KResult<Seq> {
+        let or = env.sym_by_name.get("or").copied();
+        let and = env.sym_by_name.get("and").copied().ok_or_else(|| KernelError("step: no `and`".into()))?;
+        let (a, bt) = match d.concl().node() {
+            Node::App(f, x) if Some(*f) == or => (x[0].clone(), x[1].clone()),
+            _ => return err("step: a call's rule not `A || B`"),
+        };
+        // (the overflow: ex v. v in Vm && X(v), X carried to the outcome)
+        let abody = match a.node() {
+            Node::App(e, x) if *e == lg.ex => x[0].clone(),
+            _ => return err("step: a call's overflow not `ex v. ..`"),
+        };
+        let vv = env.new_var("v", 0);
+        let vt = Term::var(vv, vec![]);
+        let pa = abody.instantiate_params(std::slice::from_ref(&vt), &env.binders_fn());
+        let sa = Seq::assume(env, pa.clone())?;
+        let vm = and_part(env, &sa, false)?;
+        let mut t = self.step_simp(env, lg, and_part(env, &sa, true)?)?;
+        let mut pend: Vec<Seq> = pending.to_vec();
+        loop {
+            let is_out = matches!(t.concl().node(), Node::App(f, x) if *f == lg.eq && matches!(x[0].node(), Node::Var(..)));
+            if !is_out || pend.is_empty() {
+                break;
+            }
+            let r = pend.pop().unwrap();
+            t = Seq::rewrite(env, &t, &r)?;
+            t = self.step_simp(env, lg, t)?;
+        }
+        if !pend.is_empty() {
+            return err(format!("step: a call's overflow not carried to the outcome: `{}`", Printer::new(env).short(t.concl())));
+        }
+        let both = Term::app(and, vec![vm.concl().clone(), t.concl().clone()]);
+        let conj = Seq::taut(env, lg, &[&vm, &t], &both)?;
+        let body = abstract_term(&both, &vt, 0, &env.binders_fn());
+        let sa2 = Seq::ex_intro(env, lg, &conj, &vt, &body)?;
+        let imp = Seq::gen(env, lg, &sa2.discharge(env, &pa)?, vv)?;
+        let ha = Seq::assume(env, a.clone())?;
+        let wit = Seq::witness(env, lg, &ha)?;
+        let c = Term::app(lg.choose, vec![abody.clone()]);
+        let inst = Seq::all_elim(env, lg, &imp, &c)?;
+        let a_imp = Seq::mp(env, &inst, &wit)?.discharge(env, &a)?;
+        self.frames.push(Frame::Cases(d, a_imp, bt.clone()));
+        // (the return: its witnesses named, the contract's facts kept)
+        let mut cur = Seq::assume(env, bt)?;
+        while matches!(cur.concl().node(), Node::App(e, _) if *e == lg.ex) {
+            let Some(x) = xs.pop_front() else {
+                return err(format!("step: a call's return: a name for `{}`", Printer::new(env).short(cur.concl())));
+            };
+            cur = self.obtain_one(env, lg, cur, &x)?;
+        }
+        // (an equation of the contract's: the continuation rewritten by it)
+        let sf = and_part(env, &cur, false)?;
+        let mut k = and_part(env, &cur, true)?;
+        if matches!(sf.concl().node(), Node::App(e, _) if *e == lg.eq) {
+            if let Ok(k2) = Seq::rewrite(env, &sf, &k) {
+                k = k2;
+            }
+        }
+        side.push(sf);
+        Ok(k)
     }
 
     /// `g.det(P, s, O)` for a bind's program P, a defined procedure outside
@@ -2749,6 +3173,70 @@ fn disj_parts(env: &Env, t: &Term) -> Vec<Term> {
 }
 
 /// with fact i used (and its copies: the same statement)
+/// a callee's contract at a call, or a lemma giving it: `all xs. H.. ->
+/// runs(app(F, regs), t, o) -> A || B`
+fn call_lemma(env: &Env, lg: &Logic, t: &Term) -> bool {
+    let runs = env.sym_by_name.get("runs").copied();
+    let app = env.sym_by_name.get("app").copied();
+    let or = env.sym_by_name.get("or").copied();
+    let mut t = t.clone();
+    while let Node::App(a, x) = t.node() {
+        if *a != lg.all {
+            break;
+        }
+        t = x[0].clone();
+    }
+    let mut last: Option<Term> = None;
+    let mut n = 0;
+    while let Node::App(i, x) = t.node() {
+        if *i != env.builtins.imp {
+            break;
+        }
+        last = Some(x[0].clone());
+        n += 1;
+        t = x[1].clone();
+    }
+    n >= 2 && matches!(t.node(), Node::App(o, _) if Some(*o) == or)
+        && last.is_some_and(|r| matches!(r.node(), Node::App(f, a) if Some(*f) == runs && matches!(a[0].node(), Node::App(h, _) if Some(*h) == app)))
+}
+
+/// a callee's contract at a call: `all regs o. P -> runs(app(F, regs), w,
+/// o) -> D`
+#[allow(dead_code)]
+fn call_fact(env: &Env, lg: &Logic, t: &Term) -> bool {
+    let runs = env.sym_by_name.get("runs").copied();
+    let app = env.sym_by_name.get("app").copied();
+    let mut t = t.clone();
+    for _ in 0..2 {
+        match t.node() {
+            Node::App(a, x) if *a == lg.all => t = x[0].clone(),
+            _ => return false,
+        }
+    }
+    let imp = env.builtins.imp;
+    let Node::App(i1, x1) = t.node() else { return false };
+    if *i1 != imp {
+        return false;
+    }
+    let Node::App(i2, x2) = x1[1].node() else { return false };
+    if *i2 != imp {
+        return false;
+    }
+    let rn = &x2[0];
+    matches!(rn.node(), Node::App(f, a) if Some(*f) == runs && matches!(a[0].node(), Node::App(h, x) if Some(*h) == app && x[1] == Term::bvar(1)) && a[2] == Term::bvar(0))
+}
+
+/// t's loose bound variables from `cutoff` lowered by d (None if one below
+/// d occurs)
+fn unshift(t: &Term, d: u32, cutoff: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Option<Term> {
+    match t.node() {
+        Node::BVar(i) if *i >= cutoff => (*i - cutoff >= d).then(|| Term::bvar(i - d)),
+        Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => Some(t.clone()),
+        Node::Var(_, a) => Some(t.with_args(a.iter().map(|x| unshift(x, d, cutoff, binders)).collect::<Option<Vec<_>>>()?)),
+        Node::App(s, a) => Some(t.with_args(a.iter().enumerate().map(|(i, x)| unshift(x, d, cutoff + binders(*s, i), binders)).collect::<Option<Vec<_>>>()?)),
+    }
+}
+
 fn mark_used(withs: &[Seq], used: &mut [bool], i: usize) {
     for j in 0..withs.len() {
         if withs[j].concl() == withs[i].concl() {

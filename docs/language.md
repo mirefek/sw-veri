@@ -547,7 +547,20 @@ goes, in order:
 - into L of `L && R` (while there are names or `with` items left), R
   waiting for L's outcome `x = V`; an L that is already `x = V` (an `if`
   step's rules decided) substituted into R;
-- and it stops at anything else -- a call, a loop, a bind or branch with
+- through a call (`gimple.call` / `call1`) by its callee's contract at the
+  call: a `with` lemma `all xs. H.. -> gc.regs_ok(regs, ARGS) ->
+  runs(app(F, regs), t, o) -> overflow || return` (`mp.dq_q`; or such a
+  fact without the H's). Its variables come from the call (t, ARGS), the
+  rest from `using` facts its premises match (the first, in order); its
+  premises, the world sound and a world, the registers and the callee
+  refining F (a `using` fact) are discharged as an operation's. The
+  return `ex r. o = ok(fn_update(w, "vm", V), r) && R(r)` (or `ex V r.
+  (V in Vm && P(V)) && ..`) takes the next names for its witnesses; R
+  (an equation rewrites the continuation) is a last conjunct of the
+  result. The overflow is carried to the outcome and must be a disjunct
+  of the block's goal (`ex v. v in Vm && o = exc(fn_update(s, "vm", v),
+  ..)`), closed at the block's end;
+- and it stops at anything else -- a loop, a bind or branch with
   no `with` fact for it, a choice with no name -- naming the fact there
   `h` (or its conjuncts `h..`). Unused names or `with` facts are an error
   (for an operation's lemma that matched but did not apply, why).
