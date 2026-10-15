@@ -647,7 +647,7 @@ fn later_hint(src: &str, msg: &str, line: usize) -> String {
         if matches!(ws.next(), Some("theorem" | "lemma" | "def" | "abbrev"))
             && ws.next().is_some_and(|w| w.split(['(', ':']).next() == Some(n))
         {
-            return format!(" (`{}` is declared later, at line {}: move it above, or declare it first as a `lemma`)", n, i + 1);
+            return format!(" (`{}` is declared later, at line {}: move it above -- scripts/reorder.py FILE --, or declare it first as a `lemma`)", n, i + 1);
         }
     }
     String::new()

@@ -421,6 +421,10 @@ mem_closure name               registers a memory closure
 bit_rule name                  registers a bit rule (below, "Bits")
 ```
 
+A name is used after its declaration (a forward use: an open `lemma`
+first). `scripts/reorder.py FILE` moves what a file uses too early up,
+just above its first use, with its comment.
+
 Terms:
 - the operators are fixed: `-> <-> || && ! = != in`;
 - binders are `all x. P`, `ex x. P`, and `x y. t` as an argument of a
