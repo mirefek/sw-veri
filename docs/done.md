@@ -658,3 +658,19 @@ item is a short summary of finished work; details are in the files named.
   - an active list reorganised (`mp.relist`: class sc's list l2, its
     groups' links the memory's) after dequeue or a rotation
     (`mp.holds_relist`: from `links_only` and `list_at`).
+- **Groups nest** (derived from the invariant, no new conjunct): every
+  group in use lies in one mapped on its own (`mp.root`); two groups'
+  bytes meeting, the later lies in a nested slot of the earlier
+  (`mp.laminar`); so a group's header byte in another group's bytes is in
+  a nested slot of it (`mp.hdr_nested`). Both by strong induction on where
+  a group starts.
+- **A group's active index raised** (`mp.holds_hdr`, `mp.holds_in_hdr`):
+  the masks frame's byte premise leaves the groups' bytes free
+  (`mp.ingrp`; what reads no group byte is apart from them by the regions'
+  separation, `mp.reg_nogrp`, `mp.grp_noarea`); the groups transferred one
+  by one (`mp.group_tr_g`), the groups nesting the header byte excluding
+  their nested slots.
+- **Induction from omega's definition**: induction by membership
+  (`omega_mem_ind`, the ordinals' induction on omega) in core/sets.core;
+  the induction on naturals (`nat_ind`) and strong induction
+  (`nat_strong_ind`) derived from it in core/nat.core.
