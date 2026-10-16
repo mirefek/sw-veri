@@ -295,7 +295,7 @@ pred areas_ok(c: Cfg, A: Abs, m: Mem) =
      (all a: nat. A.areas[k] <= a && a < A.areas[k] + 4096 && !in_taken(A, a) -> m_rw(m, a) && pg(m, a).value.kind != stack)) &&
   distinct: (all k: nat, l: nat. k < len(A.areas) && l < len(A.areas) && A.areas[k] = A.areas[l] -> k = l) &&
   // reserved pages: mapped (maybe PROT_NONE), zero
-  reserve: (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> m_mapped(m, a) && b8(m, a) = 0)
+  reserve: (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> m_mapped(m, a) && pg(m, a).value.kind != stack && b8(m, a) = 0)
 
 // every meta slot is used, free, not yet handed out, or taken (handed out,
 // its group not yet made) -- exactly one
@@ -447,7 +447,7 @@ pred blocks_ok(A: Abs, blocks: Addr -> Option[nat]) =
 pred normal(A: Abs) =
   (all g: nat. !is_used(A, g) -> A.metas[g] = ZERO_META && len(A.slots[g]) = 0) &&
   (A.init_done != 0 -> len(A.auxv) = 0 && A.auxv_at = 0) &&
-  (A.reserve_cnt = 0 -> A.reserve = 0) &&
+  (A.reserve_cnt = 0 <-> A.reserve = 0) &&
   !is_used(A, 0)
 
 // musl's code and constant tables are intact; single-threaded; the lock is free
@@ -504,9 +504,10 @@ pred debruijn_ok(c: Cfg, m: Mem) =
   (all a: nat. c.dbj <= a && a < c.dbj + 32 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack) &&
   (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.dbj && c.dbj + 32 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1])
 
-// the meta areas, the tables and the context: no client's bytes
+// the meta areas, the reserve, the tables and the context: no client's bytes
 pred fixed_free(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) =
   areas: (all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)) &&
+  reserve: (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> a notin live_of(blocks)) &&
   classes: (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks)) &&
   debruijn: (all a: nat. c.dbj <= a && a < c.dbj + 32 -> a notin live_of(blocks)) &&
   context: (all a: nat. c.ctx <= a && a < c.ctx + CTX_SIZE -> a notin live_of(blocks))
