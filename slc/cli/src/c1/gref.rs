@@ -751,12 +751,12 @@ impl<'e> Gen<'e> {
             let leaf = self.app(&ub, "eq", 2).is_some_and(|x| matches!(x[0].node(), Node::BVar(0)));
             if !leaf && self.mentions(&ub, w) {
                 let bb = self.abstract_(&ub, w, 0);
-                let (_, stmt) = self.inst("g.q_gen", &[("b", bb.clone())])?;
+                let (_, stmt) = self.inst("tr.q_from", &[("b", bb.clone())])?;
                 let (hs, _) = self.imps(&self.app(&self.app(&stmt, "all", 1).unwrap()[0], "all", 1).unwrap()[0].clone());
-                let q2 = self.app(&hs[0], "runs", 3).ok_or("g.q_gen")?[0].clone();
+                let q2 = self.app(&hs[0], "runs", 3).ok_or("tr.q_from")?[0].clone();
                 let j = self.new_q(q2);
                 let rest = self.walk(lo, j, w)?;
-                let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(mp(R::Inst("g.q_gen".into(), vec![("b", bb)]), vec![t(w)]))]);
+                let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(mp(R::Inst("tr.q_from".into(), vec![("b", bb)]), vec![t(w)]))]);
                 return self.run(&rr, &[]);
             }
         }
@@ -2070,7 +2070,7 @@ impl<'e> Gen<'e> {
         if disj.len() != labels.len() {
             return Err("v's disjuncts not the labels".into());
         }
-        let mut acc = self.run(&R::Inst("g.lab_none".into(), vec![("G", gl.clone())]), &[])?;
+        let mut acc = self.run(&R::Inst("tr.cfg_kk_nil".into(), vec![("P", gl.clone())]), &[])?;
         for i in (0..labels.len()).rev() {
             let (r, st) = self.inst("g.lab_pt", &[("G", gl.clone()), ("k", lit(labels[i]))])?;
             let (ps, _) = self.imps(&st);

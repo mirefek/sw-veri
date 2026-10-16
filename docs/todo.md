@@ -114,13 +114,9 @@ holding for the empty heap.
   stated, framed and read each by its own copy of the same lemmas
   (`mp.mf_classes` / `mp.mf_debruijn`, `mp.lf_*`, `mp.*_table`): one
   predicate for a read-only table, framed once, would serve both.
-- Lemmas stated twice (the checker's note, `ext::facts`): `dne_taut` /
-  `dne_any`, `x86.can_access_read` and `tr.acc_wr` / `x86.write_read`,
-  `g.q_gen` / `tr.q_from`, `g.lab_none` / `tr.cfg_kk_nil`, `abi.world_part`
-  / `tr.and_world`, `mp.w32_out` / `mp.wr32_out`, `mp.w32_typed` /
-  `mp.wr32_typed`, `mp.acr_abi` / `acr.implements_abi`, `mp.nr_out` /
-  `mp.nores`; `ms.imul_4` / `_16` and the generated contexts' effect lemmas
-  (`dqtc.eff_meta_next` .. in each `..tc`): one shared set.
+- Lemmas stated twice: `ms.imul_4` / `_16` and the generated contexts'
+  effect lemmas (`dqtc.eff_meta_next` .. repeated in each `..tc` of `slc
+  steps`): one shared set.
 - `search`: by patterns and by the goal; not yet by a premise's shape
   (what a fact in hand can be fed to), nor ranked by how much of the
   pattern a fact's statement is.
