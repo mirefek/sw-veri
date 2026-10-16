@@ -19,13 +19,17 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   `mp.holds_supply`, the groups' clauses kept) and the area's next meta
   taken (`mp.tav_holds_in`) and the free metas' head taken
   (`mp.tfr_holds_in`, dequeue_head), both instances of the general take
-  step (`mp.tkpre`, `mp.tk_holds_in`), are done. Left: a new area from brk or
-  from the mmap'd reserve (mprotect'ed: pages change, `areas` grows); the
-  first call's secret (get_random_secret: the auxiliary vector leaves the
-  footprint); then the run (the GIMPLE walk under the callees' World
-  specs, layers/mallocng_specs.sl) and the machine form. A failed mmap of
-  the meta areas' doubling size keeps `meta_alloc_shift <= 34`
-  (`TASK_SIZE`).
+  step (`mp.tkpre`, `mp.tk_holds_in`), are done, and so is a meta area
+  added from the reserve (proofs/mallocng/model/newarea.core:
+  `mp.na_holds_in`, its page made accessible by mprotect or fresh from
+  brk). Left: the reserve refilled (brk: the pages past the break, the
+  first time with a guard page; mmap: 2 << shift pages, the first a guard;
+  brk's failure: `ctx.brk = -1`) -- a range fresh, apart from the regions
+  as unmapped before; the first call's secret (get_random_secret: the
+  auxiliary vector leaves the footprint); then the run (the GIMPLE walk
+  under the callees' World specs, layers/mallocng_specs.sl) and the
+  machine form. A failed mmap of the meta areas' doubling size keeps
+  `meta_alloc_shift <= 34` (`TASK_SIZE`).
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already

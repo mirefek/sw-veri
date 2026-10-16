@@ -1871,3 +1871,415 @@ proof
   show := rewrite(sym(e2), s)
 qed
 
+// (a group's byte: in no fixed range, so off the reserve's first page)
+theorem mp.na_grpfar(c, A, vm, V1, b, h, a): mp.napre(c, A, vm, V1, b) -> mallocng.is_used(A, h) -> a in omega ->
+  mallocng.in_range(a, mallocng.group_range(A.metas[h])) ->
+  far: !mallocng.in_ranges(a, mallocng.fixed_ranges(c, A)) && off: !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096)))
+proof
+  assume P iu hao hr
+  have {hh = holds} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hga = apart} := expand(H, mallocng.holds)
+  obtain k, hk hkl hke from expand(iu, mallocng.is_used)
+  have nf := mp(all_elim(expand(hga, mallocng.groups_apart), {k}, {a}), conj(hk, hao), conj(hkl, rewrite(sym(hke), hr)))
+  have q := apply(mp.na_infixed[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao)
+  show by taut(nf, q)
+qed
+
+// the permissions for the new state: as before (none of those bytes on
+// the reserve's first page)
+theorem mp.na_perms(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) ->
+  mallocng.perms_ok(c, mp.narea(A), mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), b)
+proof
+  assume P
+  let A2 := mp.narea(A)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  let M2 := mallocng.mview(V1, mallocng.held(c, A2, b))
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hpm = perms, hnm = normal} := expand(H, mallocng.holds)
+  have q1 q2 q3 := expand(hpm, mallocng.perms_ok)
+  have {em = metas, es = slots, eu = used} := apply(mp.na_basic, P)
+  have {ni = init, rc = cnt} := apply(mp.na_res, P)
+  have r1: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, 3) && int_le(fst(mallocng.data_ranges(c)[x0]), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.data_ranges(c)[x0]), snd(mallocng.data_ranges(c)[x0])))) && !mallocng.ctx_free(c, x1) ->
+      mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2) proof
+    fix k a
+    assume ho h
+    have hk hao := ho
+    have hkl h1 h2 _ := h
+    have inr: mallocng.in_range(a, mallocng.data_ranges(c)[k]) by defs(taut(h1, h2), mallocng.in_range)
+    have ed: ex i. i in omega && int_lt(i, 3) && mallocng.in_range(a, mallocng.data_ranges(c)[i]) by ex_intro({k}, taut(hk, hkl, inr))
+    have nr := apply(mp.not_res[c := c, A := A, M := M, b := b, brk := vm.brk, a := a], hc, hu, ha, H, taut(ed))
+    have nr2: !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(nr, mallocng.in_range))
+    have np: !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096))) by arith(nr2, hrc, rc)
+    have pe := apply(mp.na_pgeq[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, np)
+    have {rw = rw} := apply(mp.pg_same, pe)
+    have o1 o2 := mp(all_elim(q1, {k}, {a}), ho, h)
+    show by taut(rw, o1, rewrite(sym(pe), o2))
+  qed
+  have r2: all x0. all x1. x0 in omega && x1 in omega -> (((int_lt(x0, seq_len(A.used)) && int_le(fst(mallocng.group_range(A.metas[A.used[x0]])), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.group_range(A.metas[A.used[x0]])), snd(mallocng.group_range(A.metas[A.used[x0]]))))) && !(x1 in malloc.live_of(b))) &&
+      !mallocng.in_reserved(A2, x1) -> mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2) proof
+    fix k a
+    assume ho h
+    have hk hao := ho
+    have hkl h1 h2 nl nr2 := h
+    have nr: !mallocng.in_reserved(A, a) by taut(nr2, apply(mp.inres_fields[A := A, A2 := A2, a := a], em, es, eu))
+    have inr: mallocng.in_range(a, mallocng.group_range(A.metas[A.used[k]])) by defs(taut(h1, h2), mallocng.in_range)
+    have iu: mallocng.is_used(A, A.used[k]) by defs(ex_intro({k}, taut(hk, hkl, refl({A.used[k]}))), mallocng.is_used)
+    have {np = off} := apply(mp.na_grpfar[c := c, A := A, vm := vm, V1 := V1, b := b, h := A.used[k], a := a], P, iu, hao, inr)
+    have pe := apply(mp.na_pgeq[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, np)
+    have {rw = rw} := apply(mp.pg_same, pe)
+    have o1 o2 := mp(all_elim(q2, {k}, {a}), ho, taut(hkl, h1, h2, nl, nr))
+    show by taut(rw, o1, rewrite(sym(pe), o2))
+  qed
+  have r3: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(mallocng.auxv_ranges(A))) && int_le(fst(mallocng.auxv_ranges(A)[x0]), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.auxv_ranges(A)[x0]), snd(mallocng.auxv_ranges(A)[x0]))) -> mallocng.m_mapped(M2, x1) && snd(mallocng.pg(M2, x1)).prot.r proof
+    fix k a
+    assume ho h
+    have hk _ := ho
+    have hkl h1 h2 := h
+    have f := apply(mp.auxv_none[A := A, k := k, a := a], hu, ha, hnm, ni, hk, hkl)
+    show by taut(f, (mallocng.in_range(a, mallocng.auxv_ranges(A)[k]) by defs(taut(h1, h2), mallocng.in_range)))
+  qed
+  have ear: mallocng.auxv_ranges(A2) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)
+  show by defs(simp(r1, r2, r3, ear, em, eu), mallocng.perms_ok)
+qed
+
+// (segment i of the image, loaded and read-only: its range)
+theorem mp.ro_at(c, i): c in mallocng.Cfg -> i in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> x86_64_linux.is_load(c.file, i) ->
+  !bit(x86_64_linux.segment(c.file, i).flags, 1) ->
+  mallocng.ro_ranges(c.file)[i] = pair(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.segment(c.file, i).memsz)
+proof
+  assume hc hi hil hl hf
+  let F := c.file
+  have fs: F in seq_type(bits(8)) by simp(hc)
+  have pn: x86_64_linux.phnum(F) in omega by defs(mp(x86.le_at_nat[f := F, off := 56, n := 2], fs, simp()), x86_64_linux.phnum)
+  have iin := mp(nat_lt_mem[k := i, n := int_sub(x86_64_linux.phnum(F), 0)], hi, arith(pn), arith(hil, pn))
+  have ab := mp(app_fn_build[d := int_sub(x86_64_linux.phnum(F), 0), v := x0. ite(x86_64_linux.is_load(F, int_add(0, x0)) && !bit(x86_64_linux.segment(F, int_add(0, x0)).flags, 1),
+    pair(x86_64_linux.segment(F, int_add(0, x0)).vaddr, x86_64_linux.segment(F, int_add(0, x0)).memsz), pair(0, 0)), a := i], iin)
+  have z: int_add(0, i) = i by arith(hi)
+  show by defs(simp(ab, z, hl, hf), mallocng.ro_ranges)
+qed
+
+// (a page a read-only segment is last on: not the reserve's first page --
+// a byte of the segment on it)
+theorem mp.na_ropg(c, A, vm, V1, b, i, p): mp.napre(c, A, vm, V1, b) -> i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) ->
+  !bit(x86_64_linux.segment(c.file, i).flags, 1) -> x86_64_linux.last_on_page(c.file, i, p) ->
+  !(p = int_div(A.reserve, 4096))
+proof
+  assume P hi hp hil hf hlp
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
+  let F := c.file
+  let V := x86_64_linux.segment(F, i).vaddr
+  let S := x86_64_linux.segment(F, i).memsz
+  have hl sp _ := expand(hlp, x86_64_linux.last_on_page)
+  have sm p1 p2 := expand(sp, x86_64_linux.seg_page)
+  have fs: F in seq_type(bits(8)) by simp(hc)
+  have v1 := mp(x86.le_at_nat[f := F, off := int_add(x86_64_linux.ph(F, i), 16), n := 8], fs, simp())
+  have v2 := mp(x86.le_at_nat[f := F, off := int_add(x86_64_linux.ph(F, i), 40), n := 8], fs, simp())
+  have vo: V in omega by defs(simp(v1), x86_64_linux.segment)
+  have so: S in omega by defs(simp(v2), x86_64_linux.segment)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have er := apply(mp.ro_at, hc, hi, hil, hl, hf)
+  assume e
+  // (a byte y of the segment on page p: then the reserve's -- not so)
+  have no: all y. y in omega -> int_le(V, y) -> int_lt(y, int_add(V, S)) -> !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, 4096))) proof
+    fix y
+    assume yo y1 y2
+    have inr: mallocng.in_range(y, mallocng.ro_ranges(F)[i]) by defs(simp(er, y1, y2), mallocng.in_range)
+    have ex: ex j. j in omega && int_lt(j, x86_64_linux.phnum(F)) && mallocng.in_range(y, mallocng.ro_ranges(F)[j]) by ex_intro({i}, taut(hi, hil, inr))
+    have nr := apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := y], hc, hu, ha, H, taut(ex))
+    have nr2: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(nr, mallocng.in_range))
+    show by arith(nr2, hrc, rc)
+  qed
+  have d1: int_le(V, int_mul(p, 4096)) -> false proof
+    assume h
+    have q := mp(all_elim(no, {int_mul(p, 4096)}), (int_mul(p, 4096) in omega by simp(hp)), h, (int_lt(int_mul(p, 4096), int_add(V, S)) by arith(p2, kp, vo, so, sm, hp)))
+    show by arith(q, e, ral, ro, hp)
+  qed
+  have d2: !int_le(V, int_mul(p, 4096)) -> false proof
+    assume h
+    have q := mp(all_elim(no, {V}), vo, (int_le(V, V) by arith()), (int_lt(V, int_add(V, S)) by arith(sm, so)))
+    show by arith(q, e, ral, ro, hp, p1, kp, vo, h)
+  qed
+  show by taut(d1, d2)
+qed
+
+// the invariant for the new state on its view
+theorem mp.na_holds(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) ->
+  mallocng.holds(c, mp.narea(A), mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), b, V1.brk)
+proof
+  assume P
+  let A2 := mp.narea(A)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  let M2 := mallocng.mview(V1, mallocng.held(c, A2, b))
+  have {hc = cfg, hu = univ, ha = abs, hb = blocks, hh = holds, rest = rest, hrc = rcnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hnm = normal, hbk = brk, hcl = classes, hdb = debruijn, hff = fixed, hga = apart, himg = image, huo = used} := expand(H, mallocng.holds)
+  have {em = metas, es = slots, eu = used, ea = active} := apply(mp.na_basic, P)
+  have {ni = init, ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
+  have {l2 = len, lst = last, od = old} := apply(mp.na_last, P)
+  have gbs: all a. a in omega -> mp.ingrp(A, a) -> M2[a] = M[a] proof
+    fix a
+    assume hao ig
+    obtain h, iu gb from expand(ig, mp.ingrp)
+    have {go = nat} := apply(mp.used_nat, ha, iu)
+    have gok := apply(mp.used_group, huo, iu)
+    have g1 g2 := expand(gb, mp.gb)
+    have inr := apply(mp.group_bytes[A := A, M := M, b := b, h := h, a := a], ha, go, gok, hao, g1, g2)
+    have {nf = far} := apply(mp.na_grpfar[c := c, A := A, vm := vm, V1 := V1, b := b, h := h, a := a], P, iu, hao, inr)
+    show := apply(mp.na_far[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, nf)
+  qed
+  have rcs: all g. all a. mallocng.is_used(A, g) -> a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> M2[a] = M[a] proof
+    fix g a
+    assume iu hao h1 h2
+    show := apply(mp.na_meta[c := c, A := A, vm := vm, V1 := V1, b := b, g := g, a := a], P, apply(mp.used_slot, H, iu), hao, h1, h2)
+  qed
+  have d0 d1 d2 := apply(mp.data_at[c := c])
+  have cl1 cl2 cl3 := (c.ctx in omega && c.lock in omega && c.libc in omega by simp(hc))
+  have ro2: all i. all a. i in omega -> a in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) -> M2[a] = M[a] proof
+    fix i a
+    assume hi hao hil inr
+    have e: ex i0. i0 in omega && int_lt(i0, x86_64_linux.phnum(c.file)) && mallocng.in_range(a, mallocng.ro_ranges(c.file)[i0]) by ex_intro({i}, taut(hi, hil, inr))
+    show := apply(mp.na_ro[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, taut(e))
+  qed
+  have pgs: all i. all p. i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> x86_64_linux.is_load(c.file, i) -> !bit(x86_64_linux.segment(c.file, i).flags, 1) ->
+      int_le(int_div(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.PAGE), p) ->
+      int_le(p, int_div(int_sub(int_add(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.segment(c.file, i).memsz), 1), x86_64_linux.PAGE)) ->
+      x86_64_linux.last_on_page(c.file, i, p) -> mallocng.pg(M2, int_mul(p, x86_64_linux.PAGE)) = mallocng.pg(M, int_mul(p, x86_64_linux.PAGE)) proof
+    fix i p
+    assume hi hp hil _ hnf _ _ hlp
+    have np := apply(mp.na_ropg[c := c, A := A, vm := vm, V1 := V1, b := b, i := i, p := p], P, hi, hp, hil, hnf, hlp)
+    have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+    have nr: !(int_le(A.reserve, int_mul(p, x86_64_linux.PAGE)) && int_lt(int_mul(p, x86_64_linux.PAGE), int_add(A.reserve, 4096))) by arith(np, kp, ro, ral, hp)
+    show := apply(mp.na_pgeq[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_mul(p, x86_64_linux.PAGE)], P, (int_mul(p, x86_64_linux.PAGE) in omega by simp(hp, kp)), nr)
+  qed
+  have lnl: mallocng.L_NEED_LOCKS = 3 by defs(simp(), mallocng.L_NEED_LOCKS)
+  have lb: mallocng.in_range(int_add(c.libc, mallocng.L_NEED_LOCKS), mallocng.data_ranges(c)[2]) by defs(simp(d2, lnl, (int_lt(int_add(c.libc, 3), int_add(c.libc, 16)) by arith(cl3))), mallocng.in_range)
+  have lbx: ex i. i in omega && (int_lt(0, i) && int_lt(i, 3)) && mallocng.in_range(int_add(c.libc, mallocng.L_NEED_LOCKS), mallocng.data_ranges(c)[i])
+    by ex_intro({2}, taut((2 in omega by simp()), (int_lt(0, 2) && int_lt(2, 3) by simp()), lb))
+  have nl := apply(mp.na_ro[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(c.libc, mallocng.L_NEED_LOCKS)], P, simp(cl3, lnl), taut(lbx))
+  have lk: all i. i in omega -> int_lt(i, 4) -> M2[int_add(c.lock, i)] = M[int_add(c.lock, i)] proof
+    fix i
+    assume hi hil
+    have inr: mallocng.in_range(int_add(c.lock, i), mallocng.data_ranges(c)[1]) by defs(simp(d1, (int_lt(int_add(c.lock, i), int_add(c.lock, 4)) by arith(cl2, hi, hil)), cl2, hi), mallocng.in_range)
+    have ex: ex j. j in omega && (int_lt(0, j) && int_lt(j, 3)) && mallocng.in_range(int_add(c.lock, i), mallocng.data_ranges(c)[j])
+      by ex_intro({1}, taut((1 in omega by simp()), (int_lt(0, 1) && int_lt(1, 3) by simp()), inr))
+    show := apply(mp.na_ro[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(c.lock, i)], P, simp(cl2, hi), taut(ex))
+  qed
+  have img := apply(mp.image_tr[c := c, M := M, M2 := M2], hc, himg, ro2, pgs, nl, lk)
+  have _ _ kc3 := expand(hcl, mallocng.classes_ok)
+  have cla: all a. a in omega -> int_le(c.sct, a) -> int_lt(a, int_add(c.sct, 96)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    obtain i, hi hil r1 r2 from kc3
+    have inr: mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) by defs(arith(r1, r2, h1, h2), mallocng.in_range)
+    show := mp(all_elim(ro2, {i}, {a}), hi, hao, hil, inr)
+  qed
+  have cl := apply(mp.classes_tr[c := c, M := M, M2 := M2], hc, hcl, cla)
+  have _ _ kd3 := expand(hdb, mallocng.debruijn_ok)
+  have dba: all a. a in omega -> int_le(c.dbj, a) -> int_lt(a, int_add(c.dbj, 32)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    obtain i, hi hil r1 r2 from kd3
+    have inr: mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) by defs(arith(r1, r2, h1, h2), mallocng.in_range)
+    show := mp(all_elim(ro2, {i}, {a}), hi, hao, hil, inr)
+  qed
+  have db := apply(mp.debruijn_tr[c := c, M := M, M2 := M2], hc, hdb, dba)
+  have cok2 := apply(mp.na_ctx, P)
+  have ar2 := apply(mp.na_areas, P)
+  have pm2 := apply(mp.na_perms, P)
+  have ni2: !(A2.init_done = 0) by simp(ni)
+  have fr2: mallocng.fresh_ok(c, A2, M2) by defs(taut(ni2), mallocng.fresh_ok)
+  have pt2 := apply(mp.na_part, P)
+  // normal: the reserve 0 just when none left
+  have r3: A2.reserve_cnt = 0 <-> A2.reserve = 0 proof
+    have y: A.reserve_cnt = 1 -> (A2.reserve_cnt = 0 <-> A2.reserve = 0) proof
+      assume e
+      have z1: A2.reserve_cnt = 0 by simp(e)
+      have z2: A2.reserve = 0 by simp(e)
+      show by taut(z1, z2)
+    qed
+    have n: !(A.reserve_cnt = 1) -> (A2.reserve_cnt = 0 <-> A2.reserve = 0) proof
+      assume e
+      have z1: A2.reserve_cnt = int_sub(A.reserve_cnt, 1) by simp(e)
+      have z2: A2.reserve = int_add(A.reserve, 4096) by simp(e)
+      show by taut((!(A2.reserve_cnt = 0) by arith(z1, e, hrc, rc)), (!(A2.reserve = 0) by arith(z2, ro)))
+    qed
+    show by taut(y, n)
+  qed
+  have n1 n2 _ n4 := expand(hnm, mallocng.normal)
+  have iu: all g. mallocng.is_used(A2, g) <-> mallocng.is_used(A, g) proof
+    fix g
+    show by defs(simp(eu), mallocng.is_used)
+  qed
+  have m1: all x0. x0 in omega -> !mallocng.is_used(A2, x0) -> A2.metas[x0] = mallocng.ZERO_META && seq_len(A2.slots[x0]) = 0 proof
+    fix g
+    assume hg hn
+    have q := mp(all_elim(n1, {g}), hg, (!mallocng.is_used(A, g) by taut(hn, all_elim(iu, {g}))))
+    show := rewrite(sym(es), rewrite(sym(em), q))
+  qed
+  have m2: !(A2.init_done = 0) -> seq_len(A2.auxv) = 0 && A2.auxv_at = 0 by simp(n2)
+  have m4: !mallocng.is_used(A2, 0) by taut(n4, all_elim(iu, {0}))
+  have nm2: mallocng.normal(A2) by defs(taut(m1, m2, r3, m4), mallocng.normal)
+  have eb: V1.brk = vm.brk := rewrite(rest, (V1.brk = fn_update(fn_update(V1, "bytes", vm.bytes), "pages", vm.pages).brk by simp()))
+  have bk2: mallocng.brk_ok(A2, V1.brk) by defs(simp(expand(hbk, mallocng.brk_ok), eb), mallocng.brk_ok)
+  have sp2 := apply(mp.na_sep, P)
+  // no client's bytes in the areas, the reserve: the old ones'
+  have {fa = areas, fr = reserve, fcl = classes, fdb = debruijn, fcx = context} := expand(hff, mallocng.fixed_free)
+  have f1: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(A2.areas)) && int_le(A2.areas[x0], x1)) && int_lt(x1, int_add(A2.areas[x0], 4096)) ->
+      !(x1 in malloc.live_of(b)) proof
+    fix k a
+    assume ho h
+    have hk hao := ho
+    have hkl h1 h2 := h
+    have co: int_lt(k, seq_len(A.areas)) -> !(a in malloc.live_of(b)) proof
+      assume hl
+      have ek := mp(all_elim(od, {k}), hk, hl)
+      show := mp(all_elim(fa, {k}, {a}), ho, taut(hl, rewrite(ek, h1), rewrite(ek, h2)))
+    qed
+    have cn: k = seq_len(A.areas) -> !(a in malloc.live_of(b)) proof
+      assume e
+      have i0: int_sub(seq_len(A2.areas), 1) = k by arith(l2, e)
+      have ek := subst({y. A2.areas[y] = A.reserve}, i0, lst)
+      show := mp(all_elim(fr, {a}), hao, conj(rewrite(ek, h1), (int_lt(a, int_add(A.reserve, int_mul(4096, A.reserve_cnt))) by arith(rewrite(ek, h2), hrc, rc))))
+    qed
+    have no: seq_len(A.areas) in omega by arith((A.areas in list_type(omega) by simp(ha)))
+    show by taut(co, cn, (int_lt(k, seq_len(A.areas)) || k = seq_len(A.areas) by arith(hkl, l2, hk, no)))
+  qed
+  have f2: all x0. x0 in omega -> int_le(A2.reserve, x0) && int_lt(x0, int_add(A2.reserve, int_mul(4096, A2.reserve_cnt))) -> !(x0 in malloc.live_of(b)) proof
+    fix a
+    assume hao h
+    have h1 h2 := h
+    have y: A.reserve_cnt = 1 -> !(a in malloc.live_of(b)) proof
+      assume e
+      have z: A2.reserve_cnt = 0 by simp(e)
+      show by arith(h1, h2, z)
+    qed
+    have n: !(A.reserve_cnt = 1) -> !(a in malloc.live_of(b)) proof
+      assume e
+      have z1: A2.reserve_cnt = int_sub(A.reserve_cnt, 1) by simp(e)
+      have z2: A2.reserve = int_add(A.reserve, 4096) by simp(e)
+      show := mp(all_elim(fr, {a}), hao, conj((int_le(A.reserve, a) by arith(h1, z2, ro)), (int_lt(a, int_add(A.reserve, int_mul(4096, A.reserve_cnt))) by arith(h2, z1, z2, hrc, rc))))
+    qed
+    show by taut(y, n)
+  qed
+  have ff2: mallocng.fixed_free(c, A2, b) by defs(taut(f1, f2, fcl, fdb, fcx), mallocng.fixed_free)
+  have ga2: mallocng.groups_apart(c, A2) proof
+    have q: all x0. all x1. x0 in omega && x1 in omega -> int_lt(x0, seq_len(A2.used)) && mallocng.in_range(x1, mallocng.group_range(A2.metas[A2.used[x0]])) ->
+        !mallocng.in_ranges(x1, mallocng.fixed_ranges(c, A2)) proof
+      fix k a
+      assume ho h
+      have _ hao := ho
+      have o := mp(all_elim(expand(hga, mallocng.groups_apart), {k}, {a}), ho, rewrite(em, rewrite(eu, h)))
+      have fx := apply(mp.na_fixed[c := c, A := A, a := a], hc, hu, ha, hrc)
+      show by taut(o, fx)
+    qed
+    show by defs(q, mallocng.groups_apart)
+  qed
+  show := apply(mp.holds_supply[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := vm.brk, brk2 := V1.brk], ha, hb, H, em, es, eu, ea, gbs, rcs,
+    img, cok2, fr2, ar2, pt2, nm2, bk2, pm2, sp2, cl, db, ff2, ga2)
+qed
+
+// The step: the invariant in memory for the new state
+theorem mp.na_holds_in(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) -> mallocng.holds_in(c, mp.narea(A), V1, b)
+proof
+  assume P
+  let A2 := mp.narea(A)
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hpg = pages, rw0 = pg0, hrc = rcnt} := P
+  have {H = inv, hm = mapped, hfr = free, hrw = rw} := expand(hh, mallocng.holds_in)
+  have {em = metas, es = slots, eu = used, fl = fp} := apply(mp.na_basic, P)
+  have {ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
+  have h2 := apply(mp.na_holds, P)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  // (V1's pages: vm's but the reserve's first one, which is mapped)
+  have pq: all a. a in omega -> !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096))) ->
+      V1.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+    fix a
+    assume hao np
+    have qn: !(int_div(a, x86_64_linux.PAGE) = int_div(A.reserve, 4096)) by arith(kp, hao, ro, ral, np)
+    show := mp(all_elim(hpg, {int_div(a, x86_64_linux.PAGE)}), (int_div(a, x86_64_linux.PAGE) in omega by arith(kp, hao)), qn)
+  qed
+  have r1 _ := rw0
+  have m0 _ _ := expand(r1, mallocng.m_rw)
+  have mb mn := expand(m0, mallocng.m_mapped)
+  have p0 := apply(mp.pg_view[vm := V1, fp := mallocng.all_bytes(), a := A.reserve], ro, (A.reserve in mallocng.all_bytes() by defs(sel(taut(ro)), mallocng.all_bytes)))
+  have r0m: x86_64_linux.mapped(V1, int_div(A.reserve, x86_64_linux.PAGE)) by defs(taut(mb, rewrite(p0, mn)), x86_64_linux.mapped)
+  // the owned bytes mapped
+  have mq: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(mallocng.fp_ranges(c, A2))) && int_le(fst(mallocng.fp_ranges(c, A2)[x0]), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A2)[x0]), snd(mallocng.fp_ranges(c, A2)[x0])))) && !(x1 in malloc.live_of(b)) ->
+      x86_64_linux.mapped(V1, int_div(x1, x86_64_linux.PAGE)) proof
+    fix k a
+    assume ho h
+    have hk hao := ho
+    have hkl h1 h2 nl := h
+    have inr: mallocng.in_range(a, mallocng.fp_ranges(c, A2)[k]) by defs(taut(h1, h2), mallocng.in_range)
+    have ir2: mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) by defs(ex_intro({k}, taut(hk, hkl, inr)), mallocng.in_ranges)
+    have ir1: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) by taut(ir2, apply(mp.na_fpr[c := c, A := A, a := a], hc, hu, ha, hrc))
+    obtain k1, hk1 hk1l hr1 from expand(ir1, mallocng.in_ranges)
+    have g1 g2 := expand(hr1, mallocng.in_range)
+    have mo := mp(all_elim(expand(hm, mallocng.fp_mapped), {k1}, {a}), conj(hk1, hao), taut(hk1l, g1, g2, nl))
+    have c1: int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096)) -> x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
+      assume w
+      have q: int_div(a, x86_64_linux.PAGE) = int_div(A.reserve, x86_64_linux.PAGE) by arith(kp, hao, ro, ral, w)
+      show := rewrite(sym(q), r0m)
+    qed
+    have c2: !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096))) -> x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
+      assume w
+      have e := mp(all_elim(pq, {a}), hao, w)
+      show by defs(rewrite(sym(e), expand(mo, x86_64_linux.mapped)), x86_64_linux.mapped)
+    qed
+    show by taut(c1, c2)
+  qed
+  have m2: mallocng.fp_mapped(mallocng.fp_ranges(c, A2), b, V1) by defs(mq, mallocng.fp_mapped)
+  // the free bytes: the context's, off the reserve's first page
+  have fm: all a. a in omega -> mallocng.ctx_free(c, a) -> (a in mallocng.footprint(c, A, b) <-> a in mallocng.footprint(c, A2, b)) proof
+    fix a
+    assume _ _
+    show by taut(all_elim(fl, {a}))
+  qed
+  have f1 := apply(mp.free_rw_mem[c := c, vm := vm, F1 := mallocng.footprint(c, A, b), F2 := mallocng.footprint(c, A2, b)], hfr, fm)
+  have fq: all a. a in omega -> mallocng.ctx_free(c, a) -> mallocng.m_rw(mallocng.mview(V1, mallocng.footprint(c, A2, b)), a) &&
+      !(snd(mallocng.pg(mallocng.mview(V1, mallocng.footprint(c, A2, b)), a)).kind = 2) proof
+    fix a
+    assume hao hfa
+    have o1 o2 := mp(all_elim(expand(f1, mallocng.free_rw), {a}), hao, hfa)
+    have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+    have inc: int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))
+      by arith(expand(hfa, mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK), ks)
+    have d0 _ _ := mp.data_at[c := c]
+    have i0: mallocng.in_range(a, mallocng.data_ranges(c)[0]) by defs(simp(d0, inc), mallocng.in_range)
+    have ex: ex j. j in omega && int_lt(j, 3) && mallocng.in_range(a, mallocng.data_ranges(c)[j]) by ex_intro({0}, taut((0 in omega by simp()), (int_lt(0, 3) by simp()), i0))
+    have nr := apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := a], hc, hu, ha, H, taut(ex))
+    have nr2: !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(nr, mallocng.in_range))
+    have np: !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096))) by arith(nr2, hrc, rc)
+    have pe := apply(mp.view_pg1[vm := vm, vm2 := V1, fp := mallocng.footprint(c, A2, b), a := a], hao, mp(all_elim(pq, {a}), hao, np))
+    have {rw = rw} := apply(mp.pg_same, pe)
+    show by taut(rw, o1, rewrite(sym(pe), o2))
+  qed
+  have f2: mallocng.free_rw(c, mallocng.mview(V1, mallocng.footprint(c, A2, b))) by defs(fq, mallocng.free_rw)
+  // the groups' bytes: accessible as before (none on the new area's page)
+  have gq: all x0. all x1. x0 in omega && x1 in omega -> (mallocng.is_used(A2, x0) && mallocng.in_range(x1, mallocng.group_range(A2.metas[x0]))) &&
+      ((x1 in mallocng.footprint(c, A2, b) || x1 in malloc.live_of(b)) || mallocng.in_reserved(A2, x1)) ->
+      mallocng.m_rw(mallocng.mview(V1, mallocng.all_bytes()), x1) && !(snd(mallocng.pg(mallocng.mview(V1, mallocng.all_bytes()), x1)).kind = 2) proof
+    fix g a
+    assume ho h
+    have hg hao := ho
+    have iu2 inr2 w := h
+    have iu: mallocng.is_used(A, g) by defs(rewrite(eu, expand(iu2, mallocng.is_used)), mallocng.is_used)
+    have inr: mallocng.in_range(a, mallocng.group_range(A.metas[g])) := rewrite(em, inr2)
+    have re := apply(mp.inres_fields[A := A, A2 := A2, a := a], em, es, eu)
+    have w1: (a in mallocng.footprint(c, A, b) || a in malloc.live_of(b)) || mallocng.in_reserved(A, a) by taut(w, all_elim(fl, {a}), re)
+    have o1 o2 := mp(all_elim(expand(hrw, mallocng.grp_rw), {g}, {a}), ho, taut(iu, inr, w1))
+    have {np = off} := apply(mp.na_grpfar[c := c, A := A, vm := vm, V1 := V1, b := b, h := g, a := a], P, iu, hao, inr)
+    have pe := apply(mp.view_pg1[vm := vm, vm2 := V1, fp := mallocng.all_bytes(), a := a], hao, mp(all_elim(pq, {a}), hao, np))
+    have {rw = rw} := apply(mp.pg_same, pe)
+    show by taut(rw, o1, rewrite(sym(pe), o2))
+  qed
+  have r2: mallocng.grp_rw(c, A2, V1, b) by defs(gq, mallocng.grp_rw)
+  show by defs(taut(h2, m2, f2, r2), mallocng.holds_in)
+qed
