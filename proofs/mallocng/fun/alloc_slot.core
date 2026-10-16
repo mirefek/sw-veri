@@ -25,7 +25,7 @@ abbrev mp.agr_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bit
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
   runs(f[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
-  (ex V rr. (V in x86_64_linux.Vm && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && A2.active[sc] = h.A.active[sc]) &&
+  (ex V rr. (V in x86_64_linux.Vm && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && A2.active[sc] = h.A.active[sc] && A2.taken = h.A.taken) &&
      (fst(rr) = 0 || mallocng_specs.fresh_group(A2, fst(rr), sc, req)) &&
      mallocng.holds_in(c, A2, V, h.blocks) && mallocng.untouched(c, h.A, h.blocks, t.vm, V, mp.errno(t.fs_base)) && mp.grown(c, A2, h.A, h.blocks, t.vm) &&
      (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(V, A2.metas[fst(rr)]), A2.metas[fst(rr)].last_idx) ->
@@ -38,7 +38,7 @@ abbrev mp.agr_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bit
 // but errno, the allocator grown only into memory unmapped before -- or an
 // overflow
 abbrev mp.as_out(c, A, sc, req, b, s, o) := (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
-  (ex A2 V2 r. (A2 in mallocng.Abs && A2 in univ(1)) && r in bits(32) &&
+  (ex A2 V2 r. (A2 in mallocng.Abs && A2 in univ(1)) && A2.taken = A.taken && r in bits(32) &&
      ((r = 4294967295 && mallocng.no_reserved(A2)) ||
       (int_lt(r, 32) && ord_lt(0, seq_len(A2.active[sc])) && mallocng.reserved_only(A2, A2.active[sc][0], r) &&
        A2.metas[A2.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A2.metas[A2.active[sc][0]])))) &&
@@ -495,7 +495,7 @@ proof
   have fsub := apply(mp.fp_sub[c := c, A := A, A2 := A1, b := B], fr, ftk, hnr)
   have {H1 = inv} := expand(hin1, mallocng.holds_in)
   have {hac1 = active, cok1 = ctx} := expand(H1, mallocng.holds)
-  have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok1, mallocng.ctx_ok)
+  have _ _ _ _ _ _ _ _ _ _ c11 .. := expand(cok1, mallocng.ctx_ok)
   have al1: A1.active in list_type(list_type(omega)) by simp(a1a)
   have l1t := mp(at_type[l := A1.active, t := list_type(omega), i := sc], al1, hs, (int_lt(sc, seq_len(A1.active)) by arith(c11, hsl)))
   // a slot reserved: its index, a_ctz_32(F)
@@ -573,7 +573,7 @@ proof
       have cb: C in bits(32) by simp()
       have c32: int_lt(C, 32) by arith(ce, il)
       have rc := rewrite(sym(ce), ro)
-      show by disj({2}, ex_intro({A1}, {V1}, {C}, taut(a1a, a1u, cb, c32, olt, rc, sc1, fit, v1v, hin1, unt, grw, oe)))
+      show by disj({2}, ex_intro({A1}, {V1}, {C}, taut(a1a, a1u, ftk, cb, c32, olt, rc, sc1, fit, v1v, hin1, unt, grw, oe)))
     qed
     show by taut(cc, cov, cret)
   qed
@@ -616,7 +616,8 @@ proof
     qed
     step V2 rr, e5 hR2 from k5 with hagr using agself, hsb, hrb, hsl, hfit, wW1, hg1, pin, pnr, pth, ptl
     have v2v ex2 := hR2
-    obtain A2, a2a a2u nr2 act2 fg2 hin2 unt2 grw2 past2 from ex2
+    obtain A2, a2a a2u nr2 act2 tk2 fg2 hin2 unt2 grw2 past2 from ex2
+    have tk02: A2.taken = A.taken := trans(rewrite(hA1, tk2), ftk)
     let GN := fst(rr)
     let EN := mp.errno(s.fs_base)
     // so far: the allocator's bytes as before but the new group's, nothing
@@ -638,7 +639,7 @@ proof
       have _ ye7 := e7
       have m1: bits_neg(32, 1) = 4294967295 by simp()
       have oe: o = ok(fn_update(s, "vm", V2), 4294967295) by simp(rewrite(ye7, kx2), m1)
-      show by disj({2}, ex_intro({A2}, {V2}, {4294967295}, taut(a2a, a2u, (4294967295 in bits(32) by simp()), refl({4294967295}), nr2, v2v, hin2b, unt02, grw02, oe)))
+      show by disj({2}, ex_intro({A2}, {V2}, {4294967295}, taut(a2a, a2u, tk02, (4294967295 in bits(32) by simp()), refl({4294967295}), nr2, v2v, hin2b, unt02, grw02, oe)))
     qed
     // a new group GN: its first slot reserved (its mask less 1), the group
     // queued on class sc's list; 0
@@ -826,7 +827,8 @@ proof
       have u04 := apply(mp.unt_grow[c := c, A := A, A1 := R3, b := B, V0 := V0, V1 := V3, V2 := V4, e := EN], u03,
         apply(mp.unt_wider[c := c, A := R3, b := B, V0 := V3, V1 := V4, e := EN], qun), g03)
       have zb: 0 in bits(32) by simp()
-      show by disj({2}, ex_intro({A4}, {V4}, {0}, taut(qa, qu, zb, (int_lt(0, 32) by simp()), ln4, subst({y. mallocng.reserved_only(A4, y, 0)}, sym(hd4), ro4),
+      have tk4: A4.taken = A.taken := trans(trans(apply(mp.gm_field[A := R3, A2 := A4, k := "taken"], qg, simp(), simp(), simp()), (R3.taken = A2.taken by simp())), tk02)
+      show by disj({2}, ex_intro({A4}, {V4}, {0}, taut(qa, qu, tk4, zb, (int_lt(0, 32) by simp()), ln4, subst({y. mallocng.reserved_only(A4, y, 0)}, sym(hd4), ro4),
         subst({y. A4.metas[y].sizeclass = sc}, sym(hd4), sc4), subst({y. int_le(int_add(req, mallocng.IB), mallocng.stride(A4.metas[y]))}, sym(hd4), ft4),
         v4v, qh, u04, g04, e14)))
     qed
@@ -880,7 +882,7 @@ proof
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
-    obtain A2 V2 r, ha2 hu2 hrb hrc hv2 hin2 hunt hgr ho from e
+    obtain A2 V2 r, ha2 hu2 htk hrb hrc hv2 hin2 hunt hgr ho from e
     let S1 := fn_update(fn_update(S, "A", A2), "vm", V2)
     let H2 := fn_update(h, "A", A2)
     let s1 := fn_update(s, "vm", V2)
@@ -901,7 +903,7 @@ proof
     have e1 := mp(fn_update_union_r[a := s, b := h, k := "A", v := A2], na)
     have e2 := mp(fn_update_union_l[a := s, b := H2, k := "vm", v := V2], nv)
     have eS: union2(s1, H2) = S1 := sym(trans(subst({y. S1 = fn_update(y, "vm", V2)}, e1, refl({S1})), e2))
-    show by disj({2}, ex_intro({s1}, {r}, {H2}, spec_ret({A2}, {r}, {V2}, hg2, ho, ha2, hrb, hrc, aS, vS, bS, fS, hv2, hin2, hunt, hgr, eS)))
+    show by disj({2}, ex_intro({s1}, {r}, {H2}, spec_ret({A2}, {r}, {V2}, hg2, ho, ha2, htk, hrb, hrc, aS, vS, bS, fS, hv2, hin2, hunt, hgr, eS)))
   qed
   show by taut(run, k)
 qed
@@ -968,7 +970,7 @@ abbrev mp.as_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
   runs(f[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
-  (ex V rr. (V in x86_64_linux.Vm && (ex A2 r. (A2 in mallocng.Abs && A2 in univ(1)) && r in bits(32) &&
+  (ex V rr. (V in x86_64_linux.Vm && (ex A2 r. (A2 in mallocng.Abs && A2 in univ(1)) && A2.taken = h.A.taken && r in bits(32) &&
      ((r = 4294967295 && mallocng.no_reserved(A2)) ||
       (int_lt(r, 32) && ord_lt(0, seq_len(A2.active[sc])) && mallocng.reserved_only(A2, A2.active[sc][0], r) &&
        A2.metas[A2.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A2.metas[A2.active[sc][0]])))) &&
@@ -1010,18 +1012,18 @@ proof
   have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
   have bp: bits_of_int(64, regs[1]) = req by defs(simp(r1, hrb), bits_of_int, pow2)
   step o3 A2 V2 r, e hs1 from hr with o2l, r0, bp, mp.as_run using ra, hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, hagr, hgq, hw, hh, hin, hnr, hth, htl
-  have ha2 hu2 hrb2 hrc hv2 hin2 hunt hgr := hs1
+  have ha2 hu2 htk hrb2 hrc hv2 hin2 hunt hgr := hs1
   step o4 u y, e2 from e with g.result32_inv using hrb2
   have oe _ ur := e2
   have fr: bits_of_int(32, fst(pair(u, y))) = r by simp(ur)
-  have inner: ex A3 r3. (A3 in mallocng.Abs && A3 in univ(1)) && r3 in bits(32) &&
+  have inner: ex A3 r3. (A3 in mallocng.Abs && A3 in univ(1)) && A3.taken = h.A.taken && r3 in bits(32) &&
       ((r3 = 4294967295 && mallocng.no_reserved(A3)) ||
        (int_lt(r3, 32) && ord_lt(0, seq_len(A3.active[sc])) && mallocng.reserved_only(A3, A3.active[sc][0], r3) &&
         A3.metas[A3.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A3.metas[A3.active[sc][0]])))) &&
       mallocng.holds_in(c, A3, V2, h.blocks) && mallocng.untouched(c, h.A, h.blocks, t.vm, V2, mp.errno(t.fs_base)) && mp.grown(c, A3, h.A, h.blocks, t.vm) &&
       bits_of_int(32, fst(pair(u, y))) = r3
-    by ex_intro({A2}, {r}, taut(ha2, hu2, hrb2, hrc, hin2, hunt, hgr, fr))
-  have ret: ex V3 rr. (V3 in x86_64_linux.Vm && (ex A3 r3. (A3 in mallocng.Abs && A3 in univ(1)) && r3 in bits(32) &&
+    by ex_intro({A2}, {r}, taut(ha2, hu2, htk, hrb2, hrc, hin2, hunt, hgr, fr))
+  have ret: ex V3 rr. (V3 in x86_64_linux.Vm && (ex A3 r3. (A3 in mallocng.Abs && A3 in univ(1)) && A3.taken = h.A.taken && r3 in bits(32) &&
       ((r3 = 4294967295 && mallocng.no_reserved(A3)) ||
        (int_lt(r3, 32) && ord_lt(0, seq_len(A3.active[sc])) && mallocng.reserved_only(A3, A3.active[sc][0], r3) &&
         A3.metas[A3.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A3.metas[A3.active[sc][0]])))) &&

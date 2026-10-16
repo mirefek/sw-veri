@@ -769,3 +769,10 @@ item is a short summary of finished work; details are in the files named.
   alloc_meta's and alloc_group's specs. The footprint lemmas take the byte
   untaken (`mp.untaken_of`, `mp.grp_untaken`, `mp.untaken_meta`,
   `mp.untaken_hdr`); a meta's area read by its header only (`mp.meta_area`).
+- **alloc_meta's spec** (`alloc_meta_spec`): a meta taken (`A.taken`
+  grown by it, `meta_ready`: accessible, its links 0) or 0; the groups as
+  before (`groups_kept`), memory taken only where unmapped, errno. alloc_slot
+  and alloc_group keep the taken metas (`A.taken = A0.taken`; `mp.as_out`,
+  `mp.as_call`, `mp.agr_call`). The invariant bounds `meta_alloc_shift`
+  (`<= 34`, ctx_ok's last clause; no longer a free counter): alloc_meta's
+  `2 << shift` is undefined from 64 on.

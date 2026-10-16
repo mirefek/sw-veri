@@ -14,6 +14,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 ## 2. Next: alloc_group, loops on the CFG and loops by their purpose
 
+- `__malloc_alloc_meta` by its spec (`alloc_meta_spec`: a meta taken, or
+  0): the free metas' head (dequeue_head), the area's next meta, a new
+  area from brk or from the mmap'd reserve (mprotect'ed); the first call's
+  secret (get_random_secret). Needs the World-level specs of `__mmap`,
+  `__mprotect`, brk (`__syscall1(12, ..)`) and `___errno_location`; a failed
+  mmap of the meta areas' doubling size keeps `meta_alloc_shift <= 34`
+  (`TASK_SIZE`).
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already
@@ -31,8 +38,7 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 - alloc_slot's machine-code form (`mp.as_implements`): with alloc_group's
   -- they call each other (`mp.as_call`, `mp.agr_call`), the composition
-  by induction on the class (a nested group's class larger) --;
-  `__malloc_alloc_meta`.
+  by induction on the class (a nested group's class larger) --.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
@@ -126,6 +132,12 @@ holding for the empty heap.
   spec function's shape (`ct.fun_divg` / `_v` / `_v0`) and the body's
   (`ct.dv_havoc`, `ct.dv_exc_a`, ...): written from one template for eleven
   functions. The checker could derive them from the spec's definition.
+- A clause added to a predicate breaks every positional destructuring of
+  it (`have _ _ .. c11 _ := expand(cok, ctx_ok)`: 22 sites for ctx_ok's
+  new last clause; `rep`'s, `metas_partition`'s): named clauses
+  (`{cy = name}`) are immune, so the invariant's predicates could all
+  name theirs (ctx_ok does not), or the checker could warn on positional
+  use of a predicate with more than a few conjuncts.
 - Finding an existing lemma: `mp.qu_q` was written a second time before
   the checker said it was proven; a search by statement shape (or by the
   names it mentions) would help.

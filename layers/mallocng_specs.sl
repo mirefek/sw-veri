@@ -760,7 +760,7 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
     let A0 = A
     let before = vm
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
-    ghost A := any A2: Abs where true
+    ghost A := any A2: Abs where A2.taken = A0.taken
     let r = any r: bits[32] where (
       (r = bits[32](2^32 - 1) && no_reserved(A)) ||
       (uint(r) < 32 && len(A.active[uint(sc)]) > 0 && reserved_only(A, A.active[uint(sc)][0], uint(r)) &&
@@ -769,6 +769,35 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
     return r
+  }
+}
+
+// A2: A with its groups as before -- the ones in use, their metas, slots
+// and the active lists (the metas' supply, the areas, may differ)
+pred groups_kept(A: Abs, A2: Abs) =
+  A2.used = A.used && A2.slots = A.slots && A2.active = A.active && (all g: nat. is_used(A, g) -> A2.metas[g] = A.metas[g])
+
+// a meta handed out: its bytes accessible, its links 0 (on no list)
+pred meta_ready(vm: Vm, m: nat) =
+  (all a: nat. m <= a && a < m + META_SIZE -> m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack) &&
+  rd(mview(vm, all_bytes()), m, 8) = 0 && rd(mview(vm, all_bytes()), m + 8, 8) = 0
+
+// alloc_meta(): a meta for a new group -- taken (its maker's, out of the
+// allocator's bytes), ready -- or 0, none to be had (a failed mmap or
+// mprotect). The groups as before; the allocator may take memory that was
+// unmapped (a meta area) and set errno.
+proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
+  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base)
+  either { overflow() } or {
+    let A0 = A
+    let before = vm
+    let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
+    ghost A := any A2: Abs where groups_kept(A0, A2)
+    let m = any m: bits[64] where (m = 0 && A.taken = A0.taken) || (m != 0 && A.taken = A0.taken ++ [uint(m)])
+    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (m != 0 -> meta_ready(vm, uint(m)))
+    return m
   }
 }
 
@@ -793,7 +822,7 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
     let A0 = A
     let before = vm
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
-    ghost A := any A2: Abs where no_reserved(A2) && A2.active[uint(sc)] = A0.active[uint(sc)]
+    ghost A := any A2: Abs where no_reserved(A2) && A2.active[uint(sc)] = A0.active[uint(sc)] && A2.taken = A0.taken
     let g = any g: bits[64] where g = 0 || fresh_group(A, uint(g), uint(sc), uint(req))
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
@@ -908,6 +937,12 @@ fn alloc_slot_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 2
   let r = alloc_slot_spec(c, bits[32](args[0]), bits[64](args[1]))
   let w = result[32](r)
+  return (w, any bits[64])
+}
+
+fn alloc_meta_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  let r = alloc_meta_spec(c)
+  let w = result[64](r)
   return (w, any bits[64])
 }
 

@@ -79,8 +79,8 @@ const C_ACTIVE      : nat = 80      // struct meta *active[48]
 const C_BRK         : nat = 920
 const CTX_SIZE      : nat = 928
 // (the counters and heuristics: unsigned mmap_counter; size_t
-// meta_alloc_shift; size_t usage_by_class[48], then uint8_t unmap_seq[32],
-// bounces[32], seq up to brk)
+// usage_by_class[48], then uint8_t unmap_seq[32], bounces[32], seq up to
+// brk; and size_t meta_alloc_shift, the meta areas' mapping size)
 const C_MMAP_CNT    : nat = 12
 const C_META_SHIFT  : nat = 48
 const C_USAGE       : nat = 464
@@ -219,8 +219,7 @@ fn footprint(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
 // the context's bytes the invariant leaves free: musl's counters and
 // heuristics -- the allocator's (in the footprint), of any value
 pred ctx_free(c: Cfg, a: nat) =
-  (c.ctx + C_MMAP_CNT <= a && a < c.ctx + C_MMAP_CNT + 4) || (c.ctx + C_META_SHIFT <= a && a < c.ctx + C_META_SHIFT + 8) ||
-  (c.ctx + C_USAGE <= a && a < c.ctx + C_BRK)
+  (c.ctx + C_MMAP_CNT <= a && a < c.ctx + C_MMAP_CNT + 4) || (c.ctx + C_USAGE <= a && a < c.ctx + C_BRK)
 
 // the bytes the invariant reads: the footprint but the free ones
 fn held(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
@@ -269,7 +268,10 @@ pred ctx_ok(c: Cfg, A: Abs, m: Mem) =
   ctx_word(c, m, C_BRK) = A.brk &&
   cyclic(m, ctx_word(c, m, C_FREE_META), A.free_metas) &&
   len(A.active) = 48 &&
-  (all sc: nat. sc < 48 -> cyclic(m, ctx_word(c, m, C_ACTIVE + 8 * sc), A.active[sc]))
+  (all sc: nat. sc < 48 -> cyclic(m, ctx_word(c, m, C_ACTIVE + 8 * sc), A.active[sc])) &&
+  // (the meta areas' mappings, 2 << shift pages each, doubling: one of
+  // 2^35 pages is past the user space, so never made)
+  ctx_word(c, m, C_META_SHIFT) <= 34
 
 // before the first allocation: nothing yet, and libc's auxv is readable
 pred fresh_ok(c: Cfg, A: Abs, m: Mem) =
