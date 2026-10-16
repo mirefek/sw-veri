@@ -2169,3 +2169,204 @@ proof
   assume P
   show := apply(mp.tk_holds_in, apply(mp.tav_tk, P))
 qed
+
+// The free metas' head taken (dequeue_head of the context's list): such a
+// step (its writes the list's head word and links, the count and next
+// meta as before)
+theorem mp.tfr_tk(c, A, vm, V1, b, objs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  vm in x86_64_linux.Vm -> V1 in x86_64_linux.Vm -> mallocng.holds_in(c, A, vm, b) -> int_mod(c.ctx, 8) = 0 -> int_lt(0, seq_len(A.free_metas)) ->
+  mallocng_specs.dequeued(vm, V1, objs, int_add(c.ctx, 16), A.free_metas[0]) ->
+  mp.tkpre(c, A, mallocng_specs.rm_at(A.free_metas, 0), A.avail_cnt, A.free_metas[0], vm, V1, b)
+proof
+  assume hc hu ha hb hv hv1 hh cal hn hdq
+  let F := A.free_metas
+  let x := A.free_metas[0]
+  let R := mallocng_specs.rm_at(A.free_metas, 0)
+  let A2 := mp.take(A, mallocng_specs.rm_at(A.free_metas, 0), A.avail_cnt, A.free_metas[0])
+  let PH := int_add(c.ctx, 16)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  let M2 := mallocng.mview(V1, mallocng.held(c, A2, b))
+  have {H = inv, hm = mapped} := expand(hh, mallocng.holds_in)
+  have {cok = ctx, hpt = part} := expand(H, mallocng.holds)
+  have {k4 = avail_cnt, k5 = avail_le, k6 = avail_meta, k10 = free_metas} := expand(cok, mallocng.ctx_ok)
+  have {fs = free_slots} := expand(hpt, mallocng.metas_partition)
+  have vb: vm.bytes in fn_space(bits(64), bits(8)) by simp(hv)
+  have vb2: V1.bytes in fn_space(bits(64), bits(8)) by simp(hv1)
+  have fl: F in list_type(omega) by simp(ha)
+  have tl: A.taken in list_type(omega) by simp(ha)
+  have ko: A.avail_cnt in omega by simp(ha)
+  have nle: int_le(A.avail_cnt, mallocng.NSLOTS) by simp(k5)
+  have co: c.ctx in omega by simp(hc)
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have kf: mallocng.C_FREE_META = 16 by defs(refl({16}), mallocng.C_FREE_META)
+  have p64: int_pow(2, 64) = 18446744073709551616 by simp()
+  // (the context below 2^64: its last byte the allocator's)
+  have cf := apply(mp.ctx_fp[c := c, A := A, vm := vm, b := b, a := int_add(c.ctx, 927)], hc, hu, ha, hh, arith(co), arith(co), arith(co, ks))
+  have clo := apply(mp.fp_low[c := c, A := A, vm := vm, b := b, a := int_add(c.ctx, 927)], hm, cf)
+  have pho: PH in omega by arith(co)
+  have phb: PH in bits(64) by arith(co, clo)
+  // the free metas: meta slots, not in use, not taken -- the list as
+  // dequeue has it
+  have hsl: all i. i in omega -> int_lt(i, seq_len(F)) -> mallocng.meta_slot(A, F[i]) && mp.untaken(A, F[i]) proof
+    fix i
+    assume hi hil
+    have ms _ := mp(all_elim(fs, {i}), hi, hil)
+    show by taut(ms, apply(mp.free_untaken, H, hi, hil))
+  qed
+  have la := apply(mp.ctx_list[c := c, A := A, vm := vm, b := b, objs := objs, off := 16, L := F], hc, hu, ha, vb, hh, cal, simp(), simp(), arith(), fl, hsl, rewrite(kf, k10))
+  have r1 _ _ only := mp(all_elim(expand(hdq, mallocng_specs.dequeued), {F}, {0}), conj(fl, (0 in omega by simp())), taut(la, hn, refl({x})))
+  have {rml = len, rmt = type} := apply(mp.rm_at_app[l := F, k := 0, j := 0], fl, simp(), hn)
+  have el: all j. j in omega -> int_lt(j, seq_len(R)) -> R[j] = F[int_add(j, 1)] proof
+    fix j
+    assume hj hjl
+    have {re = elem} := apply(mp.rm_at_app[l := F, k := 0, j := j], fl, simp(), hn)
+    have e := mp(re, hj, rewrite(rml, hjl))
+    show by simp(e, hj)
+  qed
+  have _ dst _ := expand(k10, mallocng.cyclic)
+  have hd: all i. all j. i in omega -> j in omega -> int_lt(i, seq_len(F)) -> int_lt(j, seq_len(F)) -> F[i] = F[j] -> i = j proof
+    fix i j
+    assume hi hj hil hjl he
+    show := mp(all_elim(dst, {i}, {j}), conj(hi, hj), taut(hil, hjl, he))
+  qed
+  // x: the head
+  have xs xnt := mp(all_elim(hsl, {0}), simp(), hn)
+  have _ xnu := mp(all_elim(fs, {0}), simp(), hn)
+  have {xo = nat, xout = out} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := x], hc, hu, ha, hh, xs, xnt)
+  // the new state's parts
+  have fpr: mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) by defs(simp(), mallocng.fp_ranges, mallocng.fixed_ranges, mallocng.auxv_ranges)
+  have em: A2.metas = A.metas by simp()
+  have es: A2.slots = A.slots by simp()
+  have eu: A2.used = A.used by simp()
+  have etk: A2.taken = seq_concat(A.taken, seq_one(x)) by simp()
+  have pt2 := apply(mp.part_free[A := A, A2 := A2, x := x], ha, hpt, hn, hd, eu, simp(), simp(), simp(), etk, refl({x}))
+  // the bytes written: the head word, the free metas' links
+  have fo lo := expand(only, mallocng_specs.links_only)
+  have up := mp(app_update_other[f := V1, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have ep: V1.pages = vm.pages by taut(sym(rewrite(fo, up)))
+  have hby: all y. y in bits(64) -> !mp.tkbyte(c, A, y) -> V1.bytes[y] = vm.bytes[y] proof
+    fix y
+    assume hy hnt
+    have yo: y in omega by arith(hy)
+    have yl: int_lt(y, int_pow(2, 64)) by arith(hy)
+    have oh: !(int_le(PH, y) && int_lt(y, int_add(PH, 8))) proof
+      assume w
+      have w1 w2 := w
+      show by taut(hnt, (mp.tkbyte(c, A, y) by defs(taut((int_le(int_add(c.ctx, 16), y) && int_lt(y, int_add(c.ctx, 40)) by arith(w1, w2))), mp.tkbyte)))
+    qed
+    have on: all i. i in omega -> int_lt(i, seq_len(F)) -> !(int_le(F[i], y) && int_lt(y, int_add(F[i], 16))) proof
+      fix i
+      assume hi hil
+      assume w
+      have ms nu := mp(all_elim(fs, {i}), hi, hil)
+      have ex1: ex l. (mallocng.meta_slot(A, l) && !mallocng.is_used(A, l)) && (int_le(l, y) && int_lt(y, int_add(l, 16))) by ex_intro({F[i]}, taut(ms, nu, w))
+      show by taut(hnt, (mp.tkbyte(c, A, y) by defs(taut(ex1), mp.tkbyte)))
+    qed
+    have bb := mp(all_elim(lo, {y}), yo, taut(yl, oh, on))
+    have bi := mp(bits_of_int_small[n := 64, a := y], yo, (int_lt(y, pow2(64)) by arith(hy)))
+    show := rewrite(bi, bb)
+  qed
+  // the count and next meta words: not written, so as before
+  have cag: all a. a in omega -> int_le(int_add(c.ctx, 24), a) -> int_lt(a, int_add(c.ctx, 40)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    have oh: !(int_le(PH, a) && int_lt(a, int_add(PH, 8))) by arith(h1)
+    have on: all i. i in omega -> int_lt(i, seq_len(F)) -> !(int_le(F[i], a) && int_lt(a, int_add(F[i], 16))) proof
+      fix i
+      assume hi hil
+      have ms nt := mp(all_elim(hsl, {i}), hi, hil)
+      have {fo2 = out} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := F[i]], hc, hu, ha, hh, ms, nt)
+      show by arith(fo2, ks, h1, h2)
+    qed
+    have bb := mp(all_elim(lo, {a}), hao, taut((int_lt(a, int_pow(2, 64)) by arith(h2, co, clo)), oh, on))
+    have nx: !(int_le(x, a) && int_lt(a, int_add(x, 40))) by arith(xout, ks, h1, h2)
+    show := apply(mp.take_agree[c := c, A := A, A2 := A2, vm := vm, V1 := V1, b := b, x := x, a := a], tl, xo, hao, fpr, em, es, eu, etk, nx, bb,
+      (V1.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)))
+  qed
+  have g24: all i. i in omega -> int_lt(i, 8) -> M2[int_add(int_add(c.ctx, 24), i)] = M[int_add(int_add(c.ctx, 24), i)] proof
+    fix i
+    assume hi hil
+    show := mp(all_elim(cag, {int_add(int_add(c.ctx, 24), i)}), arith(co, hi), arith(co, hi), arith(co, hi, hil))
+  qed
+  have g32: all i. i in omega -> int_lt(i, 8) -> M2[int_add(int_add(c.ctx, 32), i)] = M[int_add(int_add(c.ctx, 32), i)] proof
+    fix i
+    assume hi hil
+    show := mp(all_elim(cag, {int_add(int_add(c.ctx, 32), i)}), arith(co, hi), arith(co, hi), arith(co, hi, hil))
+  qed
+  have w24 := apply(mp.agree_rd[M := M, M2 := M2, a := int_add(c.ctx, 24), n := 8], simp(), g24)
+  have w32 := apply(mp.agree_rd[M := M, M2 := M2, a := int_add(c.ctx, 32), n := 8], simp(), g32)
+  have we24: mallocng.ctx_word(c, M2, mallocng.C_AVAIL_META) = mallocng.ctx_word(c, M, mallocng.C_AVAIL_META) by defs(w24, mallocng.ctx_word, mallocng.C_AVAIL_META)
+  have we32: mallocng.ctx_word(c, M2, mallocng.C_AVAIL_CNT) = mallocng.ctx_word(c, M, mallocng.C_AVAIL_CNT) by defs(w32, mallocng.ctx_word, mallocng.C_AVAIL_CNT)
+  have kc := trans(we32, k4)
+  have kn: int_lt(0, A.avail_cnt) -> ord_lt(0, seq_len(A.areas)) &&
+      mallocng.ctx_word(c, M2, mallocng.C_AVAIL_META) = mallocng.meta_at(A.areas[int_sub(seq_len(A.areas), 1)], int_sub(mallocng.NSLOTS, A.avail_cnt))
+    by simp(rewrite(sym(we24), k6))
+  // the list: as dequeue left it, read through the new view (its head word
+  // the context's, its links the free metas' records -- not x's)
+  have {lkd = linked} := expand(r1, mallocng_specs.list_at)
+  have _ dst2 _ := expand(lkd, mallocng.cyclic)
+  have {hd2 = head} := apply(mp.list_rd[vm := V1, objs := objs, phead := PH, l := R, i := 0], vb2, phb, rmt, r1)
+  have phf: all i. i in omega -> int_lt(i, 8) -> int_add(PH, i) in mallocng.held(c, A2, b) proof
+    fix i
+    assume hi hil
+    have nf: !mallocng.ctx_free(c, int_add(PH, i)) by defs(arith(hi, hil, co), mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK)
+    have q _ _ := apply(mp.ctx_acc[c := c, A := A, vm := vm, b := b, a := int_add(PH, i)], hc, hu, ha, hh, arith(co, hi), arith(co, hi), arith(co, ks, hi, hil), nf)
+    have th := apply(mp.take_held[c := c, A := A, A2 := A2, b := b, x := x, a := int_add(PH, i)], tl, xo, fpr, em, es, eu, etk, (!(int_le(x, int_add(PH, i)) && int_lt(int_add(PH, i), int_add(x, 40))) by arith(xout, ks, co, hi, hil)))
+    show by taut(q, th)
+  qed
+  have rh := apply(mp.view_read[vm := V1, fp := mallocng.held(c, A2, b), a := PH, n := 8], pho, simp(), simp(), phf)
+  have hdw: mallocng.ctx_word(c, M2, mallocng.C_FREE_META) = ite(seq_len(R) = 0, 0, R[0]) by defs(trans(sym(rh), hd2), mallocng.ctx_word, mallocng.C_FREE_META)
+  have lk2: all i. i in omega -> int_lt(i, seq_len(R)) ->
+      mallocng.rd(M2, int_add(R[i], 8), 8) = R[int_mod(int_add(i, 1), seq_len(R))] &&
+      mallocng.rd(M2, R[i], 8) = R[int_mod(int_sub(int_add(i, seq_len(R)), 1), seq_len(R))] proof
+    fix i
+    assume hi hil
+    have e := mp(all_elim(el, {i}), hi, hil)
+    have i1o: int_add(i, 1) in omega by simp(hi)
+    have i1l: int_lt(int_add(i, 1), seq_len(F)) by arith(hil, rml, hi)
+    have ms0 nt0 := mp(all_elim(hsl, {int_add(i, 1)}), i1o, i1l)
+    have ms := rewrite(sym(e), ms0)
+    have nt := rewrite(sym(e), nt0)
+    have ne: !(R[i] = x) proof
+      assume h
+      have z := mp(all_elim(hd, {int_add(i, 1)}, {0}), i1o, simp(), i1l, hn, trans(sym(e), h))
+      show by arith(z, hi)
+    qed
+    have {go = nat, acc = acc} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := R[i]], hc, hu, ha, hh, ms, nt)
+    have inh: all a. a in omega -> int_le(R[i], a) -> int_lt(a, int_add(R[i], 16)) -> a in mallocng.held(c, A2, b) proof
+      fix a
+      assume hao h1 h2
+      have q _ _ := mp(all_elim(acc, {a}), hao, h1, arith(h2))
+      have nx := apply(mp.meta_disj[c := c, A := A, M := M, b := b, brk := vm.brk, g := x, l := R[i], a := a], hc, hu, ha, H, xs, ms, ne, hao, h1, arith(h2))
+      have th := apply(mp.take_held[c := c, A := A, A2 := A2, b := b, x := x, a := a], tl, xo, fpr, em, es, eu, etk, nx)
+      show by taut(q, th)
+    qed
+    have in8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(R[i], 8), j) in mallocng.held(c, A2, b) proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(inh, {int_add(int_add(R[i], 8), j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+    qed
+    have in0: all j. j in omega -> int_lt(j, 8) -> int_add(R[i], j) in mallocng.held(c, A2, b) proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(inh, {int_add(R[i], j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+    qed
+    have r8 := apply(mp.view_read[vm := V1, fp := mallocng.held(c, A2, b), a := int_add(R[i], 8), n := 8], arith(go), simp(), simp(), in8)
+    have r0 := apply(mp.view_read[vm := V1, fp := mallocng.held(c, A2, b), a := R[i], n := 8], go, simp(), simp(), in0)
+    have {lks = links} := apply(mp.list_rd[vm := V1, objs := objs, phead := PH, l := R, i := i], vb2, phb, rmt, r1)
+    have l8 l0 := mp(lks, hi, hil)
+    show by taut(trans(sym(r8), l8), trans(sym(r0), l0))
+  qed
+  have cy2: mallocng.cyclic(M2, mallocng.ctx_word(c, M2, mallocng.C_FREE_META), R) by defs(taut(hdw, dst2, lk2), mallocng.cyclic)
+  show by taut(hc, hu, ha, hb, hv, hv1, hh, xs, xnu, xnt, rmt, ko, nle, hby, ep, fo, pt2, cy2, kc, kn)
+qed
+
+// ... the invariant kept
+theorem mp.tfr_holds_in(c, A, vm, V1, b, objs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  vm in x86_64_linux.Vm -> V1 in x86_64_linux.Vm -> mallocng.holds_in(c, A, vm, b) -> int_mod(c.ctx, 8) = 0 -> int_lt(0, seq_len(A.free_metas)) ->
+  mallocng_specs.dequeued(vm, V1, objs, int_add(c.ctx, 16), A.free_metas[0]) ->
+  mallocng.holds_in(c, mp.take(A, mallocng_specs.rm_at(A.free_metas, 0), A.avail_cnt, A.free_metas[0]), V1, b)
+proof
+  assume hc hu ha hb hv hv1 hh cal hn hdq
+  show := apply(mp.tk_holds_in, apply(mp.tfr_tk, hc, hu, ha, hb, hv, hv1, hh, cal, hn, hdq))
+qed

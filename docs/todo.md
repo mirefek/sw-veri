@@ -17,9 +17,9 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 - `__malloc_alloc_meta` by its spec (`alloc_meta_spec`: a meta taken, or
   0). The supply frame (proofs/mallocng/model/supply.core:
   `mp.holds_supply`, the groups' clauses kept) and the area's next meta
-  taken (`mp.tav_holds_in`) are done. Left: the free metas' head taken
-  (dequeue_head: the list's links and head word changed -- a frame over a
-  set of written bytes, `mp.take_view` generalized); a new area from brk or
+  taken (`mp.tav_holds_in`) and the free metas' head taken
+  (`mp.tfr_holds_in`, dequeue_head), both instances of the general take
+  step (`mp.tkpre`, `mp.tk_holds_in`), are done. Left: a new area from brk or
   from the mmap'd reserve (mprotect'ed: pages change, `areas` grows); the
   first call's secret (get_random_secret: the auxiliary vector leaves the
   footprint); then the run (the GIMPLE walk under the callees' World
