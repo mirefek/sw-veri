@@ -224,27 +224,33 @@ fn syscall1_spec_fun() -> CFun2[World] = (args: Args) => {
 pred errno_ok(vm: Vm, objs: Set[nat], fs: Addr) =
   uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
 
+// a place for mmap's len bytes, page p: at addr if MAP_FIXED; else one
+// Linux may pick -- free, off the stack's space when there is no hint,
+// never page 0
+pred mmap_place(before: Vm, addr: Addr, len: bits[64], flags: bits[32], p: nat) =
+  uint(len) != 0 && uint(len) < 2^63 &&
+  (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { uint(addr) % PAGE = 0 && p = page_of(addr) && p + pages_for(uint(len)) <= TASK_SIZE / PAGE }
+   else { p >= 1 && free_range(before, p, pages_for(uint(len))) && (addr != 0 || off_stack_space(before, p, pages_for(uint(len)))) })
+
 // mmap(addr, len, prot, flags, -1, 0), anonymous private memory (at addr
-// if MAP_FIXED): len's pages fresh at a place Linux picks -- free, off the
-// stack's space when there is no hint, never page 0 -- or at addr,
-// replacing what was there; or -1, errno ENOMEM or EINVAL (the kernel
-// may always refuse; musl's own checks), nothing else changed
+// if MAP_FIXED): len's pages fresh at a place for them (`mmap_place`),
+// replacing what was there; or -1, errno ENOMEM or EINVAL (no place; the
+// kernel may always refuse; musl's own checks), nothing else changed
 proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32], off: bits[64]) -> bits[64] {
   require (uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS || uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED) && uint(prot) < 8 && off = 0 &&
     errno_ok(vm, objs, fs_base)
   either { overflow() } or {
     let before = vm
-    either {
-      vm := wr32(vm, errno_at(fs_base), any e: nat where e = ENOMEM || e = EINVAL)
-      return bits[64](2^64 - 1)
-    } or {
-      let n = pages_for(uint(len))
-      let p = any p: nat where uint(len) != 0 && uint(len) < 2^63 &&
-        (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { uint(addr) % PAGE = 0 && p = page_of(addr) && p + n <= TASK_SIZE / PAGE }
-         else { p >= 1 && free_range(before, p, n) && (addr != 0 || off_stack_space(before, p, n)) })
-      havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(bits[64](uint(prot))), kind: anon }) && vm.brk = before.brk
-      return bits[64](p * PAGE)
+    if ex p: nat. mmap_place(before, addr, len, flags, p) {
+      either { } or {
+        let n = pages_for(uint(len))
+        let p = any p: nat where mmap_place(before, addr, len, flags, p)
+        havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(bits[64](uint(prot))), kind: anon }) && vm.brk = before.brk
+        return bits[64](p * PAGE)
+      }
     }
+    vm := wr32(vm, errno_at(fs_base), any e: nat where e = ENOMEM || e = EINVAL)
+    return bits[64](2^64 - 1)
   }
 }
 
@@ -884,6 +890,9 @@ proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
 // after writing the allocator's memory needs it intact)
 pred tls_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 8 -> uint(fs) + i notin footprint(c, A, blocks)
 
+// errno's cell (the thread's, as the thread pointer) not the allocator's
+pred errno_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 4 -> uint(errno_at(fs)) + i notin footprint(c, A, blocks)
+
 // try_avail(pm), pm class sc's active list: a free slot of a group already
 // there. Its bit (1 << i) returned, slot i of the list's head reserved --
 // the head now, if need be: the list reorganised --; or 0, no group of the
@@ -942,9 +951,11 @@ pred meta_ready(vm: Vm, m: nat) =
 // alloc_meta(): a meta for a new group -- taken (its maker's, out of the
 // allocator's bytes), ready -- or 0, none to be had (a failed mmap or
 // mprotect). The groups as before; the allocator may take memory that was
-// unmapped (a meta area) and set errno.
+// unmapped (a meta area) and set errno (its cell writable, not the
+// allocator's).
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm)
+  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) &&
+    errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, fs_base)
   either { overflow() } or {
     let A0 = A
     let before = vm
