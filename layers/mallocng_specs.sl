@@ -166,6 +166,163 @@ fn size_overflows_spec_fun() -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
+///////////////////////////////////////////////////////////////////////
+//  The system's memory calls, as malloc makes them: what Linux does
+//  (spec/linux/process.sl's sys_brk, sys_mmap, sys_mprotect) seen from the
+//  C world, through musl's wrappers (errno, -1 on failure)
+
+// vm: before with the pages p .. p+n-1 fresh pages pg -- their bytes 0 --,
+// nothing else changed (its break aside)
+pred fresh_pages(before: Vm, vm: Vm, p: nat, n: nat, pg: Page) =
+  vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
+  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(pg) } else { before.pages[q] })) &&
+  (all a: Addr. vm.bytes[a] = (if p * PAGE <= uint(a) && uint(a) < (p + n) * PAGE { bits[8](0) } else { before.bytes[a] }))
+
+// vm: before with the pages p .. p+n-1 gone, nothing else changed (its break aside)
+pred gone_pages(before: Vm, vm: Vm, p: nat, n: nat) =
+  vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
+  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { none } else { before.pages[q] })) &&
+  vm.bytes = before.bytes
+
+// vm: before with the pages p .. p+n-1 (mapped) of protection pr, nothing else changed
+pred reprot(before: Vm, vm: Vm, p: nat, n: nat, pr: Prot) =
+  (vm with { pages: before.pages }) = before &&
+  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(before.pages[q].value with { prot: pr }) } else { before.pages[q] }))
+
+// brk(new) (`__syscall1(SYS_brk, new)`): the break moved to new -- the
+// pages up to it fresh readable, writable heap if they had to be had and
+// could be (free, off the stack's space; the kernel may refuse), the
+// pages above it gone if it went down --, or not; the break returned. Not
+// below where it started.
+proc[World] brk_spec(new: Addr) -> bits[64] {
+  either { overflow() } or {
+    let before = vm
+    let old_end = pages_for(uint(before.brk))
+    let new_end = pages_for(uint(new))
+    if new < before.brk_start { return before.brk }
+    if new_end > old_end {
+      if !free_range(before, old_end, new_end - old_end) || !off_stack_space(before, old_end, new_end - old_end) { return before.brk }
+      either { return before.brk } or {
+        havoc vm where fresh_pages(before, vm, old_end, new_end - old_end, Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new
+        return new
+      }
+    } else {
+      havoc vm where gone_pages(before, vm, new_end, old_end - new_end) && vm.brk = new
+      return new
+    }
+  }
+}
+
+// a 1-argument system call: as malloc makes one, brk
+fn syscall1_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 2 && uint(args[0]) = 12
+  let r = brk_spec(args[1])
+  return (r, any bits[64])
+}
+
+// errno's cell writable, the thread pointer sound (a failing call sets it)
+pred errno_ok(vm: Vm, objs: Set[nat], fs: Addr) =
+  uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
+
+// mmap(addr, len, prot, flags, -1, 0), anonymous private memory (at addr
+// if MAP_FIXED): len's pages fresh at a place Linux picks -- free, off the
+// stack's space when there is no hint, never page 0 -- or at addr,
+// replacing what was there; or -1, errno ENOMEM or EINVAL (the kernel
+// may always refuse; musl's own checks), nothing else changed
+proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32], off: bits[64]) -> bits[64] {
+  require (uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS || uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED) && uint(prot) < 8 && off = 0 &&
+    errno_ok(vm, objs, fs_base)
+  either { overflow() } or {
+    let before = vm
+    either {
+      vm := wr32(vm, errno_at(fs_base), any e: nat where e = ENOMEM || e = EINVAL)
+      return bits[64](2^64 - 1)
+    } or {
+      let n = pages_for(uint(len))
+      let p = any p: nat where uint(len) != 0 && uint(len) < 2^63 &&
+        (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { uint(addr) % PAGE = 0 && p = page_of(addr) && p + n <= TASK_SIZE / PAGE }
+         else { p >= 1 && free_range(before, p, n) && (addr != 0 || off_stack_space(before, p, n)) })
+      havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(bits[64](uint(prot))), kind: anon }) && vm.brk = before.brk
+      return bits[64](p * PAGE)
+    }
+  }
+}
+
+fn mmap_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 6
+  let r = mmap_spec(args[0], args[1], bits[32](args[2]), bits[32](args[3]), args[5])
+  return (r, any bits[64])
+}
+
+// mprotect(addr, len, prot): the pages from addr's to addr + len's of
+// protection prot, 0; or, at the first of them unmapped, -1, errno
+// ENOMEM -- the pages before it changed already
+proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32] {
+  require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && errno_ok(vm, objs, fs_base)
+  either { overflow() } or {
+    let before = vm
+    let s = uint(addr) / PAGE
+    let e = (uint(addr) + uint(len) + PAGE - 1) / PAGE
+    if all q: nat. s <= q && q < e -> mapped(before, q) {
+      havoc vm where reprot(before, vm, s, e - s, prot_of(bits[64](uint(prot))))
+      return 0
+    }
+    let k = any k: nat where s <= k && k < e && !mapped(before, k) && (all q: nat. s <= q && q < k -> mapped(before, q))
+    havoc vm where reprot(before, vm, s, k - s, prot_of(bits[64](uint(prot))))
+    vm := wr32(vm, errno_at(fs_base), ENOMEM)
+    return bits[32](2^32 - 1)
+  }
+}
+
+fn mprotect_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = mprotect_spec(args[0], args[1], bits[32](args[2]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+// memcpy(d, s, n): the n bytes at s copied to d (apart), d returned
+proc[World] memcpy_spec(d: Addr, s: Addr, n: bits[64]) -> bits[64] {
+  require usable(vm, objs, uint(s), uint(n), false) && usable(vm, objs, uint(d), uint(n), true) &&
+    (uint(d) + uint(n) <= uint(s) || uint(s) + uint(n) <= uint(d))
+  either { overflow() } or {
+    let before = vm
+    vm := vm with { bytes: store_le(vm.bytes, d, uint(n), bytes_at(before, s, uint(n))) }
+    return d
+  }
+}
+
+fn memcpy_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = memcpy_spec(args[0], args[1], args[2])
+  return (r, any bits[64])
+}
+
+// libc's auxiliary vector readable (`libc.auxv`, at libc + 8): its pairs up
+// to AT_NULL, the 8 bytes past AT_RANDOM's address
+pred auxv_ok(vm: Vm, objs: Set[nat], libc: Addr) =
+  usable(vm, objs, uint(libc) + 8, 8, false) &&
+  (ex auxv: List[(nat, nat)]. len(auxv) >= 1 &&
+     (all k: nat. k < len(auxv) ->
+        usable(vm, objs, bytes_at(vm, libc + 8, 8) + 16 * k, 16, false) &&
+        bytes_at(vm, bits[64](bytes_at(vm, libc + 8, 8) + 16 * k), 8) = auxv[k][0] &&
+        bytes_at(vm, bits[64](bytes_at(vm, libc + 8, 8) + 16 * k + 8), 8) = auxv[k][1] &&
+        (auxv[k][0] = AT_RANDOM -> usable(vm, objs, auxv[k][1] + 8, 8, false))) &&
+     auxv[len(auxv) - 1][0] = AT_NULL && (all k: nat. k + 1 < len(auxv) -> auxv[k][0] != AT_NULL))
+
+// get_random_secret(): a secret -- any value (the kernel's random bytes,
+// AT_RANDOM's, if any), nothing changed
+proc[World] random_secret_spec(libc: Addr) -> bits[64] {
+  require auxv_ok(vm, objs, libc)
+  either { overflow() } or { return any bits[64] }
+}
+
+fn random_secret_spec_fun(libc: Addr) -> CFun2[World] = (args: Args) => {
+  let r = random_secret_spec(libc)
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
 // a_cas(p, t, s): the 4-byte word at p, s written if it holds t; its old
 // value returned (a locked compare-and-swap: one thread, so one step). The
 // word usable for reading and writing: the instruction writes it either
