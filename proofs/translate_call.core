@@ -344,9 +344,10 @@ qed
 
 // A return keeps the world valid for GIMPLE (C1's bookkeeping, nothing
 // function-specific): the input as it was, the events grown, the program
-// loaded still
+// loaded still, the break's start as it was
 def tr.returns_valid(w, w2) := w2.os.input = w.os.input && subset(w.os.events, w2.os.events) &&
-  (all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(w2.vm, gb, gc, st)) && w2.cpu = w.cpu
+  (all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(w2.vm, gb, gc, st)) && w2.cpu = w.cpu &&
+  w2.vm.brk_start = w.vm.brk_start
 
 // outcomes r undefined: every exception and every divergence among them
 // (as GIMPLE's undefined behaviour allows every outcome)
@@ -1442,6 +1443,10 @@ proof
   have spC2: abi.stack_page(C.vm, int_div(C.gpr[4], x86_64_linux.PAGE)) by defs(simp(c4, spC), x86_64_linux.PAGE)
   have acc2: x86_64_linux.can_access(C.vm, C.gpr[4], 1) by simp(c4, acc0)
   have eoku: tr.entry_ok_u(C, tr.aregs(m, n)) by defs(taut(spC2, acc2, rsvC, cdf, ar, tC2), tr.entry_ok_u)
+  // (the break's start: the world's)
+  have {wbk} := expand(hi, tr.inv)
+  have _ _ cvb _ := expand(cvf, x86.vm_fields)
+  have cbk: abi.brk_start_ok(C.vm) by defs(simp(cvb, brk0, expand(wbk, abi.brk_start_ok)), abi.brk_start_ok)
   // (aligned as the ABI wants: a frame of 8 mod 16)
   have eok: int_mod(fr, 16) = 8 -> abi.entry_ok(C, tr.aregs(m, n)) proof
     assume h8
@@ -1451,7 +1456,7 @@ proof
     have ra16: int_mod(R, 16) = 0 by arith(er4, m1, h8, so, fo)
     have al: int_mod(bits_add(64, int_sub(R, 8), 8), 16) = 0 by simp(rb, r16, rlt, ra16)
     have al2: int_mod(bits_add(64, C.gpr[4], 8), 16) = 0 by simp(c4, al)
-    show by defs(taut(spC2, acc2, rsvC, al2, cdf, ar, tC2), abi.entry_ok)
+    show by defs(taut(spC2, acc2, rsvC, al2, cdf, ar, tC2, cbk), abi.entry_ok)
   qed
   // the view
   have vf := expand(cvf, x86.vm_fields)
@@ -1599,7 +1604,7 @@ proof
   have ro: R in omega by simp(rb)
   have sp8: abi.sp(s) = int_add(S, 8) by simp(sb, slt)
   have cM cu co cf cc0 cgs cfl cgpr crip ckc cvf cle cpi cby cstk cacc := apply(tr.push_ok, {s}, {base}, {code}, {fr}, {m}, {w}, {RA}, {T}, {m1}, {e1}, {C}, hi, hcf, hra, ht, htr, hC)
-  have rinp rev rld rcpu := expand(hrv, tr.returns_valid)
+  have rinp rev rld rcpu rbk := expand(hrv, tr.returns_valid)
   have {top, limit, brk0, brk, bytes, frames, pages, nostk, stk, rsv} := hwm
   have {wob, wm} := hmm
   have {mpages = pages, mnostk = nostk, mrsv = rsv} := expand(hmm, tr.mem).wm
@@ -1840,8 +1845,10 @@ proof
   have w4W: W4 in abi.World by defs(simp(w2f, wf, w2u, wou), abi.World)
   have w4u: W4 in univ(1) by simp(w2u, wou)
   have fro: fr in omega := expand(hcf, tr.cfr).1
+  have {wbk} := expand(hi, tr.inv)
+  have w4bk: abi.brk_start_ok(W4.vm) by defs(simp(rbk, expand(wbk, abi.brk_start_ok)), abi.brk_start_ok)
   have invx: tr.inv(s, base, code, fr, x, W4) by defs(simp(xM, xu, cdx, kcx, x4, fro, kpx, rax, xcs2, xcpu2, xgs2,
-    (x.os = W4.os by simp(xos)), (x.fs_base = W4.fs_base by simp(xfs)), xdf, w4in, w4ev, w4W, w4u, w4cpu, sM, sacc, sal, hsps, slt, sgf, srsv, keep(abi.code_at, tr.keeps_code, tr.kept, x86_64_linux.Machine, abi.World, abi.stack_page, abi.stack_gap_free, abi.stack_reserve, x86_64_linux.can_access)), tr.inv)
+    (x.os = W4.os by simp(xos)), (x.fs_base = W4.fs_base by simp(xfs)), xdf, w4in, w4ev, w4W, w4u, w4cpu, w4bk, sM, sacc, sal, hsps, slt, sgf, srsv, keep(abi.code_at, tr.keeps_code, tr.kept, x86_64_linux.Machine, abi.World, abi.stack_page, abi.stack_gap_free, abi.stack_reserve, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
   // the coupling
   have {oacc} := hmm
   have mframes: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(w.vm, ds, x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->

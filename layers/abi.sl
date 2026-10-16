@@ -144,15 +144,19 @@ pred stack_reserve(vm: Vm) =
 pred thread_ok(vm: Vm, fs: Addr) =
   readable(vm, uint(fs), 8) && (all i: nat. i < 8 -> !stack_page(vm, (uint(fs) + i) / PAGE)) && le(vm.bytes, fs, 8) = fs
 
+// the break's start as Linux keeps it (exec sets it, nothing moves it):
+// above page 0, so a brk below it -- brk(0) -- only reads the break
+pred brk_start_ok(vm: Vm) = uint(vm.brk_start) >= PAGE
+
 // entry conditions: rsp points to the return address on the stack (its
 // page writable: `call` has just written it there), rsp + 8 is 16-byte
 // aligned, the direction flag is clear, arguments are in registers, and
-// the thread pointer is sound
+// the thread pointer and the break's start are sound
 pred entry_ok(m: Machine, args: Args) =
   stack_page(m.vm, uint(m.gpr[rsp]) / PAGE) && can_access(m.vm, m.gpr[rsp], write) && stack_reserve(m.vm) &&
   uint(m.gpr[rsp] + 8) % 16 = 0 && !m.flags.df &&
   (all i: nat. i < len(args) -> m.gpr[ARG_REGS[i]] = args[i]) &&
-  thread_ok(m.vm, m.fs_base)
+  thread_ok(m.vm, m.fs_base) && brk_start_ok(m.vm)
 
 // the stack as entry_ok has it, rsp at the return address's slot: a
 // writable stack page, the stack's reserve kept

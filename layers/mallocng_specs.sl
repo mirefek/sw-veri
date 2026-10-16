@@ -944,7 +944,7 @@ pred meta_ready(vm: Vm, m: nat) =
 // mprotect). The groups as before; the allocator may take memory that was
 // unmapped (a meta area) and set errno.
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base)
+  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm)
   either { overflow() } or {
     let A0 = A
     let before = vm
