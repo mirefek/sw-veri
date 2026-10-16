@@ -1959,6 +1959,9 @@ impl<'a> Simp<'a> {
                         match name {
                             // no pair at all: `empty` (app's default)
                             "empty" if b.is_empty() => return m,
+                            // a one-element list's element (`seq_one(x)` is
+                            // `single(pair(0, x))`)
+                            "seq_one" if b.len() == 1 && matches!(k.node(), Node::Nat(n) if n.is_zero()) => return b[0].clone(),
                             "restrict" => match self.key_in(k, &b[1]) {
                                 Some(true) => {
                                     m = b[0].clone();

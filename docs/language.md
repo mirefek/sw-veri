@@ -495,6 +495,10 @@ rsimp e1, .. [in h]       simplify the goal (or h) with rsimp
 print P                   show what P proves, then (on their own lines) its hypotheses and the goal
 goal [N]                  show the current goal, the variables in scope and the named facts (the
                           last N), a name bound again marked `(shadowed)`
+search P1, P2, ..         show the facts (theorems, axioms, conditional theorems) with a subterm
+                          matching each pattern (`_` any term; a bare function's name, any
+                          application of it): matching the conclusion itself first, then inside
+                          it, then a premise; shorter statements first (30 shown)
 ```
 
 `assume` and `fix` take formulas from the goal, so write a formula only

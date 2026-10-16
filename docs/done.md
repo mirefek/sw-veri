@@ -776,3 +776,17 @@ item is a short summary of finished work; details are in the files named.
   `mp.as_call`, `mp.agr_call`). The invariant bounds `meta_alloc_shift`
   (`<= 34`, ctx_ok's last clause; no longer a free counter): alloc_meta's
   `2 << shift` is undefined from 64 on.
+- **Usability before alloc_meta**: a call's registers for any argument
+  widths (`gc.regs_one`, `gc.regs_cat`, `gc.regs_get` composed by `step`
+  along the arguments; `gc.reg_at` to read one back); `goal [N]` printing
+  the goal, variables and named facts; ctx_ok's, rep's and fresh_ok's
+  clauses named; `divergence([GU, GS])` deriving a spec function's
+  divergence lemma (`runs_univ()`, `div_body(GS)`; 21 hand-written ones
+  replaced); a failing step naming a fact that hides an enclosing block's
+  says so; simp evaluates `seq_one(x)[0]`; a fact and a goal differing in
+  `pow2(k)` against its value fitted (`conv_pow2`).
+- **Lemma search** (`search P1, ..`: the facts with subterms matching the
+  patterns, `_` any term, a bare name any application; `search` alone:
+  the facts whose conclusion matches the goal) and a note for a theorem
+  stating what one before it states (12 such pairs found by hand-written
+  proofs, listed in todo §7).

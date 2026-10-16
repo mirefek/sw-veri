@@ -140,11 +140,31 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
     if let Some((line_no, _, _)) = all.iter().rev().skip(1).find(|(_, _, s)| s.split_whitespace().next() == Some("show")) {
         return Err(KernelError(format!("line {}: `show` before the block's last step (it ends the block)", line + line_no)));
     }
+    // (the facts of the enclosing blocks: a new fact of one's name hides it
+    // for the rest of the block; a failing step naming such a fact says so
+    // -- else it shows up only as an odd failure; `.. in h` replacing h is
+    // meant)
+    let outer = st.facts.len();
+    let mut hidden: Vec<(String, usize)> = Vec::new();
+    let mut last_step = String::new();
     for (line_no, body_no, step) in all {
         let t0 = std::time::Instant::now();
+        let before = st.facts.len();
         res = st.step(env, lg, &step, line + line_no, line + body_no).map_err(|e| {
             if e.0.starts_with("line ") { e } else { KernelError(format!("line {}: {}", line + line_no, e.0)) }
         });
+        let replaces = matches!(step.split_whitespace().next(), Some("unfold" | "zeta" | "fold_let" | "flip" | "rsimp"));
+        if res.is_ok() && !replaces && st.facts.len() > before {
+            for (n, _) in &st.facts[before..] {
+                if !n.starts_with("__") && n != "_" && st.facts[..outer].iter().any(|(m, _)| m == n) && !hidden.iter().any(|(m, _)| m == n) {
+                    hidden.push((n.clone(), line + line_no));
+                }
+            }
+        }
+        if let Err(e) = res {
+            res = Err(hidden_note(e, &step, &hidden));
+        }
+        last_step = step.clone();
         if let Some(s) = slow {
             let dt = t0.elapsed().as_secs_f64();
             if dt > s {
@@ -156,7 +176,13 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
         }
     }
     let lets = std::mem::take(&mut st.lets);
+    let failed = res.is_err();
     let r = res.and_then(|_| close(env, lg, st)).and_then(|s| then(env, s));
+    // (the block's result not the goal: its last step's hidden facts too)
+    let r = match r {
+        Err(e) if !failed => Err(hidden_note(e, &last_step, &hidden)),
+        r => r,
+    };
     // the block's `let`s end with it (an outer one it shadowed is back)
     for (name, prev) in lets.into_iter().rev() {
         match prev {
@@ -165,6 +191,22 @@ fn run_block(env: &mut Env, lg: &Logic, mut st: State, text: &str, line: usize, 
         };
     }
     r
+}
+
+/// e, with a note for each fact the step names that hides an enclosing
+/// block's fact of its name (`hidden`: the names, the lines binding them)
+fn hidden_note(e: KernelError, step: &str, hidden: &[(String, usize)]) -> KernelError {
+    let words: Vec<&str> = step.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).collect();
+    let notes: Vec<String> = hidden
+        .iter()
+        .filter(|(n, _)| words.contains(&n.as_str()))
+        .map(|(n, l)| format!("`{}` here is line {}'s, hiding the enclosing block's", n, l))
+        .collect();
+    if notes.is_empty() {
+        e
+    } else {
+        KernelError(format!("{} (note: {})", e.0, notes.join("; ")))
+    }
 }
 
 fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
@@ -332,10 +374,88 @@ fn conv_to(env: &Env, s: Seq, goal: &Term, start: &[SymId]) -> KResult<Seq> {
         Some(syms) if syms.is_empty() => Ok(s),
         Some(syms) => Seq::conv(env, &s, goal, &syms),
         None => {
+            if start.is_empty() {
+                if let Some(r) = conv_pow2(env, &s, goal) {
+                    return Ok(r);
+                }
+            }
             let pp = Printer::new(env);
             err(format!("this proves `{}`, not `{}`\n  {}", pp.short(s.concl()), pp.short(goal), pp.mismatch(goal, s.concl())))
         }
     }
+}
+
+/// s as the goal, the two the same but for `pow2(k)` (k a numeral, one
+/// side) where the other has its value (a step's output evaluates it, a
+/// lemma's instance does not): each `pow2(k) = 2^k` by arith, s rewritten
+/// with it, the goal reached back from the values by `subst`
+fn conv_pow2(env: &Env, s: &Seq, goal: &Term) -> Option<Seq> {
+    let p2 = env.sym_by_name.get("pow2").copied()?;
+    fn collect(t: &Term, p2: SymId, out: &mut Vec<(Term, u32)>) {
+        if let Node::App(f, a) = t.node() {
+            if *f == p2 && a.len() == 1 {
+                if let Node::Nat(k) = a[0].node() {
+                    if let Some(k) = k.to_u64().filter(|k| *k <= 128) {
+                        if !out.iter().any(|(u, _)| u == t) {
+                            out.push((t.clone(), k as u32));
+                        }
+                        return;
+                    }
+                }
+            }
+            for x in a {
+                collect(x, p2, out);
+            }
+        }
+    }
+    let mut ps = Vec::new();
+    collect(s.concl(), p2, &mut ps);
+    collect(goal, p2, &mut ps);
+    if ps.is_empty() {
+        return None;
+    }
+    let lg = Logic::new(env).ok()?;
+    let bf = env.binders_fn();
+    let mut eqs = Vec::new();
+    for (t, k) in &ps {
+        if *k > 127 {
+            return None;
+        }
+        let v = Term::nat(sl_kernel::Nat::from_u128(1u128 << k));
+        let e = Term::app(env.builtins.eq, vec![t.clone(), v.clone()]);
+        eqs.push((t.clone(), v, Seq::arith(env, &lg, &[], &e).ok()?));
+    }
+    // s with the values
+    let mut s1 = s.clone();
+    for (t, _, e) in &eqs {
+        let body = sl_kernel::ext::seq::abstract_term(s1.concl(), t, 0, &bf);
+        if body != *s1.concl() {
+            s1 = Seq::subst(env, e, &body, &s1).ok()?;
+        }
+    }
+    // the goal with the values, step by step: G_0 = goal, G_i+1 = G_i's
+    // pow2(k_i) its value
+    let mut gs = vec![goal.clone()];
+    let mut bodies = Vec::new();
+    for (t, v, _) in &eqs {
+        let g = gs.last().unwrap();
+        let body = sl_kernel::ext::seq::abstract_term(g, t, 0, &bf);
+        let next = body.instantiate_params(std::slice::from_ref(v), &bf);
+        bodies.push(body);
+        gs.push(next);
+    }
+    if gs.last() != Some(s1.concl()) {
+        return None;
+    }
+    // back: from G_i+1 to G_i (`subst` with the equation turned)
+    let mut r = s1;
+    for (i, (_, _, e)) in eqs.iter().enumerate().rev() {
+        if gs[i] == gs[i + 1] {
+            continue;
+        }
+        r = Seq::subst(env, &Seq::sym(env, e).ok()?, &bodies[i], &r).ok()?;
+    }
+    (r.concl() == goal).then_some(r)
 }
 
 /// Modus ponens, the fact fitted to the premise by implicit unfolding.
@@ -347,6 +467,9 @@ fn mp_u(env: &Env, imp: &Seq, a: &Seq) -> KResult<Seq> {
             }
             if let Some(syms) = unfold_match(env, a.concl(), &c[0], &[]) {
                 return Seq::mp(env, imp, &Seq::conv(env, a, &c[0], &syms)?);
+            }
+            if let Some(r) = conv_pow2(env, a, &c[0]) {
+                return Seq::mp(env, imp, &r);
             }
         }
     }
@@ -1151,6 +1274,22 @@ impl State {
                 }
                 if let Some(g) = &self.goal {
                     eprintln!("  goal: {}", p.term(g));
+                }
+            }
+            // search P1, P2, ..: the facts (theorems, axioms, conditional
+            // theorems) with a subterm matching each pattern (`_` any term),
+            // those matching in the conclusion first, the shortest first
+            "search" => {
+                let hits = if rest.trim().is_empty() {
+                    let g = self.goal.clone().ok_or_else(|| KernelError("search: no current goal here (give patterns)".into()))?;
+                    self.search_goal(env, lg, &g)
+                } else {
+                    self.search(env, lg, rest)?
+                };
+                let p = Printer::new(env);
+                eprintln!("line {}: search {}: {} found{}", line, rest.trim(), hits.len(), if hits.len() > 30 { " (the first 30)" } else { "" });
+                for (name, s) in hits.iter().take(30) {
+                    eprintln!("  {}: {}", name, p.short(s));
                 }
             }
             // goal [N]: shows the current goal, the variables in scope and
@@ -2014,6 +2153,154 @@ impl State {
             s = Seq::gen(env, lg, &s, v)?;
         }
         Ok(s)
+    }
+
+    /// `search`'s matches: (name, statement), ranked -- a pattern matching
+    /// the conclusion itself, then inside it, then in a premise only; the
+    /// shorter statement first
+    fn search(&mut self, env: &mut Env, lg: &Logic, text: &str) -> KResult<Vec<(String, Term)>> {
+        // (the patterns: `_` a fresh wildcard variable)
+        let mut wild = Vec::new();
+        let mut pats = Vec::new();
+        for pt in split_top(text, ',') {
+            // (a bare function's name: any application of it)
+            let mut pt = pt.trim().to_string();
+            if let Some(&s) = env.sym_by_name.get(&pt) {
+                let b = &env.syms[s as usize].binders;
+                if !b.is_empty() && b.iter().all(|k| *k == 0) {
+                    pt = format!("{}({})", pt, vec!["_"; b.len()].join(", "));
+                }
+            }
+            let mut out = String::new();
+            let cs: Vec<char> = pt.chars().collect();
+            for (i, c) in cs.iter().enumerate() {
+                let id = |k: Option<&char>| k.is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '.');
+                if *c == '_' && !id(if i > 0 { cs.get(i - 1) } else { None }) && !id(cs.get(i + 1)) {
+                    let n = format!("__w{}", wild.len());
+                    let v = env.new_var(&n, 0);
+                    self.scope.push((n.clone(), v));
+                    wild.push(v);
+                    out.push_str(&n);
+                } else {
+                    out.push(*c);
+                }
+            }
+            pats.push(out);
+        }
+        let parsed: KResult<Vec<Term>> = pats.iter().map(|p| self.term(env, p)).collect();
+        self.scope.truncate(self.scope.len() - wild.len());
+        let pats = parsed?;
+        if pats.is_empty() {
+            return err("expected `search P1, P2, ..` (patterns, `_` any term)");
+        }
+        fn subterms(t: &Term, out: &mut Vec<Term>) {
+            out.push(t.clone());
+            if let Node::App(_, a) | Node::Var(_, a) = t.node() {
+                for x in a {
+                    subterms(x, out);
+                }
+            }
+        }
+        let mut names: Vec<String> = env.theorems.iter().map(|(n, _)| n.clone()).collect();
+        names.extend(env.axioms.iter().map(|(n, _)| n.clone()));
+        names.extend(env.open.conditional.iter().map(|(n, _)| n.clone()));
+        let mut hits: Vec<(usize, usize, String, Term)> = Vec::new();
+        for name in names {
+            if name.starts_with("__") {
+                continue;
+            }
+            let Some(s) = facts::seq_of(env, &name) else { continue };
+            let stmt = s.concl().clone();
+            // (the leading `all`s opened, then the premises and the conclusion)
+            let mut t = stmt.clone();
+            let mut prem = Vec::new();
+            loop {
+                let next = match t.node() {
+                    Node::App(a, b) if *a == lg.all => {
+                        let v = env.new_var("x", 0);
+                        b[0].instantiate_params(&[Term::var(v, vec![])], &env.binders_fn())
+                    }
+                    Node::App(i, c) if *i == env.builtins.imp => {
+                        prem.push(c[0].clone());
+                        c[1].clone()
+                    }
+                    _ => break,
+                };
+                t = next;
+            }
+            let mut in_concl = Vec::new();
+            subterms(&t, &mut in_concl);
+            let mut in_prem = Vec::new();
+            for p in &prem {
+                subterms(p, &mut in_prem);
+            }
+            let found = |ts: &[Term], p: &Term| ts.iter().any(|u| pmatch(env, p, u, &wild, &mut Vec::new()));
+            let mut rank = 0;
+            let mut all = true;
+            for p in &pats {
+                if pmatch(env, p, &t, &wild, &mut Vec::new()) {
+                } else if found(&in_concl, p) {
+                    rank = rank.max(1);
+                } else if found(&in_prem, p) {
+                    rank = 2;
+                } else {
+                    all = false;
+                    break;
+                }
+            }
+            if all {
+                let size = Printer::new(env).short(&stmt).len();
+                hits.push((rank, size, name, stmt));
+            }
+        }
+        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        Ok(hits.into_iter().map(|(_, _, n, s)| (n, s)).collect())
+    }
+
+    /// `search` with no patterns: the facts whose conclusion (after their
+    /// `all`s and premises) matches the goal, their variables the
+    /// pattern's -- what `apply` could prove it by; fewer premises first
+    fn search_goal(&self, env: &mut Env, lg: &Logic, goal: &Term) -> Vec<(String, Term)> {
+        let mut names: Vec<String> = env.theorems.iter().map(|(n, _)| n.clone()).collect();
+        names.extend(env.axioms.iter().map(|(n, _)| n.clone()));
+        names.extend(env.open.conditional.iter().map(|(n, _)| n.clone()));
+        let mut hits: Vec<(usize, usize, String, Term)> = Vec::new();
+        for name in names {
+            if name.starts_with("__") {
+                continue;
+            }
+            let Some(s) = facts::seq_of(env, &name) else { continue };
+            let stmt = s.concl().clone();
+            let mut pvars = Vec::new();
+            stmt.vars(&mut pvars);
+            let mut t = stmt.clone();
+            let mut np = 0;
+            loop {
+                let next = match t.node() {
+                    Node::App(a, b) if *a == lg.all => {
+                        let v = env.new_var("x", 0);
+                        pvars.push(v);
+                        b[0].instantiate_params(&[Term::var(v, vec![])], &env.binders_fn())
+                    }
+                    Node::App(i, c) if *i == env.builtins.imp => {
+                        np += 1;
+                        c[1].clone()
+                    }
+                    _ => break,
+                };
+                t = next;
+            }
+            // (a bare variable matches anything: not a hit)
+            if matches!(t.node(), Node::Var(v, a) if a.is_empty() && pvars.contains(v)) {
+                continue;
+            }
+            if pmatch(env, &t, goal, &pvars, &mut Vec::new()) {
+                let size = Printer::new(env).short(&stmt).len();
+                hits.push((np, size, name, stmt));
+            }
+        }
+        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        hits.into_iter().map(|(_, _, n, s)| (n, s)).collect()
     }
 
     /// the goal's leading `all`s and premises opened: the steps (a fresh

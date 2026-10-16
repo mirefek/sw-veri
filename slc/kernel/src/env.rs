@@ -119,6 +119,9 @@ pub struct Env {
     pub prelude_end: Option<usize>,
     /// the layer definitions with their pinned bodies (`ext::pinned`)
     pub pinned: std::collections::HashSet<SymId>,
+    /// the recorded facts' statements, up to their variables' names (a
+    /// theorem stating what one before it states is noted: `ext::facts`)
+    pub stmt_index: HashMap<String, String>,
     /// (terms checked well-formed, at a depth: they stay so, the
     /// environment only growing -- each checked once)
     wf_ok: std::cell::RefCell<std::collections::HashSet<(Term, u32)>>,
@@ -162,6 +165,7 @@ impl Env {
             bit_rules: Vec::new(),
             prelude_end: None,
             pinned: Default::default(),
+            stmt_index: HashMap::new(),
             wf_ok: Default::default(),
             ld_memo: Default::default(),
             builtins: Builtins {

@@ -69,6 +69,21 @@ pub fn record(env: &mut Env, name: &str, s: Seq) -> KResult<()> {
     if env.fact(name).is_some() || env.open.conditional.iter().any(|(n, _)| n == name) {
         return err(format!("`{}` is already proven", name));
     }
+    // (a statement proven before, under another name: noted -- a lemma
+    // written twice; not for the proof checker's own facts, nor the
+    // generated translation contexts' -- `slc steps`, a namespace `..tc`
+    // per function, each with the effect lemmas it needs)
+    let generated = name.split_once('.').is_some_and(|(ns, _)| ns.ends_with("tc"));
+    if !name.starts_with("__") && !generated {
+        let key = canonical(s.concl());
+        match env.stmt_index.get(&key) {
+            Some(other) if other != name => eprintln!("note: `{}` states what `{}` states", name, other),
+            Some(_) => {}
+            None => {
+                env.stmt_index.insert(key, name.to_string());
+            }
+        }
+    }
     if s.open().is_empty() {
         let thm = s.into_thm(env)?;
         return env.add_theorem(name, thm);
@@ -85,6 +100,48 @@ pub fn record(env: &mut Env, name: &str, s: Seq) -> KResult<()> {
     }
     env.open.conditional.push((name.to_string(), s));
     Ok(())
+}
+
+/// A statement as text with its variables numbered by first occurrence
+/// (the same for two statements equal up to their variables' names).
+fn canonical(t: &Term) -> String {
+    fn go(t: &Term, vs: &mut Vec<crate::term::VarId>, out: &mut String) {
+        use crate::term::Node;
+        use std::fmt::Write;
+        match t.node() {
+            Node::App(s, a) | Node::Var(s, a) => {
+                if let Node::Var(..) = t.node() {
+                    let i = vs.iter().position(|v| v == s).unwrap_or_else(|| {
+                        vs.push(*s);
+                        vs.len() - 1
+                    });
+                    let _ = write!(out, "v{}", i);
+                } else {
+                    let _ = write!(out, "s{}", s);
+                }
+                if !a.is_empty() {
+                    out.push('(');
+                    for x in a.iter() {
+                        go(x, vs, out);
+                        out.push(',');
+                    }
+                    out.push(')');
+                }
+            }
+            Node::BVar(i) => {
+                let _ = write!(out, "b{}", i);
+            }
+            Node::Nat(n) => {
+                let _ = write!(out, "n{}", n);
+            }
+            Node::Bytes(b) => {
+                let _ = write!(out, "y{:?}", b);
+            }
+        }
+    }
+    let mut out = String::new();
+    go(t, &mut Vec::new(), &mut out);
+    out
 }
 
 /// The open lemmas `name` still rests on, transitively (empty: proven).

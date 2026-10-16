@@ -83,20 +83,12 @@ holding for the empty heap.
   that the callee refines itself (`agself`, `dbself` in `mp.ta_run`): the
   call rule could take it as given.
 - `ex_intro({..})` inside `taut(..)` misparsed as a binder (hit again in
-  `mp.ta_q`: the inner witness needs its own `have`); the list lemmas of
-  proofs/translate_call.core to core/list.core.
-- A function's divergence lemma (`mp.ta_divg`) copies the spec's
-  elaborated body verbatim (40 lines, parentheses counted by hand): one
-  lemma per spec shape (choices, havoc, return), or the checker deriving
-  the body from the spec's definition, would remove it.
+  `mp.ta_q` and `gc.regs_one`: the inner witness needs its own `have`);
+  the list lemmas of proofs/translate_call.core (`tr.seq_one_type`,
+  `tr.concat_list`) to core/list.core.
 - `step`'s names: the continuation first, then the call's facts; a
   wrong guess shows up only as "names not used" or an odd destructuring
   error. The message could print which name got what.
-- A shadowed hypothesis name (an inner `obtain .. hx` hiding the theorem's
-  `hx`) surfaced as "premise not discharged" far away: warn on shadowing.
-- Exploring a walk: `print` and then reading "the obtained x occurs in
-  the result" is the way to see a continuation; a `goal` / `show ?`
-  command printing the current goal and facts would be direct.
 - `defs(..)` unfolds the goal only; a fact needs `expand` first (ctx_free
   in `mp.co_unt`): `defs` could unfold the facts it is given too.
 - `arith`: `x in bits(n)` for n above 100 is not arithmetic (bits(128):
@@ -105,10 +97,9 @@ holding for the empty heap.
   goal written out.
 - Record updates in another order (`fn_update` with distinct keys): simp
   does not normalize them; `mp.clear_perm` swaps four times by hand.
-- A call's registers: the step rule picks a lemma per list of argument
-  widths from a fixed table (slc/proof/src/lib.rs, `step_regs_ex`), each a
-  hand-written pair `gc.regs*` / `gc.regs*_ex` (`gc.regs_32_64` for
-  alloc_group's call); one lemma over any list of widths would end that.
+- A call's registers read back: the inversion lemmas `gc.regs1` ..
+  `gc.regs_32_64` per list of widths remain (the existence side is
+  general now); `gc.reg_at` reads one register of any list.
 - The rules' standard form: the statics' names, `and r8, 2^k - 1`, `[p + 0]`
   as equations of N (docs/overview.md).
 - `rewrite(e, f)` rewrites every occurrence, also inside abbreviations
@@ -117,30 +108,22 @@ holding for the empty heap.
   it): a `subst` with its motive written out, or the occurrences selected
   (`rewrite(e, p, {k}..)`, counted in the unfolded term), is the workaround.
   A rewrite keeping abbreviations folded would do.
-- The kernel normalizes `pow2(0)` to `1` in a step's output but not in a
-  `let` or a lemma's instance; the two forms then fail to match
-  (`mp.as_run`'s V3).
-- `simp` does not evaluate `seq_one(x)[0]` (`at({..})` does); `arith`
-  takes `x in omega` only as its own fact, not as a conjunct of one
-  (`x0 in omega && x1 in omega` destructured first).
+- `arith` takes `x in omega` only as its own fact, not as a conjunct of
+  one (`x0 in omega && x1 in omega` destructured first).
 - The invariant's constant tables (the class table, a_ctz_32's) are
   stated, framed and read each by its own copy of the same lemmas
   (`mp.mf_classes` / `mp.mf_debruijn`, `mp.lf_*`, `mp.*_table`): one
   predicate for a read-only table, framed once, would serve both.
-- A World spec's divergence lemma and its ABI form (`mp.X_divw`,
-  `mp.X_abi`) are the same 15 lines per function, differing only in the
-  spec function's shape (`ct.fun_divg` / `_v` / `_v0`) and the body's
-  (`ct.dv_havoc`, `ct.dv_exc_a`, ...): written from one template for eleven
-  functions. The checker could derive them from the spec's definition.
-- A clause added to a predicate breaks every positional destructuring of
-  it (`have _ _ .. c11 _ := expand(cok, ctx_ok)`: 22 sites for ctx_ok's
-  new last clause; `rep`'s, `metas_partition`'s): named clauses
-  (`{cy = name}`) are immune, so the invariant's predicates could all
-  name theirs (ctx_ok does not), or the checker could warn on positional
-  use of a predicate with more than a few conjuncts.
-- Finding an existing lemma: `mp.qu_q` was written a second time before
-  the checker said it was proven; a search by statement shape (or by the
-  names it mentions) would help.
+- Lemmas stated twice (the checker's note, `ext::facts`): `dne_taut` /
+  `dne_any`, `x86.can_access_read` and `tr.acc_wr` / `x86.write_read`,
+  `g.q_gen` / `tr.q_from`, `g.lab_none` / `tr.cfg_kk_nil`, `abi.world_part`
+  / `tr.and_world`, `mp.w32_out` / `mp.wr32_out`, `mp.w32_typed` /
+  `mp.wr32_typed`, `mp.acr_abi` / `acr.implements_abi`, `mp.nr_out` /
+  `mp.nores`; `ms.imul_4` / `_16` and the generated contexts' effect lemmas
+  (`dqtc.eff_meta_next` .. in each `..tc`): one shared set.
+- `search`: by patterns and by the goal; not yet by a premise's shape
+  (what a fact in hand can be fed to), nor ranked by how much of the
+  pattern a fact's statement is.
 
 ## Later
 
