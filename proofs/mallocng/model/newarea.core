@@ -1962,16 +1962,12 @@ proof
   show by defs(simp(ab, z, hl, hf), mallocng.ro_ranges)
 qed
 
-// (a page a read-only segment is last on: not the reserve's first page --
-// a byte of the segment on it)
-theorem mp.na_ropg(c, A, vm, V1, b, i, p): mp.napre(c, A, vm, V1, b) -> i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) ->
+// (a page a read-only segment is last on: one of its bytes on it)
+theorem mp.seg_byte(c, i, p): c in mallocng.Cfg -> i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) ->
   !bit(x86_64_linux.segment(c.file, i).flags, 1) -> x86_64_linux.last_on_page(c.file, i, p) ->
-  !(p = int_div(A.reserve, 4096))
+  ex y. y in omega && (mallocng.in_range(y, mallocng.ro_ranges(c.file)[i]) && int_div(y, x86_64_linux.PAGE) = p)
 proof
-  assume P hi hp hil hf hlp
-  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
-  have {H = inv} := expand(hh, mallocng.holds_in)
-  have {ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
+  assume hc hi hp hil hf hlp
   let F := c.file
   let V := x86_64_linux.segment(F, i).vaddr
   let S := x86_64_linux.segment(F, i).memsz
@@ -1984,28 +1980,36 @@ proof
   have so: S in omega by defs(simp(v2), x86_64_linux.segment)
   have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   have er := apply(mp.ro_at, hc, hi, hil, hl, hf)
-  assume e
-  // (a byte y of the segment on page p: then the reserve's -- not so)
-  have no: all y. y in omega -> int_le(V, y) -> int_lt(y, int_add(V, S)) -> !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, 4096))) proof
-    fix y
-    assume yo y1 y2
-    have inr: mallocng.in_range(y, mallocng.ro_ranges(F)[i]) by defs(simp(er, y1, y2), mallocng.in_range)
-    have ex: ex j. j in omega && int_lt(j, x86_64_linux.phnum(F)) && mallocng.in_range(y, mallocng.ro_ranges(F)[j]) by ex_intro({i}, taut(hi, hil, inr))
-    have nr := apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := y], hc, hu, ha, H, taut(ex))
-    have nr2: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(nr, mallocng.in_range))
-    show by arith(nr2, hrc, rc)
-  qed
-  have d1: int_le(V, int_mul(p, 4096)) -> false proof
+  have d1: int_le(V, int_mul(p, 4096)) -> ex y. y in omega && (mallocng.in_range(y, mallocng.ro_ranges(F)[i]) && int_div(y, x86_64_linux.PAGE) = p) proof
     assume h
-    have q := mp(all_elim(no, {int_mul(p, 4096)}), (int_mul(p, 4096) in omega by simp(hp)), h, (int_lt(int_mul(p, 4096), int_add(V, S)) by arith(p2, kp, vo, so, sm, hp)))
-    show by arith(q, e, ral, ro, hp)
+    have inr: mallocng.in_range(int_mul(p, 4096), mallocng.ro_ranges(F)[i]) by defs(simp(er, h, (int_lt(int_mul(p, 4096), int_add(V, S)) by arith(p2, kp, vo, so, sm, hp))), mallocng.in_range)
+    show by ex_intro({int_mul(p, 4096)}, taut((int_mul(p, 4096) in omega by simp(hp)), inr, (int_div(int_mul(p, 4096), x86_64_linux.PAGE) = p by arith(kp, hp))))
   qed
-  have d2: !int_le(V, int_mul(p, 4096)) -> false proof
+  have d2: !int_le(V, int_mul(p, 4096)) -> ex y. y in omega && (mallocng.in_range(y, mallocng.ro_ranges(F)[i]) && int_div(y, x86_64_linux.PAGE) = p) proof
     assume h
-    have q := mp(all_elim(no, {V}), vo, (int_le(V, V) by arith()), (int_lt(V, int_add(V, S)) by arith(sm, so)))
-    show by arith(q, e, ral, ro, hp, p1, kp, vo, h)
+    have inr: mallocng.in_range(V, mallocng.ro_ranges(F)[i]) by defs(simp(er, (int_le(V, V) by arith()), (int_lt(V, int_add(V, S)) by arith(sm, so))), mallocng.in_range)
+    show by ex_intro({V}, taut(vo, inr, (int_div(V, x86_64_linux.PAGE) = p by arith(p1, kp, vo, h, hp))))
   qed
   show by taut(d1, d2)
+qed
+
+// (a page a read-only segment is last on: not the reserve's first page --
+// a byte of the segment on it)
+theorem mp.na_ropg(c, A, vm, V1, b, i, p): mp.napre(c, A, vm, V1, b) -> i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) ->
+  !bit(x86_64_linux.segment(c.file, i).flags, 1) -> x86_64_linux.last_on_page(c.file, i, p) ->
+  !(p = int_div(A.reserve, 4096))
+proof
+  assume P hi hp hil hf hlp
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  obtain y, yo inr yp from apply(mp.seg_byte, hc, hi, hp, hil, hf, hlp)
+  have ex: ex j. j in omega && int_lt(j, x86_64_linux.phnum(c.file)) && mallocng.in_range(y, mallocng.ro_ranges(c.file)[j]) by ex_intro({i}, taut(hi, hil, inr))
+  have nr := apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := y], hc, hu, ha, H, taut(ex))
+  have nr2: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(nr, mallocng.in_range))
+  assume e
+  show by arith(nr2, hrc, rc, yp, e, kp, ral, ro, yo)
 qed
 
 // the invariant for the new state on its view
