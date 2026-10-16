@@ -15,11 +15,16 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 ## 2. Next: alloc_group, loops on the CFG and loops by their purpose
 
 - `__malloc_alloc_meta` by its spec (`alloc_meta_spec`: a meta taken, or
-  0): the free metas' head (dequeue_head), the area's next meta, a new
-  area from brk or from the mmap'd reserve (mprotect'ed); the first call's
-  secret (get_random_secret). Needs the World-level specs of `__mmap`,
-  `__mprotect`, brk (`__syscall1(12, ..)`) and `___errno_location`; a failed
-  mmap of the meta areas' doubling size keeps `meta_alloc_shift <= 34`
+  0). The supply frame (proofs/mallocng/model/supply.core:
+  `mp.holds_supply`, the groups' clauses kept) and the area's next meta
+  taken (`mp.tav_holds_in`) are done. Left: the free metas' head taken
+  (dequeue_head: the list's links and head word changed -- a frame over a
+  set of written bytes, `mp.take_view` generalized); a new area from brk or
+  from the mmap'd reserve (mprotect'ed: pages change, `areas` grows); the
+  first call's secret (get_random_secret: the auxiliary vector leaves the
+  footprint); then the run (the GIMPLE walk under the callees' World
+  specs, layers/mallocng_specs.sl) and the machine form. A failed mmap of
+  the meta areas' doubling size keeps `meta_alloc_shift <= 34`
   (`TASK_SIZE`).
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops

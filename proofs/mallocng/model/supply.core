@@ -1505,3 +1505,71 @@ proof
   show := apply(mp.holds_supply[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := vm.brk, brk2 := V1.brk], ha, hb, H, em, es, eu, ea, gbs, rcs,
     img, cok2, fr2, ar2, pt2, nm2, bk2, pm2, sp2, cl, db, ff2, ga2)
 qed
+
+// (x taken, the groups and the ranges as before: a byte outside x's
+// record the allocator's after just when before)
+theorem mp.take_fp(c, A, A2, b, x, a): A.taken in list_type(omega) -> x in omega ->
+  mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.metas = A.metas -> A2.slots = A.slots -> A2.used = A.used ->
+  A2.taken = seq_concat(A.taken, seq_one(x)) -> !(int_le(x, a) && int_lt(a, int_add(x, 40))) ->
+  (a in mallocng.footprint(c, A2, b) <-> a in mallocng.footprint(c, A, b))
+proof
+  assume tl xo fpr em es eu etk nx
+  have re := apply(mp.inres_fields[A := A, A2 := A2, a := a], em, es, eu)
+  have ts := apply(mp.taken_snoc[A := A, A2 := A2, x := x, a := a], tl, xo, etk)
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  have te: mallocng.in_taken(A2, a) <-> mallocng.in_taken(A, a) by taut(rewrite(cm, ts), nx)
+  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
+  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y), z := a]
+  have fs := subst({y. (a in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) <-> (a in mallocng.fp_set(y, b))}, fpr,
+    ((a in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) <-> (a in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) by taut()))
+  show by defs(taut(f1, f2, fs, re, te), mallocng.footprint)
+qed
+
+// (the free bytes accessible: on a view of a memory of the same pages too)
+theorem mp.free_rw_pg(c, vm, V1, F): mallocng.free_rw(c, mallocng.mview(vm, F)) -> V1.pages = vm.pages -> mallocng.free_rw(c, mallocng.mview(V1, F))
+proof
+  assume hf ep
+  have r: all a. a in omega -> mallocng.ctx_free(c, a) -> mallocng.m_rw(mallocng.mview(V1, F), a) && !(snd(mallocng.pg(mallocng.mview(V1, F), a)).kind = 2) proof
+    fix a
+    assume hao hfa
+    have h1 := mp(all_elim(expand(hf, mallocng.free_rw), {a}), hao, hfa)
+    have e := apply(mp.view_pg[vm := vm, vm2 := V1, fp := F, a := a], hao, ep)
+    show by defs(rewrite(sym(e), expand(h1, mallocng.m_rw, mallocng.m_mapped)), mallocng.m_rw, mallocng.m_mapped)
+  qed
+  show by defs(r, mallocng.free_rw)
+qed
+
+// the step: the invariant in memory for the new state
+theorem mp.tav_holds_in(c, A, vm, V1, b): mp.tavpre(c, A, vm, V1, b) -> mallocng.holds_in(c, mp.tav(A), V1, b)
+proof
+  assume P
+  let A2 := mp.tav(A)
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, ep = pages} := P
+  have {H = inv, hm = mapped, hfr = free} := expand(hh, mallocng.holds_in)
+  have {em = metas, es = slots, eu = used, etk = taken, fpr = ranges, tl = tl, xo = nat} := apply(mp.tav_basic, P)
+  have h2 := apply(mp.tav_holds, P)
+  have m2: mallocng.fp_mapped(mallocng.fp_ranges(c, A2), b, V1) by defs(simp(expand(hm, mallocng.fp_mapped, x86_64_linux.mapped), fpr, ep), mallocng.fp_mapped, x86_64_linux.mapped)
+  // (a free byte: the context's -- outside the next meta's record)
+  have fm: all a. a in omega -> mallocng.ctx_free(c, a) -> (a in mallocng.footprint(c, A, b) <-> a in mallocng.footprint(c, A2, b)) proof
+    fix a
+    assume hao hfa
+    have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+    have inc: int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))
+      by arith(expand(hfa, mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK), ks)
+    have hin: mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) by defs(simp(inc), mallocng.in_range)
+    have hn := apply(mp.ctx_noarea[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := a], hc, hu, ha, H, hao, hin)
+    have e := apply(mp.take_fp[c := c, A := A, A2 := A2, b := b, x := mp.anext(A), a := a], tl, xo, fpr, em, es, eu, etk, apply(mp.tav_nox, P, hn))
+    show by taut(e)
+  qed
+  have f1 := apply(mp.free_rw_mem[c := c, vm := vm, F1 := mallocng.footprint(c, A, b), F2 := mallocng.footprint(c, A2, b)], hfr, fm)
+  have f2 := apply(mp.free_rw_pg[c := c, vm := vm, V1 := V1, F := mallocng.footprint(c, A2, b)], f1, ep)
+  have gu: all g. g in omega -> mallocng.is_used(A2, g) -> mallocng.is_used(A, g) && mallocng.group_range(A2.metas[g]) = mallocng.group_range(A.metas[g]) proof
+    fix g
+    assume _ h
+    have iu: mallocng.is_used(A, g) by defs(rewrite(eu, expand(h, mallocng.is_used)), mallocng.is_used)
+    have gr: mallocng.group_range(A2.metas[g]) = mallocng.group_range(A.metas[g]) := rewrite(em, refl({mallocng.group_range(A2.metas[g])}), {2})
+    show by taut(iu, gr)
+  qed
+  have r2 := apply(mp.holds_rw[c := c, A := A, A2 := A2, vm := vm, vm2 := V1, b := b], hc, hu, ha, hh, ep, gu)
+  show by defs(taut(h2, m2, f2, r2), mallocng.holds_in)
+qed
