@@ -380,6 +380,48 @@ proof
   show by defs(taut(k1b, k2b, k3), mallocng.classes_ok)
 qed
 
+// a_ctz_32's table intact: the same
+theorem mp.lf_debruijn(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, brk) -> mallocng.debruijn_ok(c, M2)
+proof
+  assume F
+  have {hc = cfg, H = holds, pgs = pages} := F
+  have {hdb = debruijn} := expand(H, mallocng.holds)
+  have k1 k2 k3 := expand(hdb, mallocng.debruijn_ok)
+  obtain i, hi hil hlo hhi from k3
+  have so: c.dbj in omega by simp(hc)
+  let RI := mallocng.ro_ranges(c.file)[i]
+  have fs: c.file in seq_type(bits(8)) by simp(hc)
+  have rn := apply(mp.ro_nat[f := c.file, i := i], fs, hi, hil)
+  have rs rz := apply(mp.cart_nat, rn)
+  have tb: all a. a in omega -> int_le(c.dbj, a) -> int_lt(a, int_add(c.dbj, 32)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    have inr: mallocng.in_range(a, RI) by defs(arith(h1, h2, hlo, hhi, rs, rz, so, hao), mallocng.in_range)
+    have ex: ex j. j in omega && int_lt(j, x86_64_linux.phnum(c.file)) && mallocng.in_range(a, mallocng.ro_ranges(c.file)[j]) by ex_intro({i}, taut(hi, hil, inr))
+    show := apply(mp.lf_region[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, a := a], F, hao, taut(ex))
+  qed
+  have k1b: all x0. x0 in omega -> int_lt(x0, 32) -> mallocng.rd(M2, int_add(c.dbj, x0), 1) = mallocng.debruijn32_tab[x0] proof
+    fix x
+    assume hx hxl
+    have ai: all j. j in omega -> int_lt(j, 1) -> M2[int_add(int_add(c.dbj, x), j)] = M[int_add(int_add(c.dbj, x), j)] proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(tb, {int_add(int_add(c.dbj, x), j)}), simp(so, hx, hj), arith(so, hx, hj), arith(so, hx, hxl, hj, hjl))
+    qed
+    have e := apply(mp.agree_rd[M := M, M2 := M2, a := int_add(c.dbj, x), n := 1], simp(), ai)
+    show := trans(e, mp(all_elim(k1, {x}), hx, hxl))
+  qed
+  have k2b: all x0. x0 in omega -> int_le(c.dbj, x0) && int_lt(x0, int_add(c.dbj, 32)) ->
+      (mallocng.m_mapped(M2, x0) && snd(mallocng.pg(M2, x0)).prot.r) && !(snd(mallocng.pg(M2, x0)).kind = 2) proof
+    fix x
+    assume hx hxr
+    have pe := mp(all_elim(pgs, {x}), hx)
+    have o := mp(all_elim(k2, {x}), hx, hxr)
+    show by defs(simp(pe, o, expand(o, mallocng.m_mapped)), mallocng.m_mapped)
+  qed
+  show by defs(taut(k1b, k2b, k3), mallocng.debruijn_ok)
+qed
+
 // the meta areas intact: their headers, pages and the reserve's bytes
 theorem mp.lf_areas(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, brk) -> mallocng.areas_ok(c, A2, M2)
 proof
@@ -680,20 +722,14 @@ qed
 
 // (a group partial on a new list: on the list before, partial before -- its
 // header byte as before)
-theorem mp.lf_partial(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, brk) ->
-  (all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(A2.active[s], g) -> mallocng.on_list(A.active[s], g)) ->
-  mp.partial_kept(A, A2, M, M2)
+// (a group in use partially active after: so before, its slot size and
+// last slot as before -- its header byte not a list operation's)
+theorem mp.lf_part1(c, A, A2, M, M2, b, brk, g): mp.lframe(c, A, A2, M, M2, b, brk) -> mallocng.is_used(A, g) -> mallocng.partial(M2, A2, g) ->
+  part: mallocng.partial(M, A, g) && stride: mallocng.stride(A2.metas[g]) = mallocng.stride(A.metas[g]) && last: A2.metas[g].last_idx = A.metas[g].last_idx
 proof
-  assume F sub
+  assume F iu p2
   have {ha = abs, H = holds, hg = geom} := F
-  have {hac = active, huo = used} := expand(H, mallocng.holds)
-  fix sc g
-  assume hn hs ol p2
-  have hs0 _ := hn
-  have ol1 := mp(all_elim(sub, {sc}, {g}), hn, hs, ol)
-  obtain k, hk hkl hke from expand(ol1, mallocng.on_list)
-  have iu0 _ _ := mp(all_elim(expand(hac, mallocng.active_ok), {sc}, {k}), taut(hs0, hk), taut(hs, hkl))
-  have iu := rewrite(hke, iu0)
+  have {huo = used} := expand(H, mallocng.holds)
   have {ho = nat, hmo = mem} := apply(mp.used_nat, ha, iu)
   have gok := apply(mp.used_group, huo, iu)
   have {gx = hdr} := apply(mp.hdr_bytes, ha, ho, gok)
@@ -703,6 +739,24 @@ proof
   have {eb = byte} := apply(mp.agree_b8, apply(mp.lf_region[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, a := int_add(A.metas[g].mem, 8)], F, arith(hmo), taut(ex)))
   have {em = mem, el = last, es = stride} := apply(mp.gm_geom[A := A, A2 := A2, x := g], hg, ho)
   have q: mallocng.partial(M, A, g) by defs(arith(rewrite(em, rewrite(el, expand(p2, mallocng.partial))), eb), mallocng.partial)
+  show by taut(q, es, el)
+qed
+
+theorem mp.lf_partial(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, brk) ->
+  (all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(A2.active[s], g) -> mallocng.on_list(A.active[s], g)) ->
+  mp.partial_kept(A, A2, M, M2)
+proof
+  assume F sub
+  have {H = holds} := F
+  have {hac = active} := expand(H, mallocng.holds)
+  fix sc g
+  assume hn hs ol p2
+  have hs0 _ := hn
+  have ol1 := mp(all_elim(sub, {sc}, {g}), hn, hs, ol)
+  obtain k, hk hkl hke from expand(ol1, mallocng.on_list)
+  have iu0 _ _ := mp(all_elim(expand(hac, mallocng.active_ok), {sc}, {k}), taut(hs0, hk), taut(hs, hkl))
+  have iu := rewrite(hke, iu0)
+  have q es el := apply(mp.lf_part1[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F, iu, p2)
   show by taut(ol1, q, es, el)
 qed
 
@@ -710,6 +764,35 @@ qed
 // the context, their metas' links, each group linked exactly when on its
 // list, the active lists' conditions), the metas' partition and the
 // normal form for A2; the rest as before
+theorem mp.holds_links_pr(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, brk) ->
+  mallocng.cyclic(M2, mallocng.ctx_word(c, M2, mallocng.C_FREE_META), A2.free_metas) -> seq_len(A2.active) = 48 ->
+  (all x0. x0 in omega -> int_lt(x0, 48) -> mallocng.cyclic(M2, mallocng.ctx_word(c, M2, int_add(mallocng.C_ACTIVE, int_mul(8, x0))), A2.active[x0])) ->
+  (all h. mallocng.is_used(A, h) -> mallocng.rd(M2, h, 8) = A2.metas[h].prev && mallocng.rd(M2, int_add(h, 8), 8) = A2.metas[h].next) ->
+  (all h. mallocng.is_used(A, h) -> mp.links_ok(A2, h)) ->
+  mallocng.active_ok(A2) -> mallocng.metas_partition(A2) -> mallocng.normal(A2) -> !(A.init_done = 0) ->
+  mallocng.partial_ok(A2, M2) -> mallocng.reuse_ok(A2) ->
+  mallocng.holds(c, A2, M2, b, brk)
+proof
+  assume F o10 o11 o12 hlnk hlok hac hpt hnm nz po ru
+  have {ha = abs, H = holds, hg = geom} := F
+  have {hin = in_slots, hbrk = brk, hsep = sep, hwf = wf, hfix = fixed} := expand(H, mallocng.holds)
+  have {ein = in_slots, ebrk = brk, efx = fixed} := apply(mp.gm_same[c := c, A := A, A2 := A2, b := b, brk := brk], hg)
+  have er := apply(mp.gm_regions[c := c, A := A, A2 := A2], ha, hg)
+  have im := apply(mp.lf_image[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
+  have cx := apply(mp.lf_ctx[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F, o10, o11, o12)
+  have ar := apply(mp.lf_areas[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
+  have us := apply(mp.lf_used[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F, hlnk, hlok)
+  have pm := apply(mp.lf_perms[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
+  have cl := apply(mp.lf_classes[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
+  have db := apply(mp.lf_debruijn[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
+  have gp := apply(mp.lf_apart[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
+  have ei := apply(mp.gm_field[A := A, A2 := A2, k := "init_done"], hg, simp(), simp(), simp())
+  have fr: mallocng.fresh_ok(c, A2, M2) by defs(taut(rewrite(sym(ei), nz)), mallocng.fresh_ok)
+  show by defs(taut(im, cx, fr, ar, hpt, us, hac, po, ru, rewrite(sym(ein), hin), hnm, rewrite(sym(ebrk), hbrk), pm, rewrite(sym(er), hsep), hwf, cl, db,
+    rewrite(sym(efx), hfix), gp), mallocng.holds)
+qed
+// ... the lists shrunk (a group on one before on it): the active groups'
+// conditions kept
 theorem mp.holds_links(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, brk) ->
   mallocng.cyclic(M2, mallocng.ctx_word(c, M2, mallocng.C_FREE_META), A2.free_metas) -> seq_len(A2.active) = 48 ->
   (all x0. x0 in omega -> int_lt(x0, 48) -> mallocng.cyclic(M2, mallocng.ctx_word(c, M2, int_add(mallocng.C_ACTIVE, int_mul(8, x0))), A2.active[x0])) ->
@@ -720,20 +803,10 @@ theorem mp.holds_links(c, A, A2, M, M2, b, brk): mp.lframe(c, A, A2, M, M2, b, b
   mallocng.holds(c, A2, M2, b, brk)
 proof
   assume F o10 o11 o12 hlnk hlok hac hpt hnm nz hsub
-  have {ha = abs, H = holds, hg = geom} := F
-  have {hin = in_slots, hbrk = brk, hsep = sep, hwf = wf, hfix = fixed, hpo = partial} := expand(H, mallocng.holds)
+  have {hg = geom, H = holds} := F
+  have {hpo = partial, hru = reuse} := expand(H, mallocng.holds)
   have po := apply(mp.partial_mono[A := A, A2 := A2, M := M, M2 := M2], hpo, apply(mp.lf_partial[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F, hsub))
-  have {ein = in_slots, ebrk = brk, efx = fixed} := apply(mp.gm_same[c := c, A := A, A2 := A2, b := b, brk := brk], hg)
-  have er := apply(mp.gm_regions[c := c, A := A, A2 := A2], ha, hg)
-  have im := apply(mp.lf_image[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
-  have cx := apply(mp.lf_ctx[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F, o10, o11, o12)
-  have ar := apply(mp.lf_areas[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
-  have us := apply(mp.lf_used[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F, hlnk, hlok)
-  have pm := apply(mp.lf_perms[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
-  have cl := apply(mp.lf_classes[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
-  have gp := apply(mp.lf_apart[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F)
-  have ei := apply(mp.gm_field[A := A, A2 := A2, k := "init_done"], hg, simp(), simp(), simp())
-  have fr: mallocng.fresh_ok(c, A2, M2) by defs(taut(rewrite(sym(ei), nz)), mallocng.fresh_ok)
-  show by defs(taut(im, cx, fr, ar, hpt, us, hac, po, rewrite(sym(ein), hin), hnm, rewrite(sym(ebrk), hbrk), pm, rewrite(sym(er), hsep), hwf, cl,
-    rewrite(sym(efx), hfix), gp), mallocng.holds)
+  have ru := apply(mp.reuse_gm[A := A, A2 := A2], hg, hsub, hru)
+  show := apply(mp.holds_links_pr[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk], F, o10, o11, o12, hlnk, hlok, hac, hpt, hnm, nz, po, ru)
 qed
+

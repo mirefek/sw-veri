@@ -36,8 +36,10 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 ## 3. Then: the remaining functions
 
-- alloc_slot (spec written, `alloc_slot_spec`; C1 done; try_avail called
-  as `mp.ta_call`), `__malloc_alloc_meta`.
+- alloc_slot's machine-code form (`mp.as_implements`): with alloc_group's
+  -- they call each other (`mp.as_call`, `mp.agr_call`), the composition
+  by induction on the class (a nested group's class larger) --;
+  `__malloc_alloc_meta`.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
@@ -81,10 +83,53 @@ holding for the empty heap.
 - A call to a callee by its own contract still needs the trivial fact
   that the callee refines itself (`agself`, `dbself` in `mp.ta_run`): the
   call rule could take it as given.
-- `ex_intro({..})` inside `taut(..)` misparsed as a binder; the list
-  lemmas of proofs/translate_call.core to core/list.core.
+- `ex_intro({..})` inside `taut(..)` misparsed as a binder (hit again in
+  `mp.ta_q`: the inner witness needs its own `have`); the list lemmas of
+  proofs/translate_call.core to core/list.core.
+- A function's divergence lemma (`mp.ta_divg`) copies the spec's
+  elaborated body verbatim (40 lines, parentheses counted by hand): one
+  lemma per spec shape (choices, havoc, return), or the checker deriving
+  the body from the spec's definition, would remove it.
+- `step`'s names: the continuation first, then the call's facts; a
+  wrong guess shows up only as "names not used" or an odd destructuring
+  error. The message could print which name got what.
+- A shadowed hypothesis name (an inner `obtain .. hx` hiding the theorem's
+  `hx`) surfaced as "premise not discharged" far away: warn on shadowing.
+- Exploring a walk: `print` and then reading "the obtained x occurs in
+  the result" is the way to see a continuation; a `goal` / `show ?`
+  command printing the current goal and facts would be direct.
+- `defs(..)` unfolds the goal only; a fact needs `expand` first (ctx_free
+  in `mp.co_unt`): `defs` could unfold the facts it is given too.
+- `arith`: `x in bits(n)` for n above 100 is not arithmetic (bits(128):
+  narrowed by hand, `mp.hdr_new`); `ord_lt(0, n)` needs `n in omega` given;
+  no `-1` literal (`int_neg(1)`); an inline arith inside `taut` needs its
+  goal written out.
+- Record updates in another order (`fn_update` with distinct keys): simp
+  does not normalize them; `mp.clear_perm` swaps four times by hand.
+- A call's registers: the step rule picks a lemma per list of argument
+  widths from a fixed table (slc/proof/src/lib.rs, `step_regs_ex`), each a
+  hand-written pair `gc.regs*` / `gc.regs*_ex` (`gc.regs_32_64` for
+  alloc_group's call); one lemma over any list of widths would end that.
 - The rules' standard form: the statics' names, `and r8, 2^k - 1`, `[p + 0]`
   as equations of N (docs/overview.md).
+- `rewrite(e, f)` rewrites every occurrence, also inside abbreviations
+  that unfold to the term (`rewrite(sym(i0), ..)` turning each `0` of
+  `mp.res_abs(A2, GN, 0)` into `i`; `rewrite(p0, ..)` each `pow2(0)` in
+  it): a `subst` with its motive written out is the workaround. A rewrite
+  at chosen positions, or one keeping abbreviations folded, would do.
+- The kernel normalizes `pow2(0)` to `1` in a step's output but not in a
+  `let` or a lemma's instance; the two forms then fail to match
+  (`mp.as_run`'s V3).
+- `simp` does not evaluate `seq_one(x)[0]` (`at({..})` does); `arith`
+  takes `x in omega` only as its own fact, not as a conjunct of one
+  (`x0 in omega && x1 in omega` destructured first).
+- The invariant's constant tables (the class table, a_ctz_32's) are
+  stated, framed and read each by its own copy of the same lemmas
+  (`mp.mf_classes` / `mp.mf_debruijn`, `mp.lf_*`, `mp.*_table`): one
+  predicate for a read-only table, framed once, would serve both.
+- Finding an existing lemma: `mp.qu_q` was written a second time before
+  the checker said it was proven; a search by statement shape (or by the
+  names it mentions) would help.
 
 ## Later
 

@@ -2806,6 +2806,7 @@ impl State {
             ["64"] => "gc.regs1_ex",
             ["32"] => "gc.regs1_32_ex",
             ["64", "64"] => "gc.regs2_ex",
+            ["32", "64"] => "gc.regs_32_64_ex",
             ["64", "64", "64"] => "gc.regs3_ex",
             ["64", "32", "32"] => "gc.regs3w_ex",
             _ => return err(format!("step: no register lemma for arguments of widths {}", ws.join(", "))),

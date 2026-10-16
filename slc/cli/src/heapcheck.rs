@@ -506,6 +506,7 @@ impl Checker<'_> {
             ("metas_partition", "metas_partition", vec![av.clone()]),
             ("active_ok", "active_ok", vec![av.clone()]),
             ("partial_ok", "partial_ok", vec![av.clone(), m.clone()]),
+            ("reuse_ok", "reuse_ok", vec![av.clone()]),
             ("blocks_ok", "blocks_ok", vec![av.clone(), bl.clone()]),
             ("normal", "normal", vec![av.clone()]),
             ("brk_ok", "brk_ok", vec![av.clone(), vm.field("brk").unwrap().clone()]),
@@ -658,6 +659,9 @@ pub fn heapcheck(args: &[String]) -> CResult {
     let sym = |n: &str| elf.symbol(n).map(|s| s.value).ok_or_else(|| format!("symbol `{}` not found", n));
     let (main_at, malloc_at, calloc_at, free_at) = (sym("main")?, sym("malloc")?, sym("calloc")?, sym("free")?);
     let (ctx, lock, libc, sct) = (sym("__malloc_context")?, sym("__malloc_lock")?, sym("__libc")?, sym("__malloc_size_classes")?);
+    // (a_ctz_32's table; an optimized build counts with an instruction and
+    // has none -- the class table's range then, a read-only constant too)
+    let dbj = sym("debruijn32.0").unwrap_or(sct);
 
     // the spec and layers, for the interpreter
     let root = repo_root();
@@ -681,6 +685,7 @@ pub fn heapcheck(args: &[String]) -> CResult {
             ("lock", n(lock)),
             ("libc", n(libc)),
             ("sct", n(sct)),
+            ("dbj", n(dbj)),
         ]),
     };
 

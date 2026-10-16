@@ -198,11 +198,6 @@ pred table_ok(vm: Vm, objs: Set[nat], t: Addr, n: nat, tab: List[nat]) =
   all i: nat. i < len(tab) ->
     usable(vm, objs, uint(t) + n * i, n, false) && bytes_at(vm, bits[64](uint(t) + n * i), n) = tab[i]
 
-// malloc.c's debruijn32 (a_ctz_32's, at a de Bruijn sequence's positions)
-const debruijn32_tab : List[nat] = [
-  0, 1, 23, 2, 29, 24, 19, 3, 30, 27, 25, 11, 20, 8, 4, 13,
-  31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14]
-
 ///////////////////////////////////////////////////////////////////////
 //  Bit counts (C2: proofs/mallocng/code/classes.core); their callers' C2 use
 //  these contracts.
@@ -745,7 +740,7 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
     let before = vm
     ghost A := any A2: Abs where reorganised(A0, A2, sc)
     let r = any r: bits[32] where (
-      (r = 0 && len(A.active[sc]) = 0 && (all g: nat. on_list(A0.active[sc], g) -> !has_unused(A0, g))) ||
+      (r = 0 && len(A.active[sc]) = 0 && (all g: nat. on_list(A0.active[sc], g) -> !has_unused(A0, g)) && A.slots = A0.slots) ||
       (ex i: nat. i < 32 && uint(r) = 2^i && len(A.active[sc]) > 0 && reserves(A0, A, A.active[sc][0], i)))
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, {})
     return r
@@ -759,7 +754,7 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
 // header; or -1, out of memory. The allocator may take memory that was
 // unmapped (a new group, a meta area) and set errno (a failed mmap).
 proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
     let A0 = A
@@ -774,6 +769,37 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
     return r
+  }
+}
+
+// g a group just made for class sc's requests of up to req bytes: in use,
+// on no list (unlinked), its slots all unused, the first available; room
+// in each slot for req bytes and the in-band header; one slot if mapped on
+// its own shorter than the class's slots
+pred fresh_group(A: Abs, g: nat, sc: nat, req: nat) =
+  is_used(A, g) && A.metas[g].sizeclass = sc && A.metas[g].prev = 0 && A.metas[g].next = 0 &&
+  (all i: nat. i < len(A.slots[g]) -> A.slots[g][i] = unused) && bit(A.metas[g].avail, 0) = 1 &&
+  req + IB <= stride(A.metas[g]) && (own_mapping(A.metas[g]) -> A.metas[g].last_idx = 0)
+
+// alloc_group(sc, req): a new group of class sc for requests of up to req
+// bytes (`fresh_group`; partially active only if its slots reach past its
+// first page) -- or 0, none to be had. Class sc's list as before, no slot
+// reserved; the allocator may take memory that was unmapped (the group, a
+// meta area, a slot of a larger class's group) and set errno.
+proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64] {
+  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+    uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
+  either { overflow() } or {
+    let A0 = A
+    let before = vm
+    let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
+    ghost A := any A2: Abs where no_reserved(A2) && A2.active[uint(sc)] = A0.active[uint(sc)]
+    let g = any g: bits[64] where g = 0 || fresh_group(A, uint(g), uint(sc), uint(req))
+    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (g != 0 -> active_idx(vm, A.metas[uint(g)]) < A.metas[uint(g)].last_idx ->
+         4096 < UNIT + stride(A.metas[uint(g)]) * (A.metas[uint(g)].last_idx + 1))
+    return g
   }
 }
 
@@ -880,7 +906,14 @@ fn try_avail_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
 
 fn alloc_slot_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 2
-  let r = alloc_slot_spec(c, bits[32](args[0]), args[1])
+  let r = alloc_slot_spec(c, bits[32](args[0]), bits[64](args[1]))
   let w = result[32](r)
+  return (w, any bits[64])
+}
+
+fn alloc_group_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 2
+  let r = alloc_group_spec(c, bits[32](args[0]), bits[64](args[1]))
+  let w = result[64](r)
   return (w, any bits[64])
 }

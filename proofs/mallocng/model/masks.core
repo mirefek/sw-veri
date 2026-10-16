@@ -182,6 +182,18 @@ proof
   show := apply(mp.fixed_unres[c := c, A := A, M := M, b := b, a := a], hc, hu, ha, hao, huo, hga, taut(ir))
 qed
 
+theorem mp.unres_dbj(c, A, M, b, brk, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> a in omega ->
+  int_le(c.dbj, a) -> int_lt(a, int_add(c.dbj, 32)) -> !mallocng.in_reserved(A, a)
+proof
+  assume hc hu ha H hao h1 h2
+  have {huo = used, hga = apart} := expand(H, mallocng.holds)
+  have rr: mallocng.in_range(a, pair(c.dbj, 32)) by defs(simp(h1, h2), mallocng.in_range)
+  have l1: int_lt(0, seq_len(seq_one(pair(c.dbj, 32)))) by arith()
+  have a0 := at({seq_one(pair(c.dbj, 32))[0]})
+  have ir: mallocng.in_ranges(a, seq_one(pair(c.dbj, 32))) by defs(ex_intro({0}, simp(rr, l1, a0)), mallocng.in_ranges)
+  show := apply(mp.fixed_unres[c := c, A := A, M := M, b := b, a := a], hc, hu, ha, hao, huo, hga, taut(ir))
+qed
+
 // a reserved slot's byte: its group's
 theorem mp.inres_grp(c, A, M, b, brk, a): A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> a in omega ->
   mallocng.in_reserved(A, a) -> mp.ingrp(A, a)
@@ -494,6 +506,49 @@ proof
     show by defs(simp(pe, o, expand(o, mallocng.m_mapped)), mallocng.m_mapped)
   qed
   show by defs(taut(k1b, k2b, k3), mallocng.classes_ok)
+qed
+
+// a_ctz_32's table intact: the same
+theorem mp.mf_debruijn(c, A, A2, M, M2, b, brk, g): mp.mframe(c, A, A2, M, M2, b, brk, g) -> mallocng.debruijn_ok(c, M2)
+proof
+  assume F
+  have {hc = cfg, hu = univ, ha = abs, H = holds, pgs = pages} := F
+  have {hdb = debruijn} := expand(H, mallocng.holds)
+  have k1 k2 k3 := expand(hdb, mallocng.debruijn_ok)
+  obtain i, hi hil hlo hhi from k3
+  have so: c.dbj in omega by simp(hc)
+  let RI := mallocng.ro_ranges(c.file)[i]
+  have fs: c.file in seq_type(bits(8)) by simp(hc)
+  have rn := apply(mp.ro_nat[f := c.file, i := i], fs, hi, hil)
+  have rs rz := apply(mp.cart_nat, rn)
+  have tb: all a. a in omega -> int_le(c.dbj, a) -> int_lt(a, int_add(c.dbj, 32)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    have inr: mallocng.in_range(a, RI) by defs(arith(h1, h2, hlo, hhi, rs, rz, so, hao), mallocng.in_range)
+    have ex: ex j. j in omega && int_lt(j, x86_64_linux.phnum(c.file)) && mallocng.in_range(a, mallocng.ro_ranges(c.file)[j]) by ex_intro({i}, taut(hi, hil, inr))
+    show := apply(mp.mf_region[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g, a := a], F, hao, taut(ex))
+  qed
+  have k1b: all x0. x0 in omega -> int_lt(x0, 32) -> mallocng.rd(M2, int_add(c.dbj, x0), 1) = mallocng.debruijn32_tab[x0] proof
+    fix x
+    assume hx hxl
+    have ai: all j. j in omega -> int_lt(j, 1) -> M2[int_add(int_add(c.dbj, x), j)] = M[int_add(int_add(c.dbj, x), j)] proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(tb, {int_add(int_add(c.dbj, x), j)}), simp(so, hx, hj), arith(so, hx, hj), arith(so, hx, hxl, hj, hjl))
+    qed
+    have e := apply(mp.agree_rd[M := M, M2 := M2, a := int_add(c.dbj, x), n := 1], simp(), ai)
+    show := trans(e, mp(all_elim(k1, {x}), hx, hxl))
+  qed
+  have k2b: all x0. x0 in omega -> int_le(c.dbj, x0) && int_lt(x0, int_add(c.dbj, 32)) ->
+      (mallocng.m_mapped(M2, x0) && snd(mallocng.pg(M2, x0)).prot.r) && !(snd(mallocng.pg(M2, x0)).kind = 2) proof
+    fix x
+    assume hx hxr
+    have x1 x2 := hxr
+    have pe := mp(all_elim(pgs, {x}), hx, apply(mp.unres_dbj[c := c, A := A, M := M, b := b, brk := brk, a := x], hc, hu, ha, H, hx, x1, x2))
+    have o := mp(all_elim(k2, {x}), hx, hxr)
+    show by defs(simp(pe, o, expand(o, mallocng.m_mapped)), mallocng.m_mapped)
+  qed
+  show by defs(taut(k1b, k2b, k3), mallocng.debruijn_ok)
 qed
 
 // (the context's words: as before -- its bytes data)
@@ -975,6 +1030,89 @@ proof
   show by defs(taut(u, pg), mallocng.partial_ok)
 qed
 
+// listed groups with an unused slot fit their class (`reuse_ok`): kept when
+// the lists shrink, the unused slots too, the groups' class and stride as
+// before
+theorem mp.reuse_mono(A, A2): mallocng.reuse_ok(A) ->
+  (all sc g. sc in omega && g in omega -> int_lt(sc, 48) -> mallocng.on_list(A2.active[sc], g) -> mallocng.on_list(A.active[sc], g)) ->
+  (all g. mallocng.has_unused(A2, g) -> mallocng.has_unused(A, g)) ->
+  (all g. g in omega -> A2.metas[g].sizeclass = A.metas[g].sizeclass && mallocng.stride(A2.metas[g]) = mallocng.stride(A.metas[g])) ->
+  mallocng.reuse_ok(A2)
+proof
+  assume R hl hu hm
+  have r0 := expand(R, mallocng.reuse_ok)
+  have u: all sc g. sc in omega && g in omega -> int_lt(sc, 48) && mallocng.on_list(A2.active[sc], g) && mallocng.has_unused(A2, g) ->
+      !mallocng.own_mapping(A2.metas[g]) proof
+    fix sc g
+    assume hn hp
+    have l0 o2 u2 := hp
+    have _ go := hn
+    have o0 := mp(all_elim(hl, {sc}, {g}), hn, l0, o2)
+    have u0 := mp(all_elim(hu, {g}), u2)
+    have nm := mp(all_elim(r0, {sc}, {g}), hn, taut(l0, o0, u0))
+    have es ed := mp(all_elim(hm, {g}), go)
+    have back: mallocng.own_mapping(A2.metas[g]) -> mallocng.own_mapping(A.metas[g]) proof
+      assume o
+      show by defs(rewrite(es, rewrite(ed, expand(o, mallocng.own_mapping))), mallocng.own_mapping)
+    qed
+    show by taut(nm, back)
+  qed
+  show by defs(taut(u), mallocng.reuse_ok)
+qed
+
+// (the slots as before: the same unused ones)
+theorem mp.unused_same(A, A2, g): A2.slots = A.slots -> mallocng.has_unused(A2, g) -> mallocng.has_unused(A, g)
+proof
+  assume e h
+  show by defs(rewrite(e, expand(h, mallocng.has_unused)), mallocng.has_unused)
+qed
+
+// (the masks changed only)
+theorem mp.reuse_mo(A, A2): mallocng_specs.masks_only(A, A2) -> mallocng.reuse_ok(A) -> mallocng.reuse_ok(A2)
+proof
+  assume mo R
+  have ea := apply(mp.mo_field[A := A, A2 := A2, k := "active"], mo, simp())
+  have es := apply(mp.mo_field[A := A, A2 := A2, k := "slots"], mo, simp())
+  have l: all sc g. sc in omega && g in omega -> int_lt(sc, 48) -> mallocng.on_list(A2.active[sc], g) -> mallocng.on_list(A.active[sc], g) proof
+    fix sc g
+    assume _ _ ol
+    show := rewrite(ea, ol)
+  qed
+  have u: all g. mallocng.has_unused(A2, g) -> mallocng.has_unused(A, g) proof
+    fix g
+    assume h
+    show := mp(mp.unused_same[A := A, A2 := A2, g := g], es, h)
+  qed
+  have m: all g. g in omega -> A2.metas[g].sizeclass = A.metas[g].sizeclass && mallocng.stride(A2.metas[g]) = mallocng.stride(A.metas[g]) proof
+    fix g
+    assume go
+    have {s1 = sclass, s2 = stride} := apply(mp.mo_geom[A := A, A2 := A2, x := g], mo, go)
+    show by taut(s1, s2)
+  qed
+  show := apply(mp.reuse_mono[A := A, A2 := A2], R, l, u, m)
+qed
+
+// (the same geometry, the lists shrunk)
+theorem mp.reuse_gm(A, A2): mp.geom(A, A2) ->
+  (all sc g. sc in omega && g in omega -> int_lt(sc, 48) -> mallocng.on_list(A2.active[sc], g) -> mallocng.on_list(A.active[sc], g)) ->
+  mallocng.reuse_ok(A) -> mallocng.reuse_ok(A2)
+proof
+  assume hg l R
+  have es := apply(mp.gm_field[A := A, A2 := A2, k := "slots"], hg, simp(), simp(), simp())
+  have u: all g. mallocng.has_unused(A2, g) -> mallocng.has_unused(A, g) proof
+    fix g
+    assume h
+    show := mp(mp.unused_same[A := A, A2 := A2, g := g], es, h)
+  qed
+  have m: all g. g in omega -> A2.metas[g].sizeclass = A.metas[g].sizeclass && mallocng.stride(A2.metas[g]) = mallocng.stride(A.metas[g]) proof
+    fix g
+    assume go
+    have {s1 = sclass, s2 = stride} := apply(mp.gm_geom[A := A, A2 := A2, x := g], hg, go)
+    show by taut(s1, s2)
+  qed
+  show := apply(mp.reuse_mono[A := A, A2 := A2], R, l, u, m)
+qed
+
 // ... the lists as before, no group in use with its active index lowered,
 // the groups' places as before
 theorem mp.partial_rise(c, A, A2, M, M2, b, brk): A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> mallocng_specs.masks_only(A, A2) ->
@@ -1009,6 +1147,8 @@ proof
   have {ha = abs, H = holds, hmo = mo} := F
   have {hpart = part, hin = in_slots, hbrk = brk, hsep = sep, hwf = wf, hfix = fixed, hpo = partial} := expand(H, mallocng.holds)
   have po := apply(mp.partial_mono[A := A, A2 := A2, M := M, M2 := M2], hpo, hpm)
+  have {hru = reuse} := expand(H, mallocng.holds)
+  have ru := apply(mp.reuse_mo[A := A, A2 := A2], hmo, hru)
   have {ep = part, ein = in_slots, ebrk = brk, efx = fixed} := apply(mp.mo_same[c := c, A := A, A2 := A2, M := M, b := b, brk := brk], hmo)
   have er := apply(mp.mo_regions[c := c, A := A, A2 := A2], ha, hmo)
   have im := apply(mp.mf_image[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F)
@@ -1019,8 +1159,9 @@ proof
   have nm := apply(mp.mf_normal[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F)
   have pm := apply(mp.mf_perms[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F)
   have cl := apply(mp.mf_classes[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F)
+  have db := apply(mp.mf_debruijn[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F)
   have gp := apply(mp.mf_apart[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := brk, g := g], F)
-  show by defs(taut(im, cx, fr, ar, rewrite(sym(ep), hpart), us, ac, po, rewrite(sym(ein), hin), nm, rewrite(sym(ebrk), hbrk), pm, rewrite(sym(er), hsep), hwf, cl,
+  show by defs(taut(im, cx, fr, ar, rewrite(sym(ep), hpart), us, ac, po, ru, rewrite(sym(ein), hin), nm, rewrite(sym(ebrk), hbrk), pm, rewrite(sym(er), hsep), hwf, cl, db,
     rewrite(sym(efx), hfix), gp), mallocng.holds)
 qed
 

@@ -1,12 +1,17 @@
-// An active list reorganised (`mp.relist`): the invariant kept
-// (`mp.holds_relist`).
+// An active list reorganised (`mp.relist`, `mp.enlist`): the invariant
+// kept (`mp.holds_relink`, `mp.holds_relist`).
 
 // ----------------------------------------------------------------------
-//  An active list reorganised: A with class sc's list l2, the old list's
-//  groups' links as the memory has them
-def mp.relist(A, sc, l2, vm) := fn_update(fn_update(A, "active", fn_build(seq_len(A.active), s. ite(s = sc, l2, A.active[s]))), "metas",
-  fn_build(omega, g. ite(mallocng.on_list(A.active[sc], g),
+//  An active list changed: A with class sc's list l2, the links of the
+//  groups on K (those the change wrote) as the memory has them -- K the
+//  old list when it shrinks or turns (`relist`), the new one when a group
+//  joins it (`enlist`)
+def mp.relink(A, sc, l2, K, vm) := fn_update(fn_update(A, "active", fn_build(seq_len(A.active), s. ite(s = sc, l2, A.active[s]))), "metas",
+  fn_build(omega, g. ite(mallocng.on_list(K, g),
     fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g])))
+
+abbrev mp.relist(A, sc, l2, vm) := mp.relink(A, sc, l2, A.active[sc], vm)
+abbrev mp.enlist(A, sc, l2, vm) := mp.relink(A, sc, l2, l2, vm)
 
 // (lists of a type in the universe: in it)
 theorem mp.list_univ(t): t in univ(1) -> list_type(t) in univ(1)
@@ -44,44 +49,44 @@ qed
 
 // its fields: the others A's, class sc's list l2, the old list's groups'
 // links the memory's
-theorem mp.relist_at(A, sc, l2, vm): A in mallocng.Abs ->
-  other: (all k. !(k = "active") -> !(k = "metas") -> mp.relist(A, sc, l2, vm)[k] = A[k]) &&
-  len: seq_len(mp.relist(A, sc, l2, vm).active) = seq_len(A.active) &&
-  list: (all s. s in omega -> int_lt(s, seq_len(A.active)) -> mp.relist(A, sc, l2, vm).active[s] = ite(s = sc, l2, A.active[s])) &&
-  meta: (all g. g in omega -> mp.relist(A, sc, l2, vm).metas[g] = ite(mallocng.on_list(A.active[sc], g),
+theorem mp.relink_at(A, sc, l2, K, vm): A in mallocng.Abs ->
+  other: (all k. !(k = "active") -> !(k = "metas") -> mp.relink(A, sc, l2, K, vm)[k] = A[k]) &&
+  len: seq_len(mp.relink(A, sc, l2, K, vm).active) = seq_len(A.active) &&
+  list: (all s. s in omega -> int_lt(s, seq_len(A.active)) -> mp.relink(A, sc, l2, K, vm).active[s] = ite(s = sc, l2, A.active[s])) &&
+  meta: (all g. g in omega -> mp.relink(A, sc, l2, K, vm).metas[g] = ite(mallocng.on_list(K, g),
     fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]))
 proof
   assume ha
   let AC := fn_build(seq_len(A.active), s. ite(s = sc, l2, A.active[s]))
-  let MS := fn_build(omega, g. ite(mallocng.on_list(A.active[sc], g),
+  let MS := fn_build(omega, g. ite(mallocng.on_list(K, g),
     fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]))
   let A1 := fn_update(A, "active", AC)
-  have ot: all k. !(k = "active") -> !(k = "metas") -> mp.relist(A, sc, l2, vm)[k] = A[k] proof
+  have ot: all k. !(k = "active") -> !(k = "metas") -> mp.relink(A, sc, l2, K, vm)[k] = A[k] proof
     fix k
     assume k1 k2
     have e2 := mp(app_update_other[f := A1, k := "metas", v := MS, x := k], k2)
     have e1 := mp(app_update_other[f := A, k := "active", v := AC, x := k], k1)
-    show by defs(trans(e2, e1), mp.relist)
+    show by defs(trans(e2, e1), mp.relink)
   qed
-  have ea: mp.relist(A, sc, l2, vm).active = AC
-    by defs(trans(mp(app_update_other[f := A1, k := "metas", v := MS, x := "active"], simp()), app_update_same[f := A, k := "active", v := AC]), mp.relist)
-  have em: mp.relist(A, sc, l2, vm).metas = MS by defs(app_update_same[f := A1, k := "metas", v := MS], mp.relist)
+  have ea: mp.relink(A, sc, l2, K, vm).active = AC
+    by defs(trans(mp(app_update_other[f := A1, k := "metas", v := MS, x := "active"], simp()), app_update_same[f := A, k := "active", v := AC]), mp.relink)
+  have em: mp.relink(A, sc, l2, K, vm).metas = MS by defs(app_update_same[f := A1, k := "metas", v := MS], mp.relink)
   have al: A.active in list_type(list_type(omega)) by simp(ha)
   have ld: seq_len(A.active) in omega by arith(al)
   have dl: seq_len(AC) = seq_len(A.active) by defs(fn_build_dom[d := seq_len(A.active), v := s. ite(s = sc, l2, A.active[s])], seq_len)
   have ln := rewrite(sym(ea), dl)
-  have lt: all s. s in omega -> int_lt(s, seq_len(A.active)) -> mp.relist(A, sc, l2, vm).active[s] = ite(s = sc, l2, A.active[s]) proof
+  have lt: all s. s in omega -> int_lt(s, seq_len(A.active)) -> mp.relink(A, sc, l2, K, vm).active[s] = ite(s = sc, l2, A.active[s]) proof
     fix s
     assume hs hsl
     have sin := mp(nat_lt_mem[k := s, n := seq_len(A.active)], hs, ld, hsl)
     have ab := mp(app_fn_build[d := seq_len(A.active), v := x. ite(x = sc, l2, A.active[x]), a := s], sin)
     show := rewrite(sym(ea), ab)
   qed
-  have mt: all g. g in omega -> mp.relist(A, sc, l2, vm).metas[g] = ite(mallocng.on_list(A.active[sc], g),
+  have mt: all g. g in omega -> mp.relink(A, sc, l2, K, vm).metas[g] = ite(mallocng.on_list(K, g),
       fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]) proof
     fix g
     assume hg
-    have ab := mp(app_fn_build[d := omega, v := x. ite(mallocng.on_list(A.active[sc], x),
+    have ab := mp(app_fn_build[d := omega, v := x. ite(mallocng.on_list(K, x),
       fn_update(fn_update(A.metas[x], "prev", gimple.bytes_at(vm, x, 8)), "next", gimple.bytes_at(vm, int_add(x, 8), 8)), A.metas[x]), a := g], hg)
     show := rewrite(sym(em), ab)
   qed
@@ -89,16 +94,16 @@ proof
 qed
 
 // ... an abstract state
-theorem mp.relist_abs(A, sc, l2, vm): A in mallocng.Abs -> l2 in list_type(omega) -> vm.bytes in fn_space(bits(64), bits(8)) ->
-  abs: mp.relist(A, sc, l2, vm) in mallocng.Abs && univ: mp.relist(A, sc, l2, vm) in univ(1)
+theorem mp.relink_abs(A, sc, l2, K, vm): A in mallocng.Abs -> l2 in list_type(omega) -> vm.bytes in fn_space(bits(64), bits(8)) ->
+  abs: mp.relink(A, sc, l2, K, vm) in mallocng.Abs && univ: mp.relink(A, sc, l2, K, vm) in univ(1)
 proof
   assume ha hl hb
-  let K := insert("secret", insert("init_done", insert("auxv_at", insert("auxv", insert("areas", insert("avail_cnt", insert("reserve", insert("reserve_cnt", insert("free_metas", insert("used", insert("metas", insert("active", insert("slots", insert("brk", empty))))))))))))))
+  let KS := insert("secret", insert("init_done", insert("auxv_at", insert("auxv", insert("areas", insert("avail_cnt", insert("reserve", insert("reserve_cnt", insert("free_metas", insert("used", insert("metas", insert("active", insert("slots", insert("brk", empty))))))))))))))
   let AC := fn_build(seq_len(A.active), s. ite(s = sc, l2, A.active[s]))
-  let MS := fn_build(omega, g. ite(mallocng.on_list(A.active[sc], g),
+  let MS := fn_build(omega, g. ite(mallocng.on_list(K, g),
     fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]))
   let A1 := fn_update(A, "active", AC)
-  have ap af ad := (A in powerset(cart(K, univ(1))) && is_fun(A) && dom(A) = K by simp(expand(ha, mallocng.Abs)))
+  have ap af ad := (A in powerset(cart(KS, univ(1))) && is_fun(A) && dom(A) = KS by simp(expand(ha, mallocng.Abs)))
   have al: A.active in list_type(list_type(omega)) by simp(ha)
   have ld: seq_len(A.active) in omega by arith(al)
   have pa: all x. x in seq_len(A.active) -> ite(x = sc, l2, A.active[x]) in list_type(omega) proof
@@ -113,7 +118,7 @@ proof
   have llu := mp(mp.list_univ[t := list_type(omega)], mp(mp.list_univ[t := omega], omega_univ))
   have acu := mp(univ_trans[u := 1, a := AC, b := list_type(list_type(omega))], llu, acl)
   have ms: A.metas in fn_space(omega, mallocng.MetaV) by simp(ha)
-  have pm: all g. g in omega -> ite(mallocng.on_list(A.active[sc], g),
+  have pm: all g. g in omega -> ite(mallocng.on_list(K, g),
       fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]) in mallocng.MetaV proof
     fix g
     assume hg
@@ -121,44 +126,44 @@ proof
     have b0 _ := mp(all_elim(g.bytes_bound, {vm}, {g}, {8}), hb, simp())
     have b8 _ := mp(all_elim(g.bytes_bound, {vm}, {int_add(g, 8)}, {8}), hb, simp())
     have ml := apply(mp.meta_link[V := A.metas[g], p := gimple.bytes_at(vm, g, 8), n := gimple.bytes_at(vm, int_add(g, 8), 8)], vt, b0, b8)
-    show := apply(ite_in[c := mallocng.on_list(A.active[sc], g), a := fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)),
+    show := apply(ite_in[c := mallocng.on_list(K, g), a := fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)),
       b := A.metas[g], t := mallocng.MetaV], ml, vt)
   qed
-  have msp := apply(fn_build_space[d := omega, v := g. ite(mallocng.on_list(A.active[sc], g),
+  have msp := apply(fn_build_space[d := omega, v := g. ite(mallocng.on_list(K, g),
       fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]), b := mallocng.MetaV], pm)
   have msu := mp(fn_space_univ[u := 1, a := omega, b := mallocng.MetaV, f := MS], omega_univ, mp.metav_univ, msp)
-  have p1 := apply(mp.pow_upd[K := K, B := univ(1), r := A, k := "active", v := AC], ap, simp(), acu)
-  have f1 d1 := mp(fn_update_fd[f := A, k := "active", v := AC, d := K], af, ad, simp())
-  have p2 := apply(mp.pow_upd[K := K, B := univ(1), r := A1, k := "metas", v := MS], p1, simp(), msu)
-  have f2 d2 := mp(fn_update_fd[f := A1, k := "metas", v := MS, d := K], f1, d1, simp())
-  have au := mp(rec_univ[u := 1, k := K, r := A], simp(x86.insert_univ), ap, af, ad)
+  have p1 := apply(mp.pow_upd[K := KS, B := univ(1), r := A, k := "active", v := AC], ap, simp(), acu)
+  have f1 d1 := mp(fn_update_fd[f := A, k := "active", v := AC, d := KS], af, ad, simp())
+  have p2 := apply(mp.pow_upd[K := KS, B := univ(1), r := A1, k := "metas", v := MS], p1, simp(), msu)
+  have f2 d2 := mp(fn_update_fd[f := A1, k := "metas", v := MS, d := KS], f1, d1, simp())
+  have au := mp(rec_univ[u := 1, k := KS, r := A], simp(x86.insert_univ), ap, af, ad)
   have a2: fn_update(A1, "metas", MS) in mallocng.Abs by defs(simp(p2, f2, d2, acl, msp, au, acu, msu, expand(ha, mallocng.Abs)), mallocng.Abs)
-  have u2 := mp(rec_univ[u := 1, k := K, r := fn_update(A1, "metas", MS)], simp(x86.insert_univ), p2, f2, d2)
-  show by defs(taut(a2, u2), mp.relist)
+  have u2 := mp(rec_univ[u := 1, k := KS, r := fn_update(A1, "metas", MS)], simp(x86.insert_univ), p2, f2, d2)
+  show by defs(taut(a2, u2), mp.relink)
 qed
 
 // ... of A's geometry and masks
-theorem mp.relist_geom(A, sc, l2, vm): A in mallocng.Abs ->
-  geom: mp.geom(A, mp.relist(A, sc, l2, vm)) &&
-  masks: (all x. x in omega -> avail: mp.relist(A, sc, l2, vm).metas[x].avail = A.metas[x].avail &&
-     freed: mp.relist(A, sc, l2, vm).metas[x].freed = A.metas[x].freed)
+theorem mp.relink_geom(A, sc, l2, K, vm): A in mallocng.Abs ->
+  geom: mp.geom(A, mp.relink(A, sc, l2, K, vm)) &&
+  masks: (all x. x in omega -> avail: mp.relink(A, sc, l2, K, vm).metas[x].avail = A.metas[x].avail &&
+     freed: mp.relink(A, sc, l2, K, vm).metas[x].freed = A.metas[x].freed)
 proof
   assume ha
-  let R := mp.relist(A, sc, l2, vm)
-  have {ot = other, mt = meta} := apply(mp.relist_at[A := A, sc := sc, l2 := l2, vm := vm], ha)
+  let R := mp.relink(A, sc, l2, K, vm)
+  have {ot = other, mt = meta} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := vm], ha)
   have af: is_fun(A) by simp(ha)
   have ak: "active" in dom(A) && "metas" in dom(A) && "free_metas" in dom(A) by simp(ha)
   have ak1 ak2 ak3 := ak
   let AC := fn_build(seq_len(A.active), s. ite(s = sc, l2, A.active[s]))
-  let MS := fn_build(omega, g. ite(mallocng.on_list(A.active[sc], g),
+  let MS := fn_build(omega, g. ite(mallocng.on_list(K, g),
     fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]))
   let A1 := fn_update(A, "active", AC)
   have f1 := mp(fn_update_fun[f := A, k := "active", v := AC], af)
   have d1 := mp(fn_update_dom[f := A, k := "active", v := AC], af, ak1)
   have f2 := mp(fn_update_fun[f := A1, k := "metas", v := MS], f1)
   have d2 := mp(fn_update_dom[f := A1, k := "metas", v := MS], f1, rewrite(sym(d1), ak2))
-  have rf1: is_fun(R) by defs(f2, mp.relist)
-  have rf2: dom(R) = dom(A) by defs(trans(d2, d1), mp.relist)
+  have rf1: is_fun(R) by defs(f2, mp.relink)
+  have rf2: dom(R) = dom(A) by defs(trans(d2, d1), mp.relink)
   // (R with A's lists and metas: A)
   have eq: all k. fn_update(fn_update(fn_update(R, "metas", A.metas), "active", A.active), "free_metas", A.free_metas)[k] = A[k] proof
     fix k
@@ -207,7 +212,7 @@ proof
     fix x
     assume hx
     have e := mp(all_elim(mt, {x}), hx)
-    have c1: mallocng.on_list(A.active[sc], x) -> ((((R.metas[x].mem = A.metas[x].mem &&
+    have c1: mallocng.on_list(K, x) -> ((((R.metas[x].mem = A.metas[x].mem &&
         R.metas[x].maplen = A.metas[x].maplen) &&
         R.metas[x].last_idx = A.metas[x].last_idx) &&
         R.metas[x].sizeclass = A.metas[x].sizeclass) &&
@@ -216,7 +221,7 @@ proof
       assume h
       show by simp(e, h, keep(mallocng.on_list))
     qed
-    have c2: !mallocng.on_list(A.active[sc], x) -> ((((R.metas[x].mem = A.metas[x].mem &&
+    have c2: !mallocng.on_list(K, x) -> ((((R.metas[x].mem = A.metas[x].mem &&
         R.metas[x].maplen = A.metas[x].maplen) &&
         R.metas[x].last_idx = A.metas[x].last_idx) &&
         R.metas[x].sizeclass = A.metas[x].sizeclass) &&
@@ -244,21 +249,53 @@ proof
   show by taut(eqr, gr1, gr2)
 qed
 
-// A list operation's memory (dequeue's, a rotation's): class sc's list at
-// its word in the context reorganised to l2 (`list_at`), no byte but the
-// head word and the old list's links written (`links_only`), the groups
-// leaving it with their links 0
-abbrev mp.rlpre(c, A, vm, V2, b, objs, sc, l2) := cfg: c in mallocng.Cfg && univ: A in univ(1) && abs: A in mallocng.Abs &&
+// (the old list's links rewritten: `relist`)
+theorem mp.relist_at(A, sc, l2, vm): A in mallocng.Abs ->
+  other: (all k. !(k = "active") -> !(k = "metas") -> mp.relist(A, sc, l2, vm)[k] = A[k]) &&
+  len: seq_len(mp.relist(A, sc, l2, vm).active) = seq_len(A.active) &&
+  list: (all s. s in omega -> int_lt(s, seq_len(A.active)) -> mp.relist(A, sc, l2, vm).active[s] = ite(s = sc, l2, A.active[s])) &&
+  meta: (all g. g in omega -> mp.relist(A, sc, l2, vm).metas[g] = ite(mallocng.on_list(A.active[sc], g),
+    fn_update(fn_update(A.metas[g], "prev", gimple.bytes_at(vm, g, 8)), "next", gimple.bytes_at(vm, int_add(g, 8), 8)), A.metas[g]))
+proof
+  assume ha
+  show := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := A.active[sc], vm := vm], ha)
+qed
+
+theorem mp.relist_abs(A, sc, l2, vm): A in mallocng.Abs -> l2 in list_type(omega) -> vm.bytes in fn_space(bits(64), bits(8)) ->
+  abs: mp.relist(A, sc, l2, vm) in mallocng.Abs && univ: mp.relist(A, sc, l2, vm) in univ(1)
+proof
+  assume ha hl hb
+  show := apply(mp.relink_abs[A := A, sc := sc, l2 := l2, K := A.active[sc], vm := vm], ha, hl, hb)
+qed
+
+theorem mp.relist_geom(A, sc, l2, vm): A in mallocng.Abs ->
+  geom: mp.geom(A, mp.relist(A, sc, l2, vm)) &&
+  masks: (all x. x in omega -> avail: mp.relist(A, sc, l2, vm).metas[x].avail = A.metas[x].avail &&
+     freed: mp.relist(A, sc, l2, vm).metas[x].freed = A.metas[x].freed)
+proof
+  assume ha
+  show := apply(mp.relink_geom[A := A, sc := sc, l2 := l2, K := A.active[sc], vm := vm], ha)
+qed
+
+// A list operation's memory (dequeue's, a rotation's, queue's): class
+// sc's list at its word in the context changed to l2 (`list_at`), no byte
+// but the head word and the links of the groups on K written
+// (`links_only`) -- K the old list's groups and those joining it (in use,
+// of class sc), l2's among them --, the groups leaving it with their links
+// 0
+abbrev mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) := cfg: c in mallocng.Cfg && univ: A in univ(1) && abs: A in mallocng.Abs &&
   blocks: b in fn_space(bits(64), option(omega)) && vb: vm.bytes in fn_space(bits(64), bits(8)) && vb2: V2.bytes in fn_space(bits(64), bits(8)) &&
   inv: mallocng.holds_in(c, A, vm, b) && scn: sc in omega && scl: int_lt(sc, 48) &&
-  only: mallocng_specs.links_only(vm, V2, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), A.active[sc]) &&
+  only: mallocng_specs.links_only(vm, V2, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), K) &&
   at: mallocng_specs.list_at(V2, objs, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), l2) && l2t: l2 in list_type(omega) &&
-  sub: (all g. mallocng.on_list(l2, g) -> mallocng.on_list(A.active[sc], g)) &&
-  gone: (all g. mallocng.on_list(A.active[sc], g) -> !mallocng.on_list(l2, g) ->
+  kold: (all g. mallocng.on_list(A.active[sc], g) -> mallocng.on_list(K, g)) &&
+  knew: (all g. mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> mallocng.is_used(A, g) && A.metas[g].sizeclass = sc) &&
+  sub: (all g. mallocng.on_list(l2, g) -> mallocng.on_list(K, g)) &&
+  gone: (all g. mallocng.on_list(K, g) -> !mallocng.on_list(l2, g) ->
      gimple.bytes_at(V2, g, 8) = 0 && gimple.bytes_at(V2, int_add(g, 8), 8) = 0)
 
 // (its pages and break as before)
-theorem mp.rl_pages(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
+theorem mp.rl_pages(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
   pages: V2.pages = vm.pages && brk: V2.brk = vm.brk
 proof
   assume P
@@ -269,11 +306,48 @@ proof
   show by taut(sym(rewrite(er, up)), sym(rewrite(er, uk)))
 qed
 
+// (a group whose links are written (on K): a used group's meta, its bytes
+// the invariant's; class sc its class)
+theorem mp.rl_elem(c, A, vm, V2, b, objs, sc, l2, K, g): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) -> mallocng.on_list(K, g) ->
+  used: mallocng.is_used(A, g) && slot: mallocng.meta_slot(A, g) && sclass: A.metas[g].sizeclass = sc &&
+  nat: g in omega && low: int_le(24, g) &&
+  held: (all a. a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> a in mallocng.held(c, A, b))
+proof
+  assume P hon
+  have {hc = cfg, hu = univ, ha = abs, hh = inv, hs = scn, hsl = scl, hnew = knew} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {act = active} := expand(H, mallocng.holds)
+  // on the old list, or joining it
+  have us: mallocng.is_used(A, g) && A.metas[g].sizeclass = sc proof
+    have c1: mallocng.on_list(A.active[sc], g) -> mallocng.is_used(A, g) && A.metas[g].sizeclass = sc proof
+      assume hol
+      obtain j, hj hjl hje from expand(hol, mallocng.on_list)
+      have gu gs _ := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {j}), conj(hs, hj), conj(hsl, hjl))
+      show by taut(rewrite(hje, gu), rewrite(hje, gs))
+    qed
+    have c2: !mallocng.on_list(A.active[sc], g) -> mallocng.is_used(A, g) && A.metas[g].sizeclass = sc proof
+      assume hn
+      show := mp(all_elim(hnew, {g}), hon, hn)
+    qed
+    show by taut(c1, c2)
+  qed
+  have gu2 gs2 := us
+  have sl := apply(mp.used_slot, H, gu2)
+  have {go = nat, glo = low, inr = acc} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := g], hc, hu, ha, hh, sl)
+  have hd: all a. a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> a in mallocng.held(c, A, b) proof
+    fix a
+    assume hao h1 h2
+    have q _ _ := mp(all_elim(inr, {a}), hao, h1, h2)
+    show := q
+  qed
+  show by taut(gu2, sl, gs2, go, glo, hd)
+qed
+
 // (the invariant's view: as before but at the head word and the old
 // list's links)
-theorem mp.rl_uc(c, A, vm, V2, b, objs, sc, l2, a): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) -> a in omega ->
+theorem mp.rl_uc(c, A, vm, V2, b, objs, sc, l2, K, a): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) -> a in omega ->
   !(int_le(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), a) && int_lt(a, int_add(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), 8))) ->
-  (all i. i in omega -> int_lt(i, seq_len(A.active[sc])) -> !(int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16)))) ->
+  (all i. i in omega -> int_lt(i, seq_len(K)) -> !(int_le(K[i], a) && int_lt(a, int_add(K[i], 16)))) ->
   mallocng.mview(V2, mallocng.held(c, A, b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a]
 proof
   assume P hao nph nl
@@ -292,15 +366,15 @@ proof
 qed
 
 // ... a list operation's frame (`lframe`)
-theorem mp.rl_frame(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
-  mp.lframe(c, A, mp.relist(A, sc, l2, V2), mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.mview(V2, mallocng.held(c, A, b)), b, vm.brk)
+theorem mp.rl_frame(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
+  mp.lframe(c, A, mp.relink(A, sc, l2, K, V2), mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.mview(V2, mallocng.held(c, A, b)), b, vm.brk)
 proof
   assume P
   have {hc = cfg, hu = univ, ha = abs, hb = blocks, vb2 = vb2, hh = inv, hs = scn, hsl = scl, hl2 = l2t} := P
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {act = active} := expand(H, mallocng.holds)
-  have {ab2 = abs} := apply(mp.relist_abs[A := A, sc := sc, l2 := l2, vm := V2], ha, hl2, vb2)
-  have {hg = geom, hmk = masks} := apply(mp.relist_geom[A := A, sc := sc, l2 := l2, vm := V2], ha)
+  have {ab2 = abs} := apply(mp.relink_abs[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha, hl2, vb2)
+  have {hg = geom, hmk = masks} := apply(mp.relink_geom[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
   have {ep = pages} := apply(mp.rl_pages, P)
   have ka: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
   have bytes: all a. a in omega -> !mp.lbyte(c, A, a) -> mallocng.mview(V2, mallocng.held(c, A, b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a] proof
@@ -312,19 +386,19 @@ proof
     have nw nm := n3
     have nph: !(int_le(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), a) && int_lt(a, int_add(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), 8)))
       by arith(nw, ka, hs, hsl)
-    have nl: all i. i in omega -> int_lt(i, seq_len(A.active[sc])) -> !(int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16))) proof
+    have nl: all i. i in omega -> int_lt(i, seq_len(K)) -> !(int_le(K[i], a) && int_lt(a, int_add(K[i], 16))) proof
       fix i
       assume hi hil
-      have gu .. := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {i}), conj(hs, hi), conj(hsl, hil))
-      have sl := apply(mp.used_slot, H, gu)
-      have n: int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16)) -> false proof
+      have onk: mallocng.on_list(K, K[i]) by defs(ex_intro({i}, taut(hi, hil, refl({K[i]}))), mallocng.on_list)
+      have {sl = slot} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := K[i]], P, onk)
+      have n: int_le(K[i], a) && int_lt(a, int_add(K[i], 16)) -> false proof
         assume hin
-        have e: ex l. mallocng.meta_slot(A, l) && (int_le(l, a) && int_lt(a, int_add(l, 16))) by ex_intro({A.active[sc][i]}, taut(sl, hin))
+        have e: ex l. mallocng.meta_slot(A, l) && (int_le(l, a) && int_lt(a, int_add(l, 16))) by ex_intro({K[i]}, taut(sl, hin))
         show by taut(e, nm)
       qed
       show by taut(n)
     qed
-    show := apply(mp.rl_uc[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, a := a], P, hao, nph, nl)
+    show := apply(mp.rl_uc[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, a := a], P, hao, nph, nl)
   qed
   have pg: all a. a in omega -> mallocng.pg(mallocng.mview(V2, mallocng.held(c, A, b)), a) = mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a) proof
     fix a
@@ -335,8 +409,8 @@ proof
 qed
 
 // (a meta off the old list: its links as before)
-theorem mp.rl_meta_same(c, A, vm, V2, b, objs, sc, l2, x): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) -> mallocng.meta_slot(A, x) ->
-  !mallocng.on_list(A.active[sc], x) ->
+theorem mp.rl_meta_same(c, A, vm, V2, b, objs, sc, l2, K, x): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) -> mallocng.meta_slot(A, x) ->
+  !mallocng.on_list(K, x) ->
   prev: mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), x, 8) = mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), x, 8) &&
   next: mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), int_add(x, 8), 8) = mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(x, 8), 8)
 proof
@@ -360,22 +434,22 @@ proof
     have h3: !(int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))) by simp(expand(rewrite(e0, mp(all_elim(d, {0}), simp(), simp())), mallocng.in_range))
     have nph: !(int_le(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), a) && int_lt(a, int_add(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), 8)))
       by arith(h3, ka, ks, hs, hsl)
-    have nl: all i. i in omega -> int_lt(i, seq_len(A.active[sc])) -> !(int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16))) proof
+    have nl: all i. i in omega -> int_lt(i, seq_len(K)) -> !(int_le(K[i], a) && int_lt(a, int_add(K[i], 16))) proof
       fix i
       assume hi hil
-      have gu .. := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {i}), conj(hs, hi), conj(hsl, hil))
-      have gsl := apply(mp.used_slot, H, gu)
-      have ne: !(x = A.active[sc][i]) proof
+      have onk: mallocng.on_list(K, K[i]) by defs(ex_intro({i}, taut(hi, hil, refl({K[i]}))), mallocng.on_list)
+      have {gsl = slot} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := K[i]], P, onk)
+      have ne: !(x = K[i]) proof
         assume e
-        have on: mallocng.on_list(A.active[sc], x) by defs(ex_intro({i}, taut(hi, hil, sym(e))), mallocng.on_list)
+        have on: mallocng.on_list(K, x) by defs(ex_intro({i}, taut(hi, hil, sym(e))), mallocng.on_list)
         show by taut(on, hn)
       qed
-      have dj := apply(mp.meta_disj[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, g := A.active[sc][i], l := x, a := a],
+      have dj := apply(mp.meta_disj[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, g := K[i], l := x, a := a],
         hc, hu, ha, H, gsl, hx, ne, hao, arith(xo, hj), arith(xo, hj, hjl))
-      show by taut(dj, (int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16)) ->
-        int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 40)) by arith()))
+      show by taut(dj, (int_le(K[i], a) && int_lt(a, int_add(K[i], 16)) ->
+        int_le(K[i], a) && int_lt(a, int_add(K[i], 40)) by arith()))
     qed
-    show := apply(mp.rl_uc[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, a := a], P, hao, nph, nl)
+    show := apply(mp.rl_uc[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, a := a], P, hao, nph, nl)
   qed
   have a0: all j. j in omega -> int_lt(j, 8) -> mallocng.mview(V2, mallocng.held(c, A, b))[int_add(x, j)] = mallocng.mview(vm, mallocng.held(c, A, b))[int_add(x, j)] proof
     fix j
@@ -393,7 +467,7 @@ proof
 qed
 
 // (a word of the context apart from the head word: as before)
-theorem mp.rl_ctx_same(c, A, vm, V2, b, objs, sc, l2, off): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) -> off in omega -> int_le(int_add(off, 8), mallocng.CTX_SIZE) ->
+theorem mp.rl_ctx_same(c, A, vm, V2, b, objs, sc, l2, K, off): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) -> off in omega -> int_le(int_add(off, 8), mallocng.CTX_SIZE) ->
   (int_le(int_add(off, 8), int_add(mallocng.C_ACTIVE, int_mul(8, sc))) || int_le(int_add(int_add(mallocng.C_ACTIVE, int_mul(8, sc)), 8), off)) ->
   mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), int_add(c.ctx, off), 8) = mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(c.ctx, off), 8)
 proof
@@ -413,63 +487,37 @@ proof
     have hn := apply(mp.ctx_noarea[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := a], hc, hu, ha, H, hao, hin)
     have nph: !(int_le(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), a) && int_lt(a, int_add(int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), 8)))
       by arith(hw, hj, hjl, co, ho, hs)
-    have nl: all i. i in omega -> int_lt(i, seq_len(A.active[sc])) -> !(int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16))) proof
+    have nl: all i. i in omega -> int_lt(i, seq_len(K)) -> !(int_le(K[i], a) && int_lt(a, int_add(K[i], 16))) proof
       fix i
       assume hi hil
-      have {act = active} := expand(H, mallocng.holds)
-      have gu .. := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {i}), conj(hs, hi), conj(hsl, hil))
-      have gsl := apply(mp.used_slot, H, gu)
+      have onk: mallocng.on_list(K, K[i]) by defs(ex_intro({i}, taut(hi, hil, refl({K[i]}))), mallocng.on_list)
+      have {gsl = slot} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := K[i]], P, onk)
       have {gex = area} := apply(mp.meta_page, ha, gsl)
       obtain k, hk hkl g1 g2 _ from gex
-      have n: int_le(A.active[sc][i], a) && int_lt(a, int_add(A.active[sc][i], 16)) -> false proof
+      have n: int_le(K[i], a) && int_lt(a, int_add(K[i], 16)) -> false proof
         assume hin2
         have i1 i2 := hin2
         show by taut(mp(all_elim(hn, {k}), hk, hkl), (int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)) by arith(g1, g2, i1, i2)))
       qed
       show by taut(n)
     qed
-    show := apply(mp.rl_uc[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, a := a], P, hao, nph, nl)
+    show := apply(mp.rl_uc[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, a := a], P, hao, nph, nl)
   qed
   show := apply(mp.agree_rd, (8 in omega by simp()), ai)
 qed
 
-// (an element of the old list: a used group's meta, its bytes the
-// invariant's; class sc its class)
-theorem mp.rl_elem(c, A, vm, V2, b, objs, sc, l2, g): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) -> mallocng.on_list(A.active[sc], g) ->
-  used: mallocng.is_used(A, g) && slot: mallocng.meta_slot(A, g) && sclass: A.metas[g].sizeclass = sc &&
-  nat: g in omega && low: int_le(24, g) &&
-  held: (all a. a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> a in mallocng.held(c, A, b))
-proof
-  assume P hon
-  have {hc = cfg, hu = univ, ha = abs, hh = inv, hs = scn, hsl = scl} := P
-  have {H = inv} := expand(hh, mallocng.holds_in)
-  have {act = active} := expand(H, mallocng.holds)
-  obtain j, hj hjl hje from expand(hon, mallocng.on_list)
-  have gu gs _ := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {j}), conj(hs, hj), conj(hsl, hjl))
-  have gu2 := rewrite(hje, gu)
-  have gs2 := rewrite(hje, gs)
-  have sl := apply(mp.used_slot, H, gu2)
-  have {go = nat, glo = low, inr = acc} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := g], hc, hu, ha, hh, sl)
-  have hd: all a. a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> a in mallocng.held(c, A, b) proof
-    fix a
-    assume hao h1 h2
-    have q _ _ := mp(all_elim(inr, {a}), hao, h1, h2)
-    show := q
-  qed
-  show by taut(gu2, sl, gs2, go, glo, hd)
-qed
 
 // the context's lists for the new state: the free metas' and the other
 // classes' as before, class sc's l2
-theorem mp.rl_lists(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
+theorem mp.rl_lists(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
   free: mallocng.cyclic(mallocng.mview(V2, mallocng.held(c, A, b)), mallocng.ctx_word(c, mallocng.mview(V2, mallocng.held(c, A, b)), mallocng.C_FREE_META),
-    mp.relist(A, sc, l2, V2).free_metas) &&
-  len: seq_len(mp.relist(A, sc, l2, V2).active) = 48 &&
+    mp.relink(A, sc, l2, K, V2).free_metas) &&
+  len: seq_len(mp.relink(A, sc, l2, K, V2).active) = 48 &&
   lists: (all x0. x0 in omega -> int_lt(x0, 48) -> mallocng.cyclic(mallocng.mview(V2, mallocng.held(c, A, b)),
-    mallocng.ctx_word(c, mallocng.mview(V2, mallocng.held(c, A, b)), int_add(mallocng.C_ACTIVE, int_mul(8, x0))), mp.relist(A, sc, l2, V2).active[x0]))
+    mallocng.ctx_word(c, mallocng.mview(V2, mallocng.held(c, A, b)), int_add(mallocng.C_ACTIVE, int_mul(8, x0))), mp.relink(A, sc, l2, K, V2).active[x0]))
 proof
   assume P
-  let R := mp.relist(A, sc, l2, V2)
+  let R := mp.relink(A, sc, l2, K, V2)
   let F := mallocng.held(c, A, b)
   let M := mallocng.mview(vm, F)
   let M2 := mallocng.mview(V2, F)
@@ -480,14 +528,14 @@ proof
   have {cok = ctx, part = part, act = active} := expand(H, mallocng.holds)
   have {fs = free_slots} := expand(part, mallocng.metas_partition)
   have _ _ _ _ _ _ _ _ _ c10 c11 c12 := expand(cok, mallocng.ctx_ok)
-  have {ot = other, ln = len, lt = list} := apply(mp.relist_at[A := A, sc := sc, l2 := l2, vm := V2], ha)
+  have {ot = other, ln = len, lt = list} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
   have ka: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
   have kf: mallocng.C_FREE_META = 16 by defs(refl({16}), mallocng.C_FREE_META)
   have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
   have p64: int_pow(2, 64) = 18446744073709551616 by simp()
   have co: c.ctx in omega by simp(hc)
   // the free metas: their head word and links as before (none on the old list: not in use)
-  have wf := apply(mp.rl_ctx_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, off := mallocng.C_FREE_META], P, simp(kf), arith(kf, ks), arith(kf, ka, hs))
+  have wf := apply(mp.rl_ctx_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, off := mallocng.C_FREE_META], P, simp(kf), arith(kf, ks), arith(kf, ka, hs))
   have wfw: mallocng.ctx_word(c, M2, mallocng.C_FREE_META) = mallocng.ctx_word(c, M, mallocng.C_FREE_META) by defs(wf, mallocng.ctx_word)
   have fl: all i. i in omega -> int_lt(i, seq_len(A.free_metas)) ->
       mallocng.rd(M2, int_add(A.free_metas[i], 8), 8) = mallocng.rd(M, int_add(A.free_metas[i], 8), 8) &&
@@ -495,12 +543,12 @@ proof
     fix i
     assume hi hil
     have ms nu := mp(all_elim(fs, {i}), hi, hil)
-    have nl: !mallocng.on_list(L, A.free_metas[i]) proof
+    have nl: !mallocng.on_list(K, A.free_metas[i]) proof
       assume hon
-      have {u = used} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := A.free_metas[i]], P, hon)
+      have {u = used} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := A.free_metas[i]], P, hon)
       show by taut(u, nu)
     qed
-    have {e0 = prev, e8 = next} := apply(mp.rl_meta_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, x := A.free_metas[i]], P, ms, nl)
+    have {e0 = prev, e8 = next} := apply(mp.rl_meta_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, x := A.free_metas[i]], P, ms, nl)
     show by taut(e8, e0)
   qed
   have fr0 := apply(mp.cyclic_agree[M := M, M2 := M2, hd := mallocng.ctx_word(c, M2, mallocng.C_FREE_META), l := A.free_metas], rewrite(sym(wfw), c10), fl)
@@ -531,7 +579,7 @@ proof
     fix i
     assume hi hil
     have on2: mallocng.on_list(l2, l2[i]) by defs(ex_intro({i}, taut(hi, hil, refl({l2[i]}))), mallocng.on_list)
-    have {go = nat, ghd = held} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := l2[i]], P, mp(all_elim(hsub, {l2[i]}), on2))
+    have {go = nat, ghd = held} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := l2[i]], P, mp(all_elim(hsub, {l2[i]}), on2))
     have in8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(l2[i], 8), j) in F proof
       fix j
       assume hj hjl
@@ -561,7 +609,7 @@ proof
     have n: !(s = sc) -> mallocng.cyclic(M2, mallocng.ctx_word(c, M2, int_add(mallocng.C_ACTIVE, int_mul(8, s))), R.active[s]) proof
       assume ne
       have e2: R.active[s] = A.active[s] by simp(es, ne)
-      have ws := apply(mp.rl_ctx_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, off := int_add(mallocng.C_ACTIVE, int_mul(8, s))], P,
+      have ws := apply(mp.rl_ctx_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, off := int_add(mallocng.C_ACTIVE, int_mul(8, s))], P,
         arith(ka, hs2), arith(ka, ks, hs2, hsl2), arith(ka, hs, hs2, ne))
       have wsw: mallocng.ctx_word(c, M2, int_add(mallocng.C_ACTIVE, int_mul(8, s))) = mallocng.ctx_word(c, M, int_add(mallocng.C_ACTIVE, int_mul(8, s))) by defs(ws, mallocng.ctx_word)
       have als: all i. i in omega -> int_lt(i, seq_len(A.active[s])) ->
@@ -571,12 +619,12 @@ proof
         assume hi hil
         have iu isc _ := mp(all_elim(expand(act, mallocng.active_ok), {s}, {i}), conj(hs2, hi), conj(hsl2, hil))
         have isl := apply(mp.used_slot, H, iu)
-        have nl: !mallocng.on_list(L, A.active[s][i]) proof
+        have nl: !mallocng.on_list(K, A.active[s][i]) proof
           assume hon
-          have {gs = sclass} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := A.active[s][i]], P, hon)
+          have {gs = sclass} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := A.active[s][i]], P, hon)
           show by taut(ne, trans(sym(isc), gs))
         qed
-        have {e0 = prev, e8 = next} := apply(mp.rl_meta_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, x := A.active[s][i]], P, isl, nl)
+        have {e0 = prev, e8 = next} := apply(mp.rl_meta_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, x := A.active[s][i]], P, isl, nl)
         show by taut(e8, e0)
       qed
       have cy := apply(mp.cyclic_agree[M := M, M2 := M2, hd := mallocng.ctx_word(c, M2, int_add(mallocng.C_ACTIVE, int_mul(8, s))), l := A.active[s]],
@@ -590,24 +638,24 @@ qed
 
 // the groups' links for the new state: the old list's as the memory has
 // them -- on l2 linked, dropped from it 0 --, the others' as before
-theorem mp.rl_links(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
-  words: (all h. mallocng.is_used(A, h) -> mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), h, 8) = mp.relist(A, sc, l2, V2).metas[h].prev &&
-     mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), int_add(h, 8), 8) = mp.relist(A, sc, l2, V2).metas[h].next) &&
-  links: (all h. mallocng.is_used(A, h) -> mp.links_ok(mp.relist(A, sc, l2, V2), h))
+theorem mp.rl_links(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
+  words: (all h. mallocng.is_used(A, h) -> mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), h, 8) = mp.relink(A, sc, l2, K, V2).metas[h].prev &&
+     mallocng.rd(mallocng.mview(V2, mallocng.held(c, A, b)), int_add(h, 8), 8) = mp.relink(A, sc, l2, K, V2).metas[h].next) &&
+  links: (all h. mallocng.is_used(A, h) -> mp.links_ok(mp.relink(A, sc, l2, K, V2), h))
 proof
   assume P
-  let R := mp.relist(A, sc, l2, V2)
+  let R := mp.relink(A, sc, l2, K, V2)
   let F := mallocng.held(c, A, b)
   let M := mallocng.mview(vm, F)
   let M2 := mallocng.mview(V2, F)
   let L := A.active[sc]
   let PH := int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc))
-  have {hc = cfg, hu = univ, ha = abs, hh = inv, hs = scn, hsl = scl, vb2 = vb2, hat = at, hl2 = l2t, hsub = sub, hgone = gone} := P
+  have {hc = cfg, hu = univ, ha = abs, hh = inv, hs = scn, hsl = scl, vb2 = vb2, hat = at, hl2 = l2t, hsub = sub, hgone = gone, hkold = kold} := P
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {huo = used, cok = ctx} := expand(H, mallocng.holds)
   have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok, mallocng.ctx_ok)
-  have {ot = other, lt = list, mt = meta} := apply(mp.relist_at[A := A, sc := sc, l2 := l2, vm := V2], ha)
-  have {hg = geom} := apply(mp.relist_geom[A := A, sc := sc, l2 := l2, vm := V2], ha)
+  have {ot = other, lt = list, mt = meta} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
+  have {hg = geom} := apply(mp.relink_geom[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
   have p64: int_pow(2, 64) = 18446744073709551616 by simp()
   have co: c.ctx in omega by simp(hc)
   have ka: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
@@ -625,10 +673,10 @@ proof
     have e := mp(all_elim(mt, {h}), ho)
     have {fs = sclass} := apply(mp.gm_geom[A := A, A2 := R, x := h], hg, ho)
     // on the old list: its links the memory's
-    have on: mallocng.on_list(L, h) -> (mallocng.rd(M2, h, 8) = R.metas[h].prev && mallocng.rd(M2, int_add(h, 8), 8) = R.metas[h].next) &&
+    have on: mallocng.on_list(K, h) -> (mallocng.rd(M2, h, 8) = R.metas[h].prev && mallocng.rd(M2, int_add(h, 8), 8) = R.metas[h].next) &&
         mp.links_ok(R, h) proof
       assume hon
-      have {gs = sclass, glo = low, ghd = held} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := h], P, hon)
+      have {gs = sclass, glo = low, ghd = held} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := h], P, hon)
       have ep: R.metas[h].prev = gimple.bytes_at(V2, h, 8) by simp(e, hon, keep(mallocng.on_list))
       have en: R.metas[h].next = gimple.bytes_at(V2, int_add(h, 8), 8) by simp(e, hon, keep(mallocng.on_list))
       have in8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(h, 8), j) in F proof
@@ -656,7 +704,7 @@ proof
         have nxi: int_mod(int_add(i, 1), seq_len(l2)) in omega && int_lt(int_mod(int_add(i, 1), seq_len(l2)), seq_len(l2)) by arith(hi, hil)
         have nx1 nx2 := nxi
         have onx: mallocng.on_list(l2, NX) by defs(ex_intro({int_mod(int_add(i, 1), seq_len(l2))}, taut(nx1, nx2, refl({NX}))), mallocng.on_list)
-        have {nno = nat, nlo = low} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := NX], P, mp(all_elim(hsub, {NX}), onx))
+        have {nno = nat, nlo = low} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := NX], P, mp(all_elim(hsub, {NX}), onx))
         have nn: !(R.metas[h].next = 0) by arith(rewrite(hie, l8), en, nlo, nno)
         have h1: int_lt(i, seq_len(R.active[sc])) := rewrite(sym(esc), hil)
         have h2: R.active[sc][i] = h := rewrite(sym(esc), hie)
@@ -683,14 +731,14 @@ proof
       show by taut(w, k2, k3)
     qed
     // off it: as before
-    have off: !mallocng.on_list(L, h) -> (mallocng.rd(M2, h, 8) = R.metas[h].prev && mallocng.rd(M2, int_add(h, 8), 8) = R.metas[h].next) &&
+    have off: !mallocng.on_list(K, h) -> (mallocng.rd(M2, h, 8) = R.metas[h].prev && mallocng.rd(M2, int_add(h, 8), 8) = R.metas[h].next) &&
         mp.links_ok(R, h) proof
       assume hn
       have e1: R.metas[h] = A.metas[h] by simp(e, hn, keep(mallocng.on_list))
       have gok := apply(mp.used_group, huo, iu)
       have {hm = mim, lkd = linked, ulk = unlinked} := expand(gok, mallocng.group_ok)
       have m1 m2 .. := expand(hm, mallocng.meta_in_memory)
-      have {e0 = prev, e8 = next} := apply(mp.rl_meta_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, x := h], P, hsl0, hn)
+      have {e0 = prev, e8 = next} := apply(mp.rl_meta_same[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, x := h], P, hsl0, hn)
       have w: mallocng.rd(M2, h, 8) = R.metas[h].prev && mallocng.rd(M2, int_add(h, 8), 8) = R.metas[h].next
         by taut(trans(e0, rewrite(sym(e1), m1)), trans(e8, rewrite(sym(e1), m2)))
       let SZ := A.metas[h].sizeclass
@@ -706,7 +754,7 @@ proof
             assume ex
             obtain i, hi hil hie from ex
             have onl: mallocng.on_list(L, h) by defs(ex_intro({i}, taut(hi, rewrite(ez, hil), rewrite(ez, hie))), mallocng.on_list)
-            show by taut(onl, hn)
+            show by taut(mp(all_elim(hkold, {h}), onl), hn)
           qed
           have n2: !(ex x0. x0 in omega && (int_lt(x0, seq_len(R.active[SZ])) && R.active[SZ][x0] = h)) proof
             assume ex
@@ -750,20 +798,21 @@ qed
 // the active lists' conditions, the metas' partition, the normal form: for
 // the new state as for A (class sc's list l2 of the old one's groups, those
 // past its head full)
-theorem mp.rl_rest(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
+theorem mp.rl_rest(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
   (all k. k in omega -> int_lt(0, k) -> int_lt(k, seq_len(l2)) -> A.metas[l2[k]].avail = 0 && !(A.metas[l2[k]].freed = 0)) ->
-  active: mallocng.active_ok(mp.relist(A, sc, l2, V2)) && part: mallocng.metas_partition(mp.relist(A, sc, l2, V2)) && normal: mallocng.normal(mp.relist(A, sc, l2, V2)) &&
-  sub: (all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(mp.relist(A, sc, l2, V2).active[s], g) -> mallocng.on_list(A.active[s], g))
+  active: mallocng.active_ok(mp.relink(A, sc, l2, K, V2)) && part: mallocng.metas_partition(mp.relink(A, sc, l2, K, V2)) && normal: mallocng.normal(mp.relink(A, sc, l2, K, V2)) &&
+  sub: (all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(mp.relink(A, sc, l2, K, V2).active[s], g) ->
+     mallocng.on_list(A.active[s], g) || (mallocng.on_list(K, g) && !mallocng.on_list(A.active[sc], g)))
 proof
   assume P htail
-  let R := mp.relist(A, sc, l2, V2)
+  let R := mp.relink(A, sc, l2, K, V2)
   let L := A.active[sc]
   have {ha = abs, hh = inv, hs = scn, hsl = scl, hsub = sub} := P
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {act = active, hpt = part, hnm = normal, cok = ctx} := expand(H, mallocng.holds)
   have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok, mallocng.ctx_ok)
-  have {ot = other, lt = list, mt = meta} := apply(mp.relist_at[A := A, sc := sc, l2 := l2, vm := V2], ha)
-  have {hg = geom, hmk = masks} := apply(mp.relist_geom[A := A, sc := sc, l2 := l2, vm := V2], ha)
+  have {ot = other, lt = list, mt = meta} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
+  have {hg = geom, hmk = masks} := apply(mp.relink_geom[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
   // the active lists
   have ac: all x0. all x1. x0 in omega && x1 in omega -> int_lt(x0, 48) && int_lt(x1, seq_len(R.active[x0])) ->
       (mallocng.is_used(R, R.active[x0][x1]) && R.metas[R.active[x0][x1]].sizeclass = x0) &&
@@ -781,7 +830,7 @@ proof
       have hkl: int_lt(k, seq_len(l2)) := rewrite(e2, hkl0)
       have xe: X = l2[k] by simp(e2)
       have on2: mallocng.on_list(l2, l2[k]) by defs(ex_intro({k}, taut(hk, hkl, refl({l2[k]}))), mallocng.on_list)
-      have {iu = used, isc = sclass, io = nat} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := l2[k]], P, mp(all_elim(hsub, {l2[k]}), on2))
+      have {iu = used, isc = sclass, io = nat} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := l2[k]], P, mp(all_elim(hsub, {l2[k]}), on2))
       have {eu = used} := apply(mp.gm_used[c := c, A := A, A2 := R, M := empty, x := l2[k]], hg)
       have {fs = sclass} := apply(mp.gm_geom[A := A, A2 := R, x := l2[k]], hg, io)
       have ea ef := mp(all_elim(hmk, {l2[k]}), io)
@@ -823,7 +872,7 @@ proof
   have acR: mallocng.active_ok(R) by defs(ac, mallocng.active_ok)
   // the partition: of fields R has as A
   have pt: mallocng.metas_partition(R) = mallocng.metas_partition(A)
-    by defs(simp(), mp.relist, mallocng.metas_partition, mallocng.meta_slot, mallocng.is_used, mallocng.avail_meta)
+    by defs(simp(), mp.relink, mallocng.metas_partition, mallocng.meta_slot, mallocng.is_used, mallocng.avail_meta)
   // the normal form: the groups not in use on no list, so as before
   have n1 n2 n3 n4 := expand(hnm, mallocng.normal)
   have esl := mp(all_elim(ot, {"slots"}), simp(), simp())
@@ -832,9 +881,9 @@ proof
     assume hx hnu
     have {eu = used} := apply(mp.gm_used[c := c, A := A, A2 := R, M := empty, x := x], hg)
     have nu := rewrite(eu, hnu)
-    have nl: !mallocng.on_list(L, x) proof
+    have nl: !mallocng.on_list(K, x) proof
       assume hon
-      have {u = used} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, g := x], P, hon)
+      have {u = used} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := x], P, hon)
       show by taut(u, nu)
     qed
     have e1: R.metas[x] = A.metas[x] by simp(mp(all_elim(mt, {x}), hx), nl, keep(mallocng.on_list))
@@ -849,21 +898,26 @@ proof
   have {e0 = used} := apply(mp.gm_used[c := c, A := A, A2 := R, M := empty, x := 0], hg)
   have nmR: mallocng.normal(R) by defs(taut(r1, rewrite(sym(eat), rewrite(sym(eax), rewrite(sym(eid), n2))), rewrite(sym(ere), rewrite(sym(erc), n3)), rewrite(sym(e0), n4)), mallocng.normal)
   // each list: a part of the one before
-  have sb: all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(R.active[s], g) -> mallocng.on_list(A.active[s], g) proof
+  have sb: all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(R.active[s], g) ->
+      mallocng.on_list(A.active[s], g) || (mallocng.on_list(K, g) && !mallocng.on_list(A.active[sc], g)) proof
     fix s g
     assume hn hs ol
     have hs2 _ := hn
     have es := mp(all_elim(lt, {s}), hs2, (int_lt(s, seq_len(A.active)) by arith(c11, hs)))
-    have y: s = sc -> mallocng.on_list(A.active[s], g) proof
+    have y: s = sc -> mallocng.on_list(A.active[s], g) || (mallocng.on_list(K, g) && !mallocng.on_list(A.active[sc], g)) proof
       assume e
       have e2: R.active[s] = l2 by simp(es, e)
       have o := mp(all_elim(hsub, {g}), rewrite(e2, ol))
-      show := subst({y. mallocng.on_list(A.active[y], g)}, sym(e), o)
+      have c1: mallocng.on_list(A.active[sc], g) -> mallocng.on_list(A.active[s], g) proof
+        assume h
+        show := subst({y. mallocng.on_list(A.active[y], g)}, sym(e), h)
+      qed
+      show by taut(c1, o)
     qed
-    have n: !(s = sc) -> mallocng.on_list(A.active[s], g) proof
+    have n: !(s = sc) -> mallocng.on_list(A.active[s], g) || (mallocng.on_list(K, g) && !mallocng.on_list(A.active[sc], g)) proof
       assume ne
       have e2: R.active[s] = A.active[s] by simp(es, ne)
-      show := rewrite(e2, ol)
+      show by taut(rewrite(e2, ol))
     qed
     show by taut(y, n)
   qed
@@ -871,24 +925,26 @@ proof
 qed
 
 // The invariant kept by a list operation on class sc's active list (its
-// memory as `rlpre` has it, the groups past l2's head full): with the list
-// l2 and its groups' links as the memory has them (`relist`)
-theorem mp.holds_relist(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2) ->
+// memory as `rlpre` has it, the groups past l2's head full, the active
+// groups' conditions met): with the list l2 and the links of the groups on
+// K as the memory has them (`relink`)
+theorem mp.holds_relink(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
   (all k. k in omega -> int_lt(0, k) -> int_lt(k, seq_len(l2)) -> A.metas[l2[k]].avail = 0 && !(A.metas[l2[k]].freed = 0)) ->
   !(A.init_done = 0) ->
-  mallocng.holds_in(c, mp.relist(A, sc, l2, V2), V2, b)
+  mallocng.partial_ok(mp.relink(A, sc, l2, K, V2), mallocng.mview(V2, mallocng.held(c, A, b))) -> mallocng.reuse_ok(mp.relink(A, sc, l2, K, V2)) ->
+  mallocng.holds_in(c, mp.relink(A, sc, l2, K, V2), V2, b)
 proof
-  assume P htail nz
-  let R := mp.relist(A, sc, l2, V2)
+  assume P htail nz po ru
+  let R := mp.relink(A, sc, l2, K, V2)
   have {ha = abs, hh = inv} := P
   have {hm = mapped, hfr = free} := expand(hh, mallocng.holds_in)
   have F := apply(mp.rl_frame, P)
   have {o10 = free, o11 = len, o12 = lists} := apply(mp.rl_lists, P)
   have {hlnk = words, hlok = links} := apply(mp.rl_links, P)
-  have {hac = active, hpt = part, hnm = normal, hsb = sub} := apply(mp.rl_rest, P, htail)
-  have hl := apply(mp.holds_links[c := c, A := A, A2 := R, M := mallocng.mview(vm, mallocng.held(c, A, b)), M2 := mallocng.mview(V2, mallocng.held(c, A, b)), b := b, brk := vm.brk],
-    F, o10, o11, o12, hlnk, hlok, hac, hpt, hnm, nz, hsb)
-  have {hg = geom} := apply(mp.relist_geom[A := A, sc := sc, l2 := l2, vm := V2], ha)
+  have {hac = active, hpt = part, hnm = normal} := apply(mp.rl_rest, P, htail)
+  have hl := apply(mp.holds_links_pr[c := c, A := A, A2 := R, M := mallocng.mview(vm, mallocng.held(c, A, b)), M2 := mallocng.mview(V2, mallocng.held(c, A, b)), b := b, brk := vm.brk],
+    F, o10, o11, o12, hlnk, hlok, hac, hpt, hnm, nz, po, ru)
+  have {hg = geom} := apply(mp.relink_geom[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
   have eh := apply(mp.gm_held[c := c, A := A, A2 := R, b := b], ha, hg)
   have efp := apply(mp.gm_fp[c := c, A := A, A2 := R, b := b], ha, hg)
   have efr := apply(mp.gm_ranges[c := c, A := A, A2 := R], ha, hg)
@@ -897,4 +953,177 @@ proof
   have m2 := rewrite(sym(efr), apply(mp.fpm_pages, hm, ep))
   have f2 := rewrite(sym(efp), apply(mp.free_rw_pages[c := c, vm := vm, vm2 := V2, F := mallocng.footprint(c, A, b)], hfr, ep))
   show by defs(taut(h2, m2, f2), mallocng.holds_in)
+qed
+
+// ... the list shrunk or turned (K the old list): the active groups'
+// conditions kept by themselves
+theorem mp.holds_relist(c, A, vm, V2, b, objs, sc, l2): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, A.active[sc]) ->
+  (all k. k in omega -> int_lt(0, k) -> int_lt(k, seq_len(l2)) -> A.metas[l2[k]].avail = 0 && !(A.metas[l2[k]].freed = 0)) ->
+  !(A.init_done = 0) ->
+  mallocng.holds_in(c, mp.relist(A, sc, l2, V2), V2, b)
+proof
+  assume P htail nz
+  let R := mp.relist(A, sc, l2, V2)
+  have {hh = inv} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hpo = partial, hru = reuse} := expand(H, mallocng.holds)
+  have F := apply(mp.rl_frame, P)
+  have {hg = geom} := F
+  have {hsb0 = sub} := apply(mp.rl_rest, P, htail)
+  have hsub: all s g. s in omega && g in omega -> int_lt(s, 48) -> mallocng.on_list(R.active[s], g) -> mallocng.on_list(A.active[s], g) proof
+    fix s g
+    assume hn hs ol
+    show by taut(mp(all_elim(hsb0, {s}, {g}), hn, hs, ol))
+  qed
+  have po := apply(mp.partial_mono[A := A, A2 := R, M := mallocng.mview(vm, mallocng.held(c, A, b)), M2 := mallocng.mview(V2, mallocng.held(c, A, b))], hpo,
+    apply(mp.lf_partial[c := c, A := A, A2 := R, M := mallocng.mview(vm, mallocng.held(c, A, b)), M2 := mallocng.mview(V2, mallocng.held(c, A, b)), b := b, brk := vm.brk], F, hsub))
+  have ru := apply(mp.reuse_gm[A := A, A2 := R], hg, hsub, hru)
+  show := apply(mp.holds_relink, P, htail, nz, po, ru)
+qed
+
+// (a group on a list after: in use; partially active after, so before, its
+// slot size and last slot as before; on the list before, or joining class
+// sc's)
+theorem mp.rl_onr(c, A, vm, V2, b, objs, sc, l2, K, s, h): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) -> s in omega -> int_lt(s, 48) ->
+  mallocng.on_list(mp.relink(A, sc, l2, K, V2).active[s], h) ->
+  used: mallocng.is_used(A, h) &&
+  was: (mallocng.on_list(A.active[s], h) || (s = sc && mallocng.on_list(K, h) && !mallocng.on_list(A.active[sc], h)))
+proof
+  assume P hs2 hsl2 ol
+  have {ha = abs, hh = inv, hsub = sub} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {act = active, cok = ctx} := expand(H, mallocng.holds)
+  have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok, mallocng.ctx_ok)
+  have {lt = list} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
+  have es := mp(all_elim(lt, {s}), hs2, (int_lt(s, seq_len(A.active)) by arith(c11, hsl2)))
+  have y: s = sc -> mallocng.is_used(A, h) && (mallocng.on_list(A.active[s], h) || (s = sc && mallocng.on_list(K, h) && !mallocng.on_list(A.active[sc], h))) proof
+    assume e
+    have e2: mp.relink(A, sc, l2, K, V2).active[s] = l2 by simp(es, e)
+    have ok := mp(all_elim(hsub, {h}), rewrite(e2, ol))
+    have {iu = used} := apply(mp.rl_elem[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, g := h], P, ok)
+    have c1: mallocng.on_list(A.active[sc], h) -> mallocng.on_list(A.active[s], h) proof
+      assume hl
+      show := subst({y. mallocng.on_list(A.active[y], h)}, sym(e), hl)
+    qed
+    show by taut(iu, c1, ok, e)
+  qed
+  have n: !(s = sc) -> mallocng.is_used(A, h) && (mallocng.on_list(A.active[s], h) || (s = sc && mallocng.on_list(K, h) && !mallocng.on_list(A.active[sc], h))) proof
+    assume ne
+    have e2: mp.relink(A, sc, l2, K, V2).active[s] = A.active[s] by simp(es, ne)
+    have ol2 := rewrite(e2, ol)
+    obtain k, hk hkl hke from expand(ol2, mallocng.on_list)
+    have iu0 _ _ := mp(all_elim(expand(act, mallocng.active_ok), {s}, {k}), conj(hs2, hk), conj(hsl2, hkl))
+    show by taut(rewrite(hke, iu0), ol2)
+  qed
+  show by taut(y, n)
+qed
+
+// the partially active groups after: as before, and those joining class
+// sc's list past their first page, none of them beside another partially
+// active one on the list
+theorem mp.relink_partial(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
+  (all g. mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> mallocng.partial(mallocng.mview(vm, mallocng.held(c, A, b)), A, g) ->
+     int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A.metas[g]), int_add(A.metas[g].last_idx, 1))))) ->
+  (all g h. mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> mallocng.on_list(l2, h) ->
+     mallocng.partial(mallocng.mview(vm, mallocng.held(c, A, b)), A, g) -> mallocng.partial(mallocng.mview(vm, mallocng.held(c, A, b)), A, h) -> g = h) ->
+  mallocng.partial_ok(mp.relink(A, sc, l2, K, V2), mallocng.mview(V2, mallocng.held(c, A, b)))
+proof
+  assume P hnb hnu
+  let R := mp.relink(A, sc, l2, K, V2)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  let M2 := mallocng.mview(V2, mallocng.held(c, A, b))
+  have {ha = abs, hh = inv, hsub = sub} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hpo = partial, cok = ctx} := expand(H, mallocng.holds)
+  have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok, mallocng.ctx_ok)
+  have p0 p1 := expand(hpo, mallocng.partial_ok)
+  have F := apply(mp.rl_frame, P)
+  have {lt = list} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
+  have esc: R.active[sc] = l2 by simp(mp(all_elim(lt, {sc}), (sc in omega by simp(P)), (int_lt(sc, seq_len(A.active)) by arith(c11, P))))
+  have u: all s g g2. s in omega && g in omega && g2 in omega -> int_lt(s, 48) && mallocng.on_list(R.active[s], g) && mallocng.on_list(R.active[s], g2) &&
+      mallocng.partial(M2, R, g) && mallocng.partial(M2, R, g2) -> g = g2 proof
+    fix s g g2
+    assume hn hl
+    have hs2 _ _ := hn
+    have l0 o1 o2 q1 q2 := hl
+    have {iu1 = used, w1 = was} := apply(mp.rl_onr[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, s := s, h := g], P, hs2, l0, o1)
+    have {iu2 = used, w2 = was} := apply(mp.rl_onr[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, s := s, h := g2], P, hs2, l0, o2)
+    have {k1 = part} := apply(mp.lf_part1[c := c, A := A, A2 := R, M := M, M2 := M2, b := b, brk := vm.brk, g := g], F, iu1, q1)
+    have {k2 = part} := apply(mp.lf_part1[c := c, A := A, A2 := R, M := M, M2 := M2, b := b, brk := vm.brk, g := g2], F, iu2, q2)
+    // both on the list before
+    have c1: mallocng.on_list(A.active[s], g) -> mallocng.on_list(A.active[s], g2) -> g = g2 proof
+      assume a1 a2
+      show := mp(all_elim(p0, {s}, {g}, {g2}), hn, taut(l0, a1, a2, k1, k2))
+    qed
+    // g joining: g2 on l2
+    have c2: s = sc -> mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> g = g2 proof
+      assume e kg ng
+      have o2b: mallocng.on_list(l2, g2) := rewrite(esc, subst({y. mallocng.on_list(R.active[y], g2)}, e, o2))
+      show := mp(all_elim(hnu, {g}, {g2}), kg, ng, o2b, k1, k2)
+    qed
+    have c3: s = sc -> mallocng.on_list(K, g2) -> !mallocng.on_list(A.active[sc], g2) -> g = g2 proof
+      assume e kg ng
+      have o1b: mallocng.on_list(l2, g) := rewrite(esc, subst({y. mallocng.on_list(R.active[y], g)}, e, o1))
+      show := sym(mp(all_elim(hnu, {g2}, {g}), kg, ng, o1b, k2, k1))
+    qed
+    show by taut(w1, w2, c1, c2, c3)
+  qed
+  have pg: all s g. s in omega && g in omega -> int_lt(s, 48) && mallocng.on_list(R.active[s], g) && mallocng.partial(M2, R, g) ->
+      int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(R.metas[g]), int_add(R.metas[g].last_idx, 1)))) proof
+    fix s g
+    assume hn hl
+    have hs2 _ := hn
+    have l0 o1 q1 := hl
+    have {iu1 = used, w1 = was} := apply(mp.rl_onr[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, s := s, h := g], P, hs2, l0, o1)
+    have k1 es el := apply(mp.lf_part1[c := c, A := A, A2 := R, M := M, M2 := M2, b := b, brk := vm.brk, g := g], F, iu1, q1)
+    have c1: mallocng.on_list(A.active[s], g) -> int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A.metas[g]), int_add(A.metas[g].last_idx, 1)))) proof
+      assume a1
+      show := mp(all_elim(p1, {s}, {g}), hn, taut(l0, a1, k1))
+    qed
+    have c2: mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A.metas[g]), int_add(A.metas[g].last_idx, 1)))) proof
+      assume kg ng
+      show := mp(all_elim(hnb, {g}), kg, ng, k1)
+    qed
+    have b0: int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A.metas[g]), int_add(A.metas[g].last_idx, 1)))) by taut(w1, c1, c2)
+    show := rewrite(sym(es), rewrite(sym(el), b0))
+  qed
+  show by defs(taut(u, pg), mallocng.partial_ok)
+qed
+
+// the groups on the lists after with an unused slot: fit their class --
+// as before, and those joining class sc's list by themselves
+theorem mp.relink_reuse(c, A, vm, V2, b, objs, sc, l2, K): mp.rlpre(c, A, vm, V2, b, objs, sc, l2, K) ->
+  (all g. mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> mallocng.has_unused(A, g) -> !mallocng.own_mapping(A.metas[g])) ->
+  mallocng.reuse_ok(mp.relink(A, sc, l2, K, V2))
+proof
+  assume P hnr
+  let R := mp.relink(A, sc, l2, K, V2)
+  have {ha = abs, hh = inv} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hru = reuse} := expand(H, mallocng.holds)
+  have r0 := expand(hru, mallocng.reuse_ok)
+  have {ot = other} := apply(mp.relink_at[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
+  have esl := mp(all_elim(ot, {"slots"}), simp(), simp())
+  have {hg = geom} := apply(mp.relink_geom[A := A, sc := sc, l2 := l2, K := K, vm := V2], ha)
+  have u: all s g. s in omega && g in omega -> int_lt(s, 48) && mallocng.on_list(R.active[s], g) && mallocng.has_unused(R, g) ->
+      !mallocng.own_mapping(R.metas[g]) proof
+    fix s g
+    assume hn hp
+    have hs2 ho := hn
+    have l0 o2 u2 := hp
+    have {w1 = was} := apply(mp.rl_onr[c := c, A := A, vm := vm, V2 := V2, b := b, objs := objs, sc := sc, l2 := l2, K := K, s := s, h := g], P, hs2, l0, o2)
+    have ua := mp(mp.unused_same[A := A, A2 := R, g := g], esl, u2)
+    have c1: mallocng.on_list(A.active[s], g) -> !mallocng.own_mapping(A.metas[g]) proof
+      assume a1
+      show := mp(all_elim(r0, {s}, {g}), hn, taut(l0, a1, ua))
+    qed
+    have c2: mallocng.on_list(K, g) -> !mallocng.on_list(A.active[sc], g) -> !mallocng.own_mapping(A.metas[g]) proof
+      assume kg ng
+      show := mp(all_elim(hnr, {g}), kg, ng, ua)
+    qed
+    have n0: !mallocng.own_mapping(A.metas[g]) by taut(w1, c1, c2)
+    have {gs = sclass, gt = stride} := apply(mp.gm_geom[A := A, A2 := R, x := g], hg, ho)
+    show by defs(rewrite(sym(gt), rewrite(sym(gs), expand(n0, mallocng.own_mapping))), mallocng.own_mapping)
+  qed
+  show by defs(u, mallocng.reuse_ok)
 qed

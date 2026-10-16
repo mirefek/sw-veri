@@ -719,3 +719,22 @@ item is a short summary of finished work; details are in the files named.
   (`mp.ag_call_ref`, ...: the CFG forms at the machine level).
   `try_avail_spec` requires the list's head word at or past `active[0]`
   (no class below 0); `ct.dv_ret3` (three choices before a return).
+- **alloc_slot by its purpose** (`mp.as_run`, `mp.as`, `mp.as_fun`,
+  `mp.as_divg`, `mp.as_call` / `mp.as_q`; proofs/mallocng/fun/alloc_slot.core):
+  try_avail's slot found -- its index by a_ctz_32, the only one reserved
+  (`mp.res_only`), room in it by `reuse_ok` (a group on a list with an
+  unused slot is not mapped on its own) --; else alloc_group (a parameter,
+  by its contract at a call `mp.agr_call`): -1, or its new group's first
+  slot reserved (`mp.put_slot`, take_slot's general part) and the group
+  queued. The memory composed over the calls: untouched but errno, grown
+  only into unmapped memory (`mp.unt_grow`, `mp.grown_trans`). The
+  invariant gained a_ctz_32's table (`debruijn_ok`, `Cfg.dbj`, a fixed
+  range); try_avail's empty-list return keeps the slots; alloc_group's new
+  group is unlinked (prev 0 too).
+- **The list frame for a list that grows** (`mp.relink`; `relist` and
+  `enlist` its two uses): the links of the groups on K rewritten -- the old
+  list's when it shrinks or turns, the new one's when a group joins --;
+  `mp.rlpre` with K, `mp.holds_relink` given the active groups' conditions
+  (`mp.relink_partial`, `mp.relink_reuse`: as before, the joining groups'
+  by premises); `mp.holds_links_pr`. A group queued on an empty list
+  (`mp.qu_step`, `mp.join_new`).

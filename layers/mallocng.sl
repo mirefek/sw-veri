@@ -35,6 +35,7 @@ record Cfg {
   lock : nat      // __malloc_lock
   libc : nat      // __libc
   sct  : nat      // __malloc_size_classes (read-only)
+  dbj  : nat      // a_ctz_32's debruijn32 (read-only)
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -100,6 +101,11 @@ const size_classes : List[nat] = [
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 20, 25, 31,
   36, 42, 50, 63, 72, 84, 102, 127, 146, 170, 204, 255, 292, 340, 409, 511,
   584, 682, 818, 1023, 1169, 1364, 1637, 2047, 2340, 2730, 3276, 4095, 4680, 5460, 6552, 8191]
+
+// malloc.c's debruijn32 (a_ctz_32's, at a de Bruijn sequence's positions)
+const debruijn32_tab : List[nat] = [
+  0, 1, 23, 2, 29, 24, 19, 3, 30, 27, 25, 11, 20, 8, 4, 13,
+  31, 22, 28, 18, 26, 10, 7, 12, 21, 17, 9, 6, 16, 5, 15, 14]
 
 ///////////////////////////////////////////////////////////////////////
 //  The abstract state
@@ -182,7 +188,7 @@ fn data_ranges(c: Cfg) -> List[(nat, nat)] = [(c.ctx, CTX_SIZE), (c.lock, 4), (c
 fn fixed_ranges(c: Cfg, A: Abs) -> List[(nat, nat)] =
   ro_ranges(c.file) ++ data_ranges(c) ++ auxv_ranges(A) ++
   [(A.areas[k], 4096) for k in 0..len(A.areas)] ++ [(A.reserve, 4096 * A.reserve_cnt)] ++
-  [(c.sct, 2 * 48)]
+  [(c.sct, 2 * 48)] ++ [(c.dbj, 32)]
 
 // everything the allocator owns (before taking out the live blocks): its
 // fixed regions and its groups
@@ -413,6 +419,12 @@ pred partial_ok(A: Abs, m: Mem) =
   (all sc: nat, g: nat. sc < 48 && on_list(A.active[sc], g) && partial(m, A, g) ->
      4096 < UNIT + stride(A.metas[g]) * (A.metas[g].last_idx + 1))
 
+// a group on a class's list with an unused slot fits the class's requests:
+// not one mapped on its own shorter than the class's slots (free unmaps
+// those as soon as a slot is free: musl's okay_to_free)
+pred reuse_ok(A: Abs) =
+  all sc: nat, g: nat. sc < 48 && on_list(A.active[sc], g) && has_unused(A, g) -> !own_mapping(A.metas[g])
+
 // every live block is in a slot (in only one: slots and groups do not overlap)
 pred blocks_ok(A: Abs, blocks: Addr -> Option[nat]) =
   all p: Addr. blocks[p] != none ->
@@ -473,10 +485,17 @@ pred classes_ok(c: Cfg, m: Mem) =
   (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack) &&
   (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.sct && c.sct + 2 * 48 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1])
 
-// the meta areas, the class table and the context: no client's bytes
+// a_ctz_32's table (the code reads it): the same
+pred debruijn_ok(c: Cfg, m: Mem) =
+  (all i: nat. i < 32 -> rd(m, c.dbj + i, 1) = debruijn32_tab[i]) &&
+  (all a: nat. c.dbj <= a && a < c.dbj + 32 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack) &&
+  (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.dbj && c.dbj + 32 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1])
+
+// the meta areas, the tables and the context: no client's bytes
 pred fixed_free(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) =
   areas: (all k: nat, a: nat. k < len(A.areas) && A.areas[k] <= a && a < A.areas[k] + 4096 -> a notin live_of(blocks)) &&
   classes: (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> a notin live_of(blocks)) &&
+  debruijn: (all a: nat. c.dbj <= a && a < c.dbj + 32 -> a notin live_of(blocks)) &&
   context: (all a: nat. c.ctx <= a && a < c.ctx + CTX_SIZE -> a notin live_of(blocks))
 
 // the groups (nested ones too: inside their parent's slot) apart from the
@@ -486,10 +505,10 @@ pred groups_apart(c: Cfg, A: Abs) =
 
 pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
   image: image_ok(c, m) && ctx: ctx_ok(c, A, m) && fresh: fresh_ok(c, A, m) && areas: areas_ok(c, A, m) &&
-  part: metas_partition(A) && used: used_ok(A, m, blocks) && active: active_ok(A) && partial: partial_ok(A, m) && in_slots: blocks_ok(A, blocks) &&
+  part: metas_partition(A) && used: used_ok(A, m, blocks) && active: active_ok(A) && partial: partial_ok(A, m) && reuse: reuse_ok(A) && in_slots: blocks_ok(A, blocks) &&
   normal: normal(A) && brk: brk_ok(A, brk) && perms: perms_ok(c, A, m, blocks) && sep: separate(regions(c, A)) &&
   wf: blocks_wf(blocks) &&       // (what the law inv_wf needs, stated directly)
-  classes: classes_ok(c, m) && fixed: fixed_free(c, A, blocks) && apart: groups_apart(c, A)
+  classes: classes_ok(c, m) && debruijn: debruijn_ok(c, m) && fixed: fixed_free(c, A, blocks) && apart: groups_apart(c, A)
 
 ///////////////////////////////////////////////////////////////////////
 //  The invariant and the owned bytes

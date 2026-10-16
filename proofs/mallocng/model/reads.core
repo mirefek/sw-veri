@@ -84,7 +84,7 @@ proof
   obtain k2 j, hk2 hj hk2l hjl he from expand(sl, mallocng.meta_slot)
   have _ _ ar _ _ := expand(aok, mallocng.areas_ok)
   have a1 a2 _ _ _ a6 := mp(all_elim(ar, {k2}), hk2, hk2l)
-  have ff1 _ _ := expand(ff, mallocng.fixed_free)
+  have {ff1 = areas} := expand(ff, mallocng.fixed_free)
   have rl: A.areas in list_type(omega) by simp(ha)
   have aro := mp(at_type[l := A.areas, t := omega, i := k2], rl, hk2, hk2l)
   have cs: mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS)
@@ -176,7 +176,7 @@ proof
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {huo = used, co = classes, ff = fixed, hga = apart} := expand(H, mallocng.holds)
   have co1 co2 co3 := expand(co, mallocng.classes_ok)
-  have _ ff2 _ := expand(ff, mallocng.fixed_free)
+  have {ff2 = classes} := expand(ff, mallocng.fixed_free)
   have so: c.sct in omega by simp(hc)
   obtain ri, hri hril hr1 hr2 from co3
   // a byte of the table: the allocator's, readable, in a read-only segment
@@ -220,6 +220,63 @@ proof
     have tl: int_lt(int_div(int_add(T, 0), 4096), int_div(int_sub(int_pow(2, 47), 4096), 4096)) by taut(mm2)
     have bt: bits_of_int(64, T) = T by defs(arith(tl, to), bits_of_int, pow2)
     have cv := mp(all_elim(co1, {i}), hi, i48)
+    show by taut(us, rewrite(sym(bt), trans(vr, cv)))
+  qed
+  show by defs(tab, mallocng_specs.table_ok)
+qed
+
+// a_ctz_32's table as GIMPLE reads it
+theorem mp.debruijn_table(c, A, vm, b, objs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs ->
+  mallocng.holds_in(c, A, vm, b) -> mallocng_specs.table_ok(vm, objs, c.dbj, 1, mallocng.debruijn32_tab)
+proof
+  assume hc hu ha hh
+  let FP := mallocng.held(c, A, b)
+  let M := mallocng.mview(vm, FP)
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {huo = used, co = debruijn, ff = fixed, hga = apart} := expand(H, mallocng.holds)
+  have co1 co2 co3 := expand(co, mallocng.debruijn_ok)
+  have {ff2 = debruijn} := expand(ff, mallocng.fixed_free)
+  have so: c.dbj in omega by simp(hc)
+  obtain ri, hri hril hr1 hr2 from co3
+  have tl32: seq_len(mallocng.debruijn32_tab) = 32 by defs(simp(), mallocng.debruijn32_tab)
+  have tab: all i. i in omega -> int_lt(i, seq_len(mallocng.debruijn32_tab)) ->
+      gimple.usable(vm, objs, int_add(c.dbj, int_mul(1, i)), 1, false) &&
+      gimple.bytes_at(vm, bits_of_int(64, int_add(c.dbj, int_mul(1, i))), 1) = mallocng.debruijn32_tab[i] proof
+    fix i
+    assume hi hl
+    have i32: int_lt(i, 32) by simp(hl, tl32)
+    let T := int_add(c.dbj, int_mul(1, i))
+    have to: T in omega by arith(so, hi)
+    have h1: int_le(c.dbj, T) by arith(so, hi)
+    have h2: int_lt(T, int_add(c.dbj, 32)) by arith(so, hi, i32)
+    // the byte: the allocator's, readable, in a read-only segment
+    have nl := mp(all_elim(ff2, {T}), to, conj(h1, h2))
+    have fp := apply(mp.dbj_fp, hc, hu, ha, huo, hga, to, h1, h2, nl)
+    have inr: mallocng.in_range(T, mallocng.ro_ranges(c.file)[ri]) by defs(arith(hr1, hr2, h1, h2), mallocng.in_range)
+    have hd := apply(mp.ro_held[c := c, A := A, M := M, b := b, brk := vm.brk, i := ri, a := T], hc, hu, ha, H, hri, hril, inr, fp)
+    have rd := mp(all_elim(co2, {T}), to, conj(h1, h2))
+    have t0: int_add(T, 0) = T by arith(to)
+    have bj: all j. j in omega -> int_lt(j, 1) -> int_add(T, j) in FP && mallocng.m_mapped(M, int_add(T, j)) &&
+        snd(mallocng.pg(M, int_add(T, j))).prot.r && !(snd(mallocng.pg(M, int_add(T, j))).kind = 2) proof
+      fix j
+      assume hj hjl
+      have j0: j = 0 by arith(hj, hjl)
+      show by simp(j0, t0, hd, rd)
+    qed
+    have us := apply(mp.view_usable[vm := vm, fp := FP, objs := objs, a := T, n := 1], to, bj)
+    have infp: all j. j in omega -> int_lt(j, 1) -> int_add(T, j) in FP proof
+      fix j
+      assume hj hjl
+      have r := mp(all_elim(bj, {j}), hj, hjl)
+      show by taut(r)
+    qed
+    have vr := apply(mp.view_read[vm := vm, fp := FP, a := T, n := 1], to, simp(), simp(), infp)
+    // below the user space's end
+    have mm2 := expand(rd, mallocng.m_mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have tl: int_lt(int_div(T, 4096), int_div(int_sub(int_pow(2, 47), 4096), 4096)) by taut(mm2)
+    have bt: bits_of_int(64, T) = T by defs(arith(tl, to), bits_of_int, pow2)
+    have ti: T = int_add(c.dbj, i) by arith(so, hi)
+    have cv := rewrite(sym(ti), mp(all_elim(co1, {i}), hi, i32))
     show by taut(us, rewrite(sym(bt), trans(vr, cv)))
   qed
   show by defs(tab, mallocng_specs.table_ok)
@@ -493,7 +550,7 @@ proof
   obtain k2 j, hk2 hj hk2l hjl he from expand(sl, mallocng.meta_slot)
   have _ _ ar _ _ := expand(aok, mallocng.areas_ok)
   have a1 a2 a3 _ _ a6 := mp(all_elim(ar, {k2}), hk2, hk2l)
-  have ff1 _ _ := expand(ff, mallocng.fixed_free)
+  have {ff1 = areas} := expand(ff, mallocng.fixed_free)
   have rl: A.areas in list_type(omega) by simp(ha)
   have aro := mp(at_type[l := A.areas, t := omega, i := k2], rl, hk2, hk2l)
   have cs: mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS)
