@@ -745,3 +745,12 @@ item is a short summary of finished work; details are in the files named.
   (`mp.slot_rw_of`). Kept on the pages as before (`mp.grp_rw_pages`, from
   the clause's every-byte form `mp.grp_all`), by the frame law (the
   allocator's and the live pages unchanged). Checked by `slc heapcheck`.
+- **The World-spec functions at the ABI level** (`mp.X_abi`:
+  `abi.implements2_at` by `tr.implements_abi`): dequeue, dequeue_head,
+  queue, free_meta, set_size and the leaves (a_ctz_32, a_clz_32, a_cas,
+  upgradelock, resetlock, a_crash; proofs/mallocng/fun/leaves.core). Their
+  specs diverge nowhere they do not raise (`mp.X_divw`): the ghost lemmas
+  with the empty ghost part (`ct.div_of_g`, `ct.w_single`), the body's
+  premise of `ct.contract_div` (`ct.contract_div0` without a precondition)
+  inferred and proved by a lemma per body shape (`ct.dv_havoc`, ...), no
+  spec body copied.

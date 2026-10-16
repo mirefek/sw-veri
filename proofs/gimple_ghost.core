@@ -1031,3 +1031,123 @@ proof
     show by ex_intro({empty}, {S}, taut(eu, eno, xg, rx))
   qed
 qed
+
+// (a World spec: one with the empty ghost part -- what diverges raises)
+theorem ct.div_of_g(spec): tr.div_raises_g(single(empty), spec) -> tr.div_raises(spec)
+proof
+  assume hd
+  fix args w t
+  assume ha hw hwu hr
+  have ue := union2_empty[a := w]
+  have he := single_intro[a := empty]
+  have e0 := mp(all_elim(expand(hd, tr.div_raises_g), {args}, {w}, {empty}, {t}), ha, hw, hwu, he, rewrite(sym(ue), hr))
+  obtain e x, heu hne hx hrx from e0
+  have rs: abi.raise_state(x) by defs(hx, abi.raise_state)
+  show by ex_intro({e}, {x}, taut(heu, hne, rs, rewrite(ue, hrx)))
+qed
+
+// (the empty ghost part: in the universe)
+theorem ct.single_univ: all h. h in single(empty) -> h in univ(1)
+proof
+  fix h
+  assume hh
+  have e := mp(single_elim[a := empty, z := h], hh)
+  show by simp(e)
+qed
+
+// (a World state and the empty ghost part: the state the World's)
+theorem ct.w_single(w, h): w in abi.World -> w in univ(1) -> h in single(empty) ->
+  univ: union2(w, h) in univ(1) && vm: union2(w, h).vm in x86_64_linux.Vm
+proof
+  assume hw hwu hh
+  have e := mp(single_elim[a := empty, z := h], hh)
+  have ue: union2(w, h) = w := trans(subst({y. union2(w, h) = union2(w, y)}, e, refl({union2(w, h)})), union2_empty[a := w])
+  have wv: w.vm in x86_64_linux.Vm by simp(expand(hw, abi.World))
+  show by taut(rewrite(sym(ue), hwu), rewrite(sym(ue), wv))
+qed
+
+// (a memory havocked, then the step done: never diverging -- with no memory
+// to choose, any outcome)
+theorem ct.dv_havoc(y. P, y. q): all x0 x1. any_rel(y. P(y), y. x0 = ok(q(y), empty)) -> fst(x0) = 2 ->
+  any_rel(y. P(y), y. x1 = ok(q(y), empty))
+proof
+  fix x0 x1
+  assume h0 hf
+  have h := expand(h0, any_rel)
+  have c2: (ex y. P(y) && x0 = ok(q(y), empty)) -> false proof
+    assume e
+    obtain y, _ he from e
+    have z: fst(x0) = 0 by simp(he)
+    show by simp(z, hf)
+  qed
+  show by defs(taut(h, c2), any_rel)
+qed
+
+// (the body premise of `ct.contract_div`, for each shape of World spec: a
+// step done, a value returned -- after a choice or two)
+theorem ct.dv_ok_a(a): all x0 x1. x0 = ok(a, empty) -> fst(x0) = 2 -> x1 = ok(a, empty)
+proof
+  fix x0 x1
+  assume he hf
+  have z: fst(x0) = 0 by simp(he)
+  show by simp(z, hf)
+qed
+
+theorem ct.dv_exc_a(a, b): all x0 x1. x0 = exc(a, b) -> fst(x0) = 2 -> x1 = exc(a, b)
+proof
+  fix x0 x1
+  assume he hf
+  have n := apply(ct.exc_not2[x := x0, a := a, b := b], he)
+  show by taut(n, hf)
+qed
+
+theorem ct.dv_ret_a(x. d, s): all x0 x1. any_rel(y. d(y), y. x0 = exc(pair(s, empty), pair("ret", y))) -> fst(x0) = 2 ->
+  any_rel(y. d(y), y. x1 = exc(pair(s, empty), pair("ret", y)))
+proof
+  fix x0 x1
+  assume ha hf
+  show := apply(ct.dv_ret[d := y. d(y), s := s, x := x0, x2 := x1], ha, hf)
+qed
+
+theorem ct.dv_ret2_a(x. d, y z. e, y z. f, y z. g): all x0 x1.
+  any_rel(y. d(y), y. any_rel(z. e(y, z), z. x0 = exc(pair(f(y, z), empty), pair("ret", g(y, z))))) -> fst(x0) = 2 ->
+  any_rel(y. d(y), y. any_rel(z. e(y, z), z. x1 = exc(pair(f(y, z), empty), pair("ret", g(y, z)))))
+proof
+  fix x0 x1
+  assume ha hf
+  show := apply(ct.dv_ret2[d := y. d(y), e := y z. e(y, z), f := y z. f(y, z), g := y z. g(y, z), x := x0, x2 := x1], ha, hf)
+qed
+
+// (... a contract with no precondition: so too)
+theorem ct.contract_div0(x0 x2. B, s, t): s in univ(1) -> s.vm in x86_64_linux.Vm ->
+  runs(mkprog(x0 x1. ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2)))))),
+    s, diverge(t)) -> (all x x2. B(s, x) -> fst(x) = 2 -> B(s, x2)) ->
+  runs(mkprog(x0 x1. ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2)))))),
+    s, exc(s, empty))
+proof
+  assume hu hv hr hb
+  let OV(x2) := bind_rel(abi.overflow, s, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))
+  let D(x2, o) := (fst(x2) = 0 && o = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o = diverge(snd(x2))))
+  let X2 := exc(pair(s, empty), pair("raise", empty))
+  have r := apply(g.runs_elim, hr)
+  have pu: pair(s, exc(s, empty)) in univ(1) by simp(hu)
+  obtain x2, hob hd from r
+  have f2: fst(x2) = 2 by defs(simp(hd), ok, exc, diverge, tag)
+  have nov: !OV(x2) proof
+    assume h
+    obtain o1, hr1 hk1 from expand(h, bind_rel)
+    obtain v, _ ho1 from mp(all_elim(ct.overflow_inv, {s}, {o1}), hv, hr1)
+    have k := rewrite(ho1, hk1)
+    have n2 := ct.exc_not2[x := x2, a := pair(fn_update(s, "vm", v), empty), b := pair("raise", exc_val("stack_overflow", empty))]
+    show by defs(simp(k, f2, n2), ok, exc, diverge, tag)
+  qed
+  have bx := mp(all_elim(hb, {x2}, {X2}), taut(hob, nov), f2)
+  have dx: D(X2, exc(s, empty)) by defs(simp(), exc, tag, out_state, out_value)
+  have rr: ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty)) by ex_intro({X2}, taut(bx, dx))
+  show by apply(tr.runs_intro, pu, rr)
+qed

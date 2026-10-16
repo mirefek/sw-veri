@@ -7,10 +7,6 @@ summarized in docs/done.md.
 
 Every function's spec states its purpose (layers/mallocng_specs.sl), its
 code refining it directly (proofs/mallocng/fun/). Left over:
-- The ABI-level form of the functions with World specs (set_size,
-  dequeue, dequeue_head, queue, free_meta, the leaf specs; proved to
-  `tr.implements_at` so far): `tr.div_raises` of the spec by the World
-  variant of `ct.contract_div`.
 - What enframe's callers owe (malloc's): the class bound (its n within the
   class), the thread pointer's word apart from the slot (the C world's
   TLS), a stride below 2^31; the slot's access is the invariant's
@@ -127,6 +123,11 @@ holding for the empty heap.
   stated, framed and read each by its own copy of the same lemmas
   (`mp.mf_classes` / `mp.mf_debruijn`, `mp.lf_*`, `mp.*_table`): one
   predicate for a read-only table, framed once, would serve both.
+- A World spec's divergence lemma and its ABI form (`mp.X_divw`,
+  `mp.X_abi`) are the same 15 lines per function, differing only in the
+  spec function's shape (`ct.fun_divg` / `_v` / `_v0`) and the body's
+  (`ct.dv_havoc`, `ct.dv_exc_a`, ...): written from one template for eleven
+  functions. The checker could derive them from the spec's definition.
 - Finding an existing lemma: `mp.qu_q` was written a second time before
   the checker said it was proven; a search by statement shape (or by the
   names it mentions) would help.
