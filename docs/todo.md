@@ -22,10 +22,11 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   step (`mp.tkpre`, `mp.tk_holds_in`), are done, and so is a meta area
   added from the reserve (proofs/mallocng/model/newarea.core:
   `mp.na_holds_in`, its page made accessible by mprotect or fresh from
-  brk). Left: the reserve refilled (brk: the pages past the break, the
-  first time with a guard page; mmap: 2 << shift pages, the first a guard;
-  brk's failure: `ctx.brk = -1`) -- a range fresh, apart from the regions
-  as unmapped before; the first call's secret (get_random_secret: the
+  brk), and the reserve refilled from fresh pages
+  (proofs/mallocng/model/refill.core: `mp.rf_holds_in`; brk's pages past
+  the break or mmap's, a guard page aside -- apart from every region, the
+  owned bytes all mapped before: `mp.owned_mapped`). Left: brk's failure
+  (`ctx.brk = -1`); the first call's secret (get_random_secret: the
   auxiliary vector leaves the footprint); then the run (the GIMPLE walk
   under the callees' World specs, layers/mallocng_specs.sl) and the
   machine form. A failed mmap of the meta areas' doubling size keeps

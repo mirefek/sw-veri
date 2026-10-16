@@ -1288,3 +1288,101 @@ proof
   show := apply(mp.holds_supply[c := c, A := A, A2 := A2, M := M, M2 := M2, b := b, brk := vm.brk, brk2 := V1.brk], ha, hb, H, em, es, eu, ea, gbs, rcs,
     img, cok2, fr2, ar2, pt2, nm2, hbk2, pm2, sp2, cl, db, ff2, ga2)
 qed
+
+// The step: the invariant in memory for the refilled state
+theorem mp.rf_holds_in(c, A, vm, V1, b, R2, K, B): mp.rfpre(c, A, vm, V1, b, R2, K, B) -> mallocng.holds_in(c, mp.refill(A, R2, K, B), V1, b)
+proof
+  assume P
+  let A2 := mp.refill(A, R2, K, B)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  have {hc = cfg, hu = univ, ha = abs, hb = blocks, hh = holds, hpg = pages, hnp = newpg, h0 = empty, hn = nat} := P
+  have hro hko hbo := hn
+  have {H = inv, hm = mapped, hfr = free, hrw = rw} := expand(hh, mallocng.holds_in)
+  have h2 := apply(mp.rf_holds, P)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have em: A2.metas = A.metas by simp()
+  have es: A2.slots = A.slots by simp()
+  have eu: A2.used = A.used by simp()
+  // the owned bytes mapped: the old ones on their pages, the new reserve's fresh
+  have mq: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(mallocng.fp_ranges(c, A2))) && int_le(fst(mallocng.fp_ranges(c, A2)[x0]), x1)) &&
+      int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A2)[x0]), snd(mallocng.fp_ranges(c, A2)[x0])))) && !(x1 in malloc.live_of(b)) ->
+      x86_64_linux.mapped(V1, int_div(x1, x86_64_linux.PAGE)) proof
+    fix k a
+    assume ho h
+    have hk hao := ho
+    have hkl h1 h2 nl := h
+    have inr: mallocng.in_range(a, mallocng.fp_ranges(c, A2)[k]) by defs(taut(h1, h2), mallocng.in_range)
+    have ir2: mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) by defs(ex_intro({k}, taut(hk, hkl, inr)), mallocng.in_ranges)
+    have fpr := apply(mp.rf_fpr[c := c, A := A, R2 := R2, K := K, B := B, a := a], hc, hu, ha, h0, hro, hko, hbo)
+    have c1: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) -> x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
+      assume ir
+      have {m = mapped} := apply(mp.rf_old[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P, hao, ir)
+      have e := mp(all_elim(hpg, {int_div(a, x86_64_linux.PAGE)}), (int_div(a, x86_64_linux.PAGE) in omega by arith(kp, hao)), m)
+      show by defs(rewrite(sym(e), expand(m, x86_64_linux.mapped)), x86_64_linux.mapped)
+    qed
+    have c2: mallocng.in_range(a, pair(R2, int_mul(4096, K))) -> x86_64_linux.mapped(V1, int_div(a, x86_64_linux.PAGE)) proof
+      assume w
+      have w1 w2 := (int_le(R2, a) && int_lt(a, int_add(R2, int_mul(4096, K))) by simp(expand(w, mallocng.in_range)))
+      have mm _ _ := mp(all_elim(hnp, {a}), hao, w1, w2)
+      have mb mn := expand(mm, mallocng.m_mapped)
+      have p0 := apply(mp.pg_view[vm := V1, fp := mallocng.all_bytes(), a := a], hao, (a in mallocng.all_bytes() by defs(sel(taut(hao)), mallocng.all_bytes)))
+      show by defs(taut(mb, rewrite(p0, mn)), x86_64_linux.mapped)
+    qed
+    show by taut(fpr, ir2, c1, c2)
+  qed
+  have m2: mallocng.fp_mapped(mallocng.fp_ranges(c, A2), b, V1) by defs(mq, mallocng.fp_mapped)
+  // the free bytes: the context's, on pages mapped before
+  have fm: all a. a in omega -> mallocng.ctx_free(c, a) -> (a in mallocng.footprint(c, A, b) <-> a in mallocng.footprint(c, A2, b)) proof
+    fix a
+    assume hao hfa
+    have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+    have inc: int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))
+      by arith(expand(hfa, mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK), ks)
+    have i1 i2 := inc
+    have ir := apply(mp.rf_ctxown[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P, hao, i1, i2)
+    have {nn = old} := apply(mp.rf_old[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P, hao, ir)
+    have {ef = fp} := apply(mp.rf_held[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P)
+    show by taut(ef, nn)
+  qed
+  have f1 := apply(mp.free_rw_mem[c := c, vm := vm, F1 := mallocng.footprint(c, A, b), F2 := mallocng.footprint(c, A2, b)], hfr, fm)
+  have fq: all a. a in omega -> mallocng.ctx_free(c, a) -> mallocng.m_rw(mallocng.mview(V1, mallocng.footprint(c, A2, b)), a) &&
+      !(snd(mallocng.pg(mallocng.mview(V1, mallocng.footprint(c, A2, b)), a)).kind = 2) proof
+    fix a
+    assume hao hfa
+    have o1 o2 := mp(all_elim(expand(f1, mallocng.free_rw), {a}), hao, hfa)
+    have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+    have inc: int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))
+      by arith(expand(hfa, mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK), ks)
+    have i1 i2 := inc
+    have ir := apply(mp.rf_ctxown[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P, hao, i1, i2)
+    have {m = mapped} := apply(mp.rf_old[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P, hao, ir)
+    have ep := mp(all_elim(hpg, {int_div(a, x86_64_linux.PAGE)}), (int_div(a, x86_64_linux.PAGE) in omega by arith(kp, hao)), m)
+    have pe := apply(mp.view_pg1[vm := vm, vm2 := V1, fp := mallocng.footprint(c, A2, b), a := a], hao, ep)
+    have {rw = rw} := apply(mp.pg_same, pe)
+    show by taut(rw, o1, rewrite(sym(pe), o2))
+  qed
+  have f2: mallocng.free_rw(c, mallocng.mview(V1, mallocng.footprint(c, A2, b))) by defs(fq, mallocng.free_rw)
+  // the groups' bytes: on pages mapped before
+  have gq: all x0. all x1. x0 in omega && x1 in omega -> (mallocng.is_used(A2, x0) && mallocng.in_range(x1, mallocng.group_range(A2.metas[x0]))) &&
+      ((x1 in mallocng.footprint(c, A2, b) || x1 in malloc.live_of(b)) || mallocng.in_reserved(A2, x1)) ->
+      mallocng.m_rw(mallocng.mview(V1, mallocng.all_bytes()), x1) && !(snd(mallocng.pg(mallocng.mview(V1, mallocng.all_bytes()), x1)).kind = 2) proof
+    fix g a
+    assume ho h
+    have hg hao := ho
+    have iu2 inr2 w := h
+    have iu: mallocng.is_used(A, g) by defs(rewrite(eu, expand(iu2, mallocng.is_used)), mallocng.is_used)
+    have inr: mallocng.in_range(a, mallocng.group_range(A.metas[g])) := rewrite(em, inr2)
+    have {ow = own} := apply(mp.grp_own[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, a := a], hc, hu, ha, H, iu, hao, inr)
+    have {m = mapped, nn = old} := apply(mp.rf_old[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P, hao, ow)
+    have {ef = fp} := apply(mp.rf_held[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, a := a], P)
+    have re := apply(mp.inres_fields[A := A, A2 := A2, a := a], em, es, eu)
+    have w1: (a in mallocng.footprint(c, A, b) || a in malloc.live_of(b)) || mallocng.in_reserved(A, a) by taut(w, ef, nn, re)
+    have o1 o2 := mp(all_elim(expand(hrw, mallocng.grp_rw), {g}, {a}), ho, taut(iu, inr, w1))
+    have ep := mp(all_elim(hpg, {int_div(a, x86_64_linux.PAGE)}), (int_div(a, x86_64_linux.PAGE) in omega by arith(kp, hao)), m)
+    have pe := apply(mp.view_pg1[vm := vm, vm2 := V1, fp := mallocng.all_bytes(), a := a], hao, ep)
+    have {rw = rw} := apply(mp.pg_same, pe)
+    show by taut(rw, o1, rewrite(sym(pe), o2))
+  qed
+  have r2: mallocng.grp_rw(c, A2, V1, b) by defs(gq, mallocng.grp_rw)
+  show by defs(taut(h2, m2, f2, r2), mallocng.holds_in)
+qed
