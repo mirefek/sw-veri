@@ -1106,3 +1106,501 @@ proof
   show by defs(taut(k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13), mallocng.ctx_ok)
 qed
 
+// ----------------------------------------------------------------------
+//  Reads of zero bytes, pages of a view
+
+// (a sum of zeros)
+theorem mp.sum_zero(a, b, i. f): a in omega -> b in omega -> (all i. i in omega -> int_le(a, i) -> int_lt(i, b) -> f(i) = 0) ->
+  int_sum(a, b, i. f(i)) = 0
+proof
+  assume ha hb hz
+  have e := mp(int_sum_ext[a := a, b := b, f := i. f(i), g := i. 0], ha, hb, hz)
+  have base: nat_rec(empty, k v. int_add(v, 0), 0) = 0 by simp(rec({nat_rec(empty, k v. int_add(v, 0), 0)}), lit_zero)
+  have step: all n. n in omega -> nat_rec(empty, k v. int_add(v, 0), n) = 0 -> nat_rec(empty, k v. int_add(v, 0), int_add(n, 1)) = 0 proof
+    fix n
+    assume hn ih
+    have r := rec({nat_rec(empty, k v. int_add(v, 0), int_add(n, 1))}, hn)
+    show by simp(r, ih)
+  qed
+  have all_n: all n. n in omega -> nat_rec(empty, k v. int_add(v, 0), n) = 0 by induct(base, step)
+  have d: ite(int_le(a, b), int_sub(b, a), empty) in omega by simp(ha, hb, lit_zero)
+  have z := mp(all_elim(all_n, {ite(int_le(a, b), int_sub(b, a), empty)}), d)
+  have s0: int_sum(a, b, i. 0) = 0 by defs(z, int_sum)
+  show := trans(e, s0)
+qed
+
+// (n zero bytes read: 0)
+theorem mp.rd_zero(M, a, n): n in omega -> (all i. i in omega -> int_lt(i, n) -> mallocng.b8(M, int_add(a, i)) = 0) -> mallocng.rd(M, a, n) = 0
+proof
+  assume hn hz
+  have t: all i. i in omega -> int_le(0, i) -> int_lt(i, n) -> int_mul(mallocng.b8(M, int_add(a, i)), int_pow(256, i)) = 0 proof
+    fix i
+    assume hi _ hil
+    show by simp(mp(all_elim(hz, {i}), hi, hil))
+  qed
+  have s := mp(mp.sum_zero[a := 0, b := n, f := i. int_mul(mallocng.b8(M, int_add(a, i)), int_pow(256, i))], simp(), hn, t)
+  show by defs(s, mallocng.rd)
+qed
+
+// (a byte of a view: its page the memory's)
+theorem mp.pg_view(vm, fp, a): a in omega -> a in fp -> mallocng.pg(mallocng.mview(vm, fp), a) = vm.pages[int_div(a, x86_64_linux.PAGE)]
+proof
+  assume hao hf
+  have a1 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm.bytes[bits_of_int(64, x)], vm.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have v1: mallocng.pg(mallocng.mview(vm, fp), a) = snd(snd(ite(a in fp, some(pair(vm.bytes[bits_of_int(64, a)], vm.pages[int_div(a, x86_64_linux.PAGE)])), none)))
+    by defs(simp(a1), mallocng.pg, mallocng.mview)
+  show by defs(simp(v1, hf), some)
+qed
+
+// (two views of memories of the same page at a: the same page at a)
+theorem mp.view_pg1(vm, vm2, fp, a): a in omega -> vm2.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] ->
+  mallocng.pg(mallocng.mview(vm2, fp), a) = mallocng.pg(mallocng.mview(vm, fp), a)
+proof
+  assume hao ep
+  have a2 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm2.bytes[bits_of_int(64, x)], vm2.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have a1 := mp(app_fn_build[d := omega, v := x. ite(x in fp, some(pair(vm.bytes[bits_of_int(64, x)], vm.pages[int_div(x, x86_64_linux.PAGE)])), none), a := a], hao)
+  have v2: mallocng.pg(mallocng.mview(vm2, fp), a) = snd(snd(ite(a in fp, some(pair(vm2.bytes[bits_of_int(64, a)], vm2.pages[int_div(a, x86_64_linux.PAGE)])), none)))
+    by defs(simp(a2), mallocng.pg, mallocng.mview)
+  have v1: mallocng.pg(mallocng.mview(vm, fp), a) = snd(snd(ite(a in fp, some(pair(vm.bytes[bits_of_int(64, a)], vm.pages[int_div(a, x86_64_linux.PAGE)])), none)))
+    by defs(simp(a1), mallocng.pg, mallocng.mview)
+  have c1: a in fp -> mallocng.pg(mallocng.mview(vm2, fp), a) = mallocng.pg(mallocng.mview(vm, fp), a) proof
+    assume h
+    have w2: mallocng.pg(mallocng.mview(vm2, fp), a) = vm2.pages[int_div(a, x86_64_linux.PAGE)] by defs(simp(v2, h), some)
+    have w1: mallocng.pg(mallocng.mview(vm, fp), a) = vm.pages[int_div(a, x86_64_linux.PAGE)] by defs(simp(v1, h), some)
+    show by simp(w2, w1, ep)
+  qed
+  have c2: !(a in fp) -> mallocng.pg(mallocng.mview(vm2, fp), a) = mallocng.pg(mallocng.mview(vm, fp), a) proof
+    assume h
+    show by simp(v2, v1, h)
+  qed
+  show by taut(c1, c2)
+qed
+
+// a byte off the reserve's first page: its page as before
+theorem mp.na_pgeq(c, A, vm, V1, b, a): mp.napre(c, A, vm, V1, b) -> a in omega -> !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 4096))) ->
+  mallocng.pg(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), a) = mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a)
+proof
+  assume P hao np
+  have {hpg = pages} := P
+  have {hl = held} := apply(mp.na_basic, P)
+  have {ro = nat, ral = al} := apply(mp.na_res, P)
+  have e1 := apply(mp.view_mem[vm := V1, F1 := mallocng.held(c, mp.narea(A), b), F2 := mallocng.held(c, A, b), a := a], hao, all_elim(hl, {a}))
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have qn: !(int_div(a, x86_64_linux.PAGE) = int_div(A.reserve, 4096)) by arith(kp, hao, ro, ral, np)
+  have ep := mp(all_elim(hpg, {int_div(a, x86_64_linux.PAGE)}), (int_div(a, x86_64_linux.PAGE) in omega by arith(kp, hao)), qn)
+  have e2 := apply(mp.view_pg1[vm := vm, vm2 := V1, fp := mallocng.held(c, A, b), a := a], hao, ep)
+  have e1p: mallocng.pg(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), a) = mallocng.pg(mallocng.mview(V1, mallocng.held(c, A, b)), a)
+    by defs(simp(e1), mallocng.pg)
+  show := trans(e1p, e2)
+qed
+
+// a byte of the reserve's first page: accessible, not the stack
+theorem mp.na_rpg(c, A, vm, V1, b, a): mp.napre(c, A, vm, V1, b) -> a in omega -> int_le(A.reserve, a) -> int_lt(a, int_add(A.reserve, 4096)) ->
+  mallocng.m_rw(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), a) && !(snd(mallocng.pg(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), a)).kind = 2)
+proof
+  assume P hao h1 h2
+  have {hrc = rcnt, rw0 = pg0} := P
+  have {ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
+  have {hn = new} := apply(mp.na_resheld[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, h1, arith(h2, hrc, rc))
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have q: int_div(a, x86_64_linux.PAGE) = int_div(A.reserve, x86_64_linux.PAGE) by arith(kp, hao, ro, ral, h1, h2)
+  have p1 := apply(mp.pg_view[vm := V1, fp := mallocng.held(c, mp.narea(A), b), a := a], hao, hn)
+  have p0 := apply(mp.pg_view[vm := V1, fp := mallocng.all_bytes(), a := A.reserve], ro, (A.reserve in mallocng.all_bytes() by defs(sel(taut(ro)), mallocng.all_bytes)))
+  have e: mallocng.pg(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), a) = mallocng.pg(mallocng.mview(V1, mallocng.all_bytes()), A.reserve) := trans(rewrite(q, p1), sym(p0))
+  have r1 r2 := rw0
+  have ii: int_div(a, x86_64_linux.PAGE) = int_div(A.reserve, x86_64_linux.PAGE) := q
+  have r1e := rewrite(sym(ii), rewrite(sym(e), expand(r1, mallocng.m_rw, mallocng.m_mapped)))
+  show by defs(taut(r1e, rewrite(sym(e), r2)), mallocng.m_rw, mallocng.m_mapped)
+qed
+
+// the bytes of the new area past its check: 0 (the reserve's, not written)
+theorem mp.na_rzero(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) ->
+  mallocng.rd(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), int_add(A.reserve, 8), 8) = 0
+proof
+  assume P
+  have {hh = holds, hrc = rcnt, hby = bytes, hv = vm, hv1 = v1} := P
+  have {H = inv, hm = mapped} := expand(hh, mallocng.holds_in)
+  have {har = areas} := expand(H, mallocng.holds)
+  have {ar = reserve} := expand(har, mallocng.areas_ok)
+  have {ro = nat, rc = cnt, rend = end} := apply(mp.na_res, P)
+  have vb: vm.bytes in fn_space(bits(64), bits(8)) by simp(hv)
+  have vb1: V1.bytes in fn_space(bits(64), bits(8)) by simp(hv1)
+  have z: all i. i in omega -> int_lt(i, 8) -> mallocng.b8(mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), int_add(int_add(A.reserve, 8), i)) = 0 proof
+    fix i
+    assume hi hil
+    let a := int_add(int_add(A.reserve, 8), i)
+    have ao: a in omega by arith(ro, hi)
+    have r1: int_le(A.reserve, a) by arith(ro, hi)
+    have r2: int_lt(a, int_add(A.reserve, int_mul(4096, A.reserve_cnt))) by arith(hil, hrc, rc, hi)
+    have {ho = old, hn = new} := apply(mp.na_resheld[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, ao, r1, r2)
+    have e1 _ := apply(mp.b8_view[vm := V1, fp := mallocng.held(c, mp.narea(A), b), a := a], vb1, ao, hn)
+    have e0 _ := apply(mp.b8_view[vm := vm, fp := mallocng.held(c, A, b), a := a], vb, ao, ho)
+    have _ _ zb := mp(all_elim(ar, {a}), ao, conj(r1, r2))
+    have bi: bits_of_int(64, a) = a by defs(arith(ao, r2, rend), bits_of_int, pow2)
+    have ab: a in bits(64) by arith(ao, r2, rend)
+    have nw: !mp.nabyte(c, A, a) proof
+      assume w
+      have {hc = cfg, hu = univ, ha = abs} := P
+      have co: c.ctx in omega by simp(hc)
+      have ex1: (int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(c.ctx, 48))) || (int_le(int_add(c.ctx, 64), a) && int_lt(a, int_add(c.ctx, 80))) ||
+          (seq_len(A.areas) = 0 && (int_le(int_add(c.ctx, 56), a) && int_lt(a, int_add(c.ctx, 64)))) ||
+          (int_lt(0, seq_len(A.areas)) && (int_le(int_add(A.areas[int_sub(seq_len(A.areas), 1)], 8), a) && int_lt(a, int_add(A.areas[int_sub(seq_len(A.areas), 1)], 16))))
+        by taut(expand(w, mp.nabyte), (!(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 8))) by arith(hi)),
+          (!(int_le(int_add(A.reserve, 16), a) && int_lt(a, int_add(A.reserve, 20))) by arith(hil)))
+      // (those bytes the context's or an area's: not the reserve's)
+      have d0 _ _ := mp.data_at[c := c]
+      have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+      have inr: mallocng.in_range(a, pair(A.reserve, int_mul(4096, A.reserve_cnt))) by defs(simp(r1, r2), mallocng.in_range)
+      have nc: !(int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, 928))) proof
+        assume h
+        have i0: mallocng.in_range(a, mallocng.data_ranges(c)[0]) by defs(simp(d0, h, ks), mallocng.in_range)
+        have ex: ex j. j in omega && int_lt(j, 3) && mallocng.in_range(a, mallocng.data_ranges(c)[j]) by ex_intro({0}, taut((0 in omega by simp()), (int_lt(0, 3) by simp()), i0))
+        show by taut(apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := a], hc, hu, ha, H, taut(ex)), inr)
+      qed
+      have nt: !(int_lt(0, seq_len(A.areas)) && (int_le(int_add(A.areas[int_sub(seq_len(A.areas), 1)], 8), a) && int_lt(a, int_add(A.areas[int_sub(seq_len(A.areas), 1)], 16)))) proof
+        assume h
+        have h0 t1 t2 := h
+        have rl: A.areas in list_type(omega) by simp(ha)
+        have lo: seq_len(A.areas) in omega by arith(rl)
+        have ko: int_sub(seq_len(A.areas), 1) in omega by arith(lo, h0)
+        have tro := apply(at_type[l := A.areas, t := omega, i := int_sub(seq_len(A.areas), 1)], rl, ko, arith(lo, h0))
+        have {rs = reserve} := apply(mp.area_apart[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := int_sub(seq_len(A.areas), 1), a := a],
+          hc, hu, ha, H, ko, arith(lo, h0), ao, arith(t1, tro), arith(t2, tro))
+        show by taut(rs, inr)
+      qed
+      show by taut(ex1, nc, nt, (int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(c.ctx, 48)) -> int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, 928)) by arith(co)),
+        (int_le(int_add(c.ctx, 64), a) && int_lt(a, int_add(c.ctx, 80)) -> int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, 928)) by arith(co)),
+        (int_le(int_add(c.ctx, 56), a) && int_lt(a, int_add(c.ctx, 64)) -> int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, 928)) by arith(co)))
+    qed
+    have eb := mp(all_elim(hby, {a}), ab, nw)
+    show := trans(trans(rewrite(bi, e1), eb), trans(sym(rewrite(bi, e0)), zb))
+  qed
+  show := apply(mp.rd_zero, simp(), z)
+qed
+
+// (a header byte of an old area: held)
+theorem mp.na_hdrheld(c, A, vm, V1, b, k, a): mp.napre(c, A, vm, V1, b) -> k in omega -> int_lt(k, seq_len(A.areas)) -> a in omega ->
+  int_le(A.areas[k], a) -> int_lt(a, int_add(A.areas[k], 24)) -> a in mallocng.held(c, A, b)
+proof
+  assume P hk hkl hao h1 h2
+  have {hc = cfg, hu = univ, ha = abs, hh = holds} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {huo = used, hga = apart, hff = fixed} := expand(H, mallocng.holds)
+  have {fa = areas} := expand(hff, mallocng.fixed_free)
+  have nl := mp(all_elim(fa, {k}, {a}), conj(hk, hao), conj(conj(hkl, h1), (int_lt(a, int_add(A.areas[k], 4096)) by arith(h2))))
+  have nt := apply(mp.untaken_hdr[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := k, a := a], hc, hu, ha, H, hk, hkl, hao, h1, h2)
+  have fp := apply(mp.area_fp[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, k := k, a := a], hc, hu, ha, huo, hga, hk, hkl, hao, h1,
+    (int_lt(a, int_add(A.areas[k], 4096)) by arith(h2)), nl, nt)
+  show := apply(mp.area_held[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := k, a := a], hc, hu, ha, H, hk, hkl, hao, h1,
+    (int_lt(a, int_add(A.areas[k], 4096)) by arith(h2)), fp)
+qed
+
+// (a byte of the reserve but the new area's check and count: not written)
+theorem mp.na_resw(c, A, vm, V1, b, a): mp.napre(c, A, vm, V1, b) -> a in omega ->
+  int_le(A.reserve, a) -> int_lt(a, int_add(A.reserve, int_mul(4096, A.reserve_cnt))) ->
+  !(int_le(A.reserve, a) && int_lt(a, int_add(A.reserve, 8))) -> !(int_le(int_add(A.reserve, 16), a) && int_lt(a, int_add(A.reserve, 20))) ->
+  !mp.nabyte(c, A, a)
+proof
+  assume P ao r1 r2 n1 n2
+  have {hc = cfg, hu = univ, ha = abs, hh = holds} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have co: c.ctx in omega by simp(hc)
+  have d0 _ _ := mp.data_at[c := c]
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have inr: mallocng.in_range(a, pair(A.reserve, int_mul(4096, A.reserve_cnt))) by defs(simp(r1, r2), mallocng.in_range)
+  have nc: !(int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, 928))) proof
+    assume h
+    have i0: mallocng.in_range(a, mallocng.data_ranges(c)[0]) by defs(simp(d0, h, ks), mallocng.in_range)
+    have ex: ex j. j in omega && int_lt(j, 3) && mallocng.in_range(a, mallocng.data_ranges(c)[j]) by ex_intro({0}, taut((0 in omega by simp()), (int_lt(0, 3) by simp()), i0))
+    show by taut(apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := a], hc, hu, ha, H, taut(ex)), inr)
+  qed
+  have nt: !(int_lt(0, seq_len(A.areas)) && (int_le(int_add(A.areas[int_sub(seq_len(A.areas), 1)], 8), a) && int_lt(a, int_add(A.areas[int_sub(seq_len(A.areas), 1)], 16)))) proof
+    assume h
+    have h0 t1 t2 := h
+    have rl: A.areas in list_type(omega) by simp(ha)
+    have lo: seq_len(A.areas) in omega by arith(rl)
+    have ko: int_sub(seq_len(A.areas), 1) in omega by arith(lo, h0)
+    have tro := apply(at_type[l := A.areas, t := omega, i := int_sub(seq_len(A.areas), 1)], rl, ko, arith(lo, h0))
+    have {rs = reserve} := apply(mp.area_apart[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := int_sub(seq_len(A.areas), 1), a := a],
+      hc, hu, ha, H, ko, arith(lo, h0), ao, arith(t1, tro), arith(t2, tro))
+    show by taut(rs, inr)
+  qed
+  show by defs(taut(nc, nt, n1, n2, (!(int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(c.ctx, 48))) by arith(nc, co)),
+    (!(int_le(int_add(c.ctx, 64), a) && int_lt(a, int_add(c.ctx, 80))) by arith(nc, co)),
+    (!(int_le(int_add(c.ctx, 56), a) && int_lt(a, int_add(c.ctx, 64))) by arith(nc, co))), mp.nabyte)
+qed
+
+// the meta areas for the new state: the old ones (the last linked to the
+// new one), the new one's header as written and its page accessible, the
+// reserve past it as before
+theorem mp.na_areas(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) ->
+  mallocng.areas_ok(c, mp.narea(A), mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)))
+proof
+  assume P
+  let A2 := mp.narea(A)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  let M2 := mallocng.mview(V1, mallocng.held(c, A2, b))
+  let n := seq_len(A.areas)
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt, x56 = w56, x64 = w64, xnx = wnx, xck = wck, xns = wns} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {har = areas} := expand(H, mallocng.holds)
+  have {ah = head, ae = each, ad = distinct, ar = reserve} := expand(har, mallocng.areas_ok)
+  have {et = taken} := apply(mp.na_basic, P)
+  have {l2 = len, lst = last, od = old} := apply(mp.na_last, P)
+  have {ro = nat, rc = cnt, ral = al, rpos = pos, rend = end} := apply(mp.na_res, P)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have no: n in omega by arith(rl)
+  have co: c.ctx in omega by simp(hc)
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have vh vt := (mallocng.C_AREA_HEAD = 56 && mallocng.C_AREA_TAIL = 64 by defs(simp(), mallocng.C_AREA_HEAD, mallocng.C_AREA_TAIL))
+  have nz: !(seq_len(A2.areas) = 0) by arith(l2, no)
+  // the head and tail words
+  have it0: ite(seq_len(A2.areas) = 0, 0, A2.areas[0]) = A2.areas[0] := mp(ite_f[c := seq_len(A2.areas) = 0, a := 0, b := A2.areas[0]], nz)
+  have k1: mallocng.ctx_word(c, M2, mallocng.C_AREA_HEAD) = ite(seq_len(A2.areas) = 0, 0, A2.areas[0]) proof
+    have c0: n = 0 -> mallocng.ctx_word(c, M2, mallocng.C_AREA_HEAD) = ite(seq_len(A2.areas) = 0, 0, A2.areas[0]) proof
+      assume e
+      have q := apply(mp.na_cwr[c := c, A := A, vm := vm, V1 := V1, b := b, off := 56, v := A.reserve], P, simp(), arith(), arith(), mp(x56, e))
+      have g := subst({y. mallocng.ctx_word(c, M2, y) = A.reserve}, sym(vh), q)
+      have i0: int_sub(seq_len(A2.areas), 1) = 0 by arith(l2, e)
+      have a0: A2.areas[0] = A.reserve := subst({y. A2.areas[y] = A.reserve}, i0, lst)
+      show := trans(g, trans(sym(a0), sym(it0)))
+    qed
+    have c1: !(n = 0) -> mallocng.ctx_word(c, M2, mallocng.C_AREA_HEAD) = ite(seq_len(A2.areas) = 0, 0, A2.areas[0]) proof
+      assume e
+      have q := apply(mp.na_cw[c := c, A := A, vm := vm, V1 := V1, b := b, off := 56], P, simp(), arith(ks),
+        ((int_le(int_add(56, 8), 24) || (int_le(48, 56) && int_le(int_add(56, 8), 56)) || (int_lt(0, seq_len(A.areas)) && int_le(56, 56) && int_le(int_add(56, 8), 64)) ||
+          int_le(80, 56)) by arith(e, no)))
+      have g := subst({y. mallocng.ctx_word(c, M2, y) = mallocng.ctx_word(c, M, y)}, sym(vh), q)
+      have a0 := mp(all_elim(od, {0}), simp(), arith(e, no))
+      have h0: mallocng.ctx_word(c, M, mallocng.C_AREA_HEAD) = A.areas[0] := trans(ah, mp(ite_f[c := n = 0, a := 0, b := A.areas[0]], e))
+      show := trans(trans(g, h0), trans(sym(a0), sym(it0)))
+    qed
+    show by taut(c0, c1)
+  qed
+  have q64 := apply(mp.na_cwr[c := c, A := A, vm := vm, V1 := V1, b := b, off := 64, v := A.reserve], P, simp(), arith(), arith(), x64)
+  have k2: mallocng.ctx_word(c, M2, mallocng.C_AREA_TAIL) = ite(seq_len(A2.areas) = 0, 0, A2.areas[int_sub(seq_len(A2.areas), 1)]) :=
+    trans(subst({y. mallocng.ctx_word(c, M2, y) = A.reserve}, sym(vt), q64),
+      trans(sym(lst), sym(mp(ite_f[c := seq_len(A2.areas) = 0, a := 0, b := A2.areas[int_sub(seq_len(A2.areas), 1)]], nz))))
+  // each area
+  have k3: all x0. x0 in omega -> int_lt(x0, seq_len(A2.areas)) ->
+      ((((((int_mod(A2.areas[x0], 4096) = 0 && int_lt(0, A2.areas[x0])) && mallocng.rd(M2, A2.areas[x0], 8) = A2.secret) &&
+        mallocng.rd(M2, int_add(A2.areas[x0], 8), 8) = ite(int_lt(int_add(x0, 1), seq_len(A2.areas)), A2.areas[int_add(x0, 1)], 0)) &&
+        mallocng.rd(M2, int_add(A2.areas[x0], 16), 4) = mallocng.NSLOTS) &&
+        (all x1. x1 in omega -> (int_le(A2.areas[x0], x1) && int_lt(x1, int_add(A2.areas[x0], 4096))) && !mallocng.in_taken(A2, x1) ->
+           mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2)))) proof
+    fix k
+    assume hk hkl
+    have es: A2.secret = A.secret by simp()
+    // an old area
+    have cold: int_lt(k, n) -> ((((((int_mod(A2.areas[k], 4096) = 0 && int_lt(0, A2.areas[k])) && mallocng.rd(M2, A2.areas[k], 8) = A2.secret) &&
+        mallocng.rd(M2, int_add(A2.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0)) &&
+        mallocng.rd(M2, int_add(A2.areas[k], 16), 4) = mallocng.NSLOTS) &&
+        (all x1. x1 in omega -> (int_le(A2.areas[k], x1) && int_lt(x1, int_add(A2.areas[k], 4096))) && !mallocng.in_taken(A2, x1) ->
+           mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2)))) proof
+      assume hl
+      have ek := mp(all_elim(od, {k}), hk, hl)
+      have e1 e2 e3 e4 e5 e6 := mp(all_elim(ae, {k}), hk, hl)
+      have ako := apply(at_type[l := A.areas, t := omega, i := k], rl, hk, hl)
+      have hb: all o. all m. o in omega -> m in omega -> int_le(int_add(o, m), 24) -> !(k = int_sub(n, 1) && int_lt(8, int_add(o, m)) && int_lt(o, 16)) ->
+          mallocng.rd(M2, int_add(A.areas[k], o), m) = mallocng.rd(M, int_add(A.areas[k], o), m) proof
+        fix o m
+        assume ho hm hle hn8
+        have ai: all j. j in omega -> int_lt(j, m) -> M2[int_add(int_add(A.areas[k], o), j)] = M[int_add(int_add(A.areas[k], o), j)] proof
+          fix j
+          assume hj hjl
+          show := apply(mp.na_area[c := c, A := A, vm := vm, V1 := V1, b := b, k := k, a := int_add(int_add(A.areas[k], o), j)], P, hk, hl, simp(ako, ho, hj),
+            arith(ako, ho, hj), arith(ako, ho, hj, hjl, hle), arith(ako, ho, hj, hjl, hn8, hle))
+        qed
+        show := apply(mp.agree_rd, hm, ai)
+      qed
+      have r0 := rewrite((int_add(A.areas[k], 0) = A.areas[k] by arith(ako)), mp(all_elim(hb, {0}, {8}), simp(), simp(), simp(), arith()))
+      have r16 := mp(all_elim(hb, {16}, {4}), simp(), simp(), simp(), arith())
+      // (its next link: the next old area's, or the new one for the last)
+      have n8: mallocng.rd(M2, int_add(A.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0) proof
+        have it1: ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0) = A2.areas[int_add(k, 1)] :=
+          mp(ite_t[c := int_lt(int_add(k, 1), seq_len(A2.areas)), a := A2.areas[int_add(k, 1)], b := 0], arith(l2, hl))
+        have d1: int_lt(int_add(k, 1), n) -> mallocng.rd(M2, int_add(A.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0) proof
+          assume h
+          have r8 := mp(all_elim(hb, {8}, {8}), simp(), simp(), simp(), arith(h, hk))
+          have o8 := trans(e4, mp(ite_t[c := int_lt(int_add(k, 1), n), a := A.areas[int_add(k, 1)], b := 0], h))
+          have ek1 := mp(all_elim(od, {int_add(k, 1)}), simp(hk), h)
+          show := trans(trans(r8, o8), trans(sym(ek1), sym(it1)))
+        qed
+        have d2: !int_lt(int_add(k, 1), n) -> mallocng.rd(M2, int_add(A.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0) proof
+          assume h
+          have kl: k = int_sub(n, 1) by arith(h, hl, hk)
+          have hd: all i. i in omega -> int_lt(i, 8) -> int_add(int_add(A.areas[k], 8), i) in mallocng.held(c, A, b) proof
+            fix i
+            assume hi hil
+            show := apply(mp.na_hdrheld[c := c, A := A, vm := vm, V1 := V1, b := b, k := k, a := int_add(int_add(A.areas[k], 8), i)], P, hk, hl, arith(ako, hi),
+              arith(ako, hi), arith(ako, hi, hil))
+          qed
+          have rd := apply(mp.na_read[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(A.areas[k], 8), n := 8], P, arith(ako), simp(), arith(), hd)
+          have w := mp(xnx, (int_lt(0, n) by arith(hl, hk)))
+          have wk := subst({y. gimple.bytes_at(V1, int_add(A.areas[y], 8), 8) = A.reserve}, sym(kl), w)
+          have i1: int_add(k, 1) = int_sub(seq_len(A2.areas), 1) by arith(kl, l2, hl, hk)
+          have an := subst({y. A2.areas[y] = A.reserve}, sym(i1), lst)
+          show := trans(trans(sym(rd), wk), trans(sym(an), sym(it1)))
+        qed
+        show by taut(d1, d2)
+      qed
+      have p6: all x1. x1 in omega -> (int_le(A.areas[k], x1) && int_lt(x1, int_add(A.areas[k], 4096))) && !mallocng.in_taken(A2, x1) ->
+          mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2) proof
+        fix y
+        assume hy hyr
+        have yr1 yr2 nt := hyr
+        have nt1: !mallocng.in_taken(A, y) by taut(apply(mp.taken_eq[A := A, A2 := A2, a := y], et), nt)
+        have {rs = reserve} := apply(mp.area_apart[c := c, A := A, M := M, b := b, brk := vm.brk, k := k, a := y], hc, hu, ha, H, hk, hl, hy, yr1, yr2)
+        have rs2: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(rs, mallocng.in_range))
+        have np: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, 4096))) by arith(rs2, hrc, rc)
+        have pe := apply(mp.na_pgeq[c := c, A := A, vm := vm, V1 := V1, b := b, a := y], P, hy, np)
+        have {rw = rw} := apply(mp.pg_same, pe)
+        have o1 o2 := mp(all_elim(e6, {y}), hy, conj(conj(yr1, yr2), nt1))
+        show by taut(rw, o1, rewrite(sym(pe), o2))
+      qed
+      have g: ((((((int_mod(A.areas[k], 4096) = 0 && int_lt(0, A.areas[k])) && mallocng.rd(M2, A.areas[k], 8) = A2.secret) &&
+          mallocng.rd(M2, int_add(A.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0)) &&
+          mallocng.rd(M2, int_add(A.areas[k], 16), 4) = mallocng.NSLOTS) &&
+          (all x1. x1 in omega -> (int_le(A.areas[k], x1) && int_lt(x1, int_add(A.areas[k], 4096))) && !mallocng.in_taken(A2, x1) ->
+             mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2))))
+        by taut(e1, e2, trans(trans(r0, e3), sym(es)), n8, trans(r16, e5), p6)
+      show := subst({y. ((((((int_mod(y, 4096) = 0 && int_lt(0, y)) && mallocng.rd(M2, y, 8) = A2.secret) &&
+          mallocng.rd(M2, int_add(y, 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0)) &&
+          mallocng.rd(M2, int_add(y, 16), 4) = mallocng.NSLOTS) &&
+          (all x1. x1 in omega -> (int_le(y, x1) && int_lt(x1, int_add(y, 4096))) && !mallocng.in_taken(A2, x1) ->
+             mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2))))}, sym(ek), g)
+    qed
+    // the new one
+    have cnew: k = n -> ((((((int_mod(A2.areas[k], 4096) = 0 && int_lt(0, A2.areas[k])) && mallocng.rd(M2, A2.areas[k], 8) = A2.secret) &&
+        mallocng.rd(M2, int_add(A2.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0)) &&
+        mallocng.rd(M2, int_add(A2.areas[k], 16), 4) = mallocng.NSLOTS) &&
+        (all x1. x1 in omega -> (int_le(A2.areas[k], x1) && int_lt(x1, int_add(A2.areas[k], 4096))) && !mallocng.in_taken(A2, x1) ->
+           mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2)))) proof
+      assume e
+      have i0: int_sub(seq_len(A2.areas), 1) = k by arith(l2, e)
+      have ek: A2.areas[k] = A.reserve := subst({y. A2.areas[y] = A.reserve}, i0, lst)
+      have hd0: all i. i in omega -> int_lt(i, 8) -> int_add(A.reserve, i) in mallocng.held(c, A, b) proof
+        fix i
+        assume hi hil
+        have {q = old} := apply(mp.na_resheld[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(A.reserve, i)], P, arith(ro, hi), arith(ro, hi), arith(hil, hrc, rc, hi))
+        show := q
+      qed
+      have hd16: all i. i in omega -> int_lt(i, 4) -> int_add(int_add(A.reserve, 16), i) in mallocng.held(c, A, b) proof
+        fix i
+        assume hi hil
+        have {q = old} := apply(mp.na_resheld[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(int_add(A.reserve, 16), i)], P, arith(ro, hi), arith(ro, hi), arith(hil, hrc, rc, hi))
+        show := q
+      qed
+      have r0 := apply(mp.na_read[c := c, A := A, vm := vm, V1 := V1, b := b, a := A.reserve, n := 8], P, ro, simp(), arith(), hd0)
+      have r16 := apply(mp.na_read[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(A.reserve, 16), n := 4], P, arith(ro), simp(), arith(), hd16)
+      have es: A2.secret = A.secret by simp()
+      have it: ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0) = 0 :=
+        mp(ite_f[c := int_lt(int_add(k, 1), seq_len(A2.areas)), a := A2.areas[int_add(k, 1)], b := 0], arith(l2, e))
+      have z8 := apply(mp.na_rzero, P)
+      have p6: all x1. x1 in omega -> (int_le(A.reserve, x1) && int_lt(x1, int_add(A.reserve, 4096))) && !mallocng.in_taken(A2, x1) ->
+          mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2) proof
+        fix y
+        assume hy hyr
+        have y1 y2 _ := hyr
+        show := apply(mp.na_rpg[c := c, A := A, vm := vm, V1 := V1, b := b, a := y], P, hy, y1, y2)
+      qed
+      have g: ((((((int_mod(A.reserve, 4096) = 0 && int_lt(0, A.reserve)) && mallocng.rd(M2, A.reserve, 8) = A2.secret) &&
+          mallocng.rd(M2, int_add(A.reserve, 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0)) &&
+          mallocng.rd(M2, int_add(A.reserve, 16), 4) = mallocng.NSLOTS) &&
+          (all x1. x1 in omega -> (int_le(A.reserve, x1) && int_lt(x1, int_add(A.reserve, 4096))) && !mallocng.in_taken(A2, x1) ->
+             mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2))))
+        by taut(ral, rpos, trans(trans(sym(r0), xck), sym(es)), trans(z8, sym(it)), trans(sym(r16), xns), p6)
+      show := subst({y. ((((((int_mod(y, 4096) = 0 && int_lt(0, y)) && mallocng.rd(M2, y, 8) = A2.secret) &&
+          mallocng.rd(M2, int_add(y, 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A2.areas)), A2.areas[int_add(k, 1)], 0)) &&
+          mallocng.rd(M2, int_add(y, 16), 4) = mallocng.NSLOTS) &&
+          (all x1. x1 in omega -> (int_le(y, x1) && int_lt(x1, int_add(y, 4096))) && !mallocng.in_taken(A2, x1) ->
+             mallocng.m_rw(M2, x1) && !(snd(mallocng.pg(M2, x1)).kind = 2))))}, sym(ek), g)
+    qed
+    show by taut(cold, cnew, (int_lt(k, n) || k = n by arith(hkl, l2, hk)))
+  qed
+  // distinct: the new one in none of the old ones
+  have nr: all k. k in omega -> int_lt(k, n) -> !(A.areas[k] = A.reserve) proof
+    fix k
+    assume hk hkl
+    assume e
+    have ako := apply(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+    have {rs = reserve} := apply(mp.area_apart[c := c, A := A, M := M, b := b, brk := vm.brk, k := k, a := A.areas[k]], hc, hu, ha, H, hk, hkl, ako, arith(ako), arith(ako))
+    have rs2: !(int_le(A.reserve, A.areas[k]) && int_lt(A.areas[k], int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(rs, mallocng.in_range))
+    show by arith(rs2, e, hrc, rc, ro)
+  qed
+  have k4: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(A2.areas)) && int_lt(x1, seq_len(A2.areas))) && A2.areas[x0] = A2.areas[x1] -> x0 = x1 proof
+    fix k l
+    assume hkl hb
+    have hk hl := hkl
+    have kb lb he := hb
+    have val: all j. j in omega -> int_lt(j, seq_len(A2.areas)) -> (int_lt(j, n) && A2.areas[j] = A.areas[j]) || (j = n && A2.areas[j] = A.reserve) proof
+      fix j
+      assume hj hjl
+      have d1: int_lt(j, n) -> (int_lt(j, n) && A2.areas[j] = A.areas[j]) || (j = n && A2.areas[j] = A.reserve) proof
+        assume h
+        show by taut(h, mp(all_elim(od, {j}), hj, h))
+      qed
+      have d2: j = n -> (int_lt(j, n) && A2.areas[j] = A.areas[j]) || (j = n && A2.areas[j] = A.reserve) proof
+        assume h
+        have i0: int_sub(seq_len(A2.areas), 1) = j by arith(l2, h)
+        show by taut(h, subst({y. A2.areas[y] = A.reserve}, i0, lst))
+      qed
+      show by taut(d1, d2, (int_lt(j, n) || j = n by arith(hjl, l2, hj)))
+    qed
+    have vk := mp(all_elim(val, {k}), hk, kb)
+    have vl := mp(all_elim(val, {l}), hl, lb)
+    have b1: int_lt(k, n) && int_lt(l, n) -> k = l proof
+      assume h
+      have h1 h2 := h
+      have ek := mp(all_elim(od, {k}), hk, h1)
+      have el := mp(all_elim(od, {l}), hl, h2)
+      show := mp(all_elim(ad, {k}, {l}), conj(hk, hl), conj(conj(h1, h2), trans(trans(sym(ek), he), el)))
+    qed
+    have b2: int_lt(k, n) && l = n -> k = l proof
+      assume h
+      have h1 h2 := h
+      have ek := mp(all_elim(od, {k}), hk, h1)
+      have i0: int_sub(seq_len(A2.areas), 1) = l by arith(l2, h2)
+      have el := subst({y. A2.areas[y] = A.reserve}, i0, lst)
+      show by taut(mp(all_elim(nr, {k}), hk, h1), trans(trans(sym(ek), he), el))
+    qed
+    have b3: k = n && int_lt(l, n) -> k = l proof
+      assume h
+      have h1 h2 := h
+      have el := mp(all_elim(od, {l}), hl, h2)
+      have i0: int_sub(seq_len(A2.areas), 1) = k by arith(l2, h1)
+      have ek := subst({y. A2.areas[y] = A.reserve}, i0, lst)
+      show by taut(mp(all_elim(nr, {l}), hl, h2), trans(trans(sym(el), sym(he)), ek))
+    qed
+    show by taut(vk, vl, b1, b2, b3, (k = n && l = n -> k = l by arith()))
+  qed
+  // the reserve past the new area: as before
+  have k5: all x0. x0 in omega -> int_le(A2.reserve, x0) && int_lt(x0, int_add(A2.reserve, int_mul(4096, A2.reserve_cnt))) ->
+      mallocng.m_mapped(M2, x0) && !(snd(mallocng.pg(M2, x0)).kind = 2) && mallocng.b8(M2, x0) = 0 proof
+    fix y
+    assume hy hyr
+    have y1 y2 := hyr
+    have c1: A.reserve_cnt = 1 -> mallocng.m_mapped(M2, y) && !(snd(mallocng.pg(M2, y)).kind = 2) && mallocng.b8(M2, y) = 0 proof
+      assume e
+      have z: A2.reserve_cnt = 0 by simp(e)
+      show by arith(y1, y2, z)
+    qed
+    have c2: !(A.reserve_cnt = 1) -> mallocng.m_mapped(M2, y) && !(snd(mallocng.pg(M2, y)).kind = 2) && mallocng.b8(M2, y) = 0 proof
+      assume e
+      have e1: A2.reserve = int_add(A.reserve, 4096) by simp(e)
+      have e2: A2.reserve_cnt = int_sub(A.reserve_cnt, 1) by simp(e)
+      have r1: int_le(A.reserve, y) by arith(y1, e1, ro)
+      have r2: int_lt(y, int_add(A.reserve, int_mul(4096, A.reserve_cnt))) by arith(y2, e1, e2, hrc, rc, ro)
+      have np: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, 4096))) by arith(y1, e1)
+      have nw := apply(mp.na_resw[c := c, A := A, vm := vm, V1 := V1, b := b, a := y], P, hy, r1, r2, arith(y1, e1), arith(y1, e1))
+      have eq := apply(mp.na_ag[c := c, A := A, vm := vm, V1 := V1, b := b, a := y], P, hy, nw, np)
+      have {eb = byte, ep = page} := apply(mp.agree_b8, eq)
+      have {mm = mapped} := apply(mp.pg_same, ep)
+      have o1 o2 o3 := mp(all_elim(ar, {y}), hy, conj(r1, r2))
+      show by taut(mm, o1, rewrite(sym(ep), o2), rewrite(sym(eb), o3))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(simp(k1, k2, k3, k4, k5), mallocng.areas_ok)
+qed
+
