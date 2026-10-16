@@ -786,3 +786,140 @@ proof
   show by defs(taut(c1, c2, c3, c4, c5, c6), mallocng.metas_partition)
 qed
 
+// ----------------------------------------------------------------------
+//  The area's next meta taken (alloc_meta's `m = ctx.avail_metas++`, the
+//  count one less): the state `mp.tav`, the invariant kept
+
+// the area's first available meta, and the state with it taken
+abbrev mp.anext(A) := mallocng.meta_at(A.areas[int_sub(seq_len(A.areas), 1)], int_sub(mallocng.NSLOTS, A.avail_cnt))
+abbrev mp.tav(A) := mp.take(A, A.free_metas, int_sub(A.avail_cnt, 1), mp.anext(A))
+
+// the step: a meta available; the memory written at the context's
+// available meta and count words only, to the next meta and the count
+// less one, the pages and the rest as before
+abbrev mp.tavpre(c, A, vm, V1, b) := cfg: c in mallocng.Cfg && univ: A in univ(1) && abs: A in mallocng.Abs &&
+  blocks: b in fn_space(bits(64), option(omega)) && vm: vm in x86_64_linux.Vm && v1: V1 in x86_64_linux.Vm &&
+  holds: mallocng.holds_in(c, A, vm, b) && cnt: int_lt(0, A.avail_cnt) &&
+  bytes: (all y. y in bits(64) -> !(int_le(int_add(c.ctx, 24), y) && int_lt(y, int_add(c.ctx, 40))) -> V1.bytes[y] = vm.bytes[y]) &&
+  pages: V1.pages = vm.pages && rest: fn_update(V1, "bytes", vm.bytes) = vm &&
+  w32: gimple.bytes_at(V1, int_add(c.ctx, 32), 8) = int_sub(A.avail_cnt, 1) &&
+  w24: gimple.bytes_at(V1, int_add(c.ctx, 24), 8) = int_add(mp.anext(A), 40)
+
+// (the step's facts: the new state's type and parts, the next meta's place)
+theorem mp.tav_basic(c, A, vm, V1, b): mp.tavpre(c, A, vm, V1, b) ->
+  abs: mp.tav(A) in mallocng.Abs && univ: mp.tav(A) in univ(1) &&
+  metas: mp.tav(A).metas = A.metas && slots: mp.tav(A).slots = A.slots && used: mp.tav(A).used = A.used && active: mp.tav(A).active = A.active &&
+  areas: mp.tav(A).areas = A.areas && free: mp.tav(A).free_metas = A.free_metas && cnt: mp.tav(A).avail_cnt = int_sub(A.avail_cnt, 1) &&
+  taken: mp.tav(A).taken = seq_concat(A.taken, seq_one(mp.anext(A))) &&
+  ranges: mallocng.fp_ranges(c, mp.tav(A)) = mallocng.fp_ranges(c, A) && regions: mallocng.regions(c, mp.tav(A)) = mallocng.regions(c, A) &&
+  fixed: mallocng.fixed_ranges(c, mp.tav(A)) = mallocng.fixed_ranges(c, A) &&
+  tl: A.taken in list_type(omega) && nat: mp.anext(A) in omega && le: int_le(A.avail_cnt, mallocng.NSLOTS) &&
+  len: ord_lt(0, seq_len(A.areas)) && word: mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.C_AVAIL_META) = mp.anext(A) &&
+  page: (ex k. k in omega && int_lt(k, seq_len(A.areas)) && int_le(int_add(A.areas[k], 24), mp.anext(A)) &&
+     int_le(int_add(mp.anext(A), 40), int_add(A.areas[k], 4096)) && int_mod(A.areas[k], 4096) = 0)
+proof
+  assume P
+  have {ha = abs, hh = holds, hk = cnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {cok = ctx, hpt = part, har = areas} := expand(H, mallocng.holds)
+  have {cle = avail_le, cam = avail_meta} := expand(cok, mallocng.ctx_ok)
+  have cl cw := mp(cam, hk)
+  have tl: A.taken in list_type(omega) by simp(ha)
+  have fl: A.free_metas in list_type(omega) by simp(ha)
+  have ko: A.avail_cnt in omega by simp(ha)
+  have km: int_sub(A.avail_cnt, 1) in omega by arith(ko, hk)
+  have al: A.areas in list_type(omega) by simp(ha)
+  have lno: seq_len(A.areas) in omega by arith(al)
+  have hni := mp(nat_mem_lt[k := seq_len(A.areas), i := 0], lno, expand(cl, ord_lt))
+  let LK := int_sub(seq_len(A.areas), 1)
+  have lo: LK in omega by arith(al, hni)
+  have lol: int_lt(LK, seq_len(A.areas)) by arith(al, hni)
+  have Lo := apply(at_type[l := A.areas, t := omega, i := LK], al, lo, lol)
+  have cs: mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS)
+  have _ _ c101 := cs
+  have kle := rewrite(c101, cle)
+  have xe: mp.anext(A) = int_add(int_add(A.areas[LK], 24), int_mul(40, int_sub(101, A.avail_cnt))) by defs(simp(cs), mallocng.meta_at)
+  have xo: mp.anext(A) in omega by arith(xe, Lo, ko, kle)
+  have {ty = abs, tu = univ} := apply(mp.take_type[A := A, F := A.free_metas, n := int_sub(A.avail_cnt, 1), x := mp.anext(A)], ha, fl, km, xo)
+  have fpr: mallocng.fp_ranges(c, mp.tav(A)) = mallocng.fp_ranges(c, A) by defs(simp(), mallocng.fp_ranges, mallocng.fixed_ranges, mallocng.auxv_ranges)
+  have rgr: mallocng.regions(c, mp.tav(A)) = mallocng.regions(c, A) by defs(simp(), mallocng.regions)
+  have fxr: mallocng.fixed_ranges(c, mp.tav(A)) = mallocng.fixed_ranges(c, A) by defs(simp(), mallocng.fixed_ranges, mallocng.auxv_ranges)
+  have {aeach = each} := expand(har, mallocng.areas_ok)
+  have am _ _ _ _ _ := mp(all_elim(aeach, {LK}), lo, lol)
+  have pg: ex k. k in omega && int_lt(k, seq_len(A.areas)) && int_le(int_add(A.areas[k], 24), mp.anext(A)) &&
+      int_le(int_add(mp.anext(A), 40), int_add(A.areas[k], 4096)) && int_mod(A.areas[k], 4096) = 0
+    by ex_intro({LK}, taut(lo, lol, (int_le(int_add(A.areas[LK], 24), mp.anext(A)) by arith(xe, Lo, ko, kle)),
+      (int_le(int_add(mp.anext(A), 40), int_add(A.areas[LK], 4096)) by arith(xe, Lo, ko, kle, hk)), am))
+  show by taut(ty, tu, (mp.tav(A).metas = A.metas by simp()), (mp.tav(A).slots = A.slots by simp()), (mp.tav(A).used = A.used by simp()),
+    (mp.tav(A).active = A.active by simp()), (mp.tav(A).areas = A.areas by simp()), (mp.tav(A).free_metas = A.free_metas by simp()),
+    (mp.tav(A).avail_cnt = int_sub(A.avail_cnt, 1) by simp()), (mp.tav(A).taken = seq_concat(A.taken, seq_one(mp.anext(A))) by simp()),
+    fpr, rgr, fxr, tl, xo, cle, cl, cw, pg)
+qed
+
+// (the views: a byte outside the context's written words and the next
+// meta's record the same; a byte outside the record, its page)
+theorem mp.tav_ag(c, A, vm, V1, b, a): mp.tavpre(c, A, vm, V1, b) -> a in omega ->
+  !(int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(c.ctx, 40))) -> !(int_le(mp.anext(A), a) && int_lt(a, int_add(mp.anext(A), 40))) ->
+  mallocng.mview(V1, mallocng.held(c, mp.tav(A), b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a]
+proof
+  assume P hao nw nx
+  have {hh = holds, hby = bytes, ep = pages} := P
+  have {em = metas, es = slots, eu = used, etk = taken, fpr = ranges, tl = tl, xo = nat} := apply(mp.tav_basic, P)
+  have nw2: !(int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(int_add(c.ctx, 24), 16))) by arith(nw)
+  have hby2: all y. y in bits(64) -> !(int_le(int_add(c.ctx, 24), y) && int_lt(y, int_add(int_add(c.ctx, 24), 16))) -> V1.bytes[y] = vm.bytes[y] proof
+    fix y
+    assume hy hn
+    show := mp(all_elim(hby, {y}), hy, (!(int_le(int_add(c.ctx, 24), y) && int_lt(y, int_add(c.ctx, 40))) by arith(hn)))
+  qed
+  show := apply(mp.take_view[c := c, A := A, A2 := mp.tav(A), vm := vm, V1 := V1, b := b, x := mp.anext(A), w := int_add(c.ctx, 24), n := 16, a := a],
+    hh, tl, xo, fpr, em, es, eu, etk, hby2, ep, hao, nw2, nx)
+qed
+
+theorem mp.tav_pg(c, A, vm, V1, b, a): mp.tavpre(c, A, vm, V1, b) -> a in omega -> !(int_le(mp.anext(A), a) && int_lt(a, int_add(mp.anext(A), 40))) ->
+  mallocng.pg(mallocng.mview(V1, mallocng.held(c, mp.tav(A), b)), a) = mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a)
+proof
+  assume P hao nx
+  have {ep = pages} := P
+  have {em = metas, es = slots, eu = used, etk = taken, fpr = ranges, tl = tl, xo = nat} := apply(mp.tav_basic, P)
+  have epa: V1.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)
+  show := apply(mp.take_pg[c := c, A := A, A2 := mp.tav(A), vm := vm, V1 := V1, b := b, x := mp.anext(A), a := a], tl, xo, hao, fpr, em, es, eu, etk, nx, epa)
+qed
+
+// (a byte in no meta area: outside the next meta's record)
+theorem mp.tav_nox(c, A, vm, V1, b, a): mp.tavpre(c, A, vm, V1, b) ->
+  (all k. k in omega -> int_lt(k, seq_len(A.areas)) -> !(int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)))) ->
+  !(int_le(mp.anext(A), a) && int_lt(a, int_add(mp.anext(A), 40)))
+proof
+  assume P hn
+  have {pg = page} := apply(mp.tav_basic, P)
+  obtain k, hk hkl k1 k2 _ from pg
+  assume h
+  have h1 h2 := h
+  show by taut(mp(all_elim(hn, {k}), hk, hkl), (int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)) by arith(k1, k2, h1, h2)))
+qed
+
+// (a byte outside the context and the meta areas: as before)
+theorem mp.tav_far(c, A, vm, V1, b, a): mp.tavpre(c, A, vm, V1, b) -> a in omega -> !mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) ->
+  (all k. k in omega -> int_lt(k, seq_len(A.areas)) -> !(int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)))) ->
+  mallocng.mview(V1, mallocng.held(c, mp.tav(A), b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a]
+proof
+  assume P hao hnc hn
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have h2: !(int_le(c.ctx, a) && int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE))) by simp(expand(hnc, mallocng.in_range))
+  have nw: !(int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(c.ctx, 40))) by arith(h2, ks)
+  show := apply(mp.tav_ag[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, nw, apply(mp.tav_nox, P, hn))
+qed
+
+// (a byte of the context but its available meta and count words: as before)
+theorem mp.tav_ctxb(c, A, vm, V1, b, a): mp.tavpre(c, A, vm, V1, b) -> a in omega ->
+  int_le(c.ctx, a) -> int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE)) -> !(int_le(int_add(c.ctx, 24), a) && int_lt(a, int_add(c.ctx, 40))) ->
+  mallocng.mview(V1, mallocng.held(c, mp.tav(A), b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a]
+proof
+  assume P hao h1 h2 nw
+  have {hc = cfg, hu = univ, ha = abs, hh = holds} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have hin: mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) by defs(simp(h1, h2), mallocng.in_range)
+  have hn := apply(mp.ctx_noarea[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := a], hc, hu, ha, H, hao, hin)
+  show := apply(mp.tav_ag[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, nw, apply(mp.tav_nox, P, hn))
+qed
+
