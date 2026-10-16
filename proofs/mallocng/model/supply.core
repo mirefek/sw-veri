@@ -156,15 +156,11 @@ qed
 // byte and the lock word
 theorem mp.image_tr(c, M, M2): c in mallocng.Cfg -> mallocng.image_ok(c, M) ->
   (all i. all a. i in omega -> a in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) -> M2[a] = M[a]) ->
-  (all i. all p. i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> x86_64_linux.is_load(c.file, i) -> !bit(x86_64_linux.segment(c.file, i).flags, 1) ->
-     int_le(int_div(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.PAGE), p) ->
-     int_le(p, int_div(int_sub(int_add(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.segment(c.file, i).memsz), 1), x86_64_linux.PAGE)) ->
-     x86_64_linux.last_on_page(c.file, i, p) -> mallocng.pg(M2, int_mul(p, x86_64_linux.PAGE)) = mallocng.pg(M, int_mul(p, x86_64_linux.PAGE))) ->
   M2[int_add(c.libc, mallocng.L_NEED_LOCKS)] = M[int_add(c.libc, mallocng.L_NEED_LOCKS)] ->
   (all i. i in omega -> int_lt(i, 4) -> M2[int_add(c.lock, i)] = M[int_add(c.lock, i)]) ->
   mallocng.image_ok(c, M2)
 proof
-  assume hc himg ro pgs nl lk
+  assume hc himg ro nl lk
   have i1 i2 i3 := expand(himg, mallocng.image_ok)
   let FL := c.file
   have fs: FL in seq_type(bits(8)) by simp(hc)
@@ -178,28 +174,34 @@ proof
     have r: !bit(SG.flags, 1) ->
         (all x0. x0 in omega -> int_le(SG.vaddr, x0) && int_lt(x0, int_add(SG.vaddr, SG.memsz)) ->
            mallocng.b8(M2, x0) = ite(int_lt(x0, int_add(SG.vaddr, SG.filesz)), FL[int_add(SG.offset, int_sub(x0, SG.vaddr))], 0)) &&
-        (all x0. x0 in omega -> (int_le(int_div(SG.vaddr, x86_64_linux.PAGE), x0) && int_le(x0, int_div(int_sub(int_add(SG.vaddr, SG.memsz), 1), x86_64_linux.PAGE))) &&
-           x86_64_linux.last_on_page(FL, i, x0) -> mallocng.pg(M2, int_mul(x0, x86_64_linux.PAGE)) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(SG)), "kind", 0))) proof
+        (all x0. x0 in omega -> (int_le(SG.vaddr, x0) && int_lt(x0, int_add(SG.vaddr, SG.memsz))) && x86_64_linux.last_on_page(FL, i, int_div(x0, x86_64_linux.PAGE)) ->
+           mallocng.pg(M2, x0) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(SG)), "kind", 0))) proof
       assume hw
       have b1 b2 := mp(expand(rs, mallocng.ro_segment_ok), hw)
       have iin := mp(nat_lt_mem[k := i, n := int_sub(x86_64_linux.phnum(FL), 0)], hi, arith(pn), arith(hil, pn, hi))
       have ab := mp(app_fn_build[d := int_sub(x86_64_linux.phnum(FL), 0), v := x0. ite(x86_64_linux.is_load(FL, int_add(0, x0)) && !bit(x86_64_linux.segment(FL, int_add(0, x0)).flags, 1),
         pair(x86_64_linux.segment(FL, int_add(0, x0)).vaddr, x86_64_linux.segment(FL, int_add(0, x0)).memsz), pair(0, 0)), a := i], iin)
       have ri: mallocng.ro_ranges(FL)[i] = pair(SG.vaddr, SG.memsz) by defs(simp(ab, (int_add(0, i) = i by arith(hi)), hld, hw), mallocng.ro_ranges)
+      have ag: all x0. x0 in omega -> int_le(SG.vaddr, x0) && int_lt(x0, int_add(SG.vaddr, SG.memsz)) -> M2[x0] = M[x0] proof
+        fix x
+        assume hx hxr
+        have inr: mallocng.in_range(x, mallocng.ro_ranges(FL)[i]) by defs(simp(ri, hxr), mallocng.in_range)
+        show := mp(all_elim(ro, {i}, {x}), hi, hx, hil, inr)
+      qed
       have bt: all x0. x0 in omega -> int_le(SG.vaddr, x0) && int_lt(x0, int_add(SG.vaddr, SG.memsz)) ->
           mallocng.b8(M2, x0) = ite(int_lt(x0, int_add(SG.vaddr, SG.filesz)), FL[int_add(SG.offset, int_sub(x0, SG.vaddr))], 0) proof
         fix x
         assume hx hxr
-        have inr: mallocng.in_range(x, mallocng.ro_ranges(FL)[i]) by defs(simp(ri, hxr), mallocng.in_range)
-        have {eb = byte} := apply(mp.agree_b8, mp(all_elim(ro, {i}, {x}), hi, hx, hil, inr))
+        have {eb = byte} := apply(mp.agree_b8, mp(all_elim(ag, {x}), hx, hxr))
         show := trans(eb, mp(all_elim(b1, {x}), hx, hxr))
       qed
-      have pt: all x0. x0 in omega -> (int_le(int_div(SG.vaddr, x86_64_linux.PAGE), x0) && int_le(x0, int_div(int_sub(int_add(SG.vaddr, SG.memsz), 1), x86_64_linux.PAGE))) &&
-          x86_64_linux.last_on_page(FL, i, x0) -> mallocng.pg(M2, int_mul(x0, x86_64_linux.PAGE)) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(SG)), "kind", 0)) proof
+      have pt: all x0. x0 in omega -> (int_le(SG.vaddr, x0) && int_lt(x0, int_add(SG.vaddr, SG.memsz))) && x86_64_linux.last_on_page(FL, i, int_div(x0, x86_64_linux.PAGE)) ->
+          mallocng.pg(M2, x0) = some(fn_update(fn_update(empty, "prot", x86_64_linux.seg_prot(SG)), "kind", 0)) proof
         fix x
         assume hx hxr
-        have p1 p2 p3 := hxr
-        show := trans(mp(all_elim(pgs, {i}, {x}), hi, hx, hil, hld, hw, p1, p2, p3), mp(all_elim(b2, {x}), hx, hxr))
+        have r1 r2 _ := hxr
+        have {ep = page} := apply(mp.agree_b8, mp(all_elim(ag, {x}), hx, conj(r1, r2)))
+        show := trans(ep, mp(all_elim(b2, {x}), hx, hxr))
       qed
       show by taut(bt, pt)
     qed
@@ -1992,20 +1994,6 @@ proof
     have e: ex i0. i0 in omega && int_lt(i0, x86_64_linux.phnum(c.file)) && mallocng.in_range(a, mallocng.ro_ranges(c.file)[i0]) by ex_intro({i}, taut(hi, hil, inr))
     show := apply(mp.tk_region[c := c, A := A, F := F, n := n, x := x, vm := vm, V1 := V1, b := b, a := a], P, hao, taut(e))
   qed
-  have pgs: all i. all p. i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> x86_64_linux.is_load(c.file, i) -> !bit(x86_64_linux.segment(c.file, i).flags, 1) ->
-      int_le(int_div(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.PAGE), p) ->
-      int_le(p, int_div(int_sub(int_add(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.segment(c.file, i).memsz), 1), x86_64_linux.PAGE)) ->
-      x86_64_linux.last_on_page(c.file, i, p) -> mallocng.pg(M2, int_mul(p, x86_64_linux.PAGE)) = mallocng.pg(M, int_mul(p, x86_64_linux.PAGE)) proof
-    fix i p
-    assume _ hp _ _ _ _ _ _
-    have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
-    obtain k0, hk0 hk0l x1 x2 am from pg
-    have Lo := apply(at_type[l := A.areas, t := omega, i := k0], (A.areas in list_type(omega) by simp(ha)), hk0, hk0l)
-    have nx: !(int_le(x, int_mul(p, x86_64_linux.PAGE)) && int_lt(int_mul(p, x86_64_linux.PAGE), int_add(x, 40)))
-      by arith(kp, x1, x2, am, hp, Lo)
-    show := apply(mp.tk_pg[c := c, A := A, F := F, n := n, x := x, vm := vm, V1 := V1, b := b, a := int_mul(p, x86_64_linux.PAGE)], P,
-      (int_mul(p, x86_64_linux.PAGE) in omega by simp(hp, kp)), nx)
-  qed
   have lnl: mallocng.L_NEED_LOCKS = 3 by defs(simp(), mallocng.L_NEED_LOCKS)
   have lb: mallocng.in_range(int_add(c.libc, mallocng.L_NEED_LOCKS), mallocng.data_ranges(c)[2]) by defs(simp(d2, lnl, (int_lt(int_add(c.libc, 3), int_add(c.libc, 16)) by arith(cl3))), mallocng.in_range)
   have lbx: ex i. i in omega && (int_lt(0, i) && int_lt(i, 3)) && mallocng.in_range(int_add(c.libc, mallocng.L_NEED_LOCKS), mallocng.data_ranges(c)[i])
@@ -2019,7 +2007,7 @@ proof
       by ex_intro({1}, taut((1 in omega by simp()), (int_lt(0, 1) && int_lt(1, 3) by simp()), inr))
     show := apply(mp.tk_region[c := c, A := A, F := F, n := n, x := x, vm := vm, V1 := V1, b := b, a := int_add(c.lock, i)], P, simp(cl2, hi), taut(ex))
   qed
-  have img := apply(mp.image_tr[c := c, M := M, M2 := M2], hc, himg, ro, pgs, nl, lk)
+  have img := apply(mp.image_tr[c := c, M := M, M2 := M2], hc, himg, ro, nl, lk)
   have _ _ kc3 := expand(hcl, mallocng.classes_ok)
   have cla: all a. a in omega -> int_le(c.sct, a) -> int_lt(a, int_add(c.sct, 96)) -> M2[a] = M[a] proof
     fix a

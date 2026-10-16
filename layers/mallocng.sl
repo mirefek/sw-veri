@@ -456,13 +456,14 @@ pred image_ok(c: Cfg, m: Mem) =
   b8(m, c.libc + L_NEED_LOCKS) = 0 && rd(m, c.lock, 4) = 0
 
 // segment i (= sg) of f, if read-only, is in memory as exec maps it: its
-// bytes, and the protection of the pages it is the last segment on
+// bytes, and the protection of the pages it is the last segment on (seen
+// at its own bytes there)
 pred ro_segment_ok(f: File, i: nat, sg: Segment, m: Mem) =
   !sg.flags[1] ->
     (all a: nat. sg.vaddr <= a && a < sg.vaddr + sg.memsz ->
        b8(m, a) = (if a < sg.vaddr + sg.filesz { uint(f[sg.offset + (a - sg.vaddr)]) } else { 0 })) &&
-    (all p: nat. sg.vaddr / PAGE <= p && p <= (sg.vaddr + sg.memsz - 1) / PAGE && last_on_page(f, i, p) ->
-       pg(m, p * PAGE) = some(Page { prot: seg_prot(sg), kind: anon }))
+    (all a: nat. sg.vaddr <= a && a < sg.vaddr + sg.memsz && last_on_page(f, i, a / PAGE) ->
+       pg(m, a) = some(Page { prot: seg_prot(sg), kind: anon }))
 
 // the allocator's memory can be accessed as the code does (its groups:
 // not on the stack, where GIMPLE's accesses are to stack objects only)

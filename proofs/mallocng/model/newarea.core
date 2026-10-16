@@ -1962,56 +1962,6 @@ proof
   show by defs(simp(ab, z, hl, hf), mallocng.ro_ranges)
 qed
 
-// (a page a read-only segment is last on: one of its bytes on it)
-theorem mp.seg_byte(c, i, p): c in mallocng.Cfg -> i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) ->
-  !bit(x86_64_linux.segment(c.file, i).flags, 1) -> x86_64_linux.last_on_page(c.file, i, p) ->
-  ex y. y in omega && (mallocng.in_range(y, mallocng.ro_ranges(c.file)[i]) && int_div(y, x86_64_linux.PAGE) = p)
-proof
-  assume hc hi hp hil hf hlp
-  let F := c.file
-  let V := x86_64_linux.segment(F, i).vaddr
-  let S := x86_64_linux.segment(F, i).memsz
-  have hl sp _ := expand(hlp, x86_64_linux.last_on_page)
-  have sm p1 p2 := expand(sp, x86_64_linux.seg_page)
-  have fs: F in seq_type(bits(8)) by simp(hc)
-  have v1 := mp(x86.le_at_nat[f := F, off := int_add(x86_64_linux.ph(F, i), 16), n := 8], fs, simp())
-  have v2 := mp(x86.le_at_nat[f := F, off := int_add(x86_64_linux.ph(F, i), 40), n := 8], fs, simp())
-  have vo: V in omega by defs(simp(v1), x86_64_linux.segment)
-  have so: S in omega by defs(simp(v2), x86_64_linux.segment)
-  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
-  have er := apply(mp.ro_at, hc, hi, hil, hl, hf)
-  have d1: int_le(V, int_mul(p, 4096)) -> ex y. y in omega && (mallocng.in_range(y, mallocng.ro_ranges(F)[i]) && int_div(y, x86_64_linux.PAGE) = p) proof
-    assume h
-    have inr: mallocng.in_range(int_mul(p, 4096), mallocng.ro_ranges(F)[i]) by defs(simp(er, h, (int_lt(int_mul(p, 4096), int_add(V, S)) by arith(p2, kp, vo, so, sm, hp))), mallocng.in_range)
-    show by ex_intro({int_mul(p, 4096)}, taut((int_mul(p, 4096) in omega by simp(hp)), inr, (int_div(int_mul(p, 4096), x86_64_linux.PAGE) = p by arith(kp, hp))))
-  qed
-  have d2: !int_le(V, int_mul(p, 4096)) -> ex y. y in omega && (mallocng.in_range(y, mallocng.ro_ranges(F)[i]) && int_div(y, x86_64_linux.PAGE) = p) proof
-    assume h
-    have inr: mallocng.in_range(V, mallocng.ro_ranges(F)[i]) by defs(simp(er, (int_le(V, V) by arith()), (int_lt(V, int_add(V, S)) by arith(sm, so))), mallocng.in_range)
-    show by ex_intro({V}, taut(vo, inr, (int_div(V, x86_64_linux.PAGE) = p by arith(p1, kp, vo, h, hp))))
-  qed
-  show by taut(d1, d2)
-qed
-
-// (a page a read-only segment is last on: not the reserve's first page --
-// a byte of the segment on it)
-theorem mp.na_ropg(c, A, vm, V1, b, i, p): mp.napre(c, A, vm, V1, b) -> i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) ->
-  !bit(x86_64_linux.segment(c.file, i).flags, 1) -> x86_64_linux.last_on_page(c.file, i, p) ->
-  !(p = int_div(A.reserve, 4096))
-proof
-  assume P hi hp hil hf hlp
-  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
-  have {H = inv} := expand(hh, mallocng.holds_in)
-  have {ro = nat, rc = cnt, ral = al} := apply(mp.na_res, P)
-  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
-  obtain y, yo inr yp from apply(mp.seg_byte, hc, hi, hp, hil, hf, hlp)
-  have ex: ex j. j in omega && int_lt(j, x86_64_linux.phnum(c.file)) && mallocng.in_range(y, mallocng.ro_ranges(c.file)[j]) by ex_intro({i}, taut(hi, hil, inr))
-  have nr := apply(mp.not_res[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, a := y], hc, hu, ha, H, taut(ex))
-  have nr2: !(int_le(A.reserve, y) && int_lt(y, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(nr, mallocng.in_range))
-  assume e
-  show by arith(nr2, hrc, rc, yp, e, kp, ral, ro, yo)
-qed
-
 // the invariant for the new state on its view
 theorem mp.na_holds(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) ->
   mallocng.holds(c, mp.narea(A), mallocng.mview(V1, mallocng.held(c, mp.narea(A), b)), b, V1.brk)
@@ -2050,17 +2000,6 @@ proof
     have e: ex i0. i0 in omega && int_lt(i0, x86_64_linux.phnum(c.file)) && mallocng.in_range(a, mallocng.ro_ranges(c.file)[i0]) by ex_intro({i}, taut(hi, hil, inr))
     show := apply(mp.na_ro[c := c, A := A, vm := vm, V1 := V1, b := b, a := a], P, hao, taut(e))
   qed
-  have pgs: all i. all p. i in omega -> p in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> x86_64_linux.is_load(c.file, i) -> !bit(x86_64_linux.segment(c.file, i).flags, 1) ->
-      int_le(int_div(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.PAGE), p) ->
-      int_le(p, int_div(int_sub(int_add(x86_64_linux.segment(c.file, i).vaddr, x86_64_linux.segment(c.file, i).memsz), 1), x86_64_linux.PAGE)) ->
-      x86_64_linux.last_on_page(c.file, i, p) -> mallocng.pg(M2, int_mul(p, x86_64_linux.PAGE)) = mallocng.pg(M, int_mul(p, x86_64_linux.PAGE)) proof
-    fix i p
-    assume hi hp hil _ hnf _ _ hlp
-    have np := apply(mp.na_ropg[c := c, A := A, vm := vm, V1 := V1, b := b, i := i, p := p], P, hi, hp, hil, hnf, hlp)
-    have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
-    have nr: !(int_le(A.reserve, int_mul(p, x86_64_linux.PAGE)) && int_lt(int_mul(p, x86_64_linux.PAGE), int_add(A.reserve, 4096))) by arith(np, kp, ro, ral, hp)
-    show := apply(mp.na_pgeq[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_mul(p, x86_64_linux.PAGE)], P, (int_mul(p, x86_64_linux.PAGE) in omega by simp(hp, kp)), nr)
-  qed
   have lnl: mallocng.L_NEED_LOCKS = 3 by defs(simp(), mallocng.L_NEED_LOCKS)
   have lb: mallocng.in_range(int_add(c.libc, mallocng.L_NEED_LOCKS), mallocng.data_ranges(c)[2]) by defs(simp(d2, lnl, (int_lt(int_add(c.libc, 3), int_add(c.libc, 16)) by arith(cl3))), mallocng.in_range)
   have lbx: ex i. i in omega && (int_lt(0, i) && int_lt(i, 3)) && mallocng.in_range(int_add(c.libc, mallocng.L_NEED_LOCKS), mallocng.data_ranges(c)[i])
@@ -2074,7 +2013,7 @@ proof
       by ex_intro({1}, taut((1 in omega by simp()), (int_lt(0, 1) && int_lt(1, 3) by simp()), inr))
     show := apply(mp.na_ro[c := c, A := A, vm := vm, V1 := V1, b := b, a := int_add(c.lock, i)], P, simp(cl2, hi), taut(ex))
   qed
-  have img := apply(mp.image_tr[c := c, M := M, M2 := M2], hc, himg, ro2, pgs, nl, lk)
+  have img := apply(mp.image_tr[c := c, M := M, M2 := M2], hc, himg, ro2, nl, lk)
   have _ _ kc3 := expand(hcl, mallocng.classes_ok)
   have cla: all a. a in omega -> int_le(c.sct, a) -> int_lt(a, int_add(c.sct, 96)) -> M2[a] = M[a] proof
     fix a
