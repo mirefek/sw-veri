@@ -11,10 +11,10 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   dequeue, dequeue_head, queue, free_meta, the leaf specs; proved to
   `tr.implements_at` so far): `tr.div_raises` of the spec by the World
   variant of `ct.contract_div`.
-- What enframe's callers owe: alloc_slot's postcondition the reserved
-  slot's access (`slot_rw`); malloc's the class bound (its n within the
+- What enframe's callers owe (malloc's): the class bound (its n within the
   class), the thread pointer's word apart from the slot (the C world's
-  TLS), a stride below 2^31.
+  TLS), a stride below 2^31; the slot's access is the invariant's
+  (`mp.slot_rw_of`).
 - The spec bookkeeping: a contract's body (`letin`, `any_rel`) spelled
   out in each refinement (`mp.ef`, `mp.ss`); a generic lemma per spec shape
   (havoc, then return) would take it.

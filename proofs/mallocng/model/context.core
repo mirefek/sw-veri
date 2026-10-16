@@ -206,12 +206,187 @@ proof
   show := apply(mp.rw_usable[vm := vm, F := F, objs := objs, a := a, n := n], hao, each)
 qed
 
+// (every byte of a group in use accessible)
+abbrev mp.grp_all(A, vm) := all x0. all x1. x0 in omega && x1 in omega -> mallocng.is_used(A, x0) && mallocng.in_range(x1, mallocng.group_range(A.metas[x0])) ->
+  mallocng.m_rw(mallocng.mview(vm, mallocng.all_bytes), x1) && !(snd(mallocng.pg(mallocng.mview(vm, mallocng.all_bytes), x1)).kind = 2)
+
+// (the invariant's clause: so -- a group's byte the allocator's unless a
+// client's or in a reserved slot)
+theorem mp.grp_all_of(c, A, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.grp_rw(c, A, vm, b) -> mp.grp_all(A, vm)
+proof
+  assume hc hu ha hr
+  have r0 := expand(hr, mallocng.grp_rw)
+  fix g a
+  assume ho h
+  have go ao := ho
+  have iu ir := h
+  have fp: !(a in malloc.live_of(b)) -> !mallocng.in_reserved(A, a) -> a in mallocng.footprint(c, A, b) proof
+    assume nl nr
+    obtain k, hk hkl hke from expand(iu, mallocng.is_used)
+    have ir2 := subst({y. mallocng.in_range(a, mallocng.group_range(A.metas[y]))}, sym(hke), ir)
+    show := apply(mp.group_fp[c := c, A := A, b := b, k := k, a := a], hc, hu, ha, hk, hkl, ao, ir2, nl, nr)
+  qed
+  have w: a in mallocng.footprint(c, A, b) || a in malloc.live_of(b) || mallocng.in_reserved(A, a) by taut(fp)
+  show := mp(all_elim(r0, {g}, {a}), ho, taut(iu, ir, w))
+qed
+
+theorem mp.grp_rw_of_all(c, A, vm, b): mp.grp_all(A, vm) -> mallocng.grp_rw(c, A, vm, b)
+proof
+  assume hr
+  have w: all x0. all x1. x0 in omega && x1 in omega -> (mallocng.is_used(A, x0) && mallocng.in_range(x1, mallocng.group_range(A.metas[x0]))) &&
+      (x1 in mallocng.footprint(c, A, b) || x1 in malloc.live_of(b) || mallocng.in_reserved(A, x1)) ->
+      mallocng.m_rw(mallocng.mview(vm, mallocng.all_bytes), x1) && !(snd(mallocng.pg(mallocng.mview(vm, mallocng.all_bytes), x1)).kind = 2) proof
+    fix g a
+    assume ho h
+    have h1 h2 _ := h
+    show := mp(all_elim(hr, {g}, {a}), ho, conj(h1, h2))
+  qed
+  show by defs(w, mallocng.grp_rw)
+qed
+
+// (the groups' bytes accessible: so with the pages as before, the groups
+// in use among the old ones, in the same places)
+theorem mp.grp_rw_pages(A, A2, vm, vm2): mp.grp_all(A, vm) -> vm2.pages = vm.pages ->
+  (all g. g in omega -> mallocng.is_used(A2, g) -> mallocng.is_used(A, g) && mallocng.group_range(A2.metas[g]) = mallocng.group_range(A.metas[g])) ->
+  mp.grp_all(A2, vm2)
+proof
+  assume hr ep hg
+  fix g a
+  assume ho h
+  have go ao := ho
+  have u2 r2 := h
+  have iu er := mp(all_elim(hg, {g}), go, u2)
+  have k := mp(all_elim(hr, {g}, {a}), ho, conj(iu, rewrite(er, r2)))
+  have pe := apply(mp.view_pg[vm := vm, vm2 := vm2, fp := mallocng.all_bytes, a := a], ao, ep)
+  show by defs(rewrite(sym(pe), expand(k, mallocng.m_rw, mallocng.m_mapped)), mallocng.m_rw, mallocng.m_mapped)
+qed
+
+// (the invariant's clause, the pages as before: so)
+theorem mp.grp_rw_pg(c, A, vm, vm2, b): mallocng.grp_rw(c, A, vm, b) -> vm2.pages = vm.pages -> mallocng.grp_rw(c, A, vm2, b)
+proof
+  assume hr ep
+  have r0 := expand(hr, mallocng.grp_rw)
+  have w: all x0. all x1. x0 in omega && x1 in omega -> (mallocng.is_used(A, x0) && mallocng.in_range(x1, mallocng.group_range(A.metas[x0]))) &&
+      (x1 in mallocng.footprint(c, A, b) || x1 in malloc.live_of(b) || mallocng.in_reserved(A, x1)) ->
+      mallocng.m_rw(mallocng.mview(vm2, mallocng.all_bytes), x1) && !(snd(mallocng.pg(mallocng.mview(vm2, mallocng.all_bytes), x1)).kind = 2) proof
+    fix g a
+    assume ho h
+    have _ ao := ho
+    have k := mp(all_elim(r0, {g}, {a}), ho, h)
+    have pe := apply(mp.view_pg[vm := vm, vm2 := vm2, fp := mallocng.all_bytes, a := a], ao, ep)
+    show by defs(rewrite(sym(pe), expand(k, mallocng.m_rw, mallocng.m_mapped)), mallocng.m_rw, mallocng.m_mapped)
+  qed
+  show by defs(w, mallocng.grp_rw)
+qed
+
+// (the groups the same, the pages too)
+theorem mp.grp_rw_same(A, vm, vm2): mp.grp_all(A, vm) -> vm2.pages = vm.pages -> mp.grp_all(A, vm2)
+proof
+  assume hr ep
+  have s: all g. g in omega -> mallocng.is_used(A, g) -> mallocng.is_used(A, g) && mallocng.group_range(A.metas[g]) = mallocng.group_range(A.metas[g]) proof
+    fix g
+    assume _ h
+    show by taut(h, refl({mallocng.group_range(A.metas[g])}))
+  qed
+  show := apply(mp.grp_rw_pages[A := A, A2 := A, vm := vm, vm2 := vm2], hr, ep, s)
+qed
+
+// (... of A's geometry)
+theorem mp.grp_rw_gm(A, A2, vm, vm2): mp.geom(A, A2) -> mp.grp_all(A, vm) -> vm2.pages = vm.pages -> mp.grp_all(A2, vm2)
+proof
+  assume hg hr ep
+  have s: all g. g in omega -> mallocng.is_used(A2, g) -> mallocng.is_used(A, g) && mallocng.group_range(A2.metas[g]) = mallocng.group_range(A.metas[g]) proof
+    fix g
+    assume go h
+    have {eu = used} := apply(mp.gm_used[c := empty, A := A, A2 := A2, M := empty, x := g], hg)
+    have {er = range} := apply(mp.gm_geom[A := A, A2 := A2, x := g], hg, go)
+    show by taut(rewrite(eu, h), er)
+  qed
+  show := apply(mp.grp_rw_pages[A := A, A2 := A2, vm := vm, vm2 := vm2], hr, ep, s)
+qed
+
+// (... of A's geometry, slots aside)
+theorem mp.grp_rw_gs(A, A2, vm, vm2): mp.geoms(A, A2) -> mp.grp_all(A, vm) -> vm2.pages = vm.pages -> mp.grp_all(A2, vm2)
+proof
+  assume hg hr ep
+  have eu := apply(mp.gs_field[A := A, A2 := A2, k := "used"], hg, simp(), simp(), simp(), simp())
+  have s: all g. g in omega -> mallocng.is_used(A2, g) -> mallocng.is_used(A, g) && mallocng.group_range(A2.metas[g]) = mallocng.group_range(A.metas[g]) proof
+    fix g
+    assume go h
+    have iu: mallocng.is_used(A, g) by defs(rewrite(eu, expand(h, mallocng.is_used)), mallocng.is_used)
+    have {er = range} := apply(mp.gs_geom[A := A, A2 := A2, x := g], hg, go)
+    show by taut(iu, er)
+  qed
+  show := apply(mp.grp_rw_pages[A := A, A2 := A2, vm := vm, vm2 := vm2], hr, ep, s)
+qed
+
+// (the invariant kept, its clause on the pages as before: the groups'
+// bytes accessible after)
+theorem mp.holds_rw(c, A, A2, vm, vm2, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) -> vm2.pages = vm.pages ->
+  (all g. g in omega -> mallocng.is_used(A2, g) -> mallocng.is_used(A, g) && mallocng.group_range(A2.metas[g]) = mallocng.group_range(A.metas[g])) ->
+  mallocng.grp_rw(c, A2, vm2, b)
+proof
+  assume hc hu ha hh ep hg
+  have {hrw = rw} := expand(hh, mallocng.holds_in)
+  have al := apply(mp.grp_all_of, hc, hu, ha, hrw)
+  show := apply(mp.grp_rw_of_all[c := c, A := A2, vm := vm2, b := b], apply(mp.grp_rw_pages[A := A, A2 := A2, vm := vm, vm2 := vm2], al, ep, hg))
+qed
+
+// a slot of a group in use: its bytes accessible (`slot_rw`, enframe's
+// premise) -- in the group's bytes
+theorem mp.slot_rw_of(c, A, vm, b, g, i): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) -> mallocng.is_used(A, g) -> i in omega ->
+  int_lt(i, seq_len(A.slots[g])) -> mallocng.slot_rw(vm, A.metas[g], i)
+proof
+  assume hc hu ha hh hg hi hil
+  let V := A.metas[g]
+  let S := mallocng.stride(V)
+  have {H = inv, hrw = rw} := expand(hh, mallocng.holds_in)
+  have {huo = used} := expand(H, mallocng.holds)
+  have {go = nat} := apply(mp.used_nat, ha, hg)
+  have gok := apply(mp.used_group, huo, hg)
+  have vt: V in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(ha), go)
+  have vo: V.mem in omega && V.maplen in omega && V.last_idx in omega by simp(vt)
+  have {gl = nslots, gmp = mapped} := expand(gok, mallocng.group_ok)
+  have so := apply(mp.stride_nat, ha, go, gok)
+  have cu: mallocng.UNIT = 16 by defs(refl({16}), mallocng.UNIT)
+  have ci: mallocng.IB = 4 by defs(refl({4}), mallocng.IB)
+  have il: int_le(int_add(i, 1), int_add(V.last_idx, 1)) by arith(gl, hil)
+  have mle := mp(all_elim(ms.mul_le, {S}, {int_add(i, 1)}, {S}, {int_add(V.last_idx, 1)}), so, (int_add(i, 1) in omega by simp(hi)), simp(so), simp(vo), arith(so), il)
+  have d1: int_mul(S, int_add(i, 1)) = int_add(int_mul(S, i), S) by simp(so, hi)
+  have m0: int_mul(S, i) in omega by simp(so, hi)
+  have r0 := apply(mp.grp_all_of, hc, hu, ha, hrw)
+  have w: all a. a in omega -> int_le(int_sub(mallocng.slot_start(V, i), mallocng.IB), a) && int_lt(a, mallocng.slot_end(V, i)) ->
+      mallocng.m_rw(mallocng.mview(vm, mallocng.all_bytes), a) && !(snd(mallocng.pg(mallocng.mview(vm, mallocng.all_bytes), a)).kind = 2) proof
+    fix a
+    assume hao hr
+    have s1 s2 := expand(hr, mallocng.slot_end, mallocng.slot_start, mallocng.storage)
+    have up: int_lt(a, int_add(int_add(V.mem, 16), int_sub(int_mul(S, int_add(V.last_idx, 1)), 4))) by arith(s2, cu, ci, d1, mle)
+    have lo: int_le(V.mem, a) by arith(s1, cu, ci, m0, vo)
+    have c1: int_lt(0, V.maplen) -> mallocng.in_range(a, mallocng.group_range(V)) proof
+      assume k
+      have _ big := mp(gmp, k)
+      have e := mp(ite_t[c := int_lt(0, V.maplen), a := pair(V.mem, int_mul(V.maplen, 4096)), b := pair(V.mem, int_add(int_sub(int_add(mallocng.UNIT, int_mul(S, int_add(V.last_idx, 1))), mallocng.IB), 1))], k)
+      have r: int_le(V.mem, a) && int_lt(a, int_add(V.mem, int_mul(V.maplen, 4096))) by arith(lo, up, big, cu)
+      show by defs(simp(e, r), mallocng.group_range, mallocng.in_range)
+    qed
+    have c2: !int_lt(0, V.maplen) -> mallocng.in_range(a, mallocng.group_range(V)) proof
+      assume k
+      have e := mp(ite_f[c := int_lt(0, V.maplen), a := pair(V.mem, int_mul(V.maplen, 4096)), b := pair(V.mem, int_add(int_sub(int_add(mallocng.UNIT, int_mul(S, int_add(V.last_idx, 1))), mallocng.IB), 1))], k)
+      have r: int_le(V.mem, a) && int_lt(a, int_add(V.mem, int_add(int_sub(int_add(mallocng.UNIT, int_mul(S, int_add(V.last_idx, 1))), mallocng.IB), 1))) by arith(lo, up, cu, ci)
+      show by defs(simp(e, r), mallocng.group_range, mallocng.in_range)
+    qed
+    have inr: mallocng.in_range(a, mallocng.group_range(V)) by taut(c1, c2)
+    show := mp(all_elim(r0, {g}, {a}), conj(go, hao), conj(hg, inr))
+  qed
+  show by defs(w, mallocng.slot_rw)
+qed
+
 // the context's free bytes changed, nothing else: the invariant kept (the
 // invariant's view the same, the pages the same)
 theorem mp.co_holds(c, A, vm, vm2, b): mallocng.holds_in(c, A, vm, b) -> mallocng_specs.ctx_only(c, vm, vm2) -> mallocng.holds_in(c, A, vm2, b)
 proof
   assume hh hco
-  have {H = inv, hm = mapped, hfr = free} := expand(hh, mallocng.holds_in)
+  have {H = inv, hm = mapped, hfr = free, hrw = rw} := expand(hh, mallocng.holds_in)
   have er eb := expand(hco, mallocng_specs.ctx_only)
   have up := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
   have ep: vm2.pages = vm.pages := sym(rewrite(er, up))
@@ -236,7 +411,8 @@ proof
   have i2 := rewrite(sym(ek), rewrite(sym(ve), H))
   have m2 := apply(mp.fpm_pages, hm, ep)
   have fr2 := apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep)
-  show by defs(taut(i2, m2, fr2), mallocng.holds_in)
+  have rw2 := apply(mp.grp_rw_pg[c := c, A := A, vm := vm, vm2 := vm2, b := b], hrw, ep)
+  show by defs(taut(i2, m2, fr2, rw2), mallocng.holds_in)
 qed
 
 // (nothing changed; k bytes stored at a, all free; one change, then another)

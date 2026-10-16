@@ -738,3 +738,10 @@ item is a short summary of finished work; details are in the files named.
   (`mp.relink_partial`, `mp.relink_reuse`: as before, the joining groups'
   by premises); `mp.holds_links_pr`. A group queued on an empty list
   (`mp.qu_step`, `mp.join_new`).
+- **The groups' bytes accessible** (`grp_rw` in `holds_in` and `rep`):
+  every byte of a group in use -- the allocator's, a live block's, a
+  reserved slot's -- readable, writable, not the stack; so a reserved
+  slot's access (`slot_rw`, enframe's premise) is the invariant's
+  (`mp.slot_rw_of`). Kept on the pages as before (`mp.grp_rw_pages`, from
+  the clause's every-byte form `mp.grp_all`), by the frame law (the
+  allocator's and the live pages unchanged). Checked by `slc heapcheck`.

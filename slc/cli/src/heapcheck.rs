@@ -514,6 +514,7 @@ impl Checker<'_> {
             ("blocks_wf", "blocks_wf", vec![bl.clone()]),
             ("live_rw", "live_rw", vec![hv.clone()]),
             ("free_rw", "free_rw", vec![c.clone(), mf.clone()]),
+            ("grp_rw", "grp_rw", vec![c.clone(), av.clone(), vm.clone(), bl.clone()]),
         ];
         let timing = std::env::var("HEAPCHECK_TIMES").is_ok();
         let profile = std::env::var("HEAPCHECK_PROFILE").is_ok();

@@ -524,6 +524,7 @@ pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g]
 pred rep(c: Cfg, A: Abs, s: Heap) =
   holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) &&
   fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
+  grp_rw(c, A, s.vm, s.blocks) &&
   live_rw(s)                 // (what the law inv_wf needs, stated directly)
 
 fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
@@ -544,8 +545,17 @@ fn owned(c: Cfg) -> Heap -> Set[nat] = (s: Heap) => owned_of(c, s)
 
 // the allocator's memory, as the invariant sees it, mapped (user space:
 // no byte's address wraps)
+// a group in use: its bytes accessible -- the allocator's, a client's
+// block's, a slot's handed out (whose caller frames it: `slot_rw`); every
+// byte of the group one of these
+pred grp_rw(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
+  all g: nat, a: nat. is_used(A, g) && in_range(a, group_range(A.metas[g])) &&
+    (a in footprint(c, A, blocks) || a in live_of(blocks) || in_reserved(A, a)) ->
+    m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack
+
 pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
-  inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks)))
+  inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks))) &&
+  rw: grp_rw(c, A, vm, blocks)
 
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g
