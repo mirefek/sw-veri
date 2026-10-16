@@ -28,9 +28,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   owned bytes all mapped before: `mp.owned_mapped`; brk's failure the
   empty refill, `K = 0`), and the first call's initialization
   (proofs/mallocng/model/first.core: `mp.fs_holds_in`; the auxiliary
-  vector leaves the footprint). Left: the run (the GIMPLE walk
-  under the callees' World specs, layers/mallocng_specs.sl) and the
-  machine form. A failed mmap of the meta areas' doubling size keeps
+  vector leaves the footprint). The callees at a call
+  (proofs/mallocng/fun/alloc_meta.core: `mp.rs_q`, `mp.brk_q`,
+  `mp.mmap_q`, `mp.mprotect_q`; `mp.dqh_q`, `ms.el_q`), the auxiliary
+  vector readable before the first call (`mp.am_auxv`) and the run's
+  states (`mp.am_st`, `mp.am_st_step`) are done. Left: the run
+  (`mp.am_run`, open: the GIMPLE walk, each block to the next state) and
+  the machine form. A failed mmap of the meta areas' doubling size keeps
   `meta_alloc_shift <= 34` (`TASK_SIZE`).
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
@@ -84,7 +88,10 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 ## 6. Init: startup to main
 
 musl's `_start` … `__libc_start_main` reaches `main` with the invariant
-holding for the empty heap.
+holding for the empty heap. It needs from exec (spec/linux/exec.sl):
+the break within the user space (`brk_ok`), the auxiliary vector apart
+from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
+`brk_start_ok`.
 
 ## 7. Usability
 
