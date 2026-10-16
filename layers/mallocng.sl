@@ -282,7 +282,10 @@ pred fresh_ok(c: Cfg, A: Abs, m: Mem) =
     auxv_len: len(A.auxv) >= 1 &&
     auxv: (all k: nat. k < len(A.auxv) ->
        rd(m, A.auxv_at + 16 * k, 8) = A.auxv[k][0] && rd(m, A.auxv_at + 16 * k + 8, 8) = A.auxv[k][1]) &&
-    auxv_end: A.auxv[len(A.auxv) - 1][0] = AT_NULL && auxv_null: (all k: nat. k + 1 < len(A.auxv) -> A.auxv[k][0] != AT_NULL)
+    auxv_end: A.auxv[len(A.auxv) - 1][0] = AT_NULL && auxv_null: (all k: nat. k + 1 < len(A.auxv) -> A.auxv[k][0] != AT_NULL) &&
+    // (on the initial stack, apart from the context)
+    auxv_ctx: (all k: nat, a: nat. k < len(auxv_ranges(A)) && auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
+       !(c.ctx <= a && a < c.ctx + CTX_SIZE))
 
 pred areas_ok(c: Cfg, A: Abs, m: Mem) =
   head: ctx_word(c, m, C_AREA_HEAD) = (if len(A.areas) = 0 { 0 } else { A.areas[0] }) &&
@@ -475,7 +478,7 @@ pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
      a notin live_of(blocks) && !in_reserved(A, a) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
   auxv: (all k: nat, a: nat. k < len(auxv_ranges(A)) &&
      auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
-       m_mapped(m, a) && pg(m, a).value.prot.r)
+       m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack)
 
 // Separate regions: the data symbols, the image, the meta areas, the
 // reserved pages and the individually mapped groups do not overlap (nested
@@ -488,9 +491,11 @@ fn regions(c: Cfg, A: Abs) -> List[(nat, nat)] =
 pred separate(rs: List[(nat, nat)]) =
   all k: nat, l: nat. k < len(rs) && l < len(rs) && k != l -> apart(rs[k], rs[l])
 
-// the program break: not used yet, given up, or where the kernel has it
+// the program break: not used yet (the kernel's in the user space: only
+// malloc moves it, musl's brk() refuses), given up, or where the kernel
+// has it
 pred brk_ok(A: Abs, brk: Addr) =
-  A.brk = 0 || A.brk = 2^64 - 1 || (A.brk = uint(brk) && A.brk % 4096 = 0)
+  (A.brk = 0 && uint(brk) <= TASK_SIZE) || A.brk = 2^64 - 1 || (A.brk = uint(brk) && A.brk % 4096 = 0)
 
 // the size classes' table (the code reads it): readable, as the source has
 // it, one of the image's constants (in a read-only segment)
