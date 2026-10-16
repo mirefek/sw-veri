@@ -790,3 +790,15 @@ item is a short summary of finished work; details are in the files named.
   the facts whose conclusion matches the goal) and a note for a theorem
   stating what one before it states (12 such pairs found by hand-written
   proofs, listed in todo §7).
+- **alloc_meta's transitions**, each keeping the invariant in memory
+  (proofs/mallocng/model/): a meta taken in general (`mp.tk_holds_in`) --
+  the free list's head (`mp.tfr_holds_in`) or the last area's next one
+  (`mp.tav_holds_in`); a meta area added from the reserve
+  (newarea.core, `mp.na_holds_in`: the reserve's region split,
+  `mp.sep_split`); the reserve refilled from fresh pages, or the break
+  alone set (refill.core, `mp.rf_holds_in`: the owned bytes all mapped,
+  `mp.owned_mapped`, so the fresh range apart from every region,
+  `mp.sep_replace`); the first call's initialization (first.core,
+  `mp.fs_holds_in`). The invariant gained: the reserve 0 just when empty,
+  its pages not the stack's, no client's bytes in it; the read-only
+  segments' pages stated at their own bytes.
