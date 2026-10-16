@@ -434,6 +434,81 @@ proof
   show by taut(c1, c2)
 qed
 
+// (x taken, the groups and the ranges as before: a byte outside x's record
+// held after just when before -- so its view entry the same, its value and
+// page the same; its page the same, its page alone)
+theorem mp.take_held(c, A, A2, b, x, a): A.taken in list_type(omega) -> x in omega ->
+  mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.metas = A.metas -> A2.slots = A.slots -> A2.used = A.used ->
+  A2.taken = seq_concat(A.taken, seq_one(x)) -> !(int_le(x, a) && int_lt(a, int_add(x, 40))) ->
+  (a in mallocng.held(c, A2, b) <-> a in mallocng.held(c, A, b))
+proof
+  assume tl xo fpr em es eu etk nx
+  have re := apply(mp.inres_fields[A := A, A2 := A2, a := a], em, es, eu)
+  have ts := apply(mp.taken_snoc[A := A, A2 := A2, x := x, a := a], tl, xo, etk)
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  have te: mallocng.in_taken(A2, a) <-> mallocng.in_taken(A, a) by taut(rewrite(cm, ts), nx)
+  show := apply(mp.held_same[c := c, A := A, A2 := A2, b := b, a := a], fpr, re, te)
+qed
+
+theorem mp.take_agree(c, A, A2, vm, V1, b, x, a): A.taken in list_type(omega) -> x in omega -> a in omega ->
+  mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.metas = A.metas -> A2.slots = A.slots -> A2.used = A.used ->
+  A2.taken = seq_concat(A.taken, seq_one(x)) -> !(int_le(x, a) && int_lt(a, int_add(x, 40))) ->
+  V1.bytes[bits_of_int(64, a)] = vm.bytes[bits_of_int(64, a)] -> V1.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] ->
+  mallocng.mview(V1, mallocng.held(c, A2, b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a]
+proof
+  assume tl xo hao fpr em es eu etk nx eb ep
+  have hm := apply(mp.take_held[c := c, A := A, A2 := A2, b := b, x := x, a := a], tl, xo, fpr, em, es, eu, etk, nx)
+  show := apply(mp.view_tr[vm := vm, V2 := V1, F := mallocng.held(c, A, b), F2 := mallocng.held(c, A2, b), a := a], hao, hm, eb, ep)
+qed
+
+theorem mp.take_pg(c, A, A2, vm, V1, b, x, a): A.taken in list_type(omega) -> x in omega -> a in omega ->
+  mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.metas = A.metas -> A2.slots = A.slots -> A2.used = A.used ->
+  A2.taken = seq_concat(A.taken, seq_one(x)) -> !(int_le(x, a) && int_lt(a, int_add(x, 40))) ->
+  V1.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] ->
+  mallocng.pg(mallocng.mview(V1, mallocng.held(c, A2, b)), a) = mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a)
+proof
+  assume tl xo hao fpr em es eu etk nx ep
+  have hm := apply(mp.take_held[c := c, A := A, A2 := A2, b := b, x := x, a := a], tl, xo, fpr, em, es, eu, etk, nx)
+  have a1 := mp(app_fn_build[d := omega, v := y. ite(y in mallocng.held(c, A, b), some(pair(vm.bytes[bits_of_int(64, y)], vm.pages[int_div(y, x86_64_linux.PAGE)])), none), a := a], hao)
+  have a2 := mp(app_fn_build[d := omega, v := y. ite(y in mallocng.held(c, A2, b), some(pair(V1.bytes[bits_of_int(64, y)], V1.pages[int_div(y, x86_64_linux.PAGE)])), none), a := a], hao)
+  have c1: a in mallocng.held(c, A, b) -> mallocng.pg(mallocng.mview(V1, mallocng.held(c, A2, b)), a) = mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a) proof
+    assume h
+    have h2: a in mallocng.held(c, A2, b) by taut(hm, h)
+    show by defs(simp(a1, a2, h, h2, ep), mallocng.pg, mallocng.mview)
+  qed
+  have c2: !(a in mallocng.held(c, A, b)) -> mallocng.pg(mallocng.mview(V1, mallocng.held(c, A2, b)), a) = mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a) proof
+    assume h
+    have h2: !(a in mallocng.held(c, A2, b)) by taut(hm, h)
+    show by defs(simp(a1, a2, h, h2), mallocng.pg, mallocng.mview)
+  qed
+  show by taut(c1, c2)
+qed
+
+// (x taken, the memory written at w .. w+n-1 only, its pages as before: a
+// byte outside both, the same in the invariant's view after)
+theorem mp.take_view(c, A, A2, vm, V1, b, x, w, n, a): mallocng.holds_in(c, A, vm, b) -> A.taken in list_type(omega) -> x in omega ->
+  mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.metas = A.metas -> A2.slots = A.slots -> A2.used = A.used ->
+  A2.taken = seq_concat(A.taken, seq_one(x)) ->
+  (all y. y in bits(64) -> !(int_le(w, y) && int_lt(y, int_add(w, n))) -> V1.bytes[y] = vm.bytes[y]) -> V1.pages = vm.pages ->
+  a in omega -> !(int_le(w, a) && int_lt(a, int_add(w, n))) -> !(int_le(x, a) && int_lt(a, int_add(x, 40))) ->
+  mallocng.mview(V1, mallocng.held(c, A2, b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a]
+proof
+  assume hh tl xo fpr em es eu etk hby ep hao nw nx
+  have {hm = mapped} := expand(hh, mallocng.holds_in)
+  have hs := apply(mp.take_held[c := c, A := A, A2 := A2, b := b, x := x, a := a], tl, xo, fpr, em, es, eu, etk, nx)
+  have e1 := apply(mp.view_mem[vm := V1, F1 := mallocng.held(c, A2, b), F2 := mallocng.held(c, A, b), a := a], hao, hs)
+  have bt: a in mallocng.held(c, A, b) -> V1.bytes[bits_of_int(64, a)] = vm.bytes[bits_of_int(64, a)] proof
+    assume hf
+    have {hff = fp} := apply(mp.held_fp, hf)
+    have lo := apply(mp.fp_low[c := c, A := A, vm := vm, b := b, a := a], hm, hff)
+    have e: bits_of_int(64, a) = a by defs(arith(hao, lo), bits_of_int, pow2)
+    have ab: a in bits(64) by arith(hao, lo)
+    show := rewrite(sym(e), mp(all_elim(hby, {a}), ab, nw))
+  qed
+  have e2 := apply(mp.view_agree[vm := vm, vm2 := V1, fp := mallocng.held(c, A, b), a := a], hao, bt, ep)
+  show := trans(e1, e2)
+qed
+
 // (one fewer available: the ones before but the first of them, x)
 theorem mp.avail_dec(A, A2, x, g): A in mallocng.Abs -> int_lt(0, A.avail_cnt) -> int_le(A.avail_cnt, mallocng.NSLOTS) ->
   A2.areas = A.areas -> A2.avail_cnt = int_sub(A.avail_cnt, 1) ->
