@@ -105,6 +105,28 @@ pub(crate) fn flatten(s: &LSyms, t: &Term, known: &[Term]) -> Option<Vec<Piece>>
     }
 }
 
+/// `t` as a concatenation of pieces, a known list taken whole even when it
+/// is itself a concatenation (`flatten` takes it apart); `[]` and `[x]`
+/// still by their lengths.
+pub(crate) fn flatten_known(s: &LSyms, t: &Term, known: &[Term]) -> Option<Vec<Piece>> {
+    match t.node() {
+        Node::App(e, a) if a.is_empty() && is(*e, s.empty) => Some(Vec::new()),
+        Node::App(o, a) if is(*o, s.one) => Some(vec![Piece::One(a[0].clone())]),
+        _ if known.contains(t) => Some(vec![Piece::List(t.clone())]),
+        Node::App(c, a) if is(*c, s.concat) => {
+            let mut x = flatten_known(s, &a[0], known)?;
+            x.extend(flatten_known(s, &a[1], known)?);
+            Some(x)
+        }
+        Node::App(c, a) if is(*c, s.append) => {
+            let mut x = flatten_known(s, &a[0], known)?;
+            x.push(Piece::One(a[1].clone()));
+            Some(x)
+        }
+        _ => None,
+    }
+}
+
 impl Logic {
     /// `premises -> A = B` for list expressions A, B with the same pieces.
     pub fn list_eq(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
@@ -129,11 +151,31 @@ impl Logic {
     pub fn list_at(&self, env: &Env, premises: &[Term], t: &Term) -> KResult<Term> {
         let s = LSyms::new(env);
         let known = known_lists(env, premises);
-        let (l, i) = match t.node() {
-            Node::App(f, a) if is(*f, s.app) => (&a[0], &a[1]),
+        let l = match t.node() {
+            Node::App(f, a) if is(*f, s.app) => &a[0],
             _ => return err("at: not `app(L, i)`"),
         };
-        let pieces = flatten(&s, l, &known).ok_or_else(|| KernelError("at: not a list expression over known lists".into()))?;
+        // (the pieces down to the known lists and singletons; failing, a
+        // known concatenation taken as one piece)
+        let first = flatten(&s, l, &known)
+            .ok_or_else(|| KernelError("at: not a list expression over known lists".into()))
+            .and_then(|p| self.list_at_pieces(env, premises, t, p));
+        if first.is_err() {
+            if let Some(p) = flatten_known(&s, l, &known) {
+                if let Ok(r) = self.list_at_pieces(env, premises, t, p) {
+                    return Ok(r);
+                }
+            }
+        }
+        first
+    }
+
+    fn list_at_pieces(&self, env: &Env, premises: &[Term], t: &Term, pieces: Vec<Piece>) -> KResult<Term> {
+        let s = LSyms::new(env);
+        let i = match t.node() {
+            Node::App(_, a) => &a[1],
+            _ => return err("at: not `app(L, i)`"),
+        };
         let g = |n: &str| env.ksym(n);
         let (Some(int_add), Some(int_sub), Some(int_le), Some(int_lt), Some(and), Some(omega), Some(len)) =
             (g("int_add"), g("int_sub"), g("int_le"), g("int_lt"), g("and"), g("omega"), s.len)

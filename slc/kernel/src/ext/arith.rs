@@ -299,7 +299,12 @@ impl Reader {
             Node::App(p, a) if is(*p, s.pair) && a.len() == 2 && small(&a[0]) == Some(1) && small(&a[1]).is_some_and(|m| m > 0) => true,
             Node::App(f, a) if is(*f, s.succ) => small(&a[0]).is_some() || self.nats.contains(&a[0]),
             // the length of a list expression (a natural)
-            Node::App(f, a) if is(*f, self.ls.len) && super::list::flatten(&self.ls, &a[0], &self.lists).is_some() => true,
+            Node::App(f, a)
+                if is(*f, self.ls.len)
+                    && (super::list::flatten(&self.ls, &a[0], &self.lists).is_some() || super::list::flatten_known(&self.ls, &a[0], &self.lists).is_some()) =>
+            {
+                true
+            }
             Node::App(f, a) => {
                 [s.int_add, s.int_sub, s.int_neg, s.int_mul, s.int_div, s.int_mod, s.int_succ, s.int_pred, s.pow2, s.int_pow].iter().any(|g| is(*f, *g))
                     || self.bits_op(t).is_some()
@@ -395,7 +400,8 @@ impl Reader {
             // the length of a list expression: its singletons plus the
             // lengths of the lists in it (each >= 0)
             Node::App(f, a) if is(*f, self.ls.len) => {
-                if let Some(pieces) = super::list::flatten(&self.ls, &a[0], &self.lists) {
+                // (a known concatenation whole when its pieces are not all known)
+                if let Some(pieces) = super::list::flatten(&self.ls, &a[0], &self.lists).or_else(|| super::list::flatten_known(&self.ls, &a[0], &self.lists)) {
                     let mut l = Lin::konst(0);
                     for p in pieces {
                         l = match p {

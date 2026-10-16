@@ -686,7 +686,7 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | `part(p, {k})`, `unsel(h)` | a conjunct; `z in S && P(z)` from `z in set_select(S, x. P)` |
 | `prop({t})`, `lit({t})` | `t` is a proposition; a literal fact |
 | `rec({t}[, h])` | the recursion equations of `nat_rec` |
-| `at({L[i]}, p..)` | the element at i of a list expression (or of a defined list constant's) |
+| `at({L[i]}, p..)` | the element at i of a list expression (or of a defined list constant's); a list known by `X in list_type(T)` among p.. is a piece, a known concatenation also whole when its own pieces are not all known (as `seq_len` in `arith`) |
 | `list_ext(ha, hb, hl, he)` | list extensionality |
 | `members({S}, h..)` | the members of S on concrete data |
 | `rsimp(h, e.., [only])` | h simplified |

@@ -388,6 +388,10 @@ impl Seq {
         let bf = env.binders_fn();
         let body = abstract_to(&s.concl, target, &a, &b, 0, &bf)
             .ok_or_else(|| KernelError(format!("rewrite: `{}` does not become the statement by `{}` -> `{}`", Printer::new(env).short(&s.concl), Printer::new(env).short(&a), Printer::new(env).short(&b))))?;
+        // (nothing rewritten: the fact already the statement)
+        if body == s.concl {
+            return err(format!("rewrite: `{}` is already the statement", Printer::new(env).short(&s.concl)));
+        }
         Self::subst(env, eq, &body, s)
     }
 

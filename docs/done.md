@@ -802,3 +802,8 @@ item is a short summary of finished work; details are in the files named.
   `mp.fs_holds_in`). The invariant gained: the reserve 0 just when empty,
   its pages not the stack's, no client's bytes in it; the read-only
   segments' pages stated at their own bytes.
+- **Names, lists, rewriting**: `[l] P(args)` states P's clause labelled l
+  and `clauses(p..)` assembles a predicate from its clauses' proofs in any
+  order; `rewrite(e, p)` with its result stated rewrites only where the
+  result differs; `at` and `arith`'s lengths take a known concatenation
+  whole when its own pieces are not all known.
