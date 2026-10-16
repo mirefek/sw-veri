@@ -357,11 +357,12 @@ def mp.rfbyte(c, a) := (int_le(int_add(c.ctx, 40), a) && int_lt(a, int_add(c.ctx
 
 // the step: the reserve empty; K pages at R2 unmapped before, mapped
 // after (not the stack, zero); the pages mapped before as they were, their
-// bytes too but the context words written
+// bytes too but the context words written. (K = 0: no pages -- the break
+// alone set, brk's failure)
 abbrev mp.rfpre(c, A, vm, V1, b, R2, K, B) := cfg: c in mallocng.Cfg && univ: A in univ(1) && abs: A in mallocng.Abs &&
   blocks: b in fn_space(bits(64), option(omega)) && vm: vm in x86_64_linux.Vm && v1: V1 in x86_64_linux.Vm &&
   holds: mallocng.holds_in(c, A, vm, b) && init: !(A.init_done = 0) && empty: A.reserve_cnt = 0 &&
-  nat: (R2 in omega && K in omega && B in omega) && kpos: int_lt(0, K) && al: int_mod(R2, 4096) = 0 && pos: int_lt(0, R2) &&
+  nat: (R2 in omega && K in omega && B in omega) && nz: ((K = 0 && R2 = 0) || (int_lt(0, K) && int_lt(0, R2))) && al: int_mod(R2, 4096) = 0 &&
   fresh: (all a. a in omega -> int_le(R2, a) -> int_lt(a, int_add(R2, int_mul(4096, K))) -> !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) &&
   newpg: (all a. a in omega -> int_le(R2, a) -> int_lt(a, int_add(R2, int_mul(4096, K))) ->
      (mallocng.m_mapped(mallocng.mview(V1, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V1, mallocng.all_bytes()), a)).kind = 2)) &&
@@ -372,7 +373,7 @@ abbrev mp.rfpre(c, A, vm, V1, b, R2, K, B) := cfg: c in mallocng.Cfg && univ: A 
   brk: mallocng.brk_ok(mp.refill(A, R2, K, B), V1.brk) &&
   w40: gimple.bytes_at(V1, int_add(c.ctx, 40), 8) = K &&
   w48: int_le(gimple.bytes_at(V1, int_add(c.ctx, 48), 8), 34) &&
-  w72: gimple.bytes_at(V1, int_add(c.ctx, 72), 8) = R2 &&
+  w72: (int_lt(0, K) -> gimple.bytes_at(V1, int_add(c.ctx, 72), 8) = R2) &&
   w920: gimple.bytes_at(V1, int_add(c.ctx, 920), 8) = B
 
 // (the new state's fixed ranges: the old ones and the new reserve)
@@ -745,8 +746,9 @@ proof
   have q48 := apply(mp.rf_cwr[c := c, A := A, vm := vm, V1 := V1, b := b, R2 := R2, K := K, B := B, off := 48], P, simp(), arith())
   have k7: mallocng.ctx_word(c, M2, mallocng.C_AREA_CNT) = A2.reserve_cnt by defs(simp(trans(sym(q40), x40)), mallocng.ctx_word, mallocng.C_AREA_CNT)
   have k8: int_lt(0, A2.reserve_cnt) -> mallocng.ctx_word(c, M2, mallocng.C_AVAIL_AREAS) = A2.reserve && int_mod(A2.reserve, 4096) = 0 proof
-    assume _
-    have e: mallocng.ctx_word(c, M2, mallocng.C_AVAIL_AREAS) = A2.reserve by defs(simp(trans(sym(q72), x72)), mallocng.ctx_word, mallocng.C_AVAIL_AREAS)
+    assume hk8
+    have k0: int_lt(0, K) by simp(hk8)
+    have e: mallocng.ctx_word(c, M2, mallocng.C_AVAIL_AREAS) = A2.reserve by defs(simp(trans(sym(q72), mp(x72, k0))), mallocng.ctx_word, mallocng.C_AVAIL_AREAS)
     show by taut(e, (int_mod(A2.reserve, 4096) = 0 by simp(ral)))
   qed
   have k9: mallocng.ctx_word(c, M2, mallocng.C_BRK) = A2.brk by defs(simp(trans(sym(q920), x920)), mallocng.ctx_word, mallocng.C_BRK)
@@ -1127,7 +1129,7 @@ proof
   let A2 := mp.refill(A, R2, K, B)
   let M := mallocng.mview(vm, mallocng.held(c, A, b))
   let M2 := mallocng.mview(V1, mallocng.held(c, A2, b))
-  have {hc = cfg, hu = univ, ha = abs, hb = blocks, hh = holds, ni = init, hn = nat, hkp = kpos, hpos = pos, hbk2 = brk, hfr = fresh} := P
+  have {hc = cfg, hu = univ, ha = abs, hb = blocks, hh = holds, ni = init, hn = nat, hnz = nz, hbk2 = brk, hfr = fresh} := P
   have hro hko hbo := hn
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {hnm = normal, hcl = classes, hdb = debruijn, hff = fixed, hga = apart, himg = image, huo = used, hpt = part} := expand(H, mallocng.holds)
@@ -1244,7 +1246,17 @@ proof
   have r3: A2.reserve_cnt = 0 <-> A2.reserve = 0 proof
     have z1: A2.reserve_cnt = K by simp()
     have z2: A2.reserve = R2 by simp()
-    show by taut((!(A2.reserve_cnt = 0) by arith(z1, hkp)), (!(A2.reserve = 0) by arith(z2, hpos)))
+    have d1: K = 0 && R2 = 0 -> (A2.reserve_cnt = 0 <-> A2.reserve = 0) proof
+      assume h
+      have e1 e2 := h
+      show by taut((A2.reserve_cnt = 0 by arith(z1, e1)), (A2.reserve = 0 by arith(z2, e2)))
+    qed
+    have d2: int_lt(0, K) && int_lt(0, R2) -> (A2.reserve_cnt = 0 <-> A2.reserve = 0) proof
+      assume h
+      have e1 e2 := h
+      show by taut((!(A2.reserve_cnt = 0) by arith(z1, e1)), (!(A2.reserve = 0) by arith(z2, e2)))
+    qed
+    show by taut(hnz, d1, d2)
   qed
   have m4: !mallocng.is_used(A2, 0) by taut(n4, all_elim(iu, {0}))
   have nm2: mallocng.normal(A2) by defs(taut(m1, m2, r3, m4), mallocng.normal)
