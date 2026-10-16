@@ -655,7 +655,7 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | rule | result |
 |---|---|
 | `mp(ab, a1, ..)` | modus ponens; a term `{t}` instantiates the leading `all` |
-| `apply(f, a1, ..)` | f instantiated by matching its premises with the proofs, then applied; terms `{t}` fill `all`s in order |
+| `apply(f, a1, ..)` | f instantiated by matching its premises with the proofs, in order, then applied; terms `{t}` fill `all`s in order. As `show by apply(..)` f's conclusion is matched with the goal first: its binder parameters (a contract's precondition and body) come from the goal, and an argument may be a rule with a goal (`simp()`, `defs(..)`) proving the premise so instantiated |
 | `all_elim(p, {t}, ..)` | instantiate `all`s |
 | `conj(p1, .., pn)` | `p1 && .. && pn` |
 | `refl({t})`, `sym(e)`, `trans(e1, e2)` | equality |

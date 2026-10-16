@@ -754,3 +754,10 @@ item is a short summary of finished work; details are in the files named.
   premise of `ct.contract_div` (`ct.contract_div0` without a precondition)
   inferred and proved by a lemma per body shape (`ct.dv_havoc`, ...), no
   spec body copied.
+- **No spec body copied** (the bookkeeping of contracts): a goal-directed
+  `show by apply(ct.contract_done, ..)` (`_ret`, `_ovf`) takes the
+  contract's precondition and body from the unfolded spec, its body premise
+  proved by a rule with that goal (`defs(taut(ex), letin, any_rel)`);
+  `ct.contract_inv` takes the run first, so it infers them too; the ghost
+  divergence lemmas' body premises by `ct.dv_ret_a` / `_ret2_a` / `_ret3_a`
+  (mp.ss, dq, dqh, qu, fm; mp.ag/as/az/db/ef/gm/gsi/ta divergence).

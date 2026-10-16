@@ -11,9 +11,6 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   class), the thread pointer's word apart from the slot (the C world's
   TLS), a stride below 2^31; the slot's access is the invariant's
   (`mp.slot_rw_of`).
-- The spec bookkeeping: a contract's body (`letin`, `any_rel`) spelled
-  out in each refinement (`mp.ef`, `mp.ss`); a generic lemma per spec shape
-  (havoc, then return) would take it.
 
 ## 2. Next: alloc_group, loops on the CFG and loops by their purpose
 
@@ -111,8 +108,9 @@ holding for the empty heap.
 - `rewrite(e, f)` rewrites every occurrence, also inside abbreviations
   that unfold to the term (`rewrite(sym(i0), ..)` turning each `0` of
   `mp.res_abs(A2, GN, 0)` into `i`; `rewrite(p0, ..)` each `pow2(0)` in
-  it): a `subst` with its motive written out is the workaround. A rewrite
-  at chosen positions, or one keeping abbreviations folded, would do.
+  it): a `subst` with its motive written out, or the occurrences selected
+  (`rewrite(e, p, {k}..)`, counted in the unfolded term), is the workaround.
+  A rewrite keeping abbreviations folded would do.
 - The kernel normalizes `pow2(0)` to `1` in a step's output but not in a
   `let` or a lemma's instance; the two forms then fail to match
   (`mp.as_run`'s V3).
