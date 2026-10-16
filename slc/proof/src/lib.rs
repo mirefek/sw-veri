@@ -1148,6 +1148,31 @@ impl State {
                     eprintln!("  goal: {}", p.term(g));
                 }
             }
+            // goal [N]: shows the current goal, the variables in scope and
+            // the named facts (the last N, else all), for writing proofs
+            "goal" => {
+                let n = if rest.trim().is_empty() {
+                    usize::MAX
+                } else {
+                    rest.trim().parse::<usize>().map_err(|_| KernelError("expected `goal` or `goal N`".into()))?
+                };
+                let p = Printer::new(env);
+                match &self.goal {
+                    Some(g) => eprintln!("line {}: goal: {}", line, p.term(g)),
+                    None => eprintln!("line {}: no goal (a `show` of the block's result)", line),
+                }
+                let vs: Vec<&str> = self.scope.iter().map(|(x, _)| x.as_str()).filter(|x| !x.starts_with("__")).collect();
+                if !vs.is_empty() {
+                    eprintln!("  vars: {}", vs.join(" "));
+                }
+                let named: Vec<&(String, Seq)> = self.facts.iter().filter(|(x, _)| !x.starts_with("__") && x != "_").collect();
+                let skip = named.len().saturating_sub(n);
+                // (a name bound twice: the last one counts)
+                for (i, (x, s)) in named.iter().enumerate().skip(skip) {
+                    let hidden = named[i + 1..].iter().any(|(y, _)| y == x);
+                    eprintln!("  {}{}: {}", x, if hidden { " (shadowed)" } else { "" }, p.term(s.concl()));
+                }
+            }
             "step" => self.step_run(env, lg, rest)?,
             "obtain" => {
                 // obtain x, h from P   (P: ex y. ψ(y); h: ψ(x) for a new x);
@@ -2768,58 +2793,44 @@ impl State {
         r
     }
 
-    /// `ex regs. gc.regs_ok(regs, args)`: by the lemma of the arguments'
-    /// widths (proofs/gimple_inv.core, proofs/mallocng/code/ctx.core), each
-    /// argument a word of its width (`using`)
+    /// `ex regs. gc.regs_ok(regs, args)`: `gc.regs_for(args)` along the
+    /// list's nesting (proofs/gimple_inv.core: `gc.regs_one` for an
+    /// argument, a word of its width by `using`; `gc.regs_cat` for two
+    /// lists), then `gc.regs_get`; no arguments: `gc.regs0_ex`
     fn step_regs_ex(&mut self, env: &mut Env, lg: &Logic, args: &Term, using: &[Seq]) -> KResult<Seq> {
-        let sym = |n: &str| env.sym_by_name.get(n).copied();
-        let (concat, one, arg, empty, in_, bits) = (sym("seq_concat"), sym("seq_one"), sym("gimple.arg"), sym("empty"), sym("in"), sym("bits"));
-        let mut leaves = Vec::new();
-        fn walk(t: &Term, concat: Option<SymId>, one: Option<SymId>, out: &mut Vec<Term>) -> bool {
-            match t.node() {
-                Node::App(c, a) if Some(*c) == concat => walk(&a[0], concat, one, out) && walk(&a[1], concat, one, out),
-                Node::App(o, a) if Some(*o) == one => {
-                    out.push(a[0].clone());
-                    true
-                }
-                _ => false,
+        let empty = env.sym_by_name.get("empty").copied();
+        if matches!(args.node(), Node::App(e, a) if Some(*e) == empty && a.is_empty()) {
+            return facts::seq_of(env, "gc.regs0_ex").ok_or_else(|| KernelError("step: `gc.regs0_ex` is not loaded".into()));
+        }
+        let rf = self.step_regs_for(env, lg, args, using)?;
+        self.lemma(env, lg, "gc.regs_get", &[rf])
+    }
+
+    /// `gc.regs_for(t)`, t a nesting of `seq_concat`s of `seq_one(gimple.arg(w, x))`s
+    fn step_regs_for(&mut self, env: &mut Env, lg: &Logic, t: &Term, using: &[Seq]) -> KResult<Seq> {
+        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("step: no `{}`", n)));
+        let (concat, one, arg) = (sym("seq_concat")?, sym("seq_one")?, sym("gimple.arg")?);
+        let (in_, bits, omega, le) = (sym("in")?, sym("bits")?, sym("omega")?, sym("int_le")?);
+        match t.node() {
+            Node::App(c, a) if *c == concat => {
+                let (l, r) = (a[0].clone(), a[1].clone());
+                let pl = self.step_regs_for(env, lg, &l, using)?;
+                let pr = self.step_regs_for(env, lg, &r, using)?;
+                self.lemma(env, lg, "gc.regs_cat", &[pl, pr])
             }
-        }
-        let is_empty = matches!(args.node(), Node::App(e, a) if Some(*e) == empty && a.is_empty());
-        if !is_empty && !walk(args, concat, one, &mut leaves) {
-            return err("step: a call's arguments not a list of `gimple.arg`s");
-        }
-        let mut widths = Vec::new();
-        let mut words = Vec::new();
-        for l in &leaves {
-            match l.node() {
-                Node::App(a, x) if Some(*a) == arg => {
-                    widths.push(x[0].clone());
-                    words.push(x[1].clone());
+            Node::App(o, a) if *o == one => {
+                let Node::App(g, wx) = a[0].node() else { return err("step: a call's argument not `gimple.arg(w, x)`") };
+                if *g != arg {
+                    return err("step: a call's argument not `gimple.arg(w, x)`");
                 }
-                _ => return err("step: a call's argument not `gimple.arg(w, x)`"),
+                let (w, x) = (wx[0].clone(), wx[1].clone());
+                let hw = self.mem_discharge(env, lg, &Term::app(in_, vec![w.clone(), Term::app(omega, vec![])]), using, 0)?;
+                let hl = self.mem_discharge(env, lg, &Term::app(le, vec![w.clone(), Term::nat(sl_kernel::Nat::from_u128(64))]), using, 0)?;
+                let hx = self.mem_discharge(env, lg, &Term::app(in_, vec![x, Term::app(bits, vec![w])]), using, 0)?;
+                self.lemma(env, lg, "gc.regs_one", &[hw, hl, hx])
             }
+            _ => err("step: a call's arguments not a list of `gimple.arg`s"),
         }
-        let ws: Vec<String> = widths.iter().map(|w| Printer::new(env).term(w)).collect();
-        let name = match ws.iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice() {
-            [] => "gc.regs0_ex",
-            ["64"] => "gc.regs1_ex",
-            ["32"] => "gc.regs1_32_ex",
-            ["64", "64"] => "gc.regs2_ex",
-            ["32", "64"] => "gc.regs_32_64_ex",
-            ["64", "64", "64"] => "gc.regs3_ex",
-            ["64", "32", "32"] => "gc.regs3w_ex",
-            _ => return err(format!("step: no register lemma for arguments of widths {}", ws.join(", "))),
-        };
-        let (in_, bits) = (in_.ok_or_else(|| KernelError("no `in`".into()))?, bits.ok_or_else(|| KernelError("no `bits`".into()))?);
-        let mut pre = Vec::new();
-        for (w, x) in widths.iter().zip(&words) {
-            pre.push(self.mem_discharge(env, lg, &Term::app(in_, vec![x.clone(), Term::app(bits, vec![w.clone()])]), using, 0)?);
-        }
-        if pre.is_empty() {
-            return facts::seq_of(env, name).ok_or_else(|| KernelError(format!("step: `{}` is not loaded", name)));
-        }
-        self.lemma(env, lg, name, &pre)
     }
 
     /// `runs(app(F, a), s, o)`: F's definition unfolded (a defined function

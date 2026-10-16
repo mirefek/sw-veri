@@ -258,31 +258,31 @@ pred cyclic(m: Mem, head: nat, l: List[nat]) =
      rd(m, l[i] + 8, 8) = l[(i + 1) % len(l)] && rd(m, l[i], 8) = l[(i + len(l) - 1) % len(l)])
 
 pred ctx_ok(c: Cfg, A: Abs, m: Mem) =
-  ctx_word(c, m, C_SECRET) = A.secret &&
-  rd(m, c.ctx + C_INIT_DONE, 4) = A.init_done && A.init_done < 2 &&
-  ctx_word(c, m, C_AVAIL_CNT) = A.avail_cnt && A.avail_cnt <= NSLOTS &&
-  (A.avail_cnt > 0 -> len(A.areas) > 0 &&
+  secret: ctx_word(c, m, C_SECRET) = A.secret &&
+  init: rd(m, c.ctx + C_INIT_DONE, 4) = A.init_done && init_lt: A.init_done < 2 &&
+  avail_cnt: ctx_word(c, m, C_AVAIL_CNT) = A.avail_cnt && avail_le: A.avail_cnt <= NSLOTS &&
+  avail_meta: (A.avail_cnt > 0 -> len(A.areas) > 0 &&
      ctx_word(c, m, C_AVAIL_META) = meta_at(A.areas[len(A.areas) - 1], NSLOTS - A.avail_cnt)) &&
-  ctx_word(c, m, C_AREA_CNT) = A.reserve_cnt &&
-  (A.reserve_cnt > 0 -> ctx_word(c, m, C_AVAIL_AREAS) = A.reserve && A.reserve % 4096 = 0) &&
-  ctx_word(c, m, C_BRK) = A.brk &&
-  cyclic(m, ctx_word(c, m, C_FREE_META), A.free_metas) &&
-  len(A.active) = 48 &&
-  (all sc: nat. sc < 48 -> cyclic(m, ctx_word(c, m, C_ACTIVE + 8 * sc), A.active[sc])) &&
+  area_cnt: ctx_word(c, m, C_AREA_CNT) = A.reserve_cnt &&
+  avail_areas: (A.reserve_cnt > 0 -> ctx_word(c, m, C_AVAIL_AREAS) = A.reserve && A.reserve % 4096 = 0) &&
+  brk: ctx_word(c, m, C_BRK) = A.brk &&
+  free_metas: cyclic(m, ctx_word(c, m, C_FREE_META), A.free_metas) &&
+  nactive: len(A.active) = 48 &&
+  active: (all sc: nat. sc < 48 -> cyclic(m, ctx_word(c, m, C_ACTIVE + 8 * sc), A.active[sc])) &&
   // (the meta areas' mappings, 2 << shift pages each, doubling: one of
   // 2^35 pages is past the user space, so never made)
-  ctx_word(c, m, C_META_SHIFT) <= 34
+  shift: ctx_word(c, m, C_META_SHIFT) <= 34
 
 // before the first allocation: nothing yet, and libc's auxv is readable
 pred fresh_ok(c: Cfg, A: Abs, m: Mem) =
   A.init_done = 0 ->
-    len(A.areas) = 0 && A.reserve_cnt = 0 && len(A.free_metas) = 0 && len(A.used) = 0 &&
-    A.avail_cnt = 0 && (all sc: nat. sc < 48 -> len(A.active[sc]) = 0) &&
-    rd(m, c.libc + L_AUXV, 8) = A.auxv_at &&
-    len(A.auxv) >= 1 &&
-    (all k: nat. k < len(A.auxv) ->
+    areas: len(A.areas) = 0 && reserve: A.reserve_cnt = 0 && free_metas: len(A.free_metas) = 0 && used: len(A.used) = 0 &&
+    avail: A.avail_cnt = 0 && active: (all sc: nat. sc < 48 -> len(A.active[sc]) = 0) &&
+    auxv_at: rd(m, c.libc + L_AUXV, 8) = A.auxv_at &&
+    auxv_len: len(A.auxv) >= 1 &&
+    auxv: (all k: nat. k < len(A.auxv) ->
        rd(m, A.auxv_at + 16 * k, 8) = A.auxv[k][0] && rd(m, A.auxv_at + 16 * k + 8, 8) = A.auxv[k][1]) &&
-    A.auxv[len(A.auxv) - 1][0] = AT_NULL && (all k: nat. k + 1 < len(A.auxv) -> A.auxv[k][0] != AT_NULL)
+    auxv_end: A.auxv[len(A.auxv) - 1][0] = AT_NULL && auxv_null: (all k: nat. k + 1 < len(A.auxv) -> A.auxv[k][0] != AT_NULL)
 
 pred areas_ok(c: Cfg, A: Abs, m: Mem) =
   head: ctx_word(c, m, C_AREA_HEAD) = (if len(A.areas) = 0 { 0 } else { A.areas[0] }) &&
@@ -535,10 +535,10 @@ pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
 
 pred rep(c: Cfg, A: Abs, s: Heap) =
-  holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) && len(A.taken) = 0 &&
-  fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
-  grp_rw(c, A, s.vm, s.blocks) &&
-  live_rw(s)                 // (what the law inv_wf needs, stated directly)
+  inv: holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&
+  mapped: fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free: free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
+  rw: grp_rw(c, A, s.vm, s.blocks) &&
+  live: live_rw(s)           // (what the law inv_wf needs, stated directly)
 
 fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
 

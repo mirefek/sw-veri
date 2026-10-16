@@ -642,6 +642,128 @@ proof
   show by taut(c, k)
 qed
 
+// a call's arguments, registers for them existing (built along the list:
+// `step` composes `gc.regs_one` and `gc.regs_cat` by the arguments' nesting)
+abbrev gc.regs_for(args) := args in list_type(univ(1)) && (ex regs. gc.regs_ok(regs, args))
+
+// (one argument x of w bits: the register x)
+theorem gc.regs_one(w, x): w in omega -> int_le(w, 64) -> x in bits(w) -> gc.regs_for(seq_one(gimple.arg(w, x)))
+proof
+  assume hw hl hx
+  let ARGS := seq_one(gimple.arg(w, x))
+  let R := fn_build(1, i. x)
+  have xo xl := (x in omega && int_lt(x, pow2(w)) by taut(unsel(expand(hx, bits))))
+  have pl := mp(pow2_le[a := w, b := 64], hw, simp(), hl)
+  have x64: x in bits(64) by defs(sel(taut(xo, (int_lt(x, pow2(64)) by arith(xl, pl)))), bits)
+  have vt: all i. i in 1 -> x in bits(64) proof
+    fix i
+    assume _
+    show x64
+  qed
+  have rl := apply(build_list, (1 in omega by simp()), vt)
+  have ln: seq_len(R) = 1 by defs(simp(fn_build_dom[d := 1, v := i. x]), seq_len)
+  have l1: seq_len(ARGS) = 1 by simp()
+  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
+    fix i
+    assume hi hil
+    have e: i = 0 by arith(hi, hil, l1)
+    have q := at({ARGS[0]})
+    have r := mp(app_fn_build[d := 1, v := i. x, a := 0], simp())
+    have g: x in gimple.in_reg(fst(gimple.arg(w, x)), snd(gimple.arg(w, x))) by defs(simp(x64), gimple.in_reg, gimple.arg)
+    show by simp(e, q, r, g)
+  qed
+  have au: gimple.arg(w, x) in univ(1) by defs(simp(hw, xo), gimple.arg)
+  have al: ARGS in list_type(univ(1)) := mp(all_elim(tr.seq_one_type, {gimple.arg(w, x)}, {univ(1)}), au)
+  have ex: ex regs. gc.regs_ok(regs, ARGS) by ex_intro({R}, simp(rl, ln, l1, el))
+  show by taut(al, ex)
+qed
+
+// (two lists of arguments: registers for both, one after the other)
+theorem gc.regs_cat(a, b): gc.regs_for(a) -> gc.regs_for(b) -> gc.regs_for(seq_concat(a, b))
+proof
+  assume ha hb
+  have al ea := ha
+  have bl eb := hb
+  obtain ra, hra from ea
+  obtain rb, hrb from eb
+  have ra1 ra2 ra3 := hra
+  have rb1 rb2 rb3 := hrb
+  let n := seq_len(a)
+  let m := seq_len(b)
+  have no: n in omega by arith(al)
+  have mo: m in omega by arith(bl)
+  let R := fn_build(int_add(n, m), i. ite(int_lt(i, n), ra[i], rb[int_sub(i, n)]))
+  have nmo: int_add(n, m) in omega by arith(no, mo)
+  have vt: all i. i in int_add(n, m) -> ite(int_lt(i, n), ra[i], rb[int_sub(i, n)]) in bits(64) proof
+    fix i
+    assume hi
+    have i1 := mp(nat_elem[k := int_add(n, m), i := i], nmo, hi)
+    have i2 := mp(nat_mem_lt[k := int_add(n, m), i := i], nmo, hi)
+    have c1: int_lt(i, n) -> ite(int_lt(i, n), ra[i], rb[int_sub(i, n)]) in bits(64) proof
+      assume h
+      have r := mp(at_type[l := ra, t := bits(64), i := i], ra1, i1, arith(h, ra2))
+      show by simp(h, r)
+    qed
+    have c2: !int_lt(i, n) -> ite(int_lt(i, n), ra[i], rb[int_sub(i, n)]) in bits(64) proof
+      assume h
+      have r := mp(at_type[l := rb, t := bits(64), i := int_sub(i, n)], rb1, arith(i1, h, no), arith(i2, h, rb2, no, mo))
+      show by simp(h, r)
+    qed
+    show by taut(c1, c2)
+  qed
+  have rl :=apply(build_list, nmo, vt)
+  have ln: seq_len(R) = int_add(n, m) by defs(simp(expand(fn_build_dom[d := int_add(n, m), v := i. ite(int_lt(i, n), ra[i], rb[int_sub(i, n)])], seq_len)), seq_len)
+  have lc: seq_len(seq_concat(a, b)) = int_add(n, m) by arith(al, bl)
+  have el: all i. i in omega -> int_lt(i, seq_len(seq_concat(a, b))) -> R[i] in gimple.in_reg(fst(seq_concat(a, b)[i]), snd(seq_concat(a, b)[i])) proof
+    fix i
+    assume hi hil
+    have r := mp(app_fn_build[d := int_add(n, m), v := i. ite(int_lt(i, n), ra[i], rb[int_sub(i, n)]), a := i], mp(nat_lt_mem[k := i, n := int_add(n, m)], hi, nmo, rewrite(lc, hil)))
+    have c1: int_lt(i, n) -> R[i] in gimple.in_reg(fst(seq_concat(a, b)[i]), snd(seq_concat(a, b)[i])) proof
+      assume h
+      have q := at({seq_concat(a, b)[i]}, al, bl, hi, h)
+      have g := mp(all_elim(ra3, {i}), hi, h)
+      show by simp(r, h, q, g)
+    qed
+    have c2: !int_lt(i, n) -> R[i] in gimple.in_reg(fst(seq_concat(a, b)[i]), snd(seq_concat(a, b)[i])) proof
+      assume h
+      let k := int_sub(i, n)
+      have ko: k in omega by arith(hi, h, no)
+      have kl: int_lt(k, m) by arith(hil, h, lc, no, mo)
+      have ik: i = int_add(n, k) by arith(hi, h, no)
+      have q := rewrite(sym(ik), at({seq_concat(a, b)[int_add(n, k)]}, al, bl, ko, kl))
+      have g := mp(all_elim(rb3, {k}), ko, (int_lt(k, seq_len(b)) by arith(kl)))
+      show by simp(r, h, q, g)
+    qed
+    show by taut(c1, c2)
+  qed
+  have cl: seq_concat(a, b) in list_type(univ(1)) := mp(all_elim(tr.concat_list, {a}, {b}, {univ(1)}), al, bl)
+  have ex: ex regs. gc.regs_ok(regs, seq_concat(a, b)) by ex_intro({R}, simp(rl, ln, lc, el))
+  show by taut(cl, ex)
+qed
+
+// (... so registers for them)
+theorem gc.regs_get(a): gc.regs_for(a) -> ex regs. gc.regs_ok(regs, a)
+proof
+  assume h
+  have _ e := h
+  show e
+qed
+
+// the register of a w-bit argument x at i: x in its low w bits
+theorem gc.reg_at(regs, args, i, w, x): gc.regs_ok(regs, args) -> i in omega -> int_lt(i, seq_len(args)) ->
+  args[i] = gimple.arg(w, x) -> w in omega -> x in bits(w) -> bits_of_int(w, regs[i]) = x
+proof
+  assume h hi hil he hw hx
+  have _ _ r3 := h
+  have g := rewrite(he, mp(all_elim(r3, {i}), hi, hil))
+  have m: int_mod(regs[i], int_pow(2, w)) = int_mod(x, int_pow(2, w)) by simp(expand(g, gimple.in_reg, gimple.arg))
+  have xo xl := (x in omega && int_lt(x, int_pow(2, w)) by taut(unsel(expand(hx, bits, pow2))))
+  have u := refl({int_mul(int_pow(2, w), int_div(x, int_pow(2, w)))})
+  have u2 := refl({int_mul(int_pow(2, w), int_sub(int_div(x, int_pow(2, w)), 1))})
+  have mx: int_mod(x, int_pow(2, w)) = x by arith(xo, xl, u, u2)
+  show by defs(trans(m, mx), bits_of_int, pow2)
+qed
+
 // (the registers of a call with two 64-bit words a, b: a, b)
 theorem gc.regs2: all regs a b. a in bits(64) -> b in bits(64) -> gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b)))) ->
   regs in list_type(bits(64)) && seq_len(regs) = 2 && regs[0] = a && regs[1] = b
@@ -665,37 +787,7 @@ theorem gc.regs2_ex: all a b. a in bits(64) -> b in bits(64) ->
 proof
   fix a b
   assume ha hb
-  let R := fn_build(2, i. ite(i = 0, a, b))
-  let ARGS := seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, b)))
-  have vt: all i. i in 2 -> ite(i = 0, a, b) in bits(64) proof
-    fix i
-    assume hi
-    show by apply(ite_in, ha, hb)
-  qed
-  have rl := apply(build_list, (2 in omega by simp()), vt)
-  have ln: seq_len(R) = 2 by defs(simp(fn_build_dom[d := 2, v := i. ite(i = 0, a, b)]), seq_len)
-  have l2: seq_len(ARGS) = 2 by simp()
-  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-    fix i
-    assume hi hl
-    have c: i = 0 || i = 1 by arith(hi, hl, l2)
-    have c0: i = 0 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[0]})
-      have r := mp(app_fn_build[d := 2, v := i. ite(i = 0, a, b), a := 0], simp())
-      have g: a in gimple.in_reg(fst(gimple.arg(64, a)), snd(gimple.arg(64, a))) by defs(simp(ha), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    have c1: i = 1 -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-      assume e
-      have q := at({ARGS[1]})
-      have r := mp(app_fn_build[d := 2, v := i. ite(i = 0, a, b), a := 1], simp())
-      have g: b in gimple.in_reg(fst(gimple.arg(64, b)), snd(gimple.arg(64, b))) by defs(simp(hb), gimple.in_reg, gimple.arg)
-      show by simp(e, q, r, g)
-    qed
-    show by taut(c, c0, c1)
-  qed
-  show by ex_intro({R}, simp(rl, ln, l2, el))
+  show := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_one, simp(), arith(), ha), apply(gc.regs_one, simp(), arith(), hb)))
 qed
 
 // (a choice from a nonempty domain: some value of it)
@@ -1341,27 +1433,7 @@ theorem gc.regs1_32_ex: all a. a in bits(32) -> ex regs. gc.regs_ok(regs, seq_on
 proof
   fix a
   assume ha
-  let R := fn_build(1, i. a)
-  let ARGS := seq_one(gimple.arg(32, a))
-  have a64: a in bits(64) by simp(ha)
-  have vt: all i. i in 1 -> a in bits(64) proof
-    fix i
-    assume hi
-    show a64
-  qed
-  have rl := apply(build_list, (1 in omega by simp()), vt)
-  have ln: seq_len(R) = 1 by defs(simp(fn_build_dom[d := 1, v := i. a]), seq_len)
-  have l1: seq_len(ARGS) = 1 by simp()
-  have el: all i. i in omega -> int_lt(i, seq_len(ARGS)) -> R[i] in gimple.in_reg(fst(ARGS[i]), snd(ARGS[i])) proof
-    fix i
-    assume hi hl
-    have e: i = 0 by arith(hi, hl, l1)
-    have q := at({ARGS[0]})
-    have r := mp(app_fn_build[d := 1, v := i. a, a := 0], simp())
-    have g: a in gimple.in_reg(fst(gimple.arg(32, a)), snd(gimple.arg(32, a))) by defs(simp(a64), gimple.in_reg, gimple.arg)
-    show by simp(e, q, r, g)
-  qed
-  show by ex_intro({R}, simp(rl, ln, l1, el))
+  show := apply(gc.regs_get, apply(gc.regs_one, simp(), arith(), ha))
 qed
 
 // a 32-bit result: some word, its low half the value

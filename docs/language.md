@@ -493,6 +493,8 @@ fold_let x [, {t}] [, {k}..] [in h]   the let x's value back to x, or a new let 
 flip [in h]               turn the equation / disequation around
 rsimp e1, .. [in h]       simplify the goal (or h) with rsimp
 print P                   show what P proves, then (on their own lines) its hypotheses and the goal
+goal [N]                  show the current goal, the variables in scope and the named facts (the
+                          last N), a name bound again marked `(shadowed)`
 ```
 
 `assume` and `fix` take formulas from the goal, so write a formula only
