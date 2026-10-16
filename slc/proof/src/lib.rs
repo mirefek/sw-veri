@@ -244,7 +244,7 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
 
 impl State {
     fn new(scope: Vec<(String, VarId)>, facts: Vec<(String, Seq)>, goal: Option<Term>) -> State {
-        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new(), mem_cache: Default::default() }
+        State { scope, facts, frames: Vec::new(), last: None, discharged: Default::default(), goal, lets: Vec::new(), mem_cache: Default::default(), scratch: Default::default() }
     }
 }
 
@@ -618,10 +618,12 @@ struct State {
     lets: Vec<(String, Option<(usize, Term)>)>,
     /// the memory rules' rule sets and unfolded facts
     mem_cache: std::cell::RefCell<mem::MemCache>,
+    /// a goal rule's own intermediate facts, by name (`divergence`)
+    scratch: std::cell::RefCell<Vec<(String, Seq)>>,
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -792,6 +794,9 @@ impl State {
 
     fn fact(&self, env: &Env, name: &str) -> KResult<Seq> {
         if let Some((_, s)) = self.facts.iter().rev().find(|(n, _)| n == name) {
+            return Ok(s.clone());
+        }
+        if let Some((_, s)) = self.scratch.borrow().iter().rev().find(|(n, _)| n == name) {
             return Ok(s.clone());
         }
         // theorems, axioms, conditional theorems, open lemmas
@@ -1574,6 +1579,24 @@ impl State {
                 let s = self.by(env, lg, &rhs, p)?;
                 Seq::taut(env, lg, &[&ax, &s], goal)
             }
+            // divergence([GU, GS]): a spec function diverges nowhere it does
+            // not raise (`tr.div_raises_g(G, F)`, GU: G's members in
+            // univ(1), GS: a world and a ghost part joined, `univ` and
+            // `vm`; or `tr.div_raises(F)` with no ghost part): by the
+            // function's shape (`ct.fun_divg`, `_v`, `_v0`), the run's
+            // universe (`runs_univ`) and the body's (`div_body`)
+            "divergence" => self.divergence(env, lg, goal, args),
+            // runs_univ(): `all .. s o. runs(P, s, o) -> pair(s, o) in univ(1)`, P a defined program
+            "runs_univ" => self.runs_univ(env, lg, goal),
+            // div_body(GS): `all .. w h t. .. -> runs(P, union2(w, h), diverge(t)) -> runs(P, union2(w, h), exc(..))`,
+            // P a defined contract (`ct.contract_div`, `_div0`; its body by `ct.dv_*`)
+            "div_body" => {
+                let gs = match args.first() {
+                    Some(Arg::Proof(PE::Ref(n))) => n.clone(),
+                    _ => return err("div_body takes the joining lemma (`mp.gS`, `ct.w_single`)"),
+                };
+                self.div_body(env, lg, goal, &gs)
+            }
             // defs(p, D1, .., Dn): p proves the goal up to unfolding the definitions Di
             "defs" => {
                 let syms = self.syms(env, &args[1.min(args.len())..])?;
@@ -1991,6 +2014,162 @@ impl State {
             s = Seq::gen(env, lg, &s, v)?;
         }
         Ok(s)
+    }
+
+    /// the goal's leading `all`s and premises opened: the steps (a fresh
+    /// variable, or a premise to assume) and the conclusion
+    fn open_goal(&self, env: &mut Env, lg: &Logic, goal: &Term) -> (Vec<Result<VarId, Term>>, Term) {
+        let mut steps = Vec::new();
+        let mut g = goal.clone();
+        loop {
+            let next = match g.node() {
+                Node::App(a, b) if *a == lg.all => {
+                    let v = env.new_var("x", 0);
+                    steps.push(Ok(v));
+                    b[0].instantiate_params(&[Term::var(v, vec![])], &env.binders_fn())
+                }
+                Node::App(i, c) if *i == env.builtins.imp => {
+                    steps.push(Err(c[0].clone()));
+                    c[1].clone()
+                }
+                _ => break,
+            };
+            g = next;
+        }
+        (steps, g)
+    }
+
+    /// `open_goal`'s steps undone on s: the premises discharged, the variables generalized
+    fn close_goal(&self, env: &mut Env, lg: &Logic, s: Seq, steps: &[Result<VarId, Term>]) -> KResult<Seq> {
+        let mut s = s;
+        for st in steps.iter().rev() {
+            s = match st {
+                Ok(v) => Seq::gen(env, lg, &s, *v)?,
+                Err(h) => s.discharge(env, h)?,
+            };
+        }
+        Ok(s)
+    }
+
+    /// f with the facts fs named in the scratch list
+    fn with_scratch<T>(&self, fs: Vec<(String, Seq)>, f: impl FnOnce() -> KResult<T>) -> KResult<T> {
+        let n = self.scratch.borrow().len();
+        self.scratch.borrow_mut().extend(fs);
+        let r = f();
+        self.scratch.borrow_mut().truncate(n);
+        r
+    }
+
+    /// the defined program at the head of `runs(P, ..)`'s P
+    fn runs_head(&self, env: &Env, t: &Term) -> KResult<SymId> {
+        let runs = env.sym_by_name.get("runs").copied();
+        if let Node::App(r, a) = t.node() {
+            if Some(*r) == runs {
+                if let Node::App(p, _) = a[0].node() {
+                    if matches!(env.syms[*p as usize].kind, sl_kernel::env::SymKind::Defined { .. }) {
+                        return Ok(*p);
+                    }
+                }
+            }
+        }
+        err(format!("not a run of a defined program: `{}`", Printer::new(env).short(t)))
+    }
+
+    /// `runs_univ()` (in `by`)
+    fn runs_univ(&self, env: &mut Env, lg: &Logic, goal: &Term) -> KResult<Seq> {
+        let (steps, concl) = self.open_goal(env, lg, goal);
+        let Some(Err(hr)) = steps.last().cloned() else { return err("runs_univ: the goal is not `.. -> runs(P, s, o) -> ..`") };
+        let p = self.runs_head(env, &hr)?;
+        let unf = sl_kernel::ext::seq::unfold_all(env, &hr, &[p]);
+        let h = Seq::conv(env, &Seq::assume(env, hr.clone())?, &unf, &[p])?;
+        let pe = parse_pe("apply(g.runs_univ, __dvr)")?;
+        let r = self.with_scratch(vec![("__dvr".into(), h)], || self.by(env, lg, &concl, &pe))?;
+        let s = self.close_goal(env, lg, r, &steps)?;
+        self.check(env, s, goal)
+    }
+
+    /// `div_body(GS)` (in `by`): the run's world and ghost part joined by
+    /// GS, the contract's divergence by `ct.contract_div` (`_div0`: no
+    /// precondition), its body by the `ct.dv_*` lemma of its shape
+    fn div_body(&self, env: &mut Env, lg: &Logic, goal: &Term, gs: &str) -> KResult<Seq> {
+        let (steps, concl) = self.open_goal(env, lg, goal);
+        let hs: Vec<Term> = steps.iter().filter_map(|s| s.as_ref().err().cloned()).collect();
+        if hs.len() < 4 {
+            return err("div_body: the goal is not `.. -> w in World -> w in univ(1) -> h in G -> runs(P, .., diverge(t)) -> ..`");
+        }
+        let n = hs.len();
+        let (hw, hwu, hh, hr) = (Seq::assume(env, hs[n - 4].clone())?, Seq::assume(env, hs[n - 3].clone())?, Seq::assume(env, hs[n - 2].clone())?, hs[n - 1].clone());
+        let pj = parse_pe(&format!("apply({}, __dvw, __dvwu, __dvh)", gs))?;
+        let sp = self.with_scratch(vec![("__dvw".into(), hw), ("__dvwu".into(), hwu), ("__dvh".into(), hh)], || self.eval(env, lg, &pj))?;
+        let (su, sv) = (conj_get(env, &sp, 1)?, conj_get(env, &sp, 2)?);
+        let p = self.runs_head(env, &hr)?;
+        let unf = sl_kernel::ext::seq::unfold_all(env, &hr, &[p]);
+        let hr2 = Seq::conv(env, &Seq::assume(env, hr.clone())?, &unf, &[p])?;
+        let mut last = None;
+        for cd in ["ct.contract_div", "ct.contract_div0"] {
+            for body in ["ct.dv_havoc", "ct.dv_ok_a", "ct.dv_exc_a", "ct.dv_ret_a", "ct.dv_ret2_a", "ct.dv_ret3_a"] {
+                let pe = parse_pe(&format!("apply({}, __dvsu, __dvsv, __dvr, defs({}, letin))", cd, body))?;
+                let fs = vec![("__dvsu".into(), su.clone()), ("__dvsv".into(), sv.clone()), ("__dvr".into(), hr2.clone())];
+                match self.with_scratch(fs, || self.eval(env, lg, &pe)).and_then(|r| Seq::conv(env, &r, &concl, &[p])) {
+                    Ok(r) => {
+                        let s = self.close_goal(env, lg, r, &steps)?;
+                        return self.check(env, s, goal);
+                    }
+                    Err(e) => last = Some(e),
+                }
+            }
+        }
+        err(format!("div_body: no `ct.dv_*` lemma fits the contract's body ({})", last.map(|e| e.to_string()).unwrap_or_default()))
+    }
+
+    /// `divergence([GU, GS])` (in `by`)
+    fn divergence(&self, env: &mut Env, lg: &Logic, goal: &Term, args: &[Arg]) -> KResult<Seq> {
+        let name = |a: &Arg| match a {
+            Arg::Proof(PE::Ref(n)) => Ok(n.clone()),
+            _ => err("divergence takes two lemmas' names (or none)"),
+        };
+        let (world, gu, gs) = match args {
+            [] => (true, "ct.single_univ".to_string(), "ct.w_single".to_string()),
+            [a, b] => (false, name(a)?, name(b)?),
+            _ => return err("divergence takes two lemmas' names (or none)"),
+        };
+        let sym = |n: &str| env.sym_by_name.get(n).copied().ok_or_else(|| KernelError(format!("divergence: no `{}`", n)));
+        let (dr, drg, single, empty) = (sym("tr.div_raises")?, sym("tr.div_raises_g")?, sym("single")?, sym("empty")?);
+        let f = match goal.node() {
+            Node::App(d, a) if world && *d == dr => a[0].clone(),
+            Node::App(d, a) if !world && *d == drg => a[1].clone(),
+            _ => return err("divergence: the goal is not `tr.div_raises(F)` (or, given GU and GS, `tr.div_raises_g(G, F)`)"),
+        };
+        let fname = match f.node() {
+            Node::App(h, _) => env.syms[*h as usize].name.clone(),
+            _ => return err("divergence: the spec function is not a defined function's value"),
+        };
+        let inner = if world { Term::app(drg, vec![Term::app(single, vec![Term::app(empty, vec![])]), f.clone()]) } else { goal.clone() };
+        let mut last = None;
+        let mut got = None;
+        for (shape, prem) in [
+            ("ct.fun_divg", format!("{}, runs_univ(), div_body({})", gu, gs)),
+            ("ct.fun_divg_v", format!("{}, div_body({})", gu, gs)),
+            ("ct.fun_divg_v0", format!("{}, div_body({})", gu, gs)),
+        ] {
+            let pe = parse_pe(&format!("defs(apply({}, {}), {})", shape, prem, fname))?;
+            match self.by(env, lg, &inner, &pe) {
+                Ok(s) => {
+                    got = Some(s);
+                    break;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        let Some(s) = got else {
+            return err(format!("divergence: `{}` not of a spec function's shape (`ct.fun_divg`, `_v`, `_v0`): {}", fname, last.map(|e| e.to_string()).unwrap_or_default()));
+        };
+        if !world {
+            return self.check(env, s, goal);
+        }
+        let pe = parse_pe("apply(ct.div_of_g, __dvi)")?;
+        let r = self.with_scratch(vec![("__dvi".into(), s)], || self.eval(env, lg, &pe))?;
+        self.check(env, r, goal)
     }
 
     /// `lemma` (a theorem, by name) applied to the facts `args`, by `apply`
