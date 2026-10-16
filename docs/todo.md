@@ -113,12 +113,6 @@ holding for the empty heap.
   general now); `gc.reg_at` reads one register of any list.
 - The rules' standard form: the statics' names, `and r8, 2^k - 1`, `[p + 0]`
   as equations of N (docs/overview.md).
-- `rewrite(e, f)` rewrites every occurrence, also inside abbreviations
-  that unfold to the term (`rewrite(sym(i0), ..)` turning each `0` of
-  `mp.res_abs(A2, GN, 0)` into `i`; `rewrite(p0, ..)` each `pow2(0)` in
-  it): a `subst` with its motive written out, or the occurrences selected
-  (`rewrite(e, p, {k}..)`, counted in the unfolded term), is the workaround.
-  A rewrite keeping abbreviations folded would do.
 - `arith` takes `x in omega` only as its own fact, not as a conjunct of
   one (`x0 in omega && x1 in omega` destructured first).
 - The invariant's constant tables (the class table, a_ctz_32's) are

@@ -68,6 +68,28 @@ fn abstract_at(t: &Term, pat: &Term, depth: u32, binders: &dyn Fn(SymId, usize) 
     }
 }
 
+/// `t` abstracted at the positions where `t` has `pat` and `goal` has `to`,
+/// the same as `goal` elsewhere (None: they differ elsewhere)
+fn abstract_to(t: &Term, goal: &Term, pat: &Term, to: &Term, depth: u32, binders: &dyn Fn(SymId, usize) -> u32) -> Option<Term> {
+    if t == goal {
+        return Some(t.clone());
+    }
+    if t == pat && goal == to {
+        return Some(Term::bvar(depth));
+    }
+    match (t.node(), goal.node()) {
+        (Node::App(s, xs), Node::App(s2, ys)) if s == s2 && xs.len() == ys.len() => {
+            let args: Option<Vec<Term>> = xs.iter().zip(ys.iter()).enumerate().map(|(i, (x, y))| abstract_to(x, y, pat, to, depth + binders(*s, i), binders)).collect();
+            Some(t.with_args(args?))
+        }
+        (Node::Var(v, xs), Node::Var(v2, ys)) if v == v2 && xs.len() == ys.len() => {
+            let args: Option<Vec<Term>> = xs.iter().zip(ys.iter()).map(|(x, y)| abstract_to(x, y, pat, to, depth, binders)).collect();
+            Some(t.with_args(args?))
+        }
+        _ => None,
+    }
+}
+
 /// bound variable `i` (counted at `depth` 0) occurs loose in `t`
 fn bvar_free_at(t: &Term, i: u32, depth: u32, bf: &dyn Fn(SymId, usize) -> u32) -> bool {
     match t.node() {
@@ -354,6 +376,18 @@ impl Seq {
         if body == s.concl {
             return err(format!("rewrite: `{}` does not occur", Printer::new(env).term(&a)));
         }
+        Self::subst(env, eq, &body, s)
+    }
+
+    /// `rewrite` into a given statement: from `Γ ⊢ a = b`, `Δ ⊢ φ` and the
+    /// target ψ, `Γ, Δ ⊢ ψ` -- the occurrences of `a` in φ replaced are the
+    /// ones where ψ has `b` (`subst` with φ abstracted exactly there; φ and
+    /// ψ the same elsewhere).
+    pub fn rewrite_to(env: &Env, eq: &Seq, s: &Seq, target: &Term) -> KResult<Seq> {
+        let (a, b) = Self::eq_sides(env, eq)?;
+        let bf = env.binders_fn();
+        let body = abstract_to(&s.concl, target, &a, &b, 0, &bf)
+            .ok_or_else(|| KernelError(format!("rewrite: `{}` does not become the statement by `{}` -> `{}`", Printer::new(env).short(&s.concl), Printer::new(env).short(&a), Printer::new(env).short(&b))))?;
         Self::subst(env, eq, &body, s)
     }
 

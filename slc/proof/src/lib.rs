@@ -1423,7 +1423,30 @@ impl State {
                             None => (None, body),
                         },
                     };
-                    let s = self.eval(env, lg, &parse_pe(p)?)?;
+                    let pe = parse_pe(p)?;
+                    // (a rewrite with a stated result: the occurrences it needs)
+                    if let PE::Rule(n, a) = &pe {
+                        if n == "rewrite" && a.len() == 2 {
+                            // (show's current goal: only if it fits so)
+                            let (g, strict) = match &goal {
+                                Some(g) => (Some(self.term(env, g)?), true),
+                                None if kw == "show" => (self.goal.clone(), false),
+                                None => (None, false),
+                            };
+                            if let Some(g) = g {
+                                let r = self.by(env, lg, &g, &pe);
+                                if strict || r.is_ok() {
+                                    let s = r?;
+                                    if let Some(n) = name {
+                                        self.facts.push((n, s.clone()));
+                                    }
+                                    self.last = Some(s);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                    let s = self.eval(env, lg, &pe)?;
                     // (the fact's free schematic variables fitted to the
                     // stated formula, or show's current goal)
                     match goal {
@@ -1501,6 +1524,19 @@ impl State {
             }
             "apply" => {
                 let s = self.apply_to(env, lg, args, Some(goal))?;
+                self.check(env, s, goal)
+            }
+            // rewrite(e, p) with a goal: the occurrences of e's left side
+            // where the goal has its right side (else as without a goal)
+            "rewrite" if args.len() == 2 => {
+                let e = self.proof_arg(env, lg, args.first())?;
+                let x = self.proof_arg(env, lg, args.get(1))?;
+                if !matches!(e.concl().node(), Node::App(q, _) if *q == lg.all) {
+                    if let Ok(s) = Seq::rewrite_to(env, &e, &x, goal) {
+                        return self.check(env, s, goal);
+                    }
+                }
+                let s = self.eval(env, lg, pe)?;
                 self.check(env, s, goal)
             }
             // arith(p1, ..): the goal by propositional logic and linear arithmetic

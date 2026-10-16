@@ -676,7 +676,7 @@ bound like `p + n + 4 <= e + w` brings in n's and w's facts.
 | `refl({t})`, `sym(e)`, `trans(e1, e2)` | equality |
 | `flip(p)` | `a = b` as `b = a`, `a != b` as `b != a` |
 | `subst({x. φ}, e, p)` | substitution |
-| `rewrite(e, p [, {k}..])` | rewrite e's left side in p (all occurrences or the selected); e may be `all x.. l = r`, also under binders |
+| `rewrite(e, p [, {k}..])` | rewrite e's left side in p (all occurrences or the selected); e may be `all x.. l = r`, also under binders. With a stated result (`have h: φ := rewrite(e, p)`, `show φ := ..`, or as a goal rule) only the occurrences where φ has e's right side |
 | `expand(p, D.. [, {k}..])` | unfold D in p once |
 | `unfold(D)` | D's defining equation |
 | `zeta(p, x [, {k}..])` | the let x's variable its value at the k-th occurrences in the let's body (none given: all, the let dropped) |
