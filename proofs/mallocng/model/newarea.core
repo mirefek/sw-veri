@@ -1604,3 +1604,270 @@ proof
   show by defs(simp(k1, k2, k3, k4, k5), mallocng.areas_ok)
 qed
 
+// (a meta slot before: one after)
+theorem mp.na_slot(c, A, vm, V1, b, g): mp.napre(c, A, vm, V1, b) -> mallocng.meta_slot(A, g) -> mallocng.meta_slot(mp.narea(A), g)
+proof
+  assume P hg
+  have {l2 = len, od = old} := apply(mp.na_last, P)
+  obtain k j, hk hj hkl hjl he from expand(hg, mallocng.meta_slot)
+  have ek := mp(all_elim(od, {k}), hk, hkl)
+  have e2: g = mallocng.meta_at(mp.narea(A).areas[k], j) := rewrite(sym(ek), he)
+  show by defs(ex_intro({k}, {j}, taut(hk, hj, (int_lt(k, seq_len(mp.narea(A).areas)) by arith(l2, hkl)), hjl, e2)), mallocng.meta_slot)
+qed
+
+// (a meta slot before: none of the new area's)
+theorem mp.na_notnew(c, A, vm, V1, b, g, j): mp.napre(c, A, vm, V1, b) -> mallocng.meta_slot(A, g) -> j in omega -> int_lt(j, mallocng.NSLOTS) ->
+  !(g = mallocng.meta_at(A.reserve, j))
+proof
+  assume P hg hj hjl
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {ro = nat, rc = cnt} := apply(mp.na_res, P)
+  have {go = nat, gex = area} := apply(mp.meta_page, ha, hg)
+  obtain k, hk hkl g1 g2 _ from gex
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have ako := apply(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+  have {rs = reserve} := apply(mp.area_apart[c := c, A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, brk := vm.brk, k := k, a := g],
+    hc, hu, ha, H, hk, hkl, go, arith(g1, ako), arith(g2))
+  have rs2: !(int_le(A.reserve, g) && int_lt(g, int_add(A.reserve, int_mul(4096, A.reserve_cnt)))) by simp(expand(rs, mallocng.in_range))
+  have ch cm cn := (mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS))
+  assume e
+  have ge: g = int_add(int_add(A.reserve, 24), int_mul(40, j)) := trans(e, (mallocng.meta_at(A.reserve, j) = int_add(int_add(A.reserve, 24), int_mul(40, j)) by defs(simp(ch, cm), mallocng.meta_at)))
+  show by arith(rs2, ge, hj, hjl, cn, hrc, rc, ro)
+qed
+
+// the metas for the new state: the new area's all available
+theorem mp.na_part(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) -> mallocng.metas_partition(mp.narea(A))
+proof
+  assume P
+  let A2 := mp.narea(A)
+  have {ha = abs, hh = holds, h0 = cnt0} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hpt = part} := expand(H, mallocng.holds)
+  have {so = sorted, us = used_slots, fs = free_slots, cv = cover, tk = taken, fr = fresh} := expand(hpt, mallocng.metas_partition)
+  have {eu = used, efr = free, et = taken, eac = cnt} := apply(mp.na_basic, P)
+  have {l2 = len, lst = last, od = old} := apply(mp.na_last, P)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have no: seq_len(A.areas) in omega by arith(rl)
+  have cn: mallocng.NSLOTS = 101 by defs(refl({101}), mallocng.NSLOTS)
+  have iu: all g. mallocng.is_used(A2, g) <-> mallocng.is_used(A, g) proof
+    fix g
+    show by defs(simp(eu), mallocng.is_used)
+  qed
+  // (A's available metas: none)
+  have na0: all g. !mallocng.avail_meta(A, g) proof
+    fix g
+    assume h
+    have _ ej := expand(h, mallocng.avail_meta)
+    obtain j, hj hj1 hj2 _ from ej
+    show by arith(hj1, hj2, h0, cn, hj)
+  qed
+  // (A2's: the new area's)
+  have na2: all g. mallocng.avail_meta(A2, g) -> (ex j. j in omega && int_lt(j, mallocng.NSLOTS) && g = mallocng.meta_at(A.reserve, j)) proof
+    fix g
+    assume h
+    have _ ej := expand(h, mallocng.avail_meta)
+    obtain j, hj hj1 hj2 hje from ej
+    show by ex_intro({j}, taut(hj, hj2, rewrite(lst, hje)))
+  qed
+  have c1 := rewrite(sym(eu), so)
+  have c2: all x0. x0 in omega -> int_lt(x0, seq_len(A2.used)) -> mallocng.meta_slot(A2, A2.used[x0]) proof
+    fix k
+    assume hk0 hkl
+    have m := mp(all_elim(us, {k}), hk0, rewrite(eu, hkl))
+    show := rewrite(sym(eu), apply(mp.na_slot, P, m))
+  qed
+  have c3: all x0. x0 in omega -> int_lt(x0, seq_len(A2.free_metas)) -> mallocng.meta_slot(A2, A2.free_metas[x0]) && !mallocng.is_used(A2, A2.free_metas[x0]) proof
+    fix k
+    assume hk0 hkl
+    have m nu := mp(all_elim(fs, {k}), hk0, rewrite(efr, hkl))
+    have q: mallocng.meta_slot(A2, A.free_metas[k]) && !mallocng.is_used(A2, A.free_metas[k]) by taut(apply(mp.na_slot, P, m), nu, all_elim(iu, {A.free_metas[k]}))
+    show := rewrite(sym(efr), q)
+  qed
+  have c4: all x0. all x1. x0 in omega && x1 in omega -> int_lt(x0, seq_len(A2.areas)) && int_lt(x1, mallocng.NSLOTS) ->
+      ((mallocng.is_used(A2, mallocng.meta_at(A2.areas[x0], x1)) || (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.free_metas)) && A2.free_metas[x2] = mallocng.meta_at(A2.areas[x0], x1)))) ||
+        mallocng.avail_meta(A2, mallocng.meta_at(A2.areas[x0], x1))) ||
+      (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.taken)) && A2.taken[x2] = mallocng.meta_at(A2.areas[x0], x1))) proof
+    fix k j
+    assume hkj hl
+    have hk hj := hkj
+    have hl1 hl2 := hl
+    have cold: int_lt(k, seq_len(A.areas)) -> ((mallocng.is_used(A2, mallocng.meta_at(A2.areas[k], j)) || (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.free_metas)) && A2.free_metas[x2] = mallocng.meta_at(A2.areas[k], j)))) ||
+        mallocng.avail_meta(A2, mallocng.meta_at(A2.areas[k], j))) ||
+        (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.taken)) && A2.taken[x2] = mallocng.meta_at(A2.areas[k], j))) proof
+      assume h
+      have ek := mp(all_elim(od, {k}), hk, h)
+      have o := mp(all_elim(cv, {k}, {j}), hkj, conj(h, hl2))
+      let G := mallocng.meta_at(A.areas[k], j)
+      have q1: ((mallocng.is_used(A2, G) || (ex x2. x2 in omega && (int_lt(x2, seq_len(A.free_metas)) && A.free_metas[x2] = G))) || mallocng.avail_meta(A2, G)) ||
+          (ex x2. x2 in omega && (int_lt(x2, seq_len(A.taken)) && A.taken[x2] = G))
+        by taut(o, all_elim(iu, {G}), all_elim(na0, {G}))
+      have q := rewrite(sym(et), rewrite(sym(efr), q1))
+      show := subst({y. ((mallocng.is_used(A2, mallocng.meta_at(y, j)) || (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.free_metas)) && A2.free_metas[x2] = mallocng.meta_at(y, j)))) ||
+        mallocng.avail_meta(A2, mallocng.meta_at(y, j))) ||
+        (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.taken)) && A2.taken[x2] = mallocng.meta_at(y, j)))}, sym(ek), q)
+    qed
+    have cnew: k = seq_len(A.areas) -> ((mallocng.is_used(A2, mallocng.meta_at(A2.areas[k], j)) || (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.free_metas)) && A2.free_metas[x2] = mallocng.meta_at(A2.areas[k], j)))) ||
+        mallocng.avail_meta(A2, mallocng.meta_at(A2.areas[k], j))) ||
+        (ex x2. x2 in omega && (int_lt(x2, seq_len(A2.taken)) && A2.taken[x2] = mallocng.meta_at(A2.areas[k], j))) proof
+      assume e
+      have i0: int_sub(seq_len(A2.areas), 1) = k by arith(l2, e)
+      have z: 0 in int_add(seq_len(A.areas), 1) := mp(nat_lt_mem[k := 0, n := int_add(seq_len(A.areas), 1)], simp(), arith(no), arith(no))
+      have ol: ord_lt(0, seq_len(A2.areas)) by defs(rewrite(sym(l2), z), ord_lt)
+      have j0: int_le(int_sub(mallocng.NSLOTS, A2.avail_cnt), j) by arith(eac, hj)
+      have g0 := subst({y. mallocng.meta_at(A2.areas[k], j) = mallocng.meta_at(A2.areas[y], j)}, sym(i0), refl({mallocng.meta_at(A2.areas[k], j)}))
+      have av: mallocng.avail_meta(A2, mallocng.meta_at(A2.areas[k], j)) by defs(taut(ol, (ex x. x in omega && ((int_le(int_sub(mallocng.NSLOTS, A2.avail_cnt), x) && int_lt(x, mallocng.NSLOTS)) &&
+        mallocng.meta_at(A2.areas[k], j) = mallocng.meta_at(A2.areas[int_sub(seq_len(A2.areas), 1)], x)) by ex_intro({j}, taut(hj, j0, hl2, g0)))), mallocng.avail_meta)
+      show by taut(av)
+    qed
+    show by taut(cold, cnew, (int_lt(k, seq_len(A.areas)) || k = seq_len(A.areas) by arith(hl1, l2, hk)))
+  qed
+  have c5: all x0. x0 in omega -> int_lt(x0, seq_len(A2.taken)) -> (((mallocng.meta_slot(A2, A2.taken[x0]) && !mallocng.is_used(A2, A2.taken[x0])) &&
+      !mallocng.avail_meta(A2, A2.taken[x0])) && (all x1. x1 in omega -> int_lt(x1, seq_len(A2.free_metas)) -> !(A2.free_metas[x1] = A2.taken[x0]))) &&
+      (all x1. x1 in omega -> int_lt(x1, seq_len(A2.taken)) && A2.taken[x1] = A2.taken[x0] -> x1 = x0) proof
+    fix i
+    assume hi hil
+    have ms nu _ nf uq := mp(all_elim(tk, {i}), hi, rewrite(et, hil))
+    let t := A.taken[i]
+    have nav: !mallocng.avail_meta(A2, t) proof
+      assume h
+      obtain j, hj hjl he from apply(na2, h)
+      show by taut(apply(mp.na_notnew, P, ms, hj, hjl), he)
+    qed
+    have q: (((mallocng.meta_slot(A2, t) && !mallocng.is_used(A2, t)) && !mallocng.avail_meta(A2, t)) &&
+        (all x1. x1 in omega -> int_lt(x1, seq_len(A.free_metas)) -> !(A.free_metas[x1] = t))) &&
+        (all x1. x1 in omega -> int_lt(x1, seq_len(A.taken)) && A.taken[x1] = t -> x1 = i)
+      by taut(apply(mp.na_slot, P, ms), nu, all_elim(iu, {t}), nav, nf, uq)
+    show := rewrite(sym(et), rewrite(sym(efr), q))
+  qed
+  have c6: all x0. x0 in omega -> (ord_lt(0, seq_len(A2.areas)) && int_le(int_sub(mallocng.NSLOTS, A2.avail_cnt), x0)) && int_lt(x0, mallocng.NSLOTS) ->
+      !mallocng.is_used(A2, mallocng.meta_at(A2.areas[int_sub(seq_len(A2.areas), 1)], x0)) &&
+      (all x1. x1 in omega -> int_lt(x1, seq_len(A2.free_metas)) -> !(A2.free_metas[x1] = mallocng.meta_at(A2.areas[int_sub(seq_len(A2.areas), 1)], x0))) proof
+    fix j
+    assume hj h
+    have _ _ hjl := h
+    have nu: !mallocng.is_used(A, mallocng.meta_at(A.reserve, j)) proof
+      assume hu
+      obtain k, hk hkl hke from expand(hu, mallocng.is_used)
+      have m := mp(all_elim(us, {k}), hk, hkl)
+      show by taut(apply(mp.na_notnew, P, m, hj, hjl), hke)
+    qed
+    have nf: all x1. x1 in omega -> int_lt(x1, seq_len(A.free_metas)) -> !(A.free_metas[x1] = mallocng.meta_at(A.reserve, j)) proof
+      fix k
+      assume hk hkl
+      have m _ := mp(all_elim(fs, {k}), hk, hkl)
+      show := apply(mp.na_notnew, P, m, hj, hjl)
+    qed
+    have q: !mallocng.is_used(A2, mallocng.meta_at(A.reserve, j)) &&
+        (all x1. x1 in omega -> int_lt(x1, seq_len(A2.free_metas)) -> !(A2.free_metas[x1] = mallocng.meta_at(A.reserve, j)))
+      by taut(nu, all_elim(iu, {mallocng.meta_at(A.reserve, j)}), rewrite(sym(efr), nf))
+    show := subst({y. !mallocng.is_used(A2, mallocng.meta_at(y, j)) &&
+        (all x1. x1 in omega -> int_lt(x1, seq_len(A2.free_metas)) -> !(A2.free_metas[x1] = mallocng.meta_at(y, j)))}, sym(lst), q)
+  qed
+  show by defs(taut(c1, c2, c3, c4, c5, c6), mallocng.metas_partition)
+qed
+
+// the regions for the new state: the reserve's region split into the new
+// area's and the rest's
+theorem mp.na_sep(c, A, vm, V1, b): mp.napre(c, A, vm, V1, b) -> mallocng.separate(mallocng.regions(c, mp.narea(A)))
+proof
+  assume P
+  let A2 := mp.narea(A)
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, hrc = rcnt} := P
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {sp = sep} := expand(H, mallocng.holds)
+  have {ta = abs, tu = univ} := apply(mp.na_basic, P)
+  have {ro = nat, rc = cnt} := apply(mp.na_res, P)
+  have {l2 = len, lst = last, od = old} := apply(mp.na_last, P)
+  have {fr = front, ar = areas, rdl = rodata, rp = reserve, gr = groups, er = eq} := apply(mp.regions_parts[c := c, A := A], hc, hu, ha)
+  have {ar2 = areas, rp2 = reserve, er2 = eq} := apply(mp.regions_parts[c := c, A := A2], hc, tu, ta)
+  let DR := seq_concat(mallocng.data_ranges(c), mallocng.ro_ranges(c.file))
+  let AR := fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))
+  let AR2 := fn_build(int_sub(seq_len(A2.areas), 0), x0. pair(A2.areas[int_add(0, x0)], 4096))
+  let GR := fn_build(int_sub(seq_len(A.used), 0), x0. ite(int_lt(0, A.metas[A.used[int_add(0, x0)]].maplen), mallocng.group_range(A.metas[A.used[int_add(0, x0)]]), pair(0, 0)))
+  let GR2 := fn_build(int_sub(seq_len(A2.used), 0), x0. ite(int_lt(0, A2.metas[A2.used[int_add(0, x0)]].maplen), mallocng.group_range(A2.metas[A2.used[int_add(0, x0)]]), pair(0, 0)))
+  let r := pair(A.reserve, int_mul(4096, A.reserve_cnt))
+  let r1 := pair(A.reserve, 4096)
+  let r2 := pair(A2.reserve, int_mul(4096, A2.reserve_cnt))
+  have eg: GR2 = GR by simp()
+  have r1c: r1 in cart(omega, omega) := mp(cart_intro[a := omega, b := omega, x := A.reserve, y := 4096], ro, simp())
+  have r1l := apply(tr.seq_one_type, r1c)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have no: seq_len(A.areas) in omega by arith(rl)
+  // the areas' ranges: the old ones', then the new area's
+  have la2r: seq_len(AR2) = int_sub(seq_len(A2.areas), 0) by defs(fn_build_dom[d := int_sub(seq_len(A2.areas), 0), v := x0. pair(A2.areas[int_add(0, x0)], 4096)], seq_len)
+  have lar: seq_len(AR) = int_sub(seq_len(A.areas), 0) by defs(fn_build_dom[d := int_sub(seq_len(A.areas), 0), v := x0. pair(A.areas[int_add(0, x0)], 4096)], seq_len)
+  have la2: seq_len(AR2) = int_add(seq_len(A.areas), 1) by arith(la2r, l2, no)
+  have la: seq_len(AR) = seq_len(A.areas) by arith(lar, no)
+  have tA1 := apply(tr.concat_list, ar, r1l)
+  have el: all i. i in omega -> int_lt(i, seq_len(AR2)) -> AR2[i] = seq_concat(AR, seq_one(r1))[i] proof
+    fix i
+    assume hi hil
+    have d2: int_sub(seq_len(A2.areas), 0) in omega by arith(l2, no)
+    have iin := mp(nat_lt_mem[k := i, n := int_sub(seq_len(A2.areas), 0)], hi, d2, arith(hil, la2, l2))
+    have a2 := mp(app_fn_build[d := int_sub(seq_len(A2.areas), 0), v := x0. pair(A2.areas[int_add(0, x0)], 4096), a := i], iin)
+    have z: int_add(0, i) = i by arith(hi)
+    have c1: int_lt(i, seq_len(A.areas)) -> AR2[i] = seq_concat(AR, seq_one(r1))[i] proof
+      assume h
+      have q := at({seq_concat(AR, seq_one(r1))[i]}, ar, hi, la, h)
+      have iin1 := mp(nat_lt_mem[k := i, n := int_sub(seq_len(A.areas), 0)], hi, arith(no), arith(h, no))
+      have a1 := mp(app_fn_build[d := int_sub(seq_len(A.areas), 0), v := x0. pair(A.areas[int_add(0, x0)], 4096), a := i], iin1)
+      have ei := mp(all_elim(od, {i}), hi, h)
+      show := trans(rewrite(ei, rewrite(z, a2)), sym(trans(q, rewrite(z, a1))))
+    qed
+    have c2: i = seq_len(A.areas) -> AR2[i] = seq_concat(AR, seq_one(r1))[i] proof
+      assume e
+      have q := at({seq_concat(AR, seq_one(r1))[i]}, ar, hi, la, e)
+      have i0: int_sub(seq_len(A2.areas), 1) = i by arith(l2, e)
+      have ei := subst({y. A2.areas[y] = A.reserve}, i0, lst)
+      show := trans(rewrite(ei, rewrite(z, a2)), sym(q))
+    qed
+    show by taut(c1, c2, (int_lt(i, seq_len(A.areas)) || i = seq_len(A.areas) by arith(hil, la2, hi)))
+  qed
+  have ea: AR2 = seq_concat(AR, seq_one(r1)) := list_ext(ar2, tA1, (seq_len(AR2) = seq_len(seq_concat(AR, seq_one(r1))) by arith(la2, la, ar, r1l)), el)
+  have as := apply(concat_assoc[a := DR, b := AR, c := seq_one(r1), t := cart(omega, omega)], rdl, ar, r1l)
+  have e2: mallocng.regions(c, A2) = seq_concat(seq_concat(seq_concat(seq_concat(DR, AR), seq_one(r1)), seq_one(r2)), GR) :=
+    rewrite(eg, rewrite(sym(as), rewrite(ea, er2)))
+  // r1, r2 within r, apart
+  have f1: fst(r) = A.reserve && snd(r) = int_mul(4096, A.reserve_cnt) && fst(r1) = A.reserve && snd(r1) = 4096 && fst(r2) = A2.reserve &&
+    snd(r2) = int_mul(4096, A2.reserve_cnt) by simp()
+  have q1 q2 q3 q4 q5 q6 := f1
+  have y: A.reserve_cnt = 1 -> A2.reserve_cnt = 0 proof
+    assume e
+    show by simp(e)
+  qed
+  have n: !(A.reserve_cnt = 1) -> A2.reserve = int_add(A.reserve, 4096) && A2.reserve_cnt = int_sub(A.reserve_cnt, 1) proof
+    assume e
+    show by simp(e)
+  qed
+  have w1: mp.within(r1, r) by defs(arith(q1, q2, q3, q4, hrc, rc, ro), mp.within)
+  have w2: mp.within(r2, r) proof
+    have d1: A.reserve_cnt = 1 -> mp.within(r2, r) proof
+      assume e
+      have z := mp(y, e)
+      show by defs(arith(q6, z), mp.within)
+    qed
+    have d2: !(A.reserve_cnt = 1) -> mp.within(r2, r) proof
+      assume e
+      have z1 z2 := mp(n, e)
+      show by defs(arith(q1, q2, q5, q6, z1, z2, hrc, rc, ro), mp.within)
+    qed
+    show by taut(d1, d2)
+  qed
+  have a12: mallocng.apart(r1, r2) proof
+    have d1: A.reserve_cnt = 1 -> mallocng.apart(r1, r2) proof
+      assume e
+      have z := mp(y, e)
+      show by defs(arith(q6, z), mallocng.apart)
+    qed
+    have d2: !(A.reserve_cnt = 1) -> mallocng.apart(r1, r2) proof
+      assume e
+      have z1 z2 := mp(n, e)
+      show by defs(arith(q3, q4, q5, z1), mallocng.apart)
+    qed
+    show by taut(d1, d2)
+  qed
+  have s := apply(mp.sep_split[X := seq_concat(DR, AR), r := r, Q := GR, r1 := r1, r2 := r2], fr, gr, rp, r1c, rp2, rewrite(er, sp), w1, w2, a12)
+  show := rewrite(sym(e2), s)
+qed
+
