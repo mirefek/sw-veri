@@ -25,9 +25,10 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   brk), and the reserve refilled from fresh pages
   (proofs/mallocng/model/refill.core: `mp.rf_holds_in`; brk's pages past
   the break or mmap's, a guard page aside -- apart from every region, the
-  owned bytes all mapped before: `mp.owned_mapped`). Left: brk's failure
-  (`ctx.brk = -1`); the first call's secret (get_random_secret: the
-  auxiliary vector leaves the footprint); then the run (the GIMPLE walk
+  owned bytes all mapped before: `mp.owned_mapped`; brk's failure the
+  empty refill, `K = 0`), and the first call's initialization
+  (proofs/mallocng/model/first.core: `mp.fs_holds_in`; the auxiliary
+  vector leaves the footprint). Left: the run (the GIMPLE walk
   under the callees' World specs, layers/mallocng_specs.sl) and the
   machine form. A failed mmap of the meta areas' doubling size keeps
   `meta_alloc_shift <= 34` (`TASK_SIZE`).
