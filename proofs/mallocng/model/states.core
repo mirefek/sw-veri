@@ -860,7 +860,7 @@ theorem mp.res_type(A, g, i): A in mallocng.Abs -> g in omega -> i in omega -> i
   abs: mp.res_abs(A, g, i) in mallocng.Abs && univ: mp.res_abs(A, g, i) in univ(1)
 proof
   assume ha hg hi hil hun hbit
-  let K := insert("secret", insert("init_done", insert("auxv_at", insert("auxv", insert("areas", insert("avail_cnt", insert("reserve", insert("reserve_cnt", insert("free_metas", insert("used", insert("metas", insert("active", insert("slots", insert("brk", empty))))))))))))))
+  let K := insert("secret", insert("init_done", insert("auxv_at", insert("auxv", insert("areas", insert("avail_cnt", insert("reserve", insert("reserve_cnt", insert("free_metas", insert("used", insert("metas", insert("active", insert("slots", insert("brk", insert("taken", empty)))))))))))))))
   let X := mp.res_sl(A, g, i)
   have {a1 = abs1} := apply(mp.res_state, ha, hg, hi, hil, hun, hbit)
   have ap af ad := (mp.res_m(A, g, i) in powerset(cart(K, univ(1))) && is_fun(mp.res_m(A, g, i)) && dom(mp.res_m(A, g, i)) = K by simp(expand(a1, mallocng.Abs)))
@@ -911,24 +911,25 @@ qed
 
 // (two states of the same ranges, a byte in neither's reserved slots: in
 // both footprints or neither, both held or neither)
-theorem mp.fp_same(c, A, A2, b, a): a in omega -> mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) ->
+theorem mp.fp_same(c, A, A2, b, a): a in omega -> mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.taken = A.taken ->
   !mallocng.in_reserved(A, a) -> !mallocng.in_reserved(A2, a) ->
   fp: (a in mallocng.footprint(c, A2, b) <-> a in mallocng.footprint(c, A, b)) && held: (a in mallocng.held(c, A2, b) <-> a in mallocng.held(c, A, b))
 proof
-  assume hao fpr nr1 nr2
-  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := a]
-  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y), z := a]
+  assume hao fpr tke nr1 nr2
+  have te := apply(mp.taken_eq[A := A, A2 := A2, a := a], tke)
+  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
+  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y), z := a]
   have g2 := rewrite(fpr, f2)
   have d1: a in mallocng.footprint(c, A2, b) -> a in mallocng.footprint(c, A, b) proof
     assume h
     have k := expand(h, mallocng.footprint)
-    have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y)) by taut(f1, g2, rewrite(fpr, k), nr1)
+    have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y)) by taut(f1, g2, rewrite(fpr, k), nr1, te)
     show by defs(m, mallocng.footprint)
   qed
   have d2: a in mallocng.footprint(c, A, b) -> a in mallocng.footprint(c, A2, b) proof
     assume h
     have k := expand(h, mallocng.footprint)
-    have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A2, y)) by taut(f1, g2, k, nr2)
+    have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y)) by taut(f1, g2, k, nr2, te)
     show by defs(rewrite(sym(fpr), m), mallocng.footprint)
   qed
   have fpe: a in mallocng.footprint(c, A2, b) <-> a in mallocng.footprint(c, A, b) by taut(d1, d2)
@@ -1024,7 +1025,7 @@ proof
     assume hao nr2
     have r12 := apply(mp.gs_inres[A := A, A2 := mp.res_abs(A, g, i), x := a], ha, gs)
     have nr1: !mallocng.in_reserved(A, a) by taut(nr2, r12)
-    have {hmem = held} := apply(mp.fp_same[c := c, A := A, A2 := mp.res_abs(A, g, i), b := b, a := a], hao, fpr, nr1, nr2)
+    have {hmem = held} := apply(mp.fp_same[c := c, A := A, A2 := mp.res_abs(A, g, i), b := b, a := a], hao, fpr, simp(), nr1, nr2)
     show := apply(mp.view_mem[vm := vm2, F1 := FP2, F2 := FP, a := a], hao, hmem)
   qed
   have h2 := apply(mp.holds_restrict[c := c, A := mp.res_abs(A, g, i), M := M1, M2 := M2, b := b, brk := vm.brk, g := g], hc, u2, a2, hb, h1, ug2, restr)
@@ -1045,11 +1046,11 @@ proof
     have ic: mallocng.in_range(a, mallocng.data_ranges(c)[0]) by defs(simp(d0, cr1, cr2), mallocng.in_range, mallocng.CTX_SIZE)
     have nr1 := apply(mp.unres_data[c := c, A := A, M := M, b := b, brk := vm.brk, k := 0, a := a], hc, hu, ha, H, hao, simp(), simp(), ic)
     have nr2 := apply(mp.unres_data[c := c, A := mp.res_abs(A, g, i), M := M1, b := b, brk := vm.brk, k := 0, a := a], hc, u2, a2, h1, hao, simp(), simp(), ic)
-    have {ff = fp} := apply(mp.fp_same[c := c, A := A, A2 := mp.res_abs(A, g, i), b := b, a := a], hao, fpr, nr1, nr2)
+    have {ff = fp} := apply(mp.fp_same[c := c, A := A, A2 := mp.res_abs(A, g, i), b := b, a := a], hao, fpr, simp(), nr1, nr2)
     show by taut(ff)
   qed
   have fr2 := apply(mp.free_rw_mem[c := c, vm := vm2, F1 := mallocng.footprint(c, A, b), F2 := mallocng.footprint(c, mp.res_abs(A, g, i), b)], fr1, fm)
-  have rw2 := apply(mp.grp_rw_of_all[c := c, A := mp.res_abs(A, g, i), vm := vm2, b := b], apply(mp.grp_rw_gs[A := A, A2 := mp.res_abs(A, g, i), vm := vm, vm2 := vm2], gs, apply(mp.grp_all_of, hc, hu, ha, hrw), ep))
+  have rw2 := apply(mp.grp_rw_of_all[c := c, A := mp.res_abs(A, g, i), vm := vm2, b := b], apply(mp.grp_rw_gs[A := A, A2 := mp.res_abs(A, g, i), vm := vm, vm2 := vm2], gs, apply(mp.grp_all_of, hc, hu, ha, hh), ep))
   have hin2: mallocng.holds_in(c, mp.res_abs(A, g, i), vm2, b) by defs(taut(i2, mp2, fr2, rw2), mallocng.holds_in)
   show by taut(a2, u2, hin2)
 qed
@@ -1165,7 +1166,7 @@ proof
   have i2 := rewrite(sym(ek), rewrite(sym(efp), h2))
   have m3 := rewrite(sym(efr), mp2)
   have fr2 := rewrite(sym(efp0), apply(mp.free_rw_pages[c := c, vm := vm, vm2 := vm2, F := mallocng.footprint(c, A, b)], hfr, ep))
-  have rw2 := apply(mp.grp_rw_of_all[c := c, A := A2, vm := vm2, b := b], apply(mp.grp_rw_gm[A := A, A2 := A2, vm := vm, vm2 := vm2], apply(mp.mo_geom_of, ha, hmo), apply(mp.grp_all_of, hc, hu, ha, hrw), ep))
+  have rw2 := apply(mp.grp_rw_of_all[c := c, A := A2, vm := vm2, b := b], apply(mp.grp_rw_gm[A := A, A2 := A2, vm := vm, vm2 := vm2], apply(mp.mo_geom_of, ha, hmo), apply(mp.grp_all_of, hc, hu, ha, hh), ep))
   show by defs(taut(i2, m3, fr2, rw2), mallocng.holds_in)
 qed
 

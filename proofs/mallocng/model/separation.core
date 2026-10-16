@@ -518,12 +518,13 @@ proof
   have efr := apply(mp.gm_ranges[c := c, A := A, A2 := A2], ha, h)
   have ext: all x. x in mallocng.footprint(c, A2, b) <-> x in mallocng.footprint(c, A, b) proof
     fix x
-    have s2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y), z := x]
-    have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := x]
+    have s2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y), z := x]
+    have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := x]
     have ir := apply(mp.gm_inres[A := A, A2 := A2, a := x], ha, h)
+    have it := apply(mp.taken_eq[A := A, A2 := A2, a := x], apply(mp.gm_field[A := A, A2 := A2, k := "taken"], h, simp(), simp(), simp()))
     have m2 := subst({y. (x in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) <-> (x in mallocng.fp_set(y, b))}, efr,
       ((x in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) <-> (x in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) by taut()))
-    show by defs(taut(s2, s1, ir, m2), mallocng.footprint)
+    show by defs(taut(s2, s1, ir, it, m2), mallocng.footprint)
   qed
   show := mp(set_ext[a := mallocng.footprint(c, A2, b), b := mallocng.footprint(c, A, b)], ext)
 qed
@@ -1222,6 +1223,91 @@ proof
   show by taut(n)
 qed
 
+// (a meta not taken)
+abbrev mp.untaken(A, g) := all i. i in omega -> int_lt(i, seq_len(A.taken)) -> !(A.taken[i] = g)
+
+// a group's meta, a free one: not taken
+theorem mp.used_untaken(c, A, M, b, brk, g): mallocng.holds(c, A, M, b, brk) -> mallocng.is_used(A, g) -> mp.untaken(A, g)
+proof
+  assume H hg
+  have {hpt = part} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  fix i
+  assume hi hil e
+  have _ nu _ _ _ := mp(all_elim(htk, {i}), hi, hil)
+  show by taut(rewrite(e, nu), hg)
+qed
+
+theorem mp.free_untaken(c, A, M, b, brk, k): mallocng.holds(c, A, M, b, brk) -> k in omega -> int_lt(k, seq_len(A.free_metas)) -> mp.untaken(A, A.free_metas[k])
+proof
+  assume H hk hkl
+  have {hpt = part} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  fix i
+  assume hi hil e
+  have _ _ _ nf _ := mp(all_elim(htk, {i}), hi, hil)
+  have n := mp(all_elim(nf, {k}), hk, hkl)
+  show by taut(n, sym(e))
+qed
+
+// a byte of a group in use: in no taken meta (the groups apart from the
+// meta areas)
+theorem mp.grp_untaken(c, A, M, b, brk, g, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  mallocng.is_used(A, g) -> a in omega -> mallocng.in_range(a, mallocng.group_range(A.metas[g])) -> !mallocng.in_taken(A, a)
+proof
+  assume hc hu ha H hg hao hr it
+  have {hpt = part, hga = apart} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  obtain i, hi hil t1 t2 from expand(it, mallocng.in_taken)
+  have ts _ _ _ _ := mp(all_elim(htk, {i}), hi, hil)
+  have _ gex := apply(mp.meta_page, ha, ts)
+  obtain k, hk hkl g1 g2 _ from gex
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  have fx := apply(mp.area_fixed[c := c, A := A, k := k, a := a], hc, hu, ha, hk, hkl, arith(g1, t1), arith(g2, t2, cm))
+  obtain kg, hkg hkgr from expand(hg, mallocng.is_used)
+  have hkgl hkge := hkgr
+  have hr2 := subst({y. mallocng.in_range(a, mallocng.group_range(A.metas[y]))}, sym(hkge), hr)
+  have n := mp(all_elim(expand(hga, mallocng.groups_apart), {kg}, {a}), conj(hkg, hao), conj(hkgl, hr2))
+  show by taut(n, fx)
+qed
+
+// a meta area's header byte: in no taken meta (the metas past the header,
+// the areas page-aligned)
+theorem mp.untaken_hdr(c, A, M, b, brk, k, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  k in omega -> int_lt(k, seq_len(A.areas)) -> a in omega -> int_le(A.areas[k], a) -> int_lt(a, int_add(A.areas[k], 24)) -> !mallocng.in_taken(A, a)
+proof
+  assume hc hu ha H hk hkl hao h1 h2 it
+  have {hpt = part, aok = areas} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  have {ar = each} := expand(aok, mallocng.areas_ok)
+  obtain i, hi hil t1 t2 from expand(it, mallocng.in_taken)
+  have ts _ _ _ _ := mp(all_elim(htk, {i}), hi, hil)
+  have _ gex := apply(mp.meta_page, ha, ts)
+  obtain k2, hk2 hk2l g1 g2 _ from gex
+  have m1 _ _ _ _ _ := mp(all_elim(ar, {k}), hk, hkl)
+  have m2 _ _ _ _ _ := mp(all_elim(ar, {k2}), hk2, hk2l)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have ao1 := mp(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+  have ao2 := mp(at_type[l := A.areas, t := omega, i := k2], rl, hk2, hk2l)
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  show by arith(h1, h2, t1, t2, g1, g2, m1, m2, ao1, ao2, cm, hao)
+qed
+
+// a meta not taken: its bytes in no taken meta (distinct metas apart)
+theorem mp.untaken_meta(c, A, M, b, brk, g, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  mallocng.meta_slot(A, g) -> mp.untaken(A, g) -> a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> !mallocng.in_taken(A, a)
+proof
+  assume hc hu ha H hs hn hao h1 h2 it
+  have {hpt = part} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  obtain k, hk hkl t1 t2 from expand(it, mallocng.in_taken)
+  have ts _ _ _ _ := mp(all_elim(htk, {k}), hk, hkl)
+  have ne: !(A.taken[k] = g) := mp(all_elim(hn, {k}), hk, hkl)
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  have d := apply(mp.meta_disj[c := c, A := A, M := M, b := b, brk := brk, g := g, l := A.taken[k], a := a], hc, hu, ha, H, hs, ts, ne, hao, t1, arith(t2, cm))
+  show by taut(d, conj(h1, h2))
+qed
+
 // a group's bytes from its header to its last slot's end: in its range
 theorem mp.group_bytes(A, M, b, h, a): A in mallocng.Abs -> h in omega -> mallocng.group_ok(A, M, b, h) -> a in omega ->
   int_le(A.metas[h].mem, a) -> int_le(a, mallocng.slot_end(A.metas[h], A.metas[h].last_idx)) ->
@@ -1462,6 +1548,56 @@ proof
   show := apply(mp.ranges_l, apply(tr.concat_list, ro, dl), xl, c1)
 qed
 
+// (a byte of the context: in no meta area's page)
+theorem mp.ctx_noarea(c, A, M, b, brk, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> a in omega ->
+  mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) ->
+  (all k. k in omega -> int_lt(k, seq_len(A.areas)) -> !(int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096))))
+proof
+  assume hc hu ha H hao hin
+  fix k
+  assume hk hkl
+  have n: int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)) -> false proof
+    assume hp
+    have {d = data} := apply(mp.area_apart[c := c, A := A, M := M, b := b, brk := brk, k := k, a := a], hc, hu, ha, H, hk, hkl, hao, taut(hp), taut(hp))
+    have e0 _ _ := mp.data_at[c := c]
+    show by taut(rewrite(e0, mp(all_elim(d, {0}), simp(), simp())), hin)
+  qed
+  show by taut(n)
+qed
+
+// (a byte of the image's read-only segments: in no meta area)
+theorem mp.ro_noarea(c, A, M, b, brk, i, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> a in omega ->
+  i in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) ->
+  (all k. k in omega -> int_lt(k, seq_len(A.areas)) -> !(int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096))))
+proof
+  assume hc hu ha H hao hi hil hin
+  fix k
+  assume hk hkl
+  have n: int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)) -> false proof
+    assume hp
+    have {r = ro} := apply(mp.area_apart[c := c, A := A, M := M, b := b, brk := brk, k := k, a := a], hc, hu, ha, H, hk, hkl, hao, taut(hp), taut(hp))
+    show by taut(mp(all_elim(r, {i}), hi, hil), hin)
+  qed
+  show by taut(n)
+qed
+
+// a byte in no meta area: in no taken meta (each in one)
+theorem mp.untaken_of(c, A, M, b, brk, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> a in omega ->
+  (all k. k in omega -> int_lt(k, seq_len(A.areas)) -> !(int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)))) ->
+  !mallocng.in_taken(A, a)
+proof
+  assume hc hu ha H hao hna it
+  have {hpt = part} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  obtain k0, hk0 hk0l t1 t2 from expand(it, mallocng.in_taken)
+  have ms _ _ _ _ := mp(all_elim(htk, {k0}), hk0, hk0l)
+  have _ gex := apply(mp.meta_page, ha, ms)
+  obtain k, hk hkl g1 g2 _ from gex
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  have n := mp(all_elim(hna, {k}), hk, hkl)
+  show by taut(n, (int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096)) by arith(g1, g2, t1, t2, cm)))
+qed
+
 // the context's bytes: the allocator's (no client's, no group's)
 theorem mp.ctx_fp(c, A, vm, b, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
   a in omega -> int_le(c.ctx, a) -> int_lt(a, int_add(c.ctx, mallocng.CTX_SIZE)) -> a in mallocng.footprint(c, A, b)
@@ -1474,7 +1610,8 @@ proof
   have ir: mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) by defs(simp(h1, h2), mallocng.in_range)
   have cf := apply(mp.ctx_front[c := c, A := A, a := a], hc, hu, ha, ir)
   have nr := apply(mp.fixed_unres, hc, hu, ha, hao, huo, hga, taut(cf))
-  show := apply(mp.fp_intro, hc, hu, ha, hao, nl, nr, taut(cf))
+  have nt := apply(mp.untaken_of, hc, hu, ha, H, hao, apply(mp.ctx_noarea, hc, hu, ha, H, hao, ir))
+  show := apply(mp.fp_intro, hc, hu, ha, hao, nl, nr, nt, taut(cf))
 qed
 
 // ... and, not a free one: the invariant's, accessible

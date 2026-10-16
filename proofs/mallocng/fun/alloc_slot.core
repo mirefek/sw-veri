@@ -86,9 +86,13 @@ qed
 // (... its groups' places, classes and slot sizes as before)
 theorem mp.reorg_ranges(c, A, A2, sc): A in mallocng.Abs -> mallocng.reorganised(A, A2, sc) ->
   ranges: mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) &&
-  meta: (all x. x in omega -> A2.metas[x].sizeclass = A.metas[x].sizeclass && mallocng.stride(A2.metas[x]) = mallocng.stride(A.metas[x]))
+  meta: (all x. x in omega -> A2.metas[x].sizeclass = A.metas[x].sizeclass && mallocng.stride(A2.metas[x]) = mallocng.stride(A.metas[x])) &&
+  taken: A2.taken = A.taken
 proof
   assume ha r
+  have e0 _ _ _ _ _ := expand(r, mallocng.reorganised)
+  have tk: A2.taken = A.taken := subst({y. A2.taken = y.taken}, e0,
+    (A2.taken = fn_update(fn_update(fn_update(A2, "metas", A.metas), "active", A.active), "slots", A.slots).taken by simp()))
   let A3 := fn_update(A2, "slots", A.slots)
   have g := apply(mp.reorg_geom, ha, r)
   have r3 := apply(mp.gm_ranges[c := c, A := A, A2 := A3], ha, g)
@@ -100,7 +104,7 @@ proof
     have em := mp(app_update_other[f := A2, k := "slots", v := A.slots, x := "metas"], simp())
     show := rewrite(em, conj(s1, s2))
   qed
-  show by taut(trans(sym(s3), r3), mt)
+  show by taut(trans(sym(s3), r3), mt, tk)
 qed
 
 // (A's slots none reserved, A2 A with slot i of g reserved: that slot
@@ -162,35 +166,37 @@ qed
 // (the groups' places as before, no slot reserved before: the allocator's
 // bytes no more than before -- grown into nothing; the thread's block
 // still apart)
-theorem mp.fp_sub(c, A, A2, b): mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> mallocng.no_reserved(A) ->
+theorem mp.fp_sub(c, A, A2, b): mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.taken = A.taken -> mallocng.no_reserved(A) ->
   all a. a in omega -> a in mallocng.footprint(c, A2, b) -> a in mallocng.footprint(c, A, b)
 proof
-  assume fpr nr
+  assume fpr tke nr
   fix a
   assume hao h
-  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := a]
-  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y), z := a]
+  have te := apply(mp.taken_eq[A := A, A2 := A2, a := a], tke)
+  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
+  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y), z := a]
   have k := expand(h, mallocng.footprint)
   have fs: a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) := rewrite(fpr, (a in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) by taut(f2, k)))
   have ur := apply(mp.nr_out[A := A, a := a], nr)
-  have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y)) by taut(f1, hao, fs, ur)
+  have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y)) by taut(f1, f2, k, hao, fs, ur, te)
   show by defs(m, mallocng.footprint)
 qed
 
 // (... and no slot reserved after: the same bytes)
-theorem mp.fp_eq(c, A, A2, b): mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> mallocng.no_reserved(A) -> mallocng.no_reserved(A2) ->
+theorem mp.fp_eq(c, A, A2, b): mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> A2.taken = A.taken -> mallocng.no_reserved(A) -> mallocng.no_reserved(A2) ->
   mallocng.footprint(c, A2, b) = mallocng.footprint(c, A, b)
 proof
-  assume efr n1 n2
+  assume efr tke n1 n2
   have ext: all x. x in mallocng.footprint(c, A2, b) <-> x in mallocng.footprint(c, A, b) proof
     fix x
-    have s2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y), z := x]
-    have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := x]
+    have te := apply(mp.taken_eq[A := A, A2 := A2, a := x], tke)
+    have s2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y), z := x]
+    have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := x]
     have r1 := apply(mp.nr_out[A := A, a := x], n1)
     have r2 := apply(mp.nr_out[A := A2, a := x], n2)
     have m2 := subst({y. (x in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) <-> (x in mallocng.fp_set(y, b))}, efr,
       ((x in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) <-> (x in mallocng.fp_set(mallocng.fp_ranges(c, A2), b)) by taut()))
-    show by defs(taut(s2, s1, r1, r2, m2), mallocng.footprint)
+    show by defs(taut(s2, s1, r1, r2, m2, te), mallocng.footprint)
   qed
   show := mp(set_ext[a := mallocng.footprint(c, A2, b), b := mallocng.footprint(c, A, b)], ext)
 qed
@@ -325,18 +331,19 @@ qed
 // (of A's geometry, its reserved slots A's and more: the allocator's
 // bytes no more than A's)
 theorem mp.geom_sub(c, A, A2, b): A in mallocng.Abs -> mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) ->
-  (all a. mallocng.in_reserved(A, a) -> mallocng.in_reserved(A2, a)) ->
+  A2.taken = A.taken -> (all a. mallocng.in_reserved(A, a) -> mallocng.in_reserved(A2, a)) ->
   all a. a in omega -> a in mallocng.footprint(c, A2, b) -> a in mallocng.footprint(c, A, b)
 proof
-  assume ha fpr ir
+  assume ha fpr tke ir
   fix a
   assume hao h
-  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := a]
-  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y), z := a]
+  have te := apply(mp.taken_eq[A := A, A2 := A2, a := a], tke)
+  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
+  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) && !mallocng.in_reserved(A2, y) && !mallocng.in_taken(A2, y), z := a]
   have k := expand(h, mallocng.footprint)
   have fs: a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) := rewrite(fpr, (a in mallocng.fp_set(mallocng.fp_ranges(c, A2), b) by taut(f2, k)))
   have ur: !mallocng.in_reserved(A, a) by taut(f2, k, all_elim(ir, {a}))
-  have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y)) by taut(f1, hao, fs, ur)
+  have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y)) by taut(f1, f2, k, hao, fs, ur, te)
   show by defs(m, mallocng.footprint)
 qed
 
@@ -363,14 +370,15 @@ qed
 // reserved after, the groups' places as before: still the allocator's --
 // the slot starts past it)
 theorem mp.hdr_res(c, A, R, b, g): int_add(A.metas[g].mem, 8) in mallocng.held(c, A, b) -> mallocng.fp_ranges(c, R) = mallocng.fp_ranges(c, A) ->
-  mallocng.reserved_only(R, g, 0) -> R.metas[g].mem = A.metas[g].mem -> A.metas[g].mem in omega ->
+  R.taken = A.taken -> mallocng.reserved_only(R, g, 0) -> R.metas[g].mem = A.metas[g].mem -> A.metas[g].mem in omega ->
   int_add(A.metas[g].mem, 8) in mallocng.held(c, R, b)
 proof
-  assume hh fpr ro em mo
+  assume hh fpr tke ro em mo
   let a := int_add(A.metas[g].mem, 8)
+  have te := apply(mp.taken_eq[A := A, A2 := R, a := a], tke)
   have {hf = fp, hn = free} := apply(mp.held_fp, hh)
-  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y), z := a]
-  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, R), b) && !mallocng.in_reserved(R, y), z := a]
+  have f1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
+  have f2 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, R), b) && !mallocng.in_reserved(R, y) && !mallocng.in_taken(R, y), z := a]
   have k := expand(hf, mallocng.footprint)
   have fs: a in mallocng.fp_set(mallocng.fp_ranges(c, R), b) := rewrite(sym(fpr), (a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) by taut(f1, k)))
   have _ _ only := expand(ro, mallocng.reserved_only)
@@ -384,7 +392,7 @@ proof
     show by arith(s1, ei, em, mo, cu, ci)
   qed
   have ao: a in omega by arith(mo)
-  have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, R), b) && !mallocng.in_reserved(R, y)) by taut(f2, ao, fs, nr)
+  have m: a in set_select(omega, y. y in mallocng.fp_set(mallocng.fp_ranges(c, R), b) && !mallocng.in_reserved(R, y) && !mallocng.in_taken(R, y)) by taut(f1, f2, k, ao, fs, nr, te)
   have fr: a in mallocng.footprint(c, R, b) by defs(m, mallocng.footprint)
   show := apply(mp.held_intro, fr, hn)
 qed
@@ -483,8 +491,8 @@ proof
   qed
   have th1 := apply(mp.tls_kept[c := c, A := A, b := B, V0 := V0, V1 := V1, fs := s.fs_base, e := empty], fsb, hth, htl, unt1, ne8)
   // the groups' places as before: the allocator's bytes no more
-  have {fr = ranges, fm = meta} := apply(mp.reorg_ranges[c := c, A := A, A2 := A1, sc := sc], hat, reo)
-  have fsub := apply(mp.fp_sub[c := c, A := A, A2 := A1, b := B], fr, hnr)
+  have {fr = ranges, fm = meta, ftk = taken} := apply(mp.reorg_ranges[c := c, A := A, A2 := A1, sc := sc], hat, reo)
+  have fsub := apply(mp.fp_sub[c := c, A := A, A2 := A1, b := B], fr, ftk, hnr)
   have {H1 = inv} := expand(hin1, mallocng.holds_in)
   have {hac1 = active, cok1 = ctx} := expand(H1, mallocng.holds)
   have _ _ _ _ _ _ _ _ _ _ c11 _ := expand(cok1, mallocng.ctx_ok)
@@ -613,7 +621,7 @@ proof
     let EN := mp.errno(s.fs_base)
     // so far: the allocator's bytes as before but the new group's, nothing
     // else touched but errno
-    have fe1 := apply(mp.fp_eq[c := c, A := A, A2 := A1, b := B], fr, hnr, nr1)
+    have fe1 := apply(mp.fp_eq[c := c, A := A, A2 := A1, b := B], fr, ftk, hnr, nr1)
     have hin2b: mallocng.holds_in(c, A2, V2, B) by simp(hin2, hB1)
     have unt2b: mallocng.untouched(c, A1, B, V1, V2, EN) by simp(unt2, hA1, hB1)
     have unt02 := apply(mp.unt_trans[c := c, A := A, A1 := A1, b := B, V0 := V0, V1 := V1, V2 := V2, e := EN],
@@ -752,7 +760,7 @@ proof
       have rr: mallocng.fp_ranges(c, R3) = mallocng.fp_ranges(c, A2) := trans(rr1, rewrite(sym(rback), rr0))
       have ro3 := apply(mp.res_only, nr2, rs)
       let H8 := int_add(A2.metas[GN].mem, 8)
-      have h8 := apply(mp.hdr_res[c := c, A := A2, R := R3, b := B, g := GN], ghh, rr, ro3, r3mem, mo2)
+      have h8 := apply(mp.hdr_res[c := c, A := A2, R := R3, b := B, g := GN], ghh, rr, simp(), ro3, r3mem, mo2)
       have hp3: mallocng.partial(mallocng.mview(V3, mallocng.held(c, R3, B)), R3, GN) ->
           int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(R3.metas[GN]), int_add(R3.metas[GN].last_idx, 1)))) proof
         assume hpm
@@ -804,7 +812,7 @@ proof
         assume h
         show := apply(mp.gs_inres[A := A2, A2 := R3, x := a], a2a, rgs, h)
       qed
-      have s32 := apply(mp.geom_sub[c := c, A := A2, A2 := R3, b := B], a2a, rr, rin)
+      have s32 := apply(mp.geom_sub[c := c, A := A2, A2 := R3, b := B], a2a, rr, simp(), rin)
       have g03 := apply(mp.grown_less[c := c, A := A, A1 := A2, A2 := R3, b := B, vm := V0], grw02, s32)
       have f43 := apply(mp.gm_fp[c := c, A := R3, A2 := A4, b := B], ra, qg)
       have s43: all a. a in omega -> a in mallocng.footprint(c, A4, B) -> a in mallocng.footprint(c, R3, B) proof

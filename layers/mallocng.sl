@@ -138,6 +138,7 @@ record Abs {
   active      : List[List[nat]]    // for each of the 48 size classes: the list from ctx.active[sc] along next
   slots       : nat -> List[Use]   // for a used meta: what each slot holds
   brk         : nat                // ctx.brk
+  taken       : List[nat]          // metas handed out (alloc_meta), their groups not yet made (alloc_group)
 }
 
 pred is_used(A: Abs, g: nat) = ex k: nat. k < len(A.used) && A.used[k] = g
@@ -207,9 +208,13 @@ pred in_slot(v: MetaV, i: nat, a: nat) = slot_start(v, i) - IB < a && a < slot_e
 pred in_reserved(A: Abs, a: nat) =
   ex g: nat, i: nat. is_used(A, g) && i < len(A.slots[g]) && A.slots[g][i] = reserved && in_slot(A.metas[g], i, a)
 
+// a taken meta's bytes: handed out (`alloc_meta`), whoever took it makes
+// its group (`alloc_group`) -- no longer the allocator's
+pred in_taken(A: Abs, a: nat) = ex k: nat. k < len(A.taken) && A.taken[k] <= a && a < A.taken[k] + META_SIZE
+
 // the bytes the allocator owns
 fn footprint(c: Cfg, A: Abs, blocks: Addr -> Option[nat]) -> Set[nat] =
-  {a: nat | a in fp_set(fp_ranges(c, A), blocks) && !in_reserved(A, a)}
+  {a: nat | a in fp_set(fp_ranges(c, A), blocks) && !in_reserved(A, a) && !in_taken(A, a)}
 
 // the context's bytes the invariant leaves free: musl's counters and
 // heuristics -- the allocator's (in the footprint), of any value
@@ -285,12 +290,13 @@ pred areas_ok(c: Cfg, A: Abs, m: Mem) =
      rd(m, A.areas[k], 8) = A.secret &&
      rd(m, A.areas[k] + 8, 8) = (if k + 1 < len(A.areas) { A.areas[k + 1] } else { 0 }) &&
      rd(m, A.areas[k] + 16, 4) = NSLOTS &&
-     (all a: nat. A.areas[k] <= a && a < A.areas[k] + 4096 -> m_rw(m, a) && pg(m, a).value.kind != stack)) &&
+     (all a: nat. A.areas[k] <= a && a < A.areas[k] + 4096 && !in_taken(A, a) -> m_rw(m, a) && pg(m, a).value.kind != stack)) &&
   distinct: (all k: nat, l: nat. k < len(A.areas) && l < len(A.areas) && A.areas[k] = A.areas[l] -> k = l) &&
   // reserved pages: mapped (maybe PROT_NONE), zero
   reserve: (all a: nat. A.reserve <= a && a < A.reserve + 4096 * A.reserve_cnt -> m_mapped(m, a) && b8(m, a) = 0)
 
-// every meta slot is used, free, or not yet handed out -- exactly one
+// every meta slot is used, free, not yet handed out, or taken (handed out,
+// its group not yet made) -- exactly one
 pred metas_partition(A: Abs) =
   sorted: (all k: nat. k + 1 < len(A.used) -> A.used[k] < A.used[k + 1]) &&
   used_slots: (all k: nat. k < len(A.used) -> meta_slot(A, A.used[k])) &&
@@ -298,7 +304,12 @@ pred metas_partition(A: Abs) =
   cover: (all k: nat, j: nat. k < len(A.areas) && j < NSLOTS ->
      is_used(A, meta_at(A.areas[k], j)) ||
      (ex i: nat. i < len(A.free_metas) && A.free_metas[i] = meta_at(A.areas[k], j)) ||
-     avail_meta(A, meta_at(A.areas[k], j))) &&
+     avail_meta(A, meta_at(A.areas[k], j)) ||
+     (ex i: nat. i < len(A.taken) && A.taken[i] = meta_at(A.areas[k], j))) &&
+  taken: (all i: nat. i < len(A.taken) ->
+     meta_slot(A, A.taken[i]) && !is_used(A, A.taken[i]) && !avail_meta(A, A.taken[i]) &&
+     (all k: nat. k < len(A.free_metas) -> A.free_metas[k] != A.taken[i]) &&
+     (all k: nat. k < len(A.taken) && A.taken[k] = A.taken[i] -> k = i)) &&
   fresh: (all j: nat. len(A.areas) > 0 && NSLOTS - A.avail_cnt <= j && j < NSLOTS ->
      !is_used(A, meta_at(A.areas[len(A.areas) - 1], j)) &&
      (all i: nat. i < len(A.free_metas) -> A.free_metas[i] != meta_at(A.areas[len(A.areas) - 1], j)))
@@ -522,7 +533,7 @@ pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
 
 pred rep(c: Cfg, A: Abs, s: Heap) =
-  holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) &&
+  holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && no_reserved(A) && len(A.taken) = 0 &&
   fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
   grp_rw(c, A, s.vm, s.blocks) &&
   live_rw(s)                 // (what the law inv_wf needs, stated directly)

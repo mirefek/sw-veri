@@ -424,6 +424,8 @@ fn abs_v(a: &Abs) -> V {
         ("active", list(a.active.iter().map(|l| list(l.iter().map(|&x| n(x)))))),
         ("slots", map(a.slots.iter().map(|(g, us)| (n(*g), list(us.iter().map(use_v)))).collect(), Some(list([])))),
         ("brk", n(a.brk)),
+        // (between the allocator's calls: no meta handed out)
+        ("taken", list([])),
     ])
 }
 

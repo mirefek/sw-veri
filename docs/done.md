@@ -761,3 +761,11 @@ item is a short summary of finished work; details are in the files named.
   `ct.contract_inv` takes the run first, so it infers them too; the ghost
   divergence lemmas' body premises by `ct.dv_ret_a` / `_ret2_a` / `_ret3_a`
   (mp.ss, dq, dqh, qu, fm; mp.ag/as/az/db/ef/gm/gsi/ta divergence).
+- **Taken metas** (`Abs.taken`, `in_taken`): a meta handed out by
+  alloc_meta whose group is not yet made -- out of the footprint and of its
+  area's accessible bytes, a fourth case of the metas' partition (a meta
+  slot, not used, not free, not available, once); none between the
+  allocator's calls (`rep`: `len(A.taken) = 0`). The groundwork for
+  alloc_meta's and alloc_group's specs. The footprint lemmas take the byte
+  untaken (`mp.untaken_of`, `mp.grp_untaken`, `mp.untaken_meta`,
+  `mp.untaken_hdr`); a meta's area read by its header only (`mp.meta_area`).
