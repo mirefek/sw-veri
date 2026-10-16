@@ -508,6 +508,15 @@ where it says something new. They see through a defined goal's head.
 the k-th (from 1) and `h.label` the labelled one. Both are projections,
 not search.
 
+**A clause as a statement.** `[l] P(args)` (wherever a formula is
+written: `have h: [each] mallocng.areas_ok(c, A2, M2) proof ... qed`) is
+the clause of `P(args)` labelled `l`, P's definition unfolded once,
+the arguments substituted -- not written out by hand. `[l.m] P(args)`
+is the clause labelled `m` in that one. The goal rule `clauses(p1, ..,
+pn)` proves a predicate (or a conjunction) from proofs of its clauses as
+written, in any order; it names a clause no proof matches, and a proof
+that matches none.
+
 **Proof expressions:**
 - a fact: `h`, a theorem, an axiom;
 - an instantiation `name[x := t, p := y. φ]`: its parameters, or its

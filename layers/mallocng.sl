@@ -445,15 +445,15 @@ pred blocks_ok(A: Abs, blocks: Addr -> Option[nat]) =
 
 // the abstract state is normalized where memory says nothing
 pred normal(A: Abs) =
-  (all g: nat. !is_used(A, g) -> A.metas[g] = ZERO_META && len(A.slots[g]) = 0) &&
-  (A.init_done != 0 -> len(A.auxv) = 0 && A.auxv_at = 0) &&
-  (A.reserve_cnt = 0 <-> A.reserve = 0) &&
-  !is_used(A, 0)
+  unused: (all g: nat. !is_used(A, g) -> A.metas[g] = ZERO_META && len(A.slots[g]) = 0) &&
+  init: (A.init_done != 0 -> len(A.auxv) = 0 && A.auxv_at = 0) &&
+  reserve: (A.reserve_cnt = 0 <-> A.reserve = 0) &&
+  zero: !is_used(A, 0)
 
 // musl's code and constant tables are intact; single-threaded; the lock is free
 pred image_ok(c: Cfg, m: Mem) =
-  (all i: nat. i < phnum(c.file) && is_load(c.file, i) -> ro_segment_ok(c.file, i, segment(c.file, i), m)) &&
-  b8(m, c.libc + L_NEED_LOCKS) = 0 && rd(m, c.lock, 4) = 0
+  ro: (all i: nat. i < phnum(c.file) && is_load(c.file, i) -> ro_segment_ok(c.file, i, segment(c.file, i), m)) &&
+  need_locks: b8(m, c.libc + L_NEED_LOCKS) = 0 && lock: rd(m, c.lock, 4) = 0
 
 // segment i (= sg) of f, if read-only, is in memory as exec maps it: its
 // bytes, and the protection of the pages it is the last segment on (seen
@@ -468,12 +468,12 @@ pred ro_segment_ok(f: File, i: nat, sg: Segment, m: Mem) =
 // the allocator's memory can be accessed as the code does (its groups:
 // not on the stack, where GIMPLE's accesses are to stack objects only)
 pred perms_ok(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
-  (all k: nat, a: nat. k < 3 && data_ranges(c)[k][0] <= a && a < data_ranges(c)[k][0] + data_ranges(c)[k][1] && !ctx_free(c, a) ->
+  data: (all k: nat, a: nat. k < 3 && data_ranges(c)[k][0] <= a && a < data_ranges(c)[k][0] + data_ranges(c)[k][1] && !ctx_free(c, a) ->
      m_rw(m, a) && pg(m, a).value.kind != stack) &&
-  (all k: nat, a: nat. k < len(A.used) &&
+  groups: (all k: nat, a: nat. k < len(A.used) &&
      group_range(A.metas[A.used[k]])[0] <= a && a < group_range(A.metas[A.used[k]])[0] + group_range(A.metas[A.used[k]])[1] &&
      a notin live_of(blocks) && !in_reserved(A, a) -> m_rw(m, a) && pg(m, a).value.kind != stack) &&
-  (all k: nat, a: nat. k < len(auxv_ranges(A)) &&
+  auxv: (all k: nat, a: nat. k < len(auxv_ranges(A)) &&
      auxv_ranges(A)[k][0] <= a && a < auxv_ranges(A)[k][0] + auxv_ranges(A)[k][1] ->
        m_mapped(m, a) && pg(m, a).value.prot.r)
 

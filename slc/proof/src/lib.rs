@@ -746,7 +746,7 @@ struct State {
 }
 
 /// Rules that take their statement from the goal.
-const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
+const GOAL_RULES: &[&str] = &["taut", "arith", "simp", "rsimp", "lists", "induct", "ex_intro", "defs", "clauses", "sel", "eval", "mem", "bitwise", "cases", "disj", "spec_ret", "divergence", "runs_univ", "div_body"];
 
 /// `a -> b`: (a, b)
 fn imp_parts(env: &Env, t: &Term) -> KResult<(Term, Term)> {
@@ -912,6 +912,21 @@ fn parse_pe(s: &str) -> KResult<PE> {
 
 impl State {
     fn term(&self, env: &mut Env, text: &str) -> KResult<Term> {
+        // `[l] P(args)` (`[l.m] ..`): the clause of P(args) labelled l (in
+        // it, the one labelled m) -- the statement as the definition has it
+        let t = text.trim_start();
+        if t.starts_with('[') {
+            if let Ok(close) = closing(t, 0) {
+                let path = t[1..close].trim();
+                if !path.is_empty() && path.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                    let mut body = parse_term(env, &t[close + 1..], &self.scope)?;
+                    for l in path.split('.') {
+                        body = clause_term(env, &body, l)?;
+                    }
+                    return Ok(body);
+                }
+            }
+        }
         parse_term(env, text, &self.scope)
     }
 
@@ -1735,6 +1750,69 @@ impl State {
                     _ => return err("div_body takes the joining lemma (`mp.gS`, `ct.w_single`)"),
                 };
                 self.div_body(env, lg, goal, &gs)
+            }
+            // clauses(p1, .., pn): the goal (a definition at its head unfolded
+            // once) from proofs of its clauses as written, in any order
+            "clauses" => {
+                let mut syms = Vec::new();
+                let mut g2 = goal.clone();
+                let and = env.sym_by_name.get("and").copied();
+                if let Node::App(f, _) = goal.node() {
+                    if Some(*f) != and && matches!(env.syms[*f as usize].kind, sl_kernel::SymKind::Defined { .. }) {
+                        syms.push(*f);
+                        g2 = unfold_all(env, goal, &[*f]);
+                    }
+                }
+                let parts = conj_parts(env, &g2);
+                let ps = self.proofs(env, lg, args)?;
+                let mut used = vec![false; ps.len()];
+                let mut got: Vec<Seq> = Vec::new();
+                let mut missing: Vec<String> = Vec::new();
+                for (i, part) in parts.iter().enumerate() {
+                    let mut found = None;
+                    for (j, p) in ps.iter().enumerate() {
+                        if used[j] {
+                            continue;
+                        }
+                        if let Ok(s) = self.check(env, p.clone(), part) {
+                            found = Some((j, s));
+                            break;
+                        }
+                    }
+                    match found {
+                        Some((j, s)) => {
+                            used[j] = true;
+                            got.push(s);
+                        }
+                        None => missing.push(match part.label() {
+                            Some(l) => format!("`{}`", l),
+                            None => format!("#{} `{}`", i + 1, Printer::new(env).short(part)),
+                        }),
+                    }
+                }
+                if !missing.is_empty() {
+                    return err(format!("clauses: no proof given of the clause(s) {}", missing.join(", ")));
+                }
+                if let Some(j) = used.iter().position(|u| !u) {
+                    return err(format!("clauses: proof #{} (`{}`) proves no clause left", j + 1, Printer::new(env).short(ps[j].concl())));
+                }
+                let lemma = facts::seq_of(env, "and_intro").ok_or_else(|| KernelError("`and_intro` (core/logic.core) is not loaded".into()))?;
+                let mut vs = Vec::new();
+                lemma.concl().vars(&mut vs);
+                let mut it = got.into_iter();
+                let mut acc = it.next().ok_or_else(|| KernelError("clauses: no clause".into()))?;
+                for p in it {
+                    let mut l = lemma.clone();
+                    for (v, x) in vs.iter().zip([acc.concl().clone(), p.concl().clone()]) {
+                        l = Seq::inst(env, &l, *v, &x)?;
+                    }
+                    acc = Seq::mp(env, &Seq::mp(env, &l, &acc)?, &p)?;
+                }
+                if syms.is_empty() {
+                    self.check(env, acc, goal)
+                } else {
+                    Seq::conv(env, &acc, goal, &syms)
+                }
             }
             // defs(p, D1, .., Dn): p proves the goal up to unfolding the definitions Di
             "defs" => {
@@ -4389,6 +4467,27 @@ fn conj_label(env: &Env, s: &Seq, l: &str) -> KResult<Seq> {
     let labels: Vec<String> = conj_parts(env, s2.concl()).iter().filter_map(|p| p.label().map(|x| x.to_string())).collect();
     let have = if labels.is_empty() { "none".to_string() } else { labels.join(", ") };
     err(format!("no conjunct labelled `{}` in `{}` (its labels: {})", l, Printer::new(env).short(s.concl()), have))
+}
+
+/// The clause labelled `l` of the statement `t` (a definition at its head
+/// unfolded once if `t` has none): what `[l] t` states.
+fn clause_term(env: &Env, t: &Term, l: &str) -> KResult<Term> {
+    let find = |t: &Term| conj_parts(env, t).into_iter().find(|p| p.label() == Some(l));
+    if let Some(p) = find(t) {
+        return Ok(p);
+    }
+    let mut t2 = t.clone();
+    if let Node::App(f, _) = t.node() {
+        if matches!(env.syms[*f as usize].kind, sl_kernel::SymKind::Defined { .. }) {
+            t2 = unfold_all(env, t, &[*f]);
+            if let Some(p) = find(&t2) {
+                return Ok(p);
+            }
+        }
+    }
+    let labels: Vec<String> = conj_parts(env, &t2).iter().filter_map(|p| p.label().map(|x| x.to_string())).collect();
+    let have = if labels.is_empty() { "none".to_string() } else { labels.join(", ") };
+    err(format!("no clause labelled `{}` in `{}` (its labels: {})", l, Printer::new(env).short(t), have))
 }
 
 /// The conjuncts labelled `labels` of `s`'s statement, named by their labels
