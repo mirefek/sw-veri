@@ -890,8 +890,10 @@ proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
 // after writing the allocator's memory needs it intact)
 pred tls_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 8 -> uint(fs) + i notin footprint(c, A, blocks)
 
-// errno's cell (the thread's, as the thread pointer) not the allocator's
-pred errno_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 4 -> uint(errno_at(fs)) + i notin footprint(c, A, blocks)
+// errno's cell (the thread's, mapped as the thread pointer's word) not the
+// allocator's
+pred errno_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, fs: Addr) =
+  all i: nat. i < 4 -> uint(errno_at(fs)) + i notin footprint(c, A, blocks) && mapped(vm, (uint(errno_at(fs)) + i) / PAGE)
 
 // try_avail(pm), pm class sc's active list: a free slot of a group already
 // there. Its bit (1 << i) returned, slot i of the list's head reserved --
@@ -955,7 +957,7 @@ pred meta_ready(vm: Vm, m: nat) =
 // allocator's).
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
   require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) &&
-    errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, fs_base)
+    errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base)
   either { overflow() } or {
     let A0 = A
     let before = vm

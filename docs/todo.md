@@ -32,10 +32,16 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   (proofs/mallocng/fun/alloc_meta.core: `mp.rs_q`, `mp.brk_q`,
   `mp.mmap_q`, `mp.mprotect_q`; `mp.dqh_q`, `ms.el_q`), the auxiliary
   vector readable before the first call (`mp.am_auxv`) and the run's
-  states (`mp.am_st`, `mp.am_st_step`) are done. Left: the run
-  (`mp.am_run`, open: the GIMPLE walk, each block to the next state) and
-  the machine form. A failed mmap of the meta areas' doubling size keeps
-  `meta_alloc_shift <= 34` (`TASK_SIZE`).
+  states (`mp.am_st`, `mp.am_st_step`) are done, and so is the run
+  (`mp.am_run`: each path's GIMPLE walk to its outcome; the states between
+  by `mp.am_rf` -- brk's refused / granted refills `mp.am_brkfail` /
+  `mp.am_brkok`, mmap's `mp.am_mmok` --, `mp.am_na` -- the new area --,
+  `mp.am_errw` / `mp.am_ret0` -- 0 returned, errno written). Left: the
+  refinement to `alloc_meta_spec` (`mp.am`, as `mp.ta`), divergence, the
+  machine form, the contract at a call. The run's file is long (~5400
+  lines): the walk restates the locals at each join and reads each word
+  back through every store after it -- a read-through-stores lemma (or a
+  memory normal form) would shorten both.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already

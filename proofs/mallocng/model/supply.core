@@ -1065,6 +1065,59 @@ abbrev mp.tavpre(c, A, vm, V1, b) := cfg: c in mallocng.Cfg && univ: A in univ(1
   w32: gimple.bytes_at(V1, int_add(c.ctx, 32), 8) = int_sub(A.avail_cnt, 1) &&
   w24: gimple.bytes_at(V1, int_add(c.ctx, 24), 8) = int_add(mp.anext(A), 40)
 
+// (a meta available: the last area's next one -- the context's word, a meta
+// slot within the area's page)
+theorem mp.anext_at(c, A, vm, b): A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) -> int_lt(0, A.avail_cnt) ->
+  nat: mp.anext(A) in omega && le: int_le(A.avail_cnt, mallocng.NSLOTS) && len: ord_lt(0, seq_len(A.areas)) &&
+  word: mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.C_AVAIL_META) = mp.anext(A) &&
+  page: (ex k. k in omega && int_lt(k, seq_len(A.areas)) && int_le(int_add(A.areas[k], 24), mp.anext(A)) &&
+     int_le(int_add(mp.anext(A), 40), int_add(A.areas[k], 4096)) && int_mod(A.areas[k], 4096) = 0) &&
+  slot: mallocng.meta_slot(A, mp.anext(A)) && avail: mallocng.avail_meta(A, mp.anext(A)) && untaken: mp.untaken(A, mp.anext(A))
+proof
+  assume ha hh hk
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {cok = ctx, har = areas, hpt = part} := expand(H, mallocng.holds)
+  have {tk = taken} := expand(hpt, mallocng.metas_partition)
+  have {cle = avail_le, cam = avail_meta} := expand(cok, mallocng.ctx_ok)
+  have cl cw := mp(cam, hk)
+  have ko: A.avail_cnt in omega by simp(ha)
+  have al: A.areas in list_type(omega) by simp(ha)
+  have lno: seq_len(A.areas) in omega by arith(al)
+  have hni := mp(nat_mem_lt[k := seq_len(A.areas), i := 0], lno, expand(cl, ord_lt))
+  let LK := int_sub(seq_len(A.areas), 1)
+  have lo: LK in omega by arith(al, hni)
+  have lol: int_lt(LK, seq_len(A.areas)) by arith(al, hni)
+  have Lo := apply(at_type[l := A.areas, t := omega, i := LK], al, lo, lol)
+  have cs: mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS)
+  have _ _ c101 := cs
+  have kle := rewrite(c101, cle)
+  have xe: mp.anext(A) = int_add(int_add(A.areas[LK], 24), int_mul(40, int_sub(101, A.avail_cnt))) by defs(simp(cs), mallocng.meta_at)
+  have xo: mp.anext(A) in omega by arith(xe, Lo, ko, kle)
+  have {aeach = each} := expand(har, mallocng.areas_ok)
+  have am _ _ _ _ _ := mp(all_elim(aeach, {LK}), lo, lol)
+  have pg: ex k. k in omega && int_lt(k, seq_len(A.areas)) && int_le(int_add(A.areas[k], 24), mp.anext(A)) &&
+      int_le(int_add(mp.anext(A), 40), int_add(A.areas[k], 4096)) && int_mod(A.areas[k], 4096) = 0
+    by ex_intro({LK}, taut(lo, lol, (int_le(int_add(A.areas[LK], 24), mp.anext(A)) by arith(xe, Lo, ko, kle)),
+      (int_le(int_add(mp.anext(A), 40), int_add(A.areas[LK], 4096)) by arith(xe, Lo, ko, kle, hk)), am))
+  have j0o: int_sub(mallocng.NSLOTS, A.avail_cnt) in omega := rewrite(sym(c101), (int_sub(101, A.avail_cnt) in omega by arith(ko, kle)))
+  have j0l: int_lt(int_sub(mallocng.NSLOTS, A.avail_cnt), mallocng.NSLOTS) := rewrite(sym(c101), (int_lt(int_sub(101, A.avail_cnt), 101) by arith(ko, hk)))
+  have xs: mallocng.meta_slot(A, mp.anext(A)) by defs(ex_intro({LK}, {int_sub(mallocng.NSLOTS, A.avail_cnt)}, taut(lo, j0o, lol, j0l, refl({mp.anext(A)}))), mallocng.meta_slot)
+  // (available: no taken one -- those never are)
+  have xe1: ex x0. x0 in omega && ((int_le(int_sub(mallocng.NSLOTS, A.avail_cnt), x0) && int_lt(x0, mallocng.NSLOTS)) &&
+      mp.anext(A) = mallocng.meta_at(A.areas[int_sub(seq_len(A.areas), 1)], x0))
+    by ex_intro({int_sub(mallocng.NSLOTS, A.avail_cnt)}, taut(j0o, (int_le(int_sub(mallocng.NSLOTS, A.avail_cnt), int_sub(mallocng.NSLOTS, A.avail_cnt)) by arith(j0o)), j0l,
+      refl({mp.anext(A)})))
+  have xa: mallocng.avail_meta(A, mp.anext(A)) by defs(taut(cl, xe1), mallocng.avail_meta)
+  have xnt: mp.untaken(A, mp.anext(A)) proof
+    fix i
+    assume hi hil
+    have _ _ na _ _ := mp(all_elim(tk, {i}), hi, hil)
+    assume e
+    show by taut(na, rewrite(sym(e), xa))
+  qed
+  show by taut(xo, cle, cl, cw, pg, xs, xa, xnt)
+qed
+
 // (the step's facts: the new state's type and parts, the next meta's place)
 theorem mp.tav_basic(c, A, vm, V1, b): mp.tavpre(c, A, vm, V1, b) ->
   abs: mp.tav(A) in mallocng.Abs && univ: mp.tav(A) in univ(1) &&
@@ -1081,39 +1134,15 @@ theorem mp.tav_basic(c, A, vm, V1, b): mp.tavpre(c, A, vm, V1, b) ->
 proof
   assume P
   have {ha = abs, hh = holds, hk = cnt} := P
-  have {H = inv} := expand(hh, mallocng.holds_in)
-  have {cok = ctx, hpt = part, har = areas} := expand(H, mallocng.holds)
-  have {cle = avail_le, cam = avail_meta} := expand(cok, mallocng.ctx_ok)
-  have cl cw := mp(cam, hk)
+  have {xo = nat, cle = le, cl = len, cw = word, pg = page, xs = slot} := apply(mp.anext_at, ha, hh, hk)
   have tl: A.taken in list_type(omega) by simp(ha)
   have fl: A.free_metas in list_type(omega) by simp(ha)
   have ko: A.avail_cnt in omega by simp(ha)
   have km: int_sub(A.avail_cnt, 1) in omega by arith(ko, hk)
-  have al: A.areas in list_type(omega) by simp(ha)
-  have lno: seq_len(A.areas) in omega by arith(al)
-  have hni := mp(nat_mem_lt[k := seq_len(A.areas), i := 0], lno, expand(cl, ord_lt))
-  let LK := int_sub(seq_len(A.areas), 1)
-  have lo: LK in omega by arith(al, hni)
-  have lol: int_lt(LK, seq_len(A.areas)) by arith(al, hni)
-  have Lo := apply(at_type[l := A.areas, t := omega, i := LK], al, lo, lol)
-  have cs: mallocng.AREA_HDR = 24 && mallocng.META_SIZE = 40 && mallocng.NSLOTS = 101 by defs(simp(), mallocng.AREA_HDR, mallocng.META_SIZE, mallocng.NSLOTS)
-  have _ _ c101 := cs
-  have kle := rewrite(c101, cle)
-  have xe: mp.anext(A) = int_add(int_add(A.areas[LK], 24), int_mul(40, int_sub(101, A.avail_cnt))) by defs(simp(cs), mallocng.meta_at)
-  have xo: mp.anext(A) in omega by arith(xe, Lo, ko, kle)
   have {ty = abs, tu = univ} := apply(mp.take_type[A := A, F := A.free_metas, n := int_sub(A.avail_cnt, 1), x := mp.anext(A)], ha, fl, km, xo)
   have fpr: mallocng.fp_ranges(c, mp.tav(A)) = mallocng.fp_ranges(c, A) by defs(simp(), mallocng.fp_ranges, mallocng.fixed_ranges, mallocng.auxv_ranges)
   have rgr: mallocng.regions(c, mp.tav(A)) = mallocng.regions(c, A) by defs(simp(), mallocng.regions)
   have fxr: mallocng.fixed_ranges(c, mp.tav(A)) = mallocng.fixed_ranges(c, A) by defs(simp(), mallocng.fixed_ranges, mallocng.auxv_ranges)
-  have {aeach = each} := expand(har, mallocng.areas_ok)
-  have am _ _ _ _ _ := mp(all_elim(aeach, {LK}), lo, lol)
-  have pg: ex k. k in omega && int_lt(k, seq_len(A.areas)) && int_le(int_add(A.areas[k], 24), mp.anext(A)) &&
-      int_le(int_add(mp.anext(A), 40), int_add(A.areas[k], 4096)) && int_mod(A.areas[k], 4096) = 0
-    by ex_intro({LK}, taut(lo, lol, (int_le(int_add(A.areas[LK], 24), mp.anext(A)) by arith(xe, Lo, ko, kle)),
-      (int_le(int_add(mp.anext(A), 40), int_add(A.areas[LK], 4096)) by arith(xe, Lo, ko, kle, hk)), am))
-  have j0o: int_sub(mallocng.NSLOTS, A.avail_cnt) in omega := rewrite(sym(c101), (int_sub(101, A.avail_cnt) in omega by arith(ko, kle)))
-  have j0l: int_lt(int_sub(mallocng.NSLOTS, A.avail_cnt), mallocng.NSLOTS) := rewrite(sym(c101), (int_lt(int_sub(101, A.avail_cnt), 101) by arith(ko, hk)))
-  have xs: mallocng.meta_slot(A, mp.anext(A)) by defs(ex_intro({LK}, {int_sub(mallocng.NSLOTS, A.avail_cnt)}, taut(lo, j0o, lol, j0l, refl({mp.anext(A)}))), mallocng.meta_slot)
   show by taut(xs, ty, tu, (mp.tav(A).metas = A.metas by simp()), (mp.tav(A).slots = A.slots by simp()), (mp.tav(A).used = A.used by simp()),
     (mp.tav(A).active = A.active by simp()), (mp.tav(A).areas = A.areas by simp()), (mp.tav(A).free_metas = A.free_metas by simp()),
     (mp.tav(A).avail_cnt = int_sub(A.avail_cnt, 1) by simp()), (mp.tav(A).taken = seq_concat(A.taken, seq_one(mp.anext(A))) by simp()),
