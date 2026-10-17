@@ -569,7 +569,7 @@ goes, in order:
   `app(fn_build(D, ..), regs)` with `regs in D` discharged), a bind of a
   program with several outcomes (`ex o. runs(p, s, o) && ..`, o named),
   a disjunction a side of which is decided false (the precondition, the
-  argument count), a contract's `overflow || body` (the overflow as a
+  argument count; the other side `c && T` with c decided too: T), a contract's `overflow || body` (the overflow as a
   call's: carried to the outcome, closed against the goal), a bind's
   dispatch on its outcome known (`g.disp_ok`, `g.disp_exc`); stopped, an
   unused `with` equation (or conjunction of them) whose left side occurs
@@ -597,9 +597,18 @@ goes, in order:
   return `ex r. o = ok(fn_update(w, "vm", V), r) && R(r)` (or `ex V r.
   (V in Vm && P(V)) && ..`) takes the next names for its witnesses; R
   (an equation rewrites the continuation) is a last conjunct of the
-  result. The overflow is carried to the outcome and must be a disjunct
+  result. The overflow is carried to the outcome and must imply a disjunct
   of the block's goal (`ex v. v in Vm && o = exc(fn_update(s, "vm", v),
-  ..)`), closed at the block's end;
+  ..)`; up to lets, the goal's further witnesses -- the locals' values --
+  by matching), closed at the block's end. The `with` item may be a fact
+  `all regs o. gc.regs_ok(regs, ARGS) -> runs(app(F, regs), t, o) ->
+  overflow || return` proved for this call (a callee's contract adapted to
+  what the call needs);
+- through a join: a `with` fact `(ex v w... v in Vm && x = exc(..)) ||
+  (ex ws. P && x = ok(..))` on an outcome x the fact is about (a block's
+  result stated once, `T1`): the overflow carried to the outcome and closed
+  as a call's, the return's witnesses the next names, `x = ok(..)` into the
+  fact, P a last conjunct of the result;
 - and it stops at anything else -- a loop, a bind or branch with
   no `with` fact for it, a choice with no name -- naming the fact there
   `h` (or its conjuncts `h..`). Unused names or `with` facts are an error

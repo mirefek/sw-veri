@@ -255,7 +255,17 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                 Frame::Cases(d, a_imp, b) => {
                     let g = s.concl().clone();
                     let s1 = s.discharge(env, b)?;
-                    Seq::taut(env, lg, &[d, a_imp, &s1], &g).map_err(|_| {
+                    // (else the overflow implying a disjunct up to lets and
+                    // the witnesses of what the goal's overflow names more)
+                    let more = match a_imp.concl().node() {
+                        Node::App(_, x) if x.len() == 2 => imply_disjunct(env, lg, &x[1], &g).ok(),
+                        _ => None,
+                    };
+                    let mut ps: Vec<&Seq> = vec![d, a_imp, &s1];
+                    if let Some(m) = &more {
+                        ps.push(m);
+                    }
+                    Seq::taut(env, lg, &ps, &g).map_err(|_| {
                         let pr = Printer::new(env);
                         let a2 = match a_imp.concl().node() {
                             Node::App(_, x) => pr.short(&x[1]),
@@ -2675,6 +2685,31 @@ impl State {
         // state `pair(s, ..)` reads `fst(pair(s, ..))` as s)
         let cur0 = self.eval(env, lg, &parse_pe(p.trim())?)?;
         let mut cur = self.step_simp(env, lg, cur0)?;
+        // (a join `overflow || return` of an outcome x the fact is about, a
+        // `with` fact: the overflow carried to the outcome and closed against
+        // the goal as a call's; the return's witnesses named, its `x = ok(..)`
+        // into the fact, its other facts a last conjunct of the result)
+        for i in 0..withs.len() {
+            if used[i] || is_op[i] {
+                continue;
+            }
+            let Some(x) = join_outcome(env, lg, withs[i].concl()) else { continue };
+            if !occurs(&x, cur.concl()) {
+                continue;
+            }
+            mark_used(&withs, &mut used, i);
+            let mut b = self.step_split_call(env, lg, withs[i].clone(), std::slice::from_ref(&cur), &mut xs, &mut side, false)?;
+            while matches!(b.concl().node(), Node::App(e, _) if *e == lg.ex) {
+                let Some(n) = xs.pop_front() else {
+                    return err(format!("step: a join's return: a name for `{}`", Printer::new(env).short(b.concl())));
+                };
+                b = self.obtain_one(env, lg, b, &n)?;
+            }
+            let (facts, eqp) = (and_part(env, &b, false)?, and_part(env, &b, true)?);
+            cur = self.step_simp(env, lg, Seq::rewrite(env, &eqp, &cur)?)?;
+            side.push(facts);
+            break;
+        }
         // (`L && R` stepped in L, R pending: on L's outcome `x = V`, R at V)
         let mut pending: Vec<Seq> = Vec::new();
         let mut fallbacks = 0;
@@ -2909,14 +2944,22 @@ impl State {
                     _ => Term::app(not.unwrap(), vec![t.clone()]),
                 };
                 let (l, r) = (a[0].clone(), a[1].clone());
-                if let Some(w) = self.step_decide(env, lg, &neg(&l), &withs, &is_op, &mut used, &using) {
+                let w = if let Some(w) = self.step_decide(env, lg, &neg(&l), &withs, &is_op, &mut used, &using) {
                     let nl = Seq::taut(env, lg, &[&w], &Term::app(not.unwrap(), vec![l.clone()]))?;
                     cur = Seq::taut(env, lg, &[&cur, &nl], &r)?;
+                    w
                 } else if let Some(w) = self.step_decide(env, lg, &neg(&r), &withs, &is_op, &mut used, &using) {
                     let nr = Seq::taut(env, lg, &[&w], &Term::app(not.unwrap(), vec![r.clone()]))?;
                     cur = Seq::taut(env, lg, &[&cur, &nr], &l)?;
+                    w
                 } else {
                     break;
+                };
+                // (a branch `c && T` whose condition the deciding fact gives: T)
+                if let Some((g, ga)) = head(cur.concl()) {
+                    if Some(g) == and && (Seq::taut(env, lg, &[&w], &ga[0]).is_ok() || self.step_decide(env, lg, &ga[0], &withs, &is_op, &mut used, &using).is_some()) {
+                        cur = and_part(env, &cur, true)?;
+                    }
                 }
             } else if Some(f) == and && !pending.is_empty() && head(&a[1]).is_some_and(|(g, ga)| g == lg.eq && matches!(ga[0].node(), Node::Var(..)))
                 && !head(&a[0]).is_some_and(|(g, _)| g == lg.ex || Some(g) == bind || Some(g) == letin || Some(g) == runs || Some(g) == or || Some(g) == any)
@@ -3481,7 +3524,8 @@ impl State {
             Node::App(f, x) if Some(*f) == or => (x[0].clone(), x[1].clone()),
             _ => return err("step: a call's rule not `A || B`"),
         };
-        // (the overflow: ex v. v in Vm && X(v), X carried to the outcome)
+        // (the overflow: ex v w... v in Vm && X(v, w..), X carried to the
+        // outcome -- the witnesses as their choices, v abstracted again)
         let abody = match a.node() {
             Node::App(e, x) if *e == lg.ex => x[0].clone(),
             _ => return err("step: a call's overflow not `ex v. ..`"),
@@ -3489,7 +3533,10 @@ impl State {
         let vv = env.new_var("v", 0);
         let vt = Term::var(vv, vec![]);
         let pa = abody.instantiate_params(std::slice::from_ref(&vt), &env.binders_fn());
-        let sa = Seq::assume(env, pa.clone())?;
+        let mut sa = Seq::assume(env, pa.clone())?;
+        while matches!(sa.concl().node(), Node::App(e, _) if *e == lg.ex) {
+            sa = Seq::witness(env, lg, &sa)?;
+        }
         let vm = and_part(env, &sa, false)?;
         let mut t = self.step_simp(env, lg, and_part(env, &sa, true)?)?;
         let mut pend: Vec<Seq> = pending.to_vec();
@@ -4281,6 +4328,119 @@ fn split_conj(env: &Env, facts: Vec<Seq>) -> KResult<Vec<Seq>> {
         }
     }
     Ok(out)
+}
+
+/// a join `(ex v. v in Vm && x = exc(..)) || (ex ws. P && x = ok(..))`:
+/// its outcome x (a local constant)
+fn join_outcome(env: &Env, lg: &Logic, t: &Term) -> Option<Term> {
+    let or = env.sym_by_name.get("or").copied()?;
+    let Node::App(o, d) = t.node() else { return None };
+    if *o != or {
+        return None;
+    }
+    let Node::App(e, a) = d[0].node() else { return None };
+    if *e != lg.ex {
+        return None;
+    }
+    let mut b = a[0].clone();
+    while let Node::App(e2, a2) = b.node() {
+        if *e2 != lg.ex {
+            break;
+        }
+        b = a2[0].clone();
+    }
+    let parts = conj_parts(env, &b);
+    let eq = parts.last()?;
+    match eq.node() {
+        Node::App(q, y) if *q == lg.eq && matches!(y[0].node(), Node::Var(..)) => Some(y[0].clone()),
+        _ => None,
+    }
+}
+
+/// t with its `letin`s reduced
+fn unlet(env: &Env, t: &Term, l: SymId) -> Term {
+    match t.node() {
+        Node::App(f, a) if *f == l && a.len() == 2 => {
+            let b = a[1].instantiate_params(std::slice::from_ref(&a[0]), &env.binders_fn());
+            unlet(env, &b, l)
+        }
+        Node::App(f, a) => {
+            let b: Vec<Term> = a.iter().map(|x| unlet(env, x, l)).collect();
+            if b.iter().zip(a.iter()).all(|(x, y)| x == y) {
+                t.clone()
+            } else {
+                Term::app(*f, b)
+            }
+        }
+        _ => t.clone(),
+    }
+}
+
+/// `⊢ a -> g`: a = `ex v.. P(v..)` (a call's overflow) implies a disjunct
+/// `ex w.. Q(w..)` of g (up to lets) -- Q's witnesses by matching its
+/// conjuncts with P's (the values of the locals the goal's overflow names),
+/// Q then by taut from P
+fn imply_disjunct(env: &mut Env, lg: &Logic, a: &Term, g: &Term) -> KResult<Seq> {
+    let l = env.sym_by_name.get("letin").copied().ok_or_else(|| KernelError("no `letin`".into()))?;
+    let gr = unlet(env, g, l);
+    let ha = Seq::assume(env, a.clone())?;
+    let mut p = ha;
+    while matches!(p.concl().node(), Node::App(e, _) if *e == lg.ex) {
+        p = Seq::witness(env, lg, &p)?;
+    }
+    let pparts = split_conj(env, vec![p])?;
+    let prefs: Vec<&Seq> = pparts.iter().collect();
+    for d in disj_parts(env, &gr) {
+        // (d's `ex`s opened by fresh variables)
+        let (mut bodies, mut vs, mut t) = (Vec::new(), Vec::new(), d.clone());
+        while let Node::App(e, x) = t.node() {
+            if *e != lg.ex {
+                break;
+            }
+            let body = x[0].clone();
+            let v = env.new_var("w", 0);
+            t = body.instantiate_params(&[Term::var(v, vec![])], &env.binders_fn());
+            bodies.push(body);
+            vs.push(v);
+        }
+        if vs.is_empty() {
+            continue;
+        }
+        let mut binds: Vec<(VarId, Term)> = Vec::new();
+        for q in conj_parts(env, &t) {
+            for pp in &pparts {
+                let mut b2 = binds.clone();
+                if pmatch(env, &q, pp.concl(), &vs, &mut b2) {
+                    binds = b2;
+                    break;
+                }
+            }
+        }
+        if vs.iter().any(|v| !binds.iter().any(|(w, _)| w == v)) {
+            continue;
+        }
+        let sub = |x: &Term| binds.iter().fold(x.clone(), |x, (v, w)| x.subst_var(*v, w, &env.binders_fn()));
+        let Ok(mut s) = Seq::taut(env, lg, &prefs, &sub(&t)) else { continue };
+        // (the `ex`s back, innermost first)
+        let mut ok = true;
+        for (i, body) in bodies.iter().enumerate().rev() {
+            let w = binds.iter().find(|(v, _)| *v == vs[i]).map(|(_, w)| w.clone()).unwrap();
+            match Seq::ex_intro(env, lg, &s, &w, &sub(body)) {
+                Ok(r) => s = r,
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let Ok(s) = Seq::taut(env, lg, &[&s], &gr) else { continue };
+        let s = s.discharge(env, a)?;
+        return Seq::conv_lets(env, &s, &Term::app(env.builtins.imp, vec![a.clone(), g.clone()]));
+    }
+    err("no disjunct of the goal the overflow implies")
 }
 
 /// the aliases among facts: a fact `a = K`, K a constant (a global's

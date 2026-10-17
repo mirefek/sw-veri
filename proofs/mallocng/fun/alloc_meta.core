@@ -336,6 +336,40 @@ proof
   show by taut(ci, c1, c2, c3)
 qed
 
+// (the same, the return in `step`'s call shape: refused, nothing changed,
+// or granted, the pages grown or shrunk)
+abbrev mp.brk_grow(t, V, new) := (int_lt(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new)) &&
+    x86_64_linux.free_range(t.vm, x86_64_linux.pages_for(t.vm.brk), int_sub(x86_64_linux.pages_for(new), x86_64_linux.pages_for(t.vm.brk))) &&
+    x86_64_linux.off_stack_space(t.vm, x86_64_linux.pages_for(t.vm.brk), int_sub(x86_64_linux.pages_for(new), x86_64_linux.pages_for(t.vm.brk))) &&
+    mallocng_specs.fresh_pages(t.vm, V, x86_64_linux.pages_for(t.vm.brk), int_sub(x86_64_linux.pages_for(new), x86_64_linux.pages_for(t.vm.brk)),
+      fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1))) ||
+  (!int_lt(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new)) &&
+    mallocng_specs.gone_pages(t.vm, V, x86_64_linux.pages_for(new), int_sub(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new))))
+abbrev mp.brk_ret(t, V, r, new) := (V = t.vm && fst(r) = t.vm.brk) || (fst(r) = new && V.brk = new && !int_lt(new, t.vm.brk_start) && mp.brk_grow(t, V, new))
+theorem mp.brk_qr: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 12))), seq_one(gimple.arg(64, new)))) ->
+  runs(mallocng_specs.syscall1_spec_fun()[regs], t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && mp.brk_ret(t, V, r, new)) && o2 = ok(fn_update(t, "vm", V), r))
+proof
+  fix t new regs o2
+  assume hw hu hn hro h2
+  have ea: bits_of_int(64, 12) = 12 by simp()
+  have q := apply(mp.brk_q, hw, hu, hn, rewrite(ea, hro), h2)
+  have wv vf vd vb := apply(ms.world_parts, hw)
+  have k2: case 2 of q proof
+    assume e
+    obtain r, h1 h3 from e
+    show by disj({2}, ex_intro({t.vm}, {r}, taut(wv, refl({t.vm}), h3, h1)))
+  qed
+  have k3: case 3 of q proof
+    assume e
+    obtain V r, h1 h3 h4 h5 h6 h7 from e
+    show by disj({2}, ex_intro({V}, {r}, taut(h4, h3, h5, h6, h7, h1)))
+  qed
+  show by taut(q, k2, k3)
+qed
+
 // brk(0) (its arguments as the code passes them), the break starting at a
 // page or above: an overflow, or the break returned, nothing changed
 theorem mp.brk0_q: all t regs o2. t in abi.World -> t in univ(1) -> abi.brk_start_ok(t.vm) ->
@@ -3813,38 +3847,17 @@ proof
     assume h0
     have z: bits_of_int(32, gimple.bytes_at(V0, int_add(K, 8), 4)) = 0 := trans(i0, h0)
     have ax := apply(mp.am_auxv[c := c, A := A, vm := V0, b := B, objs := s.objs], hc, au, hat, hbt, hin, h0, vb)
-    have _ bx := (bits_of_int(32, gimple.bytes_at(V0, int_add(K, 8), 4)) = 0 &&
-        bind_rel(gimple.call1(grs, empty), s, y0 y1. letin(y1, y2. bind_rel(c_src_malloc_mallocng_malloc.set_malloc_context_secret(K, y2), y0, y3 y4.
-          bind_rel(c_src_malloc_mallocng_malloc.set_malloc_context_init_done(K, 1), y3, y5 y6. x1 = ok(pair(y5, LOC), empty), y5 y6. x1 = exc(pair(y5, LOC), pair("raise", y6)),
-            y5. x1 = diverge(y5)), y3 y4. x1 = exc(pair(y3, LOC), pair("raise", y4)), y3. x1 = diverge(y3))), y0 y1. x1 = exc(pair(y0, LOC), pair("raise", y1)), y0. x1 = diverge(y0))
-      by taut(tb, z))
-    let FRS := mallocng_specs.random_secret_spec_fun(c.libc)
-    have qa: all regs o2. gc.regs_ok(regs, empty) -> runs(FRS[regs], s, o2) ->
-        (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) in bits(64)) proof
-      fix regs o2
-      assume hro h2
-      show := apply(mp.rs_q, hw, hu, ax, hro, h2)
-    qed
-    have cc := apply(gc.contract_call1[R := r. fst(r) in bits(64)], {grs}, {FRS}, {empty}, {s}, {V0}, ths, hw, vV, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hrs, qa, bx)
     have ss: fn_update(s, "vm", V0) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
     have _ u0w := apply(mp.ctx_usable[c := c, A := A, vm := V0, b := B, objs := s.objs, off := 0, n := 8], hc, au, hat, hin, simp(), simp(), arith(),
       mp(all_elim(NF, {0}, {8}), simp(), simp(), simp()))
-    have cov: case 1 of cc proof
-      assume e
-      show by taut(e)
-    qed
-    have cok: case 2 of cc proof
-      assume e
-      obtain r, hrb hk from e
-      have k0b: int_add(K, 0) in bits(64) by arith(kb)
-      step e3 from rewrite(ss, hk) with mp.st64w_det, ms.st32_det using conj(hw, hu, kb, u0w, u8w, hrb, k0b, cv, hx, cnz)
-      have fsl _ _ := expand(heo, mallocng_specs.errno_ok)
-      have st := apply(mp.am_init_st[c := c, A := A, B := B, s := s, sec := fst(r)], hc, hw, hu, hat, au, hbt, hin, h0, hrb, hea, fsl, arith(cv))
-      let V1 := fn_update(V0, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(V0.bytes, int_add(c.ctx, 0), 8, fst(r)), int_add(c.ctx, 8), 4, 1))
-      have e4: x1 = ok(pair(fn_update(s, "vm", V1), LOC), empty) := rewrite(sym(hx), e3)
-      show by disj({2}, ex_intro({V1}, {mp.first(A, fst(r))}, taut(st, e4)))
-    qed
-    show by taut(cc, cov, cok)
+    // (the secret read, written, the init word set)
+    step e0 from tb with z
+    step r, e3 hrb from e0 with mp.rs_q, ss, mp.st64w_det, ms.st32_det using conj(hw, hu, vV, ax, ths, hrs, kb, u0w, u8w, cv, hx, cnz)
+    have fsl _ _ := expand(heo, mallocng_specs.errno_ok)
+    have st := apply(mp.am_init_st[c := c, A := A, B := B, s := s, sec := fst(r)], hc, hw, hu, hat, au, hbt, hin, h0, hrb, hea, fsl, arith(cv))
+    let V1 := fn_update(V0, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(V0.bytes, int_add(c.ctx, 0), 8, fst(r)), int_add(c.ctx, 8), 4, 1))
+    have e4: x1 = ok(pair(fn_update(s, "vm", V1), LOC), empty) := rewrite(sym(hx), e3)
+    show by disj({2}, ex_intro({V1}, {mp.first(A, fst(r))}, taut(st, e4)))
   qed
   // initialized before: nothing changed
   have notfirst: !(A.init_done = 0) -> T1 proof
@@ -3857,17 +3870,10 @@ proof
   qed
   have t1: T1 by taut(first, notfirst)
   // an overflow at the first call: the run's
-  have ov: case 1 of t1 proof
-    assume e
-    obtain v, hv hx1 from e
-    step oe from rewrite(hx1, kx)
-    show by disj({1}, ex_intro({v}, taut(hv, oe)))
-  qed
-  have go: case 2 of t1 proof
-    assume e
-    obtain V1 A1, s1 s2 s3 s4 s5 s6 s7 s8 s9 hid hx1 from e
+  // (after the first call or none: an overflow, the run's; else on)
+  step V1 A1, k1 hP from kx with t1
+    have s1 s2 s3 s4 s5 s6 s7 s8 s9 hid := hP
     have hst: mp.am_st(c, A, B, s, V1, A1) by taut(s1, s2, s3, s4, s5, s6, s7, s8, s9)
-    step k1 from rewrite(hx1, kx)
     let W1 := fn_update(s, "vm", V1)
     have w1W w1u := apply(mp.am_world, hw, hu, s1)
     have th1 := apply(mp.am_thread[c := c, A := A, B := B, s := s, V := V1, A1 := A1], hst, hw, hth, htl)
@@ -3887,32 +3893,9 @@ proof
     have phb: PH in bits(64) by simp(cv, hx)
     have laW: mallocng_specs.list_at(W1.vm, W1.objs, PH, A1.free_metas) by simp(rewrite(hx, rewrite(kf, la1)), keep(mallocng_specs.list_at))
     have thW: abi.thread_ok(W1.vm, W1.fs_base) by simp(th1, keep(abi.thread_ok))
-    let FDH := mallocng_specs.dequeue_head_spec_fun()
-    let PHD(V, r) := mallocng_specs.is_head(W1.vm, W1.objs, PH, fst(r)) && mallocng_specs.head_taken(W1.vm, V, W1.objs, PH, fst(r))
-    have qd: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, PH))) -> runs(FDH[regs], W1, o2) ->
-        (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W1, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && PHD(V, r)) && o2 = ok(fn_update(W1, "vm", V), r)) proof
-      fix regs o2
-      assume hro h2
-      have q := apply(mp.dqh_q, w1W, w1u, phb, fl, laW, thW, hro, h2)
-      have c2: (ex V hd r. ((V in x86_64_linux.Vm && mallocng_specs.is_head(W1.vm, W1.objs, PH, hd)) && mallocng_specs.head_taken(W1.vm, V, W1.objs, PH, hd)) &&
-          o2 = ok(fn_update(W1, "vm", V), pair(hd, r))) -> (ex V r. (V in x86_64_linux.Vm && PHD(V, r)) && o2 = ok(fn_update(W1, "vm", V), r)) proof
-        assume e
-        obtain V hd r, hV hih hht ho from e
-        have fe: fst(pair(hd, r)) = hd by simp()
-        show by ex_intro({V}, {pair(hd, r)}, taut(hV, rewrite(sym(fe), hih), rewrite(sym(fe), hht), ho))
-      qed
-      show by taut(q, c2)
-    qed
-    have cd := apply(gc.contract_call1VR[P := V r. PHD(V, r)], {gdh}, {FDH}, {seq_one(gimple.arg(64, PH))}, {W1}, ths1, w1W, apply(gc.regs1_ex, phb),
-      (int_le(seq_len(seq_one(gimple.arg(64, PH))), 6) by simp()), hdh, qd, rewrite(sv, k3))
-    have dov: case 1 of cd proof
-      assume e
-      obtain v, hv ho from e
-      show by disj({1}, ex_intro({v}, taut(hv, (o = exc(fn_update(s, "vm", v), OVF) by simp(ho)))))
-    qed
-    have dok: case 2 of cd proof
-      assume e
-      obtain V2 r, hV2 hih hht hk4 from e
+    // (the head dequeued: dequeue_head's contract)
+    step V2 r, hk4 hR from rewrite(sv, k3) with mp.dqh_qr using conj(w1W, w1u, ths1, phb, fl, laW, thW, hdh)
+    have hV2 hih hht := hR
       let F := A1.free_metas
       let HD := ite(seq_len(F) = 0, 0, F[0])
       have hd: fst(r) = HD by simp(mp(all_elim(expand(hih, mallocng_specs.is_head), {F}), fl, laW))
@@ -4023,10 +4006,9 @@ proof
           assume hn
           have z: !(bits_of_int(64, gimple.bytes_at(V1, int_add(K, 32), 8)) = 0) := rewrite(sym(i32), hn)
           step e from tb2 with z
-          have _ ex4 := e
           let L4 := pair(0, pair(a2, pair(a3, pair(a4, pair(a5, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
           have ca: int_lt(0, A1.avail_cnt) by arith(hn, avo)
-          show by disj({3}, ex_intro({A1}, {V1}, {L4}, taut(hst, hid, ca, ex4)))
+          show by disj({3}, ex_intro({A1}, {V1}, {L4}, taut(hst, hid, ca, e)))
         qed
         // none available: an area added (or none to be had: 0), the
         // metas then available
@@ -4034,11 +4016,10 @@ proof
           assume h0
           have z: bits_of_int(64, gimple.bytes_at(V1, int_add(K, 32), 8)) = 0 := trans(i32, h0)
           step e from tb2 with z
-          have _ e1 := e
           // the reserve's page count: A1's
           have u40 u40w := apply(mp.ctx_usable[c := c, A := A1, vm := V1, b := B, objs := s.objs, off := 40, n := 8], hc, s3, s2, s4, simp(), simp(), arith(),
             mp(all_elim(NF2, {40}, {8}), simp(), simp(), simp(), simp()))
-          step x5, e2 from e1 with g.ld64_det using conj(w1u, kb, u40, cv, hx, cnz)
+          step x5, e2 from e with g.ld64_det using conj(w1u, kb, u40, cv, hx, cnz)
           have {cw40 = cnt, bkv = brkv, bko = brk_ok} := apply(mp.am_words[c := c, A := A1, V := V1, b := B], hc, s3, s2, s4, s1)
           have tb3 kx3 := e2
           let TJ(y) := (ex v l2 l4. v in x86_64_linux.Vm &&
@@ -4058,9 +4039,8 @@ proof
             assume hz
             have z: bits_of_int(64, gimple.bytes_at(V1, int_add(K, 40), 8)) = 0 := trans(rewrite(hx, cw40), hz)
             step e3 from tb3 with z
-            have _ e4 := e3
             have md920: g.mem_defined(W1, K, 920, 8, false) := rewrite(hx, (g.mem_defined(W1, c.ctx, 920, 8, false) by simp(cnz, apply(mp.ctx_usable[c := c, A := A1, vm := V1, b := B, objs := s.objs, off := 920, n := 8], hc, s3, s2, s4, simp(), simp(), arith(), NFB).1, cv)))
-            step x6, e5 from e4 with g.ld64_det using conj(w1u, kb, md920, cv, hx, cnz)
+            step x6, e5 from e3 with g.ld64_det using conj(w1u, kb, md920, cv, hx, cnz)
             have tb4 kx4 := e5
             have n1: bits_neg(64, 1) = 18446744073709551615 by defs(simp(), bits_neg, pow2)
             have rb: bits_of_int(64, gimple.bytes_at(V1, int_add(K, 920), 8)) = A1.brk := rewrite(hx, bkv)
@@ -4075,8 +4055,7 @@ proof
               assume hb
               have q: !(bits_of_int(64, gimple.bytes_at(V1, int_add(K, 920), 8)) = bits_neg(64, 1)) by simp(rb, hb, n1)
               step e6 from tb4 with q
-              have _ e7 := e6
-              step x7, e8 from e7 with g.ld64_det, rb using conj(w1u, kb, md920, cv, hx, cnz)
+              step x7, e8 from e6 with g.ld64_det, rb using conj(w1u, kb, md920, cv, hx, cnz)
               have tb5 kx5 := e8
               let LG := pair(0, pair(a2, pair(1, pair(1, pair(bits_add(64, 4096, A1.brk), pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
               let JG(y) := (ex v. v in x86_64_linux.Vm && y = exc(pair(fn_update(s, "vm", v), LG), pair("raise", OVF))) ||
@@ -4101,30 +4080,11 @@ proof
               have jgz: A1.brk = 0 -> JG(x7) proof
                 assume hz
                 step e9 from tb5 with hz
-                have _ bx := e9
-                let FSY := mallocng_specs.syscall1_spec_fun()
-                let ARG0 := seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 12))), seq_one(gimple.arg(64, bits_of_int(64, 0))))
                 have _ ubs := expand(s7, mallocng.untouched)
                 have bsW: abi.brk_start_ok(W1.vm) by defs(simp(expand(hbs, abi.brk_start_ok), ubs), abi.brk_start_ok)
-                have qa: all regs o2. gc.regs_ok(regs, ARG0) -> runs(FSY[regs], W1, o2) ->
-                    (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W1, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(W1, "vm", V1), r) && fst(r) = V1.brk) proof
-                  fix regs o2
-                  assume hro h2
-                  have q := apply(mp.brk0_q, w1W, w1u, bsW, hro, h2)
-                  show by simp(q)
-                qed
-                have cc := apply(gc.contract_call1[R := r. fst(r) = V1.brk], {gsy}, {FSY}, {ARG0}, {W1}, {V1}, ths1, w1W, s1,
-                  apply(gc.regs2_ex, (bits_of_int(64, 12) in bits(64) by simp()), (bits_of_int(64, 0) in bits(64) by simp())), (int_le(seq_len(ARG0), 6) by simp()), hsy, qa, bx)
-                have cov: case 1 of cc proof
-                  assume e
-                  obtain v, hv hx7 from e
-                  show by disj({1}, ex_intro({v}, taut(hv, (x7 = exc(pair(fn_update(s, "vm", v), LG), pair("raise", OVF)) by simp(hx7)))))
-                qed
-                have cok: case 2 of cc proof
-                  assume e
-                  obtain r, hrb hk from e
-                  have ww: fn_update(fn_update(s, "vm", V1), "vm", V1) = W1 by simp()
-                  have hk2 := rewrite(hrb, rewrite(ww, hk))
+                // (the break: brk(0)'s contract)
+                step r, hk hrb from e9 with mp.brk0_q using conj(w1W, w1u, bsW, ths1, hsy, s1)
+                  have hk2 := hk
                   have v1V v1f v1d v1b := apply(ms.world_parts, w1W)
                   have bkb: V1.brk in bits(64) by simp(expand(s1, x86_64_linux.Vm))
                   have bkt0: int_le(V1.brk, x86_64_linux.TASK_SIZE) proof
@@ -4174,20 +4134,11 @@ proof
                   have jg: mp.am_jg(c, A1, V1, VB, 1, bits_add(64, AL, bits_mul(64, 4096, 2)), AL) by taut((VB in x86_64_linux.Vm by simp(vbV)), vbrest, out, rbc, refl({1}), hz, ala, alg, all, alt, nw,
                     rewrite(sym(nw), (int_add(AL, 8192) in bits(64) by arith(alo, alt))))
                   show by disj({2}, ex_intro({VB}, {1}, {bits_add(64, AL, bits_mul(64, 4096, 2))}, {AL}, taut(jg, e12)))
-                qed
-                show by taut(cc, cov, cok)
+
               qed
               have jg := (JG(x7) by taut(jgn, jgz))
-              have g1: case 1 of jg proof
-                assume e
-                obtain v, hv hx7 from e
-                step e13 from rewrite(hx7, kx5)
-                show by disj({1}, ex_intro({v}, {1}, {bits_add(64, 4096, A1.brk)}, taut(hv, e13)))
-              qed
-              have g2: case 2 of jg proof
-                assume e
-                obtain VG g nw bb, j1 j2 j3 j4 j6 j5 hx7 from e
-                step e13 from rewrite(hx7, kx5)
+              step VG g nw bb, e13 hP from kx5 with jg
+                have j1 j2 j3 j4 j6 j5 := hP
                 have J: mp.am_jg(c, A1, V1, VG, g, nw, bb) by taut(j1, j2, j3, j4, j6, j5)
                 have kcb: int_le(int_add(c.ctx, 928), 18446744073709551616) by simp(cv)
                 have {gp = pages, gs = start, gbk = brk} := apply(mp.jg_parts, J, cx, kcb)
@@ -4210,38 +4161,10 @@ proof
                     mallocng_specs.fresh_pages(WG.vm, V, PO, int_sub(PN, PO), HP)) ||
                   (!int_lt(PO, PN) && mallocng_specs.gone_pages(WG.vm, V, PN, int_sub(PO, PN)))
                 let PBK(V, r) := (V = WG.vm && fst(r) = WG.vm.brk) || (fst(r) = nw && V.brk = nw && !int_lt(nw, WG.vm.brk_start) && GROW(V))
-                have qb: all regs o2. gc.regs_ok(regs, ARGN) -> runs(FSY[regs], WG, o2) ->
-                    (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(WG, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && PBK(V, r)) && o2 = ok(fn_update(WG, "vm", V), r)) proof
-                  fix regs o2
-                  assume hro h2
-                  have ea: ARGN = seq_concat(seq_one(gimple.arg(64, 12)), seq_one(gimple.arg(64, nw))) by simp()
-                  have q := apply(mp.brk_q, wgW, wgu, j6, rewrite(ea, hro), h2)
-                  have wv: WG.vm in x86_64_linux.Vm by simp(j1)
-                  have k2: (ex r. o2 = ok(fn_update(WG, "vm", WG.vm), r) && fst(r) = WG.vm.brk) ->
-                      (ex V r. (V in x86_64_linux.Vm && PBK(V, r)) && o2 = ok(fn_update(WG, "vm", V), r)) proof
-                    assume e
-                    obtain r, h1 h3 from e
-                    show by ex_intro({WG.vm}, {r}, taut(wv, refl({WG.vm}), h3, h1))
-                  qed
-                  have k3: (ex V r. o2 = ok(fn_update(WG, "vm", V), r) && fst(r) = nw && V in x86_64_linux.Vm && V.brk = nw && !int_lt(nw, WG.vm.brk_start) && GROW(V)) ->
-                      (ex V r. (V in x86_64_linux.Vm && PBK(V, r)) && o2 = ok(fn_update(WG, "vm", V), r)) proof
-                    assume e
-                    obtain V r, h1 h3 h4 h5 h6 h7 from e
-                    show by ex_intro({V}, {r}, taut(h4, h3, h5, h6, h7, h1))
-                  qed
-                  show by taut(q, k2, k3)
-                qed
-                have cb := apply(gc.contract_call1VR[P := V r. PBK(V, r)], {gsy}, {FSY}, {ARGN}, {WG}, thsg, wgW,
-                  apply(gc.regs2_ex, (bits_of_int(64, 12) in bits(64) by simp()), j6), (int_le(seq_len(ARGN), 6) by simp()), hsy, qb, e13)
                 let LN := pair(0, pair(a2, pair(g, pair(1, pair(nw, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
-                have bov: case 1 of cb proof
-                  assume e
-                  obtain v, hv hx from e
-                  show by disj({1}, ex_intro({v}, {g}, {nw}, taut(hv, (x6 = exc(pair(fn_update(s, "vm", v), LN), pair("raise", OVF)) by simp(hx)))))
-                qed
-                have bok: case 2 of cb proof
-                  assume e
-                  obtain V r, hV hp hk from e
+                // (the break moved: brk's contract)
+                step V r, hk hR from e13 with mp.brk_qr using conj(wgW, wgu, j6, thsg, hsy)
+                  have hV hp := hR
                   have wgv: WG.vm = VG by simp()
                   have nne := apply(mp.jg_ne, J, s1)
                   have ww: fn_update(fn_update(s, "vm", VG), "vm", V) = fn_update(s, "vm", V) by simp()
@@ -4255,7 +4178,6 @@ proof
                     assume hn
                     have p1: V = VG by taut(hp, hn, (V = WG.vm -> V = VG by simp()))
                     step e15 from tb6 with hn
-                    have _ e16 := e15
                     have wv: fn_update(s, "vm", V) = WG := rewrite(p1, refl({fn_update(s, "vm", V)}), {2})
                     have u9r u9w := apply(mp.ctx_usable[c := c, A := A1, vm := V1, b := B, objs := s.objs, off := 920, n := 8], hc, s3, s2, s4, simp(), simp(), arith(), NFB)
                     have pgi: all i. i in omega -> int_lt(i, 8) -> VG.pages[int_div(int_add(int_add(c.ctx, 920), i), x86_64_linux.PAGE)] = V1.pages[int_div(int_add(int_add(c.ctx, 920), i), x86_64_linux.PAGE)] proof
@@ -4265,7 +4187,7 @@ proof
                     qed
                     have ug9 := apply(mp.usable_pg[vm := V1, vm2 := VG, objs := s.objs, a := int_add(c.ctx, 920), n := 8, w := true], pgi, u9w)
                     have vgV vgf vgd _ := apply(ms.world_parts, wgW)
-                    step e17 from rewrite(wv, e16) with g.st64_det using conj(wgW, wgu, kb, ug9, vgV, vgf, vgd, cv, hx, cnz)
+                    step e17 from rewrite(wv, e15) with g.st64_det using conj(wgW, wgu, kb, ug9, vgV, vgf, vgd, cv, hx, cnz)
                     have kcb: int_le(int_add(c.ctx, 928), 18446744073709551616) by simp(cv)
                     have st := apply(mp.am_brkfail[c := c, A := A, B := B, s := s, V1 := V1, A1 := A1, VG := VG, g := g, nw := nw, bb := bb], hst, hc, hw, hbt, hea,
                       arith(expand(heo, mallocng_specs.errno_ok), (s.fs_base in bits(64) by simp(expand(hw, abi.World)))), kcb, hid, hz, J)
@@ -4281,8 +4203,7 @@ proof
                     have _ hvb hns hg := (fst(r) = nw && V.brk = nw && !int_lt(nw, WG.vm.brk_start) && GROW(V) by taut(hp, nb1))
                     have hnn: !!(fst(r) = nw) by simp(he)
                     step e18 from tb6 with hnn
-                    have _ e18b := e18
-                    obtain y3, tb7 kx7 from e18b
+                    obtain y3, tb7 kx7 from e18
                     have kcb: int_le(int_add(c.ctx, 928), 18446744073709551616) by simp(cv)
                     have _ ubs := expand(s7, mallocng.untouched)
                     have bs0: int_le(4096, V1.brk_start) by defs(simp(expand(hbs, abi.brk_start_ok), ubs), x86_64_linux.PAGE)
@@ -4309,7 +4230,6 @@ proof
                     have tg1: !(g = 0) -> TG(y3) proof
                       assume h
                       step e19 from tb7 with h
-                      have _ e19b := e19
                       have _ _ _ _ _ jc := J
                       have g1: g = 1 by taut(jc, h)
                       have {bgu = guard} := apply(mp.brk_pages, J, s1, bs0, rewrite(gs, hns2))
@@ -4329,7 +4249,7 @@ proof
                       qed
                       have uv9 := apply(mp.usable_pg[vm := V1, vm2 := V, objs := s.objs, a := int_add(c.ctx, 920), n := 8, w := false], pv9, u9r)
                       have rb9: bits_of_int(64, gimple.bytes_at(V, int_add(K, 920), 8)) = bb := rewrite(hx, rewrite(sym(fw9), j4))
-                      step e20 from e19b with g.ld64_det, rb9 using conj(wvu, kb, uv9, cv, hx, cnz)
+                      step e20 from e19 with g.ld64_det, rb9 using conj(wvu, kb, uv9, cv, hx, cnz)
                       let FMM := mallocng_specs.mmap_spec_fun()
                       let ARGM := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bb)), seq_one(gimple.arg(64, 4096))), seq_one(gimple.arg(32, bits_of_int(32, 0)))),
                         seq_one(gimple.arg(32, bits_of_int(32, 50)))), seq_one(gimple.arg(32, bits_of_int(32, int_neg(1))))), seq_one(gimple.arg(64, bits_of_int(64, 0))))
@@ -4375,19 +4295,9 @@ proof
                         qed
                         show by taut(q, k2, k3)
                       qed
-                      have regsm: ex regs. gc.regs_ok(regs, ARGM) := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat,
-                        apply(gc.regs_one, simp(), arith(), bbb), apply(gc.regs_one, simp(), arith(), (4096 in bits(64) by simp()))),
-                        apply(gc.regs_one, simp(), arith(), (bits_of_int(32, 0) in bits(32) by simp()))), apply(gc.regs_one, simp(), arith(), (bits_of_int(32, 50) in bits(32) by simp()))),
-                        apply(gc.regs_one, simp(), arith(), (bits_of_int(32, int_neg(1)) in bits(32) by simp()))), apply(gc.regs_one, simp(), arith(), (bits_of_int(64, 0) in bits(64) by simp()))))
-                      have cg := apply(gc.contract_callV[P := v. PG(v)], {gmm}, {FMM}, {ARGM}, {WV}, thsv, wvW, regsm, (int_le(seq_len(ARGM), 6) by simp()), hmm, qm, e20)
-                      have go: case 1 of cg proof
-                        assume e
-                        obtain v, hv hy from e
-                        show by disj({1}, ex_intro({v}, taut(hv, (y3 = exc(pair(fn_update(s, "vm", v), LN), pair("raise", OVF)) by simp(hy)))))
-                      qed
-                      have gk: case 2 of cg proof
-                        assume e
-                        obtain Vm r, hvm hpg hy from e
+                      // (the guard page mapped: mmap's contract at the call)
+                      step Vm r, hy hR from e20 with qm using conj(wvW, wvu, thsv, hmm, bbb)
+                        have hvm hpg := hR
                         have hy2: y3 = ok(pair(fn_update(s, "vm", Vm), LN), empty) by simp(hy)
                         have p1: (ex pg. mallocng_specs.fresh_pages(V, Vm, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) -> TG(y3) proof
                           assume f
@@ -4401,20 +4311,11 @@ proof
                           show by disj({2}, ex_intro({Vm}, {mallocng_specs.wr32(V1, EA, e1)}, taut(hvm, g1, w, hy2)))
                         qed
                         show by taut(hpg, p1, p2)
-                      qed
-                      show by taut(cg, go, gk)
+
                     qed
                     have tg := (TG(y3) by taut(tg0, tg1))
-                    have tgo: case 1 of tg proof
-                      assume e
-                      obtain v, hv hy from e
-                      step e20 from rewrite(hy, kx7)
-                      show by disj({1}, ex_intro({v}, taut(hv, e20)))
-                    qed
-                    have tgk: case 2 of tg proof
-                      assume e
-                      obtain Vm Ve, hvm hgd hy from e
-                      step e20 from rewrite(hy, kx7)
+                    step Vm Ve, e20 hP from kx7 with tg
+                      have hvm hgd := hP
                       have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
                       have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(expand(heo, mallocng_specs.errno_ok), fsb)
                       have {bst = st, bpg = pages} := apply(mp.am_brkok[c := c, A := A, B := B, s := s, V1 := V1, A1 := A1, VG := VG, g := g, nw := nw, bb := bb, V := V, Vm := Vm, Ve := Ve],
@@ -4449,54 +4350,21 @@ proof
                       let VF := fn_update(Vm, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(x86_64_linux.store_le(Vm.bytes,
                         int_add(c.ctx, 920), 8, nw), int_add(c.ctx, 72), 8, bits_sub(64, nw, 4096)), int_add(c.ctx, 40), 8, bits_shr(64, 4096, 12)))
                       show by disj({2}, ex_intro({mp.refill(A1, int_sub(nw, 4096), 1, nw)}, {VF}, {0}, taut(bst, rewrite(sym(hx), e23))))
-                    qed
-                    show by taut(tg, tgo, tgk)
                   qed
                   have tbb := (TB(y2) by taut(bf, bg))
-                  have tbo: case 1 of tbb proof
-                    assume e
-                    obtain v, hv hy from e
-                    step e24 from rewrite(hy, kx6)
-                    show by disj({1}, ex_intro({v}, {g}, {nw}, taut(hv, e24)))
-                  qed
-                  have tbk: case 2 of tbb proof
-                    assume e
-                    obtain A3 V3 nu, q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12 hy from e
-                    step e24 from rewrite(hy, kx6)
+                  step A3 V3 nu, e24 hP from kx6 with tbb
+                    have q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12 := hP
                     show by disj({2}, ex_intro({A3}, {V3}, {g}, {nw}, {nu}, taut(q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, e24)))
-                  qed
-                  show by taut(tbb, tbo, tbk)
-                qed
-                show by taut(cb, bov, bok)
-              qed
-              show by taut(jg, g1, g2)
+
             qed
             have j0 := (TJ(x6) by taut(j0n, j0p))
-            have p1: case 1 of j0 proof
-              assume e
-              obtain v l2 l4, hv hx6 from e
-              step e7 from rewrite(hx6, kx4)
-              show by disj({1}, ex_intro({v}, {l2}, {l4}, taut(hv, e7)))
-            qed
-            have p2: case 2 of j0 proof
-              assume e
-              obtain A3 V3 l2 l4 nu, q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12 hx6 from e
-              step e7 from rewrite(hx6, kx4)
+            step A3 V3 l2 l4 nu, e7 hP from kx4 with j0
+              have q1 q2 q3 q4 q5 q6 q7 q8 q9 q10 q11 q12 := hP
               show by disj({2}, ex_intro({A3}, {V3}, {l2}, {l4}, {nu}, taut(q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, e7)))
-            qed
-            show by taut(j0, p1, p2)
           qed
           have j1 := (T3 by taut(j1nz, j1z))
-          have q1: case 1 of j1 proof
-            assume e
-            obtain v l2 l4, hv hx5 from e
-            step e8 from rewrite(hx5, kx3)
-            show by disj({1}, ex_intro({v}, {pair(0, pair(a2, pair(l2, pair(1, pair(l4, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))}, taut(hv, e8)))
-          qed
-          have q2: case 2 of j1 proof
-            assume e
-            obtain A3 V3 l2 l4 nu, r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 hx5 from e
-            step e8 from rewrite(hx5, kx3)
+          step A3 V3 l2 l4 nu, e8 hP from kx3 with j1
+            have r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 := hP
             have hst3: mp.am_st(c, A, B, s, V3, A3) by taut(r1, r2, r3, r4, r5, r6, r7, r8, r9)
             let W3 := fn_update(s, "vm", V3)
             have w3W w3u := apply(mp.am_world, hw, hu, r1)
@@ -4525,7 +4393,6 @@ proof
               assume hz3
               have z: bits_of_int(64, gimple.bytes_at(V3, int_add(K, 40), 8)) = 0 := trans(rewrite(hx, c3), hz3)
               step e10 from tb8 with z
-              have _ e11 := e10
               have nu1: nu = 1 by taut(r12, (!(int_lt(0, A3.reserve_cnt)) by arith(hz3)))
               // (the shift: below 35; the mapping's size 2 << shift pages)
               have u48r _ := apply(mp.ctx_usable[c := c, A := A3, vm := V3, b := B, objs := s.objs, off := 48, n := 8], hc, r3, r2, r4, simp(), simp(), arith(),
@@ -4550,7 +4417,7 @@ proof
                 show by defs(arith(hx1, hx2), bits_mul, pow2)
               qed
               have mul: bits_mul(64, PN, 4096) = int_mul(PN, 4096) := mp(all_elim(mlw, {PN}), pno, pnl)
-              step e12 from e11 with g.ld64_det, shv, s32, b2, mp.shl64_det, shl, mul using conj(w3u, kb, u48r, sho, (int_lt(SH, 64) by arith(sh34)), cv, hx, cnz)
+              step e12 from e10 with g.ld64_det, shv, s32, b2, mp.shl64_det, shl, mul using conj(w3u, kb, u48r, sho, (int_lt(SH, 64) by arith(sh34)), cv, hx, cnz)
               let LEN := int_mul(PN, 4096)
               let FMM := mallocng_specs.mmap_spec_fun()
               let ARGM := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 0))), seq_one(gimple.arg(64, LEN))),
@@ -4604,21 +4471,9 @@ proof
                 qed
                 show by taut(q, k2, k3)
               qed
-              have regsm: ex regs. gc.regs_ok(regs, ARGM) := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat,
-                apply(gc.regs_one, simp(), arith(), (bits_of_int(64, 0) in bits(64) by simp())), apply(gc.regs_one, simp(), arith(), lenb)),
-                apply(gc.regs_one, simp(), arith(), (bits_of_int(32, 0) in bits(32) by simp()))), apply(gc.regs_one, simp(), arith(), (bits_of_int(32, 34) in bits(32) by simp()))),
-                apply(gc.regs_one, simp(), arith(), (bits_of_int(32, int_neg(1)) in bits(32) by simp()))), apply(gc.regs_one, simp(), arith(), (bits_of_int(64, 0) in bits(64) by simp()))))
-              have cm := apply(gc.contract_call1VR[P := V r. PM(V, r)], {gmm}, {FMM}, {ARGM}, {W3}, ths3, w3W, regsm, (int_le(seq_len(ARGM), 6) by simp()), hmm, qmm, e12)
-              have mo: case 1 of cm proof
-                assume e
-                obtain v, hv hx from e
-                have hx2: x7 = exc(pair(fn_update(s, "vm", v), pair(0, pair(PN, pair(l2, pair(nu, pair(l4, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))),
-                  pair("raise", OVF)) by simp(hx)
-                show by disj({1}, ex_intro({v}, {PN}, {a6}, taut(hv, hx2)))
-              qed
-              have mk: case 2 of cm proof
-                assume e
-                obtain V r, hV hpm hk from e
+              // (the area mapped: mmap's contract at the call)
+              step V r, hk hR from e12 with qmm using conj(w3W, w3u, ths3, hmm, lenb)
+                have hV hpm := hR
                 step y11, e14 from hk
                 have tb9 kx9 := e14
                 have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
@@ -4630,8 +4485,7 @@ proof
                   obtain e1, hve hf from f
                   have hf2: fst(r) = bits_neg(64, 1) := trans(hf, sym(nb1))
                   step e15 from tb9 with hf2
-                  have _ e15b := e15
-                  step e16 from rewrite(e15b, kx9)
+                  step e16 from rewrite(e15, kx9)
                   have post := apply(mp.am_ret0, apply(mp.am_errw[c := c, A := A, B := B, s := s, V := V3, A1 := A3, e := e1], hst3, hw, hea, hfl))
                   have e17: x7 = exc(pair(fn_update(s, "vm", V), pair(0, pair(PN, pair(l2, pair(nu, pair(l4, pair(fst(r), pair(4096, pair(0, pair(a9, pair(a10, pair(a11, 0)))))))))))),
                     pair("ret", 0)) by simp(e16)
@@ -4661,8 +4515,7 @@ proof
                     show := rewrite(sym(fr4), mp(all_elim(k, {p}), hpo, mlow))
                   qed
                   step e15 from tb9 with nn
-                  have _ e15b := e15
-                  step e16 from rewrite(e15b, kx9)
+                  step e16 from rewrite(e15, kx9)
                   // (the context's words usable in V: its pages V3's)
                   have umw: all off. off in omega -> int_le(int_add(off, 8), 928) -> (all i. i in omega -> int_lt(i, 8) -> !mallocng.ctx_free(c, int_add(int_add(c.ctx, off), i))) ->
                       gimple.usable(V, s.objs, int_add(c.ctx, off), 8, false) && gimple.usable(V, s.objs, int_add(c.ctx, off), 8, true) proof
@@ -4726,8 +4579,7 @@ proof
                   show by disj({3}, ex_intro({mp.refill(A3, R2, KN, A3.brk)}, {VF}, {PN}, {fst(r)}, conj(conj(aj, (int_lt(0, mp.refill(A3, R2, KN, A3.brk).reserve_cnt) by simp(mpos))), e20)))
                 qed
                 show by taut(hpm, mf, mok)
-              qed
-              show by taut(cm, mo, mk)
+
             qed
             have tm := (TM(x7) by taut(mnz, mz))
             have tmo: case 1 of tm proof
@@ -4791,11 +4643,10 @@ proof
               have tp1: !(nu = 0) -> TP(y7) proof
                 assume h
                 step e14 from tp7 with h
-                have _ e15 := e14
                 let FMP := mallocng_specs.mprotect_spec_fun()
                 let ARGP := seq_concat(seq_concat(seq_one(gimple.arg(64, R)), seq_one(gimple.arg(64, 4096))), seq_one(gimple.arg(32, bits_of_int(32, 3))))
                 let PR(V, r) := bits_of_int(32, fst(r)) = 0 && PP(V)
-                have {t4 = thread, e4 = errno} := apply(mp.am_eok[c := c, A := A, B := B, s := s, V := V4, A1 := A4], hst4, hw, hth, htl, heo, hea)
+                have {t4 = thread, e3 = errno} := apply(mp.am_eok[c := c, A := A, B := B, s := s, V := V4, A1 := A4], hst4, hw, hth, htl, heo, hea)
                 have ths4: gc.sound(W4) by simp(t4)
                 have qmp: all regs o2. gc.regs_ok(regs, ARGP) -> runs(FMP[regs], W4, o2) ->
                     (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W4, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && PR(V, r)) && o2 = ok(fn_update(W4, "vm", V), r)) proof
@@ -4803,7 +4654,7 @@ proof
                   assume hro h2
                   have q := apply(mp.mprotect_q, w4W, w4u, rb, (4096 in bits(64) by simp()), (bits_of_int(32, 3) in bits(32) by simp()), (int_lt(bits_of_int(32, 3), 8) by simp()),
                     (int_le(int_add(int_add(R, 4096), x86_64_linux.PAGE), int_pow(2, 64)) by arith(qend, qpos, ro4, co4)),
-                    (mallocng_specs.errno_ok(W4.vm, W4.objs, W4.fs_base) by simp(e4, keep(mallocng_specs.errno_ok))), hro, h2)
+                    (mallocng_specs.errno_ok(W4.vm, W4.objs, W4.fs_base) by simp(e3, keep(mallocng_specs.errno_ok))), hro, h2)
                   have wvv: W4.vm = V4 by simp()
                   have k2: (ex V r. o2 = ok(fn_update(W4, "vm", V), r) && bits_of_int(32, fst(r)) = 0 && V in x86_64_linux.Vm &&
                       (all q. q in omega -> int_le(int_div(R, x86_64_linux.PAGE), q) && int_lt(q, int_div(int_sub(int_add(int_add(R, 4096), x86_64_linux.PAGE), 1), x86_64_linux.PAGE)) ->
@@ -4830,37 +4681,20 @@ proof
                   qed
                   show by taut(q, k2, k3)
                 qed
-                have regsp: ex regs. gc.regs_ok(regs, ARGP) := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_one, simp(), arith(), rb),
-                  apply(gc.regs_one, simp(), arith(), (4096 in bits(64) by simp()))), apply(gc.regs_one, simp(), arith(), (bits_of_int(32, 3) in bits(32) by simp()))))
-                have cp := apply(gc.contract_call1VR[P := V r. PR(V, r)], {gmp}, {FMP}, {ARGP}, {W4}, ths4, w4W, regsp, (int_le(seq_len(ARGP), 6) by simp()), hmp, qmp, e15)
-                have po: case 1 of cp proof
-                  assume e
-                  obtain v, hv hx from e
-                  show by disj({1}, ex_intro({v}, taut(hv, (y7 = exc(pair(fn_update(s, "vm", v), LP), pair("raise", OVF)) by simp(hx)))))
-                qed
-                have pk: case 2 of cp proof
-                  assume e
-                  obtain V r, hV hz q1 q2 q3 q4 q5 hk from e
+                // (the reserve's page made writable: mprotect's contract at the call)
+                step V r, hk hR from e14 with qmp using conj(w4W, w4u, ths4, hmp, rb)
+                  have hV hz q1 q2 q3 q4 q5 := hR
                   step e16 from hk with hz
                   obtain y8, ta8 ka8 from e16
                   step e17 from ta8
                   step e18 from rewrite(e17, ka8)
                   have e19: y7 = ok(pair(fn_update(s, "vm", V), LP), empty) by simp(e18)
                   show by disj({2}, ex_intro({V}, taut(q1, q2, q3, q4, q5, e19)))
-                qed
-                show by taut(cp, po, pk)
+
               qed
               have tp := (TP(y7) by taut(tp0, tp1))
-              have tpo: case 1 of tp proof
-                assume e
-                obtain v, hv hy from e
-                step e14 from rewrite(hy, kp7)
-                show by disj({1}, ex_intro({v}, {LP}, taut(hv, e14)))
-              qed
-              have tpk: case 2 of tp proof
-                assume e
-                obtain V5, p1 p2 p3 p4 p5 hy from e
-                step e14 from rewrite(hy, kp7)
+              step V5, e14 hP from kp7 with tp
+                have p1 p2 p3 p4 p5 := hP
                 // (V5: V4 but the reserve's first page)
                 have ub5 := mp(app_update_other[f := V5, k := "pages", v := V4.pages, x := "bytes"], (!("bytes" = "pages") by simp()))
                 have eb5: V5.bytes = V4.bytes := sym(rewrite(p2, ub5))
@@ -4951,7 +4785,6 @@ proof
                   have tlv: TL = L by simp((!(seq_len(A4.areas) = 0) by arith(hn, nao4)))
                   have tnz: !(TL = 0) by simp(tlv, (!(L = 0) by arith(lpos)))
                   step e18 from tb9 with tnz
-                  have _ e18b := e18
                   have rtl2 := trans(rtl, tlv)
                   have hu4 hw4 := apply(mp.hdr_use[c := c, A := A4, vm := V4, b := B, objs := s.objs], hc, k3, k2, k4, hn)
                   have pvl: all i. i in omega -> int_lt(i, 8) ->
@@ -4963,7 +4796,7 @@ proof
                   qed
                   have ul5 := apply(mp.usable_pg[vm := V4, vm2 := V5, objs := s.objs, a := int_add(L, 8), n := 8, w := true], pvl, hw4)
                   have lb: L in bits(64) by arith(llo, llt)
-                  step e19 from e18b with g.ld64_det, rtl2, mp.st64w_det using conj(w5bW, w5bu, kb, u64r, lb, ul5, rbb, cv, hx, cnz, lpos, llt, llo)
+                  step e19 from e18 with g.ld64_det, rtl2, mp.st64w_det using conj(w5bW, w5bu, kb, u64r, lb, ul5, rbb, cv, hx, cnz, lpos, llt, llo)
                   show by ex_intro({int_add(L, 8)}, taut(hn, refl({int_add(L, 8)}), e19))
                 qed
                 // (the first area: the head)
@@ -4972,8 +4805,7 @@ proof
                   have tz: TL = 0 by simp(hz)
                   have tz2: !!(TL = 0) by simp(tz)
                   step e18 from tb9 with tz2
-                  have _ e18b := e18
-                  step e19 from e18b with mp.st64w_det using conj(w5bW, w5bu, kb, u56w, rbb, cv, hx, cnz)
+                  step e19 from e18 with mp.st64w_det using conj(w5bW, w5bu, kb, u56w, rbb, cv, hx, cnz)
                   show by ex_intro({int_add(K, 56)}, taut(hz, refl({int_add(K, 56)}), e19))
                 qed
                 have ta := (TA(y9) by taut(ta0, ta1, (seq_len(A4.areas) = 0 || int_lt(0, seq_len(A4.areas)) by arith(nao4))))
@@ -5059,18 +4891,12 @@ proof
                 let VD := fn_update(V5, "bytes", mp.am_nachain(c, A4, V5.bytes, ln))
                 have e26: x4 = ok(pair(fn_update(s, "vm", VD), LP), empty) := rewrite(sym(hx), e25)
                 show by disj({3}, ex_intro({mp.narea(A4)}, {VD}, {LP}, conj(conj(conj(nst, nin), nav), e26)))
-              qed
-              show by taut(tp, tpo, tpk)
             qed
             show by taut(tm, tmo, tmr, tmk)
-          qed
-          show by taut(j1, q1, q2)
         qed
         show by taut(apply(finish, (T2 by taut(skip, big))))
       qed
       show by taut(taken, none, (int_lt(0, seq_len(F)) || seq_len(F) = 0 by arith(flo)))
-    qed
-    show by taut(cd, dov, dok)
-  qed
-  show by taut(t1, ov, go)
+
+
 qed
