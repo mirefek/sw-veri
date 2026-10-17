@@ -315,6 +315,7 @@ impl FxHasher {
 }
 
 type FxMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<FxHasher>>;
+type FxSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<FxHasher>>;
 
 struct Simp<'a> {
     env: &'a Env,
@@ -783,6 +784,65 @@ impl<'a> Simp<'a> {
         })();
         self.footprints.borrow_mut().insert((f, i), r.clone());
         r
+    }
+
+    /// t closed data: numerals, strings and first-order applications of
+    /// them (no local constant, no binder; small -- a value to compute,
+    /// not a structure to unfold)
+    fn closed_data(&self, t: &Term, size: usize) -> bool {
+        self.closed_data_n(t, 48usize.saturating_sub(size))
+    }
+
+    /// `closed_data`, at most `limit` nodes
+    fn closed_data_n(&self, t: &Term, limit: usize) -> bool {
+        fn go(sp: &Simp, t: &Term, n: &mut usize, limit: usize) -> bool {
+            *n += 1;
+            if *n > limit {
+                return false;
+            }
+            match t.node() {
+                Node::Nat(_) | Node::Bytes(_) => true,
+                Node::App(f, a) => {
+                    let bf = sp.env.binders_fn();
+                    (0..a.len()).all(|i| bf(*f, i) == 0) && a.iter().all(|x| go(sp, x, n, limit))
+                }
+                _ => false,
+            }
+        }
+        let mut n = 0;
+        go(self, t, &mut n, limit)
+    }
+
+    /// closed data t's value, if a literal: the term rules, the arguments'
+    /// values, then f's definition unfolded (at most `depth` levels, each
+    /// unfolding small; no program)
+    fn ground_value(&self, t: &Term, depth: usize) -> Option<Term> {
+        let lit = |x: &Term| matches!(x.node(), Node::Nat(_) | Node::Bytes(_));
+        let r = self.term(t);
+        if lit(&r) {
+            return Some(r);
+        }
+        let Node::App(f, a) = r.node() else { return None };
+        if depth == 0 || self.keep.contains(f) {
+            return None;
+        }
+        let args: Vec<Term> = a.iter().map(|x| if lit(x) { x.clone() } else { self.ground_value(x, depth - 1).unwrap_or_else(|| x.clone()) }).collect();
+        let r = self.term(&Term::app(*f, args.clone()));
+        if lit(&r) {
+            return Some(r);
+        }
+        if self.arith.contains_key(f) {
+            return None;
+        }
+        let SymKind::Defined { body, .. } = &self.env.syms[*f as usize].kind else { return None };
+        if matches!(body.node(), Node::App(g, _) if self.env.kname(*g) == "mkprog") {
+            return None;
+        }
+        let u = self.unfold(*f, &args)?;
+        if !self.closed_data_n(&u, 200) {
+            return None;
+        }
+        self.ground_value(&u, depth - 1)
     }
 
     /// The width n if the definition of `f` uses its (first-order) parameter
@@ -5301,6 +5361,46 @@ fn abstract_var(env: &Env, t: &Term, v: crate::term::VarId, dep: u32) -> Term {
 }
 
 impl Logic {
+    /// The ground facts of the terms ts: `t = n` for each closed subterm t
+    /// (not a numeral) whose value by `simp`'s term rules is the numeral n
+    /// (`CTX_SIZE = 928`, `bits_shr(64, 4096, 12) = 1`), and each closed
+    /// equation of literals decided (`!("pages" = "bytes")`) -- for `arith`,
+    /// which reads such terms as atoms.
+    pub fn ground_facts(&self, env: &Env, ts: &[Term]) -> Vec<Term> {
+        let sp = Simp::new(env, self);
+        let not = env.ksym("not");
+        let mut seen: FxSet<Term> = Default::default();
+        let mut out = Vec::new();
+        fn walk(sp: &Simp, not: Option<SymId>, t: &Term, seen: &mut FxSet<Term>, out: &mut Vec<Term>) {
+            let Node::App(f, a) = t.node() else { return };
+            if !seen.insert(t.clone()) {
+                return;
+            }
+            if sp.closed_data(t, 0) {
+                if *f == sp.s.eq && a.len() == 2 {
+                    if let (Some(x), Some(y)) = (sp.ground_value(&a[0], 4), sp.ground_value(&a[1], 4)) {
+                        if distinct_literals(&x, &y) {
+                            if let Some(n) = not {
+                                out.push(Term::app(n, vec![t.clone()]));
+                            }
+                        }
+                    }
+                } else if let Some(v) = sp.ground_value(t, 4) {
+                    if &v != t {
+                        out.push(Term::app(sp.s.eq, vec![t.clone(), v]));
+                    }
+                }
+            }
+            for x in a.iter() {
+                walk(sp, not, x, seen, out);
+            }
+        }
+        for t in ts {
+            walk(&sp, not, t, &mut seen, &mut out);
+        }
+        out
+    }
+
     /// A consequence of the fact `t` (simplified; `runs` of a program
     /// replaced by its relation in positive positions; then in path normal
     /// form).

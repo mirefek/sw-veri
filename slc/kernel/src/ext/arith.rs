@@ -1056,6 +1056,30 @@ impl Logic {
     }
 
     fn arith_(&self, env: &Env, premises: &[Term], goal: &Term) -> KResult<()> {
+        // (closed terms by their values: `PAGE` by 4096 in `int_div(a, PAGE)`;
+        // a closed equation of distinct literals false: `!("a" = "b")`)
+        let gs = self.ground_facts(env, &premises.iter().chain([goal]).cloned().collect::<Vec<_>>());
+        let subst: Vec<(Term, Term)> = gs
+            .iter()
+            .filter_map(|g| match g.node() {
+                // (a term arith reads only as an atom -- not its own
+                // arithmetic, `pow2(32)` --, with a value it reads: below 2^96)
+                Node::App(e, a)
+                    if *e == env.builtins.eq
+                        && a.len() == 2
+                        && !matches!(a[0].node(), Node::App(f, _) if ARITH_NATIVE.contains(&env.kname(*f)))
+                        && matches!(a[1].node(), Node::Nat(v) if v.to_u128().is_some_and(|v| v < 1u128 << 96)) =>
+                {
+                    Some((a[0].clone(), a[1].clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let ground: Vec<Term> = gs.iter().filter(|g| !matches!(g.node(), Node::App(e, _) if *e == env.builtins.eq)).cloned().collect();
+        let mut given: Vec<Term> = premises.iter().map(|p| replace_ground(p, &subst)).collect();
+        given.extend(ground);
+        let goal = &replace_ground(goal, &subst);
+        let premises = &given[..];
         // (equals for equals: the terms read by their classes' representatives,
         // the equations also as given)
         let cc = Congruence::of(env, premises);
@@ -1189,3 +1213,29 @@ impl Logic {
         Ok(env.mk_eq(t.clone(), body))
     }
 }
+
+/// t with the closed terms of `subst` replaced by their values (outermost
+/// first; closed terms have no bound variables, so no shifting)
+fn replace_ground(t: &Term, subst: &[(Term, Term)]) -> Term {
+    if subst.is_empty() {
+        return t.clone();
+    }
+    if let Some((_, v)) = subst.iter().find(|(c, _)| c == t) {
+        return v.clone();
+    }
+    match t.node() {
+        Node::App(f, a) => {
+            let b: Vec<Term> = a.iter().map(|x| replace_ground(x, subst)).collect();
+            if b.iter().zip(a.iter()).all(|(x, y)| x == y) {
+                t.clone()
+            } else {
+                Term::app(*f, b)
+            }
+        }
+        _ => t.clone(),
+    }
+}
+
+/// the operations arith reads itself (their closed terms not replaced by
+/// values: the reading is already exact)
+const ARITH_NATIVE: &[&str] = &["int_add", "int_sub", "int_neg", "int_mul", "int_div", "int_mod", "int_pow", "pow2", "bits_add", "bits_sub", "bits_of_int", "bits_neg"];

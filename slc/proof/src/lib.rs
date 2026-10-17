@@ -1568,7 +1568,7 @@ impl State {
             // frames), the writes' places by arith from the facts
             "mem" => {
                 let ps = self.proofs(env, lg, args)?;
-                let ps = split_conj(env, ps)?;
+                let ps = with_aliases(env, split_conj(env, ps)?);
                 self.mem_goal(env, lg, goal, &ps)
             }
             // cases({k}, {a}, {b}, R, p1, ..): the goal for each value of the
@@ -2610,7 +2610,7 @@ impl State {
         for u in &using_t {
             using.push(self.eval(env, lg, &parse_pe(u.trim())?)?);
         }
-        let using = split_conj(env, using)?;
+        let using = with_aliases(env, split_conj(env, using)?);
         let (xs, hs): (Vec<String>, Vec<String>) = match names.split_once(',') {
             Some((x, h)) => (x.split_whitespace().map(String::from).collect(), h.split_whitespace().map(String::from).collect()),
             None => (Vec::new(), names.split_whitespace().map(String::from).collect()),
@@ -2622,8 +2622,10 @@ impl State {
         // (the `with` facts: each used wherever it fits, in any order -- an
         // operation's lemma as often as it applies)
         let mut withs: Vec<Seq> = Vec::new();
+        let aliases = aliases_of(env, &using);
         for w in &with {
-            withs.push(self.eval(env, lg, &parse_pe(w.trim())?)?);
+            let f = self.eval(env, lg, &parse_pe(w.trim())?)?;
+            withs.push(alias_rw(env, &aliases, &f));
         }
         let mut used = vec![false; withs.len()];
         let mut why: Option<String> = None;
@@ -4279,6 +4281,52 @@ fn split_conj(env: &Env, facts: Vec<Seq>) -> KResult<Vec<Seq>> {
         }
     }
     Ok(out)
+}
+
+/// the aliases among facts: a fact `a = K`, K a constant (a global's
+/// address: `c.ctx = __malloc_context`), a an application not a numeral --
+/// the program names K where the facts name a
+fn aliases_of(env: &Env, facts: &[Seq]) -> Vec<(Term, Seq)> {
+    let eq = env.builtins.eq;
+    facts
+        .iter()
+        .filter_map(|f| match f.concl().node() {
+            Node::App(e, a) if *e == eq && a.len() == 2 && matches!(a[1].node(), Node::App(_, k) if k.is_empty()) && matches!(a[0].node(), Node::App(_, x) if !x.is_empty()) => {
+                Some((a[0].clone(), f.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// f with each alias's a rewritten to its K
+fn alias_rw(env: &Env, aliases: &[(Term, Seq)], f: &Seq) -> Seq {
+    let mut g = f.clone();
+    for (a, e) in aliases {
+        if e.concl() == g.concl() || !occurs(a, g.concl()) {
+            continue;
+        }
+        if let Ok(r) = Seq::rewrite(env, e, &g) {
+            g = r;
+        }
+    }
+    g
+}
+
+/// facts with their aliases' forms added (`aliases_of`)
+fn with_aliases(env: &Env, facts: Vec<Seq>) -> Vec<Seq> {
+    let aliases = aliases_of(env, &facts);
+    if aliases.is_empty() {
+        return facts;
+    }
+    let mut out = facts.clone();
+    for f in &facts {
+        let g = alias_rw(env, &aliases, f);
+        if g.concl() != f.concl() && !out.iter().any(|o| o.concl() == g.concl()) {
+            out.push(g);
+        }
+    }
+    out
 }
 
 /// a disjunction's disjuncts as written (`a || b || c`: three)

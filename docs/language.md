@@ -653,7 +653,12 @@ read hits is decided by a fixed algorithm.
   premise matching a conjunct (`ms.world_wr`, `ms.sw`: a world written is
   a world).
 - A `step` lemma's premise is discharged by a `using` fact, its record
-  fields simplified, a closure, `mem`, or `arith` on the facts.
+  fields simplified, a closure, `mem`, or `arith` on the facts; a
+  conjunction (`g.mem_defined`: not null, in range, usable) part by part.
+- Aliases: a `using` fact `a = K`, K a constant (`c.ctx =
+  __malloc_context`: the program names the global, the facts the
+  configuration), rewrites a to K in the other `using` facts, the `with`
+  facts and `mem`'s facts -- the facts stay in their own terms.
 
 The facts are what a precondition provides: bounds, alignment (`al8`
 expanded to `x % 8 = 0`), disequalities, either-or placements (a slot
@@ -731,6 +736,12 @@ depends on, with unit propagation; there is no limit on the atoms. A
 sign fact comes with each product in the facts or the goal, so a product
 term given as a hint (`refl({int_mul(m, int_sub(q, 1))})`) brings `m >= 0
 && q - 1 >= 0 -> m (q - 1) >= 0` in (core/bits.core's `div_unique`).
+Closed terms arith reads only as atoms are replaced by their values first
+(the term rules, then definitions unfolded a few levels): named constants
+(`PAGE`, `CTX_SIZE`, `TASK_SIZE`), `sval` of a literal, word operations
+on literals (`bits_shr(64, 4096, 12)`), up to 2^96; and a closed equation
+of distinct literals is false (`"pages" != "bytes"`). No such fact needs
+stating.
 
 **Bits** (core/bits.core). `bitwise` reduces a word equation `L = R` to
 `bit(L, i) <-> bit(R, i)` at a fresh i < n (`bits_ext`), the width n from

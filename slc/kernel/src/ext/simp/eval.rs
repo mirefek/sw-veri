@@ -108,7 +108,7 @@ impl<'s, 'a> Ev<'s, 'a> {
     /// A closed term in normal form: `simp`'s term rules, and definitions
     /// of values unfolded where that exposes a constructor, a numeral or a
     /// record (not programs, not definitions by choice or recursion).
-    fn norm(&mut self, t: &Term) -> Term {
+    pub(super) fn norm(&mut self, t: &Term) -> Term {
         if let Some(r) = self.norm_memo.get(t) {
             return r.clone();
         }

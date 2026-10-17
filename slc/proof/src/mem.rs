@@ -455,6 +455,16 @@ impl State {
         if let Some(f) = using.iter().find(|f| f.concl() == h) {
             return Ok(f.clone());
         }
+        // a conjunction (`g.mem_defined`: not null, in range, usable): each part
+        if let Node::App(c, a) = h.node() {
+            if env.sym_by_name.get("and") == Some(c) && a.len() == 2 {
+                if let (Ok(l), Ok(r)) = (self.mem_discharge(env, lg, &a[0], using, depth), self.mem_discharge(env, lg, &a[1], using, depth)) {
+                    if let Ok(p) = Seq::taut(env, lg, &[&l, &r], h) {
+                        return Ok(p);
+                    }
+                }
+            }
+        }
         // (its record fields first; else as written -- the facts' terms may
         // be the unsimplified ones)
         let srs = self.step_rules(env, lg)?;
