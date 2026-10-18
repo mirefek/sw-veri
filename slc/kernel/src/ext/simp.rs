@@ -5367,6 +5367,42 @@ impl Logic {
     /// equation of literals decided (`!("pages" = "bytes")`) -- for `arith`,
     /// which reads such terms as atoms.
     pub fn ground_facts(&self, env: &Env, ts: &[Term]) -> Vec<Term> {
+        // (a quick scan first: a closed application of a defined symbol, not
+        // arithmetic's own, or a closed equation of strings -- else none)
+        fn scan(env: &Env, t: &Term, hit: &mut bool) -> bool {
+            match t.node() {
+                Node::Nat(_) | Node::Bytes(_) => true,
+                Node::Var(..) | Node::BVar(_) => false,
+                Node::App(f, a) => {
+                    let mut closed = true;
+                    for x in a.iter() {
+                        closed &= scan(env, x, hit);
+                        if *hit {
+                            return closed;
+                        }
+                    }
+                    if closed {
+                        let defined = matches!(env.syms[*f as usize].kind, SymKind::Defined { .. });
+                        let strings = *f == env.builtins.eq && a.len() == 2 && matches!((a[0].node(), a[1].node()), (Node::Bytes(_), Node::Bytes(_)));
+                        let native = super::arith::ARITH_NATIVE.contains(&env.kname(*f));
+                        if strings || ((defined || ARITH.contains(&env.kname(*f))) && !native) {
+                            *hit = true;
+                        }
+                    }
+                    closed
+                }
+            }
+        }
+        let mut hit = false;
+        for t in ts {
+            scan(env, t, &mut hit);
+            if hit {
+                break;
+            }
+        }
+        if !hit {
+            return Vec::new();
+        }
         let sp = Simp::new(env, self);
         let not = env.ksym("not");
         let mut seen: FxSet<Term> = Default::default();

@@ -27,6 +27,10 @@ use std::rc::Rc;
 pub(crate) struct MemCache {
     pub(crate) rules: std::collections::HashMap<u8, Rc<Rules>>,
     unfold: std::collections::HashMap<Term, Seq>,
+    /// a premise simplified by step's own rules (`mem_discharge`)
+    premise_eq: std::collections::HashMap<Term, Seq>,
+    /// `mem` goals not shown from these facts (the facts' hash)
+    mem_failed: std::collections::HashSet<(Term, u64)>,
     /// the reads left unresolved (why), for a failing goal's message
     skipped: Vec<String>,
 }
@@ -467,8 +471,16 @@ impl State {
         }
         // (its record fields first; else as written -- the facts' terms may
         // be the unsimplified ones)
-        let srs = self.step_rules(env, lg)?;
-        let e = self.rsimp_eq(env, lg, h, &srs, 0)?;
+        let cached = self.mem_cache.borrow().premise_eq.get(h).cloned();
+        let e = match cached {
+            Some(e) => e,
+            None => {
+                let srs = self.step_rules(env, lg)?;
+                let e = self.rsimp_eq(env, lg, h, &srs, 0)?;
+                self.mem_cache.borrow_mut().premise_eq.insert(h.clone(), e.clone());
+                e
+            }
+        };
         let h2 = rhs_of(env, e.concl());
         if &h2 != h {
             if let Ok(p) = self.mem_discharge(env, lg, &h2, using, depth) {
@@ -498,13 +510,32 @@ impl State {
                 }
             }
         }
-        if let Ok(p) = self.mem_goal(env, lg, h, using) {
+        // (arith and taut first: cheap, and most premises are bounds and
+        // memberships; mem, normalizing the facts, after -- a failure
+        // remembered for the same facts)
+        let refs: Vec<&Seq> = using.iter().collect();
+        if let Ok(p) = rel_arith(env, lg, &refs, h).or_else(|_| Seq::taut(env, lg, &refs, h)) {
             return Ok(p);
         }
-        let refs: Vec<&Seq> = using.iter().collect();
-        rel_arith(env, lg, &refs, h).or_else(|_| Seq::taut(env, lg, &refs, h)).map_err(|_| {
-            KernelError(format!("step: the premise `{}` not discharged (a `using` fact, a closure, mem, arith)", Printer::new(env).short(h)))
-        })
+        let fkey = {
+            use std::hash::{Hash, Hasher};
+            let mut st = std::collections::hash_map::DefaultHasher::new();
+            for f in using {
+                f.concl().hash(&mut st);
+            }
+            (h.clone(), st.finish())
+        };
+        let not_shown = |env: &Env| KernelError(format!("step: the premise `{}` not discharged (a `using` fact, a closure, mem, arith)", Printer::new(env).short(h)));
+        if self.mem_cache.borrow().mem_failed.contains(&fkey) {
+            return Err(not_shown(env));
+        }
+        match self.mem_goal(env, lg, h, using) {
+            Ok(p) => Ok(p),
+            Err(_) => {
+                self.mem_cache.borrow_mut().mem_failed.insert(fkey);
+                Err(not_shown(env))
+            }
+        }
     }
 }
 

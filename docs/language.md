@@ -662,7 +662,8 @@ read hits is decided by a fixed algorithm.
   premise matching a conjunct (`ms.world_wr`, `ms.sw`: a world written is
   a world).
 - A `step` lemma's premise is discharged by a `using` fact, its record
-  fields simplified, a closure, `mem`, or `arith` on the facts; a
+  fields simplified (each premise once per block), a closure, `arith` or
+  taut on the facts, then `mem` (a failure remembered for the same facts); a
   conjunction (`g.mem_defined`: not null, in range, usable) part by part.
 - Aliases: a `using` fact `a = K`, K a constant (`c.ctx =
   __malloc_context`: the program names the global, the facts the

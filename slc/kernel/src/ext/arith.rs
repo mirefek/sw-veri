@@ -1238,4 +1238,4 @@ fn replace_ground(t: &Term, subst: &[(Term, Term)]) -> Term {
 
 /// the operations arith reads itself (their closed terms not replaced by
 /// values: the reading is already exact)
-const ARITH_NATIVE: &[&str] = &["int_add", "int_sub", "int_neg", "int_mul", "int_div", "int_mod", "int_pow", "pow2", "bits_add", "bits_sub", "bits_of_int", "bits_neg"];
+pub(crate) const ARITH_NATIVE: &[&str] = &["int_add", "int_sub", "int_neg", "int_mul", "int_div", "int_mod", "int_pow", "pow2", "bits_add", "bits_sub", "bits_of_int", "bits_neg"];
