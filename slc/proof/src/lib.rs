@@ -2562,6 +2562,7 @@ impl State {
             ("ct.fun_divg", format!("{}, runs_univ(), div_body({})", gu, gs)),
             ("ct.fun_divg_v", format!("{}, div_body({})", gu, gs)),
             ("ct.fun_divg_v0", format!("{}, div_body({})", gu, gs)),
+            ("ct.fun_divg0", format!("{}, runs_univ(), div_body({})", gu, gs)),
         ] {
             let pe = parse_pe(&format!("defs(apply({}, {}), {})", shape, prem, fname))?;
             match self.by(env, lg, &inner, &pe) {
@@ -2573,7 +2574,7 @@ impl State {
             }
         }
         let Some(s) = got else {
-            return err(format!("divergence: `{}` not of a spec function's shape (`ct.fun_divg`, `_v`, `_v0`): {}", fname, last.map(|e| e.to_string()).unwrap_or_default()));
+            return err(format!("divergence: `{}` not of a spec function's shape (`ct.fun_divg`, `_v`, `_v0`, `0`): {}", fname, last.map(|e| e.to_string()).unwrap_or_default()));
         };
         if !world {
             return self.check(env, s, goal);

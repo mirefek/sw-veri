@@ -14,34 +14,9 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 ## 2. Next: alloc_group, loops on the CFG and loops by their purpose
 
-- `__malloc_alloc_meta` by its spec (`alloc_meta_spec`: a meta taken, or
-  0). The supply frame (proofs/mallocng/model/supply.core:
-  `mp.holds_supply`, the groups' clauses kept) and the area's next meta
-  taken (`mp.tav_holds_in`) and the free metas' head taken
-  (`mp.tfr_holds_in`, dequeue_head), both instances of the general take
-  step (`mp.tkpre`, `mp.tk_holds_in`), are done, and so is a meta area
-  added from the reserve (proofs/mallocng/model/newarea.core:
-  `mp.na_holds_in`, its page made accessible by mprotect or fresh from
-  brk), and the reserve refilled from fresh pages
-  (proofs/mallocng/model/refill.core: `mp.rf_holds_in`; brk's pages past
-  the break or mmap's, a guard page aside -- apart from every region, the
-  owned bytes all mapped before: `mp.owned_mapped`; brk's failure the
-  empty refill, `K = 0`), and the first call's initialization
-  (proofs/mallocng/model/first.core: `mp.fs_holds_in`; the auxiliary
-  vector leaves the footprint). The callees at a call
-  (proofs/mallocng/fun/alloc_meta.core: `mp.rs_q`, `mp.brk_q`,
-  `mp.mmap_q`, `mp.mprotect_q`; `mp.dqh_q`, `ms.el_q`), the auxiliary
-  vector readable before the first call (`mp.am_auxv`) and the run's
-  states (`mp.am_st`, `mp.am_st_step`) are done, and so is the run
-  (`mp.am_run`: each path's GIMPLE walk to its outcome; the states between
-  by `mp.am_rf` -- brk's refused / granted refills `mp.am_brkfail` /
-  `mp.am_brkok`, mmap's `mp.am_mmok` --, `mp.am_na` -- the new area --,
-  `mp.am_errw` / `mp.am_ret0` -- 0 returned, errno written). Left: the
-  refinement to `alloc_meta_spec` (`mp.am`, as `mp.ta`), divergence, the
-  machine form, the contract at a call. The run's file is long (~5400
-  lines): the walk restates the locals at each join and reads each word
-  back through every store after it -- a read-through-stores lemma (or a
-  memory normal form) would shorten both.
+- alloc_meta's leaves at machine level: get_random_secret, __syscall1,
+  __mmap, __mprotect, __errno_location (C1 of their code, or their specs
+  as the machine's), to discharge `mp.am_implements`' hypotheses.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already

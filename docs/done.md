@@ -807,3 +807,23 @@ item is a short summary of finished work; details are in the files named.
   order; `rewrite(e, p)` with its result stated rewrites only where the
   result differs; `at` and `arith`'s lengths take a known concatenation
   whole when its own pieces are not all known.
+- **alloc_meta by its purpose, end to end** (`mp.am_run`, `mp.am`,
+  `mp.am_fun`, `mp.am_divg`, `mp.am_implements`, `mp.am_call` /
+  `mp.am_call_ref` / `mp.am_q`; proofs/mallocng/fun/alloc_meta.core): each
+  path's GIMPLE walk (the first call's initialization, the free metas' head,
+  the area's next meta, a new area from the reserve, the reserve refilled by
+  brk or mmap) to `alloc_meta_spec`'s outcome. Its machine code is composed
+  over dequeue_head's (linked) and, as hypotheses, the leaves not yet at
+  machine level (get_random_secret, __syscall1, __mmap, __mprotect,
+  __errno_location: each implemented at its address, meeting its spec).
+  For no-argument procedures `g.fun_res_ghost0`, `ct.fun_div0` /
+  `ct.fun_divg0` (in `divergence`).
+- **Brevity and speed of the C2 proofs** (alloc_meta's run 1358 -> ~1120
+  lines; the uncached chain 377 s -> 262 s): `arith` reads closed terms by
+  their values (named constants, `sval`, word operations on literals);
+  `step`'s facts take their aliases (`c.ctx = __malloc_context`), a
+  conjunctive premise part by part, a call by its callee's contract or a
+  fact for that call, a join (`overflow || return` of an outcome) as a
+  call's result, the overflow closed against the goal up to lets and the
+  locals' witnesses, a decided branch's condition dropped; a premise
+  simplified once per block, arith before mem, mem failures remembered.
