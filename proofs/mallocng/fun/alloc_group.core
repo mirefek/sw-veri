@@ -1,0 +1,112 @@
+// alloc_group(sc, req) by its purpose (`alloc_group_spec`): a new group of
+// class sc for requests of up to req bytes, or 0. Its callees at a call
+// first, then the run.
+
+// every size up to the largest class's has a class: the least one big enough
+theorem mp.class_ex: all n. n in omega -> int_le(n, 131052) -> ex c. c in bits(32) && mallocng_specs.class_of(n, c)
+proof
+  fix n
+  assume hn hl
+  let U := int_div(int_add(n, 19), 16)
+  have s47: mallocng.size_classes[47] = 8191 by simp(ms.sc_vals)
+  have p47: 47 in omega && int_lt(47, 48) && int_le(U, mallocng.size_classes[47]) by arith(s47, hn, hl)
+  have e47: ex a. a in omega && (a in omega && int_lt(a, 48) && int_le(U, mallocng.size_classes[a])) by ex_intro({47}, taut(p47))
+  obtain m, hm hp hmin from mp(nat_least[p := x. x in omega && int_lt(x, 48) && int_le(U, mallocng.size_classes[x])], e47)
+  have _ hm48 hmu := hp
+  have prev: m = 0 || int_lt(mallocng.size_classes[int_sub(m, 1)], U) proof
+    have c1: !(m = 0) -> int_lt(mallocng.size_classes[int_sub(m, 1)], U) proof
+      assume hz
+      have m1: int_sub(m, 1) in omega by arith(hm, hz)
+      have nl: !(int_sub(m, 1) in omega && int_lt(int_sub(m, 1), 48) && int_le(U, mallocng.size_classes[int_sub(m, 1)])) proof
+        assume e
+        have le := mp(all_elim(hmin, {int_sub(m, 1)}), m1, e)
+        show by arith(le, hz, hm)
+      qed
+      have sv _ := apply(ms.sc_nat, m1, (int_lt(int_sub(m, 1), 48) by arith(hm48, hm)))
+      show by arith(nl, m1, hm48, hm, sv)
+    qed
+    show by taut(c1)
+  qed
+  have co := apply(ms.class_from, hn, hm, hm48, hmu, prev)
+  show by ex_intro({m}, taut((m in bits(32) by arith(hm, hm48)), co))
+qed
+
+// what a caller relies on of a callee f called as enframe(g, idx, n, ctr),
+// the ghost part h read: an overflow, or the slot framed for n bytes at P,
+// P in the result register
+abbrev mp.ef_call(c, f) := all g idx n ctr t h regs o2. g in bits(64) -> idx in bits(32) -> n in bits(64) -> ctr in bits(32) -> t in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> abi.thread_ok(t.vm, t.fs_base) ->
+  mallocng.is_used(h.A, g) -> mallocng.reserved_only(h.A, g, idx) ->
+  mallocng.slot_rw(t.vm, h.A.metas[g], idx) ->
+  int_le(int_add(n, mallocng.IB), mallocng.stride(h.A.metas[g])) -> int_lt(mallocng.stride(h.A.metas[g]), int_pow(2, 31)) ->
+  (int_lt(h.A.metas[g].sizeclass, 48) ->
+     int_lt(int_sub(int_sub(mallocng.slot_end(h.A.metas[g], idx), n), mallocng.storage(h.A.metas[g])),
+       int_mul(int_mul(mallocng.UNIT, mallocng.size_classes[h.A.metas[g].sizeclass]), int_add(idx, 1)))) ->
+  (int_le(int_add(t.fs_base, 8), int_sub(mallocng.slot_start(h.A.metas[g], idx), mallocng.IB)) ||
+     int_le(mallocng.slot_end(h.A.metas[g], idx), t.fs_base)) ->
+  gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, g)), seq_one(gimple.arg(32, idx))), seq_one(gimple.arg(64, n))), seq_one(gimple.arg(32, ctr)))) ->
+  runs(f[regs], t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex W rr. (W in x86_64_linux.Vm && (fst(rr) in bits(64) && ((int_le(mallocng.slot_start(h.A.metas[g], idx), fst(rr)) &&
+        int_mod(int_sub(fst(rr), mallocng.slot_start(h.A.metas[g], idx)), mallocng.UNIT) = 0) &&
+        int_lt(fst(rr), int_add(mallocng.slot_start(h.A.metas[g], idx), int_mul(256, mallocng.UNIT)))) &&
+        int_le(int_add(fst(rr), n), mallocng.slot_end(h.A.metas[g], idx)) &&
+      mallocng_specs.framed(t.vm, W, h.A.metas[g], idx, fst(rr), n))) && o2 = ok(fn_update(t, "vm", W), rr))
+
+// enframe's code called as enframe
+theorem mp.ef_q: all c g0 g1 g2. c in mallocng.Cfg -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g0[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g2[regs], s, o) -> runs(mallocng_specs.set_size_spec_fun()[regs], s, o)) ->
+  mp.ef_call(c, c_src_malloc_mallocng_malloc.enframe_fun(g0, g1, g2))
+proof
+  fix c g0 g1 g2
+  assume hc hsct hg0 hg2
+  fix g idx n ctr t h regs o2
+  assume hgb hib hnb hcb hw hh hin hth hus hro hrw hns hs31 hcls hfs hrg hr
+  let ARGS := seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, g)), seq_one(gimple.arg(32, idx))), seq_one(gimple.arg(64, n))), seq_one(gimple.arg(32, ctr)))
+  have rl rln _ := hrg
+  have an: seq_len(ARGS) = 4 by simp()
+  have rn: seq_len(regs) = 4 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := g], hrg, simp(), simp(an), at({ARGS[0]}), simp(), hgb)
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 32, x := idx], hrg, simp(), simp(an), at({ARGS[1]}), simp(), hib)
+  have q2 := apply(gc.reg_at[regs := regs, args := ARGS, i := 2, w := 64, x := n], hrg, simp(), simp(an), at({ARGS[2]}), simp(), hnb)
+  have q3 := apply(gc.reg_at[regs := regs, args := ARGS, i := 3, w := 32, x := ctr], hrg, simp(), simp(an), at({ARGS[3]}), simp(), hcb)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o4l: ord_le(4, seq_len(regs)) by defs(simp(rn), ord_le)
+  step o3 P W, e hs1 from hr with o4l, q0, q1, q2, q3, mp.ef_run using ra, hc, hsct, hgb, hib, hnb, hcb, hw, hh, hin, hth, hus, hro, hrw, hns, hs31, hcls, hfs, hg0, hg2
+  have pb: P in bits(64) by taut(hs1)
+  step o4 y, e2 from e with g.result64_inv using pb
+  show by disj({2}, ex_intro({W}, {pair(P, y)}, simp(hs1, e2)))
+qed
+
+// size_to_class's spec at a call (the class table readable): an overflow,
+// or the class of n returned, the memory as it was
+theorem mp.s2c_q: all t sct tbl n regs o2. t in abi.World -> t in univ(1) -> n in bits(64) -> int_le(n, 131052) ->
+  mallocng_specs.table_ok(t.vm, t.objs, sct, 2, mallocng.size_classes) -> mallocng_specs.table_ok(t.vm, t.objs, tbl, 1, mallocng.debruijn32_tab) ->
+  abi.thread_ok(t.vm, t.fs_base) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, n))) ->
+  runs(mallocng_specs.size_to_class_spec_fun(sct, tbl)[regs], t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && mallocng_specs.class_of(n, bits_of_int(32, fst(r))))
+proof
+  fix t sct tbl n regs o2
+  assume hw htu hnb hnl hts htb hth hro h
+  have rl rn r0 := apply(gc.regs1, hnb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = n by defs(simp(r0, hnb), bits_of_int, pow2)
+  have pv pf pd _ := apply(ms.world_parts, hw)
+  have cex := mp(all_elim(mp.class_ex, {n}), (n in omega by simp(hnb)), hnl)
+  step o3 cl k, e hk from h with o1l, bp, rewrite(sym(bp), cex) using ra, hw, htu, hnb, hnl, hts, htb, hth, pv
+  have kb kc := hk
+  step u y z, e2 hy from e with g.result32_inv using kb
+  have _ yk := hy
+  have ss: fn_update(t, "vm", t.vm) = t := mp(fn_update_same[f := t, k := "vm"], pf, pd)
+  have cy: mallocng_specs.class_of(n, bits_of_int(32, fst(pair(y, z)))) by simp(rewrite(bp, kc), yk)
+  have ret: ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && mallocng_specs.class_of(n, bits_of_int(32, fst(r))) by ex_intro({pair(y, z)}, taut(rewrite(sym(ss), e2), cy))
+  show by disj({2}, ret)
+qed

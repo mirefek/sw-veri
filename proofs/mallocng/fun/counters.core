@@ -545,3 +545,71 @@ proof
   step o3 u y, e from hr with o1l, r0, ms.db_run using ra, hxb, hw, pre
   show by disj({2}, spec_ret({mallocng_specs.decay_vm(t.vm, c_src_malloc_mallocng_malloc.__malloc_context, x)}, {pair(u, y)}, cv, co, e))
 qed
+
+// account_bounce's code called as decay_bounces is (the same contract: the
+// class's counters, context bytes only)
+theorem mp.ab_q: all c. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  mp.db_call(c, c_src_malloc_mallocng_malloc.account_bounce_fun())
+proof
+  fix c
+  assume hc hx
+  fix x t h regs o2
+  assume hxb hw hh hin hro hr
+  have rl rn r0 := apply(gc.regs1_32, hxb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+  have pre := apply(mp.ab_pre[c := c, A := h.A, vm := t.vm, b := h.blocks, objs := t.objs, sc := x], hc, (h.A in univ(1) by simp(hu)), hat, hx, hxb, hin)
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have co cv := apply(mp.ab_only[c := c, vm := t.vm, sc := x], pv, hx, hxb)
+  step o3 u y, e from hr with o1l, r0, ms.ab_run using ra, hxb, hw, pre
+  show by disj({2}, spec_ret({mallocng_specs.account_vm(t.vm, c_src_malloc_mallocng_malloc.__malloc_context, x)}, {pair(u, y)}, cv, co, e))
+qed
+
+// what a caller relies on of a callee f called as is_bouncing: an
+// overflow, or some answer, nothing changed
+abbrev mp.ib_call(c, f) := all x t h regs o2. x in bits(32) -> t in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, t.vm, h.blocks) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(32, x))) ->
+  runs(f[regs], t, o2) ->
+  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) in bits(64))
+
+// (a callee refining one called as is_bouncing: called as it too)
+theorem mp.ib_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
+  mp.ib_call(c, f2) -> mp.ib_call(c, f)
+proof
+  assume hf q
+  fix x t h regs o2
+  assume hxb hw hh hin hro hr
+  have rl rn _ := apply(gc.regs1_32, hxb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
+  show := mp(all_elim(q, {x}, {t}, {h}, {regs}, {o2}), hxb, hw, hh, hin, hro, r2)
+qed
+
+// is_bouncing's code called as is_bouncing
+theorem mp.ib_q: all c. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  mp.ib_call(c, c_src_malloc_mallocng_malloc.is_bouncing_fun())
+proof
+  fix c
+  assume hc hx
+  fix x t h regs o2
+  assume hxb hw hh hin hro hr
+  have rl rn r0 := apply(gc.regs1_32, hxb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have hu _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+  have pre := apply(mp.bp_pre[c := c, A := h.A, vm := t.vm, b := h.blocks, objs := t.objs, sc := x, w := false], hc, (h.A in univ(1) by simp(hu)), hat, hx, hxb, hin)
+  have pv pf pd _ := apply(ms.world_parts, hw)
+  have ss: fn_update(t, "vm", t.vm) = t := mp(fn_update_same[f := t, k := "vm"], pf, pd)
+  let Q := ite(mallocng_specs.bouncing_class(x) && int_lt(99, gimple.bytes_at(t.vm, mallocng_specs.bounce_at(c_src_malloc_mallocng_malloc.__malloc_context, x), 1)), 1, 0)
+  have qb: Q in bits(32) by simp()
+  step o3 u y z, e hy from hr with o1l, r0, ms.ib_run, g.result32_inv using ra, hxb, hw, pre, qb
+  have yb _ := hy
+  have ret: ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) in bits(64) by ex_intro({pair(y, z)}, taut(rewrite(sym(ss), e), (fst(pair(y, z)) in bits(64) by simp(yb))))
+  show by disj({2}, ret)
+qed
