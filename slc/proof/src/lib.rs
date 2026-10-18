@@ -2598,6 +2598,127 @@ impl State {
         r
     }
 
+    /// a call's registers `gc.regs_ok(R, ARGS)` (its conjuncts among the
+    /// facts, ARGS a list of `gimple.arg(w, x)`): R's length, R in the
+    /// function values' domain, the argument count; and each register's value
+    /// `bits_of_int(w, R[i]) = x` (`gc.reg_at`) whose `x in bits(w)` is a
+    /// fact -- the lines a proof writes for them, the terms named for the while
+    fn regs_facts(&mut self, env: &mut Env, lg: &Logic, using: &[Seq]) -> (Vec<Seq>, Vec<Seq>) {
+        let sym = |n: &str| env.sym_by_name.get(n).copied();
+        let (Some(slen), Some(scat), Some(sone), Some(garg), Some(in_), Some(inreg)) =
+            (sym("seq_len"), sym("seq_concat"), sym("seq_one"), sym("gimple.arg"), sym("in"), sym("gimple.in_reg"))
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        fn flat(t: &Term, scat: SymId, sone: SymId, garg: SymId, out: &mut Vec<(Term, Term)>) -> bool {
+            match t.node() {
+                Node::App(f, a) if *f == scat => flat(&a[0], scat, sone, garg, out) && flat(&a[1], scat, sone, garg, out),
+                Node::App(f, a) if *f == sone => match a[0].node() {
+                    Node::App(g, b) if *g == garg && b.len() == 2 => {
+                        out.push((b[0].clone(), b[1].clone()));
+                        true
+                    }
+                    _ => false,
+                },
+                _ => false,
+            }
+        }
+        fn mentions_sym(t: &Term, s: SymId) -> bool {
+            match t.node() {
+                Node::App(f, a) => *f == s || a.iter().any(|x| mentions_sym(x, s)),
+                Node::Var(_, a) => a.iter().any(|x| mentions_sym(x, s)),
+                _ => false,
+            }
+        }
+        let mut facts = Vec::new();
+        let mut eqs = Vec::new();
+        for (fi, f) in using.iter().enumerate() {
+            let Node::App(e, a) = f.concl().node() else { continue };
+            if *e != lg.eq || a.len() != 2 {
+                continue;
+            }
+            let (Node::App(l1, r), Node::App(l2, ar)) = (a[0].node(), a[1].node()) else { continue };
+            if *l1 != slen || *l2 != slen {
+                continue;
+            }
+            let (r, args) = (r[0].clone(), ar[0].clone());
+            let mut items = Vec::new();
+            let empty = matches!(args.node(), Node::App(s, x) if x.is_empty() && env.syms[*s as usize].name == "empty");
+            if !empty && !flat(&args, scat, sone, garg, &mut items) {
+                continue;
+            }
+            let Some(f1) = using.iter().find(|g| matches!(g.concl().node(), Node::App(i, b) if *i == in_ && b[0] == r)) else { continue };
+            let Some(f3) = using.iter().find(|g| mentions_sym(g.concl(), inreg) && occurs(&r, g.concl())) else { continue };
+            // (the terms and facts named for the while)
+            let mut names: Vec<(String, Option<(usize, Term)>)> = Vec::new();
+            let mut def = |env: &mut Env, n: &str, t: &Term| {
+                names.push((n.to_string(), env.abbrevs.get(n).cloned()));
+                let _ = sl_kernel::syntax::define_abbrev(env, n, 0, t.clone());
+            };
+            def(env, "__rg", &r);
+            def(env, "__ra", &args);
+            for (i, (_, x)) in items.iter().enumerate() {
+                def(env, &format!("__rx{}", i), x);
+            }
+            let n0 = self.facts.len();
+            self.facts.push(("__rl".into(), f1.clone()));
+            self.facts.push(("__rln".into(), using[fi].clone()));
+            self.facts.push(("__rf3".into(), f3.clone()));
+            let n = items.len();
+            let run = |st: &mut Self, env: &mut Env, name: &str, text: String| -> Option<Seq> {
+                let s = parse_pe(&text).ok().and_then(|pe| st.eval(env, lg, &pe).ok())?;
+                st.facts.push((name.to_string(), s.clone()));
+                Some(s)
+            };
+            let rok = run(self, env, "__rok", "(gc.regs_ok(__rg, __ra) by taut(__rl, __rln, __rf3))".into());
+            let an = run(self, env, "__an", format!("(seq_len(__ra) = {} by simp())", n));
+            let rn = an.as_ref().and_then(|_| run(self, env, "__rn", "trans(__rln, __an)".into()));
+            if let Some(rn) = &rn {
+                facts.push(rn.clone());
+                if n <= 6 {
+                    if let Some(d) = run(self, env, "__rd",
+                        "(__rg in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(__rl, (ord_le(seq_len(__rg), 6) by defs(arith(__rn, (seq_len(__rg) in omega by simp(__rn))), ord_le)), keep(ord_le)))".into())
+                    {
+                        facts.push(d);
+                        if let Some(d2) = run(self, env, "__rd2", "(__rg in abi.ARGS by defs(__rd, abi.ARGS))".into()) {
+                            facts.push(d2);
+                        }
+                    }
+                }
+                if let Some(c) = run(self, env, "__rc", format!("(ord_le({}, seq_len(__rg)) by defs(simp(__rn), ord_le))", n)) {
+                    facts.push(c);
+                }
+            }
+            if rok.is_some() && an.is_some() {
+                let pr = Printer::new(env);
+                let ws: Vec<String> = items.iter().map(|(w, _)| pr.term(w)).collect();
+                drop(pr);
+                for (i, (w, x)) in items.iter().enumerate() {
+                    let bt = Term::app(in_, vec![x.clone(), Term::app(env.sym_by_name["bits"], vec![w.clone()])]);
+                    let Some(xb) = using.iter().find(|g| g.concl() == &bt) else { continue };
+                    self.facts.push((format!("__xb{}", i), xb.clone()));
+                    let text = format!("apply(gc.reg_at[regs := __rg, args := __ra, i := {i}, w := {w}, x := __rx{i}], __rok, simp(), simp(__an), at({{__ra[{i}]}}), simp(), __xb{i})", i = i, w = ws[i]);
+                    if let Some(q) = run(self, env, &format!("__q{}", i), text) {
+                        eqs.push(q);
+                    }
+                }
+            }
+            self.facts.truncate(n0);
+            for (nm, prev) in names {
+                match prev {
+                    Some(p) => {
+                        env.abbrevs.insert(nm, p);
+                    }
+                    None => {
+                        env.abbrevs.remove(&nm);
+                    }
+                }
+            }
+            break;
+        }
+        (facts, eqs)
+    }
+
     /// `step x.., h.. from P with f1, ..`: P (a run of readable GIMPLE, or a
     /// fact on a program's outcome) inverted step by step -- the program's
     /// relation, `letin`s, binds by the `with` facts' one outcomes
@@ -2638,6 +2759,13 @@ impl State {
             let f = self.eval(env, lg, &parse_pe(w.trim())?)?;
             withs.push(alias_rw(env, &aliases, &f));
         }
+        // (a call's registers among the `using` facts, `gc.regs_ok(R, ARGS)`:
+        // R's length, R in the domain, the argument count -- facts --, each
+        // register's value -- an equation, as a `with` one)
+        let (rf, req) = self.regs_facts(env, lg, &using);
+        let using: Vec<Seq> = using.iter().cloned().chain(rf).collect();
+        let n_req = req.len();
+        withs.extend(req);
         let mut used = vec![false; withs.len()];
         let mut why: Option<String> = None;
         let sym = |n: &str| env.sym_by_name.get(n).copied();
@@ -3017,7 +3145,8 @@ impl State {
             let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
             cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
         }
-        let unused: Vec<usize> = (0..withs.len()).filter(|&i| !used[i]).map(|i| i + 1).collect();
+        // (the registers' equations step made itself: used or not)
+        let unused: Vec<usize> = (0..withs.len() - n_req).filter(|&i| !used[i]).map(|i| i + 1).collect();
         if !unused.is_empty() {
             let pos: Vec<String> = unused.iter().map(|i| i.to_string()).collect();
             return err(format!(

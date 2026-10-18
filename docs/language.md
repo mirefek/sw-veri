@@ -604,6 +604,11 @@ goes, in order:
   `all regs o. gc.regs_ok(regs, ARGS) -> runs(app(F, regs), t, o) ->
   overflow || return` proved for this call (a callee's contract adapted to
   what the call needs);
+- a call's registers as a `using` fact `gc.regs_ok(regs, ARGS)` (ARGS a
+  list of `gimple.arg(w, x)`): their length, `regs` in the function
+  values' domain, the argument count, and each register's value
+  `bits_of_int(w, regs[i]) = x` (a `with` equation, used or not) where
+  `x in bits(w)` is a `using` fact;
 - through a join: a `with` fact `(ex v w... v in Vm && x = exc(..)) ||
   (ex ws. P && x = ok(..))` on an outcome x the fact is about (a block's
   result stated once, `T1`): the overflow carried to the outcome and closed
