@@ -101,6 +101,19 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 
 ## 7. Usability
 
+- The proof cache does not key on the checker: after an engine change
+  `scripts/check.sh` reports proofs "as checked before"; check the
+  engine's changes uncached (the test's `--no-cache`), times per file by
+  `SLC_TIMES=1`, slow steps by `STEP_SLOW=secs`.
+- alloc_meta's remaining plumbing (am_run ~1120 lines): the context's
+  usable words derived per memory stretch (`mp.ctx_usable` per offset,
+  `mp.usable_pg` across a page change); the two three-case joins (`ht2`,
+  `tm`) still split by hand; each exit's outcome built by `disj` /
+  `ex_intro`. A closure deriving usability from the invariant
+  (`mp.ctx_usable_w`, tried at every usable premise, its variables bound
+  from the `using` facts) made the run several times slower: not that
+  way -- a fact the run states once per memory, instantiated by step.
+
 - Generate the function-level C2s and compositions (one instance of
   `g.fun_res` / `g.fun_res_ghost` and `tr.implements_refine` each).
 - A call to a callee by its own contract still needs the trivial fact
