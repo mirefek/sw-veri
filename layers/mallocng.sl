@@ -418,7 +418,12 @@ pred group_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat) =
   chk_own: (all i: nat. i <= A.metas[g].last_idx + 1 -> slot_start(A.metas[g], i) - IB notin live_of(blocks)) &&
   // a group of several slots: their offsets in units within 16 bits (the
   // in-band header's; `alloc_group` keeps it so)
-  offs: (A.metas[g].last_idx > 0 -> stride(A.metas[g]) * (A.metas[g].last_idx + 1) <= 2^16 * UNIT)
+  offs: (A.metas[g].last_idx > 0 -> stride(A.metas[g]) * (A.metas[g].last_idx + 1) <= 2^16 * UNIT) &&
+  // a class's group: its slots shorter than two of the class's (`enframe`
+  // frames within the class's slot -- get_meta's check -- what a slot of a
+  // group mapped on its own leaves past it; `alloc_group` maps one slot
+  // only for a class past half a page)
+  span: (A.metas[g].sizeclass < 48 -> stride(A.metas[g]) < 2 * (UNIT * size_classes[A.metas[g].sizeclass]))
 
 pred used_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat]) =
   all k: nat. k < len(A.used) -> group_ok(A, m, blocks, A.used[k])
