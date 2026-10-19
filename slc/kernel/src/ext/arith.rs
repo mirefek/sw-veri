@@ -974,7 +974,10 @@ impl Congruence {
             }
             // (an entry whose arguments' classes changed: also under its
             // arguments' representatives -- f(a), f(b) one class)
-            let entries: Vec<(Term, Term)> = cc.rep.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            // (in an order of their own: which entry claims a class first
+            // must not depend on the table's random seed)
+            let mut entries: Vec<(Term, Term)> = cc.rep.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by_key(|(k, v)| (k.shash(), v.shash()));
             for (k, v) in entries {
                 let k2 = match k.node() {
                     Node::App(_, a) | Node::Var(_, a) if !a.is_empty() => k.with_args(a.iter().map(|x| cc.canon(x)).collect()),

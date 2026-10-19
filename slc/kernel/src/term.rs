@@ -94,6 +94,12 @@ impl Term {
         &self.0.node
     }
 
+    /// The term's structural hash (the same in every run: an order for a
+    /// hash table's entries that does not depend on the table's seed).
+    pub fn shash(&self) -> u64 {
+        self.0.hash
+    }
+
     /// The term's label (metadata, see `Term`).
     pub fn label(&self) -> Option<&str> {
         self.0.label.as_deref()
