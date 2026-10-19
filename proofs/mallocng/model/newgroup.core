@@ -1329,3 +1329,115 @@ proof
   qed
   show by defs(taut(pd, g2, rewrite(sym(xe), pa)), mallocng.perms_ok)
 qed
+
+// the meta areas: as before, m's bytes (no longer taken) accessible
+theorem mp.ng_areas(c, A, k, T, m, V, n, M): A in mallocng.Abs -> T in list_type(omega) -> A.taken = seq_concat(T, seq_one(m)) ->
+  mallocng.areas_ok(c, A, M) ->
+  (all a. a in omega -> int_le(m, a) -> int_lt(a, int_add(m, mallocng.META_SIZE)) -> mallocng.m_rw(M, a) && !(snd(mallocng.pg(M, a)).kind = 2)) ->
+  mallocng.areas_ok(c, mp.ngrp(A, k, T, m, V, n), M)
+proof
+  assume ha ht hte h hv
+  let A2 := mp.ngrp(A, k, T, m, V, n)
+  have {hd = head, tl = tail, ea = each, ds = distinct, rs = reserve} := expand(h, mallocng.areas_ok)
+  have tlo: seq_len(T) in omega by arith(ht)
+  have lt: seq_len(A.taken) = int_add(seq_len(T), 1) := rewrite(sym(hte), (seq_len(seq_concat(T, seq_one(m))) = int_add(seq_len(T), 1) by arith(ht)))
+  have tm: A.taken[seq_len(T)] = m := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[seq_len(T)]}, ht))
+  // (a byte taken before: taken still, or m's)
+  have it: all a. mallocng.in_taken(A, a) -> mallocng.in_taken(A2, a) || int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) proof
+    fix a
+    assume h1
+    obtain i, hi hil h2 h3 from expand(h1, mallocng.in_taken)
+    have c1: int_lt(i, seq_len(T)) -> mallocng.in_taken(A2, a) proof
+      assume hl
+      have ti: A.taken[i] = T[i] := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[i]}, ht, hi, hl))
+      have tk: A2.taken = T by simp()
+      show by defs(ex_intro({i}, taut(hi, rewrite(sym(tk), hl), rewrite(sym(tk), rewrite(ti, h2)), rewrite(sym(tk), rewrite(ti, h3)))), mallocng.in_taken)
+    qed
+    have c2: i = seq_len(T) -> int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) proof
+      assume e
+      have tm2: A.taken[i] = m := rewrite(sym(e), tm, {1})
+      show by taut(rewrite(tm2, h2), rewrite(tm2, h3))
+    qed
+    show by taut(c1, c2, (int_lt(i, seq_len(T)) || i = seq_len(T) by arith(hi, hil, lt)))
+  qed
+  have e2: all x0. x0 in omega -> int_lt(x0, seq_len(A.areas)) -> ((((int_mod(A.areas[x0], 4096) = 0 && int_lt(0, A.areas[x0])) && mallocng.rd(M, A.areas[x0], 8) = A.secret) &&
+      mallocng.rd(M, int_add(A.areas[x0], 8), 8) = ite(int_lt(int_add(x0, 1), seq_len(A.areas)), A.areas[int_add(x0, 1)], 0)) && mallocng.rd(M, int_add(A.areas[x0], 16), 4) = mallocng.NSLOTS) &&
+      (all x1. x1 in omega -> (int_le(A.areas[x0], x1) && int_lt(x1, int_add(A.areas[x0], 4096))) && !mallocng.in_taken(A2, x1) -> mallocng.m_rw(M, x1) && !(snd(mallocng.pg(M, x1)).kind = 2)) proof
+    fix j
+    assume hj hjl
+    have q1 q2 q3 q4 q5 qr := mp(all_elim(ea, {j}), hj, hjl)
+    have r: all x1. x1 in omega -> (int_le(A.areas[j], x1) && int_lt(x1, int_add(A.areas[j], 4096))) && !mallocng.in_taken(A2, x1) -> mallocng.m_rw(M, x1) && !(snd(mallocng.pg(M, x1)).kind = 2) proof
+      fix a
+      assume hao hr
+      have hr1 hr2 nt := hr
+      have d1: mallocng.in_taken(A, a) -> mallocng.m_rw(M, a) && !(snd(mallocng.pg(M, a)).kind = 2) proof
+        assume tk
+        have w1 w2 := (int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) by taut(mp(all_elim(it, {a}), tk), nt))
+        show := mp(all_elim(hv, {a}), hao, w1, w2)
+      qed
+      have d2: !mallocng.in_taken(A, a) -> mallocng.m_rw(M, a) && !(snd(mallocng.pg(M, a)).kind = 2) proof
+        assume tk
+        show := mp(all_elim(qr, {a}), hao, conj(conj(hr1, hr2), tk))
+      qed
+      show by taut(d1, d2)
+    qed
+    show by taut(q1, q2, q3, q4, q5, r)
+  qed
+  show by defs(simp(hd, tl, e2, ds, rs), mallocng.areas_ok)
+qed
+
+// ----------------------------------------------------------------------
+//  The invariant for the new state
+
+// the invariant after a group made from the meta taken last: the old
+// groups' bytes and records as before, the new group's clauses, the
+// memory's own (the image, the context, the tables) given
+theorem mp.ng_holds(c, A, k, T, m, V, n, M, M2, b, brk, brk2): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs ->
+  b in fn_space(bits(64), option(omega)) -> mallocng.holds(c, A, M, b, brk) ->
+  T in list_type(omega) -> A.taken = seq_concat(T, seq_one(m)) -> !(m = 0) -> V in mallocng.MetaV -> n in omega ->
+  k in omega -> int_le(k, seq_len(A.used)) ->
+  (all j. j in omega -> int_lt(j, k) -> int_lt(A.used[j], m)) -> (all j. j in omega -> int_le(k, j) -> int_lt(j, seq_len(A.used)) -> int_lt(m, A.used[j])) ->
+  (all a. a in omega -> mp.ingrp(A, a) -> M2[a] = M[a]) ->
+  (all g. all a. mallocng.is_used(A, g) -> a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> M2[a] = M[a]) ->
+  mallocng.group_ok(mp.ngrp(A, k, T, m, V, n), M2, b, m) ->
+  mallocng.image_ok(c, M2) -> mallocng.ctx_ok(c, mp.ngrp(A, k, T, m, V, n), M2) -> mallocng.fresh_ok(c, mp.ngrp(A, k, T, m, V, n), M2) ->
+  mallocng.areas_ok(c, A, M2) ->
+  (all a. a in omega -> int_le(m, a) -> int_lt(a, int_add(m, mallocng.META_SIZE)) -> mallocng.m_rw(M2, a) && !(snd(mallocng.pg(M2, a)).kind = 2)) ->
+  mallocng.brk_ok(mp.ngrp(A, k, T, m, V, n), brk2) -> mallocng.perms_ok(c, A, M2, b) ->
+  (all a. a in omega -> mallocng.in_range(a, mallocng.group_range(V)) -> !(a in malloc.live_of(b)) -> mallocng.m_rw(M2, a) && !(snd(mallocng.pg(M2, a)).kind = 2)) ->
+  mallocng.classes_ok(c, M2) -> mallocng.debruijn_ok(c, M2) ->
+  (int_lt(0, V.maplen) -> all i. i in omega -> int_lt(i, seq_len(mallocng.regions(c, A))) -> mallocng.apart(mallocng.group_range(V), mallocng.regions(c, A)[i])) ->
+  (all a. a in omega -> mallocng.in_range(a, mallocng.group_range(V)) -> !mallocng.in_ranges(a, mallocng.fixed_ranges(c, A))) ->
+  mallocng.holds(c, mp.ngrp(A, k, T, m, V, n), M2, b, brk2)
+proof
+  assume hc hu ha hb H ht hte hmz hv hn hk hkl hlo hhi gbs rcs gm img cok fr ar mrw bk pm gpm cl db sep apt
+  let A2 := mp.ngrp(A, k, T, m, V, n)
+  have {hp = part, huo = used, hac = active, hpa = partial, hre = reuse, hbl = in_slots, hnm = normal, hsp = sep, hwf = wf, hff = fixed, hga = apart} :=
+    expand(H, mallocng.holds)
+  // (m: the last taken, not in use)
+  have {htk = taken} := expand(hp, mallocng.metas_partition)
+  have tl: A.taken in list_type(omega) by simp(ha)
+  have tlo: seq_len(T) in omega by arith(ht)
+  have lt: seq_len(A.taken) = int_add(seq_len(T), 1) := rewrite(sym(hte), (seq_len(seq_concat(T, seq_one(m))) = int_add(seq_len(T), 1) by arith(ht)))
+  have tm: A.taken[seq_len(T)] = m := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[seq_len(T)]}, ht))
+  have hm: m in omega := rewrite(tm, apply(at_type[l := A.taken, t := omega, i := seq_len(T)], tl, tlo, (int_lt(seq_len(T), seq_len(A.taken)) by arith(lt))))
+  have _ mnu0 _ _ _ := mp(all_elim(htk, {seq_len(T)}), tlo, (int_lt(seq_len(T), seq_len(A.taken)) by arith(lt)))
+  have nm := rewrite(tm, mnu0)
+  have {au = abs, uu = univ} := apply(mp.ngrp_type[A := A, k := k, T := T, m := m, V := V, n := n], ha, hk, hkl, ht, hm, hv, hn)
+  // the groups: the old ones on the new memory, then in the new state
+  have er: A.metas = A.metas && A.slots = A.slots && A.used = A.used && A.active = A.active by simp()
+  have e1 e2 e3 e4 := er
+  have u1 := apply(mp.used_tr[A := A, A2 := A, M := M, M2 := M2, b := b], ha, hb, e1, e2, e3, e4, huo, gbs, rcs)
+  have p1 := apply(mp.partial_tr[A := A, A2 := A, M := M, M2 := M2, b := b], ha, e1, e4, hac, huo, hpa, gbs)
+  have u2 := apply(mp.ng_used_ok[A := A, k := k, T := T, m := m, V := V, n := n, M := M2, b := b], ha, hk, hkl, hm, nm, u1, gm)
+  have {a2 = active, p2 = partial, r2 = reuse, b2 = in_slots} := apply(mp.ng_lists[A := A, k := k, T := T, m := m, V := V, n := n, M := M2, b := b],
+    ha, hk, hkl, hm, nm, hac, p1, hre, hbl)
+  have pt2 := apply(mp.ng_part[A := A, k := k, T := T, m := m, V := V, n := n], ha, hp, ht, hte, hk, hkl, hlo, hhi)
+  have nm2 := apply(mp.ng_normal[A := A, k := k, T := T, m := m, V := V, n := n], ha, hnm, hk, hkl, hm, hmz)
+  have ar2 := apply(mp.ng_areas[c := c, A := A, k := k, T := T, m := m, V := V, n := n, M := M2], ha, ht, hte, ar, mrw)
+  have pm2 := apply(mp.ng_perms[c := c, A := A, k := k, T := T, m := m, V := V, n := n, M := M2, b := b], ha, hk, hkl, hm, nm, hn, pm, gpm)
+  have sp2 := apply(mp.ng_sep[c := c, A := A, k := k, T := T, m := m, V := V, n := n], hc, hu, ha, hk, hkl, hm, nm, uu, au, hsp, sep)
+  have ff2 := apply(mp.ng_fixed[c := c, A := A, k := k, T := T, m := m, V := V, n := n, b := b], hff)
+  have ga2 := apply(mp.ng_apart[c := c, A := A, k := k, T := T, m := m, V := V, n := n], ha, hk, hkl, hm, nm, hga, apt)
+  show by defs(taut(img, cok, fr, ar2, pt2, u2, a2, p2, r2, b2, nm2, bk, pm2, sp2, hwf, cl, db, ff2, ga2), mallocng.holds)
+qed
