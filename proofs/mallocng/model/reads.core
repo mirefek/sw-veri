@@ -176,7 +176,7 @@ proof
   let M := mallocng.mview(vm, FP)
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {huo = used, co = classes, ff = fixed, hga = apart} := expand(H, mallocng.holds)
-  have co1 co2 co3 := expand(co, mallocng.classes_ok)
+  have co1 co2 co3 _ := expand(co, mallocng.classes_ok)
   have {ff2 = classes} := expand(ff, mallocng.fixed_free)
   have so: c.sct in omega by simp(hc)
   obtain ri, hri hril hr1 hr2 from co3
@@ -680,3 +680,101 @@ proof
   have bb := mp(fn_space_app[a := bits(64), b := bits(8), f := vm.bytes, x := bits_of_int(64, a)], hb, simp())
   show by taut(e, rewrite(sym(e), (vm.bytes[bits_of_int(64, a)] in omega by simp(bb))))
 qed
+
+// the slot counts' tables: intact on a view agreeing at the image's
+// read-only bytes
+theorem mp.counts_tr(c, M, M2): c in mallocng.Cfg -> mallocng.counts_ok(c, M) ->
+  (all i. all a. i in omega -> a in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) -> M2[a] = M[a]) ->
+  mallocng.counts_ok(c, M2)
+proof
+  assume hc hk ro
+  have {ks = small, km = med, kr = read, kso = ro_small, kmo = ro_med} := expand(hk, mallocng.counts_ok)
+  have sco: c.scnt in omega by simp(hc)
+  have mco: c.mcnt in omega by simp(hc)
+  obtain si, hsi hsil s1 s2 from kso
+  obtain mi, hmi hmil m1 m2 from kmo
+  have ags: all a. a in omega -> int_le(c.scnt, a) -> int_lt(a, int_add(c.scnt, 27)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    show := mp(all_elim(ro, {si}, {a}), hsi, hao, hsil, (mallocng.in_range(a, mallocng.ro_ranges(c.file)[si]) by defs(arith(s1, s2, h1, h2), mallocng.in_range)))
+  qed
+  have agm: all a. a in omega -> int_le(c.mcnt, a) -> int_lt(a, int_add(c.mcnt, 4)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    show := mp(all_elim(ro, {mi}, {a}), hmi, hao, hmil, (mallocng.in_range(a, mallocng.ro_ranges(c.file)[mi]) by defs(arith(m1, m2, h1, h2), mallocng.in_range)))
+  qed
+  have v1: all x0. x0 in omega -> int_lt(x0, 27) -> mallocng.b8(M2, int_add(c.scnt, x0)) = mallocng.small_cnt_tab[x0] proof
+    fix i
+    assume hi hil
+    have {eb = byte} := apply(mp.agree_b8, mp(all_elim(ags, {int_add(c.scnt, i)}), arith(sco, hi), arith(sco, hi), arith(sco, hi, hil)))
+    show := trans(eb, mp(all_elim(ks, {i}), hi, hil))
+  qed
+  have v2: all x0. x0 in omega -> int_lt(x0, 4) -> mallocng.b8(M2, int_add(c.mcnt, x0)) = mallocng.med_cnt_tab[x0] proof
+    fix i
+    assume hi hil
+    have {eb = byte} := apply(mp.agree_b8, mp(all_elim(agm, {int_add(c.mcnt, i)}), arith(mco, hi), arith(mco, hi), arith(mco, hi, hil)))
+    show := trans(eb, mp(all_elim(km, {i}), hi, hil))
+  qed
+  have p2: all x0. x0 in omega -> (int_le(c.scnt, x0) && int_lt(x0, int_add(c.scnt, 27))) || (int_le(c.mcnt, x0) && int_lt(x0, int_add(c.mcnt, 4))) ->
+      (mallocng.m_mapped(M2, x0) && snd(mallocng.pg(M2, x0)).prot.r) && !(snd(mallocng.pg(M2, x0)).kind = 2) proof
+    fix a
+    assume ha hr
+    have ag: M2[a] = M[a] proof
+      have d1: int_le(c.scnt, a) && int_lt(a, int_add(c.scnt, 27)) -> M2[a] = M[a] proof
+        assume w
+        have w1 w2 := w
+        show := mp(all_elim(ags, {a}), ha, w1, w2)
+      qed
+      have d2: int_le(c.mcnt, a) && int_lt(a, int_add(c.mcnt, 4)) -> M2[a] = M[a] proof
+        assume w
+        have w1 w2 := w
+        show := mp(all_elim(agm, {a}), ha, w1, w2)
+      qed
+      show by taut(hr, d1, d2)
+    qed
+    have {ep = page} := apply(mp.agree_b8, ag)
+    have o := mp(all_elim(kr, {a}), ha, hr)
+    show by defs(rewrite(sym(ep), expand(o, mallocng.m_mapped)), mallocng.m_mapped)
+  qed
+  show by defs(taut(v1, v2, p2, kso, kmo), mallocng.counts_ok)
+qed
+
+// the class tables, a_ctz_32's table: intact on a view agreeing at the
+// image's read-only bytes
+theorem mp.classes_tr(c, M, M2): c in mallocng.Cfg -> mallocng.classes_ok(c, M) ->
+  (all i. all a. i in omega -> a in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) -> M2[a] = M[a]) ->
+  mallocng.classes_ok(c, M2)
+proof
+  assume hc hcl ro
+  have k1 k2 k3 kc := expand(hcl, mallocng.classes_ok)
+  have ag: all a. a in omega -> int_le(c.sct, a) -> int_lt(a, int_add(c.sct, 96)) -> M2[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    obtain i, hi hil r1 r2 from k3
+    have inr: mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) by defs(arith(r1, r2, h1, h2), mallocng.in_range)
+    show := mp(all_elim(ro, {i}, {a}), hi, hao, hil, inr)
+  qed
+  have kc2 := apply(mp.counts_tr, hc, kc, ro)
+  have so: c.sct in omega by simp(hc)
+  have v2: all x0. x0 in omega -> int_lt(x0, 48) -> mallocng.rd(M2, int_add(c.sct, int_mul(2, x0)), 2) = mallocng.size_classes[x0] proof
+    fix i
+    assume hi hil
+    have ai: all j. j in omega -> int_lt(j, 2) -> M2[int_add(int_add(c.sct, int_mul(2, i)), j)] = M[int_add(int_add(c.sct, int_mul(2, i)), j)] proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(ag, {int_add(int_add(c.sct, int_mul(2, i)), j)}), simp(so, hi, hj), arith(so, hi, hj), arith(so, hi, hil, hj, hjl))
+    qed
+    show := trans(apply(mp.agree_rd, simp(), ai), mp(all_elim(k1, {i}), hi, hil))
+  qed
+  have p2: all x0. x0 in omega -> int_le(c.sct, x0) && int_lt(x0, int_add(c.sct, int_mul(2, 48))) ->
+      (mallocng.m_mapped(M2, x0) && snd(mallocng.pg(M2, x0)).prot.r) && !(snd(mallocng.pg(M2, x0)).kind = 2) proof
+    fix a
+    assume ha hr
+    have r1 r2 := hr
+    have {ep = page} := apply(mp.agree_b8, mp(all_elim(ag, {a}), ha, r1, arith(r2)))
+    have o := mp(all_elim(k2, {a}), ha, hr)
+    show by defs(rewrite(sym(ep), expand(o, mallocng.m_mapped)), mallocng.m_mapped)
+  qed
+  show by defs(taut(v2, p2, k3, kc2), mallocng.classes_ok)
+qed
+

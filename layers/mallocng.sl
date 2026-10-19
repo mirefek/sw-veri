@@ -36,6 +36,8 @@ record Cfg {
   libc : nat      // __libc
   sct  : nat      // __malloc_size_classes (read-only)
   dbj  : nat      // a_ctz_32's debruijn32 (read-only)
+  scnt : nat      // alloc_group's small_cnt_tab (read-only)
+  mcnt : nat      // alloc_group's med_cnt_tab (read-only)
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -101,6 +103,12 @@ const size_classes : List[nat] = [
   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 18, 20, 25, 31,
   36, 42, 50, 63, 72, 84, 102, 127, 146, 170, 204, 255, 292, 340, 409, 511,
   584, 682, 818, 1023, 1169, 1364, 1637, 2047, 2340, 2730, 3276, 4095, 4680, 5460, 6552, 8191]
+
+// malloc.c's slot counts for a new group (alloc_group's): small_cnt_tab's
+// rows of 3 for the classes up to 8, med_cnt_tab's by the class mod 4
+const small_cnt_tab : List[nat] = [
+  30, 30, 30, 31, 15, 15, 20, 10, 10, 31, 15, 7, 25, 12, 6, 21, 10, 5, 18, 8, 4, 31, 15, 7, 28, 14, 6]
+const med_cnt_tab : List[nat] = [28, 24, 20, 32]
 
 // malloc.c's debruijn32 (a_ctz_32's, at a de Bruijn sequence's positions)
 const debruijn32_tab : List[nat] = [
@@ -502,7 +510,16 @@ pred brk_ok(A: Abs, brk: Addr) =
 pred classes_ok(c: Cfg, m: Mem) =
   (all i: nat. i < 48 -> rd(m, c.sct + 2 * i, 2) = size_classes[i]) &&
   (all a: nat. c.sct <= a && a < c.sct + 2 * 48 -> m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack) &&
-  (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.sct && c.sct + 2 * 48 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1])
+  (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.sct && c.sct + 2 * 48 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1]) &&
+  counts: counts_ok(c, m)
+
+// the slot counts' tables: the same
+pred counts_ok(c: Cfg, m: Mem) =
+  small: (all i: nat. i < 27 -> b8(m, c.scnt + i) = small_cnt_tab[i]) && med: (all i: nat. i < 4 -> b8(m, c.mcnt + i) = med_cnt_tab[i]) &&
+  read: (all a: nat. (c.scnt <= a && a < c.scnt + 27) || (c.mcnt <= a && a < c.mcnt + 4) ->
+     m_mapped(m, a) && pg(m, a).value.prot.r && pg(m, a).value.kind != stack) &&
+  ro_small: (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.scnt && c.scnt + 27 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1]) &&
+  ro_med: (ex i: nat. i < phnum(c.file) && ro_ranges(c.file)[i][0] <= c.mcnt && c.mcnt + 4 <= ro_ranges(c.file)[i][0] + ro_ranges(c.file)[i][1])
 
 // a_ctz_32's table (the code reads it): the same
 pred debruijn_ok(c: Cfg, m: Mem) =
