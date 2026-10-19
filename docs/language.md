@@ -557,6 +557,10 @@ goes, in order:
   --, and the state's record fields are simplified;
 - through a local's choice of a word (`any_rel`), and an `if`'s outcome
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
+  an `if`'s outcome with no name left is opened when c is decided (below),
+  its branch then giving x, K at it, x gone -- nested `if`s in one step,
+  the conditions all in `with` (else step stops before the `ex`; a join of
+  the cases before K, as `obtain x, t k` and the cases stepped from t);
   a spec's choice (`havoc .. where d`) by a `with` fact `ex x. d(x)` (d as
   written or simplified), d of the name kept as a last conjunct;
 - through a program by its run lemma: a `with` lemma `all xs. H.. ->

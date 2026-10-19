@@ -2977,10 +2977,33 @@ impl State {
                 }
                 cur = and_part(env, &h, true)?;
             } else if f == lg.ex {
-                if xs.is_empty() {
+                if let Some(n) = xs.pop_front() {
+                    cur = self.obtain_one(env, lg, cur, &n)?;
+                    continue;
+                }
+                // (an `if`'s outcome x, unnamed: opened when the `if` is
+                // decided -- its branch then gives x, K at it, x gone)
+                let saved = cur.clone();
+                cur = self.obtain_one(env, lg, cur, "_x")?;
+                let decided = if_shape(&cur) && {
+                    let c = head(cur.concl()).and_then(|(_, ka)| {
+                        let (_, oa) = head(&ka[0])?;
+                        let (_, la) = head(&oa[0])?;
+                        let (_, ra) = head(&oa[1])?;
+                        Some((la[0].clone(), ra[0].clone()))
+                    });
+                    let mut u2 = used.clone();
+                    c.is_some_and(|(c, c2)| {
+                        self.step_decide(env, lg, &c, &withs, &is_op, &mut u2, &using).is_some()
+                            || self.step_decide(env, lg, &c2, &withs, &is_op, &mut u2, &using).is_some()
+                    })
+                };
+                if !decided {
+                    self.frames.pop();
+                    self.scope.pop();
+                    cur = saved;
                     break;
                 }
-                cur = self.obtain_one(env, lg, cur, &xs.pop_front().unwrap())?;
             } else if if_shape(&cur) {
                 let h = cur.clone();
                 // an `if`'s outcome: ((c && T) || (c2 && E)) && K(x)

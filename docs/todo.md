@@ -30,8 +30,7 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already
-  accepts a loop exiting into the next loop's head (uncommitted in
-  slc/cli/src/c1/gref/gloop.rs). Later: nested loops, a head reached at
+  accepts a loop exiting into the next loop's head. Later: nested loops, a head reached at
   two structured loops, a callee refined inside a walk with loops of its
   own.
 - alloc_group's CFG C1: stops at 404413, a byte store of `dl`
