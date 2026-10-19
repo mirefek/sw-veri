@@ -668,3 +668,134 @@ proof
   qed
   show by defs(r, mallocng.used_ok)
 qed
+
+// ----------------------------------------------------------------------
+//  The new group's own clauses
+
+// (the bits from a below b)
+theorem mp.bit_range(a, b, i): a in omega -> b in omega -> int_le(a, b) -> i in omega ->
+  (bit(int_sub(pow2(b), pow2(a)), i) <-> int_le(a, i) && int_lt(i, b))
+proof
+  assume ha hb hab hi
+  let d := int_sub(b, a)
+  have do: d in omega by arith(hab, ha, hb)
+  have sp := apply(pow2_split[a := a, b := b], ha, hb, hab)
+  have pd := mp(pow2_pos[k := d], do)
+  have e: int_sub(pow2(b), pow2(a)) = int_mul(int_sub(pow2(d), 1), pow2(a)) by arith(sp)
+  have bm := apply(bit_mul[x := int_sub(pow2(d), 1), k := a, i := i], (int_sub(pow2(d), 1) in omega by arith(pd)), ha, hi)
+  have c1: int_le(a, i) -> (bit(int_sub(pow2(d), 1), int_sub(i, a)) <-> int_lt(i, b)) proof
+    assume h
+    have k := apply(bit_mask[k := d, i := int_sub(i, a)], do, (int_sub(i, a) in omega by arith(h, hi, ha)))
+    show by taut(k, (int_lt(int_sub(i, a), d) <-> int_lt(i, b) by arith(h)))
+  qed
+  show by taut(rewrite(sym(e), bm), c1)
+qed
+
+// a group made with its slots up to the active index x available, the
+// others freed, all unused, their check bytes 0: its masks
+theorem mp.ng_masks(A2, M, m, n): A2.slots[m] = fn_build(n, i. tag(0, empty)) -> n = int_add(A2.metas[m].last_idx, 1) -> A2.metas[m].last_idx in omega ->
+  int_le(int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32), A2.metas[m].last_idx) ->
+  A2.metas[m].avail = int_sub(pow2(int_add(int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32), 1)), 1) ->
+  A2.metas[m].freed = int_sub(pow2(int_add(A2.metas[m].last_idx, 1)), pow2(int_add(int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32), 1))) ->
+  (all i. i in omega -> int_le(i, A2.metas[m].last_idx) -> mallocng.b8(M, int_sub(mallocng.slot_start(A2.metas[m], i), 4)) = 0) ->
+  mallocng.masks_ok(A2, M, m)
+proof
+  assume es en hl hx eav efr chk
+  let W := A2.metas[m]
+  let X := int_mod(mallocng.b8(M, int_add(W.mem, 8)), 32)
+  let L := W.last_idx
+  have xo: X in omega by arith(hx, hl)
+  have no: n in omega by arith(en, hl)
+  have r: all x0. x0 in omega -> int_lt(x0, 32) ->
+      (((mallocng.bit(W.avail, x0) = 1 -> int_le(x0, X) && mallocng.bit(W.freed, x0) = 0) &&
+        (int_lt(0, int_add(mallocng.bit(W.avail, x0), mallocng.bit(W.freed, x0))) -> int_le(x0, L))) &&
+       (int_le(x0, L) -> (A2.slots[m][x0] = tag(0, empty) <-> int_lt(0, int_add(mallocng.bit(W.avail, x0), mallocng.bit(W.freed, x0)))) &&
+          mallocng.b8(M, int_sub(mallocng.slot_start(W, x0), 4)) = 0)) &&
+      (int_lt(X, x0) && int_le(x0, L) -> mallocng.bit(W.freed, x0) = 1) proof
+    fix i
+    assume hi hil
+    have ba := rewrite(sym(eav), apply(bit_mask[k := int_add(X, 1), i := i], (int_add(X, 1) in omega by arith(xo)), hi))
+    have bf := rewrite(sym(efr), apply(mp.bit_range[a := int_add(X, 1), b := int_add(L, 1), i := i], (int_add(X, 1) in omega by arith(xo)),
+      (int_add(L, 1) in omega by arith(hl)), (int_le(int_add(X, 1), int_add(L, 1)) by arith(hx)), hi))
+    have na := apply(mp.nbit[x := W.avail, i := i], rewrite(sym(eav), (int_sub(pow2(int_add(X, 1)), 1) in omega by arith(mp(pow2_pos[k := int_add(X, 1)], (int_add(X, 1) in omega by arith(xo)))))), hi)
+    have nf := apply(mp.nbit[x := W.freed, i := i], rewrite(sym(efr), (int_sub(pow2(int_add(L, 1)), pow2(int_add(X, 1))) in omega by
+      arith(apply(pow2_le[a := int_add(X, 1), b := int_add(L, 1)], (int_add(X, 1) in omega by arith(xo)), (int_add(L, 1) in omega by arith(hl)), (int_le(int_add(X, 1), int_add(L, 1)) by arith(hx)))))), hi)
+    have su: int_le(i, L) -> A2.slots[m][i] = tag(0, empty) proof
+      assume h
+      have id := mp(nat_lt_mem[k := i, n := n], hi, no, (int_lt(i, n) by arith(en, h)))
+      show := rewrite(sym(es), mp(app_fn_build[d := n, v := i. tag(0, empty), a := i], id))
+    qed
+    have c1: int_lt(i, int_add(X, 1)) -> (mallocng.bit(W.avail, i) = 1 && mallocng.bit(W.freed, i) = 0) && int_lt(0, int_add(mallocng.bit(W.avail, i), mallocng.bit(W.freed, i))) proof
+      assume h
+      show by simp(na, nf, ba, bf, h)
+    qed
+    have c2: int_le(int_add(X, 1), i) -> int_lt(i, int_add(L, 1)) -> (mallocng.bit(W.avail, i) = 0 && mallocng.bit(W.freed, i) = 1) && int_lt(0, int_add(mallocng.bit(W.avail, i), mallocng.bit(W.freed, i))) proof
+      assume h1 h2
+      show by simp(na, nf, ba, bf, h1, h2, (!int_lt(i, int_add(X, 1)) by arith(h1)))
+    qed
+    have c3: int_le(int_add(L, 1), i) -> (mallocng.bit(W.avail, i) = 0 && mallocng.bit(W.freed, i) = 0) && !int_lt(0, int_add(mallocng.bit(W.avail, i), mallocng.bit(W.freed, i))) proof
+      assume h
+      show by simp(na, nf, ba, bf, (!int_lt(i, int_add(X, 1)) by arith(h, hx)), (!int_lt(i, int_add(L, 1)) by arith(h)))
+    qed
+    have k1: int_lt(i, int_add(X, 1)) -> int_le(i, L) by arith(hx)
+    show by taut(c1, c2, c3, k1, su, mp(all_elim(chk, {i}), hi), (int_lt(i, int_add(X, 1)) || int_le(int_add(X, 1), i) && int_lt(i, int_add(L, 1)) || int_le(int_add(L, 1), i) by arith(hi, xo)),
+      (int_lt(X, i) <-> int_le(int_add(X, 1), i) by arith(hi, xo)), (int_le(i, L) <-> int_lt(i, int_add(L, 1)) by arith(hi, hl)),
+      (int_lt(i, int_add(X, 1)) -> int_le(i, X) by arith(hi, xo)), (int_le(int_add(X, 1), i) <-> !int_lt(i, int_add(X, 1)) by arith(hi, xo)),
+      (int_le(int_add(L, 1), i) <-> !int_lt(i, int_add(L, 1)) by arith(hi, hl)), (mallocng.bit(W.avail, i) = 0 -> !(mallocng.bit(W.avail, i) = 1) by simp()))
+  qed
+  show by defs(r, mallocng.masks_ok)
+qed
+
+// the group made: its record in memory, its header pointing back, the
+// masks as made, its slots unused (their check bytes and the end 0), on no
+// list; mapped on its own or nested
+theorem mp.ng_self(A2, M, b, m, n): A2.slots[m] = fn_build(n, i. tag(0, empty)) -> n = int_add(A2.metas[m].last_idx, 1) -> A2.metas[m].last_idx in omega ->
+  mallocng.meta_in_memory(M, m, A2.metas[m]) -> int_lt(A2.metas[m].sizeclass, 48) ->
+  hdr: ((mallocng.rd(M, A2.metas[m].mem, 8) = m && int_mod(A2.metas[m].mem, mallocng.UNIT) = 0) && int_lt(0, A2.metas[m].mem)) ->
+  hdr_own: (all a. a in omega -> int_le(A2.metas[m].mem, a) && int_lt(a, int_add(A2.metas[m].mem, mallocng.UNIT)) -> !(a in malloc.live_of(b))) ->
+  act: int_le(int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32), A2.metas[m].last_idx) ->
+  A2.metas[m].avail = int_sub(pow2(int_add(int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32), 1)), 1) ->
+  A2.metas[m].freed = int_sub(pow2(int_add(A2.metas[m].last_idx, 1)), pow2(int_add(int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32), 1))) ->
+  small: (mallocng.stride(A2.metas[m]) = mallocng.UNIT -> int_mod(mallocng.b8(M, int_add(A2.metas[m].mem, 8)), 32) = A2.metas[m].last_idx) ->
+  mapped: (int_lt(0, A2.metas[m].maplen) -> int_mod(A2.metas[m].mem, 4096) = 0 &&
+     int_le(int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[m]), int_add(A2.metas[m].last_idx, 1))), int_mul(A2.metas[m].maplen, 4096))) ->
+  nested: (A2.metas[m].maplen = 0 -> (ex x0. ex x1. (x0 in omega && x1 in omega) &&
+     ((int_lt(x0, seq_len(A2.used)) && int_lt(x1, seq_len(A2.slots[A2.used[x0]]))) && A2.slots[A2.used[x0]][x1] = tag(2, m)))) ->
+  A2.metas[m].next = 0 -> A2.metas[m].prev = 0 ->
+  (all j. j in omega -> int_lt(j, seq_len(A2.active[A2.metas[m].sizeclass])) -> !(A2.active[A2.metas[m].sizeclass][j] = m)) ->
+  (all i. i in omega -> int_le(i, A2.metas[m].last_idx) -> mallocng.b8(M, int_sub(mallocng.slot_start(A2.metas[m], i), 4)) = 0) ->
+  sentinel: mallocng.b8(M, mallocng.slot_end(A2.metas[m], A2.metas[m].last_idx)) = 0 ->
+  chk_own: (all i. i in omega -> int_le(i, int_add(A2.metas[m].last_idx, 1)) -> !(int_sub(mallocng.slot_start(A2.metas[m], i), mallocng.IB) in malloc.live_of(b))) ->
+  offs: (int_lt(0, A2.metas[m].last_idx) -> int_le(int_mul(mallocng.stride(A2.metas[m]), int_add(A2.metas[m].last_idx, 1)), int_mul(int_pow(2, 16), mallocng.UNIT))) ->
+  mallocng.group_ok(A2, M, b, m)
+proof
+  assume es en hl mim cls hdr hown act eav efr small mapped nested enx epv nol chk sent chko offs
+  let W := A2.metas[m]
+  have msk := apply(mp.ng_masks[A2 := A2, M := M, m := m, n := n], es, en, hl, act, eav, efr, chk)
+  have no: n in omega by arith(en, hl)
+  have dn: seq_len(A2.slots[m]) = n by defs(rewrite(sym(es), fn_build_dom[d := n, v := i. tag(0, empty)]), seq_len)
+  have ns: seq_len(A2.slots[m]) = int_add(W.last_idx, 1) := trans(dn, en)
+  have n63: !(W.sizeclass = 63) proof
+    assume e
+    show by arith(rewrite(e, cls))
+  qed
+  have big: mallocng.big_ok(A2, m) by defs(taut(n63), mallocng.big_ok)
+  have lk: !(W.next = 0) <-> int_lt(W.sizeclass, 48) && (ex x0. x0 in omega && (int_lt(x0, seq_len(A2.active[W.sizeclass])) && A2.active[W.sizeclass][x0] = m)) proof
+    have n1: !(ex x0. x0 in omega && (int_lt(x0, seq_len(A2.active[W.sizeclass])) && A2.active[W.sizeclass][x0] = m)) proof
+      assume e
+      obtain j, hj hjl hje from e
+      show by taut(mp(all_elim(nol, {j}), hj, hjl), hje)
+    qed
+    show by taut(enx, n1)
+  qed
+  have ul: W.next = 0 -> W.prev = 0 by taut(epv)
+  have sl: all x0. x0 in omega -> int_lt(x0, seq_len(A2.slots[m])) -> mallocng.slot_ok(A2, M, b, m, x0, A2.slots[m][x0]) proof
+    fix i
+    assume hi hil
+    have id := mp(nat_lt_mem[k := i, n := n], hi, no, rewrite(dn, hil))
+    have e := rewrite(sym(es), mp(app_fn_build[d := n, v := i. tag(0, empty), a := i], id))
+    show by defs(simp(e), mallocng.slot_ok)
+  qed
+  have cl: int_lt(W.sizeclass, 48) || W.sizeclass = 63 by taut(cls)
+  show by defs(taut(mim, cl, hdr, hown, act, ns, msk, small, mapped, nested, big, lk, ul, sl, sent, chko, offs), mallocng.group_ok)
+qed
