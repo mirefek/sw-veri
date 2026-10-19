@@ -820,6 +820,30 @@ proof
   show by taut(hne, trans(sym(h), f))
 qed
 
+// a nested group in slot j of h: framed there, at or past the slot's start,
+// its slots' end within the slot
+theorem mp.nest_start(A, M, b, h, j): A in mallocng.Abs -> h in omega -> mallocng.group_ok(A, M, b, h) -> j in omega -> int_lt(j, seq_len(A.slots[h])) ->
+  fst(A.slots[h][j]) = 2 ->
+  start: int_le(mallocng.slot_start(A.metas[h], j), A.metas[snd(A.slots[h][j])].mem) &&
+  fits: int_le(int_add(A.metas[snd(A.slots[h][j])].mem, int_sub(int_add(mallocng.UNIT, int_mul(mallocng.stride(A.metas[snd(A.slots[h][j])]),
+    int_add(A.metas[snd(A.slots[h][j])].last_idx, 1))), mallocng.IB)), mallocng.slot_end(A.metas[h], j))
+proof
+  assume ha hh gok hk hkl e2
+  have {slots = slots} := expand(gok, mallocng.group_ok)
+  have sok := mp(all_elim(slots, {j}), hk, hkl)
+  have slt: A.slots[h] in list_type(mallocng.Use) := mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := h], simp(ha), hh)
+  have ut := apply(at_type[l := A.slots[h], t := mallocng.Use, i := j], slt, hk, hkl)
+  let H3 := snd(A.slots[h][j])
+  let W3 := A.metas[H3]
+  have ue: A.slots[h][j] = tag(2, H3) by simp(apply(mp.use_eta, ut), e2)
+  have s0: ((mallocng.is_used(A, H3) && W3.maplen = 0) && mallocng.hdr_free(b, W3.mem)) &&
+      mallocng.frame_ok(M, A.metas[h], j, W3.mem, int_sub(int_add(mallocng.UNIT, int_mul(mallocng.stride(W3), int_add(W3.last_idx, 1))), mallocng.IB), 6)
+    by simp(expand(rewrite(ue, sok), mallocng.slot_ok))
+  have _ _ _ fo := s0
+  have {st = start, ft = fits} := expand(fo, mallocng.frame_ok)
+  show by taut(st, ft)
+qed
+
 // group h of A, its bytes (from its header to its last slot's end) the
 // same in M2, its meta words, masks and links given anew: group h of A2 --
 // A2 of the same geometry
@@ -830,7 +854,7 @@ theorem mp.group_tr_s(A, A2, M, M2, b, h): A in mallocng.Abs -> b in fn_space(bi
      !(a = int_add(A.metas[h].mem, 8)) ->
      (all j. j in omega -> int_lt(j, seq_len(A.slots[h])) ->
         ((A.slots[h][j] = tag(0, empty) || A.slots[h][j] = tag(3, empty)) -> !mallocng.in_slot(A.metas[h], j, a)) &&
-        (fst(A.slots[h][j]) = 2 -> !(int_le(mallocng.slot_start(A.metas[h], j), a) && int_lt(a, mallocng.slot_end(A.metas[h], j))))) ->
+        (fst(A.slots[h][j]) = 2 -> !(int_le(A.metas[snd(A.slots[h][j])].mem, a) && int_lt(a, mallocng.slot_end(A.metas[h], j))))) ->
      M2[a] = M[a]) ->
   mallocng.meta_in_memory(M2, h, A2.metas[h]) -> mallocng.masks_ok(A2, M2, h) -> mallocng.big_ok(A2, h) -> mp.links_ok(A2, h) ->
   int_le(int_mod(mallocng.b8(M2, int_add(A2.metas[h].mem, 8)), 32), A2.metas[h].last_idx) ->
@@ -863,18 +887,39 @@ proof
   have ml: int_mul(S, V.last_idx) in omega by simp(sn, vlast)
   have seo: SE in omega by arith(seE, ml, vmem, sn)
   // (a byte before each slot's header or past its end: in no slot's interior)
+  // (a nested group: at or past its slot's start)
+  have nmem: all k. k in omega -> int_lt(k, seq_len(A.slots[h])) -> fst(A.slots[h][k]) = 2 ->
+      int_le(mallocng.slot_start(V, k), A.metas[snd(A.slots[h][k])].mem) proof
+    fix k
+    assume hk hkl e2
+    have sok := mp(all_elim(slots, {k}), hk, hkl)
+    have slt: A.slots[h] in list_type(mallocng.Use) := mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := h], simp(ha), hh)
+    have ut := apply(at_type[l := A.slots[h], t := mallocng.Use, i := k], slt, hk, hkl)
+    let H3 := snd(A.slots[h][k])
+    let W3 := A.metas[H3]
+    have ue: A.slots[h][k] = tag(2, H3) by simp(apply(mp.use_eta, ut), e2)
+    have s0: ((mallocng.is_used(A, H3) && W3.maplen = 0) && mallocng.hdr_free(b, W3.mem)) &&
+        mallocng.frame_ok(M, V, k, W3.mem, int_sub(int_add(mallocng.UNIT, int_mul(mallocng.stride(W3), int_add(W3.last_idx, 1))), mallocng.IB), 6)
+      by simp(expand(rewrite(ue, sok), mallocng.slot_ok))
+    have _ _ _ fo := s0
+    have {st = start} := expand(fo, mallocng.frame_ok)
+    show := st
+  qed
   have zn: all a. a in omega -> (all j. j in omega -> int_lt(j, seq_len(A.slots[h])) ->
         int_le(a, int_sub(mallocng.slot_start(V, j), 4)) || int_le(mallocng.slot_end(V, j), a)) ->
       (all j. j in omega -> int_lt(j, seq_len(A.slots[h])) ->
         ((A.slots[h][j] = tag(0, empty) || A.slots[h][j] = tag(3, empty)) -> !mallocng.in_slot(V, j, a)) &&
-        (fst(A.slots[h][j]) = 2 -> !(int_le(mallocng.slot_start(V, j), a) && int_lt(a, mallocng.slot_end(V, j))))) proof
+        (fst(A.slots[h][j]) = 2 -> !(int_le(A.metas[snd(A.slots[h][j])].mem, a) && int_lt(a, mallocng.slot_end(V, j))))) proof
     fix a
     assume hao hd
     fix j
     assume hj hjl
     have d := mp(all_elim(hd, {j}), hj, hjl)
     have n1: !mallocng.in_slot(V, j, a) by defs(arith(d, ci), mallocng.in_slot)
-    have n2: !(int_le(mallocng.slot_start(V, j), a) && int_lt(a, mallocng.slot_end(V, j))) by arith(d)
+    have n2: fst(A.slots[h][j]) = 2 -> !(int_le(A.metas[snd(A.slots[h][j])].mem, a) && int_lt(a, mallocng.slot_end(V, j))) proof
+      assume f2
+      show by arith(d, mp(all_elim(nmem, {j}), hj, hjl, f2))
+    qed
     show by taut(n1, n2)
   qed
   // the header's word and active index, the last slot's end: as before
@@ -950,11 +995,11 @@ proof
         assume hao h1 h2
         have z: all k. k in omega -> int_lt(k, seq_len(A.slots[h])) ->
             ((A.slots[h][k] = tag(0, empty) || A.slots[h][k] = tag(3, empty)) -> !mallocng.in_slot(V, k, a)) &&
-            (fst(A.slots[h][k]) = 2 -> !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k)))) proof
+            (fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k)))) proof
           fix k
           assume hk hkl
           have ki: k = i -> ((A.slots[h][k] = tag(0, empty) || A.slots[h][k] = tag(3, empty)) -> !mallocng.in_slot(V, k, a)) &&
-              (fst(A.slots[h][k]) = 2 -> !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k)))) proof
+              (fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k)))) proof
             assume e
             have u1: fst(A.slots[h][k]) = 1 by simp(e, ue)
             have n0 := conj(apply(mp.tag_ne[u := A.slots[h][k], k := 1, x := 0, v := empty], u1, simp()),
@@ -962,11 +1007,14 @@ proof
             show by taut(n0, (!(fst(A.slots[h][k]) = 2) by simp(u1)))
           qed
           have kn: !(k = i) -> ((A.slots[h][k] = tag(0, empty) || A.slots[h][k] = tag(3, empty)) -> !mallocng.in_slot(V, k, a)) &&
-              (fst(A.slots[h][k]) = 2 -> !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k)))) proof
+              (fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k)))) proof
             assume ne
             have o := mp(all_elim(mp(all_elim(oth, {a}), hao, h1, h2), {k}), hk, hkl, ne)
             have n1: !mallocng.in_slot(V, k, a) by defs(arith(o, ci), mallocng.in_slot)
-            have n2: !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k))) by arith(o)
+            have n2: fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k))) proof
+              assume f2
+              show by arith(o, mp(all_elim(nmem, {k}), hk, hkl, f2))
+            qed
             show by taut(n1, n2)
           qed
           show by taut(ki, kn)
@@ -986,11 +1034,10 @@ proof
       have ue: u = tag(2, H2) by simp(apply(mp.use_eta, ut), e2)
       let W := A.metas[H2]
       let NW := int_sub(int_add(mallocng.UNIT, int_mul(mallocng.stride(W), int_add(W.last_idx, 1))), mallocng.IB)
-      have s0: ((((mallocng.is_used(A, H2) && W.maplen = 0) && W.mem = mallocng.slot_start(V, i)) &&
-          int_le(int_add(mallocng.UNIT, int_mul(mallocng.stride(W), int_add(W.last_idx, 1))), mallocng.stride(V))) && mallocng.hdr_free(b, W.mem)) &&
-          mallocng.frame_ok(M, V, i, W.mem, NW, 6)
+      have s0: ((mallocng.is_used(A, H2) && W.maplen = 0) && mallocng.hdr_free(b, W.mem)) && mallocng.frame_ok(M, V, i, W.mem, NW, 6)
         by simp(expand(rewrite(ue, so), mallocng.slot_ok))
-      have iu wm0 wme wst whf fo := s0
+      have iu wm0 whf fo := s0
+      have {fst0 = start, ffi = fits} := expand(fo, mallocng.frame_ok)
       have gw := apply(mp.used_group, uo, iu)
       have wn := apply(mp.stride_nat, ha, ho, gw)
       have wt: W in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := H2], simp(ha), ho)
@@ -999,32 +1046,34 @@ proof
       have mw: int_mul(mallocng.stride(W), int_add(W.last_idx, 1)) in omega by simp(wn, wl)
       have nwo: NW in omega by arith(mw, cu, ci)
       // (its frame: read below the nested group only -- in no slot's interior)
-      have s16: int_le(16, S) by arith(wst, mw, cu)
       have agn: all a. a in omega -> int_le(int_sub(mallocng.slot_start(V, i), 4), a) -> int_lt(a, W.mem) -> M2[a] = M[a] proof
         fix a
         assume hao h1 h2
-        have h2b: int_le(a, mallocng.slot_end(V, i)) by arith(h2, wme, ssi, sei, s16)
+        have h2b: int_le(a, mallocng.slot_end(V, i)) by arith(h2, ffi, nwo)
         have z: all k. k in omega -> int_lt(k, seq_len(A.slots[h])) ->
             ((A.slots[h][k] = tag(0, empty) || A.slots[h][k] = tag(3, empty)) -> !mallocng.in_slot(V, k, a)) &&
-            (fst(A.slots[h][k]) = 2 -> !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k)))) proof
+            (fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k)))) proof
           fix k
           assume hk hkl
           have ki: k = i -> ((A.slots[h][k] = tag(0, empty) || A.slots[h][k] = tag(3, empty)) -> !mallocng.in_slot(V, k, a)) &&
-              (fst(A.slots[h][k]) = 2 -> !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k)))) proof
+              (fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k)))) proof
             assume e
             have u2: fst(A.slots[h][k]) = 2 by simp(e, ue)
             have n0 := conj(apply(mp.tag_ne[u := A.slots[h][k], k := 2, x := 0, v := empty], u2, simp()),
               apply(mp.tag_ne[u := A.slots[h][k], k := 2, x := 3, v := empty], u2, simp()))
-            have n2i: !(int_le(mallocng.slot_start(V, i), a) && int_lt(a, mallocng.slot_end(V, i))) by arith(wme, h2, wmo)
+            have n2i: !(int_le(A.metas[snd(A.slots[h][i])].mem, a) && int_lt(a, mallocng.slot_end(V, i))) by arith(h2)
             have n2 := rewrite(sym(e), n2i)
             show by taut(n0, n2)
           qed
           have kn: !(k = i) -> ((A.slots[h][k] = tag(0, empty) || A.slots[h][k] = tag(3, empty)) -> !mallocng.in_slot(V, k, a)) &&
-              (fst(A.slots[h][k]) = 2 -> !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k)))) proof
+              (fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k)))) proof
             assume ne
             have o := mp(all_elim(mp(all_elim(oth, {a}), hao, h1, h2b), {k}), hk, hkl, ne)
             have n1: !mallocng.in_slot(V, k, a) by defs(arith(o, ci), mallocng.in_slot)
-            have n2: !(int_le(mallocng.slot_start(V, k), a) && int_lt(a, mallocng.slot_end(V, k))) by arith(o)
+            have n2: fst(A.slots[h][k]) = 2 -> !(int_le(A.metas[snd(A.slots[h][k])].mem, a) && int_lt(a, mallocng.slot_end(V, k))) proof
+              assume f2
+              show by arith(o, mp(all_elim(nmem, {k}), hk, hkl, f2))
+            qed
             show by taut(n1, n2)
           qed
           show by taut(ki, kn)
@@ -1037,7 +1086,7 @@ proof
       have f2 := apply(mp.frame_agree6[M := M, M2 := M2, v := V, v2 := V2, i := i, p := W.mem, n := NW], fo, s1, s2, sg, fs, sso, s5, wmo, agn)
       have {wm = mem, wp = maplen, wl2 = last, wst2 = stride} := apply(mp.gs_geom[A := A, A2 := A2, x := H2], hmo, ho)
       have iu2: mallocng.is_used(A2, H2) by defs(simp(eus, expand(iu, mallocng.is_used)), mallocng.is_used)
-      show by defs(simp(e0, e2, iu2, wm, wp, wl2, wst2, s1, st, wm0, wme, wst, whf, f2), mallocng.slot_ok)
+      show by defs(simp(e0, e2, iu2, wm, wp, wl2, wst2, s1, st, wm0, whf, f2), mallocng.slot_ok)
     qed
     have c3: !(u = tag(0, empty)) -> !(fst(u) = 1) -> !(fst(u) = 2) -> mallocng.slot_ok(A2, M2, b, h, i, u) proof
       assume e0 e1 e2
@@ -1104,7 +1153,7 @@ theorem mp.group_tr_g(A, A2, M, M2, b, h): A in mallocng.Abs -> b in fn_space(bi
      !(a = int_add(A.metas[h].mem, 8)) ->
      (all j. j in omega -> int_lt(j, seq_len(A.slots[h])) ->
         ((A.slots[h][j] = tag(0, empty) || A.slots[h][j] = tag(3, empty)) -> !mallocng.in_slot(A.metas[h], j, a)) &&
-        (fst(A.slots[h][j]) = 2 -> !(int_le(mallocng.slot_start(A.metas[h], j), a) && int_lt(a, mallocng.slot_end(A.metas[h], j))))) ->
+        (fst(A.slots[h][j]) = 2 -> !(int_le(A.metas[snd(A.slots[h][j])].mem, a) && int_lt(a, mallocng.slot_end(A.metas[h], j))))) ->
      M2[a] = M[a]) ->
   mallocng.meta_in_memory(M2, h, A2.metas[h]) -> mallocng.masks_ok(A2, M2, h) -> mallocng.big_ok(A2, h) -> mp.links_ok(A2, h) ->
   int_le(int_mod(mallocng.b8(M2, int_add(A2.metas[h].mem, 8)), 32), A2.metas[h].last_idx) ->
@@ -1142,7 +1191,7 @@ proof
   have agz: all a. a in omega -> int_le(V.mem, a) -> int_le(a, mallocng.slot_end(V, V.last_idx)) -> !(a = int_add(V.mem, 8)) ->
       (all j. j in omega -> int_lt(j, seq_len(A.slots[h])) ->
         ((A.slots[h][j] = tag(0, empty) || A.slots[h][j] = tag(3, empty)) -> !mallocng.in_slot(V, j, a)) &&
-        (fst(A.slots[h][j]) = 2 -> !(int_le(mallocng.slot_start(V, j), a) && int_lt(a, mallocng.slot_end(V, j))))) ->
+        (fst(A.slots[h][j]) = 2 -> !(int_le(A.metas[snd(A.slots[h][j])].mem, a) && int_lt(a, mallocng.slot_end(V, j))))) ->
       M2[a] = M[a] proof
     fix a
     assume hao h1 h2 _ _

@@ -9,10 +9,12 @@
 def mp.gb(A, k, a) := int_le(A.metas[k].mem, a) &&
   int_le(a, mallocng.slot_end(A.metas[k], A.metas[k].last_idx))
 
-// h's bytes within a nested slot of k (from the slot's start to its end)
+// h's bytes within a nested slot of k (from the slot's start to its end;
+// from the nested group's start, at an offset in the slot)
 def mp.inside(A, h, k) := ex j. j in omega && int_lt(j, seq_len(A.slots[k])) && fst(A.slots[k][j]) = 2 &&
   int_le(mallocng.slot_start(A.metas[k], j), A.metas[h].mem) &&
-  int_le(mallocng.slot_end(A.metas[h], A.metas[h].last_idx), mallocng.slot_end(A.metas[k], j))
+  int_le(mallocng.slot_end(A.metas[h], A.metas[h].last_idx), mallocng.slot_end(A.metas[k], j)) &&
+  int_le(A.metas[snd(A.slots[k][j])].mem, A.metas[h].mem)
 
 // (two groups in use starting at one address: one -- the header names it)
 theorem mp.same_mem(c, A, M, b, brk, g, h): mallocng.holds(c, A, M, b, brk) -> mallocng.is_used(A, g) -> mallocng.is_used(A, h) ->
@@ -55,11 +57,11 @@ proof
 qed
 
 // a nested group's parent: a group in use, its slot j the nested group's,
-// within it; the parent starts before
+// within it (at an offset: enframe's); the parent starts before
 theorem mp.parent(c, A, M, b, brk, h): A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> mallocng.is_used(A, h) ->
   A.metas[h].maplen = 0 ->
   ex p j. mallocng.is_used(A, p) && j in omega && int_lt(j, seq_len(A.slots[p])) && A.slots[p][j] = tag(2, h) &&
-    A.metas[h].mem = mallocng.slot_start(A.metas[p], j) &&
+    int_le(mallocng.slot_start(A.metas[p], j), A.metas[h].mem) &&
     int_le(mallocng.slot_end(A.metas[h], A.metas[h].last_idx), mallocng.slot_end(A.metas[p], j)) &&
     int_le(mallocng.slot_end(A.metas[p], j), mallocng.slot_end(A.metas[p], A.metas[p].last_idx)) &&
     int_lt(A.metas[p].mem, A.metas[h].mem)
@@ -78,11 +80,11 @@ proof
   have so := mp(all_elim(psl, {i}), hi, hil)
   let W := A.metas[h]
   let V := A.metas[p]
-  have s0: ((((mallocng.is_used(A, h) && W.maplen = 0) && W.mem = mallocng.slot_start(V, i)) &&
-      int_le(int_add(mallocng.UNIT, int_mul(mallocng.stride(W), int_add(W.last_idx, 1))), mallocng.stride(V))) && mallocng.hdr_free(b, W.mem)) &&
+  have s0: ((mallocng.is_used(A, h) && W.maplen = 0) && mallocng.hdr_free(b, W.mem)) &&
       mallocng.frame_ok(M, V, i, W.mem, int_sub(int_add(mallocng.UNIT, int_mul(mallocng.stride(W), int_add(W.last_idx, 1))), mallocng.IB), 6)
     by simp(expand(rewrite(hsl, so), mallocng.slot_ok))
-  have _ _ wme wst _ _ := s0
+  have _ _ _ fo := s0
+  have {wme = start, wst = fits} := expand(fo, mallocng.frame_ok)
   obtain kh, hkh hkhl hkhe from expand(hh, mallocng.is_used)
   have ho := rewrite(hkhe, mp(at_type[l := A.used, t := omega, i := kh], ul, hkh, hkhl))
   have {wm = mem, wl = last, ws = stride, wse = end} := apply(mp.geo, ha, ho, gh)
@@ -94,7 +96,8 @@ proof
   have e4 := all_elim(pse, {V.last_idx})
   have mw: int_mul(mallocng.stride(W), W.last_idx) in omega by simp(ws, wl)
   have mv: int_mul(mallocng.stride(V), i) in omega by simp(psn, hi)
-  have c1: int_le(mallocng.slot_end(W, W.last_idx), mallocng.slot_end(V, i)) by arith(e1, e2, e3, wme, wst, cu, mw, ws, wl)
+  have ci: mallocng.IB = 4 by defs(refl({4}), mallocng.IB)
+  have c1: int_le(mallocng.slot_end(W, W.last_idx), mallocng.slot_end(V, i)) by arith(e1, wst, cu, ci, mw, ws, wl)
   have il: int_le(i, V.last_idx) by arith(pns, hil, hi, pl)
   have ml := mp(all_elim(ms.mul_le, {mallocng.stride(V)}, {i}, {mallocng.stride(V)}, {V.last_idx}), psn, hi, simp(psn), simp(pl), arith(psn), il)
   have c2: int_le(mallocng.slot_end(V, i), mallocng.slot_end(V, V.last_idx)) by arith(e2, e4, ml)
@@ -280,7 +283,8 @@ proof
       have gp2: int_le(a, mallocng.slot_end(A.metas[p], A.metas[p].last_idx)) by arith(h2, hse, hpe)
       have gp: mp.gb(A, p, a) by defs(taut(gp1, gp2), mp.gb)
       have f2: fst(A.slots[p][j]) = 2 by defs(simp(hs), tag)
-      have ip: mp.inside(A, h, p) by defs(ex_intro({j}, taut(hj, hjl, f2, (int_le(mallocng.slot_start(A.metas[p], j), A.metas[h].mem) by arith(hme, hmo)), hse)), mp.inside)
+      have sh: int_le(A.metas[snd(A.slots[p][j])].mem, A.metas[h].mem) by simp(hs, (int_le(A.metas[h].mem, A.metas[h].mem) by arith(hmo)))
+      have ip: mp.inside(A, h, p) by defs(ex_intro({j}, taut(hj, hjl, f2, hme, hse, sh)), mp.inside)
       have pk: k = p -> mp.inside(A, h, k) proof
         assume e
         show := rewrite(sym(e), ip)
@@ -289,8 +293,9 @@ proof
         assume l
         have ihp := mp(all_elim(ih, {A.metas[p].mem}), pmo, (int_lt(A.metas[p].mem, n) by arith(hlt, eh)))
         have ins := mp(all_elim(ihp, {p}, {k}, {a}), hp, hk, refl({A.metas[p].mem}), l, hao, gp, gk)
-        obtain j2, a1 a2 a3 a4 a5 from expand(ins, mp.inside)
-        show by defs(ex_intro({j2}, taut(a1, a2, a3, (int_le(mallocng.slot_start(A.metas[k], j2), A.metas[h].mem) by arith(a4, hlt)), (int_le(mallocng.slot_end(A.metas[h], A.metas[h].last_idx), mallocng.slot_end(A.metas[k], j2)) by arith(hse, hpe, a5)))), mp.inside)
+        obtain j2, a1 a2 a3 a4 a5 a6 from expand(ins, mp.inside)
+        show by defs(ex_intro({j2}, taut(a1, a2, a3, (int_le(mallocng.slot_start(A.metas[k], j2), A.metas[h].mem) by arith(a4, hlt)), (int_le(mallocng.slot_end(A.metas[h], A.metas[h].last_idx), mallocng.slot_end(A.metas[k], j2)) by arith(hse, hpe, a5)),
+          (int_le(A.metas[snd(A.slots[k][j2])].mem, A.metas[h].mem) by arith(a6, hlt)))), mp.inside)
       qed
       have same: A.metas[k].mem = A.metas[p].mem -> mp.inside(A, h, k) proof
         assume e
@@ -300,7 +305,7 @@ proof
         assume l
         have ihk := mp(all_elim(ih, {A.metas[k].mem}), kmo, (int_lt(A.metas[k].mem, n) by taut(lt)))
         have ins := mp(all_elim(ihk, {k}, {p}, {a}), hk, hp, refl({A.metas[k].mem}), l, hao, gk, gp)
-        obtain j2, a1 a2 a3 a4 a5 from expand(ins, mp.inside)
+        obtain j2, a1 a2 a3 a4 a5 a6 from expand(ins, mp.inside)
         have {pm = mem, psn = stride, pss = start, pse = end} := apply(mp.geo, ha, po, apply(mp.used_group, huo, hp))
         have {hn2 = nat} := apply(mp.used_nat, ha, hh)
         have {ws = stride, wl = last, wse = end} := apply(mp.geo, ha, hn2, apply(mp.used_group, huo, hh))
@@ -322,7 +327,8 @@ proof
           qed
           show by taut(ne)
         qed
-        have f: false by arith(rewrite(jj, a4), hme, lt, eh)
+        have a6j: int_le(A.metas[h].mem, A.metas[k].mem) by simp(rewrite(hs, rewrite(jj, a6)))
+        have f: false by arith(a6j, lt, eh)
         show by taut(f)
       qed
       show by taut(below, same, above, (int_lt(A.metas[k].mem, A.metas[p].mem) || A.metas[k].mem = A.metas[p].mem || int_lt(A.metas[p].mem, A.metas[k].mem) by arith(kmo, pmo)))
@@ -338,7 +344,8 @@ qed
 // nested slot of that group
 theorem mp.hdr_nested(c, A, M, b, brk, g, h): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
   mallocng.is_used(A, g) -> mallocng.is_used(A, h) -> !(g = h) -> mp.gb(A, h, int_add(A.metas[g].mem, 8)) ->
-  ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j))
+  ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) &&
+    int_le(A.metas[snd(A.slots[h][j])].mem, int_add(A.metas[g].mem, 8))
 proof
   assume hc hu ha H hg hh hne gh
   have {huo = used} := expand(H, mallocng.holds)
@@ -351,19 +358,23 @@ proof
   have x12: int_le(int_add(A.metas[g].mem, 12), mallocng.slot_end(A.metas[g], A.metas[g].last_idx)) by arith(eg, mg, gs)
   have gg: mp.gb(A, g, int_add(A.metas[g].mem, 8)) by defs(taut((int_le(A.metas[g].mem, int_add(A.metas[g].mem, 8)) by arith(gmo)), (int_le(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[g], A.metas[g].last_idx)) by arith(x12))), mp.gb)
   have h1 h2 := expand(gh, mp.gb)
-  have below: int_lt(A.metas[h].mem, A.metas[g].mem) -> ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) proof
+  have below: int_lt(A.metas[h].mem, A.metas[g].mem) -> ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) &&
+      int_le(A.metas[snd(A.slots[h][j])].mem, int_add(A.metas[g].mem, 8)) proof
     assume l
-    obtain j, a1 a2 a3 a4 a5 from expand(apply(mp.laminar, hc, hu, ha, H, hg, hh, l, xo, gg, gh), mp.inside)
-    show by ex_intro({j}, taut(a1, a2, a3, (int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) by arith(a4, gmo)), (int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) by arith(a5, x12))))
+    obtain j, a1 a2 a3 a4 a5 a6 from expand(apply(mp.laminar, hc, hu, ha, H, hg, hh, l, xo, gg, gh), mp.inside)
+    show by ex_intro({j}, taut(a1, a2, a3, (int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) by arith(a4, gmo)), (int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) by arith(a5, x12)),
+      (int_le(A.metas[snd(A.slots[h][j])].mem, int_add(A.metas[g].mem, 8)) by arith(a6, gmo))))
   qed
-  have same: A.metas[h].mem = A.metas[g].mem -> ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) proof
+  have same: A.metas[h].mem = A.metas[g].mem -> ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) &&
+      int_le(A.metas[snd(A.slots[h][j])].mem, int_add(A.metas[g].mem, 8)) proof
     assume e
     have f: false by taut(hne, apply(mp.same_mem, H, hg, hh, sym(e)))
     show by taut(f)
   qed
-  have above: int_lt(A.metas[g].mem, A.metas[h].mem) -> ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) proof
+  have above: int_lt(A.metas[g].mem, A.metas[h].mem) -> ex j. j in omega && int_lt(j, seq_len(A.slots[h])) && fst(A.slots[h][j]) = 2 && int_le(mallocng.slot_start(A.metas[h], j), int_add(A.metas[g].mem, 8)) && int_lt(int_add(A.metas[g].mem, 8), mallocng.slot_end(A.metas[h], j)) &&
+      int_le(A.metas[snd(A.slots[h][j])].mem, int_add(A.metas[g].mem, 8)) proof
     assume l
-    obtain j, a1 a2 a3 a4 a5 from expand(apply(mp.laminar, hc, hu, ha, H, hh, hg, l, xo, gh, gg), mp.inside)
+    obtain j, a1 a2 a3 a4 a5 _ from expand(apply(mp.laminar, hc, hu, ha, H, hh, hg, l, xo, gh, gg), mp.inside)
     have mj: int_mul(mallocng.stride(A.metas[g]), j) in omega by simp(gs, a1)
     have f: false by arith(all_elim(gss, {j}), a4, h1, mj)
     show by taut(f)

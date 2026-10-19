@@ -354,14 +354,15 @@ pred frame_ok(m: Mem, v: MetaV, i: nat, p: nat, n: nat, tag: nat) =
 // the in-band header before p (its IB bytes): no client's
 pred hdr_free(blocks: Addr -> Option[nat], p: nat) = all a: nat. p - IB <= a && a < p -> a notin live_of(blocks)
 
-// what slot i of the group g holds
+// what slot i of the group g holds (a nested group framed like a block:
+// at a unit offset in the slot -- enframe's, the slot's slack cycled --,
+// its slots and their end within it)
 pred slot_ok(A: Abs, m: Mem, blocks: Addr -> Option[nat], g: nat, i: nat, u: Use) =
   match u {
     unused    => true,
     block(p)  => blocks[bits[64](p)] != none && hdr_free(blocks, p) &&
                  frame_ok(m, A.metas[g], i, p, blocks[bits[64](p)].value, 0),
-    nested(h) => is_used(A, h) && A.metas[h].maplen = 0 && A.metas[h].mem = slot_start(A.metas[g], i) &&
-                 UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) <= stride(A.metas[g]) &&
+    nested(h) => is_used(A, h) && A.metas[h].maplen = 0 &&
                  hdr_free(blocks, A.metas[h].mem) &&
                  frame_ok(m, A.metas[g], i, A.metas[h].mem, UNIT + stride(A.metas[h]) * (A.metas[h].last_idx + 1) - IB, 6),
     reserved  => true
