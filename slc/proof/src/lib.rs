@@ -3932,6 +3932,12 @@ impl State {
                 cur = Seq::rewrite(env, &e, &cur)?;
             }
             cur = self.step_simp(env, lg, cur)?;
+        } else if let Some(v1) = v1.filter(|v| read_past_store(env, v)) {
+            // (a det fact's value -- an accessor's, stepped inline: only a
+            // read past a write)
+            if let Some(e) = self.mem_value(env, lg, &v1, using) {
+                cur = Seq::rewrite(env, &e, &cur)?;
+            }
         }
         Ok(cur)
     }
@@ -4804,6 +4810,28 @@ fn unshift(t: &Term, d: u32, cutoff: u32, binders: &dyn Fn(SymId, usize) -> u32)
         Node::Var(_, a) => Some(t.with_args(a.iter().map(|x| unshift(x, d, cutoff, binders)).collect::<Option<Vec<_>>>()?)),
         Node::App(s, a) => Some(t.with_args(a.iter().enumerate().map(|(i, x)| unshift(x, d, cutoff + binders(*s, i), binders)).collect::<Option<Vec<_>>>()?)),
     }
+}
+
+/// v is a read `bits_of_int(n, gimple.bytes_at(m, a, k))` with a write
+/// (`x86_64_linux.store_le`) in its memory m
+fn read_past_store(env: &Env, v: &Term) -> bool {
+    let sym = |n: &str| env.sym_by_name.get(n).copied();
+    let Node::App(f, a) = v.node() else { return false };
+    if Some(*f) != sym("bits_of_int") || a.len() != 2 {
+        return false;
+    }
+    let Node::App(g, b) = a[1].node() else { return false };
+    if Some(*g) != sym("gimple.bytes_at") || b.len() != 3 {
+        return false;
+    }
+    fn has(t: &Term, s: Option<SymId>) -> bool {
+        match t.node() {
+            Node::App(f, a) => Some(*f) == s || a.iter().any(|x| has(x, s)),
+            Node::Var(_, a) => a.iter().any(|x| has(x, s)),
+            _ => false,
+        }
+    }
+    has(&b[0], sym("x86_64_linux.store_le"))
 }
 
 /// `p` occurs in `t`

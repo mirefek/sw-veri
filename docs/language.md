@@ -554,7 +554,9 @@ goes, in order:
   same facts, to its one outcome (`g.det`, derived on the spot). Then the
   value read is resolved, if it resolves -- to a value written, or to the
   same read before the writes (`mnext(wr64(V0, ..), m)` to `mnext(V0, m)`)
-  --, and the state's record fields are simplified;
+  --, and the state's record fields are simplified; an accessor's
+  outcome too, when its value is a read past a write (`meta_mem_(m)`
+  after `set_meta_mem_(m, p)`: p);
 - through a local's choice of a word (`any_rel`), and an `if`'s outcome
   (`ex x. ((c && T) || (!c && E)) && K(x)`), each named by the next name;
   an `if`'s outcome with no name left is opened when c is decided (below),

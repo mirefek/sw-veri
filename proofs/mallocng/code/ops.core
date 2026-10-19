@@ -276,6 +276,49 @@ mem_closure ms.md_st0
 
 mem_closure ms.md_st
 
+// (an address's i-th byte, below 2^64: its sum)
+theorem ms.add_i: all a i. a in omega -> i in omega -> int_lt(int_add(a, i), 18446744073709551616) -> bits_add(64, a, bits_of_int(64, i)) = int_add(a, i)
+proof
+  fix a i
+  assume ha hi hl
+  have e: bits_of_int(64, i) = i by defs(arith(hi, hl, ha), bits_of_int, pow2)
+  have e2: bits_add(64, a, i) = int_add(a, i) by defs(arith(ha, hi, hl), bits_add, pow2)
+  show := subst({y. bits_add(64, a, y) = int_add(a, i)}, sym(e), e2)
+qed
+
+// a byte outside a store (not wrapping): as before
+theorem ms.st_out: all b x n v c. c in bits(64) -> x in omega -> n in omega -> int_le(int_add(x, n), 18446744073709551616) ->
+  int_lt(c, x) || int_le(int_add(x, n), c) -> x86_64_linux.store_le(b, x, n, v)[c] = b[c]
+proof
+  fix b x n v c
+  assume hc hx hn hl ho
+  have hw: all i. i in omega -> int_lt(i, n) -> !(bits_add(64, x, bits_of_int(64, i)) = c) proof
+    fix i
+    assume hi hil e
+    have e2 := apply(ms.add_i, {x}, {i}, hx, hi, arith(hil, hl))
+    show by arith(trans(sym(e2), e), ho, hil, hi)
+  qed
+  show := apply(x86.store_outside, {b}, {x}, {n}, {v}, {c}, hc, hw)
+qed
+
+// (n bytes read, each as in another memory: the same)
+theorem ms.bytes_agree: all vm vm2 a n. n in omega ->
+  (all i. i in omega -> int_lt(i, n) -> vm2.bytes[bits_add(64, a, bits_of_int(64, i))] = vm.bytes[bits_add(64, a, bits_of_int(64, i))]) ->
+  gimple.bytes_at(vm2, a, n) = gimple.bytes_at(vm, a, n)
+proof
+  fix vm vm2 a n
+  assume hn he
+  have q: all i. i in omega -> int_le(0, i) -> int_lt(i, n) -> int_mul(vm2.bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i)) =
+      int_mul(vm.bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i)) proof
+    fix i
+    assume hi _ hil
+    show by simp(mp(all_elim(he, {i}), hi, hil))
+  qed
+  have e := apply(int_sum_ext[a := 0, b := n, f := i. int_mul(vm2.bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i)),
+    g := i. int_mul(vm.bytes[bits_add(64, a, bits_of_int(64, i))], int_pow(256, i))], simp(), hn, q)
+  show by defs(e, gimple.bytes_at)
+qed
+
 // GIMPLE's stores of 1 and 4 bytes in a world
 theorem ms.st8_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 1, true) ->
   g.det(gimple.st8(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 1, v))), empty))
