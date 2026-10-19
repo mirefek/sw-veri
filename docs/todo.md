@@ -17,6 +17,12 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 - alloc_meta's leaves at machine level: get_random_secret, __syscall1,
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
   as the machine's), to discharge `mp.am_implements`' hypotheses.
+- alloc_group by its purpose (GIMPLE): the model's lemmas are in
+  newgroup.core (`mp.ng_holds`, `mp.ngn_holds`); left: the memory level
+  (the held bytes before and after: the old groups' bytes and records
+  kept, `holds_in`'s mapped / free / rw clauses for the new group's
+  pages or slot), the run (four loops, the mmap and nested paths, the
+  failures freeing the meta), the refinement and the contract at a call.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already

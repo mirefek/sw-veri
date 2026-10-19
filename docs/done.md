@@ -827,3 +827,14 @@ item is a short summary of finished work; details are in the files named.
   call's result, the overflow closed against the goal up to lets and the
   locals' witnesses, a decided branch's condition dropped; a premise
   simplified once per block, arith before mem, mem failures remembered.
+- **A group made, in the abstract state** (proofs/mallocng/model/newgroup.core):
+  the meta taken last put among the groups in use at its place
+  (`mp.ngrp`; `mp.ins_at` keeps them ascending), its record set, its
+  slots unused; or in a reserved slot of a larger class's group
+  (`mp.ngn`, the slot holding it). The invariant for the new state from
+  the old one's clauses (`mp.ng_holds_c`; `mp.ng_holds` mapped on its
+  own, `mp.ngn_holds` nested): the old groups by the frame
+  (`mp.ng_group`, `mp.nt_group`, the parent `mp.nt_parent`, slot uses by
+  `mp.slot_tr`), the new one's clauses from its memory (`mp.ng_self`, its
+  masks from the active index `mp.ng_masks`), the regions re-indexed
+  (`mp.sep_inject`), the lists, blocks, reserved slots, perms, areas.
