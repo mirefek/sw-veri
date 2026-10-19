@@ -465,8 +465,8 @@ hold:
 ## 13. Proofs
 
 A proof is a sequence of steps, one per line. A line continues while
-brackets are open; a line starting with `by` or `:=` continues the step
-before.
+brackets are open; a line starting with `by`, `:=`, `with` or `using`
+continues the step before.
 
 ```
 assume h: φ               hypothesis (discharged at the end)

@@ -677,8 +677,9 @@ fn steps(text: &str) -> Vec<(usize, usize, String)> {
         if l.trim().is_empty() && depth == 0 {
             continue;
         }
-        // a line starting with `by` or `:=` continues the previous step
-        if cur.is_empty() && (l.trim_start().starts_with("by ") || l.trim_start().starts_with(":= ")) {
+        // a line starting with `by` or `:=` continues the previous step, as
+        // does one starting with `with` or `using` (a step's facts)
+        if cur.is_empty() && ["by ", ":= ", "with ", "using "].iter().any(|k| l.trim_start().starts_with(k)) {
             if let Some((k, _, prev)) = out.pop() {
                 start = k;
                 cur = prev;
