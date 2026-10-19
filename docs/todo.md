@@ -17,18 +17,12 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 - alloc_meta's leaves at machine level: get_random_secret, __syscall1,
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
   as the machine's), to discharge `mp.am_implements`' hypotheses.
-- alloc_group by its purpose (GIMPLE): the model's lemmas are in
-  newgroup.core (`mp.ng_holds` mapped, `mp.ngn_holds` nested,
-  `mp.fb_holds_in` the meta given back, `mp.counts_tables`); the run
-  (`mp.agr_run`, uncommitted in fun/alloc_group.core) is through
-  alloc_meta, the count's three loops, and the mapped path to its return
-  (the calls, the count's adjustments, mmap and its refusal -- the meta
-  given back, `mp.agr_back` --, the active index, the meta's and the
-  group's stores: `o = ok(.., M)` on V4 with eleven stores). Left: the
-  mapped group's state (`mp.ngrp` on the final memory: `holds_in` from
-  `mp.ng_holds`, `fresh_group`, untouched, grown, the active index's
-  clause), the nested path (size_to_class, alloc_slot -- its failure by
-  `mp.agr_back` --, enframe, the header-zeroing loop, the same stores),
+- alloc_group by its purpose (GIMPLE): the run `mp.agr_run` shows every
+  exit of the meta's lack, the mmap's refusal and the group mapped on its
+  own (model: model/groupmap.core, `mp.gx_holds_in` from the memory-level
+  `mp.gxpre`). Left: the nested path (size_to_class, alloc_slot -- its
+  failure by `mp.agr_back` --, enframe, the header-zeroing loop, the same
+  stores; model `mp.ngn_holds`, its memory-level frame like groupmap's),
   the refinement and the contract at a call.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
