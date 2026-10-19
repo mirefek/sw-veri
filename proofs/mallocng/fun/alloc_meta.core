@@ -1535,12 +1535,16 @@ proof
     mp.unt_refl[c := c, A := A1, b := B, vm := V, e := mp.errno(s.fs_base)], pq)
 qed
 
+// (the meta m's bytes: the allocator's at the entry, or unmapped then)
+abbrev mp.am_mfp(c, A, B, s, m) := !(m = 0) ->
+  (all a. a in omega -> int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)))
+
 // alloc_meta's outcome from a state A2 on V2, the meta m returned (0 for
 // none), as its spec has it
 abbrev mp.am_post(c, A, B, s, A2, V2, m) := ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng_specs.groups_kept(A, A2)) && m in bits(64) &&
   ((m = 0 && A2.taken = A.taken) || (!(m = 0) && A2.taken = seq_concat(A.taken, seq_one(m)))) &&
   V2 in x86_64_linux.Vm && mallocng.holds_in(c, A2, V2, B) && mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
-  mp.grown(c, A2, A, B, s.vm) && (!(m = 0) -> mallocng_specs.meta_ready(V2, m)) && mp.am_epg(s, V2)
+  mp.grown(c, A2, A, B, s.vm) && (!(m = 0) -> mallocng_specs.meta_ready(V2, m)) && mp.am_epg(s, V2) && mp.am_mfp(c, A, B, s, m)
 
 // ----------------------------------------------------------------------
 //  The free metas' head taken (dequeue_head): nothing outside touched
@@ -1554,7 +1558,11 @@ proof
     assume h
     show by taut(h, refl({0}))
   qed
-  show by taut(s1, s2, s3, s4, s5, s6, s7, s8, s9, (0 in bits(64) by simp()), refl({0}), nz)
+  have nf: mp.am_mfp(c, A, B, s, 0) proof
+    assume h
+    show by taut(h, refl({0}))
+  qed
+  show by taut(s1, s2, s3, s4, s5, s6, s7, s8, s9, (0 in bits(64) by simp()), refl({0}), nz, nf)
 qed
 
 // (GIMPLE's 8-byte store in a world: as ms.st32_det, its memory's record
@@ -2110,7 +2118,18 @@ proof
   have vdV: VD in x86_64_linux.Vm by simp(vdv)
   have tk2: mp.tav(A3).taken = seq_concat(A.taken, seq_one(M)) := trans(ttk, (seq_concat(A3.taken, seq_one(M)) = seq_concat(A.taken, seq_one(M)) by simp(sk)))
   have epg: mp.am_epg(s, VD) by simp(se)
-  show by taut(ta, tu, apply(mp.gk_trans, sg, gk3), mb, (!(M = 0) by arith(mlo)), tk2, vdV, hh3, un, gr, rdy, epg)
+  // (M's bytes: A3's, so the entry's or unmapped then)
+  have mfp: mp.am_mfp(c, A, B, s, M) proof
+    assume _
+    fix a
+    assume ho hr
+    have h1 h2 := hr
+    have {acc = acc} := apply(mp.slot_meta[c := c, A := A3, vm := V3, b := B, g := M], hc, s3, s2, s4, xs, xnt)
+    have yh _ _ := mp(all_elim(acc, {a}), ho, h1, (int_lt(a, int_add(M, 40)) by defs(arith(h2), mallocng.META_SIZE)))
+    have {yf = fp} := apply(mp.held_fp, yh)
+    show := mp(all_elim(sf, {a}), ho, yf)
+  qed
+  show by taut(ta, tu, apply(mp.gk_trans, sg, gk3), mb, (!(M = 0) by arith(mlo)), tk2, vdV, hh3, un, gr, rdy, epg, mfp)
 qed
 
 // the free metas' head taken from a run state: the outcome
@@ -2149,7 +2168,18 @@ proof
   have ep: V2.pages = V1.pages := sym(rewrite(fo, up))
   have rd := apply(mp.ready_of[c := c, A := A1, V := V1, V2 := V2, b := B, m := F[0]], hc, s3, s2, s4, ms0, nt0, ep, v2b, r0, r8)
   have epg: mp.am_epg(s, V2) by simp(se, ep)
-  show by taut(ta, tu, apply(mp.gk_trans, sg, gk12), mb, mz, tk2, hv2, hh2, un, gr, rd, epg)
+  // (the head's bytes: A1's, so the entry's or unmapped then)
+  have mfp: mp.am_mfp(c, A, B, s, F[0]) proof
+    assume _
+    fix a
+    assume ho hr
+    have h1 h2 := hr
+    have {acc = acc} := apply(mp.slot_meta[c := c, A := A1, vm := V1, b := B, g := F[0]], hc, s3, s2, s4, ms0, nt0)
+    have yh _ _ := mp(all_elim(acc, {a}), ho, h1, (int_lt(a, int_add(F[0], 40)) by defs(arith(h2), mallocng.META_SIZE)))
+    have {yf = fp} := apply(mp.held_fp, yh)
+    show := mp(all_elim(sf, {a}), ho, yf)
+  qed
+  show by taut(ta, tu, apply(mp.gk_trans, sg, gk12), mb, mz, tk2, hv2, hh2, un, gr, rd, epg, mfp)
 qed
 
 // ----------------------------------------------------------------------
@@ -3949,9 +3979,9 @@ proof
           qed
           have f2: case 2 of ht2 proof
             assume e
-            obtain A3 V3 L, p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 hx4 from e
+            obtain A3 V3 L, p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 hx4 from e
             step oe from rewrite(hx4, kx2)
-            show by disj({2}, ex_intro({A3}, {V3}, {0}, taut(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, oe)))
+            show by disj({2}, ex_intro({A3}, {V3}, {0}, taut(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, oe)))
           qed
           have f3: case 3 of ht2 proof
             assume e
@@ -4586,10 +4616,10 @@ proof
             qed
             have tmr: case 2 of tm proof
               assume e
-              obtain A4 V4 n1 p1, k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 k11 hx7 from e
+              obtain A4 V4 n1 p1, k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 k11 k12 hx7 from e
               step e10 from rewrite(hx7, kx8)
               show by disj({2}, ex_intro({A4}, {V4}, {pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(0, pair(a9, pair(a10, pair(a11, 0)))))))))))},
-                taut(k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, e10)))
+                taut(k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, e10)))
             qed
             have tmk: case 3 of tm proof
               assume e
@@ -4932,7 +4962,7 @@ proof
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
-    obtain A2 V2 m, ha2 hu2 hgk hm htk hv2 hin2 hunt hgr hrd _ ho from e
+    obtain A2 V2 m, ha2 hu2 hgk hm htk hv2 hin2 hunt hgr hrd _ hmf ho from e
     let S1 := fn_update(fn_update(S, "A", A2), "vm", V2)
     let H2 := fn_update(h, "A", A2)
     let s1 := fn_update(s, "vm", V2)
@@ -4953,7 +4983,7 @@ proof
     have e1 := mp(fn_update_union_r[a := s, b := h, k := "A", v := A2], na)
     have e2 := mp(fn_update_union_l[a := s, b := H2, k := "vm", v := V2], nv)
     have eS: union2(s1, H2) = S1 := sym(trans(subst({y. S1 = fn_update(y, "vm", V2)}, e1, refl({S1})), e2))
-    show by disj({2}, ex_intro({s1}, {m}, {H2}, spec_ret({A2}, {m}, {V2}, hg2, ho, ha2, hgk, hm, htk, aS, vS, bS, fS, oS, hv2, hin2, hunt, hgr, hrd, eS)))
+    show by disj({2}, ex_intro({s1}, {m}, {H2}, spec_ret({A2}, {m}, {V2}, hg2, ho, ha2, hgk, hm, htk, aS, vS, bS, fS, oS, hv2, hin2, hunt, hgr, hrd, hmf, eS)))
   qed
   show by taut(run, k)
 qed
@@ -5067,9 +5097,9 @@ proof
   fix t h regs o2
   assume hw hh hin hth htl hbs heo hea hro hr
   step o3 A2 V2 m, e hs1 from hr with mp.am_run using hro, hc, hx, hrs, hdh, hsy, hmm, hmp, hel, hw, hh, hin, hth, htl, hbs, heo, hea
-  have ha2 hu2 hgk hm htk hv2 hin2 hunt hgr hrd hep := hs1
+  have ha2 hu2 hgk hm htk hv2 hin2 hunt hgr hrd hep hmf := hs1
   step o4 y, e2 from e with g.result64_inv using hm
-  have post: mp.am_post(c, h.A, h.blocks, t, A2, V2, m) by taut(ha2, hu2, hgk, hm, htk, hv2, hin2, hunt, hgr, hrd, hep)
+  have post: mp.am_post(c, h.A, h.blocks, t, A2, V2, m) by taut(ha2, hu2, hgk, hm, htk, hv2, hin2, hunt, hgr, hrd, hep, hmf)
   have inner: ex A3 m3. mp.am_post(c, h.A, h.blocks, t, A3, V2, m3) && fst(pair(m, y)) = m3 by ex_intro({A2}, {m}, taut(post, (fst(pair(m, y)) = m by simp())))
   show by disj({2}, ex_intro({V2}, {pair(m, y)}, taut(hv2, inner, e2)))
 qed

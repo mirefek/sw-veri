@@ -597,14 +597,18 @@ goes, in order:
   fact without the H's). Its variables come from the call (t, ARGS), the
   rest from `using` facts its premises match (the first, in order); its
   premises, the world sound and a world, the registers and the callee
-  refining F (a `using` fact) are discharged as an operation's. The
+  refining F (a `using` fact; none for a contract on the callee itself, a
+  parameter: `gc.calls_self`) are discharged as an operation's. The
   return `ex r. o = ok(fn_update(w, "vm", V), r) && R(r)` (or `ex V r.
   (V in Vm && P(V)) && ..`) takes the next names for its witnesses; R
   (an equation rewrites the continuation) is a last conjunct of the
   result. The overflow is carried to the outcome and must imply a disjunct
   of the block's goal (`ex v. v in Vm && o = exc(fn_update(s, "vm", v),
   ..)`; up to lets, the goal's further witnesses -- the locals' values --
-  by matching), closed at the block's end. The `with` item may be a fact
+  by matching), closed at the block's end; it gets there through the
+  continuations in the stepped fact, so an `if`'s continuation split off
+  by naming its outcome goes along, `step .. from conj(e, kx)` (its copy
+  in the result `_`). The `with` item may be a fact
   `all regs o. gc.regs_ok(regs, ARGS) -> runs(app(F, regs), t, o) ->
   overflow || return` proved for this call (a callee's contract adapted to
   what the call needs);

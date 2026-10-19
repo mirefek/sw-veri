@@ -21,12 +21,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   newgroup.core (`mp.ng_holds` mapped, `mp.ngn_holds` nested,
   `mp.fb_holds_in` the meta given back, `mp.counts_tables`); the run
   (`mp.agr_run`, uncommitted in fun/alloc_group.core) is through
-  alloc_meta and the count's three loops, stopped at the mapped / nested
-  split. Left: the two paths (is_bouncing, account_bounce, step_seq --
-  its call contract still to state --, mmap or size_to_class, alloc_slot,
-  enframe, the header-zeroing loop, the meta's stores), the memory level
-  (`holds_in` for the new state from the run's writes), the refinement
-  and the contract at a call.
+  alloc_meta, the count's three loops, the mapped path's calls and count
+  adjustments, mmap, and its refusal (the meta given back: `mp.agr_back`).
+  Left: the mapped group's stores (from `cnt <=s active_idx` on), the
+  nested path (size_to_class, alloc_slot -- its failure by
+  `mp.agr_back` --, enframe, the header-zeroing loop, the meta's stores),
+  the memory level (`holds_in` for the new state from the run's writes),
+  the refinement and the contract at a call.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already
@@ -100,9 +101,9 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 
 - Generate the function-level C2s and compositions (one instance of
   `g.fun_res` / `g.fun_res_ghost` and `tr.implements_refine` each).
-- A call to a callee by its own contract still needs the trivial fact
-  that the callee refines itself (`agself`, `dbself` in `mp.ta_run`): the
-  call rule could take it as given.
+- The trivial facts that a callee refines itself (`agself`, `dbself` in
+  `mp.ta_run`, `amself`, `taself`) are no longer needed (`gc.calls_self`):
+  to be removed.
 - `ex_intro({..})` inside `taut(..)` misparsed as a binder (hit again in
   `mp.ta_q` and `gc.regs_one`: the inner witness needs its own `have`);
   the list lemmas of proofs/translate_call.core (`tr.seq_one_type`,

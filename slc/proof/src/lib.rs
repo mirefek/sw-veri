@@ -3057,8 +3057,7 @@ impl State {
                         cur = t;
                     }
                     _ => {
-                        let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![t.concl().clone(), hk.concl().clone()]);
-                        cur = Seq::taut(env, lg, &[&t, &hk], &both)?;
+                        cur = and_both(env, lg, &t, &hk)?;
                         break;
                     }
                 }
@@ -3160,13 +3159,11 @@ impl State {
         }
         }
         while let Some(r) = pending.pop() {
-            let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
-            cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
+            cur = and_both(env, lg, &cur, &r)?;
         }
         // (what the calls' contracts said of their returns: after)
         for r in side {
-            let both = Term::app(and.ok_or_else(|| KernelError("step: no `and`".into()))?, vec![cur.concl().clone(), r.concl().clone()]);
-            cur = Seq::taut(env, lg, &[&cur, &r], &both)?;
+            cur = and_both(env, lg, &cur, &r)?;
         }
         // (the registers' equations step made itself: used or not)
         let unused: Vec<usize> = (0..withs.len() - n_req).filter(|&i| !used[i]).map(|i| i + 1).collect();
@@ -3558,10 +3555,22 @@ impl State {
                 }
             }
         };
-        let hg = using.iter().chain(withs.iter()).find(|f| refines(f.concl())).cloned().ok_or_else(|| {
-            let pr = Printer::new(env);
-            KernelError(format!("step: no fact that the callee `{}` refines `{}`", pr.short(g), pr.short(&fq)))
-        })?;
+        let found = using.iter().chain(withs.iter()).find(|f| refines(f.concl())).cloned();
+        let hg = match found {
+            Some(h) => h,
+            // (the contract on the callee itself, a parameter: `gc.calls_self`)
+            None if *g == fq && matches!(g.node(), Node::Var(..)) => {
+                let l = facts::seq_of(env, "gc.calls_self").ok_or_else(|| KernelError("step: `gc.calls_self` (proofs/gimple_inv.core) is not loaded".into()))?;
+                let mut lvs = Vec::new();
+                l.concl().vars(&mut lvs);
+                let gv = *lvs.iter().find(|v| env.vars[**v as usize].name == "g").ok_or_else(|| KernelError("step: `gc.calls_self` has no `g`".into()))?;
+                Seq::inst(env, &l, gv, g)?
+            }
+            None => {
+                let pr = Printer::new(env);
+                return Err(KernelError(format!("step: no fact that the callee `{}` refines `{}`", pr.short(g), pr.short(&fq))));
+            }
+        };
         pre.push(hg);
         pre.push(q.clone());
         pre.push(b.clone());
@@ -3713,7 +3722,7 @@ impl State {
             return err(format!("step: a call's overflow not carried to the outcome: `{}`", Printer::new(env).short(t.concl())));
         }
         let both = Term::app(and, vec![vm.concl().clone(), t.concl().clone()]);
-        let conj = Seq::taut(env, lg, &[&vm, &t], &both)?;
+        let conj = and_both(env, lg, &vm, &t)?;
         let body = abstract_term(&both, &vt, 0, &env.binders_fn());
         let sa2 = Seq::ex_intro(env, lg, &conj, &vt, &body)?;
         let imp = Seq::gen(env, lg, &sa2.discharge(env, &pa)?, vv)?;
@@ -4817,6 +4826,24 @@ fn and_part(env: &Env, s: &Seq, right: bool) -> KResult<Seq> {
         lemma = Seq::inst(env, &lemma, v, &x)?;
     }
     Seq::mp(env, &lemma, s)
+}
+
+/// `a && b` from a and b: by a truth table, or (too many atoms) by
+/// `and_intro` (core/logic.core)
+fn and_both(env: &Env, lg: &Logic, a: &Seq, b: &Seq) -> KResult<Seq> {
+    if let Some(and) = env.sym_by_name.get("and").copied() {
+        let both = Term::app(and, vec![a.concl().clone(), b.concl().clone()]);
+        if let Ok(s) = Seq::taut(env, lg, &[a, b], &both) {
+            return Ok(s);
+        }
+    }
+    let mut lemma = facts::seq_of(env, "and_intro").ok_or_else(|| KernelError("`and_intro` (core/logic.core) is not loaded".into()))?;
+    let mut vs = Vec::new();
+    lemma.concl().vars(&mut vs);
+    for (v, x) in vs.into_iter().zip([a.concl().clone(), b.concl().clone()]) {
+        lemma = Seq::inst(env, &lemma, v, &x)?;
+    }
+    Seq::mp(env, &Seq::mp(env, &lemma, a)?, b)
 }
 
 /// The k-th conjunct (from 1, as written: `conj_parts`) of `s`'s statement.

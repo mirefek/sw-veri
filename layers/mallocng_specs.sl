@@ -952,10 +952,10 @@ pred meta_ready(vm: Vm, m: nat) =
   rd(mview(vm, all_bytes()), m, 8) = 0 && rd(mview(vm, all_bytes()), m + 8, 8) = 0
 
 // alloc_meta(): a meta for a new group -- taken (its maker's, out of the
-// allocator's bytes), ready -- or 0, none to be had (a failed mmap or
-// mprotect). The groups as before; the allocator may take memory that was
-// unmapped (a meta area) and set errno (its cell writable, not the
-// allocator's).
+// allocator's bytes: the allocator's before, or unmapped), ready -- or 0,
+// none to be had (a failed mmap or mprotect). The groups as before; the
+// allocator may take memory that was unmapped (a meta area) and set errno
+// (its cell writable, not the allocator's).
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
   require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) &&
     errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base)
@@ -967,7 +967,8 @@ proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
     let m = any m: bits[64] where (m = 0 && A.taken = A0.taken) || (m != 0 && A.taken = A0.taken ++ [uint(m)])
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
-      (m != 0 -> meta_ready(vm, uint(m)))
+      (m != 0 -> meta_ready(vm, uint(m))) &&
+      (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
     return m
   }
 }

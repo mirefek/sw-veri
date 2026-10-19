@@ -838,3 +838,10 @@ item is a short summary of finished work; details are in the files named.
   `mp.slot_tr`), the new one's clauses from its memory (`mp.ng_self`, its
   masks from the active index `mp.ng_masks`), the regions re-indexed
   (`mp.sep_inject`), the lists, blocks, reserved slots, perms, areas.
+- **step through nested ifs and calls**: an `if`'s unnamed outcome opened
+  when its condition is decided (a loop body's nested ifs in one step); a
+  contract on the callee itself (a parameter) needs no refinement fact
+  (`gc.calls_self`); a step's conjunctions by `and_intro` when too large
+  for a truth table. The meta alloc_meta hands out: its
+  bytes the allocator's at the entry or unmapped then (alloc_meta_spec,
+  `mp.am_mfp`) -- what giving it back (`mp.agr_back`) needs.

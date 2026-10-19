@@ -2423,6 +2423,74 @@ proof
   show := apply(mp.ms_holds_in, apply(mp.fb_ms, hc, hu, ha, hb, hv, hv1, hh, cal, ht, hte, hj, hfd, xrw))
 qed
 
+// m, the meta taken last, ready (alloc_meta's): one free_meta may give
+// back -- a meta slot apart from the list's head and from the free metas,
+// its 40 bytes usable
+theorem mp.fm_join(c, A, vm, b, objs, T, m): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
+  T in list_type(omega) -> A.taken = seq_concat(T, seq_one(m)) -> mallocng_specs.meta_ready(vm, m) ->
+  mallocng_specs.meta_joinable(vm, objs, int_add(c.ctx, 16), A.free_metas, m)
+proof
+  assume hc hu ha hh ht hte hrd
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {hpt = part, har = areas} := expand(H, mallocng.holds)
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  have tl: A.taken in list_type(omega) by simp(ha)
+  have tlo: seq_len(T) in omega by arith(ht)
+  have lt: seq_len(A.taken) = int_add(seq_len(T), 1) := rewrite(sym(hte), (seq_len(seq_concat(T, seq_one(m))) = int_add(seq_len(T), 1) by arith(ht)))
+  have tm: A.taken[seq_len(T)] = m := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[seq_len(T)]}, ht))
+  have ms0 _ _ nf0 _ := mp(all_elim(htk, {seq_len(T)}), tlo, (int_lt(seq_len(T), seq_len(A.taken)) by arith(lt)))
+  have msl := rewrite(tm, ms0)
+  have nf := rewrite(tm, nf0)
+  have mo mex := apply(mp.meta_page, ha, msl)
+  obtain k, hk hkl g1 g2 g3 from mex
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have ako := mp(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+  have {aeach = each} := expand(har, mallocng.areas_ok)
+  have aal _ _ _ _ _ := mp(all_elim(aeach, {k}), hk, hkl)
+  have mal: int_mod(m, 8) = 0 by arith(g3, aal, g1, ako, mo)
+  // (its bytes: read-write, so in user space)
+  have rwa _ _ := expand(hrd, mallocng_specs.meta_ready)
+  have each: all i. i in omega -> int_lt(i, 40) -> int_add(m, i) in mallocng.all_bytes() && mallocng.m_rw(mallocng.mview(vm, mallocng.all_bytes()), int_add(m, i)) &&
+      !(snd(mallocng.pg(mallocng.mview(vm, mallocng.all_bytes()), int_add(m, i))).kind = 2) proof
+    fix i
+    assume hi hil
+    have r1 r2 := mp(all_elim(rwa, {int_add(m, i)}), (int_add(m, i) in omega by arith(mo, hi)),
+      (int_le(m, int_add(m, i)) && int_lt(int_add(m, i), int_add(m, mallocng.META_SIZE)) by defs(arith(hi, hil), mallocng.META_SIZE)))
+    have mio: int_add(m, i) in omega by arith(mo, hi)
+    show by taut((int_add(m, i) in mallocng.all_bytes() by defs(simp(mio), mallocng.all_bytes)), r1, r2)
+  qed
+  have u1 u2 := apply(mp.rw_usable[vm := vm, F := mallocng.all_bytes(), objs := objs, a := m, n := 40], mo, each)
+  have _ e39 _ := mp(each, {39}, simp(), simp())
+  have mm39 _ _ := expand(e39, mallocng.m_rw)
+  have p39 _ := expand(mm39, mallocng.m_mapped)
+  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have bnd: int_le(int_add(m, 40), int_pow(2, 64)) by arith(p39, ts, pg, mo)
+  // (apart from the list's head, in the context: not in an area)
+  have co: c.ctx in omega by simp(hc)
+  have cs: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have i16: int_le(c.ctx, int_add(c.ctx, 16)) && int_lt(int_add(c.ctx, 16), int_add(c.ctx, 928)) by arith(co)
+  have i23: int_le(c.ctx, int_add(c.ctx, 23)) && int_lt(int_add(c.ctx, 23), int_add(c.ctx, 928)) by arith(co)
+  have na16 := mp(all_elim(apply(mp.ctx_noarea[c := c, A := A, a := int_add(c.ctx, 16)], hc, hu, ha, H, arith(co),
+    (mallocng.in_range(int_add(c.ctx, 16), pair(c.ctx, mallocng.CTX_SIZE)) by defs(simp(cs, i16), mallocng.in_range))), {k}), hk, hkl)
+  have na23 := mp(all_elim(apply(mp.ctx_noarea[c := c, A := A, a := int_add(c.ctx, 23)], hc, hu, ha, H, arith(co),
+    (mallocng.in_range(int_add(c.ctx, 23), pair(c.ctx, mallocng.CTX_SIZE)) by defs(simp(cs, i23), mallocng.in_range))), {k}), hk, hkl)
+  have oh: int_le(int_add(int_add(c.ctx, 16), 8), m) || int_le(int_add(m, 40), int_add(c.ctx, 16)) by arith(na16, na23, g1, g2, ako, mo, co)
+  // (apart from each free meta: another meta slot)
+  have ol: all i. i in omega -> int_lt(i, seq_len(A.free_metas)) -> int_le(int_add(A.free_metas[i], 16), m) || int_le(int_add(m, 40), A.free_metas[i]) proof
+    fix i
+    assume hi hil
+    have {fsl = free_slots} := expand(hpt, mallocng.metas_partition)
+    have fs _ := mp(all_elim(fsl, {i}), hi, hil)
+    have ne := mp(all_elim(nf, {i}), hi, hil)
+    have fo _ := apply(mp.meta_page, ha, fs)
+    have d1 := apply(mp.meta_disj[c := c, A := A, g := m, l := A.free_metas[i], a := A.free_metas[i]], hc, hu, ha, H, msl, fs, ne, fo, arith(fo), arith(fo))
+    have d2 := apply(mp.meta_disj[c := c, A := A, g := A.free_metas[i], l := m, a := m], hc, hu, ha, H, fs, msl, (!(m = A.free_metas[i]) by taut(ne)), mo, arith(mo), arith(mo))
+    show by arith(d1, d2, fo, mo)
+  qed
+  show by defs(taut((!(m = 0) by arith(g1, ako)), bnd, mal, u1, u2, oh, ol), mallocng_specs.meta_joinable)
+qed
+
 // ----------------------------------------------------------------------
 //  The slot counts' tables read
 
