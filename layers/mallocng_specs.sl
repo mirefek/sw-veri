@@ -923,6 +923,7 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
 // unmapped (a new group, a meta area) and set errno (a failed mmap).
 proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
   require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+    brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
     let A0 = A
@@ -987,6 +988,7 @@ pred fresh_group(A: Abs, g: nat, sc: nat, req: nat) =
 // meta area, a slot of a larger class's group) and set errno.
 proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64] {
   require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+    brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
     let A0 = A
