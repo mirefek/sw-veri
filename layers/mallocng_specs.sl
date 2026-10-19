@@ -919,8 +919,10 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
 // index i returned, slot i of the head of class sc's active list reserved
 // (an existing group's free slot, or a new group's: mapped, or nested in a
 // slot of a larger class), room in it for req bytes and the in-band
-// header; or -1, out of memory. The allocator may take memory that was
-// unmapped (a new group, a meta area) and set errno (a failed mmap).
+// header; or -1, out of memory. The smaller classes' lists as before. The
+// allocator may take memory that was unmapped (a new group, a meta area)
+// and set errno (a failed mmap); the slot reserved is of the allocator's
+// memory or of that.
 proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
   require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
@@ -929,14 +931,15 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
     let A0 = A
     let before = vm
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
-    ghost A := any A2: Abs where A2.taken = A0.taken
+    ghost A := any A2: Abs where A2.taken = A0.taken && (all s: nat. s < uint(sc) -> A2.active[s] = A0.active[s])
     let r = any r: bits[32] where (
       (r = bits[32](2^32 - 1) && no_reserved(A)) ||
       (uint(r) < 32 && len(A.active[uint(sc)]) > 0 && reserved_only(A, A.active[uint(sc)][0], uint(r)) &&
        A.metas[A.active[uint(sc)][0]].sizeclass = uint(sc) &&
        uint(req) + IB <= stride(A.metas[A.active[uint(sc)][0]])))
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
-      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
     return r
   }
 }
@@ -984,9 +987,10 @@ pred fresh_group(A: Abs, g: nat, sc: nat, req: nat) =
 
 // alloc_group(sc, req): a new group of class sc for requests of up to req
 // bytes (`fresh_group`; partially active only if its slots reach past its
-// first page) -- or 0, none to be had. Class sc's list as before, no slot
-// reserved; the allocator may take memory that was unmapped (the group, a
-// meta area, a slot of a larger class's group) and set errno.
+// first page) -- or 0, none to be had. The lists of class sc and the
+// smaller ones as before (a nested group's slot is a larger class's), no
+// slot reserved; the allocator may take memory that was unmapped (the
+// group, a meta area, a slot of a larger class's group) and set errno.
 proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64] {
   require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
@@ -995,7 +999,7 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
     let A0 = A
     let before = vm
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
-    ghost A := any A2: Abs where no_reserved(A2) && A2.active[uint(sc)] = A0.active[uint(sc)] && A2.taken = A0.taken
+    ghost A := any A2: Abs where no_reserved(A2) && (all s: nat. s <= uint(sc) -> A2.active[s] = A0.active[s]) && A2.taken = A0.taken
     let g = any g: bits[64] where g = 0 || fresh_group(A, uint(g), uint(sc), uint(req))
     havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&

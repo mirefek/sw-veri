@@ -807,11 +807,11 @@ qed
 
 // alloc_group's purpose (`alloc_group_spec`), from A on s's memory: an
 // overflow, or the return -- a new group of class sc for requests of up to
-// req bytes, or 0 --, class sc's list as before, no slot reserved, the
-// invariant kept, nothing outside the allocator touched but errno, the
-// allocator grown only into memory unmapped before
+// req bytes, or 0 --, the lists of class sc and the smaller ones as before,
+// no slot reserved, the invariant kept, nothing outside the allocator
+// touched but errno, the allocator grown only into memory unmapped before
 abbrev mp.agr_out(c, A, sc, req, B, s, o) := (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
-  (ex V g. (V in x86_64_linux.Vm && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && A2.active[sc] = A.active[sc] && A2.taken = A.taken) &&
+  (ex V g. (V in x86_64_linux.Vm && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, A, sc) && A2.taken = A.taken) &&
      (g = 0 || mallocng_specs.fresh_group(A2, g, sc, req)) &&
      mallocng.holds_in(c, A2, V, B) && mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
      (!(g = 0) -> int_lt(mallocng_specs.active_idx(V, A2.metas[g]), A2.metas[g].last_idx) ->
@@ -882,11 +882,15 @@ proof
     step e8 from e5 with z
     have gu gs ga _ := expand(gk1, mallocng_specs.groups_kept)
     have nr1: mallocng.no_reserved(A1) by defs(rewrite(sym(gs), expand(hnr, mallocng.no_reserved)), mallocng.no_reserved)
-    have ac1: A1.active[sc] = A.active[sc] by simp(ga)
+    have ac1: mp.upto(A1, A, sc) proof
+      fix s2
+      assume _ _
+      show by simp(ga)
+    qed
     have tk: A1.taken = A.taken by taut(tk1, h0)
     have vac: !(0 = 0) -> int_lt(mallocng_specs.active_idx(V1, A1.metas[0]), A1.metas[0].last_idx) ->
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A1.metas[0]), int_add(A1.metas[0].last_idx, 1)))) by simp()
-    have inner: ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && A2.active[sc] = A.active[sc] && A2.taken = A.taken) &&
+    have inner: ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, A, sc) && A2.taken = A.taken) &&
         (0 = 0 || mallocng_specs.fresh_group(A2, 0, sc, req)) &&
         mallocng.holds_in(c, A2, V1, B) && mallocng.untouched(c, A, B, s.vm, V1, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
         (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V1, A2.metas[0]), A2.metas[0].last_idx) ->
@@ -1691,12 +1695,17 @@ proof
         let A2 := mp.back(A1, A.taken, M)
         have vac: !(0 = 0) -> int_lt(mallocng_specs.active_idx(V5, A2.metas[0]), A2.metas[0].last_idx) ->
             int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[0]), int_add(A2.metas[0].last_idx, 1)))) by simp()
-        have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && A3.active[sc] = A.active[sc] && A3.taken = A.taken) &&
+        have bup: mp.upto(A2, A, sc) proof
+          fix s2
+          assume _ _
+          show by simp(bact)
+        qed
+        have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && mp.upto(A3, A, sc) && A3.taken = A.taken) &&
             (0 = 0 || mallocng_specs.fresh_group(A3, 0, sc, req)) &&
             mallocng.holds_in(c, A3, V5, B) && mallocng.untouched(c, A, B, s.vm, V5, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
             (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V5, A3.metas[0]), A3.metas[0].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[0]), int_add(A3.metas[0].last_idx, 1)))))
-          by ex_intro({A2}, taut(ba, bu, bnr, (A2.active[sc] = A.active[sc] by simp(bact)), btk, refl({0}), bhin, bunt, bgrw, vac))
+          by ex_intro({A2}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, bunt, bgrw, vac))
         show by disj({2}, ex_intro({V5}, {0}, taut(v5v, inner, oe)))
       qed
       // mapped at p: the group's stores
@@ -2473,7 +2482,11 @@ proof
           qed
           show by defs(r, mallocng.no_reserved)
         qed
-        have ac2: A2.active[sc] = A.active[sc] by simp(ga)
+        have ac2: mp.upto(A2, A, sc) proof
+          fix s2
+          assume _ _
+          show by simp(ga)
+        qed
         have tk2: A2.taken = A.taken by simp()
         // (M's group fresh: in use, unlinked, its slots unused, the first
         // available, its slots fitting the request; one slot if mapped short)
@@ -2617,7 +2630,7 @@ proof
           have sk2 := subst({y. int_mul(mallocng.stride(VR), int_add(VR.last_idx, 1)) = int_mul(SZ, y)}, kk, sk)
           show := rewrite(sym(em), (int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(VR), int_add(VR.last_idx, 1)))) by defs(arith(sk2, big), mallocng.UNIT)))
         qed
-        have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && A3.active[sc] = A.active[sc] && A3.taken = A.taken) &&
+        have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && mp.upto(A3, A, sc) && A3.taken = A.taken) &&
             (fst(rr) = 0 || mallocng_specs.fresh_group(A3, fst(rr), sc, req)) &&
             mallocng.holds_in(c, A3, VF, B) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
             (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(VF, A3.metas[fst(rr)]), A3.metas[fst(rr)].last_idx) ->
