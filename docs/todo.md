@@ -21,12 +21,14 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   newgroup.core (`mp.ng_holds` mapped, `mp.ngn_holds` nested,
   `mp.fb_holds_in` the meta given back, `mp.counts_tables`); the run
   (`mp.agr_run`, uncommitted in fun/alloc_group.core) is through
-  alloc_meta, the count's three loops, the mapped path's calls and count
-  adjustments, mmap, and its refusal (the meta given back: `mp.agr_back`).
-  Left: the mapped group's stores (from `cnt <=s active_idx` on), the
-  nested path (size_to_class, alloc_slot -- its failure by
-  `mp.agr_back` --, enframe, the header-zeroing loop, the meta's stores),
-  the memory level (`holds_in` for the new state from the run's writes),
+  alloc_meta, the count's three loops, and the mapped path to its return
+  (the calls, the count's adjustments, mmap and its refusal -- the meta
+  given back, `mp.agr_back` --, the active index, the meta's and the
+  group's stores: `o = ok(.., M)` on V4 with eleven stores). Left: the
+  mapped group's state (`mp.ngrp` on the final memory: `holds_in` from
+  `mp.ng_holds`, `fresh_group`, untouched, grown, the active index's
+  clause), the nested path (size_to_class, alloc_slot -- its failure by
+  `mp.agr_back` --, enframe, the header-zeroing loop, the same stores),
   the refinement and the contract at a call.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
@@ -101,6 +103,17 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 
 - Generate the function-level C2s and compositions (one instance of
   `g.fun_res` / `g.fun_res_ghost` and `tr.implements_refine` each).
+- A `step`'s `using` on the next line is silently dropped (its premises
+  then "not discharged", the facts there): the command should continue
+  over lines, or refuse the stray `using`.
+- An accessor's read (`meta_mem_(m)`, stepped inline from its body) is not
+  resolved through the stores before it, as an `ld` by its lemma is: the
+  value stays `bits_of_int(64, bytes_at(<stores>, ..))`; alloc_group's
+  mapped path proves the two reads by `mem` and passes them as `with`
+  equations (`er1`, `er2`).
+- `mem_defined` across a world's stores: closures `ms.md_st0` / `ms.md_st`
+  (in fun/alloc_group.core, with the bitfield store `ms.stbfw_det`) belong
+  with ops.core's world closures.
 - The trivial facts that a callee refines itself (`agself`, `dbself` in
   `mp.ta_run`, `amself`, `taself`) are no longer needed (`gc.calls_self`):
   to be removed.
