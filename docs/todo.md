@@ -18,11 +18,15 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
   as the machine's), to discharge `mp.am_implements`' hypotheses.
 - alloc_group by its purpose (GIMPLE): the model's lemmas are in
-  newgroup.core (`mp.ng_holds`, `mp.ngn_holds`); left: the memory level
-  (the held bytes before and after: the old groups' bytes and records
-  kept, `holds_in`'s mapped / free / rw clauses for the new group's
-  pages or slot), the run (four loops, the mmap and nested paths, the
-  failures freeing the meta), the refinement and the contract at a call.
+  newgroup.core (`mp.ng_holds` mapped, `mp.ngn_holds` nested,
+  `mp.fb_holds_in` the meta given back, `mp.counts_tables`); the run
+  (`mp.agr_run`, uncommitted in fun/alloc_group.core) is through
+  alloc_meta and the count's three loops, stopped at the mapped / nested
+  split. Left: the two paths (is_bouncing, account_bounce, step_seq --
+  its call contract still to state --, mmap or size_to_class, alloc_slot,
+  enframe, the header-zeroing loop, the meta's stores), the memory level
+  (`holds_in` for the new state from the run's writes), the refinement
+  and the contract at a call.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already
