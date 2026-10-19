@@ -15,6 +15,7 @@ abbrev mp.agr_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bit
   int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
   t in abi.World -> h in mp.G ->
   mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
   runs(f[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
@@ -305,6 +306,50 @@ proof
   show by defs(m, mallocng.footprint)
 qed
 
+// (memory untouched outside the allocator but e -- not the thread's block,
+// not errno --, the allocator grown only into unmapped memory: the break's
+// start, errno usable and apart as before)
+theorem mp.err_keep(c, A, A1, B, V0, V1, fs, objs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, B, fs) ->
+  abi.brk_start_ok(V0) -> mallocng_specs.errno_ok(V0, objs, fs) -> mallocng_specs.errno_apart(c, A, B, V0, fs) ->
+  mallocng.untouched(c, A, B, V0, V1, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) ->
+  (all i. i in omega -> int_lt(i, 4) -> !(int_add(mallocng_specs.errno_at(fs), i) in e)) -> mp.grown(c, A1, A, B, V0) ->
+  brk: abi.brk_start_ok(V1) && errno: mallocng_specs.errno_ok(V1, objs, fs) && apart: mallocng_specs.errno_apart(c, A1, B, V1, fs)
+proof
+  assume hfb ht htl hbs heo hea hun hte hee hgr
+  have u1 u2 := expand(hun, mallocng.untouched)
+  have th := apply(mp.tls_kept[c := c, A := A, b := B, V0 := V0, V1 := V1, fs := fs, e := e], hfb, ht, htl, hun, hte)
+  have bs: abi.brk_start_ok(V1) by defs(simp(u2, expand(hbs, abi.brk_start_ok)), abi.brk_start_ok)
+  have efl eus _ := expand(heo, mallocng_specs.errno_ok)
+  have ea: mallocng_specs.errno_at(fs) = int_add(fs, 52) by defs(arith(hfb, efl), mallocng_specs.errno_at, bits_add, pow2)
+  have eo: mallocng_specs.errno_at(fs) in omega by arith(ea, hfb)
+  // (errno's bytes: not the allocator's, mapped, outside e -- their pages kept)
+  have pe: all i. i in omega -> int_lt(i, 4) ->
+      V1.pages[int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE)] = V0.pages[int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE)] proof
+    fix i
+    assume hi hil
+    have nf mp0 := mp(all_elim(expand(hea, mallocng_specs.errno_apart), {i}), hi, hil)
+    have _ pg := mp(all_elim(u1, {int_add(mallocng_specs.errno_at(fs), i)}), arith(eo, hi), taut(nf, mp(all_elim(hee, {i}), hi, hil), mp0))
+    show := pg
+  qed
+  have us := apply(mp.usable_pg[vm := V0, vm2 := V1, objs := objs, a := mallocng_specs.errno_at(fs), n := 4, w := true], pe, eus)
+  have eok: mallocng_specs.errno_ok(V1, objs, fs) by defs(taut(efl, us, th), mallocng_specs.errno_ok)
+  have r: all x0. x0 in omega -> int_lt(x0, 4) -> !(int_add(mallocng_specs.errno_at(fs), x0) in mallocng.footprint(c, A1, B)) &&
+      x86_64_linux.mapped(V1, int_div(int_add(mallocng_specs.errno_at(fs), x0), x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hil
+    have nf mp0 := mp(all_elim(expand(hea, mallocng_specs.errno_apart), {i}), hi, hil)
+    have nf1: !(int_add(mallocng_specs.errno_at(fs), i) in mallocng.footprint(c, A1, B)) proof
+      assume f
+      show by taut(mp(all_elim(hgr, {int_add(mallocng_specs.errno_at(fs), i)}), arith(eo, hi), f), nf, mp0)
+    qed
+    have p := mp(all_elim(pe, {i}), hi, hil)
+    have m1: x86_64_linux.mapped(V1, int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE)) by defs(simp(p, expand(mp0, x86_64_linux.mapped)), x86_64_linux.mapped)
+    show by taut(nf1, m1)
+  qed
+  have ap: mallocng_specs.errno_apart(c, A1, B, V1, fs) by defs(r, mallocng_specs.errno_apart)
+  show by taut(bs, eok, ap)
+qed
+
 // (the allocator grown into unmapped memory only: still apart from the
 // thread's block)
 theorem mp.tls_grown(c, A, A2, b, vm, fs): fs in bits(64) -> abi.thread_ok(vm, fs) -> mallocng_specs.tls_apart(c, A, b, fs) ->
@@ -394,10 +439,11 @@ theorem mp.as_run(c, sc, req, gta, gac, gagr, gq, s, h, o): c in mallocng.Cfg ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gq[regs], s, o) -> runs(mallocng_specs.queue_spec_fun()[regs], s, o)) ->
   s in abi.World -> h in mp.G ->
   mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
+  abi.brk_start_ok(s.vm) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, s.vm, s.fs_base) ->
   runs(c_src_malloc_mallocng_malloc.alloc_slot(sc, req, gta, gac, gagr, gq), s, o) ->
   mp.as_out(c, h.A, sc, req, h.blocks, s, o)
 proof
-  assume hc hx hst hdj hsb hsl hrb hfit hta hac hagr hgq hw hh hin hnr hth htl hr
+  assume hc hx hst hdj hsb hsl hrb hfit hta hac hagr hgq hw hh hin hnr hth htl hbs heo hea hr
   let A := h.A
   let B := h.blocks
   let V0 := s.vm
@@ -564,13 +610,23 @@ proof
     have pth: abi.thread_ok(W1.vm, W1.fs_base) by simp(th1)
     have tl1 := apply(mp.tls_sub[c := c, A := A, A2 := A1, b := B, fs := s.fs_base], fsub, fsb, htl)
     have ptl: mallocng_specs.tls_apart(c, H1.A, H1.blocks, W1.fs_base) by simp(tl1, hA1, hB1)
+    have ne4: all i. i in omega -> int_lt(i, 4) -> !(int_add(mallocng_specs.errno_at(s.fs_base), i) in empty) proof
+      fix i
+      assume _ _
+      show by simp()
+    qed
+    have {kb = brk, ke = errno, kp = apart} := apply(mp.err_keep[c := c, A := A, A1 := A1, B := B, V0 := V0, V1 := V1, fs := s.fs_base, objs := s.objs, e := empty],
+      fsb, hth, htl, hbs, heo, hea, unt1, ne8, ne4, apply(mp.grown_sub[c := c, A := A, A2 := A1, b := B, vm := V0], fsub))
+    have pbs: abi.brk_start_ok(W1.vm) by simp(kb)
+    have peo: mallocng_specs.errno_ok(W1.vm, W1.objs, W1.fs_base) by simp(ke)
+    have pea: mallocng_specs.errno_apart(c, H1.A, H1.blocks, W1.vm, W1.fs_base) by simp(kp, hA1, hB1)
     have agself: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
         runs(gagr[regs], s, o) -> runs(gagr[regs], s, o) proof
       fix regs s o
       assume _ _ _ r
       show r
     qed
-    step V2 rr, e5 hR2 from k5 with hagr using agself, hsb, hrb, hsl, hfit, wW1, hg1, pin, pnr, pth, ptl
+    step V2 rr, e5 hR2 from k5 with hagr using agself, hsb, hrb, hsl, hfit, wW1, hg1, pin, pnr, pth, ptl, pbs, peo, pea
     have v2v ex2 := hR2
     obtain A2, a2a a2u nr2 act2 tk2 fg2 hin2 unt2 grw2 past2 from ex2
     have tk02: A2.taken = A.taken := trans(rewrite(hA1, tk2), ftk)
@@ -831,8 +887,11 @@ proof
   have htl: mallocng_specs.tls_apart(c, A, B, s.fs_base) by simp(hpre, sd, hd)
   have hsl: int_lt(sc, 48) by simp(hpre, sd, hd)
   have hfit: int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) by simp(hpre, sd, hd)
+  have hbs: abi.brk_start_ok(V0) by simp(hpre, sd, hd)
+  have heo: mallocng_specs.errno_ok(V0, s.objs, s.fs_base) by simp(hpre, sd, hd)
+  have hea: mallocng_specs.errno_apart(c, A, B, V0, s.fs_base) by simp(hpre, sd, hd)
   have run := apply(mp.as_run[c := c, sc := sc, req := req, gta := gta, gac := gac, gagr := gagr, gq := gq, s := s, h := h, o := o],
-    hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, hagr, hgq, hw, hh, hin, hnr, hth, htl, hr)
+    hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, hagr, hgq, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hr)
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
@@ -902,6 +961,7 @@ abbrev mp.as_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits
   int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
   t in abi.World -> h in mp.G ->
   mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
   runs(f[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
@@ -919,11 +979,11 @@ theorem mp.as_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> 
 proof
   assume hf q
   fix sc req t h regs o2
-  assume hsb hrb hsl hfit hw hh hin hnr hth htl hro hr
+  assume hsb hrb hsl hfit hw hh hin hnr hth htl hbs heo hea hro hr
   have rl rn _ _ := apply(gc.regs_32_64, hsb, hrb, hro)
   have lo: seq_len(regs) in omega by simp(rl)
   have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
-  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hfit, hw, hh, hin, hnr, hth, htl, hro, r2)
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, r2)
 qed
 
 // alloc_slot's code called as alloc_slot
@@ -939,14 +999,14 @@ proof
   fix c gta gac gagr gq
   assume hc hx hst hdj hta hac hagr hgq
   fix sc req t h regs o2
-  assume hsb hrb hsl hfit hw hh hin hnr hth htl hro hr
+  assume hsb hrb hsl hfit hw hh hin hnr hth htl hbs heo hea hro hr
   have rl rn r0 r1 := apply(gc.regs_32_64, hsb, hrb, hro)
   have lo: seq_len(regs) in omega by simp(rl)
   have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
   have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
   have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
   have bp: bits_of_int(64, regs[1]) = req by defs(simp(r1, hrb), bits_of_int, pow2)
-  step o3 A2 V2 r, e hs1 from hr with o2l, r0, bp, mp.as_run using ra, hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, hagr, hgq, hw, hh, hin, hnr, hth, htl
+  step o3 A2 V2 r, e hs1 from hr with o2l, r0, bp, mp.as_run using ra, hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, hagr, hgq, hw, hh, hin, hnr, hth, htl, hbs, heo, hea
   have ha2 hu2 htk hrb2 hrc hv2 hin2 hunt hgr := hs1
   step o4 u y, e2 from e with g.result32_inv using hrb2
   have oe _ ur := e2
