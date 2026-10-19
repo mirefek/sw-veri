@@ -2422,3 +2422,131 @@ proof
   assume hc hu ha hb hv hv1 hh cal ht hte hj hfd xrw
   show := apply(mp.ms_holds_in, apply(mp.fb_ms, hc, hu, ha, hb, hv, hv1, hh, cal, ht, hte, hj, hfd, xrw))
 qed
+
+// ----------------------------------------------------------------------
+//  The slot counts' tables read
+
+// (a byte of the image's read-only segments: the invariant's)
+theorem mp.ro_view(c, A, vm, b, i, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds_in(c, A, vm, b) -> a in omega -> i in omega -> int_lt(i, x86_64_linux.phnum(c.file)) -> mallocng.in_range(a, mallocng.ro_ranges(c.file)[i]) ->
+  a in mallocng.held(c, A, b)
+proof
+  assume hc hu ha hb hh hao hi hil inr
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {huo = used, hga = apart} := expand(H, mallocng.holds)
+  let RO := mallocng.ro_ranges(c.file)
+  let FR := seq_concat(seq_concat(mallocng.ro_ranges(c.file), mallocng.data_ranges(c)), mallocng.auxv_ranges(A))
+  have fs: c.file in seq_type(bits(8)) by simp(hc)
+  have pn: x86_64_linux.phnum(c.file) in omega by defs(mp(x86.le_at_nat[f := c.file, off := 56, n := 2], fs, simp()), x86_64_linux.phnum)
+  have rol := apply(mp.ro_list, fs)
+  have rlen: seq_len(RO) = x86_64_linux.phnum(c.file) by defs(arith(fn_build_dom[d := int_sub(x86_64_linux.phnum(c.file), 0), v := x0. ite(x86_64_linux.is_load(c.file, int_add(0, x0)) && !bit(x86_64_linux.segment(c.file, int_add(0, x0)).flags, 1), pair(x86_64_linux.segment(c.file, int_add(0, x0)).vaddr, x86_64_linux.segment(c.file, int_add(0, x0)).memsz), pair(0, 0))], pn), seq_len, mallocng.ro_ranges)
+  have {pf = front, par = areas, prs = reserve, pcl = classes, pdb = debruijn} := apply(mp.fp_pieces, hc, hu, ha)
+  have il: int_lt(i, seq_len(RO)) by arith(rlen, hil)
+  have cf: c.ctx in omega && c.lock in omega && c.libc in omega by simp(hc)
+  have o1 := apply(tr.seq_one_type, (pair(c.ctx, mallocng.CTX_SIZE) in univ(1) by simp(cf)))
+  have o2 := apply(tr.seq_one_type, (pair(c.lock, 4) in univ(1) by simp(cf)))
+  have o3 := apply(tr.seq_one_type, (pair(c.libc, 16) in univ(1) by simp(cf)))
+  have dl: mallocng.data_ranges(c) in list_type(univ(1)) by defs(apply(tr.concat_list, apply(tr.concat_list, o1, o2), o3), mallocng.data_ranges)
+  have {xl = auxv} := apply(mp.front_pieces, hc, hu, ha)
+  have e1: FR[i] = RO[i] := at({FR[i]}, rol, dl, xl, hi, il)
+  have lf: int_lt(i, seq_len(FR)) by arith(rol, dl, xl, il)
+  have irf: mallocng.in_ranges(a, FR) by defs(ex_intro({i}, taut(hi, lf, rewrite(sym(e1), inr))), mallocng.in_ranges)
+  // (in the fixed regions: no client's)
+  let FX := seq_concat(seq_concat(seq_concat(seq_concat(FR, fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))), seq_one(pair(A.reserve, int_mul(4096, A.reserve_cnt)))), seq_one(pair(c.sct, int_mul(2, 48)))), seq_one(pair(c.dbj, 32)))
+  have fxe: mallocng.fixed_ranges(c, A) = FX by defs(refl({FX}), mallocng.fixed_ranges)
+  have ef: FX[i] = RO[i] := at({FX[i]}, rol, dl, xl, par, prs, pcl, pdb, hi, il)
+  have lfx: int_lt(i, seq_len(FX)) by arith(rol, dl, xl, par, prs, pcl, pdb, il)
+  have irx: mallocng.in_ranges(a, mallocng.fixed_ranges(c, A)) := rewrite(sym(fxe), (mallocng.in_ranges(a, FX) by defs(ex_intro({i}, taut(hi, lfx, rewrite(sym(ef), inr))), mallocng.in_ranges)))
+  have nl: !(a in malloc.live_of(b)) proof
+    assume l
+    show by taut(irx, apply(mp.live_nofix[c := c, A := A, M := M, b := b, brk := vm.brk, a := a], ha, hb, H, l))
+  qed
+  have nt := apply(mp.untaken_of, hc, hu, ha, H, hao, apply(mp.ro_noarea, hc, hu, ha, H, hao, hi, hil, inr))
+  have nr := apply(mp.fixed_unres[c := c, A := A, M := M, b := b, a := a], hc, hu, ha, hao, huo, hga, taut(irf))
+  have fp := apply(mp.fp_intro, hc, hu, ha, hao, nl, nr, nt, taut(irf))
+  show := apply(mp.ro_held[c := c, A := A, M := M, b := b, brk := vm.brk, i := i, a := a], hc, hu, ha, H, hi, hil, inr, fp)
+qed
+
+// (a byte read through the invariant's view, held, mapped below the user
+// space's end, readable: usable, its value the view's)
+theorem mp.held_rd1(c, A, vm, b, objs, a): vm.bytes in fn_space(bits(64), bits(8)) -> a in omega -> a in mallocng.held(c, A, b) ->
+  mallocng.m_mapped(mallocng.mview(vm, mallocng.held(c, A, b)), a) -> snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a)).prot.r ->
+  !(snd(mallocng.pg(mallocng.mview(vm, mallocng.held(c, A, b)), a)).kind = 2) ->
+  gimple.usable(vm, objs, a, 1, false) && gimple.bytes_at(vm, bits_of_int(64, a), 1) = mallocng.b8(mallocng.mview(vm, mallocng.held(c, A, b)), a)
+proof
+  assume hvb hao hd mm pr nk
+  let FP := mallocng.held(c, A, b)
+  let M := mallocng.mview(vm, FP)
+  have t0: int_add(a, 0) = a by arith(hao)
+  have bj: all j. j in omega -> int_lt(j, 1) -> int_add(a, j) in FP && mallocng.m_mapped(M, int_add(a, j)) &&
+      snd(mallocng.pg(M, int_add(a, j))).prot.r && !(snd(mallocng.pg(M, int_add(a, j))).kind = 2) proof
+    fix j
+    assume hj hjl
+    have j0: j = 0 by arith(hj, hjl)
+    show by simp(j0, t0, hd, mm, pr, nk)
+  qed
+  have us := apply(mp.view_usable[vm := vm, fp := FP, objs := objs, a := a, n := 1], hao, bj)
+  have infp: all j. j in omega -> int_lt(j, 1) -> int_add(a, j) in FP proof
+    fix j
+    assume hj hjl
+    have r := mp(all_elim(bj, {j}), hj, hjl)
+    show by taut(r)
+  qed
+  have vr := apply(mp.view_read[vm := vm, fp := FP, a := a, n := 1], hao, simp(), simp(), infp)
+  have mm2 := expand(mm, mallocng.m_mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have tl: int_lt(int_div(a, 4096), int_div(int_sub(int_pow(2, 47), 4096), 4096)) by taut(mm2)
+  have bt: bits_of_int(64, a) = a by defs(arith(tl, hao), bits_of_int, pow2)
+  have _ bvo := apply(mp.b8_view[vm := vm, fp := FP, a := a], hvb, hao, hd)
+  have r1: mallocng.rd(M, a, 1) = mallocng.b8(M, a) by defs(simp(bvo, t0), mallocng.rd)
+  show by taut(us, subst({y. gimple.bytes_at(vm, y, 1) = mallocng.b8(M, a)}, sym(bt), trans(vr, r1)))
+qed
+
+// the slot counts' tables: readable, as the source has them
+theorem mp.counts_tables(c, A, vm, b, objs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  vm in x86_64_linux.Vm -> mallocng.holds_in(c, A, vm, b) ->
+  small: mallocng_specs.table_ok(vm, objs, c.scnt, 1, mallocng.small_cnt_tab) && med: mallocng_specs.table_ok(vm, objs, c.mcnt, 1, mallocng.med_cnt_tab)
+proof
+  assume hc hu ha hb hv hh
+  have hvb: vm.bytes in fn_space(bits(64), bits(8)) by simp(hv)
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  have {H = inv} := expand(hh, mallocng.holds_in)
+  have {co = classes} := expand(H, mallocng.holds)
+  have _ _ _ kc := expand(co, mallocng.classes_ok)
+  have {ks = small, km = med, kr = read, kso = ro_small, kmo = ro_med} := expand(kc, mallocng.counts_ok)
+  have sco: c.scnt in omega by simp(hc)
+  have mco: c.mcnt in omega by simp(hc)
+  obtain si, hsi hsil s1 s2 from kso
+  obtain mi, hmi hmil m1 m2 from kmo
+  have ls: seq_len(mallocng.small_cnt_tab) = 27 by defs(simp(), mallocng.small_cnt_tab)
+  have lm: seq_len(mallocng.med_cnt_tab) = 4 by defs(simp(), mallocng.med_cnt_tab)
+  have t1: all x0. x0 in omega -> int_lt(x0, seq_len(mallocng.small_cnt_tab)) ->
+      gimple.usable(vm, objs, int_add(c.scnt, int_mul(1, x0)), 1, false) && gimple.bytes_at(vm, bits_of_int(64, int_add(c.scnt, int_mul(1, x0))), 1) = mallocng.small_cnt_tab[x0] proof
+    fix i
+    assume hi hl
+    let T := int_add(c.scnt, int_mul(1, i))
+    have i27: int_lt(i, 27) by simp(hl, ls)
+    have to: T in omega by arith(sco, hi)
+    have inr: mallocng.in_range(T, mallocng.ro_ranges(c.file)[si]) by defs(arith(s1, s2, sco, hi, i27), mallocng.in_range)
+    have hd := apply(mp.ro_view[c := c, A := A, vm := vm, b := b, i := si, a := T], hc, hu, ha, hb, hh, to, hsi, hsil, inr)
+    have mm pr nk := mp(all_elim(kr, {T}), to, (int_le(c.scnt, T) && int_lt(T, int_add(c.scnt, 27)) || int_le(c.mcnt, T) && int_lt(T, int_add(c.mcnt, 4)) by arith(sco, hi, i27)))
+    have us bv := apply(mp.held_rd1[c := c, A := A, vm := vm, b := b, objs := objs, a := T], hvb, to, hd, mm, pr, nk)
+    have ti: T = int_add(c.scnt, i) by arith(sco, hi)
+    show by taut(us, trans(bv, rewrite(sym(ti), mp(all_elim(ks, {i}), hi, i27))))
+  qed
+  have t2: all x0. x0 in omega -> int_lt(x0, seq_len(mallocng.med_cnt_tab)) ->
+      gimple.usable(vm, objs, int_add(c.mcnt, int_mul(1, x0)), 1, false) && gimple.bytes_at(vm, bits_of_int(64, int_add(c.mcnt, int_mul(1, x0))), 1) = mallocng.med_cnt_tab[x0] proof
+    fix i
+    assume hi hl
+    let T := int_add(c.mcnt, int_mul(1, i))
+    have i4: int_lt(i, 4) by simp(hl, lm)
+    have to: T in omega by arith(mco, hi)
+    have inr: mallocng.in_range(T, mallocng.ro_ranges(c.file)[mi]) by defs(arith(m1, m2, mco, hi, i4), mallocng.in_range)
+    have hd := apply(mp.ro_view[c := c, A := A, vm := vm, b := b, i := mi, a := T], hc, hu, ha, hb, hh, to, hmi, hmil, inr)
+    have mm pr nk := mp(all_elim(kr, {T}), to, (int_le(c.scnt, T) && int_lt(T, int_add(c.scnt, 27)) || int_le(c.mcnt, T) && int_lt(T, int_add(c.mcnt, 4)) by arith(mco, hi, i4)))
+    have us bv := apply(mp.held_rd1[c := c, A := A, vm := vm, b := b, objs := objs, a := T], hvb, to, hd, mm, pr, nk)
+    have ti: T = int_add(c.mcnt, i) by arith(mco, hi)
+    show by taut(us, trans(bv, rewrite(sym(ti), mp(all_elim(km, {i}), hi, i4))))
+  qed
+  show by defs(taut(t1, t2), mallocng_specs.table_ok)
+qed
