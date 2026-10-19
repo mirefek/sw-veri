@@ -78,7 +78,8 @@ pub(super) fn loops_of(labels: &[u128], succ: &BTreeMap<u128, Vec<Option<u128>>>
             es.extend(next(x).into_iter().filter(|s| !bs.contains(s)));
         }
         for &e in &es {
-            if lp.contains_key(&e) {
+            // (another loop's head: a loop after the loop)
+            if lp.get(&e).is_some_and(|&h2| h2 != e) {
                 return Err(format!("loop {}: its exit {} inside a loop (nested loops: not yet)", h, e));
             }
         }
@@ -613,7 +614,7 @@ impl<'e> Gen<'e> {
         if disj.len() != labels.len() {
             return Err("v's disjuncts not the labels".into());
         }
-        let mut acc = self.run(&R::Inst("g.lab_none".into(), vec![("G", gp.clone())]), &[])?;
+        let mut acc = self.run(&R::Inst("tr.cfg_kk_nil".into(), vec![("P", gp.clone())]), &[])?;
         for i in (0..labels.len()).rev() {
             let (r, st) = self.inst("g.lab_pt", &[("G", gp.clone()), ("k", lit(labels[i]))])?;
             let (ps, _) = self.imps(&st);
