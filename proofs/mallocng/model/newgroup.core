@@ -920,3 +920,266 @@ proof
   have bl2: mallocng.blocks_ok(A2, b) by defs(k4, mallocng.blocks_ok)
   show by taut(ac2, pa2, re2, bl2)
 qed
+
+// (the regions before the groups': the data's, the image's, the areas',
+// the reserve)
+abbrev mp.reg_pre(c, A) := seq_concat(seq_concat(seq_concat(mallocng.data_ranges(c), mallocng.ro_ranges(c.file)),
+  fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))), seq_one(pair(A.reserve, int_mul(4096, A.reserve_cnt))))
+abbrev mp.reg_q(c, A) := int_add(int_add(int_add(3, x86_64_linux.phnum(c.file)), seq_len(A.areas)), 1)
+
+theorem mp.reg_front(c, A, i): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> i in omega ->
+  pre: (int_lt(i, mp.reg_q(c, A)) -> mallocng.regions(c, A)[i] = mp.reg_pre(c, A)[i]) &&
+  len: seq_len(mallocng.regions(c, A)) = int_add(mp.reg_q(c, A), seq_len(A.used))
+proof
+  assume hc hu ha hi
+  let F := c.file
+  let RO := mallocng.ro_ranges(F)
+  let AR := fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))
+  let GR := fn_build(int_sub(seq_len(A.used), 0), x0. ite(int_lt(0, A.metas[A.used[int_add(0, x0)]].maplen), mallocng.group_range(A.metas[A.used[int_add(0, x0)]]), pair(0, 0)))
+  let DR := mallocng.data_ranges(c)
+  let P := mp.reg_pre(c, A)
+  have fs: F in seq_type(bits(8)) by simp(hc)
+  have pn: x86_64_linux.phnum(F) in omega by defs(mp(x86.le_at_nat[f := F, off := 56, n := 2], fs, simp()), x86_64_linux.phnum)
+  have rol := apply(mp.ro_list, fs)
+  have rlen: seq_len(RO) = x86_64_linux.phnum(F) by defs(arith(fn_build_dom[d := int_sub(x86_64_linux.phnum(F), 0), v := x0. ite(x86_64_linux.is_load(F, int_add(0, x0)) && !bit(x86_64_linux.segment(F, int_add(0, x0)).flags, 1), pair(x86_64_linux.segment(F, int_add(0, x0)).vaddr, x86_64_linux.segment(F, int_add(0, x0)).memsz), pair(0, 0))], pn), seq_len, mallocng.ro_ranges)
+  have {p2 = areas, p3 = reserve} := apply(mp.fp_pieces, hc, hu, ha)
+  have cf: c.ctx in omega && c.lock in omega && c.libc in omega by simp(hc)
+  have o1 := apply(tr.seq_one_type, (pair(c.ctx, mallocng.CTX_SIZE) in univ(1) by simp(cf)))
+  have o2 := apply(tr.seq_one_type, (pair(c.lock, 4) in univ(1) by simp(cf)))
+  have o3 := apply(tr.seq_one_type, (pair(c.libc, 16) in univ(1) by simp(cf)))
+  have dl: DR in list_type(univ(1)) by defs(apply(tr.concat_list, apply(tr.concat_list, o1, o2), o3), mallocng.data_ranges)
+  have drl: seq_len(DR) = 3 by defs(arith(), mallocng.data_ranges)
+  have pl: P in list_type(univ(1)) := apply(tr.concat_list, apply(tr.concat_list, apply(tr.concat_list, dl, rol), p2), p3)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have al: seq_len(A.areas) in omega by arith(rl)
+  have arl: seq_len(AR) = int_sub(seq_len(A.areas), 0) by defs(fn_build_dom[d := int_sub(seq_len(A.areas), 0), v := x0. pair(A.areas[int_add(0, x0)], 4096)], seq_len)
+  have pln: seq_len(P) = mp.reg_q(c, A) by arith(dl, rol, p2, p3, drl, rlen, arl, pn, al)
+  have ul: A.used in list_type(omega) by simp(ha)
+  have ud: int_sub(seq_len(A.used), 0) in omega by arith(ul)
+  have gv: all x0. x0 in int_sub(seq_len(A.used), 0) -> ite(int_lt(0, A.metas[A.used[int_add(0, x0)]].maplen), mallocng.group_range(A.metas[A.used[int_add(0, x0)]]), pair(0, 0)) in univ(1) proof
+    fix x0
+    assume hx
+    show by defs(simp(hu), mallocng.group_range, mallocng.stride)
+  qed
+  have p5 := apply(build_list, ud, gv)
+  have grl: seq_len(GR) = int_sub(seq_len(A.used), 0) by defs(fn_build_dom[d := int_sub(seq_len(A.used), 0),
+    v := x0. ite(int_lt(0, A.metas[A.used[int_add(0, x0)]].maplen), mallocng.group_range(A.metas[A.used[int_add(0, x0)]]), pair(0, 0))], seq_len)
+  have er: mallocng.regions(c, A) = seq_concat(P, GR) by defs(refl({seq_concat(P, GR)}), mallocng.regions)
+  have c1: int_lt(i, mp.reg_q(c, A)) -> seq_concat(P, GR)[i] = P[i] proof
+    assume h
+    show := at({seq_concat(P, GR)[i]}, pl, p5, pln, hi, h)
+  qed
+  have c2: seq_len(seq_concat(P, GR)) = int_add(mp.reg_q(c, A), seq_len(A.used)) by arith(pl, p5, pln, grl, ul)
+  show by simp(er, c1, c2)
+qed
+
+// (regions rs2 the regions rs re-indexed by f, but for x: separate if x's
+// is apart from the others)
+theorem mp.sep_inject(rs, rs2, x, j. f): mallocng.separate(rs) -> x in omega ->
+  (all i. i in omega -> int_lt(i, seq_len(rs2)) -> !(i = x) -> (f(i) in omega && int_lt(f(i), seq_len(rs))) && rs2[i] = rs[f(i)]) ->
+  (all i. all j. i in omega -> j in omega -> !(i = x) -> !(j = x) -> f(i) = f(j) -> i = j) ->
+  (all i. i in omega -> int_lt(i, seq_len(rs2)) -> !(i = x) -> mallocng.apart(rs2[x], rs2[i])) ->
+  mallocng.separate(rs2)
+proof
+  assume hs hx hf hi ha
+  have r: all x0. all x1. x0 in omega && x1 in omega -> (int_lt(x0, seq_len(rs2)) && int_lt(x1, seq_len(rs2))) && !(x0 = x1) -> mallocng.apart(rs2[x0], rs2[x1]) proof
+    fix i j
+    assume ho h
+    have io jo := ho
+    have il jl ne := h
+    have c1: i = x -> mallocng.apart(rs2[i], rs2[j]) proof
+      assume e
+      have jx: !(j = x) proof
+        assume e2
+        show by taut(ne, trans(e, sym(e2)))
+      qed
+      show := rewrite(sym(e), mp(all_elim(ha, {j}), jo, jl, jx))
+    qed
+    have c2: j = x -> mallocng.apart(rs2[i], rs2[j]) proof
+      assume e
+      have ix: !(i = x) proof
+        assume e2
+        show by taut(ne, trans(e2, sym(e)))
+      qed
+      show := apply(mp.apart_sym, rewrite(sym(e), mp(all_elim(ha, {i}), io, il, ix)))
+    qed
+    have c3: !(i = x) -> !(j = x) -> mallocng.apart(rs2[i], rs2[j]) proof
+      assume ix jx
+      have fio fil fie := mp(all_elim(hf, {i}), io, il, ix)
+      have fjo fjl fje := mp(all_elim(hf, {j}), jo, jl, jx)
+      have fne: !(f(i) = f(j)) proof
+        assume e
+        show by taut(ne, mp(all_elim(hi, {i}, {j}), io, jo, ix, jx, e))
+      qed
+      have a := mp(all_elim(expand(hs, mallocng.separate), {f(i)}, {f(j)}), conj(fio, fjo), taut(fil, fjl, fne))
+      show := rewrite(sym(fje), rewrite(sym(fie), a))
+    qed
+    show by taut(c1, c2, c3)
+  qed
+  show by defs(r, mallocng.separate)
+qed
+
+// the regions separate: the old ones, the new group's mapping (if mapped
+// on its own) apart from them
+theorem mp.ng_sep(c, A, k, T, m, V, n): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> k in omega -> int_le(k, seq_len(A.used)) -> m in omega ->
+  !mallocng.is_used(A, m) -> mp.ngrp(A, k, T, m, V, n) in univ(1) -> mp.ngrp(A, k, T, m, V, n) in mallocng.Abs ->
+  mallocng.separate(mallocng.regions(c, A)) ->
+  (int_lt(0, V.maplen) -> all i. i in omega -> int_lt(i, seq_len(mallocng.regions(c, A))) -> mallocng.apart(mallocng.group_range(V), mallocng.regions(c, A)[i])) ->
+  mallocng.separate(mallocng.regions(c, mp.ngrp(A, k, T, m, V, n)))
+proof
+  assume hc hu ha hk hkl hm nm hu2 ha2 hs hap
+  let A2 := mp.ngrp(A, k, T, m, V, n)
+  let Q := mp.reg_q(c, A)
+  let X := int_add(Q, k)
+  let R := mallocng.regions(c, A)
+  let R2 := mallocng.regions(c, A2)
+  have fs: c.file in seq_type(bits(8)) by simp(hc)
+  have pn: x86_64_linux.phnum(c.file) in omega by defs(mp(x86.le_at_nat[f := c.file, off := 56, n := 2], fs, simp()), x86_64_linux.phnum)
+  have al: seq_len(A.areas) in omega by arith((A.areas in list_type(omega) by simp(ha)))
+  have ul: A.used in list_type(omega) by simp(ha)
+  have uo: seq_len(A.used) in omega by arith(ul)
+  have qo: Q in omega by arith(pn, al)
+  have xo: X in omega by arith(qo, hk)
+  have q2: mp.reg_q(c, A2) = Q by simp()
+  have pe: mp.reg_pre(c, A2) = mp.reg_pre(c, A) by simp()
+  have dl _ _ := apply(mp.ins_app[l := A.used, k := k, x := m, j := 0], ul, hk, hkl, hm)
+  have el: all j. j in omega -> int_lt(j, int_add(seq_len(A.used), 1)) -> A2.used[j] = ite(int_lt(j, k), A.used[j], ite(j = k, m, A.used[int_sub(j, 1)])) proof
+    fix j
+    have _ _ e := apply(mp.ins_app[l := A.used, k := k, x := m, j := j], ul, hk, hkl, hm)
+    show by simp(e)
+  qed
+  have u2l: seq_len(A2.used) = int_add(seq_len(A.used), 1) by simp(dl)
+  have {l1 = len} := apply(mp.reg_front[c := c, A := A, i := 0], hc, hu, ha, simp())
+  have {l2 = len} := apply(mp.reg_front[c := c, A := A2, i := 0], hc, hu2, ha2, simp())
+  // (a group in use before: its record as before)
+  have em: all g. mallocng.is_used(A, g) -> A2.metas[g] = A.metas[g] proof
+    fix g
+    assume h1
+    have gm: !(g = m) proof
+      assume e
+      show by taut(rewrite(e, h1), nm)
+    qed
+    show by simp(mp(app_update_other[f := A.metas, k := m, v := V, x := g], gm))
+  qed
+  have iu: all j. j in omega -> int_lt(j, seq_len(A.used)) -> mallocng.is_used(A, A.used[j]) proof
+    fix j
+    assume hj hjl
+    show by defs(ex_intro({j}, taut(hj, hjl, refl({A.used[j]}))), mallocng.is_used)
+  qed
+  // (the k-th group's entry of A2's: the j-th of A's)
+  have gq: all i. all j. i in omega -> j in omega -> int_lt(j, seq_len(A.used)) -> int_lt(int_sub(i, Q), int_add(seq_len(A.used), 1)) ->
+      int_le(Q, i) -> A2.used[int_sub(i, Q)] = A.used[j] -> R2[i] = R[int_add(Q, j)] proof
+    fix i j
+    assume hi hj hjl hil hqi eu
+    let j2 := int_sub(i, Q)
+    have j2o: j2 in omega by arith(hi, hqi, qo)
+    have g2 _ := apply(mp.reg_grp[c := c, A := A2, k := j2], hc, hu2, ha2, j2o, rewrite(sym(u2l), hil))
+    have g1 _ := apply(mp.reg_grp[c := c, A := A, k := j], hc, hu, ha, hj, hjl)
+    have ei: int_add(mp.reg_q(c, A2), j2) = i by arith(q2, hqi, hi, qo)
+    have e2 := rewrite(mp(all_elim(em, {A.used[j]}), mp(all_elim(iu, {j}), hj, hjl)), rewrite(eu, rewrite(ei, g2)))
+    show := trans(e2, sym(g1))
+  qed
+  have hf: all i. i in omega -> int_lt(i, seq_len(R2)) -> !(i = X) ->
+      (ite(int_lt(i, X), i, int_sub(i, 1)) in omega && int_lt(ite(int_lt(i, X), i, int_sub(i, 1)), seq_len(R))) && R2[i] = R[ite(int_lt(i, X), i, int_sub(i, 1))] proof
+    fix i
+    assume hi hil hix
+    have c1: int_lt(i, Q) -> (i in omega && int_lt(i, seq_len(R))) && R2[i] = R[i] proof
+      assume h
+      have {p2 = pre} := apply(mp.reg_front[c := c, A := A2, i := i], hc, hu2, ha2, hi)
+      have {p1 = pre} := apply(mp.reg_front[c := c, A := A, i := i], hc, hu, ha, hi)
+      have e: R2[i] = R[i] := trans(rewrite(pe, mp(p2, rewrite(sym(q2), h))), sym(mp(p1, h)))
+      show by taut(hi, (int_lt(i, seq_len(R)) by arith(l1, h, uo)), e)
+    qed
+    have c2: int_le(Q, i) -> int_lt(i, X) -> (i in omega && int_lt(i, seq_len(R))) && R2[i] = R[i] proof
+      assume h1 h2
+      let j := int_sub(i, Q)
+      have jo: j in omega by arith(h1, hi, qo)
+      have jk: int_lt(j, k) by arith(h2)
+      have eu: A2.used[j] = A.used[j] := trans(mp(all_elim(el, {j}), jo, (int_lt(j, int_add(seq_len(A.used), 1)) by arith(jk, hkl))),
+        mp(ite_t[c := int_lt(j, k), a := A.used[j], b := ite(j = k, m, A.used[int_sub(j, 1)])], jk))
+      have e0 := mp(all_elim(gq, {i}, {j}), hi, jo, (int_lt(j, seq_len(A.used)) by arith(jk, hkl)), (int_lt(j, int_add(seq_len(A.used), 1)) by arith(jk, hkl)), h1, eu)
+      have e: R2[i] = R[i] := rewrite((int_add(Q, j) = i by arith(h1, hi, qo)), e0)
+      show by taut(hi, (int_lt(i, seq_len(R)) by arith(l1, h2, hkl, qo)), e)
+    qed
+    have c3: int_lt(X, i) -> (int_sub(i, 1) in omega && int_lt(int_sub(i, 1), seq_len(R))) && R2[i] = R[int_sub(i, 1)] proof
+      assume h
+      let j := int_sub(i, Q)
+      have jo: j in omega by arith(h, hi, qo, hk)
+      have kj: int_lt(k, j) by arith(h)
+      have jl: int_lt(j, int_add(seq_len(A.used), 1)) by arith(hil, l2, u2l, q2)
+      have eu: A2.used[j] = A.used[int_sub(j, 1)] := trans(mp(all_elim(el, {j}), jo, jl),
+        trans(mp(ite_f[c := int_lt(j, k), a := A.used[j], b := ite(j = k, m, A.used[int_sub(j, 1)])], (!int_lt(j, k) by arith(kj))),
+          mp(ite_f[c := j = k, a := m, b := A.used[int_sub(j, 1)]], (!(j = k) by arith(kj)))))
+      have e0 := mp(all_elim(gq, {i}, {int_sub(j, 1)}), hi, (int_sub(j, 1) in omega by arith(kj, hk)), (int_lt(int_sub(j, 1), seq_len(A.used)) by arith(jl)), jl,
+        (int_le(Q, i) by arith(h, hk)), eu)
+      have e: R2[i] = R[int_sub(i, 1)] := rewrite((int_add(Q, int_sub(j, 1)) = int_sub(i, 1) by arith(h, hi, qo, hk)), e0)
+      show by taut((int_sub(i, 1) in omega by arith(h, xo)), (int_lt(int_sub(i, 1), seq_len(R)) by arith(l1, l2, u2l, q2, hil)), e)
+    qed
+    have d1: int_lt(i, X) -> ite(int_lt(i, X), i, int_sub(i, 1)) = i by simp()
+    have d2: !int_lt(i, X) -> ite(int_lt(i, X), i, int_sub(i, 1)) = int_sub(i, 1) by simp()
+    have k1: int_lt(i, X) -> (ite(int_lt(i, X), i, int_sub(i, 1)) in omega && int_lt(ite(int_lt(i, X), i, int_sub(i, 1)), seq_len(R))) &&
+        R2[i] = R[ite(int_lt(i, X), i, int_sub(i, 1))] proof
+      assume h
+      have r: (i in omega && int_lt(i, seq_len(R))) && R2[i] = R[i] by taut(c1, c2, h, (int_lt(i, Q) || int_le(Q, i) by arith(hi, qo)))
+      show := subst({y. (y in omega && int_lt(y, seq_len(R))) && R2[i] = R[y]}, sym(mp(d1, h)), r)
+    qed
+    have k2: !int_lt(i, X) -> (ite(int_lt(i, X), i, int_sub(i, 1)) in omega && int_lt(ite(int_lt(i, X), i, int_sub(i, 1)), seq_len(R))) &&
+        R2[i] = R[ite(int_lt(i, X), i, int_sub(i, 1))] proof
+      assume h
+      have r := mp(c3, (int_lt(X, i) by arith(h, hix)))
+      show := subst({y. (y in omega && int_lt(y, seq_len(R))) && R2[i] = R[y]}, sym(mp(d2, h)), r)
+    qed
+    show by taut(k1, k2)
+  qed
+  have hi: all i. all j. i in omega -> j in omega -> !(i = X) -> !(j = X) -> ite(int_lt(i, X), i, int_sub(i, 1)) = ite(int_lt(j, X), j, int_sub(j, 1)) -> i = j proof
+    fix i j
+    assume hio hjo hix hjx e
+    have a1: int_lt(i, X) -> ite(int_lt(i, X), i, int_sub(i, 1)) = i by simp()
+    have a2: !int_lt(i, X) -> ite(int_lt(i, X), i, int_sub(i, 1)) = int_sub(i, 1) by simp()
+    have b1: int_lt(j, X) -> ite(int_lt(j, X), j, int_sub(j, 1)) = j by simp()
+    have b2: !int_lt(j, X) -> ite(int_lt(j, X), j, int_sub(j, 1)) = int_sub(j, 1) by simp()
+    have r1: int_lt(i, X) -> int_lt(j, X) -> i = j proof
+      assume h1 h2
+      show := trans(sym(mp(a1, h1)), trans(e, mp(b1, h2)))
+    qed
+    have r2: int_lt(i, X) -> !int_lt(j, X) -> i = j proof
+      assume h1 h2
+      show by arith(trans(sym(mp(a1, h1)), trans(e, mp(b2, h2))), h1, h2, hjx, hio, hjo, xo)
+    qed
+    have r3: !int_lt(i, X) -> int_lt(j, X) -> i = j proof
+      assume h1 h2
+      show by arith(trans(sym(mp(a2, h1)), trans(e, mp(b1, h2))), h1, h2, hix, hio, hjo, xo)
+    qed
+    have r4: !int_lt(i, X) -> !int_lt(j, X) -> i = j proof
+      assume h1 h2
+      show by arith(trans(sym(mp(a2, h1)), trans(e, mp(b2, h2))), hio, hjo)
+    qed
+    show by taut(r1, r2, r3, r4)
+  qed
+  // the new entry: m's range if mapped, else empty
+  have hx: all i. i in omega -> int_lt(i, seq_len(R2)) -> !(i = X) -> mallocng.apart(R2[X], R2[i]) proof
+    fix i
+    assume hio hil hix
+    have fo fl fe := mp(all_elim(hf, {i}), hio, hil, hix)
+    have gx _ := apply(mp.reg_grp[c := c, A := A2, k := k], hc, hu2, ha2, hk, (int_lt(k, seq_len(A2.used)) by arith(u2l, hkl)))
+    have uk: A2.used[k] = m := trans(mp(all_elim(el, {k}), hk, (int_lt(k, int_add(seq_len(A.used), 1)) by arith(hkl))),
+      trans(mp(ite_f[c := int_lt(k, k), a := A.used[k], b := ite(k = k, m, A.used[int_sub(k, 1)])], (!int_lt(k, k) by arith(hk))),
+        mp(ite_t[c := k = k, a := m, b := A.used[int_sub(k, 1)]], refl({k}))))
+    have vm: A2.metas[m] = V by simp()
+    have ex: int_add(mp.reg_q(c, A2), k) = X by arith(q2)
+    have rx: R2[X] = ite(int_lt(0, V.maplen), mallocng.group_range(V), pair(0, 0)) := rewrite(vm, rewrite(uk, rewrite(ex, gx)))
+    have c1: int_lt(0, V.maplen) -> mallocng.apart(R2[X], R2[i]) proof
+      assume h
+      have a := mp(all_elim(mp(hap, h), {ite(int_lt(i, X), i, int_sub(i, 1))}), fo, fl)
+      have r1: R2[X] = mallocng.group_range(V) by simp(rx, h)
+      show := rewrite(sym(fe), rewrite(sym(r1), a))
+    qed
+    have c2: !int_lt(0, V.maplen) -> mallocng.apart(R2[X], R2[i]) proof
+      assume h
+      have r1: R2[X] = pair(0, 0) by simp(rx, h)
+      show by defs(simp(r1), mallocng.apart)
+    qed
+    show by taut(c1, c2)
+  qed
+  show := apply(mp.sep_inject[rs := R, rs2 := R2, x := X, f := j. ite(int_lt(j, X), j, int_sub(j, 1))], hs, xo, hf, hi, hx)
+qed
