@@ -179,15 +179,13 @@ proof
   show by defs(taut(f1, fs), mallocng.footprint)
 qed
 
-// the taken bytes now: taken before; taken before, now m's or still taken
-theorem mp.gx_taken(c, A, vm, V1, b, k, T, m, V, n, a): mp.gxpre(c, A, vm, V1, b, k, T, m, V, n) ->
-  fw: (mallocng.in_taken(mp.ngrp(A, k, T, m, V, n), a) -> mallocng.in_taken(A, a)) &&
-  bw: (mallocng.in_taken(A, a) -> mallocng.in_taken(mp.ngrp(A, k, T, m, V, n), a) || int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)))
+// the taken bytes of a state A2 taking T, the meta m taken last by A no
+// longer: taken by A; taken by A, m's or taken by A2
+theorem mp.tk_cases(A, A2, T, m, a): T in list_type(omega) -> A.taken = seq_concat(T, seq_one(m)) -> A2.taken = T ->
+  fw: (mallocng.in_taken(A2, a) -> mallocng.in_taken(A, a)) &&
+  bw: (mallocng.in_taken(A, a) -> mallocng.in_taken(A2, a) || int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)))
 proof
-  assume P
-  let A2 := mp.ngrp(A, k, T, m, V, n)
-  have {ht = tlist, hte = taken} := P
-  have tk: A2.taken = T by simp()
+  assume ht hte tk
   have lt: seq_len(A.taken) = int_add(seq_len(T), 1) := rewrite(sym(hte), (seq_len(seq_concat(T, seq_one(m))) = int_add(seq_len(T), 1) by arith(ht)))
   have tm: A.taken[seq_len(T)] = m := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[seq_len(T)]}, ht))
   have fw: mallocng.in_taken(A2, a) -> mallocng.in_taken(A, a) proof
@@ -215,20 +213,36 @@ proof
   show by taut(fw, bw)
 qed
 
-// a byte of m's record: owned, in a meta area (none of the context's), no
-// client's, not reserved; taken before, not now
-theorem mp.gx_mrec(c, A, vm, V1, b, k, T, m, V, n, a): mp.gxpre(c, A, vm, V1, b, k, T, m, V, n) -> a in omega -> int_le(m, a) -> int_lt(a, int_add(m, mallocng.META_SIZE)) ->
+// the taken bytes now: taken before; taken before, now m's or still taken
+theorem mp.gx_taken(c, A, vm, V1, b, k, T, m, V, n, a): mp.gxpre(c, A, vm, V1, b, k, T, m, V, n) ->
+  fw: (mallocng.in_taken(mp.ngrp(A, k, T, m, V, n), a) -> mallocng.in_taken(A, a)) &&
+  bw: (mallocng.in_taken(A, a) -> mallocng.in_taken(mp.ngrp(A, k, T, m, V, n), a) || int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)))
+proof
+  assume P
+  have {ht = tlist, hte = taken} := P
+  show := apply(mp.tk_cases[A := A, A2 := mp.ngrp(A, k, T, m, V, n), T := T, m := m, a := a], ht, hte, (mp.ngrp(A, k, T, m, V, n).taken = T by simp()))
+qed
+
+// a byte of the meta taken last, m: owned, in a meta area (none of the
+// context's), no client's, not reserved; taken, not by a state A2 taking
+// the others (T) only
+theorem mp.trec(c, A, vm, b, T, m, A2, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
+  T in list_type(omega) -> A.taken = seq_concat(T, seq_one(m)) -> A2.taken = T -> a in omega -> int_le(m, a) -> int_lt(a, int_add(m, mallocng.META_SIZE)) ->
   own: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && fixed: mallocng.in_ranges(a, mallocng.fixed_ranges(c, A)) &&
   area: (ex j. j in omega && int_lt(j, seq_len(A.areas)) && int_le(int_add(A.areas[j], 24), a) && int_lt(a, int_add(A.areas[j], 4096))) &&
   nctx: !mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) && live: !(a in malloc.live_of(b)) && res: !mallocng.in_reserved(A, a) &&
-  was: mallocng.in_taken(A, a) && now: !mallocng.in_taken(mp.ngrp(A, k, T, m, V, n), a)
+  was: mallocng.in_taken(A, a) && now: !mallocng.in_taken(A2, a)
 proof
-  assume P hao h1 h2
-  let A2 := mp.ngrp(A, k, T, m, V, n)
-  have {hc = cfg, hu = univ, ha = abs, hh = holds, ht = tlist, hte = taken} := P
+  assume hc hu ha hh ht hte tk hao h1 h2
   have {H = inv} := expand(hh, mallocng.holds_in)
   have {huo = used, hpt = part, hff = fixed, hga = apart} := expand(H, mallocng.holds)
-  have {hm = nat, ms = slot} := apply(mp.gx_basic, P)
+  have {hm = nat} := apply(mp.ng_taken[A := A, T := T, m := m], ha, hpt, ht, hte)
+  have tlo: seq_len(T) in omega by arith(ht)
+  have lt: seq_len(A.taken) = int_add(seq_len(T), 1) := rewrite(sym(hte), (seq_len(seq_concat(T, seq_one(m))) = int_add(seq_len(T), 1) by arith(ht)))
+  have tm: A.taken[seq_len(T)] = m := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[seq_len(T)]}, ht))
+  have {htk = taken} := expand(hpt, mallocng.metas_partition)
+  have ms0 _ _ _ _ := mp(all_elim(htk, {seq_len(T)}), tlo, (int_lt(seq_len(T), seq_len(A.taken)) by arith(lt)))
+  have ms := rewrite(tm, ms0)
   have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
   have _ gex := apply(mp.meta_page, ha, ms)
   obtain j, hj hjl g1 g2 _ from gex
@@ -256,19 +270,15 @@ proof
     have q := mp(all_elim(expand(hga, mallocng.groups_apart), {l}, {a}), conj(hl, hao), conj(hll, rewrite(sym(hle), inr)))
     show by taut(q, fx)
   qed
-  have tlo: seq_len(T) in omega by arith(ht)
-  have lt: seq_len(A.taken) = int_add(seq_len(T), 1) := rewrite(sym(hte), (seq_len(seq_concat(T, seq_one(m))) = int_add(seq_len(T), 1) by arith(ht)))
-  have tm: A.taken[seq_len(T)] = m := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[seq_len(T)]}, ht))
   have wt: mallocng.in_taken(A, a) by defs(ex_intro({seq_len(T)}, taut(tlo, (int_lt(seq_len(T), seq_len(A.taken)) by arith(lt)), rewrite(sym(tm), h1),
     rewrite(sym(tm), h2, {1}))), mallocng.in_taken)
   // (the other taken metas: other meta slots, apart)
-  have {htk = taken} := expand(hpt, mallocng.metas_partition)
   have nt: !mallocng.in_taken(A2, a) proof
     assume w
     obtain i, hi hil t1 t2 from expand(w, mallocng.in_taken)
-    have il: int_lt(i, seq_len(T)) by simp(hil)
+    have il: int_lt(i, seq_len(T)) := rewrite(tk, hil)
     have ti: A.taken[i] = T[i] := rewrite(sym(hte), at({seq_concat(T, seq_one(m))[i]}, ht, hi, il))
-    have t2i: A2.taken[i] = A.taken[i] := trans((A2.taken[i] = T[i] by simp()), sym(ti))
+    have t2i: A2.taken[i] = A.taken[i] := trans((A2.taken[i] = T[i] by simp(tk)), sym(ti))
     have msi _ _ _ dst := mp(all_elim(htk, {i}), hi, (int_lt(i, seq_len(A.taken)) by arith(il, lt)))
     have ne: !(A.taken[i] = m) proof
       assume e
@@ -280,6 +290,20 @@ proof
     show by taut(d, rewrite(t2i, t1), rewrite(t2i, (int_lt(a, int_add(A2.taken[i], 40)) by arith(t2, cm))))
   qed
   show by taut(ir, fx, ar, nc, nl, nr, wt, nt)
+qed
+
+// a byte of m's record: owned, in a meta area (none of the context's), no
+// client's, not reserved; taken before, not now
+theorem mp.gx_mrec(c, A, vm, V1, b, k, T, m, V, n, a): mp.gxpre(c, A, vm, V1, b, k, T, m, V, n) -> a in omega -> int_le(m, a) -> int_lt(a, int_add(m, mallocng.META_SIZE)) ->
+  own: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && fixed: mallocng.in_ranges(a, mallocng.fixed_ranges(c, A)) &&
+  area: (ex j. j in omega && int_lt(j, seq_len(A.areas)) && int_le(int_add(A.areas[j], 24), a) && int_lt(a, int_add(A.areas[j], 4096))) &&
+  nctx: !mallocng.in_range(a, pair(c.ctx, mallocng.CTX_SIZE)) && live: !(a in malloc.live_of(b)) && res: !mallocng.in_reserved(A, a) &&
+  was: mallocng.in_taken(A, a) && now: !mallocng.in_taken(mp.ngrp(A, k, T, m, V, n), a)
+proof
+  assume P hao h1 h2
+  have {hc = cfg, hu = univ, ha = abs, hh = holds, ht = tlist, hte = taken} := P
+  show := apply(mp.trec[c := c, A := A, vm := vm, b := b, T := T, m := m, A2 := mp.ngrp(A, k, T, m, V, n), a := a], hc, hu, ha, hh, ht, hte,
+    (mp.ngrp(A, k, T, m, V, n).taken = T by simp()), hao, h1, h2)
 qed
 
 // the new state's footprint: the old one, m's group's range, m's record
