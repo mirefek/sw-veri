@@ -663,6 +663,28 @@ proof
   show by defs(each, gimple.usable)
 qed
 
+// (a byte of fresh pages: read-write, not the stack)
+theorem mp.fresh_rw(V, p, N, a): p in omega -> N in omega -> a in omega ->
+  (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, int_div(N, 4096))) ->
+     V.pages[q] = some(fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(32, 3))), "kind", 0))) ->
+  int_le(int_add(int_mul(p, 4096), N), 140737488351232) -> int_mod(N, 4096) = 0 ->
+  int_le(int_mul(p, 4096), a) -> int_lt(a, int_add(int_mul(p, 4096), N)) ->
+  mallocng.m_rw(mallocng.mview(V, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V, mallocng.all_bytes()), a)).kind = 2)
+proof
+  assume hp hn ha np low al h1 h2
+  have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have pr: x86_64_linux.prot_of(bits_of_int(32, 3)).r && x86_64_linux.prot_of(bits_of_int(32, 3)).w by defs(simp(), x86_64_linux.prot_of)
+  have pr1 pr2 := pr
+  let q := int_div(a, x86_64_linux.PAGE)
+  have q1: int_le(p, q) by arith(pg, h1, ha)
+  have q2: int_lt(q, int_add(p, int_div(N, 4096))) by arith(pg, h2, ha, al, hn)
+  have e := mp(all_elim(np, {q}), arith(pg, ha), q1, q2)
+  have qt: int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(ts, q2, low, pg, hp, hn, al)
+  have p0 := apply(mp.pg_view[vm := V, fp := mallocng.all_bytes(), a := a], ha, (a in mallocng.all_bytes() by defs(sel(taut(ha)), mallocng.all_bytes)))
+  show by defs(simp(p0, e, qt, pr1, pr2), mallocng.m_rw, mallocng.m_mapped)
+qed
+
 // (the thread pointer's word, mapped at the entry and not the allocator's:
 // apart from the meta alloc_meta took)
 theorem mp.fs_meta(c, A, B, s, M): s.fs_base in bits(64) -> M in omega -> !(M = 0) -> abi.thread_ok(s.vm, s.fs_base) ->
@@ -2173,6 +2195,98 @@ proof
           have f1 := mp(all_elim(frb, {a}), yb, arith(mpd0, h1, h2, hpo), arith(pcx0, hx, h1, h2), arith(pcx0, cv, hs, hsl, h1, h2), arith(h1))
           have z := mp(all_elim(v4z, {a}), hao, arith(h1), h2)
           show by simp(rewrite(ea, b0v), f1, z)
+        qed
+        // ---- the state with the group made: M in use at its place, its
+        // record the one in memory
+        have {H4 = inv, hm4 = mapped} := expand(hin4, mallocng.holds_in)
+        have {hpt4 = part, hnm4 = normal} := expand(H4, mallocng.holds)
+        have {mnu = unused} := apply(mp.ng_taken[A := A1, T := A.taken, m := M], a1a, hpt4, tl0, tkm)
+        have ul1: A1.used in list_type(omega) by simp(a1a)
+        have {srt = sorted} := expand(hpt4, mallocng.metas_partition)
+        have nin: all j. j in omega -> int_lt(j, seq_len(A1.used)) -> !(A1.used[j] = M) proof
+          fix j
+          assume hj hjl e
+          show by taut(mnu, (mallocng.is_used(A1, M) by defs(ex_intro({j}, taut(hj, hjl, e)), mallocng.is_used)))
+        qed
+        obtain KK, kko kkl klo khi from apply(mp.ins_pos[l := A1.used, x := M], ul1, mo, srt, nin)
+        let M0 := A1.metas[M]
+        have m0t: M0 in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A1.metas, x := M], (A1.metas in fn_space(omega, mallocng.MetaV) by simp(a1a)), mo)
+        have {nu0 = unused} := expand(hnm4, mallocng.normal)
+        have m0z _ := mp(all_elim(nu0, {M}), mo, mnu)
+        have zp: mallocng.ZERO_META.prev = 0 && mallocng.ZERO_META.next = 0 by defs(simp(), mallocng.ZERO_META)
+        have m0p: M0.prev = 0 && M0.next = 0 := rewrite(sym(m0z), zp)
+        have m0p1 m0p2 := m0p
+        let LI := int_sub(K4, 1)
+        let AVN := int_sub(pow2(int_add(AI, 1)), 1)
+        let FVN := int_sub(pow2(K4), pow2(int_add(AI, 1)))
+        let VR := mp.mset(M0, P, AVN, FVN, LI, 1, sc, QN)
+        have ppa := mp(pow2_pos[k := int_add(AI, 1)], arith(aio))
+        have pak := apply(pow2_le[a := int_add(AI, 1), b := K4], arith(aio), k4o, arith(aik))
+        have vrt := apply(mp.mset_type[V := M0, p := P, av := AVN, fr := FVN, l := LI, f := 1, s := sc, ml := QN], m0t, ppo, arith(ppa), arith(pak), arith(k41), simp(), hs, arith(n4o))
+        have vmem: VR.mem = P by simp()
+        have vav: VR.avail = AVN by simp()
+        have vfd: VR.freed = FVN by simp()
+        have vli: VR.last_idx = LI by simp()
+        have vfb: VR.freeable = 1 by simp()
+        have vsc: VR.sizeclass = sc by simp()
+        have vml: VR.maplen = QN by simp()
+        have vpv: VR.prev = 0 by simp(m0p1)
+        have vnx: VR.next = 0 by simp(m0p2)
+        have qnp: int_lt(0, QN) by arith(n4g)
+        have qn4: int_mul(QN, 4096) = N4 by arith(n4a, n4o)
+        have vgr: mallocng.group_range(VR) = pair(P, N4) by defs(simp(vml, vmem, qnp, qn4), mallocng.group_range)
+        // (its stride: the mapping's, one slot; else the class's)
+        have str1: K4 = 1 -> mallocng.stride(VR) = int_sub(N4, 16) proof
+          assume e
+          have l0: VR.last_idx = 0 by simp(vli, e)
+          show by defs(simp(l0, vml, qnp, qn4), mallocng.stride, mallocng.UNIT)
+        qed
+        have str2: !(K4 = 1) -> mallocng.stride(VR) = SZ proof
+          assume ne
+          have l0: !(VR.last_idx = 0) by arith(vli, ne, k41)
+          show by defs(simp(l0, vsc), mallocng.stride, mallocng.UNIT)
+        qed
+        have k1c: K4 = 1 || !(K4 = 1) by taut()
+        have sno1: K4 = 1 -> mallocng.stride(VR) in omega proof
+          assume e
+          show := rewrite(sym(mp(str1, e)), (int_sub(N4, 16) in omega by arith(n4g)))
+        qed
+        have sno2: !(K4 = 1) -> mallocng.stride(VR) in omega proof
+          assume ne
+          show := rewrite(sym(mp(str2, ne)), szo)
+        qed
+        have sno: mallocng.stride(VR) in omega by taut(k1c, sno1, sno2)
+        have sk1: int_mul(mallocng.stride(VR), K4) = int_mul(mallocng.stride(VR), K4) := refl({int_mul(mallocng.stride(VR), K4)})
+        have fits: int_le(int_add(mallocng.UNIT, int_mul(mallocng.stride(VR), K4)), int_mul(VR.maplen, 4096)) proof
+          have c1: K4 = 1 -> int_le(int_add(mallocng.UNIT, int_mul(mallocng.stride(VR), K4)), int_mul(VR.maplen, 4096)) proof
+            assume e
+            have m1: int_mul(mallocng.stride(VR), K4) = mallocng.stride(VR) := subst({y. int_mul(mallocng.stride(VR), y) = mallocng.stride(VR)}, sym(e),
+              (int_mul(mallocng.stride(VR), 1) = mallocng.stride(VR) by arith(sno)))
+            show by defs(arith(m1, mp(str1, e), vml, qn4), mallocng.UNIT)
+          qed
+          have c2: !(K4 = 1) -> int_le(int_add(mallocng.UNIT, int_mul(mallocng.stride(VR), K4)), int_mul(VR.maplen, 4096)) proof
+            assume ne
+            have k16: int_le(int_add(int_mul(SZ, K4), 16), N4) by taut(n4f, ne)
+            show by defs(arith(subst({y. int_mul(mallocng.stride(VR), K4) = int_mul(y, K4)}, mp(str2, ne), sk1), k16, vml, qn4), mallocng.UNIT)
+          qed
+          show by taut(k1c, c1, c2)
+        qed
+        have offs: int_lt(0, VR.last_idx) -> int_le(int_mul(mallocng.stride(VR), K4), int_mul(int_pow(2, 16), mallocng.UNIT)) proof
+          assume h
+          have ne: !(K4 = 1) by arith(h, vli)
+          show by defs(arith(subst({y. int_mul(mallocng.stride(VR), K4) = int_mul(y, K4)}, mp(str2, ne), sk1), k4sz), mallocng.UNIT)
+        qed
+        have small: mallocng.stride(VR) = mallocng.UNIT -> int_mod(mallocng.b8(mallocng.mview(VF, mallocng.all_bytes()), int_add(VR.mem, 8)), 32) = VR.last_idx proof
+          assume h16
+          have ne: !(K4 = 1) proof
+            assume e
+            show by defs(arith(rewrite(mp(str1, e), h16), n4g), mallocng.UNIT)
+          qed
+          have sz16: SZ = 16 by defs(arith(rewrite(mp(str2, ne), h16)), mallocng.UNIT)
+          have sk32 := mp(all_elim(ms.mul_le, {SZ}, {K4}, {16}, {32}), szo, k4o, simp(), simp(), arith(sz16), k432)
+          have eq: AI = int_sub(K4, 1) by arith(aik, aip, sk32)
+          have xv := subst({y. int_mod(mallocng.b8(mallocng.mview(VF, mallocng.all_bytes()), int_add(y, 8)), 32) = AI}, trans(rp, sym(vmem)), xai)
+          show := trans(trans(xv, eq), sym(vli))
         qed
         goal 0
       qed
