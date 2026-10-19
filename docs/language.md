@@ -678,6 +678,13 @@ read hits is decided by a fixed algorithm.
   fields simplified (each premise once per block), a closure, `arith` or
   taut on the facts, then `mem` (a failure remembered for the same facts); a
   conjunction (`g.mem_defined`: not null, in range, usable) part by part.
+  A literal's signed value in a premise (`gimple.sval(T64, 464)`, a
+  literal offset) also counts as the literal (`g.sval64_lit`): a `using`
+  fact or `arith` fact states `CTX + 464`; the stepped fact keeps the
+  program's term.
+- A value read that step leaves unresolved (a fact missing for a write's
+  apartness) shows in the message when the step stops: `a value read left
+  unresolved: ..`, naming the write.
 - Aliases: a `using` fact `a = K`, K a constant (`c.ctx =
   __malloc_context`: the program names the global, the facts the
   configuration), rewrites a to K in the other `using` facts, the `with`

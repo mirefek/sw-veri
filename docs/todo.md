@@ -103,14 +103,8 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 
 - Generate the function-level C2s and compositions (one instance of
   `g.fun_res` / `g.fun_res_ghost` and `tr.implements_refine` each).
-- An accessor's read (`meta_mem_(m)`, stepped inline from its body) is not
-  resolved through the stores before it, as an `ld` by its lemma is: the
-  value stays `bits_of_int(64, bytes_at(<stores>, ..))`; alloc_group's
-  mapped path proves the two reads by `mem` and passes them as `with`
-  equations (`er1`, `er2`).
-- `mem_defined` across a world's stores: closures `ms.md_st0` / `ms.md_st`
-  (in fun/alloc_group.core, with the bitfield store `ms.stbfw_det`) belong
-  with ops.core's world closures.
+- The bitfield store `ms.stbfw_det` (fun/alloc_group.core) belongs with
+  ops.core's store lemmas.
 - The trivial facts that a callee refines itself (`agself`, `dbself` in
   `mp.ta_run`, `amself`, `taself`) are no longer needed (`gc.calls_self`):
   to be removed.

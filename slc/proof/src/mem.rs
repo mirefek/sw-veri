@@ -28,11 +28,13 @@ pub(crate) struct MemCache {
     pub(crate) rules: std::collections::HashMap<u8, Rc<Rules>>,
     unfold: std::collections::HashMap<Term, Seq>,
     /// a premise simplified by step's own rules (`mem_discharge`)
-    premise_eq: std::collections::HashMap<Term, Seq>,
+    premise_eq: std::collections::HashMap<(Term, bool), Seq>,
     /// `mem` goals not shown from these facts (the facts' hash)
     mem_failed: std::collections::HashSet<(Term, u64)>,
     /// the reads left unresolved (why), for a failing goal's message
     skipped: Vec<String>,
+    /// the values read a step left unresolved (why), for its message
+    pub(crate) value_failed: Vec<String>,
 }
 
 impl State {
@@ -328,6 +330,17 @@ fn rhs_of(env: &Env, t: &Term) -> Term {
     eq_sides(env, t).map(|(_, r)| r).unwrap_or_else(|| t.clone())
 }
 
+/// a literal's signed value `gimple.sval(T, n)` occurs in t
+fn sval_lit(env: &Env, t: &Term) -> bool {
+    match t.node() {
+        Node::App(f, a) => {
+            (a.len() == 2 && matches!(a[1].node(), Node::Nat(_)) && env.sym_by_name.get("gimple.sval") == Some(f)) || a.iter().any(|x| sval_lit(env, x))
+        }
+        Node::Var(_, a) => a.iter().any(|x| sval_lit(env, x)),
+        _ => false,
+    }
+}
+
 fn eq_sides(env: &Env, t: &Term) -> Option<(Term, Term)> {
     match t.node() {
         Node::App(f, a) if *f == env.builtins.eq && a.len() == 2 => Some((a[0].clone(), a[1].clone())),
@@ -381,7 +394,16 @@ impl State {
         let srs = self.step_rules(env, lg).ok()?;
         let es = self.rsimp_eq(env, lg, v, &srs, 0).ok()?;
         let vs = rhs_of(env, es.concl());
-        let er = self.mem_read_eq(env, lg, &vs, using, false, false).ok()?;
+        let er = match self.mem_read_eq(env, lg, &vs, using, false, false) {
+            Ok(er) => er,
+            Err(KernelError(why)) => {
+                let mut c = self.mem_cache.borrow_mut();
+                if !c.value_failed.contains(&why) {
+                    c.value_failed.push(why);
+                }
+                return None;
+            }
+        };
         let r = rhs_of(env, er.concl());
         let bytes_at = env.sym_by_name.get("gimple.bytes_at").copied();
         if r == vs {
@@ -453,11 +475,39 @@ impl State {
         Ok(s)
     }
 
-    /// a premise h: a fact given, by a closure fact (backward), by `mem`,
-    /// or by arith / taut from the facts given
+    /// h with its literals' signed values `gimple.sval(T, n)` written as
+    /// the literals (`premise_rules`): `h = h'`, if any
+    fn lit_form(&self, env: &mut Env, lg: &Logic, h: &Term) -> KResult<Option<Seq>> {
+        if !sval_lit(env, h) || facts::seq_of(env, "g.sval64_lit").is_none() {
+            return Ok(None);
+        }
+        let cached = self.mem_cache.borrow().premise_eq.get(&(h.clone(), true)).cloned();
+        let e = match cached {
+            Some(e) => e,
+            None => {
+                let srs = self.premise_rules(env, lg)?;
+                let e = self.rsimp_eq(env, lg, h, &srs, 0)?;
+                self.mem_cache.borrow_mut().premise_eq.insert((h.clone(), true), e.clone());
+                e
+            }
+        };
+        Ok(if &rhs_of(env, e.concl()) == h { None } else { Some(e) })
+    }
+
+    /// a premise h: a fact given (also as h with its literal offsets'
+    /// signed values written as the literals, as facts state them), by a
+    /// closure fact (backward), by `mem`, or by arith / taut from the facts
+    /// given
     pub(crate) fn mem_discharge(&self, env: &mut Env, lg: &Logic, h: &Term, using: &[Seq], depth: usize) -> KResult<Seq> {
         if let Some(f) = using.iter().find(|f| f.concl() == h) {
             return Ok(f.clone());
+        }
+        let lit = self.lit_form(env, lg, h)?;
+        if let Some(e) = &lit {
+            let h2 = rhs_of(env, e.concl());
+            if let Some(f) = using.iter().find(|f| f.concl() == &h2) {
+                return Seq::rewrite(env, &Seq::sym(env, e)?, f);
+            }
         }
         // a conjunction (`g.mem_defined`: not null, in range, usable): each part
         if let Node::App(c, a) = h.node() {
@@ -471,13 +521,13 @@ impl State {
         }
         // (its record fields first; else as written -- the facts' terms may
         // be the unsimplified ones)
-        let cached = self.mem_cache.borrow().premise_eq.get(h).cloned();
+        let cached = self.mem_cache.borrow().premise_eq.get(&(h.clone(), false)).cloned();
         let e = match cached {
             Some(e) => e,
             None => {
                 let srs = self.step_rules(env, lg)?;
                 let e = self.rsimp_eq(env, lg, h, &srs, 0)?;
-                self.mem_cache.borrow_mut().premise_eq.insert(h.clone(), e.clone());
+                self.mem_cache.borrow_mut().premise_eq.insert((h.clone(), false), e.clone());
                 e
             }
         };
@@ -516,6 +566,12 @@ impl State {
         let refs: Vec<&Seq> = using.iter().collect();
         if let Ok(p) = rel_arith(env, lg, &refs, h).or_else(|_| Seq::taut(env, lg, &refs, h)) {
             return Ok(p);
+        }
+        if let Some(e) = &lit {
+            let h2 = rhs_of(env, e.concl());
+            if let Ok(p) = rel_arith(env, lg, &refs, &h2) {
+                return Seq::rewrite(env, &Seq::sym(env, e)?, &p);
+            }
         }
         let fkey = {
             use std::hash::{Hash, Hasher};

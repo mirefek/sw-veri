@@ -2843,6 +2843,7 @@ impl State {
         // (`L && R` stepped in L, R pending: on L's outcome `x = V`, R at V)
         let mut pending: Vec<Seq> = Vec::new();
         let mut fallbacks = 0;
+        self.mem_cache.borrow_mut().value_failed.clear();
         loop {
         for _ in 0..10000 {
             let Some((f, a)) = head(cur.concl()) else { break };
@@ -3170,11 +3171,13 @@ impl State {
         let unused: Vec<usize> = (0..withs.len() - n_req).filter(|&i| !used[i]).map(|i| i + 1).collect();
         if !unused.is_empty() {
             let pos: Vec<String> = unused.iter().map(|i| i.to_string()).collect();
+            let reads = self.mem_cache.borrow().value_failed.clone();
             return err(format!(
-                "step: `with` facts not used: number {} (it stopped at `{}`){}",
+                "step: `with` facts not used: number {} (it stopped at `{}`){}{}",
                 pos.join(", "),
                 Printer::new(env).short(cur.concl()),
-                why.map(|w| format!("\n  an operation's lemma that matched but did not apply: {w}")).unwrap_or_default()
+                why.map(|w| format!("\n  an operation's lemma that matched but did not apply: {w}")).unwrap_or_default(),
+                if reads.is_empty() { String::new() } else { format!("\n  a value read left unresolved: {}", reads.join("\n    ")) }
             ));
         }
         if !xs.is_empty() {
@@ -3956,6 +3959,26 @@ impl State {
         };
         let r = std::rc::Rc::new(self.rsimp_rules(env, lg, &args)?);
         self.mem_cache.borrow_mut().rules.insert(2, r.clone());
+        Ok(r)
+    }
+
+    /// a premise's second normalization (after step's rules): a literal
+    /// offset's signed value itself (`g.sval64_lit`, once loaded) -- in a
+    /// premise only, the stepped fact as step keeps it
+    pub(crate) fn premise_rules(&self, env: &mut Env, lg: &Logic) -> KResult<std::rc::Rc<rsimp::Rules>> {
+        if facts::seq_of(env, "g.sval64_lit").is_none() {
+            return self.step_rules(env, lg);
+        }
+        if let Some(r) = self.mem_cache.borrow().rules.get(&3) {
+            r.reset();
+            return Ok(r.clone());
+        }
+        let args = match parse_pe("rsimp(g.sval64_lit, only)")? {
+            PE::Rule(_, a) => a,
+            _ => unreachable!(),
+        };
+        let r = std::rc::Rc::new(self.rsimp_rules(env, lg, &args)?);
+        self.mem_cache.borrow_mut().rules.insert(3, r.clone());
         Ok(r)
     }
 
