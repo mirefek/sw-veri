@@ -391,7 +391,7 @@ impl<'e> Gen<'e> {
         }
         let rs_args = st0.rs.clone();
         // the proof
-        self.vmark0 = self.env.vars.len();
+        self.vmark0 = self.env.var_bound() as usize;
         let pt = self.prove_pt(st0)?;
         // (the callees' premises, as their calls had them)
         let mut cprem = Vec::new();

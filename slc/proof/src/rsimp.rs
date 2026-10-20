@@ -256,7 +256,7 @@ impl State {
         if matches!(lhs.node(), Node::Var(v, _) if pvars.contains(v)) {
             return None;
         }
-        let general = if kind == Kind::Eq && prems == 0 && !pvars.is_empty() && pvars.iter().all(|v| env.vars[*v as usize].arity == 0) {
+        let general = if kind == Kind::Eq && prems == 0 && !pvars.is_empty() && pvars.iter().all(|v| env.var(*v).arity == 0) {
             let mut g = Some(s.clone());
             for v in pvars.iter().rev() {
                 g = g.and_then(|g| Seq::gen(env, lg, &g, *v).ok());

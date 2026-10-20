@@ -144,7 +144,7 @@ impl Api {
         let mut staged = Vec::new();
         let mut bound: Vec<(&str, Term)> = Vec::new();
         for (vname, value) in binds {
-            let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.vars[*v as usize].name == *vname).collect();
+            let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.var(*v).name == *vname).collect();
             let v = match cands.as_slice() {
                 [v] => *v,
                 [] => {
@@ -153,7 +153,7 @@ impl Api {
                 }
                 _ => return err(format!("several variables named `{}`", vname)),
             };
-            let k = env.vars[v as usize].arity;
+            let k = env.var(v).arity;
             let tmp = env.new_var(&format!("{}'", vname), k);
             let tmp_term = Term::var(tmp, (0..k).rev().map(Term::bvar).collect());
             s = Seq::inst(env, &s, v, &tmp_term)?;
@@ -302,8 +302,8 @@ impl Api {
                 None => {
                     let mut vs = Vec::new();
                     s.concl().vars(&mut vs);
-                    if vs.contains(v) && env.vars[*v as usize].arity == 0 {
-                        return err(format!("apply: `{}` is not determined", env.vars[*v as usize].name));
+                    if vs.contains(v) && env.var(*v).arity == 0 {
+                        return err(format!("apply: `{}` is not determined", env.var(*v).name));
                     }
                 }
             }

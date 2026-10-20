@@ -169,7 +169,7 @@ impl<'e> Gen<'e> {
                 } else {
                     let mut vs = Vec::new();
                     s.concl().vars(&mut vs);
-                    let by = |nm: &str, t: &Term| vs.iter().find(|v| self.env.vars[**v as usize].name == nm).map(|v| (*v, t.clone()));
+                    let by = |nm: &str, t: &Term| vs.iter().find(|v| self.env.var(**v).name == nm).map(|v| (*v, t.clone()));
                     by("bkp", &self.bkp).into_iter().chain(by("bka", &self.bka)).collect()
                 };
                 // (the breakpoints last: theirs mention the function's own
@@ -212,7 +212,7 @@ impl<'e> Gen<'e> {
     fn bk_inst(&mut self, api: &sl_proof::api::Api, s: Seq, n: &str) -> Result<Seq, String> {
         let mut vs = Vec::new();
         s.concl().vars(&mut vs);
-        if !vs.iter().any(|v| self.env.vars[*v as usize].name == "bkp") {
+        if !vs.iter().any(|v| self.env.var(*v).name == "bkp") {
             return Ok(s);
         }
         let bs = [("bkp", self.bkp.clone()), ("bka", self.bka.clone())];

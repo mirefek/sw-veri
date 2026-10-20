@@ -82,6 +82,50 @@ mod tests {
     }
 
     #[test]
+    fn a_proofs_variables_are_dropped_after_it() {
+        let mut env = mini();
+        let (_, refl) = env.axioms.iter().find(|a| a.0 == "eq_refl").unwrap().clone();
+        let mut rv = Vec::new();
+        refl.prop().vars(&mut rv);
+        // a proof's variable: local, known while it runs
+        env.begin_locals();
+        let x = env.new_var("x", 0);
+        assert!(x >= env::LOCAL0);
+        assert!(env.var_get(x).is_some());
+        let rx = env.instantiate(&refl, rv[0], &Term::var(x, vec![])).unwrap();
+        env.end_locals();
+        // after it: unknown, never given again, refused by instantiation
+        assert!(env.var_get(x).is_none());
+        assert!(env.instantiate(&rx, x, &Term::nat(Nat::from_u64(7))).is_err());
+        env.begin_locals();
+        let y = env.new_var("y", 0);
+        assert!(y > x);
+        env.end_locals();
+        // outside a proof: global, kept
+        let g = env.new_var("g", 0);
+        assert!(g < env::LOCAL0);
+        assert!(env.var_get(g).is_some());
+    }
+
+    #[test]
+    fn a_kept_local_is_renamed_to_a_global() {
+        let mut env = mini();
+        let (_, refl) = env.axioms.iter().find(|a| a.0 == "eq_refl").unwrap().clone();
+        let mut rv = Vec::new();
+        refl.prop().vars(&mut rv);
+        env.begin_locals();
+        let x = env.new_var("x", 0);
+        let s = ext::Seq::of_thm(&env.instantiate(&refl, rv[0], &Term::var(x, vec![])).unwrap());
+        let g = ext::Seq::globalize(&mut env, &s).unwrap();
+        env.end_locals();
+        assert!(env.locals_in(g.concl()).is_empty());
+        let mut gv = Vec::new();
+        g.concl().vars(&mut gv);
+        assert_eq!(gv.len(), 1);
+        assert!(env.var_get(gv[0]).is_some());
+    }
+
+    #[test]
     fn cached_theorems_only_from_a_cache_file() {
         let mut env = mini();
         // a source file cannot claim a theorem without its proof

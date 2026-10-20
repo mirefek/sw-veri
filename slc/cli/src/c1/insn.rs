@@ -1585,7 +1585,7 @@ impl<'e> Gen<'e> {
                 let cond = self.ld8_cond(&ad);
                 let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
                     let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
-                    let vals: Vec<String> = self.vals.iter().map(|(v, tr)| format!("{} = {}", self.env.vars[*v as usize].name, self.print(tr))).collect();
+                    let vals: Vec<String> = self.vals.iter().map(|(v, tr)| format!("{} = {}", self.env.var(*v).name, self.print(tr))).collect();
                     format!("{:x}: a byte load at {} the spec does not load (the facts: {}; the values: {})", a, self.print(&ad), facts.join(", "), vals.join(", "))
                 })?;
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
@@ -2079,7 +2079,7 @@ impl<'e> Gen<'e> {
             _ => {
                 self.trace(|| {
                     let hyps: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
-                    let vals: Vec<String> = self.vals.iter().map(|(v, tr)| format!("{} := {}", self.env.vars[*v as usize].name, self.print(tr))).collect();
+                    let vals: Vec<String> = self.vals.iter().map(|(v, tr)| format!("{} := {}", self.env.var(*v).name, self.print(tr))).collect();
                     format!("no rule at {:x}: facts {}; values {}", a, hyps.join(", "), vals.join(", "))
                 });
                 Err(bad("no rule for the instruction"))

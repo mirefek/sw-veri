@@ -366,7 +366,7 @@ impl<'a, 'e> Parser<'a, 'e> {
     /// schematic variable or abbreviation of no arguments, a constant
     fn value_name(&self, name: &str) -> bool {
         self.scopes.iter().any(|s| s == name)
-            || self.params.get(name).is_some_and(|&v| self.env.vars[v as usize].arity == 0)
+            || self.params.get(name).is_some_and(|&v| self.env.var(v).arity == 0)
             || self.env.abbrevs.get(name).is_some_and(|(k, _)| *k == 0)
             || self.env.sym_by_name.get(name).is_some_and(|&s| self.env.syms[s as usize].binders.is_empty())
     }
@@ -446,7 +446,7 @@ impl<'a, 'e> Parser<'a, 'e> {
             if arg_binders.iter().any(|&b| b > 0) {
                 return self.error("arguments of a schematic variable cannot bind variables");
             }
-            let arity = self.env.vars[v as usize].arity as usize;
+            let arity = self.env.var(v).arity as usize;
             if args.len() != arity {
                 return self.error(&format!("`{}` takes {} arguments, got {}", name, arity, args.len()));
             }
@@ -773,13 +773,23 @@ fn load_mode(
                 };
                 // (C1_KEEP_GOING=1: as a `c1` line's, reported, the file
                 // going on)
-                let sq = match pr.refines(p.env, &name, &low, &high) {
+                // (the procedure's variables local: the result's renamed to
+                // global ones, the rest dropped after it)
+                let mark = p.env.local_mark();
+                p.env.begin_locals();
+                let r = pr.refines(p.env, &name, &low, &high).and_then(|sq| Seq::globalize(p.env, &sq));
+                let kept = p.env.locals_kept(&mark);
+                p.env.end_locals();
+                let sq = match r {
                     Err(e) if std::env::var("C1_KEEP_GOING").is_ok_and(|v| v == "1") => {
                         eprintln!("refines failed (going on): {}: {}", name, e.0.lines().next().unwrap_or(""));
                         continue;
                     }
                     r => r.map_err(ctx)?,
                 };
+                if let Some(n) = kept {
+                    return Err(ctx(KernelError(format!("`{}` keeps a variable of the procedure for `{}`", n, name))));
+                }
                 if !sq.hyps().is_empty() {
                     let pp = Printer::new(p.env);
                     return Err(ctx(KernelError(format!("`{}`: hypotheses left: {}", name, sq.hyps().iter().map(|h| pp.short(h)).collect::<Vec<_>>().join(", ")))));
@@ -817,7 +827,19 @@ fn load_mode(
                 };
                 // (C1_KEEP_GOING=1, for debugging: a function whose C1
                 // fails reported, its theorems not made, the file going on)
-                let ths = match pr.c1(p.env, &name, &spec, &prefix, &hints) {
+                // (the engine's variables local: its theorems' renamed to
+                // global ones, the rest dropped after it)
+                let mark = p.env.local_mark();
+                p.env.begin_locals();
+                let r = pr.c1(p.env, &name, &spec, &prefix, &hints).and_then(|ths| {
+                    ths.into_iter().map(|(n, sq)| Seq::globalize(p.env, &sq).map(|g| (n, g))).collect::<KResult<Vec<_>>>()
+                });
+                let kept = p.env.locals_kept(&mark);
+                p.env.end_locals();
+                if let Some(n) = &kept {
+                    return Err(ctx(KernelError(format!("`{}` keeps a variable of the C1 engine's run for `{}`", n, name))));
+                }
+                let ths = match r {
                     Err(e) if std::env::var("C1_KEEP_GOING").is_ok_and(|v| v == "1") => {
                         eprintln!("C1 failed (going on): {}: {}", name, e.0.lines().next().unwrap_or(""));
                         continue;
@@ -870,7 +892,7 @@ fn load_mode(
                     (Tok::Ident(k), Some(t)) if k == "proof" || (cached && k == "cached") => {
                         let mut vs = Vec::new();
                         t.vars(&mut vs);
-                        (vs.iter().map(|v| (p.env.vars[*v as usize].name.clone(), *v)).collect::<Vec<_>>(), t)
+                        (vs.iter().map(|v| (p.env.var(*v).name.clone(), *v)).collect::<Vec<_>>(), t)
                     }
                     (_, known) => {
                         let ps = p.param_list()?;
@@ -969,7 +991,17 @@ fn load_mode(
                     // (the line of `proof`, where the text starts)
                     line: src[..start].matches('\n').count() + 1,
                 };
-                let s = pr.prove(p.env, &req).map_err(ctx)?;
+                // (the proof's own variables local: dropped after it, the
+                // result the statement -- nothing kept mentions them)
+                let mark = p.env.local_mark();
+                p.env.begin_locals();
+                let s = pr.prove(p.env, &req);
+                let kept = p.env.locals_kept(&mark);
+                p.env.end_locals();
+                let s = s.map_err(ctx)?;
+                if let Some(n) = kept {
+                    return Err(ctx(KernelError(format!("`{}` keeps a variable of the proof of `{}`", n, name))));
+                }
                 if s.concl() != &t || !s.hyps().is_empty() {
                     let pr = Printer::new(p.env);
                     let why = if s.hyps().is_empty() { pr.mismatch(&t, s.concl()) } else { format!("hypotheses left: {}", s.hyps().iter().map(|h| pr.short(h)).collect::<Vec<_>>().join(", ")) };
@@ -1180,7 +1212,7 @@ impl<'e> Printer<'e> {
             let step = match (e.node(), g.node()) {
                 (Node::App(se, ae), Node::App(sg, ag)) if se == sg && ae.len() == ag.len() => Some((self.name(*se).to_string(), self.env.syms[*se as usize].binders.clone(), ae.clone(), ag.clone())),
                 (Node::Var(ve, ae), Node::Var(vg, ag)) if ve == vg && ae.len() == ag.len() && !ae.is_empty() => {
-                    Some((self.env.vars.get(*ve as usize).map(|v| v.name.clone()).unwrap_or_default(), vec![0; ae.len()], ae.clone(), ag.clone()))
+                    Some((self.env.var_get(*ve).map(|v| v.name.clone()).unwrap_or_default(), vec![0; ae.len()], ae.clone(), ag.clone()))
                 }
                 _ => None,
             };
@@ -1298,7 +1330,7 @@ impl<'e> Printer<'e> {
             }
             Node::Var(v, args) => {
                 // (variables made up by tools, e.g. the simplifier's path variables)
-                match self.env.vars.get(*v as usize) {
+                match self.env.var_get(*v) {
                     Some(info) => out.push_str(&info.name),
                     None => out.push_str(&format!("?v{}", v)),
                 }
@@ -1443,7 +1475,7 @@ impl<'e> Printer<'e> {
                 let ps: Vec<String> = params
                     .iter()
                     .map(|v| {
-                        let info = &self.env.vars[*v as usize];
+                        let info = &self.env.var(*v);
                         let bs: Vec<String> = (0..info.arity).map(|i| format!("y{}", i)).collect();
                         if bs.is_empty() {
                             info.name.clone()

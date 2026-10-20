@@ -1391,7 +1391,7 @@ impl<'e> Gen<'e> {
                 eprintln!("c1 ref: point differs at label {}: {}{}", k, diff.join(", "), td);
                 // (C1_DUMP=dir: the two templates, instantiated at a variable)
                 if let Ok(d) = std::env::var("C1_DUMP") {
-                    let yv = Term::var(self.env.vars.len() as u32 - 1, vec![]);
+                    let yv = Term::var(self.env.var_bound() - 1, vec![]);
                     let n = std::fs::read_dir(&d).map(|r| r.count()).unwrap_or(0);
                     for (i, tm) in [&p.tmpl, &pt.tmpl].into_iter().enumerate() {
                         let x = tm.instantiate_params(std::slice::from_ref(&yv), &self.env.binders_fn());

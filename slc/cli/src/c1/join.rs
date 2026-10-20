@@ -18,7 +18,7 @@ pub(super) struct Split {
 impl<'e> Gen<'e> {
     /// the split of a branch at st
     pub(super) fn split(&self, st: &St) -> Split {
-        Split { hyps: st.hyps.len(), facts: st.facts.len(), mark: self.env.vars.len() }
+        Split { hyps: st.hyps.len(), facts: st.facts.len(), mark: self.env.var_bound() as usize }
     }
 
     /// the code's successors of the instruction at a
@@ -68,7 +68,7 @@ impl<'e> Gen<'e> {
     /// locals (the claim's premise says what it knows of them), nor of
     /// values the claim does not mention
     pub(super) fn shared_facts(&self, st: &St, y0: &Term, vs: &[VarId], ts: &[&Term]) -> (Vec<(Term, Seq)>, Vec<Seq>, Vec<Seq>) {
-        let mark = st.splits.first().map(|sp| sp.mark).unwrap_or(self.env.vars.len());
+        let mark = st.splits.first().map(|sp| sp.mark).unwrap_or(self.env.var_bound() as usize);
         let mut yvs = Vec::new();
         self.expand(y0).vars(&mut yvs);
         yvs.retain(|v| (*v as usize) >= self.vmark0);

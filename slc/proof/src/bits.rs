@@ -118,7 +118,7 @@ impl State {
         if let Some(cong) = facts::seq_of(env, "bit_cong") {
             let (c0, pv, _) = open_rule(env, lg, &cong)?;
             // (its variables x, a, b by name)
-            let by_name = |n: &str| pv.iter().copied().find(|v| env.vars[*v as usize].name == n);
+            let by_name = |n: &str| pv.iter().copied().find(|v| env.var(*v).name == n);
             let (Some(vx), Some(va), Some(vb)) = (by_name("x"), by_name("a"), by_name("b")) else {
                 return err("bitwise: `bit_cong(x, a, b)` expected");
             };
@@ -173,7 +173,7 @@ impl State {
     #[allow(clippy::too_many_arguments)]
     fn bit_high_at(&self, env: &mut Env, lg: &Logic, high: &Seq, x: &Term, n: &Term, i: &Term, facts: &[Seq]) -> KResult<Seq> {
         let (s, pv, _) = open_rule(env, lg, high)?;
-        let by_name = |m: &str| pv.iter().copied().find(|v| env.vars[*v as usize].name == m);
+        let by_name = |m: &str| pv.iter().copied().find(|v| env.var(*v).name == m);
         let (Some(vx), Some(vn), Some(vi)) = (by_name("x"), by_name("n"), by_name("i")) else {
             return err("bitwise: `bit_high(x, n, i)` expected");
         };
@@ -373,7 +373,7 @@ pub(crate) fn open_rule(env: &mut Env, lg: &Logic, l: &Seq) -> KResult<(Seq, Vec
             h.vars(&mut hv);
             hv.contains(&v)
         }) {
-            let w = env.new_var(&env.vars[v as usize].name.clone(), 0);
+            let w = env.new_var(&env.var(v).name.clone(), 0);
             s = Seq::inst(env, &s, v, &Term::var(w, vec![]))?;
             vs.push(w);
         }
@@ -497,7 +497,7 @@ impl State {
             // the goal at c, by R; then at k = c
             let gc = body.instantiate_params(&[nat(c)], &env.binders_fn());
             // (R's terms at the case: k's name read as c)
-            let kname = env.vars[*v as usize].name.clone();
+            let kname = env.var(*v).name.clone();
             let rc = pe_at(r, &kname, &c.to_string());
             let pc = self.by(env, lg, &gc, &rc).map_err(|e| KernelError(format!("cases: the case {}: {}", c, e.0)))?;
             let eq = Term::app(env.builtins.eq, vec![nat(c), k.clone()]);

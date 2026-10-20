@@ -997,7 +997,7 @@ impl<'e> Gen<'e> {
         let cond = self.mem_defined(&st.w, pp, d, n, false);
         self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| {
             let facts: Vec<String> = st.hyps.iter().map(|h| self.print(&h.0)).collect();
-            let vals: Vec<String> = self.vals.iter().map(|(v, x)| format!("{} := {}", self.env.vars[*v as usize].name, self.print(x))).collect();
+            let vals: Vec<String> = self.vals.iter().map(|(v, x)| format!("{} := {}", self.env.var(*v).name, self.print(x))).collect();
             format!("{:x}: a load of {} bytes at {} + {} the spec does not make (the facts: {}; values {})", st.a, n, self.print(pp), self.print(d), facts.join(", "), vals.join(", "))
         })
     }

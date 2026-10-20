@@ -228,10 +228,10 @@ fn close(env: &mut Env, lg: &Logic, st: State) -> KResult<Seq> {
                 Frame::Obtain(v, prop, ex) => {
                     let s1 = s.discharge(env, prop)?;
                     if has_var(s.concl(), *v) {
-                        return Err(KernelError(format!("the obtained `{}` occurs in the result", env.vars[*v as usize].name)));
+                        return Err(KernelError(format!("the obtained `{}` occurs in the result", env.var(*v).name)));
                     }
                     if s1.hyps().iter().any(|h| has_var(h, *v)) {
-                        return Err(KernelError(format!("the obtained `{}` occurs in an open assumption", env.vars[*v as usize].name)));
+                        return Err(KernelError(format!("the obtained `{}` occurs in an open assumption", env.var(*v).name)));
                     }
                     let w = Seq::witness(env, lg, ex)?;
                     let body = match ex.concl().node() {
@@ -1116,8 +1116,8 @@ impl State {
                     if vs.contains(&v) {
                         continue;
                     }
-                    let k = env.vars[v as usize].arity;
-                    let w = env.new_var(&env.vars[v as usize].name.clone(), k);
+                    let k = env.var(v).arity;
+                    let w = env.new_var(&env.var(v).name.clone(), k);
                     ls = Seq::inst(env, &ls, v, &Term::var(w, (0..k).rev().map(Term::bvar).collect()))?;
                     vs.push(w);
                 }
@@ -1167,7 +1167,7 @@ impl State {
                 let mut vs2 = Vec::new();
                 p.vars(&mut vs2);
                 if let Some(v) = vs.iter().find(|v| vs2.contains(v)) {
-                    return err(format!("refine: `{}` not determined by the goal", env.vars[*v as usize].name));
+                    return err(format!("refine: `{}` not determined by the goal", env.var(*v).name));
                 }
                 self.frames.push(Frame::Refine(g, ls));
                 self.goal = Some(p);
@@ -1695,7 +1695,7 @@ impl State {
                 let ind = facts::seq_of(env, "nat_ind").ok_or_else(|| KernelError("induct needs the theorem `nat_ind` (core/nat.core)".into()))?;
                 let mut vs = Vec::new();
                 ind.concl().vars(&mut vs);
-                let p = vs.iter().copied().find(|v| env.vars[*v as usize].name == "p").ok_or_else(|| KernelError("nat_ind has no `p`".into()))?;
+                let p = vs.iter().copied().find(|v| env.var(*v).name == "p").ok_or_else(|| KernelError("nat_ind has no `p`".into()))?;
                 let ind = Seq::inst(env, &ind, p, &body)?;
                 // P(0) -> (step) -> goal
                 let (g_base, rest) = imp_parts(env, ind.concl())?;
@@ -2074,8 +2074,8 @@ impl State {
                 None => {
                     let mut vs = Vec::new();
                     s.concl().vars(&mut vs);
-                    if vs.contains(v) && env.vars[*v as usize].arity == 0 {
-                        return err(format!("apply: `{}` is not determined (give it as a term `{{t}}`)", env.vars[*v as usize].name));
+                    if vs.contains(v) && env.var(*v).arity == 0 {
+                        return err(format!("apply: `{}` is not determined (give it as a term `{{t}}`)", env.var(*v).name));
                     }
                 }
             }
@@ -2117,7 +2117,7 @@ impl State {
         let ax = facts::seq_of(env, "set_select_def").ok_or_else(|| KernelError("no axiom `set_select_def`".into()))?;
         let mut vs = Vec::new();
         ax.concl().vars(&mut vs);
-        let var = |n: &str| vs.iter().copied().find(|v| env.vars[*v as usize].name == n).ok_or_else(|| KernelError(format!("set_select_def has no `{}`", n)));
+        let var = |n: &str| vs.iter().copied().find(|v| env.var(*v).name == n).ok_or_else(|| KernelError(format!("set_select_def has no `{}`", n)));
         let (vs_, vp, vz) = (var("s")?, var("p")?, var("z")?);
         let mut ax = Seq::inst(env, &ax, vs_, &s)?;
         ax = Seq::inst(env, &ax, vp, &p)?;
@@ -3357,7 +3357,7 @@ impl State {
                 }
             }
             if found.is_empty() {
-                return err(format!("step: a call's contract: `{}` from no `using` fact", env.vars[open[0] as usize].name));
+                return err(format!("step: a call's contract: `{}` from no `using` fact", env.var(open[0]).name));
             }
             for (v, t) in &found {
                 s = Seq::inst(env, &s, *v, t)?;
@@ -3425,7 +3425,7 @@ impl State {
                 }
             }
             if found.is_empty() {
-                return err(format!("step: a run lemma's `{}` from no `using` fact", env.vars[open[0] as usize].name));
+                return err(format!("step: a run lemma's `{}` from no `using` fact", env.var(open[0]).name));
             }
             for (v, t) in &found {
                 s = Seq::inst(env, &s, *v, t)?;
@@ -3527,7 +3527,7 @@ impl State {
         let r0 = facts::seq_of(env, rule).ok_or_else(|| KernelError(format!("step: `{}` (proofs/gimple_inv.core) is not loaded", rule)))?;
         let mut rvs = Vec::new();
         r0.concl().vars(&mut rvs);
-        let pv = *rvs.iter().find(|v| env.vars[**v as usize].name == var).ok_or_else(|| KernelError(format!("step: `{}` has no `{}`", rule, var)))?;
+        let pv = *rvs.iter().find(|v| env.var(**v).name == var).ok_or_else(|| KernelError(format!("step: `{}` has no `{}`", rule, var)))?;
         let r1 = Seq::inst(env, &r0, pv, &value)?;
         // (its premises: the world sound, a world, the memory a memory, the
         // registers, at most 6 arguments, the callee refining F)
@@ -3567,7 +3567,7 @@ impl State {
                 let l = facts::seq_of(env, "gc.calls_self").ok_or_else(|| KernelError("step: `gc.calls_self` (proofs/gimple_inv.core) is not loaded".into()))?;
                 let mut lvs = Vec::new();
                 l.concl().vars(&mut lvs);
-                let gv = *lvs.iter().find(|v| env.vars[**v as usize].name == "g").ok_or_else(|| KernelError("step: `gc.calls_self` has no `g`".into()))?;
+                let gv = *lvs.iter().find(|v| env.var(**v).name == "g").ok_or_else(|| KernelError("step: `gc.calls_self` has no `g`".into()))?;
                 Seq::inst(env, &l, gv, g)?
             }
             None => {
@@ -3638,7 +3638,7 @@ impl State {
                 let l = facts::seq_of(env, "app_fn_build").ok_or_else(|| KernelError("`app_fn_build` is not loaded".into()))?;
                 let mut vs = Vec::new();
                 l.concl().vars(&mut vs);
-                let var = |n: &str| vs.iter().copied().find(|v| env.vars[*v as usize].name == n);
+                let var = |n: &str| vs.iter().copied().find(|v| env.var(*v).name == n);
                 let (Some(vd), Some(vv), Some(va)) = (var("d"), var("v"), var("a")) else { return err("step: `app_fn_build`'s variables") };
                 let mut e = Seq::inst(env, &l, vd, &ga[0])?;
                 e = Seq::inst(env, &e, vv, &ga[1])?;
@@ -4028,7 +4028,7 @@ impl State {
                 // (names of leading `all` binders: instantiated after)
                 let mut bound: Vec<(&str, &str)> = Vec::new();
                 for (vname, text) in insts {
-                    let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.vars[*v as usize].name == *vname).collect();
+                    let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.var(*v).name == *vname).collect();
                     let v = match cands.as_slice() {
                         [v] => *v,
                         [] => {
@@ -4037,7 +4037,7 @@ impl State {
                         }
                         _ => return err(format!("several variables named `{}`", vname)),
                     };
-                    let k = env.vars[v as usize].arity;
+                    let k = env.var(v).arity;
                     let value = parse_value(env, text, &self.scope, k)?;
                     let tmp = env.new_var(&format!("{}'", vname), k);
                     let tmp_term = Term::var(tmp, (0..k).rev().map(Term::bvar).collect());

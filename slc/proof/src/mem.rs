@@ -390,7 +390,7 @@ impl State {
             l = Seq::inst(env, &l, *v, t)?;
         }
         if let Some(v) = inst.1.iter().find(|v| !binds.iter().any(|(w, _)| w == *v)) {
-            return err(format!("step: the lemma's `{}` not determined by the operation", env.vars[*v as usize].name));
+            return err(format!("step: the lemma's `{}` not determined by the operation", env.var(*v).name));
         }
         self.mem_discharge_all(env, lg, l, using, 0)
     }

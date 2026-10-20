@@ -50,7 +50,7 @@ impl B {
     }
 
     pub fn fresh(&mut self, hint: &str) -> VarId {
-        let id = self.env.vars.len();
+        let id = self.env.globals_len();
         let clean: String = hint.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
         let clean = if clean.is_empty() || !clean.chars().next().unwrap().is_ascii_alphabetic() {
             format!("v{}", clean)

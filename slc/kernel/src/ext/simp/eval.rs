@@ -671,7 +671,7 @@ impl Logic {
     /// value` as known values; which premises were used.
     pub fn eval_truth(&self, env: &Env, p: &Term, known: &[Term]) -> crate::env::KResult<Vec<usize>> {
         let sp = Simp::new(env, self);
-        let fresh = known.iter().chain([p]).map(|t| max_var(t) + 1).fold(env.vars.len() as u32 + 5_000_000, u32::max);
+        let fresh = known.iter().chain([p]).map(|t| max_var(t) + 1).fold(env.var_bound() + 5_000_000, u32::max);
         let mut ev = Ev::new(&sp, fresh).with_known(known);
         match ev.truth(p) {
             Ok(true) => Ok(ev.used.borrow().iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect()),
@@ -685,7 +685,7 @@ impl Logic {
     /// <-> x = c1 || .. || x = cn`, and which premises were used.
     pub fn eval_members(&self, env: &Env, set: &Term, known: &[Term]) -> crate::env::KResult<(Term, Vec<usize>)> {
         let sp = Simp::new(env, self);
-        let fresh = known.iter().chain([set]).map(|t| max_var(t) + 1).fold(env.vars.len() as u32 + 5_000_000, u32::max);
+        let fresh = known.iter().chain([set]).map(|t| max_var(t) + 1).fold(env.var_bound() + 5_000_000, u32::max);
         let mut ev = Ev::new(&sp, fresh).with_known(known);
         let ms = ev.members(set).map_err(|e| crate::env::KernelError(format!("eval: {}", e)))?;
         if std::env::var("EVAL_STATS").is_ok() {

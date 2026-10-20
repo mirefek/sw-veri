@@ -173,7 +173,7 @@ fn params_of(env: &Env, t: &sl_kernel::Term) -> String {
     let ps: Vec<String> = vs
         .iter()
         .map(|v| {
-            let x = &env.vars[*v as usize];
+            let x = &env.var(*v);
             let bs: Vec<String> = (0..x.arity).map(|i| format!("x{}", i)).collect();
             if bs.is_empty() { x.name.clone() } else { format!("{}. {}", bs.join(" "), x.name) }
         })
@@ -237,6 +237,9 @@ pub fn kernel_check(args: &[String]) -> CResult {
                 (rep, stmts)
             }
         };
+        // (the file's terms not kept alive by the term caches: a cached file
+        // and a checked one leave the same environment)
+        env.clear_term_caches();
         prefix = crate::sha256::hex(format!("{}\n{}\n{}", prefix, first, stmts).as_bytes());
         println!(
             "{}: {} constants, {} axioms, {} definitions, {} theorems, {} conditional theorems, {} open lemmas, {} claims{}",

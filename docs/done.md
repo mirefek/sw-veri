@@ -845,3 +845,27 @@ item is a short summary of finished work; details are in the files named.
   for a truth table. The meta alloc_meta hands out: its
   bytes the allocator's at the entry or unmapped then (alloc_meta_spec,
   `mp.am_mfp`) -- what giving it back (`mp.agr_back`) needs.
+- **alloc_group by its purpose** (`mp.agr_run`, `mp.agp`, `mp.agp_fun`,
+  `mp.agp_divg`, `mp.agr_q`; proofs/mallocng/fun/alloc_group.core, model
+  groupmap.core / groupnest.core): every path's GIMPLE walk -- no meta, the
+  mmap refused, a group mapped on its own (`mp.gx_holds_in`), a group nested
+  in the reserved slot of a larger class's group (size_to_class, alloc_slot,
+  free_meta when no slot, enframe, the header byte, the check-byte loop by an
+  invariant and variant at its head; `mp.gn_holds_in`, the old invariant on
+  a view mixing the held bytes and the slot's) -- to `alloc_group_spec`'s
+  outcome. Model and specs grown for it: group_ok's `span` (a class's
+  stride under two of its slots); alloc_slot keeps the smaller classes'
+  lists and its slot was the allocator's or unmapped (`mp.below`,
+  `mp.rgrown`); alloc_group keeps its class's and the smaller ones'
+  (`mp.upto`). Engine: arith's congruence classes in a fixed order; a read
+  of bytes with no write on them left as it is (bytes after a loop).
+- **A proof's variables dropped after it** (kernel: `Env::begin_locals` /
+  `end_locals` around each `prove`, `c1`, `refines`): its variables local,
+  numbered from a base above the global ones, the base moved past them at
+  its end -- no id given twice, a dropped one unknown to every rule (each
+  reads the arity, refuses an unknown variable); a result's local
+  variables renamed to fresh global ones by `inst` (`Seq::globalize`), any
+  other entry keeping one refused (`Env::locals_kept`); the term caches
+  emptied between files. The uncached chain no longer keeps every proof's
+  variables (23.7 M by alloc_slot, ~2 GB live): 3.3 GB -> 1.7 GB peak, the
+  whole chain with alloc_group within the 6 GB limit (403 s).

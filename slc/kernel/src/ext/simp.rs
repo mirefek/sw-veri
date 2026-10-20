@@ -776,7 +776,7 @@ impl<'a> Simp<'a> {
         let r = (|| {
             let SymKind::Defined { params, body } = &self.env.syms[f as usize].kind else { return None };
             let p = *params.get(i)?;
-            if self.env.vars[p as usize].arity != 0 {
+            if self.env.var(p).arity != 0 {
                 return None;
             }
             let mut out = Vec::new();
@@ -861,7 +861,7 @@ impl<'a> Simp<'a> {
     fn word_param_of(&self, f: SymId, i: usize) -> Option<u64> {
         let SymKind::Defined { params, body } = &self.env.syms[f as usize].kind else { return None };
         let p = *params.get(i)?;
-        if self.env.vars[p as usize].arity != 0 {
+        if self.env.var(p).arity != 0 {
             return None;
         }
         fn walk(sp: &Simp, t: &Term, p: crate::term::VarId, w: &mut Option<u64>) -> bool {
@@ -1154,7 +1154,7 @@ impl<'a> Simp<'a> {
                     Node::App(g, gb) if self.env.ksym("bits_of_int") == Some(*g) && gb.len() == 2 => {
                         let mut wt = gb[0].clone();
                         for (p, x) in params.iter().zip(a) {
-                            if self.env.vars[*p as usize].arity != 0 {
+                            if self.env.var(*p).arity != 0 {
                                 return false;
                             }
                             wt = wt.subst_var(*p, x, &self.env.binders_fn());
@@ -1412,7 +1412,7 @@ impl<'a> Simp<'a> {
         let SymKind::Defined { params, body } = &self.env.syms[s as usize].kind else { return None };
         let mut t = body.clone();
         for (p, a) in params.iter().zip(args) {
-            let k = self.env.vars[*p as usize].arity;
+            let k = self.env.var(*p).arity;
             t = subst_var_ctx(self.env, &t, *p, a, k);
         }
         Some(t)
@@ -3913,7 +3913,7 @@ impl Simp<'_> {
 
     /// The path normal form of a proposition (equivalent to it).
     fn pathify(&self, t: &Term) -> Term {
-        let mut fresh = self.env.vars.len() as u32 + 1_000_000;
+        let mut fresh = self.env.var_bound() + 1_000_000;
         let Some(ps) = self.paths(t, &mut fresh) else { return t.clone() };
         let mut out = self.ff();
         for p in ps {
@@ -4290,7 +4290,7 @@ impl Simp<'_> {
         // `all xs. !(ex ys. B)` (xs or ys non-empty): they become pattern
         // variables, B instantiated must be among the literals
         let mut vs = Vec::new();
-        let mut next = self.env.vars.len() as u32 + 3_000_000;
+        let mut next = self.env.var_bound() + 3_000_000;
         let mut open = |t: &Term, vs: &mut Vec<crate::term::VarId>| {
             vs.push(next);
             next += 1;
@@ -5498,7 +5498,7 @@ impl Logic {
 
     fn simp_prove_loops_(&self, env: &Env, premises: &[Term], goal: &Term, hints: &[LoopHint]) -> crate::env::KResult<()> {
         // fresh variables above every variable of the input
-        let mut fresh = env.vars.len() as u32 + 2_000_000;
+        let mut fresh = env.var_bound() + 2_000_000;
         for t in premises.iter().chain([goal]).chain(hints.iter().flat_map(|h| [&h.inv].into_iter().chain(&h.var))) {
             fresh = fresh.max(max_var(t) + 1);
         }

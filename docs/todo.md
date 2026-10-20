@@ -17,13 +17,6 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 - alloc_meta's leaves at machine level: get_random_secret, __syscall1,
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
   as the machine's), to discharge `mp.am_implements`' hypotheses.
-- alloc_group by its purpose (GIMPLE): the run `mp.agr_run` shows every
-  exit of the meta's lack, the mmap's refusal and the group mapped on its
-  own (model: model/groupmap.core, `mp.gx_holds_in` from the memory-level
-  `mp.gxpre`). Left: the nested path (size_to_class, alloc_slot -- its
-  failure by `mp.agr_back` --, enframe, the header-zeroing loop, the same
-  stores; model `mp.ngn_holds`, its memory-level frame like groupmap's),
-  the refinement and the contract at a call.
 - CFG -> loops: alloc_group has four loops one after another (heads 7, 12,
   16, 54). `g.cut_loops` takes one loop's data (H, bs, ks); several loops
   need them per head, chosen under binders. The loop finder already
@@ -32,7 +25,7 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   own.
 - alloc_group's CFG C1: stops at 404413, a byte store of `dl`
   (`tr.store8_b`'s premise); then the rest of its blocks.
-- Specs by purpose of the loop functions (alloc_group, step_seq): the
+- Specs by purpose of the loop functions (step_seq): the
   loop's invariant and variant at its head stated over the abstract
   state, the code's loop refined to it (as try_avail's span loop).
 
@@ -59,6 +52,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   walked again in each caller.
 - User proofs on a CFG (an invariant per label) for functions with no
   structured view.
+- Variables and terms owned by what uses them: a variable reference
+  counted (its name and arity freed with its last term, identity by
+  pointer, not a table index), terms hash-consed (equal terms one node,
+  equality a pointer compare, a weak table freeing them). Now a proof's
+  variables are dropped only at its end (`Env::begin_locals` ..
+  `end_locals`), each proof's still held until then, and equal terms built
+  apart are separate nodes.
 
 ## 5. The invariant and the laws
 

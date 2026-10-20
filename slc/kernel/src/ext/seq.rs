@@ -260,7 +260,7 @@ impl Seq {
     /// Instantiates schematic variable `v` everywhere (the kernel's rule,
     /// applied to the whole implication).
     pub fn inst(env: &Env, s: &Seq, v: VarId, value: &Term) -> KResult<Seq> {
-        let arity = env.vars.get(v as usize).ok_or_else(|| KernelError("unknown variable".into()))?.arity;
+        let arity = env.var_get(v).ok_or_else(|| KernelError("unknown variable".into()))?.arity;
         env.check_wf(value, arity)?;
         Ok(Seq {
             hyps: s.hyps.iter().map(|h| env.subst_var_m(h, v, value)).collect(),
@@ -269,19 +269,43 @@ impl Seq {
         })
     }
 
+    /// The sequent with each local variable of the current proof (dropped
+    /// at its end) renamed to a fresh global one of the same name and
+    /// arity: by `inst`, each instantiated by that variable applied to its
+    /// parameters.
+    pub fn globalize(env: &mut Env, s: &Seq) -> KResult<Seq> {
+        let mut vs = env.locals_in(&s.concl);
+        for h in &s.hyps {
+            for v in env.locals_in(h) {
+                if !vs.contains(&v) {
+                    vs.push(v);
+                }
+            }
+        }
+        let mut r = s.clone();
+        for v in vs {
+            let info = env.var_get(v).ok_or_else(|| KernelError("unknown variable".into()))?.clone();
+            let g = env.new_global_var(&info.name, info.arity);
+            let k = info.arity;
+            let value = Term::var(g, (0..k).map(|i| Term::bvar(k - 1 - i)).collect());
+            r = Seq::inst(env, &r, v, &value)?;
+        }
+        Ok(r)
+    }
+
     /// From `Γ ⊢ φ(v)`, `v` a first-order variable not in `Γ`: `Γ ⊢ all x. φ(x)`.
     /// Derivation: `all x. φ(x)` is `!(ex x. !φ(x))`; from `ex x. !φ(x)`,
     /// `choose_spec` gives `!φ(c)` for `c = choose(x. !φ(x))`, and
     /// instantiating `v` by `c` gives `φ(c)`: a contradiction.
     pub fn gen(env: &Env, lg: &Logic, s: &Seq, v: VarId) -> KResult<Seq> {
-        if env.vars.get(v as usize).map(|x| x.arity) != Some(0) {
+        if env.var_get(v).map(|x| x.arity) != Some(0) {
             return err("generalization over a variable with parameters");
         }
         for h in &s.hyps {
             let mut vs = Vec::new();
             h.vars(&mut vs);
             if vs.contains(&v) {
-                return err(format!("cannot generalize over `{}`: it occurs in a hypothesis", env.vars[v as usize].name));
+                return err(format!("cannot generalize over `{}`: it occurs in a hypothesis", env.var(v).name));
             }
         }
         let body = abstract_term(&s.concl, &Term::var(v, vec![]), 0, &env.binders_fn());
@@ -700,7 +724,7 @@ fn unfold_all_in(env: &Env, t: &Term, syms: &[SymId], budget: &mut usize) -> Opt
                     // an argument with bound variables of the context (the
                     // occurrence is under binders): placed under the body's
                     // binders shifted
-                    let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.vars[*p as usize].arity;
+                    let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.var(*p).arity;
                     // the kernel's instantiation of the defining equation
                     let mut b = body.clone();
                     for (p, a) in params.iter().zip(&args) {
@@ -731,8 +755,8 @@ pub fn unfold_at(env: &Env, t: &Term, sym: SymId, occ: &[usize], count: &mut usi
             if occ.is_empty() || occ.contains(count) {
                 if let SymKind::Defined { params, body } = &env.syms[*s as usize].kind {
                     let bf = env.binders_fn();
-                    let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.vars[*p as usize].arity;
-                    if !params.iter().zip(args.iter()).any(|(p, a)| open(p, a) && env.vars[*p as usize].arity > 0) {
+                    let open = |p: &VarId, a: &Term| a.loose_depth(&bf) > env.var(*p).arity;
+                    if !params.iter().zip(args.iter()).any(|(p, a)| open(p, a) && env.var(*p).arity > 0) {
                         let mut b = body.clone();
                         for (p, a) in params.iter().zip(args.iter()) {
                             b = if open(p, a) { subst_open(env, &b, *p, a, 0) } else { b.subst_var(*p, a, &bf) };

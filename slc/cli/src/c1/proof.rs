@@ -608,7 +608,7 @@ impl<'e> Gen<'e> {
         });
         self.callees[ci].3 |= !aligned;
         // (its premises: hcall{i} .. for the spec's parameter Gi)
-        let gi: usize = self.env.vars[Self::var_id(&g) as usize].name.strip_prefix('G').and_then(|i| i.parse().ok()).ok_or_else(|| format!("{:x}: a call of {}, not a parameter of the spec", a, self.print(&g)))?;
+        let gi: usize = self.env.var(Self::var_id(&g)).name.strip_prefix('G').and_then(|i| i.parse().ok()).ok_or_else(|| format!("{:x}: a call of {}, not a parameter of the spec", a, self.print(&g)))?;
         // (its premises, at its first call: its contract on the program text,
         // its spec typed, its returns' effects)
         if gi >= self.cinfo.len() {

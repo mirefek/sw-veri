@@ -358,7 +358,7 @@ impl<'e> Eff<'e> {
         let called = self.called(&body);
         let mut hyps = Vec::new();
         for (i, p) in params.iter().enumerate() {
-            if self.env.vars[*p as usize].arity > 0 {
+            if self.env.var(*p).arity > 0 {
                 return Err(format!("`{}`: a procedure taking a function", name));
             }
             let (pn, pv) = self.fresh("as");

@@ -47,6 +47,16 @@ pub struct VarInfo {
     pub arity: u32,
 }
 
+/// The environment's entries counted before a proof (`Env::local_mark`)
+pub struct LocalMark {
+    theorems: usize,
+    axioms: usize,
+    defs: usize,
+    claims: usize,
+    lemmas: usize,
+    conditional: usize,
+}
+
 /// A proven statement. Private field: only the kernel can construct it.
 #[derive(Clone, Debug)]
 pub struct Thm(Term);
@@ -77,10 +87,25 @@ pub struct Builtins {
     pub bytes_at: SymId,
 }
 
+/// The first local variable's id: the global variables (declared outside a
+/// proof) below, a proof's own from here (`Env::begin_locals`).
+pub const LOCAL0: VarId = 1 << 31;
+/// The local ids' end: above it the proof checker's private fresh ids (its
+/// offsets above `Env::var_bound`, its lets' locals from 3_000_000_000).
+pub const LOCAL_END: VarId = 2_900_000_000;
+
 pub struct Env {
     pub syms: Vec<SymInfo>,
     pub sym_by_name: HashMap<String, SymId>,
-    pub vars: Vec<VarInfo>,
+    /// the global variables, numbered from 0
+    globals: Vec<VarInfo>,
+    /// a proof's variables (inside `begin_locals` .. `end_locals`),
+    /// numbered from `local_base`; emptied after it, the base moved past
+    /// them -- no id ever given twice, a dropped one unknown (refused by
+    /// every rule that reads a variable's arity)
+    locals: Vec<VarInfo>,
+    local_base: VarId,
+    local_depth: u32,
     pub axioms: Vec<(String, Thm)>,
     pub defs: Vec<(SymId, Thm)>,
     pub claims: Vec<(String, Term)>,
@@ -150,7 +175,10 @@ impl Env {
         let mut env = Env {
             syms: Vec::new(),
             sym_by_name: HashMap::new(),
-            vars: Vec::new(),
+            globals: Vec::new(),
+            locals: Vec::new(),
+            local_base: LOCAL0,
+            local_depth: 0,
             axioms: Vec::new(),
             defs: Vec::new(),
             claims: Vec::new(),
@@ -217,9 +245,112 @@ impl Env {
         move |s, i| self.syms[s as usize].binders[i]
     }
 
+    /// A fresh variable: a proof's own (local) inside `begin_locals` ..
+    /// `end_locals`, else global. Panics when its range is used up (an id
+    /// never wraps around to one given before).
     pub fn new_var(&mut self, name: &str, arity: u32) -> VarId {
-        self.vars.push(VarInfo { name: name.to_string(), arity });
-        (self.vars.len() - 1) as VarId
+        if self.local_depth > 0 {
+            let id = self.local_base as u64 + self.locals.len() as u64;
+            assert!(id < LOCAL_END as u64, "local variable ids used up");
+            self.locals.push(VarInfo { name: name.to_string(), arity });
+            id as VarId
+        } else {
+            let id = self.globals.len() as u64;
+            assert!(id < LOCAL0 as u64, "global variable ids used up");
+            self.globals.push(VarInfo { name: name.to_string(), arity });
+            id as VarId
+        }
+    }
+
+    /// A variable's name and arity; None for an id never given, or a
+    /// proof's dropped one
+    pub fn var_get(&self, v: VarId) -> Option<&VarInfo> {
+        if v < LOCAL0 {
+            self.globals.get(v as usize)
+        } else if v >= self.local_base {
+            self.locals.get((v - self.local_base) as usize)
+        } else {
+            None
+        }
+    }
+
+    /// A variable's name and arity (panics for an unknown id: a checker's
+    /// bug -- the kernel's rules use `var_get` and refuse)
+    pub fn var(&self, v: VarId) -> &VarInfo {
+        self.var_get(v).unwrap_or_else(|| panic!("unknown variable {}", v))
+    }
+
+    /// Above every variable id given so far (and every live one): fresh
+    /// private ids start here
+    pub fn var_bound(&self) -> VarId {
+        if self.local_depth > 0 { self.local_base + self.locals.len() as VarId } else { self.local_base.max(self.globals.len() as VarId) }
+    }
+
+    /// the number of global variables (the next global one's id)
+    pub fn globals_len(&self) -> usize {
+        self.globals.len()
+    }
+
+    /// A proof begins: its variables local (nested: the outer one's)
+    pub fn begin_locals(&mut self) {
+        self.local_depth += 1;
+    }
+
+    /// A proof ends: its variables dropped (the outermost's end), the base
+    /// moved past them; the term caches emptied (they may hold its terms).
+    /// The caller has made sure nothing kept mentions them
+    /// (`locals_in`, `globalize`).
+    pub fn end_locals(&mut self) {
+        self.local_depth -= 1;
+        if self.local_depth == 0 {
+            self.local_base += self.locals.len() as VarId;
+            self.locals = Vec::new();
+            self.clear_term_caches();
+        }
+    }
+
+    /// the local variables of the current proof occurring in t
+    pub fn locals_in(&self, t: &Term) -> Vec<VarId> {
+        let mut vs = Vec::new();
+        t.vars(&mut vs);
+        vs.retain(|v| *v >= LOCAL0);
+        vs
+    }
+
+    /// a global variable, also inside a proof (`ext::seq::globalize`: a
+    /// result's local variable renamed to one)
+    pub(crate) fn new_global_var(&mut self, name: &str, arity: u32) -> VarId {
+        let id = self.globals.len() as u64;
+        assert!(id < LOCAL0 as u64, "global variable ids used up");
+        self.globals.push(VarInfo { name: name.to_string(), arity });
+        id as VarId
+    }
+
+    /// what the environment holds, counted: entries added after it are a
+    /// proof's (`locals_kept`)
+    pub fn local_mark(&self) -> LocalMark {
+        LocalMark {
+            theorems: self.theorems.len(),
+            axioms: self.axioms.len(),
+            defs: self.defs.len(),
+            claims: self.claims.len(),
+            lemmas: self.open.lemmas.len(),
+            conditional: self.open.conditional.len(),
+        }
+    }
+
+    /// An entry added since the mark, or an abbreviation, mentioning one of
+    /// the current proof's local variables (dropped at its end): its name
+    pub fn locals_kept(&self, m: &LocalMark) -> Option<String> {
+        let has = |t: &Term| !self.locals_in(t).is_empty();
+        let named = |v: &[(String, Thm)], from: usize| v[from..].iter().find(|(_, th)| has(th.prop())).map(|(n, _)| n.clone());
+        named(&self.theorems, m.theorems)
+            .or_else(|| named(&self.axioms, m.axioms))
+            .or_else(|| self.defs[m.defs..].iter().find(|(_, th)| has(th.prop())).map(|(s, _)| self.syms[*s as usize].name.clone()))
+            .or_else(|| self.claims[m.claims..].iter().find(|(_, t)| has(t)).map(|(n, _)| n.clone()))
+            .or_else(|| self.open.lemmas[m.lemmas..].iter().find(|(_, t)| has(t)).map(|(n, _)| n.clone()))
+            .or_else(|| self.open.conditional[m.conditional..].iter().find(|(_, s)| has(s.concl()) || s.hyps().iter().any(has)).map(|(n, _)| n.clone()))
+            .or_else(|| self.abbrevs.iter().find(|(_, (_, t))| has(t)).map(|(n, _)| n.clone()))
     }
 
     /// Well-formedness: arities of symbols and variables, no loose bound
@@ -318,7 +449,7 @@ impl Env {
             }
             Node::Nat(_) | Node::Bytes(_) => {}
             Node::Var(v, args) => {
-                let info = self.vars.get(*v as usize).ok_or_else(|| KernelError("unknown variable".into()))?;
+                let info = self.var_get(*v).ok_or_else(|| KernelError("unknown variable".into()))?;
                 if args.len() as u32 != info.arity {
                     return err(format!("variable `{}` expects {} arguments, got {}", info.name, info.arity, args.len()));
                 }
@@ -360,7 +491,7 @@ impl Env {
         body.vars(&mut used);
         for v in &used {
             if !params.contains(v) {
-                return err(format!("definition of `{}` mentions `{}`, which is not a parameter", name, self.vars[*v as usize].name));
+                return err(format!("definition of `{}` mentions `{}`, which is not a parameter", name, self.var(*v).name));
             }
         }
         for (i, p) in params.iter().enumerate() {
@@ -370,7 +501,7 @@ impl Env {
         }
         // (a name the extensions rely on: only with its pinned body)
         let pinned = crate::ext::pinned::check_def(self, name, &params, &body)?;
-        let binders: Vec<u32> = params.iter().map(|p| self.vars[*p as usize].arity).collect();
+        let binders: Vec<u32> = params.iter().map(|p| self.var(*p).arity).collect();
         let sym = self.add_sym(name, binders.clone(), SymKind::Defined { params: params.clone(), body: body.clone() })?;
         if pinned {
             self.pinned.insert(sym);
@@ -390,7 +521,7 @@ impl Env {
         let mut vs = Vec::new();
         prop.vars(&mut vs);
         if !vs.is_empty() {
-            return err(format!("claim `{}` is not closed (schematic variable `{}`)", name, self.vars[vs[0] as usize].name));
+            return err(format!("claim `{}` is not closed (schematic variable `{}`)", name, self.var(vs[0]).name));
         }
         self.claims.push((name.to_string(), prop));
         Ok(())
@@ -431,7 +562,7 @@ impl Env {
 
     /// Instantiate schematic variable `v` by `value` (with `arity(v)` parameters).
     pub fn instantiate(&self, thm: &Thm, v: VarId, value: &Term) -> KResult<Thm> {
-        let arity = self.vars.get(v as usize).ok_or_else(|| KernelError("unknown variable".into()))?.arity;
+        let arity = self.var_get(v).ok_or_else(|| KernelError("unknown variable".into()))?.arity;
         self.check_wf(value, arity)?;
         Ok(Thm(thm.0.subst_var(v, value, &self.binders_fn())))
     }
