@@ -19,13 +19,7 @@ abbrev mp.rgrown(c, A2, A, b, vm) := all a. a in omega -> mallocng.in_reserved(A
 // 0; the lists of class sc and the smaller ones as before, no slot
 // reserved, the invariant kept, nothing outside the allocator touched but
 // errno, the allocator grown only into memory unmapped before
-abbrev mp.agr_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits(64) -> int_lt(sc, 48) ->
-  int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
-  t in abi.World -> h in mp.G ->
-  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
-  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
-  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
-  runs(f[regs], t, o2) ->
+abbrev mp.agr_post(c, sc, req, t, h, o2) :=
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V rr. (V in x86_64_linux.Vm && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, h.A, sc) && A2.taken = h.A.taken) &&
      (fst(rr) = 0 || mallocng_specs.fresh_group(A2, fst(rr), sc, req)) &&
@@ -33,6 +27,59 @@ abbrev mp.agr_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bit
      (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(V, A2.metas[fst(rr)]), A2.metas[fst(rr)].last_idx) ->
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[fst(rr)]), int_add(A2.metas[fst(rr)].last_idx, 1))))))) &&
      o2 = ok(fn_update(t, "vm", V), rr))
+
+abbrev mp.agr_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits(64) -> int_lt(sc, 48) ->
+  int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
+  t in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
+  runs(f[regs], t, o2) -> mp.agr_post(c, sc, req, t, h, o2)
+
+// (the same at the classes from k on: see mp.as_call_ge)
+abbrev mp.agr_call_ge(c, f, k) := all sc req t h regs o2. sc in bits(32) -> req in bits(64) -> int_lt(sc, 48) -> int_le(k, sc) ->
+  int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
+  t in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
+  runs(f[regs], t, o2) -> mp.agr_post(c, sc, req, t, h, o2)
+
+theorem mp.agr_call_ge_of(c, f, k): mp.agr_call(c, f) -> mp.agr_call_ge(c, f, k)
+proof
+  assume q
+  fix sc req t h regs o2
+  assume hsb hrb hsl _ hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, hr)
+qed
+
+theorem mp.agr_call_ge_mono(c, f, k, k2): k in omega -> int_le(k, k2) -> mp.agr_call_ge(c, f, k) -> mp.agr_call_ge(c, f, k2)
+proof
+  assume ko hk q
+  fix sc req t h regs o2
+  assume hsb hrb hsl hge hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, (int_le(k, sc) by arith(ko, hk, hge, hsb)), hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, hr)
+qed
+
+theorem mp.agr_call_of_ge0(c, f): mp.agr_call_ge(c, f, 0) -> mp.agr_call(c, f)
+proof
+  assume q
+  fix sc req t h regs o2
+  assume hsb hrb hsl hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, (int_le(0, sc) by arith(hsb)), hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, hr)
+qed
+
+theorem mp.agr_call_ge_ref(c, f, f2, k): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
+  mp.agr_call_ge(c, f2, k) -> mp.agr_call_ge(c, f, k)
+proof
+  assume hf q
+  fix sc req t h regs o2
+  assume hsb hrb hsl hge hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  have rl rn _ _ := apply(gc.regs_32_64, hsb, hrb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hge, hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, r2)
+qed
 
 // alloc_slot's purpose (`alloc_slot_spec`): slot r of the head of class
 // sc's list reserved, the only one, room in it for req bytes; or -1, no
@@ -470,7 +517,7 @@ theorem mp.as_run(c, sc, req, gta, gac, gagr, gq, s, h, o): c in mallocng.Cfg ->
   mp.ta_call(c, gta) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gac[regs], s, o) ->
      runs(mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)[regs], s, o)) ->
-  mp.agr_call(c, gagr) ->
+  mp.agr_call_ge(c, gagr, sc) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gq[regs], s, o) -> runs(mallocng_specs.queue_spec_fun()[regs], s, o)) ->
   s in abi.World -> h in mp.G ->
   mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
@@ -687,7 +734,8 @@ proof
       assume _ _ _ r
       show r
     qed
-    step V2 rr, e5 hR2 from k5 with hagr using agself, hsb, hrb, hsl, hfit, wW1, hg1, pin, pnr, pth, ptl, pbs, peo, pea
+    have scle: int_le(sc, sc) by arith(hsb)
+    step V2 rr, e5 hR2 from k5 with hagr using agself, hsb, hrb, hsl, scle, hfit, wW1, hg1, pin, pnr, pth, ptl, pbs, peo, pea
     have v2v ex2 := hR2
     obtain A2, a2a a2u nr2 act2 tk2 fg2 hin2 unt2 grw2 past2 from ex2
     have tk02: A2.taken = A.taken := trans(rewrite(hA1, tk2), ftk)
@@ -993,7 +1041,7 @@ proof
   have heo: mallocng_specs.errno_ok(V0, s.objs, s.fs_base) by simp(hpre, sd, hd)
   have hea: mallocng_specs.errno_apart(c, A, B, V0, s.fs_base) by simp(hpre, sd, hd)
   have run := apply(mp.as_run[c := c, sc := sc, req := req, gta := gta, gac := gac, gagr := gagr, gq := gq, s := s, h := h, o := o],
-    hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, hagr, hgq, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hr)
+    hc, hx, hst, hdj, hsb, hsl, hrb, hfit, hta, hac, apply(mp.agr_call_ge_of[c := c, f := gagr, k := sc], hagr), hgq, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hr)
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
@@ -1060,13 +1108,7 @@ qed
 // for req bytes, or -1 -- the smaller classes' lists as before, the
 // invariant kept, nothing outside the allocator touched but errno, the
 // allocator grown only into memory unmapped before, the slot too
-abbrev mp.as_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits(64) -> int_lt(sc, 48) ->
-  int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
-  t in abi.World -> h in mp.G ->
-  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
-  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
-  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
-  runs(f[regs], t, o2) ->
+abbrev mp.as_post(c, sc, req, t, h, o2) :=
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V rr. (V in x86_64_linux.Vm && (ex A2 r. (A2 in mallocng.Abs && A2 in univ(1)) && A2.taken = h.A.taken && mp.below(A2, h.A, sc) && r in bits(32) &&
      ((r = 4294967295 && mallocng.no_reserved(A2)) ||
@@ -1075,6 +1117,25 @@ abbrev mp.as_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits
      mallocng.holds_in(c, A2, V, h.blocks) && mallocng.untouched(c, h.A, h.blocks, t.vm, V, mp.errno(t.fs_base)) && mp.grown(c, A2, h.A, h.blocks, t.vm) &&
      mp.rgrown(c, A2, h.A, h.blocks, t.vm) && bits_of_int(32, fst(rr)) = r)) &&
      o2 = ok(fn_update(t, "vm", V), rr))
+
+abbrev mp.as_call(c, f) := all sc req t h regs o2. sc in bits(32) -> req in bits(64) -> int_lt(sc, 48) ->
+  int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
+  t in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
+  runs(f[regs], t, o2) -> mp.as_post(c, sc, req, t, h, o2)
+
+// (the same at the classes from k on: a callee known so far -- alloc_slot
+// and alloc_group calling each other, a nested group's slot of a larger
+// class)
+abbrev mp.as_call_ge(c, f, k) := all sc req t h regs o2. sc in bits(32) -> req in bits(64) -> int_lt(sc, 48) -> int_le(k, sc) ->
+  int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) ->
+  t in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(32, sc)), seq_one(gimple.arg(64, req)))) ->
+  runs(f[regs], t, o2) -> mp.as_post(c, sc, req, t, h, o2)
 
 // (a callee refining one called as alloc_slot: called as it too)
 theorem mp.as_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
@@ -1089,20 +1150,60 @@ proof
   show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, r2)
 qed
 
-// alloc_slot's code called as alloc_slot
-theorem mp.as_q: all c gta gac gagr gq. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
-  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> c.dbj = c_src_malloc_mallocng_malloc.debruijn32 ->
-  mp.ta_call(c, gta) ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gac[regs], s, o) ->
-     runs(mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)[regs], s, o)) ->
-  mp.agr_call(c, gagr) ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gq[regs], s, o) -> runs(mallocng_specs.queue_spec_fun()[regs], s, o)) ->
-  mp.as_call(c, c_src_malloc_mallocng_malloc.alloc_slot_fun(gta, gac, gagr, gq))
+// (the contract at the classes from k on: from the contract; from k's at a
+// larger k2; at 0 the contract; along a refinement)
+theorem mp.as_call_ge_of(c, f, k): mp.as_call(c, f) -> mp.as_call_ge(c, f, k)
 proof
-  fix c gta gac gagr gq
-  assume hc hx hst hdj hta hac hagr hgq
+  assume q
+  fix sc req t h regs o2
+  assume hsb hrb hsl _ hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, hr)
+qed
+
+theorem mp.as_call_ge_mono(c, f, k, k2): k in omega -> int_le(k, k2) -> mp.as_call_ge(c, f, k) -> mp.as_call_ge(c, f, k2)
+proof
+  assume ko hk q
+  fix sc req t h regs o2
+  assume hsb hrb hsl hge hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, (int_le(k, sc) by arith(ko, hk, hge, hsb)), hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, hr)
+qed
+
+theorem mp.as_call_of_ge0(c, f): mp.as_call_ge(c, f, 0) -> mp.as_call(c, f)
+proof
+  assume q
   fix sc req t h regs o2
   assume hsb hrb hsl hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, (int_le(0, sc) by arith(hsb)), hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, hr)
+qed
+
+theorem mp.as_call_ge_ref(c, f, f2, k): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
+  mp.as_call_ge(c, f2, k) -> mp.as_call_ge(c, f, k)
+proof
+  assume hf q
+  fix sc req t h regs o2
+  assume hsb hrb hsl hge hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  have rl rn _ _ := apply(gc.regs_32_64, hsb, hrb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
+  show := mp(all_elim(q, {sc}, {req}, {t}, {h}, {regs}, {o2}), hsb, hrb, hsl, hge, hfit, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hro, r2)
+qed
+
+// alloc_slot's code called as alloc_slot -- at the classes from k on, its
+// alloc_group known there (alloc_slot calls it at its own class)
+theorem mp.as_q: all c k gta gac gagr gq. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> c.dbj = c_src_malloc_mallocng_malloc.debruijn32 ->
+  k in omega -> mp.ta_call(c, gta) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gac[regs], s, o) ->
+     runs(mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)[regs], s, o)) ->
+  mp.agr_call_ge(c, gagr, k) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gq[regs], s, o) -> runs(mallocng_specs.queue_spec_fun()[regs], s, o)) ->
+  mp.as_call_ge(c, c_src_malloc_mallocng_malloc.alloc_slot_fun(gta, gac, gagr, gq), k)
+proof
+  fix c k gta gac gagr gq
+  assume hc hx hst hdj ko hta hac hagk hgq
+  fix sc req t h regs o2
+  assume hsb hrb hsl hge hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  have hagr := apply(mp.agr_call_ge_mono[c := c, f := gagr, k := k, k2 := sc], ko, hge, hagk)
   have rl rn r0 r1 := apply(gc.regs_32_64, hsb, hrb, hro)
   have lo: seq_len(regs) in omega by simp(rl)
   have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
