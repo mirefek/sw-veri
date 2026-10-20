@@ -23,8 +23,6 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   accepts a loop exiting into the next loop's head. Later: nested loops, a head reached at
   two structured loops, a callee refined inside a walk with loops of its
   own.
-- alloc_group's CFG C1: stops at 404413, a byte store of `dl`
-  (`tr.store8_b`'s premise); then the rest of its blocks.
 - Specs by purpose of the loop functions (step_seq): the
   loop's invariant and variant at its head stated over the abstract
   state, the code's loop refined to it (as try_avail's span loop).

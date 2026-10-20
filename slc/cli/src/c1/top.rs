@@ -98,6 +98,8 @@ impl<'e> Gen<'e> {
             no_refl: Default::default(),
             no_field: Default::default(),
             nf_memo: Default::default(),
+            nf_bits: false,
+            nf_bits_memo: Default::default(),
             val_of: Default::default(),
             zs: Vec::new(),
             qs: Vec::new(),

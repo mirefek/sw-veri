@@ -1882,9 +1882,26 @@ impl<'e> Gen<'e> {
                         p(mpf("tr.low8_add", vec![t(&bb), t(&kk), simp_l(), simp_l()]))
                     }
                     Some((bb, kk, kk2)) => p(mpf("tr.low8_add_mod", vec![t(&bb), t(&kk), t(&kk2), simp_l(), simp_l(), simp_l(), simp_l()])),
-                    // (else: the low byte of a sum of words, shifts, bytes --
-                    // their arithmetic modulo 2^8, the words' definitions)
-                    None => RA::P(RP::Defs(Box::new(RP::Simp(true, vec![], vec![], false)), ["bits_slice", "bits_add", "bits_shl", "bits_mul", "bits_of_int"].iter().map(|x| x.to_string()).collect())),
+                    None => {
+                        // (the register's low 8 bits and the spec's value: one
+                        // normal form)
+                        let lo = self.mk("bits_add", vec![lit(8), u.clone(), lit(0)]);
+                        let by_nf = match self.nat_of(&u) {
+                            Some(un) => match self.eq_nf_bits(&lo, &v)? {
+                                Some(e) => {
+                                    let l = self.run(&rec::mp(R::Inst("tr.low8_lo".into(), vec![("u", u.clone())]), vec![un]), &[])?;
+                                    Some(rec::s(&Seq::trans(self.env, &l, &e).map_err(|e| e.0)?))
+                                }
+                                None => None,
+                            },
+                            None => None,
+                        };
+                        // (else: the low byte of a sum of words, shifts, bytes --
+                        // their arithmetic modulo 2^8, the words' definitions)
+                        by_nf.unwrap_or_else(|| {
+                            RA::P(RP::Defs(Box::new(RP::Simp(true, vec![], vec![], false)), ["bits_slice", "bits_add", "bits_shl", "bits_mul", "bits_of_int"].iter().map(|x| x.to_string()).collect()))
+                        })
+                    }
                     }
                 };
                 let _ = &sa;

@@ -859,6 +859,14 @@ item is a short summary of finished work; details are in the files named.
   `mp.rgrown`); alloc_group keeps its class's and the smaller ones'
   (`mp.upto`). Engine: arith's congruence classes in a fixed order; a read
   of bytes with no write on them left as it is (bytes after a loop).
+- **alloc_group's C1 on its CFG** (`c1 alloc_group .. agrc`,
+  machine/c1.core; 48 s): a byte store's value -- the register's low 8
+  bits against the spec's -- compared in normal form (`tr.low8_lo`, then
+  N), N's names of bitwise operations seen through for that comparison
+  only (`eq_nf_bits`); N's new rules: a word's low k bits of a word that
+  fits it, of a bitwise operation the operation's on the operands' low k
+  bits (`nf.lo_fit`, `nf.lo_and` / `lo_or` / `lo_xor`). The machine's
+  `or eax, -64` of a byte and GIMPLE's 8-bit `| -64` one value.
 - **A proof's variables dropped after it** (kernel: `Env::begin_locals` /
   `end_locals` around each `prove`, `c1`, `refines`): its variables local,
   numbered from a base above the global ones, the base moved past them at

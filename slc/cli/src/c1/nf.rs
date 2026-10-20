@@ -13,6 +13,11 @@
 //!   the word's width by its operation's `*_in` lemma, `nf.bits_le`);
 //! - a shift by a literal: a product by 2^k (`nf.shl_mul`); a value added
 //!   to itself: twice it (`nf.add_self`);
+//! - a word's low k bits (`x + 0` at k bits): of a word of at most k bits,
+//!   the word (`nf.lo_fit`); of a bitwise operation of at least k bits, the
+//!   operation's on the operands' low k bits (`nf.lo_and`, `nf.lo_or`,
+//!   `nf.lo_xor`) -- a narrower register's value; its names seen through
+//!   only in that comparison (`eq_nf_bits`);
 //! - the ring of words modulo 2^n: a sum nested to the left
 //!   (`nf.add_assoc`), its terms in order (`nf.add_swap`), its literals
 //!   gathered last (`nf.add_lits`); a product by a literal distributed over a
@@ -62,6 +67,18 @@ impl<'e> Gen<'e> {
     /// forms the same (a match), the proof by N's rewrites
     pub(super) fn eq_nf(&mut self, u: &Term, v: &Term) -> Result<Option<RA>, String> {
         Ok(self.eq_nf_seq(u, v)?.map(|e| rec::s(&e)))
+    }
+
+    /// `eq_nf_seq` with bitwise operations' names seen through (a narrower
+    /// register's bits against the spec's: the machine's 32-bit `or` of a
+    /// byte, GIMPLE's 8-bit one); N's own normal forms untouched
+    pub(super) fn eq_nf_bits(&mut self, u: &Term, v: &Term) -> Result<Option<Seq>, String> {
+        std::mem::swap(&mut self.nf_memo, &mut self.nf_bits_memo);
+        self.nf_bits = true;
+        let r = self.eq_nf_seq(u, v);
+        self.nf_bits = false;
+        std::mem::swap(&mut self.nf_memo, &mut self.nf_bits_memo);
+        r
     }
 
     /// the same, the equation's proof
@@ -165,11 +182,13 @@ impl<'e> Gen<'e> {
             return Ok(r.clone());
         }
         // (a name of a sum or product: its definition -- the ring's terms
-        // seen through names; the same kernel term, no step)
+        // seen through names; with `nf_bits`, a bitwise operation's too --
+        // a narrower register's bits; the same kernel term, no step)
         if let Node::Var(v, a) = t.node() {
             if a.is_empty() {
                 let def = self.vals.iter().rev().find(|x| x.0 == *v).map(|x| x.1.clone());
-                if let Some(d) = def.filter(|d| ["bits_add", "bits_mul"].iter().any(|o| self.app(d, o, 3).is_some())) {
+                let ops: &[&str] = if self.nf_bits { &["bits_add", "bits_mul", "bits_and", "bits_or", "bits_xor"] } else { &["bits_add", "bits_mul"] };
+                if let Some(d) = def.filter(|d| ops.iter().any(|o| self.app(d, o, 3).is_some())) {
                     let r = self.nf(&d, depth)?;
                     self.nf_memo.insert(t.clone(), r.clone());
                     return Ok(r);
@@ -270,6 +289,39 @@ impl<'e> Gen<'e> {
         if name == "bits_add" && a.len() == 3 && a[1] == a[2] {
             let e = self.run(&R::Inst("nf.add_self".into(), vec![("n", a[0].clone()), ("x", a[1].clone())]), &[])?;
             return Ok(Some((self.mk("bits_mul", vec![a[0].clone(), a[1].clone(), lit(2)]), e)));
+        }
+        // a word's low k bits (a narrower register's value, `x + 0` at k
+        // bits): of a word of at most k bits, the word; of a bitwise
+        // operation of at least k bits, the operation's on the operands'
+        // low k bits
+        if name == "bits_add" && a.len() == 3 && nat(&a[2]) == Some(0) {
+            if let Some(k) = nat(&a[0]) {
+                if let Some((m, hin)) = self.word_of(&a[1]) {
+                    if m <= k {
+                        let r = rec::mp(
+                            R::Inst("nf.lo_fit".into(), vec![("k", a[0].clone()), ("m", lit(m)), ("x", a[1].clone())]),
+                            vec![rec::simp0(), rec::simp0(), rec::simp0(), rec::p(hin)],
+                        );
+                        let e = self.run(&r, &[])?;
+                        return Ok(Some((a[1].clone(), e)));
+                    }
+                }
+                for (op, lemma) in [("bits_and", "nf.lo_and"), ("bits_or", "nf.lo_or"), ("bits_xor", "nf.lo_xor")] {
+                    let Some(x) = self.app(&a[1], op, 3).map(|x| x.to_vec()) else { continue };
+                    let Some(n) = nat(&x[0]) else { continue };
+                    if k > n {
+                        continue;
+                    }
+                    let (Some(pa), Some(pb)) = (self.nat_of(&x[1]), self.nat_of(&x[2])) else { continue };
+                    let r = rec::mp(
+                        R::Inst(lemma.into(), vec![("k", a[0].clone()), ("n", x[0].clone()), ("a", x[1].clone()), ("b", x[2].clone())]),
+                        vec![rec::simp0(), rec::simp0(), rec::simp0(), pa, pb],
+                    );
+                    let e = self.run(&r, &[])?;
+                    let lo = |g: &Gen, y: &Term| g.mk("bits_add", vec![a[0].clone(), y.clone(), lit(0)]);
+                    return Ok(Some((self.mk(op, vec![a[0].clone(), lo(self, &x[1]), lo(self, &x[2])]), e)));
+                }
+            }
         }
         // a sum: nested to the left, its terms in order, literals gathered
         // last (the ring modulo 2^n)
@@ -401,6 +453,16 @@ impl<'e> Gen<'e> {
         let vals: Vec<Term> = (0..n).map(|j| bs[j as usize].clone().unwrap()).collect();
         let next = lr[1].instantiate_params(&vals.iter().rev().cloned().collect::<Vec<_>>(), &self.env.binders_fn());
         Ok(Some((next, sq)))
+    }
+
+    /// `t in omega`'s proof: a literal's by evaluation, a word's from its
+    /// width (`nf.bits_nat`); None if t is neither
+    pub(super) fn nat_of(&self, t: &Term) -> Option<RA> {
+        if nat(t).is_some() {
+            return Some(rec::simp0());
+        }
+        let (m, hin) = self.word_of(t)?;
+        Some(rec::p(rec::mp(R::Inst("nf.bits_nat".into(), vec![("m", lit(m)), ("x", t.clone())]), vec![rec::p(hin)])))
     }
 
     /// t a word of m bits by its operation (a value's: its definition's):

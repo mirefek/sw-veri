@@ -207,6 +207,10 @@ struct Gen<'e> {
     no_field: std::cell::RefCell<std::collections::HashSet<Term>>,
     /// (the normal forms made, nf.rs: for good -- a name's meaning is fixed)
     nf_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
+    /// (N seeing through bitwise operations' names too: a low byte's
+    /// comparison only, `eq_nf_bits` -- its normal forms memoized apart)
+    nf_bits: bool,
+    nf_bits_memo: std::collections::HashMap<Term, (Term, Option<Seq>)>,
     zs: Vec<VarId>,
     qs: Vec<Term>,
     insns: BTreeMap<u128, Insn>,
