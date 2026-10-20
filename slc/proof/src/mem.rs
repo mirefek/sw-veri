@@ -90,7 +90,16 @@ impl State {
         let facts = &all[..];
         let refs: Vec<&Seq> = facts.iter().collect();
         let g = |n: &str| env.sym_by_name.get(n).copied();
-        let (bytes_at, fn_update) = (g("gimple.bytes_at"), g("fn_update"));
+        let (bytes_at, fn_update, store_le, app) = (g("gimple.bytes_at"), g("fn_update"), g("x86_64_linux.store_le"), g("app"));
+        // (a memory's bytes X with no write on them -- not a store, not
+        // another memory's bytes: the read is already of them)
+        let bare = |m: &Term| match m.node() {
+            Node::App(h, b) if Some(*h) == fn_update && b.len() == 3 && matches!(b[1].node(), Node::Bytes(k) if &**k == b"bytes") => match b[2].node() {
+                Node::App(s, c) => !(Some(*s) == store_le || (Some(*s) == app && c.len() == 2)),
+                _ => true,
+            },
+            _ => false,
+        };
         // each read of a written memory, through its writes (those that do
         // not resolve left as they are)
         let mut left: Vec<Term> = Vec::new();
@@ -98,7 +107,7 @@ impl State {
             let rhs = rhs_of(env, e.concl());
             let Some(u) = find(env, &rhs, &|x: &Term| match x.node() {
                 Node::App(f, a) if Some(*f) == bytes_at && a.len() == 3 => {
-                    !left.contains(x) && matches!(a[0].node(), Node::App(h, _) if Some(*h) == fn_update)
+                    !left.contains(x) && matches!(a[0].node(), Node::App(h, _) if Some(*h) == fn_update) && !bare(&a[0])
                 }
                 _ => false,
             }) else {
