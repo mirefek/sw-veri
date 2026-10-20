@@ -313,6 +313,10 @@ struct Gen<'e> {
     /// the reducer's lets as written, not in N (two translations of the
     /// same statements compared: `refines`)
     raw_lets: bool,
+    /// the refined procedures' parameters (`refines`): in univ(1) by
+    /// hypothesis -- a premise of the procedures' refinement, discharged at
+    /// the wrapper's arguments (words)
+    params: Vec<Term>,
     /// callees' refinements found (CFG layer's, structured layer's)
     grefs: std::collections::HashMap<(String, String), Seq>,
     /// the refinement walk's choices in scope, with their domains' facts
@@ -799,7 +803,9 @@ impl<'e> Gen<'e> {
     /// (C1_TRACE, `phase` too: a walk's phase -- no terms printed)
     fn phase(&self, m: impl FnOnce() -> String) {
         if std::env::var("C1_TRACE").is_ok() {
-            eprintln!("c1 {} [{:.2}]", m(), trace_t0());
+            // (and the resident memory, MB)
+            let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map(|p| p * 4096 / 1_000_000).unwrap_or(0);
+            eprintln!("c1 {} [{:.2}, {} MB]", m(), trace_t0(), rss);
         }
     }
 

@@ -147,6 +147,9 @@ fn match_pat(p: &Term, t: &Term, pd: u32, n: u32, as_: &mut Vec<Option<Term>>, b
 /// ones (`count` numbers them; outer before inner, left to right)
 #[allow(clippy::too_many_arguments)]
 fn rewrite_pat(env: &Env, t: &Term, l: &Term, r: &Term, n: u32, d: u32, occ: &[usize], count: &mut usize) -> Term {
+    if occ.is_empty() {
+        return rewrite_all(env, t, l, r, n, count, &mut std::collections::HashMap::new());
+    }
     let bf = env.binders_fn();
     let mut as_ = vec![None; n as usize];
     if match_pat(l, t, 0, n, &mut as_, &bf) && as_.iter().all(|x| x.is_some()) {
@@ -167,6 +170,41 @@ fn rewrite_pat(env: &Env, t: &Term, l: &Term, r: &Term, n: u32, d: u32, occ: &[u
         Node::Var(_, a) => t.with_args(a.iter().map(|x| rewrite_pat(env, x, l, r, n, d, occ, count)).collect()),
         _ => t.clone(),
     }
+}
+
+/// `rewrite_pat` of every instance: a node's result depends on the node
+/// alone (a match reads t, not its depth), so a shared node is rewritten
+/// once (`memo` by node; `count` then counts the distinct instances -- only
+/// whether there is one matters). The nodes are t's, alive meanwhile.
+fn rewrite_all(env: &Env, t: &Term, l: &Term, r: &Term, n: u32, count: &mut usize, memo: &mut std::collections::HashMap<usize, Term>) -> Term {
+    if let Some(x) = memo.get(&t.ptr_id()) {
+        return x.clone();
+    }
+    let bf = env.binders_fn();
+    let mut as_ = vec![None; n as usize];
+    let res = if match_pat(l, t, 0, n, &mut as_, &bf) && as_.iter().all(|x| x.is_some()) {
+        *count += 1;
+        let args: Vec<Term> = as_.into_iter().rev().map(|x| x.unwrap()).collect();
+        let rr = r.instantiate_params(&args, &bf);
+        match t.label() {
+            Some(lb) => rr.with_label(Some(lb.into())),
+            None => rr,
+        }
+    } else {
+        match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => {
+                let a2: Vec<Term> = a.iter().map(|x| rewrite_all(env, x, l, r, n, count, memo)).collect();
+                if a2.iter().zip(a.iter()).all(|(x, y)| x.ptr_id() == y.ptr_id()) {
+                    t.clone()
+                } else {
+                    t.with_args(a2)
+                }
+            }
+            _ => t.clone(),
+        }
+    };
+    memo.insert(t.ptr_id(), res.clone());
+    res
 }
 
 impl Seq {
@@ -473,6 +511,29 @@ impl Seq {
         }
         env.check_wf(&concl, 0)?;
         Ok(Seq { hyps: union(&eq.hyps, &s.hyps), concl, open: union(&eq.open, &s.open) })
+    }
+
+    /// The number of instances of `eq`'s left side in t (`all x1 .. xn. l =
+    /// r`), as `rewrite_under` numbers them -- for choosing occurrences; no
+    /// sequent. `outer`: only those not inside another (the ones a rewrite
+    /// of all reaches: a rewritten instance is not looked into).
+    pub fn instance_count(env: &Env, lg: &Logic, eq: &Seq, t: &Term, outer: bool) -> usize {
+        let mut n = 0u32;
+        let mut b = eq.concl.clone();
+        while let Node::App(q, a) = b.node() {
+            if *q != lg.all {
+                break;
+            }
+            b = a[0].clone();
+            n += 1;
+        }
+        let Node::App(e, a) = b.node() else { return 0 };
+        if *e != env.builtins.eq {
+            return 0;
+        }
+        let mut count = 0;
+        rewrite_pat(env, t, &a[0], &a[1], n, 0, if outer { &[] } else { &[usize::MAX] }, &mut count);
+        count
     }
 
     /// The defining equation of a defined symbol, `⊢ c(params) = body`

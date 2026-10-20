@@ -358,6 +358,19 @@ item is a short summary of finished work; details are in the files named.
   univ(1) by their parts (the operations' runs, words' widths).
   step_seq, activate_group (a call in its loop) and try_avail refined
   (< 1 s, 1 s, 110 s).
+- **... several loops** (alloc_group's four, one after another): H, bs, ks
+  a case on the head (`ite(h = k, ..)`); each claim proven at its loop's
+  own parts, the cases taken by `g.ite_y` / `g.ite_n` under binders
+  (`rewrite_under`, memoized over shared nodes when every instance is
+  rewritten -- a DAG not unfolded), a claim at a variable head by cases
+  (`g.cases`, the claim whole, not a truth table). The trips walked at the
+  free INV as the points; an exit reached before as a cut point (its
+  program folded at the break) by `g.ex_mono` (the conversion alone
+  evaluated); a parameter in a loop's state in univ(1) by a premise of the
+  procedures' refinement, discharged at the wrapper's words. Unsigned
+  64-bit division's effect (`tr.eff_cdiv64u`). The label claims' terms
+  dropped from the caches per label (62 MB a label kept before).
+  alloc_group refined in ~330 s, 2.6 GB (the chain uncached 720 s).
 - **Divergence in C1**: the claim (`tr.sim`) matches a machine run that
   never ends by a divergence of the spec (`tr.div`, its trace not compared
   yet), through steps, spec reductions and calls (a callee's divergence is

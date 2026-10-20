@@ -300,6 +300,12 @@ impl<'e> Eff<'e> {
             ];
             return self.api.mp(self.env, f0, a).map_err(|x| format!("{}: {}", rule, x.0));
         }
+        // an unsigned 64-bit division: its own lemma (w, a, b)
+        if name == "gimple.cdiv" && args.len() == 4 && args[0] == Term::nat(sl_kernel::Nat::from_u128(64)) && self.app(&args[3], "false", 0).is_some() {
+            let f0 = self.api.fact(self.env, "tr.eff_cdiv64u").map_err(e)?;
+            let a = vec![A::T(self.unlet(s)), A::T(self.unlet(&args[1])), A::T(self.unlet(&args[2]))];
+            return self.api.mp(self.env, f0, a).map_err(|x| format!("tr.eff_cdiv64u: {}", x.0));
+        }
         let lemma = if let Some(prim) = name.strip_prefix("gimple.") {
             let l = format!("tr.eff_{}", prim);
             self.api.fact(self.env, &l).map_err(|_| format!("no effect lemma `{}` (proofs/translate_effects.core)", l))?

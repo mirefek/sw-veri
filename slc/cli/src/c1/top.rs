@@ -155,6 +155,7 @@ impl<'e> Gen<'e> {
             cfg: None,
             gref: None,
             raw_lets: false,
+            params: Vec::new(),
             grefs: std::collections::HashMap::new(),
             gtyped: Vec::new(),
         })

@@ -153,6 +153,9 @@ impl<'e> Gen<'e> {
     /// runs(PH(ps), s, r)` by the walk
     fn proc_ref(&mut self, pl: &str, ph: &str, n: usize) -> Result<Seq, String> {
         let ps: Vec<Term> = (0..n).map(|i| self.var(&format!("pa{i}"))).collect();
+        // (added: a callee's refinement, found during the walk, keeps the
+        // caller's)
+        self.params.extend(ps.iter().cloned());
         let w = self.var("pw");
         let o = self.var("po");
         self.w = w.clone();
@@ -196,6 +199,12 @@ impl<'e> Gen<'e> {
             let Node::App(sy, x) = c.node() else { break };
             if *sy != self.env.builtins.imp {
                 break;
+            }
+            // (a parameter in univ(1): the argument's, a word)
+            if let Some(i) = self.app(&x[0], "in", 2).filter(|i| self.app(&i[1], "univ", 1).is_some()).map(|i| i[0].clone()) {
+                let u = self.univ_of(&i)?;
+                cur = self.run(&mp(R::S(cur), vec![s(&u)]), &[])?;
+                continue;
             }
             let h = self.assume(&x[0])?;
             cur = self.run(&mp(R::S(cur), vec![s(&h)]), &[])?;
@@ -865,13 +874,13 @@ impl<'e> Gen<'e> {
                 let way = if self.canon(&ncl) != n0 {
                     None
                 } else if cu0 == c0 && ncu0 == n0 {
-                    Some(("g.ref_if", b1, b2))
+                    Some(("g.ref_if", b1.clone(), b2.clone()))
                 } else if cu0 == n0 && ncu0 == nn0 {
-                    Some(("g.ref_ifn", b2, b1))
+                    Some(("g.ref_ifn", b2.clone(), b1.clone()))
                 } else if self.app(&cl, "not", 1).is_some_and(|n| self.canon(&n[0]) == cu0) && ncu0 == c0 {
                     // (the CFG's condition `!c` -- an `if a != b` -- the
                     // structured side's c: its ways the other way round)
-                    Some(("g.ref_ifnn", b2, b1))
+                    Some(("g.ref_ifnn", b2.clone(), b1.clone()))
                 } else {
                     None
                 };
@@ -910,6 +919,23 @@ impl<'e> Gen<'e> {
                             let (j, inst) = self.by(qi, "tr.qe_eq", &[("b", bb), ("e", cu2.clone()), ("e2", e2)])?;
                             let rest = self.walk(lo, j, w)?;
                             let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(mp(inst, vec![s(&eq), t(w)]))]);
+                            return self.run(&rr, &[]);
+                        }
+                    }
+                    // (the structured side's `A && B`, the CFG testing A --
+                    // a short circuit: A tested alone first, B inside,
+                    // tr.qe_and)
+                    if let Some(ab) = self.app(&cu, "and", 2).map(|x| x.to_vec()) {
+                        let nab = self.canon(&self.mk("not", vec![cu2.clone()]));
+                        if ncu0 == nab && self.lam(&ab[0], &uctx, &[]).is_some_and(|a0| self.canon(&a0) == c0) {
+                            let al = self.lam(&ab[0], &uctx, &["x0", "x1"]).ok_or("a condition")?;
+                            let bl = self.lam(&ab[1], &uctx, &["x0", "x1"]).ok_or("a condition")?;
+                            let b13 = self.lam(&b1, &uctx, &["x0", "x1", "x8"]).ok_or("a way")?;
+                            let b23 = self.lam(&b2, &uctx, &["x0", "x1", "x8"]).ok_or("a way")?;
+                            let k3 = self.lam(&uk, &uctx, &["x0", "x1", "x8"]).ok_or("the structured block's rest")?;
+                            let (j, inst) = self.by(qi, "tr.qe_and", &[("A", al), ("B", bl), ("b1", b13), ("b2", b23), ("k", k3)])?;
+                            let rest = self.walk(lo, j, w)?;
+                            let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(mp(inst, vec![t(w)]))]);
                             return self.run(&rr, &[]);
                         }
                     }
