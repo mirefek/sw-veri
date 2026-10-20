@@ -1,0 +1,487 @@
+// alloc_slot and alloc_group at machine level: they call each other (a
+// nested group's slot of a larger class), so their contracts are composed
+// by induction on the class, down from 48. At class k alloc_slot's callee
+// is alloc_group's code over alloc_slot's from class k + 1 on: called as
+// alloc_group from k on (`mp.agr_q`), so alloc_slot over it from k on
+// (`mp.as_q`); at 48, a_crash's spec (undefined) -- no class.
+
+// the base: nothing known (a_crash's spec, undefined), implemented by any
+// code
+theorem mp.undef_implements: all f statics. tr.implements_at(f, mallocng_specs.a_crash_spec_fun(), 4198400, text.code, statics)
+proof
+  fix f statics
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->
+      abi.loaded(s.vm, 4198400, text.code, statics) -> s.rip = f -> tr.entry_ok_u(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) ->
+      tr.run_d(s, s, o) -> tr.matches_t(mallocng_specs.a_crash_spec_fun(), args, objs, mem, s, o) proof
+    fix args objs mem s o
+    assume hA ho hm hs hu _ _ _ _ _ _
+    let V := abi.view(s, objs, mem)
+    have ou := apply(abi.objs_univ, ho)
+    have mu := apply(x86.vm_univ, hm)
+    have vu: V in univ(1) by simp(hu, ou, mu)
+    have vW := apply(abi.world_typed, hs, ho, hm, vu)
+    have rst: abi.raise_state(V) by defs(apply(tr.world_and, vW), abi.raise_state)
+    have eu: empty in univ(1) by simp()
+    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+    have pu: pair(V, exc(V, empty)) in univ(1) by simp(vu)
+    have rf: runs(mallocng_specs.a_crash_spec_fun()[args], V, exc(V, empty)) by defs(simp(hA, pu), mallocng_specs.a_crash_spec_fun)
+    have ra: abi.raises_at(mallocng_specs.a_crash_spec_fun(), args, objs, mem, s) by defs(ex_intro({empty}, {V}, taut(eu, eno, rst, rf)), abi.raises_at)
+    show by defs(taut(ra), tr.matches_t)
+  qed
+  show := apply(tr.implements_u, (tr.implements_at_u(f, mallocng_specs.a_crash_spec_fun(), 4198400, text.code, statics) by defs(g, tr.implements_at_u)))
+qed
+
+// (at class 48 on: no class -- any callee's contract)
+theorem mp.as_call_48(c, f): mp.as_call_ge(c, f, 48)
+proof
+  fix sc req t h regs o2
+  assume _ _ hsl hge
+  have no: false by arith(hsl, hge)
+  show by taut(no)
+qed
+
+theorem mp.agr_call_48(c, f): mp.agr_call_ge(c, f, 48)
+proof
+  fix sc req t h regs o2
+  assume _ _ hsl hge
+  have no: false by arith(hsl, hge)
+  show by taut(no)
+qed
+
+// (a callee refining one called as step_seq / enframe: called as it too)
+theorem mp.sq_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
+  mp.sq_call(c, f2) -> mp.sq_call(c, f)
+proof
+  assume hf q
+  fix t h regs o2
+  assume hw hh hin hro hr
+  have rl rn := apply(gc.regs0, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
+  show := mp(all_elim(q, {t}, {h}, {regs}, {o2}), hw, hh, hin, hro, r2)
+qed
+
+theorem mp.ef_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
+  mp.ef_call(c, f2) -> mp.ef_call(c, f)
+proof
+  assume hf q
+  fix g idx n ctr t h regs o2
+  assume hg hi hn hct hw hh hin hth hu hro2 hsr hfit hst hlt hfs hro hr
+  have rl rn _ := hro
+  have l4: seq_len(regs) = 4 by simp(rn)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(l4, lo)), hw, hr)
+  show := mp(all_elim(q, {g}, {idx}, {n}, {ctr}, {t}, {h}, {regs}, {o2}), hg, hi, hn, hct, hw, hh, hin, hth, hu, hro2, hsr, hfit, hst, hlt, hfs, hro, r2)
+qed
+
+// ---------------------------------------------------------------------
+// The callees of the two besides each other: their machine code linked,
+// typed, their io, their contracts at a call.
+
+// try_avail's CFG form linked (with dequeue, activate_group, a_crash's
+// contract, decay_bounces)
+abbrev mp.ap_ta := c_src_malloc_mallocng_malloc_cfg.try_avail_fun(c_src_malloc_mallocng_malloc_cfg.dequeue_fun,
+  c_src_malloc_mallocng_malloc_cfg.activate_group_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.a_cas_fun()),
+  mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.decay_bounces_fun())
+
+theorem mp.ap_ta_ok: all c statics. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  tr.implements_at(4209736, mp.ap_ta, 4198400, text.code, statics) && mp.ap_ta in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(mp.ap_ta, 1) && mp.ta_call(c, mp.ap_ta)
+proof
+  fix c statics
+  assume hc hx hst
+  let AC := mallocng_specs.a_crash_spec_fun()
+  let DQ := c_src_malloc_mallocng_malloc_cfg.dequeue_fun
+  let AG := c_src_malloc_mallocng_malloc_cfg.activate_group_fun(AC, c_src_malloc_mallocng_malloc_cfg.a_cas_fun())
+  let DB := c_src_malloc_mallocng_malloc_cfg.decay_bounces_fun()
+  have hgq: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+      runs(DQ[regs], s, o) -> runs(mallocng_specs.dequeue_spec_fun()[regs], s, o) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    show := mp(all_elim(mp.dq_fun, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(dequeue_ref, {regs}, {s}, {o}), h1, h2, h3, hr))
+  qed
+  have agr := mp(all_elim(activate_group_ref, {AC}, {c_src_malloc_mallocng_malloc_cfg.a_cas_fun()}), acr.io, acstc.io)
+  have hag := apply(mp.ag_call_ref[c := c, f := AG, f2 := c_src_malloc_mallocng_malloc.activate_group_fun(AC, c_src_malloc_mallocng_malloc_cfg.a_cas_fun())], agr,
+    mp(all_elim(mp.ag_q, {c}, {AC}, {c_src_malloc_mallocng_malloc_cfg.a_cas_fun()}), hc, cc.a_cas))
+  have hdb := apply(mp.db_call_ref[c := c, f := DB, f2 := c_src_malloc_mallocng_malloc.decay_bounces_fun()], decay_bounces_ref, mp(all_elim(mp.db_q, {c}), hc, hx))
+  have tq := mp(all_elim(mp.ta_q, {c}, {DQ}, {AG}, {AC}, {DB}), hc, hx, hst, hgq, hag, hdb)
+  have rf := mp(all_elim(try_avail_ref, {DQ}, {AG}, {AC}, {DB}), dqtc.io, agtc.io_linked, acr.io, dbtc.io)
+  have ta := apply(mp.ta_call_ref[c := c, f := mp.ap_ta, f2 := c_src_malloc_mallocng_malloc.try_avail_fun(DQ, AG, AC, DB)], rf, tq)
+  have ty: mp.ap_ta in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.try_avail_fun)
+  have io := mp(all_elim(tatc.io, {DQ}, {AG}, {AC}, {DB}), dqtc.io, agtc.io_linked, acr.io, dbtc.io)
+  show by taut(all_elim(tatc.linked, {statics}), ty, io, ta)
+qed
+
+// queue's CFG form linked (with a_crash's contract)
+abbrev mp.ap_q := c_src_malloc_mallocng_malloc_cfg.queue_fun(mallocng_specs.a_crash_spec_fun())
+
+theorem mp.ap_q_ok: all statics. tr.implements_at(4206220, mp.ap_q, 4198400, text.code, statics) && mp.ap_q in fn_space(abi.ARGS, powerset(univ(1))) &&
+  tr.callee_io(mp.ap_q, 2) && (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(mp.ap_q[regs], s, o) ->
+    runs(mallocng_specs.queue_spec_fun()[regs], s, o))
+proof
+  fix statics
+  have c: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(mp.ap_q[regs], s, o) ->
+      runs(mallocng_specs.queue_spec_fun()[regs], s, o) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    have r := mp(all_elim(queue_ref, {mallocng_specs.a_crash_spec_fun()}, {regs}, {s}, {o}), h1, h2, h3, hr)
+    show := mp(all_elim(mp.qu_fun, {mallocng_specs.a_crash_spec_fun()}, {regs}, {s}, {o}), h1, h2, h3, r)
+  qed
+  show by taut(all_elim(qutc.linked, {statics}), qutc.typed_linked, qutc.io_linked, c)
+qed
+
+// alloc_meta's CFG form linked with dequeue_head and its leaves G1, G3 ..
+// G6 (random_secret, __syscall1, __mmap, __mprotect, ___errno_location: at
+// machine level each its contract's)
+abbrev mp.ap_am(G1, G3, G4, G5, G6) := c_src_malloc_mallocng_malloc_cfg.__malloc_alloc_meta_fun(G1,
+  c_src_malloc_mallocng_malloc_cfg.dequeue_head_fun(c_src_malloc_mallocng_malloc_cfg.dequeue_fun), G3, G4, G5, G6)
+
+// (the leaves: implemented, typed, io, refining their specs)
+abbrev mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) :=
+  (tr.implements_at(4205853, G1, 4198400, text.code, statics) && G1 in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(G1, 0) &&
+    mp.calls(G1, mallocng_specs.random_secret_spec_fun(c.libc))) &&
+  (tr.implements_at(4205817, G3, 4198400, text.code, statics) && G3 in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(G3, 2) &&
+    mp.calls(G3, mallocng_specs.syscall1_spec_fun())) &&
+  (tr.implements_at(4213468, G4, 4198400, text.code, statics) && G4 in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(G4, 6) &&
+    mp.calls(G4, mallocng_specs.mmap_spec_fun())) &&
+  (tr.implements_at(4213779, G5, 4198400, text.code, statics) && G5 in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(G5, 3) &&
+    mp.calls(G5, mallocng_specs.mprotect_spec_fun())) &&
+  (tr.implements_at(4216494, G6, 4198400, text.code, statics) && G6 in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(G6, 0) &&
+    mp.calls(G6, mallocng_specs.errno_location_spec_fun))
+
+theorem mp.ap_am_ok: all c statics G1 G3 G4 G5 G6. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) ->
+  tr.implements_at(4208782, mp.ap_am(G1, G3, G4, G5, G6), 4198400, text.code, statics) && mp.ap_am(G1, G3, G4, G5, G6) in fn_space(abi.ARGS, powerset(univ(1))) &&
+  tr.callee_io(mp.ap_am(G1, G3, G4, G5, G6), 0) && mp.am_call(c, mp.ap_am(G1, G3, G4, G5, G6))
+proof
+  fix c statics G1 G3 G4 G5 G6
+  assume hc hx hl
+  have i1 t1 o1 q1 i3 t3 o3 q3 i4 t4 o4 q4 i5 t5 o5 q5 i6 t6 o6 q6 := hl
+  let DQ := c_src_malloc_mallocng_malloc_cfg.dequeue_fun
+  let DH := c_src_malloc_mallocng_malloc_cfg.dequeue_head_fun(DQ)
+  have hdq: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(DQ[regs], s, o) ->
+      runs(mallocng_specs.dequeue_spec_fun()[regs], s, o) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    show := mp(all_elim(mp.dq_fun, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(dequeue_ref, {regs}, {s}, {o}), h1, h2, h3, hr))
+  qed
+  have c2 := mp(all_elim(mp.dqh_fun, {DQ}), hdq)
+  have qdh: mp.calls(DH, mallocng_specs.dequeue_head_spec_fun()) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    show := mp(all_elim(c2, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(dequeue_head_ref, {DQ}, {regs}, {s}, {o}), h1, h2, h3, hr))
+  qed
+  have tdh: DH in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.dequeue_head_fun)
+  have odh := mp(all_elim(dqhtc.io, {DQ}), dqtc.io)
+  have ln := mp(all_elim(amtc.implements, {statics}, {G1}, {DH}, {G3}, {G4}, {G5}, {G6}), i1, t1, o1, all_elim(dqhtc.linked, {statics}), tdh, odh, i3, t3, o3,
+    i4, t4, o4, i5, t5, o5, i6, t6, o6)
+  have ty: mp.ap_am(G1, G3, G4, G5, G6) in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.__malloc_alloc_meta_fun)
+  have io := mp(all_elim(amtc.io, {G1}, {DH}, {G3}, {G4}, {G5}, {G6}), o1, odh, o3, o4, o5, o6)
+  have rf := all_elim(__malloc_alloc_meta_ref, {G1}, {DH}, {G3}, {G4}, {G5}, {G6})
+  have aq := mp(all_elim(mp.am_q, {c}, {G1}, {DH}, {G3}, {G4}, {G5}, {G6}), hc, hx, q1, qdh, q3, q4, q5, q6)
+  have ac := apply(mp.am_call_ref[c := c, f := mp.ap_am(G1, G3, G4, G5, G6), f2 := c_src_malloc_mallocng_malloc.__malloc_alloc_meta_fun(G1, DH, G3, G4, G5, G6)], rf, aq)
+  show by taut(ln, ty, io, ac)
+qed
+
+// free_meta's CFG form linked (with queue's)
+abbrev mp.ap_fm := c_src_malloc_mallocng_malloc_cfg.free_meta_fun(mp.ap_q)
+
+theorem mp.ap_fm_ok: all c statics. c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  tr.implements_at(4206612, mp.ap_fm, 4198400, text.code, statics) && mp.ap_fm in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(mp.ap_fm, 1) &&
+  mp.calls(mp.ap_fm, mallocng_specs.free_meta_spec_fun(c.ctx))
+proof
+  fix c statics
+  assume hx
+  have _ _ qio qc := all_elim(mp.ap_q_ok, {statics})
+  have c2 := mp(all_elim(mp.fm_fun, {mp.ap_q}), qc)
+  have cl: mp.calls(mp.ap_fm, mallocng_specs.free_meta_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context)) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    show := mp(all_elim(c2, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(free_meta_ref, {mp.ap_q}, {regs}, {s}, {o}), h1, h2, h3, hr))
+  qed
+  have ty: mp.ap_fm in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.free_meta_fun)
+  have io := mp(all_elim(fmtc.io, {mp.ap_q}), qio)
+  show by taut(all_elim(fmtc.linked, {statics}), ty, io, rewrite(sym(hx), cl))
+qed
+
+// size_to_class's CFG form linked (with a_clz_32's, a_ctz_32's)
+abbrev mp.ap_s2c := c_src_malloc_mallocng_malloc_cfg.size_to_class_fun(c_src_malloc_mallocng_malloc_cfg.a_clz_32_fun(c_src_malloc_mallocng_malloc_cfg.a_ctz_32_fun()))
+
+theorem mp.ap_s2c_ok: all c statics. c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> c.dbj = c_src_malloc_mallocng_malloc.debruijn32 ->
+  tr.implements_at(4208187, mp.ap_s2c, 4198400, text.code, statics) && mp.ap_s2c in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(mp.ap_s2c, 1) &&
+  mp.calls(mp.ap_s2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj))
+proof
+  fix c statics
+  assume hst hdj
+  have ty: mp.ap_s2c in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.size_to_class_fun)
+  have io := mp(all_elim(stctc.io, {c_src_malloc_mallocng_malloc_cfg.a_clz_32_fun(c_src_malloc_mallocng_malloc_cfg.a_ctz_32_fun())}), aclzc.io_linked)
+  have cl: mp.calls(mp.ap_s2c, mallocng_specs.size_to_class_spec_fun(c_src_malloc_mallocng_malloc.__malloc_size_classes, c_src_malloc_mallocng_malloc.debruijn32)) := cc.size_to_class
+  show by taut(all_elim(stctc.linked, {statics}), ty, io, rewrite(sym(hdj), rewrite(sym(hst), cl)))
+qed
+
+// enframe's CFG form linked (with get_stride, a_crash's contract, set_size)
+abbrev mp.ap_ef := c_src_malloc_mallocng_malloc_cfg.enframe_fun(c_src_malloc_mallocng_malloc_cfg.get_stride_fun(), mallocng_specs.a_crash_spec_fun(),
+  c_src_malloc_mallocng_malloc_cfg.set_size_fun())
+
+theorem mp.ap_ef_ok: all c statics. c in mallocng.Cfg -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  tr.implements_at(4207700, mp.ap_ef, 4198400, text.code, statics) && mp.ap_ef in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(mp.ap_ef, 4) &&
+  mp.ef_call(c, mp.ap_ef)
+proof
+  fix c statics
+  assume hc hst
+  let GS := c_src_malloc_mallocng_malloc_cfg.get_stride_fun()
+  let AC := mallocng_specs.a_crash_spec_fun()
+  let SZ := c_src_malloc_mallocng_malloc_cfg.set_size_fun()
+  have hss: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(SZ[regs], s, o) ->
+      runs(mallocng_specs.set_size_spec_fun()[regs], s, o) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    show := mp(all_elim(mp.ss_fun, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(set_size_ref, {regs}, {s}, {o}), h1, h2, h3, hr))
+  qed
+  have eq := mp(all_elim(mp.ef_q, {c}, {GS}, {AC}, {SZ}), hc, hst, gst_ref, hss)
+  have rf := all_elim(enframe_ref, {GS}, {AC}, {SZ})
+  have ec := apply(mp.ef_call_ref[c := c, f := mp.ap_ef, f2 := c_src_malloc_mallocng_malloc.enframe_fun(GS, AC, SZ)], rf, eq)
+  have ty: mp.ap_ef in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.enframe_fun)
+  have io := mp(all_elim(eftc.io, {GS}, {AC}, {SZ}), gstc.io, acr.io, sszc.io)
+  show by taut(all_elim(eftc.linked, {statics}), ty, io, ec)
+qed
+
+// a_crash's spec as a callee of any arity: undefined wherever it returns
+theorem mp.undef_io(n): tr.callee_io(mallocng_specs.a_crash_spec_fun(), n)
+proof
+  have g: all args w w2 r. ord_le(n, seq_len(args)) -> runs(mallocng_specs.a_crash_spec_fun()[args], w, ok(w2, r)) ->
+      tr.returns_valid(w, w2) || tr.may_raise(mallocng_specs.a_crash_spec_fun(), args, w) proof
+    fix args w w2 r
+    assume _ h
+    have ha hp := apply(runs_fn_build, expand(h, mallocng_specs.a_crash_spec_fun))
+    have wu: w in univ(1) by simp(apply(g.runs_univ, hp))
+    have m: all x e. x in univ(1) -> e in univ(1) -> runs(mallocng_specs.a_crash_spec_fun()[args], w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      have pu: pair(w, exc(x, e)) in univ(1) by simp(wu, hx, he)
+      show by defs(simp(ha, pu), mallocng_specs.a_crash_spec_fun)
+    qed
+    have d: all t. t in univ(1) -> runs(mallocng_specs.a_crash_spec_fun()[args], w, diverge(t)) proof
+      fix t
+      assume ht
+      have pu: pair(w, diverge(t)) in univ(1) by simp(wu, ht)
+      show by defs(simp(ha, pu), mallocng_specs.a_crash_spec_fun)
+    qed
+    have mr: tr.may_raise(mallocng_specs.a_crash_spec_fun(), args, w) by defs(taut(m, d), tr.may_raise, tr.undef)
+    show by taut(mr)
+  qed
+  show by defs(g, tr.callee_io)
+qed
+
+// ---------------------------------------------------------------------
+// The induction.
+
+// the allocator's configuration (its tables at their statics)
+abbrev mp.ap_cfg(c) := c in mallocng.Cfg && c.ctx = c_src_malloc_mallocng_malloc.__malloc_context &&
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes && c.dbj = c_src_malloc_mallocng_malloc.debruijn32 &&
+  c.scnt = c_src_malloc_mallocng_malloc.small_cnt_tab && c.mcnt = c_src_malloc_mallocng_malloc.med_cnt_tab
+
+// alloc_group's CFG form over its callees and alloc_slot's gs; alloc_slot's
+// over its callees and alloc_group's ga
+abbrev mp.ap_agr(G1, G3, G4, G5, G6, gs) := c_src_malloc_mallocng_malloc_cfg.alloc_group_fun(mp.ap_am(G1, G3, G4, G5, G6),
+  c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun(), c_src_malloc_mallocng_malloc_cfg.account_bounce_fun(), c_src_malloc_mallocng_malloc_cfg.step_seq_fun(),
+  G4, mp.ap_fm, mp.ap_s2c, gs, mp.ap_ef)
+abbrev mp.ap_as(ga) := c_src_malloc_mallocng_malloc_cfg.alloc_slot_fun(mp.ap_ta, c_src_malloc_mallocng_malloc_cfg.a_ctz_32_fun(), ga, mp.ap_q)
+
+// alloc_slot's code gs known from class k on: implemented, typed, its io,
+// called as alloc_slot from k on
+abbrev mp.ap_known(c, statics, k, gs) := tr.implements_at(4212095, gs, 4198400, text.code, statics) && gs in fn_space(abi.ARGS, powerset(univ(1))) &&
+  tr.callee_io(gs, 2) && mp.as_call_ge(c, gs, k)
+
+// alloc_group's callees but alloc_slot: called as each
+abbrev mp.ap_agr_cc(c, G1, G3, G4, G5, G6) := mp.am_call(c, mp.ap_am(G1, G3, G4, G5, G6)) &&
+  mp.ib_call(c, c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun()) && mp.db_call(c, c_src_malloc_mallocng_malloc_cfg.account_bounce_fun()) &&
+  mp.sq_call(c, c_src_malloc_mallocng_malloc_cfg.step_seq_fun()) && mp.calls(G4, mallocng_specs.mmap_spec_fun()) &&
+  mp.calls(mp.ap_fm, mallocng_specs.free_meta_spec_fun(c.ctx)) && mp.calls(mp.ap_s2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) &&
+  mp.ef_call(c, mp.ap_ef)
+
+theorem mp.ap_agr_cc_ok: all c statics G1 G3 G4 G5 G6. mp.ap_cfg(c) -> mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) -> mp.ap_agr_cc(c, G1, G3, G4, G5, G6)
+proof
+  fix c statics G1 G3 G4 G5 G6
+  assume hcf hl
+  have hc hx hst hdj _ _ := hcf
+  have _ _ _ q1 _ _ _ q3 _ _ _ q4 _ _ _ q5 _ _ _ q6 := hl
+  have _ _ _ am := mp(all_elim(mp.ap_am_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hc, hx, hl)
+  have ib := apply(mp.ib_call_ref[c := c, f := c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun(), f2 := c_src_malloc_mallocng_malloc.is_bouncing_fun()],
+    is_bouncing_ref, mp(all_elim(mp.ib_q, {c}), hc, hx))
+  have ab := apply(mp.db_call_ref[c := c, f := c_src_malloc_mallocng_malloc_cfg.account_bounce_fun(), f2 := c_src_malloc_mallocng_malloc.account_bounce_fun()],
+    account_bounce_ref, mp(all_elim(mp.ab_q, {c}), hc, hx))
+  have sq := apply(mp.sq_call_ref[c := c, f := c_src_malloc_mallocng_malloc_cfg.step_seq_fun(), f2 := c_src_malloc_mallocng_malloc.step_seq_fun()],
+    step_seq_ref, mp(all_elim(mp.sq_q, {c}), hc, hx))
+  have _ _ _ fm := mp(all_elim(mp.ap_fm_ok, {c}, {statics}), hx)
+  have _ _ _ s2 := mp(all_elim(mp.ap_s2c_ok, {c}, {statics}), hst, hdj)
+  have _ _ _ ef := mp(all_elim(mp.ap_ef_ok, {c}, {statics}), hc, hst)
+  show by taut(am, ib, ab, sq, q4, fm, s2, ef)
+qed
+
+// alloc_group over alloc_slot's code known from k + 1 on: implemented,
+// typed, its io, called as alloc_group from k on
+theorem mp.ap_agr_ok: all c statics G1 G3 G4 G5 G6 k gs. mp.ap_cfg(c) -> mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) -> k in omega ->
+  mp.ap_known(c, statics, int_add(k, 1), gs) ->
+  tr.implements_at(4210406, mp.ap_agr(G1, G3, G4, G5, G6, gs), 4198400, text.code, statics) &&
+  mp.ap_agr(G1, G3, G4, G5, G6, gs) in fn_space(abi.ARGS, powerset(univ(1))) && tr.callee_io(mp.ap_agr(G1, G3, G4, G5, G6, gs), 2) &&
+  mp.agr_call_ge(c, mp.ap_agr(G1, G3, G4, G5, G6, gs), k)
+proof
+  fix c statics G1 G3 G4 G5 G6 k gs
+  assume hcf hl ko hk
+  have hc hx hst hdj hscn hmcn := hcf
+  have _ _ _ _ _ _ _ _ i4 t4 o4 _ _ _ _ _ _ _ _ _ := hl
+  have ik tk ok qk := hk
+  let AM := mp.ap_am(G1, G3, G4, G5, G6)
+  let IB := c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun()
+  let AB := c_src_malloc_mallocng_malloc_cfg.account_bounce_fun()
+  let SS := c_src_malloc_mallocng_malloc_cfg.step_seq_fun()
+  have iam tam oam _ := mp(all_elim(mp.ap_am_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hc, hx, hl)
+  have ifm tfm ofm _ := mp(all_elim(mp.ap_fm_ok, {c}, {statics}), hx)
+  have is2 ts2 os2 _ := mp(all_elim(mp.ap_s2c_ok, {c}, {statics}), hst, hdj)
+  have ief tef oef _ := mp(all_elim(mp.ap_ef_ok, {c}, {statics}), hc, hst)
+  have ln := mp(all_elim(agrc.implements, {statics}, {AM}, {IB}, {AB}, {SS}, {G4}, {mp.ap_fm}, {mp.ap_s2c}, {gs}, {mp.ap_ef}),
+    iam, tam, oam, all_elim(ibtc.implements, {statics}), ibtc.typed, ibtc.io, all_elim(acbtc.implements, {statics}), acbtc.typed, acbtc.io,
+    all_elim(sstc.implements, {statics}), sstc.typed, sstc.io, i4, t4, o4, ifm, tfm, ofm, is2, ts2, os2, ik, tk, ok, ief, tef, oef)
+  have ty: mp.ap_agr(G1, G3, G4, G5, G6, gs) in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.alloc_group_fun)
+  have io := mp(all_elim(agrc.io, {AM}, {IB}, {AB}, {SS}, {G4}, {mp.ap_fm}, {mp.ap_s2c}, {gs}, {mp.ap_ef}), oam, ibtc.io, acbtc.io, sstc.io, o4, ofm, os2, ok, oef)
+  // (called as alloc_group from k on: its structured form's, alloc_slot
+  // known from k + 1 on)
+  have cam cib cab css cmm cfm cs2 cef := mp(all_elim(mp.ap_agr_cc_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hcf, hl)
+  have aq := mp(all_elim(mp.agr_q, {c}, {k}, {AM}, {IB}, {AB}, {SS}, {G4}, {mp.ap_fm}, {mp.ap_s2c}, {gs}, {mp.ap_ef}), hc, hx, hst, hdj, hscn, hmcn, ko,
+    cam, cib, cab, css, cmm, cfm, cs2, qk, cef)
+  have rf := mp(all_elim(alloc_group_ref, {AM}, {IB}, {AB}, {SS}, {G4}, {mp.ap_fm}, {mp.ap_s2c}, {gs}, {mp.ap_ef}),
+    oam, ibtc.io, acbtc.io, sstc.io, o4, ofm, os2, ok, oef)
+  have ac := apply(mp.agr_call_ge_ref[c := c, f := mp.ap_agr(G1, G3, G4, G5, G6, gs),
+    f2 := c_src_malloc_mallocng_malloc.alloc_group_fun(AM, IB, AB, SS, G4, mp.ap_fm, mp.ap_s2c, gs, mp.ap_ef), k := k], rf, aq)
+  show by taut(ln, ty, io, ac)
+qed
+
+// alloc_slot over alloc_group's code known from k on: known from k on
+theorem mp.ap_as_ok: all c statics k ga. mp.ap_cfg(c) -> k in omega ->
+  tr.implements_at(4210406, ga, 4198400, text.code, statics) -> ga in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(ga, 2) -> mp.agr_call_ge(c, ga, k) ->
+  mp.ap_known(c, statics, k, mp.ap_as(ga))
+proof
+  fix c statics k ga
+  assume hcf ko iga tga oga qga
+  have hc hx hst hdj _ _ := hcf
+  let AC := c_src_malloc_mallocng_malloc_cfg.a_ctz_32_fun()
+  have ita tta ota qta := mp(all_elim(mp.ap_ta_ok, {c}, {statics}), hc, hx, hst)
+  have iq tq oq qq := all_elim(mp.ap_q_ok, {statics})
+  have ln := mp(all_elim(astc.implements, {statics}, {mp.ap_ta}, {AC}, {ga}, {mp.ap_q}), ita, tta, ota, all_elim(actc.implements, {statics}), actc.typed, actc.io,
+    iga, tga, oga, iq, tq, oq)
+  have ty: mp.ap_as(ga) in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.alloc_slot_fun)
+  have io := mp(all_elim(astc.io, {mp.ap_ta}, {AC}, {ga}, {mp.ap_q}), ota, actc.io, oga, oq)
+  have aq := mp(all_elim(mp.as_q, {c}, {k}, {mp.ap_ta}, {AC}, {ga}, {mp.ap_q}), hc, hx, hst, hdj, ko, qta, cc.a_ctz_32, qga, qq)
+  have rf := all_elim(alloc_slot_ref, {mp.ap_ta}, {AC}, {ga}, {mp.ap_q})
+  have ac := apply(mp.as_call_ge_ref[c := c, f := mp.ap_as(ga), f2 := c_src_malloc_mallocng_malloc.alloc_slot_fun(mp.ap_ta, AC, ga, mp.ap_q), k := k], rf, aq)
+  show by taut(ln, ty, io, ac)
+qed
+
+// one class down: alloc_slot known from k + 1 on gives it from k on
+theorem mp.ap_step: all c statics G1 G3 G4 G5 G6 k gs. mp.ap_cfg(c) -> mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) -> k in omega ->
+  mp.ap_known(c, statics, int_add(k, 1), gs) -> mp.ap_known(c, statics, k, mp.ap_as(mp.ap_agr(G1, G3, G4, G5, G6, gs)))
+proof
+  fix c statics G1 G3 G4 G5 G6 k gs
+  assume hcf hl ko hk
+  have i t o q := mp(all_elim(mp.ap_agr_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}, {k}, {gs}), hcf, hl, ko, hk)
+  show := mp(all_elim(mp.ap_as_ok, {c}, {statics}, {k}, {mp.ap_agr(G1, G3, G4, G5, G6, gs)}), hcf, ko, i, t, o, q)
+qed
+
+// down from class 48 (nothing known: a_crash's spec) to n classes below it
+theorem mp.ap_all: all c statics G1 G3 G4 G5 G6. mp.ap_cfg(c) -> mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) ->
+  all n. n in omega -> int_le(n, 48) -> ex gs. mp.ap_known(c, statics, int_sub(48, n), gs)
+proof
+  fix c statics G1 G3 G4 G5 G6
+  assume hcf hl
+  let P(n) := int_le(n, 48) -> ex gs. mp.ap_known(c, statics, int_sub(48, n), gs)
+  have b: P(0) proof
+    assume _
+    let AC := mallocng_specs.a_crash_spec_fun()
+    have e: int_sub(48, 0) = 48 by arith()
+    have k48: mp.ap_known(c, statics, 48, AC) by taut(all_elim(mp.undef_implements, {4212095}, {statics}), acr.typed, mp.undef_io[n := 2],
+      mp.as_call_48[c := c, f := AC])
+    show by ex_intro({AC}, rewrite(sym(e), k48))
+  qed
+  have s: all n. n in omega -> P(n) -> P(int_add(n, 1)) proof
+    fix n
+    assume no hp hle
+    obtain gs, hk from mp(hp, (int_le(n, 48) by arith(hle)))
+    let K := int_sub(48, int_add(n, 1))
+    have ko: K in omega by arith(no, hle)
+    have e: int_add(K, 1) = int_sub(48, n) by arith(no, hle)
+    have k1 := mp(all_elim(mp.ap_step, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}, {K}, {gs}), hcf, hl, ko, rewrite(sym(e), hk))
+    show by ex_intro({mp.ap_as(mp.ap_agr(G1, G3, G4, G5, G6, gs))}, k1)
+  qed
+  show := mp(nat_ind[p := n. P(n)], b, s)
+qed
+
+// ---------------------------------------------------------------------
+// The two at machine level: their contracts (the ghost part the allocator's
+// abstract state), their leaves' machine code by hypothesis.
+
+theorem mp.as_implements: all c statics G1 G3 G4 G5 G6. mp.ap_cfg(c) -> mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) ->
+  abi.implements2_at(mp.G, 4212095, mallocng_specs.alloc_slot_spec_fun(c), 4198400, text.code, statics)
+proof
+  fix c statics G1 G3 G4 G5 G6
+  assume hcf hl
+  have hc hx hst hdj _ _ := hcf
+  // alloc_slot known from class 0 on: its alloc_group over it, called as
+  // alloc_group everywhere
+  obtain gs, hk0 from mp(all_elim(mp.ap_all, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hcf, hl, {48}, simp(), arith())
+  have e0: int_sub(48, 48) = 0 by arith()
+  have i0 t0 o0 q0 := rewrite(e0, hk0)
+  have q1 := apply(mp.as_call_ge_mono[c := c, f := gs, k := 0, k2 := int_add(0, 1)], simp(), arith(), q0)
+  have ia ta oa qa := mp(all_elim(mp.ap_agr_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}, {0}, {gs}), hcf, hl, simp(), (mp.ap_known(c, statics, int_add(0, 1), gs) by taut(i0, t0, o0, q1)))
+  let GA := mp.ap_agr(G1, G3, G4, G5, G6, gs)
+  have agr := apply(mp.agr_call_of_ge0[c := c, f := GA], qa)
+  let AC := c_src_malloc_mallocng_malloc_cfg.a_ctz_32_fun()
+  let LOW := c_src_malloc_mallocng_malloc.alloc_slot_fun(mp.ap_ta, AC, GA, mp.ap_q)
+  have _ _ _ qta := mp(all_elim(mp.ap_ta_ok, {c}, {statics}), hc, hx, hst)
+  have _ _ _ qq := all_elim(mp.ap_q_ok, {statics})
+  have r: all args. args in abi.ARGS -> refines_ghost(LOW[args], mallocng_specs.alloc_slot_spec_fun(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.as_fun, {c}, {args}, {mp.ap_ta}, {AC}, {GA}, {mp.ap_q}), hc, hx, hst, hdj, qta, cc.a_ctz_32, agr, qq, ha)
+  qed
+  have ik _ _ _ := mp(all_elim(mp.ap_as_ok, {c}, {statics}, {0}, {GA}), hcf, simp(), ia, ta, oa, qa)
+  have st := mp(all_elim(tr.implements_refine, {4212095}, {mp.ap_as(GA)}, {LOW}, {4198400}, {text.code}, {statics}), ik,
+    all_elim(alloc_slot_ref, {mp.ap_ta}, {AC}, {GA}, {mp.ap_q}))
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4212095}, {LOW}, {mallocng_specs.alloc_slot_spec_fun(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, all_elim(mp.as_divg, {c}), st, r)
+qed
+
+theorem mp.agr_implements: all c statics G1 G3 G4 G5 G6. mp.ap_cfg(c) -> mp.ap_leaves(c, statics, G1, G3, G4, G5, G6) ->
+  abi.implements2_at(mp.G, 4210406, mallocng_specs.alloc_group_spec_fun(c), 4198400, text.code, statics)
+proof
+  fix c statics G1 G3 G4 G5 G6
+  assume hcf hl
+  have hc hx hst hdj hscn hmcn := hcf
+  // alloc_slot known from class 0 on: called as alloc_slot everywhere
+  obtain gs, hk0 from mp(all_elim(mp.ap_all, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hcf, hl, {48}, simp(), arith())
+  have e0: int_sub(48, 48) = 0 by arith()
+  have i0 t0 o0 q0 := rewrite(e0, hk0)
+  have q1 := apply(mp.as_call_ge_mono[c := c, f := gs, k := 0, k2 := int_add(0, 1)], simp(), arith(), q0)
+  have ia _ _ _ := mp(all_elim(mp.ap_agr_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}, {0}, {gs}), hcf, hl, simp(), (mp.ap_known(c, statics, int_add(0, 1), gs) by taut(i0, t0, o0, q1)))
+  have asc := apply(mp.as_call_of_ge0[c := c, f := gs], q0)
+  let AM := mp.ap_am(G1, G3, G4, G5, G6)
+  let IB := c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun()
+  let AB := c_src_malloc_mallocng_malloc_cfg.account_bounce_fun()
+  let SS := c_src_malloc_mallocng_malloc_cfg.step_seq_fun()
+  let LOW := c_src_malloc_mallocng_malloc.alloc_group_fun(AM, IB, AB, SS, G4, mp.ap_fm, mp.ap_s2c, gs, mp.ap_ef)
+  have cam cib cab css cmm cfm cs2 cef := mp(all_elim(mp.ap_agr_cc_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hcf, hl)
+  have r: all args. args in abi.ARGS -> refines_ghost(LOW[args], mallocng_specs.alloc_group_spec_fun(c)[args], abi.World, mp.G) proof
+    fix args
+    assume ha
+    show := mp(all_elim(mp.agp_fun, {c}, {args}, {AM}, {IB}, {AB}, {SS}, {G4}, {mp.ap_fm}, {mp.ap_s2c}, {gs}, {mp.ap_ef}), hc, hx, hst, hdj, hscn, hmcn,
+      cam, cib, cab, css, cmm, cfm, cs2, asc, cef, ha)
+  qed
+  have _ _ _ _ _ _ _ _ _ _ o4 _ _ _ _ _ _ _ _ _ := hl
+  have _ _ oam _ := mp(all_elim(mp.ap_am_ok, {c}, {statics}, {G1}, {G3}, {G4}, {G5}, {G6}), hc, hx, hl)
+  have _ _ ofm _ := mp(all_elim(mp.ap_fm_ok, {c}, {statics}), hx)
+  have _ _ os2 _ := mp(all_elim(mp.ap_s2c_ok, {c}, {statics}), hst, hdj)
+  have _ _ oef _ := mp(all_elim(mp.ap_ef_ok, {c}, {statics}), hc, hst)
+  have st := mp(all_elim(tr.implements_refine, {4210406}, {mp.ap_agr(G1, G3, G4, G5, G6, gs)}, {LOW}, {4198400}, {text.code}, {statics}), ia,
+    mp(all_elim(alloc_group_ref, {AM}, {IB}, {AB}, {SS}, {G4}, {mp.ap_fm}, {mp.ap_s2c}, {gs}, {mp.ap_ef}), oam, ibtc.io, acbtc.io, sstc.io, o4, ofm, os2, o0, oef))
+  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4210406}, {LOW}, {mallocng_specs.alloc_group_spec_fun(c)}, {4198400}, {text.code}, {statics}),
+    mp.g_ok, all_elim(mp.agp_divg, {c}), st, r)
+qed

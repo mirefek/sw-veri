@@ -16,7 +16,8 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 - alloc_meta's leaves at machine level: get_random_secret, __syscall1,
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
-  as the machine's), to discharge `mp.am_implements`' hypotheses.
+  as the machine's), to discharge `mp.am_implements`' hypotheses -- and
+  `mp.as_implements` / `mp.agr_implements`' (`mp.ap_leaves`, the same).
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.
@@ -26,9 +27,6 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 ## 3. Then: the remaining functions
 
-- alloc_slot's machine-code form (`mp.as_implements`): with alloc_group's
-  -- they call each other (`mp.as_call`, `mp.agr_call`), the composition
-  by induction on the class (a nested group's class larger) --.
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,

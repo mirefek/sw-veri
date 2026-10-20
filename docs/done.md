@@ -880,6 +880,18 @@ item is a short summary of finished work; details are in the files named.
   fits it, of a bitwise operation the operation's on the operands' low k
   bits (`nf.lo_fit`, `nf.lo_and` / `lo_or` / `lo_xor`). The machine's
   `or eax, -64` of a byte and GIMPLE's 8-bit `| -64` one value.
+- **alloc_slot and alloc_group at machine level** (`mp.as_implements`,
+  `mp.agr_implements`; proofs/mallocng/fun/alloc_pair.core): they call
+  each other, a nested group's slot of a larger class (`j > sc`: the
+  group's slots, at least one of sc's size, fit in a slot of j), so by
+  induction on the class down from 48 -- alloc_slot's code known from k on
+  (implemented, typed, io, called as alloc_slot from class k on:
+  `mp.as_call_ge`), at 48 a_crash's spec (no class), at k alloc_slot over
+  alloc_group's code over the one from k + 1 (`mp.agr_q`, `mp.as_q` at the
+  classes from k on). Their callees linked (try_avail, queue, alloc_meta
+  with dequeue_head, free_meta, size_to_class, enframe, is_bouncing,
+  account_bounce, step_seq); alloc_meta's leaves by hypothesis
+  (`mp.ap_leaves`).
 - **A proof's variables dropped after it** (kernel: `Env::begin_locals` /
   `end_locals` around each `prove`, `c1`, `refines`): its variables local,
   numbered from a base above the global ones, the base moved past them at
