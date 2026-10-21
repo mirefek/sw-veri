@@ -22,7 +22,8 @@ def tr.vm_chg(m0, V, w0, WV, p, n) :=
   (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> V.pages[q] = none || !(snd(V.pages[q]).kind = 2)) &&
   (all a. a in bits(64) -> !(int_le(p, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(p, n))) ->
     V.bytes[a] = m0.bytes[a] && WV.bytes[a] = w0.bytes[a]) &&
-  (all a. a in bits(64) -> int_le(p, x86_64_linux.page_of(a)) -> int_lt(x86_64_linux.page_of(a), int_add(p, n)) -> WV.bytes[a] = V.bytes[a])
+  (all a. a in bits(64) -> int_le(p, x86_64_linux.page_of(a)) -> int_lt(x86_64_linux.page_of(a), int_add(p, n)) ->
+    x86_64_linux.mapped(V, x86_64_linux.page_of(a)) -> WV.bytes[a] = V.bytes[a])
 
 // (a page within the stack's space: not in a range off it)
 theorem tr.chg_space(vm, p, n, q): x86_64_linux.off_stack_space(vm, p, n) -> p in omega -> n in omega -> q in omega ->
@@ -230,6 +231,17 @@ proof
     fix a
     show by rsimp(x86_64_linux.page_of)
   qed
+  // (a stack page of the entry at or above sp - 8: m's, off the range)
+  have sk: all q. q in omega -> abi.stack_page(s.vm, q) -> int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), q) ->
+      m.vm.pages[q] = s.vm.pages[q] && !IN(q) && V.pages[q] = s.vm.pages[q] proof
+    fix q
+    assume hq hs hl
+    have e0 := mp(all_elim(stk, {q}), hq, (abi.stack_page(s.vm, q) && int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), q) by taut(hs, hl)))
+    have sm := apply(tr.sp_pt, e0, hs)
+    have nr := apply(tr.chg_stack, rm, os, po, no, hq, sm)
+    have ev := mp(all_elim(vp, {q}), hq, nr)
+    show by taut(e0, nr, trans(ev, e0))
+  qed
   // bytes: in the world's domain, the world's
   have by2: all a. a in bits(64) -> abi.in_domain(WV, v, a) -> V.bytes[a] = WV.bytes[a] proof
     fix a
@@ -237,10 +249,30 @@ proof
     let P := int_div(a, x86_64_linux.PAGE)
     have pa: P in omega by arith(ha, pg4)
     have pe1 := all_elim(pe, {a})
+    // (in the range: not a stack object -- those are on the entry's stack
+    // pages --, so on a page of the world's, V's: mapped)
     have c1: IN(P) -> V.bytes[a] = WV.bytes[a] proof
       assume hi
       have h1 h2 := hi
-      show := sym(mp(all_elim(wby, {a}), ha, rewrite(sym(pe1), h1), rewrite(sym(pe1), h2)))
+      have d := expand(hd, abi.in_domain)
+      have o1: a in v -> false proof
+        assume hv
+        have ao: a in omega by simp(ha)
+        have hle hsp _ := mp(all_elim(oacc, {a}), ao, hv)
+        have so: abi.sp(s) in omega by simp(hle, ao)
+        have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, ao, pg4, so)
+        have _ nr _ := mp(all_elim(sk, {P}), pa, hsp, lq)
+        show by taut(nr, hi)
+      qed
+      have o2: x86_64_linux.mapped(WV, P) && !(snd(WV.pages[P]).kind = 2) -> x86_64_linux.mapped(V, x86_64_linux.page_of(a)) proof
+        assume h
+        have hm _ := h
+        have lt nn := expand(hm, x86_64_linux.mapped)
+        have e := mp(all_elim(wvp, {P}), pa, lt, h1, h2)
+        show := rewrite(sym(pe1), (x86_64_linux.mapped(V, P) by defs(taut(lt, rewrite(e, nn)), x86_64_linux.mapped)))
+      qed
+      have mv: x86_64_linux.mapped(V, x86_64_linux.page_of(a)) by taut(d, o1, o2)
+      show := sym(mp(all_elim(wby, {a}), ha, rewrite(sym(pe1), h1), rewrite(sym(pe1), h2), mv))
     qed
     have c2: !IN(P) -> V.bytes[a] = WV.bytes[a] proof
       assume hn
@@ -254,17 +286,6 @@ proof
       show := trans(eb1, trans(mb, sym(eb2)))
     qed
     show by taut(c1, c2)
-  qed
-  // (a stack page of the entry at or above sp - 8: m's, off the range)
-  have sk: all q. q in omega -> abi.stack_page(s.vm, q) -> int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), q) ->
-      m.vm.pages[q] = s.vm.pages[q] && !IN(q) && V.pages[q] = s.vm.pages[q] proof
-    fix q
-    assume hq hs hl
-    have e0 := mp(all_elim(stk, {q}), hq, (abi.stack_page(s.vm, q) && int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), q) by taut(hs, hl)))
-    have sm := apply(tr.sp_pt, e0, hs)
-    have nr := apply(tr.chg_stack, rm, os, po, no, hq, sm)
-    have ev := mp(all_elim(vp, {q}), hq, nr)
-    show by taut(e0, nr, trans(ev, e0))
   qed
   // the callers' frames: the entry's bytes
   have fr2: all a. a in bits(64) -> (int_le(abi.sp(s), a) && !abi.in_domain(WV, v, a)) && abi.stack_page(s.vm, x86_64_linux.page_of(a)) ->
@@ -370,4 +391,181 @@ proof
     trans(vbs, trans(brk0, sym(wbs))), vbk, by2, fr2, pg2, ns2, stk2, rsv2), abi.world_matches)
   have wo2: w2.objs = v := trans(eo, wob)
   show by defs(taut(wo2, rewrite(sym(em), rewrite(sym(ew), wm2)), rewrite(sym(em), oa2)), tr.mem)
+qed
+
+// (a page off the range: V's and its bytes m0's)
+theorem tr.chg_off(m0, V, w0, WV, p, n, a): tr.vm_chg(m0, V, w0, WV, p, n) -> a in bits(64) ->
+  !(int_le(p, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(p, n))) ->
+  V.pages[x86_64_linux.page_of(a)] = m0.pages[x86_64_linux.page_of(a)] && V.bytes[a] = m0.bytes[a]
+proof
+  assume hc ha hn
+  have _ _ _ _ _ _ _ _ _ _ _ vp _ _ _ vby _ := expand(hc, tr.vm_chg)
+  have po: x86_64_linux.page_of(a) in omega by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+  have e1 := mp(all_elim(vp, {x86_64_linux.page_of(a)}), po, hn)
+  have e2 _ := mp(all_elim(vby, {a}), ha, hn)
+  show by taut(e1, e2)
+qed
+
+// the code: on executable pages, off the range -- as it was
+theorem tr.code_chg(m0, V, w0, WV, p, n, gb, gc): abi.code_at(m0, gb, gc) -> tr.vm_chg(m0, V, w0, WV, p, n) -> abi.code_at(V, gb, gc)
+proof
+  assume hd hc
+  have _ _ _ _ _ _ _ _ _ _ nx _ _ _ _ _ _ := expand(hc, tr.vm_chg)
+  have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+      V.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] = m0.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] &&
+      V.bytes[bits_of_int(64, int_add(gb, i))] = m0.bytes[bits_of_int(64, int_add(gb, i))] proof
+    fix i
+    assume hi hl
+    let A := bits_of_int(64, int_add(gb, i))
+    let Q := x86_64_linux.page_of(A)
+    have c0 := mp(all_elim(expand(hd, abi.code_at), {i}), hi, hl)
+    have cf _ _ _ := c0
+    have fm fx := expand(cf, x86_64_linux.fetchable)
+    have xq: snd(m0.pages[Q]).prot.x := rsimp(expand(fx, x86_64_linux.hw_allows))
+    have qo: Q in omega by defs(arith((A in bits(64) by simp())), x86_64_linux.page_of, x86_64_linux.PAGE)
+    have nr: !(int_le(p, Q) && int_lt(Q, int_add(p, n))) proof
+      assume h
+      have h1 h2 := h
+      show by taut(mp(all_elim(nx, {Q}), qo, h1, h2, fm), xq)
+    qed
+    show := apply(tr.chg_off, hc, (A in bits(64) by simp()), nr)
+  qed
+  show := apply(tr.code_at_tr, hd, e)
+qed
+
+// the program loaded: its code as it was, its statics off the stack's space still
+theorem tr.loaded_chg(m0, V, w0, WV, p, n, gb, gc, st): abi.loaded(m0, gb, gc, st) -> tr.vm_chg(m0, V, w0, WV, p, n) -> abi.loaded(V, gb, gc, st)
+proof
+  assume hl hc
+  have vt vl _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ := expand(hc, tr.vm_chg)
+  have l1 l2 := expand(hl, abi.loaded)
+  have c := apply(tr.code_chg, l1, hc)
+  have s2 := apply(tr.statics_same, {m0}, {V}, {st}, vt, vl, l2)
+  show by defs(taut(c, s2), abi.loaded)
+qed
+
+// the homes: on stack pages, off the range -- as they were
+theorem tr.homes_chg(s, m, m2, hs, V, w0, WV, p, n): tr.homes(s, m, hs) -> abi.stack_reserve(m.vm) -> tr.vm_chg(m.vm, V, w0, WV, p, n) -> m2.vm = V ->
+  tr.homes(s, m2, hs)
+proof
+  assume hh hr hc em
+  have _ _ _ _ _ _ _ po no os _ _ _ _ _ _ _ := expand(hc, tr.vm_chg)
+  have g: all c. c in dom(hs) -> x86_64_linux.le(m2.vm.bytes, tr.ha(s, c), fst(hs[c])) = snd(hs[c]) && tr.hrange(c, fst(hs[c])) &&
+      tr.hacc(s, m2.vm, c, fst(hs[c])) proof
+    fix c
+    assume hd
+    have hv hcr ha := mp(all_elim(expand(hh, tr.homes), {c}), hd)
+    have nko: fst(hs[c]) in omega by taut(expand(hcr, tr.hrange))
+    // (each byte: on a stack page of m, so off the range)
+    have bt: all k. k in omega -> int_lt(k, fst(hs[c])) ->
+        V.pages[x86_64_linux.page_of(bits_add(64, tr.ha(s, c), bits_of_int(64, k)))] = m.vm.pages[x86_64_linux.page_of(bits_add(64, tr.ha(s, c), bits_of_int(64, k)))] &&
+        V.bytes[bits_add(64, tr.ha(s, c), bits_of_int(64, k))] = m.vm.bytes[bits_add(64, tr.ha(s, c), bits_of_int(64, k))] &&
+        x86_64_linux.can_access(m.vm, bits_add(64, tr.ha(s, c), bits_of_int(64, k)), 1) &&
+        abi.stack_page(m.vm, int_div(bits_add(64, tr.ha(s, c), bits_of_int(64, k)), 4096)) proof
+      fix k
+      assume k1 k2
+      let A := bits_add(64, tr.ha(s, c), bits_of_int(64, k))
+      have a1 a2 := mp(all_elim(expand(ha, tr.hacc), {k}), k1, k2)
+      have ab: A in bits(64) by simp()
+      have pq: x86_64_linux.page_of(A) = int_div(A, 4096) by rsimp(x86_64_linux.page_of, x86_64_linux.PAGE)
+      have qo: int_div(A, 4096) in omega by arith(ab)
+      have nr := apply(tr.chg_stack, hr, os, po, no, qo, a2)
+      have e1 e2 := apply(tr.chg_off, hc, ab, rewrite(sym(pq), nr))
+      show by taut(e1, e2, a1, a2)
+    qed
+    have bb: all k. k in omega -> int_lt(k, fst(hs[c])) ->
+        V.bytes[bits_add(64, tr.ha(s, c), bits_of_int(64, k))] = m.vm.bytes[bits_add(64, tr.ha(s, c), bits_of_int(64, k))] proof
+      fix k
+      assume k1 k2
+      have _ e2 _ _ := mp(all_elim(bt, {k}), k1, k2)
+      show := e2
+    qed
+    have ls := apply(tr.le_same, {V.bytes}, {m.vm.bytes}, {tr.ha(s, c)}, {fst(hs[c])}, nko, bb)
+    have ac: tr.hacc(s, V, c, fst(hs[c])) proof
+      have q: all k. k in omega -> int_lt(k, fst(hs[c])) ->
+          x86_64_linux.can_access(V, bits_add(64, tr.ha(s, c), bits_of_int(64, k)), 1) && abi.stack_page(V, int_div(bits_add(64, tr.ha(s, c), bits_of_int(64, k)), 4096)) proof
+        fix k
+        assume k1 k2
+        let A := bits_add(64, tr.ha(s, c), bits_of_int(64, k))
+        have e1 _ a1 a2 := mp(all_elim(bt, {k}), k1, k2)
+        have pq: x86_64_linux.page_of(A) = int_div(A, 4096) by rsimp(x86_64_linux.page_of, x86_64_linux.PAGE)
+        show by taut(apply(tr.acc_pt, e1, a1), apply(tr.sp_pt, rewrite(pq, e1), a2))
+      qed
+      show by defs(q, tr.hacc)
+    qed
+    show by taut(rewrite(sym(em), trans(ls, hv)), hcr, rewrite(sym(em), ac))
+  qed
+  show by defs(g, tr.homes)
+qed
+
+// the invariant after the change: the code, the program, the return
+// address and its page as they were; the machine's other parts as given
+theorem tr.inv_chg(s, base, code, fr, m, w, v, V, WV, p, n, m2, w2): tr.inv(s, base, code, fr, m, w) -> tr.mem(s, m, w, v) ->
+  tr.vm_chg(m.vm, V, w.vm, WV, p, n) ->
+  m2 in x86_64_linux.Machine -> m2 in univ(1) -> m2.vm = V -> m2.gpr[4] = m.gpr[4] -> abi.callee_saved(m2, s) -> m2.cpu = m.cpu ->
+  m2.gs_base = m.gs_base -> m2.os = m.os -> m2.fs_base = m.fs_base -> !m2.flags.df ->
+  w2 in abi.World -> w2 in univ(1) -> w2.vm = WV -> w2.os = w.os -> w2.fs_base = w.fs_base -> w2.cpu = w.cpu ->
+  tr.inv(s, base, code, fr, m2, w2)
+proof
+  assume hi hm hc m2M m2u em e4 mcs2 ecpu egs eos efs mdf2 w2W w2u ew wos wfs wcp
+  have {cd, kc, rspm, fro, kp, ra8, mcpu, mgs, mos, mfs, winp, sws, wcpu, wbk, sM, sacc, sal, hsps, slt, sgf, srsv} := hi
+  have {rsv} := expand(hm, tr.mem).wm
+  have rm := mp(rsv, srsv)
+  have _ _ _ _ _ wbs _ po no os _ _ _ _ _ _ _ := expand(hc, tr.vm_chg)
+  let R := s.gpr[4]
+  have r4 := apply(x86i.rsp_typed, sM)
+  have so: R in omega by simp(r4)
+  // the code and the program, loaded still
+  have cd2: abi.code_at(m2.vm, base, code) := rewrite(sym(em), apply(tr.code_chg, cd, hc))
+  have kc2: tr.keeps_code(s.vm, m2.vm) proof
+    have g: all gb gc st. gb in omega -> abi.loaded(s.vm, gb, gc, st) -> abi.loaded(m2.vm, gb, gc, st) proof
+      fix gb gc st
+      assume hb hl
+      have l1 := mp(all_elim(expand(kc, tr.keeps_code), {gb}, {gc}, {st}), hb, hl)
+      show := rewrite(sym(em), apply(tr.loaded_chg, l1, hc))
+    qed
+    show by defs(g, tr.keeps_code)
+  qed
+  // the return address's page: rsp's, a stack page -- off the range
+  have kr := mp(all_elim(expand(kp, tr.kept), {R}), so, arith(so), arith(so))
+  have p0: m.vm.pages[int_div(R, 4096)] = s.vm.pages[int_div(R, 4096)] by defs(kr, x86_64_linux.page_of, x86_64_linux.PAGE)
+  have sm0 := apply(tr.sp_pt, p0, hsps)
+  have po0: int_div(R, 4096) in omega by arith(so)
+  have nr0 := apply(tr.chg_stack, rm, os, po, no, po0, sm0)
+  have kp2: tr.kept(s.vm, m2.vm, R) proof
+    have g: all a. a in omega -> int_le(int_sub(R, 8), a) -> int_lt(a, int_add(R, 8)) ->
+        m2.vm.pages[x86_64_linux.page_of(a)] = s.vm.pages[x86_64_linux.page_of(a)] proof
+      fix a
+      assume a1 ab2 a3
+      have pa: x86_64_linux.page_of(a) = int_div(R, 4096) by defs(arith(a1, ab2, a3, so, sal, slt, r4), x86_64_linux.page_of, x86_64_linux.PAGE)
+      have ab: a in bits(64) by simp(a1, (int_lt(a, pow2(64)) by arith(a3, slt, (pow2(64) = 18446744073709551616 by rsimp()))))
+      have e1 _ := apply(tr.chg_off, hc, ab, rewrite(sym(pa), nr0))
+      have k0 := mp(all_elim(expand(kp, tr.kept), {a}), a1, ab2, a3)
+      show := rewrite(sym(em), trans(e1, k0))
+    qed
+    show by defs(g, tr.kept)
+  qed
+  have rb: all k. k in omega -> int_lt(k, 8) -> m2.vm.bytes[bits_add(64, R, bits_of_int(64, k))] = m.vm.bytes[bits_add(64, R, bits_of_int(64, k))] proof
+    fix k
+    assume k1 k2
+    have rp := apply(abi.ret_pages, {R}, {k}, r4, sal, slt, k1, k2)
+    have peA: x86_64_linux.page_of(bits_add(64, R, bits_of_int(64, k))) = int_div(bits_add(64, R, bits_of_int(64, k)), 4096) by rsimp(x86_64_linux.page_of, x86_64_linux.PAGE)
+    have pq := rewrite(sym(peA), rp)
+    have _ e2 := apply(tr.chg_off, hc, (bits_add(64, R, bits_of_int(64, k)) in bits(64) by simp()), rewrite(sym(pq), nr0))
+    show := rewrite(sym(em), e2)
+  qed
+  have ra82: x86_64_linux.le(m2.vm.bytes, R, 8) = abi.ret(s) := trans(apply(tr.le_same, {m2.vm.bytes}, {m.vm.bytes}, {R}, {8}, (8 in omega by simp()), rb), ra8)
+  // the rest: as given
+  have rspm2: m2.gpr[4] = int_sub(R, fr) := trans(e4, rspm)
+  have mcpu2: m2.cpu = s.cpu := trans(ecpu, mcpu)
+  have mgs2: m2.gs_base = s.gs_base := trans(egs, mgs)
+  have mos2: m2.os = w2.os := trans(eos, trans(mos, sym(wos)))
+  have mfs2: m2.fs_base = w2.fs_base := trans(efs, trans(mfs, sym(wfs)))
+  have winp2: w2.os.input = s.os.input := rewrite(sym(wos), winp)
+  have sws2: subset(s.os.events, w2.os.events) := rewrite(sym(wos), sws)
+  have wcpu2: w2.cpu = s.cpu := trans(wcp, wcpu)
+  have eb: w2.vm.brk_start = w.vm.brk_start by rsimp(ew, wbs)
+  have wbk2: abi.brk_start_ok(w2.vm) by defs(rewrite(sym(eb), expand(wbk, abi.brk_start_ok)), abi.brk_start_ok)
+  show by defs(taut(m2M, m2u, cd2, kc2, rspm2, fro, kp2, ra82, mcs2, mcpu2, mgs2, mos2, mfs2, mdf2, winp2, sws2, w2W, w2u, wcpu2, wbk2,
+    sM, sacc, sal, hsps, slt, sgf, srsv), tr.inv)
 qed
