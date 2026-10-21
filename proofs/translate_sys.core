@@ -680,3 +680,109 @@ proof
   qed
   show by defs(taut(f1, g2, g3), x86_64_linux.free_range)
 qed
+
+// (the stack's space: the world's the machine's)
+theorem tr.off_xfer(s, m, w, v, p, n): tr.mem(s, m, w, v) -> x86_64_linux.off_stack_space(m.vm, p, n) -> x86_64_linux.off_stack_space(w.vm, p, n)
+proof
+  assume hm ho
+  have {wm} := hm
+  have {top, limit} := wm
+  have fe: x86_64_linux.stack_floor(m.vm) = x86_64_linux.stack_floor(w.vm) by rsimp(x86_64_linux.stack_floor, top, limit)
+  show by defs(rewrite(top, rewrite(fe, expand(ho, x86_64_linux.off_stack_space))), x86_64_linux.off_stack_space)
+qed
+
+// brk growing: the world's memory fresh heap pages there too
+theorem tr.brk_grow_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm -> N in bits(64) ->
+  lx.brk_grow(m.vm, N, V, r) ->
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n)
+proof
+  assume hm hmv hwv hN hg
+  have {wm} := hm
+  have {top, limit, brk0, brk} := wm
+  obtain Q B, nl gl fr os eV er hq hb hqt hbt from expand(hg, lx.brk_grow)
+  let PO := x86_64_linux.pages_for(m.vm.brk)
+  let PN := x86_64_linux.pages_for(N)
+  let n := int_sub(PN, PO)
+  let HP := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1)
+  have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+  have bo: m.vm.brk in omega by simp(expand(hmv, x86_64_linux.Vm))
+  have po: PO in omega by defs(arith(bo), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have pno: PN in omega by defs(arith(hN), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have no: n in omega by arith(gl, po, pno)
+  have ad: int_add(PO, n) = PN by arith(gl)
+  obtain WV, wv1 wfp wbk from apply(g.fresh_ex, hwv, apply(x86.vm_univ, hwv), po, no, g.heap_page, hN)
+  // the world's call: growing onto free pages off the stack's space
+  have frw := rewrite(brk, apply(tr.free_xfer, hm, fr))
+  have osw := rewrite(brk, apply(tr.off_xfer, hm, os))
+  have nlw: int_le(w.vm.brk_start, N) by arith(rewrite(brk0, nl))
+  have bp: gimple.brk_post(w.vm, WV, N) by defs(taut(nlw, rewrite(brk, gl), frw, osw, rewrite(brk, wfp), wbk), gimple.brk_post)
+  // V: a memory
+  have vv: V in x86_64_linux.Vm := rewrite(sym(eV), apply(g.vm_set, hmv, apply(x86.vm_univ, hmv), hqt, hbt, hN))
+  // the change: the pages PO .. PN-1 heap pages on both sides, their bytes 0
+  have wt wl wb wpg wby0 := expand(wfp, gimple.fresh_pages)
+  let IN(q) := int_le(PO, q) && int_lt(q, int_add(PO, n))
+  have vt: V.stack_top = m.vm.stack_top by rsimp(eV)
+  have vl: V.stack_limit = m.vm.stack_limit by rsimp(eV)
+  have vb: V.brk_start = m.vm.brk_start by rsimp(eV)
+  have vk: V.brk = WV.brk by rsimp(eV, wbk)
+  have vq: V.pages = Q by rsimp(eV)
+  have vbs: V.bytes = B by rsimp(eV)
+  have _ f2 _ := expand(fr, x86_64_linux.free_range)
+  have c1: all q. q in omega -> int_le(PO, q) -> int_lt(q, int_add(PO, n)) -> x86_64_linux.mapped(m.vm, q) -> !snd(m.vm.pages[q]).prot.x proof
+    fix q
+    assume hq h1 h2 hmq
+    show by taut(mp(all_elim(f2, {q}), hq, (int_le(PO, q) && int_lt(q, int_add(PO, int_sub(PN, PO))) by taut(h1, h2))), hmq)
+  qed
+  have c2: all q. q in omega -> !IN(q) -> V.pages[q] = m.vm.pages[q] proof
+    fix q
+    assume hq0 hn
+    have e := rewrite(sym(vq), mp(all_elim(hq, {q}), hq0))
+    show := apply(tr.ite_no, e, rewrite(ad, hn))
+  qed
+  have c3: all q. q in omega -> int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> !IN(q) -> WV.pages[q] = w.vm.pages[q] proof
+    fix q
+    assume hq0 hl hn
+    show := apply(tr.ite_no, mp(all_elim(wpg, {q}), hq0, hl), hn)
+  qed
+  have c4: all q. q in omega -> int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> int_le(PO, q) -> int_lt(q, int_add(PO, n)) -> WV.pages[q] = V.pages[q] proof
+    fix q
+    assume hq0 hl h1 h2
+    have ew := apply(tr.ite_yes, mp(all_elim(wpg, {q}), hq0, hl), (int_le(PO, q) && int_lt(q, int_add(PO, n)) by taut(h1, h2)))
+    have ev := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (int_le(PO, q) && int_lt(q, PN) by taut(h1, rewrite(ad, h2))))
+    show := trans(ew, sym(ev))
+  qed
+  have c5: all q. q in omega -> int_le(PO, q) -> int_lt(q, int_add(PO, n)) -> V.pages[q] = none || !(snd(V.pages[q]).kind = 2) proof
+    fix q
+    assume hq0 h1 h2
+    have ev := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (int_le(PO, q) && int_lt(q, PN) by taut(h1, rewrite(ad, h2))))
+    have k: !(snd(some(HP)).kind = 2) by rsimp(some, tag)
+    show by taut(rewrite(sym(ev), k))
+  qed
+  have c6: all a. a in bits(64) -> !(int_le(PO, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(PO, n))) ->
+      V.bytes[a] = m.vm.bytes[a] && WV.bytes[a] = w.vm.bytes[a] proof
+    fix a
+    assume ha hn
+    have ao: a in omega by simp(ha)
+    have a64: int_lt(a, pow2(64)) by simp(ha)
+    have rng := apply(tr.pg_rng, ha, po, no)
+    have nb: !(int_le(int_mul(PO, x86_64_linux.PAGE), a) && int_lt(a, int_mul(int_add(PO, n), x86_64_linux.PAGE))) by taut(rng, hn)
+    have ev := apply(tr.ite_no, rewrite(sym(vbs), mp(all_elim(hb, {a}), ao, a64)), rewrite(ad, nb))
+    have ew := apply(tr.ite_no, mp(all_elim(wby0, {a}), ha), nb)
+    show by taut(ev, ew)
+  qed
+  have c7: all a. a in bits(64) -> int_le(PO, x86_64_linux.page_of(a)) -> int_lt(x86_64_linux.page_of(a), int_add(PO, n)) ->
+      x86_64_linux.mapped(V, x86_64_linux.page_of(a)) -> WV.bytes[a] = V.bytes[a] proof
+    fix a
+    assume ha h1 h2 _
+    have ao: a in omega by simp(ha)
+    have a64: int_lt(a, pow2(64)) by simp(ha)
+    have rng := apply(tr.pg_rng, ha, po, no)
+    have yb: int_le(int_mul(PO, x86_64_linux.PAGE), a) && int_lt(a, int_mul(int_add(PO, n), x86_64_linux.PAGE)) by taut(rng, h1, h2)
+    have ev := apply(tr.ite_yes, rewrite(sym(vbs), mp(all_elim(hb, {a}), ao, a64)), rewrite(ad, yb))
+    have ew := apply(tr.ite_yes, mp(all_elim(wby0, {a}), ha), yb)
+    have z: bits_of_int(8, 0) = 0 by simp()
+    show := trans(ew, trans(z, sym(ev)))
+  qed
+  have ch: tr.vm_chg(m.vm, V, w.vm, WV, PO, n) by defs(taut(vt, vl, vb, wt, wl, wb, vk, po, no, os, c1, c2, c3, c4, c5, c6, c7), tr.vm_chg)
+  show by ex_intro({WV}, {PO}, {n}, taut(wv1, bp, trans(er, sym(wbk)), vv, ch))
+qed
