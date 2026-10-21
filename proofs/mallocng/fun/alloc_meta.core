@@ -55,8 +55,9 @@ qed
 // brk(new) (`__syscall1(SYS_brk, new)`): an overflow, or a return -- the
 // break as it was, the memory too; or the break new, its pages fresh
 // readable, writable heap (they were free, off the stack's space) or the
-// pages above it gone, new not below the break's start
-theorem mp.brk_q: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) ->
+// pages above it gone, new not below the break's start (the pages it
+// gives back the break's own: `tr.req1`)
+theorem mp.brk_q: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) -> tr.req1(t, new) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, 12)), seq_one(gimple.arg(64, new)))) ->
   runs(mallocng_specs.syscall1_spec_fun()[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
@@ -71,18 +72,33 @@ theorem mp.brk_q: all t new regs o2. t in abi.World -> t in univ(1) -> new in bi
        gimple.gone_pages(t.vm, V, x86_64_linux.pages_for(new), int_sub(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new))))))
 proof
   fix t new regs o2
-  assume hw htu hn hro h
+  assume hw htu hn hrq hro h
   let OVF := exc_val("stack_overflow", empty)
   have rl rn r0 r1 := apply(gc.regs2, (12 in bits(64) by simp()), hn, hro)
   have lo: seq_len(regs) in omega by simp(rl)
   have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
   have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
   rsimp only, mallocng_specs.syscall1_spec_fun, app_fn_build, ra in h
-  have o12: ord_le(2, seq_len(regs)) && regs[0] = 12 by defs(simp(rn, r0), ord_le)
-  have b := rewrite(r1, apply(g.runs_elim, h))
-  have b2: bind_rel(mallocng_specs.brk_spec(new), t, x3 x4. letin(x4, x5. any_rel(x6. x6 in bits(64), x6. o2 = ok(x3, pair(x5, x6)))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
-    by taut(b, o12)
-  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
+  have e12: bits_of_int(64, 12) = 12 by simp()
+  have en: bits_of_int(64, new) = new by defs(arith(hn), bits_of_int, pow2)
+  have b := rewrite(e12, rewrite(en, rewrite(r0, rewrite(r1, apply(g.runs_elim, h)))))
+  have b2: bind_rel(mallocng_specs.syscall1_spec(12, new), t, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
+    by taut(b, o2l)
+  obtain o3, hs3r hk3 from expand(b2, bind_rel)
+  rsimp only, mallocng_specs.syscall1_spec in hs3r
+  have hs3 := apply(or_resolve, apply(g.runs_elim, hs3r), conj(refl({12}), hrq))
+  // (a return of a word v: o2 the wrapper's return of it)
+  have rk: all S v. v in bits(64) -> o3 = ok(S, v) -> any_rel(x9. x9 in bits(64), x9. o2 = ok(S, pair(v, x9))) proof
+    fix S v
+    assume hv he
+    have k1: bind_rel(gimple.result(64, v), S, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+      by simp(expand(rewrite(he, hk3), letin), keep(bind_rel, gimple.result))
+    obtain o4, hr4 hk4 from expand(k1, bind_rel)
+    have ho4 := apply(g.result64_inv, hv, hr4)
+    show by simp(expand(rewrite(ho4, hk4), letin), keep(any_rel))
+  qed
   have pv pf pd pb := apply(ms.world_parts, hw)
   have ss: fn_update(t, "vm", t.vm) = t := mp(fn_update_same[f := t, k := "vm"], pf, pd)
   let PO := x86_64_linux.pages_for(t.vm.brk)
@@ -121,7 +137,7 @@ proof
   qed
   have c2: o3 = ok(t, t.vm.brk) -> G proof
     assume he
-    have k: any_rel(x3. x3 in bits(64), x3. o2 = ok(t, pair(t.vm.brk, x3))) by simp(rewrite(he, hk3), keep(any_rel))
+    have k := mp(all_elim(rk, {t}, {t.vm.brk}), bko, he)
     obtain z, _ hoz from apply(g.any_e, ne, k)
     have ho: o2 = ok(fn_update(t, "vm", t.vm), pair(t.vm.brk, z)) := subst({y. o2 = ok(y, pair(t.vm.brk, z))}, sym(ss), hoz)
     have l: ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) = t.vm.brk by ex_intro({pair(t.vm.brk, z)}, taut(ho, (fst(pair(t.vm.brk, z)) = t.vm.brk by simp())))
@@ -130,7 +146,7 @@ proof
   have c3: (ex V. (V in x86_64_linux.Vm && V.brk = new && !int_lt(new, t.vm.brk_start) && GROW(V)) && o3 = ok(fn_update(t, "vm", V), new)) -> G proof
     assume e
     obtain V, hV hb hs hg he from e
-    have k: any_rel(x3. x3 in bits(64), x3. o2 = ok(fn_update(t, "vm", V), pair(new, x3))) by simp(rewrite(he, hk3), keep(any_rel))
+    have k := mp(all_elim(rk, {fn_update(t, "vm", V)}, {new}), hn, he)
     obtain z, _ hoz from apply(g.any_e, ne, k)
     have l: ex V r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = new && V in x86_64_linux.Vm && V.brk = new && !int_lt(new, t.vm.brk_start) && GROW(V)
       by ex_intro({V}, {pair(new, z)}, taut(hoz, (fst(pair(new, z)) = new by simp()), hV, hb, hs, hg))
@@ -149,16 +165,16 @@ abbrev mp.brk_grow(t, V, new) := (int_lt(x86_64_linux.pages_for(t.vm.brk), x86_6
   (!int_lt(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new)) &&
     gimple.gone_pages(t.vm, V, x86_64_linux.pages_for(new), int_sub(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new))))
 abbrev mp.brk_ret(t, V, r, new) := (V = t.vm && fst(r) = t.vm.brk) || (fst(r) = new && V.brk = new && !int_lt(new, t.vm.brk_start) && mp.brk_grow(t, V, new))
-theorem mp.brk_qr: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) ->
+theorem mp.brk_qr: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) -> tr.req1(t, new) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 12))), seq_one(gimple.arg(64, new)))) ->
   runs(mallocng_specs.syscall1_spec_fun()[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && mp.brk_ret(t, V, r, new)) && o2 = ok(fn_update(t, "vm", V), r))
 proof
   fix t new regs o2
-  assume hw hu hn hro h2
+  assume hw hu hn hrq hro h2
   have ea: bits_of_int(64, 12) = 12 by simp()
-  have q := apply(mp.brk_q, hw, hu, hn, rewrite(ea, hro), h2)
+  have q := apply(mp.brk_q, hw, hu, hn, hrq, rewrite(ea, hro), h2)
   have wv vf vd vb := apply(ms.world_parts, hw)
   have k2: case 2 of q proof
     assume e
@@ -185,11 +201,13 @@ proof
   assume hw htu hbs hro h
   have ea: seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 12))), seq_one(gimple.arg(64, bits_of_int(64, 0)))) =
     seq_concat(seq_one(gimple.arg(64, 12)), seq_one(gimple.arg(64, 0))) by simp()
-  have q := apply(mp.brk_q, hw, htu, (0 in bits(64) by simp()), rewrite(ea, hro), h)
   have pv _ _ _ := apply(ms.world_parts, hw)
   have bs: t.vm.brk_start in bits(64) by simp(expand(pv, x86_64_linux.Vm))
   have hb1: int_le(x86_64_linux.PAGE, t.vm.brk_start) by simp(expand(hbs, abi.brk_start_ok), bs)
   have b0: int_lt(0, t.vm.brk_start) by arith(hb1)
+  have nb: !int_le(t.vm.brk_start, 0) by arith(b0)
+  have hrq: tr.req1(t, 0) by taut(nb)
+  have q := apply(mp.brk_q, hw, htu, (0 in bits(64) by simp()), hrq, rewrite(ea, hro), h)
   have c3: !(ex V r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = 0 && V in x86_64_linux.Vm && V.brk = 0 && !int_lt(0, t.vm.brk_start) &&
       ((int_lt(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(0)) &&
         x86_64_linux.free_range(t.vm, x86_64_linux.pages_for(t.vm.brk), int_sub(x86_64_linux.pages_for(0), x86_64_linux.pages_for(t.vm.brk))) &&
@@ -2097,6 +2115,32 @@ proof
   show by taut(jc, c0, c1)
 qed
 
+// (... and no page given back: brk's requirement on shrinking vacuous --
+// the break grown, or wrapped to 0, below the break's start)
+theorem mp.jg_req(c, A1, V1, VG, g, nw, bb, w): mp.am_jg(c, A1, V1, VG, g, nw, bb) -> V1 in x86_64_linux.Vm -> w.vm.brk = V1.brk ->
+  int_lt(0, w.vm.brk_start) -> tr.req1(w, nw)
+proof
+  assume J hv wb ws
+  have _ _ _ _ _ jc := J
+  have vb: V1.brk in bits(64) by simp(expand(hv, x86_64_linux.Vm))
+  have c0: g = 0 && A1.brk = V1.brk && int_mod(V1.brk, 4096) = 0 && !(V1.brk = 0) && nw = bits_add(64, 4096, A1.brk) && bb = V1.brk ->
+      !(int_lt(x86_64_linux.pages_for(nw), x86_64_linux.pages_for(V1.brk)) && int_le(w.vm.brk_start, nw)) proof
+    assume q
+    have _ q1 q2 _ q4 _ := q
+    have nv: nw = int_mod(int_add(4096, V1.brk), pow2(64)) by defs(simp(rewrite(q1, q4)), bits_add)
+    show by defs(arith(nv, vb, q2, ws), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  qed
+  have c1: g = 1 && A1.brk = 0 && int_mod(bb, 4096) = 0 && int_le(V1.brk, bb) && int_lt(bb, int_add(V1.brk, 4096)) && int_le(bb, 140737488351232) && nw = int_add(bb, 8192) ->
+      !(int_lt(x86_64_linux.pages_for(nw), x86_64_linux.pages_for(V1.brk)) && int_le(w.vm.brk_start, nw)) proof
+    assume q
+    have _ _ _ q3 _ _ q6 := q
+    show by defs(arith(q3, q6, vb), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  qed
+  have k0: !(int_lt(x86_64_linux.pages_for(nw), x86_64_linux.pages_for(V1.brk)) && int_le(w.vm.brk_start, nw)) by taut(jc, c0, c1)
+  have k := rewrite(sym(wb), k0)
+  show by taut(k)
+qed
+
 // the break refused: given up (its word -1), the reserve still empty
 theorem mp.am_brkfail(c, A, B, s, V1, A1, VG, g, nw, bb): mp.am_st(c, A, B, s, V1, A1) -> c in mallocng.Cfg -> s in abi.World ->
   B in fn_space(bits(64), option(omega)) -> mallocng_specs.errno_apart(c, A, B, s.vm, s.fs_base) -> int_le(int_add(s.fs_base, 56), int_pow(2, 64)) ->
@@ -3930,7 +3974,12 @@ proof
                 let PBK(V, r) := (V = WG.vm && fst(r) = WG.vm.brk) || (fst(r) = nw && V.brk = nw && !int_lt(nw, WG.vm.brk_start) && GROW(V))
                 let LN := pair(0, pair(a2, pair(g, pair(1, pair(nw, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
                 // (the break moved: brk's contract)
-                step V r, hk hR from e13 with mp.brk_qr using conj(wgW, wgu, j6, thsg, hsy)
+                have _ ubg := expand(s7, mallocng.untouched)
+                have bsg: int_le(4096, V1.brk_start) by defs(simp(expand(hbs, abi.brk_start_ok), ubg), x86_64_linux.PAGE)
+                have bg0: int_lt(0, V1.brk_start) by arith(bsg)
+                have wgs: int_lt(0, WG.vm.brk_start) by simp(gs, bg0)
+                have wrq := apply(mp.jg_req[w := WG], J, s1, (WG.vm.brk = V1.brk by simp(gbk)), wgs)
+                step V r, hk hR from e13 with mp.brk_qr using conj(wgW, wgu, j6, wrq, thsg, hsy)
                   have hV hp := hR
                   have wgv: WG.vm = VG by simp()
                   have nne := apply(mp.jg_ne, J, s1)

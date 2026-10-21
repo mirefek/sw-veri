@@ -42,6 +42,77 @@ proof
   show := apply(tr.implements_abi, all_elim(mp.aclz_divw, {c_src_malloc_mallocng_malloc.debruijn32}), all_elim(aclzc.composed, {statics}))
 qed
 
+// (brk, its requirement met, never diverges: each memory it asks for
+// there is)
+theorem mp.sy1_nodiv: all s n a t. s.vm in x86_64_linux.Vm -> s in univ(1) -> a in bits(64) -> n = 12 -> tr.req1(s, a) ->
+  !runs(mallocng_specs.syscall1_spec(n, a), s, diverge(t))
+proof
+  fix s n a t
+  assume pv hu ha hn hq
+  have vu := apply(x86.vm_univ, pv)
+  let PO := x86_64_linux.pages_for(s.vm.brk)
+  let PN := x86_64_linux.pages_for(a)
+  let HP := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1)
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
+  have bko: s.vm.brk in bits(64) by simp(expand(pv, x86_64_linux.Vm))
+  have poo: PO in omega by defs(arith(bko), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have pno: PN in omega by defs(arith(ha), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have fx: int_lt(PO, PN) -> ex V. V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, PO, int_sub(PN, PO), HP) && a = V.brk) proof
+    assume hl
+    obtain V, h1 h2 h3 from apply(g.fresh_ex[before := s.vm, p := PO, n := int_sub(PN, PO), pg := HP, br := a], pv, vu, poo, (int_sub(PN, PO) in omega by arith(hl, poo, pno)), g.heap_page, ha)
+    show by ex_intro({V}, taut(h1, h2, sym(h3)))
+  qed
+  have gx: !int_lt(PO, PN) -> ex V. V in x86_64_linux.Vm && (gimple.gone_pages(s.vm, V, PN, int_sub(PO, PN)) && a = V.brk) proof
+    assume _
+    obtain V, h1 h2 h3 from apply(g.gone_ex[before := s.vm, p := PN, n := int_sub(PO, PN), br := a], pv, vu, ha)
+    show by ex_intro({V}, taut(h1, h2, sym(h3)))
+  qed
+  show proof
+    assume h
+    rsimp only, mallocng_specs.syscall1_spec in h
+    have hs := apply(or_resolve, apply(g.runs_elim, h), conj(hn, hq))
+    show by simp(hs, vv, fx, gx, keep(gimple.fresh_pages, gimple.gone_pages, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.pages_for))
+  qed
+qed
+
+// (so the 1-argument call's spec diverges only where it allows anything)
+theorem mp.sy1_divw: tr.div_raises(mallocng_specs.syscall1_spec_fun())
+proof
+  let Q(x0) := mallocng_specs.syscall1_spec(bits_of_int(64, x0[0]), bits_of_int(64, x0[1]))
+  have ru: all regs s o. runs(Q(regs), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume h
+    rsimp only, mallocng_specs.syscall1_spec in h
+    show := apply(g.runs_univ, h)
+  qed
+  have dq: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in single(empty) -> runs(Q(regs), union2(w, h), diverge(t)) ->
+      runs(Q(regs), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let W := union2(w, h)
+    let N := bits_of_int(64, regs[0])
+    let A := bits_of_int(64, regs[1])
+    have {wu = univ, wv = vm} := apply(ct.w_single, hw, hwu, hh)
+    have ab: A in bits(64) by simp()
+    have c: !(N = 12 && tr.req1(W, A)) proof
+      assume e
+      have en eq := e
+      show by taut(mp(all_elim(mp.sy1_nodiv, {W}, {N}, {A}, {t}), wv, wu, ab, en, eq), hr)
+    qed
+    have pu: pair(W, exc(W, empty)) in univ(1) by simp(wu)
+    show by simp(pu, c)
+  qed
+  have gf := apply(ct.fun_divg[G := single(empty), q := x0. Q(x0), n := 2, w := 64], ct.single_univ, ru, dq)
+  have gd: tr.div_raises_g(single(empty), mallocng_specs.syscall1_spec_fun()) by defs(gf, mallocng_specs.syscall1_spec_fun)
+  show := apply(ct.div_of_g, gd)
+qed
+
+theorem mp.sy1_abi: all statics. abi.implements2_at(single(empty), 4205817, mallocng_specs.syscall1_spec_fun(), 4198400, text.code, statics)
+proof
+  fix statics
+  show := apply(tr.implements_abi, mp.sy1_divw, all_elim(sy1c.composed, {statics}))
+qed
+
 theorem mp.acas_abi: all statics. abi.implements2_at(single(empty), 4205639, mallocng_specs.a_cas_spec_fun(), 4198400, text.code, statics)
 proof
   fix statics

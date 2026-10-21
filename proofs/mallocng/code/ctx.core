@@ -1043,3 +1043,124 @@ proof
   show by taut(rr, r1, r2)
 qed
 
+// ----------------------------------------------------------------------
+//  brk (`__syscall1(SYS_brk, new)`)
+// (the call's outcomes, `gimple.brk_post`: the spec's, its requirement
+// met -- the break as it was; grown, the pages fresh; or shrunk)
+theorem ms.brk_post_spec: all s V n a. s in abi.World -> s in univ(1) -> V in x86_64_linux.Vm -> n = 12 -> tr.req1(s, a) ->
+  gimple.brk_post(s.vm, V, a) -> runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk))
+proof
+  fix s V n a
+  assume hw hu hV hn hq hp
+  have pv pf pd pb := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have vu := apply(x86.vm_univ, hV)
+  let PO := x86_64_linux.pages_for(s.vm.brk)
+  let PN := x86_64_linux.pages_for(a)
+  let HP := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1)
+  have c1: V = s.vm && (int_lt(a, s.vm.brk_start) || int_lt(PO, PN)) -> runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk)) proof
+    assume h
+    have hv hc := h
+    have r0: runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", s.vm), s.vm.brk))
+      by simp(hc, ss, hn, hq, hu, keep(x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.pages_for, gimple.sys_pages_ok))
+    show := rewrite(sym(hv), r0)
+  qed
+  have c2: int_le(s.vm.brk_start, a) && int_lt(PO, PN) && x86_64_linux.free_range(s.vm, PO, int_sub(PN, PO)) &&
+      x86_64_linux.off_stack_space(s.vm, PO, int_sub(PN, PO)) && gimple.fresh_pages(s.vm, V, PO, int_sub(PN, PO), HP) && V.brk = a ->
+      runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk)) proof
+    assume h
+    have h1 h2 h3 h4 h5 h6 := h
+    show by simp(h1, h2, h3, h4, h5, h6, hV, hn, hq, hu, vu,
+      keep(x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.pages_for, gimple.sys_pages_ok, gimple.fresh_pages))
+  qed
+  have c3: int_le(s.vm.brk_start, a) && int_le(PN, PO) && gimple.gone_pages(s.vm, V, PN, int_sub(PO, PN)) && V.brk = a ->
+      runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk)) proof
+    assume h
+    have h1 h2 h3 h4 := h
+    show by simp(h1, h2, h3, h4, hV, hn, hq, hu, vu,
+      keep(x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.pages_for, gimple.sys_pages_ok, gimple.gone_pages))
+  qed
+  show by taut(expand(hp, gimple.brk_post), c1, c2, c3)
+qed
+
+// (the call has an outcome: the break as it was, or shrunk)
+theorem ms.brk_post_ex(v, a): v in x86_64_linux.Vm -> a in bits(64) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, a)
+proof
+  assume hv ha
+  have vu := apply(x86.vm_univ, hv)
+  let PO := x86_64_linux.pages_for(v.brk)
+  let PN := x86_64_linux.pages_for(a)
+  have c1: int_lt(a, v.brk_start) || int_lt(PO, PN) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, a) proof
+    assume h
+    show by ex_intro({v}, defs(taut(hv, h, refl({v})), gimple.brk_post))
+  qed
+  have c2: !(int_lt(a, v.brk_start) || int_lt(PO, PN)) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, a) proof
+    assume h
+    have bs: v.brk_start in bits(64) by simp(expand(hv, x86_64_linux.Vm))
+    have bb: v.brk in bits(64) by simp(expand(hv, x86_64_linux.Vm))
+    have l1: int_le(v.brk_start, a) by arith(h, bs, ha)
+    have poo: PO in omega by defs(arith(bb), x86_64_linux.pages_for, x86_64_linux.PAGE)
+    have pno: PN in omega by defs(arith(ha), x86_64_linux.pages_for, x86_64_linux.PAGE)
+    have l2: int_le(PN, PO) by arith(h, poo, pno)
+    obtain V, h1 h2 h3 from apply(g.gone_ex[before := v, p := PN, n := int_sub(PO, PN), br := a], hv, vu, ha)
+    show by ex_intro({V}, defs(taut(h1, h2, h3, l1, l2), gimple.brk_post))
+  qed
+  show by taut(c1, c2)
+qed
+
+// __syscall1 (its two locals, the call, the call's result returned)
+// refines the spec: not brk or its requirement not met, anything;
+// else brk's outcome -- one there is -- the spec's
+theorem ms.syscall1_c2: all n a. a in bits(64) -> refines(c_src_malloc_mallocng_malloc.__syscall1(n, a), mallocng_specs.syscall1_spec(n, a), abi.World)
+proof
+  fix n a
+  assume ha
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := mallocng_specs.syscall1_spec(n, a)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have nq: !(n = 12 && tr.req1(s, a)) -> runs(SPEC, s, o) proof
+      assume h
+      show by simp(pu, h)
+    qed
+    have yq: n = 12 && tr.req1(s, a) -> runs(SPEC, s, o) proof
+      assume h
+      have hn hq := h
+      have pv _ _ _ := apply(ms.world_parts, hw)
+      have ne: ex z. z in bits(64) by ex_intro({0}, simp())
+      have bx := apply(ms.brk_post_ex, pv, ha)
+      rsimp only, c_src_malloc_mallocng_malloc.__syscall1 in hr
+      have b3 := apply(g.runs_elim, hr)
+      obtain z1, _ k1 from apply(g.any_e, ne, b3)
+      obtain z2, _ k2 from apply(g.any_e, ne, expand(k1, letin))
+      obtain o4, r4 c4 from expand(expand(k2, letin), bind_rel)
+      rsimp only, gimple.sys_call1 in r4
+      have b4: bind_rel(gimple.os_brk(a), s, x2 x3. o4 = ok(x2, x3), x2 x3. o4 = exc(x2, x3), x2. o4 = diverge(x2))
+        by taut(apply(g.runs_elim, r4), hn, hq)
+      obtain o5, r5 c5 from expand(b4, bind_rel)
+      rsimp gimple.os_brk in r5
+      have b5 := apply(g.runs_elim, r5)
+      obtain V, hV hp ho5 from apply(g.any_e, bx, b5)
+      have e4: o4 = ok(fn_update(s, "vm", V), V.brk) by simp(rewrite(expand(ho5, letin), c5))
+      have e2: o = ok(fn_update(s, "vm", V), V.brk) by simp(rewrite(e4, c4))
+      show := rewrite(sym(e2), apply(ms.brk_post_spec, hw, hu, hV, hn, hq, hp))
+    qed
+    show by taut(nq, yq)
+  qed
+qed
+
+// __syscall1 as a C function value: its register wrapper refines the
+// spec's
+theorem ms.syscall1_fun_c2: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(c_src_malloc_mallocng_malloc.__syscall1_fun()[regs], s, o) -> runs(mallocng_specs.syscall1_spec_fun()[regs], s, o)
+proof
+  have hm: all regs. refines(c_src_malloc_mallocng_malloc.__syscall1(bits_of_int(64, regs[0]), bits_of_int(64, regs[1])),
+      mallocng_specs.syscall1_spec(bits_of_int(64, regs[0]), bits_of_int(64, regs[1])), abi.World) proof
+    fix regs
+    show := mp(all_elim(ms.syscall1_c2, {bits_of_int(64, regs[0])}, {bits_of_int(64, regs[1])}), simp())
+  qed
+  show by defs(apply(g.fun_res[n := 2, w := 64], hm), c_src_malloc_mallocng_malloc.__syscall1_fun, mallocng_specs.syscall1_spec_fun, letin)
+qed
+

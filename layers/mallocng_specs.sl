@@ -174,12 +174,18 @@ fn size_overflows_spec_fun() -> CFun2[World] = (args: Args) => {
 // (the memory's changes -- fresh_pages, gone_pages, reprot -- are
 // layers/gimple.sl's: its system calls' too)
 
-// brk(new) (`__syscall1(SYS_brk, new)`): the break moved to new -- the
-// pages up to it fresh readable, writable heap if they had to be had and
-// could be (free, off the stack's space; the kernel may refuse), the
-// pages above it gone if it went down --, or not; the break returned. Not
-// below where it started.
-proc[World] brk_spec(new: Addr) -> bits[64] {
+// a 1-argument system call n, as malloc makes one: brk(new)
+// (`__syscall1(SYS_brk, new)`): the break moved to new -- the pages up to
+// it fresh readable, writable heap if they had to be had and could be
+// (free, off the stack's space; the kernel may refuse), the pages above it
+// gone if it went down --, or not; the break returned. Not below where it
+// started. The pages it gives back the break's own (as the call's,
+// `sys_call1`).
+proc[World] syscall1_spec(n: bits[64], new: Addr) -> bits[64] {
+  require uint(n) = 12 && (pages_for(uint(new)) < pages_for(uint(vm.brk)) -> new >= vm.brk_start ->
+    pages_for(uint(vm.brk)) <= TASK_SIZE / PAGE &&
+    sys_pages_ok(vm, pages_for(uint(new)), pages_for(uint(vm.brk)) - pages_for(uint(new))) &&
+    (all q: nat. pages_for(uint(new)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap))
   either { overflow() } or {
     let before = vm
     let old_end = pages_for(uint(before.brk))
@@ -198,11 +204,11 @@ proc[World] brk_spec(new: Addr) -> bits[64] {
   }
 }
 
-// a 1-argument system call: as malloc makes one, brk
 fn syscall1_spec_fun() -> CFun2[World] = (args: Args) => {
-  require len(args) >= 2 && uint(args[0]) = 12
-  let r = brk_spec(args[1])
-  return (r, any bits[64])
+  require len(args) >= 2
+  let r = syscall1_spec(bits[64](args[0]), bits[64](args[1]))
+  let w = result[64](r)
+  return (w, any bits[64])
 }
 
 // errno's cell writable, the thread pointer sound (a failing call sets it)

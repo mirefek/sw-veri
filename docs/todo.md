@@ -18,12 +18,11 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
   as the machine's), to discharge `mp.am_implements`' hypotheses -- and
   `mp.as_implements` / `mp.agr_implements`' (`mp.ap_leaves`, the same).
-  __syscall1: its C2 against `syscall1_spec_fun` (brk_spec needs the
-  op's requirement on shrinking: the pages given back the heap's, not
-  executable, off the stack's space, within the task's -- alloc_meta's
-  call grows, so it holds there). Then `sys_call3` / `sys_call6` the same way (the
+  __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
+  to be used once the other leaves are). Then `sys_call3` / `sys_call6` the same way (the
   closed forms `lx.sys_mprotect_ok`, `lx.sys_mmap_ok`; their world calls
-  relational like brk's), memcpy's model.
+  relational like brk's; mmap_spec / mprotect_spec restated in the code's
+  shape, as `syscall1_spec`), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.
@@ -94,6 +93,11 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
   The rest of the proofs' `simp` that only rewrites: `rsimp` (simp kept
   for executing program paths).
 
+- `divergence()` takes a contract's body only of the `ct.dv_*` shapes (a
+  step, a return after a choice or two); brk's (branches, havocs) by hand
+  (`mp.sy1_divw`: never diverging with its requirement met,
+  `mp.sy1_nodiv`). A body's divergence by its structure (per statement)
+  would cover such specs.
 - The proof cache does not key on the checker: after an engine change
   `scripts/check.sh` reports proofs "as checked before"; check the
   engine's changes uncached (the test's `--no-cache`), times per file by

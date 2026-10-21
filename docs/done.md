@@ -937,3 +937,10 @@ item is a short summary of finished work; details are in the files named.
   in rax, the frame rsp's page (8 bytes). The engine applies it at a
   `syscall` like a call (`Red::Sys`, `sys_at`); the call's effect
   (`tr.eff_sys_call1`) gives callers' `tr.callee_io`. `c1 __syscall1`.
+- **__syscall1 to its contract** (`mp.sy1_abi`): the spec in the code's
+  shape (`syscall1_spec(n, new)`, layers/mallocng_specs.sl, requiring brk
+  and the op's requirement on shrinking); C2 `ms.syscall1_c2` (brk's
+  outcome, one there is -- `ms.brk_post_ex` --, the spec's:
+  `ms.brk_post_spec`), composed `sy1c.composed`. alloc_meta's call
+  discharges the requirement (`mp.jg_req`: the break grown, or wrapped to
+  0 below its start).
