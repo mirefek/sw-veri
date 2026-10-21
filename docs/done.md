@@ -912,3 +912,17 @@ item is a short summary of finished work; details are in the files named.
   memory, its peaks (resident, virtual) and its largest proof's variables.
   The uncached chain 935 s -> 630 s, its virtual peak 5.9 GB -> 4.4 GB
   (alloc_group's; c1.core's resident 2.8 GB the largest).
+- **The program loaded, through memory given back** (`abi.loaded`,
+  layers/abi.sl): its statics off the stack's space (no longer "mapped and
+  not on the stack" -- whether a static is mapped is the C world's to
+  check, as for any access), so munmap / brk shrinking / mmap / mprotect
+  keep every loaded program (`tr.keeps_code`, `tr.returns_valid`) where
+  they keep the stack's space and do not touch executable pages -- what
+  `sys_pages_ok` requires of each call changing pages (brk's shrinking
+  too). Re-proven by `tr.statics_same` (the same stack top and limit).
+- **Linux's memory calls in closed form** (proofs/linux_sys.core):
+  `lx.sys_brk_ok`, `lx.sys_mprotect_ok` (the loop to the first unmapped
+  page, `lx.prot_loop`), `lx.sys_mmap_ok`, by their loops' invariants
+  (`lx.pages_loop`, `lx.bytes_loop`); the syscall instruction with rax 12
+  (`x86i.brk_insn`). The readable op by the arguments passed:
+  `sys_call1` (brk), `sys_call3` (mprotect), `sys_call6` (mmap).

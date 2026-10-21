@@ -611,13 +611,15 @@ proof
 qed
 
 // (the program loaded, in a memory with the same mapped pages -- but the
-// stack's -- and the same bytes on them: loaded there)
+// stack's -- and the same bytes on them, the same stack space: loaded
+// there)
 theorem tr.loaded_xfer: all v1 v2 gb gc st. (all p. p in omega -> x86_64_linux.mapped(v1, p) -> !abi.stack_page(v1, p) -> v2.pages[p] = v1.pages[p]) ->
   (all a. a in bits(64) -> x86_64_linux.mapped(v1, x86_64_linux.page_of(a)) -> !abi.stack_page(v1, x86_64_linux.page_of(a)) -> v2.bytes[a] = v1.bytes[a]) ->
+  v2.stack_top = v1.stack_top -> v2.stack_limit = v1.stack_limit ->
   abi.loaded(v1, gb, gc, st) -> abi.loaded(v2, gb, gc, st)
 proof
   fix v1 v2 gb gc st
-  assume hp hb hl
+  assume hp hb et el hl
   have l1 l2 := expand(hl, abi.loaded)
   have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
       v2.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] = v1.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] &&
@@ -631,14 +633,7 @@ proof
     show by taut(pe, be)
   qed
   have c2 := apply(tr.code_at_tr, {v1}, {v2}, {gb}, {gc}, l1, e)
-  have s2: all x0. x0 in omega -> x0 in st -> x86_64_linux.mapped(v2, int_div(x0, x86_64_linux.PAGE)) && !abi.stack_page(v2, int_div(x0, x86_64_linux.PAGE)) proof
-    fix x0
-    assume h1 h2
-    have c := mp(all_elim(l2, {x0}), h1, h2)
-    have po: int_div(x0, x86_64_linux.PAGE) in omega by defs(simp(h1), x86_64_linux.PAGE)
-    have pe := mp(all_elim(hp, {int_div(x0, x86_64_linux.PAGE)}), po, c.1, c.2)
-    show by defs(rewrite(sym(pe), expand(c, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
-  qed
+  have s2 := apply(tr.statics_same, {v1}, {v2}, {st}, et, el, l2)
   show by defs(taut(c2, s2), abi.loaded)
 qed
 
@@ -648,7 +643,7 @@ theorem tr.wm_back: all o n wv ob sp gb gcode st. abi.world_matches(o, n, wv, ob
 proof
   fix o n wv ob sp gb gcode st
   assume hw hl
-  have {bytes, pages} := hw
+  have {top, limit, bytes, pages} := hw
   have pp: all p. p in omega -> x86_64_linux.mapped(n, p) -> !abi.stack_page(n, p) -> wv.pages[p] = n.pages[p] proof
     fix p
     assume hp hm hs
@@ -668,14 +663,14 @@ proof
     have b := mp(all_elim(bytes, {a}), ha, d)
     show := sym(b)
   qed
-  show := apply(tr.loaded_xfer, {n}, {wv}, {gb}, {gcode}, {st}, pp, bb, hl)
+  show := apply(tr.loaded_xfer, {n}, {wv}, {gb}, {gcode}, {st}, pp, bb, sym(top), sym(limit), hl)
 qed
 
 theorem tr.wm_fwd: all o n wv ob sp gb gcode st. abi.world_matches(o, n, wv, ob, sp) -> abi.loaded(wv, gb, gcode, st) -> abi.loaded(n, gb, gcode, st)
 proof
   fix o n wv ob sp gb gcode st
   assume hw hl
-  have {bytes, pages} := hw
+  have {top, limit, bytes, pages} := hw
   have pp: all p. p in omega -> x86_64_linux.mapped(wv, p) -> !abi.stack_page(wv, p) -> n.pages[p] = wv.pages[p] proof
     fix p
     assume hp hm hs
@@ -691,7 +686,7 @@ proof
     have d: abi.in_domain(wv, ob, a) by defs(simp(expand(rewrite(pe, hm), x86_64_linux.mapped), expand(rewrite(pe, hs), abi.stack_page, x86_64_linux.mapped)), abi.in_domain, x86_64_linux.mapped)
     show := mp(all_elim(bytes, {a}), ha, d)
   qed
-  show := apply(tr.loaded_xfer, {wv}, {n}, {gb}, {gcode}, {st}, pp, bb, hl)
+  show := apply(tr.loaded_xfer, {wv}, {n}, {gb}, {gcode}, {st}, pp, bb, top, limit, hl)
 qed
 
 // (the callee's world xw back with the caller's (w's) stack objects: a world)
@@ -937,14 +932,8 @@ proof
       have lc: abi.code_at(M2.vm, gb, gc) by simp(expand(hl, abi.loaded), keep(abi.code_at))
       have sc := all_elim(apply(x86.store_code, {gb}, {gc}, {M2}, {PA}, {8}, {m1}, {e1}, simp(), hb, htr2, lc), {RA})
       have cc: abi.code_at(C.vm, gb, gc) := rewrite(sym(cvm), sc)
-      have stt: all x. x in omega -> x in st -> x86_64_linux.mapped(C.vm, int_div(x, x86_64_linux.PAGE)) && !abi.stack_page(C.vm, int_div(x, x86_64_linux.PAGE)) proof
-        fix x
-        assume hx hs
-        have l0 := mp(all_elim(expand(hl, abi.loaded).2, {x}), hx, hs)
-        have po: int_div(x, x86_64_linux.PAGE) in omega by defs(simp(hx), x86_64_linux.PAGE)
-        have pe := apply(tr.pages_eq_mapped, {m.vm}, {C.vm}, {L}, {P0}, {int_div(x, x86_64_linux.PAGE)}, cpi, po, l0.1)
-        show by defs(simp(pe, expand(l0, abi.stack_page, x86_64_linux.mapped), keep(x86_64_linux.PAGE)), abi.stack_page, x86_64_linux.mapped)
-      qed
+      have ft fm _ _ := expand(cfl, x86.vm_fields)
+      have stt := apply(tr.statics_same, {m.vm}, {C.vm}, {st}, ft, fm, expand(hl, abi.loaded).2)
       show by defs(taut(cc, stt), abi.loaded)
     qed
     show by defs(g, tr.keeps_code)
