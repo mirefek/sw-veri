@@ -1,0 +1,373 @@
+// A system call in the translation (docs/overview.md, C1): the machine's
+// `syscall` against readable GIMPLE's sys_call1 / sys_call3 / sys_call6.
+// Linux changes the pages p .. p+n-1 (and their bytes, the break) of the
+// machine's memory, off the stack's space, none of them executable; the
+// world's memory changes the same way there (the world's call allows it:
+// proofs/gimple_sys.core), and the coupling holds after it -- its stack,
+// its code, its frames untouched (tr.chg_*).
+//
+//   checked after proofs/linux_sys.core
+
+// ----------------------------------------------------------------------
+//  The change: the machine's memory m0 to V, the world's w0 to WV
+
+def tr.vm_chg(m0, V, w0, WV, p, n) :=
+  V.stack_top = m0.stack_top && V.stack_limit = m0.stack_limit && V.brk_start = m0.brk_start &&
+  WV.stack_top = w0.stack_top && WV.stack_limit = w0.stack_limit && WV.brk_start = w0.brk_start && V.brk = WV.brk &&
+  p in omega && n in omega && x86_64_linux.off_stack_space(m0, p, n) &&
+  (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> x86_64_linux.mapped(m0, q) -> !snd(m0.pages[q]).prot.x) &&
+  (all q. q in omega -> !(int_le(p, q) && int_lt(q, int_add(p, n))) -> V.pages[q] = m0.pages[q]) &&
+  (all q. q in omega -> int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> !(int_le(p, q) && int_lt(q, int_add(p, n))) -> WV.pages[q] = w0.pages[q]) &&
+  (all q. q in omega -> int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> WV.pages[q] = V.pages[q]) &&
+  (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> V.pages[q] = none || !(snd(V.pages[q]).kind = 2)) &&
+  (all a. a in bits(64) -> !(int_le(p, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(p, n))) ->
+    V.bytes[a] = m0.bytes[a] && WV.bytes[a] = w0.bytes[a]) &&
+  (all a. a in bits(64) -> int_le(p, x86_64_linux.page_of(a)) -> int_lt(x86_64_linux.page_of(a), int_add(p, n)) -> WV.bytes[a] = V.bytes[a])
+
+// (a page within the stack's space: not in a range off it)
+theorem tr.chg_space(vm, p, n, q): x86_64_linux.off_stack_space(vm, p, n) -> p in omega -> n in omega -> q in omega ->
+  int_le(x86_64_linux.stack_floor(vm), int_mul(q, x86_64_linux.PAGE)) -> int_le(int_mul(int_add(q, 1), x86_64_linux.PAGE), vm.stack_top) ->
+  !(int_le(p, q) && int_lt(q, int_add(p, n)))
+proof
+  assume ho hp hn hq l1 l2
+  have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+  have gp: x86_64_linux.STACK_GUARD_GAP = 1048576 by rsimp(x86_64_linux.STACK_GUARD_GAP, x86_64_linux.PAGE)
+  have o := expand(ho, x86_64_linux.off_stack_space)
+  have k1: int_le(int_add(int_mul(int_add(p, n), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(vm)) ->
+      !(int_le(p, q) && int_lt(q, int_add(p, n))) proof
+    assume h
+    show by arith(h, l1, pg4, gp, hp, hn, hq)
+  qed
+  have k2: int_le(vm.stack_top, int_mul(p, x86_64_linux.PAGE)) -> !(int_le(p, q) && int_lt(q, int_add(p, n))) proof
+    assume h
+    show by arith(h, l2, pg4, hp, hn, hq)
+  qed
+  show by taut(o, k1, k2)
+qed
+
+// (a stack page: not in the range, off the stack's space -- the stack's
+// pages are within it)
+theorem tr.chg_stack(vm, p, n, q): abi.stack_reserve(vm) -> x86_64_linux.off_stack_space(vm, p, n) -> p in omega -> n in omega -> q in omega ->
+  abi.stack_page(vm, q) -> !(int_le(p, q) && int_lt(q, int_add(p, n)))
+proof
+  assume hr ho hp hn hq hs
+  have _ _ rc _ := expand(hr, abi.stack_reserve)
+  have l1 l2 _ _ := mp(all_elim(rc, {q}), hq, hs)
+  show := apply(tr.chg_space, ho, hp, hn, hq, l1, l2)
+qed
+
+// (a range's page of V: no stack page)
+theorem tr.chg_nostk(m0, V, w0, WV, p, n, q): tr.vm_chg(m0, V, w0, WV, p, n) -> q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> !abi.stack_page(V, q)
+proof
+  assume hc hq h1 h2
+  have _ _ _ _ _ _ _ _ _ _ _ _ _ _ vns _ _ := expand(hc, tr.vm_chg)
+  have k := mp(all_elim(vns, {q}), hq, h1, h2)
+  show by defs(taut(k), abi.stack_page, x86_64_linux.mapped)
+qed
+
+// (a stack page of V: m0's, out of the range)
+theorem tr.chg_stk_back(m0, V, w0, WV, p, n, q): tr.vm_chg(m0, V, w0, WV, p, n) -> q in omega -> abi.stack_page(V, q) ->
+  !(int_le(p, q) && int_lt(q, int_add(p, n))) && V.pages[q] = m0.pages[q] && abi.stack_page(m0, q)
+proof
+  assume hc hq hs
+  have _ _ _ _ _ _ _ _ _ _ _ vp _ _ _ _ _ := expand(hc, tr.vm_chg)
+  have nr: !(int_le(p, q) && int_lt(q, int_add(p, n))) proof
+    assume h
+    have h1 h2 := h
+    show by taut(hs, apply(tr.chg_nostk, hc, hq, h1, h2))
+  qed
+  have e := mp(all_elim(vp, {q}), hq, nr)
+  have sm: abi.stack_page(m0, q) by defs(rewrite(e, expand(hs, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+  show by taut(nr, e, sm)
+qed
+
+// the stack's reserve kept: its pages m0's, the new ones off its space
+theorem tr.rsv_chg(m0, V, w0, WV, p, n): abi.stack_reserve(m0) -> m0.stack_top in omega -> tr.vm_chg(m0, V, w0, WV, p, n) -> abi.stack_reserve(V)
+proof
+  assume hr htop hc
+  have vt vl _ _ _ _ _ po no os _ vp _ _ vns _ _ := expand(hc, tr.vm_chg)
+  have ra rb rc rd := expand(hr, abi.stack_reserve)
+  have fl: x86_64_linux.stack_floor(V) = x86_64_linux.stack_floor(m0) by rsimp(x86_64_linux.stack_floor, vt, vl)
+  have a2: int_le(x86_64_linux.STACK_GUARD_GAP, x86_64_linux.stack_floor(V)) := rewrite(sym(fl), ra)
+  have b2: int_mod(V.stack_top, x86_64_linux.PAGE) = 0 := rewrite(sym(vt), rb)
+  // a stack page of V: m0's, its run to the top m0's
+  have c2: all x0. x0 in omega -> abi.stack_page(V, x0) ->
+      ((int_le(x86_64_linux.stack_floor(V), int_mul(x0, x86_64_linux.PAGE)) && int_le(int_mul(int_add(x0, 1), x86_64_linux.PAGE), V.stack_top)) &&
+        (all x1. x1 in omega -> int_le(x0, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), V.stack_top) -> V.pages[x1] = V.pages[x0])) &&
+      !(V.pages[int_div(V.stack_top, x86_64_linux.PAGE)] = V.pages[x0]) proof
+    fix x0
+    assume hx hs
+    have nr e0 sm := apply(tr.chg_stk_back, hc, hx, hs)
+    have cl1 cl2 crun ctop := mp(all_elim(rc, {x0}), hx, sm)
+    have bnds: int_le(x86_64_linux.stack_floor(V), int_mul(x0, x86_64_linux.PAGE)) && int_le(int_mul(int_add(x0, 1), x86_64_linux.PAGE), V.stack_top)
+      by taut(rewrite(sym(fl), cl1), rewrite(sym(vt), cl2))
+    have run: all x1. x1 in omega -> int_le(x0, x1) && int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), V.stack_top) -> V.pages[x1] = V.pages[x0] proof
+      fix x1
+      assume h1 h2
+      have em := mp(all_elim(crun, {x1}), h1, rewrite(vt, h2))
+      have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+      have f1: int_le(x86_64_linux.stack_floor(m0), int_mul(x1, x86_64_linux.PAGE)) by arith(cl1, h2, pg4, hx, h1)
+      have n1 := apply(tr.chg_space, os, po, no, h1, f1, rewrite(vt, (int_le(int_mul(int_add(x1, 1), x86_64_linux.PAGE), V.stack_top) by taut(h2))))
+      have e1 := mp(all_elim(vp, {x1}), h1, n1)
+      show := trans(e1, trans(em, sym(e0)))
+    qed
+    // (the page at the top: not the stack's -- in the range none of V's
+    // stack pages, else m0's)
+    let T := int_div(V.stack_top, x86_64_linux.PAGE)
+    have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+    have to: T in omega by arith(rewrite(sym(vt), htop), pg4)
+    have sx: !(m0.pages[x0] = none) && snd(m0.pages[x0]).kind = 2 by taut(expand(sm, abi.stack_page, x86_64_linux.mapped))
+    have tp: !(V.pages[T] = V.pages[x0]) proof
+      assume e
+      have c1: (int_le(p, T) && int_lt(T, int_add(p, n))) -> false proof
+        assume h
+        have h1 h2 := h
+        have k := mp(all_elim(vns, {T}), to, h1, h2)
+        show by taut(rewrite(e0, rewrite(e, k)), sx)
+      qed
+      have c2: !(int_le(p, T) && int_lt(T, int_add(p, n))) -> false proof
+        assume h
+        have eT := mp(all_elim(vp, {T}), to, h)
+        have tq := ctop
+        have ee: m0.pages[int_div(m0.stack_top, x86_64_linux.PAGE)] = m0.pages[x0] := trans(sym(rewrite(vt, eT)), trans(rewrite(vt, e), e0))
+        show by taut(tq, ee)
+      qed
+      show by taut(c1, c2)
+    qed
+    show by taut(bnds, run, tp)
+  qed
+  // a mapped page of V not the stack's: off its space -- in the range by
+  // the range's place, else as m0's
+  have d2: all x0. x0 in omega -> x86_64_linux.mapped(V, x0) && !abi.stack_page(V, x0) ->
+      int_le(int_add(int_mul(int_add(x0, 1), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V)) || int_le(V.stack_top, int_mul(x0, x86_64_linux.PAGE)) proof
+    fix x0
+    assume hx hm
+    have c1: (int_le(p, x0) && int_lt(x0, int_add(p, n))) -> int_le(int_add(int_mul(int_add(x0, 1), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V)) ||
+        int_le(V.stack_top, int_mul(x0, x86_64_linux.PAGE)) proof
+      assume h
+      have h1 h2 := h
+      have o := rewrite(sym(vt), rewrite(sym(fl), expand(os, x86_64_linux.off_stack_space)))
+      have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+      have k1: int_le(int_add(int_mul(int_add(p, n), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V)) ->
+          int_le(int_add(int_mul(int_add(x0, 1), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V)) proof
+        assume k
+        show by arith(k, h2, pg4, hx, po, no)
+      qed
+      have k2: int_le(V.stack_top, int_mul(p, x86_64_linux.PAGE)) -> int_le(V.stack_top, int_mul(x0, x86_64_linux.PAGE)) proof
+        assume k
+        show by arith(k, h1, pg4, hx, po)
+      qed
+      show by taut(o, k1, k2)
+    qed
+    have c2: !(int_le(p, x0) && int_lt(x0, int_add(p, n))) -> int_le(int_add(int_mul(int_add(x0, 1), x86_64_linux.PAGE), x86_64_linux.STACK_GUARD_GAP), x86_64_linux.stack_floor(V)) ||
+        int_le(V.stack_top, int_mul(x0, x86_64_linux.PAGE)) proof
+      assume h
+      have e := mp(all_elim(vp, {x0}), hx, h)
+      have mm: x86_64_linux.mapped(m0, x0) && !abi.stack_page(m0, x0) by defs(rewrite(e, expand(hm, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+      have k := mp(all_elim(rd, {x0}), hx, mm)
+      show := rewrite(sym(vt), rewrite(sym(fl), k))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(taut(a2, b2, c2, d2), abi.stack_reserve)
+qed
+
+// (by a page's entry alone: a byte in the domain, accessible; a stack page)
+theorem tr.dom_pt(v1, v2, ob, a): (int_lt(int_div(a, x86_64_linux.PAGE), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) ->
+    v2.pages[int_div(a, x86_64_linux.PAGE)] = v1.pages[int_div(a, x86_64_linux.PAGE)]) ->
+  abi.in_domain(v1, ob, a) -> abi.in_domain(v2, ob, a)
+proof
+  assume he hd
+  have d := expand(hd, abi.in_domain)
+  have c1: a in ob -> abi.in_domain(v2, ob, a) proof
+    assume h
+    show by defs(taut(h), abi.in_domain)
+  qed
+  have c2: x86_64_linux.mapped(v1, int_div(a, x86_64_linux.PAGE)) && !(snd(v1.pages[int_div(a, x86_64_linux.PAGE)]).kind = 2) -> abi.in_domain(v2, ob, a) proof
+    assume h
+    have hm hk := h
+    have lt _ := expand(hm, x86_64_linux.mapped)
+    have e := mp(he, lt)
+    show by defs(taut(rewrite(sym(e), expand(h, x86_64_linux.mapped))), abi.in_domain, x86_64_linux.mapped)
+  qed
+  show by taut(d, c1, c2)
+qed
+
+theorem tr.acc_pt(v1, v2, a, k): v2.pages[x86_64_linux.page_of(a)] = v1.pages[x86_64_linux.page_of(a)] ->
+  x86_64_linux.can_access(v1, a, k) -> x86_64_linux.can_access(v2, a, k)
+proof
+  assume e h
+  show by defs(rewrite(sym(e), expand(h, x86_64_linux.can_access, x86_64_linux.mapped)), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+theorem tr.sp_pt(v1, v2, q): v2.pages[q] = v1.pages[q] -> abi.stack_page(v1, q) -> abi.stack_page(v2, q)
+proof
+  assume e h
+  show by defs(rewrite(sym(e), expand(h, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+qed
+
+// the coupling after the change: the world's domain, the callers' frames,
+// the pages, the stack's -- off the range, the machine's and the world's
+// as before; in it, the same
+theorem tr.mem_chg(s, m, w, v, V, WV, p, n, m2, w2): tr.mem(s, m, w, v) -> abi.stack_reserve(s.vm) -> m.vm.stack_top in omega ->
+  tr.vm_chg(m.vm, V, w.vm, WV, p, n) -> m2.vm = V -> w2.vm = WV -> w2.objs = w.objs -> tr.mem(s, m2, w2, v)
+proof
+  assume h hsr htop hc em ew eo
+  have {wob, wm, oacc} := h
+  have {top, limit, brk0, brk, bytes, frames, pages, nostk, stk, rsv} := wm
+  have vt vl vbs wt wl wbs vbk po no os nx vp wp wvp vns vby wby := expand(hc, tr.vm_chg)
+  have rm := mp(rsv, hsr)
+  have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  let IN(q) := int_le(p, q) && int_lt(q, int_add(p, n))
+  // (a page off the range: the world's as before)
+  have wq: all q. q in omega -> !IN(q) -> (int_lt(q, TSP) -> WV.pages[q] = w.vm.pages[q]) proof
+    fix q
+    assume hq hn hl
+    show := mp(all_elim(wp, {q}), hq, hl, hn)
+  qed
+  have pe: all a. x86_64_linux.page_of(a) = int_div(a, x86_64_linux.PAGE) proof
+    fix a
+    show by rsimp(x86_64_linux.page_of)
+  qed
+  // bytes: in the world's domain, the world's
+  have by2: all a. a in bits(64) -> abi.in_domain(WV, v, a) -> V.bytes[a] = WV.bytes[a] proof
+    fix a
+    assume ha hd
+    let P := int_div(a, x86_64_linux.PAGE)
+    have pa: P in omega by arith(ha, pg4)
+    have pe1 := all_elim(pe, {a})
+    have c1: IN(P) -> V.bytes[a] = WV.bytes[a] proof
+      assume hi
+      have h1 h2 := hi
+      show := sym(mp(all_elim(wby, {a}), ha, rewrite(sym(pe1), h1), rewrite(sym(pe1), h2)))
+    qed
+    have c2: !IN(P) -> V.bytes[a] = WV.bytes[a] proof
+      assume hn
+      have eb1 eb2 := mp(all_elim(vby, {a}), ha, rewrite(sym(pe1), hn))
+      have wb: int_lt(P, TSP) -> w.vm.pages[P] = WV.pages[P] proof
+        assume l
+        show := sym(mp(all_elim(wq, {P}), pa, hn, l))
+      qed
+      have dw := apply(tr.dom_pt, wb, hd)
+      have mb := mp(all_elim(bytes, {a}), ha, dw)
+      show := trans(eb1, trans(mb, sym(eb2)))
+    qed
+    show by taut(c1, c2)
+  qed
+  // (a stack page of the entry at or above sp - 8: m's, off the range)
+  have sk: all q. q in omega -> abi.stack_page(s.vm, q) -> int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), q) ->
+      m.vm.pages[q] = s.vm.pages[q] && !IN(q) && V.pages[q] = s.vm.pages[q] proof
+    fix q
+    assume hq hs hl
+    have e0 := mp(all_elim(stk, {q}), hq, (abi.stack_page(s.vm, q) && int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), q) by taut(hs, hl)))
+    have sm := apply(tr.sp_pt, e0, hs)
+    have nr := apply(tr.chg_stack, rm, os, po, no, hq, sm)
+    have ev := mp(all_elim(vp, {q}), hq, nr)
+    show by taut(e0, nr, trans(ev, e0))
+  qed
+  // the callers' frames: the entry's bytes
+  have fr2: all a. a in bits(64) -> (int_le(abi.sp(s), a) && !abi.in_domain(WV, v, a)) && abi.stack_page(s.vm, x86_64_linux.page_of(a)) ->
+      V.bytes[a] = s.vm.bytes[a] proof
+    fix a
+    assume ha hf
+    have hle hnd hsp := hf
+    let P := int_div(a, x86_64_linux.PAGE)
+    have pe1 := all_elim(pe, {a})
+    have pa: P in omega by arith(ha, pg4)
+    have sp0 := rewrite(pe1, hsp)
+    have so: abi.sp(s) in omega by simp(hle, ha)
+    have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, ha, pg4, so)
+    have _ nr _ := mp(all_elim(sk, {P}), pa, sp0, lq)
+    have eb1 _ := mp(all_elim(vby, {a}), ha, rewrite(sym(pe1), nr))
+    have wb: int_lt(P, TSP) -> WV.pages[P] = w.vm.pages[P] proof
+      assume l
+      show := mp(all_elim(wq, {P}), pa, nr, l)
+    qed
+    have ndw: !abi.in_domain(w.vm, v, a) proof
+      assume d
+      show by taut(hnd, apply(tr.dom_pt, wb, d))
+    qed
+    have mf := mp(all_elim(frames, {a}), ha, (((int_le(abi.sp(s), a) && !abi.in_domain(w.vm, v, a)) && abi.stack_page(s.vm, x86_64_linux.page_of(a))) by taut(hle, ndw, hsp)))
+    show := trans(eb1, mf)
+  qed
+  // the pages: in the range the same, else as before
+  have pg2: all x0. x0 in set_select(omega, x1. int_lt(x1, TSP)) -> V.pages[x0] = WV.pages[x0] || (WV.pages[x0] = none && abi.stack_page(V, x0)) proof
+    fix x0
+    assume hx
+    have xo: x0 in omega by simp(hx)
+    have xl: int_lt(x0, TSP) by simp(hx)
+    have c1: IN(x0) -> V.pages[x0] = WV.pages[x0] proof
+      assume hi
+      have h1 h2 := hi
+      show := sym(mp(all_elim(wvp, {x0}), xo, xl, h1, h2))
+    qed
+    have c2: !IN(x0) -> V.pages[x0] = WV.pages[x0] || (WV.pages[x0] = none && abi.stack_page(V, x0)) proof
+      assume hn
+      have ev := mp(all_elim(vp, {x0}), xo, hn)
+      have ew2 := mp(all_elim(wq, {x0}), xo, hn, xl)
+      have c := mp(all_elim(pages, {x0}), hx)
+      have sv: abi.stack_page(m.vm, x0) -> abi.stack_page(V, x0) proof
+        assume h
+        show := apply(tr.sp_pt, ev, h)
+      qed
+      show by taut(rewrite(sym(ew2), rewrite(sym(ev), c)), sv)
+    qed
+    show by taut(c1, c2)
+  qed
+  have ns2: all x0. x0 in set_select(omega, x1. int_lt(x1, TSP)) -> !(WV.pages[x0] = none) -> !(snd(WV.pages[x0]).kind = 2) proof
+    fix x0
+    assume hx hnn
+    have xo: x0 in omega by simp(hx)
+    have xl: int_lt(x0, TSP) by simp(hx)
+    have c1: IN(x0) -> !(snd(WV.pages[x0]).kind = 2) proof
+      assume hi
+      have h1 h2 := hi
+      have e := mp(all_elim(wvp, {x0}), xo, xl, h1, h2)
+      have k := mp(all_elim(vns, {x0}), xo, h1, h2)
+      show by taut(rewrite(sym(e), k), hnn)
+    qed
+    have c2: !IN(x0) -> !(snd(WV.pages[x0]).kind = 2) proof
+      assume hn
+      have e := mp(all_elim(wq, {x0}), xo, hn, xl)
+      have k := mp(all_elim(nostk, {x0}), hx, rewrite(e, hnn))
+      show := rewrite(sym(e), k)
+    qed
+    show by taut(c1, c2)
+  qed
+  have stk2: all x0. x0 in omega -> abi.stack_page(s.vm, x0) && int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), x0) -> V.pages[x0] = s.vm.pages[x0] proof
+    fix x0
+    assume hx h0
+    have hs hl := h0
+    have _ _ e := mp(all_elim(sk, {x0}), hx, hs, hl)
+    show := e
+  qed
+  have rsv2: abi.stack_reserve(s.vm) -> abi.stack_reserve(V) proof
+    assume _
+    show := apply(tr.rsv_chg, rm, htop, hc)
+  qed
+  // the stack objects: on the entry's stack pages at or above sp, accessible still
+  have oa2: all y. y in omega -> y in v -> (int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) && x86_64_linux.can_access(V, bits_of_int(64, y), 1) proof
+    fix y
+    assume h1 h2
+    have c := mp(all_elim(oacc, {y}), h1, h2)
+    have hle hsp hac := c
+    let P := int_div(y, x86_64_linux.PAGE)
+    have pa: P in omega by arith(h1, pg4)
+    have so: abi.sp(s) in omega by simp(hle, h1)
+    have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, h1, pg4, so)
+    have _ _ ev := mp(all_elim(sk, {P}), pa, hsp, lq)
+    have em _ _ := mp(all_elim(sk, {P}), pa, hsp, lq)
+    // (y below the task's top: its page mapped -- y its address)
+    have ml _ := expand(expand(hsp, abi.stack_page).1, x86_64_linux.mapped)
+    have td: TSP = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+    have yb: bits_of_int(64, y) = y := mp(bits_of_int_small[n := 64, a := y], h1, (int_lt(y, pow2(64)) by arith(ml, td, pg4, h1, (pow2(64) = 18446744073709551616 by rsimp()))))
+    have pq: x86_64_linux.page_of(bits_of_int(64, y)) = P by rsimp(yb, x86_64_linux.page_of)
+    have eVm: V.pages[x86_64_linux.page_of(bits_of_int(64, y))] = m.vm.pages[x86_64_linux.page_of(bits_of_int(64, y))] := rewrite(sym(pq), trans(ev, sym(em)))
+    show by taut(hle, hsp, apply(tr.acc_pt, eVm, hac))
+  qed
+  have wm2: abi.world_matches(s.vm, V, WV, v, abi.sp(s)) by defs(taut(trans(vt, trans(top, sym(wt))), trans(vl, trans(limit, sym(wl))),
+    trans(vbs, trans(brk0, sym(wbs))), vbk, by2, fr2, pg2, ns2, stk2, rsv2), abi.world_matches)
+  have wo2: w2.objs = v := trans(eo, wob)
+  show by defs(taut(wo2, rewrite(sym(em), rewrite(sym(ew), wm2)), rewrite(sym(em), oa2)), tr.mem)
+qed
