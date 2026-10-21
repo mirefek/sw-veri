@@ -425,6 +425,7 @@ proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
   // the pages it gives back, the break's own (it takes new ones only where
   // they are free, off the stack's space)
   require pages_for(uint(a1)) < pages_for(uint(vm.brk)) -> a1 >= vm.brk_start ->
+    pages_for(uint(vm.brk)) <= TASK_SIZE / PAGE &&
     sys_pages_ok(vm, pages_for(uint(a1)), pages_for(uint(vm.brk)) - pages_for(uint(a1))) &&
     (all q: nat. pages_for(uint(a1)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap)
   return os_brk(a1)
