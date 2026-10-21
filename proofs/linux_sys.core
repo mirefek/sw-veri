@@ -326,6 +326,29 @@ proof
   show by taut(rewrite(s2, rewrite(s1, rewrite(f2, rewrite(f1, h)))), n0, n2, n3)
 qed
 
+theorem lx.top_raise(a, b, v, L, o): lx.top(exc(pair(a, b), pair("raise", v)), L, o) -> o = exc(a, v)
+proof
+  assume h
+  have f1: fst(exc(pair(a, b), pair("raise", v))) = 1 by simp()
+  have f2: fst(out_value(exc(pair(a, b), pair("raise", v)))) = "raise" by simp()
+  have s1: fst(out_state(exc(pair(a, b), pair("raise", v)))) = a by simp()
+  have s2: snd(out_value(exc(pair(a, b), pair("raise", v)))) = v by simp()
+  have n0: !(1 = 0) by simp()
+  have n2: !(1 = 2) by simp()
+  have n3: !("raise" = "ret") by simp()
+  show by taut(rewrite(s2, rewrite(s1, rewrite(f2, rewrite(f1, h)))), n0, n2, n3)
+qed
+
+theorem lx.top_div(t, L, o): lx.top(diverge(t), L, o) -> o = diverge(t)
+proof
+  assume h
+  have f2: fst(diverge(t)) = 2 by simp()
+  have s2: snd(diverge(t)) = t by simp()
+  have n0: !(2 = 0) by simp()
+  have n1: !(2 = 1) by simp()
+  show by taut(rewrite(s2, rewrite(f2, h)), n0, n1)
+qed
+
 theorem lx.blk_go(a, b, L, o): lx.blk(ok(pair(a, b), empty), L, o) -> L
 proof
   assume h
@@ -824,6 +847,206 @@ proof
     show by ex_intro({k}, {Q}, taut(h, h8, ko, kl, ke, km, hq, ce, c1, c2))
   qed
   show by taut(mis, al)
+qed
+
+// ----------------------------------------------------------------------
+//  The machine's `syscall` (0F 05): rcx the next instruction's address,
+//  r11 the flags' word, rax Linux's result (spec/x86_64/instructions.sl)
+
+theorem x86i.syscall_run(m, o, len): runs(x86_64_linux.exec_body(len, tag(156, empty)), m, o) ->
+  ex y. runs(x86_64_linux.syscall(), fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), y) &&
+    ((ex s1 v. y = ok(s1, v) && o = ok(s1, empty)) || (ex s1 e. y = exc(s1, e) && o = exc(s1, e)) || (ex t. y = diverge(t) && o = diverge(t)))
+proof
+  assume h
+  let M0 := fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len)))
+  have b := expand(apply(g.runs_elim, expand(h, x86_64_linux.exec_body)), letin)
+  obtain y, hy hc from expand(b, bind_rel)
+  have e: runs(x86_64_linux.x86.body156(empty), M0, y) by simp(apply(g.runs_elim, expand(hy, x86_64_linux.x86.execute)), keep(x86_64_linux.x86.body156))
+  obtain y2, hs hb2 from expand(apply(g.runs_elim, expand(e, x86_64_linux.x86.body156)), bind_rel)
+  have c1: (ex s1 v. y2 = ok(s1, v) && y = ok(s1, empty)) -> (ex s1 v. y2 = ok(s1, v) && o = ok(s1, empty)) proof
+    assume h1
+    obtain s1 v, e1 e2 from h1
+    have o1: o = ok(s1, empty) by simp(rewrite(e2, hc))
+    show by ex_intro({s1}, {v}, taut(e1, o1))
+  qed
+  have c2: (ex s1 x. y2 = exc(s1, x) && y = exc(s1, x)) -> (ex s1 x. y2 = exc(s1, x) && o = exc(s1, x)) proof
+    assume h1
+    obtain s1 x, e1 e2 from h1
+    have o1: o = exc(s1, x) by simp(rewrite(e2, hc))
+    show by ex_intro({s1}, {x}, taut(e1, o1))
+  qed
+  have c3: (ex t. y2 = diverge(t) && y = diverge(t)) -> (ex t. y2 = diverge(t) && o = diverge(t)) proof
+    assume h1
+    obtain t, e1 e2 from h1
+    have o1: o = diverge(t) by simp(rewrite(e2, hc))
+    show by ex_intro({t}, taut(e1, o1))
+  qed
+  show by ex_intro({y2}, taut(hs, hb2, c1, c2, c3))
+qed
+
+// (a match's head: its cases, or anything -- the cases)
+theorem lx.or_true(a, b): !(a || true) || b -> b
+proof
+  assume h
+  show by taut(h)
+qed
+
+// syscall with rax 12: brk(rdi) on the machine with rcx and r11 set, rax
+// its result
+theorem x86i.syscall_brk(m, y): m.gpr[0] = 12 -> runs(x86_64_linux.syscall(), m, y) ->
+  ex z. runs(x86_64_linux.sys_brk(m.gpr[7]), fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags))), z) &&
+    ((ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) || (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) ||
+     (ex t. z = diverge(t) && y = diverge(t)))
+proof
+  assume h0 h
+  have b0 := expand(apply(g.runs_elim, expand(h, x86_64_linux.syscall)), letin)
+  let X1 := fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags)))
+  have eX: fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)), "gpr", fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).gpr, 11,
+    x86_64_linux.rflags_word(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).flags))) = X1 by simp(fn_update_twice, app_update_same, app_update_other)
+  have e0: X1.gpr[0] = 12 by simp(h0, app_update_same, app_update_other)
+  have e7: X1.gpr[7] = m.gpr[7] by simp(app_update_same, app_update_other)
+  obtain z1, hz hp1 from expand(rewrite(e7, rewrite(e0, rewrite(eX, b0))), bind_rel)
+  obtain x2, hd hp2 from apply(lx.or_true, apply(g.runs_elim, expand(hz, x86_64_linux.linux_syscall)))
+  have hb: bind_rel(x86_64_linux.sys_brk(m.gpr[7]), X1, x3 x4. x2 = exc(pair(x3, empty), pair("ret", x4)), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)),
+    x3. x2 = diverge(x3)) by simp(hd, keep(x86_64_linux.sys_brk, bind_rel))
+  obtain z, hr hc from expand(hb, bind_rel)
+  have c1: (ex s1 v. z = ok(s1, v) && x2 = exc(pair(s1, empty), pair("ret", v))) ->
+      (ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) proof
+    assume h1
+    obtain s1 v, e1 e2 from h1
+    have ez := apply(lx.top_ret, rewrite(e2, hp2))
+    have o1: y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, v)), empty) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {v}, taut(e1, o1))
+  qed
+  have c2: (ex s1 e. z = exc(s1, e) && x2 = exc(pair(s1, empty), pair("raise", e))) -> (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) proof
+    assume h1
+    obtain s1 x, e1 e2 from h1
+    have ez := apply(lx.top_raise, rewrite(e2, hp2))
+    have o1: y = exc(s1, x) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {x}, taut(e1, o1))
+  qed
+  have c3: (ex t. z = diverge(t) && x2 = diverge(t)) -> (ex t. z = diverge(t) && y = diverge(t)) proof
+    assume h1
+    obtain t, e1 e2 from h1
+    have ez := apply(lx.top_div, rewrite(e2, hp2))
+    have o1: y = diverge(t) by simp(rewrite(ez, hp1))
+    show by ex_intro({t}, taut(e1, o1))
+  qed
+  show by ex_intro({z}, taut(hr, hc, c1, c2, c3))
+qed
+
+// (a machine: a state with a memory, its break a number; a field but the
+// memory replaced: still one)
+theorem lx.rec_machine(m): m in x86_64_linux.Machine -> lx.rec(m) && m.vm.brk in omega
+proof
+  assume hM
+  have pt := apply(x86i.parts, hM)
+  have mf: is_fun(m) && "vm" in dom(m) by simp(expand(hM, x86_64_linux.Machine))
+  have vf: is_fun(m.vm) && "pages" in dom(m.vm) && "bytes" in dom(m.vm) && m.vm.brk in omega by simp(expand(pt.4, x86_64_linux.Vm))
+  show by taut(mf, vf)
+qed
+
+theorem lx.rec_set(x, k, v): lx.rec(x) -> !(k = "vm") -> lx.rec(fn_update(x, k, v))
+proof
+  assume hx hk
+  have xf xd vf vp vb := hx
+  have f1 := mp(fn_update_fun[f := x, k := k, v := v], xf)
+  have d1 := mp(dom_update[f := x, k := k, v := v], xf)
+  have e: fn_update(x, k, v).vm = x.vm := mp(app_update_other[f := x, k := k, v := v, x := "vm"], (!("vm" = k) by taut(hk)))
+  show by simp(f1, d1, e, xd, vf, vp, vb)
+qed
+
+// brk(new)'s outcome on the memory vm: V the memory after, r the result
+// (lx.sys_brk_ok's cases)
+def lx.brk_same(vm, new, V, r) := V = vm && r = vm.brk && (int_lt(new, vm.brk_start) || int_lt(x86_64_linux.pages_for(vm.brk), x86_64_linux.pages_for(new)))
+def lx.brk_grow(vm, new, V, r) := ex Q B. !int_lt(new, vm.brk_start) && int_lt(x86_64_linux.pages_for(vm.brk), x86_64_linux.pages_for(new)) &&
+    x86_64_linux.free_range(vm, x86_64_linux.pages_for(vm.brk), int_sub(x86_64_linux.pages_for(new), x86_64_linux.pages_for(vm.brk))) &&
+    x86_64_linux.off_stack_space(vm, x86_64_linux.pages_for(vm.brk), int_sub(x86_64_linux.pages_for(new), x86_64_linux.pages_for(vm.brk))) &&
+    V = fn_update(fn_update(fn_update(vm, "pages", Q), "bytes", B), "brk", new) && r = new &&
+    (all k. k in omega -> Q[k] = ite(int_le(x86_64_linux.pages_for(vm.brk), k) && int_lt(k, x86_64_linux.pages_for(new)),
+      some(fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1)), vm.pages[k])) &&
+    (all k. k in omega -> int_lt(k, pow2(64)) -> B[k] = ite(int_le(int_mul(x86_64_linux.pages_for(vm.brk), x86_64_linux.PAGE), k) &&
+      int_lt(k, int_mul(x86_64_linux.pages_for(new), x86_64_linux.PAGE)), 0, vm.bytes[k]))
+def lx.brk_shrink(vm, new, V, r) := ex Q. !int_lt(new, vm.brk_start) && !int_lt(x86_64_linux.pages_for(vm.brk), x86_64_linux.pages_for(new)) &&
+    V = fn_update(fn_update(vm, "pages", Q), "brk", new) && r = new &&
+    (all k. k in omega -> Q[k] = ite(int_le(x86_64_linux.pages_for(new), k) && int_lt(k, x86_64_linux.pages_for(vm.brk)), none, vm.pages[k]))
+def lx.brk_post(vm, new, V, r) := lx.brk_same(vm, new, V, r) || lx.brk_grow(vm, new, V, r) || lx.brk_shrink(vm, new, V, r)
+
+// the syscall instruction with rax 12: the machine with rip on, rcx and
+// r11 set, its memory brk's, rax the result
+theorem x86i.brk_insn(m, o, len): m in x86_64_linux.Machine -> m.gpr[0] = 12 -> runs(x86_64_linux.exec_body(len, tag(156, empty)), m, o) ->
+  ex V r. lx.brk_post(m.vm, m.gpr[7], V, r) &&
+    o = ok(fn_update(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), "gpr",
+      fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags))), "vm", V), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags)), 0, r)), empty)
+proof
+  assume hM h0 h
+  let A := bits_add(64, m.rip, bits_of_int(64, len))
+  let M0 := fn_update(m, "rip", A)
+  let G := fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))
+  let X1 := fn_update(M0, "gpr", G)
+  obtain y, hy hc from apply(x86i.syscall_run, h)
+  have g0: M0.gpr[0] = 12 by simp(h0, app_update_other)
+  obtain z, hz hzc from apply(x86i.syscall_brk, g0, hy)
+  have ex1: fn_update(M0, "gpr", fn_update(fn_update(M0.gpr, 1, M0.rip), 11, x86_64_linux.rflags_word(M0.flags))) = X1 by simp(app_update_same, app_update_other)
+  have e7: M0.gpr[7] = m.gpr[7] by simp(app_update_other)
+  have hz2 := rewrite(e7, rewrite(ex1, hz))
+  have rb := apply(lx.rec_machine, hM)
+  have r0: lx.rec(m) by taut(rb)
+  have b0: m.vm.brk in omega by taut(rb)
+  have r10 := mp(lx.rec_set[x := m, k := "rip", v := A], r0, (!("rip" = "vm") by simp()))
+  have r1 := mp(lx.rec_set[x := M0, k := "gpr", v := G], r10, (!("gpr" = "vm") by simp()))
+  have xv: X1.vm = m.vm by simp(app_update_other)
+  have n7: m.gpr[7] in omega by simp(mp(x86i.reg_typed, {m}, {7}, hM, simp()))
+  have bo: X1.vm.brk in omega by simp(xv, b0)
+  have cf := rewrite(xv, mp(lx.sys_brk_ok[x := X1, new := m.gpr[7], o := z], r1, n7, bo, hz2))
+  let N := m.gpr[7]
+  let PO := x86_64_linux.pages_for(m.vm.brk)
+  let PN := x86_64_linux.pages_for(N)
+  let GOAL := ex V r. lx.brk_post(m.vm, N, V, r) && o = ok(fn_update(fn_update(X1, "vm", V), "gpr", fn_update(G, 0, r)), empty)
+  // (the call's outcome z = ok(S, r): rax r)
+  have fin: all V r. z = ok(fn_update(X1, "vm", V), r) -> o = ok(fn_update(fn_update(X1, "vm", V), "gpr", fn_update(G, 0, r)), empty) proof
+    fix V r
+    assume ez
+    have yy: y = ok(fn_update(fn_update(X1, "vm", V), "gpr", fn_update(fn_update(X1, "vm", V).gpr, 0, r)), empty) by simp(rewrite(ez, hzc))
+    have eg: fn_update(X1, "vm", V).gpr = G by simp(app_update_other, app_update_same)
+    show by simp(rewrite(eg, rewrite(yy, hc)))
+  qed
+  have xf xd _ _ _ := r1
+  have xs := rewrite(xv, mp(mp(fn_update_same[f := X1, k := "vm"], xf), xd))
+  have k0: z = ok(X1, m.vm.brk) && (int_lt(N, m.vm.brk_start) || int_lt(PO, PN)) -> GOAL proof
+    assume h1
+    have ez c := h1
+    have ez2 := rewrite(sym(xs), ez, {1})
+    have bp: lx.brk_same(m.vm, N, m.vm, m.vm.brk) by defs(taut(c, refl({m.vm}), refl({m.vm.brk})), lx.brk_same)
+    have bq: lx.brk_post(m.vm, N, m.vm, m.vm.brk) by defs(taut(bp), lx.brk_post)
+    show by ex_intro({m.vm}, {m.vm.brk}, taut(bq, mp(all_elim(fin, {m.vm}, {m.vm.brk}), ez2)))
+  qed
+  let HP := fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1)
+  have k1: (ex Q B. !int_lt(N, m.vm.brk_start) && int_lt(PO, PN) &&
+      x86_64_linux.free_range(m.vm, PO, int_sub(PN, PO)) && x86_64_linux.off_stack_space(m.vm, PO, int_sub(PN, PO)) &&
+      z = ok(fn_update(X1, "vm", fn_update(fn_update(fn_update(m.vm, "pages", Q), "bytes", B), "brk", N)), N) &&
+      (all k. k in omega -> Q[k] = ite(int_le(PO, k) && int_lt(k, PN), some(HP), m.vm.pages[k])) &&
+      (all k. k in omega -> int_lt(k, pow2(64)) -> B[k] = ite(int_le(int_mul(PO, x86_64_linux.PAGE), k) &&
+        int_lt(k, int_mul(PN, x86_64_linux.PAGE)), 0, m.vm.bytes[k]))) -> GOAL proof
+    assume h1
+    obtain Q B, nl gl fr os ez hq hb from h1
+    let W := fn_update(fn_update(fn_update(m.vm, "pages", Q), "bytes", B), "brk", N)
+    have bp: lx.brk_grow(m.vm, N, W, N) by defs(ex_intro({Q}, {B}, taut(nl, gl, fr, os, refl({W}), refl({N}), hq, hb)), lx.brk_grow)
+    have bq: lx.brk_post(m.vm, N, W, N) by defs(taut(bp), lx.brk_post)
+    show by ex_intro({W}, {N}, taut(bq, mp(all_elim(fin, {W}, {N}), ez)))
+  qed
+  have k2: (ex Q. !int_lt(N, m.vm.brk_start) && !int_lt(PO, PN) &&
+      z = ok(fn_update(X1, "vm", fn_update(fn_update(m.vm, "pages", Q), "brk", N)), N) &&
+      (all k. k in omega -> Q[k] = ite(int_le(PN, k) && int_lt(k, PO), none, m.vm.pages[k]))) -> GOAL proof
+    assume h1
+    obtain Q, nl gl ez hq from h1
+    let W := fn_update(fn_update(m.vm, "pages", Q), "brk", N)
+    have bp: lx.brk_shrink(m.vm, N, W, N) by defs(ex_intro({Q}, taut(nl, gl, refl({W}), refl({N}), hq)), lx.brk_shrink)
+    have bq: lx.brk_post(m.vm, N, W, N) by defs(taut(bp), lx.brk_post)
+    show by ex_intro({W}, {N}, taut(bq, mp(all_elim(fin, {W}, {N}), ez)))
+  qed
+  show by taut(cf, k0, k1, k2)
 qed
 
 // (in a block with locals: a statement's outcome X and the rest L)
