@@ -813,6 +813,112 @@ proof
   show by defs(apply(g.fun_res[n := 1, w := 32], hm), c_src_malloc_mallocng_malloc.size_overflows_fun, mallocng_specs.size_overflows_spec_fun, letin)
 qed
 
+// __syscall_ret's contract from ___errno_location's (as size_overflows'):
+// for every callee refining errno_location's spec, an error code r's
+// number to errno and -1, else r
+theorem ms.syscall_ret_c2: all r g. r in bits(64) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o)) ->
+  refines(c_src_internal_syscall_ret.__syscall_ret(r, g), mallocng_specs.syscall_ret_spec(r), abi.World)
+proof
+  fix r g
+  assume hn hg
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := mallocng_specs.syscall_ret_spec(r)
+    let V0 := s.vm
+    let FS := s.fs_base
+    let E := mallocng_specs.errno_at(FS)
+    let OVF := exc_val("stack_overflow", empty)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have vV vfun vdom .. := apply(ms.world_parts, hw)
+    have ss: fn_update(s, "vm", V0) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+    let ERR := int_lt(18446744073709547520, r)
+    let PRE := ERR -> mallocng_specs.errno_ok(V0, s.objs, FS)
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume hn2
+      show by simp(pu, hn2, keep(abi.overflow, mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume hp
+      // no error: r
+      have ok: !ERR -> runs(SPEC, s, o) proof
+        assume hc
+        step x2 x4 x6 x8, oe from hr with hc
+        show by simp(oe, pu, hp, hc, keep(abi.overflow, mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
+      qed
+      // an error: errno's address by the call, -r stored there, -1
+      have err: ERR -> runs(SPEC, s, o) proof
+        assume hc
+        have fsb ue hth := expand(mp(hp, hc), mallocng_specs.errno_ok)
+        have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
+          fix v
+          assume hv
+          have vu := apply(x86.vm_univ, hv)
+          have eu: OVF in univ(1) by defs(simp(), exc_val)
+          have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
+          have ovi := apply(ct.overflow_intro, hv, pu2)
+          show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
+        qed
+        step x2 x4 x6 x8, c1 ck from hr with hc
+        have qa: all regs o2. gc.regs_ok(regs, empty) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o2) ->
+            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+            (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = E) proof
+          fix regs o2
+          assume hro h2
+          show := apply(ms.el_q, hw, hu, hro, h2)
+        qed
+        have ths: gc.sound(s) by simp(hth)
+        have cc := apply(gc.contract_call1[R := r. fst(r) = E], {g}, {mallocng_specs.errno_location_spec_fun}, {empty}, {s}, {V0},
+          ths, hw, vV, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hg, qa, c1)
+        have cov: case 1 of cc proof
+          assume h
+          obtain v, hv hx from h
+          have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, ck))
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+        qed
+        have cok: case 2 of cc proof
+          assume h
+          obtain r1, hR hk from h
+          have hk2 := rewrite(hR, rewrite(ss, hk))
+          // (errno's cell: fs + 0x34, writable)
+          have fsw: FS in bits(64) by simp(expand(hw, abi.World))
+          have p64: pow2(64) = 18446744073709551616 by simp()
+          have ee: E = int_add(FS, 52) by defs(arith(fsw, fsb, p64), mallocng_specs.errno_at, bits_add, pow2)
+          have eb: E in bits(64) by defs(simp(), mallocng_specs.errno_at)
+          have ue2 := rewrite(ee, ue)
+          have md: g.mem_defined(s, E, 0, 4, true) by simp(ee, ue2, fsw, fsb, p64)
+          step oe from conj(hk2, ck) with ms.st32_det using conj(hu, hw, eb, md)
+          have e0: bits_add(64, E, 0) = E by simp(eb)
+          // (the error's number: -r in 32 bits is 2^64 - r)
+          have ev: bits_sub(32, 0, bits_of_int(32, r)) = int_sub(int_pow(2, 64), r) by defs(arith(hn, hc), bits_sub, bits_of_int, pow2)
+          have oe2: o = ok(fn_update(s, "vm", mallocng_specs.wr32(V0, E, int_sub(int_pow(2, 64), r))), bits_neg(64, 1)) by simp(oe, e0, eb, ev, ms.v_wr32)
+          show by simp(oe2, pu, hp, hc, keep(abi.overflow, mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
+        qed
+        show by taut(cc, cov, cok)
+      qed
+      show by taut(ok, err)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// __syscall_ret as a C function value, for every such callee
+theorem ms.syscall_ret_fun_c2: all g.
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o)) ->
+  all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(c_src_internal_syscall_ret.__syscall_ret_fun(g)[regs], s, o) -> runs(mallocng_specs.syscall_ret_spec_fun()[regs], s, o)
+proof
+  fix g
+  assume hg
+  have hm: all regs. refines(c_src_internal_syscall_ret.__syscall_ret(bits_of_int(64, regs[0]), g), mallocng_specs.syscall_ret_spec(bits_of_int(64, regs[0])), abi.World) proof
+    fix regs
+    show := mp(all_elim(ms.syscall_ret_c2, {bits_of_int(64, regs[0])}, {g}), simp(), hg)
+  qed
+  show by defs(apply(g.fun_res[n := 1, w := 64], hm), c_src_internal_syscall_ret.__syscall_ret_fun, mallocng_specs.syscall_ret_spec_fun, letin)
+qed
+
 // a_cas's contract at a call a_cas(p, t, x): an overflow, or the word at
 // p written (x if it held t), its old value returned
 theorem ms.acas_q: all regs s p t x o2. p in bits(64) -> t in bits(32) -> x in bits(32) -> s in abi.World -> s in univ(1) ->

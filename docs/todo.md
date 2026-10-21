@@ -21,9 +21,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
   to be used once the other leaves are); __get_tp, __errno_location,
   __syscall3, __mprotect, __syscall_ret have their C1
-  (proofs/mallocng/machine/c1_leaves.core). Their C2: __syscall_ret's,
-  then __mprotect's against `mprotect_spec_fun` (restated in the code's
-  shape, as `syscall1_spec`). Then `sys_call6` the same way
+  (proofs/mallocng/machine/c1_leaves.core); __syscall_ret its contract for
+  any ___errno_location meeting errno_location's spec (`srtc.composed`).
+  __errno_location's C2: its spec needs a precondition (`thread_ptr()` is
+  `ld64(fs_base, 0)`, defined only where the C world has those 8 bytes),
+  `errno_location_spec`'s callers then owing it. __mprotect's C2 against
+  `mprotect_spec_fun` (restated in the code's shape, as `syscall1_spec`).
+  Then `sys_call6` the same way
   (the closed form `lx.sys_mmap_ok`; os_mmap relational; a place for a
   mapping without a hint the world's iff the machine's), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured

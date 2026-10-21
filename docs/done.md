@@ -970,3 +970,8 @@ item is a short summary of finished work; details are in the files named.
   (`tr.pt_rs_cs`). The prologue's pushes count in the frame's depth and
   the body's start, the epilogue's pops in the epilogue. `neg r32` of a
   64-bit word (`tr.neg32_w`). C1 of __syscall_ret.
+- **__syscall_ret to its contract** (`srtc.composed`): the spec by purpose
+  (`syscall_ret_spec(r)`, layers/mallocng_specs.sl: an error code's number
+  -r to errno, -1; else r), C2 `ms.syscall_ret_c2` for any
+  ___errno_location meeting errno_location's spec (as size_overflows'),
+  the CFG refining the structured form (`__syscall_ret_ref`).

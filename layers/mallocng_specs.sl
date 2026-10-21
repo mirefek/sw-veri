@@ -215,6 +215,27 @@ fn syscall1_spec_fun() -> CFun2[World] = (args: Args) => {
 pred errno_ok(vm: Vm, objs: Set[nat], fs: Addr) =
   uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
 
+// __syscall_ret(r): a system call's raw result as the C function's -- an
+// error (r one of -4095 .. -1): its number -r to errno, -1 returned; else
+// r itself. Errno's cell writable on an error.
+proc[World] syscall_ret_spec(r: bits[64]) -> bits[64] {
+  require uint(r) > 0xfffffffffffff000 -> errno_ok(vm, objs, fs_base)
+  either { overflow() } or {
+    if uint(r) > 0xfffffffffffff000 {
+      vm := wr32(vm, errno_at(fs_base), 2^64 - uint(r))
+      return bits[64](2^64 - 1)
+    }
+    return r
+  }
+}
+
+fn syscall_ret_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = syscall_ret_spec(bits[64](args[0]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
 // a place for mmap's len bytes, page p: at addr if MAP_FIXED; else one
 // Linux may pick -- free, off the stack's space when there is no hint,
 // never page 0
