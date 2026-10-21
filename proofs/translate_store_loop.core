@@ -1405,17 +1405,20 @@ proof
   show := apply(tr.store_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {bv}, {4}, {u}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, he, hbase, a2b, bb, simp(), simp(), hus, hw2, hred, hpt)
 qed
 
-// the return of a procedure without a result: rax:rdx anything
+// the return of a procedure without a result: rax:rdx anything (the
+// callee-saved registers the entry's, tr.cs_rs)
 theorem tr.ret_void(zb. bkp, zb pb wb. bka): all s v base code a len hs fd rs p w.
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o)) ->
+  tr.cs_rs(s, rs) ->
   (w in univ(1) -> (all y1 y2. y1 in bits(64) -> y2 in bits(64) -> runs(p, w, ok(w, pair(y1, y2))))) ->
   tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, 0, a, hs, fd, rs, p, w)
 proof
   fix s v base code a len hs fd rs p w
-  assume hat hsp
+  assume hat hcs hsp
   have g: all m. tr.inv(s, base, code, 0, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
     fix m
     assume hi hr hhs hrs hmm hfr
+    have mcs := apply(tr.cs_of_rs, hrs, hcs)
     have i := expand(hi, tr.inv)
     have mM: m in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have mu: m in univ(1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
@@ -1427,7 +1430,7 @@ proof
     have kpt: tr.kept(s.vm, m.vm, s.gpr[4]) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.kept))
     have rest: x86_64_linux.le(m.vm.bytes, s.gpr[4], 8) = abi.ret(s) && abi.callee_saved(m, s) && m.cpu = s.cpu && m.gs_base = s.gs_base &&
       m.os = w.os && m.fs_base = w.fs_base && !m.flags.df && w in abi.World && w in univ(1)
-      by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+      by simp(i, mcs, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have r4 := apply(x86i.rsp_typed, sM)
     // (the return address's 8 bytes: readable)
     have ra := apply(abi.ret_access, {s.vm}, {s.gpr[4]}, r4, ca, al)
@@ -1511,15 +1514,16 @@ qed
 // the entry of a function without arguments (no prologue: the claim at f
 // itself, the world s's with the callers' stack objects v), its procedure
 // q, its return kw: the claim for every entry gives abi.matches
-theorem tr.entry0(lb, lc, base, code, statics, f, fd, q, x3 x4 x2. kw): base in omega ->
+theorem tr.entry0(lb, lc, base, code, statics, f, fd, x1. rs, q, x3 x4 x2. kw): base in omega ->
   (all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)) ->
+  (all s. s in x86_64_linux.Machine -> tr.regs(s, rs(s))) ->
   (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) ->
-    tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, empty, mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
+    tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, rs(s), mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
   (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
     abi.entry_ok(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
     tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, v, mem, s, o))
 proof
-  assume hbase hsub hbody
+  assume hbase hsub hregs hbody
   fix args v mem s o
   assume hA hvo hmv hM hsu hl hrip he hob hvw hr
   let W := abi.view(s, v, mem)
@@ -1539,7 +1543,7 @@ proof
   have wbk := apply(abi.entry_brk, he, hvw)
   have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := s.os.events], hvw.1, apply(abi.entry_gap, he), apply(abi.entry_rsv, he), all_elim(tr.keeps_refl, {s.vm}), all_elim(tr.kept_refl, {s.vm}, {s.gpr[4]}), z0, hM, su, hc, hdf, wt, hvu, ent, wbk, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
   have hh: tr.homes(s, s, empty) by defs(simp(dom_empty), tr.homes)
-  have rr: tr.regs(s, empty) by defs(simp(dom_empty), tr.regs)
+  have rr := mp(all_elim(hregs, {s}), hM)
   have mm := apply(tr.mem_entry, hob, hvw)
   have fe := all_elim(tr.frame_entry, {s}, {fd})
   have lt0 := apply(tr.sp_lt, {s.gpr[4]}, r4, ent.4)
@@ -1566,6 +1570,21 @@ proof
     fix m
     assume hi hr hh hrs hmm hfr
     have re: tr.regs(m, empty) by defs(simp(dom_empty), tr.regs)
+    show := mp(all_elim(expand(h, tr.pt), {m}), hi, hr, hh, re, hmm, hfr)
+  qed
+  show by defs(g, tr.lv)
+qed
+
+// (... all but rs's part rc, the callee-saved registers')
+theorem tr.pt_rs_cs(zb. bkp, zb pb wb. bka): all s v base code fr a hs ds rc rs p w. tr.cs_sub(rc, rs) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rc, p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a hs ds rc rs p w
+  assume hsub h
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have re := apply(tr.regs_cs_keep, {m}, {m}, {rs}, {rc}, hrs, hsub, (all r. tr.cs_reg(r) -> m.gpr[r] = m.gpr[r] by simp()))
     show := mp(all_elim(expand(h, tr.pt), {m}), hi, hr, hh, re, hmm, hfr)
   qed
   show by defs(g, tr.lv)

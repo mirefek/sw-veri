@@ -51,6 +51,9 @@ pub(super) struct Cfg {
     fixed: BTreeMap<u128, (u128, Term)>,
     fr: u128,
     fd: Term,
+    /// the registers at every label: the callee-saved ones at their entry
+    /// values, not saved in a home (Gen::cs_fixed)
+    rc: Vec<(u128, u128, Term)>,
     /// the facts every block has (the body's start's, on fixed values)
     hyps: Vec<(Term, Seq)>,
     facts: Vec<Seq>,
@@ -63,8 +66,9 @@ pub(super) struct Cfg {
 }
 
 impl<'e> Gen<'e> {
-    /// the body's first instruction: after the prologue (`sub rsp, k`, the
-    /// argument registers stored to their homes)
+    /// the body's first instruction: after the prologue (the callee-saved
+    /// registers pushed, `sub rsp, k`, the argument registers stored to
+    /// their homes)
     pub(super) fn cfg_body_start(&self, entry: u128) -> u128 {
         let mut a = entry;
         while let Some(i) = self.insns.get(&a) {
@@ -72,7 +76,8 @@ impl<'e> Gen<'e> {
             let rsp_reg = |t: &Term| self.tag(t).is_some_and(|(k, r)| k == 0 && nat(&r) == Some(4));
             let sub_rsp = matches!(i.row, 59 | 60) && x.as_ref().is_some_and(|x| nat(&x[1]) == Some(5) && rsp_reg(&x[2]));
             let arg_store = i.row == 75 && x.as_ref().is_some_and(|x| self.rsp_mem(&x[2]).is_some() && nat(&x[1]).is_some_and(|g| [7, 6, 2, 1, 8, 9].contains(&g)));
-            if !sub_rsp && !arg_store {
+            let push_cs = i.row == 114 && nat(&i.fields).is_some_and(|g| CS_REGS.contains(&g));
+            if !sub_rsp && !arg_store && !push_cs {
                 break;
             }
             a = (a + i.len) % P64;
@@ -108,9 +113,9 @@ impl<'e> Gen<'e> {
     }
 
     /// the epilogue (not cut points): the code from which every way runs
-    /// to a `ret` by the frame's code (`nop`, `add rsp, k`), jumps, and the
-    /// result set (rax loaded from a home, or an immediate): a `return`'s
-    /// code, shared by the ways that return
+    /// to a `ret` by the frame's code (`nop`, `add rsp, k`, the callee-saved
+    /// registers popped), jumps, and the result set (rax loaded from a home,
+    /// or an immediate): a `return`'s code, shared by the ways that return
     fn cfg_epilogue(&mut self) -> BTreeSet<u128> {
         let tail = |g: &Gen, a: u128| {
             let Some(i) = g.insns.get(&a) else { return false };
@@ -118,7 +123,8 @@ impl<'e> Gen<'e> {
             let rsp = || x.as_ref().and_then(|x| g.tag(&x[2])).is_some_and(|(k, r)| k == 0 && nat(&r) == Some(4));
             let ld_rax = || i.row == 76 && x.as_ref().is_some_and(|x| nat(&x[1]) == Some(0) && g.rsp_mem(&x[2]).is_some());
             let imm_rax = || matches!(i.row, 111 | 112) && g.pairs(&i.fields, 2).is_some_and(|x| nat(&x[0]) == Some(0));
-            matches!(i.row, 109 | 122 | 124 | 125) || (matches!(i.row, 59 | 60) && rsp()) || ld_rax() || imm_rax()
+            let pop_cs = || i.row == 115 && nat(&i.fields).is_some_and(|g| CS_REGS.contains(&g));
+            matches!(i.row, 109 | 122 | 124 | 125) || (matches!(i.row, 59 | 60) && rsp()) || ld_rax() || imm_rax() || pop_cs()
         };
         let addrs: Vec<u128> = self.insns.keys().copied().collect();
         let mut out: BTreeSet<u128> = addrs.iter().copied().filter(|a| self.insns[a].row == 122).collect();
@@ -320,6 +326,7 @@ impl<'e> Gen<'e> {
             fixed,
             fr: st.fr,
             fd: st.ds.clone(),
+            rc: self.cs_fixed(st),
             hyps: Vec::new(),
             facts: Vec::new(),
             lfx: Vec::new(),
@@ -354,6 +361,7 @@ impl<'e> Gen<'e> {
                 ("code", self.code.clone()),
                 ("fr", lit(st.fr)),
                 ("fd", st.ds.clone()),
+                ("rc", self.regs_map(&c.rc)),
                 ("ct", c.ct_lam.clone()),
                 ("ad", ad_lam),
                 ("hs", c.hs_lam.clone()),
@@ -472,7 +480,7 @@ impl<'e> Gen<'e> {
             ],
         );
         let c1 = self.run(&R::Expand(Box::new(conv), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
-        let at = self.loop_at(st, st.a, c1)?;
+        let at = self.loop_at(st, st.a, &c.rc, c1)?;
         // AD: the table found
         let hts: Vec<Term> = c.hyp.values().map(|h| h.0.clone()).collect();
         let closed = self.close(at, &hts, &[Self::var_id(&ad)])?;
@@ -503,7 +511,7 @@ impl<'e> Gen<'e> {
         let a = c.addr[&k];
         let mask = c.labels.iter().find(|x| x.0 == k).map(|x| x.1).ok_or_else(|| format!("{:x}: the CFG: label {} not among the labels", a, k))?;
         let pk_t = c.body.instantiate_params(&[lit(k)], &self.env.binders_fn());
-        let (bkp2, bka2, hs_lam, fr, fd) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fr, c.fd.clone());
+        let (bkp2, bka2, hs_lam, fr, fd, rc) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fr, c.fd.clone(), c.rc.clone());
         let bkp0 = c.bkp0.clone();
         let (hyps, facts, lfx) = (c.hyps.clone(), c.facts.clone(), c.lfx.clone());
         let (b, kl, kw, wrap) = (c.b.clone(), c.kl.clone(), c.kw.clone(), c.wrap.clone());
@@ -538,8 +546,8 @@ impl<'e> Gen<'e> {
         let st_body = St {
             a,
             fr,
-            regs: Vec::new(),
-            rs: self.mk("empty", vec![]),
+            regs: rc.clone(),
+            rs: self.regs_map(&rc),
             ds: fd.clone(),
             w: wv.clone(),
             hvu: hv,
@@ -561,7 +569,7 @@ impl<'e> Gen<'e> {
         self.bka = bka2;
         self.wrap = wrap_id;
         self.kw = kw_id;
-        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, wrap, kw, hu: hu.clone(), fd: fd.clone(), yt: hs_lam, hy: hy.clone() });
+        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, wrap, kw, hu: hu.clone(), fd: fd.clone(), rc, yt: hs_lam, hy: hy.clone() });
         self.trace(|| format!("cfg label {} at {:x}", k, a));
         let hus = std::mem::take(&mut self.hus);
         let res = self.prove(st_body);
@@ -707,6 +715,7 @@ impl<'e> Gen<'e> {
                 ("code", self.code.clone()),
                 ("fr", lit(st.fr)),
                 ("fd", fd.clone()),
+                ("rc", self.regs_map(&lg.rc)),
                 ("ct", ct_lam),
                 ("ad", ad_y),
                 ("hs", hs_lam),
@@ -718,7 +727,7 @@ impl<'e> Gen<'e> {
         self.trace(|| format!("cfg at {:x}: arrived, label {}", st.a, k2));
         let r = mp(
             inst,
-            vec![t(&lit(st.a)), t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), simp0(), simpw(vec![R::S(hk)]), s(&sub2), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(yt2), p(rw)],
+            vec![t(&lit(st.a)), t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), simp0(), simpw(vec![R::S(hk)]), s(&sub2), p(self.cs_sub_pf(&lg.rc, &st.rs)), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(yt2), p(rw)],
         );
         if self.canon(&st.ds) == self.canon(&fd) {
             return self.run(&r, &[]).map(Some);

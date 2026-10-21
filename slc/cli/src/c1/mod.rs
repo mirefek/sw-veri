@@ -41,6 +41,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const P64: u128 = 1 << 64;
 
+/// the callee-saved registers (tr.cs_reg): rbx, rbp, r12 - r15
+const CS_REGS: [u128; 6] = [3, 5, 12, 13, 14, 15];
+
 /// A decode fact: at its address, `len` bytes decode to `tag(row, fields)`.
 #[derive(Clone)]
 struct Insn {
@@ -143,8 +146,9 @@ struct LoopG {
     kw: Term,
     /// the iteration's world and locals in the universe
     hu: Seq,
-    /// the frame at the head
+    /// the frame at the head, the registers there (tr.cs_sub's rc)
     fd: Term,
+    rc: Vec<(u128, u128, Term)>,
     /// the locals' invariant, and its assumption in the iteration
     yt: Term,
     hy: Seq,
@@ -736,6 +740,59 @@ impl<'e> Gen<'e> {
     /// `fn_update(m, k, pair(n, v))`
     fn upd(&self, m: &Term, k: u128, n: u128, v: &Term) -> Term {
         self.mk("fn_update", vec![m.clone(), lit(k), self.mk("pair", vec![lit(n), v.clone()])])
+    }
+
+    /// m's register r, `app(app(m, "gpr"), r)`
+    fn gpr(&self, m: &Term, r: u128) -> Term {
+        self.mk("app", vec![self.mk("app", vec![m.clone(), Term::bytes(b"gpr")]), lit(r)])
+    }
+
+    /// the callee-saved registers st holds (register, bytes, value): those a
+    /// callee keeps (tr.cs_sub's rc at a call)
+    fn cs_held(&self, st: &St) -> Vec<(u128, u128, Term)> {
+        CS_REGS.iter().filter_map(|&r| self.reg(st, r).map(|(n, v)| (r, n, v))).collect()
+    }
+
+    /// ... those holding their entry value, not saved in a home st keeps:
+    /// a label's or a loop head's (the saved ones are restored from their
+    /// homes)
+    fn cs_fixed(&self, st: &St) -> Vec<(u128, u128, Term)> {
+        self.cs_held(st)
+            .into_iter()
+            .filter(|(r, n, v)| {
+                let e = self.gpr(&self.s, *r);
+                *n == 8 && self.canon(v) == self.canon(&e) && !st.hsm.values().any(|(m, x)| *m == 8 && self.canon(x) == self.canon(&e))
+            })
+            .collect()
+    }
+
+    /// the map of the entries es
+    fn regs_map(&self, es: &[(u128, u128, Term)]) -> Term {
+        es.iter().fold(self.mk("empty", vec![]), |m, (r, n, v)| self.upd(&m, *r, *n, v))
+    }
+
+    /// st's registers: only the entries es
+    fn with_regs(&self, st: &St, es: &[(u128, u128, Term)]) -> St {
+        let mut st2 = st.clone();
+        st2.regs = es.to_vec();
+        st2.rs = self.regs_map(es);
+        st2
+    }
+
+    /// `tr.cs_sub(rc, rs)`, rc the map of es (each rs's entry)
+    fn cs_sub_pf(&self, es: &[(u128, u128, Term)], rs: &Term) -> R {
+        let mut pf = R::Inst("tr.cs_sub_empty".into(), vec![("rs", rs.clone())]);
+        let mut rc = self.mk("empty", vec![]);
+        for (r, n, v) in es {
+            pf = rec::mpf("tr.cs_sub_add", vec![rec::t(&rc), rec::t(rs), rec::t(&lit(*r)), rec::t(&lit(*n)), rec::t(v), rec::p(pf), rec::simp0(), rec::simp_l(), rec::simp_l()]);
+            rc = self.upd(&rc, *r, *n, v);
+        }
+        pf
+    }
+
+    /// `tr.cs_rs(s, rs)`: the six at their entry values (at a return)
+    fn cs_rs_pf(&self, rs: &Term) -> R {
+        rec::mp(R::Inst("tr.cs_rs_intro".into(), vec![("s", self.s.clone()), ("rs", rs.clone())]), (0..12).map(|_| rec::simp_l()).collect())
     }
 
     /// the state after writing v (n bytes) to r, at a

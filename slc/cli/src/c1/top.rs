@@ -289,16 +289,23 @@ impl<'e> Gen<'e> {
         }
         // (no `gimple.result`: a void function, no result bytes)
         self.rbytes = result_bits(self, &kw).unwrap_or(0) / 8;
-        // the frame: `sub rsp, k` at the entry (or none); fd, the deepest byte
-        // below the entry's rsp the function's stack accesses reach
-        let k0 = (|| {
-            let i = &self.insns[&entry];
-            let x = (i.row == 60).then(|| self.pairs(&i.fields, 5)).flatten()?;
-            let (tg, r) = self.tag(&x[2])?;
-            (nat(&x[0])? == 8 && nat(&x[1])? == 5 && tg == 0 && nat(&r)? == 4).then_some(())?;
-            nat(&x[4])
-        })()
-        .unwrap_or(0);
+        // the frame: the pushes at the entry, then `sub rsp, k` (or none);
+        // fd, the deepest byte below the entry's rsp the function's stack
+        // accesses reach
+        let (mut pa, mut np) = (entry, 0u128);
+        while let Some(i) = self.insns.get(&pa).filter(|i| i.row == 114) {
+            np += 1;
+            pa = (pa + i.len) % P64;
+        }
+        let k0 = 8 * np
+            + (|| {
+                let i = self.insns.get(&pa)?;
+                let x = (i.row == 60).then(|| self.pairs(&i.fields, 5)).flatten()?;
+                let (tg, r) = self.tag(&x[2])?;
+                (nat(&x[0])? == 8 && nat(&x[1])? == 5 && tg == 0 && nat(&r)? == 4).then_some(())?;
+                nat(&x[4])
+            })()
+            .unwrap_or(0);
         fn rsp_disps(g: &Gen, t: &Term, out: &mut Vec<u128>) {
             if let Some(d) = g.rsp_mem(t).and_then(|d| nat(&d)) {
                 out.push(d);
@@ -386,6 +393,12 @@ impl<'e> Gen<'e> {
         };
         let x0 = self.var("x0");
         let mut rs_lam = self.mk("empty", vec![]);
+        // (the callee-saved registers: their entry values, to be restored)
+        for r in CS_REGS {
+            let v = self.gpr(&s, r);
+            st0 = self.set_reg(&st0, entry, r, 8, v.clone());
+            rs_lam = self.upd(&rs_lam, r, 8, &v);
+        }
         for i in 0..nargs {
             let r = argregs[i as usize];
             let v = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![args_t.clone(), lit(i)])]);
@@ -438,8 +451,7 @@ impl<'e> Gen<'e> {
             let hg2 = self.mk("ord_le", vec![lit(nargs), self.mk("seq_len", vec![a2.clone()])]);
             let (sa, ss, se, sg) = (self.assume(&ha2)?, self.assume(&hs2)?, self.assume(&he2)?, self.assume(&hg2)?);
             let ln = self.evp(&RP::Simp(false, vec![R::S(sa)], vec![], false), &self.mk("in", vec![self.mk("seq_len", vec![a2.clone()]), self.mk("omega", vec![])]), &[])?;
-            let mut r = self.run(&mpf("tr.regs_empty", vec![t(&s2)]), &[])?;
-            let mut prev = self.mk("empty", vec![]);
+            let (mut r, mut prev) = self.cs_entry_regs(&s2, &ss)?;
             for i in 0..nargs {
                 let reg = argregs[i as usize];
                 let lt = self.mk("int_lt", vec![lit(i), self.mk("seq_len", vec![a2.clone()])]);
@@ -457,18 +469,25 @@ impl<'e> Gen<'e> {
                 prev = self.upd(&prev, reg, 8, &vx);
             }
             let hregs = self.close(r, &[ha2, hs2, he2, hg2], &[Self::var_id(&a2), Self::var_id(&s2)])?;
-            let rsl = self.abs(&rs_lam, &[Self::var_id(&x0)]);
+            let rsl = self.abs(&rs_lam, &[Self::var_id(&x0), Self::var_id(&s)]);
             let inst = R::Inst(
                 "tr.entry_n".into(),
                 vec![("lb", lb.clone()), ("lc", lc.clone()), ("base", b.clone()), ("code", c.clone()), ("statics", statics.clone()), ("f", b.clone()), ("n", lit(nargs)), ("fd", lit(fd)), ("rs", rsl), ("q", ql), ("kw", kwl)],
             );
             self.run(&mp(inst, vec![simp0(), s_(&hsub), s_(&hregs), s_(&body_in)]), &[])?
         } else {
+            // (the callee-saved registers' entries)
+            let s2 = self.var("s2");
+            let hs2 = self.mk("in", vec![s2.clone(), self.mk("x86_64_linux.Machine", vec![])]);
+            let ss = self.assume(&hs2)?;
+            let (r, _) = self.cs_entry_regs(&s2, &ss)?;
+            let hregs = self.close(r, &[hs2], &[Self::var_id(&s2)])?;
+            let rsl = self.abs(&rs_lam, &[Self::var_id(&s)]);
             let inst = R::Inst(
                 "tr.entry0".into(),
-                vec![("lb", lb.clone()), ("lc", lc.clone()), ("base", b.clone()), ("code", c.clone()), ("statics", statics.clone()), ("f", b.clone()), ("fd", lit(fd)), ("q", q0raw.clone()), ("kw", kwl)],
+                vec![("lb", lb.clone()), ("lc", lc.clone()), ("base", b.clone()), ("code", c.clone()), ("statics", statics.clone()), ("f", b.clone()), ("fd", lit(fd)), ("rs", rsl), ("q", q0raw.clone()), ("kw", kwl)],
             );
-            self.run(&mp(inst, vec![simp0(), s_(&hsub), s_(&body_in)]), &[])?
+            self.run(&mp(inst, vec![simp0(), s_(&hsub), s_(&hregs), s_(&body_in)]), &[])?
         };
         let _ = rs_args;
         // m: all args objs mem s o. .. -> tr.matches_t(spec, args, objs, mem, s, o), the spec unfolded
@@ -502,6 +521,20 @@ impl<'e> Gen<'e> {
             Err(e) => eprintln!("{}: no tr.callee_io yet: {}", p, e),
         }
         Ok(out)
+    }
+
+    /// `tr.regs(m, rs)`, rs the callee-saved registers at their values on m
+    /// (hm: m a machine); and rs
+    fn cs_entry_regs(&mut self, m: &Term, hm: &Seq) -> Result<(Seq, Term), String> {
+        let mut r = self.run(&mpf("tr.regs_empty", vec![t(m)]), &[])?;
+        let mut prev = self.mk("empty", vec![]);
+        for g in CS_REGS {
+            let v = self.gpr(m, g);
+            let ty = R::Apply(Box::new(f("x86i.reg_typed")), vec![t(m), t(&lit(g)), s_(hm), simp0()]);
+            r = self.run(&R::Apply(Box::new(f("tr.regs_add")), vec![t(m), t(&prev), t(&lit(g)), t(&lit(8)), t(&v), s_(&r), simp0(), simpw(vec![ty])]), &[])?;
+            prev = self.upd(&prev, g, 8, &v);
+        }
+        Ok((r, prev))
     }
 
     /// `L`: a map's keys (`tr.dom_upd`, `tr.dom_keep`), the scratch

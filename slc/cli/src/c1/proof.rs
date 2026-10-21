@@ -701,9 +701,10 @@ impl<'e> Gen<'e> {
             st0.facts.push(hf.clone());
             st0.lfx.push(hf);
         }
+        // (the callee-saved registers kept by the callee)
+        let rc = self.cs_held(st);
+        st0 = self.with_regs(&st0, &rc);
         st0.a = a2;
-        st0.regs = Vec::new();
-        st0.rs = self.mk("empty", vec![]);
         st0.w = w4.clone();
         st0.hvu = hv4;
         st0.hw = hw4;
@@ -738,6 +739,7 @@ impl<'e> Gen<'e> {
                 ("ds", st.ds.clone()),
                 ("fd2", lit(fd2)),
                 ("rs", st.rs.clone()),
+                ("rc", self.regs_map(&rc)),
                 ("w", w.clone()),
                 ("ka", al),
                 ("xx", xl),
@@ -768,6 +770,7 @@ impl<'e> Gen<'e> {
                     s(&htyp),
                     s(&hio),
                     p(hreg),
+                    p(self.cs_sub_pf(&rc, &st.rs)),
                     p(hin),
                     simp0(),
                     simp0(),
@@ -836,9 +839,10 @@ impl<'e> Gen<'e> {
         let hr0 = self.assume(&hr0t)?;
         st0.facts.push(hr0.clone());
         st0.lfx.push(hr0);
+        // (the callee-saved registers kept by the kernel)
+        let rc = self.cs_held(st);
+        st0 = self.with_regs(&st0, &rc);
         st0.a = a2;
-        st0.regs = Vec::new();
-        st0.rs = self.mk("empty", vec![]);
         st0.w = w4.clone();
         st0.hvu = hv4;
         st0.hw = hw4;
@@ -858,6 +862,7 @@ impl<'e> Gen<'e> {
             ("hs", st.hst.clone()),
             ("ds", st.ds.clone()),
             ("rs", st.rs.clone()),
+            ("rc", self.regs_map(&rc)),
             ("w", w),
             ("nv", nv),
         ];
@@ -867,7 +872,7 @@ impl<'e> Gen<'e> {
         // (rip's step, then each register's two facts)
         let mut prem = vec![p(f(&insn.name))];
         prem.extend((0..1 + 2 * (1 + args.len())).map(|_| simp_l()));
-        prem.extend([s(&hk), s(&pc)]);
+        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), s(&hk), s(&pc)]);
         self.run(&mp(inst, prem), &[])
     }
 
@@ -1008,14 +1013,14 @@ impl<'e> Gen<'e> {
         Ok(None)
     }
 
-    /// the loop's claim at its head h for st's locals and world (c0): st's
-    /// homes and registers, the claim's and more
-    pub(super) fn loop_at(&mut self, st: &St, h: u128, c0: Seq) -> Result<Seq, String> {
+    /// the loop's claim at its head h for st's locals and world (c0, its
+    /// registers rc's): st's homes and registers, the claim's and more
+    pub(super) fn loop_at(&mut self, st: &St, h: u128, rc: &[(u128, u128, Term)], c0: Seq) -> Result<Seq, String> {
         // (the point's homes and registers: the claim's, and more)
         let hs1 = self.app(c0.concl(), "tr.lv", 13).map(|x| x[8].clone()).ok_or("the loop's claim")?;
-        let empty = self.mk("empty", vec![]);
+        let rcm = self.regs_map(rc);
         let mut sub_pf = mpf("tr.hsub_empty", vec![t(&st.hst)]);
-        let mut fm = empty.clone();
+        let mut fm = self.mk("empty", vec![]);
         for (k, nb, x) in self.home_entries(&hs1).ok_or("the loop's claim's homes")? {
             let v = self.mk("pair", vec![lit(nb), x.clone()]);
             sub_pf = mpf("tr.hsub_upd", vec![t(&st.hst), t(&fm), t(&lit(k)), t(&v), p(sub_pf), simp_l(), simp_l()]);
@@ -1035,7 +1040,7 @@ impl<'e> Gen<'e> {
                     t(&hs1),
                     t(&st.hst),
                     t(&st.ds),
-                    t(&empty),
+                    t(&rcm),
                     t(&pcl),
                     t(&st.w),
                     p(sub_pf),
@@ -1045,8 +1050,23 @@ impl<'e> Gen<'e> {
             &[],
         )?;
         let rs = mpf(
-            "tr.pt_rs",
-            vec![t(&self.s.clone()), t(&self.v.clone()), t(&self.base.clone()), t(&self.code.clone()), t(&lit(st.fr)), t(&lit(h)), t(&st.hst), t(&st.ds), t(&st.rs), t(&pcl), t(&st.w), s(&c1)],
+            "tr.pt_rs_cs",
+            vec![
+                t(&self.s.clone()),
+                t(&self.v.clone()),
+                t(&self.base.clone()),
+                t(&self.code.clone()),
+                t(&lit(st.fr)),
+                t(&lit(h)),
+                t(&st.hst),
+                t(&st.ds),
+                t(&rcm),
+                t(&st.rs),
+                t(&pcl),
+                t(&st.w),
+                p(self.cs_sub_pf(rc, &st.rs)),
+                s(&c1),
+            ],
         );
         self.run(&rs, &[])
     }
@@ -1125,6 +1145,7 @@ impl<'e> Gen<'e> {
                 ("fr", lit(st.fr)),
                 ("ha", lit(lg.head)),
                 ("fd", lg.fd.clone()),
+                ("rc", self.regs_map(&lg.rc)),
                 ("hs", lg.hs.clone()),
                 ("yt", lg.yt.clone()),
                 ("bkp", lg.bkp.clone()),
@@ -1132,7 +1153,7 @@ impl<'e> Gen<'e> {
         );
         let pcl = self.p(&st.spec);
         self.trace(|| format!("loop at {:x}: arrived", st.a));
-        let r = mp(inst, vec![t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), p(sub_pf), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), simp_lw(vec![R::S(lg.hy.clone())]), p(rw)]);
+        let r = mp(inst, vec![t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), p(sub_pf), p(self.cs_sub_pf(&lg.rc, &st.rs)), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), simp_lw(vec![R::S(lg.hy.clone())]), p(rw)]);
         // (more of the frame here than at the head: the claim with the head's)
         if self.canon(&st.ds) == self.canon(&lg.fd) {
             return self.run(&r, &[]);

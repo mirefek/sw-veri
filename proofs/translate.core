@@ -1502,9 +1502,10 @@ qed
 //
 //  - the ABI's part (tr.inv): the machine typed, its code loaded at base,
 //    rsp s's less the frame's size fr (0 but between a prologue's
-//    `sub rsp` and the epilogue's `add rsp`; the return at fr 0), the
-//    return address as at s, the callee-saved registers, cpu,
-//    gs_base as at s, os and fs_base the world's, df clear; only the
+//    pushes and `sub rsp` and the epilogue's `add rsp` and pops; the
+//    return at fr 0), the return address as at s, cpu, gs_base as at s,
+//    os and fs_base the world's, df clear (the callee-saved registers are
+//    the registers' map's, restored by the return: tr.cs_rs); only the
 //    machine's bytes changed since s; the world's cpu and sp s's (a call's
 //    callee world takes them); s's entry facts;
 //  - the homes (hs: offset c from s's rsp -> pair(n, x)): the n bytes there
@@ -1549,7 +1550,7 @@ def tr.inv(s, base, code, fr, m, w) :=
   mM: m in x86_64_linux.Machine && mu: m in univ(1) && cd: abi.code_at(m.vm, base, code) && kc: tr.keeps_code(s.vm, m.vm) &&
   rspm: m.gpr[4] = int_sub(s.gpr[4], fr) && fro: fr in omega && kp: tr.kept(s.vm, m.vm, s.gpr[4]) &&
   ra8: x86_64_linux.le(m.vm.bytes, s.gpr[4], 8) = abi.ret(s) &&
-  mcs: abi.callee_saved(m, s) && mcpu: m.cpu = s.cpu && mgs: m.gs_base = s.gs_base &&
+  mcpu: m.cpu = s.cpu && mgs: m.gs_base = s.gs_base &&
   mos: m.os = w.os && mfs: m.fs_base = w.fs_base && mdf: !m.flags.df &&
   winp: w.os.input = s.os.input && sws: subset(s.os.events, w.os.events) &&
   wW: w in abi.World && wu: w in univ(1) && wcpu: w.cpu = s.cpu && wbk: abi.brk_start_ok(w.vm) &&
@@ -1933,8 +1934,20 @@ proof
   show by simp(expand(expand(hi.wW, abi.World), x86_64_linux.Vm))
 qed
 
-// a register an instruction may write: not rsp, not callee-saved
-def tr.scratch_reg(g) := g in x86_64_linux.Reg && !(g = 3) && !(g = 4) && !(g = 5) && !(g = 12) && !(g = 13) && !(g = 14) && !(g = 15)
+// a register an instruction may write: not rsp (a callee-saved one too:
+// its entry value is the function's to restore by the return, tr.cs_rs)
+def tr.scratch_reg(g) := g in x86_64_linux.Reg && !(g = 4)
+
+// the callee-saved registers (the ABI's: rbx, rbp, r12 .. r15)
+def tr.cs_reg(r) := r = 3 || r = 5 || r = 12 || r = 13 || r = 14 || r = 15
+
+// (the registers' map rs: each callee-saved register at the entry s's
+// value -- as the return must leave them)
+def tr.cs_rs(s, rs) := all r. tr.cs_reg(r) -> r in dom(rs) && rs[r] = pair(8, s.gpr[r])
+
+// (rc: part of rs, callee-saved registers only -- what a call or a system
+// call keeps)
+def tr.cs_sub(rc, rs) := is_fun(rc) && (all r. r in dom(rc) -> tr.cs_reg(r) && r in dom(rs) && rc[r] = rs[r])
 
 // the invariant after a register write (and rip, the flags)
 theorem tr.inv_reg: all s base code fr m w r f g x. tr.inv(s, base, code, fr, m, w) -> r in bits(64) -> x86i.flags_ok(m, f) -> tr.scratch_reg(g) -> x in bits(64) ->
@@ -1948,17 +1961,11 @@ proof
   have f1 := expand(hf, x86i.flags_ok)
   have g1 := expand(hg, tr.scratch_reg)
   have m2: fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(m.gpr, g, x)) in x86_64_linux.Machine by defs(simp(expand(mM, x86_64_linux.Machine), mu, hr, f1, g1, hx, pt), x86_64_linux.Machine)
-  have gn: !(g = 3) && !(g = 4) && !(g = 5) && !(g = 12) && !(g = 13) && !(g = 14) && !(g = 15) by taut(g1)
+  have gn: !(g = 4) by taut(g1)
   have gu: g in univ(1) by simp(g1)
-  // (rsp and the callee-saved registers untouched)
-  have e3 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 3], simp(gn))
+  // (rsp untouched)
   have e4 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 4], simp(gn))
-  have e5 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 5], simp(gn))
-  have e12 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 12], simp(gn))
-  have e13 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 13], simp(gn))
-  have e14 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 14], simp(gn))
-  have e15 := mp(app_update_other[f := m.gpr, k := g, v := x, x := 15], simp(gn))
-  show by defs(simp(i, m2, hr, f1, gn, gu, hx, e3, e4, e5, e12, e13, e14, e15, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+  show by defs(simp(i, m2, hr, f1, gn, gu, hx, e4, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
 qed
 
 // the registers after the write of x to g: g holds x
@@ -2035,14 +2042,7 @@ proof
   have m2: fn_update(fn_update(fn_update(m, "rip", r), "flags", f), "gpr", fn_update(m.gpr, 4, int_sub(s.gpr[4], fr2))) in x86_64_linux.Machine
     by defs(simp(expand(mM, x86_64_linux.Machine), mu, hr, f1, x64, pt), x86_64_linux.Machine)
   have xu: int_sub(s.gpr[4], fr2) in univ(1) by simp(x64)
-  // (the callee-saved registers untouched)
-  have e3 := mp(app_update_other[f := m.gpr, k := 4, v := int_sub(s.gpr[4], fr2), x := 3], simp())
-  have e5 := mp(app_update_other[f := m.gpr, k := 4, v := int_sub(s.gpr[4], fr2), x := 5], simp())
-  have e12 := mp(app_update_other[f := m.gpr, k := 4, v := int_sub(s.gpr[4], fr2), x := 12], simp())
-  have e13 := mp(app_update_other[f := m.gpr, k := 4, v := int_sub(s.gpr[4], fr2), x := 13], simp())
-  have e14 := mp(app_update_other[f := m.gpr, k := 4, v := int_sub(s.gpr[4], fr2), x := 14], simp())
-  have e15 := mp(app_update_other[f := m.gpr, k := 4, v := int_sub(s.gpr[4], fr2), x := 15], simp())
-  show by defs(simp(i, m2, hr, f1, xu, hfo, e3, e5, e12, e13, e14, e15, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
+  show by defs(simp(i, m2, hr, f1, xu, hfo, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access)), tr.inv)
 qed
 
 // the registers after a write of rsp (not among them)
@@ -2570,6 +2570,40 @@ proof
   show := apply(tr.reg_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {4}, {bits_sub(32, 0, u)}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
 qed
 
+// neg r32 of a register holding a 64-bit word u: 0 less its low half
+// (GIMPLE's `-(int) u`)
+theorem tr.neg32_w(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g z u r hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(64, pair(4, pair(3, pair(tag(0, g), z))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> g in dom(rs) -> rs[g] = pair(8, u) ->
+  r = bits_sub(32, 0, bits_of_int(32, u)) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, fn_update(rs, g, pair(4, r)), p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g z u r hs ds rs p w
+  assume hat ha2 hg hd hu hr hpt0
+  have hpt := rewrite(hr, hpt0)
+  let R := bits_sub(32, 0, bits_of_int(32, u))
+  have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(m.gpr, g, R)), empty)) proof
+    fix m o
+    assume hi hr hh hrs ho
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have rg u64 := apply(tr.regs_get, {m}, {rs}, {g}, {8}, {u}, hrs, hd, hu)
+    have hx := mp(mp(mp(all_elim(hat, {m}, {o}), ho), ipC), hr)
+    have sl: bits_slice(u, 31, 0) = bits_of_int(32, u) by defs(simp(u64), bits_slice, bits_of_int)
+    obtain f, hf from apply(x86i.neg32, {m}, {o}, {g}, {z}, {len}, ipM, ipU, gR, hx)
+    show by ex_intro({f}, simp(hf, rg, sl, hr, ha2, keep(x86i.flags_ok)))
+  qed
+  have ty: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) ->
+      R in bits(int_mul(8, 4)) && R in bits(64) proof
+    fix m
+    show by simp(keep(tr.inv, tr.homes, tr.regs))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {4}, {R}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
+qed
+
 // neg r64: g := 0 - u
 theorem tr.neg64(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g z u r hs ds rs p w.
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
@@ -3070,22 +3104,151 @@ proof
   show by defs(simp(), x86_64_linux.le, gimple.bytes_at)
 qed
 
+// (the callee-saved registers, by the registers' map: the entry's)
+theorem tr.cs_of_rs: all s m rs. tr.regs(m, rs) -> tr.cs_rs(s, rs) -> abi.callee_saved(m, s)
+proof
+  fix s m rs
+  assume hr hc
+  have one: all r. tr.cs_reg(r) -> m.gpr[r] = s.gpr[r] proof
+    fix r
+    assume hcr
+    have d e := mp(all_elim(expand(hc, tr.cs_rs), {r}), hcr)
+    have g _ := apply(tr.regs_get, {m}, {rs}, {r}, {8}, {s.gpr[r]}, hr, d, e)
+    show := g
+  qed
+  have c3 := mp(all_elim(one, {3}), (tr.cs_reg(3) by defs(simp(), tr.cs_reg)))
+  have c5 := mp(all_elim(one, {5}), (tr.cs_reg(5) by defs(simp(), tr.cs_reg)))
+  have c12 := mp(all_elim(one, {12}), (tr.cs_reg(12) by defs(simp(), tr.cs_reg)))
+  have c13 := mp(all_elim(one, {13}), (tr.cs_reg(13) by defs(simp(), tr.cs_reg)))
+  have c14 := mp(all_elim(one, {14}), (tr.cs_reg(14) by defs(simp(), tr.cs_reg)))
+  have c15 := mp(all_elim(one, {15}), (tr.cs_reg(15) by defs(simp(), tr.cs_reg)))
+  show by taut(c3, c5, c12, c13, c14, c15)
+qed
+
+// (the callee-saved registers as at m: rs's part rc on x too)
+theorem tr.regs_cs_keep: all m x rs rc. tr.regs(m, rs) -> tr.cs_sub(rc, rs) -> (all r. tr.cs_reg(r) -> x.gpr[r] = m.gpr[r]) -> tr.regs(x, rc)
+proof
+  fix m x rs rc
+  assume hr hs he
+  have rf rk := expand(hs, tr.cs_sub)
+  have k: all r. r in dom(rc) -> x.gpr[r] = snd(rc[r]) && snd(rc[r]) in bits(int_mul(8, fst(rc[r]))) proof
+    fix r
+    assume hd
+    have c d e := mp(all_elim(rk, {r}), hd)
+    have _ mr := expand(hr, tr.regs)
+    have g := mp(all_elim(mr, {r}), d)
+    have xe := mp(all_elim(he, {r}), c)
+    show by simp(g, xe, e)
+  qed
+  show by defs(taut(rf, k), tr.regs)
+qed
+
+// (the six callee-saved registers equal: each of them)
+theorem tr.cs_eq(m, x): x.gpr[3] = m.gpr[3] && x.gpr[5] = m.gpr[5] && x.gpr[12] = m.gpr[12] && x.gpr[13] = m.gpr[13] &&
+  x.gpr[14] = m.gpr[14] && x.gpr[15] = m.gpr[15] -> all r. tr.cs_reg(r) -> x.gpr[r] = m.gpr[r]
+proof
+  assume h
+  have k3 k5 k12 k13 k14 k15 := h
+  fix r
+  assume hc
+  have d := expand(hc, tr.cs_reg)
+  have c3: r = 3 -> x.gpr[r] = m.gpr[r] proof
+    assume e
+    show := rewrite(sym(e), k3)
+  qed
+  have c5: r = 5 -> x.gpr[r] = m.gpr[r] proof
+    assume e
+    show := rewrite(sym(e), k5)
+  qed
+  have c12: r = 12 -> x.gpr[r] = m.gpr[r] proof
+    assume e
+    show := rewrite(sym(e), k12)
+  qed
+  have c13: r = 13 -> x.gpr[r] = m.gpr[r] proof
+    assume e
+    show := rewrite(sym(e), k13)
+  qed
+  have c14: r = 14 -> x.gpr[r] = m.gpr[r] proof
+    assume e
+    show := rewrite(sym(e), k14)
+  qed
+  have c15: r = 15 -> x.gpr[r] = m.gpr[r] proof
+    assume e
+    show := rewrite(sym(e), k15)
+  qed
+  show by taut(d, c3, c5, c12, c13, c14, c15)
+qed
+
+// (the six callee-saved registers in rs, each its entry value)
+theorem tr.cs_rs_intro(s, rs): 3 in dom(rs) -> rs[3] = pair(8, s.gpr[3]) -> 5 in dom(rs) -> rs[5] = pair(8, s.gpr[5]) ->
+  12 in dom(rs) -> rs[12] = pair(8, s.gpr[12]) -> 13 in dom(rs) -> rs[13] = pair(8, s.gpr[13]) ->
+  14 in dom(rs) -> rs[14] = pair(8, s.gpr[14]) -> 15 in dom(rs) -> rs[15] = pair(8, s.gpr[15]) -> tr.cs_rs(s, rs)
+proof
+  assume d3 k3 d5 k5 d12 k12 d13 k13 d14 k14 d15 k15
+  have one: all r. tr.cs_reg(r) -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) proof
+    fix r
+    assume hc
+    have d := expand(hc, tr.cs_reg)
+    have c3: r = 3 -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) by simp(d3, k3)
+    have c5: r = 5 -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) by simp(d5, k5)
+    have c12: r = 12 -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) by simp(d12, k12)
+    have c13: r = 13 -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) by simp(d13, k13)
+    have c14: r = 14 -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) by simp(d14, k14)
+    have c15: r = 15 -> r in dom(rs) && rs[r] = pair(8, s.gpr[r]) by simp(d15, k15)
+    show by taut(d, c3, c5, c12, c13, c14, c15)
+  qed
+  show by defs(one, tr.cs_rs)
+qed
+
+// (rc's entries among rs's: none)
+theorem tr.cs_sub_empty(rs): tr.cs_sub(empty, rs)
+proof
+  show by defs(simp(dom_empty), tr.cs_sub)
+qed
+
+// (... and r's, a callee-saved register's)
+theorem tr.cs_sub_add: all rc rs r n x. tr.cs_sub(rc, rs) -> r = 3 || r = 5 || r = 12 || r = 13 || r = 14 || r = 15 -> r in dom(rs) -> rs[r] = pair(n, x) ->
+  tr.cs_sub(fn_update(rc, r, pair(n, x)), rs)
+proof
+  fix rc rs r n x
+  assume hs hc hd he
+  have rf rk := expand(hs, tr.cs_sub)
+  have du := mp(dom_update[f := rc, k := r, v := pair(n, x)], rf)
+  have fu := mp(fn_update_fun[f := rc, k := r, v := pair(n, x)], rf)
+  have cr: tr.cs_reg(r) by defs(hc, tr.cs_reg)
+  have k: all r0. r0 in dom(fn_update(rc, r, pair(n, x))) -> tr.cs_reg(r0) && r0 in dom(rs) && fn_update(rc, r, pair(n, x))[r0] = rs[r0] proof
+    fix r0
+    assume h0
+    have same: r0 = r -> tr.cs_reg(r0) && r0 in dom(rs) && fn_update(rc, r, pair(n, x))[r0] = rs[r0] by simp(cr, hd, he)
+    have other: !(r0 = r) -> tr.cs_reg(r0) && r0 in dom(rs) && fn_update(rc, r, pair(n, x))[r0] = rs[r0] proof
+      assume ne
+      have d0: r0 in dom(rc) by simp(rewrite(du, h0), ne)
+      have e1 := mp(app_update_other[f := rc, k := r, v := pair(n, x), x := r0], ne)
+      have c := mp(all_elim(rk, {r0}), d0)
+      show by simp(e1, c)
+    qed
+    show by taut(same, other)
+  qed
+  show by defs(taut(fu, k), tr.cs_sub)
+qed
+
 // ----------------------------------------------------------------------
 //  The return: `ret` with rax holding the spec's result (the spec returning
-//  it, rdx anything)
+//  it, rdx anything), the callee-saved registers the entry's (tr.cs_rs)
 
 theorem tr.ret_insn(zb. bkp, zb pb wb. bka): all s v base code a len hs fd rs p w n bigv.
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o)) ->
-  0 in dom(rs) -> rs[0] = pair(n, bigv) ->
+  0 in dom(rs) -> rs[0] = pair(n, bigv) -> tr.cs_rs(s, rs) ->
   (w in univ(1) -> bigv in bits(int_mul(8, n)) -> (all y. y in bits(64) -> runs(p, w, ok(w, pair(bigv, y))))) ->
   tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, 0, a, hs, fd, rs, p, w)
 proof
   fix s v base code a len hs fd rs p w n bigv
-  assume hat h0d h0 hsp
+  assume hat h0d h0 hcs hsp
   have g: all m. tr.inv(s, base, code, 0, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
     fix m
     assume hi hr hhs hrs hmm hfr
-    have {mM, mu, cd, kp, ra8, mcs, mcpu, mgs, mos, mfs, mdf, wW, wu, sM, sacc, sal, slt} := hi
+    have {mM, mu, cd, kp, ra8, mcpu, mgs, mos, mfs, mdf, wW, wu, sM, sacc, sal, slt} := hi
+    have mcs := apply(tr.cs_of_rs, hrs, hcs)
     have rspm := apply(tr.inv0_rsp, hi)
     have rest: x86_64_linux.le(m.vm.bytes, s.gpr[4], 8) = abi.ret(s) && abi.callee_saved(m, s) && m.cpu = s.cpu && m.gs_base = s.gs_base &&
       m.os = w.os && m.fs_base = w.fs_base && !m.flags.df && w in abi.World && w in univ(1)

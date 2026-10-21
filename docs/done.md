@@ -958,3 +958,15 @@ item is a short summary of finished work; details are in the files named.
   world's `os_mprotect` relational, `gimple.mprot_post` / `mprot_ret`);
   its effect `tr.eff_sys_call3`. The engine's `Red::Sys` takes one or three
   arguments. C1 of __syscall3 and __mprotect.
+- **Callee-saved registers restored, not kept** (proofs/translate_cs.core):
+  the bridge's register map carries rbx, rbp, r12-r15 at their entry
+  values from the entry (`tr.entry_n`, `tr.entry0`), the return requires
+  them back (`tr.cs_rs`; `tr.inv` no longer has them fixed throughout).
+  `push r64` saves one in a home at the frame's new bottom
+  (`tr.push64`), `pop r64` restores it (`tr.pop64`); in between the
+  register is the function's (`tr.scratch_reg` all but rsp). Calls and
+  system calls keep the callee-saved part of the map (`tr.cs_sub`), labels
+  and loop heads those at their entry values not saved in a home
+  (`tr.pt_rs_cs`). The prologue's pushes count in the frame's depth and
+  the body's start, the epilogue's pops in the epilogue. `neg r32` of a
+  64-bit word (`tr.neg32_w`). C1 of __syscall_ret.

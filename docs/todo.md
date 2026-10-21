@@ -19,15 +19,11 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   as the machine's), to discharge `mp.am_implements`' hypotheses -- and
   `mp.as_implements` / `mp.agr_implements`' (`mp.ap_leaves`, the same).
   __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
-  to be used once the other leaves are); __get_tp, __errno_location have
-  their C1 (proofs/mallocng/machine/c1_leaves.core). __syscall_ret keeps a
-  value in rbx across its call (`push rbx` .. `pop rbx`): C1 has every
-  callee-saved register its entry's throughout (`tr.inv`'s `mcs`), so a
-  saved one needs the bridge to know it saved (its value in a home, rbx
-  the function's to use, restored before the return); nontrivial_free the
-  same. __syscall3 and __mprotect have their C1 (`tr.sys_call3`); their
-  C2 against `mprotect_spec_fun` (restated in the code's shape, as
-  `syscall1_spec`) waits on __syscall_ret's. Then `sys_call6` the same way
+  to be used once the other leaves are); __get_tp, __errno_location,
+  __syscall3, __mprotect, __syscall_ret have their C1
+  (proofs/mallocng/machine/c1_leaves.core). Their C2: __syscall_ret's,
+  then __mprotect's against `mprotect_spec_fun` (restated in the code's
+  shape, as `syscall1_spec`). Then `sys_call6` the same way
   (the closed form `lx.sys_mmap_ok`; os_mmap relational; a place for a
   mapping without a hint the world's iff the machine's), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured

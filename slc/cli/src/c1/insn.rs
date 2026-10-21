@@ -33,6 +33,41 @@ impl<'e> Gen<'e> {
             return Err(bad("in a zero-initialization: not a store of the zero register"));
         }
         match insn.row {
+            // push r64 (a callee-saved register's value x): the home at the
+            // frame's new bottom, the frame 8 bytes more
+            114 => {
+                let g = reg(&f)?;
+                let Some((8, x)) = self.reg(st, g) else { return Err(bad("push of a register not holding 8 bytes")) };
+                let fr2 = fr + 8;
+                if fr2 > 65536 {
+                    return Err(bad("push beyond the frame's bound"));
+                }
+                let c = P64 - fr2;
+                let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+                let (_, hs2, hk) = self.hkeep(st, c, 8);
+                let mut extra = vec![p(n4)];
+                extra.extend((0..6).map(|_| simp_l()));
+                extra.push(p(hk));
+                let tr = self.step("push64", a, insn, &[&f, &x, &lit(fr2), &lit(c)], self.tail_h(st, insn, &hs2, 5, extra));
+                let mut st2 = self.set_home(st, a2, c, 8, x);
+                st2.fr = fr2;
+                return self.then(tr, st2);
+            }
+            // pop r64: g := the home at rsp (x), the frame 8 bytes less
+            115 => {
+                let g = reg(&f)?;
+                if fr < 8 {
+                    return Err(bad("pop beyond the frame"));
+                }
+                let c = (P64 - fr) % P64;
+                let Some((8, x)) = st.hsm.get(&c).cloned() else { return Err(bad("pop of no 8-byte home")) };
+                let fr2 = fr - 8;
+                let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+                let tr = self.step("pop64", a, insn, &[&f, &x, &lit(fr2), &lit(c)], self.tail(st, insn, 8, vec![p(n4)]));
+                let mut st2 = self.set_reg(st, a2, g, 8, x);
+                st2.fr = fr2;
+                return self.then(tr, st2);
+            }
             // cmp r64, qword [rsp + d]: g (u) against the home's word
             57 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
@@ -272,6 +307,14 @@ impl<'e> Gen<'e> {
                     let tr = self.step("neg64", a, insn, &[&g, &x[3], &u, &r], self.tail(st, insn, 4, vec![hr]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, r);
+                    return self.then(tr, st2);
+                }
+                // neg r32 of a 64-bit word: of its low half
+                if let (Some(3), Some((8, w8))) = (op, self.reg(st, gn)) {
+                    let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), lit(0), self.mk("bits_of_int", vec![lit(32), w8.clone()])]))?;
+                    let tr = self.step("neg32_w", a, insn, &[&g, &x[3], &w8, &r], self.tail(st, insn, 4, vec![hr]));
+                    self.scratch.insert(gn);
+                    let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
                 }
                 let u = self.need_reg(st, gn, 4)?;
@@ -1777,7 +1820,7 @@ impl<'e> Gen<'e> {
                 let mut r = self.ret_step("tr.ret_insn", a, insn, pr, vec![t(&lit(n)), t(val)], mpf(&format!("tr.result{}", 8 * n), vec![t(&st.w), t(val)]), st);
                 if let (Some(q), R::Mp(_, args)) = (eqf, &mut r) {
                     // (rax's entry: the spec's value, by the equation)
-                    let i = args.len() - 2;
+                    let i = args.len() - 3;
                     args[i] = simp_lw(vec![R::S(q)]);
                 }
                 self.run(&r, &[])
@@ -2198,7 +2241,7 @@ impl<'e> Gen<'e> {
         Ok((n, x0.clone(), x0))
     }
 
-    /// a return's rule: `mp(RULE, s, V, base, code, a, len, hs, ds, rs, pr, w, ts.., decode, [simp(L), simp(L)], result)`
+    /// a return's rule: `mp(RULE, s, V, base, code, a, len, hs, ds, rs, pr, w, ts.., decode, [simp(L), simp(L)], callee-saved, result)`
     fn ret_step(&self, rule: &str, a: u128, insn: &Insn, pr: &Term, ts: Vec<RA>, res: R, st: &St) -> R {
         let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
         let has = !ts.is_empty();
@@ -2208,6 +2251,7 @@ impl<'e> Gen<'e> {
             v.push(simp_l());
             v.push(simp_l());
         }
+        v.push(p(self.cs_rs_pf(&st.rs)));
         v.push(p(res));
         mpf(rule, v)
     }
