@@ -1009,3 +1009,50 @@ proof
   qed
   show by taut(c, k1, k2, k3)
 qed
+
+// ----------------------------------------------------------------------
+//  The rule
+
+// (sys_call1's requirement on brk's shrinking, the world w's memory)
+abbrev tr.req1(w, a1) := int_lt(x86_64_linux.pages_for(a1), x86_64_linux.pages_for(w.vm.brk)) -> int_le(w.vm.brk_start, a1) ->
+  (int_le(x86_64_linux.pages_for(w.vm.brk), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) &&
+   gimple.sys_pages_ok(w.vm, x86_64_linux.pages_for(a1), int_sub(x86_64_linux.pages_for(w.vm.brk), x86_64_linux.pages_for(a1)))) &&
+  (all x2. x2 in omega -> int_le(x86_64_linux.pages_for(a1), x2) && int_lt(x2, x86_64_linux.pages_for(w.vm.brk)) -> x86_64_linux.mapped(w.vm, x2) ->
+    snd(w.vm.pages[x2]).kind = 1)
+
+// (not brk, or its requirement not met: any outcome, a raise too)
+theorem tr.sys1_raise(n, a1, w, x, e): !(n = 12 && tr.req1(w, a1)) -> pair(w, exc(x, e)) in univ(1) -> runs(gimple.sys_call1(n, a1), w, exc(x, e))
+proof
+  assume h pu
+  show by defs(simp(h, pu, keep(gimple.os_brk, gimple.sys_pages_ok, bind_rel)), gimple.sys_call1)
+qed
+
+// (the flags' word: a word)
+theorem tr.rflags_typed(f): x86_64_linux.rflags_word(f) in bits(64)
+proof
+  show by defs(apply(bits_build_in, (64 in omega by simp())), x86_64_linux.rflags_word, letin, bits_set_bit)
+qed
+
+// (the machine after the syscall: rip on, rcx, r11 and rax set, its memory
+// V -- a machine)
+theorem tr.mach_sys(m, A, V, r): m in x86_64_linux.Machine -> m in univ(1) -> A in bits(64) -> V in x86_64_linux.Vm -> r in bits(64) ->
+  fn_update(fn_update(fn_update(fn_update(m, "rip", A), "gpr", fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))), "vm", V), "gpr",
+    fn_update(fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags)), 0, r)) in x86_64_linux.Machine &&
+  fn_update(fn_update(fn_update(fn_update(m, "rip", A), "gpr", fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))), "vm", V), "gpr",
+    fn_update(fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags)), 0, r)) in univ(1)
+proof
+  assume hM hu ha hv hr
+  have _ gt .. := apply(x86i.parts, hM)
+  have g1 := apply(x86.space_upd, {x86_64_linux.Reg}, {bits(64)}, {m.gpr}, {1}, {A}, gt, simp(), ha)
+  have g2 := apply(x86.space_upd, {x86_64_linux.Reg}, {bits(64)}, {fn_update(m.gpr, 1, A)}, {11}, {x86_64_linux.rflags_word(m.flags)}, g1, simp(), tr.rflags_typed[f := m.flags])
+  have g3 := apply(x86.space_upd, {x86_64_linux.Reg}, {bits(64)}, {fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))}, {0}, {r}, g2, simp(), hr)
+  have gu := mp(app_univ[u := 1, f := m, k := "gpr"], hu)
+  have vu := apply(x86.vm_univ, hv)
+  have rw := tr.rflags_typed[f := m.flags]
+  have a: fn_update(fn_update(fn_update(fn_update(m, "rip", A), "gpr", fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))), "vm", V), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags)), 0, r)) in x86_64_linux.Machine
+    by defs(simp(expand(hM, x86_64_linux.Machine), hu, hv, vu, g3, gu, ha, hr, rw), x86_64_linux.Machine)
+  have b: fn_update(fn_update(fn_update(fn_update(m, "rip", A), "gpr", fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))), "vm", V), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags)), 0, r)) in univ(1) by simp(hu, vu, gu, ha, hr, rw)
+  show by taut(a, b)
+qed
