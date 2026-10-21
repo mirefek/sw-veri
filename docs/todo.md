@@ -21,11 +21,16 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
   to be used once the other leaves are); __get_tp, __errno_location,
   __syscall3, __mprotect, __syscall_ret have their C1
-  (proofs/mallocng/machine/c1_leaves.core); __syscall_ret its contract for
-  any ___errno_location meeting errno_location's spec (`srtc.composed`).
-  __errno_location's C2: its spec needs a precondition (`thread_ptr()` is
-  `ld64(fs_base, 0)`, defined only where the C world has those 8 bytes),
-  `errno_location_spec`'s callers then owing it. __mprotect's C2 against
+  (proofs/mallocng/machine/c1_leaves.core); __errno_location, __syscall_ret
+  and size_overflows their contracts at machine level (`elc.composed`,
+  `srtc.composed_el`, `sotc.composed_el`) but for __get_tp's contract for
+  any entry (`tr.implements_at_u`: __errno_location calls it without a
+  frame). C1 proves the aligned entry's only: `tr.inv` has the entry's rsp
+  16-byte aligned (`sal`, used for the return slot's and the stack's pages,
+  and aligned calls). To have C1 prove `_u` for a function with no aligned
+  calls: `tr.inv` with rsp 8-byte aligned (enough for the pages; every
+  caller's frame a multiple of 8, `tr.entry_ok_u` with it), the 16-byte
+  alignment a premise of the aligned call alone. __mprotect's C2 against
   `mprotect_spec_fun` (restated in the code's shape, as `syscall1_spec`).
   Then `sys_call6` the same way
   (the closed form `lx.sys_mmap_ok`; os_mmap relational; a place for a

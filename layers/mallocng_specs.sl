@@ -131,8 +131,10 @@ fn a_crash_spec_fun() -> CFun2[World] = (args: Args) => {
 fn errno_at(fs: Addr) -> Addr = fs + 0x34
 
 // ___errno_location(): errno's address (the thread pointer's), nothing
-// changed
+// changed -- in a sound thread (`thread_ok`), errno's cell not wrapping
+// around the address space
 proc[World] errno_location_spec() -> Addr {
+  require uint(fs_base) + 0x38 <= 2^64 && thread_ok(vm, fs_base)
   either { overflow() } or { return errno_at(fs_base) }
 }
 

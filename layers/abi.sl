@@ -140,9 +140,9 @@ pred stack_reserve(vm: Vm) =
 
 // the thread pointer as the ABI has it: the word at fs:0 points to itself
 // (x86-64 TLS ABI: it is how code finds its TLS), in the program's memory
-// (not on the stack)
+// (not on the stack) -- the thread's descriptor, an object, so not null
 pred thread_ok(vm: Vm, fs: Addr) =
-  readable(vm, uint(fs), 8) && (all i: nat. i < 8 -> !stack_page(vm, (uint(fs) + i) / PAGE)) && le(vm.bytes, fs, 8) = fs
+  readable(vm, uint(fs), 8) && (all i: nat. i < 8 -> !stack_page(vm, (uint(fs) + i) / PAGE)) && le(vm.bytes, fs, 8) = fs && fs != 0
 
 // the break's start as Linux keeps it (exec sets it, nothing moves it):
 // above page 0, so a brk below it -- brk(0) -- only reads the break

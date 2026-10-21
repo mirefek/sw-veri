@@ -51,6 +51,10 @@ refines __syscall1_ref c_src_malloc_mallocng_malloc_cfg.__syscall1_fun c_src_mal
 // (the leaves' translation units)
 refines __syscall_ret_ref c_src_internal_syscall_ret_cfg.__syscall_ret_fun c_src_internal_syscall_ret.__syscall_ret_fun
 
+refines __get_tp_ref c_src_errno___errno_location_cfg.__get_tp_fun c_src_errno___errno_location.__get_tp_fun
+
+refines __errno_location_ref c_src_errno___errno_location_cfg.__errno_location_fun c_src_errno___errno_location.__errno_location_fun
+
 // The functions with loops (g.cut_loops, proofs/gimple_loop.core): an
 // infinite run's trace the structured loop's; activate_group's with a_cas's
 // tr.callee_io (the call in its loop) a premise
@@ -298,8 +302,47 @@ proof
   show := mp(all_elim(ms.a_cas_fun_c2, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(a_cas_ref, {regs}, {s}, {o}), h1, h2, h3, hr))
 qed
 
-// size_overflows with any ___errno_location (a leaf not yet at machine
-// level) meeting errno_location's spec: its code there, its contract
+// ___errno_location with __get_tp -- its code's contract for any entry
+// (__errno_location calls it without a frame, rsp not 16-byte aligned):
+// C1 has the aligned entry's only (gtpc.implements), so a premise yet
+theorem elc.linked: all statics. tr.implements_at_u(4216474, c_src_errno___errno_location_cfg.__get_tp_fun(), 4198400, text.code, statics) ->
+  tr.implements_at(4216494, c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun()), 4198400, text.code, statics)
+proof
+  fix statics
+  assume hu
+  show := mp(all_elim(elc.implements, {statics}, {c_src_errno___errno_location_cfg.__get_tp_fun()}), hu, gtpc.typed, gtpc.io)
+qed
+
+theorem elc.io_linked: tr.callee_io(c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun()), 0)
+proof
+  show := mp(all_elim(elc.io, {c_src_errno___errno_location_cfg.__get_tp_fun()}), gtpc.io)
+qed
+
+theorem elc.typed_linked: c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun()) in fn_space(abi.ARGS, powerset(univ(1)))
+proof
+  show := all_elim(elc.typed, {c_src_errno___errno_location_cfg.__get_tp_fun()})
+qed
+
+theorem cc.errno_location: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun())[regs], s, o) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o)
+proof
+  fix regs s o
+  assume h1 h2 h3 hr
+  have c2 := mp(all_elim(ms.errno_location_fun_c2, {c_src_errno___errno_location_cfg.__get_tp_fun()}), __get_tp_ref)
+  show := mp(all_elim(c2, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(__errno_location_ref, {c_src_errno___errno_location_cfg.__get_tp_fun()}, {regs}, {s}, {o}), h1, h2, h3, hr))
+qed
+
+theorem elc.composed: all statics. tr.implements_at_u(4216474, c_src_errno___errno_location_cfg.__get_tp_fun(), 4198400, text.code, statics) ->
+  tr.implements_at(4216494, mallocng_specs.errno_location_spec_fun, 4198400, text.code, statics)
+proof
+  fix statics
+  assume hu
+  show := mp(all_elim(tr.implements_refine, {4216494}, {c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun())}, {mallocng_specs.errno_location_spec_fun},
+    {4198400}, {text.code}, {statics}), mp(all_elim(elc.linked, {statics}), hu), cc.errno_location)
+qed
+
+// size_overflows with any ___errno_location meeting errno_location's
+// spec: its code there, its contract
 theorem sotc.composed: all statics G. tr.implements_at(4216494, G, 4198400, text.code, statics) -> G in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G, 0) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(G[regs], s, o) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o)) ->
   tr.implements_at(4208340, mallocng_specs.size_overflows_spec_fun, 4198400, text.code, statics)
@@ -336,4 +379,24 @@ proof
   qed
   show := mp(all_elim(tr.implements_refine, {4216593}, {c_src_internal_syscall_ret_cfg.__syscall_ret_fun(G)}, {mallocng_specs.syscall_ret_spec_fun()},
     {4198400}, {text.code}, {statics}), ln, cc)
+qed
+
+// (... with this ___errno_location: theirs at machine level, but for
+// __get_tp's contract for any entry)
+theorem sotc.composed_el: all statics. tr.implements_at_u(4216474, c_src_errno___errno_location_cfg.__get_tp_fun(), 4198400, text.code, statics) ->
+  tr.implements_at(4208340, mallocng_specs.size_overflows_spec_fun, 4198400, text.code, statics)
+proof
+  fix statics
+  assume hu
+  show := mp(all_elim(sotc.composed, {statics}, {c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun())}),
+    mp(all_elim(elc.linked, {statics}), hu), elc.typed_linked, elc.io_linked, cc.errno_location)
+qed
+
+theorem srtc.composed_el: all statics. tr.implements_at_u(4216474, c_src_errno___errno_location_cfg.__get_tp_fun(), 4198400, text.code, statics) ->
+  tr.implements_at(4216593, mallocng_specs.syscall_ret_spec_fun(), 4198400, text.code, statics)
+proof
+  fix statics
+  assume hu
+  show := mp(all_elim(srtc.composed, {statics}, {c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun())}),
+    mp(all_elim(elc.linked, {statics}), hu), elc.typed_linked, elc.io_linked, cc.errno_location)
 qed

@@ -975,3 +975,12 @@ item is a short summary of finished work; details are in the files named.
   -r to errno, -1; else r), C2 `ms.syscall_ret_c2` for any
   ___errno_location meeting errno_location's spec (as size_overflows'),
   the CFG refining the structured form (`__syscall_ret_ref`).
+- **___errno_location to its contract** (`elc.composed`): the spec requires
+  a sound thread (`thread_ok`) and errno's cell not wrapping (what its
+  callers' `errno_ok` has already); the ABI's `thread_ok` says the thread
+  pointer is not null (the descriptor an object). C2
+  `ms.errno_location_c2` from __get_tp's readable form (`ms.tp_det`:
+  `thread_ptr()` the thread pointer, `ms.gtp_q` at a call); `g.fun_res0`
+  for functions of no arguments. Linked with __get_tp's code (its
+  contract for any entry a premise), it closes size_overflows' and
+  __syscall_ret's contracts (`sotc.composed_el`, `srtc.composed_el`).
