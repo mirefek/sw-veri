@@ -598,7 +598,11 @@ pred grp_rw(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
 
 pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
   inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks))) &&
-  rw: grp_rw(c, A, vm, blocks)
+  rw: grp_rw(c, A, vm, blocks) &&
+  // the reserve's pages: ones the kernel may reprotect (mapped, off the
+  // stack's space, not executable -- as mmap and brk made them)
+  rsv: (A.reserve_cnt > 0 -> off_stack_space(vm, A.reserve / PAGE, A.reserve_cnt) &&
+    (all q: nat. A.reserve / PAGE <= q && q < A.reserve / PAGE + A.reserve_cnt -> mapped(vm, q) && !vm.pages[q].value.prot.x))
 
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g

@@ -984,6 +984,15 @@ item is a short summary of finished work; details are in the files named.
   for functions of no arguments. Linked with __get_tp's C1, it closes
   size_overflows' and __syscall_ret's contracts (`sotc.composed_el`,
   `srtc.composed_el`).
+- **mprotect's pages the kernel's to reprotect**: `mprotect_spec` requires
+  GIMPLE's `sys_pages_ok` (the kernel model's: off the stack's space, not
+  executable); the invariant's `holds_in` says the reserve's pages are
+  such (`rsv`: mapped, not executable, off the stack's space -- as the
+  mmap without a hint and the brk growth made them, `mp.rsv_fresh`), kept
+  by the frames (`mp.rsv_keep`, `mp.rsv_vm`, `mp.rsv_drop` for a new
+  area), so alloc_meta's mprotect of the reserve's first page has it
+  (`mp.rsv_first`). The frames' preconditions carry the stack's bounds
+  (unchanged by the C world).
 - **C1 for any entry alignment**: `tr.inv` has the entry's rsp 8-byte
   aligned (enough for the return slot's page, `tr.page_ret`; `tr.kept` the
   return slot's pages), the ABI's 16-byte alignment (`tr.sal16`) a premise

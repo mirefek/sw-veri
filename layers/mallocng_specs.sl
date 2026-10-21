@@ -276,9 +276,11 @@ fn mmap_spec_fun() -> CFun2[World] = (args: Args) => {
 
 // mprotect(addr, len, prot): the pages from addr's to addr + len's of
 // protection prot, 0; or, at the first of them unmapped, -1, errno
-// ENOMEM -- the pages before it changed already
+// ENOMEM -- the pages before it changed already. The pages ones the kernel
+// may reprotect (sys_pages_ok: off the stack's space, not executable).
 proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32] {
-  require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && errno_ok(vm, objs, fs_base)
+  require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && errno_ok(vm, objs, fs_base) &&
+    sys_pages_ok(vm, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE)
   either { overflow() } or {
     let before = vm
     let s = uint(addr) / PAGE

@@ -537,10 +537,22 @@ qed
 theorem mp.mm_holds(c, A, vm, V2, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
   (all q. q in omega -> x86_64_linux.mapped(vm, q) -> V2.pages[q] = vm.pages[q]) ->
   (all y. y in bits(64) -> x86_64_linux.mapped(vm, int_div(y, x86_64_linux.PAGE)) -> V2.bytes[y] = vm.bytes[y]) -> V2.brk = vm.brk ->
+  V2.stack_top = vm.stack_top -> V2.stack_limit = vm.stack_limit ->
   mallocng.holds_in(c, A, V2, b)
 proof
-  assume hc hu ha hh hpg hby hbk
-  have {H = inv, hm = mapped, hfr = free, hrw = rw} := expand(hh, mallocng.holds_in)
+  assume hc hu ha hh hpg hby hbk het hel
+  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv} := expand(hh, mallocng.holds_in)
+  // (the reserve's pages: mapped, so as they were)
+  have rpq: all q. q in omega -> int_le(int_div(A.reserve, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.reserve, x86_64_linux.PAGE), A.reserve_cnt)) ->
+      V2.pages[q] = vm.pages[q] proof
+    fix q
+    assume hq hr
+    have hc0: int_lt(0, A.reserve_cnt) by arith(hr)
+    have _ px := mp(hrs, hc0)
+    have hmq _ := mp(all_elim(px, {q}), hq, hr)
+    show := mp(all_elim(hpg, {q}), hq, hmq)
+  qed
+  have rs2 := apply(mp.rsv_keep[A := A, A2 := A, vm := vm, vm2 := V2], hrs, refl({A.reserve}), refl({A.reserve_cnt}), het, hel, rpq)
   have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   // (a page mapped: as before, so mapped still)
   have pq: all a. a in omega -> x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) -> V2.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] proof
@@ -630,7 +642,7 @@ proof
     show by taut(rw, o1, rewrite(sym(pe), o2))
   qed
   have g2: mallocng.grp_rw(c, A, V2, b) by defs(gq, mallocng.grp_rw)
-  show by defs(taut(i2, m2, f2, g2), mallocng.holds_in)
+  show by defs(taut(i2, m2, f2, g2, rs2), mallocng.holds_in)
 qed
 
 // (bytes on pages mmap gave read-write: usable)
@@ -1967,7 +1979,8 @@ proof
         have w4W w4u := apply(mp.am_world, hw, hu, v4v)
         have mbr := rewrite(sym(rm), mb)
         // (the invariant on V4: mmap's pages unmapped before)
-        have hin4 := apply(mp.mm_holds[c := c, A := A1, vm := V3, V2 := V4, b := B], hc, a1u, a1a, hin3, mpg, mby, hvb)
+        have ft4 fl4 .. := expand(hfr, gimple.fresh_pages)
+        have hin4 := apply(mp.mm_holds[c := c, A := A1, vm := V3, V2 := V4, b := B], hc, a1u, a1a, hin3, mpg, mby, hvb, ft4, fl4)
         // (M's record read-write, its pages V1's)
         have ep31: V3.pages = V1.pages := trans(ep23, ep12)
         have rwa _ _ := expand(mp(rdy1, hnz), mallocng_specs.meta_ready)
@@ -2693,7 +2706,7 @@ proof
           show by taut(k1c, c1, c2)
         qed
         have GP: mp.gxpre(c, A1, V4, VF, B, KK, A.taken, M, VR, K4) := conj(hc, a1u, a1a, hbt, v4v, vfv, hin4, tl0, tkm, hnz, vrt, (K4 = int_add(VR.last_idx, 1) by arith(vli)),
-          conj(kko, kkl), klo, khi, (int_lt(0, VR.maplen) by arith(vml, qnp)), vfr, vnp, vmr, (VF.pages = V4.pages by simp()), (VF.brk = V4.brk by simp()), vby, vrec,
+          conj(kko, kkl), klo, khi, (int_lt(0, VR.maplen) by arith(vml, qnp)), vfr, vnp, vmr, (VF.pages = V4.pages by simp()), (VF.brk = V4.brk by simp()), (VF.stack_top = V4.stack_top && VF.stack_limit = V4.stack_limit by simp()), vby, vrec,
           conj(vpv, vnx), (int_lt(VR.sizeclass, 48) by arith(vsc, hsl)), vhd, vact, vavl, vfrd, small, vzr, sno, fits, offs, span)
         have hinF := apply(mp.gx_holds_in, GP)
         // ---- the outcome: M's group, fresh; no slot reserved, the class's
@@ -4251,6 +4264,8 @@ proof
         have pgs: VF.pages = V17.pages := trans((VF.pages = V20.pages by simp()), ep20)
         have eb20: V20.brk = V17.brk := sym(rewrite(fv1, mp(app_update_other[f := V20, k := "bytes", v := V17.bytes, x := "brk"], (!("brk" = "bytes") by simp()))))
         have bks: VF.brk = V17.brk := trans((VF.brk = V20.brk by simp()), eb20)
+        have et20: V20.stack_top = V17.stack_top := sym(rewrite(fv1, mp(app_update_other[f := V20, k := "bytes", v := V17.bytes, x := "stack_top"], (!("stack_top" = "bytes") by simp()))))
+        have el20: V20.stack_limit = V17.stack_limit := sym(rewrite(fv1, mp(app_update_other[f := V20, k := "bytes", v := V17.bytes, x := "stack_limit"], (!("stack_limit" = "bytes") by simp()))))
         // (the frame: the block's made the group's -- the byte before p its
         // slot's index and 6, the bytes below p as before)
         have ss0 := all_elim(gss, {R2})
@@ -4341,7 +4356,7 @@ proof
           show by defs(arith(e, nnl), mallocng.UNIT)
         qed
         have GP: mp.gnpre(c, A2, V17, VF, B, G, R2, KK, A.taken, M, VR, C2) := conj(hc, a2u, a2a, hbt, v17v, vfv, hin17, iuG, r2o, ro, tl0, tk17, hnz, vrt,
-          (C2 = int_add(VR.last_idx, 1) by arith(vli)), conj(kko, kkl), klo, khi, vml, vmr, pgs, bks, vby, send, vrec, conj(vpv, vnx), (int_lt(VR.sizeclass, 48) by arith(vsc, hsl)),
+          (C2 = int_add(VR.last_idx, 1) by arith(vli)), conj(kko, kkl), klo, khi, vml, vmr, pgs, bks, (VF.stack_top = V17.stack_top && VF.stack_limit = V17.stack_limit by simp(et20, el20)), vby, send, vrec, conj(vpv, vnx), (int_lt(VR.sizeclass, 48) by arith(vsc, hsl)),
           hd1, vfr, vact, vavl, vfrd, vsm, chk, offs)
         have hinF := apply(mp.gn_holds_in, GP)
         // ---- the outcome: M's group, fresh, nested in g's slot; no slot
