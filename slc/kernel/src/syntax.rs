@@ -892,7 +892,7 @@ fn load_mode(
                     (Tok::Ident(k), Some(t)) if k == "proof" || (cached && k == "cached") => {
                         let mut vs = Vec::new();
                         t.vars(&mut vs);
-                        (vs.iter().map(|v| (p.env.var(*v).name.clone(), *v)).collect::<Vec<_>>(), t)
+                        (vs.iter().map(|v| (p.env.var(*v).name.to_string(), *v)).collect::<Vec<_>>(), t)
                     }
                     (_, known) => {
                         let ps = p.param_list()?;
@@ -1212,7 +1212,7 @@ impl<'e> Printer<'e> {
             let step = match (e.node(), g.node()) {
                 (Node::App(se, ae), Node::App(sg, ag)) if se == sg && ae.len() == ag.len() => Some((self.name(*se).to_string(), self.env.syms[*se as usize].binders.clone(), ae.clone(), ag.clone())),
                 (Node::Var(ve, ae), Node::Var(vg, ag)) if ve == vg && ae.len() == ag.len() && !ae.is_empty() => {
-                    Some((self.env.var_get(*ve).map(|v| v.name.clone()).unwrap_or_default(), vec![0; ae.len()], ae.clone(), ag.clone()))
+                    Some((self.env.var_get(*ve).map(|v| v.name.to_string()).unwrap_or_default(), vec![0; ae.len()], ae.clone(), ag.clone()))
                 }
                 _ => None,
             };
@@ -1478,7 +1478,7 @@ impl<'e> Printer<'e> {
                         let info = &self.env.var(*v);
                         let bs: Vec<String> = (0..info.arity).map(|i| format!("y{}", i)).collect();
                         if bs.is_empty() {
-                            info.name.clone()
+                            info.name.to_string()
                         } else {
                             format!("{}. {}", bs.join(" "), info.name)
                         }

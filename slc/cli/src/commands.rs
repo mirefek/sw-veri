@@ -175,7 +175,7 @@ fn params_of(env: &Env, t: &sl_kernel::Term) -> String {
         .map(|v| {
             let x = &env.var(*v);
             let bs: Vec<String> = (0..x.arity).map(|i| format!("x{}", i)).collect();
-            if bs.is_empty() { x.name.clone() } else { format!("{}. {}", bs.join(" "), x.name) }
+            if bs.is_empty() { x.name.to_string() } else { format!("{}. {}", bs.join(" "), x.name) }
         })
         .collect();
     format!("({})", ps.join(", "))
@@ -253,9 +253,28 @@ pub fn kernel_check(args: &[String]) -> CResult {
             rep.claims.len(),
             if cached { " (cached)" } else { "" }
         );
-        // (SLC_TIMES: each file's time)
+        // (SLC_TIMES: each file's time, the resident memory after it, the
+        // peaks so far -- resident, virtual: what ulimit -v bounds)
+        // (the allocator's free memory given back after each file: a large
+        // file's peak -- c1's -- otherwise stays as free heap, and the next
+        // file's peak lands on top of it, against ulimit -v; what stays
+        // resident then is live)
+        #[cfg(target_env = "gnu")]
+        {
+            extern "C" {
+                fn malloc_trim(pad: usize) -> i32;
+            }
+            // SAFETY: glibc's malloc_trim only releases free memory
+            unsafe {
+                malloc_trim(0);
+            }
+        }
         if std::env::var("SLC_TIMES").is_ok() {
-            eprintln!("{:8.2}s {}", t0.elapsed().as_secs_f64(), f.display());
+            let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |p| p * 4096 / 1_000_000);
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let kb = |k: &str| status.lines().find(|l| l.starts_with(k)).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()).map_or(0, |v| v / 1000);
+            eprintln!("{:8.2}s {:6} MB (peak {} MB, virtual {} MB, {} variables in a proof at most) {}", t0.elapsed().as_secs_f64(), rss, kb("VmHWM:"), kb("VmPeak:"), env.peak_locals, f.display());
+            env.peak_locals = 0;
         }
     }
     // what the claims and conditional theorems still rest on

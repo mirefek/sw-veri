@@ -1117,7 +1117,7 @@ impl State {
                         continue;
                     }
                     let k = env.var(v).arity;
-                    let w = env.new_var(&env.var(v).name.clone(), k);
+                    let w = env.new_var(&env.var(v).name.to_string(), k);
                     ls = Seq::inst(env, &ls, v, &Term::var(w, (0..k).rev().map(Term::bvar).collect()))?;
                     vs.push(w);
                 }

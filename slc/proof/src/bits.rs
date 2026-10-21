@@ -373,7 +373,7 @@ pub(crate) fn open_rule(env: &mut Env, lg: &Logic, l: &Seq) -> KResult<(Seq, Vec
             h.vars(&mut hv);
             hv.contains(&v)
         }) {
-            let w = env.new_var(&env.var(v).name.clone(), 0);
+            let w = env.new_var(&env.var(v).name.to_string(), 0);
             s = Seq::inst(env, &s, v, &Term::var(w, vec![]))?;
             vs.push(w);
         }

@@ -322,9 +322,8 @@ impl Seq {
         }
         let mut r = s.clone();
         for v in vs {
-            let info = env.var_get(v).ok_or_else(|| KernelError("unknown variable".into()))?.clone();
-            let g = env.new_global_var(&info.name, info.arity);
-            let k = info.arity;
+            let (name, k) = env.var_get(v).map(|i| (i.name.to_string(), i.arity)).ok_or_else(|| KernelError("unknown variable".into()))?;
+            let g = env.new_global_var(&name, k);
             let value = Term::var(g, (0..k).map(|i| Term::bvar(k - 1 - i)).collect());
             r = Seq::inst(env, &r, v, &value)?;
         }

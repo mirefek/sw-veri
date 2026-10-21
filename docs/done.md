@@ -902,3 +902,13 @@ item is a short summary of finished work; details are in the files named.
   emptied between files. The uncached chain no longer keeps every proof's
   variables (23.7 M by alloc_slot, ~2 GB live): 3.3 GB -> 1.7 GB peak, the
   whole chain with alloc_group within the 6 GB limit (403 s).
+- **... 8 bytes each, freed memory given back**: a variable stored as its
+  interned name's index and its arity (`VarSlot`; names once, in
+  `Env::var_names`; the accessors give `VarInfo { name: &str, arity }`) --
+  alloc_group's largest proof makes 35 M (its table's doubling to 2 GB hit
+  ulimit -v). After each file the allocator's free memory is returned
+  (`malloc_trim`): c1.core's 2.8 GB peak otherwise stayed as free heap
+  under the next files' peaks. `SLC_TIMES` shows each file's resident
+  memory, its peaks (resident, virtual) and its largest proof's variables.
+  The uncached chain 935 s -> 630 s, its virtual peak 5.9 GB -> 4.4 GB
+  (alloc_group's; c1.core's resident 2.8 GB the largest).

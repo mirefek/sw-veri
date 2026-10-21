@@ -526,7 +526,7 @@ impl<'e> Gen<'e> {
         // (named as the world before, in messages and for `zeta`)
         let e = self.mk("letin", vec![ew.clone(), body.clone()]);
         let e = match w.node() {
-            Node::Var(x, a) if a.is_empty() => e.with_binder_name(Some(self.env.var(*x).name.as_str().into())),
+            Node::Var(x, a) if a.is_empty() => e.with_binder_name(Some(self.env.var(*x).name.into())),
             _ => e,
         };
         if self.is_value(v) && !self.zs.contains(&v) {
@@ -628,7 +628,7 @@ impl<'e> Gen<'e> {
 
     /// a value's name (`T`, a world): not the fixed V and W
     fn is_value(&self, v: VarId) -> bool {
-        !matches!(self.env.var(v).name.as_str(), "V" | "W")
+        !matches!(self.env.var(v).name, "V" | "W")
     }
 
     fn canon_in(&self, t: &Term) -> Term {

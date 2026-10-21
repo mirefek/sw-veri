@@ -41,10 +41,19 @@ pub struct SymInfo {
     pub kind: SymKind,
 }
 
-#[derive(Debug, Clone)]
-pub struct VarInfo {
-    pub name: String,
+/// A variable's name and arity, as the accessors give them
+#[derive(Debug, Clone, Copy)]
+pub struct VarInfo<'a> {
+    pub name: &'a str,
     pub arity: u32,
+}
+
+/// A variable as stored: its name interned (`Env::var_names`), its arity
+/// -- 8 bytes (a proof may make tens of millions)
+#[derive(Debug, Clone, Copy)]
+struct VarSlot {
+    name: u32,
+    arity: u32,
 }
 
 /// The environment's entries counted before a proof (`Env::local_mark`)
@@ -97,15 +106,21 @@ pub const LOCAL_END: VarId = 2_900_000_000;
 pub struct Env {
     pub syms: Vec<SymInfo>,
     pub sym_by_name: HashMap<String, SymId>,
+    /// the variables' names, each once (by its index in `var_slots`)
+    var_names: Vec<String>,
+    var_name_ids: HashMap<String, u32>,
     /// the global variables, numbered from 0
-    globals: Vec<VarInfo>,
+    globals: Vec<VarSlot>,
     /// a proof's variables (inside `begin_locals` .. `end_locals`),
     /// numbered from `local_base`; emptied after it, the base moved past
     /// them -- no id ever given twice, a dropped one unknown (refused by
     /// every rule that reads a variable's arity)
-    locals: Vec<VarInfo>,
+    locals: Vec<VarSlot>,
     local_base: VarId,
     local_depth: u32,
+    /// the most variables one proof made, since this was last reset (a
+    /// measure, not part of the logic)
+    pub peak_locals: usize,
     pub axioms: Vec<(String, Thm)>,
     pub defs: Vec<(SymId, Thm)>,
     pub claims: Vec<(String, Term)>,
@@ -175,10 +190,13 @@ impl Env {
         let mut env = Env {
             syms: Vec::new(),
             sym_by_name: HashMap::new(),
+            var_names: Vec::new(),
+            var_name_ids: HashMap::new(),
             globals: Vec::new(),
             locals: Vec::new(),
             local_base: LOCAL0,
             local_depth: 0,
+            peak_locals: 0,
             axioms: Vec::new(),
             defs: Vec::new(),
             claims: Vec::new(),
@@ -249,34 +267,47 @@ impl Env {
     /// `end_locals`, else global. Panics when its range is used up (an id
     /// never wraps around to one given before).
     pub fn new_var(&mut self, name: &str, arity: u32) -> VarId {
+        let name = self.var_name_id(name);
         if self.local_depth > 0 {
             let id = self.local_base as u64 + self.locals.len() as u64;
             assert!(id < LOCAL_END as u64, "local variable ids used up");
-            self.locals.push(VarInfo { name: name.to_string(), arity });
+            self.locals.push(VarSlot { name, arity });
             id as VarId
         } else {
             let id = self.globals.len() as u64;
             assert!(id < LOCAL0 as u64, "global variable ids used up");
-            self.globals.push(VarInfo { name: name.to_string(), arity });
+            self.globals.push(VarSlot { name, arity });
             id as VarId
         }
     }
 
+    /// (a name's index in the names table: each name kept once)
+    fn var_name_id(&mut self, name: &str) -> u32 {
+        if let Some(&i) = self.var_name_ids.get(name) {
+            return i;
+        }
+        let i = u32::try_from(self.var_names.len()).expect("variable names used up");
+        self.var_names.push(name.to_string());
+        self.var_name_ids.insert(name.to_string(), i);
+        i
+    }
+
     /// A variable's name and arity; None for an id never given, or a
     /// proof's dropped one
-    pub fn var_get(&self, v: VarId) -> Option<&VarInfo> {
-        if v < LOCAL0 {
+    pub fn var_get(&self, v: VarId) -> Option<VarInfo<'_>> {
+        let slot = if v < LOCAL0 {
             self.globals.get(v as usize)
         } else if v >= self.local_base {
             self.locals.get((v - self.local_base) as usize)
         } else {
             None
-        }
+        }?;
+        Some(VarInfo { name: &self.var_names[slot.name as usize], arity: slot.arity })
     }
 
     /// A variable's name and arity (panics for an unknown id: a checker's
     /// bug -- the kernel's rules use `var_get` and refuse)
-    pub fn var(&self, v: VarId) -> &VarInfo {
+    pub fn var(&self, v: VarId) -> VarInfo<'_> {
         self.var_get(v).unwrap_or_else(|| panic!("unknown variable {}", v))
     }
 
@@ -303,6 +334,7 @@ impl Env {
     pub fn end_locals(&mut self) {
         self.local_depth -= 1;
         if self.local_depth == 0 {
+            self.peak_locals = self.peak_locals.max(self.locals.len());
             self.local_base += self.locals.len() as VarId;
             self.locals = Vec::new();
             self.clear_term_caches();
@@ -322,7 +354,8 @@ impl Env {
     pub(crate) fn new_global_var(&mut self, name: &str, arity: u32) -> VarId {
         let id = self.globals.len() as u64;
         assert!(id < LOCAL0 as u64, "global variable ids used up");
-        self.globals.push(VarInfo { name: name.to_string(), arity });
+        let name = self.var_name_id(name);
+        self.globals.push(VarSlot { name, arity });
         id as VarId
     }
 
