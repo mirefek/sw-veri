@@ -295,17 +295,17 @@ impl<'e> Gen<'e> {
 
     /// an equation of constructed outcomes in the program's body t (of its
     /// world x0 alone, t at `depth` binders within the body) false by
-    /// g.exc_ne_ok, g.ok_ne_exc, g.exc_raise_brk or g.exc_ret_brk: it
+    /// exc_ok_ne, ok_exc_ne (core/records.core), g.exc_raise_brk or g.exc_ret_brk: it
     /// (at the body), the lemma
     fn ctor_false(&self, t: &Term, depth: u32) -> Option<(Term, &'static str)> {
         if let Some(e) = self.app(t, "eq", 2) {
             if self.ctor_eq(&e[0], &e[1]) == Some(false) {
                 let lab = |x: &Term| self.app(x, "exc", 2).and_then(|y| self.app(&y[1], "pair", 2).map(|p| p[0].clone()));
                 let lemma = match (self.app(&e[0], "exc", 2).is_some(), self.app(&e[1], "exc", 2).is_some()) {
-                    _ if self.app(&e[0], "diverge", 1).is_some() && self.app(&e[1], "ok", 2).is_some() => Some("g.div_ne_ok"),
-                    _ if self.app(&e[0], "diverge", 1).is_some() && self.app(&e[1], "exc", 2).is_some() => Some("g.div_ne_exc"),
-                    (true, false) if self.app(&e[1], "ok", 2).is_some() => Some("g.exc_ne_ok"),
-                    (false, true) if self.app(&e[0], "ok", 2).is_some() => Some("g.ok_ne_exc"),
+                    _ if self.app(&e[0], "diverge", 1).is_some() && self.app(&e[1], "ok", 2).is_some() => Some("div_ok_ne"),
+                    _ if self.app(&e[0], "diverge", 1).is_some() && self.app(&e[1], "exc", 2).is_some() => Some("div_exc_ne"),
+                    (true, false) if self.app(&e[1], "ok", 2).is_some() => Some("exc_ok_ne"),
+                    (false, true) if self.app(&e[0], "ok", 2).is_some() => Some("ok_exc_ne"),
                     (true, true) => match (lab(&e[0]), lab(&e[1])) {
                         (Some(a), Some(b)) if matches!(b.node(), Node::Bytes(x) if &x[..] == b"brk") => match a.node() {
                             Node::Bytes(x) if &x[..] == b"raise" => Some("g.exc_raise_brk"),
@@ -1232,9 +1232,9 @@ impl<'e> Gen<'e> {
                 Some(d) => vec![d[0].clone()],
                 None => self.app(&e[0], "exc", 2).or_else(|| self.app(&e[0], "ok", 2)).ok_or("redex")?.to_vec(),
             };
-            let binds: Vec<(&'static str, Term)> = if lemma.starts_with("g.div_") {
+            let binds: Vec<(&'static str, Term)> = if lemma.starts_with("div_") {
                 vec![("t", pa[0].clone()), ("c", pb[0].clone()), ("d", pb[1].clone())]
-            } else if lemma == "g.exc_ne_ok" || lemma == "g.ok_ne_exc" {
+            } else if lemma == "exc_ok_ne" || lemma == "ok_exc_ne" {
                 vec![("a", pa[0].clone()), ("b", pa[1].clone()), ("c", pb[0].clone()), ("d", pb[1].clone())]
             } else {
                 let (va, vb) = (self.app(&pa[1], "pair", 2).ok_or("redex")?[1].clone(), self.app(&pb[1], "pair", 2).ok_or("redex")?[1].clone());

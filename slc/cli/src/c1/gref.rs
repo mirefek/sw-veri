@@ -671,7 +671,7 @@ impl<'e> Gen<'e> {
                 return Some((t.clone(), R::Inst("snd_pair".into(), vec![("a", p2[0].clone()), ("b", p2[1].clone())])));
             }
             if let Some(o) = self.app(&x, "diverge", 1) {
-                return Some((t.clone(), R::Inst("g.snd_diverge".into(), vec![("t", o[0].clone())])));
+                return Some((t.clone(), R::Inst("snd_diverge".into(), vec![("t", o[0].clone())])));
             }
         }
         for (f0, lk, le) in [("out_state", "out_state_ok", "out_state_exc"), ("out_value", "out_value_ok", "out_value_exc")] {

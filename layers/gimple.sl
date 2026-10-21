@@ -356,22 +356,27 @@ pred reprot(before: Vm, vm: Vm, p: nat, n: nat, pr: Prot) =
 
 // Linux's calls (spec/linux/process.sl's sys_brk, sys_mmap, sys_mprotect),
 // their effect on the memory stated (C1's `syscall` rule shows the
-// machine's run of each, seen through the world, one of these). brk:
+// machine's run of each, seen through the world, one of these).
+//
+// brk(new): the memory vm after it, from before -- unchanged, below the
+// break's start or refused growing (the pages not free, off the stack's
+// space; or the kernel's choice); grown to new by fresh heap pages; or
+// shrunk to new, the pages above gone. The break returned (the old one
+// unchanged, else new).
+pred brk_post(before: Vm, vm: Vm, new: Addr) =
+  (vm = before && (new < before.brk_start || pages_for(uint(new)) > pages_for(uint(before.brk)))) ||
+  (new >= before.brk_start && pages_for(uint(new)) > pages_for(uint(before.brk)) &&
+   free_range(before, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk))) &&
+   off_stack_space(before, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk))) &&
+   fresh_pages(before, vm, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk)),
+     Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new) ||
+  (new >= before.brk_start && pages_for(uint(new)) <= pages_for(uint(before.brk)) &&
+   gone_pages(before, vm, pages_for(uint(new)), pages_for(uint(before.brk)) - pages_for(uint(new))) && vm.brk = new)
+
 proc[World] os_brk(new: Addr) -> bits[64] {
   let before = vm
-  let old_end = pages_for(uint(before.brk))
-  let new_end = pages_for(uint(new))
-  if new < before.brk_start { return before.brk }
-  if new_end > old_end {
-    if !free_range(before, old_end, new_end - old_end) || !off_stack_space(before, old_end, new_end - old_end) { return before.brk }
-    either { return before.brk } or {
-      havoc vm where fresh_pages(before, vm, old_end, new_end - old_end, Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new
-      return new
-    }
-  } else {
-    havoc vm where gone_pages(before, vm, new_end, old_end - new_end) && vm.brk = new
-    return new
-  }
+  havoc vm where brk_post(before, vm, new)
+  return vm.brk
 }
 
 // mmap (anonymous private memory only)

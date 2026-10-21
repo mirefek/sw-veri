@@ -79,15 +79,14 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 
 ## 7. Usability
 
-- Dedicated rules for what `simp` is used for in the machine's semantics
-  (proofs/linux_sys.core), without unfolding anything: (a) a dispatch's
-  live case -- a disjunction of guarded clauses whose guards are closed
-  comparisons (`x86.execute`'s tags, `linux_syscall`'s match): the guards
-  evaluated, the one clause left as written (simp there needs `keep(..)`
-  of the live body, else it unfolds all of Linux); (b) a statement's known
-  outcome (ok / ret / raise / brk / diverge) through the elaborator's
-  sequencing forms -- one rule for the hand lemmas `lx.top_*`, `lx.blk_*`,
-  `lx.ib_*`, `lx.istep_*`, `lx.tlp_*`, `lx.lp_brk`. Time both.
+- `rsimp` for the machine's semantics (proofs/linux_sys.core) instead of
+  hand lemmas: a dispatch's live case is `rsimp(h, tag)` already; a
+  statement's known outcome through the elaborator's sequencing forms
+  (the outcomes' parts and their kinds' disequalities registered,
+  core/records.core) should be too -- the hand lemmas `lx.top_*`,
+  `lx.blk_*`, `lx.ib_*`, `lx.istep_*`, `lx.tlp_*`, `lx.lp_brk` then go.
+  The rest of the proofs' `simp` that only rewrites: `rsimp` (simp kept
+  for executing program paths).
 
 - The proof cache does not key on the checker: after an engine change
   `scripts/check.sh` reports proofs "as checked before"; check the
