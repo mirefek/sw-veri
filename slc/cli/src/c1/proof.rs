@@ -9,18 +9,20 @@ struct Ctx {
     fr: u128,
     w: Term,
     hvu: Option<Seq>,
+    hww: Option<Seq>,
     lf: Vec<Seq>,
 }
 
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
-        Ctx { fr: self.fr, w: self.w.clone(), hvu: self.hvu.clone(), lf: self.lf.clone() }
+        Ctx { fr: self.fr, w: self.w.clone(), hvu: self.hvu.clone(), hww: self.hww.clone(), lf: self.lf.clone() }
     }
 
     fn restore(&mut self, c: Ctx) {
         self.fr = c.fr;
         self.w = c.w;
         self.hvu = c.hvu;
+        self.hww = c.hww;
         self.lf = c.lf;
     }
 
@@ -337,6 +339,7 @@ impl<'e> Gen<'e> {
         self.fr = st.fr;
         self.w = st.w.clone();
         self.hvu = Some(st.hvu.clone());
+        self.hww = Some(st.hw.clone());
         self.set_lf(&st)?;
         if let Some(pf) = self.loop_point(&st)? {
             return Ok(pf);
@@ -561,7 +564,7 @@ impl<'e> Gen<'e> {
         if insn.row != 120 {
             return Err(format!("{:x}: the spec calls, the machine does not", a));
         }
-        if st.fr % 8 != 0 || st.fr < 8 || st.fr + 8 > 65536 {
+        if st.fr % 8 != 0 || st.fr + 8 > 65536 {
             return Err(format!("{:x}: a call from a frame of {} bytes (a multiple of 8, at most 64 KiB expected)", a, st.fr));
         }
         let aligned = st.fr % 16 == 8;
@@ -1050,6 +1053,7 @@ impl<'e> Gen<'e> {
         self.fr = st.fr;
         self.w = st.w.clone();
         self.hvu = Some(st.hvu.clone());
+        self.hww = Some(st.hw.clone());
         self.set_lf(st)?;
         let Spec::Proc(qi) = st.spec else { return Err(format!("{:x}: back at the loop's head after its result", st.a)) };
         // the reductions to the marked return

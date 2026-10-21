@@ -19,7 +19,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   as the machine's), to discharge `mp.am_implements`' hypotheses -- and
   `mp.as_implements` / `mp.agr_implements`' (`mp.ap_leaves`, the same).
   __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
-  to be used once the other leaves are). Then `sys_call3` / `sys_call6` the same way (the
+  to be used once the other leaves are); __get_tp, __errno_location have
+  their C1 (proofs/mallocng/machine/c1_leaves.core). __syscall_ret keeps a
+  value in rbx across its call (`push rbx` .. `pop rbx`): C1 has every
+  callee-saved register its entry's throughout (`tr.inv`'s `mcs`), so a
+  saved one needs the bridge to know it saved (its value in a home, rbx
+  the function's to use, restored before the return); nontrivial_free the
+  same. Then `sys_call3` / `sys_call6` the same way (the
   closed forms `lx.sys_mprotect_ok`, `lx.sys_mmap_ok`; their world calls
   relational like brk's; mmap_spec / mprotect_spec restated in the code's
   shape, as `syscall1_spec`), memcpy's model.

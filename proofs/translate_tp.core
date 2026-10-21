@@ -1,0 +1,115 @@
+// The thread pointer (readable GIMPLE's `thread_ptr()`, layers/gimple.sl:
+// the word at fs_base, musl's __get_tp's `mov %fs:0, r`): the machine's
+// load, GIMPLE's op, C1's rule.
+//
+//   checked after proofs/translate.core
+
+// (fs:[d], no base, no index)
+abbrev x86i.fs_mem(d) := tag(2, fn_update(fn_update(fn_update(fn_update(fn_update(empty, "seg", 2), "base", tag(0, empty)), "index", none), "scale", 1), "disp", d))
+
+// mov r64, qword fs:[d] (64 8B /r): g := the 8 bytes at fs_base + d
+theorem x86i.load64_fs: all m o g d z2 len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> d in bits(64) ->
+  x86i.acc(m, bits_add(64, int_add(m.fs_base, d), 0), 8, 0) ->
+  runs(x86_64_linux.exec_body(len, tag(76, pair(8, pair(g, pair(x86i.fs_mem(d), pair(x86i.fs_mem(d), z2)))))), m, o) ->
+  o = ok(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "gpr",
+    fn_update(m.gpr, g, x86_64_linux.le(m.vm.bytes, bits_add(64, int_add(m.fs_base, d), 0), 8))), empty)
+proof
+  fix m o g d z2 len
+  assume hM hu h0 h2 a0 hr
+  have pt := apply(x86i.parts, hM)
+  have fb: m.fs_base in bits(64) by simp(expand(hM, x86_64_linux.Machine))
+  have k0: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.canonical(bits_add(64, bits_add(64, int_add(m.fs_base, d), 0), bits_of_int(64, j))) proof
+    fix j
+    assume j1 j2
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {m.vm}), {bits_add(64, bits_add(64, int_add(m.fs_base, d), 0), bits_of_int(64, j))}), {0}), mp(mp(all_elim(a0, {j}), j1), j2))
+  qed
+  show by simp(hr, hu, pt, h2, fb, apply(x86i.reg_typed, hM, h0), a0, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed
+
+// GIMPLE's: the 8 bytes at fs_base, readable in the world (else undefined)
+theorem tr.tp_ok: all s. s in abi.World && s in univ(1) -> g.mem_defined(s, s.fs_base, 0, 8, false) ->
+  runs(gimple.thread_ptr(), s, ok(s, bits_of_int(64, gimple.bytes_at(s.vm, bits_add(64, s.fs_base, 0), 8))))
+proof
+  fix s
+  assume hws hd
+  have hW hs := hws
+  have hf: s.fs_base in bits(64) by simp(expand(hW, abi.World))
+  let O := ok(s, bits_of_int(64, gimple.bytes_at(s.vm, bits_add(64, s.fs_base, 0), 8)))
+  have l := apply(tr.ld64_ok, hs, hf, (0 in bits(32) by simp()), hd)
+  have u: pair(s, O) in univ(1) by simp(hs)
+  have ek: ex s1 v. O = ok(s1, v) && O = ok(s1, v) by ex_intro({s}, {bits_of_int(64, gimple.bytes_at(s.vm, bits_add(64, s.fs_base, 0), 8))}, simp())
+  have b: bind_rel(gimple.ld64(s.fs_base, 0), s, x2 x3. O = ok(x2, x3), x2 x3. O = exc(x2, x3), x2. O = diverge(x2))
+    by defs(ex_intro({O}, taut(l, ek)), bind_rel)
+  show by defs(apply(tr.runs_intro, u, b), gimple.thread_ptr)
+qed
+
+theorem tr.tp_ub: all s s2 e. s in abi.World && s in univ(1) -> s2 in univ(1) -> e in univ(1) -> !g.mem_defined(s, s.fs_base, 0, 8, false) ->
+  runs(gimple.thread_ptr(), s, exc(s2, e))
+proof
+  fix s s2 e
+  assume hws h2 he hn
+  have hW hs := hws
+  have hf: s.fs_base in bits(64) by simp(expand(hW, abi.World))
+  let O := exc(s2, e)
+  have l := apply(tr.ld64_ub, hs, h2, he, hf, (0 in bits(32) by simp()), hn)
+  have u: pair(s, O) in univ(1) by simp(hs, h2, he)
+  have ek: ex s1 v. O = exc(s1, v) && O = exc(s1, v) by ex_intro({s2}, {e}, simp())
+  have b: bind_rel(gimple.ld64(s.fs_base, 0), s, x2 x3. O = ok(x2, x3), x2 x3. O = exc(x2, x3), x2. O = diverge(x2))
+    by defs(ex_intro({O}, taut(l, ek)), bind_rel)
+  show by defs(apply(tr.runs_intro, u, b), gimple.thread_ptr)
+qed
+
+// C1's rule: mov r64, fs:[d] -- g := the 8 bytes at the world's fs_base + d
+// (the machine's fs_base the world's, tr.inv), the spec's load there
+// defined
+theorem tr.load64_fs(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g d z2 r hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(76, pair(8, pair(g, pair(x86i.fs_mem(d), pair(x86i.fs_mem(d), z2)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> d in bits(32) ->
+  g.mem_defined(w, w.fs_base, d, 8, false) ->
+  r = bits_of_int(64, gimple.bytes_at(w.vm, bits_add(64, w.fs_base, d), 8)) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, fn_update(rs, g, pair(8, r)), p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g d z2 r hs ds rs p w
+  assume hat ha2 hg hd hdef hr hpt0
+  have hpt := rewrite(hr, hpt0)
+  let BY := bits_of_int(64, gimple.bytes_at(w.vm, bits_add(64, w.fs_base, d), 8))
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "gpr", fn_update(m.gpr, g, BY)), empty) proof
+    fix m o
+    assume hi hr hhs hrs hmm ho
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have mf := hi.mfs
+    have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+    have fb: m.fs_base in bits(64) by simp(expand(ipM, x86_64_linux.Machine))
+    have wf: w.fs_base in bits(64) by simp(rewrite(mf, fb))
+    have d64: d in bits(64) by simp(hd)
+    have ea: bits_add(64, int_add(m.fs_base, d), 0) = bits_add(64, w.fs_base, d) by simp(mf, wf, d64)
+    have rd := apply(tr.reads, {s}, {m}, {w}, {v}, {w.fs_base}, {d}, {8}, wf, hd, hdef, hmm, simp())
+    have ac := rewrite(sym(ea), rd.1)
+    have hx := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+    have e := apply(x86i.load64_fs, {m}, {o}, {g}, {d}, {z2}, {len}, ipM, ipU, gR, d64, ac, hx)
+    have lw := all_elim(tr.le_bytes, {w.vm}, {bits_add(64, w.fs_base, d)}, {8})
+    show by simp(e, ea, rd.2, lw, hr, ha2, keep(gimple.bytes_at, x86_64_linux.le))
+  qed
+  have ty: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> BY in bits(int_mul(8, 8)) && BY in bits(64) proof
+    fix m
+    show by simp(keep(tr.inv, tr.homes, tr.regs, gimple.bytes_at))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step0v[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {8}, {BY}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
+qed
+
+// its effect: a load's (callers' tr.callee_io)
+theorem tr.eff_thread_ptr: all w. tr.eff(w, o. runs(gimple.thread_ptr(), w, o))
+proof
+  fix w
+  have el := all_elim(tr.eff_ld64, {w}, {w.fs_base}, {0})
+  have rt: all s1 v. runs(gimple.ld64(w.fs_base, 0), w, ok(s1, v)) -> tr.eff(s1, o. o = ok(s1, v)) proof
+    fix s1 v
+    assume _
+    show := all_elim(tr.eff_ret, {s1}, {v})
+  qed
+  have eb := apply(tr.eff_bind[p := gimple.ld64(w.fs_base, 0), k := s1 v o. o = ok(s1, v)], {w}, el, rt)
+  show by defs(apply(tr.eff_prog, {w}, eb), gimple.thread_ptr)
+qed

@@ -944,3 +944,9 @@ item is a short summary of finished work; details are in the files named.
   `ms.brk_post_spec`), composed `sy1c.composed`. alloc_meta's call
   discharges the requirement (`mp.jg_req`: the break grown, or wrapped to
   0 below its start).
+- **The thread pointer in C1** (proofs/translate_tp.core): `mov r64,
+  fs:[d]` (`tr.load64_fs`: the machine's fs_base the world's), readable
+  GIMPLE's `thread_ptr()` (`tr.tp_ok`, `tr.tp_ub`, `tr.eff_thread_ptr`);
+  calls from a function without a frame (`tr.cfr` with fr = 0: the
+  callee's contract for any entry, `tr.implements_at_u`). C1 of __get_tp
+  and __errno_location (proofs/mallocng/machine/c1_leaves.core).

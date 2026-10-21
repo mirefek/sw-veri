@@ -239,6 +239,8 @@ struct Gen<'e> {
     fr: u128,
     w: Term,
     hvu: Option<Seq>,
+    /// (its `in abi.World && in univ(1)` fact)
+    hww: Option<Seq>,
     /// the spec's view at the entry (`W`): the state of its raises
     vw: Term,
     /// the fixed s, V (the entry's machine, its view's objects)

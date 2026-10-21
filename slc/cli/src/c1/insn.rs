@@ -176,6 +176,19 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_reg(st, a2, g, n, v);
                     return self.then(tr, st2);
                 }
+                // mov r64, fs:[d]: the spec's load at the world's fs_base + d
+                // (the thread pointer's)
+                if let Some(m) = self.memop(&x[2]).filter(|m| nat(&m["seg"]) == Some(2) && self.tag(&m["base"]).is_some_and(|b| b.0 == 0) && nat(&x[0]) == Some(8)) {
+                    let d = m["disp"].clone();
+                    let fs = self.mk("app", vec![st.w.clone(), Term::bytes(b"fs_base")]);
+                    let hc = self.mem_hyp(st, &fs, &d, 8)?;
+                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&fs), self.print(&d)))?;
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step("load64_fs", a, insn, &[&x[1], &d, &x[4], &v], self.tail(st, insn, 3, vec![s(&hc), hr]));
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, v);
+                    return self.then(tr, st2);
+                }
                 // mov r64, [b + i]: the spec's load at the address computed
                 // otherwise
                 if let Some(m) = self.memop(&x[2]).filter(|m| matches!(self.app(&m["index"], "some", 1), Some(_)) && nat(&m["scale"]) == Some(1) && nat(&m["disp"]) == Some(0)) {

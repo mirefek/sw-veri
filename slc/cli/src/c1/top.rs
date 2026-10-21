@@ -118,6 +118,7 @@ impl<'e> Gen<'e> {
             fr: 0,
             w: empty.clone(),
             hvu: None,
+            hww: None,
             vw: empty.clone(),
             s: empty.clone(),
             v: empty.clone(),

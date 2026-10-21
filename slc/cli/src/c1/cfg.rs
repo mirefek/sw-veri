@@ -415,6 +415,7 @@ impl<'e> Gen<'e> {
         self.fr = st.fr;
         self.w = st.w.clone();
         self.hvu = Some(st.hvu.clone());
+        self.hww = Some(st.hw.clone());
         self.set_lf(st)?;
         // the labels' claims gathered (the last first), the cut points'
         // premise likewise
@@ -602,6 +603,7 @@ impl<'e> Gen<'e> {
         self.fr = st.fr;
         self.w = st.w.clone();
         self.hvu = Some(st.hvu.clone());
+        self.hww = Some(st.hw.clone());
         self.set_lf(st)?;
         let marker = |g: &Gen, q: &Term| -> Option<(Term, Term)> {
             let b = g.app(q, "mkprog", 1)?[0].clone();

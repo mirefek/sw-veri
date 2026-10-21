@@ -777,6 +777,19 @@ impl<'e> Gen<'e> {
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
+        // the thread pointer: the 8 bytes at the world's fs_base, readable
+        // there (tr.tp_ok)
+        if self.app(op, "gimple.thread_ptr", 0).is_some() {
+            let w = self.w.clone();
+            let fs = self.mk("app", vec![w.clone(), Term::bytes(b"fs_base")]);
+            let cond = self.mem_defined(&w, &fs, &lit(0), 8, false);
+            let vm = self.mk("app", vec![w, Term::bytes(b"vm")]);
+            let r = self.mk("bits_of_int", vec![lit(64), self.mk("gimple.bytes_at", vec![vm, self.mk("bits_add", vec![lit(64), fs, lit(0)]), lit(8)])]);
+            let hw = R::S(self.hww.clone().expect("a point's world"));
+            let ok = p(mpf("tr.tp_ok", vec![t(&self.w), p(hw.clone()), hc()]));
+            let ub = p(mpf("tr.tp_ub", vec![t(&self.w), t(&self.vw), t(&self.mk("empty", vec![])), p(hw), p(self.hvu_w()), simp0(), p(R::Slot("HN"))]));
+            return Ok((Some(cond), r, ok, Some(ub)));
+        }
         // a call of a one-operation helper (a field's accessor): its
         // operation's definedness, its value through the helper's result
         if let Node::App(f, args) = op.node() {
