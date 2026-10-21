@@ -216,6 +216,8 @@ struct Fx {
     /// `static` locals: name -> address
     statics: HashMap<String, u64>,
     obj_list: Vec<(u64, u64)>,
+    /// register variables (values, though not SSA names)
+    regvars: Vec<String>,
     /// the function's return type
     ret: RT,
     /// statements of the current block
@@ -379,7 +381,7 @@ impl<'a> Lower<'a> {
     }
 
     fn is_value_name(&self, fx: &Fx, s: &str) -> bool {
-        is_ssa(s) && (fx.decl.contains_key(s.trim_end_matches("(D)")) || fx.decl.contains_key(ssa_base(s)))
+        (is_ssa(s) && (fx.decl.contains_key(s.trim_end_matches("(D)")) || fx.decl.contains_key(ssa_base(s)))) || fx.regvars.iter().any(|r| r == s)
     }
 
     // ---------------------------------------------------------------
@@ -879,6 +881,7 @@ impl<'a> Lower<'a> {
             objs: HashMap::new(),
             statics: HashMap::new(),
             obj_list: Vec::new(),
+            regvars: f.hard_regs.iter().map(|(n, _)| n.clone()).collect(),
             ret,
             out: Vec::new(),
         };
@@ -900,7 +903,8 @@ impl<'a> Lower<'a> {
             }
         }
         for (n, _) in &f.decls {
-            if !is_ssa(n) && bare.contains(n) {
+            // (a register variable lives in its register: no object)
+            if !is_ssa(n) && bare.contains(n) && !f.hard_regs.iter().any(|(r, _)| r == n) {
                 let t = fx.decl[n].clone();
                 let size = self.size(&t)?;
                 let align = size.clamp(1, 16).next_power_of_two().min(16);

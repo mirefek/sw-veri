@@ -322,6 +322,41 @@ proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
   return old
 }
 
+// A system call (`syscall`: rax n, rdi a1, rsi a2, rdx a3, r10 a4, r8 a5,
+// r9 a6; its result in rax, rcx and r11 clobbered): Linux's call
+// (spec/linux/process.sl) as the C world sees it -- run on the world's
+// memory, the machine's but its stack pages (a page free in the machine
+// is free there: the world's run allows the machine's). Only the calls the
+// allocator makes -- brk, mmap, mprotect -- and only where the pages they
+// change are its kind of memory: off the stack's space (the world does not
+// see the stack's pages: its frames, its room to grow) and not the
+// program's code (executable). A call reaching other pages is undefined,
+// as is any other call.
+pred sys_pages_ok(vm: Vm, p: nat, n: nat) =
+  off_stack_space(vm, p, n) && (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> !vm.pages[q].value.prot.x)
+
+proc[World] sys_call(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4: bits[64], a5: bits[64], a6: bits[64]) -> bits[64] {
+  require uint(n) = 9 || uint(n) = 10 || uint(n) = 12
+  // brk: the pages it gives back, the break's own (it takes new ones only
+  // where they are free, off the stack's space)
+  require uint(n) = 12 -> pages_for(uint(a1)) < pages_for(uint(vm.brk)) -> a1 >= vm.brk_start ->
+    off_stack_space(vm, pages_for(uint(a1)), pages_for(uint(vm.brk)) - pages_for(uint(a1))) &&
+    (all q: nat. pages_for(uint(a1)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap)
+  // mmap: a fixed mapping's pages; else no hint (Linux then places it on
+  // free pages off the stack's space)
+  require uint(n) = 9 -> (if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 })
+  // mprotect: its pages
+  require uint(n) = 10 -> sys_pages_ok(vm, page_of(a1), pages_for(uint(a2)))
+  // (Linux's calls read and write only the memory and the I/O)
+  let r = with asm_machine(any (Reg -> bits[64]), any (Reg -> bits[128]), any Flags, any Addr) { return linux_syscall(n, a1, a2, a3, a4, a5, a6) }
+  return r
+}
+
+// the thread pointer (`mov %fs:0, r`, musl's __get_tp): the word at the
+// thread pointer -- the thread descriptor's own address, where the ABI
+// keeps it (`thread_ok`)
+proc[World] thread_ptr() -> Addr { return ld64(fs_base, 0) }
+
 // constant bytes (aggregate initializers)
 proc[World] st_bytes(p: Addr, off: bits[64], data: List[bits[8]]) {
   let a = mem(p, off, len(data), true)

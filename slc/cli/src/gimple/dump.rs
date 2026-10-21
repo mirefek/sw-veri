@@ -136,6 +136,9 @@ pub struct Func {
     pub decls: Vec<(String, String)>,
     /// `static` local declarations (global objects)
     pub statics: Vec<(String, String)>,
+    /// register variables (`register long r10 __asm__ ("r10")`): name ->
+    /// its register
+    pub hard_regs: Vec<(String, String)>,
     pub blocks: Vec<Block>,
 }
 
@@ -509,7 +512,15 @@ pub fn parse_dump(text: &str) -> Result<Vec<Func>, String> {
                         f.statics.push((name, ty));
                     }
                     None => {
+                        // (a register variable: `type name __asm__ (*reg)`)
+                        let (d, reg) = match d.find(" __asm__ (") {
+                            Some(k) => (&d[..k], Some(d[k + " __asm__ (".len()..].trim_end_matches(')').trim_start_matches('*').trim().to_string())),
+                            None => (d, None),
+                        };
                         let (ty, name) = split_decl(d).ok_or_else(|| ctx("declaration".into()))?;
+                        if let Some(r) = reg {
+                            f.hard_regs.push((name.clone(), r));
+                        }
                         f.decls.push((name, ty));
                     }
                 }

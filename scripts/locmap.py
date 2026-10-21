@@ -35,6 +35,11 @@ LOG = os.path.join(ROOT, "build", "musl-O0-make.log")
 SOURCES = [
     ("src/malloc/mallocng/malloc.c", "build/gimple-O0/sl/c_mallocng_malloc.sl", "c_src_malloc_mallocng_malloc"),
     ("src/malloc/mallocng/free.c", "build/gimple-O0/sl/c_mallocng_free.sl", "c_src_malloc_mallocng_free"),
+    # the leaves: musl's errno, syscall and mman wrappers
+    ("src/errno/__errno_location.c", "build/gimple-O0/sl/c_errno_location.sl", "c_src_errno___errno_location"),
+    ("src/internal/syscall_ret.c", "build/gimple-O0/sl/c_syscall_ret.sl", "c_src_internal_syscall_ret"),
+    ("src/mman/mprotect.c", "build/gimple-O0/sl/c_mman_mprotect.sl", "c_src_mman_mprotect"),
+    ("src/mman/mmap.c", "build/gimple-O0/sl/c_mman_mmap.sl", "c_src_mman_mmap"),
 ]
 P64 = 1 << 64
 

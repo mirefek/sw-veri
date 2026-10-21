@@ -1022,6 +1022,51 @@ impl<'a> Lower<'a> {
                 let v = format!("cas32({}, {}, {})", self.val(rx, sh, p, 64)?, self.val(rx, sh, t_in, 32)?, self.val(rx, sh, s, 32)?);
                 self.set(rx, t, v)
             }
+            // a system call (layers/gimple.sl's `sys_call`): x86_64's
+            // __syscallN -- "=a"(ret) : "a"(n), "D"(a1), "S"(a2), "d"(a3);
+            // the arguments not passed whatever their registers hold
+            S::Asm { tmpl, outs, ins } if tmpl.trim() == "syscall" => {
+                let [(c0, E::Name(r))] = outs.as_slice() else { return Err("syscall with other outputs".into()) };
+                if c0 != "=a" {
+                    return Err("syscall's result not in rax".into());
+                }
+                let mut n = None;
+                let mut a: Vec<Option<String>> = vec![None; 6];
+                for (c, e) in ins {
+                    if self.scalar(&self.type_of(&rx.fx, e)?)?.0 != 64 {
+                        return Err("a syscall operand of other than 64 bits".into());
+                    }
+                    let v = self.val(rx, sh, e, 64)?;
+                    // (an "r" operand a register variable: its register --
+                    // __syscall4..6's r10, r8, r9)
+                    let reg = match (c.as_str(), e) {
+                        ("r", E::Name(x)) => rx.f.hard_regs.iter().find(|(nm, _)| nm == x).map(|(_, r)| r.as_str()).ok_or("a syscall \"r\" operand not a register variable")?,
+                        (c, _) => c,
+                    };
+                    match reg {
+                        "a" => n = Some(v),
+                        "D" => a[0] = Some(v),
+                        "S" => a[1] = Some(v),
+                        "d" => a[2] = Some(v),
+                        "r10" => a[3] = Some(v),
+                        "r8" => a[4] = Some(v),
+                        "r9" => a[5] = Some(v),
+                        other => return Err(format!("syscall operand `{}` (not yet)", other)),
+                    }
+                }
+                let n = n.ok_or("syscall without its number")?;
+                let args: Vec<String> = a.into_iter().map(|x| x.unwrap_or("any bits[64]".into())).collect();
+                self.set(rx, r, format!("sys_call({}, {})", n, args.join(", ")))
+            }
+            // the thread pointer (layers/gimple.sl's `thread_ptr`): __get_tp's
+            // `mov %%fs:0,%0` -- "=r"(tp)
+            S::Asm { tmpl, outs, ins } if tmpl.split_whitespace().collect::<String>() == "mov%%fs:0,%0" && ins.is_empty() => {
+                let [(c0, E::Name(t))] = outs.as_slice() else { return Err("mov %fs:0 with other outputs".into()) };
+                if c0 != "=r" {
+                    return Err("mov %fs:0 into other than a register".into());
+                }
+                self.set(rx, t, "thread_ptr()".into())
+            }
             S::Asm { .. } => Err("inline assembly with operands (not yet in readable form)".into()),
             S::Return(None) => {
                 self.line(rx, "return".into());
