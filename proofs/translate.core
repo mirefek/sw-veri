@@ -1399,23 +1399,29 @@ def tr.implements_at(f, spec, base, code, statics) :=
     s.rip = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, objs, mem, s, o)
 
 // The same for an entry whose stack need not be 16-byte aligned: GCC calls
-// a local function that needs no alignment (IPA stack alignment, e.g. a
-// trap) with rsp as its caller's frame leaves it. The ABI's entry
-// conditions but the alignment:
-def tr.entry_ok_u(m, args) := ((((abi.stack_page(m.vm, int_div(m.gpr[4], x86_64_linux.PAGE)) && x86_64_linux.can_access(m.vm, m.gpr[4], 1)) &&
+// a local function that needs no alignment (IPA stack alignment: a trap, a
+// leaf called from a frameless function) with rsp as its caller's frame
+// leaves it. The ABI's entry conditions but the alignment, rsp 8-byte
+// aligned (every frame a multiple of 8):
+def tr.entry_ok_u(m, args) := ((((((abi.stack_page(m.vm, int_div(m.gpr[4], x86_64_linux.PAGE)) && x86_64_linux.can_access(m.vm, m.gpr[4], 1)) &&
   abi.stack_reserve(m.vm)) && !m.flags.df) && (all x0. x0 in omega -> int_lt(x0, seq_len(args)) -> m.gpr[abi.ARG_REGS[x0]] = args[x0])) &&
-  abi.thread_ok(m.vm, m.fs_base)
+  abi.thread_ok(m.vm, m.fs_base)) && int_mod(m.gpr[4], 8) = 0) && abi.brk_start_ok(m.vm)
 
 def tr.implements_at_u(f, spec, base, code, statics) :=
   all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
     s.rip = f -> tr.entry_ok_u(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, objs, mem, s, o)
 
 // (the ABI's entry: the alignment-free one)
-theorem tr.entry_ok_u_of: all m args. abi.entry_ok(m, args) -> tr.entry_ok_u(m, args)
+theorem tr.entry_ok_u_of: all m args. m in x86_64_linux.Machine -> abi.entry_ok(m, args) -> tr.entry_ok_u(m, args)
 proof
   fix m args
-  assume h
-  show by defs(taut(expand(h, abi.entry_ok)), tr.entry_ok_u)
+  assume hM h
+  have e := expand(h, abi.entry_ok)
+  have r4 := apply(x86i.rsp_typed, hM)
+  have a16: int_mod(bits_add(64, m.gpr[4], 8), 16) = 0 by taut(e)
+  have em: int_mod(bits_add(64, m.gpr[4], 8), 16) = int_mod(int_add(m.gpr[4], 8), 16) by defs(arith(r4), bits_add, pow2)
+  have a8: int_mod(m.gpr[4], 8) = 0 by arith(a16, em, r4)
+  show by defs(taut(e, a8), tr.entry_ok_u)
 qed
 
 // (the contract for any entry: the contract)
@@ -1427,9 +1433,53 @@ proof
       s.rip = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> tr.matches_t(spec, args, objs, mem, s, o) proof
     fix args objs mem s o
     assume h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11
-    show := mp(all_elim(expand(h, tr.implements_at_u), {args}, {objs}, {mem}, {s}, {o}), h1, h2, h3, h4, h5, h6, h7, apply(tr.entry_ok_u_of, h8), h9, h10, h11)
+    show := mp(all_elim(expand(h, tr.implements_at_u), {args}, {objs}, {mem}, {s}, {o}), h1, h2, h3, h4, h5, h6, h7, apply(tr.entry_ok_u_of, h4, h8), h9, h10, h11)
   qed
   show by defs(g, tr.implements_at)
+qed
+
+// (an entry for any alignment: one -- tr.entry_n's E for it)
+theorem tr.entry_ok_u_id: all m args. m in x86_64_linux.Machine -> tr.entry_ok_u(m, args) -> tr.entry_ok_u(m, args)
+proof
+  fix m args
+  assume hM h
+  show := h
+qed
+
+// (an entry for any alignment: rsp's facts, as abi.entry_stack's)
+theorem tr.entry_stack_u: all s args. s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) ->
+  x86_64_linux.can_access(s.vm, s.gpr[4], 1) && int_mod(s.gpr[4], 8) = 0 &&
+  abi.stack_page(s.vm, int_div(s.gpr[4], 4096)) && int_lt(s.gpr[4], 140737488355328)
+proof
+  fix s args
+  assume hM he
+  have e := expand(he, tr.entry_ok_u)
+  have hsp: s.gpr[4] in bits(64) by simp(hM)
+  have w: x86_64_linux.can_access(s.vm, s.gpr[4], 1) by taut(e)
+  have mp0: int_lt(int_div(s.gpr[4], 4096), 34359738367) by simp(expand(expand(expand(w, x86_64_linux.can_access), x86_64_linux.mapped), x86_64_linux.page_of, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+  have lt: int_lt(s.gpr[4], 140737488355328) by simp(hsp, mp0)
+  have sp: abi.stack_page(s.vm, int_div(s.gpr[4], 4096)) by taut(expand(he, tr.entry_ok_u, x86_64_linux.PAGE))
+  show by taut(w, e, sp, lt)
+qed
+
+// (... the stack's reserve, its guard gap free, df clear)
+theorem tr.entry_rsv_u: all s args. tr.entry_ok_u(s, args) -> abi.stack_reserve(s.vm) && abi.stack_gap_free(s.vm) && !s.flags.df
+proof
+  fix s args
+  assume he
+  have e := expand(he, tr.entry_ok_u)
+  have r: abi.stack_reserve(s.vm) by taut(e)
+  show by taut(r, apply(abi.reserve_gap, r), e)
+qed
+
+// (... the world's break's start sound)
+theorem tr.entry_brk_u: all s args objs mem. tr.entry_ok_u(s, args) -> abi.view_ok(s, objs, mem) -> abi.brk_start_ok(abi.view(s, objs, mem).vm)
+proof
+  fix s args objs mem
+  assume he hv
+  have b: abi.brk_start_ok(s.vm) by taut(expand(he, tr.entry_ok_u))
+  have {e = brk0} := expand(hv.2, abi.world_matches)
+  show by defs(simp(rewrite(e, expand(b, abi.brk_start_ok))), abi.brk_start_ok)
 qed
 
 // (an outcome the spec matches only by raising: so is every outcome)
@@ -1535,12 +1585,17 @@ def tr.hacc(s, vm, c, n) := all i. i in omega -> int_lt(i, n) ->
 // (n bytes at offset c: below s's rsp, within tr.FMAX)
 def tr.hrange(c, n) := c in bits(64) && int_le(int_sub(18446744073709551616, tr.FMAX), c) && n in omega && int_le(n, int_sub(18446744073709551616, c))
 
-// (the pages of the 8 bytes below the entry's rsp r -- the homes -- and of
-// the 8 from it -- the return address -- as at the entry; the rest of the
-// memory is the world's, tr.mem: a callee may change the page map, but not
-// the pages of its caller's frame, GIMPLE's call_at)
-def tr.kept(sv, vm, r) := all a. a in omega -> int_le(int_sub(r, 8), a) -> int_lt(a, int_add(r, 8)) ->
+// (the pages of the 8 bytes from the entry's rsp r -- the return address --
+// as at the entry; the rest of the memory is the world's, tr.mem: a callee
+// may change the page map, but not the pages of its caller's frame,
+// GIMPLE's call_at)
+def tr.kept(sv, vm, r) := all a. a in omega -> int_le(r, a) -> int_lt(a, int_add(r, 8)) ->
   vm.pages[x86_64_linux.page_of(a)] = sv.pages[x86_64_linux.page_of(a)]
+
+// (the ABI's alignment at an entry: rsp + 8 16-byte aligned -- what an
+// aligned call, a frame of 8 bytes reached at once, needs; C1's claims have
+// the entry's rsp 8-byte aligned only, tr.inv)
+abbrev tr.sal16(s) := int_mod(bits_add(64, s.gpr[4], 8), 16) = 0
 
 // (the code loaded at the entry, loaded still: the function's own, a
 // callee's)
@@ -1555,7 +1610,7 @@ def tr.inv(s, base, code, fr, m, w) :=
   winp: w.os.input = s.os.input && sws: subset(s.os.events, w.os.events) &&
   wW: w in abi.World && wu: w in univ(1) && wcpu: w.cpu = s.cpu && wbk: abi.brk_start_ok(w.vm) &&
   sM: s in x86_64_linux.Machine &&
-  sacc: x86_64_linux.can_access(s.vm, s.gpr[4], 1) && sal: int_mod(bits_add(64, s.gpr[4], 8), 16) = 0 &&
+  sacc: x86_64_linux.can_access(s.vm, s.gpr[4], 1) && sal: int_mod(s.gpr[4], 8) = 0 &&
   hsps: abi.stack_page(s.vm, int_div(s.gpr[4], 4096)) && slt: int_lt(s.gpr[4], 140737488355328) &&
   sgf: abi.stack_gap_free(s.vm) && srsv: abi.stack_reserve(s.vm)
 
@@ -1628,7 +1683,7 @@ qed
 theorem tr.kept_refl: all sv r. tr.kept(sv, sv, r)
 proof
   fix sv r
-  have g: all a. a in omega -> int_le(int_sub(r, 8), a) -> int_lt(a, int_add(r, 8)) ->
+  have g: all a. a in omega -> int_le(r, a) -> int_lt(a, int_add(r, 8)) ->
       sv.pages[x86_64_linux.page_of(a)] = sv.pages[x86_64_linux.page_of(a)] proof
     fix a
     assume h1 h2 h3
@@ -1638,7 +1693,7 @@ proof
 qed
 
 // (an accessible byte there: accessible still)
-theorem tr.kept_acc: all sv vm r a k. tr.kept(sv, vm, r) -> a in omega -> int_le(int_sub(r, 8), a) -> int_lt(a, int_add(r, 8)) ->
+theorem tr.kept_acc: all sv vm r a k. tr.kept(sv, vm, r) -> a in omega -> int_le(r, a) -> int_lt(a, int_add(r, 8)) ->
   x86_64_linux.can_access(sv, a, k) -> x86_64_linux.can_access(vm, a, k)
 proof
   fix sv vm r a k
@@ -1660,7 +1715,7 @@ qed
 
 // (the return address's byte: rsp + j, j < 8)
 theorem tr.ret_range: all r j. r in bits(64) -> int_lt(r, 140737488355328) -> j in omega -> int_lt(j, 8) ->
-  bits_add(64, r, bits_of_int(64, j)) in omega && int_le(int_sub(r, 8), bits_add(64, r, bits_of_int(64, j))) &&
+  bits_add(64, r, bits_of_int(64, j)) in omega && int_le(r, bits_add(64, r, bits_of_int(64, j))) &&
     int_lt(bits_add(64, r, bits_of_int(64, j)), int_add(r, 8))
 proof
   fix r j
@@ -1669,7 +1724,7 @@ proof
   have jb: int_mod(j, 18446744073709551616) = j by arith(hj, hj2)
   have e0: int_mod(int_add(r, int_mod(j, 18446744073709551616)), 18446744073709551616) = int_add(r, j) by arith(hr, hl, hj, hj2, jb)
   have e: bits_add(64, r, bits_of_int(64, j)) = int_add(r, j) by defs(rewrite(sym(p64), e0), bits_add, bits_of_int)
-  have g: int_add(r, j) in omega && int_le(int_sub(r, 8), int_add(r, j)) && int_lt(int_add(r, j), int_add(r, 8)) by arith(hr, hj, hj2)
+  have g: int_add(r, j) in omega && int_le(r, int_add(r, j)) && int_lt(int_add(r, j), int_add(r, 8)) by arith(hr, hj, hj2)
   show := rewrite(sym(e), g)
 qed
 
@@ -1996,20 +2051,6 @@ proof
     show by taut(same, other)
   qed
   show by defs(taut(fu, k), tr.regs)
-qed
-
-// (the entry's rsp: at least 8, as rsp + 8 is 16-aligned)
-theorem tr.inv_sp8: all s base code fr m w. tr.inv(s, base, code, fr, m, w) -> int_le(8, s.gpr[4])
-proof
-  fix s base code fr m w
-  assume hi
-  have {sM, sal, slt} := hi
-  have r4 := apply(x86i.rsp_typed, sM)
-  have p64: pow2(64) = 18446744073709551616 by simp()
-  have e0: int_mod(int_add(s.gpr[4], 8), 18446744073709551616) = int_add(s.gpr[4], 8) by arith(r4, slt)
-  have e: bits_add(64, s.gpr[4], 8) = int_add(s.gpr[4], 8) by defs(rewrite(sym(p64), e0), bits_add)
-  have al2 := rewrite(e, sal)
-  show by arith(al2, r4)
 qed
 
 // (the entry's rsp: above the guard gap -- a frame's push does not wrap)
@@ -3356,6 +3397,14 @@ proof
   show by defs(taut(e, wm2, oa), tr.mem)
 qed
 
+// (the 8 bytes from rsp: rsp's page -- rsp 8-aligned)
+theorem tr.page_ret: all sp a. sp in bits(64) -> int_mod(sp, 8) = 0 -> int_le(sp, a) -> int_lt(a, int_add(sp, 8)) -> int_div(a, 4096) = int_div(sp, 4096)
+proof
+  fix sp a
+  assume hs hm h1 h2
+  show by arith(hs, hm, h1, h2)
+qed
+
 // (the 8 bytes below rsp and the 8 above: rsp's page -- rsp + 8 16-aligned)
 theorem tr.page_near: all sp a. sp in bits(64) -> int_mod(bits_add(64, sp, 8), 16) = 0 -> int_lt(sp, 140737488355328) ->
   int_le(int_sub(sp, 8), a) -> int_lt(a, int_add(sp, 8)) -> int_div(a, 4096) = int_div(sp, 4096)
@@ -3535,16 +3584,18 @@ qed
 // the entry of a function of n arguments (`require len(args) >= n`, the
 // procedure called with them, its result returned by kw): the claim at the
 // entry, for every entry with n arguments, gives abi.matches. (Too few
-// arguments: the spec allows anything.)
-theorem tr.entry_g(base, code, statics, f, n, x0. q, x3 x4 x2. kw):
+// arguments: the spec allows anything.) The entry's condition E: the
+// ABI's (abi.entry_ok), or one for any alignment (tr.entry_ok_u).
+theorem tr.entry_g(base, code, statics, f, n, x0. q, x3 x4 x2. kw, x5 x6. E):
+  (all s args. s in x86_64_linux.Machine -> E(s, args) -> tr.entry_ok_u(s, args)) ->
   (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
-    abi.entry_ok(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
+    E(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
     tr.sim(s, zb. false, zb pb wb. false, v, mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem), s)) ->
   (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
-    abi.entry_ok(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+    E(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
     tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, v, mem, s, o))
 proof
-  assume hpro
+  assume hE hpro
   fix args v mem s o
   assume hA hvo hmv hM hsu hl hrip he hob hvw hr
   let W := abi.view(s, v, mem)
@@ -3570,7 +3621,7 @@ proof
       r2 := x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], k)
     have red: tr.red(SPEC[args], W, BIND, W) by defs(rewrite(sym(ae), r0), tr.red)
     have sim := apply(tr.sim_red[bkp := zb. false, bka := zb pb wb. false], red, sim0)
-    show := apply(tr.entry_d, {SPEC}, {args}, {s}, {v}, {mem}, {o}, hM, apply(abi.entry_stack, hM, he).4, sim, hr)
+    show := apply(tr.entry_d, {SPEC}, {args}, {s}, {v}, {mem}, {o}, hM, apply(tr.entry_stack_u, hM, mp(all_elim(hE, {s}, {args}), hM, he)).4, sim, hr)
   qed
   have few: !ord_le(n, seq_len(args)) -> tr.matches_t(SPEC, args, v, mem, s, o) proof
     assume hng

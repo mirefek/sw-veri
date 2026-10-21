@@ -981,6 +981,18 @@ item is a short summary of finished work; details are in the files named.
   pointer is not null (the descriptor an object). C2
   `ms.errno_location_c2` from __get_tp's readable form (`ms.tp_det`:
   `thread_ptr()` the thread pointer, `ms.gtp_q` at a call); `g.fun_res0`
-  for functions of no arguments. Linked with __get_tp's code (its
-  contract for any entry a premise), it closes size_overflows' and
-  __syscall_ret's contracts (`sotc.composed_el`, `srtc.composed_el`).
+  for functions of no arguments. Linked with __get_tp's C1, it closes
+  size_overflows' and __syscall_ret's contracts (`sotc.composed_el`,
+  `srtc.composed_el`).
+- **C1 for any entry alignment**: `tr.inv` has the entry's rsp 8-byte
+  aligned (enough for the return slot's page, `tr.page_ret`; `tr.kept` the
+  return slot's pages), the ABI's 16-byte alignment (`tr.sal16`) a premise
+  only where it is used: an aligned call (`tr.call`, `tr.call1`: frame 8
+  mod 16), a system call (`tr.sys_call1`, `tr.sys_call3`: the 8-byte frame
+  after it, `tr.frame8`). The entry rules (`tr.entry_n`, `tr.entry0`,
+  `tr.entry_g`) take the entry's condition E: the ABI's, or
+  `tr.entry_ok_u` (now with rsp 8-aligned and the break's start). The
+  engine assumes the ABI's entry at the first aligned call or system call;
+  else the function's contract is for any entry (`{p}.implements_u`, e.g.
+  `gtpc.implements_u`, __get_tp called from the frameless
+  __errno_location).

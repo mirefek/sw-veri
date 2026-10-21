@@ -125,6 +125,8 @@ impl<'e> Gen<'e> {
             hw0: None,
             hvu0: None,
             hl: None,
+            ent_m: None,
+            ent_al: None,
             hcall: Vec::new(),
             htyp: Vec::new(),
             hio: Vec::new(),
@@ -407,9 +409,21 @@ impl<'e> Gen<'e> {
             rs_lam = self.upd(&rs_lam, r, 8, &vx);
         }
         let rs_args = st0.rs.clone();
-        // the proof
+        // the proof (the entry's condition: assumed if an aligned call or a
+        // system call needs the ABI's alignment)
+        self.ent_m = Some((s_hm.clone(), args_t.clone()));
+        self.ent_al = None;
         self.vmark0 = self.env.var_bound() as usize;
         let pt = self.prove_pt(st0)?;
+        let (aligned, e_t) = match self.ent_al.take() {
+            Some((et, _)) => (true, et),
+            None => (false, self.mk("tr.entry_ok_u", vec![s.clone(), args_t.clone()])),
+        };
+        self.ent_m = None;
+        let _ = self.assume(&e_t)?;
+        inner_h.push(e_t.clone());
+        let e_lam = self.abs(&e_t, &[Self::var_id(&s), Self::var_id(&args_t)]);
+        let h_e = super::rec::p(f(if aligned { "tr.entry_ok_u_of" } else { "tr.entry_ok_u_id" }));
         // (the callees' premises, as their calls had them)
         let mut cprem = Vec::new();
         let mut cns = Vec::new();
@@ -447,7 +461,7 @@ impl<'e> Gen<'e> {
             let (a2, s2) = (self.var("args2"), self.var("s2"));
             let ha2 = self.mk("in", vec![a2.clone(), self.mk("abi.ARGS", vec![])]);
             let hs2 = self.mk("in", vec![s2.clone(), self.mk("x86_64_linux.Machine", vec![])]);
-            let he2 = self.mk("abi.entry_ok", vec![s2.clone(), a2.clone()]);
+            let he2 = self.mk("tr.entry_ok_u", vec![s2.clone(), a2.clone()]);
             let hg2 = self.mk("ord_le", vec![lit(nargs), self.mk("seq_len", vec![a2.clone()])]);
             let (sa, ss, se, sg) = (self.assume(&ha2)?, self.assume(&hs2)?, self.assume(&he2)?, self.assume(&hg2)?);
             let ln = self.evp(&RP::Simp(false, vec![R::S(sa)], vec![], false), &self.mk("in", vec![self.mk("seq_len", vec![a2.clone()]), self.mk("omega", vec![])]), &[])?;
@@ -472,9 +486,22 @@ impl<'e> Gen<'e> {
             let rsl = self.abs(&rs_lam, &[Self::var_id(&x0), Self::var_id(&s)]);
             let inst = R::Inst(
                 "tr.entry_n".into(),
-                vec![("lb", lb.clone()), ("lc", lc.clone()), ("base", b.clone()), ("code", c.clone()), ("statics", statics.clone()), ("f", b.clone()), ("n", lit(nargs)), ("fd", lit(fd)), ("rs", rsl), ("q", ql), ("kw", kwl)],
+                vec![
+                    ("lb", lb.clone()),
+                    ("lc", lc.clone()),
+                    ("base", b.clone()),
+                    ("code", c.clone()),
+                    ("statics", statics.clone()),
+                    ("f", b.clone()),
+                    ("n", lit(nargs)),
+                    ("fd", lit(fd)),
+                    ("rs", rsl),
+                    ("q", ql),
+                    ("kw", kwl),
+                    ("E", e_lam.clone()),
+                ],
             );
-            self.run(&mp(inst, vec![simp0(), s_(&hsub), s_(&hregs), s_(&body_in)]), &[])?
+            self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
         } else {
             // (the callee-saved registers' entries)
             let s2 = self.var("s2");
@@ -485,15 +512,29 @@ impl<'e> Gen<'e> {
             let rsl = self.abs(&rs_lam, &[Self::var_id(&s)]);
             let inst = R::Inst(
                 "tr.entry0".into(),
-                vec![("lb", lb.clone()), ("lc", lc.clone()), ("base", b.clone()), ("code", c.clone()), ("statics", statics.clone()), ("f", b.clone()), ("fd", lit(fd)), ("rs", rsl), ("q", q0raw.clone()), ("kw", kwl)],
+                vec![
+                    ("lb", lb.clone()),
+                    ("lc", lc.clone()),
+                    ("base", b.clone()),
+                    ("code", c.clone()),
+                    ("statics", statics.clone()),
+                    ("f", b.clone()),
+                    ("fd", lit(fd)),
+                    ("rs", rsl),
+                    ("q", q0raw.clone()),
+                    ("kw", kwl),
+                    ("E", e_lam.clone()),
+                ],
             );
-            self.run(&mp(inst, vec![simp0(), s_(&hsub), s_(&hregs), s_(&body_in)]), &[])?
+            self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
         };
         let _ = rs_args;
         // m: all args objs mem s o. .. -> tr.matches_t(spec, args, objs, mem, s, o), the spec unfolded
+        // (the ABI's entry, or any alignment's)
+        let ent = if aligned { "abi.entry_ok" } else { "tr.entry_ok_u" };
         let m_goal = self.parse(&format!(
             "all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> \
-             abi.loaded(app(s, \"vm\"), {lbp}, {lcp}, statics) -> app(s, \"rip\") = {bp} -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> \
+             abi.loaded(app(s, \"vm\"), {lbp}, {lcp}, statics) -> app(s, \"rip\") = {bp} -> {ent}(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> \
              tr.matches_t({sp}, args, objs, mem, s, o)",
             lbp = self.print(&lb),
             lcp = self.print(&lc),
@@ -501,8 +542,17 @@ impl<'e> Gen<'e> {
             sp = self.print(&spec_app)
         ))?;
         let m = self.evp(&RP::Defs(Box::new(RP::By(R::S(m0))), vec![spec_name.to_string()]), &m_goal, &[])?;
-        let imp_goal = self.mk("tr.implements_at", vec![b.clone(), spec_app.clone(), lb.clone(), lc.clone(), statics.clone()]);
-        let imp_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec!["tr.implements_at".into()]), &imp_goal, &[])?;
+        let imp_in = if aligned {
+            let imp_goal = self.mk("tr.implements_at", vec![b.clone(), spec_app.clone(), lb.clone(), lc.clone(), statics.clone()]);
+            self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec!["tr.implements_at".into()]), &imp_goal, &[])?
+        } else {
+            // (for any entry, so for the ABI's)
+            let impu_goal = self.mk("tr.implements_at_u", vec![b.clone(), spec_app.clone(), lb.clone(), lc.clone(), statics.clone()]);
+            let impu_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec!["tr.implements_at_u".into()]), &impu_goal, &[])?;
+            let impu = self.close(impu_in.clone(), &cprem, &gvs)?;
+            out.push((format!("{p}.implements_u"), impu));
+            self.run(&R::Apply(Box::new(f("tr.implements_u")), vec![s_(&impu_in)]), &[])?
+        };
         let imp = self.close(imp_in.clone(), &cprem, &gvs)?;
         out.push((format!("{p}.implements"), imp));
         // the ABI's contract, from the bridge's: given the spec diverges

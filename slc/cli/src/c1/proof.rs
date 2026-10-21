@@ -751,6 +751,8 @@ impl<'e> Gen<'e> {
         let _ = qi;
         let hl = self.hl.clone().unwrap();
         let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
+        // (an aligned call: the entry aligned; else the frame decides)
+        let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
         self.run(
             &mp(
                 inst,
@@ -761,6 +763,7 @@ impl<'e> Gen<'e> {
                     simp_l(),
                     simp_l(),
                     hcon,
+                    hal,
                     s(&hl),
                     simp0(),
                     cfr,
@@ -872,7 +875,9 @@ impl<'e> Gen<'e> {
         // (rip's step, then each register's two facts)
         let mut prem = vec![p(f(&insn.name))];
         prem.extend((0..1 + 2 * (1 + args.len())).map(|_| simp_l()));
-        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), s(&hk), s(&pc)]);
+        // (the frame of 8 bytes after it: the entry aligned)
+        let h16 = self.sal16()?;
+        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), s(&h16), s(&hk), s(&pc)]);
         self.run(&mp(inst, prem), &[])
     }
 

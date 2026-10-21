@@ -605,7 +605,7 @@ proof
   have p0: m.vm.pages[int_div(R, 4096)] = s.vm.pages[int_div(R, 4096)] by defs(kr, x86_64_linux.page_of, x86_64_linux.PAGE)
   have mp0: x86_64_linux.mapped(m.vm, int_div(R, 4096)) by defs(simp(p0, expand(hsps, abi.stack_page, x86_64_linux.mapped)), x86_64_linux.mapped)
   have kp2: tr.kept(s.vm, C.vm, R) proof
-    have g: all a. a in omega -> int_le(int_sub(R, 8), a) -> int_lt(a, int_add(R, 8)) ->
+    have g: all a. a in omega -> int_le(R, a) -> int_lt(a, int_add(R, 8)) ->
         C.vm.pages[x86_64_linux.page_of(a)] = s.vm.pages[x86_64_linux.page_of(a)] proof
       fix a
       assume a1 ab2 a3
@@ -942,41 +942,45 @@ qed
 //  arguments, gives abi.matches -- for the contract's code lb/lc, which
 //  holds the function's (base/code; a caller's: its callees' too). The
 //  prologue -- `sub rsp, k`, the arguments' stores -- is ordinary
-//  instructions after it.
+//  instructions after it. The entry's condition E: the ABI's
+//  (abi.entry_ok), or one for any alignment (tr.entry_ok_u); the claim may
+//  assume it (an aligned call's, a system call's alignment).
 
-theorem tr.entry_n(lb, lc, base, code, statics, f, n, fd, x0 x1. rs, x0. q, x3 x4 x2. kw): base in omega ->
+theorem tr.entry_n(lb, lc, base, code, statics, f, n, fd, x0 x1. rs, x0. q, x3 x4 x2. kw, x5 x6. E): base in omega ->
   (all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)) ->
-  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> ord_le(n, seq_len(args)) -> tr.regs(s, rs(args, s))) ->
+  (all s args. s in x86_64_linux.Machine -> E(s, args) -> tr.entry_ok_u(s, args)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) -> ord_le(n, seq_len(args)) -> tr.regs(s, rs(args, s))) ->
   (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(n, seq_len(args)) ->
-    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) ->
+    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args) ->
     tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
   (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
-    abi.entry_ok(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+    E(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
     tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, v, mem, s, o))
 proof
-  assume hbase hsub hregs hbody
+  assume hbase hsub hE hregs hbody
   have hpro: all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
-      abi.entry_ok(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
+      E(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
       tr.sim(s, zb. false, zb pb wb. false, v, mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem), s) proof
     fix args v mem s
     assume hA hvo hmv hM su hl hrip he hob hvw hg
     let W := abi.view(s, v, mem)
+    have heu := mp(all_elim(hE, {s}, {args}), hM, he)
     have hc := mp(all_elim(hsub, {s.vm}), hl)
-    have ent := apply(abi.entry_stack, hM, he)
-    have hdf: !s.flags.df by taut(expand(he, abi.entry_ok))
+    have ent := apply(tr.entry_stack_u, hM, heu)
+    have rsv gap hdf := apply(tr.entry_rsv_u, heu)
     have r4 := apply(x86i.rsp_typed, hM)
     have ou := apply(abi.objs_univ, hvo)
     have mu := apply(x86.vm_univ, hmv)
     have hvu: W in univ(1) by simp(su, ou, mu)
     have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
-    have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hg, hl, hvu)
+    have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hg, hl, hvu, he)
     have z0: int_sub(s.gpr[4], 0) = s.gpr[4] by arith(r4)
-    have wbk := apply(abi.entry_brk, he, hvw)
-    have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := s.os.events], hvw.1, apply(abi.entry_gap, he), apply(abi.entry_rsv, he), all_elim(tr.keeps_refl, {s.vm}),
+    have wbk := apply(tr.entry_brk_u, heu, hvw)
+    have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := s.os.events], hvw.1, gap, rsv, all_elim(tr.keeps_refl, {s.vm}),
       all_elim(tr.kept_refl, {s.vm}, {s.gpr[4]}), z0, hM, su, hc, hdf, wt, hvu, ent, wbk,
       keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
     have hh := all_elim(tr.homes_empty, {s}, {s})
-    have rr := mp(all_elim(hregs, {args}, {s}), hA, hM, he, hg)
+    have rr := mp(all_elim(hregs, {args}, {s}), hA, hM, heu, hg)
     have mm := apply(tr.mem_entry, hob, hvw)
     have fe := all_elim(tr.frame_entry, {s}, {fd})
     have lt0 := apply(tr.sp_lt, {s.gpr[4]}, r4, ent.4)
@@ -984,7 +988,7 @@ proof
     have c0 := mp(all_elim(expand(body, tr.pt), {s}), inv, hrip, hh, rr, mm, fe)
     show := mp(expand(c0, tr.cl).2, ns0)
   qed
-  show := mp(tr.entry_g[base := lb, code := lc, statics := statics, f := f, n := n, q := x0. q(x0), kw := x3 x4 x2. kw(x3, x4, x2)], hpro)
+  show := mp(tr.entry_g[base := lb, code := lc, statics := statics, f := f, n := n, q := x0. q(x0), kw := x3 x4 x2. kw(x3, x4, x2), E := x5 x6. E(x5, x6)], hE, hpro)
 qed
 
 // (the argument registers: rdi, rsi, rdx, rcx, r8, r9)
@@ -1002,12 +1006,12 @@ proof
 qed
 
 // argument i: in its register r at the entry, 64 bits
-theorem tr.arg_reg: all s args i r. s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> i in omega -> int_lt(i, seq_len(args)) ->
+theorem tr.arg_reg: all s args i r. s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) -> i in omega -> int_lt(i, seq_len(args)) ->
   abi.ARG_REGS[i] = r -> r in x86_64_linux.Reg -> s.gpr[r] = args[i] && args[i] in bits(int_mul(8, 8))
 proof
   fix s args i r
   assume hM he hi lt hr hR
-  have ac: all x0. x0 in omega -> int_lt(x0, seq_len(args)) -> s.gpr[abi.ARG_REGS[x0]] = args[x0] by taut(expand(he, abi.entry_ok))
+  have ac: all x0. x0 in omega -> int_lt(x0, seq_len(args)) -> s.gpr[abi.ARG_REGS[x0]] = args[x0] by taut(expand(he, tr.entry_ok_u))
   have e0 := mp(all_elim(ac, {i}), hi, lt)
   have e := rewrite(hr, e0)
   have t := apply(x86i.reg_typed, hM, hR)
@@ -1175,14 +1179,14 @@ proof
 qed
 
 // ----------------------------------------------------------------------
-//  A frame of at most 8 bytes: on the entry rsp's page (kept, writable),
-//  accessible always
+//  A frame of at most 8 bytes, the entry aligned as the ABI has it: on the
+//  entry rsp's page (kept, writable), accessible always
 
-theorem tr.frame8: all s base code fr m w fd. tr.inv(s, base, code, fr, m, w) -> fd in omega -> int_le(fd, 8) -> tr.frame(s, m, fd)
+theorem tr.frame8: all s base code fr m w fd. tr.inv(s, base, code, fr, m, w) -> tr.sal16(s) -> fd in omega -> int_le(fd, 8) -> tr.frame(s, m, fd)
 proof
   fix s base code fr m w fd
-  assume hi hfo hf8
-  have {kp, sM, sacc, sal, slt, hsps} := hi
+  assume hi h16 hfo hf8
+  have {kp, sM, sacc, slt, hsps} := hi
   have r4 := apply(x86i.rsp_typed, sM)
   have g8 := apply(tr.inv_gap, hi)
   let R := s.gpr[4]
@@ -1196,8 +1200,9 @@ proof
     let X := int_add(int_sub(R, int_sub(18446744073709551616, int_sub(18446744073709551616, fd))), i)
     have l1: int_le(int_sub(R, 8), X) by arith(hfo, hf8, i1, r4)
     have l2: int_lt(X, int_add(R, 8)) by arith(xl)
-    have pn := apply(tr.page_near, {R}, {X}, r4, sal, slt, l1, l2)
-    have kx := mp(all_elim(expand(kp, tr.kept), {X}), xo, l1, l2)
+    have pn := apply(tr.page_near, {R}, {X}, r4, h16, slt, l1, l2)
+    have ro: R in omega by simp(r4)
+    have kx := mp(all_elim(expand(kp, tr.kept), {R}), ro, arith(ro), arith(ro))
     have kx2 := expand(kx, x86_64_linux.page_of, x86_64_linux.PAGE)
     have pe: m.vm.pages[int_div(X, 4096)] = s.vm.pages[int_div(R, 4096)] by simp(kx2, pn)
     have ca: x86_64_linux.can_access(m.vm, X, 1) by defs(simp(pe, pn, expand(sacc, x86_64_linux.can_access, x86_64_linux.mapped, x86_64_linux.page_of, x86_64_linux.PAGE), keep(x86_64_linux.hw_allows)),

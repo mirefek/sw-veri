@@ -257,6 +257,12 @@ struct Gen<'e> {
     hw0: Option<Seq>,
     hvu0: Option<Seq>,
     hl: Option<Seq>,
+    /// the entry's machine typed, its arguments (for the entry's
+    /// condition); the ABI's entry assumed (`abi.entry_ok(s, args)`) and
+    /// the alignment from it (`tr.sal16(s)`) once an aligned call or a
+    /// system call needs it -- else the claim is for any alignment
+    ent_m: Option<(Seq, Term)>,
+    ent_al: Option<(Term, Seq)>,
     hcall: Vec<Option<Seq>>,
     htyp: Vec<Option<Seq>>,
     hio: Vec<Option<Seq>>,
@@ -740,6 +746,23 @@ impl<'e> Gen<'e> {
     /// `fn_update(m, k, pair(n, v))`
     fn upd(&self, m: &Term, k: u128, n: u128, v: &Term) -> Term {
         self.mk("fn_update", vec![m.clone(), lit(k), self.mk("pair", vec![lit(n), v.clone()])])
+    }
+
+    /// `tr.sal16(s)`: the entry aligned as the ABI has it -- the entry's
+    /// condition then the ABI's (`abi.entry_ok`, assumed at the first need;
+    /// the alignment by `abi.entry_stack`)
+    fn sal16(&mut self) -> Result<Seq, String> {
+        if let Some((_, sq)) = &self.ent_al {
+            return Ok(sq.clone());
+        }
+        let (hm, args) = self.ent_m.clone().ok_or("the entry's machine: not known")?;
+        let et = self.mk("abi.entry_ok", vec![self.s.clone(), args]);
+        let he = self.assume(&et)?;
+        let st = self.run(&R::Apply(Box::new(R::F("abi.entry_stack".into())), vec![rec::s(&hm), rec::s(&he)]), &[])?;
+        let goal = self.mk("eq", vec![self.mk("int_mod", vec![self.mk("bits_add", vec![lit(64), self.gpr(&self.s, 4), lit(8)]), lit(16)]), lit(0)]);
+        let sal = self.evp(&rec::RP::Taut(vec![R::S(st)]), &goal, &[])?;
+        self.ent_al = Some((et, sal.clone()));
+        Ok(sal)
     }
 
     /// m's register r, `app(app(m, "gpr"), r)`

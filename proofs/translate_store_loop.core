@@ -1425,7 +1425,7 @@ proof
     have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have cd: abi.code_at(m.vm, base, code) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have ca: x86_64_linux.can_access(s.vm, s.gpr[4], 1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
-    have al: int_mod(bits_add(64, s.gpr[4], 8), 16) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have al: int_mod(s.gpr[4], 8) = 0 by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
     have rspm := apply(tr.inv0_rsp, hi)
     have kpt: tr.kept(s.vm, m.vm, s.gpr[4]) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.kept))
     have rest: x86_64_linux.le(m.vm.bytes, s.gpr[4], 8) = abi.ret(s) && abi.callee_saved(m, s) && m.cpu = s.cpu && m.gs_base = s.gs_base &&
@@ -1513,35 +1513,38 @@ qed
 
 // the entry of a function without arguments (no prologue: the claim at f
 // itself, the world s's with the callers' stack objects v), its procedure
-// q, its return kw: the claim for every entry gives abi.matches
-theorem tr.entry0(lb, lc, base, code, statics, f, fd, x1. rs, q, x3 x4 x2. kw): base in omega ->
+// q, its return kw: the claim for every entry gives abi.matches. The
+// entry's condition E as tr.entry_n's.
+theorem tr.entry0(lb, lc, base, code, statics, f, fd, x1. rs, q, x3 x4 x2. kw, x5 x6. E): base in omega ->
   (all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)) ->
+  (all s args. s in x86_64_linux.Machine -> E(s, args) -> tr.entry_ok_u(s, args)) ->
   (all s. s in x86_64_linux.Machine -> tr.regs(s, rs(s))) ->
-  (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) ->
+  (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args) ->
     tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, rs(s), mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
   (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
-    abi.entry_ok(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+    E(s, args) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
     tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, v, mem, s, o))
 proof
-  assume hbase hsub hregs hbody
+  assume hbase hsub hE hregs hbody
   fix args v mem s o
   assume hA hvo hmv hM hsu hl hrip he hob hvw hr
   let W := abi.view(s, v, mem)
   let SPEC := fn_build(abi.ARGS, x0. mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))
   let BIND := mkprog(x1 x2. bind_rel(q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have heu := mp(all_elim(hE, {s}, {args}), hM, he)
   have hc := mp(all_elim(hsub, {s.vm}), hl)
   have su := hsu
-  have ent := apply(abi.entry_stack, hM, he)
-  have hdf: !s.flags.df by taut(expand(he, abi.entry_ok))
+  have ent := apply(tr.entry_stack_u, hM, heu)
+  have rsv gap hdf := apply(tr.entry_rsv_u, heu)
   have r4 := apply(x86i.rsp_typed, hM)
   have ou := apply(abi.objs_univ, hvo)
   have mu := apply(x86.vm_univ, hmv)
   have hvu: W in univ(1) by simp(su, ou, mu)
   have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
-  have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hl, hvu)
+  have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hl, hvu, he)
   have z0: int_sub(s.gpr[4], 0) = s.gpr[4] by arith(r4)
-  have wbk := apply(abi.entry_brk, he, hvw)
-  have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := s.os.events], hvw.1, apply(abi.entry_gap, he), apply(abi.entry_rsv, he), all_elim(tr.keeps_refl, {s.vm}), all_elim(tr.kept_refl, {s.vm}, {s.gpr[4]}), z0, hM, su, hc, hdf, wt, hvu, ent, wbk, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
+  have wbk := apply(tr.entry_brk_u, heu, hvw)
+  have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := s.os.events], hvw.1, gap, rsv, all_elim(tr.keeps_refl, {s.vm}), all_elim(tr.kept_refl, {s.vm}, {s.gpr[4]}), z0, hM, su, hc, hdf, wt, hvu, ent, wbk, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
   have hh: tr.homes(s, s, empty) by defs(simp(dom_empty), tr.homes)
   have rr := mp(all_elim(hregs, {s}), hM)
   have mm := apply(tr.mem_entry, hob, hvw)
