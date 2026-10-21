@@ -412,21 +412,32 @@ proc[World] os_mprotect(addr: Addr, len: bits[64], prot: bits[64]) -> bits[64] {
   return err(ENOMEM)
 }
 
-proc[World] sys_call(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4: bits[64], a5: bits[64], a6: bits[64]) -> bits[64] {
-  require uint(n) = 9 || uint(n) = 10 || uint(n) = 12
-  // brk: the pages it gives back, the break's own (it takes new ones only
-  // where they are free, off the stack's space)
-  require uint(n) = 12 -> pages_for(uint(a1)) < pages_for(uint(vm.brk)) -> a1 >= vm.brk_start ->
+// The calls by the arguments passed (the registers not passed no
+// argument of the call made, which reads only its own): with one, brk
+// (12); with three, mprotect (10); with six, mmap (9).
+proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
+  require uint(n) = 12
+  // the pages it gives back, the break's own (it takes new ones only where
+  // they are free, off the stack's space)
+  require pages_for(uint(a1)) < pages_for(uint(vm.brk)) -> a1 >= vm.brk_start ->
     off_stack_space(vm, pages_for(uint(a1)), pages_for(uint(vm.brk)) - pages_for(uint(a1))) &&
     (all q: nat. pages_for(uint(a1)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap)
-  // mmap: a fixed mapping's pages; else no hint (Linux then places it on
-  // free pages off the stack's space)
-  require uint(n) = 9 -> (if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 })
-  // mprotect: its pages
-  require uint(n) = 10 -> sys_pages_ok(vm, page_of(a1), pages_for(uint(a2)))
-  if uint(n) = 12 { return os_brk(a1) }
-  if uint(n) = 9 { return os_mmap(a1, a2, a3, a4, a5, a6) }
+  return os_brk(a1)
+}
+
+proc[World] sys_call3(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64]) -> bits[64] {
+  require uint(n) = 10
+  // its pages
+  require sys_pages_ok(vm, page_of(a1), pages_for(uint(a2)))
   return os_mprotect(a1, a2, a3)
+}
+
+proc[World] sys_call6(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4: bits[64], a5: bits[64], a6: bits[64]) -> bits[64] {
+  require uint(n) = 9
+  // a fixed mapping's pages; else no hint (Linux then places it on free
+  // pages off the stack's space)
+  require if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 }
+  return os_mmap(a1, a2, a3, a4, a5, a6)
 }
 
 // the thread pointer (`mov %fs:0, r`, musl's __get_tp): the word at the
