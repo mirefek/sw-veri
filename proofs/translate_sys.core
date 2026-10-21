@@ -786,3 +786,226 @@ proof
   have ch: tr.vm_chg(m.vm, V, w.vm, WV, PO, n) by defs(taut(vt, vl, vb, wt, wl, wb, vk, po, no, os, c1, c2, c3, c4, c5, c6, c7), tr.vm_chg)
   show by ex_intro({WV}, {PO}, {n}, taut(wv1, bp, trans(er, sym(wbk)), vv, ch))
 qed
+
+// brk unchanged: the world's memory too
+theorem tr.brk_same_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> abi.stack_reserve(m.vm) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm ->
+  lx.brk_same(m.vm, N, V, r) ->
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n)
+proof
+  assume hm hr hmv hwv hs
+  have {wm} := hm
+  have {brk0, brk} := wm
+  have eV er c := expand(hs, lx.brk_same)
+  have bp: gimple.brk_post(w.vm, w.vm, N) by defs(taut(refl({w.vm}), rewrite(brk0, rewrite(brk, c))), gimple.brk_post)
+  have pv: all q. q in omega -> V.pages[q] = m.vm.pages[q] proof
+    fix q
+    assume _
+    show by rsimp(eV)
+  qed
+  have pw: all q. q in omega -> int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> w.vm.pages[q] = w.vm.pages[q] proof
+    fix q
+    assume _ _
+    show := refl({w.vm.pages[q]})
+  qed
+  have bv: all a. a in bits(64) -> V.bytes[a] = m.vm.bytes[a] && w.vm.bytes[a] = w.vm.bytes[a] proof
+    fix a
+    assume _
+    have e: V.bytes[a] = m.vm.bytes[a] by rsimp(eV)
+    show by taut(e, refl({w.vm.bytes[a]}))
+  qed
+  have ch := apply(tr.chg_refl, hr, (V.stack_top = m.vm.stack_top by rsimp(eV)), (V.stack_limit = m.vm.stack_limit by rsimp(eV)),
+    (V.brk_start = m.vm.brk_start by rsimp(eV)), refl({w.vm.stack_top}), refl({w.vm.stack_limit}), refl({w.vm.brk_start}),
+    (V.brk = w.vm.brk by rsimp(eV, brk)), pv, pw, bv)
+  show by ex_intro({w.vm}, {0}, {0}, taut(hwv, bp, trans(er, brk), rewrite(sym(eV), hmv), ch))
+qed
+
+// (a memory with its pages and break replaced)
+theorem tr.vm_set2(vm, pg, br): vm in x86_64_linux.Vm -> lx.pgs(pg) -> br in bits(64) -> fn_update(fn_update(vm, "pages", pg), "brk", br) in x86_64_linux.Vm
+proof
+  assume hv hp hb
+  have bt: vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(hv, x86_64_linux.Vm))
+  have h := apply(g.vm_set, hv, apply(x86.vm_univ, hv), hp, bt, hb)
+  let F := fn_update(vm, "pages", pg)
+  have vf: is_fun(vm) && "bytes" in dom(vm) by simp(expand(hv, x86_64_linux.Vm))
+  have ff := mp(fn_update_fun[f := vm, k := "pages", v := pg], vf.1)
+  have fd := mp(dom_update[f := vm, k := "pages", v := pg], vf.1)
+  have bd: "bytes" in dom(F) by simp(fd, vf)
+  have fs := mp(mp(fn_update_same[f := F, k := "bytes"], ff), bd)
+  have fb: F.bytes = vm.bytes by rsimp()
+  show := rewrite(rewrite(fb, fs), h)
+qed
+
+// (the stack's space: the machine's the world's)
+theorem tr.off_back(s, m, w, v, p, n): tr.mem(s, m, w, v) -> x86_64_linux.off_stack_space(w.vm, p, n) -> x86_64_linux.off_stack_space(m.vm, p, n)
+proof
+  assume hm ho
+  have {wm} := hm
+  have {top, limit} := wm
+  have fe: x86_64_linux.stack_floor(w.vm) = x86_64_linux.stack_floor(m.vm) by rsimp(x86_64_linux.stack_floor, top, limit)
+  show by defs(rewrite(sym(top), rewrite(fe, expand(ho, x86_64_linux.off_stack_space))), x86_64_linux.off_stack_space)
+qed
+
+// brk shrinking: the world's pages gone too -- by the call's requirement
+// off the stack's space, not executable, within the task's pages
+theorem tr.brk_shrink_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> abi.stack_reserve(m.vm) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm -> N in bits(64) ->
+  (int_lt(x86_64_linux.pages_for(N), x86_64_linux.pages_for(w.vm.brk)) -> int_le(w.vm.brk_start, N) ->
+    int_le(x86_64_linux.pages_for(w.vm.brk), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) &&
+    gimple.sys_pages_ok(w.vm, x86_64_linux.pages_for(N), int_sub(x86_64_linux.pages_for(w.vm.brk), x86_64_linux.pages_for(N)))) ->
+  lx.brk_shrink(m.vm, N, V, r) ->
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n)
+proof
+  assume hm hr hmv hwv hN hq0 hs
+  have {wm} := hm
+  have {top, limit, brk0, brk, pages} := wm
+  obtain Q, nl gl eV er hq hqt from expand(hs, lx.brk_shrink)
+  let PO := x86_64_linux.pages_for(m.vm.brk)
+  let PN := x86_64_linux.pages_for(N)
+  let n := int_sub(PO, PN)
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have bo: m.vm.brk in omega by simp(expand(hmv, x86_64_linux.Vm))
+  have po: PO in omega by defs(arith(bo), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have pno: PN in omega by defs(arith(hN), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have no: n in omega by arith(gl, po, pno)
+  have ad: int_add(PN, n) = PO by arith(gl)
+  have nlw: int_le(w.vm.brk_start, N) by arith(rewrite(brk0, nl))
+  have req := rewrite(sym(brk), hq0)
+  obtain WV, wv1 wgp wbk from mp(g.gone_ex[before := w.vm, p := PN, n := n, br := N], hwv, apply(x86.vm_univ, hwv), hN)
+  have gle: int_le(PN, PO) by arith(gl)
+  have bp: gimple.brk_post(w.vm, WV, N) by defs(taut(nlw, rewrite(brk, gle), rewrite(brk, wgp), wbk), gimple.brk_post)
+  // V: a memory (its pages within the task's, the requirement's)
+  have bnd: int_lt(PN, PO) -> int_le(PO, TSP) proof
+    assume l
+    have b1 _ := mp(req, l, nlw)
+    show := b1
+  qed
+  have vv: V in x86_64_linux.Vm := rewrite(sym(eV), apply(tr.vm_set2, hmv, mp(hqt, bnd), hN))
+  have wt wl wb wpg wby0 := expand(wgp, gimple.gone_pages)
+  have vt: V.stack_top = m.vm.stack_top by rsimp(eV)
+  have vl: V.stack_limit = m.vm.stack_limit by rsimp(eV)
+  have vb: V.brk_start = m.vm.brk_start by rsimp(eV)
+  have vk: V.brk = WV.brk by rsimp(eV, wbk)
+  have vq: V.pages = Q by rsimp(eV)
+  have vbs: V.bytes = m.vm.bytes by rsimp(eV)
+  // shrinking by a page or more: the range PN .. PO-1
+  have k1: int_lt(PN, PO) -> tr.vm_chg(m.vm, V, w.vm, WV, PN, n) proof
+    assume l
+    have _ spk := mp(req, l, nlw)
+    have offw nxw := expand(spk, gimple.sys_pages_ok)
+    have osm := apply(tr.off_back, hm, offw)
+    let IN(q) := int_le(PN, q) && int_lt(q, int_add(PN, n))
+    have c1: all q. q in omega -> int_le(PN, q) -> int_lt(q, int_add(PN, n)) -> x86_64_linux.mapped(m.vm, q) -> !snd(m.vm.pages[q]).prot.x proof
+      fix q
+      assume hq0 h1 h2 hmq
+      have ns: !abi.stack_page(m.vm, q) proof
+        assume hs0
+        show by taut(apply(tr.chg_stack, hr, osm, pno, no, hq0, hs0), h1, h2)
+      qed
+      have ql _ := expand(hmq, x86_64_linux.mapped)
+      have c := mp(all_elim(pages, {q}), (q in set_select(omega, x1. int_lt(x1, TSP)) by simp(hq0, ql)))
+      have e: m.vm.pages[q] = w.vm.pages[q] by taut(c, ns)
+      have mw: x86_64_linux.mapped(w.vm, q) by defs(rewrite(e, expand(hmq, x86_64_linux.mapped)), x86_64_linux.mapped)
+      have k := mp(all_elim(nxw, {q}), hq0, (int_le(PN, q) && int_lt(q, int_add(PN, n)) by taut(h1, h2)), mw)
+      show := rewrite(sym(e), k)
+    qed
+    have c2: all q. q in omega -> !IN(q) -> V.pages[q] = m.vm.pages[q] proof
+      fix q
+      assume hq0 hn
+      show := apply(tr.ite_no, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), rewrite(ad, hn))
+    qed
+    have c3: all q. q in omega -> int_lt(q, TSP) -> !IN(q) -> WV.pages[q] = w.vm.pages[q] proof
+      fix q
+      assume hq0 hl hn
+      show := apply(tr.ite_no, mp(all_elim(wpg, {q}), hq0, hl), hn)
+    qed
+    have c4: all q. q in omega -> int_lt(q, TSP) -> int_le(PN, q) -> int_lt(q, int_add(PN, n)) -> WV.pages[q] = V.pages[q] proof
+      fix q
+      assume hq0 hl h1 h2
+      have ew := apply(tr.ite_yes, mp(all_elim(wpg, {q}), hq0, hl), (IN(q) by taut(h1, h2)))
+      have ev := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (int_le(PN, q) && int_lt(q, PO) by taut(h1, rewrite(ad, h2))))
+      show := trans(ew, sym(ev))
+    qed
+    have c5: all q. q in omega -> int_le(PN, q) -> int_lt(q, int_add(PN, n)) -> V.pages[q] = none || !(snd(V.pages[q]).kind = 2) proof
+      fix q
+      assume hq0 h1 h2
+      have ev := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (int_le(PN, q) && int_lt(q, PO) by taut(h1, rewrite(ad, h2))))
+      show by taut(ev)
+    qed
+    have c6: all a. a in bits(64) -> !(int_le(PN, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(PN, n))) ->
+        V.bytes[a] = m.vm.bytes[a] && WV.bytes[a] = w.vm.bytes[a] proof
+      fix a
+      assume _ _
+      show by taut((V.bytes[a] = m.vm.bytes[a] by rsimp(vbs)), (WV.bytes[a] = w.vm.bytes[a] by rsimp(wby0)))
+    qed
+    have c7: all a. a in bits(64) -> int_le(PN, x86_64_linux.page_of(a)) -> int_lt(x86_64_linux.page_of(a), int_add(PN, n)) ->
+        x86_64_linux.mapped(V, x86_64_linux.page_of(a)) -> WV.bytes[a] = V.bytes[a] proof
+      fix a
+      assume ha h1 h2 hmv2
+      have qo: x86_64_linux.page_of(a) in omega by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+      have ev := mp(all_elim(c5, {x86_64_linux.page_of(a)}), qo, h1, h2)
+      have nn: V.pages[x86_64_linux.page_of(a)] = none := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {x86_64_linux.page_of(a)}), qo)),
+        (int_le(PN, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), PO) by taut(h1, rewrite(ad, h2))))
+      have f: false by taut(expand(hmv2, x86_64_linux.mapped), nn)
+      show by taut(f)
+    qed
+    show by defs(taut(vt, vl, vb, wt, wl, wb, vk, pno, no, osm, c1, c2, c3, c4, c5, c6, c7), tr.vm_chg)
+  qed
+  // shrinking by nothing: no page changed
+  have k2: !int_lt(PN, PO) -> tr.vm_chg(m.vm, V, w.vm, WV, 0, 0) proof
+    assume l
+    have pv: all q. q in omega -> V.pages[q] = m.vm.pages[q] proof
+      fix q
+      assume hq0
+      show := apply(tr.ite_no, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (!(int_le(PN, q) && int_lt(q, PO)) by arith(l)))
+    qed
+    have pw: all q. q in omega -> int_lt(q, TSP) -> WV.pages[q] = w.vm.pages[q] proof
+      fix q
+      assume hq0 hl
+      show := apply(tr.ite_no, mp(all_elim(wpg, {q}), hq0, hl), (!(int_le(PN, q) && int_lt(q, int_add(PN, n))) by arith(l, gle)))
+    qed
+    have bv: all a. a in bits(64) -> V.bytes[a] = m.vm.bytes[a] && WV.bytes[a] = w.vm.bytes[a] proof
+      fix a
+      assume _
+      show by taut((V.bytes[a] = m.vm.bytes[a] by rsimp(vbs)), (WV.bytes[a] = w.vm.bytes[a] by rsimp(wby0)))
+    qed
+    show := apply(tr.chg_refl, hr, vt, vl, vb, wt, wl, wb, vk, pv, pw, bv)
+  qed
+  have rr: r = WV.brk := trans(er, sym(wbk))
+  have g1: int_lt(PN, PO) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) proof
+    assume l
+    show by ex_intro({WV}, {PN}, {n}, taut(wv1, bp, rr, vv, mp(k1, l)))
+  qed
+  have g2: !int_lt(PN, PO) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) proof
+    assume l
+    show by ex_intro({WV}, {0}, {0}, taut(wv1, bp, rr, vv, mp(k2, l)))
+  qed
+  show by taut(g1, g2)
+qed
+
+// brk(N) on the machine: the world's call allows the same, the memories
+// changed alike
+theorem tr.brk_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> abi.stack_reserve(m.vm) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm -> N in bits(64) ->
+  (int_lt(x86_64_linux.pages_for(N), x86_64_linux.pages_for(w.vm.brk)) -> int_le(w.vm.brk_start, N) ->
+    int_le(x86_64_linux.pages_for(w.vm.brk), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) &&
+    gimple.sys_pages_ok(w.vm, x86_64_linux.pages_for(N), int_sub(x86_64_linux.pages_for(w.vm.brk), x86_64_linux.pages_for(N)))) ->
+  lx.brk_post(m.vm, N, V, r) ->
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n)
+proof
+  assume hm hr hmv hwv hN hq hp
+  have c := expand(hp, lx.brk_post)
+  have k1: lx.brk_same(m.vm, N, V, r) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm &&
+      tr.vm_chg(m.vm, V, w.vm, WV, p, n) proof
+    assume h
+    show := apply(tr.brk_same_world, hm, hr, hmv, hwv, h)
+  qed
+  have k2: lx.brk_grow(m.vm, N, V, r) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm &&
+      tr.vm_chg(m.vm, V, w.vm, WV, p, n) proof
+    assume h
+    show := apply(tr.brk_grow_world, hm, hmv, hwv, hN, h)
+  qed
+  have k3: lx.brk_shrink(m.vm, N, V, r) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, N) && r = WV.brk && V in x86_64_linux.Vm &&
+      tr.vm_chg(m.vm, V, w.vm, WV, p, n) proof
+    assume h
+    show := apply(tr.brk_shrink_world, hm, hr, hmv, hwv, hN, hq, h)
+  qed
+  show by taut(c, k1, k2, k3)
+qed
