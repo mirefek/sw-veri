@@ -950,3 +950,11 @@ item is a short summary of finished work; details are in the files named.
   calls from a function without a frame (`tr.cfr` with fr = 0: the
   callee's contract for any entry, `tr.implements_at_u`). C1 of __get_tp
   and __errno_location (proofs/mallocng/machine/c1_leaves.core).
+- **C1's rule for `syscall` with mprotect** (`tr.sys_call3`,
+  proofs/translate_sys3.core): the machine's mprotect (`x86i.mprot_insn`,
+  `lx.mprot_post`; `lx.prot_loop` keeps the page map typed), the world's
+  alike (`tr.mprot_world`: the pages from addr's to the first unmapped one
+  reprotected on both sides, the world's pages the machine's there; the
+  world's `os_mprotect` relational, `gimple.mprot_post` / `mprot_ret`);
+  its effect `tr.eff_sys_call3`. The engine's `Red::Sys` takes one or three
+  arguments. C1 of __syscall3 and __mprotect.

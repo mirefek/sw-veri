@@ -1360,8 +1360,10 @@ impl<'e> Gen<'e> {
                     }
                 }
                 // a system call: the machine's syscall makes it
-                if let Some(c) = self.app(&x[0], "gimple.sys_call1", 2) {
-                    return Ok(Some(Red::Sys { n: c[0].clone(), a1: c[1].clone(), a: al, xx: xl, dd: dl, k: kl }));
+                for (name, n) in [("gimple.sys_call1", 2), ("gimple.sys_call3", 4)] {
+                    if let Some(c) = self.app(&x[0], name, n) {
+                        return Ok(Some(Red::Sys { n: c[0].clone(), args: c[1..].to_vec(), a: al, xx: xl, dd: dl, k: kl }));
+                    }
                 }
                 let (cond, e, okf, ubf) = self.op(&x[0])?;
                 let (r, hr) = self.result(&e)?;

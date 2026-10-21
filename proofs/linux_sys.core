@@ -604,22 +604,25 @@ abbrev lx.pbody(x4, x5, e, pv) := (int_lt(snd(x4), e) && (ex x6. ((!x86_64_linux
   (!int_lt(snd(x4), e) && x5 = exc(pair(fst(x4), snd(x4)), pair("brk", empty)))
 
 // sys_mprotect's loop from s to e: up to the first unmapped page k (or e)
-// the pages of protection pv, the others as before; at an unmapped one ENOMEM
+// the pages of protection pv, the others as before; at an unmapped one
+// ENOMEM -- a page map still, for a page map and a protection
 theorem lx.prot_loop(x, s, e, pv, r): lx.rec(x) -> s in omega -> e in omega -> int_le(s, e) ->
   while_rel(pair(x, s), x4. true, x4 x5. lx.pbody(x4, x5, e, pv), x4. fn_update(empty, "os.events", fst(x4).os.events), r) ->
   ex k Q. k in omega && int_le(s, k) && int_le(k, e) && (all q. q in omega -> int_le(s, q) -> int_lt(q, k) -> x86_64_linux.mapped(x.vm, q)) &&
     (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, k), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q])) &&
     ((k = e && r = exc(pair(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), e), pair("brk", empty))) ||
      (int_lt(k, e) && !x86_64_linux.mapped(x.vm, k) &&
-      r = exc(pair(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), k), pair("ret", x86_64_linux.err(x86_64_linux.ENOMEM)))))
+      r = exc(pair(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), k), pair("ret", x86_64_linux.err(x86_64_linux.ENOMEM))))) &&
+    (lx.pgs(x.vm.pages) -> pv in x86_64_linux.Prot -> lx.pgs(Q))
 proof
   assume hx hp hn hse hw
   have xf xd vf vd _ := hx
   let E := e
+  let T := lx.pgs(x.vm.pages) && pv in x86_64_linux.Prot
   let I(l) := snd(l) in omega && int_le(s, snd(l)) && int_le(snd(l), E) &&
     (all q. q in omega -> int_le(s, q) -> int_lt(q, snd(l)) -> x86_64_linux.mapped(x.vm, q)) &&
     (ex Q. fst(l) = fn_update(x, "vm", fn_update(x.vm, "pages", Q)) &&
-      (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, snd(l)), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q])))
+      (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, snd(l)), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q])) && (T -> lx.pgs(Q)))
   let B(x4, x5) := lx.pbody(x4, x5, E, pv)
   // (at the start: Q the pages themselves)
   have e1 := mp(mp(fn_update_same[f := x.vm, k := "pages"], vf), vd)
@@ -632,7 +635,7 @@ proof
     show := sym(mp(ite_f[c := int_le(s, q) && int_lt(q, s), a := some(fn_update(snd(x.vm.pages[q]), "prot", pv)), b := x.vm.pages[q]], nf))
   qed
   have ex0: ex Q. x = fn_update(x, "vm", fn_update(x.vm, "pages", Q)) &&
-      (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, s), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q]))
+      (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, s), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q])) && (T -> lx.pgs(Q))
     by ex_intro({x.vm.pages}, taut(x0, q0))
   have m0: all q. q in omega -> int_le(s, q) -> int_lt(q, s) -> x86_64_linux.mapped(x.vm, q) proof
     fix q
@@ -646,7 +649,7 @@ proof
     fix l
     assume il
     have so _ _ _ ex := il
-    obtain Q, fq hq from ex
+    obtain Q, fq hq _ from ex
     have nf: !(int_le(s, snd(l)) && int_lt(snd(l), snd(l))) by arith()
     have qs: Q[snd(l)] = x.vm.pages[snd(l)] := rewrite(mp(ite_f[c := int_le(s, snd(l)) && int_lt(snd(l), snd(l)),
       a := some(fn_update(snd(x.vm.pages[snd(l)]), "prot", pv)), b := x.vm.pages[snd(l)]], nf), mp(all_elim(hq, {snd(l)}), so))
@@ -659,7 +662,7 @@ proof
     fix l l2
     assume il _ hb
     have so lo hi hm ex := il
-    obtain Q, fq hq from ex
+    obtain Q, fq hq ht from ex
     have pq mq := mp(all_elim(at, {l}), il)
     have nb: !(ok(l2, empty) = exc(pair(fst(l), snd(l)), pair("brk", empty))) by rsimp()
     have lt: int_lt(snd(l), E) by taut(hb, nb)
@@ -716,9 +719,20 @@ proof
       qed
       show by taut(c1, c2)
     qed
+    // (the page set: mapped, so within the task's pages -- a page's)
+    have t2: T -> lx.pgs(Q2) proof
+      assume th
+      have hpg hpv := th
+      have mx: x86_64_linux.mapped(x.vm, snd(l)) by taut(mq, mp1)
+      have ml mn := expand(mx, x86_64_linux.mapped)
+      have sp: snd(l) in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(so, ml)
+      have po := apply(fn_space_app, hpg, sp)
+      have pv2: PV in option(x86_64_linux.Page) := apply(g.some_page, apply(g.prot_upd, apply(some_val, po, mn), hpv))
+      show := apply(x86.space_upd, mp(ht, th), sp, pv2)
+    qed
     have ex2: ex Q. fn_update(x, "vm", fn_update(x.vm, "pages", Q2)) = fn_update(x, "vm", fn_update(x.vm, "pages", Q)) &&
-        (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, int_add(snd(l), 1)), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q]))
-      by ex_intro({Q2}, taut(refl({fn_update(x, "vm", fn_update(x.vm, "pages", Q2))}), q2))
+        (all q. q in omega -> Q[q] = ite(int_le(s, q) && int_lt(q, int_add(snd(l), 1)), some(fn_update(snd(x.vm.pages[q]), "prot", pv)), x.vm.pages[q])) && (T -> lx.pgs(Q))
+      by ex_intro({Q2}, taut(refl({fn_update(x, "vm", fn_update(x.vm, "pages", Q2))}), q2, t2))
     have i2: I(l2) by simp(l2e, so, ex2, m2, (int_le(s, int_add(snd(l), 1)) by arith(lo, so)), (int_le(int_add(snd(l), 1), E) by arith(lt, so)))
     have dc: int_lt(int_sub(E, snd(l2)), int_sub(E, snd(l))) by simp(l2e, (int_lt(int_sub(E, int_add(snd(l), 1)), int_sub(E, snd(l))) by arith()))
     show by taut(i2, dc)
@@ -742,7 +756,7 @@ proof
   have w := mp(while_var[l0 := pair(x, s), c := l. true, b := l o. B(l, o), tr := x4. fn_update(empty, "os.events", fst(x4).os.events), r := r,
     p := l. I(l), m := l. int_sub(E, snd(l))], i0, st1, mo, dc, hw)
   obtain l, so lo hi hm ex hl from w
-  obtain Q, fq hq from ex
+  obtain Q, fq hq ht from ex
   have nk: !is_ok(r) by taut(hl)
   have bl: B(l, r) by taut(hl)
   have pq mq := mp(all_elim(at, {l}), (I(l) by taut(so, lo, hi, hm, ex)))
@@ -781,7 +795,11 @@ proof
     have nm: !x86_64_linux.mapped(x.vm, snd(l)) by taut(mq, mp0)
     show by taut(nm, rewrite(fl, e7))
   qed
-  show by ex_intro({snd(l)}, {Q}, taut(so, lo, hi, hm, hq, ce, cl))
+  have tq: lx.pgs(x.vm.pages) -> pv in x86_64_linux.Prot -> lx.pgs(Q) proof
+    assume a1 a2
+    show := mp(ht, conj(a1, a2))
+  qed
+  show by ex_intro({snd(l)}, {Q}, taut(so, lo, hi, hm, hq, ce, cl, tq))
 qed
 
 // (after a loop at the procedure's top, v the value returned then: left by
@@ -816,10 +834,16 @@ proof
   show by taut(rewrite(s2, rewrite(s1, rewrite(f2, rewrite(f1, h)))), n0, n2, n3, n4)
 qed
 
+// (a protection's bits: a protection)
+theorem lx.prot_of_typed(p): x86_64_linux.prot_of(p) in x86_64_linux.Prot
+proof
+  show by defs(apply(g.prot_typed, (bit(p, 0) in bool by simp()), (bit(p, 1) in bool by simp()), (bit(p, 2) in bool by simp())), x86_64_linux.prot_of)
+qed
+
 // sys_mprotect(addr, len, prot) in closed form, P / N its first page and
 // count: misaligned, EINVAL; a protection beyond 7, undefined; else up to
 // the first unmapped page k (or P+N) the pages of the protection -- ENOMEM
-// at k, 0 at the end
+// at k, 0 at the end; a page map still
 theorem lx.sys_mprotect_ok(x, addr, len, prot, o): lx.rec(x) -> addr in omega -> len in omega ->
   runs(x86_64_linux.sys_mprotect(addr, len, prot), x, o) ->
   (!(int_mod(addr, x86_64_linux.PAGE) = 0) && o = ok(x, x86_64_linux.err(x86_64_linux.EINVAL))) ||
@@ -830,7 +854,8 @@ theorem lx.sys_mprotect_ok(x, addr, len, prot, o): lx.rec(x) -> addr in omega ->
     (all q. q in omega -> Q[q] = ite(int_le(x86_64_linux.page_of(addr), q) && int_lt(q, k), some(fn_update(snd(x.vm.pages[q]), "prot", x86_64_linux.prot_of(prot))), x.vm.pages[q])) &&
     ((k = int_add(x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) && o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), 0)) ||
      (int_lt(k, int_add(x86_64_linux.page_of(addr), x86_64_linux.pages_for(len))) && !x86_64_linux.mapped(x.vm, k) &&
-      o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), x86_64_linux.err(x86_64_linux.ENOMEM)))))
+      o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), x86_64_linux.err(x86_64_linux.ENOMEM)))) &&
+    (lx.pgs(x.vm.pages) -> lx.pgs(Q)))
 proof
   assume hx ha hl hr
   let P := x86_64_linux.page_of(addr)
@@ -849,12 +874,17 @@ proof
       (all q. q in omega -> int_le(P, q) -> int_lt(q, k) -> x86_64_linux.mapped(x.vm, q)) &&
       (all q. q in omega -> Q[q] = ite(int_le(P, q) && int_lt(q, k), some(fn_update(snd(x.vm.pages[q]), "prot", x86_64_linux.prot_of(prot))), x.vm.pages[q])) &&
       ((k = int_add(P, N) && o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), 0)) ||
-       (int_lt(k, int_add(P, N)) && !x86_64_linux.mapped(x.vm, k) && o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), x86_64_linux.err(x86_64_linux.ENOMEM)))) proof
+       (int_lt(k, int_add(P, N)) && !x86_64_linux.mapped(x.vm, k) && o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), x86_64_linux.err(x86_64_linux.ENOMEM)))) &&
+      (lx.pgs(x.vm.pages) -> lx.pgs(Q)) proof
     assume h h8
     have e2 := apply(lx.case_f, d2, (!!(int_mod(addr, x86_64_linux.PAGE) = 0) by taut(h)))
     obtain x6, w6 k6 from apply(lx.or_r, rewrite(eo, apply(lx.top_go, rewrite(e2, k2))), h8)
-    obtain k Q, ko kl ke km hq ce from mp(lx.prot_loop[x := x, s := P, e := int_add(P, N), pv := x86_64_linux.prot_of(prot), r := x6], hx, po,
+    obtain k Q, ko kl ke km hq ce tq0 from mp(lx.prot_loop[x := x, s := P, e := int_add(P, N), pv := x86_64_linux.prot_of(prot), r := x6], hx, po,
       (int_add(P, N) in omega by arith(po, no)), (int_le(P, int_add(P, N)) by arith(no)), w6)
+    have tq: lx.pgs(x.vm.pages) -> lx.pgs(Q) proof
+      assume a1
+      show := mp(tq0, a1, lx.prot_of_typed[p := prot])
+    qed
     let X1 := fn_update(x, "vm", fn_update(x.vm, "pages", Q))
     have c1: k = int_add(P, N) && x6 = exc(pair(X1, int_add(P, N)), pair("brk", empty)) -> k = int_add(P, N) && o = ok(X1, 0) proof
       assume h1
@@ -867,7 +897,7 @@ proof
       have lk nm e6 := h1
       show by taut(lk, nm, apply(lx.tlp_ret, rewrite(e6, k6)))
     qed
-    show by ex_intro({k}, {Q}, taut(h, h8, ko, kl, ke, km, hq, ce, c1, c2))
+    show by ex_intro({k}, {Q}, taut(h, h8, ko, kl, ke, km, hq, ce, c1, c2, tq))
   qed
   show by taut(mis, al)
 qed

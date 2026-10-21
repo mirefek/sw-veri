@@ -401,20 +401,23 @@ proc[World] os_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64], 
   }
 }
 
-// mprotect: the pages up to the first unmapped one changed; ENOMEM there
+// mprotect: the pages up to the first unmapped one (k) changed; ENOMEM if
+// there is one in the range
+pred mprot_post(before: Vm, vm: Vm, addr: Addr, len: bits[64], prot: bits[64]) =
+  ex k: nat. page_of(addr) <= k && k <= page_of(addr) + pages_for(uint(len)) &&
+    (all q: nat. page_of(addr) <= q && q < k -> mapped(before, q)) &&
+    (k < page_of(addr) + pages_for(uint(len)) -> !mapped(before, k)) &&
+    reprot(before, vm, page_of(addr), k - page_of(addr), prot_of(prot))
+
+fn mprot_ret(before: Vm, addr: Addr, len: bits[64]) -> bits[64] =
+  if all q: nat. page_of(addr) <= q && q < page_of(addr) + pages_for(uint(len)) -> mapped(before, q) { 0 } else { err(ENOMEM) }
+
 proc[World] os_mprotect(addr: Addr, len: bits[64], prot: bits[64]) -> bits[64] {
   if uint(addr) % PAGE != 0 { return err(EINVAL) }
   require uint(prot) < 8
-  let p = page_of(addr)
-  let n = pages_for(uint(len))
   let before = vm
-  if all q: nat. p <= q && q < p + n -> mapped(before, q) {
-    havoc vm where reprot(before, vm, p, n, prot_of(prot))
-    return 0
-  }
-  let k = any k: nat where p <= k && k < p + n && !mapped(before, k) && (all q: nat. p <= q && q < k -> mapped(before, q))
-  havoc vm where reprot(before, vm, p, k - p, prot_of(prot))
-  return err(ENOMEM)
+  havoc vm where mprot_post(before, vm, addr, len, prot)
+  return mprot_ret(before, addr, len)
 }
 
 // The calls by the arguments passed (the registers not passed no

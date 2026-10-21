@@ -25,10 +25,11 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   callee-saved register its entry's throughout (`tr.inv`'s `mcs`), so a
   saved one needs the bridge to know it saved (its value in a home, rbx
   the function's to use, restored before the return); nontrivial_free the
-  same. Then `sys_call3` / `sys_call6` the same way (the
-  closed forms `lx.sys_mprotect_ok`, `lx.sys_mmap_ok`; their world calls
-  relational like brk's; mmap_spec / mprotect_spec restated in the code's
-  shape, as `syscall1_spec`), memcpy's model.
+  same. __syscall3 and __mprotect have their C1 (`tr.sys_call3`); their
+  C2 against `mprotect_spec_fun` (restated in the code's shape, as
+  `syscall1_spec`) waits on __syscall_ret's. Then `sys_call6` the same way
+  (the closed form `lx.sys_mmap_ok`; os_mmap relational; a place for a
+  mapping without a hint the world's iff the machine's), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

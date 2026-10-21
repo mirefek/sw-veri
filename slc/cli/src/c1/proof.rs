@@ -418,9 +418,9 @@ impl<'e> Gen<'e> {
                     }
                 }
                 // (a system call: at the machine's syscall)
-                Some(Red::Sys { n, a1, a, xx, dd, k }) => {
+                Some(Red::Sys { n, args, a, xx, dd, k }) => {
                     if self.insns.get(&st.a).map(|i| i.row) == Some(156) {
-                        return self.sys_at(&st, n, a1, a, xx, dd, k);
+                        return self.sys_at(&st, n, &args, a, xx, dd, k);
                     }
                 }
                 // the loop's exit: the rest in the function's wrapper, no
@@ -781,16 +781,25 @@ impl<'e> Gen<'e> {
         )
     }
 
-    /// A system call (tr.sys_call1): the machine's `syscall` at st's address,
-    /// rax and rdi holding the spec's number and argument; the claim after
-    /// it (rax the result, the other registers not known, the frame rsp's
-    /// page) for every world and result
+    /// A system call (tr.sys_call1, tr.sys_call3): the machine's `syscall` at
+    /// st's address, rax and rdi (rsi, rdx) holding the spec's number and
+    /// arguments; the claim after it (rax the result, the other registers
+    /// not known, the frame rsp's page) for every world and result
     #[allow(clippy::too_many_arguments)]
-    fn sys_at(&mut self, st: &St, nv: Term, a1: Term, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+    fn sys_at(&mut self, st: &St, nv: Term, args: &[Term], al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
         let a = st.a;
         let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
         let a2 = (a + insn.len) % P64;
-        for (r, x) in [(0u128, &nv), (7, &a1)] {
+        let (rule, names): (&str, &[&str]) = match args.len() {
+            1 => ("tr.sys_call1", &["a1"]),
+            3 => ("tr.sys_call3", &["a1", "b2", "b3"]),
+            n => return Err(format!("{:x}: a system call with {} arguments (1 or 3 so far)", a, n)),
+        };
+        let mut regs = vec![(0u128, &nv)];
+        for (r, x) in [7u128, 6, 2].iter().zip(args.iter()) {
+            regs.push((*r, x));
+        }
+        for (r, x) in regs {
             let (k, v) = self.reg(st, r).ok_or_else(|| format!("{:x}: register {} holds no value at the syscall", a, r))?;
             if k != 8 || self.canon(&v) != self.canon(x) {
                 return Err(format!("{:x}: register {} holds {}, the spec's system call passes {}", a, r, self.print(&v), self.print(x)));
@@ -838,32 +847,28 @@ impl<'e> Gen<'e> {
         let st2 = self.set_reg(&st0, a2, 0, 8, r0.clone());
         let rest = self.prove_pt(st2)?;
         let pc = self.close(rest, &[hw4t, hr0t], &[Self::var_id(&w4), Self::var_id(&r0)])?;
-        let inst = R::Inst(
-            "tr.sys_call1".into(),
-            vec![
-                ("s", self.s.clone()),
-                ("v", self.v.clone()),
-                ("base", self.base.clone()),
-                ("code", self.code.clone()),
-                ("fr", lit(st.fr)),
-                ("a", lit(a)),
-                ("a2", lit(a2)),
-                ("hs", st.hst.clone()),
-                ("ds", st.ds.clone()),
-                ("rs", st.rs.clone()),
-                ("w", w),
-                ("nv", nv),
-                ("a1", a1),
-                ("ka", al),
-                ("xx", xl),
-                ("dd", dl),
-                ("k", kl),
-                ("kw", self.kw3()),
-                ("bkp", self.bkp.clone()),
-                ("bka", self.bka.clone()),
-            ],
-        );
-        self.run(&mp(inst, vec![p(f(&insn.name)), simp_l(), simp_l(), simp_l(), simp_l(), simp_l(), s(&hk), s(&pc)]), &[])
+        let mut iv = vec![
+            ("s", self.s.clone()),
+            ("v", self.v.clone()),
+            ("base", self.base.clone()),
+            ("code", self.code.clone()),
+            ("fr", lit(st.fr)),
+            ("a", lit(a)),
+            ("a2", lit(a2)),
+            ("hs", st.hst.clone()),
+            ("ds", st.ds.clone()),
+            ("rs", st.rs.clone()),
+            ("w", w),
+            ("nv", nv),
+        ];
+        iv.extend(names.iter().copied().zip(args.iter().cloned()));
+        iv.extend([("ka", al), ("xx", xl), ("dd", dl), ("k", kl), ("kw", self.kw3()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())]);
+        let inst = R::Inst(rule.into(), iv);
+        // (rip's step, then each register's two facts)
+        let mut prem = vec![p(f(&insn.name))];
+        prem.extend((0..1 + 2 * (1 + args.len())).map(|_| simp_l()));
+        prem.extend([s(&hk), s(&pc)]);
+        self.run(&mp(inst, prem), &[])
     }
 
     /// An equation by arith over the definitions defs, its sides' largest
