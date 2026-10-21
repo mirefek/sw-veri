@@ -934,4 +934,6 @@ item is a short summary of finished work; details are in the files named.
   `g.sys_call1_ok`), the coupling after it by a change on a page range
   off the stack's space, its pages not executable (`tr.vm_chg`;
   `tr.mem_chg`, `tr.inv_chg`, `tr.homes_chg`, `tr.rsv_chg`), the result
-  in rax, the frame rsp's page (8 bytes).
+  in rax, the frame rsp's page (8 bytes). The engine applies it at a
+  `syscall` like a call (`Red::Sys`, `sys_at`); the call's effect
+  (`tr.eff_sys_call1`) gives callers' `tr.callee_io`. `c1 __syscall1`.
