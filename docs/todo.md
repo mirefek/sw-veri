@@ -18,6 +18,11 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   __mmap, __mprotect, __errno_location (C1 of their code, or their specs
   as the machine's), to discharge `mp.am_implements`' hypotheses -- and
   `mp.as_implements` / `mp.agr_implements`' (`mp.ap_leaves`, the same).
+  __syscall1: the engine applies `tr.sys_call1` at a `syscall` (a
+  reduction like a call's, spec.rs/proof.rs), its c1 line, its C2 against
+  `syscall1_spec_fun`. Then `sys_call3` / `sys_call6` the same way (the
+  closed forms `lx.sys_mprotect_ok`, `lx.sys_mmap_ok`; their world calls
+  relational like brk's), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

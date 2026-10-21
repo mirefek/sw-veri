@@ -925,4 +925,13 @@ item is a short summary of finished work; details are in the files named.
   page, `lx.prot_loop`), `lx.sys_mmap_ok`, by their loops' invariants
   (`lx.pages_loop`, `lx.bytes_loop`); the syscall instruction with rax 12
   (`x86i.brk_insn`). The readable op by the arguments passed:
-  `sys_call1` (brk), `sys_call3` (mprotect), `sys_call6` (mmap).
+  `sys_call1` (brk), `sys_call3` (mprotect), `sys_call6` (mmap); the
+  world's brk relational (`gimple.brk_post`, the break returned).
+- **C1's rule for `syscall` with brk** (`tr.sys_call1`,
+  proofs/translate_sys.core): undefined unless brk with its requirement,
+  so the spec raises; else Linux's brk on the machine, the world's memory
+  changed alike (`tr.brk_world`: the world's call allows it,
+  `g.sys_call1_ok`), the coupling after it by a change on a page range
+  off the stack's space, its pages not executable (`tr.vm_chg`;
+  `tr.mem_chg`, `tr.inv_chg`, `tr.homes_chg`, `tr.rsv_chg`), the result
+  in rax, the frame rsp's page (8 bytes).
