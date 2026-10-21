@@ -595,6 +595,16 @@ proof
   show by defs(arith(ha, hp, hn), x86_64_linux.page_of, x86_64_linux.PAGE)
 qed
 
+// (... for any range: its ends integers -- the integer operations' any
+// arguments)
+theorem tr.pg_rng2(a, p, n): a in bits(64) ->
+  ((int_le(p, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(p, n))) <->
+   (int_le(int_mul(p, x86_64_linux.PAGE), a) && int_lt(a, int_mul(int_add(p, n), x86_64_linux.PAGE))))
+proof
+  assume ha
+  show by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+qed
+
 // nothing changed: the empty range
 theorem tr.chg_refl(m0, V, w0, WV): abi.stack_reserve(m0) -> V.stack_top = m0.stack_top -> V.stack_limit = m0.stack_limit ->
   V.brk_start = m0.brk_start -> WV.stack_top = w0.stack_top -> WV.stack_limit = w0.stack_limit -> WV.brk_start = w0.brk_start -> V.brk = WV.brk ->
@@ -1184,4 +1194,225 @@ proof
     show by taut(cu, cd)
   qed
   show by defs(g, tr.lv)
+qed
+
+// ----------------------------------------------------------------------
+//  The call's effect (tr.eff, for its callers' tr.callee_io): its returns
+//  keep the world valid -- the program loaded (its code on executable
+//  pages, which brk neither takes nor gives back), the break's start
+
+// (a code byte: on a mapped, executable page)
+theorem tr.code_pg(vm, gb, gc, i): abi.code_at(vm, gb, gc) -> i in omega -> int_lt(i, seq_len(gc)) ->
+  x86_64_linux.mapped(vm, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))) &&
+  snd(vm.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))]).prot.x &&
+  x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))) in omega && bits_of_int(64, int_add(gb, i)) in bits(64)
+proof
+  assume hd hi hl
+  have c0 := mp(all_elim(expand(hd, abi.code_at), {i}), hi, hl)
+  have cf _ _ _ := c0
+  have fm fx := expand(cf, x86_64_linux.fetchable)
+  have xq: snd(vm.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))]).prot.x := rsimp(expand(fx, x86_64_linux.hw_allows))
+  have ab: bits_of_int(64, int_add(gb, i)) in bits(64) by simp()
+  have qo: x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))) in omega by defs(arith(ab), x86_64_linux.page_of, x86_64_linux.PAGE)
+  show by taut(fm, xq, qo, ab)
+qed
+
+// brk's return: the world valid still
+theorem tr.brk_valid(w, V, a1): tr.req1(w, a1) -> gimple.brk_post(w.vm, V, a1) -> tr.returns_valid(w, fn_update(w, "vm", V))
+proof
+  assume hq hp
+  let W2 := fn_update(w, "vm", V)
+  let PO := x86_64_linux.pages_for(w.vm.brk)
+  let PN := x86_64_linux.pages_for(a1)
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have c := expand(hp, gimple.brk_post)
+  // the program loaded, its break's start: as before
+  let G := all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(V, gb, gc, st)
+  let GB := V.brk_start = w.vm.brk_start
+  have k1: V = w.vm && (int_lt(a1, w.vm.brk_start) || int_lt(PO, PN)) -> G && GB proof
+    assume h
+    have e _ := h
+    have g: G proof
+      fix gb gc st
+      assume _ hl
+      show := rewrite(sym(e), hl)
+    qed
+    have b: GB by rsimp(e)
+    show by taut(g, b)
+  qed
+  have k2: ((((int_le(w.vm.brk_start, a1) && int_lt(PO, PN)) && x86_64_linux.free_range(w.vm, PO, int_sub(PN, PO))) &&
+      x86_64_linux.off_stack_space(w.vm, PO, int_sub(PN, PO))) && gimple.fresh_pages(w.vm, V, PO, int_sub(PN, PO),
+      fn_update(fn_update(empty, "prot", fn_update(fn_update(fn_update(empty, "r", true), "w", true), "x", false)), "kind", 1))) && V.brk = a1 -> G && GB proof
+    assume h
+    have nl gl fr _ fp _ := h
+    have vt vl vb vpg vby := expand(fp, gimple.fresh_pages)
+    have _ f2 _ := expand(fr, x86_64_linux.free_range)
+    have g: G proof
+      fix gb gc st
+      assume _ hl
+      have l1 l2 := expand(hl, abi.loaded)
+      have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+          V.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] = w.vm.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] &&
+          V.bytes[bits_of_int(64, int_add(gb, i))] = w.vm.bytes[bits_of_int(64, int_add(gb, i))] proof
+        fix i
+        assume hi hli
+        let A := bits_of_int(64, int_add(gb, i))
+        let Q := x86_64_linux.page_of(A)
+        have fm _ qo ab := apply(tr.code_pg, l1, hi, hli)
+        have nr: !(int_le(PO, Q) && int_lt(Q, int_add(PO, int_sub(PN, PO)))) proof
+          assume hr
+          show by taut(mp(all_elim(f2, {Q}), qo, hr), fm)
+        qed
+        have ql _ := expand(fm, x86_64_linux.mapped)
+        have ep := apply(tr.ite_no, mp(all_elim(vpg, {Q}), qo, ql), nr)
+        have rng := mp(tr.pg_rng2[a := A, p := PO, n := int_sub(PN, PO)], ab)
+        have eb := apply(tr.ite_no, mp(all_elim(vby, {A}), ab), (!(int_le(int_mul(PO, x86_64_linux.PAGE), A) && int_lt(A, int_mul(int_add(PO, int_sub(PN, PO)), x86_64_linux.PAGE))) by taut(rng, nr)))
+        show by taut(ep, eb)
+      qed
+      have cd2 := apply(tr.code_at_tr, l1, e)
+      have s2 := apply(tr.statics_same, {w.vm}, {V}, {st}, vt, vl, l2)
+      show by defs(taut(cd2, s2), abi.loaded)
+    qed
+    show by taut(g, vb)
+  qed
+  have k3: ((int_le(w.vm.brk_start, a1) && int_le(PN, PO)) && gimple.gone_pages(w.vm, V, PN, int_sub(PO, PN))) && V.brk = a1 -> G && GB proof
+    assume h
+    have nl gl gp _ := h
+    have vt vl vb vpg vby := expand(gp, gimple.gone_pages)
+    have g: G proof
+      fix gb gc st
+      assume _ hl
+      have l1 l2 := expand(hl, abi.loaded)
+      have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+          V.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] = w.vm.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] &&
+          V.bytes[bits_of_int(64, int_add(gb, i))] = w.vm.bytes[bits_of_int(64, int_add(gb, i))] proof
+        fix i
+        assume hi hli
+        let A := bits_of_int(64, int_add(gb, i))
+        let Q := x86_64_linux.page_of(A)
+        have fm fx qo ab := apply(tr.code_pg, l1, hi, hli)
+        // (a page given back: not executable, by the requirement -- so not the code's)
+        have nr: !(int_le(PN, Q) && int_lt(Q, int_add(PN, int_sub(PO, PN)))) proof
+          assume hr
+          have h1 h2 := hr
+          have lt: int_lt(PN, PO) by arith(h1, h2)
+          have _ spk _ := mp(hq, lt, nl)
+          have _ nx := expand(spk, gimple.sys_pages_ok)
+          show by taut(mp(all_elim(nx, {Q}), qo, hr, fm), fx)
+        qed
+        have ql _ := expand(fm, x86_64_linux.mapped)
+        have ep := apply(tr.ite_no, mp(all_elim(vpg, {Q}), qo, ql), nr)
+        have eb: V.bytes[A] = w.vm.bytes[A] by rsimp(vby)
+        show by taut(ep, eb)
+      qed
+      have cd2 := apply(tr.code_at_tr, l1, e)
+      have s2 := apply(tr.statics_same, {w.vm}, {V}, {st}, vt, vl, l2)
+      show by defs(taut(cd2, s2), abi.loaded)
+    qed
+    show by taut(g, vb)
+  qed
+  have gg gb := (G && GB by taut(c, k1, k2, k3))
+  have ev: W2.vm = V by rsimp()
+  have eos: W2.os = w.os by rsimp()
+  have ecp: W2.cpu = w.cpu by rsimp()
+  have l: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(W2.vm, gb, gc, st) := rewrite(sym(ev), gg)
+  have ei: W2.os.input = w.os.input by rsimp()
+  have se: subset(w.os.events, W2.os.events) := rewrite(sym(eos), subset_refl[s := w.os.events], {2})
+  show by defs(taut(ei, se, l, ecp, rewrite(sym(ev), gb)), tr.returns_valid)
+qed
+
+// (the same outcomes: the same effect)
+theorem tr.eff_iff(w, o. r, o. q): (all o. r(o) <-> q(o)) -> tr.eff(w, o. q(o)) -> tr.eff(w, o. r(o))
+proof
+  assume he hq
+  have c := expand(hq, tr.eff)
+  have l: (all w2 v. q(ok(w2, v)) -> tr.returns_valid(w, w2)) -> (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume h
+    fix w2 v
+    assume hr
+    have qv: q(ok(w2, v)) by taut(all_elim(he, {ok(w2, v)}), hr)
+    show := mp(all_elim(h, {w2}, {v}), qv)
+  qed
+  have u: tr.undef(o. q(o)) -> tr.undef(o. r(o)) proof
+    assume h
+    have ux ud := expand(h, tr.undef)
+    have gx: all x e. x in univ(1) -> e in univ(1) -> r(exc(x, e)) proof
+      fix x e
+      assume h1 h2
+      show by taut(mp(all_elim(ux, {x}, {e}), h1, h2), all_elim(he, {exc(x, e)}))
+    qed
+    have gd: all t. t in univ(1) -> r(diverge(t)) proof
+      fix t
+      assume h1
+      show by taut(mp(all_elim(ud, {t}), h1), all_elim(he, {diverge(t)}))
+    qed
+    show by defs(taut(gx, gd), tr.undef)
+  qed
+  show by defs(taut(c, l, u), tr.eff)
+qed
+
+// brk's world call (its requirement met): its returns valid
+theorem tr.eff_os_brk(w, a1): tr.req1(w, a1) -> tr.eff(w, o. runs(gimple.os_brk(a1), w, o))
+proof
+  assume hq
+  have k: all V. V in x86_64_linux.Vm && gimple.brk_post(w.vm, fn_update(w, "vm", V).vm, a1) ->
+      tr.eff(w, o. letin(fn_update(w, "vm", V), x4. o = ok(x4, x4.vm.brk))) proof
+    fix V
+    assume h
+    have _ hp := h
+    have bp: gimple.brk_post(w.vm, V, a1) := rsimp(hp)
+    have rv := apply(tr.brk_valid, hq, bp)
+    have g: all w2 v. ok(w2, v) = ok(fn_update(w, "vm", V), fn_update(w, "vm", V).vm.brk) -> tr.returns_valid(w, w2) proof
+      fix w2 v
+      assume e
+      have ew: w2 = fn_update(w, "vm", V) by simp(e)
+      show := rewrite(sym(ew), rv)
+    qed
+    show by defs(taut(g), tr.eff, letin)
+  qed
+  have a := apply(tr.eff_any[d := x3. x3 in x86_64_linux.Vm && gimple.brk_post(w.vm, fn_update(w, "vm", x3).vm, a1),
+    k := x3 o. letin(fn_update(w, "vm", x3), x4. o = ok(x4, x4.vm.brk))], {w}, k)
+  show by defs(apply(tr.eff_prog, {w}, (tr.eff(w, o. letin(w.vm, x2. any_rel(x3. x3 in x86_64_linux.Vm && gimple.brk_post(x2, fn_update(w, "vm", x3).vm, a1),
+    x3. letin(fn_update(w, "vm", x3), x4. o = ok(x4, x4.vm.brk))))) by defs(a, letin))), gimple.os_brk)
+qed
+
+// sys_call1's effect: undefined but for brk with its requirement; then brk's
+theorem tr.eff_sys_call1: all w n a1. tr.eff(w, o. runs(gimple.sys_call1(n, a1), w, o))
+proof
+  fix w n a1
+  let B(o) := bind_rel(gimple.os_brk(a1), w, x2 x3. o = ok(x2, x3), x2 x3. o = exc(x2, x3), x2. o = diverge(x2))
+  let BODY(o) := !(n = 12) || (!tr.req1(w, a1) || B(o))
+  have c1: !(n = 12 && tr.req1(w, a1)) -> tr.eff(w, o. BODY(o)) proof
+    assume h
+    have ux: all x e. x in univ(1) -> e in univ(1) -> BODY(exc(x, e)) proof
+      fix x e
+      assume _ _
+      show by taut(h)
+    qed
+    have ud: all t. t in univ(1) -> BODY(diverge(t)) proof
+      fix t
+      assume _
+      show by taut(h)
+    qed
+    have u: tr.undef(o. BODY(o)) by defs(taut(ux, ud), tr.undef)
+    show by defs(taut(u), tr.eff)
+  qed
+  have c2: n = 12 && tr.req1(w, a1) -> tr.eff(w, o. BODY(o)) proof
+    assume h
+    have _ hq := h
+    have eo := apply(tr.eff_os_brk, hq)
+    have rt: all s1 v. runs(gimple.os_brk(a1), w, ok(s1, v)) -> tr.eff(s1, o. o = ok(s1, v)) proof
+      fix s1 v
+      assume _
+      show := all_elim(tr.eff_ret, {s1}, {v})
+    qed
+    have eb := apply(tr.eff_bind[p := gimple.os_brk(a1), k := s1 v o. o = ok(s1, v)], {w}, eo, rt)
+    have iff: all o. BODY(o) <-> B(o) proof
+      fix o
+      show by taut(h)
+    qed
+    show := apply(tr.eff_iff[w := w, r := o. BODY(o), q := o. B(o)], iff, eb)
+  qed
+  have be: tr.eff(w, o. BODY(o)) by taut(c1, c2)
+  show by defs(apply(tr.eff_prog, {w}, be), gimple.sys_call1)
 qed

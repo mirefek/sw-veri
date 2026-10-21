@@ -414,6 +414,12 @@ impl<'e> Gen<'e> {
                         return self.call_at(&st, qi, g, &args, list, one, a, xx, dd, k);
                     }
                 }
+                // (a system call: at the machine's syscall)
+                Some(Red::Sys { n, a1, a, xx, dd, k }) => {
+                    if self.insns.get(&st.a).map(|i| i.row) == Some(156) {
+                        return self.sys_at(&st, n, a1, a, xx, dd, k);
+                    }
+                }
                 // the loop's exit: the rest in the function's wrapper, no
                 // arrival (tr.lv_exit)
                 Some(Red::Exit { e, k, kw }) => {
@@ -770,6 +776,91 @@ impl<'e> Gen<'e> {
             ),
             &[],
         )
+    }
+
+    /// A system call (tr.sys_call1): the machine's `syscall` at st's address,
+    /// rax and rdi holding the spec's number and argument; the claim after
+    /// it (rax the result, the other registers not known, the frame rsp's
+    /// page) for every world and result
+    #[allow(clippy::too_many_arguments)]
+    fn sys_at(&mut self, st: &St, nv: Term, a1: Term, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+        let a = st.a;
+        let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
+        let a2 = (a + insn.len) % P64;
+        for (r, x) in [(0u128, &nv), (7, &a1)] {
+            let (k, v) = self.reg(st, r).ok_or_else(|| format!("{:x}: register {} holds no value at the syscall", a, r))?;
+            if k != 8 || self.canon(&v) != self.canon(x) {
+                return Err(format!("{:x}: register {} holds {}, the spec's system call passes {}", a, r, self.print(&v), self.print(x)));
+            }
+        }
+        let w = st.w.clone();
+        let hv = st.hvu.clone();
+        // the continuation's raise: the function's (as at a call)
+        let n = self.fresh("s");
+        let (xv, ev) = (self.var(&format!("XS{n}")), self.var(&format!("ES{n}")));
+        let x8 = Term::bvar(0);
+        let mkq = |gg: &Gen, h: Term| -> Term {
+            let kk = kl.instantiate_params(&[Term::bvar(0), Term::bvar(1)], &gg.env.binders_fn());
+            gg.mk("mkprog", vec![gg.mk("ex", vec![gg.mk("and", vec![h, kk])])])
+        };
+        let qx = mkq(self, xl.instantiate_params(&[xv.clone(), ev.clone(), x8.clone()], &self.env.binders_fn()));
+        let univ = |gg: &Gen, x: &Term| gg.mk("in", vec![x.clone(), gg.mk("univ", vec![lit(1)])]);
+        let (hx, he) = (univ(self, &xv), univ(self, &ev));
+        let (hxs, hes) = (self.assume(&hx)?, self.assume(&he)?);
+        let gk = self.mk("runs", vec![qx, w.clone(), self.mk("exc", vec![xv.clone(), ev.clone()])]);
+        let kd: Vec<String> = if self.lpg.is_some() { ["tr.lcont", "tr.isout", "tr.mk"].map(String::from).to_vec() } else { vec!["runs".into(), "mkprog".into()] };
+        let k0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hxs), R::S(hes), R::S(hv.clone())], vec![], false)), kd), &gk, &[])?;
+        let hk = self.close(k0, &[hx, he], &[Self::var_id(&xv), Self::var_id(&ev)])?;
+        // the claim after the call, for every world W4 and result R0
+        let (w4, r0) = (self.var(&format!("WS{n}")), self.var(&format!("RS{n}")));
+        let ka = al.instantiate_params(&[Term::bvar(2), r0.clone(), Term::bvar(0)], &self.env.binders_fn());
+        let q2 = self.canon(&mkq(self, ka));
+        let j = self.new_q(q2);
+        let hw4t = self.mk("and", vec![self.mk("in", vec![w4.clone(), self.mk("abi.World", vec![])]), univ(self, &w4)]);
+        let hw4 = self.assume(&hw4t)?;
+        let hv4 = self.evp(&RP::Taut(vec![R::S(hw4.clone())]), &univ(self, &w4), &[])?;
+        let hr0t = self.mk("in", vec![r0.clone(), self.mk("bits", vec![lit(64)])]);
+        let mut st0 = st.clone();
+        let hr0 = self.assume(&hr0t)?;
+        st0.facts.push(hr0.clone());
+        st0.lfx.push(hr0);
+        st0.a = a2;
+        st0.regs = Vec::new();
+        st0.rs = self.mk("empty", vec![]);
+        st0.w = w4.clone();
+        st0.hvu = hv4;
+        st0.hw = hw4;
+        st0.ds = lit(8);
+        st0.spec = Spec::Proc(j);
+        let st2 = self.set_reg(&st0, a2, 0, 8, r0.clone());
+        let rest = self.prove_pt(st2)?;
+        let pc = self.close(rest, &[hw4t, hr0t], &[Self::var_id(&w4), Self::var_id(&r0)])?;
+        let inst = R::Inst(
+            "tr.sys_call1".into(),
+            vec![
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("a", lit(a)),
+                ("a2", lit(a2)),
+                ("hs", st.hst.clone()),
+                ("ds", st.ds.clone()),
+                ("rs", st.rs.clone()),
+                ("w", w),
+                ("nv", nv),
+                ("a1", a1),
+                ("ka", al),
+                ("xx", xl),
+                ("dd", dl),
+                ("k", kl),
+                ("kw", self.kw3()),
+                ("bkp", self.bkp.clone()),
+                ("bka", self.bka.clone()),
+            ],
+        );
+        self.run(&mp(inst, vec![p(f(&insn.name)), simp_l(), simp_l(), simp_l(), simp_l(), simp_l(), s(&hk), s(&pc)]), &[])
     }
 
     /// An equation by arith over the definitions defs, its sides' largest

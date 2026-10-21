@@ -122,6 +122,9 @@ enum Red {
     /// a call of `g` (the machine's `call` makes it): the block's
     /// continuation, handlers and rest (`one`: call1, the result's rax only)
     Call { g: Term, args: Vec<Term>, list: Term, one: bool, a: Term, xx: Term, dd: Term, k: Term },
+    /// a system call (gimple.sys_call1; the machine's `syscall` makes it):
+    /// its number and argument, the block's continuation, handlers and rest
+    Sys { n: Term, a1: Term, a: Term, xx: Term, dd: Term, k: Term },
     /// a loop's iteration ended by the body leaving with `e` (`tr.lcont`):
     /// the rest `k` in the wrapper `kw`
     Exit { e: Term, k: Term, kw: Term },

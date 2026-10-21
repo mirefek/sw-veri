@@ -1346,6 +1346,10 @@ impl<'e> Gen<'e> {
                         return Ok(Some(Red::Call { g: c[0].clone(), args: items, list: c[1].clone(), one, a: al, xx: xl, dd: dl, k: kl }));
                     }
                 }
+                // a system call: the machine's syscall makes it
+                if let Some(c) = self.app(&x[0], "gimple.sys_call1", 2) {
+                    return Ok(Some(Red::Sys { n: c[0].clone(), a1: c[1].clone(), a: al, xx: xl, dd: dl, k: kl }));
+                }
                 let (cond, e, okf, ubf) = self.op(&x[0])?;
                 let (r, hr) = self.result(&e)?;
                 let args = |r2: (&'static str, Term)| vec![("op", x[0].clone()), r2, ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())];
