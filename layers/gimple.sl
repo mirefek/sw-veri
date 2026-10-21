@@ -324,9 +324,9 @@ proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
 
 // A system call (`syscall`: rax n, rdi a1, rsi a2, rdx a3, r10 a4, r8 a5,
 // r9 a6; its result in rax, rcx and r11 clobbered): Linux's call
-// (spec/linux/process.sl) as the C world sees it -- run on the world's
-// memory, the machine's but its stack pages (a page free in the machine
-// is free there: the world's run allows the machine's). Only the calls the
+// (spec/linux/process.sl) as the C world sees it -- on the world's memory,
+// the machine's but its stack pages (a page free in the machine is free
+// there: the world's call allows the machine's). Only the calls the
 // allocator makes -- brk, mmap, mprotect -- and only where the pages they
 // change are its kind of memory: off the stack's space (the world does not
 // see the stack's pages: its frames, its room to grow) and not the
@@ -334,6 +334,83 @@ proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
 // as is any other call.
 pred sys_pages_ok(vm: Vm, p: nat, n: nat) =
   off_stack_space(vm, p, n) && (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> !vm.pages[q].value.prot.x)
+
+// The memory's changes by a call. vm: before with the pages p .. p+n-1
+// fresh pages pg -- their bytes 0 --, nothing else changed (its break
+// aside)
+pred fresh_pages(before: Vm, vm: Vm, p: nat, n: nat, pg: Page) =
+  vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
+  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(pg) } else { before.pages[q] })) &&
+  (all a: Addr. vm.bytes[a] = (if p * PAGE <= uint(a) && uint(a) < (p + n) * PAGE { bits[8](0) } else { before.bytes[a] }))
+
+// vm: before with the pages p .. p+n-1 gone, nothing else changed (its break aside)
+pred gone_pages(before: Vm, vm: Vm, p: nat, n: nat) =
+  vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
+  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { none } else { before.pages[q] })) &&
+  vm.bytes = before.bytes
+
+// vm: before with the pages p .. p+n-1 (mapped) of protection pr, nothing else changed
+pred reprot(before: Vm, vm: Vm, p: nat, n: nat, pr: Prot) =
+  (vm with { pages: before.pages }) = before &&
+  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(before.pages[q].value with { prot: pr }) } else { before.pages[q] }))
+
+// Linux's calls (spec/linux/process.sl's sys_brk, sys_mmap, sys_mprotect),
+// their effect on the memory stated (C1's `syscall` rule shows the
+// machine's run of each, seen through the world, one of these). brk:
+proc[World] os_brk(new: Addr) -> bits[64] {
+  let before = vm
+  let old_end = pages_for(uint(before.brk))
+  let new_end = pages_for(uint(new))
+  if new < before.brk_start { return before.brk }
+  if new_end > old_end {
+    if !free_range(before, old_end, new_end - old_end) || !off_stack_space(before, old_end, new_end - old_end) { return before.brk }
+    either { return before.brk } or {
+      havoc vm where fresh_pages(before, vm, old_end, new_end - old_end, Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new
+      return new
+    }
+  } else {
+    havoc vm where gone_pages(before, vm, new_end, old_end - new_end) && vm.brk = new
+    return new
+  }
+}
+
+// mmap (anonymous private memory only)
+proc[World] os_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64], fd: bits[64], off: bits[64]) -> bits[64] {
+  require uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS || uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED
+  require uint(prot) < 8
+  if uint(off) % PAGE != 0 { return err(EINVAL) }
+  if len = 0 { return err(EINVAL) }
+  let n = pages_for(uint(len))
+  either { return err(ENOMEM) } or {}
+  let before = vm
+  if flags[4] {
+    if uint(addr) % PAGE != 0 { return err(EINVAL) }
+    let p = page_of(addr)
+    if p + n > TASK_SIZE / PAGE { return err(ENOMEM) }
+    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk
+    return bits[64](p * PAGE)
+  } else {
+    let p = any q: nat where q >= 1 && free_range(before, q, n) && (addr != 0 || off_stack_space(before, q, n))
+    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk
+    return bits[64](p * PAGE)
+  }
+}
+
+// mprotect: the pages up to the first unmapped one changed; ENOMEM there
+proc[World] os_mprotect(addr: Addr, len: bits[64], prot: bits[64]) -> bits[64] {
+  if uint(addr) % PAGE != 0 { return err(EINVAL) }
+  require uint(prot) < 8
+  let p = page_of(addr)
+  let n = pages_for(uint(len))
+  let before = vm
+  if all q: nat. p <= q && q < p + n -> mapped(before, q) {
+    havoc vm where reprot(before, vm, p, n, prot_of(prot))
+    return 0
+  }
+  let k = any k: nat where p <= k && k < p + n && !mapped(before, k) && (all q: nat. p <= q && q < k -> mapped(before, q))
+  havoc vm where reprot(before, vm, p, k - p, prot_of(prot))
+  return err(ENOMEM)
+}
 
 proc[World] sys_call(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4: bits[64], a5: bits[64], a6: bits[64]) -> bits[64] {
   require uint(n) = 9 || uint(n) = 10 || uint(n) = 12
@@ -347,9 +424,9 @@ proc[World] sys_call(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4: 
   require uint(n) = 9 -> (if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 })
   // mprotect: its pages
   require uint(n) = 10 -> sys_pages_ok(vm, page_of(a1), pages_for(uint(a2)))
-  // (Linux's calls read and write only the memory and the I/O)
-  let r = with asm_machine(any (Reg -> bits[64]), any (Reg -> bits[128]), any Flags, any Addr) { return linux_syscall(n, a1, a2, a3, a4, a5, a6) }
-  return r
+  if uint(n) = 12 { return os_brk(a1) }
+  if uint(n) = 9 { return os_mmap(a1, a2, a3, a4, a5, a6) }
+  return os_mprotect(a1, a2, a3)
 }
 
 // the thread pointer (`mov %fs:0, r`, musl's __get_tp): the word at the

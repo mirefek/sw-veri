@@ -1,0 +1,292 @@
+// Linux's system calls (spec/linux/process.sl) in closed form: what
+// map_pages, sys_brk, sys_mmap and sys_mprotect leave, on any state with a
+// memory (`vm`) -- the machine's (C1's `syscall` rule) and the C world's
+// (its `sys_call`, against the specs' brk_spec / mmap_spec / mprotect_spec).
+
+// (a state with a memory: records, their fields there)
+abbrev lx.rec(x) := is_fun(x) && "vm" in dom(x) && is_fun(x.vm) && "pages" in dom(x.vm) && "bytes" in dom(x.vm)
+
+// a loop setting the pages s .. e-1 to v (map_pages' first, some page;
+// sys_brk's giving pages back, none): it leaves, at e, with the
+// state's pages v there and as before elsewhere
+theorem lx.pages_loop(x, s, e, v, r): lx.rec(x) -> s in omega -> e in omega -> int_le(s, e) ->
+  while_rel(pair(x, s), x4. true, x4 x5. (int_lt(snd(x4), e) && letin(snd(x4), x6. letin(fn_update(fst(x4), "vm",
+    fn_update(fst(x4).vm, "pages", fn_update(fst(x4).vm.pages, x6, v))), x7. x5 = ok(pair(x7, int_add(snd(x4), 1)), empty)))) ||
+    (!int_lt(snd(x4), e) && x5 = exc(pair(fst(x4), snd(x4)), pair("brk", empty))),
+    x4. fn_update(empty, "os.events", fst(x4).os.events), r) ->
+  ex Q. r = exc(pair(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), e), pair("brk", empty)) &&
+    (all k. k in omega -> Q[k] = ite(int_le(s, k) && int_lt(k, e), v, x.vm.pages[k]))
+proof
+  assume hx hp hn hse hw
+  have xf xd vf vd _ := hx
+  let E := e
+  let I(l) := snd(l) in omega && int_le(s, snd(l)) && int_le(snd(l), E) &&
+    (ex Q. fst(l) = fn_update(x, "vm", fn_update(x.vm, "pages", Q)) &&
+      (all k. k in omega -> Q[k] = ite(int_le(s, k) && int_lt(k, snd(l)), v, x.vm.pages[k])))
+  // (at the start: Q the pages themselves)
+  have e1 := mp(mp(fn_update_same[f := x.vm, k := "pages"], vf), vd)
+  have e0 := mp(mp(fn_update_same[f := x, k := "vm"], xf), xd)
+  have x0: x = fn_update(x, "vm", fn_update(x.vm, "pages", x.vm.pages)) := sym(rewrite(sym(e1), e0, {1}))
+  have q0: all k. k in omega -> x.vm.pages[k] = ite(int_le(s, k) && int_lt(k, s), v, x.vm.pages[k]) proof
+    fix k
+    assume hk
+    have nf: !(int_le(s, k) && int_lt(k, s)) by arith()
+    show := sym(mp(ite_f[c := int_le(s, k) && int_lt(k, s), a := v, b := x.vm.pages[k]], nf))
+  qed
+  have ex0: ex Q. x = fn_update(x, "vm", fn_update(x.vm, "pages", Q)) &&
+      (all k. k in omega -> Q[k] = ite(int_le(s, k) && int_lt(k, s), v, x.vm.pages[k])) by ex_intro({x.vm.pages}, taut(x0, q0))
+  have i0: I(pair(x, s)) by simp(hp, ex0, (int_le(s, E) by arith(hse)))
+  // (a pass: page q set, the next)
+  have pass: all l l2. I(l) -> true -> letin(snd(l), x6. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "pages", fn_update(fst(l).vm.pages, x6, v))),
+      x7. ok(l2, empty) = ok(pair(x7, int_add(snd(l), 1)), empty))) && int_lt(snd(l), E) -> I(l2) proof
+    fix l l2
+    assume il _ hb
+    have so lo hi ex := il
+    obtain Q, fq hq from ex
+    have lt: int_lt(snd(l), E) by taut(hb)
+    let Q2 := fn_update(Q, snd(l), v)
+    have l2e: l2 = pair(fn_update(x, "vm", fn_update(x.vm, "pages", Q2)), int_add(snd(l), 1)) by simp(hb, fq, fn_update_twice, app_update_same)
+    have q2: all k. k in omega -> Q2[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), v, x.vm.pages[k]) proof
+      fix k
+      assume hk
+      have c1: k = snd(l) -> Q2[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), v, x.vm.pages[k]) proof
+        assume e
+        have t: int_le(s, k) && int_lt(k, int_add(snd(l), 1)) by arith(e, lo)
+        show by simp(e, app_update_same, mp(ite_t[c := int_le(s, k) && int_lt(k, int_add(snd(l), 1)), a := v, b := x.vm.pages[k]], t))
+      qed
+      have c2: !(k = snd(l)) -> Q2[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), v, x.vm.pages[k]) proof
+        assume ne
+        have o := mp(app_update_other[f := Q, k := snd(l), v := v, x := k], ne)
+        have same: (int_le(s, k) && int_lt(k, int_add(snd(l), 1))) <-> (int_le(s, k) && int_lt(k, snd(l))) by arith(ne, hk, so)
+        show by simp(o, mp(all_elim(hq, {k}), hk), same)
+      qed
+      show by taut(c1, c2)
+    qed
+    have ex2: ex Q. fn_update(x, "vm", fn_update(x.vm, "pages", Q2)) = fn_update(x, "vm", fn_update(x.vm, "pages", Q)) &&
+        (all k. k in omega -> Q[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), v, x.vm.pages[k]))
+      by ex_intro({Q2}, taut(refl({fn_update(x, "vm", fn_update(x.vm, "pages", Q2))}), q2))
+    show by simp(l2e, so, ex2, (int_le(s, int_add(snd(l), 1)) by arith(lo, so)), (int_le(int_add(snd(l), 1), E) by arith(lt, so)))
+  qed
+  // (the loop's body, its step by the pass; the distance to E falling)
+  let B(x4, x5) := (int_lt(snd(x4), E) && letin(snd(x4), x6. letin(fn_update(fst(x4), "vm",
+    fn_update(fst(x4).vm, "pages", fn_update(fst(x4).vm.pages, x6, v))), x7. x5 = ok(pair(x7, int_add(snd(x4), 1)), empty)))) ||
+    (!int_lt(snd(x4), E) && x5 = exc(pair(fst(x4), snd(x4)), pair("brk", empty)))
+  have go: all l l2. B(l, ok(l2, empty)) -> int_lt(snd(l), E) && letin(snd(l), x6. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "pages",
+      fn_update(fst(l).vm.pages, x6, v))), x7. ok(l2, empty) = ok(pair(x7, int_add(snd(l), 1)), empty))) proof
+    fix l l2
+    assume hb
+    have ne: !(ok(l2, empty) = exc(pair(fst(l), snd(l)), pair("brk", empty))) by simp()
+    show by taut(hb, ne)
+  qed
+  have st: all l l2. I(l) -> true -> B(l, ok(l2, empty)) -> I(l2) proof
+    fix l l2
+    assume il t hb
+    have lt pb := mp(all_elim(go, {l}, {l2}), hb)
+    show := mp(all_elim(pass, {l}, {l2}), il, t, taut(lt, pb))
+  qed
+  have m0: all l. I(l) -> int_sub(E, snd(l)) in omega proof
+    fix l
+    assume il
+    have so _ hi _ := il
+    show by arith(so, hi)
+  qed
+  have dc: all l l2. I(l) -> true -> B(l, ok(l2, empty)) -> int_lt(int_sub(E, snd(l2)), int_sub(E, snd(l))) proof
+    fix l l2
+    assume il t hb
+    have lt pb := mp(all_elim(go, {l}, {l2}), hb)
+    have e2: snd(l2) = int_add(snd(l), 1) by simp(pb)
+    show by arith(e2)
+  qed
+  have w := mp(while_var[l0 := pair(x, s), c := l. true, b := l o. B(l, o), tr := x4. fn_update(empty, "os.events", fst(x4).os.events), r := r,
+    p := l. I(l), m := l. int_sub(E, snd(l))], i0, st, m0, dc, hw)
+  obtain l, so lo hi ex hl from w
+  obtain Q, fq hq from ex
+  // (it left: not the pass -- its outcome ok -- so at E, by break)
+  have nk: !is_ok(r) by taut(hl)
+  have bl: B(l, r) by taut(hl)
+  have np: !(int_lt(snd(l), E) && letin(snd(l), x6. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "pages", fn_update(fst(l).vm.pages, x6, v))),
+      x7. r = ok(pair(x7, int_add(snd(l), 1)), empty)))) proof
+    assume h
+    let X := pair(fn_update(fst(l), "vm", fn_update(fst(l).vm, "pages", fn_update(fst(l).vm.pages, snd(l), v))), int_add(snd(l), 1))
+    have e: r = ok(X, empty) by simp(h)
+    have io: is_ok(r) by defs(ex_intro({X}, {empty}, e), is_ok)
+    show by taut(io, nk)
+  qed
+  have hb: !int_lt(snd(l), E) && r = exc(pair(fst(l), snd(l)), pair("brk", empty)) by taut(bl, np)
+  have eE: snd(l) = E by arith(hb, hi)
+  show by ex_intro({Q}, simp(hb, eE, fq, rewrite(eE, hq)))
+qed
+
+// a loop zeroing the bytes s .. e-1 (map_pages' second; below 2^64): it
+// leaves, at e, with the state's bytes 0 there and as before elsewhere
+theorem lx.bytes_loop(x, s, e, r): lx.rec(x) -> s in omega -> e in omega -> int_le(s, e) -> int_le(e, pow2(64)) ->
+  while_rel(pair(x, s), x4. true, x4 x5. (int_lt(snd(x4), e) && letin(snd(x4), x6. letin(fn_update(fst(x4), "vm",
+    fn_update(fst(x4).vm, "bytes", fn_update(fst(x4).vm.bytes, bits_of_int(64, x6), 0))), x7. x5 = ok(pair(x7, int_add(snd(x4), 1)), empty)))) ||
+    (!int_lt(snd(x4), e) && x5 = exc(pair(fst(x4), snd(x4)), pair("brk", empty))),
+    x4. fn_update(empty, "os.events", fst(x4).os.events), r) ->
+  ex Q. r = exc(pair(fn_update(x, "vm", fn_update(x.vm, "bytes", Q)), e), pair("brk", empty)) &&
+    (all k. k in omega -> int_lt(k, pow2(64)) -> Q[k] = ite(int_le(s, k) && int_lt(k, e), 0, x.vm.bytes[k]))
+proof
+  assume hx hp hn hse hb64 hw
+  have xf xd vf _ bd := hx
+  let E := e
+  let I(l) := snd(l) in omega && int_le(s, snd(l)) && int_le(snd(l), E) &&
+    (ex Q. fst(l) = fn_update(x, "vm", fn_update(x.vm, "bytes", Q)) &&
+      (all k. k in omega -> int_lt(k, pow2(64)) -> Q[k] = ite(int_le(s, k) && int_lt(k, snd(l)), 0, x.vm.bytes[k])))
+  have e1 := mp(mp(fn_update_same[f := x.vm, k := "bytes"], vf), bd)
+  have e0 := mp(mp(fn_update_same[f := x, k := "vm"], xf), xd)
+  have x0: x = fn_update(x, "vm", fn_update(x.vm, "bytes", x.vm.bytes)) := sym(rewrite(sym(e1), e0, {1}))
+  have q0: all k. k in omega -> int_lt(k, pow2(64)) -> x.vm.bytes[k] = ite(int_le(s, k) && int_lt(k, s), 0, x.vm.bytes[k]) proof
+    fix k
+    assume hk _
+    have nf: !(int_le(s, k) && int_lt(k, s)) by arith()
+    show := sym(mp(ite_f[c := int_le(s, k) && int_lt(k, s), a := 0, b := x.vm.bytes[k]], nf))
+  qed
+  have ex0: ex Q. x = fn_update(x, "vm", fn_update(x.vm, "bytes", Q)) &&
+      (all k. k in omega -> int_lt(k, pow2(64)) -> Q[k] = ite(int_le(s, k) && int_lt(k, s), 0, x.vm.bytes[k])) by ex_intro({x.vm.bytes}, taut(x0, q0))
+  have i0: I(pair(x, s)) by simp(hp, ex0, (int_le(s, E) by arith(hse)))
+  // (a pass: byte q zeroed, the next)
+  have pass: all l l2. I(l) -> true -> letin(snd(l), x6. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes", fn_update(fst(l).vm.bytes, bits_of_int(64, x6), 0))),
+      x7. ok(l2, empty) = ok(pair(x7, int_add(snd(l), 1)), empty))) && int_lt(snd(l), E) -> I(l2) proof
+    fix l l2
+    assume il _ hb
+    have so lo hi ex := il
+    obtain Q, fq hq from ex
+    have lt: int_lt(snd(l), E) by taut(hb)
+    // (the byte's address the index: below 2^64)
+    have bq: bits_of_int(64, snd(l)) = snd(l) := mp(bits_of_int_small[n := 64, a := snd(l)], so, (int_lt(snd(l), pow2(64)) by arith(lt, hb64)))
+    let Q2 := fn_update(Q, snd(l), 0)
+    have l2e: l2 = pair(fn_update(x, "vm", fn_update(x.vm, "bytes", Q2)), int_add(snd(l), 1)) by simp(hb, fq, bq, fn_update_twice, app_update_same)
+    have q2: all k. k in omega -> int_lt(k, pow2(64)) -> Q2[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), 0, x.vm.bytes[k]) proof
+      fix k
+      assume hk k64
+      have c1: k = snd(l) -> Q2[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), 0, x.vm.bytes[k]) proof
+        assume e
+        have t: int_le(s, k) && int_lt(k, int_add(snd(l), 1)) by arith(e, lo)
+        show by simp(e, app_update_same, mp(ite_t[c := int_le(s, k) && int_lt(k, int_add(snd(l), 1)), a := 0, b := x.vm.bytes[k]], t))
+      qed
+      have c2: !(k = snd(l)) -> Q2[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), 0, x.vm.bytes[k]) proof
+        assume ne
+        have o := mp(app_update_other[f := Q, k := snd(l), v := 0, x := k], ne)
+        have same: (int_le(s, k) && int_lt(k, int_add(snd(l), 1))) <-> (int_le(s, k) && int_lt(k, snd(l))) by arith(ne, hk, so)
+        show by simp(o, mp(all_elim(hq, {k}), hk, k64), same)
+      qed
+      show by taut(c1, c2)
+    qed
+    have ex2: ex Q. fn_update(x, "vm", fn_update(x.vm, "bytes", Q2)) = fn_update(x, "vm", fn_update(x.vm, "bytes", Q)) &&
+        (all k. k in omega -> int_lt(k, pow2(64)) -> Q[k] = ite(int_le(s, k) && int_lt(k, int_add(snd(l), 1)), 0, x.vm.bytes[k]))
+      by ex_intro({Q2}, taut(refl({fn_update(x, "vm", fn_update(x.vm, "bytes", Q2))}), q2))
+    show by simp(l2e, so, ex2, (int_le(s, int_add(snd(l), 1)) by arith(lo, so)), (int_le(int_add(snd(l), 1), E) by arith(lt, so)))
+  qed
+  let B(x4, x5) := (int_lt(snd(x4), E) && letin(snd(x4), x6. letin(fn_update(fst(x4), "vm",
+    fn_update(fst(x4).vm, "bytes", fn_update(fst(x4).vm.bytes, bits_of_int(64, x6), 0))), x7. x5 = ok(pair(x7, int_add(snd(x4), 1)), empty)))) ||
+    (!int_lt(snd(x4), E) && x5 = exc(pair(fst(x4), snd(x4)), pair("brk", empty)))
+  have go: all l l2. B(l, ok(l2, empty)) -> int_lt(snd(l), E) && letin(snd(l), x6. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes",
+      fn_update(fst(l).vm.bytes, bits_of_int(64, x6), 0))), x7. ok(l2, empty) = ok(pair(x7, int_add(snd(l), 1)), empty))) proof
+    fix l l2
+    assume hb
+    have ne: !(ok(l2, empty) = exc(pair(fst(l), snd(l)), pair("brk", empty))) by simp()
+    show by taut(hb, ne)
+  qed
+  have st: all l l2. I(l) -> true -> B(l, ok(l2, empty)) -> I(l2) proof
+    fix l l2
+    assume il t hb
+    have lt pb := mp(all_elim(go, {l}, {l2}), hb)
+    show := mp(all_elim(pass, {l}, {l2}), il, t, taut(lt, pb))
+  qed
+  have m0: all l. I(l) -> int_sub(E, snd(l)) in omega proof
+    fix l
+    assume il
+    have so _ hi _ := il
+    show by arith(so, hi)
+  qed
+  have dc: all l l2. I(l) -> true -> B(l, ok(l2, empty)) -> int_lt(int_sub(E, snd(l2)), int_sub(E, snd(l))) proof
+    fix l l2
+    assume il t hb
+    have lt pb := mp(all_elim(go, {l}, {l2}), hb)
+    have e2: snd(l2) = int_add(snd(l), 1) by simp(pb)
+    show by arith(e2)
+  qed
+  have w := mp(while_var[l0 := pair(x, s), c := l. true, b := l o. B(l, o), tr := x4. fn_update(empty, "os.events", fst(x4).os.events), r := r,
+    p := l. I(l), m := l. int_sub(E, snd(l))], i0, st, m0, dc, hw)
+  obtain l, so lo hi ex hl from w
+  obtain Q, fq hq from ex
+  have nk: !is_ok(r) by taut(hl)
+  have bl: B(l, r) by taut(hl)
+  have np: !(int_lt(snd(l), E) && letin(snd(l), x6. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes", fn_update(fst(l).vm.bytes, bits_of_int(64, x6), 0))),
+      x7. r = ok(pair(x7, int_add(snd(l), 1)), empty)))) proof
+    assume h
+    let X := pair(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes", fn_update(fst(l).vm.bytes, bits_of_int(64, snd(l)), 0))), int_add(snd(l), 1))
+    have e: r = ok(X, empty) by simp(h)
+    have io: is_ok(r) by defs(ex_intro({X}, {empty}, e), is_ok)
+    show by taut(io, nk)
+  qed
+  have hb: !int_lt(snd(l), E) && r = exc(pair(fst(l), snd(l)), pair("brk", empty)) by taut(bl, np)
+  have eE: snd(l) = E by arith(hb, hi)
+  show by ex_intro({Q}, simp(hb, eE, fq, rewrite(eE, hq)))
+qed
+
+// (after a loop that left by `break`: the code after it)
+theorem lx.brk_then(L, s, o): (((fst(exc(s, pair("brk", empty))) = 0 || (fst(exc(s, pair("brk", empty))) = 1 &&
+    fst(out_value(exc(s, pair("brk", empty)))) = "brk")) && L) ||
+  ((((fst(exc(s, pair("brk", empty))) = 1 && fst(out_value(exc(s, pair("brk", empty)))) = "ret") &&
+      o = ok(fst(out_state(exc(s, pair("brk", empty)))), snd(out_value(exc(s, pair("brk", empty)))))) ||
+    ((fst(exc(s, pair("brk", empty))) = 1 && fst(out_value(exc(s, pair("brk", empty)))) = "raise") &&
+      o = exc(fst(out_state(exc(s, pair("brk", empty)))), snd(out_value(exc(s, pair("brk", empty))))))) ||
+   (fst(exc(s, pair("brk", empty))) = 2 && o = diverge(snd(exc(s, pair("brk", empty))))))) -> L
+proof
+  assume h
+  have f1: fst(exc(s, pair("brk", empty))) = 1 by simp()
+  have f2: fst(out_value(exc(s, pair("brk", empty)))) = "brk" by simp()
+  have n1: !("brk" = "ret") by simp()
+  have n2: !("brk" = "raise") by simp()
+  have n3: !(1 = 2) by simp()
+  show by taut(rewrite(f2, rewrite(f1, h)), n1, n2, n3)
+qed
+
+// (a state with a memory field replaced: still one)
+theorem lx.rec_up(x, f, Q): lx.rec(x) -> lx.rec(fn_update(x, "vm", fn_update(x.vm, f, Q)))
+proof
+  assume hx
+  have xf xd vf vp vb := hx
+  have f1 := mp(fn_update_fun[f := x, k := "vm", v := fn_update(x.vm, f, Q)], xf)
+  have d1 := mp(dom_update[f := x, k := "vm", v := fn_update(x.vm, f, Q)], xf)
+  have f2 := mp(fn_update_fun[f := x.vm, k := f, v := Q], vf)
+  have d2 := mp(dom_update[f := x.vm, k := f, v := Q], vf)
+  show by simp(f1, d1, f2, d2, vp, vb, app_update_same)
+qed
+
+// map_pages(p, n, pg): the pages p .. p+n-1 pg, their bytes 0 (below 2^64),
+// the rest of the state as it was
+theorem lx.map_pages_ok(x, p, n, pg, o): lx.rec(x) -> p in omega -> n in omega -> int_le(int_mul(int_add(p, n), x86_64_linux.PAGE), pow2(64)) ->
+  runs(x86_64_linux.map_pages(p, n, pg), x, o) ->
+  ex Q B. o = ok(fn_update(x, "vm", fn_update(fn_update(x.vm, "pages", Q), "bytes", B)), empty) &&
+    (all k. k in omega -> Q[k] = ite(int_le(p, k) && int_lt(k, int_add(p, n)), some(pg), x.vm.pages[k])) &&
+    (all k. k in omega -> int_lt(k, pow2(64)) ->
+      B[k] = ite(int_le(int_mul(p, x86_64_linux.PAGE), k) && int_lt(k, int_mul(int_add(p, n), x86_64_linux.PAGE)), 0, x.vm.bytes[k]))
+proof
+  assume hx hp hn hb hr
+  have b := expand(apply(g.runs_elim, expand(hr, x86_64_linux.map_pages)), letin)
+  obtain x3, w1 k1 from b
+  // the pages
+  obtain Q, e3 hq from mp(lx.pages_loop[x := x, s := p, e := int_add(p, n), v := some(pg), r := x3], hx, hp, (int_add(p, n) in omega by arith(hp, hn)),
+    (int_le(p, int_add(p, n)) by arith(hn)), w1)
+  let X1 := fn_update(x, "vm", fn_update(x.vm, "pages", Q))
+  // (the first loop's break: on to the second, at its state X1)
+  have k2 := apply(lx.brk_then, rewrite(e3, k1))
+  have eo: fst(out_state(exc(pair(X1, int_add(p, n)), pair("brk", empty)))) = X1 by simp()
+  obtain x5, w2 k3 from expand(rewrite(eo, k2), letin)
+  // the bytes
+  let S := int_mul(p, x86_64_linux.PAGE)
+  let E := int_mul(int_add(p, n), x86_64_linux.PAGE)
+  have pg4: x86_64_linux.PAGE = 4096 by defs(simp(), x86_64_linux.PAGE)
+  have hb4: int_le(E, pow2(64)) := hb
+  have r1 := mp(lx.rec_up[x := x, f := "pages", Q := Q], hx)
+  obtain B, e5 hb2 from mp(lx.bytes_loop[x := X1, s := S, e := E, r := x5], r1, (S in omega by arith(hp, pg4)), (E in omega by arith(hp, hn, pg4)),
+    (int_le(S, E) by arith(hp, hn, pg4)), hb4, w2)
+  have eb: X1.vm.bytes = x.vm.bytes by simp(app_update_same, app_update_other)
+  have o1: o = ok(fn_update(X1, "vm", fn_update(X1.vm, "bytes", B)), empty) by simp(rewrite(e5, k3))
+  have o2: fn_update(X1, "vm", fn_update(X1.vm, "bytes", B)) = fn_update(x, "vm", fn_update(fn_update(x.vm, "pages", Q), "bytes", B))
+    by simp(fn_update_twice, app_update_same)
+  show by ex_intro({Q}, {B}, taut(rewrite(o2, o1), hq, rewrite(eb, hb2)))
+qed

@@ -171,23 +171,8 @@ fn size_overflows_spec_fun() -> CFun2[World] = (args: Args) => {
 //  (spec/linux/process.sl's sys_brk, sys_mmap, sys_mprotect) seen from the
 //  C world, through musl's wrappers (errno, -1 on failure)
 
-// vm: before with the pages p .. p+n-1 fresh pages pg -- their bytes 0 --,
-// nothing else changed (its break aside)
-pred fresh_pages(before: Vm, vm: Vm, p: nat, n: nat, pg: Page) =
-  vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
-  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(pg) } else { before.pages[q] })) &&
-  (all a: Addr. vm.bytes[a] = (if p * PAGE <= uint(a) && uint(a) < (p + n) * PAGE { bits[8](0) } else { before.bytes[a] }))
-
-// vm: before with the pages p .. p+n-1 gone, nothing else changed (its break aside)
-pred gone_pages(before: Vm, vm: Vm, p: nat, n: nat) =
-  vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
-  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { none } else { before.pages[q] })) &&
-  vm.bytes = before.bytes
-
-// vm: before with the pages p .. p+n-1 (mapped) of protection pr, nothing else changed
-pred reprot(before: Vm, vm: Vm, p: nat, n: nat, pr: Prot) =
-  (vm with { pages: before.pages }) = before &&
-  (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(before.pages[q].value with { prot: pr }) } else { before.pages[q] }))
+// (the memory's changes -- fresh_pages, gone_pages, reprot -- are
+// layers/gimple.sl's: its system calls' too)
 
 // brk(new) (`__syscall1(SYS_brk, new)`): the break moved to new -- the
 // pages up to it fresh readable, writable heap if they had to be had and
