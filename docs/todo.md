@@ -33,7 +33,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   - memcpy (musl's assembly): a readable model (byte loop, `rep movsq`
     as one instruction rule, byte loop), its C1 -- loop locals in
     registers, no frame: the CFG's claims with registers as functions of
-    the locals -- and its C2 against `memcpy_spec`;
+    the locals (tr.cfg_lv's rc as `y. rc(y)`) -- and its C2 against
+    `memcpy_spec`. The `rep movsq` rule (spec/x86_64: a `while` inside the
+    instruction) by `while_var`: invariant after j iterations, variant
+    rcx. `memcpy_spec`'s copy is one `store_le` of `bytes_at(before, s,
+    n)` -- comparing it with byte or word copies needs the digits of a
+    little-endian sum; stated byte by byte (d + i the old s + i, the rest
+    kept) it would not;
   - get_random_secret's C2 against `random_secret_spec` (the auxv walk;
     the canary kept: memcpy writes only the stack object). The canary's
     word must be readable at the entry (the wrapper's `ld64(fs_base, 40)`):
