@@ -1118,9 +1118,10 @@ qed
 // A call under a callee's contract that gives its memory and return by a
 // property P of both: the continuation holds of an overflow, or of the
 // return with some memory V and return r having P (as `gc.contract_callV`)
-theorem gc.contract_callVR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
-  (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
+// (... the callee's runs, on the call's registers, F's)
+theorem gc.contract_callVR_m(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
+  (ex regs. gc.regs_ok(regs, args)) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
@@ -1129,16 +1130,10 @@ theorem gc.contract_callVR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.s
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
 proof
   fix g F args w
-  assume ths hw rex hl hg hq hb
+  assume ths hw rex hm hq hb
   let OVF := exc_val("stack_overflow", empty)
   let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o2 = ok(fn_update(w, "vm", V), r))
   let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
-  have hm: all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2) proof
-    fix regs o2
-    assume hro h2
-    have rl rn _ := hro
-    show := mp(all_elim(hg, {regs}, {w}, {o2}), rl, rewrite(sym(rn), hl), hw, h2)
-  qed
   have cm: all o2. runs(gimple.call(g, args), w, o2) -> runs(gimple.call(F, args), w, o2) proof
     fix o2
     assume h2
@@ -1221,12 +1216,34 @@ proof
   show by taut(ci, c1, c2, c3, c4)
 qed
 
+// (the callee's contract for any registers of at most six words)
+theorem gc.contract_callVR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
+  (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
+  (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
+     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
+  bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
+  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
+proof
+  fix g F args w
+  assume ths hw rex hl hg hq hb
+  have hm: all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2) proof
+    fix regs o2
+    assume hro h2
+    have rl rn _ := hro
+    show := mp(all_elim(hg, {regs}, {w}, {o2}), rl, rewrite(sym(rn), hl), hw, h2)
+  qed
+  show := mp(all_elim(gc.contract_callVR_m[P := v r. P(v, r), k := s1 v. k(s1, v), x := s1 e. x(s1, e), d := t. d(t)], {g}, {F}, {args}, {w}), ths, hw, rex, hm, hq, hb)
+qed
+
 // ... a call of one result (call1): the continuation holds of an
 // overflow, or of the return with V and the first register of a return r,
 // P of V and r
-theorem gc.contract_call1VR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
-  (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
+theorem gc.contract_call1VR_m(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
+  (ex regs. gc.regs_ok(regs, args)) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
@@ -1235,13 +1252,13 @@ theorem gc.contract_call1VR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
 proof
   fix g F args w
-  assume ths hw rex hl hg hq hb
+  assume ths hw rex hm hq hb
   let OVF := exc_val("stack_overflow", empty)
   let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
   obtain o1, hr1 hk1 from expand(hb, bind_rel)
   have b := apply(g.runs_elim, expand(hr1, gimple.call1))
-  have c := mp(all_elim(gc.contract_callVR[P := v r. P(v, r), k := x2 x3. letin(x3, x4. o1 = ok(x2, fst(x4))), x := x2 x3. o1 = exc(x2, x3), d := x2. o1 = diverge(x2)], {g}, {F}, {args}, {w}),
-    ths, hw, rex, hl, hg, hq, b)
+  have c := mp(all_elim(gc.contract_callVR_m[P := v r. P(v, r), k := x2 x3. letin(x3, x4. o1 = ok(x2, fst(x4))), x := x2 x3. o1 = exc(x2, x3), d := x2. o1 = diverge(x2)], {g}, {F}, {args}, {w}),
+    ths, hw, rex, hm, hq, b)
   have c1: (ex v. v in x86_64_linux.Vm && o1 = exc(fn_update(w, "vm", v), OVF)) -> G proof
     assume h
     obtain v, hv he from h
@@ -1258,6 +1275,57 @@ proof
     show by taut(l)
   qed
   show by taut(c, c1, c2)
+qed
+
+theorem gc.contract_call1VR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
+  (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
+  (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
+     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
+  bind_rel(gimple.call1(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
+  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
+proof
+  fix g F args w
+  assume ths hw rex hl hg hq hb
+  have hm: all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2) proof
+    fix regs o2
+    assume hro h2
+    have rl rn _ := hro
+    show := mp(all_elim(hg, {regs}, {w}, {o2}), rl, rewrite(sym(rn), hl), hw, h2)
+  qed
+  show := mp(all_elim(gc.contract_call1VR_m[P := v r. P(v, r), k := s1 v. k(s1, v), x := s1 e. x(s1, e), d := t. d(t)], {g}, {F}, {args}, {w}), ths, hw, rex, hm, hq, hb)
+qed
+
+// A callee of more than six arguments (call1_s: the stack's part the
+// bridge's): GIMPLE's call the same, its contract for any registers
+theorem gc.call1_s_eq: all g args. gimple.call1_s(g, args) = gimple.call1(g, args)
+proof
+  fix g args
+  show by defs(refl({gimple.call1(g, args)}), gimple.call1_s, gimple.call_s, gimple.call_callee_s, gimple.call1, gimple.call, gimple.call_callee)
+qed
+
+theorem gc.contract_call1VR_s(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.sound(w) -> w in abi.World ->
+  (ex regs. gc.regs_ok(regs, args)) ->
+  (all regs s o. regs in list_type(bits(64)) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
+  (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
+     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
+  bind_rel(gimple.call1_s(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
+  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
+proof
+  fix g F args w
+  assume ths hw rex hg hq hb
+  have hm: all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2) proof
+    fix regs o2
+    assume hro h2
+    have rl _ _ := hro
+    show := mp(all_elim(hg, {regs}, {w}, {o2}), rl, hw, h2)
+  qed
+  show := mp(all_elim(gc.contract_call1VR_m[P := v r. P(v, r), k := s1 v. k(s1, v), x := s1 e. x(s1, e), d := t. d(t)], {g}, {F}, {args}, {w}), ths, hw, rex, hm, hq,
+    rewrite(all_elim(gc.call1_s_eq, {g}, {args}), hb))
 qed
 
 // ----------------------------------------------------------------------

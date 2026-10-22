@@ -395,6 +395,8 @@ proc[World] os_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64], 
     havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk
     return bits[64](p * PAGE)
   } else {
+    // (no free place: ENOMEM, as Linux's get_unmapped_area)
+    if !(ex q: nat. q >= 1 && free_range(before, q, n) && (addr != 0 || off_stack_space(before, q, n))) { return err(ENOMEM) }
     let p = any q: nat where q >= 1 && free_range(before, q, n) && (addr != 0 || off_stack_space(before, q, n))
     havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk
     return bits[64](p * PAGE)
@@ -534,6 +536,27 @@ proc[World] call_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bi
 // (the same: the objects are in the world)
 fn arg[n: nat](x: bits[n]) -> (nat, Ty) = (uint(x), Ty { prec: n, signed: false })
 proc[World] call_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call(g, args) }
+
+// (a callee of more than six arguments, the rest on the stack: the same --
+// the stack is the ABI bridge's)
+proc[World] call_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  either { raise stack_overflow } or { }
+  let (r0, r1) = call_callee_s(g, args)
+  either { raise stack_overflow } or { }
+  return (r0, r1)
+}
+proc[World] call_callee_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
+  if !thread_ok(vm, fs_base) { undefined }
+  let objs0 = objs
+  let (r0, r1) = g(regs)
+  objs := objs0
+  return (r0, r1)
+}
+proc[World] call1_s(g: CFunS[World], args: List[(nat, Ty)]) -> bits[64] {
+  let (r0, r1) = call_s(g, args)
+  return r0
+}
 
 // ... with the value in rax only
 proc[World] call1(g: CFun2[World], args: List[(nat, Ty)]) -> bits[64] {

@@ -25,7 +25,7 @@ pub struct Shared {
 /// keywords, the state's fields).
 const RESERVED: &[&str] = &[
     "sadd", "ssub", "smul", "sneg", "cdiv", "crem", "div", "rem", "shl", "shr", "sar", "smin", "smax", "umin", "umax", "b1", "padd", "mem", "ld8", "ld16",
-    "ld32", "ld64", "ld128", "st8", "st16", "st32", "st64", "st128", "st_bytes", "ldbf", "stbf", "call", "call1", "call_objs", "call1_objs",
+    "ld32", "ld64", "ld128", "st8", "st16", "st32", "st64", "st128", "st_bytes", "ldbf", "stbf", "call", "call1", "call_objs", "call1_objs", "call_s", "call1_s",
     "arg", "result", "elem", "inline_asm", "alloc_objs", "objs", "args", "any", "let", "var", "if", "else", "match", "while", "for", "in",
     "return", "fn", "proc", "pred", "type", "state", "self", "true", "false", "loop", "break", "either", "or", "havoc", "where", "require",
     "undefined", "ghost", "emit", "raise", "try", "catch", "vm", "os", "sp", "cpu", "fs_base", "uint", "sint", "zext", "sext", "bits",
@@ -76,6 +76,9 @@ struct Rx<'f> {
     /// are copied into a variable
     params: Vec<(String, u64, bool)>,
     callees: Vec<String>,
+    /// the callees called with more than six arguments (the rest on the
+    /// stack: `CFunS`)
+    callees_s: BTreeSet<String>,
     out: Vec<String>,
     depth: usize,
     emitted: usize,
@@ -155,6 +158,7 @@ impl<'a> Lower<'a> {
             vars: BTreeMap::new(),
             params: Vec::new(),
             callees: Vec::new(),
+            callees_s: BTreeSet::new(),
             out: Vec::new(),
             depth: 1,
             emitted: 0,
@@ -192,8 +196,10 @@ impl<'a> Lower<'a> {
             let ty = if *w == 64 { "bits[64]".to_string() } else { format!("bits[{}]", w) };
             ps.push(format!("{}{}: {}", name, if *reassigned { "_in" } else { "" }, ty));
         }
+        let callees_s = rx.callees_s.clone();
+        let cty = |c: &String| if callees_s.contains(c) { "CFunS[World]" } else { "CFun2[World]" };
         for c in &rx.callees {
-            ps.push(format!("{}: CFun2[World]", c));
+            ps.push(format!("{}: {}", c, cty(c)));
         }
         let mut s = String::new();
         writeln!(s, "// {} {}", f.ret, f.name).unwrap();
@@ -266,10 +272,12 @@ impl<'a> Lower<'a> {
             writeln!(s, "fn {}_cfg_widths() -> List[nat] = [{}]", fname, ws.join(", ")).unwrap();
         }
         // the C function spec: arguments and result in registers
-        let cps: Vec<String> = rx.callees.iter().map(|c| format!("{}: CFun2[World]", c)).collect();
+        let cps: Vec<String> = rx.callees.iter().map(|c| format!("{}: {}", c, cty(c))).collect();
         let mut call_args: Vec<String> = rx.params.iter().enumerate().map(|(i, (_, w, _))| format!("bits[{}](args[{}])", w, i)).collect();
         call_args.extend(rx.callees.iter().cloned());
-        writeln!(s, "fn {}_fun({}) -> CFun2[World] = (args: Args) => {{", fname, cps.join(", ")).unwrap();
+        // (more than six parameters: the rest on the stack)
+        let (fty, aty) = if rx.params.len() > 6 { ("CFunS[World]", "ArgsS") } else { ("CFun2[World]", "Args") };
+        writeln!(s, "fn {}_fun({}) -> {} = (args: {}) => {{", fname, cps.join(", "), fty, aty).unwrap();
         // a call with fewer arguments than the function's parameters is
         // undefined (the missing ones would be whatever the registers hold)
         if !rx.params.is_empty() {
@@ -969,7 +977,20 @@ impl<'a> Lower<'a> {
                     av.push(format!("arg({})", self.tval(rx, sh, a, p)?));
                 }
                 let objs = !rx.fx.obj_list.is_empty();
-                let (c1, c2) = if objs { ("call1_objs(objs, ", "call_objs(objs, ") } else { ("call1(", "call(") };
+                let stack = args.len() > 6;
+                if stack {
+                    if objs {
+                        return Err(format!("a call of {} with stack arguments from a function with stack objects (not yet in readable form)", f));
+                    }
+                    rx.callees_s.insert(fname.clone());
+                }
+                let (c1, c2) = if stack {
+                    ("call1_s(", "call_s(")
+                } else if objs {
+                    ("call1_objs(objs, ", "call_objs(objs, ")
+                } else {
+                    ("call1(", "call(")
+                };
                 match lhs {
                     None => {
                         let l = format!("{}{}, [{}])", c2, fname, av.join(", "));

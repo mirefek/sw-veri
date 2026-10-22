@@ -4,8 +4,9 @@ layer abi uses x86_64_linux
 // Nothing here is assumed about the computer: everything is a definition, and
 // the claims (e.g. "glibc's malloc implements its spec") are theorems to prove.
 //
-// Covered: up to 6 integer/pointer arguments, integer/pointer result in rax.
-// Not yet: stack-passed or floating-point arguments, struct returns, varargs.
+// Covered: integer/pointer arguments (the seventh on on the stack:
+// `CFunS`), integer/pointer result in rax.
+// Not yet: floating-point arguments, struct returns, varargs.
 
 ///////////////////////////////////////////////////////////////////////
 //  What a C function sees
@@ -331,6 +332,34 @@ pred loaded(vm: Vm, base: nat, code: List[bits[8]], statics: Set[nat]) =
 // the program's entry points (e.g. malloc) show it from their own spec.
 pred implements2_at[G](f: Addr, spec: CFun2[World & G], base: nat, code: List[bits[8]], statics: Set[nat]) =
   all args: Args, objs: Set[nat], mem: Vm. run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function(f, spec, args, objs, mem) }
+
+// Functions of more than six arguments: the seventh on are on the stack,
+// the words above the return address (`stack_args`). Such a function's
+// spec takes all of them; with its stack arguments fixed it is a
+// register-argument spec (`with_stack`), and its contract is that one's
+// (`abi_function_s`) -- its callers' frames, the stack arguments among
+// them, kept (`world_matches`: the callee keeps them, which the ABI would
+// not require).
+type ArgsS    = List[bits[64]]
+type CFunS[S] = proc[S](ArgsS) -> (bits[64], bits[64])
+
+pred stack_args(m: Machine, stk: List[bits[64]]) =
+  (all i: nat. i < 8 * len(stk) -> stack_page(m.vm, (uint(m.gpr[rsp]) + 8 + i) / PAGE) && can_access(m.vm, m.gpr[rsp] + bits[64](8 + i), read)) &&
+  (all i: nat. i < len(stk) -> le(m.vm.bytes, m.gpr[rsp] + bits[64](8 + 8 * i), 8) = stk[i])
+
+fn with_stack[G](spec: CFunS[World & G], stk: List[bits[64]]) -> CFun2[World & G] = (args: Args) => {
+  let (r0, r1) = spec(args ++ stk)
+  return (r0, r1)
+}
+
+proc[Machine & G] abi_function_s[G](f: Addr, spec: CFunS[World & G], args: Args, stk: List[bits[64]], objs: Set[nat], mem: Vm) {
+  require stack_args(self, stk) && (len(stk) = 0 || len(args) = 6)
+  abi_function(f, with_stack(spec, stk), args, objs, mem)
+}
+
+pred implements2_at_s[G](f: Addr, spec: CFunS[World & G], base: nat, code: List[bits[8]], statics: Set[nat]) =
+  all args: Args, stk: List[bits[64]], objs: Set[nat], mem: Vm.
+    run_to_return() refines do[Machine & G] { require loaded(vm, base, code, statics); abi_function_s(f, spec, args, stk, objs, mem) }
 
 // A spec keeps the program loaded: from a world where it is, every outcome
 // still has it (a frame property, proven for each function at the C level;

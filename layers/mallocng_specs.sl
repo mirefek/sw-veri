@@ -265,10 +265,13 @@ pred mmap_place(before: Vm, addr: Addr, len: bits[64], flags: bits[32], p: nat) 
 // mmap(addr, len, prot, flags, -1, 0), anonymous private memory (at addr
 // if MAP_FIXED): len's pages fresh at a place for them (`mmap_place`),
 // replacing what was there; or -1, errno ENOMEM or EINVAL (no place; the
-// kernel may always refuse; musl's own checks), nothing else changed
+// kernel may always refuse; musl's own checks), nothing else changed. A
+// fixed mapping's pages ones the kernel may replace (sys_pages_ok); else
+// no hint (addr 0: Linux places it).
 proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32], off: bits[64]) -> bits[64] {
   require (uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS || uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED) && uint(prot) < 8 && off = 0 &&
-    errno_ok(vm, objs, fs_base)
+    errno_ok(vm, objs, fs_base) &&
+    (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { sys_pages_ok(vm, page_of(addr), pages_for(uint(len))) } else { uint(addr) = 0 })
   either { overflow() } or {
     let before = vm
     if ex p: nat. mmap_place(before, addr, len, flags, p) {
@@ -286,8 +289,31 @@ proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32]
 
 fn mmap_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 6
-  let r = mmap_spec(args[0], args[1], bits[32](args[2]), bits[32](args[3]), args[5])
-  return (r, any bits[64])
+  let r = mmap_spec(bits[64](args[0]), bits[64](args[1]), bits[32](args[2]), bits[32](args[3]), bits[64](args[5]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
+// __syscall6(9, ..): the kernel's mmap, as malloc makes it (its
+// requirements GIMPLE's) -- its seventh argument on the stack
+proc[World] syscall6_spec(n: bits[64], a1: Addr, a2: bits[64], a3: bits[64], a4: bits[64], a5: bits[64], a6: bits[64]) -> bits[64] {
+  require uint(n) = 9 && (if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 })
+  either { overflow() } or { return os_mmap(a1, a2, a3, a4, a5, a6) }
+}
+fn syscall6_spec_fun() -> CFunS[World] = (args: ArgsS) => {
+  require len(args) >= 7
+  let r = syscall6_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]), bits[64](args[3]), bits[64](args[4]), bits[64](args[5]), bits[64](args[6]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
+// __vm_wait (musl's no-op without threads): nothing
+proc[World] vm_wait_spec() {
+  either { overflow() } or { }
+}
+fn vm_wait_spec_fun() -> CFun2[World] = (args: Args) => {
+  vm_wait_spec()
+  return (any bits[64], any bits[64])
 }
 
 // mprotect(addr, len, prot): the pages from addr's to addr + len's of
