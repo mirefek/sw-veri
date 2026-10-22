@@ -164,6 +164,10 @@ impl<'e> Gen<'e> {
             gtyped: Vec::new(),
             hva: None,
             last_home: std::cell::Cell::new((0, 0)),
+            reroot: None,
+            objk: Vec::new(),
+            hvo: None,
+            objw: None,
         })
     }
 }
@@ -188,6 +192,16 @@ impl<'e> Gen<'e> {
                             self.locmap.push((k as usize, key, entry + lo, entry + hi));
                         }
                     }
+                    cur = x[1].clone();
+                }
+            }
+        }
+        // (the stack objects' keys, in their order)
+        if let Some(&ls) = self.env.sym_by_name.get(&lname.replacen("loc.", "loc_objs.", 1)) {
+            if let SymKind::Defined { body, .. } = &self.env.syms[ls as usize].kind {
+                let mut cur = body.clone();
+                while let Some(x) = self.app(&cur, "pair", 2).map(|x| x.to_vec()) {
+                    self.objk.extend(nat(&x[0]));
                     cur = x[1].clone();
                 }
             }
@@ -280,7 +294,26 @@ impl<'e> Gen<'e> {
             let wrap = self.mk("mkprog", vec![self.mk("bind_rel", wa)]);
             Some((nargs, proc, kw, wrap, bl))
         })();
-        let (nargs, proc, kw, wrap, bl) = parts.ok_or_else(|| format!("`{}`: not a procedure's spec", spec_name))?;
+        // (more than the procedure's call -- the canary read before it, the
+        // objects released after: a function of no arguments, its spec's
+        // program P itself at the entry (tr.entry0p), the procedure's call
+        // in it the walk's wrapper, Spec::Plain until there)
+        let plain: Option<Term> = match &parts {
+            Some(_) => None,
+            None => (|| {
+                let fb = self.app(&sbody, "fn_build", 2)?;
+                let mp = self.app(&fb[1], "mkprog", 1)?;
+                (self.app(&mp[0], "or", 2).is_none() && fb[1].loose_depth(&self.env.binders_fn()) == 0).then_some(())?;
+                let &ps = self.env.sym_by_name.get(pname)?;
+                self.reroot = Some(ps);
+                Some(fb[1].clone())
+            })(),
+        };
+        let (nargs, proc, kw, wrap, bl) = match (parts, &plain) {
+            (Some(x), _) => x,
+            (None, Some(_)) => (0, Term::bvar(0), Term::bvar(0), Term::bvar(0), None),
+            (None, None) => return Err(format!("`{}`: not a procedure's spec", spec_name)),
+        };
         let guarded = nargs > 0;
         // (beyond six arguments: the rest on the stack, the list stk; the
         // spec's arguments seq_concat(args, stk))
@@ -301,7 +334,7 @@ impl<'e> Gen<'e> {
             }
         }
         // (no `gimple.result`: a void function, no result bytes)
-        self.rbytes = result_bits(self, &kw).unwrap_or(0) / 8;
+        self.rbytes = result_bits(self, if plain.is_some() { &sbody } else { &kw }).unwrap_or(0) / 8;
         // the frame: the pushes at the entry, then `sub rsp, k` (or none);
         // fd, the deepest byte below the entry's rsp the function's stack
         // accesses reach
@@ -370,6 +403,11 @@ impl<'e> Gen<'e> {
         self.hl = Some(s_hl);
         // the literal facts: a map's keys, the scratch registers
         let lf0 = self.literal_facts()?;
+        // (and the thread pointer a word: the canary's load, ld64(fs_base, 40))
+        let fs_t = self.mk("in", vec![self.mk("app", vec![s.clone(), Term::bytes(b"fs_base")]), self.mk("bits", vec![lit(64)])]);
+        let fsf = self.evp(&RP::Simp(false, vec![R::Expand(Box::new(R::S(s_hm.clone())), vec!["x86_64_linux.Machine".into()])], vec![], false), &fs_t, &[])?;
+        let lf_t = self.mk("and", vec![lf0.concl().clone(), fs_t]);
+        let lf0 = self.evp(&RP::Taut(vec![R::S(lf0), R::S(fsf)]), &lf_t, &[])?;
         self.lf0 = Some(lf0);
         // the world: a world
         let wt = self.run(&R::Apply(Box::new(f("abi.world_typed")), vec![s_(&s_hm), s_(&s_hvo), s_(&s_hmv), s_(&s_hvu)]), &[])?;
@@ -378,7 +416,10 @@ impl<'e> Gen<'e> {
         self.hw0 = Some(hw.clone());
         self.hvu0 = Some(s_hvu.clone());
         // the entry: the arguments in their registers (64 bits each)
-        let q0raw = proc.instantiate_params(&[cat(self, &args_t)], &self.env.binders_fn());
+        let q0raw = match &plain {
+            Some(pp) => pp.clone(),
+            None => proc.instantiate_params(&[cat(self, &args_t)], &self.env.binders_fn()),
+        };
         let q0 = self.canon(&q0raw);
         let i0 = self.new_q(q0);
         let argregs = [7u128, 6, 2, 1, 8, 9];
@@ -393,7 +434,7 @@ impl<'e> Gen<'e> {
             hw,
             hsm: BTreeMap::new(),
             hst: self.mk("empty", vec![]),
-            spec: Spec::Proc(i0),
+            spec: if plain.is_some() { Spec::Plain(i0) } else { Spec::Proc(i0) },
             hyps: Vec::new(),
             facts: Vec::new(),
             lfx: Vec::new(),
@@ -611,22 +652,39 @@ impl<'e> Gen<'e> {
             let (r, _) = self.cs_entry_regs(&s2, &ss)?;
             let hregs = self.close(r, &[hs2], &[Self::var_id(&s2)])?;
             let rsl = self.abs(&rs_lam, &[Self::var_id(&s)]);
-            let inst = R::Inst(
-                "tr.entry0".into(),
-                vec![
-                    ("lb", lb.clone()),
-                    ("lc", lc.clone()),
-                    ("base", b.clone()),
-                    ("code", c.clone()),
-                    ("statics", statics.clone()),
-                    ("f", b.clone()),
-                    ("fd", lit(fd)),
-                    ("rs", rsl),
-                    ("q", q0raw.clone()),
-                    ("kw", kwl),
-                    ("E", e_lam.clone()),
-                ],
-            );
+            let inst = match &plain {
+                Some(pp) => R::Inst(
+                    "tr.entry0p".into(),
+                    vec![
+                        ("lb", lb.clone()),
+                        ("lc", lc.clone()),
+                        ("base", b.clone()),
+                        ("code", c.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("fd", lit(fd)),
+                        ("rs", rsl),
+                        ("P", pp.clone()),
+                        ("E", e_lam.clone()),
+                    ],
+                ),
+                None => R::Inst(
+                    "tr.entry0".into(),
+                    vec![
+                        ("lb", lb.clone()),
+                        ("lc", lc.clone()),
+                        ("base", b.clone()),
+                        ("code", c.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("fd", lit(fd)),
+                        ("rs", rsl),
+                        ("q", q0raw.clone()),
+                        ("kw", kwl),
+                        ("E", e_lam.clone()),
+                    ],
+                ),
+            };
             self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
         };
         let _ = rs_args;

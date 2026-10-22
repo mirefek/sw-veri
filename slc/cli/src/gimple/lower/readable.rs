@@ -288,11 +288,16 @@ impl<'a> Lower<'a> {
             writeln!(s, "  require len(args) >= {}", rx.params.len()).unwrap();
         }
         // (a function's stack objects end with it: the world's as before)
+        // (with them, GCC's stack protector (-fstack-protector-strong:
+        // address-taken locals and arrays): the thread's canary word at
+        // fs:0x28 read at the entry and the same at the return -- the
+        // callee's premise, undefined otherwise; the GIMPLE does not show it)
         let has_objs = !rx.fx.obj_list.is_empty();
         if has_objs {
+            writeln!(s, "  let canary = ld64(fs_base, 40)").unwrap();
             writeln!(s, "  let objs0 = objs").unwrap();
         }
-        let drop = if has_objs { "\n  objs := objs0" } else { "" };
+        let drop = if has_objs { "\n  if ld64(fs_base, 40) != canary { undefined }\n  objs := objs0" } else { "" };
         match ret_ty {
             None => writeln!(s, "  {}({}){drop}\n  return (any bits[64], any bits[64])", fname, call_args.join(", ")).unwrap(),
             Some(_) if two_words => writeln!(s, "  let (r0, r1) = {}({}){drop}\n  return (r0, r1)", fname, call_args.join(", ")).unwrap(),

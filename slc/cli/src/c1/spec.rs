@@ -53,7 +53,7 @@ impl<'e> Gen<'e> {
 
     /// a guard's value: a literal comparison, a fact in scope (or one of
     /// operands of the same normal forms)
-    fn guard(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
+    pub(super) fn guard(&mut self, g: &Term, hyps: &[(Term, Seq)]) -> Option<(bool, RA)> {
         let (v, facts) = self.guard_val(g, hyps)?;
         // (the facts it was decided by: a branch condition among them spent)
         if v {
@@ -171,6 +171,15 @@ impl<'e> Gen<'e> {
         if let Some(a) = self.app(g, "eq", 2) {
             if a[0] == a[1] && g.loose_depth(&self.env.binders_fn()) == 0 {
                 return Some((true, vec![]));
+            }
+            // (the equation the other way round: the stack protector's
+            // check, the machine's operands in its order)
+            let sw = self.mk("eq", vec![a[1].clone(), a[0].clone()]);
+            if let Some(h) = self.hyp_find(hyps, &sw) {
+                return Some((true, vec![h.1.clone()]));
+            }
+            if let Some(h) = self.hyp_find(hyps, &self.mk("not", vec![sw])) {
+                return Some((false, vec![h.1.clone()]));
             }
             let v = match (a[0].node(), a[1].node()) {
                 (Node::Nat(x), Node::Nat(y)) => x == y,
@@ -723,7 +732,13 @@ impl<'e> Gen<'e> {
                 let cond = self.mem_defined(&self.w.clone(), &pp, &off, 8, false);
                 let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
                 let r = self.mk("bits_of_int", vec![lit(64), self.mk("gimple.bytes_at", vec![vm, self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]), lit(8)])]);
-                let (ok, ub) = self.ok_ub("tr.ld64_ok", "tr.ld64_ub", &[pp, off], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
+                // (at the world's thread pointer -- the canary's: a word, the
+                // world's)
+                let pb = || match (self.app(&pp, "app", 2), &self.hww) {
+                    (Some(_), Some(hw)) => simp_lw(vec![R::Expand(Box::new(R::S(hw.clone())), vec!["abi.World".into()])]),
+                    _ => simp_l(),
+                };
+                let (ok, ub) = self.ok_ub("tr.ld64_ok", "tr.ld64_ub", &[pp.clone(), off], vec![pb(), simp_l(), hc()], vec![pb(), simp_l()]);
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
@@ -1152,6 +1167,41 @@ impl<'e> Gen<'e> {
     }
 
     /// One reduction of the rest `qi` (None: the head waits for the machine).
+    /// a store of the stack object's word the machine has just stored
+    /// there (the world right after the allocation): its run to the same
+    /// world (tr.run_kept) -- None for any other store
+    #[allow(clippy::too_many_arguments)]
+    fn store_kept(&mut self, qi: usize, op: &Term, so: &StoreOp, hc: &Seq, al: &Term, xl: &Term, dl: &Term, kl: &Term) -> Result<Option<Red>, String> {
+        let Some((w2, w0, ha, u, objs0, weq, hw0)) = self.objw.clone() else { return Ok(None) };
+        if so.n != 8 || so.data.is_some() || so.cas.is_some() || so.bf.is_some() || so.helper.is_some() {
+            return Ok(None);
+        }
+        let w = self.w.clone();
+        if self.expand(&w) != self.expand(&w2) {
+            return Ok(None);
+        }
+        // (the address and the word the object's: by their normal forms)
+        let (Some(ea), Some(ex)) = (self.eq_nf(&so.addr, &ha)?, self.eq_nf(&so.v, &u)?) else {
+            self.trace(|| format!("a store not of the object's word again: at {}, of {}", self.print(&so.addr), self.print(&so.v)));
+            return Ok(None);
+        };
+        let hvu = self.hvu.clone().ok_or("a point's world")?;
+        let hw = self.hww.clone().ok_or("a point's world")?;
+        let st8 = self.run(
+            &mpf("tr.st64_at_ok", vec![t(&w), t(&so.p), t(&so.off), t(&so.v), t(&so.addr), taut(vec![R::S(hw.clone())]), s(&hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(hc)]),
+            &[],
+        )?;
+        let e2 = match &weq {
+            Some(eq) => p(eq.clone()),
+            None => simp0(),
+        };
+        let kept = R::Inst("tr.run_kept".into(), vec![("op", op.clone())]);
+        let okr = self.run(&mp(kept, vec![t(&w2), t(&w0), t(&ha), t(&u), t(&so.addr), t(&so.v), t(&objs0), e2, ea, ex, taut(vec![R::S(hw0)]), taut(vec![R::S(hw)]), s(&st8)]), &[])?;
+        let empty = self.mk("empty", vec![]);
+        let (j, inst) = self.by(qi, "tr.qs_opw", &[("op", op.clone()), ("r", empty), ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())])?;
+        Ok(Some(Red::Q(j, mp(inst, vec![t(&w), t(&w), s(&hvu), s(&okr)]))))
+    }
+
     pub(super) fn reduce(&mut self, qi: usize, hyps: &[(Term, Seq)]) -> Result<Option<Red>, String> {
         let _p = super::prof::g("reduce");
         let q = self.qs[qi].clone();
@@ -1301,7 +1351,11 @@ impl<'e> Gen<'e> {
         // a let
         if let Some(x) = self.app(&a, "letin", 2) {
             if x[0].loose_depth(&self.env.binders_fn()) > 0 {
-                return Err(format!("a let of the state: {}", self.lambda(3, &x[0])));
+                // (of the world's part: the point's, tr.qs_letw)
+                let e = self.lam(&x[0], &ctx, &["x0"]).ok_or_else(|| format!("a let of the state: {}", self.lambda(3, &x[0])))?;
+                let al = self.lam(&x[1], &["x0", "x1", "x8", "x"], &["x0", "x8", "x"]).ok_or("a let's body reads the outcome")?;
+                let (j, inst) = self.by(qi, "tr.qs_letw", &[("w", w.clone()), ("e", e), ("a", al), ("k", kl)])?;
+                return Ok(Some(Red::Q(j, inst)));
             }
             // (its value in the normal form first: the rest of N(e), by N's
             // rewrites -- unless as written, `raw_lets`)
@@ -1335,6 +1389,17 @@ impl<'e> Gen<'e> {
         }
         // an operation
         if let Some(x) = self.app(&a, "bind_rel", 5) {
+            // (its arguments reading the world: the point's, tr.qs_atop)
+            if matches!(x[1].node(), Node::BVar(2)) && x[0].loose_depth(&self.env.binders_fn()) > 0 {
+                if let Some(op) = self.lam(&x[0], &ctx, &["x0"]) {
+                    let c5 = ["x0", "x1", "x8", "x9", "x10"];
+                    let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("an operation's continuation reads the world before it")?;
+                    let xl = self.lam(&x[3], &c5, &["x9", "x10", "x8"]).ok_or("an operation's handler reads the world before it")?;
+                    let dl = self.lam(&x[4], &["x0", "x1", "x8", "x9"], &["x9", "x8"]).ok_or("an operation's handler reads the world before it")?;
+                    let (j, inst) = self.by(qi, "tr.qs_atop", &[("w", w.clone()), ("op", op), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+                    return Ok(Some(Red::Q(j, inst)));
+                }
+            }
             if matches!(x[1].node(), Node::BVar(2)) && x[0].loose_depth(&self.env.binders_fn()) == 0 {
                 let c5 = ["x0", "x1", "x8", "x9", "x10"];
                 let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("an operation's continuation reads the world before it")?;
@@ -1344,7 +1409,12 @@ impl<'e> Gen<'e> {
                 // a store: its definedness split here, the store itself at
                 // the machine's
                 if let Some(so) = self.store_op(&x[0])? {
-                    if self.hyp_find(hyps, &so.cond).is_some() {
+                    if let Some(hc) = self.hyp_find(hyps, &so.cond).map(|h| h.1.clone()) {
+                        // (the stack object's word stored again, as the
+                        // machine's store made it: the world kept)
+                        if let Some(r) = self.store_kept(qi, &x[0], &so, &hc, &al, &xl, &dl, &kl)? {
+                            return Ok(Some(r));
+                        }
                         return Ok(None);
                     }
                     let ra = vec![("op", x[0].clone()), ("s2", self.vw.clone()), ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone()), ("e", empty)];
@@ -1352,12 +1422,21 @@ impl<'e> Gen<'e> {
                     let ubr = mp(rinst, vec![t(&w), so.ub]);
                     return Ok(Some(Red::Guard { cond: so.cond, ub: (u, ubr) }));
                 }
+                // (a call from a function with stack objects: the call itself)
+                if let Some(c) = self.app(&x[0], "gimple.call_objs", 3).map(|c| c.to_vec()) {
+                    let (j, inst) = self.by(qi, "tr.qs_callobjs", &[("objs", c[0].clone()), ("g", c[1].clone()), ("l", c[2].clone()), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+                    return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
+                }
                 // a call: the machine's call makes it
                 for (name, one, stk) in [("gimple.call1", true, false), ("gimple.call", false, false), ("gimple.call1_s", true, true)] {
                     if let Some(c) = self.app(&x[0], name, 2) {
                         let items = self.list_items(&c[1]).ok_or("a call's arguments: not a list literal")?;
                         return Ok(Some(Red::Call { g: c[0].clone(), args: items, list: c[1].clone(), one, stk, a: al, xx: xl, dd: dl, k: kl }));
                     }
+                }
+                // the frame's stack objects: the machine's store to them makes it
+                if self.app(&x[0], "gimple.alloc_objs", 1).is_some() {
+                    return Ok(Some(Red::Alloc { op: x[0].clone(), a: al, xx: xl, dd: dl, k: kl }));
                 }
                 // a system call: the machine's syscall makes it
                 for (name, n) in [("gimple.sys_call1", 2), ("gimple.sys_call3", 4), ("gimple.sys_call6", 7)] {

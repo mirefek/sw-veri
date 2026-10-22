@@ -319,6 +319,17 @@ impl<'e> Gen<'e> {
                         return self.then(tr, st2);
                     }
                 }
+                // (a stack object's bytes, allocated: the spec's load there)
+                if n == 8 && self.hvo.is_some() && self.objk.contains(&hk) {
+                    let ha = self.mk("tr.ha", vec![self.s.clone(), lit(hk)]);
+                    let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ha, 8)?;
+                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&pp), self.print(&off)))?;
+                    let (v, hr) = self.result(&v)?;
+                    let tr = self.step("load64_obj", a, insn, &[&x[1], &d, &c, &x[4], &pp, &off, &v], self.tail(st, insn, 6, vec![s(&heq), s(&hc), hr]));
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, v);
+                    return self.then(tr, st2);
+                }
                 let v = match (n, st.hsm.get(&self.hkey(dn))) {
                     (4, _) => home(&st.hsm, &d)?,
                     (8, Some((8, x))) => x.clone(),
@@ -502,6 +513,25 @@ impl<'e> Gen<'e> {
                 if nat(&x[0]) != Some(8) {
                     return Err(bad("not sub r64, [rsp + d]"));
                 }
+                // sub r64, fs:[d]; jcc: g's word less the spec's at the world's
+                // fs_base + d (the stack protector's check), the jump on it
+                if let Some(m) = self.memop(&x[2]).filter(|m| nat(&m["seg"]) == Some(2) && self.tag(&m["base"]).is_some_and(|b| b.0 == 0)) {
+                    let d = m["disp"].clone();
+                    let g = reg(&x[1])?;
+                    let u = self.need_reg(st, g, 8)?;
+                    let fs = self.mk("app", vec![st.w.clone(), Term::bytes(b"fs_base")]);
+                    let hc = self.mem_hyp(st, &fs, &d, 8)?;
+                    let y = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&fs), self.print(&d)))?;
+                    let (y, hy) = self.result(&y)?;
+                    let r = self.mk("bits_sub", vec![lit(64), u.clone(), y.clone()]);
+                    let mut v = self.head(a, insn);
+                    v.extend([&x[1], &d, &x[4], &u, &y, &st.hst, &st.rs, &st.w].into_iter().map(t));
+                    v.push(p(R::F(insn.name.clone())));
+                    v.extend((0..5).map(|_| simp_l()));
+                    v.extend([s(&hc), hy]);
+                    let step = mpf("tr.fsub64_fs", v);
+                    return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r)));
+                }
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
                 let g = reg(&x[1])?;
                 let v = home_n(&st.hsm, &d, 8)?;
@@ -525,6 +555,15 @@ impl<'e> Gen<'e> {
                 let c = nat(&x[5]).ok_or_else(|| bad("an immediate that is not a literal"))?;
                 if c >= 1 << 31 {
                     return Err(bad("a negative immediate (no product lemma yet)"));
+                }
+                // imul r64, r64, imm32: the word product
+                if nat(&x[0]) == Some(8) {
+                    let u = self.need_reg(st, hn, 8)?;
+                    let (r, hr) = self.result(&self.mk("bits_mul", vec![lit(64), u.clone(), x[5].clone()]))?;
+                    let tr = self.step("imul64", a, insn, &[&x[1], &h, &x[3], &x[4], &x[5], &u, &r], self.tail(st, insn, 7, vec![hr]));
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, r);
+                    return self.then(tr, st2);
                 }
                 let u = self.need_reg(st, hn, 4)?;
                 let by = self.imul_fact(c)?;
@@ -1198,6 +1237,19 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, g, 8, x[1].clone());
                 self.then(tr, st2)
             }
+            // xor r32, r32 of one register: g := 0 (the canary cleared)
+            53 => {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let h = reg(&x[1])?;
+                let same = |t: &Term| self.tag(t).is_some_and(|(k, r)| k == 0 && nat(&r) == Some(h));
+                if nat(&x[0]) != Some(4) || !same(&x[2]) || !same(&x[3]) || !same(&x[4]) {
+                    return Err(bad("xor of two registers"));
+                }
+                let tr = self.step("xor32_self", a, insn, &[&x[1]], self.tail(st, insn, 2, vec![]));
+                self.scratch.insert(h);
+                let st2 = self.set_reg(st, a2, h, 4, lit(0));
+                return self.then(tr, st2);
+            }
             // mov r32, imm32
             111 => {
                 let x = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
@@ -1499,6 +1551,18 @@ impl<'e> Gen<'e> {
                 let x = self.pairs(&f, 6).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
                 let m = self.record(&x[5]).ok_or_else(|| bad("fields"))?;
+                // lea r64, [rsp + d]: the frame's bytes at c (a stack object's address)
+                let rsp_base = m.get("base").and_then(|b| self.tag(b)).is_some_and(|(k, r)| k == 2 && nat(&r) == Some(4));
+                if nat(&x[0]) == Some(8) && rsp_base && m.get("index").is_some_and(|i| self.app(i, "none", 0).is_some()) && m.get("scale").and_then(nat) == Some(1) {
+                    let d = m.get("disp").cloned().ok_or_else(|| bad("fields"))?;
+                    let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let c = self.hkey(dn);
+                    let tr = self.step("lea_rsp", a, insn, &[&x[1], &d, &lit(c), &x[2], &x[3], &x[4]], self.tail(st, insn, 4, vec![]));
+                    self.scratch.insert(g);
+                    let ha = self.mk("tr.ha", vec![self.s.clone(), lit(c)]);
+                    let st2 = self.set_reg(st, a2, g, 8, ha);
+                    return self.then(tr, st2);
+                }
                 // lea r32, [b + d]: u + d, 32 bits
                 if nat(&x[0]) == Some(4) {
                     let (bk, b) = m.get("base").and_then(|b| self.tag(b)).ok_or_else(|| bad("fields"))?;
@@ -1573,7 +1637,7 @@ impl<'e> Gen<'e> {
                     Some(tr) => tr,
                     None => {
                         let q = match &st.spec {
-                            Spec::Proc(i) => self.qs[*i].clone(),
+                            Spec::Proc(i) | Spec::Plain(i) => self.qs[*i].clone(),
                             Spec::Ret(v, _) => v.clone(),
                         };
                         let mut found = None;
@@ -1868,6 +1932,20 @@ impl<'e> Gen<'e> {
                             return Err(format!("{:x}: rax holds {} = {}, the spec returns {} = {}", a, self.print(&v), self.print(&self.expand(&v)), self.print(val), self.print(&self.expand(val))))
                         }
                     }
+                }
+                // (the objects released, `objs := objs0`: the result's world
+                // w with the callers' objects O, tr.ret_insn_w)
+                if let (Some(o), 8, None) = (self.objs_back(pr), n, &eqf) {
+                    let w2 = self.mk("fn_update", vec![st.w.clone(), Term::bytes(b"objs"), o.clone()]);
+                    let hw0 = self.hw0.clone().ok_or("the entry's world")?;
+                    let ot = simpw(vec![R::Expand(Box::new(R::S(hw0)), vec!["abi.World".into()])]);
+                    let wo = self.run(&mpf("tr.world_objs", vec![t(&st.w), t(&o), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), ot]), &[])?;
+                    let res = mpf("tr.result64_objs", vec![t(&st.w), t(val), t(&o), simpw(vec![R::S(wo.clone())])]);
+                    let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
+                    v.extend([t(&lit(8)), t(val), t(&w2), p(R::F(insn.name.clone())), simp_l(), simp_l(), p(self.cs_rs_pf(&st.rs))]);
+                    v.extend((0..5).map(|_| taut(vec![R::S(wo.clone())])));
+                    v.push(p(res));
+                    return self.run(&mpf("tr.ret_insn_w", v), &[]);
                 }
                 let mut r = self.ret_step("tr.ret_insn", a, insn, pr, vec![t(&lit(n)), t(val)], mpf(&format!("tr.result{}", 8 * n), vec![t(&st.w), t(val)]), st);
                 if let (Some(q), R::Mp(_, args)) = (eqf, &mut r) {
@@ -2294,6 +2372,23 @@ impl<'e> Gen<'e> {
     }
 
     /// a return's rule: `mp(RULE, s, V, base, code, a, len, hs, ds, rs, pr, w, ts.., decode, [simp(L), simp(L)], callee-saved, result)`
+    /// the objects the wrapper's last part restores (`objs := objs0`: its
+    /// `fn_update(.., "objs", O)`), if any
+    fn objs_back(&self, pr: &Term) -> Option<Term> {
+        fn go(g: &Gen, t: &Term) -> Option<Term> {
+            if let Some(x) = g.app(t, "fn_update", 3) {
+                if x[1] == Term::bytes(b"objs") && x[2].loose_depth(&g.env.binders_fn()) == 0 {
+                    return Some(x[2].clone());
+                }
+            }
+            match t.node() {
+                Node::App(_, a) => a.iter().find_map(|x| go(g, x)),
+                _ => None,
+            }
+        }
+        go(self, pr)
+    }
+
     fn ret_step(&self, rule: &str, a: u128, insn: &Insn, pr: &Term, ts: Vec<RA>, res: R, st: &St) -> R {
         let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
         let has = !ts.is_empty();

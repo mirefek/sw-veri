@@ -128,8 +128,37 @@ impl<'e> Gen<'e> {
         };
         let addrs: Vec<u128> = self.insns.keys().copied().collect();
         let mut out: BTreeSet<u128> = addrs.iter().copied().filter(|a| self.insns[a].row == 122).collect();
+        // (the stack protector's check: the canary's word from its home,
+        // `sub r64, fs:[0x28]`, the `je` past `call __stack_chk_fail`)
+        let mut canary = BTreeSet::new();
+        for &a in &addrs {
+            let i = &self.insns[&a];
+            let fs40 = i.row == 51 && self.pairs(&i.fields, 5).and_then(|x| self.memop(&x[2])).is_some_and(|m| nat(&m["seg"]) == Some(2) && nat(&m["disp"]) == Some(40));
+            if !fs40 {
+                continue;
+            }
+            canary.insert(a);
+            if let Some(&p) = addrs.iter().find(|&&p| (p + self.insns[&p].len) % P64 == a && self.insns[&p].row == 76) {
+                canary.insert(p);
+            }
+            let j = (a + i.len) % P64;
+            if self.insns.get(&j).is_some_and(|x| matches!(x.row, 127 | 128)) {
+                canary.insert(j);
+                let k = (j + self.insns[&j].len) % P64;
+                if self.insns.get(&k).is_some_and(|x| x.row == 120) {
+                    canary.insert(k);
+                }
+            }
+        }
         loop {
-            let more: Vec<u128> = addrs.iter().copied().filter(|&p| !out.contains(&p) && tail(self, p) && { let s = self.succs(p); s.len() == 1 && out.contains(&s[0]) }).collect();
+            let more: Vec<u128> = addrs
+                .iter()
+                .copied()
+                .filter(|&p| {
+                    let s = self.succs(p);
+                    !out.contains(&p) && ((tail(self, p) && s.len() == 1 && out.contains(&s[0])) || (canary.contains(&p) && !s.is_empty() && s.iter().all(|x| out.contains(x))))
+                })
+                .collect();
             if more.is_empty() {
                 break;
             }
@@ -250,23 +279,25 @@ impl<'e> Gen<'e> {
 
     /// The function's CFG at the body's start (st, the spec at its loop):
     /// the claim there by tr.cfg_lvk -- each label walked once
-    pub(super) fn cfg_function(&mut self, st: &St, qi: usize) -> Result<Seq, String> {
+    /// (`start`: entered within the first label's block -- after its stack
+    /// object's allocation --, its rest walked from st, tr.cfg_lvk_st)
+    pub(super) fn cfg_function(&mut self, st: &St, qi: usize, start: bool) -> Result<Seq, String> {
         let (live, _) = self.cfg_meta.clone().ok_or("the CFG: no live locals")?;
         let all: BTreeSet<u128> = live.iter().map(|x| x.0).collect();
-        match self.cfg_labels(st, qi, &all)? {
+        match self.cfg_labels(st, qi, &all, start)? {
             Ok(pf) => Ok(pf),
             // (labels no walk reached -- the compiler's code has none, a
             // constant condition decided: the claim by the others)
             Err(reached) => {
                 self.trace(|| format!("cfg at {:x}: labels not reached: {:?}, again without them", st.a, all.difference(&reached).collect::<Vec<_>>()));
-                self.cfg_labels(st, qi, &reached)?.map_err(|_| format!("{:x}: the CFG: labels not reached again", st.a))
+                self.cfg_labels(st, qi, &reached, start)?.map_err(|_| format!("{:x}: the CFG: labels not reached again", st.a))
             }
         }
     }
 
     /// ... by the labels `only`: the claim, or the labels the walks reached
     /// (fewer than `only`)
-    fn cfg_labels(&mut self, st: &St, qi: usize, only: &BTreeSet<u128>) -> Result<Result<Seq, BTreeSet<u128>>, String> {
+    fn cfg_labels(&mut self, st: &St, qi: usize, only: &BTreeSet<u128>, start: bool) -> Result<Result<Seq, BTreeSet<u128>>, String> {
         let bad = |m: &str| format!("{:x}: the CFG: {}", st.a, m);
         let (live, widths) = self.cfg_meta.clone().ok_or_else(|| bad("no live locals"))?;
         let live: Vec<(u128, u128)> = live.into_iter().filter(|x| only.contains(&x.0)).collect();
@@ -281,6 +312,10 @@ impl<'e> Gen<'e> {
         let y0 = self.app(&l0[1], "pair", 2).ok_or_else(|| bad("its locals not a label and the rest"))?.to_vec();
         let k_e = nat(&y0[0]).ok_or_else(|| bad("the first label not a literal"))?;
         let ys0 = y0[1].clone();
+        // (started within the first label's block: that label's claim the
+        // start's, not one at its address)
+        let live: Vec<(u128, u128)> = if start { live.into_iter().filter(|x| x.0 != k_e).collect() } else { live };
+        let mask_e0 = self.cfg_meta.as_ref().and_then(|(l, _)| l.iter().find(|x| x.0 == k_e).map(|x| x.1)).ok_or_else(|| bad("the first label not among the labels"))?;
         let m = widths.len();
         let cuts = self.cfg_cuts(st.a);
         // the locals' homes (the location map: of one key, or several by scope)
@@ -352,9 +387,11 @@ impl<'e> Gen<'e> {
         let kk_lam = self.abs(&kk_t, &[Self::var_id(&cv)]);
         c.kk_lam = kk_lam.clone();
         let ad_lam = self.abs(&ad_t, &[Self::var_id(&cv)]);
-        let (lr, stmt) = self.inst(
-            "tr.cfg_lvk",
-            &[
+        let mut rargs: Vec<(&'static str, Term)> = Vec::new();
+        if start {
+            rargs.extend([("a0", lit(st.a)), ("hs0", st.hst.clone()), ("rs0", st.rs.clone())]);
+        }
+        let mut iargs: Vec<(&'static str, Term)> = vec![
                 ("s", self.s.clone()),
                 ("v", self.v.clone()),
                 ("base", self.base.clone()),
@@ -373,10 +410,11 @@ impl<'e> Gen<'e> {
                 ("tr", wr[3].clone()),
                 ("k", kl.clone()),
                 ("kw", self.kw.clone()),
-            ],
-        )?;
+        ];
+        iargs.extend(rargs);
+        let (lr, stmt) = self.inst(if start { "tr.cfg_lvk_st" } else { "tr.cfg_lvk" }, &iargs)?;
         let (prems, _) = self.imps(&stmt);
-        if prems.len() != 5 {
+        if prems.len() != if start { 7 } else { 5 } {
             return Err(bad("tr.cfg_lvk's premises"));
         }
         // the premise per label: all c. kk(c) -> P(c); P's claim's breakpoints
@@ -400,14 +438,31 @@ impl<'e> Gen<'e> {
         c.hyps = hyps;
         c.facts = facts;
         c.lfx = lfx;
-        // the first label at the body's start; each label walked once
-        let h0 = self.mk("eq", vec![self.mk("app", vec![ad.clone(), lit(k_e)]), lit(st.a)]);
-        let hs0 = self.assume(&h0)?;
-        c.addr.insert(k_e, st.a);
-        c.hyp.insert(k_e, (h0, hs0));
-        c.todo.push(k_e);
+        // the first label at the body's start (or its rest from st: the
+        // start's walk, the labels its arrivals find); each label walked once
+        let y0t = self.mk("pair", vec![lit(k_e), ys0.clone()]);
+        let mut wf = vec![R::S(st.hvu.clone())];
+        wf.extend(st.facts.iter().map(|f| R::S(f.clone())));
+        let start_h = if start {
+            let hu_t = self.mk("in", vec![self.mk("pair", vec![st.w.clone(), y0t.clone()]), self.mk("univ", vec![lit(1)])]);
+            let hu = self.evp(&RP::Simp(true, vec![R::S(st.hvu.clone())], vec![], false), &hu_t, &[])?;
+            let hy_t = self.and_all(self.cfg_widths(&c, mask_e0, &ys0));
+            let hy = self.evp(&RP::Simp(true, wf.clone(), vec![], false), &hy_t, &[])?;
+            Some((hu, hy))
+        } else {
+            let h0 = self.mk("eq", vec![self.mk("app", vec![ad.clone(), lit(k_e)]), lit(st.a)]);
+            let hs0 = self.assume(&h0)?;
+            c.addr.insert(k_e, st.a);
+            c.hyp.insert(k_e, (h0, hs0));
+            c.todo.push(k_e);
+            None
+        };
         let outer = (self.bkp.clone(), self.bka.clone(), self.wrap.clone(), self.kw.clone(), self.lpg.take());
         self.cfg = Some(c);
+        let sw = match &start_h {
+            Some((hu, hy)) => Some(self.cfg_start_walk(st, &y0t, hu.clone(), hy.clone())),
+            None => None,
+        };
         let res = self.cfg_walks();
         let c = self.cfg.take().expect("the CFG walk");
         self.bkp = outer.0;
@@ -415,6 +470,7 @@ impl<'e> Gen<'e> {
         self.wrap = outer.2;
         self.kw = outer.3;
         self.lpg = outer.4;
+        let sw = sw.transpose()?;
         res?;
         let reached: BTreeSet<u128> = c.done.keys().copied().collect();
         if reached.len() < c.labels.len() {
@@ -449,11 +505,26 @@ impl<'e> Gen<'e> {
             g.evp(&RP::Simp(false, vec![R::S(h.1.clone())], vec![], false), goal, &[])
         })?;
         let p4 = self.evp(&RP::Simp(false, vec![], vec![], false), &prems[3], &[])?;
+        // (started within the first block: the start's claim, the rule at
+        // st itself)
+        if let (Some((hu, _)), Some(sw)) = (&start_h, &sw) {
+            let rule = self.run(&mp(lr, vec![simp0(), p(f("tr.tr_univ")), s(&p3), s(&p4), s(&p5), simp0(), simp0()]), &[])?;
+            let c0 = self.run(&mp(R::S(rule), vec![t(&y0t), t(&st.w), s(hu), defs(RP::By(R::S(sw.clone())), &["tr.lone"])]), &[])?;
+            let c1 = self.run(&R::Expand(Box::new(R::S(c0)), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
+            let hts: Vec<Term> = c.hyp.values().map(|h| h.0.clone()).collect();
+            let closed = self.close(c1, &hts, &[Self::var_id(&ad)])?;
+            let mut table = self.mk("empty", vec![]);
+            for (k, a) in &c.addr {
+                table = self.mk("fn_update", vec![table, lit(*k), lit(*a)]);
+            }
+            let mut args = vec![t(&table)];
+            args.extend(hts.iter().map(|_| simp0()));
+            self.trace(|| format!("cfg within its first block at {:x}: {} labels walked", st.a, c.addr.len()));
+            return self.run(&mp(R::S(closed), args), &[]).map(Ok);
+        }
         let rule = self.run(&mp(lr, vec![simp0(), p(f("tr.tr_univ")), s(&p3), s(&p4), s(&p5)]), &[])?;
         // at the first label, the locals now
         let (_, mask_e) = *c.labels.iter().find(|x| x.0 == k_e).ok_or_else(|| bad("the first label not among the labels"))?;
-        let mut wf = vec![R::S(st.hvu.clone())];
-        wf.extend(st.facts.iter().map(|f| R::S(f.clone())));
         let c0 = self.run(&mp(R::S(rule), vec![t(&lit(k_e)), t(&ys0), t(&st.w), simp0(), simp_lw(vec![R::S(st.hvu.clone())]), simp_lw(wf)]), &[])?;
         let lv0 = self.app(c0.concl(), "tr.lv", 13).ok_or_else(|| bad("the rule's claim"))?.to_vec();
         let (_, hs_e) = self.cfg_homes(&c, mask_e, &ys0, st.a)?;
@@ -601,6 +672,37 @@ impl<'e> Gen<'e> {
         );
         let pk = self.run(&conv, &[])?;
         self.close(pk, &asm, &[Self::var_id(&ys), Self::var_id(&wv)])
+    }
+
+    /// the start's claim (tr.cfg_lvk_st): the first iteration's rest, on
+    /// the locals y0, walked from st (its homes, registers and world) up to
+    /// the labels' cut points; hu, hy: y0's facts as a label's
+    fn cfg_start_walk(&mut self, st: &St, y0: &Term, hu: Seq, hy: Seq) -> Result<Seq, String> {
+        let c = self.cfg.as_ref().expect("the CFG walk");
+        let (bkp2, bka2, hs_lam, fd, rc, bkp0) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fd.clone(), c.rc.clone(), c.bkp0.clone());
+        let (b, kl, kw, wrap) = (c.b.clone(), c.kl.clone(), c.kw.clone(), c.wrap.clone());
+        let n = self.fresh("");
+        let qit = self.mk("tr.liter", vec![y0.clone(), b, kl, kw.clone()]);
+        let jq = self.new_q(qit);
+        let qv = self.var(&format!("cq{n}"));
+        let wid = self.parse(&format!("mkprog(x1 x2. bind_rel(cq{n}, x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))"))?;
+        let wrap_id = self.abs(&wid, &[Self::var_id(&qv)]);
+        let kw_id = self.mk("eq", vec![Term::bvar(0), self.mk("ok", vec![Term::bvar(2), Term::bvar(1)])]);
+        let mut st_body = st.clone();
+        st_body.spec = Spec::Proc(jq);
+        st_body.no_join = Some(st.a);
+        st_body.no_block = Some(st.a);
+        st_body.splits = Vec::new();
+        self.bkp = bkp2;
+        self.bka = bka2;
+        self.wrap = wrap_id;
+        self.kw = kw_id;
+        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, wrap, kw, hu, fd, rc, yt: hs_lam, hy });
+        self.trace(|| format!("cfg start at {:x}", st.a));
+        let hus = std::mem::take(&mut self.hus);
+        let res = self.prove(st_body);
+        self.hus = hus;
+        res
     }
 
     /// At a cut point in a label's walk: the spec reduced to its marked

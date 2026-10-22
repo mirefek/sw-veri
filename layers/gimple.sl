@@ -224,9 +224,10 @@ proc[World] alloc_objs(sizes: List[(nat, nat)]) -> List[Addr] {
        (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> !in_domain(vm, objs, a))) &&
     (all j: nat, k: nat. j < k && k < len(sizes) ->
        uint(l[j]) + sizes[j][0] <= uint(l[k]) || uint(l[k]) + sizes[k][0] <= uint(l[j]))
-  for k in 0..len(sizes) {
-    for i in 0..sizes[k][0] { vm.bytes[addrs[k] + bits[64](i)] := any bits[8] }
-  }
+  // (their bytes any: the memory but for them as it was)
+  let before = vm
+  havoc vm where (vm with { bytes: before.bytes }) = before &&
+    (all a: Addr. (all k: nat. k < len(sizes) -> !(uint(addrs[k]) <= uint(a) && uint(a) < uint(addrs[k]) + sizes[k][0])) -> vm.bytes[a] = before.bytes[a])
   objs := {a: nat | a in objs || ex k: nat. k < len(sizes) && uint(addrs[k]) <= a && a < uint(addrs[k]) + sizes[k][0]}
   return addrs
 }

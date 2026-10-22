@@ -402,6 +402,25 @@ item is a short summary of finished work; details are in the files named.
   their preconditions. `proofs/mallocng_link.core` links a_clz_32 with
   a_ctz_32, dequeue_head with dequeue, queue with a_crash, free_meta with
   queue, and size_to_class with a_clz_32.
+- **Stack objects and the stack protector in C1** (get_random_secret,
+  `grsc.implements_abi`; proofs/translate_objs.core):
+  - `alloc_objs` at the machine's first store to the object
+    (`tr.astore_r`): its bytes the stored word, aligned and outside the
+    world's domain by the machine's state (`tr.aslot`, `tr.nodom`); the
+    claims' objects from there `tr.obj1(v, A)`, the homes apart from it
+    by their ranges (`tr.vone`);
+  - the spec's own store of the word after it keeps the world
+    (`tr.run_kept`);
+  - the CFG entered within its first block (`tr.cfg_lvk_st`);
+  - loads of the object as the world's (`tr.load64_obj`); `call_objs` as
+    the call (`tr.qs_callobjs`);
+  - GCC's canary check: the `_fun` wrapper reads `ld64(fs_base, 40)`
+    before the call and is undefined if the word changed. The C1 starts
+    on the wrapper itself (`tr.entry0p`, `Spec::Plain`, rerooted at the
+    procedure's call). After the result, the wrapper's rest is reduced:
+    `sub rdx, fs:0x28; je` (`tr.jcc_w`), the mismatch undefined
+    (`tr.undef_ub`). The return comes with the objects released
+    (`tr.ret_insn_w`).
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),

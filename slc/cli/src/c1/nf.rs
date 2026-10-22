@@ -188,7 +188,8 @@ impl<'e> Gen<'e> {
             if a.is_empty() {
                 let def = self.vals.iter().rev().find(|x| x.0 == *v).map(|x| x.1.clone());
                 let ops: &[&str] = if self.nf_bits { &["bits_add", "bits_mul", "bits_and", "bits_or", "bits_xor"] } else { &["bits_add", "bits_mul"] };
-                if let Some(d) = def.filter(|d| ops.iter().any(|o| self.app(d, o, 3).is_some())) {
+                // (and a one-element list's: a stack object's address list)
+                if let Some(d) = def.filter(|d| ops.iter().any(|o| self.app(d, o, 3).is_some()) || self.app(d, "seq_one", 1).is_some()) {
                     let r = self.nf(&d, depth)?;
                     self.nf_memo.insert(t.clone(), r.clone());
                     return Ok(r);
@@ -261,6 +262,13 @@ impl<'e> Gen<'e> {
                 let lg = &self.api.as_ref().expect("the proving context").lg;
                 let e = Seq::eval_goal(self.env, lg, &[], &goal).map_err(|e| format!("N: {}: {}", self.print(t), e.0))?;
                 return Ok(Some((lit(k), e)));
+            }
+        }
+        // a one-element list's first element (a stack object's address)
+        if name == "app" && a.len() == 2 && nat(&a[1]) == Some(0) {
+            if let Some(x) = self.app(&a[0], "seq_one", 1).map(|x| x[0].clone()) {
+                let e = self.run(&R::Inst("nf.seq_one0".into(), vec![("x", x.clone())]), &[])?;
+                return Ok(Some((x, e)));
             }
         }
         // a cast of a word of its width or narrower

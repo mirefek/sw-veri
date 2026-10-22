@@ -187,6 +187,191 @@ impl<'e> Gen<'e> {
         Ok((hc, so.v.clone(), st2, red, so.addr.clone(), so))
     }
 
+    /// The frame's stack object allocated (`Red::Alloc`, the rest qi) at
+    /// the machine's first store to it, `mov [rsp + d], r64` (tr.astore_r):
+    /// the spec's allocation there, the object's bytes the stored word (any,
+    /// as alloc_objs makes them); the claim on from it with the object
+    /// (`tr.vone` assumed). None: not that store.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn alloc_at(&mut self, st: &St, qi: usize, op: &Term, al: &Term, xl: &Term, dl: &Term, kl: &Term) -> Result<Option<Seq>, String> {
+        let Some(insn) = self.insns.get(&st.a).cloned() else { return Ok(None) };
+        if insn.row != 75 {
+            return Ok(None);
+        }
+        let Some(x) = self.pairs(&insn.fields, 5) else { return Ok(None) };
+        let (Some(d), Some(8), Some(g)) = (self.rsp_mem(&x[2]), nat(&x[0]), nat(&x[1])) else { return Ok(None) };
+        let Some(dn) = nat(&d) else { return Ok(None) };
+        let c = self.hkey(dn);
+        if !self.objk.contains(&c) {
+            return Ok(None);
+        }
+        let a = st.a;
+        if self.objk.len() != 1 || self.hvo.is_some() {
+            return Err(format!("{:x}: more than one stack object (not yet)", a));
+        }
+        let a2 = (a + insn.len) % P64;
+        let Some((8, u)) = self.reg(st, g) else { return Err(format!("{:x}: the object's first store not of a register's word", a)) };
+        let s0 = self.s.clone();
+        let ha = self.mk("tr.ha", vec![s0.clone(), lit(c)]);
+        let w = st.w.clone();
+        let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
+        let bytes = self.mk("app", vec![vm.clone(), Term::bytes(b"bytes")]);
+        let stored = self.mk("x86_64_linux.store_le", vec![bytes, ha.clone(), lit(8), u.clone()]);
+        let objs = self.mk("app", vec![w.clone(), Term::bytes(b"objs")]);
+        let w1 = self.mk("fn_update", vec![w.clone(), Term::bytes(b"vm"), self.mk("fn_update", vec![vm, Term::bytes(b"bytes"), stored])]);
+        let w2term = self.mk("fn_update", vec![w1, Term::bytes(b"objs"), self.mk("tr.obj1", vec![objs, ha.clone()])]);
+        let wn2 = self.fresh("W");
+        let w2 = self.var(&wn2);
+        let weq = self.push_world(Self::var_id(&w2), w2term, &w);
+        let hab = simp_l();
+        let hw2 = self.run(&R::Apply(Box::new(f("tr.world_alloc")), vec![t(&w), t(&ha), t(&u), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), hab.clone()]), &[])?;
+        let hw2 = match &weq {
+            Some(eq) => self.world_conv(hw2, eq)?,
+            None => hw2,
+        };
+        let w2u = self.mk("in", vec![w2.clone(), self.mk("univ", vec![lit(1)])]);
+        let hv2 = self.evp(&RP::Taut(vec![R::S(hw2.clone())]), &w2u, &[])?;
+        // the allocation's run: the object's bytes outside the world's
+        // domain, its slot aligned (tr.astore_r's, of the machine)
+        let asl_t = self.mk("tr.aslot", vec![s0.clone(), lit(c)]);
+        let nd_t = self.mk("tr.nodom", vec![w.clone(), ha.clone(), lit(8)]);
+        let hasl = self.assume(&asl_t)?;
+        let hnd = self.assume(&nd_t)?;
+        let okr = self.run(
+            &mpf(
+                "tr.alloc1_run",
+                vec![t(&w), t(&ha), t(&u), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), hab.clone(), taut(vec![R::S(hasl.clone())]), taut(vec![R::S(hasl)]), s(&hnd)],
+            ),
+            &[],
+        )?;
+        let okr = match &weq {
+            Some(eq) => self.world_conv(okr, eq)?,
+            None => okr,
+        };
+        let res = self.mk("seq_one", vec![ha.clone()]);
+        let (j, inst) = self.by(qi, "tr.qs_opw", &[("op", op.clone()), ("r", res), ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone())])?;
+        let qred = mp(inst, vec![t(&w), t(&w2), s(&st.hvu), s(&okr)]);
+        let wredw = R::Inst("tr.wredw".into(), vec![("w", w.clone()), ("w2", w2.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone()), ("kw", self.kw3())]);
+        let red = self.run(&mp(wredw, vec![s(&st.hvu), p(qred)]), &[])?;
+        let red = self.close(red, &[asl_t, nd_t], &[])?;
+        // the homes left (the object's bytes no home)
+        let (kept, hs2, hk) = self.hkeep(st, c, 8);
+        // the claim after it, with the object (tr.vone assumed)
+        let v0 = self.v.clone();
+        let vn = self.mk("tr.obj1", vec![v0.clone(), ha.clone()]);
+        let vone_t = self.mk("tr.vone", vec![s0.clone(), vn.clone(), v0.clone(), lit(c)]);
+        let hvo = self.assume(&vone_t)?;
+        let mut st2 = st.clone();
+        st2.a = a2;
+        st2.w = w2.clone();
+        st2.hvu = hv2;
+        st2.hw = hw2.clone();
+        st2.spec = Spec::Proc(j);
+        st2.hst = hs2.clone();
+        st2.hsm = kept;
+        self.trace(|| format!("at {:x}: the stack object at {} allocated", a, self.print(&ha)));
+        self.v = vn;
+        self.hvo = Some((v0.clone(), c, hvo));
+        let objs0 = self.mk("tr.obj1", vec![self.mk("app", vec![w.clone(), Term::bytes(b"objs")]), ha.clone()]);
+        self.objw = Some((w2.clone(), w.clone(), ha.clone(), u.clone(), objs0, weq.clone(), st.hw.clone()));
+        let rest = self.prove_pt(st2);
+        self.v = v0;
+        self.hvo = None;
+        self.objw = None;
+        let rest = self.close(rest?, &[vone_t], &[])?;
+        // the step
+        let mut args = self.head(a, &insn);
+        args.extend([&x[1], &d, &lit(c), &x[3], &x[4], &u].into_iter().map(t));
+        let p2 = self.wrap_of(&self.qs[j].clone());
+        args.extend([&st.hst, &hs2, &st.ds, &st.rs, &self.p(&st.spec), &p2, &w, &w2].into_iter().map(t));
+        args.push(p(f(&insn.name)));
+        args.extend((0..5).map(|_| simp_l()));
+        args.push(simp_lw(self.facts_about(&st.facts, &u)));
+        args.extend([simp_l(), simp_l(), defs(RP::Simp(false, vec![], vec![], false), &["tr.hrange"]), simp_l(), simp_l(), simp_l()]);
+        args.push(p(hk));
+        args.push(p(self.hva_r()));
+        args.push(match &weq {
+            Some(eq) => p(eq.clone()),
+            None => simp0(),
+        });
+        args.push(simp_l());
+        args.push(taut(vec![R::S(hw2.clone())]));
+        args.push(taut(vec![R::S(hw2)]));
+        args.push(s(&red));
+        args.push(s(&rest));
+        self.run(&mpf("tr.astore_r", args), &[]).map(Some)
+    }
+
+    /// `tr.lv_red` at st, from the program qi to j (rs: j's runs are qi's),
+    /// the claim on j `rest`
+    fn lv_red_plain(&mut self, st: &St, qi: usize, j: usize, rs: Seq, rest: Seq) -> Result<Seq, String> {
+        let args = vec![
+            t(&self.s.clone()),
+            t(&self.v.clone()),
+            t(&self.base.clone()),
+            t(&self.code.clone()),
+            t(&lit(st.fr)),
+            t(&lit(st.a)),
+            t(&st.hst),
+            t(&st.ds),
+            t(&st.rs),
+            t(&self.qs[qi].clone()),
+            t(&self.qs[j].clone()),
+            t(&st.w),
+            s(&rs),
+            s(&rest),
+        ];
+        self.run(&mpf("tr.lv_red", args), &[])
+    }
+
+    /// the program qi a block of the procedure's call alone, `mkprog(x0 x1.
+    /// ex x8. bind_rel(PROC(..), x0, ..) && x1 = x8)`: its head the program
+    /// (tr.qs_outro)
+    fn outro_at(&mut self, qi: usize) -> Result<Option<Red>, String> {
+        let Some(ps) = self.reroot else { return Ok(None) };
+        let q = self.qs[qi].clone();
+        let Some(body) = self.app(&q, "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
+        let Some(ex) = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())) else { return Ok(None) };
+        let Some(e) = self.app(&ex[1], "eq", 2) else { return Ok(None) };
+        if !(matches!(e[0].node(), Node::BVar(1)) && matches!(e[1].node(), Node::BVar(0))) {
+            return Ok(None);
+        }
+        let Some(br) = self.app(&ex[0], "bind_rel", 5) else { return Ok(None) };
+        if !matches!(br[0].node(), Node::App(f, _) if *f == ps) {
+            return Ok(None);
+        }
+        let Some(a) = self.lam(&ex[0], &["x0", "x1", "x8"], &["x0", "x8"]) else { return Ok(None) };
+        let (j, inst) = self.by(qi, "tr.qs_outro", &[("a", a)])?;
+        Ok(Some(Red::Q(j, mp(inst, vec![t(&self.w.clone())]))))
+    }
+
+    /// the program qi the procedure's call, `mkprog(x1 x2. bind_rel(PROC(..),
+    /// x1, KW, ..))` (Spec::Plain): KW the walk's wrapper from here, the
+    /// call's rest PROC(..)
+    fn reroot_at(&mut self, qi: usize) -> Result<Option<usize>, String> {
+        let Some(ps) = self.reroot else { return Ok(None) };
+        let q = self.qs[qi].clone();
+        let Some(body) = self.app(&q, "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
+        let Some(br) = self.app(&body, "bind_rel", 5).map(|x| x.to_vec()) else { return Ok(None) };
+        if !matches!(br[0].node(), Node::App(f, _) if *f == ps) || !matches!(br[1].node(), Node::BVar(1)) {
+            return Ok(None);
+        }
+        let kw = self.lam(&br[2], &["x1", "x2", "x3", "x4"], &["x3", "x4", "x2"]).ok_or("the wrapper after the procedure's call reads its start")?;
+        let q_t = self.var("q");
+        let mut wa = vec![q_t.clone()];
+        wa.extend(br[1..].iter().cloned());
+        let wrap = self.mk("mkprog", vec![self.mk("bind_rel", wa)]);
+        self.kw = kw;
+        self.wrap = self.abs(&wrap, &[Self::var_id(&q_t)]);
+        self.reroot = None;
+        let j = self.new_q(br[0].clone());
+        let back = self.wrap_of(&self.qs[j].clone());
+        if self.expand(&back) != self.expand(&q) {
+            return Err(format!("the procedure's call: its wrapper does not give the program back:\n  {}\n  {}", self.print(&back), self.print(&q)));
+        }
+        Ok(Some(j))
+    }
+
     /// `tr.wred` at st, from the rest qi to j
     fn wred(&self, st: &St, qi: usize, j: usize) -> R {
         R::Inst(
@@ -340,7 +525,8 @@ impl<'e> Gen<'e> {
         self.trace(|| {
             let q = match &st.spec {
                 Spec::Proc(i) => format!("q{}: {}", i, Printer::new(self.env).short(&self.qs[*i])),
-                Spec::Ret(..) => "ret".into(),
+                Spec::Plain(i) => format!("plain q{}: {}", i, Printer::new(self.env).short(&self.qs[*i])),
+                Spec::Ret(_, pr) => format!("ret: {}", Printer::new(self.env).short(pr)),
             };
             format!("point {:x} spec {}", st.a, q)
         });
@@ -355,6 +541,44 @@ impl<'e> Gen<'e> {
         // (in a zero-initialization: the machine's stores only, the spec's made)
         if st.z.is_some() {
             return self.insn(st);
+        }
+        // a wrapper's part before the procedure's call: the claim on the
+        // program itself, reduced (tr.lv_red, tr.psplit); at the call, the
+        // walk's wrapper its rest (the same claim)
+        if let Spec::Plain(qi) = st.spec {
+            if let Some(j) = self.reroot_at(qi)? {
+                let mut st2 = st.clone();
+                st2.spec = Spec::Proc(j);
+                self.trace(|| format!("at {:x}: the procedure's call, its wrapper the walk's", st.a));
+                return self.prove(st2);
+            }
+            self.picked.borrow_mut().clear();
+            let red = match self.outro_at(qi)? {
+                Some(r) => Some(r),
+                None => self.reduce(qi, &st.hyps)?,
+            };
+            return match red {
+                Some(Red::Q(j, r)) => {
+                    let rs = self.run(&r, &[])?;
+                    let mut st2 = st.clone();
+                    st2.spec = Spec::Plain(j);
+                    let rest = self.prove_kept(st2)?;
+                    self.lv_red_plain(&st, qi, j, rs, rest)
+                }
+                Some(Red::Split { cond, ok, ub }) => {
+                    let u = self.raise_when_not(&cond, &ub)?;
+                    let hc = self.assume(&cond)?;
+                    let okr = self.run(&ok.1, &[("HC", hc.clone())])?;
+                    let mut st2 = st.clone();
+                    st2.spec = Spec::Plain(ok.0);
+                    st2.hyps.push((cond.clone(), hc));
+                    let rest = self.prove_kept(st2)?;
+                    let body = self.lv_red_plain(&st, qi, ok.0, okr, rest)?;
+                    let d = self.close(body, &[cond.clone()], &[])?;
+                    self.psplit_at(&st, qi, &cond, u, d)
+                }
+                _ => Err(format!("{:x}: the wrapper before the procedure's call: {}", st.a, self.print(&self.qs[qi]))),
+            };
         }
         if let Spec::Proc(qi) = st.spec {
             // (the branch conditions spent: not to choose between an `if`'s
@@ -429,6 +653,13 @@ impl<'e> Gen<'e> {
                         return self.push_c_at(&st, g, list, a, xx, dd, k);
                     }
                 }
+                // (the frame's stack objects: at the machine's first store to
+                // one; the instructions before it first)
+                Some(Red::Alloc { op, a, xx, dd, k }) => {
+                    if let Some(pf) = self.alloc_at(&st, qi, &op, &a, &xx, &dd, &k)? {
+                        return Ok(pf);
+                    }
+                }
                 // (a system call: at the machine's syscall)
                 Some(Red::Sys { n, args, a, xx, dd, k }) => {
                     if self.insns.get(&st.a).map(|i| i.row) == Some(156) {
@@ -490,7 +721,120 @@ impl<'e> Gen<'e> {
                 None => {}
             }
         }
+        // after the procedure's result: the wrapper's rest reduced up to its
+        // final part (the stack protector's check before it; the result and
+        // rdx the return's), on the program itself (tr.lv_red, tr.psplit)
+        if let Spec::Ret(val, pr) = st.spec.clone() {
+            if !self.ret_final(&pr) {
+                let qi = self.new_q(pr);
+                self.picked.borrow_mut().clear();
+                match self.reduce(qi, &st.hyps)? {
+                    Some(Red::Q(j, r)) => {
+                        let rs = self.run(&r, &[])?;
+                        let mut st2 = st.clone();
+                        st2.spec = Spec::Ret(val, self.qs[j].clone());
+                        let rest = self.prove_kept(st2)?;
+                        return self.lv_red_plain(&st, qi, j, rs, rest);
+                    }
+                    Some(Red::Split { cond, ok, ub }) => {
+                        let u = self.raise_when_not(&cond, &ub)?;
+                        let hc = self.assume(&cond)?;
+                        let okr = self.run(&ok.1, &[("HC", hc.clone())])?;
+                        let mut st2 = st.clone();
+                        st2.spec = Spec::Ret(val, self.qs[ok.0].clone());
+                        st2.hyps.push((cond.clone(), hc));
+                        let rest = self.prove_kept(st2)?;
+                        let body = self.lv_red_plain(&st, qi, ok.0, okr, rest)?;
+                        let d = self.close(body, &[cond.clone()], &[])?;
+                        return self.psplit_at(&st, qi, &cond, u, d);
+                    }
+                    None => {
+                        if let Some(pf) = self.undef_at(&st, &self.p(&st.spec))? {
+                            return Ok(pf);
+                        }
+                    }
+                    _ => return Err(format!("{:x}: the wrapper's rest after the result: {}", st.a, self.print(&self.qs[qi]))),
+                }
+            }
+        }
         self.insn(st)
+    }
+
+    /// the wrapper's rest after the result at its final part: the result's
+    /// cast and rdx (any), the objects released -- the return's
+    fn ret_final(&self, pr: &Term) -> bool {
+        let Some(mut b) = self.app(pr, "mkprog", 1).map(|x| x[0].clone()) else { return true };
+        loop {
+            if let Some(x) = self.app(&b, "letin", 2) {
+                b = x[1].clone();
+                continue;
+            }
+            if let Some(x) = self.app(&b, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|y| y.to_vec())) {
+                b = x[0].clone();
+                continue;
+            }
+            break;
+        }
+        match self.app(&b, "bind_rel", 5) {
+            Some(x) => self.app(&x[0], "gimple.result", 2).is_some(),
+            None => self.app(&b, "any_rel", 2).is_some() || self.app(&b, "eq", 2).is_some(),
+        }
+    }
+
+    /// the program pr at `if !C { undefined }` with C false by the facts in
+    /// scope (the canary changed): any claim (tr.undef_ub)
+    fn undef_at(&mut self, st: &St, pr: &Term) -> Result<Option<Seq>, String> {
+        let Some(body) = self.app(pr, "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
+        let Some(e) = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())) else { return Ok(None) };
+        let Some(or) = self.app(&e[0], "or", 2).map(|x| x.to_vec()) else { return Ok(None) };
+        let Some(c) = self.app(&or[0], "not", 1).map(|x| x[0].clone()).filter(|c| c.loose_depth(&self.env.binders_fn()) == 0) else { return Ok(None) };
+        let Some(b) = self.app(&e[1], "ex", 1).and_then(|x| self.app(&x[0], "and", 2).map(|y| y.to_vec())) else { return Ok(None) };
+        let Some(l) = self.app(&b[0], "or", 2).and_then(|x| self.app(&x[0], "and", 2).map(|y| y[1].clone())) else { return Ok(None) };
+        let Some(ll) = self.lam(&l, &["x0", "x1", "x2", "x3"], &["x2", "x3"]) else { return Ok(None) };
+        let nc = self.mk("not", vec![c.clone()]);
+        let Some((true, hn)) = self.guard(&nc, &st.hyps) else { return Ok(None) };
+        self.trace(|| format!("at {:x}: undefined ({} false)", st.a, self.print(&c)));
+        let inst = R::Inst("tr.undef_ub".into(), vec![("C", c), ("L", ll), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())]);
+        let args = vec![
+            t(&self.s.clone()),
+            t(&self.v.clone()),
+            t(&self.base.clone()),
+            t(&self.code.clone()),
+            t(&lit(st.fr)),
+            t(&lit(st.a)),
+            t(&st.hst),
+            t(&st.ds),
+            t(&st.rs),
+            t(&st.w),
+            hn,
+            taut(vec![R::S(st.hw.clone())]),
+            taut(vec![R::S(st.hw.clone())]),
+        ];
+        self.run(&mp(inst, args), &[]).map(Some)
+    }
+
+    /// `tr.psplit` at st over cond (the program qi's): the raise u when not,
+    /// the claim d when
+    fn psplit_at(&mut self, st: &St, qi: usize, cond: &Term, u: Seq, d: Seq) -> Result<Seq, String> {
+        let inst = R::Inst(
+            "tr.psplit".into(),
+            vec![
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("a", lit(st.a)),
+                ("hs", st.hst.clone()),
+                ("ds", st.ds.clone()),
+                ("rs", st.rs.clone()),
+                ("w", st.w.clone()),
+                ("q", self.qs[qi].clone()),
+                ("c", cond.clone()),
+            ],
+        );
+        let hw0 = self.hw0.clone().unwrap();
+        self.run(&mp(inst, vec![t(&self.vw.clone()), taut(vec![R::S(hw0)]), p(self.hvu0_r()), s(&u), s(&d)]), &[])
     }
 
     /// the literal facts at st: `L`, a loop step's counter, the maps' deep
@@ -605,7 +949,13 @@ impl<'e> Gen<'e> {
             // (the same value computed otherwise: equal by arithmetic modulo
             // the width, from the facts in scope)
             let mut eqf = Vec::new();
+            // (of the same normal form -- a stack object's address: N's)
             if [1, 2, 4, 8].contains(&k) && self.canon(&v) != self.canon(&x) {
+                if let Some(q) = self.eq_nf_seq(&v, &x)? {
+                    eqf.push(R::S(q));
+                }
+            }
+            if [1, 2, 4, 8].contains(&k) && self.canon(&v) != self.canon(&x) && eqf.is_empty() {
                 let facts: Vec<R> = st.lfx.iter().chain(st.hyps.iter().map(|h| &h.1)).cloned().map(R::S).collect();
                 let e = self.mk("eq", vec![v.clone(), x.clone()]);
                 let defs: Vec<String> = ["bits_add", "bits_mul", "bits_sext"].iter().map(|d| d.to_string()).collect();
@@ -1200,7 +1550,12 @@ impl<'e> Gen<'e> {
         }
         // (the readable CFG: its loop at the body's start, by tr.cfg_lvk)
         if self.cfg.is_none() && st.a == self.cfg_start {
-            return self.cfg_function(st, qi).map(Some);
+            return self.cfg_function(st, qi, false).map(Some);
+        }
+        // (its loop reached within its first block, after the stack
+        // object's allocation there: the CFG from here, tr.cfg_lvk_st)
+        if self.cfg.is_none() && self.hvo.is_some() && self.cfg_meta.is_some() && self.lpg.is_none() {
+            return self.cfg_function(st, qi, true).map(Some);
         }
         Ok(None)
     }
@@ -1628,18 +1983,29 @@ impl<'e> Gen<'e> {
 
     /// `tr.hfree(s, c, n, v)`: the home at c no object
     pub(super) fn hfree_pf(&self, c: u128, n: u128) -> R {
-        mpf("tr.hfree_above", vec![t(&self.s), t(&self.v), t(&lit(c)), t(&lit(n)), p(self.hva_r()), defs(RP::Simp(false, vec![], vec![], false), &["tr.hrange"])])
+        let hr = defs(RP::Simp(false, vec![], vec![], false), &["tr.hrange"]);
+        // (with the frame's object: apart from it by the ranges, tr.vone)
+        if let Some((v0, c0, hvo)) = &self.hvo {
+            return mpf("tr.hfree_one", vec![t(&self.s), t(&self.v), t(v0), t(&lit(*c0)), t(&lit(c)), t(&lit(n)), s(hvo), hr, simp0()]);
+        }
+        mpf("tr.hfree_above", vec![t(&self.s), t(&self.v), t(&lit(c)), t(&lit(n)), p(self.hva_r()), hr])
     }
 
     /// `tr.hfr(s, c, n, v)`, as a home's store takes it: the callers'
     /// objects alone (`tr.vabove`)
     pub(super) fn hfr_pf(&self, c: u128, n: u128) -> R {
+        if self.hvo.is_some() {
+            return mpf("tr.hfr_r", vec![t(&self.s), t(&lit(c)), t(&lit(n)), t(&self.v), p(self.hfree_pf(c, n))]);
+        }
         mpf("tr.hfr_l", vec![t(&self.s), t(&lit(c)), t(&lit(n)), t(&self.v), p(self.hva_r())])
     }
 
     /// `tr.hap(s, hs, v)`, as a store's rule takes it: the callers' objects
     /// alone (`tr.vabove`)
     pub(super) fn hap_pf(&self, hs: &Term) -> R {
+        if self.hvo.is_some() {
+            return mpf("tr.hap_r", vec![t(&self.s), t(hs), t(&self.v), p(self.hapart_term(hs))]);
+        }
         mpf("tr.hap_l", vec![t(&self.s), t(hs), t(&self.v), p(self.hva_r())])
     }
 
@@ -1664,6 +2030,10 @@ impl<'e> Gen<'e> {
 
     /// `tr.ofr(s, fr, v)`: no object the function's own
     pub(super) fn ofr_pf(&self, fr: &Term) -> R {
+        // (with the frame's object: within any frame reaching it, tr.vone)
+        if let Some((v0, c0, hvo)) = &self.hvo {
+            return mpf("tr.ofr_one", vec![t(&self.s), t(fr), t(&self.v), t(v0), t(&lit(*c0)), s(hvo), simp0()]);
+        }
         mpf("tr.ofr_above", vec![t(&self.s), t(fr), t(&self.v), p(self.hva_r())])
     }
 
@@ -1734,12 +2104,18 @@ impl<'e> Gen<'e> {
     /// both branches walked
     #[allow(clippy::too_many_arguments)]
     pub(super) fn compare(&mut self, st: &St, a: u128, a2: u128, insn: &Insn, fs: &str, ts: &[&Term], n: usize, fl: Flags) -> Result<Seq, String> {
-        let (j, len2, a3, tt, cc) = self.jcc(a2)?;
         let mut v = vec![t(&self.s), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(insn.len))];
         v.extend(ts.iter().map(|x| t(x)));
         v.extend([t(&st.hst), t(&st.rs), t(&st.w), p(f(&insn.name))]);
         v.extend((0..n).map(|_| simp_l()));
         let step = mpf(&format!("tr.{fs}"), v);
+        self.compare_x(st, a, a2, step, fl, None)
+    }
+
+    /// ... the flags step `step` (`write`: writing a scratch register g its
+    /// word x too, tr.jcc_w)
+    pub(super) fn compare_x(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, write: Option<(u128, Term)>) -> Result<Seq, String> {
+        let (j, len2, a3, tt, cc) = self.jcc(a2)?;
         let si = |g: &Gen, x: &Term| g.mk("sint", vec![lit(32), x.clone()]);
         let (lemma, c, args, ff) = match &fl {
             Flags::Sub(w, x, y) => {
@@ -1781,11 +2157,24 @@ impl<'e> Gen<'e> {
         let (jn, jw) = if self.insns[&a2].row == 128 { (128, 32) } else { (127, 8) };
         let mut jv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt))];
         jv.extend([t(&lit(len2)), t(&lit(jn)), t(&lit(jw)), t(&lit(cc)), t(&j), t(&c), t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w)]);
+        if let Some((g, x)) = &write {
+            jv.extend([t(&lit(*g)), t(x)]);
+        }
         jv.extend([p(step), p(ccf), p(f(&self.insns[&a2].name))]);
         jv.extend((0..6).map(|_| simp_l()));
+        if write.is_some() {
+            jv.extend([simp_l(), simp_l()]);
+        }
         jv.extend([self.nobp(), p(R::Slot("T")), p(R::Slot("F"))]);
-        let rule = mp(R::Inst("tr.jcc".into(), vec![("ff", ff)]), jv);
-        self.branch(st, c, a3, tt, rule)
+        let (lemma, st2) = match &write {
+            Some((g, x)) => {
+                self.scratch.insert(*g);
+                ("tr.jcc_w", self.set_reg(st, st.a, *g, 8, x.clone()))
+            }
+            None => ("tr.jcc", st.clone()),
+        };
+        let rule = mp(R::Inst(lemma.into(), vec![("ff", ff)]), jv);
+        self.branch(&st2, c, a3, tt, rule)
     }
 
     /// the statics' variable

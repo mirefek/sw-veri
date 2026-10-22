@@ -27,26 +27,22 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
   last `tr.implements_at_s`, with a stack argument -- `mmc.composed`).
   `mp.ap_mm`, `mp.ap_mpr`, `mp.ap_el`: such leaves for `mp.ap_leaves`.
-  Next: get_random_secret, then the hypotheses discharged. It needs, in
-  order:
-  - stack objects in C1 (its `secret`, address-taken; the first such
-    C1): `alloc_objs` at the bridge -- the object's frame offset from the
-    location map, its bytes the entry's (a home from the entry until
-    then), the claims' objects the callers' and the frame's from there
-    (`tr.mem`'s `oacc` for own-frame objects; the return's
-    `world_matches` with the callers' alone, the frame's below sp);
-    rsp-relative accesses to an object as the world's; a call passing
-    one; the `_fun` wrapper's objects restored;
-  - the stack protector's canary (GCC's -fstack-protector-strong on
-    malloc.c; the GIMPLE does not show it): C1 against `tr.ssp(F)` --
-    undefined unless the thread's canary word (fs:0x28) is readable at
-    the entry, or if F returns with it changed (the frame slot a home of
-    the entry's word, the epilogue's `je` split there); C2 shows the
-    word kept (memcpy writes only the stack object);
+  get_random_secret has its C1 (proofs/mallocng/machine/c1_objs.core,
+  `grsc.implements_abi`, memcpy's contract its hypothesis). Next, then
+  the hypotheses discharged:
   - memcpy (musl's assembly): a readable model (byte loop, `rep movsq`
-    as one instruction rule, byte loop), its C1 and its C2 against
-    `memcpy_spec`;
-  - get_random_secret's C2 against `random_secret_spec` (the auxv walk).
+    as one instruction rule, byte loop), its C1 -- loop locals in
+    registers, no frame: the CFG's claims with registers as functions of
+    the locals -- and its C2 against `memcpy_spec`;
+  - get_random_secret's C2 against `random_secret_spec` (the auxv walk;
+    the canary kept: memcpy writes only the stack object). The canary's
+    word must be readable at the entry (the wrapper's `ld64(fs_base, 40)`):
+    neither `abi.thread_ok` (8 bytes at fs) nor `random_secret_spec`
+    says so yet -- a decision: the ABI's thread block (48 bytes), or the
+    spec's `require`.
+  - the stack objects' engine: more than one object (`tr.obj1` is one
+    8-byte object; `alloc_objs` of several), objects read before their
+    first store (none at -O0 yet).
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

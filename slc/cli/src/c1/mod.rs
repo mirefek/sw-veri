@@ -56,11 +56,13 @@ struct Insn {
 }
 
 /// The spec's side at a point: the procedure's rest, or (after its result)
-/// the wrapper's rest, with the value returned.
+/// the wrapper's rest, with the value returned; or a program as it is (a
+/// wrapper's part before the procedure's call: the claim on it itself).
 #[derive(Clone)]
 enum Spec {
     Proc(usize),
     Ret(Term, Term),
+    Plain(usize),
 }
 
 /// A path's state at an address.
@@ -133,6 +135,10 @@ enum Red {
     /// a loop's iteration ended by the body leaving with `e` (`tr.lcont`):
     /// the rest `k` in the wrapper `kw`
     Exit { e: Term, k: Term, kw: Term },
+    /// the frame's stack objects allocated (`gimple.alloc_objs`; the
+    /// machine's first store to the object makes it, tr.astore_r): the
+    /// operation, its continuation, handlers and rest
+    Alloc { op: Term, a: Term, xx: Term, dd: Term, k: Term },
 }
 
 /// The CFG's walk under its loop rule (`tr.cfg_lv`, cfg.rs): its head, the
@@ -359,6 +365,19 @@ struct Gen<'e> {
     hva: Option<Seq>,
     /// the home a store writes (`hkeep`'s): its `tr.hfree`
     last_home: std::cell::Cell<(u128, u128)>,
+    /// a wrapper with more than the procedure's call (`Spec::Plain` at the
+    /// entry): the procedure, whose call in it makes the walk's wrapper
+    reroot: Option<sl_kernel::SymId>,
+    /// the frame's stack objects' keys (the location map's `loc_objs`), and
+    /// once allocated (tr.astore_r) the callers' objects and `tr.vone`'s
+    /// proof (assumed): the homes apart from the object by their ranges
+    objk: Vec<u128>,
+    hvo: Option<(Term, u128, Seq)>,
+    /// the world just after the allocation, its object's word stored there
+    /// (the spec's own store of it, coming after, keeps it: tr.run_kept):
+    /// the world, the world before, the address, the word, the objects, the
+    /// world's equation, the world before's facts
+    objw: Option<(Term, Term, Term, Term, Term, Option<R>, Seq)>,
 }
 
 /// the seconds since the first trace line
@@ -854,6 +873,7 @@ impl<'e> Gen<'e> {
         match spec {
             Spec::Proc(i) => self.wrap_of(&self.qs[*i]),
             Spec::Ret(_, pr) => pr.clone(),
+            Spec::Plain(i) => self.qs[*i].clone(),
         }
     }
 
