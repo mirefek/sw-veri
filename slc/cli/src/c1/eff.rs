@@ -300,6 +300,21 @@ impl<'e> Eff<'e> {
             ];
             return self.api.mp(self.env, f0, a).map_err(|x| format!("{}: {}", rule, x.0));
         }
+        // a call of a callee with stack arguments: its tr.callee_io_s (called with exactly its k)
+        if name == "gimple.call1_s" {
+            let Node::Var(g, _) = args[0].node() else { return Err(format!("a call of other than a callee: {}", self.short(p))) };
+            let (h, k) = self.hios.get(g).cloned().ok_or_else(|| format!("a call of an unknown callee: {}", self.short(p)))?;
+            let f0 = self.api.fact(self.env, "tr.eff_call1_s").map_err(e)?;
+            let a = vec![
+                A::T(self.unlet(&args[0])),
+                A::T(self.unlet(&args[1])),
+                A::T(Term::nat(sl_kernel::Nat::from_u128(k as u128))),
+                A::T(self.unlet(s)),
+                A::G(G::By(h)),
+                A::G(G::Simp(vec![], vec![], false)),
+            ];
+            return self.api.mp(self.env, f0, a).map_err(|x| format!("tr.eff_call1_s: {}", x.0));
+        }
         // an unsigned 64-bit division: its own lemma (w, a, b)
         if name == "gimple.cdiv" && args.len() == 4 && args[0] == Term::nat(sl_kernel::Nat::from_u128(64)) && self.app(&args[3], "false", 0).is_some() {
             let f0 = self.api.fact(self.env, "tr.eff_cdiv64u").map_err(e)?;
@@ -323,6 +338,12 @@ impl<'e> Eff<'e> {
 
     /// the variables called in t (`call(g, args)`, `call1(g, args)`), with
     /// their calls' numbers of arguments (the least)
+    /// a callee's hypothesis: `tr.callee_io(g, k)`, or with more than six
+    /// arguments (stack arguments, CFunS) `tr.callee_io_s(g, k)`
+    fn callee_hyp(&self, g: &Term, k: usize) -> R<Term> {
+        self.mk(if k > 6 { "tr.callee_io_s" } else { "tr.callee_io" }, vec![g.clone(), Term::nat(sl_kernel::Nat::from_u128(k as u128))])
+    }
+
     fn called(&self, t: &Term) -> HashMap<VarId, usize> {
         let mut m: HashMap<VarId, usize> = HashMap::new();
         self.called_in(t, &mut m);
@@ -330,7 +351,7 @@ impl<'e> Eff<'e> {
     }
 
     fn called_in(&self, t: &Term, m: &mut HashMap<VarId, usize>) {
-        for name in ["gimple.call", "gimple.call1"] {
+        for name in ["gimple.call", "gimple.call1", "gimple.call1_s"] {
             if let Some(c) = self.app(t, name, 2) {
                 if let (Node::Var(g, _), Some(k)) = (c[0].node(), list_len(self, &c[1])) {
                     let e = m.entry(*g).or_insert(k);
@@ -369,7 +390,7 @@ impl<'e> Eff<'e> {
             }
             let (pn, pv) = self.fresh("as");
             if let Some(&k) = called.get(p) {
-                let h = self.mk("tr.callee_io", vec![pv.clone(), Term::nat(sl_kernel::Nat::from_u128(k as u128))])?;
+                let h = self.callee_hyp(&pv, k)?;
                 let hs = Seq::assume(self.env, h.clone()).map_err(e)?;
                 self.hios.insert(pn, (hs, k));
                 hyps.push(h);
@@ -405,7 +426,7 @@ impl<'e> Eff<'e> {
         let body = self.open(b, &[lv.clone(), ov.clone()]);
         for (g, k) in self.called(&body) {
             if !self.hios.contains_key(&g) {
-                let h = self.mk("tr.callee_io", vec![Term::var(g, vec![]), Term::nat(sl_kernel::Nat::from_u128(k as u128))])?;
+                let h = self.callee_hyp(&Term::var(g, vec![]), k)?;
                 let hs = Seq::assume(self.env, h).map_err(e)?;
                 self.hios.insert(g, (hs, k));
             }
@@ -431,7 +452,7 @@ impl<'e> Eff<'e> {
             let gv = self.env.new_var(&format!("G{i}"), 0);
             let gt = Term::var(gv, vec![]);
             body = body.subst_var(*p, &gt, &self.env.binders_fn());
-            let h = self.mk("tr.callee_io", vec![gt.clone(), Term::nat(sl_kernel::Nat::from_u128(cn(i) as u128))])?;
+            let h = self.callee_hyp(&gt, cn(i))?;
             let hs = Seq::assume(self.env, h.clone()).map_err(e)?;
             self.hios.insert(gv, (hs, cn(i)));
             ghyps.push(h);

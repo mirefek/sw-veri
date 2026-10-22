@@ -392,13 +392,14 @@ proc[World] os_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64], 
     if uint(addr) % PAGE != 0 { return err(EINVAL) }
     let p = page_of(addr)
     if p + n > TASK_SIZE / PAGE { return err(ENOMEM) }
-    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk
+    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk else { return err(ENOMEM) }
     return bits[64](p * PAGE)
   } else {
-    // (no free place: ENOMEM, as Linux's get_unmapped_area)
-    if !(ex q: nat. q >= 1 && free_range(before, q, n) && (addr != 0 || off_stack_space(before, q, n))) { return err(ENOMEM) }
-    let p = any q: nat where q >= 1 && free_range(before, q, n) && (addr != 0 || off_stack_space(before, q, n))
-    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk
+    // (no free place: ENOMEM, as Linux's get_unmapped_area; the havocs'
+    // else -- no memory with fresh pages, never so for a world's memory --
+    // ENOMEM too, so the call is defined for every state)
+    let p = any nat where p >= 1 && free_range(before, p, n) && (addr != 0 || off_stack_space(before, p, n)) else { return err(ENOMEM) }
+    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk else { return err(ENOMEM) }
     return bits[64](p * PAGE)
   }
 }

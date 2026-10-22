@@ -26,12 +26,20 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
   `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
   last `tr.implements_at_s`, with a stack argument). __mmap has its C2
-  (`ms.mmap_fun_c2`) and its C1 (`mmc.implements`); to link it:
-  __syscall6's `{p}.typed` and `tr.callee_io_s` (eff.rs for a CFunS spec,
-  `tr.eff_sys_call6` -- mmap's fresh pages keep the program loaded),
-  __mmap's own `tr.callee_io` (`tr.eff_call1_s`), then `mmc.linked` /
-  `mmc.composed` (proofs/mallocng/machine/cfg_mmap.core). Then memcpy's
-  model.
+  (`ms.mmap_fun_c2`), its C1 (`mmc.implements`) and its `mmc.io` /
+  `mmc.typed`. To link it: __syscall6's `{p}.typed` and `.io` --
+  `tr.callee_io_s` (eff.rs: a CFunS spec through `tr.callee_io_s_fun`,
+  `tr.fun_typed_s`) from `tr.eff_sys_call6`, by `tr.eff_os_mmap` (os_mmap's
+  returns valid: `tr.mmap_valid`). Two gaps there: simp leaves the
+  free-place branch's empty `any` (the elaborator's `any .. else` is the
+  guard plus an `any_rel`, its empty case after the guard not seen
+  contradictory -- emit `ex` there, or prove that branch by hand; simp with
+  the fixed and free cases' validity, `tr.mmap_valid`, closes every other
+  path); and the page arithmetic needs
+  a1, a2 words, which eff.rs' procedure lemmas do not give for untyped
+  parameters (typed parameters in proc_lemma, or a requirement in
+  sys_call6). Then `mmc.linked` / `mmc.composed`
+  (proofs/mallocng/machine/cfg_mmap.core). Then memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

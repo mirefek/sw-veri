@@ -1063,4 +1063,10 @@ item is a short summary of finished work; details are in the files named.
   `tr.call1_s`, `tr.call1_sc`; `and eax, imm32` of a 64-bit word. The
   engine: call1_s, a callee's CFunS premises (`tr.implements_at_s`, typed
   on lists, `tr.callee_io_s`), the cut points' no-stop from a deeper frame
-  (`tr.nobp_cut_le`).
+  (`tr.nobp_cut_le`). Effects for callers of a stack-argument callee:
+  `tr.eff_call_s` / `tr.eff_call1_s` (generated copy of tr.eff_call),
+  `tr.callee_io_s_fun`, eff.rs's `tr.callee_io_s` hypotheses (`mmc.io`);
+  `tr.mmap_valid` (fresh pages on no executable page keep the world valid).
+  The kernel model's os_mmap: its havocs `else { ENOMEM }` (a memory with
+  fresh pages always exists for a world's; defined for every state), the
+  free place by `any .. else`.

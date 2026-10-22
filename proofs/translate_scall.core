@@ -1433,3 +1433,203 @@ proof
     dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)],
     hat, ha2, hoff, hb, hf, h8, hal, himp, hld, hcb, hcf, h6, l7, hi7, hin7, hx, hgt, expand(hio, tr.callee_io_s), hreg, hsub, hhin, hcd, hcx, hfo, hfd, hk, hd, hpost, hbf)
 qed
+
+// (GIMPLE's call of a callee with stack arguments: as tr.eff_call, the
+// callee's returns for its n arguments)
+theorem tr.eff_call_s: all g args n w. tr.callee_io_s(g, n) -> seq_len(args) = n -> tr.eff(w, o. runs(gimple.call(g, args), w, o))
+proof
+  fix g args n w
+  assume hio hn
+  let C := gimple.call(g, args)
+  // (all exceptions and divergences: the call undefined)
+  let U := tr.undef(o. runs(C, w, o))
+  have toE: U -> tr.eff(w, o. runs(C, w, o)) proof
+    assume hu
+    show by defs(taut(hu), tr.eff)
+  qed
+  // (a world outside the universe: no run at all)
+  have nu: !(w in univ(1)) -> tr.eff(w, o. runs(C, w, o)) proof
+    assume hn0
+    have g0: all w2 v. runs(C, w, ok(w2, v)) -> tr.returns_valid(w, w2) proof
+      fix w2 v
+      assume h
+      have pu: pair(w, ok(w2, v)) in univ(1) by taut(unsel(expand(h, runs, gimple.call, mkprog)))
+      have f: false by simp(pu, hn0)
+      show by taut(f)
+    qed
+    show by defs(taut(g0), tr.eff)
+  qed
+  have yu: w in univ(1) -> tr.eff(w, o. runs(C, w, o)) proof
+    assume hw
+    // no registers possible, the thread pointer broken, or the callee
+    // undefined for some registers: the call undefined
+    have u0: !(ex regs. gc.regs_ok(regs, args)) -> tr.eff(w, o. runs(C, w, o)) proof
+      assume hr
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e)) proof
+        fix x e
+        assume hx he
+        show := apply(tr.call_noregs, {g}, {args}, {w}, {x}, {e}, hw, hx, he, hr)
+      qed
+      have dv: all t. t in univ(1) -> runs(C, w, diverge(t)) proof
+        fix t
+        assume ht
+        show := apply(tr.call_noregs_div, {g}, {args}, {w}, {t}, hw, ht, hr)
+      qed
+      have hu: U by defs(taut(ex, dv), tr.undef)
+      show := mp(toE, hu)
+    qed
+    have u1: (ex regs. gc.regs_ok(regs, args)) -> !gc.sound(w) -> tr.eff(w, o. runs(C, w, o)) proof
+      assume hr hs
+      obtain regs, rg from hr
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e)) proof
+        fix x e
+        assume hx he
+        show := apply(gc.call_ub, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, rg, hs)
+      qed
+      have dv: all t. t in univ(1) -> runs(C, w, diverge(t)) proof
+        fix t
+        assume ht
+        show := apply(gc.call_ub_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, rg, hs)
+      qed
+      have hu: U by defs(taut(ex, dv), tr.undef)
+      show := mp(toE, hu)
+    qed
+    have u2: (ex regs. gc.regs_ok(regs, args) && tr.may_raise(g, regs, w)) -> gc.sound(w) -> tr.eff(w, o. runs(C, w, o)) proof
+      assume hr hs
+      obtain regs, r1 r2 r3 hm from hr
+      have rg: gc.regs_ok(regs, args) := conj(r1, r2, r3)
+      have hm2 := expand(expand(hm, tr.may_raise), tr.undef)
+      have mx: all x e. x in univ(1) -> e in univ(1) -> runs(g[regs], w, exc(x, e)) by taut(hm2)
+      have md: all t. t in univ(1) -> runs(g[regs], w, diverge(t)) by taut(hm2)
+      have ex: all x e. x in univ(1) -> e in univ(1) -> runs(C, w, exc(x, e)) proof
+        fix x e
+        assume hx he
+        have c := mp(all_elim(mx, {x}, {e}), hx, he)
+        show := apply(gc.call_exc, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, rg, hs, c)
+      qed
+      have dv: all t. t in univ(1) -> runs(C, w, diverge(t)) proof
+        fix t
+        assume ht
+        have c := mp(all_elim(md, {t}), ht)
+        show := apply(gc.call_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, rg, hs, c)
+      qed
+      have hu: U by defs(taut(ex, dv), tr.undef)
+      show := mp(toE, hu)
+    qed
+    // otherwise every return of the call is the callee's, which keeps the world valid
+    have v: (ex regs. gc.regs_ok(regs, args)) -> gc.sound(w) -> !(ex regs. gc.regs_ok(regs, args) && tr.may_raise(g, regs, w)) -> tr.eff(w, o. runs(C, w, o)) proof
+      assume hr hs hnm
+      have g0: all w2 v. runs(C, w, ok(w2, v)) -> tr.returns_valid(w, w2) proof
+        fix w2 v
+        assume h
+        have cs := apply(gc.call_cases, h)
+        have c0: ok(w2, v) = exc(w, exc_val("stack_overflow", empty)) -> tr.returns_valid(w, w2) proof
+          assume e
+          have f: false by simp(e)
+          show by taut(f)
+        qed
+        have c1: gc.cc(g, args, w, ok(w2, v)) -> tr.returns_valid(w, w2) proof
+          assume hc
+          obtain o1, h1 hk from expand(hc, bind_rel)
+          have ci := apply(gc.cc_inv, hs, h1, hr)
+          obtain regs o2, r1 r2 r3 ho2 hcase from ci
+          have rg: gc.regs_ok(regs, args) := conj(r1, r2, r3)
+          have rl := r2
+          have k1: (ex s1 v1. o1 = ok(s1, v1) && letin(v1, x5. gc.aft(s1, x5, ok(w2, v)))) -> tr.returns_valid(w, w2) proof
+            assume e
+            obtain s1 v1, eo1 ha from e
+            have af := apply(gc.aft_inv, expand(ha, letin))
+            have ws: w2 = s1 by simp(af)
+            have q1: (ex w4 r. o2 = ok(w4, r) && o1 = ok(gc.back(w4, w), pair(fst(r), snd(r)))) -> tr.returns_valid(w, w2) proof
+              assume e2
+              obtain w4 r, eo2 eo1b from e2
+              have sb: s1 = gc.back(w4, w) by simp(eo1, eo1b)
+              have hg := rewrite(eo2, ho2)
+              have io := mp(all_elim(expand(hio, tr.callee_io_s), {regs}, {w}, {w4}, {r}), r1, (seq_len(regs) = n by simp(rl, hn)), hg)
+              have nm: !tr.may_raise(g, regs, w) proof
+                have c: tr.may_raise(g, regs, w) -> false proof
+                  assume hm
+                  have ex1: ex regs. gc.regs_ok(regs, args) && tr.may_raise(g, regs, w) by ex_intro({regs}, conj(rg, hm))
+                  show by taut(ex1, hnm)
+                qed
+                show by taut(c)
+              qed
+              have rv: tr.returns_valid(w, w4) by taut(io, nm)
+              have rb := apply(tr.rv_back, {w}, {w4}, {w.objs}, rv)
+              show by simp(ws, sb, rb, keep(tr.returns_valid))
+            qed
+            have q2: (ex x e. o2 = exc(x, e) && o1 = exc(x, e)) -> tr.returns_valid(w, w2) proof
+              assume e2
+              obtain x e, _ eo1b from e2
+              have f: false by simp(eo1, eo1b)
+              show by taut(f)
+            qed
+            have q3: (ex t. o2 = diverge(t) && o1 = diverge(t)) -> tr.returns_valid(w, w2) proof
+              assume e2
+              obtain t, _ eo1b from e2
+              have f: false by simp(eo1, eo1b)
+              show by taut(f)
+            qed
+            show by taut(hcase, q1, q2, q3)
+          qed
+          have k2: (ex s1 e1. o1 = exc(s1, e1) && ok(w2, v) = exc(s1, e1)) -> tr.returns_valid(w, w2) proof
+            assume e
+            obtain s1 e1, _ eo from e
+            have f: false by simp(eo)
+            show by taut(f)
+          qed
+          have k3: (ex t. o1 = diverge(t) && ok(w2, v) = diverge(t)) -> tr.returns_valid(w, w2) proof
+            assume e
+            obtain t, _ eo from e
+            have f: false by simp(eo)
+            show by taut(f)
+          qed
+          show by taut(hk, k1, k2, k3)
+        qed
+        show by taut(cs, c0, c1)
+      qed
+      show by defs(taut(g0), tr.eff)
+    qed
+    show by taut(u0, u1, u2, v)
+  qed
+  show by taut(nu, yu)
+qed
+
+// ... call1_s (rax the result)
+theorem tr.eff_call1_s: all g args n w. tr.callee_io_s(g, n) -> seq_len(args) = n -> tr.eff(w, o. runs(gimple.call1_s(g, args), w, o))
+proof
+  fix g args n w
+  assume hio hn
+  have c := mp(all_elim(tr.eff_call_s, {g}, {args}, {n}, {w}), hio, hn)
+  have b := mp(all_elim(tr.eff_bind_ret[p := gimple.call(g, args), f := v. fst(v)], {w}), c)
+  have c1: tr.eff(w, o. runs(gimple.call1(g, args), w, o)) by defs(apply(tr.eff_prog, {w}, b), gimple.call1, letin)
+  show := rewrite(sym(all_elim(gc.call1_s_eq, {g}, {args})), c1)
+qed
+
+// a spec with stack arguments built as GIMPLE's `_fun` wrappers are (a
+// program per argument list): its returns for n arguments by their effect
+theorem tr.callee_io_s_fun(x0 x1 x2. r): all n. (all args w. args in list_type(bits(64)) -> seq_len(args) = n -> tr.eff(w, o. runs(mkprog(x1 x2. r(args, x1, x2)), w, o))) ->
+  tr.callee_io_s(fn_build(list_type(bits(64)), x0. mkprog(x1 x2. r(x0, x1, x2))), n)
+proof
+  fix n
+  assume h
+  have g: all args w w2 rr. args in list_type(bits(64)) -> seq_len(args) = n -> runs(fn_build(list_type(bits(64)), x0. mkprog(x1 x2. r(x0, x1, x2)))[args], w, ok(w2, rr)) ->
+      tr.returns_valid(w, w2) || tr.may_raise(fn_build(list_type(bits(64)), x0. mkprog(x1 x2. r(x0, x1, x2))), args, w) proof
+    fix args w w2 rr
+    assume ha hn hr
+    have _ hp := apply(runs_fn_build, hr)
+    have e := expand(mp(all_elim(h, {args}, {w}), ha, hn), tr.eff)
+    have ap := mp(app_fn_build[d := list_type(bits(64)), v := x0. mkprog(x1 x2. r(x0, x1, x2)), a := args], ha)
+    have c1: (all w3 v. runs(mkprog(x1 x2. r(args, x1, x2)), w, ok(w3, v)) -> tr.returns_valid(w, w3)) -> tr.returns_valid(w, w2) proof
+      assume hv
+      show := mp(all_elim(hv, {w2}, {rr}), hp)
+    qed
+    have c2: tr.undef(o. runs(mkprog(x1 x2. r(args, x1, x2)), w, o)) ->
+        tr.may_raise(fn_build(list_type(bits(64)), x0. mkprog(x1 x2. r(x0, x1, x2))), args, w) proof
+      assume hu
+      show by defs(rewrite(sym(ap), hu), tr.may_raise)
+    qed
+    show by taut(e, c1, c2)
+  qed
+  show by defs(g, tr.callee_io_s)
+qed

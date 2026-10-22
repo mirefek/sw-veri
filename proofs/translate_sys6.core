@@ -644,3 +644,56 @@ proof
   qed
   show by defs(g, tr.lv)
 qed
+
+// ----------------------------------------------------------------------
+//  The call's effect (tr.eff, for its callers' tr.callee_io): its returns
+//  keep the world valid -- the program loaded (its code on executable
+//  pages, mmap's fresh pages none of them: sys_pages_ok, or free), the
+//  break's start
+
+// fresh pages on no executable page: the world valid still
+theorem tr.mmap_valid(w, V, p, n, pg): p in omega -> n in omega ->
+  (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> x86_64_linux.mapped(w.vm, q) -> !snd(w.vm.pages[q]).prot.x) ->
+  gimple.fresh_pages(w.vm, V, p, n, pg) -> tr.returns_valid(w, fn_update(w, "vm", V))
+proof
+  assume hp hn hnx hf
+  let W2 := fn_update(w, "vm", V)
+  have vt vl vb vpg vby := expand(hf, gimple.fresh_pages)
+  // the program loaded: its pages executable, so not fresh
+  let G := all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(V, gb, gc, st)
+  have g: G proof
+    fix gb gc st
+    assume _ hl
+    have l1 l2 := expand(hl, abi.loaded)
+    have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+        V.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] = w.vm.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] &&
+        V.bytes[bits_of_int(64, int_add(gb, i))] = w.vm.bytes[bits_of_int(64, int_add(gb, i))] proof
+      fix i
+      assume hi hli
+      let A := bits_of_int(64, int_add(gb, i))
+      let Q := x86_64_linux.page_of(A)
+      have fm fx qo ab := apply(tr.code_pg, l1, hi, hli)
+      have nr: !(int_le(p, Q) && int_lt(Q, int_add(p, n))) proof
+        assume hr
+        have h1 h2 := hr
+        show by taut(mp(all_elim(hnx, {Q}), qo, h1, h2, fm), fx)
+      qed
+      have ql _ := expand(fm, x86_64_linux.mapped)
+      have ep := apply(tr.ite_no, mp(all_elim(vpg, {Q}), qo, ql), nr)
+      have rng := apply(tr.pg_rng, ab, hp, hn)
+      have nb: !(int_le(int_mul(p, x86_64_linux.PAGE), A) && int_lt(A, int_mul(int_add(p, n), x86_64_linux.PAGE))) by taut(rng, nr)
+      have eb := apply(tr.ite_no, mp(all_elim(vby, {A}), ab), nb)
+      show by taut(ep, eb)
+    qed
+    have cd2 := apply(tr.code_at_tr, l1, e)
+    have s2 := apply(tr.statics_same, {w.vm}, {V}, {st}, vt, vl, l2)
+    show by defs(taut(cd2, s2), abi.loaded)
+  qed
+  have ev: W2.vm = V by rsimp()
+  have eos: W2.os = w.os by rsimp()
+  have ecp: W2.cpu = w.cpu by rsimp()
+  have l: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(W2.vm, gb, gc, st) := rewrite(sym(ev), g)
+  have ei: W2.os.input = w.os.input by rsimp()
+  have se: subset(w.os.events, W2.os.events) := rewrite(sym(eos), subset_refl[s := w.os.events], {2})
+  show by defs(taut(ei, se, l, ecp, rewrite(sym(ev), vb)), tr.returns_valid)
+qed
