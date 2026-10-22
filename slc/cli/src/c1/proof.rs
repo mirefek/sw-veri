@@ -787,8 +787,8 @@ impl<'e> Gen<'e> {
         )
     }
 
-    /// A system call (tr.sys_call1, tr.sys_call3): the machine's `syscall` at
-    /// st's address, rax and rdi (rsi, rdx) holding the spec's number and
+    /// A system call (tr.sys_call1, tr.sys_call3, tr.sys_call6): the machine's
+    /// `syscall` at st's address, rax and rdi (rsi, rdx, r10, r8, r9) holding the spec's number and
     /// arguments; the claim after it (rax the result, the other registers
     /// not known, the frame rsp's page) for every world and result
     #[allow(clippy::too_many_arguments)]
@@ -799,10 +799,12 @@ impl<'e> Gen<'e> {
         let (rule, names): (&str, &[&str]) = match args.len() {
             1 => ("tr.sys_call1", &["a1"]),
             3 => ("tr.sys_call3", &["a1", "b2", "b3"]),
-            n => return Err(format!("{:x}: a system call with {} arguments (1 or 3 so far)", a, n)),
+            6 => ("tr.sys_call6", &["a1", "b2", "b3", "b4", "b5", "b6"]),
+            n => return Err(format!("{:x}: a system call with {} arguments (1, 3 or 6)", a, n)),
         };
         let mut regs = vec![(0u128, &nv)];
-        for (r, x) in [7u128, 6, 2].iter().zip(args.iter()) {
+        // (Linux's argument registers: rdi, rsi, rdx, r10, r8, r9)
+        for (r, x) in [7u128, 6, 2, 10, 8, 9].iter().zip(args.iter()) {
             regs.push((*r, x));
         }
         for (r, x) in regs {

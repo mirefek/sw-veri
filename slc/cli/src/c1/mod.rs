@@ -125,7 +125,7 @@ enum Red {
     /// a call of `g` (the machine's `call` makes it): the block's
     /// continuation, handlers and rest (`one`: call1, the result's rax only)
     Call { g: Term, args: Vec<Term>, list: Term, one: bool, a: Term, xx: Term, dd: Term, k: Term },
-    /// a system call (gimple.sys_call1, sys_call3; the machine's `syscall`
+    /// a system call (gimple.sys_call1, sys_call3, sys_call6; the machine's `syscall`
     /// makes it): its number and arguments, the block's continuation,
     /// handlers and rest
     Sys { n: Term, args: Vec<Term>, a: Term, xx: Term, dd: Term, k: Term },
@@ -190,6 +190,15 @@ enum Pick {
     L,
     R,
     And(Term, rec::RA),
+}
+
+#[derive(Clone)]
+struct SArgs {
+    stk: Term,
+    hsa: Seq,
+    hso: Seq,
+    hstk: Seq,
+    args: Vec<(Term, Seq, Seq)>,
 }
 
 struct Gen<'e> {
@@ -263,6 +272,12 @@ struct Gen<'e> {
     /// system call needs it -- else the claim is for any alignment
     ent_m: Option<(Seq, Term)>,
     ent_al: Option<(Term, Seq)>,
+    /// a function with stack arguments (beyond the six in registers): the
+    /// arguments' list stk, `abi.stack_args(s, stk)`, `tr.sargs_off(s, v,
+    /// seq_len(stk))`, `stk in list_type(bits(64))` and by argument j its
+    /// facts `int_lt(j, seq_len(stk))`, `x = bits_of_int(64, stk[j])` (x
+    /// the spec's argument)
+    sargs: Option<SArgs>,
     hcall: Vec<Option<Seq>>,
     htyp: Vec<Option<Seq>>,
     hio: Vec<Option<Seq>>,

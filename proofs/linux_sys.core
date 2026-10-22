@@ -1176,7 +1176,7 @@ qed
 // sys_mmap in closed form, N the pages: flags or protection beyond the
 // model, undefined; EINVAL (an offset off a page, no length, a fixed address
 // off a page); ENOMEM (refused, or a fixed mapping beyond the task's top);
-// no free place where one is asked for, undefined; else fresh pages at p
+// no free place where one is asked for, ENOMEM too); else fresh pages at p
 // (the fixed address' page, or a free place off page 0, off the stack's
 // space without a hint), p's address back
 theorem lx.sys_mmap_ok(x, addr, len, prot, flags, fd, off, o): lx.rec(x) -> addr in omega -> len in omega ->
@@ -1188,8 +1188,6 @@ theorem lx.sys_mmap_ok(x, addr, len, prot, flags, fd, off, o): lx.rec(x) -> addr
   (o = ok(x, x86_64_linux.err(x86_64_linux.EINVAL)) &&
     (!(int_mod(off, x86_64_linux.PAGE) = 0) || len = 0 || (bit(flags, 4) && !(int_mod(addr, x86_64_linux.PAGE) = 0)))) ||
   (o = ok(x, x86_64_linux.err(x86_64_linux.ENOMEM)) && int_mod(off, x86_64_linux.PAGE) = 0 && !(len = 0)) ||
-  (!bit(flags, 4) && !(ex q. q in omega && ((int_le(1, q) && x86_64_linux.free_range(x.vm, q, x86_64_linux.pages_for(len))) &&
-    (!(addr = 0) || x86_64_linux.off_stack_space(x.vm, q, x86_64_linux.pages_for(len)))))) ||
   (ex p Q B. int_mod(off, x86_64_linux.PAGE) = 0 && !(len = 0) && p in omega &&
     ((bit(flags, 4) && p = x86_64_linux.page_of(addr) && int_mod(addr, x86_64_linux.PAGE) = 0 &&
        int_le(int_add(p, x86_64_linux.pages_for(len)), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ||
@@ -1210,8 +1208,6 @@ proof
   let D2 := o = ok(x, x86_64_linux.err(x86_64_linux.EINVAL)) &&
     (!(int_mod(off, x86_64_linux.PAGE) = 0) || len = 0 || (bit(flags, 4) && !(int_mod(addr, x86_64_linux.PAGE) = 0)))
   let D3 := o = ok(x, x86_64_linux.err(x86_64_linux.ENOMEM)) && int_mod(off, x86_64_linux.PAGE) = 0 && !(len = 0)
-  let D4 := !bit(flags, 4) && !(ex q. q in omega && ((int_le(1, q) && x86_64_linux.free_range(x.vm, q, N)) &&
-    (!(addr = 0) || x86_64_linux.off_stack_space(x.vm, q, N))))
   let D5 := ex p Q B. int_mod(off, x86_64_linux.PAGE) = 0 && !(len = 0) && p in omega &&
     ((bit(flags, 4) && p = PA && int_mod(addr, x86_64_linux.PAGE) = 0 && int_le(int_add(p, N), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ||
      (!bit(flags, 4) && int_le(1, p) && x86_64_linux.free_range(x.vm, p, N) && (!(addr = 0) || x86_64_linux.off_stack_space(x.vm, p, N)))) &&
@@ -1224,7 +1220,7 @@ proof
   have pao: PA in omega by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
   have b := expand(apply(g.runs_elim, expand(hr, x86_64_linux.sys_mmap)), letin)
   have eo: fst(out_state(ok(pair(x, empty), empty))) = x by rsimp()
-  have m: FL -> int_lt(prot, 8) -> D2 || D3 || D4 || D5 proof
+  have m: FL -> int_lt(prot, 8) -> D2 || D3 || D5 proof
     assume hf h8
     obtain x3, d3 k3 from apply(lx.or_r, apply(lx.or_r, b, hf), h8)
     have m1: !(int_mod(off, x86_64_linux.PAGE) = 0) -> D2 proof
@@ -1232,7 +1228,7 @@ proof
       have o1 := apply(lx.top_ret, rewrite(apply(lx.case_t, d3, h), k3))
       show by taut(o1, h)
     qed
-    have m2: int_mod(off, x86_64_linux.PAGE) = 0 -> D2 || D3 || D4 || D5 proof
+    have m2: int_mod(off, x86_64_linux.PAGE) = 0 -> D2 || D3 || D5 proof
       assume hof
       have e3 := apply(lx.case_f, d3, (!!(int_mod(off, x86_64_linux.PAGE) = 0) by taut(hof)))
       obtain x4, d4 k4 from rewrite(eo, apply(lx.top_go, rewrite(e3, k3)))
@@ -1241,7 +1237,7 @@ proof
         have o1 := apply(lx.top_ret, rewrite(apply(lx.case_t, d4, h), k4))
         show by taut(o1, h)
       qed
-      have l1: !(len = 0) -> D2 || D3 || D4 || D5 proof
+      have l1: !(len = 0) -> D2 || D3 || D5 proof
         assume hn0
         have e4 := apply(lx.case_f, d4, hn0)
         obtain x6, d6 k6 from rewrite(eo, apply(lx.top_go, rewrite(e4, k4)))
@@ -1251,7 +1247,7 @@ proof
           have o1 := apply(lx.top_ret, rewrite(e6, k6))
           show by taut(o1, hof, hn0)
         qed
-        have g6: x6 = ok(pair(x, empty), empty) -> D2 || D3 || D4 || D5 proof
+        have g6: x6 = ok(pair(x, empty), empty) -> D2 || D3 || D5 proof
           assume e6
           obtain x8, d8 k8 from rewrite(eo, apply(lx.top_go, rewrite(e6, k6)))
           // (the place found: p's fresh pages)
@@ -1303,9 +1299,17 @@ proof
             show by taut(f1, f2)
           qed
           // a free place
-          have nf: !bit(flags, 4) -> D4 || D5 proof
+          have nf: !bit(flags, 4) -> D3 || D5 proof
             assume hb
-            have an := expand(apply(lx.case_f, d8, hb), any_rel)
+            let FR := ex q. q in omega && ((int_le(1, q) && x86_64_linux.free_range(x.vm, q, N)) && (!(addr = 0) || x86_64_linux.off_stack_space(x.vm, q, N)))
+            obtain x9, d9 k9 from apply(lx.case_f, d8, hb)
+            // (none: ENOMEM)
+            have f1: !FR -> D3 proof
+              assume h
+              have e8 := apply(lx.ib_ret, rewrite(apply(lx.case_t, d9, h), k9))
+              have o1 := apply(lx.top_ret, rewrite(e8, k8))
+              show by taut(o1, hof, hn0)
+            qed
             have s1: (ex q. q in omega && ((int_le(1, q) && x86_64_linux.free_range(x.vm, q, N)) && (!(addr = 0) || x86_64_linux.off_stack_space(x.vm, q, N))) &&
                 x8 = ok(pair(x, q), empty)) -> D5 proof
               assume e
@@ -1314,7 +1318,14 @@ proof
               obtain Q B, o1 hq hb2 hqt hbt2 from mp(all_elim(tail, {q}), qo, ht, e8)
               show by ex_intro({q}, {Q}, {B}, taut(hof, hn0, qo, hb, q1, fr, os, o1, hq, hb2, hqt, hbt2))
             qed
-            show by taut(an, hb, s1)
+            // (one: the choice among them)
+            have f2: FR -> D5 proof
+              assume hfr
+              have e0: fst(out_state(ok(pair(x, 0), empty))) = x by rsimp()
+              have an := expand(rewrite(e0, apply(lx.ib_go, rewrite(apply(lx.case_f, d9, (!!FR by taut(hfr))), k9))), any_rel)
+              show by taut(an, hfr, s1)
+            qed
+            show by taut(f1, f2)
           qed
           show by taut(fx, nf)
         qed

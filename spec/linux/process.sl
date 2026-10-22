@@ -178,7 +178,9 @@ proc sys_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64],
     // the address hint may or may not be honoured (a free place); without
     // a hint, off the stack's space (Linux: below mmap_base); never page 0
     // (POSIX: "When the implementation selects a value for pa, it never
-    // places a mapping at address 0")
+    // places a mapping at address 0"); no such place: ENOMEM (Linux's
+    // get_unmapped_area failing)
+    if !(ex q: nat. q >= 1 && free_range(vm, q, n) && (addr != 0 || off_stack_space(vm, q, n))) { return err(ENOMEM) }
     p := any q: nat where q >= 1 && free_range(vm, q, n) && (addr != 0 || off_stack_space(vm, q, n))
   }
   map_pages(p, n, Page { prot: prot_of(prot), kind: anon })   // MAP_FIXED replaces

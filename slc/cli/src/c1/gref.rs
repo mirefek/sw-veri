@@ -136,6 +136,8 @@ impl<'e> Gen<'e> {
         let concl = self.mk("runs", vec![self.mk("app", vec![fapp(self, high), regs.clone()]), w.clone(), o.clone()]);
         let prem_t = self.mk("runs", vec![self.mk("app", vec![fapp(self, low), regs.clone()]), w.clone(), o.clone()]);
         let lt = self.parse("list_type(bits(64))")?;
+        // (a function with stack arguments, CFunS: any number of them)
+        let stk_dom = self.canon(&fl[0]) == self.canon(&lt);
         let h1 = self.mk("in", vec![regs.clone(), lt]);
         let h2 = self.mk("int_le", vec![self.mk("seq_len", vec![regs.clone()]), lit(6)]);
         let h3 = self.mk("in", vec![w.clone(), self.mk("abi.World", vec![])]);
@@ -143,7 +145,8 @@ impl<'e> Gen<'e> {
         let hpl = self.run(&R::Expand(Box::new(R::S(hp)), vec![low.to_string()]), &[])?;
         let r1 = self.run(&mp(R::S(fun), vec![t(&regs), t(&w), t(&o), s(&hpl)]), &[])?;
         let r3 = self.evp(&RP::Defs(Box::new(RP::By(R::S(r1))), vec![high.to_string()]), &concl, &[])?;
-        let r4 = self.close(r3, &[h1, h2, h3, prem_t], &[Self::var_id(&regs), Self::var_id(&w), Self::var_id(&o)])?;
+        let hs = if stk_dom { vec![h1, h3, prem_t] } else { vec![h1, h2, h3, prem_t] };
+        let r4 = self.close(r3, &hs, &[Self::var_id(&regs), Self::var_id(&w), Self::var_id(&o)])?;
         // (the callees' tr.callee_io the loops' records need: premises after
         // the callees)
         self.close(r4, &cio, &gs.iter().map(Self::var_id).collect::<Vec<_>>())

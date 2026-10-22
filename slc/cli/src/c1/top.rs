@@ -127,6 +127,7 @@ impl<'e> Gen<'e> {
             hl: None,
             ent_m: None,
             ent_al: None,
+            sargs: None,
             hcall: Vec::new(),
             htyp: Vec::new(),
             hio: Vec::new(),
@@ -252,18 +253,20 @@ impl<'e> Gen<'e> {
         self.lbase = lb.clone();
         self.lcode = lc.clone();
         // the wrapper: PROC(x0); KW(x3, x4, x2); the wrapper's rest
-        let parts = (|| -> Option<(u128, Term, Term, Term)> {
+        let parts = (|| -> Option<(u128, Term, Term, Term, Option<Term>)> {
             let fb = self.app(&sbody, "fn_build", 2)?;
             let mp = self.app(&fb[1], "mkprog", 1)?;
-            let (nargs, br) = match self.app(&mp[0], "or", 2) {
+            let (nargs, br, bl) = match self.app(&mp[0], "or", 2) {
                 Some(or) => {
                     let guard = self.app(&or[0], "not", 1)?;
                     let le = self.app(&guard[0], "ord_le", 2)?;
                     let n = nat(&le[0])?;
-                    (1..=6).contains(&n).then_some(())?;
-                    (n, self.app(&or[1], "bind_rel", 5)?.to_vec())
+                    (n >= 1).then_some(())?;
+                    // (beyond six arguments, B: x0 x1 x2. the guard's other side)
+                    let bl = if n > 6 { Some(self.lam(&or[1], &["x0", "x1", "x2"], &["x0", "x1", "x2"])?) } else { None };
+                    (n, self.app(&or[1], "bind_rel", 5)?.to_vec(), bl)
                 }
-                None => (0, self.app(&mp[0], "bind_rel", 5)?.to_vec()),
+                None => (0, self.app(&mp[0], "bind_rel", 5)?.to_vec(), None),
             };
             matches!(br[1].node(), Node::BVar(1)).then_some(())?;
             let proc = self.lam(&br[0], &["x0", "x1", "x2"], &["x0"])?;
@@ -273,10 +276,16 @@ impl<'e> Gen<'e> {
             let mut wa = vec![q_t.clone()];
             wa.extend(rest);
             let wrap = self.mk("mkprog", vec![self.mk("bind_rel", wa)]);
-            Some((nargs, proc, kw, wrap))
+            Some((nargs, proc, kw, wrap, bl))
         })();
-        let (nargs, proc, kw, wrap) = parts.ok_or_else(|| format!("`{}`: not a procedure's spec", spec_name))?;
+        let (nargs, proc, kw, wrap, bl) = parts.ok_or_else(|| format!("`{}`: not a procedure's spec", spec_name))?;
         let guarded = nargs > 0;
+        // (beyond six arguments: the rest on the stack, the list stk; the
+        // spec's arguments seq_concat(args, stk))
+        let nregs = nargs.min(6);
+        let nstk = nargs.saturating_sub(6);
+        let stk = self.var("stk");
+        let cat = |g: &Gen, l: &Term| if nstk > 0 { g.mk("seq_concat", vec![l.clone(), stk.clone()]) } else { l.clone() };
         self.kw = kw.clone();
         self.wrap = self.abs(&wrap, &[Self::var_id(&q_t)]);
         // (the result's width: the wrapper's gimple.result(N, ..))
@@ -340,7 +349,7 @@ impl<'e> Gen<'e> {
         let h_vo = self.mk("in", vec![vv.clone(), self.mk("set_type", vec![self.mk("omega", vec![])])]);
         let h_mv = self.mk("in", vec![mem.clone(), self.mk("x86_64_linux.Vm", vec![])]);
         let h_m = self.mk("in", vec![s.clone(), self.mk("x86_64_linux.Machine", vec![])]);
-        let h_g = self.mk("ord_le", vec![lit(nargs), self.mk("seq_len", vec![args_t.clone()])]);
+        let h_g = self.mk("ord_le", vec![lit(nregs), self.mk("seq_len", vec![args_t.clone()])]);
         let h_l = self.mk("abi.loaded", vec![self.mk("app", vec![s.clone(), Term::bytes(b"vm")]), lb.clone(), lc.clone(), statics.clone()]);
         let h_vu = univ1(self, &view);
         let mut inner_h = vec![h_a.clone(), h_vo.clone(), h_mv.clone(), h_m.clone()];
@@ -367,7 +376,7 @@ impl<'e> Gen<'e> {
         self.hw0 = Some(hw.clone());
         self.hvu0 = Some(s_hvu.clone());
         // the entry: the arguments in their registers (64 bits each)
-        let q0raw = proc.instantiate_params(&[args_t.clone()], &self.env.binders_fn());
+        let q0raw = proc.instantiate_params(&[cat(self, &args_t)], &self.env.binders_fn());
         let q0 = self.canon(&q0raw);
         let i0 = self.new_q(q0);
         let argregs = [7u128, 6, 2, 1, 8, 9];
@@ -401,11 +410,11 @@ impl<'e> Gen<'e> {
             st0 = self.set_reg(&st0, entry, r, 8, v.clone());
             rs_lam = self.upd(&rs_lam, r, 8, &v);
         }
-        for i in 0..nargs {
+        for i in 0..nregs {
             let r = argregs[i as usize];
-            let v = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![args_t.clone(), lit(i)])]);
+            let v = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![cat(self, &args_t), lit(i)])]);
             st0 = self.set_reg(&st0, entry, r, 8, v);
-            let vx = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![x0.clone(), lit(i)])]);
+            let vx = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![cat(self, &x0), lit(i)])]);
             rs_lam = self.upd(&rs_lam, r, 8, &vx);
         }
         let rs_args = st0.rs.clone();
@@ -413,6 +422,46 @@ impl<'e> Gen<'e> {
         // system call needs the ABI's alignment)
         self.ent_m = Some((s_hm.clone(), args_t.clone()));
         self.ent_al = None;
+        // (stack arguments: stk typed, long enough; the entry's condition
+        // the ABI's with the arguments on the stack, assumed; each
+        // argument's facts for its load)
+        let lty = self.mk("list_type", vec![self.mk("bits", vec![lit(64)])]);
+        let hstk_t = self.mk("in", vec![stk.clone(), lty.clone()]);
+        let lstk = self.mk("seq_len", vec![stk.clone()]);
+        let hle_t = self.mk("int_le", vec![lit(nargs), self.mk("int_add", vec![lit(6), lstk.clone()])]);
+        if nstk > 0 {
+            let (hstk, hle) = (self.assume(&hstk_t)?, self.assume(&hle_t)?);
+            let largs = self.mk("seq_len", vec![args_t.clone()]);
+            let eo_t = self.mk("abi.entry_ok", vec![s.clone(), args_t.clone()]);
+            let sa_t = self.mk("abi.stack_args", vec![s.clone(), stk.clone()]);
+            let h6_t = self.mk("eq", vec![largs.clone(), lit(6)]);
+            let so_t = self.mk("tr.sargs_off", vec![s.clone(), vv.clone(), lstk.clone()]);
+            let e_t = self.mk("and", vec![self.mk("and", vec![self.mk("and", vec![eo_t.clone(), sa_t.clone()]), h6_t.clone()]), so_t.clone()]);
+            let he = self.assume(&e_t)?;
+            let [eo, hsa, h6, hso] = [&eo_t, &sa_t, &h6_t, &so_t].map(|g| self.evp(&RP::Taut(vec![R::S(he.clone())]), g, &[]));
+            let (eo, hsa, h6, hso) = (eo?, hsa?, h6?, hso?);
+            let st = self.run(&R::Apply(Box::new(f("abi.entry_stack")), vec![s_(&s_hm), s_(&eo)]), &[])?;
+            let goal = self.mk("eq", vec![self.mk("int_mod", vec![self.mk("bits_add", vec![lit(64), self.gpr(&s, 4), lit(8)]), lit(16)]), lit(0)]);
+            let sal = self.evp(&RP::Taut(vec![R::S(st)]), &goal, &[])?;
+            self.ent_al = Some((e_t, sal));
+            let hal = self.evp(&RP::Simp(false, vec![R::S(hseqs[0].clone())], vec![], false), &self.mk("in", vec![args_t.clone(), lty.clone()]), &[])?;
+            let ln = self.evp(&RP::Simp(false, vec![R::S(hstk.clone())], vec![], false), &self.mk("in", vec![lstk.clone(), self.mk("omega", vec![])]), &[])?;
+            let mut sargs = Vec::new();
+            for j in 0..nstk {
+                let i = 6 + j;
+                let xj = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![cat(self, &args_t), lit(i)])]);
+                let lt = self.evp(&RP::Arith(vec![R::S(hle.clone()), R::S(ln.clone())]), &self.mk("int_lt", vec![lit(j), lstk.clone()]), &[])?;
+                let le6 = self.evp(&RP::Arith(vec![R::S(h6.clone())]), &self.mk("int_le", vec![largs.clone(), lit(i)]), &[])?;
+                let ut = self.evp(&RP::Arith(vec![R::S(h6.clone()), R::S(hle.clone())]), &self.mk("int_lt", vec![lit(i), self.mk("int_add", vec![largs.clone(), lstk.clone()])]), &[])?;
+                let ca = self.run(&mpf("tr.concat_at_r", vec![t(&args_t), t(&stk), t(&lit(i)), s_(&hal), s_(&hstk), simp0(), s_(&le6), s_(&ut)]), &[])?;
+                let xs = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![stk.clone(), lit(j)])]);
+                let hx = self.evp(&RP::Simp(false, vec![R::S(ca), R::S(h6.clone())], vec![], false), &self.mk("eq", vec![xj.clone(), xs]), &[])?;
+                sargs.push((xj, lt, hx));
+            }
+            self.sargs = Some(SArgs { stk: stk.clone(), hsa, hso, hstk, args: sargs });
+        } else {
+            self.sargs = None;
+        }
         self.vmark0 = self.env.var_bound() as usize;
         let pt = self.prove_pt(st0)?;
         let (aligned, e_t) = match self.ent_al.take() {
@@ -422,8 +471,14 @@ impl<'e> Gen<'e> {
         self.ent_m = None;
         let _ = self.assume(&e_t)?;
         inner_h.push(e_t.clone());
-        let e_lam = self.abs(&e_t, &[Self::var_id(&s), Self::var_id(&args_t)]);
-        let h_e = super::rec::p(f(if aligned { "tr.entry_ok_u_of" } else { "tr.entry_ok_u_id" }));
+        // (E of the entry, its arguments and the callers' stack objects)
+        let e_lam = self.abs(&e_t, &[Self::var_id(&s), Self::var_id(&args_t), Self::var_id(&vv)]);
+        let h_e = if nstk > 0 {
+            super::rec::p(R::Inst("tr.entry_e_s".into(), vec![("stk", stk.clone())]))
+        } else {
+            super::rec::p(f(if aligned { "tr.entry_e_of" } else { "tr.entry_e_id" }))
+        };
+        let sargs = self.sargs.take();
         // (the callees' premises, as their calls had them)
         let mut cprem = Vec::new();
         let mut cns = Vec::new();
@@ -440,7 +495,9 @@ impl<'e> Gen<'e> {
         let body_in = self.close(pt, &inner_h, &vs_inner)?;
         let mut gvs = vec![Self::var_id(&statics)];
         gvs.extend(gs.iter().map(Self::var_id));
-        let body = self.close(body_in.clone(), &cprem, &gvs)?;
+        // (with stack arguments: for any stk long enough)
+        let body_s = if sargs.is_some() { self.close(body_in.clone(), &[hstk_t.clone(), hle_t.clone()], &[Self::var_id(&stk)])? } else { body_in.clone() };
+        let body = self.close(body_s, &cprem, &gvs)?;
         out.push((format!("{p}.body"), body));
         // the contract (`tr.implements_at`): the entry's rule, the body
         let b = self.base.clone();
@@ -462,11 +519,16 @@ impl<'e> Gen<'e> {
             let ha2 = self.mk("in", vec![a2.clone(), self.mk("abi.ARGS", vec![])]);
             let hs2 = self.mk("in", vec![s2.clone(), self.mk("x86_64_linux.Machine", vec![])]);
             let he2 = self.mk("tr.entry_ok_u", vec![s2.clone(), a2.clone()]);
-            let hg2 = self.mk("ord_le", vec![lit(nargs), self.mk("seq_len", vec![a2.clone()])]);
+            let hg2 = self.mk("ord_le", vec![lit(nregs), self.mk("seq_len", vec![a2.clone()])]);
             let (sa, ss, se, sg) = (self.assume(&ha2)?, self.assume(&hs2)?, self.assume(&he2)?, self.assume(&hg2)?);
-            let ln = self.evp(&RP::Simp(false, vec![R::S(sa)], vec![], false), &self.mk("in", vec![self.mk("seq_len", vec![a2.clone()]), self.mk("omega", vec![])]), &[])?;
+            let ln = self.evp(&RP::Simp(false, vec![R::S(sa.clone())], vec![], false), &self.mk("in", vec![self.mk("seq_len", vec![a2.clone()]), self.mk("omega", vec![])]), &[])?;
+            // (with stack arguments, a2's elements in seq_concat(a2, stk))
+            let hal = match &sargs {
+                Some(_) => Some(self.evp(&RP::Simp(false, vec![R::S(sa)], vec![], false), &self.mk("in", vec![a2.clone(), lty.clone()]), &[])?),
+                None => None,
+            };
             let (mut r, mut prev) = self.cs_entry_regs(&s2, &ss)?;
-            for i in 0..nargs {
+            for i in 0..nregs {
                 let reg = argregs[i as usize];
                 let lt = self.mk("int_lt", vec![lit(i), self.mk("seq_len", vec![a2.clone()])]);
                 let lt_s = self.evp(&RP::Arith(vec![R::S(ln.clone()), R::Expand(Box::new(R::S(sg.clone())), vec!["ord_le".into()])]), &lt, &[])?;
@@ -478,12 +540,43 @@ impl<'e> Gen<'e> {
                     &[],
                 )?;
                 let ai = self.ev(&R::S(ai), &[])?;
-                let vx = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![a2.clone(), lit(i)])]);
-                r = self.run(&R::Apply(Box::new(f("tr.regs_add")), vec![t(&s2), t(&prev), t(&lit(reg)), t(&lit(8)), t(&vx), s_(&r), simpw(vec![R::S(ai.clone())]), simpw(vec![R::S(ai)])]), &[])?;
+                let vx = self.mk("bits_of_int", vec![lit(64), self.mk("app", vec![cat(self, &a2), lit(i)])]);
+                let mut ws = vec![R::S(ai)];
+                if let (Some(sq), Some(hal)) = (&sargs, &hal) {
+                    let cl = self.run(&mpf("tr.concat_at_l", vec![t(&a2), t(&stk), t(&lit(i)), s_(hal), s_(&sq.hstk), simp0(), s_(&lt_s)]), &[])?;
+                    ws.push(R::S(cl));
+                }
+                r = self.run(&R::Apply(Box::new(f("tr.regs_add")), vec![t(&s2), t(&prev), t(&lit(reg)), t(&lit(8)), t(&vx), s_(&r), simpw(ws.clone()), simpw(ws)]), &[])?;
                 prev = self.upd(&prev, reg, 8, &vx);
             }
             let hregs = self.close(r, &[ha2, hs2, he2, hg2], &[Self::var_id(&a2), Self::var_id(&s2)])?;
             let rsl = self.abs(&rs_lam, &[Self::var_id(&x0), Self::var_id(&s)]);
+            if let Some(sq) = &sargs {
+                // (the spec's procedure on x0 itself, q; on x0 with stk, q2)
+                let qx = proc.instantiate_params(&[x0.clone()], &self.env.binders_fn());
+                let qx = self.abs(&qx, &[Self::var_id(&x0)]);
+                let inst = R::Inst(
+                    "tr.entry_ns".into(),
+                    vec![
+                        ("lb", lb.clone()),
+                        ("lc", lc.clone()),
+                        ("base", b.clone()),
+                        ("code", c.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("n", lit(nargs)),
+                        ("fd", lit(fd)),
+                        ("rs", rsl),
+                        ("q", qx),
+                        ("q2", ql),
+                        ("kw", kwl),
+                        ("E", e_lam.clone()),
+                        ("stk", stk.clone()),
+                    ],
+                );
+                let hle = self.assume(&hle_t)?;
+                self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in), simp0(), simp0(), s_(&sq.hstk), simp0(), s_(&hle)]), &[])?
+            } else {
             let inst = R::Inst(
                 "tr.entry_n".into(),
                 vec![
@@ -502,6 +595,7 @@ impl<'e> Gen<'e> {
                 ],
             );
             self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
+            }
         } else {
             // (the callee-saved registers' entries)
             let s2 = self.var("s2");
@@ -529,6 +623,20 @@ impl<'e> Gen<'e> {
             self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
         };
         let _ = rs_args;
+        // (stack arguments: for any stk long enough, tr.implements_at_s)
+        if let (Some(_), Some(bl)) = (&sargs, &bl) {
+            let h = self.close(m0, &[hstk_t.clone(), hle_t.clone()], &[Self::var_id(&stk)])?;
+            let inst = R::Inst(
+                "tr.implements_s_intro".into(),
+                vec![("f", b.clone()), ("base", lb.clone()), ("code", lc.clone()), ("statics", statics.clone()), ("n", lit(nargs)), ("B", bl.clone())],
+            );
+            let i0 = self.run(&mp(inst, vec![simp0(), simp0(), s_(&h)]), &[])?;
+            let goal = self.mk("tr.implements_at_s", vec![b.clone(), spec_app.clone(), lb.clone(), lc.clone(), statics.clone()]);
+            let imp_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(i0))), vec![spec_name.to_string()]), &goal, &[])?;
+            let imp = self.close(imp_in, &cprem, &gvs)?;
+            out.push((format!("{p}.implements_s"), imp));
+            return Ok(out);
+        }
         // m: all args objs mem s o. .. -> tr.matches_t(spec, args, objs, mem, s, o), the spec unfolded
         // (the ABI's entry, or any alignment's)
         let ent = if aligned { "abi.entry_ok" } else { "tr.entry_ok_u" };

@@ -277,6 +277,24 @@ impl<'e> Gen<'e> {
                 let n = nat(&x[0]).ok_or_else(|| bad("fields"))?;
                 let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
                 let c = lit(self.hkey(dn));
+                // (above the return slot, no home: a stack argument's)
+                let hk = self.hkey(dn);
+                if let (8, None, Some(sa)) = (n, st.hsm.get(&hk), self.sargs.clone()) {
+                    let j = hk.wrapping_sub(8) / 8;
+                    if hk >= 8 && hk % 8 == 0 && j < sa.args.len() as u128 {
+                        let (xv, hlt, hx) = sa.args[j as usize].clone();
+                        let tr = self.step(
+                            "load64_sarg",
+                            a,
+                            insn,
+                            &[&x[1], &d, &c, &x[3], &x[4], &sa.stk, &lit(j), &xv],
+                            self.tail(st, insn, 6, vec![s(&sa.hsa), s(&sa.hso), s(&sa.hstk), s(&hlt), s(&hx)]),
+                        );
+                        self.scratch.insert(g);
+                        let st2 = self.set_reg(st, a2, g, 8, xv);
+                        return self.then(tr, st2);
+                    }
+                }
                 let v = match (n, st.hsm.get(&self.hkey(dn))) {
                     (4, _) => home(&st.hsm, &d)?,
                     (8, Some((8, x))) => x.clone(),

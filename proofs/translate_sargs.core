@@ -1,0 +1,387 @@
+// Stack arguments: a function of more than six arguments (abi.CFunS), the
+// rest on the stack above the return address (abi.stack_args). Its
+// contract (tr.implements_at_s): for its stack arguments stk -- the
+// caller's words, no stack object (tr.sargs_off) --, the register-argument
+// contract of the spec with them (abi.with_stack). The entry
+// (tr.entry_ns): tr.entry_n's for the spec's body at args ++ stk; the
+// stack arguments read where the entry left them (tr.load64_sarg: tr.mem's
+// frames clause keeps them).
+
+// (the k stack arguments' bytes, above the entry's return slot: no stack
+// object of the callers)
+def tr.sargs_off(s, v, k) := all i. i in omega -> int_lt(i, int_mul(8, k)) -> !(int_add(int_add(s.gpr[4], 8), i) in v)
+
+// The bridge's contract of a function at f with stack arguments: as
+// tr.implements_at, for every stack arguments stk the spec with them
+def tr.implements_at_s(f, F, base, code, statics) :=
+  all stk args objs mem s o. stk in list_type(bits(64)) -> args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine ->
+    s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f -> abi.entry_ok(s, args) -> abi.stack_args(s, stk) -> (seq_len(stk) = 0 || seq_len(args) = 6) ->
+    tr.sargs_off(s, objs, seq_len(stk)) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->
+    tr.matches_t(abi.with_stack(single(empty), F, stk), args, objs, mem, s, o)
+
+// (the arguments args ++ stk: args' first, then stk's)
+theorem tr.concat_at_l: all a b i. a in list_type(bits(64)) -> b in list_type(bits(64)) -> i in omega -> int_lt(i, seq_len(a)) -> seq_concat(a, b)[i] = a[i]
+proof
+  fix a b i
+  assume ha hb hi hl
+  show := at({seq_concat(a, b)[i]}, ha, hb, hi, hl)
+qed
+
+theorem tr.concat_at_r: all a b i. a in list_type(bits(64)) -> b in list_type(bits(64)) -> i in omega -> int_le(seq_len(a), i) ->
+  int_lt(i, int_add(seq_len(a), seq_len(b))) -> seq_concat(a, b)[i] = b[int_sub(i, seq_len(a))]
+proof
+  fix a b i
+  assume ha hb hi hl hu
+  show := at({seq_concat(a, b)[i]}, ha, hb, hi, hl, hu)
+qed
+
+// (an outcome: normal, an exception or a divergence)
+abbrev tr.tagged(o) := (ex s1 v. o = ok(s1, v)) || (ex s1 e. o = exc(s1, e)) || (ex t. o = diverge(t))
+
+// The entry of a function of n > 6 arguments, the stack arguments stk (at
+// least n - 6 of them): tr.entry_n's claim for the spec's body at its
+// arguments args ++ stk (q2: q there, its arguments as the registers and
+// stk have them), the spec with stk matched
+theorem tr.entry_ns(lb, lc, base, code, statics, f, n, fd, x0 x1. rs, x0. q, x0. q2, x3 x4 x2. kw, x5 x6 x7. E, stk): base in omega ->
+  (all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)) ->
+  (all s args v. s in x86_64_linux.Machine -> E(s, args, v) -> tr.entry_ok_u(s, args)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) -> ord_le(6, seq_len(args)) -> tr.regs(s, rs(args, s))) ->
+  (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(6, seq_len(args)) ->
+    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args, v) ->
+    tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. bind_rel(q2(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
+  (all args. args in abi.ARGS -> seq_len(args) = 6 -> q(seq_concat(args, stk)) = q2(args)) ->
+  (all x3 x4 x2. kw(x3, x4, x2) -> tr.tagged(x2)) ->
+  stk in list_type(bits(64)) -> n in omega -> int_le(n, int_add(6, seq_len(stk))) ->
+  (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
+    E(s, args, v) -> seq_len(args) = 6 -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+    tr.matches_t(abi.with_stack(single(empty), fn_build(list_type(bits(64)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2),
+      x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), stk), args, v, mem, s, o))
+proof
+  assume hbase hsub hE hregs hbody heq hkw hstk hno hn
+  have en := mp(tr.entry_n[lb := lb, lc := lc, base := base, code := code, statics := statics, f := f, n := 6, fd := fd, rs := x0 x1. rs(x0, x1), q := x0. q2(x0),
+    kw := x3 x4 x2. kw(x3, x4, x2), E := x5 x6 x7. E(x5, x6, x7)], hbase, hsub, hE, hregs, hbody)
+  fix args v mem s o
+  assume hA hvo hmv hM hsu hl hrip he h6 hob hvw hr
+  let W := abi.view(s, v, mem)
+  let S6 := fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(6, seq_len(x0)) || bind_rel(q2(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))
+  let F := fn_build(list_type(bits(64)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))
+  let WS := abi.with_stack(single(empty), F, stk)
+  have m6 := mp(all_elim(en, {args}, {v}, {mem}, {s}, {o}), hA, hvo, hmv, hM, hsu, hl, hrip, he, hob, hvw, hr)
+  // (the spec with stk: the body at args ++ stk, which is q2's at args)
+  have al: args in list_type(bits(64)) by simp(hA)
+  have ca: seq_concat(args, stk) in list_type(bits(64)) := mp(all_elim(tr.concat_list, {args}, {stk}, {bits(64)}), al, hstk)
+  have cl: seq_len(seq_concat(args, stk)) = int_add(6, seq_len(stk)) by simp(al, hstk, h6)
+  have g6: ord_le(6, seq_len(args)) by defs(simp(h6), ord_le)
+  have so: seq_len(stk) in omega by simp(hstk)
+  let L := seq_len(seq_concat(args, stk))
+  have lo: L in omega by arith(cl, so)
+  have gn: ord_le(n, L) proof
+    have c1: int_lt(n, L) -> ord_le(n, L) proof
+      assume h
+      show by defs(taut(mp(nat_lt_mem[k := n, n := L], hno, lo, h)), ord_le)
+    qed
+    have c2: n = L -> ord_le(n, L) proof
+      assume h
+      show by defs(taut(h), ord_le)
+    qed
+    show by taut(c1, c2, (int_lt(n, L) || n = L by arith(cl, hn, hno, so)))
+  qed
+  have e6: S6[args] = mkprog(x1 x2. !ord_le(6, seq_len(args)) || bind_rel(q2(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))) by simp(hA)
+  have ef: F[seq_concat(args, stk)] = mkprog(x1 x2. !ord_le(n, seq_len(seq_concat(args, stk))) || bind_rel(q(seq_concat(args, stk)), x1, x3 x4. kw(x3, x4, x2),
+    x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))) by simp(ca)
+  have ew: WS[args] = mkprog(x1 x2. bind_rel(F[seq_concat(args, stk)], x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))) by defs(simp(hA), abi.with_stack)
+  have eq := mp(all_elim(heq, {args}), hA, h6)
+  have inc: all x. runs(S6[args], W, x) -> runs(WS[args], W, x) proof
+    fix x
+    assume hx
+    have pu := apply(g.runs_univ, rewrite(e6, hx))
+    have r6 := apply(g.runs_elim, rewrite(e6, hx))
+    have b2: bind_rel(q2(args), W, x3 x4. kw(x3, x4, x), x3 x4. x = exc(x3, x4), x3. x = diverge(x3)) by taut(r6, g6)
+    // (the outcome: one of the three)
+    obtain o2, h2 c2 from expand(b2, bind_rel)
+    have t1: (ex s1 v1. o2 = ok(s1, v1) && kw(s1, v1, x)) -> tr.tagged(x) proof
+      assume y
+      obtain s1 v1, _ k from y
+      show := mp(all_elim(hkw, {s1}, {v1}, {x}), k)
+    qed
+    have tg: tr.tagged(x) by simp(c2, t1)
+    have bq: bind_rel(q(seq_concat(args, stk)), W, x3 x4. kw(x3, x4, x), x3 x4. x = exc(x3, x4), x3. x = diverge(x3)) := rewrite(sym(eq), b2)
+    have rf: runs(F[seq_concat(args, stk)], W, x) := rewrite(sym(ef), apply(tr.runs_intro[r := x1 x2. !ord_le(n, seq_len(seq_concat(args, stk))) ||
+      bind_rel(q(seq_concat(args, stk)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {W}, {x}, pu, taut(bq)))
+    let BW := bind_rel(F[seq_concat(args, stk)], W, x3 x4. x = ok(x3, x4), x3 x4. x = exc(x3, x4), x3. x = diverge(x3))
+    have b1: (ex s1 v1. x = ok(s1, v1)) -> BW proof
+      assume y
+      obtain s1 v1, e from y
+      show := apply(gc.bind_ok[p := F[seq_concat(args, stk)], k := x3 x4. x = ok(x3, x4), x := x3 x4. x = exc(x3, x4), d := x3. x = diverge(x3)], rewrite(e, rf), e)
+    qed
+    have b2: (ex s1 e1. x = exc(s1, e1)) -> BW proof
+      assume y
+      obtain s1 e1, e from y
+      show := apply(gc.bind_exc[p := F[seq_concat(args, stk)], k := x3 x4. x = ok(x3, x4), x := x3 x4. x = exc(x3, x4), d := x3. x = diverge(x3)], rewrite(e, rf), e)
+    qed
+    have b3: (ex t. x = diverge(t)) -> BW proof
+      assume y
+      obtain t, e from y
+      show := apply(gc.bind_div[p := F[seq_concat(args, stk)], k := x3 x4. x = ok(x3, x4), x := x3 x4. x = exc(x3, x4), d := x3. x = diverge(x3)], rewrite(e, rf), e)
+    qed
+    have bw: BW by taut(tg, b1, b2, b3)
+    show := rewrite(sym(ew), apply(tr.runs_intro[r := x1 x2. bind_rel(F[seq_concat(args, stk)], x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))],
+      {W}, {x}, pu, bw))
+  qed
+  show := mp(all_elim(tr.matches_t_mono, {S6}, {WS}, {args}, {v}, {mem}, {s}, {o}), inc, m6)
+qed
+
+// (a byte at or above the entry's sp on its stack pages, no stack object of
+// the callers: as at the entry, its page too -- tr.mem's frames, the
+// callers' stack pages kept)
+theorem tr.sarg_byte: all s m w v a. tr.mem(s, m, w, v) -> a in bits(64) -> int_le(abi.sp(s), a) -> abi.stack_page(s.vm, int_div(a, x86_64_linux.PAGE)) ->
+  !(a in v) -> m.vm.bytes[a] = s.vm.bytes[a] && m.vm.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)]
+proof
+  fix s m w v a
+  assume hm ha hsp hst hv
+  have {wm = wm} := expand(hm, tr.mem)
+  have {frames = frames, pages = pages, nostk = nostk, stk = stk} := expand(wm, abi.world_matches)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  let p := int_div(a, x86_64_linux.PAGE)
+  have po: p in omega by arith(ha, kp)
+  have sm sk := expand(hst, abi.stack_page)
+  have pt _ := expand(sm, x86_64_linux.mapped)
+  have spb: abi.sp(s) in bits(64) by simp()
+  have ple: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), p) by arith(hsp, kp, ha, spb)
+  have pe := mp(all_elim(stk, {p}), po, conj(hst, ple))
+  have nd: !abi.in_domain(w.vm, v, a) proof
+    assume hd
+    have c2: x86_64_linux.mapped(w.vm, p) && !(snd(w.vm.pages[p]).kind = 2) -> false proof
+      assume y
+      have ym yk := y
+      have _ wn := expand(ym, x86_64_linux.mapped)
+      have pp := mp(all_elim(pages, {p}), (p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(po, pt)))
+      have k1: m.vm.pages[p] = w.vm.pages[p] -> false proof
+        assume e
+        have e2: w.vm.pages[p] = s.vm.pages[p] := trans(sym(e), pe)
+        show by taut(yk, (snd(w.vm.pages[p]).kind = 2 by simp(e2, sk)))
+      qed
+      show by taut(pp, k1, wn)
+    qed
+    show by taut(expand(hd, abi.in_domain), hv, c2)
+  qed
+  have be := mp(all_elim(frames, {a}), ha, conj(conj(hsp, nd), (abi.stack_page(s.vm, x86_64_linux.page_of(a)) by defs(hst, x86_64_linux.page_of))))
+  show by taut(be, pe)
+qed
+
+// mov r64, [rsp + d] reading the stack argument j (the entry's [rsp + 8 +
+// 8 j], d - fr above the return slot): stk[j]
+theorem tr.load64_sarg(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g d c z1 z2 stk j x hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(76, pair(8, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> d in bits(64) -> c = int_mod(int_sub(d, fr), 18446744073709551616) -> j in omega -> c = int_add(8, int_mul(8, j)) ->
+  abi.stack_args(s, stk) -> tr.sargs_off(s, v, seq_len(stk)) -> stk in list_type(bits(64)) -> int_lt(j, seq_len(stk)) -> x = bits_of_int(64, stk[j]) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, fn_update(rs, g, pair(8, x)), p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g d c z1 z2 stk j x hs ds rs p w
+  assume hat ha2 hg hd hcd hj hc hsa hso hstk hjl hxv hpt0
+  have tj := apply(at_type[l := stk, t := bits(64), i := j], hstk, hj, hjl)
+  have bj0: bits_of_int(64, stk[j]) = stk[j] by simp(tj)
+  have hpt := rewrite(trans(hxv, bj0), hpt0)
+  have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have sa1 sa2 := expand(hsa, abi.stack_args)
+  have lo: seq_len(stk) in omega by simp(hstk)
+  // (the slot's 8 bytes: rsp + 8 + 8 j + i, below the user space's end)
+  let B(i) := int_add(int_add(s.gpr[4], 8), int_add(int_mul(8, j), i))
+  have sb: all i. i in omega -> int_lt(i, 8) -> abi.stack_page(s.vm, int_div(B(i), x86_64_linux.PAGE)) && x86_64_linux.can_access(s.vm, bits_add(64, s.gpr[4], bits_of_int(64, int_add(8, int_add(int_mul(8, j), i)))), 0) &&
+      !(B(i) in v) && int_lt(B(i), 140737488351232) proof
+    fix i
+    assume hi hil
+    have k: int_lt(int_add(int_mul(8, j), i), int_mul(8, seq_len(stk))) by arith(hil, hjl, hj, hi, lo)
+    have ko: int_add(int_mul(8, j), i) in omega by arith(hj, hi)
+    have st ca := mp(all_elim(sa1, {int_add(int_mul(8, j), i)}), ko, k)
+    have no := mp(all_elim(expand(hso, tr.sargs_off), {int_add(int_mul(8, j), i)}), ko, k)
+    have sm _ := expand(st, abi.stack_page)
+    have pt _ := expand(sm, x86_64_linux.mapped)
+    show by taut(st, ca, no, (int_lt(B(i), 140737488351232) by arith(expand(pt, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), kp)))
+  qed
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "gpr", fn_update(m.gpr, g, stk[j])), empty) proof
+    fix m o
+    assume hi hr hhs hrs hmm ho
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have fe := apply(tr.frame_ea, {s}, {base}, {code}, {fr}, {m}, {w}, {d}, {c}, {0}, hi, hd, hcd, simp())
+    have r4: s.gpr[4] in bits(64) by simp(hi.sM)
+    // (each byte: the entry's, its page too)
+    have by: all i. i in omega -> int_lt(i, 8) -> bits_add(64, bits_add(64, int_add(s.gpr[4], c), 0), bits_of_int(64, i)) = B(i) &&
+        m.vm.bytes[B(i)] = s.vm.bytes[B(i)] && m.vm.pages[int_div(B(i), x86_64_linux.PAGE)] = s.vm.pages[int_div(B(i), x86_64_linux.PAGE)] proof
+      fix i
+      assume hi2 hil
+      have st ca no bl := mp(all_elim(sb, {i}), hi2, hil)
+      have ae: bits_add(64, bits_add(64, int_add(s.gpr[4], c), 0), bits_of_int(64, i)) = B(i) by defs(arith(hc, r4, hj, hi2, hil, bl), bits_add, bits_of_int, pow2)
+      have bb: B(i) in bits(64) by arith(r4, hj, hi2, bl)
+      have spl: int_le(abi.sp(s), B(i)) by defs(arith(r4, hj, hi2, bl), bits_add, pow2)
+      have sbx := apply(tr.sarg_byte, hmm, bb, spl, st, no)
+      show by taut(ae, sbx)
+    qed
+    have acc: x86i.acc(m, x86i.rsp_ea(m, d), 8, 0) proof
+      fix i
+      assume hi2 hil
+      have ae bq pq := mp(all_elim(by, {i}), hi2, hil)
+      have st ca no bl := mp(all_elim(sb, {i}), hi2, hil)
+      have ae2: bits_add(64, s.gpr[4], bits_of_int(64, int_add(8, int_add(int_mul(8, j), i)))) = B(i) by defs(arith(r4, hj, hi2, bl), bits_add, bits_of_int, pow2)
+      have cs: x86_64_linux.can_access(s.vm, B(i), 0) := rewrite(ae2, ca)
+      have cm: x86_64_linux.can_access(m.vm, B(i), 0) by defs(simp(expand(cs, x86_64_linux.can_access, x86_64_linux.mapped), (x86_64_linux.page_of(B(i)) = int_div(B(i), x86_64_linux.PAGE) by defs(refl({x86_64_linux.page_of(B(i))}), x86_64_linux.page_of)), pq), x86_64_linux.can_access, x86_64_linux.mapped)
+      have fei := apply(tr.frame_ea, {s}, {base}, {code}, {fr}, {m}, {w}, {d}, {c}, {i}, hi, hd, hcd, hi2)
+      show by simp(fei, ae, cm)
+    qed
+    have hx2 := mp(mp(mp(all_elim(hat, {m}, {o}), ho), ipC), hr)
+    have e := apply(x86i.load64_rsp, {m}, {o}, {g}, {d}, {z1}, {z2}, {len}, ipM, ipU, gR, hd, acc, hx2)
+    // (the value: the entry's 8 bytes there, stk[j])
+    have bj: all i. i in omega -> int_lt(i, 8) -> m.vm.bytes[bits_add(64, bits_add(64, int_add(s.gpr[4], c), 0), bits_of_int(64, i))] = s.vm.bytes[bits_add(64, bits_add(64, int_add(s.gpr[4], c), 0), bits_of_int(64, i))] proof
+      fix i
+      assume hi2 hil
+      have ae bq _ := mp(all_elim(by, {i}), hi2, hil)
+      show by simp(ae, bq)
+    qed
+    have le0 := mp(all_elim(tr.le_eq8, {m.vm.bytes}, {s.vm.bytes}, {bits_add(64, int_add(s.gpr[4], c), 0)}), bj)
+    have sj := mp(all_elim(sa2, {j}), hj, hjl)
+    have ea0: bits_add(64, int_add(s.gpr[4], c), 0) = bits_add(64, s.gpr[4], bits_of_int(64, int_add(8, int_mul(8, j)))) by defs(arith(hc, r4, hj, (int_lt(B(0), 140737488351232) by taut(mp(all_elim(sb, {0}), simp(), simp())))), bits_add, bits_of_int, pow2)
+    have v1: x86_64_linux.le(m.vm.bytes, x86i.rsp_ea(m, d), 8) = x86_64_linux.le(m.vm.bytes, bits_add(64, int_add(s.gpr[4], c), 0), 8) :=
+      rewrite(fe, refl({x86_64_linux.le(m.vm.bytes, x86i.rsp_ea(m, d), 8)}), {2})
+    have vj: x86_64_linux.le(m.vm.bytes, x86i.rsp_ea(m, d), 8) = stk[j] := trans(v1, trans(le0, rewrite(sym(ea0), sj)))
+    show by simp(e, vj, ipM, ipU, ipC, hr, ha2, keep(abi.code_at, x86_64_linux.Machine))
+  qed
+  have ty: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> stk[j] in bits(int_mul(8, 8)) && stk[j] in bits(64) proof
+    fix m
+    assume _ _ _ _ _
+    have t := apply(at_type[l := stk, t := bits(64), i := j], hstk, hj, hjl)
+    show by simp(t)
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step0v[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {8}, {stk[j]}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
+qed
+
+// (the entry's condition with stack arguments stk: the ABI's, the stack
+// arguments, six in registers, no stack object)
+theorem tr.entry_e_s(stk): all m args v. m in x86_64_linux.Machine ->
+  ((abi.entry_ok(m, args) && abi.stack_args(m, stk)) && seq_len(args) = 6) && tr.sargs_off(m, v, seq_len(stk)) -> tr.entry_ok_u(m, args)
+proof
+  fix m args v
+  assume hM h
+  have he _ _ _ := h
+  show := mp(all_elim(tr.entry_ok_u_of, {m}, {args}), hM, he)
+qed
+
+// The contract with stack arguments, from tr.entry_ns's for every stk long
+// enough (n arguments in all): too few, the spec allows anything (it
+// raises)
+theorem tr.implements_s_intro(f, base, code, statics, n, x0 x1 x2. B): n in omega -> int_lt(6, n) ->
+  (all stk. stk in list_type(bits(64)) -> int_le(n, int_add(6, seq_len(stk))) ->
+    all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+      s.rip = f -> ((abi.entry_ok(s, args) && abi.stack_args(s, stk)) && seq_len(args) = 6) && tr.sargs_off(s, v, seq_len(stk)) -> seq_len(args) = 6 -> tr.objs_ok(s, v) ->
+      abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+      tr.matches_t(abi.with_stack(single(empty), fn_build(list_type(bits(64)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B(x0, x1, x2))), stk), args, v, mem, s, o)) ->
+  tr.implements_at_s(f, fn_build(list_type(bits(64)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B(x0, x1, x2))), base, code, statics)
+proof
+  assume hno hn6 hH
+  let F := fn_build(list_type(bits(64)), x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B(x0, x1, x2)))
+  have g: all stk args objs mem s o. stk in list_type(bits(64)) -> args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine ->
+      s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f -> abi.entry_ok(s, args) -> abi.stack_args(s, stk) -> (seq_len(stk) = 0 || seq_len(args) = 6) ->
+      tr.sargs_off(s, objs, seq_len(stk)) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->
+      tr.matches_t(abi.with_stack(single(empty), F, stk), args, objs, mem, s, o) proof
+    fix stk args objs mem s o
+    assume hstk hA hvo hmv hM hsu hl hrip he hsa hor hso hob hvw hr
+    let W := abi.view(s, objs, mem)
+    let WS := abi.with_stack(single(empty), F, stk)
+    have al: args in list_type(bits(64)) by simp(hA)
+    have alo: seq_len(args) in omega by simp(al)
+    have a6: int_le(seq_len(args), 6) by arith(expand((ord_le(seq_len(args), 6) by simp(hA)), ord_le), alo)
+    have so: seq_len(stk) in omega by simp(hstk)
+    have ca: seq_concat(args, stk) in list_type(bits(64)) := mp(all_elim(tr.concat_list, {args}, {stk}, {bits(64)}), al, hstk)
+    have cl: seq_len(seq_concat(args, stk)) = int_add(seq_len(args), seq_len(stk)) by simp(al, hstk)
+    // enough: tr.entry_ns's
+    have yes: int_le(n, int_add(6, seq_len(stk))) && seq_len(args) = 6 -> tr.matches_t(WS, args, objs, mem, s, o) proof
+      assume y
+      have y1 y2 := y
+      show := mp(all_elim(mp(all_elim(hH, {stk}), hstk, y1), {args}, {objs}, {mem}, {s}, {o}), hA, hvo, hmv, hM, hsu, hl, hrip, conj(conj(conj(he, hsa), y2), hso), y2, hob, hvw, hr)
+    qed
+    // too few: the spec raises
+    have few: !(int_le(n, int_add(6, seq_len(stk))) && seq_len(args) = 6) -> tr.matches_t(WS, args, objs, mem, s, o) proof
+      assume hf
+      have lt: int_lt(seq_len(seq_concat(args, stk)), n) by arith(hf, hor, cl, a6, alo, so, hno, hn6)
+      have ng: !ord_le(n, seq_len(seq_concat(args, stk))) proof
+        assume h
+        show by arith(lt, expand(h, ord_le), hno, (seq_len(seq_concat(args, stk)) in omega by arith(cl, alo, so)))
+      qed
+      have ou := apply(abi.objs_univ, hvo)
+      have mu := apply(x86.vm_univ, hmv)
+      have hvu: W in univ(1) by simp(hsu, ou, mu)
+      have pu: pair(W, exc(W, empty)) in univ(1) by simp(hvu)
+      have ef: F[seq_concat(args, stk)] = mkprog(x1 x2. !ord_le(n, seq_len(seq_concat(args, stk))) || B(seq_concat(args, stk), x1, x2)) by simp(ca)
+      have rf: runs(F[seq_concat(args, stk)], W, exc(W, empty)) := rewrite(sym(ef), apply(tr.runs_intro[r := x1 x2. !ord_le(n, seq_len(seq_concat(args, stk))) ||
+        B(seq_concat(args, stk), x1, x2)], {W}, {exc(W, empty)}, pu, taut(ng)))
+      have bw := apply(gc.bind_exc[p := F[seq_concat(args, stk)], k := x3 x4. exc(W, empty) = ok(x3, x4), x := x3 x4. exc(W, empty) = exc(x3, x4), d := x3. exc(W, empty) = diverge(x3)],
+        rf, refl({exc(W, empty)}))
+      have ew: WS[args] = mkprog(x1 x2. bind_rel(F[seq_concat(args, stk)], x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))) by defs(simp(hA), abi.with_stack)
+      have rs: runs(WS[args], W, exc(W, empty)) := rewrite(sym(ew), apply(tr.runs_intro[r := x1 x2. bind_rel(F[seq_concat(args, stk)], x1, x3 x4. x2 = ok(x3, x4),
+        x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {W}, {exc(W, empty)}, pu, bw))
+      have eu: empty in univ(1) by simp()
+      have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+      have wW := apply(abi.world_typed, hM, hvo, hmv, hvu)
+      have rst: abi.raise_state(W) by defs(apply(tr.world_and, wW), abi.raise_state)
+      have ub: abi.raises_at(WS, args, objs, mem, s) by defs(ex_intro({empty}, {W}, taut(eu, eno, rst, rs)), abi.raises_at)
+      show by defs(taut(ub), tr.matches_t)
+    qed
+    show by taut(yes, few)
+  qed
+  show by defs(g, tr.implements_at_s)
+qed
+
+// (a spec with stack arguments refined: so with them fixed)
+theorem tr.with_stack_mono: all F S stk args w x. stk in list_type(bits(64)) -> args in abi.ARGS -> w in abi.World ->
+  (all regs w2 o. regs in list_type(bits(64)) -> w2 in abi.World -> runs(F[regs], w2, o) -> runs(S[regs], w2, o)) ->
+  runs(abi.with_stack(single(empty), F, stk)[args], w, x) -> runs(abi.with_stack(single(empty), S, stk)[args], w, x)
+proof
+  fix F S stk args w x
+  assume hs ha hw hc hr
+  let K(z) := bind_rel(z, w, x3 x4. x = ok(x3, x4), x3 x4. x = exc(x3, x4), x3. x = diverge(x3))
+  let M(G) := mkprog(x1 x2. bind_rel(G[seq_concat(args, stk)], x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have al: args in list_type(bits(64)) by simp(ha)
+  have cl := apply(tr.concat_list, al, hs)
+  have ef: abi.with_stack(single(empty), F, stk)[args] = M(F) by defs(simp(ha, keep(mkprog)), abi.with_stack)
+  have es: abi.with_stack(single(empty), S, stk)[args] = M(S) by defs(simp(ha, keep(mkprog)), abi.with_stack)
+  have hr2 := rewrite(ef, hr)
+  have pu := apply(g.runs_univ, hr2)
+  have b: K(F[seq_concat(args, stk)]) := apply(g.runs_elim, hr2)
+  obtain z, hz hk from expand(b, bind_rel)
+  have hz2 := mp(all_elim(hc, {seq_concat(args, stk)}, {w}, {z}), cl, hw, hz)
+  have b2: K(S[seq_concat(args, stk)]) by defs(ex_intro({z}, taut(hz2, hk)), bind_rel)
+  have rr: runs(M(S), w, x) := mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(S[seq_concat(args, stk)], x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4),
+    x3. x2 = diverge(x3))], {w}, {x}), pu, b2)
+  show := rewrite(sym(es), rr)
+qed
+
+// (a refined contract with stack arguments)
+theorem tr.implements_refine_s: all f F S base code statics. tr.implements_at_s(f, F, base, code, statics) ->
+  (all regs w o. regs in list_type(bits(64)) -> w in abi.World -> runs(F[regs], w, o) -> runs(S[regs], w, o)) ->
+  tr.implements_at_s(f, S, base, code, statics)
+proof
+  fix f F S base code statics
+  assume hi hc
+  have g: all stk args objs mem s o. stk in list_type(bits(64)) -> args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine ->
+      s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f -> abi.entry_ok(s, args) -> abi.stack_args(s, stk) -> (seq_len(stk) = 0 || seq_len(args) = 6) ->
+      tr.sargs_off(s, objs, seq_len(stk)) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) ->
+      tr.matches_t(abi.with_stack(single(empty), S, stk), args, objs, mem, s, o) proof
+    fix stk args objs mem s o
+    assume hs hA hvo hmv hM su hl hrip he hsa h6 hso hob hvw hrd
+    have m := mp(all_elim(expand(hi, tr.implements_at_s), {stk}, {args}, {objs}, {mem}, {s}, {o}), hs, hA, hvo, hmv, hM, su, hl, hrip, he, hsa, h6, hso, hob, hvw, hrd)
+    // (the entry's view a world)
+    have ou := apply(abi.objs_univ, hvo)
+    have mu := apply(x86.vm_univ, hmv)
+    have hvu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu)
+    have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
+    have r: all x. runs(abi.with_stack(single(empty), F, stk)[args], abi.view(s, objs, mem), x) -> runs(abi.with_stack(single(empty), S, stk)[args], abi.view(s, objs, mem), x) proof
+      fix x
+      show := mp(all_elim(tr.with_stack_mono, {F}, {S}, {stk}, {args}, {abi.view(s, objs, mem)}, {x}), hs, hA, wt, hc)
+    qed
+    show := mp(all_elim(tr.matches_t_mono, {abi.with_stack(single(empty), F, stk)}, {abi.with_stack(single(empty), S, stk)}, {args}, {objs}, {mem}, {s}, {o}), r, m)
+  qed
+  show by defs(g, tr.implements_at_s)
+qed

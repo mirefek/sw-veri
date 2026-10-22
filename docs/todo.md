@@ -24,16 +24,15 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   (proofs/mallocng/machine/c1_leaves.core); __errno_location, __syscall_ret,
   size_overflows, __syscall3 and __mprotect their contracts at machine
   level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
-  `sy3c.composed`, `mprc.composed`, `vwc.composed`). __syscall6 and __mmap
-  have their C2 (`ms.syscall6_fun_c2`, `ms.mmap_fun_c2`); their C1 needs
-  the bridge for stack arguments (`abi.implements2_at_s`), engine and
-  rules: the callee's entry with its stack arguments above the return
-  slot (`abi.stack_args`; tr.mem's frames clause keeps them, if they are
-  no stack object -- to require in abi_function_s), a load from there
-  ([rsp + 8] in __syscall6); the caller's `sub $8, %rsp; push 0x10(%rsp)`
-  (push of a memory operand), a call rule for a CFunS callee (its stack
-  arguments the homes at the frame's top), `add $0x10, %rsp` after it.
-  Then memcpy's model.
+  `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
+  last `tr.implements_at_s`, with a stack argument). __mmap has its C2
+  (`ms.mmap_fun_c2`); its C1 needs the caller's side of a stack argument:
+  `sub $8, %rsp; push 0x10(%rsp)` (an rsp adjustment in the body, a push
+  of a memory operand -- the home of `off`), a call rule for a CFunS
+  callee against `tr.implements_at_s` (its stack arguments the pushed
+  words at the frame's top, `tr.sargs_off` from the caller's objects
+  above its frame), `add $0x10, %rsp` after it. Then `__mmap`'s
+  composition (proofs/mallocng/machine/cfg_mmap.core), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

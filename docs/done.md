@@ -1034,3 +1034,20 @@ item is a short summary of finished work; details are in the files named.
   checks, the vm_wait, the kernel's outcomes through __syscall_ret: errno
   or the place; the spec's returns built, `ms.mmap_ok`, `ms.mmap_errno`;
   the thread pointer sound after fresh pages, `ms.th_fresh`).
+- **__syscall6's C1 and contract (a callee with a stack argument).** The
+  bridge (proofs/translate_sargs.core): `tr.implements_at_s` (the contract
+  for any stack arguments stk the entry has, `abi.stack_args`, off the
+  callers' objects, `tr.sargs_off`), the entry `tr.entry_ns` (six in
+  registers, the spec's arguments `seq_concat(args, stk)`), the load
+  `tr.load64_sarg` (the entry's [rsp + 8 + 8 j], kept as the frames clause
+  keeps bytes above rsp), `tr.implements_s_intro`, `tr.implements_refine_s`.
+  The engine: an argument count beyond six, stk's facts at the entry, a
+  home load above the return slot as a stack argument. mmap's `syscall`
+  (proofs/translate_sys6.core): the machine's Linux mmap
+  (`x86i.mmap_insn`, `lx.mmap_post`), the world's os_mmap outcomes by
+  case (`g.mmap_inval` .. `g.mmap_free`), fresh pages on both sides keeping
+  the coupling (`tr.fresh_chg`, `tr.mmap_world`), the rule `tr.sys_call6`.
+  The Linux model's sys_mmap returns ENOMEM without a free place (it was
+  undefined; Linux's get_unmapped_area fails so) -- trusted spec,
+  `lx.sys_mmap_ok` restated. `refines` for a CFunS without the six-argument
+  bound; `sy6c.composed` (proofs/mallocng/machine/cfg_mmap.core).

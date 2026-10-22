@@ -348,12 +348,12 @@ pred stack_args(m: Machine, stk: List[bits[64]]) =
   (all i: nat. i < len(stk) -> le(m.vm.bytes, m.gpr[rsp] + bits[64](8 + 8 * i), 8) = stk[i])
 
 fn with_stack[G](spec: CFunS[World & G], stk: List[bits[64]]) -> CFun2[World & G] = (args: Args) => {
-  let (r0, r1) = spec(args ++ stk)
-  return (r0, r1)
+  return spec(args ++ stk)
 }
 
 proc[Machine & G] abi_function_s[G](f: Addr, spec: CFunS[World & G], args: Args, stk: List[bits[64]], objs: Set[nat], mem: Vm) {
-  require stack_args(self, stk) && (len(stk) = 0 || len(args) = 6)
+  // (the stack arguments: the caller's words, no stack object)
+  require stack_args(self, stk) && (len(stk) = 0 || len(args) = 6) && (all i: nat. i < 8 * len(stk) -> uint(gpr[rsp]) + 8 + i notin objs)
   abi_function(f, with_stack(spec, stk), args, objs, mem)
 }
 
