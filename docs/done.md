@@ -1019,3 +1019,18 @@ item is a short summary of finished work; details are in the files named.
   page as the spec's choice, `ms.any_i`). Malloc's side: the reserve's
   bytes are the allocator's (`mp.rsv_fp`), the thread pointer's and errno's
   not (`tls_apart`, `errno_apart`), so its page misses them (`mp.am_tls`).
+- **Stack arguments, __syscall6 and __mmap's C2.** The ABI layer's
+  `CFunS` (more than six arguments, the rest on the stack above the return
+  address, `stack_args`); with them fixed a register-argument spec
+  (`with_stack`) whose contract is `abi_function`'s (the callee keeps
+  them). GIMPLE's `call_s` / `call1_s`, emitted by the readable generator
+  for such callees; `gc.contract_call1VR_s` (the contract lemmas' core
+  takes the callee's runs, `_m`). The kernel model's os_mmap returns
+  ENOMEM without a free place (it was unconstrained). `mmap_spec` requires
+  what sys_call6 does (a fixed mapping's pages `sys_pages_ok`, else addr
+  0) and, fixed, `tls_off` (__mmap calls on after it); alloc_meta's guard
+  page at the old break meets both (`mp.fresh_spo`, `mp.am_tls_unm`). C2:
+  `ms.syscall6_c2`, `ms.sy6_q` (its outcomes at a call), `ms.mmap_c2` (musl's
+  checks, the vm_wait, the kernel's outcomes through __syscall_ret: errno
+  or the place; the spec's returns built, `ms.mmap_ok`, `ms.mmap_errno`;
+  the thread pointer sound after fresh pages, `ms.th_fresh`).

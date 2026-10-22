@@ -24,9 +24,13 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   (proofs/mallocng/machine/c1_leaves.core); __errno_location, __syscall_ret,
   size_overflows, __syscall3 and __mprotect their contracts at machine
   level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
-  `sy3c.composed`, `mprc.composed`). Then `sys_call6` the same way
-  (the closed form `lx.sys_mmap_ok`; os_mmap relational; a place for a
-  mapping without a hint the world's iff the machine's), memcpy's model.
+  `sy3c.composed`, `mprc.composed`). __syscall6, __vm_wait and __mmap have
+  their C2 (`ms.syscall6_fun_c2`, `ms.vm_wait_fun_c2`, `ms.mmap_fun_c2`);
+  their C1 needs the bridge for stack arguments (`abi.implements2_at_s`):
+  an entry rule with the stack arguments above the return slot
+  (`abi.stack_args`, kept), the call of a CFunS callee after the caller's
+  push (`sub $8, %rsp; push ..; call; add $0x10, %rsp`), the engine for
+  both; and __vm_wait (`dummy`)'s C1. Then memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

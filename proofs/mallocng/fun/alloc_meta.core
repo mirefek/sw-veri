@@ -232,7 +232,8 @@ theorem mp.mmap_q: all t addr len prot flags fd regs o2. t in abi.World -> t in 
   (flags = int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS) || flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) ->
   int_lt(prot, 8) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) ->
   ite(flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED),
-    gimple.sys_pages_ok(t.vm, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)), addr = 0) ->
+    gimple.sys_pages_ok(t.vm, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) && mallocng_specs.tls_off(t.fs_base, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)),
+    addr = 0) ->
   gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, addr)), seq_one(gimple.arg(64, len))), seq_one(gimple.arg(32, prot))),
     seq_one(gimple.arg(32, flags))), seq_one(gimple.arg(32, fd))), seq_one(gimple.arg(64, 0)))) ->
   runs(mallocng_specs.mmap_spec_fun()[regs], t, o2) ->
@@ -282,7 +283,7 @@ proof
          gimple.fresh_pages(t.vm, V, p, x86_64_linux.pages_for(len), PG) && V.brk = t.vm.brk) && o3 = ok(fn_update(t, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE)))) ||
       (ex p. (p in omega && mallocng_specs.mmap_place(t.vm, addr, len, flags, p)) && !FR(p))
     by simp(hs3, vv, ee, hfl, hpl, he, hfx, bp, keep(gimple.fresh_pages, mallocng_specs.mmap_place, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at,
-      gimple.sys_pages_ok, x86_64_linux.page_of, x86_64_linux.pages_for))
+      gimple.sys_pages_ok, mallocng_specs.tls_off, x86_64_linux.page_of, x86_64_linux.pages_for))
   let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) ||
     (ex e r. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
        fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
@@ -1288,6 +1289,42 @@ proof
   have pe := rewrite(ai2, mp(all_elim(sep, {i}), io, (int_lt(i, 4) by arith(e2))))
   have ml mn := expand(m0, x86_64_linux.mapped)
   show by defs(taut(ml, rewrite(sym(pe), mn)), x86_64_linux.mapped)
+qed
+
+// (a page unmapped in a run state: neither the thread pointer's nor
+// errno's -- theirs are mapped)
+theorem mp.am_tls_unm(c, A, B, s, V, A1, q): mp.am_st(c, A, B, s, V, A1) -> s in abi.World -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng_specs.tls_apart(c, A, B, s.fs_base) -> mallocng_specs.errno_apart(c, A, B, s.vm, s.fs_base) -> int_le(int_add(s.fs_base, 56), int_pow(2, 64)) ->
+  q in omega -> !x86_64_linux.mapped(V, q) -> mallocng_specs.tls_off(s.fs_base, q, 1)
+proof
+  assume S hw ht htl hea hfl hq hn
+  have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
+  have thv := apply(mp.am_thread, S, hw, ht, htl)
+  have rd _ _ _ := expand(thv, abi.thread_ok)
+  have rd1 := expand(rd, x86_64_linux.readable)
+  have t8: all i. i in omega -> int_lt(i, 8) -> !(int_le(q, int_div(int_add(s.fs_base, i), x86_64_linux.PAGE)) && int_lt(int_div(int_add(s.fs_base, i), x86_64_linux.PAGE), int_add(q, 1))) proof
+    fix i
+    assume hi hil
+    assume w
+    have w1 w2 := w
+    have e: int_div(int_add(s.fs_base, i), x86_64_linux.PAGE) = q by arith(w1, w2)
+    have m _ := mp(all_elim(rd1, {i}), hi, hil)
+    show by taut(hn, rewrite(e, m))
+  qed
+  have eb: mallocng_specs.errno_at(s.fs_base) = int_add(s.fs_base, 52) by defs(arith(fsb, hfl), mallocng_specs.errno_at, bits_add, pow2)
+  have e4: all i. i in omega -> int_lt(i, 4) -> !(int_le(q, int_div(int_add(mallocng_specs.errno_at(s.fs_base), i), x86_64_linux.PAGE)) &&
+      int_lt(int_div(int_add(mallocng_specs.errno_at(s.fs_base), i), x86_64_linux.PAGE), int_add(q, 1))) proof
+    fix i
+    assume hi hil
+    assume w
+    have w1 w2 := rewrite(eb, w)
+    let a := int_add(int_add(s.fs_base, 52), i)
+    have ie: a in mp.errno(s.fs_base) by simp((a in omega by arith(fsb, hi)), (int_le(int_add(s.fs_base, 52), a) by arith(hi)), (int_lt(a, int_add(s.fs_base, 56)) by arith(hil)))
+    have m := apply(mp.am_emapped[c := c, A := A, B := B, s := s, V := V, A1 := A1, a := a], S, hea, fsb, hfl, ie)
+    have e: int_div(a, x86_64_linux.PAGE) = q by arith(w1, w2)
+    show by taut(hn, rewrite(e, m))
+  qed
+  show by defs(taut(t8, e4), mallocng_specs.tls_off)
 qed
 
 // (memory of a run state touched outside the allocator only at errno, its
@@ -4228,6 +4265,10 @@ proof
                         pg := HP, q := int_div(bb, 4096)], gfp, gos, (!HP.prot.x by simp()), (int_div(bb, 4096) in omega by arith(bbb)), (int_le(x86_64_linux.pages_for(VG.brk), int_div(bb, 4096)) by arith(qpo)),
                         (int_lt(int_div(bb, 4096), int_add(x86_64_linux.pages_for(VG.brk), int_sub(x86_64_linux.pages_for(nw), x86_64_linux.pages_for(VG.brk)))) by arith(qlt)),
                         (int_lt(int_div(bb, 4096), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(gft, qlt, glt)))
+                      // (nor the thread pointer's or errno's: unmapped before the break grew)
+                      have hfl5: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(expand(heo, mallocng_specs.errno_ok), (s.fs_base in bits(64) by simp(expand(hw, abi.World))))
+                      have tfo := apply(mp.am_tls_unm[c := c, A := A, B := B, s := s, V := V1, A1 := A1, q := int_div(bb, 4096)], hst, hw, hth, htl, hea, hfl5,
+                        (int_div(bb, 4096) in omega by arith(bbb)), mp(fgd, g1))
                       let WV := fn_update(s, "vm", V)
                       have wvW wvu := apply(mp.am_world, hw, hu, hV)
                       have thsv: gc.sound(WV) by simp(tv)
@@ -4261,9 +4302,10 @@ proof
                             bits_of_int(32, 50) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED) by simp(mc)),
                           (int_lt(bits_of_int(32, 0), 8) by simp()), (mallocng_specs.errno_ok(WV.vm, WV.objs, WV.fs_base) by simp(ev, keep(mallocng_specs.errno_ok))),
                           (ite(bits_of_int(32, 50) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED),
-                            gimple.sys_pages_ok(WV.vm, x86_64_linux.page_of(bb), x86_64_linux.pages_for(4096)), bb = 0) by
-                            simp(mc, spo, (x86_64_linux.page_of(bb) = int_div(bb, 4096) by defs(simp(), x86_64_linux.page_of, x86_64_linux.PAGE)),
-                              (x86_64_linux.pages_for(4096) = 1 by defs(simp(), x86_64_linux.pages_for, x86_64_linux.PAGE)), keep(gimple.sys_pages_ok))),
+                            gimple.sys_pages_ok(WV.vm, x86_64_linux.page_of(bb), x86_64_linux.pages_for(4096)) &&
+                            mallocng_specs.tls_off(WV.fs_base, x86_64_linux.page_of(bb), x86_64_linux.pages_for(4096)), bb = 0) by
+                            simp(mc, spo, tfo, (x86_64_linux.page_of(bb) = int_div(bb, 4096) by defs(simp(), x86_64_linux.page_of, x86_64_linux.PAGE)),
+                              (x86_64_linux.pages_for(4096) = 1 by defs(simp(), x86_64_linux.pages_for, x86_64_linux.PAGE)), keep(gimple.sys_pages_ok, mallocng_specs.tls_off))),
                           rewrite(ea, hro), h2)
                         have wvv: WV.vm = V by simp()
                         have wvf: WV.fs_base = s.fs_base by simp()
@@ -4443,8 +4485,9 @@ proof
                     bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED) by taut(mc2)),
                   (int_lt(bits_of_int(32, 0), 8) by simp()), (mallocng_specs.errno_ok(W3.vm, W3.objs, W3.fs_base) by simp(e3, keep(mallocng_specs.errno_ok))),
                   (ite(bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED),
-                    gimple.sys_pages_ok(W3.vm, x86_64_linux.page_of(bits_of_int(64, 0)), x86_64_linux.pages_for(LEN)), bits_of_int(64, 0) = 0) by
-                    defs(simp(keep(gimple.sys_pages_ok)), x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)),
+                    gimple.sys_pages_ok(W3.vm, x86_64_linux.page_of(bits_of_int(64, 0)), x86_64_linux.pages_for(LEN)) &&
+                    mallocng_specs.tls_off(W3.fs_base, x86_64_linux.page_of(bits_of_int(64, 0)), x86_64_linux.pages_for(LEN)), bits_of_int(64, 0) = 0) by
+                    defs(simp(keep(gimple.sys_pages_ok, mallocng_specs.tls_off)), x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)),
                   rewrite(ea, hro), h2)
                 have wvv: W3.vm = V3 by simp()
                 have wvf: W3.fs_base = s.fs_base by simp()

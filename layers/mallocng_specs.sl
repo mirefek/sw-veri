@@ -262,16 +262,24 @@ pred mmap_place(before: Vm, addr: Addr, len: bits[64], flags: bits[32], p: nat) 
   (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { uint(addr) % PAGE = 0 && p = page_of(addr) && p + pages_for(uint(len)) <= TASK_SIZE / PAGE }
    else { p >= 1 && free_range(before, p, pages_for(uint(len))) && (addr != 0 || off_stack_space(before, p, pages_for(uint(len)))) })
 
+// the pages [p, p + n) neither the thread pointer's nor errno's (a call
+// changing them leaves both as they are)
+pred tls_off(fs: Addr, p: nat, n: nat) =
+  (all i: nat. i < 8 -> !(p <= (uint(fs) + i) / PAGE && (uint(fs) + i) / PAGE < p + n)) &&
+  (all i: nat. i < 4 -> !(p <= (uint(errno_at(fs)) + i) / PAGE && (uint(errno_at(fs)) + i) / PAGE < p + n))
+
 // mmap(addr, len, prot, flags, -1, 0), anonymous private memory (at addr
 // if MAP_FIXED): len's pages fresh at a place for them (`mmap_place`),
 // replacing what was there; or -1, errno ENOMEM or EINVAL (no place; the
 // kernel may always refuse; musl's own checks), nothing else changed. A
-// fixed mapping's pages ones the kernel may replace (sys_pages_ok); else
-// no hint (addr 0: Linux places it).
+// fixed mapping's pages ones the kernel may replace (sys_pages_ok), not
+// the thread pointer's or errno's (`tls_off`: __mmap calls on); else no
+// hint (addr 0: Linux places it).
 proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32], off: bits[64]) -> bits[64] {
   require (uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS || uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED) && uint(prot) < 8 && off = 0 &&
     errno_ok(vm, objs, fs_base) &&
-    (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { sys_pages_ok(vm, page_of(addr), pages_for(uint(len))) } else { uint(addr) = 0 })
+    (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { sys_pages_ok(vm, page_of(addr), pages_for(uint(len))) && tls_off(fs_base, page_of(addr), pages_for(uint(len))) }
+     else { uint(addr) = 0 })
   either { overflow() } or {
     let before = vm
     if ex p: nat. mmap_place(before, addr, len, flags, p) {
@@ -323,10 +331,6 @@ fn vm_wait_spec_fun() -> CFun2[World] = (args: Args) => {
 // neither the thread's pointer's nor errno's (`tls_off`: errno is set
 // after). (len + PAGE <= 2^63: addr + len + PAGE - 1 a defined pointer
 // sum, as musl forms it.)
-pred tls_off(fs: Addr, p: nat, n: nat) =
-  (all i: nat. i < 8 -> !(p <= (uint(fs) + i) / PAGE && (uint(fs) + i) / PAGE < p + n)) &&
-  (all i: nat. i < 4 -> !(p <= (uint(errno_at(fs)) + i) / PAGE && (uint(errno_at(fs)) + i) / PAGE < p + n))
-
 proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32] {
   require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && uint(len) + PAGE <= 2^63 && errno_ok(vm, objs, fs_base) &&
     sys_pages_ok(vm, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE) &&
