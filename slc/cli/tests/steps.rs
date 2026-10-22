@@ -145,7 +145,7 @@ fn c1_cfg_engine_checks() {
         .args(["steps"])
         .arg(&elf)
         .arg(&claim)
-        .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "alloc_group=403ee6", "a_cas=402c47", "size_overflows", "__malloc_alloc_meta", "get_random_secret", "__syscall1=402cf9", "__mmap", "__mprotect", "__errno_location", "-o"])
+        .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "alloc_group=403ee6", "a_cas=402c47", "size_overflows", "__malloc_alloc_meta", "get_random_secret", "__syscall1=402cf9", "__mmap", "__mprotect", "__errno_location", "__get_tp=40569a", "__syscall3=404bde", "__syscall6=404a8c", "__syscall_ret", "dummy=404ada", "-o"])
         .arg(&steps)
         .arg("--text")
         .arg(&text)
@@ -167,7 +167,28 @@ fn c1_cfg_engine_checks() {
         .output()
         .unwrap();
     assert!(gc.status.success(), "{}", String::from_utf8_lossy(&gc.stderr));
-    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg(&cfg_sl).arg("-o").arg(&gimple).output().unwrap();
+    // (the leaves' translation units -- errno, the syscall and mman
+    // wrappers -- their structured and CFG forms, as scripts/check.sh's)
+    let mut leaf_sl = Vec::new();
+    for (src, name, base) in [
+        ("src_errno___errno_location", "c_errno_location", "__errno_location.c"),
+        ("src_internal_syscall_ret", "c_syscall_ret", "syscall_ret.c"),
+        ("src_mman_mprotect", "c_mman_mprotect", "mprotect.c"),
+        ("src_mman_mmap", "c_mman_mmap", "mmap.c"),
+    ] {
+        let (d, o) = (root.join(format!("build/gimple-O0/{src}.c.optimized")), root.join(format!("build/gimple-O0/{src}.c.o")));
+        for cfg in [false, true] {
+            let out = tmp.join(format!("slc-{}{}-{}.sl", name, if cfg { "-cfg" } else { "" }, id));
+            let mut a = vec!["gimple", "--readable"];
+            if cfg {
+                a.push("--cfg");
+            }
+            let r = Command::new(slc).current_dir(&root).args(&a).arg("--elf").arg(&elf).arg("--obj").arg(&o).args(["--source", base]).arg(&d).arg("-o").arg(&out).output().unwrap();
+            assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+            leaf_sl.push(out);
+        }
+    }
+    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg(&cfg_sl).args(&leaf_sl).arg("-o").arg(&gimple).output().unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
     // the chain (proofs/chain): the libraries, the spec, the decode facts,
     // the rules, the program text (the code every contract assumes loaded),

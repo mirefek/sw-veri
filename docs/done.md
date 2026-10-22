@@ -390,7 +390,14 @@ item is a short summary of finished work; details are in the files named.
   `slc steps --text`, from the executable segment's start, so its base
   does not move with the set of functions), so linking needs no widening. A caller's
   `tr.callee_io` (its returns keep the world valid for GIMPLE) is
-  generated from its callees' (`tr.eff_call`). `a_crash` (`hlt`) has the
+  generated from its callees' (`tr.eff_call`), by structure alone, no
+  simp (slc/cli/src/c1/eff.rs, proofs/translate_struct.core):
+  requirements, choices, statements keeping the world (the rest from it),
+  a return to a changed world valid by the change's lemma (`tr.valid_vm`),
+  the layer's procedures inlined, a procedure's parameter types (the
+  elaborator's `{proc}.dom`) premises of its lemma where its proof uses
+  them -- so __syscall6's through sys_call6 and os_mmap, and __mmap
+  linked (`mmc.composed`). `a_crash` (`hlt`) has the
   undefined contract (`proofs/mallocng/machine/a_crash.core`); callers' specs exclude it by
   their preconditions. `proofs/mallocng_link.core` links a_clz_32 with
   a_ctz_32, dequeue_head with dequeue, queue with a_crash, free_meta with

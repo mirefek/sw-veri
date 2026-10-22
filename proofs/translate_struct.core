@@ -1,0 +1,313 @@
+// A layer procedure's effect (tr.eff) by its structure, as
+// slc/cli/src/c1/eff.rs proves it: the rules for a requirement, a choice
+// of statements, a statement keeping the world (tr.sk: the next ones from
+// the same world), a return to a changed world (its validity: tr.valid_*),
+// a parameter's type (tr.ty_*). Checked after proofs/translate_effects.core,
+// proofs/translate_sys.core (tr.eff_iff) and proofs/translate_sys6.core
+// (tr.mmap_valid).
+
+// ---------------------------------------------------------------------
+//  Requirements and choices
+
+// `require c`: undefined unless c
+theorem tr.eff_req(c, o. r): all w. (c -> tr.eff(w, o. r(o))) -> tr.eff(w, o. !c || r(o))
+proof
+  fix w
+  assume h
+  have c1: !c -> tr.eff(w, o. !c || r(o)) proof
+    assume hn
+    have ux: all x e. x in univ(1) -> e in univ(1) -> !c || r(exc(x, e)) proof
+      fix x e
+      assume _ _
+      show by taut(hn)
+    qed
+    have ud: all t. t in univ(1) -> !c || r(diverge(t)) proof
+      fix t
+      assume _
+      show by taut(hn)
+    qed
+    have u: tr.undef(o. !c || r(o)) by defs(taut(ux, ud), tr.undef)
+    show by defs(taut(u), tr.eff)
+  qed
+  have c2: c -> tr.eff(w, o. !c || r(o)) proof
+    assume hc
+    have iff: all o. (!c || r(o)) <-> r(o) proof
+      fix o
+      show by taut(hc)
+    qed
+    show := apply(tr.eff_iff[w := w, r := o. !c || r(o), q := o. r(o)], iff, mp(h, hc))
+  qed
+  show by taut(c1, c2)
+qed
+
+// `either { a } or { b }`: each one's
+theorem tr.seff_or(y. a, y. b): all w. tr.seff(w, y. a(y)) -> tr.seff(w, y. b(y)) -> tr.seff(w, y. a(y) || b(y))
+proof
+  fix w
+  assume ha hb
+  have ua: tr.sundef(y. a(y)) -> tr.sundef(y. a(y) || b(y)) proof
+    assume hu0
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> a(diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e))) || b(exc(pair(y, l), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l}, taut(hl))
+    qed
+    have dv: all t. t in univ(1) -> a(diverge(t)) || b(diverge(t)) proof
+      fix t
+      assume ht
+      show by taut(mp(all_elim(hd, {t}), ht))
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
+  qed
+  have ub: tr.sundef(y. b(y)) -> tr.sundef(y. a(y) || b(y)) proof
+    assume hu0
+    have hu: all y e. y in univ(1) -> e in univ(1) -> (ex l. b(exc(pair(y, l), pair("raise", e)))) by taut(expand(hu0, tr.sundef))
+    have hd: all t. t in univ(1) -> b(diverge(t)) by taut(expand(hu0, tr.sundef))
+    have ex: all y e. y in univ(1) -> e in univ(1) -> (ex l. a(exc(pair(y, l), pair("raise", e))) || b(exc(pair(y, l), pair("raise", e)))) proof
+      fix y e
+      assume hy he
+      obtain l, hl from mp(all_elim(hu, {y}, {e}), hy, he)
+      show by ex_intro({l}, taut(hl))
+    qed
+    have dv: all t. t in univ(1) -> a(diverge(t)) || b(diverge(t)) proof
+      fix t
+      assume ht
+      show by taut(mp(all_elim(hd, {t}), ht))
+    qed
+    show by defs(taut(ex, dv), tr.sundef)
+  qed
+  have uc: (all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ->
+      (all x. b(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) ->
+      (all x. a(x) || b(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x)))) proof
+    assume va vb
+    fix x
+    assume h hr
+    have c1: a(x) -> tr.returns_valid(w, fst(out_state(x))) proof
+      assume h1
+      show := mp(all_elim(va, {x}), h1, hr)
+    qed
+    have c2: b(x) -> tr.returns_valid(w, fst(out_state(x))) proof
+      assume h2
+      show := mp(all_elim(vb, {x}), h2, hr)
+    qed
+    show by taut(h, c1, c2)
+  qed
+  show by defs(taut(expand(ha, tr.seff), expand(hb, tr.seff), ua, ub, uc), tr.seff)
+qed
+
+// ---------------------------------------------------------------------
+//  Statements keeping the world: every outcome's world w (a check
+//  returning early, a choice of returns)
+
+def tr.sk(w, x. a) := all x. a(x) -> fst(out_state(x)) = w
+
+theorem tr.sk_ok: all w l v. tr.sk(w, y. y = ok(pair(w, l), v))
+proof
+  fix w l v
+  have e: fst(out_state(ok(pair(w, l), v))) = w by rsimp()
+  have g: all y. y = ok(pair(w, l), v) -> fst(out_state(y)) = w proof
+    fix y
+    assume h
+    show := rewrite(sym(h), e)
+  qed
+  show by defs(taut(g), tr.sk)
+qed
+
+theorem tr.sk_exc: all w l v. tr.sk(w, y. y = exc(pair(w, l), v))
+proof
+  fix w l v
+  have e: fst(out_state(exc(pair(w, l), v))) = w by rsimp()
+  have g: all y. y = exc(pair(w, l), v) -> fst(out_state(y)) = w proof
+    fix y
+    assume h
+    show := rewrite(sym(h), e)
+  qed
+  show by defs(taut(g), tr.sk)
+qed
+
+theorem tr.sk_or(y. a, y. b): all w. tr.sk(w, y. a(y)) -> tr.sk(w, y. b(y)) -> tr.sk(w, y. a(y) || b(y))
+proof
+  fix w
+  assume ha hb
+  have g: all y. a(y) || b(y) -> fst(out_state(y)) = w proof
+    fix y
+    assume h
+    have c1: a(y) -> fst(out_state(y)) = w := all_elim(expand(ha, tr.sk), {y})
+    have c2: b(y) -> fst(out_state(y)) = w := all_elim(expand(hb, tr.sk), {y})
+    show by taut(h, c1, c2)
+  qed
+  show by defs(taut(g), tr.sk)
+qed
+
+theorem tr.sk_and(y. c, y. a): all w. tr.sk(w, y. a(y)) -> tr.sk(w, y. c(y) && a(y))
+proof
+  fix w
+  assume ha
+  have g: all y. c(y) && a(y) -> fst(out_state(y)) = w proof
+    fix y
+    assume h
+    have c1: a(y) -> fst(out_state(y)) = w := all_elim(expand(ha, tr.sk), {y})
+    show by taut(h, c1)
+  qed
+  show by defs(taut(g), tr.sk)
+qed
+
+// a block whose statement keeps the world: the rest from it
+theorem tr.eff_seq_same(x. a, s x o. k): all w. tr.sk(w, x. a(x)) -> (all x. a(x) -> fst(x) = 0 -> tr.eff(w, o. k(w, x, o))) ->
+  tr.eff(w, o. ex x. a(x) && ((fst(x) = 0 && k(fst(out_state(x)), x, o)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && o = ok(fst(out_state(x)), snd(out_value(x)))) ||
+    ((fst(x) = 1 && fst(out_value(x)) = "raise") && o = exc(fst(out_state(x)), snd(out_value(x))))) || (fst(x) = 2 && o = diverge(snd(x))))))
+proof
+  fix w
+  assume hs hk
+  have es: all x. a(x) -> fst(out_state(x)) = w := expand(hs, tr.sk)
+  have g: all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x))) proof
+    fix x
+    assume hx _
+    have e := mp(all_elim(es, {x}), hx)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  have sf: tr.seff(w, x. a(x)) by defs(taut(g), tr.seff)
+  have kk: all x. a(x) -> fst(x) = 0 -> tr.eff(fst(out_state(x)), o. k(fst(out_state(x)), x, o)) proof
+    fix x
+    assume hx h0
+    have e := mp(all_elim(es, {x}), hx)
+    show := rewrite(sym(e), mp(all_elim(hk, {x}), hx, h0))
+  qed
+  show := apply(tr.eff_seq[a := x. a(x), k := x o. k(fst(out_state(x)), x, o)], {w}, sf, kk)
+qed
+
+// the same inside a statement
+theorem tr.seff_seq_same(x. a, s x y. k, x. l): all w. tr.sk(w, x. a(x)) -> (all x. a(x) -> fst(x) = 0 -> tr.seff(w, y. k(w, x, y))) ->
+  tr.seff(w, y. ex x. a(x) && ((fst(x) = 0 && k(fst(out_state(x)), x, y)) || ((((fst(x) = 1 && fst(out_value(x)) = "ret") && y = exc(pair(fst(out_state(x)), l(x)), pair("ret", snd(out_value(x))))) ||
+    ((fst(x) = 1 && fst(out_value(x)) = "raise") && y = exc(pair(fst(out_state(x)), l(x)), pair("raise", snd(out_value(x)))))) || (fst(x) = 2 && y = diverge(snd(x))))))
+proof
+  fix w
+  assume hs hk
+  have es: all x. a(x) -> fst(out_state(x)) = w := expand(hs, tr.sk)
+  have g: all x. a(x) -> (fst(x) = 0 || (fst(x) = 1 && !(fst(out_value(x)) = "raise"))) -> tr.returns_valid(w, fst(out_state(x))) proof
+    fix x
+    assume hx _
+    have e := mp(all_elim(es, {x}), hx)
+    show := rewrite(sym(e), all_elim(tr.rv_refl, {w}), {2})
+  qed
+  have sf: tr.seff(w, x. a(x)) by defs(taut(g), tr.seff)
+  have kk: all x. a(x) -> fst(x) = 0 -> tr.seff(fst(out_state(x)), y. k(fst(out_state(x)), x, y)) proof
+    fix x
+    assume hx h0
+    have e := mp(all_elim(es, {x}), hx)
+    show := rewrite(sym(e), mp(all_elim(hk, {x}), hx, h0))
+  qed
+  show := apply(tr.seff_seq[a := x. a(x), k := x y. k(fst(out_state(x)), x, y), l := x. l(x)], {w}, sf, kk)
+qed
+
+// ---------------------------------------------------------------------
+//  A return to a changed world: valid by the change's own lemma
+
+theorem tr.eff_ret_chg: all w w2 v. tr.returns_valid(w, w2) -> tr.eff(w, o. o = ok(w2, v))
+proof
+  fix w w2 v
+  assume hv
+  have g: all w3 v3. ok(w3, v3) = ok(w2, v) -> tr.returns_valid(w, w3) proof
+    fix w3 v3
+    assume h
+    have e0: out_state(ok(w3, v3)) = w3 by rsimp()
+    have e1: out_state(ok(w2, v)) = w2 by rsimp()
+    have e: w3 = w2 := trans(sym(rewrite(h, e0)), e1)
+    show := rewrite(sym(e), hv)
+  qed
+  show by defs(taut(g), tr.eff)
+qed
+
+theorem tr.seff_ok_chg: all w w2 l v. tr.returns_valid(w, w2) -> tr.seff(w, y. y = ok(pair(w2, l), v))
+proof
+  fix w w2 l v
+  assume hv
+  have e0: fst(out_state(ok(pair(w2, l), v))) = w2 by rsimp()
+  have g: all y. y = ok(pair(w2, l), v) -> (fst(y) = 0 || (fst(y) = 1 && !(fst(out_value(y)) = "raise"))) -> tr.returns_valid(w, fst(out_state(y))) proof
+    fix y
+    assume h _
+    have e: fst(out_state(y)) = w2 := rewrite(sym(h), e0)
+    show := rewrite(sym(e), hv)
+  qed
+  show by defs(taut(g), tr.seff)
+qed
+
+theorem tr.seff_ret_chg: all w w2 l v. tr.returns_valid(w, w2) -> tr.seff(w, y. y = exc(pair(w2, l), pair("ret", v)))
+proof
+  fix w w2 l v
+  assume hv
+  have e0: fst(out_state(exc(pair(w2, l), pair("ret", v)))) = w2 by rsimp()
+  have g: all y. y = exc(pair(w2, l), pair("ret", v)) -> (fst(y) = 0 || (fst(y) = 1 && !(fst(out_value(y)) = "raise"))) -> tr.returns_valid(w, fst(out_state(y))) proof
+    fix y
+    assume h _
+    have e: fst(out_state(y)) = w2 := rewrite(sym(h), e0)
+    show := rewrite(sym(e), hv)
+  qed
+  show by defs(taut(g), tr.seff)
+qed
+
+// fresh pages (mmap's) where the world's pages are the world's own or none
+// is mapped: valid
+theorem tr.valid_vm(w, V, p, n, pg): gimple.fresh_pages(w.vm, fn_update(w, "vm", V).vm, p, n, pg) ->
+  (gimple.sys_pages_ok(w.vm, p, n) || x86_64_linux.free_range(w.vm, p, n)) -> p in omega -> n in omega ->
+  tr.returns_valid(w, fn_update(w, "vm", V))
+proof
+  assume hf hk hp hn
+  have ev: fn_update(w, "vm", V).vm = V by rsimp()
+  have hf2: gimple.fresh_pages(w.vm, V, p, n, pg) := rewrite(ev, hf)
+  have nx: all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> x86_64_linux.mapped(w.vm, q) -> !snd(w.vm.pages[q]).prot.x proof
+    fix q
+    assume h0 h1 h2 h3
+    have c1: gimple.sys_pages_ok(w.vm, p, n) -> !snd(w.vm.pages[q]).prot.x proof
+      assume hs
+      have _ nx0 := expand(hs, gimple.sys_pages_ok)
+      show := mp(all_elim(nx0, {q}), h0, conj(h1, h2), h3)
+    qed
+    have c2: x86_64_linux.free_range(w.vm, p, n) -> !snd(w.vm.pages[q]).prot.x proof
+      assume hr
+      have _ f2 _ := expand(hr, x86_64_linux.free_range)
+      show by taut(mp(all_elim(f2, {q}), h0, conj(h1, h2)), h3)
+    qed
+    show by taut(hk, c1, c2)
+  qed
+  show := apply(tr.mmap_valid, hp, hn, nx, hf2)
+qed
+
+// ---------------------------------------------------------------------
+//  Facts by cases, types
+
+theorem tr.ite_imp_t(c, a, b): ite(c, a, b) -> c -> a
+proof
+  assume h hc
+  show := rewrite(mp(ite_t[c := c, a := a, b := b], hc), h)
+qed
+
+theorem tr.ite_imp_f(c, a, b): ite(c, a, b) -> !c -> b
+proof
+  assume h hc
+  show := rewrite(mp(ite_f[c := c, a := a, b := b], hc), h)
+qed
+
+theorem tr.ty_bits_of_int: all n z. n in omega -> bits_of_int(n, z) in bits(n)
+proof
+  fix n z
+  assume hn
+  show by defs(arith(hn), bits_of_int)
+qed
+
+theorem tr.ty_page_of: all a. a in bits(64) -> x86_64_linux.page_of(a) in omega
+proof
+  fix a
+  assume ha
+  show by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+qed
+
+theorem tr.ty_pages_for: all a. a in bits(64) -> x86_64_linux.pages_for(a) in omega
+proof
+  fix a
+  assume ha
+  show by defs(arith(ha), x86_64_linux.pages_for, x86_64_linux.PAGE)
+qed

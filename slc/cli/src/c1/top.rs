@@ -635,6 +635,7 @@ impl<'e> Gen<'e> {
             let imp_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(i0))), vec![spec_name.to_string()]), &goal, &[])?;
             let imp = self.close(imp_in, &cprem, &gvs)?;
             out.push((format!("{p}.implements_s"), imp));
+            self.callee_effects(&p, ssym, &cns, &mut out)?;
             return Ok(out);
         }
         // m: all args objs mem s o. .. -> tr.matches_t(spec, args, objs, mem, s, o), the spec unfolded
@@ -672,13 +673,18 @@ impl<'e> Gen<'e> {
         aprem.push(dr_t);
         let abi = self.close(abi_in, &aprem, &gvs)?;
         out.push((format!("{p}.implements_abi"), abi));
-        // as a callee: tr.callee_io from the spec's structure
-        let mut eff = super::eff::Eff::new(self.env, &p)?;
-        match eff.callee_io(ssym, &cns) {
+        self.callee_effects(&p, ssym, &cns, &mut out)?;
+        Ok(out)
+    }
+
+    /// as a callee: tr.callee_io (tr.callee_io_s) from the spec's structure
+    fn callee_effects(&mut self, p: &str, ssym: sl_kernel::SymId, cns: &[usize], out: &mut Vec<(String, Seq)>) -> Result<(), String> {
+        let mut eff = super::eff::Eff::new(self.env, p)?;
+        match eff.callee_io(ssym, cns) {
             Ok(()) => out.extend(std::mem::take(&mut eff.out)),
             Err(e) => eprintln!("{}: no tr.callee_io yet: {}", p, e),
         }
-        Ok(out)
+        Ok(())
     }
 
     /// `tr.regs(m, rs)`, rs the callee-saved registers at their values on m

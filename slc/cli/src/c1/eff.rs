@@ -15,7 +15,20 @@
 //!   of the program (its own lemma, proven first);
 //! - `runs(call(G, args), S, o)` (or call1) of a callee G: tr.eff_call (or
 //!   tr.eff_call1) from G's own `tr.callee_io` -- a hypothesis of the
-//!   lemma, so a caller's lemmas hold for every callee with that property.
+//!   lemma, so a caller's lemmas hold for every callee with that property;
+//! - (proofs/translate_struct.core) `!c || R` (a requirement): tr.eff_req,
+//!   R's with c; `a || b` (a statement's choice): tr.seff_or; a block whose
+//!   statement keeps the world (every outcome's at S: tr.sk), the rest
+//!   from S itself (tr.eff_seq_same); a return to a changed world: its
+//!   validity by the change's lemma (`VALID`), its premises from the facts
+//!   in hand (exactly, a type by `ty`, else propositionally);
+//! - a GIMPLE procedure without its own lemma: inlined (its body from S,
+//!   with the facts in hand -- a caller's requirements).
+//!
+//! The facts in hand: the conditions, choices and requirements on the way
+//! (their conjuncts, a case split's `ite(c, a, b)` as `c -> a`, `!c -> b`),
+//! and a procedure's parameter types (the elaborator's `{proc}.dom`,
+//! assumed by its lemma, shown at its calls by `ty`).
 
 use sl_kernel::ext::seq::Seq;
 use sl_kernel::syntax::Printer;
@@ -39,7 +52,20 @@ pub struct Eff<'e> {
     hios: HashMap<VarId, (Seq, usize)>,
     /// a procedure's parameters that are callees (their indices)
     callee_params: HashMap<SymId, Vec<usize>>,
+    /// the facts in hand (see the module's doc)
+    ctx: Vec<Seq>,
+    /// a procedure's lemma: the parameter types it assumes (indices into
+    /// `param_types`)
+    typed: HashMap<SymId, Vec<usize>>,
 }
+
+/// A world changed in a field (`fn_update(S, field, V)`): the lemma showing
+/// it valid (proofs/translate_struct.core)
+const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm")];
+
+/// A term's type by its head (`f(a..) in T`): the lemma, all a.. ->
+/// premises on the arguments (each `a in T'`) -> f(a..) in T
+const TYPES: &[(&str, &str)] = &[("bits_of_int", "tr.ty_bits_of_int"), ("x86_64_linux.page_of", "tr.ty_page_of"), ("x86_64_linux.pages_for", "tr.ty_pages_for")];
 
 type R<T> = Result<T, String>;
 
@@ -50,7 +76,230 @@ fn e(x: sl_kernel::KernelError) -> String {
 impl<'e> Eff<'e> {
     pub fn new(env: &'e mut Env, prefix: &str) -> R<Eff<'e>> {
         let api = Api::new(env, Vec::new()).map_err(e)?;
-        Ok(Eff { env, api, prefix: prefix.to_string(), n: 0, procs: HashMap::new(), under_way: BTreeSet::new(), out: Vec::new(), hios: HashMap::new(), callee_params: HashMap::new() })
+        Ok(Eff { env, api, prefix: prefix.to_string(), n: 0, procs: HashMap::new(), under_way: BTreeSet::new(), out: Vec::new(), hios: HashMap::new(), callee_params: HashMap::new(), ctx: Vec::new(), typed: HashMap::new() })
+    }
+
+    /// t assumed, a fact in hand (with its parts)
+    fn assume(&mut self, t: &Term) -> R<Seq> {
+        let h = Seq::assume(self.env, t.clone()).map_err(e)?;
+        self.add_fact(h.clone())?;
+        Ok(h)
+    }
+
+    /// a fact in hand, with its conjuncts and an `ite`'s two cases
+    fn add_fact(&mut self, s: Seq) -> R<()> {
+        let t = s.concl().clone();
+        self.ctx.push(s.clone());
+        if let Some(a) = self.app(&t, "and", 2) {
+            for x in a.to_vec() {
+                let p = self.api.by(self.env, &x, G::Taut(vec![s.clone()])).map_err(e)?;
+                self.add_fact(p)?;
+            }
+        }
+        if let Some(a) = self.app(&t, "ite", 3) {
+            let a = a.to_vec();
+            let imp = self.env.builtins.imp;
+            let nc = self.mk("not", vec![a[0].clone()])?;
+            for (c, b, rule) in [(a[0].clone(), a[1].clone(), "tr.ite_imp_t"), (nc, a[2].clone(), "tr.ite_imp_f")] {
+                let f = self.api.fact(self.env, rule).map_err(e)?;
+                let g = Term::app(imp, vec![c, b]);
+                let p = self.api.by(self.env, &g, G::Apply(f, vec![A::G(G::By(s.clone()))])).map_err(|x| format!("{}: {}", rule, x.0))?;
+                self.ctx.push(p);
+            }
+        }
+        Ok(())
+    }
+
+    /// `t in set` from the facts in hand: one of them, or by t's head
+    /// (`TYPES`), its arguments' types in turn
+    fn ty(&mut self, t: &Term, set: &Term) -> R<Seq> {
+        let goal = self.mk("in", vec![t.clone(), set.clone()])?;
+        if let Some(f) = self.ctx.iter().find(|f| *f.concl() == goal) {
+            return Ok(f.clone());
+        }
+        let rule = match t.node() {
+            Node::App(h, _) => TYPES.iter().find(|(n, _)| *n == self.env.syms[*h as usize].name).map(|r| r.1),
+            _ => None,
+        };
+        // (else arithmetic, from the types in hand)
+        let Some(rule) = rule else {
+            let tys: Vec<Seq> = self.ctx.iter().filter(|f| self.app(f.concl(), "in", 2).is_some()).cloned().collect();
+            return self.api.by(self.env, &goal, G::Arith(tys)).map_err(|x| format!("no type for {}: {}", self.short(&goal), x.0));
+        };
+        let f = self.api.fact(self.env, rule).map_err(e)?;
+        // (its arguments, then a proof of each premise: a type, else arithmetic)
+        let Node::App(_, args) = t.node() else { unreachable!() };
+        let mut a: Vec<A> = args.iter().map(|x| A::T(x.clone())).collect();
+        let mut s = f.clone();
+        for x in args.iter() {
+            s = Seq::all_elim(self.env, &self.api.lg, &s, x).map_err(e)?;
+        }
+        for prem in self.premises(s.concl()).0 {
+            let g = match self.app(&prem, "in", 2) {
+                Some(p) if !matches!(p[0].node(), Node::Nat(_)) => {
+                    let (x, st) = (p[0].clone(), p[1].clone());
+                    G::By(self.ty(&x, &st)?)
+                }
+                _ => G::Arith(vec![]),
+            };
+            let pr = self.api.by(self.env, &prem, g).map_err(|x| format!("{}: {}", rule, x.0))?;
+            a.push(A::G(G::By(pr)));
+        }
+        self.api.mp(self.env, f, a).map_err(|x| format!("{}: {}", rule, x.0))
+    }
+
+    /// `p1 -> .. -> c`: the premises, c
+    fn premises(&self, t: &Term) -> (Vec<Term>, Term) {
+        let imp = self.env.builtins.imp;
+        let mut ps = Vec::new();
+        let mut c = t.clone();
+        while let Node::App(i, pc) = c.node() {
+            if *i != imp {
+                break;
+            }
+            ps.push(pc[0].clone());
+            let n = pc[1].clone();
+            c = n;
+        }
+        (ps, c)
+    }
+
+    /// f's parameter types (the elaborator's `{f}.dom`, its conjuncts `p in
+    /// T`), over the arguments `args`: each `arg in T`
+    fn param_types(&self, f: SymId, args: &[Term]) -> Vec<Term> {
+        let name = format!("{}.dom", self.env.syms[f as usize].name);
+        let Some(&d) = self.env.sym_by_name.get(&name) else { return Vec::new() };
+        let SymKind::Defined { params, body } = self.env.syms[d as usize].kind.clone() else { return Vec::new() };
+        let mut b = body;
+        for (p, a) in params.iter().zip(args) {
+            b = b.subst_var(*p, a, &self.env.binders_fn());
+        }
+        let mut parts = Vec::new();
+        let mut todo = vec![b];
+        while let Some(t) = todo.pop() {
+            if let Some(a) = self.app(&t, "and", 2) {
+                todo.push(a[1].clone());
+                todo.push(a[0].clone());
+            } else if self.app(&t, "in", 2).is_some() {
+                parts.push(t);
+            }
+        }
+        parts
+    }
+
+    /// `tr.returns_valid(s, s2)`, s2 a world changed (`VALID`): the lemma's
+    /// variables by its conclusion, then by its premises in turn matched
+    /// with the facts in hand; each premise one of them, a type, or by
+    /// propositional logic from them
+    fn valid(&mut self, s: &Term, s2: &Term) -> R<Seq> {
+        let goal = self.mk("tr.returns_valid", vec![s.clone(), s2.clone()])?;
+        let field = self.app(s2, "fn_update", 3).filter(|u| u[0] == *s).and_then(|u| match u[1].node() {
+            Node::Bytes(b) => Some(String::from_utf8_lossy(b).to_string()),
+            _ => None,
+        });
+        let Some((_, rule)) = field.and_then(|f| VALID.iter().find(|(n, _)| *n == f)) else { return Err(format!("no validity rule for a return to {}", self.short(s2))) };
+        let f = self.api.fact(self.env, rule).map_err(e)?;
+        let mut vars = Vec::new();
+        f.concl().vars(&mut vars);
+        let (prems, c) = self.premises(f.concl());
+        let mut b: HashMap<VarId, Term> = HashMap::new();
+        if !self.pmatch(&c, &goal, &vars, &mut b, 0) {
+            return Err(format!("{}: not of {}", rule, self.short(&goal)));
+        }
+        for p in &prems {
+            let mut pv = Vec::new();
+            p.vars(&mut pv);
+            if pv.iter().all(|v| !vars.contains(v) || b.contains_key(v)) {
+                continue;
+            }
+            let found = self.ctx.iter().map(|x| x.concl().clone()).find_map(|t| {
+                let mut b2 = b.clone();
+                self.pmatch(p, &t, &vars, &mut b2, 0).then_some(b2)
+            });
+            b = found.ok_or_else(|| format!("{}: no fact in hand for {}", rule, self.short(p)))?;
+        }
+        let mut fi = f.clone();
+        for v in &vars {
+            let val = b.get(v).ok_or_else(|| format!("{}: `{}` not determined", rule, self.env.var(*v).name))?;
+            fi = self.api.inst_var(self.env, fi, *v, val).map_err(e)?;
+        }
+        let mut a = Vec::new();
+        for prem in self.premises(fi.concl()).0 {
+            let pr = if let Some(x) = self.ctx.iter().find(|x| *x.concl() == prem) {
+                x.clone()
+            } else if let Some(t) = self.app(&prem, "in", 2) {
+                let (x, st) = (t[0].clone(), t[1].clone());
+                self.ty(&x, &st)?
+            } else {
+                self.api.by(self.env, &prem, G::Taut(self.ctx.clone())).map_err(|x| format!("{}: {}: {}", rule, self.short(&prem), x.0))?
+            };
+            a.push(A::G(G::By(pr)));
+        }
+        self.api.mp(self.env, fi, a).map_err(|x| format!("{}: {}", rule, x.0))
+    }
+
+    /// first-order matching of `pat` (its variables `vars`, bound in b) with t
+    fn pmatch(&self, pat: &Term, t: &Term, vars: &[VarId], b: &mut HashMap<VarId, Term>, d: u32) -> bool {
+        match (pat.node(), t.node()) {
+            (Node::Var(v, a), _) if a.is_empty() && vars.contains(v) => match b.get(v) {
+                Some(x) => x == t,
+                None if d == 0 => {
+                    b.insert(*v, t.clone());
+                    true
+                }
+                None => false,
+            },
+            (Node::App(s1, a1), Node::App(s2, a2)) => s1 == s2 && a1.len() == a2.len() && a1.iter().zip(a2.iter()).enumerate().all(|(i, (x, y))| self.pmatch(x, y, vars, b, d + self.env.syms[*s1 as usize].binders[i])),
+            (Node::Var(v1, a1), Node::Var(v2, a2)) => v1 == v2 && a1.len() == a2.len() && a1.iter().zip(a2.iter()).all(|(x, y)| self.pmatch(x, y, vars, b, d)),
+            _ => pat == t,
+        }
+    }
+
+    /// every outcome of the statement a (its outcome the variable x) at the
+    /// world s: a choice (`||`, `c && ..`) of `x = ok/exc(pair(s, l), v)`
+    fn keeps(&self, a: &Term, x: VarId, s: &Term) -> bool {
+        if let Some(o) = self.app(a, "or", 2) {
+            return self.keeps(&o[0], x, s) && self.keeps(&o[1], x, s);
+        }
+        if let Some(o) = self.app(a, "and", 2) {
+            return self.keeps(&o[1], x, s);
+        }
+        if let Some(q) = self.app(a, "eq", 2) {
+            if matches!(q[0].node(), Node::Var(v, z) if *v == x && z.is_empty()) {
+                let k = self.app(&q[1], "ok", 2).or_else(|| self.app(&q[1], "exc", 2));
+                return k.and_then(|k| self.app(&k[0], "pair", 2)).is_some_and(|p| p[0] == *s);
+            }
+        }
+        false
+    }
+
+    /// `tr.sk(s, x. a)` (`keeps`)
+    fn sk(&mut self, s: &Term, a: &Term, x: VarId) -> R<Seq> {
+        let goal = self.mk("tr.sk", vec![s.clone(), self.close_var(a, x)])?;
+        if let Some(o) = self.app(a, "or", 2) {
+            let (l, r) = (o[0].clone(), o[1].clone());
+            let (kl, kr) = (self.sk(s, &l, x)?, self.sk(s, &r, x)?);
+            return self.show(&goal, "tr.sk_or", s, vec![A::G(G::By(kl)), A::G(G::By(kr))]);
+        }
+        if let Some(o) = self.app(a, "and", 2) {
+            let r = o[1].clone();
+            let kr = self.sk(s, &r, x)?;
+            return self.show(&goal, "tr.sk_and", s, vec![A::G(G::By(kr))]);
+        }
+        let q = self.app(a, "eq", 2).ok_or("not a statement keeping the world")?.to_vec();
+        let rule = if self.app(&q[1], "ok", 2).is_some() { "tr.sk_ok" } else { "tr.sk_exc" };
+        self.show(&goal, rule, s, vec![])
+    }
+
+    /// t with the subterm `from` replaced by `to`
+    fn replace(&self, t: &Term, from: &Term, to: &Term) -> Term {
+        if t == from {
+            return to.clone();
+        }
+        match t.node() {
+            Node::App(_, a) | Node::Var(_, a) => t.with_args(a.iter().map(|x| self.replace(x, from, to)).collect()),
+            _ => t.clone(),
+        }
     }
 
     fn app<'t>(&self, t: &'t Term, name: &str, n: usize) -> Option<&'t [Term]> {
@@ -157,9 +406,16 @@ impl<'e> Eff<'e> {
         if let Some(eq) = self.app(r, "eq", 2) {
             if eq[0] == ov {
                 let at_s = |t: &Term| if st { self.app(t, "pair", 2).is_some_and(|p| p[0] == *s) } else { *t == *s };
+                // (the world of a statement's outcome)
+                let world = |t: &Term| if st { self.app(t, "pair", 2).map(|p| p[0].clone()) } else { Some(t.clone()) };
                 if let Some(k) = self.app(&eq[1], "ok", 2) {
                     if at_s(&k[0]) {
                         return self.show(&goal, &format!("{pre}_{}", if st { "ok" } else { "ret" }), s, vec![]);
+                    }
+                    // (to a changed world: its validity)
+                    if let Some(w2) = world(&k[0]) {
+                        let v = self.valid(s, &w2)?;
+                        return self.show(&goal, &format!("{pre}_{}_chg", if st { "ok" } else { "ret" }), s, vec![A::G(G::By(v))]);
                     }
                 }
                 if let Some(k) = self.app(&eq[1], "exc", 2) {
@@ -169,6 +425,12 @@ impl<'e> Eff<'e> {
                     }
                     if st && at_s(&k[0]) && label(b"brk") {
                         return self.show(&goal, &format!("{pre}_brk"), s, vec![]);
+                    }
+                    if st && label(b"ret") {
+                        if let Some(w2) = world(&k[0]) {
+                            let v = self.valid(s, &w2)?;
+                            return self.show(&goal, "tr.seff_ret_chg", s, vec![A::G(G::By(v))]);
+                        }
                     }
                 }
             }
@@ -196,8 +458,10 @@ impl<'e> Eff<'e> {
                 let c = self.unlet(&self.open(&wl[1], &[lv.clone()]));
                 let b = self.open(&wl[2], &[lv.clone(), ov.clone()]);
                 let ls = self.mk("fst", vec![lv.clone()])?;
-                let _h = Seq::assume(self.env, c.clone()).map_err(e)?;
+                let sc = self.ctx.len();
+                self.assume(&c)?;
                 let kb = self.prove(true, &ls, &b, o)?;
+                self.ctx.truncate(sc);
                 let hk = self.close(kb, &[c], &[ln])?;
                 return self.show(&goal, &format!("{pre}_while"), s, vec![A::G(G::By(hk))]);
             }
@@ -207,12 +471,15 @@ impl<'e> Eff<'e> {
             let (xn, xv) = self.fresh("cs");
             let d = self.unlet(&self.open(&a[0], &[xv.clone()]));
             let k = self.open(&a[1], &[xv.clone()]);
-            let _h = Seq::assume(self.env, d.clone()).map_err(e)?;
+            let sc = self.ctx.len();
+            self.assume(&d)?;
             let kk = self.prove(st, s, &k, o)?;
+            self.ctx.truncate(sc);
             let hk = self.close(kk, &[d], &[xn])?;
             return self.show(&goal, &format!("{pre}_any"), s, vec![A::G(G::By(hk))]);
         }
         if let Some(or) = self.app(r, "or", 2) {
+            let or = or.to_vec();
             // a statement `undefined if c`: c || (!c && o = ok(pair(S, empty), empty))
             if st {
                 if let Some(nc) = self.app(&or[1], "and", 2) {
@@ -226,14 +493,33 @@ impl<'e> Eff<'e> {
                 if self.app(&a2[0], "not", 1).is_some_and(|n| n[0] == a1[0]) {
                     let (c, r1, r2) = (self.unlet(&a1[0]), a1[1].clone(), a2[1].clone());
                     let nc = self.mk("not", vec![c.clone()])?;
-                    let _h1 = Seq::assume(self.env, c.clone()).map_err(e)?;
+                    let sc = self.ctx.len();
+                    self.assume(&c)?;
                     let k1 = self.prove(st, s, &r1, o)?;
+                    self.ctx.truncate(sc);
                     let h1 = self.close(k1, &[c], &[])?;
-                    let _h2 = Seq::assume(self.env, nc.clone()).map_err(e)?;
+                    self.assume(&nc)?;
                     let k2 = self.prove(st, s, &r2, o)?;
+                    self.ctx.truncate(sc);
                     let h2 = self.close(k2, &[nc], &[])?;
                     return self.show(&goal, &format!("{pre}_if"), s, vec![A::G(G::By(h1)), A::G(G::By(h2))]);
                 }
+            }
+            // `require c`: !c || R, R's with c
+            if let (false, Some(n)) = (st, self.app(&or[0], "not", 1)) {
+                let c = self.unlet(&n[0]);
+                let sc = self.ctx.len();
+                self.assume(&c)?;
+                let k = self.prove(st, s, &or[1], o)?;
+                self.ctx.truncate(sc);
+                let h = self.close(k, &[c], &[])?;
+                return self.show(&goal, "tr.eff_req", s, vec![A::G(G::By(h))]);
+            }
+            // a statement's choice (`either`): each one's
+            if st {
+                let k1 = self.prove(st, s, &or[0], o)?;
+                let k2 = self.prove(st, s, &or[1], o)?;
+                return self.show(&goal, "tr.seff_or", s, vec![A::G(G::By(k1)), A::G(G::By(k2))]);
             }
         }
         // a block: ex x. A(x) && ((fst(x) = 0 && K(x, o)) || ..), its statement's outcome dispatched
@@ -265,11 +551,36 @@ impl<'e> Eff<'e> {
                     _ => return Err(format!("a block's dispatch not covered: {}", self.short(r))),
                 };
                 let state = self.mk("fst", vec![self.mk("out_state", vec![xv.clone()])?])?;
-                let ha = self.prove(true, s, &stmt, x)?;
                 let stmt_u = self.unlet(&stmt);
-                let _s1 = Seq::assume(self.env, stmt_u.clone()).map_err(e)?;
-                let _s2 = Seq::assume(self.env, cond.clone()).map_err(e)?;
+                // (a statement keeping the world: the rest from S, its world
+                // S there -- the facts in hand still of it)
+                if rule != "seq_loop" && rule != "seq_brk" && self.keeps(&stmt_u, x, s) {
+                    let hs = self.sk(s, &stmt_u, x)?;
+                    let (sn, sv) = self.fresh("ws");
+                    let ku = self.unlet(&k);
+                    let k_s = self.replace(&ku, &state, s);
+                    let kf = self.close_var(&self.close_var(&self.close_var(&self.replace(&ku, &state, &sv), sn), x), o);
+                    let sc = self.ctx.len();
+                    self.assume(&stmt_u)?;
+                    self.assume(&cond)?;
+                    let kk = self.prove(st, s, &k_s, o)?;
+                    self.ctx.truncate(sc);
+                    let hk = self.close(kk, &[stmt_u, cond], &[x])?;
+                    let lemma = format!("{pre}_seq_same");
+                    let f = self.api.fact(self.env, &lemma).map_err(e)?;
+                    let f = self.api.inst(self.env, f, &[("k", kf)]).map_err(|x| format!("{lemma}: {}", x.0))?;
+                    let letin = self.sym("letin")?;
+                    return self
+                        .api
+                        .by(self.env, &goal, G::Defs(Box::new(G::Apply(f, vec![A::T(s.clone()), A::G(G::By(hs)), A::G(G::By(hk))])), vec![letin]))
+                        .map_err(|x| format!("{lemma}: {}", x.0));
+                }
+                let ha = self.prove(true, s, &stmt, x)?;
+                let sc = self.ctx.len();
+                self.assume(&stmt_u)?;
+                self.assume(&cond)?;
                 let kk = self.prove(st, &state, &k, o)?;
+                self.ctx.truncate(sc);
                 let hk = self.close(kk, &[stmt_u, cond], &[x])?;
                 return self.show(&goal, &format!("{pre}_{rule}"), s, vec![A::G(G::By(ha)), A::G(G::By(hk))]);
             }
@@ -321,19 +632,50 @@ impl<'e> Eff<'e> {
             let a = vec![A::T(self.unlet(s)), A::T(self.unlet(&args[1])), A::T(self.unlet(&args[2]))];
             return self.api.mp(self.env, f0, a).map_err(|x| format!("tr.eff_cdiv64u: {}", x.0));
         }
+        let mut a = terms;
         let lemma = if let Some(prim) = name.strip_prefix("gimple.") {
             let l = format!("tr.eff_{}", prim);
-            self.api.fact(self.env, &l).map_err(|_| format!("no effect lemma `{}` (proofs/translate_effects.core)", l))?
+            match self.api.fact(self.env, &l) {
+                Ok(x) => x,
+                // (a procedure of the layer: inlined)
+                Err(_) => return self.inline(s, *f, args).map_err(|x| format!("{} (inlined; no effect lemma `{}`): {}", name, l, x)),
+            }
         } else {
-            self.proc_lemma(*f)?
+            let pl = self.proc_lemma(*f)?;
+            // (the parameters' types its lemma needs)
+            let ua: Vec<Term> = args.iter().map(|x| self.unlet(x)).collect();
+            let tys = self.param_types(*f, &ua);
+            for i in self.typed.get(f).cloned().unwrap_or_default() {
+                let p = self.app(&tys[i], "in", 2).unwrap().to_vec();
+                a.push(A::G(G::By(self.ty(&p[0], &p[1])?)));
+            }
+            pl
         };
         // (a procedure taking callees: their hypotheses)
-        let mut a = terms;
         for &i in self.callee_params.get(f).cloned().unwrap_or_default().iter() {
             let Node::Var(g, _) = args[i].node() else { return Err(format!("a callee argument not a callee: {}", self.short(p))) };
             a.push(A::G(G::By(self.hios.get(g).ok_or_else(|| format!("a callee argument not in scope: {}", self.short(p)))?.0.clone())));
         }
         self.api.mp(self.env, lemma, a).map_err(|x| format!("{}: {}", name, x.0))
+    }
+
+    /// `tr.eff(S, o. runs(f(args), S, o))`, f's body from S with the facts
+    /// in hand
+    fn inline(&mut self, s: &Term, f: SymId, args: &[Term]) -> R<Seq> {
+        let SymKind::Defined { params, body } = self.env.syms[f as usize].kind.clone() else { return Err("not a definition".into()) };
+        let mut b = body;
+        for (p, a) in params.iter().zip(args) {
+            b = b.subst_var(*p, &self.unlet(a), &self.env.binders_fn());
+        }
+        let m = self.app(&b, "mkprog", 1).ok_or("not a program")?.to_vec();
+        let (o, ov) = self.fresh("os");
+        let bo = self.open(&m[0], &[s.clone(), ov.clone()]);
+        let kb = self.prove(false, s, &bo, o)?;
+        let p = Term::app(f, args.to_vec());
+        let goal = self.eff(false, s, &self.mk("runs", vec![p, s.clone(), ov])?, o)?;
+        let ep = self.api.fact(self.env, "tr.eff_prog").map_err(e)?;
+        let letin = self.sym("letin")?;
+        self.api.by(self.env, &goal, G::Defs(Box::new(G::Apply(ep, vec![A::T(s.clone()), A::G(G::By(kb))])), vec![f, letin])).map_err(|x| x.0)
     }
 
     /// the variables called in t (`call(g, args)`, `call1(g, args)`), with
@@ -399,6 +741,13 @@ impl<'e> Eff<'e> {
             body = body.subst_var(*p, &pv, &self.env.binders_fn());
             pvars.push((pn, pv));
         }
+        // (its parameters' types, facts in hand: the ones its proof uses
+        // its premises, first)
+        let sc = self.ctx.len();
+        let tys = self.param_types(f, &pvars.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>());
+        for t in &tys {
+            self.assume(t)?;
+        }
         let m = self.app(&body, "mkprog", 1).ok_or_else(|| format!("`{}`: not a program", name))?.to_vec();
         let (o, ov) = self.fresh("os");
         let b = self.open(&m[0], &[wv.clone(), ov.clone()]);
@@ -406,9 +755,15 @@ impl<'e> Eff<'e> {
         let runs = self.mk("runs", vec![call, wv.clone(), ov.clone()])?;
         let goal = self.eff(false, &wv, &runs, o)?;
         let kb = self.prove(false, &wv, &b, o)?;
+        self.ctx.truncate(sc);
         let ep = self.api.fact(self.env, "tr.eff_prog").map_err(e)?;
         let (fsym, letin) = (f, self.sym("letin")?);
         let r = self.api.by(self.env, &goal, G::Defs(Box::new(G::Apply(ep, vec![A::T(wv.clone()), A::G(G::By(kb))])), vec![fsym, letin])).map_err(|x| format!("{}: {}", lemma, x.0))?;
+        let used: Vec<usize> = (0..tys.len()).filter(|i| r.hyps().contains(&tys[*i])).collect();
+        for &i in used.iter().rev() {
+            hyps.insert(0, tys[i].clone());
+        }
+        self.typed.insert(f, used);
         let mut vs = vec![wn];
         vs.extend(pvars.iter().map(|(v, _)| *v));
         let s = self.close(r, &hyps, &vs)?;
@@ -461,6 +816,9 @@ impl<'e> Eff<'e> {
         let app = self.mk(&name, gs.iter().map(|g| g.1.clone()).collect())?;
         // fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B))
         let fb = self.app(&body, "fn_build", 2).ok_or("not a `_fun` wrapper")?.to_vec();
+        // (with stack arguments, a CFunS: its arguments words, exactly n)
+        let words = self.mk("list_type", vec![self.mk("bits", vec![Term::nat(sl_kernel::Nat::from_u128(64))])?])?;
+        let stack = fb[0] == words;
         let (an, av) = self.fresh("as");
         let (wn, wv) = self.fresh("ws");
         let (o, ov) = self.fresh("os");
@@ -478,10 +836,13 @@ impl<'e> Eff<'e> {
             None => (zero, wrapper.clone()),
         };
         let runs = self.mk("runs", vec![m.clone(), wv.clone(), ov.clone()])?;
-        let in_args = self.mk("in", vec![av.clone(), self.mk("abi.ARGS", vec![])?])?;
-        let le = self.mk("ord_le", vec![n.clone(), self.mk("seq_len", vec![av.clone()])?])?;
+        let in_args = self.mk("in", vec![av.clone(), if stack { words.clone() } else { self.mk("abi.ARGS", vec![])? }])?;
+        let ord_le = self.sym("ord_le")?;
+        let le0 = self.mk("ord_le", vec![n.clone(), self.mk("seq_len", vec![av.clone()])?])?;
+        let le = if stack { self.mk("eq", vec![self.mk("seq_len", vec![av.clone()])?, n.clone()])? } else { le0.clone() };
         let _ha = Seq::assume(self.env, in_args.clone()).map_err(e)?;
-        let hn = Seq::assume(self.env, le.clone()).map_err(e)?;
+        let hl = Seq::assume(self.env, le.clone()).map_err(e)?;
+        let hn = if stack { self.api.by(self.env, &le0, G::Defs(Box::new(G::Arith(vec![hl])), vec![ord_le])).map_err(|x| format!("{}.io: {}", self.prefix, x.0))? } else { hl };
         let kb = self.prove(false, &wv, &b, o)?;
         let goal = self.eff(false, &wv, &runs, o)?;
         let letin = self.sym("letin")?;
@@ -494,15 +855,15 @@ impl<'e> Eff<'e> {
         };
         let g1 = self.api.by(self.env, &goal, G::Defs(Box::new(G::Apply(ep, vec![A::T(wv.clone()), A::G(inner)])), vec![letin])).map_err(|x| format!("{}.io: {}", self.prefix, x.0))?;
         let g1 = self.close(g1, &[in_args, le], &[an, wn])?;
-        let io_goal = self.mk("tr.callee_io", vec![app.clone(), n.clone()])?;
-        let cio = self.api.fact(self.env, "tr.callee_io_fun").map_err(e)?;
+        let io_goal = self.mk(if stack { "tr.callee_io_s" } else { "tr.callee_io" }, vec![app.clone(), n.clone()])?;
+        let cio = self.api.fact(self.env, if stack { "tr.callee_io_s_fun" } else { "tr.callee_io_fun" }).map_err(e)?;
         let io = self.api.by(self.env, &io_goal, G::Defs(Box::new(G::Apply(cio, vec![A::T(n), A::G(G::By(g1))])), vec![spec, letin])).map_err(|x| format!("{}.io: {}", self.prefix, x.0))?;
         let gvs: Vec<VarId> = gs.iter().map(|g| g.0).collect();
         let io = self.close(io, &ghyps, &gvs)?;
         self.out.push((format!("{}.io", self.prefix), io));
         // its spec typed
-        let ty_goal = self.mk("in", vec![app, self.mk("fn_space", vec![self.mk("abi.ARGS", vec![])?, self.mk("powerset", vec![self.mk("univ", vec![Term::nat(sl_kernel::Nat::from_u128(1))])?])?])?])?;
-        let ft = self.api.fact(self.env, "tr.fun_typed").map_err(e)?;
+        let ty_goal = self.mk("in", vec![app, self.mk("fn_space", vec![fb[0].clone(), self.mk("powerset", vec![self.mk("univ", vec![Term::nat(sl_kernel::Nat::from_u128(1))])?])?])?])?;
+        let ft = self.api.fact(self.env, if stack { "tr.fun_typed_s" } else { "tr.fun_typed" }).map_err(e)?;
         let ty = self.api.by(self.env, &ty_goal, G::Defs(Box::new(G::By(ft)), vec![spec])).map_err(|x| format!("{}.typed: {}", self.prefix, x.0))?;
         let ty = self.close(ty, &[], &gvs)?;
         self.out.push((format!("{}.typed", self.prefix), ty));

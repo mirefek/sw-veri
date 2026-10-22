@@ -51,7 +51,8 @@ impl<'s> Elab<'s> {
                 let prog = self.program(&cx, &st, &body, &sig.ret, span)?;
                 cx.locals.clear();
                 let params = self.all_params(&lift, &gens, &sig);
-                self.define(&sig.core, params, prog, span)?;
+                self.define(&sig.core, params.clone(), prog, span)?;
+                self.define_dom(&sig, params, span)?;
                 Ok(())
             }
             DeclKind::View { get, set_var, set, .. } => {
@@ -109,6 +110,29 @@ impl<'s> Elab<'s> {
 
     fn lift_params(&self, lift: &[String]) -> Vec<VarId> {
         lift.iter().map(|q| self.lift_vars[q]).collect()
+    }
+
+    /// A procedure's parameter types, `{core}.dom(params) := p1 in T1 &&
+    /// ..` (the parameters whose types are sets over the parameters alone):
+    /// what a proof about the procedure may assume of its arguments, its
+    /// callers showing it. None without such parameters.
+    fn define_dom(&mut self, sig: &Sig, params: Vec<VarId>, span: Span) -> R<()> {
+        let mut conj = Vec::new();
+        for (_, v, t) in &sig.params {
+            let Ok(set) = self.ty_set(t, span) else { continue };
+            let mut fv = Vec::new();
+            set.vars(&mut fv);
+            if fv.iter().any(|x| !params.contains(x)) {
+                continue;
+            }
+            conj.push(self.b.app("in", vec![self.b.v(*v), set]));
+        }
+        if conj.is_empty() {
+            return Ok(());
+        }
+        let body = self.b.ands(conj);
+        self.define(&format!("{}.dom", sig.core), params, body, span)?;
+        Ok(())
     }
 
     fn all_params(&self, lift: &[String], gens: &[crate::elab::GenParam], sig: &Sig) -> Vec<VarId> {

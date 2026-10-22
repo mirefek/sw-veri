@@ -25,21 +25,9 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   size_overflows, __syscall3 and __mprotect their contracts at machine
   level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
   `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
-  last `tr.implements_at_s`, with a stack argument). __mmap has its C2
-  (`ms.mmap_fun_c2`), its C1 (`mmc.implements`) and its `mmc.io` /
-  `mmc.typed`. To link it: __syscall6's `{p}.typed` and `.io` --
-  `tr.callee_io_s` (eff.rs: a CFunS spec through `tr.callee_io_s_fun`,
-  `tr.fun_typed_s`) from `tr.eff_sys_call6`, by `tr.eff_os_mmap` (os_mmap's
-  returns valid: `tr.mmap_valid`). Two gaps there: simp leaves the
-  free-place branch's empty `any` (the elaborator's `any .. else` is the
-  guard plus an `any_rel`, its empty case after the guard not seen
-  contradictory -- emit `ex` there, or prove that branch by hand; simp with
-  the fixed and free cases' validity, `tr.mmap_valid`, closes every other
-  path); and the page arithmetic needs
-  a1, a2 words, which eff.rs' procedure lemmas do not give for untyped
-  parameters (typed parameters in proc_lemma, or a requirement in
-  sys_call6). Then `mmc.linked` / `mmc.composed`
-  (proofs/mallocng/machine/cfg_mmap.core). Then memcpy's model.
+  last `tr.implements_at_s`, with a stack argument -- `mmc.composed`).
+  Next: get_random_secret (memcpy's model), then the hypotheses
+  discharged.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.
@@ -108,7 +96,9 @@ from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
   core/records.core) should be too -- the hand lemmas `lx.top_*`,
   `lx.blk_*`, `lx.ib_*`, `lx.istep_*`, `lx.tlp_*`, `lx.lp_brk` then go.
   The rest of the proofs' `simp` that only rewrites: `rsimp` (simp kept
-  for executing program paths).
+  for executing program paths). eff.rs' last simp: a stack call's
+  argument count (`seq_len(list) = n`, `tr.eff_call1_s`) -- the list
+  lemmas or rsimp through the proof API.
 
 - `divergence()` takes a contract's body only of the `ct.dv_*` shapes (a
   step, a return after a choice or two); brk's (branches, havocs) by hand
