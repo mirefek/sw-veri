@@ -213,6 +213,22 @@ fn syscall1_spec_fun() -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
+// a 3-argument system call n, as malloc makes one: mprotect(addr, len,
+// prot) (`__syscall3(SYS_mprotect, ..)`) -- the kernel's: the pages from
+// addr's for len reprotected up to the first unmapped one, 0 or -ENOMEM
+// (addr not page-aligned: -EINVAL). The pages the kernel's to reprotect.
+proc[World] syscall3_spec(n: bits[64], addr: Addr, len: bits[64], prot: bits[64]) -> bits[64] {
+  require uint(n) = 10 && sys_pages_ok(vm, page_of(addr), pages_for(uint(len)))
+  either { overflow() } or { return os_mprotect(addr, len, prot) }
+}
+
+fn syscall3_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 4
+  let r = syscall3_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]), bits[64](args[3]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
 // errno's cell writable, the thread pointer sound (a failing call sets it)
 pred errno_ok(vm: Vm, objs: Set[nat], fs: Addr) =
   uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
@@ -277,10 +293,18 @@ fn mmap_spec_fun() -> CFun2[World] = (args: Args) => {
 // mprotect(addr, len, prot): the pages from addr's to addr + len's of
 // protection prot, 0; or, at the first of them unmapped, -1, errno
 // ENOMEM -- the pages before it changed already. The pages ones the kernel
-// may reprotect (sys_pages_ok: off the stack's space, not executable).
+// may reprotect (sys_pages_ok: off the stack's space, not executable),
+// neither the thread's pointer's nor errno's (`tls_off`: errno is set
+// after). (len + PAGE <= 2^63: addr + len + PAGE - 1 a defined pointer
+// sum, as musl forms it.)
+pred tls_off(fs: Addr, p: nat, n: nat) =
+  (all i: nat. i < 8 -> !(p <= (uint(fs) + i) / PAGE && (uint(fs) + i) / PAGE < p + n)) &&
+  (all i: nat. i < 4 -> !(p <= (uint(errno_at(fs)) + i) / PAGE && (uint(errno_at(fs)) + i) / PAGE < p + n))
+
 proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32] {
-  require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && errno_ok(vm, objs, fs_base) &&
-    sys_pages_ok(vm, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE)
+  require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && uint(len) + PAGE <= 2^63 && errno_ok(vm, objs, fs_base) &&
+    sys_pages_ok(vm, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE) &&
+    tls_off(fs_base, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE)
   either { overflow() } or {
     let before = vm
     let s = uint(addr) / PAGE
@@ -298,7 +322,7 @@ proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32]
 
 fn mprotect_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
-  let r = mprotect_spec(args[0], args[1], bits[32](args[2]))
+  let r = mprotect_spec(bits[64](args[0]), bits[64](args[1]), bits[32](args[2]))
   let w = result[32](r)
   return (w, any bits[64])
 }

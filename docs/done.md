@@ -1005,3 +1005,17 @@ item is a short summary of finished work; details are in the files named.
   else the function's contract is for any entry (`{p}.implements_u`, e.g.
   `gtpc.implements_u`, __get_tp called from the frameless
   __errno_location).
+- **__syscall3 and __mprotect to their contracts** (`sy3c.composed`,
+  `mprc.composed`, with __syscall_ret linked: `srtc.linked`). `syscall3_spec`
+  is the kernel's mprotect (`ms.syscall3_c2`, by `ms.ret_run`: a run of p
+  is one of "require q; overflow or return p"). `mprotect_spec` now also
+  requires `tls_off` -- the range misses the thread pointer's and errno's
+  pages, else the errno write after it could fault -- and len + PAGE <=
+  2^63 (musl's addr + len + PAGE - 1, a defined pointer sum). C2
+  `ms.mprotect_c2` by the callees' outcomes at a call (`ms.sy3_q`,
+  `ms.sr_q`), errno kept sound across the reprotection (`ms.eok_reprot`),
+  the kernel's memory after always existing (`ms.mprot_post_ex`), the
+  spec's two returns built (`ms.mpr_all`, `ms.mpr_err`: the first unmapped
+  page as the spec's choice, `ms.any_i`). Malloc's side: the reserve's
+  bytes are the allocator's (`mp.rsv_fp`), the thread pointer's and errno's
+  not (`tls_apart`, `errno_apart`), so its page misses them (`mp.am_tls`).

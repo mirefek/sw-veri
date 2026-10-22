@@ -21,11 +21,10 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
   to be used once the other leaves are); __get_tp, __errno_location,
   __syscall3, __mprotect, __syscall_ret have their C1
-  (proofs/mallocng/machine/c1_leaves.core); __errno_location, __syscall_ret
-  and size_overflows their contracts at machine level (`elc.composed`,
-  `srtc.composed_el`, `sotc.composed_el`). __mprotect's C2 against
-  `mprotect_spec_fun` (restated in the code's shape, as `syscall1_spec`).
-  Then `sys_call6` the same way
+  (proofs/mallocng/machine/c1_leaves.core); __errno_location, __syscall_ret,
+  size_overflows, __syscall3 and __mprotect their contracts at machine
+  level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
+  `sy3c.composed`, `mprc.composed`). Then `sys_call6` the same way
   (the closed form `lx.sys_mmap_ok`; os_mmap relational; a place for a
   mapping without a hint the world's iff the machine's), memcpy's model.
 - CFG -> loops, later: nested loops, a head reached at two structured
