@@ -412,9 +412,13 @@ impl<'e> Gen<'e> {
                     return self.wsplit(&st, qi, &cond, u, d);
                 }
                 // (a call: at the machine's call; the instructions before it first)
-                Some(Red::Call { g, args, list, one, a, xx, dd, k }) => {
+                Some(Red::Call { g, args, list, one, stk, a, xx, dd, k }) => {
                     if self.insns.get(&st.a).map(|i| i.row) == Some(120) {
-                        return self.call_at(&st, qi, g, &args, list, one, a, xx, dd, k);
+                        return self.call_at(&st, qi, g, &args, list, one, stk, a, xx, dd, k);
+                    }
+                    // (a stack argument pushed: the call's first step)
+                    if stk && self.insns.get(&st.a).map(|i| i.row) == Some(118) {
+                        return self.push_c_at(&st, g, list, a, xx, dd, k);
                     }
                 }
                 // (a system call: at the machine's syscall)
@@ -558,7 +562,7 @@ impl<'e> Gen<'e> {
     /// address, rax:rdx the result -- rax for call1 --, the homes kept, the
     /// frame from the push up) for every world and result
     #[allow(clippy::too_many_arguments)]
-    fn call_at(&mut self, st: &St, qi: usize, g: Term, args: &[Term], list: Term, one: bool, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+    fn call_at(&mut self, st: &St, qi: usize, g: Term, args_all: &[Term], list: Term, one: bool, stk: bool, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
         let a = st.a;
         let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
         if insn.row != 120 {
@@ -568,10 +572,16 @@ impl<'e> Gen<'e> {
             return Err(format!("{:x}: a call from a frame of {} bytes (a multiple of 8, at most 64 KiB expected)", a, st.fr));
         }
         let aligned = st.fr % 16 == 8;
-        let nargs = args.len();
-        if nargs > 6 {
+        let nargs = args_all.len();
+        // (a callee with stack arguments: seven, the last the home at the
+        // frame's bottom, pushed there; the call aligned, rax the result)
+        if stk && (nargs != 7 || !aligned || !one) {
+            return Err(format!("{:x}: a call with stack arguments other than seven, aligned, of call1_s", a));
+        }
+        if nargs > 6 && !stk {
             return Err(format!("{:x}: a call with {} arguments (at most 6 so far)", a, nargs));
         }
+        let args = &args_all[..nargs.min(6)];
         let off = nat(&insn.fields).ok_or_else(|| format!("{:x}: the call's displacement", a))?;
         let a2 = (a + insn.len) % P64;
         let fa = (a2 + if off >= 1 << 31 { off + (P64 - (1 << 32)) } else { off }) % P64;
@@ -609,7 +619,7 @@ impl<'e> Gen<'e> {
             }
             aps.push(p(R::Apply(Box::new(f("tr.argv_reg")), vec![t(&st.rs), t(&lit(r)), t(&lit(k)), t(&lit(nb)), t(&x), simp_l(), simp_lw(eqf), simp0()])));
         }
-        let hreg = if nargs == 0 { mpf("tr.args0", vec![t(&st.rs)]) } else { R::Apply(Box::new(f(&format!("tr.args{nargs}"))), aps) };
+        let hreg = if nargs == 0 { mpf("tr.args0", vec![t(&st.rs)]) } else { R::Apply(Box::new(f(&format!("tr.args{}", args.len()))), aps) };
         let hin = self.hin_proof(&st.hst, st.fr)?;
         let ci = self.callees.iter().position(|c| c.0 == g && c.1 == fa).unwrap_or_else(|| {
             self.callees.push((g.clone(), fa, nargs, false));
@@ -625,11 +635,12 @@ impl<'e> Gen<'e> {
         }
         match &self.cinfo[gi] {
             None => {
-                let imp = if aligned { "tr.implements_at" } else { "tr.implements_at_u" };
+                let imp = if stk { "tr.implements_at_s" } else if aligned { "tr.implements_at" } else { "tr.implements_at_u" };
                 let (lb, lc, statics) = (self.lbase.clone(), self.lcode.clone(), self.statics_t.clone());
                 let hc = self.mk(imp, vec![lit(fa), g.clone(), lb, lc, statics]);
-                let ht = self.mk("in", vec![g.clone(), self.mk("fn_space", vec![self.mk("abi.ARGS", vec![]), self.mk("powerset", vec![self.mk("univ", vec![lit(1)])])])]);
-                let hi = self.mk("tr.callee_io", vec![g.clone(), lit(nargs as u128)]);
+                let dom = if stk { self.mk("list_type", vec![self.mk("bits", vec![lit(64)])]) } else { self.mk("abi.ARGS", vec![]) };
+                let ht = self.mk("in", vec![g.clone(), self.mk("fn_space", vec![dom, self.mk("powerset", vec![self.mk("univ", vec![lit(1)])])])]);
+                let hi = self.mk(if stk { "tr.callee_io_s" } else { "tr.callee_io" }, vec![g.clone(), lit(nargs as u128)]);
                 self.hcall[gi] = Some(self.assume(&hc)?);
                 self.htyp[gi] = Some(self.assume(&ht)?);
                 self.hio[gi] = Some(self.assume(&hi)?);
@@ -643,7 +654,9 @@ impl<'e> Gen<'e> {
         }
         let (hcall, htyp, hio) = (self.hcall[gi].clone().unwrap(), self.htyp[gi].clone().unwrap(), self.hio[gi].clone().unwrap());
         // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
-        let hcon = if aligned {
+        let hcon = if stk {
+            p(R::S(hcall.clone()))
+        } else if aligned {
             let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
             defs(RP::Taut(vec![R::S(hcall), R::S(fr16)]), &["tr.callee_contract"])
         } else {
@@ -716,6 +729,105 @@ impl<'e> Gen<'e> {
         }
         let rest = self.prove_pt(st2)?;
         let pc = self.close(rest, &hs_after, &vs_after)?;
+        if stk {
+            // (the six in registers, then y: the home at the frame's bottom, x)
+            let l6 = self.app(&list, "seq_concat", 2).ok_or_else(|| format!("{:x}: the arguments: not six, then one", a))?[0].clone();
+            let y = args_all[6].clone();
+            let cb = P64 - st.fr;
+            let (kb, xh) = st.hsm.get(&cb).cloned().ok_or_else(|| format!("{:x}: no home at the frame's bottom (the stack argument)", a))?;
+            let yv = self.app(&y, "gimple.arg", 2).map(|x| x[1].clone()).ok_or_else(|| format!("{:x}: the stack argument not an argument", a))?;
+            if kb != 8 || self.canon(&xh) != self.canon(&yv) {
+                return Err(format!("{:x}: the frame's bottom holds {}, the spec passes {}", a, self.print(&xh), self.print(&yv)));
+            }
+            let inst = R::Inst(
+                "tr.call1_sc".into(),
+                vec![
+                    ("s", self.s.clone()),
+                    ("v", self.v.clone()),
+                    ("base", self.base.clone()),
+                    ("code", self.code.clone()),
+                    ("fr", lit(st.fr)),
+                    ("a", lit(a)),
+                    ("a2", lit(a2)),
+                    ("len", lit(insn.len)),
+                    ("off", lit(off)),
+                    ("f", lit(fa)),
+                    ("G", g.clone()),
+                    ("x", xh.clone()),
+                    ("a6", l6),
+                    ("y", y),
+                    ("cb", self.lbase.clone()),
+                    ("cc", self.lcode.clone()),
+                    ("st", self.statics_var()),
+                    ("hs", st.hst.clone()),
+                    ("ds", st.ds.clone()),
+                    ("fd2", lit(fd2)),
+                    ("rs", st.rs.clone()),
+                    ("rc", self.regs_map(&rc)),
+                    ("w", w.clone()),
+                    ("ka", al),
+                    ("xx", xl),
+                    ("dd", dl),
+                    ("k", kl),
+                    ("kw", self.kw3()),
+                    ("bkp", self.bkp.clone()),
+                    ("bka", self.bka.clone()),
+                ],
+            );
+            let hl = self.hl.clone().unwrap();
+            let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
+            let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
+            let s16 = self.sal16()?;
+            let nobp = self.nobp_below(&self.bkp.clone(), st.fr);
+            let csp = self.cs_sub_pf(&rc, &st.rs);
+            // (the six a list of univ(1): its items' by tr.seq_one_type, tr.concat_list)
+            fn list_univ(g: &Gen, l: &Term) -> Option<R> {
+                let u1 = g.mk("univ", vec![lit(1)]);
+                if let Some(x) = g.app(l, "seq_one", 1) {
+                    return Some(mpf("tr.seq_one_type", vec![t(&x[0]), t(&u1), defs(RP::Simp(false, vec![], vec![], false), &["gimple.arg"])]));
+                }
+                let c = g.app(l, "seq_concat", 2)?;
+                Some(mpf("tr.concat_list", vec![t(&c[0]), t(&c[1]), t(&u1), p(list_univ(g, &c[0])?), p(list_univ(g, &c[1])?)]))
+            }
+            let l6t = list_univ(self, &self.app(&list, "seq_concat", 2).unwrap()[0].clone()).ok_or_else(|| format!("{:x}: the six: not a list literal", a))?;
+            return self.run(
+                &mp(
+                    inst,
+                    vec![
+                        p(f(&insn.name)),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        s(&fr16),
+                        taut(vec![R::S(s16)]),
+                        hcon,
+                        s(&hl),
+                        simp0(),
+                        cfr,
+                        p(l6t),
+                        simp0(),
+                        defs(RP::Simp(false, vec![], vec![], false), &["gimple.arg"]),
+                        defs(RP::Simp(true, vec![], vec![], false), &["gimple.arg", "gimple.in_reg"]),
+                        simp_l(),
+                        s(&htyp),
+                        s(&hio),
+                        p(hreg),
+                        p(csp),
+                        p(hin),
+                        simp_l(),
+                        simp_l(),
+                        simp0(),
+                        simp0(),
+                        s(&hk),
+                        s(&hd),
+                        s(&pc),
+                        nobp,
+                    ],
+                ),
+                &[],
+            );
+        }
         let inst = R::Inst(
             if one { "tr.call1" } else { "tr.call" }.into(),
             vec![
@@ -780,11 +892,62 @@ impl<'e> Gen<'e> {
                     s(&hk),
                     s(&hd),
                     s(&pc),
-                    self.nobp_below(&self.bkp.clone()),
+                    self.nobp_below(&self.bkp.clone(), st.fr),
                 ],
             ),
             &[],
         )
+    }
+
+    /// `push [rsp + d]` before a call with stack arguments (tr.push_m64_c):
+    /// the home's word at the frame's new bottom, from any frame -- a fault
+    /// the call's overflow
+    #[allow(clippy::too_many_arguments)]
+    fn push_c_at(&mut self, st: &St, g: Term, list: Term, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+        let a = st.a;
+        let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
+        let a2 = (a + insn.len) % P64;
+        let bad = |m: &str| format!("{:x}: {}", a, m);
+        let xs = self.pairs(&insn.fields, 2).ok_or_else(|| bad("fields"))?;
+        let d = self.rsp_mem(&xs[0]).ok_or_else(|| bad("push of a memory operand not [rsp + d]"))?;
+        let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+        let c0 = self.hkey(dn);
+        let Some((8, x)) = st.hsm.get(&c0).cloned() else { return Err(bad("push of a word not a home")) };
+        let fr2 = st.fr + 8;
+        if fr2 > 65536 || st.fr % 8 != 0 {
+            return Err(bad("push beyond the frame's bound"));
+        }
+        let c = P64 - fr2;
+        let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+        let (_, hs2, hk) = self.hkeep(st, c, 8);
+        // (the call's raise: the function's, as at the call)
+        let w = st.w.clone();
+        let hv = st.hvu.clone();
+        let n = self.fresh("c");
+        let (xv, ev) = (self.var(&format!("XP{n}")), self.var(&format!("EP{n}")));
+        let x8 = Term::bvar(0);
+        let kk = kl.instantiate_params(&[Term::bvar(0), Term::bvar(1)], &self.env.binders_fn());
+        let qx = self.mk("mkprog", vec![self.mk("ex", vec![self.mk("and", vec![xl.instantiate_params(&[xv.clone(), ev.clone(), x8], &self.env.binders_fn()), kk])])]);
+        let univ = |gg: &Gen, x: &Term| gg.mk("in", vec![x.clone(), gg.mk("univ", vec![lit(1)])]);
+        let (hx, he) = (univ(self, &xv), univ(self, &ev));
+        let (hxs, hes) = (self.assume(&hx)?, self.assume(&he)?);
+        let gk = self.mk("runs", vec![qx, w.clone(), self.mk("exc", vec![xv.clone(), ev.clone()])]);
+        let kd: Vec<String> = if self.lpg.is_some() { ["tr.lcont", "tr.isout", "tr.mk"].map(String::from).to_vec() } else { vec!["runs".into(), "mkprog".into()] };
+        let k0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hxs), R::S(hes), R::S(hv)], vec![], false)), kd), &gk, &[])?;
+        let hkx = self.close(k0, &[hx, he], &[Self::var_id(&xv), Self::var_id(&ev)])?;
+        let inst = R::Inst(
+            "tr.push_m64_c".into(),
+            vec![("ka", al), ("xx", xl), ("dd", dl), ("k", kl), ("kw", self.kw3()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())],
+        );
+        let mut args = self.head(a, &insn);
+        args.extend([&d, &lit(c0), &x, &lit(fr2), &lit(c), &g, &list].iter().map(|y| t(y)));
+        let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
+        let extra = vec![p(n4), simp_l(), simp_l(), simp_l(), cfr, p(hk), simp0(), s(&hkx)];
+        args.extend(self.tail_h(st, &insn, &hs2, 6, extra));
+        let tr = mp(inst, args);
+        let mut st2 = self.set_home(st, a2, c, 8, x);
+        st2.fr = fr2;
+        self.then(tr, st2)
     }
 
     /// A system call (tr.sys_call1, tr.sys_call3, tr.sys_call6): the machine's
@@ -982,7 +1145,7 @@ impl<'e> Gen<'e> {
     /// the callee's states (below the frame) no breakpoints of bkp: a
     /// loop's head (`tr.hd(z) = pair(h, x) || ..`) by tr.nobp_hd, at the
     /// frame x itself; the rest likewise
-    fn nobp_below(&self, bkp: &Term) -> RA {
+    fn nobp_below(&self, bkp: &Term, frc: u128) -> RA {
         let hd = (|| {
             let o = self.app(bkp, "or", 2)?;
             let e = self.app(&o[0], "eq", 2)?;
@@ -999,10 +1162,18 @@ impl<'e> Gen<'e> {
             Some((c[0].clone(), c[1].clone(), c[2].clone(), o[1].clone()))
         })();
         if let Some((s0, fr, ct, outer)) = cut {
-            return p(R::Mp(Box::new(R::Inst("tr.nobp_cut".into(), vec![("s", s0), ("fr", fr), ("ct", ct), ("bkp", outer.clone())])), vec![self.nobp_below(&outer)]));
+            // (from a deeper frame: rsp below the points' -- a call with
+            // its arguments pushed)
+            if nat(&fr).is_some_and(|f| f != frc) {
+                return p(R::Mp(
+                    Box::new(R::Inst("tr.nobp_cut_le".into(), vec![("s", s0), ("fr", fr), ("fr2", lit(frc)), ("ct", ct), ("bkp", outer.clone())])),
+                    vec![simp0(), self.nobp_below(&outer, frc)],
+                ));
+            }
+            return p(R::Mp(Box::new(R::Inst("tr.nobp_cut".into(), vec![("s", s0), ("fr", fr), ("ct", ct), ("bkp", outer.clone())])), vec![self.nobp_below(&outer, frc)]));
         }
         match hd {
-            Some((h, x, outer)) => p(R::Mp(Box::new(R::Inst("tr.nobp_hd".into(), vec![("bkp", outer.clone())])), vec![t(&x), t(&h), self.nobp_below(&outer)])),
+            Some((h, x, outer)) => p(R::Mp(Box::new(R::Inst("tr.nobp_hd".into(), vec![("bkp", outer.clone())])), vec![t(&x), t(&h), self.nobp_below(&outer, frc)])),
             None => simp0(),
         }
     }

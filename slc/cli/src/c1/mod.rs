@@ -124,7 +124,8 @@ enum Red {
     Guard { cond: Term, ub: (usize, R) },
     /// a call of `g` (the machine's `call` makes it): the block's
     /// continuation, handlers and rest (`one`: call1, the result's rax only)
-    Call { g: Term, args: Vec<Term>, list: Term, one: bool, a: Term, xx: Term, dd: Term, k: Term },
+    /// (`stk`: call1_s, a callee with stack arguments)
+    Call { g: Term, args: Vec<Term>, list: Term, one: bool, stk: bool, a: Term, xx: Term, dd: Term, k: Term },
     /// a system call (gimple.sys_call1, sys_call3, sys_call6; the machine's `syscall`
     /// makes it): its number and arguments, the block's continuation,
     /// handlers and rest

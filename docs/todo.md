@@ -26,13 +26,12 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
   `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
   last `tr.implements_at_s`, with a stack argument). __mmap has its C2
-  (`ms.mmap_fun_c2`); its C1 needs the caller's side of a stack argument:
-  `sub $8, %rsp; push 0x10(%rsp)` (an rsp adjustment in the body, a push
-  of a memory operand -- the home of `off`), a call rule for a CFunS
-  callee against `tr.implements_at_s` (its stack arguments the pushed
-  words at the frame's top, `tr.sargs_off` from the caller's objects
-  above its frame), `add $0x10, %rsp` after it. Then `__mmap`'s
-  composition (proofs/mallocng/machine/cfg_mmap.core), memcpy's model.
+  (`ms.mmap_fun_c2`) and its C1 (`mmc.implements`); to link it:
+  __syscall6's `{p}.typed` and `tr.callee_io_s` (eff.rs for a CFunS spec,
+  `tr.eff_sys_call6` -- mmap's fresh pages keep the program loaded),
+  __mmap's own `tr.callee_io` (`tr.eff_call1_s`), then `mmc.linked` /
+  `mmc.composed` (proofs/mallocng/machine/cfg_mmap.core). Then memcpy's
+  model.
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.

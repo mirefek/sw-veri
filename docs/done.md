@@ -1051,3 +1051,16 @@ item is a short summary of finished work; details are in the files named.
   undefined; Linux's get_unmapped_area fails so) -- trusted spec,
   `lx.sys_mmap_ok` restated. `refines` for a CFunS without the six-argument
   bound; `sy6c.composed` (proofs/mallocng/machine/cfg_mmap.core).
+- **__mmap's C1 (a caller of a stack-argument callee).** The bridge
+  (proofs/translate_scall.core): `push [rsp + d]` (`x86i.push_m`,
+  `tr.push_m64`; before a call from any frame, its fault the call's
+  overflow, the slot's page by the stack's gap: `tr.push_m64_c`,
+  `tr.push_hacc`); GIMPLE's seven-argument call as the six-register call of
+  `with_stack(G, [x])` (`g.callee_ws`, `g.call_ws`); the home at the frame's
+  bottom the stack argument at the callee's entry (`tr.sargs_at_call`);
+  `tr.callee_sim_c` / `tr.call_c` (tr.callee_sim / tr.call with the
+  callee's contract at its entry state, generated copies), `tr.call_s`,
+  `tr.call1_s`, `tr.call1_sc`; `and eax, imm32` of a 64-bit word. The
+  engine: call1_s, a callee's CFunS premises (`tr.implements_at_s`, typed
+  on lists, `tr.callee_io_s`), the cut points' no-stop from a deeper frame
+  (`tr.nobp_cut_le`).

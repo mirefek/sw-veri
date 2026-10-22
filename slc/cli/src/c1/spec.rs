@@ -1353,10 +1353,10 @@ impl<'e> Gen<'e> {
                     return Ok(Some(Red::Guard { cond: so.cond, ub: (u, ubr) }));
                 }
                 // a call: the machine's call makes it
-                for (name, one) in [("gimple.call1", true), ("gimple.call", false)] {
+                for (name, one, stk) in [("gimple.call1", true, false), ("gimple.call", false, false), ("gimple.call1_s", true, true)] {
                     if let Some(c) = self.app(&x[0], name, 2) {
                         let items = self.list_items(&c[1]).ok_or("a call's arguments: not a list literal")?;
-                        return Ok(Some(Red::Call { g: c[0].clone(), args: items, list: c[1].clone(), one, a: al, xx: xl, dd: dl, k: kl }));
+                        return Ok(Some(Red::Call { g: c[0].clone(), args: items, list: c[1].clone(), one, stk, a: al, xx: xl, dd: dl, k: kl }));
                     }
                 }
                 // a system call: the machine's syscall makes it

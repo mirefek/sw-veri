@@ -53,6 +53,29 @@ impl<'e> Gen<'e> {
                 st2.fr = fr2;
                 return self.then(tr, st2);
             }
+            // push [rsp + d] (a home's word x -- a stack argument's): the home
+            // at the frame's new bottom, the frame 8 bytes more
+            118 => {
+                let xs = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
+                let d = self.rsp_mem(&xs[0]).ok_or_else(|| bad("push of a memory operand not [rsp + d]"))?;
+                let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                let c0 = self.hkey(dn);
+                let Some((8, x)) = st.hsm.get(&c0).cloned() else { return Err(bad("push of a word not a home")) };
+                let fr2 = fr + 8;
+                if fr2 > 65536 {
+                    return Err(bad("push beyond the frame's bound"));
+                }
+                let c = P64 - fr2;
+                let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+                let (_, hs2, hk) = self.hkeep(st, c, 8);
+                let mut extra = vec![p(n4)];
+                extra.extend((0..6).map(|_| simp_l()));
+                extra.push(p(hk));
+                let tr = self.step("push_m64", a, insn, &[&d, &lit(c0), &x, &lit(fr2), &lit(c)], self.tail_h(st, insn, &hs2, 6, extra));
+                let mut st2 = self.set_home(st, a2, c, 8, x);
+                st2.fr = fr2;
+                return self.then(tr, st2);
+            }
             // pop r64: g := the home at rsp (x), the frame 8 bytes less
             115 => {
                 let g = reg(&f)?;
@@ -1735,6 +1758,16 @@ impl<'e> Gen<'e> {
                 if nat(&x[0]) == Some(4) {
                     if let Some(pf) = self.widen(st, 0, 4)? {
                         return Ok(pf);
+                    }
+                    // (of a 64-bit word, a mask below 2^31: the 64-bit and, the upper half cleared)
+                    if let (Some((8, u)), Some(kn)) = (self.reg(st, 0), nat(&x[1])) {
+                        if kn < 1 << 31 {
+                            let (r, hr) = self.result(&self.mk("bits_and", vec![lit(64), u.clone(), x[1].clone()]))?;
+                            let tr = self.step("and32_imm_ax_w", a, insn, &[&x[1], &u, &r], self.tail(st, insn, 5, vec![hr]));
+                            self.scratch.insert(0);
+                            let st2 = self.set_reg(st, a2, 0, 8, r);
+                            return self.then(tr, st2);
+                        }
                     }
                     let u = self.need_reg(st, 0, 4)?;
                     let (r, hr) = self.result(&self.mk("bits_and", vec![lit(32), u.clone(), x[1].clone()]))?;
