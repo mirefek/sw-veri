@@ -162,6 +162,8 @@ impl<'e> Gen<'e> {
             params: Vec::new(),
             grefs: std::collections::HashMap::new(),
             gtyped: Vec::new(),
+            hva: None,
+            last_home: std::cell::Cell::new((0, 0)),
         })
     }
 }
@@ -463,6 +465,9 @@ impl<'e> Gen<'e> {
             self.sargs = None;
         }
         self.vmark0 = self.env.var_bound() as usize;
+        // (the callers' objects at or above sp, tr.vabove: the homes apart from them)
+        let vab_t = self.mk("tr.vabove", vec![s.clone(), vv.clone()]);
+        self.hva = Some(self.assume(&vab_t)?);
         let pt = self.prove_pt(st0)?;
         let (aligned, e_t) = match self.ent_al.take() {
             Some((et, _)) => (true, et),
@@ -471,6 +476,8 @@ impl<'e> Gen<'e> {
         self.ent_m = None;
         let _ = self.assume(&e_t)?;
         inner_h.push(e_t.clone());
+        // (the callers' objects at or above sp: assumed for the walk)
+        inner_h.push(vab_t);
         // (E of the entry, its arguments and the callers' stack objects)
         let e_lam = self.abs(&e_t, &[Self::var_id(&s), Self::var_id(&args_t), Self::var_id(&vv)]);
         let h_e = if nstk > 0 {

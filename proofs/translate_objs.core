@@ -1,0 +1,99 @@
+// Stack objects of the function's own frame (an address-taken local:
+// readable GIMPLE's `alloc_objs`, slc/cli/src/c1): the claims' objects
+// grown by them from where the spec allocates them -- after the machine's
+// first store to the object's bytes, then a home's, accessible -- to the
+// return, where the callers' objects alone are matched (the frame's below
+// sp: tr.wm_sub). Checked after proofs/translate_struct.core.
+
+// ---------------------------------------------------------------------
+//  The claims with more objects, below sp: the claims with fewer
+
+theorem tr.wm_sub: all old new w v v2 sp. abi.world_matches(old, new, w, v2, sp) -> (all x. x in v -> x in v2) ->
+  (all x. x in omega -> x in v2 -> !(x in v) -> int_lt(x, sp)) -> abi.world_matches(old, new, w, v, sp)
+proof
+  fix old new w v v2 sp
+  assume h hs hb
+  have {top, limit, brk0, brk, bytes, frames, pages, nostk, stk, rsv} := h
+  have by2: all a. a in bits(64) -> abi.in_domain(w, v, a) -> new.bytes[a] = w.bytes[a] proof
+    fix a
+    assume ha hd
+    have c1: a in v -> a in v2 := all_elim(hs, {a})
+    have d2: abi.in_domain(w, v2, a) by defs(taut(expand(hd, abi.in_domain), c1), abi.in_domain)
+    show := mp(all_elim(bytes, {a}), ha, d2)
+  qed
+  have fr2: all a. a in bits(64) -> (int_le(sp, a) && !abi.in_domain(w, v, a)) && abi.stack_page(old, x86_64_linux.page_of(a)) -> new.bytes[a] = old.bytes[a] proof
+    fix a
+    assume ha hf
+    have hl hn hsp := hf
+    have ao: a in omega by simp(ha)
+    have c2: a in v2 -> !(a in v) -> false proof
+      assume h2 h3
+      have lt := mp(all_elim(hb, {a}), ao, h2, h3)
+      show by arith(lt, hl)
+    qed
+    have nd2: !abi.in_domain(w, v2, a) by defs(taut(expand(hn, abi.in_domain), c2), abi.in_domain)
+    show := mp(all_elim(frames, {a}), ha, conj(conj(hl, nd2), hsp))
+  qed
+  show by defs(taut(top, limit, brk0, brk, by2, fr2, pages, nostk, stk, rsv), abi.world_matches)
+qed
+
+// (the objects v2: v's and some below sp(s))
+abbrev tr.osub(s, v, v2) := (all x. x in v -> x in v2) && (all x. x in omega -> x in v2 -> !(x in v) -> int_lt(x, abi.sp(s)))
+
+theorem tr.retok_sub: all s v v2 p w m1. tr.osub(s, v, v2) -> tr.retok(s, v2, p, w, m1) -> tr.retok(s, v, p, w, m1)
+proof
+  fix s v v2 p w m1
+  assume ho h
+  have hs hb := ho
+  have a1 a2 a3 a4 a5 a6 a7 a8 a9 := expand(h, tr.retok)
+  obtain w2, r1 r2 r3 r4 r5 r6 from a3
+  have r4b := apply(tr.wm_sub, r4, hs, hb)
+  have e: ex w2. runs(p, w, ok(w2, pair(m1.gpr[0], m1.gpr[2]))) && w2 in abi.World && w2 in univ(1) &&
+      abi.world_matches(s.vm, m1.vm, w2.vm, v, abi.sp(s)) && m1.os = w2.os && m1.fs_base = w2.fs_base by ex_intro({w2}, taut(r1, r2, r3, r4b, r5, r6))
+  show by defs(taut(a1, a2, e, a4, a5, a6, a7, a8, a9), tr.retok)
+qed
+
+theorem tr.arr_sub(zb. bkp, zb pb wb. bka): all s v v2 m p w. tr.osub(s, v, v2) -> tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v2, m, p, w) ->
+  tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m, p, w)
+proof
+  fix s v v2 m p w
+  assume ho h
+  have c1 c2 := expand(h, tr.arr)
+  have d1: tr.out(s, m) -> tr.retok(s, v, p, w, m) proof
+    assume hout
+    show := apply(tr.retok_sub, ho, mp(c1, hout))
+  qed
+  show by defs(taut(d1, c2), tr.arr)
+qed
+
+theorem tr.gk_sub(zb. bkp, zb pb wb. bka): all s v v2 p w o. tr.osub(s, v, v2) -> tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v2, p, w, o) ->
+  tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, o)
+proof
+  fix s v v2 p w o
+  assume ho h
+  have e := expand(h, tr.gk)
+  have u: tr.ub(s, v2, p, w) -> tr.ub(s, v, p, w) proof
+    assume hu
+    show by defs(expand(hu, tr.ub), tr.ub)
+  qed
+  have a: (ex m1. o = ok(m1, empty) && tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v2, m1, p, w)) ->
+      (ex m1. o = ok(m1, empty) && tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m1, p, w)) proof
+    assume ha
+    obtain m1, h1 h2 from ha
+    show by ex_intro({m1}, taut(h1, apply(tr.arr_sub[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], ho, h2)))
+  qed
+  show by defs(taut(e, u, a), tr.gk)
+qed
+
+theorem tr.sim_sub(zb. bkp, zb pb wb. bka): all s v v2 p w m. tr.osub(s, v, v2) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v2, p, w, m) ->
+  tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m)
+proof
+  fix s v v2 p w m
+  assume ho h
+  have g: all o. tr.run_k(s, zb. bkp(zb), m, o) -> tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, o) proof
+    fix o
+    assume hr
+    show := apply(tr.gk_sub[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], ho, mp(all_elim(expand(h, tr.sim), {o}), hr))
+  qed
+  show by defs(g, tr.sim)
+qed

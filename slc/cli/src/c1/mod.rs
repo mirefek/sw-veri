@@ -354,6 +354,11 @@ struct Gen<'e> {
     /// the refinement walk's choices in scope, with their domains' facts
     /// (`x in S`, assumed): a loop's start state in univ(1)
     gtyped: Vec<(Term, Seq)>,
+    /// the callers' objects at or above sp (`tr.vabove(s, v)`, assumed at
+    /// the entry): the homes apart from the objects
+    hva: Option<Seq>,
+    /// the home a store writes (`hkeep`'s): its `tr.hfree`
+    last_home: std::cell::Cell<(u128, u128)>,
 }
 
 /// the seconds since the first trace line

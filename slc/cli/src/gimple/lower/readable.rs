@@ -225,7 +225,11 @@ impl<'a> Lower<'a> {
         }
         if !rx.fx.obj_list.is_empty() {
             let objs: Vec<String> = rx.fx.obj_list.iter().map(|(sz, al)| format!("({}, {})", sz, al)).collect();
-            writeln!(s, "  let objs = alloc_objs([{}])", objs.join(", ")).unwrap();
+            // (the objects' C names, in order: scripts/locmap.py's)
+            let mut names: Vec<(usize, &String)> = rx.fx.objs.iter().map(|(n, (k, _))| (*k, n)).collect();
+            names.sort();
+            let names: Vec<&str> = names.iter().map(|(_, n)| n.as_str()).collect();
+            writeln!(s, "  let objs = alloc_objs([{}])  // {}", objs.join(", "), names.join(", ")).unwrap();
         }
         for l in &rx.out {
             writeln!(s, "{}", l).unwrap();

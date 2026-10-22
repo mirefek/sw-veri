@@ -145,6 +145,7 @@ impl<'e> Gen<'e> {
                         t(&self.p(&st2.spec)),
                         t(&st.w),
                         t(&st2.w),
+                        p(self.hap_pf(&st.hst)),
                         simp_l(),
                         simp_l(),
                         simp_l(),

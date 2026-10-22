@@ -16,7 +16,11 @@ Written to build/locmap_O0.core, one definition per procedure:
 
 K the local's position in the tuple, KEY its home's key (the offset from
 the entry's rsp, modulo 2^64: the engine's), LO..HI the scope's addresses
-as offsets from the function's start. Untrusted: the engine only uses it
+as offsets from the function's start; and for a procedure with stack
+objects (address-taken locals, `alloc_objs`), their keys in order:
+
+  def loc_objs.SPEC() := pair(KEY, pair(.., empty))
+ Untrusted: the engine only uses it
 to choose which home holds which local; the kernel checks every step.
 
 usage: scripts/locmap.py   (after scripts/build-musl.sh -O0 and
@@ -98,8 +102,10 @@ def dwarf_locals(obj):
 
 
 def readable_vars(sl):
-    """per procedure: its vars' names in order"""
+    """per procedure: its vars' names in order, and its stack objects'
+    (the `alloc_objs` line's comment, in order)"""
     procs = {}
+    objs = {}
     name = None
     for line in open(sl):
         m = re.match(r"proc\[\w+\] (\w+)\(", line)
@@ -110,9 +116,13 @@ def readable_vars(sl):
         m = re.match(r"  var (\w+):", line)
         if m and name is not None:
             procs[name].append(m.group(1))
-        elif name is not None and not line.startswith("  var "):
-            name = None if not line.startswith("proc") else name
-    return procs
+            continue
+        m = re.match(r"  let objs = alloc_objs\(.*\)  // (.*)$", line)
+        if m and name is not None:
+            objs[name] = [x.strip() for x in m.group(1).split(",")]
+        if name is not None and not line.startswith("  var "):
+            name = None
+    return procs, objs
 
 
 def main():
@@ -122,7 +132,20 @@ def main():
             obj = os.path.join(tmp, os.path.basename(src) + ".o")
             compile_g(src, obj)
             dl = dwarf_locals(obj)
-            for proc, names in readable_vars(os.path.join(ROOT, sl)).items():
+            procs, objs = readable_vars(os.path.join(ROOT, sl))
+            # (the stack objects' frame keys, in order)
+            for proc, names in objs.items():
+                keys = []
+                for nm in names:
+                    ks = [(fb + 8) % P64 for (dn, fb, lo, hi) in dl.get(proc, []) if dn == nm]
+                    if len(ks) != 1:
+                        sys.exit("%s: object %s: %d locations" % (proc, nm, len(ks)))
+                    keys.append(ks[0])
+                t = "empty"
+                for key in reversed(keys):
+                    t = "pair(%d, %s)" % (key, t)
+                out.append("def loc_objs.%s.%s() := %s" % (prefix, proc, t))
+            for proc, names in procs.items():
                 if proc not in dl:
                     continue
                 entries = []

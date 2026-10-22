@@ -242,6 +242,14 @@ proof
     have ev := mp(all_elim(vp, {q}), hq, nr)
     show by taut(e0, nr, trans(ev, e0))
   qed
+  // (a stack page of m: off the range, V's as m's -- an own object's)
+  have sko: all q. q in omega -> abi.stack_page(m.vm, q) -> !IN(q) && V.pages[q] = m.vm.pages[q] proof
+    fix q
+    assume hq hs
+    have nr := apply(tr.chg_stack, rm, os, po, no, hq, hs)
+    have ev := mp(all_elim(vp, {q}), hq, nr)
+    show by taut(nr, ev)
+  qed
   // bytes: in the world's domain, the world's
   have by2: all a. a in bits(64) -> abi.in_domain(WV, v, a) -> V.bytes[a] = WV.bytes[a] proof
     fix a
@@ -258,11 +266,22 @@ proof
       have o1: a in v -> false proof
         assume hv
         have ao: a in omega by simp(ha)
-        have hle hsp _ := mp(all_elim(oacc, {a}), ao, hv)
-        have so: abi.sp(s) in omega by simp(hle, ao)
-        have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, ao, pg4, so)
-        have _ nr _ := mp(all_elim(sk, {P}), pa, hsp, lq)
-        show by taut(nr, hi)
+        have o _ := mp(all_elim(oacc, {a}), ao, hv)
+        have n1: int_le(abi.sp(s), a) && abi.stack_page(s.vm, P) -> false proof
+          assume hh
+          have hle hsp := hh
+          have so: abi.sp(s) in omega by simp(hle, ao)
+          have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, ao, pg4, so)
+          have _ nr _ := mp(all_elim(sk, {P}), pa, hsp, lq)
+          show by taut(nr, hi)
+        qed
+        have n2: tr.own(s, m, a) -> false proof
+          assume hh
+          have _ hsp := hh
+          have nr _ := mp(all_elim(sko, {P}), pa, hsp)
+          show by taut(nr, hi)
+        qed
+        show by taut(o, n1, n2)
       qed
       have o2: x86_64_linux.mapped(WV, P) && !(snd(WV.pages[P]).kind = 2) -> x86_64_linux.mapped(V, x86_64_linux.page_of(a)) proof
         assume h
@@ -368,24 +387,43 @@ proof
     show := apply(tr.rsv_chg, rm, htop, hc)
   qed
   // the stack objects: on the entry's stack pages at or above sp, accessible still
-  have oa2: all y. y in omega -> y in v -> (int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) && x86_64_linux.can_access(V, bits_of_int(64, y), 1) proof
+  have oa2: all y. y in omega -> y in v -> ((int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) || tr.own(s, m2, y)) &&
+      x86_64_linux.can_access(V, bits_of_int(64, y), 1) proof
     fix y
     assume h1 h2
-    have c := mp(all_elim(oacc, {y}), h1, h2)
-    have hle hsp hac := c
+    have c hac := mp(all_elim(oacc, {y}), h1, h2)
     let P := int_div(y, x86_64_linux.PAGE)
     have pa: P in omega by arith(h1, pg4)
-    have so: abi.sp(s) in omega by simp(hle, h1)
-    have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, h1, pg4, so)
-    have _ _ ev := mp(all_elim(sk, {P}), pa, hsp, lq)
-    have em _ _ := mp(all_elim(sk, {P}), pa, hsp, lq)
-    // (y below the task's top: its page mapped -- y its address)
-    have ml _ := expand(expand(hsp, abi.stack_page).1, x86_64_linux.mapped)
-    have td: TSP = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
-    have yb: bits_of_int(64, y) = y := mp(bits_of_int_small[n := 64, a := y], h1, (int_lt(y, pow2(64)) by arith(ml, td, pg4, h1, (pow2(64) = 18446744073709551616 by rsimp()))))
-    have pq: x86_64_linux.page_of(bits_of_int(64, y)) = P by rsimp(yb, x86_64_linux.page_of)
-    have eVm: V.pages[x86_64_linux.page_of(bits_of_int(64, y))] = m.vm.pages[x86_64_linux.page_of(bits_of_int(64, y))] := rewrite(sym(pq), trans(ev, sym(em)))
-    show by taut(hle, hsp, apply(tr.acc_pt, eVm, hac))
+    // a caller's: on the entry's stack pages, kept
+    have k1: int_le(abi.sp(s), y) && abi.stack_page(s.vm, P) -> x86_64_linux.can_access(V, bits_of_int(64, y), 1) proof
+      assume hh
+      have hle hsp := hh
+      have so: abi.sp(s) in omega by simp(hle, h1)
+      have lq: int_le(int_div(int_sub(abi.sp(s), 8), x86_64_linux.PAGE), P) by arith(hle, h1, pg4, so)
+      have _ _ ev := mp(all_elim(sk, {P}), pa, hsp, lq)
+      have em _ _ := mp(all_elim(sk, {P}), pa, hsp, lq)
+      // (y below the task's top: its page mapped -- y its address)
+      have ml _ := expand(expand(hsp, abi.stack_page).1, x86_64_linux.mapped)
+      have td: TSP = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+      have yb: bits_of_int(64, y) = y := mp(bits_of_int_small[n := 64, a := y], h1, (int_lt(y, pow2(64)) by arith(ml, td, pg4, h1, (pow2(64) = 18446744073709551616 by rsimp()))))
+      have pq: x86_64_linux.page_of(bits_of_int(64, y)) = P by rsimp(yb, x86_64_linux.page_of)
+      have eVm: V.pages[x86_64_linux.page_of(bits_of_int(64, y))] = m.vm.pages[x86_64_linux.page_of(bits_of_int(64, y))] := rewrite(sym(pq), trans(ev, sym(em)))
+      show := apply(tr.acc_pt, eVm, hac)
+    qed
+    // an own one: on a stack page of m, off the range, kept
+    have k2: tr.own(s, m, y) -> tr.own(s, m2, y) && x86_64_linux.can_access(V, bits_of_int(64, y), 1) proof
+      assume hh
+      have yl hsp := hh
+      have _ ev := mp(all_elim(sko, {P}), pa, hsp)
+      have ml _ := expand(expand(hsp, abi.stack_page).1, x86_64_linux.mapped)
+      have td: TSP = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+      have yb: bits_of_int(64, y) = y := mp(bits_of_int_small[n := 64, a := y], h1, (int_lt(y, pow2(64)) by arith(ml, td, pg4, h1, (pow2(64) = 18446744073709551616 by rsimp()))))
+      have pq: x86_64_linux.page_of(bits_of_int(64, y)) = P by rsimp(yb, x86_64_linux.page_of)
+      have eVm: V.pages[x86_64_linux.page_of(bits_of_int(64, y))] = m.vm.pages[x86_64_linux.page_of(bits_of_int(64, y))] := rewrite(sym(pq), ev)
+      have sp2: abi.stack_page(m2.vm, P) by defs(simp(em, ev, expand(hsp, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+      show by taut(yl, sp2, apply(tr.acc_pt, eVm, hac))
+    qed
+    show by taut(c, k1, k2)
   qed
   have wm2: abi.world_matches(s.vm, V, WV, v, abi.sp(s)) by defs(taut(trans(vt, trans(top, sym(wt))), trans(vl, trans(limit, sym(wl))),
     trans(vbs, trans(brk0, sym(wbs))), vbk, by2, fr2, pg2, ns2, stk2, rsv2), abi.world_matches)

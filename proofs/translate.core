@@ -1640,10 +1640,30 @@ def tr.regs(m, rs) := is_fun(rs) && (all r. r in dom(rs) -> m.gpr[r] = snd(rs[r]
 // domain the world's bytes, the callers' frames (the entry's stack pages
 // at and above its sp, outside the domain) as at the entry, the page map
 // the world's or grown stack pages, the other fields the world's
-// (and the stack objects -- the callers' -- at or above sp, on the entry's
-// stack pages, accessible: a pointer access to one is the machine's)
+// (and the stack objects -- the callers' at or above sp, on the entry's
+// stack pages; the function's own in its frame -- below the entry's rsp,
+// the return address -- on a stack page -- accessible: a pointer access to
+// one is the machine's)
+abbrev tr.own(s, m, x) := int_lt(x, s.gpr[4]) && abi.stack_page(m.vm, int_div(x, x86_64_linux.PAGE))
+// (the n bytes of the home at c none of the objects v)
+abbrev tr.hfree(s, c, n, v) := all j. j in omega -> int_lt(j, n) -> !(int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j) in v)
+// (the homes hs apart from the objects v)
+def tr.hapart(s, hs, v) := all c. c in dom(hs) -> tr.hfree(s, c, fst(hs[c]), v)
+// (the own objects within the frame of fr bytes: at or above rsp)
+abbrev tr.ofr(s, fr, v) := all x. x in omega -> x in v -> int_lt(x, s.gpr[4]) -> int_le(int_sub(s.gpr[4], fr), x)
+
+theorem tr.ofr_le: all s fr fr2 v. int_le(fr, fr2) -> tr.ofr(s, fr, v) -> tr.ofr(s, fr2, v)
+proof
+  fix s fr fr2 v
+  assume hl h
+  fix x
+  assume h1 h2 h3
+  have a := mp(all_elim(h, {x}), h1, h2, h3)
+  show by arith(a, hl)
+qed
 def tr.mem(s, m, w, ob) := wob: w.objs = ob && wm: abi.world_matches(s.vm, m.vm, w.vm, ob, abi.sp(s)) &&
-  oacc: (all x. x in omega -> x in ob -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(m.vm, bits_of_int(64, x), 1))
+  oacc: (all x. x in omega -> x in ob -> ((int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) || tr.own(s, m, x)) &&
+    x86_64_linux.can_access(m.vm, bits_of_int(64, x), 1))
 
 // the frame: the I/O and pages as at the entry but for grown stack pages,
 // or its fd bytes accessible
@@ -3402,7 +3422,7 @@ proof
   assume ho hv
   have wm2: abi.world_matches(s.vm, s.vm, abi.view(s, v, mem).vm, v, abi.sp(s)) by simp(hv.2, keep(abi.world_matches))
   have e: abi.view(s, v, mem).objs = v by simp()
-  have oa: all x. x in omega -> x in v -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1) proof
+  have oa: all x. x in omega -> x in v -> ((int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) || tr.own(s, s, x)) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1) proof
     fix x
     assume h1 h2
     have c := mp(all_elim(expand(ho, tr.objs_ok), {x}), h1, h2)
@@ -3463,6 +3483,25 @@ qed
 
 // the coupling after the machine's bytes changed only outside the world's
 // domain, below the entry's sp
+// the objects' places and access, on the same pages
+theorem tr.oacc_pages(s, m, m2, ob): m2.vm.pages = m.vm.pages ->
+  (all x. x in omega -> x in ob -> ((int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) || tr.own(s, m, x)) && x86_64_linux.can_access(m.vm, bits_of_int(64, x), 1)) ->
+  (all x. x in omega -> x in ob -> ((int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) || tr.own(s, m2, x)) && x86_64_linux.can_access(m2.vm, bits_of_int(64, x), 1))
+proof
+  assume pe oacc
+  fix x
+  assume h1 h2
+  have c := mp(all_elim(oacc, {x}), h1, h2)
+  have ca := apply(tr.acc_pages, {m.vm}, {m2.vm}, {bits_of_int(64, x)}, {1}, pe, taut(c))
+  have sq := mp(all_elim(tr.sp_pages, {m.vm}, {m2.vm}, {int_div(x, x86_64_linux.PAGE)}), pe)
+  have o2: tr.own(s, m, x) -> tr.own(s, m2, x) proof
+    assume ho
+    have hl hp := ho
+    show by taut(hl, rewrite(sym(sq), hp))
+  qed
+  show by taut(c, ca, o2)
+qed
+
 theorem tr.mem_bytes: all s m m2 w ob b. tr.mem(s, m, w, ob) -> m2.vm = fn_update(m.vm, "bytes", b) ->
   (all a. a in bits(64) -> abi.in_domain(w.vm, ob, a) || int_le(abi.sp(s), a) -> b[a] = m.vm.bytes[a]) ->
   tr.mem(s, m2, w, ob)
@@ -3501,13 +3540,7 @@ proof
     show := apply(tr.rsv_same, pe, (m2.vm.stack_top = m.vm.stack_top by simp(em)), (m2.vm.stack_limit = m.vm.stack_limit by simp(em)), mp(rsv, h0))
   qed
   have wm2: abi.world_matches(s.vm, m2.vm, w.vm, ob, abi.sp(s)) by defs(simp(em, top, limit, brk0, brk, rewrite(em, by2), rewrite(em, fr2), rewrite(em, pg2), nostk, stk, rewrite(em, rsv2), keep(abi.in_domain, abi.stack_page, abi.stack_reserve)), abi.world_matches)
-  have oa2: all x. x in omega -> x in ob -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(m2.vm, bits_of_int(64, x), 1) proof
-    fix x
-    assume h1 h2
-    have c := mp(all_elim(oacc, {x}), h1, h2)
-    have ca := apply(tr.acc_pages, {m.vm}, {m2.vm}, {bits_of_int(64, x)}, {1}, pe, taut(c))
-    show by taut(c, ca)
-  qed
+  have oa2 := apply(tr.oacc_pages, pe, oacc)
   show by defs(taut(wob, wm2, oa2), tr.mem)
 qed
 

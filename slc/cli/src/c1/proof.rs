@@ -13,6 +13,14 @@ struct Ctx {
     lf: Vec<Seq>,
 }
 
+
+/// The rules keeping the homes past the spec's store (their first premise
+/// `tr.hapart`)
+const HAPART: &[&str] = &[
+    "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
+    "store64i_bd", "store32i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
+    "store64_bd_eq", "store64_bi",
+];
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
         Ctx { fr: self.fr, w: self.w.clone(), hvu: self.hvu.clone(), hww: self.hww.clone(), lf: self.lf.clone() }
@@ -794,6 +802,8 @@ impl<'e> Gen<'e> {
                 &mp(
                     inst,
                     vec![
+                        p(self.ofr_pf(&self.mk("int_sub", vec![lit(st.fr), lit(8)]))),
+                        p(self.hap_pf(&st.hst)),
                         p(f(&insn.name)),
                         simp_l(),
                         simp_l(),
@@ -865,10 +875,13 @@ impl<'e> Gen<'e> {
         let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
         // (an aligned call: the entry aligned; else the frame decides)
         let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
+        // (the homes apart from the objects, no object the function's own: in the rule's order)
+        let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
+        let pre = if one { vec![ha, ho] } else { vec![ho, ha] };
         self.run(
             &mp(
                 inst,
-                vec![
+                [pre, vec![
                     p(f(&insn.name)),
                     simp_l(),
                     simp_l(),
@@ -893,7 +906,8 @@ impl<'e> Gen<'e> {
                     s(&hd),
                     s(&pc),
                     self.nobp_below(&self.bkp.clone(), st.fr),
-                ],
+                ]]
+                .concat(),
             ),
             &[],
         )
@@ -1578,21 +1592,79 @@ impl<'e> Gen<'e> {
     }
 
     /// the same for a rule writing a home: the homes it leaves (hs2) after
-    /// the map
+    /// the map; the home written (`hkeep`'s) free of the objects
     pub(super) fn tail_h(&self, st: &St, insn: &Insn, hs2: &Term, n: usize, extra: Vec<RA>) -> Vec<RA> {
         let mut v = vec![t(&st.hst), t(hs2), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w), p(f(&insn.name))];
         v.extend((0..n).map(|_| simp_l()));
         v.extend(extra);
+        let (c, k) = self.last_home.get();
+        v.push(p(self.hfr_pf(c, k)));
         v.push(p(R::Slot("NEXT")));
         v
     }
 
-    /// a rule's instance: `mp(tr.RULE, head, terms, tail)`
+    /// a rule's instance: `mp(tr.RULE, head, terms, tail)` (a rule keeping
+    /// the homes past the spec's store: the homes apart from the objects
+    /// first)
     pub(super) fn step(&self, rule: &str, a: u128, insn: &Insn, ts: &[&Term], tail: Vec<RA>) -> R {
         let mut args = self.head(a, insn);
+        let n0 = args.len() + ts.len();
         args.extend(ts.iter().map(|x| t(x)));
         args.extend(tail);
+        if HAPART.contains(&rule) {
+            // (the homes: the tail's first term)
+            let RA::T(hs) = &args[n0] else { panic!("tr.{}: a tail without the homes", rule) };
+            let pf = self.hap_pf(&hs.clone());
+            let i = args.iter().position(|x| !matches!(x, RA::T(_))).unwrap_or(args.len());
+            args.insert(i, p(pf));
+        }
         mpf(&format!("tr.{}", rule), args)
+    }
+
+    /// `tr.vabove(s, v)`: the entry's (assumed)
+    fn hva_r(&self) -> R {
+        R::S(self.hva.clone().expect("tr.vabove assumed at the entry"))
+    }
+
+    /// `tr.hfree(s, c, n, v)`: the home at c no object
+    pub(super) fn hfree_pf(&self, c: u128, n: u128) -> R {
+        mpf("tr.hfree_above", vec![t(&self.s), t(&self.v), t(&lit(c)), t(&lit(n)), p(self.hva_r()), defs(RP::Simp(false, vec![], vec![], false), &["tr.hrange"])])
+    }
+
+    /// `tr.hfr(s, c, n, v)`, as a home's store takes it: the callers'
+    /// objects alone (`tr.vabove`)
+    pub(super) fn hfr_pf(&self, c: u128, n: u128) -> R {
+        mpf("tr.hfr_l", vec![t(&self.s), t(&lit(c)), t(&lit(n)), t(&self.v), p(self.hva_r())])
+    }
+
+    /// `tr.hap(s, hs, v)`, as a store's rule takes it: the callers' objects
+    /// alone (`tr.vabove`)
+    pub(super) fn hap_pf(&self, hs: &Term) -> R {
+        mpf("tr.hap_l", vec![t(&self.s), t(hs), t(&self.v), p(self.hva_r())])
+    }
+
+    /// `tr.hapart(s, hs, v)` for the homes' map term hs (`hs_term`'s:
+    /// `fn_update(.., c, pair(n, x))` from empty)
+    pub(super) fn hapart_term(&self, hs: &Term) -> R {
+        let mut cur = hs.clone();
+        let mut order = Vec::new();
+        while let Some(u) = self.app(&cur, "fn_update", 3).map(|u| u.to_vec()) {
+            let (c, pr) = (nat(&u[1]).expect("a home's literal key"), self.app(&u[2], "pair", 2).expect("a home's pair").to_vec());
+            order.push((c, nat(&pr[0]).expect("a home's literal size"), pr[1].clone()));
+            cur = u[0].clone();
+        }
+        let mut m = self.mk("empty", vec![]);
+        let mut pf = mpf("tr.hapart_empty", vec![t(&self.s), t(&self.v)]);
+        for (c, n, x) in order.into_iter().rev() {
+            pf = mpf("tr.hapart_upd", vec![t(&self.s), t(&m), t(&self.v), t(&lit(c)), t(&lit(n)), t(&x), p(pf), p(self.hfree_pf(c, n))]);
+            m = self.upd(&m, c, n, &x);
+        }
+        pf
+    }
+
+    /// `tr.ofr(s, fr, v)`: no object the function's own
+    pub(super) fn ofr_pf(&self, fr: &Term) -> R {
+        mpf("tr.ofr_above", vec![t(&self.s), t(fr), t(&self.v), p(self.hva_r())])
     }
 
     /// the homes' map
@@ -1608,6 +1680,7 @@ impl<'e> Gen<'e> {
     /// it), their map, and the `tr.hkeep` proof -- one `tr.hkeep_upd` per
     /// home left
     pub(super) fn hkeep(&self, st: &St, c: u128, n: u128) -> (BTreeMap<u128, (u128, Term)>, Term, R) {
+        self.last_home.set((c, n));
         let mut kept = BTreeMap::new();
         let mut pf = mpf("tr.hkeep_empty", vec![t(&st.hst), t(&lit(c)), t(&lit(n))]);
         for (&k, (nk, xk)) in &st.hsm {
