@@ -34,15 +34,24 @@ fn byte_eq(k: usize, v: u8) -> String {
 
 /// A function by its symbol, or `ALIAS=ADDR` (hex): the function at ADDR,
 /// named ALIAS (a static function with copies in several files)
-fn function<'a>(elf: &'a Elf, s: &'a str) -> Result<(&'a str, &'a sl_interp::elf::Symbol), String> {
-    match s.split_once('=') {
+/// A function by name (or `alias=address`): its name and symbol -- an
+/// assembly function without its size (`.size`, e.g. musl's memcpy) up to
+/// the next symbol
+fn function<'a>(elf: &'a Elf, s: &'a str) -> Result<(&'a str, sl_interp::elf::Symbol), String> {
+    let (name, sym) = match s.split_once('=') {
         Some((alias, a)) => {
             let addr = u64::from_str_radix(a.trim_start_matches("0x"), 16).map_err(|e| format!("{}: {}", s, e))?;
             let sym = elf.symbol_at(addr).filter(|y| y.value == addr).ok_or_else(|| format!("no function at {:x}", addr))?;
-            Ok((alias, sym))
+            (alias, sym)
         }
-        None => Ok((s, elf.symbol(s).ok_or_else(|| format!("no symbol `{}`", s))?)),
-    }
+        None => (s, elf.symbol(s).ok_or_else(|| format!("no symbol `{}`", s))?),
+    };
+    let size = if sym.size > 0 {
+        sym.size
+    } else {
+        elf.symbols.iter().filter(|y| y.value > sym.value).map(|y| y.value).min().ok_or_else(|| format!("{}: no size, no symbol after it", s))? - sym.value
+    };
+    Ok((name, sl_interp::elf::Symbol { name: sym.name.clone(), value: sym.value, size }))
 }
 
 pub fn steps(args: &[String]) -> CResult {

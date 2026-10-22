@@ -65,7 +65,7 @@ const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm")];
 
 /// A term's type by its head (`f(a..) in T`): the lemma, all a.. ->
 /// premises on the arguments (each `a in T'`) -> f(a..) in T
-const TYPES: &[(&str, &str)] = &[("bits_of_int", "tr.ty_bits_of_int"), ("x86_64_linux.page_of", "tr.ty_page_of"), ("x86_64_linux.pages_for", "tr.ty_pages_for")];
+const TYPES: &[(&str, &str)] = &[("bits_of_int", "nf.of_int_in"), ("x86_64_linux.page_of", "tr.ty_page_of"), ("x86_64_linux.pages_for", "tr.ty_pages_for")];
 
 type R<T> = Result<T, String>;
 
