@@ -50,9 +50,9 @@ fn mallocng_at_o0_has_a_readable_form() {
         .output()
         .unwrap();
     let msg = String::from_utf8_lossy(&t.stdout);
-    assert!(t.status.success() && msg.contains("34 of 35 functions"), "{}{}", msg, String::from_utf8_lossy(&t.stderr));
-    // what is left: inline assembly with operands (__syscall1; a_cas's is
-    // the primitive cas32)
+    assert!(t.status.success() && msg.contains("35 of 35 functions"), "{}{}", msg, String::from_utf8_lossy(&t.stderr));
+    // what would be left: inline assembly with operands (none: __syscall1's
+    // `syscall` is a readable op, a_cas's the primitive cas32)
     assert_eq!(msg.matches("not translated").count(), msg.matches("inline assembly with operands").count(), "{}", msg);
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(text.contains("meta := group_meta(base)") && text.contains("if offset <=s 65535 {") && text.contains("t := cas32(p, t, s)"), "{}", text);

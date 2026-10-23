@@ -564,6 +564,14 @@ pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
 // no slot handed out and not yet framed (between the allocator's calls)
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
 
+// the allocator's memory the C world's: none of its bytes the ABI's own
+// (`objs.hidden`), nor any on the reserve's pages (the kernel's to
+// reprotect: the C world's pages)
+pred fp_shown(rs: List[(nat, nat)], objs: Objs) = all a: nat. in_ranges(a, rs) -> a notin objs.hidden
+pred shown_in(c: Cfg, A: Abs, objs: Objs) =
+  fp: fp_shown(fp_ranges(c, A), objs) &&
+  rsv: (A.reserve_cnt > 0 -> all a: nat. a in objs.hidden -> !(A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt))
+
 pred rep(c: Cfg, A: Abs, s: Heap) =
   inv: holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&
   mapped: fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free: free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
@@ -596,13 +604,18 @@ pred grp_rw(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
     (a in footprint(c, A, blocks) || a in live_of(blocks) || in_reserved(A, a)) ->
     m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack
 
-pred holds_in(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
+pred holds_m(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
   inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks))) &&
   rw: grp_rw(c, A, vm, blocks) &&
   // the reserve's pages: ones the kernel may reprotect (mapped, off the
   // stack's space, not executable -- as mmap and brk made them)
   rsv: (A.reserve_cnt > 0 -> off_stack_space(vm, A.reserve / PAGE, A.reserve_cnt) &&
     (all q: nat. A.reserve / PAGE <= q && q < A.reserve / PAGE + A.reserve_cnt -> mapped(vm, q) && !vm.pages[q].value.prot.x))
+
+// ... in the C world: the memory's (holds_m), the allocator's bytes the
+// world's (shown_in)
+pred holds_in(c: Cfg, A: Abs, vm: Vm, objs: Objs, blocks: Addr -> Option[nat]) =
+  mem: holds_m(c, A, vm, blocks) && shown: shown_in(c, A, objs)
 
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g

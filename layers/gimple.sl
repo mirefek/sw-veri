@@ -183,15 +183,16 @@ fn operand(fr: Frame, o: Opnd) -> nat =
 // The memory a GIMPLE access may use: the world's (its domain: its mapped
 // pages, as their protection allows -- C objects are never write-only --,
 // and elsewhere the stack objects, not wrapping around the address space;
-// the world has no stack pages, so the test for them is vacuous). Anything else
+// the world has no stack pages, so the test for them is vacuous) but the
+// ABI's bytes on them (`objs.hidden`). Anything else
 // is undefined (GCC may remove, reorder or speculate accesses that are
 // valid in C): also the stack outside the stack objects, where the machine
 // keeps what C does not see -- reached only by a dangling pointer.
-pred usable(vm: Vm, objs: Set[nat], a: nat, n: nat, w: bool) =
+pred usable(vm: Vm, objs: Objs, a: nat, n: nat, w: bool) =
   all i: nat. i < n ->
     if mapped(vm, (a + i) / PAGE) && vm.pages[(a + i) / PAGE].value.kind != stack {
-      if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }
-    } else { a + i < 2^64 && a + i in objs }
+      (if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }) && a + i notin objs.hidden
+    } else { a + i < 2^64 && a + i in objs.live }
 
 // An access through a null base pointer is undefined, whatever is mapped at
 // page 0: no C object is there, and GCC relies on it (a dereferenced pointer
@@ -213,7 +214,8 @@ proc[World] write_bytes(a: Addr, n: nat, v: nat) {
 }
 
 // Stack objects (address-taken locals) are placed on the stack (anywhere
-// GCC's frame layout may put them: outside the world's domain), disjoint
+// GCC's frame layout may put them: outside the world's domain, none of the
+// ABI's bytes), disjoint
 // and aligned; their contents are arbitrary. They join the world's domain
 // (`objs`) for the rest of the function: its `_fun` wrapper drops them at
 // the return.
@@ -221,14 +223,14 @@ proc[World] alloc_objs(sizes: List[(nat, nat)]) -> List[Addr] {
   let addrs = any l: List[Addr] where len(l) = len(sizes) &&
     (all k: nat. k < len(sizes) ->
        uint(l[k]) % sizes[k][1] = 0 &&
-       (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> !in_domain(vm, objs, a))) &&
+       (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> !in_domain(vm, objs, a) && a notin objs.hidden)) &&
     (all j: nat, k: nat. j < k && k < len(sizes) ->
        uint(l[j]) + sizes[j][0] <= uint(l[k]) || uint(l[k]) + sizes[k][0] <= uint(l[j]))
   // (their bytes any: the memory but for them as it was)
   let before = vm
   havoc vm where (vm with { bytes: before.bytes }) = before &&
     (all a: Addr. (all k: nat. k < len(sizes) -> !(uint(addrs[k]) <= uint(a) && uint(a) < uint(addrs[k]) + sizes[k][0])) -> vm.bytes[a] = before.bytes[a])
-  objs := {a: nat | a in objs || ex k: nat. k < len(sizes) && uint(addrs[k]) <= a && a < uint(addrs[k]) + sizes[k][0]}
+  objs := objs with { live: {a: nat | a in objs.live || ex k: nat. k < len(sizes) && uint(addrs[k]) <= a && a < uint(addrs[k]) + sizes[k][0]} }
   return addrs
 }
 
@@ -331,15 +333,21 @@ proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
 // allocator makes -- brk, mmap, mprotect -- and only where the pages they
 // change are its kind of memory: off the stack's space (the world does not
 // see the stack's pages: its frames, its room to grow) and not the
-// program's code (executable). A call reaching other pages is undefined,
-// as is any other call.
-pred sys_pages_ok(vm: Vm, p: nat, n: nat) =
-  off_stack_space(vm, p, n) && (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> !vm.pages[q].value.prot.x)
+// program's code (executable), and none with a byte the ABI keeps
+// (`objs.hidden`). A call reaching other pages is undefined, as is any
+// other call.
+pred hidden_off(objs: Objs, p: nat, n: nat) = all a: nat. a in objs.hidden -> !(p <= a / PAGE && a / PAGE < p + n)
+
+pred sys_pages_ok(vm: Vm, objs: Objs, p: nat, n: nat) =
+  off_stack_space(vm, p, n) && (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> !vm.pages[q].value.prot.x) &&
+  hidden_off(objs, p, n)
 
 // The memory's changes by a call. vm: before with the pages p .. p+n-1
-// fresh pages pg -- their bytes 0 --, nothing else changed (its break
-// aside)
-pred fresh_pages(before: Vm, vm: Vm, p: nat, n: nat, pg: Page) =
+// fresh pages pg -- their bytes 0; the world's own, none with a byte the
+// ABI keeps (the kernel maps no page that is mapped: the ABI's are) --,
+// nothing else changed (its break aside)
+pred fresh_pages(before: Vm, vm: Vm, objs: Objs, p: nat, n: nat, pg: Page) =
+  hidden_off(objs, p, n) &&
   vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
   (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(pg) } else { before.pages[q] })) &&
   (all a: Addr. vm.bytes[a] = (if p * PAGE <= uint(a) && uint(a) < (p + n) * PAGE { bits[8](0) } else { before.bytes[a] }))
@@ -364,19 +372,19 @@ pred reprot(before: Vm, vm: Vm, p: nat, n: nat, pr: Prot) =
 // space; or the kernel's choice); grown to new by fresh heap pages; or
 // shrunk to new, the pages above gone. The break returned (the old one
 // unchanged, else new).
-pred brk_post(before: Vm, vm: Vm, new: Addr) =
+pred brk_post(before: Vm, vm: Vm, objs: Objs, new: Addr) =
   (vm = before && (new < before.brk_start || pages_for(uint(new)) > pages_for(uint(before.brk)))) ||
   (new >= before.brk_start && pages_for(uint(new)) > pages_for(uint(before.brk)) &&
    free_range(before, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk))) &&
    off_stack_space(before, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk))) &&
-   fresh_pages(before, vm, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk)),
+   fresh_pages(before, vm, objs, pages_for(uint(before.brk)), pages_for(uint(new)) - pages_for(uint(before.brk)),
      Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new) ||
   (new >= before.brk_start && pages_for(uint(new)) <= pages_for(uint(before.brk)) &&
    gone_pages(before, vm, pages_for(uint(new)), pages_for(uint(before.brk)) - pages_for(uint(new))) && vm.brk = new)
 
 proc[World] os_brk(new: Addr) -> bits[64] {
   let before = vm
-  havoc vm where brk_post(before, vm, new)
+  havoc vm where brk_post(before, vm, objs, new)
   return vm.brk
 }
 
@@ -393,14 +401,14 @@ proc[World] os_mmap(addr: Addr, len: bits[64], prot: bits[64], flags: bits[64], 
     if uint(addr) % PAGE != 0 { return err(EINVAL) }
     let p = page_of(addr)
     if p + n > TASK_SIZE / PAGE { return err(ENOMEM) }
-    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk else { return err(ENOMEM) }
+    havoc vm where fresh_pages(before, vm, objs, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk else { return err(ENOMEM) }
     return bits[64](p * PAGE)
   } else {
     // (no free place: ENOMEM, as Linux's get_unmapped_area; the havocs'
     // else -- no memory with fresh pages, never so for a world's memory --
     // ENOMEM too, so the call is defined for every state)
     let p = any nat where p >= 1 && free_range(before, p, n) && (addr != 0 || off_stack_space(before, p, n)) else { return err(ENOMEM) }
-    havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk else { return err(ENOMEM) }
+    havoc vm where fresh_pages(before, vm, objs, p, n, Page { prot: prot_of(prot), kind: anon }) && vm.brk = before.brk else { return err(ENOMEM) }
     return bits[64](p * PAGE)
   }
 }
@@ -433,7 +441,7 @@ proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
   // they are free, off the stack's space)
   require pages_for(uint(a1)) < pages_for(uint(vm.brk)) -> a1 >= vm.brk_start ->
     pages_for(uint(vm.brk)) <= TASK_SIZE / PAGE &&
-    sys_pages_ok(vm, pages_for(uint(a1)), pages_for(uint(vm.brk)) - pages_for(uint(a1))) &&
+    sys_pages_ok(vm, objs, pages_for(uint(a1)), pages_for(uint(vm.brk)) - pages_for(uint(a1))) &&
     (all q: nat. pages_for(uint(a1)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap)
   return os_brk(a1)
 }
@@ -441,7 +449,7 @@ proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
 proc[World] sys_call3(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64]) -> bits[64] {
   require uint(n) = 10
   // its pages
-  require sys_pages_ok(vm, page_of(a1), pages_for(uint(a2)))
+  require sys_pages_ok(vm, objs, page_of(a1), pages_for(uint(a2)))
   return os_mprotect(a1, a2, a3)
 }
 
@@ -449,14 +457,17 @@ proc[World] sys_call6(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4:
   require uint(n) = 9
   // a fixed mapping's pages; else no hint (Linux then places it on free
   // pages off the stack's space)
-  require if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 }
+  require if a4[4] { sys_pages_ok(vm, objs, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 }
   return os_mmap(a1, a2, a3, a4, a5, a6)
 }
 
-// the thread pointer (`mov %fs:0, r`, musl's __get_tp): the word at the
-// thread pointer -- the thread descriptor's own address, where the ABI
-// keeps it (`thread_ok`)
-proc[World] thread_ptr() -> Addr { return ld64(fs_base, 0) }
+// the thread pointer (`mov %fs:0, r`, musl's __get_tp): the ABI's, in a
+// sound thread (`thread_ok`: the word at fs:0 the thread descriptor's own
+// address) -- the machine's load of that word is the bridge's
+proc[World] thread_ptr() -> Addr {
+  if !thread_ok(vm, fs_base) { undefined }
+  return fs_base
+}
 
 // constant bytes (aggregate initializers)
 proc[World] st_bytes(p: Addr, off: bits[64], data: List[bits[8]]) {
@@ -513,6 +524,8 @@ fn in_reg(v: nat, ty: Ty) -> Set[bits[64]] = {r: bits[64] | uint(r) % 2^ty.prec 
 // world, nor is the rest of the stack: the machine's business, the ABI
 // bridge's). A call with the thread pointer broken (the word at fs:0 not
 // pointing to itself, as the ABI requires at every call) is undefined.
+// The thread pointer is the thread's: back as it was after the call (the
+// ABI's `world`).
 // Every call may overflow the stack (`stack_overflow`, the ABI's: no
 // undefined behavior), before the callee runs and after it returns.
 proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
@@ -529,8 +542,10 @@ proc[World] call_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bi
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !thread_ok(vm, fs_base) { undefined }
   let objs0 = objs
+  let fs0 = fs_base
   let (r0, r1) = g(regs)
   objs := objs0              // (the callee's stack objects are gone)
+  fs_base := fs0
   return (r0, r1)
 }
 
@@ -551,8 +566,10 @@ proc[World] call_callee_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], 
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !thread_ok(vm, fs_base) { undefined }
   let objs0 = objs
+  let fs0 = fs_base
   let (r0, r1) = g(regs)
   objs := objs0
+  fs_base := fs0
   return (r0, r1)
 }
 proc[World] call1_s(g: CFunS[World], args: List[(nat, Ty)]) -> bits[64] {

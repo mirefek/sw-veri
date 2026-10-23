@@ -414,13 +414,30 @@ item is a short summary of finished work; details are in the files named.
   - the CFG entered within its first block (`tr.cfg_lvk_st`);
   - loads of the object as the world's (`tr.load64_obj`); `call_objs` as
     the call (`tr.qs_callobjs`);
-  - GCC's canary check: the `_fun` wrapper reads `ld64(fs_base, 40)`
-    before the call and is undefined if the word changed. The C1 starts
-    on the wrapper itself (`tr.entry0p`, `Spec::Plain`, rerooted at the
-    procedure's call). After the result, the wrapper's rest is reduced:
-    `sub rdx, fs:0x28; je` (`tr.jcc_w`), the mismatch undefined
-    (`tr.undef_ub`). The return comes with the objects released
+  - GCC's canary check: the bridge's alone (see below). The C1 starts
+    on the `_fun` wrapper itself (`tr.entry0p`, `Spec::Plain`, rerooted
+    at the procedure's call); the return comes with the objects released
     (`tr.ret_insn_w`).
+- **The stack protector's word out of the C world** (layers/abi.sl,
+  layers/gimple.sl): the world's objects are `Objs { live, hidden }`,
+  `hidden` the ABI's bytes (the canary, `abi.canary(fs)`, by the view's
+  `objs_at`). GIMPLE never sees them: `usable` and `in_domain` exclude
+  them, `world_matches` keeps them and their pages, the system calls
+  change no page with one (`hidden_off` in `sys_pages_ok` and
+  `fresh_pages`), the thread pointer is kept across calls, and
+  `thread_ptr()` is the ABI's fs_base under `thread_ok` (its machine
+  load the bridge's, `tr.load64_tp`). The entry requires the word
+  readable and writable off the stack (`abi.canary_ok`); the epilogue's
+  `sub r, fs:0x28; je` is proven in the bridge (`tr.load64_can`,
+  `tr.fsub64_can`: the entry's word, the branch to `__stack_chk_fail`
+  never taken), the wrapper has no check.
+  - mallocng's invariant in the C world: `holds_in = holds_m &&
+    shown_in` -- the memory's (the model's lemmas, unchanged) and the
+    allocator's ranges and reserve pages none of the ABI's bytes
+    (`shown_in`, kept by the steps of the same geometry, re-established
+    for fresh pages by their `hidden_off`: `mp.shown_refill`,
+    `mp.shown_ngrp`). brk's and mmap's specs return the kernel's refusal
+    when no fresh memory is to be had.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),
@@ -971,8 +988,9 @@ item is a short summary of finished work; details are in the files named.
   discharges the requirement (`mp.jg_req`: the break grown, or wrapped to
   0 below its start).
 - **The thread pointer in C1** (proofs/translate_tp.core): `mov r64,
-  fs:[d]` (`tr.load64_fs`: the machine's fs_base the world's), readable
-  GIMPLE's `thread_ptr()` (`tr.tp_ok`, `tr.tp_ub`, `tr.eff_thread_ptr`);
+  fs:[0]` (`tr.load64_tp`: the word there the world's, the thread
+  sound -- `tr.tp_def`), readable GIMPLE's `thread_ptr()` (`tr.tp_ok`,
+  `tr.tp_ub`, `tr.eff_thread_ptr`);
   calls from a function without a frame (`tr.cfr` with fr = 0: the
   callee's contract for any entry, `tr.implements_at_u`). C1 of __get_tp
   and __errno_location (proofs/mallocng/machine/c1_leaves.core).

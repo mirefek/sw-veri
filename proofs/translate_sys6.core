@@ -205,7 +205,7 @@ qed
 theorem g.mmap_fixed(w, a1, a2, a3, a4, a5, a6, V): w in univ(1) -> V in x86_64_linux.Vm -> g.mflags(a4) -> int_lt(a3, 8) ->
   int_mod(a6, x86_64_linux.PAGE) = 0 -> !(a2 = 0) -> bit(a4, 4) -> int_mod(a1, x86_64_linux.PAGE) = 0 ->
   int_le(int_add(x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) ->
-  gimple.fresh_pages(w.vm, V, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2), lx.anon(a3)) -> V.brk = w.vm.brk ->
+  gimple.fresh_pages(w.vm, V, w.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2), lx.anon(a3)) -> V.brk = w.vm.brk ->
   runs(gimple.os_mmap(a1, a2, a3, a4, a5, a6), w, ok(fn_update(w, "vm", V), bits_of_int(64, int_mul(x86_64_linux.page_of(a1), x86_64_linux.PAGE))))
 proof
   assume hw hv hfl h8 hof hn0 hb hal ht hfp hbk
@@ -219,7 +219,7 @@ qed
 theorem g.mmap_free(w, a1, a2, a3, a4, a5, a6, p, V): w in univ(1) -> V in x86_64_linux.Vm -> g.mflags(a4) -> int_lt(a3, 8) ->
   int_mod(a6, x86_64_linux.PAGE) = 0 -> !(a2 = 0) -> !bit(a4, 4) -> p in omega -> int_le(1, p) ->
   x86_64_linux.free_range(w.vm, p, x86_64_linux.pages_for(a2)) -> (!(a1 = 0) || x86_64_linux.off_stack_space(w.vm, p, x86_64_linux.pages_for(a2))) ->
-  gimple.fresh_pages(w.vm, V, p, x86_64_linux.pages_for(a2), lx.anon(a3)) -> V.brk = w.vm.brk ->
+  gimple.fresh_pages(w.vm, V, w.objs, p, x86_64_linux.pages_for(a2), lx.anon(a3)) -> V.brk = w.vm.brk ->
   runs(gimple.os_mmap(a1, a2, a3, a4, a5, a6), w, ok(fn_update(w, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))
 proof
   assume hw hv hfl h8 hof hn0 hb hp hp1 hfr hos hfp hbk
@@ -230,7 +230,7 @@ proof
 qed
 
 // (sys_call6's requirement: a fixed mapping's pages the world's, else no hint)
-abbrev tr.preq6(w, a1, a2, a4) := ite(bit(a4, 4), gimple.sys_pages_ok(w.vm, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0)
+abbrev tr.preq6(w, a1, a2, a4) := ite(bit(a4, 4), gimple.sys_pages_ok(w.vm, w.objs,x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0)
 
 // mmap, its requirement met: os_mmap's outcomes
 theorem g.sys_call6_of(w, a1, a2, a3, a4, a5, a6, W2, R): tr.preq6(w, a1, a2, a4) -> pair(w, ok(W2, R)) in univ(1) ->
@@ -274,18 +274,18 @@ theorem tr.fresh_chg(s, m, w, v, P, n, PG, Q, B): tr.mem(s, m, w, v) -> m.vm in 
   (all k. k in omega -> Q[k] = ite(int_le(P, k) && int_lt(k, int_add(P, n)), some(PG), m.vm.pages[k])) ->
   (all k. k in omega -> int_lt(k, pow2(64)) ->
     B[k] = ite(int_le(int_mul(P, x86_64_linux.PAGE), k) && int_lt(k, int_mul(int_add(P, n), x86_64_linux.PAGE)), 0, m.vm.bytes[k])) ->
-  lx.pgs(Q) -> B in fn_space(bits(64), bits(8)) ->
-  ex WV. WV in x86_64_linux.Vm && gimple.fresh_pages(w.vm, WV, P, n, PG) && WV.brk = w.vm.brk &&
+  lx.pgs(Q) -> B in fn_space(bits(64), bits(8)) -> gimple.hidden_off(w.objs, P, n) ->
+  ex WV. WV in x86_64_linux.Vm && gimple.fresh_pages(w.vm, WV, w.objs, P, n, PG) && WV.brk = w.vm.brk &&
     fn_update(fn_update(m.vm, "pages", Q), "bytes", B) in x86_64_linux.Vm && tr.vm_chg(m.vm, fn_update(fn_update(m.vm, "pages", Q), "bytes", B), w.vm, WV, P, n)
 proof
-  assume hm hmv hwv po no hpg hpk os hnx hq hb hqt hbt
+  assume hm hmv hwv po no hpg hpk os hnx hq hb hqt hbt hho
   have {wm} := hm
   have {top, limit, brk0, brk} := wm
   let V := fn_update(fn_update(m.vm, "pages", Q), "bytes", B)
   have wb: w.vm.brk in bits(64) by simp(expand(hwv, x86_64_linux.Vm))
-  obtain WV, wv1 wfp wbk from apply(g.fresh_ex, hwv, apply(x86.vm_univ, hwv), po, no, hpg, wb)
+  obtain WV, wv1 wfp wbk from apply(g.fresh_ex, hwv, apply(x86.vm_univ, hwv), po, no, hpg, wb, hho)
   have vv: V in x86_64_linux.Vm := apply(tr.vm_set_pb, hmv, hqt, hbt)
-  have wt wl wb2 wpg wby0 := expand(wfp, gimple.fresh_pages)
+  have _ wt wl wb2 wpg wby0 := expand(wfp, gimple.fresh_pages)
   let IN(q) := int_le(P, q) && int_lt(q, int_add(P, n))
   have vt: V.stack_top = m.vm.stack_top by rsimp()
   have vl: V.stack_limit = m.vm.stack_limit by rsimp()
@@ -354,7 +354,7 @@ theorem tr.mmap_world(s, m, w, v, A, L, PR, FL, FD, OFF, V, r): tr.mem(s, m, w, 
   w in abi.World -> w in univ(1) -> A in bits(64) -> L in bits(64) -> g.mflags(FL) -> int_lt(PR, 8) -> tr.preq6(w, A, L, FL) ->
   lx.mmap_post(m.vm, A, L, PR, FL, OFF, V, r) ->
   ex WV p n. WV in x86_64_linux.Vm && runs(gimple.os_mmap(A, L, PR, FL, FD, OFF), w, ok(fn_update(w, "vm", WV), r)) && r in bits(64) &&
-    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n)
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
 proof
   assume hm hr hmv hW hwu hA hL hfl h8 hq hp
   have {wm} := hm
@@ -363,7 +363,7 @@ proof
   let N := x86_64_linux.pages_for(L)
   let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
   let GOAL := ex WV p n. WV in x86_64_linux.Vm && runs(gimple.os_mmap(A, L, PR, FL, FD, OFF), w, ok(fn_update(w, "vm", WV), r)) && r in bits(64) &&
-    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n)
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
   have wf := expand(hW, abi.World)
   have wvm: w.vm in x86_64_linux.Vm by simp(wf)
   have pf pd := (is_fun(w) && "vm" in dom(w) by simp(wf))
@@ -395,7 +395,7 @@ proof
       (V.brk_start = m.vm.brk_start by rsimp(eV)), refl({w.vm.stack_top}), refl({w.vm.stack_limit}), refl({w.vm.brk_start}),
       (V.brk = w.vm.brk by rsimp(eV, brk)), pv, pw, bv)
     have ro2 := subst({y. runs(gimple.os_mmap(A, L, PR, FL, FD, OFF), w, ok(y, r))}, sym(ss), ro)
-    show by ex_intro({w.vm}, {0}, {0}, taut(wvm, ro2, rb, rewrite(sym(eV), hmv), ch))
+    show by ex_intro({w.vm}, {0}, {0}, taut(wvm, ro2, rb, rewrite(sym(eV), hmv), ch, all_elim(g.hidden_off_0, {w.objs})))
   qed
   let EI := x86_64_linux.err(x86_64_linux.EINVAL)
   let EN := x86_64_linux.err(x86_64_linux.ENOMEM)
@@ -427,8 +427,8 @@ proof
     have f1: bit(FL, 4) && p = P && int_mod(A, x86_64_linux.PAGE) = 0 && int_le(int_add(p, N), TSP) -> GOAL proof
       assume h1
       have hb4 ep hal ht := h1
-      have spo: gimple.sys_pages_ok(w.vm, P, N) := rewrite(mp(ite_t[c := bit(FL, 4), a := gimple.sys_pages_ok(w.vm, P, N), b := A = 0], hb4), hq)
-      have offw nxw := expand(spo, gimple.sys_pages_ok)
+      have spo: gimple.sys_pages_ok(w.vm, w.objs,P, N) := rewrite(mp(ite_t[c := bit(FL, 4), a := gimple.sys_pages_ok(w.vm, w.objs,P, N), b := A = 0], hb4), hq)
+      have offw nxw hho := expand(spo, gimple.sys_pages_ok)
       have osm := apply(tr.off_back, hm, offw)
       have hnx: all q. q in omega -> int_le(P, q) -> int_lt(q, int_add(P, N)) -> x86_64_linux.mapped(m.vm, q) -> !snd(m.vm.pages[q]).prot.x proof
         fix q
@@ -445,17 +445,17 @@ proof
         show := rewrite(sym(e), kx)
       qed
       obtain WV, wv1 wfp wbk vv ch from apply(tr.fresh_chg[s := s, m := m, w := w, v := v, P := P, n := N, PG := lx.anon(PR), Q := Q, B := B], hm, hmv, wvm, po, no, pgt, pk, osm, hnx,
-        rewrite(ep, hq2), rewrite(ep, hb2), hqt, hbt)
+        rewrite(ep, hq2), rewrite(ep, hb2), hqt, hbt, hho)
       have ro := apply(g.mmap_fixed[w := w, a1 := A, a2 := L, a3 := PR, a4 := FL, a5 := FD, a6 := OFF, V := WV], hwu, wv1, hfl, h8, hof, hn0, hb4, hal,
         rewrite(ep, ht), wfp, wbk)
       have ro2 := rewrite(sym(rewrite(ep, er)), ro)
-      show by ex_intro({WV}, {P}, {N}, taut(wv1, ro2, rb, rewrite(sym(eV), vv), rewrite(sym(eV), ch)))
+      show by ex_intro({WV}, {P}, {N}, taut(wv1, ro2, rb, rewrite(sym(eV), vv), rewrite(sym(eV), ch), hho))
     qed
     // a free place, off the stack's space (no hint)
     have f2: !bit(FL, 4) && int_le(1, p) && x86_64_linux.free_range(m.vm, p, N) && (!(A = 0) || x86_64_linux.off_stack_space(m.vm, p, N)) -> GOAL proof
       assume h1
       have hb4 p1 fr osq := h1
-      have a0: A = 0 := rewrite(mp(ite_f[c := bit(FL, 4), a := gimple.sys_pages_ok(w.vm, P, N), b := A = 0], hb4), hq)
+      have a0: A = 0 := rewrite(mp(ite_f[c := bit(FL, 4), a := gimple.sys_pages_ok(w.vm, w.objs,P, N), b := A = 0], hb4), hq)
       have os: x86_64_linux.off_stack_space(m.vm, p, N) by taut(osq, a0)
       have _ fr2 _ := expand(fr, x86_64_linux.free_range)
       have hnx: all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, N)) -> x86_64_linux.mapped(m.vm, q) -> !snd(m.vm.pages[q]).prot.x proof
@@ -463,14 +463,21 @@ proof
         assume hq0 h1 h2 hmq
         show by taut(mp(all_elim(fr2, {q}), hq0, (int_le(p, q) && int_lt(q, int_add(p, N)) by taut(h1, h2))), hmq)
       qed
+      // (free in the machine: none of the ABI's pages)
+      have fq: all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, N)) -> !x86_64_linux.mapped(m.vm, q) proof
+        fix q
+        assume hq0 h1 h2
+        show := mp(all_elim(fr2, {q}), hq0, (int_le(p, q) && int_lt(q, int_add(p, N)) by taut(h1, h2)))
+      qed
+      have hho := apply(tr.hid_free, {s}, {m}, {w}, {v}, {p}, {N}, hm, fq)
       obtain WV, wv1 wfp wbk vv ch from apply(tr.fresh_chg[s := s, m := m, w := w, v := v, P := p, n := N, PG := lx.anon(PR), Q := Q, B := B], hm, hmv, wvm, hpo, no, pgt, pk, os, hnx,
-        hq2, hb2, hqt, hbt)
+        hq2, hb2, hqt, hbt, hho)
       have frw := apply(tr.free_xfer, hm, fr)
       have osw := apply(tr.off_xfer, hm, os)
       have ro := apply(g.mmap_free[w := w, a1 := A, a2 := L, a3 := PR, a4 := FL, a5 := FD, a6 := OFF, p := p, V := WV], hwu, wv1, hfl, h8, hof, hn0, hb4, hpo, p1,
         frw, (!(A = 0) || x86_64_linux.off_stack_space(w.vm, p, N) by taut(osw)), wfp, wbk)
       have ro2 := rewrite(sym(er), ro)
-      show by ex_intro({WV}, {p}, {N}, taut(wv1, ro2, rb, rewrite(sym(eV), vv), rewrite(sym(eV), ch)))
+      show by ex_intro({WV}, {p}, {N}, taut(wv1, ro2, rb, rewrite(sym(eV), vv), rewrite(sym(eV), ch), hho))
     qed
     show by taut(pc, f1, f2)
   qed
@@ -592,7 +599,7 @@ proof
         fix m2
         assume hq2
         obtain V r, bp em from hq2
-        obtain WV p n, wv ro rb vv ch from apply(tr.mmap_world[s := s, m := m, w := w, v := v, A := a1, L := b2, PR := b3, FL := b4, FD := b5, OFF := b6, V := V, r := r],
+        obtain WV p n, wv ro rb vv ch hoff from apply(tr.mmap_world[s := s, m := m, w := w, v := v, A := a1, L := b2, PR := b3, FL := b4, FD := b5, OFF := b6, V := V, r := r],
           hmm, rm, mvm, wW, wu, (a1 in bits(64) by simp(ab)), (b2 in bits(64) by simp(bb2)), hfl, h8, hq,
           rewrite(r9, rewrite(r10, rewrite(r2, rewrite(r6, rewrite(r7, bp))))))
         let W4 := fn_update(w, "vm", WV)
@@ -624,7 +631,7 @@ proof
         have w4ob: W4.objs = w.objs by rsimp()
         have htop: m.vm.stack_top in omega by simp(expand(mvm, x86_64_linux.Vm))
         have i2 := apply(tr.inv_chg, hi, hmm, ch, m2M, m2u, ev, e4, ecpu, egs, eos, efs, df2, w4W, w4u, w4v, w4os, w4fs, w4cpu)
-        have mm2 := apply(tr.mem_chg, hmm, srsv, htop, ch, ev, w4v, w4ob)
+        have mm2 := apply(tr.mem_chg, hmm, srsv, htop, ch, hoff, ev, w4v, w4ob)
         have hh2 := apply(tr.homes_chg, hh, rm, ch, ev)
         have rs2 := apply(tr.regs_add, apply(tr.regs_cs_keep, hrs, hsub, cs), e0, (r in bits(int_mul(8, 8)) by simp(rb)))
         have f2 := apply(tr.frame8, i2, h16, (8 in omega by simp()), (int_le(8, 8) by arith()))
@@ -654,11 +661,11 @@ qed
 // fresh pages on no executable page: the world valid still
 theorem tr.mmap_valid(w, V, p, n, pg): p in omega -> n in omega ->
   (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, n)) -> x86_64_linux.mapped(w.vm, q) -> !snd(w.vm.pages[q]).prot.x) ->
-  gimple.fresh_pages(w.vm, V, p, n, pg) -> tr.returns_valid(w, fn_update(w, "vm", V))
+  gimple.fresh_pages(w.vm, V, w.objs, p, n, pg) -> tr.returns_valid(w, fn_update(w, "vm", V))
 proof
   assume hp hn hnx hf
   let W2 := fn_update(w, "vm", V)
-  have vt vl vb vpg vby := expand(hf, gimple.fresh_pages)
+  have _ vt vl vb vpg vby := expand(hf, gimple.fresh_pages)
   // the program loaded: its pages executable, so not fresh
   let G := all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(V, gb, gc, st)
   have g: G proof

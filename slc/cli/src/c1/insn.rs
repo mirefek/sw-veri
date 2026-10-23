@@ -239,11 +239,25 @@ impl<'e> Gen<'e> {
                 // (the thread pointer's)
                 if let Some(m) = self.memop(&x[2]).filter(|m| nat(&m["seg"]) == Some(2) && self.tag(&m["base"]).is_some_and(|b| b.0 == 0) && nat(&x[0]) == Some(8)) {
                     let d = m["disp"].clone();
+                    // (fs:[0x28], the stack protector's word: the ABI's,
+                    // the entry's -- no spec's load, tr.load64_can)
+                    if nat(&d) == Some(40) {
+                        let v = self.mk("tr.canv", vec![self.s.clone()]);
+                        let tr = self.step("load64_can", a, insn, &[&x[1], &x[4]], self.tail(st, insn, 2, vec![]));
+                        self.scratch.insert(g);
+                        let st2 = self.set_reg(st, a2, g, 8, v);
+                        return self.then(tr, st2);
+                    }
+                    // (fs:[0], the thread pointer: the spec's thread_ptr(),
+                    // the thread sound, tr.load64_tp)
+                    if nat(&d) != Some(0) {
+                        return Err(bad("an fs: load other than the thread pointer or the stack protector's word"));
+                    }
                     let fs = self.mk("app", vec![st.w.clone(), Term::bytes(b"fs_base")]);
-                    let hc = self.mem_hyp(st, &fs, &d, 8)?;
-                    let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&fs), self.print(&d)))?;
-                    let (v, hr) = self.result(&v)?;
-                    let tr = self.step("load64_fs", a, insn, &[&x[1], &d, &x[4], &v], self.tail(st, insn, 3, vec![s(&hc), hr]));
+                    let cond = self.mk("abi.thread_ok", vec![self.mk("app", vec![st.w.clone(), Term::bytes(b"vm")]), fs.clone()]);
+                    let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(|| format!("{:x}: a thread pointer's load the spec does not make", st.a))?;
+                    let v = self.mk("bits_of_int", vec![lit(64), fs]);
+                    let tr = self.step("load64_tp", a, insn, &[&x[1], &x[4]], self.tail(st, insn, 2, vec![s(&hc)]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, 8, v);
                     return self.then(tr, st2);
@@ -519,6 +533,18 @@ impl<'e> Gen<'e> {
                     let d = m["disp"].clone();
                     let g = reg(&x[1])?;
                     let u = self.need_reg(st, g, 8)?;
+                    // (fs:[0x28]: the entry's stack protector's word, the
+                    // ABI's -- its copy from the frame less it, tr.fsub64_can)
+                    if nat(&d) == Some(40) {
+                        let y = self.mk("tr.canv", vec![self.s.clone()]);
+                        let r = self.mk("bits_sub", vec![lit(64), u.clone(), y.clone()]);
+                        let mut v = self.head(a, insn);
+                        v.extend([&x[1], &x[4], &u, &st.hst, &st.rs, &st.w].into_iter().map(t));
+                        v.push(p(R::F(insn.name.clone())));
+                        v.extend((0..4).map(|_| simp_l()));
+                        let step = mpf("tr.fsub64_can", v);
+                        return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r)));
+                    }
                     let fs = self.mk("app", vec![st.w.clone(), Term::bytes(b"fs_base")]);
                     let hc = self.mem_hyp(st, &fs, &d, 8)?;
                     let y = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&fs), self.print(&d)))?;
@@ -1938,8 +1964,11 @@ impl<'e> Gen<'e> {
                 if let (Some(o), 8, None) = (self.objs_back(pr), n, &eqf) {
                     let w2 = self.mk("fn_update", vec![st.w.clone(), Term::bytes(b"objs"), o.clone()]);
                     let hw0 = self.hw0.clone().ok_or("the entry's world")?;
-                    let ot = simpw(vec![R::Expand(Box::new(R::S(hw0)), vec!["abi.World".into()])]);
-                    let wo = self.run(&mpf("tr.world_objs", vec![t(&st.w), t(&o), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), ot]), &[])?;
+                    let ot = simpw(vec![R::Expand(Box::new(R::S(hw0.clone())), vec!["abi.World".into()])]);
+                    // (the entry's objects: of the universe, as its world)
+                    let au = mp(R::Inst("app_univ".into(), vec![("u", lit(1)), ("f", self.vw.clone()), ("k", Term::bytes(b"objs"))]), vec![taut(vec![R::S(hw0.clone())])]);
+                    let ou = simpw(vec![R::S(hw0), au]);
+                    let wo = self.run(&mpf("tr.world_objs", vec![t(&st.w), t(&o), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), ot, ou]), &[])?;
                     let res = mpf("tr.result64_objs", vec![t(&st.w), t(val), t(&o), simpw(vec![R::S(wo.clone())])]);
                     let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
                     v.extend([t(&lit(8)), t(val), t(&w2), p(R::F(insn.name.clone())), simp_l(), simp_l(), p(self.cs_rs_pf(&st.rs))]);

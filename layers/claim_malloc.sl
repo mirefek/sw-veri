@@ -14,7 +14,7 @@ proc[Machine] run_until(target: Addr) {
 // the heap at machine state `m`, with no live blocks, the stack's objects
 // `objs` (the program's data on the initial stack)
 fn empty_heap(m: Machine, objs: Set[nat]) -> Heap =
-  Heap { vm: m.vm, os: m.os, fs_base: m.fs_base, cpu: m.cpu, objs: objs, blocks: (p: Addr) => none }
+  Heap { vm: m.vm, os: m.os, fs_base: m.fs_base, cpu: m.cpu, objs: objs_at(objs, m.fs_base), blocks: (p: Addr) => none }
 
 // Assumption of this claim: the program starts without privileges. musl's
 // startup then skips its secure path, whose system calls (poll, open) are

@@ -7,10 +7,10 @@
 // The byte it reads is the slot's header (`mp.slot_hdr`), its low 5 bits
 // the index.
 theorem mp.gsi_run(c, p, s, h, o, g, i): c in mallocng.Cfg -> p in bits(64) -> s in abi.World -> h in mp.G ->
-  mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.no_reserved(h.A) -> i in omega -> mallocng.starts_at(h.A, g, i, p) ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> i in omega -> mallocng.starts_at(h.A, g, i, p) ->
   runs(c_src_malloc_mallocng_malloc.get_slot_index(p), s, o) -> o = ok(s, i) && i in bits(32)
 proof
-  assume hc hp hs hh hin hnr hi hst hr
+  assume hc hp hs hh hin hsh hnr hi hst hr
   have hu hd hbt hat := mp(all_elim(mp.g_rec, {h}), hh)
   let V0 := s.vm
   let A := h.A
@@ -23,11 +23,12 @@ proof
     have pgx: mallocng.pg(M3, int_sub(p, 3)) = V0.pages[int_div(int_sub(p, 3), x86_64_linux.PAGE)]
       by defs(simp(hfp, p3o, keep(mallocng.held)), mallocng.pg, mallocng.mview)
     have rw2 := expand(expand(hrw, mallocng.m_rw), mallocng.m_mapped)
+    have nh := mp(all_elim(apply(mp.held_vis[c := c, A := A, objs := s.objs, b := B], hsh), {int_sub(p, 3)}), hfp)
     have us: gimple.usable(V0, s.objs, int_sub(p, 3), 1, false) proof
       fix x0
       assume h0 h1
       have z: x0 = 0 by arith(h0, h1)
-      show by defs(simp(z, pgx, rw2, hks, keep(mallocng.pg)), x86_64_linux.mapped)
+      show by defs(simp(z, pgx, rw2, hks, nh, keep(mallocng.pg)), x86_64_linux.mapped)
     qed
     // the code's run: the low 5 bits of that byte
     have su: s in univ(1) by simp(apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_slot_index)))
@@ -69,7 +70,7 @@ proof
     show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_slot_index))
   qed
   have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.get_slot_index(p), s, o) ->
-      ((mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).blocks) && mallocng.no_reserved(union2(s, h).A)) &&
+      ((mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).objs, union2(s, h).blocks) && mallocng.no_reserved(union2(s, h).A)) &&
         (ex g i. (g in omega && i in omega) && mallocng.starts_at(union2(s, h).A, g, i, p))) ->
       (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
       (ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(union2(s, h).A, x4, x3, p)),
@@ -78,11 +79,12 @@ proof
     assume hs hh hr hpre
     have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
     have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
-    have hin: mallocng.holds_in(c, h.A, s.vm, h.blocks) by simp(hpre, sd, hd)
+    have hin0: mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) by simp(hpre, sd, hd)
+    have {hin = mem, hsh = shown} := hin0
     have hnr: mallocng.no_reserved(h.A) by simp(hpre, sd, hd)
     have ex1: ex g i. (g in omega && i in omega) && mallocng.starts_at(h.A, g, i, p) by simp(hpre, sd, hd)
     obtain g i, hg hi hst from ex1
-    have oi ib := apply(mp.gsi_run, hc, hp, hs, hh, hin, hnr, hi, hst, hr)
+    have oi ib := apply(mp.gsi_run, hc, hp, hs, hh, hin, hsh, hnr, hi, hst, hr)
     have sa: mallocng.starts_at(union2(s, h).A, g, i, p) by simp(hst, sd, hd)
     have e4: ex x4. x4 in omega && mallocng.starts_at(union2(s, h).A, x4, i, p) by ex_intro({g}, taut(hg, sa))
     have e3b: ex x3. (x3 in bits(32) && (ex x4. x4 in omega && mallocng.starts_at(union2(s, h).A, x4, x3, p))) && exc(pair(union2(s, h), empty), pair("ret", i)) = exc(pair(union2(s, h), empty), pair("ret", x3))
@@ -99,14 +101,14 @@ qed
 // get_slot_index's contract at a call (its C function value): the index
 // of the slot returned, the world unchanged
 theorem mp.gsi_q: all c regs s h p o2 g i. c in mallocng.Cfg -> p in bits(64) -> s in abi.World -> h in mp.G ->
-  mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.no_reserved(h.A) -> i in omega -> mallocng.starts_at(h.A, g, i, p) ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> i in omega -> mallocng.starts_at(h.A, g, i, p) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, p))) ->
   runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(32, fst(r)) = i)
 proof
   fix c regs s h p o2 g i
-  assume hc hp hw hh hin hnr hi hst hr h
+  assume hc hp hw hh hin hsh hnr hi hst hr h
   have rl rn r0 := apply(gc.regs1, hp, hr)
   have lo: seq_len(regs) in omega by simp(rl)
   have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
@@ -120,7 +122,7 @@ proof
   have b2: bind_rel(c_src_malloc_mallocng_malloc.get_slot_index(p), s, x3 x4. letin(x4, x5. bind_rel(gimple.result(32, x5), x3, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))),
       x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1)
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
-  have he ib := apply(mp.gsi_run, hc, hp, hw, hh, hin, hnr, hi, hst, hs3)
+  have he ib := apply(mp.gsi_run, hc, hp, hw, hh, hin, hsh, hnr, hi, hst, hs3)
   have k1: bind_rel(gimple.result(32, i), s, x6 x7. any_rel(x8. x8 in bits(64), x8. o2 = ok(x6, pair(x7, x8))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
     by simp(expand(rewrite(he, hk3), letin), keep(bind_rel, gimple.result))
   obtain o4, hr4 hk4 from expand(k1, bind_rel)

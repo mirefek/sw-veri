@@ -925,6 +925,20 @@ impl<'g> Interp<'g> {
                 v => Ok(V::Bool(v.bool()?)),
             };
         };
+        // `ex x. P`: a run's hint satisfying P is a witness (the hints the
+        // `any` choices use: a system call's result, say) -- true; else the
+        // range below (a hint that fails, or cannot be evaluated, decides
+        // nothing)
+        if !all {
+            for h in run.hints.clone() {
+                env.locals.push((x.to_string(), h));
+                let r = self.quant(env, all, rest, body, run);
+                env.locals.pop();
+                if matches!(r, Ok(V::Bool(true))) {
+                    return Ok(V::Bool(true));
+                }
+            }
+        }
         let premise = match (&body.kind, all) {
             (ExprKind::Binary(BinOp::Imp, p, _), true) => p.as_ref(),
             // all x. !(P && Q) is all x. P -> !Q

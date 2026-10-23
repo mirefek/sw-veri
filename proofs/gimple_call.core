@@ -12,8 +12,30 @@ abbrev gc.regs_ok(regs, args) := regs in list_type(bits(64)) && seq_len(regs) = 
 abbrev gc.sound(w) := abi.thread_ok(w.vm, w.fs_base)
 // the page numbers
 abbrev gc.PN := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
-// the callee's world w4 back with the caller's (w's) stack objects
-abbrev gc.back(w4, w) := fn_update(w4, "objs", w.objs)
+// the callee's world w4 back with the caller's (w's) stack objects and
+// thread pointer
+abbrev gc.back(w4, w) := fn_update(fn_update(w4, "objs", w.objs), "fs_base", w.fs_base)
+
+// (a world with another memory, back with its own objects and thread
+// pointer: itself)
+theorem gc.back_vm: all w V. w in abi.World -> gc.back(fn_update(w, "vm", V), w) = fn_update(w, "vm", V)
+proof
+  fix w V
+  assume hw
+  have vfun: is_fun(w) by simp(expand(hw, abi.World))
+  have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
+  have od: "objs" in dom(w) by simp(expand(hw, abi.World))
+  have fd: "fs_base" in dom(w) by simp(expand(hw, abi.World))
+  have fW := mp(fn_update_fun[f := w, k := "vm", v := V], vfun)
+  have dW := mp(fn_update_dom[f := w, k := "vm", v := V], vfun, vdom)
+  have oW: "objs" in dom(fn_update(w, "vm", V)) := rewrite(sym(dW), od)
+  have fW2: "fs_base" in dom(fn_update(w, "vm", V)) := rewrite(sym(dW), fd)
+  have aW := mp(app_update_other[f := w, k := "vm", v := V, x := "objs"], simp())
+  have aF := mp(app_update_other[f := w, k := "vm", v := V, x := "fs_base"], simp())
+  have b1: fn_update(fn_update(w, "vm", V), "objs", w.objs) = fn_update(w, "vm", V) := rewrite(aW, mp(fn_update_same[f := fn_update(w, "vm", V), k := "objs"], fW, oW))
+  have b2: fn_update(fn_update(w, "vm", V), "fs_base", w.fs_base) = fn_update(w, "vm", V) := rewrite(aF, mp(fn_update_same[f := fn_update(w, "vm", V), k := "fs_base"], fW, fW2))
+  show by simp(b1, b2, vfun, fd, od)
+qed
 
 // (a bind from a known run of its first part)
 theorem gc.bind_ok(p, s1 v. k, s1 e. x, t. d): all s s1 v. runs(p, s, ok(s1, v)) -> k(s1, v) -> bind_rel(p, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t))

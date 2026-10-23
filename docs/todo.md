@@ -41,11 +41,8 @@ code refining it directly (proofs/mallocng/fun/). Left over:
     little-endian sum; stated byte by byte (d + i the old s + i, the rest
     kept) it would not;
   - get_random_secret's C2 against `random_secret_spec` (the auxv walk;
-    the canary kept: memcpy writes only the stack object). The canary's
-    word must be readable at the entry (the wrapper's `ld64(fs_base, 40)`):
-    neither `abi.thread_ok` (8 bytes at fs) nor `random_secret_spec`
-    says so yet -- a decision: the ABI's thread block (48 bytes), or the
-    spec's `require`.
+    memcpy writes only the stack object -- the canary is the bridge's,
+    not the C world's).
   - the stack objects' engine: more than one object (`tr.obj1` is one
     8-byte object; `alloc_objs` of several), objects read before their
     first store (none at -O0 yet).
@@ -107,6 +104,14 @@ holding for the empty heap. It needs from exec (spec/linux/exec.sl):
 the break within the user space (`brk_ok`), the auxiliary vector apart
 from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 `brk_start_ok`.
+
+The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: no byte
+of the allocator's ranges the ABI's); the claim's `rep` does not (the
+`frame` law says nothing of the world's objects). The top-level proof
+(rep to holds_in at each allocator call) establishes it as it does
+`tls_apart`: the thread block (the canary at fs + 40) apart from the
+allocator's memory -- at the empty heap, from the context, the tables
+and the auxiliary vector; after, the allocator maps only fresh pages.
 
 ## 7. Usability
 

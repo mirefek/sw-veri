@@ -11,10 +11,10 @@ theorem ms.mmap_ok: all addr len prot flags s V p. s in abi.World -> s in univ(1
   (flags = int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS) || flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) ->
   int_lt(prot, 8) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) ->
   ite(flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED),
-    gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)),
+    gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)),
     addr = 0) ->
   p in omega -> mallocng_specs.mmap_place(s.vm, addr, len, flags, p) ->
-  gimple.fresh_pages(s.vm, V, p, x86_64_linux.pages_for(len), fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(64, prot))), "kind", 0)) -> V.brk = s.vm.brk ->
+  gimple.fresh_pages(s.vm, V, s.objs, p, x86_64_linux.pages_for(len), fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(64, prot))), "kind", 0)) -> V.brk = s.vm.brk ->
   runs(mallocng_specs.mmap_spec(addr, len, prot, flags, 0), s, ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))
 proof
   fix addr len prot flags s V p
@@ -29,16 +29,25 @@ proof
   let PL(x) := x in omega && mallocng_specs.mmap_place(s.vm, addr, len, flags, x)
   let EXP := ex x5. PL(x5)
   // (the spec's choices: the place, then the memory)
-  let D9(n, y, x9) := x9 in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, app(fn_update(s, "vm", x9), "vm"), y, n, PGS) && app(app(fn_update(s, "vm", x9), "vm"), "brk") = app(s.vm, "brk"))
-  let K9(y, x5, x9) := letin(fn_update(s, "vm", x9), x10. x5 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_mul(y, x86_64_linux.PAGE)))))
-  let A7(n, x5) := any_rel(x7. PL(x7), x7. letin(x7, x8. any_rel(x9. D9(n, x8, x9), x9. K9(x8, x5, x9))))
+  let D9(n, y, x9) := x9 in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, app(fn_update(s, "vm", x9), "vm"), app(fn_update(s, "vm", x9), "objs"),y, n, PGS) && app(app(fn_update(s, "vm", x9), "vm"), "brk") = app(s.vm, "brk"))
+  let WE := fn_update(s, "vm", mallocng_specs.wr32(app(s, "vm"), mallocng_specs.errno_at(app(s, "fs_base")), x86_64_linux.ENOMEM))
+  let H9(n, y, x9) := ((ex x10. D9(n, y, x10)) && any_rel(x10. D9(n, y, x10), x10. letin(fn_update(s, "vm", x10), x11. x9 = ok(pair(x11, empty), empty)))) ||
+    (!(ex x10. D9(n, y, x10)) && letin(WE, x10. x9 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_sub(int_pow(2, 64), 1))))))
+  let K9(y, x5, x9) := lx.blk(x9, x5 = exc(pair(fst(out_state(x9)), empty), pair("ret", bits_of_int(64, int_mul(y, x86_64_linux.PAGE)))), x5)
+  let A7(n, x5) := any_rel(x7. PL(x7), x7. letin(x7, x8. ex x9. H9(n, x8, x9) && K9(x8, x5, x9)))
   let C5(x4, x5) := (fst(x5) = 0 && x4 = ok(pair(fst(out_state(x5)), empty), empty)) || ((((fst(x5) = 1 && fst(out_value(x5)) = "ret") && x4 = exc(pair(fst(out_state(x5)), empty), pair("ret", snd(out_value(x5))))) ||
     ((fst(x5) = 1 && fst(out_value(x5)) = "raise") && x4 = exc(pair(fst(out_state(x5)), empty), pair("raise", snd(out_value(x5)))))) || (fst(x5) = 2 && x4 = diverge(snd(x5))))
   let REL2(x0, x1) := (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) ||
       letin(app(x0, "vm"), x3. ex x4. (((ex x5. x5 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x5)) && (ex x5. (x5 = ok(pair(x0, empty), empty) ||
-        letin(x86_64_linux.pages_for(len), x6. any_rel(x7. x7 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x7), x7. letin(x7, x8. any_rel(x9. x9 in x86_64_linux.Vm &&
-          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x9), "vm"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x9), "vm"), "brk") = app(x3, "brk")),
-          x9. letin(fn_update(x0, "vm", x9), x10. x5 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_mul(x8, x86_64_linux.PAGE)))))))))) &&
+        letin(x86_64_linux.pages_for(len), x6. any_rel(x7. x7 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x7), x7. letin(x7, x8. ex x9. (((ex x10. x10 in x86_64_linux.Vm &&
+          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x10), "vm"), app(fn_update(x0, "vm", x10), "objs"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x10), "vm"), "brk") = app(x3, "brk"))) &&
+          any_rel(x10. x10 in x86_64_linux.Vm &&
+          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x10), "vm"), app(fn_update(x0, "vm", x10), "objs"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x10), "vm"), "brk") = app(x3, "brk")),
+          x10. letin(fn_update(x0, "vm", x10), x11. x9 = ok(pair(x11, empty), empty)))) ||
+          (!(ex x10. x10 in x86_64_linux.Vm &&
+          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x10), "vm"), app(fn_update(x0, "vm", x10), "objs"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x10), "vm"), "brk") = app(x3, "brk"))) &&
+          letin(fn_update(x0, "vm", mallocng_specs.wr32(app(x0, "vm"), mallocng_specs.errno_at(app(x0, "fs_base")), x86_64_linux.ENOMEM)), x10. x9 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_sub(int_pow(2, 64), 1))))))) &&
+          lx.blk(x9, x5 = exc(pair(fst(out_state(x9)), empty), pair("ret", bits_of_int(64, int_mul(x8, x86_64_linux.PAGE)))), x5))))) &&
         ((fst(x5) = 0 && x4 = ok(pair(fst(out_state(x5)), empty), empty)) || ((((fst(x5) = 1 && fst(out_value(x5)) = "ret") && x4 = exc(pair(fst(out_state(x5)), empty), pair("ret", snd(out_value(x5))))) ||
           ((fst(x5) = 1 && fst(out_value(x5)) = "raise") && x4 = exc(pair(fst(out_state(x5)), empty), pair("raise", snd(out_value(x5)))))) || (fst(x5) = 2 && x4 = diverge(snd(x5))))))) ||
         (!(ex x5. x5 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x5)) && x4 = ok(pair(x0, empty), empty))) &&
@@ -50,19 +59,25 @@ proof
         ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))
   let REL(x0, x1) := !(((((flags = int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS) || flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) &&
       int_lt(prot, 8)) && 0 = 0) && mallocng_specs.errno_ok(app(x0, "vm"), app(x0, "objs"), app(x0, "fs_base"))) &&
-      ite(flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED), gimple.sys_pages_ok(app(x0, "vm"), x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) &&
+      ite(flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED), gimple.sys_pages_ok(app(x0, "vm"), app(x0, "objs"), x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) &&
         mallocng_specs.tls_off(app(x0, "fs_base"), x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)), addr = 0)) ||
     REL2(x0, x1)
   let ER(x2, x4) := any_rel(x5. x5 in omega && (x5 = x86_64_linux.ENOMEM || x5 = x86_64_linux.EINVAL), x5. letin(fn_update(fst(out_state(x4)), "vm",
     mallocng_specs.wr32(app(fst(out_state(x4)), "vm"), mallocng_specs.errno_at(app(fst(out_state(x4)), "fs_base")), x5)), x6. x2 = exc(pair(x6, empty), pair("ret", bits_of_int(64, int_sub(int_pow(2, 64), 1))))))
   let C4(x2, x4) := (fst(x4) = 0 && ER(x2, x4)) || ((((fst(x4) = 1 && fst(out_value(x4)) = "ret") && x2 = exc(pair(fst(out_state(x4)), empty), pair("ret", snd(out_value(x4))))) ||
     ((fst(x4) = 1 && fst(out_value(x4)) = "raise") && x2 = exc(pair(fst(out_state(x4)), empty), pair("raise", snd(out_value(x4)))))) || (fst(x4) = 2 && x2 = diverge(snd(x4))))
+  // (the memory V: such a memory there is, the havoc's)
+  let X9 := ok(pair(W, empty), empty)
   have d9: D9(N, p, V) by simp(hV, hfp, hbk)
-  have k9: K9(p, X, V) by simp()
-  have a9 := apply(ms.any_i[d := x9. D9(N, p, x9), k := x9. K9(p, X, x9), a := V], d9, k9)
+  have e9: ex x10. D9(N, p, x10) by ex_intro({V}, d9)
+  have a9 := apply(ms.any_i[d := x10. D9(N, p, x10), k := x10. letin(fn_update(s, "vm", x10), x11. X9 = ok(pair(x11, empty), empty)), a := V], d9,
+    (letin(W, x11. X9 = ok(pair(x11, empty), empty)) by defs(refl({X9}), letin)))
+  have h9: H9(N, p, X9) by taut(e9, a9)
+  have k9: K9(p, X, X9) by simp()
+  have b9: ex x9. H9(N, p, x9) && K9(p, X, x9) by ex_intro({X9}, taut(h9, k9))
   have pl: PL(p) by taut(hpo, hpl)
-  have a7 := apply(ms.any_i[d := x7. PL(x7), k := x7. letin(x7, x8. any_rel(x9. D9(N, x8, x9), x9. K9(x8, X, x9))), a := p], pl,
-    (letin(p, x8. any_rel(x9. D9(N, x8, x9), x9. K9(x8, X, x9))) by defs(a9, letin)))
+  have a7 := apply(ms.any_i[d := x7. PL(x7), k := x7. letin(x7, x8. ex x9. H9(N, x8, x9) && K9(x8, X, x9)), a := p], pl,
+    (letin(p, x8. ex x9. H9(N, x8, x9) && K9(x8, X, x9)) by defs(b9, letin)))
   have b5: X = ok(pair(s, empty), empty) || letin(N, x6. A7(x6, X)) by taut((letin(N, x6. A7(x6, X)) by defs(a7, letin)))
   have c5: C5(X, X) by simp()
   have e5: ex x5. (x5 = ok(pair(s, empty), empty) || letin(N, x6. A7(x6, x5))) && C5(X, x5) by ex_intro({X}, taut(b5, c5))
@@ -95,8 +110,13 @@ proof
   let X4 := ok(pair(s, empty), empty)
   let PL(x) := x in omega && mallocng_specs.mmap_place(s.vm, addr, len, flags, x)
   let EXP := ex x5. PL(x5)
-  let A7(n, x5) := any_rel(x7. PL(x7), x7. letin(x7, x8. any_rel(x9. x9 in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, app(fn_update(s, "vm", x9), "vm"), x8, n, PGS) &&
-    app(app(fn_update(s, "vm", x9), "vm"), "brk") = app(s.vm, "brk")), x9. letin(fn_update(s, "vm", x9), x10. x5 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_mul(x8, x86_64_linux.PAGE))))))))
+  let D9(n, y, x9) := x9 in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, app(fn_update(s, "vm", x9), "vm"), app(fn_update(s, "vm", x9), "objs"), y, n, PGS) &&
+    app(app(fn_update(s, "vm", x9), "vm"), "brk") = app(s.vm, "brk"))
+  let A7(n, x5) := any_rel(x7. PL(x7), x7. letin(x7, x8. ex x9. (((ex x10. D9(n, x8, x10)) &&
+    any_rel(x10. D9(n, x8, x10), x10. letin(fn_update(s, "vm", x10), x11. x9 = ok(pair(x11, empty), empty)))) ||
+    (!(ex x10. D9(n, x8, x10)) && letin(fn_update(s, "vm", mallocng_specs.wr32(app(s, "vm"), mallocng_specs.errno_at(app(s, "fs_base")), x86_64_linux.ENOMEM)),
+      x10. x9 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_sub(int_pow(2, 64), 1))))))) &&
+    lx.blk(x9, x5 = exc(pair(fst(out_state(x9)), empty), pair("ret", bits_of_int(64, int_mul(x8, x86_64_linux.PAGE)))), x5)))
   let C5(x4, x5) := (fst(x5) = 0 && x4 = ok(pair(fst(out_state(x5)), empty), empty)) || ((((fst(x5) = 1 && fst(out_value(x5)) = "ret") && x4 = exc(pair(fst(out_state(x5)), empty), pair("ret", snd(out_value(x5))))) ||
     ((fst(x5) = 1 && fst(out_value(x5)) = "raise") && x4 = exc(pair(fst(out_state(x5)), empty), pair("raise", snd(out_value(x5)))))) || (fst(x5) = 2 && x4 = diverge(snd(x5))))
   let ER(x2, x4) := any_rel(x5. x5 in omega && (x5 = x86_64_linux.ENOMEM || x5 = x86_64_linux.EINVAL), x5. letin(fn_update(fst(out_state(x4)), "vm",
@@ -105,9 +125,15 @@ proof
     ((fst(x4) = 1 && fst(out_value(x4)) = "raise") && x2 = exc(pair(fst(out_state(x4)), empty), pair("raise", snd(out_value(x4)))))) || (fst(x4) = 2 && x2 = diverge(snd(x4))))
   let REL2(x0, x1) := (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) ||
       letin(app(x0, "vm"), x3. ex x4. (((ex x5. x5 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x5)) && (ex x5. (x5 = ok(pair(x0, empty), empty) ||
-        letin(x86_64_linux.pages_for(len), x6. any_rel(x7. x7 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x7), x7. letin(x7, x8. any_rel(x9. x9 in x86_64_linux.Vm &&
-          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x9), "vm"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x9), "vm"), "brk") = app(x3, "brk")),
-          x9. letin(fn_update(x0, "vm", x9), x10. x5 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_mul(x8, x86_64_linux.PAGE)))))))))) &&
+        letin(x86_64_linux.pages_for(len), x6. any_rel(x7. x7 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x7), x7. letin(x7, x8. ex x9. (((ex x10. x10 in x86_64_linux.Vm &&
+          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x10), "vm"), app(fn_update(x0, "vm", x10), "objs"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x10), "vm"), "brk") = app(x3, "brk"))) &&
+          any_rel(x10. x10 in x86_64_linux.Vm &&
+          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x10), "vm"), app(fn_update(x0, "vm", x10), "objs"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x10), "vm"), "brk") = app(x3, "brk")),
+          x10. letin(fn_update(x0, "vm", x10), x11. x9 = ok(pair(x11, empty), empty)))) ||
+          (!(ex x10. x10 in x86_64_linux.Vm &&
+          (gimple.fresh_pages(x3, app(fn_update(x0, "vm", x10), "vm"), app(fn_update(x0, "vm", x10), "objs"), x8, x6, PGS) && app(app(fn_update(x0, "vm", x10), "vm"), "brk") = app(x3, "brk"))) &&
+          letin(fn_update(x0, "vm", mallocng_specs.wr32(app(x0, "vm"), mallocng_specs.errno_at(app(x0, "fs_base")), x86_64_linux.ENOMEM)), x10. x9 = exc(pair(x10, empty), pair("ret", bits_of_int(64, int_sub(int_pow(2, 64), 1))))))) &&
+          lx.blk(x9, x5 = exc(pair(fst(out_state(x9)), empty), pair("ret", bits_of_int(64, int_mul(x8, x86_64_linux.PAGE)))), x5))))) &&
         ((fst(x5) = 0 && x4 = ok(pair(fst(out_state(x5)), empty), empty)) || ((((fst(x5) = 1 && fst(out_value(x5)) = "ret") && x4 = exc(pair(fst(out_state(x5)), empty), pair("ret", snd(out_value(x5))))) ||
           ((fst(x5) = 1 && fst(out_value(x5)) = "raise") && x4 = exc(pair(fst(out_state(x5)), empty), pair("raise", snd(out_value(x5)))))) || (fst(x5) = 2 && x4 = diverge(snd(x5))))))) ||
         (!(ex x5. x5 in omega && mallocng_specs.mmap_place(x3, addr, len, flags, x5)) && x4 = ok(pair(x0, empty), empty))) &&
@@ -119,7 +145,7 @@ proof
         ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))
   let REL(x0, x1) := !(((((flags = int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS) || flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) &&
       int_lt(prot, 8)) && 0 = 0) && mallocng_specs.errno_ok(app(x0, "vm"), app(x0, "objs"), app(x0, "fs_base"))) &&
-      ite(flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED), gimple.sys_pages_ok(app(x0, "vm"), x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) &&
+      ite(flags = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED), gimple.sys_pages_ok(app(x0, "vm"), app(x0, "objs"), x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)) &&
         mallocng_specs.tls_off(app(x0, "fs_base"), x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)), addr = 0)) ||
     REL2(x0, x1)
   // (errno's choice e)
@@ -148,14 +174,14 @@ proof
 qed
 
 // (the thread pointer sound, fresh pages that miss its page: still sound)
-theorem ms.th_fresh(v, V, p, n, pg, fs): v in x86_64_linux.Vm -> V in x86_64_linux.Vm -> fs in bits(64) -> int_le(int_add(fs, 56), int_pow(2, 64)) ->
-  abi.thread_ok(v, fs) -> gimple.fresh_pages(v, V, p, n, pg) -> p in omega -> n in omega ->
+theorem ms.th_fresh(v, V, objs, p, n, pg, fs): v in x86_64_linux.Vm -> V in x86_64_linux.Vm -> fs in bits(64) -> int_le(int_add(fs, 56), int_pow(2, 64)) ->
+  abi.thread_ok(v, fs) -> gimple.fresh_pages(v, V, objs, p, n, pg) -> p in omega -> n in omega ->
   (all i. i in omega -> int_lt(i, 8) -> !(int_le(p, int_div(int_add(fs, i), x86_64_linux.PAGE)) && int_lt(int_div(int_add(fs, i), x86_64_linux.PAGE), int_add(p, n)))) ->
   abi.thread_ok(V, fs)
 proof
   assume hv hV hfs hfl ht hf hp hn hoff
   have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
-  have _ _ _ pq bq := expand(hf, gimple.fresh_pages)
+  have _ _ _ _ pq bq := expand(hf, gimple.fresh_pages)
   have tq: all i. i in omega -> int_lt(i, 8) -> V.pages[int_div(int_add(fs, i), x86_64_linux.PAGE)] = v.pages[int_div(int_add(fs, i), x86_64_linux.PAGE)] proof
     fix i
     assume hi hil
@@ -265,7 +291,7 @@ proof
     have pu := apply(g.runs_univ, hr)
     have hu: s in univ(1) by simp(pu)
     let PRE := ((((flags = MAPA || flags = MAPF) && int_lt(prot, 8)) && off = 0) && mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base)) &&
-      ite(flags = MAPF, gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), x86_64_linux.pages_for(len)) &&
+      ite(flags = MAPF, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), x86_64_linux.pages_for(len)) &&
         mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), x86_64_linux.pages_for(len)), start = 0)
     have np: !PRE -> runs(SPEC, s, o) proof
       assume h
@@ -344,7 +370,7 @@ proof
       let N := x86_64_linux.pages_for(len)
       let PG6 := fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(A3)), "kind", 0)
       let MM6(V, r) := (V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
-        (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, start, len, A4, p)) && gimple.fresh_pages(s.vm, V, p, N, PG6)) &&
+        (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, start, len, A4, p)) && gimple.fresh_pages(s.vm, V, s.objs, p, N, PG6)) &&
           V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)))
       let K6(z4, z6, z8, z10, x0, x1) := letin(x1, x2. letin(bits_and(32, flags, 32), x3. letin(bits_and(32, flags, 16), x4. ex x5.
         (((x2 = bits_neg(64, 1) && (start = 0 && (!(x3 = 0) && x4 = 0))) && letin(bits_neg(64, 12), x6. x5 = ok(pair(x0, pair(x6, pair(z4, pair(z6, pair(z8, z10))))), empty))) ||
@@ -374,22 +400,22 @@ proof
         fix z4 z6 z8 z10
         assume hfa hb6
         // (the kernel's mmap's requirements: as the spec's)
-        have i50: A4 = 50 -> ite(A4 = 50, gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N), start = 0) proof
+        have i50: A4 = 50 -> ite(A4 = 50, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N), start = 0) proof
           assume e
           have fe: flags = MAPF by simp(sym(a4e), e, mf)
-          have h1 _ := rewrite(mp(ite_t[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), N),
+          have h1 _ := rewrite(mp(ite_t[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), N),
             b := start = 0], fe), hfx)
-          show := rewrite(sym(mp(ite_t[c := A4 = 50, a := gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N), b := start = 0], e)), h1)
+          show := rewrite(sym(mp(ite_t[c := A4 = 50, a := gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N), b := start = 0], e)), h1)
         qed
-        have i34: A4 = 34 -> ite(A4 = 50, gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N), start = 0) proof
+        have i34: A4 = 34 -> ite(A4 = 50, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N), start = 0) proof
           assume e
           have fe: !(flags = MAPF) by simp(sym(a4e), e, mf)
           have n5: !(A4 = 50) by simp(e)
-          have h1 := rewrite(mp(ite_f[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), N),
+          have h1 := rewrite(mp(ite_f[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), N),
             b := start = 0], fe), hfx)
-          show := rewrite(sym(mp(ite_f[c := A4 = 50, a := gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N), b := start = 0], n5)), h1)
+          show := rewrite(sym(mp(ite_f[c := A4 = 50, a := gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N), b := start = 0], n5)), h1)
         qed
-        have hfx6 := (ite(A4 = 50, gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N), start = 0) by taut(hfa, i50, i34))
+        have hfx6 := (ite(A4 = 50, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N), start = 0) by taut(hfa, i50, i34))
         have q6: all regs o2. gc.regs_ok(regs, ARGS6) -> runs(mallocng_specs.syscall6_spec_fun()[regs], s, o2) ->
             (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && MM6(V, r)) && o2 = ok(fn_update(s, "vm", V), r)) proof
           fix regs o2
@@ -462,7 +488,7 @@ proof
             show by taut(cc7, cov7, cok7)
           qed
           // a place p, its pages fresh: p's address
-          have pl: (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, start, len, A4, p)) && gimple.fresh_pages(s.vm, V, p, N, PG6)) &&
+          have pl: (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, start, len, A4, p)) && gimple.fresh_pages(s.vm, V, s.objs, p, N, PG6)) &&
               V.brk = s.vm.brk && RV = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))) -> runs(SPEC, s, o) proof
             assume x
             obtain p, hpo hpl hfp hbk hrr from x
@@ -475,7 +501,7 @@ proof
               have _ hpe hle := rewrite(mp(ite_t[c := flags = MAPF, a := (int_mod(start, x86_64_linux.PAGE) = 0 && p = x86_64_linux.page_of(start)) &&
                 int_le(int_add(p, N), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)), b := (int_le(1, p) && x86_64_linux.free_range(s.vm, p, N)) &&
                 (!(start = 0) || x86_64_linux.off_stack_space(s.vm, p, N))], e), hite)
-              have _ htf := rewrite(mp(ite_t[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), N) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), N),
+              have _ htf := rewrite(mp(ite_t[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N) && mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), N),
                 b := start = 0], e), hfx)
               show by taut(hle, rewrite(sym(hpe), htf))
             qed
@@ -520,7 +546,7 @@ proof
               qed
               show by taut(yf, nf2)
             qed
-            have thV := apply(ms.th_fresh[v := s.vm, V := V, p := p, n := N, pg := PG6, fs := FS], vV, hV, fsw, fsb8, hth, hfp, hpo, no, toff)
+            have thV := apply(ms.th_fresh[v := s.vm, V := V, objs := s.objs, p := p, n := N, pg := PG6, fs := FS], vV, hV, fsw, fsb8, hth, hfp, hpo, no, toff)
             have ths1: gc.sound(W1) by simp(thV)
             step c7 from hk with nm
             have q7s := mp(all_elim(q7, {W1}, {RV}), w1W, w1u, rvb, (int_lt(C, RV) -> mallocng_specs.errno_ok(W1.vm, W1.objs, W1.fs_base) by taut(ner)))
@@ -537,7 +563,7 @@ proof
               obtain V2 r2, hV2 hP7 hk7 from h2
               have v2e f2e := (V2 = W1.vm && fst(r2) = RV by taut(hP7, ner))
               have oe: o = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))) by simp(expand(hk7, letin), v2e, f2e, hrr)
-              have hfp2: gimple.fresh_pages(s.vm, V, p, N, fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(64, prot))), "kind", 0)) :=
+              have hfp2: gimple.fresh_pages(s.vm, V, s.objs, p, N, fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(64, prot))), "kind", 0)) :=
                 rewrite(sym(bp), rewrite(a3e, hfp))
               have rr := apply(ms.mmap_ok[addr := start, len := len, prot := prot, flags := flags, s := s, V := V, p := p], hw, hu, hV, hfl, hp8, he, hfx, hpo, hpl2, hfp2, hbk)
               show := rewrite(sym(spe), rewrite(sym(oe), rr))
@@ -556,7 +582,7 @@ proof
       have s34: !int_lt(9223372036854775806, len) -> flags = MAPA -> runs(SPEC, s, o) proof
         assume hn e34
         have nf := mp(nfx, e34)
-        have s0: start = 0 := rewrite(mp(ite_f[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(start), x86_64_linux.pages_for(len)) &&
+        have s0: start = 0 := rewrite(mp(ite_f[c := flags = MAPF, a := gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), x86_64_linux.pages_for(len)) &&
           mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(start), x86_64_linux.pages_for(len)), b := start = 0], nf), hfx)
         have fz: bits_and(32, flags, 16) = 0 by defs(simp(e34), x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS)
         step x2 x4 x6 x8 x10, c6 from hr with a0, hn, fz

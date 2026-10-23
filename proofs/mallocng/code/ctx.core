@@ -924,52 +924,17 @@ qed
 //  ___errno_location (its own translation unit): errno's address from the
 //  thread pointer (__get_tp's)
 
-// (a sound thread's pointer: its 8 bytes a C object's, to read)
-theorem ms.tp_def: all s. s in abi.World -> abi.thread_ok(s.vm, s.fs_base) -> g.mem_defined(s, s.fs_base, 0, 8, false)
-proof
-  fix s
-  assume hw ht
-  let FS := s.fs_base
-  have rd ns _ nz := expand(ht, abi.thread_ok)
-  have fsw: FS in bits(64) by simp(expand(hw, abi.World))
-  have rd1 := expand(rd, x86_64_linux.readable)
-  have k: all x0. x0 in omega -> int_lt(x0, 8) ->
-      ite(x86_64_linux.mapped(s.vm, int_div(int_add(FS, x0), x86_64_linux.PAGE)) && !(snd(s.vm.pages[int_div(int_add(FS, x0), x86_64_linux.PAGE)]).kind = 2),
-        ite(false, snd(s.vm.pages[int_div(int_add(FS, x0), x86_64_linux.PAGE)]).prot.w, snd(s.vm.pages[int_div(int_add(FS, x0), x86_64_linux.PAGE)]).prot.r),
-        int_lt(int_add(FS, x0), int_pow(2, 64)) && int_add(FS, x0) in s.objs) proof
-    fix i
-    assume i1 i2
-    have r := mp(all_elim(rd1, {i}), i1, i2)
-    have n := expand(mp(all_elim(ns, {i}), i1, i2), abi.stack_page)
-    show by simp(r, n)
-  qed
-  have us0: gimple.usable(s.vm, s.objs, FS, 8, false) by defs(k, gimple.usable)
-  have e0: int_add(FS, 0) = FS by arith(fsw)
-  have us := rewrite(sym(e0), us0)
-  have lt: int_lt(int_add(FS, 0), pow2(64)) by simp(fsw)
-  show by taut(nz, lt, us)
-qed
-
 // (thread_ptr() in a sound thread: the thread pointer)
 theorem ms.tp_det: all s. s in abi.World -> s in univ(1) -> abi.thread_ok(s.vm, s.fs_base) -> g.det(gimple.thread_ptr(), s, ok(s, s.fs_base))
 proof
   fix s
   assume hw hu ht
-  let FS := s.fs_base
-  have fsw: FS in bits(64) by simp(expand(hw, abi.World))
-  have ld := apply(g.ld64_det, {s}, {FS}, {0}, hu, fsw, (0 in bits(32) by simp()), apply(ms.tp_def, hw, ht))
-  have _ _ le _ := expand(ht, abi.thread_ok)
-  have lb := apply(tr.le_bytes, {s.vm}, {FS}, {8})
-  have e0: bits_add(64, FS, 0) = FS by simp(fsw)
-  have ev: bits_of_int(64, gimple.bytes_at(s.vm, int_add(FS, 0), 8)) = FS by simp(trans(sym(lb), le), e0)
-  have g0: all o. runs(gimple.thread_ptr(), s, o) -> o = ok(s, FS) proof
+  have g0: all o. runs(gimple.thread_ptr(), s, o) -> o = ok(s, s.fs_base) proof
     fix o
     assume h
     rsimp only, gimple.thread_ptr in h
     have b := apply(g.runs_elim, h)
-    obtain o3, h3 k3 from expand(b, bind_rel)
-    have e3 := mp(all_elim(expand(ld, g.det), {o3}), h3)
-    show by simp(rewrite(e3, k3), ev)
+    show by simp(b, ht)
   qed
   show by defs(g0, g.det)
 qed
@@ -1155,7 +1120,7 @@ proof
     assume hw hr
     let SPEC := mallocng_specs.syscall3_spec(n, a1, a2, a3)
     have pu := apply(g.runs_univ, hr)
-    let PRE := n = 10 && gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))
+    let PRE := n = 10 && gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))
     have np: !PRE -> runs(SPEC, s, o) proof
       assume h
       show by simp(pu, h)
@@ -1173,7 +1138,7 @@ proof
       have b4: bind_rel(gimple.os_mprotect(a1, a2, a3), s, x2 x3. o4 = ok(x2, x3), x2 x3. o4 = exc(x2, x3), x2. o4 = diverge(x2))
         by taut(apply(g.runs_elim, r4), hn, hq)
       have e4: o = o4 by simp(c4, keep(letin))
-      have rr := apply(ms.ret_run[p := gimple.os_mprotect(a1, a2, a3), q := x. n = 10 && gimple.sys_pages_ok(x.vm, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))],
+      have rr := apply(ms.ret_run[p := gimple.os_mprotect(a1, a2, a3), q := x. n = 10 && gimple.sys_pages_ok(x.vm, x.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))],
         (pair(s, o4) in univ(1) by simp(rewrite(e4, pu))), b4)
       show by defs(rewrite(sym(e4), rr), mallocng_specs.syscall3_spec)
     qed
@@ -1283,8 +1248,8 @@ proof
   have ue1 := expand(ue, gimple.usable)
   have ueV: all i. i in omega -> int_lt(i, 4) ->
       ite(x86_64_linux.mapped(V, int_div(int_add(E, i), x86_64_linux.PAGE)) && !(snd(V.pages[int_div(int_add(E, i), x86_64_linux.PAGE)]).kind = 2),
-        ite(true, snd(V.pages[int_div(int_add(E, i), x86_64_linux.PAGE)]).prot.w, snd(V.pages[int_div(int_add(E, i), x86_64_linux.PAGE)]).prot.r),
-        int_lt(int_add(E, i), int_pow(2, 64)) && int_add(E, i) in objs) proof
+        ite(true, snd(V.pages[int_div(int_add(E, i), x86_64_linux.PAGE)]).prot.w, snd(V.pages[int_div(int_add(E, i), x86_64_linux.PAGE)]).prot.r) && !(int_add(E, i) in objs.hidden),
+        int_lt(int_add(E, i), int_pow(2, 64)) && int_add(E, i) in objs.live) proof
     fix i
     assume hi hil
     have e := mp(all_elim(pe, {int_div(int_add(E, i), x86_64_linux.PAGE)}), (int_div(int_add(E, i), x86_64_linux.PAGE) in omega by arith(eb, hi, kp)), mp(all_elim(t2, {i}), hi, hil))
@@ -1385,7 +1350,7 @@ qed
 // __syscall3(10, a, l, p) at a call, as its spec has it: an overflow, or
 // the kernel's mprotect -- the memory after (`mprot_post`), its result
 theorem ms.sy3_q: all a l p regs s o2. s in abi.World -> s in univ(1) -> a in bits(64) -> l in bits(64) -> p in bits(64) ->
-  int_mod(a, x86_64_linux.PAGE) = 0 -> int_lt(p, 8) -> gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  int_mod(a, x86_64_linux.PAGE) = 0 -> int_lt(p, 8) -> gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
   gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 10))), seq_one(gimple.arg(64, a))), seq_one(gimple.arg(64, l))), seq_one(gimple.arg(64, p)))) ->
   runs(mallocng_specs.syscall3_spec_fun()[regs], s, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
@@ -1561,7 +1526,7 @@ qed
 theorem ms.mpr_all: all addr len prot s V. s in abi.World -> s in univ(1) -> V in x86_64_linux.Vm ->
   int_lt(prot, 8) -> int_le(int_add(int_add(addr, len), x86_64_linux.PAGE), int_pow(2, 64)) -> int_le(int_add(len, x86_64_linux.PAGE), int_pow(2, 63)) ->
   mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) ->
-  gimple.sys_pages_ok(s.vm, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
+  gimple.sys_pages_ok(s.vm, s.objs, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
   mallocng_specs.tls_off(s.fs_base, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
   (all q. q in omega -> int_le(int_div(addr, x86_64_linux.PAGE), q) && int_lt(q, int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE)) ->
     x86_64_linux.mapped(s.vm, q)) ->
@@ -1581,7 +1546,7 @@ qed
 theorem ms.mpr_err: all addr len prot s V k. s in abi.World -> s in univ(1) -> V in x86_64_linux.Vm ->
   int_lt(prot, 8) -> int_le(int_add(int_add(addr, len), x86_64_linux.PAGE), int_pow(2, 64)) -> int_le(int_add(len, x86_64_linux.PAGE), int_pow(2, 63)) ->
   mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) ->
-  gimple.sys_pages_ok(s.vm, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
+  gimple.sys_pages_ok(s.vm, s.objs, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
   mallocng_specs.tls_off(s.fs_base, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
   k in omega -> int_le(int_div(addr, x86_64_linux.PAGE), k) -> int_lt(k, int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE)) ->
   !x86_64_linux.mapped(s.vm, k) -> (all q. q in omega -> int_le(int_div(addr, x86_64_linux.PAGE), q) && int_lt(q, k) -> x86_64_linux.mapped(s.vm, q)) ->
@@ -1625,7 +1590,7 @@ proof
       ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
         ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))
   let REL(x0, x1) := !(((((int_lt(prot, 8) && int_le(int_add(int_add(addr, len), x86_64_linux.PAGE), int_pow(2, 64))) && int_le(int_add(len, x86_64_linux.PAGE), int_pow(2, 63))) &&
-      mallocng_specs.errno_ok(app(x0, "vm"), app(x0, "objs"), app(x0, "fs_base"))) && gimple.sys_pages_ok(app(x0, "vm"), SX, int_sub(EX, SX))) &&
+      mallocng_specs.errno_ok(app(x0, "vm"), app(x0, "objs"), app(x0, "fs_base"))) && gimple.sys_pages_ok(app(x0, "vm"), app(x0, "objs"), SX, int_sub(EX, SX))) &&
       mallocng_specs.tls_off(app(x0, "fs_base"), SX, int_sub(EX, SX))) || REL2(x0, x1)
   have nall: !ALL proof
     assume h
@@ -1669,7 +1634,7 @@ proof
     let S := int_div(addr, x86_64_linux.PAGE)
     let E := int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE)
     let PRE := ((((int_lt(prot, 8) && int_le(int_add(int_add(addr, len), x86_64_linux.PAGE), int_pow(2, 64))) && int_le(int_add(len, x86_64_linux.PAGE), int_pow(2, 63))) &&
-      mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base)) && gimple.sys_pages_ok(s.vm, S, int_sub(E, S))) && mallocng_specs.tls_off(s.fs_base, S, int_sub(E, S))
+      mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base)) && gimple.sys_pages_ok(s.vm, s.objs, S, int_sub(E, S))) && mallocng_specs.tls_off(s.fs_base, S, int_sub(E, S))
     have np: !PRE -> runs(SPEC, s, o) proof
       assume h
       show by simp(pu, h, keep(mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, abi.overflow, gimple.reprot, mallocng_specs.wr32, x86_64_linux.mapped))
@@ -1730,7 +1695,7 @@ proof
       have ths: gc.sound(s) by simp(th)
       have rex := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_one, simp(), arith(), (bits_of_int(64, 10) in bits(64) by simp())),
         apply(gc.regs_one, simp(), arith(), sab)), apply(gc.regs_one, simp(), arith(), l3b)), apply(gc.regs_one, simp(), arith(), p3b)))
-      have hsp3: gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(SA), x86_64_linux.pages_for(L3)) := rewrite(sym(pge), rewrite(sym(pfe), hsp))
+      have hsp3: gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(SA), x86_64_linux.pages_for(L3)) := rewrite(sym(pge), rewrite(sym(pfe), hsp))
       have qa: all regs o2. gc.regs_ok(regs, ARGS) -> runs(mallocng_specs.syscall3_spec_fun()[regs], s, o2) ->
           (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P1(V, r)) && o2 = ok(fn_update(s, "vm", V), r)) proof
         fix regs o2
@@ -1911,7 +1876,7 @@ proof
     assume hw hr
     let SPEC := mallocng_specs.syscall6_spec(n, a1, a2, a3, a4, a5, a6)
     have pu := apply(g.runs_univ, hr)
-    let PRE := n = 9 && ite(bit(a4, 4), gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0)
+    let PRE := n = 9 && ite(bit(a4, 4), gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0)
     have np: !PRE -> runs(SPEC, s, o) proof
       assume h
       show by simp(pu, h, keep(gimple.sys_pages_ok))
@@ -1933,7 +1898,7 @@ proof
         by taut(apply(g.runs_elim, r4), hn, hq)
       have e4: o = o4 by simp(c4, keep(letin))
       have rr := apply(ms.ret_run[p := gimple.os_mmap(a1, a2, a3, a4, a5, a6),
-        q := x. n = 9 && ite(bit(a4, 4), gimple.sys_pages_ok(x.vm, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0)],
+        q := x. n = 9 && ite(bit(a4, 4), gimple.sys_pages_ok(x.vm, x.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0)],
         (pair(s, o4) in univ(1) by simp(rewrite(e4, pu))), b4)
       show by defs(rewrite(sym(e4), rr), mallocng_specs.syscall6_spec)
     qed
@@ -1977,7 +1942,7 @@ qed
 // a2's pages (`mmap_place`), its pages fresh, p's address
 theorem ms.sy6_q: all a1 a2 a3 a4 a5 a6 regs s o2. s in abi.World -> s in univ(1) -> a1 in bits(64) -> a2 in bits(64) -> a3 in bits(64) ->
   a4 in bits(64) -> a5 in bits(64) -> a6 in bits(64) ->
-  (a4 = 34 || a4 = 50) -> int_lt(a3, 8) -> a6 = 0 -> ite(a4 = 50, gimple.sys_pages_ok(s.vm, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0) ->
+  (a4 = 34 || a4 = 50) -> int_lt(a3, 8) -> a6 = 0 -> ite(a4 = 50, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0) ->
   gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 9))), seq_one(gimple.arg(64, a1))),
     seq_one(gimple.arg(64, a2))), seq_one(gimple.arg(64, a3))), seq_one(gimple.arg(64, a4))), seq_one(gimple.arg(64, a5))), seq_one(gimple.arg(64, a6)))) ->
   runs(mallocng_specs.syscall6_spec_fun()[regs], s, o2) ->
@@ -1985,7 +1950,7 @@ theorem ms.sy6_q: all a1 a2 a3 a4 a5 a6 regs s o2. s in abi.World -> s in univ(1
   (ex V r. (V in x86_64_linux.Vm &&
      ((V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
       (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) &&
-        gimple.fresh_pages(s.vm, V, p, x86_64_linux.pages_for(a2), fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(a3)), "kind", 0))) &&
+        gimple.fresh_pages(s.vm, V, s.objs, p, x86_64_linux.pages_for(a2), fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(a3)), "kind", 0))) &&
         V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))) && o2 = ok(fn_update(s, "vm", V), r))
 proof
   fix a1 a2 a3 a4 a5 a6 regs s o2
@@ -2018,15 +1983,13 @@ proof
   have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
   have vu := apply(x86.vm_univ, pv)
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
-  let FR(p) := ex V. V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, p, N, PG) && V.brk = s.vm.brk)
+  let FR(p) := ex V. V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, p, N, PG) && V.brk = s.vm.brk)
   let CI := (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) ||
     o3 = ok(s, x86_64_linux.err(x86_64_linux.EINVAL)) || o3 = ok(s, x86_64_linux.err(x86_64_linux.ENOMEM)) ||
     (ex V. ((((a4 = 50 && !(a2 = 0)) && int_mod(a1, x86_64_linux.PAGE) = 0) && !int_lt(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), int_add(P0, N))) &&
-      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, P0, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(P0, x86_64_linux.PAGE)))) ||
+      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, P0, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(P0, x86_64_linux.PAGE)))) ||
     (ex q V. (((a4 = 34 && !(a2 = 0)) && (q in omega && ((int_le(1, q) && x86_64_linux.free_range(s.vm, q, N)) && (!(a1 = 0) || x86_64_linux.off_stack_space(s.vm, q, N))))) &&
-      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, q, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(q, x86_64_linux.PAGE)))) ||
-    (a4 = 50 && !FR(P0)) ||
-    (ex q. (q in omega && ((int_le(1, q) && x86_64_linux.free_range(s.vm, q, N)) && (!(a1 = 0) || x86_64_linux.off_stack_space(s.vm, q, N)))) && !FR(q))
+      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, q, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(q, x86_64_linux.PAGE))))
   have c50: a4 = 50 -> CI proof
     assume e
     show by simp(hs3, vv, e, hp8, h60, hfx, keep(gimple.fresh_pages, gimple.sys_pages_ok, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.page_of,
@@ -2035,13 +1998,13 @@ proof
   have c34: a4 = 34 -> CI proof
     assume e
     have n50: !(a4 = 50) by simp(e)
-    have a10: a1 = 0 := rewrite(mp(ite_f[c := a4 = 50, a := gimple.sys_pages_ok(s.vm, P0, N), b := a1 = 0], n50), hfx)
+    have a10: a1 = 0 := rewrite(mp(ite_f[c := a4 = 50, a := gimple.sys_pages_ok(s.vm, s.objs, P0, N), b := a1 = 0], n50), hfx)
     show by simp(rewrite(a10, hs3), vv, e, a10, hp8, h60, keep(gimple.fresh_pages, gimple.sys_pages_ok, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.page_of,
       x86_64_linux.pages_for, x86_64_linux.prot_of, x86_64_linux.err))
   qed
   have ci: CI by taut(hfl, c50, c34)
   let MM(V, r) := (V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
-    (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) && gimple.fresh_pages(s.vm, V, p, N, PG)) &&
+    (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) && gimple.fresh_pages(s.vm, V, s.objs, p, N, PG)) &&
       V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)))
   let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && MM(V, r)) && o2 = ok(fn_update(s, "vm", V), r))
   have ne: ex z. z in bits(64) by ex_intro({0}, simp())
@@ -2086,18 +2049,18 @@ proof
   have ce1 := mp(all_elim(ce, {x86_64_linux.EINVAL}), (x86_64_linux.EINVAL = x86_64_linux.EINVAL || x86_64_linux.EINVAL = x86_64_linux.ENOMEM by taut(refl({x86_64_linux.EINVAL}))))
   have ce2 := mp(all_elim(ce, {x86_64_linux.ENOMEM}), (x86_64_linux.ENOMEM = x86_64_linux.EINVAL || x86_64_linux.ENOMEM = x86_64_linux.ENOMEM by taut(refl({x86_64_linux.ENOMEM}))))
   // a place p, its pages fresh: p's address
-  have cp: all V p. p in omega -> mallocng_specs.mmap_place(s.vm, a1, a2, a4, p) -> V in x86_64_linux.Vm -> gimple.fresh_pages(s.vm, V, p, N, PG) -> V.brk = s.vm.brk ->
+  have cp: all V p. p in omega -> mallocng_specs.mmap_place(s.vm, a1, a2, a4, p) -> V in x86_64_linux.Vm -> gimple.fresh_pages(s.vm, V, s.objs, p, N, PG) -> V.brk = s.vm.brk ->
       o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))) -> G proof
     fix V p
     assume hpo hpl hV hfp hbk hx
     obtain r, hor hr from mp(all_elim(res, {fn_update(s, "vm", V)}, {bits_of_int(64, int_mul(p, x86_64_linux.PAGE))}), simp(), hx)
-    have e: ex p2. ((p2 in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p2)) && gimple.fresh_pages(s.vm, V, p2, N, PG)) &&
+    have e: ex p2. ((p2 in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p2)) && gimple.fresh_pages(s.vm, V, s.objs, p2, N, PG)) &&
         V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p2, x86_64_linux.PAGE)) by ex_intro({p}, taut(hpo, hpl, hfp, hbk, hr))
     have l: ex V r. (V in x86_64_linux.Vm && MM(V, r)) && o2 = ok(fn_update(s, "vm", V), r) by ex_intro({V}, {r}, taut(hV, e, hor))
     show by taut(l)
   qed
   have cfx: (ex V. ((((a4 = 50 && !(a2 = 0)) && int_mod(a1, x86_64_linux.PAGE) = 0) && !int_lt(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), int_add(P0, N))) &&
-      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, P0, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(P0, x86_64_linux.PAGE)))) -> G proof
+      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, P0, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(P0, x86_64_linux.PAGE)))) -> G proof
     assume x
     obtain V, e50 hnz hmod hle hV hfp hbk hx from x
     have lt := mp(l63, (int_le(N, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(hle, p0o)))
@@ -2106,7 +2069,7 @@ proof
     show := mp(all_elim(cp, {V}, {P0}), p0o, hpl, hV, hfp, hbk, hx)
   qed
   have cnf: (ex q V. (((a4 = 34 && !(a2 = 0)) && (q in omega && ((int_le(1, q) && x86_64_linux.free_range(s.vm, q, N)) && (!(a1 = 0) || x86_64_linux.off_stack_space(s.vm, q, N))))) &&
-      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, q, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(q, x86_64_linux.PAGE)))) -> G proof
+      (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, q, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(q, x86_64_linux.PAGE)))) -> G proof
     assume x
     obtain q V, e34 hnz hq h1q hfr hos hV hfp hbk hx from x
     have ft _ _ := expand(hfr, x86_64_linux.free_range)
@@ -2115,29 +2078,7 @@ proof
       keep(x86_64_linux.page_of, x86_64_linux.pages_for, x86_64_linux.free_range, x86_64_linux.off_stack_space)), mallocng_specs.mmap_place)
     show := mp(all_elim(cp, {V}, {q}), hq, hpl, hV, hfp, hbk, hx)
   qed
-  // (fresh pages anywhere: such a memory exists)
-  have pr := apply(g.prot_typed, eq_bool[a := int_mod(int_div(a3, pow2(0)), 2), b := 1], eq_bool[a := int_mod(int_div(a3, pow2(1)), 2), b := 1],
-    eq_bool[a := int_mod(int_div(a3, pow2(2)), 2), b := 1])
-  have pt: x86_64_linux.prot_of(a3) in x86_64_linux.Prot by defs(simp(pr, keep(x86_64_linux.Prot)), x86_64_linux.prot_of, bit)
-  have pg := apply(g.page_typed, pt, (0 in x86_64_linux.Kind by defs(simp(), x86_64_linux.Kind)))
-  have bkb: s.vm.brk in bits(64) by simp(expand(pv, x86_64_linux.Vm))
-  have fr: all p. p in omega -> FR(p) proof
-    fix p
-    assume hp
-    obtain V, k1 k2 k3 from apply(g.fresh_ex[before := s.vm, p := p, n := N, pg := PG, br := s.vm.brk], pv, vu, hp, no, pg, bkb)
-    show by ex_intro({V}, taut(k1, k2, k3))
-  qed
-  have cn1: a4 = 50 && !FR(P0) -> G proof
-    assume x
-    have _ hn := x
-    show by taut(hn, mp(all_elim(fr, {P0}), p0o))
-  qed
-  have cn2: (ex q. (q in omega && ((int_le(1, q) && x86_64_linux.free_range(s.vm, q, N)) && (!(a1 = 0) || x86_64_linux.off_stack_space(s.vm, q, N)))) && !FR(q)) -> G proof
-    assume x
-    obtain q, hq _ _ _ hn from x
-    show by taut(hn, mp(all_elim(fr, {q}), hq))
-  qed
-  show by taut(ci, c1, ce1, ce2, cfx, cnf, cn1, cn2)
+  show by taut(ci, c1, ce1, ce2, cfx, cnf)
 qed
 
 // a_cas's contract at a call a_cas(p, t, x): an overflow, or the word at
@@ -2375,7 +2316,7 @@ qed
 // (the call's outcomes, `gimple.brk_post`: the spec's, its requirement
 // met -- the break as it was; grown, the pages fresh; or shrunk)
 theorem ms.brk_post_spec: all s V n a. s in abi.World -> s in univ(1) -> V in x86_64_linux.Vm -> n = 12 -> tr.req1(s, a) ->
-  gimple.brk_post(s.vm, V, a) -> runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk))
+  gimple.brk_post(s.vm, V, s.objs, a) -> runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk))
 proof
   fix s V n a
   assume hw hu hV hn hq hp
@@ -2393,7 +2334,7 @@ proof
     show := rewrite(sym(hv), r0)
   qed
   have c2: int_le(s.vm.brk_start, a) && int_lt(PO, PN) && x86_64_linux.free_range(s.vm, PO, int_sub(PN, PO)) &&
-      x86_64_linux.off_stack_space(s.vm, PO, int_sub(PN, PO)) && gimple.fresh_pages(s.vm, V, PO, int_sub(PN, PO), HP) && V.brk = a ->
+      x86_64_linux.off_stack_space(s.vm, PO, int_sub(PN, PO)) && gimple.fresh_pages(s.vm, V, s.objs, PO, int_sub(PN, PO), HP) && V.brk = a ->
       runs(mallocng_specs.syscall1_spec(n, a), s, ok(fn_update(s, "vm", V), V.brk)) proof
     assume h
     have h1 h2 h3 h4 h5 h6 := h
@@ -2411,17 +2352,17 @@ proof
 qed
 
 // (the call has an outcome: the break as it was, or shrunk)
-theorem ms.brk_post_ex(v, a): v in x86_64_linux.Vm -> a in bits(64) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, a)
+theorem ms.brk_post_ex(v, objs, a): v in x86_64_linux.Vm -> a in bits(64) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, objs, a)
 proof
   assume hv ha
   have vu := apply(x86.vm_univ, hv)
   let PO := x86_64_linux.pages_for(v.brk)
   let PN := x86_64_linux.pages_for(a)
-  have c1: int_lt(a, v.brk_start) || int_lt(PO, PN) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, a) proof
+  have c1: int_lt(a, v.brk_start) || int_lt(PO, PN) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, objs, a) proof
     assume h
     show by ex_intro({v}, defs(taut(hv, h, refl({v})), gimple.brk_post))
   qed
-  have c2: !(int_lt(a, v.brk_start) || int_lt(PO, PN)) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, a) proof
+  have c2: !(int_lt(a, v.brk_start) || int_lt(PO, PN)) -> ex V. V in x86_64_linux.Vm && gimple.brk_post(v, V, objs, a) proof
     assume h
     have bs: v.brk_start in bits(64) by simp(expand(hv, x86_64_linux.Vm))
     have bb: v.brk in bits(64) by simp(expand(hv, x86_64_linux.Vm))
@@ -2457,7 +2398,7 @@ proof
       have hn hq := h
       have pv _ _ _ := apply(ms.world_parts, hw)
       have ne: ex z. z in bits(64) by ex_intro({0}, simp())
-      have bx := apply(ms.brk_post_ex, pv, ha)
+      have bx := apply(ms.brk_post_ex[v := s.vm, objs := s.objs, a := a], pv, ha)
       rsimp only, c_src_malloc_mallocng_malloc.__syscall1 in hr
       have b3 := apply(g.runs_elim, hr)
       obtain z1, _ k1 from apply(g.any_e, ne, b3)

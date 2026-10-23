@@ -219,7 +219,10 @@ impl<'e> Gen<'e> {
         let stored = self.mk("x86_64_linux.store_le", vec![bytes, ha.clone(), lit(8), u.clone()]);
         let objs = self.mk("app", vec![w.clone(), Term::bytes(b"objs")]);
         let w1 = self.mk("fn_update", vec![w.clone(), Term::bytes(b"vm"), self.mk("fn_update", vec![vm, Term::bytes(b"bytes"), stored])]);
-        let w2term = self.mk("fn_update", vec![w1, Term::bytes(b"objs"), self.mk("tr.obj1", vec![objs, ha.clone()])]);
+        // (alloc_objs grows the live objects: `objs with { live: .. }`)
+        let live = self.mk("app", vec![objs.clone(), Term::bytes(b"live")]);
+        let objs2 = self.mk("fn_update", vec![objs, Term::bytes(b"live"), self.mk("tr.obj1", vec![live, ha.clone()])]);
+        let w2term = self.mk("fn_update", vec![w1, Term::bytes(b"objs"), objs2.clone()]);
         let wn2 = self.fresh("W");
         let w2 = self.var(&wn2);
         let weq = self.push_world(Self::var_id(&w2), w2term, &w);
@@ -272,8 +275,7 @@ impl<'e> Gen<'e> {
         self.trace(|| format!("at {:x}: the stack object at {} allocated", a, self.print(&ha)));
         self.v = vn;
         self.hvo = Some((v0.clone(), c, hvo));
-        let objs0 = self.mk("tr.obj1", vec![self.mk("app", vec![w.clone(), Term::bytes(b"objs")]), ha.clone()]);
-        self.objw = Some((w2.clone(), w.clone(), ha.clone(), u.clone(), objs0, weq.clone(), st.hw.clone()));
+        self.objw = Some((w2.clone(), w.clone(), ha.clone(), u.clone(), objs2, weq.clone(), st.hw.clone()));
         let rest = self.prove_pt(st2);
         self.v = v0;
         self.hvo = None;

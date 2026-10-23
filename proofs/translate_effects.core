@@ -607,12 +607,12 @@ proof
 qed
 
 // (the callee's stack objects replaced: the world as valid)
-theorem tr.rv_back: all w w4 z. tr.returns_valid(w, w4) -> tr.returns_valid(w, fn_update(w4, "objs", z))
+theorem tr.rv_back: all w w4 z f. tr.returns_valid(w, w4) -> tr.returns_valid(w, fn_update(fn_update(w4, "objs", z), "fs_base", f))
 proof
-  fix w w4 z
+  fix w w4 z f
   assume h
   have i ev ld cpu bk := expand(h, tr.returns_valid)
-  have ld2: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(fn_update(w4, "objs", z).vm, gb, gc, st) proof
+  have ld2: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(fn_update(fn_update(w4, "objs", z), "fs_base", f).vm, gb, gc, st) proof
     fix gb gc st
     assume hb hl
     have l := mp(all_elim(ld, {gb}, {gc}, {st}), hb, hl)
@@ -742,7 +742,7 @@ proof
                 show by taut(c)
               qed
               have rv: tr.returns_valid(w, w4) by taut(io, nm)
-              have rb := apply(tr.rv_back, {w}, {w4}, {w.objs}, rv)
+              have rb := apply(tr.rv_back, {w}, {w4}, {w.objs}, {w.fs_base}, rv)
               show by simp(ws, sb, rb, keep(tr.returns_valid))
             qed
             have q2: (ex x e. o2 = exc(x, e) && o1 = exc(x, e)) -> tr.returns_valid(w, w2) proof
@@ -1365,7 +1365,7 @@ qed
 // a byte the world w0 may write: writable, or a stack object's (off the
 // program's mapped pages)
 abbrev tr.wbl(w0, a) := x86_64_linux.can_access(w0.vm, a, 1) ||
-  (a in w0.objs && !(x86_64_linux.mapped(w0.vm, x86_64_linux.page_of(a)) && !abi.stack_page(w0.vm, x86_64_linux.page_of(a))))
+  (a in w0.objs.live && !(x86_64_linux.mapped(w0.vm, x86_64_linux.page_of(a)) && !abi.stack_page(w0.vm, x86_64_linux.page_of(a))))
 
 // w is w0 with its memory's bytes changed only where w0 may write
 def tr.wr_only(w0, w) := w = w0 || (ex b. w = fn_update(w0, "vm", fn_update(w0.vm, "bytes", b)) &&
@@ -1483,15 +1483,15 @@ proof
   have pe: x86_64_linux.page_of(X) = P by defs(simp(), x86_64_linux.page_of)
   have c1: C -> tr.wbl(w, X) proof
     assume hc
-    have ip := rewrite(mp(ite_t[c := C, a := ite(true, PW, PR), b := int_lt(X, int_pow(2, 64)) && X in w.objs], hc), ui)
+    have ip := rewrite(mp(ite_t[c := C, a := ite(true, PW, PR) && !(X in w.objs.hidden), b := int_lt(X, int_pow(2, 64)) && X in w.objs.live], hc), ui)
     have pw: PW by simp(ip)
     have ca: x86_64_linux.can_access(w.vm, X, 1) by defs(simp(pe, expand(hc, x86_64_linux.mapped), pw), x86_64_linux.can_access, x86_64_linux.mapped, x86_64_linux.hw_allows, x86_64_linux.accessible)
     show by taut(ca)
   qed
   have c2: !C -> tr.wbl(w, X) proof
     assume hc
-    have ho0 := rewrite(mp(ite_f[c := C, a := ite(true, PW, PR), b := int_lt(X, int_pow(2, 64)) && X in w.objs], hc), ui)
-    have xo: X in w.objs by taut(ho0)
+    have ho0 := rewrite(mp(ite_f[c := C, a := ite(true, PW, PR) && !(X in w.objs.hidden), b := int_lt(X, int_pow(2, 64)) && X in w.objs.live], hc), ui)
+    have xo: X in w.objs.live by taut(ho0)
     have nc: !(x86_64_linux.mapped(w.vm, x86_64_linux.page_of(X)) && !abi.stack_page(w.vm, x86_64_linux.page_of(X))) by defs(simp(pe, hc), abi.stack_page)
     show by taut(xo, nc)
   qed
@@ -2136,7 +2136,8 @@ proof
     // (the entry's view a world; the arguments the ABI's)
     have ou := apply(abi.objs_univ, hvo)
     have mu := apply(x86.vm_univ, hmv)
-    have hvu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu)
+    have ocu := mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), ou)
+    have hvu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu, ocu)
     have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
     have al: args in list_type(bits(64)) by simp(hA)
     have lo: seq_len(args) in omega by simp(al)

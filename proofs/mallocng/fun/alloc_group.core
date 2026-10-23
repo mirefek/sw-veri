@@ -35,7 +35,7 @@ qed
 // the ghost part h read: an overflow, or the slot framed for n bytes at P,
 // P in the result register
 abbrev mp.ef_call(c, f) := all g idx n ctr t h regs o2. g in bits(64) -> idx in bits(32) -> n in bits(64) -> ctr in bits(32) -> t in abi.World -> h in mp.G ->
-  mallocng.holds_in(c, h.A, t.vm, h.blocks) -> abi.thread_ok(t.vm, t.fs_base) ->
+  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> abi.thread_ok(t.vm, t.fs_base) ->
   mallocng.is_used(h.A, g) -> mallocng.reserved_only(h.A, g, idx) ->
   mallocng.slot_rw(t.vm, h.A.metas[g], idx) ->
   int_le(int_add(n, mallocng.IB), mallocng.stride(h.A.metas[g])) -> int_lt(mallocng.stride(h.A.metas[g]), int_pow(2, 31)) ->
@@ -62,8 +62,8 @@ proof
   fix c g0 g1 g2
   assume hc hsct hg0 hg2
   fix g idx n ctr t h regs o2
-  assume hgb hib hnb hcb hw hh hin hth hus hro hrw hns hs31 hcls hfs hrg hr
-  step o3 P W, e hs1 from hr with mp.ef_run using hrg, hc, hsct, hgb, hib, hnb, hcb, hw, hh, hin, hth, hus, hro, hrw, hns, hs31, hcls, hfs, hg0, hg2
+  assume hgb hib hnb hcb hw hh hin hsh hth hus hro hrw hns hs31 hcls hfs hrg hr
+  step o3 P W, e hs1 from hr with mp.ef_run using hrg, hc, hsct, hgb, hib, hnb, hcb, hw, hh, hin, hsh, hth, hus, hro, hrw, hns, hs31, hcls, hfs, hg0, hg2
   have pb: P in bits(64) by taut(hs1)
   step o4 y, e2 from e with g.result64_inv using pb
   show by disj({2}, ex_intro({W}, {pair(P, y)}, simp(hs1, e2)))
@@ -351,9 +351,9 @@ qed
 
 // (errno written, apart from A's footprint: the invariant kept, nothing
 // else touched, the pages as before)
-theorem mp.agr_errw(c, A, B, V, fs, e): mallocng.holds_in(c, A, V, B) -> V in x86_64_linux.Vm -> fs in bits(64) -> int_le(int_add(fs, 56), int_pow(2, 64)) ->
+theorem mp.agr_errw(c, A, B, V, fs, e): mallocng.holds_m(c, A, V, B) -> V in x86_64_linux.Vm -> fs in bits(64) -> int_le(int_add(fs, 56), int_pow(2, 64)) ->
   (all a. a in omega -> a in mallocng.footprint(c, A, B) -> !(a in mp.errno(fs))) ->
-  hin: mallocng.holds_in(c, A, mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), B) &&
+  hin: mallocng.holds_m(c, A, mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), B) &&
   unt: mallocng.untouched(c, A, B, V, mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), mp.errno(fs)) &&
   pages: mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e).pages = V.pages && vm: mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e) in x86_64_linux.Vm
 proof
@@ -435,8 +435,8 @@ qed
 // (mmap of N bytes, a multiple of pages, at a place p it chose: its pages
 // unmapped before, in user space; the pages mapped before as they were,
 // their bytes too; the new bytes 0)
-theorem mp.mm_fresh(V3, V4, p, N, PG): p in omega -> N in omega -> int_mod(N, 4096) = 0 -> int_lt(0, N) ->
-  mallocng_specs.mmap_place(V3, 0, N, bits_of_int(32, 34), p) -> gimple.fresh_pages(V3, V4, p, x86_64_linux.pages_for(N), PG) ->
+theorem mp.mm_fresh(V3, V4, p, N, PG, objs): p in omega -> N in omega -> int_mod(N, 4096) = 0 -> int_lt(0, N) ->
+  mallocng_specs.mmap_place(V3, 0, N, bits_of_int(32, 34), p) -> gimple.fresh_pages(V3, V4, objs, p, x86_64_linux.pages_for(N), PG) ->
   npg: x86_64_linux.pages_for(N) = int_div(N, 4096) && one: int_le(1, p) && low: int_le(int_add(int_mul(p, 4096), N), 140737488351232) &&
   unm: (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, int_div(N, 4096))) -> !x86_64_linux.mapped(V3, q)) &&
   pages: (all q. q in omega -> x86_64_linux.mapped(V3, q) -> V4.pages[q] = V3.pages[q]) &&
@@ -457,7 +457,7 @@ proof
   have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
   have pnb: int_le(int_add(p, NP), 34359738367) := rewrite(ts, fr1)
   have low: int_le(int_add(int_mul(p, 4096), N), 140737488351232) by arith(pnb, hp, hn, hal)
-  have xt xl xs xpg xby := expand(rewrite(nf, hfr), gimple.fresh_pages)
+  have _ xt xl xs xpg xby := expand(rewrite(nf, hfr), gimple.fresh_pages)
   have unm: all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, NP)) -> !x86_64_linux.mapped(V3, q) proof
     fix q
     assume hq h1 h2
@@ -534,14 +534,14 @@ qed
 
 // (memory changed only on pages unmapped before -- an mmap's fresh pages --,
 // the break as before: the invariant kept)
-theorem mp.mm_holds(c, A, vm, V2, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, b) ->
+theorem mp.mm_holds(c, A, vm, V2, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
   (all q. q in omega -> x86_64_linux.mapped(vm, q) -> V2.pages[q] = vm.pages[q]) ->
   (all y. y in bits(64) -> x86_64_linux.mapped(vm, int_div(y, x86_64_linux.PAGE)) -> V2.bytes[y] = vm.bytes[y]) -> V2.brk = vm.brk ->
   V2.stack_top = vm.stack_top -> V2.stack_limit = vm.stack_limit ->
-  mallocng.holds_in(c, A, V2, b)
+  mallocng.holds_m(c, A, V2, b)
 proof
   assume hc hu ha hh hpg hby hbk het hel
-  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv} := expand(hh, mallocng.holds_in)
+  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv} := expand(hh, mallocng.holds_m)
   // (the reserve's pages: mapped, so as they were)
   have rpq: all q. q in omega -> int_le(int_div(A.reserve, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.reserve, x86_64_linux.PAGE), A.reserve_cnt)) ->
       V2.pages[q] = vm.pages[q] proof
@@ -642,7 +642,7 @@ proof
     show by taut(rw, o1, rewrite(sym(pe), o2))
   qed
   have g2: mallocng.grp_rw(c, A, V2, b) by defs(gq, mallocng.grp_rw)
-  show by defs(taut(i2, m2, f2, g2, rs2), mallocng.holds_in)
+  show by defs(taut(i2, m2, f2, g2, rs2), mallocng.holds_m)
 qed
 
 // (bytes on pages mmap gave read-write: usable)
@@ -650,17 +650,17 @@ theorem mp.fresh_usable(V, objs, p, N, a, n, w): p in omega -> N in omega -> a i
   (all q. q in omega -> int_le(p, q) -> int_lt(q, int_add(p, int_div(N, 4096))) ->
      V.pages[q] = some(fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(32, 3))), "kind", 0))) ->
   int_le(int_add(int_mul(p, 4096), N), 140737488351232) -> int_mod(N, 4096) = 0 ->
-  int_le(int_mul(p, 4096), a) -> int_le(int_add(a, n), int_add(int_mul(p, 4096), N)) -> gimple.usable(V, objs, a, n, w)
+  int_le(int_mul(p, 4096), a) -> int_le(int_add(a, n), int_add(int_mul(p, 4096), N)) -> gimple.hidden_off(objs, p, int_div(N, 4096)) -> gimple.usable(V, objs, a, n, w)
 proof
-  assume hp hn ha hnn np low al h1 h2
+  assume hp hn ha hnn np low al h1 h2 hof
   have pg: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
   have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
   have pr: x86_64_linux.prot_of(bits_of_int(32, 3)).r && x86_64_linux.prot_of(bits_of_int(32, 3)).w by defs(simp(), x86_64_linux.prot_of)
   have pr1 pr2 := pr
   have each: all i. i in omega -> int_lt(i, n) ->
       ite(x86_64_linux.mapped(V, int_div(int_add(a, i), x86_64_linux.PAGE)) && !(snd(V.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).kind = 2),
-        ite(w, snd(V.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.w, snd(V.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.r),
-        int_lt(int_add(a, i), int_pow(2, 64)) && int_add(a, i) in objs) proof
+        ite(w, snd(V.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.w, snd(V.pages[int_div(int_add(a, i), x86_64_linux.PAGE)]).prot.r) && !(int_add(a, i) in objs.hidden),
+        int_lt(int_add(a, i), int_pow(2, 64)) && int_add(a, i) in objs.live) proof
     fix i
     assume hi hil
     let q := int_div(int_add(a, i), x86_64_linux.PAGE)
@@ -670,7 +670,13 @@ proof
     have e := mp(all_elim(np, {q}), qo, q1, q2)
     have qt: int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(ts, q2, low, pg, hp, hn, al)
     have m: x86_64_linux.mapped(V, q) by defs(simp(e, qt), x86_64_linux.mapped)
-    show by simp(m, e, pr1, pr2)
+    // (fresh pages: none of the ABI's bytes there)
+    have no: int_add(a, i) in objs.hidden -> false proof
+      assume hh
+      have c := mp(all_elim(expand(hof, gimple.hidden_off), {int_add(a, i)}), (int_add(a, i) in omega by arith(ha, hi)), hh)
+      show by taut(c, q1, q2)
+    qed
+    show by simp(m, e, pr1, pr2, no)
   qed
   show by defs(each, gimple.usable)
 qed
@@ -726,23 +732,23 @@ qed
 // touched but errno, grown only into memory unmapped before)
 theorem mp.agr_back_g(c, A, A1, B, s, V, V2, M): c in mallocng.Cfg -> A in mallocng.Abs -> A1 in univ(1) -> A1 in mallocng.Abs ->
   B in fn_space(bits(64), option(omega)) -> int_mod(c.ctx, 8) = 0 -> V in x86_64_linux.Vm -> V2 in x86_64_linux.Vm ->
-  mallocng.holds_in(c, A1, V, B) -> A1.taken = seq_concat(A.taken, seq_one(M)) -> mallocng.no_reserved(A1) ->
+  mallocng.holds_m(c, A1, V, B) -> mallocng.shown_in(c, A1, s.objs) -> A1.taken = seq_concat(A.taken, seq_one(M)) -> mallocng.no_reserved(A1) ->
   mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_mfp(c, A, B, s, M) -> !(M = 0) ->
   mallocng_specs.meta_joinable(V, s.objs, int_add(c.ctx, 16), A1.free_metas, M) -> mallocng_specs.meta_freed(V, V2, s.objs, int_add(c.ctx, 16), M) ->
   (all a. a in omega -> int_le(M, a) -> int_lt(a, int_add(M, 40)) ->
      mallocng.m_rw(mallocng.mview(V, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V, mallocng.all_bytes()), a)).kind = 2)) ->
   abs: mp.back(A1, A.taken, M) in mallocng.Abs && univ: mp.back(A1, A.taken, M) in univ(1) && nr: mallocng.no_reserved(mp.back(A1, A.taken, M)) &&
   act: mp.back(A1, A.taken, M).active = A1.active && tk: mp.back(A1, A.taken, M).taken = A.taken &&
-  hin: mallocng.holds_in(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
+  hin: mallocng.holds_m(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
   grw: mp.grown(c, mp.back(A1, A.taken, M), A, B, s.vm)
 proof
-  assume hc ha hu1 ha1 hb cal hv hv2 hh tk nr1 un gr mf mnz hj hfd xrw
+  assume hc ha hu1 ha1 hb cal hv hv2 hh hsh tk nr1 un gr mf mnz hj hfd xrw
   let A2 := mp.back(A1, A.taken, M)
   let F := A1.free_metas
   have tl: A.taken in list_type(omega) by simp(ha)
-  have P := apply(mp.fb_ms[c := c, A := A1, T := A.taken, x := M, vm := V, V1 := V2, b := B, objs := s.objs], hc, hu1, ha1, hb, hv, hv2, hh, cal, tl, tk, hj, hfd, xrw)
+  have P := apply(mp.fb_ms[c := c, A := A1, T := A.taken, x := M, vm := V, V1 := V2, b := B, objs := s.objs], hc, hu1, ha1, hb, hv, hv2, hh, hsh, cal, tl, tk, hj, hfd, xrw)
   have {ba = abs, bu = univ, bsl = slots, bac = active, btk = taken, bx = nat} := apply(mp.ms_basic, P)
-  have hin := apply(mp.fb_holds_in, hc, hu1, ha1, hb, hv, hv2, hh, cal, tl, tk, hj, hfd, xrw)
+  have hin := apply(mp.fb_holds_in, hc, hu1, ha1, hb, hv, hv2, hh, hsh, cal, tl, tk, hj, hfd, xrw)
   have nr2: mallocng.no_reserved(A2) by defs(rewrite(sym(bsl), expand(nr1, mallocng.no_reserved)), mallocng.no_reserved)
   // (grown: M's bytes the entry's or unmapped then, the others A1's)
   have grw: mp.grown(c, A2, A, B, s.vm) proof
@@ -762,7 +768,7 @@ proof
   // (untouched: free_meta wrote the head's word, M's bytes and the free
   // metas' links -- the allocator's then, or unmapped)
   have kf: mallocng.C_FREE_META = 16 by defs(refl({16}), mallocng.C_FREE_META)
-  have la := rewrite(kf, apply(mp.free_metas_at[c := c, A := A1, vm := V, b := B, objs := s.objs], hc, hu1, ha1, (V.bytes in fn_space(bits(64), bits(8)) by simp(hv)), hh, cal))
+  have la := rewrite(kf, apply(mp.free_metas_at[c := c, A := A1, vm := V, b := B, objs := s.objs], hc, hu1, ha1, (V.bytes in fn_space(bits(64), bits(8)) by simp(hv)), hh, hsh, cal))
   have fl: F in list_type(omega) by simp(ha1)
   have _ _ vr vb := mp(all_elim(expand(hfd, mallocng_specs.meta_freed), {F}), fl, taut(la, hj))
   have up := mp(app_update_other[f := V2, k := "bytes", v := V.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
@@ -771,7 +777,7 @@ proof
   have es: V2.brk_start = V.brk_start := sym(rewrite(vr, us))
   have u1 u2 := expand(un, mallocng.untouched)
   have co: c.ctx in omega by simp(hc)
-  have {H1 = inv} := expand(hh, mallocng.holds_in)
+  have {H1 = inv} := expand(hh, mallocng.holds_m)
   have {hpt = part} := expand(H1, mallocng.holds)
   have {fsl = free_slots} := expand(hpt, mallocng.metas_partition)
   have nfp: all a. a in omega -> a in mallocng.footprint(c, A1, B) -> !(a in mallocng.footprint(c, A, B)) -> !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
@@ -1043,22 +1049,70 @@ qed
 // ... from alloc_meta's state (the groups A's): the lists A's
 theorem mp.agr_back(c, A, A1, B, s, V, V2, M): c in mallocng.Cfg -> A in mallocng.Abs -> A1 in univ(1) -> A1 in mallocng.Abs ->
   B in fn_space(bits(64), option(omega)) -> int_mod(c.ctx, 8) = 0 -> V in x86_64_linux.Vm -> V2 in x86_64_linux.Vm ->
-  mallocng.holds_in(c, A1, V, B) -> mallocng_specs.groups_kept(A, A1) -> A1.taken = seq_concat(A.taken, seq_one(M)) -> mallocng.no_reserved(A) ->
+  mallocng.holds_m(c, A1, V, B) -> mallocng.shown_in(c, A1, s.objs) -> mallocng_specs.groups_kept(A, A1) -> A1.taken = seq_concat(A.taken, seq_one(M)) -> mallocng.no_reserved(A) ->
   mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_mfp(c, A, B, s, M) -> !(M = 0) ->
   mallocng_specs.meta_joinable(V, s.objs, int_add(c.ctx, 16), A1.free_metas, M) -> mallocng_specs.meta_freed(V, V2, s.objs, int_add(c.ctx, 16), M) ->
   (all a. a in omega -> int_le(M, a) -> int_lt(a, int_add(M, 40)) ->
      mallocng.m_rw(mallocng.mview(V, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V, mallocng.all_bytes()), a)).kind = 2)) ->
   abs: mp.back(A1, A.taken, M) in mallocng.Abs && univ: mp.back(A1, A.taken, M) in univ(1) && nr: mallocng.no_reserved(mp.back(A1, A.taken, M)) &&
   act: mp.back(A1, A.taken, M).active = A.active && tk: mp.back(A1, A.taken, M).taken = A.taken &&
-  hin: mallocng.holds_in(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
+  hin: mallocng.holds_m(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
   grw: mp.grown(c, mp.back(A1, A.taken, M), A, B, s.vm)
 proof
-  assume hc ha hu1 ha1 hb cal hv hv2 hh gk tk nr un gr mf mnz hj hfd xrw
+  assume hc ha hu1 ha1 hb cal hv hv2 hh hsh gk tk nr un gr mf mnz hj hfd xrw
   have gu gs ga _ := expand(gk, mallocng_specs.groups_kept)
   have nr1: mallocng.no_reserved(A1) by defs(rewrite(sym(gs), expand(nr, mallocng.no_reserved)), mallocng.no_reserved)
   have {ba = abs, bu = univ, bnr = nr, bac = act, btk = tk, bhin = hin, bunt = unt, bgrw = grw} :=
-    apply(mp.agr_back_g[c := c, A := A, A1 := A1, B := B, s := s, V := V, V2 := V2, M := M], hc, ha, hu1, ha1, hb, cal, hv, hv2, hh, tk, nr1, un, gr, mf, mnz, hj, hfd, xrw)
+    apply(mp.agr_back_g[c := c, A := A, A1 := A1, B := B, s := s, V := V, V2 := V2, M := M], hc, ha, hu1, ha1, hb, cal, hv, hv2, hh, hsh, tk, nr1, un, gr, mf, mnz, hj, hfd, xrw)
   show by taut(ba, bu, bnr, trans(bac, ga), btk, bhin, bunt, bgrw)
+qed
+
+// (ranges no more than A's but bytes none of the ABI's, the reserve A's)
+theorem mp.shown_ranges2(c, A, A2, objs): mallocng.shown_in(c, A, objs) ->
+  (all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !(a in objs.hidden)) ->
+  A2.reserve = A.reserve -> A2.reserve_cnt = A.reserve_cnt -> mallocng.shown_in(c, A2, objs)
+proof
+  assume h hr e1 e2
+  have {f0 = fp, r0 = rsv} := h
+  have q: all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) -> !(a in objs.hidden) proof
+    fix a
+    assume ha hi
+    have d := mp(all_elim(hr, {a}), ha, hi)
+    have o := mp(all_elim(expand(f0, mallocng.fp_shown), {a}), ha)
+    show by taut(d, o)
+  qed
+  have fp2: mallocng.fp_shown(mallocng.fp_ranges(c, A2), objs) by defs(q, mallocng.fp_shown)
+  show by defs(simp(fp2, r0, e1, e2, keep(mallocng.fp_shown)), mallocng.shown_in)
+qed
+
+// (a mapped group: its range's bytes none of the ABI's)
+theorem mp.shown_ngrp(c, A, vm, V1, b, k, T, m, V, n, objs): mp.gxpre(c, A, vm, V1, b, k, T, m, V, n) -> mallocng.shown_in(c, A, objs) ->
+  (all a. a in omega -> mallocng.in_range(a, mallocng.group_range(V)) -> !(a in objs.hidden)) -> mallocng.shown_in(c, mp.ngrp(A, k, T, m, V, n), objs)
+proof
+  assume P h hv
+  have q: all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, mp.ngrp(A, k, T, m, V, n))) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !(a in objs.hidden) proof
+    fix a
+    assume ha hi
+    have d: mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || mallocng.in_range(a, mallocng.group_range(V))
+      by taut(apply(mp.gx_fpr[c := c, A := A, vm := vm, V1 := V1, b := b, k := k, T := T, m := m, V := V, n := n, a := a], P), hi)
+    show by taut(d, mp(all_elim(hv, {a}), ha))
+  qed
+  show := apply(mp.shown_ranges2[c := c, A := A, A2 := mp.ngrp(A, k, T, m, V, n), objs := objs], h, q, simp(), simp())
+qed
+
+// (a nested group: the same ranges)
+theorem mp.shown_ngn(c, A, vm, V1, b, g, i, k, T, m, V, n, objs): mp.gnpre(c, A, vm, V1, b, g, i, k, T, m, V, n) -> mallocng.shown_in(c, A, objs) ->
+  mallocng.shown_in(c, mp.ngn(A, g, i, k, T, m, V, n), objs)
+proof
+  assume P h
+  have q: all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, mp.ngn(A, g, i, k, T, m, V, n))) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !(a in objs.hidden) proof
+    fix a
+    assume ha hi
+    show by taut(apply(mp.gn_fpr[c := c, A := A, vm := vm, V1 := V1, b := b, g := g, i := i, k := k, T := T, m := m, V := V, n := n, a := a], P, ha), hi)
+  qed
+  show := apply(mp.shown_ranges2[c := c, A := A, A2 := mp.ngn(A, g, i, k, T, m, V, n), objs := objs], h, q, simp(), simp())
 qed
 
 // alloc_group's purpose (`alloc_group_spec`), from A on s's memory: an
@@ -1069,7 +1123,7 @@ qed
 abbrev mp.agr_out(c, A, sc, req, B, s, o) := (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V g. (V in x86_64_linux.Vm && g in bits(64) && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, A, sc) && A2.taken = A.taken) &&
      (g = 0 || mallocng_specs.fresh_group(A2, g, sc, req)) &&
-     mallocng.holds_in(c, A2, V, B) && mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
+     mallocng.holds_m(c, A2, V, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
      (!(g = 0) -> int_lt(mallocng_specs.active_idx(V, A2.metas[g]), A2.metas[g].last_idx) ->
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[g]), int_add(A2.metas[g].last_idx, 1))))))) &&
      o = ok(fn_update(s, "vm", V), g))
@@ -1083,12 +1137,12 @@ theorem mp.agr_run(c, sc, req, galm, gib, gab, gss, gmm, gfm, gs2c, gas, gef, s,
   mp.calls(gmm, mallocng_specs.mmap_spec_fun()) -> mp.calls(gfm, mallocng_specs.free_meta_spec_fun(c.ctx)) ->
   mp.calls(gs2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) -> mp.as_call_ge(c, gas, int_add(sc, 1)) -> mp.ef_call(c, gef) ->
   s in abi.World -> h in mp.G ->
-  mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
   abi.brk_start_ok(s.vm) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, s.vm, s.fs_base) ->
   runs(c_src_malloc_mallocng_malloc.alloc_group(sc, req, galm, gib, gab, gss, gmm, gfm, gs2c, gas, gef), s, o) ->
   mp.agr_out(c, h.A, sc, req, h.blocks, s, o)
 proof
-  assume hc hx hst hdj hscn hmcn hsb hsl hrb hfit halm hib hab hsq hmm hfm hs2c has hef hw hh hin hnr hth htl hbs heo hea hr
+  assume hc hx hst hdj hscn hmcn hsb hsl hrb hfit halm hib hab hsq hmm hfm hs2c has hef hw hh hin hsh hnr hth htl hbs heo hea hr
   let A := h.A
   let B := h.blocks
   let V0 := s.vm
@@ -1102,7 +1156,7 @@ proof
   let SCT := c_src_malloc_mallocng_malloc.__malloc_size_classes
   have sctb: SCT in bits(64) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
   have sctnz: !(SCT = 0) by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_size_classes)
-  have tok0 := apply(mp.classes_table[c := c, A := A, vm := V0, b := B, objs := s.objs], hc, au, hat, hin)
+  have tok0 := apply(mp.classes_table[c := c, A := A, vm := V0, b := B, objs := s.objs], hc, au, hat, hin, hsh)
   have tok: mallocng_specs.table_ok(s.vm, s.objs, SCT, 2, mallocng.size_classes) := rewrite(hst, tok0)
   have ssc := mp(all_elim(ms.sint_small, {sc}), hs, arith(hsl))
   have td tl := apply(ms.tab_rd, {s}, {SCT}, {sc}, {mallocng.size_classes}, hu, sctb, sctnz, hsb, (int_le(0, sint(32, sc)) by arith(ssc, hs)),
@@ -1128,9 +1182,9 @@ proof
     assume _ _ _ r
     show r
   qed
-  step V1 rr, e5 hR1 from e4 with halm using amself, hw, hh, hin, hth, htl, hbs, heo, hea
+  step V1 rr, e5 hR1 from e4 with halm using amself, hw, hh, hin, hsh, hth, htl, hbs, heo, hea
   have v1v ex1 := hR1
-  obtain A1 M, a1a a1u gk1 mb tk1 _ hin1 unt1 grw1 rdy1 epg1 mfp1 rm from ex1
+  obtain A1 M, a1a a1u gk1 mb tk1 _ hin1 hsh1 unt1 grw1 rdy1 epg1 mfp1 rm from ex1
   // no meta: 0, nothing done
   have none: M = 0 -> mp.agr_out(c, A, sc, req, B, s, o) proof
     assume h0
@@ -1148,10 +1202,10 @@ proof
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A1.metas[0]), int_add(A1.metas[0].last_idx, 1)))) by simp()
     have inner: ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, A, sc) && A2.taken = A.taken) &&
         (0 = 0 || mallocng_specs.fresh_group(A2, 0, sc, req)) &&
-        mallocng.holds_in(c, A2, V1, B) && mallocng.untouched(c, A, B, s.vm, V1, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
+        mallocng.holds_m(c, A2, V1, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V1, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
         (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V1, A2.metas[0]), A2.metas[0].last_idx) ->
            int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[0]), int_add(A2.metas[0].last_idx, 1)))))
-      by ex_intro({A1}, taut(a1a, a1u, nr1, ac1, tk, refl({0}), hin1, unt1, grw1, vac))
+      by ex_intro({A1}, taut(a1a, a1u, nr1, ac1, tk, refl({0}), hin1, hsh1, unt1, grw1, vac))
     show by disj({2}, ex_intro({V1}, {0}, taut(v1v, (0 in bits(64) by simp()), inner, e8)))
   qed
   // a meta M: on
@@ -1169,7 +1223,7 @@ proof
     have co: c.ctx in omega by arith(hx, cv)
     let UA := int_add(int_add(CTX, 464), int_mul(8, sc))
     have fu := apply(mp.free_off[c := c, a := UA, n := 8], co, arith(cv, hs), arith(hx, cv, hs), arith(hx, cv, hs, hsl))
-    have uu _ := apply(mp.free_usable[c := c, A := A1, vm := V1, b := B, objs := s.objs, a := UA, n := 8], hc, a1u, a1a, hin1, arith(cv, hs), fu)
+    have uu _ := apply(mp.free_usable[c := c, A := A1, vm := V1, b := B, objs := s.objs, a := UA, n := 8], hc, a1u, a1a, hin1, hsh1, arith(cv, hs), fu)
     have sx := apply(ms.sext_small, hsb, arith(hsl, hs))
     have sv: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 464) = 464 by defs(simp(), gimple.sval)
     have uab: UA in bits(64) by arith(cv, hs, hsl)
@@ -1179,7 +1233,7 @@ proof
     have tb9 kx9 := e9
     // the slot count: by the class and the usage
     let SCT3 := c_src_malloc_mallocng_malloc.small_cnt_tab
-    have {tsm = small, tmd = med} := apply(mp.counts_tables[c := c, A := A1, vm := V1, b := B, objs := s.objs], hc, a1u, a1a, hbt, v1v, hin1)
+    have {tsm = small, tmd = med} := apply(mp.counts_tables[c := c, A := A1, vm := V1, b := B, objs := s.objs], hc, a1u, a1a, hbt, v1v, hin1, hsh1)
     have s8: sint(32, 8) = 8 by defs(simp(), sint)
     have small: int_le(sc, 8) -> (ex k. (k in omega && int_le(k, 2)) && x9 = ok(pair(W1, pair(req, pair(l1, pair(mallocng.small_cnt_tab[int_add(int_mul(3, sc), k)], pair(l3,
         pair(k, pair(l5, pair(l6, pair(fst(rr), pair(l8, pair(l9, pair(l10, pair(4096, pair(SZ, pair(l13, pair(l14, pair(l15, pair(l16, pair(l17, U))))))))))))))))))), empty)) proof
@@ -1556,24 +1610,26 @@ proof
     have hg1 := apply(mp.g_upd, {h}, {A1}, hh, a1a, a1u)
     have hA1: H1.A = A1 by simp()
     have hB1: H1.blocks = B by simp(hbt)
-    have pin: mallocng.holds_in(c, H1.A, W1.vm, H1.blocks) by simp(hin1, hA1, hB1)
+    have pin: mallocng.holds_m(c, H1.A, W1.vm, H1.blocks) by simp(hin1, hA1, hB1)
+    have psh: mallocng.shown_in(c, H1.A, W1.objs) by simp(hsh1, hA1)
     have {th1 = thread, eo1 = errno, tl1 = tls, ea1 = apart} := apply(mp.agr_side[c := c, A := A, A1 := A1, B := B, s := s, V := V1], hw, hth, htl, heo, hea, unt1, grw1, epg1)
     have ths1: gc.sound(W1) by simp(th1)
     have w1v: W1.vm in x86_64_linux.Vm by simp(v1v)
     // its slots past half a page: the group mapped on its own
     have mapped: int_lt(2048, int_add(int_mul(SZ, C2), 16)) -> mp.agr_out(c, A, sc, req, B, s, o) proof
       assume hm
-      step y16 r1, e16 kx16 hr1 from e15 with sx2, bm2, ba2, hm, hib using hg1, pin, w1W, hsb, ths1, w1v
+      step y16 r1, e16 kx16 hr1 from e15 with sx2, bm2, ba2, hm, hib using hg1, pin, psh, w1W, hsb, ths1, w1v
       // account_bounce(sc), step_seq(): the context's free bytes only
       have ss1: fn_update(W1, "vm", W1.vm) = W1 by simp()
-      step V2 r2, e17 _ hR2 from conj(rewrite(ss1, e16), kx16) with hab using hg1, pin, w1W, hsb, ths1, w1v
+      step V2 r2, e17 _ hR2 from conj(rewrite(ss1, e16), kx16) with hab using hg1, pin, psh, w1W, hsb, ths1, w1v
       have v2v co12w := hR2
       have co12: mallocng_specs.ctx_only(c, V1, V2) by simp(co12w)
       have hin2 := apply(mp.co_holds[c := c, A := A1, vm := V1, vm2 := V2, b := B], hin1, co12)
       let W2 := fn_update(s, "vm", V2)
       have ww2: fn_update(W1, "vm", V2) = W2 := fn_update_twice[f := s, k := "vm", a := V1, b := V2]
       have w2W w2u := apply(mp.am_world, hw, hu, v2v)
-      have pin2: mallocng.holds_in(c, H1.A, W2.vm, H1.blocks) by simp(hin2, hA1, hB1)
+      have pin2: mallocng.holds_m(c, H1.A, W2.vm, H1.blocks) by simp(hin2, hA1, hB1)
+      have psh2: mallocng.shown_in(c, H1.A, W2.objs) by simp(hsh1, hA1)
       have un12 := apply(mp.co_unt[c := c, A := A1, vm := V1, vm2 := V2, b := B], hc, a1u, a1a, hin1, co12)
       have ne8: all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) proof
         fix i
@@ -1583,7 +1639,7 @@ proof
       have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
       have th2 := apply(mp.tls_kept[c := c, A := A1, b := B, V0 := V1, V1 := V2, fs := s.fs_base, e := empty], fsb, th1, tl1, un12, ne8)
       have ths2: gc.sound(W2) by simp(th2)
-      step V3 r3, e18 _ hR3 from conj(rewrite(ww2, e17), kx16) with hsq using hg1, pin2, w2W, ths2, v2v
+      step V3 r3, e18 _ hR3 from conj(rewrite(ww2, e17), kx16) with hsq using hg1, pin2, psh2, w2W, ths2, v2v
       have v3v co23w := hR3
       have co23: mallocng_specs.ctx_only(c, V2, V3) by simp(co23w)
       have hin3 := apply(mp.co_holds[c := c, A := A1, vm := V2, vm2 := V3, b := B], hin2, co23)
@@ -1609,7 +1665,7 @@ proof
           let UA2 := int_add(int_add(CTX, 464), int_mul(8, int_add(sc, 1)))
           have cxo: c.ctx in omega by arith(hx, cv)
           have fu2 := apply(mp.free_off[c := c, a := UA2, n := 8], cxo, arith(cv, hs), arith(hx, cv, hs), arith(hx, cv, hs, hs31))
-          have uu2 _ := apply(mp.free_usable[c := c, A := A1, vm := V3, b := B, objs := s.objs, a := UA2, n := 8], hc, a1u, a1a, hin3, arith(cv, hs), fu2)
+          have uu2 _ := apply(mp.free_usable[c := c, A := A1, vm := V3, b := B, objs := s.objs, a := UA2, n := 8], hc, a1u, a1a, hin3, hsh1, arith(cv, hs), fu2)
           have ua2b: UA2 in bits(64) by arith(cv, hs, hs31)
           have umd2: g.mem_defined(W3, UA2, 0, 8, false) by simp(uu2, (int_add(UA2, 0) = UA2 by arith(ua2b)), (!(UA2 = 0) by arith(cv, hs)), (int_lt(UA2, pow2(64)) by arith(ua2b)))
           step e19 from tb18 with he, ad, ka, sx1, g.padd_det, sv, g.elem8_det, g.ld64_det using conj(w3u, kb, umd2, ua2b, cv, hx, cnz, hs, hs31)
@@ -1822,7 +1878,7 @@ proof
       let NPG := fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(32, 3))), "kind", 0)
       let EA := mallocng_specs.errno_at(s.fs_base)
       let PM(V, r) := (ex e. V = mallocng_specs.wr32(V3, EA, e) && fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
-        (ex p. ((((p in omega && mallocng_specs.mmap_place(V3, 0, N4, bits_of_int(32, 34), p)) && gimple.fresh_pages(V3, V, p, x86_64_linux.pages_for(N4), NPG)) &&
+        (ex p. ((((p in omega && mallocng_specs.mmap_place(V3, 0, N4, bits_of_int(32, 34), p)) && gimple.fresh_pages(V3, V, s.objs, p, x86_64_linux.pages_for(N4), NPG)) &&
           V.brk = V3.brk) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))
       have n4b: N4 in bits(64) by arith(n4o, n4l)
       have mc2: bits_of_int(32, 34) = int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS) by defs(simp(), x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS)
@@ -1838,7 +1894,7 @@ proof
             bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED) by taut(mc2)),
           (int_lt(bits_of_int(32, 3), 8) by simp()), (mallocng_specs.errno_ok(W3.vm, W3.objs, W3.fs_base) by simp(eo3, keep(mallocng_specs.errno_ok))),
           (ite(bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED),
-            gimple.sys_pages_ok(W3.vm, x86_64_linux.page_of(bits_of_int(64, 0)), x86_64_linux.pages_for(N4)) &&
+            gimple.sys_pages_ok(W3.vm, W3.objs, x86_64_linux.page_of(bits_of_int(64, 0)), x86_64_linux.pages_for(N4)) &&
             mallocng_specs.tls_off(W3.fs_base, x86_64_linux.page_of(bits_of_int(64, 0)), x86_64_linux.pages_for(N4)), bits_of_int(64, 0) = 0) by
             defs(simp(keep(gimple.sys_pages_ok, mallocng_specs.tls_off)), x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)),
           rewrite(ea, hro), h2)
@@ -1858,13 +1914,13 @@ proof
         qed
         have k3: (ex Vx p r. ((((((o2 = ok(fn_update(W3, "vm", Vx), r) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))) && Vx in x86_64_linux.Vm) && p in omega) &&
             mallocng_specs.mmap_place(W3.vm, bits_of_int(64, 0), N4, bits_of_int(32, 34), p)) &&
-            gimple.fresh_pages(W3.vm, Vx, p, x86_64_linux.pages_for(N4), NPG)) && Vx.brk = W3.vm.brk)) ->
+            gimple.fresh_pages(W3.vm, Vx, W3.objs, p, x86_64_linux.pages_for(N4), NPG)) && Vx.brk = W3.vm.brk)) ->
             (ex V r. (V in x86_64_linux.Vm && PM(V, r)) && o2 = ok(fn_update(W3, "vm", V), r)) proof
           assume e
           obtain Vx p r, ho hf hvx hp hpl hfr hbr from e
-          have w: ex p1. (((p1 in omega && mallocng_specs.mmap_place(V3, 0, N4, bits_of_int(32, 34), p1)) && gimple.fresh_pages(V3, Vx, p1, x86_64_linux.pages_for(N4), NPG)) &&
+          have w: ex p1. (((p1 in omega && mallocng_specs.mmap_place(V3, 0, N4, bits_of_int(32, 34), p1)) && gimple.fresh_pages(V3, Vx, s.objs, p1, x86_64_linux.pages_for(N4), NPG)) &&
               Vx.brk = V3.brk) && fst(r) = bits_of_int(64, int_mul(p1, x86_64_linux.PAGE))
-            by ex_intro({p}, taut(hp, rewrite(b0, rewrite(wvv, hpl)), rewrite(wvv, hfr), rewrite(wvv, hbr), hf))
+            by ex_intro({p}, taut(hp, rewrite(b0, rewrite(wvv, hpl)), rewrite((W3.objs = s.objs by simp()), rewrite(wvv, hfr)), rewrite(wvv, hbr), hf))
           have pm3: PM(Vx, r) by taut(w)
           show by ex_intro({Vx}, {r}, taut(hvx, pm3, ho))
         qed
@@ -1897,7 +1953,7 @@ proof
         have ep41: V4.pages = V1.pages := trans(ep34, trans(ep23, ep12))
         // (M joinable to the free list, accessible: V1's)
         have rdy := mp(rdy1, hnz)
-        have mj1 := apply(mp.fm_join[c := c, A := A1, vm := V1, b := B, objs := s.objs, T := A.taken, m := M], hc, a1u, a1a, hin1, tl0, tkm, rdy)
+        have mj1 := apply(mp.fm_join[c := c, A := A1, vm := V1, b := B, objs := s.objs, T := A.taken, m := M], hc, a1u, a1a, hin1, hsh1, tl0, tkm, rdy)
         have mj4 := apply(mp.mj_pages[vm := V1, vm2 := V4, objs := s.objs, ph := int_add(c.ctx, 16), l := A1.free_metas, m := M], ep41, mj1)
         have rwa _ _ := expand(rdy, mallocng_specs.meta_ready)
         have rwv1: all a. a in omega -> int_le(M, a) -> int_lt(a, int_add(M, 40)) ->
@@ -1910,7 +1966,7 @@ proof
         // free_meta(m): its contract at the call
         have cal: int_mod(c.ctx, 8) = 0 by arith(hx, cv)
         have kf: mallocng.C_FREE_META = 16 by defs(refl({16}), mallocng.C_FREE_META)
-        have la4 := rewrite(kf, apply(mp.free_metas_at[c := c, A := A1, vm := V4, b := B, objs := s.objs], hc, a1u, a1a, (V4.bytes in fn_space(bits(64), bits(8)) by simp(v4v)), hin4, cal))
+        have la4 := rewrite(kf, apply(mp.free_metas_at[c := c, A := A1, vm := V4, b := B, objs := s.objs], hc, a1u, a1a, (V4.bytes in fn_space(bits(64), bits(8)) by simp(v4v)), hin4, hsh1, cal))
         have pb: bits_add(64, CTX, 16) = int_add(c.ctx, 16) by defs(arith(hx, cv), bits_add, pow2)
         have laW: mallocng_specs.list_at(W4.vm, W4.objs, bits_add(64, CTX, 16), A1.free_metas) by simp(rewrite(sym(pb), la4), keep(mallocng_specs.list_at))
         have mjW: mallocng_specs.meta_joinable(W4.vm, W4.objs, bits_add(64, CTX, 16), A1.free_metas, M) by simp(rewrite(sym(pb), mj4), keep(mallocng_specs.meta_joinable))
@@ -1952,7 +2008,7 @@ proof
         have un14 := apply(mp.unt_trans[c := c, A := A1, A1 := A1, b := B, V0 := V1, V1 := V3, V2 := V4, e := mp.errno(s.fs_base)], un14a, un34, refl({mallocng.footprint(c, A1, B)}))
         have un04 := apply(mp.unt_grow[c := c, A := A, A1 := A1, b := B, V0 := s.vm, V1 := V1, V2 := V4, e := mp.errno(s.fs_base)], unt1, un14, grw1)
         have {ba = abs, bu = univ, bnr = nr, bact = act, btk = tk, bhin = hin, bunt = unt, bgrw = grw} := apply(mp.agr_back[c := c, A := A, A1 := A1, B := B, s := s, V := V4, V2 := V5, M := M],
-          hc, hat, a1u, a1a, hbt, cal, v4v, v5v, hin4, gk1, tkm, hnr, un04, grw1, mfp1, hnz, mj4, fd, rw4)
+          hc, hat, a1u, a1a, hbt, cal, v4v, v5v, hin4, hsh1, gk1, tkm, hnr, un04, grw1, mfp1, hnz, mj4, fd, rw4)
         let A2 := mp.back(A1, A.taken, M)
         have vac: !(0 = 0) -> int_lt(mallocng_specs.active_idx(V5, A2.metas[0]), A2.metas[0].last_idx) ->
             int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[0]), int_add(A2.metas[0].last_idx, 1)))) by simp()
@@ -1963,14 +2019,14 @@ proof
         qed
         have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && mp.upto(A3, A, sc) && A3.taken = A.taken) &&
             (0 = 0 || mallocng_specs.fresh_group(A3, 0, sc, req)) &&
-            mallocng.holds_in(c, A3, V5, B) && mallocng.untouched(c, A, B, s.vm, V5, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
+            mallocng.holds_m(c, A3, V5, B) && mallocng.shown_in(c, A3, s.objs) && mallocng.untouched(c, A, B, s.vm, V5, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
             (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V5, A3.metas[0]), A3.metas[0].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[0]), int_add(A3.metas[0].last_idx, 1)))))
-          by ex_intro({A2}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, bunt, bgrw, vac))
+          by ex_intro({A2}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, apply(mp.shown_mstep[c := c, A := A1, F := seq_concat(A1.free_metas, seq_one(M)), n := A1.avail_cnt, T := A.taken, objs := s.objs], hsh1), bunt, bgrw, vac))
         show by disj({2}, ex_intro({V5}, {0}, taut(v5v, (0 in bits(64) by simp()), inner, oe)))
       qed
       // mapped at p: the group's stores
-      have mapd: (ex p. ((((p in omega && mallocng_specs.mmap_place(V3, 0, N4, bits_of_int(32, 34), p)) && gimple.fresh_pages(V3, V4, p, x86_64_linux.pages_for(N4), NPG)) &&
+      have mapd: (ex p. ((((p in omega && mallocng_specs.mmap_place(V3, 0, N4, bits_of_int(32, 34), p)) && gimple.fresh_pages(V3, V4, s.objs, p, x86_64_linux.pages_for(N4), NPG)) &&
           V4.brk = V3.brk) && fst(r4) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)))) -> mp.agr_out(c, A, sc, req, B, s, o) proof
         assume f
         obtain p, hpo hpl hfr hvb hfr2 from f
@@ -1984,7 +2040,7 @@ proof
         have w4W w4u := apply(mp.am_world, hw, hu, v4v)
         have mbr := rewrite(sym(rm), mb)
         // (the invariant on V4: mmap's pages unmapped before)
-        have ft4 fl4 .. := expand(hfr, gimple.fresh_pages)
+        have hof4 ft4 fl4 .. := expand(hfr, gimple.fresh_pages)
         have hin4 := apply(mp.mm_holds[c := c, A := A1, vm := V3, V2 := V4, b := B], hc, a1u, a1a, hin3, mpg, mby, hvb, ft4, fl4)
         // (M's record read-write, its pages V1's)
         have ep31: V3.pages = V1.pages := trans(ep23, ep12)
@@ -2005,8 +2061,9 @@ proof
           have {rw = rw} := apply(mp.pg_same, pe)
           show by taut((int_add(M, i) in mallocng.all_bytes() by defs(simp(ao), mallocng.all_bytes)), rw, r1, rewrite(sym(pe), r2))
         qed
-        have mur muw := apply(mp.rw_usable[vm := V4, F := mallocng.all_bytes(), objs := s.objs, a := M, n := 40], mo, each)
-        have mjm := apply(mp.fm_join[c := c, A := A1, vm := V1, b := B, objs := s.objs, T := A.taken, m := M], hc, a1u, a1a, hin1, tl0, tkm, mp(rdy1, hnz))
+        have mur muw := apply(mp.rw_usable_at[vm := V4, F := mallocng.all_bytes(), objs := s.objs, a := M, n := 40], mo, each,
+          apply(mp.taken_vis[c := c, A := A1, vm := V1, b := B, objs := s.objs, T := A.taken, m := M], hc, a1u, a1a, hin1, hsh1, tl0, tkm))
+        have mjm := apply(mp.fm_join[c := c, A := A1, vm := V1, b := B, objs := s.objs, T := A.taken, m := M], hc, a1u, a1a, hin1, hsh1, tl0, tkm, mp(rdy1, hnz))
         have _ mbd _ _ _ _ _ := expand(mjm, mallocng_specs.meta_joinable)
         have mtop: int_le(int_add(M, 40), 18446744073709551616) by arith(mbd)
         let MW(off, n) := g.mem_defined(W4, fst(rr), off, n, true)
@@ -2031,7 +2088,7 @@ proof
           assume hi hil
           show by defs(arith(hi, hil, hx, cv), mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK)
         qed
-        have u12r u12w := apply(mp.free_usable[c := c, A := A1, vm := V4, b := B, objs := s.objs, a := int_add(CTX, 12), n := 4], hc, a1u, a1a, hin4, arith(cv), f12)
+        have u12r u12w := apply(mp.free_usable[c := c, A := A1, vm := V4, b := B, objs := s.objs, a := int_add(CTX, 12), n := 4], hc, a1u, a1a, hin4, hsh1, arith(cv), f12)
         have md12r: g.mem_defined(W4, CTX, 12, 4, false) by simp(u12r, cnz, cv)
         have md12w: g.mem_defined(W4, CTX, 12, 4, true) by simp(u12w, cnz, cv)
         // (the memory after the maplen's store: V5)
@@ -2154,7 +2211,7 @@ proof
         step e31 from rewrite(ey30, kx30)
         // the class's usage counter: the count added
         have fuu := apply(mp.free_off[c := c, a := UA, n := 8], cxo, arith(cv, hs), arith(hx, cv, hs), arith(hx, cv, hs, hsl))
-        have uur uuw := apply(mp.free_usable[c := c, A := A1, vm := V4, b := B, objs := s.objs, a := UA, n := 8], hc, a1u, a1a, hin4, arith(cv, hs), fuu)
+        have uur uuw := apply(mp.free_usable[c := c, A := A1, vm := V4, b := B, objs := s.objs, a := UA, n := 8], hc, a1u, a1a, hin4, hsh1, arith(cv, hs), fuu)
         have mdur: g.mem_defined(W4, UA, 0, 8, false) by simp(uur, (int_add(UA, 0) = UA by arith(uab)), (!(UA = 0) by arith(cv, hs)), (int_lt(UA, pow2(64)) by arith(uab)))
         have mduw: g.mem_defined(W4, UA, 0, 8, true) by simp(uuw, (int_add(UA, 0) = UA by arith(uab)), (!(UA = 0) by arith(cv, hs)), (int_lt(UA, pow2(64)) by arith(uab)))
         have sxk := apply(ms.sext_small, k4b, arith(k432))
@@ -2175,10 +2232,12 @@ proof
         have m322: g.mem_defined(W4, fst(rr), 32, 2, true) by taut(m322a)
         have n4g: int_le(4096, N4) by arith(n4a, n4p, n4o)
         have ppo: P in omega by arith(hpo)
+        have pf4: x86_64_linux.pages_for(N4) = int_div(N4, 4096) by defs(arith(n4a, n4o), x86_64_linux.pages_for, x86_64_linux.PAGE)
+        have hof: gimple.hidden_off(s.objs, p, int_div(N4, 4096)) := rewrite(pf4, hof4)
         have pu8 := apply(mp.fresh_usable[V := V4, objs := s.objs, p := p, N := N4, a := P, n := 8, w := true], hpo, n4o, ppo, simp(), mnew, mlow, n4a,
-          (int_le(int_mul(p, 4096), P) by arith(hpo)), (int_le(int_add(P, 8), int_add(int_mul(p, 4096), N4)) by arith(n4g)))
+          (int_le(int_mul(p, 4096), P) by arith(hpo)), (int_le(int_add(P, 8), int_add(int_mul(p, 4096), N4)) by arith(n4g)), hof)
         have pu1 := apply(mp.fresh_usable[V := V4, objs := s.objs, p := p, N := N4, a := int_add(P, 8), n := 1, w := true], hpo, n4o, (int_add(P, 8) in omega by arith(hpo)), simp(), mnew,
-          mlow, n4a, (int_le(int_mul(p, 4096), int_add(P, 8)) by arith(hpo)), (int_le(int_add(int_add(P, 8), 1), int_add(int_mul(p, 4096), N4)) by arith(n4g)))
+          mlow, n4a, (int_le(int_mul(p, 4096), int_add(P, 8)) by arith(hpo)), (int_le(int_add(int_add(P, 8), 1), int_add(int_mul(p, 4096), N4)) by arith(n4g)), hof)
         have pnz: !(P = 0) by arith(mone, hpo)
         have mdp0: g.mem_defined(W4, fst(r4), 0, 8, true) by simp(rp, pu8, (int_lt(int_add(P, 0), pow2(64)) by arith(mlow, hpo)), pnz, keep(gimple.usable))
         have mdp8: g.mem_defined(W4, fst(r4), 8, 1, true) by simp(rp, pu1, (int_lt(int_add(P, 8), pow2(64)) by arith(mlow, hpo)), pnz, keep(gimple.usable))
@@ -2494,7 +2553,7 @@ proof
         qed
         // ---- the state with the group made: M in use at its place, its
         // record the one in memory
-        have {H4 = inv, hm4 = mapped} := expand(hin4, mallocng.holds_in)
+        have {H4 = inv, hm4 = mapped} := expand(hin4, mallocng.holds_m)
         have {hpt4 = part, hnm4 = normal} := expand(H4, mallocng.holds)
         have {mnu = unused} := apply(mp.ng_taken[A := A1, T := A.taken, m := M], a1a, hpt4, tl0, tkm)
         have ul1: A1.used in list_type(omega) by simp(a1a)
@@ -2710,6 +2769,18 @@ proof
           qed
           show by taut(k1c, c1, c2)
         qed
+        // (its range: on the fresh pages, none of the ABI's bytes)
+        have kpv: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+        have vhid: all a. a in omega -> mallocng.in_range(a, mallocng.group_range(VR)) -> !(a in s.objs.hidden) proof
+          fix a
+          assume hao hr
+          have r1 r2 := mp(all_elim(inrg, {a}), hr)
+          show proof
+            assume hh
+            have n0 := mp(all_elim(expand(hof, gimple.hidden_off), {a}), hao, hh)
+            show by taut(n0, (int_le(p, int_div(a, x86_64_linux.PAGE)) && int_lt(int_div(a, x86_64_linux.PAGE), int_add(p, int_div(N4, 4096))) by arith(r1, r2, kpv, n4a, n4o, hpo, hao)))
+          qed
+        qed
         have GP: mp.gxpre(c, A1, V4, VF, B, KK, A.taken, M, VR, K4) := conj(hc, a1u, a1a, hbt, v4v, vfv, hin4, tl0, tkm, hnz, vrt, (K4 = int_add(VR.last_idx, 1) by arith(vli)),
           conj(kko, kkl), klo, khi, (int_lt(0, VR.maplen) by arith(vml, qnp)), vfr, vnp, vmr, (VF.pages = V4.pages by simp()), (VF.brk = V4.brk by simp()), (VF.stack_top = V4.stack_top && VF.stack_limit = V4.stack_limit by simp()), vby, vrec,
           conj(vpv, vnx), (int_lt(VR.sizeclass, 48) by arith(vsc, hsl)), vhd, vact, vavl, vfrd, small, vzr, sno, fits, offs, span)
@@ -2894,10 +2965,10 @@ proof
         qed
         have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && mp.upto(A3, A, sc) && A3.taken = A.taken) &&
             (fst(rr) = 0 || mallocng_specs.fresh_group(A3, fst(rr), sc, req)) &&
-            mallocng.holds_in(c, A3, VF, B) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
+            mallocng.holds_m(c, A3, VF, B) && mallocng.shown_in(c, A3, s.objs) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
             (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(VF, A3.metas[fst(rr)]), A3.metas[fst(rr)].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[fst(rr)]), int_add(A3.metas[fst(rr)].last_idx, 1)))))
-          by ex_intro({A2}, taut(au2, uu2, nr2, ac2, tk2, fgr, hinF, untF, grF, actF))
+          by ex_intro({A2}, taut(au2, uu2, nr2, ac2, tk2, fgr, hinF, apply(mp.shown_ngrp[c := c, A := A1, vm := V4, V1 := VF, b := B, k := KK, T := A.taken, m := M, V := VR, n := K4, objs := s.objs], GP, hsh1, vhid), untF, grF, actF))
         show by disj({2}, ex_intro({VF}, {fst(rr)}, taut(vfv, mbr, inner, of)))
       qed
       show by taut(pm4, refused, mapd)
@@ -2915,8 +2986,8 @@ proof
       let DBJ := c_src_malloc_mallocng_malloc.debruijn32
       let OVF := exc_val("stack_overflow", empty)
       let S2C := mallocng_specs.size_to_class_spec_fun(SCT, DBJ)
-      have tsc0 := apply(mp.classes_table[c := c, A := A1, vm := V1, b := B, objs := s.objs], hc, a1u, a1a, hin1)
-      have tdb0 := apply(mp.debruijn_table[c := c, A := A1, vm := V1, b := B, objs := s.objs], hc, a1u, a1a, hin1)
+      have tsc0 := apply(mp.classes_table[c := c, A := A1, vm := V1, b := B, objs := s.objs], hc, a1u, a1a, hin1, hsh1)
+      have tdb0 := apply(mp.debruijn_table[c := c, A := A1, vm := V1, b := B, objs := s.objs], hc, a1u, a1a, hin1, hsh1)
       have tsc: mallocng_specs.table_ok(W1.vm, W1.objs, SCT, 2, mallocng.size_classes) by simp(rewrite(hst, tsc0))
       have tdb: mallocng_specs.table_ok(W1.vm, W1.objs, DBJ, 1, mallocng.debruijn32_tab) by simp(rewrite(hdj, tdb0))
       have thw: abi.thread_ok(W1.vm, W1.fs_base) by simp(th1)
@@ -2960,14 +3031,15 @@ proof
       have pbs: abi.brk_start_ok(W1.vm) by simp(bs1)
       have peo: mallocng_specs.errno_ok(W1.vm, W1.objs, W1.fs_base) by simp(eo1)
       have pea: mallocng_specs.errno_apart(c, H1.A, H1.blocks, W1.vm, W1.fs_base) by simp(ea1, hA1, hB1)
-      step V17 r17, e17 hR17 from rewrite(ss16, e16) with has using conj(hg1, pin, w1W, w1u, w1v, ths1, pnr, thw, ptl, pbs, peo, pea, j48, jgt, afit)
+      step V17 r17, e17 hR17 from rewrite(ss16, e16) with has using conj(hg1, pin, psh, w1W, w1u, w1v, ths1, pnr, thw, ptl, pbs, peo, pea, j48, jgt, afit)
       have v17v ex17 := hR17
-      obtain A2 R2, a2a a2u tk2 lw2 r2b alt2 hin2 unt2 grw2 rgw2 rr2 from ex17
+      obtain A2 R2, a2a a2u tk2 lw2 r2b alt2 hin2 hsh2w unt2 grw2 rgw2 rr2 from ex17
+      have hsh2: mallocng.shown_in(c, A2, s.objs) by simp(hsh2w)
       let W17 := fn_update(s, "vm", V17)
       let EN := mp.errno(s.fs_base)
       have ww17: fn_update(fn_update(s, "vm", V1), "vm", V17) = W17 := fn_update_twice[f := s, k := "vm", a := V1, b := V17]
       have w17W w17u := apply(mp.am_world, hw, hu, v17v)
-      have hin17: mallocng.holds_in(c, A2, V17, B) by simp(hin2, hB1)
+      have hin17: mallocng.holds_m(c, A2, V17, B) by simp(hin2, hB1)
       have unt17: mallocng.untouched(c, A1, B, V1, V17, EN) by simp(unt2, hA1, hB1)
       have grw17: mp.grown(c, A2, A1, B, V1) by simp(grw2, hA1, hB1)
       have tkm: A1.taken = seq_concat(A.taken, seq_one(M)) by taut(tk1, hnz)
@@ -3038,10 +3110,10 @@ proof
         have cal: int_mod(c.ctx, 8) = 0 by arith(hx, cv)
         have kf: mallocng.C_FREE_META = 16 by defs(refl({16}), mallocng.C_FREE_META)
         have la17 := rewrite(kf, apply(mp.free_metas_at[c := c, A := A2, vm := V17, b := B, objs := s.objs], hc, a2u, a2a,
-          (V17.bytes in fn_space(bits(64), bits(8)) by simp(v17v)), hin17, cal))
+          (V17.bytes in fn_space(bits(64), bits(8)) by simp(v17v)), hin17, hsh2, cal))
         have pb: bits_add(64, CTX, 16) = int_add(c.ctx, 16) by defs(arith(hx, cv), bits_add, pow2)
         have laW: mallocng_specs.list_at(W17.vm, W17.objs, bits_add(64, CTX, 16), A2.free_metas) by simp(rewrite(sym(pb), la17), keep(mallocng_specs.list_at))
-        have mj17 := apply(mp.fm_join[c := c, A := A2, vm := V17, b := B, objs := s.objs, T := A.taken, m := M], hc, a2u, a2a, hin17, tl0, tk17, rdy17)
+        have mj17 := apply(mp.fm_join[c := c, A := A2, vm := V17, b := B, objs := s.objs, T := A.taken, m := M], hc, a2u, a2a, hin17, hsh2, tl0, tk17, rdy17)
         have mjW: mallocng_specs.meta_joinable(W17.vm, W17.objs, bits_add(64, CTX, 16), A2.free_metas, M) by simp(rewrite(sym(pb), mj17), keep(mallocng_specs.meta_joinable))
         have thW: abi.thread_ok(W17.vm, W17.fs_base) by simp(th17, keep(abi.thread_ok))
         have fs8a: int_le(int_add(s.fs_base, 8), int_pow(2, 64)) by arith(efl, fsb)
@@ -3073,7 +3145,7 @@ proof
         qed
         have {ba = abs, bu = univ, bnr = nr, bact = act, btk = tk, bhin = hin, bunt = unt, bgrw = grw} :=
           apply(mp.agr_back_g[c := c, A := A, A1 := A2, B := B, s := s, V := V17, V2 := V18, M := M],
-            hc, hat, a2u, a2a, hbt, cal, v17v, v18v, hin17, tk17, nr2, un017, gr017, mfp1, hnz, mj17, fd, rw17)
+            hc, hat, a2u, a2a, hbt, cal, v17v, v18v, hin17, hsh2, tk17, nr2, un017, gr017, mfp1, hnz, mj17, fd, rw17)
         let A3 := mp.back(A2, A.taken, M)
         have bup: mp.upto(A3, A, sc) proof
           fix s2
@@ -3084,10 +3156,10 @@ proof
             int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[0]), int_add(A3.metas[0].last_idx, 1)))) by simp()
         have inner: ex A4. ((A4 in mallocng.Abs && A4 in univ(1)) && mallocng.no_reserved(A4) && mp.upto(A4, A, sc) && A4.taken = A.taken) &&
             (0 = 0 || mallocng_specs.fresh_group(A4, 0, sc, req)) &&
-            mallocng.holds_in(c, A4, V18, B) && mallocng.untouched(c, A, B, s.vm, V18, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
+            mallocng.holds_m(c, A4, V18, B) && mallocng.shown_in(c, A4, s.objs) && mallocng.untouched(c, A, B, s.vm, V18, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
             (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V18, A4.metas[0]), A4.metas[0].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A4.metas[0]), int_add(A4.metas[0].last_idx, 1)))))
-          by ex_intro({A3}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, bunt, bgrw, vac))
+          by ex_intro({A3}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, apply(mp.shown_mstep[c := c, A := A2, F := seq_concat(A2.free_metas, seq_one(M)), n := A2.avail_cnt, T := A.taken, objs := s.objs], hsh2), bunt, bgrw, vac))
         show by disj({2}, ex_intro({V18}, {0}, taut(v18v, (0 in bits(64) by simp()), inner, oe)))
       qed
       // a slot reserved: slot r of j's head g, the only one, room in it
@@ -3106,11 +3178,11 @@ proof
         have vb17: V17.bytes in fn_space(bits(64), bits(8)) by simp(v17v)
         have cal: int_mod(c.ctx, 8) = 0 by arith(hx, cv)
         have ka: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
-        have la0 := apply(mp.active_at[c := c, A := A2, vm := V17, b := B, objs := s.objs, sc := J], hc, a2u, a2a, vb17, hin17, cal, jo, j48)
+        have la0 := apply(mp.active_at[c := c, A := A2, vm := V17, b := B, objs := s.objs, sc := J], hc, a2u, a2a, vb17, hin17, hsh2, cal, jo, j48)
         have phe: int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, J)) = PH by arith(hx, ka, cv)
         have la := rewrite(phe, la0)
         have phb: PH in bits(64) by arith(cv, jo, j48)
-        have {H17 = inv} := expand(hin17, mallocng.holds_in)
+        have {H17 = inv} := expand(hin17, mallocng.holds_m)
         have {cok17 = ctx} := expand(H17, mallocng.holds)
         have {na17 = nactive} := expand(cok17, mallocng.ctx_ok)
         have al2: A2.active in list_type(list_type(omega)) by simp(a2a)
@@ -3130,10 +3202,10 @@ proof
           assume hi hil
           show by defs(arith(hi, hil, hx, cv), mallocng.ctx_free, mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK)
         qed
-        have u12r _ := apply(mp.free_usable[c := c, A := A2, vm := V17, b := B, objs := s.objs, a := int_add(CTX, 12), n := 4], hc, a2u, a2a, hin17, arith(cv), f12)
+        have u12r _ := apply(mp.free_usable[c := c, A := A2, vm := V17, b := B, objs := s.objs, a := int_add(CTX, 12), n := 4], hc, a2u, a2a, hin17, hsh2, arith(cv), f12)
         have md12r: g.mem_defined(W17, CTX, 12, 4, false) by simp(u12r, cnz, cv)
         // (j's slot size: its table entry, times 16, less the in-band header)
-        have tok17 := rewrite(hst, apply(mp.classes_table[c := c, A := A2, vm := V17, b := B, objs := s.objs], hc, a2u, a2a, hin17))
+        have tok17 := rewrite(hst, apply(mp.classes_table[c := c, A := A2, vm := V17, b := B, objs := s.objs], hc, a2u, a2a, hin17, hsh2))
         have tokW: mallocng_specs.table_ok(W17.vm, W17.objs, SCT, 2, mallocng.size_classes) by simp(tok17)
         have sjs := mp(all_elim(ms.sint_small, {J}), jo, arith(j48))
         have td2 tl2 := apply(ms.tab_rd, {W17}, {SCT}, {J}, {mallocng.size_classes}, w17u, sctb, sctnz, jb, (int_le(0, sint(32, J)) by arith(sjs, jo)),
@@ -3174,7 +3246,8 @@ proof
         have hg2 := apply(mp.g_upd, {h}, {A2}, hh, a2a, a2u)
         have hA2: H2.A = A2 by simp()
         have hB2: H2.blocks = B by simp(hbt)
-        have pin2: mallocng.holds_in(c, H2.A, W17.vm, H2.blocks) by simp(hin17, hA2, hB2)
+        have pin2: mallocng.holds_m(c, H2.A, W17.vm, H2.blocks) by simp(hin17, hA2, hB2)
+        have psh2: mallocng.shown_in(c, H2.A, W17.objs) by simp(hsh2, hA2)
         have thW17: abi.thread_ok(W17.vm, W17.fs_base) by simp(th17)
         // (g in use: the head of j's list; its slot r the one reserved, accessible)
         have {hac17 = active, huo17 = used} := expand(H17, mallocng.holds)
@@ -3183,6 +3256,7 @@ proof
         have pro: mallocng.reserved_only(H2.A, G, R2) by simp(ro, hA2)
         have ril rrs _ := expand(ro, mallocng.reserved_only)
         have srw := apply(mp.slot_rw_of[c := c, A := A2, vm := V17, b := B, g := G, i := R2], hc, a2u, a2a, hin17, iuG, r2o, ril)
+        have svs := apply(mp.slot_vis[c := c, A := A2, vm := V17, b := B, objs := s.objs, g := G, i := R2], hc, a2u, a2a, hin17, hsh2, iuG, r2o, ril)
         have psrw: mallocng.slot_rw(W17.vm, H2.A.metas[G], R2) by simp(srw, hA2)
         // (its geometry: class j's slots, under two of them; j at most 24 --
         // a page's -- so a stride at least 16 sc[j])
@@ -3302,7 +3376,7 @@ proof
         have njb64: NJ in bits(64) by arith(jsn, jsl, zj1)
         have cb32: bits_of_int(32, gimple.bytes_at(V17, int_add(CTX, 12), 4)) in bits(32) by simp()
         step V20 r20, e21 hR20 from e20 with mdj, mje, adj, aje, sxn, gv, rr2, hef
-          using conj(gb, r2b, njb64, cb32, hg2, pin2, w17W, w17u, v17v, ths17, thW17, pu, pro, psrw, pfit, pspan, pcb, pfs)
+          using conj(gb, r2b, njb64, cb32, hg2, pin2, psh2, w17W, w17u, v17v, ths17, thW17, pu, pro, psrw, pfit, pspan, pcb, pfs)
         // ---- p: the slot framed at a unit offset, the slot's interior only
         // written
         let P := fst(r20)
@@ -3350,8 +3424,9 @@ proof
           have {r = rw} := apply(mp.pg_same, pe)
           show by taut((int_add(M, i) in mallocng.all_bytes() by defs(sel(taut(ao)), mallocng.all_bytes)), r, o1, rewrite(sym(pe), o2))
         qed
-        have mur muw := apply(mp.rw_usable[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := M, n := 40], mo, macc)
-        have mjm := apply(mp.fm_join[c := c, A := A2, vm := V17, b := B, objs := s.objs, T := A.taken, m := M], hc, a2u, a2a, hin17, tl0, tk17, rdy17)
+        have mur muw := apply(mp.rw_usable_at[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := M, n := 40], mo, macc,
+          apply(mp.taken_vis[c := c, A := A2, vm := V17, b := B, objs := s.objs, T := A.taken, m := M], hc, a2u, a2a, hin17, hsh2, tl0, tk17))
+        have mjm := apply(mp.fm_join[c := c, A := A2, vm := V17, b := B, objs := s.objs, T := A.taken, m := M], hc, a2u, a2a, hin17, hsh2, tl0, tk17, rdy17)
         have _ mbd _ _ _ _ _ := expand(mjm, mallocng_specs.meta_joinable)
         have mtop: int_le(int_add(M, 40), 18446744073709551616) by arith(mbd)
         have mbr := rewrite(sym(rm), mb)
@@ -3373,7 +3448,13 @@ proof
           assume hi hil
           show := mp(all_elim(sacc, {int_add(int_add(P, int_neg(3)), i)}), arith(p3o, hi), arith(pst, hi, hil, ib4), arith(pfi, hi, hil, jsn, zj1))
         qed
-        have u3r u3w := apply(mp.rw_usable[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := int_add(P, int_neg(3)), n := 1], p3o, a3)
+        have n3: all i. i in omega -> int_lt(i, 1) -> !(int_add(int_add(P, int_neg(3)), i) in s.objs.hidden) proof
+          fix i
+          assume hi hil
+          show := mp(all_elim(svs, {int_add(int_add(P, int_neg(3)), i)}), arith(p3o, hi),
+            conj((int_le(SS, int_add(int_add(P, int_neg(3)), i)) by arith(pst, hi, hil, ib4)), (int_lt(int_add(int_add(P, int_neg(3)), i), mallocng.slot_end(VG, R2)) by arith(pfi, hi, hil, jsn, zj1))))
+        qed
+        have u3r u3w := apply(mp.rw_usable_at[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := int_add(P, int_neg(3)), n := 1], p3o, a3, n3)
         // (the memory after the maplen's store: V21)
         let BF0 := int_add(bits_and(128, gimple.b128(gimple.bytes_at(V20, int_add(fst(rr), 32), 8)), bits_not(128, gimple.b128(int_mul(int_pow(2, 12), int_sub(int_pow(2, 52), 1))))),
           int_mul(int_mod(0, int_pow(2, 52)), int_pow(2, 12)))
@@ -3440,7 +3521,7 @@ proof
         have chk1 chk2 := apply(mp.chk_fp[c := c, A := A2, vm := V17, b := B, g := G, j := int_add(R2, 1)], hc, a2u, a2a, (int_add(R2, 1) in omega by arith(r2o)), hin17, iuG,
           arith(ril, gns, gl), nrs1)
         have seh := rewrite(ese, chk1)
-        have {hrw17 = rw} := expand(hin17, mallocng.holds_in)
+        have {hrw17 = rw} := expand(hin17, mallocng.holds_m)
         have sacc2: all a. a in omega -> int_le(SS, a) -> int_le(a, mallocng.slot_end(VG, R2)) -> a in mallocng.all_bytes() &&
             mallocng.m_rw(mallocng.mview(V20, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V20, mallocng.all_bytes()), a)).kind = 2) proof
           fix a
@@ -3463,6 +3544,21 @@ proof
             have pe := mp(all_elim(pg20, {a}), hao)
             have {r = rw} := apply(mp.pg_same, pe)
             show by taut((a in mallocng.all_bytes() by defs(sel(taut(hao)), mallocng.all_bytes)), r, o1, rewrite(sym(pe), o2))
+          qed
+          show by taut(c1, c2, (int_lt(a, mallocng.slot_end(VG, R2)) || a = mallocng.slot_end(VG, R2) by arith(h2, hao, seo)))
+        qed
+        // (... none of the ABI's: the slot's, its end byte held)
+        have svis2: all a. a in omega -> int_le(SS, a) -> int_le(a, mallocng.slot_end(VG, R2)) -> !(a in s.objs.hidden) proof
+          fix a
+          assume hao h1 h2
+          have c1: int_lt(a, mallocng.slot_end(VG, R2)) -> !(a in s.objs.hidden) proof
+            assume l
+            show := mp(all_elim(svs, {a}), hao, conj(h1, l))
+          qed
+          have c2: a = mallocng.slot_end(VG, R2) -> !(a in s.objs.hidden) proof
+            assume e
+            have ha := rewrite(sym(e), seh)
+            show := mp(all_elim(apply(mp.held_vis[c := c, A := A2, objs := s.objs, b := B], hsh2), {a}), ha)
           qed
           show by taut(c1, c2, (int_lt(a, mallocng.slot_end(VG, R2)) || a = mallocng.slot_end(VG, R2) by arith(h2, hao, seo)))
         qed
@@ -3493,7 +3589,12 @@ proof
             assume hi hil
             show := mp(all_elim(sacc2, {int_add(LA(k), i)}), arith(lo, hi), arith(l1, hi), arith(l2, hi, hil))
           qed
-          have _ uw := apply(mp.rw_usable[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := LA(k), n := 1], lo, ak)
+          have nk: all i. i in omega -> int_lt(i, 1) -> !(int_add(LA(k), i) in s.objs.hidden) proof
+            fix i
+            assume hi hil
+            show := mp(all_elim(svis2, {int_add(LA(k), i)}), arith(lo, hi), arith(l1, hi), arith(l2, hi, hil))
+          qed
+          have _ uw := apply(mp.rw_usable_at[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := LA(k), n := 1], lo, ak, nk)
           have _ rw0 _ := mp(all_elim(sacc2, {LA(k)}), lo, l1, l2)
           have lt := apply(mp.rw_top, lo, rw0)
           have md: g.mem_defined(W20, LA(k), 0, 1, true) by simp(uw, (int_add(LA(k), 0) = LA(k) by arith(lo)), (!(LA(k) = 0) by arith(l1, sso, ib4, pst)),
@@ -3654,7 +3755,7 @@ proof
         // the record's word (as for a mapped group)
         let WE := WZ(z)
         have fuu := apply(mp.free_off[c := c, a := UA, n := 8], (c.ctx in omega by arith(hx, cv)), arith(cv, hs), arith(hx, cv, hs), arith(hx, cv, hs, hsl))
-        have uur uuw := apply(mp.free_usable[c := c, A := A2, vm := V17, b := B, objs := s.objs, a := UA, n := 8], hc, a2u, a2a, hin17, arith(cv, hs), fuu)
+        have uur uuw := apply(mp.free_usable[c := c, A := A2, vm := V17, b := B, objs := s.objs, a := UA, n := 8], hc, a2u, a2a, hin17, hsh2, arith(cv, hs), fuu)
         have uur2 := apply(mp.usable_bytes[v := V17, v2 := V20, objs := s.objs, a := UA, n := 8, w := false], fv1, uur)
         have uuw2 := apply(mp.usable_bytes[v := V17, v2 := V20, objs := s.objs, a := UA, n := 8, w := true], fv1, uuw)
         have mdur := apply(mp.md_bytes[s := s, V := V20, z := z, p := UA, off := 0, k := 8, w := false],
@@ -3694,7 +3795,12 @@ proof
           assume hi hil
           show := mp(all_elim(sacc2, {int_add(P, i)}), arith(po, hi), arith(pst, ib4, hi), arith(pfi, hi, hil, zj1))
         qed
-        have pur puw := apply(mp.rw_usable[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := P, n := 9], po, pacc)
+        have np: all i. i in omega -> int_lt(i, 9) -> !(int_add(P, i) in s.objs.hidden) proof
+          fix i
+          assume hi hil
+          show := mp(all_elim(svis2, {int_add(P, i)}), arith(po, hi), arith(pst, ib4, hi), arith(pfi, hi, hil, zj1))
+        qed
+        have pur puw := apply(mp.rw_usable_at[vm := V20, F := mallocng.all_bytes(), objs := s.objs, a := P, n := 9], po, pacc, np)
         have _ p8rw _ := mp(all_elim(pacc, {8}), simp(), simp())
         have p8t := apply(mp.rw_top, arith(po), p8rw)
         have pnz: !(P = 0) by arith(pst, all_elim(gss, {R2}), gm, mr)
@@ -4166,7 +4272,7 @@ proof
             (int_lt(seq_len(A.taken), seq_len(A2.taken)) by arith(rewrite(sym(tk17), (seq_len(seq_concat(A.taken, seq_one(M))) = int_add(seq_len(A.taken), 1) by arith(tl0))), tl0)),
             rewrite(sym(tmx), x1), (int_lt(x, int_add(A2.taken[seq_len(A.taken)], mallocng.META_SIZE)) by defs(arith(tmx, x2), mallocng.META_SIZE)))), mallocng.in_taken)
         qed
-        have {hm17 = mapped} := expand(hin17, mallocng.holds_in)
+        have {hm17 = mapped} := expand(hin17, mallocng.holds_m)
         // (the bytes held before, but the slot's end: as before)
         have vby: all a. a in omega -> a in mallocng.held(c, A2, B) -> !(a = mallocng.slot_end(VG, R2)) -> VF.bytes[bits_of_int(64, a)] = V17.bytes[bits_of_int(64, a)] proof
           fix a
@@ -4547,10 +4653,10 @@ proof
         qed
         have inner: ex A4. ((A4 in mallocng.Abs && A4 in univ(1)) && mallocng.no_reserved(A4) && mp.upto(A4, A, sc) && A4.taken = A.taken) &&
             (fst(rr) = 0 || mallocng_specs.fresh_group(A4, fst(rr), sc, req)) &&
-            mallocng.holds_in(c, A4, VF, B) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
+            mallocng.holds_m(c, A4, VF, B) && mallocng.shown_in(c, A4, s.objs) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
             (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(VF, A4.metas[fst(rr)]), A4.metas[fst(rr)].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A4.metas[fst(rr)]), int_add(A4.metas[fst(rr)].last_idx, 1)))))
-          by ex_intro({A3}, taut(au3, uu3, nr3, ac3, tk3, fgr, hinF, untF, grF, actF))
+          by ex_intro({A3}, taut(au3, uu3, nr3, ac3, tk3, fgr, hinF, apply(mp.shown_ngn[c := c, A := A2, vm := V17, V1 := VF, b := B, g := G, i := R2, k := KK, T := A.taken, m := M, V := VR, n := C2, objs := s.objs], GP, hsh2), untF, grF, actF))
         show by disj({2}, ex_intro({VF}, {fst(rr)}, taut(vfv, mbr, inner, of)))
       qed
       show by taut(alt2, nfail, nok)
@@ -4592,8 +4698,10 @@ proof
   have aS: S.A = A by simp(sd, hd)
   have vS: S.vm = V0 by simp(sd, hd)
   have bS: S.blocks = B by simp(sd, hd)
+  have oS: S.objs = s.objs by simp(sd, hd)
   have fS: S.fs_base = s.fs_base by simp(sd, hd)
-  have hin: mallocng.holds_in(c, A, V0, B) by simp(hpre, sd, hd)
+  have hin0: mallocng.holds_in(c, A, V0, s.objs, B) by simp(hpre, sd, hd)
+  have {hin = mem, hsh = shown} := hin0
   have hnr: mallocng.no_reserved(A) by simp(hpre, sd, hd)
   have hth: abi.thread_ok(V0, s.fs_base) by simp(hpre, sd, hd)
   have htl: mallocng_specs.tls_apart(c, A, B, s.fs_base) by simp(hpre, sd, hd)
@@ -4604,12 +4712,13 @@ proof
   have hfit: int_le(int_add(req, mallocng.IB), int_mul(mallocng.UNIT, mallocng.size_classes[sc])) by simp(hpre, sd, hd)
   have run := apply(mp.agr_run[c := c, sc := sc, req := req, galm := galm, gib := gib, gab := gab, gss := gss, gmm := gmm, gfm := gfm, gs2c := gs2c, gas := gas, gef := gef,
     s := s, h := h, o := o], hc, hx, hst, hdj, hscn, hmcn, hsb, hsl, hrb, hfit, halm, hib, hab, hsq, hmm, hfm, hs2c,
-    apply(mp.as_call_ge_of[c := c, f := gas, k := int_add(sc, 1)], has), hef, hw, hh, hin, hnr, hth, htl, hbs, heo, hea, hr)
+    apply(mp.as_call_ge_of[c := c, f := gas, k := int_add(sc, 1)], has), hef, hw, hh, hin, hsh, hnr, hth, htl, hbs, heo, hea, hr)
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
     obtain V2 g, hv2 hgb ex2 ho from e
-    obtain A2, ha2 hu2 hnr2 hup htk hfg hin2 hunt hgr hact from ex2
+    obtain A2, ha2 hu2 hnr2 hup htk hfg hin2m hsh2 hunt hgr hact from ex2
+    have hin2: mallocng.holds_in(c, A2, V2, s.objs, B) by defs(taut(hin2m, hsh2), mallocng.holds_in)
     let S1 := fn_update(fn_update(S, "A", A2), "vm", V2)
     let H2 := fn_update(h, "A", A2)
     let s1 := fn_update(s, "vm", V2)
@@ -4630,7 +4739,7 @@ proof
     have e1 := mp(fn_update_union_r[a := s, b := h, k := "A", v := A2], na)
     have e2 := mp(fn_update_union_l[a := s, b := H2, k := "vm", v := V2], nv)
     have eS: union2(s1, H2) = S1 := sym(trans(subst({y. S1 = fn_update(y, "vm", V2)}, e1, refl({S1})), e2))
-    show by disj({2}, ex_intro({s1}, {g}, {H2}, spec_ret({A2}, {g}, {V2}, hg2, ho, ha2, hnr2, hup, htk, hgb, hfg, aS, vS, bS, fS, hv2, hin2, hunt, hgr, hact, eS)))
+    show by disj({2}, ex_intro({s1}, {g}, {H2}, spec_ret({A2}, {g}, {V2}, hg2, ho, ha2, hnr2, hup, htk, hgb, hfg, aS, vS, bS, oS, fS, hv2, hin2, hunt, hgr, hact, eS)))
   qed
   show by taut(run, k)
 qed
@@ -4677,7 +4786,7 @@ proof
   fix c k galm gib gab gss gmm gfm gs2c gas gef
   assume hc hx hst hdj hscn hmcn ko halm hib hab hsq hmm hfm hs2c hask hef
   fix sc req t h regs o2
-  assume hsb hrb hsl hge hfit hw hh hin hnr hth htl hbs heo hea hro hr
+  assume hsb hrb hsl hge hfit hw hh hin hsh hnr hth htl hbs heo hea hro hr
   have has := apply(mp.as_call_ge_mono[c := c, f := gas, k := int_add(k, 1), k2 := int_add(sc, 1)], (int_add(k, 1) in omega by arith(ko)),
     (int_le(int_add(k, 1), int_add(sc, 1)) by arith(ko, hge, hsb)), hask)
   have rl rn r0 r1 := apply(gc.regs_32_64, hsb, hrb, hro)
@@ -4687,7 +4796,7 @@ proof
   have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
   have bp: bits_of_int(64, regs[1]) = req by defs(simp(r1, hrb), bits_of_int, pow2)
   step o3 V2 g, e hs1 from hr with o2l, r0, bp, mp.agr_run using ra, hc, hx, hst, hdj, hscn, hmcn, hsb, hsl, hrb, hfit, halm, hib, hab, hsq, hmm, hfm, hs2c, has, hef,
-    hw, hh, hin, hnr, hth, htl, hbs, heo, hea
+    hw, hh, hin, hsh, hnr, hth, htl, hbs, heo, hea
   have hv2 hgb ex2 := hs1
   step o4 y, e2 from e with g.result64_inv using hgb
   show by disj({2}, ex_intro({V2}, {pair(g, y)}, simp(hv2, ex2, e2)))

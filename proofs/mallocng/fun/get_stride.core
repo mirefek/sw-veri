@@ -4,17 +4,18 @@
 //  get_stride's conditions: a group in use meets them, its stride the
 //  group's (`mallocng_specs.stride_w`: the meta word's fields)
 theorem mp.gs_pre(c, A, vm, b, objs, g): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> g in bits(64) ->
-  mallocng.holds_in(c, A, vm, b) -> mallocng.is_used(A, g) ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.shown_in(c, A, objs) -> mallocng.is_used(A, g) ->
   mallocng_specs.get_stride_pre(vm, objs, c.sct, g) &&
   mallocng_specs.stride_w(vm, g) = mallocng.stride(A.metas[g]) &&
   int_mod(int_div(mallocng_specs.mword(vm, g), 64), 64) = A.metas[g].sizeclass
 proof
-  assume hc hu ha hg hin hus
+  assume hc hu ha hg hin hsh hus
+  have VS := apply(mp.held_vis[c := c, A := A, objs := objs, b := b], hsh)
   let V := A.metas[g]
   have go: g in omega by simp(hg)
   // the meta's word: its fields packed
   have top mw := apply(mp.meta_word, hc, hu, ha, hin, hus)
-  have {H = inv} := expand(hin, mallocng.holds_in)
+  have {H = inv} := expand(hin, mallocng.holds_m)
   have {uo = used} := expand(H, mallocng.holds)
   have gok := apply(mp.used_group, uo, hus)
   have {mim, sc = cls, big1 = big} := expand(gok, mallocng.group_ok)
@@ -44,8 +45,8 @@ proof
       (int_le(g, int_add(int_add(g, 32), j)) by arith(go, hj)), (int_lt(int_add(int_add(g, 32), j), int_add(g, 40)) by arith(go, hj, hjl)))
     show by taut(r1, expand(r2, mallocng.m_rw), r3)
   qed
-  have us := apply(mp.view_usable[vm := vm, fp := FP, objs := objs, a := int_add(g, 32), n := 8], (int_add(g, 32) in omega by arith(go)), bj)
-  have tb := apply(mp.classes_table[c := c, A := A, vm := vm, b := b, objs := objs], hc, hu, ha, hin)
+  have us := apply(mp.view_usable[vm := vm, fp := FP, objs := objs, a := int_add(g, 32), n := 8], (int_add(g, 32) in omega by arith(go)), bj, VS)
+  have tb := apply(mp.classes_table[c := c, A := A, vm := vm, b := b, objs := objs], hc, hu, ha, hin, hsh)
   have gpre: mallocng_specs.get_stride_pre(vm, objs, c.sct, g)
     by defs(simp(top, us, tb, msi, w64, sc, big, g24, go), mallocng_specs.get_stride_pre)
   show by taut(gpre, sw, w64)
@@ -58,10 +59,10 @@ qed
 // get_stride's contract, the ghost part h read: for g a group in use, the
 // code returns its stride, the world unchanged
 theorem mp.gst_run(c, g, s, h, o): c in mallocng.Cfg -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
-  s in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.is_used(h.A, g) ->
+  s in abi.World -> h in mp.G -> mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.is_used(h.A, g) ->
   runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> o = ok(s, bits_of_int(64, mallocng.stride(h.A.metas[g])))
 proof
-  assume hc hsct hg hs hh hin hus hr
+  assume hc hsct hg hs hh hin hsh hus hr
   have rp: all s o. runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) -> pair(s, o) in univ(1) proof
     fix s o
     assume hr
@@ -71,7 +72,7 @@ proof
   // the meta word read packs the group's fields: its conditions met, its
   // stride the group's (`mp.gs_pre`)
   have gpre sw _ := apply(mp.gs_pre[c := c, A := h.A, vm := s.vm, b := h.blocks, objs := s.objs, g := g],
-    hc, (h.A in univ(1) by simp(hu)), hat, hg, hin, hus)
+    hc, (h.A in univ(1) by simp(hu)), hat, hg, hin, hsh, hus)
   // the code's run: the stride returned
   have su: s in univ(1) by simp(mp(all_elim(rp, {s}, {o}), hr))
   have oe := apply(ms.gs_run, {g}, {s}, {o}, hg, hs, su, rewrite(hsct, gpre), hr)
@@ -80,12 +81,12 @@ qed
 
 // get_stride's contract at a call (its C function value)
 theorem mp.gst_q(c, regs, s, h, g, o2): c in mallocng.Cfg -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
-  s in abi.World -> h in mp.G -> mallocng.holds_in(c, h.A, s.vm, h.blocks) -> mallocng.is_used(h.A, g) ->
+  s in abi.World -> h in mp.G -> mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.is_used(h.A, g) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, g))) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(64, fst(r)) = bits_of_int(64, mallocng.stride(h.A.metas[g])) && fst(r) in bits(64))
 proof
-  assume hc hsct hg hs hh hin hus hro h2
+  assume hc hsct hg hs hh hin hsh hus hro h2
   let SV := bits_of_int(64, mallocng.stride(h.A.metas[g]))
   have rl rn r0 := apply(gc.regs1, hg, hro)
   have lo: seq_len(regs) in omega by simp(rl)
@@ -97,7 +98,7 @@ proof
       (ex vm. vm in x86_64_linux.Vm && o = exc(fn_update(s, "vm", vm), exc_val("stack_overflow", empty))) || o = ok(s, SV) proof
     fix o
     assume hr
-    have e := apply(mp.gst_run[c := c, g := g, s := s, h := h, o := o], hc, hsct, hg, hs, hh, hin, hus, rewrite(bp, hr))
+    have e := apply(mp.gst_run[c := c, g := g, s := s, h := h, o := o], hc, hsct, hg, hs, hh, hin, hsh, hus, rewrite(bp, hr))
     show by taut(e)
   qed
   have sb: SV in bits(64) by defs(simp(), bits_of_int, pow2)
@@ -124,16 +125,17 @@ proof
     show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_stride))
   qed
   have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.get_stride(g), s, o) ->
-      (mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).blocks) && mallocng.is_used(union2(s, h).A, g)) ->
+      (mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).objs, union2(s, h).blocks) && mallocng.is_used(union2(s, h).A, g)) ->
       (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
       (ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, mallocng.stride(union2(s, h).A.metas[g]))))) proof
     fix s h o
     assume hs hh hr hpre
     have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
     have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
-    have hin: mallocng.holds_in(c, h.A, s.vm, h.blocks) by simp(hpre, sd, hd)
+    have hin0: mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) by simp(hpre, sd, hd)
+    have {hin = mem, hsh = shown} := hin0
     have hus: mallocng.is_used(h.A, g) by simp(hpre, sd, hd)
-    have oe := apply(mp.gst_run[c := c, g := g, s := s, h := h, o := o], hc, hsct, hg, hs, hh, hin, hus, hr)
+    have oe := apply(mp.gst_run[c := c, g := g, s := s, h := h, o := o], hc, hsct, hg, hs, hh, hin, hsh, hus, hr)
     have ra: union2(s, h).A.metas[g] = h.A.metas[g] by simp(sd, hd)
     have fin: ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, mallocng.stride(union2(s, h).A.metas[g]))))
       by ex_intro({s}, {bits_of_int(64, mallocng.stride(h.A.metas[g]))}, simp(oe, ra))

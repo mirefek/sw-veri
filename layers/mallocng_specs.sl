@@ -25,7 +25,7 @@ fn wr64(vm: Vm, a: Addr, v: bits[64]) -> Vm = vm with { bytes: store_le(vm.bytes
 
 // the word at p + off: GIMPLE may read and write it (p not null, in the
 // address space, usable for reading and writing)
-pred word_ok(vm: Vm, objs: Set[nat], p: Addr, off: nat) =
+pred word_ok(vm: Vm, objs: Objs, p: Addr, off: nat) =
   nonnull: p != 0 && bound: uint(p) + off + 8 <= 2^64 &&
   read: usable(vm, objs, uint(p) + off, 8, false) && write: usable(vm, objs, uint(p) + off, 8, true)
 
@@ -44,7 +44,7 @@ fn mnext(vm: Vm, m: Addr) -> bits[64] = rd64(vm, m + 8)
 // each other (if it has any), the head moved past it, its links cleared.
 // The words involved: usable, 8-aligned, and apart (the head pointer, m's
 // links, and its neighbours' links to it).
-pred dequeue_pre(vm: Vm, objs: Set[nat], phead: Addr, m: Addr) =
+pred dequeue_pre(vm: Vm, objs: Objs, phead: Addr, m: Addr) =
   word_ok(vm, objs, phead, 0) && word_ok(vm, objs, m, 0) && word_ok(vm, objs, m, 8) &&
   al8(phead) && al8(m) && uint(phead) != uint(m) && uint(phead) != uint(m) + 8 &&
   (mnext(vm, m) != m ->
@@ -68,7 +68,7 @@ fn dequeue_vm(vm: Vm, phead: Addr, m: Addr) -> Vm = wr64(wr64(dq_head(dq_links(v
 // joins the list *phead: before its head H (at the circular list's end,
 // after H's prev P), or as the list's only element. The words involved:
 // usable, 8-aligned, and the ones written apart from those read after.
-pred queue_pre(vm: Vm, objs: Set[nat], phead: Addr, m: Addr) =
+pred queue_pre(vm: Vm, objs: Objs, phead: Addr, m: Addr) =
   word_ok(vm, objs, phead, 0) && word_ok(vm, objs, m, 0) && word_ok(vm, objs, m, 8) && al8(phead) && al8(m) &&
   mnext(vm, m) = 0 && mprev(vm, m) = 0 &&
   (rd64(vm, phead) != 0 ->
@@ -105,7 +105,7 @@ fn wr32(vm: Vm, a: Addr, v: nat) -> Vm = vm with { bytes: store_le(vm.bytes, a, 
 // signed), p past its header; r below 2^31 (an int).
 fn reserved(p: Addr, end: Addr, n: bits[64]) -> int = uint(end) - uint(p) - uint(n)
 
-pred set_size_pre(vm: Vm, objs: Set[nat], p: Addr, end: Addr, n: bits[64]) =
+pred set_size_pre(vm: Vm, objs: Objs, p: Addr, end: Addr, n: bits[64]) =
   4 <= uint(p) && uint(p) + uint(n) <= uint(end) && uint(end) < 2^63 && reserved(p, end, n) < 2^31 &&
   usable(vm, objs, uint(p) - 3, 1, false) && usable(vm, objs, uint(p) - 3, 1, true) &&
   (reserved(p, end, n) > 0 -> usable(vm, objs, uint(p) + uint(n), 1, true)) &&
@@ -147,7 +147,7 @@ fn errno_location_spec_fun() -> CFun2[World] = (args: Args) => {
 // size_overflows(n): a size beyond the allocator's (n > 2^63 - 4098):
 // errno ENOMEM (12), 1; else 0. Errno's cell writable then, the thread
 // pointer sound (the call to ___errno_location).
-pred size_overflows_pre(vm: Vm, objs: Set[nat], fs: Addr, n: bits[64]) =
+pred size_overflows_pre(vm: Vm, objs: Objs, fs: Addr, n: bits[64]) =
   uint(n) > 0x7fffffffffffeffe -> uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
 
 proc[World] size_overflows_spec(n: bits[64]) -> bits[32] {
@@ -186,7 +186,7 @@ fn size_overflows_spec_fun() -> CFun2[World] = (args: Args) => {
 proc[World] syscall1_spec(n: bits[64], new: Addr) -> bits[64] {
   require uint(n) = 12 && (pages_for(uint(new)) < pages_for(uint(vm.brk)) -> new >= vm.brk_start ->
     pages_for(uint(vm.brk)) <= TASK_SIZE / PAGE &&
-    sys_pages_ok(vm, pages_for(uint(new)), pages_for(uint(vm.brk)) - pages_for(uint(new))) &&
+    sys_pages_ok(vm, objs, pages_for(uint(new)), pages_for(uint(vm.brk)) - pages_for(uint(new))) &&
     (all q: nat. pages_for(uint(new)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap))
   either { overflow() } or {
     let before = vm
@@ -196,7 +196,7 @@ proc[World] syscall1_spec(n: bits[64], new: Addr) -> bits[64] {
     if new_end > old_end {
       if !free_range(before, old_end, new_end - old_end) || !off_stack_space(before, old_end, new_end - old_end) { return before.brk }
       either { return before.brk } or {
-        havoc vm where fresh_pages(before, vm, old_end, new_end - old_end, Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new
+        havoc vm where fresh_pages(before, vm, objs, old_end, new_end - old_end, Page { prot: Prot { r: true, w: true, x: false }, kind: heap }) && vm.brk = new else { return before.brk }
         return new
       }
     } else {
@@ -218,7 +218,7 @@ fn syscall1_spec_fun() -> CFun2[World] = (args: Args) => {
 // addr's for len reprotected up to the first unmapped one, 0 or -ENOMEM
 // (addr not page-aligned: -EINVAL). The pages the kernel's to reprotect.
 proc[World] syscall3_spec(n: bits[64], addr: Addr, len: bits[64], prot: bits[64]) -> bits[64] {
-  require uint(n) = 10 && sys_pages_ok(vm, page_of(addr), pages_for(uint(len)))
+  require uint(n) = 10 && sys_pages_ok(vm, objs, page_of(addr), pages_for(uint(len)))
   either { overflow() } or { return os_mprotect(addr, len, prot) }
 }
 
@@ -230,7 +230,7 @@ fn syscall3_spec_fun() -> CFun2[World] = (args: Args) => {
 }
 
 // errno's cell writable, the thread pointer sound (a failing call sets it)
-pred errno_ok(vm: Vm, objs: Set[nat], fs: Addr) =
+pred errno_ok(vm: Vm, objs: Objs, fs: Addr) =
   uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
 
 // __syscall_ret(r): a system call's raw result as the C function's -- an
@@ -278,7 +278,7 @@ pred tls_off(fs: Addr, p: nat, n: nat) =
 proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32], off: bits[64]) -> bits[64] {
   require (uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS || uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED) && uint(prot) < 8 && off = 0 &&
     errno_ok(vm, objs, fs_base) &&
-    (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { sys_pages_ok(vm, page_of(addr), pages_for(uint(len))) && tls_off(fs_base, page_of(addr), pages_for(uint(len))) }
+    (if uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED { sys_pages_ok(vm, objs, page_of(addr), pages_for(uint(len))) && tls_off(fs_base, page_of(addr), pages_for(uint(len))) }
      else { uint(addr) = 0 })
   either { overflow() } or {
     let before = vm
@@ -286,7 +286,10 @@ proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32]
       either { } or {
         let n = pages_for(uint(len))
         let p = any p: nat where mmap_place(before, addr, len, flags, p)
-        havoc vm where fresh_pages(before, vm, p, n, Page { prot: prot_of(bits[64](uint(prot))), kind: anon }) && vm.brk = before.brk
+        havoc vm where fresh_pages(before, vm, objs, p, n, Page { prot: prot_of(bits[64](uint(prot))), kind: anon }) && vm.brk = before.brk else {
+          vm := wr32(vm, errno_at(fs_base), ENOMEM)
+          return bits[64](2^64 - 1)
+        }
         return bits[64](p * PAGE)
       }
     }
@@ -305,7 +308,7 @@ fn mmap_spec_fun() -> CFun2[World] = (args: Args) => {
 // __syscall6(9, ..): the kernel's mmap, as malloc makes it (its
 // requirements GIMPLE's) -- its seventh argument on the stack
 proc[World] syscall6_spec(n: bits[64], a1: Addr, a2: bits[64], a3: bits[64], a4: bits[64], a5: bits[64], a6: bits[64]) -> bits[64] {
-  require uint(n) = 9 && (if a4[4] { sys_pages_ok(vm, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 })
+  require uint(n) = 9 && (if a4[4] { sys_pages_ok(vm, objs, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 })
   either { overflow() } or { return os_mmap(a1, a2, a3, a4, a5, a6) }
 }
 fn syscall6_spec_fun() -> CFunS[World] = (args: ArgsS) => {
@@ -333,7 +336,7 @@ fn vm_wait_spec_fun() -> CFun2[World] = (args: Args) => {
 // sum, as musl forms it.)
 proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32] {
   require uint(prot) < 8 && uint(addr) + uint(len) + PAGE <= 2^64 && uint(len) + PAGE <= 2^63 && errno_ok(vm, objs, fs_base) &&
-    sys_pages_ok(vm, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE) &&
+    sys_pages_ok(vm, objs, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE) &&
     tls_off(fs_base, uint(addr) / PAGE, (uint(addr) + uint(len) + PAGE - 1) / PAGE - uint(addr) / PAGE)
   either { overflow() } or {
     let before = vm
@@ -376,7 +379,7 @@ fn memcpy_spec_fun() -> CFun2[World] = (args: Args) => {
 
 // libc's auxiliary vector readable (`libc.auxv`, at libc + 8): its pairs up
 // to AT_NULL, the 8 bytes past AT_RANDOM's address
-pred auxv_ok(vm: Vm, objs: Set[nat], libc: Addr) =
+pred auxv_ok(vm: Vm, objs: Objs, libc: Addr) =
   usable(vm, objs, uint(libc) + 8, 8, false) &&
   (ex auxv: List[(nat, nat)]. len(auxv) >= 1 &&
      (all k: nat. k < len(auxv) ->
@@ -403,7 +406,7 @@ fn random_secret_spec_fun(libc: Addr) -> CFun2[World] = (args: Args) => {
 // value returned (a locked compare-and-swap: one thread, so one step). The
 // word usable for reading and writing: the instruction writes it either
 // way (its old value back when it is not t).
-pred a_cas_pre(vm: Vm, objs: Set[nat], p: Addr) =
+pred a_cas_pre(vm: Vm, objs: Objs, p: Addr) =
   p != 0 && uint(p) + 4 <= 2^64 && usable(vm, objs, uint(p), 4, false) && usable(vm, objs, uint(p), 4, true)
 
 proc[World] a_cas_spec(p: bits[64], t: bits[32], s: bits[32]) -> bits[32] {
@@ -427,7 +430,7 @@ fn a_cas_spec_fun() -> CFun2[World] = (args: Args) => {
 //  world to be the program's (callers show it from the loaded program)
 
 // n-byte entries, little-endian, at t: the list's
-pred table_ok(vm: Vm, objs: Set[nat], t: Addr, n: nat, tab: List[nat]) =
+pred table_ok(vm: Vm, objs: Objs, t: Addr, n: nat, tab: List[nat]) =
   all i: nat. i < len(tab) ->
     usable(vm, objs, uint(t) + n * i, n, false) && bytes_at(vm, bits[64](uint(t) + n * i), n) = tab[i]
 
@@ -501,7 +504,7 @@ pred mapped_single(vm: Vm, g: Addr) = mword(vm, g) % 32 = 0 && mword(vm, g) / 40
 // meta at g): its mapping less the group's header (a unit) for a group of
 // one slot mapped on its own, else a unit times its size class's entry
 // (the class one of the 48); sct: the class table's address
-pred get_stride_pre(vm: Vm, objs: Set[nat], sct: Addr, g: Addr) =
+pred get_stride_pre(vm: Vm, objs: Objs, sct: Addr, g: Addr) =
   g != 0 && uint(g) + 40 <= 2^64 && usable(vm, objs, uint(g) + 32, 8, false) &&
   (!mapped_single(vm, g) -> mword(vm, g) / 64 % 64 < 48 && table_ok(vm, objs, sct, 2, size_classes))
 
@@ -527,7 +530,7 @@ fn eslot(vm: Vm, g: Addr, idx: bits[32]) -> nat = uint(rd64(vm, g + 16)) + UNIT 
 // usable, apart from the meta's mem word (read again after the writes) and
 // the thread pointer's word (sound for the calls), and past null; its check
 // byte is 0 (else the code traps).
-pred enframe_pre(vm: Vm, objs: Set[nat], fs: Addr, sct: Addr, g: Addr, idx: bits[32], n: bits[64]) =
+pred enframe_pre(vm: Vm, objs: Objs, fs: Addr, sct: Addr, g: Addr, idx: bits[32], n: bits[64]) =
   get_stride_pre(vm, objs, sct, g) && usable(vm, objs, uint(g) + 16, 8, false) &&
   uint(idx) < 2^31 && uint(n) + IB <= stride_w(vm, g) && stride_w(vm, g) < 2^31 &&
   IB < eslot(vm, g, idx) && eslot(vm, g, idx) + stride_w(vm, g) < 2^63 &&
@@ -573,7 +576,7 @@ fn gm_idx(vm: Vm, p: Addr) -> nat = bytes_at(vm, p - 3, 1) % 32
 // area's check) the context's secret (its first word); the offset within
 // slot idx for a size class (else the class 63), within the mapping when
 // there is one (maplen); the thread pointer sound for the call.
-pred get_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, sct: Addr, p: Addr) =
+pred get_meta_pre(vm: Vm, objs: Objs, fs: Addr, ctx: Addr, sct: Addr, p: Addr) =
   uint(p) % 16 = 0 && 16 <= uint(p) && usable(vm, objs, uint(p) - 4, 4, false) &&
   (bytes_at(vm, p - 4, 1) != 0 -> usable(vm, objs, uint(p) - 8, 4, false) &&
      bytes_at(vm, p - 2, 2) = 0 && 65535 < bytes_at(vm, p - 8, 4) && bytes_at(vm, p - 8, 4) < 2^27) &&
@@ -605,7 +608,7 @@ pred get_meta_pre(vm: Vm, objs: Set[nat], fs: Addr, ctx: Addr, sct: Addr, p: Add
 fn ag_act(vm: Vm, m: Addr) -> bits[32] = bits[32](2 * 2^(bytes_at(vm, rd64(vm, m + 16) + 8, 1) % 32) - 1)
 fn ag_freed(vm: Vm, m: Addr) -> bits[32] = bits[32](bytes_at(vm, m + 28, 4))
 
-pred activate_group_pre(vm: Vm, objs: Set[nat], fs: Addr, m: Addr) =
+pred activate_group_pre(vm: Vm, objs: Objs, fs: Addr, m: Addr) =
   m != 0 && uint(m) + 32 <= 2^64 && usable(vm, objs, uint(m) + 16, 16, false) && usable(vm, objs, uint(m) + 24, 8, true) &&
   bytes_at(vm, m + 24, 4) = 0 &&
   rd64(vm, m + 16) != 0 && uint(rd64(vm, m + 16)) + 9 <= 2^64 && usable(vm, objs, uint(rd64(vm, m + 16)) + 8, 1, false) &&
@@ -633,7 +636,7 @@ pred bouncing_class(sc: bits[32]) = 7 <= uint(sc) && uint(sc) <= 38
 fn bounce_at(ctx: Addr, sc: bits[32]) -> Addr = bits[64](uint(ctx) + 880 + uint(sc) - 7)
 
 // (its byte usable: for reading, and for writing if w)
-pred bounce_pre(vm: Vm, objs: Set[nat], ctx: Addr, sc: bits[32], w: bool) =
+pred bounce_pre(vm: Vm, objs: Objs, ctx: Addr, sc: bits[32], w: bool) =
   ctx != 0 && uint(ctx) + 913 <= 2^64 &&
   (bouncing_class(sc) -> usable(vm, objs, uint(bounce_at(ctx, sc)), 1, false) && (w -> usable(vm, objs, uint(bounce_at(ctx, sc)), 1, true)))
 
@@ -651,7 +654,7 @@ fn unmap_seqs_at(ctx: Addr) -> Addr = ctx + 848
 // up by 1 below 99, else 150. The bytes: usable (the counter for writing).
 fn unmap_seq_at(ctx: Addr, sc: bits[32]) -> Addr = bits[64](uint(ctx) + 848 + uint(sc) - 7)
 
-pred account_bounce_pre(vm: Vm, objs: Set[nat], ctx: Addr, sc: bits[32]) =
+pred account_bounce_pre(vm: Vm, objs: Objs, ctx: Addr, sc: bits[32]) =
   bounce_pre(vm, objs, ctx, sc, true) &&
   (bouncing_class(sc) -> usable(vm, objs, uint(unmap_seq_at(ctx, sc)), 1, false) && usable(vm, objs, uint(ctx) + 912, 1, false))
 
@@ -666,7 +669,7 @@ fn account_vm(vm: Vm, ctx: Addr, sc: bits[32]) -> Vm =
 // step_seq(): the sequence byte counted up -- at 255, the unmap sequence
 // bytes zeroed and the count restarted at 1
 
-pred step_seq_pre(vm: Vm, objs: Set[nat], ctx: Addr) =
+pred step_seq_pre(vm: Vm, objs: Objs, ctx: Addr) =
   ctx != 0 && uint(ctx) + 913 <= 2^64 &&
   usable(vm, objs, uint(ctx) + 912, 1, false) && usable(vm, objs, uint(ctx) + 912, 1, true) &&
   (bytes_at(vm, seq_at(ctx), 1) = 255 -> usable(vm, objs, uint(ctx) + 848, 32, true))
@@ -676,7 +679,7 @@ fn step_seq_vm(vm: Vm, ctx: Addr) -> Vm =
   else { wr8(vm with { bytes: store_le(vm.bytes, unmap_seqs_at(ctx), 32, 0) }, seq_at(ctx), 1) }
 
 // resetlock(): the lock word (at lk) 0
-pred resetlock_pre(vm: Vm, objs: Set[nat], lk: Addr) = lk != 0 && uint(lk) + 4 <= 2^64 && usable(vm, objs, uint(lk), 4, true)
+pred resetlock_pre(vm: Vm, objs: Objs, lk: Addr) = lk != 0 && uint(lk) + 4 <= 2^64 && usable(vm, objs, uint(lk), 4, true)
 
 proc[World] resetlock_spec(lk: bits[64]) {
   require resetlock_pre(vm, objs, lk)
@@ -718,7 +721,7 @@ fn rm_at(l: List[nat], k: nat) -> List[nat] = [l[if j < k { j } else { j + 1 }] 
 
 // the list l at *phead: linked cyclically, its elements' links accessible,
 // 8-aligned, apart from each other and from the head word
-pred list_at(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat]) =
+pred list_at(vm: Vm, objs: Objs, phead: bits[64], l: List[nat]) =
   head: word_ok(vm, objs, phead, 0) && head_al: al8(phead) &&
   linked: cyclic(mview(vm, all_bytes()), uint(rd64(vm, phead)), l) &&
   elems: (all i: nat. i < len(l) -> bound: l[i] + 16 <= 2^64 && prev_ok: word_ok(vm, objs, bits[64](l[i]), 0) &&
@@ -734,7 +737,7 @@ pred links_only(before: Vm, vm: Vm, phead: bits[64], l: List[nat]) =
 
 // dequeue(phead, m), m in the list at phead: m out of it, the others'
 // order kept, m's links cleared
-pred dequeued(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
+pred dequeued(before: Vm, vm: Vm, objs: Objs, phead: bits[64], m: bits[64]) =
   all l: List[nat], k: nat. list_at(before, objs, phead, l) && k < len(l) && l[k] = uint(m) ->
     list_at(vm, objs, phead, rm_at(l, k)) && rd64(vm, m) = 0 && rd64(vm, m + 8) = 0 && links_only(before, vm, phead, l)
 
@@ -750,12 +753,12 @@ proc[World] dequeue_spec(phead: bits[64], m: bits[64]) {
 // 8-aligned, apart from the list's and the head word; its links 0 -- else
 // musl's a_crash, a bug), joins it at the end; no byte but the head word
 // and the links written
-pred joinable(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat], m: bits[64]) =
+pred joinable(vm: Vm, objs: Objs, phead: bits[64], l: List[nat], m: bits[64]) =
   bound: uint(m) + 16 <= 2^64 && prev_ok: word_ok(vm, objs, m, 0) && next_ok: word_ok(vm, objs, m, 8) && al: uint(m) % 8 = 0 &&
   off_head: (uint(phead) + 8 <= uint(m) || uint(m) + 16 <= uint(phead)) &&
   off_list: (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 16 <= l[i]) &&
   prev0: rd64(vm, m) = 0 && next0: rd64(vm, m + 8) = 0
-pred queued(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
+pred queued(before: Vm, vm: Vm, objs: Objs, phead: bits[64], m: bits[64]) =
   all l: List[nat]. list_at(before, objs, phead, l) && joinable(before, objs, phead, l, m) ->
     list_at(vm, objs, phead, l ++ [uint(m)]) && links_only(before, vm, phead, l ++ [uint(m)])
 
@@ -772,12 +775,12 @@ proc[World] queue_spec(phead: bits[64], m: bits[64]) {
 // appended to that list -- its links the list's, its other bytes 0; no
 // byte but those, the head word and the list's links written. Its call to
 // queue needs the thread pointer sound, its word not m's.
-pred meta_joinable(vm: Vm, objs: Set[nat], phead: bits[64], l: List[nat], m: bits[64]) =
+pred meta_joinable(vm: Vm, objs: Objs, phead: bits[64], l: List[nat], m: bits[64]) =
   nonnull: m != 0 && bound: uint(m) + 40 <= 2^64 && al: uint(m) % 8 = 0 &&
   read: usable(vm, objs, uint(m), 40, false) && write: usable(vm, objs, uint(m), 40, true) &&
   off_head: (uint(phead) + 8 <= uint(m) || uint(m) + 40 <= uint(phead)) &&
   off_list: (all i: nat. i < len(l) -> l[i] + 16 <= uint(m) || uint(m) + 40 <= l[i])
-pred meta_freed(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], m: bits[64]) =
+pred meta_freed(before: Vm, vm: Vm, objs: Objs, phead: bits[64], m: bits[64]) =
   all l: List[nat]. list_at(before, objs, phead, l) && meta_joinable(before, objs, phead, l, m) ->
     list_at(vm, objs, phead, l ++ [uint(m)]) &&
     (all a: nat. uint(m) + 16 <= a && a < uint(m) + 40 -> vm.bytes[bits[64](a)] = 0) &&
@@ -799,9 +802,9 @@ proc[World] free_meta_spec(ctx: bits[64], m: bits[64]) {
 // dequeue_head(phead): the list at *phead's first element (0 for an empty
 // list) out of it and returned. Its call to dequeue needs the thread
 // pointer sound (the ABI's, at every call).
-pred is_head(vm: Vm, objs: Set[nat], phead: bits[64], h: bits[64]) =
+pred is_head(vm: Vm, objs: Objs, phead: bits[64], h: bits[64]) =
   all l: List[nat]. list_at(vm, objs, phead, l) -> uint(h) = (if len(l) = 0 { 0 } else { l[0] })
-pred head_taken(before: Vm, vm: Vm, objs: Set[nat], phead: bits[64], h: bits[64]) =
+pred head_taken(before: Vm, vm: Vm, objs: Objs, phead: bits[64], h: bits[64]) =
   (h = 0 -> vm = before) && (h != 0 -> dequeued(before, vm, objs, phead, h))
 
 proc[World] dequeue_head_spec(phead: bits[64]) -> bits[64] {
@@ -837,7 +840,7 @@ proc[World] set_size_spec(p: bits[64], end: bits[64], n: bits[64]) {
 // get_slot_index(p), p where a client block or a nested group starts: the
 // index of its slot in its group
 proc[MallocAbs] get_slot_index_spec(c: Cfg, p: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
   either { overflow() } or {
     return any i: bits[32] where ex g: nat. starts_at(A, g, uint(i), uint(p))
   }
@@ -847,7 +850,7 @@ proc[MallocAbs] get_slot_index_spec(c: Cfg, p: bits[64]) -> bits[32] {
 // of its group (the thread pointer sound: get_meta's checks may call
 // a_crash)
 proc[MallocAbs] get_meta_spec(c: Cfg, p: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
   either { overflow() } or {
     return any m: bits[64] where ex i: nat. starts_at(A, uint(m), i, uint(p))
   }
@@ -856,7 +859,7 @@ proc[MallocAbs] get_meta_spec(c: Cfg, p: bits[64]) -> bits[64] {
 // __malloc_allzerop(p), p where a client block or a nested group starts:
 // whether its group is one slot mapped on its own (`own_mapping`)
 proc[MallocAbs] allzerop_spec(c: Cfg, p: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
   either { overflow() } or {
     return any r: bits[32] where ex g: nat, i: nat. starts_at(A, g, i, uint(p)) &&
       (own_mapping(A.metas[g]) && r = 1 || !own_mapping(A.metas[g]) && r = 0)
@@ -878,7 +881,7 @@ pred framed(before: Vm, vm: Vm, v: MetaV, i: nat, p: nat, n: nat) =
 // part: for a size class, p within the class's slot wherever it lies; the
 // thread pointer's word apart from the slot; a stride below 2^31.
 proc[MallocAbs] enframe_spec(c: Cfg, g: bits[64], idx: bits[32], n: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(g)) && reserved_only(A, uint(g), uint(idx)) &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(g)) && reserved_only(A, uint(g), uint(idx)) &&
     slot_rw(vm, A.metas[uint(g)], uint(idx)) &&
     uint(n) + IB <= stride(A.metas[uint(g)]) && stride(A.metas[uint(g)]) < 2^31 &&
     (A.metas[uint(g)].sizeclass < 48 ->
@@ -896,7 +899,7 @@ proc[MallocAbs] enframe_spec(c: Cfg, g: bits[64], idx: bits[32], n: bits[64]) ->
 
 // get_stride(g), g a group in use: its slots' size
 proc[MallocAbs] get_stride_spec(c: Cfg, g: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && is_used(A, uint(g))
+  require holds_in(c, A, vm, objs, blocks) && is_used(A, uint(g))
   either { overflow() } or { return bits[64](stride(A.metas[uint(g)])) }
 }
 
@@ -909,7 +912,7 @@ pred ctx_only(c: Cfg, before: Vm, vm: Vm) =
   (vm with { bytes: before.bytes }) = before && (all x: bits[64]. !ctx_free(c, uint(x)) -> vm.bytes[x] = before.bytes[x])
 
 proc[MallocAbs] counters_spec(c: Cfg) {
-  require holds_in(c, A, vm, blocks)
+  require holds_in(c, A, vm, objs, blocks)
   either { overflow() } or {
     let before = vm
     havoc vm where ctx_only(c, before, vm)
@@ -917,7 +920,7 @@ proc[MallocAbs] counters_spec(c: Cfg) {
 }
 
 proc[MallocAbs] is_bouncing_spec(c: Cfg, sc: bits[32]) -> bits[32] {
-  require holds_in(c, A, vm, blocks)
+  require holds_in(c, A, vm, objs, blocks)
   either { overflow() } or { return any bits[32] }
 }
 
@@ -945,13 +948,13 @@ pred activated(A: Abs, A2: Abs, g: nat, idx: nat) =
 // returned; the memory outside the allocator's untouched. Its call to a_cas
 // needs the thread pointer sound.
 proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && is_used(A, uint(m)) && A.metas[uint(m)].avail = 0 &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && is_used(A, uint(m)) && A.metas[uint(m)].avail = 0 &&
     (all sc: nat, k: nat. sc < 48 && k < len(A.active[sc]) && A.active[sc][k] = uint(m) -> k = 0)
   either { overflow() } or {
     let A0 = A
     let before = vm
     ghost A := any A2: Abs where activated(A0, A2, uint(m), active_idx(before, A0.metas[uint(m)]))
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, {})
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, {})
     return bits[32](A.metas[uint(m)].avail)
   }
 }
@@ -971,7 +974,7 @@ pred errno_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, fs: Addr) 
 // list with a free slot (the list then empty). A runs out of stack, if it
 // does, with the memory arbitrary.
 proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     sc < 48 && uint(pm) >= c.ctx + C_ACTIVE && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
   either { overflow() } or {
     let A0 = A
@@ -980,7 +983,7 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
     let r = any r: bits[32] where (
       (r = 0 && len(A.active[sc]) = 0 && (all g: nat. on_list(A0.active[sc], g) -> !has_unused(A0, g)) && A.slots = A0.slots) ||
       (ex i: nat. i < 32 && uint(r) = 2^i && len(A.active[sc]) > 0 && reserves(A0, A, A.active[sc][0], i)))
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, {})
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, {})
     return r
   }
 }
@@ -994,7 +997,7 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
 // and set errno (a failed mmap); the slot reserved is of the allocator's
 // memory or of that.
 proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
@@ -1007,7 +1010,7 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
       (uint(r) < 32 && len(A.active[uint(sc)]) > 0 && reserved_only(A, A.active[uint(sc)][0], uint(r)) &&
        A.metas[A.active[uint(sc)][0]].sizeclass = uint(sc) &&
        uint(req) + IB <= stride(A.metas[A.active[uint(sc)][0]])))
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
     return r
@@ -1030,7 +1033,7 @@ pred meta_ready(vm: Vm, m: nat) =
 // allocator may take memory that was unmapped (a meta area) and set errno
 // (its cell writable, not the allocator's).
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) &&
     errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base)
   either { overflow() } or {
     let A0 = A
@@ -1038,7 +1041,7 @@ proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
     ghost A := any A2: Abs where groups_kept(A0, A2)
     let m = any m: bits[64] where (m = 0 && A.taken = A0.taken) || (m != 0 && A.taken = A0.taken ++ [uint(m)])
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (m != 0 -> meta_ready(vm, uint(m))) &&
       (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
@@ -1062,7 +1065,7 @@ pred fresh_group(A: Abs, g: nat, sc: nat, req: nat) =
 // slot reserved; the allocator may take memory that was unmapped (the
 // group, a meta area, a slot of a larger class's group) and set errno.
 proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
@@ -1071,7 +1074,7 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
     ghost A := any A2: Abs where no_reserved(A2) && (all s: nat. s <= uint(sc) -> A2.active[s] = A0.active[s]) && A2.taken = A0.taken
     let g = any g: bits[64] where g = 0 || fresh_group(A, uint(g), uint(sc), uint(req))
-    havoc vm where holds_in(c, A, vm, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (g != 0 -> active_idx(vm, A.metas[uint(g)]) < A.metas[uint(g)].last_idx ->
          4096 < UNIT + stride(A.metas[uint(g)]) * (A.metas[uint(g)].last_idx + 1))
