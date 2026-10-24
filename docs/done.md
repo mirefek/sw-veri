@@ -1179,8 +1179,12 @@ item is a short summary of finished work; details are in the files named.
   - C2 (`mp.grs_run`): the allocation (`mp.alloc1_inv`), the auxv walk by
     `g.loop` -- k pairs passed, the memory the entry's but the stack's free
     bytes (`mp.rs_vm`, reads by `mp.rs_read`) --, AT_RANDOM's bytes copied
-    by memcpy's contract at a call (`mp.mc_q`), the object's word read.
-    The function (`mp.grs_fun`) refines the spec up to an overflow's world:
-    a function with stack objects raises with them still live (the
-    wrapper restores them at its return only); the machine's contract
-    sees an overflow's records only (`tr.implements_refine_ovf`).
+    by memcpy's contract at a call (`mp.mc_q`), the object's word read; the
+    function (`mp.grs_fun`), its CFG form linked (`grsc.calls`).
+- **A stack overflow keeps only the I/O** (layers/abi.sl `overflow()`:
+  the memory and the objects any, as a divergence's state; the machine's
+  contract reads an overflow's records only, `tr.ovf`): a function with
+  stack objects raises with them still live, its spec's overflow too. The
+  outcome `abi.ovf_out(t, o)` (proofs/gimple_inv.core) in every contract;
+  `ct.objs_ne`, `ct.objs_univ`; the call lemmas (`gc.contract_call*`) with
+  the objects a witness; `step` carries an overflow of several witnesses.

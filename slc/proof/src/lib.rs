@@ -3685,24 +3685,26 @@ impl State {
     /// kept for after (`side`), its continuation returned to step on
     fn step_split_call(&mut self, env: &mut Env, lg: &Logic, d: Seq, pending: &[Seq], xs: &mut std::collections::VecDeque<String>, side: &mut Vec<Seq>, call: bool) -> KResult<Seq> {
         let or = env.sym_by_name.get("or").copied();
-        let and = env.sym_by_name.get("and").copied().ok_or_else(|| KernelError("step: no `and`".into()))?;
         let (a, bt) = match d.concl().node() {
             Node::App(f, x) if Some(*f) == or => (x[0].clone(), x[1].clone()),
             _ => return err("step: a call's rule not `A || B`"),
         };
-        // (the overflow: ex v w... v in Vm && X(v, w..), X carried to the
-        // outcome -- the witnesses as their choices, v abstracted again)
-        let abody = match a.node() {
-            Node::App(e, x) if *e == lg.ex => x[0].clone(),
-            _ => return err("step: a call's overflow not `ex v. ..`"),
-        };
-        let vv = env.new_var("v", 0);
-        let vt = Term::var(vv, vec![]);
-        let pa = abody.instantiate_params(std::slice::from_ref(&vt), &env.binders_fn());
-        let mut sa = Seq::assume(env, pa.clone())?;
-        while matches!(sa.concl().node(), Node::App(e, _) if *e == lg.ex) {
-            sa = Seq::witness(env, lg, &sa)?;
+        // (the overflow: ex v w... (v in Vm && ..) && X(v, w..), X carried
+        // to the outcome -- its witnesses fresh variables, abstracted again)
+        if !matches!(a.node(), Node::App(e, _) if *e == lg.ex) {
+            return err("step: a call's overflow not `ex v. ..`");
         }
+        let mut vars: Vec<VarId> = Vec::new();
+        let mut pa = a.clone();
+        while let Node::App(e, x) = pa.node() {
+            if *e != lg.ex {
+                break;
+            }
+            let v = env.new_var("v", 0);
+            vars.push(v);
+            pa = x[0].instantiate_params(&[Term::var(v, vec![])], &env.binders_fn());
+        }
+        let sa = Seq::assume(env, pa.clone())?;
         let vm = and_part(env, &sa, false)?;
         let mut t = self.step_simp(env, lg, and_part(env, &sa, true)?)?;
         let mut pend: Vec<Seq> = pending.to_vec();
@@ -3725,16 +3727,28 @@ impl State {
         if !pend.is_empty() {
             return err(format!("step: a call's overflow not carried to the outcome: `{}`", Printer::new(env).short(t.concl())));
         }
-        let both = Term::app(and, vec![vm.concl().clone(), t.concl().clone()]);
         let conj = and_both(env, lg, &vm, &t)?;
-        let body = abstract_term(&both, &vt, 0, &env.binders_fn());
-        let sa2 = Seq::ex_intro(env, lg, &conj, &vt, &body)?;
-        let imp = Seq::gen(env, lg, &sa2.discharge(env, &pa)?, vv)?;
-        let ha = Seq::assume(env, a.clone())?;
-        let wit = Seq::witness(env, lg, &ha)?;
-        let c = Term::app(lg.choose, vec![abody.clone()]);
-        let inst = Seq::all_elim(env, lg, &imp, &c)?;
-        let a_imp = Seq::mp(env, &inst, &wit)?.discharge(env, &a)?;
+        let mut sa2 = conj;
+        for v in vars.iter().rev() {
+            let vt = Term::var(*v, vec![]);
+            let body = abstract_term(sa2.concl(), &vt, 0, &env.binders_fn());
+            sa2 = Seq::ex_intro(env, lg, &sa2, &vt, &body)?;
+        }
+        let mut imp = sa2.discharge(env, &pa)?;
+        for v in vars.iter().rev() {
+            imp = Seq::gen(env, lg, &imp, *v)?;
+        }
+        // (the overflow's witnesses: their choices, one by one)
+        let mut wit = Seq::assume(env, a.clone())?;
+        while let Node::App(e, x) = wit.concl().node() {
+            if *e != lg.ex {
+                break;
+            }
+            let c = Term::app(lg.choose, vec![x[0].clone()]);
+            wit = Seq::witness(env, lg, &wit)?;
+            imp = Seq::all_elim(env, lg, &imp, &c)?;
+        }
+        let a_imp = Seq::mp(env, &imp, &wit)?.discharge(env, &a)?;
         self.frames.push(Frame::Cases(d, a_imp, bt.clone()));
         if !call {
             return Seq::assume(env, bt);

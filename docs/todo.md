@@ -29,12 +29,9 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   `mp.ap_mm`, `mp.ap_mpr`, `mp.ap_el`: such leaves for `mp.ap_leaves`.
   get_random_secret implements its purpose at machine level, linked with
   memcpy (`grsc.composed`). Next, then the hypotheses discharged:
-  - `mp.ap_leaves`' G1 (get_random_secret): an exact `mp.calls(G1,
-    random_secret_spec_fun)` -- the code's function value refines the
-    spec only up to an overflow's world (its stack object still live
-    there: `mp.grs_fun`). Either the spec's function itself as G1 (its
-    `tr.callee_io` then), or the GIMPLE wrapper dropping the objects at an
-    exception too, or `overflow()` leaving the objects any.
+  - `mp.ap_leaves`' get_random_secret (G1) as its CFG form linked with
+    memcpy's: `grsc.implements` and `grsc.calls` there; its typing and
+    `tr.callee_io` missing (eff.rs: no effect rule for `alloc_objs` yet).
   - the stack objects' engine: more than one object (`tr.obj1` is one
     8-byte object; `alloc_objs` of several), objects read before their
     first store (none at -O0 yet).

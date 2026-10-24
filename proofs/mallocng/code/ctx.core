@@ -668,7 +668,7 @@ qed
 theorem ms.el_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) ->
   int_le(int_add(s.fs_base, 56), int_pow(2, 64)) && abi.thread_ok(s.vm, s.fs_base) ->
   runs(mallocng_specs.errno_location_spec_fun[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && fst(r) = mallocng_specs.errno_at(s.fs_base))
 proof
   fix regs s o2
@@ -682,16 +682,16 @@ proof
   rsimp only, mallocng_specs.errno_location_spec_fun, app_fn_build, ra in h
   have pv pf pd pb := apply(ms.world_parts, hw)
   have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && fst(r) = V)
+  let G := abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && fst(r) = V)
   have b := apply(g.runs_elim, h)
   obtain o3, hs3 hk3 from expand(b, bind_rel)
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) || o3 = ok(s, V) by simp(hs3, vv, ss, hpre, keep(mallocng_specs.errno_at, abi.thread_ok))
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have ci: abi.ovf_out(s, o3) || o3 = ok(s, V) by simp(hs3, vv, ct.objs_ne, ss, hpre, keep(mallocng_specs.errno_at, abi.thread_ok))
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume e
-    obtain v, hv he from e
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(he, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have vb: V in bits(64) by defs(simp(), mallocng_specs.errno_at)
@@ -749,18 +749,18 @@ proof
       have big: int_lt(9223372036854771710, n) -> runs(SPEC, s, o) proof
         assume hc
         have fsb ue hth := mp(expand(hp, mallocng_specs.size_overflows_pre), hc)
-        have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-          fix v
-          assume hv
+        have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+          fix v ob
+          assume hv hob
           have vu := apply(x86.vm_univ, hv)
           have eu: OVF in univ(1) by defs(simp(), exc_val)
-          have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-          have ovi := apply(ct.overflow_intro, hv, pu2)
+          have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+          have ovi := apply(ct.overflow_intro, hv, hob, pu2)
           show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.size_overflows_pre, mallocng_specs.errno_at, mallocng_specs.wr32))
         qed
         step x2 x4 x6 x8, c1 ck from hr with hc
         have qa: all regs o2. gc.regs_ok(regs, empty) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+            abi.ovf_out(s, o2) ||
             (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = E) proof
           fix regs o2
           assume hro h2
@@ -771,9 +771,9 @@ proof
           ths, hw, vV, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hg, qa, c1)
         have cov: case 1 of cc proof
           assume h
-          obtain v, hv hx from h
-          have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, ck))
-          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob hx from h
+          have ho: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, ck))
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         have cok: case 2 of cc proof
           assume h
@@ -853,18 +853,18 @@ proof
       have err: ERR -> runs(SPEC, s, o) proof
         assume hc
         have fsb ue hth := expand(mp(hp, hc), mallocng_specs.errno_ok)
-        have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-          fix v
-          assume hv
+        have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+          fix v ob
+          assume hv hob
           have vu := apply(x86.vm_univ, hv)
           have eu: OVF in univ(1) by defs(simp(), exc_val)
-          have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-          have ovi := apply(ct.overflow_intro, hv, pu2)
+          have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+          have ovi := apply(ct.overflow_intro, hv, hob, pu2)
           show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
         qed
         step x2 x4 x6 x8, c1 ck from hr with hc
         have qa: all regs o2. gc.regs_ok(regs, empty) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+            abi.ovf_out(s, o2) ||
             (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = E) proof
           fix regs o2
           assume hro h2
@@ -875,9 +875,9 @@ proof
           ths, hw, vV, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hg, qa, c1)
         have cov: case 1 of cc proof
           assume h
-          obtain v, hv hx from h
-          have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, ck))
-          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob hx from h
+          have ho: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, ck))
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         have cok: case 2 of cc proof
           assume h
@@ -943,7 +943,7 @@ qed
 // memory as it was
 theorem ms.gtp_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) -> abi.thread_ok(s.vm, s.fs_base) ->
   runs(c_src_errno___errno_location.__get_tp_fun()[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && fst(r) = s.fs_base)
 proof
   fix regs s o2
@@ -1000,18 +1000,18 @@ proof
     have yp: PRE -> runs(SPEC, s, o) proof
       assume hp
       have fsb hth := hp
-      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-        fix v
-        assume hv
+      have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+        fix v ob
+        assume hv hob
         have vu := apply(x86.vm_univ, hv)
         have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
         show by simp(hp, ovi, pu2, keep(abi.overflow, abi.thread_ok, mallocng_specs.errno_at))
       qed
       step x2, c1 from hr
       have qa: all regs o2. gc.regs_ok(regs, empty) -> runs(c_src_errno___errno_location.__get_tp_fun()[regs], s, o2) ->
-          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+          abi.ovf_out(s, o2) ||
           (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = FS) proof
         fix regs o2
         assume hro h2
@@ -1022,9 +1022,9 @@ proof
         ths, hw, vV, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hg, qa, c1)
       have cov: case 1 of cc proof
         assume h
-        obtain v, hv hx from h
-        have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(hx)
-        show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+        obtain v ob, hv hob hx from h
+        have ho: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(hx)
+        show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
       qed
       have cok: case 2 of cc proof
         assume h
@@ -1353,7 +1353,7 @@ theorem ms.sy3_q: all a l p regs s o2. s in abi.World -> s in univ(1) -> a in bi
   int_mod(a, x86_64_linux.PAGE) = 0 -> int_lt(p, 8) -> gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
   gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 10))), seq_one(gimple.arg(64, a))), seq_one(gimple.arg(64, l))), seq_one(gimple.arg(64, p)))) ->
   runs(mallocng_specs.syscall3_spec_fun()[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex V r. (V in x86_64_linux.Vm && (gimple.mprot_post(s.vm, V, a, l, p) && fst(r) = gimple.mprot_ret(s.vm, a, l))) && o2 = ok(fn_update(s, "vm", V), r))
 proof
   fix a l p regs s o2
@@ -1381,16 +1381,16 @@ proof
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
   have px := apply(ms.mprot_post_ex[before := s.vm, a := a, l := l, p := p], pv, vu, ha, hl)
   let POST(V) := V in x86_64_linux.Vm && gimple.mprot_post(s.vm, V, a, l, p)
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) ||
+  have ci: abi.ovf_out(s, o3) ||
       (ex V. POST(V) && o3 = ok(fn_update(s, "vm", V), gimple.mprot_ret(s.vm, a, l))) || !(ex V. POST(V))
-    by simp(hs3, vv, hal, hp8, hsp, keep(gimple.mprot_post, gimple.mprot_ret, gimple.sys_pages_ok, x86_64_linux.page_of, x86_64_linux.pages_for))
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+    by simp(hs3, vv, ct.objs_ne, hal, hp8, hsp, keep(gimple.mprot_post, gimple.mprot_ret, gimple.sys_pages_ok, x86_64_linux.page_of, x86_64_linux.pages_for))
+  let G := abi.ovf_out(s, o2) ||
     (ex V r. (V in x86_64_linux.Vm && (gimple.mprot_post(s.vm, V, a, l, p) && fst(r) = gimple.mprot_ret(s.vm, a, l))) && o2 = ok(fn_update(s, "vm", V), r))
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume x
-    obtain v, hv hx from x
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, hk3))
-    have l1: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob hx from x
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hk3))
+    have l1: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l1)
   qed
   have c2: (ex V. POST(V) && o3 = ok(fn_update(s, "vm", V), gimple.mprot_ret(s.vm, a, l))) -> G proof
@@ -1418,7 +1418,7 @@ qed
 theorem ms.sr_q: all r regs s o2. s in abi.World -> s in univ(1) -> r in bits(64) -> gc.regs_ok(regs, seq_one(gimple.arg(64, r))) ->
   (int_lt(18446744073709547520, r) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base)) ->
   runs(mallocng_specs.syscall_ret_spec_fun()[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex V r2. (V in x86_64_linux.Vm &&
      ((int_lt(18446744073709547520, r) && V = mallocng_specs.wr32(s.vm, mallocng_specs.errno_at(s.fs_base), int_sub(int_pow(2, 64), r)) &&
        fst(r2) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
@@ -1446,9 +1446,9 @@ proof
   have pv pf pd pb := apply(ms.world_parts, hw)
   have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) || (ERR && o3 = ok(fn_update(s, "vm", EV), M1)) || (!ERR && o3 = ok(s, r))
-    by simp(hs3, vv, hpre, keep(mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) ||
+  have ci: abi.ovf_out(s, o3) || (ERR && o3 = ok(fn_update(s, "vm", EV), M1)) || (!ERR && o3 = ok(s, r))
+    by simp(hs3, vv, ct.objs_ne, hpre, keep(mallocng_specs.errno_ok, mallocng_specs.errno_at, mallocng_specs.wr32))
+  let G := abi.ovf_out(s, o2) ||
     (ex V r2. (V in x86_64_linux.Vm && ((ERR && V = EV && fst(r2) = M1) || (!ERR && V = s.vm && fst(r2) = r))) && o2 = ok(fn_update(s, "vm", V), r2))
   // (a 64-bit result from state W: as GIMPLE's wrapper returns it)
   have res: all W v. v in bits(64) -> o3 = ok(W, v) -> ex r2. o2 = ok(W, r2) && fst(r2) = v proof
@@ -1463,11 +1463,11 @@ proof
     obtain y, _ hoy from apply(g.any_e, ne, k2)
     show by ex_intro({pair(v, y)}, taut(hoy, (fst(pair(v, y)) = v by simp())))
   qed
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume x
-    obtain v, hv hx from x
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, hk3))
-    have l1: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob hx from x
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hk3))
+    have l1: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l1)
   qed
   have c2: ERR && o3 = ok(fn_update(s, "vm", EV), M1) -> G proof
@@ -1657,13 +1657,13 @@ proof
       have vu0 := apply(x86.vm_univ, pv)
       have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
       // (an overflow, in any memory: the spec's)
-      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-        fix v
-        assume hv
+      have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+        fix v ob
+        assume hv hob
         have vu := apply(x86.vm_univ, hv)
         have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
         show by simp(ovi, pu2, keep(abi.overflow, mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, gimple.reprot, mallocng_specs.wr32, x86_64_linux.mapped))
       qed
       // the range: from addr's page start SA to the end's EA, L3 bytes
@@ -1697,7 +1697,7 @@ proof
         apply(gc.regs_one, simp(), arith(), sab)), apply(gc.regs_one, simp(), arith(), l3b)), apply(gc.regs_one, simp(), arith(), p3b)))
       have hsp3: gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(SA), x86_64_linux.pages_for(L3)) := rewrite(sym(pge), rewrite(sym(pfe), hsp))
       have qa: all regs o2. gc.regs_ok(regs, ARGS) -> runs(mallocng_specs.syscall3_spec_fun()[regs], s, o2) ->
-          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P1(V, r)) && o2 = ok(fn_update(s, "vm", V), r)) proof
+          abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && P1(V, r)) && o2 = ok(fn_update(s, "vm", V), r)) proof
         fix regs o2
         assume hro h2
         show := apply(ms.sy3_q, hw, hu, sab, l3b, p3b, smod, (int_lt(P3, 8) by simp(p3e, hp8)), hsp3, hro, h2)
@@ -1708,8 +1708,8 @@ proof
         {g3}, {mallocng_specs.syscall3_spec_fun()}, {ARGS}, {s}, ths, hw, rex, (int_le(seq_len(ARGS), 6) by simp()), hg3, qa, c1)
       have cov: case 1 of cc proof
         assume h
-        obtain v, hv hx from h
-        show := rewrite(sym(hx), mp(all_elim(sov, {v}), hv))
+        obtain v ob, hv hob hx from h
+        show := rewrite(sym(hx), mp(all_elim(sov, {v}, {ob}), hv, hob))
       qed
       have cok: case 2 of cc proof
         assume h
@@ -1732,7 +1732,7 @@ proof
         let P2(V2, r2) := (ERR && V2 = mallocng_specs.wr32(W1.vm, mallocng_specs.errno_at(W1.fs_base), int_sub(int_pow(2, 64), RV)) && fst(r2) = M1) ||
           (!ERR && V2 = W1.vm && fst(r2) = RV)
         have qb: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, RV))) -> runs(mallocng_specs.syscall_ret_spec_fun()[regs], W1, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W1, "vm", v), OVF)) || (ex V2 r2. (V2 in x86_64_linux.Vm && P2(V2, r2)) && o2 = ok(fn_update(W1, "vm", V2), r2)) proof
+            abi.ovf_out(W1, o2) || (ex V2 r2. (V2 in x86_64_linux.Vm && P2(V2, r2)) && o2 = ok(fn_update(W1, "vm", V2), r2)) proof
           fix regs o2
           assume hro h2
           have eo: ERR -> mallocng_specs.errno_ok(W1.vm, W1.objs, W1.fs_base) proof
@@ -1747,9 +1747,9 @@ proof
           hgr, qb, b2)
         have cov2: case 1 of cc2 proof
           assume h2
-          obtain v, hv hx from h2
-          have hx2: o = exc(fn_update(s, "vm", v), OVF) by simp(hx)
-          show := rewrite(sym(hx2), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob hx from h2
+          have hx2: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(hx)
+          show := rewrite(sym(hx2), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         have cok2: case 2 of cc2 proof
           assume h2
@@ -1946,7 +1946,7 @@ theorem ms.sy6_q: all a1 a2 a3 a4 a5 a6 regs s o2. s in abi.World -> s in univ(1
   gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 9))), seq_one(gimple.arg(64, a1))),
     seq_one(gimple.arg(64, a2))), seq_one(gimple.arg(64, a3))), seq_one(gimple.arg(64, a4))), seq_one(gimple.arg(64, a5))), seq_one(gimple.arg(64, a6)))) ->
   runs(mallocng_specs.syscall6_spec_fun()[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex V r. (V in x86_64_linux.Vm &&
      ((V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
       (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) &&
@@ -1984,7 +1984,7 @@ proof
   have vu := apply(x86.vm_univ, pv)
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
   let FR(p) := ex V. V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, p, N, PG) && V.brk = s.vm.brk)
-  let CI := (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) ||
+  let CI := abi.ovf_out(s, o3) ||
     o3 = ok(s, x86_64_linux.err(x86_64_linux.EINVAL)) || o3 = ok(s, x86_64_linux.err(x86_64_linux.ENOMEM)) ||
     (ex V. ((((a4 = 50 && !(a2 = 0)) && int_mod(a1, x86_64_linux.PAGE) = 0) && !int_lt(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), int_add(P0, N))) &&
       (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, P0, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(P0, x86_64_linux.PAGE)))) ||
@@ -1992,21 +1992,21 @@ proof
       (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, q, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(q, x86_64_linux.PAGE))))
   have c50: a4 = 50 -> CI proof
     assume e
-    show by simp(hs3, vv, e, hp8, h60, hfx, keep(gimple.fresh_pages, gimple.sys_pages_ok, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.page_of,
+    show by simp(hs3, vv, ct.objs_ne, e, hp8, h60, hfx, keep(gimple.fresh_pages, gimple.sys_pages_ok, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.page_of,
       x86_64_linux.pages_for, x86_64_linux.prot_of, x86_64_linux.err))
   qed
   have c34: a4 = 34 -> CI proof
     assume e
     have n50: !(a4 = 50) by simp(e)
     have a10: a1 = 0 := rewrite(mp(ite_f[c := a4 = 50, a := gimple.sys_pages_ok(s.vm, s.objs, P0, N), b := a1 = 0], n50), hfx)
-    show by simp(rewrite(a10, hs3), vv, e, a10, hp8, h60, keep(gimple.fresh_pages, gimple.sys_pages_ok, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.page_of,
+    show by simp(rewrite(a10, hs3), vv, ct.objs_ne, e, a10, hp8, h60, keep(gimple.fresh_pages, gimple.sys_pages_ok, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.page_of,
       x86_64_linux.pages_for, x86_64_linux.prot_of, x86_64_linux.err))
   qed
   have ci: CI by taut(hfl, c50, c34)
   let MM(V, r) := (V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
     (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) && gimple.fresh_pages(s.vm, V, s.objs, p, N, PG)) &&
       V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)))
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && MM(V, r)) && o2 = ok(fn_update(s, "vm", V), r))
+  let G := abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && MM(V, r)) && o2 = ok(fn_update(s, "vm", V), r))
   have ne: ex z. z in bits(64) by ex_intro({0}, simp())
   // (a 64-bit result from state W: as the spec's wrapper returns it)
   have res: all W v. v in bits(64) -> o3 = ok(W, v) -> ex r. o2 = ok(W, r) && fst(r) = v proof
@@ -2029,11 +2029,11 @@ proof
     assume hn
     show by arith(expand(hn, x86_64_linux.pages_for, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), h2)
   qed
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume x
-    obtain v, hv hx from x
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob hx from x
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   // an error: the memory as before
@@ -2087,7 +2087,7 @@ theorem ms.acas_q: all regs s p t x o2. p in bits(64) -> t in bits(32) -> x in b
   mallocng_specs.a_cas_pre(s.vm, s.objs, p) ->
   gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, p)), seq_one(gimple.arg(32, t))), seq_one(gimple.arg(32, x)))) ->
   runs(mallocng_specs.a_cas_spec_fun()[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", mallocng_specs.wr32(s.vm, p, ite(gimple.bytes_at(s.vm, p, 4) = t, x, gimple.bytes_at(s.vm, p, 4)))), r) &&
      bits_of_int(32, fst(r)) = bits_of_int(32, gimple.bytes_at(s.vm, p, 4)))
 proof
@@ -2102,7 +2102,7 @@ proof
   have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
   have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
   rsimp only, mallocng_specs.a_cas_spec_fun, app_fn_build, ra in h
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(W1, r) && bits_of_int(32, fst(r)) = V)
+  let G := abi.ovf_out(s, o2) || (ex r. o2 = ok(W1, r) && bits_of_int(32, fst(r)) = V)
   have o1: ord_le(3, seq_len(regs)) by defs(simp(rn), ord_le)
   have bp: bits_of_int(64, p) = p by defs(arith(hp), bits_of_int, pow2)
   have b := rewrite(r2, rewrite(r1, rewrite(bp, rewrite(r0, apply(g.runs_elim, h)))))
@@ -2111,12 +2111,12 @@ proof
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   have pv pf pd pb := apply(ms.world_parts, hw)
   have vv: ex y. y in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) || o3 = ok(W1, V) by simp(hs3, hpre, vv, keep(mallocng_specs.a_cas_pre, mallocng_specs.wr32))
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have ci: abi.ovf_out(s, o3) || o3 = ok(W1, V) by simp(hs3, hpre, vv, ct.objs_ne, keep(mallocng_specs.a_cas_pre, mallocng_specs.wr32))
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume e
-    obtain v, hv he from e
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(he, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: o3 = ok(W1, V) -> G proof
@@ -2182,7 +2182,7 @@ theorem ms.ag_run: all m g0 g1 s o. m in bits(64) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(mallocng_specs.a_cas_spec_fun()[regs], s, o)) ->
   s in abi.World -> mallocng_specs.activate_group_pre(s.vm, s.objs, s.fs_base, m) ->
   runs(c_src_malloc_mallocng_malloc.activate_group(m, g0, g1), s, o) ->
-  (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o) ||
   o = ok(fn_update(s, "vm", mallocng_specs.activate_group_vm(s.vm, m)), bits_and(32, mallocng_specs.ag_freed(s.vm, m), mallocng_specs.ag_act(s.vm, m)))
 proof
   fix m g0 g1 s o
@@ -2249,7 +2249,7 @@ proof
   // the body from a state of the loop: an overflow, or the break at W1
   let BODY(l, o) := loop_body(wl)
   have run: all a b o. BODY(pair(s, pair(ACT, pair(a, b))), o) ->
-      (ex v. v in x86_64_linux.Vm && o = exc(pair(fn_update(s, "vm", v), pair(ACT, pair(F, b))), pair("raise", OVF))) ||
+      (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && o = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), pair(ACT, pair(F, b))), pair("raise", OVF))) ||
       o = exc(pair(W1, pair(ACT, pair(F, b))), pair("brk", empty)) proof
     fix a b o
     assume hb
@@ -2275,9 +2275,9 @@ proof
   // an overflow in the call
   have r1: case 1 of rr proof
     assume h
-    obtain v, hv xe from h
-    have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(xe, c2))
-    have l: ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, ho))
+    obtain v ob, hv hob xe from h
+    have ho: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(xe, c2))
+    have l: abi.ovf_out(s, o) by ex_intro({v}, {ob}, taut(hv, hob, ho))
     show by taut(l)
   qed
   // the break: the available mask F & ACT stored, returned

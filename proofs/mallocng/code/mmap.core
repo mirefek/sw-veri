@@ -232,7 +232,7 @@ qed
 
 // __vm_wait at a call, as its spec has it: an overflow, or nothing changed
 theorem ms.vw_q: all regs s o2. s in abi.World -> s in univ(1) -> gc.regs_ok(regs, empty) -> runs(mallocng_specs.vm_wait_spec_fun()[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex V r. (V in x86_64_linux.Vm && V = s.vm) && o2 = ok(fn_update(s, "vm", V), r))
 proof
   fix regs s o2
@@ -248,13 +248,13 @@ proof
   have ne: ex z. z in bits(64) by ex_intro({0}, simp())
   have b := apply(g.runs_elim, h)
   obtain o3, hs3 hk3 from expand(b, bind_rel)
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) || o3 = ok(s, empty) by simp(hs3, vv)
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ->
-      (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) proof
+  have ci: abi.ovf_out(s, o3) || o3 = ok(s, empty) by simp(hs3, vv, ct.objs_ne)
+  have c1: abi.ovf_out(s, o3) ->
+      abi.ovf_out(s, o2) proof
     assume x
-    obtain v, hv hx from x
-    have oe: o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty)) by simp(rewrite(hx, hk3))
-    show by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob hx from x
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty)) by simp(rewrite(hx, hk3))
+    show by ex_intro({v}, {ob}, taut(hv, hob, oe))
   qed
   have c2: o3 = ok(s, empty) -> ex V r. (V in x86_64_linux.Vm && V = s.vm) && o2 = ok(fn_update(s, "vm", V), r) proof
     assume hx
@@ -312,13 +312,13 @@ proof
       have fsb ue hth := expand(he, mallocng_specs.errno_ok)
       have ths: gc.sound(s) by simp(hth)
       // (an overflow, in any memory: the spec's)
-      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-        fix v
-        assume hv
+      have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+        fix v ob
+        assume hv hob
         have vu := apply(x86.vm_univ, hv)
         have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
         show by simp(ovi, pu2, keep(abi.overflow, mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, mallocng_specs.mmap_place, gimple.fresh_pages, mallocng_specs.wr32))
       qed
       // (errno's cell: fs + 0x34, writable)
@@ -331,7 +331,7 @@ proof
       have e0: bits_add(64, E, 0) = E by simp(eb)
       // (___errno_location at a call: errno's address)
       have qel: all regs o2. gc.regs_ok(regs, empty) -> runs(mallocng_specs.errno_location_spec_fun[regs], s, o2) ->
-          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = E) proof
+          abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", V0), r) && fst(r) = E) proof
         fix regs o2
         assume hro h2
         show := apply(ms.el_q, hw, hu, hro, conj(fsb, hth), h2)
@@ -344,9 +344,9 @@ proof
           ths, hw, vV, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hgel, qel, c1)
         have cov: case 1 of cc proof
           assume h
-          obtain v, hv hx from h
-          have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, ck))
-          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob hx from h
+          have ho: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, ck))
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         have cok: case 2 of cc proof
           assume h
@@ -417,7 +417,7 @@ proof
         qed
         have hfx6 := (ite(A4 = 50, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(start), N), start = 0) by taut(hfa, i50, i34))
         have q6: all regs o2. gc.regs_ok(regs, ARGS6) -> runs(mallocng_specs.syscall6_spec_fun()[regs], s, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && MM6(V, r)) && o2 = ok(fn_update(s, "vm", V), r)) proof
+            abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && MM6(V, r)) && o2 = ok(fn_update(s, "vm", V), r)) proof
           fix regs o2
           assume hro h2
           show := apply(ms.sy6_q, hw, hu, hst, hl, a3b, a4b, a5b, ho, hfa, (int_lt(A3, 8) by simp(a3e, hp8)), hoff, hfx6, hro, h2)
@@ -428,13 +428,13 @@ proof
         have cc6 := apply(gc.contract_call1VR_s[P := V r. MM6(V, r)], {g6}, {mallocng_specs.syscall6_spec_fun()}, {ARGS6}, {s}, ths, hw, rex7, hg6, q6, hb6)
         have cov6: case 1 of cc6 proof
           assume h
-          obtain v, hv hx from h
-          show := rewrite(sym(hx), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob hx from h
+          show := rewrite(sym(hx), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         // (__syscall_ret at a call from W on RV, its outcomes)
         have q7: all W RV. W in abi.World -> W in univ(1) -> RV in bits(64) -> (int_lt(C, RV) -> mallocng_specs.errno_ok(W.vm, W.objs, W.fs_base)) ->
             all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, RV))) -> runs(mallocng_specs.syscall_ret_spec_fun()[regs], W, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W, "vm", v), OVF)) || (ex V2 r2. (V2 in x86_64_linux.Vm && P7(W, RV, V2, r2)) && o2 = ok(fn_update(W, "vm", V2), r2)) proof
+            abi.ovf_out(W, o2) || (ex V2 r2. (V2 in x86_64_linux.Vm && P7(W, RV, V2, r2)) && o2 = ok(fn_update(W, "vm", V2), r2)) proof
           fix W RV
           assume hw2 hu2 hrv he2
           fix regs o2
@@ -458,8 +458,8 @@ proof
               ths, hw, apply(gc.regs1_ex, rvb), (int_le(seq_len(seq_one(gimple.arg(64, RV))), 6) by simp()), hgsr, q7s, c7)
             have cov7: case 1 of cc7 proof
               assume h2
-              obtain v, hv hx from h2
-              show := rewrite(sym(hx), mp(all_elim(sov, {v}), hv))
+              obtain v ob, hv hob hx from h2
+              show := rewrite(sym(hx), mp(all_elim(sov, {v}, {ob}), hv, hob))
             qed
             have cok7: case 2 of cc7 proof
               assume h2
@@ -554,9 +554,9 @@ proof
               ths1, w1W, apply(gc.regs1_ex, rvb), (int_le(seq_len(seq_one(gimple.arg(64, RV))), 6) by simp()), hgsr, q7s, c7)
             have cov7: case 1 of cc7 proof
               assume h2
-              obtain v, hv hx from h2
-              have hx2: o = exc(fn_update(s, "vm", v), OVF) by simp(hx)
-              show := rewrite(sym(hx2), mp(all_elim(sov, {v}), hv))
+              obtain v ob, hv hob hx from h2
+              have hx2: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(hx)
+              show := rewrite(sym(hx2), mp(all_elim(sov, {v}, {ob}), hv, hob))
             qed
             have cok7: case 2 of cc7 proof
               assume h2
@@ -595,7 +595,7 @@ proof
         have fnz: !(bits_and(32, flags, 16) = 0) by simp(e50, mf)
         step x2 x4 x6 x8 x10, cw ck from hr with a0, hn, fnz
         have qw: all regs o2. gc.regs_ok(regs, empty) -> runs(mallocng_specs.vm_wait_spec_fun()[regs], s, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && V = s.vm) && o2 = ok(fn_update(s, "vm", V), r)) proof
+            abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && V = s.vm) && o2 = ok(fn_update(s, "vm", V), r)) proof
           fix regs o2
           assume hro h2
           show := apply(ms.vw_q, hw, hu, hro, h2)
@@ -604,9 +604,9 @@ proof
           (int_le(seq_len(empty), 6) by arith()), hgvw, qw, cw)
         have covw: case 1 of ccw proof
           assume h
-          obtain v, hv hx from h
-          have ho: o = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(hx, ck))
-          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob hx from h
+          have ho: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, ck))
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         have cokw: case 2 of ccw proof
           assume h

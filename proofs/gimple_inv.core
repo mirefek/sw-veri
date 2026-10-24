@@ -388,20 +388,56 @@ qed
 // ----------------------------------------------------------------------
 //  Contracts (layers/abi.sl): `overflow` read as outcomes
 
-theorem ct.overflow_inv: all s o. s.vm in x86_64_linux.Vm -> runs(abi.overflow, s, o) -> ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))
+// a stack overflow from the world t: the outcome o one of `overflow`'s --
+// t's I/O, any memory and objects
+abbrev abi.ovf_out(t, o) := ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && o = exc(fn_update(fn_update(t, "vm", v), "objs", ob), exc_val("stack_overflow", empty))
+
+// (some objects: none live, no C world's bytes)
+theorem ct.objs_ne: ex x. x in abi.Objs
+proof
+  have ep: empty in powerset(omega) by taut(powerset_def[s := omega, a := empty], (subset(empty, omega) by defs(simp(), subset)))
+  show by ex_intro({fn_update(fn_update(empty, "live", empty), "c_bytes", empty)}, defs(simp(ep), abi.Objs, set_type))
+qed
+
+theorem ct.objs_univ: all ob. ob in abi.Objs -> ob in univ(1)
+proof
+  fix ob
+  assume h
+  let K2 := insert("live", insert("c_bytes", empty))
+  have k2: K2 in univ(1) by simp(x86.insert_univ)
+  have bb: set_type(omega) in univ(1) by defs(mp(univ_powerset[u := 1, s := omega], omega_univ), set_type)
+  have pv: all r. r in set_select(powerset(cart(K2, univ(1))), x0. ((is_fun(x0) && dom(x0) = K2) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega)) ->
+      is_fun(r) && (all y. y in K2 -> r[y] in set_type(omega)) proof
+    fix r
+    assume hr
+    have hp: is_fun(r) && r.live in set_type(omega) && r.c_bytes in set_type(omega) by simp(hr)
+    have g: all y. y in K2 -> r[y] in set_type(omega) proof
+      fix y
+      assume hy
+      have c: y = "live" || y = "c_bytes" by simp(hy)
+      show by simp(c, hp)
+    qed
+    show by taut(hp, g)
+  qed
+  have ou: abi.Objs in univ(1) by defs(apply(rec_type_univ, k2, bb, pv), abi.Objs)
+  show := mp(mp(univ_trans[u := 1, a := ob, b := abi.Objs], ou), h)
+qed
+
+theorem ct.overflow_inv: all s o. s.vm in x86_64_linux.Vm -> runs(abi.overflow, s, o) -> abi.ovf_out(s, o)
 proof
   fix s o
   assume hv h
   have ne: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, hv)
-  show by simp(h, ne)
+  show by simp(h, ne, ct.objs_ne)
 qed
 
-theorem ct.overflow_intro: all s v. v in x86_64_linux.Vm -> pair(s, exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) in univ(1) ->
-  runs(abi.overflow, s, exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty)))
+theorem ct.overflow_intro: all s v ob. v in x86_64_linux.Vm -> ob in abi.Objs ->
+  pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) in univ(1) ->
+  runs(abi.overflow, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty)))
 proof
-  fix s v
-  assume hv hu
-  show by simp(hv, hu)
+  fix s v ob
+  assume hv ho hu
+  show by simp(hv, ho, hu)
 qed
 
 // (a bind's dispatch on an outcome known: its continuation for it)
@@ -458,14 +494,14 @@ qed
 // (an overflow bound: its exception's continuation, at some memory)
 theorem ct.bind_ovf(s1 v. k, s1 e. x, t. d): all s. s.vm in x86_64_linux.Vm ->
   bind_rel(abi.overflow, s, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  ex v. v in x86_64_linux.Vm && x(fn_update(s, "vm", v), exc_val("stack_overflow", empty))
+  ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty))
 proof
   fix s
   assume hv hb
   obtain o1, hr hk from expand(hb, bind_rel)
-  obtain v, hv2 he from apply(ct.overflow_inv, {s}, {o1}, hv, hr)
-  have xx: x(fn_update(s, "vm", v), exc_val("stack_overflow", empty)) by simp(rewrite(he, hk))
-  show by ex_intro({v}, taut(hv2, xx))
+  obtain v ob, hv2 ho2 he from apply(ct.overflow_inv, {s}, {o1}, hv, hr)
+  have xx: x(fn_update(fn_update(s, "vm", v), "objs", ob), exc_val("stack_overflow", empty)) by simp(rewrite(he, hk))
+  show by ex_intro({v}, {ob}, taut(hv2, ho2, xx))
 qed
 
 // ----------------------------------------------------------------------
@@ -847,6 +883,21 @@ proof
   show r
 qed
 
+// (a world with another memory, its objects its own: that world)
+theorem gc.vm_objs: all w V. w in abi.World -> fn_update(fn_update(w, "vm", V), "objs", w.objs) = fn_update(w, "vm", V)
+proof
+  fix w V
+  assume hw
+  have vfun: is_fun(w) by simp(expand(hw, abi.World))
+  have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
+  have od: "objs" in dom(w) by simp(expand(hw, abi.World))
+  have fW := mp(fn_update_fun[f := w, k := "vm", v := V], vfun)
+  have dW := mp(fn_update_dom[f := w, k := "vm", v := V], vfun, vdom)
+  have oW: "objs" in dom(fn_update(w, "vm", V)) := rewrite(sym(dW), od)
+  have aW := mp(app_update_other[f := w, k := "vm", v := V, x := "objs"], simp())
+  show := rewrite(aW, mp(fn_update_same[f := fn_update(w, "vm", V), k := "objs"], fW, oW))
+qed
+
 // The call g(args) at w, g refining F (as C function values), F's
 // contract at w: an overflow (the memory any) or the return with the
 // memory V. The call's continuation (k, x, d of its bind) then holds of an
@@ -857,16 +908,18 @@ theorem gc.contract_callR(r. R, s1 v. k, s1 e. x, t. d): all g F args w V. gc.so
   (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. o = ok(fn_update(w, "vm", V), r) && R(r))) ->
+     abi.ovf_out(w, o) || (ex r. o = ok(fn_update(w, "vm", V), r) && R(r))) ->
   bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. R(r) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
+  (ex r. R(r) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
 proof
   fix g F args w V
   assume ths hw hV rex hl hg hq hb
   let OVF := exc_val("stack_overflow", empty)
   let W := fn_update(w, "vm", V)
-  let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(w, "vm", v), OVF)) || (ex r. o2 = ok(W, r) && R(r))
-  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex r. R(r) && k(W, pair(fst(r), snd(r))))
+  let Q(o2) := abi.ovf_out(w, o2) || (ex r. o2 = ok(W, r) && R(r))
+  let XO := ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF)
+  let G := XO || (ex r. R(r) && k(W, pair(fst(r), snd(r))))
   // (the callee refines F at w: so does the call)
   have hm: all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2) proof
     fix regs o2
@@ -887,6 +940,8 @@ proof
   have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
   have od: "objs" in dom(w) by simp(expand(hw, abi.World))
   have ws: fn_update(w, "vm", w.vm) = w := mp(fn_update_same[f := w, k := "vm"], vfun, vdom)
+  have oo: w.objs in abi.Objs by simp(expand(hw, abi.World))
+  have wo: fn_update(fn_update(w, "vm", w.vm), "objs", w.objs) = w := trans(apply(gc.vm_objs, {w}, {w.vm}, hw), ws)
   have fW := mp(fn_update_fun[f := w, k := "vm", v := V], vfun)
   have dW := mp(fn_update_dom[f := w, k := "vm", v := V], vfun, vdom)
   have oW: "objs" in dom(W) := rewrite(sym(dW), od)
@@ -905,8 +960,8 @@ proof
   qed
   have c1: o1 = exc(w, OVF) -> G proof
     assume e
-    have x0 := rewrite(sym(ws), mp(all_elim(xo, {w}), e))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({w.vm}, taut(vV, x0))
+    have x0 := rewrite(sym(wo), mp(all_elim(xo, {w}), e))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({w.vm}, {w.objs}, taut(vV, oo, x0))
     show by taut(l)
   qed
   have c2: (ex w4 r. Q(ok(w4, r)) && (o1 = ok(gc.back(w4, w), pair(fst(r), snd(r))) || o1 = exc(gc.back(w4, w), OVF))) -> G proof
@@ -923,8 +978,8 @@ proof
     qed
     have b: o1 = exc(W, OVF) -> G proof
       assume e
-      have x1 := mp(all_elim(xo, {W}), e)
-      have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({V}, taut(hV, x1))
+      have x1 := rewrite(sym(b1), mp(all_elim(xo, {W}), e))
+      have l: XO by ex_intro({V}, {w.objs}, taut(hV, oo, x1))
       show by taut(l)
     qed
     show by taut(ho2, a, b)
@@ -932,9 +987,9 @@ proof
   have c3: (ex x0 e. Q(exc(x0, e)) && o1 = exc(x0, e)) -> G proof
     assume h
     obtain x0 e, hq2 ho from h
-    obtain v, hv hx he2 from simp(hq2)
-    have x1 := mp(all_elim(xo, {fn_update(w, "vm", v)}), rewrite(hx, rewrite(he2, ho)))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    obtain v ob, hv hob hx he2 from simp(hq2)
+    have x1 := mp(all_elim(xo, {fn_update(fn_update(w, "vm", v), "objs", ob)}), rewrite(hx, rewrite(he2, ho)))
+    have l: XO by ex_intro({v}, {ob}, taut(hv, hob, x1))
     show by taut(l)
   qed
   have c4: (ex t. Q(diverge(t)) && o1 = diverge(t)) -> G proof
@@ -951,14 +1006,14 @@ theorem gc.contract_call(s1 v. k, s1 e. x, t. d): all g F args w V. gc.sound(w) 
   (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. o = ok(fn_update(w, "vm", V), r))) ->
+     abi.ovf_out(w, o) || (ex r. o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. k(fn_update(w, "vm", V), r))
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) || (ex r. k(fn_update(w, "vm", V), r))
 proof
   fix g F args w V
   assume ths hw hV rex hl hg hq hb
   have hq2: all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-      (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. o = ok(fn_update(w, "vm", V), r) && true) proof
+      abi.ovf_out(w, o) || (ex r. o = ok(fn_update(w, "vm", V), r) && true) proof
     fix regs o
     assume h1 h2
     have c := mp(all_elim(hq, {regs}, {o}), h1, h2)
@@ -980,17 +1035,17 @@ theorem gc.contract_callV(v. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.soun
   (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     abi.ovf_out(w, o) ||
      (ex V r. (V in x86_64_linux.Vm && P(V)) && o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && P(V)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
 proof
   fix g F args w
   assume ths hw rex hl hg hq hb
   let OVF := exc_val("stack_overflow", empty)
-  let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V)) && o2 = ok(fn_update(w, "vm", V), r))
-  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
+  let Q(o2) := abi.ovf_out(w, o2) || (ex V r. (V in x86_64_linux.Vm && P(V)) && o2 = ok(fn_update(w, "vm", V), r))
+  let G := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
   // (the callee refines F at w: so does the call)
   have hm: all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2) proof
     fix regs o2
@@ -1011,6 +1066,8 @@ proof
   have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
   have od: "objs" in dom(w) by simp(expand(hw, abi.World))
   have ws: fn_update(w, "vm", w.vm) = w := mp(fn_update_same[f := w, k := "vm"], vfun, vdom)
+  have oo: w.objs in abi.Objs by simp(expand(hw, abi.World))
+  have wo: fn_update(fn_update(w, "vm", w.vm), "objs", w.objs) = w := trans(apply(gc.vm_objs, {w}, {w.vm}, hw), ws)
   // (a world with another memory: its objects w's)
   have bk: all V. gc.back(fn_update(w, "vm", V), w) = fn_update(w, "vm", V) proof
     fix V
@@ -1024,8 +1081,8 @@ proof
   qed
   have c1: o1 = exc(w, OVF) -> G proof
     assume e
-    have x0 := rewrite(sym(ws), mp(all_elim(xo, {w}), e))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({w.vm}, taut(vV, x0))
+    have x0 := rewrite(sym(wo), mp(all_elim(xo, {w}), e))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({w.vm}, {w.objs}, taut(vV, oo, x0))
     show by taut(l)
   qed
   have c2: (ex w4 r. Q(ok(w4, r)) && (o1 = ok(gc.back(w4, w), pair(fst(r), snd(r))) || o1 = exc(gc.back(w4, w), OVF))) -> G proof
@@ -1037,7 +1094,7 @@ proof
         obtain V r2, hV hP he from e
         show by ex_intro({V}, taut(hV, hP, (w4 = fn_update(w, "vm", V) by simp(he))))
       qed
-      have n0: !(ex v. v in x86_64_linux.Vm && ok(w4, r) = exc(fn_update(w, "vm", v), OVF)) by simp()
+      have n0: !abi.ovf_out(w, ok(w4, r)) by simp()
       show by taut(hq2, k0, n0)
     qed
     obtain V, hV hP ew from ev
@@ -1050,8 +1107,8 @@ proof
     qed
     have b: o1 = exc(fn_update(w, "vm", V), OVF) -> G proof
       assume e
-      have x1 := mp(all_elim(xo, {fn_update(w, "vm", V)}), e)
-      have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({V}, taut(hV, x1))
+      have x1 := rewrite(sym(apply(gc.vm_objs, {w}, {V}, hw)), mp(all_elim(xo, {fn_update(w, "vm", V)}), e))
+      have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({V}, {w.objs}, taut(hV, oo, x1))
       show by taut(l)
     qed
     show by taut(ho2, a, b)
@@ -1060,18 +1117,18 @@ proof
     assume h
     obtain x0 e, hq2 ho from h
     have n1: !(ex V r. (V in x86_64_linux.Vm && P(V)) && exc(x0, e) = ok(fn_update(w, "vm", V), r)) by simp()
-    have q1: ex v. v in x86_64_linux.Vm && exc(x0, e) = exc(fn_update(w, "vm", v), OVF) by taut(hq2, n1)
-    obtain v, hv hx from q1
-    have he2: x0 = fn_update(w, "vm", v) && e = OVF by simp(hx)
-    have x1 := mp(all_elim(xo, {fn_update(w, "vm", v)}), (o1 = exc(fn_update(w, "vm", v), OVF) by simp(ho, he2)))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    have q1: abi.ovf_out(w, exc(x0, e)) by taut(hq2, n1)
+    obtain v ob, hv hob hx from q1
+    have he2: x0 = fn_update(fn_update(w, "vm", v), "objs", ob) && e = OVF by simp(hx)
+    have x1 := mp(all_elim(xo, {fn_update(fn_update(w, "vm", v), "objs", ob)}), (o1 = exc(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by simp(ho, he2)))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({v}, {ob}, taut(hv, hob, x1))
     show by taut(l)
   qed
   have c4: (ex t. Q(diverge(t)) && o1 = diverge(t)) -> G proof
     assume h
     obtain t, hq2 _ from h
     have n1: !(ex V r. (V in x86_64_linux.Vm && P(V)) && diverge(t) = ok(fn_update(w, "vm", V), r)) by simp()
-    have n2: !(ex v. v in x86_64_linux.Vm && diverge(t) = exc(fn_update(w, "vm", v), OVF)) by simp()
+    have n2: !abi.ovf_out(w, diverge(t)) by simp()
     have f: false by taut(hq2, n1, n2)
     show by taut(f)
   qed
@@ -1085,24 +1142,24 @@ theorem gc.contract_call1(r. R, s1 v. k, s1 e. x, t. d): all g F args w V. gc.so
   (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. o = ok(fn_update(w, "vm", V), r) && R(r))) ->
+     abi.ovf_out(w, o) || (ex r. o = ok(fn_update(w, "vm", V), r) && R(r))) ->
   bind_rel(gimple.call1(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) || (ex r. R(r) && k(fn_update(w, "vm", V), fst(r)))
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) || (ex r. R(r) && k(fn_update(w, "vm", V), fst(r)))
 proof
   fix g F args w V
   assume ths hw hV rex hl hg hq hb
   let OVF := exc_val("stack_overflow", empty)
   let W := fn_update(w, "vm", V)
-  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex r. R(r) && k(W, fst(r)))
+  let G := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF)) || (ex r. R(r) && k(W, fst(r)))
   obtain o1, hr1 hk1 from expand(hb, bind_rel)
   have b := apply(g.runs_elim, expand(hr1, gimple.call1))
   have c := mp(all_elim(gc.contract_callR[R := r. R(r), k := x2 x3. letin(x3, x4. o1 = ok(x2, fst(x4))), x := x2 x3. o1 = exc(x2, x3), d := x2. o1 = diverge(x2)], {g}, {F}, {args}, {w}, {V}),
     ths, hw, hV, rex, hl, hg, hq, b)
-  have c1: (ex v. v in x86_64_linux.Vm && o1 = exc(fn_update(w, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(w, o1) -> G proof
     assume h
-    obtain v, hv he from h
-    have x1: x(fn_update(w, "vm", v), OVF) by simp(rewrite(he, hk1))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    obtain v ob, hv hob he from h
+    have x1: x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk1))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({v}, {ob}, taut(hv, hob, x1))
     show by taut(l)
   qed
   have c2: (ex r. R(r) && letin(pair(fst(r), snd(r)), x4. o1 = ok(W, fst(x4)))) -> G proof
@@ -1124,17 +1181,17 @@ theorem gc.contract_callVR_m(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc
   (ex regs. gc.regs_ok(regs, args)) ->
   (all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     abi.ovf_out(w, o) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
 proof
   fix g F args w
   assume ths hw rex hm hq hb
   let OVF := exc_val("stack_overflow", empty)
-  let Q(o2) := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o2 = ok(fn_update(w, "vm", V), r))
-  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
+  let Q(o2) := abi.ovf_out(w, o2) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o2 = ok(fn_update(w, "vm", V), r))
+  let G := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
   have cm: all o2. runs(gimple.call(g, args), w, o2) -> runs(gimple.call(F, args), w, o2) proof
     fix o2
     assume h2
@@ -1147,6 +1204,8 @@ proof
   have vdom: "vm" in dom(w) by simp(expand(hw, abi.World))
   have od: "objs" in dom(w) by simp(expand(hw, abi.World))
   have ws: fn_update(w, "vm", w.vm) = w := mp(fn_update_same[f := w, k := "vm"], vfun, vdom)
+  have oo: w.objs in abi.Objs by simp(expand(hw, abi.World))
+  have wo: fn_update(fn_update(w, "vm", w.vm), "objs", w.objs) = w := trans(apply(gc.vm_objs, {w}, {w.vm}, hw), ws)
   have bk: all V. gc.back(fn_update(w, "vm", V), w) = fn_update(w, "vm", V) proof
     fix V
     show := mp(all_elim(gc.back_vm, {w}, {V}), hw)
@@ -1158,8 +1217,8 @@ proof
   qed
   have c1: o1 = exc(w, OVF) -> G proof
     assume e
-    have x0 := rewrite(sym(ws), mp(all_elim(xo, {w}), e))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({w.vm}, taut(vV, x0))
+    have x0 := rewrite(sym(wo), mp(all_elim(xo, {w}), e))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({w.vm}, {w.objs}, taut(vV, oo, x0))
     show by taut(l)
   qed
   have c2: (ex w4 r. Q(ok(w4, r)) && (o1 = ok(gc.back(w4, w), pair(fst(r), snd(r))) || o1 = exc(gc.back(w4, w), OVF))) -> G proof
@@ -1172,7 +1231,7 @@ proof
         have e3 e4 := (w4 = fn_update(w, "vm", V) && r = r2 by simp(he))
         show by ex_intro({V}, taut(hV, subst({y. P(V, y)}, sym(e4), hP), e3))
       qed
-      have n0: !(ex v. v in x86_64_linux.Vm && ok(w4, r) = exc(fn_update(w, "vm", v), OVF)) by simp()
+      have n0: !abi.ovf_out(w, ok(w4, r)) by simp()
       show by taut(hq2, k0, n0)
     qed
     obtain V, hV hP ew from ev
@@ -1185,8 +1244,8 @@ proof
     qed
     have b: o1 = exc(fn_update(w, "vm", V), OVF) -> G proof
       assume e
-      have x1 := mp(all_elim(xo, {fn_update(w, "vm", V)}), e)
-      have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({V}, taut(hV, x1))
+      have x1 := rewrite(sym(apply(gc.vm_objs, {w}, {V}, hw)), mp(all_elim(xo, {fn_update(w, "vm", V)}), e))
+      have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({V}, {w.objs}, taut(hV, oo, x1))
       show by taut(l)
     qed
     show by taut(ho2, a, b)
@@ -1195,18 +1254,18 @@ proof
     assume h
     obtain x0 e, hq2 ho from h
     have n1: !(ex V r. (V in x86_64_linux.Vm && P(V, r)) && exc(x0, e) = ok(fn_update(w, "vm", V), r)) by simp()
-    have q1: ex v. v in x86_64_linux.Vm && exc(x0, e) = exc(fn_update(w, "vm", v), OVF) by taut(hq2, n1)
-    obtain v, hv hx from q1
-    have he2: x0 = fn_update(w, "vm", v) && e = OVF by simp(hx)
-    have x1 := mp(all_elim(xo, {fn_update(w, "vm", v)}), (o1 = exc(fn_update(w, "vm", v), OVF) by simp(ho, he2)))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    have q1: abi.ovf_out(w, exc(x0, e)) by taut(hq2, n1)
+    obtain v ob, hv hob hx from q1
+    have he2: x0 = fn_update(fn_update(w, "vm", v), "objs", ob) && e = OVF by simp(hx)
+    have x1 := mp(all_elim(xo, {fn_update(fn_update(w, "vm", v), "objs", ob)}), (o1 = exc(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by simp(ho, he2)))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({v}, {ob}, taut(hv, hob, x1))
     show by taut(l)
   qed
   have c4: (ex t. Q(diverge(t)) && o1 = diverge(t)) -> G proof
     assume h
     obtain t, hq2 _ from h
     have n1: !(ex V r. (V in x86_64_linux.Vm && P(V, r)) && diverge(t) = ok(fn_update(w, "vm", V), r)) by simp()
-    have n2: !(ex v. v in x86_64_linux.Vm && diverge(t) = exc(fn_update(w, "vm", v), OVF)) by simp()
+    have n2: !abi.ovf_out(w, diverge(t)) by simp()
     have f: false by taut(hq2, n1, n2)
     show by taut(f)
   qed
@@ -1218,10 +1277,10 @@ theorem gc.contract_callVR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.s
   (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     abi.ovf_out(w, o) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), pair(fst(r), snd(r))))
 proof
   fix g F args w
@@ -1242,25 +1301,25 @@ theorem gc.contract_call1VR_m(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. g
   (ex regs. gc.regs_ok(regs, args)) ->
   (all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], w, o2) -> runs(F[regs], w, o2)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     abi.ovf_out(w, o) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call1(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
 proof
   fix g F args w
   assume ths hw rex hm hq hb
   let OVF := exc_val("stack_overflow", empty)
-  let G := (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
+  let G := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF)) || (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
   obtain o1, hr1 hk1 from expand(hb, bind_rel)
   have b := apply(g.runs_elim, expand(hr1, gimple.call1))
   have c := mp(all_elim(gc.contract_callVR_m[P := v r. P(v, r), k := x2 x3. letin(x3, x4. o1 = ok(x2, fst(x4))), x := x2 x3. o1 = exc(x2, x3), d := x2. o1 = diverge(x2)], {g}, {F}, {args}, {w}),
     ths, hw, rex, hm, hq, b)
-  have c1: (ex v. v in x86_64_linux.Vm && o1 = exc(fn_update(w, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(w, o1) -> G proof
     assume h
-    obtain v, hv he from h
-    have x1: x(fn_update(w, "vm", v), OVF) by simp(rewrite(he, hk1))
-    have l: ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), OVF) by ex_intro({v}, taut(hv, x1))
+    obtain v ob, hv hob he from h
+    have x1: x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk1))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), OVF) by ex_intro({v}, {ob}, taut(hv, hob, x1))
     show by taut(l)
   qed
   have c2: (ex V r. (V in x86_64_linux.Vm && P(V, r)) && letin(pair(fst(r), snd(r)), x4. o1 = ok(fn_update(w, "vm", V), fst(x4)))) -> G proof
@@ -1278,10 +1337,10 @@ theorem gc.contract_call1VR(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. gc.
   (ex regs. gc.regs_ok(regs, args)) -> int_le(seq_len(args), 6) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     abi.ovf_out(w, o) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call1(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
 proof
   fix g F args w
@@ -1307,10 +1366,10 @@ theorem gc.contract_call1VR_s(v r. P, s1 v. k, s1 e. x, t. d): all g F args w. g
   (ex regs. gc.regs_ok(regs, args)) ->
   (all regs s o. regs in list_type(bits(64)) -> s in abi.World -> runs(g[regs], s, o) -> runs(F[regs], s, o)) ->
   (all regs o. gc.regs_ok(regs, args) -> runs(F[regs], w, o) ->
-     (ex v. v in x86_64_linux.Vm && o = exc(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+     abi.ovf_out(w, o) ||
      (ex V r. (V in x86_64_linux.Vm && P(V, r)) && o = ok(fn_update(w, "vm", V), r))) ->
   bind_rel(gimple.call1_s(g, args), w, s1 v. k(s1, v), s1 e. x(s1, e), t. d(t)) ->
-  (ex v. v in x86_64_linux.Vm && x(fn_update(w, "vm", v), exc_val("stack_overflow", empty))) ||
+  (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x(fn_update(fn_update(w, "vm", v), "objs", ob), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && P(V, r)) && k(fn_update(w, "vm", V), fst(r)))
 proof
   fix g F args w

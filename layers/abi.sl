@@ -282,9 +282,11 @@ pred spec_raises[S](w: S, spec: CFun2[S], args: Args) =
 // `overflow_ok`). A leaf's implementation shows the effect without it; a
 // caller's uses its callees' contracts at its calls.
 
-// a stack overflow: the memory then is any (the process dies)
+// a stack overflow: the process dies, only its I/O so far matters -- the
+// memory and the objects then any (as a divergence's state)
 proc[World] overflow() {
   havoc vm
+  havoc objs
   raise stack_overflow
 }
 

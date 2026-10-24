@@ -16,7 +16,7 @@ abbrev mp.rs_vm(t, V) := fn_update(V, "bytes", t.vm.bytes) = t.vm &&
 // memory as it was but the stack's free bytes
 theorem mp.rs_q: all t libc regs o2. t in abi.World -> t in univ(1) -> mallocng_specs.auxv_ok(t.vm, t.objs, libc) -> abi.thread_ok(t.vm, t.fs_base) -> gc.regs_ok(regs, empty) ->
   runs(mallocng_specs.random_secret_spec_fun(libc)[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex V r. (V in x86_64_linux.Vm && (fst(r) in bits(64) && mp.rs_vm(t, V))) && o2 = ok(fn_update(t, "vm", V), r))
 proof
   fix t libc regs o2
@@ -29,7 +29,7 @@ proof
   rsimp only, mallocng_specs.random_secret_spec_fun, app_fn_build, ra in h
   have pv pf pd pb := apply(ms.world_parts, hw)
   have ss: fn_update(t, "vm", t.vm) = t := mp(fn_update_same[f := t, k := "vm"], pf, pd)
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && (fst(r) in bits(64) && mp.rs_vm(t, V))) && o2 = ok(fn_update(t, "vm", V), r))
+  let G := abi.ovf_out(t, o2) || (ex V r. (V in x86_64_linux.Vm && (fst(r) in bits(64) && mp.rs_vm(t, V))) && o2 = ok(fn_update(t, "vm", V), r))
   have b := apply(g.runs_elim, h)
   obtain o3, hs3 hk3 from expand(b, bind_rel)
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
@@ -38,11 +38,11 @@ proof
   have vk: ex V. V in x86_64_linux.Vm && (fn_update(V, "bytes", t.vm.bytes) = t.vm && (all x. x in bits(64) -> !abi.stack_free(t.vm, t.objs, x) -> V.bytes[x] = t.vm.bytes[x]))
     by ex_intro({t.vm}, simp(pv, vb))
   have ne: ex z. z in bits(64) by ex_intro({0}, simp())
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(t, o3) -> G proof
     assume e
-    obtain v, hv he from e
-    have oe: o2 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(he, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: (ex V y. (V in x86_64_linux.Vm && mp.rs_vm(t, V)) && y in bits(64) && o3 = ok(fn_update(t, "vm", V), y)) -> G proof
@@ -67,10 +67,10 @@ proof
   have k1: case 1 of hbr proof
     assume e
     rsimp only, abi.overflow in e
-    have l: ex v. v in x86_64_linux.Vm && x0 = exc(pair(fn_update(t, "vm", v), empty), pair("raise", OVF)) by simp(e, vv)
-    obtain v, hv hx from l
-    have oe: o3 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(hx, hout))
-    show := mp(c1, ex_intro({v}, taut(hv, oe)))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x0 = exc(pair(fn_update(fn_update(t, "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e, vv, ct.objs_ne)
+    obtain v ob, hv hob hx from l
+    have oe: o3 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
+    show := mp(c1, ex_intro({v}, {ob}, taut(hv, hob, oe)))
   qed
   have k2: case 2 of hbr proof
     assume e
@@ -92,7 +92,7 @@ qed
 theorem mp.brk_q: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) -> tr.req1(t, new) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, 12)), seq_one(gimple.arg(64, new)))) ->
   runs(mallocng_specs.syscall1_spec_fun()[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) = t.vm.brk) ||
   (ex V r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = new && V in x86_64_linux.Vm && V.brk = new && !int_lt(new, t.vm.brk_start) &&
      ((int_lt(x86_64_linux.pages_for(t.vm.brk), x86_64_linux.pages_for(new)) &&
@@ -139,7 +139,7 @@ proof
   let GROW(V) := (int_lt(PO, PN) && x86_64_linux.free_range(t.vm, PO, int_sub(PN, PO)) && x86_64_linux.off_stack_space(t.vm, PO, int_sub(PN, PO)) &&
       gimple.fresh_pages(t.vm, V, t.objs, PO, int_sub(PN, PO), HP)) ||
     (!int_lt(PO, PN) && gimple.gone_pages(t.vm, V, PN, int_sub(PO, PN)))
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) = t.vm.brk) ||
+  let G := abi.ovf_out(t, o2) || (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) = t.vm.brk) ||
     (ex V r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = new && V in x86_64_linux.Vm && V.brk = new && !int_lt(new, t.vm.brk_start) && GROW(V))
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
   have vu := apply(x86.vm_univ, pv)
@@ -151,15 +151,15 @@ proof
     obtain V, h1 h2 h3 from apply(g.gone_ex[before := t.vm, p := PN, n := int_sub(PO, PN), br := new], pv, vu, hn)
     show by ex_intro({V}, taut(h1, h2, sym(h3)))
   qed
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) || o3 = ok(t, t.vm.brk) ||
+  have ci: abi.ovf_out(t, o3) || o3 = ok(t, t.vm.brk) ||
       (ex V. (V in x86_64_linux.Vm && V.brk = new && !int_lt(new, t.vm.brk_start) && GROW(V)) && o3 = ok(fn_update(t, "vm", V), new))
-    by simp(hs3, vv, gx, keep(gimple.fresh_pages, gimple.gone_pages, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.pages_for))
+    by simp(hs3, vv, ct.objs_ne, gx, keep(gimple.fresh_pages, gimple.gone_pages, x86_64_linux.free_range, x86_64_linux.off_stack_space, x86_64_linux.pages_for))
   have ne: ex z. z in bits(64) by ex_intro({0}, simp())
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(t, o3) -> G proof
     assume e
-    obtain v, hv he from e
-    have oe: o2 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(he, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: o3 = ok(t, t.vm.brk) -> G proof
@@ -195,7 +195,7 @@ abbrev mp.brk_ret(t, V, r, new) := (V = t.vm && fst(r) = t.vm.brk) || (fst(r) = 
 theorem mp.brk_qr: all t new regs o2. t in abi.World -> t in univ(1) -> new in bits(64) -> tr.req1(t, new) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 12))), seq_one(gimple.arg(64, new)))) ->
   runs(mallocng_specs.syscall1_spec_fun()[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex V r. (V in x86_64_linux.Vm && mp.brk_ret(t, V, r, new)) && o2 = ok(fn_update(t, "vm", V), r))
 proof
   fix t new regs o2
@@ -221,7 +221,7 @@ qed
 theorem mp.brk0_q: all t regs o2. t in abi.World -> t in univ(1) -> abi.brk_start_ok(t.vm) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 12))), seq_one(gimple.arg(64, bits_of_int(64, 0))))) ->
   runs(mallocng_specs.syscall1_spec_fun()[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && fst(r) = t.vm.brk)
 proof
   fix t regs o2
@@ -264,7 +264,7 @@ theorem mp.mmap_q: all t addr len prot flags fd regs o2. t in abi.World -> t in 
   gc.regs_ok(regs, seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, addr)), seq_one(gimple.arg(64, len))), seq_one(gimple.arg(32, prot))),
     seq_one(gimple.arg(32, flags))), seq_one(gimple.arg(32, fd))), seq_one(gimple.arg(64, 0)))) ->
   runs(mallocng_specs.mmap_spec_fun()[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex e r. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
      fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
   (ex V p r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)) && V in x86_64_linux.Vm && p in omega &&
@@ -303,13 +303,13 @@ proof
   qed
   let PG := fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(prot)), "kind", 0)
   have bp: bits_of_int(64, prot) = prot by defs(arith(hp), bits_of_int, pow2)
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) ||
+  have ci: abi.ovf_out(t, o3) ||
       (ex e. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), bits_of_int(64, int_sub(int_pow(2, 64), 1)))) ||
       (ex V p. (V in x86_64_linux.Vm && p in omega && mallocng_specs.mmap_place(t.vm, addr, len, flags, p) &&
          gimple.fresh_pages(t.vm, V, t.objs, p, x86_64_linux.pages_for(len), PG) && V.brk = t.vm.brk) && o3 = ok(fn_update(t, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))
-    by simp(hs3, vv, ee, hfl, hpl, he, hfx, bp, keep(gimple.fresh_pages, mallocng_specs.mmap_place, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at,
+    by simp(hs3, vv, ct.objs_ne, ee, hfl, hpl, he, hfx, bp, keep(gimple.fresh_pages, mallocng_specs.mmap_place, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at,
       gimple.sys_pages_ok, mallocng_specs.tls_off, x86_64_linux.page_of, x86_64_linux.pages_for))
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) ||
+  let G := abi.ovf_out(t, o2) ||
     (ex e r. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
        fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
     (ex V p r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)) && V in x86_64_linux.Vm && p in omega &&
@@ -327,11 +327,11 @@ proof
     obtain z, _ hoz from apply(g.any_e, ne, k2)
     show by ex_intro({pair(v, z)}, taut(hoz, (fst(pair(v, z)) = v by simp())))
   qed
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(t, o3) -> G proof
     assume e
-    obtain v, hv hx from e
-    have oe: o2 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(hx, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob hx from e
+    have oe: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hk3))
+    have l: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: (ex e. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) &&
@@ -441,7 +441,7 @@ theorem mp.mprotect_q: all t addr len prot regs o2. t in abi.World -> t in univ(
   mallocng_specs.tls_off(t.fs_base, int_div(addr, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(addr, x86_64_linux.PAGE))) ->
   gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, addr)), seq_one(gimple.arg(64, len))), seq_one(gimple.arg(32, prot)))) ->
   runs(mallocng_specs.mprotect_spec_fun()[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex V r. o2 = ok(fn_update(t, "vm", V), r) && bits_of_int(32, fst(r)) = 0 && V in x86_64_linux.Vm &&
      (all q. q in omega -> int_le(int_div(addr, x86_64_linux.PAGE), q) && int_lt(q, int_div(int_sub(int_add(int_add(addr, len), x86_64_linux.PAGE), 1), x86_64_linux.PAGE)) ->
         x86_64_linux.mapped(t.vm, q)) &&
@@ -525,16 +525,16 @@ proof
     show by ex_intro({k}, taut(hk, hp2, below))
   qed
   let RX(k) := ex V. V in x86_64_linux.Vm && gimple.reprot(t.vm, V, S, int_sub(k, S), PR)
-  have ci: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) ||
+  have ci: abi.ovf_out(t, o3) ||
       (ex V. (V in x86_64_linux.Vm && ALL && gimple.reprot(t.vm, V, S, int_sub(E, S), PR)) && o3 = ok(fn_update(t, "vm", V), 0)) ||
       (ex V k. (V in x86_64_linux.Vm && LEAST(k) && gimple.reprot(t.vm, V, S, int_sub(k, S), PR)) &&
          o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(V, mallocng_specs.errno_at(t.fs_base), x86_64_linux.ENOMEM)), bits_of_int(32, int_sub(int_pow(2, 32), 1)))) ||
       (ex k. LEAST(k) && !RX(k))
-    by simp(hs3, vv, ax, kx, hpl, hsz, hln, he, hsp, htf, keep(gimple.reprot, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at, x86_64_linux.mapped, gimple.sys_pages_ok,
+    by simp(hs3, vv, ct.objs_ne, ax, kx, hpl, hsz, hln, he, hsp, htf, keep(gimple.reprot, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at, x86_64_linux.mapped, gimple.sys_pages_ok,
       mallocng_specs.tls_off))
   let G1(V) := V in x86_64_linux.Vm && ALL && gimple.reprot(t.vm, V, S, int_sub(E, S), PR)
   let G2(V, k) := V in x86_64_linux.Vm && LEAST(k) && gimple.reprot(t.vm, V, S, int_sub(k, S), PR)
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF)) ||
+  let G := abi.ovf_out(t, o2) ||
     (ex V r. o2 = ok(fn_update(t, "vm", V), r) && bits_of_int(32, fst(r)) = 0 && V in x86_64_linux.Vm && ALL && gimple.reprot(t.vm, V, S, int_sub(E, S), PR)) ||
     (ex V k r. o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(V, mallocng_specs.errno_at(t.fs_base), x86_64_linux.ENOMEM)), r) &&
        bits_of_int(32, fst(r)) = bits_of_int(32, int_sub(int_pow(2, 32), 1)) && V in x86_64_linux.Vm && k in omega && int_le(S, k) && int_lt(k, E) &&
@@ -553,11 +553,11 @@ proof
     obtain z, _ hoz from apply(g.any_e, ne, k2)
     show by ex_intro({pair(u, z)}, taut(hoz, (bits_of_int(32, fst(pair(u, z))) = v by simp(hlow))))
   qed
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(t, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(t, o3) -> G proof
     assume x
-    obtain v, hv hx from x
-    have oe: o2 = exc(fn_update(t, "vm", v), OVF) by simp(rewrite(hx, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob hx from x
+    have oe: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hk3))
+    have l: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: (ex V. G1(V) && o3 = ok(fn_update(t, "vm", V), 0)) -> G proof
@@ -4027,7 +4027,7 @@ abbrev mp.calls(g, F) := all regs s o. regs in list_type(bits(64)) -> int_le(seq
 // taken metas grown by it) and ready, or 0; the groups as before, the
 // invariant kept, nothing outside the allocator touched but errno, the
 // footprint grown only by memory unmapped before -- or an overflow
-abbrev mp.am_out(c, A, b, s, o) := (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+abbrev mp.am_out(c, A, b, s, o) := abi.ovf_out(s, o) ||
   (ex A2 V2 m. mp.am_post(c, A, b, s, A2, V2, m) && o = ok(fn_update(s, "vm", V2), m))
 
 theorem mp.am_run(c, grs, gdh, gsy, gmm, gmp, gel, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
@@ -4092,7 +4092,7 @@ proof
   have ths: gc.sound(s) by simp(hth)
   let LOC := pair(a1, pair(a2, pair(a3, pair(a4, pair(a5, pair(a6, pair(a7, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
   let OVF := exc_val("stack_overflow", empty)
-  let T1 := (ex v. v in x86_64_linux.Vm && x1 = exc(pair(fn_update(s, "vm", v), LOC), pair("raise", OVF))) ||
+  let T1 := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x1 = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), LOC), pair("raise", OVF))) ||
     (ex V1 A1. (mp.am_st(c, A, B, s, V1, A1) && !(A1.init_done = 0)) && x1 = ok(pair(fn_update(s, "vm", V1), LOC), empty))
   // the first call: the secret read, the allocator initialized
   have first: A.init_done = 0 -> T1 proof
@@ -4210,7 +4210,7 @@ proof
         have avo: A1.avail_cnt in omega by simp(s2)
         have i32: bits_of_int(64, gimple.bytes_at(V1, int_add(K, 32), 8)) = A1.avail_cnt by defs(arith(b32, cavl, avo, (mallocng.NSLOTS = 101 by defs(refl({101}), mallocng.NSLOTS))), bits_of_int, pow2)
         have tb2 kx2 := k7
-        let T2 := (ex v L. v in x86_64_linux.Vm && x4 = exc(pair(fn_update(s, "vm", v), L), pair("raise", OVF))) ||
+        let T2 := (ex v ob L. (v in x86_64_linux.Vm && ob in abi.Objs) && x4 = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), L), pair("raise", OVF))) ||
           (ex A3 V3 L. mp.am_post(c, A, B, s, A3, V3, 0) && x4 = exc(pair(fn_update(s, "vm", V3), L), pair("ret", 0))) ||
           (ex A3 V3 L. (mp.am_st(c, A, B, s, V3, A3) && !(A3.init_done = 0) && int_lt(0, A3.avail_cnt)) && x4 = ok(pair(fn_update(s, "vm", V3), L), empty))
         // the area's next meta taken, from where the ways meet
@@ -4218,9 +4218,9 @@ proof
           assume ht2
           have f1: case 1 of ht2 proof
             assume e
-            obtain v L, hv hx4 from e
+            obtain v ob L, hv hob hx4 from e
             step oe from rewrite(hx4, kx2)
-            show by disj({1}, ex_intro({v}, taut(hv, oe)))
+            show by disj({1}, ex_intro({v}, {ob}, taut(hv, hob, oe)))
           qed
           have f2: case 2 of ht2 proof
             assume e
@@ -4293,8 +4293,8 @@ proof
           step x5, e2 from e with g.ld64_det using conj(w1u, kb, u40, cv, hx, cnz)
           have {cw40 = cnt, bkv = brkv, bko = brk_ok} := apply(mp.am_words[c := c, A := A1, V := V1, b := B], hc, s3, s2, s4, s1)
           have tb3 kx3 := e2
-          let TJ(y) := (ex v l2 l4. v in x86_64_linux.Vm &&
-               y = exc(pair(fn_update(s, "vm", v), pair(0, pair(a2, pair(l2, pair(1, pair(l4, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), pair("raise", OVF))) ||
+          let TJ(y) := (ex v ob l2 l4. (v in x86_64_linux.Vm && ob in abi.Objs) &&
+               y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), pair(0, pair(a2, pair(l2, pair(1, pair(l4, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), pair("raise", OVF))) ||
             (ex A3 V3 l2 l4 nu. mp.am_j1(c, A, B, s, V3, A3, nu) &&
                y = ok(pair(fn_update(s, "vm", V3), pair(0, pair(a2, pair(l2, pair(nu, pair(l4, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), empty))
           let T3 := TJ(x5)
@@ -4329,7 +4329,7 @@ proof
               step x7, e8 from e6 with g.ld64_det, rb using conj(w1u, kb, md920, cv, hx, cnz)
               have tb5 kx5 := e8
               let LG := pair(0, pair(a2, pair(1, pair(1, pair(bits_add(64, 4096, A1.brk), pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))
-              let JG(y) := (ex v. v in x86_64_linux.Vm && y = exc(pair(fn_update(s, "vm", v), LG), pair("raise", OVF))) ||
+              let JG(y) := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), LG), pair("raise", OVF))) ||
                 (ex VG g nw bb. mp.am_jg(c, A1, V1, VG, g, nw, bb) &&
                    y = ok(pair(fn_update(s, "vm", VG), pair(0, pair(a2, pair(g, pair(1, pair(nw, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), empty))
               have v1rest: fn_update(V1, "bytes", V1.bytes) = V1 := mp(fn_update_same[f := V1, k := "bytes"], simp(expand(s1, x86_64_linux.Vm)), simp(expand(s1, x86_64_linux.Vm)))
@@ -4447,7 +4447,7 @@ proof
                   have ww: fn_update(fn_update(s, "vm", VG), "vm", V) = fn_update(s, "vm", V) by simp()
                   step y2, e14 from rewrite(ww, hk)
                   have tb6 kx6 := e14
-                  let TB(y) := (ex v. v in x86_64_linux.Vm && y = exc(pair(fn_update(s, "vm", v), LN), pair("raise", OVF))) ||
+                  let TB(y) := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), LN), pair("raise", OVF))) ||
                     (ex A3 V3 nu. mp.am_j1(c, A, B, s, V3, A3, nu) &&
                        y = ok(pair(fn_update(s, "vm", V3), pair(0, pair(a2, pair(g, pair(nu, pair(nw, pair(a6, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), empty))
                   // refused: the break given up
@@ -4493,7 +4493,7 @@ proof
                     let GUARD(Vm, Ve) := (g = 0 && Vm = V && Ve = V1) ||
                       (g = 1 && (ex pg. gimple.fresh_pages(V, Vm, s.objs, int_div(bb, 4096), 1, pg) && Vm.brk = V.brk) && Ve = V1) ||
                       (g = 1 && (ex e. Vm = mallocng_specs.wr32(V, EA, e) && Ve = mallocng_specs.wr32(V1, EA, e)))
-                    let TG(y) := (ex v. v in x86_64_linux.Vm && y = exc(pair(fn_update(s, "vm", v), LN), pair("raise", OVF))) ||
+                    let TG(y) := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), LN), pair("raise", OVF))) ||
                       (ex Vm Ve. (Vm in x86_64_linux.Vm && GUARD(Vm, Ve)) && y = ok(pair(fn_update(s, "vm", Vm), LN), empty))
                     // no guard page
                     have tg0: g = 0 -> TG(y3) proof
@@ -4553,7 +4553,7 @@ proof
                       have mc: int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED) = 50 by defs(simp(), x86_64_linux.MAP_PRIVATE,
                         x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)
                       have qm: all regs o2. gc.regs_ok(regs, ARGM) -> runs(FMM[regs], WV, o2) ->
-                          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(WV, "vm", v), OVF)) || (ex Vm r. (Vm in x86_64_linux.Vm && PG(Vm)) && o2 = ok(fn_update(WV, "vm", Vm), r)) proof
+                          abi.ovf_out(WV, o2) || (ex Vm r. (Vm in x86_64_linux.Vm && PG(Vm)) && o2 = ok(fn_update(WV, "vm", Vm), r)) proof
                         fix regs o2
                         assume hro h2
                         have ea: ARGM = seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bb)), seq_one(gimple.arg(64, 4096))), seq_one(gimple.arg(32, bits_of_int(32, 0)))),
@@ -4675,8 +4675,8 @@ proof
               mp(all_elim(NF2, {40}, {8}), simp(), simp(), simp(), simp()))
             step x7, e9 from e8 with g.ld64_det using conj(w3u, kb, u40b, cv, hx, cnz)
             have tb8 kx8 := e9
-            let TM(y) := (ex v n1 p1. v in x86_64_linux.Vm &&
-                 y = exc(pair(fn_update(s, "vm", v), pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), pair("raise", OVF))) ||
+            let TM(y) := (ex v ob n1 p1. (v in x86_64_linux.Vm && ob in abi.Objs) &&
+                 y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))), pair("raise", OVF))) ||
               (ex A4 V4 n1 p1. mp.am_post(c, A, B, s, A4, V4, 0) &&
                  y = exc(pair(fn_update(s, "vm", V4), pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(0, pair(a9, pair(a10, pair(a11, 0)))))))))))), pair("ret", 0))) ||
               (ex A4 V4 n1 p1. (mp.am_j1(c, A, B, s, V4, A4, nu) && int_lt(0, A4.reserve_cnt)) &&
@@ -4735,7 +4735,7 @@ proof
               have lenb: LEN in bits(64) by arith(pno, pnl)
               have mc2: bits_of_int(32, 34) = int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS) by defs(simp(), x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS)
               have qmm: all regs o2. gc.regs_ok(regs, ARGM) -> runs(FMM[regs], W3, o2) ->
-                  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W3, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && PM(V, r)) && o2 = ok(fn_update(W3, "vm", V), r)) proof
+                  abi.ovf_out(W3, o2) || (ex V r. (V in x86_64_linux.Vm && PM(V, r)) && o2 = ok(fn_update(W3, "vm", V), r)) proof
                 fix regs o2
                 assume hro h2
                 have ea: ARGM = seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 0))), seq_one(gimple.arg(64, LEN))),
@@ -4891,9 +4891,9 @@ proof
             have tm := (TM(x7) by taut(mnz, mz))
             have tmo: case 1 of tm proof
               assume e
-              obtain v n1 p1, hv hx7 from e
+              obtain v ob n1 p1, hv hob hx7 from e
               step e10 from rewrite(hx7, kx8)
-              show by disj({1}, ex_intro({v}, {pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))}, taut(hv, e10)))
+              show by disj({1}, ex_intro({v}, {ob}, {pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(a8, pair(a9, pair(a10, pair(a11, a12)))))))))))}, taut(hv, hob, e10)))
             qed
             have tmr: case 2 of tm proof
               assume e
@@ -4926,7 +4926,7 @@ proof
               let RP := int_div(R, 4096)
               let PP(V5) := (V5 in x86_64_linux.Vm && fn_update(V5, "pages", V4.pages) = V4) && (all q. q in omega -> !(q = RP) -> V5.pages[q] = V4.pages[q]) &&
                 mallocng.m_rw(mallocng.mview(V5, mallocng.all_bytes()), R) && !(snd(mallocng.pg(mallocng.mview(V5, mallocng.all_bytes()), R)).kind = 2)
-              let TP(y) := (ex v. v in x86_64_linux.Vm && y = exc(pair(fn_update(s, "vm", v), LP), pair("raise", OVF))) ||
+              let TP(y) := (ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && y = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), LP), pair("raise", OVF))) ||
                 (ex V5. PP(V5) && y = ok(pair(fn_update(s, "vm", V5), LP), empty))
               // accessible already (from brk)
               have tp0: nu = 0 -> TP(y7) proof
@@ -4967,7 +4967,7 @@ proof
                 have htf: mallocng_specs.tls_off(W4.fs_base, int_div(R, x86_64_linux.PAGE), int_sub(int_div(int_sub(int_add(int_add(R, 4096), x86_64_linux.PAGE), 1), x86_64_linux.PAGE), int_div(R, x86_64_linux.PAGE)))
                   by simp(e1, tf1, keep(mallocng_specs.tls_off))
                 have qmp: all regs o2. gc.regs_ok(regs, ARGP) -> runs(FMP[regs], W4, o2) ->
-                    (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(W4, "vm", v), OVF)) || (ex V r. (V in x86_64_linux.Vm && PR(V, r)) && o2 = ok(fn_update(W4, "vm", V), r)) proof
+                    abi.ovf_out(W4, o2) || (ex V r. (V in x86_64_linux.Vm && PR(V, r)) && o2 = ok(fn_update(W4, "vm", V), r)) proof
                   fix regs o2
                   assume hro h2
                   have q := apply(mp.mprotect_q, w4W, w4u, rb, (4096 in bits(64) by simp()), (bits_of_int(32, 3) in bits(32) by simp()), (int_lt(bits_of_int(32, 3), 8) by simp()),
@@ -5382,7 +5382,7 @@ abbrev mp.am_call(c, f) := all t h regs o2. t in abi.World -> h in mp.G ->
   mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
   gc.regs_ok(regs, empty) ->
   runs(f[regs], t, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(t, o2) ||
   (ex V2 rr. (V2 in x86_64_linux.Vm && (ex A2 m. mp.am_post(c, h.A, h.blocks, t, A2, V2, m) && fst(rr) = m)) && o2 = ok(fn_update(t, "vm", V2), rr))
 
 // (a callee refining one called as alloc_meta: called as it too)

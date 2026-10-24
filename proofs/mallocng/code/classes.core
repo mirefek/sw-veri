@@ -49,13 +49,13 @@ qed
 theorem ms.clz_spec_inv: all tbl x s o. x in bits(32) -> s in abi.World -> !(x = 0) ->
   mallocng_specs.table_ok(s.vm, s.objs, tbl, 1, mallocng.debruijn32_tab) -> abi.thread_ok(s.vm, s.fs_base) ->
   runs(mallocng_specs.a_clz_32_spec(tbl, x), s, o) ->
-  (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) || (ex r. r in bits(32) && mallocng_specs.clz_of(x, r) && o = ok(s, r))
+  abi.ovf_out(s, o) || (ex r. r in bits(32) && mallocng_specs.clz_of(x, r) && o = ok(s, r))
 proof
   fix tbl x s o
   assume hx hw hnz htb hth h
   have ce := apply(ms.clz_exists, hx, hnz)
   have vv: ex y. y in x86_64_linux.Vm by ex_intro({s.vm}, simp(expand(hw, abi.World)))
-  show by simp(h, hnz, htb, hth, ce, vv, keep(mallocng_specs.table_ok, mallocng_specs.clz_of, abi.thread_ok))
+  show by simp(h, hnz, htb, hth, ce, vv, ct.objs_ne, keep(mallocng_specs.table_ok, mallocng_specs.clz_of, abi.thread_ok))
 qed
 
 // a_clz_32's contract at a call a_clz_32(x) (its spec's register wrapper,
@@ -66,7 +66,7 @@ theorem ms.clzs_q: all regs s tbl x o2. x in bits(32) -> s in abi.World -> s in 
   !(x = 0) -> mallocng_specs.table_ok(s.vm, s.objs, tbl, 1, mallocng.debruijn32_tab) -> abi.thread_ok(s.vm, s.fs_base) ->
   gc.regs_ok(regs, seq_one(gimple.arg(32, x))) ->
   runs(mallocng_specs.a_clz_32_spec_fun(tbl)[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && mallocng_specs.clz_of(x, bits_of_int(32, fst(r))))
 proof
   fix regs s tbl x o2
@@ -80,7 +80,7 @@ proof
   have vfun: is_fun(s) by simp(expand(hw, abi.World))
   have vdom: "vm" in dom(s) by simp(expand(hw, abi.World))
   have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && mallocng_specs.clz_of(x, bits_of_int(32, fst(r))))
+  let G := abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && mallocng_specs.clz_of(x, bits_of_int(32, fst(r))))
   // (one argument: the spec's run)
   have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
   have b := rewrite(r0, apply(g.runs_elim, h))
@@ -88,11 +88,11 @@ proof
       x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1)
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   have ci := apply(ms.clz_spec_inv, hx, hw, hnz, htb, hth, hs3)
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume e
-    obtain v, hv he from e
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(he, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: (ex r. r in bits(32) && mallocng_specs.clz_of(x, r) && o3 = ok(s, r)) -> G proof
@@ -1056,13 +1056,13 @@ proof
       assume hp
       have h131 hsct htbl hth := hp
       // (the spec's outcomes: an overflow, any memory; a class of n)
-      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-        fix v
-        assume hv
+      have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+        fix v ob
+        assume hv hob
         have vu := apply(x86.vm_univ, hv)
         have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
         show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.table_ok, mallocng_specs.class_of, abi.thread_ok))
       qed
       have sret: all c. c in bits(32) -> mallocng_specs.class_of(n, c) -> runs(SPEC, s, ok(s, c)) proof
@@ -1109,7 +1109,7 @@ proof
         have xnz: !(X = 0) by arith(x11, xo)
         // the call: a_clz_32's contract
         have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(32, X))) -> runs(mallocng_specs.a_clz_32_spec_fun(tbl)[regs], s, o2) ->
-            (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && mallocng_specs.clz_of(X, bits_of_int(32, fst(r)))) proof
+            abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && mallocng_specs.clz_of(X, bits_of_int(32, fst(r)))) proof
           fix regs o2
           assume hro h2
           show := apply(ms.clzs_q, xb, hw, hu, xnz, htbl, hth, hro, h2)
@@ -1117,10 +1117,10 @@ proof
         have ths: gc.sound(s) by simp(hth)
         have cc := apply(gc.contract_call1[R := r. mallocng_specs.clz_of(X, bits_of_int(32, fst(r)))], {g}, {mallocng_specs.a_clz_32_spec_fun(tbl)}, {seq_one(gimple.arg(32, X))}, {s}, {s.vm},
           ths, hw, vV, apply(gc.regs1_32_ex, xb), (int_le(seq_len(seq_one(gimple.arg(32, X))), 6) by simp()), hg, qa, b)
-        have cov: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) -> runs(SPEC, s, o) proof
+        have cov: abi.ovf_out(s, o) -> runs(SPEC, s, o) proof
           assume h
-          obtain v, hv ho from h
-          show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+          obtain v ob, hv hob ho from h
+          show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
         qed
         // the count C returned: the bucket's index I, its two lookups
         have cok: case 2 of cc proof
@@ -1578,12 +1578,12 @@ qed
 theorem ms.ctz_spec_inv: all tbl x s o. x in bits(32) -> s in abi.World -> !(x = 0) ->
   mallocng_specs.table_ok(s.vm, s.objs, tbl, 1, mallocng.debruijn32_tab) ->
   runs(mallocng_specs.a_ctz_32_spec(tbl, x), s, o) ->
-  (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) || o = ok(s, bits_of_int(32, gimple.tz(x)))
+  abi.ovf_out(s, o) || o = ok(s, bits_of_int(32, gimple.tz(x)))
 proof
   fix tbl x s o
   assume hx hw hnz htb h
   have vv: ex y. y in x86_64_linux.Vm by ex_intro({s.vm}, simp(expand(hw, abi.World)))
-  show by simp(h, hnz, htb, vv, keep(mallocng_specs.table_ok))
+  show by simp(h, hnz, htb, vv, ct.objs_ne, keep(mallocng_specs.table_ok))
 qed
 
 // a_ctz_32's contract at a call a_ctz_32(x): an overflow, or the return,
@@ -1592,7 +1592,7 @@ theorem ms.ctzs_q: all regs s tbl x o2. x in bits(32) -> s in abi.World -> s in 
   !(x = 0) -> mallocng_specs.table_ok(s.vm, s.objs, tbl, 1, mallocng.debruijn32_tab) ->
   gc.regs_ok(regs, seq_one(gimple.arg(32, x))) ->
   runs(mallocng_specs.a_ctz_32_spec_fun(tbl)[regs], s, o2) ->
-  (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
+  abi.ovf_out(s, o2) ||
   (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, gimple.tz(x)))
 proof
   fix regs s tbl x o2
@@ -1607,18 +1607,18 @@ proof
   have vfun: is_fun(s) by simp(expand(hw, abi.World))
   have vdom: "vm" in dom(s) by simp(expand(hw, abi.World))
   have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
-  let G := (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(32, fst(r)) = T)
+  let G := abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(32, fst(r)) = T)
   have o1: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
   have b := rewrite(r0, apply(g.runs_elim, h))
   have b2: bind_rel(mallocng_specs.a_ctz_32_spec(tbl, x), s, x3 x4. letin(x4, x5. bind_rel(gimple.result(32, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))),
       x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o1)
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   have ci := apply(ms.ctz_spec_inv, hx, hw, hnz, htb, hs3)
-  have c1: (ex v. v in x86_64_linux.Vm && o3 = exc(fn_update(s, "vm", v), OVF)) -> G proof
+  have c1: abi.ovf_out(s, o3) -> G proof
     assume e
-    obtain v, hv he from e
-    have oe: o2 = exc(fn_update(s, "vm", v), OVF) by simp(rewrite(he, hk3))
-    have l: ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF) by ex_intro({v}, taut(hv, oe))
+    obtain v ob, hv hob he from e
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(he, hk3))
+    have l: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
   have c2: o3 = ok(s, T) -> G proof
@@ -1664,13 +1664,13 @@ proof
       assume hp
       have hnz htb hth := hp
       // (the spec's outcomes: an overflow, any memory; x's leading zeros)
-      have sov: all v. v in x86_64_linux.Vm -> runs(SPEC, s, exc(fn_update(s, "vm", v), OVF)) proof
-        fix v
-        assume hv
+      have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+        fix v ob
+        assume hv hob
         have vu := apply(x86.vm_univ, hv)
         have eu: OVF in univ(1) by defs(simp(), exc_val)
-        have pu2: pair(s, exc(fn_update(s, "vm", v), OVF)) in univ(1) by simp(hu, vu, eu)
-        have ovi := apply(ct.overflow_intro, hv, pu2)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
         show by simp(hp, ovi, pu2, keep(abi.overflow, mallocng_specs.table_ok, mallocng_specs.clz_of, abi.thread_ok))
       qed
       have sret: all c. c in bits(32) -> mallocng_specs.clz_of(x, c) -> runs(SPEC, s, ok(s, c)) proof
@@ -1688,7 +1688,7 @@ proof
       step t17, b from hr
       // the call: a_ctz_32's contract
       have qa: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(32, X))) -> runs(mallocng_specs.a_ctz_32_spec_fun(tbl)[regs], s, o2) ->
-          (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(s, "vm", v), OVF)) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, gimple.tz(X))) proof
+          abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && bits_of_int(32, fst(r)) = bits_of_int(32, gimple.tz(X))) proof
         fix regs o2
         assume hro h2
         show := apply(ms.ctzs_q, xb, hw, hu, xnz, htb, hro, h2)
@@ -1696,10 +1696,10 @@ proof
       have ths: gc.sound(s) by simp(hth)
       have cc := apply(gc.contract_call1[R := r. bits_of_int(32, fst(r)) = bits_of_int(32, gimple.tz(X))], {g}, {mallocng_specs.a_ctz_32_spec_fun(tbl)}, {seq_one(gimple.arg(32, X))}, {s}, {s.vm},
         ths, hw, vV, apply(gc.regs1_32_ex, xb), (int_le(seq_len(seq_one(gimple.arg(32, X))), 6) by simp()), hg, qa, b)
-      have cov: (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), OVF)) -> runs(SPEC, s, o) proof
+      have cov: abi.ovf_out(s, o) -> runs(SPEC, s, o) proof
         assume h
-        obtain v, hv ho from h
-        show := rewrite(sym(ho), mp(all_elim(sov, {v}), hv))
+        obtain v ob, hv hob ho from h
+        show := rewrite(sym(ho), mp(all_elim(sov, {v}, {ob}), hv, hob))
       qed
       // the count returned: P; 31 - P
       have cok: case 2 of cc proof
