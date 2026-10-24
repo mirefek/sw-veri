@@ -1155,3 +1155,32 @@ item is a short summary of finished work; details are in the files named.
     d's word boundary, the words, the bytes left -- each a move of what is
     at s still (`mp.mvw`), the loops by `g.loop`; `memcpy_spec_fun` by the
     GIMPLE wrapper's convention (`result`).
+- **get_random_secret to its purpose** (`grsc.composed`, linked with
+  memcpy's code; proofs/mallocng/fun/random_secret.core).
+  - Spec and model fixes it needed (GIMPLE level): `stack_free` is a byte
+    on none of the world's pages (the world has none of the stack's) and
+    no live object's -- before, on a stack page, never in a world, so
+    `random_secret_spec` kept every byte, its own object's too;
+    `alloc_objs` places its objects at such bytes (`objs_fit`), not null,
+    within the address space, and raises a stack overflow when there is
+    no such place (before: any outcome); `auxv_ok` has the vector not at
+    null and below 2^63 (an index a pointer's signed offset), so mallocng's
+    invariant has `auxv_nz` (fresh_ok); `random_secret_spec` requires the
+    thread sound (its copy a call).
+  - The bridge: the object not null from the stack's reserve (`tr.aslot`:
+    rsp at the entry at least the guard gap up, the frame within
+    tr.FMAX); `tr.alloc1_run` through the overflow's guard.
+  - CFG refining the structured form (`get_random_secret_ref`): a `call_objs`
+    callee in a loop (eff.rs `called_in`), a wrapper reading the world
+    first (`g.wrap_ref_let`); the CFG's return inside a loop, the
+    structured one's after it: a trip's `break` then the loop's rest
+    (`g.loop_head`, `g.cut_loops`: the break case `o = pair(5, ..) ||
+    ks(..)`; gref's `or_side` takes the exit, else the rest).
+  - C2 (`mp.grs_run`): the allocation (`mp.alloc1_inv`), the auxv walk by
+    `g.loop` -- k pairs passed, the memory the entry's but the stack's free
+    bytes (`mp.rs_vm`, reads by `mp.rs_read`) --, AT_RANDOM's bytes copied
+    by memcpy's contract at a call (`mp.mc_q`), the object's word read.
+    The function (`mp.grs_fun`) refines the spec up to an overflow's world:
+    a function with stack objects raises with them still live (the
+    wrapper restores them at its return only); the machine's contract
+    sees an overflow's records only (`tr.implements_refine_ovf`).

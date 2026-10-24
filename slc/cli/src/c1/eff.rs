@@ -682,14 +682,14 @@ impl<'e> Eff<'e> {
         self.api.by(self.env, &goal, G::Defs(Box::new(G::Apply(ep, vec![A::T(s.clone()), A::G(G::By(kb))])), vec![f, letin])).map_err(|x| x.0)
     }
 
-    /// the variables called in t (`call(g, args)`, `call1(g, args)`), with
-    /// their calls' numbers of arguments (the least)
     /// a callee's hypothesis: `tr.callee_io(g, k)`, or with more than six
     /// arguments (stack arguments, CFunS) `tr.callee_io_s(g, k)`
     fn callee_hyp(&self, g: &Term, k: usize) -> R<Term> {
         self.mk(if k > 6 { "tr.callee_io_s" } else { "tr.callee_io" }, vec![g.clone(), Term::nat(sl_kernel::Nat::from_u128(k as u128))])
     }
 
+    /// the variables called in t (`call(g, args)`, `call1(g, args)`), with
+    /// their calls' numbers of arguments (the least)
     fn called(&self, t: &Term) -> HashMap<VarId, usize> {
         let mut m: HashMap<VarId, usize> = HashMap::new();
         self.called_in(t, &mut m);
@@ -703,6 +703,13 @@ impl<'e> Eff<'e> {
                     let e = m.entry(*g).or_insert(k);
                     *e = (*e).min(k);
                 }
+            }
+        }
+        // (a call from a function with stack objects: `call_objs(objs, g, args)`)
+        if let Some(c) = self.app(t, "gimple.call_objs", 3) {
+            if let (Node::Var(g, _), Some(k)) = (c[1].node(), list_len(self, &c[2])) {
+                let e = m.entry(*g).or_insert(k);
+                *e = (*e).min(k);
             }
         }
         match t.node() {

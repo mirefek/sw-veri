@@ -286,7 +286,7 @@ pred fresh_ok(c: Cfg, A: Abs, m: Mem) =
   A.init_done = 0 ->
     areas: len(A.areas) = 0 && reserve: A.reserve_cnt = 0 && free_metas: len(A.free_metas) = 0 && used: len(A.used) = 0 &&
     avail: A.avail_cnt = 0 && active: (all sc: nat. sc < 48 -> len(A.active[sc]) = 0) &&
-    auxv_at: rd(m, c.libc + L_AUXV, 8) = A.auxv_at &&
+    auxv_at: rd(m, c.libc + L_AUXV, 8) = A.auxv_at && auxv_nz: A.auxv_at != 0 &&
     auxv_len: len(A.auxv) >= 1 &&
     auxv: (all k: nat. k < len(A.auxv) ->
        rd(m, A.auxv_at + 16 * k, 8) = A.auxv[k][0] && rd(m, A.auxv_at + 16 * k + 8, 8) = A.auxv[k][1]) &&

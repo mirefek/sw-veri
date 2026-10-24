@@ -11,16 +11,16 @@
 abbrev mp.rs_vm(t, V) := fn_update(V, "bytes", t.vm.bytes) = t.vm &&
   (all x. x in bits(64) -> !abi.stack_free(t.vm, t.objs, x) -> V.bytes[x] = t.vm.bytes[x])
 
-// get_random_secret's (libc's auxiliary vector readable): an overflow, or
-// a secret returned -- any 64-bit value --, the memory as it was but the
-// stack's free bytes
-theorem mp.rs_q: all t libc regs o2. t in abi.World -> t in univ(1) -> mallocng_specs.auxv_ok(t.vm, t.objs, libc) -> gc.regs_ok(regs, empty) ->
+// get_random_secret's (libc's auxiliary vector readable, the thread
+// sound): an overflow, or a secret returned -- any 64-bit value --, the
+// memory as it was but the stack's free bytes
+theorem mp.rs_q: all t libc regs o2. t in abi.World -> t in univ(1) -> mallocng_specs.auxv_ok(t.vm, t.objs, libc) -> abi.thread_ok(t.vm, t.fs_base) -> gc.regs_ok(regs, empty) ->
   runs(mallocng_specs.random_secret_spec_fun(libc)[regs], t, o2) ->
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V r. (V in x86_64_linux.Vm && (fst(r) in bits(64) && mp.rs_vm(t, V))) && o2 = ok(fn_update(t, "vm", V), r))
 proof
   fix t libc regs o2
-  assume hw htu hax hro h
+  assume hw htu hax hth hro h
   let OVF := exc_val("stack_overflow", empty)
   have rl rn := apply(gc.regs0, hro)
   have lo: seq_len(regs) in omega by simp(rl)
@@ -63,7 +63,7 @@ proof
   // the spec's body: an overflow, or the memory havocked so (t.vm one such)
   // and a word returned
   rsimp only, mallocng_specs.random_secret_spec in hs3
-  obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), hax)
+  obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), (mallocng_specs.auxv_ok(t.vm, t.objs, libc) && abi.thread_ok(t.vm, t.fs_base) by taut(hax, hth)))
   have k1: case 1 of hbr proof
     assume e
     rsimp only, abi.overflow in e
@@ -777,7 +777,7 @@ proof
   let AT := A.auxv_at
   have {H = inv} := expand(hh, mallocng.holds_m)
   have {hfr = fresh} := expand(H, mallocng.holds)
-  have {fal = auxv_len, fav = auxv, fae = auxv_end, fan = auxv_null} := mp(expand(hfr, mallocng.fresh_ok), h0)
+  have {fal = auxv_len, fnz = auxv_nz, fav = auxv, fae = auxv_end, fan = auxv_null} := mp(expand(hfr, mallocng.fresh_ok), h0)
   have lu le lb := apply(mp.libc_auxv[c := c, A := A, vm := vm, b := b, objs := objs], hc, hu, ha, hb, hh, hsh, h0)
   have cf3: c.libc in omega by simp(hc)
   have bl: bits_add(64, c.libc, 8) = int_add(c.libc, 8) by defs(arith(cf3, lb), bits_add, pow2)
@@ -802,7 +802,7 @@ proof
   // (n bytes from p, all in the auxiliary vector's range j: usable, read as the view has them)
   have rng: all j p n. j in omega -> int_lt(j, seq_len(mallocng.auxv_ranges(A))) -> p in omega -> n in omega -> int_lt(0, n) -> int_le(n, 16) ->
       (all i. i in omega -> int_lt(i, n) -> mallocng.in_range(int_add(p, i), mallocng.auxv_ranges(A)[j])) ->
-      gimple.usable(vm, objs, p, n, false) && gimple.bytes_at(vm, p, n) = mallocng.rd(M, p, n) && int_lt(int_add(p, n), int_pow(2, 64)) proof
+      gimple.usable(vm, objs, p, n, false) && gimple.bytes_at(vm, p, n) = mallocng.rd(M, p, n) && int_le(int_add(p, n), int_pow(2, 63)) proof
     fix j p n
     assume hj hjl hp hn hn0 hn16 hin
     have each: all i. i in omega -> int_lt(i, n) -> int_add(p, i) in F && mallocng.m_mapped(M, int_add(p, i)) &&
@@ -820,13 +820,14 @@ proof
     have us := apply(mp.view_usable[vm := vm, fp := F, objs := objs, a := p, n := n], hp, each, VS)
     have er := apply(mp.view_read[vm := vm, fp := F, a := p, n := n], hp, hn, arith(hn16), inF)
     have _ ml _ _ := mp(all_elim(each, {int_sub(n, 1)}), arith(hn0, hn), arith(hn0))
-    have nb: int_lt(int_add(p, n), int_pow(2, 64)) by arith(expand(ml, mallocng.m_mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), hp, hn, hn0)
+    have nb: int_le(int_add(p, n), int_pow(2, 63)) by arith(expand(ml, mallocng.m_mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), hp, hn, hn0)
     show by taut(us, er, nb)
   qed
   have a0l: int_lt(0, seq_len(mallocng.auxv_ranges(A))) by arith(arl, lo)
   // each entry: its pair readable, as the view has it; AT_RANDOM's 8 bytes readable
   have ent: all x1. x1 in omega -> int_lt(x1, seq_len(L)) ->
-      ((gimple.usable(vm, objs, int_add(AT, int_mul(16, x1)), 16, false) && gimple.bytes_at(vm, bits_of_int(64, int_add(AT, int_mul(16, x1))), 8) = fst(L[x1])) &&
+      (((gimple.usable(vm, objs, int_add(AT, int_mul(16, x1)), 16, false) && int_le(int_add(int_add(AT, int_mul(16, x1)), 16), int_pow(2, 63))) &&
+        gimple.bytes_at(vm, bits_of_int(64, int_add(AT, int_mul(16, x1))), 8) = fst(L[x1])) &&
         gimple.bytes_at(vm, bits_of_int(64, int_add(int_add(AT, int_mul(16, x1)), 8)), 8) = snd(L[x1])) &&
       (fst(L[x1]) = x86_64_linux.AT_RANDOM -> gimple.usable(vm, objs, int_add(snd(L[x1]), 8), 8, false)) proof
     fix k
@@ -878,12 +879,14 @@ proof
       have uq _ _ := mp(all_elim(rng, {int_add(1, k)}, {Q}, {8}), arith(hk), arith(arl, hkl), qo, simp(), simp(), simp(), rq)
       show := uq
     qed
-    show by taut(u16, w0, w1, rnd)
+    show by taut(u16, n16, w0, w1, rnd)
   qed
   have ent2 := rewrite(sym(ba), ent)
   have o1: ord_le(1, seq_len(L)) := fal
-  show by defs(taut(lu, (ex x0. x0 in list_type(cart(omega, omega)) && (((ord_le(1, seq_len(x0)) && (all x1. x1 in omega -> int_lt(x1, seq_len(x0)) ->
-      ((gimple.usable(vm, objs, int_add(LA, int_mul(16, x1)), 16, false) && gimple.bytes_at(vm, bits_of_int(64, int_add(LA, int_mul(16, x1))), 8) = fst(x0[x1])) &&
+  have lnz: !(LA = 0) := rewrite(sym(ba), fnz)
+  show by defs(taut(lu, lnz, (ex x0. x0 in list_type(cart(omega, omega)) && (((ord_le(1, seq_len(x0)) && (all x1. x1 in omega -> int_lt(x1, seq_len(x0)) ->
+      (((gimple.usable(vm, objs, int_add(LA, int_mul(16, x1)), 16, false) && int_le(int_add(int_add(LA, int_mul(16, x1)), 16), int_pow(2, 63))) &&
+        gimple.bytes_at(vm, bits_of_int(64, int_add(LA, int_mul(16, x1))), 8) = fst(x0[x1])) &&
         gimple.bytes_at(vm, bits_of_int(64, int_add(int_add(LA, int_mul(16, x1)), 8)), 8) = snd(x0[x1])) &&
       (fst(x0[x1]) = x86_64_linux.AT_RANDOM -> gimple.usable(vm, objs, int_add(snd(x0[x1]), 8), 8, false)))) &&
       fst(x0[int_sub(seq_len(x0), 1)]) = x86_64_linux.AT_NULL) && (all x1. x1 in omega -> int_lt(int_add(x1, 1), seq_len(x0)) -> !(fst(x0[x1]) = x86_64_linux.AT_NULL)))
@@ -4100,7 +4103,7 @@ proof
       mp(all_elim(NF, {0}, {8}), simp(), simp(), simp()))
     // (the secret read: the C world's memory as it was, mp.rs_vm)
     step e0 from tb with z
-    step Vr r, e1 hP from e0 with mp.rs_q using conj(hw, hu, vV, ax, ths, hrs)
+    step Vr r, e1 hP from e0 with mp.rs_q using conj(hw, hu, vV, ax, hth, ths, hrs)
     have vrV hQ := hP
     have hrb hrv := hQ
     have er eb := hrv

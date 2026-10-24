@@ -1452,8 +1452,9 @@ impl<'e> Gen<'e> {
                     return Ok(Some(Red::Guard { cond: so.cond, ub: (u, ubr) }));
                 }
                 // a move (a string instruction's): its definedness split
-                // here, the move itself at the machine's movs
-                if let Some((_, _, _, cond, ub, _)) = self.move_op(&x[0]) {
+                // here, the move itself at the machine's movs (C1's: at a
+                // point's world)
+                if let Some((_, _, _, cond, ub, _)) = if self.hvu.is_some() { self.move_op(&x[0]) } else { None } {
                     if self.hyp_find(hyps, &cond).is_some() {
                         return Ok(None);
                     }

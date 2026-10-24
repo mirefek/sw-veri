@@ -27,12 +27,14 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
   last `tr.implements_at_s`, with a stack argument -- `mmc.composed`).
   `mp.ap_mm`, `mp.ap_mpr`, `mp.ap_el`: such leaves for `mp.ap_leaves`.
-  get_random_secret has its C1 (proofs/mallocng/machine/c1_objs.core,
-  `grsc.implements_abi`, memcpy's contract its hypothesis -- memcpy's is
-  `mcpc.composed`). Next, then the hypotheses discharged:
-  - get_random_secret's C2 against `random_secret_spec` (the auxv walk;
-    memcpy writes only the stack object, a free byte of the stack after
-    the return -- the canary is the bridge's, not the C world's).
+  get_random_secret implements its purpose at machine level, linked with
+  memcpy (`grsc.composed`). Next, then the hypotheses discharged:
+  - `mp.ap_leaves`' G1 (get_random_secret): an exact `mp.calls(G1,
+    random_secret_spec_fun)` -- the code's function value refines the
+    spec only up to an overflow's world (its stack object still live
+    there: `mp.grs_fun`). Either the spec's function itself as G1 (its
+    `tr.callee_io` then), or the GIMPLE wrapper dropping the objects at an
+    exception too, or `overflow()` leaving the objects any.
   - the stack objects' engine: more than one object (`tr.obj1` is one
     8-byte object; `alloc_objs` of several), objects read before their
     first store (none at -O0 yet).
@@ -98,7 +100,7 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 musl's `_start` … `__libc_start_main` reaches `main` with the invariant
 holding for the empty heap. It needs from exec (spec/linux/exec.sl):
 the break within the user space (`brk_ok`), the auxiliary vector apart
-from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
+from the data (`fresh_ok.auxv_ctx`) and not at null (`auxv_nz`); and the ABI's entry its
 `brk_start_ok`.
 
 The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: the

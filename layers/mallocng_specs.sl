@@ -377,13 +377,14 @@ fn memcpy_spec_fun() -> CFun2[World] = (args: Args) => {
   return (result(r), any bits[64])
 }
 
-// libc's auxiliary vector readable (`libc.auxv`, at libc + 8): its pairs up
-// to AT_NULL, the 8 bytes past AT_RANDOM's address
+// libc's auxiliary vector readable (`libc.auxv`, at libc + 8, not null):
+// its pairs up to AT_NULL (below 2^63: an index into it a pointer's signed
+// offset), the 8 bytes past AT_RANDOM's address
 pred auxv_ok(vm: Vm, objs: Objs, libc: Addr) =
-  usable(vm, objs, uint(libc) + 8, 8, false) &&
+  usable(vm, objs, uint(libc) + 8, 8, false) && bytes_at(vm, libc + 8, 8) != 0 &&
   (ex auxv: List[(nat, nat)]. len(auxv) >= 1 &&
      (all k: nat. k < len(auxv) ->
-        usable(vm, objs, bytes_at(vm, libc + 8, 8) + 16 * k, 16, false) &&
+        usable(vm, objs, bytes_at(vm, libc + 8, 8) + 16 * k, 16, false) && bytes_at(vm, libc + 8, 8) + 16 * k + 16 <= 2^63 &&
         bytes_at(vm, bits[64](bytes_at(vm, libc + 8, 8) + 16 * k), 8) = auxv[k][0] &&
         bytes_at(vm, bits[64](bytes_at(vm, libc + 8, 8) + 16 * k + 8), 8) = auxv[k][1] &&
         (auxv[k][0] = AT_RANDOM -> usable(vm, objs, auxv[k][1] + 8, 8, false))) &&
@@ -391,9 +392,10 @@ pred auxv_ok(vm: Vm, objs: Objs, libc: Addr) =
 
 // get_random_secret(): a secret -- any value (the kernel's random bytes,
 // AT_RANDOM's, if any), nothing changed but the stack's free bytes (its
-// own stack object's, dead after it: `stack_free`)
+// own stack object's, dead after it: `stack_free`); the thread sound (the
+// copy a call)
 proc[World] random_secret_spec(libc: Addr) -> bits[64] {
-  require auxv_ok(vm, objs, libc)
+  require auxv_ok(vm, objs, libc) && thread_ok(vm, fs_base)
   either { overflow() } or {
     let before = vm
     havoc vm where (vm with { bytes: before.bytes }) = before &&

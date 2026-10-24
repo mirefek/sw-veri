@@ -306,7 +306,7 @@ impl<'e> Gen<'e> {
         let okr = self.run(
             &mpf(
                 "tr.alloc1_run",
-                vec![t(&w), t(&ha), t(&u), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), hab.clone(), taut(vec![R::S(hasl.clone())]), taut(vec![R::S(hasl)]), s(&hnd)],
+                vec![t(&w), t(&ha), t(&u), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), hab.clone(), taut(vec![R::S(hasl.clone())]), taut(vec![R::S(hasl.clone())]), taut(vec![R::S(hasl)]), s(&hnd)],
             ),
             &[],
         )?;

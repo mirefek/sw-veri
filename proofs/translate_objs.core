@@ -450,15 +450,16 @@ proof
   show by defs(taut(wo3, wm3, oa2, hlv2, cok), tr.mem)
 qed
 
-// (the n bytes from A outside the world's domain: as alloc_objs takes its
+// (the n bytes from A the stack's free ones: as alloc_objs takes its
 // objects' bytes)
-// (the 8 bytes at the home c as an object takes them: aligned, in range)
-abbrev tr.aslot(s, c) := int_mod(tr.ha(s, c), 8) = 0 && int_le(int_add(tr.ha(s, c), 8), 18446744073709551616)
+// (the 8 bytes at the home c as an object takes them: aligned, in range,
+// not null)
+abbrev tr.aslot(s, c) := int_mod(tr.ha(s, c), 8) = 0 && int_le(int_add(tr.ha(s, c), 8), 18446744073709551616) && !(tr.ha(s, c) = 0)
 
-abbrev tr.nodom(w, A, n) := all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, n)) -> !abi.in_domain(w.vm, w.objs, a)
+abbrev tr.nodom(w, A, n) := all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, n)) -> abi.stack_free(w.vm, w.objs, a)
 
 // (the 8 bytes of the home c on the machine's stack pages, none of the
-// objects: outside the world's domain -- its pages none there, or the
+// objects: the stack's free bytes -- the world's pages none there, or the
 // machine's, the stack's)
 theorem tr.nodom_frame: all s base code fr m0 m w v c. tr.inv(s, base, code, fr, m0, w) -> tr.mem(s, m, w, v) -> tr.hrange(c, 8) ->
   tr.hacc(s, m.vm, c, 8) -> tr.hfree(s, c, 8, v) -> tr.nodom(w, tr.ha(s, c), 8)
@@ -507,8 +508,8 @@ proof
     show by defs(taut(e), x86_64_linux.mapped)
   qed
   have pq: int_div(a, x86_64_linux.PAGE) = P by defs(simp(), x86_64_linux.PAGE)
-  have g: !(a in w.objs.live || ((x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2)) && a in w.objs.c_bytes)) by taut(nv, pc, c1, c2)
-  show by defs(rewrite(sym(pq), g), abi.in_domain)
+  have g: !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2)) && !(a in w.objs.live) by taut(nv, pc, c1, c2)
+  show by defs(rewrite(sym(pq), g), abi.stack_free)
 qed
 
 // The objects after the frame's object at c0 allocated: the callers' v0
@@ -616,7 +617,13 @@ proof
     have hz: bits_add(64, tr.ha(s, c), bits_of_int(64, 0)) = tr.ha(s, c) by simp(hb0)
     have eh: tr.ha(s, c) = int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), 0) := trans(sym(hz), e0)
     have c64 _ _ nl := expand(hc, tr.hrange)
-    have hsl: tr.aslot(s, c) by arith(eh, sal, hc8, c64, nl, r4)
+    // (not null: rsp at the entry on a stack page, at least the guard gap
+    // up -- the stack's reserve --, the frame within tr.FMAX below it)
+    have {srsv, hsps} := hi
+    have gg _ rsp _ := expand(srsv, abi.stack_reserve)
+    have fl _ _ _ := mp(all_elim(rsp, {int_div(s.gpr[4], 4096)}), (int_div(s.gpr[4], 4096) in omega by simp(r4)), hsps)
+    have sg: int_le(1048576, s.gpr[4]) by arith(expand(gg, x86_64_linux.STACK_GUARD_GAP, x86_64_linux.PAGE), expand(fl, x86_64_linux.PAGE), r4)
+    have hsl: tr.aslot(s, c) by arith(eh, sal, hc8, c64, nl, r4, sg, hfd, hfm)
     let ST(m1) := fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, tr.ha(s, c), 8, x)))
     let Q(m2) := ex m1 e1. runs(x86_64_linux.touch_range(tr.ha(s, c), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) && m2 = ST(m1)
     let QX(y, e) := runs(x86_64_linux.touch_range(tr.ha(s, c), 8, 1), fn_update(m, "rip", a2), exc(y, e))
@@ -742,19 +749,16 @@ qed
 //  The spec's allocation of one object of 8 bytes at A (its bytes x:
 //  any, as alloc_objs allows)
 
-theorem tr.alloc1_run: all w A x. w in abi.World -> w in univ(1) -> A in bits(64) -> int_le(int_add(A, 8), 18446744073709551616) -> int_mod(A, 8) = 0 ->
-  (all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, 8)) -> !abi.in_domain(w.vm, w.objs, a)) ->
+theorem tr.alloc1_run: all w A x. w in abi.World -> w in univ(1) -> A in bits(64) -> int_le(int_add(A, 8), 18446744073709551616) -> int_mod(A, 8) = 0 -> !(A = 0) ->
+  (all a. a in omega -> int_le(A, a) && int_lt(a, int_add(A, 8)) -> abi.stack_free(w.vm, w.objs, a)) ->
   runs(gimple.alloc_objs(seq_one(pair(8, 8))), w, ok(fn_update(fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, A, 8, x))), "objs", fn_update(w.objs, "live", tr.obj1(w.objs.live, A))), seq_one(A)))
 proof
   fix w A x
-  assume hW hu hA hA8 hal hnd
+  assume hW hu hA hA8 hal hnz hnd
   let SZ := seq_one(pair(8, 8))
   let V := fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, A, 8, x))
   let W2 := fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", tr.obj1(w.objs.live, A)))
-  let D(x2) := x2 in list_type(bits(64)) && ((seq_len(x2) = seq_len(SZ) && (all x3. x3 in omega -> int_lt(x3, seq_len(SZ)) -> int_mod(app(x2, x3), snd(app(SZ, x3))) = 0 &&
-    (all x4. x4 in omega -> int_le(app(x2, x3), x4) && int_lt(x4, int_add(app(x2, x3), fst(app(SZ, x3)))) -> !abi.in_domain(app(w, "vm"), app(w, "objs"), x4)))) &&
-    (all x3. all x4. x3 in omega && x4 in omega -> int_lt(x3, x4) && int_lt(x4, seq_len(SZ)) -> int_le(int_add(app(x2, x3), fst(app(SZ, x3))), app(x2, x4)) ||
-      int_le(int_add(app(x2, x4), fst(app(SZ, x4))), app(x2, x3))))
+  let D(x2) := x2 in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, SZ, x2)
   let P2(x3, x5) := x5 in x86_64_linux.Vm && (fn_update(app(fn_update(w, "vm", x5), "vm"), "bytes", app(app(w, "vm"), "bytes")) = app(w, "vm") &&
     (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(SZ)) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(SZ, x7)))))) ->
       app(app(app(fn_update(w, "vm", x5), "vm"), "bytes"), x6) = app(app(app(w, "vm"), "bytes"), x6)))
@@ -770,20 +774,23 @@ proof
   have dA: D(seq_one(A)) proof
     have t1 := mp(all_elim(tr.seq_one_type, {A}, {bits(64)}), hA)
     have t2: seq_len(seq_one(A)) = seq_len(SZ) by simp()
-    have t3: all x3. x3 in omega -> int_lt(x3, seq_len(SZ)) -> int_mod(app(seq_one(A), x3), snd(app(SZ, x3))) = 0 &&
-        (all x4. x4 in omega -> int_le(app(seq_one(A), x3), x4) && int_lt(x4, int_add(app(seq_one(A), x3), fst(app(SZ, x3)))) -> !abi.in_domain(app(w, "vm"), app(w, "objs"), x4)) proof
+    have t3: all x3. x3 in omega -> int_lt(x3, seq_len(SZ)) -> ((int_mod(app(seq_one(A), x3), snd(app(SZ, x3))) = 0 && !(app(seq_one(A), x3) = 0)) &&
+        int_le(int_add(app(seq_one(A), x3), fst(app(SZ, x3))), int_pow(2, 64))) &&
+        (all x4. x4 in omega -> int_le(app(seq_one(A), x3), x4) && int_lt(x4, int_add(app(seq_one(A), x3), fst(app(SZ, x3)))) -> abi.stack_free(app(w, "vm"), app(w, "objs"), x4)) proof
       fix k
       assume k1 k2
       have e := mp(all_elim(k0, {k}), k1, k2)
       have m0: int_mod(app(seq_one(A), k), snd(app(SZ, k))) = 0 by simp(e, hal)
-      have nd: all x4. x4 in omega -> int_le(app(seq_one(A), k), x4) && int_lt(x4, int_add(app(seq_one(A), k), fst(app(SZ, k)))) -> !abi.in_domain(app(w, "vm"), app(w, "objs"), x4) proof
+      have m1: !(app(seq_one(A), k) = 0) by simp(e, hnz)
+      have m2: int_le(int_add(app(seq_one(A), k), fst(app(SZ, k))), int_pow(2, 64)) by simp(e, hA8)
+      have nd: all x4. x4 in omega -> int_le(app(seq_one(A), k), x4) && int_lt(x4, int_add(app(seq_one(A), k), fst(app(SZ, k)))) -> abi.stack_free(app(w, "vm"), app(w, "objs"), x4) proof
         fix y
         assume y1 y2
         have y3 := rewrite(e, y2)
         have yy: int_le(A, y) && int_lt(y, int_add(A, 8)) by simp(y3)
         show := mp(all_elim(hnd, {y}), y1, yy)
       qed
-      show by taut(m0, nd)
+      show by taut(m0, m1, m2, nd)
     qed
     have t4: all x3. all x4. x3 in omega && x4 in omega -> int_lt(x3, x4) && int_lt(x4, seq_len(SZ)) -> int_le(int_add(app(seq_one(A), x3), fst(app(SZ, x3))), app(seq_one(A), x4)) ||
         int_le(int_add(app(seq_one(A), x4), fst(app(SZ, x4))), app(seq_one(A), x3)) proof
@@ -793,7 +800,7 @@ proof
       have f: false by arith(jo, ko, h2, l1)
       show by taut(f)
     qed
-    show by taut(t1, t2, t3, t4)
+    show by defs(taut(t1, t2, t3, t4), gimple.objs_fit)
   qed
   // the memory: x at A, else as it was
   have vm0: w.vm in x86_64_linux.Vm by simp(hW, keep(x86_64_linux.Vm))
@@ -822,8 +829,20 @@ proof
   have qV: Q2(seq_one(A), V) by simp()
   have e5: ex x5. P2(seq_one(A), x5) && Q2(seq_one(A), x5) by ex_intro({V}, taut(pV, qV))
   have e2: ex x2. D(x2) && (!(ex x5. P2(x2, x5)) || (ex x5. P2(x2, x5) && Q2(x2, x5))) by ex_intro({seq_one(A)}, taut(dA, e5))
-  let BODY(x0, x1) := any_rel(x2. x2 in list_type(bits(64)) && ((seq_len(x2) = seq_len(seq_one(pair(8, 8))) && (all x3. x3 in omega -> int_lt(x3, seq_len(seq_one(pair(8, 8)))) -> int_mod(app(x2, x3), snd(app(seq_one(pair(8, 8)), x3))) = 0 && (all x4. x4 in omega -> int_le(app(x2, x3), x4) && int_lt(x4, int_add(app(x2, x3), fst(app(seq_one(pair(8, 8)), x3)))) -> !abi.in_domain(app(x0, "vm"), app(x0, "objs"), x4)))) && (all x3. all x4. x3 in omega && x4 in omega -> int_lt(x3, x4) && int_lt(x4, seq_len(seq_one(pair(8, 8)))) -> int_le(int_add(app(x2, x3), fst(app(seq_one(pair(8, 8)), x3))), app(x2, x4)) || int_le(int_add(app(x2, x4), fst(app(seq_one(pair(8, 8)), x4))), app(x2, x3)))), x2. letin(x2, x3. letin(app(x0, "vm"), x4. any_rel(x5. x5 in x86_64_linux.Vm && (fn_update(app(fn_update(x0, "vm", x5), "vm"), "bytes", app(x4, "bytes")) = x4 && (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(seq_one(pair(8, 8)))) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(seq_one(pair(8, 8)), x7)))))) -> app(app(app(fn_update(x0, "vm", x5), "vm"), "bytes"), x6) = app(app(x4, "bytes"), x6))), x5. letin(fn_update(x0, "vm", x5), x6. letin(fn_update(x6, "objs", fn_update(app(x6, "objs"), "live", set_select(omega, x7. x7 in app(app(x6, "objs"), "live") || (ex x8. x8 in omega && ((int_lt(x8, seq_len(seq_one(pair(8, 8)))) && int_le(app(x3, x8), x7)) && int_lt(x7, int_add(app(x3, x8), fst(app(seq_one(pair(8, 8)), x8))))))))), x7. x1 = ok(x7, x3)))))))
-  have rb: BODY(w, ok(W2, seq_one(A))) by defs(taut(e2), any_rel, letin)
+  let ANY(x0, x1) := any_rel(x2. x2 in list_type(bits(64)) && gimple.objs_fit(x0.vm, x0.objs, seq_one(pair(8, 8)), x2), x2. letin(x2, x3. letin(app(x0, "vm"), x4. any_rel(x5. x5 in x86_64_linux.Vm && (fn_update(app(fn_update(x0, "vm", x5), "vm"), "bytes", app(x4, "bytes")) = x4 && (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(seq_one(pair(8, 8)))) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(seq_one(pair(8, 8)), x7)))))) -> app(app(app(fn_update(x0, "vm", x5), "vm"), "bytes"), x6) = app(app(x4, "bytes"), x6))), x5. letin(fn_update(x0, "vm", x5), x6. letin(fn_update(x6, "objs", fn_update(app(x6, "objs"), "live", set_select(omega, x7. x7 in app(app(x6, "objs"), "live") || (ex x8. x8 in omega && ((int_lt(x8, seq_len(seq_one(pair(8, 8)))) && int_le(app(x3, x8), x7)) && int_lt(x7, int_add(app(x3, x8), fst(app(seq_one(pair(8, 8)), x8))))))))), x7. x1 = ok(x7, x3)))))))
+  have rb0: ANY(w, ok(W2, seq_one(A))) by defs(taut(e2), any_rel, letin)
+  // (room for it: not the overflow)
+  let FIT(x0) := ex x3. x3 in list_type(bits(64)) && gimple.objs_fit(x0.vm, x0.objs, SZ, x3)
+  let TOP(X, L, o) := ((fst(X) = 0 && L) || ((((fst(X) = 1 && fst(out_value(X)) = "ret") && o = ok(fst(out_state(X)), snd(out_value(X)))) ||
+    ((fst(X) = 1 && fst(out_value(X)) = "raise") && o = exc(fst(out_state(X)), snd(out_value(X))))) || (fst(X) = 2 && o = diverge(snd(X)))))
+  let BODY(x0, x1) := ex x2. ((!FIT(x0) && x2 = exc(pair(x0, empty), pair("raise", exc_val("stack_overflow", empty)))) || (!!FIT(x0) && x2 = ok(pair(x0, empty), empty))) &&
+    TOP(x2, ANY(fst(out_state(x2)), x1), x1)
+  have fx: FIT(w) by ex_intro({seq_one(A)}, dA)
+  have f0: fst(ok(pair(w, empty), empty)) = 0 by simp()
+  have f1: fst(out_state(ok(pair(w, empty), empty))) = w by simp()
+  have rb1 := subst({y. ANY(y, ok(W2, seq_one(A)))}, sym(f1), rb0)
+  have lt: TOP(ok(pair(w, empty), empty), ANY(fst(out_state(ok(pair(w, empty), empty))), ok(W2, seq_one(A))), ok(W2, seq_one(A))) by taut(f0, rb1)
+  have rb: BODY(w, ok(W2, seq_one(A))) by ex_intro({ok(pair(w, empty), empty)}, taut(fx, lt, refl({ok(pair(w, empty), empty)})))
   have a1 := mp(univ_trans[u := 1, a := A, b := bits(64)], bits_univ[n := 64], hA)
   have ss: subset(tr.obj1(w.objs.live, A), omega) proof
     have g: all z. z in tr.obj1(w.objs.live, A) -> z in omega proof

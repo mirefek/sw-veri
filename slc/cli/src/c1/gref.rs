@@ -72,19 +72,27 @@ impl<'e> Gen<'e> {
         if self.canon(&fl[0]) != self.canon(&fh[0]) {
             return Err("the two functions' domains differ".into());
         }
-        // each argument list's program: mkprog(x1 x2. [c ||] bind_rel(P(..), x1, K, X, D))
-        let parts = |g: &Gen, m: &Term| -> Option<(Option<Term>, Term, Vec<Term>)> {
+        // each argument list's program: mkprog(x1 x2. [c ||] bind_rel(P(..), x1, K, X, D)),
+        // or (a function with stack objects) mkprog(x1 x2. letin(A, z. bind_rel(..)))
+        let parts = |g: &Gen, m: &Term| -> Option<(Option<Term>, Option<Term>, Term, Vec<Term>)> {
             let body = g.app(m, "mkprog", 1)?[0].clone();
             let (c, b) = match g.app(&body, "or", 2) {
                 Some(o) => (Some(o[0].clone()), o[1].clone()),
                 None => (None, body),
             };
+            let (lv, b) = match g.app(&b, "letin", 2) {
+                Some(l) if c.is_none() => (Some(l[0].clone()), l[1].clone()),
+                _ => (None, b),
+            };
             let br = g.app(&b, "bind_rel", 5)?.to_vec();
-            Some((c, br[0].clone(), br))
+            Some((c, lv, br[0].clone(), br))
         };
-        let (cl, procl, brl) = parts(self, &fl[1]).ok_or("the low function's program: not a procedure's call")?;
-        let (ch, proch, brh) = parts(self, &fh[1]).ok_or("the high function's program: not a procedure's call")?;
-        if cl.as_ref().map(|c| self.canon(c)) != ch.as_ref().map(|c| self.canon(c)) || (2..5).any(|i| self.canon(&brl[i]) != self.canon(&brh[i])) {
+        let (cl, ll, procl, brl) = parts(self, &fl[1]).ok_or("the low function's program: not a procedure's call")?;
+        let (ch, lh, proch, brh) = parts(self, &fh[1]).ok_or("the high function's program: not a procedure's call")?;
+        if cl.as_ref().map(|c| self.canon(c)) != ch.as_ref().map(|c| self.canon(c))
+            || ll.as_ref().map(|c| self.canon(c)) != lh.as_ref().map(|c| self.canon(c))
+            || (2..5).any(|i| self.canon(&brl[i]) != self.canon(&brh[i]))
+        {
             return Err("the two functions' wrappers differ".into());
         }
         let (Node::App(sl, al), Node::App(sh, ah)) = (procl.node(), proch.node()) else { return Err("the procedures' calls".into()) };
@@ -100,23 +108,31 @@ impl<'e> Gen<'e> {
         let av = self.var("ra");
         let inst_a = |g: &Gen, t: &Term| t.instantiate_params(std::slice::from_ref(&av), &g.env.binders_fn());
         let (ml, mh) = (inst_a(self, &fl[1]), inst_a(self, &fh[1]));
-        let (ca, pa, br) = parts(self, &ml).ok_or("the wrapper")?;
-        let (_, pb, _) = parts(self, &mh).ok_or("the wrapper")?;
+        let (ca, la, pa, br) = parts(self, &ml).ok_or("the wrapper")?;
+        let (_, _, pb, _) = parts(self, &mh).ok_or("the wrapper")?;
         let args: Vec<Term> = match pa.node() {
             Node::App(_, a) => a.to_vec(),
             _ => Vec::new(),
         };
         let (prs, cio) = self.proc_ref_at(pr, &args)?;
         let prr = R::S(prs);
-        let k = self.lam(&br[2], &["x1", "x2", "y", "v"], &["y", "v", "x2"]).ok_or("the wrapper's continuation")?;
-        let x = self.lam(&br[3], &["x1", "x2", "y", "e"], &["y", "e", "x2"]).ok_or("the wrapper's handler")?;
-        let d = self.lam(&br[4], &["x1", "x2", "t"], &["t", "x2"]).ok_or("the wrapper's handler")?;
-        let wrap = match &ca {
-            Some(c) => {
+        // (the rests: under the wrapper's `letin` its value z too)
+        let z: &[&'static str] = if la.is_some() { &["z"] } else { &[] };
+        let cx = |m: &[&'static str]| -> Vec<&'static str> { ["x1", "x2"].iter().chain(z).chain(m).copied().collect() };
+        let ps = |m: &[&'static str]| -> Vec<&'static str> { z.iter().chain(m).chain(&["x2"]).copied().collect() };
+        let k = self.lam(&br[2], &cx(&["y", "v"]), &ps(&["y", "v"])).ok_or("the wrapper's continuation")?;
+        let x = self.lam(&br[3], &cx(&["y", "e"]), &ps(&["y", "e"])).ok_or("the wrapper's handler")?;
+        let d = self.lam(&br[4], &cx(&["t"]), &ps(&["t"])).ok_or("the wrapper's handler")?;
+        let wrap = match (&ca, &la) {
+            (_, Some(a)) => {
+                let a1 = self.lam(a, &["x1", "x2"], &["x1"]).ok_or("the wrapper's value")?;
+                R::Inst("g.wrap_ref_let".into(), vec![("p1", pa.clone()), ("p2", pb.clone()), ("a", a1), ("k", k), ("x", x), ("d", d)])
+            }
+            (Some(c), None) => {
                 let c1 = self.lam(c, &["x1", "x2"], &["x1"]).ok_or("the wrapper's guard")?;
                 R::Inst("g.wrap_ref1".into(), vec![("c", c1), ("p1", pa.clone()), ("p2", pb.clone()), ("k", k), ("x", x), ("d", d)])
             }
-            None => R::Inst("g.wrap_ref0".into(), vec![("p1", pa.clone()), ("p2", pb.clone()), ("k", k), ("x", x), ("d", d)]),
+            (None, None) => R::Inst("g.wrap_ref0".into(), vec![("p1", pa.clone()), ("p2", pb.clone()), ("k", k), ("x", x), ("d", d)]),
         };
         let wr = self.run(&mp(wrap, vec![p(prr)]), &[])?;
         // (g.fun_ref's premise: all a s o. a in d -> runs(v1(a)) -> runs(v2(a)))
@@ -792,6 +808,20 @@ impl<'e> Gen<'e> {
         if self.app(&a, "while_rel", 5).is_some() {
             return self.cfg_loop(lo, &a, &k, qi, w);
         }
+        // (a trip's break: the CFG on to the exit -- or on in the loop, the
+        // loop's rest after the break)
+        if let Some((j, r)) = self.or_side(qi, w, false)? {
+            let (j, r, rest) = match self.walk(lo, j, w) {
+                Ok(rest) => (j, r, rest),
+                Err(_) => {
+                    let (j2, r2) = self.or_side(qi, w, true)?.ok_or("a trip's break")?;
+                    let rest = self.walk(lo, j2, w)?;
+                    (j2, r2, rest)
+                }
+            };
+            let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(r)]);
+            return self.run(&rr, &[]);
+        }
         let lctx = ["o", "x8"];
         let kl = self.lam(&k, &lctx, &["x8", "o"]).ok_or("the lower block's rest")?;
         // the structured side: on to its head (its own reductions)
@@ -1113,8 +1143,44 @@ impl<'e> Gen<'e> {
     }
 
     /// the result o = e: the structured side's the same
+    /// The structured side `x1 = v || B` (a trip's break: at an exit, or
+    /// the loop's rest after it): the side taken (the result's for a jump
+    /// or a result, else the rest's), its program and the implication
+    fn or_side(&mut self, qi: usize, w: &Term, rest: bool) -> Result<Option<(usize, R)>, String> {
+        let Some(ub) = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
+        // (in a block's head: `ex x8. (x8 = v || B) && K`)
+        if let Some((ua, uk)) = block(self, &ub) {
+            let Some(x) = self.app(&ua, "or", 2).map(|x| x.to_vec()) else { return Ok(None) };
+            if !self.app(&x[0], "eq", 2).is_some_and(|y| matches!(y[0].node(), Node::BVar(0))) {
+                return Ok(None);
+            }
+            let ctx = ["x0", "x1", "x8"];
+            let a = self.lam(&x[0], &ctx, &["x0", "x8"]).ok_or("a disjunct reads the outcome")?;
+            let b = self.lam(&x[1], &ctx, &["x0", "x8"]).ok_or("a disjunct reads the outcome")?;
+            let kl = self.lam(&uk, &ctx, &["x8", "x1"]).ok_or("a block's rest reads the world")?;
+            let lemma = if rest { "tr.qs_orr" } else { "tr.qs_orl" };
+            let (j, inst) = self.by(qi, lemma, &[("a", a), ("b", b), ("k", kl)])?;
+            return Ok(Some((j, mp(inst, vec![t(w)]))));
+        }
+        let Some(x) = self.app(&ub, "or", 2).map(|x| x.to_vec()) else { return Ok(None) };
+        if !self.app(&x[0], "eq", 2).is_some_and(|y| matches!(y[0].node(), Node::BVar(0))) {
+            return Ok(None);
+        }
+        let a = self.lam(&x[0], &["x0", "x1"], &["x0", "x1"]).ok_or("a disjunct")?;
+        let b = self.lam(&x[1], &["x0", "x1"], &["x0", "x1"]).ok_or("a disjunct")?;
+        let side = if rest { &x[1] } else { &x[0] };
+        let j = self.new_q(self.mk("mkprog", vec![side.clone()]));
+        let lemma = if rest { "g.runs_orr" } else { "g.runs_orl" };
+        Ok(Some((j, mp(R::Inst(lemma.into(), vec![("a", a), ("b", b)]), vec![t(w)]))))
+    }
+
     fn leaf_eq(&mut self, e: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
         let lo = self.mk("eq", vec![Term::bvar(0), e.clone()]);
+        if let Some((j, r)) = self.or_side(qi, w, false)? {
+            let rest = self.leaf_eq(e, j, w)?;
+            let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(r)]);
+            return self.run(&rr, &[]);
+        }
         // (a procedure's name: unfolded by the reducer below)
         let ub = self.app(&self.qs[qi], "mkprog", 1).map_or_else(|| Term::bvar(0), |x| x[0].clone());
         if let Some(x) = self.app(&ub, "eq", 2) {
