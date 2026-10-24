@@ -61,7 +61,7 @@ pub struct Eff<'e> {
 
 /// A world changed in a field (`fn_update(S, field, V)`): the lemma showing
 /// it valid (proofs/translate_struct.core)
-const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm")];
+const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm"), ("objs", "tr.valid_objs")];
 
 /// A term's type by its head (`f(a..) in T`): the lemma, all a.. ->
 /// premises on the arguments (each `a in T'`) -> f(a..) in T
@@ -438,7 +438,15 @@ impl<'e> Eff<'e> {
         // bind_rel(p, S, s v. K, ..)
         if let Some(b) = self.app(r, "bind_rel", 5) {
             if b[1] != *s {
-                return Err(format!("a sequence not from the current state: {}", self.short(r)));
+                // (from a world changed and valid: the effect from there,
+                // tr.eff_from -- the `_fun` wrapper's return with its
+                // objects released)
+                if st {
+                    return Err(format!("a sequence not from the current state: {}", self.short(r)));
+                }
+                let v = self.valid(s, &self.unlet(&b[1]))?;
+                let kk = self.prove(false, &b[1], r, o)?;
+                return self.show(&goal, "tr.eff_from", s, vec![A::G(G::By(v)), A::G(G::By(kk))]);
             }
             let pe = self.prog_eff(s, &b[0])?;
             let (sn, sv) = self.fresh("ws");

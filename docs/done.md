@@ -946,8 +946,12 @@ item is a short summary of finished work; details are in the files named.
   alloc_group's code over the one from k + 1 (`mp.agr_q`, `mp.as_q` at the
   classes from k on). Their callees linked (try_avail, queue, alloc_meta
   with dequeue_head, free_meta, size_to_class, enframe, is_bouncing,
-  account_bounce, step_seq); alloc_meta's leaves by hypothesis
-  (`mp.ap_leaves`).
+  account_bounce, step_seq); alloc_meta's leaves (`mp.ap_leaves`) their
+  machine code linked (`mp.ap_leaves_ok`: get_random_secret with memcpy,
+  __syscall1, __mmap, __mprotect, __errno_location), so alloc_meta,
+  alloc_slot and alloc_group implement their contracts from the
+  configuration alone (`mp.am_machine`, `mp.as_machine`,
+  `mp.agr_machine`; `mp.ap_cfg` with `c.libc` libc's struct).
 - **A proof's variables dropped after it** (kernel: `Env::begin_locals` /
   `end_locals` around each `prove`, `c1`, `refines`): its variables local,
   numbered from a base above the global ones, the base moved past them at
@@ -1181,6 +1185,12 @@ item is a short summary of finished work; details are in the files named.
     bytes (`mp.rs_vm`, reads by `mp.rs_read`) --, AT_RANDOM's bytes copied
     by memcpy's contract at a call (`mp.mc_q`), the object's word read; the
     function (`mp.grs_fun`), its CFG form linked (`grsc.calls`).
+  - Its `tr.callee_io` and typing from C1 (`grsc.io`, `grsc.typed`):
+    alloc_objs' effect (`tr.eff_alloc_objs`: the memory's pages the same,
+    bytes changed only off the program's -- `tr.valid_keep`), the
+    wrapper's return from the world with the objects released (eff.rs: a
+    bind from a changed world valid from the current one, `tr.eff_from`,
+    `tr.valid_objs`).
 - **A stack overflow keeps only the I/O** (layers/abi.sl `overflow()`:
   the memory and the objects any, as a divergence's state; the machine's
   contract reads an overflow's records only, `tr.ovf`): a function with

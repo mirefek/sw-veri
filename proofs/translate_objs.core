@@ -1747,6 +1747,198 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  alloc_objs' effect (C1's tr.callee_io of a function with stack
+//  objects): its memory the same pages, its bytes changed only on the
+//  stack's free ones -- never the program's code
+
+// (a world with its memory's bytes changed only off the mapped pages but
+// the stack's, and any objects: the program stays loaded)
+theorem tr.valid_keep(w, V, O): fn_update(V, "bytes", w.vm.bytes) = w.vm ->
+  (all a. a in bits(64) -> x86_64_linux.mapped(w.vm, x86_64_linux.page_of(a)) -> !abi.stack_page(w.vm, x86_64_linux.page_of(a)) -> V.bytes[a] = w.vm.bytes[a]) ->
+  tr.returns_valid(w, fn_update(fn_update(w, "vm", V), "objs", O))
+proof
+  assume hv hk
+  let W2 := fn_update(fn_update(w, "vm", V), "objs", O)
+  have ev: W2.vm = V by rsimp()
+  have pg: w.vm.pages = V.pages := subst({y. y.pages = V.pages}, hv, (fn_update(V, "bytes", w.vm.bytes).pages = V.pages by rsimp()))
+  have stt: w.vm.stack_top = V.stack_top := subst({y. y.stack_top = V.stack_top}, hv, (fn_update(V, "bytes", w.vm.bytes).stack_top = V.stack_top by rsimp()))
+  have sll: w.vm.stack_limit = V.stack_limit := subst({y. y.stack_limit = V.stack_limit}, hv, (fn_update(V, "bytes", w.vm.bytes).stack_limit = V.stack_limit by rsimp()))
+  have bk: w.vm.brk_start = V.brk_start := subst({y. y.brk_start = V.brk_start}, hv, (fn_update(V, "bytes", w.vm.bytes).brk_start = V.brk_start by rsimp()))
+  have l: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(W2.vm, gb, gc, st) proof
+    fix gb gc st
+    assume _ hl
+    have hc hs := expand(hl, abi.loaded)
+    have g: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+        ((x86_64_linux.fetchable(V, bits_of_int(64, int_add(gb, i))) && !x86_64_linux.can_access(V, bits_of_int(64, int_add(gb, i)), 1)) &&
+          !abi.stack_page(V, x86_64_linux.page_of(bits_of_int(64, int_add(gb, i))))) &&
+        V.bytes[bits_of_int(64, int_add(gb, i))] = gc[i] proof
+      fix i
+      assume hi hlt
+      let B := bits_of_int(64, int_add(gb, i))
+      have c0 := mp(all_elim(expand(hc, abi.code_at), {i}), hi, hlt)
+      have fm: x86_64_linux.mapped(w.vm, x86_64_linux.page_of(B)) by taut(expand(c0, x86_64_linux.fetchable))
+      have ns: !abi.stack_page(w.vm, x86_64_linux.page_of(B)) by taut(c0)
+      have nb := mp(all_elim(hk, {B}), (B in bits(64) by simp()), fm, ns)
+      show by defs(simp(expand(c0, x86_64_linux.fetchable, x86_64_linux.can_access, abi.stack_page, x86_64_linux.mapped), nb, sym(pg)), x86_64_linux.fetchable, x86_64_linux.can_access, abi.stack_page, x86_64_linux.mapped)
+    qed
+    have s := apply(tr.statics_same, {w.vm}, {V}, {st}, sym(stt), sym(sll), hs)
+    have cg: abi.code_at(V, gb, gc) by defs(g, abi.code_at)
+    have lv: abi.loaded(V, gb, gc, st) by defs(taut(cg, s), abi.loaded)
+    show := rewrite(sym(ev), lv)
+  qed
+  have ose: W2.os = w.os by rsimp()
+  have cpe: W2.cpu = w.cpu by rsimp()
+  have bke: W2.vm.brk_start = w.vm.brk_start := rewrite(sym(ev), sym(bk))
+  have ev2: subset(w.os.events, W2.os.events) := rewrite(sym(ose), subset_refl[s := w.os.events], {2})
+  show by defs(taut(rewrite(sym(ose), refl({w.os.input}), {1}), ev2, l, cpe, bke), tr.returns_valid)
+qed
+
+// (the objects changed: the world stays valid)
+theorem tr.valid_objs(w, O): tr.returns_valid(w, fn_update(w, "objs", O))
+proof
+  let W2 := fn_update(w, "objs", O)
+  have ev: W2.vm = w.vm by rsimp()
+  have ose: W2.os = w.os by rsimp()
+  have cpe: W2.cpu = w.cpu by rsimp()
+  have l: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(W2.vm, gb, gc, st) proof
+    fix gb gc st
+    assume _ hl
+    show := rewrite(sym(ev), hl)
+  qed
+  have bke: W2.vm.brk_start = w.vm.brk_start := rewrite(sym(ev), refl({w.vm.brk_start}), {1})
+  have ev2: subset(w.os.events, W2.os.events) := rewrite(sym(ose), subset_refl[s := w.os.events], {2})
+  show by defs(taut(rewrite(sym(ose), refl({w.os.input}), {1}), ev2, l, cpe, bke), tr.returns_valid)
+qed
+
+// (a program run from a world w1 valid from w: its effect from w)
+theorem tr.eff_from(w1, o. r): all w. tr.returns_valid(w, w1) -> tr.eff(w1, o. r(o)) -> tr.eff(w, o. r(o))
+proof
+  fix w
+  assume hv he
+  have c1: (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w1, w2)) -> (all w2 v. r(ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume ha
+    fix w2 v
+    assume h
+    show := mp(all_elim(tr.rv_trans, {w}, {w1}, {w2}), hv, mp(all_elim(ha, {w2}, {v}), h))
+  qed
+  show by defs(taut(expand(he, tr.eff), c1), tr.eff)
+qed
+
+// alloc_objs: a return keeps the world valid (the objects' bytes the
+// stack's free ones); no memory for the choice of its bytes, any outcome
+theorem tr.eff_alloc_objs: all w sizes. tr.eff(w, o. runs(gimple.alloc_objs(sizes), w, o))
+proof
+  fix w sizes
+  let OVF := exc_val("stack_overflow", empty)
+  let FL(x2) := x2 in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, sizes, x2)
+  let P2(x3, x5) := x5 in x86_64_linux.Vm && (fn_update(app(fn_update(w, "vm", x5), "vm"), "bytes", app(app(w, "vm"), "bytes")) = app(w, "vm") &&
+    (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(sizes)) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(sizes, x7)))))) ->
+      app(app(app(fn_update(w, "vm", x5), "vm"), "bytes"), x6) = app(app(app(w, "vm"), "bytes"), x6)))
+  let OL(x3, x5) := fn_update(app(fn_update(w, "vm", x5), "objs"), "live", set_select(omega, x7. x7 in app(app(fn_update(w, "vm", x5), "objs"), "live") ||
+    (ex x8. x8 in omega && ((int_lt(x8, seq_len(sizes)) && int_le(app(x3, x8), x7)) && int_lt(x7, int_add(app(x3, x8), fst(app(sizes, x8))))))))
+  let Q2(o, x3, x5) := o = ok(fn_update(fn_update(w, "vm", x5), "objs", OL(x3, x5)), x3)
+  let NE := all l. FL(l) -> (ex V. P2(l, V))
+  let ANY(x0, x1) := any_rel(x2. x2 in list_type(bits(64)) && gimple.objs_fit(x0.vm, x0.objs, sizes, x2), x2. letin(x2, x3. letin(app(x0, "vm"), x4. any_rel(x5. x5 in x86_64_linux.Vm && (fn_update(app(fn_update(x0, "vm", x5), "vm"), "bytes", app(x4, "bytes")) = x4 && (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(sizes)) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(sizes, x7)))))) -> app(app(app(fn_update(x0, "vm", x5), "vm"), "bytes"), x6) = app(app(x4, "bytes"), x6))), x5. letin(fn_update(x0, "vm", x5), x6. letin(fn_update(x6, "objs", fn_update(app(x6, "objs"), "live", set_select(omega, x7. x7 in app(app(x6, "objs"), "live") || (ex x8. x8 in omega && ((int_lt(x8, seq_len(sizes)) && int_le(app(x3, x8), x7)) && int_lt(x7, int_add(app(x3, x8), fst(app(sizes, x8))))))))), x7. x1 = ok(x7, x3)))))))
+  let FIT(x0) := ex x3. x3 in list_type(bits(64)) && gimple.objs_fit(x0.vm, x0.objs, sizes, x3)
+  let TOP(X, L, o) := ((fst(X) = 0 && L) || ((((fst(X) = 1 && fst(out_value(X)) = "ret") && o = ok(fst(out_state(X)), snd(out_value(X)))) ||
+    ((fst(X) = 1 && fst(out_value(X)) = "raise") && o = exc(fst(out_state(X)), snd(out_value(X))))) || (fst(X) = 2 && o = diverge(snd(X)))))
+  let BODY(x0, x1) := ex x2. ((!FIT(x0) && x2 = exc(pair(x0, empty), pair("raise", OVF))) || (!!FIT(x0) && x2 = ok(pair(x0, empty), empty))) &&
+    TOP(x2, ANY(fst(out_state(x2)), x1), x1)
+  let X0 := ok(pair(w, empty), empty)
+  have f0: fst(X0) = 0 by simp()
+  have f1: fst(out_state(X0)) = w by simp()
+  // (a choice of the bytes for each place: every return the objects
+  // placed and their bytes, the rest of the memory as it was)
+  have a1: NE -> (all w2 v. runs(gimple.alloc_objs(sizes), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume ne
+    fix w2 v
+    assume h
+    have b: BODY(w, ok(w2, v)) := apply(g.runs_elim, expand(h, gimple.alloc_objs))
+    obtain x0, hg ht from b
+    have c1: !FIT(w) -> false proof
+      assume nf
+      have e: x0 = exc(pair(w, empty), pair("raise", OVF)) by taut(hg, nf)
+      show by simp(rewrite(e, ht))
+    qed
+    have f: FIT(w) by taut(c1)
+    have e: x0 = X0 by taut(hg, f)
+    have t2 := rewrite(f1, rewrite(f0, rewrite(e, ht)))
+    have a0: ANY(w, ok(w2, v)) by taut(t2, refl({0}), (!(0 = 1) by simp()), (!(0 = 2) by simp()))
+    obtain l, hl1 hl2 hk from apply(g.any_e, f, a0)
+    have hfl: FL(l) by taut(hl1, hl2)
+    have k2: any_rel(x5. P2(l, x5), x5. Q2(ok(w2, v), l, x5)) by taut(expand(hk, letin))
+    obtain V, v1 v23 hq from apply(g.any_e, mp(all_elim(ne, {l}), hfl), k2)
+    have v2 v3 := v23
+    have ew: w2 = fn_update(fn_update(w, "vm", V), "objs", OL(l, V)) by simp(hq)
+    have kv: fn_update(V, "bytes", w.vm.bytes) = w.vm by simp(v2)
+    have kb: all a. a in bits(64) -> x86_64_linux.mapped(w.vm, x86_64_linux.page_of(a)) -> !abi.stack_page(w.vm, x86_64_linux.page_of(a)) -> V.bytes[a] = w.vm.bytes[a] proof
+      fix a
+      assume ha hm hs
+      have nr: all x7. x7 in omega -> int_lt(x7, seq_len(sizes)) -> !(int_le(app(l, x7), a) && int_lt(a, int_add(app(l, x7), fst(app(sizes, x7))))) proof
+        fix k
+        assume k1 k2
+        assume hr
+        have _ hk2 _ := expand(hl2, gimple.objs_fit)
+        have m0 m1 m2 sfa := mp(all_elim(hk2, {k}), k1, k2)
+        have ao: a in omega by arith(ha)
+        have sfr := mp(all_elim(sfa, {a}), ao, hr)
+        show by taut(expand(sfr, abi.stack_free), expand(hs, abi.stack_page, x86_64_linux.page_of), expand(hm, x86_64_linux.page_of))
+      qed
+      have r := mp(all_elim(v3, {a}), ha, nr)
+      show by simp(r)
+    qed
+    have vk := mp(tr.valid_keep[w := w, V := V, O := OL(l, V)], kv, kb)
+    show := rewrite(sym(ew), vk)
+  qed
+  // (a place with no memory for it: any outcome)
+  have a2: w in univ(1) -> !NE -> tr.undef(o. runs(gimple.alloc_objs(sizes), w, o)) proof
+    assume hw hn
+    have nn: !(ex l. FL(l) && !(ex V. P2(l, V))) -> NE proof
+      assume hx
+      fix l
+      assume hl
+      have c: !(ex V. P2(l, V)) -> false proof
+        assume hv
+        have x: ex l. FL(l) && !(ex V. P2(l, V)) by ex_intro({l}, taut(hl, hv))
+        show by taut(hx, x)
+      qed
+      show by taut(c)
+    qed
+    obtain l, hl1 hl2 hnv from (ex l. FL(l) && !(ex V. P2(l, V)) by taut(hn, nn))
+    have hfl: FL(l) by taut(hl1, hl2)
+    have fx: FIT(w) by ex_intro({l}, hfl)
+    have any: all o. pair(w, o) in univ(1) -> runs(gimple.alloc_objs(sizes), w, o) proof
+      fix o
+      assume pu
+      have e2: ex x2. FL(x2) && (!(ex x5. P2(x2, x5)) || (ex x5. P2(x2, x5) && Q2(o, x2, x5))) by ex_intro({l}, taut(hfl, hnv))
+      have rb0: ANY(w, o) by defs(taut(e2), any_rel, letin)
+      have rb1 := subst({y. ANY(y, o)}, sym(f1), rb0)
+      have lt: TOP(X0, ANY(fst(out_state(X0)), o), o) by taut(f0, rb1)
+      have rb: BODY(w, o) by ex_intro({X0}, taut(fx, lt, refl({X0})))
+      show by defs(apply(tr.runs_intro[r := x0 x1. BODY(x0, x1)], {w}, {o}, pu, rb), gimple.alloc_objs)
+    qed
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.alloc_objs(sizes), w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      show := mp(all_elim(any, {exc(x, e)}), (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)))
+    qed
+    have dv: all t. t in univ(1) -> runs(gimple.alloc_objs(sizes), w, diverge(t)) proof
+      fix t
+      assume ht
+      show := mp(all_elim(any, {diverge(t)}), (pair(w, diverge(t)) in univ(1) by simp(hw, ht)))
+    qed
+    show by defs(taut(ex, dv), tr.undef)
+  qed
+  have a3: !(w in univ(1)) -> (all w2 v. runs(gimple.alloc_objs(sizes), w, ok(w2, v)) -> tr.returns_valid(w, w2)) proof
+    assume hn
+    fix w2 v
+    assume h
+    show by taut(hn, apply(tr.runs_univ, expand(h, gimple.alloc_objs)))
+  qed
+  show by defs(taut(a1, a2, a3), tr.eff)
+qed
+
+// ----------------------------------------------------------------------
 //  A call from a function with stack objects (`call_objs(objs, g, args)`,
 //  readable GIMPLE's): the call itself, its outcome the bind's
 

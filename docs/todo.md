@@ -14,27 +14,9 @@ code refining it directly (proofs/mallocng/fun/). Left over:
 
 ## 2. Next: alloc_group, loops on the CFG and loops by their purpose
 
-- alloc_meta's leaves at machine level: get_random_secret, __syscall1,
-  __mmap, __mprotect, __errno_location (C1 of their code, or their specs
-  as the machine's), to discharge `mp.am_implements`' hypotheses -- and
-  `mp.as_implements` / `mp.agr_implements`' (`mp.ap_leaves`, the same).
-  __syscall1 is done (`mp.sy1_abi`; as `mp.ap_leaves`' G3: `mp.ap_sy1`,
-  to be used once the other leaves are); __get_tp, __errno_location,
-  __syscall3, __mprotect, __syscall_ret have their C1
-  (proofs/mallocng/machine/c1_leaves.core); __errno_location, __syscall_ret,
-  size_overflows, __syscall3 and __mprotect their contracts at machine
-  level (`elc.composed`, `srtc.composed_el`, `sotc.composed_el`,
-  `sy3c.composed`, `mprc.composed`, `vwc.composed`, `sy6c.composed` -- the
-  last `tr.implements_at_s`, with a stack argument -- `mmc.composed`).
-  `mp.ap_mm`, `mp.ap_mpr`, `mp.ap_el`: such leaves for `mp.ap_leaves`.
-  get_random_secret implements its purpose at machine level, linked with
-  memcpy (`grsc.composed`). Next, then the hypotheses discharged:
-  - `mp.ap_leaves`' get_random_secret (G1) as its CFG form linked with
-    memcpy's: `grsc.implements` and `grsc.calls` there; its typing and
-    `tr.callee_io` missing (eff.rs: no effect rule for `alloc_objs` yet).
-  - the stack objects' engine: more than one object (`tr.obj1` is one
-    8-byte object; `alloc_objs` of several), objects read before their
-    first store (none at -O0 yet).
+- The stack objects' engine: more than one object (`tr.obj1` is one
+  8-byte object; `alloc_objs` of several), objects read before their
+  first store (none at -O0 yet).
 - CFG -> loops, later: nested loops, a head reached at two structured
   loops, an exit of two loops, a callee refined inside a walk with loops
   of its own.
@@ -56,8 +38,8 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   an overlapping forward copy (s < d < s + n: each element read after
   writes reached it -- memmove's) its exact bytes, not undefined: the
   pointwise invariant of `x86.moved` with the source as it is then.
-- Leaves at machine level: `a_or`, `__syscall*`, `__mmap`, `munmap`,
-  `__mprotect`, `memset`, `__lock` / `__unlock`,
+- Leaves at machine level: `a_or`, `__syscall*`, `munmap`, `memset`,
+  `__lock` / `__unlock`,
   `___errno_location` (then size_overflows' composition without its
   premise).
 
