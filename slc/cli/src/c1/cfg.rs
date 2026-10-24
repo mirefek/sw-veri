@@ -54,6 +54,12 @@ pub(super) struct Cfg {
     /// the registers at every label: the callee-saved ones at their entry
     /// values, not saved in a home (Gen::cs_fixed)
     rc: Vec<(u128, u128, Term)>,
+    /// each local's register, if it lives in one (a hand-written CFG's);
+    /// the registers at a label as a function of the locals (the rule's
+    /// rc: rc's and the live locals'), whether that is rc's at every label
+    rreg: Vec<Option<u128>>,
+    rc_lam: Term,
+    rc_const: bool,
     /// the facts every block has (the body's start's, on fixed values)
     hyps: Vec<(Term, Seq)>,
     facts: Vec<Seq>,
@@ -187,7 +193,7 @@ impl<'e> Gen<'e> {
         let mut one = c.fixed.clone();
         let mut several = Vec::new();
         for j in 0..m {
-            if mask & (1u128 << j) == 0 {
+            if mask & (1u128 << j) == 0 || c.rreg[j].is_some() {
                 continue;
             }
             let es = &c.lent[j];
@@ -220,7 +226,7 @@ impl<'e> Gen<'e> {
         let mut one = c.fixed.clone();
         let mut several = Vec::new();
         for j in 0..m {
-            if mask & (1u128 << j) == 0 {
+            if mask & (1u128 << j) == 0 || c.rreg[j].is_some() {
                 continue;
             }
             let es = &c.lent[j];
@@ -246,6 +252,30 @@ impl<'e> Gen<'e> {
             term = self.mk("fn_update", vec![term, key, self.mk("pair", vec![lit(nb), v])]);
         }
         Ok(term)
+    }
+
+    /// the registers at a label (its live locals, mask) of the locals ys:
+    /// rc's, then each live local's living in one (register, bytes, value)
+    fn cfg_rc(&self, c: &Cfg, mask: u128, ys: &Term) -> Vec<(u128, u128, Term)> {
+        let m = c.widths.len();
+        let mut out = c.rc.clone();
+        for j in 0..m {
+            if let (true, Some(r)) = (mask & (1u128 << j) != 0, c.rreg[j]) {
+                out.push((r, (c.widths[j] / 8) as u128, self.cfg_proj(ys, j, m)));
+            }
+        }
+        out
+    }
+
+    /// `tr.rsub(rc, rs)`, rc the map of es (each rs's entry)
+    fn rsub_pf(&self, es: &[(u128, u128, Term)], rs: &Term) -> R {
+        let mut pf = R::Inst("tr.rsub_empty".into(), vec![("rs", rs.clone())]);
+        let mut rc = self.mk("empty", vec![]);
+        for (r, n, v) in es {
+            pf = mpf("tr.rsub_add", vec![t(&rc), t(rs), t(&lit(*r)), t(&lit(*n)), t(v), p(pf), simp_l(), simp_l()]);
+            rc = self.upd(&rc, *r, *n, v);
+        }
+        pf
     }
 
     /// `x in bits(w)` for each live local of ys
@@ -362,6 +392,9 @@ impl<'e> Gen<'e> {
             fr: st.fr,
             fd: st.ds.clone(),
             rc: self.cs_fixed(st),
+            rreg: (0..m).map(|j| self.cfg_regs.iter().find(|x| x.0 == j).map(|x| x.1)).collect(),
+            rc_lam: Term::bvar(0),
+            rc_const: true,
             hyps: Vec::new(),
             facts: Vec::new(),
             lfx: Vec::new(),
@@ -381,6 +414,20 @@ impl<'e> Gen<'e> {
         let kk_t = self.or_chain(live.iter().map(|&(k, _)| self.mk("eq", vec![cv.clone(), lit(k)])).collect());
         let ct_t = self.or_chain(cuts.iter().map(|&a| self.mk("eq", vec![av.clone(), lit(a)])).collect());
         let ad_t = self.mk("app", vec![ad.clone(), cv.clone()]);
+        // (the registers: rc's at every label, or by label with its live
+        // locals' in registers)
+        c.rc_const = !live.iter().any(|&(_, mask)| (0..m).any(|j| mask & (1u128 << j) != 0 && c.rreg[j].is_some()));
+        let rc_t = if c.rc_const {
+            self.regs_map(&c.rc)
+        } else {
+            let mut acc = self.mk("empty", vec![]);
+            for &(k, mask) in live.iter().rev() {
+                let r = self.regs_map(&self.cfg_rc(&c, mask, &ysv));
+                acc = self.mk("ite", vec![self.mk("eq", vec![fy.clone(), lit(k)]), r, acc]);
+            }
+            acc
+        };
+        c.rc_lam = self.abs(&rc_t, &[Self::var_id(&yv)]);
         c.hs_lam = self.abs(&hs_t, &[Self::var_id(&yv)]);
         c.yt_lam = self.abs(&yt_t, &[Self::var_id(&yv)]);
         c.ct_lam = self.abs(&ct_t, &[Self::var_id(&av)]);
@@ -398,7 +445,7 @@ impl<'e> Gen<'e> {
                 ("code", self.code.clone()),
                 ("fr", lit(st.fr)),
                 ("fd", st.ds.clone()),
-                ("rc", self.regs_map(&c.rc)),
+                ("rc", c.rc_lam.clone()),
                 ("ct", c.ct_lam.clone()),
                 ("ad", ad_lam),
                 ("hs", c.hs_lam.clone()),
@@ -528,6 +575,11 @@ impl<'e> Gen<'e> {
         let c0 = self.run(&mp(R::S(rule), vec![t(&lit(k_e)), t(&ys0), t(&st.w), simp0(), simp_lw(vec![R::S(st.hvu.clone())]), simp_lw(wf)]), &[])?;
         let lv0 = self.app(c0.concl(), "tr.lv", 13).ok_or_else(|| bad("the rule's claim"))?.to_vec();
         let (_, hs_e) = self.cfg_homes(&c, mask_e, &ys0, st.a)?;
+        // (the first label's registers: rc's -- none of its live locals in
+        // one, the entry's registers are the arguments')
+        if self.cfg_rc(&c, mask_e, &ys0).len() != c.rc.len() {
+            return Err(bad("the first label's live locals in registers"));
+        }
         let (_, h0s) = c.hyp[&k_e].clone();
         let conv = mpf(
             "tr.lv_conv",
@@ -542,11 +594,13 @@ impl<'e> Gen<'e> {
                 t(&hs_e),
                 t(&lv0[8]),
                 t(&lv0[9]),
+                t(&self.regs_map(&c.rc)),
                 t(&lv0[10]),
                 t(&lv0[11]),
                 t(&lv0[12]),
                 simpw(vec![R::S(h0s.clone())]),
                 simpw(vec![R::S(h0s)]),
+                simp0(),
                 s(&c0),
             ],
         );
@@ -602,6 +656,7 @@ impl<'e> Gen<'e> {
         let hv = self.evp(&RP::Taut(vec![R::S(hw.clone())]), &self.mk("in", vec![wv.clone(), self.mk("univ", vec![lit(1)])]), &[])?;
         let c = self.cfg.as_ref().expect("the CFG walk");
         let (hsm, hst) = self.cfg_homes(c, mask, &ys, a)?;
+        let regs = self.cfg_rc(c, mask, &ys);
         let wts = self.cfg_widths(c, mask, &ys);
         let mut wfacts = Vec::new();
         for wt in wts {
@@ -614,11 +669,12 @@ impl<'e> Gen<'e> {
         let wid = self.parse(&format!("mkprog(x1 x2. bind_rel(cq{n}, x1, x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))"))?;
         let wrap_id = self.abs(&wid, &[Self::var_id(&qv)]);
         let kw_id = self.mk("eq", vec![Term::bvar(0), self.mk("ok", vec![Term::bvar(2), Term::bvar(1)])]);
+        let rs_k = self.regs_map(&regs);
         let st_body = St {
             a,
             fr,
-            regs: rc.clone(),
-            rs: self.regs_map(&rc),
+            regs,
+            rs: rs_k.clone(),
             ds: fd.clone(),
             w: wv.clone(),
             hvu: hv,
@@ -663,10 +719,12 @@ impl<'e> Gen<'e> {
                 t(&hst),
                 t(&lvx[9]),
                 t(&lvx[10]),
+                t(&rs_k),
                 t(&lvx[11]),
                 t(&lvx[12]),
                 simpw(vec![R::S(hk.clone())]),
                 simpw(vec![R::S(hk)]),
+                simp0(),
                 s(&walk),
             ],
         );
@@ -767,12 +825,20 @@ impl<'e> Gen<'e> {
         }
         let c = self.cfg.as_ref().expect("the CFG walk");
         let (hk, ad, hs_lam, yt_lam, ct_lam, kk_lam, fd) = (c.hyp[&k2].1.clone(), c.ad.clone(), c.hs_lam.clone(), c.yt_lam.clone(), c.ct_lam.clone(), c.kk_lam.clone(), c.fd.clone());
+        let (rc_lam, rc_const) = (c.rc_lam.clone(), c.rc_const);
         let (hs2, hs2e) = self.cfg_homes(c, mask, &ys2, st.a)?;
-        // (the homes there: each the point's)
+        let regs2 = self.cfg_rc(c, mask, &ys2);
+        // (the homes there: each the point's; the registers likewise)
         for (key, (nb, v)) in &hs2 {
             match st.hsm.get(key) {
                 Some((nb0, v0)) if nb0 == nb && self.canon(v0) == self.canon(v) => {}
                 _ => return Err(format!("{:x}: label {}'s home {:x} does not hold {} here", st.a, k2, key, self.print(v))),
+            }
+        }
+        for (r, nb, v) in &regs2 {
+            match self.reg(st, *r) {
+                Some((nb0, v0)) if nb0 == *nb && self.canon(&v0) == self.canon(v) => {}
+                _ => return Err(format!("{:x}: label {}'s register {} does not hold {} here", st.a, k2, r, self.print(v))),
             }
         }
         // the reductions to the marked return
@@ -798,6 +864,15 @@ impl<'e> Gen<'e> {
         let sub = self.run(&sub_pf, &[])?;
         let heq = self.evp(&RP::Simp(false, vec![R::S(hk.clone())], vec![], false), &self.mk("eq", vec![hs2t.clone(), hs2e.clone()]), &[])?;
         let sub2 = self.evp(&RP::Simp(false, vec![R::S(sub), R::S(heq)], vec![], false), &self.mk("tr.hsub", vec![hs2t, st.hst.clone()]), &[])?;
+        // (the registers at y2 among the point's)
+        let rsub = if rc_const {
+            self.rsub_pf(&lg.rc, &st.rs)
+        } else {
+            let rsub0 = self.run(&self.rsub_pf(&regs2, &st.rs), &[])?;
+            let rc2t = rc_lam.instantiate_params(std::slice::from_ref(&y2), &self.env.binders_fn());
+            let req = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![rc2t.clone(), self.regs_map(&regs2)]), &[])?;
+            R::S(self.evp(&RP::Simp(false, vec![R::S(rsub0), R::S(req)], vec![], false), &self.mk("tr.rsub", vec![rc2t, st.rs.clone()]), &[])?)
+        };
         // the label's invariant: its live locals words
         let cyt_lam = self.mk("tr.cyt", vec![yt_lam.clone(), kk_lam.clone(), Term::bvar(0)]);
         let yt2 = R::Apply(
@@ -817,7 +892,7 @@ impl<'e> Gen<'e> {
                 ("code", self.code.clone()),
                 ("fr", lit(st.fr)),
                 ("fd", fd.clone()),
-                ("rc", self.regs_map(&lg.rc)),
+                ("rc", rc_lam),
                 ("ct", ct_lam),
                 ("ad", ad_y),
                 ("hs", hs_lam),
@@ -829,7 +904,7 @@ impl<'e> Gen<'e> {
         self.trace(|| format!("cfg at {:x}: arrived, label {}", st.a, k2));
         let r = mp(
             inst,
-            vec![t(&lit(st.a)), t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), simp0(), simpw(vec![R::S(hk)]), s(&sub2), p(self.cs_sub_pf(&lg.rc, &st.rs)), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(yt2), p(rw)],
+            vec![t(&lit(st.a)), t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), simp0(), simpw(vec![R::S(hk)]), s(&sub2), p(rsub), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(yt2), p(rw)],
         );
         if self.canon(&st.ds) == self.canon(&fd) {
             return self.run(&r, &[]).map(Some);

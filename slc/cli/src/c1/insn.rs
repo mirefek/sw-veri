@@ -543,7 +543,7 @@ impl<'e> Gen<'e> {
                         v.push(p(R::F(insn.name.clone())));
                         v.extend((0..4).map(|_| simp_l()));
                         let step = mpf("tr.fsub64_can", v);
-                        return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r)));
+                        return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r, 8)));
                     }
                     let fs = self.mk("app", vec![st.w.clone(), Term::bytes(b"fs_base")]);
                     let hc = self.mem_hyp(st, &fs, &d, 8)?;
@@ -556,7 +556,7 @@ impl<'e> Gen<'e> {
                     v.extend((0..5).map(|_| simp_l()));
                     v.extend([s(&hc), hy]);
                     let step = mpf("tr.fsub64_fs", v);
-                    return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r)));
+                    return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r, 8)));
                 }
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("not a home"))?;
                 let g = reg(&x[1])?;
@@ -1398,6 +1398,20 @@ impl<'e> Gen<'e> {
                     st2.fr = fr2;
                     return self.then(tr, st2);
                 }
+                // and r32, imm8, a jump on its flags after it: g := g's low 32
+                // bits and k (4 bytes)
+                if (size, nat(&x[1])) == (4, Some(4)) && self.insns.get(&a2).is_some_and(|j| matches!(j.row, 127 | 128)) {
+                    let (n, x0, u) = self.low(st, gn, 32)?;
+                    let kl = lit(kk);
+                    let (r, hr) = self.result(&self.mk("bits_and", vec![lit(32), u.clone(), kl.clone()]))?;
+                    let mut v = self.head(a, insn);
+                    v.extend([&g, &x[3], &x[4], &kl, &lit(n), &x0, &u, &r, &st.hst, &st.rs, &st.w].into_iter().map(t));
+                    v.push(p(R::F(insn.name.clone())));
+                    v.extend((0..7).map(|_| simp_l()));
+                    v.push(hr);
+                    let step = mpf("tr.fs_and32_imm", v);
+                    return self.compare_x(st, a, a2, step, Flags::Log(32, r.clone()), Some((gn, r, 4)));
+                }
                 // and r32, imm8 of a byte: in 8 bits; of a shifted word: the field
                 if (size, nat(&x[1])) == (4, Some(4)) {
                     let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
@@ -1915,6 +1929,81 @@ impl<'e> Gen<'e> {
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 4, r);
                 self.then(tr, st2)
+            }
+            // test r32, imm32: g's low 32 bits and k, for the jump after it
+            63 => {
+                let x = self.pairs(&f, 4).ok_or_else(|| bad("fields"))?;
+                let (k0, g) = self.tag(&x[1]).ok_or_else(|| bad("fields"))?;
+                if nat(&x[0]) != Some(4) || k0 != 0 {
+                    return Err(bad("not test r32, imm32"));
+                }
+                let gn = reg(&g)?;
+                let (n, x0, u) = self.low(st, gn, 32)?;
+                let r = self.mk("bits_and", vec![lit(32), u.clone(), x[3].clone()]);
+                self.compare(st, a, a2, insn, "fs_test32_imm", &[&g, &x[2], &x[3], &lit(n), &x0, &u], 6, Flags::Log(32, r))
+            }
+            // dec r64: g := u - 1; dec r32, the jump on its zero flag after it:
+            // g := g's low 32 bits less 1 (4 bytes)
+            66 => {
+                let x = self.pairs(&f, 3).ok_or_else(|| bad("fields"))?;
+                let (k0, g) = self.tag(&x[1]).ok_or_else(|| bad("fields"))?;
+                if k0 != 0 || x[1] != x[2] {
+                    return Err(bad("not dec r"));
+                }
+                let gn = reg(&g)?;
+                match nat(&x[0]) {
+                    Some(8) => {
+                        let u = self.need_reg(st, gn, 8)?;
+                        let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(64), u.clone(), lit(1)]))?;
+                        let tr = self.step("dec64", a, insn, &[&g, &u, &r], self.tail(st, insn, 4, vec![hr]));
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 8, r);
+                        self.then(tr, st2)
+                    }
+                    Some(4) if self.insns.get(&a2).is_some_and(|j| matches!(j.row, 127 | 128)) => {
+                        let (n, x0, u) = self.low(st, gn, 32)?;
+                        let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), u.clone(), lit(1)]))?;
+                        let mut v = self.head(a, insn);
+                        v.extend([&g, &lit(n), &x0, &u, &r, &st.hst, &st.rs, &st.w].into_iter().map(t));
+                        v.push(p(R::F(insn.name.clone())));
+                        v.extend((0..5).map(|_| simp_l()));
+                        v.push(hr);
+                        let step = mpf("tr.fs_dec32", v);
+                        self.compare_x(st, a, a2, step, Flags::Zero(32, r.clone()), Some((gn, r, 4)))
+                    }
+                    _ => Err(bad("dec of a width other than 8, or 4 before a jump")),
+                }
+            }
+            // movsb: the spec's move of the byte at rsi to rdi, both one up
+            131 => {
+                let si = self.need_reg(st, 6, 8)?;
+                let di = self.need_reg(st, 7, 8)?;
+                let (hc, st2, red) = self.spec_move(st, &di, &si, &lit(1))?;
+                let (r6, h6) = self.result(&self.mk("bits_add", vec![lit(64), si.clone(), lit(1)]))?;
+                let (r7, h7) = self.result(&self.mk("bits_add", vec![lit(64), di.clone(), lit(1)]))?;
+                let tr = self.step("movsb", a, insn, &[&di, &si, &r6, &r7], self.tail_s(st, &st2, insn, 8, vec![h6, h7], &hc, &red));
+                self.scratch.extend([6, 7]);
+                let st3 = self.set_reg(&st2, a2, 6, 8, r6);
+                let st3 = self.set_reg(&st3, a2, 7, 8, r7);
+                self.then(tr, st3)
+            }
+            // rep movsq: the spec's move of the rcx words at rsi to rdi, both
+            // 8 rcx up, rcx 0
+            85 if nat(&f) == Some(8) => {
+                let si = self.need_reg(st, 6, 8)?;
+                let di = self.need_reg(st, 7, 8)?;
+                let c = self.need_reg(st, 1, 8)?;
+                let n = self.mk("int_mul", vec![lit(8), c.clone()]);
+                let (hc, st2, red) = self.spec_move(st, &di, &si, &n)?;
+                let c8 = self.mk("bits_mul", vec![lit(64), c.clone(), lit(8)]);
+                let (r6, h6) = self.result(&self.mk("bits_add", vec![lit(64), si.clone(), c8.clone()]))?;
+                let (r7, h7) = self.result(&self.mk("bits_add", vec![lit(64), di.clone(), c8]))?;
+                let tr = self.step("rep_movsq", a, insn, &[&di, &si, &c, &r6, &r7], self.tail_s(st, &st2, insn, 11, vec![h6, h7], &hc, &red));
+                self.scratch.extend([1, 6, 7]);
+                let st3 = self.set_reg(&st2, a2, 6, 8, r6);
+                let st3 = self.set_reg(&st3, a2, 7, 8, r7);
+                let st3 = self.set_reg(&st3, a2, 1, 8, lit(0));
+                self.then(tr, st3)
             }
             // ret: eax the spec's result
             122 => {

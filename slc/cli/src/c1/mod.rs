@@ -168,6 +168,8 @@ pub(super) use sl_kernel::prof;
 enum Flags {
     Sub(u128, Term, Term),
     Log(u128, Term),
+    /// (the zero flag of the result alone: dec's, its carry kept)
+    Zero(u128, Term),
 }
 
 /// A store of the spec: st8 / st16 / st32 / st64 / st_bytes (or a helper
@@ -345,6 +347,9 @@ struct Gen<'e> {
     /// locals' widths; the body's start; the CFG walk going on
     cfg_meta: Option<(Vec<(u128, u128)>, Vec<u64>)>,
     cfg_start: u128,
+    /// (a hand-written CFG's, `F_cfg_regs`: the locals living in
+    /// registers -- local, register)
+    cfg_regs: Vec<(usize, u128)>,
     cfg: Option<cfg::Cfg>,
     /// the CFG ⊑ structured walk's points (gref.rs)
     gref: Option<gref::GRef>,

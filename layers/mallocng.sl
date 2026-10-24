@@ -556,10 +556,12 @@ pred holds(c: Cfg, A: Abs, m: Mem, blocks: Addr -> Option[nat], brk: Addr) =
 ///////////////////////////////////////////////////////////////////////
 //  The invariant and the owned bytes
 
-// the owned bytes are mapped (for the law owned_mapped)
+// the owned bytes are mapped (for the law owned_mapped), not on a stack
+// page (none of the stack's free bytes, abi.sl's `stack_free`: a callee
+// leaves them)
 pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
   all k: nat, a: nat. k < len(rs) && rs[k][0] <= a && a < rs[k][0] + rs[k][1] && a notin live_of(blocks) ->
-    mapped(vm, a / PAGE)
+    mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.kind != stack
 
 // no slot handed out and not yet framed (between the allocator's calls)
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
@@ -654,8 +656,16 @@ pred reserves(A: Abs, A2: Abs, g: nat, i: nat) =
   (all h: nat. h != g -> A2.slots[h] = A.slots[h])
 
 // the memory outside the allocator's (in A) untouched, but for `extra` and
-// what was unmapped; the program break's start kept
-pred untouched(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, extra: Set[nat]) =
+// what was unmapped -- and the stack's free bytes (objs as at the start: a
+// callee's dead frame and objects, abi.sl's `stack_free`); the program
+// break's start kept
+pred untouched(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, objs: Objs, extra: Set[nat]) =
+  (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
+     (!stack_free(vm, objs, a) -> vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)]) && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
+  vm2.brk_start = vm.brk_start
+
+// ... every byte (the allocator's own steps: they write only its memory)
+pred kept_outside(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, extra: Set[nat]) =
   (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
      vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
   vm2.brk_start = vm.brk_start

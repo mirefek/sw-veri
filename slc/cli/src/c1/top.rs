@@ -156,6 +156,7 @@ impl<'e> Gen<'e> {
             lpg: None,
             cfg_meta: None,
             cfg_start: 0,
+            cfg_regs: Vec::new(),
             cfg: None,
             gref: None,
             raw_lets: false,
@@ -220,6 +221,11 @@ impl<'e> Gen<'e> {
                 self.cfg_meta = Some((live, ws));
                 self.cfg_start = self.cfg_body_start(entry);
             }
+        }
+        // (the locals in registers, a hand-written CFG's)
+        if let Some(rg) = meta(self, "regs") {
+            let rg: Option<Vec<(usize, u128)>> = rg.iter().map(|x| self.app(x, "pair", 2).and_then(|p| Some((nat(&p[0])? as usize, nat(&p[1])?)))).collect();
+            self.cfg_regs = rg.ok_or("the CFG's registers: not a list of pairs of literals")?;
         }
         // (no guide: a function of a return alone, walked straight -- C1 is
         // against the readable CFG, its branches and loops only there)

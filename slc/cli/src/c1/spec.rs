@@ -963,6 +963,35 @@ impl<'e> Gen<'e> {
         Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None, bf: None }))
     }
 
+    /// A move of a hand-written readable model (layers/musl_asm.sl:
+    /// `move(d, s, n)`, `move_words(d, s, c)`, the string instructions'):
+    /// its destination, source, byte count, definedness and raise when
+    /// undefined (the slot `HN`), and its run when defined (`ok`, the slots
+    /// `HW` the world's facts and `HC` the condition's proof)
+    pub(super) fn move_op(&mut self, op: &Term) -> Option<(Term, Term, Term, Term, RA, R)> {
+        let w = self.w.clone();
+        let empty = self.mk("empty", vec![]);
+        if let Some(x) = self.app(op, "musl_asm.move", 3).map(|x| x.to_vec()) {
+            let (d, s, n) = (x[0].clone(), x[1].clone(), x[2].clone());
+            let cond = self.mk("g.movable", vec![w.clone(), d.clone(), s.clone(), n.clone()]);
+            let ub = p(mpf("tr.move_at_ub", vec![t(&w), t(&d), t(&s), t(&n), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
+            let ok = mpf("tr.move_at_ok", vec![t(&w), t(&d), t(&s), t(&n), p(R::Slot("HWW")), p(R::Slot("HWU")), simp_l(), simp_l(), simp_l(), p(R::Slot("HC"))]);
+            return Some((d, s, n, cond, ub, ok));
+        }
+        if let Some(x) = self.app(op, "musl_asm.move_words", 3).map(|x| x.to_vec()) {
+            let (d, s, c) = (x[0].clone(), x[1].clone(), x[2].clone());
+            let cond = self.mk("g.words_ok", vec![w.clone(), d.clone(), s.clone(), c.clone()]);
+            let ub = p(mpf(
+                "tr.move_words_at_ub",
+                vec![t(&w), t(&d), t(&s), t(&c), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), simp_l(), p(R::Slot("HN"))],
+            ));
+            let ok = mpf("tr.move_words_at_ok", vec![t(&w), t(&d), t(&s), t(&c), p(R::Slot("HWW")), p(R::Slot("HWU")), simp_l(), simp_l(), simp_l(), p(R::Slot("HC"))]);
+            let n = self.mk("int_mul", vec![lit(8), c]);
+            return Some((d, s, n, cond, ub, ok));
+        }
+        None
+    }
+
     /// a store's raise when undefined: its operation's, through the helper
     /// that makes it if any
     fn helper_ub(&mut self, helper: &Option<String>, inner: &Term, inner_ub: R) -> Result<RA, String> {
@@ -1421,6 +1450,17 @@ impl<'e> Gen<'e> {
                     let (u, rinst) = self.by(qi, "tr.qs_raise", &ra)?;
                     let ubr = mp(rinst, vec![t(&w), so.ub]);
                     return Ok(Some(Red::Guard { cond: so.cond, ub: (u, ubr) }));
+                }
+                // a move (a string instruction's): its definedness split
+                // here, the move itself at the machine's movs
+                if let Some((_, _, _, cond, ub, _)) = self.move_op(&x[0]) {
+                    if self.hyp_find(hyps, &cond).is_some() {
+                        return Ok(None);
+                    }
+                    let ra = vec![("op", x[0].clone()), ("s2", self.vw.clone()), ("a", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone()), ("e", empty)];
+                    let (u, rinst) = self.by(qi, "tr.qs_raise", &ra)?;
+                    let ubr = mp(rinst, vec![t(&w), ub]);
+                    return Ok(Some(Red::Guard { cond, ub: (u, ubr) }));
                 }
                 // (a call from a function with stack objects: the call itself)
                 if let Some(c) = self.app(&x[0], "gimple.call_objs", 3).map(|c| c.to_vec()) {

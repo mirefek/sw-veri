@@ -284,7 +284,7 @@ qed
 // apart, the thread's block apart)
 theorem mp.agr_side(c, A, A1, B, s, V): s in abi.World -> abi.thread_ok(s.vm, s.fs_base) ->
   mallocng_specs.tls_apart(c, A, B, s.fs_base) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, A, B, s.vm, s.fs_base) ->
-  mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_epg(s, V) ->
+  mallocng.untouched(c, A, B, s.vm, V, s.objs, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_epg(s, V) ->
   thread: abi.thread_ok(V, s.fs_base) && errno: mallocng_specs.errno_ok(V, s.objs, s.fs_base) &&
   tls: mallocng_specs.tls_apart(c, A1, B, s.fs_base) && apart: mallocng_specs.errno_apart(c, A1, B, V, s.fs_base)
 proof
@@ -299,7 +299,7 @@ proof
     have e1 _ := (int_le(int_add(s.fs_base, 52), int_add(s.fs_base, i)) && int_lt(int_add(s.fs_base, i), int_add(s.fs_base, 56)) by simp(he))
     show by arith(e1, hil)
   qed
-  have th := apply(mp.tls_kept[c := c, A := A, b := B, V0 := s.vm, V1 := V, fs := s.fs_base, e := mp.errno(s.fs_base)], fsb, ht, htl, su, ne)
+  have th := apply(mp.tls_unt[c := c, A := A, b := B, V0 := s.vm, V1 := V, fs := s.fs_base, e := mp.errno(s.fs_base)], fsb, ht, htl, su, ne)
   have tl := apply(mp.tls_grown[c := c, A := A, A2 := A1, b := B, vm := s.vm, fs := s.fs_base], fsb, ht, htl, sgr)
   have ea: mallocng_specs.errno_at(s.fs_base) = int_add(s.fs_base, 52) by defs(arith(fsb, hfl), mallocng_specs.errno_at, bits_add, pow2)
   have pe: all i. i in omega -> int_lt(i, 4) ->
@@ -354,7 +354,7 @@ qed
 theorem mp.agr_errw(c, A, B, V, fs, e): mallocng.holds_m(c, A, V, B) -> V in x86_64_linux.Vm -> fs in bits(64) -> int_le(int_add(fs, 56), int_pow(2, 64)) ->
   (all a. a in omega -> a in mallocng.footprint(c, A, B) -> !(a in mp.errno(fs))) ->
   hin: mallocng.holds_m(c, A, mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), B) &&
-  unt: mallocng.untouched(c, A, B, V, mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), mp.errno(fs)) &&
+  unt: mallocng.kept_outside(c, A, B, V, mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), mp.errno(fs)) &&
   pages: mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e).pages = V.pages && vm: mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e) in x86_64_linux.Vm
 proof
   assume hh hv fsb hfl eo
@@ -397,7 +397,7 @@ proof
     have bb := rewrite(sym(ab), mp(all_elim(out, {a}), (a in bits(64) by arith(ho, expand(ml, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), n2))
     show by taut(bb, (V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)))
   qed
-  have un: mallocng.untouched(c, A, B, V, V2, mp.errno(fs)) by defs(taut(r, eb), mallocng.untouched)
+  have un: mallocng.kept_outside(c, A, B, V, V2, mp.errno(fs)) by defs(taut(r, eb), mallocng.kept_outside)
   show by taut(hh2, un, ep, v2V)
 qed
 
@@ -582,7 +582,8 @@ proof
     have _ ir nl := (a in omega && mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && !(a in malloc.live_of(b)) by taut(s2, expand(af, mallocng.fp_set)))
     obtain k, hk hkl hr from expand(ir, mallocng.in_ranges)
     have r1 r2 := expand(hr, mallocng.in_range)
-    show := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), taut(hk, hao), taut(hkl, r1, r2, nl))
+    have m _ := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), taut(hk, hao), taut(hkl, r1, r2, nl))
+    show := m
   qed
   // the invariant's view: its bytes the footprint's, on pages mapped
   have ag: all a. a in omega -> mallocng.mview(V2, mallocng.held(c, A, b))[a] = mallocng.mview(vm, mallocng.held(c, A, b))[a] proof
@@ -605,12 +606,13 @@ proof
   // the owned bytes: mapped still
   have mq: all x0. all x1. x0 in omega && x1 in omega -> ((int_lt(x0, seq_len(mallocng.fp_ranges(c, A))) && int_le(fst(mallocng.fp_ranges(c, A)[x0]), x1)) &&
       int_lt(x1, int_add(fst(mallocng.fp_ranges(c, A)[x0]), snd(mallocng.fp_ranges(c, A)[x0])))) && !(x1 in malloc.live_of(b)) ->
-      x86_64_linux.mapped(V2, int_div(x1, x86_64_linux.PAGE)) proof
+      x86_64_linux.mapped(V2, int_div(x1, x86_64_linux.PAGE)) && !(snd(V2.pages[int_div(x1, x86_64_linux.PAGE)]).kind = 2) proof
     fix k a
     assume ho h
     have _ hao := ho
-    have m := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), ho, h)
-    show := mp(all_elim(mm, {a}), hao, m)
+    have m mk := mp(all_elim(expand(hm, mallocng.fp_mapped), {k}, {a}), ho, h)
+    have e := mp(all_elim(pq, {a}), hao, m)
+    show by taut(mp(all_elim(mm, {a}), hao, m), rewrite(sym(e), mk))
   qed
   have m2: mallocng.fp_mapped(mallocng.fp_ranges(c, A), b, V2) by defs(mq, mallocng.fp_mapped)
   // the free bytes, the groups' bytes: read-write still
@@ -730,13 +732,13 @@ qed
 theorem mp.agr_back_g(c, A, A1, B, s, V, V2, M): c in mallocng.Cfg -> A in mallocng.Abs -> A1 in univ(1) -> A1 in mallocng.Abs ->
   B in fn_space(bits(64), option(omega)) -> int_mod(c.ctx, 8) = 0 -> V in x86_64_linux.Vm -> V2 in x86_64_linux.Vm ->
   mallocng.holds_m(c, A1, V, B) -> mallocng.shown_in(c, A1, s.objs) -> A1.taken = seq_concat(A.taken, seq_one(M)) -> mallocng.no_reserved(A1) ->
-  mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_mfp(c, A, B, s, M) -> !(M = 0) ->
+  mallocng.untouched(c, A, B, s.vm, V, s.objs, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_mfp(c, A, B, s, M) -> !(M = 0) ->
   mallocng_specs.meta_joinable(V, s.objs, int_add(c.ctx, 16), A1.free_metas, M) -> mallocng_specs.meta_freed(V, V2, s.objs, int_add(c.ctx, 16), M) ->
   (all a. a in omega -> int_le(M, a) -> int_lt(a, int_add(M, 40)) ->
      mallocng.m_rw(mallocng.mview(V, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V, mallocng.all_bytes()), a)).kind = 2)) ->
   abs: mp.back(A1, A.taken, M) in mallocng.Abs && univ: mp.back(A1, A.taken, M) in univ(1) && nr: mallocng.no_reserved(mp.back(A1, A.taken, M)) &&
   act: mp.back(A1, A.taken, M).active = A1.active && tk: mp.back(A1, A.taken, M).taken = A.taken &&
-  hin: mallocng.holds_m(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
+  hin: mallocng.holds_m(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, s.objs, mp.errno(s.fs_base)) &&
   grw: mp.grown(c, mp.back(A1, A.taken, M), A, B, s.vm)
 proof
   assume hc ha hu1 ha1 hb cal hv hv2 hh hsh tk nr1 un gr mf mnz hj hfd xrw
@@ -783,7 +785,7 @@ proof
     show by taut(mp(all_elim(gr, {a}), ho, hf), hn)
   qed
   have r: all a. a in omega -> (!(a in mallocng.footprint(c, A, B)) && !(a in mp.errno(s.fs_base))) && x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
-      V2.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] && V2.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+      (!abi.stack_free(s.vm, s.objs, a) -> V2.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)]) && V2.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
     fix a
     assume ho hq
     have n1 n2 m0 := hq
@@ -813,15 +815,19 @@ proof
     qed
     have b2 := mp(all_elim(vb, {a}), ho, taut(alo, nh, nm, nl))
     have b1 p1 := mp(all_elim(u1, {a}), ho, taut(n1, n2, m0))
-    show by taut(trans(b2, b1), trans((V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)), p1))
+    have bb: !abi.stack_free(s.vm, s.objs, a) -> V2.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] proof
+      assume nf
+      show := trans(b2, mp(b1, nf))
+    qed
+    show by taut(bb, trans((V2.pages[int_div(a, x86_64_linux.PAGE)] = V.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)), p1))
   qed
-  have unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) by defs(taut(r, trans(es, u2)), mallocng.untouched)
+  have unt: mallocng.untouched(c, A, B, s.vm, V2, s.objs, mp.errno(s.fs_base)) by defs(taut(r, trans(es, u2)), mallocng.untouched)
   show by taut(ba, bu, nr2, bac, btk, hin, unt, grw)
 qed
 
 // (a meta ready on V0, its record none of the allocator's bytes nor e's,
 // memory untouched but those: ready on V1)
-theorem mp.ready_keep(c, A, B, V0, V1, e, m): m in omega -> mallocng_specs.meta_ready(V0, m) -> mallocng.untouched(c, A, B, V0, V1, e) ->
+theorem mp.ready_keep(c, A, B, V0, V1, objs, e, m): m in omega -> mallocng_specs.meta_ready(V0, m) -> mallocng.untouched(c, A, B, V0, V1, objs, e) ->
   (all a. a in omega -> int_le(m, a) -> int_lt(a, int_add(m, 40)) -> !(a in mallocng.footprint(c, A, B)) && !(a in e)) ->
   mallocng_specs.meta_ready(V1, m)
 proof
@@ -835,10 +841,13 @@ proof
     fix a
     assume hao h1 h2
     have n1 n2 := mp(all_elim(hn, {a}), hao, h1, h2)
-    have rw0 _ := mp(all_elim(rw, {a}), hao, (int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) by arith(h1, h2, cm)))
+    have rw0 nk0 := mp(all_elim(rw, {a}), hao, (int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) by arith(h1, h2, cm)))
     have mm := apply(mp.rw_mapped[vm := V0, a := a], hao, rw0)
     have b p := mp(all_elim(u1, {a}), hao, taut(n1, n2, mm))
-    show := apply(mp.view_agree1[vm := V0, vm2 := V1, fp := mallocng.all_bytes(), a := a], hao, (a in mallocng.all_bytes() -> V1.bytes[bits_of_int(64, a)] = V0.bytes[bits_of_int(64, a)] by taut(b)), p)
+    // (the record off the stack: none of its bytes the stack's free ones)
+    have p0 := apply(mp.pg_view[vm := V0, fp := mallocng.all_bytes(), a := a], hao, (a in mallocng.all_bytes() by defs(sel(taut(hao)), mallocng.all_bytes)))
+    have nf: !abi.stack_free(V0, objs, a) by defs(taut(rewrite(p0, nk0)), abi.stack_free, abi.stack_page)
+    show := apply(mp.view_agree1[vm := V0, vm2 := V1, fp := mallocng.all_bytes(), a := a], hao, (a in mallocng.all_bytes() -> V1.bytes[bits_of_int(64, a)] = V0.bytes[bits_of_int(64, a)] by taut(mp(b, nf))), p)
   qed
   have rw1: all a. a in omega -> int_le(m, a) && int_lt(a, int_add(m, mallocng.META_SIZE)) -> mallocng.m_rw(M1, a) && !(snd(mallocng.pg(M1, a)).kind = 2) proof
     fix a
@@ -930,14 +939,6 @@ theorem mp.md_bytes(s, V, z, p, off, k, w): g.mem_defined(fn_update(s, "vm", V),
 proof
   assume h
   show by simp(h, ms.f_usable)
-qed
-
-// (bytes usable: so in a memory differing in its bytes only)
-theorem mp.usable_bytes(v, v2, objs, a, n, w): fn_update(v2, "bytes", v.bytes) = v -> gimple.usable(v, objs, a, n, w) -> gimple.usable(v2, objs, a, n, w)
-proof
-  assume e u
-  have u2 := subst({y. gimple.usable(y, objs, a, n, w)}, sym(e), u)
-  show := rewrite(ms.f_usable[vm := v2, X := v.bytes, objs := objs, a := a, n := n, w := w], u2)
 qed
 
 // (a byte read-write: below the address space's top)
@@ -1047,13 +1048,13 @@ qed
 theorem mp.agr_back(c, A, A1, B, s, V, V2, M): c in mallocng.Cfg -> A in mallocng.Abs -> A1 in univ(1) -> A1 in mallocng.Abs ->
   B in fn_space(bits(64), option(omega)) -> int_mod(c.ctx, 8) = 0 -> V in x86_64_linux.Vm -> V2 in x86_64_linux.Vm ->
   mallocng.holds_m(c, A1, V, B) -> mallocng.shown_in(c, A1, s.objs) -> mallocng_specs.groups_kept(A, A1) -> A1.taken = seq_concat(A.taken, seq_one(M)) -> mallocng.no_reserved(A) ->
-  mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_mfp(c, A, B, s, M) -> !(M = 0) ->
+  mallocng.untouched(c, A, B, s.vm, V, s.objs, mp.errno(s.fs_base)) -> mp.grown(c, A1, A, B, s.vm) -> mp.am_mfp(c, A, B, s, M) -> !(M = 0) ->
   mallocng_specs.meta_joinable(V, s.objs, int_add(c.ctx, 16), A1.free_metas, M) -> mallocng_specs.meta_freed(V, V2, s.objs, int_add(c.ctx, 16), M) ->
   (all a. a in omega -> int_le(M, a) -> int_lt(a, int_add(M, 40)) ->
      mallocng.m_rw(mallocng.mview(V, mallocng.all_bytes()), a) && !(snd(mallocng.pg(mallocng.mview(V, mallocng.all_bytes()), a)).kind = 2)) ->
   abs: mp.back(A1, A.taken, M) in mallocng.Abs && univ: mp.back(A1, A.taken, M) in univ(1) && nr: mallocng.no_reserved(mp.back(A1, A.taken, M)) &&
   act: mp.back(A1, A.taken, M).active = A.active && tk: mp.back(A1, A.taken, M).taken = A.taken &&
-  hin: mallocng.holds_m(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, mp.errno(s.fs_base)) &&
+  hin: mallocng.holds_m(c, mp.back(A1, A.taken, M), V2, B) && unt: mallocng.untouched(c, A, B, s.vm, V2, s.objs, mp.errno(s.fs_base)) &&
   grw: mp.grown(c, mp.back(A1, A.taken, M), A, B, s.vm)
 proof
   assume hc ha hu1 ha1 hb cal hv hv2 hh hsh gk tk nr un gr mf mnz hj hfd xrw
@@ -1120,7 +1121,7 @@ qed
 abbrev mp.agr_out(c, A, sc, req, B, s, o) := (ex v. v in x86_64_linux.Vm && o = exc(fn_update(s, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V g. (V in x86_64_linux.Vm && g in bits(64) && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, A, sc) && A2.taken = A.taken) &&
      (g = 0 || mallocng_specs.fresh_group(A2, g, sc, req)) &&
-     mallocng.holds_m(c, A2, V, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
+     mallocng.holds_m(c, A2, V, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
      (!(g = 0) -> int_lt(mallocng_specs.active_idx(V, A2.metas[g]), A2.metas[g].last_idx) ->
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[g]), int_add(A2.metas[g].last_idx, 1))))))) &&
      o = ok(fn_update(s, "vm", V), g))
@@ -1199,7 +1200,7 @@ proof
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A1.metas[0]), int_add(A1.metas[0].last_idx, 1)))) by simp()
     have inner: ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, A, sc) && A2.taken = A.taken) &&
         (0 = 0 || mallocng_specs.fresh_group(A2, 0, sc, req)) &&
-        mallocng.holds_m(c, A2, V1, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V1, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
+        mallocng.holds_m(c, A2, V1, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V1, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A2, A, B, s.vm) &&
         (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V1, A2.metas[0]), A2.metas[0].last_idx) ->
            int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[0]), int_add(A2.metas[0].last_idx, 1)))))
       by ex_intro({A1}, taut(a1a, a1u, nr1, ac1, tk, refl({0}), hin1, hsh1, unt1, grw1, vac))
@@ -2016,7 +2017,7 @@ proof
         qed
         have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && mp.upto(A3, A, sc) && A3.taken = A.taken) &&
             (0 = 0 || mallocng_specs.fresh_group(A3, 0, sc, req)) &&
-            mallocng.holds_m(c, A3, V5, B) && mallocng.shown_in(c, A3, s.objs) && mallocng.untouched(c, A, B, s.vm, V5, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
+            mallocng.holds_m(c, A3, V5, B) && mallocng.shown_in(c, A3, s.objs) && mallocng.untouched(c, A, B, s.vm, V5, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
             (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V5, A3.metas[0]), A3.metas[0].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[0]), int_add(A3.metas[0].last_idx, 1)))))
           by ex_intro({A2}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, apply(mp.shown_mstep[c := c, A := A1, F := seq_concat(A1.free_metas, seq_one(M)), n := A1.avail_cnt, T := A.taken, objs := s.objs], hsh1), bunt, bgrw, vac))
@@ -2867,7 +2868,7 @@ proof
         have mf := mp(mfp1, hnz)
         have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
         have ur: all a. a in omega -> (!(a in mallocng.footprint(c, A, B)) && !(a in mp.errno(s.fs_base))) && x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
-            VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] && VF.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+            (!abi.stack_free(s.vm, s.objs, a) -> VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)]) && VF.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
           fix a
           assume hao hq
           have n1 n2 m0 := hq
@@ -2897,11 +2898,15 @@ proof
             show by taut(rewrite(pg, m3), mp(all_elim(pfr, {a}), hao, w1, arith(w2, n4g)))
           qed
           have f1 := mp(all_elim(frb, {a}), yb, arith(nt), arith(nc, hx, ks), arith(nc, hx, ks, cv, hs, hsl), arith(np))
-          have eb: VF.bytes[a] = s.vm.bytes[a] := trans((VF.bytes[a] = Y11[a] by simp()), trans(f1, trans(b4, rewrite(ea, b3))))
-          show by taut(rewrite(sym(ea), eb), trans((VF.pages[int_div(a, x86_64_linux.PAGE)] = V4.pages[int_div(a, x86_64_linux.PAGE)] by simp()), trans(p4, p3)))
+          have eb: !abi.stack_free(s.vm, s.objs, a) -> VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] proof
+            assume nf
+            have e0: VF.bytes[a] = s.vm.bytes[a] := trans((VF.bytes[a] = Y11[a] by simp()), trans(f1, trans(b4, rewrite(ea, mp(b3, nf)))))
+            show := rewrite(sym(ea), e0)
+          qed
+          show by taut(eb, trans((VF.pages[int_div(a, x86_64_linux.PAGE)] = V4.pages[int_div(a, x86_64_linux.PAGE)] by simp()), trans(p4, p3)))
         qed
         have {mst = start} := apply(mp.mm_fresh[V3 := V3, V4 := V4, p := p, N := N4, PG := NPG], hpo, n4o, n4a, n4p, hpl, hfr)
-        have untF: mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) by defs(taut(ur, trans((VF.brk_start = V4.brk_start by simp()), trans(mst, u32))), mallocng.untouched)
+        have untF: mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) by defs(taut(ur, trans((VF.brk_start = V4.brk_start by simp()), trans(mst, u32))), mallocng.untouched)
         // (grown: by the meta, unmapped before or the allocator's; by the
         // pages, unmapped before -- errno's mapped)
         have fsb2: s.fs_base in bits(64) by simp(expand(hw, abi.World))
@@ -2958,7 +2963,7 @@ proof
         qed
         have inner: ex A3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.no_reserved(A3) && mp.upto(A3, A, sc) && A3.taken = A.taken) &&
             (fst(rr) = 0 || mallocng_specs.fresh_group(A3, fst(rr), sc, req)) &&
-            mallocng.holds_m(c, A3, VF, B) && mallocng.shown_in(c, A3, s.objs) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
+            mallocng.holds_m(c, A3, VF, B) && mallocng.shown_in(c, A3, s.objs) && mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A3, A, B, s.vm) &&
             (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(VF, A3.metas[fst(rr)]), A3.metas[fst(rr)].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[fst(rr)]), int_add(A3.metas[fst(rr)].last_idx, 1)))))
           by ex_intro({A2}, taut(au2, uu2, nr2, ac2, tk2, fgr, hinF, apply(mp.shown_ngrp[c := c, A := A1, vm := V4, V1 := VF, b := B, k := KK, T := A.taken, m := M, V := VR, n := K4, objs := s.objs], GP, hsh1, vhid), untF, grF, actF))
@@ -3033,7 +3038,7 @@ proof
       have ww17: fn_update(fn_update(s, "vm", V1), "vm", V17) = W17 := fn_update_twice[f := s, k := "vm", a := V1, b := V17]
       have w17W w17u := apply(mp.am_world, hw, hu, v17v)
       have hin17: mallocng.holds_m(c, A2, V17, B) by simp(hin2, hB1)
-      have unt17: mallocng.untouched(c, A1, B, V1, V17, EN) by simp(unt2, hA1, hB1)
+      have unt17: mallocng.untouched(c, A1, B, V1, V17, s.objs, EN) by simp(unt2, hA1, hB1)
       have grw17: mp.grown(c, A2, A1, B, V1) by simp(grw2, hA1, hB1)
       have tkm: A1.taken = seq_concat(A.taken, seq_one(M)) by taut(tk1, hnz)
       have tk17: A2.taken = seq_concat(A.taken, seq_one(M)) := trans((A2.taken = A1.taken by simp(tk2, hA1)), tkm)
@@ -3043,7 +3048,7 @@ proof
       have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(efl, fsb)
       // (so far: nothing outside the allocator touched but errno, grown only
       // into memory unmapped before)
-      have un017 := apply(mp.unt_grow[c := c, A := A, A1 := A1, b := B, V0 := s.vm, V1 := V1, V2 := V17, e := EN], unt1, unt17, grw1)
+      have un017 := apply(mp.unt_seq[c := c, A := A, A1 := A1, b := B, V0 := s.vm, V1 := V1, V2 := V17, objs := s.objs, e := EN], unt1, unt17, grw1)
       have eo17 := apply(mp.errno_out[c := c, A := A1, A1 := A2, B := B, V0 := V1, fs := s.fs_base], ea1, fsb, hfl, grw17)
       have gr017 := apply(mp.fp_grow[c := c, A := A, A1 := A1, A2 := A2, b := B, V0 := s.vm, V1 := V1, e := EN], unt1, grw1, grw17, eo17)
       // (the thread's block, M's record: as they were -- M's is taken, no
@@ -3055,7 +3060,7 @@ proof
         have q1 _ := (int_le(int_add(s.fs_base, 52), int_add(s.fs_base, i)) && int_lt(int_add(s.fs_base, i), int_add(s.fs_base, 56)) by simp(he))
         show by arith(q1, hil)
       qed
-      have th17 := apply(mp.tls_kept[c := c, A := A1, b := B, V0 := V1, V1 := V17, fs := s.fs_base, e := EN], fsb, th1, tl1, unt17, nee)
+      have th17 := apply(mp.tls_unt[c := c, A := A1, b := B, V0 := V1, V1 := V17, fs := s.fs_base, e := EN], fsb, th1, tl1, unt17, nee)
       have ths17: gc.sound(W17) by simp(th17)
       have mo: M in omega by arith(mb)
       have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
@@ -3149,7 +3154,7 @@ proof
             int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A3.metas[0]), int_add(A3.metas[0].last_idx, 1)))) by simp()
         have inner: ex A4. ((A4 in mallocng.Abs && A4 in univ(1)) && mallocng.no_reserved(A4) && mp.upto(A4, A, sc) && A4.taken = A.taken) &&
             (0 = 0 || mallocng_specs.fresh_group(A4, 0, sc, req)) &&
-            mallocng.holds_m(c, A4, V18, B) && mallocng.shown_in(c, A4, s.objs) && mallocng.untouched(c, A, B, s.vm, V18, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
+            mallocng.holds_m(c, A4, V18, B) && mallocng.shown_in(c, A4, s.objs) && mallocng.untouched(c, A, B, s.vm, V18, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
             (!(0 = 0) -> int_lt(mallocng_specs.active_idx(V18, A4.metas[0]), A4.metas[0].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A4.metas[0]), int_add(A4.metas[0].last_idx, 1)))))
           by ex_intro({A3}, taut(ba, bu, bnr, bup, btk, refl({0}), bhin, apply(mp.shown_mstep[c := c, A := A2, F := seq_concat(A2.free_metas, seq_one(M)), n := A2.avail_cnt, T := A.taken, objs := s.objs], hsh2), bunt, bgrw, vac))
@@ -4559,7 +4564,7 @@ proof
         have mf := mp(mfp1, hnz)
         have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
         have ur: all a. a in omega -> (!(a in mallocng.footprint(c, A, B)) && !(a in EN)) && x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) ->
-            VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] && VF.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
+            (!abi.stack_free(s.vm, s.objs, a) -> VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)]) && VF.pages[int_div(a, x86_64_linux.PAGE)] = s.vm.pages[int_div(a, x86_64_linux.PAGE)] proof
           fix a
           assume hao hq
           have n1 n2 m0 := hq
@@ -4605,13 +4610,17 @@ proof
           have f2 := mp(all_elim(zr, {a}), yb, nl)
           have f3 := mp(all_elim(z0o, {a}), yb, arith(nt), (!(a = int_add(P, int_neg(3))) by arith(ns2, pst, ib4, pfi, zj1, hao, po)))
           have f4 := mp(all_elim(fout, {a}), hao, taut((int_lt(a, int_pow(2, 64)) by arith(lo, (int_pow(2, 64) = 18446744073709551616 by simp()))), ns))
-          have eb: VF.bytes[a] = s.vm.bytes[a] := trans(f1, trans(f2, trans(f3, trans(rewrite(ea, f4), rewrite(ea, b3)))))
+          have eb: !abi.stack_free(s.vm, s.objs, a) -> VF.bytes[bits_of_int(64, a)] = s.vm.bytes[bits_of_int(64, a)] proof
+            assume nf
+            have e0: VF.bytes[a] = s.vm.bytes[a] := trans(f1, trans(f2, trans(f3, trans(rewrite(ea, f4), rewrite(ea, mp(b3, nf))))))
+            show := rewrite(sym(ea), e0)
+          qed
           have ep: VF.pages[int_div(a, x86_64_linux.PAGE)] = V17.pages[int_div(a, x86_64_linux.PAGE)] := subst({y. VF.pages[int_div(a, x86_64_linux.PAGE)] = y[int_div(a, x86_64_linux.PAGE)]},
             pgs, refl({VF.pages[int_div(a, x86_64_linux.PAGE)]}))
-          show by taut(rewrite(sym(ea), eb), trans(ep, p3))
+          show by taut(eb, trans(ep, p3))
         qed
         have ebs: V20.brk_start = V17.brk_start := sym(rewrite(fv1, mp(app_update_other[f := V20, k := "bytes", v := V17.bytes, x := "brk_start"], (!("brk_start" = "bytes") by simp()))))
-        have untF: mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) by defs(taut(ur, trans((VF.brk_start = V20.brk_start by simp()), trans(ebs, u32))), mallocng.untouched)
+        have untF: mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) by defs(taut(ur, trans((VF.brk_start = V20.brk_start by simp()), trans(ebs, u32))), mallocng.untouched)
         // (grown: by the slot, the allocator's or unmapped; by the meta, the
         // same)
         have grF: all a. a in omega -> a in mallocng.footprint(c, A3, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE)) proof
@@ -4646,7 +4655,7 @@ proof
         qed
         have inner: ex A4. ((A4 in mallocng.Abs && A4 in univ(1)) && mallocng.no_reserved(A4) && mp.upto(A4, A, sc) && A4.taken = A.taken) &&
             (fst(rr) = 0 || mallocng_specs.fresh_group(A4, fst(rr), sc, req)) &&
-            mallocng.holds_m(c, A4, VF, B) && mallocng.shown_in(c, A4, s.objs) && mallocng.untouched(c, A, B, s.vm, VF, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
+            mallocng.holds_m(c, A4, VF, B) && mallocng.shown_in(c, A4, s.objs) && mallocng.untouched(c, A, B, s.vm, VF, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A4, A, B, s.vm) &&
             (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(VF, A4.metas[fst(rr)]), A4.metas[fst(rr)].last_idx) ->
                int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A4.metas[fst(rr)]), int_add(A4.metas[fst(rr)].last_idx, 1)))))
           by ex_intro({A3}, taut(au3, uu3, nr3, ac3, tk3, fgr, hinF, apply(mp.shown_ngn[c := c, A := A2, vm := V17, V1 := VF, b := B, g := G, i := R2, k := KK, T := A.taken, m := M, V := VR, n := C2, objs := s.objs], GP, hsh2), untF, grF, actF))

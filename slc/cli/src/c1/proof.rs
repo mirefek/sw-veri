@@ -19,7 +19,7 @@ struct Ctx {
 const HAPART: &[&str] = &[
     "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
     "store64i_bd", "store32i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
-    "store64_bd_eq", "store64_bi",
+    "store64_bd_eq", "store64_bi", "movsb", "rep_movsq",
 ];
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
@@ -185,6 +185,69 @@ impl<'e> Gen<'e> {
         st2.hw = hw2;
         st2.spec = Spec::Proc(j);
         Ok((hc, so.v.clone(), st2, red, so.addr.clone(), so))
+    }
+
+    /// The spec's move at the machine's movs (a string instruction: its
+    /// destination d, source s, bytes n): its condition's proof, the state
+    /// after it (the world with the n bytes at s stored at d), the
+    /// reduction across it
+    pub(super) fn spec_move(&mut self, st: &St, dst: &Term, src: &Term, n: &Term) -> Result<(Seq, St, R), String> {
+        let Spec::Proc(qi) = st.spec else { return Err(format!("{:x}: a move after the procedure's result", st.a)) };
+        let q = self.qs[qi].clone();
+        let badm = format!("{:x}: a move the spec does not make here (its rest: {})", st.a, self.print(&q));
+        let bad = || badm.clone();
+        let body = self.app(&q, "mkprog", 1).ok_or_else(bad)?[0].clone();
+        let ex = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())).ok_or_else(bad)?;
+        let (a, k) = (ex[0].clone(), ex[1].clone());
+        let x = self.app(&a, "bind_rel", 5).ok_or_else(bad)?.to_vec();
+        let (md, ms, mn, cond, _, okr) = self.move_op(&x[0]).ok_or_else(bad)?;
+        for (what, m, c) in [("destination", &md, dst), ("source", &ms, src), ("size", &mn, n)] {
+            if self.canon(m) != self.canon(c) {
+                return Err(format!("{:x}: the move's {}: the machine's {}, the spec's {}", st.a, what, self.print(c), self.print(m)));
+            }
+        }
+        let hc = self.hyp_find(&st.hyps, &cond).map(|h| h.1.clone()).ok_or_else(bad)?;
+        let ctx = ["x0", "x1", "x8"];
+        let kl = self.lam(&k, &ctx, &["x8", "x1"]).ok_or("a block's rest reads the world")?;
+        let c5 = ["x0", "x1", "x8", "x9", "x10"];
+        let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("a move's continuation reads the world before it")?;
+        let xl = self.lam(&x[3], &c5, &["x9", "x10", "x8"]).ok_or("a move's handler reads the world before it")?;
+        let dl = self.lam(&x[4], &["x0", "x1", "x8", "x9"], &["x9", "x8"]).ok_or("a move's handler reads the world before it")?;
+        // the world after it
+        let wn2 = self.fresh("W");
+        let w2 = self.var(&wn2);
+        let w = st.w.clone();
+        let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
+        let bytes = self.mk("app", vec![vm.clone(), Term::bytes(b"bytes")]);
+        let v = self.mk("gimple.bytes_at", vec![vm.clone(), ms.clone(), mn.clone()]);
+        let stored = self.mk("x86_64_linux.store_le", vec![bytes, md.clone(), mn.clone(), v.clone()]);
+        let w2term = self.mk("fn_update", vec![w.clone(), Term::bytes(b"vm"), self.mk("fn_update", vec![vm, Term::bytes(b"bytes"), stored])]);
+        let weq = self.push_world(Self::var_id(&w2), w2term, &w);
+        let hw2 = self.run(&R::Apply(Box::new(f("tr.world_store")), vec![t(&w), t(&md), t(&mn), t(&v), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), simp_l()]), &[])?;
+        let hw2 = match &weq {
+            Some(eq) => self.world_conv(hw2, eq)?,
+            None => hw2,
+        };
+        let w2u = self.mk("in", vec![w2.clone(), self.mk("univ", vec![lit(1)])]);
+        let hv2 = self.evp(&RP::Taut(vec![R::S(hw2.clone())]), &w2u, &[])?;
+        // the move's run: ok, to the world after
+        let hww = self.evp(&RP::Taut(vec![R::S(st.hw.clone())]), &self.mk("in", vec![w.clone(), self.mk("abi.World", vec![])]), &[])?;
+        let ok = self.run(&okr, &[("HWW", hww), ("HWU", st.hvu.clone()), ("HC", hc.clone())])?;
+        let ok = match &weq {
+            Some(eq) => R::S(self.world_conv(ok, eq)?),
+            None => R::S(ok),
+        };
+        let empty = self.mk("empty", vec![]);
+        let (j, inst) = self.by(qi, "tr.qs_opw", &[("op", x[0].clone()), ("r", empty), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+        let qred = mp(inst, vec![t(&w), t(&w2), s(&st.hvu), p(ok)]);
+        let wredw = R::Inst("tr.wredw".into(), vec![("w", w.clone()), ("w2", w2.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone()), ("kw", self.kw3())]);
+        let red = R::S(self.run(&mp(wredw, vec![s(&st.hvu), p(qred)]), &[])?);
+        let mut st2 = st.clone();
+        st2.w = w2;
+        st2.hvu = hv2;
+        st2.hw = hw2;
+        st2.spec = Spec::Proc(j);
+        Ok((hc, st2, red))
     }
 
     /// The frame's stack object allocated (`Red::Alloc`, the rest qi) at
@@ -1550,9 +1613,11 @@ impl<'e> Gen<'e> {
         if self.loop_head(qi).is_none() {
             return Ok(None);
         }
-        // (the readable CFG: its loop at the body's start, by tr.cfg_lvk)
+        // (the readable CFG: its loop at the body's start, by tr.cfg_lvk; a
+        // hand-written one with locals in registers: its first block from
+        // here, the arguments in theirs, tr.cfg_lvk_st)
         if self.cfg.is_none() && st.a == self.cfg_start {
-            return self.cfg_function(st, qi, false).map(Some);
+            return self.cfg_function(st, qi, !self.cfg_regs.is_empty()).map(Some);
         }
         // (its loop reached within its first block, after the stack
         // object's allocation there: the CFG from here, tr.cfg_lvk_st)
@@ -2115,8 +2180,8 @@ impl<'e> Gen<'e> {
     }
 
     /// ... the flags step `step` (`write`: writing a scratch register g its
-    /// word x too, tr.jcc_w)
-    pub(super) fn compare_x(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, write: Option<(u128, Term)>) -> Result<Seq, String> {
+    /// value x of n bytes too, tr.jcc_w)
+    pub(super) fn compare_x(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, write: Option<(u128, Term, u128)>) -> Result<Seq, String> {
         let (j, len2, a3, tt, cc) = self.jcc(a2)?;
         let si = |g: &Gen, x: &Term| g.mk("sint", vec![lit(32), x.clone()]);
         let (lemma, c, args, ff) = match &fl {
@@ -2151,6 +2216,15 @@ impl<'e> Gen<'e> {
                 };
                 (l, c, vec![lit(*w), r.clone()], self.mk("x86i.logf", vec![lit(*w), r.clone(), Term::bvar(0)]))
             }
+            Flags::Zero(w, r) => {
+                let z = self.mk("eq", vec![r.clone(), lit(0)]);
+                let (l, c) = match cc {
+                    4 => ("ccz_e", self.mk("not", vec![z])),
+                    5 => ("ccz_ne", z),
+                    _ => return Err(format!("{:x}: a jump on condition {} after a zero flag only: no lemma", a, cc)),
+                };
+                (l, c, vec![lit(*w), r.clone()], self.mk("x86i.zff", vec![lit(*w), r.clone(), Term::bvar(0)]))
+            }
         };
         let mut ca: Vec<RA> = args.iter().map(t).collect();
         ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
@@ -2159,19 +2233,19 @@ impl<'e> Gen<'e> {
         let (jn, jw) = if self.insns[&a2].row == 128 { (128, 32) } else { (127, 8) };
         let mut jv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt))];
         jv.extend([t(&lit(len2)), t(&lit(jn)), t(&lit(jw)), t(&lit(cc)), t(&j), t(&c), t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w)]);
-        if let Some((g, x)) = &write {
-            jv.extend([t(&lit(*g)), t(x)]);
+        if let Some((g, x, n)) = &write {
+            jv.extend([t(&lit(*g)), t(x), t(&lit(*n))]);
         }
         jv.extend([p(step), p(ccf), p(f(&self.insns[&a2].name))]);
         jv.extend((0..6).map(|_| simp_l()));
         if write.is_some() {
-            jv.extend([simp_l(), simp_l()]);
+            jv.extend([simp_l(), simp_l(), simp_l()]);
         }
         jv.extend([self.nobp(), p(R::Slot("T")), p(R::Slot("F"))]);
         let (lemma, st2) = match &write {
-            Some((g, x)) => {
+            Some((g, x, n)) => {
                 self.scratch.insert(*g);
-                ("tr.jcc_w", self.set_reg(st, st.a, *g, 8, x.clone()))
+                ("tr.jcc_w", self.set_reg(st, st.a, *g, *n, x.clone()))
             }
             None => ("tr.jcc", st.clone()),
         };

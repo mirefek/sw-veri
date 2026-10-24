@@ -265,8 +265,9 @@ impl<'e> Gen<'e> {
                         if a1 == a2 {
                             continue;
                         }
-                        let _ = std::fs::write(format!("{}/exit_new.txt", std::env::var("TMPDIR").unwrap_or("/tmp".into())), self.print(&a1));
-                        let _ = std::fs::write(format!("{}/exit_old.txt", std::env::var("TMPDIR").unwrap_or("/tmp".into())), self.print(&a2));
+                        // (the two templates, functions of the locals)
+                        let _ = std::fs::write(format!("{}/exit_new.txt", std::env::var("TMPDIR").unwrap_or("/tmp".into())), self.lambda(1, &a1));
+                        let _ = std::fs::write(format!("{}/exit_old.txt", std::env::var("TMPDIR").unwrap_or("/tmp".into())), self.lambda(1, &a2));
                         return Err(format!("loop {}: its exit {} a cut point already, of another program", p.label, e));
                     }
                     let g = self.gref.as_mut().unwrap();
@@ -387,8 +388,13 @@ impl<'e> Gen<'e> {
                     s0 = Seq::mp(self.env, &d, hp).map_err(|e| e.0)?;
                 }
             }
-            if !s0.hyps().is_empty() {
-                return Err(format!("label {}'s ways: {} hypotheses left", kl, s0.hyps().len()));
+            // (the parameters in the universe: the refinement's own
+            // hypotheses, discharged at the wrapper's arguments)
+            let univ1 = self.mk("univ", vec![lit(1)]);
+            let param_h = |g: &Self, h: &Term| g.params.iter().any(|p| *h == g.mk("in", vec![p.clone(), univ1.clone()]));
+            if !s0.hyps().iter().all(|h| param_h(self, h)) {
+                let hs: Vec<String> = s0.hyps().iter().map(|h| self.print(h)).collect();
+                return Err(format!("label {}'s ways: {} hypotheses left: {}", kl, s0.hyps().len(), hs.join("; ")));
             }
             done.insert(kl, s0);
         }
@@ -751,6 +757,13 @@ impl<'e> Gen<'e> {
                     }
                     // (a witness not mentioned: the body alone)
                     ("ex", 1) if !self.occurs_bv(&a2[0], 0) => self.lower_bv(&a2[0], 0),
+                    // (a witness given: `ex x. x = v && K(x)` is K(v) -- a
+                    // block that only passes its outcome on, as an `if`'s end)
+                    ("ex", 1) if self.one_point(&a2[0]).is_some() => {
+                        let (v, k) = self.one_point(&a2[0]).unwrap();
+                        let k2 = self.subst_bv(&k, 0, &v);
+                        self.red_t(&k2, memo)
+                    }
                     _ => t2,
                 }
             }
@@ -758,6 +771,40 @@ impl<'e> Gen<'e> {
         };
         memo.insert(t.clone(), r.clone());
         r
+    }
+
+    /// an existential's body `x = v && K` (x bound variable 0, not in v):
+    /// v outside the binder, K
+    fn one_point(&self, b: &Term) -> Option<(Term, Term)> {
+        let x = self.app(b, "and", 2)?;
+        let e = self.app(&x[0], "eq", 2)?;
+        (matches!(e[0].node(), Node::BVar(0)) && !self.occurs_bv(&e[1], 0)).then(|| (self.lower_bv(&e[1], 0), x[1].clone()))
+    }
+
+    /// t with bound variable `d` (at this depth) v (a term outside the
+    /// binder: its loose variables raised by the depth), those above d one
+    /// lower
+    fn subst_bv(&self, t: &Term, d: u32, v: &Term) -> Term {
+        match t.node() {
+            Node::BVar(i) if *i == d => self.shift_bv(v, 0, d),
+            Node::BVar(i) if *i > d => Term::bvar(i - 1),
+            Node::App(f, a) => t.with_args(a.iter().enumerate().map(|(i, x)| self.subst_bv(x, d + self.env.syms[*f as usize].binders[i], v)).collect()),
+            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.subst_bv(x, d, v)).collect()),
+            _ => t.clone(),
+        }
+    }
+
+    /// t's bound variables from `c` up raised by k
+    fn shift_bv(&self, t: &Term, c: u32, k: u32) -> Term {
+        if k == 0 {
+            return t.clone();
+        }
+        match t.node() {
+            Node::BVar(i) if *i >= c => Term::bvar(i + k),
+            Node::App(f, a) => t.with_args(a.iter().enumerate().map(|(i, x)| self.shift_bv(x, c + self.env.syms[*f as usize].binders[i], k)).collect()),
+            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.shift_bv(x, c, k)).collect()),
+            _ => t.clone(),
+        }
     }
 
     /// bound variable `d` (at this depth) occurs in t
@@ -1382,6 +1429,9 @@ impl<'e> Gen<'e> {
         }
         // (the exit point's program folded at the break -- an exit reached
         // before as a cut point: its first part from the rest's, g.ex_mono)
+        // (or, the exit inside more blocks than the point's program -- a
+        // loop in nested `if`s: their ends pass the outcome on --, the rest
+        // by evaluation from the program)
         let pf = if ps != goal { self.ex_mono(pf, &goal)? } else { pf };
         let pf = self.evp(&RP::Taut(vec![R::S(pf)]), &goal, &[])?;
         let pf = self.close(pf, &hs, &[Self::var_id(&o)])?;
@@ -1401,8 +1451,35 @@ impl<'e> Gen<'e> {
         };
         let (a, k1) = parts(self, fact.concl()).ok_or("an exit's program: not ex x. A && K")?;
         let (b, k2) = parts(self, goal).ok_or("an exit's rest: not ex x. B && K")?;
+        // (the rest one block end further: `ex y. P(x, y) && K(y)`, P passing
+        // the outcome on -- g.ex_pass)
         if k1 != k2 {
-            return Err("an exit's program and rest: their rests differ".into());
+            let pass = (|| {
+                let e = self.app(&k2, "ex", 1)?[0].clone();
+                let c = self.app(&e, "and", 2)?;
+                (c[1] == self.shift_bv(&k1, 1, 1)).then(|| c[0].clone())
+            })();
+            let Some(pp) = pass else { return Err("an exit's program and rest: their rests differ".into()) };
+            let (xv, yv) = (self.var("mx"), self.var("my"));
+            let (ax, bx, kx, pxy, pxx) = {
+                let bf = self.env.binders_fn();
+                (
+                    a.instantiate_params(std::slice::from_ref(&xv), &bf),
+                    b.instantiate_params(std::slice::from_ref(&xv), &bf),
+                    k1.instantiate_params(std::slice::from_ref(&xv), &bf),
+                    pp.instantiate_params(&[xv.clone(), yv.clone()], &bf),
+                    pp.instantiate_params(&[xv.clone(), xv.clone()], &bf),
+                )
+            };
+            let ha = self.assume(&ax)?;
+            let pb = self.evp(&RP::Simp(false, vec![R::S(ha.clone())], vec![], false), &bx, &[])?;
+            let pp2 = self.evp(&RP::Simp(false, vec![R::S(ha)], vec![], false), &pxx, &[])?;
+            let prem = self.close(pb, &[ax.clone()], &[Self::var_id(&xv)])?;
+            let prem2 = self.close(pp2, &[ax.clone()], &[Self::var_id(&xv)])?;
+            let (ix, iy) = (Self::var_id(&xv), Self::var_id(&yv));
+            let (al, bl, kl, pl) = (self.abs(&ax, &[ix]), self.abs(&bx, &[ix]), self.abs(&kx, &[ix]), self.abs(&pxy, &[ix, iy]));
+            let r = self.run(&mp(R::Inst("g.ex_pass".into(), vec![("A", al), ("B", bl), ("P", pl), ("K", kl)]), vec![s(&prem), s(&prem2), s(&fact)]), &[])?;
+            return self.evp(&RP::Taut(vec![R::S(r)]), goal, &[]);
         }
         let xv = self.var("mx");
         let (ax, bx, kx) = {

@@ -70,6 +70,11 @@ const CALLEE_SAVED_LIST = [rbx, rbp, r12, r13, r14, r15]   // the same, in a fix
 
 pred stack_page(vm: Vm, p: nat) = mapped(vm, p) && vm.pages[p].value.kind = stack
 
+// a free byte of the stack: on a stack page, no live object's (a callee's
+// frame and objects there, dead after it -- what a call may change besides
+// what it is for)
+pred stack_free(vm: Vm, objs: Objs, a: nat) = stack_page(vm, a / PAGE) && a notin objs.live
+
 // `new` is the machine's memory after a callee called with the stack
 // pointer `sp` ran from `old`, where the callee's world ended as `w` (with
 // the stack objects `objs`): on the world's domain, the world's; the stack

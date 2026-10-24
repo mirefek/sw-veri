@@ -5,9 +5,10 @@
 // ----------------------------------------------------------------------
 //  try_avail: its code refines its purpose
 // (the thread pointer sound, its word not the allocator's: so after the
-// allocator's memory changed only, nothing outside it)
-theorem mp.tls_kept(c, A, b, V0, V1, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, b, fs) ->
-  mallocng.untouched(c, A, b, V0, V1, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) -> abi.thread_ok(V1, fs)
+// allocator's memory changed only, nothing outside it but the stack's free
+// bytes -- the word is off the stack)
+theorem mp.tls_unt(c, A, b, V0, V1, objs, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, b, fs) ->
+  mallocng.untouched(c, A, b, V0, V1, objs, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) -> abi.thread_ok(V1, fs)
 proof
   assume hfb ht hap hun he
   have r0 ns0 le0 nz0 := expand(ht, abi.thread_ok)
@@ -18,7 +19,10 @@ proof
     assume hi hil
     have mp1 _ := mp(all_elim(expand(r0, x86_64_linux.readable), {i}), hi, hil)
     have nf := mp(all_elim(expand(hap, mallocng_specs.tls_apart), {i}), hi, hil)
-    show := mp(all_elim(u1, {int_add(fs, i)}), (int_add(fs, i) in omega by arith(hfb, hi)), taut(nf, mp(all_elim(he, {i}), hi, hil), mp1))
+    have ns := mp(all_elim(ns0, {i}), hi, hil)
+    have nfr: !abi.stack_free(V0, objs, int_add(fs, i)) by defs(taut(ns), abi.stack_free)
+    have bt pt := mp(all_elim(u1, {int_add(fs, i)}), (int_add(fs, i) in omega by arith(hfb, hi)), taut(nf, mp(all_elim(he, {i}), hi, hil), mp1))
+    show by taut(mp(bt, nfr), pt)
   qed
   have r1: all x0. x0 in omega -> int_lt(x0, 8) -> x86_64_linux.mapped(V1, int_div(int_add(fs, x0), x86_64_linux.PAGE)) &&
       snd(V1.pages[int_div(int_add(fs, x0), x86_64_linux.PAGE)]).prot.r proof
@@ -55,6 +59,14 @@ proof
   show by defs(taut(r1, ns1, l1, nz0), abi.thread_ok, x86_64_linux.readable)
 qed
 
+// (... every byte outside kept: so)
+theorem mp.tls_kept(c, A, b, V0, V1, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, b, fs) ->
+  mallocng.kept_outside(c, A, b, V0, V1, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) -> abi.thread_ok(V1, fs)
+proof
+  assume hfb ht hap hun he
+  show := apply(mp.tls_unt[objs := empty], hfb, ht, hap, apply(mp.kept_unt[objs := empty], hun), he)
+qed
+
 // try_avail's purpose (`try_avail_spec`): the list reorganised, a slot of
 // its head reserved and its bit returned, or 0 and the list empty, none of
 // its groups having had a free slot; the invariant kept, nothing outside
@@ -63,7 +75,7 @@ abbrev mp.ta_out(c, A, sc, b, s, o) := (ex v. v in x86_64_linux.Vm && o = exc(fn
   (ex A2 V2 r. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.reorganised(A, A2, sc)) && r in bits(32) &&
      ((r = 0 && seq_len(A2.active[sc]) = 0 && (all g. g in omega -> mallocng.on_list(A.active[sc], g) -> !mallocng.has_unused(A, g)) && A2.slots = A.slots) ||
       (ex i. i in omega && ((int_lt(i, 32) && r = int_pow(2, i)) && ord_lt(0, seq_len(A2.active[sc]))) && mallocng.reserves(A, A2, A2.active[sc][0], i))) &&
-     V2 in x86_64_linux.Vm && mallocng.holds_m(c, A2, V2, b) && mallocng.untouched(c, A, b, s.vm, V2, empty) &&
+     V2 in x86_64_linux.Vm && mallocng.holds_m(c, A2, V2, b) && mallocng.kept_outside(c, A, b, s.vm, V2, empty) &&
      o = ok(fn_update(s, "vm", V2), r))
 
 // try_avail's state where its two ways meet (the head dequeued or rotated
@@ -73,7 +85,7 @@ abbrev mp.ta_jst(c, A, sc, B, s, pm, V1, A1) := (V1 in x86_64_linux.Vm && A1 in 
   mallocng.holds_m(c, A1, V1, B) && mallocng.no_reserved(A1) && abi.thread_ok(V1, s.fs_base) && mallocng_specs.tls_apart(c, A1, B, s.fs_base) &&
   mallocng_specs.list_at(V1, s.objs, pm, A1.active[sc]) && int_lt(0, seq_len(A1.active[sc])) &&
   A1.metas[A1.active[sc][0]].avail = 0 && !(A1.metas[A1.active[sc][0]].freed = 0) &&
-  mallocng.reorganised(A, A1, sc) && mallocng.untouched(c, A, B, s.vm, V1, empty) && A1.slots = A.slots &&
+  mallocng.reorganised(A, A1, sc) && mallocng.kept_outside(c, A, B, s.vm, V1, empty) && A1.slots = A.slots &&
   mallocng.footprint(c, A1, B) = mallocng.footprint(c, A, B)
 
 // (A2 of A's reorganisation, with A's slots: of A's geometry)
@@ -197,12 +209,12 @@ qed
 
 // (memory untouched outside the allocator twice, its footprint as before:
 // untouched)
-theorem mp.unt_trans(c, A, A1, b, V0, V1, V2, e): mallocng.untouched(c, A, b, V0, V1, e) -> mallocng.untouched(c, A1, b, V1, V2, e) ->
-  mallocng.footprint(c, A1, b) = mallocng.footprint(c, A, b) -> mallocng.untouched(c, A, b, V0, V2, e)
+theorem mp.unt_trans(c, A, A1, b, V0, V1, V2, e): mallocng.kept_outside(c, A, b, V0, V1, e) -> mallocng.kept_outside(c, A1, b, V1, V2, e) ->
+  mallocng.footprint(c, A1, b) = mallocng.footprint(c, A, b) -> mallocng.kept_outside(c, A, b, V0, V2, e)
 proof
   assume u1 u2 fe
-  have a1 b1 := expand(u1, mallocng.untouched)
-  have a2 b2 := rewrite(fe, expand(u2, mallocng.untouched))
+  have a1 b1 := expand(u1, mallocng.kept_outside)
+  have a2 b2 := rewrite(fe, expand(u2, mallocng.kept_outside))
   have r: all x0. x0 in omega -> (!(x0 in mallocng.footprint(c, A, b)) && !(x0 in e)) && x86_64_linux.mapped(V0, int_div(x0, x86_64_linux.PAGE)) ->
       V2.bytes[bits_of_int(64, x0)] = V0.bytes[bits_of_int(64, x0)] && V2.pages[int_div(x0, x86_64_linux.PAGE)] = V0.pages[int_div(x0, x86_64_linux.PAGE)] proof
     fix a
@@ -213,7 +225,7 @@ proof
     have p2 pp2 := mp(all_elim(a2, {a}), ha, conj(conj(q1, q2), m1))
     show by taut(trans(p2, p1), trans(pp2, pp1))
   qed
-  show by defs(taut(r, trans(b2, b1)), mallocng.untouched)
+  show by defs(taut(r, trans(b2, b1)), mallocng.kept_outside)
 qed
 
 // (a meta's freeable bit, as the code tests it: bit 5 of its word's first
@@ -682,7 +694,7 @@ qed
 // (the context's free bytes changed only: nothing outside the allocator
 // touched)
 theorem mp.co_unt(c, A, vm, vm2, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
-  mallocng_specs.ctx_only(c, vm, vm2) -> mallocng.untouched(c, A, b, vm, vm2, empty)
+  mallocng_specs.ctx_only(c, vm, vm2) -> mallocng.kept_outside(c, A, b, vm, vm2, empty)
 proof
   assume hc hu ha hin co
   have er eb := expand(co, mallocng_specs.ctx_only)
@@ -719,7 +731,7 @@ proof
     have pp: vm2.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)
     show by taut(bb, pp)
   qed
-  show by defs(taut(ut, es), mallocng.untouched)
+  show by defs(taut(ut, es), mallocng.kept_outside)
 qed
 
 // (a header byte with its active index -- the low 5 bits -- replaced by n,
@@ -813,7 +825,7 @@ proof
     have pp: V3.pages[int_div(a, x86_64_linux.PAGE)] = V2.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)
     show by taut(bb, pp)
   qed
-  have unt23: mallocng.untouched(c, A2, B, V2, V3, empty) by defs(taut(ut, es), mallocng.untouched)
+  have unt23: mallocng.kept_outside(c, A2, B, V2, V3, empty) by defs(taut(ut, es), mallocng.kept_outside)
   have th3 := apply(mp.tls_kept[c := c, A := A2, b := B, V0 := V2, V1 := V3, fs := s.fs_base, e := empty], hfb, th2, tl2, unt23,
     (all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) by simp()))
   have la3 := rewrite(sym(hpe), apply(mp.active_at[c := c, A := A2, vm := V3, b := B, objs := s.objs, sc := sc], hc, a2u, a2a, vb3, hin3, hsh, cal, hs, hsl))
@@ -1790,7 +1802,7 @@ proof
         have e34 := rewrite(scv4, rewrite(wv4, e33))
         // the bounce counters decayed (`db_q`: the context's free bytes only)
         have fsb: s.fs_base in bits(64) by simp(hw)
-        have unt34: mallocng.untouched(c, A3, B, V3, V4, empty) by simp(unt4, hA3, hB3)
+        have unt34: mallocng.kept_outside(c, A3, B, V3, V4, empty) by simp(unt4, hA3, hB3)
         have th4 := apply(mp.tls_kept[c := c, A := A3, b := B, V0 := V3, V1 := V4, fs := s.fs_base, e := empty], fsb, l6, l7, unt34,
           (all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) by simp()))
         have ths4: gc.sound(W4) by simp(th4)
@@ -1925,7 +1937,8 @@ proof
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
-    obtain A2 V2 r, ha2 hu2 hro hrb hrc hv2 hin2m hunt ho from e
+    obtain A2 V2 r, ha2 hu2 hro hrb hrc hv2 hin2m hkept ho from e
+    have hunt := apply(mp.kept_unt[objs := s.objs], hkept)
     // (reorganised: the allocator's bytes the world's as before)
     have _ _ _ hAa := mp(all_elim(mp.g_rec, {h}), hh)
     have hsh2 := apply(mp.shown_reorg[c := c, A := A, A2 := A2, sc := sc, objs := s.objs], hAa, hro, hsh)
@@ -2041,7 +2054,7 @@ abbrev mp.ta_call(c, f) := all sc pm t h regs o2. sc in omega -> int_lt(sc, 48) 
   (ex V2 rr. (V2 in x86_64_linux.Vm && (ex A2 r. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.reorganised(h.A, A2, sc)) && r in bits(32) &&
      ((r = 0 && seq_len(A2.active[sc]) = 0 && (all g. g in omega -> mallocng.on_list(h.A.active[sc], g) -> !mallocng.has_unused(h.A, g)) && A2.slots = h.A.slots) ||
       (ex i. i in omega && ((int_lt(i, 32) && r = int_pow(2, i)) && ord_lt(0, seq_len(A2.active[sc]))) && mallocng.reserves(h.A, A2, A2.active[sc][0], i))) &&
-     mallocng.holds_m(c, A2, V2, h.blocks) && mallocng.untouched(c, h.A, h.blocks, t.vm, V2, empty) && bits_of_int(32, fst(rr)) = r)) &&
+     mallocng.holds_m(c, A2, V2, h.blocks) && mallocng.kept_outside(c, h.A, h.blocks, t.vm, V2, empty) && bits_of_int(32, fst(rr)) = r)) &&
      o2 = ok(fn_update(t, "vm", V2), rr))
 
 // (a callee refining one called as try_avail: called as it too)
@@ -2082,12 +2095,12 @@ proof
   have inner: ex A3 r3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.reorganised(h.A, A3, sc)) && r3 in bits(32) &&
       ((r3 = 0 && seq_len(A3.active[sc]) = 0 && (all g. g in omega -> mallocng.on_list(h.A.active[sc], g) -> !mallocng.has_unused(h.A, g)) && A3.slots = h.A.slots) ||
        (ex i. i in omega && ((int_lt(i, 32) && r3 = int_pow(2, i)) && ord_lt(0, seq_len(A3.active[sc]))) && mallocng.reserves(h.A, A3, A3.active[sc][0], i))) &&
-      mallocng.holds_m(c, A3, V2, h.blocks) && mallocng.untouched(c, h.A, h.blocks, t.vm, V2, empty) && bits_of_int(32, fst(pair(u, y))) = r3
+      mallocng.holds_m(c, A3, V2, h.blocks) && mallocng.kept_outside(c, h.A, h.blocks, t.vm, V2, empty) && bits_of_int(32, fst(pair(u, y))) = r3
     by ex_intro({A2}, {r}, taut(ha2, hu2, hro, hrb, hrc, hin2, hunt, fr))
   have ret: ex V3 rr. (V3 in x86_64_linux.Vm && (ex A3 r3. ((A3 in mallocng.Abs && A3 in univ(1)) && mallocng.reorganised(h.A, A3, sc)) && r3 in bits(32) &&
       ((r3 = 0 && seq_len(A3.active[sc]) = 0 && (all g. g in omega -> mallocng.on_list(h.A.active[sc], g) -> !mallocng.has_unused(h.A, g)) && A3.slots = h.A.slots) ||
        (ex i. i in omega && ((int_lt(i, 32) && r3 = int_pow(2, i)) && ord_lt(0, seq_len(A3.active[sc]))) && mallocng.reserves(h.A, A3, A3.active[sc][0], i))) &&
-      mallocng.holds_m(c, A3, V3, h.blocks) && mallocng.untouched(c, h.A, h.blocks, t.vm, V3, empty) && bits_of_int(32, fst(rr)) = r3)) &&
+      mallocng.holds_m(c, A3, V3, h.blocks) && mallocng.kept_outside(c, h.A, h.blocks, t.vm, V3, empty) && bits_of_int(32, fst(rr)) = r3)) &&
       o2 = ok(fn_update(t, "vm", V3), rr)
     by ex_intro({V2}, {pair(u, y)}, taut(hv2, inner, oe))
   show by disj({2}, ret)

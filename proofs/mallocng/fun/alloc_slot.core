@@ -23,7 +23,7 @@ abbrev mp.agr_post(c, sc, req, t, h, o2) :=
   (ex v. v in x86_64_linux.Vm && o2 = exc(fn_update(t, "vm", v), exc_val("stack_overflow", empty))) ||
   (ex V rr. (V in x86_64_linux.Vm && (ex A2. ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2) && mp.upto(A2, h.A, sc) && A2.taken = h.A.taken) &&
      (fst(rr) = 0 || mallocng_specs.fresh_group(A2, fst(rr), sc, req)) &&
-     mallocng.holds_m(c, A2, V, h.blocks) && mallocng.shown_in(c, A2, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V, mp.errno(t.fs_base)) && mp.grown(c, A2, h.A, h.blocks, t.vm) &&
+     mallocng.holds_m(c, A2, V, h.blocks) && mallocng.shown_in(c, A2, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V, t.objs, mp.errno(t.fs_base)) && mp.grown(c, A2, h.A, h.blocks, t.vm) &&
      (!(fst(rr) = 0) -> int_lt(mallocng_specs.active_idx(V, A2.metas[fst(rr)]), A2.metas[fst(rr)].last_idx) ->
         int_lt(4096, int_add(mallocng.UNIT, int_mul(mallocng.stride(A2.metas[fst(rr)]), int_add(A2.metas[fst(rr)].last_idx, 1))))))) &&
      o2 = ok(fn_update(t, "vm", V), rr))
@@ -91,7 +91,7 @@ abbrev mp.as_out(c, A, sc, req, b, s, o) := (ex v. v in x86_64_linux.Vm && o = e
      ((r = 4294967295 && mallocng.no_reserved(A2)) ||
       (int_lt(r, 32) && ord_lt(0, seq_len(A2.active[sc])) && mallocng.reserved_only(A2, A2.active[sc][0], r) &&
        A2.metas[A2.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A2.metas[A2.active[sc][0]])))) &&
-     V2 in x86_64_linux.Vm && mallocng.holds_m(c, A2, V2, b) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, b, s.vm, V2, mp.errno(s.fs_base)) && mp.grown(c, A2, A, b, s.vm) &&
+     V2 in x86_64_linux.Vm && mallocng.holds_m(c, A2, V2, b) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, b, s.vm, V2, s.objs, mp.errno(s.fs_base)) && mp.grown(c, A2, A, b, s.vm) &&
      mp.rgrown(c, A2, A, b, s.vm) && o = ok(fn_update(s, "vm", V2), r))
 
 // ----------------------------------------------------------------------
@@ -130,10 +130,10 @@ proof
 qed
 
 // (memory untouched but nothing: untouched but anything)
-theorem mp.unt_wider(c, A, b, V0, V1, e): mallocng.untouched(c, A, b, V0, V1, empty) -> mallocng.untouched(c, A, b, V0, V1, e)
+theorem mp.unt_wider(c, A, b, V0, V1, e): mallocng.kept_outside(c, A, b, V0, V1, empty) -> mallocng.kept_outside(c, A, b, V0, V1, e)
 proof
   assume u
-  have u1 u2 := expand(u, mallocng.untouched)
+  have u1 u2 := expand(u, mallocng.kept_outside)
   have w: all a. a in omega -> !(a in mallocng.footprint(c, A, b)) && !(a in e) && x86_64_linux.mapped(V0, int_div(a, x86_64_linux.PAGE)) ->
       V1.bytes[bits_of_int(64, a)] = V0.bytes[bits_of_int(64, a)] && V1.pages[int_div(a, x86_64_linux.PAGE)] = V0.pages[int_div(a, x86_64_linux.PAGE)] proof
     fix a
@@ -142,7 +142,7 @@ proof
     have ne: !(a in empty) by simp()
     show := mp(all_elim(u1, {a}), ha, taut(n1, ne, n3))
   qed
-  show by defs(taut(w, u2), mallocng.untouched)
+  show by defs(taut(w, u2), mallocng.kept_outside)
 qed
 
 // (the groups' places as before, no slot reserved before: the allocator's
@@ -186,10 +186,10 @@ qed
 // (grown twice, the memory between untouched outside the allocator:
 // grown)
 theorem mp.grown_trans(c, A, A1, A2, b, V0, V1): (all a. a in omega -> a in mallocng.footprint(c, A1, b) -> a in mallocng.footprint(c, A, b)) ->
-  mallocng.untouched(c, A, b, V0, V1, empty) -> mp.grown(c, A2, A1, b, V1) -> mp.grown(c, A2, A, b, V0)
+  mallocng.kept_outside(c, A, b, V0, V1, empty) -> mp.grown(c, A2, A1, b, V1) -> mp.grown(c, A2, A, b, V0)
 proof
   assume hs hu g2
-  have u1 _ := expand(hu, mallocng.untouched)
+  have u1 _ := expand(hu, mallocng.kept_outside)
   fix a
   assume hao h
   have g := mp(all_elim(g2, {a}), hao, h)
@@ -308,12 +308,12 @@ qed
 // start, errno usable and apart as before)
 theorem mp.err_keep(c, A, A1, B, V0, V1, fs, objs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, B, fs) ->
   abi.brk_start_ok(V0) -> mallocng_specs.errno_ok(V0, objs, fs) -> mallocng_specs.errno_apart(c, A, B, V0, fs) ->
-  mallocng.untouched(c, A, B, V0, V1, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) ->
+  mallocng.kept_outside(c, A, B, V0, V1, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) ->
   (all i. i in omega -> int_lt(i, 4) -> !(int_add(mallocng_specs.errno_at(fs), i) in e)) -> mp.grown(c, A1, A, B, V0) ->
   brk: abi.brk_start_ok(V1) && errno: mallocng_specs.errno_ok(V1, objs, fs) && apart: mallocng_specs.errno_apart(c, A1, B, V1, fs)
 proof
   assume hfb ht htl hbs heo hea hun hte hee hgr
-  have u1 u2 := expand(hun, mallocng.untouched)
+  have u1 u2 := expand(hun, mallocng.kept_outside)
   have th := apply(mp.tls_kept[c := c, A := A, b := B, V0 := V0, V1 := V1, fs := fs, e := e], hfb, ht, htl, hun, hte)
   have bs: abi.brk_start_ok(V1) by defs(simp(u2, expand(hbs, abi.brk_start_ok)), abi.brk_start_ok)
   have efl eus _ := expand(heo, mallocng_specs.errno_ok)
@@ -585,7 +585,7 @@ proof
     have sz0: A.metas[G].sizeclass = sc := trans(sym(sc0), sc1)
     have nm := rewrite(sz0, expand(nom, mallocng.own_mapping))
     have fit: int_le(int_add(req, mallocng.IB), mallocng.stride(A1.metas[G])) by arith(nm, st0, hfit)
-    have unt := apply(mp.unt_wider[c := c, A := A, b := B, V0 := V0, V1 := V1, e := mp.errno(s.fs_base)], unt1)
+    have unt := apply(mp.kept_unt[objs := s.objs], apply(mp.unt_wider[c := c, A := A, b := B, V0 := V0, V1 := V1, e := mp.errno(s.fs_base)], unt1))
     have grw := apply(mp.grown_sub[c := c, A := A, A2 := A1, b := B, vm := V0], fsub)
     // the other classes' lists as before
     have lw: mp.below(A1, A, sc) proof
@@ -690,9 +690,14 @@ proof
     have fe1 := apply(mp.fp_eq[c := c, A := A, A2 := A1, b := B], fr, ftk, hnr, nr1)
     have hin2b: mallocng.holds_m(c, A2, V2, B) by simp(hin2, hB1)
     have hsh2: mallocng.shown_in(c, A2, s.objs) by simp(hsh2w)
-    have unt2b: mallocng.untouched(c, A1, B, V1, V2, EN) by simp(unt2, hA1, hB1)
-    have unt02 := apply(mp.unt_trans[c := c, A := A, A1 := A1, b := B, V0 := V0, V1 := V1, V2 := V2, e := EN],
-      apply(mp.unt_wider[c := c, A := A, b := B, V0 := V0, V1 := V1, e := EN], unt1), unt2b, fe1)
+    have unt2b: mallocng.untouched(c, A1, B, V1, V2, s.objs, EN) by simp(unt2, hA1, hB1)
+    have fg01: mp.grown(c, A1, A, B, V0) proof
+      fix a
+      assume _ h
+      show by taut(rewrite(fe1, h))
+    qed
+    have unt01 := apply(mp.kept_unt[objs := s.objs], apply(mp.unt_wider[c := c, A := A, b := B, V0 := V0, V1 := V1, e := EN], unt1))
+    have unt02 := apply(mp.unt_seq[c := c, A := A, A1 := A1, b := B, V0 := V0, V1 := V1, V2 := V2, objs := s.objs, e := EN], unt01, unt2b, fg01)
     have grw2b: mp.grown(c, A2, A1, B, V1) by simp(grw2, hA1, hB1)
     have grw02 := apply(mp.grown_trans[c := c, A := A, A1 := A1, A2 := A2, b := B, V0 := V0, V1 := V1], fsub, unt1, grw2b)
     have ss2: fn_update(W1, "vm", V2) = fn_update(s, "vm", V2) := fn_update_twice[f := s, k := "vm", a := V1, b := V2]
@@ -814,7 +819,7 @@ proof
         have cn: !(int_le(int_add(s.fs_base, 52), int_add(s.fs_base, i)) && int_lt(int_add(s.fs_base, i), int_add(s.fs_base, 56))) by arith(hi, hil)
         show by taut(set_select_def[s := omega, p := x. int_le(int_add(s.fs_base, 52), x) && int_lt(x, int_add(s.fs_base, 56)), z := int_add(s.fs_base, i)], cn)
       qed
-      have th2 := apply(mp.tls_kept[c := c, A := A1, b := B, V0 := V1, V1 := V2, fs := s.fs_base, e := EN], fsb, th1, tl1, unt2b, nee)
+      have th2 := apply(mp.tls_unt[c := c, A := A1, b := B, V0 := V1, V1 := V2, fs := s.fs_base, e := EN], fsb, th1, tl1, unt2b, nee)
       have tl2 := apply(mp.tls_grown[c := c, A := A1, A2 := A2, b := B, vm := V1, fs := s.fs_base], fsb, th1, tl1, grw2b)
       have th3 := apply(mp.tls_kept[c := c, A := A2, b := B, V0 := V2, V1 := V3, fs := s.fs_base, e := empty], fsb, th2, tl2, unt3, ne8)
       have ths3: gc.sound(W3) by simp(th3)
@@ -1063,7 +1068,7 @@ abbrev mp.as_post(c, sc, req, t, h, o2) :=
      ((r = 4294967295 && mallocng.no_reserved(A2)) ||
       (int_lt(r, 32) && ord_lt(0, seq_len(A2.active[sc])) && mallocng.reserved_only(A2, A2.active[sc][0], r) &&
        A2.metas[A2.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A2.metas[A2.active[sc][0]])))) &&
-     mallocng.holds_m(c, A2, V, h.blocks) && mallocng.shown_in(c, A2, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V, mp.errno(t.fs_base)) && mp.grown(c, A2, h.A, h.blocks, t.vm) &&
+     mallocng.holds_m(c, A2, V, h.blocks) && mallocng.shown_in(c, A2, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V, t.objs, mp.errno(t.fs_base)) && mp.grown(c, A2, h.A, h.blocks, t.vm) &&
      mp.rgrown(c, A2, h.A, h.blocks, t.vm) && bits_of_int(32, fst(rr)) = r)) &&
      o2 = ok(fn_update(t, "vm", V), rr))
 
@@ -1168,14 +1173,14 @@ proof
       ((r3 = 4294967295 && mallocng.no_reserved(A3)) ||
        (int_lt(r3, 32) && ord_lt(0, seq_len(A3.active[sc])) && mallocng.reserved_only(A3, A3.active[sc][0], r3) &&
         A3.metas[A3.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A3.metas[A3.active[sc][0]])))) &&
-      mallocng.holds_m(c, A3, V2, h.blocks) && mallocng.shown_in(c, A3, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V2, mp.errno(t.fs_base)) && mp.grown(c, A3, h.A, h.blocks, t.vm) &&
+      mallocng.holds_m(c, A3, V2, h.blocks) && mallocng.shown_in(c, A3, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V2, t.objs, mp.errno(t.fs_base)) && mp.grown(c, A3, h.A, h.blocks, t.vm) &&
       mp.rgrown(c, A3, h.A, h.blocks, t.vm) && bits_of_int(32, fst(pair(u, y))) = r3
     by ex_intro({A2}, {r}, taut(ha2, hu2, htk, hbl, hrb2, hrc, hin2, hsh2, hunt, hgr, hrg, fr))
   have ret: ex V3 rr. (V3 in x86_64_linux.Vm && (ex A3 r3. (A3 in mallocng.Abs && A3 in univ(1)) && A3.taken = h.A.taken && mp.below(A3, h.A, sc) && r3 in bits(32) &&
       ((r3 = 4294967295 && mallocng.no_reserved(A3)) ||
        (int_lt(r3, 32) && ord_lt(0, seq_len(A3.active[sc])) && mallocng.reserved_only(A3, A3.active[sc][0], r3) &&
         A3.metas[A3.active[sc][0]].sizeclass = sc && int_le(int_add(req, mallocng.IB), mallocng.stride(A3.metas[A3.active[sc][0]])))) &&
-      mallocng.holds_m(c, A3, V3, h.blocks) && mallocng.shown_in(c, A3, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V3, mp.errno(t.fs_base)) && mp.grown(c, A3, h.A, h.blocks, t.vm) &&
+      mallocng.holds_m(c, A3, V3, h.blocks) && mallocng.shown_in(c, A3, t.objs) && mallocng.untouched(c, h.A, h.blocks, t.vm, V3, t.objs, mp.errno(t.fs_base)) && mp.grown(c, A3, h.A, h.blocks, t.vm) &&
       mp.rgrown(c, A3, h.A, h.blocks, t.vm) && bits_of_int(32, fst(rr)) = r3)) && o2 = ok(fn_update(t, "vm", V3), rr)
     by ex_intro({V2}, {pair(u, y)}, taut(hv2, inner, oe))
   show by disj({2}, ret)

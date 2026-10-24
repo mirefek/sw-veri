@@ -28,21 +28,11 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   last `tr.implements_at_s`, with a stack argument -- `mmc.composed`).
   `mp.ap_mm`, `mp.ap_mpr`, `mp.ap_el`: such leaves for `mp.ap_leaves`.
   get_random_secret has its C1 (proofs/mallocng/machine/c1_objs.core,
-  `grsc.implements_abi`, memcpy's contract its hypothesis). Next, then
-  the hypotheses discharged:
-  - memcpy (musl's assembly): a readable model (byte loop, `rep movsq`
-    as one instruction rule, byte loop), its C1 -- loop locals in
-    registers, no frame: the CFG's claims with registers as functions of
-    the locals (tr.cfg_lv's rc as `y. rc(y)`) -- and its C2 against
-    `memcpy_spec`. The `rep movsq` rule (spec/x86_64: a `while` inside the
-    instruction) by `while_var`: invariant after j iterations, variant
-    rcx. `memcpy_spec`'s copy is one `store_le` of `bytes_at(before, s,
-    n)` -- comparing it with byte or word copies needs the digits of a
-    little-endian sum; stated byte by byte (d + i the old s + i, the rest
-    kept) it would not;
+  `grsc.implements_abi`, memcpy's contract its hypothesis -- memcpy's is
+  `mcpc.composed`). Next, then the hypotheses discharged:
   - get_random_secret's C2 against `random_secret_spec` (the auxv walk;
-    memcpy writes only the stack object -- the canary is the bridge's,
-    not the C world's).
+    memcpy writes only the stack object, a free byte of the stack after
+    the return -- the canary is the bridge's, not the C world's).
   - the stack objects' engine: more than one object (`tr.obj1` is one
     8-byte object; `alloc_objs` of several), objects read before their
     first store (none at -O0 yet).
@@ -61,8 +51,14 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   `nontrivial_free`.
 - The entry points `__libc_malloc_impl`, `__libc_free`, `calloc` and the
   `lite_malloc` / `free.c` wrappers, against the malloc layer.
+- The string instructions in general (layers/musl_asm.sl): `rep movs` of
+  any element size (`x86i.rep_movsq` is for 8: its iteration and facts
+  with the size a parameter), `rep stos` (memset's: no overlap question);
+  an overlapping forward copy (s < d < s + n: each element read after
+  writes reached it -- memmove's) its exact bytes, not undefined: the
+  pointwise invariant of `x86.moved` with the source as it is then.
 - Leaves at machine level: `a_or`, `__syscall*`, `__mmap`, `munmap`,
-  `__mprotect`, `memset`, `memcpy`, `__lock` / `__unlock`,
+  `__mprotect`, `memset`, `__lock` / `__unlock`,
   `___errno_location` (then size_overflows' composition without its
   premise).
 

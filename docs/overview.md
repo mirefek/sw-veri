@@ -95,6 +95,13 @@ outcome.
     (an out-of-line function or inlined). Under threads later, the
     primitives are where the per-thread simulation meets the memory model.
 
+  musl's assembly functions (memcpy) have no GIMPLE: their readable
+  models are written by hand at this level (layers/musl_asm.sl,
+  musl_asm_cfg.sl), their registers the locals, an instruction GIMPLE has
+  no operation for a primitive of its own (`move`, `move_words`: the
+  string instructions); C1 checks them against the code like the
+  generated ones.
+
   It comes in two forms of the same blocks:
   - structured (`--readable`): nested `if`s and loops, close to C -- what
     the C2 proofs are about;

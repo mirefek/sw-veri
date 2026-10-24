@@ -640,6 +640,10 @@ impl<'e> Eff<'e> {
                 // (a procedure of the layer: inlined)
                 Err(_) => return self.inline(s, *f, args).map_err(|x| format!("{} (inlined; no effect lemma `{}`): {}", name, l, x)),
             }
+        } else if let Ok(x) = self.api.fact(self.env, &format!("tr.eff_{}", name.replace('.', "_"))) {
+            // (a procedure with an effect lemma of its own, for any
+            // arguments -- a hand-written layer's primitive)
+            x
         } else {
             let pl = self.proc_lemma(*f)?;
             // (the parameters' types its lemma needs)

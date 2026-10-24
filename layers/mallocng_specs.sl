@@ -373,8 +373,8 @@ proc[World] memcpy_spec(d: Addr, s: Addr, n: bits[64]) -> bits[64] {
 
 fn memcpy_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
-  let r = memcpy_spec(args[0], args[1], args[2])
-  return (r, any bits[64])
+  let r = memcpy_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  return (result(r), any bits[64])
 }
 
 // libc's auxiliary vector readable (`libc.auxv`, at libc + 8): its pairs up
@@ -390,10 +390,16 @@ pred auxv_ok(vm: Vm, objs: Objs, libc: Addr) =
      auxv[len(auxv) - 1][0] = AT_NULL && (all k: nat. k + 1 < len(auxv) -> auxv[k][0] != AT_NULL))
 
 // get_random_secret(): a secret -- any value (the kernel's random bytes,
-// AT_RANDOM's, if any), nothing changed
+// AT_RANDOM's, if any), nothing changed but the stack's free bytes (its
+// own stack object's, dead after it: `stack_free`)
 proc[World] random_secret_spec(libc: Addr) -> bits[64] {
   require auxv_ok(vm, objs, libc)
-  either { overflow() } or { return any bits[64] }
+  either { overflow() } or {
+    let before = vm
+    havoc vm where (vm with { bytes: before.bytes }) = before &&
+      (all a: Addr. !stack_free(before, objs, uint(a)) -> vm.bytes[a] = before.bytes[a])
+    return any bits[64]
+  }
 }
 
 fn random_secret_spec_fun(libc: Addr) -> CFun2[World] = (args: Args) => {
@@ -954,7 +960,7 @@ proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
     let A0 = A
     let before = vm
     ghost A := any A2: Abs where activated(A0, A2, uint(m), active_idx(before, A0.metas[uint(m)]))
-    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, {})
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, {})
     return bits[32](A.metas[uint(m)].avail)
   }
 }
@@ -983,7 +989,7 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
     let r = any r: bits[32] where (
       (r = 0 && len(A.active[sc]) = 0 && (all g: nat. on_list(A0.active[sc], g) -> !has_unused(A0, g)) && A.slots = A0.slots) ||
       (ex i: nat. i < 32 && uint(r) = 2^i && len(A.active[sc]) > 0 && reserves(A0, A, A.active[sc][0], i)))
-    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, {})
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, {})
     return r
   }
 }
@@ -1010,7 +1016,7 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
       (uint(r) < 32 && len(A.active[uint(sc)]) > 0 && reserved_only(A, A.active[uint(sc)][0], uint(r)) &&
        A.metas[A.active[uint(sc)][0]].sizeclass = uint(sc) &&
        uint(req) + IB <= stride(A.metas[A.active[uint(sc)][0]])))
-    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
     return r
@@ -1041,7 +1047,7 @@ proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
     ghost A := any A2: Abs where groups_kept(A0, A2)
     let m = any m: bits[64] where (m = 0 && A.taken = A0.taken) || (m != 0 && A.taken = A0.taken ++ [uint(m)])
-    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (m != 0 -> meta_ready(vm, uint(m))) &&
       (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
@@ -1074,7 +1080,7 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
     ghost A := any A2: Abs where no_reserved(A2) && (all s: nat. s <= uint(sc) -> A2.active[s] = A0.active[s]) && A2.taken = A0.taken
     let g = any g: bits[64] where g = 0 || fresh_group(A, uint(g), uint(sc), uint(req))
-    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, errno) &&
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (g != 0 -> active_idx(vm, A.metas[uint(g)]) < A.metas[uint(g)].last_idx ->
          4096 < UNIT + stride(A.metas[uint(g)]) * (A.metas[uint(g)].last_idx + 1))

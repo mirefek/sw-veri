@@ -443,6 +443,14 @@ item is a short summary of finished work; details are in the files named.
     re-established for fresh pages by `fresh_pages`: `mp.shown_refill`,
     `mp.shown_ngrp`). brk's and mmap's specs return the kernel's refusal
     when no fresh memory is to be had.
+  - A callee's dead frame and objects: a call may change the stack's free
+    bytes (`abi.stack_free`: on a stack page, no live object's) -- the
+    specs' frames say so (`untouched` keeps every other byte outside the
+    allocator, `random_secret_spec` every other byte); the allocator's own
+    steps keep all (`kept_outside`, `mp.kept_unt`, chained by
+    `mp.unt_seq`). The allocator's memory is off the stack's pages
+    (`fp_mapped`), so a callee's scratch leaves the invariant
+    (`mp.free_holds`) and the thread's word (`mp.tls_unt`).
 - **C2**, against contracts in `layers/mallocng_specs.sl`:
   - dequeue (`ms.dequeue_c2`);
   - dequeue_head from dequeue's contract only (`ms.dequeue_head_c2`),
@@ -1119,3 +1127,31 @@ item is a short summary of finished work; details are in the files named.
   The kernel model's os_mmap: its havocs `else { ENOMEM }` (a memory with
   fresh pages always exists for a world's; defined for every state), the
   free place by `any .. else`.
+- **memcpy (musl's assembly) to its contract** (`mcpc.composed`). A
+  hand-written readable model (layers/musl_asm.sl, structured;
+  layers/musl_asm_cfg.sl, the CFG as the code's blocks, the registers its
+  locals: `F_cfg_regs`), the string instructions as primitives: `move(d,
+  s, n)` (movs: read, then written; undefined unless usable, n < 2^64),
+  `move_words(d, s, c)` (rep movsq: one move of the 8c bytes; a word read
+  after a write reached it -- s < d < s + 8c -- not modelled, undefined).
+  - C1 (`mcpc.implements`): the CFG rules' registers a function of the
+    locals (`tr.cfg_lv` .. `y. rc(y)`, a label's among the point's by
+    `tr.rsub`); a hand-written CFG's first block walked from the entry
+    (`tr.cfg_lvk_st`); rep movsq on the machine by `while_var` on its
+    `while` over rcx (`x86i.rep_movsq`, `x86i.rep_movsq_out`: the bytes
+    after j words `x86.moved`, one more word `x86.moved_stepn`, all of them
+    one store `x86.moved_store`; byte k of a read `g.bytes_digit`); the
+    rules `tr.move_step` (a move the world's: its bytes by `tr.mem`),
+    `tr.movsb`, `tr.rep_movsq`, `test r32, imm32`, `and r32, imm8` and `dec
+    r32` before a jump (`tr.jcc_w` of any width; `x86i.zff`, dec's zero flag
+    alone), `dec r64` (proofs/translate_string.core, translate_asm.core).
+  - The CFG refining the structured form (`memcpy_ref`): gref's folding
+    of blocks passing their outcome on (`red_t`'s one-point rule;
+    `g.ex_pass`, an exit inside nested `if`s), the parameters' universe
+    facts past a loop function's ways, the moves' effects
+    (`tr.eff_musl_asm_move`, found by eff.rs by name; `move` writes at
+    `bits[64](d)`, a word for a loop's untyped locals).
+  - C2 (`mp.memcpy_c2`, proofs/mallocng/fun/memcpy.core): the bytes up to
+    d's word boundary, the words, the bytes left -- each a move of what is
+    at s still (`mp.mvw`), the loops by `g.loop`; `memcpy_spec_fun` by the
+    GIMPLE wrapper's convention (`result`).
