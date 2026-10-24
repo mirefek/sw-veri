@@ -5299,32 +5299,28 @@ proof
   show by taut(run, k)
 qed
 
-theorem mp.am_fun: all c regs grs gdh gsy gmm gmp gel. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
-  mp.calls(grs, mallocng_specs.random_secret_spec_fun(c.libc)) -> mp.calls(gdh, mallocng_specs.dequeue_head_spec_fun()) -> mp.calls(gsy, mallocng_specs.syscall1_spec_fun()) ->
-  mp.calls(gmm, mallocng_specs.mmap_spec_fun()) -> mp.calls(gmp, mallocng_specs.mprotect_spec_fun()) -> mp.calls(gel, mallocng_specs.errno_location_spec_fun) ->
-  regs in abi.ARGS ->
-  refines_ghost(c_src_malloc_mallocng_malloc.__malloc_alloc_meta_fun(grs, gdh, gsy, gmm, gmp, gel)[regs], mallocng_specs.alloc_meta_spec_fun(c)[regs], abi.World, mp.G)
-proof
-  fix c regs grs gdh gsy gmm gmp gel
-  assume hc hx hrs hdh hsy hmm hmp hel hr
-  have hm := mp(all_elim(mp.am, {c}, {grs}, {gdh}, {gsy}, {gmm}, {gmp}, {gel}), hc, hx, hrs, hdh, hsy, hmm, hmp, hel)
-  have w := mp(g.fun_res_ghost0[p := c_src_malloc_mallocng_malloc.__malloc_alloc_meta(grs, gdh, gsy, gmm, gmp, gel), q := mallocng_specs.alloc_meta_spec(c), w := 64, G := mp.G],
-    mp.g_univ, hm)
-  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.__malloc_alloc_meta_fun, mallocng_specs.alloc_meta_spec_fun)
-qed
+// what a caller relies on of a callee f called as alloc_meta (its C
+// function value), the ghost part h read: an overflow, or the return -- its
+// state A2 on the memory V2, the meta m (0 for none) in the result register
+// (`mp.am_post`: alloc_meta_spec's)
+abbrev mp.am_call(c, f) := all t h regs o2. t in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) -> abi.brk_start_ok(t.vm) ->
+  mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
+  gc.regs_ok(regs, empty) ->
+  runs(f[regs], t, o2) ->
+  abi.ovf_out(t, o2) ||
+  (ex V2 rr. (V2 in x86_64_linux.Vm && (ex A2 m. mp.am_post(c, h.A, h.blocks, t, A2, V2, m) && fst(rr) = m)) && o2 = ok(fn_update(t, "vm", V2), rr))
 
-// (the purpose spec diverges nowhere it does not also raise)
-theorem mp.am_divg: all c. tr.div_raises_g(mp.G, mallocng_specs.alloc_meta_spec_fun(c))
-proof
-  fix c
-  show by divergence(mp.g_univ, mp.gS)
-qed
+// its C function value, its divergence, its machine code over any callees,
+// a callee refining one called as alloc_meta called as it too: mp.am_fun,
+// mp.am_divg, mp.am_implements, mp.am_call_ref
+contract __malloc_alloc_meta mallocng_specs.alloc_meta_spec_fun by mp.am call mp.am_call
 
 // alloc_meta's machine code (linked with dequeue_head's and dequeue's)
-// implements its purpose, given its other callees -- leaves not yet at
-// machine level (get_random_secret, __syscall1, __mmap, __mprotect,
-// __errno_location) -- each implemented at its address and meeting its spec
-theorem mp.am_implements: all c statics G1 G3 G4 G5 G6. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+// implements its purpose, given its other callees -- its leaves
+// (get_random_secret, __syscall1, __mmap, __mprotect, __errno_location),
+// each implemented at its address and meeting its spec
+theorem mp.am_over_leaves: all c statics G1 G3 G4 G5 G6. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
   tr.implements_at(4205853, G1, 4198400, text.code, statics) -> G1 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G1, 0) ->
   mp.calls(G1, mallocng_specs.random_secret_spec_fun(c.libc)) ->
   tr.implements_at(4205817, G3, 4198400, text.code, statics) -> G3 in fn_space(abi.ARGS, powerset(univ(1))) -> tr.callee_io(G3, 2) ->
@@ -5341,49 +5337,10 @@ proof
   assume hc hx i1 t1 o1 q1 i3 t3 o3 q3 i4 t4 o4 q4 i5 t5 o5 q5 i6 t6 o6 q6
   let DQ := c_src_malloc_mallocng_malloc_cfg.dequeue_fun
   let DH := c_src_malloc_mallocng_malloc_cfg.dequeue_head_fun(DQ)
-  let LOW := c_src_malloc_mallocng_malloc.__malloc_alloc_meta_fun(G1, DH, G3, G4, G5, G6)
-  // dequeue_head: its CFG form over dequeue's, by its purpose
-  have qdh: mp.calls(DH, mallocng_specs.dequeue_head_spec_fun()) := mp.dqh_calls_linked
   have tdh: DH in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.dequeue_head_fun)
   have odh := mp(all_elim(dqhtc.io, {DQ}), dqtc.io)
-  have hdr := all_elim(mp.am_divg, {c})
-  have r: all args. args in abi.ARGS -> refines_ghost(LOW[args], mallocng_specs.alloc_meta_spec_fun(c)[args], abi.World, mp.G) proof
-    fix args
-    assume ha
-    show := mp(all_elim(mp.am_fun, {c}, {args}, {G1}, {DH}, {G3}, {G4}, {G5}, {G6}), hc, hx, q1, qdh, q3, q4, q5, q6, ha)
-  qed
-  // the machine code: alloc_meta's CFG form linked, refining the structured one
-  have ln := mp(all_elim(amtc.implements, {statics}, {G1}, {DH}, {G3}, {G4}, {G5}, {G6}), i1, t1, o1, all_elim(dqhtc.linked, {statics}), tdh, odh, i3, t3, o3,
-    i4, t4, o4, i5, t5, o5, i6, t6, o6)
-  have rf := all_elim(__malloc_alloc_meta_ref, {G1}, {DH}, {G3}, {G4}, {G5}, {G6})
-  have st := mp(all_elim(tr.implements_refine, {4208782}, {c_src_malloc_mallocng_malloc_cfg.__malloc_alloc_meta_fun(G1, DH, G3, G4, G5, G6)}, {LOW},
-    {4198400}, {text.code}, {statics}), ln, rf)
-  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4208782}, {LOW}, {mallocng_specs.alloc_meta_spec_fun(c)}, {4198400}, {text.code}, {statics}),
-    mp.g_ok, hdr, st, r)
-qed
-
-// what a caller relies on of a callee f called as alloc_meta (its C
-// function value), the ghost part h read: an overflow, or the return -- its
-// state A2 on the memory V2, the meta m (0 for none) in the result register
-// (`mp.am_post`: alloc_meta_spec's)
-abbrev mp.am_call(c, f) := all t h regs o2. t in abi.World -> h in mp.G ->
-  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) -> abi.brk_start_ok(t.vm) ->
-  mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
-  gc.regs_ok(regs, empty) ->
-  runs(f[regs], t, o2) ->
-  abi.ovf_out(t, o2) ||
-  (ex V2 rr. (V2 in x86_64_linux.Vm && (ex A2 m. mp.am_post(c, h.A, h.blocks, t, A2, V2, m) && fst(rr) = m)) && o2 = ok(fn_update(t, "vm", V2), rr))
-
-// (a callee refining one called as alloc_meta: called as it too)
-theorem mp.am_call_ref(c, f, f2): mp.calls(f, f2) -> mp.am_call(c, f2) -> mp.am_call(c, f)
-proof
-  assume hf q
-  fix t h regs o2
-  assume hw hh hin hsh hth htl hbs heo hea hro hr
-  have rl rn := apply(gc.regs0, hro)
-  have lo: seq_len(regs) in omega by simp(rl)
-  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
-  show := mp(all_elim(q, {t}, {h}, {regs}, {o2}), hw, hh, hin, hsh, hth, htl, hbs, heo, hea, hro, r2)
+  show := mp(all_elim(mp.am_implements, {c}, {statics}, {G1}, {DH}, {G3}, {G4}, {G5}, {G6}), i1, t1, o1, all_elim(dqhtc.linked, {statics}), tdh, odh,
+    i3, t3, o3, i4, t4, o4, i5, t5, o5, i6, t6, o6, hc, hx, q1, mp.dqh_calls_linked, q3, q4, q5, q6)
 qed
 
 // alloc_meta's code called as alloc_meta

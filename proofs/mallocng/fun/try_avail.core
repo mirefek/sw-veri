@@ -1968,72 +1968,6 @@ proof
   show by taut(run, k)
 qed
 
-theorem mp.ta_fun: all c regs gq gag ga gdb. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
-  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gq[regs], s, o) -> runs(mallocng_specs.dequeue_spec_fun()[regs], s, o)) ->
-  mp.ag_call(c, gag) -> mp.db_call(c, gdb) -> regs in abi.ARGS ->
-  refines_ghost(c_src_malloc_mallocng_malloc.try_avail_fun(gq, gag, ga, gdb)[regs], mallocng_specs.try_avail_spec_fun(c)[regs], abi.World, mp.G)
-proof
-  fix c regs gq gag ga gdb
-  assume hc hx hst hgq hag hdb hr
-  have cto: c.ctx in omega by simp(hc)
-  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.try_avail(bits_of_int(64, regs[0]), gq, gag, ga, gdb),
-      mallocng_specs.try_avail_spec(c, int_div(int_sub(int_sub(bits_of_int(64, regs[0]), c.ctx), mallocng.C_ACTIVE), 8), bits_of_int(64, regs[0])), abi.World, mp.G) proof
-    fix regs
-    have pb: bits_of_int(64, regs[0]) in bits(64) by simp()
-    have ka: mallocng.C_ACTIVE = 80 by defs(simp(), mallocng.C_ACTIVE)
-    have si: int_div(int_sub(int_sub(bits_of_int(64, regs[0]), c.ctx), mallocng.C_ACTIVE), 8) in int by arith(pb, cto, ka)
-    show := mp(all_elim(mp.ta, {c}, {int_div(int_sub(int_sub(bits_of_int(64, regs[0]), c.ctx), mallocng.C_ACTIVE), 8)}, {bits_of_int(64, regs[0])}, {gq}, {gag}, {ga}, {gdb}),
-      hc, hx, hst, si, pb, hgq, hag, hdb)
-  qed
-  have w := mp(g.fun_res_ghost[p := x0. c_src_malloc_mallocng_malloc.try_avail(bits_of_int(64, x0[0]), gq, gag, ga, gdb),
-    q := x0. mallocng_specs.try_avail_spec(c, int_div(int_sub(int_sub(bits_of_int(64, x0[0]), c.ctx), mallocng.C_ACTIVE), 8), bits_of_int(64, x0[0])), w := 32, n := 1, G := mp.G],
-    mp.g_univ, hm)
-  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.try_avail_fun, mallocng_specs.try_avail_spec_fun, letin)
-qed
-
-// (the purpose spec diverges nowhere it does not also raise: only where
-// it allows anything -- no reorganised state, no result, no memory)
-theorem mp.ta_divg: all c. tr.div_raises_g(mp.G, mallocng_specs.try_avail_spec_fun(c))
-proof
-  fix c
-  show by divergence(mp.g_univ, mp.gS)
-qed
-
-// try_avail's machine code (linked with dequeue's, activate_group's and
-// decay_bounces' code and a_crash's spec) implements its purpose: its
-// callees' CFG forms called as their contracts say (`mp.ag_call_linked`,
-// `mp.db_call_linked`)
-theorem mp.ta_implements: all c statics. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
-  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  abi.implements2_at(mp.G, 4209736, mallocng_specs.try_avail_spec_fun(c), 4198400, text.code, statics)
-proof
-  fix c statics
-  assume hc hx hst
-  let AC := mallocng_specs.a_crash_spec_fun()
-  let DQ := c_src_malloc_mallocng_malloc_cfg.dequeue_fun
-  let AG := c_src_malloc_mallocng_malloc_cfg.activate_group_fun(AC, c_src_malloc_mallocng_malloc_cfg.a_cas_fun())
-  let DB := c_src_malloc_mallocng_malloc_cfg.decay_bounces_fun()
-  let LOW := c_src_malloc_mallocng_malloc.try_avail_fun(DQ, AG, AC, DB)
-  have hdr := all_elim(mp.ta_divg, {c})
-  // the callees: dequeue by its spec, activate_group and decay_bounces by
-  // their contracts at a call
-  have hgq := mp.dq_calls_linked
-  have hag := mp(all_elim(mp.ag_call_linked, {c}), hc)
-  have hdb := mp(all_elim(mp.db_call_linked, {c}), hc, hx)
-  have r: all args. args in abi.ARGS -> refines_ghost(LOW[args], mallocng_specs.try_avail_spec_fun(c)[args], abi.World, mp.G) proof
-    fix args
-    assume ha
-    show := mp(all_elim(mp.ta_fun, {c}, {args}, {DQ}, {AG}, {AC}, {DB}), hc, hx, hst, hgq, hag, hdb, ha)
-  qed
-  // the machine code: try_avail's CFG form linked, refining the structured one
-  have rf := mp(all_elim(try_avail_ref, {DQ}, {AG}, {AC}, {DB}), dqtc.io, agtc.io_linked, acr.io, dbtc.io)
-  have st := mp(all_elim(tr.implements_refine, {4209736}, {c_src_malloc_mallocng_malloc_cfg.try_avail_fun(DQ, AG, AC, DB)}, {LOW},
-    {4198400}, {text.code}, {statics}), all_elim(tatc.linked, {statics}), rf)
-  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4209736}, {LOW}, {mallocng_specs.try_avail_spec_fun(c)}, {4198400}, {text.code}, {statics}),
-    mp.g_ok, hdr, st, r)
-qed
-
 // what a caller relies on of a callee f called as try_avail (its C function
 // value) on class sc's list, the ghost part h read: an overflow, or the
 // return -- the list reorganised, a slot of its head reserved and its bit
@@ -2049,19 +1983,6 @@ abbrev mp.ta_call(c, f) := all sc pm t h regs o2. sc in omega -> int_lt(sc, 48) 
       (ex i. i in omega && ((int_lt(i, 32) && r = int_pow(2, i)) && ord_lt(0, seq_len(A2.active[sc]))) && mallocng.reserves(h.A, A2, A2.active[sc][0], i))) &&
      mallocng.holds_m(c, A2, V2, h.blocks) && mallocng.kept_outside(c, h.A, h.blocks, t.vm, V2, empty) && bits_of_int(32, fst(rr)) = r)) &&
      o2 = ok(fn_update(t, "vm", V2), rr))
-
-// (a callee refining one called as try_avail: called as it too)
-theorem mp.ta_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
-  mp.ta_call(c, f2) -> mp.ta_call(c, f)
-proof
-  assume hf q
-  fix sc pm t h regs o2
-  assume hs hsl hpb hpe hw hh hin hsh hnr hth htl hro hr
-  have rl rn _ := apply(gc.regs1, hpb, hro)
-  have lo: seq_len(regs) in omega by simp(rl)
-  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
-  show := mp(all_elim(q, {sc}, {pm}, {t}, {h}, {regs}, {o2}), hs, hsl, hpb, hpe, hw, hh, hin, hsh, hnr, hth, htl, hro, r2)
-qed
 
 // try_avail's code called as try_avail
 theorem mp.ta_q: all c gq gag ga gdb. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
@@ -2098,3 +2019,9 @@ proof
     by ex_intro({V2}, {pair(u, y)}, taut(hv2, inner, oe))
   show by disj({2}, ret)
 qed
+
+// its C function value, its divergence, its machine code over any callees
+// and linked (with dequeue's, activate_group's and decay_bounces' code and
+// a_crash's spec), called as try_avail: mp.ta_fun, mp.ta_divg,
+// mp.ta_implements, mp.ta_linked, mp.ta_call_ref, mp.ta_call_linked
+contract try_avail mallocng_specs.try_avail_spec_fun by mp.ta call mp.ta_call

@@ -111,8 +111,13 @@ and the auxiliary vector; after, the allocator maps only fresh pages.
   from the `using` facts) made the run several times slower: not that
   way -- a fact the run states once per memory, instantiated by step.
 
-- Generate the function-level C2s and compositions (one instance of
-  `g.fun_res` / `g.fun_res_ghost` and `tr.implements_refine` each).
+- `contract` for the rest: get_random_secret and memcpy (their `_fun`
+  forms by hand, no procedure-level `refines` theorem); a procedure-level
+  refinement's ghost bookkeeping (`mp.ag`'s ~70 lines: the precondition's
+  clauses read from the union, the ghost part's update) and `THM_q` (a
+  `step` over the run lemma) by the procedure too; linking a function
+  whose C1 has no `.linked` (alloc_meta over dequeue_head:
+  `mp.am_over_leaves` by hand).
 - The bitfield store `ms.stbfw_det` (fun/alloc_group.core) belongs with
   ops.core's store lemmas.
 - The trivial facts that a callee refines itself (`agself`, `dbself` in

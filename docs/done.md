@@ -93,7 +93,24 @@ item is a short summary of finished work; details are in the files named.
   uses (hashes of their sources, slc/cli/build.rs): the kernel with the
   cache's format and the proof scripts' automation always, the C1 and
   refinement engines (src/c1 with the structuring's cut points) for files
-  with `c1` or `refines` lines -- other changes keep it.
+  with `c1`, `refines` or `contract` lines -- other changes keep it.
+- **A function's wrapper theorems by the checker** (`contract FN SPEC by
+  THM [call ABBR] [using L, ..]`, slc/cli/src/c1/contract.rs, through the
+  proof API, no proof text): from THM, the refinement of FN's procedure
+  (with or without the ghost part), `THM_fun` (the `g.fun_*` lemma of the
+  wrapper's shape; THM's premises on the arguments by simp / arith from L
+  and the configuration's premises), `THM_divg` / `_divw`,
+  `THM_implements` (callees by their C1 and THM premises; `_abi` too
+  without the ghost part), `THM_linked` (the callees C1's `.linked` has,
+  their premises by a theorem of that statement, a `_ref` or a callee's
+  `_call_linked`; a callee's own callees fixed by unification),
+  `THM_calls_linked` (the linked CFG form refining SPEC), with ABBR
+  `THM_call_ref` and `THM_call_linked` (from `THM_q`). SPEC's parameters
+  may be fixed by THM (free_meta at the allocator's context). Every C
+  function with a procedure-level refinement uses it (get_stride ..
+  alloc_meta, 18 lines); callers take the generated `_calls_linked` /
+  `_call_linked` facts; about 820 lines of hand-written wrappers gone, each
+  line checked in milliseconds.
 
 ## The levels
 
@@ -937,8 +954,8 @@ item is a short summary of finished work; details are in the files named.
   fits it, of a bitwise operation the operation's on the operands' low k
   bits (`nf.lo_fit`, `nf.lo_and` / `lo_or` / `lo_xor`). The machine's
   `or eax, -64` of a byte and GIMPLE's 8-bit `| -64` one value.
-- **alloc_slot and alloc_group at machine level** (`mp.as_implements`,
-  `mp.agr_implements`; proofs/mallocng/fun/alloc_pair.core): they call
+- **alloc_slot and alloc_group at machine level** (`mp.as_over_leaves`,
+  `mp.agr_over_leaves`; proofs/mallocng/fun/alloc_pair.core): they call
   each other, a nested group's slot of a larger class (`j > sc`: the
   group's slots, at least one of sc's size, fit in a slot of j), so by
   induction on the class down from 48 -- alloc_slot's code known from k on
