@@ -47,7 +47,7 @@ reach `main`:
   musl's data symbols), the thread descriptor up to errno (`fs_base ..
   +0x34`), and the auxiliary vector and AT_RANDOM bytes.
 If the model could not reach `main` at all, `Init` would hold vacuously;
-the startup proof (docs/todo.md §3) has to show that it does.
+the startup proof (docs/todo.md §5) has to show that it does.
 
 ## The levels
 

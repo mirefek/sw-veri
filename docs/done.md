@@ -858,7 +858,7 @@ item is a short summary of finished work; details are in the files named.
   patterns, `_` any term, a bare name any application; `search` alone:
   the facts whose conclusion matches the goal) and a note for a theorem
   stating what one before it states (12 such pairs found by hand-written
-  proofs, listed in todo §7).
+  proofs, listed in todo §6).
 - **alloc_meta's transitions**, each keeping the invariant in memory
   (proofs/mallocng/model/): a meta taken in general (`mp.tk_holds_in`) --
   the free list's head (`mp.tfr_holds_in`) or the last area's next one

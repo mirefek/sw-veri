@@ -3,47 +3,40 @@
 The current plans, in order. When an item is done it is deleted here and
 summarized in docs/done.md.
 
-## 1. Now: the specs' loose ends
+## 1. Next: the remaining functions
 
-Every function's spec states its purpose (layers/mallocng_specs.sl), its
-code refining it directly (proofs/mallocng/fun/). Left over:
-- What enframe's callers owe (malloc's): the class bound (its n within the
-  class), the thread pointer's word apart from the slot (the C world's
-  TLS), a stride below 2^31; the slot's access is the invariant's
-  (`mp.slot_rw_of`).
-
-## 2. Next: alloc_group, loops on the CFG and loops by their purpose
-
-- The stack objects' engine: more than one object (`tr.obj1` is one
-  8-byte object; `alloc_objs` of several), objects read before their
-  first store (none at -O0 yet).
-- CFG -> loops, later: nested loops, a head reached at two structured
-  loops, an exit of two loops, a callee refined inside a walk with loops
-  of its own.
-- Specs by purpose of the loop functions (step_seq): the
-  loop's invariant and variant at its head stated over the abstract
-  state, the code's loop refined to it (as try_avail's span loop).
-
-## 3. Then: the remaining functions
-
+alloc_meta, alloc_slot and alloc_group are verified at machine level from
+the configuration alone (`mp.am_machine`, `mp.as_machine`,
+`mp.agr_machine`). Left, each with its spec by purpose
+(layers/mallocng_specs.sl), its code refining it (proofs/mallocng/fun/),
+its machine code linked:
 - The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
   generated.
 - `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
   `nontrivial_free`.
 - The entry points `__libc_malloc_impl`, `__libc_free`, `calloc` and the
-  `lite_malloc` / `free.c` wrappers, against the malloc layer.
+  `lite_malloc` / `free.c` wrappers, against the malloc layer. malloc
+  owes enframe: the class bound (its n within the class), the thread
+  pointer's word apart from the slot (the C world's TLS), a stride below
+  2^31; the slot's access is the invariant's (`mp.slot_rw_of`).
 - The string instructions in general (layers/musl_asm.sl): `rep movs` of
   any element size (`x86i.rep_movsq` is for 8: its iteration and facts
   with the size a parameter), `rep stos` (memset's: no overlap question);
   an overlapping forward copy (s < d < s + n: each element read after
   writes reached it -- memmove's) its exact bytes, not undefined: the
   pointwise invariant of `x86.moved` with the source as it is then.
-- Leaves at machine level: `a_or`, `__syscall*`, `munmap`, `memset`,
-  `__lock` / `__unlock`,
-  `___errno_location` (then size_overflows' composition without its
-  premise).
+- Leaves at machine level: `a_or`, the other `__syscall*`, `munmap`,
+  `memset`, `__lock` / `__unlock`.
 
-## 4. The CFG path's remaining engineering
+## 2. The engine, when a function needs it
+
+- Stack objects: more than one object (`tr.obj1` is one 8-byte object;
+  `alloc_objs` of several), objects read before their first store (none
+  at -O0 yet).
+- CFG -> loops: nested loops, a head reached at two structured loops, an
+  exit of two loops, a callee refined inside a walk with loops of its own.
+
+## 3. The CFG path's remaining engineering
 
 - The structured form generated and checked in one run (`slc gimple`
   running the refinement); a callee's refinement a theorem of its own, not
@@ -62,7 +55,7 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   `end_locals`), each proof's still held until then, and equal terms built
   apart are separate nodes.
 
-## 5. The invariant and the laws
+## 4. The invariant and the laws
 
 - `mallocng.abs_unique` (the abstract state determined by memory): the
   laws rest on it.
@@ -74,7 +67,7 @@ code refining it directly (proofs/mallocng/fun/). Left over:
   groups x bytes (~2 min at 60 groups; the ignored tests take 3.5 min).
   An interval form of the footprint per check would make it linear.
 
-## 6. Init: startup to main
+## 5. Init: startup to main
 
 musl's `_start` … `__libc_start_main` reaches `main` with the invariant
 holding for the empty heap. It needs from exec (spec/linux/exec.sl):
@@ -91,7 +84,7 @@ bytes). The top-level proof
 allocator's memory -- at the empty heap, from the context, the tables
 and the auxiliary vector; after, the allocator maps only fresh pages.
 
-## 7. Usability
+## 6. Usability
 
 - `rsimp` for the machine's semantics (proofs/linux_sys.core) instead of
   hand lemmas: a dispatch's live case is `rsimp(h, tag)` already; a
