@@ -21,6 +21,7 @@
 //! error naming the address.
 
 mod cfg;
+mod contract;
 mod eff;
 mod gref;
 mod insn;
@@ -976,5 +977,9 @@ impl syntax::Prover for Checker {
 
     fn refines(&mut self, env: &mut Env, name: &str, low: &str, high: &str) -> sl_kernel::KResult<Seq> {
         gref::refines(env, name, low, high).map_err(sl_kernel::KernelError)
+    }
+
+    fn contract(&mut self, env: &mut Env, fname: &str, spec: &str, by: &str, call: Option<&str>, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
+        contract::contract(env, fname, spec, by, call, hints).map_err(sl_kernel::KernelError)
     }
 }

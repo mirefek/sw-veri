@@ -382,19 +382,6 @@ abbrev mp.ag_call(c, f) := all m t h regs o2. m in bits(64) -> t in abi.World ->
      mallocng.holds_m(c, A2, V, h.blocks) && mallocng.kept_outside(c, h.A, h.blocks, t.vm, V, empty)) && bits_of_int(32, fst(r)) = bits_of_int(32, A2.metas[m].avail))) &&
      o2 = ok(fn_update(t, "vm", V), r))
 
-// (a callee refining one called as activate_group: called as it too)
-theorem mp.ag_call_ref(c, f, f2): (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(f[regs], s, o) -> runs(f2[regs], s, o)) ->
-  mp.ag_call(c, f2) -> mp.ag_call(c, f)
-proof
-  assume hf q
-  fix m t h regs o2
-  assume hm hw hh hin hsh hnr hth hu av0 hhead hro hr
-  have rl rn _ := apply(gc.regs1, hm, hro)
-  have lo: seq_len(regs) in omega by simp(rl)
-  have r2 := mp(all_elim(hf, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by arith(rn, lo)), hw, hr)
-  show := mp(all_elim(q, {m}, {t}, {h}, {regs}, {o2}), hm, hw, hh, hin, hsh, hnr, hth, hu, av0, hhead, hro, r2)
-qed
-
 // activate_group's code called as activate_group
 theorem mp.ag_q: all c g0 g1. c in mallocng.Cfg ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(mallocng_specs.a_cas_spec_fun()[regs], s, o)) ->
@@ -414,46 +401,8 @@ proof
   show by disj({2}, spec_ret({V2}, {pair(u, y)}, {A2}, e, hs1, hs2))
 qed
 
-theorem mp.ag_fun: all c regs g0 g1. c in mallocng.Cfg ->
-  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(mallocng_specs.a_cas_spec_fun()[regs], s, o)) ->
-  regs in abi.ARGS ->
-  refines_ghost(c_src_malloc_mallocng_malloc.activate_group_fun(g0, g1)[regs], mallocng_specs.activate_group_spec_fun(c)[regs], abi.World, mp.G)
-proof
-  fix c regs g0 g1
-  assume hc hg1 hr
-  have hm: all regs. refines_ghost(c_src_malloc_mallocng_malloc.activate_group(bits_of_int(64, regs[0]), g0, g1), mallocng_specs.activate_group_spec(c, bits_of_int(64, regs[0])), abi.World, mp.G) proof
-    fix regs
-    show := mp(all_elim(mp.ag, {c}, {bits_of_int(64, regs[0])}, {g0}, {g1}), hc, simp(), hg1)
-  qed
-  have w := mp(g.fun_res_ghost[p := x0. c_src_malloc_mallocng_malloc.activate_group(bits_of_int(64, x0[0]), g0, g1), q := x0. mallocng_specs.activate_group_spec(c, bits_of_int(64, x0[0])), w := 32, n := 1, G := mp.G], mp.g_univ, hm)
-  show by defs(mp(all_elim(w, {regs}), hr), c_src_malloc_mallocng_malloc.activate_group_fun, mallocng_specs.activate_group_spec_fun, letin)
-qed
-
-// (the purpose spec diverges nowhere it does not also raise: only where
-// it allows anything -- no activated state, no memory holding it)
-theorem mp.ag_divg: all c. tr.div_raises_g(mp.G, mallocng_specs.activate_group_spec_fun(c))
-proof
-  fix c
-  show by divergence(mp.g_univ, mp.gS)
-qed
-
-// activate_group's machine code (linked with a_crash's spec and a_cas's
-// code) implements its purpose
-theorem mp.ag_implements: all c statics. c in mallocng.Cfg ->
-  abi.implements2_at(mp.G, 4206671, mallocng_specs.activate_group_spec_fun(c), 4198400, text.code, statics)
-proof
-  fix c statics
-  assume hc
-  have hdr := all_elim(mp.ag_divg, {c})
-  let LOW := c_src_malloc_mallocng_malloc.activate_group_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.a_cas_fun())
-  have r: all args. args in abi.ARGS -> refines_ghost(LOW[args], mallocng_specs.activate_group_spec_fun(c)[args], abi.World, mp.G) proof
-    fix args
-    assume ha
-    show := mp(all_elim(mp.ag_fun, {c}, {args}, {mallocng_specs.a_crash_spec_fun()}, {c_src_malloc_mallocng_malloc_cfg.a_cas_fun()}), hc, cc.a_cas, ha)
-  qed
-  have rf := mp(all_elim(activate_group_ref, {mallocng_specs.a_crash_spec_fun()}, {c_src_malloc_mallocng_malloc_cfg.a_cas_fun()}), acr.io, acstc.io)
-  have st := mp(all_elim(tr.implements_refine, {4206671}, {c_src_malloc_mallocng_malloc_cfg.activate_group_fun(mallocng_specs.a_crash_spec_fun(), c_src_malloc_mallocng_malloc_cfg.a_cas_fun())}, {LOW},
-    {4198400}, {text.code}, {statics}), all_elim(agtc.linked, {statics}), rf)
-  show := mp(all_elim(tr.implements_abi_g, {mp.G}, {4206671}, {LOW}, {mallocng_specs.activate_group_spec_fun(c)}, {4198400}, {text.code}, {statics}),
-    mp.g_ok, hdr, st, r)
-qed
+// its C function value, its divergence, its machine code over any callees
+// and linked (with a_crash's spec and a_cas's code), called as
+// activate_group: mp.ag_fun, mp.ag_divg, mp.ag_implements, mp.ag_linked,
+// mp.ag_call_ref, mp.ag_call_linked
+contract activate_group mallocng_specs.activate_group_spec_fun by mp.ag call mp.ag_call

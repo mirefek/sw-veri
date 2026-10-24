@@ -11,8 +11,8 @@ pub type CResult = Result<(), String>;
 /// `prefix`); otherwise the file is checked and its entry written again.
 /// The parts (build.rs: hashes of their sources): the trusted kernel and
 /// this cache's format, always; the proof scripts' automation (sl_proof),
-/// always; the C1 and refinement engines (src/c1), for a file with `c1` or
-/// `refines` lines (`uses_engines`). A change to other code -- or to the
+/// always; the engines of src/c1, for a file with `c1`, `refines` or
+/// `contract` lines (`uses_engines`). A change to other code -- or to the
 /// engines, for files without such lines -- keeps the entries. (No
 /// modification times: a file restored with an older date, or changed
 /// within one clock tick, is checked again.)
@@ -78,11 +78,12 @@ impl Cache {
     }
 }
 
-/// a file whose lines run the C1 or the refinement engine (`c1`, `refines`)
+/// a file whose lines run the engines of src/c1 (`c1`, `refines`,
+/// `contract`)
 fn uses_engines(src: &str) -> bool {
     src.lines().any(|l| {
         let l = l.trim_start();
-        l.starts_with("c1 ") || l.starts_with("refines ")
+        l.starts_with("c1 ") || l.starts_with("refines ") || l.starts_with("contract ")
     })
 }
 

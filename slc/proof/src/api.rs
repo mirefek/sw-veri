@@ -23,6 +23,9 @@ pub enum G {
     Apply(Seq, Vec<A>),
     /// `mp(f, ..)` (its result fitted to it)
     Mp(Seq, Vec<A>),
+    /// `divergence([GU, GS])`: a spec function diverges nowhere it does not
+    /// also raise (the lemmas GU, GS by name: a ghost family's)
+    Divergence(Vec<String>),
 }
 
 /// An argument of `mp` / `apply`: a term for the leading `all`, or a
@@ -90,6 +93,10 @@ impl Api {
             G::Mp(f, args) => {
                 let s = self.mp(env, f, args)?;
                 self.st.check(env, s, goal)
+            }
+            G::Divergence(names) => {
+                let args: Vec<Arg> = names.into_iter().map(|n| Arg::Proof(PE::Ref(n))).collect();
+                self.st.divergence(env, lg, goal, &args)
             }
         }
     }

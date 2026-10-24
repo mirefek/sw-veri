@@ -559,6 +559,14 @@ pub trait Prover {
     fn refines(&mut self, _env: &mut Env, _name: &str, _low: &str, _high: &str) -> KResult<Seq> {
         Err(KernelError("`refines`: this checker has no refinement procedure".into()))
     }
+
+    /// `contract FN SPEC by THM [call ABBR] [using L, ..]`: a function's
+    /// wrapper theorems (its `_fun`, `_divg`, `_implements`, ..) from the
+    /// refinement THM of its procedure, proven by a procedure (not trusted
+    /// either)
+    fn contract(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _by: &str, _call: Option<&str>, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
+        Err(KernelError("`contract`: this checker has no contract procedure".into()))
+    }
 }
 
 /// The proof cache of `slc kernel-check` (`ext::cache`), supplied by the
@@ -808,9 +816,27 @@ fn load_mode(
             // c1 FN SPEC PREFIX [using L, ..]: the function FN's C1 theorems
             // (`PREFIX.body`, `.implements`, ..), proven by the checker's C1
             // engine, the facts L (theorems) its hints
-            "c1" => {
+            // contract FN SPEC by THM [call ABBR] [using L, ..]: FN's wrapper
+            // theorems from its procedure's refinement THM (named after THM:
+            // `THM_fun`, ..), proven by the checker's procedure
+            "c1" | "contract" => {
                 let spec = p.ident()?;
-                let prefix = p.ident()?;
+                let (prefix, call) = if kw == "contract" {
+                    if !matches!(&p.tok, Tok::Ident(s) if s == "by") {
+                        return p.error("`contract FN SPEC by THM`: `by` expected");
+                    }
+                    p.bump()?;
+                    let by = p.ident()?;
+                    let call = if matches!(&p.tok, Tok::Ident(s) if s == "call") {
+                        p.bump()?;
+                        Some(p.ident()?)
+                    } else {
+                        None
+                    };
+                    (by, call)
+                } else {
+                    (p.ident()?, None)
+                };
                 let mut hints = Vec::new();
                 if matches!(&p.tok, Tok::Ident(s) if s == "using") {
                     p.bump()?;
@@ -823,7 +849,7 @@ fn load_mode(
                     }
                 }
                 let Some(pr) = prover.as_deref_mut() else {
-                    return Err(ctx(KernelError("`c1` needs a proof checker".into())));
+                    return Err(ctx(KernelError(format!("`{}` needs a proof checker", kw))));
                 };
                 // (C1_KEEP_GOING=1, for debugging: a function whose C1
                 // fails reported, its theorems not made, the file going on)
@@ -831,13 +857,14 @@ fn load_mode(
                 // global ones, the rest dropped after it)
                 let mark = p.env.local_mark();
                 p.env.begin_locals();
-                let r = pr.c1(p.env, &name, &spec, &prefix, &hints).and_then(|ths| {
+                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, &hints) };
+                let r = r.and_then(|ths| {
                     ths.into_iter().map(|(n, sq)| Seq::globalize(p.env, &sq).map(|g| (n, g))).collect::<KResult<Vec<_>>>()
                 });
                 let kept = p.env.locals_kept(&mark);
                 p.env.end_locals();
                 if let Some(n) = &kept {
-                    return Err(ctx(KernelError(format!("`{}` keeps a variable of the C1 engine's run for `{}`", n, name))));
+                    return Err(ctx(KernelError(format!("`{}` keeps a variable of the `{}` engine's run for `{}`", n, kw, name))));
                 }
                 let ths = match r {
                     Err(e) if std::env::var("C1_KEEP_GOING").is_ok_and(|v| v == "1") => {
