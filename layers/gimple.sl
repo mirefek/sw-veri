@@ -180,19 +180,23 @@ record Frame { vals: Name -> nat, objs: List[Addr], bb: nat, prev: nat }
 fn operand(fr: Frame, o: Opnd) -> nat =
   match o { ssa(x) => fr.vals[x], cst(v) => v, obj(k) => uint(fr.objs[k]) }
 
-// The memory a GIMPLE access may use: the world's (its domain: its mapped
-// pages, as their protection allows -- C objects are never write-only --,
-// and elsewhere the stack objects, not wrapping around the address space;
-// the world has no stack pages, so the test for them is vacuous) but the
-// ABI's bytes on them (`objs.hidden`). Anything else
+// The memory a GIMPLE access may use: the world's (its domain: the C
+// world's bytes on its mapped pages, as their protection allows -- C objects are
+// never write-only --, and elsewhere the stack objects, not wrapping
+// around the address space; the world has no stack pages, so the test for
+// them is vacuous). Anything else
 // is undefined (GCC may remove, reorder or speculate accesses that are
 // valid in C): also the stack outside the stack objects, where the machine
 // keeps what C does not see -- reached only by a dangling pointer.
 pred usable(vm: Vm, objs: Objs, a: nat, n: nat, w: bool) =
   all i: nat. i < n ->
     if mapped(vm, (a + i) / PAGE) && vm.pages[(a + i) / PAGE].value.kind != stack {
-      (if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }) && a + i notin objs.hidden
+      (if w { vm.pages[(a + i) / PAGE].value.prot.w } else { vm.pages[(a + i) / PAGE].value.prot.r }) && a + i in objs.c_bytes
     } else { a + i < 2^64 && a + i in objs.live }
+
+// A valid page: mapped, all its bytes the C world's (as the pages the
+// kernel gives are; a page the ABI keeps a byte of is not).
+pred page_valid(vm: Vm, objs: Objs, p: nat) = mapped(vm, p) && (all i: nat. i < PAGE -> p * PAGE + i in objs.c_bytes)
 
 // An access through a null base pointer is undefined, whatever is mapped at
 // page 0: no C object is there, and GCC relies on it (a dereferenced pointer
@@ -214,16 +218,15 @@ proc[World] write_bytes(a: Addr, n: nat, v: nat) {
 }
 
 // Stack objects (address-taken locals) are placed on the stack (anywhere
-// GCC's frame layout may put them: outside the world's domain, none of the
-// ABI's bytes), disjoint
+// GCC's frame layout may put them: outside the world's domain), disjoint
 // and aligned; their contents are arbitrary. They join the world's domain
-// (`objs`) for the rest of the function: its `_fun` wrapper drops them at
-// the return.
+// (`objs.live`) for the rest of the function: its `_fun` wrapper drops them
+// at the return.
 proc[World] alloc_objs(sizes: List[(nat, nat)]) -> List[Addr] {
   let addrs = any l: List[Addr] where len(l) = len(sizes) &&
     (all k: nat. k < len(sizes) ->
        uint(l[k]) % sizes[k][1] = 0 &&
-       (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> !in_domain(vm, objs, a) && a notin objs.hidden)) &&
+       (all a: nat. uint(l[k]) <= a && a < uint(l[k]) + sizes[k][0] -> !in_domain(vm, objs, a))) &&
     (all j: nat, k: nat. j < k && k < len(sizes) ->
        uint(l[j]) + sizes[j][0] <= uint(l[k]) || uint(l[k]) + sizes[k][0] <= uint(l[j]))
   // (their bytes any: the memory but for them as it was)
@@ -332,22 +335,20 @@ proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
 // there: the world's call allows the machine's). Only the calls the
 // allocator makes -- brk, mmap, mprotect -- and only where the pages they
 // change are its kind of memory: off the stack's space (the world does not
-// see the stack's pages: its frames, its room to grow) and not the
-// program's code (executable), and none with a byte the ABI keeps
-// (`objs.hidden`). A call reaching other pages is undefined, as is any
-// other call.
-pred hidden_off(objs: Objs, p: nat, n: nat) = all a: nat. a in objs.hidden -> !(p <= a / PAGE && a / PAGE < p + n)
-
+// see the stack's pages: its frames, its room to grow), not the
+// program's code (executable), and valid -- whole pages of the world's
+// (`page_valid`: none the ABI keeps a byte of). A call reaching other
+// pages is undefined, as is any other call.
 pred sys_pages_ok(vm: Vm, objs: Objs, p: nat, n: nat) =
   off_stack_space(vm, p, n) && (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> !vm.pages[q].value.prot.x) &&
-  hidden_off(objs, p, n)
+  (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> page_valid(vm, objs, q))
 
 // The memory's changes by a call. vm: before with the pages p .. p+n-1
-// fresh pages pg -- their bytes 0; the world's own, none with a byte the
-// ABI keeps (the kernel maps no page that is mapped: the ABI's are) --,
-// nothing else changed (its break aside)
+// fresh pages pg -- their bytes 0; the C world's (none of them has a
+// byte the ABI keeps: the kernel maps no page that is mapped, the ABI's
+// are), so valid pages --, nothing else changed (its break aside)
 pred fresh_pages(before: Vm, vm: Vm, objs: Objs, p: nat, n: nat, pg: Page) =
-  hidden_off(objs, p, n) &&
+  (all a: nat. p * PAGE <= a && a < (p + n) * PAGE -> a in objs.c_bytes) &&
   vm.stack_top = before.stack_top && vm.stack_limit = before.stack_limit && vm.brk_start = before.brk_start &&
   (all q: nat. q < TASK_SIZE / PAGE -> vm.pages[q] = (if p <= q && q < p + n { some(pg) } else { before.pages[q] })) &&
   (all a: Addr. vm.bytes[a] = (if p * PAGE <= uint(a) && uint(a) < (p + n) * PAGE { bits[8](0) } else { before.bytes[a] }))
@@ -541,10 +542,10 @@ proc[World] call(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64])
 proc[World] call_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !thread_ok(vm, fs_base) { undefined }
-  let objs0 = objs
+  let live0 = objs.live
   let fs0 = fs_base
   let (r0, r1) = g(regs)
-  objs := objs0              // (the callee's stack objects are gone)
+  objs := objs with { live: live0 }      // (the callee's stack objects are gone)
   fs_base := fs0
   return (r0, r1)
 }
@@ -565,10 +566,10 @@ proc[World] call_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], bits[64
 proc[World] call_callee_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
   let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
   if !thread_ok(vm, fs_base) { undefined }
-  let objs0 = objs
+  let live0 = objs.live
   let fs0 = fs_base
   let (r0, r1) = g(regs)
-  objs := objs0
+  objs := objs with { live: live0 }
   fs_base := fs0
   return (r0, r1)
 }

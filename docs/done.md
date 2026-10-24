@@ -418,24 +418,29 @@ item is a short summary of finished work; details are in the files named.
     on the `_fun` wrapper itself (`tr.entry0p`, `Spec::Plain`, rerooted
     at the procedure's call); the return comes with the objects released
     (`tr.ret_insn_w`).
-- **The stack protector's word out of the C world** (layers/abi.sl,
-  layers/gimple.sl): the world's objects are `Objs { live, hidden }`,
-  `hidden` the ABI's bytes (the canary, `abi.canary(fs)`, by the view's
-  `objs_at`). GIMPLE never sees them: `usable` and `in_domain` exclude
-  them, `world_matches` keeps them and their pages, the system calls
-  change no page with one (`hidden_off` in `sys_pages_ok` and
-  `fresh_pages`), the thread pointer is kept across calls, and
-  `thread_ptr()` is the ABI's fs_base under `thread_ok` (its machine
-  load the bridge's, `tr.load64_tp`). The entry requires the word
-  readable and writable off the stack (`abi.canary_ok`); the epilogue's
-  `sub r, fs:0x28; je` is proven in the bridge (`tr.load64_can`,
-  `tr.fsub64_can`: the entry's word, the branch to `__stack_chk_fail`
-  never taken), the wrapper has no check.
+- **Byte-wise validity; the stack protector's word out of the C world**
+  (layers/abi.sl, layers/gimple.sl): the world's bytes are `Objs { live,
+  c_bytes }` -- `c_bytes` the C world's bytes, stored byte by byte (all
+  but the ABI's: `objs_at`, the canary `abi.canary(fs)` not among them),
+  `live` the stack objects. An access uses a byte of `c_bytes` on a
+  mapped page as the page's protection allows (`usable`, `in_domain`); a
+  valid page is a mapped one all of whose bytes are the C world's
+  (`page_valid`). The kernel's calls touch only valid pages
+  (`sys_pages_ok`), and its fresh pages are the C world's
+  (`fresh_pages`, the bridge's: they were free, the ABI's pages are
+  mapped). `world_matches` keeps the ABI's bytes and their pages and has
+  `c_bytes` all others; a call drops the callee's objects, not
+  `c_bytes` (`objs := objs with { live: .. }`). `thread_ptr()` is
+  the ABI's fs_base under `thread_ok` (its machine load the bridge's,
+  `tr.load64_tp`). The entry requires the canary's word readable and
+  writable off the stack (`abi.canary_ok`); the epilogue's `sub r,
+  fs:0x28; je` is proven in the bridge (`tr.load64_can`, `tr.fsub64_can`:
+  the entry's word, `__stack_chk_fail` never reached).
   - mallocng's invariant in the C world: `holds_in = holds_m &&
-    shown_in` -- the memory's (the model's lemmas, unchanged) and the
-    allocator's ranges and reserve pages none of the ABI's bytes
-    (`shown_in`, kept by the steps of the same geometry, re-established
-    for fresh pages by their `hidden_off`: `mp.shown_refill`,
+    shown_in` -- the memory's (the model's lemmas, page-wise, unchanged)
+    and the allocator's bytes the C world's, its reserve's pages valid
+    ones (`shown_in`, kept by the steps of the same geometry,
+    re-established for fresh pages by `fresh_pages`: `mp.shown_refill`,
     `mp.shown_ngrp`). brk's and mmap's specs return the kernel's refusal
     when no fresh memory is to be had.
 - **C2**, against contracts in `layers/mallocng_specs.sl`:

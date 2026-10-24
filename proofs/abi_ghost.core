@@ -105,6 +105,57 @@ qed
 abbrev abi.gs1(S) := fn_update(fn_update(S, "vm", S.vm), "os", S.os)
 abbrev abi.gmm1(S, objs, mem) := rec_merge(restrict(abi.gs1(S), abi.KEYS), ghost_part(abi.cw(S, objs, mem), abi.WKEYS))
 
+// (a record's pairs: their first components its domain)
+theorem abi.keys_of(f, d): dom(f) = d -> (all z. z in f -> fst(z) in d)
+proof
+  assume hd
+  fix z
+  assume hz
+  have im := set_image_def[s := f, f := x. fst(x), y := fst(z)]
+  have e: ex x. x in f && fst(x) = fst(z) by ex_intro({z}, taut(hz, refl({fst(z)})))
+  have kd: fst(z) in dom(f) by defs(taut(im, e), dom)
+  show := rewrite(hd, kd)
+qed
+
+// a world w with a ghost part h: its fields w's, its world part w, its
+// ghost part h
+theorem abi.ghost_parts_w: all G w h. abi.ghost_ok(G) -> h in G -> w in abi.World ->
+  restrict(union2(w, h), abi.WKEYS) = w && ghost_part(union2(w, h), abi.WKEYS) = h &&
+  (all k. k in abi.WKEYS -> union2(w, h)[k] = w[k])
+proof
+  fix G w h
+  assume hg hh hw
+  have hu hf hz := mp(all_elim(hg, {h}), hh)
+  have wd: dom(w) = abi.WKEYS by simp(expand(hw, abi.World))
+  have kw := mp(abi.keys_of[f := w, d := abi.WKEYS], wd)
+  have hk: all z. z in h -> !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz2
+    have _ b := mp(all_elim(hz, {z}), hz2)
+    show b
+  qed
+  have r := mp(abi.restrict_union_l[a := w, b := h, d := abi.WKEYS], kw, hk)
+  have g := mp(abi.ghost_part_union_r[a := w, b := h, d := abi.WKEYS], kw, hk)
+  have ap: all k. k in abi.WKEYS -> union2(w, h)[k] = w[k] proof
+    fix k
+    assume hkk
+    have nz: all z. z in h -> fst(z) != k proof
+      fix z
+      assume hz2
+      show proof
+        assume e
+        have kz: fst(z) in abi.WKEYS := rewrite(sym(e), hkk)
+        show by taut(mp(all_elim(hk, {z}), hz2), kz)
+      qed
+    qed
+    show := mp(app_union2_lacks[a := w, b := h, k := k], nz)
+  qed
+  show by taut(r, g, ap)
+qed
+
+// ----------------------------------------------------------------------
+//  The other cases with a ghost part
+
 // the entry s with the ghost part h: the world the spec runs on, the
 // entry's with h; the state at the call, S itself; the entry's facts as of S
 theorem abi.ghost_entry: all G s h objs mem. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine -> s in univ(1) -> objs in set_type(omega) -> mem in x86_64_linux.Vm ->
@@ -116,7 +167,8 @@ theorem abi.ghost_entry: all G s h objs mem. abi.ghost_ok(G) -> h in G -> s in x
   abi.view_ok(union2(s, h), objs, mem) &&
   (all x. x in omega -> x in objs -> (int_le(abi.sp(union2(s, h)), x) && abi.stack_page(union2(s, h).vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(union2(s, h).vm, bits_of_int(64, x), 1)) &&
   union2(s, h).vm in x86_64_linux.Vm && union2(s, h).gpr[4] in bits(64) &&
-  (all k. k in abi.KEYS -> union2(s, h)[k] = s[k])
+  (all k. k in abi.KEYS -> union2(s, h)[k] = s[k]) &&
+  abi.cw(union2(s, h), objs, mem).objs = abi.objs_at(objs, union2(s, h).fs_base)
 proof
   fix G s h objs mem
   assume hg hh hM su hot hmv hwm hob
@@ -167,7 +219,13 @@ proof
   have hobS := rewrite(sym(a1), rewrite(sym(a8), hob))
   have hsvS: S.vm in x86_64_linux.Vm := rewrite(sym(a8), (s.vm in x86_64_linux.Vm by simp(hM)))
   have hspS: S.gpr[4] in bits(64) := rewrite(sym(a1), (s.gpr[4] in bits(64) by simp(hM)))
-  show by taut(Su, x7e, m1e, hwmS, hobS, hsvS, hspS, apS)
+  // (the world's bytes at the call: the entry's)
+  have vu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, hmu, mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), ou))
+  have wt := apply(abi.world_typed, hM, hot, hmv, vu)
+  have _ _ apw := apply(abi.ghost_parts_w, hg, hh, wt)
+  have vo := mp(all_elim(apw, {"objs"}), simp())
+  have co: abi.cw(S, objs, mem).objs = abi.objs_at(objs, S.fs_base) by simp(x7e, vo, a6)
+  show by taut(Su, x7e, m1e, hwmS, hobS, hsvS, hspS, apS, co)
 qed
 
 // (the spec raises from w: an exception of its run, its state with a ghost
@@ -267,7 +325,11 @@ proof
   // the entry world: read, and written back unchanged
   have g0 := mp(all_elim(abi.get_ok, {abi.sp(S)}, {objs}, {mem}, {S}), Su, ou, hmu)
   have wu := mp(restrict_univ[u := 1, f := x7, d := abi.WKEYS], x7u)
-  have hm0: abi.world_matches(S.vm, S.vm, restrict(x7, abi.WKEYS).vm, abi.objs_at(objs, S.fs_base), abi.sp(S)) by simp(hwmS, keep(abi.world_matches, abi.objs_at))
+  have wt0 := apply(abi.world_typed, hM, hot, hmv, wun)
+  have _ _ apw := apply(abi.ghost_parts_w, hg, hh, wt0)
+  have co: restrict(x7, abi.WKEYS).objs = abi.objs_at(objs, S.fs_base) by simp(x7e, mp(all_elim(apw, {"objs"}), simp()), a6)
+  have hm0: abi.world_matches(S.vm, S.vm, restrict(x7, abi.WKEYS).vm, abi.wob(objs, restrict(x7, abi.WKEYS).objs.c_bytes), S.fs_base, abi.sp(S))
+    by simp(rewrite(all_elim(abi.objs_at_wob, {objs}, {S.fs_base}), hwmS.2), co, all_elim(abi.objs_at_live, {objs}, {S.fs_base}), keep(abi.world_matches, abi.canary))
   have s0 := mp(all_elim(abi.set_ok, {abi.sp(S)}, {objs}, {mem}, {S}, {restrict(x7, abi.WKEYS)}, {S.vm}), Su, wu, vmuS, hsvS, hm0)
   // the spec on the world, from mm1 (= S)
   have m1u: mm1 in univ(1) := rewrite(sym(m1e), Su)
@@ -296,57 +358,6 @@ proof
   show by mp(set_ext[a := restrict(union2(a, b), d), b := restrict(a, d)], all_z)
 qed
 
-// (a record's pairs: their first components its domain)
-theorem abi.keys_of(f, d): dom(f) = d -> (all z. z in f -> fst(z) in d)
-proof
-  assume hd
-  fix z
-  assume hz
-  have im := set_image_def[s := f, f := x. fst(x), y := fst(z)]
-  have e: ex x. x in f && fst(x) = fst(z) by ex_intro({z}, taut(hz, refl({fst(z)})))
-  have kd: fst(z) in dom(f) by defs(taut(im, e), dom)
-  show := rewrite(hd, kd)
-qed
-
-// a world w with a ghost part h: its fields w's, its world part w, its
-// ghost part h
-theorem abi.ghost_parts_w: all G w h. abi.ghost_ok(G) -> h in G -> w in abi.World ->
-  restrict(union2(w, h), abi.WKEYS) = w && ghost_part(union2(w, h), abi.WKEYS) = h &&
-  (all k. k in abi.WKEYS -> union2(w, h)[k] = w[k])
-proof
-  fix G w h
-  assume hg hh hw
-  have hu hf hz := mp(all_elim(hg, {h}), hh)
-  have wd: dom(w) = abi.WKEYS by simp(expand(hw, abi.World))
-  have kw := mp(abi.keys_of[f := w, d := abi.WKEYS], wd)
-  have hk: all z. z in h -> !(fst(z) in abi.WKEYS) proof
-    fix z
-    assume hz2
-    have _ b := mp(all_elim(hz, {z}), hz2)
-    show b
-  qed
-  have r := mp(abi.restrict_union_l[a := w, b := h, d := abi.WKEYS], kw, hk)
-  have g := mp(abi.ghost_part_union_r[a := w, b := h, d := abi.WKEYS], kw, hk)
-  have ap: all k. k in abi.WKEYS -> union2(w, h)[k] = w[k] proof
-    fix k
-    assume hkk
-    have nz: all z. z in h -> fst(z) != k proof
-      fix z
-      assume hz2
-      show proof
-        assume e
-        have kz: fst(z) in abi.WKEYS := rewrite(sym(e), hkk)
-        show by taut(mp(all_elim(hk, {z}), hz2), kz)
-      qed
-    qed
-    show := mp(app_union2_lacks[a := w, b := h, k := k], nz)
-  qed
-  show by taut(r, g, ap)
-qed
-
-// ----------------------------------------------------------------------
-//  The other cases with a ghost part
-
 // undefined behavior: the spec raises from the entry's world with h
 theorem abi.ub_case_g: all G f spec args objs mem s h o e x. abi.ghost_ok(G) -> h in G -> s in x86_64_linux.Machine -> s in univ(1) -> objs in set_type(omega) -> mem in x86_64_linux.Vm ->
   abi.view_ok(s, objs, mem) ->
@@ -357,11 +368,11 @@ theorem abi.ub_case_g: all G f spec args objs mem s h o e x. abi.ghost_ok(G) -> 
 proof
   fix G f spec args objs mem s h o e x
   assume hg hh hM su hot hmv hwm hob he hno hx hr hp ho
-  have Su x7e m1e hwmS hobS hsvS hspS apS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
+  have Su x7e m1e hwmS hobS hsvS hspS apS hcoS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
   have ou := apply(abi.objs_univ, hot)
   have hmu := apply(x86.vm_univ, hmv)
   have hra := apply(abi.raises_intro_g, {G}, {abi.cw(union2(s, h), objs, mem)}, {x}, {spec}, {args}, {e}, hx, he, hno, rewrite(sym(x7e), hr))
-  show := apply(abi.ub_intro_g, {G}, {f}, hp, ho, ou, hmu, hsvS, hspS, hwmS, hra)
+  show := apply(abi.ub_intro_g, {G}, {f}, hp, ho, ou, hmu, hsvS, hspS, hwmS, hcoS, hra)
 qed
 
 // a crash: the machine faulting on its stack (its ghost part h kept), with
@@ -381,10 +392,11 @@ proof
   have su: s in univ(1) by simp(hp)
   have m1u: m1 in univ(1) by simp(hp)
   have cu: c in univ(1) by simp(hp)
-  have Su x7e m1e hwmS hobS hsvS hspS apS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
+  have Su x7e m1e hwmS hobS hsvS hspS apS hcoS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
   have _ _ apM := apply(abi.ghost_parts, hg, hh, hM1)
   have hu _ _ := mp(all_elim(hg, {h}), hh)
   have a1 := mp(all_elim(apS, {"gpr"}), simp())
+  have a6 := mp(all_elim(apS, {"fs_base"}), simp())
   have a9 := mp(all_elim(apS, {"os"}), simp())
   have b1 := mp(all_elim(apM, {"gpr"}), simp())
   have b8 := mp(all_elim(apM, {"vm"}), simp())
@@ -400,7 +412,11 @@ proof
   have vmuS: S.vm in univ(1) by simp(Su)
   have g0 := mp(all_elim(abi.get_ok, {abi.sp(S)}, {objs}, {mem}, {S}), Su, ou, hmu)
   have wu := mp(restrict_univ[u := 1, f := x7, d := abi.WKEYS], x7u)
-  have hm0: abi.world_matches(S.vm, S.vm, restrict(x7, abi.WKEYS).vm, abi.objs_at(objs, S.fs_base), abi.sp(S)) by simp(hwmS, keep(abi.world_matches, abi.objs_at))
+  have wt0 := apply(abi.world_typed, hM, hot, hmv, wun)
+  have _ _ apw := apply(abi.ghost_parts_w, hg, hh, wt0)
+  have co: restrict(x7, abi.WKEYS).objs = abi.objs_at(objs, S.fs_base) by simp(x7e, mp(all_elim(apw, {"objs"}), simp()), a6)
+  have hm0: abi.world_matches(S.vm, S.vm, restrict(x7, abi.WKEYS).vm, abi.wob(objs, restrict(x7, abi.WKEYS).objs.c_bytes), S.fs_base, abi.sp(S))
+    by simp(rewrite(all_elim(abi.objs_at_wob, {objs}, {S.fs_base}), hwmS.2), co, all_elim(abi.objs_at_live, {objs}, {S.fs_base}), keep(abi.world_matches, abi.canary))
   have s0 := mp(all_elim(abi.set_ok, {abi.sp(S)}, {objs}, {mem}, {S}, {restrict(x7, abi.WKEYS)}, {S.vm}), Su, wu, vmuS, hsvS, hm0)
   have m1u2: mm1 in univ(1) := rewrite(sym(m1e), Su)
   // the crash state: M1, a machine with the ghost part h; its I/O as overflow_ok has it
@@ -422,7 +438,7 @@ theorem abi.ret_case_g: all G f spec args objs mem s h m1 w2 h2. abi.ghost_ok(G)
   s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> m1 in x86_64_linux.Machine -> pair(s, ok(m1, empty)) in univ(1) ->
   objs in set_type(omega) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
   runs(spec[args], union2(abi.view(s, objs, mem), h), ok(union2(w2, h2), pair(m1.gpr[0], m1.gpr[2]))) -> w2 in abi.World -> w2 in univ(1) ->
-  abi.world_matches(s.vm, m1.vm, w2.vm, abi.objs_at(objs, s.fs_base), abi.sp(s)) -> m1.os = w2.os -> m1.fs_base = s.fs_base ->
+  abi.world_matches(s.vm, m1.vm, w2.vm, abi.wob(objs, w2.objs.c_bytes), s.fs_base, abi.sp(s)) -> m1.os = w2.os -> m1.fs_base = s.fs_base ->
   m1.cpu = s.cpu -> m1.gs_base = s.gs_base -> m1.rip = abi.ret(s) -> m1.gpr[4] = abi.sp(s) ->
   abi.callee_saved(m1, s) -> !m1.flags.df ->
   runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), ok(union2(m1, h2), empty))
@@ -434,7 +450,7 @@ proof
   have ok0 := apply(abi.ok_univ, hp)
   have su: s in univ(1) by taut(ok0)
   have m1u: m1 in univ(1) by taut(ok0)
-  have Su x7e m1e hwmS hobS hsvS hspS apS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
+  have Su x7e m1e hwmS hobS hsvS hspS apS hcoS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hwm, hob)
   have rW gW apW := apply(abi.ghost_parts_w, hg, hh2, hw)
   have hu2 _ _ := mp(all_elim(hg, {h2}), hh2)
   have W2u: W2 in univ(1) := mp(union2_univ[u := 1, a := w2, b := h2], hwu, hu2)
@@ -457,9 +473,10 @@ proof
   have tx: m1.xmm in fn_space(x86_64_linux.Reg, bits(128)) by simp(hM1)
   have fu: m1.flags in univ(1) by simp(m1u)
   have tf: m1.flags in x86_64_linux.Flags by simp(hM1)
-  have hnmS := rewrite(sym(mp(all_elim(apS, {"fs_base"}), simp())), rewrite(sym(a1), rewrite(sym(a8), rewrite(sym(c8), hnm))))
+  have co8 := mp(all_elim(apW, {"objs"}), simp())
+  have hnmS := rewrite(sym(mp(all_elim(apS, {"fs_base"}), simp())), rewrite(sym(a1), rewrite(sym(a8), rewrite(sym(c8), rewrite(sym(co8), hnm)))))
   have rt := apply(abi.ret_intro_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {S}, {m1.vm}, {W2}, {m1.gpr[0]}, {m1.gpr[2]}, {m1.gpr}, {m1.xmm}, {m1.flags},
-    Su, ou, hmu, hsvS, hspS, hobS, hwmS, hspec, W2u, h0, h1, hnu, hnv, hnmS, gu, tg, xu, tx, fu, tf)
+    Su, ou, hmu, hsvS, hspS, hobS, hwmS, hcoS, hspec, W2u, h0, h1, hnu, hnv, hnmS, gu, tg, xu, tx, fu, tf)
   have rt2 := rewrite(m1e, rt)
   // its final state is m1 with h2: the ghost parts carried past the
   // machine's fields (h at the entry, h2 from the spec's world)
@@ -790,7 +807,7 @@ proof
   // a return
   have c2: (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine &&
       runs(low[args], abi.view(s, objs, mem), ok(w2, pair(m1.gpr[0], m1.gpr[2]))) && w2 in abi.World && w2 in univ(1) &&
-      abi.world_matches(s.vm, m1.vm, w2.vm, abi.objs_at(objs, s.fs_base), abi.sp(s)) && m1.os = w2.os && m1.fs_base = s.fs_base &&
+      abi.world_matches(s.vm, m1.vm, w2.vm, abi.wob(objs, w2.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w2.os && m1.fs_base = s.fs_base &&
       m1.cpu = s.cpu && m1.gs_base = s.gs_base && m1.rip = abi.ret(s) && m1.gpr[4] = abi.sp(s) &&
       abi.callee_saved(m1, s) && !m1.flags.df) -> GOAL proof
     assume hc

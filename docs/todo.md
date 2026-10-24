@@ -105,9 +105,10 @@ the break within the user space (`brk_ok`), the auxiliary vector apart
 from the data (`fresh_ok.auxv_ctx`); and the ABI's entry its
 `brk_start_ok`.
 
-The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: no byte
-of the allocator's ranges the ABI's); the claim's `rep` does not (the
-`frame` law says nothing of the world's objects). The top-level proof
+The internal specs' `holds_in` has `shown` (`mallocng.shown_in`: the
+allocator's bytes the C world's, its reserve's pages valid); the
+claim's `rep` does not (the `frame` law says nothing of the world's
+bytes). The top-level proof
 (rep to holds_in at each allocator call) establishes it as it does
 `tls_apart`: the thread block (the canary at fs + 40) apart from the
 allocator's memory -- at the empty heap, from the context, the tables

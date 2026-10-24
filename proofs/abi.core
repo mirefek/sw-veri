@@ -20,7 +20,7 @@ abbrev abi.ARGS := set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6))
 abbrev abi.sp(s) := bits_add(64, s.gpr[4], 8)
 abbrev abi.ret(s) := x86_64_linux.le(s.vm.bytes, s.gpr[4], 8)
 // the world of the machine state m, with the stack objects objs, its
-// memory mem (a view of m's), the ABI's bytes hidden
+// memory mem (a view of m's), all bytes its own but the ABI's
 abbrev abi.wo(m, objs, mem) := fn_update(fn_update(fn_update(fn_update(fn_update(empty, "vm", mem), "os", m.os), "fs_base", m.fs_base), "cpu", m.cpu), "objs", abi.objs_at(objs, m.fs_base))
 // ... in the merged state of abi_call (no ghost state)
 abbrev abi.cw(m, objs, mem) := rec_merge(abi.wo(m, objs, mem), ghost_part(m, abi.KEYS))
@@ -28,7 +28,12 @@ abbrev abi.cw(m, objs, mem) := rec_merge(abi.wo(m, objs, mem), ghost_part(m, abi
 abbrev abi.view(s, objs, mem) := abi.wo(s, objs, mem)
 // mem a view of s's memory (as abi_function requires): its pages, its
 // bytes on the world's domain
-abbrev abi.view_ok(s, objs, mem) := abi.world_pages(s.vm, mem) && abi.world_matches(s.vm, s.vm, mem, abi.objs_at(objs, s.fs_base), abi.sp(s))
+abbrev abi.view_ok(s, objs, mem) := abi.world_pages(s.vm, mem) && abi.world_matches(s.vm, s.vm, mem, abi.objs_at(objs, s.fs_base), s.fs_base, abi.sp(s))
+// the world's bytes as a world written back has them: the callers' objects
+// objs, its own bytes own (`world.set`)
+abbrev abi.wob(objs, cb) := fn_update(fn_update(empty, "live", objs), "c_bytes", cb)
+// the C world's bytes at an entry: all but the ABI's
+abbrev abi.cbytes0(fs) := set_select(omega, x0. !(x0 in abi.canary(fs)))
 abbrev abi.outcome(o) := (ex m1 e. o = ok(m1, e)) || (ex m1 e. o = exc(m1, e)) || (ex t. o = diverge(t))
 // the callee-saved registers of m as at entry s
 abbrev abi.callee_saved(m, s) := m.gpr[3] = s.gpr[3] && m.gpr[5] = s.gpr[5] &&
@@ -50,94 +55,178 @@ proof
   show := conj(t, u)
 qed
 
+// (the C world's bytes at an entry: the same)
+theorem abi.cbytes0_type: all fs. abi.cbytes0(fs) in set_type(omega) && abi.cbytes0(fs) in univ(1)
+proof
+  fix fs
+  have ss: subset(abi.cbytes0(fs), omega) proof
+    fix x
+    assume h
+    show by taut(set_select_def[s := omega, p := x0. !(x0 in abi.canary(fs)), z := x], h)
+  qed
+  have t: abi.cbytes0(fs) in set_type(omega) by defs(taut(powerset_def[s := omega, a := abi.cbytes0(fs)], ss), set_type)
+  have u := mp(univ_subset[u := 1, a := abi.cbytes0(fs), b := omega], omega_univ, ss)
+  show := conj(t, u)
+qed
+
+// (a byte of the C world's at an entry: one not the ABI's)
+theorem abi.cbytes0_in: all fs x. x in abi.cbytes0(fs) <-> x in omega && !(x in abi.canary(fs))
+proof
+  fix fs x
+  show := set_select_def[s := omega, p := x0. !(x0 in abi.canary(fs)), z := x]
+qed
+
 theorem abi.objs_at_univ: all objs fs. objs in univ(1) -> abi.objs_at(objs, fs) in univ(1)
 proof
   fix objs fs
   assume ho
-  have c := all_elim(abi.canary_type, {fs})
+  have c := all_elim(abi.cbytes0_type, {fs})
   show by defs(simp(ho, c.2), abi.objs_at)
+qed
+
+// (the world's bytes of the parts objs and own: of type Objs)
+theorem abi.wob_typed: all objs own. objs in set_type(omega) -> own in set_type(omega) -> own in univ(1) -> abi.wob(objs, own) in abi.Objs && abi.wob(objs, own) in univ(1)
+proof
+  fix objs own
+  assume ht hot hou
+  let O := abi.wob(objs, own)
+  have hs: subset(objs, omega) by taut(powerset_def[s := omega, a := objs], expand(ht, set_type))
+  have hu := mp(univ_subset[u := 1, a := objs, b := omega], omega_univ, hs)
+  have ou: O in univ(1) by simp(hu, hou)
+  have de := dom_empty
+  have f0: is_fun(empty) by taut(de)
+  have d0: dom(empty) = empty by taut(de)
+  have f1 := mp(fn_update_fun[f := empty, k := "live", v := objs], f0)
+  have d1 := mp(dom_update[f := empty, k := "live", v := objs], f0)
+  have f2 := mp(fn_update_fun[f := fn_update(empty, "live", objs), k := "c_bytes", v := own], f1)
+  have d2 := mp(dom_update[f := fn_update(empty, "live", objs), k := "c_bytes", v := own], f1)
+  have dset: all x. x in insert("c_bytes", insert("live", empty)) <-> x in insert("live", insert("c_bytes", empty)) proof
+    fix x
+    have l: x in insert("c_bytes", insert("live", empty)) -> x in insert("live", insert("c_bytes", empty)) proof
+      assume h
+      show by simp(h)
+    qed
+    have r: x in insert("live", insert("c_bytes", empty)) -> x in insert("c_bytes", insert("live", empty)) proof
+      assume h
+      show by simp(h)
+    qed
+    show by taut(l, r)
+  qed
+  have deq := mp(set_ext[a := insert("c_bytes", insert("live", empty)), b := insert("live", insert("c_bytes", empty))], dset)
+  have fO: is_fun(O) := f2
+  have dO: dom(O) = insert("live", insert("c_bytes", empty)) by simp(d2, d1, d0, deq)
+  have eL: O.live = objs by simp()
+  have eH: O.c_bytes = own by simp()
+  have pO: ((is_fun(O) && dom(O) = insert("live", insert("c_bytes", empty))) && O.live in set_type(omega)) && O.c_bytes in set_type(omega) by simp(fO, dO, eL, eH, ht, hot)
+  have r := mp(rec_type_intro[u := 1, k := insert("live", insert("c_bytes", empty)), p := x0. ((is_fun(x0) && dom(x0) = insert("live", insert("c_bytes", empty))) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega), r := O], ou, fO, dO, pO)
+  show by defs(conj(r, ou), abi.Objs)
 qed
 
 theorem abi.objs_at_typed: all objs fs. objs in set_type(omega) -> abi.objs_at(objs, fs) in abi.Objs
 proof
   fix objs fs
   assume ht
-  let O := abi.objs_at(objs, fs)
-  have hs: subset(objs, omega) by taut(powerset_def[s := omega, a := objs], expand(ht, set_type))
-  have hu := mp(univ_subset[u := 1, a := objs, b := omega], omega_univ, hs)
-  have c := all_elim(abi.canary_type, {fs})
-  have ou := mp(all_elim(abi.objs_at_univ, {objs}, {fs}), hu)
-  have de := dom_empty
-  have f0: is_fun(empty) by taut(de)
-  have d0: dom(empty) = empty by taut(de)
-  have f1 := mp(fn_update_fun[f := empty, k := "live", v := objs], f0)
-  have d1 := mp(dom_update[f := empty, k := "live", v := objs], f0)
-  have f2 := mp(fn_update_fun[f := fn_update(empty, "live", objs), k := "hidden", v := abi.canary(fs)], f1)
-  have d2 := mp(dom_update[f := fn_update(empty, "live", objs), k := "hidden", v := abi.canary(fs)], f1)
-  have dset: all x. x in insert("hidden", insert("live", empty)) <-> x in insert("live", insert("hidden", empty)) proof
-    fix x
-    have l: x in insert("hidden", insert("live", empty)) -> x in insert("live", insert("hidden", empty)) proof
-      assume h
-      show by simp(h)
-    qed
-    have r: x in insert("live", insert("hidden", empty)) -> x in insert("hidden", insert("live", empty)) proof
-      assume h
-      show by simp(h)
-    qed
-    show by taut(l, r)
-  qed
-  have deq := mp(set_ext[a := insert("hidden", insert("live", empty)), b := insert("live", insert("hidden", empty))], dset)
-  have fO: is_fun(O) by defs(f2, abi.objs_at)
-  have dO: dom(O) = insert("live", insert("hidden", empty)) by defs(simp(d2, d1, d0, deq), abi.objs_at)
-  have eL: O.live = objs by defs(simp(), abi.objs_at)
-  have eH: O.hidden = abi.canary(fs) by defs(simp(), abi.objs_at)
-  have pO: ((is_fun(O) && dom(O) = insert("live", insert("hidden", empty))) && O.live in set_type(omega)) && O.hidden in set_type(omega) by simp(fO, dO, eL, eH, ht, c.1, keep(abi.objs_at, abi.canary))
-  have r := mp(rec_type_intro[u := 1, k := insert("live", insert("hidden", empty)), p := x0. ((is_fun(x0) && dom(x0) = insert("live", insert("hidden", empty))) && x0.live in set_type(omega)) && x0.hidden in set_type(omega), r := O], ou, fO, dO, pO)
-  show by defs(r, abi.Objs)
+  have c := all_elim(abi.cbytes0_type, {fs})
+  have r := mp(all_elim(abi.wob_typed, {objs}, {abi.cbytes0(fs)}), ht, c.1, c.2)
+  show by defs(r.1, abi.objs_at)
 qed
 
-// (the world's bytes beyond its pages: sets of numbers)
-theorem abi.objs_parts: all o. o in abi.Objs -> o.live in set_type(omega) && o.hidden in set_type(omega)
+// (the world's bytes: sets of numbers)
+theorem abi.objs_parts: all o. o in abi.Objs -> o.live in set_type(omega) && o.c_bytes in set_type(omega)
 proof
   fix o
   assume h
-  show by taut(set_select_def[s := powerset(cart(insert("live", insert("hidden", empty)), univ(1))),
-    p := x0. ((is_fun(x0) && dom(x0) = insert("live", insert("hidden", empty))) && x0.live in set_type(omega)) && x0.hidden in set_type(omega), z := o], expand(h, abi.Objs))
+  show by taut(set_select_def[s := powerset(cart(insert("live", insert("c_bytes", empty)), univ(1))),
+    p := x0. ((is_fun(x0) && dom(x0) = insert("live", insert("c_bytes", empty))) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega), z := o], expand(h, abi.Objs))
 qed
 
-// (other live objects: the world's bytes beyond its pages still)
+// (other live objects: the world's bytes still)
 theorem abi.objs_live_typed: all o y. o in abi.Objs -> o in univ(1) -> y in set_type(omega) -> y in univ(1) -> fn_update(o, "live", y) in abi.Objs
 proof
   fix o y
   assume ho hu hy hyu
   let O := fn_update(o, "live", y)
-  let K := insert("live", insert("hidden", empty))
+  let K := insert("live", insert("c_bytes", empty))
   have op := apply(abi.objs_parts, ho)
   have pf pd := (is_fun(o) && dom(o) = K by taut(set_select_def[s := powerset(cart(K, univ(1))),
-    p := x0. ((is_fun(x0) && dom(x0) = K) && x0.live in set_type(omega)) && x0.hidden in set_type(omega), z := o], expand(ho, abi.Objs)))
+    p := x0. ((is_fun(x0) && dom(x0) = K) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega), z := o], expand(ho, abi.Objs)))
   have fO := mp(fn_update_fun[f := o, k := "live", v := y], pf)
   have dO0 := mp(fn_update_dom[f := o, k := "live", v := y], pf, (("live" in dom(o)) by simp(pd)))
   have dO: dom(O) = K := trans(dO0, pd)
-  have hO: O.hidden = o.hidden := mp(app_update_other[f := o, k := "live", v := y, x := "hidden"], simp())
+  have hO: O.c_bytes = o.c_bytes := mp(app_update_other[f := o, k := "live", v := y, x := "c_bytes"], simp())
   have lO: O.live = y by simp(pf)
-  have pO: ((is_fun(O) && dom(O) = K) && O.live in set_type(omega)) && O.hidden in set_type(omega) by simp(fO, dO, lO, hO, hy, op.2, keep(set_type))
+  have pO: ((is_fun(O) && dom(O) = K) && O.live in set_type(omega)) && O.c_bytes in set_type(omega) by simp(fO, dO, lO, hO, hy, op.2, keep(set_type))
   have ou: O in univ(1) by simp(hu, hyu)
-  have r := mp(rec_type_intro[u := 1, k := K, p := x0. ((is_fun(x0) && dom(x0) = K) && x0.live in set_type(omega)) && x0.hidden in set_type(omega), r := O], ou, fO, dO, pO)
+  have r := mp(rec_type_intro[u := 1, k := K, p := x0. ((is_fun(x0) && dom(x0) = K) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega), r := O], ou, fO, dO, pO)
   show by defs(r, abi.Objs)
 qed
 
-// (the live objects of the ABI's world at an entry)
-theorem abi.objs_at_live: all l fs. abi.objs_at(l, fs).live = l && abi.objs_at(l, fs).hidden = abi.canary(fs)
+// (the world's bytes with other live objects: of their parts)
+theorem abi.objs_eta: all o y. o in abi.Objs -> fn_update(o, "live", y) = abi.wob(y, o.c_bytes)
+proof
+  fix o y
+  assume ho
+  let K := insert("live", insert("c_bytes", empty))
+  let B := abi.wob(y, o.c_bytes)
+  have pf pd := (is_fun(o) && dom(o) = K by taut(set_select_def[s := powerset(cart(K, univ(1))),
+    p := x0. ((is_fun(x0) && dom(x0) = K) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega), z := o], expand(ho, abi.Objs)))
+  have fA := mp(fn_update_fun[f := o, k := "live", v := y], pf)
+  have dA0 := mp(fn_update_dom[f := o, k := "live", v := y], pf, (("live" in dom(o)) by simp(pd)))
+  have dA: dom(fn_update(o, "live", y)) = K := trans(dA0, pd)
+  have de := dom_empty
+  have f1 := mp(fn_update_fun[f := empty, k := "live", v := y], de.1)
+  have d1 := mp(dom_update[f := empty, k := "live", v := y], de.1)
+  have fB := mp(fn_update_fun[f := fn_update(empty, "live", y), k := "c_bytes", v := o.c_bytes], f1)
+  have d2 := mp(dom_update[f := fn_update(empty, "live", y), k := "c_bytes", v := o.c_bytes], f1)
+  have dset: all x. x in insert("c_bytes", insert("live", empty)) <-> x in K proof
+    fix x
+    have l: x in insert("c_bytes", insert("live", empty)) -> x in K proof
+      assume h
+      show by simp(h)
+    qed
+    have r: x in K -> x in insert("c_bytes", insert("live", empty)) proof
+      assume h
+      show by simp(h)
+    qed
+    show by taut(l, r)
+  qed
+  have dB: dom(B) = K by simp(d2, d1, de, mp(set_ext[a := insert("c_bytes", insert("live", empty)), b := K], dset))
+  have vals: all k. k in dom(fn_update(o, "live", y)) -> fn_update(o, "live", y)[k] = B[k] proof
+    fix k
+    assume hk
+    have k2: k = "live" || k = "c_bytes" by simp(rewrite(dA, hk))
+    have c1: k = "live" -> fn_update(o, "live", y)[k] = B[k] proof
+      assume e
+      show by simp(e)
+    qed
+    have c2: k = "c_bytes" -> fn_update(o, "live", y)[k] = B[k] proof
+      assume e
+      show by simp(e)
+    qed
+    show by taut(k2, c1, c2)
+  qed
+  show := mp(rec_ext[a := fn_update(o, "live", y), b := B], fA, fB, trans(dA, sym(dB)), vals)
+qed
+
+// (the live objects of the ABI's world at an entry, its own bytes)
+theorem abi.objs_at_live: all l fs. abi.objs_at(l, fs).live = l && abi.objs_at(l, fs).c_bytes = abi.cbytes0(fs)
 proof
   fix l fs
   show by defs(simp(keep(abi.canary)), abi.objs_at)
 qed
 
-// (other live objects, the same ABI's bytes)
+// (the world's bytes at an entry: its parts)
+theorem abi.objs_at_wob: all l fs. abi.objs_at(l, fs) = abi.wob(l, abi.cbytes0(fs))
+proof
+  fix l fs
+  show by defs(simp(keep(abi.canary)), abi.objs_at)
+qed
+
+// (other live objects, the same own bytes)
 theorem abi.objs_at_upd: all v y fs. fn_update(abi.objs_at(v, fs), "live", y) = abi.objs_at(y, fs)
 proof
   fix v y fs
-  have sw := mp(fn_update_swap[f := fn_update(empty, "live", v), k := "hidden", a := abi.canary(fs), j := "live", b := y], simp())
+  have sw := mp(fn_update_swap[f := fn_update(empty, "live", v), k := "c_bytes", a := abi.cbytes0(fs), j := "live", b := y], simp())
   have tw := fn_update_twice[f := empty, k := "live", a := v, b := y]
   show by defs(rewrite(tw, sw), abi.objs_at)
 qed
@@ -150,7 +239,7 @@ proof
   show by simp(hs, ho, hm, c)
 qed
 
-theorem abi.set_ok: all sp objs mem s w nv. s in univ(1) -> w in univ(1) -> nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(s.vm, nv, w.vm, abi.objs_at(objs, s.fs_base), sp) ->
+theorem abi.set_ok: all sp objs mem s w nv. s in univ(1) -> w in univ(1) -> nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(s.vm, nv, w.vm, abi.wob(objs, w.objs.c_bytes), s.fs_base, sp) ->
   runs(abi.world.set(sp, objs, mem, w), s, ok(fn_update(fn_update(s, "vm", nv), "os", w.os), empty))
 proof
   fix sp objs mem s w nv
@@ -167,11 +256,12 @@ qed
 
 theorem abi.ub_intro_g: all G f spec args objs mem s o. pair(s, o) in univ(1) -> abi.outcome(o) -> objs in univ(1) -> mem in univ(1) ->
   s.vm in x86_64_linux.Vm -> s.gpr[4] in bits(64) -> abi.view_ok(s, objs, mem) ->
+  abi.cw(s, objs, mem).objs = abi.objs_at(objs, s.fs_base) ->
   abi.spec_raises(rec_and(abi.World, G), abi.cw(s, objs, mem), spec, args) ->
   runs(abi.abi_function(G, f, spec, args, objs, mem), s, o)
 proof
   fix G f spec args objs mem s o
-  assume hu ho hou hmu hsv hsp hwm hr
+  assume hu ho hou hmu hsv hsp hwm hco hr
   have su: s in univ(1) by simp(hu)
   have gp := mp(all_elim(abi.get_ok, {abi.sp(s)}, {objs}, {mem}, {s}), su, hou, hmu)
   have c := mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), hou)
@@ -180,7 +270,8 @@ proof
   have cwu: abi.cw(s, objs, mem) in univ(1) by simp(wun, gpu)
   have wu := mp(restrict_univ[u := 1, f := abi.cw(s, objs, mem), d := abi.WKEYS], cwu)
   have vmu: s.vm in univ(1) by simp(su)
-  have hm2: abi.world_matches(s.vm, s.vm, restrict(abi.cw(s, objs, mem), abi.WKEYS).vm, abi.objs_at(objs, s.fs_base), abi.sp(s)) by simp(hwm, keep(abi.world_matches))
+  have hw2 := rewrite(all_elim(abi.objs_at_wob, {objs}, {s.fs_base}), hwm.2)
+  have hm2: abi.world_matches(s.vm, s.vm, restrict(abi.cw(s, objs, mem), abi.WKEYS).vm, abi.wob(objs, restrict(abi.cw(s, objs, mem), abi.WKEYS).objs.c_bytes), s.fs_base, abi.sp(s)) by simp(hw2, hco, all_elim(abi.objs_at_live, {objs}, {s.fs_base}), keep(abi.world_matches, abi.canary))
   have st := mp(all_elim(abi.set_ok, {abi.sp(s)}, {objs}, {mem}, {s}, {restrict(abi.cw(s, objs, mem), abi.WKEYS)}, {s.vm}), su, wu, vmu, hsv, hm2)
   show by simp(hu, ho, wun, gp, st, hr, gpu, cwu, keep(abi.world_pages, abi.world_matches, abi.spec_raises, abi.entry_ok, abi.world.get, abi.world.set))
 qed
@@ -188,6 +279,7 @@ qed
 // ... with no ghost state
 theorem abi.ub_intro: all f spec args objs mem s o. pair(s, o) in univ(1) -> abi.outcome(o) -> objs in univ(1) -> mem in univ(1) ->
   s.vm in x86_64_linux.Vm -> s.gpr[4] in bits(64) -> abi.view_ok(s, objs, mem) ->
+  abi.cw(s, objs, mem).objs = abi.objs_at(objs, s.fs_base) ->
   abi.spec_raises(rec_and(abi.World, single(empty)), abi.cw(s, objs, mem), spec, args) ->
   runs(abi.abi_function(single(empty), f, spec, args, objs, mem), s, o)
 proof
@@ -198,7 +290,7 @@ qed
 // the result (r0, r1) in the merged state.
 theorem abi.call_ok: all spec args sp objs mem m nv w2 r0 r1. m in univ(1) -> objs in univ(1) -> mem in univ(1) ->
   runs(spec[args], abi.cw(m, objs, mem), ok(w2, pair(r0, r1))) -> w2 in univ(1) ->
-  nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(m.vm, nv, w2.vm, abi.objs_at(objs, m.fs_base), sp) -> r0 in univ(1) -> r1 in univ(1) ->
+  nv in univ(1) -> nv in x86_64_linux.Vm -> abi.world_matches(m.vm, nv, w2.vm, abi.wob(objs, w2.objs.c_bytes), m.fs_base, sp) -> r0 in univ(1) -> r1 in univ(1) ->
   runs(abi.abi_call(single(empty), spec, args, sp, objs, mem), m, ok(rec_merge(restrict(fn_update(fn_update(m, "vm", nv), "os", w2.os), abi.KEYS),
     ghost_part(w2, abi.WKEYS)), pair(r0, r1)))
 proof
@@ -206,7 +298,7 @@ proof
   assume mu ou hmu hspec wu nu hnv hnm r0u r1u
   have g := mp(all_elim(abi.get_ok, {sp}, {objs}, {mem}, {m}), mu, ou, hmu)
   have w2r := mp(restrict_univ[u := 1, f := w2, d := abi.WKEYS], wu)
-  have hnm1: abi.world_matches(m.vm, nv, restrict(w2, abi.WKEYS).vm, abi.objs_at(objs, m.fs_base), sp) by simp(hnm, keep(abi.world_matches))
+  have hnm1: abi.world_matches(m.vm, nv, restrict(w2, abi.WKEYS).vm, abi.wob(objs, restrict(w2, abi.WKEYS).objs.c_bytes), m.fs_base, sp) by simp(hnm, keep(abi.world_matches))
   have st := mp(all_elim(abi.set_ok, {sp}, {objs}, {mem}, {m}, {restrict(w2, abi.WKEYS)}, {nv}), mu, w2r, nu, hnv, hnm1)
   have c := mp(all_elim(abi.objs_at_univ, {objs}, {m.fs_base}), ou)
   have wun: abi.wo(m, objs, mem) in univ(1) by simp(mu, ou, hmu, c)

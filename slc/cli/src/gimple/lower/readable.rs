@@ -287,14 +287,15 @@ impl<'a> Lower<'a> {
         if !rx.params.is_empty() {
             writeln!(s, "  require len(args) >= {}", rx.params.len()).unwrap();
         }
-        // (a function's stack objects end with it: the world's as before;
-        // GCC's stack protector with them -- the canary word at fs:0x28 --
-        // the ABI's, hidden from the world: the bridge's, not the spec's)
+        // (a function's stack objects end with it: the world's as before --
+        // its own bytes as the function left them; GCC's stack protector
+        // with them -- the canary word at fs:0x28 -- the ABI's, never the
+        // world's: the bridge's, not the spec's)
         let has_objs = !rx.fx.obj_list.is_empty();
         if has_objs {
-            writeln!(s, "  let objs0 = objs").unwrap();
+            writeln!(s, "  let live0 = objs.live").unwrap();
         }
-        let drop = if has_objs { "\n  objs := objs0" } else { "" };
+        let drop = if has_objs { "\n  objs := objs with { live: live0 }" } else { "" };
         match ret_ty {
             None => writeln!(s, "  {}({}){drop}\n  return (any bits[64], any bits[64])", fname, call_args.join(", ")).unwrap(),
             Some(_) if two_words => writeln!(s, "  let (r0, r1) = {}({}){drop}\n  return (r0, r1)", fname, call_args.join(", ")).unwrap(),

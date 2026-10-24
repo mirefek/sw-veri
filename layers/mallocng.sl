@@ -564,13 +564,13 @@ pred fp_mapped(rs: List[(nat, nat)], blocks: Addr -> Option[nat], vm: Vm) =
 // no slot handed out and not yet framed (between the allocator's calls)
 pred no_reserved(A: Abs) = all g: nat, i: nat. i < len(A.slots[g]) -> A.slots[g][i] != reserved
 
-// the allocator's memory the C world's: none of its bytes the ABI's own
-// (`objs.hidden`), nor any on the reserve's pages (the kernel's to
-// reprotect: the C world's pages)
-pred fp_shown(rs: List[(nat, nat)], objs: Objs) = all a: nat. in_ranges(a, rs) -> a notin objs.hidden
+// the allocator's memory the C world's: its bytes the C world's (its
+// data may share a page with what is not: the thread's descriptor), the
+// reserve's pages all of them (the kernel's to reprotect: valid pages)
+pred fp_shown(rs: List[(nat, nat)], objs: Objs) = all a: nat. in_ranges(a, rs) -> a in objs.c_bytes
 pred shown_in(c: Cfg, A: Abs, objs: Objs) =
   fp: fp_shown(fp_ranges(c, A), objs) &&
-  rsv: (A.reserve_cnt > 0 -> all a: nat. a in objs.hidden -> !(A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt))
+  rsv: (A.reserve_cnt > 0 -> all a: nat. A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt -> a in objs.c_bytes)
 
 pred rep(c: Cfg, A: Abs, s: Heap) =
   inv: holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&

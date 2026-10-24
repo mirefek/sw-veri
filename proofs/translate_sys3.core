@@ -213,7 +213,7 @@ theorem tr.mprot_world(s, m, w, v, A, L, PR, V, r): tr.mem(s, m, w, v) -> abi.st
   ex WV p n. WV in x86_64_linux.Vm &&
     ((!(int_mod(A, x86_64_linux.PAGE) = 0) && WV = w.vm && r = x86_64_linux.err(x86_64_linux.EINVAL)) ||
      (int_mod(A, x86_64_linux.PAGE) = 0 && gimple.mprot_post(w.vm, WV, A, L, PR) && r = gimple.mprot_ret(w.vm, A, L))) &&
-    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
 proof
   assume hm hr hmv hwv hA hL hsp hp
   have {wm} := hm
@@ -225,7 +225,7 @@ proof
   let GOAL := ex WV p n. WV in x86_64_linux.Vm &&
     ((!(int_mod(A, x86_64_linux.PAGE) = 0) && WV = w.vm && r = x86_64_linux.err(x86_64_linux.EINVAL)) ||
      (int_mod(A, x86_64_linux.PAGE) = 0 && gimple.mprot_post(w.vm, WV, A, L, PR) && r = gimple.mprot_ret(w.vm, A, L))) &&
-    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
   have po: P in omega by defs(arith(hA), x86_64_linux.page_of, x86_64_linux.PAGE)
   have no: N in omega by defs(arith(hL), x86_64_linux.pages_for, x86_64_linux.PAGE)
   have offw nxw hof := expand(hsp, gimple.sys_pages_ok)
@@ -287,7 +287,7 @@ proof
       (V.brk = w.vm.brk by rsimp(eV, brk)), pv, pw, bv)
     have mid: (!(int_mod(A, x86_64_linux.PAGE) = 0) && w.vm = w.vm && r = x86_64_linux.err(x86_64_linux.EINVAL)) ||
         (int_mod(A, x86_64_linux.PAGE) = 0 && gimple.mprot_post(w.vm, w.vm, A, L, PR) && r = gimple.mprot_ret(w.vm, A, L)) by taut(na, refl({w.vm}), er)
-    show by ex_intro({w.vm}, {0}, {0}, taut(hwv, mid, rewrite(sym(eV), hmv), ch, all_elim(g.hidden_off_0, {w.objs})))
+    show by ex_intro({w.vm}, {0}, {0}, taut(hwv, mid, rewrite(sym(eV), hmv), ch, tr.can_off_none[fs := s.fs_base]))
   qed
   // aligned: the pages P .. k-1 reprotected on both sides
   have k1: (ex k Q. int_mod(A, x86_64_linux.PAGE) = 0 && k in omega && int_le(P, k) && int_le(k, int_add(P, N)) &&
@@ -301,7 +301,7 @@ proof
     have nno: n in omega by arith(kl, ko, po)
     have ad: int_add(P, n) = k by arith(kl)
     have nle: int_le(n, N) by arith(ke, kl)
-    have hon := apply(g.hidden_off_sub, hof, nno, nle)
+    have hon := mp(tr.can_off_sub[fs := s.fs_base, p := P, n := N, k := n], apply(tr.valid_can_off, hm, hsp), nno, nle)
     have kin: all q. q in omega -> int_lt(q, k) -> int_lt(q, int_add(P, N)) proof
       fix q
       assume _ h2
@@ -436,12 +436,19 @@ proof
       have ql nn := expand(mw, x86_64_linux.mapped)
       have ns := mp(all_elim(nostk, {x86_64_linux.page_of(a)}), (x86_64_linux.page_of(a) in set_select(omega, x1. int_lt(x1, TSP)) by simp(qo, ql)), nn)
       have pe: x86_64_linux.page_of(a) = int_div(a, x86_64_linux.PAGE) by defs(refl({int_div(a, x86_64_linux.PAGE)}), x86_64_linux.page_of)
-      // (not the ABI's: none of its bytes on these pages)
+      // (the C world's: its page a valid one, the call's requirement)
       have ao: a in omega by simp(ha)
-      have nh0 := mp(all_elim(expand(hon, gimple.hidden_off), {a}), ao)
-      have nh1: !(a in w.objs.hidden) by taut(nh0, rewrite(pe, h1), rewrite(pe, h2))
+      have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+      have hrN: int_le(P, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(P, N)) by arith(h1, h2, nle)
+      have pv := mp(all_elim(hof, {x86_64_linux.page_of(a)}), qo, hrN, mw)
+      have _ pall := expand(pv, gimple.page_valid)
+      have i0: int_sub(a, int_mul(x86_64_linux.page_of(a), x86_64_linux.PAGE)) in omega by defs(arith(ao, pg4), x86_64_linux.page_of)
+      have i1: int_lt(int_sub(a, int_mul(x86_64_linux.page_of(a), x86_64_linux.PAGE)), x86_64_linux.PAGE) by defs(arith(ao, pg4), x86_64_linux.page_of)
+      have ow0 := mp(all_elim(pall, {int_sub(a, int_mul(x86_64_linux.page_of(a), x86_64_linux.PAGE))}), i0, i1)
+      have eq: int_add(int_mul(x86_64_linux.page_of(a), x86_64_linux.PAGE), int_sub(a, int_mul(x86_64_linux.page_of(a), x86_64_linux.PAGE))) = a by arith(ao)
+      have nh1: a in w.objs.c_bytes := rewrite(eq, ow0)
       have nh2 := rewrite(wob, nh1)
-      have dm: abi.in_domain(w.vm, abi.objs_at(v, s.fs_base), a) by defs(taut(rewrite(pe, mw), rewrite(pe, ns), nh2), abi.in_domain)
+      have dm: abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), a) by defs(taut(rewrite(pe, mw), rewrite(pe, ns), nh2), abi.in_domain)
       have eb := mp(all_elim(bytes, {a}), ha, dm)
       show by rsimp(wy, vbs, eb)
     qed

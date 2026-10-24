@@ -64,8 +64,12 @@ outcome.
     out of the stack's space.
   - Checked against the real CPU by differential testing (`slc cputest`).
 - **L1, the C world and the ABI** (`layers/abi.sl`). A C function sees:
-  - its memory: a partial byte map, the mapped pages that are not stack
-    pages plus the bytes of its live stack objects (`objs`);
+  - its memory: a partial byte map, the C world's bytes (`c_bytes`,
+    stored byte by byte: all but the ABI's, e.g. the stack protector's
+    word) on the mapped pages that are not stack pages, plus the bytes
+    of its live stack objects (`objs`); a valid page is a mapped one all
+    of whose bytes are the C world's (the kernel's calls touch only
+    those, and give only those);
   - the I/O, the thread pointer and the CPU features;
   - nothing of the stack, the registers, or where values live.
 

@@ -12,9 +12,20 @@ abbrev gc.regs_ok(regs, args) := regs in list_type(bits(64)) && seq_len(regs) = 
 abbrev gc.sound(w) := abi.thread_ok(w.vm, w.fs_base)
 // the page numbers
 abbrev gc.PN := set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)))
-// the callee's world w4 back with the caller's (w's) stack objects and
-// thread pointer
-abbrev gc.back(w4, w) := fn_update(fn_update(w4, "objs", w.objs), "fs_base", w.fs_base)
+// the callee's world w4 back with the caller's (w's) stack objects -- its
+// own bytes the callee's -- and thread pointer
+abbrev gc.back(w4, w) := fn_update(fn_update(w4, "objs", fn_update(w4.objs, "live", w.objs.live)), "fs_base", w.fs_base)
+
+// (a world's bytes with their own stack objects: themselves)
+theorem gc.objs_same: all w. w in abi.World -> fn_update(w.objs, "live", w.objs.live) = w.objs
+proof
+  fix w
+  assume hw
+  have ot: w.objs in abi.Objs by simp(expand(hw, abi.World))
+  have of od := (is_fun(w.objs) && dom(w.objs) = insert("live", insert("c_bytes", empty)) by taut(set_select_def[s := powerset(cart(insert("live", insert("c_bytes", empty)), univ(1))),
+    p := x0. ((is_fun(x0) && dom(x0) = insert("live", insert("c_bytes", empty))) && x0.live in set_type(omega)) && x0.c_bytes in set_type(omega), z := w.objs], expand(ot, abi.Objs)))
+  show := mp(fn_update_same[f := w.objs, k := "live"], of, ("live" in dom(w.objs) by simp(od)))
+qed
 
 // (a world with another memory, back with its own objects and thread
 // pointer: itself)
@@ -32,9 +43,11 @@ proof
   have fW2: "fs_base" in dom(fn_update(w, "vm", V)) := rewrite(sym(dW), fd)
   have aW := mp(app_update_other[f := w, k := "vm", v := V, x := "objs"], simp())
   have aF := mp(app_update_other[f := w, k := "vm", v := V, x := "fs_base"], simp())
-  have b1: fn_update(fn_update(w, "vm", V), "objs", w.objs) = fn_update(w, "vm", V) := rewrite(aW, mp(fn_update_same[f := fn_update(w, "vm", V), k := "objs"], fW, oW))
+  have os := apply(gc.objs_same, hw)
+  have b1: fn_update(fn_update(w, "vm", V), "objs", fn_update(fn_update(w, "vm", V).objs, "live", w.objs.live)) = fn_update(w, "vm", V)
+    by simp(os, vfun, od, mp(fn_update_same[f := fn_update(w, "vm", V), k := "objs"], fW, oW))
   have b2: fn_update(fn_update(w, "vm", V), "fs_base", w.fs_base) = fn_update(w, "vm", V) := rewrite(aF, mp(fn_update_same[f := fn_update(w, "vm", V), k := "fs_base"], fW, fW2))
-  show by simp(b1, b2, vfun, fd, od)
+  show by simp(b1, b2, vfun, fd, od, os)
 qed
 
 // (a bind from a known run of its first part)

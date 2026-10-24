@@ -12,44 +12,44 @@ layer abi uses x86_64_linux
 //  What a C function sees
 
 // What a C function sees: the machine's memory on the world's domain (a
-// partial byte map: the mapped pages that are not stack pages -- the
-// world's page map has none -- but for the ABI's own bytes on them, and
-// the bytes of the live stack objects -- address-taken locals it may
-// reach: `objs`),
+// partial byte map: the C world's bytes on the mapped pages that are not stack
+// pages -- the world's page map has none --, and the bytes of the live
+// stack objects -- address-taken locals it may reach: `objs`),
 // the I/O, the thread pointer, the CPU. Not the registers, and not the
 // stack: frames, spilled values, return addresses and the stack's growth are
 // the machine's own business (the ABI below constrains them); running out
 // of stack is a C function's only contact with it (`stack_overflow`).
 
-// The world's memory beyond its page map, byte by byte: the bytes of the
-// live stack objects (on stack pages, which the world has none of: in its
-// domain), and the bytes on its pages the ABI keeps for itself (the
-// thread's stack-protector word, `canary`: out of it -- no C function's,
-// whatever else its page holds).
-record Objs { live: Set[nat], hidden: Set[nat] }
+// The world's memory byte by byte: the C world's bytes (`c_bytes`: all
+// but the ABI's, which keeps some for itself -- `canary`; on its pages it
+// may use them as their page's protection allows) and the bytes of the
+// live stack objects (`live`: on stack pages, which the world has none
+// of). A valid page is a mapped one all of whose bytes are the C world's
+// (gimple.sl's `page_valid`).
+record Objs { live: Set[nat], c_bytes: Set[nat] }
 
 state World {
   vm      : Vm
   os      : Os
   fs_base : Addr          // thread pointer: TLS, errno
   cpu     : Cpu           // CPU features (fixed for the run)
-  objs    : Objs          // the memory beyond the page map: stack objects, the ABI's bytes
+  objs    : Objs          // the world's bytes: the C world's (not the ABI's), the stack objects
 }
 
 // the world's memory: the byte at a is in its domain
 pred in_domain(vm: Vm, objs: Objs, a: nat) =
-  a in objs.live || (mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.kind != stack && a notin objs.hidden)
+  a in objs.live || (mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.kind != stack && a in objs.c_bytes)
 
 // The stack protector's word (GCC's -fstack-protector, x86-64): at fs:0x28,
 // in the thread's descriptor. A function with arrays copies it to its
 // frame at its entry and compares the copy with it at its return (a
-// mismatch: __stack_chk_fail, the process aborts). The ABI's: hidden from
-// the C world, kept by every function (`world_matches`).
+// mismatch: __stack_chk_fail, the process aborts). The ABI's: never among
+// the C world's bytes, kept by every function (`world_matches`).
 fn canary(fs: Addr) -> Set[nat] = {a: nat | uint(fs) + 40 <= a && a < uint(fs) + 48}
 
-// the world's bytes beyond its pages at a function's entry: its callers'
-// stack objects `live` it may reach; the ABI's word hidden
-fn objs_at(live: Set[nat], fs: Addr) -> Objs = Objs { live: live, hidden: canary(fs) }
+// the world's bytes at a function's entry: its callers' stack objects
+// `live` it may reach; the C world's bytes all but the ABI's
+fn objs_at(live: Set[nat], fs: Addr) -> Objs = Objs { live: live, c_bytes: {a: nat | a notin canary(fs)} }
 
 // A C function specification: a program over the world (possibly extended
 // by ghost state of higher layers), from arguments to the value in rax.
@@ -79,14 +79,16 @@ pred stack_page(vm: Vm, p: nat) = mapped(vm, p) && vm.pages[p].value.kind = stac
 // pages the world's, or stack pages where the world has none (the stack
 // grew), and no stack pages in the world; the stack pages from the
 // callee's return address up (its return slot, the callers' frames) as
-// they were; the stack's reserve kept; the ABI's hidden bytes and their
-// pages as they were.
-pred world_matches(old: Vm, new: Vm, w: Vm, objs: Objs, sp: Addr) =
+// they were; the stack's reserve kept; the ABI's bytes of the thread `fs`
+// and their pages as they were, the C world's bytes all others (as at
+// the entry).
+pred world_matches(old: Vm, new: Vm, w: Vm, objs: Objs, fs: Addr, sp: Addr) =
   top: new.stack_top = w.stack_top && limit: new.stack_limit = w.stack_limit &&
   brk0: new.brk_start = w.brk_start && brk: new.brk = w.brk &&
   bytes: (all a: Addr. in_domain(w, objs, uint(a)) -> new.bytes[a] = w.bytes[a]) &&
   frames: (all a: Addr. uint(sp) <= uint(a) && !in_domain(w, objs, uint(a)) && stack_page(old, page_of(a)) -> new.bytes[a] = old.bytes[a]) &&
-  hid: (all a: Addr. uint(a) in objs.hidden -> new.bytes[a] = old.bytes[a] && new.pages[page_of(a)] = old.pages[page_of(a)]) &&
+  hid: (all a: Addr. uint(a) in canary(fs) -> new.bytes[a] = old.bytes[a] && new.pages[page_of(a)] = old.pages[page_of(a)]) &&
+  c_bytes: objs.c_bytes = {a: nat | a notin canary(fs)} &&
   pages: (all p: PageNo. new.pages[p] = w.pages[p] || (w.pages[p] = none && stack_page(new, p))) &&
   nostk: (all p: PageNo. w.pages[p] != none -> w.pages[p].value.kind != stack) &&
   stk: (all p: nat. stack_page(old, p) && (uint(sp) - 8) / PAGE <= p -> new.pages[p] = old.pages[p]) &&
@@ -101,8 +103,9 @@ pred world_pages(vm: Vm, mem: Vm) =
 // `objs` (above sp): the world's memory `mem`, a view of the machine's (at
 // the entry, abi_function: its pages but the stack's, and its bytes on the
 // world's domain -- what lies outside the domain is no C function's to
-// see; the ABI's own bytes hidden, `objs_at`). Writing a world back: its
-// domain the world's, the callers' frames kept, the stack below sp
+// see; the ABI's bytes not the C world's, `objs_at`). Writing a world
+// back: its domain the world's (its C world's bytes, the callers'
+// objects), the callers' frames kept, the stack below sp
 // arbitrary (the callee used it). The thread pointer is the thread's: a
 // function returns with it as it was (the stack protector compares the
 // word at fs:0x28 at the entry and at the return), as GIMPLE's call has it.
@@ -112,7 +115,7 @@ view[Machine] world(sp: Addr, objs: Set[nat], mem: Vm) : World {
   }
   set(w) {
     let old = vm
-    havoc vm where world_matches(old, vm, w.vm, objs_at(objs, fs_base), sp)
+    havoc vm where world_matches(old, vm, w.vm, Objs { live: objs, c_bytes: w.objs.c_bytes }, fs_base, sp)
     os      := w.os
   }
 }
@@ -316,7 +319,7 @@ proc[Machine & G] abi_function[G](f: Addr, spec: CFun2[World & G], args: Args, o
   require rip = f && entry_ok(self, args)
   let sp    = gpr[rsp] + 8
   require all a: nat. a in objs -> uint(sp) <= a && stack_page(vm, a / PAGE) && can_access(vm, bits[64](a), write)
-  require world_pages(vm, mem) && world_matches(vm, vm, mem, objs_at(objs, fs_base), sp)
+  require world_pages(vm, mem) && world_matches(vm, vm, mem, objs_at(objs, fs_base), fs_base, sp)
   let ret   = le(vm.bytes, gpr[rsp], 8)
   let saved = gpr
   let w0    = with world(sp, objs, mem) { return self }    // the world, with ghost state

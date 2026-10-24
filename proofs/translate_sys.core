@@ -184,7 +184,7 @@ proof
     assume h
     show by defs(taut(h), abi.in_domain)
   qed
-  have c2: (x86_64_linux.mapped(v1, int_div(a, x86_64_linux.PAGE)) && !(snd(v1.pages[int_div(a, x86_64_linux.PAGE)]).kind = 2)) && !(a in ob.hidden) -> abi.in_domain(v2, ob, a) proof
+  have c2: (x86_64_linux.mapped(v1, int_div(a, x86_64_linux.PAGE)) && !(snd(v1.pages[int_div(a, x86_64_linux.PAGE)]).kind = 2)) && a in ob.c_bytes -> abi.in_domain(v2, ob, a) proof
     assume h0
     have hm hk hh := h0
     have h := conj(hm, hk)
@@ -221,17 +221,108 @@ proof
   show by taut(e1, e2)
 qed
 
+// (the ABI's bytes off the pages p .. p+n-1)
+abbrev tr.can_off(fs, p, n) := all a. a in omega -> a in abi.canary(fs) -> !(int_le(p, int_div(a, x86_64_linux.PAGE)) && int_lt(int_div(a, x86_64_linux.PAGE), int_add(p, n)))
+
+// (no pages: none with an ABI's byte)
+theorem tr.can_off_none(fs): tr.can_off(fs, 0, 0)
+proof
+  fix a
+  assume ha hc
+  have po: int_div(a, x86_64_linux.PAGE) in omega by defs(simp(ha), x86_64_linux.PAGE)
+  show by arith(po)
+qed
+
+// (valid pages of the world: none of them has an ABI's byte -- the ABI's
+// bytes are on a page of the world's, not its own)
+theorem tr.valid_can_off(s, m, w, v, p, n): tr.mem(s, m, w, v) -> gimple.sys_pages_ok(w.vm, w.objs, p, n) -> tr.can_off(s.fs_base, p, n)
+proof
+  assume h hsp
+  have _ _ hv := expand(hsp, gimple.sys_pages_ok)
+  have {wm, cok} := h
+  have {pages} := wm
+  have hc fsb := cok
+  have o1 _ := apply(tr.mem_objs, h)
+  have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+  fix a
+  assume ha hca
+  have no: int_le(p, int_div(a, x86_64_linux.PAGE)) && int_lt(int_div(a, x86_64_linux.PAGE), int_add(p, n)) -> false proof
+    assume hr
+    have ci: a in omega && int_le(int_add(s.fs_base, 40), a) && int_lt(a, int_add(s.fs_base, 48))
+      by taut(set_select_def[s := omega, p := x0. int_le(int_add(s.fs_base, 40), x0) && int_lt(x0, int_add(s.fs_base, 48)), z := a], expand(hca, abi.canary))
+    have ca c1 c2 := ci
+    have fo: s.fs_base in omega by simp(fsb)
+    have io: int_sub(a, int_add(s.fs_base, 40)) in omega by arith(ca, c1, c2, fo)
+    have il: int_lt(int_sub(a, int_add(s.fs_base, 40)), 8) by arith(ca, c1, c2, fo)
+    have ea: int_add(int_add(s.fs_base, 40), int_sub(a, int_add(s.fs_base, 40))) = a by arith(ca, c1, c2, fo)
+    have _ hm0 := apply(tr.hid_pages, {s}, {m}, {w}, {v}, {int_sub(a, int_add(s.fs_base, 40))}, h, hc, fsb, io, il)
+    have hm := rewrite(ea, hm0)
+    have al: int_lt(a, 18446744073709551616) by simp(expand(hm, x86_64_linux.mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), ca)
+    have ab: a in bits(64) by simp(ca, al)
+    have _ ns _ _ := apply(tr.hid_at, {s}, {m}, {w}, {v}, {a}, h, hc, fsb, ab, hca)
+    // (its page: the world's, mapped)
+    let Q := int_div(a, x86_64_linux.PAGE)
+    have qo: Q in omega by arith(ca, pg4)
+    have qp: Q in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(expand(hm, x86_64_linux.mapped), qo)
+    have pc := mp(all_elim(pages, {Q}), qp)
+    have pe: m.vm.pages[Q] = w.vm.pages[Q] by taut(pc, ns)
+    have wmq: x86_64_linux.mapped(w.vm, Q) by defs(rewrite(pe, expand(hm, x86_64_linux.mapped)), x86_64_linux.mapped)
+    have pv := mp(all_elim(hv, {Q}), qo, hr, wmq)
+    have _ pall := expand(pv, gimple.page_valid)
+    have i0: int_sub(a, int_mul(Q, x86_64_linux.PAGE)) in omega by arith(ca, pg4)
+    have i1: int_lt(int_sub(a, int_mul(Q, x86_64_linux.PAGE)), x86_64_linux.PAGE) by arith(ca, pg4)
+    have ow0 := mp(all_elim(pall, {int_sub(a, int_mul(Q, x86_64_linux.PAGE))}), i0, i1)
+    have eq: int_add(int_mul(Q, x86_64_linux.PAGE), int_sub(a, int_mul(Q, x86_64_linux.PAGE))) = a by arith(ca)
+    have ow: a in abi.cbytes0(s.fs_base) := rewrite(o1, rewrite(eq, ow0))
+    show by taut(all_elim(abi.cbytes0_in, {s.fs_base}, {a}), ow, hca)
+  qed
+  show by taut(no)
+qed
+
+// (fewer pages from p: none with an ABI's byte either)
+theorem tr.can_off_sub(fs, p, n, k): tr.can_off(fs, p, n) -> k in omega -> int_le(k, n) -> tr.can_off(fs, p, k)
+proof
+  assume h hk hl
+  fix a
+  assume ha hc
+  have c := mp(all_elim(h, {a}), ha, hc)
+  have po: int_div(a, x86_64_linux.PAGE) in omega by defs(simp(ha), x86_64_linux.PAGE)
+  have no: int_le(p, int_div(a, x86_64_linux.PAGE)) && int_lt(int_div(a, x86_64_linux.PAGE), int_add(p, k)) -> false proof
+    assume hr
+    have r1 r2 := hr
+    have r3: int_lt(int_div(a, x86_64_linux.PAGE), int_add(p, n)) by arith(r1, r2, hl, hk, po)
+    show by taut(c, r1, r3)
+  qed
+  show by taut(no)
+qed
+
+// (pages with none of the ABI's bytes: their bytes the C world's -- all
+// but the ABI's)
+theorem tr.cbytes_fresh(s, m, w, v, p, n): tr.mem(s, m, w, v) -> p in omega -> n in omega -> tr.can_off(s.fs_base, p, n) -> g.cbytes_rng(w.objs, p, n)
+proof
+  assume h hpo hno hn
+  have o1 _ := apply(tr.mem_objs, h)
+  have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
+  fix x
+  assume xo hr
+  have nc: x in abi.canary(s.fs_base) -> false proof
+    assume hc
+    show by taut(mp(all_elim(hn, {x}), xo, hc), (int_le(p, int_div(x, x86_64_linux.PAGE)) && int_lt(int_div(x, x86_64_linux.PAGE), int_add(p, n)) by arith(hr, xo, pg4, hpo, hno)))
+  qed
+  show := rewrite(sym(o1), (x in abi.cbytes0(s.fs_base) by taut(all_elim(abi.cbytes0_in, {s.fs_base}, {x}), xo, nc)))
+qed
+
 // the coupling after the change: the world's domain, the callers' frames,
 // the pages, the stack's -- off the range, the machine's and the world's
 // as before; in it, the same
 theorem tr.mem_chg(s, m, w, v, V, WV, p, n, m2, w2): tr.mem(s, m, w, v) -> abi.stack_reserve(s.vm) -> m.vm.stack_top in omega ->
-  tr.vm_chg(m.vm, V, w.vm, WV, p, n) -> gimple.hidden_off(w.objs, p, n) -> m2.vm = V -> w2.vm = WV -> w2.objs = w.objs -> tr.mem(s, m2, w2, v)
+  tr.vm_chg(m.vm, V, w.vm, WV, p, n) -> tr.can_off(s.fs_base, p, n) -> m2.vm = V -> w2.vm = WV -> w2.objs = w.objs -> tr.mem(s, m2, w2, v)
 proof
   assume h hsr htop hc hho em ew eo
   have {wob, wm, oacc, hlv, cok} := h
-  have {top, limit, brk0, brk, bytes, frames, hid, pages, nostk, stk, rsv} := wm
-  let O := abi.objs_at(v, s.fs_base)
-  have lv := all_elim(abi.objs_at_live, {v}, {s.fs_base})
+  have {top, limit, brk0, brk, bytes, frames, hid, own = c_bytes, pages, nostk, stk, rsv} := wm
+  let O := abi.wob(v, w.objs.c_bytes)
+  have lv: O.live = v by simp()
   have vt vl vbs wt wl wbs vbk po no os nx vp wp wvp vns vby wby := expand(hc, tr.vm_chg)
   have rm := mp(rsv, hsr)
   have pg4: x86_64_linux.PAGE = 4096 by rsimp(x86_64_linux.PAGE)
@@ -281,7 +372,7 @@ proof
       have d := expand(hd, abi.in_domain)
       have o1: a in O.live -> false proof
         assume hv0
-        have hv: a in v := rewrite(lv.1, hv0)
+        have hv: a in v := rewrite(lv, hv0)
         have ao: a in omega by simp(ha)
         have o _ := mp(all_elim(oacc, {a}), ao, hv)
         have n1: int_le(abi.sp(s), a) && abi.stack_page(s.vm, P) -> false proof
@@ -444,21 +535,21 @@ proof
   qed
   // the ABI's bytes: off the range (none of its pages there), V's as m's,
   // so s's
-  have hid2: all a. a in bits(64) -> a in O.hidden -> V.bytes[a] = s.vm.bytes[a] && V.pages[x86_64_linux.page_of(a)] = s.vm.pages[x86_64_linux.page_of(a)] proof
+  have hid2: all a. a in bits(64) -> a in abi.canary(s.fs_base) -> V.bytes[a] = s.vm.bytes[a] && V.pages[x86_64_linux.page_of(a)] = s.vm.pages[x86_64_linux.page_of(a)] proof
     fix a
     assume ha hh
     have ao: a in omega by simp(ha)
-    have hh2: a in w.objs.hidden := rewrite(sym(wob), hh)
-    have nr := mp(all_elim(expand(hho, gimple.hidden_off), {a}), ao, hh2)
+    have nr := mp(all_elim(hho, {a}), ao, hh)
     have nr2: !(int_le(p, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(p, n))) by defs(nr, x86_64_linux.page_of)
     have cp cb := apply(tr.chg_off, hc, ha, nr2)
     have e := mp(all_elim(hid, {a}), ha, hh)
     show by simp(cp, cb, e)
   qed
-  have wm2: abi.world_matches(s.vm, V, WV, O, abi.sp(s)) by defs(taut(trans(vt, trans(top, sym(wt))), trans(vl, trans(limit, sym(wl))),
-    trans(vbs, trans(brk0, sym(wbs))), vbk, by2, fr2, hid2, pg2, ns2, stk2, rsv2), abi.world_matches)
-  have wo2: w2.objs = O := trans(eo, wob)
-  show by defs(taut(wo2, rewrite(sym(em), rewrite(sym(ew), wm2)), rewrite(sym(em), oa2), hlv, cok), tr.mem)
+  have wm2: abi.world_matches(s.vm, V, WV, O, s.fs_base, abi.sp(s)) by defs(taut(trans(vt, trans(top, sym(wt))), trans(vl, trans(limit, sym(wl))),
+    trans(vbs, trans(brk0, sym(wbs))), vbk, by2, fr2, hid2, own, pg2, ns2, stk2, rsv2), abi.world_matches)
+  have wo2: w2.objs = abi.wob(v, w2.objs.c_bytes) := rewrite(sym(eo), wob)
+  have wm3 := rewrite(sym(eo), rewrite(sym(em), rewrite(sym(ew), wm2)))
+  show by defs(taut(wo2, wm3, rewrite(sym(em), oa2), hlv, cok), tr.mem)
 qed
 
 
@@ -761,7 +852,7 @@ qed
 // brk growing: the world's memory fresh heap pages there too
 theorem tr.brk_grow_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm -> N in bits(64) ->
   lx.brk_grow(m.vm, N, V, r) ->
-  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
 proof
   assume hm hmv hwv hN hg
   have {wm} := hm
@@ -785,7 +876,7 @@ proof
     show := mp(all_elim(f20, {q}), hq, (int_le(PO, q) && int_lt(q, int_add(PO, int_sub(PN, PO))) by taut(h1, h2)))
   qed
   have hho := apply(tr.hid_free, {s}, {m}, {w}, {v}, {PO}, {n}, hm, fq)
-  obtain WV, wv1 wfp wbk from apply(g.fresh_ex, hwv, apply(x86.vm_univ, hwv), po, no, g.heap_page, hN, hho)
+  obtain WV, wv1 wfp wbk from apply(g.fresh_ex, hwv, apply(x86.vm_univ, hwv), po, no, g.heap_page, hN, apply(tr.cbytes_fresh, hm, po, no, hho))
   // the world's call: growing onto free pages off the stack's space
   have frw := rewrite(brk, apply(tr.free_xfer, hm, fr))
   have osw := rewrite(brk, apply(tr.off_xfer, hm, os))
@@ -865,7 +956,7 @@ qed
 // brk unchanged: the world's memory too
 theorem tr.brk_same_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> abi.stack_reserve(m.vm) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm ->
   lx.brk_same(m.vm, N, V, r) ->
-  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
 proof
   assume hm hr hmv hwv hs
   have {wm} := hm
@@ -891,7 +982,7 @@ proof
   have ch := apply(tr.chg_refl, hr, (V.stack_top = m.vm.stack_top by rsimp(eV)), (V.stack_limit = m.vm.stack_limit by rsimp(eV)),
     (V.brk_start = m.vm.brk_start by rsimp(eV)), refl({w.vm.stack_top}), refl({w.vm.stack_limit}), refl({w.vm.brk_start}),
     (V.brk = w.vm.brk by rsimp(eV, brk)), pv, pw, bv)
-  show by ex_intro({w.vm}, {0}, {0}, taut(hwv, bp, trans(er, brk), rewrite(sym(eV), hmv), ch, all_elim(g.hidden_off_0, {w.objs})))
+  show by ex_intro({w.vm}, {0}, {0}, taut(hwv, bp, trans(er, brk), rewrite(sym(eV), hmv), ch, tr.can_off_none[fs := s.fs_base]))
 qed
 
 // (a memory with its pages and break replaced)
@@ -927,7 +1018,7 @@ theorem tr.brk_shrink_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> abi.stac
     int_le(x86_64_linux.pages_for(w.vm.brk), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) &&
     gimple.sys_pages_ok(w.vm, w.objs,x86_64_linux.pages_for(N), int_sub(x86_64_linux.pages_for(w.vm.brk), x86_64_linux.pages_for(N)))) ->
   lx.brk_shrink(m.vm, N, V, r) ->
-  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
 proof
   assume hm hr hmv hwv hN hq0 hs
   have {wm} := hm
@@ -1045,15 +1136,15 @@ proof
     show := apply(tr.chg_refl, hr, vt, vl, vb, wt, wl, wb, vk, pv, pw, bv)
   qed
   have rr: r = WV.brk := trans(er, sym(wbk))
-  have g1: int_lt(PN, PO) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n) proof
+  have g1: int_lt(PN, PO) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n) proof
     assume l
     have _ sp := mp(req, l, nlw)
-    have _ _ ho := expand(sp, gimple.sys_pages_ok)
+    have ho := apply(tr.valid_can_off, hm, sp)
     show by ex_intro({WV}, {PN}, {n}, taut(wv1, bp, rr, vv, mp(k1, l), ho))
   qed
-  have g2: !int_lt(PN, PO) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n) proof
+  have g2: !int_lt(PN, PO) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n) proof
     assume l
-    show by ex_intro({WV}, {0}, {0}, taut(wv1, bp, rr, vv, mp(k2, l), all_elim(g.hidden_off_0, {w.objs})))
+    show by ex_intro({WV}, {0}, {0}, taut(wv1, bp, rr, vv, mp(k2, l), tr.can_off_none[fs := s.fs_base]))
   qed
   show by taut(g1, g2)
 qed
@@ -1065,22 +1156,22 @@ theorem tr.brk_world(s, m, w, v, N, V, r): tr.mem(s, m, w, v) -> abi.stack_reser
     int_le(x86_64_linux.pages_for(w.vm.brk), int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) &&
     gimple.sys_pages_ok(w.vm, w.objs,x86_64_linux.pages_for(N), int_sub(x86_64_linux.pages_for(w.vm.brk), x86_64_linux.pages_for(N)))) ->
   lx.brk_post(m.vm, N, V, r) ->
-  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+  ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
 proof
   assume hm hr hmv hwv hN hq hp
   have c := expand(hp, lx.brk_post)
   have k1: lx.brk_same(m.vm, N, V, r) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm &&
-      tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n) proof
+      tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n) proof
     assume h
     show := apply(tr.brk_same_world, hm, hr, hmv, hwv, h)
   qed
   have k2: lx.brk_grow(m.vm, N, V, r) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm &&
-      tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n) proof
+      tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n) proof
     assume h
     show := apply(tr.brk_grow_world, hm, hmv, hwv, hN, h)
   qed
   have k3: lx.brk_shrink(m.vm, N, V, r) -> ex WV p n. WV in x86_64_linux.Vm && gimple.brk_post(w.vm, WV, w.objs, N) && r = WV.brk && V in x86_64_linux.Vm &&
-      tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n) proof
+      tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n) proof
     assume h
     show := apply(tr.brk_shrink_world, hm, hr, hmv, hwv, hN, hq, h)
   qed

@@ -299,7 +299,7 @@ proof
   fix s base code fr m m1 w v
   assume hi hmm hg hx hfl
   have {wob, wm, oacc} := hmm
-  have {top, limit, brk0, brk, bytes, frames, hid, pages, nostk, stk, rsv} := wm
+  have {top, limit, brk0, brk, bytes, frames, hid, own = c_bytes, pages, nostk, stk, rsv} := wm
   have {sM, scan} := hi
   have fsb: s.fs_base in bits(64) by simp(expand(sM, x86_64_linux.Machine))
   have gp gb := expand(hg, abi.vm_grows)
@@ -314,15 +314,15 @@ proof
     have mp0: x86_64_linux.mapped(m.vm, p) by defs(simp(e, hn, hp), x86_64_linux.mapped)
     show by taut(e, mp0)
   qed
-  have by2: all x0. x0 in bits(64) -> abi.in_domain(w.vm, abi.objs_at(v, s.fs_base), x0) -> m1.vm.bytes[x0] = w.vm.bytes[x0] proof
+  have by2: all x0. x0 in bits(64) -> abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), x0) -> m1.vm.bytes[x0] = w.vm.bytes[x0] proof
     fix x0
     assume hx0 hd
     have e := mp(all_elim(bytes, {x0}), hx0, hd)
     let P := int_div(x0, x86_64_linux.PAGE)
     have mpd: x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) proof
-      have c1: x0 in abi.objs_at(v, s.fs_base).live -> x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) proof
+      have c1: x0 in abi.wob(v, w.objs.c_bytes).live -> x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) proof
         assume ho0
-        have ho: x0 in v by simp(expand(ho0, abi.objs_at))
+        have ho: x0 in v by simp(ho0)
         have _ c3 := mp(all_elim(oacc, {x0}), simp(hx0), ho)
         have bx: bits_of_int(64, x0) = x0 by simp(hx0)
         have ca := rewrite(bx, c3)
@@ -342,7 +342,7 @@ proof
     have g := mp(all_elim(gb, {x0}), hx0, mpd)
     show := trans(g, e)
   qed
-  have fr2: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(w.vm, abi.objs_at(v, s.fs_base), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->
+  have fr2: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->
       m1.vm.bytes[x0] = s.vm.bytes[x0] proof
     fix x0
     assume hx0 hf
@@ -399,18 +399,17 @@ proof
     show := mp(expand(hx, x86.stk_ext).2, mp(rsv, h0))
   qed
   // (the hidden bytes: on mapped pages, kept)
-  have hid2: all x0. x0 in bits(64) -> x0 in abi.objs_at(v, s.fs_base).hidden ->
+  have hid2: all x0. x0 in bits(64) -> x0 in abi.canary(s.fs_base) ->
       m1.vm.bytes[x0] = s.vm.bytes[x0] && m1.vm.pages[x86_64_linux.page_of(x0)] = s.vm.pages[x86_64_linux.page_of(x0)] proof
     fix x0
-    assume hx0 hh
-    have hc: x0 in abi.canary(s.fs_base) by simp(expand(hh, abi.objs_at))
+    assume hx0 hc
     have km _ kp kb := apply(tr.hid_at, {s}, {m}, {w}, {v}, {x0}, hmm, scan, fsb, hx0, hc)
     have po: int_div(x0, x86_64_linux.PAGE) in omega by defs(simp(hx0), x86_64_linux.PAGE)
     have g := mp(all_elim(gb, {x0}), hx0, (x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) by defs(km, x86_64_linux.page_of)))
     have gq := mp(all_elim(gp, {int_div(x0, x86_64_linux.PAGE)}), po, km)
     show by defs(simp(g, kb, gq, kp), x86_64_linux.page_of)
   qed
-  have wm2: abi.world_matches(s.vm, m1.vm, w.vm, abi.objs_at(v, s.fs_base), abi.sp(s)) by defs(simp(fl, top, limit, brk0, brk, by2, fr2, hid2, pg2, nostk, stk2, rsv2, keep(abi.in_domain, abi.stack_page, abi.stack_reserve, abi.objs_at)), abi.world_matches)
+  have wm2: abi.world_matches(s.vm, m1.vm, w.vm, abi.wob(v, w.objs.c_bytes), s.fs_base, abi.sp(s)) by defs(simp(fl, top, limit, brk0, brk, by2, fr2, hid2, own, pg2, nostk, stk2, rsv2, keep(abi.in_domain, abi.stack_page, abi.stack_reserve, abi.objs_at, abi.canary)), abi.world_matches)
   have oa2: all y. y in omega -> y in v -> ((int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) || tr.own(s, m1, y)) &&
       x86_64_linux.can_access(m1.vm, bits_of_int(64, y), 1) proof
     fix y
@@ -598,7 +597,7 @@ proof
   have {wob, wm, oacc} := hmm
   have {pages} := wm
   let B := m.vm.bytes
-  have k: all a. a in bits(64) -> abi.in_domain(w.vm, abi.objs_at(v, s.fs_base), a) || int_le(abi.sp(s), a) || a in abi.canary(s.fs_base) -> x86_64_linux.store_le(B, tr.ha(s, c), n, x)[a] = B[a] proof
+  have k: all a. a in bits(64) -> abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), a) || int_le(abi.sp(s), a) || a in abi.canary(s.fs_base) -> x86_64_linux.store_le(B, tr.ha(s, c), n, x)[a] = B[a] proof
     fix a
     assume hab hda
     have ne: all j. j in omega -> int_lt(j, n) -> !(bits_add(64, tr.ha(s, c), bits_of_int(64, j)) = a) proof
@@ -617,13 +616,13 @@ proof
         have pc := mp(all_elim(pages, {P}), hp)
         have nd: !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2))
           by defs(simp(pc, expand(sp3, abi.stack_page, x86_64_linux.mapped), keep(x86_64_linux.TASK_SIZE)), x86_64_linux.mapped, x86_64_linux.PAGE)
-        have nob: a in abi.objs_at(v, s.fs_base).live -> false proof
+        have nob: a in abi.wob(v, w.objs.c_bytes).live -> false proof
           assume hv0
-          have hv: a in v by simp(expand(hv0, abi.objs_at))
+          have hv: a in v by simp(hv0)
           have nf := mp(all_elim(apply(tr.hfr_get, hfree, hc), {j}), j1, j2)
           show by taut(nf, rewrite(ea, hv))
         qed
-        have nd2: !abi.in_domain(w.vm, abi.objs_at(v, s.fs_base), a) by defs(taut(nd, nob), abi.in_domain)
+        have nd2: !abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), a) by defs(taut(nd, nob), abi.in_domain)
         // (not the ABI's word either: that is off the stack)
         have nca: a in abi.canary(s.fs_base) -> false proof
           assume hca

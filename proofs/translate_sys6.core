@@ -274,7 +274,7 @@ theorem tr.fresh_chg(s, m, w, v, P, n, PG, Q, B): tr.mem(s, m, w, v) -> m.vm in 
   (all k. k in omega -> Q[k] = ite(int_le(P, k) && int_lt(k, int_add(P, n)), some(PG), m.vm.pages[k])) ->
   (all k. k in omega -> int_lt(k, pow2(64)) ->
     B[k] = ite(int_le(int_mul(P, x86_64_linux.PAGE), k) && int_lt(k, int_mul(int_add(P, n), x86_64_linux.PAGE)), 0, m.vm.bytes[k])) ->
-  lx.pgs(Q) -> B in fn_space(bits(64), bits(8)) -> gimple.hidden_off(w.objs, P, n) ->
+  lx.pgs(Q) -> B in fn_space(bits(64), bits(8)) -> g.cbytes_rng(w.objs, P, n) ->
   ex WV. WV in x86_64_linux.Vm && gimple.fresh_pages(w.vm, WV, w.objs, P, n, PG) && WV.brk = w.vm.brk &&
     fn_update(fn_update(m.vm, "pages", Q), "bytes", B) in x86_64_linux.Vm && tr.vm_chg(m.vm, fn_update(fn_update(m.vm, "pages", Q), "bytes", B), w.vm, WV, P, n)
 proof
@@ -354,7 +354,7 @@ theorem tr.mmap_world(s, m, w, v, A, L, PR, FL, FD, OFF, V, r): tr.mem(s, m, w, 
   w in abi.World -> w in univ(1) -> A in bits(64) -> L in bits(64) -> g.mflags(FL) -> int_lt(PR, 8) -> tr.preq6(w, A, L, FL) ->
   lx.mmap_post(m.vm, A, L, PR, FL, OFF, V, r) ->
   ex WV p n. WV in x86_64_linux.Vm && runs(gimple.os_mmap(A, L, PR, FL, FD, OFF), w, ok(fn_update(w, "vm", WV), r)) && r in bits(64) &&
-    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
 proof
   assume hm hr hmv hW hwu hA hL hfl h8 hq hp
   have {wm} := hm
@@ -363,7 +363,7 @@ proof
   let N := x86_64_linux.pages_for(L)
   let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
   let GOAL := ex WV p n. WV in x86_64_linux.Vm && runs(gimple.os_mmap(A, L, PR, FL, FD, OFF), w, ok(fn_update(w, "vm", WV), r)) && r in bits(64) &&
-    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && gimple.hidden_off(w.objs, p, n)
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
   have wf := expand(hW, abi.World)
   have wvm: w.vm in x86_64_linux.Vm by simp(wf)
   have pf pd := (is_fun(w) && "vm" in dom(w) by simp(wf))
@@ -395,7 +395,7 @@ proof
       (V.brk_start = m.vm.brk_start by rsimp(eV)), refl({w.vm.stack_top}), refl({w.vm.stack_limit}), refl({w.vm.brk_start}),
       (V.brk = w.vm.brk by rsimp(eV, brk)), pv, pw, bv)
     have ro2 := subst({y. runs(gimple.os_mmap(A, L, PR, FL, FD, OFF), w, ok(y, r))}, sym(ss), ro)
-    show by ex_intro({w.vm}, {0}, {0}, taut(wvm, ro2, rb, rewrite(sym(eV), hmv), ch, all_elim(g.hidden_off_0, {w.objs})))
+    show by ex_intro({w.vm}, {0}, {0}, taut(wvm, ro2, rb, rewrite(sym(eV), hmv), ch, tr.can_off_none[fs := s.fs_base]))
   qed
   let EI := x86_64_linux.err(x86_64_linux.EINVAL)
   let EN := x86_64_linux.err(x86_64_linux.ENOMEM)
@@ -428,7 +428,8 @@ proof
       assume h1
       have hb4 ep hal ht := h1
       have spo: gimple.sys_pages_ok(w.vm, w.objs,P, N) := rewrite(mp(ite_t[c := bit(FL, 4), a := gimple.sys_pages_ok(w.vm, w.objs,P, N), b := A = 0], hb4), hq)
-      have offw nxw hho := expand(spo, gimple.sys_pages_ok)
+      have offw nxw _ := expand(spo, gimple.sys_pages_ok)
+      have hho := apply(tr.valid_can_off, hm, spo)
       have osm := apply(tr.off_back, hm, offw)
       have hnx: all q. q in omega -> int_le(P, q) -> int_lt(q, int_add(P, N)) -> x86_64_linux.mapped(m.vm, q) -> !snd(m.vm.pages[q]).prot.x proof
         fix q
@@ -445,7 +446,7 @@ proof
         show := rewrite(sym(e), kx)
       qed
       obtain WV, wv1 wfp wbk vv ch from apply(tr.fresh_chg[s := s, m := m, w := w, v := v, P := P, n := N, PG := lx.anon(PR), Q := Q, B := B], hm, hmv, wvm, po, no, pgt, pk, osm, hnx,
-        rewrite(ep, hq2), rewrite(ep, hb2), hqt, hbt, hho)
+        rewrite(ep, hq2), rewrite(ep, hb2), hqt, hbt, apply(tr.cbytes_fresh, hm, po, no, hho))
       have ro := apply(g.mmap_fixed[w := w, a1 := A, a2 := L, a3 := PR, a4 := FL, a5 := FD, a6 := OFF, V := WV], hwu, wv1, hfl, h8, hof, hn0, hb4, hal,
         rewrite(ep, ht), wfp, wbk)
       have ro2 := rewrite(sym(rewrite(ep, er)), ro)
@@ -471,7 +472,7 @@ proof
       qed
       have hho := apply(tr.hid_free, {s}, {m}, {w}, {v}, {p}, {N}, hm, fq)
       obtain WV, wv1 wfp wbk vv ch from apply(tr.fresh_chg[s := s, m := m, w := w, v := v, P := p, n := N, PG := lx.anon(PR), Q := Q, B := B], hm, hmv, wvm, hpo, no, pgt, pk, os, hnx,
-        hq2, hb2, hqt, hbt, hho)
+        hq2, hb2, hqt, hbt, apply(tr.cbytes_fresh, hm, hpo, no, hho))
       have frw := apply(tr.free_xfer, hm, fr)
       have osw := apply(tr.off_xfer, hm, os)
       have ro := apply(g.mmap_free[w := w, a1 := A, a2 := L, a3 := PR, a4 := FL, a5 := FD, a6 := OFF, p := p, V := WV], hwu, wv1, hfl, h8, hof, hn0, hb4, hpo, p1,

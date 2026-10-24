@@ -1959,20 +1959,19 @@ impl<'e> Gen<'e> {
                         }
                     }
                 }
-                // (the objects released, `objs := objs0`: the result's world
-                // w with the callers' objects O, tr.ret_insn_w)
-                if let (Some(o), 8, None) = (self.objs_back(pr), n, &eqf) {
-                    let w2 = self.mk("fn_update", vec![st.w.clone(), Term::bytes(b"objs"), o.clone()]);
+                // (the objects released, `objs := objs with { live: live0 }`:
+                // the result's world w with the callers' objects L -- the
+                // entry's --, its own bytes kept, tr.ret_insn_w)
+                if let (Some(l), 8, None) = (self.live_back(pr), n, &eqf) {
+                    let ol = self.mk("fn_update", vec![self.mk("app", vec![st.w.clone(), Term::bytes(b"objs")]), Term::bytes(b"live"), l.clone()]);
+                    let w2 = self.mk("fn_update", vec![st.w.clone(), Term::bytes(b"objs"), ol]);
                     let hw0 = self.hw0.clone().ok_or("the entry's world")?;
-                    let ot = simpw(vec![R::Expand(Box::new(R::S(hw0.clone())), vec!["abi.World".into()])]);
-                    // (the entry's objects: of the universe, as its world)
-                    let au = mp(R::Inst("app_univ".into(), vec![("u", lit(1)), ("f", self.vw.clone()), ("k", Term::bytes(b"objs"))]), vec![taut(vec![R::S(hw0.clone())])]);
-                    let ou = simpw(vec![R::S(hw0), au]);
-                    let wo = self.run(&mpf("tr.world_objs", vec![t(&st.w), t(&o), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]), ot, ou]), &[])?;
-                    let res = mpf("tr.result64_objs", vec![t(&st.w), t(val), t(&o), simpw(vec![R::S(wo.clone())])]);
+                    let wo = self.run(&mpf("tr.world_live", vec![t(&st.w), t(&self.vw), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]),
+                        taut(vec![R::S(hw0.clone())]), taut(vec![R::S(hw0)])]), &[])?;
+                    let res = mpf("tr.result64_live", vec![t(&st.w), t(val), t(&l), taut(vec![R::S(wo.clone())])]);
                     let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
                     v.extend([t(&lit(8)), t(val), t(&w2), p(R::F(insn.name.clone())), simp_l(), simp_l(), p(self.cs_rs_pf(&st.rs))]);
-                    v.extend((0..5).map(|_| taut(vec![R::S(wo.clone())])));
+                    v.extend((0..6).map(|_| taut(vec![R::S(wo.clone())])));
                     v.push(p(res));
                     return self.run(&mpf("tr.ret_insn_w", v), &[]);
                 }
@@ -2401,13 +2400,18 @@ impl<'e> Gen<'e> {
     }
 
     /// a return's rule: `mp(RULE, s, V, base, code, a, len, hs, ds, rs, pr, w, ts.., decode, [simp(L), simp(L)], callee-saved, result)`
-    /// the objects the wrapper's last part restores (`objs := objs0`: its
-    /// `fn_update(.., "objs", O)`), if any
-    fn objs_back(&self, pr: &Term) -> Option<Term> {
+    /// the live objects the wrapper's last part restores (`objs := objs
+    /// with { live: live0 }`: its `fn_update(.., "objs", fn_update(..,
+    /// "live", L))`), if any
+    fn live_back(&self, pr: &Term) -> Option<Term> {
         fn go(g: &Gen, t: &Term) -> Option<Term> {
             if let Some(x) = g.app(t, "fn_update", 3) {
-                if x[1] == Term::bytes(b"objs") && x[2].loose_depth(&g.env.binders_fn()) == 0 {
-                    return Some(x[2].clone());
+                if x[1] == Term::bytes(b"objs") {
+                    if let Some(y) = g.app(&x[2], "fn_update", 3) {
+                        if y[1] == Term::bytes(b"live") && y[2].loose_depth(&g.env.binders_fn()) == 0 {
+                            return Some(y[2].clone());
+                        }
+                    }
                 }
             }
             match t.node() {
