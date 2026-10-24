@@ -37,5 +37,7 @@ fn collect(p: &Path, out: &mut Vec<std::path::PathBuf>) {
 fn main() {
     println!("cargo:rustc-env=SLC_ID_KERNEL={}", hash_tree(&["../kernel/src", "src/commands.rs"]));
     println!("cargo:rustc-env=SLC_ID_PROOF={}", hash_tree(&["../proof/src"]));
-    println!("cargo:rustc-env=SLC_ID_C1={}", hash_tree(&["src/c1"]));
+    // (the C1 and refinement engines: src/c1, and the structuring the
+    // refinement's cut points come from)
+    println!("cargo:rustc-env=SLC_ID_C1={}", hash_tree(&["src/c1", "src/gimple/structure.rs"]));
 }

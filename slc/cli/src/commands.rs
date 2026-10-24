@@ -11,10 +11,11 @@ pub type CResult = Result<(), String>;
 /// `prefix`); otherwise the file is checked and its entry written again.
 /// The parts (build.rs: hashes of their sources): the trusted kernel and
 /// this cache's format, always; the proof scripts' automation (sl_proof),
-/// always; the C1 engine, for a file with `c1` lines. A change to other
-/// code -- or to the C1 engine, for files without `c1` lines -- keeps the
-/// entries. (No modification times: a file restored with an older date, or
-/// changed within one clock tick, is checked again.)
+/// always; the C1 and refinement engines (src/c1), for a file with `c1` or
+/// `refines` lines (`uses_engines`). A change to other code -- or to the
+/// engines, for files without such lines -- keeps the entries. (No
+/// modification times: a file restored with an older date, or changed
+/// within one clock tick, is checked again.)
 struct Cache {
     dir: PathBuf,
     /// the checker's identity for files without `c1` lines, and with
@@ -43,8 +44,8 @@ impl Cache {
     }
 
     fn header(&self, src: &str, prefix: &str, first: bool) -> String {
-        // (a file with `c1` lines: the C1 engine's identity too)
-        let c1 = src.lines().any(|l| l.trim_start().starts_with("c1 "));
+        // (a file with `c1` or `refines` lines: the engines' identity too)
+        let c1 = uses_engines(src);
         format!(
             "// slc kernel-check cache (statements only; see `slc kernel-check --no-cache`)\n// checker {}\n// source {}\n// prefix {}\n// first {}\n",
             if c1 { &self.checker_c1 } else { &self.checker },
@@ -77,6 +78,14 @@ impl Cache {
     }
 }
 
+/// a file whose lines run the C1 or the refinement engine (`c1`, `refines`)
+fn uses_engines(src: &str) -> bool {
+    src.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with("c1 ") || l.starts_with("refines ")
+    })
+}
+
 /// The proof cache of `kernel-check`, for a file not in the file cache:
 /// per proof checked, the open lemmas it rested on, under the hash of the
 /// checker's identity (as the file's entry would have it), the statements
@@ -93,8 +102,7 @@ struct ProofStore {
 
 impl ProofStore {
     fn new(cache: &Cache, src: &str, prefix: &str, first: bool) -> ProofStore {
-        let c1 = src.lines().any(|l| l.trim_start().starts_with("c1 "));
-        let checker = if c1 { &cache.checker_c1 } else { &cache.checker };
+        let checker = if uses_engines(src) { &cache.checker_c1 } else { &cache.checker };
         ProofStore { dir: cache.dir.join("proofs"), salt: format!("{}\n{}\n{}\n", checker, prefix, first), hits: 0 }
     }
 

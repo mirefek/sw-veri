@@ -102,10 +102,6 @@ and the auxiliary vector; after, the allocator maps only fresh pages.
   (`mp.sy1_divw`: never diverging with its requirement met,
   `mp.sy1_nodiv`). A body's divergence by its structure (per statement)
   would cover such specs.
-- The proof cache does not key on the checker: after an engine change
-  `scripts/check.sh` reports proofs "as checked before"; check the
-  engine's changes uncached (the test's `--no-cache`), times per file by
-  `SLC_TIMES=1`, slow steps by `STEP_SLOW=secs`.
 - alloc_meta's remaining plumbing (am_run ~1120 lines): the context's
   usable words derived per memory stretch (`mp.ctx_usable` per offset,
   `mp.usable_pg` across a page change); the two three-case joins (`ht2`,

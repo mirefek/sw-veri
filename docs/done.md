@@ -91,8 +91,9 @@ item is a short summary of finished work; details are in the files named.
 - **The checker**: a per-file cache. The main chain checks in about 5 s
   uncached and 0.2 s cached. An entry rests on the parts of the checker it
   uses (hashes of their sources, slc/cli/build.rs): the kernel with the
-  cache's format and the proof scripts' automation always, the C1 engine
-  for files with `c1` lines -- other changes keep it.
+  cache's format and the proof scripts' automation always, the C1 and
+  refinement engines (src/c1 with the structuring's cut points) for files
+  with `c1` or `refines` lines -- other changes keep it.
 
 ## The levels
 
