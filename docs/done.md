@@ -91,9 +91,11 @@ item is a short summary of finished work; details are in the files named.
 - **The checker**: a per-file cache. The main chain checks in about 5 s
   uncached and 0.2 s cached. An entry rests on the parts of the checker it
   uses (hashes of their sources, slc/cli/build.rs): the kernel with the
-  cache's format and the proof scripts' automation always, the C1 and
-  refinement engines (src/c1 with the structuring's cut points) for files
-  with `c1`, `refines` or `contract` lines -- other changes keep it.
+  cache's format and the proof scripts' automation always, and each engine
+  a file's lines run, each by its own hash: the C1 engine (`c1`), gref
+  with the structuring's cut points (`refines`), contract.rs (`contract`)
+  -- other changes keep it (a contract.rs change rechecks the 11 files
+  with `contract` lines, 1.5 min, not the chain's C1 and refinements).
 - **A function's wrapper theorems by the checker** (`contract FN SPEC by
   THM [call ABBR] [using L, ..]`, slc/cli/src/c1/contract.rs, through the
   proof API, no proof text): from THM, the refinement of FN's procedure

@@ -11,29 +11,38 @@ pub type CResult = Result<(), String>;
 /// `prefix`); otherwise the file is checked and its entry written again.
 /// The parts (build.rs: hashes of their sources): the trusted kernel and
 /// this cache's format, always; the proof scripts' automation (sl_proof),
-/// always; the engines of src/c1, for a file with `c1`, `refines` or
-/// `contract` lines (`uses_engines`). A change to other code -- or to the
-/// engines, for files without such lines -- keeps the entries. (No
-/// modification times: a file restored with an older date, or changed
-/// within one clock tick, is checked again.)
+/// always; each engine of src/c1 its lines run -- the C1 engine for `c1`
+/// lines, gref for `refines`, contract.rs for `contract` (`checker`). A
+/// change to other code -- or to an engine a file's lines do not run --
+/// keeps the entries. (No modification times: a file restored with an older
+/// date, or changed within one clock tick, is checked again.)
 struct Cache {
     dir: PathBuf,
-    /// the checker's identity for files without `c1` lines, and with
-    checker: String,
-    checker_c1: String,
+    /// the checker's identity: its kernel and automation's
+    base: String,
+    /// (SLC_CACHE_AS=ID, while developing the checker: every entry as the
+    /// checker ID's -- trusting that the changes left them valid)
+    as_id: Option<String>,
 }
 
 impl Cache {
     fn new() -> Cache {
         let base = format!("k{}-p{}", env!("SLC_ID_KERNEL"), env!("SLC_ID_PROOF"));
-        let c1 = format!("{}-c{}", base, env!("SLC_ID_C1"));
-        // (SLC_CACHE_AS=ID, while developing the checker: its entries as
-        // the checker ID's -- trusting that the changes left them valid)
-        let (checker, checker_c1) = match std::env::var("SLC_CACHE_AS") {
-            Ok(id) => (id.clone(), id),
-            Err(_) => (base, c1),
-        };
-        Cache { dir: repo_root().join("build/kernel-cache"), checker, checker_c1 }
+        Cache { dir: repo_root().join("build/kernel-cache"), base, as_id: std::env::var("SLC_CACHE_AS").ok() }
+    }
+
+    /// the identity of the checker parts a file's contents `src` rest on
+    fn checker(&self, src: &str) -> String {
+        if let Some(id) = &self.as_id {
+            return id.clone();
+        }
+        let mut id = self.base.clone();
+        for (cmd, tag, part) in ENGINES {
+            if src.lines().any(|l| l.trim_start().starts_with(cmd)) {
+                id.push_str(&format!("-{}{}", tag, part));
+            }
+        }
+        id
     }
 
     fn entry(&self, f: &std::path::Path) -> PathBuf {
@@ -44,11 +53,9 @@ impl Cache {
     }
 
     fn header(&self, src: &str, prefix: &str, first: bool) -> String {
-        // (a file with `c1` or `refines` lines: the engines' identity too)
-        let c1 = uses_engines(src);
         format!(
             "// slc kernel-check cache (statements only; see `slc kernel-check --no-cache`)\n// checker {}\n// source {}\n// prefix {}\n// first {}\n",
-            if c1 { &self.checker_c1 } else { &self.checker },
+            self.checker(src),
             crate::sha256::hex(src.as_bytes()),
             prefix,
             first
@@ -57,16 +64,13 @@ impl Cache {
 
     /// f's statements, if its entry holds for f's contents `src`
     fn lookup(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool) -> Option<String> {
-        if self.checker.is_empty() {
-            return None;
-        }
         let text = std::fs::read_to_string(self.entry(f)).ok()?;
         text.strip_prefix(&self.header(src, prefix, first)).map(|s| s.to_string())
     }
 
     /// writes f's entry for its contents `src` (as read before checking)
     fn store(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool, stmts: &str) {
-        if self.checker.is_empty() || std::fs::create_dir_all(&self.dir).is_err() {
+        if std::fs::create_dir_all(&self.dir).is_err() {
             return;
         }
         let e = self.entry(f);
@@ -78,14 +82,13 @@ impl Cache {
     }
 }
 
-/// a file whose lines run the engines of src/c1 (`c1`, `refines`,
-/// `contract`)
-fn uses_engines(src: &str) -> bool {
-    src.lines().any(|l| {
-        let l = l.trim_start();
-        l.starts_with("c1 ") || l.starts_with("refines ") || l.starts_with("contract ")
-    })
-}
+/// the engines of src/c1 a file's lines may run: the line's command, the
+/// tag in the checker's identity, the engine's identity (build.rs)
+const ENGINES: [(&str, &str, &str); 3] = [
+    ("c1 ", "c", env!("SLC_ID_C1")),
+    ("refines ", "g", env!("SLC_ID_GREF")),
+    ("contract ", "n", env!("SLC_ID_CONTRACT")),
+];
 
 /// The proof cache of `kernel-check`, for a file not in the file cache:
 /// per proof checked, the open lemmas it rested on, under the hash of the
@@ -103,8 +106,7 @@ struct ProofStore {
 
 impl ProofStore {
     fn new(cache: &Cache, src: &str, prefix: &str, first: bool) -> ProofStore {
-        let checker = if uses_engines(src) { &cache.checker_c1 } else { &cache.checker };
-        ProofStore { dir: cache.dir.join("proofs"), salt: format!("{}\n{}\n{}\n", checker, prefix, first), hits: 0 }
+        ProofStore { dir: cache.dir.join("proofs"), salt: format!("{}\n{}\n{}\n", cache.checker(src), prefix, first), hits: 0 }
     }
 
     fn entry(&self, context: &str, proof: &str) -> PathBuf {
@@ -226,7 +228,7 @@ pub fn kernel_check(args: &[String]) -> CResult {
                 // (its proofs checked before, in the same context: from the
                 // proof cache)
                 let rep = match &cache {
-                    Some(c) if !c.checker.is_empty() => {
+                    Some(c) => {
                         let mut store = ProofStore::new(c, &src, &prefix, first);
                         let r = syntax::load_checked(&mut env, &src, first, &mut prover, &mut store);
                         n_proofs_cached += store.hits;

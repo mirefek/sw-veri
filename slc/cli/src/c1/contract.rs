@@ -20,7 +20,8 @@
 //!   called as FN too) and `THM_call_linked` (FN's CFG form, linked, called
 //!   as FN: from `THM_q`, the structured form called as FN).
 //!
-//! THM: `all xs. ps -> refines_ghost(PROC(args), Q(sargs), abi.World, G)`,
+//! THM: `all xs. ps -> refines_ghost(PROC(args), Q(sargs), abi.World, G)`
+//! (or without the ghost part, `refines(PROC(args), Q(sargs), abi.World)`),
 //! PROC the procedure FN's structured `_fun` calls.
 
 use sl_kernel::ext::seq::Seq;
