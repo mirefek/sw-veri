@@ -976,14 +976,16 @@ pred framed(before: Vm, vm: Vm, v: MetaV, i: nat, p: nat, n: nat) =
 // the in-band header: the slot framed for a block of n bytes at some p in
 // it (`frame_ok`), p returned; only the slot's interior written. Which p
 // -- the offset, in units, a byte musl cycles -- left free. The caller's
-// part: for a size class, p within the class's slot wherever it lies; the
-// thread pointer's word apart from the slot; a stride below 2^31.
+// part: for a size class, p within the class's slot wherever it lies (the
+// slot's slack under it, or the offset's 256 units); the thread pointer's
+// word apart from the slot; a stride below 2^31.
 proc[MallocAbs] enframe_spec(c: Cfg, g: bits[64], idx: bits[32], n: bits[64]) -> bits[64] {
   require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(g)) && reserved_only(A, uint(g), uint(idx)) &&
     slot_rw(vm, A.metas[uint(g)], uint(idx)) &&
     uint(n) + IB <= stride(A.metas[uint(g)]) && stride(A.metas[uint(g)]) < 2^31 &&
     (A.metas[uint(g)].sizeclass < 48 ->
-       slot_end(A.metas[uint(g)], uint(idx)) - uint(n) - storage(A.metas[uint(g)]) < UNIT * size_classes[A.metas[uint(g)].sizeclass] * (uint(idx) + 1)) &&
+       slot_end(A.metas[uint(g)], uint(idx)) - uint(n) - storage(A.metas[uint(g)]) < UNIT * size_classes[A.metas[uint(g)].sizeclass] * (uint(idx) + 1) ||
+       slot_start(A.metas[uint(g)], uint(idx)) - storage(A.metas[uint(g)]) + 256 * UNIT <= UNIT * size_classes[A.metas[uint(g)].sizeclass] * (uint(idx) + 1)) &&
     (uint(fs_base) + 8 <= slot_start(A.metas[uint(g)], uint(idx)) - IB || slot_end(A.metas[uint(g)], uint(idx)) <= uint(fs_base))
   either { overflow() } or {
     let before = vm
