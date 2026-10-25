@@ -70,7 +70,9 @@ impl Cache {
 
     /// writes f's entry for its contents `src` (as read before checking)
     fn store(&self, f: &std::path::Path, src: &str, prefix: &str, first: bool, stmts: &str) {
-        if std::fs::create_dir_all(&self.dir).is_err() {
+        // (C1_KEEP_GOING: an engine's line failed may have been left out --
+        // no entry)
+        if std::env::var("C1_KEEP_GOING").is_ok() || std::fs::create_dir_all(&self.dir).is_err() {
             return;
         }
         let e = self.entry(f);

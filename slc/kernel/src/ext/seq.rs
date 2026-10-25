@@ -299,7 +299,11 @@ impl Seq {
     /// applied to the whole implication).
     pub fn inst(env: &Env, s: &Seq, v: VarId, value: &Term) -> KResult<Seq> {
         let arity = env.var_get(v).ok_or_else(|| KernelError("unknown variable".into()))?.arity;
-        env.check_wf(value, arity)?;
+        {
+            let _p = crate::prof::g(if arity > 0 { "seq inst wf (ho)" } else { "seq inst wf" });
+            env.check_wf(value, arity)?;
+        }
+        let _p = crate::prof::g(if arity > 0 { "seq inst subst (ho)" } else { "seq inst subst" });
         Ok(Seq {
             hyps: s.hyps.iter().map(|h| env.subst_var_m(h, v, value)).collect(),
             concl: env.subst_var_m(&s.concl, v, value),

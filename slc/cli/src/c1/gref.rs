@@ -13,6 +13,11 @@ use super::*;
 mod gloop;
 
 pub fn refines(env: &mut Env, name: &str, low: &str, high: &str) -> Result<Seq, String> {
+    // (GREF_ONLY=NAME, for debugging with C1_KEEP_GOING=1: that refinement
+    // alone, the others skipped)
+    if std::env::var("GREF_ONLY").is_ok_and(|n| n != name) {
+        return Err("skipped (GREF_ONLY)".into());
+    }
     let empty = Term::app(env.sym_by_name["empty"], vec![]);
     let t0 = std::time::Instant::now();
     let _rep = super::prof::Rep(name.to_string());

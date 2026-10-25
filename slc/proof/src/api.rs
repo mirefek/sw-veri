@@ -144,12 +144,23 @@ impl Api {
     pub fn inst(&self, env: &mut Env, s: Seq, binds: &[(&str, Term)]) -> KResult<Seq> {
         let mut s = s;
         let mut vs = Vec::new();
-        s.concl().vars(&mut vs);
-        for h in s.hyps() {
-            h.vars(&mut vs);
+        {
+            let _p = sl_kernel::prof::g("inst vars");
+            s.concl().vars(&mut vs);
+            for h in s.hyps() {
+                h.vars(&mut vs);
+            }
         }
         let mut staged = Vec::new();
         let mut bound: Vec<(&str, Term)> = Vec::new();
+        // (simultaneously: through fresh variables, unless no value has a
+        // variable instantiated -- then one after the other is the same)
+        let targets: Vec<VarId> = vs.iter().copied().filter(|v| binds.iter().any(|(n, _)| env.var(*v).name == *n)).collect();
+        let direct = binds.iter().all(|(_, value)| {
+            let mut ws = Vec::new();
+            value.vars(&mut ws);
+            !ws.iter().any(|w| targets.contains(w))
+        });
         for (vname, value) in binds {
             let cands: Vec<VarId> = vs.iter().copied().filter(|v| env.var(*v).name == *vname).collect();
             let v = match cands.as_slice() {
@@ -160,6 +171,10 @@ impl Api {
                 }
                 _ => return err(format!("several variables named `{}`", vname)),
             };
+            if direct {
+                s = Seq::inst(env, &s, v, value)?;
+                continue;
+            }
             let k = env.var(v).arity;
             let tmp = env.new_var(&format!("{}'", vname), k);
             let tmp_term = Term::var(tmp, (0..k).rev().map(Term::bvar).collect());
