@@ -1248,3 +1248,19 @@ item is a short summary of finished work; details are in the files named.
   outcome `abi.ovf_out(t, o)` (proofs/gimple_inv.core) in every contract;
   `ct.objs_ne`, `ct.objs_univ`; the call lemmas (`gc.contract_call*`) with
   the objects a witness; `step` carries an overflow of several witnesses.
+- **`__libc_malloc_impl`** (proofs/mallocng/fun/malloc.core): its purpose
+  spec (`malloc_impl_spec`: p a new live block of n bytes -- the ghost
+  blocks by `set_block` -- or 0 with ENOMEM; malloc(0) allowed none), its
+  run (`mp.mi_run`), refinement (`mp.mi`) and contract over any callees.
+  - The big path: a group of its own mapped (`mp.mm_fresh_n`,
+    `mp.bg_holds_m`), alloc_meta's failure unmapping it (`mp.gone_off`).
+  - The class path: the coarse class (sc or its odd neighbour, `mp.low_bit`;
+    the if's outcome proved once and the continuation rewritten by it);
+    the head group's free slot taken (`mp.take_slot`, a_ctz_32) or
+    upgradelock and alloc_slot; both by `mp.mi_efpre` (enframe's premises:
+    the class bound `mp.cls_bound` from the invariant's `span`, the stride
+    from `reuse_ok`) and `mp.mi_fin` (the slot framed: the new block).
+  - The layer: `untouched` / `kept_outside` keep the stack's bounds too
+    (`bounds_kept`), munmap's precondition after alloc_meta.
+  - C1: `or [rsp + d], imm8` (`tr.or32_home_i`), `or r16, imm16`
+    (`tr.or16_imm`); the ghost part's blocks replaced (`mp.g_updb`).

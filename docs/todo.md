@@ -8,13 +8,11 @@ summarized in docs/done.md.
 alloc_meta, alloc_slot and alloc_group are verified at machine level from
 the configuration alone (`mp.am_machine`, `mp.as_machine`,
 `mp.agr_machine`); the locks and munmap too (`mp.rdl_linked` ..
-`mp.unl_linked`, `mp.mun_linked`).
+`mp.unl_linked`, `mp.mun_linked`); `__libc_malloc_impl` refines its
+purpose spec, its contract over any callees (proofs/mallocng/fun/malloc.core).
 Next, malloc (`musl.impl_malloc`, proofs/mallocng/claim.core):
-- `__libc_malloc_impl`'s spec by purpose (the mmap path: a group of its
-  own; the slot path: alloc_slot's slot, enframed) and its C2. malloc owes
-  enframe: the class bound (its n within the class), the thread pointer's
-  word apart from the slot (the C world's TLS), a stride below 2^31; the
-  slot's access is the invariant's (`mp.slot_rw_of`).
+- `__libc_malloc_impl` at machine level from the configuration alone (its
+  callees' contracts linked, as `mp.agr_machine`).
 - mallocng's abstract state to the malloc layer's blocks (`rep`): the
   purpose spec giving `malloc.malloc`; the `malloc` symbol's wrapper
   (lite_malloc.c's `default_malloc`) to `__libc_malloc_impl`. malloc(0):
