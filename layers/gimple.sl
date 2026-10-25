@@ -335,6 +335,13 @@ proc[World] cas32(p: Addr, t: bits[32], s: bits[32]) -> bits[32] {
   return old
 }
 
+// lock or [p], v: the 32-bit word at p or'ed with v (a locked
+// read-modify-write)
+proc[World] or32(p: Addr, v: bits[32]) {
+  let old = ld32(p, 0)
+  st32(p, 0, old | v)
+}
+
 // A system call (`syscall`: rax n, rdi a1, rsi a2, rdx a3, r10 a4, r8 a5,
 // r9 a6; its result in rax, rcx and r11 clobbered): Linux's call
 // (spec/linux/process.sl) as the C world sees it -- on the world's memory,

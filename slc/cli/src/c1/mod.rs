@@ -191,6 +191,8 @@ struct StoreOp {
     /// a compare-and-swap (gimple.cas32): its operands t, s; its result
     /// (the old dword)
     cas: Option<(Term, Term, Term)>,
+    /// a locked or (gimple.or32): the value or'ed in
+    or: Option<Term>,
     /// a bitfield (gimple.stbf): its size, position, width, field
     bf: Option<(Term, Term, Term, Term)>,
 }

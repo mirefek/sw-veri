@@ -1272,6 +1272,19 @@ item is a short summary of finished work; details are in the files named.
     C1, its contract (`mp.dm` by `mp.mi_ref`, any program of malloc's
     outcome), `__libc_malloc_impl` called as such (`mp.mi_call`, its two
     returns as one), `mp.dm_machine`.
+- **free's translation unit at machine level (C1)**: its readable and CFG
+  forms (scripts/check.sh's units), its code's step facts (free.c's copies
+  of malloc.c's static functions as `fr_*`, checked against malloc.c's CFG
+  forms: the same GIMPLE). Readable GIMPLE holds a small struct whose
+  address is never taken (`struct mapinfo`) as a variable per field
+  (`mi_base`, `mi_len`; locmap.py their homes from the struct's), no stack
+  object. Engine: `lock or` (`gimple.or32`, a_or), shr r8, setcc after a
+  compare (`tr.setcc`, then movzx of the byte, `tr.movzx8_set`), cmp r32,
+  r32, or r32, [rsp + d], xor r64, r64, mov word [b + d], imm16, two-word
+  call results and returns (`tr.ret_pair`), a narrow register's value
+  stored to a home as itself, N on `bits_shr`'s width, pairs' parts,
+  `b1` and `ite(!p, ..)`; a guarded spec with any program after the guard
+  (`tr.entry_np`); a `nop; jmp` no cut point.
 - **The malloc layer's world and rep** (towards the claim's top):
   malloc.sl's `world_ok` (the ABI's view at a call: no stack page, the
   canonical C domain; the thread, the break's start, the program loaded --

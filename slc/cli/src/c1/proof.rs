@@ -18,7 +18,7 @@ struct Ctx {
 /// `tr.hapart`)
 const HAPART: &[&str] = &[
     "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
-    "store64i_bd", "store32i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
+    "store64i_bd", "store32i_bd", "store16i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "or32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
     "store64_bd_eq", "store64_bi", "movsb", "rep_movsq",
 ];
 impl<'e> Gen<'e> {
@@ -132,6 +132,10 @@ impl<'e> Gen<'e> {
             (_, Some((tv, sv, _))) => mpf(
                 "tr.cas32_at_ok",
                 vec![t(&w), t(&so.p), t(tv), t(sv), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(&hc)],
+            ),
+            _ if so.or.is_some() => mpf(
+                "tr.or32_at_ok",
+                vec![t(&w), t(&so.p), t(so.or.as_ref().unwrap()), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), s(&hc)],
             ),
             (Some(d), _) => mpf(
                 "tr.stz_at_ok",
@@ -1847,7 +1851,11 @@ impl<'e> Gen<'e> {
             self.restore(c);
             match r? {
                 Some(pf) => return Ok(pf),
-                None => return Err(format!("{:x}: a cut point (a block's start), the spec not at a block's end: {}", st2.a, self.print(&self.p(&st2.spec)))),
+                None => {
+                    // (the machine's branch condition last assumed, its N form)
+                    let last = st2.hyps.last().map(|h| format!("; the machine's condition: {} (N: {})", self.print(&h.0), self.print(&self.canon(&h.0)))).unwrap_or_default();
+                    return Err(format!("{:x}: a cut point (a block's start), the spec not at a block's end{}: {}", st2.a, last, self.print(&self.p(&st2.spec))));
+                }
             }
         }
         // (back at the head of the loop walked: its arrival)
@@ -2183,7 +2191,16 @@ impl<'e> Gen<'e> {
     /// ... the flags step `step` (`write`: writing a scratch register g its
     /// value x of n bytes too, tr.jcc_w)
     pub(super) fn compare_x(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, write: Option<(u128, Term, u128)>) -> Result<Seq, String> {
-        let (j, len2, a3, tt, cc) = self.jcc(a2)?;
+        // (setcc after it: the byte register written, tr.setcc)
+        let set = self.insns.get(&a2).filter(|j| j.row == 31 && write.is_none()).map(|j| (j.fields.clone(), j.len));
+        let (j, len2, a3, tt, cc) = match &set {
+            Some((fx, len2)) => {
+                let x = self.pairs(fx, 3).ok_or_else(|| format!("{:x}: setcc's fields", a2))?;
+                let cc = nat(&x[0]).ok_or_else(|| format!("{:x}: setcc's condition", a2))?;
+                (x[2].clone(), *len2, (a2 + len2) % P64, 0, cc)
+            }
+            None => self.jcc(a2)?,
+        };
         let si = |g: &Gen, x: &Term| g.mk("sint", vec![lit(32), x.clone()]);
         let (lemma, c, args, ff) = match &fl {
             Flags::Sub(w, x, y) => {
@@ -2232,6 +2249,28 @@ impl<'e> Gen<'e> {
         let mut ca: Vec<RA> = args.iter().map(t).collect();
         ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
         let ccf = mpf(&format!("tr.{lemma}"), ca);
+        // setcc r8 (al .. bl, holding u): its low byte 1 when the condition
+        // holds (!c), else 0
+        if set.is_some() {
+            let (k, g) = self.tag(&j).ok_or_else(|| format!("{:x}: setcc of other than a register", a2))?;
+            let gn = nat(&g).ok_or_else(|| format!("{:x}: setcc's register not a literal", a2))?;
+            if k != 0 || gn >= 4 {
+                return Err(format!("{:x}: setcc of other than al .. bl", a2));
+            }
+            let (n, u) = self.reg(st, gn).ok_or_else(|| format!("{:x}: setcc's register holds no value (its high bytes kept)", a2))?;
+            let z = self.pairs(&self.insns[&a2].fields.clone(), 3).unwrap()[1].clone();
+            let b = self.mk("ite", vec![c.clone(), lit(0), lit(1)]);
+            let x = self.mk("bits_set_slice", vec![lit(64), u.clone(), lit(7), lit(0), b]);
+            let mut sv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3))];
+            sv.extend([t(&lit(len2)), t(&lit(cc)), t(&c), t(&g), t(&z), t(&lit(n)), t(&u), t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w)]);
+            sv.extend([p(step), p(ccf), p(f(&self.insns[&a2].name))]);
+            sv.extend((0..6).map(|_| simp_l()));
+            sv.extend([self.nobp(), p(R::Slot("NEXT"))]);
+            let rule = mp(R::Inst("tr.setcc".into(), vec![("ff", ff)]), sv);
+            self.scratch.insert(gn);
+            let st2 = self.set_reg(st, a3, gn, 8, x);
+            return self.then(rule, st2);
+        }
         // (the jump's row and displacement width: 127 / 8, 128 / 32)
         let (jn, jw) = if self.insns[&a2].row == 128 { (128, 32) } else { (127, 8) };
         let mut jv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3)), t(&lit(tt))];

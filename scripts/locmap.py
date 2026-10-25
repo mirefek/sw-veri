@@ -8,7 +8,8 @@ without -g), and its DWARF read (objdump --dwarf=info): each named local's
 frame offset (DW_OP_fbreg, from the call frame's CFA: the entry's rsp + 8)
 and the address range of its scope (the function's, or its lexical
 block's). The locals of the readable procedure (its `var`s, in order: the
-locals tuple of its GIMPLE semantics) are matched by name.
+locals tuple of its GIMPLE semantics) are matched by name (a struct's
+field held as a variable, `var x_f: .. // x + OFF`: x's, OFF on).
 
 Written to build/locmap_O0.core, one definition per procedure:
 
@@ -113,9 +114,14 @@ def readable_vars(sl):
             name = m.group(1)
             procs[name] = []
             continue
-        m = re.match(r"  var (\w+):", line)
+        m = re.match(r"  var (\w+):[^/]*(?://\s*(\S+) \+ (\d+))?\s*$", line)
         if m and name is not None:
-            procs[name].append(m.group(1))
+            # (a struct's field held as a variable: the struct's C name,
+            # the field's offset)
+            if m.group(2):
+                procs[name].append((m.group(1), m.group(2), int(m.group(3))))
+            else:
+                procs[name].append((m.group(1), m.group(1), 0))
             continue
         m = re.match(r"  let objs = alloc_objs\(.*\)  // (.*)$", line)
         if m and name is not None:
@@ -149,10 +155,12 @@ def main():
                 if proc not in dl:
                     continue
                 entries = []
-                for k, nm in enumerate(names):
+                for k, (_, nm, off) in enumerate(names):
+                    # (a C name the readable form renamed, a keyword there: `self` as `self_`)
+                    cs = {nm, nm[:-1]} if nm.endswith("_") else {nm}
                     for (dn, fb, lo, hi) in dl[proc]:
-                        if dn == nm:
-                            entries.append((k, (fb + 8) % P64, lo, hi))
+                        if dn in cs and not (dn != nm and any(d == nm for (d, _, _, _) in dl[proc])):
+                            entries.append((k, (fb + off + 8) % P64, lo, hi))
                 if not entries:
                     continue
                 t = "empty"

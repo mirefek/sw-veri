@@ -286,6 +286,32 @@ impl<'e> Gen<'e> {
                 }
             }
         }
+        // GIMPLE's boolean as a word: a choice
+        if name == "gimple.b1" && a.len() == 1 {
+            let e = self.run(&R::Inst("nf.b1".into(), vec![("c", a[0].clone())]), &[])?;
+            return Ok(Some((self.mk("ite", vec![a[0].clone(), lit(1), lit(0)]), e)));
+        }
+        // a choice on a negation: on the condition, swapped
+        if name == "ite" && a.len() == 3 {
+            if let Some(q) = self.app(&a[0], "not", 1).map(|x| x[0].clone()) {
+                let e = self.run(&R::Inst("nf.ite_not".into(), vec![("p", q.clone()), ("a", a[1].clone()), ("b", a[2].clone())]), &[])?;
+                return Ok(Some((self.mk("ite", vec![q, a[2].clone(), a[1].clone()]), e)));
+            }
+        }
+        // a pair's part (a two-word call result's word)
+        for (part, lemma, k) in [("fst", "fst_pair", 0), ("snd", "snd_pair", 1)] {
+            if name == part && a.len() == 1 {
+                // (the pair named: a value's definition)
+                let pa = match a[0].node() {
+                    Node::Var(v, x) if x.is_empty() => self.vals.iter().rev().find(|y| y.0 == *v).map(|y| y.1.clone()).unwrap_or_else(|| a[0].clone()),
+                    _ => a[0].clone(),
+                };
+                if let Some(p) = self.app(&pa, "pair", 2).map(|x| x.to_vec()) {
+                    let e = self.run(&R::Inst(lemma.into(), vec![("a", p[0].clone()), ("b", p[1].clone())]), &[])?;
+                    return Ok(Some((p[k].clone(), e)));
+                }
+            }
+        }
         // a shift by a literal: a product by 2^k
         if name == "bits_shl" && a.len() == 3 && nat(&a[2]).is_some() {
             let r = R::Inst("nf.shl_mul".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("k", a[2].clone())]);
@@ -475,7 +501,7 @@ impl<'e> Gen<'e> {
 
     /// t a word of m bits by its operation (a value's: its definition's):
     /// m, and the proof of `t in bits(m)`
-    fn word_of(&self, t: &Term) -> Option<(u128, R)> {
+    pub(super) fn word_of(&self, t: &Term) -> Option<(u128, R)> {
         let d = match t.node() {
             Node::Var(v, a) if a.is_empty() => self.vals.iter().rev().find(|x| x.0 == *v).map(|x| x.1.clone())?,
             _ => t.clone(),
@@ -487,6 +513,7 @@ impl<'e> Gen<'e> {
             ("bits_sub", 3) => ("nf.sub_in", vec!["n", "a", "b"]),
             ("bits_mul", 3) => ("nf.mul_in", vec!["n", "a", "b"]),
             ("bits_neg", 2) => ("nf.neg_in", vec!["n", "a"]),
+            ("bits_shr", 3) => ("nf.shr_in", vec!["n", "a", "k"]),
             ("bits_of_int", 2) => ("nf.of_int_in", vec!["n", "z"]),
             ("bits_sext", 3) => ("nf.sext_in", vec!["m", "n", "x"]),
             ("bits_and", 3) => ("bits_and_in", vec!["n", "x", "y"]),
@@ -496,7 +523,9 @@ impl<'e> Gen<'e> {
             _ => return None,
         };
         let m = nat(if name == "bits_sext" { &a[1] } else { &a[0] })?;
-        let r = rec::mp(R::Inst(lemma.into(), binds.into_iter().zip(a.iter().cloned()).collect()), vec![rec::simp0()]);
+        // (a right shift: its count a natural too)
+        let prem = if name == "bits_shr" { vec![rec::simp0(), rec::simp0()] } else { vec![rec::simp0()] };
+        let r = rec::mp(R::Inst(lemma.into(), binds.into_iter().zip(a.iter().cloned()).collect()), prem);
         Some((m, r))
     }
 

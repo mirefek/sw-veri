@@ -85,6 +85,105 @@ struct Rx<'f> {
     /// the statement written: its block's number, its index (names fresh
     /// by place, the same in every form)
     at: (u64, usize),
+    /// the small structs held as words (`word_structs`): local -> its
+    /// fields (C name, variable) in order
+    words: BTreeMap<String, Vec<(String, String)>>,
+}
+
+/// a statement's word-struct variables (`word_structs`) written and read:
+/// a field's as `n.f`, all of n's as n whole
+fn word_defs_uses(s: &S, ws: &BTreeMap<String, Vec<(String, String)>>) -> (Vec<String>, Vec<String>) {
+    fn reads(e: &E, ws: &BTreeMap<String, Vec<(String, String)>>, out: &mut Vec<String>) {
+        if let E::Field(x, f) = e {
+            if let E::Name(n) = &**x {
+                if let Some(fs) = ws.get(n) {
+                    out.extend(fs.iter().filter(|(g, _)| g == f).map(|(_, v)| v.clone()));
+                    return;
+                }
+            }
+        }
+        match e {
+            E::Name(n) => out.extend(ws.get(n).into_iter().flatten().map(|(_, v)| v.clone())),
+            E::Num(_) => {}
+            E::Addr(x) | E::Deref(x) | E::Neg(x) | E::Not(x) | E::Cast(_, x) | E::Field(x, _) | E::Arrow(x, _) | E::BitRef(x, _, _) => reads(x, ws, out),
+            E::Index(a, b) | E::Bin(_, a, b) => {
+                reads(a, ws, out);
+                reads(b, ws, out)
+            }
+            E::Mem { base, .. } => reads(base, ws, out),
+            E::Call(_, xs) | E::Code(_, xs) | E::Ctor(xs) => xs.iter().for_each(|x| reads(x, ws, out)),
+        }
+    }
+    // (a target: n's variables, or n.f's)
+    let target = |e: &E, d: &mut Vec<String>, u: &mut Vec<String>| match e {
+        E::Name(n) => d.extend(ws.get(n).into_iter().flatten().map(|(_, v)| v.clone())),
+        E::Field(x, f) if matches!(&**x, E::Name(n) if ws.contains_key(n)) => {
+            let E::Name(n) = &**x else { unreachable!() };
+            d.extend(ws[n].iter().filter(|(g, _)| g == f).map(|(_, v)| v.clone()))
+        }
+        other => reads(other, ws, u),
+    };
+    let (mut d, mut u) = (Vec::new(), Vec::new());
+    match s {
+        S::Assign(l, r) => {
+            reads(r, ws, &mut u);
+            target(l, &mut d, &mut u);
+        }
+        S::Call(l, _, args) => {
+            args.iter().for_each(|a| reads(a, ws, &mut u));
+            if let Some(l) = l {
+                target(l, &mut d, &mut u);
+            }
+        }
+        S::Asm { outs, ins, .. } => {
+            ins.iter().for_each(|(_, e)| reads(e, ws, &mut u));
+            outs.iter().for_each(|(_, e)| target(e, &mut d, &mut u));
+        }
+        S::Return(Some(e)) => reads(e, ws, &mut u),
+        S::If { a, b, .. } => {
+            reads(a, ws, &mut u);
+            reads(b, ws, &mut u)
+        }
+        _ => {}
+    }
+    (d, u)
+}
+
+/// e uses n only as `n.f` (no address of it or of a field)
+fn field_only(e: &E, n: &str) -> bool {
+    let mentions = |x: &E| {
+        let mut v = Vec::new();
+        walk_e(x, &mut v);
+        v.iter().any(|m| m == n)
+    };
+    match e {
+        E::Field(x, _) if matches!(&**x, E::Name(m) if m == n) => true,
+        E::Name(m) => m != n,
+        E::Num(_) => true,
+        E::Addr(x) => !mentions(x),
+        E::Deref(x) | E::Neg(x) | E::Not(x) | E::Cast(_, x) | E::Field(x, _) | E::Arrow(x, _) | E::BitRef(x, _, _) => field_only(x, n),
+        E::Index(a, b) | E::Bin(_, a, b) => field_only(a, n) && field_only(b, n),
+        E::Mem { base, .. } => field_only(base, n),
+        E::Call(_, xs) | E::Code(_, xs) | E::Ctor(xs) => xs.iter().all(|x| field_only(x, n)),
+    }
+}
+
+/// a statement's uses of the word struct n: as a whole set from {}, from a
+/// call or from another word struct, copied into one, returned; else a
+/// field at a time
+fn word_use_ok(s: &S, n: &str, ws: &BTreeMap<String, Vec<(String, String)>>) -> bool {
+    let whole = |e: &E| matches!(e, E::Name(m) if m == n);
+    let other = |e: &E| matches!(e, E::Name(m) if m != n && ws.contains_key(m));
+    match s {
+        S::Assign(l, r) if whole(l) => matches!(r, E::Ctor(v) if v.is_empty()) || other(r),
+        S::Assign(l, r) if whole(r) => other(l),
+        S::Assign(l, r) => field_only(l, n) && field_only(r, n),
+        S::Call(l, _, args) => l.as_ref().is_none_or(|l| whole(l) || field_only(l, n)) && args.iter().all(|a| field_only(a, n)),
+        S::Return(Some(e)) => whole(e) || field_only(e, n),
+        S::If { a, b, .. } => field_only(a, n) && field_only(b, n),
+        S::Asm { outs, ins, .. } => outs.iter().chain(ins.iter()).all(|(_, e)| field_only(e, n)),
+        _ => true,
+    }
 }
 
 fn walk_e(e: &E, out: &mut Vec<String>) {
@@ -142,7 +241,8 @@ fn defs_uses(s: &S) -> (Vec<String>, Vec<String>) {
 impl<'a> Lower<'a> {
     /// The readable form of `f`: its proc and its C function spec.
     pub fn readable(&mut self, f: &Func, sh: &mut Shared) -> Result<String, String> {
-        let (fx, _) = self.frame(f)?;
+        let (mut fx, _) = self.frame(f)?;
+        let words = self.word_structs(f, &mut fx)?;
         let index: HashMap<u64, usize> = f.blocks.iter().enumerate().map(|(i, b)| (b.num, i)).collect();
         let n = f.blocks.len();
         let mut succ = Vec::new();
@@ -163,7 +263,13 @@ impl<'a> Lower<'a> {
             depth: 1,
             emitted: 0,
             at: (0, 0),
+            words,
         };
+        for fs in rx.words.values() {
+            for (_, v) in fs {
+                rx.vars.insert(v.clone(), 64);
+            }
+        }
         self.names(&mut rx)?;
         // (a function of a return alone: as it is, no CFG)
         let cfg = sh.cfg && !self.return_only(&rx, self.past(&rx, 0));
@@ -220,7 +326,10 @@ impl<'a> Lower<'a> {
         }
         for (v, w) in &rx.vars {
             if !rx.params.iter().any(|(p, _, _)| p == v) {
-                writeln!(s, "  var {}: bits[{}] = any bits[{}]", v, w, w).unwrap();
+                // (a word struct's field: its struct and offset, for
+                // scripts/locmap.py)
+                let at = rx.words.iter().find_map(|(n, fs)| fs.iter().position(|(_, x)| x == v).map(|i| format!("  // {} + {}", n, 8 * i)));
+                writeln!(s, "  var {}: bits[{}] = any bits[{}]{}", v, w, w, at.unwrap_or_default()).unwrap();
             }
         }
         if !rx.fx.obj_list.is_empty() {
@@ -381,6 +490,61 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// The small structs whose address is never taken (two 8-byte scalar
+    /// fields, as `struct mapinfo`; set from {}, a field at a time, from a
+    /// call or another such struct, read a field at a time, returned): a
+    /// variable per field (`x_f`) in place of a stack object -- GCC keeps
+    /// them in frame slots or registers, as the other locals. Their objects
+    /// dropped from fx's (the others renumbered).
+    fn word_structs(&self, f: &Func, fx: &mut Fx) -> Result<BTreeMap<String, Vec<(String, String)>>, String> {
+        let mut cand: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for (n, (_, t)) in fx.objs.iter() {
+            let RT::Struct(s) = t else { continue };
+            let Some(DType::Struct { members, .. }) = self.dw.dies.get(s) else { continue };
+            if members.len() != 2 || self.size(t)? != 16 {
+                continue;
+            }
+            let mut fs = Vec::new();
+            let mut ok = true;
+            for (i, m) in members.iter().enumerate() {
+                let ty = self.dwarf_rt(m.ty)?;
+                ok &= m.bit_size.is_none() && m.bit_off == 64 * i as u64 && self.scalar(&ty).is_ok_and(|(p, _)| p == 64);
+                fs.push((m.name.clone(), sanitize(&format!("{}_{}", n, m.name))));
+            }
+            if ok {
+                cand.insert(n.clone(), fs);
+            }
+        }
+        // (any other use: a stack object -- and so the structs copied from
+        // or into it)
+        loop {
+            let bad: Vec<String> = cand.keys().filter(|n| f.blocks.iter().any(|b| b.stmts.iter().any(|s| !word_use_ok(s, n, &cand)))).cloned().collect();
+            if bad.is_empty() {
+                break;
+            }
+            for n in bad {
+                cand.remove(&n);
+            }
+        }
+        let mut keep: Vec<(usize, String, RT)> = fx.objs.iter().filter(|(n, _)| !cand.contains_key(*n)).map(|(n, (k, t))| (*k, n.clone(), t.clone())).collect();
+        keep.sort_by_key(|x| x.0);
+        let old = std::mem::take(&mut fx.obj_list);
+        fx.objs.clear();
+        for (k, n, t) in keep {
+            fx.objs.insert(n, (fx.obj_list.len(), t));
+            fx.obj_list.push(old[k]);
+        }
+        Ok(cand)
+    }
+
+    /// a word struct's field: its variable
+    fn word_var(&self, rx: &Rx, e: &E) -> Option<Result<String, String>> {
+        let E::Field(x, fld) = e else { return None };
+        let E::Name(n) = &**x else { return None };
+        let fs = rx.words.get(n)?;
+        Some(fs.iter().find(|(f, _)| f == fld).map(|(_, v)| v.clone()).ok_or_else(|| format!("no field `{}` of {}", fld, n)))
+    }
+
     fn line(&self, rx: &mut Rx, l: String) {
         rx.out.push(format!("{}{}", "  ".repeat(rx.depth), l));
     }
@@ -477,20 +641,19 @@ impl<'a> Lower<'a> {
         // per block: used before written, written (its statements)
         let mut uses = vec![0u128; n];
         let mut defs = vec![0u128; n];
+        // (a word struct's field variables, by their readable names)
+        let wpos = |v: &str| order.iter().position(|(x, _)| x == v);
         for b in 0..n {
             for st in &rx.f.blocks[b].stmts {
                 let (d, u) = defs_uses(st);
-                for x in u {
-                    if let Some(i) = pos(&x) {
-                        if defs[b] & bit(i) == 0 {
-                            uses[b] |= bit(i);
-                        }
+                let (wd, wu) = word_defs_uses(st, &rx.words);
+                for i in u.iter().filter_map(|x| pos(x)).chain(wu.iter().filter_map(|v| wpos(v))) {
+                    if defs[b] & bit(i) == 0 {
+                        uses[b] |= bit(i);
                     }
                 }
-                for x in d {
-                    if let Some(i) = pos(&x) {
-                        defs[b] |= bit(i);
-                    }
+                for i in d.iter().filter_map(|x| pos(x)).chain(wd.iter().filter_map(|v| wpos(v))) {
+                    defs[b] |= bit(i);
                 }
             }
         }
@@ -887,6 +1050,9 @@ impl<'a> Lower<'a> {
 
     /// a load (as an expression)
     fn load(&mut self, rx: &mut Rx, sh: &mut Shared, e: &E) -> Result<String, String> {
+        if let Some(v) = self.word_var(rx, e) {
+            return v;
+        }
         if let Some((die, sname, field, addr)) = self.field_ref(rx, sh, e)? {
             let (acc, _) = self.accessor(sh, die, &sname, &field, false)?;
             return Ok(format!("{}({})", acc, addr));
@@ -1010,6 +1176,14 @@ impl<'a> Lower<'a> {
                         let v = if w == 64 { v } else { format!("bits[{}]({})", w, v) };
                         self.set(rx, n, v)?;
                     }
+                    // (into a word struct: its two words)
+                    Some(E::Name(n)) if rx.words.contains_key(n) => {
+                        let fs = rx.words[n].clone();
+                        let (w0, w1) = (format!("w{}_{}_0", rx.at.0, rx.at.1), format!("w{}_{}_1", rx.at.0, rx.at.1));
+                        self.line(rx, format!("let ({}, {}) = {}{}, [{}])", w0, w1, c2, fname, av.join(", ")));
+                        self.line(rx, format!("{} := {}", fs[0].1, w0));
+                        self.line(rx, format!("{} := {}", fs[1].1, w1));
+                    }
                     Some(m) => {
                         // a small struct returned in rax:rdx, stored to memory
                         let size = self.size(&self.type_of(&rx.fx, m)?)?;
@@ -1049,6 +1223,16 @@ impl<'a> Lower<'a> {
                 }
                 let v = format!("cas32({}, {}, {})", self.val(rx, sh, p, 64)?, self.val(rx, sh, t_in, 32)?, self.val(rx, sh, s, 32)?);
                 self.set(rx, t, v)
+            }
+            // x86_64's a_or: "=m"(*p) : "r"(v), a 32-bit or into memory
+            S::Asm { tmpl, outs, ins } if tmpl.split_whitespace().collect::<Vec<_>>().join(" ") == "lock ; or %1, %0" => {
+                let ([(c0, E::Deref(p))], [(c1, v)]) = (outs.as_slice(), ins.as_slice()) else { return Err("lock or with other operands".into()) };
+                if c0 != "=m" || c1 != "r" || self.scalar(&self.type_of(&rx.fx, v)?)?.0 != 32 {
+                    return Err("lock or other than of a 32-bit register into memory".into());
+                }
+                let l = format!("or32({}, {})", self.val(rx, sh, p, 64)?, self.val(rx, sh, v, 32)?);
+                self.line(rx, l);
+                Ok(())
             }
             // a system call (layers/gimple.sl's `sys_call1` / `sys_call2` /
             // `sys_call3` / `sys_call6`, by the arguments passed): x86_64's __syscallN --
@@ -1107,6 +1291,11 @@ impl<'a> Lower<'a> {
             }
             S::Return(Some(e)) => {
                 let t = rx.fx.ret.clone();
+                // (a word struct: its words)
+                if let Some(fs) = if let E::Name(n) = e { rx.words.get(n).cloned() } else { None } {
+                    self.line(rx, format!("return ({}, {})", fs[0].1, fs[1].1));
+                    return Ok(());
+                }
                 if let RT::Struct(_) = t {
                     // a small struct: its two words in rax:rdx
                     let size = self.size(&t)?;
@@ -1130,6 +1319,24 @@ impl<'a> Lower<'a> {
     }
 
     fn rassign(&mut self, rx: &mut Rx, sh: &mut Shared, lhs: &E, rhs: &E) -> Result<(), String> {
+        // a word struct set whole (from {}, or another's words) or a field
+        if let Some(fs) = if let E::Name(n) = lhs { rx.words.get(n).cloned() } else { None } {
+            let src = if let E::Name(m) = rhs { rx.words.get(m).cloned() } else { None };
+            for (i, (_, v)) in fs.iter().enumerate() {
+                let x = match &src {
+                    Some(s) => s[i].1.clone(),
+                    None => "0".to_string(),
+                };
+                self.line(rx, format!("{} := {}", v, x));
+            }
+            return Ok(());
+        }
+        if let Some(v) = self.word_var(rx, lhs) {
+            let v = v?;
+            let x = self.val(rx, sh, rhs, 64)?;
+            self.line(rx, format!("{} := {}", v, x));
+            return Ok(());
+        }
         let value_lhs = matches!(lhs, E::Name(n) if self.is_value_name(&rx.fx, n));
         if !value_lhs {
             // a store

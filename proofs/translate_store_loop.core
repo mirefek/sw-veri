@@ -1580,6 +1580,17 @@ proof
   show := mp(mp(all_elim(tr.runs_intro[r := x1 x2. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x1, pair(x5, x6))))], {w}, {ok(w, pair(y1, y2))}), pu), k)
 qed
 
+// the wrapper's return of two words (a small struct): (a, b)
+theorem tr.result_pair: all w a b. a in bits(64) -> b in bits(64) -> w in univ(1) ->
+  runs(mkprog(x1 x2. letin(pair(a, b), x5. x2 = ok(x1, pair(fst(x5), snd(x5))))), w, ok(w, pair(a, b)))
+proof
+  fix w a b
+  assume ha hb hw
+  have k: letin(pair(a, b), x5. ok(w, pair(a, b)) = ok(w, pair(fst(x5), snd(x5)))) by defs(simp(), letin)
+  have pu: pair(w, ok(w, pair(a, b))) in univ(1) by simp(hw, ha, hb)
+  show := mp(mp(all_elim(tr.runs_intro[r := x1 x2. letin(pair(a, b), x5. x2 = ok(x1, pair(fst(x5), snd(x5))))], {w}, {ok(w, pair(a, b))}), pu), k)
+qed
+
 // the entry of a function without arguments (no prologue: the claim at f
 // itself, the world s's with the callers' stack objects v), its procedure
 // q, its return kw: the claim for every entry gives abi.matches. The
@@ -2509,6 +2520,38 @@ proof
   show := apply(tr.hstore_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {c}, {4}, {u}, {bits_sar(32, u, 1)}, {hs}, {hs2}, {ds}, {rs}, {p}, {w}, he, hbase, a2b, hdd, hu, simp(), x32, hkp, hfv, hpt)
 qed
 
+// or r32, [rsp + d] (the home c holding x): g := u | x
+theorem tr.or32_r_home(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g d c z1 z2 x u r hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(39, pair(4, pair(g, pair(x86i.rsp_mem(d), pair(z1, z2)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> d in bits(64) -> c = int_mod(int_sub(d, fr), 18446744073709551616) ->
+  c in dom(hs) -> hs[c] = pair(4, x) -> g in dom(rs) -> rs[g] = pair(4, u) -> r = bits_or(32, u, x) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, fn_update(rs,g, pair(4, r)), p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g d c z1 z2 x u r hs ds rs p w
+  assume hat ha2 hg hd hcd hdh hx hgr hu hr0 hpt
+  have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(m.gpr, g, r)), empty)) proof
+    fix m o
+    assume hi hr hhs hrs ho
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have ac := apply(tr.home_acc, {s}, {base}, {code}, {fr}, {m}, {w}, {hs}, {d}, {c}, {4}, {x}, hi, hhs, hd, hcd, hdh, hx)
+    have hv := apply(tr.home_read, {s}, {base}, {code}, {fr}, {m}, {w}, {hs}, {d}, {c}, {4}, {x}, hi, hhs, hd, hcd, hdh, hx)
+    have rg := apply(tr.regs_get, {m}, {rs}, {g}, {4}, {u}, hrs, hgr, hu)
+    have hx2 := mp(mp(mp(all_elim(hat, {m}, {o}), ho), ipC), hr)
+    obtain f, hf from apply(x86i.or32_r_rsp, {m}, {o}, {g}, {d}, {z1}, {z2}, {len}, ipM, ipU, gR, hd, taut(ac), hx2)
+    show by ex_intro({f}, simp(hf, hv, rg, ipM, ipU, ipC, hr, ha2, hr0, keep(x86i.flags_ok, abi.code_at, x86_64_linux.Machine)))
+  qed
+  have ty: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) ->
+      r in bits(int_mul(8, 4)) && r in bits(64) proof
+    fix m
+    show by simp(hr0, keep(tr.inv, tr.homes, tr.regs))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {4}, {r}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
+qed
+
 // or dword [rsp + d], r32 (09 /r): the home c or'ed with the register
 theorem tr.or32_home(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len d c g x u r hs hs2 ds rs p w. 
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
@@ -2729,6 +2772,44 @@ proof
   have ev := apply(tr.bd_int, {bv}, {d}, hbv, hd, dlt)
   have hus: gimple.usable(w.vm, w.objs, A, 4, true) := rewrite(ev, dus)
   show := apply(tr.store_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {A}, {4}, {k}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, hap, he, hbase, a2b, ab, simp(), simp(), hus, hw2, hred, hpt)
+qed
+
+// mov word [b + d], imm16: the spec's 2-byte store of k
+theorem tr.store16i_bd(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len b d k bv ea hs ds rs p p2 w w2. tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(77, pair(2, pair(x86i.bd_mem(b, d), pair(x86i.bd_mem(b, d), k))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> base in omega -> b in x86_64_linux.Reg -> d in bits(32) -> k in bits(16) ->
+  b in dom(rs) -> rs[b] = pair(8, bv) -> bv in bits(64) -> ea = bits_add(64, bv, d) || (d = 0 && ea = bv) -> g.mem_defined(w, bv, d, 2, true) ->
+  w2 = fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, ea, 2, k))) ->
+  tr.red(p, w, p2, w2) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, rs, p2, w2) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len b d k bv ea hs ds rs p p2 w w2
+  assume hap hat ha2 hbase hb hd hk hbd hbu hbv hea hdef hw2x hred hpt
+  have dnz dlt dus := hdef
+  let A := bits_add(64, bv, d)
+  have ab: A in bits(64) by simp()
+  have eae: ea = A by simp(hea, hbv)
+  have hw2 := rewrite(eae, hw2x)
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, 2, k))), empty) proof
+    fix m o
+    assume hi hr hh hrs hmm ho
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have rb b64 := apply(tr.regs_get, {m}, {rs}, {b}, {8}, {bv}, hrs, hbd, hbu)
+    have d64: d in bits(64) by simp(hd)
+    have ea: x86i.bd_ea(m, b, d) = A by simp(rb, b64, d64)
+    have ev := apply(tr.bd_int, {bv}, {d}, simp(b64), hd, dlt)
+    have hus: gimple.usable(w.vm, w.objs, A, 2, true) := rewrite(ev, dus)
+    have wa := apply(tr.store_acc, {s}, {m}, {w}, {v}, {A}, {2}, hmm, ab, simp(), simp(), hus)
+    have wa2 := rewrite(sym(ea), wa)
+    have hx2 := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+    have e := apply(x86i.store16i_bd, {m}, {o}, {b}, {d}, {k}, {len}, ipM, ipU, hb, d64, hk, wa2, hx2)
+    show by simp(e, ea, hr, ha2)
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  have ev := apply(tr.bd_int, {bv}, {d}, hbv, hd, dlt)
+  have hus: gimple.usable(w.vm, w.objs, A, 2, true) := rewrite(ev, dus)
+  show := apply(tr.store_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {A}, {2}, {k}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, hap, he, hbase, a2b, ab, simp(), simp(), hus, hw2, hred, hpt)
 qed
 
 // mov qword [rip + d], r64 (g holding u): the spec's 8-byte store at a
@@ -3091,6 +3172,87 @@ proof
   show by defs(g, tr.lv)
 qed
 
+// a store setting the flags (a read-modify-write: lock or)
+theorem tr.store_flags_step(zb. bkp, zb pb wb. bka): all s v base code fr a a2 a8 n x hs ds rs p p2 w w2. tr.hap(s, hs, v) ->
+  (all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+     (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "vm",
+       fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, a8, n, x))), empty))) ->
+  base in omega -> a2 in bits(64) -> a8 in bits(64) -> n in omega -> int_le(n, 8) -> gimple.usable(w.vm, w.objs, a8, n, true) ->
+  w2 = fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, a8, n, x))) ->
+  tr.red(p, w, p2, w2) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, rs, p2, w2) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 a8 n x hs ds rs p p2 w w2
+  assume hap he hbase ha2 ha8 hn hn8 hus hw2 hred hpt
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have i := expand(hi, tr.inv)
+    have mM: m in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have mu: m in univ(1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have sM: s in x86_64_linux.Machine by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have cd: abi.code_at(m.vm, base, code) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have wW: w in abi.World && w in univ(1) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access))
+    have r4 := apply(x86i.rsp_typed, sM)
+    have nr := apply(tr.inv_nr, hi)
+    let VM2 := fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, a8, n, x))
+    let M2 := fn_update(fn_update(m, "rip", a2), "vm", VM2)
+    let MX(f) := fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "vm", VM2)
+    let Q(m2) := ex f. x86i.flags_ok(m, f) && m2 = MX(f)
+    have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && Q(m2)) proof
+      fix o
+      assume ho
+      obtain f, hf from mp(all_elim(he, {m}, {o}), hi, hr, hh, hrs, hmm, ho)
+      have q2: Q(MX(f)) by ex_intro({f}, simp(hf, keep(x86i.flags_ok)))
+      show by ex_intro({MX(f)}, taut(q2, hf))
+    qed
+    have post: all m2. Q(m2) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m2) proof
+      fix m2
+      assume hq
+      obtain f, fo e2 from hq
+      have pt := apply(x86i.parts, mM)
+      // the machine's store: writable, its code untouched
+      have wa := apply(tr.store_acc, {s}, {m}, {w}, {v}, {a8}, {n}, hmm, ha8, hn, hn8, hus)
+      have sc := apply(tr.store_code_acc, {base}, {code}, {m.vm}, {a8}, {n}, hn, hbase, cd, wa)
+      have cd2: abi.code_at(fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, a8, n, x)), base, code) := all_elim(sc, {x})
+      have k0: tr.keeps_code(s.vm, m.vm) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.keeps_code))
+      have kc := apply(tr.keeps_store, {s.vm}, {m.vm}, {a8}, {n}, {x}, hn, k0, wa)
+      have kp := apply(tr.store_keeps, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {hs}, {a8}, {n}, {x}, hi, hmm, hh, hap, ha8, hn, hus)
+      have vV: m.vm in x86_64_linux.Vm by simp(pt)
+      have su := apply(g.store_univ, {m.vm}, {a8}, {n}, {x}, vV)
+      have nu: fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, a8, n, x)) in univ(1) by simp(mu, su)
+      have nv := apply(x86.store_vm, {m.vm}, {a8}, {n}, {x}, vV, nu)
+      have m2M: M2 in x86_64_linux.Machine by defs(simp(expand(mM, x86_64_linux.Machine), mu, pt, nv, nu, ha2), x86_64_linux.Machine)
+      have m2u: M2 in univ(1) by simp(mu, nu, ha2)
+      have ws := apply(tr.world_store, {w}, {a8}, {n}, {x}, taut(wW), taut(wW), ha8)
+      have ws2 := rewrite(sym(hw2), ws)
+      have kpt: tr.kept(s.vm, m.vm, s.gpr[4]) by simp(i, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.kept))
+      have vb := apply(tr.kept_bytes, {s.vm}, {m.vm}, {s.gpr[4]}, {x86_64_linux.store_le(m.vm.bytes, a8, n, x)}, kpt)
+      have i2: tr.inv(s, base, code, fr, M2, w2) by defs(simp(i, hw2, m2M, m2u, cd2, kc, kp, ws2, vb, keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, tr.kept)), tr.inv)
+      have khm: tr.homes(s, fn_update(m, "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, a8, n, x))), hs) by taut(kp)
+      have kh: tr.homes(s, M2, hs) by defs(simp(expand(khm, tr.homes)), tr.homes)
+      have mm2 := apply(tr.mem_store, {s}, {m}, {M2}, {w}, {w2}, {v}, {a8}, {n}, {x}, hmm, ha8, hus, simp(), simp(hw2), simp(hw2))
+      have pe: M2.vm.pages = m.vm.pages by simp()
+      have f2 := apply(tr.frame_store, {s}, {m}, {M2}, {ds}, {m.vm}, hfr, simp(), all_elim(x86.grows_refl, {m.vm}), all_elim(x86.stk_ext_refl, {m.vm}), pe, simp(), simp())
+      have fo2: x86i.flags_ok(M2, f) by defs(simp(expand(fo, x86i.flags_ok)), x86i.flags_ok)
+      have ir := apply(tr.inv_flags, {s}, {base}, {code}, {fr}, {M2}, {w2}, {a2}, {f}, i2, ha2, fo2)
+      // (the machine after: M2 with rip and flags -- MX(f))
+      have s1 := mp(fn_update_swap[f := fn_update(m, "rip", a2), k := "vm", a := VM2, j := "rip", b := a2], simp())
+      have s2 := fn_update_twice[f := m, k := "rip", a := a2, b := a2]
+      have s3 := mp(fn_update_swap[f := fn_update(m, "rip", a2), k := "vm", a := VM2, j := "flags", b := f], simp())
+      have mx: fn_update(fn_update(M2, "rip", a2), "flags", f) = MX(f) by simp(s1, s2, s3)
+      have ix := rewrite(mx, ir)
+      have rsx: tr.regs(MX(f), rs) by defs(simp(expand(hrs, tr.regs)), tr.regs)
+      have rpx: MX(f).rip = a2 by simp()
+      have c := apply(tr.pt_regs[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hpt, ix, rpx, rsx, kh, mm2, f2, simp(), simp())
+      have c2 := apply(tr.cl_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], hred, c)
+      show := rewrite(sym(e2), c2)
+    qed
+    show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := p, w := w, m := m, q := y. Q(y)], st), nr), post)
+  qed
+  show by defs(g, tr.lv)
+qed
+
 // cas32 at p (a = p): its old dword D read, the store of s if D is t, else
 // of D
 theorem tr.cas32_at_ok: all w p t sv a. w in abi.World -> w in univ(1) -> p in bits(64) -> t in bits(32) -> sv in bits(32) -> a = int_add(p, 0) ->
@@ -3141,6 +3303,51 @@ proof
     have ld := apply(g.ld32_ok, {s}, {p}, hs, hp, h)
     have su := apply(g.st32_at_ub, {s}, {p}, {0}, {ite(D = t, sv, D)}, {s2}, {e}, hs, h2, he, hp, simp(), hw)
     show by defs(simp(hs, h2, he, ld, su, keep(gimple.ld32, gimple.st32)), gimple.cas32)
+  qed
+  show by taut(hn, c1, c2)
+qed
+
+// or32 at p (a = p): the dword D read, D | sv stored
+theorem tr.or32_at_ok: all w p sv a. w in abi.World -> w in univ(1) -> p in bits(64) -> sv in bits(32) -> a = int_add(p, 0) ->
+  g.mem_defined(w, p, 0, 4, true) && g.mem_defined(w, p, 0, 4, false) ->
+  runs(gimple.or32(p, sv), w, ok(fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, a, 4,
+    bits_or(32, bits_of_int(32, gimple.bytes_at(w.vm, a, 4)), sv)))), empty))
+proof
+  fix w p sv a
+  assume hW hw hp hv ha hd
+  have hdw: g.mem_defined(w, p, 0, 4, true) by taut(hd)
+  have hdr: g.mem_defined(w, p, 0, 4, false) by taut(hd)
+  have ap: a = p by simp(ha, hp)
+  let V := bits_or(32, bits_of_int(32, gimple.bytes_at(w.vm, p, 4)), sv)
+  have vb: V in bits(32) by simp()
+  have ld := apply(g.ld32_ok, {w}, {p}, hw, hp, hdr)
+  have st := apply(tr.st32_at_ok, {w}, {p}, {0}, {V}, {p}, hW, hw, hp, simp(), vb, simp(hp), hdw)
+  have wf := expand(hW, abi.World)
+  have vV: w.vm in x86_64_linux.Vm by simp(wf)
+  have stu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], apply(x86.store_typed, {w.vm.bytes}, {p}, {4}, {V}, simp(vV)))
+  have r: runs(gimple.or32(p, sv), w, ok(fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, p, 4, V))), empty))
+    by defs(simp(hw, ld, st, stu, keep(gimple.ld32, gimple.st32)), gimple.or32)
+  show := subst({y. runs(gimple.or32(p, sv), w, ok(fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, y, 4,
+    bits_or(32, bits_of_int(32, gimple.bytes_at(w.vm, y, 4)), sv)))), empty))}, sym(ap), r)
+qed
+
+theorem tr.or32_ub: all s p sv s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> p in bits(64) ->
+  !(g.mem_defined(s, p, 0, 4, true) && g.mem_defined(s, p, 0, 4, false)) ->
+  runs(gimple.or32(p, sv), s, exc(s2, e))
+proof
+  fix s p sv s2 e
+  assume hs h2 he hp hn
+  have c1: !g.mem_defined(s, p, 0, 4, false) -> runs(gimple.or32(p, sv), s, exc(s2, e)) proof
+    assume h
+    have lu := apply(g.ld32_ub, {s}, {p}, {s2}, {e}, hs, h2, he, hp, h)
+    show by defs(simp(hs, h2, he, lu, keep(gimple.ld32, gimple.st32)), gimple.or32)
+  qed
+  have c2: g.mem_defined(s, p, 0, 4, false) -> !g.mem_defined(s, p, 0, 4, true) -> runs(gimple.or32(p, sv), s, exc(s2, e)) proof
+    assume h hw
+    let D := bits_of_int(32, gimple.bytes_at(s.vm, p, 4))
+    have ld := apply(g.ld32_ok, {s}, {p}, hs, hp, h)
+    have su := apply(g.st32_at_ub, {s}, {p}, {0}, {bits_or(32, D, sv)}, {s2}, {e}, hs, h2, he, hp, simp(), hw)
+    show by defs(simp(hs, h2, he, ld, su, keep(gimple.ld32, gimple.st32)), gimple.or32)
   qed
   show by taut(hn, c1, c2)
 qed
@@ -3237,6 +3444,52 @@ proof
   have d32: D in bits(int_mul(8, 4)) by simp()
   have d64: D in bits(64) by simp()
   show := apply(tr.store_reg_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {bv}, {4}, {V}, {0}, {4}, {D}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, hap, he, hbase, a2b, bb, simp(), simp(), hus, hg0, d32, d64, hw2, hred, hpt)
+qed
+
+// lock or [b] (b holding bv), r32 (g holding sv): the spec's or32 at bv --
+// its dword D, D | sv written
+theorem tr.or32_b(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g b z1 z2 bv sv hs ds rs p p2 w w2. tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(101, pair(4, pair(g, pair(x86i.bd_mem(b, 0), pair(z1, z2)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> base in omega -> g in x86_64_linux.Reg -> b in x86_64_linux.Reg ->
+  b in dom(rs) -> rs[b] = pair(8, bv) -> bv in bits(64) -> g in dom(rs) -> rs[g] = pair(4, sv) ->
+  g.mem_defined(w, bv, 0, 4, true) && g.mem_defined(w, bv, 0, 4, false) ->
+  w2 = fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, bv, 4,
+    bits_or(32, bits_of_int(32, gimple.bytes_at(w.vm, bv, 4)), sv)))) ->
+  tr.red(p, w, p2, w2) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, rs, p2, w2) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g b z1 z2 bv sv hs ds rs p p2 w w2
+  assume hap hat ha2 hbase hg hb hbd hbu bb hgd hgu hd hw2 hred hpt
+  let D := bits_of_int(32, gimple.bytes_at(w.vm, bv, 4))
+  let V := bits_or(32, D, sv)
+  have hdw: g.mem_defined(w, bv, 0, 4, true) by taut(hd)
+  have hdr: g.mem_defined(w, bv, 0, 4, false) by taut(hd)
+  have hus: gimple.usable(w.vm, w.objs, bv, 4, true) by simp(hdw, bb)
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "vm",
+        fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, bv, 4, V))), empty)) proof
+    fix m o
+    assume hi hr hh hrs hmm ho
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have rb := apply(tr.regs_get, {m}, {rs}, {b}, {8}, {bv}, hrs, hbd, hbu)
+    have rg u32 := apply(tr.regs_get, {m}, {rs}, {g}, {4}, {sv}, hrs, hgd, hgu)
+    have tb := apply(x86i.reg_typed, ipM, hb)
+    have ea: x86i.bd_ea(m, b, 0) = bv by simp(rb, tb)
+    have sl: bits_slice(sv, 31, 0) = sv by defs(simp(u32), bits_slice, bits_of_int)
+    have rd := apply(tr.reads, {s}, {m}, {w}, {v}, {bv}, {0}, {4}, bb, simp(), hdr, hmm, simp())
+    have wa := apply(tr.store_acc, {s}, {m}, {w}, {v}, {bv}, {4}, hmm, bb, simp(), simp(), hus)
+    have b0: bits_add(64, bv, 0) = bv by simp(bb)
+    have ra := rewrite(sym(ea), rewrite(b0, rd.1))
+    have wa2 := rewrite(sym(ea), wa)
+    have lw := all_elim(tr.le_bytes, {w.vm}, {bv}, {4})
+    have dm: x86_64_linux.le(m.vm.bytes, bv, 4) = D by simp(rewrite(b0, rd.2), lw, keep(gimple.bytes_at, x86_64_linux.le))
+    have hx := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+    obtain f, fo eo from apply(x86i.lock_or32_b, {m}, {o}, {g}, {b}, {z1}, {z2}, {len}, ipM, ipU, hg, hb, ra, wa2, hx)
+    show by ex_intro({f}, simp(fo, eo, ea, dm, rg, sl, hr, ha2, keep(x86i.flags_ok)))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.store_flags_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {bv}, {4}, {V}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, hap, he, hbase, a2b, bb, simp(), simp(), hus, hw2, hred, hpt)
 qed
 
 // mov [b + d], r32 (b holding bv, g holding u: the spec's field store of 4
@@ -3518,6 +3771,40 @@ proof
       R in bits(int_mul(8, 8)) && R in bits(64) proof
     fix m
     have i64 := mp(bits_or_in[n := 64, x := u, y := x], simp())
+    show by simp(i64, keep(tr.inv, tr.homes, tr.regs))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {8}, {R}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
+qed
+
+// xor r64, r64 (registers of any widths)
+theorem tr.xor64_rr(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g h n1 u n2 x r hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(53, pair(8, pair(h, pair(tag(0, g), pair(tag(0, g), tag(0, h))))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> h in x86_64_linux.Reg -> g in dom(rs) -> rs[g] = pair(n1, u) -> h in dom(rs) -> rs[h] = pair(n2, x) ->
+  r = bits_xor(64, u, x) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, fn_update(rs, g, pair(8, r)), p, w) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g h n1 u n2 x r hs ds rs p w
+  assume hat ha2 hg hh hd hu hdh hx hr hpt0
+  have hpt := rewrite(hr, hpt0)
+  let R := bits_xor(64, u, x)
+  have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+      (ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", a2), "flags", f), "gpr", fn_update(m.gpr, g, R)), empty)) proof
+    fix m o
+    assume hi hr hh0 hrs ho
+    have ip := apply(tr.inv_parts, hi)
+    have ur _ := apply(tr.regs_get, {m}, {rs}, {g}, {n1}, {u}, hrs, hd, hu)
+    have xr _ := apply(tr.regs_get, {m}, {rs}, {h}, {n2}, {x}, hrs, hdh, hx)
+    have hx2 := mp(mp(mp(all_elim(hat, {m}, {o}), ho), taut(ip)), hr)
+    obtain f, hf from apply(x86i.xor64_rr, {m}, {o}, {g}, {h}, {len}, taut(ip), taut(ip), gR, hh, hx2)
+    show by ex_intro({f}, simp(hf, ur, xr, hr, ha2, keep(x86i.flags_ok)))
+  qed
+  have ty: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) ->
+      R in bits(int_mul(8, 8)) && R in bits(64) proof
+    fix m
+    have i64 := mp(bits_xor_in[n := 64, x := u, y := x], simp())
     show by simp(i64, keep(tr.inv, tr.homes, tr.regs))
   qed
   have a2b: a2 in bits(64) by simp(ha2)

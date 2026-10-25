@@ -113,7 +113,10 @@ impl<'e> Gen<'e> {
             }
         }
         let epi = self.cfg_epilogue();
-        cuts.retain(|a| self.insns.get(a).is_some_and(|i| !matches!(i.row, 124 | 125)) && !epi.contains(a));
+        // (nor a `nop` before a lone `jmp`: the same)
+        let lone_jmp = |g: &Self, a: &u128| g.insns.get(a).is_some_and(|i| matches!(i.row, 124 | 125));
+        let nop_jmp = |g: &Self, a: &u128| g.insns.get(a).is_some_and(|i| i.row == 109 && lone_jmp(g, &((a + i.len) % P64)));
+        cuts.retain(|a| self.insns.get(a).is_some() && !lone_jmp(self, a) && !nop_jmp(self, a) && !epi.contains(a));
         cuts.insert(start);
         cuts
     }
@@ -832,7 +835,21 @@ impl<'e> Gen<'e> {
         for (key, (nb, v)) in &hs2 {
             match st.hsm.get(key) {
                 Some((nb0, v0)) if nb0 == nb && self.canon(v0) == self.canon(v) => {}
-                _ => return Err(format!("{:x}: label {}'s home {:x} does not hold {} here", st.a, k2, key, self.print(v))),
+                Some((nb0, v0)) => {
+                    return Err(format!(
+                        "{:x}: label {}'s home {:x} does not hold {} ({} bytes; N: {}) here: it holds {} ({} bytes; N: {})",
+                        st.a,
+                        k2,
+                        key,
+                        self.print(v),
+                        nb,
+                        self.print(&self.canon(v)),
+                        self.print(v0),
+                        nb0,
+                        self.print(&self.canon(v0))
+                    ))
+                }
+                None => return Err(format!("{:x}: label {}'s home {:x} does not hold {} here: not a home", st.a, k2, key, self.print(v))),
             }
         }
         for (r, nb, v) in &regs2 {

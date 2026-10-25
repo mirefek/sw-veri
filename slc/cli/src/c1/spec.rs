@@ -870,7 +870,19 @@ impl<'e> Gen<'e> {
             let v = self.mk("ite", vec![self.mk("eq", vec![d.clone(), tv.clone()]), sv.clone(), d.clone()]);
             let empty = self.mk("empty", vec![]);
             let ub = p(mpf("tr.cas32_ub", vec![t(&w), t(&pp), t(&tv), t(&sv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
-            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)), bf: None }));
+            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)), or: None, bf: None }));
+        }
+        // a locked or: a 4-byte store at p of its old dword D | s
+        if let Some(x) = self.app(op, "gimple.or32", 2) {
+            let (pp, sv) = (x[0].clone(), x[1].clone());
+            let w = self.w.clone();
+            let cond = self.mk("and", vec![self.mem_defined(&w, &pp, &lit(0), 4, true), self.mem_defined(&w, &pp, &lit(0), 4, false)]);
+            let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
+            let d = self.mk("bits_of_int", vec![lit(32), self.mk("gimple.bytes_at", vec![vm, pp.clone(), lit(4)])]);
+            let v = self.mk("bits_or", vec![lit(32), d, sv.clone()]);
+            let empty = self.mk("empty", vec![]);
+            let ub = p(mpf("tr.or32_ub", vec![t(&w), t(&pp), t(&sv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
+            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: None, or: Some(sv), bf: None }));
         }
         let is_store = |g: &Gen, t: &Term| {
             g.app(t, "gimple.stbf", 6).is_some() ||
@@ -918,7 +930,7 @@ impl<'e> Gen<'e> {
                 vec![t(&w), t(&pp), t(&off), t(&size), t(&pos), t(&k), t(&fv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
             );
             let ub = self.helper_ub(&helper, &inner, inner_ub)?;
-            return Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data: None, cas: None, bf: Some((size, pos, k, fv)) }));
+            return Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data: None, cas: None, or: None, bf: Some((size, pos, k, fv)) }));
         }
         // (constant bytes: all zero, else not covered)
         let mut data = None;
@@ -960,7 +972,7 @@ impl<'e> Gen<'e> {
             ),
         };
         let ub = self.helper_ub(&helper, &inner, inner_ub)?;
-        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None, bf: None }))
+        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None, or: None, bf: None }))
     }
 
     /// A move of a hand-written readable model (layers/musl_asm.sl:

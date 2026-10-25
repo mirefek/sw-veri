@@ -315,11 +315,34 @@ impl<'e> Gen<'e> {
                 Some(fb[1].clone())
             })(),
         };
-        let (nargs, proc, kw, wrap, bl) = match (parts, &plain) {
-            (Some(x), _) => x,
-            (None, Some(_)) => (0, Term::bvar(0), Term::bvar(0), Term::bvar(0), None),
-            (None, None) => return Err(format!("`{}`: not a procedure's spec", spec_name)),
+        // (the same for a function of n <= 6 arguments: past the guard any
+        // program B of them, `mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B)`
+        // (tr.entry_np) -- its program at args, and B as x0 x1 x2. B)
+        let plain_g: Option<(u128, Term, Term)> = match (&parts, &plain) {
+            (None, None) => (|| {
+                let fb = self.app(&sbody, "fn_build", 2)?;
+                let mp = self.app(&fb[1], "mkprog", 1)?;
+                let or = self.app(&mp[0], "or", 2)?;
+                let guard = self.app(&or[0], "not", 1)?;
+                let le = self.app(&guard[0], "ord_le", 2)?;
+                let n = nat(&le[0])?;
+                (1..=6).contains(&n).then_some(())?;
+                let prog = self.lam(&self.mk("mkprog", vec![or[1].clone()]), &["x0"], &["x0"])?;
+                let bl = self.lam(&or[1], &["x0", "x1", "x2"], &["x0", "x1", "x2"])?;
+                let &ps = self.env.sym_by_name.get(pname)?;
+                self.reroot = Some(ps);
+                Some((n, prog, bl))
+            })(),
+            _ => None,
         };
+        let (nargs, proc, kw, wrap, bl) = match (parts, &plain, &plain_g) {
+            (Some(x), _, _) => x,
+            (None, Some(_), _) => (0, Term::bvar(0), Term::bvar(0), Term::bvar(0), None),
+            (None, None, Some((n, _, _))) => (*n, Term::bvar(0), Term::bvar(0), Term::bvar(0), None),
+            (None, None, None) => return Err(format!("`{}`: not a procedure's spec", spec_name)),
+        };
+        // (a plain spec at the entry: its program; with arguments, at args)
+        let plain = plain.or_else(|| plain_g.as_ref().map(|(_, prog, _)| prog.instantiate_params(&[args_t.clone()], &self.env.binders_fn())));
         let guarded = nargs > 0;
         // (beyond six arguments: the rest on the stack, the list stk; the
         // spec's arguments seq_concat(args, stk))
@@ -630,6 +653,25 @@ impl<'e> Gen<'e> {
                 );
                 let hle = self.assume(&hle_t)?;
                 self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in), simp0(), simp0(), s_(&sq.hstk), simp0(), s_(&hle)]), &[])?
+            } else if let Some((_, _, bl3)) = &plain_g {
+                // (past the guard any program of the arguments)
+                let inst = R::Inst(
+                    "tr.entry_np".into(),
+                    vec![
+                        ("lb", lb.clone()),
+                        ("lc", lc.clone()),
+                        ("base", b.clone()),
+                        ("code", c.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("n", lit(nargs)),
+                        ("fd", lit(fd)),
+                        ("rs", rsl),
+                        ("B", bl3.clone()),
+                        ("E", e_lam.clone()),
+                    ],
+                );
+                self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
             } else {
             let inst = R::Inst(
                 "tr.entry_n".into(),

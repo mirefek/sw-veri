@@ -12,8 +12,19 @@ the configuration alone (`mp.am_machine`, `mp.as_machine`,
 (`mp.mi_machine`) and the `malloc` symbol (`mp.dm_machine`,
 proofs/mallocng/fun/malloc_machine.core), all against malloc's purpose spec.
 
-Next: free and calloc -- `get_nominal_size`, `record_seq`, `okay_to_free`,
-`free_group`, `nontrivial_free`, `__libc_free`, `calloc`.
+Next: free's purpose proofs. Its translation unit's C1 is done
+(proofs/mallocng/machine/c1_free.core; free.c's copies of malloc.c's
+functions against malloc.c's CFG forms, their purpose proofs the same).
+- `get_nominal_size`, `record_seq`, `okay_to_free`: specs and C2.
+- `free_group` and `nontrivial_free` call each other (a nested group's
+  slot freed in its container group): their specs indexed by the nesting
+  depth d -- `free_group` at d from `nontrivial_free` at d - 1, that at d
+  from `free_group` at d; by induction on d at machine level, no
+  recursion in the engine.
+- `__libc_free`, the `free` symbol (src/malloc/free.c); then `calloc`.
+- `contract` finds a function's C1 by its CFG form: two now for the copies
+  (free.c's at the chain's end for that) -- a copy's contract needs the
+  C1 named (its address).
 
 Then the top level for malloc, free and calloc together
 (`musl.impl_malloc` .., proofs/mallocng/claim.core):

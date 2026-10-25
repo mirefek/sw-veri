@@ -1018,6 +1018,108 @@ proof
   show := apply(tr.entry_d, {SPEC}, {args}, {s}, {v}, {mem}, {o}, hM, ent.4, sim2, hr)
 qed
 
+// The same for a function of n arguments: its spec, past the arguments'
+// guard, any program B of them (the stack objects' release around the
+// procedure's call)
+theorem tr.entry_gp(base, code, statics, f, n, x0 x1 x2. B, x5 x6 x7. E):
+  (all s args v. s in x86_64_linux.Machine -> E(s, args, v) -> tr.entry_ok_u(s, args)) ->
+  (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
+    E(s, args, v) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
+    tr.sim(s, zb. false, zb pb wb. false, v, mkprog(x1 x2. B(args, x1, x2)), abi.view(s, v, mem), s)) ->
+  (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
+    E(s, args, v) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B(x0, x1, x2))), args, v, mem, s, o))
+proof
+  assume hE hpro
+  fix args v mem s o
+  assume hA hvo hmv hM hsu hl hrip he hob hvw hr
+  let W := abi.view(s, v, mem)
+  let SPEC := fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B(x0, x1, x2)))
+  let BODY := mkprog(x1 x2. B(args, x1, x2))
+  have su := hsu
+  have ou := apply(abi.objs_univ, hvo)
+  have mu := apply(x86.vm_univ, hmv)
+  have ocu := mp(all_elim(abi.objs_at_univ, {v}, {s.fs_base}), ou)
+  have hvu: W in univ(1) by simp(su, ou, mu, ocu)
+  // the spec applied: its body at args
+  have ae: SPEC[args] = mkprog(x1 x2. !ord_le(n, seq_len(args)) || B(args, x1, x2)) by simp(hA)
+  have enough: ord_le(n, seq_len(args)) -> tr.matches_t(SPEC, args, v, mem, s, o) proof
+    assume hg
+    have sim0 := mp(all_elim(hpro, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, su, hl, hrip, he, hob, hvw, hg)
+    have k: all o2. B(args, W, o2) -> (!ord_le(n, seq_len(args)) || B(args, W, o2)) proof
+      fix o2
+      assume b
+      show by taut(b)
+    qed
+    have r0 := mp(tr.mkprog_mono[s := W, r1 := x1 x2. !ord_le(n, seq_len(args)) || B(args, x1, x2), r2 := x1 x2. B(args, x1, x2)], k)
+    have red: tr.red(SPEC[args], W, BODY, W) by defs(rewrite(sym(ae), r0), tr.red)
+    have sim := apply(tr.sim_red[bkp := zb. false, bka := zb pb wb. false], red, sim0)
+    show := apply(tr.entry_d, {SPEC}, {args}, {s}, {v}, {mem}, {o}, hM, apply(tr.entry_stack_u, hM, mp(all_elim(hE, {s}, {args}, {v}), hM, he)).4, sim, hr)
+  qed
+  have few: !ord_le(n, seq_len(args)) -> tr.matches_t(SPEC, args, v, mem, s, o) proof
+    assume hng
+    have eu: empty in univ(1) by simp()
+    have pu: pair(W, exc(W, empty)) in univ(1) by simp(hvu)
+    have rr := mp(mp(all_elim(tr.runs_intro[r := x1 x2. !ord_le(n, seq_len(args)) || B(args, x1, x2)], {W}, {exc(W, empty)}), pu), taut(hng))
+    have rs := rewrite(sym(ae), rr)
+    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+    have wW := apply(abi.world_typed, hM, hvo, hmv, hvu)
+    have rst: abi.raise_state(W) by defs(apply(tr.world_and, wW), abi.raise_state)
+    have ub: abi.raises_at(SPEC, args, v, mem, s) by defs(ex_intro({empty}, {W}, taut(eu, eno, rst, rs)), abi.raises_at)
+    show by defs(taut(ub), tr.matches_t)
+  qed
+  show by taut(enough, few)
+qed
+
+theorem tr.entry_np(lb, lc, base, code, statics, f, n, fd, x0 x1. rs, x0 x1 x2. B, x5 x6 x7. E): base in omega ->
+  (all vm. abi.loaded(vm, lb, lc, statics) -> abi.code_at(vm, base, code)) ->
+  (all s args v. s in x86_64_linux.Machine -> E(s, args, v) -> tr.entry_ok_u(s, args)) ->
+  (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) -> ord_le(n, seq_len(args)) -> tr.regs(s, rs(args, s))) ->
+  (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(n, seq_len(args)) ->
+    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args, v) -> tr.vabove(s, v) ->
+    tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. B(args, x1, x2)), abi.view(s, v, mem))) ->
+  (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
+    E(s, args, v) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
+    tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || B(x0, x1, x2))), args, v, mem, s, o))
+proof
+  assume hbase hsub hE hregs hbody
+  have hpro: all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
+      E(s, args, v) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
+      tr.sim(s, zb. false, zb pb wb. false, v, mkprog(x1 x2. B(args, x1, x2)), abi.view(s, v, mem), s) proof
+    fix args v mem s
+    assume hA hvo hmv hM su hl hrip he hob hvw hg
+    let W := abi.view(s, v, mem)
+    have heu := mp(all_elim(hE, {s}, {args}, {v}), hM, he)
+    have hc := mp(all_elim(hsub, {s.vm}), hl)
+    have ent := apply(tr.entry_stack_u, hM, heu)
+    have rsv gap hdf := apply(tr.entry_rsv_u, heu)
+    have r4 := apply(x86i.rsp_typed, hM)
+    have ou := apply(abi.objs_univ, hvo)
+    have mu := apply(x86.vm_univ, hmv)
+    have ocu := mp(all_elim(abi.objs_at_univ, {v}, {s.fs_base}), ou)
+    have hvu: W in univ(1) by simp(su, ou, mu, ocu)
+    have wt := apply(abi.world_typed, hM, hvo, hmv, hvu)
+    have z0: int_sub(s.gpr[4], 0) = s.gpr[4] by arith(r4)
+    have wbk := apply(tr.entry_brk_u, heu, hvw)
+    have can := apply(tr.entry_can_u, heu)
+    have inv: tr.inv(s, base, code, 0, s, W) by defs(simp(subset_refl[s := s.os.events], hvw.1, gap, rsv, all_elim(tr.keeps_refl, {s.vm}),
+      all_elim(tr.kept_refl, {s.vm}, {s.gpr[4]}), z0, hM, su, hc, hdf, wt, hvu, ent, wbk, can,
+      keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
+    have {slt} := inv
+    have vab := apply(tr.vabove_ok, hM, slt, hvo, hob)
+    have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hg, hl, hvu, he, vab)
+    have hh := all_elim(tr.homes_empty, {s}, {s})
+    have rr := mp(all_elim(hregs, {args}, {s}), hA, hM, heu, hg)
+    have mm := apply(tr.mem_entry, hM, can, hob, hvw)
+    have fe := all_elim(tr.frame_entry, {s}, {fd})
+    have lt0 := apply(tr.sp_lt, {s.gpr[4]}, r4, ent.4)
+    have ns0: !tr.stopk(s, zb. false, s) by defs(taut(lt0), tr.stopk)
+    have c0 := mp(all_elim(expand(body, tr.pt), {s}), inv, hrip, hh, rr, mm, fe)
+    show := mp(expand(c0, tr.cl).2, ns0)
+  qed
+  show := mp(tr.entry_gp[base := lb, code := lc, statics := statics, f := f, n := n, B := x0 x1 x2. B(x0, x1, x2), E := x5 x6 x7. E(x5, x6, x7)], hE, hpro)
+qed
+
 // (an operation whose arguments read the world -- `ld64(fs_base, 40)`: at
 // the point's)
 theorem tr.qs_atop(w, x0. op, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k): all o.
