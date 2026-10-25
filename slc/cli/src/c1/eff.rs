@@ -61,7 +61,7 @@ pub struct Eff<'e> {
 
 /// A world changed in a field (`fn_update(S, field, V)`): the lemma showing
 /// it valid (proofs/translate_struct.core)
-const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm"), ("objs", "tr.valid_objs")];
+const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm"), ("vm", "tr.valid_gone"), ("objs", "tr.valid_objs")];
 
 /// A term's type by its head (`f(a..) in T`): the lemma, all a.. ->
 /// premises on the arguments (each `a in T'`) -> f(a..) in T
@@ -197,7 +197,23 @@ impl<'e> Eff<'e> {
             Node::Bytes(b) => Some(String::from_utf8_lossy(b).to_string()),
             _ => None,
         });
-        let Some((_, rule)) = field.and_then(|f| VALID.iter().find(|(n, _)| *n == f)) else { return Err(format!("no validity rule for a return to {}", self.short(s2))) };
+        let Some(f) = field else { return Err(format!("no validity rule for a return to {}", self.short(s2))) };
+        // (the field's lemmas in turn: the first whose premises the facts
+        // in hand meet -- each change's lemma has its own, fresh pages',
+        // pages gone)
+        let mut errs = Vec::new();
+        for (_, rule) in VALID.iter().filter(|(n, _)| *n == f) {
+            match self.valid_by(rule, &goal) {
+                Ok(x) => return Ok(x),
+                Err(x) => errs.push(x),
+            }
+        }
+        Err(if errs.is_empty() { format!("no validity rule for a return to {}", self.short(s2)) } else { errs.join("; ") })
+    }
+
+    /// `goal` (`tr.returns_valid(..)`) by the validity lemma `rule`
+    fn valid_by(&mut self, rule: &str, goal: &Term) -> R<Seq> {
+        let goal = goal.clone();
         let f = self.api.fact(self.env, rule).map_err(e)?;
         let mut vars = Vec::new();
         f.concl().vars(&mut vars);

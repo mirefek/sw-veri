@@ -1050,8 +1050,8 @@ impl<'a> Lower<'a> {
                 let v = format!("cas32({}, {}, {})", self.val(rx, sh, p, 64)?, self.val(rx, sh, t_in, 32)?, self.val(rx, sh, s, 32)?);
                 self.set(rx, t, v)
             }
-            // a system call (layers/gimple.sl's `sys_call1` / `sys_call3` /
-            // `sys_call6`, by the arguments passed): x86_64's __syscallN --
+            // a system call (layers/gimple.sl's `sys_call1` / `sys_call2` /
+            // `sys_call3` / `sys_call6`, by the arguments passed): x86_64's __syscallN --
             // "=a"(ret) : "a"(n), "D"(a1), "S"(a2), "d"(a3), ..; the
             // registers not passed are no argument of the call made
             S::Asm { tmpl, outs, ins } if tmpl.trim() == "syscall" => {
@@ -1085,8 +1085,8 @@ impl<'a> Lower<'a> {
                 }
                 let n = n.ok_or("syscall without its number")?;
                 let k = a.iter().take_while(|x| x.is_some()).count();
-                if a[k..].iter().any(|x| x.is_some()) || ![1, 3, 6].contains(&k) {
-                    return Err(format!("syscall with {} arguments, or not the first ones (1, 3 or 6 so far)", a.iter().flatten().count()));
+                if a[k..].iter().any(|x| x.is_some()) || ![1, 2, 3, 6].contains(&k) {
+                    return Err(format!("syscall with {} arguments, or not the first ones (1, 2, 3 or 6 so far)", a.iter().flatten().count()));
                 }
                 let args: Vec<String> = a.into_iter().flatten().collect();
                 self.set(rx, r, format!("sys_call{}({}, {})", k, n, args.join(", ")))

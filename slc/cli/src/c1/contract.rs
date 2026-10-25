@@ -7,7 +7,10 @@
 //!   `g.fun_void_ghost`, `_void0_ghost`); THM's premises on the procedure's
 //!   arguments shown (by `simp`, `arith`, the facts L), the others kept;
 //! - `THM_divg`: SPEC diverges nowhere it does not also raise
-//!   (`divergence`, with the ghost family's lemmas);
+//!   (`divergence`, with the ghost family's lemmas); a `THM_divg` /
+//!   `THM_divw` proven before the line is used instead (a body
+//!   `divergence` does not take: a choice that may have no value, as a
+//!   memory's havoc -- `mp.sy2_divw`);
 //! - `THM_implements`: FN's machine code implements SPEC (its C1 theorem
 //!   `P.implements` and its CFG form refining the structured one, `refines`,
 //!   by `tr.implements_refine`, `tr.implements_abi_g`), its callees given
@@ -519,20 +522,30 @@ impl<'e> Ct<'e> {
         };
         let fun = self.close(fun, &hyps, &vs)?;
         self.out.push((format!("{}_fun", by), fun.clone()));
-        // the divergence
-        let (divg, dname) = match &gh {
+        // the divergence (proven before, when its spec's body is not of
+        // `divergence`'s shapes: a choice that may have no value, as a
+        // memory's havoc -- that it has one the proof's)
+        let dname = if gh.is_some() { "divg" } else { "divw" };
+        let given = self.api.fact(self.env, &format!("{}_{}", by, dname)).ok();
+        if given.is_some() && !wq.params.is_empty() {
+            return Err(format!("{}_{}: proven before, for a spec with parameters (not yet)", by, dname));
+        }
+        let divg = if let Some(d) = given { d } else {
+        let divg = match &gh {
             Some(g) => {
                 let gs = self.ghost_join(g)?;
                 let dgoal = self.mk("tr.div_raises_g", vec![g.clone(), qf.clone()])?;
-                (self.api.by(self.env, &dgoal, G::Divergence(vec![univ.clone().unwrap(), gs])).map_err(|x| format!("{}_divg: {}", by, x.0))?, "divg")
+                self.api.by(self.env, &dgoal, G::Divergence(vec![univ.clone().unwrap(), gs])).map_err(|x| format!("{}_divg: {}", by, x.0))?
             }
             None => {
                 let dgoal = self.mk("tr.div_raises", vec![qf.clone()])?;
-                (self.api.by(self.env, &dgoal, G::Divergence(Vec::new())).map_err(|x| format!("{}_divw: {}", by, x.0))?, "divw")
+                self.api.by(self.env, &dgoal, G::Divergence(Vec::new())).map_err(|x| format!("{}_divw: {}", by, x.0))?
             }
         };
-        let divg_c = self.close(divg.clone(), &[], &wq.params)?;
-        self.out.push((format!("{}_{}", by, dname), divg_c));
+        let d = self.close(divg.clone(), &[], &wq.params)?;
+        self.out.push((format!("{}_{}", by, dname), d));
+        divg
+        };
         // the machine code: FN's C1 theorem (`.. -> tr.implements_at(f,
         // CFUN(..), base, code, statics)`) and its CFG form refining the
         // structured one (`refines`: `.. -> runs(CFUN(..)[regs], ..) ->

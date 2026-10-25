@@ -440,9 +440,20 @@ proc[World] os_mprotect(addr: Addr, len: bits[64], prot: bits[64]) -> bits[64] {
   return mprot_ret(before, addr, len)
 }
 
+// munmap: the pages from addr's for len gone (EINVAL: addr not a page's
+// start, len 0, or the pages beyond the task's)
+proc[World] os_munmap(addr: Addr, len: bits[64]) -> bits[64] {
+  if uint(addr) % PAGE != 0 || len = 0 { return err(EINVAL) }
+  if page_of(addr) + pages_for(uint(len)) > TASK_SIZE / PAGE { return err(EINVAL) }
+  let before = vm
+  havoc vm where gone_pages(before, vm, page_of(addr), pages_for(uint(len))) && vm.brk = before.brk
+  return 0
+}
+
 // The calls by the arguments passed (the registers not passed no
 // argument of the call made, which reads only its own): with one, brk
-// (12); with three, mprotect (10); with six, mmap (9).
+// (12); with two, munmap (11); with three, mprotect (10); with six, mmap
+// (9).
 proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
   require uint(n) = 12
   // the pages it gives back, the break's own (it takes new ones only where
@@ -452,6 +463,13 @@ proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
     sys_pages_ok(vm, objs, pages_for(uint(a1)), pages_for(uint(vm.brk)) - pages_for(uint(a1))) &&
     (all q: nat. pages_for(uint(a1)) <= q && q < pages_for(uint(vm.brk)) -> mapped(vm, q) -> vm.pages[q].value.kind = heap)
   return os_brk(a1)
+}
+
+proc[World] sys_call2(n: bits[64], a1: bits[64], a2: bits[64]) -> bits[64] {
+  require uint(n) = 11
+  // its pages
+  require sys_pages_ok(vm, objs, page_of(a1), pages_for(uint(a2)))
+  return os_munmap(a1, a2)
 }
 
 proc[World] sys_call3(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64]) -> bits[64] {

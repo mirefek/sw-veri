@@ -229,6 +229,22 @@ fn syscall3_spec_fun() -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
+// a 2-argument system call n, as malloc makes one: munmap(addr, len)
+// (`__syscall2(SYS_munmap, ..)`) -- the kernel's: the pages from addr's
+// for len gone, 0 (-EINVAL: addr not a page's start, len 0, the pages past
+// the task's). The pages the kernel's to unmap.
+proc[World] syscall2_spec(n: bits[64], addr: Addr, len: bits[64]) -> bits[64] {
+  require uint(n) = 11 && sys_pages_ok(vm, objs, page_of(addr), pages_for(uint(len)))
+  either { overflow() } or { return os_munmap(addr, len) }
+}
+
+fn syscall2_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = syscall2_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
 // errno's cell writable, the thread pointer sound (a failing call sets it)
 pred errno_ok(vm: Vm, objs: Objs, fs: Addr) =
   uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
@@ -356,6 +372,32 @@ proc[World] mprotect_spec(addr: Addr, len: bits[64], prot: bits[32]) -> bits[32]
 fn mprotect_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
   let r = mprotect_spec(bits[64](args[0]), bits[64](args[1]), bits[32](args[2]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+// munmap(addr, len): the pages from addr's for len gone, 0; or -1, errno
+// EINVAL (addr not a page's start, len 0, the pages past the task's),
+// nothing else changed. The pages ones the kernel may unmap (sys_pages_ok:
+// off the stack's space, not executable), neither the thread pointer's
+// nor errno's (`tls_off`: __syscall_ret runs after).
+proc[World] munmap_spec(addr: Addr, len: bits[64]) -> bits[32] {
+  require errno_ok(vm, objs, fs_base) && sys_pages_ok(vm, objs, page_of(addr), pages_for(uint(len))) &&
+    tls_off(fs_base, page_of(addr), pages_for(uint(len)))
+  either { overflow() } or {
+    if uint(addr) % PAGE != 0 || len = 0 || page_of(addr) + pages_for(uint(len)) > TASK_SIZE / PAGE {
+      vm := wr32(vm, errno_at(fs_base), EINVAL)
+      return bits[32](2^32 - 1)
+    }
+    let before = vm
+    havoc vm where gone_pages(before, vm, page_of(addr), pages_for(uint(len))) && vm.brk = before.brk
+    return 0
+  }
+}
+
+fn munmap_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 2
+  let r = munmap_spec(bits[64](args[0]), bits[64](args[1]))
   let w = result[32](r)
   return (w, any bits[64])
 }

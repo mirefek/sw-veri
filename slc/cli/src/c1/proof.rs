@@ -1379,7 +1379,7 @@ impl<'e> Gen<'e> {
         self.then(tr, st2)
     }
 
-    /// A system call (tr.sys_call1, tr.sys_call3, tr.sys_call6): the machine's
+    /// A system call (tr.sys_call1, tr.sys_call2, tr.sys_call3, tr.sys_call6): the machine's
     /// `syscall` at st's address, rax and rdi (rsi, rdx, r10, r8, r9) holding the spec's number and
     /// arguments; the claim after it (rax the result, the other registers
     /// not known, the frame rsp's page) for every world and result
@@ -1390,9 +1390,10 @@ impl<'e> Gen<'e> {
         let a2 = (a + insn.len) % P64;
         let (rule, names): (&str, &[&str]) = match args.len() {
             1 => ("tr.sys_call1", &["a1"]),
+            2 => ("tr.sys_call2", &["a1", "b2"]),
             3 => ("tr.sys_call3", &["a1", "b2", "b3"]),
             6 => ("tr.sys_call6", &["a1", "b2", "b3", "b4", "b5", "b6"]),
-            n => return Err(format!("{:x}: a system call with {} arguments (1, 3 or 6)", a, n)),
+            n => return Err(format!("{:x}: a system call with {} arguments (1, 2, 3 or 6)", a, n)),
         };
         let mut regs = vec![(0u128, &nv)];
         // (Linux's argument registers: rdi, rsi, rdx, r10, r8, r9)

@@ -129,7 +129,7 @@ enum Red {
     /// continuation, handlers and rest (`one`: call1, the result's rax only)
     /// (`stk`: call1_s, a callee with stack arguments)
     Call { g: Term, args: Vec<Term>, list: Term, one: bool, stk: bool, a: Term, xx: Term, dd: Term, k: Term },
-    /// a system call (gimple.sys_call1, sys_call3, sys_call6; the machine's `syscall`
+    /// a system call (gimple.sys_call1, sys_call2, sys_call3, sys_call6; the machine's `syscall`
     /// makes it): its number and arguments, the block's continuation,
     /// handlers and rest
     Sys { n: Term, args: Vec<Term>, a: Term, xx: Term, dd: Term, k: Term },

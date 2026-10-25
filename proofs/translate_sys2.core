@@ -1,0 +1,591 @@
+// C1's rule for `syscall` with two arguments, munmap (readable GIMPLE's
+// `sys_call2`, layers/gimple.sl): the machine's Linux munmap, the world's
+// memory changed alike -- the pages from addr's for len gone, on the
+// world's pages (`sys_pages_ok`: off the stack's space, not executable) --
+// as for brk's shrinking (proofs/translate_sys.core).
+//
+//   checked after proofs/translate_sys3.core
+
+// syscall with rax 11: munmap(rdi, rsi) on the machine with rcx and r11
+// set, rax its result
+theorem x86i.syscall_munmap(m, y): m.gpr[0] = 11 -> runs(x86_64_linux.syscall(), m, y) ->
+  ex z. runs(x86_64_linux.sys_munmap(m.gpr[7], m.gpr[6]), fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags))), z) &&
+    ((ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) || (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) ||
+     (ex t. z = diverge(t) && y = diverge(t)))
+proof
+  assume h0 h
+  have b0 := expand(apply(g.runs_elim, expand(h, x86_64_linux.syscall)), letin)
+  let X1 := fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags)))
+  have eX: fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)), "gpr", fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).gpr, 11,
+    x86_64_linux.rflags_word(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).flags))) = X1 by simp(fn_update_twice, app_update_same, app_update_other)
+  have e0: X1.gpr[0] = 11 by simp(h0, app_update_same, app_update_other)
+  have e7: X1.gpr[7] = m.gpr[7] by simp(app_update_same, app_update_other)
+  have e6: X1.gpr[6] = m.gpr[6] by simp(app_update_same, app_update_other)
+  obtain z1, hz hp1 from expand(rewrite(e6, rewrite(e7, rewrite(e0, rewrite(eX, b0)))), bind_rel)
+  obtain x2, hd hp2 from apply(lx.or_true, apply(g.runs_elim, expand(hz, x86_64_linux.linux_syscall)))
+  have hb: bind_rel(x86_64_linux.sys_munmap(m.gpr[7], m.gpr[6]), X1, x3 x4. x2 = exc(pair(x3, empty), pair("ret", x4)), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)),
+    x3. x2 = diverge(x3)) := rsimp(hd)
+  obtain z, hr hc from expand(hb, bind_rel)
+  have c1: (ex s1 v. z = ok(s1, v) && x2 = exc(pair(s1, empty), pair("ret", v))) ->
+      (ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) proof
+    assume h1
+    obtain s1 v, e1 e2 from h1
+    have ez := apply(lx.top_ret, rewrite(e2, hp2))
+    have o1: y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, v)), empty) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {v}, taut(e1, o1))
+  qed
+  have c2: (ex s1 e. z = exc(s1, e) && x2 = exc(pair(s1, empty), pair("raise", e))) -> (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) proof
+    assume h1
+    obtain s1 x, e1 e2 from h1
+    have ez := apply(lx.top_raise, rewrite(e2, hp2))
+    have o1: y = exc(s1, x) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {x}, taut(e1, o1))
+  qed
+  have c3: (ex t. z = diverge(t) && x2 = diverge(t)) -> (ex t. z = diverge(t) && y = diverge(t)) proof
+    assume h1
+    obtain t, e1 e2 from h1
+    have ez := apply(lx.top_div, rewrite(e2, hp2))
+    have o1: y = diverge(t) by simp(rewrite(ez, hp1))
+    show by ex_intro({t}, taut(e1, o1))
+  qed
+  show by ex_intro({z}, taut(hr, hc, c1, c2, c3))
+qed
+
+// (munmap's EINVAL: addr not a page's start, len 0, or the pages beyond
+// the task's)
+abbrev tr.unmap_inval(addr, len) := !(int_mod(addr, x86_64_linux.PAGE) = 0) || len = 0 ||
+  int_lt(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), int_add(x86_64_linux.page_of(addr), x86_64_linux.pages_for(len)))
+
+// sys_munmap(addr, len) in closed form: EINVAL, nothing changed; else the
+// pages from addr's for len none, 0 returned; a page map still
+theorem lx.sys_munmap_ok(x, addr, len, o): lx.rec(x) -> addr in omega -> len in omega ->
+  runs(x86_64_linux.sys_munmap(addr, len), x, o) ->
+  (tr.unmap_inval(addr, len) && o = ok(x, x86_64_linux.err(x86_64_linux.EINVAL))) ||
+  (ex Q. !tr.unmap_inval(addr, len) && o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), 0) &&
+    (all q. q in omega -> Q[q] = ite(int_le(x86_64_linux.page_of(addr), q) && int_lt(q, int_add(x86_64_linux.page_of(addr), x86_64_linux.pages_for(len))), none, x.vm.pages[q])) &&
+    (lx.pgs(x.vm.pages) -> lx.pgs(Q)))
+proof
+  assume hx ha hl hr
+  let P := x86_64_linux.page_of(addr)
+  let N := x86_64_linux.pages_for(len)
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  let EI := x86_64_linux.err(x86_64_linux.EINVAL)
+  let C1 := ex Q. !tr.unmap_inval(addr, len) && o = ok(fn_update(x, "vm", fn_update(x.vm, "pages", Q)), 0) &&
+    (all q. q in omega -> Q[q] = ite(int_le(P, q) && int_lt(q, int_add(P, N)), none, x.vm.pages[q])) && (lx.pgs(x.vm.pages) -> lx.pgs(Q))
+  have po: P in omega by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+  have no: N in omega by defs(arith(hl), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have b := expand(apply(g.runs_elim, expand(hr, x86_64_linux.sys_munmap)), letin)
+  obtain x2, d2 k2 from b
+  have eo: fst(out_state(ok(pair(x, empty), empty))) = x by rsimp()
+  // (unaligned or empty: EINVAL)
+  have c0: !(int_mod(addr, x86_64_linux.PAGE) = 0) || len = 0 -> o = ok(x, EI) proof
+    assume h
+    have e2 := apply(lx.case_t, d2, h)
+    show := apply(lx.top_ret, rewrite(e2, k2))
+  qed
+  have c1: !(!(int_mod(addr, x86_64_linux.PAGE) = 0) || len = 0) -> (int_lt(TSP, int_add(P, N)) && o = ok(x, EI)) || C1 proof
+    assume h
+    have e2 := apply(lx.case_f, d2, h)
+    obtain x5, d5 k5 from rewrite(eo, apply(lx.top_go, rewrite(e2, k2)))
+    // (beyond the task's pages: EINVAL)
+    have t0: int_lt(TSP, int_add(P, N)) -> o = ok(x, EI) proof
+      assume hb
+      have e5 := apply(lx.case_t, d5, hb)
+      show := apply(lx.top_ret, rewrite(e5, k5))
+    qed
+    // (else the pages none, by the loop)
+    have t1: !int_lt(TSP, int_add(P, N)) -> C1 proof
+      assume hb
+      have e5 := apply(lx.case_f, d5, hb)
+      obtain x7, w7 k7 from rewrite(eo, apply(lx.top_go, rewrite(e5, k5)))
+      obtain Q, e7 hq hqt0 from mp(lx.pages_loop[x := x, s := P, e := int_add(P, N), v := none, r := x7], hx, po,
+        (int_add(P, N) in omega by arith(po, no)), (int_le(P, int_add(P, N)) by arith(no)), w7)
+      have nn: none in option(x86_64_linux.Page) by defs(taut(union2_iff[a := single(none), b := set_image(x86_64_linux.Page, y. some(y)), z := none], single_intro[a := none]), option)
+      have bd: int_lt(P, int_add(P, N)) -> int_le(int_add(P, N), TSP) proof
+        assume _
+        show by arith(hb)
+      qed
+      have hqt: lx.pgs(x.vm.pages) -> lx.pgs(Q) proof
+        assume a1
+        show := mp(hqt0, bd, a1, nn)
+      qed
+      have o1 := apply(lx.tlp_brk, rewrite(e7, k7))
+      have ni: !tr.unmap_inval(addr, len) by taut(h, hb)
+      show by ex_intro({Q}, taut(ni, o1, hq, hqt))
+    qed
+    show by taut(t0, t1)
+  qed
+  show by taut(c0, c1)
+qed
+
+// munmap(addr, len)'s outcome on the memory vm: V the memory after, r the
+// result -- EINVAL, vm as it was; else the pages from addr's for len gone, 0
+def lx.unmap_post(vm, addr, len, V, r) := (tr.unmap_inval(addr, len) && V = vm && r = x86_64_linux.err(x86_64_linux.EINVAL)) ||
+  (ex Q. !tr.unmap_inval(addr, len) &&
+    (all q. q in omega -> Q[q] = ite(int_le(x86_64_linux.page_of(addr), q) && int_lt(q, int_add(x86_64_linux.page_of(addr), x86_64_linux.pages_for(len))), none, vm.pages[q])) &&
+    V = fn_update(vm, "pages", Q) && lx.pgs(Q) && r = 0)
+
+// the syscall instruction with rax 11: the machine with rip on, rcx and
+// r11 set, its memory munmap's, rax the result
+theorem x86i.munmap_insn(m, o, len): m in x86_64_linux.Machine -> m.gpr[0] = 11 ->
+  runs(x86_64_linux.exec_body(len, tag(156, empty)), m, o) ->
+  ex V r. lx.unmap_post(m.vm, m.gpr[7], m.gpr[6], V, r) &&
+    o = ok(fn_update(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), "gpr",
+      fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags))), "vm", V), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags)), 0, r)), empty)
+proof
+  assume hM h0 h
+  let A := bits_add(64, m.rip, bits_of_int(64, len))
+  let M0 := fn_update(m, "rip", A)
+  let G := fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))
+  let X1 := fn_update(M0, "gpr", G)
+  obtain y, hy hc from apply(x86i.syscall_run, h)
+  have g0: M0.gpr[0] = 11 by simp(h0, app_update_other)
+  obtain z, hz hzc from apply(x86i.syscall_munmap, g0, hy)
+  have ex1: fn_update(M0, "gpr", fn_update(fn_update(M0.gpr, 1, M0.rip), 11, x86_64_linux.rflags_word(M0.flags))) = X1 by simp(app_update_same, app_update_other)
+  have e7: M0.gpr[7] = m.gpr[7] by simp(app_update_other)
+  have e6: M0.gpr[6] = m.gpr[6] by simp(app_update_other)
+  have hz2 := rewrite(e6, rewrite(e7, rewrite(ex1, hz)))
+  have rb := apply(lx.rec_machine, hM)
+  have r0: lx.rec(m) by taut(rb)
+  have r10 := mp(lx.rec_set[x := m, k := "rip", v := A], r0, (!("rip" = "vm") by rsimp()))
+  have r1 := mp(lx.rec_set[x := M0, k := "gpr", v := G], r10, (!("gpr" = "vm") by rsimp()))
+  have xv: X1.vm = m.vm by simp(app_update_other)
+  have n7: m.gpr[7] in omega by simp(mp(x86i.reg_typed, {m}, {7}, hM, simp()))
+  have n6: m.gpr[6] in omega by simp(mp(x86i.reg_typed, {m}, {6}, hM, simp()))
+  have vt: lx.pgs(m.vm.pages) by simp(expand(apply(x86i.parts, hM).4, x86_64_linux.Vm))
+  have cf := rewrite(xv, mp(lx.sys_munmap_ok[x := X1, addr := m.gpr[7], len := m.gpr[6], o := z], r1, n7, n6, hz2))
+  let AD := m.gpr[7]
+  let LN := m.gpr[6]
+  let EI := x86_64_linux.err(x86_64_linux.EINVAL)
+  let GOAL := ex V r. lx.unmap_post(m.vm, AD, LN, V, r) && o = ok(fn_update(fn_update(X1, "vm", V), "gpr", fn_update(G, 0, r)), empty)
+  // (the call's outcome z = ok(S, r): rax r)
+  have fin: all V r. z = ok(fn_update(X1, "vm", V), r) -> o = ok(fn_update(fn_update(X1, "vm", V), "gpr", fn_update(G, 0, r)), empty) proof
+    fix V r
+    assume ez
+    have yy: y = ok(fn_update(fn_update(X1, "vm", V), "gpr", fn_update(fn_update(X1, "vm", V).gpr, 0, r)), empty) by simp(rewrite(ez, hzc))
+    have eg: fn_update(X1, "vm", V).gpr = G by simp(app_update_other, app_update_same)
+    show by simp(rewrite(eg, rewrite(yy, hc)))
+  qed
+  have xf xd _ _ _ := r1
+  have xs := rewrite(xv, mp(mp(fn_update_same[f := X1, k := "vm"], xf), xd))
+  have k0: tr.unmap_inval(AD, LN) && z = ok(X1, EI) -> GOAL proof
+    assume h1
+    have na ez := h1
+    have ez2 := rewrite(sym(xs), ez, {1})
+    have bp: lx.unmap_post(m.vm, AD, LN, m.vm, EI) by defs(taut(na, refl({m.vm}), refl({EI})), lx.unmap_post)
+    show by ex_intro({m.vm}, {EI}, taut(bp, mp(all_elim(fin, {m.vm}, {EI}), ez2)))
+  qed
+  have k1: (ex Q. !tr.unmap_inval(AD, LN) && z = ok(fn_update(X1, "vm", fn_update(m.vm, "pages", Q)), 0) &&
+      (all q. q in omega -> Q[q] = ite(int_le(x86_64_linux.page_of(AD), q) && int_lt(q, int_add(x86_64_linux.page_of(AD), x86_64_linux.pages_for(LN))), none, m.vm.pages[q])) &&
+      (lx.pgs(m.vm.pages) -> lx.pgs(Q))) -> GOAL proof
+    assume h1
+    obtain Q, ni ez hq tq from h1
+    let W := fn_update(m.vm, "pages", Q)
+    have qt := mp(tq, vt)
+    have bp: lx.unmap_post(m.vm, AD, LN, W, 0) by defs(disj({2}, ex_intro({Q}, taut(ni, hq, refl({W}), qt, refl({0})))), lx.unmap_post)
+    show by ex_intro({W}, {0}, taut(bp, mp(all_elim(fin, {W}, {0}), ez)))
+  qed
+  show by taut(cf, k0, k1)
+qed
+
+// ----------------------------------------------------------------------
+//  The world's call: munmap, its pages gone; or EINVAL
+
+theorem g.sys_call2_ok(w, a1, a2, V): w in univ(1) -> V in x86_64_linux.Vm ->
+  gimple.sys_pages_ok(w.vm, w.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)) -> !tr.unmap_inval(a1, a2) ->
+  gimple.gone_pages(w.vm, V, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)) -> V.brk = w.vm.brk ->
+  runs(gimple.sys_call2(11, a1, a2), w, ok(fn_update(w, "vm", V), 0))
+proof
+  assume hw hv hs hi hg hb
+  let W := fn_update(w, "vm", V)
+  let P := x86_64_linux.page_of(a1)
+  let N := x86_64_linux.pages_for(a2)
+  have hal: int_mod(a1, x86_64_linux.PAGE) = 0 by taut(hi)
+  have hnz: !(a2 = 0) by taut(hi)
+  have hle: !int_lt(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), int_add(P, N)) by taut(hi)
+  have vu := apply(x86.vm_univ, hv)
+  have pu: pair(w, ok(W, 0)) in univ(1) by simp(hw, vu)
+  have e: ex x5. (x5 in x86_64_linux.Vm && (gimple.gone_pages(w.vm, fn_update(w, "vm", x5).vm, P, N) && fn_update(w, "vm", x5).vm.brk = w.vm.brk)) &&
+      letin(fn_update(w, "vm", x5), x6. ok(W, 0) = ok(x6, 0)) by ex_intro({V}, simp(hv, hg, hb, app_update_same, keep(gimple.gone_pages)))
+  have ao: any_rel(x5. x5 in x86_64_linux.Vm && (gimple.gone_pages(w.vm, fn_update(w, "vm", x5).vm, P, N) && fn_update(w, "vm", x5).vm.brk = w.vm.brk),
+      x5. letin(fn_update(w, "vm", x5), x6. ok(W, 0) = ok(x6, 0))) by defs(taut(e), any_rel)
+  have ob: runs(gimple.os_munmap(a1, a2), w, ok(W, 0)) by defs(simp(ao, pu, hal, hnz, hle, keep(any_rel, gimple.gone_pages, x86_64_linux.err)), gimple.os_munmap)
+  have bd: bind_rel(gimple.os_munmap(a1, a2), w, x2 x3. ok(W, 0) = ok(x2, x3), x2 x3. ok(W, 0) = exc(x2, x3), x2. ok(W, 0) = diverge(x2))
+    by defs(ex_intro({ok(W, 0)}, simp(ob, keep(gimple.os_munmap))), bind_rel)
+  show by defs(simp(bd, pu, hs, keep(bind_rel, gimple.os_munmap, gimple.sys_pages_ok)), gimple.sys_call2)
+qed
+
+theorem g.sys_call2_inval(w, a1, a2): w in univ(1) ->
+  gimple.sys_pages_ok(w.vm, w.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)) -> tr.unmap_inval(a1, a2) ->
+  runs(gimple.sys_call2(11, a1, a2), w, ok(w, x86_64_linux.err(x86_64_linux.EINVAL)))
+proof
+  assume hw hs hi
+  let O := ok(w, x86_64_linux.err(x86_64_linux.EINVAL))
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have pu: pair(w, O) in univ(1) by defs(simp(hw), x86_64_linux.err)
+  have c1: !(int_mod(a1, x86_64_linux.PAGE) = 0) -> runs(gimple.os_munmap(a1, a2), w, O) proof
+    assume h
+    show by defs(simp(pu, h, keep(any_rel, gimple.gone_pages, x86_64_linux.err)), gimple.os_munmap)
+  qed
+  have c2: a2 = 0 -> runs(gimple.os_munmap(a1, a2), w, O) proof
+    assume h
+    show by defs(simp(pu, h, keep(any_rel, gimple.gone_pages, x86_64_linux.err)), gimple.os_munmap)
+  qed
+  have c3: int_mod(a1, x86_64_linux.PAGE) = 0 -> !(a2 = 0) -> int_lt(TSP, int_add(x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))) ->
+      runs(gimple.os_munmap(a1, a2), w, O) proof
+    assume h1 h2 h3
+    show by defs(simp(pu, h1, h2, h3, keep(any_rel, gimple.gone_pages, x86_64_linux.err)), gimple.os_munmap)
+  qed
+  have ob: runs(gimple.os_munmap(a1, a2), w, O) by taut(hi, c1, c2, c3)
+  have bd: bind_rel(gimple.os_munmap(a1, a2), w, x2 x3. O = ok(x2, x3), x2 x3. O = exc(x2, x3), x2. O = diverge(x2))
+    by defs(ex_intro({O}, simp(ob, keep(gimple.os_munmap))), bind_rel)
+  show by defs(simp(bd, pu, hs, keep(bind_rel, gimple.os_munmap, gimple.sys_pages_ok)), gimple.sys_call2)
+qed
+
+// ----------------------------------------------------------------------
+//  The machine's munmap seen through the world: the same pages gone
+
+// munmap(A, L) on the machine (its pages the world's: the call's
+// requirement, sys_pages_ok): the world's call allows the same -- EINVAL,
+// else its pages gone --, the memories changed alike on those pages
+theorem tr.munmap_world(s, m, w, v, A, L, V, r): tr.mem(s, m, w, v) -> abi.stack_reserve(m.vm) -> m.vm in x86_64_linux.Vm -> w.vm in x86_64_linux.Vm ->
+  A in bits(64) -> L in bits(64) -> gimple.sys_pages_ok(w.vm, w.objs, x86_64_linux.page_of(A), x86_64_linux.pages_for(L)) -> lx.unmap_post(m.vm, A, L, V, r) ->
+  ex WV p n. WV in x86_64_linux.Vm &&
+    ((tr.unmap_inval(A, L) && WV = w.vm && r = x86_64_linux.err(x86_64_linux.EINVAL)) ||
+     (!tr.unmap_inval(A, L) && gimple.gone_pages(w.vm, WV, x86_64_linux.page_of(A), x86_64_linux.pages_for(L)) && WV.brk = w.vm.brk && r = 0)) &&
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
+proof
+  assume hm hr hmv hwv hA hL hsp hp
+  have {wm} := hm
+  have {top, limit, brk0, brk, bytes, pages, nostk} := wm
+  let P := x86_64_linux.page_of(A)
+  let N := x86_64_linux.pages_for(L)
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  let EI := x86_64_linux.err(x86_64_linux.EINVAL)
+  let GOAL := ex WV p n. WV in x86_64_linux.Vm &&
+    ((tr.unmap_inval(A, L) && WV = w.vm && r = EI) ||
+     (!tr.unmap_inval(A, L) && gimple.gone_pages(w.vm, WV, P, N) && WV.brk = w.vm.brk && r = 0)) &&
+    V in x86_64_linux.Vm && tr.vm_chg(m.vm, V, w.vm, WV, p, n) && tr.can_off(s.fs_base, p, n)
+  have po: P in omega by defs(arith(hA), x86_64_linux.page_of, x86_64_linux.PAGE)
+  have no: N in omega by defs(arith(hL), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have c := expand(hp, lx.unmap_post)
+  // EINVAL: nothing changed
+  have k0: tr.unmap_inval(A, L) && V = m.vm && r = EI -> GOAL proof
+    assume h
+    have na eV er := h
+    have pv: all q. q in omega -> V.pages[q] = m.vm.pages[q] proof
+      fix q
+      assume _
+      show by rsimp(eV)
+    qed
+    have pw: all q. q in omega -> int_lt(q, TSP) -> w.vm.pages[q] = w.vm.pages[q] proof
+      fix q
+      assume _ _
+      show := refl({w.vm.pages[q]})
+    qed
+    have bv: all a. a in bits(64) -> V.bytes[a] = m.vm.bytes[a] && w.vm.bytes[a] = w.vm.bytes[a] proof
+      fix a
+      assume _
+      have e: V.bytes[a] = m.vm.bytes[a] by rsimp(eV)
+      show by taut(e, refl({w.vm.bytes[a]}))
+    qed
+    have ch := apply(tr.chg_refl, hr, (V.stack_top = m.vm.stack_top by rsimp(eV)), (V.stack_limit = m.vm.stack_limit by rsimp(eV)),
+      (V.brk_start = m.vm.brk_start by rsimp(eV)), refl({w.vm.stack_top}), refl({w.vm.stack_limit}), refl({w.vm.brk_start}),
+      (V.brk = w.vm.brk by rsimp(eV, brk)), pv, pw, bv)
+    have mid: (tr.unmap_inval(A, L) && w.vm = w.vm && r = EI) ||
+        (!tr.unmap_inval(A, L) && gimple.gone_pages(w.vm, w.vm, P, N) && w.vm.brk = w.vm.brk && r = 0) by taut(na, refl({w.vm}), er)
+    show by ex_intro({w.vm}, {0}, {0}, taut(hwv, mid, rewrite(sym(eV), hmv), ch, tr.can_off_none[fs := s.fs_base]))
+  qed
+  // else: the pages P .. P+N-1 gone on both sides
+  have k1: (ex Q. !tr.unmap_inval(A, L) && (all q. q in omega -> Q[q] = ite(int_le(P, q) && int_lt(q, int_add(P, N)), none, m.vm.pages[q])) &&
+      V = fn_update(m.vm, "pages", Q) && lx.pgs(Q) && r = 0) -> GOAL proof
+    assume h1
+    obtain Q, ni hq eV qt er from h1
+    have offw nxw _ := expand(hsp, gimple.sys_pages_ok)
+    have osm := apply(tr.off_back, hm, offw)
+    have wbt: w.vm.brk in bits(64) by simp(expand(hwv, x86_64_linux.Vm))
+    obtain WV, wv1 wgp wbk from mp(g.gone_ex[before := w.vm, p := P, n := N, br := w.vm.brk], hwv, apply(x86.vm_univ, hwv), wbt)
+    have wt wl wb wpg wby0 := expand(wgp, gimple.gone_pages)
+    // V: a memory
+    have pgu := apply(x86.fn_space_univ, x86.pn_univ, x86.opt_page_univ)
+    have qu := mp(mp(univ_trans[u := 1, a := Q, b := fn_space(set_select(omega, x1. int_lt(x1, TSP)), option(x86_64_linux.Page))], pgu), qt)
+    have vt0 _ := apply(x86.vm_pages_put, hmv, apply(x86.vm_univ, hmv), qt, qu)
+    have vv: V in x86_64_linux.Vm := rewrite(sym(eV), vt0)
+    have vt: V.stack_top = m.vm.stack_top by rsimp(eV)
+    have vl: V.stack_limit = m.vm.stack_limit by rsimp(eV)
+    have vb: V.brk_start = m.vm.brk_start by rsimp(eV)
+    have vk: V.brk = WV.brk by rsimp(eV, brk, wbk)
+    have vq: V.pages = Q by rsimp(eV)
+    have vbs: V.bytes = m.vm.bytes by rsimp(eV)
+    let IN(q) := int_le(P, q) && int_lt(q, int_add(P, N))
+    have c1: all q. q in omega -> int_le(P, q) -> int_lt(q, int_add(P, N)) -> x86_64_linux.mapped(m.vm, q) -> !snd(m.vm.pages[q]).prot.x proof
+      fix q
+      assume hq0 h1 h2 hmq
+      have ns: !abi.stack_page(m.vm, q) proof
+        assume hs0
+        show by taut(apply(tr.chg_stack, hr, osm, po, no, hq0, hs0), h1, h2)
+      qed
+      have ql _ := expand(hmq, x86_64_linux.mapped)
+      have c := mp(all_elim(pages, {q}), (q in set_select(omega, x1. int_lt(x1, TSP)) by simp(hq0, ql)))
+      have e: m.vm.pages[q] = w.vm.pages[q] by taut(c, ns)
+      have mw: x86_64_linux.mapped(w.vm, q) by defs(rewrite(e, expand(hmq, x86_64_linux.mapped)), x86_64_linux.mapped)
+      have k := mp(all_elim(nxw, {q}), hq0, (IN(q) by taut(h1, h2)), mw)
+      show := rewrite(sym(e), k)
+    qed
+    have c2: all q. q in omega -> !IN(q) -> V.pages[q] = m.vm.pages[q] proof
+      fix q
+      assume hq0 hn
+      show := apply(tr.ite_no, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), hn)
+    qed
+    have c3: all q. q in omega -> int_lt(q, TSP) -> !IN(q) -> WV.pages[q] = w.vm.pages[q] proof
+      fix q
+      assume hq0 hl hn
+      show := apply(tr.ite_no, mp(all_elim(wpg, {q}), hq0, hl), hn)
+    qed
+    have c4: all q. q in omega -> int_lt(q, TSP) -> int_le(P, q) -> int_lt(q, int_add(P, N)) -> WV.pages[q] = V.pages[q] proof
+      fix q
+      assume hq0 hl h1 h2
+      have ew := apply(tr.ite_yes, mp(all_elim(wpg, {q}), hq0, hl), (IN(q) by taut(h1, h2)))
+      have ev := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (IN(q) by taut(h1, h2)))
+      show := trans(ew, sym(ev))
+    qed
+    have c5: all q. q in omega -> int_le(P, q) -> int_lt(q, int_add(P, N)) -> V.pages[q] = none || !(snd(V.pages[q]).kind = 2) proof
+      fix q
+      assume hq0 h1 h2
+      have ev := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {q}), hq0)), (IN(q) by taut(h1, h2)))
+      show by taut(ev)
+    qed
+    have c6: all a. a in bits(64) -> !(int_le(P, x86_64_linux.page_of(a)) && int_lt(x86_64_linux.page_of(a), int_add(P, N))) ->
+        V.bytes[a] = m.vm.bytes[a] && WV.bytes[a] = w.vm.bytes[a] proof
+      fix a
+      assume _ _
+      show by taut((V.bytes[a] = m.vm.bytes[a] by rsimp(vbs)), (WV.bytes[a] = w.vm.bytes[a] by rsimp(wby0)))
+    qed
+    have c7: all a. a in bits(64) -> int_le(P, x86_64_linux.page_of(a)) -> int_lt(x86_64_linux.page_of(a), int_add(P, N)) ->
+        x86_64_linux.mapped(V, x86_64_linux.page_of(a)) -> WV.bytes[a] = V.bytes[a] proof
+      fix a
+      assume ha h1 h2 hmv2
+      have qo: x86_64_linux.page_of(a) in omega by defs(arith(ha), x86_64_linux.page_of, x86_64_linux.PAGE)
+      have nn: V.pages[x86_64_linux.page_of(a)] = none := apply(tr.ite_yes, rewrite(sym(vq), mp(all_elim(hq, {x86_64_linux.page_of(a)}), qo)),
+        (IN(x86_64_linux.page_of(a)) by taut(h1, h2)))
+      have f: false by taut(expand(hmv2, x86_64_linux.mapped), nn)
+      show by taut(f)
+    qed
+    have ch: tr.vm_chg(m.vm, V, w.vm, WV, P, N) by defs(taut(vt, vl, vb, wt, wl, wb, vk, po, no, osm, c1, c2, c3, c4, c5, c6, c7), tr.vm_chg)
+    have ho := apply(tr.valid_can_off, hm, hsp)
+    have mid: (tr.unmap_inval(A, L) && WV = w.vm && r = EI) ||
+        (!tr.unmap_inval(A, L) && gimple.gone_pages(w.vm, WV, P, N) && WV.brk = w.vm.brk && r = 0) by taut(ni, wgp, wbk, er)
+    show by ex_intro({WV}, {P}, {N}, taut(wv1, mid, vv, ch, ho))
+  qed
+  show by taut(c, k0, k1)
+qed
+
+// ----------------------------------------------------------------------
+//  The rule
+
+// (sys_call2's requirement: munmap, its pages the world's)
+abbrev tr.req2(w, a1, a2) := gimple.sys_pages_ok(w.vm, w.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))
+
+// (not munmap, or its requirement not met: any outcome, a raise too)
+theorem tr.sys2_raise(n, a1, a2, w, x, e): !(n = 11 && tr.req2(w, a1, a2)) -> pair(w, exc(x, e)) in univ(1) -> runs(gimple.sys_call2(n, a1, a2), w, exc(x, e))
+proof
+  assume h pu
+  show by defs(simp(h, pu, keep(gimple.os_munmap, gimple.sys_pages_ok, bind_rel)), gimple.sys_call2)
+qed
+
+// syscall (0F 05), rax holding n, rdi a1, rsi a2: the spec's
+// sys_call2(n, a1, a2) -- undefined but for munmap meeting its
+// requirement; else Linux's munmap, the world's memory changed alike, the
+// result in rax (the other registers not known on: rcx and r11
+// clobbered), the frame 8 bytes (rsp's page)
+theorem tr.sys_call2(s, v, base, code, fr, a, a2, hs, ds, rs, rc, w, nv, a1, b2, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(2, tag(156, empty)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, 2)) ->
+  0 in dom(rs) -> rs[0] = pair(8, nv) -> 7 in dom(rs) -> rs[7] = pair(8, a1) -> 6 in dom(rs) -> rs[6] = pair(8, b2) -> tr.cs_sub(rc, rs) -> tr.sal16(s) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, 8, fn_update(rc, 0, pair(8, r0)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.sys_call2(nv, a1, b2), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+      x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hat ha2 h0d h0u h7d h7u h6d h6u hsub h16 hk hpost
+  let Q := mkprog(x0 x1. ex x8. bind_rel(gimple.sys_call2(nv, a1, b2), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1))
+  let P := mkprog(x1 x2. bind_rel(Q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) ->
+      tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have {sM, srsv, wW, wu} := hi
+    have rn nb := apply(tr.regs_get, {m}, {rs}, {0}, {8}, {nv}, hrs, h0d, h0u)
+    have r7 ab := apply(tr.regs_get, {m}, {rs}, {7}, {8}, {a1}, hrs, h7d, h7u)
+    have r6 bb2 := apply(tr.regs_get, {m}, {rs}, {6}, {8}, {b2}, hrs, h6d, h6u)
+    // undefined: the spec raises
+    have cu: !(nv = 11 && tr.req2(w, a1, b2)) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
+      assume h
+      have rst: abi.raise_state(w) by defs(apply(tr.world_and, wW), abi.raise_state)
+      have eu: empty in univ(1) by simp()
+      have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+      have pu: pair(w, exc(w, empty)) in univ(1) by simp(wu, eu)
+      have ro := apply(tr.sys2_raise, h, pu)
+      have q1 := mp(all_elim(tr.qs_raise[op := gimple.sys_call2(nv, a1, b2), s2 := w, e := empty, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
+        dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), ro)
+      have rq := mp(all_elim(q1, {exc(w, empty)}), mp(all_elim(hk, {w}, {empty}), wu, eu))
+      have rp := mp(all_elim(tr.p_exc[q := Q, kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {w}, {empty}), wu, wu, eu, rq)
+      have ub: tr.ub(s, v, P, w) by defs(ex_intro({empty}, {w}, taut(eu, eno, rst, rp)), tr.ub)
+      show := mp(all_elim(tr.sim_ub[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {P}, {w}, {m}), ub)
+    qed
+    // munmap, its requirement met: the machine's step, the world's alike
+    have cd: nv = 11 && tr.req2(w, a1, b2) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
+      assume h
+      have e11 spk := h
+      let A := bits_add(64, m.rip, bits_of_int(64, 2))
+      let G1 := fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))
+      let MM(V, r) := fn_update(fn_update(fn_update(fn_update(m, "rip", A), "gpr", G1), "vm", V), "gpr", fn_update(G1, 0, r))
+      let QM(y) := ex V r. lx.unmap_post(m.vm, m.gpr[7], m.gpr[6], V, r) && y = MM(V, r)
+      have g11: m.gpr[0] = 11 := trans(rn, e11)
+      have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && QM(m2)) proof
+        fix o
+        assume ho
+        have hx := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+        obtain V r, bp eo from apply(x86i.munmap_insn, ipM, g11, hx)
+        have hq: QM(MM(V, r)) by ex_intro({V}, {r}, taut(bp, refl({MM(V, r)})))
+        show by ex_intro({MM(V, r)}, taut(eo, hq))
+      qed
+      have nr := apply(tr.inv_nr, hi)
+      // (the coupling's parts at m)
+      have {rsv} := expand(hmm, tr.mem).wm
+      have rm := mp(rsv, srsv)
+      have mvm: m.vm in x86_64_linux.Vm := apply(x86i.parts, ipM).4
+      have wf := expand(wW, abi.World)
+      have wvm: w.vm in x86_64_linux.Vm by simp(wf)
+      have wos: w.os in x86_64_linux.Os by simp(wf)
+      have wfs: w.fs_base in bits(64) by simp(wf)
+      have wosu := mp(app_univ[u := 1, f := w, k := "os"], wu)
+      have pf pd := (is_fun(w) && "vm" in dom(w) by simp(wf))
+      have post: all m2. QM(m2) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m2) proof
+        fix m2
+        assume hq
+        obtain V r, bp em from hq
+        obtain WV p n, wv bpw vv ch hoff from apply(tr.munmap_world, hmm, rm, mvm, wvm, (a1 in bits(64) by simp(ab)), (b2 in bits(64) by simp(bb2)), spk,
+          rewrite(r6, rewrite(r7, bp)))
+        let W4 := fn_update(w, "vm", WV)
+        have wvu := apply(x86.vm_univ, wv)
+        have _ _ w4W w4u := apply(tr.world_set, wW, wu, wv, wvu, wos, wosu, wfs)
+        // (the world's call: allowed, its result r)
+        have ss: fn_update(w, "vm", w.vm) = w := mp(fn_update_same[f := w, k := "vm"], pf, pd)
+        have wc1: tr.unmap_inval(a1, b2) && WV = w.vm && r = x86_64_linux.err(x86_64_linux.EINVAL) ->
+            runs(gimple.sys_call2(nv, a1, b2), w, ok(W4, r)) && r in bits(64) proof
+          assume hc
+          have na ew er := hc
+          have o1 := rewrite(sym(e11), apply(g.sys_call2_inval[w := w, a1 := a1, a2 := b2], wu, spk, na))
+          have w4e: W4 = w := trans((W4 = fn_update(w, "vm", w.vm) by rsimp(ew)), ss)
+          have o2 := rewrite(sym(er), subst({y. runs(gimple.sys_call2(nv, a1, b2), w, ok(y, x86_64_linux.err(x86_64_linux.EINVAL)))}, sym(w4e), o1))
+          have rb: r in bits(64) by defs(simp(er), x86_64_linux.err)
+          show by taut(o2, rb)
+        qed
+        have wc2: !tr.unmap_inval(a1, b2) && gimple.gone_pages(w.vm, WV, x86_64_linux.page_of(a1), x86_64_linux.pages_for(b2)) && WV.brk = w.vm.brk && r = 0 ->
+            runs(gimple.sys_call2(nv, a1, b2), w, ok(W4, r)) && r in bits(64) proof
+          assume hc
+          have ni gp wb er := hc
+          have o1 := rewrite(sym(e11), apply(g.sys_call2_ok[w := w, a1 := a1, a2 := b2, V := WV], wu, wv, spk, ni, gp, wb))
+          have o2 := rewrite(sym(er), o1)
+          have rb: r in bits(64) by simp(er)
+          show by taut(o2, rb)
+        qed
+        have okw rb := (runs(gimple.sys_call2(nv, a1, b2), w, ok(W4, r)) && r in bits(64) by taut(bpw, wc1, wc2))
+        have mt mu2 := apply(tr.mach_sys, ipM, ipU, (A in bits(64) by simp()), vv, rb)
+        have m2M := rewrite(sym(em), mt)
+        have m2u := rewrite(sym(em), mu2)
+        // m2: as m but rip, rax, rcx, r11 and its memory
+        have ev: m2.vm = V by rsimp(em)
+        have e4: m2.gpr[4] = m.gpr[4] by rsimp(em)
+        have cs := apply(tr.cs_eq[m := m, x := m2], (m2.gpr[3] = m.gpr[3] && m2.gpr[5] = m.gpr[5] && m2.gpr[12] = m.gpr[12] && m2.gpr[13] = m.gpr[13] &&
+          m2.gpr[14] = m.gpr[14] && m2.gpr[15] = m.gpr[15] by rsimp(em)))
+        have ecpu: m2.cpu = m.cpu by rsimp(em)
+        have egs: m2.gs_base = m.gs_base by rsimp(em)
+        have eos: m2.os = m.os by rsimp(em)
+        have efs: m2.fs_base = m.fs_base by rsimp(em)
+        have {mdf} := hi
+        have df2: !m2.flags.df by rsimp(em, mdf)
+        have e0: m2.gpr[0] = r by rsimp(em)
+        have rip2: m2.rip = a2 by rsimp(em, hr, ha2)
+        have w4v: W4.vm = WV by rsimp()
+        have w4os: W4.os = w.os by rsimp()
+        have w4fs: W4.fs_base = w.fs_base by rsimp()
+        have w4cpu: W4.cpu = w.cpu by rsimp()
+        have w4ob: W4.objs = w.objs by rsimp()
+        have htop: m.vm.stack_top in omega by simp(expand(mvm, x86_64_linux.Vm))
+        have i2 := apply(tr.inv_chg, hi, hmm, ch, m2M, m2u, ev, e4, ecpu, egs, eos, efs, df2, w4W, w4u, w4v, w4os, w4fs, w4cpu)
+        have mm2 := apply(tr.mem_chg, hmm, srsv, htop, ch, hoff, ev, w4v, w4ob)
+        have hh2 := apply(tr.homes_chg, hh, rm, ch, ev)
+        have rs2 := apply(tr.regs_add, apply(tr.regs_cs_keep, hrs, hsub, cs), e0, (r in bits(int_mul(8, 8)) by simp(rb)))
+        have f2 := apply(tr.frame8, i2, h16, (8 in omega by simp()), (int_le(8, 8) by arith()))
+        have pt := mp(all_elim(hpost, {W4}, {r}), (W4 in abi.World && W4 in univ(1) by taut(w4W, w4u)), rb)
+        have cl := mp(all_elim(expand(pt, tr.pt), {m2}), i2, rip2, hh2, rs2, mm2, f2)
+        // the spec's call: allowed, its rest from the result
+        let Q2 := mkprog(x0 x1. ex x8. ka(x0, r, x8) && k(x8, x1))
+        have q1 := mp(all_elim(tr.qs_call[op := gimple.sys_call2(nv, a1, b2), w4 := W4, r := r, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
+          dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), wu, okw)
+        have r2r := mp(all_elim(tr.p_red[q := Q, q2 := Q2, kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {W4}), wu, q1)
+        have red: tr.red(P, w, mkprog(x1 x2. bind_rel(Q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W4) by defs(r2r, tr.red)
+        show := apply(tr.cl_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], red, cl)
+      qed
+      show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := P, w := w, m := m, q := y. QM(y)], st), nr), post)
+    qed
+    show by taut(cu, cd)
+  qed
+  show by defs(g, tr.lv)
+qed
+
+// ----------------------------------------------------------------------
+//  The call's effect (tr.eff, for its callers' tr.callee_io; c1/eff.rs's
+//  validity rule for a return to a memory with pages gone): the world
+//  valid still -- the program loaded (its code on executable pages, the
+//  call's not: sys_pages_ok), the break's start
+
+theorem tr.valid_gone(w, V, p, n): gimple.gone_pages(w.vm, fn_update(w, "vm", V).vm, p, n) -> gimple.sys_pages_ok(w.vm, w.objs, p, n) ->
+  p in omega -> n in omega -> tr.returns_valid(w, fn_update(w, "vm", V))
+proof
+  assume hg hs hp hn
+  let W2 := fn_update(w, "vm", V)
+  have ev: W2.vm = V by rsimp()
+  have hg2: gimple.gone_pages(w.vm, V, p, n) := rewrite(ev, hg)
+  have _ nx _ := expand(hs, gimple.sys_pages_ok)
+  have vt vl vb vpg vby := expand(hg2, gimple.gone_pages)
+  // the program loaded: its pages executable, so not gone
+  let G := all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(V, gb, gc, st)
+  have g: G proof
+    fix gb gc st
+    assume _ hl
+    have l1 l2 := expand(hl, abi.loaded)
+    have e: all i. i in omega -> int_lt(i, seq_len(gc)) ->
+        V.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] = w.vm.pages[x86_64_linux.page_of(bits_of_int(64, int_add(gb, i)))] &&
+        V.bytes[bits_of_int(64, int_add(gb, i))] = w.vm.bytes[bits_of_int(64, int_add(gb, i))] proof
+      fix i
+      assume hi hli
+      let A := bits_of_int(64, int_add(gb, i))
+      let Q := x86_64_linux.page_of(A)
+      have fm fx qo ab := apply(tr.code_pg, l1, hi, hli)
+      have nr: !(int_le(p, Q) && int_lt(Q, int_add(p, n))) proof
+        assume hr
+        show by taut(mp(all_elim(nx, {Q}), qo, hr, fm), fx)
+      qed
+      have ql _ := expand(fm, x86_64_linux.mapped)
+      have ep := apply(tr.ite_no, mp(all_elim(vpg, {Q}), qo, ql), nr)
+      have eb: V.bytes[A] = w.vm.bytes[A] by rsimp(vby)
+      show by taut(ep, eb)
+    qed
+    have cd2 := apply(tr.code_at_tr, l1, e)
+    have s2 := apply(tr.statics_same, {w.vm}, {V}, {st}, vt, vl, l2)
+    show by defs(taut(cd2, s2), abi.loaded)
+  qed
+  have eos: W2.os = w.os by rsimp()
+  have ecp: W2.cpu = w.cpu by rsimp()
+  have l: all gb gc st. gb in omega -> abi.loaded(w.vm, gb, gc, st) -> abi.loaded(W2.vm, gb, gc, st) := rewrite(sym(ev), g)
+  have ei: W2.os.input = w.os.input by rsimp()
+  have se: subset(w.os.events, W2.os.events) := rewrite(sym(eos), subset_refl[s := w.os.events], {2})
+  show by defs(taut(ei, se, l, ecp, rewrite(sym(ev), vb)), tr.returns_valid)
+qed

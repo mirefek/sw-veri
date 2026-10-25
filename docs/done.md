@@ -1179,6 +1179,17 @@ item is a short summary of finished work; details are in the files named.
     d's word boundary, the words, the bytes left -- each a move of what is
     at s still (`mp.mvw`), the loops by `g.loop`; `memcpy_spec_fun` by the
     GIMPLE wrapper's convention (`result`).
+- **munmap at machine level** (munmap.c: `__vm_wait`, `__syscall2`,
+  `__syscall_ret`): readable GIMPLE's `sys_call2` (layers/gimple.sl:
+  `os_munmap`, Linux's sys_munmap -- EINVAL, else the pages gone), its C1
+  rule (proofs/translate_sys2.core: `tr.sys_call2`, the machine's and the
+  world's pages gone alike, `tr.munmap_world`), eff.rs's validity of a
+  return with pages gone (`tr.valid_gone`: a field's lemmas tried in
+  turn); the specs `syscall2_spec`, `munmap_spec` (errno EINVAL, -1; or
+  the pages gone, 0 -- tls_off: __syscall_ret after), C2
+  (proofs/mallocng/fun/munmap.core: `mp.sy2`, `mp.mun` through its three
+  calls' contracts), divergence by hand (`contract` takes a `THM_divw`
+  proven before it), linked (`mp.mun_linked`).
 - **The locks, single-threaded** (proofs/mallocng/fun/locks.core): malloc's
   rdlock, wrlock, unlock and __lock.c's __unlock (a new leaf translation
   unit) by their purpose -- nothing done, libc's need_locks 0 and the lock

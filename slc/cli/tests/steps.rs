@@ -145,7 +145,7 @@ fn c1_cfg_engine_checks() {
         .args(["steps"])
         .arg(&elf)
         .arg(&claim)
-        .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "alloc_group=403ee6", "a_cas=402c47", "size_overflows", "__malloc_alloc_meta", "get_random_secret", "__syscall1=402cf9", "__mmap", "__mprotect", "__errno_location", "__get_tp=40569a", "__syscall3=404bde", "__syscall6=404a8c", "__syscall_ret", "dummy=404ada", "memcpy", "__stack_chk_fail", "-o"])
+        .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "alloc_group=403ee6", "a_cas=402c47", "size_overflows", "__malloc_alloc_meta", "get_random_secret", "__syscall1=402cf9", "__mmap", "__mprotect", "__errno_location", "__get_tp=40569a", "__syscall3=404bde", "__syscall6=404a8c", "__syscall_ret", "dummy=404ada", "memcpy", "__stack_chk_fail", "rdlock=402ddf", "wrlock=402e03", "unlock=402e27", "__unlock=4050c8", "__lock=404f98", "a_fetch_add=404e83", "__wake=404ea2", "__syscall2=404c8d", "__munmap", "-o"])
         .arg(&steps)
         .arg("--text")
         .arg(&text)
@@ -175,6 +175,8 @@ fn c1_cfg_engine_checks() {
         ("src_internal_syscall_ret", "c_syscall_ret", "syscall_ret.c"),
         ("src_mman_mprotect", "c_mman_mprotect", "mprotect.c"),
         ("src_mman_mmap", "c_mman_mmap", "mmap.c"),
+        ("src_thread___lock", "c_lock", "__lock.c"),
+        ("src_mman_munmap", "c_mman_munmap", "munmap.c"),
     ] {
         let (d, o) = (root.join(format!("build/gimple-O0/{src}.c.optimized")), root.join(format!("build/gimple-O0/{src}.c.o")));
         for cfg in [false, true] {

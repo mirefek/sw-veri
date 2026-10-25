@@ -7,11 +7,9 @@ summarized in docs/done.md.
 
 alloc_meta, alloc_slot and alloc_group are verified at machine level from
 the configuration alone (`mp.am_machine`, `mp.as_machine`,
-`mp.agr_machine`); the locks too (`mp.rdl_linked` .. `mp.unl_linked`).
+`mp.agr_machine`); the locks and munmap too (`mp.rdl_linked` ..
+`mp.unl_linked`, `mp.mun_linked`).
 Next, malloc (`musl.impl_malloc`, proofs/mallocng/claim.core):
-- `munmap` (src/mman/munmap.c: `__vm_wait`, a 2-argument syscall -- the
-  readable translation has 1, 3 and 6 --, `__syscall_ret`): its C1, spec,
-  C2, as `__mprotect`'s.
 - `__libc_malloc_impl`'s spec by purpose (the mmap path: a group of its
   own; the slot path: alloc_slot's slot, enframed) and its C2. malloc owes
   enframe: the class bound (its n within the class), the thread pointer's
@@ -29,8 +27,7 @@ Then free and calloc: `get_nominal_size`, `record_seq`, `okay_to_free`,
   an overlapping forward copy (s < d < s + n: each element read after
   writes reached it -- memmove's) its exact bytes, not undefined: the
   pointwise invariant of `x86.moved` with the source as it is then.
-- Leaves at machine level: `a_or`, the other `__syscall*`, `munmap`,
-  `memset`, `__lock` / `__unlock`.
+- Leaves at machine level: `a_or`, the other `__syscall*`, `memset`.
 
 ## 2. The engine, when a function needs it
 
@@ -102,10 +99,16 @@ and the auxiliary vector; after, the allocator maps only fresh pages.
   lemmas or rsimp through the proof API.
 
 - `divergence()` takes a contract's body only of the `ct.dv_*` shapes (a
-  step, a return after a choice or two); brk's (branches, havocs) by hand
-  (`mp.sy1_divw`: never diverging with its requirement met,
-  `mp.sy1_nodiv`). A body's divergence by its structure (per statement)
-  would cover such specs.
+  step, a return after a choice or two); brk's and munmap's (branches,
+  havocs) by hand (`mp.sy1_divw`, `mp.sy2_divw`, `mp.mun_divw`: never
+  diverging with the requirement met -- a memory for the havoc there is;
+  `contract` takes a `THM_divw` proven before it, only for a spec without
+  parameters). A body's divergence by its structure (per statement), a
+  havoc's choice by a given existence fact, would cover such specs.
+- A leaf translation unit's C1 has no `.linked` (`contract` derives
+  `THM_linked` from it): munmap's, unlock's linked forms by hand
+  (`mp.mun_linked`, `mp.mun_calls_linked`), each callee's C1, typing, io
+  and refinement listed.
 - alloc_meta's remaining plumbing (am_run ~1120 lines): the context's
   usable words derived per memory stretch (`mp.ctx_usable` per offset,
   `mp.usable_pg` across a page change); the two three-case joins (`ht2`,

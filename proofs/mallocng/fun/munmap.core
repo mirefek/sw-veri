@@ -1,0 +1,607 @@
+// munmap (munmap.c: __vm_wait, __syscall2's munmap, __syscall_ret): the
+// pages gone, 0; or errno EINVAL, -1 (layers/mallocng_specs.sl:
+// syscall2_spec, munmap_spec).
+
+// __syscall2 (its two locals, the call, the call's result returned)
+// refines the spec: the kernel's munmap, its requirements GIMPLE's
+theorem mp.sy2: all n a1 a2. refines(c_src_mman_munmap.__syscall2(n, a1, a2), mallocng_specs.syscall2_spec(n, a1, a2), abi.World)
+proof
+  fix n a1 a2
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := mallocng_specs.syscall2_spec(n, a1, a2)
+    have pu := apply(g.runs_univ, hr)
+    let PRE := n = 11 && gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume h
+      show by simp(pu, h)
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume h
+      have hn hq := h
+      have ne: ex z. z in bits(64) by ex_intro({0}, simp())
+      rsimp only, c_src_mman_munmap.__syscall2 in hr
+      have b3 := apply(g.runs_elim, hr)
+      obtain z1, _ k1 from apply(g.any_e, ne, b3)
+      obtain z2, _ k2 from apply(g.any_e, ne, expand(k1, letin))
+      obtain o4, r4 c4 from expand(expand(k2, letin), bind_rel)
+      rsimp only, gimple.sys_call2 in r4
+      have b4: bind_rel(gimple.os_munmap(a1, a2), s, x2 x3. o4 = ok(x2, x3), x2 x3. o4 = exc(x2, x3), x2. o4 = diverge(x2))
+        by taut(apply(g.runs_elim, r4), hn, hq)
+      have e4: o = o4 by simp(c4, keep(letin))
+      have rr := apply(ms.ret_run[p := gimple.os_munmap(a1, a2), q := x. n = 11 && gimple.sys_pages_ok(x.vm, x.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2))],
+        (pair(s, o4) in univ(1) by simp(rewrite(e4, pu))), b4)
+      show by defs(rewrite(sym(e4), rr), mallocng_specs.syscall2_spec)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// os_munmap's outcomes: EINVAL, the world as it was; else the pages gone
+theorem mp.unmap_inv(w, a1, a2, o): w.vm in x86_64_linux.Vm -> runs(gimple.os_munmap(a1, a2), w, o) ->
+  (tr.unmap_inval(a1, a2) && o = ok(w, x86_64_linux.err(x86_64_linux.EINVAL))) ||
+  (!tr.unmap_inval(a1, a2) && (ex V. (V in x86_64_linux.Vm && (gimple.gone_pages(w.vm, V, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)) && V.brk = w.vm.brk)) &&
+    o = ok(fn_update(w, "vm", V), 0)))
+proof
+  assume wvm hr
+  let P := x86_64_linux.page_of(a1)
+  let N := x86_64_linux.pages_for(a2)
+  let TSP := int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  let EI := x86_64_linux.err(x86_64_linux.EINVAL)
+  let GV := ex V. (V in x86_64_linux.Vm && (gimple.gone_pages(w.vm, V, P, N) && V.brk = w.vm.brk)) && o = ok(fn_update(w, "vm", V), 0)
+  have wbt: w.vm.brk in bits(64) by simp(expand(wvm, x86_64_linux.Vm))
+  have b := apply(g.runs_elim, expand(hr, gimple.os_munmap))
+  obtain x2, d2 k2 from b
+  have eo: fst(out_state(ok(pair(w, empty), empty))) = w by rsimp()
+  // (unaligned or empty: EINVAL)
+  have c0: !(int_mod(a1, x86_64_linux.PAGE) = 0) || a2 = 0 -> o = ok(w, EI) proof
+    assume h
+    show := apply(lx.top_ret, rewrite(apply(lx.case_t, d2, h), k2))
+  qed
+  have c1: !(!(int_mod(a1, x86_64_linux.PAGE) = 0) || a2 = 0) -> (int_lt(TSP, int_add(P, N)) && o = ok(w, EI)) || (!int_lt(TSP, int_add(P, N)) && GV) proof
+    assume h
+    obtain x3, d3 k3 from rewrite(eo, apply(lx.top_go, rewrite(apply(lx.case_f, d2, h), k2)))
+    // (past the task's pages: EINVAL)
+    have t0: int_lt(TSP, int_add(P, N)) -> o = ok(w, EI) proof
+      assume hb
+      show := apply(lx.top_ret, rewrite(apply(lx.case_t, d3, hb), k3))
+    qed
+    // (else the pages gone: such a memory there is)
+    have t1: !int_lt(TSP, int_add(P, N)) -> GV proof
+      assume hb
+      have ar := expand(rewrite(eo, apply(lx.top_go, rewrite(apply(lx.case_f, d3, hb), k3))), letin)
+      obtain V, hv hg hbk from mp(g.gone_ex[before := w.vm, p := P, n := N, br := w.vm.brk], wvm, apply(x86.vm_univ, wvm), wbt)
+      have ev: fn_update(w, "vm", V).vm = V by rsimp()
+      have ed: ex x5. x5 in x86_64_linux.Vm && (gimple.gone_pages(w.vm, fn_update(w, "vm", x5).vm, P, N) && fn_update(w, "vm", x5).vm.brk = w.vm.brk)
+        by ex_intro({V}, taut(hv, rewrite(sym(ev), hg), rewrite(sym(ev), hbk)))
+      obtain V5, hv5 hg5 hb5 ho5 from apply(g.any_e, ed, ar)
+      have e5: fn_update(w, "vm", V5).vm = V5 by rsimp()
+      show by ex_intro({V5}, taut(hv5, rewrite(e5, hg5), rewrite(e5, hb5), ho5))
+    qed
+    show by taut(t0, t1)
+  qed
+  show by taut(c0, c1)
+qed
+
+// (__syscall2's munmap, its requirement met, never diverges)
+theorem mp.sy2_nodiv: all s n a l t. s.vm in x86_64_linux.Vm -> n = 11 -> tr.req2(s, a, l) -> !runs(mallocng_specs.syscall2_spec(n, a, l), s, diverge(t))
+proof
+  fix s n a l t
+  assume pv hn hq
+  show proof
+    assume h
+    have ci := apply(ct.contract_inv, expand(h, mallocng_specs.syscall2_spec), conj(hn, hq), pv)
+    have c1: case 1 of ci proof
+      assume x
+      obtain v ob, _ _ hx from x
+      show by simp(hx)
+    qed
+    have c2: case 2 of ci proof
+      assume x
+      obtain x2, hB hD from x
+      obtain z, hz hzc from expand(hB, bind_rel)
+      // (munmap returns: the call's outcome a return, not diverge(t))
+      have k: all W R. z = ok(W, R) -> false proof
+        fix W R
+        assume hzr
+        have x2e: x2 = exc(pair(W, empty), pair("ret", R)) by simp(rewrite(hzr, hzc))
+        show by simp(rewrite(x2e, hD))
+      qed
+      have inv := apply(mp.unmap_inv, pv, hz)
+      have k1: case 1 of inv proof
+        assume hc
+        have _ e := hc
+        show := mp(all_elim(k, {s}, {x86_64_linux.err(x86_64_linux.EINVAL)}), e)
+      qed
+      have k2: case 2 of inv proof
+        assume hc
+        have _ hex := hc
+        obtain V, _ _ _ e from hex
+        show := mp(all_elim(k, {fn_update(s, "vm", V)}, {0}), e)
+      qed
+      show by taut(inv, k1, k2)
+    qed
+    show by taut(ci, c1, c2)
+  qed
+qed
+
+// (so the 2-argument call's spec diverges only where it allows anything)
+theorem mp.sy2_divw: tr.div_raises(mallocng_specs.syscall2_spec_fun())
+proof
+  let Q(x0) := mallocng_specs.syscall2_spec(bits_of_int(64, x0[0]), bits_of_int(64, x0[1]), bits_of_int(64, x0[2]))
+  have ru: all regs s o. runs(Q(regs), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume h
+    rsimp only, mallocng_specs.syscall2_spec in h
+    show := apply(g.runs_univ, h)
+  qed
+  have dq: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in single(empty) -> runs(Q(regs), union2(w, h), diverge(t)) ->
+      runs(Q(regs), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let W := union2(w, h)
+    let N := bits_of_int(64, regs[0])
+    let A := bits_of_int(64, regs[1])
+    let L := bits_of_int(64, regs[2])
+    have {wu = univ, wv = vm} := apply(ct.w_single, hw, hwu, hh)
+    have c: !(N = 11 && tr.req2(W, A, L)) proof
+      assume e
+      have en eq := e
+      show by taut(mp(all_elim(mp.sy2_nodiv, {W}, {N}, {A}, {L}, {t}), wv, en, eq), hr)
+    qed
+    have pu: pair(W, exc(W, empty)) in univ(1) by simp(wu)
+    show by simp(pu, c)
+  qed
+  have gf := apply(ct.fun_divg[G := single(empty), q := x0. Q(x0), n := 3, w := 64], ct.single_univ, ru, dq)
+  have gd: tr.div_raises_g(single(empty), mallocng_specs.syscall2_spec_fun()) by defs(gf, mallocng_specs.syscall2_spec_fun)
+  show := apply(ct.div_of_g, gd)
+qed
+
+// its C function value, machine code (the divergence mp.sy2_divw's)
+contract __syscall2 mallocng_specs.syscall2_spec_fun by mp.sy2
+
+// (munmap's memory V after v, its result r)
+abbrev mp.unmap_res(v, V, a, l, r) := (tr.unmap_inval(a, l) && V = v && r = x86_64_linux.err(x86_64_linux.EINVAL)) ||
+  (!tr.unmap_inval(a, l) && (gimple.gone_pages(v, V, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) && V.brk = v.brk) && r = 0)
+
+// __syscall2(11, a, l) at a call, as its spec has it: an overflow; or the
+// kernel's munmap -- EINVAL, nothing changed; else the pages gone, 0
+theorem mp.sy2_q: all a l regs s o2. s in abi.World -> s in univ(1) -> a in bits(64) -> l in bits(64) ->
+  gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 11))), seq_one(gimple.arg(64, a))), seq_one(gimple.arg(64, l)))) ->
+  runs(mallocng_specs.syscall2_spec_fun()[regs], s, o2) ->
+  abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && mp.unmap_res(s.vm, V, a, l, fst(r))) && o2 = ok(fn_update(s, "vm", V), r))
+proof
+  fix a l regs s o2
+  assume hw hu ha hl hsp hro h
+  let OVF := exc_val("stack_overflow", empty)
+  let EI := x86_64_linux.err(x86_64_linux.EINVAL)
+  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 11))), seq_one(gimple.arg(64, a))), seq_one(gimple.arg(64, l)))
+  let G := abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && mp.unmap_res(s.vm, V, a, l, fst(r))) && o2 = ok(fn_update(s, "vm", V), r))
+  have rl rln _ := hro
+  have an: seq_len(ARGS) = 3 by simp()
+  have rn: seq_len(regs) = 3 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := bits_of_int(64, 11)], hro, simp(), simp(an), at({ARGS[0]}), simp(), simp())
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 64, x := a], hro, simp(), simp(an), at({ARGS[1]}), simp(), ha)
+  have q2 := apply(gc.reg_at[regs := regs, args := ARGS, i := 2, w := 64, x := l], hro, simp(), simp(an), at({ARGS[2]}), simp(), hl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_specs.syscall2_spec_fun, app_fn_build, ra in h
+  have o3l: ord_le(3, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q2, rewrite(q1, rewrite(q0, apply(g.runs_elim, h))))
+  have b2: bind_rel(mallocng_specs.syscall2_spec(bits_of_int(64, 11), a, l), s, x3 x4. letin(x4, x5. bind_rel(gimple.result(64, x5), x3, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))),
+      x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) by taut(b, o3l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  have pv pf pd _ := apply(ms.world_parts, hw)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+  have pre: bits_of_int(64, 11) = 11 && gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) by taut((bits_of_int(64, 11) = 11 by simp()), hsp)
+  have ci := apply(ct.contract_inv, expand(hs3, mallocng_specs.syscall2_spec), pre, pv)
+  // (an overflow: the call's)
+  have c1: abi.ovf_out(s, o3) -> G proof
+    assume x
+    obtain v ob, hv hob hx from x
+    have oe: o2 = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hk3))
+    have l1: abi.ovf_out(s, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
+    show by taut(l1)
+  qed
+  // (munmap's return)
+  have c2: (ex x2. bind_rel(gimple.os_munmap(a, l), s, x3 x4. x2 = exc(pair(x3, empty), pair("ret", x4)), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) &&
+      ((fst(x2) = 0 && o3 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && o3 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+        ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && o3 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && o3 = diverge(snd(x2)))))) -> G proof
+    assume x
+    obtain x2, hB hD from x
+    obtain z, hz hzc from expand(hB, bind_rel)
+    // (a 64-bit result R from state W: the call's)
+    have fin: all W R. R in bits(64) -> z = ok(W, R) -> ex r. o2 = ok(W, r) && fst(r) = R proof
+      fix W R
+      assume hR hzr
+      have x2e: x2 = exc(pair(W, empty), pair("ret", R)) by simp(rewrite(hzr, hzc))
+      have o3e: o3 = ok(W, R) by simp(rewrite(x2e, hD))
+      have k1: bind_rel(gimple.result(64, R), W, x6 x7. letin(x7, x8. any_rel(x9. x9 in bits(64), x9. o2 = ok(x6, pair(x8, x9)))), x6 x7. o2 = exc(x6, x7), x6. o2 = diverge(x6))
+        by simp(expand(rewrite(o3e, hk3), letin), keep(bind_rel, gimple.result))
+      obtain o4, hr4 hk4 from expand(k1, bind_rel)
+      have ho4 := apply(g.result64_inv, hR, hr4)
+      have k2: any_rel(x9. x9 in bits(64), x9. o2 = ok(W, pair(R, x9))) by simp(expand(rewrite(ho4, hk4), letin), keep(any_rel))
+      have ne: ex y. y in bits(64) by ex_intro({0}, simp())
+      obtain y, _ hoy from apply(g.any_e, ne, k2)
+      show by ex_intro({pair(R, y)}, taut(hoy, (fst(pair(R, y)) = R by simp())))
+    qed
+    have inv := apply(mp.unmap_inv, pv, hz)
+    have k1: tr.unmap_inval(a, l) && z = ok(s, EI) -> G proof
+      assume hc
+      have hi hze := hc
+      obtain r, hor hr from mp(all_elim(fin, {s}, {EI}), (EI in bits(64) by defs(simp(), x86_64_linux.err)), hze)
+      have hor2: o2 = ok(fn_update(s, "vm", s.vm), r) := rewrite(sym(ss), hor, {1})
+      have l1: ex V r. (V in x86_64_linux.Vm && mp.unmap_res(s.vm, V, a, l, fst(r))) && o2 = ok(fn_update(s, "vm", V), r)
+        by ex_intro({s.vm}, {r}, taut(pv, hi, refl({s.vm}), hr, hor2))
+      show by taut(l1)
+    qed
+    have k2: !tr.unmap_inval(a, l) && (ex V. (V in x86_64_linux.Vm && (gimple.gone_pages(s.vm, V, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) && V.brk = s.vm.brk)) &&
+        z = ok(fn_update(s, "vm", V), 0)) -> G proof
+      assume hc
+      have hi hex := hc
+      obtain V, hV hg hbk hze from hex
+      obtain r, hor hr from mp(all_elim(fin, {fn_update(s, "vm", V)}, {0}), (0 in bits(64) by simp()), hze)
+      have l1: ex V r. (V in x86_64_linux.Vm && mp.unmap_res(s.vm, V, a, l, fst(r))) && o2 = ok(fn_update(s, "vm", V), r)
+        by ex_intro({V}, {r}, taut(hV, hi, hg, hbk, hr, hor))
+      show by taut(l1)
+    qed
+    show by taut(inv, k1, k2)
+  qed
+  show by taut(ci, c1, c2)
+qed
+
+// (the thread pointer sound, pages gone that miss its: sound still)
+theorem ms.thr_gone(v, V, fs, p, n): v in x86_64_linux.Vm -> V in x86_64_linux.Vm -> fs in bits(64) -> gimple.gone_pages(v, V, p, n) ->
+  mallocng_specs.tls_off(fs, p, n) -> abi.thread_ok(v, fs) -> abi.thread_ok(V, fs)
+proof
+  assume hv hV hfs hg ht th
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have _ _ _ gpg gby := expand(hg, gimple.gone_pages)
+  have pe: all q. q in omega -> !(int_le(p, q) && int_lt(q, int_add(p, n))) -> V.pages[q] = v.pages[q] proof
+    fix q
+    assume hq hn
+    have inside: int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> V.pages[q] = v.pages[q] proof
+      assume hl
+      show := apply(tr.ite_no, mp(all_elim(gpg, {q}), hq, hl), hn)
+    qed
+    have outside: !int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) -> V.pages[q] = v.pages[q] proof
+      assume hl
+      show := apply(mp.pages_out[V := V, W := v, q := q], hV, hv, hl)
+    qed
+    show by taut(inside, outside)
+  qed
+  have t1 _ := expand(ht, mallocng_specs.tls_off)
+  have rd ns le nz := expand(th, abi.thread_ok)
+  have rd1 := expand(rd, x86_64_linux.readable)
+  have tq: all i. i in omega -> int_lt(i, 8) -> V.pages[int_div(int_add(fs, i), x86_64_linux.PAGE)] = v.pages[int_div(int_add(fs, i), x86_64_linux.PAGE)] proof
+    fix i
+    assume hi hil
+    show := mp(all_elim(pe, {int_div(int_add(fs, i), x86_64_linux.PAGE)}), (int_div(int_add(fs, i), x86_64_linux.PAGE) in omega by arith(hfs, hi, kp)), mp(all_elim(t1, {i}), hi, hil))
+  qed
+  have rdV: all i. i in omega -> int_lt(i, 8) -> x86_64_linux.mapped(V, int_div(int_add(fs, i), x86_64_linux.PAGE)) &&
+      snd(V.pages[int_div(int_add(fs, i), x86_64_linux.PAGE)]).prot.r proof
+    fix i
+    assume hi hil
+    show by defs(simp(mp(all_elim(tq, {i}), hi, hil), expand(mp(all_elim(rd1, {i}), hi, hil), x86_64_linux.mapped)), x86_64_linux.mapped)
+  qed
+  have nsV: all i. i in omega -> int_lt(i, 8) -> !abi.stack_page(V, int_div(int_add(fs, i), x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hil
+    show by defs(simp(mp(all_elim(tq, {i}), hi, hil), expand(mp(all_elim(ns, {i}), hi, hil), abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+  qed
+  have leV: x86_64_linux.le(V.bytes, fs, 8) = fs := rewrite(sym(gby), le)
+  show by defs(taut(rdV, nsV, leV, nz), abi.thread_ok, x86_64_linux.readable)
+qed
+
+// ----------------------------------------------------------------------
+//  __munmap: __vm_wait, __syscall2's munmap, its result through
+//  __syscall_ret
+
+// (EINVAL: errno set, -1)
+theorem mp.mun_inval: all a l s. s in abi.World -> s in univ(1) -> tr.unmap_inval(a, l) ->
+  mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  runs(mallocng_specs.munmap_spec(a, l), s,
+    ok(fn_update(s, "vm", mallocng_specs.wr32(s.vm, mallocng_specs.errno_at(s.fs_base), x86_64_linux.EINVAL)), bits_of_int(32, int_sub(int_pow(2, 32), 1))))
+proof
+  fix a l s
+  assume hw hu hi he hsp htf
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have wv: mallocng_specs.wr32(s.vm, mallocng_specs.errno_at(s.fs_base), x86_64_linux.EINVAL) in x86_64_linux.Vm :=
+    rewrite(sym(all_elim(ms.v_wr32, {s.vm}, {mallocng_specs.errno_at(s.fs_base)}, {x86_64_linux.EINVAL})),
+      mp(all_elim(ms.wr_any, {s.vm}, {mallocng_specs.errno_at(s.fs_base)}, {4}, {x86_64_linux.EINVAL}), pv))
+  have vu := apply(x86.vm_univ, wv)
+  show by simp(hu, vu, hi, he, hsp, htf, keep(mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, gimple.gone_pages, mallocng_specs.wr32, mallocng_specs.errno_at))
+qed
+
+// (else: the pages gone, 0)
+theorem mp.mun_ok: all a l s V. s in abi.World -> s in univ(1) -> V in x86_64_linux.Vm -> !tr.unmap_inval(a, l) ->
+  mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  gimple.gone_pages(s.vm, V, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) -> V.brk = s.vm.brk ->
+  runs(mallocng_specs.munmap_spec(a, l), s, ok(fn_update(s, "vm", V), 0))
+proof
+  fix a l s V
+  assume hw hu hV hi he hsp htf hg hb
+  have vu := apply(x86.vm_univ, hV)
+  show by simp(hu, hV, vu, hi, he, hsp, htf, hg, hb, keep(mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, gimple.gone_pages, mallocng_specs.wr32))
+qed
+
+theorem mp.mun: all a l gv g2 gr. a in bits(64) -> l in bits(64) -> mp.calls(gv, mallocng_specs.vm_wait_spec_fun()) -> mp.calls(g2, mallocng_specs.syscall2_spec_fun()) ->
+  mp.calls(gr, mallocng_specs.syscall_ret_spec_fun()) -> refines(c_src_mman_munmap.__munmap(a, l, gv, g2, gr), mallocng_specs.munmap_spec(a, l), abi.World)
+proof
+  fix a l gv g2 gr
+  assume ha hl hgv hg2 hgr
+  show proof
+    fix s o
+    assume hw hr
+    let SPEC := mallocng_specs.munmap_spec(a, l)
+    let P := x86_64_linux.page_of(a)
+    let N := x86_64_linux.pages_for(l)
+    let OVF := exc_val("stack_overflow", empty)
+    let EI := x86_64_linux.err(x86_64_linux.EINVAL)
+    let PRE := (mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) && gimple.sys_pages_ok(s.vm, s.objs, P, N)) && mallocng_specs.tls_off(s.fs_base, P, N)
+    have pu := apply(g.runs_univ, hr)
+    have hu: s in univ(1) by simp(pu)
+    have pv pf pd _ := apply(ms.world_parts, hw)
+    have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], pf, pd)
+    have np: !PRE -> runs(SPEC, s, o) proof
+      assume hn
+      show by simp(pu, hn, keep(abi.overflow, mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, gimple.gone_pages, mallocng_specs.wr32))
+    qed
+    have yp: PRE -> runs(SPEC, s, o) proof
+      assume hp
+      have he hsp htf := hp
+      have _ _ th := expand(he, mallocng_specs.errno_ok)
+      have ths: gc.sound(s) by simp(th)
+      have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
+      // (an overflow, in any memory: the spec's)
+      have sov: all v ob. v in x86_64_linux.Vm -> ob in abi.Objs -> runs(SPEC, s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) proof
+        fix v ob
+        assume hv hob
+        have vu := apply(x86.vm_univ, hv)
+        have eu: OVF in univ(1) by defs(simp(), exc_val)
+        have pu2: pair(s, exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF)) in univ(1) by simp(hu, vu, eu, apply(ct.objs_univ, hob))
+        have ovi := apply(ct.overflow_intro, hv, hob, pu2)
+        show by simp(ovi, pu2, keep(abi.overflow, mallocng_specs.errno_ok, gimple.sys_pages_ok, mallocng_specs.tls_off, gimple.gone_pages, mallocng_specs.wr32))
+      qed
+      let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, bits_of_int(64, 11))), seq_one(gimple.arg(64, a))), seq_one(gimple.arg(64, l)))
+      let K2(x8, x9) := bind_rel(gimple.call1(gr, seq_one(gimple.arg(64, x9))), x8, x12 x13. o = ok(x12, bits_of_int(32, x13)), x12 x13. o = exc(x12, x13), x12. o = diverge(x12))
+      let K1(x4, x5) := bind_rel(gimple.call1(g2, ARGS), x4, x8 x9. K2(x8, x9), x8 x9. o = exc(x8, x9), x8. o = diverge(x8))
+      have ne: ex z. z in bits(32) by ex_intro({0}, simp())
+      obtain z, _ k0 from apply(g.any_e, ne, apply(g.runs_elim, hr))
+      have cw: bind_rel(gimple.call(gv, empty), s, x4 x5. K1(x4, x5), x4 x5. o = exc(x4, x5), x4. o = diverge(x4)) := expand(k0, letin)
+      // __vm_wait: nothing
+      have qw: all regs o2. gc.regs_ok(regs, empty) -> runs(mallocng_specs.vm_wait_spec_fun()[regs], s, o2) ->
+          abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && V = s.vm) && o2 = ok(fn_update(s, "vm", V), r)) proof
+        fix regs o2
+        assume hro h2
+        show := apply(ms.vw_q, hw, hu, hro, h2)
+      qed
+      have ccw := apply(gc.contract_callVR[P := V r. V = s.vm, k := x4 x5. K1(x4, x5), x := x4 x5. o = exc(x4, x5), d := x4. o = diverge(x4)],
+        {gv}, {mallocng_specs.vm_wait_spec_fun()}, {empty}, {s}, ths, hw, gc.regs0_ex, (int_le(seq_len(empty), 6) by arith()), hgv, qw, cw)
+      have covw: case 1 of ccw proof
+        assume h
+        obtain v ob, hv hob hx from h
+        show := rewrite(sym(hx), mp(all_elim(sov, {v}, {ob}), hv, hob))
+      qed
+      have cokw: case 2 of ccw proof
+        assume h
+        obtain V r, hV hVe hk from h
+        have c2 := rewrite(ss, rewrite(hVe, hk))
+        // __syscall2(11, a, l): the kernel's munmap
+        have rex := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_one, simp(), arith(), (bits_of_int(64, 11) in bits(64) by simp())),
+          apply(gc.regs_one, simp(), arith(), ha)), apply(gc.regs_one, simp(), arith(), hl)))
+        have q2: all regs o2. gc.regs_ok(regs, ARGS) -> runs(mallocng_specs.syscall2_spec_fun()[regs], s, o2) ->
+            abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && mp.unmap_res(s.vm, V, a, l, fst(r))) && o2 = ok(fn_update(s, "vm", V), r)) proof
+          fix regs o2
+          assume hro h2
+          show := apply(mp.sy2_q, {a}, {l}, {regs}, {s}, {o2}, hw, hu, ha, hl, hsp, hro, h2)
+        qed
+        have cc2 := apply(gc.contract_call1VR[P := V r. mp.unmap_res(s.vm, V, a, l, fst(r)), k := x8 x9. K2(x8, x9), x := x8 x9. o = exc(x8, x9), d := x8. o = diverge(x8)],
+          {g2}, {mallocng_specs.syscall2_spec_fun()}, {ARGS}, {s}, ths, hw, rex, (int_le(seq_len(ARGS), 6) by simp()), hg2, q2, c2)
+        have cov2: case 1 of cc2 proof
+          assume h2
+          obtain v ob, hv hob hx from h2
+          show := rewrite(sym(hx), mp(all_elim(sov, {v}, {ob}), hv, hob))
+        qed
+        have cok2: case 2 of cc2 proof
+          assume h2
+          obtain V2 r2, hV2 hres hk3 from h2
+          // EINVAL: __syscall_ret sets errno, -1
+          have ki: tr.unmap_inval(a, l) && V2 = s.vm && fst(r2) = EI -> runs(SPEC, s, o) proof
+            assume hc
+            have hi ev er := hc
+            have c3 := rewrite(ss, rewrite(er, rewrite(ev, hk3)))
+            have eib: EI in bits(64) by defs(simp(), x86_64_linux.err)
+            have ye: int_lt(18446744073709547520, EI) by defs(simp(), x86_64_linux.err, x86_64_linux.EINVAL, bits_neg, bits_of_int, pow2)
+            let EV := mallocng_specs.wr32(s.vm, mallocng_specs.errno_at(s.fs_base), int_sub(int_pow(2, 64), EI))
+            let M1 := bits_of_int(64, int_sub(int_pow(2, 64), 1))
+            have qr: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, EI))) -> runs(mallocng_specs.syscall_ret_spec_fun()[regs], s, o2) ->
+                abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && (V = EV && fst(r) = M1)) && o2 = ok(fn_update(s, "vm", V), r)) proof
+              fix regs o2
+              assume hro h2
+              have eo: int_lt(18446744073709547520, EI) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) proof
+                assume _
+                show := he
+              qed
+              have q := apply(ms.sr_q, hw, hu, eib, hro, eo, h2)
+              have k2: case 2 of q proof
+                assume h3
+                obtain V3 r3, hV3 hc3 ho3 from h3
+                have e3 f3 := (V3 = EV && fst(r3) = M1 by taut(hc3, ye))
+                show by disj({2}, ex_intro({V3}, {r3}, taut(hV3, e3, f3, ho3)))
+              qed
+              show by taut(q, k2)
+            qed
+            have cc3 := apply(gc.contract_call1VR[P := V r. V = EV && fst(r) = M1, k := x12 x13. o = ok(x12, bits_of_int(32, x13)), x := x12 x13. o = exc(x12, x13), d := x12. o = diverge(x12)],
+              {gr}, {mallocng_specs.syscall_ret_spec_fun()}, {seq_one(gimple.arg(64, EI))}, {s}, ths, hw, apply(gc.regs1_ex, eib), (int_le(seq_len(seq_one(gimple.arg(64, EI))), 6) by simp()),
+              hgr, qr, c3)
+            have cov3: case 1 of cc3 proof
+              assume h3
+              obtain v ob, hv hob hx from h3
+              show := rewrite(sym(hx), mp(all_elim(sov, {v}, {ob}), hv, hob))
+            qed
+            have cok3: case 2 of cc3 proof
+              assume h3
+              obtain V3 r3, hV3 e3 f3 ho from h3
+              have ei: int_sub(int_pow(2, 64), EI) = x86_64_linux.EINVAL by defs(simp(), x86_64_linux.err, x86_64_linux.EINVAL, bits_neg, bits_of_int, pow2)
+              have ho2: o = ok(fn_update(s, "vm", mallocng_specs.wr32(s.vm, mallocng_specs.errno_at(s.fs_base), x86_64_linux.EINVAL)), bits_of_int(32, int_sub(int_pow(2, 32), 1)))
+                by simp(ho, e3, f3, ei, keep(mallocng_specs.wr32, mallocng_specs.errno_at))
+              show := rewrite(sym(ho2), apply(mp.mun_inval, {a}, {l}, {s}, hw, hu, hi, he, hsp, htf))
+            qed
+            show by taut(cc3, cov3, cok3)
+          qed
+          // else: the pages gone; __syscall_ret(0): 0
+          have kg: !tr.unmap_inval(a, l) && (gimple.gone_pages(s.vm, V2, P, N) && V2.brk = s.vm.brk) && fst(r2) = 0 -> runs(SPEC, s, o) proof
+            assume hc
+            have hi gb er := hc
+            have hg hb := gb
+            let S2 := fn_update(s, "vm", V2)
+            have w2W w2u := apply(mp.am_world, hw, hu, hV2)
+            have tV := apply(ms.thr_gone, pv, hV2, fsb, hg, htf, th)
+            have ths2: gc.sound(S2) by simp(tV)
+            have c3 := rewrite(er, hk3)
+            have z0: 0 in bits(64) by simp()
+            have qr: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, 0))) -> runs(mallocng_specs.syscall_ret_spec_fun()[regs], S2, o2) ->
+                abi.ovf_out(S2, o2) || (ex V r. (V in x86_64_linux.Vm && (V = S2.vm && fst(r) = 0)) && o2 = ok(fn_update(S2, "vm", V), r)) proof
+              fix regs o2
+              assume hro h2
+              have nerr: !int_lt(18446744073709547520, 0) by arith()
+              have eo: int_lt(18446744073709547520, 0) -> mallocng_specs.errno_ok(S2.vm, S2.objs, S2.fs_base) proof
+                assume hx
+                show by taut(hx, nerr)
+              qed
+              have q := apply(ms.sr_q, w2W, w2u, z0, hro, eo, h2)
+              have k2: case 2 of q proof
+                assume h3
+                obtain V3 r3, hV3 hc3 ho3 from h3
+                have e3 f3 := (V3 = S2.vm && fst(r3) = 0 by taut(hc3, nerr))
+                show by disj({2}, ex_intro({V3}, {r3}, taut(hV3, e3, f3, ho3)))
+              qed
+              show by taut(q, k2)
+            qed
+            have cc3 := apply(gc.contract_call1VR[P := V r. V = S2.vm && fst(r) = 0, k := x12 x13. o = ok(x12, bits_of_int(32, x13)), x := x12 x13. o = exc(x12, x13), d := x12. o = diverge(x12)],
+              {gr}, {mallocng_specs.syscall_ret_spec_fun()}, {seq_one(gimple.arg(64, 0))}, {S2}, ths2, w2W, apply(gc.regs1_ex, z0), (int_le(seq_len(seq_one(gimple.arg(64, 0))), 6) by simp()),
+              hgr, qr, c3)
+            have cov3: case 1 of cc3 proof
+              assume h3
+              obtain v ob, hv hob hx from h3
+              have hx2: o = exc(fn_update(fn_update(s, "vm", v), "objs", ob), OVF) by simp(hx)
+              show := rewrite(sym(hx2), mp(all_elim(sov, {v}, {ob}), hv, hob))
+            qed
+            have cok3: case 2 of cc3 proof
+              assume h3
+              obtain V3 r3, hV3 e3 f3 ho from h3
+              have ho2: o = ok(fn_update(s, "vm", V2), 0) by simp(ho, e3, f3, fn_update_twice)
+              show := rewrite(sym(ho2), apply(mp.mun_ok, {a}, {l}, {s}, {V2}, hw, hu, hV2, hi, he, hsp, htf, hg, hb))
+            qed
+            show by taut(cc3, cov3, cok3)
+          qed
+          show by taut(hres, ki, kg)
+        qed
+        show by taut(cc2, cov2, cok2)
+      qed
+      show by taut(ccw, covw, cokw)
+    qed
+    show by taut(np, yp)
+  qed
+qed
+
+// (munmap, its requirement met, never diverges: a memory with the pages
+// gone there is)
+theorem mp.mun_nodiv: all s a l t. s.vm in x86_64_linux.Vm ->
+  (mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) && gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a), x86_64_linux.pages_for(l))) &&
+    mallocng_specs.tls_off(s.fs_base, x86_64_linux.page_of(a), x86_64_linux.pages_for(l)) ->
+  !runs(mallocng_specs.munmap_spec(a, l), s, diverge(t))
+proof
+  fix s a l t
+  assume pv hp
+  let P := x86_64_linux.page_of(a)
+  let N := x86_64_linux.pages_for(l)
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
+  have bt: s.vm.brk in bits(64) by simp(expand(pv, x86_64_linux.Vm))
+  obtain V, hv hg hb from mp(g.gone_ex[before := s.vm, p := P, n := N, br := s.vm.brk], pv, apply(x86.vm_univ, pv), bt)
+  have gx: !tr.unmap_inval(a, l) -> ex V. V in x86_64_linux.Vm && (gimple.gone_pages(s.vm, V, P, N) && V.brk = s.vm.brk) proof
+    assume _
+    show by ex_intro({V}, taut(hv, hg, hb))
+  qed
+  show proof
+    assume h
+    rsimp only, mallocng_specs.munmap_spec in h
+    have hs := apply(or_resolve, apply(g.runs_elim, h), hp)
+    have ci: tr.unmap_inval(a, l) -> false proof
+      assume hi
+      show by simp(hs, vv, ct.objs_ne, hi, keep(gimple.gone_pages, mallocng_specs.wr32, mallocng_specs.errno_at))
+    qed
+    have co: !tr.unmap_inval(a, l) -> false proof
+      assume hi
+      show by simp(hs, vv, ct.objs_ne, hi, gx, keep(gimple.gone_pages, mallocng_specs.wr32, mallocng_specs.errno_at))
+    qed
+    show by taut(ci, co)
+  qed
+qed
+
+// (so its spec diverges only where it allows anything)
+theorem mp.mun_divw: tr.div_raises(mallocng_specs.munmap_spec_fun())
+proof
+  let Q(x0) := mallocng_specs.munmap_spec(bits_of_int(64, x0[0]), bits_of_int(64, x0[1]))
+  have ru: all regs s o. runs(Q(regs), s, o) -> pair(s, o) in univ(1) proof
+    fix regs s o
+    assume h
+    rsimp only, mallocng_specs.munmap_spec in h
+    show := apply(g.runs_univ, h)
+  qed
+  have dq: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in single(empty) -> runs(Q(regs), union2(w, h), diverge(t)) ->
+      runs(Q(regs), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    let W := union2(w, h)
+    let A := bits_of_int(64, regs[0])
+    let L := bits_of_int(64, regs[1])
+    have {wu = univ, wv = vm} := apply(ct.w_single, hw, hwu, hh)
+    let PRE := (mallocng_specs.errno_ok(W.vm, W.objs, W.fs_base) && gimple.sys_pages_ok(W.vm, W.objs, x86_64_linux.page_of(A), x86_64_linux.pages_for(L))) &&
+      mallocng_specs.tls_off(W.fs_base, x86_64_linux.page_of(A), x86_64_linux.pages_for(L))
+    have c: !PRE proof
+      assume e
+      show by taut(mp(all_elim(mp.mun_nodiv, {W}, {A}, {L}, {t}), wv, e), hr)
+    qed
+    have pu: pair(W, exc(W, empty)) in univ(1) by simp(wu)
+    show by simp(pu, c)
+  qed
+  have gf := apply(ct.fun_divg[G := single(empty), q := x0. Q(x0), n := 2, w := 32], ct.single_univ, ru, dq)
+  have gd: tr.div_raises_g(single(empty), mallocng_specs.munmap_spec_fun()) by defs(gf, mallocng_specs.munmap_spec_fun)
+  show := apply(ct.div_of_g, gd)
+qed
+
+// its C function value, machine code (the divergence mp.mun_divw's)
+contract __munmap mallocng_specs.munmap_spec_fun by mp.mun
+
+// ----------------------------------------------------------------------
+// Linked: __vm_wait (mmap.c's dummy), __syscall2 and __syscall_ret (with
+// ___errno_location, __get_tp) their own code
+
+abbrev mp.MSR := c_src_internal_syscall_ret_cfg.__syscall_ret_fun(c_src_errno___errno_location_cfg.__errno_location_fun(c_src_errno___errno_location_cfg.__get_tp_fun()))
+abbrev mp.MUN := c_src_mman_munmap_cfg.__munmap_fun(c_src_mman_mmap_cfg.dummy_fun(), c_src_mman_munmap_cfg.__syscall2_fun(), mp.MSR)
+
+theorem mp.mun_linked: all statics. tr.implements_at(4213949, mallocng_specs.munmap_spec_fun(), 4198400, text.code, statics)
+proof
+  fix statics
+  show := mp(all_elim(mp.mun_implements, {statics}, {c_src_mman_mmap_cfg.dummy_fun()}, {c_src_mman_munmap_cfg.__syscall2_fun()}, {mp.MSR}),
+    all_elim(vwc.implements, {statics}), vwc.typed, vwc.io, all_elim(sy2c.implements, {statics}), sy2c.typed, sy2c.io,
+    all_elim(srtc.linked, {statics}), srtc.typed_linked, srtc.io_linked, cc.vm_wait, mp.sy2_calls_linked, cc.syscall_ret)
+qed
+
+// (__munmap's CFG form, linked, called as its spec)
+theorem mp.mun_calls_linked: all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(mp.MUN[regs], s, o) ->
+  runs(mallocng_specs.munmap_spec_fun()[regs], s, o)
+proof
+  fix regs s o
+  assume h1 h2 h3 hr
+  have r1 := mp(all_elim(__munmap_ref, {c_src_mman_mmap_cfg.dummy_fun()}, {c_src_mman_munmap_cfg.__syscall2_fun()}, {mp.MSR}, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(mp.mun_fun, {c_src_mman_mmap_cfg.dummy_fun()}, {c_src_mman_munmap_cfg.__syscall2_fun()}, {mp.MSR}, {regs}, {s}, {o}),
+    cc.vm_wait, mp.sy2_calls_linked, cc.syscall_ret, h1, h2, h3, r1)
+qed
