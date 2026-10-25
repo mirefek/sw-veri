@@ -564,7 +564,7 @@ pub trait Prover {
     /// wrapper theorems (its `_fun`, `_divg`, `_implements`, ..) from the
     /// refinement THM of its procedure, proven by a procedure (not trusted
     /// either)
-    fn contract(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _by: &str, _call: Option<&str>, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
+    fn contract(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _by: &str, _c1: Option<&str>, _call: Option<&str>, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
         Err(KernelError("`contract`: this checker has no contract procedure".into()))
     }
 }
@@ -816,26 +816,34 @@ fn load_mode(
             // c1 FN SPEC PREFIX [using L, ..]: the function FN's C1 theorems
             // (`PREFIX.body`, `.implements`, ..), proven by the checker's C1
             // engine, the facts L (theorems) its hints
-            // contract FN SPEC by THM [call ABBR] [using L, ..]: FN's wrapper
-            // theorems from its procedure's refinement THM (named after THM:
-            // `THM_fun`, ..), proven by the checker's procedure
+            // contract FN SPEC by THM [c1 P] [call ABBR] [using L, ..]: FN's
+            // wrapper theorems from its procedure's refinement THM (named
+            // after THM: `THM_fun`, ..), proven by the checker's procedure;
+            // `c1 P`: of the machine code whose C1 theorems are P's (one copy
+            // of several: `THM_implements_P`, `THM_linked_P`)
             "c1" | "contract" => {
                 let spec = p.ident()?;
-                let (prefix, call) = if kw == "contract" {
+                let (prefix, call, c1p) = if kw == "contract" {
                     if !matches!(&p.tok, Tok::Ident(s) if s == "by") {
                         return p.error("`contract FN SPEC by THM`: `by` expected");
                     }
                     p.bump()?;
                     let by = p.ident()?;
+                    let c1p = if matches!(&p.tok, Tok::Ident(s) if s == "c1") {
+                        p.bump()?;
+                        Some(p.ident()?)
+                    } else {
+                        None
+                    };
                     let call = if matches!(&p.tok, Tok::Ident(s) if s == "call") {
                         p.bump()?;
                         Some(p.ident()?)
                     } else {
                         None
                     };
-                    (by, call)
+                    (by, call, c1p)
                 } else {
-                    (p.ident()?, None)
+                    (p.ident()?, None, None)
                 };
                 let mut hints = Vec::new();
                 if matches!(&p.tok, Tok::Ident(s) if s == "using") {
@@ -857,7 +865,7 @@ fn load_mode(
                 // global ones, the rest dropped after it)
                 let mark = p.env.local_mark();
                 p.env.begin_locals();
-                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, &hints) };
+                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, c1p.as_deref(), call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, &hints) };
                 let r = r.and_then(|ths| {
                     ths.into_iter().map(|(n, sq)| Seq::globalize(p.env, &sq).map(|g| (n, g))).collect::<KResult<Vec<_>>>()
                 });

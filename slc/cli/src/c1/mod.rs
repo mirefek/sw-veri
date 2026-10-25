@@ -987,7 +987,7 @@ impl syntax::Prover for Checker {
         gref::refines(env, name, low, high).map_err(sl_kernel::KernelError)
     }
 
-    fn contract(&mut self, env: &mut Env, fname: &str, spec: &str, by: &str, call: Option<&str>, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
-        contract::contract(env, fname, spec, by, call, hints).map_err(sl_kernel::KernelError)
+    fn contract(&mut self, env: &mut Env, fname: &str, spec: &str, by: &str, c1: Option<&str>, call: Option<&str>, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
+        contract::contract(env, fname, spec, by, c1, call, hints).map_err(sl_kernel::KernelError)
     }
 }

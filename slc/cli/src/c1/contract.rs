@@ -23,6 +23,12 @@
 //!   called as FN too) and `THM_call_linked` (FN's CFG form, linked, called
 //!   as FN: from `THM_q`, the structured form called as FN).
 //!
+//! With `c1 P` (FN's machine code in several copies -- a static function
+//! of a header, one per translation unit, each with its C1 theorems): the
+//! copy whose C1 is P's (`P.implements`); its theorems `THM_implements_P`
+//! and `THM_linked_P`, the others (of the spec and the GIMPLE forms, not
+//! of the code) those of an earlier line for THM if made.
+//!
 //! THM: `all xs. ps -> refines_ghost(PROC(args), Q(sargs), abi.World, G)`
 //! (or without the ghost part, `refines(PROC(args), Q(sargs), abi.World)`),
 //! PROC the procedure FN's structured `_fun` calls.
@@ -39,15 +45,26 @@ fn e(x: sl_kernel::KernelError) -> String {
     x.0
 }
 
-pub fn contract(env: &mut Env, fname: &str, spec: &str, by: &str, call: Option<&str>, hints: &[String]) -> R<Vec<(String, Seq)>> {
+pub fn contract(env: &mut Env, fname: &str, spec: &str, by: &str, c1: Option<&str>, call: Option<&str>, hints: &[String]) -> R<Vec<(String, Seq)>> {
     let api = Api::new(env, Vec::new()).map_err(e)?;
     let mut hs = Vec::new();
     for h in hints {
         hs.push(api.fact(env, h).map_err(e)?);
     }
-    let mut c = Ct { env, api, n: 0, hints: hs, out: Vec::new() };
+    let mut c = Ct { env, api, n: 0, hints: hs, out: Vec::new(), c1: c1.map(|s| s.to_string()) };
     c.run(fname, spec, by, call).map_err(|x| format!("contract {}: {}", fname, x))?;
-    Ok(c.out)
+    let Some(p) = c1 else { return Ok(c.out) };
+    // (one copy of several: its code's theorems by P, the others an
+    // earlier line's if made)
+    let mut out = Vec::new();
+    for (n, sq) in std::mem::take(&mut c.out) {
+        if n == format!("{}_implements", by) || n == format!("{}_linked", by) {
+            out.push((format!("{}_{}", n, p), sq));
+        } else if c.api.fact(c.env, &n).is_err() {
+            out.push((n, sq));
+        }
+    }
+    Ok(out)
 }
 
 struct Ct<'e> {
@@ -57,6 +74,8 @@ struct Ct<'e> {
     /// the facts L
     hints: Vec<Seq>,
     out: Vec<(String, Seq)>,
+    /// the C1 theorems' prefix named (`c1 P`)
+    c1: Option<String>,
 }
 
 /// What `run` made and found, for the machine-code theorems
@@ -527,9 +546,15 @@ impl<'e> Ct<'e> {
         // memory's havoc -- that it has one the proof's)
         let dname = if gh.is_some() { "divg" } else { "divw" };
         let given = self.api.fact(self.env, &format!("{}_{}", by, dname)).ok();
-        if given.is_some() && !wq.params.is_empty() {
-            return Err(format!("{}_{}: proven before, for a spec with parameters (not yet)", by, dname));
-        }
+        // (for a spec with parameters: closed over them, as this line makes
+        // it -- at them again)
+        let given = match given {
+            Some(d) if !wq.params.is_empty() => {
+                let ts: Vec<A> = wq.params.iter().map(|v| A::T(Term::var(*v, vec![]))).collect();
+                Some(self.api.mp(self.env, d, ts).map_err(|x| format!("{}_{} at the spec's parameters: {}", by, dname, x.0))?)
+            }
+            g => g,
+        };
         let divg = if let Some(d) = given { d } else {
         let divg = match &gh {
             Some(g) => {
@@ -552,9 +577,20 @@ impl<'e> Ct<'e> {
         // runs(SFUN(..)[regs], ..)`)
         let csym = self.sym(&cfun)?;
         let ssym = self.sym(&sfun)?;
-        let c1 = self.one(&format!("`{}`'s C1 (`.. -> tr.implements_at(_, {}(..), ..)`)", cfun, cfun), self.find_thm(|c, n, t, _| {
+        let c1s = self.find_thm(|c, n, t, _| {
             n.ends_with(".implements") && c.app(t, "tr.implements_at", 5).is_some_and(|a| matches!(a[1].node(), Node::App(s, _) if *s == csym))
-        }))?;
+        });
+        let c1 = match &self.c1 {
+            // (the copy named)
+            Some(p) => {
+                let n = format!("{}.implements", p);
+                if !c1s.contains(&n) {
+                    return Err(format!("`{}`: not a C1 theorem of `{}` (those: {})", n, cfun, c1s.join(", ")));
+                }
+                n
+            }
+            None => self.one(&format!("`{}`'s C1 (`.. -> tr.implements_at(_, {}(..), ..)`; several copies: `c1 P` names one)", cfun, cfun), c1s)?,
+        };
         let rf = self.one(&format!("`{}` refining `{}`", cfun, sfun), self.find_thm(|c, _, t, s| {
             c.app(t, "runs", 3).is_some_and(|a| c.app(&a[0], "app", 2).is_some_and(|x| matches!(x[0].node(), Node::App(h, _) if *h == ssym))) && Self::mentions(s, csym)
         }))?;

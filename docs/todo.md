@@ -22,9 +22,10 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   from `free_group` at d; by induction on d at machine level, no
   recursion in the engine.
 - `__libc_free`, the `free` symbol (src/malloc/free.c); then `calloc`.
-- `contract` finds a function's C1 by its CFG form: two now for the copies
-  (free.c's at the chain's end for that) -- a copy's contract needs the
-  C1 named (its address).
+- free.c's copies of malloc.c's functions: their contracts by `c1 P`
+  (proofs/mallocng/fun/free_copies.core; get_meta's done), their linked
+  forms (`P.linked`, as cfg.core's for malloc.c's) where free.c's
+  callers need them.
 
 Then the top level for malloc, free and calloc together
 (`musl.impl_malloc` .., proofs/mallocng/claim.core):
