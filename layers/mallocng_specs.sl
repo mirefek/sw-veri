@@ -1183,7 +1183,40 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
   }
 }
 
+// __libc_malloc_impl(n): a block of n bytes for the client -- p, a new
+// live block (`blocks`; in a slot of one of the allocator's groups, framed
+// for n bytes: the invariant's), its bytes the allocator's before or
+// unmapped then -- or 0, errno ENOMEM (n beyond the allocator's sizes, no
+// memory to be had). The invariant kept, nothing outside the allocator
+// touched but errno, the allocator grown only into memory unmapped
+// before. Which slot of which group -- musl's heuristics -- left free.
+proc[MallocAbs] malloc_impl_spec(c: Cfg, n: bits[64]) -> Addr {
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && len(A.taken) = 0 && thread_ok(vm, fs_base) &&
+    tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base)
+  either { overflow() } or {
+    let A0 = A
+    let blocks0 = blocks
+    let before = vm
+    let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
+    let p = any p: Addr where p = 0 || blocks0[p] = none
+    ghost blocks := (q: Addr) => if p != 0 && q = p { some(uint(n)) } else { blocks0[q] }
+    ghost A := any A2: Abs where no_reserved(A2) && len(A2.taken) = 0
+    havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks0, before, vm, objs, errno) &&
+      (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks0) || !mapped(before, a / PAGE)) &&
+      (p != 0 -> all a: nat. uint(p) <= a && a < uint(p) + uint(n) -> a in footprint(c, A0, blocks0) || !mapped(before, a / PAGE)) &&
+      (p = 0 -> errno_is(vm, fs_base, ENOMEM))
+    return p
+  }
+}
+
 // ... as C function values (the result as GIMPLE returns it: `result`)
+fn malloc_impl_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let r = malloc_impl_spec(c, bits[64](args[0]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
 fn set_size_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
   set_size_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
