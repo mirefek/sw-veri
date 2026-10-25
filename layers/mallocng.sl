@@ -574,20 +574,6 @@ pred shown_in(c: Cfg, A: Abs, objs: Objs) =
   fp: fp_shown(fp_ranges(c, A), objs) &&
   rsv: (A.reserve_cnt > 0 -> all a: nat. A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt -> a in objs.c_bytes)
 
-pred rep(c: Cfg, A: Abs, s: Heap) =
-  inv: holds(c, A, mview(s.vm, held(c, A, s.blocks)), s.blocks, s.vm.brk) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&
-  mapped: fp_mapped(fp_ranges(c, A), s.blocks, s.vm) && free: free_rw(c, mview(s.vm, footprint(c, A, s.blocks))) &&
-  rw: grp_rw(c, A, s.vm, s.blocks) &&
-  live: live_rw(s)           // (what the law inv_wf needs, stated directly)
-
-fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
-
-// the footprints of all abstract states that hold: by `abs_unique`, there
-// is just one
-fn owned_of(c: Cfg, s: Heap) -> Set[nat] = {a: nat | ex A: Abs. rep(c, A, s) && a in footprint(c, A, s.blocks)}
-
-fn owned(c: Cfg) -> Heap -> Set[nat] = (s: Heap) => owned_of(c, s)
-
 ///////////////////////////////////////////////////////////////////////
 //  Internal steps by their purpose
 //
@@ -618,6 +604,28 @@ pred holds_m(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
 // world's (shown_in)
 pred holds_in(c: Cfg, A: Abs, vm: Vm, objs: Objs, blocks: Addr -> Option[nat]) =
   mem: holds_m(c, A, vm, blocks) && shown: shown_in(c, A, objs)
+
+// Between the allocator's calls: A holds in memory, no slot reserved, no
+// meta taken; the live blocks mapped read-write (what the law inv_wf
+// needs, stated directly); the thread's descriptor apart from the
+// allocator's memory -- its word at fs and errno (musl's `errno_val`,
+// fs + 0x34) none of the allocator's bytes, the ABI's canary in none of
+// its ranges or its reserve's pages (so its bytes the C world's: shown_in)
+pred rep(c: Cfg, A: Abs, s: Heap) =
+  mem: holds_m(c, A, s.vm, s.blocks) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&
+  live: live_rw(s) &&
+  tls: (all i: nat. i < 8 -> uint(s.fs_base) + i notin footprint(c, A, s.blocks)) &&
+  errno: (all i: nat. i < 4 -> uint(s.fs_base) + 0x34 + i notin footprint(c, A, s.blocks)) &&
+  canary: (all a: nat. a in canary(s.fs_base) -> !in_ranges(a, fp_ranges(c, A)) &&
+    !(A.reserve_cnt > 0 && A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt))
+
+fn inv(c: Cfg) -> Set[Heap] = {s: Heap | ex A: Abs. rep(c, A, s)}
+
+// the footprints of all abstract states that hold: by `abs_unique`, there
+// is just one
+fn owned_of(c: Cfg, s: Heap) -> Set[nat] = {a: nat | ex A: Abs. rep(c, A, s) && a in footprint(c, A, s.blocks)}
+
+fn owned(c: Cfg) -> Heap -> Set[nat] = (s: Heap) => owned_of(c, s)
 
 pred has_unused(A: Abs, g: nat) = ex i: nat. i < len(A.slots[g]) && A.slots[g][i] = unused
 pred on_list(l: List[nat], g: nat) = ex k: nat. k < len(l) && l[k] = g

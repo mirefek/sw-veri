@@ -88,11 +88,45 @@ pub fn claim(args: &[String]) -> CResult {
     };
     el.b.env.define("musl_malloc.errno_offset", vec![], errno_fn).map_err(|e| e.to_string())?;
     let errno_fn = el.b.app("musl_malloc.errno_offset", vec![]);
+    // the program as loaded (malloc.sl's `world_ok`): the executable
+    // segment's bytes at its address, the static data the claim's STATIC
+    let exec: Vec<_> = elf.segments.iter().filter(|s| s.flags & 1 != 0 && s.filesz > 0).collect();
+    let [xs] = exec.as_slice() else { return Err(format!("{}: {} executable segments, expected one", elf_path, exec.len())) };
+    let (xo, xn) = (xs.offset as usize, xs.filesz as usize);
+    let xbytes = bytes.get(xo..xo + xn).ok_or("the executable segment past the file's end")?;
+    let mut static_set = el.b.empty();
+    for (lo, hi, _) in &ranges {
+        let r = el.b.app("int_range", vec![el.b.natn(Nat::from_u64(*lo)), el.b.natn(Nat::from_u64(*hi))]);
+        static_set = el.b.app("union2", vec![r, static_set]);
+    }
+    let unit_fn = |el: &mut sl_elab::Elab, name: &str, t: Term| -> Result<Term, String> {
+        let x = el.fresh("u");
+        let dom = el.b.app("single", vec![el.b.empty()]);
+        let f = el.b.bind_app("fn_build", vec![dom], &[x], &t);
+        let full = format!("musl_malloc.{}", name);
+        el.b.env.define(&full, vec![], f).map_err(|e| format!("defining `{}`: {}", full, e))?;
+        Ok(el.b.app(&full, vec![]))
+    };
+    let base_t = el.b.natn(Nat::from_u64(xs.vaddr));
+    let base_fn = unit_fn(&mut el, "prog_base", base_t)?;
+    let code_t = el.b.app("bytes_seq", vec![Term::bytes(xbytes)]);
+    let code_fn = unit_fn(&mut el, "prog_code", code_t)?;
+    let statics_fn = unit_fn(&mut el, "prog_statics", static_set.clone())?;
     let mut cx = Cx::new("claim_malloc");
     cx.lift.insert("malloc.alloc_inv".into(), el.b.v(inv));
     cx.lift.insert("malloc.alloc_owned".into(), el.b.v(own));
     cx.lift.insert("malloc.errno_offset".into(), errno_fn);
-    let lift: Vec<String> = vec!["malloc.alloc_inv".into(), "malloc.alloc_owned".into(), "malloc.errno_offset".into()];
+    cx.lift.insert("malloc.prog_base".into(), base_fn);
+    cx.lift.insert("malloc.prog_code".into(), code_fn);
+    cx.lift.insert("malloc.prog_statics".into(), statics_fn);
+    let lift: Vec<String> = vec![
+        "malloc.alloc_inv".into(),
+        "malloc.alloc_owned".into(),
+        "malloc.errno_offset".into(),
+        "malloc.prog_base".into(),
+        "malloc.prog_code".into(),
+        "malloc.prog_statics".into(),
+    ];
     let laws = el.laws_of(&cx, &lift, Default::default()).map_err(|d| d.msg)?;
     let i = el.g.find_decl("claim_malloc", "allocator_claim").ok_or("allocator_claim not found")?;
     let sig = el.sig_of(i, "").map_err(|d| d.msg)?;
@@ -108,11 +142,6 @@ pub fn claim(args: &[String]) -> CResult {
     for (n, a) in [("main_at", main_at), ("malloc_at", malloc_at), ("free_at", free_at), ("calloc_at", calloc_at)] {
         let t = el.b.natn(Nat::from_u64(a));
         call.push(named(&mut el, n, t)?);
-    }
-    let mut static_set = el.b.empty();
-    for (lo, hi, _) in &ranges {
-        let r = el.b.app("int_range",vec![el.b.natn(Nat::from_u64(*lo)), el.b.natn(Nat::from_u64(*hi))]);
-        static_set = el.b.app("union2", vec![r, static_set]);
     }
     call.push(named(&mut el, "static", static_set)?);
     // addresses of the data symbols, for the proofs

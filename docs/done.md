@@ -1268,3 +1268,17 @@ item is a short summary of finished work; details are in the files named.
     proofs/mallocng/fun/malloc_machine.core): its 13 callees' CFG forms
     linked (the locks' `__lock` never reached: any code), alloc_slot's from
     alloc_pair's induction.
+  - The `malloc` symbol (lite_malloc.c's default_malloc, a leaf unit):
+    C1, its contract (`mp.dm` by `mp.mi_ref`, any program of malloc's
+    outcome), `__libc_malloc_impl` called as such (`mp.mi_call`, its two
+    returns as one), `mp.dm_machine`.
+- **The malloc layer's world and rep** (towards the claim's top):
+  malloc.sl's `world_ok` (the ABI's view at a call: no stack page, the
+  canonical C domain; the thread, the break's start, the program loaded --
+  `prog_base` / `prog_code` / `prog_statics`, fixed by `slc claim` from
+  the executable segment) required by malloc, free and calloc; the frame
+  law keeps `fs_base` and the stack's place. mallocng's `rep` is
+  `holds_m` (the reserve clause too), `live_rw`, and the thread's
+  descriptor apart (its word, errno, the canary). laws.core in the chain
+  (`mallocng.abs_univ`; the frame law's reserve pages by `mp.res_rng`);
+  the client facts take `world_ok`.

@@ -60,6 +60,24 @@ param fn alloc_owned(s: Heap) -> Set[nat]
 // x86_64: `errno_val` in `struct pthread`, 0x34). Fixed by the claim.
 param fn errno_offset(u: ()) -> nat
 
+// The program as loaded: its code (bytes `prog_code` at `prog_base`) and
+// its static data (`prog_statics`, off the stack's space). Fixed by the
+// claim.
+param fn prog_base(u: ()) -> nat
+param fn prog_code(u: ()) -> List[bits[8]]
+param fn prog_statics(u: ()) -> Set[nat]
+
+// What any allocator may assume of the world at its calls: the ABI's view
+// of a caller's memory (no stack page among the world's; the C world's
+// bytes all but the ABI's), and a process that keeps its thread (the
+// thread pointer's descriptor), its break's start (above page 0) and its
+// program loaded.
+pred world_ok(s: Heap) =
+  (all p: PageNo. s.vm.pages[p] != none -> s.vm.pages[p].value.kind != stack) &&
+  s.objs.c_bytes = {a: nat | a notin canary(s.fs_base)} &&
+  thread_ok(s.vm, s.fs_base) && brk_start_ok(s.vm) &&
+  loaded(s.vm, prog_base(()), prog_code(()), prog_statics(()))
+
 law inv_wf(s: Heap): alloc_inv(s) -> heap_wf(s)
 
 law owned_private(s: Heap): alloc_inv(s) -> disjoint(alloc_owned(s), live(s))
@@ -71,9 +89,11 @@ law owned_mapped(s: Heap): alloc_inv(s) -> all a: nat. a in alloc_owned(s) -> ma
 // may write the bytes of its blocks, but their mappings (pages) stay under
 // the allocator's control, as does all of the allocator's own memory and
 // the program break (an allocator may extend it; musl's sbrk refuses to
-// move it).
+// move it). The thread pointer and the stack's place are the process's,
+// no client's to change.
 law frame(s: Heap, t: Heap):
   alloc_inv(s) && t.blocks = s.blocks && t.vm.brk = s.vm.brk &&
+  t.fs_base = s.fs_base && t.vm.stack_top = s.vm.stack_top && t.vm.stack_limit = s.vm.stack_limit &&
   (all a: nat. a in alloc_owned(s) ->
      t.vm.bytes[bits[64](a)] = s.vm.bytes[bits[64](a)] &&
      t.vm.pages[a / PAGE] = s.vm.pages[a / PAGE]) &&
@@ -156,7 +176,7 @@ proc out_of_memory(before: Heap) -> Addr {
 // place for it (allocator memory or fresh mappings) and an allocator state
 // that includes it.
 proc malloc(n: bits[64]) -> Addr {
-  require alloc_inv(self) && errno_ok(self)
+  require alloc_inv(self) && errno_ok(self) && world_ok(self)
   let before = self
   // malloc(0): a unique block (its place `extent`'s), maybe no usable byte
   let size  = any? nat where size >= uint(n) else { return out_of_memory(before) }
@@ -172,7 +192,7 @@ proc malloc(n: bits[64]) -> Addr {
 
 proc free(p: Addr) {
   if p = 0 { return }
-  require alloc_inv(self) && errno_ok(self)
+  require alloc_inv(self) && errno_ok(self) && world_ok(self)
   require blocks[p] != none                     // invalid or double free: undefined
   let before = self
   let freed  = range(p, blocks[p].value)
@@ -181,7 +201,7 @@ proc free(p: Addr) {
 }
 
 proc calloc(count: bits[64], size: bits[64]) -> Addr {
-  require alloc_inv(self) && errno_ok(self)
+  require alloc_inv(self) && errno_ok(self) && world_ok(self)
   let n = uint(count) * uint(size)
   if n >= 2^64 {                                // overflow
     set_errno(ENOMEM)

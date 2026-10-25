@@ -50,9 +50,10 @@ fn loaded_code_facts_check() {
     assert!(c.status.success() && out.contains("proofs/x86_code.core: 0 constants, 0 axioms, 0 definitions, 36 theorems"), "{}{}", out, String::from_utf8_lossy(&c.stderr));
 }
 
-/// The claim's top (proofs/mallocng/claim.core from its open lemmas), the
-/// invariant's laws (proofs/mallocng/laws.core) and the client facts
-/// (proofs/malloc_client.core) check against the claim.
+/// The client facts (proofs/malloc_client.core) check against the claim.
+/// (The invariant's laws, proofs/mallocng/laws.core, are in the chain;
+/// the claim's top, proofs/mallocng/claim.core, joins it with the
+/// top-level step: docs/todo.md.)
 #[test]
 fn claim_proofs_check() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -66,7 +67,6 @@ fn claim_proofs_check() {
     let g = Command::new(slc).current_dir(&root).args(["claim", "malloc", "--elf"]).arg(&elf).arg("-o").arg(&claim).output().unwrap();
     assert!(g.status.success(), "{}", String::from_utf8_lossy(&g.stderr));
     for files in [
-        vec!["core/prelude.core", "core/logic.core", "core/sets.core", "CLAIM", "proofs/mallocng/laws.core", "proofs/mallocng/claim.core"],
         vec!["core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/list.core", "core/loop.core", "CLAIM", "proofs/malloc_client.core"],
     ] {
         let mut c = Command::new(slc);

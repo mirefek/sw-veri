@@ -8,18 +8,31 @@ summarized in docs/done.md.
 alloc_meta, alloc_slot and alloc_group are verified at machine level from
 the configuration alone (`mp.am_machine`, `mp.as_machine`,
 `mp.agr_machine`); the locks and munmap too (`mp.rdl_linked` ..
-`mp.unl_linked`, `mp.mun_linked`), and `__libc_malloc_impl`
-(`mp.mi_machine`, proofs/mallocng/fun/malloc_machine.core).
-Next, malloc (`musl.impl_malloc`, proofs/mallocng/claim.core):
-- mallocng's abstract state to the malloc layer's blocks (`rep`): the
-  purpose spec giving `malloc.malloc`; the `malloc` symbol's wrapper
-  (lite_malloc.c's `default_malloc`) to `__libc_malloc_impl`. malloc(0):
-  musl's block has no usable byte (the malloc layer allows it: a block's
-  place its `extent`, one byte at least); rep's blocks the same, the
-  extent's byte at p the allocator's.
+`mp.unl_linked`, `mp.mun_linked`), `__libc_malloc_impl`
+(`mp.mi_machine`) and the `malloc` symbol (`mp.dm_machine`,
+proofs/mallocng/fun/malloc_machine.core), all against malloc's purpose spec.
 
-Then free and calloc: `get_nominal_size`, `record_seq`, `okay_to_free`,
+Next: free and calloc -- `get_nominal_size`, `record_seq`, `okay_to_free`,
 `free_group`, `nontrivial_free`, `__libc_free`, `calloc`.
+
+Then the top level for malloc, free and calloc together
+(`musl.impl_malloc` .., proofs/mallocng/claim.core):
+- Purpose spec to the malloc layer's (`malloc_impl_spec` to
+  `malloc.malloc`): at entry rep, `world_ok` and errno_ok give the
+  internal precondition (the separation clauses, shown_in from the
+  canonical C domain); the return's state rep again, owned by
+  `mallocng.abs_unique`. malloc's outcome still owes the block 16-aligned
+  (enframe's offset from the slot's start) and the place of a block of
+  size 0 (`extent`: its byte p, the slot's) -- `mp.mi_blk`.
+- The machine level: `tr.implements_abi_g` takes a spec matching every
+  outcome of the GIMPLE function, its overflows too; malloc.sl's specs
+  have none (the ABI's own branch covers an overflow with the I/O events
+  as at the call, and the allocator makes no read or write call). A
+  lemma: a spec plus such overflows implements as the spec; then
+  `implements2_at` to `implements` by `world_ok`'s `loaded`.
+- The claim joined with the chain: the claim file and the chain's
+  `@gimple` both define the layers; claim.core's `musl.cfg` is stale (the
+  Cfg's fields) and `mallocng.law_frame` now takes `c in Cfg`.
 - The string instructions in general (layers/musl_asm.sl): `rep movs` of
   any element size (`x86i.rep_movsq` is for 8: its iteration and facts
   with the size a parameter), `rep stos` (memset's: no overlap question);

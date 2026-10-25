@@ -5,7 +5,7 @@
 //     core/list.core core/loop.core build/musl_malloc.core proofs/malloc_client.core
 
 // free(NULL) returns and changes nothing
-theorem malloc.free_null(i, o, e, s, r): runs(malloc.free(i, o, e, 0), s, r) -> r = ok(s, empty)
+theorem malloc.free_null(i, o, e, b, c, st, s, r): runs(malloc.free(i, o, e, b, c, st, 0), s, r) -> r = ok(s, empty)
 proof
   assume h
   show by simp(h)
@@ -13,29 +13,29 @@ qed
 
 // free(p) of a live block returns normally, with p no longer live. (The
 // law free_step rules out the path where no allocator step exists.)
-theorem malloc.free_live(i, o, e, p, s, r):
+theorem malloc.free_live(i, o, e, b, c, st, p, s, r):
   malloc.free_step(i, o) -> s in rec_and(abi.World, malloc.Heap.ghost) -> p in bits(64) ->
-  runs(malloc.free(i, o, e, p), s, r) -> !(p = 0) -> s in i -> malloc.errno_ok(e, s) -> !(s.blocks[p] = none) ->
+  runs(malloc.free(i, o, e, b, c, st, p), s, r) -> !(p = 0) -> s in i -> malloc.errno_ok(e, s) -> malloc.world_ok(b, c, st, s) -> !(s.blocks[p] = none) ->
     ex t. r = ok(t, empty) && t.blocks = malloc.set_block(s.blocks, p, none)
 proof
-  assume hl hs hp h h0 hi he hb
+  assume hl hs hp h h0 hi he hwo hb
   // a step exists (the law, for s and p)
   have hsp: s in rec_and(abi.World, malloc.Heap.ghost) && p in bits(64) by taut(hs, hp)
   have hib: s in i && !(s.blocks[p] = none) by taut(hi, hb)
   have step := mp(mp(all_elim(all_elim(expand(hl, malloc.free_step), {s}), {p}), hsp), hib)
-  show by simp(h, h0, hi, he, hb, step)
+  show by simp(h, h0, hi, he, hwo, hb, step)
 qed
 
 // malloc must fail when there is no place for a block: if no 16-aligned,
 // non-null address has a free range (allocator memory or unmapped pages) of
 // any size, a normal return gives NULL.
-theorem malloc.no_place_null(i, o, e, n, s, r, t, v):
-  runs(malloc.malloc(i, o, e, n), s, r) ->
+theorem malloc.no_place_null(i, o, e, b, c, st, n, s, r, t, v):
+  runs(malloc.malloc(i, o, e, b, c, st, n), s, r) ->
   (all z. !(ex p. p in bits(64) && ((!(p = 0) && int_mod(p, 16) = 0) && malloc.fresh_block(o, s, p, z)))) ->
-  s in i -> malloc.errno_ok(e, s) -> r = ok(t, v) -> v = 0
+  s in i -> malloc.errno_ok(e, s) -> malloc.world_ok(b, c, st, s) -> r = ok(t, v) -> v = 0
 proof
-  assume h hn hi he hr
-  show by simp(h, hn, hi, he, hr)
+  assume h hn hi he hwo hr
+  show by simp(h, hn, hi, he, hwo, hr)
 qed
 
 // reading the block set where it was set
@@ -51,12 +51,12 @@ qed
 // a block malloc returns is 16-byte aligned and live afterwards. (simp
 // left one path, the block set read at p; malloc.set_block_at, passed as
 // a rule, closes it.)
-theorem malloc.result_live(i, o, e, n, s, r, t, v):
-  runs(malloc.malloc(i, o, e, n), s, r) -> s in i -> malloc.errno_ok(e, s) ->
+theorem malloc.result_live(i, o, e, b, c, st, n, s, r, t, v):
+  runs(malloc.malloc(i, o, e, b, c, st, n), s, r) -> s in i -> malloc.errno_ok(e, s) -> malloc.world_ok(b, c, st, s) ->
   r = ok(t, v) -> !(v = 0) -> int_mod(v, 16) = 0 && !(t.blocks[v] = none)
 proof
-  assume h hi he hr h0
-  show by simp(h, hi, he, hr, h0, malloc.set_block_at, {l0 l. snd(l) in omega})
+  assume h hi he hwo hr h0
+  show by simp(h, hi, he, hwo, hr, h0, malloc.set_block_at, {l0 l. snd(l) in omega})
 qed
 
 // The allocator can always take a step: keeping memory as it is (the
@@ -101,11 +101,11 @@ qed
 
 // malloc terminates. The loop of set_errno (state: the program state and
 // the counter) needs an invariant and a variant.
-theorem malloc.terminates(i, o, e, n, s, r):
-  runs(malloc.malloc(i, o, e, n), s, r) -> s in rec_and(abi.World, malloc.Heap.ghost) -> s in i -> malloc.errno_ok(e, s) ->
-  !(ex t. r = diverge(t))
+theorem malloc.terminates(i, o, e, b, c, st, n, s, r):
+  runs(malloc.malloc(i, o, e, b, c, st, n), s, r) -> s in rec_and(abi.World, malloc.Heap.ghost) -> s in i -> malloc.errno_ok(e, s) ->
+  malloc.world_ok(b, c, st, s) -> !(ex t. r = diverge(t))
 proof
-  assume h ht hi he
+  assume h ht hi he hwo
   have hs := mp(mp(malloc.idle_step[i := i, o := o, s := s, x := malloc.errno_bytes(e, s)], ht), hi)
-  show by simp(h, hi, he, hs, {l0 l. snd(l) in omega && int_le(snd(l), 4)}, {l. int_sub(4, snd(l))})
+  show by simp(h, hi, he, hwo, hs, {l0 l. snd(l) in omega && int_le(snd(l), 4)}, {l. int_sub(4, snd(l))})
 qed
