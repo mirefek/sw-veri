@@ -431,10 +431,14 @@ impl Env {
     /// `t.instantiate_params(args, ..)` (the same term): its parts without
     /// a parameter kept as they are, a closed argument not shifted
     pub fn instantiate_params_m(&self, t: &Term, args: &[Term]) -> Term {
-        self.inst_m(t, args, 0)
+        self.inst_m(t, args, 0, &mut HashMap::new())
     }
 
-    fn inst_m(&self, t: &Term, args: &[Term], depth: u32) -> Term {
+    /// (`memo`: a shared subterm's instance at a depth made once -- the
+    /// terms are DAGs, a walk as a tree would repeat it per path. Keyed by
+    /// the node itself, not its structure: equal terms may carry other
+    /// labels. Its keys are t's subterms, alive throughout.)
+    fn inst_m(&self, t: &Term, args: &[Term], depth: u32, memo: &mut HashMap<(usize, u32), Term>) -> Term {
         if self.loose_depth_m(t) <= depth {
             return t.clone();
         }
@@ -445,10 +449,20 @@ impl Env {
                 if self.loose_depth_m(a) == 0 { a.clone().labelled_as(t) } else { a.shift(depth, 0, &self.binders_fn()).labelled_as(t) }
             }
             Node::BVar(_) | Node::Nat(_) | Node::Bytes(_) => t.clone(),
-            Node::Var(_, a) => t.with_args(a.iter().map(|x| self.inst_m(x, args, depth)).collect()),
-            Node::App(s, a) => {
-                let bs = &self.syms[*s as usize].binders;
-                t.with_args(a.iter().enumerate().map(|(i, x)| self.inst_m(x, args, depth + bs[i])).collect())
+            Node::Var(_, a) | Node::App(_, a) => {
+                let key = (t.ptr_id(), depth);
+                if let Some(r) = memo.get(&key) {
+                    return r.clone();
+                }
+                let r = match t.node() {
+                    Node::App(s, _) => {
+                        let bs = &self.syms[*s as usize].binders;
+                        t.with_args(a.iter().enumerate().map(|(i, x)| self.inst_m(x, args, depth + bs[i], memo)).collect())
+                    }
+                    _ => t.with_args(a.iter().map(|x| self.inst_m(x, args, depth, memo)).collect()),
+                };
+                memo.insert(key, r.clone());
+                r
             }
         }
     }
@@ -456,21 +470,32 @@ impl Env {
     /// `t.subst_var(v, value, ..)` (the same term): the value's instances
     /// as `instantiate_params_m` makes them
     pub fn subst_var_m(&self, t: &Term, v: VarId, value: &Term) -> Term {
+        self.subst_var_mm(t, v, value, &mut HashMap::new())
+    }
+
+    /// (`memo`: a shared subterm's substitution made once; by the node, as
+    /// `inst_m`'s)
+    fn subst_var_mm(&self, t: &Term, v: VarId, value: &Term, memo: &mut HashMap<usize, Term>) -> Term {
         if !t.may_contain_var(v) {
             return t.clone();
         }
-        match t.node() {
+        if let Some(r) = memo.get(&t.ptr_id()) {
+            return r.clone();
+        }
+        let r = match t.node() {
             Node::Var(w, args) => {
-                let args: Vec<Term> = args.iter().map(|a| self.subst_var_m(a, v, value)).collect();
+                let args: Vec<Term> = args.iter().map(|a| self.subst_var_mm(a, v, value, memo)).collect();
                 if *w == v {
                     self.instantiate_params_m(value, &args).labelled_as(t)
                 } else {
                     t.with_args(args)
                 }
             }
-            Node::App(_, args) => t.with_args(args.iter().map(|a| self.subst_var_m(a, v, value)).collect()),
+            Node::App(_, args) => t.with_args(args.iter().map(|a| self.subst_var_mm(a, v, value, memo)).collect()),
             _ => t.clone(),
-        }
+        };
+        memo.insert(t.ptr_id(), r.clone());
+        r
     }
 
     fn check_wf_node(&self, t: &Term, depth: u32) -> KResult<()> {
