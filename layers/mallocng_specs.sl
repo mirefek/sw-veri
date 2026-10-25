@@ -592,7 +592,7 @@ fn eslot(vm: Vm, g: Addr, idx: bits[32]) -> nat = uint(rd64(vm, g + 16)) + UNIT 
 // byte is 0 (else the code traps).
 pred enframe_pre(vm: Vm, objs: Objs, fs: Addr, sct: Addr, g: Addr, idx: bits[32], n: bits[64]) =
   get_stride_pre(vm, objs, sct, g) && usable(vm, objs, uint(g) + 16, 8, false) &&
-  uint(idx) < 2^31 && uint(n) + IB <= stride_w(vm, g) && stride_w(vm, g) < 2^31 &&
+  uint(idx) < 2^31 && uint(n) + IB <= stride_w(vm, g) && stride_w(vm, g) - uint(n) - IB < 2^31 &&
   IB < eslot(vm, g, idx) && eslot(vm, g, idx) + stride_w(vm, g) < 2^63 &&
   (uint(g) + 24 <= eslot(vm, g, idx) - IB || eslot(vm, g, idx) - IB + stride_w(vm, g) <= uint(g) + 16) &&
   (uint(fs) + 8 <= eslot(vm, g, idx) - IB || eslot(vm, g, idx) - IB + stride_w(vm, g) <= uint(fs)) &&
@@ -978,11 +978,12 @@ pred framed(before: Vm, vm: Vm, v: MetaV, i: nat, p: nat, n: nat) =
 // -- the offset, in units, a byte musl cycles -- left free. The caller's
 // part: for a size class, p within the class's slot wherever it lies (the
 // slot's slack under it, or the offset's 256 units); the thread pointer's
-// word apart from the slot; a stride below 2^31.
+// word apart from the slot; the slot's slack past n below 2^31 (enframe's
+// int arithmetic on it).
 proc[MallocAbs] enframe_spec(c: Cfg, g: bits[64], idx: bits[32], n: bits[64]) -> bits[64] {
   require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && is_used(A, uint(g)) && reserved_only(A, uint(g), uint(idx)) &&
     slot_rw(vm, A.metas[uint(g)], uint(idx)) &&
-    uint(n) + IB <= stride(A.metas[uint(g)]) && stride(A.metas[uint(g)]) < 2^31 &&
+    uint(n) + IB <= stride(A.metas[uint(g)]) && stride(A.metas[uint(g)]) - uint(n) - IB < 2^31 &&
     (A.metas[uint(g)].sizeclass < 48 ->
        slot_end(A.metas[uint(g)], uint(idx)) - uint(n) - storage(A.metas[uint(g)]) < UNIT * size_classes[A.metas[uint(g)].sizeclass] * (uint(idx) + 1) ||
        slot_start(A.metas[uint(g)], uint(idx)) - storage(A.metas[uint(g)]) + 256 * UNIT <= UNIT * size_classes[A.metas[uint(g)].sizeclass] * (uint(idx) + 1)) &&
