@@ -1289,6 +1289,16 @@ impl<'e> Gen<'e> {
             // cmp dword [rsp + d], imm32: the home (u) against k
             59 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                // or r16, imm16 (a register holding a 16-bit value): u | k
+                if let (Some((0, g)), Some(2), Some(1)) = (self.tag(&x[2]), nat(&x[0]), nat(&x[1])) {
+                    let gn = reg(&g)?;
+                    let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
+                    let (r, hr) = self.result(&self.mk("bits_or", vec![lit(16), u.clone(), x[4].clone()]))?;
+                    let tr = self.step("or16_imm", a, insn, &[&g, &x[3], &x[4], &lit(n), &u, &r], self.tail(st, insn, 6, vec![hr]));
+                    self.scratch.insert(gn);
+                    let st2 = self.set_reg(st, a2, gn, 2, r);
+                    return self.then(tr, st2);
+                }
                 // and r32, imm32 (a register of 4 or 8 bytes): its low 32
                 // bits & k, zero-extended
                 if let (Some((0, g)), Some(4), Some(4)) = (self.tag(&x[2]), nat(&x[0]), nat(&x[1])) {
@@ -1359,9 +1369,17 @@ impl<'e> Gen<'e> {
                             let st2 = self.set_home(st, a2, cn, 4, r);
                             self.then(tr, st2)
                         }
+                        // or: the home u | kk
+                        Some(1) => {
+                            let (_, hs2, hk) = self.hkeep(st, cn, 4);
+                            let (r, hr) = self.result(&self.mk("bits_or", vec![lit(32), u.clone(), kk.clone()]))?;
+                            let tr = self.step("or32_home_i", a, insn, &[&d, &ck, &x[4], &kk, &u, &r], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone()), hr]));
+                            let st2 = self.set_home(st, a2, cn, 4, r);
+                            self.then(tr, st2)
+                        }
                         // cmp: the home (u) against kk
                         Some(7) => self.compare(st, a, a2, insn, "fs32_hi8", &[&d, &ck, &x[4], &kk, &u], 7, Flags::Sub(32, u.clone(), kk.clone())),
-                        _ => Err(bad("an operation on a home other than add, cmp")),
+                        _ => Err(bad("an operation on a home other than add, or, cmp")),
                     };
                 }
                 let (k, g) = self.tag(&x[2]).ok_or_else(|| bad("fields"))?;
