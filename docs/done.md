@@ -1179,6 +1179,11 @@ item is a short summary of finished work; details are in the files named.
     d's word boundary, the words, the bytes left -- each a move of what is
     at s still (`mp.mvw`), the loops by `g.loop`; `memcpy_spec_fun` by the
     GIMPLE wrapper's convention (`result`).
+- **malloc(0) in the malloc layer**: a block may have no usable byte (C's
+  malloc(0); musl's frames 0 bytes, free checking the byte at p); blocks
+  live at once still distinct and apart by their place, `extent` (the
+  usable bytes, at least one), and a new block not a live one
+  (`fresh_block`). Laws, claim and client facts unchanged.
 - **errno ENOMEM on failure** (what malloc's failure owes its caller):
   mmap's errno by `mmap_err` (EINVAL only for no length or a fixed address
   off a page's start; `ms.sy6_q` keeps when the kernel's EINVAL comes);

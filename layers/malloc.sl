@@ -25,11 +25,17 @@ fn live(s: Heap) -> Set[nat] = live_of(s.blocks)
 pred rw_mapped(vm: Vm, a: nat) =
   mapped(vm, a / PAGE) && vm.pages[a / PAGE].value.prot.r && vm.pages[a / PAGE].value.prot.w
 
+// A block's place: its usable bytes, at least one -- a block of usable size
+// 0 (malloc(0)'s, which C lets have no usable byte) still has a place of
+// its own, so blocks live at once are distinct and none lies inside
+// another. Its extra byte is not the client's (`live` is the usable bytes).
+fn extent(n: nat) -> nat = if n = 0 { 1 } else { n }
+
 // A live block at p of usable size n is well placed.
 pred block_wf(b: Addr -> Option[nat], p: Addr, n: nat) =
   p != 0 && uint(p) % 16 = 0 &&                           // 16-byte aligned
-  (all q: Addr. q != p && b[q] != none ->                  // blocks are disjoint
-     disjoint(range(p, n), range(q, b[q].value)))
+  (all q: Addr. q != p && b[q] != none ->                  // blocks' places are disjoint
+     disjoint(range(p, extent(n)), range(q, extent(b[q].value))))
 
 pred blocks_wf(b: Addr -> Option[nat]) =
   all p: Addr. b[p] != none -> block_wf(b, p, b[p].value)
@@ -126,9 +132,11 @@ proc set_errno(e: nat) {
   for i in 0..4 { vm.bytes[a + bits[64](i)] := bits[8](e / 256^i) }
 }
 
-// a new block may come only from allocator memory or fresh mappings
+// a new block: not a live one, its place only from allocator memory or
+// fresh mappings
 pred fresh_block(s: Heap, p: Addr, n: nat) =
-  all a: nat. a in range(p, n) -> a in alloc_owned(s) || !mapped(s.vm, a / PAGE)
+  s.blocks[p] = none &&
+  (all a: nat. a in range(p, extent(n)) -> a in alloc_owned(s) || !mapped(s.vm, a / PAGE))
 
 ///////////////////////////////////////////////////////////////////////
 //  malloc, free, calloc
@@ -150,8 +158,8 @@ proc out_of_memory(before: Heap) -> Addr {
 proc malloc(n: bits[64]) -> Addr {
   require alloc_inv(self) && errno_ok(self)
   let before = self
-  // even malloc(0) returns a unique block with usable bytes
-  let size  = any? nat where size >= uint(n) && size >= 1 else { return out_of_memory(before) }
+  // malloc(0): a unique block (its place `extent`'s), maybe no usable byte
+  let size  = any? nat where size >= uint(n) else { return out_of_memory(before) }
   let p     = any Addr where p != 0 && uint(p) % 16 = 0 && fresh_block(before, p, size)
                 else { return out_of_memory(before) }
   let grown = before with { blocks: set_block(before.blocks, p, some(size)) }

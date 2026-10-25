@@ -17,14 +17,10 @@ Next, malloc (`musl.impl_malloc`, proofs/mallocng/claim.core):
   slot's access is the invariant's (`mp.slot_rw_of`).
 - mallocng's abstract state to the malloc layer's blocks (`rep`): the
   purpose spec giving `malloc.malloc`; the `malloc` symbol's wrapper
-  (lite_malloc.c's `default_malloc`) to `__libc_malloc_impl`.
-  **Open (the malloc layer, layers/malloc.sl):** `malloc` promises a block
-  of `size >= 1` even for malloc(0); musl frames malloc(0) with 0 usable
-  bytes -- the slot's size encoding keeps the byte at p 0 (`size_ok`) and
-  free checks it (get_nominal_size's `assert(!*(end-reserved))`), so a
-  client writing p[0] makes free crash. As stated, `musl.impl_malloc`
-  does not hold for n = 0; the layer's `size >= 1` (C allows a block with
-  no usable bytes, a unique pointer) is the user's to decide.
+  (lite_malloc.c's `default_malloc`) to `__libc_malloc_impl`. malloc(0):
+  musl's block has no usable byte (the malloc layer allows it: a block's
+  place its `extent`, one byte at least); rep's blocks the same, the
+  extent's byte at p the allocator's.
 
 Then free and calloc: `get_nominal_size`, `record_seq`, `okay_to_free`,
 `free_group`, `nontrivial_free`, `__libc_free`, `calloc`.
