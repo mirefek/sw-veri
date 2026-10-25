@@ -265,7 +265,7 @@ theorem mp.mmap_q: all t addr len prot flags fd regs o2. t in abi.World -> t in 
     seq_one(gimple.arg(32, flags))), seq_one(gimple.arg(32, fd))), seq_one(gimple.arg(64, 0)))) ->
   runs(mallocng_specs.mmap_spec_fun()[regs], t, o2) ->
   abi.ovf_out(t, o2) ||
-  (ex e r. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
+  (ex e r. (e in omega && mallocng_specs.mmap_err(addr, len, flags, e)) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
      fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
   (ex V p r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)) && V in x86_64_linux.Vm && p in omega &&
      mallocng_specs.mmap_place(t.vm, addr, len, flags, p) &&
@@ -297,20 +297,40 @@ proof
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   have pv pf pd pb := apply(ms.world_parts, hw)
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
-  have ee: int_lt(prot, 8) -> ex x2. x2 in omega && (x2 = 12 || x2 = 22) proof
+  // (errno's choice: EINVAL for no length, else ENOMEM)
+  have ee: int_lt(prot, 8) -> ex x2. x2 in omega && mallocng_specs.mmap_err(addr, len, flags, x2) proof
     assume _
-    show by ex_intro({12}, simp())
+    have z: len = 0 -> ex x2. x2 in omega && mallocng_specs.mmap_err(addr, len, flags, x2) proof
+      assume h0
+      have m: x86_64_linux.EINVAL in omega && mallocng_specs.mmap_err(addr, len, flags, x86_64_linux.EINVAL) by defs(simp(h0), mallocng_specs.mmap_err, x86_64_linux.EINVAL)
+      show by ex_intro({x86_64_linux.EINVAL}, m)
+    qed
+    have nz: !(len = 0) -> ex x2. x2 in omega && mallocng_specs.mmap_err(addr, len, flags, x2) proof
+      assume h0
+      have m: x86_64_linux.ENOMEM in omega && mallocng_specs.mmap_err(addr, len, flags, x86_64_linux.ENOMEM) by defs(simp(h0), mallocng_specs.mmap_err, x86_64_linux.ENOMEM)
+      show by ex_intro({x86_64_linux.ENOMEM}, m)
+    qed
+    show by taut(z, nz)
   qed
   let PG := fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(prot)), "kind", 0)
   have bp: bits_of_int(64, prot) = prot by defs(arith(hp), bits_of_int, pow2)
+  // (a place for the pages: a length, ENOMEM an mmap error)
+  have pe: all p. mallocng_specs.mmap_place(t.vm, addr, len, flags, p) -> mallocng_specs.mmap_err(addr, len, flags, x86_64_linux.ENOMEM) proof
+    fix p
+    assume hpp
+    have nz _ _ := expand(hpp, mallocng_specs.mmap_place)
+    show by defs(simp(nz), mallocng_specs.mmap_err)
+  qed
   have ci: abi.ovf_out(t, o3) ||
-      (ex e. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), bits_of_int(64, int_sub(int_pow(2, 64), 1)))) ||
+      (ex e. (e in omega && mallocng_specs.mmap_err(addr, len, flags, e)) && o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), bits_of_int(64, int_sub(int_pow(2, 64), 1)))) ||
+      (mallocng_specs.mmap_err(addr, len, flags, x86_64_linux.ENOMEM) &&
+        o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), x86_64_linux.ENOMEM)), bits_of_int(64, int_sub(int_pow(2, 64), 1)))) ||
       (ex V p. (V in x86_64_linux.Vm && p in omega && mallocng_specs.mmap_place(t.vm, addr, len, flags, p) &&
          gimple.fresh_pages(t.vm, V, t.objs, p, x86_64_linux.pages_for(len), PG) && V.brk = t.vm.brk) && o3 = ok(fn_update(t, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))
-    by simp(hs3, vv, ct.objs_ne, ee, hfl, hpl, he, hfx, bp, keep(gimple.fresh_pages, mallocng_specs.mmap_place, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at,
-      gimple.sys_pages_ok, mallocng_specs.tls_off, x86_64_linux.page_of, x86_64_linux.pages_for))
+    by simp(hs3, vv, ct.objs_ne, ee, pe, hfl, hpl, he, hfx, bp, keep(gimple.fresh_pages, mallocng_specs.mmap_place, mallocng_specs.errno_ok, mallocng_specs.wr32, mallocng_specs.errno_at,
+      gimple.sys_pages_ok, mallocng_specs.tls_off, x86_64_linux.page_of, x86_64_linux.pages_for, mallocng_specs.mmap_err))
   let G := abi.ovf_out(t, o2) ||
-    (ex e r. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
+    (ex e r. (e in omega && mallocng_specs.mmap_err(addr, len, flags, e)) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
        fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
     (ex V p r. o2 = ok(fn_update(t, "vm", V), r) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)) && V in x86_64_linux.Vm && p in omega &&
        mallocng_specs.mmap_place(t.vm, addr, len, flags, p) && gimple.fresh_pages(t.vm, V, t.objs, p, x86_64_linux.pages_for(len), PG) && V.brk = t.vm.brk)
@@ -334,15 +354,27 @@ proof
     have l: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, oe))
     show by taut(l)
   qed
-  have c2: (ex e. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) &&
+  have c2: (ex e. (e in omega && mallocng_specs.mmap_err(addr, len, flags, e)) &&
       o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), bits_of_int(64, int_sub(int_pow(2, 64), 1)))) -> G proof
     assume x
-    obtain e, he1 hx from x
+    obtain e, heo1 he1 hx from x
     let W := fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e))
     let M1 := bits_of_int(64, int_sub(int_pow(2, 64), 1))
     obtain r, hor hr from mp(all_elim(res, {W}, {M1}), simp(), hx)
-    have l: ex e r. (e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
-        fst(r) = M1 by ex_intro({e}, {r}, taut(he1, hor, hr))
+    have l: ex e r. (e in omega && mallocng_specs.mmap_err(addr, len, flags, e)) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
+        fst(r) = M1 by ex_intro({e}, {r}, taut(heo1, he1, hor, hr))
+    show by taut(l)
+  qed
+  // (no memory for the pages: ENOMEM)
+  have c2b: mallocng_specs.mmap_err(addr, len, flags, x86_64_linux.ENOMEM) &&
+      o3 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), x86_64_linux.ENOMEM)), bits_of_int(64, int_sub(int_pow(2, 64), 1))) -> G proof
+    assume x
+    have he1 hx := x
+    let W := fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), x86_64_linux.ENOMEM))
+    let M1 := bits_of_int(64, int_sub(int_pow(2, 64), 1))
+    obtain r, hor hr from mp(all_elim(res, {W}, {M1}), simp(), hx)
+    have l: ex e r. (e in omega && mallocng_specs.mmap_err(addr, len, flags, e)) && o2 = ok(fn_update(t, "vm", mallocng_specs.wr32(t.vm, mallocng_specs.errno_at(t.fs_base), e)), r) &&
+        fst(r) = M1 by ex_intro({x86_64_linux.ENOMEM}, {r}, taut((x86_64_linux.ENOMEM in omega by defs(simp(), x86_64_linux.ENOMEM)), he1, hor, hr))
     show by taut(l)
   qed
   have c3: (ex V p. (V in x86_64_linux.Vm && p in omega && mallocng_specs.mmap_place(t.vm, addr, len, flags, p) &&
@@ -356,7 +388,7 @@ proof
       by ex_intro({V}, {p}, {r}, taut(hor, hr, hV, hpo, hpl2, hfp, hbk))
     show by taut(l)
   qed
-  show by taut(ci, c1, c2, c3)
+  show by taut(ci, c1, c2, c2b, c3)
 qed
 
 // (the reserve's first page: one the kernel may reprotect)
@@ -1690,15 +1722,28 @@ abbrev mp.am_mfp(c, A, B, s, m) := !(m = 0) ->
 abbrev mp.am_post(c, A, B, s, A2, V2, m) := ((A2 in mallocng.Abs && A2 in univ(1)) && mallocng_specs.groups_kept(A, A2)) && m in bits(64) &&
   ((m = 0 && A2.taken = A.taken) || (!(m = 0) && A2.taken = seq_concat(A.taken, seq_one(m)))) &&
   V2 in x86_64_linux.Vm && mallocng.holds_m(c, A2, V2, B) && mallocng.shown_in(c, A2, s.objs) && mallocng.untouched(c, A, B, s.vm, V2, s.objs, mp.errno(s.fs_base)) &&
-  mp.grown(c, A2, A, B, s.vm) && (!(m = 0) -> mallocng_specs.meta_ready(V2, m)) && mp.am_epg(s, V2) && mp.am_mfp(c, A, B, s, m)
+  mp.grown(c, A2, A, B, s.vm) && (!(m = 0) -> mallocng_specs.meta_ready(V2, m)) && mp.am_epg(s, V2) && mp.am_mfp(c, A, B, s, m) &&
+  (m = 0 -> mallocng_specs.errno_is(V2, s.fs_base, x86_64_linux.ENOMEM))
+
+// (errno written e, below 2^32: errno's value e)
+theorem mp.errno_wr(V, fs, e): fs in bits(64) -> int_le(int_add(fs, 56), int_pow(2, 64)) -> e in omega -> int_lt(e, 4294967296) ->
+  mallocng_specs.errno_is(mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), fs, e)
+proof
+  assume hfb hfl he hl
+  have eb: mallocng_specs.errno_at(fs) = int_add(fs, 52) by defs(arith(hfb, hfl), mallocng_specs.errno_at, bits_add, pow2)
+  have e0: int_le(0, mallocng_specs.errno_at(fs)) by arith(eb, hfb)
+  have e4: int_le(int_add(mallocng_specs.errno_at(fs), 4), 18446744073709551616) by arith(eb, hfl)
+  have r: gimple.bytes_at(mallocng_specs.wr32(V, mallocng_specs.errno_at(fs), e), mallocng_specs.errno_at(fs), 4) = e by mem(he, hl, e0, e4)
+  show by defs(r, mallocng_specs.errno_is)
+qed
 
 // ----------------------------------------------------------------------
 //  The free metas' head taken (dequeue_head): nothing outside touched
 
-// (a run state: the outcome returning 0)
-theorem mp.am_ret0(c, A, B, s, V, A1): mp.am_st(c, A, B, s, V, A1) -> mp.am_post(c, A, B, s, A1, V, 0)
+// (a run state, errno ENOMEM: the outcome returning 0)
+theorem mp.am_ret0(c, A, B, s, V, A1): mp.am_st(c, A, B, s, V, A1) -> mallocng_specs.errno_is(V, s.fs_base, x86_64_linux.ENOMEM) -> mp.am_post(c, A, B, s, A1, V, 0)
 proof
-  assume S
+  assume S hen
   have s1 s2 s3 s4 s5 s6 s7 s8 s9 ssh := S
   have nz: !(0 = 0) -> mallocng_specs.meta_ready(V, 0) proof
     assume h
@@ -1708,7 +1753,7 @@ proof
     assume h
     show by taut(h, refl({0}))
   qed
-  show by taut(s1, s2, s3, s4, s5, s6, s7, s8, s9, ssh, (0 in bits(64) by simp()), refl({0}), nz, nf)
+  show by taut(s1, s2, s3, s4, s5, s6, s7, s8, s9, ssh, (0 in bits(64) by simp()), refl({0}), nz, nf, hen)
 qed
 
 // (GIMPLE's 8-byte store in a world: as ms.st32_det, its memory's record
@@ -4224,9 +4269,9 @@ proof
           qed
           have f2: case 2 of ht2 proof
             assume e
-            obtain A3 V3 L, p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 hx4 from e
+            obtain A3 V3 L, p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 hx4 from e
             step oe from rewrite(hx4, kx2)
-            show by disj({2}, ex_intro({A3}, {V3}, {0}, taut(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, oe)))
+            show by disj({2}, ex_intro({A3}, {V3}, {0}, taut(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, oe)))
           qed
           have f3: case 3 of ht2 proof
             assume e
@@ -4570,11 +4615,11 @@ proof
                           rewrite(ea, hro), h2)
                         have wvv: WV.vm = V by simp()
                         have wvf: WV.fs_base = s.fs_base by simp()
-                        have k2: (ex e r. ((e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(WV, "vm", mallocng_specs.wr32(WV.vm, mallocng_specs.errno_at(WV.fs_base), e)), r)) &&
+                        have k2: (ex e r. ((e in omega && mallocng_specs.mmap_err(bb, 4096, bits_of_int(32, 50), e)) && o2 = ok(fn_update(WV, "vm", mallocng_specs.wr32(WV.vm, mallocng_specs.errno_at(WV.fs_base), e)), r)) &&
                             fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ->
                             (ex Vm r. (Vm in x86_64_linux.Vm && PG(Vm)) && o2 = ok(fn_update(WV, "vm", Vm), r)) proof
                           assume e
-                          obtain e1 r, _ ho _ from e
+                          obtain e1 r, _ _ ho _ from e
                           have ho2: o2 = ok(fn_update(WV, "vm", mallocng_specs.wr32(V, EA, e1)), r) := rewrite(wvf, rewrite(wvv, ho))
                           have pg2: PG(mallocng_specs.wr32(V, EA, e1)) by disj({2}, ex_intro({e1}, refl({mallocng_specs.wr32(V, EA, e1)})))
                           show by ex_intro({mallocng_specs.wr32(V, EA, e1)}, {r}, taut(apply(mp.w32_vm[V := V, c := EA, v := e1], hV), pg2, ho2))
@@ -4727,7 +4772,7 @@ proof
                 seq_one(gimple.arg(64, bits_of_int(64, 0))))
               let NPG := fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(bits_of_int(32, 0))), "kind", 0)
               let EA := mallocng_specs.errno_at(s.fs_base)
-              let PM(V, r) := (ex e. V = mallocng_specs.wr32(V3, EA, e) && fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
+              let PM(V, r) := (V = mallocng_specs.wr32(V3, EA, x86_64_linux.ENOMEM) && fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ||
                 (ex p. ((((p in omega && mallocng_specs.mmap_place(V3, 0, LEN, bits_of_int(32, 34), p)) && gimple.fresh_pages(V3, V, s.objs, p, x86_64_linux.pages_for(LEN), NPG)) &&
                   V.brk = V3.brk) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))
               have {t3 = thread, e3 = errno} := apply(mp.am_eok[c := c, A := A, B := B, s := s, V := V3, A1 := A3], hst3, hw, hth, htl, heo, hea)
@@ -4753,16 +4798,19 @@ proof
                 have wvv: W3.vm = V3 by simp()
                 have wvf: W3.fs_base = s.fs_base by simp()
                 have b0: bits_of_int(64, 0) = 0 by simp()
-                have k2: (ex e r. ((e = x86_64_linux.ENOMEM || e = x86_64_linux.EINVAL) && o2 = ok(fn_update(W3, "vm", mallocng_specs.wr32(W3.vm, mallocng_specs.errno_at(W3.fs_base), e)), r)) &&
+                have k2: (ex e r. ((e in omega && mallocng_specs.mmap_err(bits_of_int(64, 0), LEN, bits_of_int(32, 34), e)) && o2 = ok(fn_update(W3, "vm", mallocng_specs.wr32(W3.vm, mallocng_specs.errno_at(W3.fs_base), e)), r)) &&
                     fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) ->
                     (ex V r. (V in x86_64_linux.Vm && PM(V, r)) && o2 = ok(fn_update(W3, "vm", V), r)) proof
                   assume e
-                  obtain e1 r, _ ho hf from e
-                  have ho2: o2 = ok(fn_update(W3, "vm", mallocng_specs.wr32(V3, EA, e1)), r) := rewrite(wvf, rewrite(wvv, ho))
-                  have w: ex e. mallocng_specs.wr32(V3, EA, e1) = mallocng_specs.wr32(V3, EA, e) && fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))
-                    by ex_intro({e1}, taut(refl({mallocng_specs.wr32(V3, EA, e1)}), hf))
-                  have pm2: PM(mallocng_specs.wr32(V3, EA, e1), r) by taut(w)
-                  show by ex_intro({mallocng_specs.wr32(V3, EA, e1)}, {r}, taut(apply(mp.w32_vm[V := V3, c := EA, v := e1], r1), pm2, ho2))
+                  obtain e1 r, _ hme ho hf from e
+                  // (errno ENOMEM: a length, no fixed address)
+                  have pp := mp(pow2_pos[k := int_add(SH, 1)], (int_add(SH, 1) in omega by arith(sho)))
+                  have lnz: !(LEN = 0) by arith(pp)
+                  have me := apply(tr.ite_imp_f, expand(hme, mallocng_specs.mmap_err, x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED), lnz)
+                  have e1n: e1 = x86_64_linux.ENOMEM by defs(simp(me), x86_64_linux.ENOMEM)
+                  have ho2: o2 = ok(fn_update(W3, "vm", mallocng_specs.wr32(V3, EA, x86_64_linux.ENOMEM)), r) := rewrite(e1n, rewrite(wvf, rewrite(wvv, ho)))
+                  have pm2: PM(mallocng_specs.wr32(V3, EA, x86_64_linux.ENOMEM), r) by taut(refl({mallocng_specs.wr32(V3, EA, x86_64_linux.ENOMEM)}), hf)
+                  show by ex_intro({mallocng_specs.wr32(V3, EA, x86_64_linux.ENOMEM)}, {r}, taut(apply(mp.w32_vm[V := V3, c := EA, v := x86_64_linux.ENOMEM], r1), pm2, ho2))
                 qed
                 have k3: (ex Vx p r. ((((((o2 = ok(fn_update(W3, "vm", Vx), r) && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))) && Vx in x86_64_linux.Vm) && p in omega) &&
                     mallocng_specs.mmap_place(W3.vm, bits_of_int(64, 0), LEN, bits_of_int(32, 34), p)) &&
@@ -4787,13 +4835,15 @@ proof
                 have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(expand(heo, mallocng_specs.errno_ok), fsb)
                 have nb1: bits_neg(64, 1) = bits_of_int(64, int_sub(int_pow(2, 64), 1)) by defs(simp(), bits_neg, pow2)
                 // refused: errno written, 0 returned
-                have mf: (ex e. V = mallocng_specs.wr32(V3, EA, e) && fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) -> TM(x7) proof
+                have mf: (V = mallocng_specs.wr32(V3, EA, x86_64_linux.ENOMEM) && fst(r) = bits_of_int(64, int_sub(int_pow(2, 64), 1))) -> TM(x7) proof
                   assume f
-                  obtain e1, hve hf from f
+                  have hve hf := f
                   have hf2: fst(r) = bits_neg(64, 1) := trans(hf, sym(nb1))
                   step e15 from tb9 with hf2
                   step e16 from rewrite(e15, kx9)
-                  have post := apply(mp.am_ret0, apply(mp.am_errw[c := c, A := A, B := B, s := s, V := V3, A1 := A3, e := e1], hst3, hw, hea, hfl))
+                  have hen := apply(mp.errno_wr[V := V3, fs := s.fs_base, e := x86_64_linux.ENOMEM], fsb, hfl, (x86_64_linux.ENOMEM in omega by defs(simp(), x86_64_linux.ENOMEM)),
+                    (int_lt(x86_64_linux.ENOMEM, 4294967296) by defs(simp(), x86_64_linux.ENOMEM)))
+                  have post := apply(mp.am_ret0, apply(mp.am_errw[c := c, A := A, B := B, s := s, V := V3, A1 := A3, e := x86_64_linux.ENOMEM], hst3, hw, hea, hfl), hen)
                   have e17: x7 = exc(pair(fn_update(s, "vm", V), pair(0, pair(PN, pair(l2, pair(nu, pair(l4, pair(fst(r), pair(4096, pair(0, pair(a9, pair(a10, pair(a11, 0)))))))))))),
                     pair("ret", 0)) by simp(e16)
                   show by disj({2}, ex_intro({A3}, {V}, {PN}, {fst(r)}, taut(rewrite(sym(hve), post), e17)))
@@ -4897,10 +4947,10 @@ proof
             qed
             have tmr: case 2 of tm proof
               assume e
-              obtain A4 V4 n1 p1, k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 k11 k12 kpz hx7 from e
+              obtain A4 V4 n1 p1, k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 k11 k12 kpz ken hx7 from e
               step e10 from rewrite(hx7, kx8)
               show by disj({2}, ex_intro({A4}, {V4}, {pair(0, pair(n1, pair(l2, pair(nu, pair(l4, pair(p1, pair(4096, pair(0, pair(a9, pair(a10, pair(a11, 0)))))))))))},
-                taut(k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, kpz, e10)))
+                taut(k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, kpz, ken, e10)))
             qed
             have tmk: case 3 of tm proof
               assume e
@@ -5272,7 +5322,7 @@ proof
   // a return: the ghost part's A the new state
   have k: case 2 of run proof
     assume e
-    obtain A2 V2 m, ha2 hu2 hgk hm htk hv2 hin2m hsh2 hunt hgr hrd _ hmf ho from e
+    obtain A2 V2 m, ha2 hu2 hgk hm htk hv2 hin2m hsh2 hunt hgr hrd _ hmf hen ho from e
     have hin2: mallocng.holds_in(c, A2, V2, s.objs, B) by defs(taut(hin2m, hsh2), mallocng.holds_in)
     let S1 := fn_update(fn_update(S, "A", A2), "vm", V2)
     let H2 := fn_update(h, "A", A2)
@@ -5294,7 +5344,7 @@ proof
     have e1 := mp(fn_update_union_r[a := s, b := h, k := "A", v := A2], na)
     have e2 := mp(fn_update_union_l[a := s, b := H2, k := "vm", v := V2], nv)
     have eS: union2(s1, H2) = S1 := sym(trans(subst({y. S1 = fn_update(y, "vm", V2)}, e1, refl({S1})), e2))
-    show by disj({2}, ex_intro({s1}, {m}, {H2}, spec_ret({A2}, {m}, {V2}, hg2, ho, ha2, hgk, hm, htk, aS, vS, bS, fS, oS, hv2, hin2, hunt, hgr, hrd, hmf, eS)))
+    show by disj({2}, ex_intro({s1}, {m}, {H2}, spec_ret({A2}, {m}, {V2}, hg2, ho, ha2, hgk, hm, htk, aS, vS, bS, fS, oS, hv2, hin2, hunt, hgr, hrd, hmf, hen, eS)))
   qed
   show by taut(run, k)
 qed
@@ -5354,9 +5404,9 @@ proof
   fix t h regs o2
   assume hw hh hin hsh hth htl hbs heo hea hro hr
   step o3 A2 V2 m, e hs1 from hr with mp.am_run using hro, hc, hx, hrs, hdh, hsy, hmm, hmp, hel, hw, hh, hin, hsh, hth, htl, hbs, heo, hea
-  have ha2 hu2 hgk hm htk hv2 hin2 hsh2 hunt hgr hrd hep hmf := hs1
+  have ha2 hu2 hgk hm htk hv2 hin2 hsh2 hunt hgr hrd hep hmf hen := hs1
   step o4 y, e2 from e with g.result64_inv using hm
-  have post: mp.am_post(c, h.A, h.blocks, t, A2, V2, m) by taut(ha2, hu2, hgk, hm, htk, hv2, hin2, hsh2, hunt, hgr, hrd, hep, hmf)
+  have post: mp.am_post(c, h.A, h.blocks, t, A2, V2, m) by taut(ha2, hu2, hgk, hm, htk, hv2, hin2, hsh2, hunt, hgr, hrd, hep, hmf, hen)
   have inner: ex A3 m3. mp.am_post(c, h.A, h.blocks, t, A3, V2, m3) && fst(pair(m, y)) = m3 by ex_intro({A2}, {m}, taut(post, (fst(pair(m, y)) = m by simp())))
   show by disj({2}, ex_intro({V2}, {pair(m, y)}, taut(hv2, inner, e2)))
 qed

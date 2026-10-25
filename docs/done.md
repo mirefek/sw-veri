@@ -1179,6 +1179,13 @@ item is a short summary of finished work; details are in the files named.
     d's word boundary, the words, the bytes left -- each a move of what is
     at s still (`mp.mvw`), the loops by `g.loop`; `memcpy_spec_fun` by the
     GIMPLE wrapper's convention (`result`).
+- **errno ENOMEM on failure** (what malloc's failure owes its caller):
+  mmap's errno by `mmap_err` (EINVAL only for no length or a fixed address
+  off a page's start; `ms.sy6_q` keeps when the kernel's EINVAL comes);
+  alloc_meta, alloc_group and alloc_slot failing leave `errno_is(vm, fs,
+  ENOMEM)` -- the area's or group's mmap refused (a length, no fixed
+  address), carried through free_meta's step (`mp.errno_kept`: errno not
+  the allocator's; agr_back's `keep`) and the nested alloc_slot's failure.
 - **munmap at machine level** (munmap.c: `__vm_wait`, `__syscall2`,
   `__syscall_ret`): readable GIMPLE's `sys_call2` (layers/gimple.sl:
   `os_munmap`, Linux's sys_munmap -- EINVAL, else the pages gone), its C1

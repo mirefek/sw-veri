@@ -1940,6 +1940,10 @@ qed
 // mappings (flags 34: Linux places it, addr 0; 50: fixed): an overflow; or
 // the kernel's mmap -- an error, the memory as before; or a place p for
 // a2's pages (`mmap_place`), its pages fresh, p's address
+// (the kernel's mmap's EINVAL: no length, or a fixed address off a page's
+// start)
+abbrev ms.einv(a1, a2, a4) := a2 = 0 || (a4 = 50 && !(int_mod(a1, x86_64_linux.PAGE) = 0))
+
 theorem ms.sy6_q: all a1 a2 a3 a4 a5 a6 regs s o2. s in abi.World -> s in univ(1) -> a1 in bits(64) -> a2 in bits(64) -> a3 in bits(64) ->
   a4 in bits(64) -> a5 in bits(64) -> a6 in bits(64) ->
   (a4 = 34 || a4 = 50) -> int_lt(a3, 8) -> a6 = 0 -> ite(a4 = 50, gimple.sys_pages_ok(s.vm, s.objs, x86_64_linux.page_of(a1), x86_64_linux.pages_for(a2)), a1 = 0) ->
@@ -1948,7 +1952,7 @@ theorem ms.sy6_q: all a1 a2 a3 a4 a5 a6 regs s o2. s in abi.World -> s in univ(1
   runs(mallocng_specs.syscall6_spec_fun()[regs], s, o2) ->
   abi.ovf_out(s, o2) ||
   (ex V r. (V in x86_64_linux.Vm &&
-     ((V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
+     ((V = s.vm && ((ms.einv(a1, a2, a4) && fst(r) = x86_64_linux.err(x86_64_linux.EINVAL)) || (!(a2 = 0) && fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM)))) ||
       (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) &&
         gimple.fresh_pages(s.vm, V, s.objs, p, x86_64_linux.pages_for(a2), fn_update(fn_update(empty, "prot", x86_64_linux.prot_of(a3)), "kind", 0))) &&
         V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE))))) && o2 = ok(fn_update(s, "vm", V), r))
@@ -1985,7 +1989,7 @@ proof
   have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
   let FR(p) := ex V. V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, p, N, PG) && V.brk = s.vm.brk)
   let CI := abi.ovf_out(s, o3) ||
-    o3 = ok(s, x86_64_linux.err(x86_64_linux.EINVAL)) || o3 = ok(s, x86_64_linux.err(x86_64_linux.ENOMEM)) ||
+    (ms.einv(a1, a2, a4) && o3 = ok(s, x86_64_linux.err(x86_64_linux.EINVAL))) || (!(a2 = 0) && o3 = ok(s, x86_64_linux.err(x86_64_linux.ENOMEM))) ||
     (ex V. ((((a4 = 50 && !(a2 = 0)) && int_mod(a1, x86_64_linux.PAGE) = 0) && !int_lt(int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), int_add(P0, N))) &&
       (V in x86_64_linux.Vm && (gimple.fresh_pages(s.vm, V, s.objs, P0, N, PG) && V.brk = s.vm.brk))) && o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(P0, x86_64_linux.PAGE)))) ||
     (ex q V. (((a4 = 34 && !(a2 = 0)) && (q in omega && ((int_le(1, q) && x86_64_linux.free_range(s.vm, q, N)) && (!(a1 = 0) || x86_64_linux.off_stack_space(s.vm, q, N))))) &&
@@ -2003,7 +2007,7 @@ proof
       x86_64_linux.pages_for, x86_64_linux.prot_of, x86_64_linux.err))
   qed
   have ci: CI by taut(hfl, c50, c34)
-  let MM(V, r) := (V = s.vm && (fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) || fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM))) ||
+  let MM(V, r) := (V = s.vm && ((ms.einv(a1, a2, a4) && fst(r) = x86_64_linux.err(x86_64_linux.EINVAL)) || (!(a2 = 0) && fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM)))) ||
     (ex p. ((p in omega && mallocng_specs.mmap_place(s.vm, a1, a2, a4, p)) && gimple.fresh_pages(s.vm, V, s.objs, p, N, PG)) &&
       V.brk = s.vm.brk && fst(r) = bits_of_int(64, int_mul(p, x86_64_linux.PAGE)))
   let G := abi.ovf_out(s, o2) || (ex V r. (V in x86_64_linux.Vm && MM(V, r)) && o2 = ok(fn_update(s, "vm", V), r))
@@ -2037,17 +2041,35 @@ proof
     show by taut(l)
   qed
   // an error: the memory as before
-  have ce: all e. (e = x86_64_linux.EINVAL || e = x86_64_linux.ENOMEM) -> o3 = ok(s, x86_64_linux.err(e)) -> G proof
+  have ce: all e. o3 = ok(s, x86_64_linux.err(e)) -> (all r. fst(r) = x86_64_linux.err(e) -> MM(s.vm, r)) -> G proof
     fix e
-    assume he hx
+    assume hx hm
     obtain r, hor hr from mp(all_elim(res, {s}, {x86_64_linux.err(e)}), (x86_64_linux.err(e) in bits(64) by defs(simp(), x86_64_linux.err)), hx)
     have hor2: o2 = ok(fn_update(s, "vm", s.vm), r) := rewrite(sym(ss), hor)
-    have m: MM(s.vm, r) by simp(he, hr, keep(x86_64_linux.err, mallocng_specs.mmap_place, gimple.fresh_pages))
+    have m := mp(all_elim(hm, {r}), hr)
     have l: ex V r. (V in x86_64_linux.Vm && MM(V, r)) && o2 = ok(fn_update(s, "vm", V), r) by ex_intro({s.vm}, {r}, taut(pv, m, hor2))
     show by taut(l)
   qed
-  have ce1 := mp(all_elim(ce, {x86_64_linux.EINVAL}), (x86_64_linux.EINVAL = x86_64_linux.EINVAL || x86_64_linux.EINVAL = x86_64_linux.ENOMEM by taut(refl({x86_64_linux.EINVAL}))))
-  have ce2 := mp(all_elim(ce, {x86_64_linux.ENOMEM}), (x86_64_linux.ENOMEM = x86_64_linux.EINVAL || x86_64_linux.ENOMEM = x86_64_linux.ENOMEM by taut(refl({x86_64_linux.ENOMEM}))))
+  have ce1: ms.einv(a1, a2, a4) && o3 = ok(s, x86_64_linux.err(x86_64_linux.EINVAL)) -> G proof
+    assume h
+    have hi hx := h
+    have hm: all r. fst(r) = x86_64_linux.err(x86_64_linux.EINVAL) -> MM(s.vm, r) proof
+      fix r
+      assume hr
+      show by taut(hi, hr, refl({s.vm}))
+    qed
+    show := mp(all_elim(ce, {x86_64_linux.EINVAL}), hx, hm)
+  qed
+  have ce2: !(a2 = 0) && o3 = ok(s, x86_64_linux.err(x86_64_linux.ENOMEM)) -> G proof
+    assume h
+    have hn hx := h
+    have hm: all r. fst(r) = x86_64_linux.err(x86_64_linux.ENOMEM) -> MM(s.vm, r) proof
+      fix r
+      assume hr
+      show by taut(hn, hr, refl({s.vm}))
+    qed
+    show := mp(all_elim(ce, {x86_64_linux.ENOMEM}), hx, hm)
+  qed
   // a place p, its pages fresh: p's address
   have cp: all V p. p in omega -> mallocng_specs.mmap_place(s.vm, a1, a2, a4, p) -> V in x86_64_linux.Vm -> gimple.fresh_pages(s.vm, V, s.objs, p, N, PG) -> V.brk = s.vm.brk ->
       o3 = ok(fn_update(s, "vm", V), bits_of_int(64, int_mul(p, x86_64_linux.PAGE))) -> G proof

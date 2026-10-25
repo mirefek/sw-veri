@@ -249,6 +249,9 @@ fn syscall2_spec_fun() -> CFun2[World] = (args: Args) => {
 pred errno_ok(vm: Vm, objs: Objs, fs: Addr) =
   uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
 
+// errno's value e (a failing allocator call's: ENOMEM)
+pred errno_is(vm: Vm, fs: Addr, e: nat) = bytes_at(vm, errno_at(fs), 4) = e
+
 // __syscall_ret(r): a system call's raw result as the C function's -- an
 // error (r one of -4095 .. -1): its number -r to errno, -1 returned; else
 // r itself. Errno's cell writable on an error.
@@ -284,9 +287,16 @@ pred tls_off(fs: Addr, p: nat, n: nat) =
   (all i: nat. i < 8 -> !(p <= (uint(fs) + i) / PAGE && (uint(fs) + i) / PAGE < p + n)) &&
   (all i: nat. i < 4 -> !(p <= (uint(errno_at(fs)) + i) / PAGE && (uint(errno_at(fs)) + i) / PAGE < p + n))
 
+// mmap's errno on failure: EINVAL for no length (the kernel's check); else
+// ENOMEM (no place, the kernel's refusal, musl's own length check) -- or,
+// for a fixed address off a page's start, EINVAL (the kernel may refuse
+// first)
+pred mmap_err(addr: Addr, len: bits[64], flags: bits[32], e: nat) =
+  if uint(len) = 0 { e = EINVAL } else { e = ENOMEM || (uint(flags) = MAP_PRIVATE + MAP_ANONYMOUS + MAP_FIXED && uint(addr) % PAGE != 0 && e = EINVAL) }
+
 // mmap(addr, len, prot, flags, -1, 0), anonymous private memory (at addr
 // if MAP_FIXED): len's pages fresh at a place for them (`mmap_place`),
-// replacing what was there; or -1, errno ENOMEM or EINVAL (no place; the
+// replacing what was there; or -1, errno as `mmap_err` (no place; the
 // kernel may always refuse; musl's own checks), nothing else changed. A
 // fixed mapping's pages ones the kernel may replace (sys_pages_ok), not
 // the thread pointer's or errno's (`tls_off`: __mmap calls on); else no
@@ -309,7 +319,7 @@ proc[World] mmap_spec(addr: Addr, len: bits[64], prot: bits[32], flags: bits[32]
         return bits[64](p * PAGE)
       }
     }
-    vm := wr32(vm, errno_at(fs_base), any e: nat where e = ENOMEM || e = EINVAL)
+    vm := wr32(vm, errno_at(fs_base), any e: nat where mmap_err(addr, len, flags, e))
     return bits[64](2^64 - 1)
   }
 }
@@ -1080,10 +1090,10 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
 // index i returned, slot i of the head of class sc's active list reserved
 // (an existing group's free slot, or a new group's: mapped, or nested in a
 // slot of a larger class), room in it for req bytes and the in-band
-// header; or -1, out of memory. The smaller classes' lists as before. The
-// allocator may take memory that was unmapped (a new group, a meta area)
-// and set errno (a failed mmap); the slot reserved is of the allocator's
-// memory or of that.
+// header; or -1, out of memory, errno ENOMEM. The smaller classes' lists
+// as before. The allocator may take memory that was unmapped (a new group,
+// a meta area) and set errno (a failed mmap); the slot reserved is of the
+// allocator's memory or of that.
 proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
   require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
@@ -1100,7 +1110,8 @@ proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32]
        uint(req) + IB <= stride(A.metas[A.active[uint(sc)][0]])))
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
-      (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
+      (all a: nat. in_reserved(A, a) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (r = bits[32](2^32 - 1) -> errno_is(vm, fs_base, ENOMEM))
     return r
   }
 }
@@ -1117,7 +1128,7 @@ pred meta_ready(vm: Vm, m: nat) =
 
 // alloc_meta(): a meta for a new group -- taken (its maker's, out of the
 // allocator's bytes: the allocator's before, or unmapped), ready -- or 0,
-// none to be had (a failed mmap or mprotect). The groups as before; the
+// none to be had (a failed mmap or mprotect), errno ENOMEM. The groups as before; the
 // allocator may take memory that was unmapped (a meta area) and set errno
 // (its cell writable, not the allocator's).
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
@@ -1132,7 +1143,8 @@ proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (m != 0 -> meta_ready(vm, uint(m))) &&
-      (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE))
+      (m != 0 -> all a: nat. uint(m) <= a && a < uint(m) + META_SIZE -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
+      (m = 0 -> errno_is(vm, fs_base, ENOMEM))
     return m
   }
 }
@@ -1148,7 +1160,7 @@ pred fresh_group(A: Abs, g: nat, sc: nat, req: nat) =
 
 // alloc_group(sc, req): a new group of class sc for requests of up to req
 // bytes (`fresh_group`; partially active only if its slots reach past its
-// first page) -- or 0, none to be had. The lists of class sc and the
+// first page) -- or 0, none to be had, errno ENOMEM. The lists of class sc and the
 // smaller ones as before (a nested group's slot is a larger class's), no
 // slot reserved; the allocator may take memory that was unmapped (the
 // group, a meta area, a slot of a larger class's group) and set errno.
@@ -1165,7 +1177,8 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || !mapped(before, a / PAGE)) &&
       (g != 0 -> active_idx(vm, A.metas[uint(g)]) < A.metas[uint(g)].last_idx ->
-         4096 < UNIT + stride(A.metas[uint(g)]) * (A.metas[uint(g)].last_idx + 1))
+         4096 < UNIT + stride(A.metas[uint(g)]) * (A.metas[uint(g)].last_idx + 1)) &&
+      (g = 0 -> errno_is(vm, fs_base, ENOMEM))
     return g
   }
 }
