@@ -3028,29 +3028,19 @@ proof
   show := rewrite(sym(e2), ri)
 qed
 
-// __libc_malloc_impl refines its purpose spec (the ghost part: the live
-// blocks and the abstract state its return's)
-theorem mp.mi: all c n gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef. c in mallocng.Cfg ->
-  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
-  c.dbj = c_src_malloc_mallocng_malloc.debruijn32 -> c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
-  n in bits(64) ->
-  mp.calls(gso, mallocng_specs.size_overflows_spec_fun) -> mp.calls(gmm, mallocng_specs.mmap_spec_fun()) ->
-  mp.calls(gwl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) -> mp.sq_call(c, gsq) -> mp.am_call(c, gam) ->
-  mp.calls(gul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) -> mp.calls(gmu, mallocng_specs.munmap_spec_fun()) ->
-  mp.calls(gs2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) -> mp.calls(grl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
-  mp.calls(gac, mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)) -> mp.calls(gug, mallocng_specs.upgradelock_spec_fun()) ->
-  mp.as_call(c, gas) -> mp.ef_call(c, gef) ->
-  refines_ghost(c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef),
-    mallocng_specs.malloc_impl_spec(c, n), abi.World, mp.G)
+// a program of malloc's outcome (`mp.mi_out`) wherever malloc's
+// precondition holds refines malloc's purpose spec (the ghost part: the
+// live blocks and the abstract state its return's)
+abbrev mp.mi_runs(c, n, P) := all s h o. s in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 ->
+  abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
+  abi.brk_start_ok(s.vm) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, s.vm, s.fs_base) ->
+  runs(P, s, o) -> mp.mi_out(c, h.A, n, h.blocks, s, o)
+
+theorem mp.mi_ref(c, n, P): n in bits(64) -> (all s o. runs(P, s, o) -> pair(s, o) in univ(1)) -> mp.mi_runs(c, n, P) ->
+  refines_ghost(P, mallocng_specs.malloc_impl_spec(c, n), abi.World, mp.G)
 proof
-  fix c n gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef
-  assume hc hx hst hdj hlk hlc hnb hso hmm hwl hsq ham hul hmu hs2c hrl hac hug has hef
-  let P := c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef)
-  have rp: all s o. runs(P, s, o) -> pair(s, o) in univ(1) proof
-    fix s o
-    assume hr
-    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.__libc_malloc_impl))
-  qed
+  assume hnb rp hrun
   unfold mallocng_specs.malloc_impl_spec
   refine ct.refines_contract_g with mp.g_world, rp
   fix s h o
@@ -3075,9 +3065,7 @@ proof
   have hbs: abi.brk_start_ok(V0) by simp(hpre, sd, hd)
   have heo: mallocng_specs.errno_ok(V0, s.objs, s.fs_base) by simp(hpre, sd, hd)
   have hea: mallocng_specs.errno_apart(c, A, B, V0, s.fs_base) by simp(hpre, sd, hd)
-  have run := apply(mp.mi_run[c := c, n := n, gso := gso, gmm := gmm, gwl := gwl, gsq := gsq, gam := gam, gul := gul, gmu := gmu, gs2c := gs2c, grl := grl, gac := gac,
-    gug := gug, gas := gas, gef := gef, s := s, h := h, o := o], hc, hx, hst, hdj, hlk, hlc, hnb, hso, hmm, hwl, hsq, ham, hul, hmu, hs2c, hrl, hac, hug, has, hef,
-    hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr)
+  have run := mp(all_elim(hrun, {s}, {h}, {o}), hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr)
   // (the world's part and the ghost part joined: the spec's state)
   have sk := apply(abi.keys_of[f := s, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty)))))], sd)
   have nab: all z. z in s -> fst(z) != "A" && fst(z) != "blocks" proof
@@ -3181,5 +3169,193 @@ proof
   show by taut(run, k0, k1)
 qed
 
+// __libc_malloc_impl refines its purpose spec
+theorem mp.mi: all c n gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.dbj = c_src_malloc_mallocng_malloc.debruijn32 -> c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
+  n in bits(64) ->
+  mp.calls(gso, mallocng_specs.size_overflows_spec_fun) -> mp.calls(gmm, mallocng_specs.mmap_spec_fun()) ->
+  mp.calls(gwl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) -> mp.sq_call(c, gsq) -> mp.am_call(c, gam) ->
+  mp.calls(gul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) -> mp.calls(gmu, mallocng_specs.munmap_spec_fun()) ->
+  mp.calls(gs2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) -> mp.calls(grl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  mp.calls(gac, mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)) -> mp.calls(gug, mallocng_specs.upgradelock_spec_fun()) ->
+  mp.as_call(c, gas) -> mp.ef_call(c, gef) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef),
+    mallocng_specs.malloc_impl_spec(c, n), abi.World, mp.G)
+proof
+  fix c n gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef
+  assume hc hx hst hdj hlk hlc hnb hso hmm hwl hsq ham hul hmu hs2c hrl hac hug has hef
+  let P := c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef)
+  have rp: all s o. runs(P, s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.__libc_malloc_impl))
+  qed
+  have rn: mp.mi_runs(c, n, P) proof
+    fix s h o
+    assume hw hh hin hsh hnr htk hth htl hbs heo hea hr
+    show := apply(mp.mi_run[c := c, n := n, gso := gso, gmm := gmm, gwl := gwl, gsq := gsq, gam := gam, gul := gul, gmu := gmu, gs2c := gs2c, grl := grl, gac := gac,
+      gug := gug, gas := gas, gef := gef, s := s, h := h, o := o], hc, hx, hst, hdj, hlk, hlc, hnb, hso, hmm, hwl, hsq, ham, hul, hmu, hs2c, hrl, hac, hug, has, hef,
+      hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr)
+  qed
+  show := apply(mp.mi_ref[c := c, n := n, P := P], hnb, rp, rn)
+qed
+
+// ----------------------------------------------------------------------
+//  Called as __libc_malloc_impl: one return, 0 or a new block
+
+// 0: errno ENOMEM, the invariant kept, nothing outside the allocator
+// touched but errno, the allocator grown only into memory unmapped before
+abbrev mp.mi_zero(c, A, B, s, A2, V2) := (((A2 in mallocng.Abs && A2 in univ(1)) && mallocng.no_reserved(A2)) && seq_len(A2.taken) = 0) &&
+  V2 in x86_64_linux.Vm && mallocng.holds_m(c, A2, V2, B) && mallocng.shown_in(c, A2, s.objs) &&
+  mallocng.untouched(c, A, B, s.vm, V2, s.objs, mp.errno(s.fs_base)) &&
+  (all a. a in omega -> a in mallocng.footprint(c, A2, B) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(s.vm, int_div(a, x86_64_linux.PAGE))) &&
+  mallocng_specs.errno_is(V2, s.fs_base, x86_64_linux.ENOMEM)
+
+abbrev mp.mi_ret(c, A, n, B, s, A2, V2, p) := (p = 0 && mp.mi_zero(c, A, B, s, A2, V2)) || (!(p = 0) && mp.mi_blk(c, A, n, B, s, A2, V2, p))
+
+// malloc's outcome with its two returns as one
+theorem mp.mi_out2(c, A, n, B, s, o): mp.mi_out(c, A, n, B, s, o) ->
+  abi.ovf_out(s, o) || (ex V p. (V in x86_64_linux.Vm && p in bits(64) && (ex A2. mp.mi_ret(c, A, n, B, s, A2, V, p))) && o = ok(fn_update(s, "vm", V), p))
+proof
+  assume h
+  have z: case 2 of h proof
+    assume e
+    obtain A2 V2, ha hu hnr htk hv hin hsh hun hgr hen ho from e
+    have r: mp.mi_ret(c, A, n, B, s, A2, V2, 0) by taut(refl({0}), ha, hu, hnr, htk, hv, hin, hsh, hun, hgr, hen)
+    have r2: ex X. mp.mi_ret(c, A, n, B, s, X, V2, 0) by ex_intro({A2}, r)
+    show by disj({2}, ex_intro({V2}, {0}, taut(hv, (0 in bits(64) by simp()), r2, ho)))
+  qed
+  have k: case 3 of h proof
+    assume e
+    obtain A3 V3 p, ha hu hnr htk hv hpb hpnz hpf hin hsh hun hgr hby ho from e
+    have r: mp.mi_ret(c, A, n, B, s, A3, V3, p) by taut(hpnz, ha, hu, hnr, htk, hv, hpb, hpf, hin, hsh, hun, hgr, hby)
+    have r2: ex X. mp.mi_ret(c, A, n, B, s, X, V3, p) by ex_intro({A3}, r)
+    show by disj({2}, ex_intro({V3}, {p}, taut(hv, hpb, r2, ho)))
+  qed
+  show by taut(h, z, k)
+qed
+
+// what a caller relies on of a callee f called as __libc_malloc_impl: an
+// overflow, or the return -- 0 or a new block
+abbrev mp.mi_post(c, n, t, h, o2) := abi.ovf_out(t, o2) ||
+  (ex V rr. (V in x86_64_linux.Vm && (ex A2. mp.mi_ret(c, h.A, n, h.blocks, t, A2, V, fst(rr)))) && o2 = ok(fn_update(t, "vm", V), rr))
+
+abbrev mp.mi_call(c, f) := all n t h regs o2. n in bits(64) -> t in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 ->
+  abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, t.vm, t.fs_base) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, n))) ->
+  runs(f[regs], t, o2) -> mp.mi_post(c, n, t, h, o2)
+
+// (the run with its returns as one)
+theorem mp.mi_run2(c, n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef, s, h, o): c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.dbj = c_src_malloc_mallocng_malloc.debruijn32 -> c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
+  n in bits(64) ->
+  mp.calls(gso, mallocng_specs.size_overflows_spec_fun) -> mp.calls(gmm, mallocng_specs.mmap_spec_fun()) ->
+  mp.calls(gwl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) -> mp.sq_call(c, gsq) -> mp.am_call(c, gam) ->
+  mp.calls(gul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) -> mp.calls(gmu, mallocng_specs.munmap_spec_fun()) ->
+  mp.calls(gs2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) -> mp.calls(grl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  mp.calls(gac, mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)) -> mp.calls(gug, mallocng_specs.upgradelock_spec_fun()) ->
+  mp.as_call(c, gas) -> mp.ef_call(c, gef) ->
+  s in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 ->
+  abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
+  abi.brk_start_ok(s.vm) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, s.vm, s.fs_base) ->
+  runs(c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef), s, o) ->
+  abi.ovf_out(s, o) || (ex V p. (V in x86_64_linux.Vm && p in bits(64) && (ex A2. mp.mi_ret(c, h.A, n, h.blocks, s, A2, V, p))) && o = ok(fn_update(s, "vm", V), p))
+proof
+  assume hc hx hst hdj hlk hlc hnb hso hmm hwl hsq ham hul hmu hs2c hrl hac hug has hef hw hh hin hsh hnr htk hth htl hbs heo hea hr
+  show := apply(mp.mi_out2[c := c, A := h.A, n := n, B := h.blocks, s := s, o := o],
+    apply(mp.mi_run[c := c, n := n, gso := gso, gmm := gmm, gwl := gwl, gsq := gsq, gam := gam, gul := gul, gmu := gmu, gs2c := gs2c, grl := grl, gac := gac,
+      gug := gug, gas := gas, gef := gef, s := s, h := h, o := o], hc, hx, hst, hdj, hlk, hlc, hnb, hso, hmm, hwl, hsq, ham, hul, hmu, hs2c, hrl, hac, hug, has, hef,
+      hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr))
+qed
+
+// __libc_malloc_impl's code called as __libc_malloc_impl
+theorem mp.mi_q: all c gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.dbj = c_src_malloc_mallocng_malloc.debruijn32 -> c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
+  mp.calls(gso, mallocng_specs.size_overflows_spec_fun) -> mp.calls(gmm, mallocng_specs.mmap_spec_fun()) ->
+  mp.calls(gwl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) -> mp.sq_call(c, gsq) -> mp.am_call(c, gam) ->
+  mp.calls(gul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) -> mp.calls(gmu, mallocng_specs.munmap_spec_fun()) ->
+  mp.calls(gs2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) -> mp.calls(grl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  mp.calls(gac, mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)) -> mp.calls(gug, mallocng_specs.upgradelock_spec_fun()) ->
+  mp.as_call(c, gas) -> mp.ef_call(c, gef) ->
+  mp.mi_call(c, c_src_malloc_mallocng_malloc.__libc_malloc_impl_fun(gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef))
+proof
+  fix c gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef
+  assume hc hx hst hdj hlk hlc hso hmm hwl hsq ham hul hmu hs2c hrl hac hug has hef
+  fix n t h regs o2
+  assume hnb hw hh hin hsh hnr htk hth htl hbs heo hea hro hr
+  have rl rn r0 := apply(gc.regs1, hnb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = n by defs(simp(r0, hnb), bits_of_int, pow2)
+  step o3 V p, e hs1 from hr with o1l, bp, mp.mi_run2 using ra, hc, hx, hst, hdj, hlk, hlc, hnb, hso, hmm, hwl, hsq, ham, hul, hmu, hs2c, hrl, hac, hug, has, hef,
+    hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea
+  have hv hpb hex := hs1
+  step o4 y, e2 from e with g.result64_inv using hpb
+  have fp: fst(pair(p, y)) = p by simp()
+  have hex2 := subst({z. ex X. mp.mi_ret(c, h.A, n, h.blocks, t, X, V, z)}, sym(fp), hex)
+  show by disj({2}, ex_intro({V}, {pair(p, y)}, taut(hv, hex2, e2)))
+qed
+
 // its C function value, its divergence, its machine code over any callees
-contract __libc_malloc_impl mallocng_specs.malloc_impl_spec_fun by mp.mi
+contract __libc_malloc_impl mallocng_specs.malloc_impl_spec_fun by mp.mi call mp.mi_call
+
+// ----------------------------------------------------------------------
+//  The `malloc` symbol: lite_malloc.c's default_malloc, calling
+//  __libc_malloc_impl -- the same purpose
+
+theorem mp.dm_run(c, n, g, s, h, o): n in bits(64) -> mp.mi_call(c, g) -> s in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 ->
+  abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
+  abi.brk_start_ok(s.vm) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, h.blocks, s.vm, s.fs_base) ->
+  runs(c_src_malloc_lite_malloc.default_malloc(n, g), s, o) -> mp.mi_out(c, h.A, n, h.blocks, s, o)
+proof
+  assume hnb hmi hw hh hin hsh hnr htk hth htl hbs heo hea hr
+  have pu := apply(g.runs_univ, hr)
+  have hu: s in univ(1) by simp(pu)
+  have ths: gc.sound(s) by simp(hth)
+  step t4 V r, e hR from hr with hmi using conj(hw, hu, ths, hnb, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea)
+  have _ hx := hR
+  obtain A2, hrt from hx
+  have z: fst(r) = 0 && mp.mi_zero(c, h.A, h.blocks, s, A2, V) -> mp.mi_out(c, h.A, n, h.blocks, s, o) proof
+    assume q
+    have q0 qz := q
+    show by disj({2}, ex_intro({A2}, {V}, taut(qz, rewrite(q0, e))))
+  qed
+  have k: !(fst(r) = 0) && mp.mi_blk(c, h.A, n, h.blocks, s, A2, V, fst(r)) -> mp.mi_out(c, h.A, n, h.blocks, s, o) proof
+    assume q
+    have _ qb := q
+    show by disj({3}, ex_intro({A2}, {V}, {fst(r)}, taut(qb, e)))
+  qed
+  show by taut(hrt, z, k)
+qed
+
+theorem mp.dm: all c n g. n in bits(64) -> mp.mi_call(c, g) ->
+  refines_ghost(c_src_malloc_lite_malloc.default_malloc(n, g), mallocng_specs.malloc_impl_spec(c, n), abi.World, mp.G)
+proof
+  fix c n g
+  assume hnb hmi
+  let P := c_src_malloc_lite_malloc.default_malloc(n, g)
+  have rp: all s o. runs(P, s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_lite_malloc.default_malloc))
+  qed
+  have rn: mp.mi_runs(c, n, P) proof
+    fix s h o
+    assume hw hh hin hsh hnr htk hth htl hbs heo hea hr
+    show := apply(mp.dm_run[c := c, n := n, g := g, s := s, h := h, o := o], hnb, hmi, hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr)
+  qed
+  show := apply(mp.mi_ref[c := c, n := n, P := P], hnb, rp, rn)
+qed
+
+// its C function value, its divergence, its machine code over any
+// __libc_malloc_impl called as such
+contract default_malloc mallocng_specs.malloc_impl_spec_fun by mp.dm
