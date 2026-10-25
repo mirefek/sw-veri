@@ -709,6 +709,44 @@ fn upgradelock_spec_fun() -> CFun2[World] = (args: Args) => {
   return (any bits[64], any bits[64])
 }
 
+// rdlock(), wrlock(): nothing -- libc single-threaded (its need_locks, at
+// libc + 3, 0: __lock never called)
+pred need_locks_off(vm: Vm, objs: Objs, libc: Addr) =
+  libc != 0 && uint(libc) + 4 <= 2^64 && usable(vm, objs, uint(libc) + 3, 1, false) && bytes_at(vm, libc + 3, 1) = 0
+
+proc[World] lock_spec(libc: bits[64]) {
+  require need_locks_off(vm, objs, libc)
+  either { overflow() } or { vm := vm }
+}
+
+fn lock_spec_fun(libc: bits[64]) -> CFun2[World] = (args: Args) => {
+  lock_spec(libc)
+  return (any bits[64], any bits[64])
+}
+
+// unlock(), __unlock(lk): nothing -- the lock word at lk 0 (never taken:
+// single-threaded); the thread sound (unlock's a call)
+pred lock_free(vm: Vm, objs: Objs, lk: Addr) =
+  lk != 0 && uint(lk) + 4 <= 2^64 && usable(vm, objs, uint(lk), 4, false) && bytes_at(vm, lk, 4) = 0
+
+proc[World] unlock_spec(lk: bits[64]) {
+  require lock_free(vm, objs, lk) && thread_ok(vm, fs_base)
+  either { overflow() } or { vm := vm }
+}
+
+// (unlock(): of the lock lk, __malloc_lock)
+fn unlock_spec_fun(lk: bits[64]) -> CFun2[World] = (args: Args) => {
+  unlock_spec(lk)
+  return (any bits[64], any bits[64])
+}
+
+// (__unlock(lk): of its argument)
+fn unlock_arg_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  unlock_spec(bits[64](args[0]))
+  return (any bits[64], any bits[64])
+}
+
 ///////////////////////////////////////////////////////////////////////
 //  The functions by their purpose, over the abstract state
 

@@ -7,18 +7,22 @@ summarized in docs/done.md.
 
 alloc_meta, alloc_slot and alloc_group are verified at machine level from
 the configuration alone (`mp.am_machine`, `mp.as_machine`,
-`mp.agr_machine`). Left, each with its spec by purpose
-(layers/mallocng_specs.sl), its code refining it (proofs/mallocng/fun/),
-its machine code linked:
-- The accessors (`meta_*`, `malloc_context_*`, `set_*`, `group_*`), possibly
-  generated.
-- `get_nominal_size`, `record_seq`, `okay_to_free`, `free_group`,
-  `nontrivial_free`.
-- The entry points `__libc_malloc_impl`, `__libc_free`, `calloc` and the
-  `lite_malloc` / `free.c` wrappers, against the malloc layer. malloc
-  owes enframe: the class bound (its n within the class), the thread
-  pointer's word apart from the slot (the C world's TLS), a stride below
-  2^31; the slot's access is the invariant's (`mp.slot_rw_of`).
+`mp.agr_machine`); the locks too (`mp.rdl_linked` .. `mp.unl_linked`).
+Next, malloc (`musl.impl_malloc`, proofs/mallocng/claim.core):
+- `munmap` (src/mman/munmap.c: `__vm_wait`, a 2-argument syscall -- the
+  readable translation has 1, 3 and 6 --, `__syscall_ret`): its C1, spec,
+  C2, as `__mprotect`'s.
+- `__libc_malloc_impl`'s spec by purpose (the mmap path: a group of its
+  own; the slot path: alloc_slot's slot, enframed) and its C2. malloc owes
+  enframe: the class bound (its n within the class), the thread pointer's
+  word apart from the slot (the C world's TLS), a stride below 2^31; the
+  slot's access is the invariant's (`mp.slot_rw_of`).
+- mallocng's abstract state to the malloc layer's blocks (`rep`): the
+  purpose spec giving `malloc.malloc`; the `malloc` symbol's wrapper
+  (lite_malloc.c's `default_malloc`) to `__libc_malloc_impl`.
+
+Then free and calloc: `get_nominal_size`, `record_seq`, `okay_to_free`,
+`free_group`, `nontrivial_free`, `__libc_free`, `calloc`.
 - The string instructions in general (layers/musl_asm.sl): `rep movs` of
   any element size (`x86i.rep_movsq` is for 8: its iteration and facts
   with the size a parameter), `rep stos` (memset's: no overlap question);
@@ -111,6 +115,9 @@ and the auxiliary vector; after, the allocator maps only fresh pages.
   from the `using` facts) made the run several times slower: not that
   way -- a fact the run states once per memory, instantiated by step.
 
+- `contract`: a callee never reached (the locks' `__lock`, `a_fetch_add`,
+  `__wake`) linked as a_crash's spec by hand (`mp.rdl_linked` ..): C1's
+  `.linked` covers only callees with a C1 of their own.
 - `contract` for the rest: get_random_secret and memcpy (their `_fun`
   forms by hand, no procedure-level `refines` theorem); a procedure-level
   refinement's ghost bookkeeping (`mp.ag`'s ~70 lines: the precondition's

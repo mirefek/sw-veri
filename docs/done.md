@@ -1179,6 +1179,13 @@ item is a short summary of finished work; details are in the files named.
     d's word boundary, the words, the bytes left -- each a move of what is
     at s still (`mp.mvw`), the loops by `g.loop`; `memcpy_spec_fun` by the
     GIMPLE wrapper's convention (`result`).
+- **The locks, single-threaded** (proofs/mallocng/fun/locks.core): malloc's
+  rdlock, wrlock, unlock and __lock.c's __unlock (a new leaf translation
+  unit) by their purpose -- nothing done, libc's need_locks 0 and the lock
+  word 0 (`lock_spec`, `unlock_spec`; unlock a call, so the thread sound);
+  C1 (a test's `jns`: `tr.ccl32_ns`), `refines`, `contract`; linked
+  (`mp.rdl_linked` .. `mp.unl_linked`) with the callees never reached
+  (__lock, a_fetch_add, __wake) as a_crash's spec.
 - **get_random_secret to its purpose** (`grsc.composed`, linked with
   memcpy's code; proofs/mallocng/fun/random_secret.core).
   - Spec and model fixes it needed (GIMPLE level): `stack_free` is a byte

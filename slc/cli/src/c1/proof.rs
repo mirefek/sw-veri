@@ -2209,10 +2209,12 @@ impl<'e> Gen<'e> {
             }
             Flags::Log(w, r) => {
                 let z = self.mk("eq", vec![r.clone(), lit(0)]);
-                let (l, c) = match cc {
-                    4 => ("ccl_e", self.mk("not", vec![z])),
-                    5 => ("ccl_ne", z),
-                    _ => return Err(format!("{:x}: a test's jump on condition {}: no lemma", a, cc)),
+                let (l, c) = match (cc, *w) {
+                    (4, _) => ("ccl_e", self.mk("not", vec![z])),
+                    (5, _) => ("ccl_ne", z),
+                    // (jns after a test: r's sign, as GIMPLE writes `r <s 0`)
+                    (9, 32) => ("ccl32_ns", self.mk("int_lt", vec![si(self, r), si(self, &lit(0))])),
+                    _ => return Err(format!("{:x}: a {}-bit test's jump on condition {}: no lemma", a, w, cc)),
                 };
                 (l, c, vec![lit(*w), r.clone()], self.mk("x86i.logf", vec![lit(*w), r.clone(), Term::bvar(0)]))
             }
