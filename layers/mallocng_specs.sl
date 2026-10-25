@@ -1202,7 +1202,7 @@ proc[MallocAbs] malloc_impl_spec(c: Cfg, n: bits[64]) -> Addr {
     let before = vm
     let errno = {a: nat | uint(fs_base) + 0x34 <= a && a < uint(fs_base) + 0x38}
     let p = any p: Addr where p = 0 || blocks0[p] = none
-    ghost blocks := (q: Addr) => if p != 0 && q = p { some(uint(n)) } else { blocks0[q] }
+    ghost blocks := if p != 0 { set_block(blocks0, p, some(uint(n))) } else { blocks0 }
     ghost A := any A2: Abs where no_reserved(A2) && len(A2.taken) = 0
     havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks0, before, vm, objs, errno) &&
       (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks0) || !mapped(before, a / PAGE)) &&

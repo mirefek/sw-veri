@@ -2982,3 +2982,201 @@ proof
   qed
   show by taut(toobig, fits)
 qed
+
+// ----------------------------------------------------------------------
+//  The refinement
+
+// the ghost part's live blocks replaced: a ghost part still
+theorem mp.g_updb: all h b2. h in mp.G -> b2 in fn_space(bits(64), option(omega)) -> b2 in univ(1) -> fn_update(h, "blocks", b2) in mp.G
+proof
+  fix h b2
+  assume hh hb2 hu2
+  obtain x y, hx hy he from mp(rec_and_elim[a := malloc.Heap.ghost, b := mallocng_specs.MallocAbs.ghost, s := h], hh)
+  have xp xf xd _ := (x in powerset(cart(insert("blocks", empty), univ(1))) && is_fun(x) && dom(x) = insert("blocks", empty) && x.blocks in fn_space(bits(64), option(omega))
+    by simp(expand(hx, malloc.Heap.ghost)))
+  have yf yd := (is_fun(y) && dom(y) = insert("A", empty) by simp(expand(hy, mallocng_specs.MallocAbs.ghost)))
+  let X2 := fn_update(x, "blocks", b2)
+  have x2f x2d := mp(fn_update_fd[f := x, k := "blocks", v := b2, d := insert("blocks", empty)], xf, xd, simp())
+  have xs: subset(x, cart(insert("blocks", empty), univ(1))) by taut(powerset_def[s := cart(insert("blocks", empty), univ(1)), a := x], xp)
+  have sub: all z. z in X2 -> z in cart(insert("blocks", empty), univ(1)) proof
+    fix z
+    assume hz
+    have c := fn_update_iff[f := x, k := "blocks", v := b2, z := z]
+    have c1: z in x -> z in cart(insert("blocks", empty), univ(1)) proof
+      assume h1
+      show := mp(subset_elim[a := x, b := cart(insert("blocks", empty), univ(1)), z := z], xs, h1)
+    qed
+    have c2: z = pair("blocks", b2) -> z in cart(insert("blocks", empty), univ(1)) proof
+      assume h2
+      show := rewrite(sym(h2), mp(cart_intro[a := insert("blocks", empty), b := univ(1), x := "blocks", y := b2], simp(), hu2))
+    qed
+    show by taut(c, hz, c1, c2)
+  qed
+  have pw: X2 in powerset(cart(insert("blocks", empty), univ(1))) by taut(powerset_def[s := cart(insert("blocks", empty), univ(1)), a := X2], (subset(X2, cart(insert("blocks", empty), univ(1))) by defs(sub, subset)))
+  have ap: X2.blocks = b2 := app_update_same[f := x, k := "blocks", v := b2]
+  have sd := set_select_def[s := powerset(cart(insert("blocks", empty), univ(1))), p := x0. (is_fun(x0) && dom(x0) = insert("blocks", empty)) && x0.blocks in fn_space(bits(64), option(omega)), z := X2]
+  have x2t: X2 in malloc.Heap.ghost by defs(taut(sd, pw, x2f, x2d, rewrite(sym(ap), hb2)), malloc.Heap.ghost)
+  have ri := mp(rec_and_intro[a := malloc.Heap.ghost, b := mallocng_specs.MallocAbs.ghost, x := X2, y := y], x2t, hy)
+  have yk := apply(mp.one_key, yf, yd)
+  have nk: all z. z in y -> fst(z) != "blocks" proof
+    fix z
+    assume hz
+    show by simp(mp(all_elim(yk, {z}), hz))
+  qed
+  have eu := mp(fn_update_union_l[a := x, b := y, k := "blocks", v := b2], nk)
+  have e2: fn_update(h, "blocks", b2) = union2(X2, y) := trans(subst({w. fn_update(h, "blocks", b2) = fn_update(w, "blocks", b2)}, he, refl({fn_update(h, "blocks", b2)})), eu)
+  show := rewrite(sym(e2), ri)
+qed
+
+// __libc_malloc_impl refines its purpose spec (the ghost part: the live
+// blocks and the abstract state its return's)
+theorem mp.mi: all c n gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.dbj = c_src_malloc_mallocng_malloc.debruijn32 -> c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
+  n in bits(64) ->
+  mp.calls(gso, mallocng_specs.size_overflows_spec_fun) -> mp.calls(gmm, mallocng_specs.mmap_spec_fun()) ->
+  mp.calls(gwl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) -> mp.sq_call(c, gsq) -> mp.am_call(c, gam) ->
+  mp.calls(gul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) -> mp.calls(gmu, mallocng_specs.munmap_spec_fun()) ->
+  mp.calls(gs2c, mallocng_specs.size_to_class_spec_fun(c.sct, c.dbj)) -> mp.calls(grl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  mp.calls(gac, mallocng_specs.a_ctz_32_spec_fun(c_src_malloc_mallocng_malloc.debruijn32)) -> mp.calls(gug, mallocng_specs.upgradelock_spec_fun()) ->
+  mp.as_call(c, gas) -> mp.ef_call(c, gef) ->
+  refines_ghost(c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef),
+    mallocng_specs.malloc_impl_spec(c, n), abi.World, mp.G)
+proof
+  fix c n gso gmm gwl gsq gam gul gmu gs2c grl gac gug gas gef
+  assume hc hx hst hdj hlk hlc hnb hso hmm hwl hsq ham hul hmu hs2c hrl hac hug has hef
+  let P := c_src_malloc_mallocng_malloc.__libc_malloc_impl(n, gso, gmm, gwl, gsq, gam, gul, gmu, gs2c, grl, gac, gug, gas, gef)
+  have rp: all s o. runs(P, s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.__libc_malloc_impl))
+  qed
+  unfold mallocng_specs.malloc_impl_spec
+  refine ct.refines_contract_g with mp.g_world, rp
+  fix s h o
+  assume hw hh hr hpre
+  let S := union2(s, h)
+  let A := h.A
+  let B := h.blocks
+  let V0 := s.vm
+  have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+  have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hw, abi.World))
+  have aS: S.A = A by simp(sd, hd)
+  have vS: S.vm = V0 by simp(sd, hd)
+  have bS: S.blocks = B by simp(sd, hd)
+  have oS: S.objs = s.objs by simp(sd, hd)
+  have fS: S.fs_base = s.fs_base by simp(sd, hd)
+  have hin0: mallocng.holds_in(c, A, V0, s.objs, B) by simp(hpre, sd, hd)
+  have {hin = mem, hsh = shown} := hin0
+  have hnr: mallocng.no_reserved(A) by simp(hpre, sd, hd)
+  have htk: seq_len(A.taken) = 0 by simp(hpre, sd, hd)
+  have hth: abi.thread_ok(V0, s.fs_base) by simp(hpre, sd, hd)
+  have htl: mallocng_specs.tls_apart(c, A, B, s.fs_base) by simp(hpre, sd, hd)
+  have hbs: abi.brk_start_ok(V0) by simp(hpre, sd, hd)
+  have heo: mallocng_specs.errno_ok(V0, s.objs, s.fs_base) by simp(hpre, sd, hd)
+  have hea: mallocng_specs.errno_apart(c, A, B, V0, s.fs_base) by simp(hpre, sd, hd)
+  have run := apply(mp.mi_run[c := c, n := n, gso := gso, gmm := gmm, gwl := gwl, gsq := gsq, gam := gam, gul := gul, gmu := gmu, gs2c := gs2c, grl := grl, gac := gac,
+    gug := gug, gas := gas, gef := gef, s := s, h := h, o := o], hc, hx, hst, hdj, hlk, hlc, hnb, hso, hmm, hwl, hsq, ham, hul, hmu, hs2c, hrl, hac, hug, has, hef,
+    hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr)
+  // (the world's part and the ghost part joined: the spec's state)
+  have sk := apply(abi.keys_of[f := s, d := insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty)))))], sd)
+  have nab: all z. z in s -> fst(z) != "A" && fst(z) != "blocks" proof
+    fix z
+    assume hz
+    show by simp(mp(all_elim(sk, {z}), hz))
+  qed
+  have hgu _ _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+  have bu := mp(app_univ[u := 1, f := h, k := "blocks"], hgu)
+  have bt: B in fn_space(bits(64), option(omega)) := mp(all_elim(mp.g_rec, {h}), hh).3
+  have joinS: all BL A2 V2. fn_update(fn_update(h, "blocks", BL), "A", A2) in mp.G ->
+      union2(fn_update(s, "vm", V2), fn_update(fn_update(h, "blocks", BL), "A", A2)) = fn_update(fn_update(fn_update(S, "blocks", BL), "A", A2), "vm", V2) proof
+    fix BL A2 V2
+    assume hg2
+    let HB := fn_update(h, "blocks", BL)
+    let H2 := fn_update(HB, "A", A2)
+    let RHS := fn_update(fn_update(fn_update(S, "blocks", BL), "A", A2), "vm", V2)
+    have nb: all z. z in s -> fst(z) != "blocks" proof
+      fix z
+      assume hz
+      have _ q := mp(all_elim(nab, {z}), hz)
+      show q
+    qed
+    have na: all z. z in s -> fst(z) != "A" proof
+      fix z
+      assume hz
+      have q _ := mp(all_elim(nab, {z}), hz)
+      show q
+    qed
+    have _ hk := mp(all_elim(mp.g_world, {H2}), hg2)
+    have nv: all z. z in H2 -> fst(z) != "vm" proof
+      fix z
+      assume hz
+      show by simp(mp(all_elim(hk, {z}), hz))
+    qed
+    have e1 := mp(fn_update_union_r[a := s, b := h, k := "blocks", v := BL], nb)
+    have e2 := mp(fn_update_union_r[a := s, b := HB, k := "A", v := A2], na)
+    have e3 := mp(fn_update_union_l[a := s, b := H2, k := "vm", v := V2], nv)
+    have r1 := subst({y. RHS = fn_update(fn_update(y, "A", A2), "vm", V2)}, e1, refl({RHS}))
+    have r2 := subst({y. RHS = fn_update(y, "vm", V2)}, e2, r1)
+    show := sym(trans(r2, e3))
+  qed
+  // 0: the blocks as they were
+  have k0: case 2 of run proof
+    assume e
+    obtain A2 V2, ha2 hu2 hnr2 htk2 hv2 hin2m hsh2 hunt hgr hen ho from e
+    have hin2: mallocng.holds_in(c, A2, V2, s.objs, B) by defs(taut(hin2m, hsh2), mallocng.holds_in)
+    let BL := ite(!(0 = 0), malloc.set_block(S.blocks, 0, some(n)), S.blocks)
+    let H2 := fn_update(fn_update(h, "blocks", BL), "A", A2)
+    let s1 := fn_update(s, "vm", V2)
+    have b0: BL = B by simp(bS)
+    have hgb := apply(mp.g_updb, {h}, {BL}, hh, rewrite(sym(b0), bt), rewrite(sym(b0), bu))
+    have hg2 := apply(mp.g_upd, {fn_update(h, "blocks", BL)}, {A2}, hgb, ha2, hu2)
+    have eS := mp(all_elim(joinS, {BL}, {A2}, {V2}), hg2)
+    show by disj({2}, ex_intro({s1}, {0}, {H2}, spec_ret({0}, {A2}, {V2}, hg2, ho, ha2, hnr2, htk2, aS, vS, bS, oS, fS, hv2, hin2, hunt, hgr, hen, b0, eS)))
+  qed
+  // p: a new live block of n bytes
+  have k1: case 3 of run proof
+    assume e
+    obtain A3 V3 p, ha3 hu3 hnr3 htk3 hv3 hpb hpnz hpf hin3m hsh3 hunt3 hgr3 hby3 ho from e
+    let NB := malloc.set_block(B, p, some(n))
+    have hin3: mallocng.holds_in(c, A3, V3, s.objs, NB) by defs(taut(hin3m, hsh3), mallocng.holds_in)
+    let BL := ite(!(p = 0), malloc.set_block(S.blocks, p, some(n)), S.blocks)
+    let H2 := fn_update(fn_update(h, "blocks", BL), "A", A3)
+    let s1 := fn_update(s, "vm", V3)
+    have b1: BL = NB by simp(bS, hpnz)
+    have vq: all q. q in bits(64) -> ite(q = p, some(n), B[q]) in option(omega) proof
+      fix q
+      assume hq
+      have bq := mp(fn_space_app[a := bits(64), b := option(omega), f := B, x := q], bt, hq)
+      have r1: some(n) in set_image(omega, x0. some(x0)) by taut(set_image_def[s := omega, f := x0. some(x0), y := some(n)],
+        (ex x0. x0 in omega && some(x0) = some(n) by ex_intro({n}, taut((n in omega by arith(hnb)), refl({some(n)})))))
+      have sn: some(n) in option(omega) by defs(simp(r1), option)
+      have c1: q = p -> ite(q = p, some(n), B[q]) in option(omega) proof
+        assume e
+        show by simp(e, sn)
+      qed
+      have c2: !(q = p) -> ite(q = p, some(n), B[q]) in option(omega) proof
+        assume e
+        show by simp(e, bq)
+      qed
+      show by taut(c1, c2)
+    qed
+    have nbt: NB in fn_space(bits(64), option(omega)) by defs(mp(fn_build_space[d := bits(64), v := q. ite(q = p, some(n), B[q]), b := option(omega)], vq), malloc.set_block)
+    have smu: all x. x in omega -> some(x) in univ(1) proof
+      fix x
+      assume hx
+      have xu := mp(mp(univ_trans[u := 1, a := x, b := omega], omega_univ), hx)
+      show by defs(simp(xu), some)
+    qed
+    have imu := mp(mp(univ_image[u := 1, s := omega, f := x. some(x)], omega_univ), smu)
+    have nu: single(none) in univ(1) by defs(simp(), single, none)
+    have ou: option(omega) in univ(1) by defs(mp(mp(union2_univ[u := 1, a := single(none), b := set_image(omega, x. some(x))], nu), imu), option)
+    have nbu: NB in univ(1) := mp(fn_space_univ[u := 1, a := bits(64), b := option(omega), f := NB], bits_univ[n := 64], ou, nbt)
+    have hgb := apply(mp.g_updb, {h}, {BL}, hh, rewrite(sym(b1), nbt), rewrite(sym(b1), nbu))
+    have hg2 := apply(mp.g_upd, {fn_update(h, "blocks", BL)}, {A3}, hgb, ha3, hu3)
+    have eS := mp(all_elim(joinS, {BL}, {A3}, {V3}), hg2)
+    have pch: p = 0 || B[p] = none by taut(hpf)
+    show by disj({2}, ex_intro({s1}, {p}, {H2}, spec_ret({p}, {A3}, {V3}, hg2, ho, hpb, pch, ha3, hnr3, htk3, aS, vS, bS, oS, fS, hv3, hin3, hunt3, hgr3, hby3, hpnz, b1, eS)))
+  qed
+  show by taut(run, k0, k1)
+qed
