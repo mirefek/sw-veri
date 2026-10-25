@@ -655,17 +655,21 @@ pred reserves(A: Abs, A2: Abs, g: nat, i: nat) =
   (all j: nat. j != i -> A2.slots[g][j] = A.slots[g][j]) &&
   (all h: nat. h != g -> A2.slots[h] = A.slots[h])
 
+// the stack's bounds and the program break's start as they were (as
+// malloc.sl's `alloc_frame` has them)
+pred bounds_kept(vm: Vm, vm2: Vm) =
+  vm2.stack_top = vm.stack_top && vm2.stack_limit = vm.stack_limit && vm2.brk_start = vm.brk_start
+
 // the memory outside the allocator's (in A) untouched, but for `extra` and
 // what was unmapped -- and the stack's free bytes (objs as at the start: a
-// callee's dead frame and objects, abi.sl's `stack_free`); the program
-// break's start kept
+// callee's dead frame and objects, abi.sl's `stack_free`); the bounds kept
 pred untouched(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, objs: Objs, extra: Set[nat]) =
   (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
      (!stack_free(vm, objs, a) -> vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)]) && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
-  vm2.brk_start = vm.brk_start
+  bounds_kept(vm, vm2)
 
 // ... every byte (the allocator's own steps: they write only its memory)
 pred kept_outside(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, vm2: Vm, extra: Set[nat]) =
   (all a: nat. a notin footprint(c, A, blocks) && a notin extra && mapped(vm, a / PAGE) ->
      vm2.bytes[bits[64](a)] = vm.bytes[bits[64](a)] && vm2.pages[a / PAGE] = vm.pages[a / PAGE]) &&
-  vm2.brk_start = vm.brk_start
+  bounds_kept(vm, vm2)
