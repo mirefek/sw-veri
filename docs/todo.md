@@ -8,11 +8,9 @@ summarized in docs/done.md.
 alloc_meta, alloc_slot and alloc_group are verified at machine level from
 the configuration alone (`mp.am_machine`, `mp.as_machine`,
 `mp.agr_machine`); the locks and munmap too (`mp.rdl_linked` ..
-`mp.unl_linked`, `mp.mun_linked`); `__libc_malloc_impl` refines its
-purpose spec, its contract over any callees (proofs/mallocng/fun/malloc.core).
+`mp.unl_linked`, `mp.mun_linked`), and `__libc_malloc_impl`
+(`mp.mi_machine`, proofs/mallocng/fun/malloc_machine.core).
 Next, malloc (`musl.impl_malloc`, proofs/mallocng/claim.core):
-- `__libc_malloc_impl` at machine level from the configuration alone (its
-  callees' contracts linked, as `mp.agr_machine`).
 - mallocng's abstract state to the malloc layer's blocks (`rep`): the
   purpose spec giving `malloc.malloc`; the `malloc` symbol's wrapper
   (lite_malloc.c's `default_malloc`) to `__libc_malloc_impl`. malloc(0):

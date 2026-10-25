@@ -1264,3 +1264,7 @@ item is a short summary of finished work; details are in the files named.
     (`bounds_kept`), munmap's precondition after alloc_meta.
   - C1: `or [rsp + d], imm8` (`tr.or32_home_i`), `or r16, imm16`
     (`tr.or16_imm`); the ghost part's blocks replaced (`mp.g_updb`).
+  - At machine level from the configuration alone (`mp.mi_machine`,
+    proofs/mallocng/fun/malloc_machine.core): its 13 callees' CFG forms
+    linked (the locks' `__lock` never reached: any code), alloc_slot's from
+    alloc_pair's induction.
