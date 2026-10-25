@@ -934,11 +934,17 @@ impl<'e> Gen<'e> {
     }
 
     /// (C1_TRACE, `phase` too: a walk's phase -- no terms printed)
+    /// (C1_TRACE, or C1_PHASES alone: the phases, their times)
     fn phase(&self, m: impl FnOnce() -> String) {
-        if std::env::var("C1_TRACE").is_ok() {
+        if std::env::var("C1_TRACE").is_ok() || std::env::var("C1_PHASES").is_ok() {
             // (and the resident memory, MB)
             let rss = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map(|p| p * 4096 / 1_000_000).unwrap_or(0);
-            eprintln!("c1 {} [{:.2}, {} MB]", m(), trace_t0(), rss);
+            let m = m();
+            // (with C1_PROF: the profile of the part before it, reset)
+            if std::env::var("C1_PROF").is_ok() {
+                sl_kernel::prof::report(&format!("before `{}`", m));
+            }
+            eprintln!("c1 {} [{:.2}, {} MB]", m, trace_t0(), rss);
         }
     }
 
