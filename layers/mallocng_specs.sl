@@ -935,20 +935,20 @@ proc[World] set_size_spec(p: bits[64], end: bits[64], n: bits[64]) {
   }
 }
 
-// get_slot_index(p), p where a client block or a nested group starts: the
-// index of its slot in its group
+// get_slot_index(p), p where a client block or a nested group starts (no
+// slot reserved below it): the index of its slot in its group
 proc[MallocAbs] get_slot_index_spec(c: Cfg, p: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, objs, blocks) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)) && clear_below(A, g, uint(p)))
   either { overflow() } or {
     return any i: bits[32] where ex g: nat. starts_at(A, g, uint(i), uint(p))
   }
 }
 
-// get_meta(p), p where a client block or a nested group starts: the meta
-// of its group (the thread pointer sound: get_meta's checks may call
-// a_crash)
+// get_meta(p), p where a client block or a nested group starts (no slot
+// reserved below it): the meta of its group (the thread pointer sound:
+// get_meta's checks may call a_crash)
 proc[MallocAbs] get_meta_spec(c: Cfg, p: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)))
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && (ex g: nat, i: nat. starts_at(A, g, i, uint(p)) && clear_below(A, g, uint(p)))
   either { overflow() } or {
     return any m: bits[64] where ex i: nat. starts_at(A, uint(m), i, uint(p))
   }
@@ -1035,10 +1035,67 @@ proc[MallocAbs] nominal_size_spec(c: Cfg, p: bits[64], end: bits[64]) -> bits[64
 }
 
 // okay_to_free(g), g a group in use whose slots are all free: whether to
-// free it now -- musl's heuristic (the class's usage, bouncing), any answer
+// free it now -- musl's heuristic (the class's usage, bouncing), any
+// answer; but yes for a group mapped on its own (never reused for its
+// class: `reuse_ok`)
 proc[MallocAbs] okay_to_free_spec(c: Cfg, g: bits[64]) -> bits[32] {
   require holds_in(c, A, vm, objs, blocks) && is_used(A, uint(g)) && thread_ok(vm, fs_base)
-  either { overflow() } or { return any bits[32] }
+  either { overflow() } or { return any r: bits[32] where own_mapping(A.metas[uint(g)]) -> r != 0 }
+}
+
+// A group's memory let go (free's), ml bytes at mb: none (ml 0), or whole
+// pages the allocator owned (or a reserved slot's: the slot being freed)
+// and no longer owns -- for the caller to unmap
+pred let_go(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], mb: bits[64], ml: bits[64]) =
+  uint(ml) = 0 ||
+  (uint(mb) % 4096 = 0 && uint(ml) % 4096 = 0 && uint(mb) > 0 &&
+   (all a: nat. uint(mb) <= a && a < uint(mb) + uint(ml) ->
+      (a in footprint(c, A0, blocks) || in_reserved(A0, a)) && a notin footprint(c, A, blocks)))
+
+// what free's steps leave: the invariant, no slot reserved, no meta taken;
+// memory outside the allocator's (and the reserved slot's) untouched; the
+// allocator grown only by the reserved slot; what it lets go returned
+pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm, vm: Vm, objs: Objs, mb: bits[64], ml: bits[64]) =
+  holds_in(c, A, vm, objs, blocks) && no_reserved(A) && len(A.taken) = 0 &&
+  untouched(c, A0, blocks, before, vm, objs, {a: nat | in_reserved(A0, a)}) &&
+  (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || in_reserved(A0, a)) &&
+  let_go(c, A0, A, blocks, mb, ml)
+
+// nontrivial_free(g, i): slot i of the group g, the one reserved (its
+// block just freed), given back to the allocator -- unused again, or with
+// its group, all of whose slots are then free, the group given back
+// (free_group). What the allocator lets go (a group's own mapping)
+// returned. The thread pointer's word apart (its callees' calls).
+proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[64], bits[64]) {
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && len(A.taken) = 0 &&
+    is_used(A, uint(g)) && reserved_only(A, uint(g), uint(i))
+  either { overflow() } or {
+    let A0 = A
+    let before = vm
+    ghost A := any A2: Abs where true
+    let mb = any bits[64]
+    let ml = any bits[64]
+    havoc vm where freed_back(c, A0, A, blocks, before, vm, objs, mb, ml)
+    return (mb, ml)
+  }
+}
+
+// free_group(g): the group g, on no active list, its slots all unused
+// but maybe one reserved (its block just freed), given back: its meta
+// freed, the slot it is nested in given back too (nontrivial_free), or
+// its own mapping returned to be unmapped
+proc[MallocAbs] free_group_spec(c: Cfg, g: bits[64]) -> (bits[64], bits[64]) {
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && len(A.taken) = 0 &&
+    is_used(A, uint(g)) && A.metas[uint(g)].next = 0 && emptied(A, uint(g))
+  either { overflow() } or {
+    let A0 = A
+    let before = vm
+    ghost A := any A2: Abs where true
+    let mb = any bits[64]
+    let ml = any bits[64]
+    havoc vm where freed_back(c, A0, A, blocks, before, vm, objs, mb, ml)
+    return (mb, ml)
+  }
 }
 
 // A2: A with its groups' masks (which free slots are available, which
@@ -1334,6 +1391,18 @@ fn okay_to_free_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   let r = okay_to_free_spec(c, bits[64](args[0]))
   let w = result[32](r)
   return (w, any bits[64])
+}
+
+fn nontrivial_free_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 2
+  let (r0, r1) = nontrivial_free_spec(c, bits[64](args[0]), bits[32](args[1]))
+  return (r0, r1)
+}
+
+fn free_group_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let (r0, r1) = free_group_spec(c, bits[64](args[0]))
+  return (r0, r1)
 }
 
 fn activate_group_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {

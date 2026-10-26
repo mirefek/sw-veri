@@ -6,7 +6,7 @@
 theorem mp.gm_pre(c, A, vm, b, objs, fs, g, i, p): c in mallocng.Cfg ->
   c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
   A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) -> vm.bytes in fn_space(bits(64), bits(8)) ->
-  p in bits(64) -> i in omega -> mallocng.holds_m(c, A, vm, b) -> mallocng.shown_in(c, A, objs) -> mallocng.no_reserved(A) -> abi.thread_ok(vm, fs) -> mallocng.starts_at(A, g, i, p) ->
+  p in bits(64) -> i in omega -> mallocng.holds_m(c, A, vm, b) -> mallocng.shown_in(c, A, objs) -> mallocng.clear_below(A, g, p) -> abi.thread_ok(vm, fs) -> mallocng.starts_at(A, g, i, p) ->
   mallocng_specs.get_meta_pre(vm, objs, fs, c_src_malloc_mallocng_malloc.__malloc_context, c_src_malloc_mallocng_malloc.__malloc_size_classes, p) &&
   mallocng_specs.gm_meta(vm, p) = g && mallocng_specs.gm_idx(vm, p) = i
 proof
@@ -344,7 +344,7 @@ qed
 theorem mp.gm_run(c, p, s, h, o, g, i, g0, g1): c in mallocng.Cfg ->
   c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
   p in bits(64) -> s in abi.World -> h in mp.G ->
-  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.clear_below(h.A, g, p) -> abi.thread_ok(s.vm, s.fs_base) ->
   i in omega -> mallocng.starts_at(h.A, g, i, p) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
   runs(c_src_malloc_mallocng_malloc.get_meta(p, g0, g1), s, o) ->
@@ -389,7 +389,7 @@ qed
 theorem mp.gm_q(c, regs, s, h, p, o2, g, i, g0, g1): c in mallocng.Cfg ->
   c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
   p in bits(64) -> s in abi.World -> h in mp.G ->
-  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.clear_below(h.A, g, p) -> abi.thread_ok(s.vm, s.fs_base) ->
   i in omega -> mallocng.starts_at(h.A, g, i, p) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)[regs], s, o2) ->
@@ -442,9 +442,9 @@ proof
     show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_malloc.get_meta))
   qed
   have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_malloc.get_meta(p, g0, g1), s, o) ->
-      (((mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).objs, union2(s, h).blocks) && mallocng.no_reserved(union2(s, h).A)) &&
+      ((mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).objs, union2(s, h).blocks) &&
         abi.thread_ok(union2(s, h).vm, union2(s, h).fs_base)) &&
-        (ex g i. (g in omega && i in omega) && mallocng.starts_at(union2(s, h).A, g, i, p))) ->
+        (ex g i. (g in omega && i in omega) && (mallocng.starts_at(union2(s, h).A, g, i, p) && mallocng.clear_below(union2(s, h).A, g, p)))) ->
       abi.ovf_out(s, o) ||
       (ex s1 v. o = ok(s1, v) && any_rel(x3. x3 in bits(64) && (ex x4. x4 in omega && mallocng.starts_at(union2(s, h).A, x3, x4, p)),
         x3. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x3)))) proof
@@ -454,10 +454,9 @@ proof
     have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
     have hin0: mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) by simp(hpre, sd, hd)
     have {hin = mem, hsh = shown} := hin0
-    have hnr: mallocng.no_reserved(h.A) by simp(hpre, sd, hd)
     have hth: abi.thread_ok(s.vm, s.fs_base) by simp(hpre, sd, hd)
-    have ex1: ex g i. (g in omega && i in omega) && mallocng.starts_at(h.A, g, i, p) by simp(hpre, sd, hd)
-    obtain g i, hg hi hst from ex1
+    have ex1: ex g i. (g in omega && i in omega) && (mallocng.starts_at(h.A, g, i, p) && mallocng.clear_below(h.A, g, p)) by simp(hpre, sd, hd)
+    obtain g i, hg hi hst hnr from ex1
     have oc gb := apply(mp.gm_run[c := c, p := p, s := s, h := h, o := o, g := g, i := i, g0 := g0, g1 := g1], hc, hctx, hsct, hp, hs, hh, hin, hsh, hnr, hth, hi, hst, hg1, hr)
     have sa: mallocng.starts_at(union2(s, h).A, g, i, p) by simp(hst, sd, hd)
     have e4: ex x4. x4 in omega && mallocng.starts_at(union2(s, h).A, g, x4, p) by ex_intro({i}, taut(hi, sa))

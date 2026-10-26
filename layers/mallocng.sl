@@ -254,7 +254,8 @@ pred meta_in_memory(m: Mem, g: nat, v: MetaV) =
   prev: rd(m, g, 8) = v.prev && next: rd(m, g + 8, 8) = v.next && mem: rd(m, g + 16, 8) = v.mem &&
   avail: rd(m, g + 24, 4) = v.avail && freed: rd(m, g + 28, 4) = v.freed &&
   word: rd(m, g + 32, 8) = v.last_idx + 32 * v.freeable + 64 * v.sizeclass + 4096 * v.maplen &&
-  last: v.last_idx < 32 && freeable: v.freeable < 2 && sclass: v.sizeclass < 64
+  // (every group freeable: only donate.c, not linked here, makes others)
+  last: v.last_idx < 32 && freeable: v.freeable = 1 && sclass: v.sizeclass < 64
 
 fn ctx_word(c: Cfg, m: Mem, off: nat) -> nat = rd(m, c.ctx + off, 8)
 
@@ -645,6 +646,17 @@ pred starts_at(A: Abs, g: nat, i: nat, p: nat) =
 pred reserved_only(A: Abs, g: nat, i: nat) =
   i < len(A.slots[g]) && A.slots[g][i] = reserved &&
   (all h: nat, j: nat. j < len(A.slots[h]) && A.slots[h][j] = reserved -> h = g && j = i)
+
+// no reserved slot's byte in the group g below p (its header, the slots
+// before p, p's in-band header): what lies there the allocator's -- free
+// reads the header of a nested group whose own last slot is reserved
+pred clear_below(A: Abs, g: nat, p: nat) = all a: nat. A.metas[g].mem <= a && a < p -> !in_reserved(A, a)
+
+// the group g's slots all free but those reserved, the only reserved ones
+// (a group free gives back: its last block just freed)
+pred emptied(A: Abs, g: nat) =
+  (all j: nat. j < len(A.slots[g]) -> A.slots[g][j] = unused || A.slots[g][j] = reserved) &&
+  (all h: nat, j: nat. j < len(A.slots[h]) && A.slots[h][j] = reserved -> h = g)
 
 // A2: A with class sc's active list reorganised -- its order, its groups'
 // links and masks (which free slots are available, which freed) -- and

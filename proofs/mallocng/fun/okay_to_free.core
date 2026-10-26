@@ -12,7 +12,7 @@ theorem mp.otf_run(c, g, s, h, o, gst, gib): c in mallocng.Cfg -> c.ctx = c_src_
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gst[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o)) ->
   mp.ib_call(c, gib) ->
   runs(c_src_malloc_mallocng_free.okay_to_free(g, gst, gib), s, o) ->
-  abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32))
+  abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32) && (mallocng.own_mapping(h.A.metas[g]) -> !(r = 0)))
 proof
   assume hc hx hsct hg hs hh hin hsh hth hus hgst hib hr
   have ths: gc.sound(s) by simp(hth)
@@ -48,20 +48,38 @@ proof
   have md8: g.mem_defined(s, g, 32, 8, false) by simp(gnz, g32, mp(all_elim(um, {int_add(g, 32)}, {8}), arith(go), simp(), arith(), arith()))
   have mn8: g.mem_defined(s, g, 8, 8, false) by simp(gnz, g8, mp(all_elim(um, {int_add(g, 8)}, {8}), arith(go), simp(), arith(), arith()))
   step l1 l2 l3 l4 l5 l6 l7 l8 l9 l10 l11, k1 from hr with g.ldbf_det using conj(su, hg, md1, md2, md8, mn8)
-  // (an answer: some word)
-  have fin: all r. r in bits(32) -> o = ok(s, r) -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+  // (an answer: some word, yes for a group mapped on its own)
+  let OWN := mallocng.own_mapping(A.metas[g])
+  let OK := abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32) && (OWN -> !(r = 0)))
+  have fin: all r. r in bits(32) -> (OWN -> !(r = 0)) -> o = ok(s, r) -> OK proof
     fix r
-    assume hb he
-    show by disj({2}, ex_intro({r}, taut(he, hb)))
+    assume hb hy he
+    show by disj({2}, ex_intro({r}, taut(he, hb, hy)))
   qed
-  // not freeable: no
+  have yes: OWN -> !(1 = 0) by simp()
+  // the meta's word: its fields (freeable set), its class
+  have {H = inv} := expand(hin, mallocng.holds_m)
+  have {uo = used} := expand(H, mallocng.holds)
+  have gok := apply(mp.used_group, uo, hus)
+  have {mim} := expand(gok, mallocng.group_ok)
+  have _ _ _ _ _ _ bl bf bs := expand(mim, mallocng.meta_in_memory)
+  have _ mw := apply(mp.meta_word, hc, au, hat, hin, hus)
+  have vt: A.metas[g] in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(hat), go)
+  have vl: A.metas[g].last_idx in omega by simp(vt)
+  have vs: A.metas[g].sizeclass in omega by simp(vt)
+  have vm2: A.metas[g].maplen in omega by simp(vt)
+  have a32 .. := mp(all_elim(ms.gs_word, {V0}, {g}), vb, hg, top)
+  have mwd: mallocng_specs.mword(V0, g) = gimple.bytes_at(V0, int_add(g, 32), 8) by defs(simp(a32), mallocng_specs.mword)
+  // not freeable: no -- never
   let F0 := bits_and(8, bits_of_int(8, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 8))), 32) = 0
-  have r0: F0 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+  have fb := apply(mp.free_bit[vm := V0, g := g], vb, hg, top)
+  have w32: int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 8), 32), 2) = 1 by arith(rewrite(mwd, mw), bl, bf, vl, vs, vm2)
+  have nF0: !F0 by simp(fb, w32)
+  have r0: F0 -> OK proof
     assume h0
-    step e from k1 with h0
-    show := mp(all_elim(fin, {0}), simp(), e)
+    show by taut(h0, nF0)
   qed
-  have n0: !F0 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+  have n0: !F0 -> OK proof
     assume h0
     step k2 from k1 with h0
     // the size class: above 47, yes
@@ -74,13 +92,13 @@ proof
     have sC := apply(ms.sint_small, co, (int_lt(C, 2147483648) by arith(co)))
     have sI: sint(32, SC6) = C by simp(e6, sC)
     have s47: sint(32, 47) = 47 by defs(simp(), sint, pow2)
-    have r1: int_lt(47, C) -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+    have r1: int_lt(47, C) -> OK proof
       assume h1
       have c1: int_lt(sint(32, 47), sint(32, SC6)) by simp(sI, s47, h1)
       step e from k2 with c1
-      show := mp(all_elim(fin, {1}), simp(), e)
+      show := mp(all_elim(fin, {1}), simp(), yes, e)
     qed
-    have n1: !int_lt(47, C) -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+    have n1: !int_lt(47, C) -> OK proof
       assume h1
       have c1: !int_lt(sint(32, 47), sint(32, SC6)) by simp(sI, s47, h1)
       have gq: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, g))) -> runs(c_src_malloc_mallocng_malloc.get_stride_fun()[regs], s, o2) ->
@@ -119,32 +137,48 @@ proof
       step k4 from rewrite(ss, k3) with rd, ld, sm
       // a smaller stride than the class's: yes
       let L2 := int_lt(fst(r3), bits_sext(32, 64, bits_mul(32, A16, 16)))
-      have r2c: L2 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+      have r2c: L2 -> OK proof
         assume h2
         step e from k4 with h2
-        show := mp(all_elim(fin, {1}), simp(), e)
+        show := mp(all_elim(fin, {1}), simp(), yes, e)
       qed
-      have n2c: !L2 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+      have n2c: !L2 -> OK proof
         assume h2
         step k5 from k4 with h2, g.ldbf_det using conj(su, hg, md8)
+        // (so not a group mapped on its own: its class below 48, its
+        // stride the class's at least)
+        let V := A.metas[g]
+        let E := mallocng.size_classes[C]
+        have vc0 := mp(all_elim(ms.sext_mul16, {E}), eo, el)
+        have vc: bits_sext(32, 64, bits_mul(32, A16, 16)) = int_mul(16, E) := rewrite(sym(a16), vc0, {1})
+        have r3b r3i := hR3
+        have sno := apply(mp.stride_nat, hat, go, gok)
+        have f3: bits_of_int(64, fst(r3)) = fst(r3) by simp(r3i)
+        have sle: int_le(bits_of_int(64, mallocng.stride(V)), mallocng.stride(V)) by defs(arith(sno), bits_of_int, pow2)
+        have csc: C = V.sizeclass by arith(rewrite(mwd, mw), bl, bf, bs, vl, vs, vm2)
+        have esc: E = mallocng.size_classes[V.sizeclass] by simp(csc)
+        have st16: !int_lt(mallocng.stride(V), int_mul(16, mallocng.size_classes[V.sizeclass])) by arith(rewrite(vc, h2), f3, r3b, sle, esc)
+        have s48: int_lt(V.sizeclass, 48) by arith(csc, c48)
+        have cu: mallocng.UNIT = 16 by defs(refl({16}), mallocng.UNIT)
+        have nown: !OWN by defs(simp(st16, s48, cu), mallocng.own_mapping)
         // not mapped (maplen 0): yes
         let L3 := bits_and(64, bits_of_int(64, int_mod(int_div(W, int_pow(2, 0)), int_pow(2, 64))), bits_neg(64, 4096)) = 0
-        have r3c: L3 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+        have r3c: L3 -> OK proof
           assume h3
           step e from k5 with h3
-          show := mp(all_elim(fin, {1}), simp(), e)
+          show := mp(all_elim(fin, {1}), simp(), yes, e)
         qed
-        have n3c: !L3 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+        have n3c: !L3 -> OK proof
           assume h3
           step k6 from k5 with h3, g.ld64_det using conj(su, hg, mn8)
           // not the only active group of its class: yes
           let L4 := g = bits_of_int(64, gimple.bytes_at(V0, int_add(g, 8), 8))
-          have r4c: !L4 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+          have r4c: !L4 -> OK proof
             assume h4
             step e from k6 with h4
-            show := mp(all_elim(fin, {1}), simp(), e)
+            show := mp(all_elim(fin, {1}), simp(), yes, e)
           qed
-          have n4c: L4 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+          have n4c: L4 -> OK proof
             assume h4
             // is_bouncing called on the class
             have iq: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(32, SC6))) -> runs(gib[regs], s, o2) ->
@@ -156,12 +190,12 @@ proof
             step r4 r5, k7 hR5 from k6 with h4, iq using conj(hs, ths, I32, vV)
             // not bouncing: yes
             let L5 := bits_of_int(32, fst(r5)) = 0
-            have r5c: L5 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+            have r5c: L5 -> OK proof
               assume h5
               step e from rewrite(ss, k7) with h5
-              show := mp(all_elim(fin, {1}), simp(), e)
+              show := mp(all_elim(fin, {1}), simp(), yes, e)
             qed
-            have n5c: !L5 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+            have n5c: !L5 -> OK proof
               assume h5
               // the slots' count: last_idx + 1
               let LI := bits_of_int(5, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 1), int_pow(2, 0)), int_pow(2, 5)))
@@ -196,15 +230,15 @@ proof
               // used enough, few slots: yes; else no
               let CN := bits_sext(32, 64, bits_add(32, LI, 1))
               let L6 := int_le(bits_mul(64, CN, 9), bits_of_int(64, gimple.bytes_at(V0, int_add(U, 0), 8))) && int_le(CN, 19)
-              have r6c: L6 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+              have r6c: L6 -> OK proof
                 assume h6
                 step e from k9 with h6
-                show := mp(all_elim(fin, {1}), simp(), e)
+                show := mp(all_elim(fin, {1}), simp(), yes, e)
               qed
-              have n6c: !L6 -> abi.ovf_out(s, o) || (ex r. o = ok(s, r) && r in bits(32)) proof
+              have n6c: !L6 -> OK proof
                 assume h6
                 step e from k9 with h6
-                show := mp(all_elim(fin, {0}), simp(), e)
+                show := mp(all_elim(fin, {0}), simp(), (OWN -> !(0 = 0) by taut(nown)), e)
               qed
               show by taut(r6c, n6c)
             qed
@@ -247,13 +281,16 @@ proof
   have hus: mallocng.is_used(h.A, g) by simp(hpre, sd, hd)
   have hth: abi.thread_ok(s.vm, s.fs_base) by simp(hpre, sd, hd)
   have run := apply(mp.otf_run[c := c, g := g, s := s, h := h, o := o, gst := gst, gib := gib], hc, hx, hsct, hg, hw, hh, hin, hsh, hth, hus, hgst, hib, hr)
-  have k: (ex r. o = ok(s, r) && r in bits(32)) ->
-      (ex s1 v. o = ok(s1, v) && any_rel(x. x in bits(32), x. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x)))) proof
+  let OWN := mallocng.own_mapping(union2(s, h).A.metas[g])
+  have eA: union2(s, h).A = h.A by simp(sd, hd)
+  have k: (ex r. o = ok(s, r) && r in bits(32) && (mallocng.own_mapping(h.A.metas[g]) -> !(r = 0))) ->
+      (ex s1 v. o = ok(s1, v) && any_rel(x. x in bits(32) && (OWN -> !(x = 0)), x. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x)))) proof
     assume e
-    obtain r, ho hb from e
-    have e1: ex x. x in bits(32) && exc(pair(union2(s, h), empty), pair("ret", r)) = exc(pair(union2(s, h), empty), pair("ret", x))
-      by ex_intro({r}, taut(hb, refl({exc(pair(union2(s, h), empty), pair("ret", r))})))
-    have a: any_rel(x. x in bits(32), x. exc(pair(union2(s, h), empty), pair("ret", r)) = exc(pair(union2(s, h), empty), pair("ret", x)))
+    obtain r, ho hb hy from e
+    have hy2: OWN -> !(r = 0) by simp(hy, eA)
+    have e1: ex x. (x in bits(32) && (OWN -> !(x = 0))) && exc(pair(union2(s, h), empty), pair("ret", r)) = exc(pair(union2(s, h), empty), pair("ret", x))
+      by ex_intro({r}, taut(hb, hy2, refl({exc(pair(union2(s, h), empty), pair("ret", r))})))
+    have a: any_rel(x. x in bits(32) && (OWN -> !(x = 0)), x. exc(pair(union2(s, h), empty), pair("ret", r)) = exc(pair(union2(s, h), empty), pair("ret", x)))
       by defs(taut(e1), any_rel)
     show by ex_intro({s}, {r}, taut(ho, a))
   qed
