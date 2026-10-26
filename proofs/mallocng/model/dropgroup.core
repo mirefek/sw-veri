@@ -1556,3 +1556,183 @@ proof
   have c4: !mallocng.is_used(D, 0) by taut(apply(mp.drop_used[A := A, g := g, k := k, h := 0], ha, hp, hk, hkl, hkg), n4)
   show by defs(taut(c1, c2, c3, c4), mallocng.normal)
 qed
+
+// (a slot's interior: past its group's header, before its last slot's end)
+theorem mp.slot_in(A, M, b, g, i, a): A in mallocng.Abs -> g in omega -> mallocng.group_ok(A, M, b, g) -> i in omega -> int_lt(i, seq_len(A.slots[g])) ->
+  mallocng.in_slot(A.metas[g], i, a) ->
+  lo: int_lt(int_add(A.metas[g].mem, 12), a) && hi: int_lt(a, mallocng.slot_end(A.metas[g], A.metas[g].last_idx))
+proof
+  assume ha hg gok hi hil his
+  have {gm = mem, gl = last, gs = stride, gss = start, gse = end, gns = nslots} := apply(mp.geo, ha, hg, gok)
+  have ci: mallocng.IB = 4 by defs(refl({4}), mallocng.IB)
+  have s1 s2 := expand(his, mallocng.in_slot)
+  have il: int_le(i, A.metas[g].last_idx) by arith(gns, hil, hi, gl)
+  have mi := mp(all_elim(ms.mul_le, {mallocng.stride(A.metas[g])}, {i}, {mallocng.stride(A.metas[g])}, {A.metas[g].last_idx}), gs, hi, simp(gs), simp(gl), arith(gs), il)
+  have mo: int_mul(mallocng.stride(A.metas[g]), i) in omega by simp(gs, hi)
+  have q1: int_lt(int_add(A.metas[g].mem, 12), a) by arith(s1, ci, all_elim(gss, {i}), mo)
+  have q2: int_lt(a, mallocng.slot_end(A.metas[g], A.metas[g].last_idx)) by arith(s2, all_elim(gse, {i}), all_elim(gse, {A.metas[g].last_idx}), mi)
+  show by taut(q1, q2)
+qed
+
+// (a reserved slot's byte: g's, if g holds the only reserved slots)
+theorem mp.res_of(c, A, M, b, brk, g, a): A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) -> mallocng.emptied(A, g) -> mallocng.in_reserved(A, a) ->
+  ex i. i in omega && int_lt(i, seq_len(A.slots[g])) && mallocng.in_slot(A.metas[g], i, a)
+proof
+  assume ha H emp r
+  have _ em2 := expand(emp, mallocng.emptied)
+  obtain y i, hy hi hyu hil hs his from expand(r, mallocng.in_reserved)
+  have yg := mp(all_elim(em2, {y}, {i}), conj(hy, hi), conj(hil, hs))
+  show by ex_intro({i}, taut(hi, rewrite(yg, hil), rewrite(yg, his)))
+qed
+
+// The invariant in the state without g, a group mapped on its own (the
+// memory as it was)
+theorem mp.drop_holds_own(c, A, M, b, brk, g, k): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds(c, A, M, b, brk) -> k in omega -> int_lt(k, seq_len(A.used)) -> A.used[k] = g -> int_lt(0, A.metas[g].maplen) ->
+  mallocng.emptied(A, g) -> A.metas[g].next = 0 -> mallocng.holds(c, mp.drop(A, g, k), M, b, brk)
+proof
+  assume hc hu ha hb H hk hkl hkg mg emp nx
+  let D := mp.drop(A, g, k)
+  have {himg = image, hctx = ctx, hfr = fresh, har = areas, hp = part, huo = used, hnm = normal, hbrk = brk, hpm = perms, hsep = sep, hwf = wf,
+    hcl = classes, hdb = debruijn, hfix = fixed, hga = apart} := expand(H, mallocng.holds)
+  have ul: A.used in list_type(omega) by simp(ha)
+  have go: g in omega := rewrite(hkg, apply(at_type[l := A.used, t := omega, i := k], ul, hk, hkl))
+  have hg: mallocng.is_used(A, g) by defs(ex_intro({k}, taut(hk, hkl, hkg)), mallocng.is_used)
+  have dr := apply(mp.dropr_own[c := c, A := A, M := M, b := b, brk := brk, g := g, k := k], ha, H, hk, hkl, hkg, mg)
+  have {du = used, dm = metas} := dr
+  have u2 := apply(mp.dr_used_ok[c := c, A := A, A2 := D, M := M, b := b, brk := brk, g := g], ha, H, hg, emp, dr)
+  have {a2 = active, p2 = partial, r2 = reuse, b2 = in_slots} := apply(mp.dr_lists[c := c, A := A, A2 := D, M := M, b := b, brk := brk, g := g], ha, H, hg, nx, emp, dr)
+  have pt2 := apply(mp.drop_part[A := A, g := g, k := k], ha, hp, hk, hkl, hkg)
+  have nm2 := apply(mp.drop_normal[A := A, g := g, k := k], ha, hnm, hp, hk, hkl, hkg)
+  have ar2 := apply(mp.drop_areas[c := c, A := A, g := g, k := k, M := M], ha, go, har)
+  have sp2 := apply(mp.drop_sep[c := c, A := A, g := g, k := k], hc, hu, ha, hnm, hp, hk, hkl, hkg, hsep)
+  have ga2 := apply(mp.drop_apart[c := c, A := A, g := g, k := k], ha, hp, hk, hkl, hkg, hga)
+  have ecx: mallocng.ctx_ok(c, D, M) = mallocng.ctx_ok(c, A, M) by defs(simp(), mallocng.ctx_ok, mallocng.ctx_word)
+  have nz: !(A.init_done = 0) proof
+    assume z
+    have {lu = used} := mp(expand(hfr, mallocng.fresh_ok), z)
+    show by arith(lu, hk, hkl)
+  qed
+  have fr2: mallocng.fresh_ok(c, D, M) by defs(taut((!(D.init_done = 0) by simp(nz))), mallocng.fresh_ok)
+  have bk2: mallocng.brk_ok(D, brk) by defs(simp(expand(hbrk, mallocng.brk_ok)), mallocng.brk_ok)
+  have ff2: mallocng.fixed_free(c, D, b) by defs(simp(expand(hfix, mallocng.fixed_free)), mallocng.fixed_free)
+  have eax: mallocng.auxv_ranges(D) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)
+  // (a byte of another group: in no reserved slot -- those g's, apart)
+  have hr3: all x a. mallocng.is_used(D, x) -> a in omega -> mallocng.in_range(a, mallocng.group_range(D.metas[x])) -> !(a in malloc.live_of(b)) ->
+      !mallocng.in_reserved(D, a) -> !mallocng.in_reserved(A, a) proof
+    fix x a
+    assume iu2 hao inr nl nr2
+    have iu xg := (mallocng.is_used(A, x) && !(x = g) by taut(all_elim(du, {x}), iu2))
+    have {xo = nat} := apply(mp.used_nat, ha, iu)
+    have inr1 := rewrite(mp(all_elim(dm, {x}), xo, xg), inr)
+    have em1 _ := expand(emp, mallocng.emptied)
+    have gnn: all i. i in omega -> int_lt(i, seq_len(A.slots[g])) -> !(fst(A.slots[g][i]) = 2) proof
+      fix i
+      assume hi hil
+      have q := mp(all_elim(em1, {i}), hi, hil)
+      have c1: A.slots[g][i] = tag(0, empty) -> !(fst(A.slots[g][i]) = 2) proof
+        assume e
+        show by simp(e)
+      qed
+      have c2: A.slots[g][i] = tag(3, empty) -> !(fst(A.slots[g][i]) = 2) proof
+        assume e
+        show by simp(e)
+      qed
+      show by taut(q, c1, c2)
+    qed
+    have na := apply(mp.own_disj[c := c, A := A, M := M, b := b, brk := brk, g := g, x := x, a := a], hc, hu, ha, H, hg, mg, gnn, iu, xg, hao, inr1)
+    have r: mallocng.in_reserved(A, a) -> false proof
+      assume ir
+      obtain i, hi hil his from apply(mp.res_of[c := c, A := A, M := M, b := b, brk := brk, g := g, a := a], ha, H, emp, ir)
+      have gok := apply(mp.used_group, huo, hg)
+      have {lo = lo, hi2 = hi} := apply(mp.slot_in[A := A, M := M, b := b, g := g, i := i, a := a], ha, go, gok, hi, hil, his)
+      have {gm = mem} := apply(mp.used_nat, ha, hg)
+      have ing := apply(mp.group_bytes[A := A, M := M, b := b, h := g, a := a], ha, go, gok, hao, arith(lo, gm), arith(hi2))
+      show by taut(na, ing)
+    qed
+    show by taut(r)
+  qed
+  have pm2 := apply(mp.dr_perms[c := c, A := A, A2 := D, M := M, b := b, g := g], hpm, dr, eax, ha, hr3)
+  show by defs(taut(himg, rewrite(sym(ecx), hctx), fr2, ar2, pt2, u2, a2, p2, r2, b2, nm2, bk2, pm2, sp2, hwf, hcl, hdb, ff2, ga2), mallocng.holds)
+qed
+
+// The invariant in the state without g, a group nested in slot j of h, that
+// slot reserved (the memory as it was)
+theorem mp.drop_holds_nest(c, A, M, b, brk, g, k, h, j): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds(c, A, M, b, brk) -> k in omega -> int_lt(k, seq_len(A.used)) -> A.used[k] = g ->
+  mallocng.is_used(A, h) -> j in omega -> int_lt(j, seq_len(A.slots[h])) -> A.slots[h][j] = tag(2, g) ->
+  mallocng.emptied(A, g) -> A.metas[g].next = 0 -> mallocng.holds(c, mp.dropn(A, g, k, h, j), M, b, brk)
+proof
+  assume hc hu ha hb H hk hkl hkg hh hj hjl ehj emp nx
+  let D := mp.drop(A, g, k)
+  let S := fn_update(D.slots, h, fn_update(D.slots[h], j, tag(3, empty)))
+  let N := mp.dropn(A, g, k, h, j)
+  have {himg = image, hctx = ctx, hfr = fresh, har = areas, hp = part, huo = used, hnm = normal, hbrk = brk, hpm = perms, hsep = sep, hwf = wf,
+    hcl = classes, hdb = debruijn, hfix = fixed, hga = apart} := expand(H, mallocng.holds)
+  have ul: A.used in list_type(omega) by simp(ha)
+  have go: g in omega := rewrite(hkg, apply(at_type[l := A.used, t := omega, i := k], ul, hk, hkl))
+  have hg: mallocng.is_used(A, g) by defs(ex_intro({k}, taut(hk, hkl, hkg)), mallocng.is_used)
+  have {gm = mem, hst = start, hfi = fits, hhd = hdr} := apply(mp.nest_geo[c := c, A := A, M := M, b := b, brk := brk, h := h, j := j, g := g], ha, H, hh, hj, hjl, ehj)
+  have hgn: !(h = g) proof
+    assume e
+    show by arith(rewrite(e, hhd), rewrite(e, hst), gm)
+  qed
+  have {ho = nat} := apply(mp.used_nat, ha, hh)
+  have dr := apply(mp.dropr_nest[c := c, A := A, M := M, b := b, brk := brk, g := g, k := k, h := h, j := j], hc, hu, ha, H, hk, hkl, hkg, hh, hj, hjl, ehj)
+  have {du = used, dm = metas} := dr
+  have {sp = part, sc = ctx, sf = fresh, sa = areas, sb = brk, sx = fixed, sap = apart, sr = regions, sax = auxv} := mp.sl_same[c := c, X := D, S := S, M := M, b := b, brk := brk]
+  have u2 := apply(mp.dr_used_ok[c := c, A := A, A2 := N, M := M, b := b, brk := brk, g := g], ha, H, hg, emp, dr)
+  have {a2 = active, p2 = partial, r2 = reuse, b2 = in_slots} := apply(mp.dr_lists[c := c, A := A, A2 := N, M := M, b := b, brk := brk, g := g], ha, H, hg, nx, emp, dr)
+  have pt2 := rewrite(sym(sp), apply(mp.drop_part[A := A, g := g, k := k], ha, hp, hk, hkl, hkg))
+  // the normal form: h in use, its slots' count kept
+  have dp := apply(mp.drop_used[A := A, g := g, k := k, h := h], ha, hp, hk, hkl, hkg)
+  have hlen: all x. x in omega -> !mallocng.is_used(D, x) -> seq_len(S[x]) = seq_len(D.slots[x]) proof
+    fix x
+    assume hx nu
+    have iud: mallocng.is_used(D, h) by taut(dp, hh, hgn)
+    have xh: !(x = h) proof
+      assume e
+      show by taut(rewrite(e, nu), iud)
+    qed
+    show by simp(mp(app_update_other[f := D.slots, k := h, v := fn_update(D.slots[h], j, tag(3, empty)), x := x], xh))
+  qed
+  have nm2 := apply(mp.normal_sl[X := D, S := S], apply(mp.drop_normal[A := A, g := g, k := k], ha, hnm, hp, hk, hkl, hkg), hlen)
+  have ar2 := rewrite(sym(sa), apply(mp.drop_areas[c := c, A := A, g := g, k := k, M := M], ha, go, har))
+  have sp2 := rewrite(sym(sr), apply(mp.drop_sep[c := c, A := A, g := g, k := k], hc, hu, ha, hnm, hp, hk, hkl, hkg, hsep))
+  have ga2 := rewrite(sym(sap), apply(mp.drop_apart[c := c, A := A, g := g, k := k], ha, hp, hk, hkl, hkg, hga))
+  have ecx: mallocng.ctx_ok(c, D, M) = mallocng.ctx_ok(c, A, M) by defs(simp(), mallocng.ctx_ok, mallocng.ctx_word)
+  have nz: !(A.init_done = 0) proof
+    assume z
+    have {lu = used} := mp(expand(hfr, mallocng.fresh_ok), z)
+    show by arith(lu, hk, hkl)
+  qed
+  have fr2: mallocng.fresh_ok(c, D, M) by defs(taut((!(D.init_done = 0) by simp(nz))), mallocng.fresh_ok)
+  have bk2: mallocng.brk_ok(D, brk) by defs(simp(expand(hbrk, mallocng.brk_ok)), mallocng.brk_ok)
+  have ff2: mallocng.fixed_free(c, D, b) by defs(simp(expand(hfix, mallocng.fixed_free)), mallocng.fixed_free)
+  have eax: mallocng.auxv_ranges(N) = mallocng.auxv_ranges(A) := trans(sax, (mallocng.auxv_ranges(D) = mallocng.auxv_ranges(A) by defs(simp(), mallocng.auxv_ranges)))
+  // (a reserved slot's byte before: g's, so in h's slot j, reserved now)
+  have hr3: all x a. mallocng.is_used(N, x) -> a in omega -> mallocng.in_range(a, mallocng.group_range(N.metas[x])) -> !(a in malloc.live_of(b)) ->
+      !mallocng.in_reserved(N, a) -> !mallocng.in_reserved(A, a) proof
+    fix x a
+    assume iu2 hao inr nl nr2
+    have r: mallocng.in_reserved(A, a) -> false proof
+      assume ir
+      obtain i, hi hil his from apply(mp.res_of[c := c, A := A, M := M, b := b, brk := brk, g := g, a := a], ha, H, emp, ir)
+      have gok := apply(mp.used_group, huo, hg)
+      have {lo = lo, hi2 = hi} := apply(mp.slot_in[A := A, M := M, b := b, g := g, i := i, a := a], ha, go, gok, hi, hil, his)
+      have ci: mallocng.IB = 4 by defs(refl({4}), mallocng.IB)
+      have ish: mallocng.in_slot(A.metas[h], j, a) by defs(arith(lo, hi2, hst, hfi, ci), mallocng.in_slot)
+      have hu2: mallocng.is_used(N, h) by taut(all_elim(du, {h}), hh, hgn)
+      have {nsl = slen, nnest = nest} := dr
+      have l2: int_lt(j, seq_len(N.slots[h])) := rewrite(sym(mp(all_elim(nsl, {h}), ho, hgn)), hjl)
+      have s2 := mp(all_elim(nnest, {h}, {j}), conj(ho, hj), hgn, hjl, ehj)
+      have ish2 := rewrite(sym(mp(all_elim(dm, {h}), ho, hgn)), ish)
+      have rr: mallocng.in_reserved(N, a) by defs(ex_intro({h}, {j}, taut(ho, hj, hu2, l2, s2, ish2)), mallocng.in_reserved)
+      show by taut(rr, nr2)
+    qed
+    show by taut(r)
+  qed
+  have pm2 := apply(mp.dr_perms[c := c, A := A, A2 := N, M := M, b := b, g := g], hpm, dr, eax, ha, hr3)
+  show by defs(taut(himg, rewrite(sym(sc), rewrite(sym(ecx), hctx)), rewrite(sym(sf), fr2), ar2, pt2, u2, a2, p2, r2, b2, nm2,
+    rewrite(sym(sb), bk2), pm2, sp2, hwf, hcl, hdb, rewrite(sym(sx), ff2), ga2), mallocng.holds)
+qed
