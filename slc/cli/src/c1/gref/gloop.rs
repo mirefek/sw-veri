@@ -63,6 +63,29 @@ pub(super) fn loops_of(labels: &[u128], succ: &BTreeMap<u128, Vec<Option<u128>>>
             }
         }
     }
+    // (a label only the loop leads to, every way from it a return or on in
+    // the loop: the loop's too -- a return from inside the structured loop,
+    // not an exit to the code after it)
+    loop {
+        let mut grew = false;
+        for bs in body.values_mut() {
+            for &x in labels {
+                if bs.contains(&x) {
+                    continue;
+                }
+                let ps = preds.get(&x).cloned().unwrap_or_default();
+                let only_in = !ps.is_empty() && ps.iter().all(|p| bs.contains(p));
+                let returns = succ.get(&x).is_some_and(|ss| ss.iter().all(|s| s.is_none_or(|s| bs.contains(&s))));
+                if only_in && returns {
+                    bs.insert(x);
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     let mut lp: BTreeMap<u128, u128> = BTreeMap::new();
     for (&h, bs) in &body {
         for &x in bs {

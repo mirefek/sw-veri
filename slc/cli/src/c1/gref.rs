@@ -977,6 +977,23 @@ impl<'e> Gen<'e> {
                             return self.run(&rr, &[]);
                         }
                     }
+                    // (the structured side's `A || B`, the CFG testing A --
+                    // a short circuit: A tested alone first, B where it
+                    // fails, tr.qe_or)
+                    if let Some(ab) = self.app(&cu, "or", 2).map(|x| x.to_vec()) {
+                        let nab = self.canon(&self.mk("not", vec![cu2.clone()]));
+                        if ncu0 == nab && self.lam(&ab[0], &uctx, &[]).is_some_and(|a0| self.canon(&a0) == c0) {
+                            let al = self.lam(&ab[0], &uctx, &["x0", "x1"]).ok_or("a condition")?;
+                            let bl = self.lam(&ab[1], &uctx, &["x0", "x1"]).ok_or("a condition")?;
+                            let b13 = self.lam(&b1, &uctx, &["x0", "x1", "x8"]).ok_or("a way")?;
+                            let b23 = self.lam(&b2, &uctx, &["x0", "x1", "x8"]).ok_or("a way")?;
+                            let k3 = self.lam(&uk, &uctx, &["x0", "x1", "x8"]).ok_or("the structured block's rest")?;
+                            let (j, inst) = self.by(qi, "tr.qe_or", &[("A", al), ("B", bl), ("b1", b13), ("b2", b23), ("k", k3)])?;
+                            let rest = self.walk(lo, j, w)?;
+                            let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(mp(inst, vec![t(w)]))]);
+                            return self.run(&rr, &[]);
+                        }
+                    }
                     self.trace(|| format!("ref: if differs: low {} / high {}", self.print(&self.expand(&cl)), self.print(&self.expand(&cu2))));
                 }
                 if let Some((lemma, b1, b2)) = way {

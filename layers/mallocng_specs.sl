@@ -1025,6 +1025,22 @@ proc[MallocAbs] is_bouncing_spec(c: Cfg, sc: bits[32]) -> bits[32] {
   either { overflow() } or { return any bits[32] }
 }
 
+// get_nominal_size(p, end), p a client block in slot i of a group, end the
+// slot's end: the block's size (its reserved-size encoding up to end, as
+// enframe left it -- the code's checks of it pass)
+proc[MallocAbs] nominal_size_spec(c: Cfg, p: bits[64], end: bits[64]) -> bits[64] {
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) &&
+    (ex g: nat, i: nat. is_used(A, g) && i < len(A.slots[g]) && A.slots[g][i] = block(uint(p)) && uint(end) = slot_end(A.metas[g], i))
+  either { overflow() } or { return bits[64](blocks[p].value) }
+}
+
+// okay_to_free(g), g a group in use whose slots are all free: whether to
+// free it now -- musl's heuristic (the class's usage, bouncing), any answer
+proc[MallocAbs] okay_to_free_spec(c: Cfg, g: bits[64]) -> bits[32] {
+  require holds_in(c, A, vm, objs, blocks) && is_used(A, uint(g))
+  either { overflow() } or { return any bits[32] }
+}
+
 // A2: A with its groups' masks (which free slots are available, which
 // freed) changed, nothing else
 pred masks_only(A: Abs, A2: Abs) =
@@ -1302,6 +1318,20 @@ fn counters_spec_fun1(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
 fn is_bouncing_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   require len(args) >= 1
   let r = is_bouncing_spec(c, bits[32](args[0]))
+  let w = result[32](r)
+  return (w, any bits[64])
+}
+
+fn nominal_size_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 2
+  let r = nominal_size_spec(c, bits[64](args[0]), bits[64](args[1]))
+  let w = result[64](r)
+  return (w, any bits[64])
+}
+
+fn okay_to_free_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  let r = okay_to_free_spec(c, bits[64](args[0]))
   let w = result[32](r)
   return (w, any bits[64])
 }
