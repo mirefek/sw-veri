@@ -1,0 +1,264 @@
+// Freeing a slot (free's nontrivial_free): a reserved slot -- its block
+// just freed -- made unused, its bit added to its group's freed mask; the
+// invariant kept.
+
+// ----------------------------------------------------------------------
+//  The abstract step: slot i of g, reserved, unused; its freed bit set
+abbrev mp.unres_meta(V, i) := fn_update(fn_update(V, "avail", V.avail), "freed", int_add(V.freed, pow2(i)))
+
+abbrev mp.unres_m(A, g, i) := fn_update(A, "metas", fn_update(A.metas, g, mp.unres_meta(A.metas[g], i)))
+
+abbrev mp.unres_sl(A, g, i) := fn_update(A.slots, g, fn_update(A.slots[g], i, tag(0, empty)))
+
+abbrev mp.unres_abs(A, g, i) := fn_update(mp.unres_m(A, g, i), "slots", mp.unres_sl(A, g, i))
+
+theorem mp.unres_state(A, g, i): A in mallocng.Abs -> g in omega -> i in omega -> int_lt(i, seq_len(A.slots[g])) -> A.slots[g][i] = tag(3, empty) ->
+  mallocng.bit(A.metas[g].freed, i) = 0 ->
+  abs1: mp.unres_m(A, g, i) in mallocng.Abs && univ1: mp.unres_m(A, g, i) in univ(1) && mo: mallocng_specs.masks_only(A, mp.unres_m(A, g, i)) &&
+  geoms: mp.geoms(A, mp.unres_abs(A, g, i)) && metas: mp.unres_abs(A, g, i).metas = mp.unres_m(A, g, i).metas &&
+  atg: mp.unres_m(A, g, i).metas[g] = mp.unres_meta(A.metas[g], i) &&
+  others: (all h. h in omega -> !(h = g) -> mp.unres_m(A, g, i).metas[h] = A.metas[h]) &&
+  sg: mp.unres_abs(A, g, i).slots[g][i] = tag(0, empty) &&
+  sj: (all j. !(j = i) -> mp.unres_abs(A, g, i).slots[g][j] = A.slots[g][j]) &&
+  sh: (all h. !(h = g) -> mp.unres_abs(A, g, i).slots[h] = A.slots[h]) &&
+  slen: seq_len(mp.unres_abs(A, g, i).slots[g]) = seq_len(A.slots[g]) &&
+  bits: (all j. j in omega -> mallocng.bit(mp.unres_meta(A.metas[g], i).freed, j) = ite(j = i, 1, mallocng.bit(A.metas[g].freed, j))) &&
+  back: fn_update(mp.unres_abs(A, g, i), "slots", A.slots) = mp.unres_m(A, g, i) &&
+  freed: int_add(A.metas[g].freed, pow2(i)) in omega
+proof
+  assume ha hg hi hil hrs hb
+  let W := mp.unres_meta(A.metas[g], i)
+  let A1 := mp.unres_m(A, g, i)
+  let S2 := mp.unres_sl(A, g, i)
+  let A2 := mp.unres_abs(A, g, i)
+  have vt: A.metas[g] in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(ha), hg)
+  have avo: A.metas[g].avail in omega by simp(vt)
+  have fo: A.metas[g].freed in omega by simp(vt)
+  have pp := mp(pow2_pos[k := i], hi)
+  have nb := apply(mp.nbit[x := A.metas[g].freed, i := i], fo, hi)
+  have ncb: bit(A.metas[g].freed, i) -> false proof
+    assume n
+    have z: ite(bit(A.metas[g].freed, i), 1, 0) = 1 by simp(n)
+    show by arith(trans(sym(nb), hb), z)
+  qed
+  have cb: !bit(A.metas[g].freed, i) by taut(ncb)
+  have nfo: int_add(A.metas[g].freed, pow2(i)) in omega by arith(fo, pp)
+  have wt := apply(mp.meta_upd[V := A.metas[g], av := A.metas[g].avail, fr := int_add(A.metas[g].freed, pow2(i))], vt, avo, nfo)
+  have {a1 = abs, u1 = univ} := apply(mp.abs_upd[A := A, g := g, W := W], ha, hg, wt)
+  // A1's metas: W at g, the others A's
+  have em: A1.metas = fn_update(A.metas, g, W) := app_update_same[f := A, k := "metas", v := fn_update(A.metas, g, W)]
+  have eg: A1.metas[g] = W := trans(subst({y. A1.metas[g] = y[g]}, em, refl({A1.metas[g]})), app_update_same[f := A.metas, k := g, v := W])
+  have eo: all x0. x0 in omega -> !(x0 = g) -> A1.metas[x0] = A.metas[x0] proof
+    fix x
+    assume hx hne
+    show := trans(subst({y. A1.metas[x] = y[x]}, em, refl({A1.metas[x]})), mp(app_update_other[f := A.metas, k := g, v := W, x := x], hne))
+  qed
+  // masks only
+  have af ad := (is_fun(A) && "metas" in dom(A) by simp(expand(ha, mallocng.Abs)))
+  have ot: fn_update(A1, "metas", A.metas) = A :=
+    trans(fn_update_twice[f := A, k := "metas", a := fn_update(A.metas, g, W), b := A.metas], mp(fn_update_same[f := A, k := "metas"], af, ad))
+  have gr: all x0. x0 in omega -> fn_update(fn_update(A1.metas[x0], "avail", 0), "freed", 0) = fn_update(fn_update(A.metas[x0], "avail", 0), "freed", 0) proof
+    fix x
+    assume hx
+    have c1: x = g -> fn_update(fn_update(A1.metas[x], "avail", 0), "freed", 0) = fn_update(fn_update(A.metas[x], "avail", 0), "freed", 0) proof
+      assume e
+      have cm := mp.clear_masks[V := A.metas[g], a := A.metas[g].avail, f := int_add(A.metas[g].freed, pow2(i))]
+      have k1 := subst({y. fn_update(fn_update(A1.metas[g], "avail", 0), "freed", 0) = fn_update(fn_update(y, "avail", 0), "freed", 0)}, eg,
+        refl({fn_update(fn_update(A1.metas[g], "avail", 0), "freed", 0)}))
+      have k2 := trans(k1, cm)
+      show := subst({y. fn_update(fn_update(A1.metas[y], "avail", 0), "freed", 0) = fn_update(fn_update(A.metas[y], "avail", 0), "freed", 0)}, sym(e), k2)
+    qed
+    have c2: !(x = g) -> fn_update(fn_update(A1.metas[x], "avail", 0), "freed", 0) = fn_update(fn_update(A.metas[x], "avail", 0), "freed", 0) proof
+      assume ne
+      have e := mp(all_elim(eo, {x}), hx, ne)
+      show := subst({y. fn_update(fn_update(A1.metas[x], "avail", 0), "freed", 0) = fn_update(fn_update(y, "avail", 0), "freed", 0)}, e,
+        refl({fn_update(fn_update(A1.metas[x], "avail", 0), "freed", 0)}))
+    qed
+    show by taut(c1, c2)
+  qed
+  have mo: mallocng_specs.masks_only(A, A1) by defs(taut(ot, gr), mallocng_specs.masks_only)
+  // the slots
+  have es2: A2.slots = S2 := app_update_same[f := A1, k := "slots", v := S2]
+  have em2 := mp(app_update_other[f := A1, k := "slots", v := S2, x := "metas"], simp())
+  have sgl: S2[g] = fn_update(A.slots[g], i, tag(0, empty)) := app_update_same[f := A.slots, k := g, v := fn_update(A.slots[g], i, tag(0, empty))]
+  have sg: A2.slots[g][i] = tag(0, empty) by simp(es2, sgl)
+  have sj: all j. !(j = i) -> A2.slots[g][j] = A.slots[g][j] proof
+    fix j
+    assume ne
+    show by simp(es2, sgl, mp(app_update_other[f := A.slots[g], k := i, v := tag(0, empty), x := j], ne))
+  qed
+  have sh: all h. !(h = g) -> A2.slots[h] = A.slots[h] proof
+    fix h
+    assume ne
+    show by simp(es2, mp(app_update_other[f := A.slots, k := g, v := fn_update(A.slots[g], i, tag(0, empty)), x := h], ne))
+  qed
+  have slt: A.slots[g] in list_type(mallocng.Use) := mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := g], simp(ha), hg)
+  have r0: tag(0, empty) in set_image(single(empty), x0. tag(0, x0)) by taut(set_image_def[s := single(empty), f := x0. tag(0, x0), y := tag(0, empty)],
+    (ex x0. x0 in single(empty) && tag(0, x0) = tag(0, empty) by ex_intro({empty}, taut(single_intro[a := empty], refl({tag(0, empty)})))))
+  have u0: tag(0, empty) in mallocng.Use by defs(simp(r0), mallocng.Use)
+  have {ln = len} := apply(mp.list_upd[l := A.slots[g], t := mallocng.Use, i := i, v := tag(0, empty)], slt, hi, hil, u0)
+  have slen: seq_len(A2.slots[g]) = seq_len(A.slots[g]) by simp(es2, sgl, ln)
+  // the bits: bit i set
+  have bits: all j. j in omega -> mallocng.bit(W.freed, j) = ite(j = i, 1, mallocng.bit(A.metas[g].freed, j)) proof
+    fix j
+    assume hj
+    have wf: W.freed = int_add(A.metas[g].freed, pow2(i)) by simp()
+    have n1 := apply(mp.nbit[x := int_add(A.metas[g].freed, pow2(i)), i := j], nfo, hj)
+    have n2 := apply(mp.nbit[x := A.metas[g].freed, i := j], fo, hj)
+    have bs := apply(bit_set[x := A.metas[g].freed, k := i, i := j], fo, hi, hj, cb)
+    have c1: j = i -> mallocng.bit(W.freed, j) = ite(j = i, 1, mallocng.bit(A.metas[g].freed, j)) proof
+      assume e
+      have yy: bit(int_add(A.metas[g].freed, pow2(i)), j) by taut(bs, e)
+      have z: ite(bit(int_add(A.metas[g].freed, pow2(i)), j), 1, 0) = 1 by simp(yy)
+      have g1: mallocng.bit(W.freed, j) = 1 := rewrite(sym(wf), trans(n1, z))
+      have g2: ite(j = i, 1, mallocng.bit(A.metas[g].freed, j)) = 1 by simp(e)
+      show := trans(g1, sym(g2))
+    qed
+    have c2: !(j = i) -> mallocng.bit(W.freed, j) = ite(j = i, 1, mallocng.bit(A.metas[g].freed, j)) proof
+      assume ne
+      have q: bit(int_add(A.metas[g].freed, pow2(i)), j) <-> bit(A.metas[g].freed, j) by taut(bs, ne)
+      show by simp(wf, n1, n2, q, ne)
+    qed
+    show by taut(c1, c2)
+  qed
+  // back: A1 the slots restored
+  have ea1 := mp(app_update_other[f := A, k := "metas", v := fn_update(A.metas, g, W), x := "slots"], simp())
+  have s1 := mp(fn_update_same[f := A1, k := "slots"], simp(a1), simp(a1))
+  have back: fn_update(A2, "slots", A.slots) = A1 := trans(fn_update_twice[f := A1, k := "slots", a := S2, b := A.slots], rewrite(ea1, s1))
+  // the geometry
+  have gl: all x. x in omega -> seq_len(S2[x]) = seq_len(A.slots[x]) proof
+    fix x
+    assume hx
+    have c1: x = g -> seq_len(S2[x]) = seq_len(A.slots[x]) proof
+      assume e
+      show := subst({y. seq_len(S2[y]) = seq_len(A.slots[y])}, sym(e), (seq_len(S2[g]) = seq_len(A.slots[g]) by simp(sgl, ln)))
+    qed
+    have c2: !(x = g) -> seq_len(S2[x]) = seq_len(A.slots[x]) proof
+      assume ne
+      show by simp(mp(app_update_other[f := A.slots, k := g, v := fn_update(A.slots[g], i, tag(0, empty)), x := x], ne))
+    qed
+    show by taut(c1, c2)
+  qed
+  have gs: all x j. x in omega && j in omega -> S2[x][j] = A.slots[x][j] ||
+      (A.slots[x][j] = tag(0, empty) && S2[x][j] = tag(3, empty)) ||
+      (A.slots[x][j] = tag(3, empty) && S2[x][j] = tag(0, empty)) proof
+    fix x j
+    assume hxj
+    have c2: !(x = g) -> S2[x][j] = A.slots[x][j] proof
+      assume ne
+      show by simp(mp(app_update_other[f := A.slots, k := g, v := fn_update(A.slots[g], i, tag(0, empty)), x := x], ne))
+    qed
+    have c1: x = g -> S2[x][j] = A.slots[x][j] ||
+        (A.slots[x][j] = tag(3, empty) && S2[x][j] = tag(0, empty)) proof
+      assume e
+      have d1: !(j = i) -> S2[g][j] = A.slots[g][j] proof
+        assume ne
+        show by simp(sgl, mp(app_update_other[f := A.slots[g], k := i, v := tag(0, empty), x := j], ne))
+      qed
+      have d2: j = i -> A.slots[g][j] = tag(3, empty) && S2[g][j] = tag(0, empty) proof
+        assume ej
+        show by simp(ej, hrs, sgl)
+      qed
+      have dg: S2[g][j] = A.slots[g][j] || (A.slots[g][j] = tag(3, empty) && S2[g][j] = tag(0, empty)) by taut(d1, d2)
+      show := subst({y. S2[y][j] = A.slots[y][j] || (A.slots[y][j] = tag(3, empty) && S2[y][j] = tag(0, empty))}, sym(e), dg)
+    qed
+    show by taut(c1, c2)
+  qed
+  have geo := apply(mp.geoms_upd[A := A, A1 := A1, S := S2], ha, apply(mp.mo_geom_of, ha, mo), gl, gs)
+  show by taut(a1, u1, mo, geo, em2, eg, eo, sg, sj, sh, slen, bits, back, nfo)
+qed
+
+// (g's masks with a slot freed: its bit added to the freed mask; the slot,
+// reserved, in neither mask before)
+theorem mp.masks_unres(A, A2, M, M2, g, i): mallocng.masks_ok(A, M, g) -> A.metas[g].avail in omega -> A.metas[g].freed in omega ->
+  i in omega -> int_le(i, A.metas[g].last_idx) ->
+  A.slots[g][i] = tag(3, empty) -> A2.slots[g][i] = tag(0, empty) -> (all j. !(j = i) -> A2.slots[g][j] = A.slots[g][j]) ->
+  A2.metas[g].mem = A.metas[g].mem -> A2.metas[g].last_idx = A.metas[g].last_idx -> A2.metas[g].avail = A.metas[g].avail ->
+  (all j. j in omega -> mallocng.bit(A2.metas[g].freed, j) = ite(j = i, 1, mallocng.bit(A.metas[g].freed, j))) ->
+  (all j. mallocng.slot_start(A2.metas[g], j) = mallocng.slot_start(A.metas[g], j)) ->
+  mallocng.b8(M2, int_add(A.metas[g].mem, 8)) = mallocng.b8(M, int_add(A.metas[g].mem, 8)) ->
+  (all j. j in omega -> int_le(j, A.metas[g].last_idx) -> mallocng.b8(M2, int_sub(mallocng.slot_start(A.metas[g], j), 4)) = mallocng.b8(M, int_sub(mallocng.slot_start(A.metas[g], j), 4))) ->
+  mallocng.masks_ok(A2, M2, g)
+proof
+  assume hm av fv hi hil hrs sg sj em el ea bits ss hx es
+  have mk := expand(hm, mallocng.masks_ok)
+  have eh: int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32) = int_mod(mallocng.b8(M, int_add(A.metas[g].mem, 8)), 32) by simp(em, hx)
+  have eab: all j. mallocng.bit(A2.metas[g].avail, j) = mallocng.bit(A.metas[g].avail, j) proof
+    fix j
+    show by simp(ea)
+  qed
+  have r: all x0. x0 in omega -> int_lt(x0, 32) -> (((mallocng.bit(A2.metas[g].avail, x0) = 1 -> int_le(x0, int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32)) && mallocng.bit(A2.metas[g].freed, x0) = 0) && (int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, x0), mallocng.bit(A2.metas[g].freed, x0))) -> int_le(x0, A2.metas[g].last_idx))) && (int_le(x0, A2.metas[g].last_idx) -> (A2.slots[g][x0] = tag(0, empty) <-> int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, x0), mallocng.bit(A2.metas[g].freed, x0)))) && mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], x0), 4)) = 0)) && (int_lt(int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32), x0) && int_le(x0, A2.metas[g].last_idx) -> mallocng.bit(A2.metas[g].freed, x0) = 1) proof
+    fix j
+    assume hj hjl
+    have a b cc d := mp(all_elim(mk, {j}), hj, hjl)
+    have ef := mp(all_elim(bits, {j}), hj)
+    have eb2 := all_elim(eab, {j})
+    have hd3: int_le(j, A2.metas[g].last_idx) -> mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], j), 4)) = 0 proof
+      assume l2
+      have l := rewrite(el, l2)
+      have _ y := mp(cc, l)
+      have s2: mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], j), 4)) = mallocng.b8(M, int_sub(mallocng.slot_start(A.metas[g], j), 4)) by simp(all_elim(ss, {j}), mp(all_elim(es, {j}), hj, l))
+      show := trans(s2, y)
+    qed
+    have ci: j = i -> (((mallocng.bit(A2.metas[g].avail, j) = 1 -> int_le(j, int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32)) && mallocng.bit(A2.metas[g].freed, j) = 0) && (int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j))) -> int_le(j, A2.metas[g].last_idx))) && (int_le(j, A2.metas[g].last_idx) -> (A2.slots[g][j] = tag(0, empty) <-> int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j)))) && mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], j), 4)) = 0)) && (int_lt(int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32), j) && int_le(j, A2.metas[g].last_idx) -> mallocng.bit(A2.metas[g].freed, j) = 1) proof
+      assume e
+      // (the slot reserved: in neither mask -- so its avail bit 0)
+      have li: int_le(j, A.metas[g].last_idx) := subst({y. int_le(y, A.metas[g].last_idx)}, sym(e), hil)
+      have x _ := mp(cc, li)
+      have t3: A.slots[g][j] = tag(3, empty) := subst({y. A.slots[g][y] = tag(3, empty)}, sym(e), hrs)
+      have n0: !(A.slots[g][j] = tag(0, empty)) by defs(simp(t3), tag)
+      have z0: !int_lt(0, int_add(mallocng.bit(A.metas[g].avail, j), mallocng.bit(A.metas[g].freed, j))) by taut(x, n0)
+      have ab0: mallocng.bit(A.metas[g].avail, j) in omega by simp(apply(mp.nbit[x := A.metas[g].avail, i := j], av, hj))
+      have fb0: mallocng.bit(A.metas[g].freed, j) in omega by simp(apply(mp.nbit[x := A.metas[g].freed, i := j], fv, hj))
+      have za: mallocng.bit(A2.metas[g].avail, j) = 0 by arith(eb2, z0, ab0, fb0)
+      have o1: mallocng.bit(A2.metas[g].freed, j) = 1 by simp(ef, e)
+      have c1: (mallocng.bit(A2.metas[g].avail, j) = 1 -> int_le(j, int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32)) && mallocng.bit(A2.metas[g].freed, j) = 0) proof
+        assume h
+        have f: false by arith(za, h)
+        show by taut(f)
+      qed
+      have c2: (int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j))) -> int_le(j, A2.metas[g].last_idx)) proof
+        assume _
+        show := rewrite(sym(el), li)
+      qed
+      have u0: A2.slots[g][j] = tag(0, empty) := subst({y. A2.slots[g][y] = tag(0, empty)}, sym(e), sg)
+      have c3: (int_le(j, A2.metas[g].last_idx) -> (A2.slots[g][j] = tag(0, empty) <-> int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j)))) && mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], j), 4)) = 0) proof
+        assume l2
+        show by taut(u0, (int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j))) by arith(za, o1)), mp(hd3, l2))
+      qed
+      have c4: (int_lt(int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32), j) && int_le(j, A2.metas[g].last_idx) -> mallocng.bit(A2.metas[g].freed, j) = 1) proof
+        assume _
+        show := o1
+      qed
+      show by taut(c1, c2, c3, c4)
+    qed
+    have cn: !(j = i) -> (((mallocng.bit(A2.metas[g].avail, j) = 1 -> int_le(j, int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32)) && mallocng.bit(A2.metas[g].freed, j) = 0) && (int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j))) -> int_le(j, A2.metas[g].last_idx))) && (int_le(j, A2.metas[g].last_idx) -> (A2.slots[g][j] = tag(0, empty) <-> int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j)))) && mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], j), 4)) = 0)) && (int_lt(int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32), j) && int_le(j, A2.metas[g].last_idx) -> mallocng.bit(A2.metas[g].freed, j) = 1) proof
+      assume ne
+      have efb: mallocng.bit(A2.metas[g].freed, j) = mallocng.bit(A.metas[g].freed, j) by simp(ef, ne)
+      have esl := mp(all_elim(sj, {j}), ne)
+      have c1: (mallocng.bit(A2.metas[g].avail, j) = 1 -> int_le(j, int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32)) && mallocng.bit(A2.metas[g].freed, j) = 0) proof
+        assume h
+        have p q := mp(a, trans(sym(eb2), h))
+        show by taut(rewrite(sym(eh), p), trans(efb, q))
+      qed
+      have c2: (int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j))) -> int_le(j, A2.metas[g].last_idx)) proof
+        assume h
+        have l := mp(b, (int_lt(0, int_add(mallocng.bit(A.metas[g].avail, j), mallocng.bit(A.metas[g].freed, j))) by arith(h, eb2, efb)))
+        show := rewrite(sym(el), l)
+      qed
+      have c3: (int_le(j, A2.metas[g].last_idx) -> (A2.slots[g][j] = tag(0, empty) <-> int_lt(0, int_add(mallocng.bit(A2.metas[g].avail, j), mallocng.bit(A2.metas[g].freed, j)))) && mallocng.b8(M2, int_sub(mallocng.slot_start(A2.metas[g], j), 4)) = 0) proof
+        assume l2
+        have x _ := mp(cc, rewrite(el, l2))
+        show by taut(rewrite(sym(esl), rewrite(sym(eb2), rewrite(sym(efb), x))), mp(hd3, l2))
+      qed
+      have c4: (int_lt(int_mod(mallocng.b8(M2, int_add(A2.metas[g].mem, 8)), 32), j) && int_le(j, A2.metas[g].last_idx) -> mallocng.bit(A2.metas[g].freed, j) = 1) proof
+        assume h
+        have h1 h2 := h
+        show := trans(efb, mp(d, conj(rewrite(eh, h1), rewrite(el, h2))))
+      qed
+      show by taut(c1, c2, c3, c4)
+    qed
+    show by taut(ci, cn)
+  qed
+  show by defs(r, mallocng.masks_ok)
+qed
