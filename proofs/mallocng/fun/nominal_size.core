@@ -156,3 +156,193 @@ proof
   have r := apply(mp.view_read[vm := vm, fp := FP, a := x, n := n], hx, hn, hl, hin)
   show by taut(u, r)
 qed
+
+// ----------------------------------------------------------------------
+//  get_nominal_size: its code refines its purpose
+// p a client block in slot i of the group g, e its slot's end: the code's
+// checks pass (the size encoding enframe wrote, `mp.blk_tail`), its result
+// the block's size, the world unchanged
+theorem mp.gns_run(c, p, e, s, h, o, g, i, g0): c in mallocng.Cfg -> p in bits(64) -> e in bits(64) -> s in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) ->
+  mallocng.is_used(h.A, g) -> i in omega -> int_lt(i, seq_len(h.A.slots[g])) -> h.A.slots[g][i] = tag(1, p) ->
+  e = mallocng.slot_end(h.A.metas[g], i) ->
+  runs(c_src_malloc_mallocng_free.get_nominal_size(p, e, g0), s, o) -> o = ok(s, snd(h.blocks[p])) && snd(h.blocks[p]) in bits(64)
+proof
+  assume hc hp he hs hh hin hsh hnr hg hi hil hsl hse hr
+  have hu hd hbt hat := mp(all_elim(mp.g_rec, {h}), hh)
+  let A := h.A
+  let B := h.blocks
+  let V0 := s.vm
+  let M := mallocng.mview(V0, mallocng.held(c, A, B))
+  let N := snd(B[p])
+  have au: A in univ(1) by simp(hu)
+  have po: p in omega by simp(hp)
+  have no nn fits sz bz tail := apply(mp.blk_tail, hc, au, hat, hbt, hi, hp, hin, hnr, hg, hil, hsl)
+  have hst: mallocng.starts_at(A, g, i, p) by defs(simp(hg, hil, hsl), mallocng.starts_at)
+  have h16 hfp hidx hrw hks := apply(mp.slot_hdr, hc, au, hat, hbt, hi, po, hin, hnr, hst)
+  // the header byte at p - 3: readable, the view's
+  have p3o: int_sub(p, 3) in omega by arith(h16, po)
+  have hb3: all x0. x0 in omega -> int_lt(x0, 1) -> int_add(int_sub(p, 3), x0) in mallocng.held(c, A, B) && mallocng.m_rw(M, int_add(int_sub(p, 3), x0)) &&
+      !(snd(mallocng.pg(M, int_add(int_sub(p, 3), x0))).kind = 2) proof
+    fix x0
+    assume h0 h1
+    have z: int_add(int_sub(p, 3), x0) = int_sub(p, 3) by arith(h0, h1)
+    show by taut(rewrite(sym(z), hfp), rewrite(sym(z), hrw), rewrite(sym(z), hks))
+  qed
+  have u3 r3 := apply(mp.held_read[c := c, A := A, vm := V0, b := B, objs := s.objs, x := int_sub(p, 3), n := 1], p3o, simp(), simp(), hsh, hb3)
+  // the code's run: the header byte
+  have su: s in univ(1) by simp(apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_free.get_nominal_size)))
+  let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+  have sv: gimple.sval(T64, bits_neg(64, 3)) = int_neg(3) by defs(simp(), gimple.sval)
+  let P3 := int_add(p, gimple.sval(T64, bits_neg(64, 3)))
+  have e3: P3 = int_sub(p, 3) by arith(sv)
+  have p3: int_lt(3, p) by arith(h16)
+  have ur3: gimple.usable(V0, s.objs, int_add(P3, 0), 1, false) by simp(u3, e3)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  step x1 x2, k1 from hr with g.padd_det, g.ld8_det using conj(su, hp, sv, e3, p3, ur3, p64)
+  // the byte: the view's at p - 3, its top 3 bits the reserved count's code
+  let B3 := gimple.bytes_at(V0, int_add(P3, 0), 1)
+  have vV vfun vdom vb := apply(ms.world_parts, hs)
+  have b3o b3l := mp(all_elim(g.bytes_bound, {V0}, {int_add(P3, 0)}, {1}), vb, arith())
+  have a3: int_add(P3, 0) = int_sub(p, 3) by arith(e3)
+  have bv3 bo3 := apply(mp.b8_view[vm := V0, fp := mallocng.held(c, A, B), a := int_sub(p, 3)], vb, p3o, hfp)
+  have rd1: mallocng.rd(M, int_sub(p, 3), 1) = mallocng.b8(M, int_sub(p, 3)) by defs(simp(bo3), mallocng.rd)
+  have b3v: B3 = mallocng.b8(M, int_sub(p, 3)) by simp(sv, r3, rd1)
+  have b3i: bits_of_int(8, B3) = B3 by defs(arith(b3o, b3l), bits_of_int, pow2)
+  have hsh5: bits_shr(8, bits_of_int(8, B3), 5) = int_div(B3, 32) by defs(simp(b3i, b3o, b3l), bits_shr, pow2)
+  // the size encoding: R the bytes reserved after the block
+  let R := int_sub(int_sub(e, p), N)
+  have rge: int_le(int_add(p, N), e) by simp(fits, hse)
+  have szA szB szC := expand(rewrite(sym(hse), sz), mallocng.size_ok)
+  have hC: bits_shr(8, bits_of_int(8, B3), 5) = int_div(mallocng.b8(M, int_sub(p, 3)), 32) by arith(hsh5, b3v)
+  // e below the task size (its byte mapped), so e - p fits
+  have eo: e in omega by simp(he)
+  have ele: int_le(e, mallocng.slot_end(A.metas[g], i)) by arith(hse)
+  have ta := mp(all_elim(tail, {e}), eo, rge, ele)
+  have erw: mallocng.m_rw(M, e) by taut(ta)
+  have emp _ _ := expand(erw, mallocng.m_rw)
+  have etk _ := expand(emp, mallocng.m_mapped)
+  have e47: int_lt(int_div(e, 4096), 34359738367) by simp(expand(etk, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+  have e63: int_lt(e, 9223372036854775808) by arith(e47)
+  have p63: int_lt(p, 9223372036854775808) by arith(e63, rge, nn)
+  have sE: sint(64, e) = e by defs(simp(he, e63), sint)
+  have sP: sint(64, p) = p by defs(simp(hp, p63), sint)
+  have fep: tr.s64_fits(int_sub(sint(64, e), sint(64, p))) by defs(simp(sE, sP, hp, he, rge, nn), gimple.fits)
+  have bep: bits_sub(64, e, p) = int_sub(e, p) by defs(arith(hp, he, rge, nn), bits_sub, bits_of_int, pow2)
+  // the bytes from the block's end to e: readable, the view's
+  have rdx: all x n. x in omega -> n in omega -> int_le(int_add(p, N), x) -> int_le(int_add(x, n), int_add(e, 1)) ->
+      gimple.usable(V0, s.objs, x, n, false) && gimple.bytes_at(V0, x, n) = mallocng.rd(M, x, n) proof
+    fix x n
+    assume hx hn hl hu
+    have hb: all x0. x0 in omega -> int_lt(x0, n) -> int_add(x, x0) in mallocng.held(c, A, B) && mallocng.m_rw(M, int_add(x, x0)) &&
+        !(snd(mallocng.pg(M, int_add(x, x0))).kind = 2) proof
+      fix x0
+      assume h0 h1
+      have t := mp(all_elim(tail, {int_add(x, x0)}), arith(hx, h0), arith(hl, h0), arith(hu, h1, ele))
+      show by taut(t)
+    qed
+    show := apply(mp.held_read[c := c, A := A, vm := V0, b := B, objs := s.objs, x := x, n := n], hx, hn, arith(hu, e63), hsh, hb)
+  qed
+  have bv: all x. x in omega -> int_le(int_add(p, N), x) -> int_le(x, e) -> mallocng.rd(M, x, 1) = mallocng.b8(M, x) proof
+    fix x
+    assume hx hl hu
+    have t := mp(all_elim(tail, {x}), hx, hl, arith(hu, ele))
+    have _ bo := apply(mp.b8_view[vm := V0, fp := mallocng.held(c, A, B), a := x], vb, hx, taut(t))
+    show by defs(simp(bo, hx), mallocng.rd)
+  qed
+  // the common tail: e - R, the block's end, and e hold zero bytes; e - R - p
+  // is N
+  have ro: R in omega by arith(rge, nn, hp)
+  have r63: int_lt(R, 9223372036854775808) by arith(rge, nn, e63)
+  have rc: int_lt(0, R) || R = 0 by arith(ro)
+  have nRa: int_lt(0, R) -> gimple.sval(T64, bits_sub(64, 0, R)) = int_neg(R) proof
+    assume h0
+    have x: bits_sub(64, 0, R) = int_sub(18446744073709551616, R) by defs(arith(ro, h0, r63), bits_sub, bits_of_int, pow2)
+    have s1: sint(64, bits_sub(64, 0, R)) = int_neg(R) by defs(simp(x, h0, r63), sint)
+    show by defs(simp(s1), gimple.sval)
+  qed
+  have nRb: R = 0 -> gimple.sval(T64, bits_sub(64, 0, R)) = int_neg(R) proof
+    assume h0
+    have x: bits_sub(64, 0, R) = 0 by defs(simp(h0), bits_sub, bits_of_int, pow2)
+    show by defs(simp(x, h0), gimple.sval)
+  qed
+  have nR: gimple.sval(T64, bits_sub(64, 0, R)) = int_neg(R) by taut(rc, nRa, nRb)
+  let ER := int_add(e, gimple.sval(T64, bits_sub(64, 0, R)))
+  have eR: ER = int_add(p, N) by arith(nR)
+  have eR0: int_add(ER, 0) = int_add(p, N) by arith(nR)
+  have gR: int_le(0, ER) by arith(eR, hp, nn)
+  have lR: int_lt(ER, pow2(64)) by arith(eR, rge, e63, p64)
+  have zR: !(ER = 0) by arith(eR, h16, nn)
+  have bR: ER in bits(64) by simp(gR, lR, p64)
+  have pno: int_add(p, N) in omega by arith(hp, nn)
+  have uR qR := mp(all_elim(rdx, {int_add(p, N)}, {1}), pno, simp(), arith(), arith(rge))
+  have ueR: gimple.usable(V0, s.objs, int_add(ER, 0), 1, false) by simp(uR, eR0)
+  have zN: mallocng.b8(M, int_add(p, N)) = 0 proof
+    have za: int_lt(0, R) -> mallocng.b8(M, int_add(p, N)) = 0 := szC
+    have zb: R = 0 -> mallocng.b8(M, int_add(p, N)) = 0 proof
+      assume h0
+      have q: int_add(p, N) = mallocng.slot_end(A.metas[g], i) by arith(h0, hse)
+      show by simp(q, bz)
+    qed
+    show by taut(rc, za, zb)
+  qed
+  have wR: gimple.bytes_at(V0, int_add(ER, 0), 1) = 0 by simp(eR0, qR, mp(all_elim(bv, {int_add(p, N)}), pno, arith(), arith(rge)), zN)
+  have vR: bits_of_int(8, gimple.bytes_at(V0, int_add(ER, 0), 1)) = 0 by simp(wR)
+  have uE qE := mp(all_elim(rdx, {e}, {1}), eo, simp(), rge, arith())
+  have e0: int_add(e, 0) = e by arith(eo)
+  have ueE: gimple.usable(V0, s.objs, int_add(e, 0), 1, false) by simp(uE, e0)
+  have wE0: gimple.bytes_at(V0, e, 1) = 0 by simp(qE, mp(all_elim(bv, {e}), eo, rge, arith()), hse, bz)
+  have wE: gimple.bytes_at(V0, int_add(e, 0), 1) = 0 := rewrite(sym(e0), wE0)
+  have vE: bits_of_int(8, gimple.bytes_at(V0, int_add(e, 0), 1)) = 0 by simp(wE)
+  have zE: !(e = 0) by arith(rge, h16, nn)
+  have sR: sint(64, ER) = int_add(p, N) by defs(simp(eR, hp, nn, rge, e63), sint)
+  have fRp: tr.s64_fits(int_sub(sint(64, ER), sint(64, p))) by defs(simp(sR, sP, hp, nn), gimple.fits)
+  have bNp: bits_sub(64, int_add(p, N), p) = N by defs(arith(hp, nn, rge, e63), bits_sub, bits_of_int, pow2)
+  have bRp: bits_sub(64, ER, p) = N := rewrite(sym(eR), bNp)
+  // more than 4 bytes reserved: the code 5 in the header, the count in the
+  // 4 bytes before e, a zero byte before them
+  have cA: int_le(5, R) -> o = ok(s, N) proof
+    assume h5
+    have c5: int_div(mallocng.b8(M, int_sub(p, 3)), 32) = 5 by taut(mp(szA, h5))
+    have r4: mallocng.rd(M, int_sub(e, 4), 4) = R by taut(mp(szA, h5))
+    have z5: mallocng.b8(M, int_sub(e, 5)) = 0 by taut(mp(szA, h5))
+    have x5: bits_shr(8, bits_of_int(8, B3), 5) = 5 by simp(hC, c5)
+    have sv4: gimple.sval(T64, bits_neg(64, 4)) = int_neg(4) by defs(simp(), gimple.sval)
+    have sv5: gimple.sval(T64, bits_neg(64, 5)) = int_neg(5) by defs(simp(), gimple.sval)
+    let E4 := int_add(e, gimple.sval(T64, bits_neg(64, 4)))
+    let E5 := int_add(e, gimple.sval(T64, bits_neg(64, 5)))
+    have e4: int_add(E4, 0) = int_sub(e, 4) by arith(sv4)
+    have e5: int_add(E5, 0) = int_sub(e, 5) by arith(sv5)
+    have u4 q4 := mp(all_elim(rdx, {int_sub(e, 4)}, {4}), arith(rge, nn, h5), simp(), arith(rge, nn, h5), arith())
+    have u5 q5 := mp(all_elim(rdx, {int_sub(e, 5)}, {1}), arith(rge, nn, h5), simp(), arith(rge, nn, h5), arith())
+    have ue4: gimple.usable(V0, s.objs, int_add(E4, 0), 4, false) by simp(u4, e4)
+    have ue5: gimple.usable(V0, s.objs, int_add(E5, 0), 1, false) by simp(u5, e5)
+    have b4o b4l := mp(all_elim(g.bytes_bound, {V0}, {int_add(E4, 0)}, {4}), vb, arith())
+    have w4: gimple.bytes_at(V0, int_add(E4, 0), 4) = R by simp(e4, q4, r4)
+    have v4: bits_of_int(32, gimple.bytes_at(V0, int_add(E4, 0), 4)) = R by defs(arith(w4, b4o, b4l), bits_of_int, pow2)
+    have w5: gimple.bytes_at(V0, int_add(E5, 0), 1) = 0 by simp(e5, q5, mp(all_elim(bv, {int_sub(e, 5)}), arith(rge, nn, h5), arith(rge, nn, h5), arith()), z5)
+    have v5: bits_of_int(8, gimple.bytes_at(V0, int_add(E5, 0), 1)) = 0 by simp(w5)
+    have g4: int_le(0, E4) by arith(sv4, rge, nn, h5, hp)
+    have l4: int_lt(E4, pow2(64)) by arith(sv4, e63, p64)
+    have g5: int_le(0, E5) by arith(sv5, rge, nn, h5, hp)
+    have l5: int_lt(E5, pow2(64)) by arith(sv5, e63, p64)
+    have n4: !(E4 = 0) by arith(sv4, rge, nn, h5, h16)
+    have n5: !(E5 = 0) by arith(sv5, rge, nn, h5, h16)
+    have b4: E4 in bits(64) by simp(g4, l4, p64)
+    have b5: E5 in bits(64) by simp(g5, l5, p64)
+    step k2 from k1 with x5, g.padd_det, g.ld32_det, v4, g.ld8_det, v5, g.ssub64_det, vR, vE, bRp using conj(su, hp, he, g4, l4, g5, l5, n4, n5, b4, b5, ue4, ue5, h5, fep, v4, rge, nn,
+      gR, lR, zR, bR, ueR, ueE, zE, fRp)
+    show := k2
+  qed
+  // at most 4: the count in the header
+  have cB: int_lt(R, 5) -> o = ok(s, N) proof
+    assume h5
+    have xB: bits_shr(8, bits_of_int(8, B3), 5) = R by simp(hC, mp(szB, h5))
+    step k2 from rewrite(xB, k1) with g.ssub64_det, g.padd_det, g.ld8_det, vR, vE, bRp using conj(su, hp, he, h5, fep, rge, nn, gR, lR, zR, bR, ueR, ueE, zE, fRp)
+    show := k2
+  qed
+  have nl: int_lt(N, 9223372036854775808) by arith(rge, hp, e63)
+  have nb: N in bits(64) by simp(nn, nl)
+  have rs: int_le(5, R) || int_lt(R, 5) by arith(ro)
+  show by taut(rs, cA, cB, nb)
+qed
