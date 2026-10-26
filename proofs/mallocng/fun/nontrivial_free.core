@@ -1163,7 +1163,12 @@ qed
 // ----------------------------------------------------------------------
 //  nontrivial_free's run
 
-theorem mp.nf_dev(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao, g, i, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+// nontrivial_free(g, i), free_group called at up to n groups in use: g's
+// slots all free but i (the test, okay_to_free answering yes) -- g off
+// its list (its successor activated if g was the head) and given back
+// whole (free_group); else slot i into g's freed mask (g queued if it was
+// full and not its list's head)
+theorem mp.nf_run(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao, g, i, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
   c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> n in omega -> g in bits(64) -> i in bits(32) ->
   s in abi.World -> h in mp.G -> int_le(seq_len(h.A.used), n) ->
   mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
@@ -1171,7 +1176,9 @@ theorem mp.nf_dev(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao, g, i, s, h, o): c
   mp.calls(otf, c_src_malloc_mallocng_free.okay_to_free_fun(gst, gib)) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) -> mp.ib_call(c, gib) ->
   mp.calls(ac, c_src_malloc_mallocng_free.a_crash_fun()) -> mp.calls(dq, mallocng_specs.dequeue_spec_fun()) -> mp.ag_call(c, ag) -> mp.fg_call(c, fg, n) ->
   mp.calls(qu, mallocng_specs.queue_spec_fun()) -> mp.aor_call(ao) ->
-  runs(c_src_malloc_mallocng_free.nontrivial_free(g, i, otf, ac, dq, ag, fg, qu, ao), s, o) -> true
+  runs(c_src_malloc_mallocng_free.nontrivial_free(g, i, otf, ac, dq, ag, fg, qu, ao), s, o) ->
+  abi.ovf_out(s, o) || (ex V rr. (V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
+    mallocng_specs.freed_back(c, h.A, A2, h.blocks, s.vm, V, s.objs, fst(rr), snd(rr)))) && o = ok(fn_update(s, "vm", V), rr))
 proof
   assume hc hx hsct hn hgb hib hs hh hdep hin hth htl htr hus hro hotf hgst hgib hac hdq hag hfg hqu hao hr
   have ths: gc.sound(s) by simp(hth)
@@ -1674,7 +1681,7 @@ proof
         have v1V hdq1 := hR1
         have hdqP := rewrite(uph, hdq1)
         have hdqk := subst({y. mallocng_specs.dequeued(V0, V1, s.objs, PH, y)}, sym(hkg), hdqP)
-        have {a1 = abs, u1 = univ, hm1 = holds, kq = unt, gm1 = geom, at1 = at, z8 = z8} :=
+        have {a1 = abs, u1 = univ, hm1 = holds, kq = unt, gm1 = geom, at1 = at, z8 = z8, li1 = list, rg1 = geom} :=
           apply(mp.dq_any[c := c, A := A, vm := V0, V := V1, b := B, objs := s.objs, sc := sc, k := k], hc, au, hat, hbt, vV, v1V, hhm, hsh, cal, vsc, s48, hk, hkl, hdqk)
         let A1 := mp.relist(A, sc, mallocng_specs.rm_at(L, k), V1)
         have fsb: s.fs_base in bits(64) by simp(expand(hs, abi.World))
@@ -1738,13 +1745,94 @@ proof
             step y16, k16 from k15 with z
             show by disj({2}, ex_intro({V1}, {A1}, {LOC1}, taut(pre1, k16)))
           qed
-          goal 3
-          show by simp()
+          // a new head M (g's successor): activated
+          have a15: !(NH = 0) -> T3 proof
+            assume nnz
+            let RM := mallocng_specs.rm_at(L, k)
+            have {rml = len, rmt = type} := apply(mp.rm_at_app[l := L, k := k, j := 0], lt0, hk, hkl)
+            have vb1: V1.bytes in fn_space(bits(64), bits(8)) by simp(v1V)
+            have {hv1 = value} := apply(mp.head_is[vm := V1, objs := s.objs, phead := PH, l := RM], vb1, phb, rmt, at1)
+            have r2e := all_elim(ms.v_rd64, {V1}, {PH})
+            have enh: NH = ite(seq_len(RM) = 0, 0, RM[0]) := rewrite(sym(u0), rewrite(sym(uph), trans(sym(r2e), hv1)))
+            have rmn: !(seq_len(RM) = 0) proof
+              assume z
+              show by taut(nnz, rewrite(mp(ite_t[c := seq_len(RM) = 0, a := 0, b := RM[0]], z), enh))
+            qed
+            let M := RM[0]
+            have enm: NH = M := rewrite(mp(ite_f[c := seq_len(RM) = 0, a := 0, b := RM[0]], rmn), enh)
+            // (M: A1's list's head -- in use, none available, only there)
+            have rmo: seq_len(RM) in omega by arith(rmt)
+            have rml0: int_lt(0, seq_len(A1.active[sc])) := rewrite(sym(li1), (int_lt(0, seq_len(RM)) by arith(rmn, rmo)))
+            have {H1i = inv} := expand(hm1, mallocng.holds_m)
+            have {hac1 = active} := expand(H1i, mallocng.holds)
+            have mu0 _ _ := mp(all_elim(expand(hac1, mallocng.active_ok), {sc}, {0}), conj(vsc, (0 in omega by simp())), conj(s48, rml0))
+            have mu: mallocng.is_used(A1, M) := rewrite(li1, mu0)
+            have {re = elem} := apply(mp.rm_at_app[l := L, k := k, j := 0], lt0, hk, hkl)
+            have nk: !int_lt(0, k) by arith(k0)
+            have em1: M = L[1] by simp(mp(re, (0 in omega by simp()), arith(rmn, rml, rmo)), mp(ite_f[c := int_lt(0, k), a := 0, b := int_add(0, 1)], nk))
+            have {hac = active} := expand(H0, mallocng.holds)
+            have l1n: int_lt(1, seq_len(L)) by arith(rmn, rml, rmo, lno)
+            have _ _ t3 := mp(all_elim(expand(hac, mallocng.active_ok), {sc}, {1}), conj(vsc, (1 in omega by simp())), conj(s48, l1n))
+            have av1 _ := mp(t3, (int_lt(0, 1) by simp()))
+            have {mo = nat} := apply(mp.used_nat, a1, mu)
+            have {rgm = masks} := apply(mp.relist_geom[A := A, sc := sc, l2 := RM, vm := V1], hat)
+            have {ra = avail} := mp(all_elim(rgm, {M}), mo)
+            have avM: A1.metas[M].avail = 0 := trans(ra, rewrite(sym(em1), av1))
+            have once: all x2 x3. x2 in omega && x3 in omega -> (int_lt(x2, 48) && int_lt(x3, seq_len(A1.active[x2]))) && A1.active[x2][x3] = M -> x3 = 0 proof
+              fix x2 x3
+              assume hn hl
+              have hn0 hn1 := hn
+              have hl0 hl1 he2 := hl
+              have h0m: A1.active[sc][0] = M := rewrite(sym(li1), refl({RM[0]}))
+              have _ kk := apply(mp.list_once[c := c, A := A1, M := mallocng.mview(V1, mallocng.held(c, A1, B)), b := B, brk := V1.brk, s1 := x2, k1 := x3, s2 := sc, k2 := 0],
+                H1i, hn0, hn1, vsc, (0 in omega by simp()), hl0, s48, hl1, rml0, trans(he2, sym(h0m)))
+              show := kk
+            qed
+            have go1 _ _ := apply(mp.meta_mem, hc, u1, a1, hm1, mu)
+            have top1 _ := apply(mp.meta_word, hc, u1, a1, hm1, mu)
+            have mb: M in bits(64) by arith(top1, go1)
+            // activate_group(M), the ghost part A1
+            let H1 := fn_update(h, "A", A1)
+            have hgH := apply(mp.g_upd, {h}, {A1}, hh, a1, u1)
+            have {hm1i = mem, hsh1 = shown} := expand(hin1, mallocng.holds_in)
+            have pin: mallocng.holds_m(c, H1.A, fn_update(s, "vm", V1).vm, H1.blocks) by simp(hm1i)
+            have psh: mallocng.shown_in(c, H1.A, fn_update(s, "vm", V1).objs) by simp(hsh1)
+            have pth: abi.thread_ok(fn_update(s, "vm", V1).vm, fn_update(s, "vm", V1).fs_base) by simp(th1)
+            have ths1: gc.sound(fn_update(s, "vm", V1)) by simp(th1)
+            have piu: mallocng.is_used(H1.A, M) by simp(mu)
+            have pav: H1.A.metas[M].avail = 0 by simp(avM)
+            have pon: all x2 x3. x2 in omega && x3 in omega -> (int_lt(x2, 48) && int_lt(x3, seq_len(H1.A.active[x2]))) && H1.A.active[x2][x3] = M -> x3 = 0 by simp(once)
+            step y17 V2 r2, k17 hR2 from k15 with nnz, g.padd_det, sv80, g.elem8_det, g.ld64_det, enm, hag
+              using conj(w1W, w1u, ths1, kb, umd1, uab, cf, cnz, sc1, sc2, sx, mb, hgH, pin, psh, pth, piu, pav, pon)
+            have v2V ex2 := hR2
+            obtain A2, a2a a2u hact hm2 kp2 _ from ex2
+            have hmo .. := expand(hact, mallocng_specs.activated)
+            have hmo1: mallocng_specs.masks_only(A1, A2) by simp(hmo, keep(mallocng_specs.masks_only))
+            have hm2b: mallocng.holds_m(c, A2, V2, B) by simp(hm2, keep(mallocng.holds_m))
+            have kp2b: mallocng.kept_outside(c, A1, B, V1, V2, empty) by simp(kp2, keep(mallocng.kept_outside))
+            have gm12 := apply(mp.mo_geom_of[A := A1, A2 := A2], a1, hmo1)
+            have {hin2 = hin, th2 = thread, tl2 = tls, tu2 = unres, hg2 = used, he2 = emp, el2 = len} :=
+              apply(mp.fg_pre_geom[c := c, A := A1, A1 := A2, b := B, vm := V1, V1 := V2, objs := s.objs, fs := s.fs_base, g := g], hc, a1, gm12, hm2b, kp2b, fsb, hin1, th1, tl1, tu1, hg1, he1)
+            // (g's next link: as before, only M's masks changed)
+            have {mog = groups} := expand(hmo1, mallocng_specs.masks_only)
+            have eg := mp(all_elim(mog, {g}), gom)
+            have eg2 := subst({y. app(y, "next") = app(fn_update(fn_update(A1.metas[g], "avail", 0), "freed", 0), "next")}, sym(eg), refl({app(fn_update(fn_update(A1.metas[g], "avail", 0), "freed", 0), "next")}))
+            have nx2: A2.metas[g].next = 0 by simp(eg2, nx1)
+            have bk2: BACK(A2, V2) proof
+              fix A3 V3 mb ml
+              assume f
+              have f1 := apply(mp.fb_geom[c := c, A := A1, A1 := A2, A3 := A3, b := B, V0 := V1, V1 := V2, V3 := V3, objs := s.objs, mb := mb, ml := ml], a1, gm12, kp2b, f)
+              show := mp(all_elim(bk1, {A3}, {V3}, {mb}, {ml}), f1)
+            qed
+            have len2: int_le(seq_len(A2.used), n) by arith(el2, len1)
+            have pre2: PRE(A2, V2) by taut(a2a, a2u, v2V, hin2, th2, tl2, tu2, hg2, nx2, he2, len2, bk2)
+            show by disj({2}, ex_intro({V2}, {A2}, {LOC1}, taut(pre2, k17)))
+          qed
+          show by taut(z15, a15)
         qed
         show by taut(nh, yh)
       qed
-      goal 3
-      show by simp()
+      show := mp(fin3, (T3 by taut(n0, n1)))
     qed
     show by taut(cz, cn)
   qed
