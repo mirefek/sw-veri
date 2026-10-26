@@ -15,7 +15,6 @@ proofs/mallocng/fun/malloc_machine.core), all against malloc's purpose spec.
 Next: free's purpose proofs. Its translation unit's C1 is done
 (proofs/mallocng/machine/c1_free.core; free.c's copies of malloc.c's
 functions against malloc.c's CFG forms, their purpose proofs the same).
-- `get_nominal_size`, `record_seq`, `okay_to_free`: specs and C2.
 - `free_group` and `nontrivial_free` call each other (a nested group's
   slot freed in its container group): their specs indexed by the nesting
   depth d -- `free_group` at d from `nontrivial_free` at d - 1, that at d

@@ -1295,3 +1295,10 @@ item is a short summary of finished work; details are in the files named.
   descriptor apart (its word, errno, the canary). laws.core in the chain
   (`mallocng.abs_univ`; the frame law's reserve pages by `mp.res_rng`);
   the client facts take `world_ok`.
+- **free's leaves by their purpose (C2)**: `get_nominal_size` (a client
+  block's size from its slot's size encoding, its checks passing:
+  `mp.blk_tail`, `mp.gns_run`), `record_seq` (a counter, `mp.rq`) and
+  `okay_to_free` (some answer, its reads accessible, get_stride and
+  is_bouncing at their contracts: `mp.otf`; its spec requires
+  `thread_ok`), each with its contract. step names why a call's contract
+  matching the call did not apply.
