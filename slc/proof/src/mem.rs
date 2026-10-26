@@ -35,6 +35,8 @@ pub(crate) struct MemCache {
     skipped: Vec<String>,
     /// the values read a step left unresolved (why), for its message
     pub(crate) value_failed: Vec<String>,
+    /// why a call's contract did not apply at a call (step's message)
+    pub(crate) call_failed: Vec<String>,
 }
 
 impl State {

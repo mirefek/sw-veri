@@ -2844,6 +2844,7 @@ impl State {
         let mut pending: Vec<Seq> = Vec::new();
         let mut fallbacks = 0;
         self.mem_cache.borrow_mut().value_failed.clear();
+        self.mem_cache.borrow_mut().call_failed.clear();
         loop {
         for _ in 0..10000 {
             let Some((f, a)) = head(cur.concl()) else { break };
@@ -3172,11 +3173,13 @@ impl State {
         if !unused.is_empty() {
             let pos: Vec<String> = unused.iter().map(|i| i.to_string()).collect();
             let reads = self.mem_cache.borrow().value_failed.clone();
+            let calls = self.mem_cache.borrow().call_failed.clone();
             return err(format!(
-                "step: `with` facts not used: number {} (it stopped at `{}`){}{}",
+                "step: `with` facts not used: number {} (it stopped at `{}`){}{}{}",
                 pos.join(", "),
                 Printer::new(env).short(cur.concl()),
                 why.map(|w| format!("\n  an operation's lemma that matched but did not apply: {w}")).unwrap_or_default(),
+                if calls.is_empty() { String::new() } else { format!("\n  a call's contract that matched the call but did not apply: {}", calls.join("\n    ")) },
                 if reads.is_empty() { String::new() } else { format!("\n  a value read left unresolved: {}", reads.join("\n    ")) }
             ));
         }
@@ -3262,7 +3265,16 @@ impl State {
                     mark_used(withs, used, i);
                     return Ok(Some(d));
                 }
-                Err(KernelError(m)) => *why = Some(m),
+                Err(KernelError(m)) => {
+                    // (the contract matched the call: why it did not apply,
+                    // for the step's message)
+                    let mut c = self.mem_cache.borrow_mut();
+                    if !c.call_failed.contains(&m) {
+                        c.call_failed.push(m.clone());
+                    }
+                    drop(c);
+                    *why = Some(m)
+                }
             }
         }
         Ok(None)
