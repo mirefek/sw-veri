@@ -278,6 +278,151 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  The slot given back into g's freed mask (no own mapping): the state
+//  with slot i unused (`mp.unres_abs`), on the memory with g's freed word
+//  written (a_or's) -- the invariant, what freed_back asks of the step
+
+theorem mp.unres_mem(c, A, vm, objs, b, g, i): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  vm in x86_64_linux.Vm -> mallocng.holds_in(c, A, vm, objs, b) -> mallocng.is_used(A, g) -> i in omega -> mallocng.reserved_only(A, g, i) ->
+  !mallocng.own_mapping(A.metas[g]) ->
+  abs: mp.unres_abs(A, g, i) in mallocng.Abs && univ: mp.unres_abs(A, g, i) in univ(1) && nores: mallocng.no_reserved(mp.unres_abs(A, g, i)) &&
+  hin: mallocng.holds_in(c, mp.unres_abs(A, g, i), mallocng_specs.wr32(vm, int_add(g, 28), int_add(A.metas[g].freed, pow2(i))), objs, b) &&
+  unt: mallocng.untouched(c, A, b, vm, mallocng_specs.wr32(vm, int_add(g, 28), int_add(A.metas[g].freed, pow2(i))), objs,
+    set_select(omega, x0. mallocng.in_reserved(A, x0))) &&
+  fp: (all a. a in omega -> a in mallocng.footprint(c, mp.unres_abs(A, g, i), b) -> a in mallocng.footprint(c, A, b) || mallocng.in_reserved(A, a)) &&
+  tk: mp.unres_abs(A, g, i).taken = A.taken &&
+  bitf: !bit(A.metas[g].freed, i) && fword: int_add(A.metas[g].freed, pow2(i)) = bits_or(32, A.metas[g].freed, pow2(i))
+proof
+  assume hc hu ha hb hv hin hg hi hro hno
+  let F := A.metas[g].freed
+  let X := int_add(F, pow2(i))
+  let V2 := mallocng_specs.wr32(vm, int_add(g, 28), X)
+  let A2 := mp.unres_abs(A, g, i)
+  let FP := mallocng.held(c, A, b)
+  let M := mallocng.mview(vm, FP)
+  have {hh = mem, hsh = shown} := expand(hin, mallocng.holds_in)
+  have {H = inv} := expand(hh, mallocng.holds_m)
+  have {huo = used} := expand(H, mallocng.holds)
+  have gok := apply(mp.used_group, huo, hg)
+  have {go = nat} := apply(mp.used_nat, ha, hg)
+  have hil hrs _ := expand(hro, mallocng.reserved_only)
+  have {mim} := expand(gok, mallocng.group_ok)
+  have {mav = avail, mfr = freed} := expand(mim, mallocng.meta_in_memory)
+  have {fb0 = bit} := apply(mp.res_freed0[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, i := i], ha, H, hg, hi, hil, hrs)
+  have {sin, each, clr, il, lt} := apply(mp.nf_masks[A := A, M := M, b := b, g := g, i := i], ha, go, gok, hi, hil, hrs)
+  have nfi: !bit(F, i) by taut(mp(all_elim(each, {i}), hi, arith(il, lt)), clr)
+  have top _ := apply(mp.meta_word, hc, hu, ha, hh, hg)
+  have _ g24 inr := apply(mp.meta_mem, hc, hu, ha, hh, hg)
+  have vb: vm.bytes in fn_space(bits(64), bits(8)) by simp(hv)
+  have inm: all o n2. o in omega -> n2 in omega -> int_le(int_add(o, n2), 40) -> (all j. j in omega -> int_lt(j, n2) -> int_add(int_add(g, o), j) in FP) proof
+    fix o n2
+    assume ho hn2 hl
+    fix j
+    assume hj hjl
+    have r1 _ _ := mp(all_elim(inr, {int_add(int_add(g, o), j)}), arith(go, ho, hj), arith(go, ho, hj), arith(go, ho, hj, hjl, hl))
+    show := r1
+  qed
+  // (F: the freed word, 32 bits; X its bit i set)
+  have v28 := apply(mp.view_read[vm := vm, fp := FP, a := int_add(g, 28), n := 4], arith(go), simp(), arith(), mp(all_elim(inm, {28}, {4}), simp(), simp(), simp()))
+  have bh28 := mp(all_elim(g.bytes_bound, {vm}, {int_add(g, 28)}, {4}), vb, simp())
+  have p4: int_pow(256, 4) = 4294967296 by simp()
+  have Fb: F in bits(32) by defs(sel(arith(v28, mfr, bh28, p4)), bits, pow2)
+  have ad := mp(mp.add_bit[S := F, i := i], Fb, hi, arith(il, lt), nfi)
+  have xb := mp(bits_or_in[n := 32, x := F, y := pow2(i)], simp())
+  have Xo Xl0 := (X in omega && int_lt(X, pow2(32)) by simp(rewrite(sym(ad), xb), keep(pow2)))
+  have p32: pow2(32) = 4294967296 by defs(simp(), pow2)
+  have Xl: int_lt(X, 4294967296) by arith(Xl0, p32)
+  // holds_m_unres's premises: only the freed word written, the avail word read back
+  have gb: int_add(g, 28) in bits(64) by arith(go, top)
+  have eb: all x. x in bits(64) -> !(int_le(int_add(g, 24), x) && int_lt(x, int_add(g, 32))) -> V2.bytes[x] = vm.bytes[x] proof
+    fix x
+    assume hx hn
+    show := apply(mp.wr32_out[V := vm, c := int_add(g, 28), v := X, x := x], hx, gb, arith(top), arith(hn))
+  qed
+  have ep: V2.pages = vm.pages := mp(mp.w32_keep[V := vm, c := int_add(g, 28), v := X, k := "pages"], simp())
+  have ek: V2.brk = vm.brk := mp(mp.w32_keep[V := vm, c := int_add(g, 28), v := X, k := "brk"], simp())
+  have et: V2.stack_top = vm.stack_top := mp(mp.w32_keep[V := vm, c := int_add(g, 28), v := X, k := "stack_top"], simp())
+  have el: V2.stack_limit = vm.stack_limit := mp(mp.w32_keep[V := vm, c := int_add(g, 28), v := X, k := "stack_limit"], simp())
+  // (A2's view: A's bytes and the slot's)
+  have mo := apply(mp.unres_state, ha, go, hi, hil, hrs, fb0).mo
+  have fpr: mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) := trans((mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, mp.unres_m(A, g, i)) by defs(simp(), mallocng.fp_ranges,
+    mallocng.fixed_ranges, mallocng.auxv_ranges)), apply(mp.mo_ranges[c := c, A := A, A2 := mp.unres_m(A, g, i)], ha, mo))
+  have tk: A2.taken = A.taken by simp()
+  have nr2 := apply(mp.unres_nores, ha, go, hi, hro, fb0)
+  have heldA2: all a. a in FP -> a in mallocng.held(c, A2, b) proof
+    fix a
+    assume h1
+    have {f1 = fp} := apply(mp.held_fp, h1)
+    have ao nr1 := (a in omega && !mallocng.in_reserved(A, a) by taut(apply(mp.fp_def[c := c, A := A, b := b, a := a]), f1))
+    have {hld = held} := apply(mp.fp_same[c := c, A := A, A2 := A2, b := b, a := a], ao, fpr, tk, nr1, apply(mp.nores[A := A2, a := a], nr2))
+    show by taut(hld, h1)
+  qed
+  have in2: all o n2. o in omega -> n2 in omega -> int_le(int_add(o, n2), 40) -> (all j. j in omega -> int_lt(j, n2) -> int_add(int_add(g, o), j) in mallocng.held(c, A2, b)) proof
+    fix o n2
+    assume ho hn2 hl
+    fix j
+    assume hj hjl
+    show := mp(all_elim(heldA2, {int_add(int_add(g, o), j)}), mp(all_elim(inm, {o}, {n2}), ho, hn2, hl, {j}, hj, hjl))
+  qed
+  have m24: all j. j in omega -> int_lt(j, 4) -> V2.bytes[int_add(int_add(g, 24), j)] = vm.bytes[int_add(int_add(g, 24), j)] proof
+    fix j
+    assume hj hjl
+    show := apply(mp.wr32_out[V := vm, c := int_add(g, 28), v := X, x := int_add(int_add(g, 24), j)], arith(go, top, hj, hjl), gb, arith(top), arith(hjl, hj))
+  qed
+  have r24 := apply(mp.rd_same[v1 := V2, v2 := vm, a := int_add(g, 24), n := 4], arith(go), simp(), arith(top), m24)
+  have v24 := apply(mp.view_read[vm := vm, fp := FP, a := int_add(g, 24), n := 4], arith(go), simp(), arith(), mp(all_elim(inm, {24}, {4}), simp(), simp(), simp()))
+  have w24 := apply(mp.view_read[vm := V2, fp := mallocng.held(c, A2, b), a := int_add(g, 24), n := 4], arith(go), simp(), arith(), mp(all_elim(in2, {24}, {4}), simp(), simp(), simp()))
+  have rav: mallocng.rd(mallocng.mview(V2, mallocng.held(c, A2, b)), int_add(g, 24), 4) = A.metas[g].avail := trans(sym(w24), trans(r24, trans(v24, mav)))
+  have w28 := apply(mp.view_read[vm := V2, fp := mallocng.held(c, A2, b), a := int_add(g, 28), n := 4], arith(go), simp(), arith(), mp(all_elim(in2, {28}, {4}), simp(), simp(), simp()))
+  have r28 := apply(mp.rd_at4[vm := vm, c := int_add(g, 28), v := X], vb, gb, Xo)
+  have wq: V2 = fn_update(vm, "bytes", x86_64_linux.store_le(vm.bytes, int_add(g, 28), 4, X)) := all_elim(ms.v_wr32, {vm}, {int_add(g, 28)}, {X})
+  have mX: int_mod(X, 4294967296) = X by arith(Xo, Xl)
+  have rfr: mallocng.rd(mallocng.mview(V2, mallocng.held(c, A2, b)), int_add(g, 28), 4) = X := trans(sym(w28), trans(rewrite(sym(wq), r28), mX))
+  have {a2 = abs, u2 = univ, hm2 = holds} := apply(mp.holds_m_unres[c := c, A := A, vm := vm, vm2 := V2, b := b, g := g, i := i], hc, hu, ha, hb, hh, hg, hi, hro, hno,
+    eb, ep, ek, et, el, rav, rfr)
+  have sh2 := apply(mp.shown_same[c := c, A := A, A2 := A2, objs := objs], hsh, fpr, (A2.reserve = A.reserve by simp()), (A2.reserve_cnt = A.reserve_cnt by simp()))
+  have hin2: mallocng.holds_in(c, A2, V2, objs, b) by defs(taut(hm2, sh2), mallocng.holds_in)
+  // untouched: only g's freed word written, the allocator's
+  have ss := mp(fn_update_same[f := vm, k := "bytes"], simp(expand(hv, x86_64_linux.Vm)), simp(expand(hv, x86_64_linux.Vm)))
+  have t2 := fn_update_twice[f := vm, k := "bytes", a := x86_64_linux.store_le(vm.bytes, int_add(g, 28), 4, X), b := vm.bytes]
+  have vr: fn_update(V2, "bytes", vm.bytes) = vm := rewrite(sym(wq), trans(t2, ss))
+  have bk := apply(mp.bk_only[v := vm, v2 := V2], vr)
+  let E := set_select(omega, x0. mallocng.in_reserved(A, x0))
+  have r0: all x0. x0 in omega -> (!(x0 in mallocng.footprint(c, A, b)) && !(x0 in E)) && x86_64_linux.mapped(vm, int_div(x0, x86_64_linux.PAGE)) ->
+      (!abi.stack_free(vm, objs, x0) -> V2.bytes[bits_of_int(64, x0)] = vm.bytes[bits_of_int(64, x0)]) &&
+      V2.pages[int_div(x0, x86_64_linux.PAGE)] = vm.pages[int_div(x0, x86_64_linux.PAGE)] proof
+    fix a
+    assume ho hq
+    have n1 _ mm := hq
+    have mm1 _ := expand(mm, x86_64_linux.mapped)
+    have alo: int_lt(a, int_pow(2, 64)) by arith(ho, expand(mm1, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))
+    have nm: !(int_le(int_add(g, 28), a) && int_lt(a, int_add(g, 32))) proof
+      assume w
+      have w1 w2 := w
+      have {mf = fp} := apply(mp.meta_held[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, a := a], hc, hu, ha, H, hg, ho, arith(w1), arith(w2))
+      show by taut(mf, n1)
+    qed
+    have ab: bits_of_int(64, a) = a by defs(arith(ho, alo), bits_of_int, pow2)
+    have bb := apply(mp.wr32_out[V := vm, c := int_add(g, 28), v := X, x := a], (a in bits(64) by defs(sel(arith(ho, alo)), bits, pow2)), gb, arith(top), arith(nm))
+    have bb2 := subst({y. V2.bytes[y] = vm.bytes[y]}, sym(ab), bb)
+    show by taut(bb2, (V2.pages[int_div(a, x86_64_linux.PAGE)] = vm.pages[int_div(a, x86_64_linux.PAGE)] by simp(ep)))
+  qed
+  have unt: mallocng.untouched(c, A, b, vm, V2, objs, E) by defs(taut(r0, bk), mallocng.untouched)
+  // the allocator after: A's, and the slot given back
+  have fpc: all a. a in omega -> a in mallocng.footprint(c, A2, b) -> a in mallocng.footprint(c, A, b) || mallocng.in_reserved(A, a) proof
+    fix a
+    assume ho f
+    have c1: !mallocng.in_reserved(A, a) -> a in mallocng.footprint(c, A, b) proof
+      assume nr1
+      have {fe = fp} := apply(mp.fp_same[c := c, A := A, A2 := A2, b := b, a := a], ho, fpr, tk, nr1, apply(mp.nores[A := A2, a := a], nr2))
+      show by taut(fe, f)
+    qed
+    show by taut(c1)
+  qed
+  show by taut(a2, u2, nr2, hin2, unt, fpc, tk, nfi, ad)
+qed
+
+// ----------------------------------------------------------------------
 //  nontrivial_free's run
 
 theorem mp.nf_dev(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao, g, i, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
