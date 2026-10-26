@@ -34,10 +34,9 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   (proofs/mallocng/fun/nontrivial_free.core, free_group called at the
   same count), and the induction (`mp.fg_nf`). Open: the refinements to
   the specs.
-- `__libc_free`: its run is done (`mp.lf_run`,
-  proofs/mallocng/fun/libc_free.core, spec `libc_free_spec`); open: its
-  refinement and contract at a call (as `mp.gns`), then the `free` symbol
-  (src/malloc/free.c), then `calloc`. `tls_apart` / `errno_apart` (and
+- `__libc_free` and the `free` symbol are done (`mp.lf`, `mp.fr`; their
+  contracts: proofs/mallocng/fun/libc_free.core, free.core); next
+  `calloc`. `tls_apart` / `errno_apart` (and
   rep's clauses) put the thread's words in none of the allocator's
   ranges -- so in no live block, no reserved slot: free's steps may unmap
   the block freed; the top level's argument (section 5) covers the whole
