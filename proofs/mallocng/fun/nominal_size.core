@@ -346,3 +346,45 @@ proof
   have rs: int_le(5, R) || int_lt(R, 5) by arith(ro)
   show by taut(rs, cA, cB, nb)
 qed
+
+// get_nominal_size's code by its purpose: its contract, the ghost part kept
+theorem mp.gns: all c p e g0. c in mallocng.Cfg -> p in bits(64) -> e in bits(64) ->
+  refines_ghost(c_src_malloc_mallocng_free.get_nominal_size(p, e, g0), mallocng_specs.nominal_size_spec(c, p, e), abi.World, mp.G)
+proof
+  fix c p e g0
+  assume hc hp he
+  have rp: all s o. runs(c_src_malloc_mallocng_free.get_nominal_size(p, e, g0), s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_free.get_nominal_size))
+  qed
+  have body: all s h o. s in abi.World -> h in mp.G -> runs(c_src_malloc_mallocng_free.get_nominal_size(p, e, g0), s, o) ->
+      (((mallocng.holds_in(c, union2(s, h).A, union2(s, h).vm, union2(s, h).objs, union2(s, h).blocks) && mallocng.no_reserved(union2(s, h).A)) &&
+        gc.sound(union2(s, h))) &&
+        (ex g i. (g in omega && i in omega) && (((mallocng.is_used(union2(s, h).A, g) && int_lt(i, seq_len(union2(s, h).A.slots[g]))) &&
+          union2(s, h).A.slots[g][i] = tag(1, p)) && e = mallocng.slot_end(union2(s, h).A.metas[g], i)))) ->
+      abi.ovf_out(s, o) ||
+      (ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, snd(union2(s, h).blocks[p]))))) proof
+    fix s h o
+    assume hs hh hr hpre
+    have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+    have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+    have hin0: mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) by simp(hpre, sd, hd)
+    have {hin = mem, hsh = shown} := hin0
+    have hnr: mallocng.no_reserved(h.A) by simp(hpre, sd, hd)
+    have ex1: ex g i. (g in omega && i in omega) && (((mallocng.is_used(h.A, g) && int_lt(i, seq_len(h.A.slots[g]))) &&
+      h.A.slots[g][i] = tag(1, p)) && e = mallocng.slot_end(h.A.metas[g], i)) by simp(hpre, sd, hd)
+    obtain g i, hg hi hu hil hsl hse from ex1
+    have oc nb := apply(mp.gns_run[c := c, p := p, e := e, s := s, h := h, o := o, g := g, i := i, g0 := g0], hc, hp, he, hs, hh, hin, hsh, hnr, hu, hi, hil, hsl, hse, hr)
+    have bN: bits_of_int(64, snd(union2(s, h).blocks[p])) = snd(h.blocks[p]) by simp(nb, sd, hd)
+    have k: ex s1 v. o = ok(s1, v) && exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, snd(union2(s, h).blocks[p]))))
+      by ex_intro({s}, {snd(h.blocks[p])}, taut(oc, (exc(pair(union2(s, h), empty), pair("ret", snd(h.blocks[p]))) = exc(pair(union2(s, h), empty), pair("ret", bits_of_int(64, snd(union2(s, h).blocks[p])))) by simp(bN))))
+    show by taut(k)
+  qed
+  show by defs(apply(ct.refines_contract, mp.g_world, rp, body), mallocng_specs.nominal_size_spec)
+qed
+
+// its C function value, its divergence, its machine code over any callee
+// and linked (with a_crash's spec): mp.gns_fun, mp.gns_divg,
+// mp.gns_implements, mp.gns_linked
+contract get_nominal_size mallocng_specs.nominal_size_spec_fun by mp.gns
