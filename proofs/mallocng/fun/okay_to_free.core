@@ -220,3 +220,46 @@ proof
   qed
   show by taut(r0, n0)
 qed
+
+// ----------------------------------------------------------------------
+//  okay_to_free's code by its purpose: its contract, the ghost part kept
+theorem mp.otf: all c g gst gib. c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
+  mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) -> mp.ib_call(c, gib) ->
+  refines_ghost(c_src_malloc_mallocng_free.okay_to_free(g, gst, gib), mallocng_specs.okay_to_free_spec(c, g), abi.World, mp.G)
+proof
+  fix c g gst gib
+  assume hc hx hsct hg hgst hib
+  let P := c_src_malloc_mallocng_free.okay_to_free(g, gst, gib)
+  have rp: all s o. runs(P, s, o) -> pair(s, o) in univ(1) proof
+    fix s o
+    assume hr
+    show := apply(g.runs_univ, expand(hr, c_src_malloc_mallocng_free.okay_to_free))
+  qed
+  unfold mallocng_specs.okay_to_free_spec
+  refine ct.refines_contract with mp.g_world, rp
+  fix s h o
+  assume hw hh hr hpre
+  have _ hd _ _ := mp(all_elim(mp.g_rec, {h}), hh)
+  have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hw, abi.World))
+  have hin0: mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) by simp(hpre, sd, hd)
+  have {hin = mem, hsh = shown} := hin0
+  have hus: mallocng.is_used(h.A, g) by simp(hpre, sd, hd)
+  have hth: abi.thread_ok(s.vm, s.fs_base) by simp(hpre, sd, hd)
+  have run := apply(mp.otf_run[c := c, g := g, s := s, h := h, o := o, gst := gst, gib := gib], hc, hx, hsct, hg, hw, hh, hin, hsh, hth, hus, hgst, hib, hr)
+  have k: (ex r. o = ok(s, r) && r in bits(32)) ->
+      (ex s1 v. o = ok(s1, v) && any_rel(x. x in bits(32), x. exc(pair(union2(s1, h), empty), pair("ret", v)) = exc(pair(union2(s, h), empty), pair("ret", x)))) proof
+    assume e
+    obtain r, ho hb from e
+    have e1: ex x. x in bits(32) && exc(pair(union2(s, h), empty), pair("ret", r)) = exc(pair(union2(s, h), empty), pair("ret", x))
+      by ex_intro({r}, taut(hb, refl({exc(pair(union2(s, h), empty), pair("ret", r))})))
+    have a: any_rel(x. x in bits(32), x. exc(pair(union2(s, h), empty), pair("ret", r)) = exc(pair(union2(s, h), empty), pair("ret", x)))
+      by defs(taut(e1), any_rel)
+    show by ex_intro({s}, {r}, taut(ho, a))
+  qed
+  show by taut(run, k)
+qed
+
+// its C function value, its divergence, its machine code over any callees:
+// mp.otf_fun, mp.otf_divg, mp.otf_implements
+contract okay_to_free mallocng_specs.okay_to_free_spec_fun by mp.otf

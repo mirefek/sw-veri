@@ -1037,7 +1037,7 @@ proc[MallocAbs] nominal_size_spec(c: Cfg, p: bits[64], end: bits[64]) -> bits[64
 // okay_to_free(g), g a group in use whose slots are all free: whether to
 // free it now -- musl's heuristic (the class's usage, bouncing), any answer
 proc[MallocAbs] okay_to_free_spec(c: Cfg, g: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, objs, blocks) && is_used(A, uint(g))
+  require holds_in(c, A, vm, objs, blocks) && is_used(A, uint(g)) && thread_ok(vm, fs_base)
   either { overflow() } or { return any bits[32] }
 }
 
