@@ -537,8 +537,9 @@ theorem mp.unres_queue(c, A, vm, V1, objs, b, g, i): c in mallocng.Cfg -> A in u
   !mallocng.own_mapping(A.metas[g]) -> int_mod(c.ctx, 8) = 0 -> int_lt(A.metas[g].sizeclass, 48) ->
   !mallocng.on_list(A.active[A.metas[g].sizeclass], g) -> A.metas[g].prev = 0 -> A.metas[g].next = 0 -> A.metas[g].avail = 0 -> A.metas[g].freed = 0 ->
   mallocng_specs.queued(vm, V1, objs, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, A.metas[g].sizeclass)), g) ->
-  ex A3. (A3 in mallocng.Abs && A3 in univ(1)) &&
-    mallocng_specs.freed_back(c, A, A3, b, vm, mallocng_specs.wr32(V1, int_add(g, 28), int_add(A.metas[g].freed, pow2(i))), objs, 0, 0)
+  rd28: gimple.bytes_at(V1, int_add(g, 28), 4) = gimple.bytes_at(vm, int_add(g, 28), 4) &&
+  out: (ex A3. (A3 in mallocng.Abs && A3 in univ(1)) &&
+    mallocng_specs.freed_back(c, A, A3, b, vm, mallocng_specs.wr32(V1, int_add(g, 28), int_add(A.metas[g].freed, pow2(i))), objs, 0, 0))
 proof
   assume hc hu ha hb hv hV1 hin hg hi hro hno cal hsl hnl hp0 hn0 hav0 hfr0 hq
   let sc := A.metas[g].sizeclass
@@ -811,7 +812,21 @@ proof
   qed
   have lg: mallocng_specs.let_go(c, A, A3, b, 0, 0) by defs(simp(), mallocng_specs.let_go)
   have fb: mallocng_specs.freed_back(c, A, A3, b, vm, V2, objs, 0, 0) by defs(taut(hin3, nr3, tk, unt3, fpc, lg), mallocng_specs.freed_back)
-  show by ex_intro({A3}, taut(a3, u3, fb))
+  have ex3: ex A3. (A3 in mallocng.Abs && A3 in univ(1)) && mallocng_specs.freed_back(c, A, A3, b, vm, V2, objs, 0, 0) by ex_intro({A3}, taut(a3, u3, fb))
+  // g's freed word: not the queue's
+  have m28: all j. j in omega -> int_lt(j, 4) -> V1.bytes[int_add(int_add(g, 28), j)] = vm.bytes[int_add(int_add(g, 28), j)] proof
+    fix j
+    assume hj hjl
+    let a := int_add(int_add(g, 28), j)
+    have ao: a in omega by arith(go, hj)
+    have al: int_lt(a, int_pow(2, 64)) by arith(top, hjl)
+    have p1 p2 := mp(all_elim(away, {a}), ao, arith(hj), arith(hjl))
+    have q := mp(all_elim(ob2, {a}), ao, taut(al, p1, p2))
+    have ab: bits_of_int(64, a) = a by defs(arith(ao, al), bits_of_int, pow2)
+    show := subst({y. V1.bytes[y] = vm.bytes[y]}, ab, q)
+  qed
+  have r28 := apply(mp.rd_same[v1 := V1, v2 := vm, a := int_add(g, 28), n := 4], arith(go), simp(), arith(top), m28)
+  show by taut(r28, ex3)
 qed
 
 // ----------------------------------------------------------------------
@@ -1166,8 +1181,8 @@ proof
     qed
     have f3: case 3 of ht2 proof
       assume e
-      have hx hno := e
-      step k1 from rewrite(hx, kx1)
+      have hx7 hno := e
+      step k1 from rewrite(hx7, kx1)
       // (a_or: the freed word or'ed with g's bit)
       have p28: bits_add(64, g, 28) = int_add(g, 28) by defs(arith(go, top), bits_add, pow2)
       have g4b: int_le(int_add(int_add(g, 28), 4), int_pow(2, 64)) by arith(top)
@@ -1193,8 +1208,73 @@ proof
           by simp(rewrite(sym(ex2), uo), keep(mallocng_specs.freed_back))
         show by disj({2}, ex_intro({V2}, {pair(0, 0)}, taut(v2V, fb, oe)))
       qed
-      goal 3
-      show by simp()
+      // g full (no slot free but i): queued if not its list's head
+      have mz: MASK = 0 -> GOAL proof
+        assume hm
+        have abits: A.metas[g].avail in bits(32) := rewrite(eAv, (bits_of_int(32, gimple.bytes_at(V0, int_add(g, 24), 4)) in bits(32) by simp()))
+        have f0 a0 := apply(mp.or_zero[x := A.metas[g].freed, y := A.metas[g].avail], fbits, abits, hm)
+        have s48: int_lt(A.metas[g].sizeclass, 48) proof
+          have k: int_le(48, A.metas[g].sizeclass) -> mallocng.own_mapping(A.metas[g]) proof
+            assume x
+            show by defs(taut(x), mallocng.own_mapping)
+          qed
+          show by arith(vsc, (!int_le(48, A.metas[g].sizeclass) by taut(k, hno)))
+        qed
+        have sC := apply(ms.sint_small, vsc, (int_lt(A.metas[g].sizeclass, 2147483648) by arith(s48)))
+        have sI: sint(32, SC6) = A.metas[g].sizeclass by simp(e6, sC)
+        have s47: sint(32, 47) = 47 by defs(simp(), sint, pow2)
+        have scs: !int_lt(sint(32, 47), sint(32, SC6)) by arith(sI, s47, s48)
+        // (the list's head word)
+        let CF := c_src_malloc_mallocng_free.__malloc_context
+        have cf: CF = 4227328 by defs(simp(), c_src_malloc_mallocng_free.__malloc_context)
+        have cv: c_src_malloc_mallocng_malloc.__malloc_context = 4227328 by defs(simp(), c_src_malloc_mallocng_malloc.__malloc_context)
+        have ca: mallocng.C_ACTIVE = 80 by defs(refl({80}), mallocng.C_ACTIVE)
+        have kb: CF in bits(64) by simp(cf)
+        have cnz: !(CF = 0) by simp(cf)
+        have sc1 sc2 := (SC6 in omega && int_lt(SC6, 48) by arith(e6, vsc, s48))
+        have sx := apply(ms.sext_small, (SC6 in bits(32) by arith(sc1, sc2)), arith(sc1, sc2))
+        have sv80: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 80) = 80 by defs(simp(), gimple.sval)
+        let UA := int_add(int_add(CF, 80), int_mul(8, SC6))
+        let PH := int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, A.metas[g].sizeclass))
+        have uph: UA = PH by arith(cf, hx, cv, e6, ca)
+        have cal: int_mod(c.ctx, 8) = 0 by arith(hx, cv)
+        have la := apply(mp.active_at[c := c, A := A, vm := V0, b := B, objs := s.objs, sc := A.metas[g].sizeclass], hc, au, hat, vb, hhm, hsh, cal, vsc, s48)
+        have {hok = head} := expand(la, mallocng_specs.list_at)
+        have _ pb ur8 _ := expand(hok, mallocng_specs.word_ok)
+        have uab: UA in bits(64) by arith(cf, sc1, sc2)
+        have u0: int_add(UA, 0) = UA by arith(uab)
+        have uu: gimple.usable(V0, s.objs, UA, 8, false) by simp(rewrite(sym(uph), ur8), u0)
+        have umd: g.mem_defined(s, UA, 0, 8, false) by simp(uu, u0, (!(UA = 0) by arith(cf, sc1)), (int_lt(UA, pow2(64)) by arith(uab)))
+        step k3 from k1 with hm, scs, sx, g.padd_det, sv80, g.elem8_det, g.ld64_det using conj(hs, su, kb, umd, uab, cf, cnz, sc1, sc2)
+        let HV := bits_of_int(64, gimple.bytes_at(V0, int_add(UA, 0), 8))
+        let L := A.active[A.metas[g].sizeclass]
+        have {H0 = inv} := expand(hhm, mallocng.holds_m)
+        have {cok = ctx, hac = active} := expand(H0, mallocng.holds)
+        have {c11 = nactive} := expand(cok, mallocng.ctx_ok)
+        have al0: A.active in list_type(list_type(omega)) by simp(hat)
+        have lt0 := mp(at_type[l := A.active, t := list_type(omega), i := A.metas[g].sizeclass], al0, vsc, (int_lt(A.metas[g].sizeclass, seq_len(A.active)) by arith(c11, s48)))
+        have phb: PH in bits(64) by defs(sel(arith(pb, hx, cv, ca, vsc)), bits, pow2)
+        have {hv0 = value} := apply(mp.head_is[vm := V0, objs := s.objs, phead := PH, l := L], vb, phb, lt0, la)
+        have r1 := all_elim(ms.v_rd64, {V0}, {PH})
+        have ehv: HV = ite(seq_len(L) = 0, 0, L[0]) := rewrite(sym(u0), rewrite(sym(uph), trans(sym(r1), hv0)))
+        // g the head: on to a_or
+        have ch: g = HV -> GOAL proof
+          assume he
+          step k4 from k3 with he
+          have g28c: int_add(g, 28) in bits(64) by arith(go, top)
+          have sv28: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 28) = 28 by defs(simp(), gimple.sval)
+          step V2 r2, oe hR from k4 with g.padd_det, hao using conj(hs, su, ths, hgb, g28c, sb, acp)
+          have v2V ev2 := rewrite(sv28, hR)
+          have ex2 := rewrite(xval, rewrite(eFr, ev2))
+          have uo := apply(mp.unres_out[c := c, A := A, vm := V0, objs := s.objs, b := B, g := g, i := i], hc, au, hat, hbt, vV, hin, hus, io, hro, hno)
+          have fb: ex A2. (A2 in mallocng.Abs && A2 in univ(1)) && mallocng_specs.freed_back(c, A, A2, B, V0, V2, s.objs, fst(pair(0, 0)), snd(pair(0, 0)))
+            by simp(rewrite(sym(ex2), uo), keep(mallocng_specs.freed_back))
+          show by disj({2}, ex_intro({V2}, {pair(0, 0)}, taut(v2V, fb, oe)))
+        qed
+        goal 3
+        show by simp()
+      qed
+      show by taut(mn, mz)
     qed
     show by taut(ht2, f1, f2, f3)
   qed
