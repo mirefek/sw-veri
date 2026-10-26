@@ -1068,7 +1068,7 @@ pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm
 // (free_group). What the allocator lets go (a group's own mapping)
 // returned. The thread pointer's word apart (its callees' calls).
 proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[64], bits[64]) {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && tls_unres(A, fs_base) &&
     is_used(A, uint(g)) && reserved_only(A, uint(g), uint(i))
   either { overflow() } or {
     let A0 = A
@@ -1086,7 +1086,7 @@ proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[
 // freed, the slot it is nested in given back too (nontrivial_free), or
 // its own mapping returned to be unmapped
 proc[MallocAbs] free_group_spec(c: Cfg, g: bits[64]) -> (bits[64], bits[64]) {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && tls_unres(A, fs_base) &&
     is_used(A, uint(g)) && A.metas[uint(g)].next = 0 && emptied(A, uint(g))
   either { overflow() } or {
     let A0 = A
@@ -1137,6 +1137,9 @@ proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
 // the thread pointer's word: not the allocator's (a function calling on
 // after writing the allocator's memory needs it intact)
 pred tls_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 8 -> uint(fs) + i notin footprint(c, A, blocks)
+// ... nor in a reserved slot (a block being freed: the user's, never the
+// thread's -- free's steps may unmap it)
+pred tls_unres(A: Abs, fs: Addr) = all i: nat. i < 8 -> !in_reserved(A, uint(fs) + i)
 
 // errno's cell (the thread's, mapped as the thread pointer's word) not the
 // allocator's
