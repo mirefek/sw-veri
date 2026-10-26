@@ -43,12 +43,13 @@ proof
   show by taut(lt2, ln)
 qed
 
-// (A1 of A's geometry, the slots S of A's but some unused made reserved:
-// A1 with S, of A's geometry so)
+// (A1 of A's geometry, the slots S of A's but some unused made reserved
+// or reserved made unused: A1 with S, of A's geometry so)
 theorem mp.geoms_upd(A, A1, S): A in mallocng.Abs -> mp.geom(A, A1) ->
   (all x. x in omega -> seq_len(S[x]) = seq_len(A.slots[x])) ->
   (all x j. x in omega && j in omega -> S[x][j] = A.slots[x][j] ||
-     (A.slots[x][j] = tag(0, empty) && S[x][j] = tag(3, empty))) ->
+     (A.slots[x][j] = tag(0, empty) && S[x][j] = tag(3, empty)) ||
+     (A.slots[x][j] = tag(3, empty) && S[x][j] = tag(0, empty))) ->
   mp.geoms(A, fn_update(A1, "slots", S))
 proof
   assume ha hg hl hr
@@ -114,7 +115,8 @@ theorem mp.res_state(A, g, i): A in mallocng.Abs -> g in omega -> i in omega -> 
   slen: seq_len(mp.res_abs(A, g, i).slots[g]) = seq_len(A.slots[g]) &&
   bits: (all j. j in omega -> mallocng.bit(mp.res_meta(A.metas[g], i).avail, j) = ite(j = i, 0, mallocng.bit(A.metas[g].avail, j))) &&
   back: fn_update(mp.res_abs(A, g, i), "slots", A.slots) = mp.res_m(A, g, i) &&
-  avail: int_sub(A.metas[g].avail, pow2(i)) in omega
+  avail: int_sub(A.metas[g].avail, pow2(i)) in omega &&
+  keep: (all x j. !(A.slots[x][j] = tag(3, empty) && mp.res_abs(A, g, i).slots[x][j] = tag(0, empty)))
 proof
   assume ha hg hi hil hun hb
   let W := mp.res_meta(A.metas[g], i)
@@ -231,7 +233,8 @@ proof
     show by taut(c1, c2)
   qed
   have gs: all x j. x in omega && j in omega -> S2[x][j] = A.slots[x][j] ||
-      (A.slots[x][j] = tag(0, empty) && S2[x][j] = tag(3, empty)) proof
+      (A.slots[x][j] = tag(0, empty) && S2[x][j] = tag(3, empty)) ||
+      (A.slots[x][j] = tag(3, empty) && S2[x][j] = tag(0, empty)) proof
     fix x j
     assume hxj
     have c2: !(x = g) -> S2[x][j] = A.slots[x][j] proof
@@ -255,7 +258,31 @@ proof
     show by taut(c1, c2)
   qed
   have geo := apply(mp.geoms_upd[A := A, A1 := A1, S := S2], ha, apply(mp.mo_geom_of, ha, mo), gl, gs)
-  show by taut(a1, u1, mo, geo, em2, eg, eo, sg, sj, sh, slen, bits, back, nao)
+  // (no reserved slot made unused: only slot i of g changes, from unused)
+  have keep: all x j. !(A.slots[x][j] = tag(3, empty) && A2.slots[x][j] = tag(0, empty)) proof
+    fix x j
+    assume e
+    have e1 e2 := e
+    have q1: x = g && j = i -> false proof
+      assume q
+      have qx qj := q
+      have z := rewrite(qj, rewrite(qx, e1))
+      show by defs(simp(trans(sym(z), hun)), tag)
+    qed
+    have q2: !(x = g) -> false proof
+      assume ne
+      have z := trans(sym(rewrite(mp(all_elim(sh, {x}), ne), e2)), e1)
+      show by defs(simp(z), tag)
+    qed
+    have q3: x = g && !(j = i) -> false proof
+      assume q
+      have qx qj := q
+      have z := trans(sym(rewrite(mp(all_elim(sj, {j}), qj), rewrite(qx, e2))), rewrite(qx, e1))
+      show by defs(simp(z), tag)
+    qed
+    show by taut(q1, q2, q3)
+  qed
+  show by taut(a1, u1, mo, geo, em2, eg, eo, sg, sj, sh, slen, bits, back, nao, keep)
 qed
 
 // (g's masks with a slot reserved: its bit taken from the available mask)
@@ -363,7 +390,13 @@ proof
       have f: false by defs(simp(trans(sym(hs), e1)), tag)
       show by taut(f)
     qed
-    have s2: A2.slots[s][j] = tag(1, p) by taut(mp(all_elim(gsr, {s}, {j}), conj(so, hj)), d1, d2)
+    have d3: A.slots[s][j] = tag(3, empty) && A2.slots[s][j] = tag(0, empty) -> A2.slots[s][j] = tag(1, p) proof
+      assume e
+      have e1 _ := e
+      have f: false by defs(simp(trans(sym(hs), e1)), tag)
+      show by taut(f)
+    qed
+    have s2: A2.slots[s][j] = tag(1, p) by taut(mp(all_elim(gsr, {s}, {j}), conj(so, hj)), d1, d2, d3)
     have sl := mp(all_elim(gsl, {s}), so)
     show by ex_intro({k}, {j}, taut(hk, hj, rewrite(sym(eu), hkl), rewrite(sym(eu), rewrite(sym(sl), hjl)), rewrite(sym(eu), s2)))
   qed
@@ -644,7 +677,7 @@ proof
   have {huo = used, hpart = part, hin = in_slots, hbrk = brk, hsep = sep, hwf = wf, hfix = fixed, hac0 = active, hpo = partial} := expand(H, mallocng.holds)
   have {usl = used_slots} := expand(hpart, mallocng.metas_partition)
   have {go = nat} := apply(mp.used_nat, ha, hg)
-  have {a1 = abs1, mo = mo, gs = geoms, em2 = metas, atg = atg, eo = others, sg = sg, sj = sj, sh = sh, slen = slen, bits = bits} := apply(mp.res_state, ha, go, hi, hil, hun, hbit)
+  have {a1 = abs1, mo = mo, gs = geoms, em2 = metas, atg = atg, eo = others, sg = sg, sj = sj, sh = sh, slen = slen, bits = bits, rk = keep} := apply(mp.res_state, ha, go, hi, hil, hun, hbit)
   have byt: all a. a in omega -> !(int_le(int_add(g, 24), a) && int_lt(a, int_add(g, 32))) -> !mp.ingrp(A, a) -> M2[a] = M[a] proof
     fix a
     assume hao hw hng
@@ -823,7 +856,8 @@ proof
       have _ e2 := e
       show := e2
     qed
-    have s2: mp.res_abs(A, g, i).slots[h][j] = tag(3, empty) by taut(mp(all_elim(gsr, {h}, {j}), conj(hh, hj)), d1, d2)
+    have d3 := all_elim(rk, {h}, {j})
+    have s2: mp.res_abs(A, g, i).slots[h][j] = tag(3, empty) by taut(mp(all_elim(gsr, {h}, {j}), conj(hh, hj)), d1, d2, d3, hs0)
     have l2: int_lt(j, seq_len(mp.res_abs(A, g, i).slots[h])) := rewrite(sym(mp(all_elim(gsl, {h}), hh)), rewrite(es1, hjl))
     have iu2: mallocng.is_used(mp.res_abs(A, g, i), h) by defs(simp(expand(hu1, mallocng.is_used)), mallocng.is_used)
     have is2: mallocng.in_slot(mp.res_abs(A, g, i).metas[h], j, x) by simp(em2, his)
@@ -963,9 +997,10 @@ proof
 qed
 
 // (the slots changed but some unused made reserved: reserved bytes stay so)
-theorem mp.gs_inres(A, A2, x): A in mallocng.Abs -> mp.geoms(A, A2) -> mallocng.in_reserved(A, x) -> mallocng.in_reserved(A2, x)
+theorem mp.gs_inres(A, A2, x): A in mallocng.Abs -> mp.geoms(A, A2) ->
+  (all x j. !(A.slots[x][j] = tag(3, empty) && A2.slots[x][j] = tag(0, empty))) -> mallocng.in_reserved(A, x) -> mallocng.in_reserved(A2, x)
 proof
-  assume ha hg r
+  assume ha hg hk r
   have {gsl = slen, gsr = sres} := hg
   obtain h j, hh hj hu hjl hs his from expand(r, mallocng.in_reserved)
   have eu := apply(mp.gs_field[A := A, A2 := A2, k := "used"], hg, simp(), simp(), simp(), simp())
@@ -979,7 +1014,8 @@ proof
     have _ e2 := e
     show := e2
   qed
-  have s2: A2.slots[h][j] = tag(3, empty) by taut(mp(all_elim(gsr, {h}, {j}), conj(hh, hj)), d1, d2)
+  have d3 := all_elim(hk, {h}, {j})
+  have s2: A2.slots[h][j] = tag(3, empty) by taut(mp(all_elim(gsr, {h}, {j}), conj(hh, hj)), d1, d2, d3, hs)
   have l2: int_lt(j, seq_len(A2.slots[h])) := rewrite(sym(mp(all_elim(gsl, {h}), hh)), hjl)
   have {ss = slots} := apply(mp.gs_geom[A := A, A2 := A2, x := h], hg, hh)
   have s1 s2e := all_elim(ss, {j})
@@ -1098,7 +1134,7 @@ proof
   qed
   have h1 := apply(mp.holds_reserve[c := c, A := A, M := M, M2 := M1, b := b, brk := vm.brk, g := g, i := i], hc, hu, ha, hb, H, hg, hi, hil, hun, hbit, ag, pg, rav, rfr, hnh)
   have {a2 = abs, u2 = univ} := apply(mp.res_type, ha, go, hi, hil, hun, hbit)
-  have {mo = mo, gs = geoms} := apply(mp.res_state, ha, go, hi, hil, hun, hbit)
+  have {mo = mo, gs = geoms, rk = keep} := apply(mp.res_state, ha, go, hi, hil, hun, hbit)
   have ug2: mallocng.is_used(mp.res_abs(A, g, i), g) by defs(simp(expand(hg, mallocng.is_used)), mallocng.is_used)
   have fpr: mallocng.fp_ranges(c, mp.res_abs(A, g, i)) = mallocng.fp_ranges(c, A) := trans((mallocng.fp_ranges(c, mp.res_abs(A, g, i)) = mallocng.fp_ranges(c, mp.res_m(A, g, i)) by defs(simp(), mallocng.fp_ranges,
     mallocng.fixed_ranges, mallocng.auxv_ranges)), apply(mp.mo_ranges[c := c, A := A, A2 := mp.res_m(A, g, i)], ha, mo))
@@ -1106,7 +1142,7 @@ proof
   have restr: all a. a in omega -> !mallocng.in_reserved(mp.res_abs(A, g, i), a) -> M2[a] = M1[a] proof
     fix a
     assume hao nr2
-    have r12 := apply(mp.gs_inres[A := A, A2 := mp.res_abs(A, g, i), x := a], ha, gs)
+    have r12 := apply(mp.gs_inres[A := A, A2 := mp.res_abs(A, g, i), x := a], ha, gs, rk)
     have nr1: !mallocng.in_reserved(A, a) by taut(nr2, r12)
     have {hmem = held} := apply(mp.fp_same[c := c, A := A, A2 := mp.res_abs(A, g, i), b := b, a := a], hao, fpr, simp(), nr1, nr2)
     show := apply(mp.view_mem[vm := vm2, F1 := FP2, F2 := FP, a := a], hao, hmem)
