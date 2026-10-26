@@ -32,15 +32,13 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   `mp.fg_run` (proofs/mallocng/fun/free_group.core, nontrivial_free
   called at one group fewer) and `mp.nf_run`
   (proofs/mallocng/fun/nontrivial_free.core, free_group called at the
-  same count). Open: the call contracts `mp.fg_call` / `mp.nf_call` from
-  the runs (the procs' C function values) and the depth induction closing
-  the mutual recursion; the refinements to the specs.
+  same count), and the induction (`mp.fg_nf`). Open: the refinements to
+  the specs.
 - `__libc_free`, the `free` symbol (src/malloc/free.c); then `calloc`.
-  free_group's and nontrivial_free's specs require `tls_unres` (the
-  thread pointer's word in no reserved slot: free's steps may unmap it):
-  `__libc_free` has it from the thread block not in the block freed --
-  the top level's `tls_apart` argument (section 5) extended to live
-  blocks.
+  `tls_apart` / `errno_apart` (and rep's clauses) put the thread's words
+  in none of the allocator's ranges -- so in no live block, no reserved
+  slot: free's steps may unmap the block freed; the top level's argument
+  (section 5) covers the whole ranges.
 - free.c's copies of malloc.c's functions: their contracts by `c1 P`
   (proofs/mallocng/fun/free_copies.core; get_meta's done), their linked
   forms (`P.linked`, as cfg.core's for malloc.c's) where free.c's
@@ -125,7 +123,7 @@ claim's `rep` does not (the `frame` law says nothing of the world's
 bytes). The top-level proof
 (rep to holds_in at each allocator call) establishes it as it does
 `tls_apart`: the thread block (the canary at fs + 40) apart from the
-allocator's memory -- at the empty heap, from the context, the tables
+allocator's ranges (its bytes, the live blocks) -- at the empty heap, from the context, the tables
 and the auxiliary vector; after, the allocator maps only fresh pages.
 
 ## 6. Usability

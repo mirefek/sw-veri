@@ -1,0 +1,281 @@
+// The thread's descriptor apart from the allocator (tls_apart,
+// errno_apart: in none of its ranges). All the allocator has -- its bytes,
+// its reserved slots, its taken metas, the live blocks -- lies in its
+// ranges; ranges grown only into memory unmapped before keep the thread's
+// mapped words apart.
+
+// ----------------------------------------------------------------------
+//  What the allocator has: in its ranges
+
+// a group in use
+theorem mp.used_rng(c, A, g, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.is_used(A, g) ->
+  mallocng.in_range(a, mallocng.group_range(A.metas[g])) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha hg hr0
+  obtain k, hk hkl he from expand(hg, mallocng.is_used)
+  have hr: mallocng.in_range(a, mallocng.group_range(A.metas[A.used[k]])) := subst({y. mallocng.in_range(a, mallocng.group_range(A.metas[y]))}, sym(he), hr0)
+  let USED := fn_build(int_sub(seq_len(A.used), 0), x0. mallocng.group_range(A.metas[A.used[int_add(0, x0)]]))
+  have pre := apply(mp.pre_list, hc, hu, ha)
+  have ul: A.used in list_type(omega) by simp(ha)
+  have ud: int_sub(seq_len(A.used), 0) in omega by arith(ul)
+  have uv: all x0. x0 in int_sub(seq_len(A.used), 0) -> mallocng.group_range(A.metas[A.used[int_add(0, x0)]]) in univ(1) proof
+    fix x0
+    assume hx
+    show by defs(simp(hu), mallocng.group_range, mallocng.stride)
+  qed
+  have usl := apply(build_list, ud, uv)
+  have kl2: int_lt(k, int_sub(seq_len(A.used), 0)) by arith(ul, hk, hkl)
+  have dl: seq_len(USED) = int_sub(seq_len(A.used), 0)
+    by defs(fn_build_dom[d := int_sub(seq_len(A.used), 0), v := x0. mallocng.group_range(A.metas[A.used[int_add(0, x0)]])], seq_len)
+  have kin := mp(nat_lt_mem[k := k, n := int_sub(seq_len(A.used), 0)], hk, ud, kl2)
+  have w: ex j. j in omega && (int_lt(j, seq_len(USED)) && mallocng.in_range(a, USED[j]))
+    by ex_intro({k}, simp(hk, kin, kl2, hr, dl))
+  have ir := mp(ex_at_concat_r[a := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(mallocng.ro_ranges(c.file), mallocng.data_ranges(c)), mallocng.auxv_ranges(A)),
+    fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))),
+    seq_one(pair(A.reserve, int_mul(4096, A.reserve_cnt)))), seq_one(pair(c.sct, int_mul(2, 48)))), seq_one(pair(c.dbj, 32))), b := USED, t := univ(1), p := r. mallocng.in_range(a, r)], pre, usl, w)
+  show by defs(ir, mallocng.in_ranges, mallocng.fp_ranges, mallocng.fixed_ranges)
+qed
+
+// a reserved slot's byte
+theorem mp.resv_rng(c, A, M, b, brk, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  a in omega -> mallocng.in_reserved(A, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha H ao hr
+  have {huo = used} := expand(H, mallocng.holds)
+  obtain g i, hg hi hug hil hsl his from expand(hr, mallocng.in_reserved)
+  have gok := apply(mp.used_group, huo, hug)
+  have inr := apply(mp.slot_in_group[A := A, M := M, b := b, g := g, i := i, a := a], ha, hg, hi, ao, gok, hil, his)
+  show := apply(mp.used_rng, hc, hu, ha, hug, inr)
+qed
+
+// a taken meta's byte
+theorem mp.taken_rng(c, A, M, b, brk, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  mallocng.in_taken(A, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha H w
+  have tf := apply(mp.taken_fix, hc, hu, ha, H, w)
+  have {gl = groups} := apply(mp.fp_pieces, hc, hu, ha)
+  have pre := apply(mp.pre_list, hc, hu, ha)
+  show by defs(apply(mp.ranges_l, pre, gl, expand(tf, mallocng.fixed_ranges)), mallocng.fp_ranges, mallocng.fixed_ranges)
+qed
+
+// a live block's byte
+theorem mp.live_rng(c, A, M, b, brk, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds(c, A, M, b, brk) -> a in malloc.live_of(b) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha hb H hl
+  obtain g, hg hr from apply(mp.live_grp, ha, hb, H, hl)
+  show := apply(mp.used_rng, hc, hu, ha, hg, hr)
+qed
+
+// ... all four, of an abstract state that holds in memory
+theorem mp.has_rng(c, A, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds_m(c, A, vm, b) ->
+  fp: (all a. a in mallocng.footprint(c, A, b) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))) &&
+  res: (all a. a in omega -> mallocng.in_reserved(A, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))) &&
+  taken: (all a. mallocng.in_taken(A, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))) &&
+  live: (all a. a in malloc.live_of(b) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)))
+proof
+  assume hc hu ha hb hm
+  have {H = inv} := expand(hm, mallocng.holds_m)
+  have f: all a. a in mallocng.footprint(c, A, b) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) proof
+    fix a
+    assume h
+    have _ r := apply(mp.fp_owned, h)
+    show := r
+  qed
+  have r: all a. a in omega -> mallocng.in_reserved(A, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) proof
+    fix a
+    assume ao h
+    show := apply(mp.resv_rng, hc, hu, ha, H, ao, h)
+  qed
+  have t: all a. mallocng.in_taken(A, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) proof
+    fix a
+    assume h
+    show := apply(mp.taken_rng, hc, hu, ha, H, h)
+  qed
+  have l: all a. a in malloc.live_of(b) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) proof
+    fix a
+    assume h
+    show := apply(mp.live_rng, hc, hu, ha, hb, H, h)
+  qed
+  show by taut(f, r, t, l)
+qed
+
+// ----------------------------------------------------------------------
+//  The ranges grown
+
+// (A2's ranges: A's, or memory unmapped before)
+abbrev mp.rng_grown(c, A2, A, vm) := all a. a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A2)) ->
+  mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))
+
+// ... by what A2 has: its bytes, reserved slots, taken metas, live blocks
+theorem mp.rng_grow(c, A, A2, b2, vm):
+  (all a. a in omega -> a in mallocng.footprint(c, A2, b2) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  (all a. a in omega -> mallocng.in_reserved(A2, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  (all a. a in omega -> mallocng.in_taken(A2, a) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  (all a. a in omega -> a in malloc.live_of(b2) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  mp.rng_grown(c, A2, A, vm)
+proof
+  assume hf hr ht hl
+  fix a
+  assume ao ar
+  have nf: !(a in malloc.live_of(b2)) -> !mallocng.in_reserved(A2, a) -> !mallocng.in_taken(A2, a) -> a in mallocng.footprint(c, A2, b2) proof
+    assume n1 n2 n3
+    have inn: a in mallocng.fp_set(mallocng.fp_ranges(c, A2), b2) by defs(sel(taut(ao, ar, n1)), mallocng.fp_set)
+    show by defs(sel(taut(ao, inn, n2, n3)), mallocng.footprint)
+  qed
+  show by taut(nf, mp(all_elim(hf, {a}), ao), mp(all_elim(hr, {a}), ao), mp(all_elim(ht, {a}), ao), mp(all_elim(hl, {a}), ao))
+qed
+
+// ... the same ranges
+theorem mp.rng_same(c, A, A2, vm): mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> mp.rng_grown(c, A2, A, vm)
+proof
+  assume e
+  fix a
+  assume ao h
+  show by taut(rewrite(e, h))
+qed
+
+// ... by A's own (A holding, the same live blocks): A2's bytes, reserved
+// slots and taken metas A's (its bytes, slots, metas) or unmapped before
+theorem mp.rng_of(c, A, A2, b, vm, vm1): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  mallocng.holds_m(c, A, vm1, b) ->
+  (all a. a in omega -> a in mallocng.footprint(c, A2, b) -> a in mallocng.footprint(c, A, b) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  (all a. a in omega -> mallocng.in_reserved(A2, a) ->
+     mallocng.in_reserved(A, a) || a in mallocng.footprint(c, A, b) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  (all a. a in omega -> mallocng.in_taken(A2, a) ->
+     mallocng.in_taken(A, a) || a in mallocng.footprint(c, A, b) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE))) ->
+  mp.rng_grown(c, A2, A, vm)
+proof
+  assume hc hu ha hb hm gf gr gt
+  have {f = fp, r = res, t = taken, l = live} := apply(mp.has_rng, hc, hu, ha, hb, hm)
+  have p1: all a. a in omega -> a in mallocng.footprint(c, A2, b) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    show by taut(mp(all_elim(gf, {a}), ao, h), all_elim(f, {a}))
+  qed
+  have p2: all a. a in omega -> mallocng.in_reserved(A2, a) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    show by taut(mp(all_elim(gr, {a}), ao, h), mp(all_elim(r, {a}), ao), all_elim(f, {a}))
+  qed
+  have p3: all a. a in omega -> mallocng.in_taken(A2, a) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    show by taut(mp(all_elim(gt, {a}), ao, h), all_elim(t, {a}), all_elim(f, {a}))
+  qed
+  have p4: all a. a in omega -> a in malloc.live_of(b) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    show by taut(mp(all_elim(l, {a}), h))
+  qed
+  show := apply(mp.rng_grow[c := c, A := A, A2 := A2, b2 := b, vm := vm], p1, p2, p3, p4)
+qed
+
+// ----------------------------------------------------------------------
+//  The thread's words apart
+
+// the thread pointer's word: none of the allocator's bytes
+theorem mp.tls_fp(c, A, b, fs): mallocng_specs.tls_apart(c, A, fs) ->
+  all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in mallocng.footprint(c, A, b))
+proof
+  assume ht
+  have t0 := expand(ht, mallocng_specs.tls_apart)
+  fix i
+  assume hi hl
+  have n := mp(all_elim(t0, {i}), hi, hl)
+  assume f
+  have _ r := apply(mp.fp_owned, f)
+  show by taut(n, r)
+qed
+
+// ... in no reserved slot
+theorem mp.tls_res(c, A, M, b, brk, fs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  fs in bits(64) -> mallocng_specs.tls_apart(c, A, fs) -> all i. i in omega -> int_lt(i, 8) -> !mallocng.in_reserved(A, int_add(fs, i))
+proof
+  assume hc hu ha H hf ht
+  have t0 := expand(ht, mallocng_specs.tls_apart)
+  fix i
+  assume hi hl
+  have n := mp(all_elim(t0, {i}), hi, hl)
+  assume r
+  show by taut(n, apply(mp.resv_rng, hc, hu, ha, H, (int_add(fs, i) in omega by arith(hf, hi)), r))
+qed
+
+theorem mp.tls_res_in(c, A, vm, objs, b, fs): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_in(c, A, vm, objs, b) ->
+  fs in bits(64) -> mallocng_specs.tls_apart(c, A, fs) -> all i. i in omega -> int_lt(i, 8) -> !mallocng.in_reserved(A, int_add(fs, i))
+proof
+  assume hc hu ha hin hf ht
+  have {hm = mem} := expand(hin, mallocng.holds_in)
+  have {H = inv} := expand(hm, mallocng.holds_m)
+  show := apply(mp.tls_res, hc, hu, ha, H, hf, ht)
+qed
+
+// ... kept apart by ranges grown into memory unmapped before (the word
+// mapped)
+theorem mp.tls_grow(c, A, A2, vm, fs): fs in bits(64) -> abi.thread_ok(vm, fs) -> mallocng_specs.tls_apart(c, A, fs) ->
+  mp.rng_grown(c, A2, A, vm) -> mallocng_specs.tls_apart(c, A2, fs)
+proof
+  assume hf ht hap gr
+  have r0 .. := expand(ht, abi.thread_ok)
+  have t0 := expand(hap, mallocng_specs.tls_apart)
+  have t2: all i. i in omega -> int_lt(i, 8) -> !mallocng.in_ranges(int_add(fs, i), mallocng.fp_ranges(c, A2)) proof
+    fix i
+    assume hi hl
+    have n := mp(all_elim(t0, {i}), hi, hl)
+    have m0 _ := mp(all_elim(expand(r0, x86_64_linux.readable), {i}), hi, hl)
+    have ao: int_add(fs, i) in omega by arith(hf, hi)
+    show by taut(n, m0, all_elim(gr, {int_add(fs, i)}), ao)
+  qed
+  show by defs(t2, mallocng_specs.tls_apart)
+qed
+
+// ... kept apart by the same ranges
+theorem mp.tls_eq(c, A, A2, fs): mallocng.fp_ranges(c, A2) = mallocng.fp_ranges(c, A) -> mallocng_specs.tls_apart(c, A, fs) ->
+  mallocng_specs.tls_apart(c, A2, fs)
+proof
+  assume e ht
+  show by defs(rewrite(sym(e), expand(ht, mallocng_specs.tls_apart)), mallocng_specs.tls_apart)
+qed
+
+// errno's cell: none of the allocator's bytes, mapped
+theorem mp.err_fp(c, A, b, vm, fs): mallocng_specs.errno_apart(c, A, vm, fs) ->
+  all i. i in omega -> int_lt(i, 4) -> !(int_add(mallocng_specs.errno_at(fs), i) in mallocng.footprint(c, A, b)) &&
+    x86_64_linux.mapped(vm, int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE))
+proof
+  assume he
+  have e0 := expand(he, mallocng_specs.errno_apart)
+  fix i
+  assume hi hl
+  have n m := mp(all_elim(e0, {i}), hi, hl)
+  have nf: !(int_add(mallocng_specs.errno_at(fs), i) in mallocng.footprint(c, A, b)) proof
+    assume f
+    have _ r := apply(mp.fp_owned, f)
+    show by taut(n, r)
+  qed
+  show by taut(nf, m)
+qed
+
+// ... kept apart by ranges grown into memory unmapped before (mapped then,
+// and in vm2)
+theorem mp.err_grow(c, A, A2, vm, vm2, fs): mallocng_specs.errno_apart(c, A, vm, fs) -> mp.rng_grown(c, A2, A, vm) ->
+  (all i. i in omega -> int_lt(i, 4) -> x86_64_linux.mapped(vm2, int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE))) ->
+  mallocng_specs.errno_at(fs) in omega -> mallocng_specs.errno_apart(c, A2, vm2, fs)
+proof
+  assume he gr hm2 eo
+  have e0 := expand(he, mallocng_specs.errno_apart)
+  have t2: all i. i in omega -> int_lt(i, 4) -> !mallocng.in_ranges(int_add(mallocng_specs.errno_at(fs), i), mallocng.fp_ranges(c, A2)) &&
+      x86_64_linux.mapped(vm2, int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hl
+    have n m := mp(all_elim(e0, {i}), hi, hl)
+    have ao: int_add(mallocng_specs.errno_at(fs), i) in omega by arith(eo, hi)
+    show by taut(n, m, all_elim(gr, {int_add(mallocng_specs.errno_at(fs), i)}), ao, mp(all_elim(hm2, {i}), hi, hl))
+  qed
+  show by defs(t2, mallocng_specs.errno_apart)
+qed

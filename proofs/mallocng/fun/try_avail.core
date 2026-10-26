@@ -7,7 +7,7 @@
 // (the thread pointer sound, its word not the allocator's: so after the
 // allocator's memory changed only, nothing outside it but the stack's free
 // bytes -- the word is off the stack)
-theorem mp.tls_unt(c, A, b, V0, V1, objs, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, b, fs) ->
+theorem mp.tls_unt(c, A, b, V0, V1, objs, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, fs) ->
   mallocng.untouched(c, A, b, V0, V1, objs, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) -> abi.thread_ok(V1, fs)
 proof
   assume hfb ht hap hun he
@@ -18,7 +18,7 @@ proof
     fix i
     assume hi hil
     have mp1 _ := mp(all_elim(expand(r0, x86_64_linux.readable), {i}), hi, hil)
-    have nf := mp(all_elim(expand(hap, mallocng_specs.tls_apart), {i}), hi, hil)
+    have nf := mp(all_elim(apply(mp.tls_fp[b := b], hap), {i}), hi, hil)
     have ns := mp(all_elim(ns0, {i}), hi, hil)
     have nfr: !abi.stack_free(V0, objs, int_add(fs, i)) by defs(taut(expand(ns, abi.stack_page), mp1), abi.stack_free)
     have bt pt := mp(all_elim(u1, {int_add(fs, i)}), (int_add(fs, i) in omega by arith(hfb, hi)), taut(nf, mp(all_elim(he, {i}), hi, hil), mp1))
@@ -60,7 +60,7 @@ proof
 qed
 
 // (... every byte outside kept: so)
-theorem mp.tls_kept(c, A, b, V0, V1, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, b, fs) ->
+theorem mp.tls_kept(c, A, b, V0, V1, fs, e): fs in bits(64) -> abi.thread_ok(V0, fs) -> mallocng_specs.tls_apart(c, A, fs) ->
   mallocng.kept_outside(c, A, b, V0, V1, e) -> (all i. i in omega -> int_lt(i, 8) -> !(int_add(fs, i) in e)) -> abi.thread_ok(V1, fs)
 proof
   assume hfb ht hap hun he
@@ -82,7 +82,7 @@ abbrev mp.ta_out(c, A, sc, b, s, o) := abi.ovf_out(s, o) ||
 // past): memory V1, abstract state A1 -- the invariant, a reorganisation
 // so far, the list's new head with no slot available but some freed
 abbrev mp.ta_jst(c, A, sc, B, s, pm, V1, A1) := (V1 in x86_64_linux.Vm && A1 in mallocng.Abs && A1 in univ(1)) &&
-  mallocng.holds_m(c, A1, V1, B) && mallocng.no_reserved(A1) && abi.thread_ok(V1, s.fs_base) && mallocng_specs.tls_apart(c, A1, B, s.fs_base) &&
+  mallocng.holds_m(c, A1, V1, B) && mallocng.no_reserved(A1) && abi.thread_ok(V1, s.fs_base) && mallocng_specs.tls_apart(c, A1, s.fs_base) &&
   mallocng_specs.list_at(V1, s.objs, pm, A1.active[sc]) && int_lt(0, seq_len(A1.active[sc])) &&
   A1.metas[A1.active[sc][0]].avail = 0 && !(A1.metas[A1.active[sc][0]].freed = 0) &&
   mallocng.reorganised(A, A1, sc) && mallocng.kept_outside(c, A, B, s.vm, V1, empty) && A1.slots = A.slots &&
@@ -307,7 +307,7 @@ proof
   have fr2: !(A2.metas[A2.active[sc][0]].freed = 0) := subst({y. !(A2.metas[y].freed = 0)}, sym(h0), rewrite(sym(mf1), avf.2))
   have nr2: mallocng.no_reserved(A2) by defs(rewrite(sym(ss), expand(nr1, mallocng.no_reserved)), mallocng.no_reserved)
   have fpe := apply(mp.gm_fp[c := c, A := A1, A2 := A2, b := B], a1a, rg)
-  have tl2: mallocng_specs.tls_apart(c, A2, B, s.fs_base) by defs(rewrite(sym(fpe), expand(tl1, mallocng_specs.tls_apart)), mallocng_specs.tls_apart)
+  have tl2 := apply(mp.tls_eq, apply(mp.gm_ranges[c := c, A := A1, A2 := A2], a1a, rg), tl1)
   have th2 := apply(mp.tls_kept[c := c, A := A1, b := B, V0 := V1, V1 := V2, fs := s.fs_base, e := empty], hfb, th1, tl1, sn,
     (all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) by simp()))
   have la2 := rewrite(sym(sl), apply(mp.rot_list[vm := V1, objs := s.objs, phead := pm, l := L], v1v, vb, hpb, ll, la1, ln1))
@@ -861,7 +861,7 @@ theorem mp.ta_run(c, sc, pm, gq, gag, ga, gdb, s, h, o): c in mallocng.Cfg -> c.
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gq[regs], s, o) -> runs(mallocng_specs.dequeue_spec_fun()[regs], s, o)) ->
   mp.ag_call(c, gag) -> mp.db_call(c, gdb) ->
   s in abi.World -> h in mp.G ->
-  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, s.fs_base) ->
   runs(c_src_malloc_mallocng_malloc.try_avail(pm, gq, gag, ga, gdb), s, o) ->
   mp.ta_out(c, h.A, sc, h.blocks, s, o)
 proof
@@ -1032,7 +1032,7 @@ proof
         // the rest: the slots, the footprint as before; the thread word apart
         have nr1: mallocng.no_reserved(A1) by defs(rewrite(sym(ss), expand(hnr, mallocng.no_reserved)), mallocng.no_reserved)
         have fpe := apply(mp.gm_fp[c := c, A := A, A2 := A1, b := B], hat, rg)
-        have tl1: mallocng_specs.tls_apart(c, A1, B, s.fs_base) by defs(rewrite(sym(fpe), expand(htl, mallocng_specs.tls_apart)), mallocng_specs.tls_apart)
+        have tl1 := apply(mp.tls_eq, apply(mp.gm_ranges[c := c, A := A, A2 := A1], hat, rg), htl)
         have th1 := apply(mp.tls_kept[c := c, A := A, b := B, V0 := V0, V1 := V1, fs := s.fs_base, e := empty], simp(vV, hw), hth, htl, sn,
           (all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) by simp()))
         have la1 := apply(mp.rot_list[vm := V0, objs := s.objs, phead := pm, l := L], vV, vb, hpb, ll, la, k0l)
@@ -1121,7 +1121,7 @@ proof
           have fr1: !(A1.metas[A1.active[sc][0]].freed = 0) := subst({y. !(A1.metas[y].freed = 0)}, sym(h0), rewrite(sym(mf1), ff1))
           have nr1: mallocng.no_reserved(A1) by defs(rewrite(sym(ds), expand(hnr, mallocng.no_reserved)), mallocng.no_reserved)
           have fpe := apply(mp.gm_fp[c := c, A := A, A2 := A1, b := B], hat, rg)
-          have tl1: mallocng_specs.tls_apart(c, A1, B, s.fs_base) by defs(rewrite(sym(fpe), expand(htl, mallocng_specs.tls_apart)), mallocng_specs.tls_apart)
+          have tl1 := apply(mp.tls_eq, apply(mp.gm_ranges[c := c, A := A, A2 := A1], hat, rg), htl)
           have th1 := apply(mp.tls_kept[c := c, A := A, b := B, V0 := V0, V1 := V, fs := s.fs_base, e := empty], simp(vV, hw), hth, htl, dn,
             (all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) by simp()))
           have la2 := rewrite(sym(dl), dat)
@@ -1928,7 +1928,7 @@ proof
   have {hin = mem, hsh = shown} := hin0
   have hnr: mallocng.no_reserved(A) by simp(hpre, sd, hd)
   have hth: abi.thread_ok(V0, s.fs_base) by simp(hpre, sd, hd)
-  have htl: mallocng_specs.tls_apart(c, A, B, s.fs_base) by simp(hpre, sd, hd)
+  have htl: mallocng_specs.tls_apart(c, A, s.fs_base) by simp(hpre, sd, hd)
   have hsl: int_lt(sc, 48) by simp(hpre, sd, hd)
   have hpe: pm = int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)) by simp(hpre, sd, hd)
   have hpl: int_le(int_add(c.ctx, mallocng.C_ACTIVE), pm) by simp(hpre, sd, hd)
@@ -1975,7 +1975,7 @@ qed
 // in the result register's low 32 bits, or 0 and the list empty
 abbrev mp.ta_call(c, f) := all sc pm t h regs o2. sc in omega -> int_lt(sc, 48) -> pm in bits(64) -> pm = int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)) ->
   t in abi.World -> h in mp.G ->
-  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
+  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> mallocng.no_reserved(h.A) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, t.fs_base) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, pm))) ->
   runs(f[regs], t, o2) ->
   abi.ovf_out(t, o2) ||

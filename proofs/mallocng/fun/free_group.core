@@ -570,12 +570,12 @@ abbrev mp.hdr0(V, G) := fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, G, 
 // nontrivial_free needs, one group fewer; the allocator then within the
 // allocator before and its reserved slots
 theorem mp.fg_nest_pre(c, A, s, b, g, k, h, j, V1): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
-  s in abi.World -> mallocng.holds_in(c, A, s.vm, s.objs, b) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, A, b, s.fs_base) ->
+  s in abi.World -> mallocng.holds_in(c, A, s.vm, s.objs, b) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, A, s.fs_base) ->
   k in omega -> int_lt(k, seq_len(A.used)) -> A.used[k] = g -> mallocng.is_used(A, h) -> j in omega -> int_lt(j, seq_len(A.slots[h])) -> A.slots[h][j] = tag(2, g) ->
   mallocng.emptied(A, g) -> A.metas[g].next = 0 -> V1 in x86_64_linux.Vm -> mallocng_specs.ctx_only(c, s.vm, V1) ->
   abs: mp.dropn(A, g, k, h, j) in mallocng.Abs && univ: mp.dropn(A, g, k, h, j) in univ(1) &&
   holds: mallocng.holds_in(c, mp.dropn(A, g, k, h, j), mp.hdr0(V1, A.metas[g].mem), s.objs, b) &&
-  thread: abi.thread_ok(mp.hdr0(V1, A.metas[g].mem), s.fs_base) && tls: mallocng_specs.tls_apart(c, mp.dropn(A, g, k, h, j), b, s.fs_base) &&
+  thread: abi.thread_ok(mp.hdr0(V1, A.metas[g].mem), s.fs_base) && tls: mallocng_specs.tls_apart(c, mp.dropn(A, g, k, h, j), s.fs_base) &&
   hused: mallocng.is_used(mp.dropn(A, g, k, h, j), h) && ronly: mallocng.reserved_only(mp.dropn(A, g, k, h, j), h, j) &&
   len: seq_len(mp.dropn(A, g, k, h, j).used) = int_sub(seq_len(A.used), 1) &&
   unt: mallocng.untouched(c, A, b, s.vm, mp.hdr0(V1, A.metas[g].mem), s.objs, set_select(omega, x0. mallocng.in_reserved(A, x0))) &&
@@ -668,7 +668,7 @@ proof
     have so := apply(mp.st_out[B := V1.bytes, c := G, k := 8, v := 0, x := a], (a in bits(64) by arith(hao, alo)), gb, simp(), g8, out)
     show by simp(ab, so)
   qed
-  have {nhh = holds} := apply(mp.drop_in_nest[c := c, A := A, vm := V1, vm2 := V2, objs := s.objs, b := b, g := g, k := k, h := h, j := j], hc, hu, ha, hb, hin1,
+  have {nhh = holds, nrs = rng} := apply(mp.drop_in_nest[c := c, A := A, vm := V1, vm2 := V2, objs := s.objs, b := b, g := g, k := k, h := h, j := j], hc, hu, ha, hb, hin1,
     hk, hkl, hkg, hh, hj, hjl, ehj, emp, nx, (V2.pages = V1.pages by simp()), (V2.brk = V1.brk by simp()), (V2.stack_top = V1.stack_top by simp()),
     (V2.stack_limit = V1.stack_limit by simp()), ebt)
   // untouched: the counters, the header word -- the allocator's bytes
@@ -698,13 +698,12 @@ proof
   have unt := apply(mp.kept_unt[c := c, A := A, b := b, vm := s.vm, V := V2, objs := s.objs, e := E], apply(mp.unt_wider[c := c, A := A, b := b, V0 := s.vm, V1 := V2, e := E], k02))
   have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
   have th2 := apply(mp.tls_kept[c := c, A := A, b := b, V0 := s.vm, V1 := V2, fs := s.fs_base, e := empty], fsb, hth, htl, k02, (all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in empty) by simp()))
-  have t0 := expand(htl, mallocng_specs.tls_apart)
-  have tl2r: all x0. x0 in omega -> int_lt(x0, 8) -> !(int_add(s.fs_base, x0) in mallocng.footprint(c, N, b)) proof
-    fix i
-    assume hi hil f
-    show by taut(mp(all_elim(t0, {i}), hi, hil), mp(all_elim(fsub, {int_add(s.fs_base, i)}), f))
+  have nrg: mp.rng_grown(c, N, A, s.vm) proof
+    fix a
+    assume _ r
+    show by taut(mp(all_elim(nrs, {a}), r))
   qed
-  have tl2: mallocng_specs.tls_apart(c, N, b, s.fs_base) by defs(tl2r, mallocng_specs.tls_apart)
+  have tl2 := apply(mp.tls_grow, fsb, hth, htl, nrg)
   // N's only reserved slot: h's j
   have _ em2 := expand(emp, mallocng.emptied)
   have uq: all x0. all x1. x0 in omega && x1 in omega -> int_lt(x1, seq_len(N.slots[x0])) && N.slots[x0][x1] = tag(3, empty) -> x0 = h && x1 = j proof
@@ -1121,8 +1120,8 @@ qed
 // nontrivial_free(g, i): slot i of g, the only reserved one, given back
 abbrev mp.nf_call(c, f, n) := all t h g i regs o2. t in abi.World -> h in mp.G -> g in bits(64) -> i in bits(32) ->
   int_le(seq_len(h.A.used), n) ->
-  mallocng.holds_in(c, h.A, t.vm, t.objs, h.blocks) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
-  mallocng_specs.tls_unres(h.A, t.fs_base) -> mallocng.is_used(h.A, g) -> mallocng.reserved_only(h.A, g, i) ->
+  mallocng.holds_in(c, h.A, t.vm, t.objs, h.blocks) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, t.fs_base) ->
+  mallocng.is_used(h.A, g) -> mallocng.reserved_only(h.A, g, i) ->
   gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, g)), seq_one(gimple.arg(32, i)))) -> runs(f[regs], t, o2) ->
   abi.ovf_out(t, o2) ||
   (ex V rr. (V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
@@ -1131,8 +1130,8 @@ abbrev mp.nf_call(c, f, n) := all t h g i regs o2. t in abi.World -> h in mp.G -
 // free_group(g): g, all of whose slots are free, unlinked, given back
 abbrev mp.fg_call(c, f, n) := all t h g regs o2. t in abi.World -> h in mp.G -> g in bits(64) ->
   int_le(seq_len(h.A.used), n) ->
-  mallocng.holds_in(c, h.A, t.vm, t.objs, h.blocks) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, t.fs_base) ->
-  mallocng_specs.tls_unres(h.A, t.fs_base) -> mallocng.is_used(h.A, g) -> h.A.metas[g].next = 0 -> mallocng.emptied(h.A, g) ->
+  mallocng.holds_in(c, h.A, t.vm, t.objs, h.blocks) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, t.fs_base) ->
+  mallocng.is_used(h.A, g) -> h.A.metas[g].next = 0 -> mallocng.emptied(h.A, g) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, g))) -> runs(f[regs], t, o2) ->
   abi.ovf_out(t, o2) ||
   (ex V rr. (V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
@@ -1148,8 +1147,8 @@ abbrev mp.fg_call(c, f, n) := all t h g regs o2. t in abi.World -> h in mp.G -> 
 theorem mp.fg_run(c, n, sq, rq, gm, g0, g1, gsi, nf, fm, g, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
   c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> n in omega -> g in bits(64) ->
   s in abi.World -> h in mp.G -> int_le(seq_len(h.A.used), int_add(n, 1)) ->
-  mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, h.blocks, s.fs_base) ->
-  mallocng_specs.tls_unres(h.A, s.fs_base) -> mallocng.is_used(h.A, g) -> h.A.metas[g].next = 0 -> mallocng.emptied(h.A, g) ->
+  mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) -> abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, s.fs_base) ->
+  mallocng.is_used(h.A, g) -> h.A.metas[g].next = 0 -> mallocng.emptied(h.A, g) ->
   mp.sq_call(c, sq) -> mp.db_call(c, rq) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gm[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)[regs], s, o)) ->
   (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
@@ -1161,7 +1160,7 @@ theorem mp.fg_run(c, n, sq, rq, gm, g0, g1, gsi, nf, fm, g, s, h, o): c in mallo
   abi.ovf_out(s, o) || (ex V rr. (V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
     mallocng_specs.freed_back(c, h.A, A2, h.blocks, s.vm, V, s.objs, fst(rr), snd(rr)))) && o = ok(fn_update(s, "vm", V), rr))
 proof
-  assume hc hx hsct hn hgb hs hh hdep hin hth htl htr hus hnx hemp hsq hrq hgm hg1 hgsi hnf hfm hr
+  assume hc hx hsct hn hgb hs hh hdep hin hth htl hus hnx hemp hsq hrq hgm hg1 hgsi hnf hfm hr
   have ths: gc.sound(s) by simp(hth)
   let A := h.A
   let B := h.blocks
@@ -1350,7 +1349,7 @@ proof
   // free_meta(g) where the ways meet: the thread pointer's word apart
   // from g's meta, g's meta not a free one
   have fsg: int_le(int_add(s.fs_base, 8), g) || int_le(int_add(g, 40), s.fs_base) proof
-    have t0 := expand(htl, mallocng_specs.tls_apart)
+    have t0 := apply(mp.tls_fp[b := B], htl)
     have nm: all i. i in omega -> int_lt(i, 8) -> !(int_le(g, int_add(s.fs_base, i)) && int_lt(int_add(s.fs_base, i), int_add(g, 40))) proof
       fix i
       assume hi hil w
@@ -1580,17 +1579,8 @@ proof
     have htop _ := apply(mp.meta_word, hc, au, hat, hhm, hhu)
     have hgb2: HG in bits(64) by arith(htop, hgo)
     have jb: j in bits(32) := rewrite(hR9, (bits_of_int(32, fst(r9)) in bits(32) by simp()))
-    // (the thread pointer's word: in none of N's reserved slots -- A's
-    // allocator's bytes or reserved slots)
-    have t0 := expand(htl, mallocng_specs.tls_apart)
-    have t1 := expand(htr, mallocng_specs.tls_unres)
-    have trn: all i. i in omega -> int_lt(i, 8) -> !mallocng.in_reserved(N, int_add(s.fs_base, i)) proof
-      fix i
-      assume hi hil hr
-      have q := mp(all_elim(nrs, {int_add(s.fs_base, i)}), arith(fsb, hi), hr)
-      show by simp(q, mp(all_elim(t0, {i}), hi, hil), mp(all_elim(t1, {i}), hi, hil))
-    qed
-    have trN: mallocng_specs.tls_unres(N, s.fs_base) by defs(simp(trn), mallocng_specs.tls_unres)
+    // (the thread pointer's word: in none of N's reserved slots)
+    have trn := apply(mp.tls_res_in, hc, nun, nab, nho, fsb, ntl)
     have qnf: all regs o2. gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, HG)), seq_one(gimple.arg(32, j)))) -> runs(nf[regs], S4, o2) ->
         abi.ovf_out(S4, o2) ||
         (ex V rr. (V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
@@ -1601,11 +1591,10 @@ proof
       have p1: int_le(seq_len(H2.A.used), n) by simp(ln)
       have p2: mallocng.holds_in(c, H2.A, S4.vm, S4.objs, H2.blocks) by simp(nho, keep(mallocng.holds_in))
       have p3: abi.thread_ok(S4.vm, S4.fs_base) by simp(nth, keep(abi.thread_ok))
-      have p4: mallocng_specs.tls_apart(c, H2.A, H2.blocks, S4.fs_base) by simp(ntl, keep(mallocng_specs.tls_apart))
+      have p4: mallocng_specs.tls_apart(c, H2.A, S4.fs_base) by simp(ntl, keep(mallocng_specs.tls_apart))
       have p5: mallocng.is_used(H2.A, HG) by simp(nhu, keep(mallocng.is_used))
       have p6: mallocng.reserved_only(H2.A, HG, j) by simp(nro, keep(mallocng.reserved_only))
-      have p7: mallocng_specs.tls_unres(H2.A, S4.fs_base) by simp(trN, keep(mallocng_specs.tls_unres))
-      have q := mp(all_elim(hnf, {S4}, {H2}, {HG}, {j}, {regs}, {o2}), w4W, hg2, hgb2, jb, p1, p2, p3, p4, p7, p5, p6, hro, h2)
+      have q := mp(all_elim(hnf, {S4}, {H2}, {HG}, {j}, {regs}, {o2}), w4W, hg2, hgb2, jb, p1, p2, p3, p4, p5, p6, hro, h2)
       show by simp(q, keep(mallocng_specs.freed_back))
     qed
     step V5 rr5, e11 hR11 from rewrite(p0, k10) with qnf using conj(w4W, w4u, ths4, hgb2, jb, v4V)

@@ -1068,7 +1068,7 @@ pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm
 // (free_group). What the allocator lets go (a group's own mapping)
 // returned. The thread pointer's word apart (its callees' calls).
 proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[64], bits[64]) {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && tls_unres(A, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, fs_base) &&
     is_used(A, uint(g)) && reserved_only(A, uint(g), uint(i))
   either { overflow() } or {
     let A0 = A
@@ -1086,7 +1086,7 @@ proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[
 // freed, the slot it is nested in given back too (nontrivial_free), or
 // its own mapping returned to be unmapped
 proc[MallocAbs] free_group_spec(c: Cfg, g: bits[64]) -> (bits[64], bits[64]) {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && tls_unres(A, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, fs_base) &&
     is_used(A, uint(g)) && A.metas[uint(g)].next = 0 && emptied(A, uint(g))
   either { overflow() } or {
     let A0 = A
@@ -1134,17 +1134,16 @@ proc[MallocAbs] activate_group_spec(c: Cfg, m: bits[64]) -> bits[32] {
   }
 }
 
-// the thread pointer's word: not the allocator's (a function calling on
-// after writing the allocator's memory needs it intact)
-pred tls_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], fs: Addr) = all i: nat. i < 8 -> uint(fs) + i notin footprint(c, A, blocks)
-// ... nor in a reserved slot (a block being freed: the user's, never the
-// thread's -- free's steps may unmap it)
-pred tls_unres(A: Abs, fs: Addr) = all i: nat. i < 8 -> !in_reserved(A, uint(fs) + i)
+// the thread pointer's word: apart from all the allocator has -- its
+// bytes, its reserved slots and taken metas, the live blocks (a function
+// calling on after writing the allocator's memory, or unmapping a group,
+// needs it intact)
+pred tls_apart(c: Cfg, A: Abs, fs: Addr) = all i: nat. i < 8 -> !in_ranges(uint(fs) + i, fp_ranges(c, A))
 
-// errno's cell (the thread's, mapped as the thread pointer's word) not the
-// allocator's
-pred errno_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, fs: Addr) =
-  all i: nat. i < 4 -> uint(errno_at(fs)) + i notin footprint(c, A, blocks) && mapped(vm, (uint(errno_at(fs)) + i) / PAGE)
+// errno's cell (the thread's, mapped as the thread pointer's word) apart
+// from all the allocator has
+pred errno_apart(c: Cfg, A: Abs, vm: Vm, fs: Addr) =
+  all i: nat. i < 4 -> !in_ranges(uint(errno_at(fs)) + i, fp_ranges(c, A)) && mapped(vm, (uint(errno_at(fs)) + i) / PAGE)
 
 // try_avail(pm), pm class sc's active list: a free slot of a group already
 // there. Its bit (1 << i) returned, slot i of the list's head reserved --
@@ -1152,7 +1151,7 @@ pred errno_apart(c: Cfg, A: Abs, blocks: Addr -> Option[nat], vm: Vm, fs: Addr) 
 // list with a free slot (the list then empty). A runs out of stack, if it
 // does, with the memory arbitrary.
 proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, fs_base) &&
     sc < 48 && uint(pm) >= c.ctx + C_ACTIVE && uint(pm) = c.ctx + C_ACTIVE + 8 * sc
   either { overflow() } or {
     let A0 = A
@@ -1175,8 +1174,8 @@ proc[MallocAbs] try_avail_spec(c: Cfg, sc: nat, pm: bits[64]) -> bits[32] {
 // a meta area) and set errno (a failed mmap); the slot reserved is of the
 // allocator's memory or of that.
 proc[MallocAbs] alloc_slot_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[32] {
-  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
-    brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, fs_base) &&
+    brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, vm, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
     let A0 = A
@@ -1212,8 +1211,8 @@ pred meta_ready(vm: Vm, m: nat) =
 // allocator may take memory that was unmapped (a meta area) and set errno
 // (its cell writable, not the allocator's).
 proc[MallocAbs] alloc_meta_spec(c: Cfg) -> bits[64] {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) &&
-    errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base)
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, fs_base) && brk_start_ok(vm) &&
+    errno_ok(vm, objs, fs_base) && errno_apart(c, A, vm, fs_base)
   either { overflow() } or {
     let A0 = A
     let before = vm
@@ -1245,8 +1244,8 @@ pred fresh_group(A: Abs, g: nat, sc: nat, req: nat) =
 // slot reserved; the allocator may take memory that was unmapped (the
 // group, a meta area, a slot of a larger class's group) and set errno.
 proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64] {
-  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
-    brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base) &&
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && thread_ok(vm, fs_base) && tls_apart(c, A, fs_base) &&
+    brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, vm, fs_base) &&
     uint(sc) < 48 && uint(req) + IB <= UNIT * size_classes[uint(sc)]
   either { overflow() } or {
     let A0 = A
@@ -1272,7 +1271,7 @@ proc[MallocAbs] alloc_group_spec(c: Cfg, sc: bits[32], req: bits[64]) -> bits[64
 // before. Which slot of which group -- musl's heuristics -- left free.
 proc[MallocAbs] malloc_impl_spec(c: Cfg, n: bits[64]) -> Addr {
   require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && len(A.taken) = 0 && thread_ok(vm, fs_base) &&
-    tls_apart(c, A, blocks, fs_base) && brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, blocks, vm, fs_base)
+    tls_apart(c, A, fs_base) && brk_start_ok(vm) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, vm, fs_base)
   either { overflow() } or {
     let A0 = A
     let blocks0 = blocks

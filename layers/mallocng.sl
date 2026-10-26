@@ -609,14 +609,15 @@ pred holds_in(c: Cfg, A: Abs, vm: Vm, objs: Objs, blocks: Addr -> Option[nat]) =
 // Between the allocator's calls: A holds in memory, no slot reserved, no
 // meta taken; the live blocks mapped read-write (what the law inv_wf
 // needs, stated directly); the thread's descriptor apart from the
-// allocator's memory -- its word at fs and errno (musl's `errno_val`,
-// fs + 0x34) none of the allocator's bytes, the ABI's canary in none of
-// its ranges or its reserve's pages (so its bytes the C world's: shown_in)
+// allocator's memory -- its word at fs, errno (musl's `errno_val`,
+// fs + 0x34) and the ABI's canary in none of its ranges (its bytes, the
+// live blocks: so a block freed is never the thread's), the canary in
+// none of its reserve's pages (so its bytes the C world's: shown_in)
 pred rep(c: Cfg, A: Abs, s: Heap) =
   mem: holds_m(c, A, s.vm, s.blocks) && unres: no_reserved(A) && untaken: len(A.taken) = 0 &&
   live: live_rw(s) &&
-  tls: (all i: nat. i < 8 -> uint(s.fs_base) + i notin footprint(c, A, s.blocks)) &&
-  errno: (all i: nat. i < 4 -> uint(s.fs_base) + 0x34 + i notin footprint(c, A, s.blocks)) &&
+  tls: (all i: nat. i < 8 -> !in_ranges(uint(s.fs_base) + i, fp_ranges(c, A))) &&
+  errno: (all i: nat. i < 4 -> !in_ranges(uint(s.fs_base) + 0x34 + i, fp_ranges(c, A))) &&
   canary: (all a: nat. a in canary(s.fs_base) -> !in_ranges(a, fp_ranges(c, A)) &&
     !(A.reserve_cnt > 0 && A.reserve / PAGE <= a / PAGE && a / PAGE < A.reserve / PAGE + A.reserve_cnt))
 
