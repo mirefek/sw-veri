@@ -1838,3 +1838,141 @@ proof
   qed
   show := mp(finish, (T2 by taut(cfT, ctT)))
 qed
+
+// ----------------------------------------------------------------------
+//  free_group and nontrivial_free at a call (their C function values)
+
+// free_group's code at a call, up to n + 1 groups in use, nontrivial_free
+// at a call up to n
+theorem mp.fg_q(c, n, sq, rq, gm, g0, g1, gsi, nf, fm): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> n in omega ->
+  mp.sq_call(c, sq) -> mp.db_call(c, rq) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gm[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gsi[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  mp.nf_call(c, nf, n) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(fm[regs], s, o) ->
+     runs(mallocng_specs.free_meta_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context)[regs], s, o)) ->
+  mp.fg_call(c, c_src_malloc_mallocng_free.free_group_fun(sq, rq, gm, gsi, nf, fm), int_add(n, 1))
+proof
+  assume hc hx hsct hn hsq hrq hgm hg1 hgsi hnf hfm
+  fix t h g regs o2
+  assume hw hh hg hdep hin hth htl htr hus hnx hemp hro hr
+  have rl rn r0 := apply(gc.regs1, hg, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = g by defs(simp(r0, hg), bits_of_int, pow2)
+  step o3 V rr, e hR from hr with o1l, bp, mp.fg_run
+    using ra, hc, hx, hsct, hn, hg, hw, hh, hdep, hin, hth, htl, htr, hus, hnx, hemp, hsq, hrq, hgm, hg1, hgsi, hnf, hfm
+  let RR := pair(fst(rr), snd(rr))
+  have fb: V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
+      mallocng_specs.freed_back(c, h.A, A2, h.blocks, t.vm, V, t.objs, fst(RR), snd(RR))) by simp(hR, keep(mallocng_specs.freed_back))
+  show by disj({2}, ex_intro({V}, {RR}, taut(fb, e)))
+qed
+
+// (a code refining another: its call facts)
+theorem mp.fg_calls(c, n, F, G): mp.fg_call(c, G, n) -> mp.calls(F, G) -> mp.fg_call(c, F, n)
+proof
+  assume hq hcl
+  fix t h g regs o2
+  assume hw hh hg hdep hin hth htl htr hus hnx hemp hro hr
+  have rl rn _ := apply(gc.regs1, hg, hro)
+  have h2 := mp(all_elim(hcl, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hw, hr)
+  show := mp(all_elim(hq, {t}, {h}, {g}, {regs}, {o2}), hw, hh, hg, hdep, hin, hth, htl, htr, hus, hnx, hemp, hro, h2)
+qed
+
+theorem mp.nf_calls(c, n, F, G): mp.nf_call(c, G, n) -> mp.calls(F, G) -> mp.nf_call(c, F, n)
+proof
+  assume hq hcl
+  fix t h g i regs o2
+  assume hw hh hg hi hdep hin hth htl htr hus hro hregs hr
+  have rl rln _ := hregs
+  have rn: seq_len(regs) = 2 := trans(rln, (seq_len(seq_concat(seq_one(gimple.arg(64, g)), seq_one(gimple.arg(32, i)))) = 2 by simp()))
+  have h2 := mp(all_elim(hcl, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hw, hr)
+  show := mp(all_elim(hq, {t}, {h}, {g}, {i}, {regs}, {o2}), hw, hh, hg, hi, hdep, hin, hth, htl, htr, hus, hro, hregs, h2)
+qed
+
+// (no group in use: free_group never called)
+theorem mp.fg_call0(c, F): mp.fg_call(c, F, 0)
+proof
+  fix t h g regs o2
+  assume hw hh hg hdep hin hth htl htr hus hnx hemp hro hr
+  obtain k, hk hkl _ from expand(hus, mallocng.is_used)
+  have f: false by arith(hk, hkl, hdep)
+  show by taut(f)
+qed
+
+// nontrivial_free's code at a call, up to n groups in use, free_group at a
+// call up to n
+theorem mp.nf_q(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> n in omega ->
+  mp.calls(otf, c_src_malloc_mallocng_free.okay_to_free_fun(gst, gib)) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) -> mp.ib_call(c, gib) ->
+  mp.calls(ac, c_src_malloc_mallocng_free.a_crash_fun()) -> mp.calls(dq, mallocng_specs.dequeue_spec_fun()) -> mp.ag_call(c, ag) -> mp.fg_call(c, fg, n) ->
+  mp.calls(qu, mallocng_specs.queue_spec_fun()) -> mp.aor_call(ao) ->
+  mp.nf_call(c, c_src_malloc_mallocng_free.nontrivial_free_fun(otf, ac, dq, ag, fg, qu, ao), n)
+proof
+  assume hc hx hsct hn hotf hgst hgib hac hdq hag hfg hqu hao
+  fix t h g i regs o2
+  assume hw hh hg hi hdep hin hth htl htr hus hro hregs hr
+  let ARGS := seq_concat(seq_one(gimple.arg(64, g)), seq_one(gimple.arg(32, i)))
+  have rl rln _ := hregs
+  have an: seq_len(ARGS) = 2 by simp()
+  have rn: seq_len(regs) = 2 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := g], hregs, simp(), simp(an), at({ARGS[0]}), simp(), hg)
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 32, x := i], hregs, simp(), simp(an), at({ARGS[1]}), simp(), hi)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
+  step o3 V rr, e hR from hr with o2l, q0, q1, mp.nf_run
+    using ra, hc, hx, hsct, hn, hg, hi, hw, hh, hdep, hin, hth, htl, htr, hus, hro, hotf, hgst, hgib, hac, hdq, hag, hfg, hqu, hao
+  let RR := pair(fst(rr), snd(rr))
+  have fb: V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) &&
+      mallocng_specs.freed_back(c, h.A, A2, h.blocks, t.vm, V, t.objs, fst(RR), snd(RR))) by simp(hR, keep(mallocng_specs.freed_back))
+  show by disj({2}, ex_intro({V}, {RR}, taut(fb, e)))
+qed
+
+// ----------------------------------------------------------------------
+//  The two calling each other: codes Ffg, Fnf refining free_group's and
+//  nontrivial_free's with each other as the callee -- their call facts at
+//  any count of groups in use (induction on it; at 0 none applies)
+
+theorem mp.fg_nf(c, sq, rq, gm, g0, g1, gsi, fm, otf, gst, gib, ac, dq, ag, qu, ao, Ffg, Fnf): c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  mp.sq_call(c, sq) -> mp.db_call(c, rq) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gm[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(g1[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(gsi[regs], s, o) -> runs(c_src_malloc_mallocng_malloc.get_slot_index_fun()[regs], s, o)) ->
+  (all regs s o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World -> runs(fm[regs], s, o) ->
+     runs(mallocng_specs.free_meta_spec_fun(c_src_malloc_mallocng_malloc.__malloc_context)[regs], s, o)) ->
+  mp.calls(otf, c_src_malloc_mallocng_free.okay_to_free_fun(gst, gib)) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) -> mp.ib_call(c, gib) ->
+  mp.calls(ac, c_src_malloc_mallocng_free.a_crash_fun()) -> mp.calls(dq, mallocng_specs.dequeue_spec_fun()) -> mp.ag_call(c, ag) ->
+  mp.calls(qu, mallocng_specs.queue_spec_fun()) -> mp.aor_call(ao) ->
+  mp.calls(Ffg, c_src_malloc_mallocng_free.free_group_fun(sq, rq, gm, gsi, Fnf, fm)) ->
+  mp.calls(Fnf, c_src_malloc_mallocng_free.nontrivial_free_fun(otf, ac, dq, ag, Ffg, qu, ao)) ->
+  all n. n in omega -> mp.fg_call(c, Ffg, n) && mp.nf_call(c, Fnf, n)
+proof
+  assume hc hx hsct hsq hrq hgm hg1 hgsi hfm hotf hgst hgib hac hdq hag hqu hao hFfg hFnf
+  have nfo: all n. n in omega -> mp.fg_call(c, Ffg, n) -> mp.nf_call(c, Fnf, n) proof
+    fix n
+    assume hn hq
+    have q := apply(mp.nf_q[c := c, n := n, otf := otf, gst := gst, gib := gib, ac := ac, dq := dq, ag := ag, fg := Ffg, qu := qu, ao := ao],
+      hc, hx, hsct, hn, hotf, hgst, hgib, hac, hdq, hag, hq, hqu, hao)
+    show := apply(mp.nf_calls[c := c, n := n, F := Fnf, G := c_src_malloc_mallocng_free.nontrivial_free_fun(otf, ac, dq, ag, Ffg, qu, ao)], q, hFnf)
+  qed
+  have stp: all n. n in omega -> mp.fg_call(c, Ffg, n) -> mp.fg_call(c, Ffg, int_add(n, 1)) proof
+    fix n
+    assume hn hq
+    have nq := mp(all_elim(nfo, {n}), hn, hq)
+    have q := apply(mp.fg_q[c := c, n := n, sq := sq, rq := rq, gm := gm, g0 := g0, g1 := g1, gsi := gsi, nf := Fnf, fm := fm],
+      hc, hx, hsct, hn, hsq, hrq, hgm, hg1, hgsi, nq, hfm)
+    show := apply(mp.fg_calls[c := c, n := int_add(n, 1), F := Ffg, G := c_src_malloc_mallocng_free.free_group_fun(sq, rq, gm, gsi, Fnf, fm)], q, hFfg)
+  qed
+  have all := mp(nat_ind[p := k. mp.fg_call(c, Ffg, k)], mp.fg_call0[c := c, F := Ffg], stp)
+  fix n
+  assume hn
+  have a := mp(all_elim(all, {n}), hn)
+  show by taut(a, mp(all_elim(nfo, {n}), hn, a))
+qed
