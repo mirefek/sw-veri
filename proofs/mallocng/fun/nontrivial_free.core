@@ -1070,6 +1070,61 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  okay_to_free at a call: an overflow, or an answer, not 0 for a group
+//  mapped on its own
+
+// (its run, the memory as before as a memory written)
+theorem mp.otf_run2(c, g, s, h, o, gst, gib): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) ->
+  s in abi.World -> h in mp.G -> mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng.is_used(h.A, g) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) -> mp.ib_call(c, gib) ->
+  runs(c_src_malloc_mallocng_free.okay_to_free(g, gst, gib), s, o) ->
+  abi.ovf_out(s, o) || (ex V r. (V = s.vm && (mallocng.own_mapping(h.A.metas[g]) -> !(bits_of_int(32, r) = 0))) && o = ok(fn_update(s, "vm", V), bits_of_int(32, r)))
+proof
+  assume hc hx hsct hg hs hh hin hsh hth hu hgst hib hr
+  have run := apply(mp.otf_run[c := c, g := g, s := s, h := h, o := o, gst := gst, gib := gib], hc, hx, hsct, hg, hs, hh, hin, hsh, hth, hu, hgst, hib, hr)
+  have _ vf vd _ := apply(ms.world_parts, hs)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], vf, vd)
+  have k: case 2 of run proof
+    assume e
+    obtain r, ho hb hy from e
+    have ro rl := (r in omega && int_lt(r, pow2(32)) by simp(hb, keep(pow2)))
+    have br: bits_of_int(32, r) = r by defs(arith(ro, rl), bits_of_int)
+    have ho2 := rewrite(sym(br), rewrite(sym(ss), ho, {1}))
+    show by disj({2}, ex_intro({s.vm}, {r}, taut(refl({s.vm}), rewrite(sym(br), hy), ho2)))
+  qed
+  show by taut(run, k)
+qed
+
+theorem mp.otf_q(c, gst, gib, g, t, h, regs, o2): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
+  c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes -> g in bits(64) -> t in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> abi.thread_ok(t.vm, t.fs_base) -> mallocng.is_used(h.A, g) ->
+  mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) -> mp.ib_call(c, gib) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, g))) -> runs(c_src_malloc_mallocng_free.okay_to_free_fun(gst, gib)[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex r. o2 = ok(fn_update(t, "vm", t.vm), r) && (mallocng.own_mapping(h.A.metas[g]) -> !(bits_of_int(32, fst(r)) = 0)))
+proof
+  assume hc hx hsct hg hw hh hin hsh hth hu hgst hib hro hr
+  have rl rn r0 := apply(gc.regs1, hg, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = g by defs(simp(r0, hg), bits_of_int, pow2)
+  step o3 V r u y, e hs1 hs2 from hr with o1l, bp, mp.otf_run2, g.result32_inv using ra, hc, hx, hsct, hg, hw, hh, hin, hsh, hth, hu, hgst, hib
+  have nb: ex x0. x0 in bits(64) by ex_intro({0}, (0 in bits(64) by simp()))
+  have e2: ex x0. x0 in bits(64) && o2 = ok(fn_update(t, "vm", V), pair(y, x0)) by taut(expand(e, any_rel), nb)
+  obtain z, _ he from e2
+  have hv hy := hs1
+  have _ hyr := hs2
+  have k1: mallocng.own_mapping(h.A.metas[g]) -> !(bits_of_int(32, fst(pair(y, z))) = 0) proof
+    assume ow
+    have n := mp(hy, ow)
+    show by simp(rewrite(sym(hyr), n))
+  qed
+  show by disj({2}, ex_intro({pair(y, z)}, taut(rewrite(hv, he), k1)))
+qed
+
+// ----------------------------------------------------------------------
 //  nontrivial_free's run
 
 theorem mp.nf_dev(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao, g, i, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
