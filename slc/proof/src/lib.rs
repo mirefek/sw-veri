@@ -2539,8 +2539,8 @@ impl State {
         let unf = sl_kernel::ext::seq::unfold_all(env, &hr, &[p]);
         let hr2 = Seq::conv(env, &Seq::assume(env, hr.clone())?, &unf, &[p])?;
         let mut last = None;
-        for cd in ["ct.contract_div", "ct.contract_div0"] {
-            for body in ["ct.dv_havoc", "ct.dv_ok_a", "ct.dv_exc_a", "ct.dv_ret_a", "ct.dv_ret2_a", "ct.dv_ret3_a"] {
+        for cd in ["ct.contract_div", "ct.contract_div0", "ct.contract_div_r"] {
+            for body in ["ct.dv_havoc", "ct.dv_ok_a", "ct.dv_exc_a", "ct.dv_ret_a", "ct.dv_ret2_a", "ct.dv_ret3_a", "ct.dv_ifb_a"] {
                 let pe = parse_pe(&format!("apply({}, __dvsu, __dvsv, __dvr, defs({}, letin))", cd, body))?;
                 let fs = vec![("__dvsu".into(), su.clone()), ("__dvsv".into(), sv.clone()), ("__dvr".into(), hr2.clone())];
                 match self.with_scratch(fs, || self.eval(env, lg, &pe)).and_then(|r| Seq::conv(env, &r, &concl, &[p])) {

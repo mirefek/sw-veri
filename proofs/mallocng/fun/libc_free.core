@@ -1546,3 +1546,107 @@ proof
   qed
   show by taut(run, k0, k1)
 qed
+
+// free(p)'s outcome, the memory V after: nothing done (p null), or the
+// block given back
+abbrev mp.lf_res(c, A, B, p, s, V) := (p = 0 && V = s.vm) || (!(p = 0) && mp.lf_post(c, A, B, p, s, V))
+
+// (the run, its two returns as one)
+theorem mp.lf_run2(c, gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu, g0, g1, g2, p, s, h, o): c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc -> p in bits(64) ->
+  mp.calls(gm, c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)) -> mp.calls(g1, c_src_malloc_mallocng_malloc.get_slot_index_fun()) ->
+  mp.calls(gsi, c_src_malloc_mallocng_malloc.get_slot_index_fun()) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) ->
+  mp.calls(gns, c_src_malloc_mallocng_free.get_nominal_size_fun(g2)) -> mp.calls(wl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  (all n. n in omega -> mp.nf_call(c, nf, n)) -> mp.calls(ul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) ->
+  mp.calls(el, mallocng_specs.errno_location_spec_fun) -> mp.calls(mu, mallocng_specs.munmap_spec_fun()) ->
+  s in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng_specs.tls_apart(c, h.A, s.fs_base) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, s.vm, s.fs_base) ->
+  (!(p = 0) -> !(h.blocks[p] = none)) ->
+  runs(c_src_malloc_mallocng_free.__libc_free(p, gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu), s, o) ->
+  abi.ovf_out(s, o) || (ex V. (V in x86_64_linux.Vm && mp.lf_res(c, h.A, h.blocks, p, s, V)) && o = ok(fn_update(s, "vm", V), empty))
+proof
+  assume hc hx hsct hlk hlc hp hgm hg1 hgsi hgst hgns hwl hnf hul hel hmu hs hh hin hnr htk hth htl heo hea hlv hr
+  have _ _ _ hat := mp(all_elim(mp.g_rec, {h}), hh)
+  have ul: h.A.used in list_type(omega) by simp(hat)
+  have nfn := mp(all_elim(hnf, {seq_len(h.A.used)}), (seq_len(h.A.used) in omega by arith(ul)))
+  have run := apply(mp.lf_run[c := c, gm := gm, gsi := gsi, gst := gst, gns := gns, ac := ac, acas := acas, wl := wl, nf := nf, ul := ul, el := el, mu := mu,
+    g0 := g0, g1 := g1, g2 := g2, p := p, s := s, h := h, o := o], hc, hx, hsct, hlk, hlc, hp, hs, hh, hin, hnr, htk, hth, htl, heo, hea, hlv,
+    hgm, hg1, hgsi, hgst, hgns, hwl, nfn, hul, hel, hmu, hr)
+  have {wv = mem, wf = record, wd = has_vm} := apply(ms.world_parts, hs)
+  have k0: case 2 of run proof
+    assume e
+    have pz ho := e
+    have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], wf, wd)
+    have ho2: o = ok(fn_update(s, "vm", s.vm), empty) := rewrite(sym(ss), ho, {1})
+    show by disj({2}, ex_intro({s.vm}, taut(wv, pz, refl({s.vm}), ho2)))
+  qed
+  have k1: case 3 of run proof
+    assume e
+    have pnz lo := e
+    obtain V, v4 post ho from lo
+    show by disj({2}, ex_intro({V}, taut(v4, pnz, post, ho)))
+  qed
+  show by taut(run, k0, k1)
+qed
+
+// what a caller relies on of a callee f called as __libc_free: an
+// overflow, or the return -- nothing done (p null), or p's block given back
+abbrev mp.lf_call(c, f) := all p t h regs o2. p in bits(64) -> t in abi.World -> h in mp.G ->
+  mallocng.holds_in(c, h.A, t.vm, t.objs, h.blocks) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 -> abi.thread_ok(t.vm, t.fs_base) ->
+  mallocng_specs.tls_apart(c, h.A, t.fs_base) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, t.vm, t.fs_base) ->
+  (!(p = 0) -> !(h.blocks[p] = none)) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(f[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex V r. (V in x86_64_linux.Vm && mp.lf_res(c, h.A, h.blocks, p, t, V)) && o2 = ok(fn_update(t, "vm", V), r))
+
+// __libc_free's code called as __libc_free
+theorem mp.lf_q: all c gm gsi gst gns ac acas wl nf ul el mu g0 g1 g2. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
+  mp.calls(gm, c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)) -> mp.calls(g1, c_src_malloc_mallocng_malloc.get_slot_index_fun()) ->
+  mp.calls(gsi, c_src_malloc_mallocng_malloc.get_slot_index_fun()) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) ->
+  mp.calls(gns, c_src_malloc_mallocng_free.get_nominal_size_fun(g2)) -> mp.calls(wl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  (all n. n in omega -> mp.nf_call(c, nf, n)) -> mp.calls(ul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) ->
+  mp.calls(el, mallocng_specs.errno_location_spec_fun) -> mp.calls(mu, mallocng_specs.munmap_spec_fun()) ->
+  mp.lf_call(c, c_src_malloc_mallocng_free.__libc_free_fun(gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu))
+proof
+  fix c gm gsi gst gns ac acas wl nf ul el mu g0 g1 g2
+  assume hc hx hsct hlk hlc hgm hg1 hgsi hgst hgns hwl hnf hul hel hmu
+  fix p t h regs o2
+  assume hpb hw hh hin hnr htk hth htl heo hea hlv hro hr
+  have rl rn r0 := apply(gc.regs1, hpb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = p by defs(simp(r0, hpb), bits_of_int, pow2)
+  step o3 V, e hs1 from hr with o1l, bp, mp.lf_run2 using ra, hc, hx, hsct, hlk, hlc, hpb, hgm, hg1, hgsi, hgst, hgns, hwl, hnf, hul, hel, hmu,
+    hw, hh, hin, hnr, htk, hth, htl, heo, hea, hlv
+  // (the result: any two words)
+  have ne: ex x0. x0 in bits(64) by ex_intro({0}, simp())
+  have e1: ex x0. x0 in bits(64) && any_rel(x1. x1 in bits(64), x1. o2 = ok(fn_update(t, "vm", V), pair(x0, x1))) by defs(taut(expand(e, any_rel), ne), any_rel)
+  obtain y0, _ e2 from e1
+  have e3: ex x1. x1 in bits(64) && o2 = ok(fn_update(t, "vm", V), pair(y0, x1)) by taut(expand(e2, any_rel), ne)
+  obtain y1, _ ho from e3
+  show by disj({2}, ex_intro({V}, {pair(y0, y1)}, taut(hs1, ho)))
+qed
+
+// (the purpose spec diverges nowhere it does not also raise)
+theorem mp.lf_divg: all c. tr.div_raises_g(mp.G, mallocng_specs.libc_free_spec_fun(c))
+proof
+  fix c
+  have body: all regs w h t. regs in abi.ARGS -> w in abi.World -> w in univ(1) -> h in mp.G ->
+      runs(mallocng_specs.libc_free_spec(c, bits_of_int(64, regs[0])), union2(w, h), diverge(t)) ->
+      runs(mallocng_specs.libc_free_spec(c, bits_of_int(64, regs[0])), union2(w, h), exc(union2(w, h), empty)) proof
+    fix regs w h t
+    assume _ hw hwu hh hr
+    have {su = univ, sv = vm} := apply(mp.gS, hw, hwu, hh)
+    have hr2 := expand(hr, mallocng_specs.libc_free_spec)
+    show := apply(ct.contract_div_r, su, sv, hr2, defs(ct.dv_ifb_a, letin))
+  qed
+  show by defs(apply(ct.fun_divg_v, mp.g_univ, body), mallocng_specs.libc_free_spec_fun)
+qed
+
+// its C function value, its divergence, its machine code over any callees
+contract __libc_free mallocng_specs.libc_free_spec_fun by mp.lf call mp.lf_call

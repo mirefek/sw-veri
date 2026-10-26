@@ -836,11 +836,12 @@ qed
 
 // a contract (`require P; either { overflow() } or { B }`) diverging at s:
 // its precondition failing or B undefined there, so it raises at s too
-theorem ct.contract_div(x0. P, x0 x2. B, s, t): s in univ(1) -> s.vm in x86_64_linux.Vm ->
+// (B's divergence a raise of s's too)
+theorem ct.contract_div_r(x0. P, x0 x2. B, s, t): s in univ(1) -> s.vm in x86_64_linux.Vm ->
   runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
     ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
       ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
-    s, diverge(t)) -> (all x x2. B(s, x) -> fst(x) = 2 -> B(s, x2)) ->
+    s, diverge(t)) -> (all x. B(s, x) -> fst(x) = 2 -> B(s, exc(pair(s, empty), pair("raise", empty)))) ->
   runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
     ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
       ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
@@ -871,13 +872,33 @@ proof
       have n2 := ct.exc_not2[x := x2, a := pair(fn_update(fn_update(s, "vm", v), "objs", ob), empty), b := pair("raise", exc_val("stack_overflow", empty))]
       show by defs(simp(k, f2, n2), ok, exc, diverge, tag)
     qed
-    have bx := mp(all_elim(hb, {x2}, {X2}), taut(hob, nov), f2)
+    have bx := mp(all_elim(hb, {x2}), taut(hob, nov), f2)
     have dx: D(X2, exc(s, empty)) by defs(simp(), exc, tag, out_state, out_value)
     have ex: ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty)) by ex_intro({X2}, taut(bx, dx))
     show by taut(ex)
   qed
   have rr: !P(s) || (ex x2. (OV(x2) || B(s, x2)) && D(x2, exc(s, empty))) by taut(r, c1, c2)
   show by apply(tr.runs_intro, pu, rr)
+qed
+
+// (B's divergence any outcome of B's)
+theorem ct.contract_div(x0. P, x0 x2. B, s, t): s in univ(1) -> s.vm in x86_64_linux.Vm ->
+  runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    s, diverge(t)) -> (all x x2. B(s, x) -> fst(x) = 2 -> B(s, x2)) ->
+  runs(mkprog(x0 x1. !P(x0) || (ex x2. (bind_rel(abi.overflow, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3)) || B(x0, x2)) &&
+    ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+      ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))))),
+    s, exc(s, empty))
+proof
+  assume hu hv hr hb
+  have hb2: all x. B(s, x) -> fst(x) = 2 -> B(s, exc(pair(s, empty), pair("raise", empty))) proof
+    fix x
+    assume h1 h2
+    show := mp(all_elim(hb, {x}, {exc(pair(s, empty), pair("raise", empty))}), h1, h2)
+  qed
+  show := apply(ct.contract_div_r[P := x0. P(x0), B := x0 x2. B(x0, x2), s := s, t := t], hu, hv, hr, hb2)
 qed
 
 // a function value of a procedure q (GIMPLE's wrapper, its result in a
@@ -1335,6 +1356,65 @@ proof
   fix x0 x1
   assume ha hf
   show := apply(ct.dv_ret2[d := y. d(y), e := y z. e(y, z), f := y z. f(y, z), g := y z. g(y, z), x := x0, x2 := x1], ha, hf)
+qed
+
+// (an `if`: two choices then a normal end, or a normal end)
+theorem ct.dv_if2_a(c0, x. d, y z. e, y z. f, a): all x0 x1.
+  (c0 && any_rel(y. d(y), y. any_rel(z. e(y, z), z. x0 = ok(f(y, z), empty)))) || (!c0 && x0 = ok(a, empty)) -> fst(x0) = 2 ->
+  (c0 && any_rel(y. d(y), y. any_rel(z. e(y, z), z. x1 = ok(f(y, z), empty)))) || (!c0 && x1 = ok(a, empty))
+proof
+  fix x0 x1
+  assume hb hf
+  have kz: all y. d(y) -> any_rel(z. e(y, z), z. x0 = ok(f(y, z), empty)) -> fst(x0) = 2 -> any_rel(z. e(y, z), z. x1 = ok(f(y, z), empty)) proof
+    fix y
+    assume _ ha hf2
+    have ki: all z. e(y, z) -> x0 = ok(f(y, z), empty) -> fst(x0) = 2 -> x1 = ok(f(y, z), empty) proof
+      fix z
+      assume _ he hf3
+      have z0: fst(x0) = 0 by simp(he)
+      have no: false by arith(z0, hf3)
+      show by taut(no)
+    qed
+    show := apply(ct.dv_any[d := z. e(y, z), k := z x. x = ok(f(y, z), empty), x := x0, x2 := x1], ki, ha, hf2)
+  qed
+  have c1: c0 && any_rel(y. d(y), y. any_rel(z. e(y, z), z. x0 = ok(f(y, z), empty))) ->
+      c0 && any_rel(y. d(y), y. any_rel(z. e(y, z), z. x1 = ok(f(y, z), empty))) proof
+    assume h
+    have hc ha := h
+    show by taut(hc, apply(ct.dv_any[d := y. d(y), k := y x. any_rel(z. e(y, z), z. x = ok(f(y, z), empty)), x := x0, x2 := x1], kz, ha, hf))
+  qed
+  have c2: !c0 && x0 = ok(a, empty) -> false proof
+    assume h
+    have _ he := h
+    have z0: fst(x0) = 0 by simp(he)
+    show by arith(z0, hf)
+  qed
+  show by taut(hb, c1, c2)
+qed
+
+// (... an `if` then the block's end: a divergence only where a choice has
+// no value, so a raise there too -- `ct.contract_div_r`'s premise)
+theorem ct.dv_ifb_a(c0, x. d, y z. e, y z. f, a, x. g, s): all x0.
+  (ex y. ((c0 && any_rel(u. d(u), u. any_rel(z. e(u, z), z. y = ok(f(u, z), empty)))) || (!c0 && y = ok(a, empty))) && lx.blk(y, x0 = ok(g(y), empty), x0)) ->
+  fst(x0) = 2 ->
+  ex y. ((c0 && any_rel(u. d(u), u. any_rel(z. e(u, z), z. y = ok(f(u, z), empty)))) || (!c0 && y = ok(a, empty))) &&
+    lx.blk(y, exc(pair(s, empty), pair("raise", empty)) = ok(g(y), empty), exc(pair(s, empty), pair("raise", empty)))
+proof
+  fix x0
+  assume hb hf
+  obtain y0, hi hl from hb
+  let Y := exc(pair(s, empty), pair("raise", empty))
+  have e1 := ct.exc_not2[x := x0, a := pair(fst(out_state(y0)), empty), b := pair("ret", snd(out_value(y0)))]
+  have e2 := ct.exc_not2[x := x0, a := pair(fst(out_state(y0)), empty), b := pair("raise", snd(out_value(y0)))]
+  have z0: x0 = ok(g(y0), empty) -> !(fst(x0) = 2) proof
+    assume e
+    have z: fst(x0) = 0 by simp(e)
+    show by arith(z)
+  qed
+  have f2: fst(y0) = 2 by taut(hl, hf, e1, e2, z0)
+  have iy := mp(all_elim(ct.dv_if2_a[c0 := c0, d := u. d(u), e := u z. e(u, z), f := u z. f(u, z), a := a], {y0}, {Y}), hi, f2)
+  have bY: lx.blk(Y, Y = ok(g(Y), empty), Y) by defs(simp(), exc, tag, out_state, out_value)
+  show by ex_intro({Y}, taut(iy, bY))
 qed
 
 // (... a contract with no precondition: so too)
