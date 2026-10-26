@@ -23,10 +23,14 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   machine level, no recursion in the engine. Done: the model of a slot
   freed with its group kept (proofs/mallocng/model/freeing.core:
   `mp.holds_m_unres`, `mp.qu_step_g` -- the freed bit first, on a memory
-  made for it, then the queue). Open: a group given back (out of `used`,
-  its meta taken until free_meta; a nested one's container slot reserved,
-  an own mapping let go); call contracts for okay_to_free, a_or,
-  free_group; the runs and refinements.
+  made for it, then the queue); of a group given back
+  (proofs/mallocng/model/dropgroup.core: `mp.drop_in_own`,
+  `mp.drop_in_nest` -- out of `used`, its meta taken until free_meta, a
+  nested one's container slot reserved; the invariant first on the old
+  memory, then on the new by `mp.holds_held`,
+  proofs/mallocng/model/heldonly.core). Open: call contracts for
+  okay_to_free, a_or, free_group; the runs and refinements; freed_back's
+  footprint and let_go clauses.
 - `__libc_free`, the `free` symbol (src/malloc/free.c); then `calloc`.
 - free.c's copies of malloc.c's functions: their contracts by `c1 P`
   (proofs/mallocng/fun/free_copies.core; get_meta's done), their linked
