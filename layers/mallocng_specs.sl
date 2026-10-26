@@ -1296,6 +1296,35 @@ fn malloc_impl_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
   return (w, any bits[64])
 }
 
+// __libc_free(p): nothing for 0; else p, a live block, given back -- no
+// longer live (`blocks`), its slot the allocator's again (or its group's
+// whole mapping returned to the kernel). The invariant kept (no slot
+// reserved, no meta taken); nothing outside the allocator and the block
+// touched (errno neither: free keeps it); the allocator grown only by the
+// block.
+proc[MallocAbs] libc_free_spec(c: Cfg, p: Addr) {
+  require holds_in(c, A, vm, objs, blocks) && no_reserved(A) && len(A.taken) = 0 && thread_ok(vm, fs_base) &&
+    tls_apart(c, A, fs_base) && errno_ok(vm, objs, fs_base) && errno_apart(c, A, vm, fs_base) && (p != 0 -> blocks[p] != none)
+  either { overflow() } or {
+    if p != 0 {
+      let A0 = A
+      let blocks0 = blocks
+      let before = vm
+      let freed = range(p, blocks0[p].value)
+      ghost blocks := set_block(blocks0, p, none)
+      ghost A := any A2: Abs where no_reserved(A2) && len(A2.taken) = 0
+      havoc vm where holds_in(c, A, vm, objs, blocks) && untouched(c, A0, blocks0, before, vm, objs, freed) &&
+        (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks0) || a in freed)
+    }
+  }
+}
+
+fn libc_free_spec_fun(c: Cfg) -> CFun2[MallocAbs] = (args: Args) => {
+  require len(args) >= 1
+  libc_free_spec(c, bits[64](args[0]))
+  return (any bits[64], any bits[64])
+}
+
 fn set_size_spec_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
   set_size_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
