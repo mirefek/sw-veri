@@ -1126,6 +1126,78 @@ proof
   have {sin, each, clr, high, il, lt} := apply(mp.nf_masks[A := A, M := mallocng.mview(V0, FP), b := B, g := g, i := i], hat, gom, gok, io, hil, hrs)
   have ft := mp(mp.full_test[S := bits_or(32, A.metas[g].freed, A.metas[g].avail), i := i, L := A.metas[g].last_idx], sin, io, vl, il, lt, clr, high)
   have tb1 kx1 := c1r
-  goal 2
+  // where the test's ways meet: an overflow, g given back whole (returned),
+  // or on to the freed mask (g then no own mapping)
+  let MASK := bits_or(32, A.metas[g].freed, A.metas[g].avail)
+  let SELF := bits_shl(32, bits_of_int(32, 1), i)
+  let LOCv := pair(l1, pair(l2, pair(l3, pair(MASK, pair(SC6, SELF)))))
+  let OVF := exc_val("stack_overflow", empty)
+  let FB(V, rr) := V in x86_64_linux.Vm && (ex A2. (A2 in mallocng.Abs && A2 in univ(1)) && mallocng_specs.freed_back(c, A, A2, B, V0, V, s.objs, fst(rr), snd(rr)))
+  let GOAL := abi.ovf_out(s, o) || (ex V rr. FB(V, rr) && o = ok(fn_update(s, "vm", V), rr))
+  let T2 := (ex v ob L. (v in x86_64_linux.Vm && ob in abi.Objs) && x7 = exc(pair(fn_update(fn_update(s, "vm", v), "objs", ob), L), pair("raise", OVF))) ||
+    (ex V L rr. FB(V, rr) && x7 = exc(pair(fn_update(s, "vm", V), L), pair("ret", rr))) ||
+    (x7 = ok(pair(s, LOCv), empty) && !mallocng.own_mapping(A.metas[g]))
+  // (a_or's word: g's freed mask, accessible)
+  have uw28: gimple.usable(V0, s.objs, int_add(g, 28), 4, true) proof
+    have bj: all j. j in omega -> int_lt(j, 4) -> int_add(int_add(g, 28), j) in FP && mallocng.m_mapped(mallocng.mview(V0, FP), int_add(int_add(g, 28), j)) &&
+        snd(mallocng.pg(mallocng.mview(V0, FP), int_add(int_add(g, 28), j))).prot.w && !(snd(mallocng.pg(mallocng.mview(V0, FP), int_add(int_add(g, 28), j))).kind = 2) proof
+      fix j
+      assume hj hjl
+      have r1 r2 r3 := mp(all_elim(inr, {int_add(int_add(g, 28), j)}), arith(go, hj), arith(go, hj), arith(go, hj, hjl))
+      have m1 _ m3 := expand(r2, mallocng.m_rw)
+      show by taut(r1, m1, m3, r3)
+    qed
+    show := apply(mp.view_usable_w[vm := V0, fp := FP, objs := s.objs, a := int_add(g, 28), n := 4], arith(go), bj, VS)
+  qed
+  have ur28 := mp(all_elim(um, {int_add(g, 28)}, {4}), arith(go), simp(), arith(), arith())
+  have finish: T2 -> GOAL proof
+    assume ht2
+    have f1: case 1 of ht2 proof
+      assume e
+      obtain v ob L, hv hob hx from e
+      step oe from rewrite(hx, kx1)
+      show by disj({1}, ex_intro({v}, {ob}, taut(hv, hob, oe)))
+    qed
+    have f2: case 2 of ht2 proof
+      assume e
+      obtain V L rr, hv hfb hx from e
+      step oe from rewrite(hx, kx1)
+      show by disj({2}, ex_intro({V}, {rr}, taut(hv, hfb, oe)))
+    qed
+    have f3: case 3 of ht2 proof
+      assume e
+      have hx hno := e
+      step k1 from rewrite(hx, kx1)
+      // (a_or: the freed word or'ed with g's bit)
+      have p28: bits_add(64, g, 28) = int_add(g, 28) by defs(arith(go, top), bits_add, pow2)
+      have g4b: int_le(int_add(int_add(g, 28), 4), int_pow(2, 64)) by arith(top)
+      have acp: mallocng_specs.a_cas_pre(V0, s.objs, int_add(g, 28)) by defs(simp(g4b, ur28, uw28, (!(int_add(g, 28) = 0) by arith(go))), mallocng_specs.a_cas_pre)
+      have s1 := mp(mp.shl1[i := i], io, il32)
+      have sb: SELF in bits(32) by simp(s1)
+      // (the word written: g's freed mask with i's bit added)
+      have nfi: !bit(A.metas[g].freed, i) by taut(mp(all_elim(each, {i}), io, arith(il, lt)), clr)
+      have fbits: A.metas[g].freed in bits(32) := rewrite(eFr, (bits_of_int(32, gimple.bytes_at(V0, int_add(g, 28), 4)) in bits(32) by simp()))
+      have ad := mp(mp.add_bit[S := A.metas[g].freed, i := i], fbits, io, il32, nfi)
+      have xval: bits_or(32, A.metas[g].freed, SELF) = int_add(A.metas[g].freed, pow2(i)) :=
+        subst({y. bits_or(32, A.metas[g].freed, y) = int_add(A.metas[g].freed, pow2(i))}, sym(s1), sym(ad))
+      have mn: !(MASK = 0) -> GOAL proof
+        assume hm
+        step k2 from k1 with hm
+        have g28c: int_add(g, 28) in bits(64) by arith(go, top)
+        have sv28: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 28) = 28 by defs(simp(), gimple.sval)
+        step V2 r2, oe hR from k2 with g.padd_det, hao using conj(hs, su, ths, hgb, g28c, sb, acp)
+        have v2V ev2 := rewrite(sv28, hR)
+        have ex2 := rewrite(xval, rewrite(eFr, ev2))
+        have uo := apply(mp.unres_out[c := c, A := A, vm := V0, objs := s.objs, b := B, g := g, i := i], hc, au, hat, hbt, vV, hin, hus, io, hro, hno)
+        have fb: ex A2. (A2 in mallocng.Abs && A2 in univ(1)) && mallocng_specs.freed_back(c, A, A2, B, V0, V2, s.objs, fst(pair(0, 0)), snd(pair(0, 0)))
+          by simp(rewrite(sym(ex2), uo), keep(mallocng_specs.freed_back))
+        show by disj({2}, ex_intro({V2}, {pair(0, 0)}, taut(v2V, fb, oe)))
+      qed
+      goal 3
+      show by simp()
+    qed
+    show by taut(ht2, f1, f2, f3)
+  qed
+  goal 1
   show by simp()
 qed
