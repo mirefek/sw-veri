@@ -509,6 +509,137 @@ proof
   show := apply(mp.rsv_keep[A := A, A2 := A2, vm := vm, vm2 := vm2], h, er, ec, sym(rewrite(ev, ut)), sym(rewrite(ev, ul)), g)
 qed
 
+// ----------------------------------------------------------------------
+//  The individually mapped groups' pages: ones the kernel may unmap
+//  (holds_in's maps)
+
+// (A2's mapped groups A's, where they were)
+abbrev mp.maps_same(A, A2) := all g. g in omega -> mallocng.is_used(A2, g) -> int_lt(0, A2.metas[g].maplen) ->
+  mallocng.is_used(A, g) && A2.metas[g].mem = A.metas[g].mem && A2.metas[g].maplen = A.metas[g].maplen
+
+// (pages unmappable: so still, theirs and the stack's bounds as they were)
+theorem mp.unmap_keep(vm, vm2, p, n): mallocng.unmap_ok(vm, p, n) -> vm2.stack_top = vm.stack_top -> vm2.stack_limit = vm.stack_limit ->
+  (all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, n)) -> vm2.pages[q] = vm.pages[q]) -> mallocng.unmap_ok(vm2, p, n)
+proof
+  assume h et el hp
+  have os px := expand(h, mallocng.unmap_ok)
+  have os2: x86_64_linux.off_stack_space(vm2, p, n) by defs(simp(expand(os, x86_64_linux.off_stack_space, x86_64_linux.stack_floor), et, el),
+    x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+  have px2: all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, n)) -> x86_64_linux.mapped(vm2, q) -> !snd(vm2.pages[q]).prot.x proof
+    fix q
+    assume hq hr hm
+    have e := mp(all_elim(hp, {q}), hq, hr)
+    have hm0: x86_64_linux.mapped(vm, q) by defs(simp(expand(hm, x86_64_linux.mapped), e), x86_64_linux.mapped)
+    have nx := mp(all_elim(px, {q}), hq, hr, hm0)
+    show by simp(nx, e)
+  qed
+  show by defs(taut(os2, px2), mallocng.unmap_ok)
+qed
+
+// (the same mapped groups, their pages and the stack's bounds as they were)
+theorem mp.maps_keep(A, A2, vm, vm2): mallocng.maps_ok(A, vm) -> mp.maps_same(A, A2) ->
+  vm2.stack_top = vm.stack_top -> vm2.stack_limit = vm.stack_limit ->
+  (all g q. g in omega -> mallocng.is_used(A, g) -> int_lt(0, A.metas[g].maplen) -> q in omega ->
+     int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) -> vm2.pages[q] = vm.pages[q]) ->
+  mallocng.maps_ok(A2, vm2)
+proof
+  assume h hs et el hp
+  have r: all g. g in omega -> mallocng.is_used(A2, g) && int_lt(0, A2.metas[g].maplen) ->
+      mallocng.unmap_ok(vm2, int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen) &&
+      (all q. q in omega -> int_le(int_div(A2.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen)) ->
+        x86_64_linux.mapped(vm2, q)) proof
+    fix g
+    assume hg hw
+    have w1 w2 := hw
+    have u em ml := mp(all_elim(hs, {g}), hg, w1, w2)
+    have l0: int_lt(0, A.metas[g].maplen) := rewrite(ml, w2)
+    have u0 m0 := mp(all_elim(expand(h, mallocng.maps_ok), {g}), hg, conj(u, l0))
+    have pg: all q. q in omega -> int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) ->
+        vm2.pages[q] = vm.pages[q] proof
+      fix q
+      assume hq hr
+      show := mp(all_elim(hp, {g}, {q}), hg, u, l0, hq, hr)
+    qed
+    have u1 := apply(mp.unmap_keep[vm := vm, vm2 := vm2, p := int_div(A.metas[g].mem, x86_64_linux.PAGE), n := A.metas[g].maplen], u0, et, el, pg)
+    have m1: all q. q in omega -> int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) ->
+        x86_64_linux.mapped(vm2, q) proof
+      fix q
+      assume hq hr
+      have e := mp(all_elim(pg, {q}), hq, hr)
+      show by defs(simp(expand(mp(all_elim(m0, {q}), hq, hr), x86_64_linux.mapped), e), x86_64_linux.mapped)
+    qed
+    show by simp(u1, m1, em, ml)
+  qed
+  show by defs(r, mallocng.maps_ok)
+qed
+
+// (... all pages as they were)
+theorem mp.maps_pages(A, A2, vm, vm2): mallocng.maps_ok(A, vm) -> mp.maps_same(A, A2) ->
+  vm2.pages = vm.pages -> vm2.stack_top = vm.stack_top -> vm2.stack_limit = vm.stack_limit -> mallocng.maps_ok(A2, vm2)
+proof
+  assume h hs ep et el
+  have g: all g q. g in omega -> mallocng.is_used(A, g) -> int_lt(0, A.metas[g].maplen) -> q in omega ->
+      int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) -> vm2.pages[q] = vm.pages[q] by simp(ep)
+  show := apply(mp.maps_keep[A := A, A2 := A2, vm := vm, vm2 := vm2], h, hs, et, el, g)
+qed
+
+// (... vm2 vm but for its bytes)
+theorem mp.maps_vm(A, A2, vm, vm2): mallocng.maps_ok(A, vm) -> mp.maps_same(A, A2) -> fn_update(vm2, "bytes", vm.bytes) = vm -> mallocng.maps_ok(A2, vm2)
+proof
+  assume h hs ev
+  have up := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have ut := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "stack_top"], (!("stack_top" = "bytes") by simp()))
+  have ul := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "stack_limit"], (!("stack_limit" = "bytes") by simp()))
+  show := apply(mp.maps_pages[A := A, A2 := A2, vm := vm, vm2 := vm2], h, hs, sym(rewrite(ev, up)), sym(rewrite(ev, ut)), sym(rewrite(ev, ul)))
+qed
+
+// (a page of a mapped group: its first byte in the group)
+theorem mp.map_pg_in(A, M, b, g, q): mallocng.used_ok(A, M, b) -> mallocng.is_used(A, g) -> int_lt(0, A.metas[g].maplen) -> q in omega ->
+  int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) ->
+  in: mallocng.in_range(int_mul(q, 4096), mallocng.group_range(A.metas[g])) && page: int_div(int_mul(q, 4096), x86_64_linux.PAGE) = q
+proof
+  assume uo hg hl hq hr
+  have gok := apply(mp.used_group, uo, hg)
+  have {mpd = mapped} := expand(gok, mallocng.group_ok)
+  have {pa = page} := mp(mpd, hl)
+  have r1 r2 := hr
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have gr: mallocng.group_range(A.metas[g]) = pair(A.metas[g].mem, int_mul(A.metas[g].maplen, 4096)) by defs(simp(hl), mallocng.group_range)
+  have a2: int_le(A.metas[g].mem, int_mul(q, 4096)) by arith(pa, r1, kp)
+  have a3: int_lt(int_mul(q, 4096), int_add(A.metas[g].mem, int_mul(A.metas[g].maplen, 4096))) by arith(pa, r2, kp)
+  have a4: int_div(int_mul(q, 4096), x86_64_linux.PAGE) = q by arith(kp)
+  have ir: mallocng.in_range(int_mul(q, 4096), pair(A.metas[g].mem, int_mul(A.metas[g].maplen, 4096))) by defs(simp(a2, a3), mallocng.in_range)
+  show by taut(rewrite(sym(gr), ir), a4)
+qed
+
+// (the same groups, every one where it was)
+theorem mp.maps_refl(A): mp.maps_same(A, A)
+proof
+  fix g
+  assume _ hu _
+  show by taut(hu, refl({A.metas[g].mem}), refl({A.metas[g].maplen}))
+qed
+
+// (the groups in use the same, each one's place and mapping as it was)
+theorem mp.maps_u(A, A2): A2.used = A.used -> (all g. g in omega -> A2.metas[g].mem = A.metas[g].mem && A2.metas[g].maplen = A.metas[g].maplen) ->
+  mp.maps_same(A, A2)
+proof
+  assume eu hg
+  fix g
+  assume ho hu _
+  have iu: mallocng.is_used(A, g) by defs(rewrite(eu, expand(hu, mallocng.is_used)), mallocng.is_used)
+  have em el := mp(all_elim(hg, {g}), ho)
+  show by taut(iu, em, el)
+qed
+
+// (... the metas as they were)
+theorem mp.maps_um(A, A2): A2.used = A.used -> A2.metas = A.metas -> mp.maps_same(A, A2)
+proof
+  assume eu em
+  have hg: all g. g in omega -> A2.metas[g].mem = A.metas[g].mem && A2.metas[g].maplen = A.metas[g].maplen by simp(em)
+  show := apply(mp.maps_u, eu, hg)
+qed
+
 // (the reserve less its first page -- the stack's bounds and the other
 // pages as they were)
 theorem mp.rsv_drop(A, A2, vm, vm2): mp.rsv(A, vm) -> A.reserve in omega -> A2.reserve_cnt = int_sub(A.reserve_cnt, 1) ->

@@ -517,6 +517,8 @@ abbrev mp.bgpre(c, A, vm, V1, b, k, T, m, V) := cfg: c in mallocng.Cfg && univ: 
   place: (k in omega && int_le(k, seq_len(A.used))) && lo: (all j. j in omega -> int_lt(j, k) -> int_lt(A.used[j], m)) &&
   hi: (all j. j in omega -> int_le(k, j) -> int_lt(j, seq_len(A.used)) -> int_lt(m, A.used[j])) &&
   big: (((V.sizeclass = 63 && V.last_idx = 0) && V.avail = 0) && V.freed = 0) && maplen: int_lt(0, V.maplen) &&
+  maps: (mallocng.unmap_ok(vm, int_div(V.mem, x86_64_linux.PAGE), V.maplen) &&
+    (all q. q in omega -> int_le(int_div(V.mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(V.mem, x86_64_linux.PAGE), V.maplen)) -> x86_64_linux.mapped(vm, q))) &&
   fresh: (all a. a in omega -> mallocng.in_range(a, mallocng.group_range(V)) ->
      !mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && !(a in malloc.live_of(b)) && !mallocng.in_reserved(A, a) && !mallocng.in_taken(A, a)) &&
   newpg: (all a. a in omega -> mallocng.in_range(a, mallocng.group_range(V)) ->
@@ -1509,5 +1511,35 @@ proof
   have {ep0 = pages, est = stk} := P
   have et el := est
   have rs2 := apply(mp.rsv_pages[A := A, A2 := A2, vm := vm, vm2 := V1], hrs, (A2.reserve = A.reserve by simp()), (A2.reserve_cnt = A.reserve_cnt by simp()), ep0, et, el)
-  show by defs(taut(h2, m2, f2, r2, rs2), mallocng.holds_m)
+  // (the mapped groups' pages: the old ones', the new one's as mmap made them)
+  have {hmq = maps} := expand(hh, mallocng.holds_m)
+  have {nmp = maps} := P
+  have mq1: all g. g in omega -> mallocng.is_used(A2, g) && int_lt(0, A2.metas[g].maplen) ->
+      mallocng.unmap_ok(vm, int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen) &&
+      (all q. q in omega -> int_le(int_div(A2.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen)) ->
+        x86_64_linux.mapped(vm, q)) proof
+    fix g
+    assume hg hw
+    have iu2 hl := hw
+    have d1: g = m -> mallocng.unmap_ok(vm, int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen) &&
+        (all q. q in omega -> int_le(int_div(A2.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen)) ->
+          x86_64_linux.mapped(vm, q)) proof
+      assume e
+      have ev: A2.metas[g] = V by simp(e)
+      show := rewrite(sym(ev), nmp)
+    qed
+    have d2: mallocng.is_used(A, g) && (A2.metas[g] = A.metas[g] && A2.slots[g] = A.slots[g]) ->
+        mallocng.unmap_ok(vm, int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen) &&
+        (all q. q in omega -> int_le(int_div(A2.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A2.metas[g].mem, x86_64_linux.PAGE), A2.metas[g].maplen)) ->
+          x86_64_linux.mapped(vm, q)) proof
+      assume q
+      have iu em _ := q
+      have r := mp(all_elim(expand(hmq, mallocng.maps_ok), {g}), hg, conj(iu, rewrite(em, hl)))
+      show := rewrite(sym(em), r)
+    qed
+    show by taut(apply(mp.bg_member[A := A, k := k, T := T, m := m, V := V, g := g], ha, hk, hkl, hm, nm, iu2), d1, d2)
+  qed
+  have m1: mallocng.maps_ok(A2, vm) by defs(mq1, mallocng.maps_ok)
+  have mq2 := apply(mp.maps_pages[A := A2, A2 := A2, vm := vm, vm2 := V1], m1, mp.maps_refl[A := A2], ep0, et, el)
+  show by defs(taut(h2, m2, f2, r2, rs2, mq2), mallocng.holds_m)
 qed

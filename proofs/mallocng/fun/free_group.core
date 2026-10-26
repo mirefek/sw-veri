@@ -449,8 +449,46 @@ proof
     show by taut(bef, aft)
   qed
   have lg: mallocng_specs.let_go(c, A, A2, b, A.metas[g].mem, int_mul(A.metas[g].maplen, 4096)) by defs(taut(pg0, mlm, mpos, each), mallocng_specs.let_go)
+  // (its pages: ones the kernel may unmap, as mmap made them -- the
+  // pages and the stack's bounds as they were)
+  have {hmq = maps} := expand(hh, mallocng.holds_m)
+  have u0 m0 := mp(all_elim(expand(hmq, mallocng.maps_ok), {g}), go, conj(hg, mg))
+  have {ev2 = rest} := P
+  have {p2 = pages, t2 = top, l2 = limit} := apply(mp.bytes_only[V := V2, vm := V1], ev2)
+  have {t1 = top, l1 = limit} := apply(mp.bytes_only[V := V1, vm := s.vm], e1)
+  have pq: all q. q in omega -> int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) ->
+      V2.pages[q] = s.vm.pages[q] by simp(p2, p1)
+  have u1 := apply(mp.unmap_keep[vm := s.vm, vm2 := V2, p := int_div(A.metas[g].mem, x86_64_linux.PAGE), n := A.metas[g].maplen], u0, trans(t2, t1), trans(l2, l1), pq)
+  have pof: x86_64_linux.page_of(A.metas[g].mem) = int_div(A.metas[g].mem, x86_64_linux.PAGE) by defs(simp(), x86_64_linux.page_of)
+  have pfr: x86_64_linux.pages_for(int_mul(A.metas[g].maplen, 4096)) = A.metas[g].maplen by defs(arith(gml), x86_64_linux.pages_for, x86_64_linux.PAGE)
+  have m1: all q. q in omega -> int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) ->
+      x86_64_linux.mapped(V2, q) proof
+    fix q
+    assume hq hr
+    have e := mp(all_elim(pq, {q}), hq, hr)
+    show by defs(simp(expand(mp(all_elim(m0, {q}), hq, hr), x86_64_linux.mapped), e), x86_64_linux.mapped)
+  qed
+  // (the mapping's words: 64-bit, its last page mapped -- below the task's end)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  let LQ := int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), int_sub(A.metas[g].maplen, 1))
+  have lm := mp(all_elim(m1, {LQ}), (LQ in omega by arith(gmo, mg, kp)), (int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), LQ) &&
+    int_lt(LQ, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) by arith(mg)))
+  have tl _ := expand(lm, x86_64_linux.mapped)
+  have mb64: A.metas[g].mem in bits(64) by arith(tl, ts, pg0, gmo, gml, mg, kp)
+  have ml64: int_mul(A.metas[g].maplen, 4096) in bits(64) by arith(tl, ts, pg0, gmo, gml, mg, kp)
+  have un: !(int_mul(A.metas[g].maplen, 4096) = 0) ->
+      mallocng.unmap_ok(V2, x86_64_linux.page_of(A.metas[g].mem), x86_64_linux.pages_for(int_mul(A.metas[g].maplen, 4096))) &&
+      (all q. q in omega -> int_le(x86_64_linux.page_of(A.metas[g].mem), q) && int_lt(q, int_add(x86_64_linux.page_of(A.metas[g].mem), x86_64_linux.pages_for(int_mul(A.metas[g].maplen, 4096)))) ->
+        x86_64_linux.mapped(V2, q)) &&
+      (ex m l. (m in bits(64) && l in bits(64)) && (m = A.metas[g].mem && l = int_mul(A.metas[g].maplen, 4096))) proof
+    assume _
+    have ty: ex m l. (m in bits(64) && l in bits(64)) && (m = A.metas[g].mem && l = int_mul(A.metas[g].maplen, 4096))
+      by ex_intro({A.metas[g].mem}, {int_mul(A.metas[g].maplen, 4096)}, taut(mb64, ml64, refl({A.metas[g].mem}), refl({int_mul(A.metas[g].maplen, 4096)})))
+    show := conj(rewrite(sym(pfr), rewrite(sym(pof), conj(u1, m1))), ty)
+  qed
   have fb: mallocng_specs.freed_back(c, A, A2, b, s.vm, V2, s.objs, A.metas[g].mem, int_mul(A.metas[g].maplen, 4096))
-    by defs(taut(hin2, bnr, btk, bunt, fpc, lg), mallocng_specs.freed_back)
+    by defs(taut(hin2, bnr, btk, bunt, fpc, lg, un), mallocng_specs.freed_back)
   show by ex_intro({A2}, taut(ba, bu, fb))
 qed
 
@@ -874,7 +912,7 @@ proof
   let EN := set_select(omega, x0. mallocng.in_reserved(N, x0))
   have {go = nat} := apply(mp.used_nat, ha, hg)
   have tl: A.taken in list_type(omega) by simp(ha)
-  have hin3 _ tk3 unt23 _ _ := expand(h3, mallocng_specs.freed_back)
+  have hin3 _ tk3 unt23 _ _ _ := expand(h3, mallocng_specs.freed_back)
   have {hm3 = mem, hsh3 = shown} := expand(hin3, mallocng.holds_in)
   have t3: A3.taken = seq_concat(A.taken, seq_one(g)) := trans(tk3, htN)
   have tko := apply(mp.taken_out[c := c, A := A, N := N, M := M, b := b, brk := brk, g := g], hc, hu, ha, H, hg, dr, htN)
@@ -912,7 +950,7 @@ proof
   have {go = nat} := apply(mp.used_nat, ha, hg)
   have tl: A.taken in list_type(omega) by simp(ha)
   have {du = used, dm = metas, nsl = slen} := dr
-  have hin3 nr3 tk3 unt23 fp3 lg3 := expand(h3, mallocng_specs.freed_back)
+  have hin3 nr3 tk3 unt23 fp3 lg3 um3 := expand(h3, mallocng_specs.freed_back)
   have {hm3 = mem, hsh3 = shown} := expand(hin3, mallocng.holds_in)
   have t3: A3.taken = seq_concat(A.taken, seq_one(g)) := trans(tk3, htN)
   // (a byte of A's allocator or reserved slots: in E or the footprint)
@@ -975,7 +1013,7 @@ proof
   have la3 := rewrite(kf, apply(mp.free_metas_at[c := c, A := A3, vm := V3, b := b, objs := s.objs], hc, u3, a3, (V3.bytes in fn_space(bits(64), bits(8)) by simp(v3v)), hm3, hsh3, cal))
   have fl3: A3.free_metas in list_type(omega) by simp(a3)
   have _ _ vr _ := mp(all_elim(expand(hfd, mallocng_specs.meta_freed), {A3.free_metas}), fl3, taut(la3, mj3))
-  have {p34 = pages} := apply(mp.bytes_only[V := V4, vm := V3], vr)
+  have {p34 = pages, t34 = top, l34 = limit} := apply(mp.bytes_only[V := V4, vm := V3], vr)
   have bk34 := apply(mp.bk_only[v := V3, v2 := V4], vr)
   have r34: all x0. x0 in omega -> (!(x0 in mallocng.footprint(c, A, b)) && !(x0 in E)) && x86_64_linux.mapped(V3, int_div(x0, x86_64_linux.PAGE)) ->
       (!abi.stack_free(V3, s.objs, x0) -> V4.bytes[bits_of_int(64, x0)] = V3.bytes[bits_of_int(64, x0)]) && V4.pages[int_div(x0, x86_64_linux.PAGE)] = V3.pages[int_div(x0, x86_64_linux.PAGE)] proof
@@ -1050,7 +1088,24 @@ proof
     qed
     show by defs(taut(l0, d2), mallocng_specs.let_go)
   qed
-  have fb4: mallocng_specs.freed_back(c, A, A4, b, s.vm, V4, s.objs, mb, ml) by defs(taut(hin4, nr4, btk, unt04, fpc, lg4), mallocng_specs.freed_back)
+  // (its pages: as they were)
+  have um4: !(ml = 0) -> mallocng.unmap_ok(V4, x86_64_linux.page_of(mb), x86_64_linux.pages_for(ml)) &&
+      (all q. q in omega -> int_le(x86_64_linux.page_of(mb), q) && int_lt(q, int_add(x86_64_linux.page_of(mb), x86_64_linux.pages_for(ml))) -> x86_64_linux.mapped(V4, q)) &&
+      (ex m l. (m in bits(64) && l in bits(64)) && (m = mb && l = ml)) proof
+    assume nz
+    have pq: all q. q in omega -> int_le(x86_64_linux.page_of(mb), q) && int_lt(q, int_add(x86_64_linux.page_of(mb), x86_64_linux.pages_for(ml))) ->
+        V4.pages[q] = V3.pages[q] by simp(p34)
+    have u3 m3 ty3 := mp(um3, nz)
+    have m4: all q. q in omega -> int_le(x86_64_linux.page_of(mb), q) && int_lt(q, int_add(x86_64_linux.page_of(mb), x86_64_linux.pages_for(ml))) ->
+        x86_64_linux.mapped(V4, q) proof
+      fix q
+      assume hq hr
+      have e := mp(all_elim(pq, {q}), hq, hr)
+      show by defs(simp(expand(mp(all_elim(m3, {q}), hq, hr), x86_64_linux.mapped), e), x86_64_linux.mapped)
+    qed
+    show by taut(apply(mp.unmap_keep[vm := V3, vm2 := V4, p := x86_64_linux.page_of(mb), n := x86_64_linux.pages_for(ml)], u3, t34, l34, pq), m4, ty3)
+  qed
+  have fb4: mallocng_specs.freed_back(c, A, A4, b, s.vm, V4, s.objs, mb, ml) by defs(taut(hin4, nr4, btk, unt04, fpc, lg4, um4), mallocng_specs.freed_back)
   show by ex_intro({A4}, taut(ba, bu, fb4))
 qed
 
@@ -1600,7 +1655,7 @@ proof
     step V5 rr5, e11 hR11 from rewrite(p0, k10) with qnf using conj(w4W, w4u, ths4, hgb2, jb, v4V)
     have v5V e5x := hR11
     obtain A3, a3a a3u hfb3 from e5x
-    have hin5 _ _ unt45 _ _ := expand(hfb3, mallocng_specs.freed_back)
+    have hin5 _ _ unt45 _ _ _ := expand(hfb3, mallocng_specs.freed_back)
     have {hm5 = mem, hsh5 = shown} := expand(hin5, mallocng.holds_in)
     // the thread pointer sound still: N's step wrote only N's bytes
     have ne5: all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in set_select(omega, x0. mallocng.in_reserved(N, x0))) proof

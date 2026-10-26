@@ -603,8 +603,20 @@ theorem mp.rng_holds(c, A, vm, V2, b): c in mallocng.Cfg -> A in univ(1) -> A in
   mallocng.holds_m(c, A, V2, b)
 proof
   assume hc hu ha hh hpr hby hrq hbk het hel
-  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv} := expand(hh, mallocng.holds_m)
+  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv, hmq = maps} := expand(hh, mallocng.holds_m)
   have rs2 := apply(mp.rsv_keep[A := A, A2 := A, vm := vm, vm2 := V2], hrs, refl({A.reserve}), refl({A.reserve_cnt}), het, hel, hrq)
+  // (the mapped groups' pages: in the ranges)
+  have {huo0 = used} := expand(H, mallocng.holds)
+  have PG: all g q. g in omega -> mallocng.is_used(A, g) -> int_lt(0, A.metas[g].maplen) -> q in omega ->
+      int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) -> V2.pages[q] = vm.pages[q] proof
+    fix g q
+    assume _ iu hl hq hr
+    have {ir = in, dq = page} := apply(mp.map_pg_in[A := A, M := mallocng.mview(vm, mallocng.held(c, A, b)), b := b, g := g, q := q], huo0, iu, hl, hq, hr)
+    have ao: int_mul(q, 4096) in omega by arith(hq)
+    have rr := apply(mp.used_rng, hc, hu, ha, iu, ir)
+    show := rewrite(dq, mp(all_elim(hpr, {int_mul(q, 4096)}), ao, rr))
+  qed
+  have mq2 := apply(mp.maps_keep[A := A, A2 := A, vm := vm, vm2 := V2], hmq, mp.maps_refl[A := A], het, hel, PG)
   // (the footprint: in the ranges)
   have fr: all a. a in omega -> a in mallocng.footprint(c, A, b) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) proof
     fix a
@@ -678,7 +690,7 @@ proof
     show by taut(rw, o1, rewrite(sym(pe), o2))
   qed
   have g2: mallocng.grp_rw(c, A, V2, b) by defs(gq, mallocng.grp_rw)
-  show by defs(taut(i2, m2, f2, g2, rs2), mallocng.holds_m)
+  show by defs(taut(i2, m2, f2, g2, rs2, mq2), mallocng.holds_m)
 qed
 
 // (the thread's descriptor word: its bytes and pages as before -- sound
@@ -1186,7 +1198,7 @@ proof
   have ths: gc.sound(s) by simp(hth)
   step l1 l2 l3 l4 l5 l6 l7 l8 l9 l10 l11 l12 l13 l14 l15 V1 r1, e1 hR1 from hr with mp.sov_q using hso, hw, hu, hnb, pso, ths
   have v1v r1c := hR1
-  have efl _ _ := expand(heo, mallocng_specs.errno_ok)
+  have efl _ _ _ := expand(heo, mallocng_specs.errno_ok)
   have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(efl, fsb)
   have fs0: all a. a in omega -> a in mallocng.footprint(c, A, B) -> a in mallocng.footprint(c, A, B) proof
     fix a
@@ -1417,6 +1429,35 @@ proof
           show by taut(trans(rewrite(qa, pp), nq), um)
         qed
         have pbb: P in bits(64) by arith(hpo, mlow, mnp)
+        // (the new pages: mapped, ones the kernel may unmap -- as mmap made
+        // them, the stack's bounds as they were)
+        have bmaps: mallocng.unmap_ok(V5, p, K) && (all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, K)) -> x86_64_linux.mapped(V5, q)) proof
+          have pl0 := expand(hpl, mallocng_specs.mmap_place)
+          have mc: !(bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) by defs(simp(),
+            x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)
+          have osp0: x86_64_linux.off_stack_space(V0, p, K) by simp(pl0, mc, keep(x86_64_linux.off_stack_space, x86_64_linux.free_range))
+          have bk05 := apply(mp.bk_trans, bk02, apply(mp.bk_trans, apply(mp.bk_only, er24), u5b))
+          have bt bl _ := expand(bk05, mallocng.bounds_kept)
+          have osp5: x86_64_linux.off_stack_space(V5, p, K) by defs(simp(expand(osp0, x86_64_linux.off_stack_space, x86_64_linux.stack_floor), bt, bl),
+            x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+          have px: !x86_64_linux.prot_of(3).x by defs(simp(), x86_64_linux.prot_of)
+          have mq: all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, K)) -> x86_64_linux.mapped(V5, q) proof
+            fix q
+            assume hq hr
+            have h1 h2 := hr
+            have e _ := mp(all_elim(fr5, {q}), hq, h1, h2)
+            show by defs(simp(e, (int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(ts, mlow, h2, mnp))), x86_64_linux.mapped)
+          qed
+          have nx: all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, K)) -> x86_64_linux.mapped(V5, q) -> !snd(V5.pages[q]).prot.x proof
+            fix q
+            assume hq hr _
+            have h1 h2 := hr
+            have e _ := mp(all_elim(fr5, {q}), hq, h1, h2)
+            show by simp(e, px)
+          qed
+          have u: mallocng.unmap_ok(V5, p, K) by defs(taut(osp5, nx), mallocng.unmap_ok)
+          show by taut(u, mq)
+        qed
         have gu1 gs1 _ _ := expand(gk1, mallocng_specs.groups_kept)
         have nr1: mallocng.no_reserved(A1) by defs(rewrite(sym(gs1), expand(hnr, mallocng.no_reserved)), mallocng.no_reserved)
         have grw5s: mp.grown(c, A1, A, B, V4) by simp(grw5)
@@ -2076,8 +2117,13 @@ proof
             show := mp(all_elim(zr, {a}), hao, arith(h1, vmem), arith(h2, vmem, vml))
           qed
           // ---- the group made: the big group's step (mp.bgpre)
+          let BM(x, k) := mallocng.unmap_ok(V5, x, k) && (all q. q in omega -> int_le(x, q) && int_lt(q, int_add(x, k)) -> x86_64_linux.mapped(V5, q))
+          have pv: p = int_div(VR.mem, x86_64_linux.PAGE) by defs(arith(vmem), x86_64_linux.PAGE)
+          have vm1 := subst({x. BM(x, K)}, pv, bmaps)
+          have vmaps := subst({k. BM(int_div(VR.mem, x86_64_linux.PAGE), k)}, sym(vml), vm1)
           have GP: mp.bgpre(c, A1, V5, VF, B, KK, A.taken, M, VR) := conj(hc, a1u, a1a, hbt, v5v, vfv, hin5, tl0, tkm, hnz, vrt, conj(kko, kkl), klo, khi,
-            ((((VR.sizeclass = 63 && VR.last_idx = 0) && VR.avail = 0) && VR.freed = 0) by simp()), (int_lt(0, VR.maplen) by arith(vml, kge)), vfr, vnp, vmr,
+            ((((VR.sizeclass = 63 && VR.last_idx = 0) && VR.avail = 0) && VR.freed = 0) by simp()), (int_lt(0, VR.maplen) by arith(vml, kge)),
+            vmaps, vfr, vnp, vmr,
             (VF.pages = V5.pages by simp()), (VF.brk = V5.brk by simp()), (VF.stack_top = V5.stack_top && VF.stack_limit = V5.stack_limit by simp()), vby, vrec,
             conj(vpv, vnx), vhd, vzr)
           have hinF := apply(mp.bg_holds_m, GP)

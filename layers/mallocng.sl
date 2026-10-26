@@ -593,13 +593,25 @@ pred grp_rw(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
     (a in footprint(c, A, blocks) || a in live_of(blocks) || in_reserved(A, a)) ->
     m_rw(mview(vm, all_bytes()), a) && pg(mview(vm, all_bytes()), a).value.kind != stack
 
+// pages p .. p+n-1 ones the kernel may unmap: off the stack's space, not
+// executable
+pred unmap_ok(vm: Vm, p: nat, n: nat) =
+  off_stack_space(vm, p, n) && (all q: nat. p <= q && q < p + n -> mapped(vm, q) -> !vm.pages[q].value.prot.x)
+
+// a group mapped on its own: its pages mapped, ones the kernel may unmap
+// (as mmap made them)
+pred maps_ok(A: Abs, vm: Vm) =
+  all g: nat. is_used(A, g) && A.metas[g].maplen > 0 -> unmap_ok(vm, A.metas[g].mem / PAGE, A.metas[g].maplen) &&
+    (all q: nat. A.metas[g].mem / PAGE <= q && q < A.metas[g].mem / PAGE + A.metas[g].maplen -> mapped(vm, q))
+
 pred holds_m(c: Cfg, A: Abs, vm: Vm, blocks: Addr -> Option[nat]) =
   inv: holds(c, A, mview(vm, held(c, A, blocks)), blocks, vm.brk) && mapped: fp_mapped(fp_ranges(c, A), blocks, vm) && free: free_rw(c, mview(vm, footprint(c, A, blocks))) &&
   rw: grp_rw(c, A, vm, blocks) &&
   // the reserve's pages: ones the kernel may reprotect (mapped, off the
   // stack's space, not executable -- as mmap and brk made them)
   rsv: (A.reserve_cnt > 0 -> off_stack_space(vm, A.reserve / PAGE, A.reserve_cnt) &&
-    (all q: nat. A.reserve / PAGE <= q && q < A.reserve / PAGE + A.reserve_cnt -> mapped(vm, q) && !vm.pages[q].value.prot.x))
+    (all q: nat. A.reserve / PAGE <= q && q < A.reserve / PAGE + A.reserve_cnt -> mapped(vm, q) && !vm.pages[q].value.prot.x)) &&
+  maps: maps_ok(A, vm)
 
 // ... in the C world: the memory's (holds_m), the allocator's bytes the
 // world's (shown_in)

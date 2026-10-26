@@ -298,7 +298,7 @@ theorem mp.agr_side(c, A, A1, B, s, V): s in abi.World -> abi.thread_ok(s.vm, s.
 proof
   assume hw ht htl heo hea su sgr sep
   have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
-  have efl eus _ := expand(heo, mallocng_specs.errno_ok)
+  have efl eus _ eur := expand(heo, mallocng_specs.errno_ok)
   have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(efl, fsb)
   have ne: all i. i in omega -> int_lt(i, 8) -> !(int_add(s.fs_base, i) in mp.errno(s.fs_base)) proof
     fix i
@@ -317,7 +317,8 @@ proof
     show := rewrite(sym(ea), mp(all_elim(sep, {i}), hi, hil))
   qed
   have us := apply(mp.usable_pg[vm := s.vm, vm2 := V, objs := s.objs, a := mallocng_specs.errno_at(s.fs_base), n := 4, w := true], pe, eus)
-  have eo: mallocng_specs.errno_ok(V, s.objs, s.fs_base) by defs(taut(efl, us, th), mallocng_specs.errno_ok)
+  have usr := apply(mp.usable_pg[vm := s.vm, vm2 := V, objs := s.objs, a := mallocng_specs.errno_at(s.fs_base), n := 4, w := false], pe, eur)
+  have eo: mallocng_specs.errno_ok(V, s.objs, s.fs_base) by defs(taut(efl, us, th, usr), mallocng_specs.errno_ok)
   have mv: all i. i in omega -> int_lt(i, 4) -> x86_64_linux.mapped(V, int_div(int_add(mallocng_specs.errno_at(s.fs_base), i), x86_64_linux.PAGE)) proof
     fix i
     assume hi hil
@@ -338,7 +339,7 @@ proof
   have er _ := expand(hco, mallocng_specs.ctx_only)
   have up := mp(app_update_other[f := vm2, k := "bytes", v := vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
   have ep: vm2.pages = vm.pages := sym(rewrite(er, up))
-  have efl eus _ := expand(heo, mallocng_specs.errno_ok)
+  have efl eus _ eur := expand(heo, mallocng_specs.errno_ok)
   have pe: all i. i in omega -> int_lt(i, 4) ->
       vm2.pages[int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE)] = vm.pages[int_div(int_add(mallocng_specs.errno_at(fs), i), x86_64_linux.PAGE)] proof
     fix i
@@ -346,7 +347,8 @@ proof
     show by simp(ep)
   qed
   have us := apply(mp.usable_pg[vm := vm, vm2 := vm2, objs := objs, a := mallocng_specs.errno_at(fs), n := 4, w := true], pe, eus)
-  show by defs(taut(efl, us, ht), mallocng_specs.errno_ok)
+  have usr := apply(mp.usable_pg[vm := vm, vm2 := vm2, objs := objs, a := mallocng_specs.errno_at(fs), n := 4, w := false], pe, eur)
+  show by defs(taut(efl, us, ht, usr), mallocng_specs.errno_ok)
 qed
 
 // (errno written, apart from A's footprint: the invariant kept, nothing
@@ -461,6 +463,47 @@ qed
 // (mmap of N bytes, a multiple of pages, at a place p it chose: its pages
 // unmapped before, in user space; the pages mapped before as they were,
 // their bytes too; the new bytes 0)
+// mmap(0, N) of pages not executable: the new pages mapped, ones the kernel
+// may unmap (off the stack's space, as mmap placed them)
+theorem mp.mm_maps(V3, V4, p, N, PG, objs): p in omega ->
+  mallocng_specs.mmap_place(V3, 0, N, bits_of_int(32, 34), p) -> gimple.fresh_pages(V3, V4, objs, p, x86_64_linux.pages_for(N), PG) -> !PG.prot.x ->
+  unmap: mallocng.unmap_ok(V4, p, x86_64_linux.pages_for(N)) &&
+  mapped: (all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, x86_64_linux.pages_for(N))) -> x86_64_linux.mapped(V4, q))
+proof
+  assume hp hpl hfr hx
+  have mc: !(bits_of_int(32, 34) = int_add(int_add(x86_64_linux.MAP_PRIVATE, x86_64_linux.MAP_ANONYMOUS), x86_64_linux.MAP_FIXED)) by defs(simp(), x86_64_linux.MAP_PRIVATE,
+    x86_64_linux.MAP_ANONYMOUS, x86_64_linux.MAP_FIXED)
+  have pl := expand(hpl, mallocng_specs.mmap_place)
+  have _ pfree osp := (int_le(1, p) && x86_64_linux.free_range(V3, p, x86_64_linux.pages_for(N)) && x86_64_linux.off_stack_space(V3, p, x86_64_linux.pages_for(N)) by simp(pl, mc))
+  have fr1 _ _ := expand(pfree, x86_64_linux.free_range)
+  have _ xt xl _ xpg _ := expand(hfr, gimple.fresh_pages)
+  have os2: x86_64_linux.off_stack_space(V4, p, x86_64_linux.pages_for(N)) by defs(simp(expand(osp, x86_64_linux.off_stack_space, x86_64_linux.stack_floor), xt, xl),
+    x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+  have qv: all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, x86_64_linux.pages_for(N))) ->
+      V4.pages[q] = some(PG) && int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) proof
+    fix q
+    assume hq hr
+    have r1 r2 := hr
+    have tq: int_lt(q, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)) by arith(fr1, r2)
+    have e := mp(all_elim(xpg, {q}), hq, tq)
+    show by simp(e, r1, r2, tq)
+  qed
+  have mq: all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, x86_64_linux.pages_for(N))) -> x86_64_linux.mapped(V4, q) proof
+    fix q
+    assume hq hr
+    have e tq := mp(all_elim(qv, {q}), hq, hr)
+    show by defs(simp(e, tq), x86_64_linux.mapped)
+  qed
+  have nx: all q. q in omega -> int_le(p, q) && int_lt(q, int_add(p, x86_64_linux.pages_for(N))) -> x86_64_linux.mapped(V4, q) -> !snd(V4.pages[q]).prot.x proof
+    fix q
+    assume hq hr _
+    have e _ := mp(all_elim(qv, {q}), hq, hr)
+    show by simp(e, hx)
+  qed
+  have u: mallocng.unmap_ok(V4, p, x86_64_linux.pages_for(N)) by defs(taut(os2, nx), mallocng.unmap_ok)
+  show by taut(u, mq)
+qed
+
 theorem mp.mm_fresh(V3, V4, p, N, PG, objs): p in omega -> N in omega -> int_mod(N, 4096) = 0 -> int_lt(0, N) ->
   mallocng_specs.mmap_place(V3, 0, N, bits_of_int(32, 34), p) -> gimple.fresh_pages(V3, V4, objs, p, x86_64_linux.pages_for(N), PG) ->
   npg: x86_64_linux.pages_for(N) = int_div(N, 4096) && one: int_le(1, p) && low: int_le(int_add(int_mul(p, 4096), N), 140737488351232) &&
@@ -567,7 +610,16 @@ theorem mp.mm_holds(c, A, vm, V2, b): c in mallocng.Cfg -> A in univ(1) -> A in 
   mallocng.holds_m(c, A, V2, b)
 proof
   assume hc hu ha hh hpg hby hbk het hel
-  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv} := expand(hh, mallocng.holds_m)
+  have {H = inv, hm = mapped, hfr = free, hrw = rw, hrs = rsv, hmps = maps} := expand(hh, mallocng.holds_m)
+  // (the mapped groups' pages: mapped, so as they were)
+  have PG: all g q. g in omega -> mallocng.is_used(A, g) -> int_lt(0, A.metas[g].maplen) -> q in omega ->
+      int_le(int_div(A.metas[g].mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.metas[g].mem, x86_64_linux.PAGE), A.metas[g].maplen)) -> V2.pages[q] = vm.pages[q] proof
+    fix g q
+    assume ho iu hl hq hr
+    have _ mq := mp(all_elim(expand(hmps, mallocng.maps_ok), {g}), ho, conj(iu, hl))
+    show := mp(all_elim(hpg, {q}), hq, mp(all_elim(mq, {q}), hq, hr))
+  qed
+  have mq2 := apply(mp.maps_keep[A := A, A2 := A, vm := vm, vm2 := V2], hmps, mp.maps_refl[A := A], het, hel, PG)
   // (the reserve's pages: mapped, so as they were)
   have rpq: all q. q in omega -> int_le(int_div(A.reserve, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(A.reserve, x86_64_linux.PAGE), A.reserve_cnt)) ->
       V2.pages[q] = vm.pages[q] proof
@@ -670,7 +722,7 @@ proof
     show by taut(rw, o1, rewrite(sym(pe), o2))
   qed
   have g2: mallocng.grp_rw(c, A, V2, b) by defs(gq, mallocng.grp_rw)
-  show by defs(taut(i2, m2, f2, g2, rs2), mallocng.holds_m)
+  show by defs(taut(i2, m2, f2, g2, rs2, mq2), mallocng.holds_m)
 qed
 
 // (bytes on pages mmap gave read-write: usable)
@@ -1972,7 +2024,7 @@ proof
       have v4v pm4 := hR4
       let W4 := fn_update(s, "vm", V4)
       have ww4: fn_update(W3, "vm", V4) = W4 := fn_update_twice[f := s, k := "vm", a := V3, b := V4]
-      have efl _ _ := expand(heo, mallocng_specs.errno_ok)
+      have efl _ _ _ := expand(heo, mallocng_specs.errno_ok)
       have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(efl, fsb)
       have eout := apply(mp.errno_out[c := c, A := A, A1 := A1, B := B, V0 := s.vm, fs := s.fs_base], hea, fsb, hfl, grw1)
       have tkm: A1.taken = seq_concat(A.taken, seq_one(M)) by taut(tk1, hnz)
@@ -2824,8 +2876,16 @@ proof
           have r1 r2 := mp(all_elim(inrg, {a}), hr)
           show := mp(all_elim(hof, {a}), hao, (int_le(int_mul(p, x86_64_linux.PAGE), a) && int_lt(a, int_mul(int_add(p, int_div(N4, 4096)), x86_64_linux.PAGE)) by arith(r1, r2, kpv, n4a, n4o, hpo, hao)))
         qed
+        // (its pages: as mmap made them -- mapped, unmappable)
+        have {mmu = unmap, mmm = mapped} := apply(mp.mm_maps[V3 := V3, V4 := V4, p := p, N := N4, PG := NPG, objs := s.objs], hpo, hpl, hfr,
+          (!NPG.prot.x by defs(simp(), x86_64_linux.prot_of)))
+        have vpq: int_div(VR.mem, x86_64_linux.PAGE) = p by arith(vmem, kpv)
+        have vpn: VR.maplen = x86_64_linux.pages_for(N4) := trans(vml, sym(pf4))
+        have vmaps: mallocng.unmap_ok(V4, int_div(VR.mem, x86_64_linux.PAGE), VR.maplen) &&
+            (all q. q in omega -> int_le(int_div(VR.mem, x86_64_linux.PAGE), q) && int_lt(q, int_add(int_div(VR.mem, x86_64_linux.PAGE), VR.maplen)) -> x86_64_linux.mapped(V4, q))
+          := rewrite(sym(vpn), rewrite(sym(vpq), conj(mmu, mmm)))
         have GP: mp.gxpre(c, A1, V4, VF, B, KK, A.taken, M, VR, K4) := conj(hc, a1u, a1a, hbt, v4v, vfv, hin4, tl0, tkm, hnz, vrt, (K4 = int_add(VR.last_idx, 1) by arith(vli)),
-          conj(kko, kkl), klo, khi, (int_lt(0, VR.maplen) by arith(vml, qnp)), vfr, vnp, vmr, (VF.pages = V4.pages by simp()), (VF.brk = V4.brk by simp()), (VF.stack_top = V4.stack_top && VF.stack_limit = V4.stack_limit by simp()), vby, vrec,
+          conj(kko, kkl), klo, khi, (int_lt(0, VR.maplen) by arith(vml, qnp)), vmaps, vfr, vnp, vmr, (VF.pages = V4.pages by simp()), (VF.brk = V4.brk by simp()), (VF.stack_top = V4.stack_top && VF.stack_limit = V4.stack_limit by simp()), vby, vrec,
           conj(vpv, vnx), (int_lt(VR.sizeclass, 48) by arith(vsc, hsl)), vhd, vact, vavl, vfrd, small, vzr, sno, fits, offs, span)
         have hinF := apply(mp.gx_holds_in, GP)
         // ---- the outcome: M's group, fresh; no slot reserved, the class's
@@ -3098,7 +3158,7 @@ proof
       have tk17: A2.taken = seq_concat(A.taken, seq_one(M)) := trans((A2.taken = A1.taken by simp(tk2, hA1)), tkm)
       have tl0: A.taken in list_type(omega) by simp(hat)
       have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
-      have efl _ _ := expand(heo, mallocng_specs.errno_ok)
+      have efl _ _ _ := expand(heo, mallocng_specs.errno_ok)
       have hfl: int_le(int_add(s.fs_base, 56), int_pow(2, 64)) by arith(efl, fsb)
       // (so far: nothing outside the allocator touched but errno, grown only
       // into memory unmapped before)

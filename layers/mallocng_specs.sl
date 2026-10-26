@@ -245,9 +245,11 @@ fn syscall2_spec_fun() -> CFun2[World] = (args: Args) => {
   return (w, any bits[64])
 }
 
-// errno's cell writable, the thread pointer sound (a failing call sets it)
+// errno's cell writable, the thread pointer sound (a failing call sets
+// it); readable too (free keeps it across munmap)
 pred errno_ok(vm: Vm, objs: Objs, fs: Addr) =
-  uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs)
+  uint(fs) + 0x38 <= 2^64 && usable(vm, objs, uint(errno_at(fs)), 4, true) && thread_ok(vm, fs) &&
+  usable(vm, objs, uint(errno_at(fs)), 4, false)
 
 // errno's value e (a failing allocator call's: ENOMEM)
 pred errno_is(vm: Vm, fs: Addr, e: nat) = bytes_at(vm, errno_at(fs), 4) = e
@@ -1055,12 +1057,16 @@ pred let_go(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], mb: bits[64], 
 // what free's steps leave: the invariant, no slot reserved, the taken
 // metas as they were (free_group's own while it gives back its slot);
 // memory outside the allocator's (and the reserved slot's) untouched; the
-// allocator grown only by the reserved slot; what it lets go returned
+// allocator grown only by the reserved slot; what it lets go returned (its
+// pages ones the kernel may unmap)
 pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm, vm: Vm, objs: Objs, mb: bits[64], ml: bits[64]) =
   holds_in(c, A, vm, objs, blocks) && no_reserved(A) && A.taken = A0.taken &&
   untouched(c, A0, blocks, before, vm, objs, {a: nat | in_reserved(A0, a)}) &&
   (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || in_reserved(A0, a)) &&
-  let_go(c, A0, A, blocks, mb, ml)
+  let_go(c, A0, A, blocks, mb, ml) &&
+  (uint(ml) != 0 -> unmap_ok(vm, page_of(mb), pages_for(uint(ml))) &&
+     (all q: nat. page_of(mb) <= q && q < page_of(mb) + pages_for(uint(ml)) -> mapped(vm, q)) &&
+     (ex m: bits[64], l: bits[64]. m = mb && l = ml))
 
 // nontrivial_free(g, i): slot i of the group g, the one reserved (its
 // block just freed), given back to the allocator -- unused again, or with
