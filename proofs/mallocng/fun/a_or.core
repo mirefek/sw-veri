@@ -1,0 +1,68 @@
+// a_or(p, v): the 32-bit word at p or'ed with v (musl's atomic or, `lock
+// or`), its word accessible as a_cas's (`a_cas_pre`). No purpose spec of
+// its own: at a call its memory is the one with that word written, which
+// its caller reads (a freed mask's bit set).
+
+// (or32's one outcome: the word read, written or'ed)
+theorem ms.or32_det: all s p x. s in abi.World -> s in univ(1) -> p in bits(64) -> g.mem_defined(s, p, 0, 4, false) -> g.mem_defined(s, p, 0, 4, true) ->
+  g.det(gimple.or32(p, x), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, 0), 4,
+    bits_or(32, bits_of_int(32, gimple.bytes_at(s.vm, int_add(p, 0), 4)), x)))), empty))
+proof
+  fix s p x
+  assume hw hs hp hr hwr
+  let OLD := bits_of_int(32, gimple.bytes_at(s.vm, int_add(p, 0), 4))
+  have z: 0 in bits(32) by simp()
+  have ld := apply(g.ld32_det, {s}, {p}, {0}, hs, hp, z, hr)
+  have st := apply(ms.st32_det, {s}, {p}, {0}, {bits_or(32, OLD, x)}, hw, hs, hp, z, hwr)
+  show proof
+    fix o
+    assume h
+    have b1 := apply(g.bind_inv, apply(g.runs_elim, expand(h, gimple.or32)), ld)
+    show := apply(g.bind_inv, expand(b1, letin), st)
+  qed
+qed
+
+// its run: the word written
+theorem mp.aor_eff(p, v, s, o): s in abi.World -> s in univ(1) -> p in bits(64) -> mallocng_specs.a_cas_pre(s.vm, s.objs, p) ->
+  runs(c_src_malloc_mallocng_free.a_or(p, v), s, o) ->
+  ex V2. (V2 in x86_64_linux.Vm && V2 = mallocng_specs.wr32(s.vm, p, bits_or(32, bits_of_int(32, gimple.bytes_at(s.vm, p, 4)), v))) &&
+    o = ok(fn_update(s, "vm", V2), empty)
+proof
+  assume hw hs hp hpre hr
+  have pnz p4 ur uw := expand(hpre, mallocng_specs.a_cas_pre)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have mr: g.mem_defined(s, p, 0, 4, false) by simp(pnz, p4, ur, p64, hp)
+  have mw: g.mem_defined(s, p, 0, 4, true) by simp(pnz, p4, uw, p64, hp)
+  have od := apply(ms.or32_det, {s}, {p}, {v}, hw, hs, hp, mr, mw)
+  have e := apply(g.bind_inv, apply(g.runs_elim, expand(hr, c_src_malloc_mallocng_free.a_or)), od)
+  have z0: int_add(p, 0) = p by arith(hp)
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  let X := bits_or(32, bits_of_int(32, gimple.bytes_at(s.vm, p, 4)), v)
+  have w := apply(mp.w32_vm[V := s.vm, c := p, v := X], pv)
+  have e2: o = ok(fn_update(s, "vm", mallocng_specs.wr32(s.vm, p, X)), empty) by defs(simp(rewrite(z0, e)), mallocng_specs.wr32)
+  show by ex_intro({mallocng_specs.wr32(s.vm, p, X)}, taut(w, refl({mallocng_specs.wr32(s.vm, p, X)}), e2))
+qed
+
+// its C function value at a call: an overflow, or the word written
+abbrev mp.aor_call(f) := all t p v regs o2. t in abi.World -> t in univ(1) -> p in bits(64) -> v in bits(32) -> mallocng_specs.a_cas_pre(t.vm, t.objs, p) ->
+  gc.regs_ok(regs, seq_concat(seq_one(gimple.arg(64, p)), seq_one(gimple.arg(32, v)))) -> runs(f[regs], t, o2) ->
+  abi.ovf_out(t, o2) ||
+  (ex V r. (V in x86_64_linux.Vm && V = mallocng_specs.wr32(t.vm, p, bits_or(32, bits_of_int(32, gimple.bytes_at(t.vm, p, 4)), v))) && o2 = ok(fn_update(t, "vm", V), r))
+
+theorem mp.aor_q: mp.aor_call(c_src_malloc_mallocng_free.a_or_fun())
+proof
+  fix t p v regs o2
+  assume hw htu hp hv hpre hro hr
+  let ARGS := seq_concat(seq_one(gimple.arg(64, p)), seq_one(gimple.arg(32, v)))
+  have rl rln _ := hro
+  have an: seq_len(ARGS) = 2 by simp()
+  have rn: seq_len(regs) = 2 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := p], hro, simp(), simp(an), at({ARGS[0]}), simp(), hp)
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 32, x := v], hro, simp(), simp(an), at({ARGS[1]}), simp(), hv)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o2l: ord_le(2, seq_len(regs)) by defs(simp(rn), ord_le)
+  step o3 V u y, e from hr with o2l, q0, q1, mp.aor_eff using ra, hw, htu, hp, hpre
+  show by disj({2}, ex_intro({V}, {pair(u, y)}, taut(e)))
+qed
