@@ -1,0 +1,98 @@
+// free_group(g) by its purpose: g, all of whose slots are free (one
+// reserved: the slot its last block was in), given back -- out of the
+// groups in use (proofs/mallocng/model/dropgroup.core), its meta returned
+// to the free list (free_meta); a nested group's slot in its container
+// reserved and given back in turn (nontrivial_free), a group mapped on its
+// own let go (its mapping returned).
+
+// ----------------------------------------------------------------------
+//  g's meta: the allocator's bytes, ready to be freed
+
+// (a meta in use: its bytes the allocator's, read by the invariant)
+theorem mp.meta_held(c, A, M, b, brk, g, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds(c, A, M, b, brk) ->
+  mallocng.is_used(A, g) -> a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) ->
+  fp: a in mallocng.footprint(c, A, b) && held: a in mallocng.held(c, A, b)
+proof
+  assume hc hu ha H hg hao h1 h2
+  have {hpt = part, hff = fixed} := expand(H, mallocng.holds)
+  have {usl = used_slots} := expand(hpt, mallocng.metas_partition)
+  obtain kg, hkg hkgl hkge from expand(hg, mallocng.is_used)
+  have gms := rewrite(hkge, mp(all_elim(usl, {kg}), hkg, hkgl))
+  have {go = nat, lex = area} := apply(mp.meta_page, ha, gms)
+  obtain k, hk hkl l1 l2 _ from lex
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have al: seq_len(A.areas) in omega by arith(rl)
+  have ako := mp(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+  have a1: int_le(A.areas[k], a) by arith(l1, h1, ako, go)
+  have a2: int_lt(a, int_add(A.areas[k], 4096)) by arith(l2, h2)
+  have nt := apply(mp.untaken_meta[c := c, A := A, M := M, b := b, brk := brk, g := g, a := a], hc, hu, ha, H, gms, apply(mp.used_untaken, H, hg), hao, h1, h2)
+  have {fa = areas} := expand(hff, mallocng.fixed_free)
+  have nl := mp(all_elim(fa, {k}, {a}), conj(hk, hao), taut(hkl, a1, a2))
+  have nr := apply(mp.unres_area[c := c, A := A, M := M, b := b, brk := brk, k := k, a := a], hc, hu, ha, H, hao, hk, hkl, a1, a2)
+  have rr: mallocng.in_range(a, pair(A.areas[k], 4096)) by defs(simp(a1, a2), mallocng.in_range)
+  have ir := apply(mp.ranges_build[r := x. pair(A.areas[x], 4096)], al, hk, hkl, rr)
+  have fp := apply(mp.fp_intro, hc, hu, ha, hao, nl, nr, nt, taut(ir))
+  have hd := apply(mp.area_held[c := c, A := A, M := M, b := b, brk := brk, k := k, a := a], hc, hu, ha, H, hk, hkl, hao, a1, a2, fp)
+  show by taut(fp, hd)
+qed
+
+// a meta in use, unlinked: ready to be freed (its bytes accessible, its
+// links 0)
+theorem mp.used_ready(c, A, vm, b, g): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
+  mallocng.is_used(A, g) -> A.metas[g].next = 0 -> mallocng_specs.meta_ready(vm, g)
+proof
+  assume hc hu ha hh hg nx
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  let MA := mallocng.mview(vm, mallocng.all_bytes())
+  have {H = inv} := expand(hh, mallocng.holds_m)
+  have {huo = used, har = areas, hpt = part} := expand(H, mallocng.holds)
+  have {go = nat} := apply(mp.used_nat, ha, hg)
+  // (its bytes: the same through either view)
+  have ag: all a. a in omega -> int_le(g, a) -> int_lt(a, int_add(g, 40)) -> MA[a] = M[a] proof
+    fix a
+    assume hao h1 h2
+    have {hd = held} := apply(mp.meta_held[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, a := a], hc, hu, ha, H, hg, hao, h1, h2)
+    have ab: a in mallocng.all_bytes() by defs(sel(taut(hao)), mallocng.all_bytes)
+    show := apply(mp.view_mem[vm := vm, F1 := mallocng.all_bytes(), F2 := mallocng.held(c, A, b), a := a], hao, taut(ab, hd))
+  qed
+  // accessible: its meta area's page, no meta taken there
+  have {usl = used_slots} := expand(hpt, mallocng.metas_partition)
+  obtain kg, hkg hkgl hkge from expand(hg, mallocng.is_used)
+  have gms := rewrite(hkge, mp(all_elim(usl, {kg}), hkg, hkgl))
+  have {lex = area} := apply(mp.meta_page, ha, gms)
+  obtain k, hk hkl l1 l2 _ from lex
+  have {ea = each} := expand(har, mallocng.areas_ok)
+  have _ _ _ _ _ pr := mp(all_elim(ea, {k}), hk, hkl)
+  have rl: A.areas in list_type(omega) by simp(ha)
+  have ako := mp(at_type[l := A.areas, t := omega, i := k], rl, hk, hkl)
+  have cm: mallocng.META_SIZE = 40 by defs(refl({40}), mallocng.META_SIZE)
+  have rw: all a. a in omega -> int_le(g, a) && int_lt(a, int_add(g, mallocng.META_SIZE)) -> mallocng.m_rw(MA, a) && !(snd(mallocng.pg(MA, a)).kind = 2) proof
+    fix a
+    assume hao h
+    have h1 h2 := h
+    have h2b: int_lt(a, int_add(g, 40)) by arith(h2, cm)
+    have nt := apply(mp.untaken_meta[c := c, A := A, M := M, b := b, brk := vm.brk, g := g, a := a], hc, hu, ha, H, gms, apply(mp.used_untaken, H, hg), hao, h1, h2b)
+    have o1 o2 := mp(all_elim(pr, {a}), hao, conj(conj((int_le(A.areas[k], a) by arith(l1, h1, ako, go)), (int_lt(a, int_add(A.areas[k], 4096)) by arith(l2, h2b))), nt))
+    have {pe = page} := apply(mp.agree_b8, mp(all_elim(ag, {a}), hao, h1, h2b))
+    have {r = rw} := apply(mp.pg_same, pe)
+    show by taut(r, o1, rewrite(sym(pe), o2))
+  qed
+  // its links: 0 (unlinked)
+  have {hmg = mim, ulg = unlinked} := expand(apply(mp.used_group, huo, hg), mallocng.group_ok)
+  have rp rn _ _ _ _ _ _ _ := expand(hmg, mallocng.meta_in_memory)
+  have pz := mp(ulg, nx)
+  have a0: all i. i in omega -> int_lt(i, 8) -> MA[int_add(g, i)] = M[int_add(g, i)] proof
+    fix i
+    assume hi hil
+    show := mp(all_elim(ag, {int_add(g, i)}), simp(go, hi), arith(go, hi), arith(go, hi, hil))
+  qed
+  have a8: all i. i in omega -> int_lt(i, 8) -> MA[int_add(int_add(g, 8), i)] = M[int_add(int_add(g, 8), i)] proof
+    fix i
+    assume hi hil
+    have e: int_add(int_add(g, 8), i) = int_add(g, int_add(8, i)) by arith(go, hi)
+    show := rewrite(sym(e), mp(all_elim(ag, {int_add(g, int_add(8, i))}), simp(go, hi), arith(go, hi), arith(go, hi, hil)))
+  qed
+  have r0 := trans(apply(mp.agree_rd[M := M, M2 := MA, a := g, n := 8], simp(), a0), trans(rp, pz))
+  have r8 := trans(apply(mp.agree_rd[M := M, M2 := MA, a := int_add(g, 8), n := 8], simp(), a8), trans(rn, nx))
+  show by defs(taut(rw, r0, r8), mallocng_specs.meta_ready)
+qed
