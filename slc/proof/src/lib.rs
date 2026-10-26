@@ -4578,7 +4578,9 @@ fn join_outcome(env: &Env, lg: &Logic, t: &Term) -> Option<Term> {
 /// t with its `letin`s reduced
 fn unlet(env: &Env, t: &Term, l: SymId) -> Term {
     match t.node() {
-        Node::App(f, a) if *f == l && a.len() == 2 => {
+        // (a body naming a variable bound outside the letin -- under a
+        // binder of the term -- left: only a closed body is instantiated)
+        Node::App(f, a) if *f == l && a.len() == 2 && a[1].loose_depth(&env.binders_fn()) <= 1 => {
             let b = a[1].instantiate_params(std::slice::from_ref(&a[0]), &env.binders_fn());
             unlet(env, &b, l)
         }
