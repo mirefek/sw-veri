@@ -125,6 +125,81 @@ proof
   show := rewrite(sym(lhs), rewrite(sym(rhs), me))
 qed
 
+// (a slot in neither mask: its bits clear)
+theorem mp.nbit0(x, y, j): x in omega -> y in omega -> j in omega -> !int_lt(0, int_add(mallocng.bit(x, j), mallocng.bit(y, j))) ->
+  !bit(x, j) && !bit(y, j)
+proof
+  assume hx hy hj hz
+  have n1 := mp(mp.nbit[x := x, i := j], hx, hj)
+  have n2 := mp(mp.nbit[x := y, i := j], hy, hj)
+  have z1: int_le(0, mallocng.bit(x, j)) by defs(arith(hx), mallocng.bit)
+  have z2: int_le(0, mallocng.bit(y, j)) by defs(arith(hy), mallocng.bit)
+  have c1: bit(x, j) -> false proof
+    assume b
+    show by arith(n1, (ite(bit(x, j), 1, 0) = 1 by simp(b)), z2, hz)
+  qed
+  have c2: bit(y, j) -> false proof
+    assume b
+    show by arith(n2, (ite(bit(y, j), 1, 0) = 1 by simp(b)), z1, hz)
+  qed
+  show by taut(c1, c2)
+qed
+
+// (g's masks or'ed, i a reserved slot of g: i's bit clear, none past the
+// last slot; its bits the masks')
+theorem mp.nf_masks(A, M, b, g, i): A in mallocng.Abs -> g in omega -> mallocng.group_ok(A, M, b, g) -> i in omega ->
+  int_lt(i, seq_len(A.slots[g])) -> A.slots[g][i] = tag(3, empty) ->
+  sin: bits_or(32, A.metas[g].freed, A.metas[g].avail) in bits(32) &&
+  each: (all j. j in omega -> int_lt(j, 32) -> (bit(bits_or(32, A.metas[g].freed, A.metas[g].avail), j) <-> bit(A.metas[g].freed, j) || bit(A.metas[g].avail, j))) &&
+  clr: !bit(bits_or(32, A.metas[g].freed, A.metas[g].avail), i) &&
+  high: (all j. j in omega -> int_lt(A.metas[g].last_idx, j) -> !bit(bits_or(32, A.metas[g].freed, A.metas[g].avail), j)) &&
+  il: int_le(i, A.metas[g].last_idx) && lt: int_lt(A.metas[g].last_idx, 32)
+proof
+  assume ha hg gok hi hil hrs
+  let F := A.metas[g].freed
+  let Av := A.metas[g].avail
+  let S := bits_or(32, F, Av)
+  have {mim = mim, hmk = masks, hns = nslots} := expand(gok, mallocng.group_ok)
+  have {ml = last} := expand(mim, mallocng.meta_in_memory)
+  have vt: A.metas[g] in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(ha), hg)
+  have avo: Av in omega by simp(vt)
+  have fro: F in omega by simp(vt)
+  have lo: A.metas[g].last_idx in omega by simp(vt)
+  have sb := mp(bits_or_in[n := 32, x := F, y := Av], simp())
+  have so sl := (S in omega && int_lt(S, pow2(32)) by simp(sb, keep(pow2)))
+  have each: all j. j in omega -> int_lt(j, 32) -> (bit(S, j) <-> bit(F, j) || bit(Av, j)) proof
+    fix j
+    assume hj hjl
+    show := mp(bit_or[n := 32, x := F, y := Av, i := j], simp(), hj, hjl)
+  qed
+  have mk := expand(hmk, mallocng.masks_ok)
+  have il: int_le(i, A.metas[g].last_idx) by arith(hil, hns)
+  have clr: !bit(S, i) proof
+    have _ _ m3 _ := mp(all_elim(mk, {i}), hi, arith(il, ml))
+    have q _ := mp(m3, il)
+    have nu: !(A.slots[g][i] = tag(0, empty)) by simp(hrs)
+    have n0 := mp(mp.nbit0[x := Av, y := F, j := i], avo, fro, hi, taut(q, nu))
+    show by taut(mp(all_elim(each, {i}), hi, arith(il, ml)), n0)
+  qed
+  have high: all j. j in omega -> int_lt(A.metas[g].last_idx, j) -> !bit(S, j) proof
+    fix j
+    assume hj hgt
+    have c1: int_lt(j, 32) -> !bit(S, j) proof
+      assume j32
+      have _ m2 _ _ := mp(all_elim(mk, {j}), hj, j32)
+      have nz: !int_lt(0, int_add(mallocng.bit(Av, j), mallocng.bit(F, j))) by taut(m2, (!int_le(j, A.metas[g].last_idx) by arith(hgt)))
+      have n0 := mp(mp.nbit0[x := Av, y := F, j := j], avo, fro, hj, nz)
+      show by taut(mp(all_elim(each, {j}), hj, j32), n0)
+    qed
+    have c2: !int_lt(j, 32) -> !bit(S, j) proof
+      assume j32
+      show := mp(bit_high[x := S, n := 32, i := j], so, simp(), hj, sl, arith(j32))
+    qed
+    show by taut(c1, c2)
+  qed
+  show by taut(sb, each, clr, high, il, ml)
+qed
+
 // (g's slots but i all in a mask, i its only reserved slot: g emptied)
 theorem mp.emp_masks(A, M, b, g, i): A in mallocng.Abs -> g in omega -> mallocng.group_ok(A, M, b, g) -> mallocng.reserved_only(A, g, i) ->
   (all j. j in omega -> int_le(j, A.metas[g].last_idx) -> !(j = i) -> bit(A.metas[g].avail, j) || bit(A.metas[g].freed, j)) ->
@@ -234,6 +309,47 @@ proof
   have il32: int_lt(i, 32) by arith(hil, hns, bl)
   have o32: bits_of_int(32, 1) in bits(32) by simp()
   step l1 l2 l3 l4 l5 l6 x7, c1 from hr with ms.shl32_det, g.ldbf_det, g.ld32_det using conj(su, hgb, hib, io, il32, o32, md2, md1, mdav, mdfr)
+  // the masks, the last index, the class read: g's meta's
+  have {mav = avail, mfr = freed} := expand(mim, mallocng.meta_in_memory)
+  have inm: all o n2. o in omega -> n2 in omega -> int_le(int_add(o, n2), 40) -> (all j. j in omega -> int_lt(j, n2) -> int_add(int_add(g, o), j) in FP) proof
+    fix o n2
+    assume ho hn2 hl
+    fix j
+    assume hj hjl
+    have r1 _ _ := mp(all_elim(inr, {int_add(int_add(g, o), j)}), arith(go, ho, hj), arith(go, ho, hj), arith(go, ho, hj, hjl, hl))
+    show := r1
+  qed
+  have v24 := apply(mp.view_read[vm := V0, fp := FP, a := int_add(g, 24), n := 4], arith(go), simp(), arith(), mp(all_elim(inm, {24}, {4}), simp(), simp(), simp()))
+  have v28 := apply(mp.view_read[vm := V0, fp := FP, a := int_add(g, 28), n := 4], arith(go), simp(), arith(), mp(all_elim(inm, {28}, {4}), simp(), simp(), simp()))
+  have bb24 _ := mp(all_elim(g.bytes_bound, {V0}, {int_add(g, 24)}, {4}), vb, simp())
+  have bb28 _ := mp(all_elim(g.bytes_bound, {V0}, {int_add(g, 28)}, {4}), vb, simp())
+  have bh24 := mp(all_elim(g.bytes_bound, {V0}, {int_add(g, 24)}, {4}), vb, simp())
+  have bh28 := mp(all_elim(g.bytes_bound, {V0}, {int_add(g, 28)}, {4}), vb, simp())
+  have p4: int_pow(256, 4) = 4294967296 by simp()
+  have eAv: bits_of_int(32, gimple.bytes_at(V0, int_add(g, 24), 4)) = A.metas[g].avail by defs(arith(v24, mav, bh24, p4), bits_of_int, pow2)
+  have eFr: bits_of_int(32, gimple.bytes_at(V0, int_add(g, 28), 4)) = A.metas[g].freed by defs(arith(v28, mfr, bh28, p4), bits_of_int, pow2)
+  let W := gimple.bytes_at(V0, int_add(g, 32), 8)
+  have _ mw := apply(mp.meta_word, hc, au, hat, hhm, hus)
+  have vt: A.metas[g] in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(hat), go)
+  have vl: A.metas[g].last_idx in omega by simp(vt)
+  have vsc: A.metas[g].sizeclass in omega by simp(vt)
+  have vml: A.metas[g].maplen in omega by simp(vt)
+  have gsw := mp(all_elim(ms.gs_word, {V0}, {g}), vb, hgb, top)
+  have a32 .. := gsw
+  have _ wb _ _ _ g4 := gsw
+  have mwd: mallocng_specs.mword(V0, g) = W by defs(simp(a32), mallocng_specs.mword)
+  have wv: W = int_add(int_add(int_add(A.metas[g].last_idx, int_mul(32, A.metas[g].freeable)), int_mul(64, A.metas[g].sizeclass)), int_mul(4096, A.metas[g].maplen))
+    := rewrite(mwd, mw)
+  have gl5 _ _ _ := mp(all_elim(ms.gm_word, {V0}, {g}), vb, hgb, top)
+  have eLI := trans(gl5, (int_mod(W, 32) = A.metas[g].last_idx by arith(wv, bl, bf, bs, vl, vsc, vml)))
+  let SC6 := bits_of_int(6, int_mod(int_div(gimple.bytes_at(V0, int_add(g, 32), 2), int_pow(2, 6)), int_pow(2, 6)))
+  have csc: int_mod(int_div(W, 64), 64) = A.metas[g].sizeclass by arith(wv, bl, bf, bs, vl, vsc, vml)
+  have e6: SC6 = A.metas[g].sizeclass := trans((SC6 = int_mod(int_div(W, 64), 64) by simp(g4)), csc)
+  have c1r := rewrite(eLI, rewrite(eFr, rewrite(eAv, c1)))
+  // the test: all g's slots but i free
+  have gom: g in omega by arith(go)
+  have {sin, each, clr, high, il, lt} := apply(mp.nf_masks[A := A, M := mallocng.mview(V0, FP), b := B, g := g, i := i], hat, gom, gok, io, hil, hrs)
+  have ft := mp(mp.full_test[S := bits_or(32, A.metas[g].freed, A.metas[g].avail), i := i, L := A.metas[g].last_idx], sin, io, vl, il, lt, clr, high)
   goal 3
   show by simp()
 qed
