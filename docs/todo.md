@@ -28,10 +28,17 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   `mp.drop_in_nest` -- out of `used`, its meta taken until free_meta, a
   nested one's container slot reserved; the invariant first on the old
   memory, then on the new by `mp.holds_held`,
-  proofs/mallocng/model/heldonly.core). Open: call contracts for
-  okay_to_free, a_or, free_group; the runs and refinements; freed_back's
-  footprint and let_go clauses.
+  proofs/mallocng/model/heldonly.core). free_group's run is done
+  (proofs/mallocng/fun/free_group.core: `mp.fg_run`, nontrivial_free
+  called at one group fewer). Open: nontrivial_free's run; the call
+  contracts `mp.fg_call` / `mp.nf_call` from the runs and the depth
+  induction; the refinements to the specs.
 - `__libc_free`, the `free` symbol (src/malloc/free.c); then `calloc`.
+  free_group's and nontrivial_free's specs require `tls_unres` (the
+  thread pointer's word in no reserved slot: free's steps may unmap it):
+  `__libc_free` has it from the thread block not in the block freed --
+  the top level's `tls_apart` argument (section 5) extended to live
+  blocks.
 - free.c's copies of malloc.c's functions: their contracts by `c1 P`
   (proofs/mallocng/fun/free_copies.core; get_meta's done), their linked
   forms (`P.linked`, as cfg.core's for malloc.c's) where free.c's
