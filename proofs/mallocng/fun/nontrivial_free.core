@@ -1069,6 +1069,42 @@ proof
   show by defs(taut(hin3, nr3, tk, unt03, fpc, lg), mallocng_specs.freed_back)
 qed
 
+// (free_group's premises over such a step: the invariant on the new
+// memory given, the rest carried)
+theorem mp.fg_pre_geom(c, A, A1, b, vm, V1, objs, fs, g): c in mallocng.Cfg -> A in mallocng.Abs -> mp.geom(A, A1) ->
+  mallocng.holds_m(c, A1, V1, b) -> mallocng.kept_outside(c, A, b, vm, V1, empty) -> fs in bits(64) ->
+  mallocng.holds_in(c, A, vm, objs, b) -> abi.thread_ok(vm, fs) -> mallocng_specs.tls_apart(c, A, b, fs) -> mallocng_specs.tls_unres(A, fs) ->
+  mallocng.is_used(A, g) -> mallocng.emptied(A, g) ->
+  hin: mallocng.holds_in(c, A1, V1, objs, b) && thread: abi.thread_ok(V1, fs) && tls: mallocng_specs.tls_apart(c, A1, b, fs) &&
+  unres: mallocng_specs.tls_unres(A1, fs) && used: mallocng.is_used(A1, g) && emp: mallocng.emptied(A1, g) && len: seq_len(A1.used) = seq_len(A.used)
+proof
+  assume hc ha gm hh1 kp fsb hin hth htl htr hg hemp
+  have {hsh = shown} := expand(hin, mallocng.holds_in)
+  have sh1 := apply(mp.shown_geom[c := c, A := A, A2 := A1, objs := objs], ha, gm, hsh)
+  have hin1: mallocng.holds_in(c, A1, V1, objs, b) by defs(taut(hh1, sh1), mallocng.holds_in)
+  have th1 := apply(mp.tls_kept[c := c, A := A, b := b, V0 := vm, V1 := V1, fs := fs, e := empty], fsb, hth, htl, kp,
+    (all j. j in omega -> int_lt(j, 8) -> !(int_add(fs, j) in empty) by simp()))
+  have efp := apply(mp.gm_fp[c := c, A := A, A2 := A1, b := b], ha, gm)
+  have tl1: mallocng_specs.tls_apart(c, A1, b, fs) by defs(rewrite(sym(efp), expand(htl, mallocng_specs.tls_apart)), mallocng_specs.tls_apart)
+  have tr0 := expand(htr, mallocng_specs.tls_unres)
+  have tr1: all j. j in omega -> int_lt(j, 8) -> !mallocng.in_reserved(A1, int_add(fs, j)) proof
+    fix j
+    assume hj hjl
+    have e := apply(mp.gm_inres[A := A, A2 := A1, a := int_add(fs, j)], ha, gm)
+    show by taut(e, (!mallocng.in_reserved(A, int_add(fs, j)) by simp(mp(all_elim(tr0, {j}), hj, hjl))))
+  qed
+  have tu1: mallocng_specs.tls_unres(A1, fs) by defs(simp(tr1), mallocng_specs.tls_unres)
+  have gs := apply(mp.geoms_of[A := A, A2 := A1], ha, gm)
+  have eu: A1.used = A.used := apply(mp.gs_field[A := A, A2 := A1, k := "used"], gs, simp(), simp(), simp(), simp())
+  have {oth = others} := gm
+  have es0 := subst({y. app(y, "slots") = A.slots}, sym(oth), refl({A.slots}))
+  have es: A1.slots = A.slots by simp(es0)
+  have hg1: mallocng.is_used(A1, g) by defs(rewrite(sym(eu), expand(hg, mallocng.is_used)), mallocng.is_used)
+  have he1: mallocng.emptied(A1, g) by defs(rewrite(sym(es), expand(hemp, mallocng.emptied)), mallocng.emptied)
+  have el: seq_len(A1.used) = seq_len(A.used) by simp(eu)
+  show by taut(hin1, th1, tl1, tu1, hg1, he1, el)
+qed
+
 // ----------------------------------------------------------------------
 //  okay_to_free at a call: an overflow, or an answer, not 0 for a group
 //  mapped on its own
@@ -1428,6 +1464,52 @@ proof
     qed
     show by taut(ht2, f1, f2, f3)
   qed
-  goal 1
-  show by simp()
+  // the test: a group mapped on its own (one slot) passes it
+  let TEST := bits_add(32, MASK, SELF) = bits_add(32, bits_shl(32, bits_of_int(32, 2), A.metas[g].last_idx), bits_neg(32, 1))
+  have ownT: mallocng.own_mapping(A.metas[g]) -> TEST proof
+    assume ow
+    have l0 := apply(mp.own_one[A := A, M := mallocng.mview(V0, FP), b := B, g := g], gok, ow)
+    have all: all j. j in omega -> int_le(j, A.metas[g].last_idx) -> !(j = i) -> bit(MASK, j) proof
+      fix j
+      assume hj hjl hne
+      have i0: i = 0 by arith(il, l0, io)
+      have j0: j = 0 by arith(hjl, l0, hj)
+      show by taut(hne, trans(j0, sym(i0)))
+    qed
+    show by taut(ft, all)
+  qed
+  have cfT: !TEST -> T2 proof
+    assume nt
+    have e: x7 = ok(pair(s, LOCv), empty) by taut(tb1, nt)
+    show by disj({3}, taut(e, (!mallocng.own_mapping(A.metas[g]) by taut(ownT, nt))))
+  qed
+  // the test passed: okay_to_free asked
+  have ctT: TEST -> T2 proof
+    assume t
+    have qotf: all regs o2. gc.regs_ok(regs, seq_one(gimple.arg(64, g))) -> runs(otf[regs], s, o2) ->
+        abi.ovf_out(s, o2) || (ex r. o2 = ok(fn_update(s, "vm", s.vm), r) && (mallocng.own_mapping(A.metas[g]) -> !(bits_of_int(32, fst(r)) = 0))) proof
+      fix regs o2
+      assume hro h2
+      have rl rn _ := hro
+      have h3 := mp(all_elim(hotf, {regs}, {s}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hs, h2)
+      show := apply(mp.otf_q[c := c, gst := gst, gib := gib, g := g, t := s, h := h, regs := regs, o2 := o2], hc, hx, hsct, hgb, hs, hh, hhm, hsh, hth, hus, hgst, hgib, hro, h3)
+    qed
+    step r8, k8 hR8 from tb1 with t, qotf using conj(hs, su, ths, hgb, vV)
+    have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], vfun, vdom)
+    // not to be freed now: on to the freed mask (no own mapping, so)
+    have cz: bits_of_int(32, fst(r8)) = 0 -> T2 proof
+      assume z
+      step k9 from k8 with z
+      show by disj({3}, taut(rewrite(ss, k9), (!mallocng.own_mapping(A.metas[g]) by taut(hR8, z))))
+    qed
+    // to be freed: g off its list, given back whole
+    have cn: !(bits_of_int(32, fst(r8)) = 0) -> T2 proof
+      assume nz
+      step k9 from k8 with nz
+      goal 3
+      show by simp()
+    qed
+    show by taut(cz, cn)
+  qed
+  show := mp(finish, (T2 by taut(cfT, ctT)))
 qed
