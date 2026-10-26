@@ -1052,11 +1052,12 @@ pred let_go(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], mb: bits[64], 
    (all a: nat. uint(mb) <= a && a < uint(mb) + uint(ml) ->
       (a in footprint(c, A0, blocks) || in_reserved(A0, a)) && a notin footprint(c, A, blocks)))
 
-// what free's steps leave: the invariant, no slot reserved, no meta taken;
+// what free's steps leave: the invariant, no slot reserved, the taken
+// metas as they were (free_group's own while it gives back its slot);
 // memory outside the allocator's (and the reserved slot's) untouched; the
 // allocator grown only by the reserved slot; what it lets go returned
 pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm, vm: Vm, objs: Objs, mb: bits[64], ml: bits[64]) =
-  holds_in(c, A, vm, objs, blocks) && no_reserved(A) && len(A.taken) = 0 &&
+  holds_in(c, A, vm, objs, blocks) && no_reserved(A) && A.taken = A0.taken &&
   untouched(c, A0, blocks, before, vm, objs, {a: nat | in_reserved(A0, a)}) &&
   (all a: nat. a in footprint(c, A, blocks) -> a in footprint(c, A0, blocks) || in_reserved(A0, a)) &&
   let_go(c, A0, A, blocks, mb, ml)
@@ -1067,7 +1068,7 @@ pred freed_back(c: Cfg, A0: Abs, A: Abs, blocks: Addr -> Option[nat], before: Vm
 // (free_group). What the allocator lets go (a group's own mapping)
 // returned. The thread pointer's word apart (its callees' calls).
 proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[64], bits[64]) {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && len(A.taken) = 0 &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     is_used(A, uint(g)) && reserved_only(A, uint(g), uint(i))
   either { overflow() } or {
     let A0 = A
@@ -1085,7 +1086,7 @@ proc[MallocAbs] nontrivial_free_spec(c: Cfg, g: bits[64], i: bits[32]) -> (bits[
 // freed, the slot it is nested in given back too (nontrivial_free), or
 // its own mapping returned to be unmapped
 proc[MallocAbs] free_group_spec(c: Cfg, g: bits[64]) -> (bits[64], bits[64]) {
-  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) && len(A.taken) = 0 &&
+  require holds_in(c, A, vm, objs, blocks) && thread_ok(vm, fs_base) && tls_apart(c, A, blocks, fs_base) &&
     is_used(A, uint(g)) && A.metas[uint(g)].next = 0 && emptied(A, uint(g))
   either { overflow() } or {
     let A0 = A
