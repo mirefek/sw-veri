@@ -1952,6 +1952,27 @@ impl State {
                 let r = self.spec_ret(env, lg, &a[1], ws, fs)?;
                 Seq::taut(env, lg, &[&l, &r], goal)
             }
+            // a disjunction (an `if`'s branches, an outcome's cases): whole
+            // from the facts, else its first side that goes through (the
+            // witnesses as they were for the second)
+            Node::App(c, a) if Some(*c) == or => {
+                let refs: Vec<&Seq> = fs.iter().collect();
+                if let Ok(s) = Seq::taut(env, lg, &refs, goal) {
+                    return Ok(s);
+                }
+                let save = ws.clone();
+                if let Ok(l) = self.spec_ret(env, lg, &a[0], ws, fs) {
+                    return Seq::taut(env, lg, &[&l], goal);
+                }
+                *ws = save.clone();
+                if let Ok(r) = self.spec_ret(env, lg, &a[1], ws, fs) {
+                    return Seq::taut(env, lg, &[&r], goal);
+                }
+                // (else as a property: simp from the facts)
+                *ws = save;
+                let r = Seq::simp_goal(env, lg, &refs, goal, &[], &[]);
+                r.map_err(|e| KernelError(format!("spec_ret: `{}` not from the facts ({})", Printer::new(env).short(goal), e.0)))
+            }
             // a property or the outcome's equation: from the facts
             _ => {
                 let refs: Vec<&Seq> = fs.iter().collect();
