@@ -776,6 +776,152 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  g off its class's list (free's dequeue, g anywhere on it): the state
+//  relisted holds; only links written
+
+theorem mp.dq_any(c, A, vm, V, b, objs, sc, k): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
+  vm in x86_64_linux.Vm -> V in x86_64_linux.Vm -> mallocng.holds_m(c, A, vm, b) -> mallocng.shown_in(c, A, objs) -> int_mod(c.ctx, 8) = 0 -> sc in omega -> int_lt(sc, 48) ->
+  k in omega -> int_lt(k, seq_len(A.active[sc])) ->
+  mallocng_specs.dequeued(vm, V, objs, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), A.active[sc][k]) ->
+  abs: mp.relist(A, sc, mallocng_specs.rm_at(A.active[sc], k), V) in mallocng.Abs && univ: mp.relist(A, sc, mallocng_specs.rm_at(A.active[sc], k), V) in univ(1) &&
+  holds: mallocng.holds_m(c, mp.relist(A, sc, mallocng_specs.rm_at(A.active[sc], k), V), V, b) &&
+  unt: mallocng.kept_outside(c, A, b, vm, V, empty) &&
+  slots: mp.relist(A, sc, mallocng_specs.rm_at(A.active[sc], k), V).slots = A.slots &&
+  list: mp.relist(A, sc, mallocng_specs.rm_at(A.active[sc], k), V).active[sc] = mallocng_specs.rm_at(A.active[sc], k) &&
+  geom: mp.geom(A, mp.relist(A, sc, mallocng_specs.rm_at(A.active[sc], k), V)) &&
+  at: mallocng_specs.list_at(V, objs, int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc)), mallocng_specs.rm_at(A.active[sc], k)) &&
+  z0: gimple.bytes_at(V, A.active[sc][k], 8) = 0 && z8: gimple.bytes_at(V, int_add(A.active[sc][k], 8), 8) = 0
+proof
+  assume hc hu ha hb hv hV hh hsh cal hs hsl hk hkl hdq
+  let PH := int_add(int_add(c.ctx, mallocng.C_ACTIVE), int_mul(8, sc))
+  let L := A.active[sc]
+  let n := seq_len(L)
+  let RM := mallocng_specs.rm_at(L, k)
+  have vb: vm.bytes in fn_space(bits(64), bits(8)) by simp(hv)
+  have vb2: V.bytes in fn_space(bits(64), bits(8)) by simp(hV)
+  have la := apply(mp.active_at[c := c, A := A, vm := vm, b := b, objs := objs, sc := sc], hc, hu, ha, vb, hh, hsh, cal, hs, hsl)
+  have {H0 = inv} := expand(hh, mallocng.holds_m)
+  have {cok = ctx, hac = active} := expand(H0, mallocng.holds)
+  have {c11 = nactive} := expand(cok, mallocng.ctx_ok)
+  have al0: A.active in list_type(list_type(omega)) by simp(ha)
+  have ll := mp(at_type[l := A.active, t := list_type(omega), i := sc], al0, hs, (int_lt(sc, seq_len(A.active)) by arith(c11, hsl)))
+  have no: n in omega by simp(ll)
+  have r1 r2 r3 only := mp(all_elim(expand(hdq, mallocng_specs.dequeued), {L}, {k}), conj(ll, hk), taut(la, hkl, refl({L[k]})))
+  have {rml = len, rmt = type} := apply(mp.rm_at_app[l := L, k := k, j := 0], ll, hk, hkl)
+  have el: all j. j in omega -> int_lt(j, seq_len(RM)) -> RM[j] = L[ite(int_lt(j, k), j, int_add(j, 1))] proof
+    fix j
+    assume hj hjl
+    have {re = elem} := apply(mp.rm_at_app[l := L, k := k, j := j], ll, hk, hkl)
+    show := mp(re, hj, rewrite(rml, hjl))
+  qed
+  // (RM's groups: L's; the one only on L: L[k])
+  have sub: all g. mallocng.on_list(RM, g) -> mallocng.on_list(L, g) proof
+    fix g
+    assume ol
+    obtain j, hj hjl hje from expand(ol, mallocng.on_list)
+    have e := trans(sym(mp(all_elim(el, {j}), hj, hjl)), hje)
+    have c1: int_lt(j, k) -> mallocng.on_list(L, g) proof
+      assume lt
+      have e2: L[j] = g := rewrite(mp(ite_t[c := int_lt(j, k), a := j, b := int_add(j, 1)], lt), e)
+      show by defs(ex_intro({j}, taut(hj, (int_lt(j, n) by arith(hjl, rml, no, hk, hkl)), e2)), mallocng.on_list)
+    qed
+    have c2: !int_lt(j, k) -> mallocng.on_list(L, g) proof
+      assume ge
+      have e2: L[int_add(j, 1)] = g := rewrite(mp(ite_f[c := int_lt(j, k), a := j, b := int_add(j, 1)], ge), e)
+      show by defs(ex_intro({int_add(j, 1)}, taut((int_add(j, 1) in omega by simp(hj)), (int_lt(int_add(j, 1), n) by arith(hjl, rml, no, hj)), e2)), mallocng.on_list)
+    qed
+    show by taut(c1, c2)
+  qed
+  have onlyk: all g. mallocng.on_list(L, g) -> !mallocng.on_list(RM, g) -> g = L[k] proof
+    fix g
+    assume ol nl
+    obtain j, hj hjl hje from expand(ol, mallocng.on_list)
+    have c0: j = k -> g = L[k] proof
+      assume jk
+      show := trans(sym(hje), subst({y. L[j] = L[y]}, jk, refl({L[j]})))
+    qed
+    have c1: int_lt(j, k) -> g = L[k] proof
+      assume lt
+      have e := mp(all_elim(el, {j}), hj, arith(hjl, rml, lt, hkl, no))
+      have e2: RM[j] = g := trans(rewrite(mp(ite_t[c := int_lt(j, k), a := j, b := int_add(j, 1)], lt), e), hje)
+      have o2: mallocng.on_list(RM, g) by defs(ex_intro({j}, taut(hj, (int_lt(j, seq_len(RM)) by arith(hjl, rml, lt, hkl, no)), e2)), mallocng.on_list)
+      show by taut(o2, nl)
+    qed
+    have c2: int_lt(k, j) -> g = L[k] proof
+      assume gt
+      have j1: int_sub(j, 1) in omega by arith(hj, gt, hk)
+      have e := mp(all_elim(el, {int_sub(j, 1)}), j1, arith(hjl, rml, gt, hk, no))
+      have nlt: !int_lt(int_sub(j, 1), k) by arith(gt)
+      have i1 := mp(ite_f[c := int_lt(int_sub(j, 1), k), a := int_sub(j, 1), b := int_add(int_sub(j, 1), 1)], nlt)
+      have i2: int_add(int_sub(j, 1), 1) = j by arith(hj)
+      have e2: RM[int_sub(j, 1)] = g := trans(rewrite(i2, rewrite(i1, e)), hje)
+      have o2: mallocng.on_list(RM, g) by defs(ex_intro({int_sub(j, 1)}, taut(j1, (int_lt(int_sub(j, 1), seq_len(RM)) by arith(hjl, rml, gt, hk, no)), e2)), mallocng.on_list)
+      show by taut(o2, nl)
+    qed
+    show by taut(c0, c1, c2, (j = k || int_lt(j, k) || int_lt(k, j) by arith(hj, hk)))
+  qed
+  // its links cleared
+  have mko := apply(at_type[l := L, t := omega, i := k], ll, hk, hkl)
+  have {mel = elems} := expand(la, mallocng_specs.list_at)
+  have mb _ _ _ _ := mp(all_elim(mel, {k}), hk, hkl)
+  have z0: gimple.bytes_at(V, L[k], 8) = 0 proof
+    have bo bl := mp(all_elim(g.bytes_bound, {V}, {L[k]}, {8}), vb2, simp())
+    show by arith(expand(r2, mallocng_specs.rd64, bits_of_int, pow2), bo, bl)
+  qed
+  have z8: gimple.bytes_at(V, int_add(L[k], 8), 8) = 0 proof
+    have ba: bits_add(64, L[k], 8) = int_add(L[k], 8) by defs(arith(mko, mb), bits_add, pow2)
+    have bo bl := mp(all_elim(g.bytes_bound, {V}, {int_add(L[k], 8)}, {8}), vb2, simp())
+    show by arith(expand(rewrite(ba, r3), mallocng_specs.rd64, bits_of_int, pow2), bo, bl)
+  qed
+  have gone: all g. mallocng.on_list(L, g) -> !mallocng.on_list(RM, g) -> gimple.bytes_at(V, g, 8) = 0 && gimple.bytes_at(V, int_add(g, 8), 8) = 0 proof
+    fix g
+    assume ol nl
+    have e := mp(all_elim(onlyk, {g}), ol, nl)
+    show := rewrite(sym(e), conj(z0, z8))
+  qed
+  have kold: all g. mallocng.on_list(L, g) -> mallocng.on_list(L, g) proof
+    fix g
+    assume h
+    show h
+  qed
+  have knew: all g. mallocng.on_list(L, g) -> !mallocng.on_list(L, g) -> mallocng.is_used(A, g) && A.metas[g].sizeclass = sc proof
+    fix g
+    assume h1 h2
+    show by taut(h1, h2)
+  qed
+  have P: mp.rlpre(c, A, vm, V, b, objs, sc, RM, L) by taut(hc, hu, ha, hb, vb, vb2, hh, hs, hsl, only, r1, rmt, kold, knew, sub, gone)
+  // past RM's head: past L's head (full, some freed)
+  have htail: all j. j in omega -> int_lt(0, j) -> int_lt(j, seq_len(RM)) -> A.metas[RM[j]].avail = 0 && !(A.metas[RM[j]].freed = 0) proof
+    fix j
+    assume hj hj0 hjl
+    have e := mp(all_elim(el, {j}), hj, hjl)
+    let J := ite(int_lt(j, k), j, int_add(j, 1))
+    have jt: int_lt(j, k) -> J in omega && int_lt(0, J) && int_lt(J, n) proof
+      assume x
+      have ij := mp(ite_t[c := int_lt(j, k), a := j, b := int_add(j, 1)], x)
+      show := subst({y. y in omega && int_lt(0, y) && int_lt(y, n)}, sym(ij), (j in omega && int_lt(0, j) && int_lt(j, n) by arith(hj, hj0, x, hkl)))
+    qed
+    have jf: !int_lt(j, k) -> J in omega && int_lt(0, J) && int_lt(J, n) proof
+      assume x
+      have ij := mp(ite_f[c := int_lt(j, k), a := j, b := int_add(j, 1)], x)
+      show := subst({y. y in omega && int_lt(0, y) && int_lt(y, n)}, sym(ij), (int_add(j, 1) in omega && int_lt(0, int_add(j, 1)) && int_lt(int_add(j, 1), n) by arith(hj, hjl, rml, no)))
+    qed
+    have jo jp jl := (J in omega && int_lt(0, J) && int_lt(J, n) by taut(jt, jf))
+    have _ _ t3 := mp(all_elim(expand(hac, mallocng.active_ok), {sc}, {J}), conj(hs, jo), conj(hsl, jl))
+    show := rewrite(sym(e), mp(t3, jp))
+  qed
+  have nz := apply(mp.init_of_list, H0, hs, hsl, (int_lt(0, n) by arith(hkl, hk)))
+  have hr := apply(mp.holds_relist, P, htail, nz)
+  have {a2 = abs, u2 = univ} := apply(mp.relist_abs[A := A, sc := sc, l2 := RM, vm := V], ha, rmt, vb2)
+  have ut := apply(mp.rl_unt, P)
+  have rsl: mp.relist(A, sc, RM, V).slots = A.slots by defs(simp(), mp.relink)
+  have {lt = list} := apply(mp.relist_at[A := A, sc := sc, l2 := RM, vm := V], ha)
+  have rs: mp.relist(A, sc, RM, V).active[sc] = RM := trans(mp(all_elim(lt, {sc}), hs, (int_lt(sc, seq_len(A.active)) by arith(c11, hsl))), mp(ite_t[c := sc = sc, a := RM, b := A.active[sc]], refl({sc})))
+  have {gm = geom} := apply(mp.relist_geom[A := A, sc := sc, l2 := RM, vm := V], ha)
+  show by taut(a2, u2, hr, ut, rsl, rs, gm, r1, z0, z8)
+qed
+
+// ----------------------------------------------------------------------
 //  nontrivial_free's run
 
 theorem mp.nf_dev(c, n, otf, gst, gib, ac, dq, ag, fg, qu, ao, g, i, s, h, o): c in mallocng.Cfg -> c.ctx = c_src_malloc_mallocng_malloc.__malloc_context ->
