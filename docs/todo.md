@@ -16,10 +16,17 @@ Next: free's purpose proofs. Its translation unit's C1 is done
 (proofs/mallocng/machine/c1_free.core; free.c's copies of malloc.c's
 functions against malloc.c's CFG forms, their purpose proofs the same).
 - `free_group` and `nontrivial_free` call each other (a nested group's
-  slot freed in its container group): their specs indexed by the nesting
-  depth d -- `free_group` at d from `nontrivial_free` at d - 1, that at d
-  from `free_group` at d; by induction on d at machine level, no
-  recursion in the engine.
+  slot freed in its container group). Their specs (`freed_back`: the
+  freed slot, reserved, given back; what is let go returned) carry no
+  depth; the proofs go by induction on the groups in use (free_group at n
+  from nontrivial_free at n - 1, that at n from free_group at n), at
+  machine level, no recursion in the engine. Done: the model of a slot
+  freed with its group kept (proofs/mallocng/model/freeing.core:
+  `mp.holds_m_unres`, `mp.qu_step_g` -- the freed bit first, on a memory
+  made for it, then the queue). Open: a group given back (out of `used`,
+  its meta taken until free_meta; a nested one's container slot reserved,
+  an own mapping let go); call contracts for okay_to_free, a_or,
+  free_group; the runs and refinements.
 - `__libc_free`, the `free` symbol (src/malloc/free.c); then `calloc`.
 - free.c's copies of malloc.c's functions: their contracts by `c1 P`
   (proofs/mallocng/fun/free_copies.core; get_meta's done), their linked
