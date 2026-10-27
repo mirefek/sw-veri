@@ -44,7 +44,7 @@ pub fn claim(args: &[String]) -> CResult {
     let bytes = std::fs::read(&elf_path).map_err(|e| format!("{}: {}", elf_path, e))?;
     let elf = Elf::parse(bytes.clone())?;
     let sym = |n: &str| elf.symbol(n).map(|s| s.value).ok_or_else(|| format!("symbol `{}` not found in {}", n, elf_path));
-    let (main_at, malloc_at, free_at, calloc_at) = (sym("main")?, sym("malloc")?, sym("free")?, sym("calloc")?);
+    let (main_at, malloc_at, free_at) = (sym("main")?, sym("malloc")?, sym("free")?);
 
     // memory the allocator may own at `main`: read-only segments (code,
     // constant tables) + data symbols
@@ -139,7 +139,7 @@ pub fn claim(args: &[String]) -> CResult {
     let mut call: Vec<Term> = sig.lift.iter().map(|q| cx.lift[q].clone()).collect();
     let file = el.b.app("bytes_seq", vec![Term::bytes(&bytes)]);
     call.push(named(&mut el, "file", file)?);
-    for (n, a) in [("main_at", main_at), ("malloc_at", malloc_at), ("free_at", free_at), ("calloc_at", calloc_at)] {
+    for (n, a) in [("main_at", main_at), ("malloc_at", malloc_at), ("free_at", free_at)] {
         let t = el.b.natn(Nat::from_u64(a));
         call.push(named(&mut el, n, t)?);
     }
@@ -166,7 +166,7 @@ pub fn claim(args: &[String]) -> CResult {
     println!("kernel check: ok (definitions conservative, claims closed, no axioms outside the prelude)");
 
     // human-readable summary of everything the claim rests on
-    let summary = summary(&root, &prelude, &elf_path, &bytes, &elf, (main_at, malloc_at, free_at, calloc_at), &ranges, &env, &sm, &el);
+    let summary = summary(&root, &prelude, &elf_path, &bytes, &elf, (main_at, malloc_at, free_at), &ranges, &env, &sm, &el);
     let spath = out.with_extension("summary.txt");
     std::fs::write(&spath, &summary).map_err(|e| e.to_string())?;
     println!("wrote {}", spath.display());
@@ -180,7 +180,7 @@ fn summary(
     elf_path: &str,
     bytes: &[u8],
     elf: &Elf,
-    addrs: (u64, u64, u64, u64),
+    addrs: (u64, u64, u64),
     ranges: &[(u64, u64, String)],
     env: &Env,
     sm: &sl_syntax::SourceMap,
@@ -202,11 +202,11 @@ fn summary(
     s.push_str("    && init_at_main(FILE, main, STATIC)                 -- invariant holds, no blocks, when main starts\n");
     s.push_str("                                                           (for runs started without privileges:\n");
     s.push_str("                                                           claim_malloc.unprivileged)\n");
-    s.push_str("    && implements(malloc) && implements(free) && implements(calloc)   -- layers/abi.sl, layers/malloc.sl\n\n");
+    s.push_str("    && implements(malloc) && implements(free)            -- layers/abi.sl, layers/malloc.sl\n\n");
     s.push_str(&format!("Binary: {}\n  size {} bytes, sha256 {}\n  entry {:#x}\n", elf_path, bytes.len(), sha256::hex(bytes), elf.entry));
     s.push_str(&format!(
-        "  main = {:#x}, malloc = {:#x}, free = {:#x}, calloc = {:#x}\n  errno: thread pointer + {:#x}\n",
-        addrs.0, addrs.1, addrs.2, addrs.3, MUSL_ERRNO_OFFSET
+        "  main = {:#x}, malloc = {:#x}, free = {:#x}\n  errno: thread pointer + {:#x}\n",
+        addrs.0, addrs.1, addrs.2, MUSL_ERRNO_OFFSET
     ));
     s.push_str("  STATIC (memory the allocator may own at main, besides the thread descriptor up to errno\n          and the auxiliary vector with its AT_RANDOM bytes on the initial stack):\n");
     for (lo, hi, n) in ranges {
@@ -240,7 +240,7 @@ fn summary(
     ));
     s.push_str("\nNotes:\n");
     s.push_str("  - No proof is given. The claim can only be true if every instruction and system call the\n");
-    s.push_str("    allocator executes is modelled; run `slc coverage ELF malloc free calloc` for the gaps.\n");
+    s.push_str("    allocator executes is modelled; run `slc coverage ELF malloc free` for the gaps.\n");
     s.push_str("  - abi.call_rule is a layer theorem, also stated (to be proven once).\n");
     s
 }

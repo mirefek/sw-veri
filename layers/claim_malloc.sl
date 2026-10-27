@@ -46,5 +46,5 @@ pred init_at_main(f: File, main_at: Addr, static: Set[nat]) =
       (all a: nat. a in alloc_owned(empty_heap(m, {a: nat | initial_auxv(m0, argv, envp, a)})) ->
          a in static || a in range(m.fs_base, errno_offset(())) || initial_auxv(m0, argv, envp, a))
 
-pred allocator_claim(f: File, main_at: Addr, malloc_at: Addr, free_at: Addr, calloc_at: Addr, static: Set[nat]) =
-  init_at_main(f, main_at, static) && allocator_correct(malloc_at, free_at, calloc_at)
+pred allocator_claim(f: File, main_at: Addr, malloc_at: Addr, free_at: Addr, static: Set[nat]) =
+  init_at_main(f, main_at, static) && allocator_correct(malloc_at, free_at)

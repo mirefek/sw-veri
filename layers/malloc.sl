@@ -228,8 +228,10 @@ fn malloc_fun() -> CFun[Heap] = (args: Args) => { require len(args) >= 1; return
 fn free_fun()   -> CFun[Heap] = (args: Args) => { require len(args) >= 1; free(args[0]); return any bits[64] }
 fn calloc_fun() -> CFun[Heap] = (args: Args) => { require len(args) >= 2; return calloc(args[0], args[1]) }
 
-// What must be proven about a concrete libc binary (see claim_malloc.sl).
-pred allocator_correct(malloc_at: Addr, free_at: Addr, calloc_at: Addr) =
+// What must be proven about a concrete libc binary (see claim_malloc.sl):
+// malloc and free. (calloc's spec above is not claimed yet: musl's calloc
+// skips clearing a block whose group has its own mapping, which needs
+// malloc to promise such a block's bytes zero -- later, with realloc.)
+pred allocator_correct(malloc_at: Addr, free_at: Addr) =
   implements(malloc_at, malloc_fun()) &&
-  implements(free_at, free_fun()) &&
-  implements(calloc_at, calloc_fun())
+  implements(free_at, free_fun())

@@ -1,7 +1,8 @@
 # Overview
 
 The project verifies basic software down to machine code (goal.md). The
-first target is musl's allocator (mallocng `malloc`, `free`, `calloc`). The
+first target is musl's allocator (mallocng `malloc` and `free`; `calloc`
+and `realloc` later). The
 statement to prove is that, as machine code in a static binary, these
 functions implement the malloc layer's specs, and that the allocator's
 invariant holds when `main` starts.
@@ -36,7 +37,7 @@ rests on:
 
 ```
 ex inv owned. Laws(inv, owned) && Init(inv, owned)
-              && Impl(malloc) && Impl(free) && Impl(calloc)
+              && Impl(malloc) && Impl(free)
 ```
 
 `Init` (`init_at_main` in layers/claim_malloc.sl) is about the runs that
@@ -131,7 +132,8 @@ outcome.
   The -O0 build is the first target. Optimized code can later be added as
   a GIMPLE ⊑ GIMPLE layer: the same cut-point theorem between two CFGs.
 - **The malloc layer** (`layers/malloc.sl`): the abstract heap (live blocks
-  as ghost state) and the specs of `malloc`, `free` and `calloc`.
+  as ghost state) and the specs of `malloc`, `free` and `calloc` (calloc's
+  not yet claimed).
   - The allocator's invariant and owned memory are parameters, constrained
     by laws.
   - The frame law: client writes outside owned memory keep the invariant.

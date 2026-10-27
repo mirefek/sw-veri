@@ -46,14 +46,12 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   forms (`P.linked`, as cfg.core's for malloc.c's) where free.c's
   callers need them.
 
-Then the top level for calloc (malloc's and free's are done:
-`mp.top_malloc`, proofs/mallocng/top.core, and `mp.top_free`,
-proofs/mallocng/top_free.core -- their symbols' machine code implements
-`malloc.malloc_fun` / `malloc.free_fun`, free_group <-> nontrivial_free
-unrolled per entry as deep as its groups in use,
-proofs/mallocng/fun/free_machine.core):
-- calloc: its translation unit's C1 and purpose proofs, then the same
-  top-level route (`abi.bridge_implements_lf` or `tr.implements_abi_l`).
+The claim is malloc and free (calloc later: section Later). Their top
+level is done (`mp.top_malloc`, proofs/mallocng/top.core, and
+`mp.top_free`, proofs/mallocng/top_free.core -- their symbols' machine
+code implements `malloc.malloc_fun` / `malloc.free_fun`, free_group <->
+nontrivial_free unrolled per entry as deep as its groups in use,
+proofs/mallocng/fun/free_machine.core). Next:
 - The claim joined with the chain: the claim file and the chain's
   `@gimple` both define the layers; claim.core's `musl.cfg` is stale (the
   Cfg's fields), its `malloc_fun` / `free_fun` take six parameters now
@@ -218,6 +216,13 @@ and the auxiliary vector; after, the allocator maps only fresh pages.
 - Multi-threading; traces of infinite runs (I/O specs that run forever).
 - Optimized code: the cut-point theorem between two CFGs, an optimization
   layer, DWARF location maps; other compilers (LLVM IR).
-- Beyond malloc: signals, varargs, realloc, filesystem, networking, C types
-  above raw memory, whole executables (busybox).
+- calloc (its spec in layers/malloc.sl, not claimed): calloc.c's C1
+  (`calloc`, `mal0_clear`'s page loop) and memset (`rep stos`). musl
+  returns a block unclear when `__malloc_allzerop` says its group has its
+  own mapping: malloc's spec must then promise such a block's bytes zero
+  (fresh anonymous pages zero in the model; the group's slot not reused
+  after a client wrote it -- to check against free's `MADV_FREE`).
+- realloc (no spec yet).
+- Beyond malloc: signals, varargs, filesystem, networking, C types above
+  raw memory, whole executables (busybox).
 - Model: file mappings, recursion, fault ordering across two pages.
