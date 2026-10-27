@@ -902,8 +902,25 @@ qed
 def tr.div_raises_g(G, spec) := all args w h t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> runs(spec[args], union2(w, h), diverge(t)) ->
   (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && x in rec_and(abi.World, G) && runs(spec[args], union2(w, h), exc(x, e)))
 
+// ... the code low diverging only where the spec raises
+def tr.div_raises_low(low, spec, G) := all args w h t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> runs(low[args], w, diverge(t)) ->
+  (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && x in rec_and(abi.World, G) && runs(spec[args], union2(w, h), exc(x, e)))
+
+// (so where the spec diverges only where it raises, low refining it)
+theorem tr.div_low_of(low, spec, G): tr.div_raises_g(G, spec) -> (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) ->
+  tr.div_raises_low(low, spec, G)
+proof
+  assume hdg hrf
+  unfold tr.div_raises_low
+  fix args w h t
+  assume hA hw hwu hh hr
+  obtain h2, hh2 r2 from apply(abi.ov_div[low := low[args], spec := spec[args], G := G, s := w, h := h, t := t], mp(all_elim(hrf, {args}), hA), hw, hh, hr)
+  have r3 := rewrite(all_elim(abi.wg_div, {t}, {h2}), r2)
+  show := mp(all_elim(expand(hdg, tr.div_raises_g), {args}, {w}, {h}, {t}), hA, hw, hwu, hh, r3)
+qed
+
 theorem abi.bridge_run_g: all G f low spec args objs mem s h o. abi.ghost_ok(G) -> h in G ->
-  abi.refines_ovf(low[args], spec[args], G) -> tr.div_raises_g(G, spec) -> args in abi.ARGS ->
+  abi.refines_ovf(low[args], spec[args], G) -> tr.div_raises_low(low, spec, G) -> args in abi.ARGS ->
   s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> objs in set_type(omega) ->
   (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
   runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) || (ex t. runs(low[args], abi.view(s, objs, mem), diverge(t))) ->
@@ -990,13 +1007,11 @@ proof
     qed
     show by taut(oe, k1, k2)
   qed
-  // the code diverging (its trace not compared): the spec too, so it raises
+  // the code diverging (its trace not compared): the spec raises there
   have c5: (ex t. runs(low[args], abi.view(s, objs, mem), diverge(t))) -> GOAL proof
     assume hc
     obtain t, rd from hc
-    obtain h2, hh2 r2 from apply(abi.ov_div[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, t := t], href, vW, hh, rd)
-    have r3 := rewrite(all_elim(abi.wg_div, {t}, {h2}), r2)
-    obtain e x, eu eno xg rx from mp(all_elim(expand(hdg, tr.div_raises_g), {args}, {abi.view(s, objs, mem)}, {h}, {t}), hA, vW, vu, hh, r3)
+    obtain e x, eu eno xg rx from mp(all_elim(expand(hdg, tr.div_raises_low), {args}, {abi.view(s, objs, mem)}, {h}, {t}), hA, vW, vu, hh, rd)
     have ho: abi.outcome(o) by simp(hsh)
     have pu ou2 := apply(abi.wg_univ, hp, hu, ho)
     have r := apply(abi.ub_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {with_ghost(o, h)}, {e}, {x}, hg, hh, hM, su, hot, hmv, hwm, hob, eu, eno, xg, rx, pu, ou2)
@@ -1015,7 +1030,8 @@ theorem abi.bridge_implements_g: all G f low spec base code statics. abi.ghost_o
   abi.implements2_at(G, f, spec, base, code, statics)
 proof
   fix G f low spec base code statics
-  assume hg hrf hdg hb
+  assume hg hrf hdg0 hb
+  have hdg := apply(tr.div_low_of[low := low, spec := spec, G := G], hdg0, hrf)
   let ld(m) := abi.loaded(m.vm, base, code, statics)
   let rel(a, ob, mm) := mkprog(x1 x2. !ld(x1) || bind_rel(abi.abi_function(G, f, spec, a, ob, mm), x1, x3 x4. x2 = ok(x3, empty), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
   have main: all x0. all x1. all x2. (x0 in abi.ARGS && x1 in set_type(omega)) && x2 in x86_64_linux.Vm -> (all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in G && runs(rel(x0, x1, x2), union2(s, h), with_ghost(o, h2)))) proof
@@ -1274,7 +1290,7 @@ qed
 // protector's word not writable) -- so the program need not be assumed
 // loaded (`implements2`, not `implements2_at`)
 theorem abi.bridge_implements_l: all G f low spec base code statics. abi.ghost_ok(G) ->
-  (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) -> tr.div_raises_g(G, spec) ->
+  (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) -> tr.div_raises_low(low, spec, G) ->
   (all args w. args in abi.ARGS -> w in rec_and(abi.World, G) -> !(abi.loaded(w.vm, base, code, statics) && abi.canary_ok(w.vm, w.fs_base)) ->
      abi.spec_raises(rec_and(abi.World, G), w, spec, args)) ->
   (all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
@@ -1380,7 +1396,7 @@ proof
 qed
 
 // ... from C1 (`tr.implements_at`)
-theorem tr.implements_abi_l: all G f low spec base code statics. abi.ghost_ok(G) -> tr.div_raises_g(G, spec) -> tr.implements_at(f, low, base, code, statics) ->
+theorem tr.implements_abi_l: all G f low spec base code statics. abi.ghost_ok(G) -> tr.div_raises_low(low, spec, G) -> tr.implements_at(f, low, base, code, statics) ->
   (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) ->
   (all args w. args in abi.ARGS -> w in rec_and(abi.World, G) -> !(abi.loaded(w.vm, base, code, statics) && abi.canary_ok(w.vm, w.fs_base)) ->
      abi.spec_raises(rec_and(abi.World, G), w, spec, args)) ->
