@@ -698,3 +698,92 @@ proof
       x := x4 x5. W = exc(pair(x4, empty), pair("raise", x5)), d := x4. W = diverge(x4)], {S}, {T}, {0}), ho, refl({W}))
   show by spec_ret({W}, pu, bo)
 qed
+
+// ... its block p of n bytes: a place and an allocator step for it
+theorem mp.top_mok(I, O, eo, b, cd, st, n, S, p, V): n in omega -> p in bits(64) -> !(p = 0) -> int_mod(p, 16) = 0 -> malloc.fresh_block(O, S, p, n) ->
+  V in x86_64_linux.Vm -> malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V), malloc.errno_bytes(eo, S)) ->
+  pair(S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V), p)) in univ(1) ->
+  runs(malloc.malloc(I, O, eo, b, cd, st, n), S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V), p))
+proof
+  assume hn hp hp0 hal hfr hv hst pu
+  let K := ok(pair(S, empty), empty)
+  have nn: int_le(n, n) by arith(hn)
+  show by spec_ret({K}, {K}, {n}, {n}, {K}, {p}, {p}, {K}, {V}, {V}, hn, nn, hp, hp0, hal, hfr, hv, hst, pu)
+qed
+
+// ... anything where its precondition fails
+theorem mp.top_many(I, O, eo, b, cd, st, n, S, o): pair(S, o) in univ(1) ->
+  !((S in I && malloc.errno_ok(eo, S)) && malloc.world_ok(b, cd, st, S)) -> runs(malloc.malloc(I, O, eo, b, cd, st, n), S, o)
+proof
+  assume pu hn
+  show by spec_ret(pu, hn)
+qed
+
+// (a run of p, an outcome: p bound to its outcome as it is)
+theorem mp.bind_self(p, s, o): runs(p, s, o) -> (ex x v. o = ok(x, v)) || (ex x e. o = exc(x, e)) || (ex t. o = diverge(t)) ->
+  bind_rel(p, s, x3 x4. o = ok(x3, x4), x3 x4. o = exc(x3, x4), x3. o = diverge(x3))
+proof
+  assume hr hs
+  have c1: (ex x v. o = ok(x, v)) -> bind_rel(p, s, x3 x4. o = ok(x3, x4), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume e
+    obtain x v, eo from e
+    show := mp(all_elim(gc.bind_ok[p := p, k := x3 x4. o = ok(x3, x4), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], {s}, {x}, {v}), rewrite(eo, hr), eo)
+  qed
+  have c2: (ex x e. o = exc(x, e)) -> bind_rel(p, s, x3 x4. o = ok(x3, x4), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume e
+    obtain x ee, eo from e
+    show := mp(all_elim(gc.bind_exc[p := p, k := x3 x4. o = ok(x3, x4), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], {s}, {x}, {ee}), rewrite(eo, hr), eo)
+  qed
+  have c3: (ex t. o = diverge(t)) -> bind_rel(p, s, x3 x4. o = ok(x3, x4), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume e
+    obtain t, eo from e
+    show := mp(all_elim(gc.bind_div[p := p, k := x3 x4. o = ok(x3, x4), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], {s}, {t}), rewrite(eo, hr), eo)
+  qed
+  show by taut(hs, c1, c2, c3)
+qed
+
+// the layer's malloc as a C function value: its run, the argument's
+theorem mp.top_mfun(I, O, eo, b, cd, st, regs, S, o): regs in abi.ARGS -> pair(S, o) in univ(1) ->
+  (ex x v. o = ok(x, v)) || (ex x e. o = exc(x, e)) || (ex t. o = diverge(t)) ->
+  runs(malloc.malloc(I, O, eo, b, cd, st, regs[0]), S, o) -> runs(malloc.malloc_fun(I, O, eo, b, cd, st)[regs], S, o)
+proof
+  assume hr pu hs hm
+  have br := apply(mp.bind_self, hm, hs)
+  have r := mp(all_elim(tr.runs_intro[r := x1 x2. bind_rel(malloc.malloc(I, O, eo, b, cd, st, regs[0]), x1,
+    x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {S}, {o}), pu, br)
+  show by defs(rewrite(sym(mp(app_fn_build[d := abi.ARGS, v := x0. mkprog(x1 x2. bind_rel(malloc.malloc(I, O, eo, b, cd, st, x0[0]), x1,
+    x3 x4. x2 = ok(x3, x4), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), a := regs], hr)), r), malloc.malloc_fun)
+qed
+
+// a single-result spec widened (rdx any): its return with any second word,
+// its exceptions and divergences as they are
+abbrev mp.WR(F, regs, x1, x2) := bind_rel(F[regs], x1, x3 x4. any_rel(x5. x5 in bits(64), x5. x2 = ok(x3, pair(x4, x5))), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))
+
+theorem mp.top_wide(G, F, regs, S, o2): regs in abi.ARGS -> pair(S, o2) in univ(1) -> mp.WR(F, regs, S, o2) -> runs(abi.wide(G, F)[regs], S, o2)
+proof
+  assume hr pu hw
+  have r := mp(all_elim(tr.runs_intro[r := x1 x2. mp.WR(F, regs, x1, x2)], {S}, {o2}), pu, hw)
+  show by defs(rewrite(sym(mp(app_fn_build[d := abi.ARGS, v := x0. mkprog(x1 x2. mp.WR(F, x0, x1, x2)), a := regs], hr)), r), abi.wide)
+qed
+
+theorem mp.wr_ok(F, regs, S, x, r, y): y in bits(64) -> runs(F[regs], S, ok(x, r)) -> mp.WR(F, regs, S, ok(x, pair(r, y)))
+proof
+  assume hy hr
+  have k: any_rel(x5. x5 in bits(64), x5. ok(x, pair(r, y)) = ok(x, pair(r, x5))) by spec_ret({y}, hy)
+  show := mp(all_elim(gc.bind_ok[p := F[regs], k := x3 x4. any_rel(x5. x5 in bits(64), x5. ok(x, pair(r, y)) = ok(x3, pair(x4, x5))),
+    x := x3 x4. ok(x, pair(r, y)) = exc(x3, x4), d := x3. ok(x, pair(r, y)) = diverge(x3)], {S}, {x}, {r}), hr, k)
+qed
+
+theorem mp.wr_exc(F, regs, S, x, e): runs(F[regs], S, exc(x, e)) -> mp.WR(F, regs, S, exc(x, e))
+proof
+  assume hr
+  show := mp(all_elim(gc.bind_exc[p := F[regs], k := x3 x4. any_rel(x5. x5 in bits(64), x5. exc(x, e) = ok(x3, pair(x4, x5))),
+    x := x3 x4. exc(x, e) = exc(x3, x4), d := x3. exc(x, e) = diverge(x3)], {S}, {x}, {e}), hr, refl({exc(x, e)}))
+qed
+
+theorem mp.wr_div(F, regs, S, t): runs(F[regs], S, diverge(t)) -> mp.WR(F, regs, S, diverge(t))
+proof
+  assume hr
+  show := mp(all_elim(gc.bind_div[p := F[regs], k := x3 x4. any_rel(x5. x5 in bits(64), x5. diverge(t) = ok(x3, pair(x4, x5))),
+    x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], {S}, {t}), hr, refl({diverge(t)}))
+qed
