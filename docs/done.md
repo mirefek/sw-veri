@@ -128,8 +128,17 @@ item is a short summary of finished work; details are in the files named.
 ## Top of the claim and the invariant
 
 - `proofs/mallocng/claim.core`, last in the chain: `musl_malloc` (malloc
-  and free) is proven from `musl.free_step` and `musl.init`; `Impl` of
-  malloc and free from `mp.top_malloc` / `mp.top_free`.
+  and free) is proven from `musl.init`; `Impl` of malloc and free from
+  `mp.top_malloc` / `mp.top_free`.
+- The law free_step (`mallocng.law_free_step`,
+  proofs/mallocng/free_step.core): a live block's slot (blocks_ok)
+  unframed, then given back as free does. A group not mapped on its
+  own: its freed bit (`wr32` of the meta's freed word). A group mapped
+  on its own (one slot): the whole group given back -- off its class's
+  list (`dequeue_vm`), its meta freed (`queue_vm` of the zeroed meta);
+  its mapping only let go, not unmapped (a big group cannot keep a
+  freed slot: `big_ok`). The step's frame from `untouched` in a world
+  whose every byte is an object's (no stack byte free).
 - `mallocng.abs_unique` (proofs/mallocng/model/unique.core): two abstract
   states that hold of the same memory are equal. Both views agree where
   both states' ranges are (nothing reserved or taken); the context's

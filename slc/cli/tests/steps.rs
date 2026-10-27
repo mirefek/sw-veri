@@ -254,7 +254,7 @@ fn c1_cfg_engine_checks() {
     let each = proofs.iter().all(|f| checked.lines().any(|l| l.starts_with(&format!("{}: ", f)) && l.contains(" 0 axioms,")));
     let mut open: Vec<&str> = checked.lines().filter_map(|l| l.trim().strip_prefix("lemma ")).collect();
     open.sort();
-    let left = ["musl.free_step: open", "musl.init: open"];
+    let left = ["musl.init: open"];
     assert!(c.status.success() && each && open == left, "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text, &cfg_sl, &claim_core] {
         let _ = std::fs::remove_file(f);
