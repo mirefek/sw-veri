@@ -654,9 +654,10 @@ qed
 
 // low refines spec over World & G but for stack overflows that keep the
 // world's OS state (its I/O: the ABI's own crash branch allows them, as at
-// the call); of its returns, those of a pair of words
+// the call); of its outcomes, the returns of a pair of words, exceptions
+// and divergences
 abbrev abi.refines_ovf(low, spec, G) := all s h o. s in abi.World -> h in G -> runs(low, s, o) ->
-  (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) ->
+  abi.outcome(o) -> (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) ->
   (ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(o, h2))) ||
   (ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os = s.os)
 
@@ -665,17 +666,17 @@ theorem abi.ovf_of_ref(low, spec, G): refines_ghost(low, spec, abi.World, G) -> 
 proof
   assume hr
   fix s h o
-  assume hs hh hro _
+  assume hs hh hro _ _
   show by taut(mp(all_elim(expand(hr, refines_ghost), {s}, {h}, {o}), hs, hh, hro))
 qed
 
 // (... an outcome no such overflow: the spec's)
-theorem abi.ovf_left(low, spec, G, s, h, o): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G -> runs(low, s, o) ->
+theorem abi.ovf_left(low, spec, G, s, h, o): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G -> runs(low, s, o) -> abi.outcome(o) ->
   (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) -> !(ex e x. o = exc(x, e) && e = exc_val("stack_overflow", empty)) ->
   ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(o, h2))
 proof
-  assume hr hs hh hro hv hn
-  have d := mp(all_elim(hr, {s}, {h}, {o}), hs, hh, hro, hv)
+  assume hr hs hh hro hsh hv hn
+  have d := mp(all_elim(hr, {s}, {h}, {o}), hs, hh, hro, hsh, hv)
   have r: (ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os = s.os) -> false proof
     assume w
     obtain x, e1 _ from w
@@ -701,7 +702,8 @@ proof
     obtain e9 x9, q9 _ from w9
     show by simp(q9)
   qed
-  show := apply(abi.ovf_left, hr, hs, hh, hro, vt, no)
+  have sh: abi.outcome(ok(x, v)) by disj({1}, ex_intro({x}, {v}, refl({ok(x, v)})))
+  show := apply(abi.ovf_left, hr, hs, hh, hro, sh, vt, no)
 qed
 
 theorem abi.ov_exc(low, spec, G, s, h, x, e): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G -> !(e = exc_val("stack_overflow", empty)) ->
@@ -719,7 +721,8 @@ proof
     have ee: e = e9 by simp(q9)
     show by taut(hn, rewrite(sym(ee), r9))
   qed
-  show := apply(abi.ovf_left, hr, hs, hh, hro, vt, no)
+  have sh: abi.outcome(exc(x, e)) by disj({2}, ex_intro({x}, {e}, refl({exc(x, e)})))
+  show := apply(abi.ovf_left, hr, hs, hh, hro, sh, vt, no)
 qed
 
 theorem abi.ov_div(low, spec, G, s, h, t): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G ->
@@ -736,7 +739,8 @@ proof
     obtain e9 x9, q9 _ from w9
     show by simp(q9)
   qed
-  show := apply(abi.ovf_left, hr, hs, hh, hro, vt, no)
+  have sh: abi.outcome(diverge(t)) by disj({3}, ex_intro({t}, refl({diverge(t)})))
+  show := apply(abi.ovf_left, hr, hs, hh, hro, sh, vt, no)
 qed
 
 // I/O of a stack overflow the ghost-free spec allows: the spec over
@@ -785,7 +789,8 @@ proof
           obtain e9 x9, q9 _ from w9
           show by simp(rewrite(hx0, q9))
         qed
-        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hw, hh, hrun, vt, no)
+        have sh0: abi.outcome(x0) by disj({1}, ex_intro({x}, {r}, hx0))
+        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hw, hh, hrun, sh0, vt, no)
         have xw := apply(tr.and_world, hx)
         have _ _ apX := apply(abi.ghost_parts_w, hg, hh2, xw)
         have xos := mp(all_elim(apX, {"os"}), simp())
@@ -804,7 +809,8 @@ proof
           assume e9
           show by simp(rewrite(hx0, e9))
         qed
-        have d := mp(all_elim(rf, {w}, {h}, {x0}), hw, hh, hrun, vt)
+        have sh0: abi.outcome(x0) by disj({2}, ex_intro({x}, {ee}, hx0))
+        have d := mp(all_elim(rf, {w}, {h}, {x0}), hw, hh, hrun, sh0, vt)
         // the overflow keeping the world's OS state: as at the call
         have c0: (ex x9. x0 = exc(x9, exc_val("stack_overflow", empty)) && x9.os = w.os) -> union2(w, h).os.events = crash.events proof
           assume w9
@@ -840,7 +846,8 @@ proof
           obtain e9 x9, q9 _ from w9
           show by simp(rewrite(hx0, q9))
         qed
-        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hw, hh, hrun, vt, no)
+        have sh0: abi.outcome(x0) by disj({3}, ex_intro({t}, hx0))
+        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hw, hh, hrun, sh0, vt, no)
         have ot := mp(abi.div_outcome_type[s := rec_and(abi.World, G), v := CT, t := t], ht)
         have r2 := rewrite(all_elim(abi.wg_div, {t}, {h2}), rewrite(hx0, hrun2))
         have it2: t["os.events"] = crash.events by simp(rewrite(hx0, hite))
