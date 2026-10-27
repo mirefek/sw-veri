@@ -398,6 +398,19 @@ pub fn elab(args: &[String]) -> CResult {
 }
 
 fn elab_to(args: &[String], write: bool) -> CResult {
+    // (--after CLAIM.core: the definitions and claims that file states
+    // already, word for word, left out -- the output loaded after it)
+    let mut after = None;
+    let mut rest = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--after" {
+            after = Some(it.next().ok_or("--after needs a file")?.clone());
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    let args = &rest[..];
     let (paths, out) = paths_and_out(args);
     let mut sm = sl_syntax::SourceMap::default();
     let files = parse_all(&paths, &mut sm)?;
@@ -413,7 +426,14 @@ fn elab_to(args: &[String], write: bool) -> CResult {
         return Err("elaboration failed".into());
     }
     if write {
-        let text = el.core_text();
+        let mut text = el.core_text();
+        if let Some(f) = &after {
+            let prior = std::fs::read_to_string(f).map_err(|e| format!("{}: {}", f, e))?;
+            let stated: std::collections::HashSet<&str> = prior.lines().filter(|l| l.starts_with("def ") || l.starts_with("claim ")).collect();
+            let kept: Vec<&str> = text.lines().filter(|l| !stated.contains(l)).collect();
+            println!("{} definitions and claims stated in {} left out", text.lines().count() - kept.len(), f);
+            text = kept.join("\n") + "\n";
+        }
         match out {
             Some(o) => {
                 std::fs::write(&o, &text).map_err(|e| e.to_string())?;

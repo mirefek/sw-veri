@@ -43,11 +43,14 @@ fi
 [ -e "$B/steps.core" ] || { echo "no build/chain: run scripts/check.sh gen" >&2; exit 1; }
 LEAF_SL=""
 for t in $LEAVES; do name=${t#*:}; name=${name%%:*}; LEAF_SL="$LEAF_SL build/gimple-O0/sl/$name.sl $B/cfg_$name.sl"; done
-$S elab spec layers build/gimple-O0/sl/c_mallocng_malloc.sl "$B/cfg.sl" $LEAF_SL -o "$B/gimple.core" >/dev/null || exit 1
+# the claim (from the layers and the -O0 binary), then the layers and the
+# readable GIMPLE elaborated, what the claim states already left out
+$S claim malloc --elf build/test_malloc_O0 -o "$B/claim.core" >/dev/null || exit 1
+$S elab spec layers build/gimple-O0/sl/c_mallocng_malloc.sl "$B/cfg.sl" $LEAF_SL --after "$B/claim.core" -o "$B/gimple.core" >/dev/null || exit 1
 LOC=""
 [ -e build/locmap_O0.core ] && LOC=build/locmap_O0.core
 FILES=$(grep -v '^ *#' proofs/chain | grep -v '^ *$' |
-  sed -e "s|^@gimple\$|$B/gimple.core|" -e "s|^@steps\$|$B/steps.core|" -e "s|^@text\$|$B/text.core|" -e "s|^@locmap\$|$LOC|")
+  sed -e "s|^@claim\$|$B/claim.core|" -e "s|^@gimple\$|$B/gimple.core|" -e "s|^@steps\$|$B/steps.core|" -e "s|^@text\$|$B/text.core|" -e "s|^@locmap\$|$LOC|")
 if [ -n "$1" ]; then
   case " $(echo $FILES) " in
     *" $1 "*) ;;

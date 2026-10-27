@@ -40,6 +40,11 @@ ex inv owned. Laws(inv, owned) && Init(inv, owned)
               && Impl(malloc) && Impl(free)
 ```
 
+The chain checks the claim of the -O0 binary (`@claim`, first after the
+libraries; the elaborated layers after it leave out what it defines) and
+proves it in proofs/mallocng/claim.core; `kernel-check` prints the open
+lemmas it rests on.
+
 `Init` (`init_at_main` in layers/claim_malloc.sl) is about the runs that
 reach `main`:
 - of unprivileged processes only;

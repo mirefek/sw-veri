@@ -3198,6 +3198,67 @@ proof
   show by defs(taut(l, cc), abi.loaded)
 qed
 
+// (a byte string's list: its length the string's)
+theorem tr.bytes_seq_len: all b. seq_len(bytes_seq(b)) = bytes_len(b)
+proof
+  fix b
+  have m: all i. i in bytes_len(b) -> bytes_at(b, i) in set_image(bytes_len(b), j. bytes_at(b, j)) proof
+    fix i
+    assume hi
+    have si := set_image_def[s := bytes_len(b), f := j. bytes_at(b, j), y := bytes_at(b, i)]
+    have ex: ex j. j in bytes_len(b) && bytes_at(b, j) = bytes_at(b, i) by ex_intro({i}, taut(hi, refl({bytes_at(b, i)})))
+    show by taut(si, ex)
+  qed
+  have sp := mp(fn_build_space[d := bytes_len(b), v := i. bytes_at(b, i), b := set_image(bytes_len(b), j. bytes_at(b, j))], m)
+  have fd: dom(fn_build(bytes_len(b), i. bytes_at(b, i))) = bytes_len(b) by simp(expand(sp, fn_space))
+  show by defs(fd, seq_len, bytes_seq)
+qed
+
+// code loaded as a byte string: a slice of it at its place (bytes C
+// at offset off of B)
+theorem tr.code_slice: all vm b B C off. b in omega -> off in omega -> bytes_len(B) in omega -> bytes_len(C) in omega ->
+  int_le(int_add(off, bytes_len(C)), bytes_len(B)) ->
+  (all i. i in bytes_len(C) -> bytes_at(B, int_add(off, i)) = bytes_at(C, i)) ->
+  abi.code_at(vm, b, bytes_seq(B)) -> abi.code_at(vm, int_add(b, off), bytes_seq(C))
+proof
+  fix vm b B C off
+  assume hb ho nb nc hle hs hc
+  have cc := expand(hc, abi.code_at)
+  have g: all i. i in omega -> int_lt(i, seq_len(bytes_seq(C))) ->
+      ((x86_64_linux.fetchable(vm, bits_of_int(64, int_add(int_add(b, off), i))) && !x86_64_linux.can_access(vm, bits_of_int(64, int_add(int_add(b, off), i)), 1)) &&
+        !abi.stack_page(vm, x86_64_linux.page_of(bits_of_int(64, int_add(int_add(b, off), i))))) &&
+      vm.bytes[bits_of_int(64, int_add(int_add(b, off), i))] = bytes_seq(C)[i] proof
+    fix i
+    assume hi hl
+    have lc: int_lt(i, bytes_len(C)) by simp(hl, tr.bytes_seq_len)
+    have jo: int_add(off, i) in omega by simp(ho, hi)
+    have lj0: int_lt(int_add(off, i), bytes_len(B)) by arith(hle, lc, hi, ho, nb, nc)
+    have lj: int_lt(int_add(off, i), seq_len(bytes_seq(B))) by simp(lj0, tr.bytes_seq_len)
+    have ci := mp(all_elim(cc, {int_add(off, i)}), jo, lj)
+    have ad: int_add(b, int_add(off, i)) = int_add(int_add(b, off), i) by arith(hb, ho, hi)
+    have mb: int_add(off, i) in bytes_len(B) by arith(lj0, jo, nb)
+    have mc: i in bytes_len(C) by arith(lc, hi, nc)
+    have e := mp(all_elim(hs, {i}), mc)
+    have eb: bytes_seq(B)[int_add(off, i)] = bytes_at(B, int_add(off, i))
+      by defs(mp(app_fn_build[d := bytes_len(B), v := k. bytes_at(B, k), a := int_add(off, i)], mb), bytes_seq)
+    have ec: bytes_seq(C)[i] = bytes_at(C, i) by defs(mp(app_fn_build[d := bytes_len(C), v := k. bytes_at(C, k), a := i], mc), bytes_seq)
+    show by simp(rewrite(ad, ci), e, eb, ec)
+  qed
+  show by defs(g, abi.code_at)
+qed
+
+theorem tr.loaded_slice: all vm b B C off st. b in omega -> off in omega -> bytes_len(B) in omega -> bytes_len(C) in omega ->
+  int_le(int_add(off, bytes_len(C)), bytes_len(B)) ->
+  (all i. i in bytes_len(C) -> bytes_at(B, int_add(off, i)) = bytes_at(C, i)) ->
+  abi.loaded(vm, b, bytes_seq(B), st) -> abi.loaded(vm, int_add(b, off), bytes_seq(C), st)
+proof
+  fix vm b B C off st
+  assume hb ho nb nc hle hs hl
+  have l := expand(hl, abi.loaded)
+  have c := apply(tr.code_slice, {vm}, {b}, {B}, {C}, {off}, hb, ho, nb, nc, hle, hs, taut(l))
+  show by defs(taut(l, c), abi.loaded)
+qed
+
 // (code bytes: a list of the bytes it has, or of more)
 theorem tr.bytes_list: all b t. (all i. i in bytes_len(b) -> bytes_at(b, i) in t) -> bytes_len(b) in omega -> bytes_seq(b) in list_type(t)
 proof
@@ -3437,6 +3498,15 @@ proof
   have x2 := apply(tr.list_mono, hx, all_elim(tr.sub_union_l, {t1}, {t2}))
   have p2 := apply(tr.list_mono, hp, all_elim(tr.sub_union_r, {t1}, {t2}))
   show := apply(tr.loaded_concat, x2, p2, hb, h).2
+qed
+
+// (a byte string of bytes: a sequence of bytes -- a file)
+theorem tr.bytes_seq_type: all b. (all i. i in bytes_len(b) -> bytes_at(b, i) in bits(8)) -> bytes_len(b) in omega -> bytes_seq(b) in seq_type(bits(8))
+proof
+  fix b
+  assume h hn
+  have l := apply(tr.bytes_list, {b}, {bits(8)}, h, hn)
+  show by simp(unsel(expand(l, list_type)))
 qed
 
 // (a code piece defined as a byte string: a list of its bytes)

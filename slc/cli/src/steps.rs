@@ -96,7 +96,7 @@ pub fn steps(args: &[String]) -> CResult {
     std::fs::write(&out, line).map_err(|e| format!("{}: {}", out, e))?;
     println!("{}: the decode facts' line ({} functions)", out, fns.len());
     if let Some(t) = &text {
-        text_pieces(&elf, fns)?;
+        exec_segment(&elf)?;
         let line = format!(
             "// The program text of {e}: the functions' code in address order and the\n// bytes between them, each function's code a piece of it (made by the\n// checker: slc/cli/src/steps.rs). Written by `slc steps --text`.\n\ntext program \"{e}\" \"{sha}\" \"{f}\"\n",
             e = elf_path,
@@ -145,155 +145,65 @@ fn args_of(t: &Term, n: usize) -> R<Vec<Term>> {
     }
 }
 
-/// The `text` line: the pieces' definitions (the bytes between the
-/// functions, `text.gapK`; the functions' `F.code` are the `steps`
-/// line's), `text.code` their concatenation, and per function `F.in_text`:
-/// `all vm st. abi.loaded(vm, TB, text.code, st) -> abi.loaded(vm, A,
-/// F.code, st)` -- by the lemmas of proofs/translate_call.core, the
-/// pieces' list facts and the left peeling made once, shared
+/// The executable segment: its address and its bytes in the file (the
+/// claim's `prog_base`, `prog_code`: slc/cli/src/claim.rs)
+fn exec_segment(elf: &Elf) -> R<(u64, Vec<u8>)> {
+    let exec: Vec<_> = elf.segments.iter().filter(|s| s.flags & 1 != 0 && s.filesz > 0).collect();
+    let [xs] = exec.as_slice() else { return Err(format!("{} executable segments, expected one", exec.len())) };
+    let b = elf.bytes_at(xs.vaddr, xs.filesz as usize).ok_or("the executable segment's bytes")?.to_vec();
+    Ok((xs.vaddr, b))
+}
+
+/// The `text` line: the program text `text.code` (the executable
+/// segment's bytes, as the claim's `prog_code`) and per function
+/// `F.in_text`: `all vm st. abi.loaded(vm, TB, text.code, st) ->
+/// abi.loaded(vm, A, F.code, st)` -- F's code (the `steps` line's
+/// `F.code`) the text's bytes at its offset (`tr.loaded_slice`, the bytes
+/// compared by evaluation)
 fn text_facts(env: &mut Env, elf: &Elf, fns: &[String]) -> R<Vec<(String, Option<Seq>)>> {
     let fns: Vec<(String, u64, u64)> = fns.iter().map(|n| function(elf, n).map(|(ns, sym)| (ns.to_string(), sym.value, sym.size))).collect::<R<_>>()?;
-    let pieces = text_pieces(elf, fns)?;
+    let (tb, seg) = exec_segment(elf)?;
     let (cx, vs) = context(env, &["vm", "st"])?;
     let lg = &cx.api.lg;
     let mut out = Vec::new();
-    // the gaps' definitions; each piece a term `P()`
-    let mut ps = Vec::new();
-    for p in &pieces {
-        if let Some(b) = &p.gap {
-            let body = cx.tm(env, "bytes_seq(ph_a)", &[&Term::bytes(b)])?;
-            env.define(&p.name, Vec::new(), body).map_err(ke)?;
-            out.push((p.name.clone(), None));
-        }
-        ps.push(cx.term(env, &format!("{}()", p.name))?);
-    }
-    // the prefixes X_1 = P_1, X_j = X_{j-1} ++ P_j
-    let mut xs: Vec<Term> = vec![ps[0].clone()];
-    for p in &ps[1..] {
-        let x = cx.tm(env, "seq_concat(ph_a, ph_b)", &[xs.last().unwrap(), p])?;
-        xs.push(x);
-    }
-    let n = ps.len();
-    env.define("text.code", Vec::new(), xs[n - 1].clone()).map_err(ke)?;
+    let segt = Term::bytes(&seg);
+    let body = cx.tm(env, "bytes_seq(ph_a)", &[&segt])?;
+    env.define("text.code", Vec::new(), body).map_err(ke)?;
     out.push(("text.code".to_string(), None));
-    // q_j: P_j in list_type(T_j); its length l_j
-    let code_list = cx.fact(env, "tr.code_list")?;
-    let (mut qs, mut ls) = (Vec::new(), Vec::new());
-    for (p, pt) in pieces.iter().zip(&ps) {
-        let eq = Seq::def_eq(env, defined_sym(env, &p.name).map_err(ke)?).map_err(ke)?;
-        let b = args_of(&args_of(eq.concl(), 2)?[1], 1)?[0].clone();
-        let q = cx.all_elim(env, &code_list, &[pt.clone(), b.clone()])?;
-        let q = Seq::mp(env, &q, &eq).map_err(ke)?;
-        let hb = cx.tm(env, "bytes_len(ph_a) in omega", &[&b])?;
-        let hb = Seq::eval_goal(env, lg, &[], &hb).map_err(ke)?;
-        qs.push(Seq::mp(env, &q, &hb).map_err(ke)?);
-        let l = cx.tm(env, &format!("seq_len(ph_a) = {}", p.len), &[pt])?;
-        ls.push(cx.simp_goal(env, &[&eq], &l, &[])?);
-    }
-    // the list types: of q_j's, of the prefixes' (x_j)
-    let ty = |s: &Seq| -> R<Term> { Ok(args_of(&args_of(s.concl(), 2)?[1], 1)?[0].clone()) };
-    let concat = cx.fact(env, "tr.concat_list2")?;
-    let mut xl = vec![qs[0].clone()];
-    for j in 1..n {
-        let (t1, t2) = (ty(&xl[j - 1])?, ty(&qs[j])?);
-        let s = cx.all_elim(env, &concat, &[xs[j - 1].clone(), ps[j].clone(), t1, t2])?;
-        let s = Seq::mp(env, &Seq::mp(env, &s, &xl[j - 1]).map_err(ke)?, &qs[j]).map_err(ke)?;
-        xl.push(s);
-    }
-    // the prefixes' lengths: seq_len(X_j) = their sum
-    let mut sl = vec![ls[0].clone()];
-    let mut sum = pieces[0].len;
-    for j in 1..n {
-        sum += pieces[j].len;
-        let g = cx.tm(env, &format!("seq_len(ph_a) = {}", sum), &[&xs[j]])?;
-        sl.push(Seq::arith(env, lg, &[&sl[j - 1], &ls[j], &xl[j - 1], &qs[j]], &g).map_err(ke)?);
-    }
-    // from h: loaded(vm, TB, text.code, st), h_j: loaded(vm, TB, X_j, st),
-    // peeling from the right end
-    let tb = pieces[0].addr;
-    let tbt = cx.term(env, &tb.to_string())?;
+    let code_sym = defined_sym(env, "text.code").map_err(ke)?;
     let h = cx.assume(env, &format!("abi.loaded(vm, {}, text.code(), st)", tb))?;
-    let hn = cx.tm(env, &format!("abi.loaded(vm, {}, ph_a, st)", tb), &[&xs[n - 1]])?;
-    let hn = Seq::conv(env, &h, &hn, &[defined_sym(env, "text.code").map_err(ke)?]).map_err(ke)?;
-    let tbg = cx.tm(env, "ph_a in omega", &[&tbt])?;
-    let tb_nat = Seq::eval_goal(env, lg, &[], &tbg).map_err(ke)?;
+    let hb = cx.tm(env, &format!("abi.loaded(vm, {}, bytes_seq(ph_a), st)", tb), &[&segt])?;
+    let hb = Seq::conv(env, &h, &hb, &[code_sym]).map_err(ke)?;
+    let slice = cx.fact(env, "tr.loaded_slice")?;
     let (vm, st) = (Term::var(vs[0], vec![]), Term::var(vs[1], vec![]));
-    // peel_left / peel_right at X_{j+1} = X_j ++ P_{j+1} (0-based: xs[j-1],
-    // ps[j]), held by hj
-    let peel = |env: &Env, name: &str, j: usize, hj: &Seq| -> R<Seq> {
-        let f = cx.fact(env, name)?;
-        let mut s = cx.all_elim(env, &f, &[vm.clone(), tbt.clone(), xs[j - 1].clone(), ps[j].clone(), ty(&xl[j - 1])?, ty(&qs[j])?, st.clone()])?;
-        for a in [&xl[j - 1], &qs[j], &tb_nat, hj] {
-            s = Seq::mp(env, &s, a).map_err(ke)?;
-        }
-        Ok(s)
-    };
-    let mut hs = vec![hn];
-    for j in (1..n).rev() {
-        let next = peel(env, "tr.peel_left", j, hs.last().unwrap())?;
-        hs.push(next);
-    }
-    hs.reverse();
-    // per function at piece k: from h_{k+1} (X_{k+1} = X_k ++ P_k), the
-    // right part, at TB + seq_len(X_k) = A
-    for (k, p) in pieces.iter().enumerate() {
-        if p.gap.is_some() {
+    let mut done = std::collections::HashSet::new();
+    for (ns, a, _) in &fns {
+        if !done.insert(ns.clone()) {
             continue;
         }
-        let s = if k == 0 {
-            hs[0].clone()
-        } else {
-            let r = peel(env, "tr.peel_right", k, &hs[k])?;
-            let e = cx.tm(env, &format!("int_add({}, seq_len(ph_a)) = {}", tb, p.addr), &[&xs[k - 1]])?;
-            let e = Seq::arith(env, lg, &[&sl[k - 1]], &e).map_err(ke)?;
-            Seq::rewrite(env, &e, &r).map_err(ke)?
-        };
-        let s = s.discharge(env, h.concl()).map_err(ke)?;
-        let s = Seq::gen(env, lg, &Seq::gen(env, lg, &s, vs[1]).map_err(ke)?, vs[0]).map_err(ke)?;
-        out.push((format!("{}.in_text", p.name.trim_end_matches(".code")), Some(s)));
+        let name = format!("{}.code", ns);
+        let fsym = defined_sym(env, &name).map_err(ke)?;
+        let eq = Seq::def_eq(env, fsym).map_err(ke)?;
+        let c = args_of(&args_of(eq.concl(), 2)?[1], 1)?[0].clone();
+        let off = a.checked_sub(tb).ok_or_else(|| format!("{} before the executable segment", ns))?;
+        let (tbt, offt) = (cx.term(env, &tb.to_string())?, cx.term(env, &off.to_string())?);
+        let mut s = cx.all_elim(env, &slice, &[vm.clone(), tbt, segt.clone(), c.clone(), offt, st.clone()])?;
+        // the premises on concrete data, by evaluation: the numbers, the
+        // lengths, and F's bytes the text's at the offset
+        for _ in 0..6 {
+            let p = args_of(s.concl(), 2)?[0].clone();
+            let pf = Seq::eval_goal(env, lg, &[], &p).map_err(|e| format!("{}: {}", ns, e.0))?;
+            s = Seq::mp(env, &s, &pf).map_err(ke)?;
+        }
+        let s = Seq::mp(env, &s, &hb).map_err(ke)?;
+        // `loaded(vm, A, F.code(), st)`
+        let goal = cx.term(env, &format!("abi.loaded(vm, {}, {}(), st)", a, name))?;
+        let r = cx.simp_goal(env, &[&s, &eq], &goal, &[])?;
+        let r = r.discharge(env, h.concl()).map_err(ke)?;
+        let r = Seq::gen(env, lg, &Seq::gen(env, lg, &r, vs[1]).map_err(ke)?, vs[0]).map_err(ke)?;
+        out.push((format!("{}.in_text", ns), Some(r)));
     }
     Ok(out)
-}
-
-/// A piece of the program text: its name (`F.code`, or `text.gapK` with
-/// its bytes), address and length
-struct Piece {
-    name: String,
-    addr: u64,
-    len: u64,
-    gap: Option<Vec<u8>>,
-}
-
-/// The program text's pieces: the functions' code in address order with
-/// the bytes between them, from the start of the executable segment (so
-/// that the text's address does not move as functions are added)
-fn text_pieces(elf: &Elf, mut fns: Vec<(String, u64, u64)>) -> R<Vec<Piece>> {
-    fns.sort_by_key(|f| f.1);
-    fns.dedup_by_key(|f| f.1);
-    let mut pieces: Vec<Piece> = Vec::new();
-    let a0 = fns.first().map(|f| f.1).ok_or("no functions")?;
-    let start = elf.segments.iter().find(|s| s.flags & 1 != 0 && s.vaddr <= a0 && a0 < s.vaddr + s.memsz).map(|s| s.vaddr).unwrap_or(a0);
-    let gap = |pieces: &mut Vec<Piece>, from: u64, to: u64| -> R<()> {
-        let b = elf.bytes_at(from, (to - from) as usize).ok_or_else(|| format!("{:x}: no bytes", from))?.to_vec();
-        let name = format!("text.gap{}", pieces.len() + 1);
-        pieces.push(Piece { name, addr: from, len: to - from, gap: Some(b) });
-        Ok(())
-    };
-    if start < a0 {
-        gap(&mut pieces, start, a0)?;
-    }
-    for (ns, a, n) in &fns {
-        if let Some(end) = pieces.last().map(|p| p.addr + p.len) {
-            if *a < end {
-                return Err(format!("{} overlaps the function before it", ns));
-            }
-            if *a > end {
-                gap(&mut pieces, end, *a)?;
-            }
-        }
-        pieces.push(Piece { name: format!("{}.code", ns), addr: *a, len: *n, gap: None });
-    }
-    Ok(pieces)
 }
 
 /// The `steps` line's facts

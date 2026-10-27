@@ -203,7 +203,22 @@ fn c1_cfg_engine_checks() {
             leaf_sl.push(out);
         }
     }
-    let e = Command::new(slc).current_dir(&root).args(["elab", "spec", "layers"]).arg(&sl).arg(&cfg_sl).args(&leaf_sl).arg("-o").arg(&gimple).output().unwrap();
+    // (the claim, then the layers and GIMPLE without what it defines)
+    let claim_core = tmp.join(format!("slc-cfg-claim-{}.core", id));
+    let cl = Command::new(slc).current_dir(&root).args(["claim", "malloc", "--elf"]).arg(&elf).arg("-o").arg(&claim_core).output().unwrap();
+    assert!(cl.status.success(), "{}", String::from_utf8_lossy(&cl.stderr));
+    let e = Command::new(slc)
+        .current_dir(&root)
+        .args(["elab", "spec", "layers"])
+        .arg(&sl)
+        .arg(&cfg_sl)
+        .args(&leaf_sl)
+        .arg("--after")
+        .arg(&claim_core)
+        .arg("-o")
+        .arg(&gimple)
+        .output()
+        .unwrap();
     assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
     // the chain (proofs/chain): the libraries, the spec, the decode facts,
     // the rules, the program text (the code every contract assumes loaded),
@@ -215,6 +230,7 @@ fn c1_cfg_engine_checks() {
     let mut proofs: Vec<String> = Vec::new();
     for l in chain.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         match l {
+            "@claim" => files.push(claim_core.clone().into()),
             "@gimple" => files.push(gimple.clone().into()),
             "@steps" => files.push(steps.clone().into()),
             "@text" => files.push(text.clone().into()),
@@ -233,14 +249,15 @@ fn c1_cfg_engine_checks() {
     }
     let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    // every proof file checked, with no axiom and nothing resting on an open
-    // lemma (the C1 theorems unconditional: the storing functions' statics'
-    // range defined)
-    let each = proofs.iter().all(|f| {
-        checked.lines().any(|l| l.starts_with(&format!("{}: ", f)) && l.contains(" 0 axioms,") && l.contains(" 0 conditional theorems, 0 open lemmas"))
-    });
-    assert!(c.status.success() && each && !checked.contains("lemma "), "{}{}", checked, String::from_utf8_lossy(&c.stderr));
-    for f in [&steps, &gimple, &text, &cfg_sl] {
+    // every proof file checked, with no axiom; open only what is left of
+    // the claim (docs/todo.md): the abstract state determined by memory,
+    // free's step law, startup
+    let each = proofs.iter().all(|f| checked.lines().any(|l| l.starts_with(&format!("{}: ", f)) && l.contains(" 0 axioms,")));
+    let mut open: Vec<&str> = checked.lines().filter_map(|l| l.trim().strip_prefix("lemma ")).collect();
+    open.sort();
+    let left = ["mallocng.abs_unique: open", "musl.free_step: open", "musl.init: open"];
+    assert!(c.status.success() && each && open == left, "{}{}", checked, String::from_utf8_lossy(&c.stderr));
+    for f in [&steps, &gimple, &text, &cfg_sl, &claim_core] {
         let _ = std::fs::remove_file(f);
     }
 }

@@ -26,6 +26,9 @@ type Assign = Vec<(VarId, Term)>;
 const UNSOLVED: &str = "unsolved: ";
 /// iterations of all loops, per evaluation
 const FUEL: usize = 100_000;
+/// the largest numeral whose elements a membership is solved by (a
+/// binary's bytes, each)
+const ENUM_MAX: u64 = 1 << 16;
 
 pub(super) struct Ev<'s, 'a> {
     sp: &'s Simp<'a>,
@@ -455,6 +458,24 @@ impl<'s, 'a> Ev<'s, 'a> {
             return self.solve_loop(x, us, a);
         }
         if is(f, s.not) {
+            // a negation inward (classical equivalences): !(a -> b) is
+            // a && !b, !(a && b) is !a || !b, !(a || b) is !a && !b, !!a is a
+            // -- so that an `all` is refuted by solving its counterexample
+            if let Node::App(g, y) = x[0].node() {
+                let g = *g;
+                if g == s.imp {
+                    return self.solve(&sp.and(y[0].clone(), sp.not(y[1].clone())), us, a);
+                }
+                if is(g, s.and) {
+                    return self.solve(&sp.or(sp.not(y[0].clone()), sp.not(y[1].clone())), us, a);
+                }
+                if is(g, s.or) {
+                    return self.solve(&sp.and(sp.not(y[0].clone()), sp.not(y[1].clone())), us, a);
+                }
+                if is(g, s.not) {
+                    return self.solve(&y[0], us, a);
+                }
+            }
             return err(format!("{}{}", UNSOLVED, self.show(&p)));
         }
         if self.defined(f) && self.name(f) != "mkprog" {
@@ -512,7 +533,7 @@ impl<'s, 'a> Ev<'s, 'a> {
     fn solve_member(&mut self, x: &Term, set: &Term, us: &[VarId], a: Assign) -> Result<Vec<Assign>, String> {
         // a numeral n (von Neumann: {0, .., n-1}), not too large: each element
         if let Node::Nat(n) = set.node() {
-            if let Some(n) = n.to_u64().filter(|&n| n <= 4096) {
+            if let Some(n) = n.to_u64().filter(|&n| n <= ENUM_MAX) {
                 let mut out = Vec::new();
                 for v in 0..n {
                     let e = Term::app(self.sp.s.eq, vec![x.clone(), Term::nat(crate::nat::Nat::from_u64(v))]);
@@ -533,7 +554,7 @@ impl<'s, 'a> Ev<'s, 'a> {
                         let rel = self.name(*r).to_string();
                         if (rel == "int_lt" || rel == "int_le") && ra[0] == *x {
                             if let Some(n) = match self.norm(&ra[1]).node() {
-                                Node::Nat(n) => n.to_u64().filter(|&n| n <= 4096),
+                                Node::Nat(n) => n.to_u64().filter(|&n| n <= ENUM_MAX),
                                 _ => None,
                             } {
                                 let top = if rel == "int_lt" { n } else { n + 1 };

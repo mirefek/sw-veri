@@ -1,21 +1,46 @@
-// The top of the proof of `musl_malloc` (docs/overview.md).
-//
-//   slc kernel-check core/prelude.core core/logic.core core/sets.core build/musl_malloc.core \
-//     proofs/mallocng/laws.core proofs/mallocng/claim.core
-//
-// The claim is proven from the open lemmas below; each is proven later, in
-// its own file, with `theorem NAME proof ... qed`. `slc kernel-check`
-// prints what is still open.
+// The top of the proof of `musl_malloc` (docs/overview.md): the claim
+// (build/chain/claim.core, `slc claim malloc` of the -O0 binary) from the
+// chain. The open lemmas below are what is left: `slc kernel-check`
+// prints them.
 
 // ----------------------------------------------------------------------
 //  The witnesses: mallocng's invariant and the memory it owns
-//  (layers/mallocng.sl), for this binary
+//  (layers/mallocng.sl), for this binary -- its file and its symbols'
+//  addresses (the readable GIMPLE's)
 
-def musl.cfg := fn_update(fn_update(fn_update(fn_update(empty,
-  "file", musl_malloc.file), "ctx", musl_malloc.at.__malloc_context),
-  "lock", musl_malloc.at.__malloc_lock), "libc", musl_malloc.at.__libc)
-def musl.inv := mallocng.inv(musl.cfg)
-def musl.owned := mallocng.owned(musl.cfg)
+def musl.cfg() := fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(fn_update(empty,
+  "file", musl_malloc.file), "ctx", c_src_malloc_mallocng_malloc.__malloc_context),
+  "lock", c_src_malloc_mallocng_malloc.__malloc_lock), "libc", c_src_malloc_mallocng_malloc.__libc),
+  "sct", c_src_malloc_mallocng_malloc.__malloc_size_classes), "dbj", c_src_malloc_mallocng_malloc.debruijn32),
+  "scnt", c_src_malloc_mallocng_malloc.small_cnt_tab), "mcnt", c_src_malloc_mallocng_malloc.med_cnt_tab)
+def musl.inv() := mallocng.inv(musl.cfg)
+def musl.owned() := mallocng.owned(musl.cfg)
+
+// the file: a sequence of bytes (each of its bytes evaluated)
+theorem musl.bytes_file: all c b. c = bytes_seq(b) -> (all i. i in bytes_len(b) -> bytes_at(b, i) in bits(8)) -> bytes_len(b) in omega ->
+  c in list_type(bits(8))
+proof
+  fix c b
+  assume e h hn
+  show := rewrite(sym(e), apply(tr.bytes_list, {b}, {bits(8)}, h, hn))
+qed
+
+theorem musl.file_list: musl_malloc.file in list_type(bits(8))
+proof
+  show := mp(apply(musl.bytes_file, unfold(musl_malloc.file)), eval(), eval())
+qed
+
+theorem musl.file_bytes: musl_malloc.file in seq_type(bits(8)) && musl_malloc.file in univ(1)
+proof
+  have s: musl_malloc.file in seq_type(bits(8)) by simp(unsel(expand(musl.file_list, list_type)))
+  have u := mp(univ_trans[u := 1, a := musl_malloc.file, b := list_type(bits(8))], mp(mp.list_univ[t := bits(8)], bits_univ[n := 8]), musl.file_list)
+  show by taut(s, u)
+qed
+
+theorem musl.cfg_ok: musl.cfg in mallocng.Cfg
+proof
+  show by defs(simp(musl.file_bytes), musl.cfg, mallocng.Cfg)
+qed
 
 // ----------------------------------------------------------------------
 //  The laws (proofs/mallocng/laws.core; frame rests on mallocng.abs_unique)
@@ -37,7 +62,7 @@ qed
 
 theorem musl.frame: malloc.frame(musl.inv, musl.owned)
 proof
-  show by defs(mallocng.law_frame[c := musl.cfg], musl.inv, musl.owned)
+  show by defs(mp(mallocng.law_frame[c := musl.cfg], musl.cfg_ok), musl.inv, musl.owned)
 qed
 
 // ----------------------------------------------------------------------
@@ -51,25 +76,67 @@ lemma musl.free_step: malloc.free_step(musl.inv, musl.owned)
 lemma musl.init:
   claim_malloc.init_at_main(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.file, musl_malloc.main_at, musl_malloc.static)
 
-// the machine code at malloc and free implements their specs; each
-// to be proven from the function lemmas of the call graph
-lemma musl.impl_malloc:
-  abi.implements(malloc.Heap.ghost, musl_malloc.malloc_at, malloc.malloc_fun(musl.inv, musl.owned, musl_malloc.errno_offset))
-lemma musl.impl_free:
-  abi.implements(malloc.Heap.ghost, musl_malloc.free_at, malloc.free_fun(musl.inv, musl.owned, musl_malloc.errno_offset))
+// ----------------------------------------------------------------------
+//  malloc and free: their machine code implements their specs
+//  (proofs/mallocng/top.core, top_free.core) -- the program as the claim
+//  has it loaded: errno's offset, the executable segment (the program
+//  text, `text.code`) at its address, the statics
+
+// (the claim's constants of the program: functions of the unit)
+theorem musl.unit_app: all f v. f = fn_build(single(empty), x. v) -> app(f, empty) = v
+proof
+  fix f v
+  assume e
+  show := rewrite(sym(e), mp(app_fn_build[d := single(empty), v := x. v, a := empty], single_intro[a := empty]))
+qed
+
+// errno's offset, the program text and its address as the top theorems
+// have them
+theorem musl.prog: app(musl_malloc.errno_offset, empty) = 52 && app(musl_malloc.prog_base, empty) = 4198400 &&
+  app(musl_malloc.prog_code, empty) = text.code
+proof
+  have he := apply(musl.unit_app, unfold(musl_malloc.errno_offset))
+  have hb := apply(musl.unit_app, unfold(musl_malloc.prog_base))
+  have hcd := trans(apply(musl.unit_app, unfold(musl_malloc.prog_code)), sym(unfold(text.code)))
+  show by taut(he, hb, hcd)
+qed
+
+theorem musl.impl_malloc:
+  abi.implements(malloc.Heap.ghost, musl_malloc.malloc_at,
+    malloc.malloc_fun(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics))
+proof
+  have hc: mp.mi_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
+  have he hb hcd := musl.prog
+  have t := mp(all_elim(mp.top_malloc, {musl.cfg}, {app(musl_malloc.prog_statics, empty)}, {musl_malloc.errno_offset}, {musl_malloc.prog_base},
+    {musl_malloc.prog_code}, {musl_malloc.prog_statics}), hc, he, hb, hcd, refl({app(musl_malloc.prog_statics, empty)}))
+  show by defs(t, musl.inv, musl.owned, musl_malloc.malloc_at)
+qed
+
+theorem musl.impl_free:
+  abi.implements(malloc.Heap.ghost, musl_malloc.free_at,
+    malloc.free_fun(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code, musl_malloc.prog_statics))
+proof
+  have hc: mp.fr_cfg(musl.cfg) by simp(musl.cfg_ok, unfold(musl.cfg))
+  have he hb hcd := musl.prog
+  have t := mp(all_elim(mp.top_free, {musl.cfg}, {app(musl_malloc.prog_statics, empty)}, {musl_malloc.errno_offset}, {musl_malloc.prog_base},
+    {musl_malloc.prog_code}, {musl_malloc.prog_statics}), hc, he, hb, hcd, refl({app(musl_malloc.prog_statics, empty)}))
+  show by defs(t, musl.inv, musl.owned, musl_malloc.free_at)
+qed
 
 // ----------------------------------------------------------------------
-//  The claim from the lemmas
+//  The claim
 
 theorem musl.allocator_correct:
-  malloc.allocator_correct(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.malloc_at, musl_malloc.free_at)
+  malloc.allocator_correct(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code,
+                           musl_malloc.prog_statics, musl_malloc.malloc_at, musl_malloc.free_at)
 proof
   show by defs(taut(musl.impl_malloc, musl.impl_free), malloc.allocator_correct)
 qed
 
 theorem musl.allocator_claim:
-  claim_malloc.allocator_claim(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.file, musl_malloc.main_at,
-                               musl_malloc.malloc_at, musl_malloc.free_at, musl_malloc.static)
+  claim_malloc.allocator_claim(musl.inv, musl.owned, musl_malloc.errno_offset, musl_malloc.prog_base, musl_malloc.prog_code,
+                               musl_malloc.prog_statics, musl_malloc.file, musl_malloc.main_at, musl_malloc.malloc_at, musl_malloc.free_at,
+                               musl_malloc.static)
 proof
   show by defs(taut(musl.init, musl.allocator_correct), claim_malloc.allocator_claim)
 qed
