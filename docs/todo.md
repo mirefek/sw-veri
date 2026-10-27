@@ -95,7 +95,20 @@ in the chain: `@claim`) from two open lemmas: `musl.free_step`
 ## 4. The invariant and the laws
 
 - `musl.free_step` (free always has a step), open in
-  proofs/mallocng/claim.core.
+  proofs/mallocng/claim.core: from rep(c, A, s) and a live block p (slot
+  i of group g), a memory with the step. Its model lemmas exist:
+  - g not mapped on its own: unframe (`mp.uf_holds_m`, the memory as it
+    is), the freed bit (`mp.unres_mem`, `wr32` of g's freed word) -- so
+    `freed_back` with nothing let go, then `mp.lf_comp`; rep of the new
+    state (the ranges unchanged: tls, errno, canary as before) and
+    step_ok directly (the only byte written the meta's, the
+    allocator's).
+  - g mapped on its own (one slot): freeing it breaks `reuse_ok` if g is
+    on its class's list (the head, full). Either dequeue g, then a
+    variant of `mp.holds_unreserve` for a group on no list (its
+    `!own_mapping` premise only serves `reuse_ok`); or give the group
+    back as musl does (dequeue, `mp.drop_in_own`, then free_meta's model
+    to empty `taken`). Both need the dequeue's memory made explicitly.
 - The C world owning only its statics, heap and stack objects.
 - `slc heapcheck` on larger heaps: each byte's view membership (`held`)
   searches every group's slots (`in_reserved`), so a check grows with
