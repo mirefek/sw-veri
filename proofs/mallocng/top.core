@@ -1391,3 +1391,75 @@ proof
   qed
   show by taut(cu, cdf)
 qed
+
+// (an exception of the layer's malloc where it is undefined)
+abbrev mp.UB := exc_val("undefined", empty)
+
+// The `malloc` symbol's code diverges only where the layer's malloc is
+// undefined (where defined, its outcome mallocng's: no divergence)
+theorem mp.top_div(c, eo, b, cd, st, g): app(eo, empty) = 52 -> mp.mi_call(c, g) ->
+  tr.div_raises_low(c_src_malloc_lite_malloc.default_malloc_fun(g), abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st)), malloc.Heap.ghost)
+proof
+  assume he hmi
+  unfold tr.div_raises_low
+  fix regs w h t
+  assume hra hw hwu hh hr
+  let S := union2(w, h)
+  have hu _ _ := mp(all_elim(mp.hg_ok, {h}), hh)
+  have Su := mp(union2_univ[u := 1, a := w, b := h], hwu, hu)
+  have sg := apply(rec_and_intro, hw, hh)
+  have dn: !(ord_le(1, seq_len(regs)) && mp.MPRE(c, eo, b, cd, st, S)) proof
+    assume hd0
+    have o1l hpre := hd0
+    obtain A, _ _ hpost from apply(mp.top_post[c := c, eo := eo, b := b, cd := cd, st := st, g := g, regs := regs, s := w, h := h, o := diverge(t)], he, hmi, hra, hw, hh, hr, o1l, hpre)
+    have k1: abi.ovf_out(w, diverge(t)) -> false proof
+      assume q
+      obtain v ob, _ _ e from q
+      show by simp(e)
+    qed
+    have k2: (ex V rr. (V in x86_64_linux.Vm && (ex A2. mp.mi_ret(c, union2(h, fn_update(empty, "A", A)).A, regs[0], union2(h, fn_update(empty, "A", A)).blocks, w, A2, V, fst(rr)))) &&
+        diverge(t) = ok(fn_update(w, "vm", V), rr)) -> false proof
+      assume q
+      obtain V rr, _ _ e from q
+      show by simp(e)
+    qed
+    show by taut(hpost, k1, k2)
+  qed
+  have eu: mp.UB in univ(1) by defs(simp(), exc_val)
+  have pu: pair(S, exc(S, mp.UB)) in univ(1) by simp(Su, eu)
+  have sh: abi.outcome(exc(S, mp.UB)) by disj({2}, ex_intro({S}, {mp.UB}, refl({exc(S, mp.UB)})))
+  have vt: all x v. exc(S, mp.UB) = ok(x, v) -> v in cart(bits(64), bits(64)) proof
+    fix x v
+    assume e
+    show by simp(e)
+  qed
+  have r := apply(mp.top_any[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := exc(S, mp.UB)], hra, pu, sh, vt, dn)
+  have ne: !(mp.UB = exc_val("stack_overflow", empty)) by defs(simp(), exc_val)
+  show by ex_intro({mp.UB}, {S}, taut(eu, ne, sg, r))
+qed
+
+// ... and raises where the program is not loaded (or the stack
+// protector's word not writable): its precondition failing
+theorem mp.top_unl(c, eo, b, cd, st, regs, w): regs in abi.ARGS -> w in rec_and(abi.World, malloc.Heap.ghost) -> w in univ(1) ->
+  !(abi.loaded(w.vm, app(b, empty), app(cd, empty), app(st, empty)) && abi.canary_ok(w.vm, w.fs_base)) ->
+  abi.spec_raises(rec_and(abi.World, malloc.Heap.ghost), w, abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st)), regs)
+proof
+  assume hra hw wu hn
+  have dn: !(ord_le(1, seq_len(regs)) && mp.MPRE(c, eo, b, cd, st, w)) proof
+    assume hd0
+    have _ hpre := hd0
+    have _ _ hwo := hpre
+    have _ _ _ cn _ ld := expand(hwo, malloc.world_ok)
+    show by taut(hn, cn, ld)
+  qed
+  have eu: mp.UB in univ(1) by defs(simp(), exc_val)
+  have pu: pair(w, exc(w, mp.UB)) in univ(1) by simp(wu, eu)
+  have sh: abi.outcome(exc(w, mp.UB)) by disj({2}, ex_intro({w}, {mp.UB}, refl({exc(w, mp.UB)})))
+  have vt: all x v. exc(w, mp.UB) = ok(x, v) -> v in cart(bits(64), bits(64)) proof
+    fix x v
+    assume e
+    show by simp(e)
+  qed
+  have r := apply(mp.top_any[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, S := w, o := exc(w, mp.UB)], hra, pu, sh, vt, dn)
+  show := apply(abi.raises_intro_g, {malloc.Heap.ghost}, {w}, {w}, {abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))}, {regs}, {mp.UB}, hw, eu, (!(mp.UB = exc_val("stack_overflow", empty)) by defs(simp(), exc_val)), r)
+qed
