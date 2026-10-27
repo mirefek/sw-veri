@@ -390,3 +390,64 @@ proof
   qed
   show by taut(rep3, al, ext)
 qed
+
+// After malloc's failure (`mp.mi_zero`, from A at S): the new memory
+// represented by A2, the live blocks as they were
+theorem mp.top_mzero(c, A, S, A2, V2): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> S.blocks in fn_space(bits(64), option(omega)) ->
+  S.fs_base in bits(64) -> mallocng.rep(c, A, S) -> abi.thread_ok(S.vm, S.fs_base) -> abi.canary_ok(S.vm, S.fs_base) ->
+  mallocng_specs.errno_apart(c, A, S.vm, S.fs_base) -> mp.mi_zero(c, A, S.blocks, S, A2, V2) ->
+  mallocng.rep(c, A2, fn_update(S, "vm", V2))
+proof
+  assume hc hu ha hb fsb hr hth hcn hea hz
+  let B := S.blocks
+  have {hm = mem, rtl = tls, rca = canary} := expand(hr, mallocng.rep)
+  have a2a a2u nr2 tk2 v2v hm2 hsh2 hun hfp _ := hz
+  have {fsl = fsl, ea = ea} := apply(mp.top_fsl, fsb, hth)
+  have {f = fp, l = live} := apply(mp.has_rng, hc, hu, ha, hb, hm)
+  have gfp: all a. a in omega -> a in mallocng.footprint(c, A2, B) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    show by taut(mp(all_elim(hfp, {a}), ao, h), all_elim(f, {a}))
+  qed
+  have grs: all a. a in omega -> mallocng.in_reserved(A2, a) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume _ h
+    show by taut(h, apply(mp.nores[A := A2, a := a], nr2))
+  qed
+  have gtk: all a. a in omega -> mallocng.in_taken(A2, a) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume _ w
+    obtain kk, hkk hkkl _ _ from expand(w, mallocng.in_taken)
+    have f0: false by arith(hkk, hkkl, tk2)
+    show by taut(f0)
+  qed
+  have glv: all a. a in omega -> a in malloc.live_of(B) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume _ h
+    show by taut(mp(all_elim(l, {a}), h))
+  qed
+  have grown := apply(mp.rng_grow[c := c, A := A, A2 := A2, b2 := B, vm := S.vm], gfp, grs, gtk, glv)
+  have tl2 := apply(mp.tls_grow[c := c, A := A, A2 := A2, vm := S.vm, fs := S.fs_base], fsb, hth, (mallocng_specs.tls_apart(c, A, S.fs_base) by defs(rtl, mallocng_specs.tls_apart)), grown)
+  have er2: all x0. x0 in omega -> int_lt(x0, 4) -> !mallocng.in_ranges(int_add(int_add(S.fs_base, 52), x0), mallocng.fp_ranges(c, A2)) proof
+    fix i
+    assume hi hil
+    have n0 m0 := rewrite(ea, mp(all_elim(expand(hea, mallocng_specs.errno_apart), {i}), hi, hil))
+    assume ir
+    show by taut(mp(all_elim(grown, {int_add(int_add(S.fs_base, 52), i)}), (int_add(int_add(S.fs_base, 52), i) in omega by arith(fsb, hi)), ir), n0, m0)
+  qed
+  have ca2 := apply(mp.top_can[c := c, A := A, A2 := A2, V2 := V2, b2 := B, vm := S.vm, fs := S.fs_base], hc, a2u, a2a, hm2, fsb, hcn, grown, rca)
+  have lv2 := apply(mp.top_live[c := c, A := A2, V := V2, b := B], a2a, hb, hm2)
+  let T := fn_update(S, "vm", V2)
+  have tm: mallocng.holds_m(c, A2, T.vm, T.blocks) by simp(hm2, keep(mallocng.holds_m))
+  have tl: malloc.live_rw(T) by defs(simp(lv2), malloc.live_rw)
+  have tt: all x0. x0 in omega -> int_lt(x0, 8) -> !mallocng.in_ranges(int_add(T.fs_base, x0), mallocng.fp_ranges(c, A2)) by simp(expand(tl2, mallocng_specs.tls_apart))
+  have te: all x0. x0 in omega -> int_lt(x0, 4) -> !mallocng.in_ranges(int_add(int_add(T.fs_base, 52), x0), mallocng.fp_ranges(c, A2)) by simp(er2)
+  have tc: all x0. x0 in omega -> x0 in abi.canary(T.fs_base) -> !mallocng.in_ranges(x0, mallocng.fp_ranges(c, A2)) &&
+      !((int_lt(0, A2.reserve_cnt) && int_le(int_div(A2.reserve, x86_64_linux.PAGE), int_div(x0, x86_64_linux.PAGE))) &&
+        int_lt(int_div(x0, x86_64_linux.PAGE), int_add(int_div(A2.reserve, x86_64_linux.PAGE), A2.reserve_cnt))) by simp(ca2)
+  show by defs(taut(tm, nr2, tk2, tl, tt, te, tc), mallocng.rep)
+qed
