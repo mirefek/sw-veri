@@ -352,6 +352,183 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  A list linked from a head, ended by 0 (the meta areas): determined by
+//  memory
+
+abbrev mp.chain(M, h, l) := h = ite(seq_len(l) = 0, 0, l[0]) &&
+  (all k. k in omega -> int_lt(k, seq_len(l)) -> mallocng.rd(M, int_add(l[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(l)), l[int_add(k, 1)], 0))
+
+theorem mp.u_chain_pre(M, h, l1, l2): l1 in list_type(omega) -> l2 in list_type(omega) -> mp.chain(M, h, l1) -> mp.chain(M, h, l2) ->
+  all i. i in omega -> int_lt(i, seq_len(l1)) -> int_lt(i, seq_len(l2)) -> l1[i] = l2[i]
+proof
+  assume h1 h2 c1 c2
+  have f1 k1 := c1
+  have f2 k2 := c2
+  let N1 := seq_len(l1)
+  let N2 := seq_len(l2)
+  have n1: N1 in omega by arith(h1)
+  have n2: N2 in omega by arith(h2)
+  let P(i) := int_lt(i, N1) -> int_lt(i, N2) -> l1[i] = l2[i]
+  have base: P(0) proof
+    assume a b
+    have e1 := trans(f1, mp(ite_f[c := N1 = 0, a := 0, b := l1[0]], (!(N1 = 0) by arith(a, n1))))
+    have e2 := trans(f2, mp(ite_f[c := N2 = 0, a := 0, b := l2[0]], (!(N2 = 0) by arith(b, n2))))
+    show := trans(sym(e1), e2)
+  qed
+  have step: all i. i in omega -> P(i) -> P(int_add(i, 1)) proof
+    fix i
+    assume hi ih
+    assume a b
+    have a0: int_lt(i, N1) by arith(a, hi)
+    have b0: int_lt(i, N2) by arith(b, hi)
+    have e := mp(ih, a0, b0)
+    have x1 := mp(all_elim(k1, {i}), hi, a0)
+    have x2 := mp(all_elim(k2, {i}), hi, b0)
+    have t1 := mp(ite_t[c := int_lt(int_add(i, 1), N1), a := l1[int_add(i, 1)], b := 0], a)
+    have t2 := mp(ite_t[c := int_lt(int_add(i, 1), N2), a := l2[int_add(i, 1)], b := 0], b)
+    show by simp(x1, x2, e, t1, t2)
+  qed
+  show by induct(base, step)
+qed
+
+theorem mp.u_chain_short(M, h, l1, l2): l1 in list_type(omega) -> l2 in list_type(omega) ->
+  (all i. i in omega -> int_lt(i, seq_len(l2)) -> !(l2[i] = 0)) ->
+  mp.chain(M, h, l1) -> mp.chain(M, h, l2) -> !int_lt(seq_len(l1), seq_len(l2))
+proof
+  assume h1 h2 z2 c1 c2
+  have f1 k1 := c1
+  have f2 k2 := c2
+  have pre := apply(mp.u_chain_pre[M := M, h := h, l1 := l1, l2 := l2], h1, h2, c1, c2)
+  let N1 := seq_len(l1)
+  let N2 := seq_len(l2)
+  have n1: N1 in omega by arith(h1)
+  have n2: N2 in omega by arith(h2)
+  have g: int_lt(N1, N2) -> false proof
+    assume lt
+    have c0: N1 = 0 -> false proof
+      assume e0
+      have hz := trans(f1, mp(ite_t[c := N1 = 0, a := 0, b := l1[0]], e0))
+      have hl := trans(f2, mp(ite_f[c := N2 = 0, a := 0, b := l2[0]], (!(N2 = 0) by arith(lt, e0, n2))))
+      have nz := mp(all_elim(z2, {0}), simp(), arith(lt, e0))
+      show by simp(hz, hl, nz)
+    qed
+    have cn: !(N1 = 0) -> false proof
+      assume ne
+      let j := int_sub(N1, 1)
+      have jo: j in omega by arith(n1, ne)
+      have jl1: int_lt(j, N1) by arith(n1, ne)
+      have jl2: int_lt(j, N2) by arith(n1, ne, lt)
+      have x1 := mp(all_elim(k1, {j}), jo, jl1)
+      have x2 := mp(all_elim(k2, {j}), jo, jl2)
+      have ej := mp(all_elim(pre, {j}), jo, jl1, jl2)
+      have t1 := mp(ite_f[c := int_lt(int_add(j, 1), N1), a := l1[int_add(j, 1)], b := 0], (!int_lt(int_add(j, 1), N1) by arith(n1, ne)))
+      have t2 := mp(ite_t[c := int_lt(int_add(j, 1), N2), a := l2[int_add(j, 1)], b := 0], (int_lt(int_add(j, 1), N2) by arith(n1, ne, lt)))
+      have e1: int_add(j, 1) = N1 by arith(n1, ne)
+      have nz := mp(all_elim(z2, {N1}), n1, lt)
+      show by simp(x1, x2, ej, t1, t2, e1, nz)
+    qed
+    show by taut(c0, cn)
+  qed
+  show by taut(g)
+qed
+
+theorem mp.u_chain(M, h, l1, l2): l1 in list_type(omega) -> l2 in list_type(omega) ->
+  (all i. i in omega -> int_lt(i, seq_len(l1)) -> !(l1[i] = 0)) -> (all i. i in omega -> int_lt(i, seq_len(l2)) -> !(l2[i] = 0)) ->
+  mp.chain(M, h, l1) -> mp.chain(M, h, l2) -> l1 = l2
+proof
+  assume h1 h2 z1 z2 c1 c2
+  have s12 := apply(mp.u_chain_short[M := M, h := h, l1 := l1, l2 := l2], h1, h2, z2, c1, c2)
+  have s21 := apply(mp.u_chain_short[M := M, h := h, l1 := l2, l2 := l1], h2, h1, z1, c2, c1)
+  have n1: seq_len(l1) in omega by arith(h1)
+  have n2: seq_len(l2) in omega by arith(h2)
+  have le: seq_len(l1) = seq_len(l2) by arith(s12, s21, n1, n2)
+  have pre := apply(mp.u_chain_pre[M := M, h := h, l1 := l1, l2 := l2], h1, h2, c1, c2)
+  have el: all i. i in omega -> int_lt(i, seq_len(l1)) -> l1[i] = l2[i] proof
+    fix i
+    assume hi hl
+    show := mp(all_elim(pre, {i}), hi, hl, (int_lt(i, seq_len(l2)) by arith(hl, le)))
+  qed
+  show := mp(ext_example[a := l1, b := l2, t := omega], h1, h2, le, el)
+qed
+
+// a state's meta areas: linked from the context's head word in the whole
+// memory's view (their headers the invariant's), nonzero
+theorem mp.u_areas_of(c, A, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
+  seq_len(A.taken) = 0 ->
+  mp.chain(mallocng.mview(vm, mallocng.all_bytes), mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.C_AREA_HEAD), A.areas) &&
+  (all i. i in omega -> int_lt(i, seq_len(A.areas)) -> !(A.areas[i] = 0))
+proof
+  assume hc hu ha hh ht
+  let M := mallocng.mview(vm, mallocng.held(c, A, b))
+  have {H = inv} := expand(hh, mallocng.holds_m)
+  have {aok = areas, huo = used, ff = fixed, hga = apart} := expand(H, mallocng.holds)
+  have {hd = head, each = each} := expand(aok, mallocng.areas_ok)
+  have {fa = areas} := expand(ff, mallocng.fixed_free)
+  have alt: A.areas in list_type(omega) by simp(ha)
+  have nt: all a. !mallocng.in_taken(A, a) proof
+    fix a
+    have g: mallocng.in_taken(A, a) -> false proof
+      assume h
+      obtain k, hko hkl _ _ from expand(h, mallocng.in_taken)
+      show by arith(hko, hkl, ht)
+    qed
+    show by taut(g)
+  qed
+  have lk: all k. k in omega -> int_lt(k, seq_len(A.areas)) ->
+      mallocng.rd(mallocng.mview(vm, mallocng.all_bytes), int_add(A.areas[k], 8), 8) = ite(int_lt(int_add(k, 1), seq_len(A.areas)), A.areas[int_add(k, 1)], 0) proof
+    fix k
+    assume hk hkl
+    have ak := mp(at_type[l := A.areas, t := omega, i := k], alt, hk, hkl)
+    have _ _ _ e8 _ _ := mp(all_elim(each, {k}), hk, hkl)
+    have inF: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(A.areas[k], 8), j) in mallocng.held(c, A, b) proof
+      fix j
+      assume hj hjl
+      let a := int_add(int_add(A.areas[k], 8), j)
+      have hao: a in omega by arith(ak, hj)
+      have nl := mp(all_elim(fa, {k}, {a}), conj(hk, hao), (int_lt(k, seq_len(A.areas)) && int_le(A.areas[k], a) && int_lt(a, int_add(A.areas[k], 4096))
+        by arith(hkl, ak, hj, hjl)))
+      have fp := apply(mp.area_fp[c := c, A := A, M := M, b := b, k := k, a := a], hc, hu, ha, huo, hga, hk, hkl, hao,
+        arith(ak, hj), arith(ak, hj, hjl), nl, all_elim(nt, {a}))
+      show := apply(mp.area_held[c := c, A := A, M := M, b := b, brk := vm.brk, k := k, a := a], hc, hu, ha, H, hk, hkl, hao,
+        arith(ak, hj), arith(ak, hj, hjl), fp)
+    qed
+    have inA: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(A.areas[k], 8), j) in mallocng.all_bytes proof
+      fix j
+      assume hj hjl
+      show := mp(mp.u_all[a := int_add(int_add(A.areas[k], 8), j)], arith(ak, hj))
+    qed
+    have r := mp(mp.u_rd2[vm := vm, F := mallocng.held(c, A, b), G := mallocng.all_bytes, a := int_add(A.areas[k], 8), n := 8], arith(ak), simp(), simp(), inF, inA)
+    show := trans(sym(r), e8)
+  qed
+  have hd2: mallocng.ctx_word(c, M, mallocng.C_AREA_HEAD) = ite(seq_len(A.areas) = 0, 0, A.areas[0]) by simp(hd)
+  have nz: all i. i in omega -> int_lt(i, seq_len(A.areas)) -> !(A.areas[i] = 0) proof
+    fix i
+    assume hi hil
+    have _ p _ _ _ _ := mp(all_elim(each, {i}), hi, hil)
+    have ai := mp(at_type[l := A.areas, t := omega, i := i], alt, hi, hil)
+    show by arith(p, ai)
+  qed
+  show by taut(hd2, lk, nz)
+qed
+
+theorem mp.u_areas(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) -> seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  A.areas = B.areas
+proof
+  assume hc hua ha hub hb hha hhb hta htb
+  have ks: mallocng.C_AREA_HEAD = 56 && mallocng.CTX_SIZE = 928 by defs(simp(), mallocng.C_AREA_HEAD, mallocng.CTX_SIZE)
+  have ew := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := mallocng.C_AREA_HEAD, n := 8], hc, hua, ha, hub, hb, hha, hhb, simp(ks), simp(),
+    simp(ks), apply(mp.u_nofree[c := c, off := mallocng.C_AREA_HEAD, n := 8], hc, simp(ks), simp(), simp(ks)))
+  have hw: mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.C_AREA_HEAD) =
+      mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, B, b)), mallocng.C_AREA_HEAD) by defs(ew, mallocng.ctx_word)
+  have ca1 ca2 za := apply(mp.u_areas_of[c := c, A := A, vm := vm, b := b], hc, hua, ha, hha, hta)
+  have cb1 cb2 zb := apply(mp.u_areas_of[c := c, A := B, vm := vm, b := b], hc, hub, hb, hhb, htb)
+  have la: A.areas in list_type(omega) by simp(ha)
+  have lb: B.areas in list_type(omega) by simp(hb)
+  show := apply(mp.u_chain, la, lb, za, zb, rewrite(hw, conj(ca1, ca2)), conj(cb1, cb2))
+qed
+
+// ----------------------------------------------------------------------
 //  The context's fields
 
 theorem mp.u_ctx_fields(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
