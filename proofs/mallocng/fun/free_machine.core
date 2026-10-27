@@ -1,0 +1,112 @@
+// free at machine level: its translation unit's callees linked (as
+// malloc_machine.core's for malloc), free_group and nontrivial_free -- which
+// call each other -- unrolled up to n groups in use (as alloc_pair.core's
+// alloc_slot and alloc_group, by class): at 0, free_group's code any (never
+// called); nontrivial_free's at n its CFG form over free_group's at n,
+// free_group's at n + 1 over nontrivial_free's at n.
+
+// ----------------------------------------------------------------------
+//  __libc_free and free called with up to n groups in use
+
+// (a code called as nontrivial_free up to n groups: so up to fewer)
+theorem mp.nf_call_mono(c, f, n, m): mp.nf_call(c, f, n) -> int_le(m, n) -> mp.nf_call(c, f, m)
+proof
+  assume hq hle
+  fix t h g i regs o2
+  assume hw hh hg hi hdep hin hth htl hus hro hregs hr
+  show := mp(all_elim(hq, {t}, {h}, {g}, {i}, {regs}, {o2}), hw, hh, hg, hi, (int_le(seq_len(h.A.used), n) by arith(hdep, hle)), hin, hth, htl, hus, hro, hregs, hr)
+qed
+
+// __libc_free(p) called as such, up to n groups in use
+abbrev mp.lf_call_n(c, f, n) := all p t h regs o2. p in bits(64) -> t in abi.World -> h in mp.G -> int_le(seq_len(h.A.used), n) ->
+  mallocng.holds_in(c, h.A, t.vm, t.objs, h.blocks) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 -> abi.thread_ok(t.vm, t.fs_base) ->
+  mallocng_specs.tls_apart(c, h.A, t.fs_base) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, t.vm, t.fs_base) ->
+  (!(p = 0) -> !(h.blocks[p] = none)) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, p))) -> runs(f[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex V r. (V in x86_64_linux.Vm && mp.lf_res(c, h.A, h.blocks, p, t, V)) && o2 = ok(fn_update(t, "vm", V), r))
+
+// __libc_free's run (its returns as one), nontrivial_free called as such up
+// to n groups
+theorem mp.lf_run2n(c, n, gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu, g0, g1, g2, p, s, h, o): c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc -> p in bits(64) ->
+  mp.calls(gm, c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)) -> mp.calls(g1, c_src_malloc_mallocng_malloc.get_slot_index_fun()) ->
+  mp.calls(gsi, c_src_malloc_mallocng_malloc.get_slot_index_fun()) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) ->
+  mp.calls(gns, c_src_malloc_mallocng_free.get_nominal_size_fun(g2)) -> mp.calls(wl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  mp.nf_call(c, nf, n) -> mp.calls(ul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) ->
+  mp.calls(el, mallocng_specs.errno_location_spec_fun) -> mp.calls(mu, mallocng_specs.munmap_spec_fun()) ->
+  s in abi.World -> h in mp.G -> int_le(seq_len(h.A.used), n) ->
+  mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng_specs.tls_apart(c, h.A, s.fs_base) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, s.vm, s.fs_base) ->
+  (!(p = 0) -> !(h.blocks[p] = none)) ->
+  runs(c_src_malloc_mallocng_free.__libc_free(p, gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu), s, o) ->
+  abi.ovf_out(s, o) || (ex V. (V in x86_64_linux.Vm && mp.lf_res(c, h.A, h.blocks, p, s, V)) && o = ok(fn_update(s, "vm", V), empty))
+proof
+  assume hc hx hsct hlk hlc hp hgm hg1 hgsi hgst hgns hwl hnf hul hel hmu hs hh hdep hin hnr htk hth htl heo hea hlv hr
+  have nfn := apply(mp.nf_call_mono[c := c, f := nf, n := n, m := seq_len(h.A.used)], hnf, hdep)
+  have run := apply(mp.lf_run[c := c, gm := gm, gsi := gsi, gst := gst, gns := gns, ac := ac, acas := acas, wl := wl, nf := nf, ul := ul, el := el, mu := mu,
+    g0 := g0, g1 := g1, g2 := g2, p := p, s := s, h := h, o := o], hc, hx, hsct, hlk, hlc, hp, hs, hh, hin, hnr, htk, hth, htl, heo, hea, hlv,
+    hgm, hg1, hgsi, hgst, hgns, hwl, nfn, hul, hel, hmu, hr)
+  have {wv = mem, wf = record, wd = has_vm} := apply(ms.world_parts, hs)
+  have k0: case 2 of run proof
+    assume e
+    have pz ho := e
+    have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], wf, wd)
+    have ho2: o = ok(fn_update(s, "vm", s.vm), empty) := rewrite(sym(ss), ho, {1})
+    show by disj({2}, ex_intro({s.vm}, taut(wv, pz, refl({s.vm}), ho2)))
+  qed
+  have k1: case 3 of run proof
+    assume e
+    have pnz lo := e
+    obtain V, v4 post ho from lo
+    show by disj({2}, ex_intro({V}, taut(v4, pnz, post, ho)))
+  qed
+  show by taut(run, k0, k1)
+qed
+
+// __libc_free's code called as such up to n groups
+theorem mp.lf_q_n: all c n gm gsi gst gns ac acas wl nf ul el mu g0 g1 g2. c in mallocng.Cfg ->
+  c.ctx = c_src_malloc_mallocng_malloc.__malloc_context -> c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes ->
+  c.lock = c_src_malloc_mallocng_malloc.__malloc_lock -> c.libc = c_src_malloc_mallocng_malloc.__libc ->
+  mp.calls(gm, c_src_malloc_mallocng_malloc.get_meta_fun(g0, g1)) -> mp.calls(g1, c_src_malloc_mallocng_malloc.get_slot_index_fun()) ->
+  mp.calls(gsi, c_src_malloc_mallocng_malloc.get_slot_index_fun()) -> mp.calls(gst, c_src_malloc_mallocng_malloc.get_stride_fun()) ->
+  mp.calls(gns, c_src_malloc_mallocng_free.get_nominal_size_fun(g2)) -> mp.calls(wl, mallocng_specs.lock_spec_fun(c_src_malloc_mallocng_malloc.__libc)) ->
+  mp.nf_call(c, nf, n) -> mp.calls(ul, mallocng_specs.unlock_spec_fun(c_src_malloc_mallocng_malloc.__malloc_lock)) ->
+  mp.calls(el, mallocng_specs.errno_location_spec_fun) -> mp.calls(mu, mallocng_specs.munmap_spec_fun()) ->
+  mp.lf_call_n(c, c_src_malloc_mallocng_free.__libc_free_fun(gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu), n)
+proof
+  fix c n gm gsi gst gns ac acas wl nf ul el mu g0 g1 g2
+  assume hc hx hsct hlk hlc hgm hg1 hgsi hgst hgns hwl hnf hul hel hmu
+  fix p t h regs o2
+  assume hpb hw hh hdep hin hnr htk hth htl heo hea hlv hro hr
+  have rl rn r0 := apply(gc.regs1, hpb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = p by defs(simp(r0, hpb), bits_of_int, pow2)
+  step o3 V, e hs1 from hr with o1l, bp, mp.lf_run2n using ra, hc, hx, hsct, hlk, hlc, hpb, hgm, hg1, hgsi, hgst, hgns, hwl, hnf, hul, hel, hmu,
+    hw, hh, hdep, hin, hnr, htk, hth, htl, heo, hea, hlv
+  // (the result: any two words)
+  have ne: ex x0. x0 in bits(64) by ex_intro({0}, simp())
+  have e1: ex x0. x0 in bits(64) && any_rel(x1. x1 in bits(64), x1. o2 = ok(fn_update(t, "vm", V), pair(x0, x1))) by defs(taut(expand(e, any_rel), ne), any_rel)
+  obtain y0, _ e2 from e1
+  have e3: ex x1. x1 in bits(64) && o2 = ok(fn_update(t, "vm", V), pair(y0, x1)) by taut(expand(e2, any_rel), ne)
+  obtain y1, _ ho from e3
+  show by disj({2}, ex_intro({V}, {pair(y0, y1)}, taut(hs1, ho)))
+qed
+
+// free(p)'s run: __libc_free(p) called as such up to n groups
+theorem mp.fr_run_n(c, n, p, g, s, h, o): p in bits(64) -> mp.lf_call_n(c, g, n) -> s in abi.World -> h in mp.G -> int_le(seq_len(h.A.used), n) ->
+  mallocng.holds_in(c, h.A, s.vm, s.objs, h.blocks) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 -> abi.thread_ok(s.vm, s.fs_base) ->
+  mallocng_specs.tls_apart(c, h.A, s.fs_base) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, s.vm, s.fs_base) ->
+  (!(p = 0) -> !(h.blocks[p] = none)) -> runs(c_src_malloc_free.free(p, g), s, o) ->
+  abi.ovf_out(s, o) || (ex V. (V in x86_64_linux.Vm && mp.lf_res(c, h.A, h.blocks, p, s, V)) && o = ok(fn_update(s, "vm", V), empty))
+proof
+  assume hp hg hw hh hdep hin hnr htk hth htl heo hea hlv hr
+  have pu := apply(g.runs_univ, hr)
+  have hu: s in univ(1) by simp(pu)
+  have ths: gc.sound(s) by simp(hth)
+  step V r, ho hR from hr with hg using conj(hw, hu, ths, hp, hh, hdep, hin, hnr, htk, hth, htl, heo, hea, hlv)
+  show by disj({2}, ex_intro({V}, taut(hR, ho)))
+qed
