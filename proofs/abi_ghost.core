@@ -1204,3 +1204,189 @@ proof
   assume hs hh hr
   show := mp(all_elim(b, {s}, {h}, {o}), hs, hh, mp(all_elim(a, {s}, {o}), hs, hr))
 qed
+
+// ----------------------------------------------------------------------
+//  The program loaded: from the spec's precondition
+
+// The program loaded in the world's view of the memory (at a function's
+// entry), the stack protector's word writable there: loaded in the
+// machine's (the code's pages the world's, its bytes the C world's -- no
+// code byte the canary's, which is writable)
+theorem abi.loaded_of_view(vm, mem, objs, fs, sp, base, code, statics): fs in bits(64) ->
+  abi.world_pages(vm, mem) -> abi.world_matches(vm, vm, mem, abi.objs_at(objs, fs), fs, sp) -> abi.canary_ok(mem, fs) ->
+  abi.loaded(mem, base, code, statics) -> abi.loaded(vm, base, code, statics)
+proof
+  assume fsb hwp hwm hcn hl
+  have lc ls := expand(hl, abi.loaded)
+  have {top = top, lim = limit, bytes = bytes, nostk = nostk} := expand(hwm, abi.world_matches)
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have cv: abi.code_at(vm, base, code) proof
+    fix i
+    assume hi hil
+    let a := bits_of_int(64, int_add(base, i))
+    have ab: a in bits(64) by simp()
+    let p := int_div(a, x86_64_linux.PAGE)
+    have f1 nw ns bt := mp(all_elim(expand(lc, abi.code_at), {i}), hi, hil)
+    have mt mn _ := expand(expand(f1, x86_64_linux.fetchable, x86_64_linux.page_of), x86_64_linux.mapped)
+    have ps: p in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by sel(taut((p in omega by arith(ab, kp)), mt))
+    have wp := mp(all_elim(expand(hwp, abi.world_pages), {p}), ps)
+    have nsv: !abi.stack_page(vm, p) proof
+      assume st
+      have e0: mem.pages[p] = none by simp(wp, st)
+      show by taut(mn, e0)
+    qed
+    have pe: mem.pages[p] = vm.pages[p] by simp(wp, nsv)
+    have fv: x86_64_linux.fetchable(vm, a) by defs(taut(rewrite(pe, expand(expand(f1, x86_64_linux.fetchable, x86_64_linux.page_of), x86_64_linux.mapped))), x86_64_linux.fetchable, x86_64_linux.page_of, x86_64_linux.mapped)
+    have nwv: !x86_64_linux.can_access(vm, a, 1) by defs(taut(rewrite(pe, expand(expand(nw, x86_64_linux.can_access, x86_64_linux.page_of), x86_64_linux.mapped))), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.mapped)
+    have nsp: !abi.stack_page(vm, x86_64_linux.page_of(a)) by defs(nsv, x86_64_linux.page_of)
+    // its byte: the C world's (no canary byte: writable), so the world's
+    have nca: !(a in abi.canary(fs)) proof
+      assume w
+      have w1 w2 := (int_le(int_add(fs, 40), a) && int_lt(a, int_add(fs, 48)) by taut(set_select_def[s := omega, p := x0. int_le(int_add(fs, 40), x0) && int_lt(x0, int_add(fs, 48)), z := a], expand(w, abi.canary)))
+      let j := int_sub(int_sub(a, fs), 40)
+      have ja: int_add(int_add(fs, 40), j) = a by arith()
+      have jo: j in omega by arith(w1)
+      have jl: int_lt(j, 8) by arith(w2)
+      have crd cwr := expand(hcn, abi.canary_ok)
+      have r1 r2 := rewrite(ja, mp(all_elim(expand(crd, x86_64_linux.readable), {j}), jo, jl))
+      have cw _ := rewrite(ja, mp(all_elim(cwr, {j}), jo, jl))
+      have ca: x86_64_linux.can_access(mem, a, 1) by defs(simp(r1, r2, cw), x86_64_linux.can_access, x86_64_linux.page_of, x86_64_linux.hw_allows)
+      show by taut(nw, ca)
+    qed
+    have kn := mp(all_elim(nostk, {p}), ps, mn)
+    have mp1: x86_64_linux.mapped(mem, p) by defs(taut(mt, mn), x86_64_linux.mapped)
+    have ao: a in omega by arith(ab)
+    have dm: abi.in_domain(mem, abi.objs_at(objs, fs), a) by defs(simp(mp1, kn, nca, ao, keep(x86_64_linux.mapped)), abi.in_domain, abi.objs_at)
+    have be := mp(all_elim(bytes, {a}), ab, dm)
+    show by taut(fv, nwv, nsp, trans(be, bt))
+  qed
+  have sv: all x0. x0 in omega -> x0 in statics -> x86_64_linux.off_stack_space(vm, int_div(x0, x86_64_linux.PAGE), 1) proof
+    fix x
+    assume hx hs
+    have o1 := mp(all_elim(ls, {x}), hx, hs)
+    show by defs(rewrite(sym(lim), rewrite(sym(top), expand(o1, x86_64_linux.off_stack_space, x86_64_linux.stack_floor))), x86_64_linux.off_stack_space, x86_64_linux.stack_floor)
+  qed
+  show by defs(taut(cv, sv), abi.loaded)
+qed
+
+// The contract at a program's entry point: the bridge's, the spec raising
+// where the world's view has the program not loaded (or the stack
+// protector's word not writable) -- so the program need not be assumed
+// loaded (`implements2`, not `implements2_at`)
+theorem abi.bridge_implements_l: all G f low spec base code statics. abi.ghost_ok(G) ->
+  (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) -> tr.div_raises_g(G, spec) ->
+  (all args w. args in abi.ARGS -> w in rec_and(abi.World, G) -> !(abi.loaded(w.vm, base, code, statics) && abi.canary_ok(w.vm, w.fs_base)) ->
+     abi.spec_raises(rec_and(abi.World, G), w, spec, args)) ->
+  (all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
+    abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
+    runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) || (ex t. runs(low[args], abi.view(s, objs, mem), diverge(t)))) ->
+  abi.implements2(G, f, spec)
+proof
+  fix G f low spec base code statics
+  assume hg hrf hdg hnl hb
+  let ld(m) := abi.loaded(m.vm, base, code, statics)
+  have main: all x0. all x1. all x2. (x0 in abi.ARGS && x1 in set_type(omega)) && x2 in x86_64_linux.Vm -> (all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) ->
+      (ex h2. h2 in G && runs(abi.abi_function(G, f, spec, x0, x1, x2), union2(s, h), with_ghost(o, h2)))) proof
+    fix args objs mem
+    assume hAo
+    have hA hot hmv := hAo
+    show all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) -> (ex h2. h2 in G && runs(abi.abi_function(G, f, spec, args, objs, mem), union2(s, h), with_ghost(o, h2))) proof
+      fix s h o
+      assume hM hh hr
+      let S := union2(s, h)
+      let GOAL := ex h2. h2 in G && runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h2))
+      have hp := apply(abi.run_univ, hr)
+      have hsh := apply(abi.run_shape, hr)
+      have su: s in univ(1) by simp(hp)
+      have ho: abi.outcome(o) by simp(hsh)
+      have _ _ apS := apply(abi.ghost_parts, hg, hh, hM)
+      have a1 := mp(all_elim(apS, {"gpr"}), simp())
+      have a3 := mp(all_elim(apS, {"rip"}), simp())
+      have a8 := mp(all_elim(apS, {"vm"}), simp())
+      have hu _ _ := mp(all_elim(hg, {h}), hh)
+      have Su := mp(union2_univ[u := 1, a := s, b := h], su, hu)
+      // abi_function's preconditions failing: anything (h kept)
+      have pu0 ou2 := apply(abi.wg_univ, hp, hu, ho)
+      have wu0: with_ghost(o, h) in univ(1) by simp(pu0)
+      have pu: pair(S, with_ghost(o, h)) in univ(1) by simp(Su, wu0)
+      have pre: !(S.rip = f && abi.entry_ok(S, args)) -> runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) proof
+        assume hn
+        show by simp(pu, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at, with_ghost))
+      qed
+      have pre2: !(all x. x in omega -> x in objs -> (int_le(abi.sp(S), x) && abi.stack_page(S.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(S.vm, bits_of_int(64, x), 1)) -> runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) proof
+        assume hn
+        show by simp(pu, hn, keep(abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at, with_ghost))
+      qed
+      have pre3: !abi.view_ok(S, objs, mem) -> runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) proof
+        assume hn
+        show by simp(pu, hn, keep(abi.world_pages, abi.world_matches, abi.entry_ok, abi.world.get, abi.world.set, abi.abi_call, abi.abi_restore, abi.abi_set_result, abi.spec_raises, abi.overflow_ok, abi.overflow_at, with_ghost))
+      qed
+      // loaded: the bridge's run
+      have mc: ld(s) -> s.rip = f && abi.entry_ok(s, args) ->
+          (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) -> GOAL proof
+        assume hc hy hb2 hw
+        have hm := mp(all_elim(hb, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, hc, hy.1, hy.2, hb2, hw, hr)
+        show := apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, mp(all_elim(hrf, {args}), hA), hdg, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
+      qed
+      // not loaded: nor in the world's view, so the spec raises
+      have nl: !ld(s) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) ->
+          abi.view_ok(s, objs, mem) -> GOAL proof
+        assume hn hb2 hw
+        have _ x7e _ hwmS hobS hsvS hspS _ hcoS := apply(abi.ghost_entry, hg, hh, hM, su, hot, hmv, hw, hb2)
+        have ou := apply(abi.objs_univ, hot)
+        have hmu := apply(x86.vm_univ, hmv)
+        have vu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, hmu, mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), ou))
+        have vW := apply(abi.world_typed, hM, hot, hmv, vu)
+        have _ _ apW := apply(abi.ghost_parts_w, hg, hh, vW)
+        have wv := mp(all_elim(apW, {"vm"}), simp())
+        have wf := mp(all_elim(apW, {"fs_base"}), simp())
+        let W := union2(abi.view(s, objs, mem), h)
+        have wvm: W.vm = mem by simp(wv)
+        have wfs: W.fs_base = s.fs_base by simp(wf)
+        have fsb: s.fs_base in bits(64) by simp(hM)
+        have wp wm := hw
+        have nlw: !(abi.loaded(W.vm, base, code, statics) && abi.canary_ok(W.vm, W.fs_base)) proof
+          assume w
+          have l1 c1 := rewrite(wfs, rewrite(wvm, w))
+          show by taut(hn, apply(abi.loaded_of_view[vm := s.vm, mem := mem, objs := objs, fs := s.fs_base, sp := abi.sp(s), base := base, code := code, statics := statics], fsb, wp, wm, c1, l1))
+        qed
+        have WG := apply(rec_and_intro, vW, hh)
+        have hra := mp(all_elim(hnl, {args}, {W}), hA, WG, nlw)
+        have hra2 := rewrite(sym(x7e), hra)
+        have r := apply(abi.ub_intro_g, {G}, {f}, pu, ou2, ou, hmu, hsvS, hspS, hwmS, hcoS, hra2)
+        show by ex_intro({h}, taut(hh, r))
+      qed
+      // (the preconditions as of S: s's)
+      have a2 := mp(all_elim(apS, {"xmm"}), simp())
+      have a4 := mp(all_elim(apS, {"flags"}), simp())
+      have a5 := mp(all_elim(apS, {"cpu"}), simp())
+      have a6 := mp(all_elim(apS, {"fs_base"}), simp())
+      have a7 := mp(all_elim(apS, {"gs_base"}), simp())
+      have a9 := mp(all_elim(apS, {"os"}), simp())
+      have eS1: (S.rip = f && abi.entry_ok(S, args)) <-> (s.rip = f && abi.entry_ok(s, args)) by defs(simp(a1, a2, a3, a4, a5, a6, a7, a8, a9), abi.entry_ok)
+      have eS2: (all x. x in omega -> x in objs -> (int_le(abi.sp(S), x) && abi.stack_page(S.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(S.vm, bits_of_int(64, x), 1)) <->
+          (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) by simp(a1, a8)
+      have eS3: abi.view_ok(S, objs, mem) <-> abi.view_ok(s, objs, mem) by simp(a1, a8, a6)
+      have pf: !(S.rip = f && abi.entry_ok(S, args)) || !(all x. x in omega -> x in objs -> (int_le(abi.sp(S), x) && abi.stack_page(S.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(S.vm, bits_of_int(64, x), 1)) ||
+          !abi.view_ok(S, objs, mem) -> GOAL proof
+        assume hn
+        have r: runs(abi.abi_function(G, f, spec, args, objs, mem), S, with_ghost(o, h)) by taut(hn, pre, pre2, pre3)
+        show by ex_intro({h}, taut(hh, r))
+      qed
+      show by taut(eS1, eS2, eS3, nl, pf, mc)
+    qed
+  qed
+  show by defs(main, abi.implements2, refines_ghost)
+qed
+
+// ... from C1 (`tr.implements_at`)
+theorem tr.implements_abi_l: all G f low spec base code statics. abi.ghost_ok(G) -> tr.div_raises_g(G, spec) -> tr.implements_at(f, low, base, code, statics) ->
+  (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) ->
+  (all args w. args in abi.ARGS -> w in rec_and(abi.World, G) -> !(abi.loaded(w.vm, base, code, statics) && abi.canary_ok(w.vm, w.fs_base)) ->
+     abi.spec_raises(rec_and(abi.World, G), w, spec, args)) ->
+  abi.implements2(G, f, spec)
+proof
+  fix G f low spec base code statics
+  assume hg hdg hi hrf hnl
+  show := apply(abi.bridge_implements_l, hg, hrf, hdg, hnl, apply(tr.implements_matches_d, hi))
+qed
