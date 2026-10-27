@@ -568,12 +568,13 @@ pub trait Prover {
         Err(KernelError("`contract`: this checker has no contract procedure".into()))
     }
 
-    /// `steps NAME "ELF" "SHA256" "SYMBOL .."`: the decode facts of the
-    /// functions of a binary (the file of that hash), proven by a procedure
-    /// (not trusted either): the definitions it made (in order, by name,
-    /// with no sequent) and the theorems
-    fn steps(&mut self, _env: &mut Env, _elf: &str, _sha: &str, _fns: &[String]) -> KResult<Vec<(String, Option<Seq>)>> {
-        Err(KernelError("`steps`: this checker has no decoder".into()))
+    /// `steps NAME "ELF" "SHA256" "SYMBOL .."` (the decode facts of the
+    /// functions of a binary, the file of that hash) or `text ..` (its
+    /// program text, those functions' code pieces of it), proven by a
+    /// procedure (not trusted either): the definitions it made (in order,
+    /// by name, with no sequent) and the theorems
+    fn binary(&mut self, _env: &mut Env, kw: &str, _elf: &str, _sha: &str, _fns: &[String]) -> KResult<Vec<(String, Option<Seq>)>> {
+        Err(KernelError(format!("`{}`: this checker reads no binaries", kw)))
     }
 }
 
@@ -908,22 +909,24 @@ fn load_mode(
             // steps NAME "ELF" "SHA256" "SYMBOL ..": the functions' decode
             // facts (their code `F.code`, the step theorems `x86.step_*`,
             // `F.at_*`), made by the checker's procedure from the binary of
-            // that hash
-            "steps" => {
+            // that hash; text NAME "ELF" "SHA256" "SYMBOL ..": the program
+            // text (`text.code`, the functions' code and the bytes between
+            // them) and each function's code a piece of it (`F.in_text`)
+            "steps" | "text" => {
                 let mut strs = Vec::new();
                 for _ in 0..3 {
                     match p.bump()? {
                         Tok::Str(s) => strs.push(String::from_utf8(s).map_err(|_| ctx(KernelError("not UTF-8".into())))?),
-                        t => return p.error(&format!("`steps NAME \"ELF\" \"SHA256\" \"SYMBOL ..\"`: a string expected, found {:?}", t)),
+                        t => return p.error(&format!("`{} NAME \"ELF\" \"SHA256\" \"SYMBOL ..\"`: a string expected, found {:?}", kw, t)),
                     }
                 }
                 let fns: Vec<String> = strs[2].split_whitespace().map(|s| s.to_string()).collect();
                 let Some(pr) = prover.as_deref_mut() else {
-                    return Err(ctx(KernelError("`steps` needs a proof checker".into())));
+                    return Err(ctx(KernelError(format!("`{}` needs a proof checker", kw))));
                 };
                 let mark = p.env.local_mark();
                 p.env.begin_locals();
-                let r = pr.steps(p.env, &strs[0], &strs[1], &fns).and_then(|ths| {
+                let r = pr.binary(p.env, &kw, &strs[0], &strs[1], &fns).and_then(|ths| {
                     ths.into_iter().map(|(n, sq)| Ok((n, sq.map(|s| Seq::globalize(p.env, &s)).transpose()?))).collect::<KResult<Vec<_>>>()
                 });
                 let kept = p.env.locals_kept(&mark);

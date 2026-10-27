@@ -161,7 +161,11 @@ For a function F, two halves:
     proves `x86.step_*` (a step there runs that instruction) and, per
     instruction, `F.at_*` (from F's code `F.code` loaded, its fetch
     succeeds), through the kernel, no proof text. The instruction
-    boundaries come from the untrusted interpreter.
+    boundaries come from the untrusted interpreter. A `text` line
+    (build/chain/text.core) the same way: the program text `text.code`
+    (the functions' code in address order, the bytes between them) and
+    `F.in_text` (F's code a piece of it, where a contract assumes the
+    text loaded).
   - C1 is against the readable CFG (`slc gimple --readable --cfg`;
     `slc/cli/src/c1/cfg.rs`, `proofs/translate_cfg.core`): each block is
     walked once from its cut point, its claim proven for every world and
@@ -245,7 +249,7 @@ slc elab PATH.. -o OUT.core                 elaborate to core definitions
 slc kernel-check [--no-cache] FILE.core..   check core files and their proofs
 slc claim malloc --elf ELF -o OUT.core      state the claim
 slc gimple --readable [--cfg] ...           GIMPLE dump to readable GIMPLE
-slc steps ELF F.. -o OUT.core [--text T]    the `steps` line (decode facts of F's instructions, made in the checker); the program text
+slc steps ELF F.. -o OUT.core [--text T]    the `steps` line (decode facts of F's instructions) and the `text` line (the program text), both made in the checker
 slc decode / coverage / cputest / heapcheck model and invariant testing
 ```
 

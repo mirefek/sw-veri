@@ -991,7 +991,7 @@ impl syntax::Prover for Checker {
         contract::contract(env, fname, spec, by, c1, call, hints).map_err(sl_kernel::KernelError)
     }
 
-    fn steps(&mut self, env: &mut Env, elf: &str, sha: &str, fns: &[String]) -> sl_kernel::KResult<Vec<(String, Option<Seq>)>> {
-        crate::steps::directive(env, elf, sha, fns).map_err(sl_kernel::KernelError)
+    fn binary(&mut self, env: &mut Env, kw: &str, elf: &str, sha: &str, fns: &[String]) -> sl_kernel::KResult<Vec<(String, Option<Seq>)>> {
+        crate::steps::directive(env, kw, elf, sha, fns).map_err(sl_kernel::KernelError)
     }
 }
