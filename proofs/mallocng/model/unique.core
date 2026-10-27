@@ -175,6 +175,182 @@ proof
   show := mp(ext_example[a := l1, b := l2, t := omega], h1, h2, le, el)
 qed
 
+// (every byte of the whole memory's view)
+theorem mp.u_all(a): a in omega -> a in mallocng.all_bytes
+proof
+  assume h
+  show by defs(simp(h), mallocng.all_bytes)
+qed
+
+// a cyclic list in a view whose elements' link words it holds: cyclic in
+// the whole memory's view
+theorem mp.u_cyc_full(vm, F, h, l): l in list_type(omega) ->
+  (all i. i in omega -> int_lt(i, seq_len(l)) -> all a. a in omega -> int_le(l[i], a) -> int_lt(a, int_add(l[i], 16)) -> a in F) ->
+  mallocng.cyclic(mallocng.mview(vm, F), h, l) -> mallocng.cyclic(mallocng.mview(vm, mallocng.all_bytes), h, l)
+proof
+  assume hl hF hc
+  have {f = first, d = distinct, k = links} := expand(hc, mallocng.cyclic)
+  have k2: all i. i in omega -> int_lt(i, seq_len(l)) ->
+      mallocng.rd(mallocng.mview(vm, mallocng.all_bytes), int_add(l[i], 8), 8) = l[int_mod(int_add(i, 1), seq_len(l))] &&
+      mallocng.rd(mallocng.mview(vm, mallocng.all_bytes), l[i], 8) = l[int_mod(int_sub(int_add(i, seq_len(l)), 1), seq_len(l))] proof
+    fix i
+    assume hi hil
+    have x1 x2 := mp(all_elim(k, {i}), hi, hil)
+    have li := mp(at_type[l := l, t := omega, i := i], hl, hi, hil)
+    have inF := mp(all_elim(hF, {i}), hi, hil)
+    have in8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(l[i], 8), j) in F proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(inF, {int_add(int_add(l[i], 8), j)}), arith(li, hj), arith(li, hj), arith(li, hj, hjl))
+    qed
+    have in0: all j. j in omega -> int_lt(j, 8) -> int_add(l[i], j) in F proof
+      fix j
+      assume hj hjl
+      show := mp(all_elim(inF, {int_add(l[i], j)}), arith(li, hj), arith(li, hj), arith(li, hj, hjl))
+    qed
+    have al8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(l[i], 8), j) in mallocng.all_bytes proof
+      fix j
+      assume hj hjl
+      show := mp(mp.u_all[a := int_add(int_add(l[i], 8), j)], arith(li, hj))
+    qed
+    have al0: all j. j in omega -> int_lt(j, 8) -> int_add(l[i], j) in mallocng.all_bytes proof
+      fix j
+      assume hj hjl
+      show := mp(mp.u_all[a := int_add(l[i], j)], arith(li, hj))
+    qed
+    have r8 := mp(mp.u_rd2[vm := vm, F := F, G := mallocng.all_bytes, a := int_add(l[i], 8), n := 8], arith(li), simp(), simp(), in8, al8)
+    have r0 := mp(mp.u_rd2[vm := vm, F := F, G := mallocng.all_bytes, a := l[i], n := 8], li, simp(), simp(), in0, al0)
+    show by simp(x1, x2, r8, r0)
+  qed
+  show by defs(taut(f, d, k2), mallocng.cyclic)
+qed
+
+// a list of meta slots, cyclic in the view of a state that holds, nothing
+// taken: cyclic in the whole memory's view, its elements nonzero
+theorem mp.u_meta_list(c, A, vm, b, h, L): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
+  seq_len(A.taken) = 0 -> L in list_type(omega) -> (all i. i in omega -> int_lt(i, seq_len(L)) -> mallocng.meta_slot(A, L[i])) ->
+  mallocng.cyclic(mallocng.mview(vm, mallocng.held(c, A, b)), h, L) ->
+  mallocng.cyclic(mallocng.mview(vm, mallocng.all_bytes), h, L) && (all i. i in omega -> int_lt(i, seq_len(L)) -> !(L[i] = 0))
+proof
+  assume hc hu ha hh ht hl hm hcy
+  have nt: all g. mp.untaken(A, g) proof
+    fix g
+    fix i
+    assume hi hil
+    show by arith(hi, hil, ht)
+  qed
+  have hF: all i. i in omega -> int_lt(i, seq_len(L)) -> all a. a in omega -> int_le(L[i], a) -> int_lt(a, int_add(L[i], 16)) -> a in mallocng.held(c, A, b) proof
+    fix i
+    assume hi hil
+    fix a
+    assume hao h1 h2
+    have {acc = acc} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := L[i]], hc, hu, ha, hh, mp(all_elim(hm, {i}), hi, hil), all_elim(nt, {L[i]}))
+    have r := mp(all_elim(acc, {a}), hao, h1, arith(h2))
+    show by taut(r)
+  qed
+  have full := apply(mp.u_cyc_full[vm := vm, F := mallocng.held(c, A, b), h := h, l := L], hl, hF, hcy)
+  have nz: all i. i in omega -> int_lt(i, seq_len(L)) -> !(L[i] = 0) proof
+    fix i
+    assume hi hil
+    have {low = low} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := L[i]], hc, hu, ha, hh, mp(all_elim(hm, {i}), hi, hil), all_elim(nt, {L[i]}))
+    have li := mp(at_type[l := L, t := omega, i := i], hl, hi, hil)
+    show by arith(low, li)
+  qed
+  show by taut(full, nz)
+qed
+
+// two states' lists of meta slots, cyclic in their views from the same
+// context word: equal
+theorem mp.u_ctx_list(c, A, B, vm, b, off, LA, LB): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) -> seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  off in omega -> int_le(16, off) -> int_le(int_add(off, 8), 464) ->
+  LA in list_type(omega) -> LB in list_type(omega) ->
+  (all i. i in omega -> int_lt(i, seq_len(LA)) -> mallocng.meta_slot(A, LA[i])) ->
+  (all i. i in omega -> int_lt(i, seq_len(LB)) -> mallocng.meta_slot(B, LB[i])) ->
+  mallocng.cyclic(mallocng.mview(vm, mallocng.held(c, A, b)), mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), off), LA) ->
+  mallocng.cyclic(mallocng.mview(vm, mallocng.held(c, B, b)), mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, B, b)), off), LB) ->
+  LA = LB
+proof
+  assume hc hua ha hub hb hha hhb hta htb ho h16 h464 la lb ma mb ca cb
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have ew := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := off, n := 8], hc, hua, ha, hub, hb, hha, hhb, ho, simp(),
+    arith(h464, ks), apply(mp.u_nofree[c := c, off := off, n := 8], hc, ho, simp(), arith(h16, h464)))
+  have hw: mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, A, b)), off) = mallocng.ctx_word(c, mallocng.mview(vm, mallocng.held(c, B, b)), off)
+    by defs(ew, mallocng.ctx_word)
+  have fa za := apply(mp.u_meta_list[c := c, A := A, vm := vm, b := b, L := LA], hc, hua, ha, hha, hta, la, ma, ca)
+  have fb zb := apply(mp.u_meta_list[c := c, A := B, vm := vm, b := b, L := LB], hc, hub, hb, hhb, htb, lb, mb, cb)
+  show := apply(mp.u_cyclic, la, lb, za, zb, rewrite(hw, fa), fb)
+qed
+
+// (a state's free metas and active lists: lists of meta slots)
+theorem mp.u_slots_of(c, A, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
+  (all i. i in omega -> int_lt(i, seq_len(A.free_metas)) -> mallocng.meta_slot(A, A.free_metas[i])) &&
+  (all sc i. sc in omega -> int_lt(sc, 48) -> i in omega -> int_lt(i, seq_len(A.active[sc])) -> mallocng.meta_slot(A, A.active[sc][i]))
+proof
+  assume hc hu ha hh
+  have {H = inv} := expand(hh, mallocng.holds_m)
+  have {part = part, act = active} := expand(H, mallocng.holds)
+  have {fs = free_slots} := expand(part, mallocng.metas_partition)
+  have f: all i. i in omega -> int_lt(i, seq_len(A.free_metas)) -> mallocng.meta_slot(A, A.free_metas[i]) proof
+    fix i
+    assume hi hil
+    have r := mp(all_elim(fs, {i}), hi, hil)
+    show by taut(r)
+  qed
+  have a: all sc i. sc in omega -> int_lt(sc, 48) -> i in omega -> int_lt(i, seq_len(A.active[sc])) -> mallocng.meta_slot(A, A.active[sc][i]) proof
+    fix sc i
+    assume hs hsl hi hil
+    have r := mp(all_elim(expand(act, mallocng.active_ok), {sc}, {i}), conj(hs, hi), conj(hsl, hil))
+    show := apply(mp.used_slot[g := A.active[sc][i]], H, taut(r))
+  qed
+  show by taut(f, a)
+qed
+
+theorem mp.u_lists(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) -> seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  A.free_metas = B.free_metas && (all sc. sc in omega -> int_lt(sc, 48) -> A.active[sc] = B.active[sc])
+proof
+  assume hc hua ha hub hb hha hhb hta htb
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have {cA = ctx} := expand(HA, mallocng.holds)
+  have {cB = ctx} := expand(HB, mallocng.holds)
+  have {fA = free_metas, aA = active} := expand(cA, mallocng.ctx_ok)
+  have {fB = free_metas, aB = active} := expand(cB, mallocng.ctx_ok)
+  have sfA saA := apply(mp.u_slots_of[c := c, A := A, vm := vm, b := b], hc, hua, ha, hha)
+  have sfB saB := apply(mp.u_slots_of[c := c, A := B, vm := vm, b := b], hc, hub, hb, hhb)
+  have ks: mallocng.C_FREE_META = 16 && mallocng.C_ACTIVE = 80 by defs(simp(), mallocng.C_FREE_META, mallocng.C_ACTIVE)
+  have lfa: A.free_metas in list_type(omega) by simp(ha)
+  have lfb: B.free_metas in list_type(omega) by simp(hb)
+  have fm := apply(mp.u_ctx_list[c := c, A := A, B := B, vm := vm, b := b, off := mallocng.C_FREE_META, LA := A.free_metas, LB := B.free_metas],
+    hc, hua, ha, hub, hb, hha, hhb, hta, htb, simp(ks), simp(ks), simp(ks), lfa, lfb, sfA, sfB, fA, fB)
+  have ac: all sc. sc in omega -> int_lt(sc, 48) -> A.active[sc] = B.active[sc] proof
+    fix sc
+    assume hs hsl
+    have laa: A.active in list_type(list_type(omega)) by simp(ha)
+    have lab: B.active in list_type(list_type(omega)) by simp(hb)
+    have {nA = nactive} := expand(cA, mallocng.ctx_ok)
+    have {nB = nactive} := expand(cB, mallocng.ctx_ok)
+    have la := mp(at_type[l := A.active, t := list_type(omega), i := sc], laa, hs, (int_lt(sc, seq_len(A.active)) by arith(hsl, nA)))
+    have lb := mp(at_type[l := B.active, t := list_type(omega), i := sc], lab, hs, (int_lt(sc, seq_len(B.active)) by arith(hsl, nB)))
+    have ea := mp(all_elim(aA, {sc}), hs, hsl)
+    have eb := mp(all_elim(aB, {sc}), hs, hsl)
+    have ma: all i. i in omega -> int_lt(i, seq_len(A.active[sc])) -> mallocng.meta_slot(A, A.active[sc][i]) proof
+      fix i
+      assume hi hil
+      show := mp(all_elim(saA, {sc}, {i}), hs, hsl, hi, hil)
+    qed
+    have mb: all i. i in omega -> int_lt(i, seq_len(B.active[sc])) -> mallocng.meta_slot(B, B.active[sc][i]) proof
+      fix i
+      assume hi hil
+      show := mp(all_elim(saB, {sc}, {i}), hs, hsl, hi, hil)
+    qed
+    show := apply(mp.u_ctx_list[c := c, A := A, B := B, vm := vm, b := b, off := int_add(mallocng.C_ACTIVE, int_mul(8, sc)), LA := A.active[sc], LB := B.active[sc]],
+      hc, hua, ha, hub, hb, hha, hhb, hta, htb, arith(ks, hs), arith(ks, hs), arith(ks, hs, hsl), la, lb, ma, mb, ea, eb)
+  qed
+  show by taut(fm, ac)
+qed
+
 // ----------------------------------------------------------------------
 //  The context's fields
 
