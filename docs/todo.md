@@ -46,24 +46,20 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   forms (`P.linked`, as cfg.core's for malloc.c's) where free.c's
   callers need them.
 
-Then the top level for malloc, free and calloc together
-(`musl.impl_malloc` .., proofs/mallocng/claim.core):
-- Purpose spec to the malloc layer's (`malloc_impl_spec` to
-  `malloc.malloc`): at entry rep, `world_ok` and errno_ok give the
-  internal precondition (the separation clauses, shown_in from the
-  canonical C domain); the return's state rep again, owned by
-  `mallocng.abs_unique`. malloc's outcome still owes the block 16-aligned
-  (enframe's offset from the slot's start) and the place of a block of
-  size 0 (`extent`: its byte p, the slot's) -- `mp.mi_blk`.
-- The machine level: `tr.implements_abi_g` takes a spec matching every
-  outcome of the GIMPLE function, its overflows too; malloc.sl's specs
-  have none (the ABI's own branch covers an overflow with the I/O events
-  as at the call, and the allocator makes no read or write call). A
-  lemma: a spec plus such overflows implements as the spec; then
-  `implements2_at` to `implements` by `world_ok`'s `loaded`.
+Then the top level for free and calloc (malloc's is done: `mp.top_malloc`,
+proofs/mallocng/top.core -- the `malloc` symbol's machine code implements
+`malloc.malloc_fun` for any configuration `mp.mi_cfg(c)`):
+- free the same way: its machine level needs the `nontrivial_free` <->
+  `free_group` recursion linked (step-indexed, as their C2 proofs);
+  then `libc_free_spec` to `malloc.free` by the pieces malloc's uses
+  (`mp.top_step` with the block as `extra`, `mp.top_post`'s shape,
+  `tr.implements_abi_l`).
 - The claim joined with the chain: the claim file and the chain's
   `@gimple` both define the layers; claim.core's `musl.cfg` is stale (the
-  Cfg's fields) and `mallocng.law_frame` now takes `c in Cfg`.
+  Cfg's fields), its `malloc_fun` takes six parameters now (the program's
+  base, code, statics), and `mallocng.law_frame` takes `c in Cfg`. Then
+  `musl.impl_malloc` from `mp.top_malloc` (`mp.mi_cfg(musl.cfg)`, errno's
+  offset 0x34, the binary's base, code and statics).
 - The string instructions in general (layers/musl_asm.sl): `rep movs` of
   any element size (`x86i.rep_movsq` is for 8: its iteration and facts
   with the size a parameter), `rep stos` (memset's: no overlap question);
