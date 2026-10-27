@@ -1347,7 +1347,7 @@ qed
 // a nested group's meta the word at its start
 theorem mp.u_slot_one(c, A, vm, b, g, i): A in mallocng.Abs -> b in fn_space(bits(64), option(omega)) ->
   mallocng.holds_m(c, A, vm, b) -> mallocng.is_used(A, g) -> g in omega -> i in omega -> int_le(i, A.metas[g].last_idx) ->
-  ss: mallocng.slot_start(A.metas[g], i) in omega &&
+  ss: mallocng.slot_start(A.metas[g], i) in omega && s16: int_le(16, mallocng.slot_start(A.metas[g], i)) &&
   blk: (fst(A.slots[g][i]) = 1 -> snd(A.slots[g][i]) = mp.fstart(mp.MV(c, A, vm, b), A.metas[g], i) &&
     int_le(int_div(mallocng.b8(mp.MV(c, A, vm, b), int_sub(snd(A.slots[g][i]), 3)), 32), 5) &&
     int_le(mallocng.slot_start(A.metas[g], i), snd(A.slots[g][i])) && int_le(snd(A.slots[g][i]), mallocng.slot_end(A.metas[g], i))) &&
@@ -1420,7 +1420,147 @@ proof
     have p8: int_le(int_add(A.metas[h].mem, 8), mallocng.slot_end(V, i)) by arith(fi, ks, mlh, soh, lho)
     show by taut(pe, code, rh, st, p8)
   qed
-  show by taut(sso, b1, b2)
+  show by taut(sso, s16, b1, b2)
+qed
+
+// slot i of a group used in two states with the same metas: the same
+theorem mp.u_slot(c, A, B, vm, b, g, i): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  b in fn_space(bits(64), option(omega)) -> mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) ->
+  mallocng.no_reserved(A) -> mallocng.no_reserved(B) -> seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  mallocng.is_used(A, g) -> mallocng.is_used(B, g) -> A.metas = B.metas -> g in omega -> i in omega -> int_le(i, A.metas[g].last_idx) ->
+  A.slots[g][i] = B.slots[g][i]
+proof
+  assume hc hua ha hub hb hbt hha hhb hra hrb hta htb uA uB hm hg hi hil
+  let V := A.metas[g]
+  let MA := mp.MV(c, A, vm, b)
+  let MB := mp.MV(c, B, vm, b)
+  let uAs := A.slots[g][i]
+  let uBs := B.slots[g][i]
+  have eV: B.metas[g] = V by simp(hm)
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have {oA = used} := expand(HA, mallocng.holds)
+  have {oB = used} := expand(HB, mallocng.holds)
+  have okA := apply(mp.used_group[g := g], oA, uA)
+  have okB := apply(mp.used_group[g := g], oB, uB)
+  have {nsA = nslots, mkA = masks, mimA = mim} := expand(okA, mallocng.group_ok)
+  have {nsB = nslots, mkB = masks} := expand(okB, mallocng.group_ok)
+  have {l32 = last} := expand(mimA, mallocng.meta_in_memory)
+  have mv := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(ha), hg)
+  have lo: V.last_idx in omega by simp(expand(mv, mallocng.MetaV))
+  have ilA: int_lt(i, seq_len(A.slots[g])) by arith(nsA, hil, hi, lo)
+  have ilB: int_lt(i, seq_len(B.slots[g])) by arith(rewrite(eV, nsB), hil, hi, lo)
+  // unused in one exactly when in the other: the masks' bits (the same metas)
+  have mA := mp(all_elim(expand(mkA, mallocng.masks_ok), {i}), hi, arith(hil, l32, hi))
+  have mB := mp(all_elim(expand(mkB, mallocng.masks_ok), {i}), hi, arith(hil, l32, hi))
+  have _ _ ua _ := mA
+  have _ _ ub _ := mB
+  have uiA _ := mp(ua, hil)
+  have uiB _ := mp(ub, (int_le(i, B.metas[g].last_idx) by simp(eV, hil)))
+  have bq: int_lt(0, int_add(mallocng.bit(B.metas[g].avail, i), mallocng.bit(B.metas[g].freed, i))) <->
+      int_lt(0, int_add(mallocng.bit(V.avail, i), mallocng.bit(V.freed, i))) by simp(eV)
+  have un: uAs = tag(0, empty) <-> uBs = tag(0, empty) by taut(uiA, uiB, bq)
+  // reserved in neither
+  have rA := mp(all_elim(expand(hra, mallocng.no_reserved), {g}, {i}), conj(hg, hi), ilA)
+  have rB := mp(all_elim(expand(hrb, mallocng.no_reserved), {g}, {i}), conj(hg, hi), ilB)
+  // the two states' ends of what slot i holds
+  have {ssA = ss, s16 = s16, bA = blk, nA = nst} := apply(mp.u_slot_one[c := c, A := A, vm := vm, b := b, g := g, i := i], ha, hbt, hha, uA, hg, hi, hil)
+  have {bB = blk, nB = nst} := apply(mp.u_slot_one[c := c, A := B, vm := vm, b := b, g := g, i := i], hb, hbt, hhb, uB, hg, hi, rewrite(sym(eV), hil))
+  let S := mallocng.slot_start(V, i)
+  have sge := apply(mp.stride_ge[A := A, M := MA, b := b, g := g], ha, hg, okA)
+  have ks: mallocng.IB = 4 by defs(simp(), mallocng.IB)
+  have ee: mallocng.slot_end(V, i) = int_sub(int_add(S, mallocng.stride(V)), 4) by defs(simp(ks), mallocng.slot_end)
+  // bytes of slot i (header to end): in both states' ranges
+  have inb: all a. a in omega -> int_le(int_sub(S, 3), a) -> int_le(a, mallocng.slot_end(V, i)) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) && mallocng.in_ranges(a, mallocng.fp_ranges(c, B)) proof
+    fix a
+    assume hao h1 h2
+    have gr := apply(mp.u_slot_bytes[A := A, M := MA, b := b, g := g, i := i, a := a], ha, hg, okA, hi, hil, hao, h1, h2)
+    have fa := apply(mp.u_group_fp[c := c, A := A, g := g, a := a], hc, hua, ha, uA, gr)
+    have fb := apply(mp.u_group_fp[c := c, A := B, g := g, a := a], hc, hub, hb, uB, rewrite(sym(eV), gr))
+    show by taut(fa, fb)
+  qed
+  // the header's start the same in both views
+  have s3 := apply(mp.u_b8_same[c := c, A := A, B := B, vm := vm, b := b, a := int_sub(S, 3)], hra, hrb, hta, htb, arith(ssA, s16,sge),
+    taut(mp(all_elim(inb, {int_sub(S, 3)}), arith(ssA, s16,sge), arith(ssA), arith(ee, ssA, sge))),
+    taut(mp(all_elim(inb, {int_sub(S, 3)}), arith(ssA, s16,sge), arith(ssA), arith(ee, ssA, sge))))
+  have w2: all j. j in omega -> int_lt(j, 2) -> int_add(int_sub(S, 2), j) in omega &&
+      mallocng.in_ranges(int_add(int_sub(S, 2), j), mallocng.fp_ranges(c, A)) && mallocng.in_ranges(int_add(int_sub(S, 2), j), mallocng.fp_ranges(c, B)) proof
+    fix j
+    assume hj hjl
+    have r := mp(all_elim(inb, {int_add(int_sub(S, 2), j)}), arith(ssA, s16,sge, hj), arith(ssA, s16,hj), arith(ee, ssA, sge, hj, hjl))
+    show by taut((int_add(int_sub(S, 2), j) in omega by arith(ssA, s16,sge, hj)), r)
+  qed
+  have s2 := apply(mp.u_rd_same[c := c, A := A, B := B, vm := vm, b := b, a := int_sub(S, 2), n := 2], hra, hrb, hta, htb, simp(), w2)
+  have pe: mp.fstart(MA, V, i) = mp.fstart(MB, V, i) by simp(s3, s2)
+  let P := mp.fstart(MA, V, i)
+  // the cases
+  have cA := apply(mp.u_use_cases, mp(at_type[l := A.slots[g], t := mallocng.Use, i := i],
+    mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := g], simp(ha), hg), hi, ilA))
+  have cB := apply(mp.u_use_cases, mp(at_type[l := B.slots[g], t := mallocng.Use, i := i],
+    mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := B.slots, x := g], simp(hb), hg), hi, ilB))
+  // (the size code at P - 3: the same in both views)
+  have code: int_le(S, P) -> int_le(P, mallocng.slot_end(V, i)) ->
+      mallocng.b8(MA, int_sub(P, 3)) = mallocng.b8(MB, int_sub(P, 3)) proof
+    assume p1 p2
+    have r := mp(all_elim(inb, {int_sub(P, 3)}), arith(ssA, s16,sge, p1), arith(p1), arith(p2))
+    show := apply(mp.u_b8_same[c := c, A := A, B := B, vm := vm, b := b, a := int_sub(P, 3)], hra, hrb, hta, htb, arith(ssA, s16,sge, p1), taut(r), taut(r))
+  qed
+  have zero: uAs = tag(0, empty) -> uAs = uBs proof
+    assume h
+    have hb: uBs = tag(0, empty) by taut(un, h)
+    show by simp(h, hb)
+  qed
+  have one: fst(uAs) = 1 -> uAs = uBs proof
+    assume f1
+    have pa ca p1 p2 := mp(bA, f1)
+    have cs := mp(code, rewrite(pa, p1), rewrite(pa, p2))
+    // B's: a block too (a nested group's code 6)
+    have nB0: !(uBs = tag(0, empty)) by taut(un, mp(mp.tag_ne[u := uAs, k := 1, x := 0, v := empty], f1, simp()))
+    have g2: fst(uBs) = 2 -> false proof
+      assume f2
+      have qb cb _ _ _ := mp(rewrite(eV, nB), f2)
+      have e := trans(qb, sym(pe))
+      show by arith(rewrite(e, cb), rewrite(pa, ca), cs)
+    qed
+    have f1B: fst(uBs) = 1 by taut(cB, nB0, rB, g2)
+    have pb _ _ _ := mp(rewrite(eV, bB), f1B)
+    have ea := mp(mp.use_eta[u := uAs], mp(at_type[l := A.slots[g], t := mallocng.Use, i := i],
+      mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := g], simp(ha), hg), hi, ilA))
+    have eb := mp(mp.use_eta[u := uBs], mp(at_type[l := B.slots[g], t := mallocng.Use, i := i],
+      mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := B.slots, x := g], simp(hb), hg), hi, ilB))
+    show by simp(ea, eb, f1, f1B, pa, pb, pe)
+  qed
+  have two: fst(uAs) = 2 -> uAs = uBs proof
+    assume f2
+    have qa ca ra p1 p8 := mp(nA, f2)
+    have nB0: !(uBs = tag(0, empty)) by taut(un, mp(mp.tag_ne[u := uAs, k := 2, x := 0, v := empty], f2, simp()))
+    have cs := mp(code, rewrite(qa, p1), (int_le(P, mallocng.slot_end(V, i)) by arith(rewrite(qa, p8))))
+    have g1: fst(uBs) = 1 -> false proof
+      assume f1
+      have pb cb _ _ := mp(rewrite(eV, bB), f1)
+      have e := trans(pb, sym(pe))
+      show by arith(rewrite(e, cb), rewrite(qa, ca), cs)
+    qed
+    have f2B: fst(uBs) = 2 by taut(cB, nB0, rB, g1)
+    have qb _ rb _ _ := mp(rewrite(eV, nB), f2B)
+    // the nested groups' metas: the word at P, in both views
+    have w8: all j. j in omega -> int_lt(j, 8) -> int_add(P, j) in omega &&
+        mallocng.in_ranges(int_add(P, j), mallocng.fp_ranges(c, A)) && mallocng.in_ranges(int_add(P, j), mallocng.fp_ranges(c, B)) proof
+      fix j
+      assume hj hjl
+      have r := mp(all_elim(inb, {int_add(P, j)}), arith(ssA, s16,sge, rewrite(qa, p1), hj), arith(rewrite(qa, p1), hj), arith(rewrite(qa, p8), hj, hjl))
+      show by taut((int_add(P, j) in omega by arith(ssA, s16,rewrite(qa, p1), hj)), r)
+    qed
+    have r8 := apply(mp.u_rd_same[c := c, A := A, B := B, vm := vm, b := b, a := P, n := 8], hra, hrb, hta, htb, simp(), w8)
+    have hh: snd(uAs) = snd(uBs) by simp(rewrite(qa, ra), rewrite(trans(qb, sym(pe)), rb), r8)
+    have ea := mp(mp.use_eta[u := uAs], mp(at_type[l := A.slots[g], t := mallocng.Use, i := i],
+      mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := g], simp(ha), hg), hi, ilA))
+    have eb := mp(mp.use_eta[u := uBs], mp(at_type[l := B.slots[g], t := mallocng.Use, i := i],
+      mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := B.slots, x := g], simp(hb), hg), hi, ilB))
+    show by simp(ea, eb, f2, f2B, hh)
+  qed
+  show by taut(cA, rA, zero, one, two)
 qed
 
 // ----------------------------------------------------------------------
