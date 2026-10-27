@@ -46,20 +46,21 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
   forms (`P.linked`, as cfg.core's for malloc.c's) where free.c's
   callers need them.
 
-Then the top level for free and calloc (malloc's is done: `mp.top_malloc`,
-proofs/mallocng/top.core -- the `malloc` symbol's machine code implements
-`malloc.malloc_fun` for any configuration `mp.mi_cfg(c)`):
-- free the same way: its machine level needs the `nontrivial_free` <->
-  `free_group` recursion linked (step-indexed, as their C2 proofs);
-  then `libc_free_spec` to `malloc.free` by the pieces malloc's uses
-  (`mp.top_step` with the block as `extra`, `mp.top_post`'s shape,
-  `tr.implements_abi_l`).
+Then the top level for calloc (malloc's and free's are done:
+`mp.top_malloc`, proofs/mallocng/top.core, and `mp.top_free`,
+proofs/mallocng/top_free.core -- their symbols' machine code implements
+`malloc.malloc_fun` / `malloc.free_fun`, free_group <-> nontrivial_free
+unrolled per entry as deep as its groups in use,
+proofs/mallocng/fun/free_machine.core):
+- calloc: its translation unit's C1 and purpose proofs, then the same
+  top-level route (`abi.bridge_implements_lf` or `tr.implements_abi_l`).
 - The claim joined with the chain: the claim file and the chain's
   `@gimple` both define the layers; claim.core's `musl.cfg` is stale (the
-  Cfg's fields), its `malloc_fun` takes six parameters now (the program's
-  base, code, statics), and `mallocng.law_frame` takes `c in Cfg`. Then
-  `musl.impl_malloc` from `mp.top_malloc` (`mp.mi_cfg(musl.cfg)`, errno's
-  offset 0x34, the binary's base, code and statics).
+  Cfg's fields), its `malloc_fun` / `free_fun` take six parameters now
+  (the program's base, code, statics), and `mallocng.law_frame` takes
+  `c in Cfg`. Then `musl.impl_malloc` / `musl.impl_free` from
+  `mp.top_malloc` / `mp.top_free` (`mp.mi_cfg(musl.cfg)`, errno's offset
+  0x34, the binary's base, code and statics).
 - The string instructions in general (layers/musl_asm.sl): `rep movs` of
   any element size (`x86i.rep_movsq` is for 8: its iteration and facts
   with the size a parameter), `rep stos` (memset's: no overlap question);
