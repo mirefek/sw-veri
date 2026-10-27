@@ -1046,3 +1046,42 @@ proof
   have r := apply(mp.top_any[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, S := union2(s, h), o := with_ghost(o, h)], hra, pu0, ou0, wt, hn)
   show by ex_intro({h}, taut(hh, r))
 qed
+
+// ... where it is defined: from A (rep), the purpose spec's ghost part
+// union2(h, {A}); the code's outcome mallocng's (`mp.mi_post`)
+theorem mp.top_post(c, eo, b, cd, st, g, regs, s, h, o): app(eo, empty) = 52 -> mp.mi_call(c, g) -> regs in abi.ARGS -> s in abi.World -> h in malloc.Heap.ghost ->
+  runs(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], s, o) -> ord_le(1, seq_len(regs)) -> mp.MPRE(c, eo, b, cd, st, union2(s, h)) ->
+  ex A. A in mallocng.Abs && mallocng.rep(c, A, union2(s, h)) && mp.mi_post(c, regs[0], s, union2(h, fn_update(empty, "A", A)), o)
+proof
+  assume he hmi hra hs hh hr o1l hpre
+  let S := union2(s, h)
+  have hinv heo hwo := hpre
+  obtain A, ha hrep from apply(mallocng.inv_rep, hinv)
+  let HA := union2(h, fn_update(empty, "A", A))
+  have au := apply(mallocng.abs_univ, ha)
+  have hag := apply(rec_and_intro, hh, apply(mp.abs_rec, ha, au))
+  have sd: dom(s) = insert("vm", insert("os", insert("fs_base", insert("cpu", insert("objs", empty))))) by simp(expand(hs, abi.World))
+  have hd: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have vS: S.vm = s.vm by simp(sd, hd)
+  have oS: S.objs = s.objs by simp(sd, hd)
+  have fS: S.fs_base = s.fs_base by simp(sd, hd)
+  have bS: S.blocks = h.blocks by simp(sd, hd)
+  have aA: HA.A = A by simp(hd)
+  have bA: HA.blocks = h.blocks by simp(hd)
+  have fsb: s.fs_base in bits(64) by simp(hs)
+  have {hin = hin, th = thread, tl = tls, bk = brk, eok = errno, eap = apart} := apply(mp.top_pre[c := c, A := A, S := S, eo := eo, b := b, cd := cd, st := st],
+    rewrite(sym(fS), fsb), hrep, he, heo, hwo)
+  have {hm = mem, hsh = shown} := hin
+  have {nr = unres, tk = untaken} := expand(hrep, mallocng.rep)
+  have q1: mallocng.holds_m(c, HA.A, s.vm, HA.blocks) := rewrite(sym(bA), rewrite(sym(aA), rewrite(bS, rewrite(vS, hm))))
+  have q2: mallocng.shown_in(c, HA.A, s.objs) := rewrite(sym(aA), rewrite(oS, hsh))
+  have q3: mallocng.no_reserved(HA.A) := rewrite(sym(aA), nr)
+  have q4: seq_len(HA.A.taken) = 0 := rewrite(sym(aA), tk)
+  have q5: abi.thread_ok(s.vm, s.fs_base) := rewrite(fS, rewrite(vS, th))
+  have q6: mallocng_specs.tls_apart(c, HA.A, s.fs_base) := rewrite(sym(aA), rewrite(fS, tl))
+  have q7: abi.brk_start_ok(s.vm) := rewrite(vS, bk)
+  have q8: mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) := rewrite(fS, rewrite(oS, rewrite(vS, eok)))
+  have q9: mallocng_specs.errno_apart(c, HA.A, s.vm, s.fs_base) := rewrite(sym(aA), rewrite(fS, rewrite(vS, eap)))
+  have post := apply(mp.dm_post[c := c, g := g, regs := regs, t := s, h := HA, o2 := o], hmi, hra, o1l, hs, hag, q1, q2, q3, q4, q5, q6, q7, q8, q9, hr)
+  show by ex_intro({A}, taut(ha, hrep, post))
+qed
