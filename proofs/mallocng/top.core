@@ -823,6 +823,60 @@ proof
   show by taut(hu, xf, keys)
 qed
 
+// (the layer's ghost part, its live blocks replaced)
+theorem mp.hg_updb(h, b2): h in malloc.Heap.ghost -> b2 in fn_space(bits(64), option(omega)) -> b2 in univ(1) -> fn_update(h, "blocks", b2) in malloc.Heap.ghost
+proof
+  assume hx hb2 hu2
+  have xp xf xd _ := (h in powerset(cart(insert("blocks", empty), univ(1))) && is_fun(h) && dom(h) = insert("blocks", empty) && h.blocks in fn_space(bits(64), option(omega))
+    by simp(expand(hx, malloc.Heap.ghost)))
+  let X2 := fn_update(h, "blocks", b2)
+  have x2f x2d := mp(fn_update_fd[f := h, k := "blocks", v := b2, d := insert("blocks", empty)], xf, xd, simp())
+  have xs: subset(h, cart(insert("blocks", empty), univ(1))) by taut(powerset_def[s := cart(insert("blocks", empty), univ(1)), a := h], xp)
+  have sub: all z. z in X2 -> z in cart(insert("blocks", empty), univ(1)) proof
+    fix z
+    assume hz
+    have c := fn_update_iff[f := h, k := "blocks", v := b2, z := z]
+    have c1: z in h -> z in cart(insert("blocks", empty), univ(1)) proof
+      assume h1
+      show := mp(subset_elim[a := h, b := cart(insert("blocks", empty), univ(1)), z := z], xs, h1)
+    qed
+    have c2: z = pair("blocks", b2) -> z in cart(insert("blocks", empty), univ(1)) proof
+      assume h2
+      show := rewrite(sym(h2), mp(cart_intro[a := insert("blocks", empty), b := univ(1), x := "blocks", y := b2], simp(), hu2))
+    qed
+    show by taut(c, hz, c1, c2)
+  qed
+  have pw: X2 in powerset(cart(insert("blocks", empty), univ(1))) by taut(powerset_def[s := cart(insert("blocks", empty), univ(1)), a := X2], (subset(X2, cart(insert("blocks", empty), univ(1))) by defs(sub, subset)))
+  have ap: X2.blocks = b2 := app_update_same[f := h, k := "blocks", v := b2]
+  have sd := set_select_def[s := powerset(cart(insert("blocks", empty), univ(1))), p := x0. (is_fun(x0) && dom(x0) = insert("blocks", empty)) && x0.blocks in fn_space(bits(64), option(omega)), z := X2]
+  show by defs(taut(sd, pw, x2f, x2d, rewrite(sym(ap), hb2)), malloc.Heap.ghost)
+qed
+
+// (the abstract state A as a ghost part)
+theorem mp.abs_rec(A): A in mallocng.Abs -> A in univ(1) -> fn_update(empty, "A", A) in mallocng_specs.MallocAbs.ghost
+proof
+  assume ha hu
+  let Y := fn_update(empty, "A", A)
+  have ef ed := dom_empty
+  have yf := mp(fn_update_fun[f := empty, k := "A", v := A], ef)
+  have yd: dom(Y) = insert("A", empty) := rewrite(ed, mp(dom_update[f := empty, k := "A", v := A], ef))
+  have sub: all z. z in Y -> z in cart(insert("A", empty), univ(1)) proof
+    fix z
+    assume hz
+    have c := fn_update_iff[f := empty, k := "A", v := A, z := z]
+    have c2: z = pair("A", A) -> z in cart(insert("A", empty), univ(1)) proof
+      assume h2
+      show := rewrite(sym(h2), mp(cart_intro[a := insert("A", empty), b := univ(1), x := "A", y := A], simp(), hu))
+    qed
+    have ne: !(z in empty) by simp()
+    show by taut(c, hz, ne, c2)
+  qed
+  have pw: Y in powerset(cart(insert("A", empty), univ(1))) by taut(powerset_def[s := cart(insert("A", empty), univ(1)), a := Y], (subset(Y, cart(insert("A", empty), univ(1))) by defs(sub, subset)))
+  have ap: Y.A = A := app_update_same[f := empty, k := "A", v := A]
+  have sd := set_select_def[s := powerset(cart(insert("A", empty), univ(1))), p := x0. (is_fun(x0) && dom(x0) = insert("A", empty)) && x0.A in mallocng.Abs, z := Y]
+  show by defs(taut(sd, pw, yf, yd, rewrite(sym(ap), ha)), mallocng_specs.MallocAbs.ghost)
+qed
+
 // default_malloc's run (__libc_malloc_impl's called as such) with its
 // returns as one
 theorem mp.dm_run2(c, n, g, s, h, o): n in bits(64) -> mp.mi_call(c, g) -> s in abi.World -> h in mp.G ->
@@ -855,5 +909,93 @@ proof
   step o4 y, e2 from e with g.result64_inv using hpb
   have fp: fst(pair(p, y)) = p by simp()
   have hex2 := subst({z. ex X. mp.mi_ret(c, h.A, n, h.blocks, t, X, V, z)}, sym(fp), hex)
+  show by disj({2}, ex_intro({V}, {pair(p, y)}, taut(hv, hex2, e2)))
+qed
+
+// the layer's malloc for mallocng (configuration c, errno at eo, the
+// program loaded as b, cd, st) as a C function value, and its precondition
+abbrev mp.UF(c, eo, b, cd, st) := malloc.malloc_fun(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st)
+abbrev mp.MPRE(c, eo, b, cd, st, S) := (S in mallocng.inv(c) && malloc.errno_ok(eo, S)) && malloc.world_ok(b, cd, st, S)
+
+// ... widened: anything where it has no argument or its precondition fails
+theorem mp.top_any(c, eo, b, cd, st, regs, S, o): regs in abi.ARGS -> pair(S, o) in univ(1) -> abi.outcome(o) ->
+  (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) -> !(ord_le(1, seq_len(regs)) && mp.MPRE(c, eo, b, cd, st, S)) ->
+  runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], S, o)
+proof
+  assume hra pu hsh hv hn
+  have fr: all o1. pair(S, o1) in univ(1) -> abi.outcome(o1) -> runs(mp.UF(c, eo, b, cd, st)[regs], S, o1) proof
+    fix o1
+    assume pu1 sh1
+    have c0: !ord_le(1, seq_len(regs)) -> runs(mp.UF(c, eo, b, cd, st)[regs], S, o1) proof
+      assume n0
+      show := apply(mp.top_mfun0[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := o1], hra, pu1, n0)
+    qed
+    have c1: !mp.MPRE(c, eo, b, cd, st, S) -> runs(mp.UF(c, eo, b, cd, st)[regs], S, o1) proof
+      assume n1
+      show := apply(mp.top_mfun[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := o1], hra, pu1, sh1,
+        apply(mp.top_many[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, n := regs[0], S := S, o := o1], pu1, n1))
+    qed
+    show by taut(hn, c0, c1)
+  qed
+  have k1: (ex m1 e. o = ok(m1, e)) -> runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], S, o) proof
+    assume e
+    obtain x v, eo1 from e
+    obtain r y, _ hy ev from apply(cart_elim, mp(all_elim(hv, {x}, {v}), eo1))
+    have pu2: pair(S, ok(x, pair(r, y))) in univ(1) := rewrite(ev, rewrite(eo1, pu))
+    have pu1: pair(S, ok(x, r)) in univ(1) by simp(pu2)
+    have sh1: abi.outcome(ok(x, r)) by disj({1}, ex_intro({x}, {r}, refl({ok(x, r)})))
+    have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UF(c, eo, b, cd, st), regs := regs, S := S, o2 := ok(x, pair(r, y))], hra, pu2,
+      apply(mp.wr_ok, hy, mp(all_elim(fr, {ok(x, r)}), pu1, sh1)))
+    show := rewrite(sym(eo1), rewrite(sym(ev), w))
+  qed
+  have k2: (ex m1 e. o = exc(m1, e)) -> runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], S, o) proof
+    assume e
+    obtain x ee, eo1 from e
+    have pu1 := rewrite(eo1, pu)
+    have sh1 := rewrite(eo1, hsh)
+    have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UF(c, eo, b, cd, st), regs := regs, S := S, o2 := exc(x, ee)], hra, pu1,
+      apply(mp.wr_exc, mp(all_elim(fr, {exc(x, ee)}), pu1, sh1)))
+    show := rewrite(sym(eo1), w)
+  qed
+  have k3: (ex t. o = diverge(t)) -> runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], S, o) proof
+    assume e
+    obtain t, eo1 from e
+    have pu1 := rewrite(eo1, pu)
+    have sh1 := rewrite(eo1, hsh)
+    have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UF(c, eo, b, cd, st), regs := regs, S := S, o2 := diverge(t)], hra, pu1,
+      apply(mp.wr_div, mp(all_elim(fr, {diverge(t)}), pu1, sh1)))
+    show := rewrite(sym(eo1), w)
+  qed
+  show by taut(hsh, k1, k2, k3)
+qed
+
+// ... with its argument first of any list of arguments
+theorem mp.dm_post(c, g, regs, t, h, o2): mp.mi_call(c, g) -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) -> t in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, t.vm, h.blocks) -> mallocng.shown_in(c, h.A, t.objs) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 ->
+  abi.thread_ok(t.vm, t.fs_base) -> mallocng_specs.tls_apart(c, h.A, t.fs_base) ->
+  abi.brk_start_ok(t.vm) -> mallocng_specs.errno_ok(t.vm, t.objs, t.fs_base) -> mallocng_specs.errno_apart(c, h.A, t.vm, t.fs_base) ->
+  runs(c_src_malloc_lite_malloc.default_malloc_fun(g)[regs], t, o2) -> mp.mi_post(c, regs[0], t, h, o2)
+proof
+  assume hmi ra o1l hw hh hin hsh hnr htk hth htl hbs heo hea hr
+  have rl _ := (regs in list_type(bits(64)) && ord_le(seq_len(regs), 6) by simp(ra))
+  have lo: seq_len(regs) in omega by simp(rl)
+  have l1: int_le(1, seq_len(regs)) proof
+    have c1: 1 in seq_len(regs) -> int_le(1, seq_len(regs)) proof
+      assume m
+      show by arith(apply(nat_mem_lt[k := seq_len(regs), i := 1], lo, m))
+    qed
+    have c2: 1 = seq_len(regs) -> int_le(1, seq_len(regs)) proof
+      assume e
+      show by arith(e)
+    qed
+    show by taut(expand(o1l, ord_le), c1, c2)
+  qed
+  have hnb := apply(at_type[l := regs, t := bits(64), i := 0], rl, simp(), (int_lt(0, seq_len(regs)) by arith(l1)))
+  have bp: bits_of_int(64, regs[0]) = regs[0] by defs(simp(hnb), bits_of_int, pow2)
+  step o3 V p, e hs1 from hr with o1l, bp, mp.dm_run2 using ra, hnb, hmi, hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea
+  have hv hpb hex := hs1
+  step o4 y, e2 from e with g.result64_inv using hpb
+  have fp: fst(pair(p, y)) = p by simp()
+  have hex2 := subst({z. ex X. mp.mi_ret(c, h.A, regs[0], h.blocks, t, X, V, z)}, sym(fp), hex)
   show by disj({2}, ex_intro({V}, {pair(p, y)}, taut(hv, hex2, e2)))
 qed
