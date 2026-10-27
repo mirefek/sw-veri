@@ -388,3 +388,65 @@ proof
   have r := rewrite(sym(all_elim(abi.wg_ok, {fn_update(s, "vm", V)}, {pair(y0, y1)}, {H2})), rewrite(sym(te), w))
   show by ex_intro({H2}, taut(hg2, r))
 qed
+
+// free(0): the layer's free's, the state as it was
+theorem mp.tf_zero(c, eo, b, cd, st, regs, s, h, y0, y1): regs in abi.ARGS -> ord_le(1, seq_len(regs)) -> regs[0] = 0 ->
+  s in abi.World -> s in univ(1) -> h in malloc.Heap.ghost -> y0 in bits(64) -> y1 in bits(64) ->
+  runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], union2(s, h), with_ghost(ok(fn_update(s, "vm", s.vm), pair(y0, y1)), h))
+proof
+  assume hra o1l r0 hs su hh hy0 hy1
+  let S := union2(s, h)
+  have {wf = record, wd = has_vm} := apply(ms.world_parts, hs)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], wf, wd)
+  have hu _ _ := mp(all_elim(mp.hg_ok, {h}), hh)
+  have Su: S in univ(1) := mp(union2_univ[u := 1, a := s, b := h], su, hu)
+  have pu: pair(S, ok(S, empty)) in univ(1) by simp(Su)
+  have f0 := rewrite(sym(r0), apply(mp.tf_f0[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, S := S], pu))
+  have pu1: pair(S, ok(S, y0)) in univ(1) by simp(Su, hy0)
+  have fv := apply(mp.tf_fun[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := ok(S, y0)], hra, pu1,
+    apply(mp.tf_rel_ok[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, x := S, v := y0], hy0, f0))
+  have pu2: pair(S, ok(S, pair(y0, y1))) in univ(1) by simp(Su, hy0, hy1)
+  have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UFF(c, eo, b, cd, st), regs := regs, S := S, o2 := ok(S, pair(y0, y1))], hra, pu2,
+    apply(mp.wr_ok[F := mp.UFF(c, eo, b, cd, st), regs := regs, S := S, x := S, r := y0, y := y1], hy1, fv))
+  have wg := all_elim(abi.wg_ok, {s}, {pair(y0, y1)}, {h})
+  have r1 := rewrite(sym(wg), w)
+  show := subst({z. runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], S, with_ghost(ok(z, pair(y0, y1)), h))}, sym(ss), r1)
+qed
+
+// the `free` symbol from the world s with the layer's ghost part h, where
+// the layer's free is undefined: its outcome the layer's (the live blocks
+// as they were)
+theorem mp.tf_undef(c, eo, b, cd, st, regs, s, h, o): regs in abi.ARGS -> s in abi.World -> h in malloc.Heap.ghost -> pair(s, o) in univ(1) -> abi.outcome(o) ->
+  (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) -> !mp.FPRE(c, eo, b, cd, st, regs, union2(s, h)) ->
+  ex h2. h2 in malloc.Heap.ghost && runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], union2(s, h), with_ghost(o, h2))
+proof
+  assume hra hs hh pu hsh hv hn
+  have hu _ _ := mp(all_elim(mp.hg_ok, {h}), hh)
+  have pu0 ou0 := apply(abi.wg_univ, pu, hu, hsh)
+  have wt: all x v. with_ghost(o, h) = ok(x, v) -> v in cart(bits(64), bits(64)) proof
+    fix x v
+    assume e
+    have k1: (ex m1 e1. o = ok(m1, e1)) -> v in cart(bits(64), bits(64)) proof
+      assume w
+      obtain m1 e1, eo1 from w
+      have e2: ok(union2(m1, h), e1) = ok(x, v) := trans(sym(all_elim(abi.wg_ok, {m1}, {e1}, {h})), rewrite(eo1, e))
+      have ve: e1 = v by simp(e2)
+      show := rewrite(ve, mp(all_elim(hv, {m1}, {e1}), eo1))
+    qed
+    have k2: (ex m1 e1. o = exc(m1, e1)) -> v in cart(bits(64), bits(64)) proof
+      assume w
+      obtain m1 e1, eo1 from w
+      have e2: exc(union2(m1, h), e1) = ok(x, v) := trans(sym(all_elim(abi.wg_exc, {m1}, {e1}, {h})), rewrite(eo1, e))
+      show by simp(e2)
+    qed
+    have k3: (ex t. o = diverge(t)) -> v in cart(bits(64), bits(64)) proof
+      assume w
+      obtain t, eo1 from w
+      have e2: diverge(t) = ok(x, v) := trans(sym(all_elim(abi.wg_div, {t}, {h})), rewrite(eo1, e))
+      show by simp(e2)
+    qed
+    show by taut(hsh, k1, k2, k3)
+  qed
+  have r := apply(mp.tf_any[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, S := union2(s, h), o := with_ghost(o, h)], hra, pu0, ou0, wt, hn)
+  show by ex_intro({h}, taut(hh, r))
+qed
