@@ -1463,3 +1463,40 @@ proof
   have r := apply(mp.top_any[c := c, eo := eo, b := b, cd := cd, st := st, regs := regs, S := w, o := exc(w, mp.UB)], hra, pu, sh, vt, dn)
   show := apply(abi.raises_intro_g, {malloc.Heap.ghost}, {w}, {w}, {abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))}, {regs}, {mp.UB}, hw, eu, (!(mp.UB = exc_val("stack_overflow", empty)) by defs(simp(), exc_val)), r)
 qed
+
+// ----------------------------------------------------------------------
+//  malloc end to end
+
+// The `malloc` symbol's machine code implements the malloc layer's malloc
+// (layers/malloc.sl), its allocator invariant mallocng's (`mallocng.inv`,
+// `mallocng.owned`), errno at the thread pointer's 0x34, the program
+// loaded as C1 has it
+theorem mp.top_malloc: all c statics eo b cd st. mp.mi_cfg(c) -> app(eo, empty) = 52 ->
+  app(b, empty) = 4198400 -> app(cd, empty) = text.code -> app(st, empty) = statics ->
+  abi.implements(malloc.Heap.ghost, 4202067, malloc.malloc_fun(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st))
+proof
+  fix c statics eo b cd st
+  assume hmc he hb hcd hst
+  have hcf: mp.ap_cfg(c) by taut(hmc)
+  have hc _ _ _ _ _ _ := hcf
+  obtain G, hi ht ho hq from mp(all_elim(mp.mi_known, {c}, {statics}, {mp.GRS}, {c_src_malloc_mallocng_malloc_cfg.__syscall1_fun()}, {mp.MM}, {mp.MPR}, {mp.EL}), hmc,
+    mp(all_elim(mp.ap_leaves_ok, {c}, {statics}), hcf))
+  let LOW := c_src_malloc_lite_malloc.default_malloc_fun(G)
+  let CFG := c_src_malloc_lite_malloc_cfg.default_malloc_fun(G)
+  let W := abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))
+  have ln := mp(all_elim(dmc.implements, {statics}, {G}), hi, ht, ho)
+  have im := mp(all_elim(tr.implements_refine, {4202067}, {CFG}, {LOW}, {4198400}, {text.code}, {statics}), ln, all_elim(default_malloc_ref, {G}))
+  have ro: all args. args in abi.ARGS -> abi.refines_ovf(LOW[args], W[args], malloc.Heap.ghost) proof
+    fix args
+    assume hA
+    show := apply(mp.top_ref[c := c, eo := eo, b := b, cd := cd, st := st, g := G, regs := args], hc, he, hq, hA)
+  qed
+  have dv := apply(mp.top_div[c := c, eo := eo, b := b, cd := cd, st := st, g := G], he, hq)
+  have nl: all args w. args in abi.ARGS -> w in rec_and(abi.World, malloc.Heap.ghost) -> w in univ(1) ->
+      !(abi.loaded(w.vm, 4198400, text.code, statics) && abi.canary_ok(w.vm, w.fs_base)) -> abi.spec_raises(rec_and(abi.World, malloc.Heap.ghost), w, W, args) proof
+    fix args w
+    assume hA hw wu hn
+    show := apply(mp.top_unl[c := c, eo := eo, b := b, cd := cd, st := st, regs := args, w := w], hA, hw, wu, rewrite(sym(hst), rewrite(sym(hcd), rewrite(sym(hb), hn))))
+  qed
+  show by defs(apply(tr.implements_abi_l, mp.hg_ok, dv, im, ro, nl), abi.implements)
+qed
