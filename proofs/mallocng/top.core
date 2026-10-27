@@ -523,3 +523,141 @@ proof
   qed
   show by defs(taut(af, ti, ow), malloc.step_ok)
 qed
+
+// ----------------------------------------------------------------------
+//  malloc's failure: the layer's out_of_memory
+
+// (errno ENOMEM: its bytes 12, 0, 0, 0)
+theorem mp.top_e12(V, a): V.bytes in fn_space(bits(64), bits(8)) -> gimple.bytes_at(V, a, 4) = 12 ->
+  all i. i in omega -> int_lt(i, 4) -> V.bytes[bits_add(64, a, bits_of_int(64, i))] = bits_of_int(8, int_div(12, int_pow(256, i)))
+proof
+  assume hb he
+  let y(k) := V.bytes[bits_add(64, a, bits_of_int(64, k))]
+  have s4: int_add(int_add(int_add(y(0), int_mul(y(1), 256)), int_mul(y(2), 65536)), int_mul(y(3), 16777216)) = 12 by simp(expand(he, gimple.bytes_at))
+  have yb: all k. y(k) in bits(8) proof
+    fix k
+    show := apply(fn_space_app, hb, (bits_add(64, a, bits_of_int(64, k)) in bits(64) by simp()))
+  qed
+  have b0 := all_elim(yb, {0})
+  have b1 := all_elim(yb, {1})
+  have b2 := all_elim(yb, {2})
+  have b3 := all_elim(yb, {3})
+  have v0: y(0) = 12 by arith(s4, b0, b1, b2, b3)
+  have v1: y(1) = 0 by arith(s4, b0, b1, b2, b3)
+  have v2: y(2) = 0 by arith(s4, b0, b1, b2, b3)
+  have v3: y(3) = 0 by arith(s4, b0, b1, b2, b3)
+  fix i
+  assume hi hil
+  have cs: i = 0 || i = 1 || i = 2 || i = 3 by arith(hi, hil)
+  have c0: i = 0 -> y(i) = bits_of_int(8, int_div(12, int_pow(256, i))) proof
+    assume e
+    show by simp(e, v0)
+  qed
+  have c1: i = 1 -> y(i) = bits_of_int(8, int_div(12, int_pow(256, i))) proof
+    assume e
+    show by simp(e, v1)
+  qed
+  have c2: i = 2 -> y(i) = bits_of_int(8, int_div(12, int_pow(256, i))) proof
+    assume e
+    show by simp(e, v2)
+  qed
+  have c3: i = 3 -> y(i) = bits_of_int(8, int_div(12, int_pow(256, i))) proof
+    assume e
+    show by simp(e, v3)
+  qed
+  show by taut(cs, c0, c1, c2, c3)
+qed
+
+// errno set to ENOMEM where it is ENOMEM already: the state as it was (the
+// loop's run, by its invariant -- the state unchanged -- and variant 4 - i)
+theorem mp.top_seterr(eo, T): T in univ(1) -> T.vm in x86_64_linux.Vm -> is_fun(T) -> "vm" in dom(T) -> T.fs_base in bits(64) ->
+  app(eo, empty) = 52 -> mallocng_specs.errno_is(T.vm, T.fs_base, x86_64_linux.ENOMEM) ->
+  runs(malloc.set_errno(eo, x86_64_linux.ENOMEM), T, ok(T, empty))
+proof
+  assume hu hvm hf hd fsb he hen
+  let a := bits_add(64, T.fs_base, bits_of_int(64, app(eo, empty)))
+  let B := T.vm.bytes
+  have ke: x86_64_linux.ENOMEM = 12 by defs(refl({12}), x86_64_linux.ENOMEM)
+  have ea: mallocng_specs.errno_at(T.fs_base) = a by defs(simp(he), mallocng_specs.errno_at)
+  have b12: gimple.bytes_at(T.vm, a, 4) = 12 := rewrite(ke, rewrite(ea, expand(hen, mallocng_specs.errno_is)))
+  have bt: B in fn_space(bits(64), bits(8)) by simp(hvm)
+  have e12 := apply(mp.top_e12[V := T.vm, a := a], bt, b12)
+  have bf: is_fun(B) && dom(B) = bits(64) by simp(hvm)
+  have vf: is_fun(T.vm) && "bytes" in dom(T.vm) by simp(hvm)
+  have e0v := mp(fn_update_same[f := T.vm, k := "bytes"], taut(vf), taut(vf))
+  have e0s := mp(fn_update_same[f := T, k := "vm"], hf, hd)
+  let P(l) := ex i. i in omega && int_le(i, 4) && l = pair(T, i)
+  let M(l) := int_sub(4, snd(l))
+  let G(l, r) := r = exc(pair(fst(l), snd(l)), pair("brk", empty))
+  let BODYA(q, l, o) := (int_lt(snd(l), 4) && letin(snd(l), x7. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes",
+      fn_update(fst(l).vm.bytes, bits_add(64, q, bits_of_int(64, x7)), bits_of_int(8, int_div(x86_64_linux.ENOMEM, int_pow(256, x7)))))), x8. o = ok(pair(x8, int_add(snd(l), 1)), empty)))) ||
+    (!int_lt(snd(l), 4) && o = exc(pair(fst(l), snd(l)), pair("brk", empty)))
+  let BODY(l, o) := BODYA(a, l, o)
+  have p0: P(pair(T, 0)) by ex_intro({0}, simp())
+  have pm: all l. P(l) -> M(l) in omega proof
+    fix l
+    assume hp2
+    obtain i, hi from hp2
+    show by simp(hi)
+  qed
+  have pb: all l. P(l) -> true -> (ex l2. BODY(l, ok(l2, empty)) && P(l2) && int_lt(M(l2), M(l))) || (ex r. BODY(l, r) && G(l, r) && !is_ok(r) && !(fst(r) = 2)) proof
+    fix l
+    assume hp2 ht
+    obtain i, io il le from hp2
+    have more: int_lt(i, 4) -> (ex l2. BODY(l, ok(l2, empty)) && P(l2) && int_lt(M(l2), M(l))) proof
+      assume hlt
+      let k := bits_add(64, a, bits_of_int(64, i))
+      have kb: k in bits(64) by simp()
+      have bk := mp(all_elim(e12, {i}), io, hlt)
+      have same := mp(fn_update_same[f := B, k := k], taut(bf), (k in dom(B) by simp(bf, kb)))
+      have ub: fn_update(B, k, bits_of_int(8, int_div(x86_64_linux.ENOMEM, int_pow(256, i)))) = B := rewrite(sym(ke), rewrite(bk, same))
+      have bd: BODY(l, ok(pair(T, int_add(i, 1)), empty)) by defs(simp(le, hlt, ub, e0v, e0s), letin)
+      have p2: P(pair(T, int_add(i, 1))) by ex_intro({int_add(i, 1)}, simp(io, hlt))
+      have m2: int_lt(M(pair(T, int_add(i, 1))), M(l)) by simp(le, io)
+      show by ex_intro({pair(T, int_add(i, 1))}, taut(bd, p2, m2))
+    qed
+    have done: !int_lt(i, 4) -> (ex r. BODY(l, r) && G(l, r) && !is_ok(r) && !(fst(r) = 2)) proof
+      assume hge
+      let R := exc(pair(fst(l), snd(l)), pair("brk", empty))
+      have bd: BODY(l, R) by simp(le, hge)
+      have g: G(l, R) by simp()
+      have no: !is_ok(R) by defs(simp(), is_ok)
+      have nd: !(fst(R) = 2) by simp()
+      show by ex_intro({R}, taut(bd, g, no, nd))
+    qed
+    have cs: int_lt(i, 4) || !int_lt(i, 4) by taut()
+    show by taut(cs, more, done)
+  qed
+  have ex := mp(while_exists[l0 := pair(T, 0), c := l. true, b := l o. BODY(l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events), p := l. P(l), m := l. M(l),
+    g := l r. G(l, r)], p0, pm, pb)
+  obtain r, hw hnd hcase from ex
+  have nst: (ex l. P(l) && !true && r = ok(l, empty)) -> false proof
+    assume h
+    obtain l0, hl0 from h
+    show by taut(hl0)
+  qed
+  have lft: ex l. P(l) && true && BODY(l, r) && G(l, r) && !is_ok(r) by taut(hcase, nst)
+  obtain l, hpl _ hbl hgl hno from lft
+  obtain i, io il le from hpl
+  have ni: !int_lt(i, 4) proof
+    assume hlt
+    have bb := rewrite(le, hbl)
+    have bb2: letin(i, x7. letin(fn_update(T, "vm", fn_update(T.vm, "bytes",
+        fn_update(T.vm.bytes, bits_add(64, a, bits_of_int(64, x7)), bits_of_int(8, int_div(x86_64_linux.ENOMEM, int_pow(256, x7)))))), x8. r = ok(pair(x8, int_add(i, 1)), empty))) by simp(bb, hlt)
+    have b1: ex x8. r = ok(pair(x8, int_add(i, 1)), empty) by ex_intro({fn_update(T, "vm", fn_update(T.vm, "bytes",
+        fn_update(T.vm.bytes, bits_add(64, a, bits_of_int(64, i)), bits_of_int(8, int_div(x86_64_linux.ENOMEM, int_pow(256, i))))))}, defs(bb2, letin))
+    obtain x8, hx8 from b1
+    have ok8: is_ok(r) by defs(ex_intro({pair(x8, int_add(i, 1))}, {empty}, hx8), is_ok)
+    show by taut(ok8, hno)
+  qed
+  have ien: i = 4 by arith(il, ni, io)
+  have re: r = exc(pair(T, 4), pair("brk", empty)) by simp(hgl, le, ien)
+  have hw2 := rewrite(re, hw)
+  have pu: pair(T, ok(T, empty)) in univ(1) by simp(hu)
+  have rel: letin(a, x2. letin(0, x3. ex x4. while_rel(pair(T, x3), x5. true, x5 x6. BODYA(x2, x5, x6), x5. fn_update(empty, "os.events", fst(x5).os.events), x4) &&
+      (((fst(x4) = 0 || (fst(x4) = 1 && fst(out_value(x4)) = "brk")) && ok(T, empty) = ok(fst(out_state(x4)), empty)) ||
+       ((((fst(x4) = 1 && fst(out_value(x4)) = "ret") && ok(T, empty) = ok(fst(out_state(x4)), snd(out_value(x4)))) ||
+         ((fst(x4) = 1 && fst(out_value(x4)) = "raise") && ok(T, empty) = exc(fst(out_state(x4)), snd(out_value(x4))))) ||
+        (fst(x4) = 2 && ok(T, empty) = diverge(snd(x4))))))) by defs(ex_intro({exc(pair(T, 4), pair("brk", empty))}, simp(hw2, keep(while_rel))), letin, out_state, out_value)
+  show by defs(apply(tr.runs_intro, {T}, {ok(T, empty)}, pu, rel), malloc.set_errno)
+qed
