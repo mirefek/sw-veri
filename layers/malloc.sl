@@ -220,10 +220,12 @@ proc calloc(count: bits[64], size: bits[64]) -> Addr {
 ///////////////////////////////////////////////////////////////////////
 //  Connection to machine code
 
-// The C-level specs above, as ABI function specs (arguments from registers).
-fn malloc_fun() -> CFun[Heap] = (args: Args) => malloc(args[0])
-fn free_fun()   -> CFun[Heap] = (args: Args) => { free(args[0]); return any bits[64] }
-fn calloc_fun() -> CFun[Heap] = (args: Args) => calloc(args[0], args[1])
+// The C-level specs above, as ABI function specs (arguments from registers;
+// a call passes them all -- with fewer, the registers read are no
+// argument's: undefined).
+fn malloc_fun() -> CFun[Heap] = (args: Args) => { require len(args) >= 1; return malloc(args[0]) }
+fn free_fun()   -> CFun[Heap] = (args: Args) => { require len(args) >= 1; free(args[0]); return any bits[64] }
+fn calloc_fun() -> CFun[Heap] = (args: Args) => { require len(args) >= 2; return calloc(args[0], args[1]) }
 
 // What must be proven about a concrete libc binary (see claim_malloc.sl).
 pred allocator_correct(malloc_at: Addr, free_at: Addr, calloc_at: Addr) =
