@@ -110,3 +110,191 @@ proof
   step V r, ho hR from hr with hg using conj(hw, hu, ths, hp, hh, hdep, hin, hnr, htk, hth, htl, heo, hea, hlv)
   show by disj({2}, ex_intro({V}, taut(hR, ho)))
 qed
+
+// (codes refining others: their call facts)
+theorem mp.calls_refl(F): mp.calls(F, F)
+proof
+  fix regs s o
+  assume _ _ _ hr
+  show hr
+qed
+
+theorem mp.aor_calls(F, G): mp.aor_call(G) -> mp.calls(F, G) -> mp.aor_call(F)
+proof
+  assume hq hcl
+  fix t p v regs o2
+  assume hw htu hp hv hpre hro hr
+  have rl rln _ := hro
+  have rn: seq_len(regs) = 2 := trans(rln, (seq_len(seq_concat(seq_one(gimple.arg(64, p)), seq_one(gimple.arg(32, v)))) = 2 by simp()))
+  have h2 := mp(all_elim(hcl, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hw, hr)
+  show := mp(all_elim(hq, {t}, {p}, {v}, {regs}, {o2}), hw, htu, hp, hv, hpre, hro, h2)
+qed
+
+theorem mp.lf_calls_n(c, n, F, G): mp.lf_call_n(c, G, n) -> mp.calls(F, G) -> mp.lf_call_n(c, F, n)
+proof
+  assume hq hcl
+  fix p t h regs o2
+  assume hpb hw hh hdep hin hnr htk hth htl heo hea hlv hro hr
+  have rl rn _ := apply(gc.regs1, hpb, hro)
+  have h2 := mp(all_elim(hcl, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hw, hr)
+  show := mp(all_elim(hq, {p}, {t}, {h}, {regs}, {o2}), hpb, hw, hh, hdep, hin, hnr, htk, hth, htl, heo, hea, hlv, hro, h2)
+qed
+
+// a_crash's spec (undefined) at an unaligned entry too: any code
+theorem mp.undef_implements_u: all f statics. tr.implements_at_u(f, mallocng_specs.a_crash_spec_fun(), 4198400, text.code, statics)
+proof
+  fix f statics
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) ->
+      abi.loaded(s.vm, 4198400, text.code, statics) -> s.rip = f -> tr.entry_ok_u(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) ->
+      tr.run_d(s, s, o) -> tr.matches_t(mallocng_specs.a_crash_spec_fun(), args, objs, mem, s, o) proof
+    fix args objs mem s o
+    assume hA ho hm hs hu _ _ _ _ _ _
+    let V := abi.view(s, objs, mem)
+    have ou := apply(abi.objs_univ, ho)
+    have mu := apply(x86.vm_univ, hm)
+    have ocu := mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), ou)
+    have vu: V in univ(1) by simp(hu, ou, mu, ocu)
+    have vW := apply(abi.world_typed, hs, ho, hm, vu)
+    have rst: abi.raise_state(V) by defs(apply(tr.world_and, vW), abi.raise_state)
+    have eu: empty in univ(1) by simp()
+    have eno: !(empty = exc_val("stack_overflow", empty)) by defs(all_elim(tr.pair_ne, {"stack_overflow"}, {empty}), exc_val)
+    have pu: pair(V, exc(V, empty)) in univ(1) by simp(vu)
+    have rf: runs(mallocng_specs.a_crash_spec_fun()[args], V, exc(V, empty)) by defs(simp(hA, pu), mallocng_specs.a_crash_spec_fun)
+    have ra: abi.raises_at(mallocng_specs.a_crash_spec_fun(), args, objs, mem, s) by defs(ex_intro({empty}, {V}, taut(eu, eno, rst, rf)), abi.raises_at)
+    show by defs(taut(ra), tr.matches_t)
+  qed
+  show by defs(g, tr.implements_at_u)
+qed
+
+// ----------------------------------------------------------------------
+//  free.c's callees but the two, linked (free.c's copies of malloc.c's
+//  functions the same CFG forms as malloc.c's)
+
+abbrev mp.FAC := mallocng_specs.a_crash_spec_fun()
+abbrev mp.FGSI := c_src_malloc_mallocng_malloc_cfg.get_slot_index_fun()
+abbrev mp.FGM := c_src_malloc_mallocng_malloc_cfg.get_meta_fun(mp.FAC, mp.FGSI)
+abbrev mp.FGST := c_src_malloc_mallocng_malloc_cfg.get_stride_fun()
+abbrev mp.FGNS := c_src_malloc_mallocng_free_cfg.get_nominal_size_fun(mp.FAC)
+abbrev mp.FCAS := c_src_malloc_mallocng_malloc_cfg.a_cas_fun()
+abbrev mp.FIB := c_src_malloc_mallocng_malloc_cfg.is_bouncing_fun()
+abbrev mp.FOTF := c_src_malloc_mallocng_free_cfg.okay_to_free_fun(mp.FGST, mp.FIB)
+abbrev mp.FDQ := c_src_malloc_mallocng_malloc_cfg.dequeue_fun()
+abbrev mp.FAG := c_src_malloc_mallocng_malloc_cfg.activate_group_fun(mp.FAC, mp.FCAS)
+abbrev mp.FAOR := c_src_malloc_mallocng_free_cfg.a_or_fun()
+abbrev mp.FSQ := c_src_malloc_mallocng_malloc_cfg.step_seq_fun()
+abbrev mp.FRQ := c_src_malloc_mallocng_free_cfg.record_seq_fun()
+
+// nontrivial_free's CFG form over free_group's code fg; free_group's over
+// nontrivial_free's nf; __libc_free's over nontrivial_free's
+abbrev mp.FNF(fg) := c_src_malloc_mallocng_free_cfg.nontrivial_free_fun(mp.FOTF, mp.FAC, mp.FDQ, mp.FAG, fg, mp.ap_q, mp.FAOR)
+abbrev mp.FFG(nf) := c_src_malloc_mallocng_free_cfg.free_group_fun(mp.FSQ, mp.FRQ, mp.FGM, mp.FGSI, nf, mp.ap_fm)
+abbrev mp.FLF(nf) := c_src_malloc_mallocng_free_cfg.__libc_free_fun(mp.FGM, mp.FGSI, mp.FGST, mp.FGNS, mp.FAC, mp.FCAS, mp.WLK, nf, mp.ULK, mp.EL, mp.MUN)
+
+// free_group's code fg known up to n groups: implemented, typed, its io,
+// called as free_group up to n; nontrivial_free's nf likewise
+abbrev mp.fg_known(c, statics, n, fg) := tr.implements_at(4203895, fg, 4198400, text.code, statics) && fg in fn_space(abi.ARGS, powerset(univ(1))) &&
+  tr.callee_io(fg, 1) && mp.fg_call(c, fg, n)
+abbrev mp.nf_known(c, statics, n, nf) := tr.implements_at(4204530, nf, 4198400, text.code, statics) && nf in fn_space(abi.ARGS, powerset(univ(1))) &&
+  tr.callee_io(nf, 2) && mp.nf_call(c, nf, n)
+
+// the allocator's configuration as free's code has it
+abbrev mp.fr_cfg(c) := c in mallocng.Cfg && c.ctx = c_src_malloc_mallocng_malloc.__malloc_context && c.sct = c_src_malloc_mallocng_malloc.__malloc_size_classes &&
+  c.lock = c_src_malloc_mallocng_malloc.__malloc_lock && c.libc = c_src_malloc_mallocng_malloc.__libc
+
+// nontrivial_free over free_group known up to n: known up to n
+theorem mp.fl_nf: all c statics n fg. mp.fr_cfg(c) -> n in omega -> mp.fg_known(c, statics, n, fg) -> mp.nf_known(c, statics, n, mp.FNF(fg))
+proof
+  fix c statics n fg
+  assume hcf hn hk
+  have hc hx hst _ _ := hcf
+  have ifg tfg ofg qfg := hk
+  // the callees: okay_to_free (over get_stride, is_bouncing), a_crash,
+  // dequeue, activate_group, queue, a_or
+  have iotf := mp(all_elim(otfc.implements, {statics}, {mp.FGST}, {mp.FIB}), all_elim(fgstc.implements, {statics}), fgstc.typed, fgstc.io,
+    all_elim(fibtc.implements, {statics}), fibtc.typed, fibtc.io)
+  have totf: mp.FOTF in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_free_cfg.okay_to_free_fun)
+  have ootf := mp(all_elim(otfc.io, {mp.FGST}, {mp.FIB}), fgstc.io, fibtc.io)
+  have iag := mp(all_elim(fagtc.implements, {statics}, {mp.FAC}, {mp.FCAS}), all_elim(mp.undef_implements, {4202156}, {statics}), acr.typed, mp.undef_io[n := 0],
+    all_elim(facsc.implements, {statics}), facsc.typed, facsc.io)
+  have tag: mp.FAG in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.activate_group_fun)
+  have oag := mp(all_elim(fagtc.io, {mp.FAC}, {mp.FCAS}), mp.undef_io[n := 0], facsc.io)
+  have iq := mp(all_elim(fqutc.implements, {statics}, {mp.FAC}), all_elim(mp.undef_implements_u, {4202156}, {statics}), acr.typed, mp.undef_io[n := 0])
+  have _ tq oq qq := all_elim(mp.ap_q_ok, {statics})
+  have ln := mp(all_elim(ntfc.implements, {statics}, {mp.FOTF}, {mp.FAC}, {mp.FDQ}, {mp.FAG}, {fg}, {mp.ap_q}, {mp.FAOR}),
+    iotf, totf, ootf, all_elim(mp.undef_implements, {4202156}, {statics}), acr.typed, mp.undef_io[n := 0],
+    all_elim(fdqtc.implements, {statics}), fdqtc.typed, fdqtc.io, iag, tag, oag, ifg, tfg, ofg, iq, tq, oq,
+    all_elim(aorc.implements, {statics}), aorc.typed, aorc.io)
+  have ty: mp.FNF(fg) in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_free_cfg.nontrivial_free_fun)
+  have io := mp(all_elim(ntfc.io, {mp.FOTF}, {mp.FAC}, {mp.FDQ}, {mp.FAG}, {fg}, {mp.ap_q}, {mp.FAOR}), ootf, mp.undef_io[n := 0], fdqtc.io, oag, ofg, oq, aorc.io)
+  // called as nontrivial_free up to n: its structured form's
+  have cotf := all_elim(okay_to_free_ref, {mp.FGST}, {mp.FIB})
+  have cgst := gst_ref
+  have cib := mp(all_elim(mp.ib_call_linked, {c}), hc, hx)
+  have cag := mp(all_elim(mp.ag_call_linked, {c}), hc)
+  have cao := apply(mp.aor_calls[F := mp.FAOR, G := c_src_malloc_mallocng_free.a_or_fun()], mp.aor_q, a_or_ref)
+  have q := apply(mp.nf_q[c := c, n := n, otf := mp.FOTF, gst := mp.FGST, gib := mp.FIB, ac := mp.FAC, dq := mp.FDQ, ag := mp.FAG, fg := fg, qu := mp.ap_q, ao := mp.FAOR],
+    hc, hx, hst, hn, cotf, cgst, cib, mp.calls_refl[F := mp.FAC], mp.dq_calls_linked, cag, qfg, qq, cao)
+  have nq := apply(mp.nf_calls[c := c, n := n, F := mp.FNF(fg), G := c_src_malloc_mallocng_free.nontrivial_free_fun(mp.FOTF, mp.FAC, mp.FDQ, mp.FAG, fg, mp.ap_q, mp.FAOR)],
+    q, all_elim(nontrivial_free_ref, {mp.FOTF}, {mp.FAC}, {mp.FDQ}, {mp.FAG}, {fg}, {mp.ap_q}, {mp.FAOR}))
+  show by taut(ln, ty, io, nq)
+qed
+
+// (get_meta's CFG form linked: implemented, typed, its io)
+theorem mp.fl_gm: all statics. tr.implements_at(4202779, mp.FGM, 4198400, text.code, statics) && mp.FGM in fn_space(abi.ARGS, powerset(univ(1))) &&
+  tr.callee_io(mp.FGM, 1)
+proof
+  fix statics
+  have i := mp(all_elim(fgmtc.implements, {statics}, {mp.FAC}, {mp.FGSI}), all_elim(mp.undef_implements, {4202156}, {statics}), acr.typed, mp.undef_io[n := 0],
+    all_elim(fgsitc.implements, {statics}), fgsitc.typed, fgsitc.io)
+  have t: mp.FGM in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_malloc_cfg.get_meta_fun)
+  have o := mp(all_elim(fgmtc.io, {mp.FAC}, {mp.FGSI}), mp.undef_io[n := 0], fgsitc.io)
+  show by taut(i, t, o)
+qed
+
+// free_group over nontrivial_free known up to n: known up to n + 1
+theorem mp.fl_fg: all c statics n nf. mp.fr_cfg(c) -> n in omega -> mp.nf_known(c, statics, n, nf) -> mp.fg_known(c, statics, int_add(n, 1), mp.FFG(nf))
+proof
+  fix c statics n nf
+  assume hcf hn hk
+  have hc hx hst _ _ := hcf
+  have inf tnf onf qnf := hk
+  have igm tgm ogm := all_elim(mp.fl_gm, {statics})
+  have ifm := mp(all_elim(ffmtc.implements, {statics}, {mp.ap_q}), mp(all_elim(fqutc.implements, {statics}, {mp.FAC}), all_elim(mp.undef_implements_u, {4202156}, {statics}),
+    acr.typed, mp.undef_io[n := 0]), qutc.typed_linked, qutc.io_linked)
+  have _ tfm ofm _ := mp(all_elim(mp.ap_fm_ok, {c}, {statics}), hx)
+  have ln := mp(all_elim(fgrc.implements, {statics}, {mp.FSQ}, {mp.FRQ}, {mp.FGM}, {mp.FGSI}, {nf}, {mp.ap_fm}),
+    all_elim(fsstc.implements, {statics}), fsstc.typed, fsstc.io, all_elim(rsqc.implements, {statics}), rsqc.typed, rsqc.io, igm, tgm, ogm,
+    all_elim(fgsitc.implements, {statics}), fgsitc.typed, fgsitc.io, inf, tnf, onf, ifm, tfm, ofm)
+  have ty: mp.FFG(nf) in fn_space(abi.ARGS, powerset(univ(1))) by defs(tr.fun_typed, c_src_malloc_mallocng_free_cfg.free_group_fun)
+  have io := mp(all_elim(fgrc.io, {mp.FSQ}, {mp.FRQ}, {mp.FGM}, {mp.FGSI}, {nf}, {mp.ap_fm}), fsstc.io, rsqc.io, ogm, fgsitc.io, onf, ofm)
+  // called as free_group up to n + 1: its structured form's
+  have csq := mp(all_elim(mp.sq_call_linked, {c}), hc, hx)
+  have crq := mp(all_elim(mp.rq_call_linked, {c}), hc, hx)
+  have q := apply(mp.fg_q[c := c, n := n, sq := mp.FSQ, rq := mp.FRQ, gm := mp.FGM, g0 := mp.FAC, g1 := mp.FGSI, gsi := mp.FGSI, nf := nf, fm := mp.ap_fm],
+    hc, hx, hst, hn, csq, crq, all_elim(get_meta_ref, {mp.FAC}, {mp.FGSI}), get_slot_index_ref, get_slot_index_ref, qnf, mp.fm_calls_linked)
+  have fq := apply(mp.fg_calls[c := c, n := int_add(n, 1), F := mp.FFG(nf), G := c_src_malloc_mallocng_free.free_group_fun(mp.FSQ, mp.FRQ, mp.FGM, mp.FGSI, nf, mp.ap_fm)],
+    q, all_elim(free_group_ref, {mp.FSQ}, {mp.FRQ}, {mp.FGM}, {mp.FGSI}, {nf}, {mp.ap_fm}))
+  show by taut(ln, ty, io, fq)
+qed
+
+// up to n groups: some nontrivial_free's code known (free_group's at 0 any:
+// never called)
+theorem mp.fl_all: all c statics. mp.fr_cfg(c) -> all n. n in omega -> ex nf. mp.nf_known(c, statics, n, mp.FNF(nf)) && mp.fg_known(c, statics, n, nf)
+proof
+  fix c statics
+  assume hcf
+  let P(n) := ex fg. mp.fg_known(c, statics, n, fg)
+  have b: P(0) by ex_intro({mp.FAC}, taut(all_elim(mp.undef_implements, {4203895}, {statics}), acr.typed, mp.undef_io[n := 1], mp.fg_call0[c := c, F := mp.FAC]))
+  have s: all n. n in omega -> P(n) -> P(int_add(n, 1)) proof
+    fix n
+    assume hn hp
+    obtain fg, hk from hp
+    have nk := mp(all_elim(mp.fl_nf, {c}, {statics}, {n}, {fg}), hcf, hn, hk)
+    show by ex_intro({mp.FFG(mp.FNF(fg))}, mp(all_elim(mp.fl_fg, {c}, {statics}, {n}, {mp.FNF(fg)}), hcf, hn, nk))
+  qed
+  have all := mp(nat_ind[p := n. P(n)], b, s)
+  fix n
+  assume hn
+  obtain fg, hk from mp(all_elim(all, {n}), hn)
+  show by ex_intro({fg}, taut(mp(all_elim(mp.fl_nf, {c}, {statics}, {n}, {fg}), hcf, hn, hk), hk))
+qed
