@@ -1315,6 +1315,71 @@ proof
   show by defs(taut(cv, sv), abi.loaded)
 qed
 
+// The machine's thread pointer sound: so in the world's view of the memory
+// (the descriptor's pages not the stack's -- the world's; its word not
+// the canary's -- the C world's)
+theorem abi.thread_view(vm, mem, objs, fs, sp): fs in bits(64) -> abi.world_pages(vm, mem) ->
+  abi.world_matches(vm, vm, mem, abi.objs_at(objs, fs), fs, sp) -> abi.thread_ok(vm, fs) -> abi.thread_ok(mem, fs)
+proof
+  assume hf hwp hwm ht
+  have rd ns le nz := expand(ht, abi.thread_ok)
+  have {bytes = bytes, nostk = nostk} := expand(hwm, abi.world_matches)
+  // (the descriptor's pages: the machine's, mapped, no stack page)
+  have wp: all k. k in omega -> int_lt(k, 8) -> mem.pages[int_div(int_add(fs, k), x86_64_linux.PAGE)] = vm.pages[int_div(int_add(fs, k), x86_64_linux.PAGE)] &&
+      x86_64_linux.mapped(vm, int_div(int_add(fs, k), x86_64_linux.PAGE)) && !abi.stack_page(vm, int_div(int_add(fs, k), x86_64_linux.PAGE)) proof
+    fix k
+    assume k1 k2
+    let q := int_div(int_add(fs, k), x86_64_linux.PAGE)
+    have r := mp(all_elim(expand(rd, x86_64_linux.readable), {k}), k1, k2)
+    have n := mp(all_elim(ns, {k}), k1, k2)
+    have mq := expand(r.1, x86_64_linux.mapped)
+    have qp: q in gc.PN by simp(hf, k1, mq)
+    have eq := mp(all_elim(expand(hwp, abi.world_pages), {q}), qp)
+    have e2 := rewrite(mp(tr.ite_f[c := abi.stack_page(vm, q), a := none, b := vm.pages[q]], n), eq)
+    show by taut(e2, r.1, n)
+  qed
+  have by: all k. k in omega -> int_lt(k, 8) -> mem.bytes[bits_add(64, fs, bits_of_int(64, k))] = vm.bytes[bits_add(64, fs, bits_of_int(64, k))] proof
+    fix k
+    assume k1 k2
+    have r := mp(all_elim(expand(rd, x86_64_linux.readable), {k}), k1, k2)
+    have pe mv nsv := mp(all_elim(wp, {k}), k1, k2)
+    have lt: int_lt(int_add(fs, k), 18446744073709551616) by simp(expand(r, x86_64_linux.mapped, x86_64_linux.TASK_SIZE, x86_64_linux.PAGE), k1)
+    have ea: bits_add(64, fs, bits_of_int(64, k)) = int_add(fs, k) by defs(simp(hf, k1, k2, lt), bits_add, bits_of_int)
+    have nc: int_add(fs, k) in abi.canary(fs) -> false proof
+      assume hc
+      have ci: int_add(fs, k) in omega && int_le(int_add(fs, 40), int_add(fs, k)) && int_lt(int_add(fs, k), int_add(fs, 48))
+        by taut(set_select_def[s := omega, p := x0. int_le(int_add(fs, 40), x0) && int_lt(x0, int_add(fs, 48)), z := int_add(fs, k)], expand(hc, abi.canary))
+      have _ c1 _ := ci
+      have fo: fs in omega by simp(hf)
+      show by arith(c1, k1, k2, fo)
+    qed
+    have nh: int_add(fs, k) in abi.objs_at(objs, fs).c_bytes by simp(all_elim(abi.objs_at_live, {objs}, {fs}), all_elim(abi.cbytes0_in, {fs}, {int_add(fs, k)}), nc, hf, k1, keep(abi.canary))
+    have mm: x86_64_linux.mapped(mem, int_div(int_add(fs, k), x86_64_linux.PAGE)) by defs(rewrite(sym(pe), expand(mv, x86_64_linux.mapped)), x86_64_linux.mapped)
+    have mm1 mm2 := expand(mm, x86_64_linux.mapped)
+    have qp: int_div(int_add(fs, k), x86_64_linux.PAGE) in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by sel(simp(hf, k1, mm1))
+    have kn := mp(all_elim(nostk, {int_div(int_add(fs, k), x86_64_linux.PAGE)}), qp, mm2)
+    have dm: abi.in_domain(mem, abi.objs_at(objs, fs), int_add(fs, k)) by defs(taut(mm, kn, nh), abi.in_domain)
+    have b := mp(all_elim(bytes, {int_add(fs, k)}), (int_add(fs, k) in bits(64) by simp(hf, k1, lt)), dm)
+    show := rewrite(sym(ea), sym(b))
+  qed
+  have ls := apply(tr.le_same, {mem.bytes}, {vm.bytes}, {fs}, {8}, simp(), by)
+  have rd2: all x0. x0 in omega -> int_lt(x0, 8) -> x86_64_linux.mapped(mem, int_div(int_add(fs, x0), x86_64_linux.PAGE)) && snd(mem.pages[int_div(int_add(fs, x0), x86_64_linux.PAGE)]).prot.r proof
+    fix k
+    assume k1 k2
+    have r := mp(all_elim(expand(rd, x86_64_linux.readable), {k}), k1, k2)
+    have pe _ _ := mp(all_elim(wp, {k}), k1, k2)
+    show by defs(rewrite(sym(pe), expand(r, x86_64_linux.mapped)), x86_64_linux.mapped)
+  qed
+  have ns2: all x0. x0 in omega -> int_lt(x0, 8) -> !abi.stack_page(mem, int_div(int_add(fs, x0), x86_64_linux.PAGE)) proof
+    fix k
+    assume k1 k2
+    have pe _ nsv := mp(all_elim(wp, {k}), k1, k2)
+    show by defs(rewrite(sym(pe), expand(nsv, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+  qed
+  have rd3: x86_64_linux.readable(mem, fs, 8) by defs(rd2, x86_64_linux.readable)
+  show by defs(taut(rd3, ns2, trans(ls, le), nz), abi.thread_ok)
+qed
+
 // The contract at a program's entry point: the bridge's, the spec raising
 // where the world's view has the program not loaded (or the stack
 // protector's word not writable) -- so the program need not be assumed
@@ -1323,7 +1388,7 @@ qed
 // of its own (C1-implemented by the machine code, refining spec from w
 // with h): the code of a recursion unrolled as deep as the entry needs.
 theorem abi.bridge_implements_lf: all G f spec base code statics. abi.ghost_ok(G) ->
-  (all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G ->
+  (all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> abi.thread_ok(w.vm, w.fs_base) ->
      ex low. tr.implements_at(f, low, base, code, statics) && abi.refines_ovf_at(low[args], spec[args], G, w, h) && tr.div_low_at(low[args], spec[args], G, w, h)) ->
   (all args w. args in abi.ARGS -> w in rec_and(abi.World, G) -> w in univ(1) -> !(abi.loaded(w.vm, base, code, statics) && abi.canary_ok(w.vm, w.fs_base)) ->
      abi.spec_raises(rec_and(abi.World, G), w, spec, args)) ->
@@ -1373,7 +1438,13 @@ proof
           (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) -> GOAL proof
         assume hc hy hb2 hw
         have vu vW := apply(abi.view_typed, hM, su, hot, hmv)
-        obtain low, hi ra da from mp(all_elim(hfam, {args}, {abi.view(s, objs, mem)}, {h}), hA, vW, vu, hh)
+        // (the thread pointer sound in the world's view: the machine's)
+        have th: abi.thread_ok(s.vm, s.fs_base) by simp(expand(hy.2, abi.entry_ok))
+        have fsb: s.fs_base in bits(64) by simp(hM)
+        have wp wm := hw
+        have tv := apply(abi.thread_view[vm := s.vm, mem := mem, objs := objs, fs := s.fs_base, sp := abi.sp(s)], fsb, wp, wm, th)
+        have tw: abi.thread_ok(abi.view(s, objs, mem).vm, abi.view(s, objs, mem).fs_base) by simp(tv)
+        obtain low, hi ra da from mp(all_elim(hfam, {args}, {abi.view(s, objs, mem)}, {h}), hA, vW, vu, hh, tw)
         have hb := apply(tr.implements_matches_d, hi)
         have hm := mp(all_elim(hb, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, hc, hy.1, hy.2, hb2, hw, hr)
         show := apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, ra, da, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
@@ -1439,10 +1510,10 @@ theorem tr.implements_abi_l: all G f low spec base code statics. abi.ghost_ok(G)
 proof
   fix G f low spec base code statics
   assume hg hdg hi hrf hnl
-  have fam: all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G ->
+  have fam: all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> abi.thread_ok(w.vm, w.fs_base) ->
       ex low2. tr.implements_at(f, low2, base, code, statics) && abi.refines_ovf_at(low2[args], spec[args], G, w, h) && tr.div_low_at(low2[args], spec[args], G, w, h) proof
     fix args w h
-    assume hA hw hwu hh
+    assume hA hw hwu hh _
     have ra := mp(all_elim(mp(all_elim(hrf, {args}), hA), {w}, {h}), hw, hh)
     have da := mp(all_elim(expand(hdg, tr.div_raises_low), {args}, {w}, {h}), hA, hw, hwu, hh)
     show by ex_intro({low}, taut(hi, ra, da))
