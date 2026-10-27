@@ -70,12 +70,12 @@ param fn prog_statics(u: ()) -> Set[nat]
 // What any allocator may assume of the world at its calls: the ABI's view
 // of a caller's memory (no stack page among the world's; the C world's
 // bytes all but the ABI's), and a process that keeps its thread (the
-// thread pointer's descriptor), its break's start (above page 0) and its
-// program loaded.
+// thread pointer's descriptor, its stack protector's word in it), its
+// break's start (above page 0) and its program loaded.
 pred world_ok(s: Heap) =
   (all p: PageNo. s.vm.pages[p] != none -> s.vm.pages[p].value.kind != stack) &&
   s.objs.c_bytes = {a: nat | a notin canary(s.fs_base)} &&
-  thread_ok(s.vm, s.fs_base) && brk_start_ok(s.vm) &&
+  thread_ok(s.vm, s.fs_base) && canary_ok(s.vm, s.fs_base) && brk_start_ok(s.vm) &&
   loaded(s.vm, prog_base(()), prog_code(()), prog_statics(()))
 
 law inv_wf(s: Heap): alloc_inv(s) -> heap_wf(s)
