@@ -69,6 +69,120 @@ proof
   show by defs(arith(ks, co, ho, hn, hr, hi, hil), mallocng.ctx_free)
 qed
 
+// (nothing taken: no byte in a taken meta)
+theorem mp.u_nt(A, a): seq_len(A.taken) = 0 -> !mallocng.in_taken(A, a)
+proof
+  assume ht
+  have g: mallocng.in_taken(A, a) -> false proof
+    assume h
+    obtain k, hko hkl _ _ from expand(h, mallocng.in_taken)
+    show by arith(hko, hkl, ht)
+  qed
+  show by taut(g)
+qed
+
+// a byte in a state's ranges, in no reserved slot or taken meta: held
+// exactly when not live and not a free byte of the context
+theorem mp.u_held_char(c, A, b, a): a in omega -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) ->
+  !mallocng.in_reserved(A, a) -> !mallocng.in_taken(A, a) ->
+  (a in mallocng.held(c, A, b) <-> !(a in malloc.live_of(b)) && !mallocng.ctx_free(c, a))
+proof
+  assume hao irs hnr hnt
+  have to: a in mallocng.held(c, A, b) -> !(a in malloc.live_of(b)) && !mallocng.ctx_free(c, a) proof
+    assume h
+    have {fp = fp, nf = free} := apply(mp.held_fp, h)
+    have s1 := set_select_def[s := omega, p := y. y in mallocng.fp_set(mallocng.fp_ranges(c, A), b) && !mallocng.in_reserved(A, y) && !mallocng.in_taken(A, y), z := a]
+    have fs: a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) by taut(s1, expand(fp, mallocng.footprint))
+    have s3 := set_select_def[s := omega, p := y. mallocng.in_ranges(y, mallocng.fp_ranges(c, A)) && !(y in malloc.live_of(b)), z := a]
+    have nl: !(a in malloc.live_of(b)) by taut(s3, expand(fs, mallocng.fp_set))
+    show by taut(nl, nf)
+  qed
+  have from: !(a in malloc.live_of(b)) -> !mallocng.ctx_free(c, a) -> a in mallocng.held(c, A, b) proof
+    assume nl nf
+    have inn: a in mallocng.fp_set(mallocng.fp_ranges(c, A), b) by defs(sel(taut(hao, irs, nl)), mallocng.fp_set)
+    have fp: a in mallocng.footprint(c, A, b) by defs(sel(taut(hao, inn, hnr, hnt)), mallocng.footprint)
+    show := apply(mp.held_intro, fp, nf)
+  qed
+  show by taut(to, from)
+qed
+
+// a byte in both states' ranges, neither with a slot reserved nor a meta
+// taken: held by one exactly when by the other
+theorem mp.u_held_iff(c, A, B, b, a): a in omega -> mallocng.no_reserved(A) -> mallocng.no_reserved(B) ->
+  seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, B)) ->
+  (a in mallocng.held(c, A, b) <-> a in mallocng.held(c, B, b))
+proof
+  assume hao hra hrb hta htb ina inb
+  have ca := apply(mp.u_held_char[c := c, A := A, b := b, a := a], hao, ina, mp(mp.nores[A := A, a := a], hra), mp(mp.u_nt[A := A, a := a], hta))
+  have cb := apply(mp.u_held_char[c := c, A := B, b := b, a := a], hao, inb, mp(mp.nores[A := B, a := a], hrb), mp(mp.u_nt[A := B, a := a], htb))
+  show by taut(ca, cb)
+qed
+
+// ... so both views the same there
+theorem mp.u_view_at(vm, F, G, a): a in omega -> (a in F <-> a in G) -> mallocng.mview(vm, F)[a] = mallocng.mview(vm, G)[a]
+proof
+  assume hao h
+  show by defs(simp(hao, h), mallocng.mview)
+qed
+
+// n bytes at a in both states' ranges: read the same in both views
+theorem mp.u_rd_same(c, A, B, vm, b, a, n): mallocng.no_reserved(A) -> mallocng.no_reserved(B) ->
+  seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 -> n in omega ->
+  (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in omega &&
+     mallocng.in_ranges(int_add(a, i), mallocng.fp_ranges(c, A)) && mallocng.in_ranges(int_add(a, i), mallocng.fp_ranges(c, B))) ->
+  mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), a, n) = mallocng.rd(mallocng.mview(vm, mallocng.held(c, B, b)), a, n)
+proof
+  assume hra hrb hta htb hn hr
+  have e: all i. i in omega -> int_lt(i, n) ->
+      mallocng.mview(vm, mallocng.held(c, B, b))[int_add(a, i)] = mallocng.mview(vm, mallocng.held(c, A, b))[int_add(a, i)] proof
+    fix i
+    assume hi hil
+    have ao ia ib := mp(all_elim(hr, {i}), hi, hil)
+    have iff := apply(mp.u_held_iff[c := c, A := B, B := A, b := b, a := int_add(a, i)], ao, hrb, hra, htb, hta, ib, ia)
+    show := apply(mp.u_view_at[vm := vm, F := mallocng.held(c, B, b), G := mallocng.held(c, A, b), a := int_add(a, i)], ao, iff)
+  qed
+  show := sym(mp(mp.agree_rd[M := mallocng.mview(vm, mallocng.held(c, A, b)), M2 := mallocng.mview(vm, mallocng.held(c, B, b)), a := a, n := n], hn, e))
+qed
+
+// the fixed ranges in the footprint's ranges
+theorem mp.u_fixed_fp(c, A, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs ->
+  mallocng.in_ranges(a, mallocng.fixed_ranges(c, A)) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha h
+  have pl := apply(mp.pre_list, hc, hu, ha)
+  have {gl = groups} := apply(mp.fp_pieces, hc, hu, ha)
+  have h2 := expand(h, mallocng.fixed_ranges)
+  have r := apply(mp.ranges_l, pl, gl, h2)
+  show by defs(r, mallocng.fp_ranges, mallocng.fixed_ranges)
+qed
+
+// a byte of the data symbols (the context, the lock, libc's), and of the
+// auxiliary vector's entries: in the footprint's ranges
+theorem mp.u_front_fp(c, A, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs ->
+  (mallocng.in_ranges(a, mallocng.data_ranges(c)) || mallocng.in_ranges(a, mallocng.auxv_ranges(A))) ->
+  mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha h
+  have {rd = rodata, ax = auxv} := apply(mp.front_pieces, hc, hu, ha)
+  have ro := apply(mp.ro_list, (c.file in seq_type(bits(8)) by simp(hc)))
+  have cf: c.ctx in omega && c.lock in omega && c.libc in omega by simp(hc)
+  have o1 := apply(tr.seq_one_type, (pair(c.ctx, mallocng.CTX_SIZE) in univ(1) by simp(cf)))
+  have o2 := apply(tr.seq_one_type, (pair(c.lock, 4) in univ(1) by simp(cf)))
+  have o3 := apply(tr.seq_one_type, (pair(c.libc, 16) in univ(1) by simp(cf)))
+  have dl: mallocng.data_ranges(c) in list_type(univ(1)) by defs(apply(tr.concat_list, apply(tr.concat_list, o1, o2), o3), mallocng.data_ranges)
+  have d: mallocng.in_ranges(a, mallocng.data_ranges(c)) -> mallocng.in_ranges(a, seq_concat(seq_concat(mallocng.ro_ranges(c.file), mallocng.data_ranges(c)), mallocng.auxv_ranges(A))) proof
+    assume hd
+    show := apply(mp.ranges_l, rd, ax, apply(mp.ranges_r, ro, dl, hd))
+  qed
+  have x: mallocng.in_ranges(a, mallocng.auxv_ranges(A)) -> mallocng.in_ranges(a, seq_concat(seq_concat(mallocng.ro_ranges(c.file), mallocng.data_ranges(c)), mallocng.auxv_ranges(A))) proof
+    assume hx
+    show := apply(mp.ranges_r, rd, ax, hx)
+  qed
+  have q: mallocng.in_ranges(a, seq_concat(seq_concat(mallocng.ro_ranges(c.file), mallocng.data_ranges(c)), mallocng.auxv_ranges(A))) by taut(h, d, x)
+  show := apply(mp.u_fixed_fp, hc, hu, ha, apply(mp.fixed_in[c := c, A := A, a := a], hc, hu, ha, taut(q)))
+qed
+
 // ----------------------------------------------------------------------
 //  A cyclic list from a head (of nonzero elements): determined by memory
 
