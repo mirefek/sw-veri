@@ -787,3 +787,60 @@ proof
   show := mp(all_elim(gc.bind_div[p := F[regs], k := x3 x4. any_rel(x5. x5 in bits(64), x5. diverge(t) = ok(x3, pair(x4, x5))),
     x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], {S}, {t}), hr, refl({diverge(t)}))
 qed
+
+// ----------------------------------------------------------------------
+//  The `malloc` symbol by the layer's malloc
+
+// the layer's ghost part (the live blocks): apart from the machine's and
+// the world's fields
+theorem mp.hg_ok: abi.ghost_ok(malloc.Heap.ghost)
+proof
+  fix h
+  assume hh
+  have kb: insert("blocks", empty) in univ(1) by simp(x86.insert_univ)
+  have xp xf xd _ := (h in powerset(cart(insert("blocks", empty), univ(1))) && is_fun(h) && dom(h) = insert("blocks", empty) && h.blocks in fn_space(bits(64), option(omega))
+    by simp(expand(hh, malloc.Heap.ghost)))
+  have hu := mp(rec_univ[u := 1, k := insert("blocks", empty), r := h], kb, xp, xf, xd)
+  have k1 := apply(mp.one_key, xf, xd)
+  have keys: all z. z in h -> !(fst(z) in abi.KEYS) && !(fst(z) in abi.WKEYS) proof
+    fix z
+    assume hz
+    show by simp(mp(all_elim(k1, {z}), hz))
+  qed
+  show by taut(hu, xf, keys)
+qed
+
+// default_malloc's run (__libc_malloc_impl's called as such) with its
+// returns as one
+theorem mp.dm_run2(c, n, g, s, h, o): n in bits(64) -> mp.mi_call(c, g) -> s in abi.World -> h in mp.G ->
+  mallocng.holds_m(c, h.A, s.vm, h.blocks) -> mallocng.shown_in(c, h.A, s.objs) -> mallocng.no_reserved(h.A) -> seq_len(h.A.taken) = 0 ->
+  abi.thread_ok(s.vm, s.fs_base) -> mallocng_specs.tls_apart(c, h.A, s.fs_base) ->
+  abi.brk_start_ok(s.vm) -> mallocng_specs.errno_ok(s.vm, s.objs, s.fs_base) -> mallocng_specs.errno_apart(c, h.A, s.vm, s.fs_base) ->
+  runs(c_src_malloc_lite_malloc.default_malloc(n, g), s, o) ->
+  abi.ovf_out(s, o) || (ex V p. (V in x86_64_linux.Vm && p in bits(64) && (ex A2. mp.mi_ret(c, h.A, n, h.blocks, s, A2, V, p))) && o = ok(fn_update(s, "vm", V), p))
+proof
+  assume hnb hmi hw hh hin hsh hnr htk hth htl hbs heo hea hr
+  show := apply(mp.mi_out2[c := c, A := h.A, n := n, B := h.blocks, s := s, o := o],
+    apply(mp.dm_run[c := c, n := n, g := g, s := s, h := h, o := o], hnb, hmi, hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea, hr))
+qed
+
+// the `malloc` symbol's code called as __libc_malloc_impl
+theorem mp.dm_q: all c g. mp.mi_call(c, g) -> mp.mi_call(c, c_src_malloc_lite_malloc.default_malloc_fun(g))
+proof
+  fix c g
+  assume hmi
+  fix n t h regs o2
+  assume hnb hw hh hin hsh hnr htk hth htl hbs heo hea hro hr
+  have rl rn r0 := apply(gc.regs1, hnb, hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = n by defs(simp(r0, hnb), bits_of_int, pow2)
+  step o3 V p, e hs1 from hr with o1l, bp, mp.dm_run2 using ra, hnb, hmi, hw, hh, hin, hsh, hnr, htk, hth, htl, hbs, heo, hea
+  have hv hpb hex := hs1
+  step o4 y, e2 from e with g.result64_inv using hpb
+  have fp: fst(pair(p, y)) = p by simp()
+  have hex2 := subst({z. ex X. mp.mi_ret(c, h.A, n, h.blocks, t, X, V, z)}, sym(fp), hex)
+  show by disj({2}, ex_intro({V}, {pair(p, y)}, taut(hv, hex2, e2)))
+qed
