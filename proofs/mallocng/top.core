@@ -1052,7 +1052,8 @@ qed
 theorem mp.top_rec(s, h, h2, V): s in abi.World -> s in univ(1) -> h in malloc.Heap.ghost -> h2 in malloc.Heap.ghost -> V in x86_64_linux.Vm ->
   h2 = h || (ex B2. h2 = fn_update(h, "blocks", B2)) ->
   typ: union2(fn_update(s, "vm", V), h2) in rec_and(abi.World, malloc.Heap.ghost) &&
-  eq: union2(fn_update(s, "vm", V), h2) = fn_update(fn_update(union2(s, h), "blocks", h2.blocks), "vm", V)
+  eq: union2(fn_update(s, "vm", V), h2) = fn_update(fn_update(union2(s, h), "blocks", h2.blocks), "vm", V) &&
+  uv: union2(fn_update(s, "vm", V), h2) in univ(1) && fun: is_fun(union2(fn_update(s, "vm", V), h2)) && vmd: "vm" in dom(union2(fn_update(s, "vm", V), h2))
 proof
   assume hs su hh hh2 hv hk
   have _ _ wv wvu := apply(tr.world_set[w := s, v := V, os := s.os, fs := s.fs_base], hs, su, hv, apply(x86.vm_univ, hv), (s.os in x86_64_linux.Os by simp(hs)),
@@ -1095,7 +1096,99 @@ proof
   have e3: fn_update(fn_update(union2(s, h), "blocks", h2.blocks), "vm", V) = union2(fn_update(s, "vm", V), h2) :=
     trans(subst({w. fn_update(fn_update(union2(s, h), "blocks", h2.blocks), "vm", V) = fn_update(w, "vm", V)}, e1b,
       refl({fn_update(fn_update(union2(s, h), "blocks", h2.blocks), "vm", V)})), e2)
-  show by taut(typ, sym(e3))
+  // (the record: in the universe, a function, its memory a field)
+  have h2u h2f _ := mp(all_elim(mp.hg_ok, {h2}), hh2)
+  have uv := mp(union2_univ[u := 1, a := fn_update(s, "vm", V), b := h2], wvu, h2u)
+  have sf: is_fun(s) by simp(expand(hs, abi.World))
+  have wf := mp(fn_update_fun[f := s, k := "vm", v := V], sf)
+  have wd: dom(fn_update(s, "vm", V)) = abi.WKEYS := rewrite(sd, mp(fn_update_dom[f := s, k := "vm", v := V], sf, (("vm" in dom(s)) by simp(sd))))
+  have wk := apply(abi.keys_of[f := fn_update(s, "vm", V), d := abi.WKEYS], wd)
+  have dj: all z w. z in fn_update(s, "vm", V) -> w in h2 -> fst(z) != fst(w) proof
+    fix z w
+    assume hz hw
+    have a1 := mp(all_elim(wk, {z}), hz)
+    have _ a2 := mp(all_elim(k2, {w}), hw)
+    assume e
+    show by taut(a2, rewrite(e, a1))
+  qed
+  have fun := apply(union2_fun, wf, h2f, dj)
+  have vmd: "vm" in dom(union2(fn_update(s, "vm", V), h2)) by simp(dom_union2[a := fn_update(s, "vm", V), b := h2], wd)
+  show by taut(typ, sym(e3), uv, fun, vmd)
+qed
+
+// (the layer's state s with h: a function, its blocks a field)
+theorem mp.top_sfun(s, h): s in abi.World -> h in malloc.Heap.ghost -> is_fun(union2(s, h)) && "blocks" in dom(union2(s, h))
+proof
+  assume hs hh
+  have sd: dom(s) = abi.WKEYS by simp(expand(hs, abi.World))
+  have hd: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have sf: is_fun(s) by simp(expand(hs, abi.World))
+  have _ hf k2 := mp(all_elim(mp.hg_ok, {h}), hh)
+  have sk := apply(abi.keys_of[f := s, d := abi.WKEYS], sd)
+  have dj: all z w. z in s -> w in h -> fst(z) != fst(w) proof
+    fix z w
+    assume hz hw
+    have a1 := mp(all_elim(sk, {z}), hz)
+    have _ a2 := mp(all_elim(k2, {w}), hw)
+    assume e
+    show by taut(a2, rewrite(e, a1))
+  qed
+  have f := apply(union2_fun, sf, hf, dj)
+  have d: "blocks" in dom(union2(s, h)) by simp(dom_union2[a := s, b := h], hd)
+  show by taut(f, d)
+qed
+
+// The `malloc` symbol's 0 (`mp.mi_zero`, from A at the layer's state):
+// the layer's malloc's, out of memory
+theorem mp.top_zero(c, eo, b, cd, st, regs, s, h, A, A2, V, y): c in mallocng.Cfg -> app(eo, empty) = 52 -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) ->
+  s in abi.World -> s in univ(1) -> h in malloc.Heap.ghost -> mp.MPRE(c, eo, b, cd, st, union2(s, h)) -> A in mallocng.Abs -> mallocng.rep(c, A, union2(s, h)) ->
+  V in x86_64_linux.Vm -> y in bits(64) -> mp.mi_zero(c, A, h.blocks, s, A2, V) ->
+  runs(abi.wide(malloc.Heap.ghost, mp.UF(c, eo, b, cd, st))[regs], union2(s, h), with_ghost(ok(fn_update(s, "vm", V), pair(0, y)), h))
+proof
+  assume hc he hra o1l hs su hh hpre ha hrep hv hy hz0
+  let S := union2(s, h)
+  have hinv heo hwo := hpre
+  have au := apply(mallocng.abs_univ, ha)
+  have sd: dom(s) = abi.WKEYS by simp(expand(hs, abi.World))
+  have hd: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have vS: S.vm = s.vm by simp(sd, hd)
+  have oS: S.objs = s.objs by simp(sd, hd)
+  have fS: S.fs_base = s.fs_base by simp(sd, hd)
+  have bS: S.blocks = h.blocks by simp(sd, hd)
+  have fsb: S.fs_base in bits(64) := rewrite(sym(fS), (s.fs_base in bits(64) by simp(hs)))
+  have bt: S.blocks in fn_space(bits(64), option(omega)) := rewrite(sym(bS), (h.blocks in fn_space(bits(64), option(omega)) by simp(expand(hh, malloc.Heap.ghost))))
+  have hz := rewrite(sym(bS), rewrite(sym(fS), rewrite(sym(oS), rewrite(sym(vS), hz0))))
+  have a2a a2u nr2 tk2 v2v hm2 hsh2 hun hfp hen := hz
+  have _ _ th cn _ _ := expand(hwo, malloc.world_ok)
+  have {eap = apart} := apply(mp.top_pre[c := c, A := A, S := S, eo := eo, b := b, cd := cd, st := st], fsb, hrep, he, heo, hwo)
+  have rep2 := apply(mp.top_mzero[c := c, A := A, S := S, A2 := A2, V2 := V], hc, au, ha, bt, fsb, hrep, th, cn, eap, hz)
+  // the new state T: the layer's state with the memory V
+  let T := fn_update(S, "vm", V)
+  have {typ = typ, eq = eq, uv = uv, fun = fun, vmd = vmd} := apply(mp.top_rec[s := s, h := h, h2 := h, V := V], hs, su, hh, hh, hv, disj({1}, refl({h})))
+  have sf sb := apply(mp.top_sfun, hs, hh)
+  have same := rewrite(bS, mp(fn_update_same[f := S, k := "blocks"], sf, sb))
+  have te: union2(fn_update(s, "vm", V), h) = T := rewrite(same, eq)
+  have tg := rewrite(te, typ)
+  have tu := rewrite(te, uv)
+  have tf := rewrite(te, fun)
+  have td := rewrite(te, vmd)
+  have tv: T.vm = V by simp()
+  have tb: T.blocks = S.blocks by simp()
+  have sg := apply(rec_and_intro, hs, hh)
+  have stp := apply(mp.top_step[c := c, A := A, S := S, T := T, A2 := A2, eo := eo, b := b, cd := cd, st := st], ha, a2a, sg, tg, fsb, he, hrep, rep2, th, hwo,
+    rewrite(sym(tv), hun),
+    subst({w. all a. a in omega -> a in mallocng.footprint(c, A2, w) -> a in mallocng.footprint(c, A, S.blocks) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE))}, sym(tb), hfp))
+  have Su: S in univ(1) := mp(union2_univ[u := 1, a := s, b := h], su, (h in univ(1) by taut(mp(all_elim(mp.hg_ok, {h}), hh))))
+  have oom := apply(mp.top_oom[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, S := S, V := V], Su, hv, fsb, he, tu, tf, td, stp, hen)
+  // the layer's malloc returning 0 there, as a C function value, widened
+  have pu: pair(S, ok(T, 0)) in univ(1) by simp(Su, tu)
+  have mf := apply(mp.top_mfail[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, n := regs[0], S := S, T := T], pu, oom)
+  have sh: abi.outcome(ok(T, 0)) by disj({1}, ex_intro({T}, {0}, refl({ok(T, 0)})))
+  have fv := apply(mp.top_mfun[I := mallocng.inv(c), O := mallocng.owned(c), eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := ok(T, 0)], hra, pu, sh, mf)
+  have pu2: pair(S, ok(T, pair(0, y))) in univ(1) by simp(Su, tu, hy)
+  have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UF(c, eo, b, cd, st), regs := regs, S := S, o2 := ok(T, pair(0, y))], hra, pu2,
+    apply(mp.wr_ok[F := mp.UF(c, eo, b, cd, st), regs := regs, S := S, x := T, r := 0, y := y], hy, fv))
+  show := rewrite(sym(all_elim(abi.wg_ok, {fn_update(s, "vm", V)}, {pair(0, y)}, {h})), rewrite(sym(te), w))
 qed
 
 // ... where it is defined: from A (rep), the purpose spec's ghost part
