@@ -154,6 +154,14 @@ For a function F, two halves:
     through the kernel; no proof text is written. The engine is untrusted:
     the kernel records only the theorems its rules made, without
     hypotheses.
+  - The decode facts come from a `steps` line (build/chain/steps.core,
+    written by `slc steps`: the binary by its path and sha256, the
+    functions). The checker (`slc/cli/src/steps.rs`) decodes each
+    distinct encoding (`members`: no other row of the decoder matches) and
+    proves `x86.step_*` (a step there runs that instruction) and, per
+    instruction, `F.at_*` (from F's code `F.code` loaded, its fetch
+    succeeds), through the kernel, no proof text. The instruction
+    boundaries come from the untrusted interpreter.
   - C1 is against the readable CFG (`slc gimple --readable --cfg`;
     `slc/cli/src/c1/cfg.rs`, `proofs/translate_cfg.core`): each block is
     walked once from its cut point, its claim proven for every world and
@@ -237,7 +245,7 @@ slc elab PATH.. -o OUT.core                 elaborate to core definitions
 slc kernel-check [--no-cache] FILE.core..   check core files and their proofs
 slc claim malloc --elf ELF -o OUT.core      state the claim
 slc gimple --readable [--cfg] ...           GIMPLE dump to readable GIMPLE
-slc steps ELF CLAIM F -o OUT.core           decode facts of F's instructions
+slc steps ELF F.. -o OUT.core [--text T]    the `steps` line (decode facts of F's instructions, made in the checker); the program text
 slc decode / coverage / cputest / heapcheck model and invariant testing
 ```
 

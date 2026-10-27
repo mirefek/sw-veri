@@ -567,6 +567,14 @@ pub trait Prover {
     fn contract(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _by: &str, _c1: Option<&str>, _call: Option<&str>, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
         Err(KernelError("`contract`: this checker has no contract procedure".into()))
     }
+
+    /// `steps NAME "ELF" "SHA256" "SYMBOL .."`: the decode facts of the
+    /// functions of a binary (the file of that hash), proven by a procedure
+    /// (not trusted either): the definitions it made (in order, by name,
+    /// with no sequent) and the theorems
+    fn steps(&mut self, _env: &mut Env, _elf: &str, _sha: &str, _fns: &[String]) -> KResult<Vec<(String, Option<Seq>)>> {
+        Err(KernelError("`steps`: this checker has no decoder".into()))
+    }
 }
 
 /// The proof cache of `slc kernel-check` (`ext::cache`), supplied by the
@@ -895,6 +903,49 @@ fn load_mode(
                     } else {
                         rep.theorems.push(n);
                     }
+                }
+            }
+            // steps NAME "ELF" "SHA256" "SYMBOL ..": the functions' decode
+            // facts (their code `F.code`, the step theorems `x86.step_*`,
+            // `F.at_*`), made by the checker's procedure from the binary of
+            // that hash
+            "steps" => {
+                let mut strs = Vec::new();
+                for _ in 0..3 {
+                    match p.bump()? {
+                        Tok::Str(s) => strs.push(String::from_utf8(s).map_err(|_| ctx(KernelError("not UTF-8".into())))?),
+                        t => return p.error(&format!("`steps NAME \"ELF\" \"SHA256\" \"SYMBOL ..\"`: a string expected, found {:?}", t)),
+                    }
+                }
+                let fns: Vec<String> = strs[2].split_whitespace().map(|s| s.to_string()).collect();
+                let Some(pr) = prover.as_deref_mut() else {
+                    return Err(ctx(KernelError("`steps` needs a proof checker".into())));
+                };
+                let mark = p.env.local_mark();
+                p.env.begin_locals();
+                let r = pr.steps(p.env, &strs[0], &strs[1], &fns).and_then(|ths| {
+                    ths.into_iter().map(|(n, sq)| Ok((n, sq.map(|s| Seq::globalize(p.env, &s)).transpose()?))).collect::<KResult<Vec<_>>>()
+                });
+                let kept = p.env.locals_kept(&mark);
+                p.env.end_locals();
+                if let Some(n) = &kept {
+                    return Err(ctx(KernelError(format!("`{}` keeps a variable of the `steps` procedure's run", n))));
+                }
+                let ths = r.map_err(ctx)?;
+                // (its line, as a `c1` line's: the cache keeps the definitions
+                // and theorems)
+                rep.c1s.push((line, ths.iter().map(|x| x.0.clone()).collect()));
+                for (n, sq) in ths {
+                    let Some(sq) = sq else {
+                        rep.defs += 1;
+                        continue;
+                    };
+                    if !sq.hyps().is_empty() || !sq.open().is_empty() {
+                        return Err(ctx(KernelError(format!("`{}`: hypotheses or open lemmas left", n))));
+                    }
+                    facts::check_new(p.env, &n).map_err(ctx)?;
+                    facts::record(p.env, &n, sq).map_err(ctx)?;
+                    rep.theorems.push(n);
                 }
             }
             // bit_rule NAME: a word's bit, for the proof checker's `bitwise`

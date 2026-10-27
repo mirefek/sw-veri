@@ -158,7 +158,14 @@ fn statements(env: &Env, src: &str, rep: &syntax::LoadReport) -> String {
         let e = line_starts.get(*line).copied().unwrap_or(src.len());
         let mut text = String::new();
         for n in names {
-            if let Some(t) = sl_kernel::ext::facts::seq_of(env, n).map(|s| s.concl().clone()) {
+            // (a definition a `steps` line made, with no parameters)
+            let def = env.sym_by_name.get(n).and_then(|s| match &env.syms[*s as usize].kind {
+                sl_kernel::SymKind::Defined { params, body } if params.is_empty() => Some(body.clone()),
+                _ => None,
+            });
+            if let Some(b) = def {
+                text.push_str(&format!("def {}() := {}\n", n, syntax::Printer::new(env).term(&b)));
+            } else if let Some(t) = sl_kernel::ext::facts::seq_of(env, n).map(|s| s.concl().clone()) {
                 text.push_str(&format!("theorem {}{} : {} cached{}\n", n, params_of(env, &t), syntax::Printer::new(env).term(&t), rests(n)));
             }
         }

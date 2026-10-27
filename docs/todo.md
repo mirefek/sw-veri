@@ -95,6 +95,15 @@ proofs/mallocng/fun/free_machine.core):
   variables are dropped only at its end (`Env::begin_locals` ..
   `end_locals`), each proof's still held until then, and equal terms built
   apart are separate nodes.
+- The generated files as data, their facts made in the checker (as the
+  decode facts' `steps` line now is): the program text (text.core: a
+  `text` line, the bytes read from the binary by its hash, `F.in_text`
+  proven through the kernel); the elaborated layers (gimple.core) kept in
+  memory, elaborated in the checker from the .sl files. The readable
+  GIMPLE (cfg*.sl) stays text: it is what a person reads.
+- The step theorems take ~70 ms each (1069 encodings, ~80 s of the
+  `steps` line's 90 s; only after the binary changes): the decoder's
+  `members` and the `exec_insn` unfolding, per encoding.
 
 ## 4. The invariant and the laws
 

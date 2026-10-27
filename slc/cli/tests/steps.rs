@@ -1,5 +1,6 @@
-//! `slc steps`: the step theorems of get_slot_index (-O0 build) are
-//! generated and prove. Needs `scripts/build-musl.sh -O0`; skipped without.
+//! `slc steps`: the `steps` line of get_slot_index (-O0 build) makes its
+//! decode facts in the checker. Needs `scripts/build-musl.sh -O0`; skipped
+//! without.
 
 use std::path::Path;
 use std::process::Command;
@@ -94,13 +95,11 @@ fn step_theorems_of_get_slot_index_prove() {
     }
     let out = std::env::temp_dir().join(format!("slc-steps-{}.core", std::process::id()));
     let slc = env!("CARGO_BIN_EXE_slc");
-    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg(&elf).arg(&claim).args(["get_slot_index", "-o"]).arg(&out).output().unwrap();
-    let msg = String::from_utf8_lossy(&g.stdout);
-    assert!(g.status.success() && msg.contains("7 instructions, 7 distinct encodings, 7 theorems"), "{}{}", msg, String::from_utf8_lossy(&g.stderr));
-    let text = std::fs::read_to_string(&out).unwrap();
-    assert!(text.contains("theorem x86.step_4883e803(m, o)"), "{}", text);
-    // the decode fact of `ret`
-    assert!(text.contains("theorem get_slot_index.at_40211a"), "{}", text);
+    // (the line: the binary by its path and hash)
+    let g = Command::new(slc).current_dir(&root).args(["steps"]).arg("build/test_malloc_O0").args(["get_slot_index", "-o"]).arg(&out).output().unwrap();
+    assert!(g.status.success(), "{}{}", String::from_utf8_lossy(&g.stdout), String::from_utf8_lossy(&g.stderr));
+    let line = std::fs::read_to_string(&out).unwrap();
+    assert!(line.contains("steps decode \"build/test_malloc_O0\""), "{}", line);
     let c = Command::new(slc)
         .current_dir(&root)
         .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/loop.core"])
@@ -110,13 +109,26 @@ fn step_theorems_of_get_slot_index_prove() {
         .output()
         .unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
-    // 7 step theorems, and per instruction where a step from it goes
+    // 7 step theorems, and per instruction where a step from it goes (the
+    // decode fact of `ret`, at_40211a, among them)
     assert!(
         c.status.success() && checked.contains("1 definitions, 14 theorems"),
         "{}{}",
         checked,
         String::from_utf8_lossy(&c.stderr)
     );
+    // a binary changed: the line fails
+    let other = line.replace("steps decode \"build/test_malloc_O0\" \"", "steps decode \"build/test_malloc_O0\" \"0");
+    std::fs::write(&out, other).unwrap();
+    let c = Command::new(slc)
+        .current_dir(&root)
+        .args(["kernel-check", "--no-cache", "core/prelude.core", "core/logic.core", "core/sets.core", "core/nat.core", "core/records.core", "core/loop.core"])
+        .arg(&claim)
+        .args(["proofs/x86.core", "proofs/x86_code.core"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(!c.status.success() && String::from_utf8_lossy(&c.stderr).contains("its sha256 is"), "{}", String::from_utf8_lossy(&c.stderr));
     let _ = std::fs::remove_file(&out);
 }
 
@@ -142,9 +154,7 @@ fn c1_cfg_engine_checks() {
     // (malloc.c's copies of the static functions also in other files: by address)
     let g = Command::new(slc)
         .current_dir(&root)
-        .args(["steps"])
-        .arg(&elf)
-        .arg(&claim)
+        .args(["steps", "build/test_malloc_O0"])
         .args(["a_ctz_32", "is_bouncing=403842", "get_slot_index=4030dd", "get_stride=403350", "step_seq=40370a", "upgradelock", "resetlock", "decay_bounces", "a_clz_32", "dequeue=402f49", "dequeue_head", "a_crash=402c6e", "queue=402e8c", "free_meta=403014", "size_to_class", "set_size", "enframe", "account_bounce", "get_meta=4030f5", "activate_group=40304f", "__malloc_allzerop", "alloc_slot", "try_avail", "alloc_group=403ee6", "a_cas=402c47", "size_overflows", "__malloc_alloc_meta", "get_random_secret", "__syscall1=402cf9", "__mmap", "__mprotect", "__errno_location", "__get_tp=40569a", "__syscall3=404bde", "__syscall6=404a8c", "__syscall_ret", "dummy=404ada", "memcpy", "__stack_chk_fail", "rdlock=402ddf", "wrlock=402e03", "unlock=402e27", "__unlock=4050c8", "__lock=404f98", "a_fetch_add=404e83", "__wake=404ea2", "__syscall2=404c8d", "__munmap", "__libc_malloc_impl", "default_malloc=401e53", "fr_a_cas=401e6e", "a_or", "fr_a_crash=401eac", "fr_wrlock=401eaf", "fr_unlock=401ed3", "fr_queue=401eec", "fr_dequeue=401fa9", "fr_free_meta=40203a", "fr_activate_group=402075", "fr_get_slot_index=402103", "fr_get_meta=40211b", "get_nominal_size", "fr_get_stride=40245e", "fr_step_seq=4024ca", "record_seq", "fr_is_bouncing=402543", "free_group", "okay_to_free", "nontrivial_free", "__libc_free", "free", "-o"])
         .arg(&steps)
         .arg("--text")

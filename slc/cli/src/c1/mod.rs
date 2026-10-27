@@ -1,6 +1,6 @@
 //! C1 by the engine (docs/overview.md, C1): a function's machine code
 //! implements its readable GIMPLE, proven by walking its decode facts
-//! (`FN.at_ADDR`, from `slc steps`) alongside the spec's procedure
+//! (`FN.at_ADDR`, from the `steps` line: crate::steps) alongside the spec's procedure
 //! (`SPEC_fun`), one rule of proofs/translate*.core per step, the rules
 //! applied through the kernel (`sl_proof::api`). Not trusted: the theorems
 //! it returns are kernel sequents. No proof text is made.
@@ -989,5 +989,9 @@ impl syntax::Prover for Checker {
 
     fn contract(&mut self, env: &mut Env, fname: &str, spec: &str, by: &str, c1: Option<&str>, call: Option<&str>, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
         contract::contract(env, fname, spec, by, c1, call, hints).map_err(sl_kernel::KernelError)
+    }
+
+    fn steps(&mut self, env: &mut Env, elf: &str, sha: &str, fns: &[String]) -> sl_kernel::KResult<Vec<(String, Option<Seq>)>> {
+        crate::steps::directive(env, elf, sha, fns).map_err(sl_kernel::KernelError)
     }
 }

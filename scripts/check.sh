@@ -6,7 +6,8 @@
 # checking while editing.
 #
 #   scripts/check.sh gen        make the generated files (build/chain/:
-#                               decode facts, program text, readable CFG),
+#                               the decode facts' line -- the facts made in
+#                               the checker --, program text, readable CFG),
 #                               after a change to the binaries or the spec
 #   scripts/check.sh [FILE]     elaborate the layers, check the chain (up
 #                               to FILE, e.g. proofs/mallocng/fun/try_avail.core)
@@ -27,7 +28,7 @@ LEAVES="src_errno___errno_location:c_errno_location:__errno_location.c src_inter
   src_malloc_mallocng_free:c_mallocng_free:free.c src_malloc_free:c_free:free.c"
 if [ "$1" = gen ]; then
   mkdir -p "$B"
-  $S steps build/test_malloc_O0 build/musl_malloc_O0.core a_ctz_32 is_bouncing=403842 get_slot_index=4030dd get_stride=403350 step_seq=40370a upgradelock resetlock decay_bounces a_clz_32 dequeue=402f49 dequeue_head a_crash=402c6e queue=402e8c free_meta=403014 size_to_class set_size enframe account_bounce get_meta=4030f5 activate_group=40304f __malloc_allzerop alloc_slot try_avail alloc_group=403ee6 a_cas=402c47 size_overflows __malloc_alloc_meta get_random_secret __syscall1=402cf9 __mmap __mprotect __errno_location __get_tp=40569a __syscall3=404bde __syscall6=404a8c __syscall_ret dummy=404ada memcpy __stack_chk_fail rdlock=402ddf wrlock=402e03 unlock=402e27 __unlock=4050c8 __lock=404f98 a_fetch_add=404e83 __wake=404ea2 __syscall2=404c8d __munmap __libc_malloc_impl default_malloc=401e53 fr_a_cas=401e6e a_or fr_a_crash=401eac fr_wrlock=401eaf fr_unlock=401ed3 fr_queue=401eec fr_dequeue=401fa9 fr_free_meta=40203a fr_activate_group=402075 fr_get_slot_index=402103 fr_get_meta=40211b get_nominal_size fr_get_stride=40245e fr_step_seq=4024ca record_seq fr_is_bouncing=402543 free_group okay_to_free nontrivial_free __libc_free free -o "$B/steps.core" --text "$B/text.core" || exit 1
+  $S steps build/test_malloc_O0 a_ctz_32 is_bouncing=403842 get_slot_index=4030dd get_stride=403350 step_seq=40370a upgradelock resetlock decay_bounces a_clz_32 dequeue=402f49 dequeue_head a_crash=402c6e queue=402e8c free_meta=403014 size_to_class set_size enframe account_bounce get_meta=4030f5 activate_group=40304f __malloc_allzerop alloc_slot try_avail alloc_group=403ee6 a_cas=402c47 size_overflows __malloc_alloc_meta get_random_secret __syscall1=402cf9 __mmap __mprotect __errno_location __get_tp=40569a __syscall3=404bde __syscall6=404a8c __syscall_ret dummy=404ada memcpy __stack_chk_fail rdlock=402ddf wrlock=402e03 unlock=402e27 __unlock=4050c8 __lock=404f98 a_fetch_add=404e83 __wake=404ea2 __syscall2=404c8d __munmap __libc_malloc_impl default_malloc=401e53 fr_a_cas=401e6e a_or fr_a_crash=401eac fr_wrlock=401eaf fr_unlock=401ed3 fr_queue=401eec fr_dequeue=401fa9 fr_free_meta=40203a fr_activate_group=402075 fr_get_slot_index=402103 fr_get_meta=40211b get_nominal_size fr_get_stride=40245e fr_step_seq=4024ca record_seq fr_is_bouncing=402543 free_group okay_to_free nontrivial_free __libc_free free -o "$B/steps.core" --text "$B/text.core" || exit 1
   $S gimple --readable --elf build/test_malloc_O0 --obj build/gimple-O0/src_malloc_mallocng_malloc.c.o --source malloc.c build/gimple-O0/src_malloc_mallocng_malloc.c.optimized -o build/gimple-O0/sl/c_mallocng_malloc.sl || exit 1
   $S gimple --readable --cfg --elf build/test_malloc_O0 --obj build/gimple-O0/src_malloc_mallocng_malloc.c.o --source malloc.c build/gimple-O0/src_malloc_mallocng_malloc.c.optimized -o "$B/cfg.sl" || exit 1
   # the leaves' sources (musl's errno, syscall and mman wrappers): their
