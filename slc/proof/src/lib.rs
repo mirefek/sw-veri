@@ -1912,6 +1912,33 @@ impl State {
     fn spec_ret(&self, env: &mut Env, lg: &Logic, goal: &Term, ws: &mut std::collections::VecDeque<Term>, fs: &[Seq]) -> KResult<Seq> {
         let sym = |n: &str| env.sym_by_name.get(n).copied();
         let (letin, any, and, or, not) = (sym("letin"), sym("any_rel"), sym("and"), sym("or"), sym("not"));
+        // runs(P, s, o), P a defined program `mkprog(x y. r)`: r(s, o), and
+        // pair(s, o) in univ(1) from the facts (`tr.runs_intro`)
+        let (mk, pair, univ) = (sym("mkprog"), sym("pair"), sym("univ"));
+        if let (Ok(p), Some(pair), Some(univ)) = (self.runs_head(env, goal), pair, univ) {
+            let unf = sl_kernel::ext::seq::unfold_all(env, goal, &[p]);
+            if let Node::App(_, ra) = unf.node() {
+                if let Node::App(m, ma) = ra[0].node() {
+                    if Some(*m) == mk {
+                        let r = ma[0].instantiate_params(&[ra[1].clone(), ra[2].clone()], &env.binders_fn());
+                        let sr = self.spec_ret(env, lg, &r, ws, fs)?;
+                        let univ1 = Term::app(lg.in_, vec![Term::app(pair, vec![ra[1].clone(), ra[2].clone()]), Term::app(univ, vec![Term::nat(sl_kernel::Nat::from_u128(1))])]);
+                        let refs: Vec<&Seq> = fs.iter().collect();
+                        let pu = Seq::taut(env, lg, &refs, &univ1).or_else(|_| Seq::simp_goal(env, lg, &refs, &univ1, &[], &[]))
+                            .map_err(|e| KernelError(format!("spec_ret: `{}` not from the facts ({})", Printer::new(env).short(&univ1), e.0)))?;
+                        let lemma = facts::seq_of(env, "tr.runs_intro").ok_or_else(|| KernelError("`tr.runs_intro` (proofs/translate.core) is not loaded".into()))?;
+                        let mut vs = Vec::new();
+                        lemma.concl().vars(&mut vs);
+                        let rv = *vs.first().ok_or_else(|| KernelError("tr.runs_intro: no relation variable".into()))?;
+                        let l = Seq::inst(env, &lemma, rv, &ma[0])?;
+                        let l = Seq::all_elim(env, lg, &l, &ra[1])?;
+                        let l = Seq::all_elim(env, lg, &l, &ra[2])?;
+                        let s = Seq::mp(env, &Seq::mp(env, &l, &pu)?, &sr)?;
+                        return Seq::conv(env, &s, goal, &[p]);
+                    }
+                }
+            }
+        }
         match goal.node() {
             // letin(a, x. f(x)): f(a)
             Node::App(l, a) if Some(*l) == letin => {

@@ -749,7 +749,7 @@ premise they stand for.
 | `defs(p, D..)` | p proves the goal with D unfolded |
 | `ex_intro({w}.., p)` | witnesses for `ex` |
 | `disj({k}, p)` | the goal's k-th disjunct (as written, from 1) by p |
-| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice and `ex` by the next witness, each property, equation and conjunct by taut, else simp, from the facts |
+| `spec_ret({w}.., f..)` | a contract body's instance: its letins, each choice and `ex` by the next witness, each property, equation and conjunct by taut, else simp, from the facts; a goal `runs(P, s, o)` (P a defined `mkprog`): its relation so, `pair(s, o) in univ(1)` from the facts |
 | `divergence([GU, GS])` | a spec function diverges nowhere it does not raise: `tr.div_raises(F)`, or `tr.div_raises_g(G, F)` given G's members in univ(1) (GU, `mp.g_univ`) and a world and ghost part joined (GS, `mp.gS`); by F's shape (`ct.fun_divg`, `_v`, `_v0`), its runs' universe (`runs_univ()`) and its contract's body (`div_body(GS)`: `ct.contract_div` / `_div0`, the body by the `ct.dv_*` lemma that fits) |
 | `sel(p)` | `z in set_select(S, x. P)` from `z in S && P(z)` |
 | `lists(p..)` | equal list expressions (same pieces) |
