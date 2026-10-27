@@ -1,0 +1,44 @@
+// The top level for free: the `free` symbol's machine code implements the
+// malloc layer's free (layers/malloc.sl), from __libc_free's purpose
+// (`mp.lf_res`) -- as top.core's for malloc. free_group and nontrivial_free
+// call each other: each entry its code unrolled as deep as its groups in
+// use (`abi.bridge_implements_lf`, proofs/mallocng/fun/free_machine.core).
+
+// ----------------------------------------------------------------------
+//  The layer's free: its runs
+
+// free(0): nothing (no precondition)
+theorem mp.tf_f0(I, O, eo, b, cd, st, S): pair(S, ok(S, empty)) in univ(1) -> runs(malloc.free(I, O, eo, b, cd, st, 0), S, ok(S, empty))
+proof
+  assume pu
+  show by spec_ret({exc(pair(S, empty), pair("ret", empty))}, pu)
+qed
+
+// free(p) of a live block: the block no longer live, an allocator step
+// (the block's bytes extra)
+theorem mp.tf_fok(I, O, eo, b, cd, st, S, p, V): !(p = 0) -> S in I -> malloc.errno_ok(eo, S) -> malloc.world_ok(b, cd, st, S) -> !(S.blocks[p] = none) ->
+  S.blocks in fn_space(bits(64), option(omega)) -> V in x86_64_linux.Vm ->
+  malloc.step_ok(I, O, S, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), malloc.range(p, snd(S.blocks[p]))) ->
+  pair(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty)) in univ(1) ->
+  pair(S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty)) in univ(1) ->
+  runs(malloc.free(I, O, eo, b, cd, st, p), S, ok(fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, none)), "vm", V), empty))
+proof
+  assume hp0 hi he hw hbl hbt hv hst pux pu
+  have bu := apply(mp.uf_bu[b := S.blocks, p := p], hbt)
+  let X := fn_update(S, "blocks", malloc.set_block(S.blocks, p, none))
+  let T := fn_update(X, "vm", V)
+  let R := malloc.range(p, snd(S.blocks[p]))
+  have as: runs(malloc.allocator_step(I, O, S, R), X, ok(T, empty)) by spec_ret({V}, hv, hst, pux)
+  have br := mp(all_elim(gc.bind_ok[p := malloc.allocator_step(I, O, S, R), k := x6 x7. ok(T, empty) = ok(x6, empty), x := x6 x7. ok(T, empty) = exc(x6, x7),
+    d := x6. ok(T, empty) = diverge(x6)], {X}, {T}, {empty}), as, refl({ok(T, empty)}))
+  show by spec_ret({ok(pair(S, empty), empty)}, hp0, hi, he, hw, hbl, br, bu, pu)
+qed
+
+// ... anything where undefined (its precondition failing, p no live block)
+theorem mp.tf_fany(I, O, eo, b, cd, st, S, p, o): !(p = 0) -> pair(S, o) in univ(1) ->
+  !(((S in I && malloc.errno_ok(eo, S)) && malloc.world_ok(b, cd, st, S)) && !(S.blocks[p] = none)) ->
+  runs(malloc.free(I, O, eo, b, cd, st, p), S, o)
+proof
+  assume hp0 pu hn
+  show by spec_ret({ok(pair(S, empty), empty)}, hp0, hn, pu)
+qed
