@@ -185,3 +185,208 @@ proof
   qed
   show by taut(n1, n2)
 qed
+
+// (the thread pointer sound: below the task's end, errno 0x34 past it)
+theorem mp.top_fsl(vm, fs): fs in bits(64) -> abi.thread_ok(vm, fs) ->
+  fsl: int_le(int_add(fs, 56), int_pow(2, 64)) && ea: mallocng_specs.errno_at(fs) = int_add(fs, 52)
+proof
+  assume fsb th
+  have kp: x86_64_linux.PAGE = 4096 by defs(refl({4096}), x86_64_linux.PAGE)
+  have ts: int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE) = 34359738367 by defs(simp(), x86_64_linux.TASK_SIZE, x86_64_linux.PAGE)
+  have r0 _ _ _ := expand(th, abi.thread_ok)
+  have m0 _ := mp(all_elim(expand(r0, x86_64_linux.readable), {0}), simp(), simp())
+  have t0 _ := expand(m0, x86_64_linux.mapped)
+  have fsl: int_le(int_add(fs, 56), int_pow(2, 64)) by arith(t0, ts, kp, fsb)
+  have ea: mallocng_specs.errno_at(fs) = int_add(fs, 52) by defs(arith(fsb, fsl), mallocng_specs.errno_at, bits_add, pow2)
+  show by taut(fsl, ea)
+qed
+
+// (a block of size n made at p: the blocks still a map to sizes)
+theorem mp.sb_btype(b, p, n): b in fn_space(bits(64), option(omega)) -> n in omega -> malloc.set_block(b, p, some(n)) in fn_space(bits(64), option(omega))
+proof
+  assume hb hn
+  have r1: some(n) in set_image(omega, x0. some(x0)) by taut(set_image_def[s := omega, f := x0. some(x0), y := some(n)],
+    (ex x0. x0 in omega && some(x0) = some(n) by ex_intro({n}, taut(hn, refl({some(n)})))))
+  have sn: some(n) in option(omega) by defs(simp(r1), option)
+  have vq: all q. q in bits(64) -> ite(q = p, some(n), b[q]) in option(omega) proof
+    fix q
+    assume hq
+    have bq := mp(fn_space_app[a := bits(64), b := option(omega), f := b, x := q], hb, hq)
+    have c1: q = p -> ite(q = p, some(n), b[q]) in option(omega) proof
+      assume e
+      show by simp(e, sn)
+    qed
+    have c2: !(q = p) -> ite(q = p, some(n), b[q]) in option(omega) proof
+      assume e
+      show by simp(e, bq)
+    qed
+    show by taut(c1, c2)
+  qed
+  show by defs(mp(fn_build_space[d := bits(64), v := q. ite(q = p, some(n), b[q]), b := option(omega)], vq), malloc.set_block)
+qed
+
+// (malloc(0)'s block at p: its place, the byte p, the allocator's -- in
+// p's slot, no live block's, neither reserved nor taken)
+theorem mp.top_zbyte(c, A3, V3, B, p): c in mallocng.Cfg -> A3 in univ(1) -> A3 in mallocng.Abs -> B in fn_space(bits(64), option(omega)) -> p in bits(64) ->
+  B[p] = none -> mallocng.holds_m(c, A3, V3, malloc.set_block(B, p, some(0))) -> mallocng.no_reserved(A3) -> seq_len(A3.taken) = 0 ->
+  p in mallocng.footprint(c, A3, malloc.set_block(B, p, some(0)))
+proof
+  assume hc hu ha hb hp hbn hm nr tk
+  let B2 := malloc.set_block(B, p, some(0))
+  have b2t := apply(mp.sb_btype[b := B, p := p, n := 0], hb, simp())
+  have {H = inv} := expand(hm, mallocng.holds_m)
+  have {huo = used, bok = in_slots, bwf = wf} := expand(H, mallocng.holds)
+  have b2p: B2[p] = some(0) by defs(simp(hp), malloc.set_block)
+  have po: p in omega by arith(hp)
+  // (its slot)
+  obtain k i, hk hi hkl hil hs from mp(all_elim(expand(bok, mallocng.blocks_ok), {p}), hp, (!(B2[p] = none) by simp(b2p)))
+  let g := A3.used[k]
+  have iu: mallocng.is_used(A3, g) by defs(ex_intro({k}, taut(hk, hkl, refl({g}))), mallocng.is_used)
+  have {go = nat} := apply(mp.used_nat, ha, iu)
+  have {ins = inslot} := apply(mp.blk_frame[c := c, A := A3, M := mallocng.mview(V3, mallocng.held(c, A3, B2)), b := B2, brk := V3.brk, h := g, j := i, q := p],
+    ha, b2t, H, iu, hi, hil, hs, po)
+  have gok := apply(mp.used_group, huo, iu)
+  have ir := apply(mp.slot_in_group[A := A3, M := mallocng.mview(V3, mallocng.held(c, A3, B2)), b := B2, g := g, i := i, a := p], ha, go, hi, po, gok, hil, ins)
+  have rr := apply(mp.used_rng, hc, hu, ha, iu, ir)
+  // (no live block's: the blocks' places apart)
+  have nl: !(p in malloc.live_of(B2)) proof
+    assume l
+    have l2 := (p in malloc.live_of(B) || (p in omega && int_le(p, p) && int_lt(p, int_add(p, 0))) by taut(apply(mp.live_new[b := B, p := p, n := 0, a := p], hp, hbn), l))
+    have l3: p in malloc.live_of(B) by taut(l2, (!int_lt(p, int_add(p, 0)) by arith()))
+    have _ ex := (p in omega && (ex q. q in bits(64) && (!(B[q] = none) && p in malloc.range(q, snd(B[q])))) by taut(apply(mp.live_def[b := B, a := p]), l3))
+    obtain q, hq hqn hqr from ex
+    have qp: !(q = p) proof
+      assume e
+      show by taut(hqn, rewrite(sym(e), hbn))
+    qed
+    have bq: B2[q] = B[q] by defs(simp(hq, qp), malloc.set_block)
+    have _ _ dj := expand(mp(all_elim(expand(bwf, malloc.blocks_wf), {p}), hp, (!(B2[p] = none) by simp(b2p))), malloc.block_wf)
+    have d := mp(all_elim(dj, {q}), hq, conj(qp, (!(B2[q] = none) by simp(bq, hqn))))
+    have q1 q2 := (int_le(q, p) && int_lt(p, int_add(q, snd(B[q]))) by taut(set_select_def[s := omega, p := x0. int_le(q, x0) && int_lt(x0, int_add(q, snd(B[q]))), z := p], expand(hqr, malloc.range)))
+    have _ sq := apply(mp.opt_nat[o := B[q]], mp(fn_space_app[a := bits(64), b := option(omega), f := B, x := q], hb, hq), hqn)
+    have inp: p in malloc.range(p, malloc.extent(snd(B2[p]))) by defs(sel(simp(po, b2p)), malloc.range, malloc.extent)
+    have ext: int_le(snd(B[q]), malloc.extent(snd(B[q]))) proof
+      have c0: snd(B[q]) = 0 -> int_le(snd(B[q]), malloc.extent(snd(B[q]))) proof
+        assume e
+        show by defs(simp(e), malloc.extent)
+      qed
+      have c1: !(snd(B[q]) = 0) -> int_le(snd(B[q]), malloc.extent(snd(B[q]))) proof
+        assume e
+        show by defs(simp(e), malloc.extent)
+      qed
+      show by taut(c0, c1)
+    qed
+    have inq: p in malloc.range(q, malloc.extent(snd(B2[q]))) by defs(sel(arith(po, q1, q2, sq, ext, (snd(B2[q]) = snd(B[q]) by simp(bq)))), malloc.range)
+    show by taut(mp(all_elim(expand(d, malloc.disjoint), {p}), po), inp, inq)
+  qed
+  have nres := apply(mp.nores[A := A3, a := p], nr)
+  have nt: !mallocng.in_taken(A3, p) proof
+    assume w
+    obtain kk, hkk hkkl _ _ from expand(w, mallocng.in_taken)
+    show by arith(hkk, hkkl, tk)
+  qed
+  show by taut(apply(mp.fp_def[c := c, A := A3, b := B2, a := p]), po, rr, nl, nres, nt)
+qed
+
+// After malloc's block p of n bytes (`mp.mi_blk`, from A at S): the new
+// state represented by A3 (rep), p 16-aligned (the blocks' places), and
+// its place -- n bytes, or the byte p for malloc(0) -- the allocator's
+// before or unmapped
+theorem mp.top_mblk(c, A, S, n, A3, V3, p): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> S.blocks in fn_space(bits(64), option(omega)) ->
+  S.fs_base in bits(64) -> n in omega -> mallocng.rep(c, A, S) -> abi.thread_ok(S.vm, S.fs_base) -> abi.canary_ok(S.vm, S.fs_base) ->
+  mallocng_specs.errno_apart(c, A, S.vm, S.fs_base) -> mp.mi_blk(c, A, n, S.blocks, S, A3, V3, p) ->
+  rep: mallocng.rep(c, A3, fn_update(fn_update(S, "blocks", malloc.set_block(S.blocks, p, some(n))), "vm", V3)) &&
+  align: int_mod(p, 16) = 0 &&
+  ext: (all a. a in omega -> a in malloc.range(p, malloc.extent(n)) ->
+     a in mallocng.footprint(c, A, S.blocks) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)))
+proof
+  assume hc hu ha hb fsb hn hr hth hcn hea hblk
+  let B := S.blocks
+  let B2 := malloc.set_block(B, p, some(n))
+  have {hm = mem, rtl = tls, rca = canary} := expand(hr, mallocng.rep)
+  have a3a a3u nr3 tk3 v3v pb pnz bn hm3 hsh3 hun hfp hbr := hblk
+  have b2t := apply(mp.sb_btype[b := B, p := p, n := n], hb, hn)
+  have {fsl = fsl, ea = ea} := apply(mp.top_fsl, fsb, hth)
+  // A3's ranges: A's or memory unmapped before
+  have {f = fp, l = live} := apply(mp.has_rng, hc, hu, ha, hb, hm)
+  have gfp: all a. a in omega -> a in mallocng.footprint(c, A3, B2) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    show by taut(mp(all_elim(hfp, {a}), ao, h), all_elim(f, {a}))
+  qed
+  have grs: all a. a in omega -> mallocng.in_reserved(A3, a) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume _ h
+    show by taut(h, apply(mp.nores[A := A3, a := a], nr3))
+  qed
+  have gtk: all a. a in omega -> mallocng.in_taken(A3, a) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume _ w
+    obtain kk, hkk hkkl _ _ from expand(w, mallocng.in_taken)
+    have f0: false by arith(hkk, hkkl, tk3)
+    show by taut(f0)
+  qed
+  have glv: all a. a in omega -> a in malloc.live_of(B2) ->
+      mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    have l2 := (a in malloc.live_of(B) || (a in omega && int_le(p, a) && int_lt(a, int_add(p, n))) by taut(apply(mp.live_new[b := B, p := p, n := n, a := a], pb, bn), h))
+    have c1: (a in omega && int_le(p, a) && int_lt(a, int_add(p, n))) ->
+        mallocng.in_ranges(a, mallocng.fp_ranges(c, A)) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+      assume w
+      have _ w1 w2 := w
+      show by taut(mp(all_elim(hbr, {a}), ao, w1, w2), all_elim(f, {a}))
+    qed
+    show by taut(l2, all_elim(l, {a}), c1)
+  qed
+  have grown := apply(mp.rng_grow[c := c, A := A, A2 := A3, b2 := B2, vm := S.vm], gfp, grs, gtk, glv)
+  // rep's parts for A3
+  have tl3 := apply(mp.tls_grow[c := c, A := A, A2 := A3, vm := S.vm, fs := S.fs_base], fsb, hth, (mallocng_specs.tls_apart(c, A, S.fs_base) by defs(rtl, mallocng_specs.tls_apart)), grown)
+  have er3: all x0. x0 in omega -> int_lt(x0, 4) -> !mallocng.in_ranges(int_add(int_add(S.fs_base, 52), x0), mallocng.fp_ranges(c, A3)) proof
+    fix i
+    assume hi hil
+    have n0 m0 := rewrite(ea, mp(all_elim(expand(hea, mallocng_specs.errno_apart), {i}), hi, hil))
+    assume ir
+    show by taut(mp(all_elim(grown, {int_add(int_add(S.fs_base, 52), i)}), (int_add(int_add(S.fs_base, 52), i) in omega by arith(fsb, hi)), ir), n0, m0)
+  qed
+  have ca3 := apply(mp.top_can[c := c, A := A, A2 := A3, V2 := V3, b2 := B2, vm := S.vm, fs := S.fs_base], hc, a3u, a3a, hm3, fsb, hcn, grown, rca)
+  have lv3 := apply(mp.top_live[c := c, A := A3, V := V3, b := B2], a3a, b2t, hm3)
+  let T := fn_update(fn_update(S, "blocks", B2), "vm", V3)
+  have tm: mallocng.holds_m(c, A3, T.vm, T.blocks) by simp(hm3, keep(mallocng.holds_m))
+  have tl: malloc.live_rw(T) by defs(simp(lv3), malloc.live_rw)
+  have tt: all x0. x0 in omega -> int_lt(x0, 8) -> !mallocng.in_ranges(int_add(T.fs_base, x0), mallocng.fp_ranges(c, A3)) by simp(expand(tl3, mallocng_specs.tls_apart))
+  have te: all x0. x0 in omega -> int_lt(x0, 4) -> !mallocng.in_ranges(int_add(int_add(T.fs_base, 52), x0), mallocng.fp_ranges(c, A3)) by simp(er3)
+  have tc: all x0. x0 in omega -> x0 in abi.canary(T.fs_base) -> !mallocng.in_ranges(x0, mallocng.fp_ranges(c, A3)) &&
+      !((int_lt(0, A3.reserve_cnt) && int_le(int_div(A3.reserve, x86_64_linux.PAGE), int_div(x0, x86_64_linux.PAGE))) &&
+        int_lt(int_div(x0, x86_64_linux.PAGE), int_add(int_div(A3.reserve, x86_64_linux.PAGE), A3.reserve_cnt))) by simp(ca3)
+  have rep3: mallocng.rep(c, A3, T) by defs(taut(tm, nr3, tk3, tl, tt, te, tc), mallocng.rep)
+  // p 16-aligned: the blocks' places
+  have {H3 = inv} := expand(hm3, mallocng.holds_m)
+  have {bwf = wf} := expand(H3, mallocng.holds)
+  have b2p: B2[p] = some(n) by defs(simp(pb), malloc.set_block)
+  have _ al _ := expand(mp(all_elim(expand(bwf, malloc.blocks_wf), {p}), pb, (!(B2[p] = none) by simp(b2p))), malloc.block_wf)
+  // its place: the block's bytes, or for malloc(0) the byte p
+  have ext: all a. a in omega -> a in malloc.range(p, malloc.extent(n)) ->
+      a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+    fix a
+    assume ao h
+    have r1 r2 := (int_le(p, a) && int_lt(a, int_add(p, malloc.extent(n))) by taut(set_select_def[s := omega, p := x0. int_le(p, x0) && int_lt(x0, int_add(p, malloc.extent(n))), z := a], expand(h, malloc.range)))
+    have z0: n = 0 -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+      assume e
+      have ap: a = p by defs(arith(r1, rewrite(e, r2)), malloc.extent)
+      have fz := apply(mp.top_zbyte[c := c, A3 := A3, V3 := V3, B := B, p := p], hc, a3u, a3a, hb, pb, bn, rewrite(e, hm3), nr3, tk3)
+      show := rewrite(sym(ap), mp(all_elim(hfp, {p}), (p in omega by arith(pb)), rewrite(sym(e), fz)))
+    qed
+    have z1: !(n = 0) -> a in mallocng.footprint(c, A, B) || !x86_64_linux.mapped(S.vm, int_div(a, x86_64_linux.PAGE)) proof
+      assume e
+      have en: malloc.extent(n) = n by defs(simp(e), malloc.extent)
+      have r3: int_lt(a, int_add(p, n)) := rewrite(en, r2)
+      show := mp(all_elim(hbr, {a}), ao, r1, r3)
+    qed
+    show by taut(z0, z1)
+  qed
+  show by taut(rep3, al, ext)
+qed
