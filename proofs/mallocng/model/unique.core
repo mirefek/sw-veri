@@ -1170,6 +1170,68 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  The used groups' slots: read from their in-band headers
+
+// (a byte of a used group: in the footprint's ranges)
+theorem mp.u_group_fp(c, A, g, a): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.is_used(A, g) ->
+  mallocng.in_range(a, mallocng.group_range(A.metas[g])) -> mallocng.in_ranges(a, mallocng.fp_ranges(c, A))
+proof
+  assume hc hu ha hg hr0
+  obtain k, hk hkl he from expand(hg, mallocng.is_used)
+  have hr := rewrite(sym(he), hr0)
+  let USED := fn_build(int_sub(seq_len(A.used), 0), x0. mallocng.group_range(A.metas[A.used[int_add(0, x0)]]))
+  have pre := apply(mp.pre_list, hc, hu, ha)
+  have ul: A.used in list_type(omega) by simp(ha)
+  have ud: int_sub(seq_len(A.used), 0) in omega by arith(ul)
+  have uv: all x0. x0 in int_sub(seq_len(A.used), 0) -> mallocng.group_range(A.metas[A.used[int_add(0, x0)]]) in univ(1) proof
+    fix x0
+    assume hx
+    show by defs(simp(hu), mallocng.group_range, mallocng.stride)
+  qed
+  have usl := apply(build_list, ud, uv)
+  have kl2: int_lt(k, int_sub(seq_len(A.used), 0)) by arith(ul, hk, hkl)
+  have dl: seq_len(USED) = int_sub(seq_len(A.used), 0)
+    by defs(fn_build_dom[d := int_sub(seq_len(A.used), 0), v := x0. mallocng.group_range(A.metas[A.used[int_add(0, x0)]])], seq_len)
+  have kin := mp(nat_lt_mem[k := k, n := int_sub(seq_len(A.used), 0)], hk, ud, kl2)
+  have w: ex j. j in omega && (int_lt(j, seq_len(USED)) && mallocng.in_range(a, USED[j]))
+    by ex_intro({k}, simp(hk, kin, kl2, hr, dl))
+  have ir := mp(ex_at_concat_r[a := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(mallocng.ro_ranges(c.file), mallocng.data_ranges(c)), mallocng.auxv_ranges(A)),
+    fn_build(int_sub(seq_len(A.areas), 0), x0. pair(A.areas[int_add(0, x0)], 4096))),
+    seq_one(pair(A.reserve, int_mul(4096, A.reserve_cnt)))), seq_one(pair(c.sct, int_mul(2, 48)))), seq_one(pair(c.dbj, 32))), b := USED, t := univ(1), p := r. mallocng.in_range(a, r)], pre, usl, w)
+  show by defs(ir, mallocng.in_ranges, mallocng.fp_ranges, mallocng.fixed_ranges)
+qed
+
+// where a framed block (or nested group) starts, its size code below 7:
+// from its slot's header -- moved (code 7) by the offset at start - 2,
+// else at the slot's start
+abbrev mp.fstart(m, v, i) := ite(int_div(mallocng.b8(m, int_sub(mallocng.slot_start(v, i), 3)), 32) = 7,
+  int_add(mallocng.slot_start(v, i), int_mul(16, mallocng.rd(m, int_sub(mallocng.slot_start(v, i), 2), 2))), mallocng.slot_start(v, i))
+
+theorem mp.u_frame_p(m, v, i, p, n, tag): mallocng.frame_ok(m, v, i, p, n, tag) -> p in omega -> mallocng.slot_start(v, i) in omega ->
+  int_lt(int_div(mallocng.b8(m, int_sub(p, 3)), 32), 7) -> p = mp.fstart(m, v, i)
+proof
+  assume hf hp hs h7
+  have {st = start, un = unit, mv = moved} := expand(hf, mallocng.frame_ok)
+  let S := mallocng.slot_start(v, i)
+  have ku: mallocng.UNIT = 16 by defs(simp(), mallocng.UNIT)
+  have gt: int_lt(S, p) -> p = mp.fstart(m, v, i) proof
+    assume h
+    have r b := mp(mv, h)
+    have c7: int_div(mallocng.b8(m, int_sub(S, 3)), 32) = 7 by simp(b)
+    have t := mp(ite_t[c := int_div(mallocng.b8(m, int_sub(S, 3)), 32) = 7, a := int_add(S, int_mul(16, mallocng.rd(m, int_sub(S, 2), 2))), b := S], c7)
+    have e: p = int_add(S, int_mul(16, mallocng.rd(m, int_sub(S, 2), 2))) by arith(r, un, ku, hp, hs, h)
+    show := trans(e, sym(t))
+  qed
+  have eq: p = S -> p = mp.fstart(m, v, i) proof
+    assume h
+    have n7: !(int_div(mallocng.b8(m, int_sub(S, 3)), 32) = 7) by simp(rewrite(h, h7), (int_lt(7, 7) -> false by arith()))
+    have f := mp(ite_f[c := int_div(mallocng.b8(m, int_sub(S, 3)), 32) = 7, a := int_add(S, int_mul(16, mallocng.rd(m, int_sub(S, 2), 2))), b := S], n7)
+    show := trans(h, sym(f))
+  qed
+  show by taut((int_lt(S, p) || p = S by arith(st, hp, hs)), gt, eq)
+qed
+
+// ----------------------------------------------------------------------
 //  The context's fields
 
 theorem mp.u_ctx_fields(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
