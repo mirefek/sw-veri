@@ -1054,6 +1054,122 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  The used metas' fields: read from their bytes
+
+// (two metas' values with the same fields: equal)
+theorem mp.u_metav_eq(v, w): v in mallocng.MetaV -> w in mallocng.MetaV ->
+  v.prev = w.prev -> v.next = w.next -> v.mem = w.mem -> v.avail = w.avail -> v.freed = w.freed ->
+  v.last_idx = w.last_idx -> v.freeable = w.freeable -> v.sizeclass = w.sizeclass -> v.maplen = w.maplen -> v = w
+proof
+  assume hv hw e1 e2 e3 e4 e5 e6 e7 e8 e9
+  let K := insert("prev", insert("next", insert("mem", insert("avail", insert("freed", insert("last_idx", insert("freeable", insert("sizeclass", insert("maplen", empty)))))))))
+  have fv: is_fun(v) && dom(v) = K by simp(expand(hv, mallocng.MetaV))
+  have fw: is_fun(w) && dom(w) = K by simp(expand(hw, mallocng.MetaV))
+  have ek: all k. k in dom(v) -> v[k] = w[k] proof
+    fix k
+    assume hk
+    have dv: dom(v) = K by taut(fv)
+    have kk := rewrite(dv, hk)
+    show by simp(kk, e1, e2, e3, e4, e5, e6, e7, e8, e9)
+  qed
+  show := mp(rec_ext[a := v, b := w], taut(fv), taut(fw), (dom(v) = dom(w) by simp(fv, fw)), ek)
+qed
+
+// (a meta used in both states: its n bytes at off read the same)
+theorem mp.u_rd_meta(c, A, B, vm, b, g, off, n): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) -> seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  mallocng.is_used(A, g) -> mallocng.is_used(B, g) -> off in omega -> n in omega -> int_le(int_add(off, n), 40) ->
+  mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(g, off), n) = mallocng.rd(mallocng.mview(vm, mallocng.held(c, B, b)), int_add(g, off), n)
+proof
+  assume hc hua ha hub hb hha hhb hta htb uA uB ho hn hle
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have ntA: mp.untaken(A, g) proof
+    fix i
+    assume hi hil
+    show by arith(hi, hil, hta)
+  qed
+  have ntB: mp.untaken(B, g) proof
+    fix i
+    assume hi hil
+    show by arith(hi, hil, htb)
+  qed
+  have {gA = nat, aA = acc} := apply(mp.slot_meta[c := c, A := A, vm := vm, b := b, g := g], hc, hua, ha, hha, apply(mp.used_slot[g := g], HA, uA), ntA)
+  have {aB = acc} := apply(mp.slot_meta[c := c, A := B, vm := vm, b := b, g := g], hc, hub, hb, hhb, apply(mp.used_slot[g := g], HB, uB), ntB)
+  have fa: all i. i in omega -> int_lt(i, n) -> int_add(int_add(g, off), i) in mallocng.held(c, A, b) proof
+    fix i
+    assume hi hil
+    have r := mp(all_elim(aA, {int_add(int_add(g, off), i)}), arith(gA, ho, hi), arith(gA, ho, hi), arith(gA, ho, hi, hil, hle))
+    show by taut(r)
+  qed
+  have fb: all i. i in omega -> int_lt(i, n) -> int_add(int_add(g, off), i) in mallocng.held(c, B, b) proof
+    fix i
+    assume hi hil
+    have r := mp(all_elim(aB, {int_add(int_add(g, off), i)}), arith(gA, ho, hi), arith(gA, ho, hi), arith(gA, ho, hi, hil, hle))
+    show by taut(r)
+  qed
+  show := mp(mp.u_rd2[vm := vm, F := mallocng.held(c, A, b), G := mallocng.held(c, B, b), a := int_add(g, off), n := n], arith(gA, ho), hn, arith(hn, hle), fa, fb)
+qed
+
+theorem mp.u_meta(c, A, B, vm, b, g): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) -> seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 ->
+  mallocng.is_used(A, g) -> mallocng.is_used(B, g) -> A.metas[g] = B.metas[g]
+proof
+  assume hc hua ha hub hb hha hhb hta htb uA uB
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have {oA = used} := expand(HA, mallocng.holds)
+  have {oB = used} := expand(HB, mallocng.holds)
+  have {mA = mim} := apply(mp.used_group[g := g], oA, uA)
+  have {mB = mim} := apply(mp.used_group[g := g], oB, uB)
+  have {pA = prev, nA = next, eA = mem, vA = avail, fA = freed, wA = word, lA = last, rA = freeable, sA = sclass} := expand(mA, mallocng.meta_in_memory)
+  have {pB = prev, nB = next, eB = mem, vB = avail, fB = freed, wB = word, lB = last, rB = freeable, sB = sclass} := expand(mB, mallocng.meta_in_memory)
+  have r0 := apply(mp.u_rd_meta[c := c, A := A, B := B, vm := vm, b := b, g := g, off := 0, n := 8], hc, hua, ha, hub, hb, hha, hhb, hta, htb, uA, uB, simp(), simp(), simp())
+  have r8 := apply(mp.u_rd_meta[c := c, A := A, B := B, vm := vm, b := b, g := g, off := 8, n := 8], hc, hua, ha, hub, hb, hha, hhb, hta, htb, uA, uB, simp(), simp(), simp())
+  have r16 := apply(mp.u_rd_meta[c := c, A := A, B := B, vm := vm, b := b, g := g, off := 16, n := 8], hc, hua, ha, hub, hb, hha, hhb, hta, htb, uA, uB, simp(), simp(), simp())
+  have r24 := apply(mp.u_rd_meta[c := c, A := A, B := B, vm := vm, b := b, g := g, off := 24, n := 4], hc, hua, ha, hub, hb, hha, hhb, hta, htb, uA, uB, simp(), simp(), simp())
+  have r28 := apply(mp.u_rd_meta[c := c, A := A, B := B, vm := vm, b := b, g := g, off := 28, n := 4], hc, hua, ha, hub, hb, hha, hhb, hta, htb, uA, uB, simp(), simp(), simp())
+  have r32 := apply(mp.u_rd_meta[c := c, A := A, B := B, vm := vm, b := b, g := g, off := 32, n := 8], hc, hua, ha, hub, hb, hha, hhb, hta, htb, uA, uB, simp(), simp(), simp())
+  obtain k, hk hkl he from expand(uA, mallocng.is_used)
+  have go := rewrite(he, mp(at_type[l := A.used, t := omega, i := k], (A.used in list_type(omega) by simp(ha)), hk, hkl))
+  have z: int_add(g, 0) = g by arith(go)
+  have prev: A.metas[g].prev = B.metas[g].prev by simp(pA, pB, rewrite(z, r0))
+  have next: A.metas[g].next = B.metas[g].next by simp(nA, nB, r8)
+  have mem: A.metas[g].mem = B.metas[g].mem by simp(eA, eB, r16)
+  have avail: A.metas[g].avail = B.metas[g].avail by simp(vA, vB, r24)
+  have freed: A.metas[g].freed = B.metas[g].freed by simp(fA, fB, r28)
+  // the packed word: its parts by their bounds
+  have mvA: A.metas[g] in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(ha), go)
+  have mvB: B.metas[g] in mallocng.MetaV := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := B.metas, x := g], simp(hb), go)
+  have tA1 tA2 tA3 := (A.metas[g].last_idx in omega && A.metas[g].sizeclass in omega && A.metas[g].maplen in omega by simp(expand(mvA, mallocng.MetaV)))
+  have tB1 tB2 tB3 := (B.metas[g].last_idx in omega && B.metas[g].sizeclass in omega && B.metas[g].maplen in omega by simp(expand(mvB, mallocng.MetaV)))
+  have ww: int_add(int_add(int_add(A.metas[g].last_idx, int_mul(32, A.metas[g].freeable)), int_mul(64, A.metas[g].sizeclass)), int_mul(4096, A.metas[g].maplen)) =
+      int_add(int_add(int_add(B.metas[g].last_idx, int_mul(32, B.metas[g].freeable)), int_mul(64, B.metas[g].sizeclass)), int_mul(4096, B.metas[g].maplen))
+    by simp(wA, wB, r32)
+  // (by 4096: maplen and the rest; the rest by 64: sizeclass and the rest)
+  let VA := A.metas[g]
+  let VB := B.metas[g]
+  let W := int_add(int_add(int_add(VA.last_idx, int_mul(32, VA.freeable)), int_mul(64, VA.sizeclass)), int_mul(4096, VA.maplen))
+  let RA := int_add(int_add(VA.last_idx, int_mul(32, VA.freeable)), int_mul(64, VA.sizeclass))
+  let RB := int_add(int_add(VB.last_idx, int_mul(32, VB.freeable)), int_mul(64, VB.sizeclass))
+  have qa ra := mp(mod_unique_int[x := W, m := 4096, q := VA.maplen, r := RA], arith(tA1, tA2, tA3), arith(tA1, tA2, tA3, lA, rA, sA), simp(), arith(tA1, tA2, tA3, lA, rA, sA),
+    (W = int_add(int_mul(4096, VA.maplen), RA) by arith(tA1, tA2, tA3)))
+  have qb rb := mp(mod_unique_int[x := W, m := 4096, q := VB.maplen, r := RB], arith(tB1, tB2, tB3), arith(tB1, tB2, tB3, lB, rB, sB), simp(), arith(tB1, tB2, tB3, lB, rB, sB),
+    (W = int_add(int_mul(4096, VB.maplen), RB) by arith(ww, tB1, tB2, tB3)))
+  have ml: VA.maplen = VB.maplen by simp(qa, qb)
+  have rr: RA = RB by simp(ra, rb)
+  have q2a r2a := mp(mod_unique_int[x := RA, m := 64, q := VA.sizeclass, r := int_add(VA.last_idx, 32)], arith(tA1, tA2, tA3), arith(tA1, tA2, tA3), simp(), arith(tA1, tA2, tA3, lA),
+    (RA = int_add(int_mul(64, VA.sizeclass), int_add(VA.last_idx, 32)) by arith(rA, tA1, tA2, tA3)))
+  have q2b r2b := mp(mod_unique_int[x := RA, m := 64, q := VB.sizeclass, r := int_add(VB.last_idx, 32)], arith(tB1, tB2, tB3), arith(tB1, tB2, tB3), simp(), arith(tB1, tB2, tB3, lB),
+    (RA = int_add(int_mul(64, VB.sizeclass), int_add(VB.last_idx, 32)) by arith(rr, rB, tB1, tB2, tB3)))
+  have sc: VA.sizeclass = VB.sizeclass by simp(q2a, q2b)
+  have li: VA.last_idx = VB.last_idx by arith(r2a, r2b, tA1, tB1)
+  have parts: VA.last_idx = VB.last_idx && VA.sizeclass = VB.sizeclass && VA.maplen = VB.maplen by taut(li, sc, ml)
+  have fr: A.metas[g].freeable = B.metas[g].freeable by simp(rA, rB)
+  show := apply(mp.u_metav_eq, mvA, mvB, prev, next, mem, avail, freed, taut(parts), fr, taut(parts), taut(parts))
+qed
+
+// ----------------------------------------------------------------------
 //  The context's fields
 
 theorem mp.u_ctx_fields(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
