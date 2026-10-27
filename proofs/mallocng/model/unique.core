@@ -1,0 +1,233 @@
+// The abstract state determined by memory (`mallocng.abs_unique`): two
+// abstract states that hold of the same memory (layers/mallocng.sl's
+// `rep`) are equal. What the invariant reads, each state through its own
+// view, is the memory's bytes: the context's fields; the lists followed
+// from it (the auxiliary vector, the meta areas, the free metas, the
+// active lists); the used metas (the meta slots neither free nor
+// available), their fields and their slots.
+
+// ----------------------------------------------------------------------
+//  Reads in two views
+
+// n bytes at a, in both views: the same (the memory's)
+theorem mp.u_rd2(vm, F, G, a, n): a in omega -> n in omega -> int_le(n, 18446744073709551616) ->
+  (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in F) -> (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in G) ->
+  mallocng.rd(mallocng.mview(vm, F), a, n) = mallocng.rd(mallocng.mview(vm, G), a, n)
+proof
+  assume ha hn hl hf hg
+  have f := mp(mp.view_read[vm := vm, fp := F, a := a, n := n], ha, hn, hl, hf)
+  have g := mp(mp.view_read[vm := vm, fp := G, a := a, n := n], ha, hn, hl, hg)
+  show := trans(sym(f), g)
+qed
+
+// the context's bytes the invariant reads (not the free ones), n at off:
+// in the view of an abstract state that holds, the memory's
+theorem mp.u_ctx(c, A, vm, b, off, n): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> mallocng.holds_m(c, A, vm, b) ->
+  off in omega -> n in omega -> int_le(int_add(off, n), mallocng.CTX_SIZE) ->
+  (all i. i in omega -> int_lt(i, n) -> !mallocng.ctx_free(c, int_add(int_add(c.ctx, off), i))) ->
+  mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(c.ctx, off), n) = gimple.bytes_at(vm, int_add(c.ctx, off), n)
+proof
+  assume hc hu ha hh ho hn hle hnf
+  have ks: mallocng.CTX_SIZE = 928 by defs(refl({928}), mallocng.CTX_SIZE)
+  have co: c.ctx in omega by simp(hc)
+  have hf: all i. i in omega -> int_lt(i, n) -> int_add(int_add(c.ctx, off), i) in mallocng.held(c, A, b) proof
+    fix i
+    assume hi hil
+    have r := apply(mp.ctx_acc[c := c, A := A, vm := vm, b := b, a := int_add(int_add(c.ctx, off), i)], hc, hu, ha, hh,
+      arith(co, ho, hi), arith(co, ho, hi), arith(co, ho, hi, hil, hle, ks), mp(all_elim(hnf, {i}), hi, hil))
+    show by taut(r)
+  qed
+  have v := mp(mp.view_read[vm := vm, fp := mallocng.held(c, A, b), a := int_add(c.ctx, off), n := n], arith(co, ho), hn, arith(hn, hle, ks), hf)
+  show := sym(v)
+qed
+
+// ... the same in two abstract states' views
+theorem mp.u_ctx2(c, A, B, vm, b, off, n): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) ->
+  off in omega -> n in omega -> int_le(int_add(off, n), mallocng.CTX_SIZE) ->
+  (all i. i in omega -> int_lt(i, n) -> !mallocng.ctx_free(c, int_add(int_add(c.ctx, off), i))) ->
+  mallocng.rd(mallocng.mview(vm, mallocng.held(c, A, b)), int_add(c.ctx, off), n) = mallocng.rd(mallocng.mview(vm, mallocng.held(c, B, b)), int_add(c.ctx, off), n)
+proof
+  assume hc hua ha hub hb hha hhb ho hn hle hnf
+  have ea := apply(mp.u_ctx[c := c, A := A, vm := vm, b := b, off := off, n := n], hc, hua, ha, hha, ho, hn, hle, hnf)
+  have eb := apply(mp.u_ctx[c := c, A := B, vm := vm, b := b, off := off, n := n], hc, hub, hb, hhb, ho, hn, hle, hnf)
+  show := trans(ea, sym(eb))
+qed
+
+// (the context's words the invariant reads: none of the free bytes --
+// those at 12..16 and 464..920)
+theorem mp.u_nofree(c, off, n): c in mallocng.Cfg -> off in omega -> n in omega ->
+  ((int_le(int_add(off, n), 12)) || (int_le(16, off) && int_le(int_add(off, n), 464)) || int_le(920, off)) ->
+  all i. i in omega -> int_lt(i, n) -> !mallocng.ctx_free(c, int_add(int_add(c.ctx, off), i))
+proof
+  assume hc ho hn hr
+  fix i
+  assume hi hil
+  have co: c.ctx in omega by simp(hc)
+  have ks: mallocng.C_MMAP_CNT = 12 && mallocng.C_USAGE = 464 && mallocng.C_BRK = 920
+    by defs(simp(), mallocng.C_MMAP_CNT, mallocng.C_USAGE, mallocng.C_BRK)
+  show by defs(arith(ks, co, ho, hn, hr, hi, hil), mallocng.ctx_free)
+qed
+
+// ----------------------------------------------------------------------
+//  A cyclic list from a head (of nonzero elements): determined by memory
+
+// (the common prefix: equal)
+theorem mp.u_cyc_pre(M, h, l1, l2): l1 in list_type(omega) -> l2 in list_type(omega) ->
+  mallocng.cyclic(M, h, l1) -> mallocng.cyclic(M, h, l2) ->
+  all i. i in omega -> int_lt(i, seq_len(l1)) -> int_lt(i, seq_len(l2)) -> l1[i] = l2[i]
+proof
+  assume h1 h2 c1 c2
+  have {f1 = first, k1 = links} := expand(c1, mallocng.cyclic)
+  have {f2 = first, k2 = links} := expand(c2, mallocng.cyclic)
+  let N1 := seq_len(l1)
+  let N2 := seq_len(l2)
+  have n1: N1 in omega by arith(h1)
+  have n2: N2 in omega by arith(h2)
+  let P(i) := int_lt(i, N1) -> int_lt(i, N2) -> l1[i] = l2[i]
+  have base: P(0) proof
+    assume a b
+    have e1 := trans(f1, mp(ite_f[c := N1 = 0, a := 0, b := l1[0]], (!(N1 = 0) by arith(a))))
+    have e2 := trans(f2, mp(ite_f[c := N2 = 0, a := 0, b := l2[0]], (!(N2 = 0) by arith(b))))
+    show := trans(sym(e1), e2)
+  qed
+  have step: all i. i in omega -> P(i) -> P(int_add(i, 1)) proof
+    fix i
+    assume hi ih
+    assume a b
+    have a0: int_lt(i, N1) by arith(a, hi)
+    have b0: int_lt(i, N2) by arith(b, hi)
+    have e := mp(ih, a0, b0)
+    have x1 _ := mp(all_elim(k1, {i}), hi, a0)
+    have x2 _ := mp(all_elim(k2, {i}), hi, b0)
+    have m1: int_mod(int_add(i, 1), N1) = int_add(i, 1) by arith(a, hi, n1)
+    have m2: int_mod(int_add(i, 1), N2) = int_add(i, 1) by arith(b, hi, n2)
+    show by simp(x1, x2, e, m1, m2)
+  qed
+  show by induct(base, step)
+qed
+
+// (neither shorter: a shorter one's last element links back to the head,
+// the longer's on to its next -- the head, by the prefix: not distinct)
+theorem mp.u_cyc_short(M, h, l1, l2): l1 in list_type(omega) -> l2 in list_type(omega) ->
+  (all i. i in omega -> int_lt(i, seq_len(l2)) -> !(l2[i] = 0)) ->
+  mallocng.cyclic(M, h, l1) -> mallocng.cyclic(M, h, l2) -> !int_lt(seq_len(l1), seq_len(l2))
+proof
+  assume h1 h2 z2 c1 c2
+  have {f1 = first, k1 = links} := expand(c1, mallocng.cyclic)
+  have {f2 = first, d2 = distinct, k2 = links} := expand(c2, mallocng.cyclic)
+  have pre := apply(mp.u_cyc_pre[M := M, h := h, l1 := l1, l2 := l2], h1, h2, c1, c2)
+  let N1 := seq_len(l1)
+  let N2 := seq_len(l2)
+  have n1: N1 in omega by arith(h1)
+  have n2: N2 in omega by arith(h2)
+  have g: int_lt(N1, N2) -> false proof
+    assume lt
+    // N1 = 0: the head 0, l2's head nonzero
+    have c0: N1 = 0 -> false proof
+      assume e0
+      have hz := trans(f1, mp(ite_t[c := N1 = 0, a := 0, b := l1[0]], e0))
+      have hl := trans(f2, mp(ite_f[c := N2 = 0, a := 0, b := l2[0]], (!(N2 = 0) by arith(lt, e0))))
+      have nz := mp(all_elim(z2, {0}), simp(), arith(lt, e0))
+      show by simp(hz, hl, nz)
+    qed
+    // else: the last of l1 links to l1's head and to l2[N1]
+    have c1n: !(N1 = 0) -> false proof
+      assume ne
+      let j := int_sub(N1, 1)
+      have jo: j in omega by arith(n1, ne)
+      have jl1: int_lt(j, N1) by arith(n1, ne)
+      have jl2: int_lt(j, N2) by arith(n1, ne, lt)
+      have x1 _ := mp(all_elim(k1, {j}), jo, jl1)
+      have x2 _ := mp(all_elim(k2, {j}), jo, jl2)
+      have ej := mp(all_elim(pre, {j}), jo, jl1, jl2)
+      have e0 := mp(all_elim(pre, {0}), simp(), arith(n1, ne), arith(lt, n1))
+      have _ m1 := mp(mod_unique_int[x := int_add(j, 1), m := N1, q := 1, r := 0], simp(), simp(), arith(n1, ne), arith(n1, ne),
+        (int_add(j, 1) = int_add(int_mul(N1, 1), 0) by arith(n1, ne)))
+      have m2: int_mod(int_add(j, 1), N2) = N1 by arith(n1, ne, lt)
+      have w: l2[N1] = l2[0] by simp(x1, x2, ej, e0, m1, m2)
+      have z0: 0 in omega by simp()
+      have p0: int_lt(0, N2) by arith(lt, n1)
+      have d := mp(all_elim(d2, {N1}, {0}), conj(n1, z0), conj(lt, p0, w))
+      show by arith(d, ne)
+    qed
+    show by taut(c0, c1n)
+  qed
+  show by taut(g)
+qed
+
+theorem mp.u_cyclic(M, h, l1, l2): l1 in list_type(omega) -> l2 in list_type(omega) ->
+  (all i. i in omega -> int_lt(i, seq_len(l1)) -> !(l1[i] = 0)) -> (all i. i in omega -> int_lt(i, seq_len(l2)) -> !(l2[i] = 0)) ->
+  mallocng.cyclic(M, h, l1) -> mallocng.cyclic(M, h, l2) -> l1 = l2
+proof
+  assume h1 h2 z1 z2 c1 c2
+  have s12 := apply(mp.u_cyc_short[M := M, h := h, l1 := l1, l2 := l2], h1, h2, z2, c1, c2)
+  have s21 := apply(mp.u_cyc_short[M := M, h := h, l1 := l2, l2 := l1], h2, h1, z1, c2, c1)
+  have n1: seq_len(l1) in omega by arith(h1)
+  have n2: seq_len(l2) in omega by arith(h2)
+  have le: seq_len(l1) = seq_len(l2) by arith(s12, s21, n1, n2)
+  have pre := apply(mp.u_cyc_pre[M := M, h := h, l1 := l1, l2 := l2], h1, h2, c1, c2)
+  have el: all i. i in omega -> int_lt(i, seq_len(l1)) -> l1[i] = l2[i] proof
+    fix i
+    assume hi hl
+    show := mp(all_elim(pre, {i}), hi, hl, (int_lt(i, seq_len(l2)) by arith(hl, le)))
+  qed
+  show := mp(ext_example[a := l1, b := l2, t := omega], h1, h2, le, el)
+qed
+
+// ----------------------------------------------------------------------
+//  The context's fields
+
+theorem mp.u_ctx_fields(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) ->
+  A.secret = B.secret && A.init_done = B.init_done && A.avail_cnt = B.avail_cnt && A.reserve_cnt = B.reserve_cnt &&
+  A.brk = B.brk && A.reserve = B.reserve
+proof
+  assume hc hua ha hub hb hha hhb
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have {cA = ctx, nA = normal} := expand(HA, mallocng.holds)
+  have {cB = ctx, nB = normal} := expand(HB, mallocng.holds)
+  have {sA = secret, iA = init, vA = avail_cnt, rA = area_cnt, aA = avail_areas, kA = brk} := expand(cA, mallocng.ctx_ok)
+  have {sB = secret, iB = init, vB = avail_cnt, rB = area_cnt, aB = avail_areas, kB = brk} := expand(cB, mallocng.ctx_ok)
+  have ks: mallocng.C_SECRET = 0 && mallocng.C_INIT_DONE = 8 && mallocng.C_AVAIL_CNT = 32 && mallocng.C_AREA_CNT = 40 &&
+      mallocng.C_AVAIL_AREAS = 72 && mallocng.C_BRK = 920 && mallocng.CTX_SIZE = 928
+    by defs(simp(), mallocng.C_SECRET, mallocng.C_INIT_DONE, mallocng.C_AVAIL_CNT, mallocng.C_AREA_CNT, mallocng.C_AVAIL_AREAS,
+      mallocng.C_BRK, mallocng.CTX_SIZE)
+  // (each field: its bytes, read in both views)
+  have e0 := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := 0, n := 8], hc, hua, ha, hub, hb, hha, hhb, simp(), simp(), simp(ks),
+    apply(mp.u_nofree[c := c, off := 0, n := 8], hc, simp(), simp(), simp()))
+  have e8 := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := 8, n := 4], hc, hua, ha, hub, hb, hha, hhb, simp(), simp(), simp(ks),
+    apply(mp.u_nofree[c := c, off := 8, n := 4], hc, simp(), simp(), simp()))
+  have e32 := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := 32, n := 8], hc, hua, ha, hub, hb, hha, hhb, simp(), simp(), simp(ks),
+    apply(mp.u_nofree[c := c, off := 32, n := 8], hc, simp(), simp(), simp()))
+  have e40 := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := 40, n := 8], hc, hua, ha, hub, hb, hha, hhb, simp(), simp(), simp(ks),
+    apply(mp.u_nofree[c := c, off := 40, n := 8], hc, simp(), simp(), simp()))
+  have e72 := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := 72, n := 8], hc, hua, ha, hub, hb, hha, hhb, simp(), simp(), simp(ks),
+    apply(mp.u_nofree[c := c, off := 72, n := 8], hc, simp(), simp(), simp()))
+  have e920 := apply(mp.u_ctx2[c := c, A := A, B := B, vm := vm, b := b, off := 920, n := 8], hc, hua, ha, hub, hb, hha, hhb, simp(), simp(), simp(ks),
+    apply(mp.u_nofree[c := c, off := 920, n := 8], hc, simp(), simp(), simp()))
+  have sec: A.secret = B.secret by simp(expand(sA, mallocng.ctx_word), expand(sB, mallocng.ctx_word), e0, ks)
+  have ini: A.init_done = B.init_done by simp(iA, iB, e8, ks)
+  have avc: A.avail_cnt = B.avail_cnt by simp(expand(vA, mallocng.ctx_word), expand(vB, mallocng.ctx_word), e32, ks)
+  have rsc: A.reserve_cnt = B.reserve_cnt by simp(expand(rA, mallocng.ctx_word), expand(rB, mallocng.ctx_word), e40, ks)
+  have brk: A.brk = B.brk by simp(expand(kA, mallocng.ctx_word), expand(kB, mallocng.ctx_word), e920, ks)
+  // (the reserve: the context's word while reserved pages remain, else 0)
+  have {zA = reserve} := expand(nA, mallocng.normal)
+  have {zB = reserve} := expand(nB, mallocng.normal)
+  have ro: A.reserve_cnt in omega by simp(ha)
+  have d: int_lt(0, A.reserve_cnt) || A.reserve_cnt = 0 by arith(ro)
+  have r1: int_lt(0, A.reserve_cnt) -> A.reserve = B.reserve proof
+    assume h
+    show by simp(h, expand(aA, mallocng.ctx_word), expand(aB, mallocng.ctx_word), e72, ks, rsc)
+  qed
+  have r0: A.reserve_cnt = 0 -> A.reserve = B.reserve proof
+    assume h
+    have a0: A.reserve = 0 by taut(zA, h)
+    have hb: B.reserve_cnt = 0 by simp(h, rsc)
+    have b0: B.reserve = 0 by taut(zB, hb)
+    show by simp(a0, b0)
+  qed
+  have rsv: A.reserve = B.reserve by taut(d, r1, r0)
+  show by taut(sec, ini, avc, rsc, brk, rsv)
+qed
