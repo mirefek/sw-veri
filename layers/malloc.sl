@@ -191,8 +191,9 @@ proc malloc(n: bits[64]) -> Addr {
 }
 
 proc free(p: Addr) {
+  require world_ok(self)                        // the process at any call (its program loaded)
   if p = 0 { return }
-  require alloc_inv(self) && errno_ok(self) && world_ok(self)
+  require alloc_inv(self) && errno_ok(self)
   require blocks[p] != none                     // invalid or double free: undefined
   let before = self
   let freed  = range(p, blocks[p].value)
