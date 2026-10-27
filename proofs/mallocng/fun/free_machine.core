@@ -391,3 +391,99 @@ proof
     ln, all_elim(free_ref, {mp.FLF(nf)}))
   show by taut(im, qlf)
 qed
+
+// ----------------------------------------------------------------------
+//  free(0): nothing, from any world
+
+// __libc_free(0)'s run: the state as it was
+theorem mp.lf_run0(gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu, s, o): s in abi.World ->
+  runs(c_src_malloc_mallocng_free.__libc_free(0, gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu), s, o) ->
+  abi.ovf_out(s, o) || (ex V. (V in x86_64_linux.Vm && V = s.vm) && o = ok(fn_update(s, "vm", V), empty))
+proof
+  assume hs hr
+  have e: o = ok(s, empty) by simp(hr)
+  have {wv = mem, wf = record, wd = has_vm} := apply(ms.world_parts, hs)
+  have ss: fn_update(s, "vm", s.vm) = s := mp(fn_update_same[f := s, k := "vm"], wf, wd)
+  show by disj({2}, ex_intro({s.vm}, taut(wv, refl({s.vm}), rewrite(sym(ss), e, {1}))))
+qed
+
+// __libc_free(0) called as such: nothing
+abbrev mp.lf_call0(f) := all t regs o2. t in abi.World -> gc.regs_ok(regs, seq_one(gimple.arg(64, 0))) -> runs(f[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex V r. (V in x86_64_linux.Vm && V = t.vm) && o2 = ok(fn_update(t, "vm", V), r))
+
+theorem mp.lf_q0: all gm gsi gst gns ac acas wl nf ul el mu. mp.lf_call0(c_src_malloc_mallocng_free.__libc_free_fun(gm, gsi, gst, gns, ac, acas, wl, nf, ul, el, mu))
+proof
+  fix gm gsi gst gns ac acas wl nf ul el mu
+  fix t regs o2
+  assume hw hro hr
+  have rl rn r0 := apply(gc.regs1, (0 in bits(64) by simp()), hro)
+  have lo: seq_len(regs) in omega by simp(rl)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have bp: bits_of_int(64, regs[0]) = 0 by defs(simp(r0), bits_of_int, pow2)
+  step o3 V, e hs1 from hr with o1l, bp, mp.lf_run0 using ra, hw
+  have ne: ex x0. x0 in bits(64) by ex_intro({0}, simp())
+  have e1: ex x0. x0 in bits(64) && any_rel(x1. x1 in bits(64), x1. o2 = ok(fn_update(t, "vm", V), pair(x0, x1))) by defs(taut(expand(e, any_rel), ne), any_rel)
+  obtain y0, _ e2 from e1
+  have e3: ex x1. x1 in bits(64) && o2 = ok(fn_update(t, "vm", V), pair(y0, x1)) by taut(expand(e2, any_rel), ne)
+  obtain y1, _ ho from e3
+  show by disj({2}, ex_intro({V}, {pair(y0, y1)}, taut(hs1, ho)))
+qed
+
+theorem mp.lf_calls0(F, G): mp.lf_call0(G) -> mp.calls(F, G) -> mp.lf_call0(F)
+proof
+  assume hq hcl
+  fix t regs o2
+  assume hw hro hr
+  have rl rn _ := apply(gc.regs1, (0 in bits(64) by simp()), hro)
+  have h2 := mp(all_elim(hcl, {regs}, {t}, {o2}), rl, (int_le(seq_len(regs), 6) by simp(rn)), hw, hr)
+  show := mp(all_elim(hq, {t}, {regs}, {o2}), hw, hro, h2)
+qed
+
+// free(0)'s run: __libc_free(0) called as such
+theorem mp.fr_run0(g, s, o): mp.lf_call0(g) -> s in abi.World -> abi.thread_ok(s.vm, s.fs_base) -> runs(c_src_malloc_free.free(0, g), s, o) ->
+  abi.ovf_out(s, o) || (ex V. (V in x86_64_linux.Vm && V = s.vm) && o = ok(fn_update(s, "vm", V), empty))
+proof
+  assume hg hw hth hr
+  have pu := apply(g.runs_univ, hr)
+  have hu: s in univ(1) by simp(pu)
+  have ths: gc.sound(s) by simp(hth)
+  have hp: 0 in bits(64) by simp()
+  step V r, ho hR from hr with hg using conj(hw, hu, ths, hp)
+  show by disj({2}, ex_intro({V}, taut(hR, ho)))
+qed
+
+// the `free` symbol's code with the argument 0 (first of any list of
+// arguments): nothing
+theorem mp.fr_post0(g, regs, t, o2): mp.lf_call0(g) -> regs in abi.ARGS -> ord_le(1, seq_len(regs)) -> regs[0] = 0 -> t in abi.World ->
+  abi.thread_ok(t.vm, t.fs_base) -> runs(c_src_malloc_free.free_fun(g)[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex V r. (V in x86_64_linux.Vm && V = t.vm) && o2 = ok(fn_update(t, "vm", V), r))
+proof
+  assume hg ra o1l r0 hw hth hr
+  have bp: bits_of_int(64, regs[0]) = 0 by defs(simp(r0), bits_of_int, pow2)
+  step o3 V, e hs1 from hr with o1l, bp, mp.fr_run0 using ra, hg, hw, hth
+  have ne: ex x0. x0 in bits(64) by ex_intro({0}, simp())
+  have e1: ex x0. x0 in bits(64) && any_rel(x1. x1 in bits(64), x1. o2 = ok(fn_update(t, "vm", V), pair(x0, x1))) by defs(taut(expand(e, any_rel), ne), any_rel)
+  obtain y0, _ e2 from e1
+  have e3: ex x1. x1 in bits(64) && o2 = ok(fn_update(t, "vm", V), pair(y0, x1)) by taut(expand(e2, any_rel), ne)
+  obtain y1, _ ho from e3
+  show by disj({2}, ex_intro({V}, {pair(y0, y1)}, taut(hs1, ho)))
+qed
+
+// __libc_free's linked code called with 0 as such
+theorem mp.fl_lf0(nf): tr.callee_io(nf, 2) -> mp.lf_call0(mp.FLF(nf))
+proof
+  assume onf
+  let AC := mp.FAC
+  have _ _ ogm := all_elim(mp.fl_gm, {empty})
+  have ogns := mp(all_elim(gnsc.io, {AC}), mp.undef_io[n := 0])
+  have _ _ owl _ := all_elim(mp.mi_wrl, {empty})
+  have _ _ oul _ := all_elim(mp.mi_unl, {empty})
+  have _ _ oel _ := all_elim(mp.ap_el, {empty})
+  have _ _ omu _ := all_elim(mp.mi_mun, {empty})
+  have q := all_elim(mp.lf_q0, {mp.FGM}, {mp.FGSI}, {mp.FGST}, {mp.FGNS}, {AC}, {mp.FCAS}, {mp.WLK}, {nf}, {mp.ULK}, {mp.EL}, {mp.MUN})
+  show := apply(mp.lf_calls0[F := mp.FLF(nf), G := c_src_malloc_mallocng_free.__libc_free_fun(mp.FGM, mp.FGSI, mp.FGST, mp.FGNS, AC, mp.FCAS, mp.WLK, nf, mp.ULK, mp.EL, mp.MUN)], q,
+    mp(all_elim(__libc_free_ref, {mp.FGM}, {mp.FGSI}, {mp.FGST}, {mp.FGNS}, {AC}, {mp.FCAS}, {mp.WLK}, {nf}, {mp.ULK}, {mp.EL}, {mp.MUN}),
+      ogm, fgsitc.io, fgstc.io, ogns, mp.undef_io[n := 0], facsc.io, owl, onf, oul, oel, omu))
+qed
