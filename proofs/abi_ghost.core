@@ -656,27 +656,31 @@ qed
 // world's OS state (its I/O: the ABI's own crash branch allows them, as at
 // the call); of its outcomes, the returns of a pair of words, exceptions
 // and divergences
-abbrev abi.refines_ovf(low, spec, G) := all s h o. s in abi.World -> h in G -> runs(low, s, o) ->
+// ... from the world s with the ghost part h
+abbrev abi.refines_ovf_at(low, spec, G, s, h) := all o. runs(low, s, o) ->
   abi.outcome(o) -> (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) ->
   (ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(o, h2))) ||
   (ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os = s.os)
+abbrev abi.refines_ovf(low, spec, G) := all s h. s in abi.World -> h in G -> abi.refines_ovf_at(low, spec, G, s, h)
 
 // (a refinement: so too)
 theorem abi.ovf_of_ref(low, spec, G): refines_ghost(low, spec, abi.World, G) -> abi.refines_ovf(low, spec, G)
 proof
   assume hr
-  fix s h o
-  assume hs hh hro _ _
+  fix s h
+  assume hs hh
+  fix o
+  assume hro _ _
   show by taut(mp(all_elim(expand(hr, refines_ghost), {s}, {h}, {o}), hs, hh, hro))
 qed
 
 // (... an outcome no such overflow: the spec's)
-theorem abi.ovf_left(low, spec, G, s, h, o): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G -> runs(low, s, o) -> abi.outcome(o) ->
+theorem abi.ovf_left(low, spec, G, s, h, o): abi.refines_ovf_at(low, spec, G, s, h) -> runs(low, s, o) -> abi.outcome(o) ->
   (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) -> !(ex e x. o = exc(x, e) && e = exc_val("stack_overflow", empty)) ->
   ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(o, h2))
 proof
-  assume hr hs hh hro hsh hv hn
-  have d := mp(all_elim(hr, {s}, {h}, {o}), hs, hh, hro, hsh, hv)
+  assume hr hro hsh hv hn
+  have d := mp(all_elim(hr, {o}), hro, hsh, hv)
   have r: (ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os = s.os) -> false proof
     assume w
     obtain x, e1 _ from w
@@ -687,10 +691,10 @@ qed
 
 // (... so a return of a pair of words, an exception but an overflow, a
 // divergence)
-theorem abi.ov_ok(low, spec, G, s, h, x, v): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G -> v in cart(bits(64), bits(64)) ->
+theorem abi.ov_ok(low, spec, G, s, h, x, v): abi.refines_ovf_at(low, spec, G, s, h) -> v in cart(bits(64), bits(64)) ->
   runs(low, s, ok(x, v)) -> ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(ok(x, v), h2))
 proof
-  assume hr hs hh hv hro
+  assume hr hv hro
   have vt: all x9 v9. ok(x, v) = ok(x9, v9) -> v9 in cart(bits(64), bits(64)) proof
     fix x9 v9
     assume e9
@@ -703,13 +707,13 @@ proof
     show by simp(q9)
   qed
   have sh: abi.outcome(ok(x, v)) by disj({1}, ex_intro({x}, {v}, refl({ok(x, v)})))
-  show := apply(abi.ovf_left, hr, hs, hh, hro, sh, vt, no)
+  show := apply(abi.ovf_left, hr, hro, sh, vt, no)
 qed
 
-theorem abi.ov_exc(low, spec, G, s, h, x, e): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G -> !(e = exc_val("stack_overflow", empty)) ->
+theorem abi.ov_exc(low, spec, G, s, h, x, e): abi.refines_ovf_at(low, spec, G, s, h) -> !(e = exc_val("stack_overflow", empty)) ->
   runs(low, s, exc(x, e)) -> ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(exc(x, e), h2))
 proof
-  assume hr hs hh hn hro
+  assume hr hn hro
   have vt: all x9 v9. exc(x, e) = ok(x9, v9) -> v9 in cart(bits(64), bits(64)) proof
     fix x9 v9
     assume e9
@@ -722,13 +726,13 @@ proof
     show by taut(hn, rewrite(sym(ee), r9))
   qed
   have sh: abi.outcome(exc(x, e)) by disj({2}, ex_intro({x}, {e}, refl({exc(x, e)})))
-  show := apply(abi.ovf_left, hr, hs, hh, hro, sh, vt, no)
+  show := apply(abi.ovf_left, hr, hro, sh, vt, no)
 qed
 
-theorem abi.ov_div(low, spec, G, s, h, t): abi.refines_ovf(low, spec, G) -> s in abi.World -> h in G ->
+theorem abi.ov_div(low, spec, G, s, h, t): abi.refines_ovf_at(low, spec, G, s, h) ->
   runs(low, s, diverge(t)) -> ex h2. h2 in G && runs(spec, union2(s, h), with_ghost(diverge(t), h2))
 proof
-  assume hr hs hh hro
+  assume hr hro
   have vt: all x9 v9. diverge(t) = ok(x9, v9) -> v9 in cart(bits(64), bits(64)) proof
     fix x9 v9
     assume e9
@@ -740,13 +744,13 @@ proof
     show by simp(q9)
   qed
   have sh: abi.outcome(diverge(t)) by disj({3}, ex_intro({t}, refl({diverge(t)})))
-  show := apply(abi.ovf_left, hr, hs, hh, hro, sh, vt, no)
+  show := apply(abi.ovf_left, hr, hro, sh, vt, no)
 qed
 
 // I/O of a stack overflow the ghost-free spec allows: the spec over
 // World & G allows it too (from the world with h)
 theorem abi.overflow_ok_g: all G w h low spec args crash. abi.ghost_ok(G) -> h in G -> w in abi.World ->
-  abi.refines_ovf(low[args], spec[args], G) ->
+  abi.refines_ovf_at(low[args], spec[args], G, w, h) ->
   abi.overflow_ok(rec_and(abi.World, single(empty)), w, low, args, crash) ->
   abi.overflow_ok(rec_and(abi.World, G), union2(w, h), spec, args, crash)
 proof
@@ -790,7 +794,7 @@ proof
           show by simp(rewrite(hx0, q9))
         qed
         have sh0: abi.outcome(x0) by disj({1}, ex_intro({x}, {r}, hx0))
-        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hw, hh, hrun, sh0, vt, no)
+        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hrun, sh0, vt, no)
         have xw := apply(tr.and_world, hx)
         have _ _ apX := apply(abi.ghost_parts_w, hg, hh2, xw)
         have xos := mp(all_elim(apX, {"os"}), simp())
@@ -810,7 +814,7 @@ proof
           show by simp(rewrite(hx0, e9))
         qed
         have sh0: abi.outcome(x0) by disj({2}, ex_intro({x}, {ee}, hx0))
-        have d := mp(all_elim(rf, {w}, {h}, {x0}), hw, hh, hrun, sh0, vt)
+        have d := mp(all_elim(rf, {x0}), hrun, sh0, vt)
         // the overflow keeping the world's OS state: as at the call
         have c0: (ex x9. x0 = exc(x9, exc_val("stack_overflow", empty)) && x9.os = w.os) -> union2(w, h).os.events = crash.events proof
           assume w9
@@ -847,7 +851,7 @@ proof
           show by simp(rewrite(hx0, q9))
         qed
         have sh0: abi.outcome(x0) by disj({3}, ex_intro({t}, hx0))
-        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hw, hh, hrun, sh0, vt, no)
+        obtain h2, hh2 hrun2 from apply(abi.ovf_left[low := low[args], spec := spec[args], G := G, s := w, h := h, o := x0], rf, hrun, sh0, vt, no)
         have ot := mp(abi.div_outcome_type[s := rec_and(abi.World, G), v := CT, t := t], ht)
         have r2 := rewrite(all_elim(abi.wg_div, {t}, {h2}), rewrite(hx0, hrun2))
         have it2: t["os.events"] = crash.events by simp(rewrite(hx0, hite))
@@ -909,9 +913,11 @@ qed
 def tr.div_raises_g(G, spec) := all args w h t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> runs(spec[args], union2(w, h), diverge(t)) ->
   (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && x in rec_and(abi.World, G) && runs(spec[args], union2(w, h), exc(x, e)))
 
-// ... the code low diverging only where the spec raises
-def tr.div_raises_low(low, spec, G) := all args w h t. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> runs(low[args], w, diverge(t)) ->
-  (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && x in rec_and(abi.World, G) && runs(spec[args], union2(w, h), exc(x, e)))
+// ... the code low diverging only where the spec raises: from the world w
+// with the ghost part h, and from any
+abbrev tr.div_low_at(low, spec, G, w, h) := all t. runs(low, w, diverge(t)) ->
+  (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && x in rec_and(abi.World, G) && runs(spec, union2(w, h), exc(x, e)))
+def tr.div_raises_low(low, spec, G) := all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G -> tr.div_low_at(low[args], spec[args], G, w, h)
 
 // (so where the spec diverges only where it raises, low refining it)
 theorem tr.div_low_of(low, spec, G): tr.div_raises_g(G, spec) -> (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) ->
@@ -919,15 +925,29 @@ theorem tr.div_low_of(low, spec, G): tr.div_raises_g(G, spec) -> (all args. args
 proof
   assume hdg hrf
   unfold tr.div_raises_low
-  fix args w h t
-  assume hA hw hwu hh hr
-  obtain h2, hh2 r2 from apply(abi.ov_div[low := low[args], spec := spec[args], G := G, s := w, h := h, t := t], mp(all_elim(hrf, {args}), hA), hw, hh, hr)
+  fix args w h
+  assume hA hw hwu hh
+  fix t
+  assume hr
+  obtain h2, hh2 r2 from apply(abi.ov_div[low := low[args], spec := spec[args], G := G, s := w, h := h, t := t], mp(all_elim(mp(all_elim(hrf, {args}), hA), {w}, {h}), hw, hh), hr)
   have r3 := rewrite(all_elim(abi.wg_div, {t}, {h2}), r2)
   show := mp(all_elim(expand(hdg, tr.div_raises_g), {args}, {w}, {h}, {t}), hA, hw, hwu, hh, r3)
 qed
 
+// (the world at an entry: a world in the universe)
+theorem abi.view_typed(s, objs, mem): s in x86_64_linux.Machine -> s in univ(1) -> objs in set_type(omega) -> mem in x86_64_linux.Vm ->
+  abi.view(s, objs, mem) in univ(1) && abi.view(s, objs, mem) in abi.World
+proof
+  assume hM su hot hmv
+  have ou := apply(abi.objs_univ, hot)
+  have hmu := apply(x86.vm_univ, hmv)
+  have vu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, hmu, mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), ou))
+  have vW := apply(abi.world_typed, hM, hot, hmv, vu)
+  show by taut(vu, vW)
+qed
+
 theorem abi.bridge_run_g: all G f low spec args objs mem s h o. abi.ghost_ok(G) -> h in G ->
-  abi.refines_ovf(low[args], spec[args], G) -> tr.div_raises_low(low, spec, G) -> args in abi.ARGS ->
+  abi.refines_ovf_at(low[args], spec[args], G, abi.view(s, objs, mem), h) -> tr.div_low_at(low[args], spec[args], G, abi.view(s, objs, mem), h) -> args in abi.ARGS ->
   s in x86_64_linux.Machine -> abi.entry_ok(s, args) -> objs in set_type(omega) ->
   (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> mem in x86_64_linux.Vm -> abi.view_ok(s, objs, mem) ->
   runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) || (ex t. runs(low[args], abi.view(s, objs, mem), diverge(t))) ->
@@ -948,7 +968,7 @@ proof
   have c1: abi.raises_at(low, args, objs, mem, s) -> GOAL proof
     assume hra
     obtain e x, eu eno hx rx from expand(hra, abi.raises_at)
-    obtain h2, hh2 r2 from apply(abi.ov_exc[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, x := x, e := e], href, vW, hh, eno, rx)
+    obtain h2, hh2 r2 from apply(abi.ov_exc[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, x := x, e := e], href, eno, rx)
     have r3 := rewrite(all_elim(abi.wg_exc, {x}, {e}, {h2}), r2)
     have xg: union2(x, h2) in rec_and(abi.World, G) := apply(rec_and_intro, apply(tr.and_world, expand(hx, abi.raise_state)), hh2)
     have ho: abi.outcome(o) by simp(hsh)
@@ -967,7 +987,7 @@ proof
     have g0: m1.gpr[0] in bits(64) by simp(m1M)
     have g2: m1.gpr[2] in bits(64) by simp(m1M)
     have pv := apply(cart_intro, g0, g2)
-    obtain h2, hh2 r2 from apply(abi.ov_ok[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, x := w2, v := pair(m1.gpr[0], m1.gpr[2])], href, vW, hh, pv, rw)
+    obtain h2, hh2 r2 from apply(abi.ov_ok[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, x := w2, v := pair(m1.gpr[0], m1.gpr[2])], href, pv, rw)
     have r3 := rewrite(all_elim(abi.wg_ok, {w2}, {pair(m1.gpr[0], m1.gpr[2])}, {h2}), r2)
     have hp1 := rewrite(eo, hp)
     have rt := apply(abi.ret_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {m1}, {w2}, {h2}, hg, hh, hh2, hM, he, m1M, hp1, hot, hob, hmv, hwm,
@@ -979,7 +999,7 @@ proof
   have c3: (ex t. o = diverge(t) && runs(low[args], abi.view(s, objs, mem), diverge(t))) -> GOAL proof
     assume hc
     obtain t, eo rd from hc
-    obtain h2, hh2 r2 from apply(abi.ov_div[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, t := t], href, vW, hh, rd)
+    obtain h2, hh2 r2 from apply(abi.ov_div[low := low[args], spec := spec[args], G := G, s := abi.view(s, objs, mem), h := h, t := t], href, rd)
     have r3 := rewrite(all_elim(abi.wg_div, {t}, {h2}), r2)
     have hp1 := rewrite(eo, hp)
     have dv := apply(abi.div_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {t}, hg, hh, hM, hp1, hot, hob, hmv, hwm, r3)
@@ -1018,7 +1038,7 @@ proof
   have c5: (ex t. runs(low[args], abi.view(s, objs, mem), diverge(t))) -> GOAL proof
     assume hc
     obtain t, rd from hc
-    obtain e x, eu eno xg rx from mp(all_elim(expand(hdg, tr.div_raises_low), {args}, {abi.view(s, objs, mem)}, {h}, {t}), hA, vW, vu, hh, rd)
+    obtain e x, eu eno xg rx from mp(all_elim(hdg, {t}), rd)
     have ho: abi.outcome(o) by simp(hsh)
     have pu ou2 := apply(abi.wg_univ, hp, hu, ho)
     have r := apply(abi.ub_case_g, {G}, {f}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {with_ghost(o, h)}, {e}, {x}, hg, hh, hM, su, hot, hmv, hwm, hob, eu, eno, xg, rx, pu, ou2)
@@ -1115,7 +1135,10 @@ proof
           ex h2. h2 in G && runs(rel(args, objs, mem), S, with_ghost(o, h2)) proof
         assume hc hy hb2 hw
         have hm := mp(all_elim(hb, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, hc, hy.1, hy.2, hb2, hw, hr)
-        obtain h2, hh2 r from apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, mp(all_elim(hrf, {args}), hA), hdg, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
+        have vu vW := apply(abi.view_typed, hM, su, hot, hmv)
+        have ra := mp(all_elim(mp(all_elim(hrf, {args}), hA), {abi.view(s, objs, mem)}, {h}), vW, hh)
+        have da := mp(all_elim(expand(hdg, tr.div_raises_low), {args}, {abi.view(s, objs, mem)}, {h}), hA, vW, vu, hh)
+        obtain h2, hh2 r from apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, ra, da, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
         show by ex_intro({h2}, taut(hh2, mp(all_elim(relk, {h2}), hh2, taut(r))))
       qed
       // (the preconditions as of S: s's)
@@ -1296,17 +1319,18 @@ qed
 // where the world's view has the program not loaded (or the stack
 // protector's word not writable) -- so the program need not be assumed
 // loaded (`implements2`, not `implements2_at`)
-theorem abi.bridge_implements_l: all G f low spec base code statics. abi.ghost_ok(G) ->
-  (all args. args in abi.ARGS -> abi.refines_ovf(low[args], spec[args], G)) -> tr.div_raises_low(low, spec, G) ->
+// Each entry (its arguments, its world w and ghost part h) may take a code
+// of its own (C1-implemented by the machine code, refining spec from w
+// with h): the code of a recursion unrolled as deep as the entry needs.
+theorem abi.bridge_implements_lf: all G f spec base code statics. abi.ghost_ok(G) ->
+  (all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G ->
+     ex low. tr.implements_at(f, low, base, code, statics) && abi.refines_ovf_at(low[args], spec[args], G, w, h) && tr.div_low_at(low[args], spec[args], G, w, h)) ->
   (all args w. args in abi.ARGS -> w in rec_and(abi.World, G) -> w in univ(1) -> !(abi.loaded(w.vm, base, code, statics) && abi.canary_ok(w.vm, w.fs_base)) ->
      abi.spec_raises(rec_and(abi.World, G), w, spec, args)) ->
-  (all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> abi.loaded(s.vm, base, code, statics) -> s.rip = f ->
-    abi.entry_ok(s, args) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) ->
-    runs(abi.run_to_return(), s, o) -> abi.matches(low, args, objs, mem, s, o) || (ex t. runs(low[args], abi.view(s, objs, mem), diverge(t)))) ->
   abi.implements2(G, f, spec)
 proof
-  fix G f low spec base code statics
-  assume hg hrf hdg hnl hb
+  fix G f spec base code statics
+  assume hg hfam hnl
   let ld(m) := abi.loaded(m.vm, base, code, statics)
   have main: all x0. all x1. all x2. (x0 in abi.ARGS && x1 in set_type(omega)) && x2 in x86_64_linux.Vm -> (all s h o. s in x86_64_linux.Machine -> h in G -> runs(abi.run_to_return(), s, o) ->
       (ex h2. h2 in G && runs(abi.abi_function(G, f, spec, x0, x1, x2), union2(s, h), with_ghost(o, h2)))) proof
@@ -1348,8 +1372,11 @@ proof
       have mc: ld(s) -> s.rip = f && abi.entry_ok(s, args) ->
           (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) -> abi.view_ok(s, objs, mem) -> GOAL proof
         assume hc hy hb2 hw
+        have vu vW := apply(abi.view_typed, hM, su, hot, hmv)
+        obtain low, hi ra da from mp(all_elim(hfam, {args}, {abi.view(s, objs, mem)}, {h}), hA, vW, vu, hh)
+        have hb := apply(tr.implements_matches_d, hi)
         have hm := mp(all_elim(hb, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, hc, hy.1, hy.2, hb2, hw, hr)
-        show := apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, mp(all_elim(hrf, {args}), hA), hdg, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
+        show := apply(abi.bridge_run_g, {G}, {f}, {low}, {spec}, {args}, {objs}, {mem}, {s}, {h}, {o}, hg, hh, ra, da, hA, hM, hy.2, hot, hb2, hmv, hw, hr, hm)
       qed
       // not loaded: nor in the world's view, so the spec raises
       have nl: !ld(s) -> (all x. x in omega -> x in objs -> (int_le(abi.sp(s), x) && abi.stack_page(s.vm, int_div(x, x86_64_linux.PAGE))) && x86_64_linux.can_access(s.vm, bits_of_int(64, x), 1)) ->
@@ -1412,5 +1439,13 @@ theorem tr.implements_abi_l: all G f low spec base code statics. abi.ghost_ok(G)
 proof
   fix G f low spec base code statics
   assume hg hdg hi hrf hnl
-  show := apply(abi.bridge_implements_l, hg, hrf, hdg, hnl, apply(tr.implements_matches_d, hi))
+  have fam: all args w h. args in abi.ARGS -> w in abi.World -> w in univ(1) -> h in G ->
+      ex low2. tr.implements_at(f, low2, base, code, statics) && abi.refines_ovf_at(low2[args], spec[args], G, w, h) && tr.div_low_at(low2[args], spec[args], G, w, h) proof
+    fix args w h
+    assume hA hw hwu hh
+    have ra := mp(all_elim(mp(all_elim(hrf, {args}), hA), {w}, {h}), hw, hh)
+    have da := mp(all_elim(expand(hdg, tr.div_raises_low), {args}, {w}, {h}), hA, hw, hwu, hh)
+    show by ex_intro({low}, taut(hi, ra, da))
+  qed
+  show := apply(abi.bridge_implements_lf, hg, fam, hnl)
 qed
