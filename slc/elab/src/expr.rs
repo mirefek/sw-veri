@@ -818,7 +818,16 @@ impl<'s> Elab<'s> {
         if let Some(Ty::Proc { state, ret, .. }) = exp.map(|t| t.strip()) {
             // a procedure value: arguments -> program
             let (st, rt) = ((**state).clone(), (**ret).clone());
-            let prog = self.program(&inner, &st, body, &rt, span)?;
+            // `(args) => e`: the program returns e's value
+            let mut body = body.clone();
+            if !matches!(rt.strip(), Ty::Unit) {
+                if let Some(last) = body.stmts.last_mut() {
+                    if let StmtKind::Expr(e) = &last.kind {
+                        last.kind = StmtKind::Return(Some(e.clone()));
+                    }
+                }
+            }
+            let prog = self.program(&inner, &st, &body, &rt, span)?;
             cx.locals.truncate(n0);
             return Ok((
                 self.b.bind_app("fn_build", vec![dom], &[x], &prog),
