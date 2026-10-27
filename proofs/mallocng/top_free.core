@@ -42,3 +42,132 @@ proof
   assume hp0 pu hn
   show by spec_ret({ok(pair(S, empty), empty)}, hp0, hn, pu)
 qed
+
+// ----------------------------------------------------------------------
+//  ... as a C function value (any result), widened
+
+abbrev mp.UFF(c, eo, b, cd, st) := malloc.free_fun(mallocng.inv(c), mallocng.owned(c), eo, b, cd, st)
+// the layer's free defined: a list of arguments, p 0 or a live block in a
+// state of the layer's precondition
+abbrev mp.FPRE(c, eo, b, cd, st, regs, S) := ord_le(1, seq_len(regs)) &&
+  (regs[0] = 0 || (mp.MPRE(c, eo, b, cd, st, S) && !(S.blocks[regs[0]] = none)))
+
+abbrev mp.FREL(I, O, eo, b, cd, st, regs, x1, x2) := !ord_le(1, seq_len(regs)) || bind_rel(malloc.free(I, O, eo, b, cd, st, regs[0]), x1,
+  x3 x4. any_rel(x5. x5 in bits(64), x5. x2 = ok(x3, x5)), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))
+
+theorem mp.tf_fun(I, O, eo, b, cd, st, regs, S, o): regs in abi.ARGS -> pair(S, o) in univ(1) -> mp.FREL(I, O, eo, b, cd, st, regs, S, o) ->
+  runs(malloc.free_fun(I, O, eo, b, cd, st)[regs], S, o)
+proof
+  assume hr pu br
+  have r := mp(all_elim(tr.runs_intro[r := x1 x2. mp.FREL(I, O, eo, b, cd, st, regs, x1, x2)], {S}, {o}), pu, br)
+  show by defs(rewrite(sym(mp(app_fn_build[d := abi.ARGS, v := x0. mkprog(x1 x2. mp.FREL(I, O, eo, b, cd, st, x0, x1, x2)), a := regs], hr)), r), malloc.free_fun)
+qed
+
+theorem mp.tf_rel_ok(I, O, eo, b, cd, st, regs, S, x, v): v in bits(64) -> runs(malloc.free(I, O, eo, b, cd, st, regs[0]), S, ok(x, empty)) ->
+  mp.FREL(I, O, eo, b, cd, st, regs, S, ok(x, v))
+proof
+  assume hv hr
+  have k: any_rel(x5. x5 in bits(64), x5. ok(x, v) = ok(x, x5)) by spec_ret({v}, hv)
+  have br := mp(all_elim(gc.bind_ok[p := malloc.free(I, O, eo, b, cd, st, regs[0]), k := x3 x4. any_rel(x5. x5 in bits(64), x5. ok(x, v) = ok(x3, x5)),
+    x := x3 x4. ok(x, v) = exc(x3, x4), d := x3. ok(x, v) = diverge(x3)], {S}, {x}, {empty}), hr, k)
+  show by taut(br)
+qed
+
+theorem mp.tf_rel_exc(I, O, eo, b, cd, st, regs, S, x, e): runs(malloc.free(I, O, eo, b, cd, st, regs[0]), S, exc(x, e)) ->
+  mp.FREL(I, O, eo, b, cd, st, regs, S, exc(x, e))
+proof
+  assume hr
+  have br := mp(all_elim(gc.bind_exc[p := malloc.free(I, O, eo, b, cd, st, regs[0]), k := x3 x4. any_rel(x5. x5 in bits(64), x5. exc(x, e) = ok(x3, x5)),
+    x := x3 x4. exc(x, e) = exc(x3, x4), d := x3. exc(x, e) = diverge(x3)], {S}, {x}, {e}), hr, refl({exc(x, e)}))
+  show by taut(br)
+qed
+
+theorem mp.tf_rel_div(I, O, eo, b, cd, st, regs, S, t): runs(malloc.free(I, O, eo, b, cd, st, regs[0]), S, diverge(t)) ->
+  mp.FREL(I, O, eo, b, cd, st, regs, S, diverge(t))
+proof
+  assume hr
+  have br := mp(all_elim(gc.bind_div[p := malloc.free(I, O, eo, b, cd, st, regs[0]), k := x3 x4. any_rel(x5. x5 in bits(64), x5. diverge(t) = ok(x3, x5)),
+    x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], {S}, {t}), hr, refl({diverge(t)}))
+  show by taut(br)
+qed
+
+// the layer's free widened: anything where undefined
+theorem mp.tf_any(c, eo, b, cd, st, regs, S, o): regs in abi.ARGS -> pair(S, o) in univ(1) -> abi.outcome(o) ->
+  (all x v. o = ok(x, v) -> v in cart(bits(64), bits(64))) -> !mp.FPRE(c, eo, b, cd, st, regs, S) ->
+  runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], S, o)
+proof
+  assume hra pu hsh hv hn
+  let I := mallocng.inv(c)
+  let O := mallocng.owned(c)
+  // (the layer's free from S: anything)
+  have fa: all o1. pair(S, o1) in univ(1) -> ord_le(1, seq_len(regs)) -> runs(malloc.free(I, O, eo, b, cd, st, regs[0]), S, o1) proof
+    fix o1
+    assume pu1 o1l
+    have p0: !(regs[0] = 0) by taut(hn, o1l)
+    have nd: !(((S in I && malloc.errno_ok(eo, S)) && malloc.world_ok(b, cd, st, S)) && !(S.blocks[regs[0]] = none)) by taut(hn, o1l)
+    show := apply(mp.tf_fany[I := I, O := O, eo := eo, b := b, cd := cd, st := st, S := S, p := regs[0], o := o1], p0, pu1, nd)
+  qed
+  have k1: (ex m1 e. o = ok(m1, e)) -> runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], S, o) proof
+    assume e
+    obtain x v, eo1 from e
+    obtain r y, hr0 hy ev from apply(cart_elim, mp(all_elim(hv, {x}, {v}), eo1))
+    have pu2: pair(S, ok(x, pair(r, y))) in univ(1) := rewrite(ev, rewrite(eo1, pu))
+    have pu1: pair(S, ok(x, r)) in univ(1) by simp(pu2)
+    have pu0: pair(S, ok(x, empty)) in univ(1) by simp(pu2)
+    have fr: mp.FREL(I, O, eo, b, cd, st, regs, S, ok(x, r)) proof
+      have c0: !ord_le(1, seq_len(regs)) -> mp.FREL(I, O, eo, b, cd, st, regs, S, ok(x, r)) proof
+        assume n0
+        show by taut(n0)
+      qed
+      have c1: ord_le(1, seq_len(regs)) -> mp.FREL(I, O, eo, b, cd, st, regs, S, ok(x, r)) proof
+        assume o1l
+        show := apply(mp.tf_rel_ok[I := I, O := O, eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, x := x, v := r], hr0,
+          mp(all_elim(fa, {ok(x, empty)}), pu0, o1l))
+      qed
+      show by taut(c0, c1)
+    qed
+    have fv := apply(mp.tf_fun[I := I, O := O, eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := ok(x, r)], hra, pu1, fr)
+    have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UFF(c, eo, b, cd, st), regs := regs, S := S, o2 := ok(x, pair(r, y))], hra, pu2,
+      apply(mp.wr_ok, hy, fv))
+    show := rewrite(sym(eo1), rewrite(sym(ev), w))
+  qed
+  have k2: (ex m1 e. o = exc(m1, e)) -> runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], S, o) proof
+    assume e
+    obtain x ee, eo1 from e
+    have pu1 := rewrite(eo1, pu)
+    have fr: mp.FREL(I, O, eo, b, cd, st, regs, S, exc(x, ee)) proof
+      have c0: !ord_le(1, seq_len(regs)) -> mp.FREL(I, O, eo, b, cd, st, regs, S, exc(x, ee)) proof
+        assume n0
+        show by taut(n0)
+      qed
+      have c1: ord_le(1, seq_len(regs)) -> mp.FREL(I, O, eo, b, cd, st, regs, S, exc(x, ee)) proof
+        assume o1l
+        show := apply(mp.tf_rel_exc, mp(all_elim(fa, {exc(x, ee)}), pu1, o1l))
+      qed
+      show by taut(c0, c1)
+    qed
+    have fv := apply(mp.tf_fun[I := I, O := O, eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := exc(x, ee)], hra, pu1, fr)
+    have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UFF(c, eo, b, cd, st), regs := regs, S := S, o2 := exc(x, ee)], hra, pu1, apply(mp.wr_exc, fv))
+    show := rewrite(sym(eo1), w)
+  qed
+  have k3: (ex t. o = diverge(t)) -> runs(abi.wide(malloc.Heap.ghost, mp.UFF(c, eo, b, cd, st))[regs], S, o) proof
+    assume e
+    obtain t, eo1 from e
+    have pu1 := rewrite(eo1, pu)
+    have fr: mp.FREL(I, O, eo, b, cd, st, regs, S, diverge(t)) proof
+      have c0: !ord_le(1, seq_len(regs)) -> mp.FREL(I, O, eo, b, cd, st, regs, S, diverge(t)) proof
+        assume n0
+        show by taut(n0)
+      qed
+      have c1: ord_le(1, seq_len(regs)) -> mp.FREL(I, O, eo, b, cd, st, regs, S, diverge(t)) proof
+        assume o1l
+        show := apply(mp.tf_rel_div, mp(all_elim(fa, {diverge(t)}), pu1, o1l))
+      qed
+      show by taut(c0, c1)
+    qed
+    have fv := apply(mp.tf_fun[I := I, O := O, eo := eo, b := b, cd := cd, st := st, regs := regs, S := S, o := diverge(t)], hra, pu1, fr)
+    have w := apply(mp.top_wide[G := malloc.Heap.ghost, F := mp.UFF(c, eo, b, cd, st), regs := regs, S := S, o2 := diverge(t)], hra, pu1, apply(mp.wr_div, fv))
+    show := rewrite(sym(eo1), w)
+  qed
+  show by taut(hsh, k1, k2, k3)
+qed
