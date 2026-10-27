@@ -643,6 +643,189 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  The auxiliary vector (while not initialized): read from libc's word,
+//  its entries up to the first AT_NULL
+
+// (two pairs of naturals with the same parts: equal)
+theorem mp.u_pair_eq(u, v): u in cart(omega, omega) -> v in cart(omega, omega) -> fst(u) = fst(v) -> snd(u) = snd(v) -> u = v
+proof
+  assume hu hv hf hs
+  obtain x y, _ _ eu from mp(cart_elim[a := omega, b := omega, z := u], hu)
+  obtain x2 y2, _ _ ev from mp(cart_elim[a := omega, b := omega, z := v], hv)
+  show by simp(eu, ev, rewrite(eu, rewrite(ev, hf)), rewrite(eu, rewrite(ev, hs)))
+qed
+
+// (the vector's bytes: in its range)
+theorem mp.u_auxv_in(A, a): A in univ(1) -> A in mallocng.Abs -> a in omega -> int_le(A.auxv_at, a) -> int_lt(a, int_add(A.auxv_at, int_mul(16, seq_len(A.auxv)))) ->
+  mallocng.in_ranges(a, mallocng.auxv_ranges(A))
+proof
+  assume hu ha hao h1 h2
+  have al: A.auxv in list_type(cart(omega, omega)) by simp(ha)
+  let P0 := pair(A.auxv_at, int_mul(16, seq_len(A.auxv)))
+  let B := fn_build(int_sub(seq_len(A.auxv), 0), x0. ite(fst(A.auxv[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(A.auxv[int_add(0, x0)]), 8), 8), pair(0, 0)))
+  have ad: int_sub(seq_len(A.auxv), 0) in omega by arith(al)
+  have av: all x0. x0 in int_sub(seq_len(A.auxv), 0) -> ite(fst(A.auxv[int_add(0, x0)]) = x86_64_linux.AT_RANDOM, pair(int_add(snd(A.auxv[int_add(0, x0)]), 8), 8), pair(0, 0)) in univ(1) proof
+    fix x0
+    assume hx
+    show by simp(hu)
+  qed
+  have a1 := apply(tr.seq_one_type, (P0 in univ(1) by simp(hu)))
+  have bl := apply(build_list, ad, av)
+  have e0 := at({seq_concat(seq_one(P0), B)[0]}, a1, bl, (0 in omega by simp()), (int_lt(0, seq_len(seq_one(P0))) by simp()))
+  have r0e: mallocng.auxv_ranges(A)[0] = P0 by defs(simp(e0), mallocng.auxv_ranges)
+  have l0: int_lt(0, seq_len(mallocng.auxv_ranges(A))) by defs(arith(a1, bl), mallocng.auxv_ranges)
+  have r0: mallocng.in_range(a, mallocng.auxv_ranges(A)[0]) by defs(simp(r0e, h1, h2), mallocng.in_range)
+  have z0: 0 in omega by simp()
+  show by defs(ex_intro({0}, taut(z0, l0, r0)), mallocng.in_ranges)
+qed
+
+theorem mp.u_auxv(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
+  mallocng.holds_m(c, A, vm, b) -> mallocng.holds_m(c, B, vm, b) -> mallocng.no_reserved(A) -> mallocng.no_reserved(B) ->
+  seq_len(A.taken) = 0 -> seq_len(B.taken) = 0 -> A.init_done = B.init_done ->
+  A.auxv_at = B.auxv_at && A.auxv = B.auxv
+proof
+  assume hc hua ha hub hb hha hhb hra hrb hta htb hin
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have {frA = fresh, nA = normal} := expand(HA, mallocng.holds)
+  have {frB = fresh, nB = normal} := expand(HB, mallocng.holds)
+  have {iA = init} := expand(nA, mallocng.normal)
+  have {iB = init} := expand(nB, mallocng.normal)
+  have la: A.auxv in list_type(cart(omega, omega)) by simp(ha)
+  have lb: B.auxv in list_type(cart(omega, omega)) by simp(hb)
+  have ao: A.init_done in omega by simp(hua, ha)
+  // initialized: both empty
+  have done: !(A.init_done = 0) -> A.auxv_at = B.auxv_at && A.auxv = B.auxv proof
+    assume ne
+    have a0 x0 := mp(iA, ne)
+    have b0 y0 := mp(iB, (!(B.init_done = 0) by simp(ne, hin)))
+    have el: all i. i in omega -> int_lt(i, seq_len(A.auxv)) -> A.auxv[i] = B.auxv[i] proof
+      fix i
+      assume hi hil
+      show by arith(hil, a0, hi)
+    qed
+    have eq := mp(ext_example[a := A.auxv, b := B.auxv, t := cart(omega, omega)], la, lb, simp(a0, b0), el)
+    show by simp(x0, y0, eq)
+  qed
+  // not yet: read from memory
+  have fresh: A.init_done = 0 -> A.auxv_at = B.auxv_at && A.auxv = B.auxv proof
+    assume z
+    have {xA = auxv_at, nzA = auxv_nz, lnA = auxv_len, eA = auxv, endA = auxv_end, nlA = auxv_null} := mp(expand(frA, mallocng.fresh_ok), z)
+    have {xB = auxv_at, nzB = auxv_nz, lnB = auxv_len, eB = auxv, endB = auxv_end, nlB = auxv_null} := mp(expand(frB, mallocng.fresh_ok), (B.init_done = 0 by simp(z, hin)))
+    // libc's word
+    have _ _ d2 := mp.data_at[c := c]
+    have cl: c.libc in omega by simp(hc)
+    have kl: mallocng.L_AUXV = 8 by defs(simp(), mallocng.L_AUXV)
+    have dl: seq_len(mallocng.data_ranges(c)) = 3 by defs(arith(), mallocng.data_ranges)
+    have ww: all i. i in omega -> int_lt(i, 8) -> int_add(int_add(c.libc, mallocng.L_AUXV), i) in omega &&
+        mallocng.in_ranges(int_add(int_add(c.libc, mallocng.L_AUXV), i), mallocng.fp_ranges(c, A)) &&
+        mallocng.in_ranges(int_add(int_add(c.libc, mallocng.L_AUXV), i), mallocng.fp_ranges(c, B)) proof
+      fix i
+      assume hi hil
+      let a := int_add(int_add(c.libc, mallocng.L_AUXV), i)
+      have hao: a in omega by arith(cl, kl, hi)
+      have r: mallocng.in_range(a, mallocng.data_ranges(c)[2]) by defs(simp(d2, (int_lt(a, int_add(c.libc, 16)) by arith(cl, kl, hi, hil)), (int_le(c.libc, a) by arith(cl, kl, hi))), mallocng.in_range)
+      have t2: 2 in omega by simp()
+      have ir: mallocng.in_ranges(a, mallocng.data_ranges(c)) by defs(ex_intro({2}, taut(t2, (int_lt(2, seq_len(mallocng.data_ranges(c))) by arith(dl)), r)), mallocng.in_ranges)
+      have fa := apply(mp.u_front_fp[c := c, A := A, a := a], hc, hua, ha, taut(ir))
+      have fb := apply(mp.u_front_fp[c := c, A := B, a := a], hc, hub, hb, taut(ir))
+      show by taut(hao, fa, fb)
+    qed
+    have rw := apply(mp.u_rd_same[c := c, A := A, B := B, vm := vm, b := b, a := int_add(c.libc, mallocng.L_AUXV), n := 8], hra, hrb, hta, htb, simp(), ww)
+    have at: A.auxv_at = B.auxv_at by simp(xA, xB, rw)
+    // the entries: the common prefix
+    have ato: A.auxv_at in omega by simp(ha)
+    let NA := seq_len(A.auxv)
+    let NB := seq_len(B.auxv)
+    have na: NA in omega by arith(la)
+    have nb: NB in omega by arith(lb)
+    have lA: int_le(1, NA) by arith(expand(lnA, ord_le), na)
+    have lB: int_le(1, NB) by arith(expand(lnB, ord_le), nb)
+    // (entry k's bytes in both states' ranges)
+    have eb: all k j. k in omega -> int_lt(k, NA) -> int_lt(k, NB) -> j in omega -> int_lt(j, 16) ->
+        int_add(int_add(A.auxv_at, int_mul(16, k)), j) in omega &&
+        mallocng.in_ranges(int_add(int_add(A.auxv_at, int_mul(16, k)), j), mallocng.fp_ranges(c, A)) &&
+        mallocng.in_ranges(int_add(int_add(A.auxv_at, int_mul(16, k)), j), mallocng.fp_ranges(c, B)) proof
+      fix k j
+      assume hk hka hkb hj hjl
+      let a := int_add(int_add(A.auxv_at, int_mul(16, k)), j)
+      have hao: a in omega by arith(ato, hk, hj)
+      have ia := apply(mp.u_auxv_in[A := A, a := a], hua, ha, hao, arith(ato, hk, hj), arith(ato, hk, hj, hjl, hka))
+      have ib := apply(mp.u_auxv_in[A := B, a := a], hub, hb, hao, arith(at, ato, hk, hj), arith(at, ato, hk, hj, hjl, hkb))
+      have fa := apply(mp.u_front_fp[c := c, A := A, a := a], hc, hua, ha, taut(ia))
+      have fb := apply(mp.u_front_fp[c := c, A := B, a := a], hc, hub, hb, taut(ib))
+      show by taut(hao, fa, fb)
+    qed
+    have ent: all k. k in omega -> int_lt(k, NA) -> int_lt(k, NB) -> A.auxv[k] = B.auxv[k] proof
+      fix k
+      assume hk hka hkb
+      have w0: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(A.auxv_at, int_mul(16, k)), j) in omega &&
+          mallocng.in_ranges(int_add(int_add(A.auxv_at, int_mul(16, k)), j), mallocng.fp_ranges(c, A)) &&
+          mallocng.in_ranges(int_add(int_add(A.auxv_at, int_mul(16, k)), j), mallocng.fp_ranges(c, B)) proof
+        fix j
+        assume hj hjl
+        show := mp(all_elim(eb, {k}, {j}), hk, hka, hkb, hj, arith(hjl))
+      qed
+      have w8: all j. j in omega -> int_lt(j, 8) -> int_add(int_add(int_add(A.auxv_at, int_mul(16, k)), 8), j) in omega &&
+          mallocng.in_ranges(int_add(int_add(int_add(A.auxv_at, int_mul(16, k)), 8), j), mallocng.fp_ranges(c, A)) &&
+          mallocng.in_ranges(int_add(int_add(int_add(A.auxv_at, int_mul(16, k)), 8), j), mallocng.fp_ranges(c, B)) proof
+        fix j
+        assume hj hjl
+        have e: int_add(int_add(int_add(A.auxv_at, int_mul(16, k)), 8), j) = int_add(int_add(A.auxv_at, int_mul(16, k)), int_add(8, j)) by arith(ato, hk, hj)
+        show := rewrite(sym(e), mp(all_elim(eb, {k}, {int_add(8, j)}), hk, hka, hkb, arith(hj), arith(hj, hjl)))
+      qed
+      have r0 := apply(mp.u_rd_same[c := c, A := A, B := B, vm := vm, b := b, a := int_add(A.auxv_at, int_mul(16, k)), n := 8], hra, hrb, hta, htb, simp(), w0)
+      have r8 := apply(mp.u_rd_same[c := c, A := A, B := B, vm := vm, b := b, a := int_add(int_add(A.auxv_at, int_mul(16, k)), 8), n := 8], hra, hrb, hta, htb, simp(), w8)
+      have xa ya := mp(all_elim(eA, {k}), hk, hka)
+      have xb yb := mp(all_elim(eB, {k}), hk, hkb)
+      have f: fst(A.auxv[k]) = fst(B.auxv[k]) by simp(xa, xb, r0, at)
+      have s: snd(A.auxv[k]) = snd(B.auxv[k]) by simp(ya, yb, r8, at)
+      show := apply(mp.u_pair_eq, mp(at_type[l := A.auxv, t := cart(omega, omega), i := k], la, hk, hka),
+        mp(at_type[l := B.auxv, t := cart(omega, omega), i := k], lb, hk, hkb), f, s)
+    qed
+    // the lengths: a shorter one's last entry AT_NULL, not the longer's
+    have short: all l1 l2. (l1 = A.auxv && l2 = B.auxv) || (l1 = B.auxv && l2 = A.auxv) -> !int_lt(seq_len(l1), seq_len(l2)) proof
+      fix l1 l2
+      assume which
+      have g: int_lt(seq_len(l1), seq_len(l2)) -> false proof
+        assume lt
+        have case1: l1 = A.auxv -> l2 = B.auxv -> false proof
+          assume e1 e2
+          let j := int_sub(NA, 1)
+          have jo: j in omega by arith(lA,na)
+          have lt2: int_lt(NA, NB) by simp(lt, e1, e2)
+          have ej := mp(all_elim(ent, {j}), jo, arith(lA,na), arith(lA,na, lt2))
+          have nn := mp(all_elim(nlB, {j}), jo, (int_lt(int_add(j, 1), NB) by arith(lA,na, lt2)))
+          show by simp(endA, ej, nn)
+        qed
+        have case2: l1 = B.auxv -> l2 = A.auxv -> false proof
+          assume e1 e2
+          let j := int_sub(NB, 1)
+          have jo: j in omega by arith(lB,nb)
+          have lt2: int_lt(NB, NA) by simp(lt, e1, e2)
+          have ej := mp(all_elim(ent, {j}), jo, arith(lB,nb, lt2), arith(lB,nb))
+          have nn := mp(all_elim(nlA, {j}), jo, (int_lt(int_add(j, 1), NA) by arith(lB,nb, lt2)))
+          show by simp(endB, ej, nn)
+        qed
+        show by taut(which, case1, case2)
+      qed
+      show by taut(g)
+    qed
+    have s1 := mp(all_elim(short, {A.auxv}, {B.auxv}), taut(refl({A.auxv}), refl({B.auxv})))
+    have s2 := mp(all_elim(short, {B.auxv}, {A.auxv}), taut(refl({A.auxv}), refl({B.auxv})))
+    have le: NA = NB by arith(s1, s2, na, nb)
+    have el: all i. i in omega -> int_lt(i, NA) -> A.auxv[i] = B.auxv[i] proof
+      fix i
+      assume hi hil
+      show := mp(all_elim(ent, {i}), hi, hil, arith(hil, le))
+    qed
+    have eq := mp(ext_example[a := A.auxv, b := B.auxv, t := cart(omega, omega)], la, lb, le, el)
+    show by taut(at, eq)
+  qed
+  show by taut(done, fresh)
+qed
+
+// ----------------------------------------------------------------------
 //  The context's fields
 
 theorem mp.u_ctx_fields(c, A, B, vm, b): c in mallocng.Cfg -> A in univ(1) -> A in mallocng.Abs -> B in univ(1) -> B in mallocng.Abs ->
