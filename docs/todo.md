@@ -48,10 +48,8 @@ functions against malloc.c's CFG forms, their purpose proofs the same).
 
 The claim is malloc and free (calloc later: section Later), proven in
 the chain (proofs/mallocng/claim.core, the claim of the -O0 binary first
-in the chain: `@claim`) from three open lemmas: `mallocng.abs_unique`
-(section 4: the frame law and the top theorems rest on it),
-`musl.free_step` (section 4) and `musl.init` (section 5). Next those, in
-that order.
+in the chain: `@claim`) from two open lemmas: `musl.free_step`
+(section 4) and `musl.init` (section 5). Next those, in that order.
 - The string instructions in general (layers/musl_asm.sl): `rep movs` of
   any element size (`x86i.rep_movsq` is for 8: its iteration and facts
   with the size a parameter), `rep stos` (memset's: no overlap question);
@@ -96,8 +94,6 @@ that order.
 
 ## 4. The invariant and the laws
 
-- `mallocng.abs_unique` (the abstract state determined by memory): the
-  laws rest on it.
 - `musl.free_step` (free always has a step), open in
   proofs/mallocng/claim.core.
 - The C world owning only its statics, heap and stack objects.

@@ -127,9 +127,17 @@ item is a short summary of finished work; details are in the files named.
 
 ## Top of the claim and the invariant
 
-- `proofs/mallocng/claim.core`: `musl_malloc` is proven from
-  `mallocng.abs_unique`, `musl.init`, and `Impl` of malloc, free and
-  calloc.
+- `proofs/mallocng/claim.core`, last in the chain: `musl_malloc` (malloc
+  and free) is proven from `musl.free_step` and `musl.init`; `Impl` of
+  malloc and free from `mp.top_malloc` / `mp.top_free`.
+- `mallocng.abs_unique` (proofs/mallocng/model/unique.core): two abstract
+  states that hold of the same memory are equal. Both views agree where
+  both states' ranges are (nothing reserved or taken); the context's
+  fields and lists read from memory (cyclic lists, the areas' chain, the
+  auxiliary vector up to AT_NULL), the used metas the meta slots neither
+  free nor available (ascending lists of the same members), their fields
+  from their bytes, their slots from the in-band headers (a block's or
+  nested group's start, its size code).
 - `layers/mallocng.sl`: mallocng's invariant, a first draft.
   - The four laws are proven for any configuration
     (`proofs/mallocng/laws.core`).

@@ -250,12 +250,11 @@ fn c1_cfg_engine_checks() {
     let c = Command::new(slc).current_dir(&root).args(["kernel-check", "--no-cache"]).args(&files).output().unwrap();
     let checked = String::from_utf8_lossy(&c.stdout);
     // every proof file checked, with no axiom; open only what is left of
-    // the claim (docs/todo.md): the abstract state determined by memory,
-    // free's step law, startup
+    // the claim (docs/todo.md): free's step law, startup
     let each = proofs.iter().all(|f| checked.lines().any(|l| l.starts_with(&format!("{}: ", f)) && l.contains(" 0 axioms,")));
     let mut open: Vec<&str> = checked.lines().filter_map(|l| l.trim().strip_prefix("lemma ")).collect();
     open.sort();
-    let left = ["mallocng.abs_unique: open", "musl.free_step: open", "musl.init: open"];
+    let left = ["musl.free_step: open", "musl.init: open"];
     assert!(c.status.success() && each && open == left, "{}{}", checked, String::from_utf8_lossy(&c.stderr));
     for f in [&steps, &gimple, &text, &cfg_sl, &claim_core] {
         let _ = std::fs::remove_file(f);

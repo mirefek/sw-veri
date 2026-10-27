@@ -1619,3 +1619,165 @@ proof
   have rsv: A.reserve = B.reserve by taut(d, r1, r0)
   show by taut(sec, ini, avc, rsc, brk, rsv)
 qed
+
+// ----------------------------------------------------------------------
+//  The abstract state determined by memory
+
+// an abstract state: a record of values (in the universe)
+theorem mallocng.abs_univ(A): A in mallocng.Abs -> A in univ(1)
+proof
+  assume ha
+  let K := insert("secret", insert("init_done", insert("auxv_at", insert("auxv", insert("areas", insert("avail_cnt", insert("reserve", insert("reserve_cnt",
+    insert("free_metas", insert("used", insert("metas", insert("active", insert("slots", insert("brk", insert("taken", empty)))))))))))))))
+  have kp: K in univ(1) by simp(x86.insert_univ)
+  have ap: A in powerset(cart(K, univ(1))) && is_fun(A) && dom(A) = K by simp(expand(ha, mallocng.Abs))
+  show := mp(rec_univ[u := 1, k := K, r := A], kp, taut(ap), taut(ap), taut(ap))
+qed
+
+// (a heap state's blocks: a map of addresses to optional sizes)
+theorem mp.u_blocks_ty(s): s in rec_and(abi.World, malloc.Heap.ghost) -> s.blocks in fn_space(bits(64), option(omega))
+proof
+  assume hs
+  obtain w h, hw hh e from mp(rec_and_elim[a := abi.World, b := malloc.Heap.ghost, s := s], hs)
+  have sd: dom(w) = abi.WKEYS by simp(expand(hw, abi.World))
+  have hd: dom(h) = insert("blocks", empty) by simp(expand(hh, malloc.Heap.ghost))
+  have bS: union2(w, h).blocks = h.blocks by simp(sd, hd)
+  have bt: h.blocks in fn_space(bits(64), option(omega)) by simp(expand(hh, malloc.Heap.ghost))
+  show := rewrite(sym(e), rewrite(sym(bS), bt))
+qed
+
+// (two functions on d, equal at every point: equal)
+theorem mp.u_fn_eq(f, g, d, t): f in fn_space(d, t) -> g in fn_space(d, t) -> (all x. x in d -> f[x] = g[x]) -> f = g
+proof
+  assume hf hg he
+  have ff fd := (is_fun(f) && dom(f) = d by simp(expand(hf, fn_space)))
+  have gf gd := (is_fun(g) && dom(g) = d by simp(expand(hg, fn_space)))
+  have pw: all k. k in dom(f) -> f[k] = g[k] proof
+    fix k
+    assume hk
+    show := mp(all_elim(he, {k}), rewrite(fd, hk))
+  qed
+  show := mp(rec_ext[a := f, b := g], ff, gf, trans(fd, sym(gd)), pw)
+qed
+
+// (an empty list: equal to any other)
+theorem mp.u_nil(l1, l2, t): l1 in list_type(t) -> l2 in list_type(t) -> seq_len(l1) = 0 -> seq_len(l2) = 0 -> l1 = l2
+proof
+  assume h1 h2 z1 z2
+  have el: all i. i in omega -> int_lt(i, seq_len(l1)) -> l1[i] = l2[i] proof
+    fix i
+    assume hi hil
+    show by arith(hi, hil, z1)
+  qed
+  show := mp(ext_example[a := l1, b := l2, t := t], h1, h2, trans(z1, sym(z2)), el)
+qed
+
+theorem mallocng.abs_unique(c, s, A, B): c in mallocng.Cfg -> s in rec_and(abi.World, malloc.Heap.ghost) -> A in mallocng.Abs -> B in mallocng.Abs ->
+  mallocng.rep(c, A, s) -> mallocng.rep(c, B, s) -> A = B
+proof
+  assume hc hs ha hb ra rb
+  have hua := apply(mallocng.abs_univ, ha)
+  have hub := apply(mallocng.abs_univ, hb)
+  have {hha = mem, nra = unres, tka = untaken} := expand(ra, mallocng.rep)
+  have {hhb = mem, nrb = unres, tkb = untaken} := expand(rb, mallocng.rep)
+  have bt := apply(mp.u_blocks_ty, hs)
+  let vm := s.vm
+  let b := s.blocks
+  have sec ini avc rsc brk rsv := apply(mp.u_ctx_fields[c := c, A := A, B := B, vm := vm, b := b], hc, hua, ha, hub, hb, hha, hhb)
+  have fm ac := apply(mp.u_lists[c := c, A := A, B := B, vm := vm, b := b], hc, hua, ha, hub, hb, hha, hhb, tka, tkb)
+  have ar := apply(mp.u_areas[c := c, A := A, B := B, vm := vm, b := b], hc, hua, ha, hub, hb, hha, hhb, tka, tkb)
+  have xa xv := apply(mp.u_auxv[c := c, A := A, B := B, vm := vm, b := b], hc, hua, ha, hub, hb, hha, hhb, nra, nrb, tka, tkb, ini)
+  have us := apply(mp.u_used[c := c, A := A, B := B, vm := vm, b := b], ha, hb, hha, hhb, tka, tkb, ar, fm, avc)
+  have {HA = inv} := expand(hha, mallocng.holds_m)
+  have {HB = inv} := expand(hhb, mallocng.holds_m)
+  have {nA = normal, cA = ctx} := expand(HA, mallocng.holds)
+  have {nB = normal, cB = ctx} := expand(HB, mallocng.holds)
+  have {zA = unused} := expand(nA, mallocng.normal)
+  have {zB = unused} := expand(nB, mallocng.normal)
+  have uiff: all g. mallocng.is_used(A, g) <-> mallocng.is_used(B, g) proof
+    fix g
+    show by defs(simp(us), mallocng.is_used)
+  qed
+  // the metas: the used ones read, the others zero
+  have mt: A.metas = B.metas proof
+    have pw: all g. g in omega -> A.metas[g] = B.metas[g] proof
+      fix g
+      assume hg
+      have u: mallocng.is_used(A, g) -> A.metas[g] = B.metas[g] proof
+        assume h
+        show := apply(mp.u_meta[c := c, A := A, B := B, vm := vm, b := b, g := g], hc, hua, ha, hub, hb, hha, hhb, tka, tkb, h, taut(all_elim(uiff, {g}), h))
+      qed
+      have n: !mallocng.is_used(A, g) -> A.metas[g] = B.metas[g] proof
+        assume h
+        have a0 _ := mp(all_elim(zA, {g}), hg, h)
+        have b0 _ := mp(all_elim(zB, {g}), hg, (!mallocng.is_used(B, g) by taut(all_elim(uiff, {g}), h)))
+        show := trans(a0, sym(b0))
+      qed
+      show by taut(u, n)
+    qed
+    show := apply(mp.u_fn_eq[f := A.metas, g := B.metas, d := omega, t := mallocng.MetaV], (A.metas in fn_space(omega, mallocng.MetaV) by simp(ha)),
+      (B.metas in fn_space(omega, mallocng.MetaV) by simp(hb)), pw)
+  qed
+  // the slots: the used groups' read, the others none
+  have sl: A.slots = B.slots proof
+    have pw: all g. g in omega -> A.slots[g] = B.slots[g] proof
+      fix g
+      assume hg
+      have la := mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := A.slots, x := g], simp(ha), hg)
+      have lb := mp(fn_space_app[a := omega, b := list_type(mallocng.Use), f := B.slots, x := g], simp(hb), hg)
+      have u: mallocng.is_used(A, g) -> A.slots[g] = B.slots[g] proof
+        assume h
+        have hB: mallocng.is_used(B, g) by taut(all_elim(uiff, {g}), h)
+        have {oA = used} := expand(HA, mallocng.holds)
+        have {oB = used} := expand(HB, mallocng.holds)
+        have {nsA = nslots} := expand(apply(mp.used_group[g := g], oA, h), mallocng.group_ok)
+        have {nsB = nslots} := expand(apply(mp.used_group[g := g], oB, hB), mallocng.group_ok)
+        have le: seq_len(A.slots[g]) = seq_len(B.slots[g]) by simp(nsA, nsB, mt)
+        have mv := mp(fn_space_app[a := omega, b := mallocng.MetaV, f := A.metas, x := g], simp(ha), hg)
+        have lo: A.metas[g].last_idx in omega by simp(expand(mv, mallocng.MetaV))
+        have el: all i. i in omega -> int_lt(i, seq_len(A.slots[g])) -> A.slots[g][i] = B.slots[g][i] proof
+          fix i
+          assume hi hil
+          show := apply(mp.u_slot[c := c, A := A, B := B, vm := vm, b := b, g := g, i := i], hc, hua, ha, hub, hb, bt, hha, hhb, nra, nrb, tka, tkb,
+            h, hB, mt, hg, hi, arith(nsA, hil, hi, lo))
+        qed
+        show := mp(ext_example[a := A.slots[g], b := B.slots[g], t := mallocng.Use], la, lb, le, el)
+      qed
+      have n: !mallocng.is_used(A, g) -> A.slots[g] = B.slots[g] proof
+        assume h
+        have _ a0 := mp(all_elim(zA, {g}), hg, h)
+        have _ b0 := mp(all_elim(zB, {g}), hg, (!mallocng.is_used(B, g) by taut(all_elim(uiff, {g}), h)))
+        show := apply(mp.u_nil, la, lb, a0, b0)
+      qed
+      show by taut(u, n)
+    qed
+    show := apply(mp.u_fn_eq[f := A.slots, g := B.slots, d := omega, t := list_type(mallocng.Use)], (A.slots in fn_space(omega, list_type(mallocng.Use)) by simp(ha)),
+      (B.slots in fn_space(omega, list_type(mallocng.Use)) by simp(hb)), pw)
+  qed
+  // the active lists: 48 of them, each the same
+  have {naA = nactive} := expand(cA, mallocng.ctx_ok)
+  have {naB = nactive} := expand(cB, mallocng.ctx_ok)
+  have act: A.active = B.active proof
+    have el: all k. k in omega -> int_lt(k, seq_len(A.active)) -> A.active[k] = B.active[k] proof
+      fix k
+      assume hk hkl
+      show := mp(all_elim(ac, {k}), hk, arith(hkl, naA))
+    qed
+    show := mp(ext_example[a := A.active, b := B.active, t := list_type(omega)], (A.active in list_type(list_type(omega)) by simp(ha)),
+      (B.active in list_type(list_type(omega)) by simp(hb)), trans(naA, sym(naB)), el)
+  qed
+  have tk := apply(mp.u_nil[l1 := A.taken, l2 := B.taken, t := omega], (A.taken in list_type(omega) by simp(ha)), (B.taken in list_type(omega) by simp(hb)), tka, tkb)
+  // the records: the same fields
+  let K := insert("secret", insert("init_done", insert("auxv_at", insert("auxv", insert("areas", insert("avail_cnt", insert("reserve", insert("reserve_cnt",
+    insert("free_metas", insert("used", insert("metas", insert("active", insert("slots", insert("brk", insert("taken", empty)))))))))))))))
+  have fa: is_fun(A) && dom(A) = K by simp(expand(ha, mallocng.Abs))
+  have fb: is_fun(B) && dom(B) = K by simp(expand(hb, mallocng.Abs))
+  have ek: all k. k in dom(A) -> A[k] = B[k] proof
+    fix k
+    assume hk
+    have da: dom(A) = K by taut(fa)
+    have kk := rewrite(da, hk)
+    show by simp(kk, sec, ini, xa, xv, ar, avc, rsv, rsc, fm, us, mt, act, sl, brk, tk)
+  qed
+  show := mp(rec_ext[a := A, b := B], taut(fa), taut(fb), (dom(A) = dom(B) by simp(fa, fb)), ek)
+qed
