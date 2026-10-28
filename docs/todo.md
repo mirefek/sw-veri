@@ -133,13 +133,25 @@ The binary as linked (gcc's crtbegin included). The steps:
   spec never raising at main), the contract from the claim at the entry
   (tr.entry_s: breakpoint rip = t, relation tr.at_t), the call split
   (tr.run_split_ks); at_main no undefined behaviour in the bridge.
-  proofs/translate_stop_call.core: the call rule (tr.callee_sim_s), the
-  call of main itself (tr.call_main: the claim at its entry tr.at_t, the
-  spec tr.raises_main), calls through the code map `fptr`
-  (tr.code_ok, tr.callee_ind_s; an undefined entry holds any contract,
-  tr.undef_contract_s).
-  Left: the engine's stop mode (its breakpoints and relation with t's,
-  the stop call rules, `call *%reg` against `call(fptr[p], ..)`).
+  proofs/translate_stop_call.core: the call rules for any breakpoints
+  with t's (tr.callee_sim_g; the callee's contract with the stop, k, or
+  never stopping), the call of main itself (tr.call_main: the claim at
+  its entry tr.at_t, the spec tr.raises_main), calls through the code
+  map `fptr` (tr.code_ok, tr.callee_ind_g; an undefined entry holds any
+  contract), the entry (tr.entry_gk, tr.entry_nk generic; tr.fin_k,
+  tr.ub_k). A function never stopping (k false) has the normal contract
+  too (tr.implements_ns_at): shared leaves proven once, in that mode.
+  Left: the engine's stop mode -- a `c1` option for t and k; breakpoints
+  `rip = t`, relation `k && tr.at_t`; at the entry tr.entry_nk/gk with
+  tr.fin_k (outputs tr.implements_stop, and for k false tr.implements);
+  calls by tr.callee_sim_g (premises: t's states breakpoints, the
+  callee's below none else, at_t -> the relation if the callee stops),
+  an instruction rule generic in the push's target (tr.call's push part)
+  for `call rel32` and `call *%reg` (tr.callee_ind_g); contract.rs
+  linking the stop contracts. Loops: a cut's relation is the invariant
+  only, so a stop inside a loop cannot arrive -- `__libc_start_init`
+  (its init_array calls through the code map, main among its entries
+  for C1) needs tr.cfg_lvk's relation `(cut && inv) || bka`.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
