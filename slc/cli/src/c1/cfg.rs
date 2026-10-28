@@ -41,6 +41,7 @@ pub(super) struct Cfg {
     kk_lam: Term,
     /// the function's breakpoints and arrival (outside the walks)
     bkp0: Term,
+    bka0: Term,
     /// the rule's premise per label (`c. all ys w. ..`), its claims made
     body: Term,
     done: BTreeMap<u128, Seq>,
@@ -387,6 +388,7 @@ impl<'e> Gen<'e> {
             ct_lam: Term::bvar(0),
             kk_lam: Term::bvar(0),
             bkp0: self.bkp.clone(),
+            bka0: self.bka.clone(),
             body: Term::bvar(0),
             done: BTreeMap::new(),
             bkp2: Term::bvar(0),
@@ -464,7 +466,7 @@ impl<'e> Gen<'e> {
         iargs.extend(rargs);
         let (lr, stmt) = self.inst(if start { "tr.cfg_lvk_st" } else { "tr.cfg_lvk" }, &iargs)?;
         let (prems, _) = self.imps(&stmt);
-        if prems.len() != if start { 7 } else { 5 } {
+        if prems.len() != if start { 8 } else { 6 } {
             return Err(bad("tr.cfg_lvk's premises"));
         }
         // the premise per label: all c. kk(c) -> P(c); P's claim's breakpoints
@@ -473,7 +475,7 @@ impl<'e> Gen<'e> {
             let (_, r) = g.imps(&a);
             Some(r)
         };
-        c.body = under(self, &prems[4]).ok_or_else(|| bad("its premise per label"))?;
+        c.body = under(self, &prems[5]).ok_or_else(|| bad("its premise per label"))?;
         let lv_b = (|| {
             let a1 = self.app(&c.body, "all", 1)?[0].clone();
             let a2 = self.app(&a1, "all", 1)?[0].clone();
@@ -548,14 +550,14 @@ impl<'e> Gen<'e> {
         };
         let done = c.done.clone();
         let p5 = gather(self, &c.body, &|_g, k, _| done.get(&k).cloned().ok_or_else(|| format!("the CFG: label {} not reached", k)))?;
-        let ct_body = under(self, &prems[2]).ok_or_else(|| bad("its cut points' premise"))?;
+        let ct_body = under(self, &prems[3]).ok_or_else(|| bad("its cut points' premise"))?;
         let hyp = c.hyp.clone();
         let p3 = gather(self, &ct_body, &|g, k, goal| {
             let h = hyp.get(&k).ok_or_else(|| format!("the CFG: label {} not reached", k))?;
             g.evp(&RP::Simp(false, vec![R::S(h.1.clone())], vec![], false), goal, &[])
         })?;
         // (no cut point a breakpoint: each label's address, by its equation)
-        let nb_body = under(self, &prems[3]).ok_or_else(|| bad("its no-breakpoint premise"))?;
+        let nb_body = under(self, &prems[4]).ok_or_else(|| bad("its no-breakpoint premise"))?;
         let p4 = gather(self, &nb_body, &|g, k, goal| {
             let h = hyp.get(&k).ok_or_else(|| format!("the CFG: label {} not reached", k))?;
             g.evp(&RP::Simp(false, vec![R::S(h.1.clone())], vec![], false), goal, &[])
@@ -563,7 +565,7 @@ impl<'e> Gen<'e> {
         // (started within the first block: the start's claim, the rule at
         // st itself)
         if let (Some((hu, _)), Some(sw)) = (&start_h, &sw) {
-            let rule = self.run(&mp(lr, vec![simp0(), p(f("tr.tr_univ")), s(&p3), s(&p4), s(&p5), simp0(), simp0()]), &[])?;
+            let rule = self.run(&mp(lr, vec![self.ec_pf(), simp0(), p(f("tr.tr_univ")), s(&p3), s(&p4), s(&p5), simp0(), simp0()]), &[])?;
             let c0 = self.run(&mp(R::S(rule), vec![t(&y0t), t(&st.w), s(hu), defs(RP::By(R::S(sw.clone())), &["tr.lone"])]), &[])?;
             let c1 = self.run(&R::Expand(Box::new(R::S(c0)), vec!["tr.lprog".into(), "tr.lp0".into()]), &[])?;
             let hts: Vec<Term> = c.hyp.values().map(|h| h.0.clone()).collect();
@@ -577,7 +579,7 @@ impl<'e> Gen<'e> {
             self.trace(|| format!("cfg within its first block at {:x}: {} labels walked", st.a, c.addr.len()));
             return self.run(&mp(R::S(closed), args), &[]).map(Ok);
         }
-        let rule = self.run(&mp(lr, vec![simp0(), p(f("tr.tr_univ")), s(&p3), s(&p4), s(&p5)]), &[])?;
+        let rule = self.run(&mp(lr, vec![self.ec_pf(), simp0(), p(f("tr.tr_univ")), s(&p3), s(&p4), s(&p5)]), &[])?;
         // at the first label, the locals now
         let (_, mask_e) = *c.labels.iter().find(|x| x.0 == k_e).ok_or_else(|| bad("the first label not among the labels"))?;
         let c0 = self.run(&mp(R::S(rule), vec![t(&lit(k_e)), t(&ys0), t(&st.w), simp0(), simp_lw(vec![R::S(st.hvu.clone())]), simp_lw(wf)]), &[])?;
@@ -645,7 +647,7 @@ impl<'e> Gen<'e> {
         let mask = c.labels.iter().find(|x| x.0 == k).map(|x| x.1).ok_or_else(|| format!("{:x}: the CFG: label {} not among the labels", a, k))?;
         let pk_t = c.body.instantiate_params(&[lit(k)], &self.env.binders_fn());
         let (bkp2, bka2, hs_lam, fr, fd, rc) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fr, c.fd.clone(), c.rc.clone());
-        let bkp0 = c.bkp0.clone();
+        let (bkp0, bka0) = (c.bkp0.clone(), c.bka0.clone());
         let (hyps, facts, lfx) = (c.hyps.clone(), c.facts.clone(), c.lfx.clone());
         let (b, kl, kw, wrap) = (c.b.clone(), c.kl.clone(), c.kw.clone(), c.wrap.clone());
         let n = self.fresh("");
@@ -704,7 +706,7 @@ impl<'e> Gen<'e> {
         self.bka = bka2;
         self.wrap = wrap_id;
         self.kw = kw_id;
-        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, wrap, kw, hu: hu.clone(), fd: fd.clone(), rc, yt: hs_lam, hy: hy.clone() });
+        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, bka: bka0, wrap, kw, hu: hu.clone(), fd: fd.clone(), rc, yt: hs_lam, hy: hy.clone() });
         self.trace(|| format!("cfg label {} at {:x}", k, a));
         let hus = std::mem::take(&mut self.hus);
         let res = self.prove(st_body);
@@ -745,7 +747,7 @@ impl<'e> Gen<'e> {
     /// the labels' cut points; hu, hy: y0's facts as a label's
     fn cfg_start_walk(&mut self, st: &St, y0: &Term, hu: Seq, hy: Seq) -> Result<Seq, String> {
         let c = self.cfg.as_ref().expect("the CFG walk");
-        let (bkp2, bka2, hs_lam, fd, rc, bkp0) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fd.clone(), c.rc.clone(), c.bkp0.clone());
+        let (bkp2, bka2, hs_lam, fd, rc, bkp0, bka0) = (c.bkp2.clone(), c.bka2.clone(), c.hs_lam.clone(), c.fd.clone(), c.rc.clone(), c.bkp0.clone(), c.bka0.clone());
         let (b, kl, kw, wrap) = (c.b.clone(), c.kl.clone(), c.kw.clone(), c.wrap.clone());
         let n = self.fresh("");
         let qit = self.mk("tr.liter", vec![y0.clone(), b, kl, kw.clone()]);
@@ -763,7 +765,7 @@ impl<'e> Gen<'e> {
         self.bka = bka2;
         self.wrap = wrap_id;
         self.kw = kw_id;
-        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, wrap, kw, hu, fd, rc, yt: hs_lam, hy });
+        self.lpg = Some(LoopG { head: u128::MAX, hs: hs_lam.clone(), bkp: bkp0, bka: bka0, wrap, kw, hu, fd, rc, yt: hs_lam, hy });
         self.trace(|| format!("cfg start at {:x}", st.a));
         let hus = std::mem::take(&mut self.hus);
         let res = self.prove(st_body);
@@ -920,6 +922,7 @@ impl<'e> Gen<'e> {
                 ("hs", hs_lam),
                 ("yt", cyt_lam),
                 ("bkp", lg.bkp.clone()),
+                ("bka", lg.bka.clone()),
             ],
         );
         let pcl = self.p(&st.spec);

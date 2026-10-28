@@ -212,18 +212,62 @@ qed
 
 // the outcome o as the spec's: undefined, a crash, a divergence, or the
 // return (no point of bp)
-def tr.lg(s, z. bp, v, p, w, o) := tr.ub(s, v, p, w) || tr.crash(s, p, w, o) || tr.div(p, w, o) ||
-  (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, p, w, m1))
+def tr.lg(s, z. bp, z p w. ar, v, p, w, o) := tr.ub(s, v, p, w) || tr.crash(s, p, w, o) || tr.div(p, w, o) ||
+  (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, p, w, m1)) ||
+  // (stopped at a breakpoint of the loop's claim, its relation there)
+  (ex m1. o = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, p, w))
+
+// a relation at the breakpoints about the program's exceptions only: kept
+// by a program with those exceptions (the stop's tr.at_t, none)
+def tr.exc_closed(z p w. ar) := all z p w p2 w2. (all x e. runs(p2, w2, exc(x, e)) -> runs(p, w, exc(x, e))) -> ar(z, p2, w2) -> ar(z, p, w)
+
+theorem tr.ec_false: tr.exc_closed(z p w. false)
+proof
+  show by defs(simp(), tr.exc_closed)
+qed
+
+theorem tr.ec_at_t(k): tr.exc_closed(z p w. k && tr.at_t(z, p, w))
+proof
+  have g: all z p w p2 w2. (all x e. runs(p2, w2, exc(x, e)) -> runs(p, w, exc(x, e))) -> k && tr.at_t(z, p2, w2) -> k && tr.at_t(z, p, w) proof
+    fix z p w p2 w2
+    assume hx h
+    have hk at := h
+    have a1: (ex w3 v3 mem3. abi.raise_state(w3) && runs(p2, w2, exc(w3, exc_val("at_main", empty))) && w3 = abi.view(z, v3, mem3) && abi.view_ok(z, v3, mem3)) -> tr.at_t(z, p, w) proof
+      assume e
+      obtain w3 v3 mem3, rs ru we vo from e
+      have r2 := mp(all_elim(hx, {w3}, {exc_val("at_main", empty)}), ru)
+      have e2: ex w4 v4 mem4. abi.raise_state(w4) && runs(p, w, exc(w4, exc_val("at_main", empty))) && w4 = abi.view(z, v4, mem4) && abi.view_ok(z, v4, mem4)
+        by ex_intro({w3}, {v3}, {mem3}, taut(rs, r2, we, vo))
+      show by defs(taut(e2), tr.at_t)
+    qed
+    have a2: (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && !(e = exc_val("at_main", empty)) && abi.raise_state(x) && runs(p2, w2, exc(x, e))) -> tr.at_t(z, p, w) proof
+      assume e
+      obtain e1 x1, eu en ea rs ru from e
+      have r2 := mp(all_elim(hx, {x1}, {e1}), ru)
+      have e2: ex e3 x3. e3 in univ(1) && !(e3 = exc_val("stack_overflow", empty)) && !(e3 = exc_val("at_main", empty)) && abi.raise_state(x3) && runs(p, w, exc(x3, e3))
+        by ex_intro({e1}, {x1}, taut(eu, en, ea, rs, r2))
+      show by defs(taut(e2), tr.at_t)
+    qed
+    show by taut(hk, expand(at, tr.at_t), a1, a2)
+  qed
+  show by defs(g, tr.exc_closed)
+qed
 
 // (... carried to a spec with those outcomes: its exceptions, divergences,
 // returns of a 64-bit word)
-theorem tr.lg_mono(z. bp): all s v p w p2 w2 o.
+theorem tr.lg_mono(z. bp, z p w. ar): all s v p w p2 w2 o. tr.exc_closed(z p w. ar(z, p, w)) ->
   (all x e. runs(p2, w2, exc(x, e)) -> runs(p, w, exc(x, e))) -> (all t. runs(p2, w2, diverge(t)) -> runs(p, w, diverge(t))) ->
   (all w3 r0 r1. r0 in bits(64) -> runs(p2, w2, ok(w3, pair(r0, r1))) -> runs(p, w, ok(w3, pair(r0, r1)))) ->
-  tr.lg(s, z. bp(z), v, p2, w2, o) -> tr.lg(s, z. bp(z), v, p, w, o)
+  tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, p2, w2, o) -> tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, p, w, o)
 proof
   fix s v p w p2 w2 o
-  assume hx hd hk h
+  assume hec hx hd hk h
+  have c5: (ex m1. o = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, p2, w2)) -> (ex m1. o = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, p, w)) proof
+    assume e
+    obtain m1, oe no bm am from e
+    have a2 := mp(all_elim(expand(hec, tr.exc_closed), {m1}, {p}, {w}, {p2}, {w2}), hx, am)
+    show by ex_intro({m1}, taut(oe, no, bm, a2))
+  qed
   have c1: tr.ub(s, v, p2, w2) -> tr.ub(s, v, p, w) proof
     assume u
     obtain e x, eu en ena rs rr from expand(u, tr.ub)
@@ -281,7 +325,7 @@ proof
     have rt2: tr.retok(s, v, p, w, m1) by defs(taut(rx, ew2), tr.retok)
     show by ex_intro({m1}, taut(oe, ar, rt2))
   qed
-  show by defs(taut(expand(h, tr.lg), c1, c2, c3, c4), tr.lg)
+  show by defs(taut(expand(h, tr.lg), c1, c2, c3, c4, c5), tr.lg)
 qed
 
 // ----------------------------------------------------------------------
@@ -295,25 +339,25 @@ def tr.hd(x) := pair(x.rip, x.gpr[4])
 
 // (an iteration: as the loop's run ends, or back at the head after one
 // pass of the body)
-theorem tr.loop_d(s, v, z. hp, z. bp, l o. b, x8 x1. k, x3 x4 x2. kw, x y w. q):
-  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+theorem tr.loop_d(s, v, z. hp, z. bp, z p w. ar, l o. b, x8 x1. k, x3 x4 x2. kw, x y w. q): tr.exc_closed(z p w. ar(z, p, w)) ->
+  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. (hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2))))) || (bp(z) && ar(z, p2, w2)),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)) ->
   all x y w o. q(x, y, w) -> tr.run_k(s, z. hp(z) || bp(z), x, o) ->
-    tr.lg(s, z. bp(z), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) ||
+    tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) ||
     (ex m1 y2 w2. o = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)))
 proof
-  assume hb
+  assume hec hb
   fix x y w o
   assume hq hr
   let P := tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
-  let G := tr.lg(s, z. bp(z), v, P, w, o) || (ex m1 y2 w2. o = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)))
+  let G := tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) || (ex m1 y2 w2. o = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)))
   have c := mp(all_elim(expand(mp(all_elim(hb, {x}, {y}, {w}), hq), tr.sim), {o}), hr)
   have u: tr.ub(s, v, P, w) || tr.crash(s, P, w, o) || tr.div(P, w, o) -> G proof
     assume e
-    have l: tr.lg(s, z. bp(z), v, P, w, o) by defs(taut(e), tr.lg)
+    have l: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) by defs(taut(e), tr.lg)
     show by taut(l)
   qed
-  have a: (ex m1. o = ok(m1, empty) && tr.arr(s, z. hp(z) || bp(z), z p2 w2. hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  have a: (ex m1. o = ok(m1, empty) && tr.arr(s, z. hp(z) || bp(z), z p2 w2. (hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2))))) || (bp(z) && ar(z, p2, w2)),
       v, m1, P, w)) -> G proof
     assume e
     obtain m1, oe ha from e
@@ -325,18 +369,36 @@ proof
       assume no
       have hp: hp(m1) || bp(m1) by taut(expand(st, tr.stopk), no)
       obtain p2 w2, rd hy from mp(ar2, no, hp)
-      obtain y2, q2 r2 from hy.2
-      have r1 := mp(all_elim(expand(rd, tr.red), {ok(w2, pair(18446744073709551616, y2))}), r2)
-      have bs := apply(tr.lone_mk[b := l o. b(l, o), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {y}, {w2}, {y2}, r1)
-      have e2: ex m2 y3 w3. o = ok(m2, empty) && q(m2, y3, w3) && b(pair(w, y), ok(pair(w3, y3), empty)) by ex_intro({m1}, {y2}, {w2}, taut(oe, q2, bs))
-      show by taut(e2)
+      have k1: (hp(m1) && (ex y2. q(m1, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2))))) -> G proof
+        assume hy1
+        obtain y2, q2 r2 from hy1.2
+        have r1 := mp(all_elim(expand(rd, tr.red), {ok(w2, pair(18446744073709551616, y2))}), r2)
+        have bs := apply(tr.lone_mk[b := l o. b(l, o), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {y}, {w2}, {y2}, r1)
+        have e2: ex m2 y3 w3. o = ok(m2, empty) && q(m2, y3, w3) && b(pair(w, y), ok(pair(w3, y3), empty)) by ex_intro({m1}, {y2}, {w2}, taut(oe, q2, bs))
+        show by taut(e2)
+      qed
+      // (stopped at a point of bp: the loop's claim's relation, its
+      // exceptions the iteration's)
+      have k2: (bp(m1) && ar(m1, p2, w2)) -> G proof
+        assume hy2
+        have rx: all x5 e5. runs(p2, w2, exc(x5, e5)) -> runs(P, w, exc(x5, e5)) proof
+          fix x5 e5
+          assume h5
+          show := mp(all_elim(expand(rd, tr.red), {exc(x5, e5)}), h5)
+        qed
+        have a2 := mp(all_elim(expand(hec, tr.exc_closed), {m1}, {P}, {w}, {p2}, {w2}), rx, hy2.2)
+        have e2: ex m2. o = ok(m2, empty) && !tr.out(s, m2) && bp(m2) && ar(m2, P, w) by ex_intro({m1}, taut(oe, no, hy2.1, a2))
+        have l: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) by defs(taut(e2), tr.lg)
+        show by taut(l)
+      qed
+      show by taut(hy, k1, k2)
     qed
     // returned
     have c2: tr.out(s, m1) -> G proof
       assume at
       have rt := mp(ar1, at)
       have e2: ex m2. o = ok(m2, empty) && tr.out(s, m2) && tr.retok(s, v, P, w, m2) by ex_intro({m1}, taut(oe, at, rt))
-      have l: tr.lg(s, z. bp(z), v, P, w, o) by defs(taut(e2), tr.lg)
+      have l: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) by defs(taut(e2), tr.lg)
       show by taut(l)
     qed
     show by taut(c1, c2)
@@ -346,12 +408,12 @@ qed
 
 // (an iteration's outcome at y, w -- reached from y0, w0 by finitely many
 // passes of the body: the loop's from y0, w0)
-theorem tr.loop_e(s, v, z. bp, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw): all y w y0 w0 o.
+theorem tr.loop_e(s, v, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw): all y w y0 w0 o. tr.exc_closed(z p w. ar(z, p, w)) ->
   (all o2. runs(tr.lpf(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o2) -> runs(tr.lpf(y0, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o2)) ->
-  tr.lg(s, z. bp(z), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) -> tr.lg(s, z. bp(z), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
+  tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) -> tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
 proof
   fix y w y0 w0 o
-  assume hr hl
+  assume hec hr hl
   let P1 := tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
   let P0 := tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
   // an unmarked outcome: a finite run from y, so from y0
@@ -393,7 +455,7 @@ proof
     qed
     show := mp(all_elim(t, {ok(w3, pair(r0, r1))}), r2, taut(nm0))
   qed
-  show := apply(tr.lg_mono[bp := z. bp(z)], {s}, {v}, {P0}, {w0}, {P1}, {w}, {o}, tx, td, tk, hl)
+  show := apply(tr.lg_mono[bp := z. bp(z), ar := z p w. ar(z, p, w)], {s}, {v}, {P0}, {w0}, {P1}, {w}, {o}, hec, tx, td, tk, hl)
 qed
 
 // (a state at the head: not the return)
@@ -414,24 +476,24 @@ proof
 qed
 
 // The loop's finite runs: each as the spec's from the loop
-theorem tr.loop_fin(s, v, z. hp, z. bp, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q):
+theorem tr.loop_fin(s, v, z. hp, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q): tr.exc_closed(z p w. ar(z, p, w)) ->
   (all x y w. q(x, y, w) -> hp(x) && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. (hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2))))) || (bp(z) && ar(z, p2, w2)),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)) ->
   (all x y w m. q(x, y, w) -> hp(m) -> !tr.out(s, m)) ->
   all x0 y0 w0 r o. q(x0, y0, w0) -> tr.rk(s, z. bp(z), x0, r) -> tr.rmap(r, o) -> !(fst(r) = 2) ->
-    tr.lg(s, z. bp(z), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
+    tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
 proof
-  assume hq hb hnr
+  assume hec hq hb hnr
   fix x0 y0 w0 r o
   assume hq0 hrk hrm hnd
   have tt: true by taut()
-  let LG := tr.lg(s, z. bp(z), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
+  let LG := tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
   let PF(y) := tr.lpf(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
   let RCH(y, w) := all o2. runs(PF(y), w, o2) -> runs(PF(y0), w0, o2)
   let MR(x, l) := all r1. !(fst(r1) = 2) -> tr.rwk(s, z. hp(z) || bp(z), l, r1) -> tr.rk(s, z. hp(z) || bp(z), x, r1)
   let TR(x5) := fn_update(empty, "os.events", fst(x5).os.events)
-  have hd := mp(tr.loop_d[s := s, v := v, hp := z. hp(z), bp := z. bp(z), b := l o. b(l, o), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hb)
+  have hd := mp(tr.loop_d[s := s, v := v, hp := z. hp(z), bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hec, hb)
   have hrun: tr.run_k(s, z. bp(z), x0, o) by defs(ex_intro({r}, taut(hrk, hrm)), tr.run_k)
   // (the run's return: at a stop of bp -- no head)
   have fo: all m1 y w. o = ok(m1, empty) -> q(m1, y, w) -> false proof
@@ -446,9 +508,9 @@ proof
     fix x y w
     assume q1 rc hr
     have d := mp(all_elim(hd, {x}, {y}, {w}, {o}), q1, hr)
-    have c1: tr.lg(s, z. bp(z), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) -> LG proof
+    have c1: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, o) -> LG proof
       assume l1
-      show := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, rc, l1)
+      show := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, hec, rc, l1)
     qed
     have c2: (ex m1 y2 w2. o = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty))) -> LG proof
       assume e
@@ -461,18 +523,18 @@ proof
   // an iteration from x back at the head, at l: the loop's run as the
   // spec's, or the head's coupling, reached from y0
   have h2: all x y w l. q(x, y, w) -> RCH(y, w) -> tr.run_k(s, z. hp(z) || bp(z), x, ok(fst(l), empty)) -> hp(fst(l)) ->
-      LG || (ex y2 w2. q(fst(l), y2, w2) && RCH(y2, w2)) proof
+      (bp(fst(l)) -> o = ok(fst(l), empty)) -> LG || (ex y2 w2. q(fst(l), y2, w2) && RCH(y2, w2)) proof
     fix x y w l
-    assume q1 rc hr hh
+    assume q1 rc hr hh hbo
     have hw: w in univ(1) by taut(mp(all_elim(hq, {x}, {y}, {w}), q1))
     have d := mp(all_elim(hd, {x}, {y}, {w}, {ok(fst(l), empty)}), q1, hr)
     let P1 := tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
-    have c1: tr.lg(s, z. bp(z), v, P1, w, ok(fst(l), empty)) -> LG proof
+    have c1: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P1, w, ok(fst(l), empty)) -> LG proof
       assume l1
       have u: tr.ub(s, v, P1, w) -> LG proof
         assume hu
-        have l2: tr.lg(s, z. bp(z), v, P1, w, o) by defs(taut(hu), tr.lg)
-        show := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, rc, l2)
+        have l2: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P1, w, o) by defs(taut(hu), tr.lg)
+        show := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, hec, rc, l2)
       qed
       have cr: tr.crash(s, P1, w, ok(fst(l), empty)) -> false proof
         assume c
@@ -492,7 +554,16 @@ proof
         have na := mp(all_elim(hnr, {x}, {y}, {w}, {fst(l)}), q1, hh)
         show by taut(at2, na)
       qed
-      show by taut(expand(l1, tr.lg), u, cr, dv, rt)
+      // (stopped at a point of bp: the loop's run stops there too)
+      have sp: (ex m1. ok(fst(l), empty) = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, P1, w)) -> LG proof
+        assume e
+        obtain m1, oe _ bm _ from e
+        have me: m1 = fst(l) by simp(oe)
+        have oe2 := mp(hbo, rewrite(me, bm))
+        have l2 := rewrite(sym(oe2), l1)
+        show := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, hec, rc, l2)
+      qed
+      show by taut(expand(l1, tr.lg), u, cr, dv, rt, sp)
     qed
     have c2: (ex m1 y2 w2. ok(fst(l), empty) = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty))) ->
         (ex y2 w2. q(fst(l), y2, w2) && RCH(y2, w2)) proof
@@ -512,10 +583,10 @@ proof
   qed
   // arriving at the head at l (a break of the iteration's run): the loop
   // from there
-  have ha: all l x y w. l = pair(fst(l), empty) -> q(x, y, w) -> RCH(y, w) -> MR(x, l) -> hp(fst(l)) ->
+  have ha: all l x y w. l = pair(fst(l), empty) -> q(x, y, w) -> RCH(y, w) -> MR(x, l) -> hp(fst(l)) -> (bp(fst(l)) -> o = ok(fst(l), empty)) ->
       (all y2 w2. q(fst(l), y2, w2) -> RCH(y2, w2) -> LG) -> LG proof
     fix l x y w
-    assume ql q1 rc mr hh hh2
+    assume ql q1 rc mr hh hbo hh2
     have st: tr.stopk(s, z. hp(z) || bp(z), fst(l)) by defs(taut(hh), tr.stopk)
     have rb: tr.rbk(s, z. hp(z) || bp(z), l, exc(pair(fst(l), empty), pair("brk", empty))) by defs(taut(st, refl({exc(pair(fst(l), empty), pair("brk", empty))})), tr.rbk)
     have nok: !is_ok(exc(pair(fst(l), empty), pair("brk", empty))) by defs(simp(), is_ok)
@@ -525,7 +596,7 @@ proof
     have rk := mp(all_elim(mr, {exc(pair(fst(l), empty), pair("brk", empty))}), nd, w2)
     have rm: tr.rmap(exc(pair(fst(l), empty), pair("brk", empty)), ok(fst(l), empty)) by defs(simp(), tr.rmap)
     have hr: tr.run_k(s, z. hp(z) || bp(z), x, ok(fst(l), empty)) by defs(ex_intro({exc(pair(fst(l), empty), pair("brk", empty))}, taut(rk, rm)), tr.run_k)
-    have c := mp(all_elim(h2, {x}, {y}, {w}, {l}), q1, rc, hr, hh)
+    have c := mp(all_elim(h2, {x}, {y}, {w}, {l}), q1, rc, hr, hh, hbo)
     have c2: (ex y2 w2. q(fst(l), y2, w2) && RCH(y2, w2)) -> LG proof
       assume e
       obtain y2 w2, q2 rc2 from e
@@ -555,7 +626,14 @@ proof
       assume q1 rc mr
       have a1: hp(fst(l)) -> LG proof
         assume hh
-        show := mp(all_elim(ha, {l}, {x}, {y}, {w}), ql, q1, rc, mr, hh, p2)
+        // (l a point of bp too: the run stopped there)
+        have hbo: bp(fst(l)) -> o = ok(fst(l), empty) proof
+          assume bm
+          have st: tr.stopk(s, z. bp(z), fst(l)) by defs(taut(bm), tr.stopk)
+          have re: r = exc(pair(fst(l), empty), pair("brk", empty)) by taut(expand(hb1.1, tr.rbk), st)
+          show by simp(expand(rewrite(re, hrm), tr.rmap))
+        qed
+        show := mp(all_elim(ha, {l}, {x}, {y}, {w}), ql, q1, rc, mr, hh, hbo, p2)
       qed
       have a2: !(hp(fst(l))) -> LG proof
         assume nh
@@ -593,7 +671,8 @@ proof
       assume q2 rc mr
       have a1: hp(fst(l)) -> LG proof
         assume hh
-        show := mp(all_elim(ha, {l}, {x}, {y}, {w}), ql, q2, rc, mr, hh, p2)
+        have hbo: bp(fst(l)) -> o = ok(fst(l), empty) by taut(expand(nst, tr.stopk))
+        show := mp(all_elim(ha, {l}, {x}, {y}, {w}), ql, q2, rc, mr, hh, hbo, p2)
       qed
       have a2: !(hp(fst(l))) -> LG proof
         assume nh
@@ -694,24 +773,24 @@ qed
 // The loop's infinite runs: as the spec's from the loop (an iteration's
 // own divergence or undefined behaviour, or infinitely many of them: the
 // spec's loop then runs forever too)
-theorem tr.loop_div(s, v, z. hp, z. bp, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q):
+theorem tr.loop_div(s, v, z. hp, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q): tr.exc_closed(z p w. ar(z, p, w)) ->
   (all x y w. q(x, y, w) -> hp(x) && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. (hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2))))) || (bp(z) && ar(z, p2, w2)),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)) ->
   (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
   all x0 y0 w0 r o. q(x0, y0, w0) -> tr.rk(s, z. bp(z), x0, r) -> tr.rmap(r, o) -> fst(r) = 2 ->
-    tr.lg(s, z. bp(z), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
+    tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
 proof
-  assume hq hb hk2 htr
+  assume hec hq hb hk2 htr
   fix x0 y0 w0 r o
   assume hq0 hrk hrm hd0
   have tt: true by taut()
-  let LG := tr.lg(s, z. bp(z), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
+  let LG := tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y0, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w0, o)
   let PF(y) := tr.lpf(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
   let RCH(y, w) := all o2. runs(PF(y), w, o2) -> runs(PF(y0), w0, o2)
   let TR(x5) := fn_update(empty, "os.events", fst(x5).os.events)
   let BRK(l) := exc(pair(fst(l), empty), pair("brk", empty))
-  have hd := mp(tr.loop_d[s := s, v := v, hp := z. hp(z), bp := z. bp(z), b := l o. b(l, o), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hb)
+  have hd := mp(tr.loop_d[s := s, v := v, hp := z. hp(z), bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hec, hb)
   have rm2 := rewrite(hd0, expand(hrm, tr.rmap))
   have od: o = diverge(snd(r)) by simp(rm2)
   have em: LG || !LG by taut()
@@ -723,7 +802,7 @@ proof
       assume q1 rc hr
       let P1 := tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
       have d := mp(all_elim(hd, {x}, {y}, {w}, {diverge(t)}), q1, hr)
-      have c1: tr.lg(s, z. bp(z), v, P1, w, diverge(t)) -> false proof
+      have c1: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P1, w, diverge(t)) -> false proof
         assume l1
         have u: tr.ub(s, v, P1, w) || tr.div(P1, w, diverge(t)) -> false proof
           assume e
@@ -732,8 +811,8 @@ proof
             have e2: ex t3. o = diverge(t3) by ex_intro({snd(r)}, od)
             show by defs(taut(expand(dd, tr.div), e2), tr.div)
           qed
-          have l2: tr.lg(s, z. bp(z), v, P1, w, o) by defs(taut(e, dv), tr.lg)
-          have lg := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, rc, l2)
+          have l2: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P1, w, o) by defs(taut(e, dv), tr.lg)
+          have lg := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, hec, rc, l2)
           show by taut(lg, nlg)
         qed
         have cr: tr.crash(s, P1, w, diverge(t)) -> false proof
@@ -746,7 +825,12 @@ proof
           obtain m1, oe _ _ from e
           show by simp(oe)
         qed
-        show by taut(expand(l1, tr.lg), u, cr, rt)
+        have sp: (ex m1. diverge(t) = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, P1, w)) -> false proof
+          assume e
+          obtain m1, oe _ _ _ from e
+          show by simp(oe)
+        qed
+        show by taut(expand(l1, tr.lg), u, cr, rt, sp)
       qed
       have c2: (ex m1 y2 w2. diverge(t) = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty))) -> false proof
         assume e
@@ -883,12 +967,12 @@ proof
           // the iteration's end at the head: a pass of the body
           have d := mp(all_elim(hd, {x}, {y}, {w}, {ok(fst(l), empty)}), q1, hr)
           let P1 := tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
-          have d1: tr.lg(s, z. bp(z), v, P1, w, ok(fst(l), empty)) -> false proof
+          have d1: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P1, w, ok(fst(l), empty)) -> false proof
             assume l2
             have u: tr.ub(s, v, P1, w) -> false proof
               assume hu
-              have l3: tr.lg(s, z. bp(z), v, P1, w, o) by defs(taut(hu), tr.lg)
-              have lg := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, rc, l3)
+              have l3: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P1, w, o) by defs(taut(hu), tr.lg)
+              have lg := apply(tr.loop_e[s := s, v := v, bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2)], {y}, {w}, {y0}, {w0}, {o}, hec, rc, l3)
               show by taut(lg, nlg)
             qed
             have cr: tr.crash(s, P1, w, ok(fst(l), empty)) -> false proof
@@ -909,7 +993,14 @@ proof
               have st: tr.stopk(s, z. bp(z), fst(l)) by defs(taut(at2), tr.stopk)
               show by taut(st, nst)
             qed
-            show by taut(expand(l2, tr.lg), u, cr, dv2, rt)
+            have sp: (ex m1. ok(fst(l), empty) = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, P1, w)) -> false proof
+              assume e4
+              obtain m1, oe _ bm _ from e4
+              have me: m1 = fst(l) by simp(oe)
+              have st: tr.stopk(s, z. bp(z), fst(l)) by defs(taut(rewrite(me, bm)), tr.stopk)
+              show by taut(st, nst)
+            qed
+            show by taut(expand(l2, tr.lg), u, cr, dv2, rt, sp)
           qed
           have d2: (ex m1 y2 w2. ok(fst(l), empty) = ok(m1, empty) && q(m1, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty))) ->
               (ex x2 y2 w2. q(x2, y2, w2) && b(pair(w, y), ok(pair(w2, y2), empty)) && DV(x2)) proof
@@ -996,15 +1087,15 @@ qed
 // iterated (a CFG: one block per iteration, the label in the locals) --
 // from the claim for one iteration (the cut points breakpoints, arrived at
 // coupled, with the iteration's spec returning the next locals marked)
-theorem tr.loop_cut(s, v, z. hp, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q):
+theorem tr.loop_cut(s, v, z. hp, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q): tr.exc_closed(z p w. ar(z, p, w)) ->
   (all x y w. q(x, y, w) -> hp(x) && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
   (all x y w m. q(x, y, w) -> hp(m) -> !tr.out(s, m)) ->
   (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
+  (all x y w. q(x, y, w) -> tr.sim(s, z. hp(z) || bp(z), z p2 w2. (hp(z) && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2))))) || (bp(z) && ar(z, p2, w2)),
     v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)) ->
   all x y w. q(x, y, w) -> tr.sim(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)
 proof
-  assume hq hnr hk2 htr hb
+  assume hec hq hnr hk2 htr hb
   fix x y w
   assume q0
   let P := tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))
@@ -1012,17 +1103,17 @@ proof
     fix o
     assume hr
     obtain r, rk rm from expand(hr, tr.run_k)
-    have f: !(fst(r) = 2) -> tr.lg(s, z. bp(z), v, P, w, o) proof
+    have f: !(fst(r) = 2) -> tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) proof
       assume nd
-      show := mp(all_elim(mp(tr.loop_fin[s := s, v := v, hp := z. hp(z), bp := z. bp(z), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hq, hb, hnr),
+      show := mp(all_elim(mp(tr.loop_fin[s := s, v := v, hp := z. hp(z), bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hec, hq, hb, hnr),
         {x}, {y}, {w}, {r}, {o}), q0, rk, rm, nd)
     qed
-    have d: fst(r) = 2 -> tr.lg(s, z. bp(z), v, P, w, o) proof
+    have d: fst(r) = 2 -> tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) proof
       assume dd
-      show := mp(all_elim(mp(tr.loop_div[s := s, v := v, hp := z. hp(z), bp := z. bp(z), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hq, hb, hk2, htr),
+      show := mp(all_elim(mp(tr.loop_div[s := s, v := v, hp := z. hp(z), bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hec, hq, hb, hk2, htr),
         {x}, {y}, {w}, {r}, {o}), q0, rk, rm, dd)
     qed
-    have lg: tr.lg(s, z. bp(z), v, P, w, o) by taut(f, d)
+    have lg: tr.lg(s, z. bp(z), z p w. ar(z, p, w), v, P, w, o) by taut(f, d)
     // (the return: no point of bp, so the arrival is the return's)
     have rt: (ex m1. o = ok(m1, empty) && tr.out(s, m1) && tr.retok(s, v, P, w, m1)) ->
         (ex m1. o = ok(m1, empty) && tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w)) proof
@@ -1031,29 +1122,26 @@ proof
       have a: tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w) by defs(taut(rt0, at), tr.arr)
       show by ex_intro({m1}, taut(oe, a))
     qed
-    show by defs(taut(expand(lg, tr.lg), rt), tr.gk)
+    // (stopped at a point of bp: its relation, for the loop's program)
+    have sp: (ex m1. o = ok(m1, empty) && !tr.out(s, m1) && bp(m1) && ar(m1, P, w)) ->
+        (ex m1. o = ok(m1, empty) && tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w)) proof
+      assume e
+      obtain m1, oe no bm am from e
+      have rd: tr.red(P, w, P, w) proof
+        have g0: all o3. runs(P, w, o3) -> runs(P, w, o3) proof
+          fix o3
+          assume r3
+          show := r3
+        qed
+        show by defs(g0, tr.red)
+      qed
+      have ea: ex p2 w2. tr.red(P, w, p2, w2) && ar(m1, p2, w2) by ex_intro({P}, {w}, taut(rd, am))
+      have a: tr.arr(s, z. bp(z), z p w. ar(z, p, w), v, m1, P, w) by defs(taut(no, ea), tr.arr)
+      show by ex_intro({m1}, taut(oe, a))
+    qed
+    show by defs(taut(expand(lg, tr.lg), rt, sp), tr.gk)
   qed
   show by defs(g, tr.sim)
-qed
-
-// The loop rule: at the loop's head h, coupled by q (the cut points: h)
-theorem tr.loop(s, v, h, z. bp, z p w. ar, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw, x y w. q):
-  (all x y w. q(x, y, w) -> tr.hd(x) = h && !bp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1)) ->
-  (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) ->
-  (all x y w. q(x, y, w) -> tr.sim(s, z. tr.hd(z) = h || bp(z), z p2 w2. tr.hd(z) = h && (ex y2. q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
-    v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)) ->
-  all x y w. q(x, y, w) -> tr.sim(s, z. bp(z), z p w. ar(z, p, w), v, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x)
-proof
-  assume hq hk2 htr hb
-  have hq2: all x y w. q(x, y, w) -> tr.hd(x) = h && !tr.out(s, x) proof
-    fix x y w
-    assume q1
-    have c := mp(all_elim(hq, {x}, {y}, {w}), q1)
-    show by taut(c)
-  qed
-  have hnr := mp(tr.hd_nret[s := s, h := h, q := x y w. q(x, y, w)], hq2)
-  show := mp(tr.loop_cut[s := s, v := v, hp := z. tr.hd(z) = h, bp := z. bp(z), ar := z p w. ar(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1),
-    kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. q(x, y, w)], hq, hnr, hk2, htr, hb)
 qed
 
 // ----------------------------------------------------------------------
@@ -1095,6 +1183,19 @@ proof
 qed
 
 // (a rest run from w: its start world w)
+// (an iteration's body of any outcome -- undefined after a call never
+// returning: one, e)
+theorem tr.q_some_e(e, x8 x1. k, x3 x4 x2. kw): all w o. runs(mkprog(x0 x1. tr.lcont(e, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), w, o) ->
+  runs(mkprog(x0 x1. ex x2. true && tr.lcont(x2, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))), w, o)
+proof
+  fix w o
+  assume hr
+  have pu := apply(g.runs_univ, hr)
+  have c := apply(g.runs_elim, hr)
+  have c2: ex x2. true && tr.lcont(x2, o, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)) by ex_intro({e}, taut(c))
+  show := apply(tr.runs_intro[r := x0 x1. ex x2. true && tr.lcont(x2, x1, x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2))], {w}, {o}, pu, c2)
+qed
+
 theorem tr.q_at(x0 x1. b): all w o. runs(mkprog(x0 x1. b(w, x1)), w, o) -> runs(mkprog(x0 x1. b(x0, x1)), w, o)
 proof
   fix w o
@@ -1305,57 +1406,6 @@ proof
   show by defs(h1, tr.homes)
 qed
 
-// The loop rule on the point claims: at the head ha (rsp the entry's less
-// the frame fr), coupled by the homes hs(y) to the locals y, the claim for
-// the loop -- from the claim for one iteration, the head a breakpoint
-// arrived at coupled (the homes at the locals there), its spec returning
-// them marked
-theorem tr.loop_lv(s, v, base, code, fr, ha, fd, rc, y. hs, y. yt, z. bkp, z p w. bka, l o. b, l. tr, x8 x1. k, x3 x4 x2. kw):
-  (all t. k(diverge(t), diverge(t))) -> (all l. l in univ(1) -> tr(l) in univ(1)) -> (all z. z.rip = ha -> !bkp(z)) ->
-  (all y w. pair(w, y) in univ(1) -> yt(y) -> w in abi.World && w in univ(1) -> tr.lv(s, z. tr.hd(z) = pair(ha, int_sub(s.gpr[4], fr)) || bkp(z),
-    z p2 w2. tr.hd(z) = pair(ha, int_sub(s.gpr[4], fr)) && (ex y2. (tr.inv(s, base, code, fr, z, w2) && z.rip = ha && tr.homes(s, z, hs(y2)) && tr.regs(z, rc) &&
-      tr.mem(s, z, w2, v) && tr.frame(s, z, fd) && pair(w2, y2) in univ(1) && yt(y2)) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
-    v, base, code, fr, ha, hs(y), fd, rc,tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)) ->
-  all y w. pair(w, y) in univ(1) -> yt(y) ->
-    tr.lv(s, z. bkp(z), z p w. bka(z, p, w), v, base, code, fr, ha, hs(y), fd, rc,tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w)
-proof
-  assume hk2 htr hbo hb
-  let Q(x, y, w) := tr.inv(s, base, code, fr, x, w) && x.rip = ha && tr.homes(s, x, hs(y)) && tr.regs(x, rc) && tr.mem(s, x, w, v) && tr.frame(s, x, fd) && pair(w, y) in univ(1) && yt(y)
-  let H := pair(ha, int_sub(s.gpr[4], fr))
-  have hq: all x y w. Q(x, y, w) -> tr.hd(x) = H && !bkp(x) && !tr.out(s, x) && w in univ(1) && pair(w, y) in univ(1) proof
-    fix x y w
-    assume q
-    have hi hr hh hg hm hf hu hy := q
-    have rspm := apply(tr.inv_parts, hi).4
-    have hd: tr.hd(x) = H by defs(simp(hr, rspm), tr.hd)
-    have nb := mp(all_elim(hbo, {x}), hr)
-    have nr := apply(tr.inv_nr, hi)
-    have wu := hi.wu
-    show by taut(hd, nb, nr, wu, hu)
-  qed
-  have hb2: all x y w. Q(x, y, w) -> tr.sim(s, z. tr.hd(z) = H || bkp(z), z p2 w2. tr.hd(z) = H && (ex y2. Q(z, y2, w2) && runs(p2, w2, ok(w2, pair(18446744073709551616, y2)))),
-      v, tr.lone(y, l o. b(l, o), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, x) proof
-    fix x y w
-    assume q
-    have hi hr hh hg hm hf hu hy := q
-    have wW := hi.wW
-    have wu := hi.wu
-    have l := mp(all_elim(hb, {y}, {w}), hu, hy, conj(wW, wu))
-    show := mp(all_elim(expand(l, tr.lv), {x}), hi, hr, hh, hg, hm, hf)
-  qed
-  have lp := mp(tr.loop[s := s, v := v, h := H, bp := z. bkp(z), ar := z p w. bka(z, p, w), b := l o. b(l, o), tr := l. tr(l), k := x8 x1. k(x8, x1),
-    kw := x3 x4 x2. kw(x3, x4, x2), q := x y w. Q(x, y, w)], hq, hk2, htr, hb2)
-  fix y w
-  assume hu hy
-  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = ha -> tr.homes(s, m, hs(y)) -> tr.regs(m, rc) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) ->
-      tr.sim(s, z. bkp(z), z p w. bka(z, p, w), v, tr.lprog(y, l o. b(l, o), l. tr(l), x8 x1. k(x8, x1), x3 x4 x2. kw(x3, x4, x2)), w, m) proof
-    fix m
-    assume hi hr hh hg hm hf
-    have q: Q(m, y, w) by taut(hi, hr, hh, hg, hm, hf, hu, hy)
-    show := mp(all_elim(lp, {m}, {y}, {w}), q)
-  qed
-  show by defs(g, tr.lv)
-qed
 
 // (back at the head, coupled to the locals y2, the spec's marked return of
 // them: the arrival)

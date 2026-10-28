@@ -150,6 +150,8 @@ struct LoopG {
     head: u128,
     hs: Term,
     bkp: Term,
+    /// (the outer relation at the breakpoints)
+    bka: Term,
     wrap: Term,
     kw: Term,
     /// the iteration's world and locals in the universe
@@ -296,7 +298,7 @@ struct Gen<'e> {
     /// each spec parameter's call: its address, number of arguments,
     /// whether it is entered unaligned (its premises assumed at the first
     /// call), and the premises' statements
-    cinfo: Vec<Option<(u128, usize, bool, [Term; 3])>>,
+    cinfo: Vec<Option<(u128, usize, bool, Vec<Term>)>>,
     /// the program's statics, the spec's parameters
     statics_t: Term,
     gs: Vec<Term>,

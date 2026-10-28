@@ -1272,6 +1272,19 @@ impl<'e> Gen<'e> {
             }
         }
         let body = self.app(&q, "mkprog", 1).ok_or_else(|| format!("the spec's rest is not a program: {}", self.print(&q)))?[0].clone();
+        // (the body of any outcome -- undefined after a call never
+        // returning: its raise of nothing, in the point's world)
+        if let Some(x) = self
+            .app(&body, "ex", 1)
+            .and_then(|e| self.app(&e[0], "and", 2).map(|y| y.to_vec()))
+            .filter(|y| self.app(&y[0], "true", 0).is_some())
+            .and_then(|y| self.app(&y[1], "tr.lcont", 4).map(|z| z.to_vec()))
+            .filter(|z| matches!(z[0].node(), Node::BVar(0)) && matches!(z[1].node(), Node::BVar(1)))
+        {
+            let e = self.mk("exc", vec![self.mk("pair", vec![w.clone(), self.mk("empty", vec![])]), self.mk("pair", vec![Term::bytes(b"raise"), self.mk("empty", vec![])])]);
+            let (j, inst) = self.by(qi, "tr.q_some_e", &[("e", e), ("k", x[2].clone()), ("kw", x[3].clone()), ("w", w.clone())])?;
+            return Ok(Some(Red::Q(j, inst)));
+        }
         // a loop's iteration ended (tr.lcont): the body went on (its marked
         // return), or it left (the rest in the wrapper)
         if let Some(x) = self.app(&body, "tr.lcont", 4).map(|x| x.to_vec()) {

@@ -146,15 +146,16 @@ The binary as linked (gcc's crtbegin included). The steps:
   tr.entry_nk/gk; callees' contracts tr.implements_stop with the
   caller's k, calls by tr.call_st/tr.call1_st). `nostop` gives the
   normal contracts too: a_ctz_32 is proven so.
-  Left: the engine's indirect calls (`call *%reg` against
-  `call(fptr[p], ..)`, tr.calli_st; a calli1 form); contract.rs linking
-  the stop contracts (an aligned call's from the callee's _u contract;
-  k false's into k true's); the entry variants besides tr.entry_n
-  (entry0, entry_np, entry0p) generic like it. Loops: a cut's relation
-  is the invariant only, so a stop inside a loop cannot arrive --
-  `__libc_start_init` (its init_array calls through the code map, main
-  among its entries for C1) needs tr.cfg_lvk's relation
-  `(cut && inv) || bka`.
+  Calls through the code map (`call *%reg` against `call(fptr[p], ..)`,
+  tr.calli_st/calli1_st, hypothesis tr.code_ok); a stop inside a loop
+  (tr.loop_cut, tr.cfg_lvk: the relation `(cut && inv) || (bkp && bka)`,
+  bka closed under the same exceptions, tr.exc_closed); the rest after a
+  call never returning (tr.q_some_e, tr.raise0_ub). C1 in the stop mode:
+  `_start_c`, `__libc_start_main`, `libc_start_main_stage2`
+  (proofs/mallocng/machine/c1_start.core).
+  Left: contract.rs linking the stop contracts (an aligned call's from
+  the callee's _u contract; k false's into k true's); the entry variants
+  besides tr.entry_n (entry0, entry_np, entry0p) generic like it.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
