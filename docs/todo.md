@@ -141,17 +141,20 @@ The binary as linked (gcc's crtbegin included). The steps:
   contract), the entry (tr.entry_gk, tr.entry_nk generic; tr.fin_k,
   tr.ub_k). A function never stopping (k false) has the normal contract
   too (tr.implements_ns_at): shared leaves proven once, in that mode.
-  Left: the engine's stop mode -- a `c1` option for t and k; breakpoints
-  `rip = t`, relation `k && tr.at_t`; at the entry tr.entry_nk/gk with
-  tr.fin_k (outputs tr.implements_stop, and for k false tr.implements);
-  calls by tr.callee_sim_g (premises: t's states breakpoints, the
-  callee's below none else, at_t -> the relation if the callee stops),
-  an instruction rule generic in the push's target (tr.call's push part)
-  for `call rel32` and `call *%reg` (tr.callee_ind_g); contract.rs
-  linking the stop contracts. Loops: a cut's relation is the invariant
-  only, so a stop inside a loop cannot arrive -- `__libc_start_init`
-  (its init_array calls through the code map, main among its entries
-  for C1) needs tr.cfg_lvk's relation `(cut && inv) || bka`.
+  The engine's stop mode: `c1 FN SPEC P stop T` / `nostop T`
+  (breakpoints `rip = T`, relation `k && tr.at_t`; the entry by
+  tr.entry_nk/gk; callees' contracts tr.implements_stop with the
+  caller's k, calls by tr.call_st/tr.call1_st). `nostop` gives the
+  normal contracts too: a_ctz_32 is proven so.
+  Left: the engine's indirect calls (`call *%reg` against
+  `call(fptr[p], ..)`, tr.calli_st; a calli1 form); contract.rs linking
+  the stop contracts (an aligned call's from the callee's _u contract;
+  k false's into k true's); the entry variants besides tr.entry_n
+  (entry0, entry_np, entry0p) generic like it. Loops: a cut's relation
+  is the invariant only, so a stop inside a loop cannot arrive --
+  `__libc_start_init` (its init_array calls through the code map, main
+  among its entries for C1) needs tr.cfg_lvk's relation
+  `(cut && inv) || bka`.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
