@@ -2593,6 +2593,113 @@ proof
   show by defs(g0, tr.lv)
 qed
 
+// `call rel32` (E8) at a: a2 pushed, rip f (a2 + off) -- or the push faulting
+theorem tr.push_rel(s, base, code, fr, a, a2, len, off, f, rs, w):
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(120, off)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> off in bits(32) -> f = bits_add(64, a2, bits_sext(32, 64, off)) -> tr.cfr(fr) ->
+  (all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+    (ex m1 e1. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) &&
+      o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, a2))),
+        "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", f), empty)) ||
+    (ex x e. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), exc(x, e)) && o = exc(x, e)))
+proof
+  assume hat ha2 hoff hf hcf
+  fix m o
+  assume hi hr _ ho
+  have {mM, mu} := apply(tr.inv_call, hi)
+  have {rb, r16, rlt, sb} := apply(tr.call_rsp, hi, hcf)
+  let RA := bits_add(64, m.rip, bits_of_int(64, len))
+  let M2 := fn_update(m, "rip", RA)
+  let PA := bits_sub(64, m.gpr[4], 8)
+  have rae: RA = a2 by simp(hr, ha2)
+  have r8: int_le(8, m.gpr[4]) by arith(r16)
+  have cd: abi.code_at(m.vm, base, code) by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access, tr.kept, tr.keeps_code))
+  have hx := mp(all_elim(hat, {m}, {o}), ho, cd, hr)
+  have cr := apply(x86i.call_rel32, {m}, {o}, {off}, {len}, mM, mu, hoff, r8, rlt, hx)
+  have c1: (ex m1 e1. runs(x86_64_linux.touch_range(PA, 8, 1), M2, ok(m1, e1)) &&
+      o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, PA, 8, RA))),
+          "gpr", fn_update(m1.gpr, 4, PA)), "rip", bits_add(64, m1.rip, bits_sext(32, 64, off))), empty)) ->
+      (ex m1 e1. runs(x86_64_linux.touch_range(PA, 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) &&
+        o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, PA, 8, a2))),
+          "gpr", fn_update(m1.gpr, 4, PA)), "rip", f), empty)) proof
+    assume e
+    obtain m1 e1, tr0 oe from e
+    have tv := apply(x86.touch_range_vm, {M2}, {PA}, {8}, {1}, {m1}, {e1}, tr0)
+    have m1r: m1.rip = RA by simp(tv)
+    have tf: bits_add(64, m1.rip, bits_sext(32, 64, off)) = f by simp(m1r, rae, hf)
+    have oe2 := rewrite(rae, rewrite(tf, oe))
+    have tr2 := rewrite(rae, tr0)
+    show by ex_intro({m1}, {e1}, taut(tr2, oe2))
+  qed
+  have c2: (ex x e. runs(x86_64_linux.touch_range(PA, 8, 1), M2, exc(x, e)) && o = exc(x, e)) ->
+      (ex x e. runs(x86_64_linux.touch_range(PA, 8, 1), fn_update(m, "rip", a2), exc(x, e)) && o = exc(x, e)) proof
+    assume e
+    obtain x e0, ex2 from e
+    have ex3 := rewrite(rae, ex2)
+    show by ex_intro({x}, {e0}, taut(ex3))
+  qed
+  have c3: (ex t. runs(x86_64_linux.touch_range(PA, 8, 1), M2, diverge(t)) && o = diverge(t)) -> false proof
+    assume e
+    obtain t, et _ from e
+    have nd := apply(x86.touch_range_nodiv, {M2}, {PA}, {8}, {1}, {t}, simp())
+    show by taut(et, nd)
+  qed
+  show by taut(cr, c1, c2, c3)
+qed
+
+// `call *%g` (FF /2) at a, g holding T (its value in the registers' map):
+// a2 pushed, rip T -- or the push faulting
+theorem tr.push_reg(s, base, code, fr, a, a2, len, g, z, nb, T, rs, w):
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(121, pair(tag(0, g), z))), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, len)) -> g in x86_64_linux.Reg -> g in dom(rs) -> rs[g] = pair(nb, T) -> tr.cfr(fr) ->
+  (all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
+    (ex m1 e1. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) &&
+      o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, a2))),
+        "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", T), empty)) ||
+    (ex x e. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), exc(x, e)) && o = exc(x, e)))
+proof
+  assume hat ha2 hg hgd hgu hcf
+  fix m o
+  assume hi hr hrs ho
+  have {mM, mu} := apply(tr.inv_call, hi)
+  have {rb, r16, rlt, sb} := apply(tr.call_rsp, hi, hcf)
+  let RA := bits_add(64, m.rip, bits_of_int(64, len))
+  let M2 := fn_update(m, "rip", RA)
+  let PA := bits_sub(64, m.gpr[4], 8)
+  have rae: RA = a2 by simp(hr, ha2)
+  have r8: int_le(8, m.gpr[4]) by arith(r16)
+  have rg _ := apply(tr.regs_get, {m}, {rs}, {g}, {nb}, {T}, hrs, hgd, hgu)
+  have cd: abi.code_at(m.vm, base, code) by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access, tr.kept, tr.keeps_code))
+  have hx := mp(all_elim(hat, {m}, {o}), ho, cd, hr)
+  have cr := apply(x86i.call_reg, {m}, {o}, {g}, {z}, {len}, mM, mu, hg, r8, rlt, hx)
+  have c1: (ex m1 e1. runs(x86_64_linux.touch_range(PA, 8, 1), M2, ok(m1, e1)) &&
+      o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, PA, 8, RA))),
+          "gpr", fn_update(m1.gpr, 4, PA)), "rip", m.gpr[g]), empty)) ->
+      (ex m1 e1. runs(x86_64_linux.touch_range(PA, 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) &&
+        o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, PA, 8, a2))),
+          "gpr", fn_update(m1.gpr, 4, PA)), "rip", T), empty)) proof
+    assume e
+    obtain m1 e1, tr0 oe from e
+    have oe2 := rewrite(rae, rewrite(rg, oe))
+    have tr2 := rewrite(rae, tr0)
+    show by ex_intro({m1}, {e1}, taut(tr2, oe2))
+  qed
+  have c2: (ex x e. runs(x86_64_linux.touch_range(PA, 8, 1), M2, exc(x, e)) && o = exc(x, e)) ->
+      (ex x e. runs(x86_64_linux.touch_range(PA, 8, 1), fn_update(m, "rip", a2), exc(x, e)) && o = exc(x, e)) proof
+    assume e
+    obtain x e0, ex2 from e
+    have ex3 := rewrite(rae, ex2)
+    show by ex_intro({x}, {e0}, taut(ex3))
+  qed
+  have c3: (ex t. runs(x86_64_linux.touch_range(PA, 8, 1), M2, diverge(t)) && o = diverge(t)) -> false proof
+    assume e
+    obtain t, et _ from e
+    have nd := apply(x86.touch_range_nodiv, {M2}, {PA}, {8}, {1}, {t}, simp())
+    show by taut(et, nd)
+  qed
+  show by taut(cr, c1, c2, c3)
+qed
+
 // A call `call rel32` (E8) at a, from a frame of fr bytes (8 mod 16, at
 // most tr.FMAX), its n arguments in their registers (tr.args_in), against
 // readable GIMPLE's call (the callee g at a2 + off, its contract
@@ -2619,53 +2726,7 @@ proof
   assume hofr hap hat ha2 hoff hb hf himp hal hld hcb hcf hln hno hn6 hgt hio hreg hsub hhin hfo hfd hk hd hpost hbf
   have a2b: a2 in bits(64) by simp(ha2)
   // (the instruction: the return address a2 pushed, rip f)
-  have hst: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.regs(m, rs) -> runs(x86_64_linux.step(), m, o) ->
-      (ex m1 e1. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) &&
-        o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, a2))),
-          "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", f), empty)) ||
-      (ex x e. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), exc(x, e)) && o = exc(x, e)) proof
-    fix m o
-    assume hi hr _ ho
-    have {mM, mu} := apply(tr.inv_call, hi)
-    have {rb, r16, rlt, sb} := apply(tr.call_rsp, hi, hcf)
-    let RA := bits_add(64, m.rip, bits_of_int(64, len))
-    let M2 := fn_update(m, "rip", RA)
-    let PA := bits_sub(64, m.gpr[4], 8)
-    have rae: RA = a2 by simp(hr, ha2)
-    have r8: int_le(8, m.gpr[4]) by arith(r16)
-    have cd: abi.code_at(m.vm, base, code) by simp(expand(hi, tr.inv), keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, abi.stack_gap_free, x86_64_linux.can_access, tr.kept, tr.keeps_code))
-    have hx := mp(all_elim(hat, {m}, {o}), ho, cd, hr)
-    have cr := apply(x86i.call_rel32, {m}, {o}, {off}, {len}, mM, mu, hoff, r8, rlt, hx)
-    have c1: (ex m1 e1. runs(x86_64_linux.touch_range(PA, 8, 1), M2, ok(m1, e1)) &&
-        o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, PA, 8, RA))),
-            "gpr", fn_update(m1.gpr, 4, PA)), "rip", bits_add(64, m1.rip, bits_sext(32, 64, off))), empty)) ->
-        (ex m1 e1. runs(x86_64_linux.touch_range(PA, 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) &&
-          o = ok(fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, PA, 8, a2))),
-            "gpr", fn_update(m1.gpr, 4, PA)), "rip", f), empty)) proof
-      assume e
-      obtain m1 e1, tr0 oe from e
-      have tv := apply(x86.touch_range_vm, {M2}, {PA}, {8}, {1}, {m1}, {e1}, tr0)
-      have m1r: m1.rip = RA by simp(tv)
-      have tf: bits_add(64, m1.rip, bits_sext(32, 64, off)) = f by simp(m1r, rae, hf)
-      have oe2 := rewrite(rae, rewrite(tf, oe))
-      have tr2 := rewrite(rae, tr0)
-      show by ex_intro({m1}, {e1}, taut(tr2, oe2))
-    qed
-    have c2: (ex x e. runs(x86_64_linux.touch_range(PA, 8, 1), M2, exc(x, e)) && o = exc(x, e)) ->
-        (ex x e. runs(x86_64_linux.touch_range(PA, 8, 1), fn_update(m, "rip", a2), exc(x, e)) && o = exc(x, e)) proof
-      assume e
-      obtain x e0, ex2 from e
-      have ex3 := rewrite(rae, ex2)
-      show by ex_intro({x}, {e0}, taut(ex3))
-    qed
-    have c3: (ex t. runs(x86_64_linux.touch_range(PA, 8, 1), M2, diverge(t)) && o = diverge(t)) -> false proof
-      assume e
-      obtain t, et _ from e
-      have nd := apply(x86.touch_range_nodiv, {M2}, {PA}, {8}, {1}, {t}, simp())
-      show by taut(et, nd)
-    qed
-    show by taut(cr, c1, c2, c3)
-  qed
+  have hst := apply(tr.push_rel[s := s, base := base, code := code, fr := fr, a := a, a2 := a2, len := len, off := off, f := f, rs := rs, w := w], hat, ha2, hoff, hf, hcf)
   // (the push done: the callee runs under its contract)
   have hcl: all m m1 e1 C. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) ->
       runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", a2), ok(m1, e1)) ->
