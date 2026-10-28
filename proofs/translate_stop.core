@@ -518,8 +518,10 @@ qed
 //  the claim with the breakpoint rip = t, there the program left raising
 //  at main in a world that is a view of the machine (tr.at_t)
 
-def tr.at_t(zb, pb, wb) := ex w2 v2 mem2. abi.raise_state(w2) && runs(pb, wb, exc(w2, exc_val("at_main", empty))) && w2 = abi.view(zb, v2, mem2) &&
-  abi.view_ok(zb, v2, mem2)
+def tr.at_t(zb, pb, wb) := (ex w2 v2 mem2. abi.raise_state(w2) && runs(pb, wb, exc(w2, exc_val("at_main", empty))) && w2 = abi.view(zb, v2, mem2) &&
+    abi.view_ok(zb, v2, mem2)) ||
+  // (or undefined: main's precondition failing)
+  (ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && !(e = exc_val("at_main", empty)) && abi.raise_state(x) && runs(pb, wb, exc(x, e)))
 
 theorem tr.entry_s: all spec args s v mem o t. s in x86_64_linux.Machine -> int_lt(s.gpr[4], 140737488355328) -> !(s.rip = t) ->
   tr.sim(s, zb. zb.rip = t, zb pb wb. tr.at_t(zb, pb, wb), v, spec[args], abi.view(s, v, mem), s) -> tr.run_s(s, t, s, o) ->
@@ -658,10 +660,25 @@ proof
         show by taut(ou)
       qed
       obtain p2 w2, rd2 att from mp(ar2, no, xt)
-      obtain w3 v3 mem3, rs3 ru3 we3 vo3 from expand(att, tr.at_t)
-      have ru := mp(all_elim(expand(rd2, tr.red), {exc(w3, exc_val("at_main", empty))}), ru3)
-      have st: tr.stop_t(spec, args, v, mem, s, o) by defs(ex_intro({x}, {w3}, {v3}, {mem3}, taut(oe, rs3, ru, we3, vo3)), tr.stop_t)
-      show by defs(taut(st), tr.matches_ts)
+      have red := expand(rd2, tr.red)
+      // (main entered: the stop; or undefined)
+      have a1: (ex w3 v3 mem3. abi.raise_state(w3) && runs(p2, w2, exc(w3, exc_val("at_main", empty))) && w3 = abi.view(x, v3, mem3) &&
+          abi.view_ok(x, v3, mem3)) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+        assume ea
+        obtain w3 v3 mem3, rs3 ru3 we3 vo3 from ea
+        have ru := mp(all_elim(red, {exc(w3, exc_val("at_main", empty))}), ru3)
+        have st: tr.stop_t(spec, args, v, mem, s, o) by defs(ex_intro({x}, {w3}, {v3}, {mem3}, taut(oe, rs3, ru, we3, vo3)), tr.stop_t)
+        show by defs(taut(st), tr.matches_ts)
+      qed
+      have a2: (ex e x3. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && !(e = exc_val("at_main", empty)) && abi.raise_state(x3) &&
+          runs(p2, w2, exc(x3, e))) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+        assume eb
+        obtain e x3, eu en ea rs3 ru3 from eb
+        have ru := mp(all_elim(red, {exc(x3, e)}), ru3)
+        have ra: abi.raises_at(spec, args, v, mem, s) by defs(ex_intro({e}, {x3}, taut(eu, en, ea, rs3, ru)), abi.raises_at)
+        show by defs(taut(ra), tr.matches_ts)
+      qed
+      show by taut(expand(att, tr.at_t), a1, a2)
     qed
     show by taut(g, k1, k2, k3, k4)
   qed
