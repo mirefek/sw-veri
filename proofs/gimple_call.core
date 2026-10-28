@@ -251,3 +251,235 @@ proof
   have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
   show := apply(gc.call1_exc, {g}, {args}, hw, hw, eu, mp(all_elim(gc.call_ovf, {g}, {args}, {w}), hw))
 qed
+
+// ----------------------------------------------------------------------
+//  call0 (layers/gimple.sl: a call before the thread is set up): no
+//  check of the thread pointer, the callee's left as it leaves it
+
+// the callee's world w4 back with the caller's (w's) stack objects
+abbrev gc.back0(w4, w) := fn_update(w4, "objs", fn_update(w4.objs, "live", w.objs.live))
+abbrev gc.cc0(g, args, x0, x1) := bind_rel(gimple.call0_callee(g, args), x0, x3 x4. letin(x4, x5. gc.aft(x3, x5, x1)), x3 x4. x1 = exc(x3, x4), x3. x1 = diverge(x3))
+
+theorem gc.call0_from: all g args w o. w in univ(1) -> pair(w, o) in univ(1) -> gc.cc0(g, args, w, o) -> runs(gimple.call0(g, args), w, o)
+proof
+  fix g args w o
+  assume hw hp hc
+  show by defs(simp(hp, hc, keep(gimple.call0_callee)), gimple.call0)
+qed
+
+theorem gc.call0_ovf: all g args w. w in univ(1) -> runs(gimple.call0(g, args), w, exc(w, exc_val("stack_overflow", empty)))
+proof
+  fix g args w
+  assume hw
+  have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
+  show by defs(simp(hw, eu), gimple.call0)
+qed
+
+theorem gc.cc0_ok: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, ok(w4, pair(r0, r1))) -> runs(gimple.call0_callee(g, args), w, ok(gc.back0(w4, w), pair(r0, r1)))
+proof
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hc
+  show by defs(simp(hw, hw4, h0, h1, hr, hc), gimple.call0_callee)
+qed
+
+theorem gc.cc0_exc: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, exc(x, e)) -> runs(gimple.call0_callee(g, args), w, exc(x, e))
+proof
+  fix g args w regs x e
+  assume hw hx he hr hc
+  show by defs(simp(hw, hx, he, hr, hc), gimple.call0_callee)
+qed
+
+theorem gc.cc0_div: all g args w regs t. w in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, diverge(t)) -> runs(gimple.call0_callee(g, args), w, diverge(t))
+proof
+  fix g args w regs t
+  assume hw ht hr hc
+  show by defs(simp(hw, ht, hr, hc), gimple.call0_callee)
+qed
+
+theorem gc.call0_ok: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, ok(w4, pair(r0, r1))) -> runs(gimple.call0(g, args), w, ok(gc.back0(w4, w), pair(r0, r1)))
+proof
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hc
+  have bu: gc.back0(w4, w) in univ(1) by simp(hw4, hw)
+  have c := apply(gc.cc0_ok, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, hc)
+  have a0 := all_elim(gc.aft_ok, {gc.back0(w4, w)}, {pair(r0, r1)})
+  have a1: letin(pair(r0, r1), x5. gc.aft(gc.back0(w4, w), x5, ok(gc.back0(w4, w), pair(r0, r1)))) by defs(simp(a0), letin)
+  have b := apply(gc.bind_ok[p := gimple.call0_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, ok(gc.back0(w4, w), pair(r0, r1)))), x := x3 x4. ok(gc.back0(w4, w), pair(r0, r1)) = exc(x3, x4), d := x3. ok(gc.back0(w4, w), pair(r0, r1)) = diverge(x3)], c, a1)
+  show := apply(gc.call0_from, hw, (pair(w, ok(gc.back0(w4, w), pair(r0, r1))) in univ(1) by simp(hw, bu, h0, h1)), b)
+qed
+
+theorem gc.call0_ovf_after: all g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, ok(w4, pair(r0, r1))) -> runs(gimple.call0(g, args), w, exc(gc.back0(w4, w), exc_val("stack_overflow", empty)))
+proof
+  fix g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hc
+  have bu: gc.back0(w4, w) in univ(1) by simp(hw4, hw)
+  have c0 := apply(gc.cc0_ok, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, hc)
+  have a0 := all_elim(gc.aft_ovf, {gc.back0(w4, w)}, {pair(r0, r1)})
+  have a1: letin(pair(r0, r1), x5. gc.aft(gc.back0(w4, w), x5, exc(gc.back0(w4, w), exc_val("stack_overflow", empty)))) by defs(simp(a0), letin)
+  have b := apply(gc.bind_ok[p := gimple.call0_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, exc(gc.back0(w4, w), exc_val("stack_overflow", empty)))), x := x3 x4. exc(gc.back0(w4, w), exc_val("stack_overflow", empty)) = exc(x3, x4), d := x3. exc(gc.back0(w4, w), exc_val("stack_overflow", empty)) = diverge(x3)], c0, a1)
+  have eu: exc_val("stack_overflow", empty) in univ(1) by defs(simp(), exc_val)
+  show := apply(gc.call0_from, hw, (pair(w, exc(gc.back0(w4, w), exc_val("stack_overflow", empty))) in univ(1) by simp(hw, bu, eu)), b)
+qed
+
+theorem gc.call0_exc: all g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, exc(x, e)) -> runs(gimple.call0(g, args), w, exc(x, e))
+proof
+  fix g args w regs x e
+  assume hw hx he hr hc
+  have c := apply(gc.cc0_exc, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, hr, hc)
+  have b := apply(gc.bind_exc[p := gimple.call0_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, exc(x, e))), x := x3 x4. exc(x, e) = exc(x3, x4), d := x3. exc(x, e) = diverge(x3)], c, refl({exc(x, e)}))
+  show := apply(gc.call0_from, hw, (pair(w, exc(x, e)) in univ(1) by simp(hw, hx, he)), b)
+qed
+
+theorem gc.call0_div: all g args w regs t. w in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) ->
+  runs(g[regs], w, diverge(t)) -> runs(gimple.call0(g, args), w, diverge(t))
+proof
+  fix g args w regs t
+  assume hw ht hr hc
+  have c := apply(gc.cc0_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, hr, hc)
+  have b := apply(gc.bind_div[p := gimple.call0_callee(g, args), k := x3 x4. letin(x4, x5. gc.aft(x3, x5, diverge(t))), x := x3 x4. diverge(t) = exc(x3, x4), d := x3. diverge(t) = diverge(x3)], c, refl({diverge(t)}))
+  show := apply(gc.call0_from, hw, (pair(w, diverge(t)) in univ(1) by simp(hw, ht)), b)
+qed
+
+// ----------------------------------------------------------------------
+//  The call in the mode b (the main run's: call; the startup's: call0)
+
+abbrev gc.cm(b, g, args) := ite(b, gimple.call(g, args), gimple.call0(g, args))
+abbrev gc.bm(b, w4, w) := ite(b, gc.back(w4, w), gc.back0(w4, w))
+
+// (a mode's call: the main's or the startup's)
+theorem gc.cm_cases(x0. q): all b g args. q(gimple.call(g, args)) -> q(gimple.call0(g, args)) -> q(gc.cm(b, g, args))
+proof
+  fix b g args
+  assume h1 h0
+  have t: b -> q(gc.cm(b, g, args)) proof
+    assume hb
+    show := rewrite(sym(mp(ite_t[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), h1)
+  qed
+  have f: !b -> q(gc.cm(b, g, args)) proof
+    assume hb
+    show := rewrite(sym(mp(ite_f[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), h0)
+  qed
+  show by taut(t, f)
+qed
+
+// (... with the callee's world back as the mode has it)
+theorem gc.cm_cases2(x0 x1. q): all b g args w4 w. q(gimple.call(g, args), gc.back(w4, w)) -> q(gimple.call0(g, args), gc.back0(w4, w)) -> q(gc.cm(b, g, args), gc.bm(b, w4, w))
+proof
+  fix b g args w4 w
+  assume h1 h0
+  have t: b -> q(gc.cm(b, g, args), gc.bm(b, w4, w)) proof
+    assume hb
+    have r := rewrite(sym(mp(ite_t[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), h1)
+    show := rewrite(sym(mp(ite_t[c := b, a := gc.back(w4, w), b := gc.back0(w4, w)], hb)), r)
+  qed
+  have f: !b -> q(gc.cm(b, g, args), gc.bm(b, w4, w)) proof
+    assume hb
+    have r := rewrite(sym(mp(ite_f[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), h0)
+    show := rewrite(sym(mp(ite_f[c := b, a := gc.back(w4, w), b := gc.back0(w4, w)], hb)), r)
+  qed
+  show by taut(t, f)
+qed
+
+// The mode's call: its outcomes from the callee's (GIMPLE's check, the
+// thread pointer sound, in the main mode only)
+theorem gc.cm_ovf: all b g args w. w in univ(1) -> runs(gc.cm(b, g, args), w, exc(w, exc_val("stack_overflow", empty)))
+proof
+  fix b g args w
+  assume hw
+  show := apply(gc.cm_cases[q := x0. runs(x0, w, exc(w, exc_val("stack_overflow", empty)))], {b}, {g}, {args},
+    mp(all_elim(gc.call_ovf, {g}, {args}, {w}), hw), mp(all_elim(gc.call0_ovf, {g}, {args}, {w}), hw))
+qed
+
+theorem gc.cm_ub: all b g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> b ->
+  !gc.sound(w) -> runs(gc.cm(b, g, args), w, exc(x, e))
+proof
+  fix b g args w regs x e
+  assume hw hx he hr hb hn
+  have c := apply(gc.call_ub, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, hr, hn)
+  show := rewrite(sym(mp(ite_t[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), c)
+qed
+
+theorem gc.cm_exc: all b g args w regs x e. w in univ(1) -> x in univ(1) -> e in univ(1) -> gc.regs_ok(regs, args) -> (b -> gc.sound(w)) ->
+  runs(g[regs], w, exc(x, e)) -> runs(gc.cm(b, g, args), w, exc(x, e))
+proof
+  fix b g args w regs x e
+  assume hw hx he hr hs hc
+  have t: b -> runs(gc.cm(b, g, args), w, exc(x, e)) proof
+    assume hb
+    have c := apply(gc.call_exc, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, hr, mp(hs, hb), hc)
+    show := rewrite(sym(mp(ite_t[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), c)
+  qed
+  have f: !b -> runs(gc.cm(b, g, args), w, exc(x, e)) proof
+    assume hb
+    have c := apply(gc.call0_exc, {g}, {args}, {w}, {regs}, {x}, {e}, hw, hx, he, hr, hc)
+    show := rewrite(sym(mp(ite_f[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), c)
+  qed
+  show by taut(t, f)
+qed
+
+theorem gc.cm_div: all b g args w regs t. w in univ(1) -> t in univ(1) -> gc.regs_ok(regs, args) -> (b -> gc.sound(w)) ->
+  runs(g[regs], w, diverge(t)) -> runs(gc.cm(b, g, args), w, diverge(t))
+proof
+  fix b g args w regs t
+  assume hw ht hr hs hc
+  have tt: b -> runs(gc.cm(b, g, args), w, diverge(t)) proof
+    assume hb
+    have c := apply(gc.call_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, hr, mp(hs, hb), hc)
+    show := rewrite(sym(mp(ite_t[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), c)
+  qed
+  have f: !b -> runs(gc.cm(b, g, args), w, diverge(t)) proof
+    assume hb
+    have c := apply(gc.call0_div, {g}, {args}, {w}, {regs}, {t}, hw, ht, hr, hc)
+    show := rewrite(sym(mp(ite_f[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), c)
+  qed
+  show by taut(tt, f)
+qed
+
+theorem gc.cm_ok: all b g args w regs w4 r0 r1. w in univ(1) -> w4 in univ(1) -> r0 in univ(1) -> r1 in univ(1) -> gc.regs_ok(regs, args) ->
+  (b -> gc.sound(w)) -> runs(g[regs], w, ok(w4, pair(r0, r1))) ->
+  runs(gc.cm(b, g, args), w, ok(gc.bm(b, w4, w), pair(r0, r1))) && runs(gc.cm(b, g, args), w, exc(gc.bm(b, w4, w), exc_val("stack_overflow", empty)))
+proof
+  fix b g args w regs w4 r0 r1
+  assume hw hw4 h0 h1 hr hs hc
+  have t: b -> runs(gc.cm(b, g, args), w, ok(gc.bm(b, w4, w), pair(r0, r1))) && runs(gc.cm(b, g, args), w, exc(gc.bm(b, w4, w), exc_val("stack_overflow", empty))) proof
+    assume hb
+    have c1 := apply(gc.call_ok, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, mp(hs, hb), hc)
+    have c2 := apply(gc.call_ovf_after, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, mp(hs, hb), hc)
+    have r := rewrite(sym(mp(ite_t[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), conj(c1, c2))
+    show := rewrite(sym(mp(ite_t[c := b, a := gc.back(w4, w), b := gc.back0(w4, w)], hb)), r)
+  qed
+  have f: !b -> runs(gc.cm(b, g, args), w, ok(gc.bm(b, w4, w), pair(r0, r1))) && runs(gc.cm(b, g, args), w, exc(gc.bm(b, w4, w), exc_val("stack_overflow", empty))) proof
+    assume hb
+    have c1 := apply(gc.call0_ok, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, hc)
+    have c2 := apply(gc.call0_ovf_after, {g}, {args}, {w}, {regs}, {w4}, {r0}, {r1}, hw, hw4, h0, h1, hr, hc)
+    have r := rewrite(sym(mp(ite_f[c := b, a := gimple.call(g, args), b := gimple.call0(g, args)], hb)), conj(c1, c2))
+    show := rewrite(sym(mp(ite_f[c := b, a := gc.back(w4, w), b := gc.back0(w4, w)], hb)), r)
+  qed
+  show by taut(t, f)
+qed
+
+// call1_0: the value in rax only (as call1)
+theorem gc.call1_0_exc: all g args w x e. w in univ(1) -> x in univ(1) -> e in univ(1) ->
+  runs(gimple.call0(g, args), w, exc(x, e)) -> runs(gimple.call1_0(g, args), w, exc(x, e))
+proof
+  fix g args w x e
+  assume hw hx he hc
+  show by simp(hw, hx, he, hc, keep(gimple.call0))
+qed
+
+theorem gc.call1_0_div: all g args w t. w in univ(1) -> t in univ(1) ->
+  runs(gimple.call0(g, args), w, diverge(t)) -> runs(gimple.call1_0(g, args), w, diverge(t))
+proof
+  fix g args w t
+  assume hw ht hc
+  show by simp(hw, ht, hc, keep(gimple.call0))
+qed
+
+// (the mode's one-result call)
+abbrev gc.c1m(b, g, args) := ite(b, gimple.call1(g, args), gimple.call1_0(g, args))
