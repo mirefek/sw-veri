@@ -7,7 +7,9 @@
 // (A raise at main is no undefined behaviour in the bridge: tr.ub,
 // abi.raises_at leave it out, as a stack overflow.)
 
-def tr.rbs(s, t, l, o) := (!(fst(l).rip = t) && tr.rbd(s, l, o)) || (!!(fst(l).rip = t) && o = exc(l, pair("raise", exc_val("stop", empty))))
+// (at t but at the return: a return)
+abbrev tr.at_stop(s, t, x) := x.rip = t && !tr.at_ret(s, x)
+def tr.rbs(s, t, l, o) := (!tr.at_stop(s, t, fst(l)) && tr.rbd(s, l, o)) || (!!tr.at_stop(s, t, fst(l)) && o = exc(l, pair("raise", exc_val("stop", empty))))
 def tr.rws(s, t, l, r) := while_rel(l, x5. true, x5 x6. tr.rbs(s, t, x5, x6), x5. fn_update(empty, "os.events", fst(x5).os.events), r)
 def tr.run_s(s, t, m, o) := ex r. tr.rws(s, t, pair(m, empty), r) && tr.rmap(r, o)
 
@@ -66,14 +68,14 @@ proof
     show by taut(n)
   qed
   have g := mp(mp(while_guard[l0 := pair(m, empty), b := l o. tr.rbd(s, l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events),
-    p := l. !(fst(l).rip = t), e := l. exc(l, pair("raise", exc_val("stop", empty))), r := x4], ne), expand(hw, tr.rwd))
-  have kept: while_rel(pair(m, empty), l. true, l o. (!(fst(l).rip = t) && tr.rbd(s, l, o)) || (!!(fst(l).rip = t) && o = exc(l, pair("raise", exc_val("stop", empty)))),
+    p := l. !tr.at_stop(s, t, fst(l)), e := l. exc(l, pair("raise", exc_val("stop", empty))), r := x4], ne), expand(hw, tr.rwd))
+  have kept: while_rel(pair(m, empty), l. true, l o. (!tr.at_stop(s, t, fst(l)) && tr.rbd(s, l, o)) || (!!tr.at_stop(s, t, fst(l)) && o = exc(l, pair("raise", exc_val("stop", empty)))),
       l. fn_update(empty, "os.events", fst(l).os.events), x4) -> tr.run_s(s, t, m, o) proof
     assume w
     have ws: tr.rws(s, t, pair(m, empty), x4) by defs(w, tr.rws, tr.rbs)
     show by defs(ex_intro({x4}, taut(ws, hm)), tr.run_s)
   qed
-  have left: (ex l. while_rel(pair(m, empty), l. true, l o. (!(fst(l).rip = t) && tr.rbd(s, l, o)) || (!!(fst(l).rip = t) && o = exc(l, pair("raise", exc_val("stop", empty)))),
+  have left: (ex l. while_rel(pair(m, empty), l. true, l o. (!tr.at_stop(s, t, fst(l)) && tr.rbd(s, l, o)) || (!!tr.at_stop(s, t, fst(l)) && o = exc(l, pair("raise", exc_val("stop", empty)))),
       l. fn_update(empty, "os.events", fst(l).os.events), exc(l, pair("raise", exc_val("stop", empty))))) -> (ex x. tr.run_s(s, t, m, exc(x, exc_val("stop", empty)))) proof
     assume e
     obtain l, w from e
@@ -206,11 +208,11 @@ proof
   obtain l, hl from el
   have hb: tr.rbs(s, t, l, r) by taut(hl)
   have nk: !is_ok(r) by taut(hl)
-  have c1: !(fst(l).rip = t) && tr.rbd(s, l, r) -> tr.at_ret(s, x) proof
+  have c1: !tr.at_stop(s, t, fst(l)) && tr.rbd(s, l, r) -> tr.at_ret(s, x) proof
     assume hd
     show := apply(tr.rbd_last[s := s, l := l, r := r, x := x, e := e], (tr.rbd(s, l, r) by taut(hd)), nk, hm)
   qed
-  have c2: !!(fst(l).rip = t) && r = exc(l, pair("raise", exc_val("stop", empty))) -> tr.at_ret(s, x) proof
+  have c2: !!tr.at_stop(s, t, fst(l)) && r = exc(l, pair("raise", exc_val("stop", empty))) -> tr.at_ret(s, x) proof
     assume hd
     show by simp(expand(rewrite(hd.2, hm), tr.rmap))
   qed
@@ -224,14 +226,14 @@ qed
 
 theorem tr.run_s_k: all s t m o. tr.run_s(s, t, m, o) -> int_lt(m.gpr[4], abi.sp(s)) -> !(m.rip = t) ->
   (ex o1. tr.run_k(s, zb. zb.rip = t, m, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
-  (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && !tr.at_ret(s, x)) ||
-  (ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && x.rip = t)
+  (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && !tr.at_ret(s, x) && !(x.rip = t)) ||
+  (ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && x.rip = t && !tr.at_ret(s, x))
 proof
   fix s t m o
   assume h hlt hnt
   let G := (ex o1. tr.run_k(s, zb. zb.rip = t, m, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
-    (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && !tr.at_ret(s, x)) ||
-    (ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && x.rip = t)
+    (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && !tr.at_ret(s, x) && !(x.rip = t)) ||
+    (ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && x.rip = t && !tr.at_ret(s, x))
   let TR(x5) := fn_update(empty, "os.events", fst(x5).os.events)
   let P(l) := int_lt(fst(l).gpr[4], abi.sp(s)) && !(fst(l).rip = t)
   let E(l) := exc(pair(fst(l), empty), pair("brk", empty))
@@ -409,8 +411,9 @@ proof
         show by taut(un2, v00, v1, v2)
       qed
       // (at t: it stops)
-      have st1: fst(l).rip = t -> G proof
+      have st1: tr.at_stop(s, t, fst(l)) -> G proof
         assume ht
+        have ht1 ht2 := ht
         let O3 := exc(l, pair("raise", exc_val("stop", empty)))
         have bb: all o2. tr.rbs(s, t, l, o2) -> o2 = O3 proof
           fix o2
@@ -427,14 +430,21 @@ proof
         qed
         have rm := mp(all_elim(one, {O3}), bb, nok, (!(fst(O3) = 2) by simp()))
         have oe: o = exc(fst(l), exc_val("stop", empty)) by simp(expand(rm, tr.rmap))
-        have e4: ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && x.rip = t by ex_intro({fst(l)}, taut(oe, rn, ht))
+        have e4: ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && x.rip = t && !tr.at_ret(s, x)
+          by ex_intro({fst(l)}, taut(oe, rn, ht1, ht2))
         show by taut(e4)
       qed
-      // (off t: rsp has reached the sp -- at the return: it returns;
-      // elsewhere: disc)
-      have st2: !(fst(l).rip = t) -> G proof
+      // (off t, or at the return: rsp has reached the sp -- at the return:
+      // it returns; elsewhere: disc)
+      have st2: !tr.at_stop(s, t, fst(l)) -> G proof
         assume nt
-        have nlt: !int_lt(fst(l).gpr[4], abi.sp(s)) by taut(np, nt)
+        have lt1: fst(l).rip = t -> !int_lt(fst(l).gpr[4], abi.sp(s)) proof
+          assume e
+          have ar: tr.at_ret(s, fst(l)) by taut(nt, e)
+          have eq: fst(l).gpr[4] = abi.sp(s) by taut(ar)
+          show by arith(eq)
+        qed
+        have nlt: !int_lt(fst(l).gpr[4], abi.sp(s)) by taut(np, lt1)
         have at1: tr.at_ret(s, fst(l)) -> G proof
           assume at
           let O3 := exc(pair(fst(l), empty), pair("brk", empty))
@@ -472,7 +482,8 @@ proof
           qed
           have rm := mp(all_elim(one, {O3}), bb, nok, (!(fst(O3) = 2) by simp()))
           have oe: o = exc(fst(l), exc_val("disc", empty)) by simp(expand(rm, tr.rmap))
-          have e4: ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && !tr.at_ret(s, x) by ex_intro({fst(l)}, taut(oe, rn, nat))
+          have e4: ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, m, ok(x, empty)) && !tr.at_ret(s, x) && !(x.rip = t)
+            by ex_intro({fst(l)}, taut(oe, rn, nat, nt))
           show by taut(e4)
         qed
         show by taut(at1, at2)
@@ -488,14 +499,179 @@ proof
   show by taut(un, u0, u1, u2)
 qed
 
+// (a stop run's outcome tagged 2: a divergence)
+theorem tr.run_s_div: all s t m o. tr.run_s(s, t, m, o) -> fst(o) = 2 -> (ex t2. o = diverge(t2))
+proof
+  fix s t m o
+  assume h hf
+  obtain r, _ hm from expand(h, tr.run_s)
+  have c: fst(r) = 2 && o = diverge(snd(r)) by simp(expand(hm, tr.rmap), hf)
+  show by ex_intro({snd(r)}, taut(c))
+qed
+
+// ----------------------------------------------------------------------
+//  The contract with the stop from the claim at the entry (as tr.entry_d):
+//  the claim with the breakpoint rip = t, there the program left raising
+//  at main in a world that is a view of the machine (tr.at_t)
+
+def tr.at_t(zb, pb, wb) := ex w2 v2 mem2. abi.raise_state(w2) && runs(pb, wb, exc(w2, exc_val("at_main", empty))) && w2 = abi.view(zb, v2, mem2) &&
+  abi.view_ok(zb, v2, mem2)
+
+theorem tr.entry_s: all spec args s v mem o t. s in x86_64_linux.Machine -> int_lt(s.gpr[4], 140737488355328) -> !(s.rip = t) ->
+  tr.sim(s, zb. zb.rip = t, zb pb wb. tr.at_t(zb, pb, wb), v, spec[args], abi.view(s, v, mem), s) -> tr.run_s(s, t, s, o) ->
+  tr.matches_ts(spec, args, v, mem, s, o)
+proof
+  fix spec args s v mem o t
+  assume hM hsl hnt h rd
+  let P := spec[args]
+  let W := abi.view(s, v, mem)
+  have r4 := apply(x86i.rsp_typed, hM)
+  have lt := apply(tr.sp_lt, {s.gpr[4]}, r4, hsl)
+  have cr := all_elim(tr.crash_at, {spec}, {args}, {s}, {v}, {mem}, {o})
+  have ua := all_elim(tr.ub_at, {spec}, {args}, {s}, {v}, {mem})
+  have sm := expand(h, tr.sim)
+  // (a return reached: the spec's return, as the contract has it)
+  have rt: all m1. o = ok(m1, empty) -> tr.retok(s, v, P, W, m1) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+    fix m1
+    assume oe hr
+    have rx := expand(hr, tr.retok)
+    have e1: ex m2 w2. o = ok(m2, empty) && m2 in x86_64_linux.Machine && m2 in univ(1) &&
+        runs(spec[args], abi.view(s, v, mem), ok(w2, pair(m2.gpr[0], m2.gpr[2]))) && w2 in abi.World && w2 in univ(1) &&
+        abi.world_matches(s.vm, m2.vm, w2.vm, abi.wob(v, w2.objs.c_bytes), s.fs_base, abi.sp(s)) && m2.os = w2.os && m2.fs_base = s.fs_base &&
+        m2.cpu = s.cpu && m2.gs_base = s.gs_base && m2.rip = abi.ret(s) && m2.gpr[4] = abi.sp(s) &&
+        abi.callee_saved(m2, s) && !m2.flags.df proof
+      have ew: ex w3. runs(P, W, ok(w3, pair(m1.gpr[0], m1.gpr[2]))) && w3 in abi.World && w3 in univ(1) &&
+          abi.world_matches(s.vm, m1.vm, w3.vm, abi.wob(v, w3.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w3.os && m1.fs_base = s.fs_base by taut(rx)
+      obtain w3, h3 from ew
+      show by ex_intro({m1}, {w3}, taut(oe, rx, h3))
+    qed
+    show by defs(taut(e1), tr.matches_ts)
+  qed
+  have k1: tr.ub(s, v, P, W) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+    assume u
+    show by defs(taut(mp(ua, u)), tr.matches_ts)
+  qed
+  have rdk := apply(tr.run_s_k, {s}, {t}, {s}, {o}, rd, lt, hnt)
+  // the claim's run to the same outcome
+  have c1: (ex o1. tr.run_k(s, zb. zb.rip = t, s, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+    assume e
+    obtain o1, rk eo from e
+    have g := expand(mp(all_elim(sm, {o1}), rk), tr.gk)
+    have k2: tr.crash(s, P, W, o1) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+      assume c
+      obtain m1 a k0, {oe} from expand(c, tr.crash)
+      have nd: !(fst(o1) = 2) by simp(oe)
+      have oe: o1 = o by taut(eo, nd)
+      have c2 := rewrite(oe, c)
+      show by defs(taut(mp(cr, c2)), tr.matches_ts)
+    qed
+    have k3: tr.div(P, W, o1) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+      assume d
+      obtain t2, te from expand(d, tr.div).1
+      have f1: fst(o1) = 2 by simp(te)
+      have f0a: o1 = o -> fst(o) = 2 proof
+        assume e5
+        show := rewrite(e5, f1)
+      qed
+      have f0: fst(o) = 2 by taut(eo, f0a)
+      have ed := apply(tr.run_s_div, rd, f0)
+      have d2: tr.div(P, W, o) by defs(taut(ed, expand(d, tr.div).2), tr.div)
+      show by defs(taut(d2), tr.matches_ts)
+    qed
+    // (the claim's run stopping: the stop run returns there)
+    have k4: (ex m1. o1 = ok(m1, empty) && tr.arr(s, zb. zb.rip = t, zb pb wb. tr.at_t(zb, pb, wb), v, m1, P, W)) -> tr.matches_ts(spec, args, v, mem, s, o) proof
+      assume e2
+      obtain m1, oe1 ha from e2
+      have nd: !(fst(o1) = 2) by simp(oe1)
+      have oe0: o1 = o by taut(eo, nd)
+      have oe: o = ok(m1, empty) := trans(sym(oe0), oe1)
+      have at := apply(tr.run_s_ok, rewrite(oe, rd))
+      have ou: tr.out(s, m1) proof
+        have ne: int_lt(m1.gpr[4], abi.sp(s)) -> false proof
+          assume l2
+          have l3 := rewrite(at.2, l2)
+          show by arith(l3)
+        qed
+        show by taut(ne)
+      qed
+      have hr := mp(expand(ha, tr.arr).1, ou)
+      show := mp(all_elim(rt, {m1}), oe, hr)
+    qed
+    show by taut(g, k1, k2, k3, k4)
+  qed
+  // the claim's run stopping where the stop run leaves with disc: undefined
+  have c2: (ex x. o = exc(x, exc_val("disc", empty)) && tr.run_k(s, zb. zb.rip = t, s, ok(x, empty)) && !tr.at_ret(s, x) && !(x.rip = t)) ->
+      tr.matches_ts(spec, args, v, mem, s, o) proof
+    assume e
+    obtain x, oe rk nat nxt from e
+    have g := expand(mp(all_elim(sm, {ok(x, empty)}), rk), tr.gk)
+    have k2: tr.crash(s, P, W, ok(x, empty)) -> false proof
+      assume c
+      obtain m1 a k0, {oe} from expand(c, tr.crash)
+      show by simp(oe)
+    qed
+    have k3 := all_elim(tr.div_ok, {P}, {W}, {x}, {empty})
+    have k4: (ex m1. ok(x, empty) = ok(m1, empty) && tr.arr(s, zb. zb.rip = t, zb pb wb. tr.at_t(zb, pb, wb), v, m1, P, W)) -> false proof
+      assume e2
+      obtain m1, oe1 ha from e2
+      have me: m1 = x by simp(oe1)
+      have st := apply(tr.run_k_stop[bkp := zb. zb.rip = t], {s}, {s}, {x}, {empty}, rk)
+      have ou: tr.out(s, x) by taut(expand(st, tr.stopk), nxt)
+      have ha2 := rewrite(me, ha)
+      have rx := expand(mp(expand(ha2, tr.arr).1, ou), tr.retok)
+      have at: tr.at_ret(s, x) by taut(rx)
+      show by taut(at, nat)
+    qed
+    show by taut(g, k1, k2, k3, k4)
+  qed
+  // the stop: the claim's run stops at t, the program raising at main there
+  have c3: (ex x. o = exc(x, exc_val("stop", empty)) && tr.run_k(s, zb. zb.rip = t, s, ok(x, empty)) && x.rip = t && !tr.at_ret(s, x)) ->
+      tr.matches_ts(spec, args, v, mem, s, o) proof
+    assume e
+    obtain x, oe rk xt xnr from e
+    have g := expand(mp(all_elim(sm, {ok(x, empty)}), rk), tr.gk)
+    have k2: tr.crash(s, P, W, ok(x, empty)) -> false proof
+      assume c
+      obtain m1 a k0, {oe2 = oe} from expand(c, tr.crash)
+      show by simp(oe2)
+    qed
+    have k3 := all_elim(tr.div_ok, {P}, {W}, {x}, {empty})
+    have k4: (ex m1. ok(x, empty) = ok(m1, empty) && tr.arr(s, zb. zb.rip = t, zb pb wb. tr.at_t(zb, pb, wb), v, m1, P, W)) ->
+        tr.matches_ts(spec, args, v, mem, s, o) proof
+      assume e2
+      obtain m1, oe1 ha from e2
+      have me: m1 = x by simp(oe1)
+      have ha2 := rewrite(me, ha)
+      have ar2 := expand(ha2, tr.arr).2
+      // (at t, below the sp: the breakpoint's relation)
+      have no: !tr.out(s, x) proof
+        have ou: tr.out(s, x) -> false proof
+          assume ou
+          have rx := expand(mp(expand(ha2, tr.arr).1, ou), tr.retok)
+          have at: tr.at_ret(s, x) by taut(rx)
+          show by taut(at, xnr)
+        qed
+        show by taut(ou)
+      qed
+      obtain p2 w2, rd2 att from mp(ar2, no, xt)
+      obtain w3 v3 mem3, rs3 ru3 we3 vo3 from expand(att, tr.at_t)
+      have ru := mp(all_elim(expand(rd2, tr.red), {exc(w3, exc_val("at_main", empty))}), ru3)
+      have st: tr.stop_t(spec, args, v, mem, s, o) by defs(ex_intro({x}, {w3}, {v3}, {mem3}, taut(oe, rs3, ru, we3, vo3)), tr.stop_t)
+      show by defs(taut(st), tr.matches_ts)
+    qed
+    show by taut(g, k1, k2, k3, k4)
+  qed
+  show by taut(rdk, c1, c2, c3)
+qed
+
 // ----------------------------------------------------------------------
 //  The function at t (main): entered, the run stops
 
 // (a run from t stops there at once)
-theorem tr.run_s_at: all s t m o. m.rip = t -> tr.run_s(s, t, m, o) -> o = exc(m, exc_val("stop", empty))
+theorem tr.run_s_at: all s t m o. m.rip = t -> !tr.at_ret(s, m) -> tr.run_s(s, t, m, o) -> o = exc(m, exc_val("stop", empty))
 proof
   fix s t m o
-  assume hr h
+  assume hr hna h
   obtain r, hw hm from expand(h, tr.run_s)
   have u := mp(while_unroll[l0 := pair(m, empty), c := x5. true, b := x5 x6. tr.rbs(s, t, x5, x6), tr := x5. fn_update(empty, "os.events", fst(x5).os.events), r := r],
     expand(hw, tr.rws))
@@ -503,7 +679,8 @@ proof
   have st: all o2. tr.rbs(s, t, pair(m, empty), o2) -> o2 = exc(pair(m, empty), pair("raise", exc_val("stop", empty))) proof
     fix o2
     assume b
-    show by simp(expand(b, tr.rbs), hr)
+    have fe: fst(pair(m, empty)) = m by simp()
+    show by taut(rewrite(fe, expand(b, tr.rbs)), hr, hna)
   qed
   have c2: tr.rbs(s, t, pair(m, empty), r) -> o = exc(m, exc_val("stop", empty)) proof
     assume b
@@ -534,7 +711,14 @@ proof
       s.rip = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_s(s, f, s, o) -> tr.matches_ts(spec, args, objs, mem, s, o) proof
     fix args objs mem s o
     assume hA _ _ hM _ _ hrip _ _ hwm hr
-    have oe := apply(tr.run_s_at[s := s, t := f, m := s, o := o], hrip, hr)
+    // (the entry not at its return: rsp + 8 is not rsp)
+    have r4 := apply(x86i.rsp_typed, hM)
+    have ne: s.gpr[4] = abi.sp(s) -> false proof
+      assume e
+      show by defs(arith(e, r4), bits_add, pow2)
+    qed
+    have na: !tr.at_ret(s, s) by taut(ne)
+    have oe := apply(tr.run_s_at[s := s, t := f, m := s, o := o], hrip, na, hr)
     have c := mp(all_elim(hsp, {args}, {objs}, {mem}, {s}), hA, hM, hwm)
     have c2: abi.raise_state(abi.view(s, objs, mem)) && runs(spec[args], abi.view(s, objs, mem), exc(abi.view(s, objs, mem), exc_val("at_main", empty))) ->
         tr.stop_t(spec, args, objs, mem, s, o) proof
