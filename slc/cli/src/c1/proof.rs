@@ -1064,7 +1064,15 @@ impl<'e> Gen<'e> {
             None => {
                 let imp = if stk { "tr.implements_at_s" } else if aligned { "tr.implements_at" } else { "tr.implements_at_u" };
                 let (lb, lc, statics) = (self.lbase.clone(), self.lcode.clone(), self.statics_t.clone());
-                let hc = self.mk(imp, vec![lit(fa), g.clone(), lb, lc, statics]);
+                // (stopping at t: the callee's contract with the stop at t, as
+                // the caller's -- k)
+                let hc = match self.stop {
+                    Some((tt, k)) if !stk => {
+                        let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+                        self.mk(if aligned { "tr.implements_stop" } else { "tr.implements_stop_u" }, vec![lit(fa), g.clone(), lit(tt), kt, lb, lc, statics])
+                    }
+                    _ => self.mk(imp, vec![lit(fa), g.clone(), lb, lc, statics]),
+                };
                 let dom = if stk { self.mk("list_type", vec![self.mk("bits", vec![lit(64)])]) } else { self.mk("abi.ARGS", vec![]) };
                 let ht = self.mk("in", vec![g.clone(), self.mk("fn_space", vec![dom, self.mk("powerset", vec![self.mk("univ", vec![lit(1)])])])]);
                 let hi = self.mk(if stk { "tr.callee_io_s" } else { "tr.callee_io" }, vec![g.clone(), lit(nargs as u128)]);
@@ -1081,13 +1089,14 @@ impl<'e> Gen<'e> {
         }
         let (hcall, htyp, hio) = (self.hcall[gi].clone().unwrap(), self.htyp[gi].clone().unwrap(), self.hio[gi].clone().unwrap());
         // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
+        let ccname = if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
         let hcon = if stk {
             p(R::S(hcall.clone()))
         } else if aligned {
             let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
-            defs(RP::Taut(vec![R::S(hcall), R::S(fr16)]), &["tr.callee_contract"])
+            defs(RP::Taut(vec![R::S(hcall), R::S(fr16)]), &[ccname])
         } else {
-            defs(RP::Taut(vec![R::S(hcall)]), &["tr.callee_contract"])
+            defs(RP::Taut(vec![R::S(hcall)]), &[ccname])
         };
         let w = st.w.clone();
         let hv = st.hvu.clone();
@@ -1257,8 +1266,95 @@ impl<'e> Gen<'e> {
                 &[],
             );
         }
+        let rname = match (self.stop.is_some(), one) {
+            (false, true) => "tr.call1",
+            (false, false) => "tr.call",
+            (true, true) => "tr.call1_st",
+            (true, false) => "tr.call_st",
+        };
+        let mut binds = vec![
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("a", lit(a)),
+                ("a2", lit(a2)),
+                ("len", lit(insn.len)),
+                ("off", lit(off)),
+                ("f", lit(fa)),
+                ("g", g.clone()),
+                ("args", list.clone()),
+                ("n", lit(nargs as u128)),
+                ("cb", self.lbase.clone()),
+                ("cc", self.lcode.clone()),
+                ("st", self.statics_var()),
+                ("hs", st.hst.clone()),
+                ("ds", st.ds.clone()),
+                ("fd2", lit(fd2)),
+                ("rs", st.rs.clone()),
+                ("rc", self.regs_map(&rc)),
+                ("w", w.clone()),
+                ("ka", al.clone()),
+                ("xx", xl.clone()),
+                ("dd", dl.clone()),
+                ("k", kl.clone()),
+                ("kw", self.kw3()),
+        ];
+        // (stopping at t: t's states breakpoints, the callee's below the
+        // frame none else, the relation at a stop the caller's)
+        let stop_tail = match self.stop {
+            Some((tt, k)) => {
+                let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+                binds.extend([("t", lit(tt)), ("ks", kt.clone()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())]);
+                let hat = if k { super::rec::p(R::Inst("tr.hat_top".into(), vec![])) } else { super::rec::p(R::Inst("tr.hat_none".into(), vec![("bka", self.bka.clone())])) };
+                Some(vec![simp0(), self.tbp_below(&self.bkp.clone(), st.fr, tt), hat])
+            }
+            None => None,
+        };
+        if let Some(tail) = stop_tail {
+            let inst = R::Inst(rname.into(), binds);
+            let hl = self.hl.clone().unwrap();
+            let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
+            let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
+            let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
+            let pre = if one { vec![ha, ho] } else { vec![ho, ha] };
+            return self.run(
+                &mp(
+                    inst,
+                    [pre, vec![
+                        p(f(&insn.name)),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        simp_l(),
+                        hcon,
+                        simp0(),
+                        hal,
+                        s(&hl),
+                        simp0(),
+                        cfr,
+                        simp0(),
+                        simp0(),
+                        simp0(),
+                        s(&htyp),
+                        s(&hio),
+                        p(hreg),
+                        p(self.cs_sub_pf(&rc, &st.rs)),
+                        p(hin),
+                        simp0(),
+                        simp0(),
+                        s(&hk),
+                        s(&hd),
+                        s(&pc),
+                    ], tail]
+                    .concat(),
+                ),
+                &[],
+            );
+        }
         let inst = R::Inst(
-            if one { "tr.call1" } else { "tr.call" }.into(),
+            rname.into(),
             vec![
                 ("s", self.s.clone()),
                 ("v", self.v.clone()),
@@ -1574,6 +1670,32 @@ impl<'e> Gen<'e> {
         let rest = self.prove_kept(st2)?;
         let wr = self.wred(&st, jk, j2);
         self.run(&mp(wr, vec![s(&rs), s(&rest)]), &[])
+    }
+
+    /// stopping at t: the callee's states (below the frame) breakpoints of
+    /// bkp only at t (a loop's head, a cut point: not below the frame)
+    fn tbp_below(&self, bkp: &Term, frc: u128, tt: u128) -> RA {
+        let hd = (|| {
+            let o = self.app(bkp, "or", 2)?;
+            let e = self.app(&o[0], "eq", 2)?;
+            let z = self.app(&e[0], "tr.hd", 1)?;
+            matches!(z[0].node(), Node::BVar(0)).then_some(())?;
+            let pr = self.app(&e[1], "pair", 2)?;
+            Some((pr[0].clone(), pr[1].clone(), o[1].clone()))
+        })();
+        let cut = (|| {
+            let o = self.app(bkp, "or", 2)?;
+            let c = self.app(&o[0], "tr.cut", 4)?;
+            matches!(c[3].node(), Node::BVar(0)).then_some(())?;
+            Some((c[0].clone(), c[1].clone(), c[2].clone(), o[1].clone()))
+        })();
+        if let Some((s0, fr, ct, outer)) = cut {
+            return p(R::Mp(Box::new(R::Inst("tr.tbp_cut".into(), vec![("s", s0), ("fr", fr), ("ct", ct), ("bkp", outer.clone()), ("t", lit(tt))])), vec![self.tbp_below(&outer, frc, tt)]));
+        }
+        match hd {
+            Some((h, x, outer)) => p(R::Mp(Box::new(R::Inst("tr.tbp_hd".into(), vec![("bkp", outer.clone()), ("t", lit(tt))])), vec![t(&x), t(&h), self.tbp_below(&outer, frc, tt)])),
+            None => simp0(),
+        }
     }
 
     /// the callee's states (below the frame) no breakpoints of bkp: a

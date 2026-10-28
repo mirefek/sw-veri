@@ -344,6 +344,10 @@ struct Gen<'e> {
     /// instance takes them
     bkp: Term,
     bka: Term,
+    /// `stop T` / `nostop T`: the runs stopping at rip = T, the stop
+    /// allowed (k) or not -- the claim's breakpoints `rip = T`, its
+    /// relation there `k && tr.at_t`
+    stop: Option<(u128, bool)>,
     /// the loop whose iteration is being walked (its head the breakpoint)
     lpg: Option<LoopG>,
     /// the readable CFG's guide (cfg.rs): each block's live locals, the
@@ -979,8 +983,8 @@ impl syntax::Prover for Checker {
         sl_proof::ScriptProver.prove(env, req)
     }
 
-    fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
-        c1(env, fname, spec, prefix, hints).map_err(sl_kernel::KernelError)
+    fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str, stop: Option<(u128, bool)>, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
+        c1(env, fname, spec, prefix, stop, hints).map_err(sl_kernel::KernelError)
     }
 
     fn refines(&mut self, env: &mut Env, name: &str, low: &str, high: &str) -> sl_kernel::KResult<Seq> {

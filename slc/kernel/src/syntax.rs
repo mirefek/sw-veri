@@ -550,7 +550,9 @@ pub trait Prover {
     /// `PREFIX.*`, proven by a procedure (the facts L its hints). Not
     /// trusted either: sequents made by the kernel's rules, each recorded
     /// only without hypotheses.
-    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
+    /// `stop T` / `nostop T`: the runs stopping at rip = T (main's entry),
+    /// the stop allowed (the contract tr.implements_stop with k) or not.
+    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str, _stop: Option<(u128, bool)>, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
         Err(KernelError("`c1`: this checker has no C1 engine".into()))
     }
 
@@ -854,6 +856,18 @@ fn load_mode(
                 } else {
                     (p.ident()?, None, None)
                 };
+                // (c1's `stop T` / `nostop T`)
+                let mut stop = None;
+                if let Tok::Ident(s) = &p.tok {
+                    if kw == "c1" && (s == "stop" || s == "nostop") {
+                        let k = s == "stop";
+                        p.bump()?;
+                        let Tok::Num(n) = &p.tok else { return p.error("`stop T`: an address expected") };
+                        let Some(t) = n.to_u128() else { return p.error("`stop T`: the address too large") };
+                        p.bump()?;
+                        stop = Some((t, k));
+                    }
+                }
                 let mut hints = Vec::new();
                 if matches!(&p.tok, Tok::Ident(s) if s == "using") {
                     p.bump()?;
@@ -874,7 +888,7 @@ fn load_mode(
                 // global ones, the rest dropped after it)
                 let mark = p.env.local_mark();
                 p.env.begin_locals();
-                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, c1p.as_deref(), call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, &hints) };
+                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, c1p.as_deref(), call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, stop, &hints) };
                 let r = r.and_then(|ths| {
                     ths.into_iter().map(|(n, sq)| Seq::globalize(p.env, &sq).map(|g| (n, g))).collect::<KResult<Vec<_>>>()
                 });

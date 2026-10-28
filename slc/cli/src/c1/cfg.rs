@@ -554,7 +554,12 @@ impl<'e> Gen<'e> {
             let h = hyp.get(&k).ok_or_else(|| format!("the CFG: label {} not reached", k))?;
             g.evp(&RP::Simp(false, vec![R::S(h.1.clone())], vec![], false), goal, &[])
         })?;
-        let p4 = self.evp(&RP::Simp(false, vec![], vec![], false), &prems[3], &[])?;
+        // (no cut point a breakpoint: each label's address, by its equation)
+        let nb_body = under(self, &prems[3]).ok_or_else(|| bad("its no-breakpoint premise"))?;
+        let p4 = gather(self, &nb_body, &|g, k, goal| {
+            let h = hyp.get(&k).ok_or_else(|| format!("the CFG: label {} not reached", k))?;
+            g.evp(&RP::Simp(false, vec![R::S(h.1.clone())], vec![], false), goal, &[])
+        })?;
         // (started within the first block: the start's claim, the rule at
         // st itself)
         if let (Some((hu, _)), Some(sw)) = (&start_h, &sw) {

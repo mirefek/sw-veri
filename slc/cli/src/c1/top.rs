@@ -37,7 +37,7 @@ fn decode_fact(env: &Env, name: &str, t: &Term) -> Option<(u128, Insn)> {
 
 /// The C1 theorems of the function `fname` (its decode facts `fname.at_*`)
 /// against the spec `spec_name` (a `_fun` wrapper), named `prefix.*`.
-pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[String]) -> Result<Vec<(String, Seq)>, String> {
+pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, stop: Option<(u128, bool)>, hints: &[String]) -> Result<Vec<(String, Seq)>, String> {
     let _rep = super::prof::Rep(fname.to_string());
     let _p = super::prof::g("c1");
     // the decode facts
@@ -75,6 +75,13 @@ pub fn c1(env: &mut Env, fname: &str, spec_name: &str, prefix: &str, hints: &[St
     // (the hints: proven facts)
     let hint_seqs: Vec<Seq> = hints.iter().map(|h| sl_kernel::ext::facts::seq_of(env, h).ok_or_else(|| format!("no fact `{}` (a hint)", h))).collect::<Result<_, _>>()?;
     let mut g = Gen::new(env, insns, base_t, code_t, prefix, fname, hint_seqs)?;
+    if let Some((t, k)) = stop {
+        // (the breakpoints zb. zb.rip = t; the relation zb pb wb. k && tr.at_t(zb, pb, wb))
+        g.stop = stop;
+        g.bkp = g.mk("eq", vec![g.mk("app", vec![Term::bvar(0), Term::bytes(b"rip")]), lit(t)]);
+        let kt = g.mk(if k { "true" } else { "false" }, vec![]);
+        g.bka = g.mk("and", vec![kt, g.mk("tr.at_t", vec![Term::bvar(2), Term::bvar(1), Term::bvar(0)])]);
+    }
     g.top(fname, spec_name, ssym, sbody, sparams, entry)
 }
 
@@ -153,6 +160,7 @@ impl<'e> Gen<'e> {
             ambient: Vec::new(),
             bkp: no_bk.clone(),
             bka: no_bk,
+            stop: None,
             lpg: None,
             cfg_meta: None,
             cfg_start: 0,
@@ -672,6 +680,53 @@ impl<'e> Gen<'e> {
                     ],
                 );
                 self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
+            } else if let Some((tt, k)) = self.stop {
+                // (stopping at t: the claim at the entry with its breakpoints,
+                // tr.entry_nk; the contract with the stop, tr.entry_gk by
+                // tr.fin_k, tr.ub_k)
+                let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+                let inst = R::Inst(
+                    "tr.entry_nk".into(),
+                    vec![
+                        ("lb", lb.clone()),
+                        ("lc", lc.clone()),
+                        ("base", b.clone()),
+                        ("code", c.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("n", lit(nargs)),
+                        ("fd", lit(fd)),
+                        ("rs", rsl),
+                        ("q", ql.clone()),
+                        ("kw", kwl.clone()),
+                        ("E", e_lam.clone()),
+                        ("B", self.bkp.clone()),
+                        ("A", self.bka.clone()),
+                    ],
+                );
+                let hpro = self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e.clone(), s_(&hregs), s_(&body_in), simp0()]), &[])?;
+                let run_l = self.mk("tr.run_s", vec![Term::bvar(1), lit(tt), Term::bvar(1), Term::bvar(0)]);
+                let match_l = self.mk("tr.matches_tk", vec![Term::bvar(5), Term::bvar(4), Term::bvar(3), Term::bvar(2), Term::bvar(1), Term::bvar(0), kt.clone()]);
+                let gk = R::Inst(
+                    "tr.entry_gk".into(),
+                    vec![
+                        ("base", lb.clone()),
+                        ("code", lc.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("n", lit(nargs)),
+                        ("q", ql),
+                        ("kw", kwl),
+                        ("E", e_lam.clone()),
+                        ("B", self.bkp.clone()),
+                        ("A", self.bka.clone()),
+                        ("RUN", run_l),
+                        ("MATCH", match_l),
+                    ],
+                );
+                let fin = mpf("tr.fin_k", vec![t(&lit(tt)), t(&b), t(&kt), simp0()]);
+                let ub = super::rec::p(R::Inst("tr.ub_k".into(), vec![("k", kt.clone())]));
+                self.run(&mp(gk, vec![super::rec::p(fin), ub, h_e, s_(&hpro)]), &[])?
             } else {
             let inst = R::Inst(
                 "tr.entry_n".into(),
@@ -751,9 +806,52 @@ impl<'e> Gen<'e> {
             self.callee_effects(&p, ssym, &cns, &mut out)?;
             return Ok(out);
         }
-        // m: all args objs mem s o. .. -> tr.matches_t(spec, args, objs, mem, s, o), the spec unfolded
         // (the ABI's entry, or any alignment's)
         let ent = if aligned { "abi.entry_ok" } else { "tr.entry_ok_u" };
+        // (stopping at t: the contract with the stop, k; never stopping, the
+        // contract too)
+        if let Some((tt, k)) = self.stop {
+            let kp = if k { "true" } else { "false" };
+            let m_goal = self.parse(&format!(
+                "all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> \
+                 abi.loaded(app(s, \"vm\"), {lbp}, {lcp}, statics) -> app(s, \"rip\") = {bp} -> {ent}(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_s(s, {tt}, s, o) -> \
+                 tr.matches_tk({sp}, args, objs, mem, s, o, {kp})",
+                lbp = self.print(&lb),
+                lcp = self.print(&lc),
+                bp = self.print(&b),
+                sp = self.print(&spec_app)
+            ))?;
+            let m = self.evp(&RP::Defs(Box::new(RP::By(R::S(m0))), vec![spec_name.to_string()]), &m_goal, &[])?;
+            let kt = self.mk(kp, vec![]);
+            let gname = if aligned { "tr.implements_stop" } else { "tr.implements_stop_u" };
+            let imp_goal = self.mk(gname, vec![b.clone(), spec_app.clone(), lit(tt), kt, lb.clone(), lc.clone(), statics.clone()]);
+            let imps = self.evp(&RP::Defs(Box::new(RP::By(R::S(m))), vec![gname.into()]), &imp_goal, &[])?;
+            out.push((format!("{p}.{}", gname.trim_start_matches("tr.")), self.close(imps.clone(), &cprem, &gvs)?));
+            if k {
+                self.callee_effects(&p, ssym, &cns, &mut out)?;
+                return Ok(out);
+            }
+            // (never stopping: the contract)
+            let imp_in = if aligned {
+                self.run(&R::Apply(Box::new(f("tr.implements_ns_at")), vec![s_(&imps)]), &[])?
+            } else {
+                let impu_in = self.run(&R::Apply(Box::new(f("tr.implements_ns_at_u")), vec![s_(&imps)]), &[])?;
+                out.push((format!("{p}.implements_u"), self.close(impu_in.clone(), &cprem, &gvs)?));
+                self.run(&R::Apply(Box::new(f("tr.implements_u")), vec![s_(&impu_in)]), &[])?
+            };
+            let imp = self.close(imp_in.clone(), &cprem, &gvs)?;
+            out.push((format!("{p}.implements"), imp));
+            let dr_t = self.mk("tr.div_raises", vec![spec_app.clone()]);
+            let dr = self.assume(&dr_t)?;
+            let abi_in = self.run(&R::Apply(Box::new(f("tr.implements_abi")), vec![s_(&dr), s_(&imp_in)]), &[])?;
+            let mut aprem = cprem.clone();
+            aprem.push(dr_t);
+            let abi = self.close(abi_in, &aprem, &gvs)?;
+            out.push((format!("{p}.implements_abi"), abi));
+            self.callee_effects(&p, ssym, &cns, &mut out)?;
+            return Ok(out);
+        }
+        // m: all args objs mem s o. .. -> tr.matches_t(spec, args, objs, mem, s, o), the spec unfolded
         let m_goal = self.parse(&format!(
             "all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> \
              abi.loaded(app(s, \"vm\"), {lbp}, {lcp}, statics) -> app(s, \"rip\") = {bp} -> {ent}(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_d(s, s, o) -> \
