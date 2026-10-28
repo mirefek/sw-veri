@@ -755,6 +755,34 @@ impl<'e> Gen<'e> {
             let (r, _) = self.cs_entry_regs(&s2, &ss)?;
             let hregs = self.close(r, &[hs2], &[Self::var_id(&s2)])?;
             let rsl = self.abs(&rs_lam, &[Self::var_id(&s)]);
+            // (stopping at t: tr.entry0k, by tr.fin_k)
+            if let (Some((tt, k)), None) = (self.stop, &plain) {
+                let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+                let run_l = self.mk("tr.run_s", vec![Term::bvar(1), lit(tt), Term::bvar(1), Term::bvar(0)]);
+                let match_l = self.mk("tr.matches_tk", vec![Term::bvar(5), Term::bvar(4), Term::bvar(3), Term::bvar(2), Term::bvar(1), Term::bvar(0), kt.clone()]);
+                let inst = R::Inst(
+                    "tr.entry0k".into(),
+                    vec![
+                        ("lb", lb.clone()),
+                        ("lc", lc.clone()),
+                        ("base", b.clone()),
+                        ("code", c.clone()),
+                        ("statics", statics.clone()),
+                        ("f", b.clone()),
+                        ("fd", lit(fd)),
+                        ("rs", rsl),
+                        ("q", q0raw.clone()),
+                        ("kw", kwl),
+                        ("E", e_lam.clone()),
+                        ("B", self.bkp.clone()),
+                        ("A", self.bka.clone()),
+                        ("RUN", run_l),
+                        ("MATCH", match_l),
+                    ],
+                );
+                let fin = mpf("tr.fin_k", vec![t(&lit(tt)), t(&b), t(&kt), simp0()]);
+                self.run(&mp(inst, vec![super::rec::p(fin), simp0(), simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
+            } else {
             let inst = match &plain {
                 Some(pp) => R::Inst(
                     "tr.entry0p".into(),
@@ -789,6 +817,7 @@ impl<'e> Gen<'e> {
                 ),
             };
             self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in)]), &[])?
+            }
         };
         let _ = rs_args;
         // (stack arguments: for any stk long enough, tr.implements_at_s)

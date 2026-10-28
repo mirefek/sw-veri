@@ -2515,7 +2515,20 @@ impl<'e> Gen<'e> {
                 if let (Some(8), Some((0, g))) = (nat(&x[0]), self.tag(&x[1])) {
                     let gn = reg(&g)?;
                     let k = nat(&x[3]).ok_or_else(|| bad("an immediate that is not a literal"))?;
-                    let (kk, hkk) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), lit(k)]))?;
+                    // (a static's address: the spec's constant, as for lea)
+                    let kv = if k >= 1 << 31 { k + (P64 - (1 << 32)) } else { k };
+                    let q = match &st.spec {
+                        Spec::Proc(i) | Spec::Plain(i) => self.qs[*i].clone(),
+                        Spec::Ret(v, _) => v.clone(),
+                    };
+                    let mut found = None;
+                    if kv >= 0x400000 {
+                        self.statics(&q, kv, &mut found);
+                    }
+                    let (kk, hkk) = match found {
+                        Some(c) => (c, simp0()),
+                        None => self.result(&self.mk("bits_sext", vec![lit(32), lit(64), lit(k)]))?,
+                    };
                     let tr = self.step("mov64_simm", a, insn, &[&g, &x[2], &x[3], &kk], self.tail(st, insn, 3, vec![hkk]));
                     self.scratch.insert(gn);
                     let st2 = self.set_reg(st, a2, gn, 8, kk);

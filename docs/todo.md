@@ -151,11 +151,11 @@ The binary as linked (gcc's crtbegin included). The steps:
   (tr.loop_cut, tr.cfg_lvk: the relation `(cut && inv) || (bkp && bka)`,
   bka closed under the same exceptions, tr.exc_closed); the rest after a
   call never returning (tr.q_some_e, tr.raise0_ub). C1 in the stop mode:
-  `_start_c`, `__libc_start_main`, `libc_start_main_stage2`
-  (proofs/mallocng/machine/c1_start.core).
+  `_start_c`, `__libc_start_main`, `libc_start_main_stage2`,
+  `__libc_start_init` (its init_array loop; proofs/mallocng/machine/c1_start.core).
   Left: contract.rs linking the stop contracts (an aligned call's from
   the callee's _u contract; k false's into k true's); the entry variants
-  besides tr.entry_n (entry0, entry_np, entry0p) generic like it.
+  entry_np, entry0p generic like tr.entry_n, tr.entry0.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the

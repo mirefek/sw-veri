@@ -51,6 +51,13 @@ fn byte_eq(k: usize, v: u8) -> String {
 /// files): its name and symbol -- an assembly function without its size
 /// (`.size`, e.g. musl's memcpy) up to the next symbol
 fn function<'a>(elf: &'a Elf, s: &'a str) -> R<(&'a str, sl_interp::elf::Symbol)> {
+    // (`name:len`: a symbol without its size, its bytes given -- crti's
+    // `_init`, its section's end before the next symbol)
+    if let Some((n, l)) = s.split_once(':') {
+        let len: u64 = l.parse().map_err(|e| format!("{}: {}", s, e))?;
+        let sym = elf.symbol(n).ok_or_else(|| format!("no symbol `{}`", n))?;
+        return Ok((n, sl_interp::elf::Symbol { name: sym.name.clone(), value: sym.value, size: len }));
+    }
     let (name, sym) = match s.split_once('=') {
         Some((alias, a)) => {
             let addr = u64::from_str_radix(a.trim_start_matches("0x"), 16).map_err(|e| format!("{}: {}", s, e))?;

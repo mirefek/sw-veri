@@ -45,6 +45,9 @@ SOURCES = [
     ("src/internal/syscall_ret.c", "build/gimple-O0/sl/c_syscall_ret.sl", "c_src_internal_syscall_ret"),
     ("src/mman/mprotect.c", "build/gimple-O0/sl/c_mman_mprotect.sl", "c_src_mman_mprotect"),
     ("src/mman/mmap.c", "build/gimple-O0/sl/c_mman_mmap.sl", "c_src_mman_mmap"),
+    # the startup code on the path to main
+    ("crt/crt1.c", "build/gimple-O0/sl/c_crt1.sl", "c_crt_crt1"),
+    ("src/env/__libc_start_main.c", "build/gimple-O0/sl/c_libc_start_main.sl", "c_src_env___libc_start_main"),
 ]
 P64 = 1 << 64
 
