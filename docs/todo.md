@@ -133,14 +133,13 @@ The binary as linked (gcc's crtbegin included). The steps:
   spec never raising at main), the contract from the claim at the entry
   (tr.entry_s: breakpoint rip = t, relation tr.at_t), the call split
   (tr.run_split_ks); at_main no undefined behaviour in the bridge.
-  Left: the call rule in the stop form (as tr.callee_sim: the callee's
-  stop contract, its stop the caller's breakpoint with tr.at_t); the call
-  of main itself: the caller's run stops at the callee's entry, the claim
-  there tr.at_t (no contract for main); indirect calls through a code map
-  `fptr` (main -> main's spec raising at_main under its precondition;
-  the init_array's and stage2's entries; elsewhere undefined); the
-  engine's stop mode (its breakpoints and relation with t's, the stop
-  call rules).
+  proofs/translate_stop_call.core: the call rule (tr.callee_sim_s), the
+  call of main itself (tr.call_main: the claim at its entry tr.at_t, the
+  spec tr.raises_main), calls through the code map `fptr`
+  (tr.code_ok, tr.callee_ind_s; an undefined entry holds any contract,
+  tr.undef_contract_s).
+  Left: the engine's stop mode (its breakpoints and relation with t's,
+  the stop call rules, `call *%reg` against `call(fptr[p], ..)`).
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
