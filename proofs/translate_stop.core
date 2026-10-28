@@ -669,6 +669,356 @@ proof
 qed
 
 // ----------------------------------------------------------------------
+//  A call in the stop form (as tr.run_split_k): the caller's run, its
+//  breakpoints and t, from the callee's entry c
+
+// (a stop run's outcome tagged 2: a divergence, by its loop)
+theorem tr.rws_div: all c t l r. while_rel(l, x5. true, x5 x6. tr.rbs(c, t, x5, x6), x5. fn_update(empty, "os.events", fst(x5).os.events), r) -> fst(r) = 2 ->
+  ex t0. r = diverge(t0)
+proof
+  fix c t l r
+  assume hw d
+  have cs := mp(while_cases[l0 := l, c := x5. true, b := x5 x6. tr.rbs(c, t, x5, x6), tr := x5. fn_update(empty, "os.events", fst(x5).os.events), r := r], hw)
+  have b: (ex l2. (!true && r = ok(l2, empty)) || (true && tr.rbs(c, t, l2, r) && !is_ok(r))) -> ex t0. r = diverge(t0) proof
+    assume e
+    obtain l2, hl from e
+    have hb: tr.rbs(c, t, l2, r) by taut(hl)
+    show by simp(expand(hb, tr.rbs, tr.rbd, tr.rb, bind_rel), d, keep(x86_64_linux.step))
+  qed
+  show by taut(cs, b)
+qed
+
+def tr.at_stop_d(s, t, x) := tr.at_stop(s, t, x)
+
+// The callee's stop run (to some outcome of the same kind), or the callee
+// returns to x and the caller's passes go on from x, or the callee leaves
+// its discipline, or it stops at x -- where the caller's run stops, its
+// breakpoint (the callee's sp at most the caller's, no breakpoint of the
+// caller below it but t)
+theorem tr.run_split_ks(zb. bkp): all s c t o. s in x86_64_linux.Machine -> int_le(abi.sp(c), abi.sp(s)) -> int_lt(c.gpr[4], abi.sp(c)) -> !(c.rip = t) ->
+  (all z. int_lt(z.gpr[4], abi.sp(c)) -> !bkp(z)) -> tr.run_k(s, zb. bkp(zb) || zb.rip = t, c, o) ->
+  (ex o1. tr.run_s(c, t, c, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
+  (ex x r1 o1. tr.run_s(c, t, c, ok(x, empty)) && tr.rwk(s, zb. bkp(zb) || zb.rip = t, pair(x, empty), r1) && tr.rmap(r1, o1) &&
+    (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
+  (ex x. tr.run_s(c, t, c, exc(x, exc_val("disc", empty)))) ||
+  (ex x. tr.run_s(c, t, c, exc(x, exc_val("stop", empty))) && o = ok(x, empty))
+proof
+  fix s c t o
+  assume hM hsp hcl hct hbx hr
+  let G := (ex o1. tr.run_s(c, t, c, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
+    (ex x r1 o1. tr.run_s(c, t, c, ok(x, empty)) && tr.rwk(s, zb. bkp(zb) || zb.rip = t, pair(x, empty), r1) && tr.rmap(r1, o1) &&
+      (o1 = o || (fst(o1) = 2 && fst(o) = 2))) ||
+    (ex x. tr.run_s(c, t, c, exc(x, exc_val("disc", empty)))) ||
+    (ex x. tr.run_s(c, t, c, exc(x, exc_val("stop", empty))) && o = ok(x, empty))
+  let P(l) := !tr.at_ret(c, fst(l)) && int_lt(fst(l).gpr[4], abi.sp(c)) && !(fst(l).rip = t)
+  let EB(l) := exc(pair(fst(l), empty), pair("brk", empty))
+  let ES(l) := exc(l, pair("raise", exc_val("stop", empty)))
+  let ED(l) := exc(l, pair("raise", exc_val("disc", empty)))
+  let E(l) := ite(tr.at_ret_d(c, fst(l)), EB(l), ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l)))
+  let TR(l) := fn_update(empty, "os.events", fst(l).os.events)
+  have r4 := apply(x86i.rsp_typed, hM)
+  have spb: abi.sp(s) in bits(64) by simp(r4)
+  obtain r, rk hm from expand(hr, tr.run_k)
+  // (inside the callee, off t: the caller's pass, the callee's stop run's)
+  have pb: all l o2. P(l) -> tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2) -> tr.rbs(c, t, l, o2) proof
+    fix l o2
+    assume hp hb
+    have nar lt nt := hp
+    have lt2: int_lt(fst(l).gpr[4], abi.sp(s)) by arith(lt, hsp)
+    have nb := mp(all_elim(hbx, {fst(l)}), lt)
+    have ns: !tr.stopk(s, zb. bkp(zb) || zb.rip = t, fst(l)) by defs(taut(lt2, nb, nt), tr.stopk)
+    have rs: tr.rst(l, o2) by taut(expand(hb, tr.rbk), ns)
+    have dok: tr.disc_ok(c, fst(l)) by taut(lt)
+    have rb: tr.rb(c, l, o2) by defs(taut(nar, expand(rs, tr.rst)), tr.rb)
+    have rd: tr.rbd(c, l, o2) by defs(taut(dok, rb), tr.rbd)
+    show by defs(taut(nt, rd), tr.rbs)
+  qed
+  // (the first pass, from c: the callee's)
+  have pc: P(pair(c, empty)) proof
+    have ne: c.gpr[4] = abi.sp(c) -> false proof
+      assume e
+      show by arith(e, hcl)
+    qed
+    have nar: !tr.at_ret(c, c) by taut(ne)
+    show by simp(nar, hcl, hct)
+  qed
+  have p0: all o2. tr.rst(pair(c, empty), o2) -> tr.rbs(c, t, pair(c, empty), o2) proof
+    fix o2
+    assume hs
+    have nar lt nt := pc
+    have dok: tr.disc_ok(c, fst(pair(c, empty))) by taut(lt)
+    have rb: tr.rb(c, pair(c, empty), o2) by defs(taut(nar, expand(hs, tr.rst)), tr.rb)
+    have rd: tr.rbd(c, pair(c, empty), o2) by defs(taut(dok, rb), tr.rbd)
+    show by defs(taut(nt, rd), tr.rbs)
+  qed
+  have he: all l. !is_ok(E(l)) proof
+    fix l
+    have n: is_ok(E(l)) -> false proof
+      assume h
+      obtain a b, h2 from expand(h, is_ok)
+      have c1: tr.at_ret_d(c, fst(l)) -> false proof
+        assume ar
+        have et := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, ar)
+        show by simp(rewrite(et, h2))
+      qed
+      have c2: !tr.at_ret_d(c, fst(l)) -> false proof
+        assume nar
+        have ef := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, nar)
+        have h3 := rewrite(ef, h2)
+        have d1: tr.at_stop_d(c, t, fst(l)) -> false proof
+          assume as
+          have e2 := apply(tr.ite_t, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, as)
+          show by simp(rewrite(e2, h3))
+        qed
+        have d2: !tr.at_stop_d(c, t, fst(l)) -> false proof
+          assume nas
+          have e2 := apply(tr.ite_f, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, nas)
+          show by simp(rewrite(e2, h3))
+        qed
+        show by taut(d1, d2)
+      qed
+      show by taut(c1, c2)
+    qed
+    show by taut(n)
+  qed
+  // the first pass leaves: the callee's run
+  have k2: tr.rst(pair(c, empty), r) && !is_ok(r) -> G proof
+    assume e
+    have rb := mp(all_elim(p0, {r}), e.1)
+    have tt: true by taut()
+    have w := mp(while_leave[l0 := pair(c, empty), c := x5. true, b := x5 x6. tr.rbs(c, t, x5, x6), tr := x5. TR(x5), r := r], tt, rb, e.2)
+    have ws: tr.rws(c, t, pair(c, empty), r) by defs(w, tr.rws)
+    have rs: tr.run_s(c, t, c, o) by defs(ex_intro({r}, taut(ws, hm)), tr.run_s)
+    have e1: ex o1. tr.run_s(c, t, c, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2)) by ex_intro({o}, taut(rs, refl({o})))
+    show by taut(e1)
+  qed
+  // the first pass goes on to l1: the passes from l1, cut where the callee
+  // returns, leaves its discipline or stops
+  have k1: (ex l1. tr.rst(pair(c, empty), ok(l1, empty)) && tr.rwk(s, zb. bkp(zb) || zb.rip = t, l1, r)) -> G proof
+    assume e
+    obtain l1, rs0 rw from e
+    have rb0 := mp(all_elim(p0, {ok(l1, empty)}), rs0)
+    have tt: true by taut()
+    have q1: l1 = pair(fst(l1), empty) by simp(expand(rs0, tr.rst), keep(x86_64_linux.step))
+    have hq: all l l2. l = pair(fst(l), empty) -> tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, ok(l2, empty)) -> l2 = pair(fst(l2), empty) proof
+      fix l l2
+      assume _ hb
+      have c3 := apply(tr.rbk_ok[bkp := zb. bkp(zb) || zb.rip = t], {s}, {l}, {l2}, {empty}, hb)
+      show by taut(c3)
+    qed
+    have sp := mp(while_split[l0 := l1, b := l o2. tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2), tr := l. TR(l), p := l. P(l), e := l. E(l), r := r,
+      q := l. l = pair(fst(l), empty)], he, q1, hq, expand(rw, tr.rwk))
+    // the guarded passes: the callee's
+    have gb: all l o2. (P(l) && tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2)) || (!P(l) && o2 = E(l)) -> tr.rbs(c, t, l, o2) proof
+      fix l o2
+      assume h
+      have in: P(l) -> tr.rbs(c, t, l, o2) proof
+        assume hp
+        have b1: tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2) by taut(h, hp)
+        show := mp(all_elim(pb, {l}, {o2}), hp, b1)
+      qed
+      have out: !P(l) -> tr.rbs(c, t, l, o2) proof
+        assume np
+        have eo: o2 = E(l) by taut(h, np)
+        have c1: tr.at_ret_d(c, fst(l)) -> tr.rbs(c, t, l, o2) proof
+          assume ar
+          have et := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, ar)
+          have eo2 := rewrite(et, eo)
+          have ar2: tr.at_ret(c, fst(l)) by defs(ar, tr.at_ret_d)
+          have rd: tr.rbd(c, l, o2) by defs(simp(eo2, ar2, keep(x86_64_linux.step)), tr.rbd, tr.rb)
+          have ns: !tr.at_stop(c, t, fst(l)) by taut(ar2)
+          show by defs(taut(ns, rd), tr.rbs)
+        qed
+        have c2: !tr.at_ret_d(c, fst(l)) -> tr.rbs(c, t, l, o2) proof
+          assume nar
+          have ef := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, nar)
+          have eo2 := rewrite(ef, eo)
+          have nar2: !tr.at_ret(c, fst(l)) by defs(nar, tr.at_ret_d)
+          have d1: tr.at_stop_d(c, t, fst(l)) -> tr.rbs(c, t, l, o2) proof
+            assume as
+            have e2 := apply(tr.ite_t, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, as)
+            have eo3 := rewrite(e2, eo2)
+            have as2: tr.at_stop(c, t, fst(l)) by defs(as, tr.at_stop_d)
+            show by defs(taut(as2, eo3), tr.rbs)
+          qed
+          have d2: !tr.at_stop_d(c, t, fst(l)) -> tr.rbs(c, t, l, o2) proof
+            assume nas
+            have e2 := apply(tr.ite_f, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, nas)
+            have eo3 := rewrite(e2, eo2)
+            have nas2: !tr.at_stop(c, t, fst(l)) by defs(nas, tr.at_stop_d)
+            have nlt: !int_lt(fst(l).gpr[4], abi.sp(c)) by taut(np, nar2, nas2)
+            have rd: tr.rbd(c, l, o2) by defs(simp(eo3, nar2, nlt, keep(x86_64_linux.step)), tr.rbd, tr.rb)
+            show by defs(taut(nas2, rd), tr.rbs)
+          qed
+          show by taut(d1, d2)
+        qed
+        show by taut(c1, c2)
+      qed
+      show by taut(in, out)
+    qed
+    // throughout: the callee's run (the first pass prepended)
+    have ca: while_rel(l1, l. true, l o2. (P(l) && tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2)) || (!P(l) && o2 = E(l)), l. TR(l), r) -> G proof
+      assume w
+      have w2 := mp(while_mono[l0 := l1, c := l. true, b1 := l o2. (P(l) && tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2)) || (!P(l) && o2 = E(l)),
+        b2 := l o2. tr.rbs(c, t, l, o2), tr := l. TR(l), r := r], gb, w)
+      have nd: !(fst(r) = 2) -> G proof
+        assume n
+        have w3 := mp(while_step[l0 := pair(c, empty), l1 := l1, c := l. true, b := l o2. tr.rbs(c, t, l, o2), tr := l. TR(l), r := r], tt, rb0, w2, n)
+        have ws: tr.rws(c, t, pair(c, empty), r) by defs(w3, tr.rws)
+        have rs: tr.run_s(c, t, c, o) by defs(ex_intro({r}, taut(ws, hm)), tr.run_s)
+        have e1: ex o1. tr.run_s(c, t, c, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2)) by ex_intro({o}, taut(rs, refl({o})))
+        show by taut(e1)
+      qed
+      have dd: fst(r) = 2 -> G proof
+        assume d
+        obtain t0, rd0 from apply(tr.rws_div, {c}, {t}, {l1}, {r}, w2, d)
+        have w2d := rewrite(rd0, w2)
+        obtain t2, w3 from mp(while_step_div[l0 := pair(c, empty), l1 := l1, c := l. true, b := l o2. tr.rbs(c, t, l, o2), tr := l. TR(l), t := t0], tt, rb0, w2d)
+        have ws: tr.rws(c, t, pair(c, empty), diverge(t2)) by defs(w3, tr.rws)
+        have rm2: tr.rmap(diverge(t2), diverge(t2)) by defs(simp(), tr.rmap)
+        have rs: tr.run_s(c, t, c, diverge(t2)) by defs(ex_intro({diverge(t2)}, taut(ws, rm2)), tr.run_s)
+        have od: fst(o) = 2 by simp(expand(hm, tr.rmap), d)
+        have f2: fst(diverge(t2)) = 2 by simp()
+        have e1: ex o1. tr.run_s(c, t, c, o1) && (o1 = o || (fst(o1) = 2 && fst(o) = 2)) by ex_intro({diverge(t2)}, taut(rs, f2, od))
+        show by taut(e1)
+      qed
+      show by taut(nd, dd)
+    qed
+    // left at l: the callee's return (the caller's passes on from it), its
+    // leaving the discipline, or its stop (the caller's breakpoint)
+    have cb: (ex l. l = pair(fst(l), empty) && while_rel(l1, l. true, l o2. (P(l) && tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2)) || (!P(l) && o2 = E(l)), l. TR(l), E(l)) &&
+        (ex r1. while_rel(l, l. true, l o2. tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2), l. TR(l), r1) && fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) -> G proof
+      assume h
+      obtain l, ql wg er1 from h
+      have w2 := mp(while_mono[l0 := l1, c := l. true, b1 := l o2. (P(l) && tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o2)) || (!P(l) && o2 = E(l)),
+        b2 := l o2. tr.rbs(c, t, l, o2), tr := l. TR(l), r := E(l)], gb, wg)
+      have nd0: fst(E(l)) = 2 -> false proof
+        assume d
+        have ne := all_elim(he, {l})
+        have c1: fst(E(l)) = 2 -> !is_ok(E(l)) -> false proof
+          assume d2 _
+          have c3: tr.at_ret_d(c, fst(l)) -> false proof
+            assume ar
+            have et := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, ar)
+            show by simp(rewrite(et, d2))
+          qed
+          have c4: !tr.at_ret_d(c, fst(l)) -> false proof
+            assume nar
+            have ef := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, nar)
+            have d3 := rewrite(ef, d2)
+            have d5: tr.at_stop_d(c, t, fst(l)) -> false proof
+              assume as
+              have e2 := apply(tr.ite_t, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, as)
+              show by simp(rewrite(e2, d3))
+            qed
+            have d6: !tr.at_stop_d(c, t, fst(l)) -> false proof
+              assume nas
+              have e2 := apply(tr.ite_f, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, nas)
+              show by simp(rewrite(e2, d3))
+            qed
+            show by taut(d5, d6)
+          qed
+          show by taut(c3, c4)
+        qed
+        show by taut(c1, d, ne)
+      qed
+      have w3 := mp(while_step[l0 := pair(c, empty), l1 := l1, c := l. true, b := l o2. tr.rbs(c, t, l, o2), tr := l. TR(l), r := E(l)], tt, rb0, w2, taut(nd0))
+      have wd: tr.rws(c, t, pair(c, empty), E(l)) by defs(w3, tr.rws)
+      // (the return)
+      have c1: tr.at_ret_d(c, fst(l)) -> G proof
+        assume ar
+        have ee := apply(tr.ite_t, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, ar)
+        have wd2 := rewrite(ee, wd)
+        have rm: tr.rmap(EB(l), ok(fst(l), empty)) by defs(simp(), tr.rmap)
+        have rc: tr.run_s(c, t, c, ok(fst(l), empty)) by defs(ex_intro({EB(l)}, taut(wd2, rm)), tr.run_s)
+        obtain r1, wr1 f4 re4 from er1
+        have wr2 := rewrite(ql, wr1)
+        have wk: tr.rwk(s, zb. bkp(zb) || zb.rip = t, pair(fst(l), empty), r1) by defs(wr2, tr.rwk)
+        have same: !(fst(r) = 2) -> G proof
+          assume n
+          have re := mp(re4, n)
+          have rm1 := rewrite(sym(re), hm)
+          have e1: ex x r2 o1. tr.run_s(c, t, c, ok(x, empty)) && tr.rwk(s, zb. bkp(zb) || zb.rip = t, pair(x, empty), r2) && tr.rmap(r2, o1) &&
+              (o1 = o || (fst(o1) = 2 && fst(o) = 2)) by ex_intro({fst(l)}, {r1}, {o}, taut(rc, wk, rm1, refl({o})))
+          show by taut(e1)
+        qed
+        have div: fst(r) = 2 -> G proof
+          assume d
+          have d1: fst(r1) = 2 by simp(f4, d)
+          have rm1: tr.rmap(r1, diverge(snd(r1))) by defs(simp(d1), tr.rmap)
+          have od: fst(o) = 2 by simp(expand(hm, tr.rmap), d)
+          have f2: fst(diverge(snd(r1))) = 2 by simp()
+          have e1: ex x r2 o1. tr.run_s(c, t, c, ok(x, empty)) && tr.rwk(s, zb. bkp(zb) || zb.rip = t, pair(x, empty), r2) && tr.rmap(r2, o1) &&
+              (o1 = o || (fst(o1) = 2 && fst(o) = 2)) by ex_intro({fst(l)}, {r1}, {diverge(snd(r1))}, taut(rc, wk, rm1, f2, od))
+          show by taut(e1)
+        qed
+        show by taut(same, div)
+      qed
+      have c2: !tr.at_ret_d(c, fst(l)) -> G proof
+        assume nar
+        have ee := apply(tr.ite_f, {tr.at_ret_d(c, fst(l))}, {EB(l)}, {ite(tr.at_stop_d(c, t, fst(l)), ES(l), ED(l))}, nar)
+        have wd2 := rewrite(ee, wd)
+        // (the stop: the caller's run stops there, at t its breakpoint)
+        have d1: tr.at_stop_d(c, t, fst(l)) -> G proof
+          assume as
+          have e2 := apply(tr.ite_t, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, as)
+          have wd3 := rewrite(e2, wd2)
+          have rm: tr.rmap(ES(l), exc(fst(l), exc_val("stop", empty))) by defs(simp(), tr.rmap)
+          have rc: tr.run_s(c, t, c, exc(fst(l), exc_val("stop", empty))) by defs(ex_intro({ES(l)}, taut(wd3, rm)), tr.run_s)
+          have as2: tr.at_stop(c, t, fst(l)) by defs(as, tr.at_stop_d)
+          have xt: fst(l).rip = t by taut(as2)
+          obtain r1, wr1 f4 re4 from er1
+          have un3 := mp(while_unroll[l0 := l, c := x5. true, b := x5 x6. tr.rbk(s, zb. bkp(zb) || zb.rip = t, x5, x6), tr := x5. TR(x5), r := r1], wr1)
+          have stk: tr.stopk(s, zb. bkp(zb) || zb.rip = t, fst(l)) by defs(taut(xt), tr.stopk)
+          have bb: all o3. tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, o3) -> o3 = exc(pair(fst(l), empty), pair("brk", empty)) proof
+            fix o3
+            assume hb
+            show by taut(expand(hb, tr.rbk), stk)
+          qed
+          have v1: tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, r1) && !is_ok(r1) -> o = ok(fst(l), empty) proof
+            assume k
+            have r1e := mp(all_elim(bb, {r1}), (tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, r1) by taut(k)))
+            have n1: !(fst(r1) = 2) by simp(r1e)
+            have n0: !(fst(r) = 2) by simp(n1, f4)
+            have re := mp(re4, n0)
+            show by simp(expand(rewrite(r1e, rewrite(sym(re), hm)), tr.rmap))
+          qed
+          have v2: (ex l4. tr.rbk(s, zb. bkp(zb) || zb.rip = t, l, ok(l4, empty)) && (ex r4. while_rel(l4, x5. true, x5 x6. tr.rbk(s, zb. bkp(zb) || zb.rip = t, x5, x6),
+              x5. TR(x5), r4) && fst(r4) = fst(r1) && (!(fst(r1) = 2) -> r4 = r1))) -> o = ok(fst(l), empty) proof
+            assume k
+            obtain l4, hb4 _ from k
+            have r4e := mp(all_elim(bb, {ok(l4, empty)}), hb4)
+            have f: false by simp(r4e)
+            show by taut(f)
+          qed
+          have v0: (!true && r1 = ok(l, empty)) -> o = ok(fst(l), empty) proof
+            assume k
+            show by taut(k)
+          qed
+          have oe: o = ok(fst(l), empty) by taut(un3, v0, v1, v2)
+          have e4: ex x. tr.run_s(c, t, c, exc(x, exc_val("stop", empty))) && o = ok(x, empty) by ex_intro({fst(l)}, taut(rc, oe))
+          show by taut(e4)
+        qed
+        // (the discipline left)
+        have d2: !tr.at_stop_d(c, t, fst(l)) -> G proof
+          assume nas
+          have e2 := apply(tr.ite_f, {tr.at_stop_d(c, t, fst(l))}, {ES(l)}, {ED(l)}, nas)
+          have wd3 := rewrite(e2, wd2)
+          have rm: tr.rmap(ED(l), exc(fst(l), exc_val("disc", empty))) by defs(simp(), tr.rmap)
+          have rc: tr.run_s(c, t, c, exc(fst(l), exc_val("disc", empty))) by defs(ex_intro({ED(l)}, taut(wd3, rm)), tr.run_s)
+          have e1: ex x. tr.run_s(c, t, c, exc(x, exc_val("disc", empty))) by ex_intro({fst(l)}, rc)
+          show by taut(e1)
+        qed
+        show by taut(d1, d2)
+      qed
+      show by taut(c1, c2)
+    qed
+    show by taut(sp, ca, cb)
+  qed
+  show by taut(expand(rk, tr.rk), k1, k2)
+qed
+
+// ----------------------------------------------------------------------
 //  The function at t (main): entered, the run stops
 
 // (a run from t stops there at once)
