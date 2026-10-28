@@ -1406,6 +1406,30 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_reg(st, a2, gn, 4, r);
                     return self.then(tr, st2);
                 }
+                // sub / add rsp, imm32: the frame grows / ends (row 60's)
+                if let (Some((0, g)), Some(8), Some(op @ (0 | 5))) = (self.tag(&x[2]), nat(&x[0]), nat(&x[1])) {
+                    if reg(&g)? == 4 {
+                        let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;
+                        let fr2 = if op == 5 {
+                            if imm >= 1 << 31 || self.fr + imm > 65536 {
+                                return Err(bad("sub rsp beyond the frame's bound"));
+                            }
+                            self.fr + imm
+                        } else {
+                            if imm >= 1 << 31 || imm > self.fr {
+                                return Err(bad("add rsp beyond the frame"));
+                            }
+                            self.fr - imm
+                        };
+                        let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+                        let rule = if op == 5 { "sub_rsp32" } else { "add_rsp32" };
+                        let tr = self.step(rule, a, insn, &[&x[3], &x[4], &lit(fr2)], self.tail(st, insn, 6, vec![p(n4)]));
+                        let mut st2 = st.clone();
+                        st2.a = a2;
+                        st2.fr = fr2;
+                        return self.then(tr, st2);
+                    }
+                }
                 let d = self.rsp_mem(&x[2]).ok_or_else(|| bad("an imm32 operation not on a home"))?;
                 let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
                 let imm = nat(&x[4]).ok_or_else(|| bad("an immediate that is not a literal"))?;

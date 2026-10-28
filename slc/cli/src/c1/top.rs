@@ -383,7 +383,7 @@ impl<'e> Gen<'e> {
         let k0 = 8 * np
             + (|| {
                 let i = self.insns.get(&pa)?;
-                let x = (i.row == 60).then(|| self.pairs(&i.fields, 5)).flatten()?;
+                let x = matches!(i.row, 59 | 60).then(|| self.pairs(&i.fields, 5)).flatten()?;
                 let (tg, r) = self.tag(&x[2])?;
                 (nat(&x[0])? == 8 && nat(&x[1])? == 5 && tg == 0 && nat(&r)? == 4).then_some(())?;
                 nat(&x[4])
