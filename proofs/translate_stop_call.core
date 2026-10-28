@@ -536,3 +536,102 @@ proof
   have sk: tr.stopk(s, zb. bkp(zb) || zb.rip = t, C) by defs(taut(ct), tr.stopk)
   show by defs(taut(sk, ar), tr.cl)
 qed
+
+// The code map a call through a pointer uses (GIMPLE's `fptr`), at a call
+// with n arguments from a frame of size fr: main at t raising at main, the
+// other entries with their contracts in the stop form (an address not a
+// function's: a spec undefined there, holding any contract)
+def tr.code_ok(fptr, n, fr, t, cb, cc, st) := all T. T in bits(64) ->
+  (T = t && tr.raises_main(fptr[T])) || (!(T = t) && tr.callee_contract_s(fr, T, fptr[T], t, cb, cc, st) && tr.callee_io(fptr[T], n))
+
+// (a spec undefined at a view: raising there)
+theorem tr.undef_raises_at: all g args objs mem s. s in x86_64_linux.Machine -> s in univ(1) -> objs in set_type(omega) -> mem in x86_64_linux.Vm ->
+  tr.may_raise(g, args, abi.view(s, objs, mem)) -> abi.raises_at(g, args, objs, mem, s)
+proof
+  fix g args objs mem s
+  assume sM su ot mv hm
+  have ou := apply(abi.objs_univ, ot)
+  have mu := apply(x86.vm_univ, mv)
+  have ocu := mp(all_elim(abi.objs_at_univ, {objs}, {s.fs_base}), ou)
+  have vu: abi.view(s, objs, mem) in univ(1) by simp(su, ou, mu, ocu)
+  have vW := apply(abi.world_typed, sM, ot, mv, vu)
+  have rst: abi.raise_state(abi.view(s, objs, mem)) by defs(apply(tr.world_and, vW), abi.raise_state)
+  have eu: empty in univ(1) by simp()
+  have hx: all x e. x in univ(1) -> e in univ(1) -> runs(g[args], abi.view(s, objs, mem), exc(x, e)) by taut(expand(expand(hm, tr.may_raise), tr.undef))
+  have pe := mp(all_elim(hx, {abi.view(s, objs, mem)}, {empty}), vu, eu)
+  show by defs(ex_intro({empty}, {abi.view(s, objs, mem)}, taut(eu, tr.undef_empty, rst, pe)), abi.raises_at)
+qed
+
+// (an address no function's: its spec undefined, holding any contract)
+theorem tr.undef_contract_s: all fr f g t cb cc st n. (all args w. tr.may_raise(g, args, w)) ->
+  tr.callee_contract_s(fr, f, g, t, cb, cc, st) && tr.callee_io(g, n)
+proof
+  fix fr f g t cb cc st n
+  assume hu
+  have iu: tr.implements_stop_u(f, g, t, cb, cc, st) proof
+    have g0: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, cb, cc, st) ->
+        s.rip = f -> tr.entry_ok_u(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_s(s, t, s, o) -> tr.matches_ts(g, args, objs, mem, s, o) proof
+      fix args objs mem s o
+      assume _ ot mv sM su _ _ _ _ _ _
+      have ra := apply(tr.undef_raises_at, {g}, {args}, {objs}, {mem}, {s}, sM, su, ot, mv, all_elim(hu, {args}, {abi.view(s, objs, mem)}))
+      show by defs(taut(ra), tr.matches_ts)
+    qed
+    show by defs(g0, tr.implements_stop_u)
+  qed
+  have io: tr.callee_io(g, n) proof
+    have g1: all args w w2 r. ord_le(n, seq_len(args)) -> runs(g[args], w, ok(w2, r)) -> tr.returns_valid(w, w2) || tr.may_raise(g, args, w) proof
+      fix args w w2 r
+      assume _ _
+      show by taut(all_elim(hu, {args}, {w}))
+    qed
+    show by defs(g1, tr.callee_io)
+  qed
+  show by defs(taut(iu, io), tr.callee_contract_s)
+qed
+
+// A call through a pointer (the target T a register's value): main's call
+// or a call under the entry's contract
+theorem tr.callee_ind_s(fptr, args, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka): all s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc t.
+  tr.hap(s, hs, v) -> tr.ofr(s, fr, v) ->
+  tr.inv(s, base, code, fr, m, w) -> tr.cfr(fr) -> tr.mem(s, m, w, v) -> base in omega -> tr.regs(m, rs) -> tr.cs_sub(rc, rs) ->
+  tr.args_in(m, args) -> seq_len(args) = n -> n in omega -> int_le(n, 6) -> RA in bits(64) -> T in bits(64) ->
+  runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", RA), ok(m1, e1)) ->
+  C = fn_update(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8, RA))),
+    "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), "rip", T) ->
+  tr.code_ok(fptr, n, fr, t, cb, cc, st) -> (int_mod(fr, 16) = 8 -> tr.sal16(s)) -> abi.loaded(s.vm, cb, cc, st) -> cb in omega ->
+  tr.homes(s, m, hs) -> tr.hin(hs, fr) -> fd in omega -> int_le(fd, int_add(fr, 8)) ->
+  fptr in fn_space(bits(64), fn_space(abi.ARGS, powerset(univ(1)))) ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) -> (all t0. t0 in univ(1) -> runs(mkprog(x0 x1. ex x8. dd(t0, x8) && k(x8, x1)), w, diverge(t0))) ->
+  (all w4 r0 r1. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> r1 in bits(64) -> tr.pt(s, zb. bkp(zb) || zb.rip = t, zb pb wb. bka(zb, pb, wb) || tr.at_t(zb, pb, wb),
+    v, base, code, fr, RA, hs, fd, fn_update(fn_update(rc, 0, pair(8, r0)), 2, pair(8, r1)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. a(x0, pair(r0, r1), x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  (all z. int_lt(z.gpr[4], m.gpr[4]) -> !bkp(z)) ->
+  tr.cl(s, zb. bkp(zb) || zb.rip = t, zb pb wb. bka(zb, pb, wb) || tr.at_t(zb, pb, wb), v,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call(fptr[T], args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C)
+proof
+  fix s v base code fr m w n hs fd RA T m1 e1 C cb cc st rs rc t
+  assume hap hofr hi hcf hmm hb hrs hsub hargs hln hno hn6 hra ht htr hC hcode hal hld hcb hhs hhin hfo hfd hft hk hd hpost hbx
+  let G := fptr[T]
+  have hc := mp(all_elim(expand(hcode, tr.code_ok), {T}), ht)
+  let GL := tr.cl(s, zb. bkp(zb) || zb.rip = t, zb pb wb. bka(zb, pb, wb) || tr.at_t(zb, pb, wb), v,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call(G, args), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, C)
+  // (main: the run stops at its entry)
+  have c1: (T = t && tr.raises_main(G)) -> GL proof
+    assume h
+    show := apply(tr.call_main[g := G, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+      bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {m}, {w}, {n}, {RA}, {T}, {m1}, {e1}, {C}, {t},
+      hofr, hi, hcf, hmm, hargs, hln, hno, hn6, hra, ht, htr, hC, (T = t by taut(h)), (tr.raises_main(G) by taut(h)), hk)
+  qed
+  // (another entry: its contract)
+  have c2: (!(T = t) && tr.callee_contract_s(fr, T, G, t, cb, cc, st) && tr.callee_io(G, n)) -> GL proof
+    assume h
+    have gt: G in fn_space(abi.ARGS, powerset(univ(1))) := mp(fn_space_app[a := bits(64), b := fn_space(abi.ARGS, powerset(univ(1))), f := fptr, x := T], hft, ht)
+    show := apply(tr.callee_sim_s[g := G, args := args, a := x9 x10 x8. a(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8), dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1), kw := x3 x4 x2. kw(x3, x4, x2),
+      bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {m}, {w}, {n}, {hs}, {fd}, {RA}, {T}, {m1}, {e1}, {C}, {cb}, {cc}, {st}, {rs}, {rc}, {t},
+      hap, hofr, hi, hcf, hmm, hb, hrs, hsub, hargs, hln, hno, hn6, hra, ht, htr, hC, (tr.callee_contract_s(fr, T, G, t, cb, cc, st) by taut(h)), (!(T = t) by taut(h)),
+      hal, hld, hcb, hhs, hhin, hfo, hfd, gt, (tr.callee_io(G, n) by taut(h)), hk, hd, hpost, hbx)
+  qed
+  show by taut(hc, c1, c2)
+qed
