@@ -9,11 +9,51 @@ def tr.rbs(s, t, l, o) := (!(fst(l).rip = t) && tr.rbd(s, l, o)) || (!!(fst(l).r
 def tr.rws(s, t, l, r) := while_rel(l, x5. true, x5 x6. tr.rbs(s, t, x5, x6), x5. fn_update(empty, "os.events", fst(x5).os.events), r)
 def tr.run_s(s, t, m, o) := ex r. tr.rws(s, t, pair(m, empty), r) && tr.rmap(r, o)
 
+// The outcomes matching a spec with the stop: as tr.matches_t, but for
+// the stop -- the spec raising `at_main` (the callee at t entered with its
+// precondition: a stop, not undefined behaviour) in a world that is a view
+// of the machine stopped (its memory, its objects); the spec's other raises
+// undefined behaviour, anything matching them
+def tr.raises_s(spec, args, objs, mem, s) :=
+  ex e x. e in univ(1) && !(e = exc_val("stack_overflow", empty)) && !(e = exc_val("at_main", empty)) && abi.raise_state(x) &&
+    runs(spec[args], abi.view(s, objs, mem), exc(x, e))
+def tr.stop_t(spec, args, objs, mem, s, o) :=
+  ex m w v2 mem2. o = exc(m, exc_val("stop", empty)) && abi.raise_state(w) && runs(spec[args], abi.view(s, objs, mem), exc(w, exc_val("at_main", empty))) &&
+    w = abi.view(m, v2, mem2) && abi.view_ok(m, v2, mem2)
+def tr.matches_ts(spec, args, objs, mem, s, o) :=
+  tr.raises_s(spec, args, objs, mem, s) ||
+  (ex m1 w2. o = ok(m1, empty) && m1 in x86_64_linux.Machine && m1 in univ(1) &&
+    runs(spec[args], abi.view(s, objs, mem), ok(w2, pair(m1.gpr[0], m1.gpr[2]))) && w2 in abi.World && w2 in univ(1) &&
+    abi.world_matches(s.vm, m1.vm, w2.vm, abi.wob(objs, w2.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w2.os && m1.fs_base = s.fs_base &&
+    m1.cpu = s.cpu && m1.gs_base = s.gs_base && m1.rip = abi.ret(s) && m1.gpr[4] = abi.sp(s) &&
+    abi.callee_saved(m1, s) && !m1.flags.df) ||
+  tr.crashes_t(spec, args, objs, mem, s, o) || tr.div(spec[args], abi.view(s, objs, mem), o) || tr.stop_t(spec, args, objs, mem, s, o)
+
 // the contract with a stop at t: every disciplined run, stopping at t,
-// matches the spec
+// matches the spec so
 def tr.implements_at_s(f, spec, t, base, code, statics) :=
   all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
-    s.rip = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_s(s, t, s, o) -> tr.matches_t(spec, args, objs, mem, s, o)
+    s.rip = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_s(s, t, s, o) -> tr.matches_ts(spec, args, objs, mem, s, o)
+
+// (matching with the stop: matching -- a raise at main undefined there)
+theorem tr.matches_of_s: all spec args objs mem s o. tr.matches_ts(spec, args, objs, mem, s, o) -> tr.matches_t(spec, args, objs, mem, s, o)
+proof
+  fix spec args objs mem s o
+  assume h
+  have r1: tr.raises_s(spec, args, objs, mem, s) -> abi.raises_at(spec, args, objs, mem, s) proof
+    assume r
+    obtain e x, eu en _ rs hr from expand(r, tr.raises_s)
+    show by defs(ex_intro({e}, {x}, taut(eu, en, rs, hr)), abi.raises_at)
+  qed
+  have r2: tr.stop_t(spec, args, objs, mem, s, o) -> abi.raises_at(spec, args, objs, mem, s) proof
+    assume st
+    obtain m w v2 mem2, _ rs hr _ _ from expand(st, tr.stop_t)
+    have eu: exc_val("at_main", empty) in univ(1) by defs(simp(), exc_val)
+    have en: !(exc_val("at_main", empty) = exc_val("stack_overflow", empty)) by defs(simp(), exc_val)
+    show by defs(ex_intro({exc_val("at_main", empty)}, {w}, taut(eu, en, rs, hr)), abi.raises_at)
+  qed
+  show by defs(taut(expand(h, tr.matches_ts), r1, r2), tr.matches_t)
+qed
 
 // (a disciplined run: the run stopping at t, or the run stopping at t
 // stops)
@@ -92,15 +132,74 @@ proof
     have d := apply(tr.run_d_s[s := s, t := t, m := s, o := o], hr)
     have c1: tr.run_s(s, t, s, o) -> tr.matches_t(spec, args, objs, mem, s, o) proof
       assume rs
-      show := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rs)
+      show := apply(tr.matches_of_s, mp(all_elim(c, {args}, {objs}, {mem}, {s}, {o}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rs))
     qed
     have c2: (ex x. tr.run_s(s, t, s, exc(x, exc_val("stop", empty)))) -> tr.matches_t(spec, args, objs, mem, s, o) proof
       assume e
       obtain x, rs from e
-      have mt := mp(all_elim(c, {args}, {objs}, {mem}, {s}, {exc(x, exc_val("stop", empty))}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rs)
+      have mt := apply(tr.matches_of_s, mp(all_elim(c, {args}, {objs}, {mem}, {s}, {exc(x, exc_val("stop", empty))}), hA, hot, hmv, hM, su, hl, hrip, he, ok, hwm, rs))
       show := apply(tr.stop_matches[spec := spec, args := args, objs := objs, mem := mem, s := s, x := x, o := o], mt)
     qed
     show by taut(d, c1, c2)
   qed
   show by defs(g, tr.implements_at)
+qed
+
+// ----------------------------------------------------------------------
+//  The function at t (main): entered, the run stops
+
+// (a run from t stops there at once)
+theorem tr.run_s_at: all s t m o. m.rip = t -> tr.run_s(s, t, m, o) -> o = exc(m, exc_val("stop", empty))
+proof
+  fix s t m o
+  assume hr h
+  obtain r, hw hm from expand(h, tr.run_s)
+  have u := mp(while_unroll[l0 := pair(m, empty), c := x5. true, b := x5 x6. tr.rbs(s, t, x5, x6), tr := x5. fn_update(empty, "os.events", fst(x5).os.events), r := r],
+    expand(hw, tr.rws))
+  // (the first pass: the stop)
+  have st: all o2. tr.rbs(s, t, pair(m, empty), o2) -> o2 = exc(pair(m, empty), pair("raise", exc_val("stop", empty))) proof
+    fix o2
+    assume b
+    show by simp(expand(b, tr.rbs), hr)
+  qed
+  have c2: tr.rbs(s, t, pair(m, empty), r) -> o = exc(m, exc_val("stop", empty)) proof
+    assume b
+    have re := mp(all_elim(st, {r}), b)
+    show by simp(rewrite(re, expand(hm, tr.rmap)))
+  qed
+  have c3: (ex l1. tr.rbs(s, t, pair(m, empty), ok(l1, empty)) && (ex r1. while_rel(l1, x5. true, x5 x6. tr.rbs(s, t, x5, x6), x5. fn_update(empty, "os.events", fst(x5).os.events), r1) &&
+      fst(r1) = fst(r) && (!(fst(r) = 2) -> r1 = r))) -> false proof
+    assume e
+    obtain l1, b _ from e
+    have re := mp(all_elim(st, {ok(l1, empty)}), b)
+    show by simp(re)
+  qed
+  show by taut(u, c2, c3)
+qed
+
+// a function at t whose spec, from its entry's world, raises at main in
+// that world (or raises): its contract with the stop at t
+theorem tr.stop_entry: all f spec base code statics.
+  (all args objs mem s. args in abi.ARGS -> s in x86_64_linux.Machine -> abi.view_ok(s, objs, mem) ->
+     tr.raises_s(spec, args, objs, mem, s) ||
+     (abi.raise_state(abi.view(s, objs, mem)) && runs(spec[args], abi.view(s, objs, mem), exc(abi.view(s, objs, mem), exc_val("at_main", empty))))) ->
+  tr.implements_at_s(f, spec, f, base, code, statics)
+proof
+  fix f spec base code statics
+  assume hsp
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+      s.rip = f -> abi.entry_ok(s, args) -> tr.objs_ok(s, objs) -> abi.view_ok(s, objs, mem) -> tr.run_s(s, f, s, o) -> tr.matches_ts(spec, args, objs, mem, s, o) proof
+    fix args objs mem s o
+    assume hA _ _ hM _ _ hrip _ _ hwm hr
+    have oe := apply(tr.run_s_at[s := s, t := f, m := s, o := o], hrip, hr)
+    have c := mp(all_elim(hsp, {args}, {objs}, {mem}, {s}), hA, hM, hwm)
+    have c2: abi.raise_state(abi.view(s, objs, mem)) && runs(spec[args], abi.view(s, objs, mem), exc(abi.view(s, objs, mem), exc_val("at_main", empty))) ->
+        tr.stop_t(spec, args, objs, mem, s, o) proof
+      assume hb
+      have rs ru := hb
+      show by defs(ex_intro({s}, {abi.view(s, objs, mem)}, {objs}, {mem}, taut(oe, rs, ru, refl({abi.view(s, objs, mem)}), hwm)), tr.stop_t)
+    qed
+    show by defs(taut(c, c2), tr.matches_ts)
+  qed
+  show by defs(g, tr.implements_at_s)
 qed
