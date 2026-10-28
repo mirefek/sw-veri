@@ -117,9 +117,17 @@ The binary as linked (gcc's crtbegin included). The steps:
   so no effect).
 - (c) `main` as a callee: an external function whose contract requires
   the invariant at the empty heap; stage2's call through the `main`
-  pointer meets it (C2), and the bridge's caller-side call rule gives
-  the machine state at rip = main (`run_until`). Indirect calls in the
-  GIMPLE world.
+  pointer meets it (C2). Refinement of whole runs says nothing of a
+  state in between, so the bridge gets a stop form: a function's
+  disciplined run stopping at rip = t (`main_at`), the stop an outcome
+  "at main" that only `main`'s contract allows (its precondition
+  holding). The path to `main` (`_start`, `_start_c`,
+  `__libc_start_main`, stage2) in that form; the callees returning
+  before it (`__init_libc`, `__init_tls`, the leaves `memset`, `memcpy`,
+  `__syscall*`, `a_crash`, `__get_tp`) too -- their runs never at t --,
+  each proven once: the normal contract (malloc's and free's use)
+  derived from the stop form by one bridge theorem (a run never at t is
+  the same run without the stop).
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
