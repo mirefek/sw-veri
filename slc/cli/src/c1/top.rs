@@ -259,9 +259,12 @@ impl<'e> Gen<'e> {
         let mem = self.var("mem");
         let s = self.var("s");
         self.s = s.clone();
-        // (V: v; W: the entry's view)
+        // (V: the claim's objects, the callers' v with the run's C bytes --
+        // the main mode's, all but the canary; W: the entry's view)
         let vvar = self.var("V");
-        self.push_val(Self::var_id(&vvar), vv.clone());
+        let fs = self.mk("app", vec![s.clone(), Term::bytes(b"fs_base")]);
+        let vobjs = self.mk("abi.wob", vec![vv.clone(), self.mk("abi.cbytes0", vec![fs])]);
+        self.push_val(Self::var_id(&vvar), vobjs);
         self.v = vvar;
         let view = self.mk("abi.view", vec![s.clone(), vv.clone(), mem.clone()]);
         let w = self.var("W");
@@ -544,7 +547,7 @@ impl<'e> Gen<'e> {
         }
         self.vmark0 = self.env.var_bound() as usize;
         // (the callers' objects at or above sp, tr.vabove: the homes apart from them)
-        let vab_t = self.mk("tr.vabove", vec![s.clone(), vv.clone()]);
+        let vab_t = self.mk("tr.vabove", vec![s.clone(), self.v.clone()]);
         self.hva = Some(self.assume(&vab_t)?);
         let pt = self.prove_pt(st0)?;
         let (aligned, e_t) = match self.ent_al.take() {

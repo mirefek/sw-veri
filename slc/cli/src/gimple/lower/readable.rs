@@ -19,13 +19,16 @@ pub struct Shared {
     pub accessors: BTreeMap<String, String>,
     /// the control-flow graph as it is (`--cfg`), not structured
     pub cfg: bool,
+    /// the unit's functions all run before main (`--startup`): its calls
+    /// `call0` (gimple.sl: no thread required, set up by the callee)
+    pub startup: bool,
 }
 
 /// Names the readable code must not shadow (gimple.sl's operations, SL
 /// keywords, the state's fields).
 const RESERVED: &[&str] = &[
     "sadd", "ssub", "smul", "sneg", "cdiv", "crem", "div", "rem", "shl", "shr", "sar", "smin", "smax", "umin", "umax", "b1", "padd", "mem", "ld8", "ld16",
-    "ld32", "ld64", "ld128", "st8", "st16", "st32", "st64", "st128", "st_bytes", "ldbf", "stbf", "call", "call1", "call_objs", "call1_objs", "call_s", "call1_s",
+    "ld32", "ld64", "ld128", "st8", "st16", "st32", "st64", "st128", "st_bytes", "ldbf", "stbf", "call", "call1", "call_objs", "call1_objs", "call_s", "call1_s", "call0", "call1_0", "call0_objs", "call1_0_objs",
     "arg", "result", "elem", "inline_asm", "alloc_objs", "objs", "args", "any", "let", "var", "if", "else", "match", "while", "for", "in",
     "return", "fn", "proc", "pred", "type", "state", "self", "true", "false", "loop", "break", "either", "or", "havoc", "where", "require",
     "undefined", "ghost", "emit", "raise", "try", "catch", "vm", "os", "sp", "cpu", "fs_base", "uint", "sint", "zext", "sext", "bits",
@@ -1188,8 +1191,15 @@ impl<'a> Lower<'a> {
                     }
                     rx.callees_s.insert(fname.clone());
                 }
+                if stack && sh.startup {
+                    return Err(format!("a call of {} with stack arguments before main (not yet in readable form)", f));
+                }
                 let (c1, c2) = if stack {
                     ("call1_s(", "call_s(")
+                } else if sh.startup && objs {
+                    ("call1_0_objs(objs, ", "call0_objs(objs, ")
+                } else if sh.startup {
+                    ("call1_0(", "call0(")
                 } else if objs {
                     ("call1_objs(objs, ", "call_objs(objs, ")
                 } else {

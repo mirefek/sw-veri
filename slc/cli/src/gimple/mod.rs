@@ -22,11 +22,12 @@ use crate::commands::CResult;
 
 pub fn gimple(args: &[String]) -> CResult {
     let (mut elf, mut obj, mut source, mut out, mut dump_path) = (None, None, None, None, None);
-    let (mut readable, mut cfg) = (false, false);
+    let (mut readable, mut cfg, mut startup) = (false, false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--readable" => readable = true,
+            "--startup" => startup = true,
             "--cfg" => cfg = true,
             "--elf" => elf = it.next().cloned(),
             "--obj" => obj = it.next().cloned(),
@@ -51,7 +52,7 @@ pub fn gimple(args: &[String]) -> CResult {
     let mut bodies = Vec::new();
     let mut failed = Vec::new();
     if readable {
-        return readable_file(&funcs, &dw, &syms, &lits, &dump_path, &obj, &elf, &out, cfg);
+        return readable_file(&funcs, &dw, &syms, &lits, &dump_path, &obj, &elf, &out, cfg, startup);
     }
     {
         let mut lw = lower::Lower { dw: &dw, syms: &syms, callees: &mut callees, lits: &lits };
@@ -108,10 +109,10 @@ fn module_name(dump_path: &str) -> String {
 #[allow(clippy::too_many_arguments)]
 fn readable_file(
     funcs: &[dump::Func], dw: &dwarf::Dwarf, syms: &lower::Symbols, lits: &std::collections::HashMap<String, u64>, dump_path: &str, obj: &str, elf: &str,
-    out: &str, cfg: bool,
+    out: &str, cfg: bool, startup: bool,
 ) -> CResult {
     let mut callees = lower::Callees::default();
-    let mut sh = lower::readable::Shared { cfg, ..Default::default() };
+    let mut sh = lower::readable::Shared { cfg, startup, ..Default::default() };
     let (mut bodies, mut failed) = (Vec::new(), Vec::new());
     {
         let mut lw = lower::Lower { dw, syms, callees: &mut callees, lits };

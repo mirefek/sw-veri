@@ -620,6 +620,34 @@ proc[World] call1_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)])
   return r0
 }
 
+// A call before the thread is set up (the startup's, until main: no
+// thread pointer until __init_tp, no canary until __init_ssp): the same
+// but for the thread -- none required, and the callee may set it up (the
+// thread pointer as the callee leaves it). `slc gimple --startup` emits
+// it for the units whose functions all run before main.
+proc[World] call0(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  either { raise stack_overflow } or { }
+  let (r0, r1) = call0_callee(g, args)
+  either { raise stack_overflow } or { }
+  return (r0, r1)
+}
+proc[World] call0_callee(g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
+  let live0 = objs.live
+  let (r0, r1) = g(regs)
+  objs := objs with { live: live0 }
+  return (r0, r1)
+}
+proc[World] call0_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) { return call0(g, args) }
+proc[World] call1_0(g: CFun2[World], args: List[(nat, Ty)]) -> bits[64] {
+  let (r0, r1) = call0(g, args)
+  return r0
+}
+proc[World] call1_0_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)]) -> bits[64] {
+  let (r0, r1) = call0_objs(objs, g, args)
+  return r0
+}
+
 // (readable GIMPLE) the address of element i (signed) of `size` bytes
 proc[World] elem(p: Addr, i: bits[64], size: nat) -> Addr { return padd(p, smul(i, bits[64](size))) }
 

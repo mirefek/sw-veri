@@ -243,7 +243,7 @@ impl<'e> Gen<'e> {
                     // the entry's -- no spec's load, tr.load64_can)
                     if nat(&d) == Some(40) {
                         let v = self.mk("tr.canv", vec![self.s.clone()]);
-                        let tr = self.step("load64_can", a, insn, &[&x[1], &x[4]], self.tail(st, insn, 2, vec![]));
+                        let tr = self.step("load64_can", a, insn, &[&x[1], &x[4]], self.tail(st, insn, 2, vec![simp0()]));
                         self.scratch.insert(g);
                         let st2 = self.set_reg(st, a2, g, 8, v);
                         return self.then(tr, st2);
@@ -326,7 +326,7 @@ impl<'e> Gen<'e> {
                             a,
                             insn,
                             &[&x[1], &d, &c, &x[3], &x[4], &sa.stk, &lit(j), &xv],
-                            self.tail(st, insn, 6, vec![s(&sa.hsa), s(&sa.hso), s(&sa.hstk), s(&hlt), s(&hx)]),
+                            self.tail(st, insn, 6, vec![s(&sa.hsa), simpw(vec![R::S(sa.hso.clone())]), s(&sa.hstk), s(&hlt), s(&hx)]),
                         );
                         self.scratch.insert(g);
                         let st2 = self.set_reg(st, a2, g, 8, xv);
@@ -542,6 +542,7 @@ impl<'e> Gen<'e> {
                         v.extend([&x[1], &x[4], &u, &st.hst, &st.rs, &st.w].into_iter().map(t));
                         v.push(p(R::F(insn.name.clone())));
                         v.extend((0..4).map(|_| simp_l()));
+                        v.push(simp0());
                         let step = mpf("tr.fsub64_can", v);
                         return self.compare_x(st, a, a2, step, Flags::Sub(64, u, y), Some((g, r, 8)));
                     }

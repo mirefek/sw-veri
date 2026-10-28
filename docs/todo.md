@@ -156,6 +156,28 @@ The binary as linked (gcc's crtbegin included). The steps:
   Left: contract.rs linking the stop contracts (an aligned call's from
   the callee's _u contract; k false's into k true's); the entry variants
   entry_np, entry0p generic like tr.entry_n, tr.entry0.
+- (c') The startup mode. Until `__init_tp` there is no thread pointer
+  (fs 0) and until `__init_ssp` no canary; `__init_tp` sets fs inside
+  calls that must keep it (`__init_tls`, `__init_libc`), `__init_ssp`
+  writes the canary in C. The main mode (the ABI as it is: the canary
+  hidden, `thread_ok`/`canary_ok` at entries and calls, fs restored)
+  holds from `main` on; every function before it runs, whole, in the
+  startup mode: nothing hidden (the world's `c_bytes` all bytes -- the
+  mode read from Objs), no thread requirement, fs as the world has it.
+  - GIMPLE: `call0` (and call1_0, ..): no thread check, fs not
+    restored; `slc gimple --startup` emits it for the startup units (all
+    their functions run before main). `call` and the C2 proofs unchanged.
+  - Bridge: done -- the claims' objects v an Objs value (v.live the
+    callers' stack objects, v.c_bytes the run's C bytes: the mode,
+    tr.mainv(s, v)); tr.mem's world matching tr.wmc (the hidden bytes
+    those not v's C bytes), its canary clauses and fs kept (mfs0, on the
+    world) under tr.mainv; the return's tr.rfs. The rules needing the
+    main mode (`call` and its variants, the canary's) take tr.mainv(s, v)
+    (the engine: simp, the entry's v the main mode's); `call0`'s rules the
+    startup mode. Left: the startup entry (`abi.view0`: c_bytes all; no thread_ok/canary_ok)
+    and contracts; a body using neither mode's rules gives both entries
+    (memcpy, memset proven once). The stop relation tr.at_t on the
+    startup view; Init's top turns it into main's world at the stop.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the

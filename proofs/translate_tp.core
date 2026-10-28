@@ -50,16 +50,15 @@ qed
 
 // (the coupling: a sound thread's word at fs:0 the world's to read -- off
 // the stack, not the ABI's stack protector's word)
-theorem tr.tp_def: all s m w ob. tr.mem(s, m, w, ob) -> w.fs_base = s.fs_base -> abi.thread_ok(w.vm, w.fs_base) -> g.mem_defined(w, w.fs_base, 0, 8, false)
+theorem tr.tp_def: all s m w ob. tr.mem(s, m, w, ob) -> w.fs_base in bits(64) -> abi.thread_ok(w.vm, w.fs_base) -> g.mem_defined(w, w.fs_base, 0, 8, false)
 proof
   fix s m w ob
-  assume hmm he ht
+  assume hmm fsw ht
   let FS := w.fs_base
-  have {wob, cok} := hmm
-  have _ sfb := cok
-  have fsw: FS in bits(64) by simp(he, sfb)
-  have o1 _ := apply(tr.mem_objs, hmm)
-  have own: w.objs.c_bytes = abi.cbytes0(FS) by simp(o1, he)
+  have {wob, wm, mfs0} := hmm
+  have {c_bytes} := wm
+  have cb2: ob.c_bytes = abi.cbytes0(s.fs_base) || ob.c_bytes = abi.cball by simp(c_bytes)
+  have wc: w.objs.c_bytes = ob.c_bytes by simp(wob)
   have rd ns _ nz := expand(ht, abi.thread_ok)
   have rd1 := expand(rd, x86_64_linux.readable)
   have k: all x0. x0 in omega -> int_lt(x0, 8) ->
@@ -77,7 +76,18 @@ proof
       show by arith(ci, i2)
     qed
     have io: int_add(FS, i) in omega by simp(fsw, i1)
-    have nh: int_add(FS, i) in w.objs.c_bytes := rewrite(sym(own), (int_add(FS, i) in abi.cbytes0(FS) by taut(all_elim(abi.cbytes0_in, {FS}, {int_add(FS, i)}), io, no)))
+    have c0: int_add(FS, i) in abi.cbytes0(FS) by taut(all_elim(abi.cbytes0_in, {FS}, {int_add(FS, i)}), io, no)
+    have m1: ob.c_bytes = abi.cbytes0(s.fs_base) -> int_add(FS, i) in ob.c_bytes proof
+      assume hm
+      have he: FS = s.fs_base := mp(mfs0, hm)
+      have c2: int_add(FS, i) in abi.cbytes0(s.fs_base) by simp(c0, he)
+      show := rewrite(sym(hm), c2)
+    qed
+    have m2: ob.c_bytes = abi.cball -> int_add(FS, i) in ob.c_bytes proof
+      assume hb
+      show by simp(hb, io)
+    qed
+    have nh: int_add(FS, i) in w.objs.c_bytes := rewrite(sym(wc), (int_add(FS, i) in ob.c_bytes by taut(cb2, m1, m2)))
     show by simp(r, n, nh)
   qed
   have us0: gimple.usable(w.vm, w.objs, FS, 8, false) by defs(k, gimple.usable)
@@ -107,12 +117,11 @@ proof
     assume hi hr hhs hrs hmm ho
     have ipM ipU ipC .. := apply(tr.inv_parts, hi)
     have mf := hi.mfs
-    have ews: FS = s.fs_base := trans(sym(mf), hi.mfs0)
     have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
     have fb: m.fs_base in bits(64) by simp(expand(ipM, x86_64_linux.Machine))
     have wf: FS in bits(64) by simp(rewrite(mf, fb))
     have ea: bits_add(64, int_add(m.fs_base, 0), 0) = bits_add(64, FS, 0) by simp(mf, wf)
-    have hdef := apply(tr.tp_def, hmm, ews, ht)
+    have hdef := apply(tr.tp_def, hmm, wf, ht)
     have rd := apply(tr.reads, {s}, {m}, {w}, {v}, {FS}, {0}, {8}, wf, (0 in bits(32) by simp()), hdef, hmm, simp())
     have ac := rewrite(sym(ea), rd.1)
     have hx := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)

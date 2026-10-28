@@ -288,7 +288,7 @@ impl<'e> Gen<'e> {
         let w1 = self.mk("fn_update", vec![w.clone(), Term::bytes(b"vm"), self.mk("fn_update", vec![vm, Term::bytes(b"bytes"), stored])]);
         // (alloc_objs grows the live objects: `objs with { live: .. }`)
         let live = self.mk("app", vec![objs.clone(), Term::bytes(b"live")]);
-        let objs2 = self.mk("fn_update", vec![objs, Term::bytes(b"live"), self.mk("tr.obj1", vec![live, ha.clone()])]);
+        let objs2 = self.mk("fn_update", vec![objs, Term::bytes(b"live"), self.mk("tr.obj1s", vec![live, ha.clone()])]);
         let w2term = self.mk("fn_update", vec![w1, Term::bytes(b"objs"), objs2.clone()]);
         let wn2 = self.fresh("W");
         let w2 = self.var(&wn2);
@@ -1294,6 +1294,7 @@ impl<'e> Gen<'e> {
                 &mp(
                     inst,
                     vec![
+                        simp0(),
                         p(self.ofr_pf(&self.mk("int_sub", vec![lit(st.fr), lit(8)]))),
                         p(self.hap_pf(&st.hst)),
                         p(f(&insn.name)),
@@ -1423,7 +1424,7 @@ impl<'e> Gen<'e> {
             let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
             let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
             let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
-            let pre = if one { vec![ha, ho] } else { vec![ho, ha] };
+            let pre = if one { vec![simp0(), ha, ho] } else { vec![simp0(), ho, ha] };
             let hat = p(R::Mp(Box::new(self.hat_r(tt, true)), vec![taut(vec![])]));
             return self.run(
                 &mp(
@@ -1468,7 +1469,7 @@ impl<'e> Gen<'e> {
             let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
             let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
             let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
-            let pre = if one { vec![ha, ho] } else { vec![ho, ha] };
+            let pre = if one { vec![simp0(), ha, ho] } else { vec![simp0(), ho, ha] };
             return self.run(
                 &mp(
                     inst,
@@ -1542,7 +1543,8 @@ impl<'e> Gen<'e> {
         let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
         // (the homes apart from the objects, no object the function's own: in the rule's order)
         let (ha, ho) = (p(self.hap_pf(&st.hst)), p(self.ofr_pf(&lit(st.fr))));
-        let pre = if one { vec![ha, ho] } else { vec![ho, ha] };
+        // (the main mode: the claim's objects' C bytes all but the canary)
+        let pre = if one { vec![simp0(), ha, ho] } else { vec![simp0(), ho, ha] };
         self.run(
             &mp(
                 inst,

@@ -300,8 +300,9 @@ proof
   assume hi hmm hg hx hfl
   have {wob, wm, oacc} := hmm
   have {top, limit, brk0, brk, bytes, frames, hid, own = c_bytes, pages, nostk, stk, rsv} := wm
-  have {sM, scan} := hi
-  have fsb: s.fs_base in bits(64) by simp(expand(sM, x86_64_linux.Machine))
+  have {sM} := hi
+  have {cok} := hmm
+  have scan fsb := cok
   have gp gb := expand(hg, abi.vm_grows)
   have fl := expand(hfl, x86.vm_fields)
   // (a page the world maps: the machine's, mapped)
@@ -314,15 +315,15 @@ proof
     have mp0: x86_64_linux.mapped(m.vm, p) by defs(simp(e, hn, hp), x86_64_linux.mapped)
     show by taut(e, mp0)
   qed
-  have by2: all x0. x0 in bits(64) -> abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), x0) -> m1.vm.bytes[x0] = w.vm.bytes[x0] proof
+  have by2: all x0. x0 in bits(64) -> abi.in_domain(w.vm, abi.wob(v.live, v.c_bytes), x0) -> m1.vm.bytes[x0] = w.vm.bytes[x0] proof
     fix x0
     assume hx0 hd
     have e := mp(all_elim(bytes, {x0}), hx0, hd)
     let P := int_div(x0, x86_64_linux.PAGE)
     have mpd: x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) proof
-      have c1: x0 in abi.wob(v, w.objs.c_bytes).live -> x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) proof
+      have c1: x0 in abi.wob(v.live, v.c_bytes).live -> x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) proof
         assume ho0
-        have ho: x0 in v by simp(ho0)
+        have ho: x0 in v.live by simp(ho0)
         have _ c3 := mp(all_elim(oacc, {x0}), simp(hx0), ho)
         have bx: bits_of_int(64, x0) = x0 by simp(hx0)
         have ca := rewrite(bx, c3)
@@ -342,7 +343,7 @@ proof
     have g := mp(all_elim(gb, {x0}), hx0, mpd)
     show := trans(g, e)
   qed
-  have fr2: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->
+  have fr2: all x0. x0 in bits(64) -> (int_le(abi.sp(s), x0) && !abi.in_domain(w.vm, abi.wob(v.live, v.c_bytes), x0)) && abi.stack_page(s.vm, x86_64_linux.page_of(x0)) ->
       m1.vm.bytes[x0] = s.vm.bytes[x0] proof
     fix x0
     assume hx0 hf
@@ -399,18 +400,20 @@ proof
     show := mp(expand(hx, x86.stk_ext).2, mp(rsv, h0))
   qed
   // (the hidden bytes: on mapped pages, kept)
-  have hid2: all x0. x0 in bits(64) -> x0 in abi.canary(s.fs_base) ->
+  have hid2: all x0. x0 in bits(64) -> !(x0 in abi.wob(v.live, v.c_bytes).c_bytes) ->
       m1.vm.bytes[x0] = s.vm.bytes[x0] && m1.vm.pages[x86_64_linux.page_of(x0)] = s.vm.pages[x86_64_linux.page_of(x0)] proof
     fix x0
-    assume hx0 hc
-    have km _ kp kb := apply(tr.hid_at, {s}, {m}, {w}, {v}, {x0}, hmm, scan, fsb, hx0, hc)
+    assume hx0 hn
+    have hm hc := apply(tr.hid_canary, {s}, {m}, {w}, {v}, {x0}, hmm, (x0 in omega by arith(hx0)), hn)
+    have km _ kp kb := apply(tr.hid_at, {s}, {m}, {w}, {v}, {x0}, hmm, hm, mp(scan, hm), fsb, hx0, hc)
     have po: int_div(x0, x86_64_linux.PAGE) in omega by defs(simp(hx0), x86_64_linux.PAGE)
     have g := mp(all_elim(gb, {x0}), hx0, (x86_64_linux.mapped(m.vm, x86_64_linux.page_of(x0)) by defs(km, x86_64_linux.page_of)))
     have gq := mp(all_elim(gp, {int_div(x0, x86_64_linux.PAGE)}), po, km)
     show by defs(simp(g, kb, gq, kp), x86_64_linux.page_of)
   qed
-  have wm2: abi.world_matches(s.vm, m1.vm, w.vm, abi.wob(v, w.objs.c_bytes), s.fs_base, abi.sp(s)) by defs(simp(fl, top, limit, brk0, brk, by2, fr2, hid2, own, pg2, nostk, stk2, rsv2, keep(abi.in_domain, abi.stack_page, abi.stack_reserve, abi.objs_at, abi.canary)), abi.world_matches)
-  have oa2: all y. y in omega -> y in v -> ((int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) || tr.own(s, m1, y)) &&
+  have t2: m1.vm.stack_top = w.vm.stack_top && m1.vm.stack_limit = w.vm.stack_limit && m1.vm.brk_start = w.vm.brk_start && m1.vm.brk = w.vm.brk by simp(fl, top, limit, brk0, brk)
+  have wm2: tr.wmc(s.vm, m1.vm, w.vm, abi.wob(v.live, v.c_bytes), s.fs_base, abi.sp(s)) by defs(taut(t2, by2, fr2, hid2, own, pg2, nostk, stk2, rsv2), tr.wmc)
+  have oa2: all y. y in omega -> y in v.live -> ((int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) || tr.own(s, m1, y)) &&
       x86_64_linux.can_access(m1.vm, bits_of_int(64, y), 1) proof
     fix y
     assume h1 h2
@@ -429,8 +432,8 @@ proof
     qed
     show by taut(c01, ca, o2)
   qed
-  have {hlv, cok} := hmm
-  show by defs(taut(wob, wm2, oa2, hlv, cok), tr.mem)
+  have {hlv, mfs0} := hmm
+  show by defs(taut(wob, wm2, oa2, hlv, cok, mfs0), tr.mem)
 qed
 
 // ----------------------------------------------------------------------
@@ -439,11 +442,12 @@ qed
 //  at or above sp (tr.vabove, the entry's tr.objs_ok) -- every home, below
 //  the entry's rsp, is free of them, and no object is the function's own
 
-def tr.vabove(s, v) := s.gpr[4] in bits(64) && int_lt(s.gpr[4], 140737488355328) && v in set_type(omega) && (all x. x in omega -> x in v -> int_le(abi.sp(s), x))
+def tr.vabove(s, v) := s.gpr[4] in bits(64) && int_lt(s.gpr[4], 140737488355328) && v.live in set_type(omega) && (all x. x in omega -> x in v.live -> int_le(abi.sp(s), x))
 
-theorem tr.vabove_ok: all s v. s in x86_64_linux.Machine -> int_lt(s.gpr[4], 140737488355328) -> v in set_type(omega) -> tr.objs_ok(s, v) -> tr.vabove(s, v)
+// (at the entry: the callers' objects v, with the run's C bytes cb)
+theorem tr.vabove_ok: all s v cb. s in x86_64_linux.Machine -> int_lt(s.gpr[4], 140737488355328) -> v in set_type(omega) -> tr.objs_ok(s, v) -> tr.vabove(s, abi.wob(v, cb))
 proof
-  fix s v
+  fix s v cb
   assume hs hlt hv ho
   have r4 := apply(x86i.rsp_typed, hs)
   have g: all x. x in omega -> x in v -> int_le(abi.sp(s), x) proof
@@ -452,7 +456,8 @@ proof
     have c := mp(all_elim(expand(ho, tr.objs_ok), {x}), h1, h2)
     show by taut(c)
   qed
-  show by defs(taut(r4, hlt, hv, g), tr.vabove)
+  have vl: abi.wob(v, cb).live = v by simp()
+  show by defs(taut(r4, hlt, rewrite(sym(vl), hv), rewrite(sym(vl), g)), tr.vabove)
 qed
 
 theorem tr.hfree_above: all s v c n. tr.vabove(s, v) -> tr.hrange(c, n) -> tr.hfree(s, c, n, v)
@@ -463,10 +468,10 @@ proof
   have c64 cl no nl := expand(hc, tr.hrange)
   fix j
   assume j1 j2
-  have no2: !(int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j) in v) proof
+  have no2: !(int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j) in v.live) proof
     assume hv
-    have sub: subset(v, omega) by taut(powerset_def[s := omega, a := v], expand(hset, set_type))
-    have xo := mp(subset_elim[a := v, b := omega, z := int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j)], sub, hv)
+    have sub: subset(v.live, omega) by taut(powerset_def[s := omega, a := v.live], expand(hset, set_type))
+    have xo := mp(subset_elim[a := v.live, b := omega, z := int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j)], sub, hv)
     have a := mp(all_elim(ab, {int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j)}), xo, hv)
     have sp8: abi.sp(s) = int_add(s.gpr[4], 8) by simp(r4, slt)
     show by arith(a, sp8, r4, c64, j1, j2, nl)
@@ -589,15 +594,16 @@ theorem tr.mem_fstore: all s base code fr m0 m m2 w v c n x. tr.inv(s, base, cod
 proof
   fix s base code fr m0 m m2 w v c n x
   assume hi hmm hc ha hfree em
-  have {sM, slt, scan} := hi
-  have fsb: s.fs_base in bits(64) by simp(expand(sM, x86_64_linux.Machine))
+  have {sM, slt} := hi
+  have {cok} := hmm
+  have scan fsb := cok
   have r4 := apply(x86i.rsp_typed, sM)
   have g8 := apply(tr.inv_gap, hi)
   have nr := apply(tr.sp_lt, {s.gpr[4]}, r4, slt)
   have {wob, wm, oacc} := hmm
   have {pages} := wm
   let B := m.vm.bytes
-  have k: all a. a in bits(64) -> abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), a) || int_le(abi.sp(s), a) || a in abi.canary(s.fs_base) -> x86_64_linux.store_le(B, tr.ha(s, c), n, x)[a] = B[a] proof
+  have k: all a. a in bits(64) -> abi.in_domain(w.vm, abi.wob(v.live, v.c_bytes), a) || int_le(abi.sp(s), a) || !(a in abi.wob(v.live, v.c_bytes).c_bytes) -> x86_64_linux.store_le(B, tr.ha(s, c), n, x)[a] = B[a] proof
     fix a
     assume hab hda
     have ne: all j. j in omega -> int_lt(j, n) -> !(bits_add(64, tr.ha(s, c), bits_of_int(64, j)) = a) proof
@@ -616,17 +622,18 @@ proof
         have pc := mp(all_elim(pages, {P}), hp)
         have nd: !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2))
           by defs(simp(pc, expand(sp3, abi.stack_page, x86_64_linux.mapped), keep(x86_64_linux.TASK_SIZE)), x86_64_linux.mapped, x86_64_linux.PAGE)
-        have nob: a in abi.wob(v, w.objs.c_bytes).live -> false proof
+        have nob: a in abi.wob(v.live, v.c_bytes).live -> false proof
           assume hv0
-          have hv: a in v by simp(hv0)
+          have hv: a in v.live by simp(hv0)
           have nf := mp(all_elim(apply(tr.hfr_get, hfree, hc), {j}), j1, j2)
           show by taut(nf, rewrite(ea, hv))
         qed
-        have nd2: !abi.in_domain(w.vm, abi.wob(v, w.objs.c_bytes), a) by defs(taut(nd, nob), abi.in_domain)
+        have nd2: !abi.in_domain(w.vm, abi.wob(v.live, v.c_bytes), a) by defs(taut(nd, nob), abi.in_domain)
         // (not the ABI's word either: that is off the stack)
-        have nca: a in abi.canary(s.fs_base) -> false proof
-          assume hca
-          have _ ns _ _ := apply(tr.hid_at, {s}, {m}, {w}, {v}, {a}, hmm, scan, fsb, hab, hca)
+        have nca: !(a in abi.wob(v.live, v.c_bytes).c_bytes) -> false proof
+          assume hn
+          have hm hca := apply(tr.hid_canary, {s}, {m}, {w}, {v}, {a}, hmm, (a in omega by arith(hab)), hn)
+          have _ ns _ _ := apply(tr.hid_at, {s}, {m}, {w}, {v}, {a}, hmm, hm, mp(scan, hm), fsb, hab, hca)
           have ns2: !abi.stack_page(m.vm, int_div(a, 4096)) := expand(ns, x86_64_linux.PAGE)
           show by taut(ns2, sp3)
         qed
@@ -1136,12 +1143,12 @@ theorem tr.entry_nk(lb, lc, base, code, statics, f, n, fd, x0 x1. rs, x0. q, x3 
   (all s args v. s in x86_64_linux.Machine -> E(s, args, v) -> tr.entry_ok_u(s, args)) ->
   (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) -> ord_le(n, seq_len(args)) -> tr.regs(s, rs(args, s))) ->
   (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(n, seq_len(args)) ->
-    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args, v) -> tr.vabove(s, v) ->
-    tr.pt(s, zb. B(zb), zb pb wb. A(zb, pb, wb), v, base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
+    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args, v) -> tr.vabove(s, abi.wob(v, abi.cbytes0(s.fs_base))) ->
+    tr.pt(s, zb. B(zb), zb pb wb. A(zb, pb, wb), abi.wob(v, abi.cbytes0(s.fs_base)), base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
   (all z. z.rip = f -> !B(z)) ->
   (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
       E(s, args, v) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> ord_le(n, seq_len(args)) ->
-      tr.sim(s, zb. B(zb), zb pb wb. A(zb, pb, wb), v, mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem), s))
+      tr.sim(s, zb. B(zb), zb pb wb. A(zb, pb, wb), abi.wob(v, abi.cbytes0(s.fs_base)), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem), s))
 proof
   assume hbase hsub hE hregs hbody hnb
     fix args v mem s
@@ -1164,7 +1171,7 @@ proof
       all_elim(tr.kept_refl, {s.vm}, {s.gpr[4]}), z0, hM, su, hc, hdf, wt, hvu, ent, wbk, can,
       keep(x86_64_linux.Machine, abi.World, abi.code_at, abi.stack_page, x86_64_linux.can_access, abi.brk_start_ok)), tr.inv)
     have {slt} := inv
-    have vab := apply(tr.vabove_ok, hM, slt, hvo, hob)
+    have vab := apply(tr.vabove_ok, {s}, {v}, {abi.cbytes0(s.fs_base)}, hM, slt, hvo, hob)
     have body := mp(all_elim(hbody, {args}, {v}, {mem}, {s}), hA, hvo, hmv, hM, hg, hl, hvu, he, vab)
     have hh := all_elim(tr.homes_empty, {s}, {s})
     have rr := mp(all_elim(hregs, {args}, {s}), hA, hM, heu, hg)
@@ -1181,8 +1188,8 @@ theorem tr.entry_n(lb, lc, base, code, statics, f, n, fd, x0 x1. rs, x0. q, x3 x
   (all s args v. s in x86_64_linux.Machine -> E(s, args, v) -> tr.entry_ok_u(s, args)) ->
   (all args s. args in abi.ARGS -> s in x86_64_linux.Machine -> tr.entry_ok_u(s, args) -> ord_le(n, seq_len(args)) -> tr.regs(s, rs(args, s))) ->
   (all args v mem s. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> ord_le(n, seq_len(args)) ->
-    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args, v) -> tr.vabove(s, v) ->
-    tr.pt(s, zb. false, zb pb wb. false, v, base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
+    abi.loaded(s.vm, lb, lc, statics) -> abi.view(s, v, mem) in univ(1) -> E(s, args, v) -> tr.vabove(s, abi.wob(v, abi.cbytes0(s.fs_base))) ->
+    tr.pt(s, zb. false, zb pb wb. false, abi.wob(v, abi.cbytes0(s.fs_base)), base, code, 0, f, empty, fd, rs(args, s), mkprog(x1 x2. bind_rel(q(args), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), abi.view(s, v, mem))) ->
   (all args v mem s o. args in abi.ARGS -> v in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, lb, lc, statics) -> s.rip = f ->
     E(s, args, v) -> tr.objs_ok(s, v) -> abi.view_ok(s, v, mem) -> tr.run_d(s, s, o) ->
     tr.matches_t(fn_build(abi.ARGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(q(x0), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))), args, v, mem, s, o))
