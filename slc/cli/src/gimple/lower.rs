@@ -35,6 +35,12 @@ impl RT {
 pub struct Symbols {
     pub local: HashMap<String, u64>,
     pub global: HashMap<String, u64>,
+    /// the other local symbols (the linker's own, `__init_array_start`),
+    /// none where several have the name
+    pub other_local: HashMap<String, Option<u64>>,
+    /// the object's weak undefined symbols the binary does not define: at
+    /// address 0 (`_DYNAMIC` in a static binary)
+    pub weak0: Vec<String>,
 }
 
 impl Symbols {
@@ -46,6 +52,7 @@ impl Symbols {
         let text = String::from_utf8_lossy(&out.stdout);
         let mut groups: Vec<(String, HashMap<String, u64>)> = Vec::new();
         let mut global = HashMap::new();
+        let mut other_local: HashMap<String, Option<u64>> = HashMap::new();
         for l in text.lines() {
             let f: Vec<&str> = l.split_whitespace().collect();
             if f.len() < 8 || !f[0].ends_with(':') {
@@ -55,6 +62,7 @@ impl Symbols {
             if typ == "FILE" {
                 groups.push((name.to_string(), HashMap::new()));
             } else if bind == "LOCAL" {
+                other_local.entry(name.to_string()).and_modify(|v| *v = None).or_insert(Some(value));
                 if let Some(g) = groups.last_mut() {
                     g.1.insert(name.to_string(), value);
                 }
@@ -65,10 +73,29 @@ impl Symbols {
         let mut cands: Vec<&(String, HashMap<String, u64>)> = groups.iter().filter(|g| g.0 == file).collect();
         cands.sort_by_key(|g| std::cmp::Reverse(anchors.iter().filter(|a| g.1.contains_key(*a)).count()));
         let local = cands.first().map(|g| g.1.clone()).unwrap_or_default();
-        Ok(Symbols { local, global })
+        Ok(Symbols { local, global, other_local, weak0: Vec::new() })
     }
+
+    /// The object's weak undefined symbols (`readelf -sW` of it) that the
+    /// binary lacks: resolved to 0 by the linker.
+    pub fn read_weak(&mut self, obj: &str) -> Result<(), String> {
+        let out = std::process::Command::new("readelf").args(["-sW", obj]).output().map_err(|e| e.to_string())?;
+        for l in String::from_utf8_lossy(&out.stdout).lines() {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            if f.len() >= 8 && f[4] == "WEAK" && f[6] == "UND" && self.addr(f[7]).is_none() {
+                self.weak0.push(f[7].to_string());
+            }
+        }
+        Ok(())
+    }
+
     fn addr(&self, n: &str) -> Option<u64> {
-        self.local.get(n).or_else(|| self.global.get(n)).copied()
+        self.local
+            .get(n)
+            .or_else(|| self.global.get(n))
+            .copied()
+            .or_else(|| self.other_local.get(n).copied().flatten())
+            .or_else(|| self.weak0.iter().any(|w| w == n).then_some(0))
     }
 
     /// A `static` local `n` of the file: GCC's symbol `n.<number>` (it must
@@ -86,6 +113,49 @@ impl Symbols {
             _ => Err(format!("several symbols for the static local `{}`", n)),
         }
     }
+}
+
+/// String literals' addresses in the linked binary. Each relocation of an
+/// object function's code into read-only data (`.rodata*`, `.LC*`) is
+/// followed in the binary: at the function's address plus the relocation's
+/// offset a 32-bit displacement from the next byte (as `lea` has); the
+/// NUL-terminated bytes at its target are the literal. A literal's first
+/// such target is its address.
+pub fn string_literals(obj: &str, elf_path: &str, syms: &Symbols) -> Result<HashMap<String, u64>, String> {
+    let bytes = std::fs::read(elf_path).map_err(|e| format!("{}: {}", elf_path, e))?;
+    let elf = sl_interp::elf::Elf::parse(bytes)?;
+    let out = std::process::Command::new("readelf").args(["-rW", obj]).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lits = HashMap::new();
+    let mut func: Option<u64> = None;
+    for l in text.lines() {
+        if let Some(rest) = l.strip_prefix("Relocation section '") {
+            let sec = rest.split('\'').next().unwrap_or("");
+            func = sec.strip_prefix(".rela.text.").and_then(|f| syms.addr(f));
+            continue;
+        }
+        let Some(fa) = func else { continue };
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() < 5 || f[2] != "R_X86_64_PC32" || !(f[4].starts_with(".rodata") || f[4].starts_with(".LC")) {
+            continue;
+        }
+        let Ok(off) = u64::from_str_radix(f[0], 16) else { continue };
+        let p = fa + off;
+        let Some(d) = elf.bytes_at(p, 4) else { continue };
+        let t = (p as i64 + 4 + i32::from_le_bytes([d[0], d[1], d[2], d[3]]) as i64) as u64;
+        let mut s = String::new();
+        for k in 0..4096u64 {
+            match elf.bytes_at(t + k, 1) {
+                Some([0]) => {
+                    lits.entry(s).or_insert(t);
+                    break;
+                }
+                Some([b]) => s.push(char::from(*b)),
+                _ => break,
+            }
+        }
+    }
+    Ok(lits)
 }
 
 /// Callees, numbered across a translated file.
@@ -203,6 +273,8 @@ pub struct Lower<'a> {
     pub dw: &'a Dwarf,
     pub syms: &'a Symbols,
     pub callees: &'a mut Callees,
+    /// string literals' addresses (`string_literals`)
+    pub lits: &'a HashMap<String, u64>,
 }
 
 /// The state of lowering one function.
@@ -274,11 +346,35 @@ impl<'a> Lower<'a> {
 
     /// a type as written in the dump
     fn ty(&self, text: &str) -> Result<RT, String> {
+        // a function pointer `int (*<T6a4>) (int, char * *)`, and pointers
+        // to them (`void (*<T4e0>) (void) *`): a pointer (to code)
+        if let Some(i) = text.find("(*") {
+            let after = &text[text.rfind(')').map_or(i, |j| j + 1).max(i)..];
+            let mut r = RT::Ptr(Box::new(RT::Void));
+            for _ in 0..after.matches('*').count() {
+                r = RT::Ptr(Box::new(r));
+            }
+            return Ok(r);
+        }
         let t0 = text.replace("{ ref - all }", "").replace("{ref-all}", "");
-        // `T[4][3] *`: pointer stars (outermost), then array dimensions
-        let t1 = t0.trim();
-        let stars = t1.chars().rev().take_while(|c| *c == '*' || c.is_whitespace()).filter(|c| *c == '*').count();
-        let mut t = t1.trim_end_matches(|c: char| c == '*' || c.is_whitespace()).to_string();
+        // `T[4][3] *`: pointer stars (outermost), then array dimensions; a
+        // qualifier between stars (`volatile void * volatile *`) dropped
+        let mut t = t0.trim().to_string();
+        let mut stars = 0;
+        loop {
+            let u = t.trim_end();
+            if let Some(v) = u.strip_suffix('*') {
+                stars += 1;
+                t = v.to_string();
+            } else if let Some(v) = ["const", "volatile", "restrict", "__restrict"].iter().find_map(|q| {
+                u.strip_suffix(q).filter(|v| v.ends_with(|c: char| c.is_whitespace() || c == '*'))
+            }) {
+                t = v.to_string();
+            } else {
+                t = u.to_string();
+                break;
+            }
+        }
         let mut dims = Vec::new();
         while t.trim_end().ends_with(']') {
             let i = t.rfind('[').ok_or("bad array type")?;
@@ -299,7 +395,12 @@ impl<'a> Lower<'a> {
         } else if let Some(e) = w.strip_prefix("complex ").or_else(|| w.strip_prefix("__complex__ ")) {
             RT::Complex(Box::new(self.ty(e)?))
         } else if let Some(n) = w.strip_prefix("struct ").or_else(|| w.strip_prefix("union ")) {
-            RT::Struct(*self.dw.structs.get(n.trim()).ok_or_else(|| format!("unknown struct `{}`", n))?)
+            // (`struct Phdr`: GIMPLE's name for a typedef of an untagged struct)
+            match (self.dw.structs.get(n.trim()), self.dw.typedefs.get(n.trim())) {
+                (Some(&s), _) => RT::Struct(s),
+                (None, Some(&td)) => self.dwarf_rt(td)?,
+                (None, None) => return Err(format!("unknown struct `{}`", n)),
+            }
         } else if let Some(b) = w.strip_prefix("<unnamed-unsigned:") {
             RT::int(b.trim_end_matches('>').parse().map_err(|_| "bitfield width")?, false)
         } else if let Some(b) = w.strip_prefix("<unnamed-signed:") {
@@ -387,14 +488,33 @@ impl<'a> Lower<'a> {
     // ---------------------------------------------------------------
     //  Expressions
 
+    /// a function's name as a value (`stage2 = libc_start_main_stage2`,
+    /// `_init` as an argument): its address -- a symbol not a value, local
+    /// or variable
+    fn function_addr(&self, fx: &Fx, s: &str) -> Option<u64> {
+        if self.is_value_name(fx, s) || fx.objs.contains_key(s) || fx.statics.contains_key(s) || fx.decl.contains_key(s) {
+            return None;
+        }
+        // (DWARF's functions: with a parameter list; its variables too have
+        // a type, functions one for their result)
+        if self.dw.params.contains_key(s) || !self.dw.vars.contains_key(s) { self.syms.addr(s) } else { None }
+    }
+
+    /// a string literal's address
+    fn lit_addr(&self, s: &str) -> Result<u64, String> {
+        self.lits.get(s).copied().ok_or_else(|| format!("no address for the string literal {:?}", s))
+    }
+
     /// the type of an operand or memory reference
     fn type_of(&self, fx: &Fx, e: &E) -> Result<RT, String> {
         Ok(match e {
+            E::Name(s) if self.function_addr(fx, s).is_some() => RT::Ptr(Box::new(RT::Void)),
             E::Name(s) => match fx.objs.get(s) {
                 Some((_, t)) => t.clone(),
                 None => self.name_ty(fx, s)?,
             },
             E::Num(_) => RT::int(64, true),
+            E::Str(_) => RT::Ptr(Box::new(RT::int(8, true))),
             E::Addr(r) => RT::Ptr(Box::new(self.type_of(fx, r)?)),
             E::Deref(p) => match self.type_of(fx, p)? {
                 RT::Ptr(t) => *t,
@@ -436,7 +556,9 @@ impl<'a> Lower<'a> {
     fn opnd(&mut self, fx: &mut Fx, e: &E, prec: u64) -> Result<String, String> {
         match e {
             E::Num(n) => Ok(format!("cst({})", wrap(*n, prec))),
+            E::Str(s) => Ok(format!("cst({})", self.lit_addr(s)?)),
             E::Name(s) if self.is_value_name(fx, s) => Ok(format!("ssa({})", self.name(fx, s)?)),
+            E::Name(s) if self.function_addr(fx, s).is_some() => Ok(format!("cst({})", self.function_addr(fx, s).unwrap_or(0))),
             E::Addr(r) => {
                 let (b, off) = self.address(fx, r)?;
                 Ok(self.add_off(fx, b, off))
@@ -1023,7 +1145,7 @@ enum Base {
 fn collect_names_e(e: &E, out: &mut Vec<String>) {
     match e {
         E::Name(n) => out.push(n.clone()),
-        E::Num(_) => {}
+        E::Num(_) | E::Str(_) => {}
         E::Addr(x) | E::Deref(x) | E::Neg(x) | E::Not(x) | E::Cast(_, x) | E::Field(x, _) | E::Arrow(x, _) | E::BitRef(x, _, _) => collect_names_e(x, out),
         E::Index(a, b) | E::Bin(_, a, b) => {
             collect_names_e(a, out);

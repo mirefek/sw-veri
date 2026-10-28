@@ -103,7 +103,35 @@ Next that.
 ## 5. Init: startup to main
 
 musl's `_start` … `__libc_start_main` reaches `main` with the invariant
-holding for the empty heap. It needs from exec (spec/linux/exec.sl):
+holding for the empty heap (`musl.init`, the claim's last open lemma).
+The binary as linked (gcc's crtbegin included). The steps:
+- (a) Readable GIMPLE of the startup units (src/env/__libc_start_main.c,
+  __init_tls.c, __stack_chk_fail.c, crt/crt1.c; dumped): `slc gimple`
+  lacks string literals, function addresses as values, indirect calls,
+  the empty `asm` hiding stage2's pointer, `volatile` pointer types,
+  `Phdr`.
+- (b) Code without musl C: readable models (as musl_asm.sl's) of
+  `_start`, `__set_thread_area`, `memset`, crti/crtn's `_init`, and
+  gcc's `frame_dummy` -> `register_tm_clones` (the init_array's one
+  constructor: no memory, its branch on `__TMC_END__ - __TMC_END__` = 0,
+  so no effect).
+- (c) `main` as a callee: an external function whose contract requires
+  the invariant at the empty heap; stage2's call through the `main`
+  pointer meets it (C2), and the bridge's caller-side call rule gives
+  the machine state at rip = main (`run_until`). Indirect calls in the
+  GIMPLE world.
+- (d) C1 of the startup functions (~560 instructions), C2 against
+  purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
+  environ; unprivileged: the secure path skipped), `__init_tls` (the
+  program headers, builtin TLS, `__init_tp`: arch_prctl,
+  set_tid_address), `__init_ssp` (the canary from AT_RANDOM),
+  `__libc_start_init` (`_init`, the init_array).
+- (e) The top: exec_state to the C world at `_start`; at `main` the
+  empty heap's rep (the context zero from .bss, the thread block in
+  .bss apart from the allocator's ranges) and `owned` within the
+  statics, the thread descriptor and the auxv.
+
+It needs from exec (spec/linux/exec.sl):
 the break within the user space (`brk_ok`), the auxiliary vector apart
 from the data (`fresh_ok.auxv_ctx`) and not at null (`auxv_nz`); and the ABI's entry its
 `brk_start_ok`.

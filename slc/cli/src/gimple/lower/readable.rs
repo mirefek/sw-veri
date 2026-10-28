@@ -32,6 +32,10 @@ const RESERVED: &[&str] = &[
     "nat", "int", "bool", "len", "all", "ex", "some", "none", "min", "max", "view", "with", "layer", "uses", "const", "law", "param",
 ];
 
+/// the code map parameter of a function calling through pointers: the
+/// function at each address
+const FPTR: &str = "fptr";
+
 fn sanitize(s: &str) -> String {
     let t: String = s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     if RESERVED.contains(&t.as_str()) { format!("{}_", t) } else { t }
@@ -56,7 +60,7 @@ fn succs(f: &Func, index: &HashMap<u64, usize>, i: usize) -> Result<Vec<usize>, 
     Ok(match f.blocks[i].stmts.last() {
         Some(S::Goto(t)) => vec![bi(t)?],
         Some(S::If { yes, no, .. }) => vec![bi(yes)?, bi(no)?],
-        Some(S::Return(_)) => vec![],
+        Some(S::Return(_)) | Some(S::Unreachable) => vec![],
         _ if i + 1 < f.blocks.len() => vec![i + 1],
         _ => return Err(format!("block {} has no successor", f.blocks[i].num)),
     })
@@ -104,7 +108,7 @@ fn word_defs_uses(s: &S, ws: &BTreeMap<String, Vec<(String, String)>>) -> (Vec<S
         }
         match e {
             E::Name(n) => out.extend(ws.get(n).into_iter().flatten().map(|(_, v)| v.clone())),
-            E::Num(_) => {}
+            E::Num(_) | E::Str(_) => {}
             E::Addr(x) | E::Deref(x) | E::Neg(x) | E::Not(x) | E::Cast(_, x) | E::Field(x, _) | E::Arrow(x, _) | E::BitRef(x, _, _) => reads(x, ws, out),
             E::Index(a, b) | E::Bin(_, a, b) => {
                 reads(a, ws, out);
@@ -159,7 +163,7 @@ fn field_only(e: &E, n: &str) -> bool {
     match e {
         E::Field(x, _) if matches!(&**x, E::Name(m) if m == n) => true,
         E::Name(m) => m != n,
-        E::Num(_) => true,
+        E::Num(_) | E::Str(_) => true,
         E::Addr(x) => !mentions(x),
         E::Deref(x) | E::Neg(x) | E::Not(x) | E::Cast(_, x) | E::Field(x, _) | E::Arrow(x, _) | E::BitRef(x, _, _) => field_only(x, n),
         E::Index(a, b) | E::Bin(_, a, b) => field_only(a, n) && field_only(b, n),
@@ -189,7 +193,7 @@ fn word_use_ok(s: &S, n: &str, ws: &BTreeMap<String, Vec<(String, String)>>) -> 
 fn walk_e(e: &E, out: &mut Vec<String>) {
     match e {
         E::Name(n) => out.push(n.clone()),
-        E::Num(_) => {}
+        E::Num(_) | E::Str(_) => {}
         E::Addr(x) | E::Deref(x) | E::Neg(x) | E::Not(x) | E::Cast(_, x) | E::Field(x, _) | E::Arrow(x, _) | E::BitRef(x, _, _) => walk_e(x, out),
         E::Index(a, b) | E::Bin(_, a, b) => {
             walk_e(a, out);
@@ -211,11 +215,15 @@ fn defs_uses(s: &S) -> (Vec<String>, Vec<String>) {
             }
             walk_e(r, &mut u);
         }
-        S::Call(l, _, args) => {
+        S::Call(l, f, args) => {
             match l {
                 Some(E::Name(n)) => d.push(n.clone()),
                 Some(other) => walk_e(other, &mut u),
                 None => {}
+            }
+            // (a call through a pointer: its value used)
+            if super::is_ssa(f) {
+                u.push(f.clone());
             }
             args.iter().for_each(|a| walk_e(a, &mut u));
         }
@@ -303,7 +311,7 @@ impl<'a> Lower<'a> {
             ps.push(format!("{}{}: {}", name, if *reassigned { "_in" } else { "" }, ty));
         }
         let callees_s = rx.callees_s.clone();
-        let cty = |c: &String| if callees_s.contains(c) { "CFunS[World]" } else { "CFun2[World]" };
+        let cty = |c: &String| if c == FPTR { "Addr -> CFun2[World]" } else if callees_s.contains(c) { "CFunS[World]" } else { "CFun2[World]" };
         for c in &rx.callees {
             ps.push(format!("{}: {}", c, cty(c)));
         }
@@ -593,7 +601,7 @@ impl<'a> Lower<'a> {
                     self.rstmt(rx, sh, &st)?;
                 }
             }
-            if matches!(rx.f.blocks[b].stmts.last(), Some(S::Return(_))) {
+            if matches!(rx.f.blocks[b].stmts.last(), Some(S::Return(_)) | Some(S::Unreachable)) {
                 return Ok(());
             }
             let s = rx.succ[b][0];
@@ -760,7 +768,7 @@ impl<'a> Lower<'a> {
                 Ok(Edge { to, copies })
             };
             let term = match blk.stmts.last() {
-                Some(S::Return(_)) => Jump::Return,
+                Some(S::Return(_)) | Some(S::Unreachable) => Jump::Return,
                 Some(S::If { op, a, b: c, .. }) => {
                     let (op, a, c) = (op.clone(), a.clone(), c.clone());
                     let text = self.cond(rx, sh, &op, &a, &c)?;
@@ -831,7 +839,7 @@ impl<'a> Lower<'a> {
             Ok(())
         };
         match blk.stmts.last().cloned() {
-            Some(S::Return(_)) => Ok(()),
+            Some(S::Return(_)) | Some(S::Unreachable) => Ok(()),
             Some(S::If { op, a, b: c, .. }) => {
                 let cond = self.cond(rx, sh, &op, &a, &c)?;
                 let (yes, no) = (rx.succ[b][0], rx.succ[b][1]);
@@ -909,7 +917,19 @@ impl<'a> Lower<'a> {
     fn val(&mut self, rx: &mut Rx, sh: &mut Shared, e: &E, prec: u64) -> Result<String, String> {
         match e {
             E::Num(n) => Ok(lit(*n, prec)),
+            E::Str(s) => {
+                // (a constant named after its text: `str_dev_null`, `str_` for "")
+                let name = format!("str_{}", sanitize(s.trim_matches(|c: char| !c.is_ascii_alphanumeric())));
+                sh.globals.insert(name.clone(), self.lit_addr(s)?);
+                Ok(name)
+            }
             E::Name(s) if self.is_value_name(&rx.fx, s) => rx.rn.get(s).cloned().ok_or_else(|| format!("no name for {}", s)),
+            // (a function's address: `f_at`, apart from its proc `f`)
+            E::Name(s) if self.function_addr(&rx.fx, s).is_some() => {
+                let name = format!("{}_at", sanitize(s));
+                sh.globals.insert(name.clone(), self.function_addr(&rx.fx, s).unwrap_or(0));
+                Ok(name)
+            }
             E::Addr(r) => {
                 let (b, o) = self.raddr(rx, sh, r)?;
                 Ok(if o == 0 { b } else { format!("padd({}, {})", b, lit(o, 64)) })
@@ -1134,10 +1154,21 @@ impl<'a> Lower<'a> {
             }
             S::Call(_, f, _) if f.starts_with('.') => Err(format!("internal function {} (not yet in readable form)", f)),
             S::Call(lhs, f, args) => {
-                let fname = sanitize(f);
-                if !rx.callees.contains(&fname) {
-                    rx.callees.push(fname.clone());
-                }
+                // (a call through a pointer p: the function the code map
+                // `fptr` has at p -- C1 links it to the code there)
+                let fname = if self.is_value_name(&rx.fx, f) {
+                    let p = self.val(rx, sh, &E::Name(f.clone()), 64)?;
+                    if !rx.callees.iter().any(|c| c == FPTR) {
+                        rx.callees.push(FPTR.to_string());
+                    }
+                    format!("{}[{}]", FPTR, p)
+                } else {
+                    let n = sanitize(f);
+                    if !rx.callees.contains(&n) {
+                        rx.callees.push(n.clone());
+                    }
+                    n
+                };
                 let ptys: Vec<RT> = self.dw.params.get(f).map(|ps| ps.iter().filter_map(|&t| self.dwarf_rt(t).ok()).collect()).unwrap_or_default();
                 let mut av = Vec::new();
                 for (i, a) in args.iter().enumerate() {
@@ -1205,6 +1236,20 @@ impl<'a> Lower<'a> {
                 let code = assemble(tmpl)?;
                 let bytes: Vec<String> = code.iter().map(|b| b.to_string()).collect();
                 self.line(rx, format!("inline_asm([{}], [])", bytes.join(", ")));
+                Ok(())
+            }
+            // an empty template, each output tied to an input ("0"): no code,
+            // the values copied (`__asm__("" : "+r"(stage2))`, hiding a value
+            // from the optimizer)
+            S::Asm { tmpl, outs, ins } if tmpl.trim().is_empty() && !outs.is_empty() => {
+                for (k, (_, o)) in outs.iter().enumerate() {
+                    let E::Name(x) = o else { return Err("an empty asm's output into memory".into()) };
+                    let (_, i) = ins.iter().find(|(c, _)| c == &k.to_string()).ok_or("an empty asm's output not tied to an input")?;
+                    let xi = self.name(&mut rx.fx, x)?;
+                    let w = rx.fx.types[xi].0;
+                    let v = self.val(rx, sh, i, w)?;
+                    self.set(rx, x, v)?;
+                }
                 Ok(())
             }
             // the atomic primitives (layers/gimple.sl): x86_64's a_cas, a
@@ -1287,6 +1332,10 @@ impl<'a> Lower<'a> {
             S::Asm { .. } => Err("inline assembly with operands (not yet in readable form)".into()),
             S::Return(None) => {
                 self.line(rx, "return".into());
+                Ok(())
+            }
+            S::Unreachable => {
+                self.line(rx, "undefined".into());
                 Ok(())
             }
             S::Return(Some(e)) => {
@@ -1464,8 +1513,8 @@ impl<'a> Lower<'a> {
                     format!("bits[{}]({})", xp, v)
                 }
             }
-            E::Num(_) | E::Addr(_) => self.val(rx, sh, rhs, xp)?,
-            E::Name(n) if self.is_value_name(&rx.fx, n) => self.val(rx, sh, rhs, xp)?,
+            E::Num(_) | E::Addr(_) | E::Str(_) => self.val(rx, sh, rhs, xp)?,
+            E::Name(n) if self.is_value_name(&rx.fx, n) || self.function_addr(&rx.fx, n).is_some() => self.val(rx, sh, rhs, xp)?,
             E::Code(c, _) => return Err(format!("{} (not yet in readable form)", c)),
             _ => self.load(rx, sh, rhs)?,
         };

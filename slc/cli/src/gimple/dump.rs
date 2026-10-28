@@ -24,7 +24,39 @@ pub fn lex(s: &str) -> Result<Vec<Tok>, String> {
             let mut t = String::new();
             while j < c.len() && c[j] != '"' {
                 if c[j] == '\\' && j + 1 < c.len() {
+                    // C escapes: \n \t \\ \" \0, octal \NNN, hex \xHH
                     j += 1;
+                    let d = |k: usize| c.get(k).copied().filter(|x| x.is_digit(8));
+                    let e = match c[j] {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        'x' => {
+                            let mut v = 0u32;
+                            while j + 1 < c.len() && c[j + 1].is_ascii_hexdigit() {
+                                j += 1;
+                                v = v * 16 + c[j].to_digit(16).unwrap();
+                            }
+                            char::from_u32(v).ok_or("bad \\x escape")?
+                        }
+                        x if x.is_digit(8) => {
+                            let mut v = x.to_digit(8).unwrap();
+                            for _ in 0..2 {
+                                match d(j + 1) {
+                                    Some(y) => {
+                                        j += 1;
+                                        v = v * 8 + y.to_digit(8).unwrap();
+                                    }
+                                    None => break,
+                                }
+                            }
+                            char::from_u32(v).ok_or("bad octal escape")?
+                        }
+                        x => x,
+                    };
+                    t.push(e);
+                    j += 1;
+                    continue;
                 }
                 t.push(c[j]);
                 j += 1;
@@ -102,6 +134,8 @@ pub enum E {
     /// BIT_FIELD_REF <obj, bits, pos>
     BitRef(Box<E>, u64, u64),
     Ctor(Vec<E>),
+    /// a string literal (its address)
+    Str(String),
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +146,8 @@ pub enum S {
     Return(Option<E>),
     Goto(u64),
     If { op: String, a: E, b: E, yes: u64, no: u64 },
+    /// after a call that does not return: undefined if reached
+    Unreachable,
 }
 
 #[derive(Clone, Debug)]
@@ -226,7 +262,7 @@ impl<'a> P<'a> {
         while let Some(t) = self.t.get(j) {
             match t {
                 Tok::P(p) if p == ")" && depth == 0 => {
-                    return !first && matches!(self.t.get(j + 1), Some(Tok::Id(_)) | Some(Tok::Num(_)) | Some(Tok::P(_)))
+                    return !first && matches!(self.t.get(j + 1), Some(Tok::Id(_)) | Some(Tok::Num(_)) | Some(Tok::Str(_)) | Some(Tok::P(_)))
                         && !matches!(self.t.get(j + 1), Some(Tok::P(p)) if p == ";" || p == "," || p == ")" || BINOPS.contains(&p.as_str()) && p != "-" && p != "&" && p != "*");
                 }
                 Tok::P(p) if p == "(" => depth += 1,
@@ -309,6 +345,10 @@ impl<'a> P<'a> {
                 self.i += 1;
                 Ok(E::Num(n))
             }
+            Some(Tok::Str(s)) => {
+                self.i += 1;
+                Ok(E::Str(s))
+            }
             Some(Tok::P(p)) if p == "{" => {
                 self.i += 1;
                 Ok(E::Ctor(self.args("}")?))
@@ -348,7 +388,8 @@ impl<'a> P<'a> {
             }
             Some(Tok::Id(s)) => {
                 self.i += 1;
-                if self.at("(") && !s.ends_with("(D)") {
+                // (`f (..)`, and a call through a pointer `p_3(D) (..)`)
+                if self.at("(") {
                     self.i += 1;
                     return Ok(E::Call(s, self.args(")")?));
                 }
@@ -579,6 +620,13 @@ pub fn parse_dump(text: &str) -> Result<Vec<Func>, String> {
         if let Some(b) = cur.take() {
             f.blocks.push(b);
         }
+        // (the last block ending in a call: a call that does not return,
+        // `exit (_4);` -- nothing after it)
+        if let Some(b) = f.blocks.last_mut() {
+            if matches!(b.stmts.last(), Some(S::Call(..))) {
+                b.stmts.push(S::Unreachable);
+            }
+        }
         funcs.push(f);
         i = j;
     }
@@ -606,7 +654,22 @@ fn parse_header(h: &str) -> Result<Func, String> {
     let (head, params) = (&h[..open], &h[open + 2..h.rfind(')').ok_or("no `)`")?]);
     let (ret, name) = split_decl(head).ok_or("bad header")?;
     let mut f = Func { name, ret, ..Default::default() };
-    for p in params.split(',').map(str::trim).filter(|p| !p.is_empty() && *p != "void") {
+    // (the commas at depth 0: a function pointer's own parameters kept)
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, c) in params.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&params[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&params[start..]);
+    for p in parts.into_iter().map(str::trim).filter(|p| !p.is_empty() && *p != "void") {
         let (ty, n) = split_decl(p).ok_or("bad parameter")?;
         f.params.push((n, ty));
     }

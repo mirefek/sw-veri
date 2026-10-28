@@ -44,15 +44,17 @@ pub fn gimple(args: &[String]) -> CResult {
     let funcs = dump::parse_dump(&text).map_err(|e| format!("{}: {}", dump_path, e))?;
     let dw = dwarf::Dwarf::from_object(&obj)?;
     let anchors: Vec<String> = funcs.iter().map(|f| f.name.clone()).collect();
-    let syms = lower::Symbols::read(&elf, &source, &anchors)?;
+    let mut syms = lower::Symbols::read(&elf, &source, &anchors)?;
+    syms.read_weak(&obj)?;
+    let lits = lower::string_literals(&obj, &elf, &syms)?;
     let mut callees = lower::Callees::default();
     let mut bodies = Vec::new();
     let mut failed = Vec::new();
     if readable {
-        return readable_file(&funcs, &dw, &syms, &dump_path, &obj, &elf, &out, cfg);
+        return readable_file(&funcs, &dw, &syms, &lits, &dump_path, &obj, &elf, &out, cfg);
     }
     {
-        let mut lw = lower::Lower { dw: &dw, syms: &syms, callees: &mut callees };
+        let mut lw = lower::Lower { dw: &dw, syms: &syms, callees: &mut callees, lits: &lits };
         for f in &funcs {
             match lw.function(f) {
                 Ok(s) => bodies.push(s),
@@ -104,12 +106,15 @@ fn module_name(dump_path: &str) -> String {
 /// the globals and field accessors it uses; with `--cfg`, its basic blocks
 /// as they are (GCC's control-flow graph, not structured)
 #[allow(clippy::too_many_arguments)]
-fn readable_file(funcs: &[dump::Func], dw: &dwarf::Dwarf, syms: &lower::Symbols, dump_path: &str, obj: &str, elf: &str, out: &str, cfg: bool) -> CResult {
+fn readable_file(
+    funcs: &[dump::Func], dw: &dwarf::Dwarf, syms: &lower::Symbols, lits: &std::collections::HashMap<String, u64>, dump_path: &str, obj: &str, elf: &str,
+    out: &str, cfg: bool,
+) -> CResult {
     let mut callees = lower::Callees::default();
     let mut sh = lower::readable::Shared { cfg, ..Default::default() };
     let (mut bodies, mut failed) = (Vec::new(), Vec::new());
     {
-        let mut lw = lower::Lower { dw, syms, callees: &mut callees };
+        let mut lw = lower::Lower { dw, syms, callees: &mut callees, lits };
         for f in funcs {
             match lw.readable(f, &mut sh) {
                 Ok(s) => bodies.push(s),
