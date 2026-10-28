@@ -1117,9 +1117,14 @@ impl<'e> Gen<'e> {
                 // (stopping at t: the callee's contract with the stop at t, as
                 // the caller's -- k)
                 let hc = match self.stop {
-                    // (through the code map: tr.code_ok, and G typed)
+                    // (through the code map: tr.code_ok, and G typed -- the
+                    // startup mode's tr.code_okm(false, ..))
                     Some((tt, _)) if ind.is_some() => {
-                        let hc = self.mk("tr.code_ok", vec![g.clone(), lit(nargs as u128), lit(st.fr), lit(tt), lb, lc, statics]);
+                        let hc = if self.startup {
+                            self.mk("tr.code_okm", vec![self.mk("false", vec![]), g.clone(), lit(nargs as u128), lit(st.fr), lit(tt), lb, lc, statics])
+                        } else {
+                            self.mk("tr.code_ok", vec![g.clone(), lit(nargs as u128), lit(st.fr), lit(tt), lb, lc, statics])
+                        };
                         let fs = self.mk("fn_space", vec![self.mk("abi.ARGS", vec![]), self.mk("powerset", vec![self.mk("univ", vec![lit(1)])])]);
                         let ht = self.mk("in", vec![g.clone(), self.mk("fn_space", vec![self.mk("bits", vec![lit(64)]), fs])]);
                         self.hcall[gi] = Some(self.assume(&hc)?);
@@ -1128,6 +1133,12 @@ impl<'e> Gen<'e> {
                         self.hio[gi] = Some(hts);
                         self.cinfo[gi] = Some((fa, nargs, !aligned, vec![hc.clone(), ht]));
                         hc
+                    }
+                    Some((tt, k)) if !stk && self.startup => {
+                        // (the startup mode's: tr.impl_m(false, u, ..))
+                        let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+                        let (ff, ut) = (self.mk("false", vec![]), self.mk(if aligned { "false" } else { "true" }, vec![]));
+                        self.mk("tr.impl_m", vec![ff, ut, lit(fa), g.clone(), lit(tt), kt, lb, lc, statics])
                     }
                     Some((tt, k)) if !stk => {
                         let kt = self.mk(if k { "true" } else { "false" }, vec![]);
@@ -1153,7 +1164,7 @@ impl<'e> Gen<'e> {
         }
         let (hcall, htyp, hio) = (self.hcall[gi].clone().unwrap(), self.htyp[gi].clone().unwrap(), self.hio[gi].clone().unwrap());
         // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
-        let ccname = if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
+        let ccname = if self.startup { "tr.ccs_m" } else if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
         let hcon = if stk || ind.is_some() {
             p(R::S(hcall.clone()))
         } else if aligned {
@@ -1334,6 +1345,8 @@ impl<'e> Gen<'e> {
         let rname = match (self.stop.is_some(), one) {
             (false, true) => "tr.call1",
             (false, false) => "tr.call",
+            (true, true) if self.startup => "tr.call1_0_st",
+            (true, false) if self.startup => "tr.call0_st",
             (true, true) => "tr.call1_st",
             (true, false) => "tr.call_st",
         };
@@ -1384,7 +1397,13 @@ impl<'e> Gen<'e> {
             let kt = self.mk("true", vec![]);
             let _ = kt;
             let inst = R::Inst(
-                if one { "tr.calli1_st" } else { "tr.calli_st" }.into(),
+                match (one, self.startup) {
+                    (true, false) => "tr.calli1_st",
+                    (false, false) => "tr.calli_st",
+                    (true, true) => "tr.calli1_0_st",
+                    (false, true) => "tr.calli0_st",
+                }
+                .into(),
                 vec![
                     ("s", self.s.clone()),
                     ("v", self.v.clone()),
@@ -1829,6 +1848,7 @@ impl<'e> Gen<'e> {
     pub(super) fn ec_pf(&self) -> RA {
         match self.stop {
             None => p(f("tr.ec_false")),
+            Some((_, k)) if self.startup => p(R::Inst("tr.ec_at_tm".into(), vec![("b", self.mk("false", vec![])), ("k", self.mk(if k { "true" } else { "false" }, vec![]))])),
             Some((_, k)) => p(R::Inst("tr.ec_at_t".into(), vec![("k", self.mk(if k { "true" } else { "false" }, vec![]))])),
         }
     }
@@ -1841,13 +1861,21 @@ impl<'e> Gen<'e> {
     }
 
     fn hat_r(&self, tt: u128, k: bool) -> R {
+        // (the startup mode's: tr.hat_nonem, tr.hat_topm, tr.hat_cutm with b false)
+        let mb = |mut v: Vec<(&'static str, Term)>| {
+            if self.startup {
+                v.push(("b", self.mk("false", vec![])));
+            }
+            v
+        };
+        let nm = |n: &str| if self.startup { format!("{n}m") } else { n.to_string() };
         if !k {
-            return R::Inst("tr.hat_none".into(), vec![("bka", self.bka.clone()), ("t", lit(tt))]);
+            return R::Inst(nm("tr.hat_none"), mb(vec![("bka", self.bka.clone()), ("t", lit(tt))]));
         }
-        let top = R::Inst("tr.hat_top".into(), vec![("t", lit(tt))]);
+        let top = R::Inst(nm("tr.hat_top"), mb(vec![("t", lit(tt))]));
         match (&self.lpg, self.app(&self.bka, "or", 2)) {
             (Some(lg), Some(o)) => R::Mp(
-                Box::new(R::Inst("tr.hat_cut".into(), vec![("l", o[0].clone()), ("bkp", lg.bkp.clone()), ("bka", lg.bka.clone()), ("t", lit(tt))])),
+                Box::new(R::Inst(nm("tr.hat_cut"), mb(vec![("l", o[0].clone()), ("bkp", lg.bkp.clone()), ("bka", lg.bka.clone()), ("t", lit(tt))]))),
                 vec![p(top), simp0()],
             ),
             _ => top,

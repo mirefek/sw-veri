@@ -551,8 +551,10 @@ pub trait Prover {
     /// trusted either: sequents made by the kernel's rules, each recorded
     /// only without hypotheses.
     /// `stop T` / `nostop T`: the runs stopping at rip = T (main's entry),
-    /// the stop allowed (the contract tr.implements_stop with k) or not.
-    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str, _stop: Option<(u128, bool)>, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
+    /// the stop allowed (the contract tr.implements_stop with k) or not;
+    /// `startup` after it: the startup mode's contract (tr.impl_m with
+    /// false: no thread pointer or canary required).
+    fn c1(&mut self, _env: &mut Env, _fname: &str, _spec: &str, _prefix: &str, _stop: Option<(u128, bool)>, _startup: bool, _hints: &[String]) -> KResult<Vec<(String, Seq)>> {
         Err(KernelError("`c1`: this checker has no C1 engine".into()))
     }
 
@@ -868,6 +870,12 @@ fn load_mode(
                         stop = Some((t, k));
                     }
                 }
+                // (... `startup`: the startup mode)
+                let mut startup = false;
+                if stop.is_some() && matches!(&p.tok, Tok::Ident(s) if s == "startup") {
+                    p.bump()?;
+                    startup = true;
+                }
                 let mut hints = Vec::new();
                 if matches!(&p.tok, Tok::Ident(s) if s == "using") {
                     p.bump()?;
@@ -888,7 +896,7 @@ fn load_mode(
                 // global ones, the rest dropped after it)
                 let mark = p.env.local_mark();
                 p.env.begin_locals();
-                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, c1p.as_deref(), call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, stop, &hints) };
+                let r = if kw == "contract" { pr.contract(p.env, &name, &spec, &prefix, c1p.as_deref(), call.as_deref(), &hints) } else { pr.c1(p.env, &name, &spec, &prefix, stop, startup, &hints) };
                 let r = r.and_then(|ths| {
                     ths.into_iter().map(|(n, sq)| Seq::globalize(p.env, &sq).map(|g| (n, g))).collect::<KResult<Vec<_>>>()
                 });

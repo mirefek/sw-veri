@@ -167,17 +167,20 @@ The binary as linked (gcc's crtbegin included). The steps:
   - GIMPLE: `call0` (and call1_0, ..): no thread check, fs not
     restored; `slc gimple --startup` emits it for the startup units (all
     their functions run before main). `call` and the C2 proofs unchanged.
-  - Bridge: done -- the claims' objects v an Objs value (v.live the
-    callers' stack objects, v.c_bytes the run's C bytes: the mode,
-    tr.mainv(s, v)); tr.mem's world matching tr.wmc (the hidden bytes
-    those not v's C bytes), its canary clauses and fs kept (mfs0, on the
-    world) under tr.mainv; the return's tr.rfs. The rules needing the
-    main mode (`call` and its variants, the canary's) take tr.mainv(s, v)
-    (the engine: simp, the entry's v the main mode's); `call0`'s rules the
-    startup mode. Left: the startup entry (`abi.view0`: c_bytes all; no thread_ok/canary_ok)
-    and contracts; a body using neither mode's rules gives both entries
-    (memcpy, memset proven once). The stop relation tr.at_t on the
-    startup view; Init's top turns it into main's world at the stop.
+  - Bridge: done -- the claims' objects v an Objs value (v.c_bytes the
+    run's C bytes: the mode, tr.mainv); the contract in either mode b
+    (tr.impl_m, tr.mtv over the claim's V and the entry's world tr.vw(b,
+    ..), tr.vok, tr.eok), its entry (tr.entry_nkm, entry0km, entry_gkm,
+    fin_km); the call machinery generic in b (callee_ready_m, post_call_m,
+    callee_sim_sm/gm, ..; gc.cm: call or call0), the main lemmas its
+    b = true instances; the startup rules tr.call0_st, calli0_st,
+    call1_0_st, calli1_0_st. Engine: `c1 .. stop T startup`; the startup
+    units generated with `--startup`; C1 of `_start_c`, `__libc_start_main`,
+    `libc_start_main_stage2`, `__libc_start_init` in the startup mode.
+    Left: `call0_objs` (`__init_libc`'s aux array); a body using neither
+    mode's rules gives both contracts (memcpy, memset proven once); Init's
+    top turns the stop's startup view (tr.at_tm(false, ..)) into main's
+    world.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
