@@ -1319,3 +1319,33 @@ item is a short summary of finished work; details are in the files named.
   is_bouncing at their contracts: `mp.otf`; its spec requires
   `thread_ok`), each with its contract. step names why a call's contract
   matching the call did not apply.
+
+## Init (startup to main)
+
+- **Readable GIMPLE of the startup units** (crt1.c, __libc_start_main.c,
+  __init_tls.c, __stack_chk_fail.c): string literals, function addresses
+  as values, indirect calls, stage2's hidden pointer, `volatile` and
+  `Phdr` in `slc gimple`.
+- **The stop mode** (proofs/translate_stop.core, translate_stop_call.core):
+  a run stopping at rip = t (main's entry), "at main" an outcome only
+  main's contract allows; the stop contract, the normal one derived from
+  it, calls with any breakpoints (direct, through the code map, main
+  itself), a stop inside a loop. Engine: `c1 FN SPEC P stop T` / `nostop
+  T`.
+- **The startup mode** (no thread pointer until `__init_tp`, no canary
+  until `__init_ssp`): GIMPLE's `call0` family (`slc gimple --startup`),
+  the contract in either mode (tr.impl_m), the startup call rules
+  (tr.call0_st, calli0_st, call1_0_st, calli1_0_st). C1 of `_start_c`,
+  `__libc_start_main`, `libc_start_main_stage2`, `__libc_start_init`
+  (proofs/mallocng/machine/c1_start.core).
+- **memset** (musl's assembly, layers/musl_asm.sl): C1 in the startup
+  mode, C2 against `memset_spec`, its startup contract `mset.composed`;
+  a call against GIMPLE's zero `st_bytes` (tr.call0_stb, mset.stz_incl;
+  the breakpoints' relation kept by the runs in its world, tr.bka_ovs:
+  the stop's, a CFG's cut points').
+- **Frames with several stack objects of any sizes** (`alloc_objs`;
+  proofs/translate_objsn.core, engine objsn.rs): allocated together where
+  the machine makes no step (tr.alloc_lv), the homes apart from them, the
+  frame reaching them; their addresses through N; element stores and
+  loads at [rsp + i*k + d], immediate stores, zero-initialization by
+  movaps / movq, calls passing them.
