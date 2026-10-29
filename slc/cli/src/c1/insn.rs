@@ -28,6 +28,15 @@ impl<'e> Gen<'e> {
             }
         };
         let home = |hs: &BTreeMap<u128, (u128, Term)>, d: &Term| home_n(hs, d, 4);
+        // (the flags of a compare kept: this instruction's rule its _f form;
+        // the jump, tr.jcc_f)
+        self.fk_ff = st.fk.as_ref().map(|fl| self.ff_term(fl));
+        if let Some(fl) = st.fk.clone() {
+            if matches!(insn.row, 127 | 128) {
+                self.fk_ff = None;
+                return self.jcc_kept(st, a, fl);
+            }
+        }
         // (in a zero-initialization: its stores only)
         if st.z.is_some() && insn.row != 145 && insn.row != 150 {
             return Err(bad("in a zero-initialization: not a store of the zero register"));
@@ -820,6 +829,11 @@ impl<'e> Gen<'e> {
             75 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
+                // mov [b + i + d], r16 / r32 / r64 (d not 0): the spec's
+                // n-byte store at a computed offset (memset's)
+                if let Some(pf) = self.store_bid(st, insn, a, a2, &x[2], &x[0], &[&x[3], &x[4]], g, &x[1])? {
+                    return Ok(pf);
+                }
                 // mov [rsp + d], r32 / r64: the home c := the register's low n bytes
                 if let Some(d) = self.rsp_mem(&x[2]) {
                     let n = nat(&x[0]).ok_or_else(|| bad("fields"))?;
@@ -896,6 +910,17 @@ impl<'e> Gen<'e> {
                 // mov [b], r32 (b holding a pointer): the spec's 4-byte store at it
                 if let (Some((bn, b, d)), Some(4)) = (self.base_disp(&x[2]).filter(|z| z.0 != 4), nat(&x[0])) {
                     let bv = self.need_reg(st, bn, 8)?;
+                    // mov [b + d], r32 of a 64-bit word: its low dword, the spec's by N
+                    if let (Some((8, u8)), false) = (self.reg(st, g), nat(&d) == Some(0)) {
+                        let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
+                        let (hc, v, st2, red, _) = self.spec_store(st, &ad, 4)?;
+                        let low = self.mk("bits_of_int", vec![lit(32), u8.clone()]);
+                        let hux = self.eq_nf(&low, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&low), self.print(&self.expand(&low)), self.print(&v), self.print(&self.expand(&v))))?;
+                        let tr = self.step("store32_bd_w", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &lit(8), &u8, &v], self.tail_s(st, &st2, insn, 10, vec![hux], &hc, &red));
+                        let mut st3 = st2;
+                        st3.a = a2;
+                        return self.then(tr, st3);
+                    }
                     let u = self.need_reg(st, g, 4)?;
                     // mov [b + d], r32: the spec's 4-byte field store
                     if nat(&d) != Some(0) {
@@ -1198,6 +1223,12 @@ impl<'e> Gen<'e> {
                 // sub r64, r64
                 if nat(&x[0]) == Some(8) && x[3] == x[2] && self.tag(&x[4]) == Some((0, x[1].clone())) {
                     let (gn, hn) = (reg(&g)?, reg(&x[1])?);
+                    // (a register of 4 bytes zero-extended: its 8)
+                    for r in [gn, hn] {
+                        if let Some(pf) = self.widen(st, r, 8)? {
+                            return Ok(pf);
+                        }
+                    }
                     let u = self.need_reg(st, gn, 8)?;
                     let xv = self.need_reg(st, hn, 8)?;
                     let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(64), u.clone(), xv.clone()]))?;
@@ -1206,7 +1237,8 @@ impl<'e> Gen<'e> {
                     let st2 = self.set_reg(st, a2, gn, 8, r);
                     return self.then(tr, st2);
                 }
-                if nat(&x[0]) != Some(4) || x[3] != x[2] || self.tag(&x[4]) != Some((0, x[1].clone())) {
+                // (x[3], x[4]: the operands' byte readings, unused)
+                if nat(&x[0]) != Some(4) {
                     return Err(bad("not sub r32, r32"));
                 }
                 let (gn, hn) = (reg(&g)?, reg(&x[1])?);
@@ -1215,10 +1247,10 @@ impl<'e> Gen<'e> {
                 // (h holding 32 bits: its value itself)
                 let (tr, r) = if nh == 4 {
                     let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), u.clone(), xv.clone()]))?;
-                    (self.step("sub32_rr4", a, insn, &[&g, &x[1], &u, &xv, &r], self.tail(st, insn, 7, vec![hr])), r)
+                    (self.step("sub32_rr4", a, insn, &[&g, &x[1], &x[3], &x[4], &u, &xv, &r], self.tail(st, insn, 7, vec![hr])), r)
                 } else {
                     let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(32), u.clone(), self.mk("bits_of_int", vec![lit(32), xv.clone()])]))?;
-                    (self.step("sub32_rr", a, insn, &[&g, &x[1], &u, &lit(nh), &xv, &r], self.tail(st, insn, 7, vec![hr])), r)
+                    (self.step("sub32_rr", a, insn, &[&g, &x[1], &x[3], &x[4], &u, &lit(nh), &xv, &r], self.tail(st, insn, 7, vec![hr])), r)
                 };
                 self.scratch.insert(gn);
                 let st2 = self.set_reg(st, a2, gn, 4, r);
@@ -1632,7 +1664,9 @@ impl<'e> Gen<'e> {
                 }
                 // (sub r32 of a 64-bit word: its own arm, on the low half)
                 let low_sub = size == 4 && nat(&x[1]) == Some(5) && matches!(self.reg(st, gn), Some((8, _)));
-                let u = if low_sub { lit(0) } else { self.need_reg(st, gn, size)? };
+                // (cmp r32: its arm reads the low half itself, of any width)
+                let low_cmp = size == 4 && nat(&x[1]) == Some(7);
+                let u = if low_sub || low_cmp { lit(0) } else { self.need_reg(st, gn, size)? };
                 match (size, nat(&x[1])) {
                     // add r64, imm8: GIMPLE's u + k
                     (8, Some(0)) => {
@@ -1835,6 +1869,19 @@ impl<'e> Gen<'e> {
             79 => {
                 let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
                 let g = reg(&x[1])?;
+                // movzx r64, r8 (memset's: REX.W, the byte register as the
+                // decoder has it -- h holding x of k bytes): its low byte
+                if let (Some((0, h)), Some(8)) = (self.tag(&x[2]), nat(&x[0])) {
+                    let hn = reg(&h)?;
+                    if x[3] != x[2] {
+                        return Err(bad("not movzx r64, r8"));
+                    }
+                    let (k, xv) = self.reg(st, hn).ok_or_else(|| bad("an empty register"))?;
+                    let tr = self.step("movzx8_rq", a, insn, &[&x[1], &h, &x[4], &lit(k), &xv], self.tail(st, insn, 5, vec![]));
+                    self.scratch.insert(g);
+                    let st2 = self.set_reg(st, a2, g, 8, self.mk("bits_of_int", vec![lit(8), xv.clone()]));
+                    return self.then(tr, st2);
+                }
                 // movzx r32, r8 (h holding the byte b)
                 if let Some((0, h)) = self.tag(&x[2]) {
                     let hn = reg(&h)?;
@@ -2150,6 +2197,22 @@ impl<'e> Gen<'e> {
                 let st3 = self.set_reg(&st3, a2, 1, 8, lit(0));
                 self.then(tr, st3)
             }
+            // rep stosq: the spec's fill of the rcx words rax at rdi, rdi
+            // 8 rcx up, rcx 0
+            86 if nat(&f) == Some(8) => {
+                let di = self.need_reg(st, 7, 8)?;
+                let c = self.need_reg(st, 1, 8)?;
+                let xv = self.need_reg(st, 0, 8)?;
+                let n = self.mk("int_mul", vec![lit(8), c.clone()]);
+                let (hc, st2, red) = self.spec_move(st, &di, &xv, &n)?;
+                let c8 = self.mk("bits_mul", vec![lit(64), c.clone(), lit(8)]);
+                let (r7, h7) = self.result(&self.mk("bits_add", vec![lit(64), di.clone(), c8]))?;
+                let tr = self.step("rep_stosq", a, insn, &[&di, &c, &xv, &r7], self.tail_s(st, &st2, insn, 10, vec![h7], &hc, &red));
+                self.scratch.extend([1, 7]);
+                let st3 = self.set_reg(&st2, a2, 7, 8, r7);
+                let st3 = self.set_reg(&st3, a2, 1, 8, lit(0));
+                self.then(tr, st3)
+            }
             // ret: eax the spec's result
             122 => {
                 if st.fr != 0 {
@@ -2282,7 +2345,15 @@ impl<'e> Gen<'e> {
                 let (bk, b) = self.tag(&m["base"]).ok_or_else(|| bad("fields"))?;
                 let (gk, g) = self.tag(&x[3]).ok_or_else(|| bad("fields"))?;
                 let gn = reg(&g)?;
-                if gk != 0 || gn >= 4 {
+                // mov byte [b + i + d], r8 (d not 0; any low byte register,
+                // sil too): the spec's byte store at a computed offset
+                if gk == 0 {
+                    if let Some(pf) = self.store_bid(st, insn, a, a2, &x[2], &lit(1), &[&x[0], &x[1]], gn, &g)? {
+                        return Ok(pf);
+                    }
+                }
+                // (gp(g): g's low byte, any g -- the decoder's ah..bh are hi8)
+                if gk != 0 {
                     return Err(bad("not mov byte [m], r8"));
                 }
                 let (n, u) = self.reg(st, gn).ok_or_else(|| bad("an empty register"))?;
@@ -2292,17 +2363,17 @@ impl<'e> Gen<'e> {
                 let (rule, terms, nlit, ad) = if bk == 1 {
                     let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let biga = lit((a2 + d) % P64);
-                    ("store8_rip", vec![g.clone(), lit(d), x[0].clone(), x[1].clone(), lit(n), u.clone()], 8, biga)
+                    ("store8_rip", vec![g.clone(), lit(d), x[0].clone(), x[1].clone(), lit(n), u.clone()], 7, biga)
                 } else if bk == 2 && self.app(&m["index"], "some", 1).is_none() && nat(&m["disp"]) == Some(0) {
                     // [b]: the address b's value
                     let bv = self.need_reg(st, reg(&b)?, 8)?;
-                    ("store8_b", vec![g.clone(), b.clone(), x[0].clone(), x[1].clone(), bv.clone(), lit(n), u.clone()], 10, bv)
+                    ("store8_b", vec![g.clone(), b.clone(), x[0].clone(), x[1].clone(), bv.clone(), lit(n), u.clone()], 9, bv)
                 } else if bk == 2 && self.app(&m["index"], "some", 1).is_none() {
                     // [b + d]: b's value + d
                     let d = m["disp"].clone();
                     let bv = self.need_reg(st, reg(&b)?, 8)?;
                     let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
-                    ("store8_bd", vec![g.clone(), b.clone(), d, x[0].clone(), x[1].clone(), bv, lit(n), u.clone()], 11, ad)
+                    ("store8_bd", vec![g.clone(), b.clone(), d, x[0].clone(), x[1].clone(), bv, lit(n), u.clone()], 10, ad)
                 } else {
                     let i = self.app(&m["index"], "some", 1).ok_or_else(|| bad("no index"))?[0].clone();
                     if bk != 2 || nat(&m["disp"]) != Some(0) || nat(&m["scale"]) != Some(1) {
@@ -2313,7 +2384,7 @@ impl<'e> Gen<'e> {
                     let iv = self.need_reg(st, inn, 8)?;
                     let (ad, had) = self.result(&self.mk("bits_add", vec![lit(64), iv.clone(), bv.clone()]))?;
                     hads.push(had);
-                    ("store8_bi", vec![g.clone(), b.clone(), i.clone(), x[0].clone(), x[1].clone(), lit(nb), bv, iv, ad.clone(), lit(n), u.clone()], 12, ad)
+                    ("store8_bi", vec![g.clone(), b.clone(), i.clone(), x[0].clone(), x[1].clone(), lit(nb), bv, iv, ad.clone(), lit(n), u.clone()], 11, ad)
                 };
                 let w0 = st.w.clone();
                 let (hc, v, st2, red, sa, so) = self.spec_store_x(st, Some(&ad), Some(1))?;
@@ -2714,6 +2785,45 @@ impl<'e> Gen<'e> {
     /// before and after, the worlds, the decode fact, n literal facts, the
     /// extra premises, its definedness, the world after, the reduction, the
     /// next point
+    /// mov [b + i + d], r (n bytes, d not 0; the fields z the decode's
+    /// others): the spec's n-byte store at pp + off, off computed (memset's
+    /// from n) -- the address (b + i) + d its, by their normal forms; the
+    /// value the register's low n bytes. None: not this form
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn store_bid(&mut self, st: &St, insn: &Insn, a: u128, a2: u128, mem: &Term, nt: &Term, z: &[&Term; 2], g: u128, gt: &Term) -> Result<Option<Seq>, String> {
+        let Some(m) = self.memop(mem) else { return Ok(None) };
+        let (Some((2, b)), Some(ix), Some(n)) = (self.tag(&m["base"]), self.app(&m["index"], "some", 1).map(|y| y[0].clone()), nat(nt)) else { return Ok(None) };
+        if nat(&m["scale"]) != Some(1) || nat(&m["disp"]) == Some(0) || nat(&m["seg"]) != Some(0) || ![1, 2, 4, 8].contains(&n) {
+            return Ok(None);
+        }
+        let d = m["disp"].clone();
+        let reg = |g: &Term| nat(g).ok_or_else(|| format!("{:x}: a register that is not a literal", a));
+        let (bv, iv) = (self.need_reg(st, reg(&b)?, 8)?, self.need_reg(st, reg(&ix)?, 8)?);
+        let (k, u) = if n == 8 { (8, self.need_reg(st, g, 8)?) } else { self.reg(st, g).ok_or_else(|| format!("{:x}: a store of an empty register", a))? };
+        let (hc, v, st2, red, _, so) = self.spec_store_x(st, None, Some(n))?;
+        if !so.soff {
+            return Err(format!("{:x}: a store at [b + i + d], the spec's at {} + {} (an offset not computed)", a, self.print(&so.p), self.print(&so.off)));
+        }
+        // (the value: the register's low n bytes, the spec's by N)
+        let low = if n == 8 { u.clone() } else { self.mk("bits_of_int", vec![lit(8 * n), u.clone()]) };
+        let hux = self.eq_nf(&low, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&low), self.print(&self.expand(&low)), self.print(&v), self.print(&self.expand(&v))))?;
+        // (the address: (b + i) + d, the spec's pp + off by N)
+        let bi = self.mk("bits_add", vec![lit(64), bv.clone(), iv.clone()]);
+        let ea = self.mk("bits_add", vec![lit(64), bi, d.clone()]);
+        let ad = self.mk("bits_add", vec![lit(64), so.p.clone(), so.off.clone()]);
+        let q = self.addr_eq(st, &ea, &ad)?;
+        let extra = vec![hux, simp_l(), simp_l(), s(&q)];
+        let tr = if n == 8 {
+            self.step("store64_bid", a, insn, &[gt, &b, &ix, &d, z[0], z[1], &bv, &iv, &u, &v, &so.p, &so.off], self.tail_s(st, &st2, insn, 12, extra, &hc, &red))
+        } else {
+            let rule = format!("store{}_bid", 8 * n);
+            self.step(&rule, a, insn, &[gt, &b, &ix, &d, z[0], z[1], &bv, &iv, &lit(k), &u, &v, &so.p, &so.off], self.tail_s(st, &st2, insn, 12, extra, &hc, &red))
+        };
+        let mut st3 = st2;
+        st3.a = a2;
+        self.then(tr, st3).map(Some)
+    }
+
     pub(super) fn tail_s(&self, st: &St, st2: &St, insn: &Insn, n: usize, extra: Vec<RA>, hc: &Seq, red: &R) -> Vec<RA> {
         let mut v = vec![t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&self.p(&st2.spec)), t(&st.w), t(&st2.w), p(R::F(insn.name.clone()))];
         v.extend((0..n).map(|_| simp_l()));

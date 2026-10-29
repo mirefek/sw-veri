@@ -85,3 +85,151 @@ fn memcpy_fun() -> CFun2[World] = (args: Args) => {
   let r = memcpy(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
   return (result(r), any bits[64])
 }
+
+// memset: the blocks at 404d24 (2), the test of n (3), the stores from
+// both ends (4 to 9), the return (10), more than 126 bytes (11), the words
+// (12), d raised to its 16-byte boundary (13)
+proc[World] memset(d: Addr, c: bits[64], n: bits[64]) -> Addr {
+  var bb: nat = 2
+  var cnt: bits[64] = any bits[64]
+  var cs: bits[64] = any bits[64]
+  var di: bits[64] = any bits[64]
+  var e: bits[32] = any bits[32]
+  var k: bits[64] = any bits[64]
+  var rv: bits[64] = any bits[64]
+  var v: bits[64] = any bits[64]
+  loop {
+    if bb < 8 {
+      if bb < 5 {
+        if bb < 3 {
+          // <bb 2>
+          cs := c
+          di := d
+          k := n
+          v := bits[64](bits[8](cs)) * 72340172838076673
+          if k > 126 {
+            bb := 11
+          } else {
+            bb := 3
+          }
+        } else {
+          if bb < 4 {
+            // <bb 3>
+            if bits[32](k) = 0 {
+              bb := 10
+            } else {
+              bb := 4
+            }
+          } else {
+            // <bb 4>
+            st8(di, 0, bits[8](cs))
+            st8(di, k - 1, bits[8](cs))
+            if bits[32](k) <= 2 {
+              bb := 10
+            } else {
+              bb := 5
+            }
+          }
+        }
+      } else {
+        if bb < 6 {
+          // <bb 5>
+          st16(di, 1, bits[16](v))
+          st16(di, k - 3, bits[16](v))
+          if bits[32](k) <= 6 {
+            bb := 10
+          } else {
+            bb := 6
+          }
+        } else {
+          if bb < 7 {
+            // <bb 6>
+            st32(di, 3, bits[32](v))
+            st32(di, k - 7, bits[32](v))
+            if bits[32](k) <= 14 {
+              bb := 10
+            } else {
+              bb := 7
+            }
+          } else {
+            // <bb 7>
+            st64(di, 7, v)
+            st64(di, k - 15, v)
+            if bits[32](k) <= 30 {
+              bb := 10
+            } else {
+              bb := 8
+            }
+          }
+        }
+      }
+    } else {
+      if bb < 11 {
+        if bb < 9 {
+          // <bb 8>
+          st64(di, 15, v)
+          st64(di, 23, v)
+          st64(di, k - 31, v)
+          st64(di, k - 23, v)
+          if bits[32](k) <= 62 {
+            bb := 10
+          } else {
+            bb := 9
+          }
+        } else {
+          if bb < 10 {
+            // <bb 9>
+            st64(di, 31, v)
+            st64(di, 39, v)
+            st64(di, 47, v)
+            st64(di, 55, v)
+            st64(di, k - 63, v)
+            st64(di, k - 55, v)
+            st64(di, k - 47, v)
+            st64(di, k - 39, v)
+            bb := 10
+          } else {
+            // <bb 10>
+            return di
+          }
+        }
+      } else {
+        if bb < 12 {
+          // <bb 11>
+          rv := di
+          st64(di, k - 8, v)
+          cnt := k
+          if (bits[32](di) & 15) != 0 {
+            bb := 13
+          } else {
+            bb := 12
+          }
+        } else {
+          if bb < 13 {
+            // <bb 12>
+            cnt := cnt >> 3
+            fill_words(di, v, cnt)
+            return rv
+          } else {
+            // <bb 13>
+            e := (0 - bits[32](di)) & 15
+            st64(di, 0, v)
+            st64(di, 8, v)
+            cnt := cnt - bits[64](e)
+            di := di + bits[64](e)
+            bb := 12
+          }
+        }
+      }
+    }
+  }
+}
+// (locals: cnt, cs, di, e, k, rv, v -- in rcx, rsi, rdi, edx, rdx, r8, rax)
+fn memset_cfg_live() -> List[(nat, nat)] = [(2, 0), (3, 86), (4, 86), (5, 84), (6, 84), (7, 84), (8, 84), (9, 84), (10, 4), (11, 84), (12, 101), (13, 101)]
+fn memset_cfg_widths() -> List[nat] = [64, 64, 64, 32, 64, 64, 64]
+fn memset_cfg_regs() -> List[(nat, nat)] = [(0, 1), (1, 6), (2, 7), (3, 2), (4, 2), (5, 8), (6, 0)]
+fn memset_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = memset(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  return (result(r), any bits[64])
+}

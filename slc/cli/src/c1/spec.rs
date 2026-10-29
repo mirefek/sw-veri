@@ -870,7 +870,7 @@ impl<'e> Gen<'e> {
             let v = self.mk("ite", vec![self.mk("eq", vec![d.clone(), tv.clone()]), sv.clone(), d.clone()]);
             let empty = self.mk("empty", vec![]);
             let ub = p(mpf("tr.cas32_ub", vec![t(&w), t(&pp), t(&tv), t(&sv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
-            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)), or: None, bf: None }));
+            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: Some((tv, sv, d)), or: None, bf: None, soff: false }));
         }
         // a locked or: a 4-byte store at p of its old dword D | s
         if let Some(x) = self.app(op, "gimple.or32", 2) {
@@ -882,7 +882,7 @@ impl<'e> Gen<'e> {
             let v = self.mk("bits_or", vec![lit(32), d, sv.clone()]);
             let empty = self.mk("empty", vec![]);
             let ub = p(mpf("tr.or32_ub", vec![t(&w), t(&pp), t(&sv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
-            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: None, or: Some(sv), bf: None }));
+            return Ok(Some(StoreOp { n: 4, cond, p: pp.clone(), off: lit(0), v, addr: pp, inner: op.clone(), helper: None, ub, data: None, cas: None, or: Some(sv), bf: None, soff: false }));
         }
         let is_store = |g: &Gen, t: &Term| {
             g.app(t, "gimple.stbf", 6).is_some() ||
@@ -930,7 +930,7 @@ impl<'e> Gen<'e> {
                 vec![t(&w), t(&pp), t(&off), t(&size), t(&pos), t(&k), t(&fv), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
             );
             let ub = self.helper_ub(&helper, &inner, inner_ub)?;
-            return Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data: None, cas: None, or: None, bf: Some((size, pos, k, fv)) }));
+            return Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data: None, cas: None, or: None, bf: Some((size, pos, k, fv)), soff: false }));
         }
         // (constant bytes: all zero, else not covered)
         let mut data = None;
@@ -956,12 +956,23 @@ impl<'e> Gen<'e> {
             _ if nat(&off) == Some(0) => pp.clone(),
             // (a narrower field: likewise)
             _ if nat(&off).is_some() => self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]),
-            _ => return Err(format!("a store at {} + {}: not covered yet", self.print(&pp), self.print(&off))),
+            // (an offset computed: memset's from n -- as the machine's [b + i + d])
+            _ => self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]),
         };
+        // (a computed offset: any word, signed -- g.mem_defined_s)
+        let soff = data.is_none() && self.eval_lit(&off).is_none();
         let w = self.w.clone();
-        let cond = self.mem_defined(&w, &pp, &off, n, true);
+        let cond = if soff {
+            self.mk("g.mem_defined_s", vec![w.clone(), pp.clone(), off.clone(), lit(n), self.mk("true", vec![])])
+        } else {
+            self.mem_defined(&w, &pp, &off, n, true)
+        };
         let empty = self.mk("empty", vec![]);
         let inner_ub = match &data {
+            None if soff => mpf(
+                &format!("g.st{}_s_ub", 8 * n),
+                vec![t(&w), t(&pp), t(&off), t(&v), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
+            ),
             Some(d) => mpf(
                 "g.stz_ub",
                 vec![t(&w), t(&pp), t(&off), t(d), t(&self.vw), t(&empty), t(&lit(n)), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), arith(vec![]), p(R::Slot("HN"))],
@@ -972,7 +983,7 @@ impl<'e> Gen<'e> {
             ),
         };
         let ub = self.helper_ub(&helper, &inner, inner_ub)?;
-        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None, or: None, bf: None }))
+        Ok(Some(StoreOp { n, cond, p: pp, off, v, addr, inner, helper, ub, data, cas: None, or: None, bf: None, soff }))
     }
 
     /// A move of a hand-written readable model (layers/musl_asm.sl:
@@ -1000,6 +1011,16 @@ impl<'e> Gen<'e> {
             let ok = mpf("tr.move_words_at_ok", vec![t(&w), t(&d), t(&s), t(&c), p(R::Slot("HWW")), p(R::Slot("HWU")), simp_l(), simp_l(), simp_l(), p(R::Slot("HC"))]);
             let n = self.mk("int_mul", vec![lit(8), c]);
             return Some((d, s, n, cond, ub, ok));
+        }
+        // (fill_words: c words v at d -- its "source" v; the value stored
+        // x86.fillv(v, c), spec_move's)
+        if let Some(x) = self.app(op, "musl_asm.fill_words", 3).map(|x| x.to_vec()) {
+            let (d, v, c) = (x[0].clone(), x[1].clone(), x[2].clone());
+            let cond = self.mk("g.fill_ok", vec![w.clone(), d.clone(), c.clone()]);
+            let ub = p(mpf("tr.fill_words_at_ub", vec![t(&w), t(&d), t(&v), t(&c), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), p(R::Slot("HN"))]));
+            let ok = mpf("tr.fill_words_at_ok", vec![t(&w), t(&d), t(&v), t(&c), p(R::Slot("HWW")), p(R::Slot("HWU")), simp_l(), simp_l(), simp_l(), p(R::Slot("HC"))]);
+            let n = self.mk("int_mul", vec![lit(8), c]);
+            return Some((d, v, n, cond, ub, ok));
         }
         None
     }
@@ -1489,8 +1510,13 @@ impl<'e> Gen<'e> {
                     return Ok(Some(Red::Guard { cond, ub: (u, ubr) }));
                 }
                 // (a call from a function with stack objects: the call itself)
+                // (the startup mode's call0_objs: call0)
+                if let Some(c) = self.app(&x[0], "gimple.call0_objs", 3).map(|c| c.to_vec()) {
+                    let (j, inst) = self.by(qi, "tr.qs_call0objs", &[("objs", c[0].clone()), ("g", c[1].clone()), ("l", c[2].clone()), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+                    return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
+                }
                 if let Some(c) = self.app(&x[0], "gimple.call_objs", 3).map(|c| c.to_vec()) {
-                    let (j, inst) = self.by(qi, "tr.qs_callobjs", &[("objs", c[0].clone()), ("g", c[1].clone()), ("l", c[2].clone()), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+                    let (j, inst) = self.by(qi, "tr.qs_callobjs",&[("objs", c[0].clone()), ("g", c[1].clone()), ("l", c[2].clone()), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
                     return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
                 }
                 // a call: the machine's call makes it

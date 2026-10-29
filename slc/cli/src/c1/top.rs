@@ -123,6 +123,7 @@ impl<'e> Gen<'e> {
             facts_made: Vec::new(),
             rbytes: 4,
             scratch: BTreeSet::new(),
+            fk_ff: None,
             base,
             code,
             prefix: prefix.to_string(),
@@ -507,6 +508,7 @@ impl<'e> Gen<'e> {
             no_join: None,
             no_block: None,
             z: None,
+            fk: None,
         };
         let x0 = self.var("x0");
         let mut rs_lam = self.mk("empty", vec![]);

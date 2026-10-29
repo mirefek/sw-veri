@@ -19,7 +19,7 @@ struct Ctx {
 const HAPART: &[&str] = &[
     "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
     "store64i_bd", "store32i_bd", "store16i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "or32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
-    "store64_bd_eq", "store64_bi", "movsb", "rep_movsq",
+    "store64_bd_eq", "store64_bi", "movsb", "rep_movsq", "rep_stosq", "store32_bd_w", "store8_bid", "store16_bid", "store32_bid", "store64_bid",
 ];
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
@@ -157,7 +157,7 @@ impl<'e> Gen<'e> {
                 ],
             ),
             (None, None) => mpf(
-                &format!("tr.st{}_at_ok", 8 * n),
+                &format!("tr.st{}_{}_ok", 8 * n, if so.soff { "s" } else { "at" }),
                 vec![t(&w), t(&so.p), t(&so.off), t(&so.v), t(&so.addr), taut(vec![R::S(st.hw.clone())]), s(&st.hvu), simp_l(), simp_l(), simp_l(), simp_l(), s(&hc)],
             ),
         };
@@ -223,7 +223,12 @@ impl<'e> Gen<'e> {
         let w = st.w.clone();
         let vm = self.mk("app", vec![w.clone(), Term::bytes(b"vm")]);
         let bytes = self.mk("app", vec![vm.clone(), Term::bytes(b"bytes")]);
-        let v = self.mk("gimple.bytes_at", vec![vm.clone(), ms.clone(), mn.clone()]);
+        // (the value stored: a move's bytes read at its source; a fill's
+        // words, x86.fillv)
+        let v = match self.app(&x[0], "musl_asm.fill_words", 3).map(|y| y.to_vec()) {
+            Some(y) => self.mk("x86.fillv", vec![ms.clone(), y[2].clone()]),
+            None => self.mk("gimple.bytes_at", vec![vm.clone(), ms.clone(), mn.clone()]),
+        };
         let stored = self.mk("x86_64_linux.store_le", vec![bytes, md.clone(), mn.clone(), v.clone()]);
         let w2term = self.mk("fn_update", vec![w.clone(), Term::bytes(b"vm"), self.mk("fn_update", vec![vm, Term::bytes(b"bytes"), stored])]);
         let weq = self.push_world(Self::var_id(&w2), w2term, &w);
@@ -443,8 +448,13 @@ impl<'e> Gen<'e> {
 
     /// `tr.wred` at st, from the rest qi to j
     fn wred(&self, st: &St, qi: usize, j: usize) -> R {
+        // (the flags kept: tr.wred_f, of their ff)
+        let (name, ff) = match &st.fk {
+            Some(fl) => ("tr.wred_f", Some(self.ff_term(fl))),
+            None => ("tr.wred", None),
+        };
         R::Inst(
-            "tr.wred".into(),
+            name.into(),
             vec![
                 ("s", self.s.clone()),
                 ("v", self.v.clone()),
@@ -459,7 +469,10 @@ impl<'e> Gen<'e> {
                 ("q", self.qs[qi].clone()),
                 ("q2", self.qs[j].clone()),
                 ("kw", self.kw3()),
-            ],
+            ]
+            .into_iter()
+            .chain(ff.map(|f| ("ff", f)))
+            .collect(),
         )
     }
 
@@ -683,7 +696,12 @@ impl<'e> Gen<'e> {
             // alternatives)
             *self.spent_now.borrow_mut() = st.spent.iter().map(|&i| self.expand(&st.hyps[i].0)).collect();
             self.picked.borrow_mut().clear();
-            match self.reduce(qi, &st.hyps)? {
+            let red = self.reduce(qi, &st.hyps)?;
+            // (the flags kept: the rest's plain reductions only, tr.wred_f)
+            if st.fk.is_some() && !matches!(red, None | Some(Red::Q(..))) {
+                return Err(format!("{:x}: the flags of a compare kept, the spec's rest not reduced plainly here: {}", st.a, self.print(&self.qs[qi])));
+            }
+            match red {
                 Some(Red::Q(j, r)) => {
                     let rs = self.run(&r, &[])?;
                     let mut st2 = st.clone();
@@ -2176,6 +2194,30 @@ impl<'e> Gen<'e> {
         if st2.z.is_some() {
             return self.prove_kept(st2);
         }
+        // (the flags kept: no cut point, no loop's head here -- tr.lvf_ptf)
+        if let Some(fl) = st2.fk.clone() {
+            if self.cfg.as_ref().is_some_and(|c| c.cuts.contains(&st2.a)) || self.lpg.as_ref().is_some_and(|l| l.head == st2.a) {
+                return Err(format!("{:x}: a block's start or a loop's head, the flags of a compare kept across it", st2.a));
+            }
+            let lv = self.prove_kept(st2.clone())?;
+            let args = vec![
+                t(&self.s.clone()),
+                t(&self.v.clone()),
+                t(&self.base.clone()),
+                t(&self.code.clone()),
+                t(&lit(st2.fr)),
+                t(&lit(st2.a)),
+                t(&st2.hst),
+                t(&st2.ds),
+                t(&st2.rs),
+                t(&self.p(&st2.spec)),
+                t(&st2.w),
+                self.nobp(),
+                s(&lv),
+            ];
+            let ff = self.ff_term(&fl);
+            return self.run(&mp(R::Inst("tr.lvf_ptf".into(), vec![("ff", ff)]), args), &[]);
+        }
         // (a CFG walk at a cut point: its arrival)
         if self.cfg.as_ref().is_some_and(|c| c.cuts.contains(&st2.a)) && self.lpg.as_ref().is_some_and(|l| l.head == u128::MAX) {
             let c = self.save();
@@ -2381,6 +2423,10 @@ impl<'e> Gen<'e> {
             let i = args.iter().position(|x| !matches!(x, RA::T(_))).unwrap_or(args.len());
             args.insert(i, p(pf));
         }
+        // (the flags kept across it: the rule's _f form, of the flags' ff)
+        if let Some(ff) = &self.fk_ff {
+            return mp(R::Inst(format!("tr.{}_f", rule), vec![("ff", ff.clone())]), args);
+        }
         mpf(&format!("tr.{}", rule), args)
     }
 
@@ -2525,6 +2571,34 @@ impl<'e> Gen<'e> {
     pub(super) fn compare_x(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, write: Option<(u128, Term, u128)>) -> Result<Seq, String> {
         // (setcc after it: the byte register written, tr.setcc)
         let set = self.insns.get(&a2).filter(|j| j.row == 31 && write.is_none()).map(|j| (j.fields.clone(), j.len));
+        // (neither: the flags kept to the jump on, tr.flags_set -- the
+        // instructions between keeping them, their rules' _f forms)
+        if set.is_none() && write.is_none() && !self.insns.get(&a2).is_some_and(|j| matches!(j.row, 127 | 128)) {
+            let ff = self.ff_term(&fl);
+            let args = vec![
+                t(&self.s.clone()),
+                t(&self.v.clone()),
+                t(&self.base.clone()),
+                t(&self.code.clone()),
+                t(&lit(self.fr)),
+                t(&lit(a)),
+                t(&lit(a2)),
+                t(&st.hst),
+                t(&st.ds),
+                t(&st.rs),
+                t(&self.p(&st.spec)),
+                t(&st.w),
+                p(step),
+                simp_l(),
+                p(R::Slot("NEXT")),
+            ];
+            let rule = mp(R::Inst("tr.flags_set".into(), vec![("ff", ff)]), args);
+            let mut st2 = st.clone();
+            st2.a = a2;
+            st2.fk = Some(fl);
+            self.trace(|| format!("at {:x}: the flags kept to the jump on", a));
+            return self.then(rule, st2);
+        }
         let (j, len2, a3, tt, cc) = match &set {
             Some((fx, len2)) => {
                 let x = self.pairs(fx, 3).ok_or_else(|| format!("{:x}: setcc's fields", a2))?;
@@ -2533,8 +2607,47 @@ impl<'e> Gen<'e> {
             }
             None => self.jcc(a2)?,
         };
+        let (lemma, c, args, ff) = self.cc_lemma(a, &fl, cc)?;
+        let mut ca: Vec<RA> = args.iter().map(t).collect();
+        ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
+        let ccf = mpf(&format!("tr.{lemma}"), ca);
+        self.compare_jump(st, a, a2, step, ccf, c, ff, set.is_some(), j, len2, a3, tt, cc, write)
+    }
+
+    /// the conditional jump at a, the flags fl's kept to it (tr.jcc_f):
+    /// both branches walked
+    pub(super) fn jcc_kept(&mut self, st: &St, a: u128, fl: Flags) -> Result<Seq, String> {
+        let (j, len2, a3, tt, cc) = self.jcc(a)?;
+        let (lemma, c, args, ff) = self.cc_lemma(a, &fl, cc)?;
+        let mut ca: Vec<RA> = args.iter().map(t).collect();
+        ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
+        let ccf = mpf(&format!("tr.{lemma}"), ca);
+        let (jn, jw) = if self.insns[&a].row == 128 { (128, 32) } else { (127, 8) };
+        let mut jv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a3)), t(&lit(tt))];
+        jv.extend([t(&lit(len2)), t(&lit(jn)), t(&lit(jw)), t(&lit(cc)), t(&j), t(&c), t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w)]);
+        jv.extend([p(ccf), p(f(&self.insns[&a].name))]);
+        jv.extend((0..5).map(|_| simp_l()));
+        jv.extend([p(R::Slot("T")), p(R::Slot("F"))]);
+        let rule = mp(R::Inst("tr.jcc_f".into(), vec![("ff", ff)]), jv);
+        let mut st2 = st.clone();
+        st2.fk = None;
+        self.branch(&st2, c, a3, tt, rule)
+    }
+
+    /// the flags' predicate ff (its bound variable the flags)
+    pub(super) fn ff_term(&self, fl: &Flags) -> Term {
+        match fl {
+            Flags::Sub(w, x, y) => self.mk("x86i.subf", vec![lit(*w), x.clone(), y.clone(), Term::bvar(0)]),
+            Flags::Log(w, r) => self.mk("x86i.logf", vec![lit(*w), r.clone(), Term::bvar(0)]),
+            Flags::Zero(w, r) => self.mk("x86i.zff", vec![lit(*w), r.clone(), Term::bvar(0)]),
+        }
+    }
+
+    /// the condition code cc's lemma on fl's flags: its name, the
+    /// fall-through's condition c, its arguments, ff
+    pub(super) fn cc_lemma(&self, a: u128, fl: &Flags, cc: u128) -> Result<(&'static str, Term, Vec<Term>, Term), String> {
         let si = |g: &Gen, x: &Term| g.mk("sint", vec![lit(32), x.clone()]);
-        let (lemma, c, args, ff) = match &fl {
+        Ok(match fl {
             Flags::Sub(w, x, y) => {
                 let (l, c) = match (cc, *w) {
                     (4, _) => ("ccs_e", self.mk("not", vec![self.mk("eq", vec![x.clone(), y.clone()])])),
@@ -2577,13 +2690,33 @@ impl<'e> Gen<'e> {
                 };
                 (l, c, vec![lit(*w), r.clone()], self.mk("x86i.zff", vec![lit(*w), r.clone(), Term::bvar(0)]))
             }
-        };
-        let mut ca: Vec<RA> = args.iter().map(t).collect();
-        ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
-        let ccf = mpf(&format!("tr.{lemma}"), ca);
+        })
+    }
+
+    /// ... the compare's setcc or jump at a2 (`set`; j its field, its
+    /// length, fall-through, target, condition code), the condition code's
+    /// lemma ccf
+    #[allow(clippy::too_many_arguments)]
+    fn compare_jump(
+        &mut self,
+        st: &St,
+        a: u128,
+        a2: u128,
+        step: R,
+        ccf: R,
+        c: Term,
+        ff: Term,
+        set: bool,
+        j: Term,
+        len2: u128,
+        a3: u128,
+        tt: u128,
+        cc: u128,
+        write: Option<(u128, Term, u128)>,
+    ) -> Result<Seq, String> {
         // setcc r8 (al .. bl, holding u): its low byte 1 when the condition
         // holds (!c), else 0
-        if set.is_some() {
+        if set {
             let (k, g) = self.tag(&j).ok_or_else(|| format!("{:x}: setcc of other than a register", a2))?;
             let gn = nat(&g).ok_or_else(|| format!("{:x}: setcc's register not a literal", a2))?;
             if k != 0 || gn >= 4 {

@@ -701,6 +701,7 @@ impl<'e> Gen<'e> {
             no_join: Some(a),
             no_block: Some(a),
             z: None,
+            fk: None,
         };
         self.bkp = bkp2;
         self.bka = bka2;
@@ -862,14 +863,60 @@ impl<'e> Gen<'e> {
         for (r, nb, v) in &regs2 {
             match self.reg(st, *r) {
                 Some((nb0, v0)) if nb0 == *nb && self.canon(&v0) == self.canon(v) => {}
-                _ => return Err(format!("{:x}: label {}'s register {} does not hold {} here", st.a, k2, r, self.print(v))),
+                Some((nb0, v0)) => {
+                    return Err(format!(
+                        "{:x}: label {}'s register {} does not hold {} ({} bytes; {}) here: it holds {} ({} bytes; {})",
+                        st.a,
+                        k2,
+                        r,
+                        self.print(v),
+                        nb,
+                        self.print(&self.expand(v)),
+                        self.print(&v0),
+                        nb0,
+                        self.print(&self.expand(&v0))
+                    ))
+                }
+                None => return Err(format!("{:x}: label {}'s register {} does not hold {} here: empty", st.a, k2, r, self.print(v))),
             }
         }
         // the reductions to the marked return
         let o = self.mk("ok", vec![st.w.clone(), self.mk("pair", vec![lit(1u128 << 64), y2.clone()])]);
         let goal = self.mk("runs", vec![self.qs[cur].clone(), st.w.clone(), o.clone()]);
         let lg = self.lpg.clone().ok_or("the CFG walk's state")?;
-        let mut rr = self.evp(&RP::Defs(Box::new(RP::Simp(true, vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())], vec![], false)), vec!["runs".into(), "mkprog".into()]), &goal, &[])?;
+        let mut facts = vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())];
+        // (a world after stores: its bytes in univ(1) too, tr.world_bytes_univ)
+        // (the world a let: its fact unfolded, letin_eq)
+        let ew = self.expand(&st.w);
+        let unlet = |g: &mut Gen, l: &[Term]| -> Result<(Term, Seq), String> {
+            let eqs = g.run(&R::Inst("letin_eq".into(), vec![("a", l[0].clone()), ("f", l[1].clone())]), &[])?;
+            let x = g.app(eqs.concl(), "eq", 2).ok_or("letin_eq: not an equation")?.to_vec();
+            let pl = g.abstract_sub(st.hvu.concl(), &x[0]);
+            let un = g.run(&rec::mp(R::Inst("eq_subst".into(), vec![("a", x[0].clone()), ("b", x[1].clone()), ("p", pl)]), vec![rec::s(&eqs), rec::s(&st.hvu)]), &[])?;
+            Ok((x[1].clone(), un))
+        };
+        let (wu, hwu) = match self.app(&ew, "letin", 2).map(|l| l.to_vec()) {
+            Some(l) => match unlet(self, &l) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.trace(|| format!("{:x}: the world's let not unfolded: {}", st.a, e));
+                    (ew.clone(), st.hvu.clone())
+                }
+            },
+            None => (ew.clone(), st.hvu.clone()),
+        };
+        if let Some(u) = self.app(&wu, "fn_update", 3).map(|u| u.to_vec()) {
+            if let Some(v) = self.app(&u[2], "fn_update", 3).map(|v| v.to_vec()) {
+                if matches!(u[1].node(), Node::Bytes(b) if &b[..] == b"vm") && matches!(v[1].node(), Node::Bytes(b) if &b[..] == b"bytes") {
+                    let pf = mpf("tr.world_bytes_univ", vec![t(&u[0]), t(&v[2]), s(&hwu)]);
+                    match self.run(&pf, &[]) {
+                        Ok(sq) => facts.push(R::S(sq)),
+                        Err(e) => self.trace(|| format!("{:x}: the world's bytes not in univ(1): {}", st.a, e)),
+                    }
+                }
+            }
+        }
+        let mut rr = self.evp(&RP::Defs(Box::new(RP::Simp(true, facts.clone(), vec![], false)), vec!["runs".into(), "mkprog".into()]), &goal, &[])?;
         for stp in steps.into_iter().rev() {
             rr = self.run(&mp(stp, vec![t(&o), s(&rr)]), &[])?;
         }
@@ -929,7 +976,7 @@ impl<'e> Gen<'e> {
         self.trace(|| format!("cfg at {:x}: arrived, label {}", st.a, k2));
         let r = mp(
             inst,
-            vec![t(&lit(st.a)), t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), simp0(), simpw(vec![R::S(hk)]), s(&sub2), p(rsub), simp_lw(vec![R::S(st.hvu.clone()), R::S(lg.hu.clone())]), p(yt2), p(rw)],
+            vec![t(&lit(st.a)), t(&st.hst), t(&st.rs), t(&pcl), t(&st.w), t(&y2), simp0(), simpw(vec![R::S(hk)]), s(&sub2), p(rsub), simp_lw(facts), p(yt2), p(rw)],
         );
         if self.canon(&st.ds) == self.canon(&fd) {
             return self.run(&r, &[]).map(Some);

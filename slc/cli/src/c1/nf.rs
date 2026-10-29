@@ -12,7 +12,8 @@
 //! - a cast of a word of its width (or narrower): the word (`nf.boi_in`,
 //!   the word's width by its operation's `*_in` lemma, `nf.bits_le`);
 //! - a shift by a literal: a product by 2^k (`nf.shl_mul`); a value added
-//!   to itself: twice it (`nf.add_self`);
+//!   to itself: twice it (`nf.add_self`); a difference: the sum with the
+//!   subtrahend times 2^n - 1 (`nf.sub_add`);
 //! - a word's low k bits (`x + 0` at k bits): of a word of at most k bits,
 //!   the word (`nf.lo_fit`); of a bitwise operation of at least k bits, the
 //!   operation's on the operands' low k bits (`nf.lo_and`, `nf.lo_or`,
@@ -311,6 +312,14 @@ impl<'e> Gen<'e> {
                     return Ok(Some((p[k].clone(), e)));
                 }
             }
+        }
+        // a difference: the sum with the subtrahend times 2^n - 1 (-1)
+        if name == "bits_sub" && a.len() == 3 && nat(&a[0]).is_some() {
+            let r = rec::mp(R::Inst("nf.sub_add".into(), vec![("n", a[0].clone()), ("a", a[1].clone()), ("b", a[2].clone())]), vec![rec::simp0()]);
+            let e = self.run(&r, &[])?;
+            let m1 = self.mk("int_sub", vec![self.mk("pow2", vec![a[0].clone()]), lit(1)]);
+            let next = self.mk("bits_add", vec![a[0].clone(), a[1].clone(), self.mk("bits_mul", vec![a[0].clone(), a[2].clone(), m1])]);
+            return Ok(Some((next, e)));
         }
         // a shift by a literal: a product by 2^k
         if name == "bits_shl" && a.len() == 3 && nat(&a[2]).is_some() {

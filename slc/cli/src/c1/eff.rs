@@ -721,7 +721,7 @@ impl<'e> Eff<'e> {
     }
 
     fn called_in(&self, t: &Term, m: &mut HashMap<VarId, usize>) {
-        for name in ["gimple.call", "gimple.call1", "gimple.call1_s"] {
+        for name in ["gimple.call", "gimple.call1", "gimple.call1_s", "gimple.call0", "gimple.call1_0"] {
             if let Some(c) = self.app(t, name, 2) {
                 if let (Node::Var(g, _), Some(k)) = (c[0].node(), list_len(self, &c[1])) {
                     let e = m.entry(*g).or_insert(k);
@@ -730,7 +730,7 @@ impl<'e> Eff<'e> {
             }
         }
         // (a call from a function with stack objects: `call_objs(objs, g, args)`)
-        if let Some(c) = self.app(t, "gimple.call_objs", 3) {
+        if let Some(c) = self.app(t, "gimple.call_objs", 3).or_else(|| self.app(t, "gimple.call0_objs", 3)) {
             if let (Node::Var(g, _), Some(k)) = (c[1].node(), list_len(self, &c[2])) {
                 let e = m.entry(*g).or_insert(k);
                 *e = (*e).min(k);

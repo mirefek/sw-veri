@@ -39,6 +39,14 @@ proc[World] move_words(d: Addr, s: Addr, c: bits[64]) {
 //   2: movsb; dec edx; jnz 2b
 //   1: ret
 
+// rep stosq: c words v at d, upwards -- usable (writable; fewer than 2^64
+// bytes), else undefined
+proc[World] fill_words(d: Addr, v: bits[64], c: bits[64]) {
+  let a = bits[64](uint(d))
+  if !usable(vm, objs, uint(a), 8 * uint(c), true) || 8 * uint(c) >= 2^64 { undefined }
+  write_bytes(a, 8 * uint(c), sum i in 0..uint(c). uint(v) * 2^(64 * i))
+}
+
 proc[World] memcpy(d: Addr, s: Addr, n: bits[64]) -> Addr {
   var di: bits[64] = any bits[64]
   var k: bits[64] = any bits[64]
@@ -86,5 +94,92 @@ proc[World] memcpy(d: Addr, s: Addr, n: bits[64]) -> Addr {
 fn memcpy_fun() -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
   let r = memcpy(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  return (result(r), any bits[64])
+}
+
+///////////////////////////////////////////////////////////////////////
+//  memset (src/string/x86_64/memset.s)
+//
+//   movzbq sil, rax; movabs 0x0101010101010101, r8; imul r8, rax
+//   cmp rdx, 126; ja 2f
+//   (up to 126 bytes: from both ends, stores of 1, 2, 4, 8, 2x8, 4x8
+//   bytes, each pair overlapping the next's, until they meet)
+//   1: mov rdi, rax; ret
+//   2: (more: the last 8 bytes; d aligned to 16 -- its first 16 bytes
+//   stored, d raised to the boundary --, then rep stosq of the words)
+
+proc[World] memset(d: Addr, c: bits[64], n: bits[64]) -> Addr {
+  var cnt: bits[64] = any bits[64]
+  var cs: bits[64] = any bits[64]
+  var di: bits[64] = any bits[64]
+  var e: bits[32] = any bits[32]
+  var k: bits[64] = any bits[64]
+  var rv: bits[64] = any bits[64]
+  var v: bits[64] = any bits[64]
+  cs := c
+  di := d
+  k := n
+  // (the byte in every byte of a word)
+  v := bits[64](bits[8](cs)) * 72340172838076673
+  if k <= 126 {
+    if bits[32](k) = 0 {
+      return di
+    }
+    st8(di, 0, bits[8](cs))
+    st8(di, k - 1, bits[8](cs))
+    if bits[32](k) <= 2 {
+      return di
+    }
+    st16(di, 1, bits[16](v))
+    st16(di, k - 3, bits[16](v))
+    if bits[32](k) <= 6 {
+      return di
+    }
+    st32(di, 3, bits[32](v))
+    st32(di, k - 7, bits[32](v))
+    if bits[32](k) <= 14 {
+      return di
+    }
+    st64(di, 7, v)
+    st64(di, k - 15, v)
+    if bits[32](k) <= 30 {
+      return di
+    }
+    st64(di, 15, v)
+    st64(di, 23, v)
+    st64(di, k - 31, v)
+    st64(di, k - 23, v)
+    if bits[32](k) <= 62 {
+      return di
+    }
+    st64(di, 31, v)
+    st64(di, 39, v)
+    st64(di, 47, v)
+    st64(di, 55, v)
+    st64(di, k - 63, v)
+    st64(di, k - 55, v)
+    st64(di, k - 47, v)
+    st64(di, k - 39, v)
+    return di
+  }
+  rv := di
+  st64(di, k - 8, v)
+  cnt := k
+  // (d not 16-aligned: its first 16 bytes, then the words from the boundary)
+  if (bits[32](di) & 15) != 0 {
+    e := (0 - bits[32](di)) & 15
+    st64(di, 0, v)
+    st64(di, 8, v)
+    cnt := cnt - bits[64](e)
+    di := di + bits[64](e)
+  }
+  cnt := cnt >> 3
+  fill_words(di, v, cnt)
+  return rv
+}
+
+fn memset_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = memset(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
   return (result(r), any bits[64])
 }

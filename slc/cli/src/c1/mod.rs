@@ -109,6 +109,9 @@ struct St {
     /// address of the bytes still to be stored (a base, an offset), their
     /// count
     z: Option<(u128, Term, u128, u128)>,
+    /// the flags a compare set, kept to its jump instructions on (the
+    /// claims tr.ptf / tr.lvf: the rules' `_f` forms; memset's)
+    fk: Option<Flags>,
 }
 
 /// A reduction of the spec's rest.
@@ -168,6 +171,7 @@ pub(super) use sl_kernel::prof;
 
 /// The flags a compare sets (proofs/translate_flags.core): of `cmp a, b`
 /// at a width (x86i.subf), of a test's result (x86i.logf)
+#[derive(Clone)]
 enum Flags {
     Sub(u128, Term, Term),
     Log(u128, Term),
@@ -197,6 +201,9 @@ struct StoreOp {
     or: Option<Term>,
     /// a bitfield (gimple.stbf): its size, position, width, field
     bf: Option<(Term, Term, Term, Term)>,
+    /// its offset computed, any 64-bit word (memset's from n): defined as
+    /// `g.mem_defined_s` (signed, as padd reads it), its lemmas `_s_`
+    soff: bool,
 }
 
 /// One step towards a disjunct whose guard holds.
@@ -253,6 +260,9 @@ struct Gen<'e> {
     /// the result's bytes (the wrapper's gimple.result width)
     rbytes: u128,
     scratch: BTreeSet<u128>,
+    /// the flags kept at the instruction stepped (St's `fk`): its rule's
+    /// `_f` form, of this ff
+    fk_ff: Option<Term>,
     base: Term,
     code: Term,
     prefix: String,

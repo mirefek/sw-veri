@@ -50,13 +50,17 @@ The claim is malloc and free (calloc later: section Later), proven in
 the chain (proofs/mallocng/claim.core, the claim of the -O0 binary first
 in the chain: `@claim`) from one open lemma: `musl.init` (section 5).
 Next that.
-- The string instructions in general (layers/musl_asm.sl): `rep movs` of
-  any element size (`x86i.rep_movsq` is for 8: its iteration and facts
-  with the size a parameter), `rep stos` (memset's: no overlap question);
-  an overlapping forward copy (s < d < s + n: each element read after
+- The string instructions in general (layers/musl_asm.sl): `rep movs` /
+  `rep stos` of any element size (`x86i.rep_movsq`, `x86i.rep_stosq` are
+  for 8: their iterations and facts with the size a parameter); an
+  overlapping forward copy (s < d < s + n: each element read after
   writes reached it -- memmove's) its exact bytes, not undefined: the
   pointwise invariant of `x86.moved` with the source as it is then.
-- Leaves at machine level: `a_or`, the other `__syscall*`, `memset`.
+- Flags kept across instructions (tr.ptf / tr.lvf, proofs/translate_memset.core):
+  `_f` forms exist for the rules memset needs (mov r64, r64; the indexed
+  64-bit store; the spec's plain reductions); others as a function needs
+  them.
+- Leaves at machine level: `a_or`, the other `__syscall*`.
 
 ## 2. The engine, when a function needs it
 
@@ -181,6 +185,13 @@ The binary as linked (gcc's crtbegin included). The steps:
     mode's rules gives both contracts (memcpy, memset proven once); Init's
     top turns the stop's startup view (tr.at_tm(false, ..)) into main's
     world.
+- memset (src/string/x86_64/memset.s; layers/musl_asm.sl, its CFG
+  musl_asm_cfg.sl): C1 in the startup mode done (proofs/translate_memset.core:
+  stores at computed offsets, `g.mem_defined_s`; the `test` kept to its
+  `jne`; `rep stosq` as one store of x86.fillv's words, x86.store_cat).
+  Left: its CFG ⊑ structured (refines), its purpose spec (the n bytes at
+  d all c's low byte) and C2, the call rule of `call memset` against
+  GIMPLE's `st_bytes` (`__init_libc`'s zeroed aux array).
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
