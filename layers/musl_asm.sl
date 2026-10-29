@@ -121,61 +121,63 @@ proc[World] memset(d: Addr, c: bits[64], n: bits[64]) -> Addr {
   k := n
   // (the byte in every byte of a word)
   v := bits[64](bits[8](cs)) * 72340172838076673
-  if k <= 126 {
-    if bits[32](k) = 0 {
-      return di
+  // (more than 126 bytes: the last 8, then the words from d's 16-byte
+  // boundary -- d not aligned: its first 16 bytes stored, d raised to it)
+  if k > 126 {
+    rv := di
+    st64(di, k - 8, v)
+    cnt := k
+    if (bits[32](di) & 15) != 0 {
+      e := (0 - bits[32](di)) & 15
+      st64(di, 0, v)
+      st64(di, 8, v)
+      cnt := cnt - bits[64](e)
+      di := di + bits[64](e)
     }
-    st8(di, 0, bits[8](cs))
-    st8(di, k - 1, bits[8](cs))
-    if bits[32](k) <= 2 {
-      return di
-    }
-    st16(di, 1, bits[16](v))
-    st16(di, k - 3, bits[16](v))
-    if bits[32](k) <= 6 {
-      return di
-    }
-    st32(di, 3, bits[32](v))
-    st32(di, k - 7, bits[32](v))
-    if bits[32](k) <= 14 {
-      return di
-    }
-    st64(di, 7, v)
-    st64(di, k - 15, v)
-    if bits[32](k) <= 30 {
-      return di
-    }
-    st64(di, 15, v)
-    st64(di, 23, v)
-    st64(di, k - 31, v)
-    st64(di, k - 23, v)
-    if bits[32](k) <= 62 {
-      return di
-    }
-    st64(di, 31, v)
-    st64(di, 39, v)
-    st64(di, 47, v)
-    st64(di, 55, v)
-    st64(di, k - 63, v)
-    st64(di, k - 55, v)
-    st64(di, k - 47, v)
-    st64(di, k - 39, v)
+    cnt := cnt >> 3
+    fill_words(di, v, cnt)
+    return rv
+  }
+  // (up to 126: from both ends, until the stores meet)
+  if bits[32](k) = 0 {
     return di
   }
-  rv := di
-  st64(di, k - 8, v)
-  cnt := k
-  // (d not 16-aligned: its first 16 bytes, then the words from the boundary)
-  if (bits[32](di) & 15) != 0 {
-    e := (0 - bits[32](di)) & 15
-    st64(di, 0, v)
-    st64(di, 8, v)
-    cnt := cnt - bits[64](e)
-    di := di + bits[64](e)
+  st8(di, 0, bits[8](cs))
+  st8(di, k - 1, bits[8](cs))
+  if bits[32](k) <= 2 {
+    return di
   }
-  cnt := cnt >> 3
-  fill_words(di, v, cnt)
-  return rv
+  st16(di, 1, bits[16](v))
+  st16(di, k - 3, bits[16](v))
+  if bits[32](k) <= 6 {
+    return di
+  }
+  st32(di, 3, bits[32](v))
+  st32(di, k - 7, bits[32](v))
+  if bits[32](k) <= 14 {
+    return di
+  }
+  st64(di, 7, v)
+  st64(di, k - 15, v)
+  if bits[32](k) <= 30 {
+    return di
+  }
+  st64(di, 15, v)
+  st64(di, 23, v)
+  st64(di, k - 31, v)
+  st64(di, k - 23, v)
+  if bits[32](k) <= 62 {
+    return di
+  }
+  st64(di, 31, v)
+  st64(di, 39, v)
+  st64(di, 47, v)
+  st64(di, 55, v)
+  st64(di, k - 63, v)
+  st64(di, k - 55, v)
+  st64(di, k - 47, v)
+  st64(di, k - 39, v)
+  return di
 }
 
 fn memset_fun() -> CFun2[World] = (args: Args) => {
