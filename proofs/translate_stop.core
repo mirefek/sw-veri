@@ -907,6 +907,46 @@ proof
   show by defs(g, tr.impl_m)
 qed
 
+// (a run matching P matches Q when Q has all of P's runs: each case -- a
+// raise, a crash, a divergence, a return, the stop -- is of P's runs)
+theorem tr.mtv_mono: all b s V P Q W o k. (all x. runs(P, W, x) -> runs(Q, W, x)) -> tr.mtv(b, s, V, P, W, o, k) -> tr.mtv(b, s, V, Q, W, o, k)
+proof
+  fix b s V P Q W o k
+  assume hr mt
+  show by defs(simp(hr, expand(mt, tr.mtv, tr.ub, tr.crash, tr.ovf, tr.div, tr.rtv, tr.stv)), tr.mtv, tr.ub, tr.crash, tr.ovf, tr.div, tr.rtv, tr.stv)
+qed
+
+// Composition in either mode (as tr.implements_refine): the machine code
+// implementing F, F refining S for the ABI's arguments and every world --
+// the machine code implements S
+theorem tr.impl_m_refine: all b u f F S t k base code statics. tr.impl_m(b, u, f, F, t, k, base, code, statics) ->
+  (all regs w o. regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> w in abi.World -> runs(F[regs], w, o) -> runs(S[regs], w, o)) ->
+  tr.impl_m(b, u, f, S, t, k, base, code, statics)
+proof
+  fix b u f F S t k base code statics
+  assume hi hc
+  have g: all args objs mem s o. args in abi.ARGS -> objs in set_type(omega) -> mem in x86_64_linux.Vm -> s in x86_64_linux.Machine -> s in univ(1) -> abi.loaded(s.vm, base, code, statics) ->
+      s.rip = f -> tr.eok(b, u, s, args) -> tr.objs_ok(s, objs) -> tr.vok(b, s, objs, mem) -> tr.run_s(s, t, s, o) ->
+      tr.mtv(b, s, abi.wob(objs, tr.cbm(b, s.fs_base)), S[args], tr.vw(b, s, objs, mem), o, k) proof
+    fix args objs mem s o
+    assume hA hvo hmv hM su hl hrip he hob hvw hrd
+    have m := mp(all_elim(expand(hi, tr.impl_m), {args}, {objs}, {mem}, {s}, {o}), hA, hvo, hmv, hM, su, hl, hrip, he, hob, hvw, hrd)
+    // (the entry's world a world; the arguments the ABI's)
+    have wu := apply(tr.vw_univ, {b}, {s}, {objs}, {mem}, su, hvo, hmv)
+    have wt := apply(tr.vw_typed, {b}, {s}, {objs}, {mem}, hM, hvo, hmv, wu)
+    have al: args in list_type(bits(64)) by simp(hA)
+    have lo: seq_len(args) in omega by simp(al)
+    have o6: ord_le(seq_len(args), 6) by simp(hA)
+    have ll: int_le(seq_len(args), 6) by arith(expand(o6, ord_le), lo)
+    have r: all x. runs(F[args], tr.vw(b, s, objs, mem), x) -> runs(S[args], tr.vw(b, s, objs, mem), x) proof
+      fix x
+      show := mp(all_elim(hc, {args}, {tr.vw(b, s, objs, mem)}, {x}), al, ll, wt)
+    qed
+    show := apply(tr.mtv_mono, r, m)
+  qed
+  show by defs(g, tr.impl_m)
+qed
+
 // ----------------------------------------------------------------------
 //  A call in the stop form (as tr.run_split_k): the caller's run, its
 //  breakpoints and t, from the callee's entry c

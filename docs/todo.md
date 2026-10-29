@@ -188,10 +188,12 @@ The binary as linked (gcc's crtbegin included). The steps:
 - memset (src/string/x86_64/memset.s; layers/musl_asm.sl, its CFG
   musl_asm_cfg.sl): C1 in the startup mode, refines, C2 against
   mallocng_specs.memset_spec (proofs/mallocng/fun/memset.core: the bytes
-  covered by the stores, mz.cov). Left: memset_fun's C2 and the composed
-  startup contract (a spec-refinement lemma for tr.impl_m), the call rule
-  of `call memset` against GIMPLE's `st_bytes` (`__init_libc`'s zeroed aux
-  array).
+  covered by the stores, mz.cov), its startup contract mset.composed
+  (tr.impl_m_refine). Left: the call rule of `call memset` against
+  GIMPLE's `st_bytes` (`__init_libc`'s zeroed aux array). GIMPLE's
+  st_bytes has no stack overflow, the call has: the crash matched by the
+  events unchanged since the entry (tr.crash's io), a premise of the rule
+  (the call before any I/O, as in `__init_libc`).
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
