@@ -431,6 +431,24 @@ fn memcpy_spec_fun() -> CFun2[World] = (args: Args) => {
   return (result(r), any bits[64])
 }
 
+// memset(d, c, n): each of the n bytes at d c's low byte, d (not null)
+// returned -- n an object's size (below 2^63, as C's sizes: a pointer
+// difference)
+proc[World] memset_spec(d: Addr, c: bits[64], n: bits[64]) -> bits[64] {
+  require d != 0 && uint(n) < 2^63 && usable(vm, objs, uint(d), uint(n), true)
+  either { overflow() } or {
+    let before = vm
+    vm := vm with { bytes: (x: Addr) => if uint(x - d) < uint(n) { bits[8](c) } else { before.bytes[x] } }
+    return d
+  }
+}
+
+fn memset_spec_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  let r = memset_spec(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
+  return (result(r), any bits[64])
+}
+
 // libc's auxiliary vector readable (`libc.auxv`, at libc + 8, not null):
 // its pairs up to AT_NULL (below 2^63: an index into it a pointer's signed
 // offset), the 8 bytes past AT_RANDOM's address

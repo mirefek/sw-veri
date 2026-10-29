@@ -1,0 +1,334 @@
+// memset (musl's assembly, its readable model layers/musl_asm.sl) by its
+// purpose (mallocng_specs.memset_spec): each of the n bytes at d c's low
+// byte. Its stores, of words whose bytes are all that byte, cover the n
+// bytes (the small sizes from both ends, overlapping; the large ones the
+// last word, d's 16-byte head, the words from the boundary): mz.cov, the
+// bytes covered so far.
+
+// ----------------------------------------------------------------------
+//  The bytes of the values stored
+
+// (every one of the m bytes of x: k)
+abbrev mz.digs(x, m, k) := all i. i in omega -> int_lt(i, m) -> bits_of_int(8, int_div(x, int_pow(256, i))) = k
+
+// the byte b in each of j bytes
+def x86.bfill(b, j) := int_sum(0, j, i. int_mul(b, int_pow(256, i)))
+
+theorem x86.bfill_zero: all b. x86.bfill(b, 0) = 0
+proof
+  fix b
+  show by defs(simp(rec({nat_rec(empty, k w. int_add(w, int_mul(b, int_pow(256, int_add(0, k)))), 0)}), lit_zero), x86.bfill, int_sum)
+qed
+
+theorem x86.bfill_succ: all b j. j in omega -> x86.bfill(b, int_add(j, 1)) = int_add(x86.bfill(b, j), int_mul(b, int_pow(256, j)))
+proof
+  fix b j
+  assume hj
+  have r := rec({nat_rec(empty, k w. int_add(w, int_mul(b, int_pow(256, int_add(0, k)))), int_add(j, 1))}, hj)
+  have j0: int_add(0, j) = j by arith(hj)
+  show by defs(simp(r, hj, j0, lit_zero), x86.bfill, int_sum)
+qed
+
+// (j bytes b, a byte: below 256^j, a natural)
+theorem x86.bfill_lt: all b j. b in omega -> int_lt(b, 256) -> j in omega -> x86.bfill(b, j) in omega && int_lt(x86.bfill(b, j), int_pow(256, j))
+proof
+  fix b j
+  assume hb hbl hj
+  have base: x86.bfill(b, 0) in omega && int_lt(x86.bfill(b, 0), int_pow(256, 0)) by simp(x86.bfill_zero)
+  have step: all j. j in omega -> x86.bfill(b, j) in omega && int_lt(x86.bfill(b, j), int_pow(256, j)) ->
+      x86.bfill(b, int_add(j, 1)) in omega && int_lt(x86.bfill(b, int_add(j, 1)), int_pow(256, int_add(j, 1))) proof
+    fix j
+    assume hj ih
+    have io il := ih
+    have s := apply(x86.bfill_succ, {b}, {j}, hj)
+    have pn := apply(x86.pow256_nat, hj)
+    have pa := mp(all_elim(mp(all_elim(pow256_add, {j}), hj), {1}), simp())
+    have p1: int_pow(256, 1) = 256 by simp()
+    have d: int_mul(int_sub(255, b), int_pow(256, j)) in omega by arith(hbl, hb, pn)
+    have bp: int_mul(b, int_pow(256, j)) in omega by arith(hb, pn)
+    have r1: x86.bfill(b, int_add(j, 1)) in omega by arith(s, io, bp)
+    have r2: int_lt(x86.bfill(b, int_add(j, 1)), int_pow(256, int_add(j, 1))) by arith(s, il, d, pn, pa, p1)
+    show by taut(r1, r2)
+  qed
+  show := mp(all_elim(mp(nat_ind[p := j. x86.bfill(b, j) in omega && int_lt(x86.bfill(b, j), int_pow(256, j))], base, step), {j}), hj)
+qed
+
+// (all j bytes of j bytes b: b)
+theorem mz.digs_bfill: all b j. b in omega -> int_lt(b, 256) -> j in omega -> mz.digs(x86.bfill(b, j), j, b)
+proof
+  fix b j
+  assume hb hbl hj
+  have b8: bits_of_int(8, b) = b by defs(simp(hb, hbl), bits_of_int, pow2)
+  have base: mz.digs(x86.bfill(b, 0), 0, b) proof
+    fix i
+    assume hi hl
+    have f: false by arith(hi, hl)
+    show by taut(f)
+  qed
+  have step: all j. j in omega -> mz.digs(x86.bfill(b, j), j, b) -> mz.digs(x86.bfill(b, int_add(j, 1)), int_add(j, 1), b) proof
+    fix j
+    assume hj ih
+    fix i
+    assume hi hl
+    have s := apply(x86.bfill_succ, {b}, {j}, hj)
+    have fo fl := apply(x86.bfill_lt, {b}, {j}, hb, hbl, hj)
+    have lo: int_lt(i, j) -> bits_of_int(8, int_div(x86.bfill(b, int_add(j, 1)), int_pow(256, i))) = b proof
+      assume h
+      have dl := apply(x86.digit_low, {x86.bfill(b, j)}, {b}, {j}, {i}, fo, hb, hj, hi, h)
+      show by simp(s, dl, mp(all_elim(ih, {i}), hi, h))
+    qed
+    have at: i = j -> bits_of_int(8, int_div(x86.bfill(b, int_add(j, 1)), int_pow(256, i))) = b proof
+      assume e
+      have dh := apply(x86.digit_high, {x86.bfill(b, j)}, {b}, {j}, {0}, fo, hb, hj, simp(), fl)
+      have j0: int_add(j, 0) = j by arith(hj)
+      have p0: int_pow(256, 0) = 1 by simp()
+      have q: int_div(b, 1) = b by arith(hb)
+      show by simp(s, e, rewrite(j0, dh), p0, q, b8)
+    qed
+    have cs: int_lt(i, j) || i = j by arith(hl, hi)
+    show by taut(cs, lo, at)
+  qed
+  show := mp(all_elim(mp(nat_ind[p := j. mz.digs(x86.bfill(b, j), j, b)], base, step), {j}), hj)
+qed
+
+// (c words v, each byte of v k: each of their 8c bytes k)
+theorem mz.digs_fillv: all v k c. v in omega -> int_lt(v, 18446744073709551616) -> mz.digs(v, 8, k) -> c in omega -> mz.digs(x86.fillv(v, c), int_mul(8, c), k)
+proof
+  fix v k c
+  assume hv hvl hd hc
+  have base: mz.digs(x86.fillv(v, 0), int_mul(8, 0), k) proof
+    fix i
+    assume hi hl
+    have f: false by arith(hi, hl)
+    show by taut(f)
+  qed
+  have step: all c. c in omega -> mz.digs(x86.fillv(v, c), int_mul(8, c), k) -> mz.digs(x86.fillv(v, int_add(c, 1)), int_mul(8, int_add(c, 1)), k) proof
+    fix c
+    assume hc ih
+    fix i
+    assume hi hl
+    have s := apply(x86.fillv_succ, {v}, {c}, hc)
+    have pe := apply(x86.pow_2_256, hc)
+    have s2 := rewrite(pe, s)
+    have fo := apply(x86.fillv_nat, {v}, {c}, hv, hc)
+    have fl := apply(x86.fillv_lt, {v}, {c}, hv, hvl, hc)
+    have c8: int_mul(8, c) in omega by arith(hc)
+    have lo: int_lt(i, int_mul(8, c)) -> bits_of_int(8, int_div(x86.fillv(v, int_add(c, 1)), int_pow(256, i))) = k proof
+      assume h
+      have dl := apply(x86.digit_low, {x86.fillv(v, c)}, {v}, {int_mul(8, c)}, {i}, fo, hv, c8, hi, h)
+      show by simp(s2, dl, mp(all_elim(ih, {i}), hi, h))
+    qed
+    have hi8: int_le(int_mul(8, c), i) -> bits_of_int(8, int_div(x86.fillv(v, int_add(c, 1)), int_pow(256, i))) = k proof
+      assume h
+      let J := int_sub(i, int_mul(8, c))
+      have jo: J in omega by arith(h, hi)
+      have jl: int_lt(J, 8) by arith(hl)
+      have dh := apply(x86.digit_high, {x86.fillv(v, c)}, {v}, {int_mul(8, c)}, {J}, fo, hv, c8, jo, fl)
+      have ej: int_add(int_mul(8, c), J) = i by arith()
+      show by simp(s2, rewrite(ej, dh), mp(all_elim(hd, {J}), jo, jl))
+    qed
+    have cs: int_lt(i, int_mul(8, c)) || int_le(int_mul(8, c), i) by arith()
+    show by taut(cs, lo, hi8)
+  qed
+  show := mp(all_elim(mp(nat_ind[p := c. mz.digs(x86.fillv(v, c), int_mul(8, c), k)], base, step), {c}), hc)
+qed
+
+// ----------------------------------------------------------------------
+//  The bytes covered: b, from B by stores within the n bytes at d, its
+//  bytes outside them B's, those at the offsets P has k
+
+def mz.cov(b, B, d, n, k, t. P) := b in fn_space(bits(64), bits(8)) &&
+  (all x. x in bits(64) -> !int_lt(bits_sub(64, x, d), n) -> b[x] = B[x]) &&
+  (all x. x in bits(64) -> int_lt(bits_sub(64, x, d), n) -> P(bits_sub(64, x, d)) -> b[x] = k)
+
+theorem mz.cov0: all B d n k. B in fn_space(bits(64), bits(8)) -> mz.cov(B, B, d, n, k, t. false)
+proof
+  fix B d n k
+  assume hB
+  show by defs(simp(hB), mz.cov)
+qed
+
+// (an address x: its offset from d + o, the one from d less o -- the m
+// bytes at d + o within the n at d)
+theorem mz.sub_off: all x d o m n. x in bits(64) -> d in bits(64) -> o in omega -> m in omega -> int_le(int_add(o, m), n) -> int_le(n, 18446744073709551616) ->
+  (int_lt(bits_sub(64, x, bits_add(64, d, o)), m) <-> int_le(o, bits_sub(64, x, d)) && int_lt(bits_sub(64, x, d), int_add(o, m))) &&
+  (int_le(o, bits_sub(64, x, d)) -> int_lt(bits_sub(64, x, d), int_add(o, m)) -> bits_sub(64, x, bits_add(64, d, o)) = int_sub(bits_sub(64, x, d), o))
+proof
+  fix x d o m n
+  assume hx hd ho hm hl hn
+  let P := 18446744073709551616
+  have p64: pow2(64) = P by simp()
+  let T := bits_sub(64, x, d)
+  have e1: bits_sub(64, x, bits_add(64, d, o)) = int_mod(int_sub(x, int_mod(int_add(d, o), P)), P) by defs(simp(p64), bits_sub, bits_add)
+  have e2: T = int_mod(int_sub(x, d), P) by defs(simp(p64), bits_sub)
+  // ((x - (d + o) mod P) mod P = (x - d - o) mod P = (T - o) mod P)
+  have dm: int_sub(x, int_mod(int_add(d, o), P)) = int_add(int_sub(int_sub(x, d), o), int_mul(P, int_div(int_add(d, o), P))) by arith()
+  have q1 := mp(mod_add_mul_int[x := int_sub(int_sub(x, d), o), m := P, y := int_div(int_add(d, o), P)], (int_div(int_add(d, o), P) in int by arith()), simp())
+  have tm: int_sub(int_sub(x, d), o) = int_add(int_sub(T, o), int_mul(P, int_div(int_sub(x, d), P))) by arith(e2)
+  have q2 := mp(mod_add_mul_int[x := int_sub(T, o), m := P, y := int_div(int_sub(x, d), P)], (int_div(int_sub(x, d), P) in int by arith()), simp())
+  have sm: bits_sub(64, x, bits_add(64, d, o)) = int_mod(int_sub(T, o), P) := trans(trans(e1, rewrite(sym(dm), q1)), rewrite(sym(tm), q2))
+  have t0: T in omega && int_lt(T, P) by defs(simp(p64), bits_sub)
+  have t1 t2 := t0
+  // (T at least o: T - o; below o: T - o + P, at least m)
+  have ge: int_le(o, T) -> bits_sub(64, x, bits_add(64, d, o)) = int_sub(T, o) proof
+    assume h
+    have u := mp(mod_unique_int[x := int_sub(T, o), m := P, q := 0, r := int_sub(T, o)], simp(), (int_sub(T, o) in omega by arith(h)), simp(),
+      (int_lt(int_sub(T, o), P) by arith(t2, ho)), (int_sub(T, o) = int_add(int_mul(P, 0), int_sub(T, o)) by arith()))
+    have u1 _ := u
+    show by simp(sm, u1)
+  qed
+  have lt: int_lt(T, o) -> !int_lt(bits_sub(64, x, bits_add(64, d, o)), m) proof
+    assume h
+    have u := mp(mod_unique_int[x := int_sub(T, o), m := P, q := int_neg(1), r := int_add(int_sub(T, o), P)], (int_neg(1) in int by arith()), (int_add(int_sub(T, o), P) in omega by arith(t1, ho, hl, hn, hm)), simp(),
+      (int_lt(int_add(int_sub(T, o), P), P) by arith(h)), (int_sub(T, o) = int_add(int_mul(P, int_neg(1)), int_add(int_sub(T, o), P)) by arith()))
+    have u1 _ := u
+    have nl: !int_lt(int_add(int_sub(T, o), P), m) by arith(t1, hl, hn, hm)
+    show by simp(sm, u1, nl)
+  qed
+  have r1: int_lt(bits_sub(64, x, bits_add(64, d, o)), m) <-> int_le(o, T) && int_lt(T, int_add(o, m)) proof
+    have c1: int_le(o, T) -> (int_lt(bits_sub(64, x, bits_add(64, d, o)), m) <-> int_le(o, T) && int_lt(T, int_add(o, m))) proof
+      assume h
+      have g := mp(ge, h)
+      have iff: int_lt(int_sub(T, o), m) <-> int_lt(T, int_add(o, m)) by arith()
+      show by simp(g, iff, h)
+    qed
+    have c2: int_lt(T, o) -> (int_lt(bits_sub(64, x, bits_add(64, d, o)), m) <-> int_le(o, T) && int_lt(T, int_add(o, m))) proof
+      assume h
+      have n1 := mp(lt, h)
+      have n2: !int_le(o, T) by arith(h)
+      show by taut(n1, n2)
+    qed
+    have cs: int_le(o, T) || int_lt(T, o) by arith()
+    show by taut(cs, c1, c2)
+  qed
+  have r2: int_le(o, T) -> int_lt(T, int_add(o, m)) -> bits_sub(64, x, bits_add(64, d, o)) = int_sub(T, o) proof
+    assume a b
+    show := mp(ge, a)
+  qed
+  show by taut(r1, r2)
+qed
+
+// a store of m bytes, each k, at d + o within the n bytes: those m covered
+theorem mz.cov_store(t. P): all b B d n k o m v. mz.cov(b, B, d, n, k, t. P(t)) -> d in bits(64) -> o in omega -> m in omega ->
+  int_le(int_add(o, m), n) -> int_le(n, 18446744073709551616) -> mz.digs(v, m, k) ->
+  mz.cov(x86_64_linux.store_le(b, bits_add(64, d, o), m, v), B, d, n, k, t. P(t) || (int_le(o, t) && int_lt(t, int_add(o, m))))
+proof
+  fix b B d n k o m v
+  assume hc hd ho hm hl hn hv
+  have hb hout hin := expand(hc, mz.cov)
+  let A := bits_add(64, d, o)
+  have st := apply(x86.store_typed, {b}, {A}, {m}, {v}, hb)
+  // (the stored bytes: at x, its digit or b's)
+  have at: all x. x in bits(64) -> x86_64_linux.store_le(b, A, m, v)[x] = ite(int_lt(bits_sub(64, x, A), m), bits_of_int(8, int_div(v, int_pow(256, bits_sub(64, x, A)))), b[x]) by defs(simp(), x86_64_linux.store_le)
+  have out: all x. x in bits(64) -> !int_lt(bits_sub(64, x, d), n) -> x86_64_linux.store_le(b, A, m, v)[x] = B[x] proof
+    fix x
+    assume hxb hxo
+    have so _ := apply(mz.sub_off, {x}, {d}, {o}, {m}, {n}, hxb, hd, ho, hm, hl, hn)
+    have nin: !int_lt(bits_sub(64, x, A), m) by taut(so, (!int_lt(bits_sub(64, x, d), int_add(o, m)) by arith(hxo, hl)))
+    show by simp(mp(all_elim(at, {x}), hxb), nin, mp(all_elim(hout, {x}), hxb, hxo))
+  qed
+  have inn: all x. x in bits(64) -> int_lt(bits_sub(64, x, d), n) -> (P(bits_sub(64, x, d)) || (int_le(o, bits_sub(64, x, d)) && int_lt(bits_sub(64, x, d), int_add(o, m)))) ->
+      x86_64_linux.store_le(b, A, m, v)[x] = k proof
+    fix x
+    assume hxb hxi hp
+    have so se := apply(mz.sub_off, {x}, {d}, {o}, {m}, {n}, hxb, hd, ho, hm, hl, hn)
+    let T := bits_sub(64, x, d)
+    have new: int_le(o, T) && int_lt(T, int_add(o, m)) -> x86_64_linux.store_le(b, A, m, v)[x] = k proof
+      assume h
+      have h1 h2 := h
+      have sx := mp(se, h1, h2)
+      have lt: int_lt(bits_sub(64, x, A), m) by taut(so, h)
+      have to: int_sub(T, o) in omega by arith(h1)
+      have tl: int_lt(int_sub(T, o), m) by arith(h2)
+      have dg := mp(all_elim(hv, {int_sub(T, o)}), to, tl)
+      show by simp(mp(all_elim(at, {x}), hxb), lt, sx, dg)
+    qed
+    have old: !(int_le(o, T) && int_lt(T, int_add(o, m))) -> P(T) -> x86_64_linux.store_le(b, A, m, v)[x] = k proof
+      assume h hpt
+      have nin: !int_lt(bits_sub(64, x, A), m) by taut(so, h)
+      show by simp(mp(all_elim(at, {x}), hxb), nin, mp(all_elim(hin, {x}), hxb, hxi, hpt))
+    qed
+    show by taut(hp, new, old)
+  qed
+  show by defs(taut(st, out, inn), mz.cov)
+qed
+
+// (all n covered: the bytes those of the spec, k at the n, B's elsewhere)
+theorem mz.cov_fin(t. P): all b B d n k. mz.cov(b, B, d, n, k, t. P(t)) -> (all t. t in omega -> int_lt(t, n) -> P(t)) ->
+  b = fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, d), n), k, B[x]))
+proof
+  fix b B d n k
+  assume hc hall
+  have hb hout hin := expand(hc, mz.cov)
+  have bf: is_fun(b) && dom(b) = bits(64) by simp(hb)
+  have pw: all x. x in bits(64) -> b[x] = ite(int_lt(bits_sub(64, x, d), n), k, B[x]) proof
+    fix x
+    assume hx
+    have c1: int_lt(bits_sub(64, x, d), n) -> b[x] = ite(int_lt(bits_sub(64, x, d), n), k, B[x]) proof
+      assume h
+      have to: bits_sub(64, x, d) in omega by defs(simp(), bits_sub)
+      show by simp(h, mp(all_elim(hin, {x}), hx, h, mp(all_elim(hall, {bits_sub(64, x, d)}), to, h)))
+    qed
+    have c2: !int_lt(bits_sub(64, x, d), n) -> b[x] = ite(int_lt(bits_sub(64, x, d), n), k, B[x]) proof
+      assume h
+      show by simp(h, mp(all_elim(hout, {x}), hx, h))
+    qed
+    show by taut(c1, c2)
+  qed
+  have ext := mp(fn_build_ext[d := bits(64), f := x. b[x], g := x. ite(int_lt(bits_sub(64, x, d), n), k, B[x])], pw)
+  have eta := mp(mp(fn_eta[f := b, d := bits(64)], taut(bf)), taut(bf))
+  show := trans(sym(eta), ext)
+qed
+
+// (memset's word v: c's low byte b in each of its 8 bytes -- and so in its
+// low 2 and 4, as the 16- and 32-bit stores take them)
+theorem mz.v_digs: all c. c in bits(64) ->
+  mz.digs(bits_of_int(8, c), 1, bits_of_int(8, c)) &&
+  mz.digs(bits_mul(64, bits_of_int(64, bits_of_int(8, c)), 72340172838076673), 8, bits_of_int(8, c)) &&
+  mz.digs(bits_of_int(16, bits_mul(64, bits_of_int(64, bits_of_int(8, c)), 72340172838076673)), 2, bits_of_int(8, c)) &&
+  mz.digs(bits_of_int(32, bits_mul(64, bits_of_int(64, bits_of_int(8, c)), 72340172838076673)), 4, bits_of_int(8, c)) &&
+  bits_mul(64, bits_of_int(64, bits_of_int(8, c)), 72340172838076673) in bits(64)
+proof
+  fix c
+  assume hc
+  let b := bits_of_int(8, c)
+  have bb: b in bits(8) by simp()
+  have bo: b in omega by simp(bb)
+  have bl: int_lt(b, 256) by simp(bb)
+  have b64: bits_of_int(64, b) = b by defs(simp(bo, bl), bits_of_int, pow2)
+  // (b's 8 copies: b K, below 2^64)
+  have z := all_elim(x86.bfill_zero, {b})
+  have s1: x86.bfill(b, 1) = int_add(x86.bfill(b, 0), b) by simp(apply(x86.bfill_succ, {b}, {0}, simp()))
+  have s2: x86.bfill(b, 2) = int_add(x86.bfill(b, 1), int_mul(b, 256)) by simp(apply(x86.bfill_succ, {b}, {1}, simp()))
+  have s3: x86.bfill(b, 3) = int_add(x86.bfill(b, 2), int_mul(b, 65536)) by simp(apply(x86.bfill_succ, {b}, {2}, simp()))
+  have s4: x86.bfill(b, 4) = int_add(x86.bfill(b, 3), int_mul(b, 16777216)) by simp(apply(x86.bfill_succ, {b}, {3}, simp()))
+  have s5: x86.bfill(b, 5) = int_add(x86.bfill(b, 4), int_mul(b, 4294967296)) by simp(apply(x86.bfill_succ, {b}, {4}, simp()))
+  have s6: x86.bfill(b, 6) = int_add(x86.bfill(b, 5), int_mul(b, 1099511627776)) by simp(apply(x86.bfill_succ, {b}, {5}, simp()))
+  have s7: x86.bfill(b, 7) = int_add(x86.bfill(b, 6), int_mul(b, 281474976710656)) by simp(apply(x86.bfill_succ, {b}, {6}, simp()))
+  have s8: x86.bfill(b, 8) = int_add(x86.bfill(b, 7), int_mul(b, 72057594037927936)) by simp(apply(x86.bfill_succ, {b}, {7}, simp()))
+  have f1: x86.bfill(b, 1) = b by arith(z, s1)
+  have f2: x86.bfill(b, 2) = int_mul(257, b) by arith(z, s1, s2)
+  have f4: x86.bfill(b, 4) = int_mul(16843009, b) by arith(z, s1, s2, s3, s4)
+  have f8: x86.bfill(b, 8) = int_mul(72340172838076673, b) by arith(z, s1, s2, s3, s4, s5, s6, s7, s8)
+  have kl: int_lt(int_mul(b, 72340172838076673), 18446744073709551616) by arith(bl, bo)
+  have vm: bits_mul(64, bits_of_int(64, b), 72340172838076673) = int_mul(b, 72340172838076673) by defs(simp(b64, bo, kl), bits_mul, pow2)
+  let V := bits_mul(64, bits_of_int(64, b), 72340172838076673)
+  have v8: V = x86.bfill(b, 8) by arith(vm, f8)
+  // (its low 2 and 4 bytes: b's 2 and 4 copies)
+  have d2 _ := mp(div_unique[x := int_mul(b, 72340172838076673), m := 65536, q := int_mul(1103823438081, b), r := int_mul(257, b)], (int_mul(b, 72340172838076673) in omega by arith(bo)),
+    (int_mul(1103823438081, b) in omega by arith(bo)), (int_mul(257, b) in omega by arith(bo)), simp(), (int_lt(int_mul(257, b), 65536) by arith(bl)), (int_mul(b, 72340172838076673) = int_add(int_mul(65536, int_mul(1103823438081, b)), int_mul(257, b)) by arith()))
+  have v2: bits_of_int(16, V) = x86.bfill(b, 2) by defs(simp(vm, d2, f2), bits_of_int, pow2)
+  have d4 _ := mp(div_unique[x := int_mul(b, 72340172838076673), m := 4294967296, q := int_mul(16843009, b), r := int_mul(16843009, b)], (int_mul(b, 72340172838076673) in omega by arith(bo)),
+    (int_mul(16843009, b) in omega by arith(bo)), (int_mul(16843009, b) in omega by arith(bo)), simp(), (int_lt(int_mul(16843009, b), 4294967296) by arith(bl)), (int_mul(b, 72340172838076673) = int_add(int_mul(4294967296, int_mul(16843009, b)), int_mul(16843009, b)) by arith()))
+  have v4: bits_of_int(32, V) = x86.bfill(b, 4) by defs(simp(vm, d4, f4), bits_of_int, pow2)
+  have g1 := apply(mz.digs_bfill, {b}, {1}, bo, bl, simp())
+  have g2 := apply(mz.digs_bfill, {b}, {2}, bo, bl, simp())
+  have g4 := apply(mz.digs_bfill, {b}, {4}, bo, bl, simp())
+  have g8 := apply(mz.digs_bfill, {b}, {8}, bo, bl, simp())
+  have r1: mz.digs(b, 1, b) := rewrite(f1, g1)
+  have r8: mz.digs(V, 8, b) := rewrite(sym(v8), g8)
+  have r2: mz.digs(bits_of_int(16, V), 2, b) := rewrite(sym(v2), g2)
+  have r4: mz.digs(bits_of_int(32, V), 4, b) := rewrite(sym(v4), g4)
+  have vb: V in bits(64) by simp()
+  show by taut(r1, r8, r2, r4, vb)
+qed
