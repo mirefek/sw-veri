@@ -33,7 +33,7 @@ struct Ctx {
 const HAPART: &[&str] = &[
     "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
     "store64i_bd", "store32i_bd", "store16i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "or32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
-    "store64_bd_eq", "store64_bi", "movsb", "rep_movsq", "rep_stosq", "store32_bd_w", "store8_bid", "store16_bid", "store32_bid", "store64_bid",
+    "store64_bd_eq", "store64_bi", "movsb", "rep_movsq", "rep_stosq", "store32_bd_w", "store8_bid", "store16_bid", "store32_bid", "store64_bid", "store64_rsib", "store32i_rsp",
 ];
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
@@ -786,6 +786,9 @@ impl<'e> Gen<'e> {
                 // (the frame's stack objects: at the machine's first store to
                 // one; the instructions before it first)
                 Some(Red::Alloc { op, a, xx, dd, k }) => {
+                    if let Some(pf) = self.allocn_at(&st, qi, &op, &a, &xx, &dd, &k)? {
+                        return Ok(pf);
+                    }
                     if let Some(pf) = self.alloc_at(&st, qi, &op, &a, &xx, &dd, &k)? {
                         return Ok(pf);
                     }
@@ -1104,10 +1107,28 @@ impl<'e> Gen<'e> {
         let arg = |gg: &Gen, v: Term| gg.mk("seq_one", vec![gg.mk("gimple.arg", vec![lit(64), v])]);
         let items = vec![self.mk("gimple.arg", vec![lit(64), so.addr.clone()]), self.mk("gimple.arg", vec![lit(64), lit(0)]), self.mk("gimple.arg", vec![lit(64), lit(so.n)])];
         let list = self.mk("seq_concat", vec![self.mk("seq_concat", vec![arg(self, so.addr.clone()), arg(self, lit(0))]), arg(self, lit(so.n))]);
+        // (the rest passes the statement's raise on: `all x e x8 y. xx(x, e,
+        // x8) -> k(x8, y) -> y = exc(x, e)` -- the raise's x8 put in the
+        // rest, then simp; in a loop's body through the iteration's end)
+        let hpass = {
+            let n = self.fresh("p");
+            let (xv, ev, x8v, yv) = (self.var(&format!("XP{n}")), self.var(&format!("EP{n}")), self.var(&format!("X8P{n}")), self.var(&format!("YP{n}")));
+            let h1t = xl.instantiate_params(&[xv.clone(), ev.clone(), x8v.clone()], &self.env.binders_fn());
+            let h2t = kl.instantiate_params(&[x8v.clone(), yv.clone()], &self.env.binders_fn());
+            let (a1, a2) = (self.assume(&h1t)?, self.assume(&h2t)?);
+            let body = self.abstract_sub(&self.expand(&h2t), &self.expand(&x8v));
+            let a3 = Seq::subst(self.env, &a1, &body, &a2).map_err(|e| format!("{:x}: the rest's raise: {}", st.a, e.0))?;
+            let goal = self.mk("eq", vec![yv.clone(), self.mk("exc", vec![xv.clone(), ev.clone()])]);
+            // (the iteration's end, if the rest is in a loop's body: unfolded)
+            let kd = ["tr.lcont", "tr.isout", "tr.mk"].map(String::from).to_vec();
+            let a3 = R::Expand(Box::new(R::S(a3)), kd);
+            let pf = self.evp(&RP::Simp(false, vec![a3], vec![], false), &goal, &[])?;
+            self.close(pf, &[h1t, h2t], &[Self::var_id(&xv), Self::var_id(&ev), Self::var_id(&x8v), Self::var_id(&yv)])?
+        };
         // (the call's runs the store's: X.stz_incl at the store; the I/O at
         // the call the entry's)
         let w = st.w.clone();
-        let incl = p(R::Apply(
+        let incl = p(R::Mp(
             Box::new(R::Inst(format!("{pre}.stz_incl"), vec![("ka", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone()), ("kw", self.kw3())])),
             vec![
                 t(&self.s.clone()),
@@ -1127,13 +1148,34 @@ impl<'e> Gen<'e> {
                 simp0(),
                 s(&hc),
                 simp_l(),
-                simp0(),
+                s(&hpass),
             ],
         ));
-        let kt = self.mk(if k { "true" } else { "false" }, vec![]);
-        let bka = p(R::Inst("tr.bka_ovs_at".into(), vec![("b", self.mk("false", vec![])), ("k", kt)]));
+        let bka = p(self.bka_ovs_pf(&self.bka.clone()).ok_or_else(|| format!("{:x}: the breakpoints' relation, not one kept by the runs (tr.bka_ovs)", st.a))?);
         let lib = LibCall { hcall, htyp, hio, stmt: x[0].clone(), incl, bka };
         self.call_at(st, qi, g, &items, list, false, false, al, xl, dl, kl, Some(lib)).map(Some)
+    }
+
+    /// `tr.bka_ovs(bka)` for the claim's breakpoints' relation (its body,
+    /// z p w bound): the stop's (tr.bka_ovs_at), a CFG's cut points' ahead
+    /// of another (tr.bka_ovs_cut)
+    fn bka_ovs_pf(&self, bka: &Term) -> Option<R> {
+        let zpw = ["z", "p", "w"];
+        if let Some(x) = self.app(bka, "and", 2) {
+            let at = self.app(&x[1], "tr.at_tm", 4)?;
+            let k = self.lam(&x[0], &zpw, &[])?;
+            return Some(R::Inst("tr.bka_ovs_at".into(), vec![("b", at[0].clone()), ("k", k)]));
+        }
+        let o = self.app(bka, "or", 2)?;
+        let (c1, c2) = (self.app(&o[0], "and", 2)?, self.app(&o[1], "and", 2)?);
+        let ex = self.app(&c1[1], "ex", 1)?;
+        let dr = self.app(&ex[0], "and", 2)?;
+        let c = self.lam(&c1[0], &zpw, &["z"])?;
+        let d = self.lam(&dr[0], &["z", "p", "w", "y"], &["z", "w", "y"])?;
+        let b = self.lam(&c2[0], &zpw, &["z"])?;
+        let inner = self.lam(&c2[1], &zpw, &zpw)?;
+        let hi = self.bka_ovs_pf(&inner)?;
+        Some(mp(R::Inst("tr.bka_ovs_cut".into(), vec![("C", c), ("D", d), ("B", b), ("bka", inner)]), vec![p(hi)]))
     }
 
     /// A call (tr.call, tr.call1 for call1): the machine's `call rel32` at
@@ -2159,7 +2201,7 @@ impl<'e> Gen<'e> {
         }
         // (its loop reached within its first block, after the stack
         // object's allocation there: the CFG from here, tr.cfg_lvk_st)
-        if self.cfg.is_none() && self.hvo.is_some() && self.cfg_meta.is_some() && self.lpg.is_none() {
+        if self.cfg.is_none() && (self.hvo.is_some() || self.objs_n.is_some()) && self.cfg_meta.is_some() && self.lpg.is_none() {
             return self.cfg_function(st, qi, true).map(Some);
         }
         Ok(None)
@@ -2614,7 +2656,7 @@ impl<'e> Gen<'e> {
     }
 
     /// `tr.vabove(s, v)`: the entry's (assumed)
-    fn hva_r(&self) -> R {
+    pub(super) fn hva_r(&self) -> R {
         R::S(self.hva.clone().expect("tr.vabove assumed at the entry"))
     }
 
@@ -2625,13 +2667,17 @@ impl<'e> Gen<'e> {
         if let Some((v0, c0, hvo)) = &self.hvo {
             return mpf("tr.hfree_one", vec![t(&self.s), t(&self.v), t(v0), t(&lit(*c0)), t(&lit(c)), t(&lit(n)), s(hvo), hr, simp0()]);
         }
+        // (with several: apart from each, tr.hfree_objs)
+        if self.objs_n.is_some() {
+            return self.hfree_objs_pf(c, n);
+        }
         mpf("tr.hfree_above", vec![t(&self.s), t(&self.v), t(&lit(c)), t(&lit(n)), p(self.hva_r()), hr])
     }
 
     /// `tr.hfr(s, c, n, v)`, as a home's store takes it: the callers'
     /// objects alone (`tr.vabove`)
     pub(super) fn hfr_pf(&self, c: u128, n: u128) -> R {
-        if self.hvo.is_some() {
+        if self.hvo.is_some() || self.objs_n.is_some() {
             return mpf("tr.hfr_r", vec![t(&self.s), t(&lit(c)), t(&lit(n)), t(&self.v), p(self.hfree_pf(c, n))]);
         }
         mpf("tr.hfr_l", vec![t(&self.s), t(&lit(c)), t(&lit(n)), t(&self.v), p(self.hva_r())])
@@ -2640,7 +2686,7 @@ impl<'e> Gen<'e> {
     /// `tr.hap(s, hs, v)`, as a store's rule takes it: the callers' objects
     /// alone (`tr.vabove`)
     pub(super) fn hap_pf(&self, hs: &Term) -> R {
-        if self.hvo.is_some() {
+        if self.hvo.is_some() || self.objs_n.is_some() {
             return mpf("tr.hap_r", vec![t(&self.s), t(hs), t(&self.v), p(self.hapart_term(hs))]);
         }
         mpf("tr.hap_l", vec![t(&self.s), t(hs), t(&self.v), p(self.hva_r())])
@@ -2670,6 +2716,9 @@ impl<'e> Gen<'e> {
         // (with the frame's object: within any frame reaching it, tr.vone)
         if let Some((v0, c0, hvo)) = &self.hvo {
             return mpf("tr.ofr_one", vec![t(&self.s), t(fr), t(&self.v), t(v0), t(&lit(*c0)), s(hvo), simp0()]);
+        }
+        if self.objs_n.is_some() {
+            return self.ofr_objs_pf(fr);
         }
         mpf("tr.ofr_above", vec![t(&self.s), t(fr), t(&self.v), p(self.hva_r())])
     }

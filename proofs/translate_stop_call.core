@@ -1378,13 +1378,15 @@ qed
 //  by the events unchanged: tr.crash's io) -- a GIMPLE statement the code
 //  implements by a call (`st_bytes` by `call memset`), the call's overflow
 //  none of the statement's. The breakpoints' relation kept by such runs
-//  (as tr.at_tm: the stop's): a breakpoint's reduct Q itself.
+//  in its world (as tr.at_tm, the stop's, and a CFG's cut points'): a
+//  breakpoint's reduct, Q's runs among its own.
 
 // (an overflow with the entry's I/O)
 abbrev tr.ovs(s, o) := ex x. o = exc(x, exc_val("stack_overflow", empty)) && x.os.events = s.os.events
-// (a relation of programs kept by the runs other than overflows)
-def tr.bka_ovs(zb pb wb. bka) := all z p1 w1 p2 w2. (all o. (all x. !(o = exc(x, exc_val("stack_overflow", empty)))) -> runs(p1, w1, o) -> runs(p2, w2, o)) ->
-  bka(z, p1, w1) -> bka(z, p2, w2)
+// (a relation of programs kept, in a world, by the runs other than
+// overflows)
+def tr.bka_ovs(zb pb wb. bka) := all z p1 p2 w. (all o. (all x. !(o = exc(x, exc_val("stack_overflow", empty)))) -> runs(p1, w, o) -> runs(p2, w, o)) ->
+  bka(z, p1, w) -> bka(z, p2, w)
 
 theorem tr.gk_ovs(zb. bkp, zb pb wb. bka): all s v P Q w o. (all o. runs(P, w, o) -> runs(Q, w, o) || tr.ovs(s, o)) -> tr.bka_ovs(zb pb wb. bka(zb, pb, wb)) ->
   tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, o) -> tr.gk(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, Q, w, o)
@@ -1488,18 +1490,26 @@ proof
           tr.wmc(s.vm, m1.vm, w3.vm, abi.wob(v.live, w3.objs.c_bytes), s.fs_base, abi.sp(s)) && m1.os = w3.os && tr.rfs(s, v, m1, w3) by ex_intro({w2}, taut(rq, q2, q3, q4, q5, q6))
       show by defs(taut(rt, ew), tr.retok)
     qed
-    // (a breakpoint: Q its reduct, the relation kept)
+    // (a breakpoint: its reduct's runs those of Q's among them, the
+    // relation kept in its world)
     have r2: !tr.out(s, m1) -> bkp(m1) -> (ex p2 w2. tr.red(Q, w, p2, w2) && bka(m1, p2, w2)) proof
       assume no hk
       obtain p2 w2, rd ba from mp(ar2, no, hk)
-      have inc: all o2. (all x. !(o2 = exc(x, exc_val("stack_overflow", empty)))) -> runs(p2, w2, o2) -> runs(Q, w, o2) proof
+      let QW := set_select(p2, z. runs(Q, w, snd(z)))
+      have inc: all o2. (all x. !(o2 = exc(x, exc_val("stack_overflow", empty)))) -> runs(p2, w2, o2) -> runs(QW, w2, o2) proof
         fix o2
         assume hn hp
-        show := mp(all_elim(nov, {o2}), hn, mp(all_elim(expand(rd, tr.red), {o2}), hp))
+        have rq := mp(all_elim(nov, {o2}), hn, mp(all_elim(expand(rd, tr.red), {o2}), hp))
+        show by defs(simp(expand(hp, runs), expand(rq, runs)), runs)
       qed
-      have bq := mp(all_elim(expand(hb, tr.bka_ovs), {m1}, {p2}, {w2}, {Q}, {w}), inc, ba)
-      have rq: tr.red(Q, w, Q, w) by defs(simp(), tr.red)
-      show by ex_intro({Q}, {w}, taut(rq, bq))
+      have bq := mp(all_elim(expand(hb, tr.bka_ovs), {m1}, {p2}, {QW}, {w2}), inc, ba)
+      have rg: all o2. runs(QW, w2, o2) -> runs(Q, w, o2) proof
+        fix o2
+        assume h
+        show by defs(simp(unsel(expand(h, runs))), runs)
+      qed
+      have rq: tr.red(Q, w, QW, w2) by defs(taut(rg), tr.red)
+      show by ex_intro({QW}, {w2}, taut(rq, bq))
     qed
     have aq: tr.arr(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, m1, Q, w) by defs(taut(r1, r2), tr.arr)
     show by ex_intro({m1}, taut(oe, aq))
@@ -1563,6 +1573,38 @@ proof
     qed
     have at2: tr.at_tm(b, z, p2, w2) by taut(expand(ht, tr.at_tm), c1, c2)
     show by taut(hk, at2)
+  qed
+  have g1: all z p1 p2 w. (all o. (all x. !(o = exc(x, exc_val("stack_overflow", empty)))) -> runs(p1, w, o) -> runs(p2, w, o)) ->
+      k && tr.at_tm(b, z, p1, w) -> k && tr.at_tm(b, z, p2, w) proof
+    fix z p1 p2 w
+    show := all_elim(g, {z}, {p1}, {w}, {p2}, {w})
+  qed
+  show by defs(g1, tr.bka_ovs)
+qed
+
+// (a CFG's cut points', ahead of a relation kept: kept -- a cut point's
+// runs an ok one)
+theorem tr.bka_ovs_cut(z. C, z w y. D, z. B, zb pb wb. bka): tr.bka_ovs(zb pb wb. bka(zb, pb, wb)) ->
+  tr.bka_ovs(z p w. (C(z) && (ex y. D(z, w, y) && runs(p, w, ok(w, pair(18446744073709551616, y))))) || (B(z) && bka(z, p, w)))
+proof
+  assume hb
+  have g: all z p1 p2 w. (all o. (all x. !(o = exc(x, exc_val("stack_overflow", empty)))) -> runs(p1, w, o) -> runs(p2, w, o)) ->
+      (C(z) && (ex y. D(z, w, y) && runs(p1, w, ok(w, pair(18446744073709551616, y))))) || (B(z) && bka(z, p1, w)) ->
+      (C(z) && (ex y. D(z, w, y) && runs(p2, w, ok(w, pair(18446744073709551616, y))))) || (B(z) && bka(z, p2, w)) proof
+    fix z p1 p2 w
+    assume hi ha
+    have c1: (ex y. D(z, w, y) && runs(p1, w, ok(w, pair(18446744073709551616, y)))) -> (ex y. D(z, w, y) && runs(p2, w, ok(w, pair(18446744073709551616, y)))) proof
+      assume e
+      obtain y, hd hr from e
+      have hn: all x. !(ok(w, pair(18446744073709551616, y)) = exc(x, exc_val("stack_overflow", empty))) proof
+        fix x
+        show by simp()
+      qed
+      have r2 := mp(all_elim(hi, {ok(w, pair(18446744073709551616, y))}), hn, hr)
+      show by ex_intro({y}, taut(hd, r2))
+    qed
+    have c2: bka(z, p1, w) -> bka(z, p2, w) := mp(all_elim(expand(hb, tr.bka_ovs), {z}, {p1}, {p2}, {w}), hi)
+    show by taut(ha, c1, c2)
   qed
   show by defs(g, tr.bka_ovs)
 qed

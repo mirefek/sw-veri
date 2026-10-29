@@ -27,6 +27,7 @@ mod gref;
 mod insn;
 mod join;
 mod nf;
+mod objsn;
 mod proof;
 pub mod rec;
 mod spec;
@@ -407,6 +408,10 @@ struct Gen<'e> {
     /// the world, the world before, the address, the word, the objects, the
     /// world's equation, the world before's facts
     objw: Option<(Term, Term, Term, Term, Term, Option<R>, Seq)>,
+    /// the frame's objects, several, once allocated where the machine
+    /// makes no step (tr.alloc_lv): `tr.vobjs`'s parts and its proof
+    /// (assumed), their ranges (offset, bytes)
+    objs_n: Option<objsn::ObjsN>,
 }
 
 /// the seconds since the first trace line

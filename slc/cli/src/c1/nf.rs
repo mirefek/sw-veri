@@ -189,8 +189,9 @@ impl<'e> Gen<'e> {
             if a.is_empty() {
                 let def = self.vals.iter().rev().find(|x| x.0 == *v).map(|x| x.1.clone());
                 let ops: &[&str] = if self.nf_bits { &["bits_add", "bits_mul", "bits_and", "bits_or", "bits_xor"] } else { &["bits_add", "bits_mul"] };
-                // (and a one-element list's: a stack object's address list)
-                if let Some(d) = def.filter(|d| ops.iter().any(|o| self.app(d, o, 3).is_some()) || self.app(d, "seq_one", 1).is_some()) {
+                // (and a one-element list's, a built one's: the stack
+                // objects' address list)
+                if let Some(d) = def.filter(|d| ops.iter().any(|o| self.app(d, o, 3).is_some()) || self.app(d, "seq_one", 1).is_some() || self.app(d, "fn_build", 2).is_some()) {
                     let r = self.nf(&d, depth)?;
                     self.nf_memo.insert(t.clone(), r.clone());
                     return Ok(r);
@@ -270,6 +271,53 @@ impl<'e> Gen<'e> {
             if let Some(x) = self.app(&a[0], "seq_one", 1).map(|x| x[0].clone()) {
                 let e = self.run(&R::Inst("nf.seq_one0".into(), vec![("x", x.clone())]), &[])?;
                 return Ok(Some((x, e)));
+            }
+        }
+        // a built function at a literal in its domain (the frame's
+        // objects' addresses: tr.hal, at an index); a literal list's
+        // element (the kernel's list_at)
+        if name == "app" && a.len() == 2 && nat(&a[1]).is_some() {
+            if let Some(fb) = self.app(&a[0], "fn_build", 2).map(|x| x.to_vec()) {
+                let v = fb[1].instantiate_params(&[a[1].clone()], &self.env.binders_fn());
+                // (the index in the domain: a literal list's length by arith)
+                let hd = match self.app(&fb[0], "seq_len", 1).and_then(|x| self.list_items(&x[0])) {
+                    Some(items) => {
+                        let e = self.mk("eq", vec![fb[0].clone(), lit(items.len() as u128)]);
+                        rec::simpw(vec![R::S(self.evp(&rec::RP::Arith(vec![]), &e, &[])?)])
+                    }
+                    None => rec::simp0(),
+                };
+                let r = rec::mp(R::Inst("app_fn_build".into(), vec![("d", fb[0].clone()), ("v", fb[1].clone()), ("a", a[1].clone())]), vec![hd]);
+                let e = self.run(&r, &[])?;
+                return Ok(Some((v, e)));
+            }
+            if self.list_items(&a[0]).is_some() {
+                let lg = &self.api.as_ref().expect("the proving context").lg;
+                let e = Seq::list_at(self.env, lg, &[], &self.expand(t)).map_err(|e| format!("N: {}: {}", self.print(t), e.0))?;
+                let v = self.app(e.concl(), "eq", 2).map(|x| x[1].clone()).ok_or("list_at: not an equation")?;
+                return Ok(Some((v, e)));
+            }
+        }
+        // a frame's address (tr.ha: a word plus an offset, in integers, at
+        // 64 bits): the word sum (nf.addi_bits)
+        if name == "bits_add" && a.len() == 3 && nat(&a[0]) == Some(64) && nat(&a[2]) == Some(0) {
+            if let Some(y) = self.app(&a[1], "int_add", 2).map(|y| y.to_vec()) {
+                // (the word: the entry's rsp -- tr.vabove's --, or an operation's)
+                let rsp = self.mk("app", vec![self.mk("app", vec![self.s.clone(), Term::bytes(b"gpr")]), lit(4)]);
+                let hin = if self.expand(&y[0]) == self.expand(&rsp) {
+                    self.hva.clone().map(|h| rec::taut(vec![R::Expand(Box::new(R::S(h)), vec!["tr.vabove".into()])]))
+                } else {
+                    match self.word_of(&y[0]) {
+                        Some((64, h)) => Some(rec::p(h)),
+                        Some((m, h)) if m < 64 => Some(rec::p(rec::mp(R::Inst("nf.bits_le".into(), vec![("m", lit(m)), ("n", lit(64)), ("x", y[0].clone())]), vec![rec::simp0(), rec::simp0(), rec::simp0(), rec::p(h)]))),
+                        _ => None,
+                    }
+                };
+                if let (Some(_), Some(hin)) = (nat(&y[1]), hin) {
+                    let r = rec::mp(R::Inst("nf.addi_bits".into(), vec![("x", y[0].clone()), ("c", y[1].clone())]), vec![hin, rec::simp0()]);
+                    let e = self.run(&r, &[])?;
+                    return Ok(Some((self.mk("bits_add", vec![lit(64), y[0].clone(), y[1].clone()]), e)));
+                }
             }
         }
         // a cast of a word of its width or narrower
@@ -550,6 +598,13 @@ impl<'e> Gen<'e> {
             return i128::try_from(n).ok();
         }
         let Node::App(f, a) = t.node() else { return None };
+        // (a static's address: its constant's literal)
+        if a.is_empty() {
+            return match &self.env.syms[*f as usize].kind {
+                sl_kernel::SymKind::Defined { params, body } if params.is_empty() => nat(body).and_then(|n| i128::try_from(n).ok()),
+                _ => None,
+            };
+        }
         let name = self.env.syms[*f as usize].name.as_str();
         let iv: Vec<i128> = a.iter().map(|x| self.ilit_eval(x)).collect::<Option<_>>()?;
         // (the integer operations)

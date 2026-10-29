@@ -38,7 +38,7 @@ impl<'e> Gen<'e> {
             }
         }
         // (in a zero-initialization: its stores only)
-        if st.z.is_some() && insn.row != 145 && insn.row != 150 {
+        if st.z.is_some() && !matches!(insn.row, 143 | 145 | 150) {
             return Err(bad("in a zero-initialization: not a store of the zero register"));
         }
         match insn.row {
@@ -171,13 +171,77 @@ impl<'e> Gen<'e> {
                 st3.z = Some((xr, so.p.clone(), o, so.n));
                 return self.then(fill(tr, "NEXT", &rd), st3);
             }
-            // movups / movq [b + d], x (x zero): the next c of the bytes
-            145 | 150 => {
+            // movups / movaps / movq [b + d], x (x zero): the next c of the bytes
+            143 | 145 | 150 => {
                 let Some((xr, bz, o, k)) = st.z.clone() else { return Err(bad("a store of an xmm register outside a zero-initialization")) };
-                let (c, nf) = if insn.row == 145 { (16u128, 4) } else { (8u128, 5) };
+                let (c, nf) = if insn.row == 150 { (8u128, 5) } else { (16u128, 4) };
                 let x = self.pairs(&f, nf).ok_or_else(|| bad("fields"))?;
                 if reg(&x[0])? != xr {
                     return Err(bad("a store of an xmm register not zeroed"));
+                }
+                // ([rsp + d]: a frame's stack object -- its address the
+                // frame's at the offset cd, shown the bytes' by N; movaps's
+                // aligned by the entry's alignment)
+                if let Some(d) = self.rsp_mem(&x[1]).filter(|_| c <= k) {
+                    let dn = nat(&d).ok_or_else(|| bad("a displacement that is not a literal"))?;
+                    let cd = self.hkey(dn);
+                    let at = |g: &Gen, o: u128| g.mk("bits_add", vec![lit(64), bz.clone(), lit(o)]);
+                    let (aa, a2t) = (at(self, o), at(self, o + c));
+                    let ha = self.mk("tr.ha", vec![self.s.clone(), lit(cd)]);
+                    let q = self.addr_eq(st, &aa, &ha).map_err(|e| format!("{:x}: the zero-initialization's bytes at {} + {}, the machine's at [rsp + {}]: {}", a, self.print(&bz), o, dn, e))?;
+                    let cdt = lit(cd);
+                    let mut ts: Vec<&Term> = vec![&x[0], &d, &cdt];
+                    ts.extend(x[2..].iter());
+                    let (kt, k2t) = (lit(k), lit(k - c));
+                    ts.extend([&aa, &kt, &a2t, &k2t]);
+                    let mut extra = vec![simp0(), s(&q)];
+                    if insn.row == 143 {
+                        if (cd + 8) % 16 != 0 {
+                            return Err(format!("{:x}: movaps at a frame offset not aligned to 16", a));
+                        }
+                        let sal = self.sal16()?;
+                        let rsp = taut(vec![R::Expand(Box::new(self.hva_r()), vec!["tr.vabove".into()])]);
+                        let al = mpf("tr.ha_al16", vec![t(&self.s.clone()), t(&lit(cd)), s(&sal), rsp, simp0(), simp0()]);
+                        extra.push(simpw(vec![R::S(q.clone()), al]));
+                    }
+                    extra.extend([simp0(), simp0(), simp0(), arith(vec![]), arith(vec![])]);
+                    let rule = match insn.row {
+                        143 => "zst_aps_rsp",
+                        145 => return Err(bad("movups at a frame offset (not yet)")),
+                        _ => "zst_q_rsp",
+                    };
+                    let mut tl = self.tail(st, insn, 5, extra);
+                    tl.insert(6, self.nobp());
+                    let mut tr = self.step(rule, a, insn, &ts, tl);
+                    let mut st2 = st.clone();
+                    st2.a = a2;
+                    if k == c {
+                        let ex = mpf(
+                            "tr.ptz_exit",
+                            vec![
+                                t(&self.s.clone()),
+                                t(&self.v.clone()),
+                                t(&self.base.clone()),
+                                t(&self.code.clone()),
+                                t(&lit(st.fr)),
+                                t(&lit(a2)),
+                                t(&st.hst),
+                                t(&st.ds),
+                                t(&st.rs),
+                                t(&lit(xr)),
+                                t(&a2t),
+                                t(&self.p(&st.spec)),
+                                t(&st.w),
+                                simp_l(),
+                                p(R::Slot("NEXT")),
+                            ],
+                        );
+                        tr = fill(tr, "NEXT", &ex);
+                        st2.z = None;
+                    } else {
+                        st2.z = Some((xr, bz, o + c, k - c));
+                    }
+                    return self.then(tr, st2);
                 }
                 let (bn, b, d) = self.base_disp(&x[1]).ok_or_else(|| bad("not [b + d]"))?;
                 let bv = self.need_reg(st, bn, 8)?;
@@ -303,11 +367,19 @@ impl<'e> Gen<'e> {
                     let rd = |ea: &str| format!("bits_of_int({}, gimple.bytes_at(app({wn}, \"vm\"), {ea}, {}))", 8 * n, n);
                     let eb = format!("bits_add(64, {}, {})", self.print(&bp), self.print(&d));
                     let v = self.parse(&rd(&eb))?;
+                    // (b holding a static's address, a literal: the spec's
+                    // load at that static, as its symbol names it -- the
+                    // fact by simp)
+                    let at_static = self.eval_lit(&bp).zip(nat(&d)).map(|(pv, dv)| (pv + dv) % P64);
                     let (tr, v) = if n == 8 {
                         // (also the bytes of the spec's store there: a bitfield's)
-                        let (hc, wt) = self.mem_hyp_rw(st, &bp, &d, 8)?;
+                        let (hc, wt) = match (self.mem_hyp_rw(st, &bp, &d, 8), at_static) {
+                            (Ok((h, wt)), _) => (s(&h), wt),
+                            (Err(_), Some(av)) => (simp_lw(vec![R::S(self.static_mem_hyp(st, av, 8)?.2)]), self.mk("false", vec![])),
+                            (Err(e), None) => return Err(e),
+                        };
                         let (v, hr) = self.result(&v)?;
-                        (self.step("load64_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt, &v], self.tail(st, insn, 6, vec![s(&hc), hr])), v)
+                        (self.step("load64_bd", a, insn, &[&x[1], &b, &d, &x[4], &bp, &wt, &v], self.tail(st, insn, 6, vec![hc, hr])), v)
                     } else {
                         let hc = self.mem_hyp(st, &bp, &d, n)?;
                         // (at offset 0: the address as the spec read it, p or p + 0)
@@ -343,7 +415,7 @@ impl<'e> Gen<'e> {
                     }
                 }
                 // (a stack object's bytes, allocated: the spec's load there)
-                if n == 8 && self.hvo.is_some() && self.objk.contains(&hk) {
+                if n == 8 && ((self.hvo.is_some() && self.objk.contains(&hk)) || self.obj_byte(hk)) {
                     let ha = self.mk("tr.ha", vec![self.s.clone(), lit(hk)]);
                     let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ha, 8)?;
                     let v = self.parse(&format!("bits_of_int(64, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 8))", self.print(&pp), self.print(&off)))?;
@@ -946,6 +1018,37 @@ impl<'e> Gen<'e> {
                     st3.a = a2;
                     return self.then(tr, st3);
                 }
+                // mov qword [rsp + i*k + d], r64: the spec's 8-byte store
+                // into a frame's stack object, an element (the object's
+                // address at the offset c, plus i*k: shown the spec's)
+                if let (Some(m), Some(8)) = (self.memop(&x[2]), nat(&x[0])) {
+                    if let (Some((2, b)), Some(ix), Some(k), Some(dn)) = (self.tag(&m["base"]), self.app(&m["index"], "some", 1).map(|y| y[0].clone()), nat(&m["scale"]), nat(&m["disp"])) {
+                        if nat(&b) == Some(4) && self.objs_n.is_some() {
+                            let iv = self.need_reg(st, reg(&ix)?, 8)?;
+                            if let Some(pf) = self.widen(st, g, 8)? {
+                                return Ok(pf);
+                            }
+                            let u = self.need_reg(st, g, 8)?;
+                            let (hc, v, st2, red, _, so) = self.spec_store_x(st, None, Some(8))?;
+                            let hux = self.eq_nf(&u, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
+                            let c = self.hkey(dn);
+                            let ha = self.mk("tr.ha", vec![self.s.clone(), lit(c)]);
+                            let ea = self.mk("bits_add", vec![lit(64), ha, self.mk("bits_mul", vec![lit(64), iv.clone(), lit(k)])]);
+                            let ad = self.mk("bits_add", vec![lit(64), so.p.clone(), so.off.clone()]);
+                            let q = self.addr_eq(st, &ea, &ad)?;
+                            let tr = self.step(
+                                "store64_rsib",
+                                a,
+                                insn,
+                                &[&x[1], &ix, &lit(k), &lit(dn), &lit(c), &x[3], &x[4], &iv, &u, &v, &so.p, &so.off],
+                                self.tail_s(st, &st2, insn, 9, vec![hux, simp_l(), simp_l(), simp_l(), simp_l(), s(&q)], &hc, &red),
+                            );
+                            let mut st3 = st2;
+                            st3.a = a2;
+                            return self.then(tr, st3);
+                        }
+                    }
+                }
                 // mov qword [b + i], r64: the spec's 8-byte store, its
                 // address computed otherwise (b + i shown the spec's)
                 if let (Some(m), Some(8)) = (self.memop(&x[2]), nat(&x[0])) {
@@ -995,10 +1098,14 @@ impl<'e> Gen<'e> {
                         st3.a = a2;
                         return self.then(tr, st3);
                     }
-                    if self.canon(&v) != self.canon(&u) {
-                        return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&u), self.print(&v)));
-                    }
-                    let tr = self.step("store64_bd", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u], self.tail_s(st, &st2, insn, 10, vec![], &hc, &red));
+                    // (the spec's value, or the same by its normal form: a
+                    // static's word read at its address, the spec at its name)
+                    let tr = if self.canon(&v) == self.canon(&u) {
+                        self.step("store64_bd", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u], self.tail_s(st, &st2, insn, 10, vec![], &hc, &red))
+                    } else {
+                        let hux = self.eq_nf(&u, &v)?.ok_or_else(|| format!("{:x}: the machine stores {} ({}), the spec {} ({})", a, self.print(&u), self.print(&self.expand(&u)), self.print(&v), self.print(&self.expand(&v))))?;
+                        self.step("store64_bd_eq", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u, &v], self.tail_s(st, &st2, insn, 10, vec![hux], &hc, &red))
+                    };
                     let mut st3 = st2;
                     st3.a = a2;
                     return self.then(tr, st3);
@@ -2646,6 +2753,22 @@ impl<'e> Gen<'e> {
                     return Err(bad("not mov dword [rsp + d], imm32"));
                 }
                 let cn = self.hkey(dn);
+                // (into a frame's object: the spec's 4-byte store there, its
+                // address the frame's at cn -- shown the spec's by N)
+                if self.obj_byte(cn) {
+                    let k = x[3].clone();
+                    let (hc, v, st2, red, _, so) = self.spec_store_x(st, None, Some(4))?;
+                    if self.eval_lit(&v) != nat(&k) {
+                        return Err(format!("{:x}: the machine stores {}, the spec {}", a, self.print(&k), self.print(&v)));
+                    }
+                    let ha = self.mk("tr.ha", vec![self.s.clone(), lit(cn)]);
+                    let ad = self.mk("bits_add", vec![lit(64), so.p.clone(), so.off.clone()]);
+                    let q = self.addr_eq(st, &ha, &ad)?;
+                    let tr = self.step("store32i_rsp", a, insn, &[&d, &lit(cn), &k, &so.p, &so.off], self.tail_s(st, &st2, insn, 4, vec![simp0(), simp_l(), simp_l(), simp_l(), s(&q)], &hc, &red));
+                    let mut st3 = st2;
+                    st3.a = a2;
+                    return self.then(tr, st3);
+                }
                 let (_, hs2, hk) = self.hkeep(st, cn, 4);
                 let k = x[3].clone();
                 let tr = self.step("store32i_home", a, insn, &[&d, &lit(cn), &k], self.tail_h(st, insn, &hs2, 4, vec![defs(RP::Simp(false, vec![], vec![], false), &["tr.hrange"]), simp_l(), simp_l(), simp_l(), simp_l(), p(hk.clone())]));

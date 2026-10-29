@@ -181,10 +181,9 @@ The binary as linked (gcc's crtbegin included). The steps:
     call1_0_st, calli1_0_st. Engine: `c1 .. stop T startup`; the startup
     units generated with `--startup`; C1 of `_start_c`, `__libc_start_main`,
     `libc_start_main_stage2`, `__libc_start_init` in the startup mode.
-    Left: `call0_objs` (`__init_libc`'s aux array); a body using neither
-    mode's rules gives both contracts (memcpy, memset proven once); Init's
-    top turns the stop's startup view (tr.at_tm(false, ..)) into main's
-    world.
+    Left: a body using neither mode's rules gives both contracts (memcpy,
+    memset proven once); Init's top turns the stop's startup view
+    (tr.at_tm(false, ..)) into main's world.
 - memset (src/string/x86_64/memset.s; layers/musl_asm.sl, its CFG
   musl_asm_cfg.sl): C1 in the startup mode, refines, C2 against
   mallocng_specs.memset_spec (proofs/mallocng/fun/memset.core: the bytes
@@ -192,17 +191,34 @@ The binary as linked (gcc's crtbegin included). The steps:
   (tr.impl_m_refine). The call against GIMPLE's zero `st_bytes`
   (`__init_libc`'s aux array): the rule tr.call0_stb (tr.call0_st's
   claim for the call is the statement's: tr.lv_ovs, the call's runs the
-  statement's but overflows with the entry's I/O -- the crash matched by
-  the events unchanged, tr.crash's io; the breakpoints' relation kept,
-  tr.bka_ovs), the call's runs by mset.stz_incl (premise: the I/O at the
-  call the entry's, as nothing was written before it). The engine's use
-  (proof.rs stz_call_try: a `call f` against the spec's zero store, f's
-  contract `X.impl_m` found by its address, X.typed, X.io, X.stz_incl)
-  written, not yet exercised: `__init_libc`'s C1 (a file after
-  proofs/mallocng/fun/memset.core) stops before it, at the frame's
-  objects -- two (pfd, aux), aux's first use its address passed to
-  memset, not a store (alloc_at: one object, at its first `mov [rsp+d],
-  r64`).
+  statement's but overflows with the entry's I/O; the breakpoints'
+  relation kept in its world, tr.bka_ovs -- the stop's tr.bka_ovs_at, a
+  CFG's cut points' tr.bka_ovs_cut), the call's runs by mset.stz_incl.
+  Engine: proof.rs stz_call_try (f's contract `X.impl_m` found by its
+  address; the rest passing a raise on, by the raise put in it),
+  bka_ovs_pf. Exercised by `__init_libc`.
+- Frames with several stack objects of any sizes (readable GIMPLE's
+  `alloc_objs(sizes)`): allocated together where the machine makes no
+  step (proofs/translate_objsn.core, tr.alloc_lv; engine objsn.rs) -- at
+  the first point with a home at or below them all, within a page of the
+  entry's rsp; their bytes the machine's there; the homes apart from them
+  (tr.hfree_objs), the frame reaching them (tr.ofr_objs). Their addresses
+  `tr.hal(s, cs)` through N (app_fn_build, a literal list's element by
+  list_at, a frame address `bits_add(64, int_add(rsp, c), 0)` the word
+  sum, nf.addi_bits). Accesses: an element store at [rsp + i*k + d]
+  (tr.store64_rsib, x86i.store64_sib), loads at [rsp + d] (tr.load64_obj),
+  an immediate's store (tr.store32i_rsp), the zero-initialization by
+  movaps / movq at [rsp + d] (tr.zst_aps_rsp, tr.zst_q_rsp; the alignment
+  by tr.ha_al16), calls passing them (call1_objs, call1_0_objs:
+  tr.qs_call1objs, tr.qs_call10objs). The single object's older path
+  (alloc_at, tr.astore_r: get_random_secret) kept; unifying it optional.
+- `__init_libc`'s C1 (a file after proofs/mallocng/fun/memset.core, `c1
+  __init_libc c_src_env___libc_start_main_cfg.__init_libc_fun c1il nostop
+  4198873 startup`): through the objects, memset, the auxv loop, the
+  program name, the poll call; it stops at 0x4015f6, `movzwl
+  0x16(%rsp,%rax,8)` (pfd[i].revents: a 2-byte zero-extending load at
+  [rsp + i*k + d]; the spec's ld16(p, 6) has its rule, tr.ld16_ok), then
+  cwtl and the open("/dev/null") branch.
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the

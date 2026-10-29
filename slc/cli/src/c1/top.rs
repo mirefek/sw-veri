@@ -186,6 +186,7 @@ impl<'e> Gen<'e> {
             objk: Vec::new(),
             hvo: None,
             objw: None,
+            objs_n: None,
         })
     }
 }

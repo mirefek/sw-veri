@@ -1,0 +1,940 @@
+// Stack objects of the function's own frame, any number of any sizes
+// (readable GIMPLE's `alloc_objs(sizes)`), allocated by the spec where the
+// machine makes no step: at a point where their bytes are accessible (an
+// accessible home below them, the frame within a page of the entry's rsp),
+// their bytes the machine's there -- alloc_objs gives them any. The claims'
+// objects grown by them (tr.objsv), the homes apart from them by their
+// ranges (tr.vobjs). Checked after proofs/translate_objs.core (one object
+// at its first store: tr.astore_r).
+
+// ---------------------------------------------------------------------
+//  The objects at the addresses L of the sizes (pairs of size, alignment)
+
+// (a byte of one of them: alloc_objs's)
+abbrev tr.oin(L, sizes, z) := ex x8. x8 in omega && ((int_lt(x8, seq_len(sizes)) && int_le(app(L, x8), z)) && int_lt(z, int_add(app(L, x8), fst(app(sizes, x8)))))
+// (the live objects with them, as alloc_objs makes them; the claims'
+// objects with them, the C bytes the same)
+abbrev tr.objsn(v, L, sizes) := set_select(omega, x6. x6 in v || tr.oin(L, sizes, x6))
+abbrev tr.objsv(v, L, sizes) := abi.wob(tr.objsn(v.live, L, sizes), v.c_bytes)
+// (the world with them: their bytes B's, the rest w's)
+abbrev tr.wobjs(w, B, L, sizes) := fn_update(fn_update(w, "vm", fn_update(w.vm, "bytes", B)), "objs", fn_update(w.objs, "live", tr.objsn(w.objs.live, L, sizes)))
+
+theorem tr.objsn_in: all v L sizes x. x in tr.objsn(v, L, sizes) <-> x in omega && (x in v || tr.oin(L, sizes, x))
+proof
+  fix v L sizes x
+  show by taut(set_select_def[s := omega, p := x6. x6 in v || tr.oin(L, sizes, x6), z := x])
+qed
+
+// ---------------------------------------------------------------------
+//  The coupling with the objects: the world's bytes there the machine's
+
+theorem tr.mem_allocn: all s base code fr m w v L sizes B. tr.inv(s, base, code, fr, m, w) -> tr.mem(s, m, w, v) ->
+  (all z. z in omega -> tr.oin(L, sizes, z) -> z in bits(64) && int_lt(z, s.gpr[4]) && x86_64_linux.can_access(m.vm, z, 1) && abi.stack_page(m.vm, int_div(z, 4096)) && !(z in v.live)) ->
+  B in fn_space(bits(64), bits(8)) -> (all z. z in bits(64) -> tr.oin(L, sizes, z) -> B[z] = m.vm.bytes[z]) -> (all z. z in bits(64) -> !tr.oin(L, sizes, z) -> B[z] = w.vm.bytes[z]) ->
+  tr.mem(s, m, tr.wobjs(w, B, L, sizes), tr.objsv(v, L, sizes))
+proof
+  fix s base code fr m w v L sizes B
+  assume hi h hob hB hin hout
+  have {sM, slt, wW} := hi
+  have r4 := apply(x86i.rsp_typed, sM)
+  have {wob, wm, oacc, hlv, cok, mfs0} := h
+  have hcan0 fsb := cok
+  have {top, limit, brk0, brk, bytes, frames, hid, own = c_bytes, pages, nostk, stk, rsv} := wm
+  let S := s.gpr[4]
+  let W2 := tr.wobjs(w, B, L, sizes)
+  let V2 := tr.objsv(v, L, sizes)
+  let O := abi.wob(v.live, v.c_bytes)
+  let O2 := abi.wob(V2.live, V2.c_bytes)
+  have lv: O.live = v.live && O.c_bytes = v.c_bytes by simp()
+  have lv2: O2.live = tr.objsn(v.live, L, sizes) && O2.c_bytes = v.c_bytes by simp()
+  have pw: W2.vm.pages = w.vm.pages by simp()
+  have ewb: W2.vm.bytes = B by simp()
+  have sp8: abi.sp(s) = int_add(S, 8) by simp(r4, slt)
+  // (an object's byte: the C world's -- the ABI's word off the stack)
+  have ncan: all y. y in omega -> tr.oin(L, sizes, y) -> y in v.c_bytes proof
+    fix y
+    assume h1 hy
+    have yb _ _ sp _ := mp(all_elim(hob, {y}), h1, hy)
+    have no: !(y in v.c_bytes) -> false proof
+      assume hn
+      have hm hca := apply(tr.hid_canary, {s}, {m}, {w}, {v}, {y}, h, h1, (!(y in abi.wob(v.live, v.c_bytes).c_bytes) by simp(hn)))
+      have _ ns _ _ := apply(tr.hid_at, {s}, {m}, {w}, {v}, {y}, h, hm, mp(hcan0, hm), fsb, yb, hca)
+      have sp2: abi.stack_page(m.vm, int_div(y, x86_64_linux.PAGE)) by defs(simp(sp), x86_64_linux.PAGE)
+      show by taut(ns, sp2)
+    qed
+    show by taut(no)
+  qed
+  // the world's domain: v's and the objects
+  have dq: all z. abi.in_domain(W2.vm, O2, z) -> abi.in_domain(w.vm, O, z) || tr.oin(L, sizes, z) proof
+    fix z
+    assume hd
+    have oi := all_elim(tr.objsn_in, {v.live}, {L}, {sizes}, {z})
+    have e2 := rewrite(lv2.2, rewrite(lv2.1, expand(hd, abi.in_domain)))
+    have k1: z in tr.objsn(v.live, L, sizes) -> abi.in_domain(w.vm, O, z) || tr.oin(L, sizes, z) proof
+      assume hz
+      have c1: z in v.live -> abi.in_domain(w.vm, O, z) proof
+        assume hv
+        have hv2: z in O.live := rewrite(sym(lv.1), hv)
+        show by defs(taut(hv2), abi.in_domain)
+      qed
+      show by taut(oi, hz, c1)
+    qed
+    have k2: (x86_64_linux.mapped(W2.vm, int_div(z, x86_64_linux.PAGE)) && !(snd(W2.vm.pages[int_div(z, x86_64_linux.PAGE)]).kind = 2)) && z in v.c_bytes -> abi.in_domain(w.vm, O, z) proof
+      assume hm0
+      have hma hmk hmc := hm0
+      have hm2 := rewrite(pw, expand(conj(hma, hmk), x86_64_linux.mapped))
+      have hc2: z in O.c_bytes := rewrite(sym(lv.2), hmc)
+      show by defs(taut(hm2, hc2), abi.in_domain, x86_64_linux.mapped)
+    qed
+    show by taut(e2, k1, k2)
+  qed
+  have by2: all z. z in bits(64) -> abi.in_domain(W2.vm, O2, z) -> m.vm.bytes[z] = W2.vm.bytes[z] proof
+    fix z
+    assume hz hd
+    have d := mp(all_elim(dq, {z}), hd)
+    have c1: !tr.oin(L, sizes, z) -> m.vm.bytes[z] = W2.vm.bytes[z] proof
+      assume hn
+      have d0: abi.in_domain(w.vm, O, z) by taut(d, hn)
+      have e := mp(all_elim(bytes, {z}), hz, d0)
+      have bo := mp(all_elim(hout, {z}), hz, hn)
+      show by simp(ewb, bo, e)
+    qed
+    have c2: tr.oin(L, sizes, z) -> m.vm.bytes[z] = W2.vm.bytes[z] proof
+      assume hy
+      have bi := mp(all_elim(hin, {z}), hz, hy)
+      show by simp(ewb, bi)
+    qed
+    show by taut(c1, c2)
+  qed
+  // (an object's byte: below S, so none of the frames' clause)
+  have obl: all z. z in omega -> tr.oin(L, sizes, z) -> int_lt(z, S) proof
+    fix z
+    assume h1 hy
+    have _ l _ _ _ := mp(all_elim(hob, {z}), h1, hy)
+    show := l
+  qed
+  have fr2: all z. z in bits(64) -> (int_le(abi.sp(s), z) && !abi.in_domain(W2.vm, O2, z)) && abi.stack_page(s.vm, x86_64_linux.page_of(z)) ->
+      m.vm.bytes[z] = s.vm.bytes[z] proof
+    fix z
+    assume hz hf2
+    have hl nd2 hsp := hf2
+    have zo: z in omega by simp(hz)
+    have nf: !tr.oin(L, sizes, z) proof
+      assume hy
+      have l := mp(all_elim(obl, {z}), zo, hy)
+      show by arith(l, hl, sp8)
+    qed
+    have nd: !abi.in_domain(w.vm, O, z) proof
+      assume hd0
+      have oi := all_elim(tr.objsn_in, {v.live}, {L}, {sizes}, {z})
+      have e0 := rewrite(lv.2, rewrite(lv.1, expand(hd0, abi.in_domain)))
+      have c1: z in v.live -> abi.in_domain(W2.vm, O2, z) proof
+        assume hv
+        have hv2: z in O2.live := rewrite(sym(lv2.1), (z in tr.objsn(v.live, L, sizes) by taut(oi, zo, hv)))
+        show by defs(taut(hv2), abi.in_domain)
+      qed
+      have c2: (x86_64_linux.mapped(w.vm, int_div(z, x86_64_linux.PAGE)) && !(snd(w.vm.pages[int_div(z, x86_64_linux.PAGE)]).kind = 2)) && z in v.c_bytes -> abi.in_domain(W2.vm, O2, z) proof
+        assume hm0
+        have hma hmk hmc := hm0
+        have hm2 := rewrite(sym(pw), expand(conj(hma, hmk), x86_64_linux.mapped))
+        have hc2: z in O2.c_bytes := rewrite(sym(lv2.2), hmc)
+        show by defs(taut(hm2, hc2), abi.in_domain, x86_64_linux.mapped)
+      qed
+      show by taut(e0, c1, c2, nd2)
+    qed
+    show := mp(all_elim(frames, {z}), hz, conj(conj(hl, nd), hsp))
+  qed
+  have pg2: all x0. x0 in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) ->
+      m.vm.pages[x0] = W2.vm.pages[x0] || (W2.vm.pages[x0] = none && abi.stack_page(m.vm, x0)) proof
+    fix x0
+    assume hx
+    show := rewrite(sym(pw), mp(all_elim(pages, {x0}), hx))
+  qed
+  have hid2: all z. z in bits(64) -> !(z in O2.c_bytes) -> m.vm.bytes[z] = s.vm.bytes[z] && m.vm.pages[x86_64_linux.page_of(z)] = s.vm.pages[x86_64_linux.page_of(z)] proof
+    fix z
+    assume hz hn
+    have hn2: !(z in O.c_bytes) := rewrite(sym(lv.2), rewrite(lv2.2, hn))
+    show := mp(all_elim(hid, {z}), hz, hn2)
+  qed
+  have t2: m.vm.stack_top = W2.vm.stack_top && m.vm.stack_limit = W2.vm.stack_limit && m.vm.brk_start = W2.vm.brk_start && m.vm.brk = W2.vm.brk by simp(top, limit, brk0, brk)
+  have own2 := rewrite(sym(lv2.2), rewrite(lv.2, own))
+  have nostk2 := rewrite(sym(pw), nostk)
+  have wm2: tr.wmc(s.vm, m.vm, W2.vm, O2, s.fs_base, abi.sp(s)) by defs(taut(t2, by2, fr2, hid2, own2, pg2, nostk2, stk, rsv), tr.wmc)
+  // the objects: v's as before, the new ones -- below S, on stack pages, accessible
+  have oa2: all y. y in omega -> y in V2.live -> ((int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) || tr.own(s, m, y)) &&
+      x86_64_linux.can_access(m.vm, bits_of_int(64, y), 1) proof
+    fix y
+    assume h1 h20
+    have h2: y in tr.objsn(v.live, L, sizes) by simp(h20)
+    have oi := all_elim(tr.objsn_in, {v.live}, {L}, {sizes}, {y})
+    have c1: y in v.live -> ((int_le(abi.sp(s), y) && abi.stack_page(s.vm, int_div(y, x86_64_linux.PAGE))) || tr.own(s, m, y)) &&
+        x86_64_linux.can_access(m.vm, bits_of_int(64, y), 1) := mp(all_elim(oacc, {y}), h1)
+    have c2: tr.oin(L, sizes, y) -> tr.own(s, m, y) && x86_64_linux.can_access(m.vm, bits_of_int(64, y), 1) proof
+      assume hy
+      have yb yl ca sp _ := mp(all_elim(hob, {y}), h1, hy)
+      have ybi: bits_of_int(64, y) = y by defs(simp(yb), bits_of_int)
+      have ca2: x86_64_linux.can_access(m.vm, bits_of_int(64, y), 1) := rewrite(sym(ybi), ca)
+      have sp2: abi.stack_page(m.vm, int_div(y, x86_64_linux.PAGE)) by defs(simp(sp), x86_64_linux.PAGE)
+      show by taut(yl, sp2, ca2)
+    qed
+    show by taut(oi, h2, c1, c2)
+  qed
+  // (the world's objects: w's with the objects, the C world's bytes v's)
+  have wot: w.objs in abi.Objs by simp(expand(wW, abi.World))
+  have et := apply(abi.objs_eta, {w.objs}, {tr.objsn(w.objs.live, L, sizes)}, wot)
+  have wo3: W2.objs = abi.wob(V2.live, V2.c_bytes) by simp(et, wob)
+  // (the main mode's: V2's the same as v's)
+  have mv: tr.mainv(s, V2) -> tr.mainv(s, v) by simp()
+  have hlv2: tr.mainv(s, V2) -> (all y. y in V2.live -> !(y in abi.canary(s.fs_base))) proof
+    assume hm2
+    have hm := mp(mv, hm2)
+    fix y
+    assume hy0
+    have hy: y in tr.objsn(v.live, L, sizes) by simp(hy0)
+    have oi := all_elim(tr.objsn_in, {v.live}, {L}, {sizes}, {y})
+    have yo: y in omega by taut(oi, hy)
+    have c1: y in v.live -> !(y in abi.canary(s.fs_base)) := all_elim(mp(hlv, hm), {y})
+    have c2: tr.oin(L, sizes, y) -> !(y in abi.canary(s.fs_base)) proof
+      assume hr
+      have yc := rewrite(hm, mp(all_elim(ncan, {y}), yo, hr))
+      show by taut(yc, all_elim(abi.cbytes0_in, {s.fs_base}, {y}))
+    qed
+    show by taut(oi, hy, c1, c2)
+  qed
+  have cok2: (tr.mainv(s, V2) -> abi.canary_ok(s.vm, s.fs_base)) && s.fs_base in bits(64) proof
+    have c: tr.mainv(s, V2) -> abi.canary_ok(s.vm, s.fs_base) proof
+      assume hm2
+      show := mp(hcan0, mp(mv, hm2))
+    qed
+    show := conj(c, fsb)
+  qed
+  have mf2: tr.mainv(s, V2) -> W2.fs_base = s.fs_base proof
+    assume hm2
+    have e0: W2.fs_base = w.fs_base by simp()
+    show := trans(e0, mp(mfs0, mp(mv, hm2)))
+  qed
+  show by defs(taut(wo3, wm2, oa2, hlv2, cok2, mf2), tr.mem)
+qed
+
+// ---------------------------------------------------------------------
+//  The objects' bytes accessible: below the entry's rsp, above an
+//  accessible home, the frame within a page -- on the home's page or the
+//  entry's
+
+// (access by the page: another byte of it, or the same page entry)
+theorem tr.acc_page: all vm a b k. x86_64_linux.page_of(a) = x86_64_linux.page_of(b) -> x86_64_linux.can_access(vm, a, k) -> x86_64_linux.can_access(vm, b, k)
+proof
+  fix vm a b k
+  assume e h
+  show by defs(rewrite(e, expand(h, x86_64_linux.can_access)), x86_64_linux.can_access)
+qed
+
+theorem tr.acc_pgs: all v1 v2 a k. v2.pages[x86_64_linux.page_of(a)] = v1.pages[x86_64_linux.page_of(a)] -> x86_64_linux.can_access(v1, a, k) -> x86_64_linux.can_access(v2, a, k)
+proof
+  fix v1 v2 a k
+  assume e h
+  show by defs(rewrite(sym(e), expand(h, x86_64_linux.can_access, x86_64_linux.mapped)), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+theorem tr.objs_acc: all s base code fr m w ch nh y. tr.inv(s, base, code, fr, m, w) -> tr.hacc(s, m.vm, ch, nh) -> tr.hrange(ch, nh) -> int_lt(0, nh) ->
+  int_le(int_sub(18446744073709551616, ch), 4096) -> y in omega -> int_le(tr.ha(s, ch), y) -> int_lt(y, s.gpr[4]) ->
+  x86_64_linux.can_access(m.vm, y, 1) && abi.stack_page(m.vm, int_div(y, 4096))
+proof
+  fix s base code fr m w ch nh y
+  assume hi ha hc hn hp hy hl hu
+  have {sM, kp, sacc, hsps} := hi
+  have r4 := apply(x86i.rsp_typed, sM)
+  have g8 := apply(tr.inv_gap, hi)
+  let S := s.gpr[4]
+  let A := tr.ha(s, ch)
+  have e0 _ _ _ := apply(tr.ha_byte, {S}, {ch}, {nh}, {0}, r4, g8, hc, arith(), hn)
+  have hb: A in bits(64) by simp()
+  have h0: bits_add(64, A, bits_of_int(64, 0)) = A by simp(hb)
+  have eh: A = int_add(int_sub(S, int_sub(18446744073709551616, ch)), 0) := trans(sym(h0), e0)
+  have a1 a2 := mp(all_elim(expand(ha, tr.hacc), {0}), arith(), hn)
+  have ca: x86_64_linux.can_access(m.vm, A, 1) := rewrite(h0, a1)
+  have sa: abi.stack_page(m.vm, int_div(A, 4096)) := rewrite(h0, a2)
+  have so: S in omega by simp(r4)
+  // (y's page: the entry's or the home's)
+  have cs: int_div(y, 4096) = int_div(S, 4096) || int_div(y, 4096) = int_div(A, 4096) by arith(eh, hp, hl, hu, hy, so)
+  have pq: all x. x86_64_linux.page_of(x) = int_div(x, 4096) by defs(simp(), x86_64_linux.page_of, x86_64_linux.PAGE)
+  have c1: int_div(y, 4096) = int_div(S, 4096) -> x86_64_linux.can_access(m.vm, y, 1) && abi.stack_page(m.vm, int_div(y, 4096)) proof
+    assume e
+    have k := mp(all_elim(expand(kp, tr.kept), {S}), so, (int_le(S, S) by arith()), (int_lt(S, int_add(S, 8)) by arith()))
+    have cm := apply(tr.acc_pgs, {s.vm}, {m.vm}, {S}, {1}, k, sacc)
+    have pe: x86_64_linux.page_of(S) = x86_64_linux.page_of(y) by simp(pq, e)
+    have cy := apply(tr.acc_page, {m.vm}, {S}, {y}, {1}, pe, cm)
+    have k2: m.vm.pages[int_div(S, 4096)] = s.vm.pages[int_div(S, 4096)] by simp(k, pq)
+    have sm: abi.stack_page(m.vm, int_div(S, 4096)) by defs(simp(k2, expand(hsps, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+    show by taut(cy, rewrite(sym(e), sm))
+  qed
+  have c2: int_div(y, 4096) = int_div(A, 4096) -> x86_64_linux.can_access(m.vm, y, 1) && abi.stack_page(m.vm, int_div(y, 4096)) proof
+    assume e
+    have pe: x86_64_linux.page_of(A) = x86_64_linux.page_of(y) by simp(pq, e)
+    have cy := apply(tr.acc_page, {m.vm}, {A}, {y}, {1}, pe, ca)
+    show by taut(cy, rewrite(sym(e), sa))
+  qed
+  show by taut(cs, c1, c2)
+qed
+
+// ---------------------------------------------------------------------
+//  The frame's objects: at the offsets cs from the entry's rsp (literal
+//  numbers, as the location map has them), of the sizes; closed facts,
+//  decided by evaluation
+
+// (their addresses)
+abbrev tr.hal(s, cs) := fn_build(seq_len(cs), x. tr.ha(s, app(cs, x)))
+// (each within the frame, at or above the home at ch, aligned as the
+// entry's rsp + 8 is (16); none two overlapping)
+abbrev tr.fok(cs, sizes, ch, k) := tr.hrange(app(cs, k), fst(app(sizes, k))) && int_lt(0, fst(app(sizes, k))) && int_le(ch, app(cs, k)) &&
+  (snd(app(sizes, k)) = 1 || snd(app(sizes, k)) = 2 || snd(app(sizes, k)) = 4 || snd(app(sizes, k)) = 8 || snd(app(sizes, k)) = 16) &&
+  int_mod(int_add(app(cs, k), 8), snd(app(sizes, k))) = 0
+abbrev tr.fdisj(cs, sizes, j, k) := int_le(int_add(app(cs, j), fst(app(sizes, j))), app(cs, k)) || int_le(int_add(app(cs, k), fst(app(sizes, k))), app(cs, j))
+// (n of them: each's facts, the pairs' -- each instance decided by
+// evaluation, the `all`s by tr.all_lt0, tr.all_lt_snoc)
+def tr.fobjs(cs, sizes, ch, n) := seq_len(cs) = n && seq_len(sizes) = n && n in omega &&
+  (all k. k in omega -> int_lt(k, n) -> tr.fok(cs, sizes, ch, k)) &&
+  (all k. k in omega -> int_lt(k, n) -> (all j. j in omega -> int_lt(j, k) -> tr.fdisj(cs, sizes, j, k)))
+
+theorem tr.all_lt0(k. P): all k. k in omega -> int_lt(k, 0) -> P(k)
+proof
+  fix k
+  assume h1 h2
+  have f: false by arith(h1, h2)
+  show by taut(f)
+qed
+
+theorem tr.all_lt_snoc(n, m, k. P): n in omega -> m = int_add(n, 1) -> (all k. k in omega -> int_lt(k, n) -> P(k)) -> P(n) -> (all k. k in omega -> int_lt(k, m) -> P(k))
+proof
+  assume hn hm ha hp
+  fix k
+  assume k1 k2
+  have c: int_lt(k, n) || k = n by arith(k1, k2, hm)
+  have c1: int_lt(k, n) -> P(k) := mp(all_elim(ha, {k}), k1)
+  have c2: k = n -> P(k) proof
+    assume e
+    show := rewrite(sym(e), hp)
+  qed
+  show by taut(c, c1, c2)
+qed
+
+// (their addresses: a list of words)
+theorem tr.hal_typed: all s cs. seq_len(cs) in omega -> tr.hal(s, cs) in list_type(bits(64)) && tr.hal(s, cs) in univ(1)
+proof
+  fix s cs
+  assume hn
+  have hb: all x. x in seq_len(cs) -> tr.ha(s, app(cs, x)) in bits(64) proof
+    fix x
+    assume hx
+    show by simp()
+  qed
+  have hl := mp(build_list[d := seq_len(cs), v := x. tr.ha(s, app(cs, x)), t := bits(64)], hn, hb)
+  have h1: tr.hal(s, cs) in seq_type(bits(64)) by taut(unsel(expand(hl, list_type)))
+  have h2: tr.hal(s, cs) in powerset(cart(omega, bits(64))) by taut(unsel(expand(h1, seq_type)))
+  have hc := mp(cart_univ[u := 1, a := omega, b := bits(64)], omega_univ, bits_univ[n := 64])
+  have hu := mp(univ_trans[u := 1, a := tr.hal(s, cs), b := powerset(cart(omega, bits(64)))], mp(univ_powerset[u := 1, s := cart(omega, bits(64))], hc), h2)
+  show by taut(hl, hu)
+qed
+
+// (their addresses: the offsets' from the entry's rsp)
+theorem tr.hal_at: all s cs n k. seq_len(cs) = n -> n in omega -> k in omega -> int_lt(k, n) -> app(tr.hal(s, cs), k) = tr.ha(s, app(cs, k))
+proof
+  fix s cs n k
+  assume hl hn k1 k2
+  have km := mp(nat_lt_mem[k := k, n := n], k1, hn, k2)
+  have kd: k in seq_len(cs) := rewrite(sym(hl), km)
+  show := mp(app_fn_build[d := seq_len(cs), v := x. tr.ha(s, app(cs, x)), a := k], kd)
+qed
+
+theorem tr.hal_len: all s cs. seq_len(tr.hal(s, cs)) = seq_len(cs)
+proof
+  fix s cs
+  show by defs(simp(expand(fn_build_dom[d := seq_len(cs), v := x. tr.ha(s, app(cs, x))], seq_len)), seq_len)
+qed
+
+// (a home's address: the entry's rsp less the offset's distance below it)
+theorem tr.ha_val: all s c n. s.gpr[4] in bits(64) -> int_le(1048576, s.gpr[4]) -> tr.hrange(c, n) -> int_lt(0, n) ->
+  tr.ha(s, c) = int_sub(s.gpr[4], int_sub(18446744073709551616, c))
+proof
+  fix s c n
+  assume r4 g8 hc hn
+  have e0 _ _ _ := apply(tr.ha_byte, {s.gpr[4]}, {c}, {n}, {0}, r4, g8, hc, arith(), hn)
+  have hb: tr.ha(s, c) in bits(64) by simp()
+  have h0: bits_add(64, tr.ha(s, c), bits_of_int(64, 0)) = tr.ha(s, c) by simp(hb)
+  have e1 := trans(sym(h0), e0)
+  show by arith(e1)
+qed
+
+// (an object's byte: at or above the home at ch, below the entry's rsp)
+theorem tr.oin_frame: all s cs sizes ch nh n z. s.gpr[4] in bits(64) -> int_lt(s.gpr[4], 140737488355328) -> int_le(1048576, s.gpr[4]) ->
+  tr.fobjs(cs, sizes, ch, n) -> tr.hrange(ch, nh) -> int_lt(0, nh) -> z in omega -> tr.oin(tr.hal(s, cs), sizes, z) ->
+  z in bits(64) && int_le(tr.ha(s, ch), z) && int_lt(z, s.gpr[4])
+proof
+  fix s cs sizes ch nh n z
+  assume r4 slt g8 hf hch hnh hz hy
+  have hl1 hl2 hn fk _ := expand(hf, tr.fobjs)
+  obtain k, k0 kr from hy
+  have k1 kl kh := kr
+  have k2: int_lt(k, n) := rewrite(hl2, k1)
+  have ea := apply(tr.hal_at, {s}, {cs}, {n}, {k}, hl1, hn, k0, k2)
+  have hrk npk chk _ _ := mp(all_elim(fk, {k}), k0, k2)
+  have ev := apply(tr.ha_val, {s}, {app(cs, k)}, {fst(app(sizes, k))}, r4, g8, hrk, npk)
+  have evh := apply(tr.ha_val, {s}, {ch}, {nh}, r4, g8, hch, hnh)
+  have cr := expand(hrk, tr.hrange)
+  have kl2 := rewrite(ev, rewrite(ea, kl))
+  have kh2 := rewrite(ev, rewrite(ea, kh))
+  have zl: int_lt(z, s.gpr[4]) by arith(kh2, cr)
+  have zb: z in bits(64) by simp(hz, (int_lt(z, 18446744073709551616) by arith(zl, slt)))
+  have zh: int_le(tr.ha(s, ch), z) by arith(kl2, evh, chk)
+  show by taut(zb, zh, zl)
+qed
+
+// (one object, the k-th: aligned, not null, within the address space, its
+// bytes the stack's free ones -- objs_fit's clause)
+theorem tr.fit_one: all s base code fr m w v cs sizes ch nh n k. tr.inv(s, base, code, fr, m, w) -> tr.mem(s, m, w, v) -> tr.vabove(s, v) -> tr.sal16(s) ->
+  tr.fobjs(cs, sizes, ch, n) -> tr.hrange(ch, nh) -> int_lt(0, nh) -> tr.hacc(s, m.vm, ch, nh) -> int_le(int_sub(18446744073709551616, ch), 4096) ->
+  k in omega -> int_lt(k, n) ->
+  ((int_mod(app(tr.hal(s, cs), k), snd(app(sizes, k))) = 0 && !(app(tr.hal(s, cs), k) = 0)) && int_le(int_add(app(tr.hal(s, cs), k), fst(app(sizes, k))), int_pow(2, 64))) &&
+  (all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) -> abi.stack_free(w.vm, w.objs, x1))
+proof
+  fix s base code fr m w v cs sizes ch nh n k
+  assume hi h hva hsal hf hch hnh hca hp k0 k2
+  have {sM, slt} := hi
+  have r4 := apply(x86i.rsp_typed, sM)
+  have g8 := apply(tr.inv_gap, hi)
+  have hl1 hl2 hn fk _ := expand(hf, tr.fobjs)
+  have ea := apply(tr.hal_at, {s}, {cs}, {n}, {k}, hl1, hn, k0, k2)
+  have hrk npk chk alc alm := mp(all_elim(fk, {k}), k0, k2)
+  have ev := apply(tr.ha_val, {s}, {app(cs, k)}, {fst(app(sizes, k))}, r4, g8, hrk, npk)
+  have evh := apply(tr.ha_val, {s}, {ch}, {nh}, r4, g8, hch, hnh)
+  have cr := expand(hrk, tr.hrange)
+  have eak: app(tr.hal(s, cs), k) = int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))) := trans(ea, ev)
+  // (aligned: the entry's rsp + 8 16-aligned, the offset + 8 the object's)
+  have so: s.gpr[4] in omega by simp(r4)
+  have s8: bits_add(64, s.gpr[4], 8) = int_add(s.gpr[4], 8) := mp(bits_add_nowrap[n := 64, a := s.gpr[4], b := 8], so, simp(), (int_lt(int_add(s.gpr[4], 8), pow2(64)) by arith(slt, (pow2(64) = 18446744073709551616 by simp()))))
+  have sm: int_mod(int_add(s.gpr[4], 8), 16) = 0 := rewrite(s8, hsal)
+  let AL := snd(app(sizes, k))
+  have am: int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), AL) = 0 proof
+    have a1: AL = 1 -> int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), AL) = 0 proof
+      assume e
+      have am2 := rewrite(e, alm)
+      show := rewrite(sym(e), (int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), 1) = 0 by arith(sm, am2, cr, g8)))
+    qed
+    have a2: AL = 2 -> int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), AL) = 0 proof
+      assume e
+      have am2 := rewrite(e, alm)
+      show := rewrite(sym(e), (int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), 2) = 0 by arith(sm, am2, cr, g8)))
+    qed
+    have a4: AL = 4 -> int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), AL) = 0 proof
+      assume e
+      have am2 := rewrite(e, alm)
+      show := rewrite(sym(e), (int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), 4) = 0 by arith(sm, am2, cr, g8)))
+    qed
+    have a8: AL = 8 -> int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), AL) = 0 proof
+      assume e
+      have am2 := rewrite(e, alm)
+      show := rewrite(sym(e), (int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), 8) = 0 by arith(sm, am2, cr, g8)))
+    qed
+    have a16: AL = 16 -> int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), AL) = 0 proof
+      assume e
+      have am2 := rewrite(e, alm)
+      show := rewrite(sym(e), (int_mod(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), 16) = 0 by arith(sm, am2, cr, g8)))
+    qed
+    show by taut(alc, a1, a2, a4, a8, a16)
+  qed
+  have mk := rewrite(sym(eak), am)
+  have nz: !(app(tr.hal(s, cs), k) = 0) by arith(eak, cr, g8)
+  have en: int_le(int_add(app(tr.hal(s, cs), k), fst(app(sizes, k))), int_pow(2, 64)) by arith(eak, cr, slt, (int_pow(2, 64) = 18446744073709551616 by simp()))
+  // (its bytes: the stack's free ones -- none of the callers' objects, on
+  // the machine's stack pages, the world's none there or the same)
+  have {wob, wm} := h
+  have {pages} := wm
+  have _ _ _ ab := expand(hva, tr.vabove)
+  have fr: all x1. x1 in omega -> int_le(app(tr.hal(s, cs), k), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), k), fst(app(sizes, k)))) -> abi.stack_free(w.vm, w.objs, x1) proof
+    fix a
+    assume a0 ar
+    have ar1 ar2 := ar
+    have alo: int_le(tr.ha(s, ch), a) by arith(ar1, eak, evh, chk)
+    have ahi: int_lt(a, s.gpr[4]) by arith(ar2, eak, cr)
+    have sp8: abi.sp(s) = int_add(s.gpr[4], 8) by simp(r4, slt)
+    have nv1: !(a in v.live) proof
+      assume hv
+      have l := mp(all_elim(ab, {a}), a0, hv)
+      show by arith(l, sp8, ahi)
+    qed
+    have nv: !(a in w.objs.live) := rewrite(sym(wob), (!(a in abi.wob(v.live, v.c_bytes).live) by simp(nv1)))
+    have _ sp := apply(tr.objs_acc, {s}, {base}, {code}, {fr}, {m}, {w}, {ch}, {nh}, {a}, hi, hca, hch, hnh, hp, a0, alo, ahi)
+    let P := int_div(a, 4096)
+    have po: P in omega by simp(a0)
+    have hpp: P in set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))) by simp(expand(sp, abi.stack_page, x86_64_linux.mapped), po)
+    have pc := mp(all_elim(pages, {P}), hpp)
+    have spk: snd(m.vm.pages[P]).kind = 2 by taut(expand(sp, abi.stack_page))
+    have c1: m.vm.pages[P] = w.vm.pages[P] -> !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2)) proof
+      assume e
+      show by taut(rewrite(e, spk))
+    qed
+    have c2: w.vm.pages[P] = none -> !x86_64_linux.mapped(w.vm, P) proof
+      assume e
+      show by defs(taut(e), x86_64_linux.mapped)
+    qed
+    have pq: int_div(a, x86_64_linux.PAGE) = P by defs(simp(), x86_64_linux.PAGE)
+    have g: !(x86_64_linux.mapped(w.vm, P) && !(snd(w.vm.pages[P]).kind = 2)) && !(a in w.objs.live) by taut(nv, pc, c1, c2)
+    show by defs(rewrite(sym(pq), g), abi.stack_free)
+  qed
+  show by taut(mk, nz, en, fr)
+qed
+
+// (the objects fit: GIMPLE's alloc_objs places them so)
+theorem tr.fit_frame: all s base code fr m w v cs sizes ch nh n. tr.inv(s, base, code, fr, m, w) -> tr.mem(s, m, w, v) -> tr.vabove(s, v) -> tr.sal16(s) ->
+  tr.fobjs(cs, sizes, ch, n) -> tr.hrange(ch, nh) -> int_lt(0, nh) -> tr.hacc(s, m.vm, ch, nh) -> int_le(int_sub(18446744073709551616, ch), 4096) ->
+  gimple.objs_fit(w.vm, w.objs, sizes, tr.hal(s, cs))
+proof
+  fix s base code fr m w v cs sizes ch nh n
+  assume hi h hva hsal hf hch hnh hca hp
+  have {sM} := hi
+  have r4 := apply(x86i.rsp_typed, sM)
+  have g8 := apply(tr.inv_gap, hi)
+  have hl1 hl2 hn fk fd := expand(hf, tr.fobjs)
+  have ln: seq_len(tr.hal(s, cs)) = seq_len(sizes) := trans(trans(all_elim(tr.hal_len, {s}, {cs}), hl1), sym(hl2))
+  have per: all x0. x0 in omega -> int_lt(x0, seq_len(sizes)) -> ((int_mod(app(tr.hal(s, cs), x0), snd(app(sizes, x0))) = 0 && !(app(tr.hal(s, cs), x0) = 0)) &&
+      int_le(int_add(app(tr.hal(s, cs), x0), fst(app(sizes, x0))), int_pow(2, 64))) &&
+      (all x1. x1 in omega -> int_le(app(tr.hal(s, cs), x0), x1) && int_lt(x1, int_add(app(tr.hal(s, cs), x0), fst(app(sizes, x0)))) -> abi.stack_free(w.vm, w.objs, x1)) proof
+    fix k
+    assume k0 k1
+    show := apply(tr.fit_one, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {cs}, {sizes}, {ch}, {nh}, {n}, {k}, hi, h, hva, hsal, hf, hch, hnh, hca, hp, k0, rewrite(hl2, k1))
+  qed
+  have dj: all x0. all x1. x0 in omega && x1 in omega -> int_lt(x0, x1) && int_lt(x1, seq_len(sizes)) ->
+      int_le(int_add(app(tr.hal(s, cs), x0), fst(app(sizes, x0))), app(tr.hal(s, cs), x1)) || int_le(int_add(app(tr.hal(s, cs), x1), fst(app(sizes, x1))), app(tr.hal(s, cs), x0)) proof
+    fix j k
+    assume jk lt
+    have j0 k0 := jk
+    have jlk kl := lt
+    have k2: int_lt(k, n) := rewrite(hl2, kl)
+    have j2: int_lt(j, n) by arith(jlk, k2)
+    have d := mp(all_elim(mp(all_elim(fd, {k}), k0, k2), {j}), j0, jlk)
+    have eaj := apply(tr.hal_at, {s}, {cs}, {n}, {j}, hl1, hn, j0, j2)
+    have eak := apply(tr.hal_at, {s}, {cs}, {n}, {k}, hl1, hn, k0, k2)
+    have hrj npj _ _ _ := mp(all_elim(fk, {j}), j0, j2)
+    have hrk npk _ _ _ := mp(all_elim(fk, {k}), k0, k2)
+    have evj := apply(tr.ha_val, {s}, {app(cs, j)}, {fst(app(sizes, j))}, r4, g8, hrj, npj)
+    have evk := apply(tr.ha_val, {s}, {app(cs, k)}, {fst(app(sizes, k))}, r4, g8, hrk, npk)
+    show by arith(d, eaj, eak, evj, evk)
+  qed
+  show by defs(taut(ln, per, dj), gimple.objs_fit)
+qed
+//  fit, their bytes B's, the rest as it was
+
+// (a memory with other bytes: a memory)
+theorem tr.vm_bytes: all vm B. vm in x86_64_linux.Vm -> B in fn_space(bits(64), bits(8)) -> fn_update(vm, "bytes", B) in univ(1) -> fn_update(vm, "bytes", B) in x86_64_linux.Vm
+proof
+  fix vm B
+  assume h hB hu
+  have ht: is_fun(vm) && dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by simp(expand(h, x86_64_linux.Vm))
+  have hf: is_fun(vm) by taut(ht)
+  have bd: "bytes" in dom(vm) by simp(ht)
+  have fuf := mp(fn_update_fun[f := vm, k := "bytes", v := B], hf)
+  have fud := mp(mp(fn_update_dom[f := vm, k := "bytes", v := B], hf), bd)
+  have dv: dom(vm) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))) by taut(ht)
+  have pv: ((((((is_fun(fn_update(vm, "bytes", B)) && dom(fn_update(vm, "bytes", B)) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && fn_update(vm, "bytes", B).pages in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && fn_update(vm, "bytes", B).bytes in fn_space(bits(64), bits(8))) && fn_update(vm, "bytes", B).stack_top in bits(64)) && fn_update(vm, "bytes", B).stack_limit in omega) && fn_update(vm, "bytes", B).brk_start in bits(64)) && fn_update(vm, "bytes", B).brk in bits(64) by simp(expand(h, x86_64_linux.Vm), hB, fuf, fud, dv)
+  have r := mp(mp(mp(mp(rec_type_intro[u := 1, k := insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty)))))), p := x0. ((((((is_fun(x0) && dom(x0) = insert("pages", insert("bytes", insert("stack_top", insert("stack_limit", insert("brk_start", insert("brk", empty))))))) && x0.pages in fn_space(set_select(omega, x1. int_lt(x1, int_div(x86_64_linux.TASK_SIZE, x86_64_linux.PAGE))), option(x86_64_linux.Page))) && x0.bytes in fn_space(bits(64), bits(8))) && x0.stack_top in bits(64)) && x0.stack_limit in omega) && x0.brk_start in bits(64)) && x0.brk in bits(64), r := fn_update(vm, "bytes", B)], hu), fuf), trans(fud, dv)), pv)
+  show by defs(r, x86_64_linux.Vm)
+qed
+
+theorem tr.allocn_run: all w L sizes B. w in abi.World -> w in univ(1) -> L in list_type(bits(64)) -> L in univ(1) -> gimple.objs_fit(w.vm, w.objs, sizes, L) ->
+  B in fn_space(bits(64), bits(8)) -> (all z. z in bits(64) -> !tr.oin(L, sizes, z) -> B[z] = w.vm.bytes[z]) ->
+  runs(gimple.alloc_objs(sizes), w, ok(tr.wobjs(w, B, L, sizes), L))
+proof
+  fix w L sizes B
+  assume hW hu hL hLu hfit hB hout
+  let SZ := sizes
+  let V := fn_update(w.vm, "bytes", B)
+  let W2 := tr.wobjs(w, B, L, sizes)
+  let D(x2) := x2 in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, SZ, x2)
+  let P2(x3, x5) := x5 in x86_64_linux.Vm && (fn_update(app(fn_update(w, "vm", x5), "vm"), "bytes", app(app(w, "vm"), "bytes")) = app(w, "vm") &&
+    (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(SZ)) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(SZ, x7)))))) ->
+      app(app(app(fn_update(w, "vm", x5), "vm"), "bytes"), x6) = app(app(app(w, "vm"), "bytes"), x6)))
+  let Q2(x3, x5) := ok(W2, L) = ok(fn_update(fn_update(w, "vm", x5), "objs", fn_update(app(fn_update(w, "vm", x5), "objs"), "live", set_select(omega, x7. x7 in app(app(fn_update(w, "vm", x5), "objs"), "live") ||
+    (ex x8. x8 in omega && ((int_lt(x8, seq_len(SZ)) && int_le(app(x3, x8), x7)) && int_lt(x7, int_add(app(x3, x8), fst(app(SZ, x8))))))))), x3)
+  have dA: D(L) by taut(hL, hfit)
+  // the memory: B's bytes, the rest as it was
+  have vm0: w.vm in x86_64_linux.Vm by simp(hW, keep(x86_64_linux.Vm))
+  have bu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], hB)
+  have vu: V in univ(1) by simp(hu, bu)
+  have vV := apply(tr.vm_bytes, {w.vm}, {B}, vm0, hB, vu)
+  have pV: P2(L, V) proof
+    have e1: fn_update(app(fn_update(w, "vm", V), "vm"), "bytes", app(app(w, "vm"), "bytes")) = app(w, "vm") by simp(vm0, keep(x86_64_linux.Vm))
+    have e2: all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(SZ)) -> !(int_le(app(L, x7), x6) && int_lt(x6, int_add(app(L, x7), fst(app(SZ, x7)))))) ->
+        app(app(app(fn_update(w, "vm", V), "vm"), "bytes"), x6) = app(app(app(w, "vm"), "bytes"), x6) proof
+      fix z
+      assume hz hn
+      have no: !tr.oin(L, sizes, z) proof
+        assume hy
+        obtain k, k0 k1 from hy
+        have kl1 kl2 kr := k1
+        have nk := mp(all_elim(hn, {k}), k0, kl1)
+        show by taut(nk, kl2, kr)
+      qed
+      have bo := mp(all_elim(hout, {z}), hz, no)
+      show by simp(bo)
+    qed
+    show by taut(vV, e1, e2)
+  qed
+  have qV: Q2(L, V) by simp()
+  have e5: ex x5. P2(L, x5) && Q2(L, x5) by ex_intro({V}, taut(pV, qV))
+  have e2: ex x2. D(x2) && (!(ex x5. P2(x2, x5)) || (ex x5. P2(x2, x5) && Q2(x2, x5))) by ex_intro({L}, taut(dA, e5))
+  let ANY(x0, x1) := any_rel(x2. x2 in list_type(bits(64)) && gimple.objs_fit(x0.vm, x0.objs, SZ, x2), x2. letin(x2, x3. letin(app(x0, "vm"), x4. any_rel(x5. x5 in x86_64_linux.Vm && (fn_update(app(fn_update(x0, "vm", x5), "vm"), "bytes", app(x4, "bytes")) = x4 && (all x6. x6 in bits(64) -> (all x7. x7 in omega -> int_lt(x7, seq_len(SZ)) -> !(int_le(app(x3, x7), x6) && int_lt(x6, int_add(app(x3, x7), fst(app(SZ, x7)))))) -> app(app(app(fn_update(x0, "vm", x5), "vm"), "bytes"), x6) = app(app(x4, "bytes"), x6))), x5. letin(fn_update(x0, "vm", x5), x6. letin(fn_update(x6, "objs", fn_update(app(x6, "objs"), "live", set_select(omega, x7. x7 in app(app(x6, "objs"), "live") || (ex x8. x8 in omega && ((int_lt(x8, seq_len(SZ)) && int_le(app(x3, x8), x7)) && int_lt(x7, int_add(app(x3, x8), fst(app(SZ, x8))))))))), x7. x1 = ok(x7, x3)))))))
+  have rb0: ANY(w, ok(W2, L)) by defs(taut(e2), any_rel, letin)
+  // (room for them: not the overflow)
+  let FIT(x0) := ex x3. x3 in list_type(bits(64)) && gimple.objs_fit(x0.vm, x0.objs, SZ, x3)
+  let TOP(X, Lr, o) := ((fst(X) = 0 && Lr) || ((((fst(X) = 1 && fst(out_value(X)) = "ret") && o = ok(fst(out_state(X)), snd(out_value(X)))) ||
+    ((fst(X) = 1 && fst(out_value(X)) = "raise") && o = exc(fst(out_state(X)), snd(out_value(X))))) || (fst(X) = 2 && o = diverge(snd(X)))))
+  let BODY(x0, x1) := ex x2. ((!FIT(x0) && x2 = exc(pair(x0, empty), pair("raise", exc_val("stack_overflow", empty)))) || (!!FIT(x0) && x2 = ok(pair(x0, empty), empty))) &&
+    TOP(x2, ANY(fst(out_state(x2)), x1), x1)
+  have fx: FIT(w) by ex_intro({L}, dA)
+  have f0: fst(ok(pair(w, empty), empty)) = 0 by simp()
+  have f1: fst(out_state(ok(pair(w, empty), empty))) = w by simp()
+  have rb1 := subst({y. ANY(y, ok(W2, L))}, sym(f1), rb0)
+  have lt: TOP(ok(pair(w, empty), empty), ANY(fst(out_state(ok(pair(w, empty), empty))), ok(W2, L)), ok(W2, L)) by taut(f0, rb1)
+  have rb: BODY(w, ok(W2, L)) by ex_intro({ok(pair(w, empty), empty)}, taut(fx, lt, refl({ok(pair(w, empty), empty)})))
+  have ss: subset(tr.objsn(w.objs.live, L, sizes), omega) proof
+    have g: all z. z in tr.objsn(w.objs.live, L, sizes) -> z in omega proof
+      fix z
+      assume hz
+      show by taut(all_elim(tr.objsn_in, {w.objs.live}, {L}, {sizes}, {z}), hz)
+    qed
+    show by defs(g, subset)
+  qed
+  have o1u := mp(univ_subset[u := 1, a := tr.objsn(w.objs.live, L, sizes), b := omega], omega_univ, ss)
+  have wou := mp(app_univ[u := 1, f := w, k := "objs"], hu)
+  have ou: fn_update(w.objs, "live", tr.objsn(w.objs.live, L, sizes)) in univ(1) by simp(wou, o1u)
+  have pu: pair(w, ok(W2, L)) in univ(1) by simp(hu, vu, ou, hLu)
+  show by defs(apply(tr.runs_intro[r := x0 x1. BODY(x0, x1)], {w}, {ok(W2, L)}, pu, rb), gimple.alloc_objs)
+qed
+
+// (the world after: a world)
+theorem tr.world_allocn: all w L sizes B. w in abi.World -> w in univ(1) -> B in fn_space(bits(64), bits(8)) ->
+  tr.wobjs(w, B, L, sizes) in abi.World && tr.wobjs(w, B, L, sizes) in univ(1)
+proof
+  fix w L sizes B
+  assume hW hu hB
+  let W1 := fn_update(w, "vm", fn_update(w.vm, "bytes", B))
+  have vm0: w.vm in x86_64_linux.Vm by simp(hW, keep(x86_64_linux.Vm))
+  have bu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], hB)
+  have vu: fn_update(w.vm, "bytes", B) in univ(1) by simp(hu, bu)
+  have vV := apply(tr.vm_bytes, {w.vm}, {B}, vm0, hB, vu)
+  have wf := expand(hW, abi.World)
+  have w1u: W1 in univ(1) by simp(hu, vu)
+  have ss: subset(tr.objsn(w.objs.live, L, sizes), omega) proof
+    have g: all z. z in tr.objsn(w.objs.live, L, sizes) -> z in omega proof
+      fix z
+      assume hz
+      show by taut(all_elim(tr.objsn_in, {w.objs.live}, {L}, {sizes}, {z}), hz)
+    qed
+    show by defs(g, subset)
+  qed
+  have ot1: tr.objsn(w.objs.live, L, sizes) in set_type(omega) by defs(taut(powerset_def[s := omega, a := tr.objsn(w.objs.live, L, sizes)], ss), set_type)
+  have o1u := mp(univ_subset[u := 1, a := tr.objsn(w.objs.live, L, sizes), b := omega], omega_univ, ss)
+  have wou := mp(app_univ[u := 1, f := w, k := "objs"], hu)
+  have wot: w.objs in abi.Objs by simp(wf)
+  have ot := apply(abi.objs_live_typed, wot, wou, ot1, o1u)
+  have ou: fn_update(w.objs, "live", tr.objsn(w.objs.live, L, sizes)) in univ(1) by simp(wou, o1u)
+  have w1W: W1 in abi.World by defs(simp(wf, vV, w1u), abi.World)
+  have w1f := expand(w1W, abi.World)
+  have r1: fn_update(W1, "objs", fn_update(w.objs, "live", tr.objsn(w.objs.live, L, sizes))) in abi.World by defs(simp(wf, w1f, ot, w1u, ou), abi.World)
+  have r2: fn_update(W1, "objs", fn_update(w.objs, "live", tr.objsn(w.objs.live, L, sizes))) in univ(1) by simp(w1u, ou)
+  show by taut(r1, r2)
+qed
+
+// ---------------------------------------------------------------------
+//  The allocation where the machine makes no step: the claim after it,
+//  for every memory of the objects' bytes, gives the claim before (the
+//  world's bytes there the machine's)
+
+// The objects after the frame's objects allocated: the callers' v0 and
+// the n objects at the offsets cs -- the homes apart from them by their
+// ranges, the frame's own within any frame reaching them
+def tr.vobjs(s, v, v0, cs, sizes, ch, n) := tr.vabove(s, v0) && int_le(1048576, s.gpr[4]) && tr.fobjs(cs, sizes, ch, n) && v = tr.objsv(v0, tr.hal(s, cs), sizes)
+
+theorem tr.alloc_lv(zb. bkp, zb pb wb. bka): all s v base code fr a hs fd rs p p2 w cs sizes ch n.
+  tr.vabove(s, v) -> tr.sal16(s) -> tr.fobjs(cs, sizes, ch, n) -> ch in dom(hs) -> int_lt(0, fst(hs[ch])) -> int_le(int_sub(18446744073709551616, ch), 4096) ->
+  (all B. B in fn_space(bits(64), bits(8)) -> (all z. z in bits(64) -> !tr.oin(tr.hal(s, cs), sizes, z) -> B[z] = w.vm.bytes[z]) ->
+    gimple.objs_fit(w.vm, w.objs, sizes, tr.hal(s, cs)) -> tr.red(p, w, p2, tr.wobjs(w, B, tr.hal(s, cs), sizes))) ->
+  (all B. B in fn_space(bits(64), bits(8)) -> (all z. z in bits(64) -> !tr.oin(tr.hal(s, cs), sizes, z) -> B[z] = w.vm.bytes[z]) ->
+    tr.vobjs(s, tr.objsv(v, tr.hal(s, cs), sizes), v, cs, sizes, ch, n) ->
+    tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), tr.objsv(v, tr.hal(s, cs), sizes), base, code, fr, a, hs, fd, rs, p2, tr.wobjs(w, B, tr.hal(s, cs), sizes))) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd, rs, p, w)
+proof
+  fix s v base code fr a hs fd rs p p2 w cs sizes ch n
+  assume hva hsal hf hchd hnh hp hred hcont
+  let L := tr.hal(s, cs)
+  let V2 := tr.objsv(v, L, sizes)
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) ->
+      tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have {sM, slt, wW, wu, mM} := hi
+    have r4 := apply(x86i.rsp_typed, sM)
+    have g8 := apply(tr.inv_gap, hi)
+    let S := s.gpr[4]
+    let NH := fst(hs[ch])
+    have _ hrng hacc := mp(all_elim(expand(hh, tr.homes), {ch}), hchd)
+    have _ _ _ ab := expand(hva, tr.vabove)
+    have sp8: abi.sp(s) = int_add(S, 8) by simp(r4, slt)
+    // (the objects' bytes: accessible, below S, none of the callers')
+    have hob: all z. z in omega -> tr.oin(L, sizes, z) -> z in bits(64) && int_lt(z, S) && x86_64_linux.can_access(m.vm, z, 1) && abi.stack_page(m.vm, int_div(z, 4096)) && !(z in v.live) proof
+      fix z
+      assume hz hy
+      have zb zh zl := apply(tr.oin_frame, {s}, {cs}, {sizes}, {ch}, {NH}, {n}, {z}, r4, slt, g8, hf, hrng, hnh, hz, hy)
+      have ac sp := apply(tr.objs_acc, {s}, {base}, {code}, {fr}, {m}, {w}, {ch}, {NH}, {z}, hi, hacc, hrng, hnh, hp, hz, zh, zl)
+      have nv: !(z in v.live) proof
+        assume hv
+        have l := mp(all_elim(ab, {z}), hz, hv)
+        show by arith(l, sp8, zl)
+      qed
+      show by taut(zb, zl, ac, sp, nv)
+    qed
+    // the objects' bytes the machine's, the rest the world's
+    have mv := apply(x86i.parts, mM).4
+    have mb: m.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(mv, x86_64_linux.Vm))
+    have wv: w.vm in x86_64_linux.Vm by simp(wW, keep(x86_64_linux.Vm))
+    have wb: w.vm.bytes in fn_space(bits(64), bits(8)) by simp(expand(wv, x86_64_linux.Vm))
+    let B := fn_build(bits(64), z. ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]))
+    have bt: all z. z in bits(64) -> ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]) in bits(8) proof
+      fix z
+      assume hz
+      have c1: tr.oin(L, sizes, z) -> ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]) in bits(8) proof
+        assume hy
+        show := rewrite(sym(mp(ite_t[c := tr.oin(L, sizes, z), a := m.vm.bytes[z], b := w.vm.bytes[z]], hy)), mp(fn_space_app[a := bits(64), b := bits(8), f := m.vm.bytes, x := z], mb, hz))
+      qed
+      have c2: !tr.oin(L, sizes, z) -> ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]) in bits(8) proof
+        assume hy
+        show := rewrite(sym(mp(ite_f[c := tr.oin(L, sizes, z), a := m.vm.bytes[z], b := w.vm.bytes[z]], hy)), mp(fn_space_app[a := bits(64), b := bits(8), f := w.vm.bytes, x := z], wb, hz))
+      qed
+      show by taut(c1, c2)
+    qed
+    have hB: B in fn_space(bits(64), bits(8)) := mp(fn_build_space[d := bits(64), v := z. ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]), b := bits(8)], bt)
+    have hin: all z. z in bits(64) -> tr.oin(L, sizes, z) -> B[z] = m.vm.bytes[z] proof
+      fix z
+      assume hz hy
+      have e := mp(app_fn_build[d := bits(64), v := z. ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]), a := z], hz)
+      show := trans(e, mp(ite_t[c := tr.oin(L, sizes, z), a := m.vm.bytes[z], b := w.vm.bytes[z]], hy))
+    qed
+    have hout: all z. z in bits(64) -> !tr.oin(L, sizes, z) -> B[z] = w.vm.bytes[z] proof
+      fix z
+      assume hz hy
+      have e := mp(app_fn_build[d := bits(64), v := z. ite(tr.oin(L, sizes, z), m.vm.bytes[z], w.vm.bytes[z]), a := z], hz)
+      show := trans(e, mp(ite_f[c := tr.oin(L, sizes, z), a := m.vm.bytes[z], b := w.vm.bytes[z]], hy))
+    qed
+    let W2 := tr.wobjs(w, B, L, sizes)
+    have mm2 := apply(tr.mem_allocn, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {L}, {sizes}, {B}, hi, hmm, hob, hB, hin, hout)
+    have w2W w2u := apply(tr.world_allocn, {w}, {L}, {sizes}, {B}, wW, wu, hB)
+    have i2 := apply(tr.inv_world, hi, w2W, w2u, (W2.os = w.os by simp()), (W2.fs_base = w.fs_base by simp()), (W2.cpu = w.cpu by simp()), (W2.vm.brk_start = w.vm.brk_start by simp()))
+    // the claim after it, with the objects
+    have hvo: tr.vobjs(s, V2, v, cs, sizes, ch, n) by defs(taut(hva, g8, hf, refl({V2})), tr.vobjs)
+    have lv2 := mp(all_elim(hcont, {B}), hB, hout, hvo)
+    have sm2 := mp(all_elim(expand(lv2, tr.lv), {m}), i2, hr, hh, hrs, mm2, hfr)
+    // (with the callers' objects: the new ones below sp)
+    have os: tr.osub(s, v, V2) proof
+      have _ _ vo _ := expand(hva, tr.vabove)
+      have s1: all x. x in v.live -> x in V2.live proof
+        fix x
+        assume hx
+        have sub: subset(v.live, omega) by taut(powerset_def[s := omega, a := v.live], expand(vo, set_type))
+        have xo := mp(subset_elim[a := v.live, b := omega, z := x], sub, hx)
+        have oi := all_elim(tr.objsn_in, {v.live}, {L}, {sizes}, {x})
+        have xin: x in tr.objsn(v.live, L, sizes) by taut(oi, hx, xo)
+        show by simp(xin)
+      qed
+      have s2: all x. x in omega -> x in V2.live -> !(x in v.live) -> int_lt(x, abi.sp(s)) proof
+        fix x
+        assume h1 h2 h3
+        have h2b: x in tr.objsn(v.live, L, sizes) by simp(h2)
+        have oi := all_elim(tr.objsn_in, {v.live}, {L}, {sizes}, {x})
+        have hy: tr.oin(L, sizes, x) by taut(oi, h2b, h3)
+        have _ zl _ _ _ := mp(all_elim(hob, {x}), h1, hy)
+        show by arith(zl, sp8)
+      qed
+      have oc: V2.c_bytes = v.c_bytes by simp()
+      show by taut(s1, s2, oc)
+    qed
+    have sm3 := apply(tr.sim_sub[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], os, sm2)
+    // the spec's allocation there
+    have fit := apply(tr.fit_frame, {s}, {base}, {code}, {fr}, {m}, {w}, {v}, {cs}, {sizes}, {ch}, {NH}, {n}, hi, hmm, hva, hsal, hf, hrng, hnh, hacc, hp)
+    have rd := mp(all_elim(hred, {B}), hB, hout, fit)
+    show := apply(tr.sim_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], rd, sm3)
+  qed
+  show by defs(g, tr.lv)
+qed
+
+// ---------------------------------------------------------------------
+//  After it: the homes apart from the objects by their ranges, the
+//  objects within any frame reaching the lowest home ch
+
+// (an object's byte, the k-th's: at its address on)
+theorem tr.oin_at: all s v0 cs sizes ch n z. tr.vobjs(s, tr.objsv(v0, tr.hal(s, cs), sizes), v0, cs, sizes, ch, n) -> z in omega -> tr.oin(tr.hal(s, cs), sizes, z) ->
+  ex k. k in omega && int_lt(k, n) && int_le(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), z) &&
+    int_lt(z, int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, app(cs, k))), fst(app(sizes, k)))) && int_le(ch, app(cs, k))
+proof
+  fix s v0 cs sizes ch n z
+  assume ho hz hy
+  have hva g8 hf _ := expand(ho, tr.vobjs)
+  have r4 _ _ _ := expand(hva, tr.vabove)
+  have hl1 hl2 hn fk _ := expand(hf, tr.fobjs)
+  obtain k, k0 kr from hy
+  have k1 kl kh := kr
+  have k2: int_lt(k, n) := rewrite(hl2, k1)
+  have ea := apply(tr.hal_at, {s}, {cs}, {n}, {k}, hl1, hn, k0, k2)
+  have hrk npk chk _ _ := mp(all_elim(fk, {k}), k0, k2)
+  have ev := apply(tr.ha_val, {s}, {app(cs, k)}, {fst(app(sizes, k))}, r4, g8, hrk, npk)
+  have kl2 := rewrite(ev, rewrite(ea, kl))
+  have kh2 := rewrite(ev, rewrite(ea, kh))
+  show by ex_intro({k}, taut(k0, k2, kl2, kh2, chk))
+qed
+
+theorem tr.hfree_objs: all s v0 cs sizes ch n c nn. tr.vobjs(s, tr.objsv(v0, tr.hal(s, cs), sizes), v0, cs, sizes, ch, n) -> tr.hrange(c, nn) ->
+  (all k. k in omega -> int_lt(k, n) -> int_le(int_add(c, nn), app(cs, k)) || int_le(int_add(app(cs, k), fst(app(sizes, k))), c)) ->
+  tr.hfree(s, c, nn, tr.objsv(v0, tr.hal(s, cs), sizes))
+proof
+  fix s v0 cs sizes ch n c nn
+  assume ho hc hd
+  have hva _ _ _ := expand(ho, tr.vobjs)
+  have hf0 := apply(tr.hfree_above, hva, hc)
+  fix j
+  assume j1 j2
+  let X := int_add(int_sub(s.gpr[4], int_sub(18446744073709551616, c)), j)
+  have g: !(X in tr.objsv(v0, tr.hal(s, cs), sizes).live) proof
+    assume hx
+    have hx2: X in tr.objsn(v0.live, tr.hal(s, cs), sizes) by simp(hx)
+    have oi := all_elim(tr.objsn_in, {v0.live}, {tr.hal(s, cs)}, {sizes}, {X})
+    have n0 := mp(all_elim(hf0, {j}), j1, j2)
+    have xo xr := (X in omega && (X in v0.live || tr.oin(tr.hal(s, cs), sizes, X)) by taut(oi, hx2))
+    have hy: tr.oin(tr.hal(s, cs), sizes, X) by taut(xr, n0)
+    obtain k, k0 k2 kl kh _ from apply(tr.oin_at, ho, xo, hy)
+    have d := mp(all_elim(hd, {k}), k0, k2)
+    show by arith(d, kl, kh, j1, j2)
+  qed
+  show := g
+qed
+
+theorem tr.ofr_objs: all s fr v0 cs sizes ch n. tr.vobjs(s, tr.objsv(v0, tr.hal(s, cs), sizes), v0, cs, sizes, ch, n) -> int_le(int_sub(18446744073709551616, ch), fr) ->
+  tr.ofr(s, fr, tr.objsv(v0, tr.hal(s, cs), sizes))
+proof
+  fix s fr v0 cs sizes ch n
+  assume ho hl
+  have hva _ _ _ := expand(ho, tr.vobjs)
+  have r4 slt _ ab := expand(hva, tr.vabove)
+  fix x
+  assume h1 h2 h3
+  have h2b: x in tr.objsn(v0.live, tr.hal(s, cs), sizes) by simp(h2)
+  have oi := all_elim(tr.objsn_in, {v0.live}, {tr.hal(s, cs)}, {sizes}, {x})
+  have c1: x in v0.live -> int_le(int_sub(s.gpr[4], fr), x) proof
+    assume hv
+    have a := mp(all_elim(ab, {x}), h1, hv)
+    have sp8: abi.sp(s) = int_add(s.gpr[4], 8) by simp(r4, slt)
+    have f: false by arith(a, sp8, h3)
+    show by taut(f)
+  qed
+  have c2: tr.oin(tr.hal(s, cs), sizes, x) -> int_le(int_sub(s.gpr[4], fr), x) proof
+    assume hy
+    obtain k, _ _ kl _ chk from apply(tr.oin_at, ho, h1, hy)
+    show by arith(kl, chk, hl)
+  qed
+  show by taut(oi, h2b, c1, c2)
+qed
+
+// mov dword [rsp + d], imm32 into a frame's object: the spec's 4-byte store
+// of k at pp + off, the frame's address at the offset c
+theorem tr.store32i_rsp(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len d c k pp off hs ds rs p p2 w w2. tr.hap(s, hs, v) ->
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(77, pair(4, pair(x86i.bd_mem(4, d), pair(x86i.bd_mem(4, d), k))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> base in omega -> d in bits(64) -> fr in omega -> c = int_mod(int_sub(d, fr), 18446744073709551616) -> k in bits(32) ->
+  pp in bits(64) -> off in bits(32) -> tr.ha(s, c) = bits_add(64, pp, off) -> g.mem_defined(w, pp, off, 4, true) ->
+  w2 = fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, bits_add(64, pp, off), 4, k))) ->
+  tr.red(p, w, p2, w2) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, rs, p2, w2) -> tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len d c k pp off hs ds rs p p2 w w2
+  assume hap hat ha2 hbase hd hfr hc hk hp ho hA hdef hw2 hred hpt
+  have dnz dlt dus := hdef
+  let A := bits_add(64, pp, off)
+  have ab: A in bits(64) by simp()
+  have ev := apply(tr.bd_int, {pp}, {off}, hp, ho, dlt)
+  have hus: gimple.usable(w.vm, w.objs, A, 4, true) := rewrite(ev, dus)
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, 4, k))), empty) proof
+    fix m o
+    assume hi hr hh hrs hmm ho2
+    have ipM ipU ipC ipR := apply(tr.inv_parts, hi)
+    have r4 := apply(x86i.rsp_typed, ipM)
+    have ea0 := apply(tr.rsp_bd_ea, {s}, {m}, {fr}, {d}, {c}, ipR, r4, hfr, hd, hc)
+    have ea: x86i.bd_ea(m, 4, d) = A := trans(ea0, hA)
+    have wa := apply(tr.store_acc, {s}, {m}, {w}, {v}, {A}, {4}, hmm, ab, simp(), simp(), hus)
+    have wa2 := rewrite(sym(ea), wa)
+    have hx2 := mp(all_elim(hat, {m}, {o}), ho2, ipC, hr)
+    have e := apply(x86i.store32i_bd, {m}, {o}, {4}, {d}, {k}, {len}, ipM, ipU, simp(), hd, hk, wa2, hx2)
+    show by simp(e, ea, hr, ha2)
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.store_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {A}, {4}, {k}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, hap, he, hbase, a2b, ab, simp(), simp(), hus, hw2, hred, hpt)
+qed
+
+// ----------------------------------------------------------------------
+//  A call from a function with stack objects, its value in rax only
+//  (call1_objs, the startup mode's call1_0_objs): the plain call's
+
+theorem tr.runs_c1objs: all objs g l w o. runs(gimple.call1(g, l), w, o) -> runs(gimple.call1_objs(objs, g, l), w, o)
+proof
+  fix objs g l w o
+  assume hr
+  have h1 := expand(hr, gimple.call1)
+  have pu := apply(g.runs_univ, h1)
+  have b := apply(g.runs_elim, h1)
+  have b2 := apply(tr.bind_callobjs[objs := objs, g := g, l := l, a := x2 x3. letin(x3, x4. o = ok(x2, fst(x4))), xx := x2 x3. o = exc(x2, x3), dd := x2. o = diverge(x2)], {w}, b)
+  show by defs(apply(tr.runs_intro[r := x0 x1. bind_rel(gimple.call_objs(objs, g, l), x0, x2 x3. letin(x3, x4. x1 = ok(x2, fst(x4))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))], {w}, {o}, pu, b2), gimple.call1_objs)
+qed
+
+theorem tr.runs_c10objs: all objs g l w o. runs(gimple.call1_0(g, l), w, o) -> runs(gimple.call1_0_objs(objs, g, l), w, o)
+proof
+  fix objs g l w o
+  assume hr
+  have h1 := expand(hr, gimple.call1_0)
+  have pu := apply(g.runs_univ, h1)
+  have b := apply(g.runs_elim, h1)
+  have b2 := apply(tr.bind_call0objs[objs := objs, g := g, l := l, a := x2 x3. letin(x3, x4. o = ok(x2, fst(x4))), xx := x2 x3. o = exc(x2, x3), dd := x2. o = diverge(x2)], {w}, b)
+  show by defs(apply(tr.runs_intro[r := x0 x1. bind_rel(gimple.call0_objs(objs, g, l), x0, x2 x3. letin(x3, x4. x1 = ok(x2, fst(x4))), x2 x3. x1 = exc(x2, x3), x2. x1 = diverge(x2))], {w}, {o}, pu, b2), gimple.call1_0_objs)
+qed
+
+theorem tr.qs_call1objs(objs, g, l, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k): all w o.
+  runs(mkprog(x0 x1. ex x8. bind_rel(gimple.call1(g, l), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), w, o) ->
+  runs(mkprog(x0 x1. ex x8. bind_rel(gimple.call1_objs(objs, g, l), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), w, o)
+proof
+  fix w o
+  assume hr
+  have pu := apply(g.runs_univ, hr)
+  obtain y, hb hk from apply(g.runs_elim, hr)
+  have inc: all o2. runs(gimple.call1(g, l), w, o2) -> runs(gimple.call1_objs(objs, g, l), w, o2) proof
+    fix o2
+    assume h
+    show := mp(all_elim(tr.runs_c1objs, {objs}, {g}, {l}, {w}, {o2}), h)
+  qed
+  have b2 := apply(tr.bind_mono[p := gimple.call1_objs(objs, g, l), p2 := gimple.call1(g, l), s := w, k := x9 x10. a(x9, x10, y), x := x9 x10. xx(x9, x10, y), d := x9. dd(x9, y)], inc, hb)
+  have e: ex x8. bind_rel(gimple.call1_objs(objs, g, l), w, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, o) by ex_intro({y}, taut(b2, hk))
+  show := apply(tr.runs_intro[r := x0 x1. ex x8. bind_rel(gimple.call1_objs(objs, g, l), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)], {w}, {o}, pu, e)
+qed
+
+theorem tr.qs_call10objs(objs, g, l, x9 x10 x8. a, x9 x10 x8. xx, x9 x8. dd, x8 x1. k): all w o.
+  runs(mkprog(x0 x1. ex x8. bind_rel(gimple.call1_0(g, l), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), w, o) ->
+  runs(mkprog(x0 x1. ex x8. bind_rel(gimple.call1_0_objs(objs, g, l), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), w, o)
+proof
+  fix w o
+  assume hr
+  have pu := apply(g.runs_univ, hr)
+  obtain y, hb hk from apply(g.runs_elim, hr)
+  have inc: all o2. runs(gimple.call1_0(g, l), w, o2) -> runs(gimple.call1_0_objs(objs, g, l), w, o2) proof
+    fix o2
+    assume h
+    show := mp(all_elim(tr.runs_c10objs, {objs}, {g}, {l}, {w}, {o2}), h)
+  qed
+  have b2 := apply(tr.bind_mono[p := gimple.call1_0_objs(objs, g, l), p2 := gimple.call1_0(g, l), s := w, k := x9 x10. a(x9, x10, y), x := x9 x10. xx(x9, x10, y), d := x9. dd(x9, y)], inc, hb)
+  have e: ex x8. bind_rel(gimple.call1_0_objs(objs, g, l), w, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, o) by ex_intro({y}, taut(b2, hk))
+  show := apply(tr.runs_intro[r := x0 x1. ex x8. bind_rel(gimple.call1_0_objs(objs, g, l), x0, x9 x10. a(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)], {w}, {o}, pu, e)
+qed

@@ -6945,6 +6945,61 @@ proof
   show by defs(simp(e), bits_of_int, bits_mul)
 qed
 
+// an array's 8-byte element at a 64-bit index: p + 8 i, the product and
+// the sum defined
+abbrev tr.elem8_q_def(p, i) := tr.s64_fits(int_mul(sint(64, i), 8)) && tr.padd_def(p, bits_mul(64, i, 8))
+
+// (the index times 8)
+theorem tr.smul_q8: all s i. s in univ(1) -> i in bits(64) -> tr.s64_fits(int_mul(sint(64, i), 8)) ->
+  runs(gimple.smul(64, i, 8), s, ok(s, bits_mul(64, i, 8)))
+proof
+  fix s i
+  assume hs hi hf
+  have v := mp(tr.imul_sint64, {i}, {8}, hi, simp())
+  have s8: sint(64, 8) = 8 by defs(simp(), sint)
+  have v8: bits_of_int(64, int_mul(sint(64, i), 8)) = bits_mul(64, i, 8) by simp(v, s8)
+  show by defs(simp(hs, hi, hf, v8, s8), gimple.smul, gimple.arith, gimple.wrap)
+qed
+
+theorem tr.elem8_q_ok: all s p i. s in univ(1) -> p in bits(64) -> i in bits(64) -> tr.elem8_q_def(p, i) ->
+  runs(gimple.elem(p, i, 8), s, ok(s, bits_add(64, p, bits_mul(64, i, 8))))
+proof
+  fix s p i
+  assume hs hp hi hd
+  have hf hpd := hd
+  let X := bits_mul(64, i, 8)
+  have xb: X in bits(64) by simp()
+  have sm := mp(tr.smul_q8, {s}, {i}, hs, hi, hf)
+  have pa := mp(tr.padd_okb, {s}, {p}, {X}, hs, hp, xb, hpd)
+  show by defs(simp(hs, hp, hi, xb, sm, pa, keep(gimple.padd, gimple.smul)), gimple.elem)
+qed
+
+theorem tr.elem8_q_ub: all s p i s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> p in bits(64) -> i in bits(64) -> !tr.elem8_q_def(p, i) ->
+  runs(gimple.elem(p, i, 8), s, exc(s2, e))
+proof
+  fix s p i s2 e
+  assume hs h2 he hp hi hn
+  let X := bits_mul(64, i, 8)
+  have xb: X in bits(64) by simp()
+  have s8: sint(64, 8) = 8 by defs(simp(), sint)
+  // (the product out of range: its raise)
+  have c1: !tr.s64_fits(int_mul(sint(64, i), 8)) -> runs(gimple.elem(p, i, 8), s, exc(s2, e)) proof
+    assume hf
+    have su: runs(gimple.smul(64, i, 8), s, exc(s2, e)) by defs(simp(hs, h2, he, hf, s8), gimple.smul, gimple.arith)
+    show by defs(simp(hs, hp, hi, su, h2, he, keep(gimple.smul)), gimple.elem)
+  qed
+  // (the sum out of range: padd's)
+  have c2: tr.s64_fits(int_mul(sint(64, i), 8)) -> runs(gimple.elem(p, i, 8), s, exc(s2, e)) proof
+    assume hf
+    have sm := mp(tr.smul_q8, {s}, {i}, hs, hi, hf)
+    have nd: !tr.padd_def(p, X) by taut(hn, hf)
+    have pu := mp(tr.padd_ub, {s}, {p}, {X}, {s2}, {e}, hs, h2, he, hp, xb, nd)
+    have wi: ex x0. ex x1. runs(gimple.smul(64, i, 8), s, ok(x0, x1)) && runs(gimple.padd(p, x1), x0, exc(s2, e)) by ex_intro({s}, ex_intro({X}, taut(sm, pu)))
+    show by defs(simp(hs, hp, xb, wi, h2, he, keep(gimple.padd, gimple.smul)), gimple.elem)
+  qed
+  show by taut(c1, c2)
+qed
+
 // imul r64 g, [rsp + d] (g holding u, the home x): g := r, the product
 // (r as the spec has it: u * x, or x * u)
 theorem tr.imul64_home(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g d c z1 z2 x u r hs ds rs p w.
@@ -7470,6 +7525,32 @@ proof
   assume hs h2 he hp ho hn
   have m := apply(g.mem_at_ub, {s}, {p}, {off}, {4}, {false}, {s2}, {e}, hs, h2, he, hp, ho, hn)
   show by defs(simp(hs, h2, he, m, keep(gimple.mem)), gimple.ld32)
+qed
+
+// (likewise a 2-byte field load)
+theorem tr.ld16_ok: all s p off. s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 2, false) ->
+  runs(gimple.ld16(p, off), s, ok(s, bits_of_int(16, gimple.bytes_at(s.vm, bits_add(64, p, off), 2))))
+proof
+  fix s p off
+  assume hs hp ho hd
+  have m := apply(g.mem_at_ok, {s}, {p}, {off}, {2}, {false}, hs, hp, ho, hd)
+  have p64: pow2(64) = 18446744073709551616 by simp()
+  have lt0: int_lt(int_add(p, off), pow2(64)) by taut(hd)
+  have lt := rewrite(p64, lt0)
+  have bdef: bits_add(64, p, off) = int_mod(int_add(p, off), 18446744073709551616) by defs(simp(), bits_add)
+  have ev: int_add(p, off) = bits_add(64, p, off) by arith(bdef, hp, ho, lt)
+  have m2 := rewrite(ev, m)
+  have hb: bits_add(64, p, off) in bits(64) by simp()
+  show by defs(simp(hs, hb, m2, keep(gimple.mem, gimple.bytes_at)), gimple.ld16)
+qed
+
+theorem tr.ld16_ub: all s p off s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> p in bits(64) -> off in bits(32) -> !g.mem_defined(s, p, off, 2, false) ->
+  runs(gimple.ld16(p, off), s, exc(s2, e))
+proof
+  fix s p off s2 e
+  assume hs h2 he hp ho hn
+  have m := apply(g.mem_at_ub, {s}, {p}, {off}, {2}, {false}, {s2}, {e}, hs, h2, he, hp, ho, hn)
+  show by defs(simp(hs, h2, he, m, keep(gimple.mem)), gimple.ld16)
 qed
 
 // a shift right by k below the width n

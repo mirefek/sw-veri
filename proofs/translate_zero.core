@@ -378,7 +378,7 @@ qed
 // the rest at A + c, gives the claim before
 theorem tr.zstore_step(zb. bkp, zb pb wb. bka): all s v base code fr a a2 hs fd rs x A c k p w.
   (all m o. m in x86_64_linux.Machine -> m in univ(1) -> m.rip = a -> abi.code_at(m.vm, base, code) -> tr.regs(m, rs) -> m.xmm[x] = 0 ->
-     x86i.acc(m, A, c, 1) -> runs(x86_64_linux.step(), m, o) ->
+     x86i.acc(m, A, c, 1) -> m.gpr[4] = int_sub(s.gpr[4], fr) -> runs(x86_64_linux.step(), m, o) ->
      o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, c, 0))), empty)) ->
   (all m. m.rip = a -> !bkp(m)) -> base in omega -> a2 in bits(64) -> A in bits(64) -> c in omega -> k in omega -> int_le(c, k) -> int_le(k, 18446744073709551616) ->
   tr.ptz(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd, rs, x, bits_add(64, A, c), int_sub(k, c), p, w) -> tr.ptz(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd, rs, x, A, k, p, w)
@@ -398,10 +398,13 @@ proof
       assume j1 j2
       show := mp(all_elim(hacc, {j}), j1, arith(j1, j2, hck))
     qed
+    // (the frame's rsp: the invariant's, the zeroing leaving it)
+    have _ _ _ ipR := apply(tr.inv_parts, hi)
+    have hsp: m.gpr[4] = int_sub(s.gpr[4], fr) by simp(expand(ipR, tr.zfill))
     have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && m2 = M2) proof
       fix o
       assume ho
-      have e := mp(all_elim(he, {m}, {o}), hM, hu, hr, hcd, hrs, hx, accC, ho)
+      have e := mp(all_elim(he, {m}, {o}), hM, hu, hr, hcd, hrs, hx, accC, hsp, ho)
       show by ex_intro({M2}, simp(e))
     qed
     have nr0 := apply(tr.inv_nr, hi)
@@ -527,10 +530,10 @@ proof
   assume hat hba ha2 hbase hx hb hd hbd hbu hA hk h16 hk64 hA2 hk2 hpz0
   have hpz := rewrite(hk2, rewrite(hA2, hpz0))
   have he: all m o. m in x86_64_linux.Machine -> m in univ(1) -> m.rip = a -> abi.code_at(m.vm, base, code) -> tr.regs(m, rs) -> m.xmm[x] = 0 ->
-      x86i.acc(m, A, 16, 1) -> runs(x86_64_linux.step(), m, o) ->
+      x86i.acc(m, A, 16, 1) -> m.gpr[4] = int_sub(s.gpr[4], fr) -> runs(x86_64_linux.step(), m, o) ->
       o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, 16, 0))), empty) proof
     fix m o
-    assume hM hu hr hcd hrs hx0 hacc ho
+    assume hM hu hr hcd hrs hx0 hacc _ ho
     have rb b64 := apply(tr.regs_get, {m}, {rs}, {b}, {8}, {bv}, hrs, hbd, hbu)
     have ea: x86i.bd_ea(m, b, d) = A by simp(rb, b64, hd, hA)
     have hx2 := mp(all_elim(hat, {m}, {o}), ho, hcd, hr)
@@ -555,14 +558,93 @@ proof
   assume hat hba ha2 hbase hx hb hd hbd hbu hA hk h8 hk64 hA2 hk2 hpz0
   have hpz := rewrite(hk2, rewrite(hA2, hpz0))
   have he: all m o. m in x86_64_linux.Machine -> m in univ(1) -> m.rip = a -> abi.code_at(m.vm, base, code) -> tr.regs(m, rs) -> m.xmm[x] = 0 ->
-      x86i.acc(m, A, 8, 1) -> runs(x86_64_linux.step(), m, o) ->
+      x86i.acc(m, A, 8, 1) -> m.gpr[4] = int_sub(s.gpr[4], fr) -> runs(x86_64_linux.step(), m, o) ->
       o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, 8, 0))), empty) proof
     fix m o
-    assume hM hu hr hcd hrs hx0 hacc ho
+    assume hM hu hr hcd hrs hx0 hacc _ ho
     have rb b64 := apply(tr.regs_get, {m}, {rs}, {b}, {8}, {bv}, hrs, hbd, hbu)
     have ea: x86i.bd_ea(m, b, d) = A by simp(rb, b64, hd, hA)
     have hx2 := mp(all_elim(hat, {m}, {o}), ho, hcd, hr)
     have e := apply(x86i.storeq_bd, {m}, {o}, {x}, {b}, {d}, {z1}, {z2}, {z3}, {len}, hM, hu, hx, hb, hd, rewrite(sym(ea), hacc), hx2)
+    show by simp(e, ea, hx0, hr, ha2)
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  have Ab: A in bits(64) by simp(hA)
+  show := apply(tr.zstore_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {hs}, {fd}, {rs}, {x}, {A}, {8}, {k}, {p}, {w}, he, hba, hbase, a2b, Ab, simp(), hk, h8, hk64, hpz)
+qed
+
+// (a frame's address [rsp + d]: the entry's rsp at the offset c, as
+// tr.lea_rsp's)
+theorem tr.rsp_bd_ea: all s m fr d c. m.gpr[4] = int_sub(s.gpr[4], fr) -> m.gpr[4] in bits(64) -> fr in omega -> d in bits(64) ->
+  c = int_mod(int_sub(d, fr), 18446744073709551616) -> x86i.bd_ea(m, 4, d) = tr.ha(s, c)
+proof
+  fix s m fr d c
+  assume hsp hr4 hfr hd hc
+  show by defs(arith(hsp, hr4, hfr, hd, hc), bits_add)
+qed
+
+// (the frame's address at c aligned to 16: the entry's rsp + 8 is, and c +
+// 8)
+theorem tr.ha_al16: all s c. tr.sal16(s) -> s.gpr[4] in bits(64) -> c in omega -> int_mod(int_add(c, 8), 16) = 0 -> int_mod(tr.ha(s, c), 16) = 0
+proof
+  fix s c
+  assume hal hs hc hc8
+  show by defs(arith(hal, hs, hc, hc8), bits_add)
+qed
+
+// movaps [rsp + d], x (x zero; the address aligned to 16): 16 of the k
+// bytes at A, the frame's at the offset c
+theorem tr.zst_aps_rsp(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len x d c z1 z2 A k A2 k2 hs fd rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(143, pair(x, pair(x86i.bd_mem(4, d), pair(z1, z2))))), m, o)) ->
+  (all m. m.rip = a -> !bkp(m)) -> a2 = bits_add(64, a, len) -> base in omega -> x in x86_64_linux.Reg -> d in bits(64) -> fr in omega ->
+  c = int_mod(int_sub(d, fr), 18446744073709551616) -> A = tr.ha(s, c) -> int_mod(A, 16) = 0 -> k in omega -> int_le(16, k) -> int_le(k, 18446744073709551616) ->
+  A2 = bits_add(64, A, 16) -> k2 = int_sub(k, 16) ->
+  tr.ptz(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd, rs, x, A2, k2, p, w) -> tr.ptz(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd, rs, x, A, k, p, w)
+proof
+  fix s v base code fr a a2 len x d c z1 z2 A k A2 k2 hs fd rs p w
+  assume hat hba ha2 hbase hx hd hfr hc hA hal hk h16 hk64 hA2 hk2 hpz0
+  have hpz := rewrite(hk2, rewrite(hA2, hpz0))
+  have he: all m o. m in x86_64_linux.Machine -> m in univ(1) -> m.rip = a -> abi.code_at(m.vm, base, code) -> tr.regs(m, rs) -> m.xmm[x] = 0 ->
+      x86i.acc(m, A, 16, 1) -> m.gpr[4] = int_sub(s.gpr[4], fr) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, 16, 0))), empty) proof
+    fix m o
+    assume hM hu hr hcd hrs hx0 hacc hsp ho
+    have r4 := apply(x86i.rsp_typed, hM)
+    have ea0 := apply(tr.rsp_bd_ea, {s}, {m}, {fr}, {d}, {c}, hsp, r4, hfr, hd, hc)
+    have ea: x86i.bd_ea(m, 4, d) = A := trans(ea0, sym(hA))
+    have hx2 := mp(all_elim(hat, {m}, {o}), ho, hcd, hr)
+    have e := apply(x86i.storeaps_bd, {m}, {o}, {x}, {4}, {d}, {z1}, {z2}, {len}, hM, hu, hx, simp(), hd, rewrite(sym(ea), hacc), rewrite(sym(ea), hal), hx2)
+    show by simp(e, ea, hx0, hr, ha2)
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  have Ab: A in bits(64) by simp(hA)
+  show := apply(tr.zstore_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {hs}, {fd}, {rs}, {x}, {A}, {16}, {k}, {p}, {w}, he, hba, hbase, a2b, Ab, simp(), hk, h16, hk64, hpz)
+qed
+
+// movq [rsp + d], x (x zero): 8 of the k bytes at A, the frame's at the
+// offset c
+theorem tr.zst_q_rsp(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len x d c z1 z2 z3 A k A2 k2 hs fd rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(150, pair(x, pair(x86i.bd_mem(4, d), pair(z1, pair(z2, z3)))))), m, o)) ->
+  (all m. m.rip = a -> !bkp(m)) -> a2 = bits_add(64, a, len) -> base in omega -> x in x86_64_linux.Reg -> d in bits(64) -> fr in omega ->
+  c = int_mod(int_sub(d, fr), 18446744073709551616) -> A = tr.ha(s, c) -> k in omega -> int_le(8, k) -> int_le(k, 18446744073709551616) ->
+  A2 = bits_add(64, A, 8) -> k2 = int_sub(k, 8) ->
+  tr.ptz(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, fd, rs, x, A2, k2, p, w) -> tr.ptz(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, fd, rs, x, A, k, p, w)
+proof
+  fix s v base code fr a a2 len x d c z1 z2 z3 A k A2 k2 hs fd rs p w
+  assume hat hba ha2 hbase hx hd hfr hc hA hk h8 hk64 hA2 hk2 hpz0
+  have hpz := rewrite(hk2, rewrite(hA2, hpz0))
+  have he: all m o. m in x86_64_linux.Machine -> m in univ(1) -> m.rip = a -> abi.code_at(m.vm, base, code) -> tr.regs(m, rs) -> m.xmm[x] = 0 ->
+      x86i.acc(m, A, 8, 1) -> m.gpr[4] = int_sub(s.gpr[4], fr) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "vm", fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, A, 8, 0))), empty) proof
+    fix m o
+    assume hM hu hr hcd hrs hx0 hacc hsp ho
+    have r4 := apply(x86i.rsp_typed, hM)
+    have ea0 := apply(tr.rsp_bd_ea, {s}, {m}, {fr}, {d}, {c}, hsp, r4, hfr, hd, hc)
+    have ea: x86i.bd_ea(m, 4, d) = A := trans(ea0, sym(hA))
+    have hx2 := mp(all_elim(hat, {m}, {o}), ho, hcd, hr)
+    have e := apply(x86i.storeq_bd, {m}, {o}, {x}, {4}, {d}, {z1}, {z2}, {z3}, {len}, hM, hu, hx, simp(), hd, rewrite(sym(ea), hacc), hx2)
     show by simp(e, ea, hx0, hr, ha2)
   qed
   have a2b: a2 in bits(64) by simp(ha2)

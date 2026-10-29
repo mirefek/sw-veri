@@ -679,6 +679,15 @@ impl<'e> Gen<'e> {
                 let (ok, ub) = self.ok_ub("g.ld16_ok", "g.ld16_ub", &[a], vec![simp_l(), hc()], vec![simp_l()]);
                 return Ok((Some(cond), r, ok, Some(ub)));
             }
+            // (at p + off, off a literal: a field's)
+            if nat(&x[1]).is_some() {
+                let (pp, off) = (x[0].clone(), x[1].clone());
+                let cond = self.mem_defined(&self.w.clone(), &pp, &off, 2, false);
+                let vm = self.mk("app", vec![self.w.clone(), Term::bytes(b"vm")]);
+                let r = self.mk("bits_of_int", vec![lit(16), self.mk("gimple.bytes_at", vec![vm, self.mk("bits_add", vec![lit(64), pp.clone(), off.clone()]), lit(2)])]);
+                let (ok, ub) = self.ok_ub("tr.ld16_ok", "tr.ld16_ub", &[pp, off], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
+                return Ok((Some(cond), r, ok, Some(ub)));
+            }
         }
         // a 4-byte load
         if let Some(x) = self.app(op, "gimple.ld32", 2) {
@@ -723,6 +732,14 @@ impl<'e> Gen<'e> {
                     let (ok, ub) = self.ok_ub(&format!("tr.elem{k}_sx_ok"), &format!("tr.elem{k}_sx_ub"), &[pp, i], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
                     return Ok((Some(cond), r, ok, Some(ub)));
                 }
+            }
+            // (an 8-byte element at a 64-bit index: the index times 8)
+            if nat(&x[2]) == Some(8) && self.app(&ix, "bits_sext", 3).is_none() {
+                let (pp, i) = (x[0].clone(), x[1].clone());
+                let cond = self.mk("tr.elem8_q_def", vec![pp.clone(), i.clone()]);
+                let r = self.mk("bits_add", vec![lit(64), pp.clone(), self.mk("bits_mul", vec![lit(64), i.clone(), lit(8)])]);
+                let (ok, ub) = self.ok_ub("tr.elem8_q_ok", "tr.elem8_q_ub", &[pp, i], vec![simp_l(), simp_l(), hc()], vec![simp_l(), simp_l()]);
+                return Ok((Some(cond), r, ok, Some(ub)));
             }
         }
         // a 64-bit field load at p + off (off a literal)
@@ -1518,6 +1535,13 @@ impl<'e> Gen<'e> {
                 if let Some(c) = self.app(&x[0], "gimple.call_objs", 3).map(|c| c.to_vec()) {
                     let (j, inst) = self.by(qi, "tr.qs_callobjs",&[("objs", c[0].clone()), ("g", c[1].clone()), ("l", c[2].clone()), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
                     return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
+                }
+                // (... with the value in rax only: call1, call1_0)
+                for (name, lemma) in [("gimple.call1_objs", "tr.qs_call1objs"), ("gimple.call1_0_objs", "tr.qs_call10objs")] {
+                    if let Some(c) = self.app(&x[0], name, 3).map(|c| c.to_vec()) {
+                        let (j, inst) = self.by(qi, lemma, &[("objs", c[0].clone()), ("g", c[1].clone()), ("l", c[2].clone()), ("a", al), ("xx", xl), ("dd", dl), ("k", kl)])?;
+                        return Ok(Some(Red::Q(j, mp(inst, vec![t(&w)]))));
+                    }
                 }
                 // a call: the machine's call makes it
                 // (the startup mode's call0, call1_0: the same, its rules tr.call0_st, ..)
