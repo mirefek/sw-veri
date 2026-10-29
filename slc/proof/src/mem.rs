@@ -31,6 +31,10 @@ pub(crate) struct MemCache {
     premise_eq: std::collections::HashMap<(Term, bool), Seq>,
     /// `mem` goals not shown from these facts (the facts' hash)
     mem_failed: std::collections::HashSet<(Term, u64)>,
+    /// premises shown from these facts (their statements' and hypotheses'
+    /// hash): a closure's premises met again below it -- a world's facts,
+    /// each from both of the world before it -- not shown again
+    shown: std::collections::HashMap<(Term, u64), Seq>,
     /// the reads left unresolved (why), for a failing goal's message
     skipped: Vec<String>,
     /// the values read a step left unresolved (why), for its message
@@ -480,7 +484,15 @@ impl State {
                 break;
             }
             let h = a[0].clone();
-            let p = self.mem_discharge(env, lg, &h, using, depth)?;
+            // (STEP_PREM_SLOW=secs: the premises taking longer, reported)
+            let t0 = std::time::Instant::now();
+            let p = self.mem_discharge(env, lg, &h, using, depth);
+            if let Some(lim) = std::env::var("STEP_PREM_SLOW").ok().and_then(|v| v.parse::<f64>().ok()) {
+                if t0.elapsed().as_secs_f64() > lim {
+                    eprintln!("premise slow: {:.3}s, depth {}, {}: {}", t0.elapsed().as_secs_f64(), depth, if p.is_ok() { "shown" } else { "not shown" }, Printer::new(env).short(&h));
+                }
+            }
+            let p = p?;
             s = Seq::mp(env, &s, &p)?;
         }
         Ok(s)
@@ -513,6 +525,24 @@ impl State {
         if let Some(f) = using.iter().find(|f| f.concl() == h) {
             return Ok(f.clone());
         }
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut st = std::collections::hash_map::DefaultHasher::new();
+            for f in using {
+                f.concl().hash(&mut st);
+                f.hyps().hash(&mut st);
+            }
+            (h.clone(), st.finish())
+        };
+        if let Some(p) = self.mem_cache.borrow().shown.get(&key) {
+            return Ok(p.clone());
+        }
+        let p = self.mem_discharge_(env, lg, h, using, depth)?;
+        self.mem_cache.borrow_mut().shown.insert(key, p.clone());
+        Ok(p)
+    }
+
+    fn mem_discharge_(&self, env: &mut Env, lg: &Logic, h: &Term, using: &[Seq], depth: usize) -> KResult<Seq> {
         let lit = self.lit_form(env, lg, h)?;
         if let Some(e) = &lit {
             let h2 = rhs_of(env, e.concl());

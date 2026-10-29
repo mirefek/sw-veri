@@ -209,12 +209,12 @@ proof
 qed
 
 // a store of m bytes, each k, at d + o within the n bytes: those m covered
-theorem mz.cov_store(t. P): all b B d n k o m v. mz.cov(b, B, d, n, k, t. P(t)) -> d in bits(64) -> o in omega -> m in omega ->
-  int_le(int_add(o, m), n) -> int_le(n, 18446744073709551616) -> mz.digs(v, m, k) ->
-  mz.cov(x86_64_linux.store_le(b, bits_add(64, d, o), m, v), B, d, n, k, t. P(t) || (int_le(o, t) && int_lt(t, int_add(o, m))))
+theorem mz.cov_store(t. P): all b B d n k o m v a. mz.cov(b, B, d, n, k, t. P(t)) -> d in bits(64) -> o in omega -> m in omega ->
+  int_le(int_add(o, m), n) -> int_le(n, 18446744073709551616) -> mz.digs(v, m, k) -> a = bits_add(64, d, o) ->
+  mz.cov(x86_64_linux.store_le(b, a, m, v), B, d, n, k, t. P(t) || (int_le(o, t) && int_lt(t, int_add(o, m))))
 proof
-  fix b B d n k o m v
-  assume hc hd ho hm hl hn hv
+  fix b B d n k o m v a
+  assume hc hd ho hm hl hn hv ha
   have hb hout hin := expand(hc, mz.cov)
   let A := bits_add(64, d, o)
   have st := apply(x86.store_typed, {b}, {A}, {m}, {v}, hb)
@@ -250,7 +250,8 @@ proof
     qed
     show by taut(hp, new, old)
   qed
-  show by defs(taut(st, out, inn), mz.cov)
+  have cA: mz.cov(x86_64_linux.store_le(b, A, m, v), B, d, n, k, t. P(t) || (int_le(o, t) && int_lt(t, int_add(o, m)))) by defs(taut(st, out, inn), mz.cov)
+  show := rewrite(sym(ha), cA)
 qed
 
 // (all n covered: the bytes those of the spec, k at the n, B's elsewhere)
@@ -331,4 +332,741 @@ proof
   have r4: mz.digs(bits_of_int(32, V), 4, b) := rewrite(sym(v4), g4)
   have vb: V in bits(64) by simp()
   show by taut(r1, r8, r2, r4, vb)
+qed
+
+// ----------------------------------------------------------------------
+//  The stores' one outcomes (for `step`): at a literal offset, and at a
+//  computed one (signed, g.mem_defined_s) -- n bytes written at p + off
+
+theorem g.mem_s_det: all s p off n w. s in univ(1) -> p in bits(64) -> off in bits(64) -> g.mem_defined_s(s, p, off, n, w) ->
+  g.det(gimple.mem(p, off, n, w), s, ok(s, bits_add(64, p, off)))
+proof
+  fix s p off n w
+  assume hs hp ho hd
+  have dnz d0 dlt dus := hd
+  have dp := apply(g.padd_det, {s}, {p}, {off}, hs, hp, ho, d0, dlt)
+  have pd := rewrite(apply(g.padd_s_eq, {p}, {off}, hp, ho, d0, dlt), dp)
+  show proof
+    fix o
+    assume hr
+    have h1 := apply(g.runs_elim, hr)
+    obtain x2, hx2 hc from h1
+    have e2: x2 = ok(pair(s, empty), empty) by taut(hx2, dnz)
+    have hc2 := rewrite(e2, hc)
+    have b: bind_rel(gimple.padd(p, off), s, x3 x4. letin(x4, x5. ex x6. (!gimple.usable(x3.vm, x3.objs, x5, n, w) || (!!gimple.usable(x3.vm, x3.objs, x5, n, w) && x6 = ok(pair(x3, empty), empty))) &&
+        ((fst(x6) = 0 && o = ok(fst(out_state(x6)), x5)) || ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && o = ok(fst(out_state(x6)), snd(out_value(x6)))) ||
+          ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && o = exc(fst(out_state(x6)), snd(out_value(x6))))) || (fst(x6) = 2 && o = diverge(snd(x6)))))),
+        x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by simp(hc2, keep(bind_rel, gimple.padd, gimple.usable))
+    have k := apply(g.bind_inv, b, pd)
+    show by simp(expand(k, letin), dus)
+  qed
+qed
+
+theorem g.st16_det: all s p off v. s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 2, true) ->
+  s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(gimple.st16(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 2, v))), empty))
+proof
+  fix s p off v
+  assume hs hp ho hd hvm hf hdm
+  have md := apply(g.mem_det, {s}, {p}, {off}, {2}, {true}, hs, hp, ho, hd)
+  have ab: int_add(p, off) in bits(64) by simp(hd, hp, ho)
+  have wd := apply(g.write_det, {s}, {int_add(p, off)}, {2}, {v}, ab, simp(), simp(), hvm, hf, hdm)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.runs_elim, hr)
+    have b2 := apply(g.bind_inv, b, md)
+    show := apply(g.bind_inv, b2, wd)
+  qed
+qed
+
+theorem g.st8_s_det: all s p off v. s in univ(1) -> p in bits(64) -> off in bits(64) -> g.mem_defined_s(s, p, off, 1, true) ->
+  s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(gimple.st8(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 1, v))), empty))
+proof
+  fix s p off v
+  assume hs hp ho hd hvm hf hdm
+  have md := apply(g.mem_s_det, {s}, {p}, {off}, {1}, {true}, hs, hp, ho, hd)
+  have wd := apply(g.write_det, {s}, {bits_add(64, p, off)}, {1}, {v}, simp(), simp(), simp(), hvm, hf, hdm)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.runs_elim, hr)
+    have b2 := apply(g.bind_inv, b, md)
+    show := apply(g.bind_inv, b2, wd)
+  qed
+qed
+
+theorem g.st16_s_det: all s p off v. s in univ(1) -> p in bits(64) -> off in bits(64) -> g.mem_defined_s(s, p, off, 2, true) ->
+  s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(gimple.st16(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 2, v))), empty))
+proof
+  fix s p off v
+  assume hs hp ho hd hvm hf hdm
+  have md := apply(g.mem_s_det, {s}, {p}, {off}, {2}, {true}, hs, hp, ho, hd)
+  have wd := apply(g.write_det, {s}, {bits_add(64, p, off)}, {2}, {v}, simp(), simp(), simp(), hvm, hf, hdm)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.runs_elim, hr)
+    have b2 := apply(g.bind_inv, b, md)
+    show := apply(g.bind_inv, b2, wd)
+  qed
+qed
+
+theorem g.st32_s_det: all s p off v. s in univ(1) -> p in bits(64) -> off in bits(64) -> g.mem_defined_s(s, p, off, 4, true) ->
+  s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(gimple.st32(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 4, v))), empty))
+proof
+  fix s p off v
+  assume hs hp ho hd hvm hf hdm
+  have md := apply(g.mem_s_det, {s}, {p}, {off}, {4}, {true}, hs, hp, ho, hd)
+  have wd := apply(g.write_det, {s}, {bits_add(64, p, off)}, {4}, {v}, simp(), simp(), simp(), hvm, hf, hdm)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.runs_elim, hr)
+    have b2 := apply(g.bind_inv, b, md)
+    show := apply(g.bind_inv, b2, wd)
+  qed
+qed
+
+theorem g.st64_s_det: all s p off v. s in univ(1) -> p in bits(64) -> off in bits(64) -> g.mem_defined_s(s, p, off, 8, true) ->
+  s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(gimple.st64(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 8, v))), empty))
+proof
+  fix s p off v
+  assume hs hp ho hd hvm hf hdm
+  have md := apply(g.mem_s_det, {s}, {p}, {off}, {8}, {true}, hs, hp, ho, hd)
+  have wd := apply(g.write_det, {s}, {bits_add(64, p, off)}, {8}, {v}, simp(), simp(), simp(), hvm, hf, hdm)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.runs_elim, hr)
+    have b2 := apply(g.bind_inv, b, md)
+    show := apply(g.bind_inv, b2, wd)
+  qed
+qed
+
+// (fill_words defined: its one outcome, the c words v stored at d)
+theorem g.fill_det: all s d v c. s in univ(1) -> d in bits(64) -> v in bits(64) -> c in bits(64) -> g.fill_ok(s, d, c) ->
+  s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(musl_asm.fill_words(d, v, c), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, d, int_mul(8, c), x86.fillv(v, c)))), empty))
+proof
+  fix s d v c
+  assume hs hd hv hc hk hvm hf hdm
+  have hus hnb := hk
+  have n8: int_mul(8, c) in omega by simp(hc)
+  have hn64: int_lt(int_mul(8, c), 18446744073709551616) by arith(hnb, n8, (int_pow(2, 64) = 18446744073709551616 by simp()))
+  have bd: bits_of_int(64, d) = d by defs(simp(hd), bits_of_int)
+  have wd := apply(g.write_det, {s}, {d}, {int_mul(8, c)}, {x86.fillv(v, c)}, hd, n8, hn64, hvm, hf, hdm)
+  have wd2 := rewrite(sym(bd), expand(wd, x86.fillv), {1})
+  have hus2: gimple.usable(s.vm, s.objs, bits_of_int(64, d), int_mul(8, c), true) := rewrite(sym(bd), hus)
+  have nd: !(!gimple.usable(s.vm, s.objs, bits_of_int(64, d), int_mul(8, c), true) || int_le(int_pow(2, 64), int_mul(8, c))) by taut(hus2, hnb)
+  show proof
+    fix o
+    assume hr
+    step x3, h from hr with wd2, nd
+    show by defs(simp(h, bd), x86.fillv)
+  qed
+qed
+
+// (the stores' one outcomes in a world: its parts from it -- for written
+// worlds, which step knows worlds)
+theorem mz.st8_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 1, true) ->
+  g.det(gimple.st8(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 1, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho hd
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st8_det, {s}, {p}, {off}, {v}, hs, hp, ho, hd, a, b, c)
+qed
+
+theorem mz.st16_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 2, true) ->
+  g.det(gimple.st16(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 2, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho hd
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st16_det, {s}, {p}, {off}, {v}, hs, hp, ho, hd, a, b, c)
+qed
+
+theorem mz.st32_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 4, true) ->
+  g.det(gimple.st32(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 4, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho hd
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st32_det, {s}, {p}, {off}, {v}, hs, hp, ho, hd, a, b, c)
+qed
+
+theorem mz.st64_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(32) -> g.mem_defined(s, p, off, 8, true) ->
+  g.det(gimple.st64(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), 8, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho hd
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st64_det, {s}, {p}, {off}, {v}, hs, hp, ho, hd, a, b, c)
+qed
+
+// (at a computed offset: the definedness's parts premises of their own --
+// not null, in range, usable -- each discharged where step meets them)
+theorem mz.st8_s_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(64) -> !(p = 0) ->
+  int_le(0, int_add(p, g.sv64(off))) -> int_lt(int_add(p, g.sv64(off)), pow2(64)) -> gimple.usable(s.vm, s.objs, bits_add(64, p, off), 1, true) ->
+  g.det(gimple.st8(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 1, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho h0 h1 h2 h3
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st8_s_det, {s}, {p}, {off}, {v}, hs, hp, ho, taut(h0, h1, h2, h3), a, b, c)
+qed
+
+theorem mz.st16_s_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(64) -> !(p = 0) ->
+  int_le(0, int_add(p, g.sv64(off))) -> int_lt(int_add(p, g.sv64(off)), pow2(64)) -> gimple.usable(s.vm, s.objs, bits_add(64, p, off), 2, true) ->
+  g.det(gimple.st16(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 2, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho h0 h1 h2 h3
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st16_s_det, {s}, {p}, {off}, {v}, hs, hp, ho, taut(h0, h1, h2, h3), a, b, c)
+qed
+
+theorem mz.st32_s_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(64) -> !(p = 0) ->
+  int_le(0, int_add(p, g.sv64(off))) -> int_lt(int_add(p, g.sv64(off)), pow2(64)) -> gimple.usable(s.vm, s.objs, bits_add(64, p, off), 4, true) ->
+  g.det(gimple.st32(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 4, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho h0 h1 h2 h3
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st32_s_det, {s}, {p}, {off}, {v}, hs, hp, ho, taut(h0, h1, h2, h3), a, b, c)
+qed
+
+theorem mz.st64_s_det: all s p off v. s in abi.World -> s in univ(1) -> p in bits(64) -> off in bits(64) -> !(p = 0) ->
+  int_le(0, int_add(p, g.sv64(off))) -> int_lt(int_add(p, g.sv64(off)), pow2(64)) -> gimple.usable(s.vm, s.objs, bits_add(64, p, off), 8, true) ->
+  g.det(gimple.st64(p, off, v), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, bits_add(64, p, off), 8, v))), empty))
+proof
+  fix s p off v
+  assume hW hs hp ho h0 h1 h2 h3
+  have a b c _ := apply(ms.world_parts, hW)
+  show := apply(g.st64_s_det, {s}, {p}, {off}, {v}, hs, hp, ho, taut(h0, h1, h2, h3), a, b, c)
+qed
+
+// (a store within the n usable bytes at d (no wrap): at the literal
+// offset o -- in range, usable; at n - j -- its signed offset, usable)
+theorem mz.lit_ok: all vm objs d n o m. d in bits(64) -> gimple.usable(vm, objs, d, n, true) -> int_le(int_add(d, n), 18446744073709551616) ->
+  o in omega -> m in omega -> int_le(1, m) -> int_le(int_add(o, m), n) ->
+  int_lt(int_add(d, o), pow2(64)) && gimple.usable(vm, objs, int_add(d, o), m, true)
+proof
+  fix vm objs d n o m
+  assume hd hu hdn ho hm h1 hl
+  have u := mp(mp.usable_sub[vm := vm, objs := objs, a := d, n := n, k := o, m := m, w := true], ho, hm, hl, hu)
+  have l: int_lt(int_add(d, o), pow2(64)) by arith(hdn, hl, h1, (pow2(64) = 18446744073709551616 by simp()))
+  show by taut(l, u)
+qed
+
+theorem mz.sub_ok: all vm objs d n j m. d in bits(64) -> n in bits(64) -> gimple.usable(vm, objs, d, n, true) -> int_le(int_add(d, n), 18446744073709551616) -> int_lt(n, 9223372036854775808) ->
+  j in omega -> m in omega -> int_le(1, m) -> int_le(m, j) -> int_le(j, n) ->
+  int_le(0, int_add(d, g.sv64(bits_sub(64, n, j)))) && int_lt(int_add(d, g.sv64(bits_sub(64, n, j))), pow2(64)) &&
+  gimple.usable(vm, objs, bits_add(64, d, bits_sub(64, n, j)), m, true)
+proof
+  fix vm objs d n j m
+  assume hd hn hu hdn hn63 hj hm h1 hmj hjn
+  have n0: n in omega by simp(hn)
+  have d0: d in omega by simp(hd)
+  have sj: bits_sub(64, n, j) = int_sub(n, j) := apply(x86.bsub_nowrap, {n}, {j}, n0, hj, hjn, (int_lt(n, 18446744073709551616) by arith(hn63)))
+  have nj: int_sub(n, j) in omega by arith(hjn)
+  have sv: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), bits_sub(64, n, j)) = int_sub(n, j) by simp(sj, apply(g.sval64_lit, {int_sub(n, j)}, nj, (int_lt(int_sub(n, j), 9223372036854775808) by arith(hn63, hj))))
+  have ua := mp(mp.usable_sub[vm := vm, objs := objs, a := d, n := n, k := int_sub(n, j), m := m, w := true], nj, hm, (int_le(int_add(int_sub(n, j), m), n) by arith(hmj)), hu)
+  have ad: bits_add(64, d, bits_sub(64, n, j)) = int_add(d, int_sub(n, j)) by simp(sj, apply(x86.add_nowrap, {d}, {int_sub(n, j)}, d0, nj, (int_lt(int_add(d, int_sub(n, j)), 18446744073709551616) by arith(hdn, hmj, hj, h1, hjn))))
+  have us: gimple.usable(vm, objs, bits_add(64, d, bits_sub(64, n, j)), m, true) by simp(ad, ua)
+  have r0: int_le(0, int_add(d, gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), bits_sub(64, n, j)))) := rewrite(sym(sv), (int_le(0, int_add(d, int_sub(n, j))) by arith(d0, hjn)))
+  have r1: int_lt(int_add(d, gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), bits_sub(64, n, j))), pow2(64)) :=
+    rewrite(sym(sv), (int_lt(int_add(d, int_sub(n, j)), pow2(64)) by arith(hdn, hmj, h1, (pow2(64) = 18446744073709551616 by simp()))))
+  show by taut(r0, r1, us)
+qed
+
+// (the bytes covered: fewer offsets, still covered)
+theorem mz.cov_mono(t. P, t. Q): all b B d n k. mz.cov(b, B, d, n, k, t. P(t)) -> (all t. t in omega -> int_lt(t, n) -> Q(t) -> P(t)) -> mz.cov(b, B, d, n, k, t. Q(t))
+proof
+  fix b B d n k
+  assume hc hq
+  have hb hout hin := expand(hc, mz.cov)
+  have inn: all x. x in bits(64) -> int_lt(bits_sub(64, x, d), n) -> Q(bits_sub(64, x, d)) -> b[x] = k proof
+    fix x
+    assume hx hl hqx
+    have to: bits_sub(64, x, d) in omega by defs(simp(), bits_sub)
+    show := mp(all_elim(hin, {x}), hx, hl, mp(all_elim(hq, {bits_sub(64, x, d)}), to, hl, hqx))
+  qed
+  show by defs(taut(hb, hout, inn), mz.cov)
+qed
+
+// (a store at d + o, o literal, and at d + (n - j): the bytes covered)
+theorem mz.st_lit(t. Q): all b B d n k o m v. mz.cov(b, B, d, n, k, t. Q(t)) -> d in bits(64) -> o in omega -> m in omega -> int_le(int_add(o, m), n) ->
+  int_le(n, 18446744073709551616) -> mz.digs(v, m, k) -> int_lt(int_add(d, o), pow2(64)) ->
+  mz.cov(x86_64_linux.store_le(b, int_add(d, o), m, v), B, d, n, k, t. Q(t) || (int_le(o, t) && int_lt(t, int_add(o, m))))
+proof
+  fix b B d n k o m v
+  assume hc hd ho hm hl hn hv hlt
+  have d0: d in omega by simp(hd)
+  have a: int_add(d, o) = bits_add(64, d, o) := sym(apply(x86.add_nowrap, {d}, {o}, d0, ho, (int_lt(int_add(d, o), 18446744073709551616) by arith(hlt, (pow2(64) = 18446744073709551616 by simp())))))
+  show := apply(mz.cov_store[P := t. Q(t)], {b}, {B}, {d}, {n}, {k}, {o}, {m}, {v}, {int_add(d, o)}, hc, hd, ho, hm, hl, hn, hv, a)
+qed
+
+theorem mz.st_sub(t. Q): all b B d n k j m v. mz.cov(b, B, d, n, k, t. Q(t)) -> d in bits(64) -> n in bits(64) -> j in omega -> m in omega -> int_le(m, j) -> int_le(j, n) ->
+  mz.digs(v, m, k) ->
+  mz.cov(x86_64_linux.store_le(b, bits_add(64, d, bits_sub(64, n, j)), m, v), B, d, n, k, t. Q(t) || (int_le(int_sub(n, j), t) && int_lt(t, int_add(int_sub(n, j), m))))
+proof
+  fix b B d n k j m v
+  assume hc hd hn hj hm hmj hjn hv
+  have n0: n in omega by simp(hn)
+  have sj: bits_sub(64, n, j) = int_sub(n, j) := apply(x86.bsub_nowrap, {n}, {j}, n0, hj, hjn, (int_lt(n, 18446744073709551616) by simp(hn)))
+  have so: int_sub(n, j) in omega by arith(hjn)
+  have c := apply(mz.cov_store[P := t. Q(t)], {b}, {B}, {d}, {n}, {k}, {int_sub(n, j)}, {m}, {v}, {bits_add(64, d, bits_sub(64, n, j))}, hc, hd, so, hm,
+    (int_le(int_add(int_sub(n, j), m), n) by arith(hmj)), (int_le(n, 18446744073709551616) by simp(hn)), hv, (bits_add(64, d, bits_sub(64, n, j)) = bits_add(64, d, int_sub(n, j)) by simp(sj)))
+  show := c
+qed
+
+// (a dword's low 4 bits: it mod 16)
+theorem mz.low4: all y. y in bits(32) -> bits_and(32, y, 15) = int_mod(y, 16)
+proof
+  fix y
+  assume hy
+  have y0: y in omega by simp(hy)
+  have p4: pow2(4) = 16 by simp()
+  have m15: int_sub(pow2(4), 1) = 15 by simp()
+  have mb: int_mod(y, pow2(4)) in bits(32) by arith(y0, p4)
+  have e0: bits_and(32, bits_of_int(32, y), int_sub(pow2(4), 1)) = int_mod(y, pow2(4)) by bitwise({32}, y0, mb)
+  have b32: bits_of_int(32, y) = y by defs(simp(hy), bits_of_int)
+  show := rewrite(b32, rewrite(p4, rewrite(m15, e0)))
+qed
+
+// ----------------------------------------------------------------------
+//  memset by its purpose
+
+// the world the spec makes: each of the n bytes at d c's low byte
+abbrev mz.fw(w, d, n, c) := fn_update(w, "vm", fn_update(w.vm, "bytes", fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, d), n), bits_of_int(8, c), w.vm.bytes[x]))))
+
+theorem mz.memset_spec_ok: all w d c n. w in abi.World -> w in univ(1) -> d in bits(64) -> c in bits(64) -> n in bits(64) ->
+  !(d = 0) -> int_lt(n, 9223372036854775808) -> gimple.usable(w.vm, w.objs, d, n, true) ->
+  runs(mallocng_specs.memset_spec(d, c, n), w, ok(mz.fw(w, d, n, c), d))
+proof
+  fix w d c n
+  assume hW hu hd hc hn hnz hn63 hus
+  have _ _ _ bm := apply(ms.world_parts, hW)
+  have fb := mp(fn_build_space[d := bits(64), v := x. ite(int_lt(bits_sub(64, x, d), n), bits_of_int(8, c), w.vm.bytes[x]), b := bits(8)],
+    (all x. x in bits(64) -> ite(int_lt(bits_sub(64, x, d), n), bits_of_int(8, c), w.vm.bytes[x]) in bits(8) by simp(bm)))
+  have ws wu := apply(tr.world_store, {w}, {d}, {0}, {0}, hW, hu, hd)
+  have vu: w.vm in univ(1) by simp(hu)
+  have fu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], fb)
+  have nu: fn_update(w.vm, "bytes", fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, d), n), bits_of_int(8, c), w.vm.bytes[x]))) in univ(1) by simp(vu, fu)
+  have pu: pair(w, ok(mz.fw(w, d, n, c), d)) in univ(1) by simp(hu, nu, hd)
+  show by simp(pu, hnz, hn63, hus, keep(abi.overflow, gimple.usable))
+qed
+
+theorem mz.memset_c2: all d c n. d in bits(64) -> c in bits(64) -> n in bits(64) ->
+  refines(musl_asm.memset(d, c, n), mallocng_specs.memset_spec(d, c, n), abi.World)
+proof
+  fix d c n
+  assume hd hc hn
+  show proof
+    fix w o
+    assume hw hr
+    let SPEC := mallocng_specs.memset_spec(d, c, n)
+    have pu := apply(g.runs_univ, expand(hr, musl_asm.memset))
+    let PRE := !(d = 0) && int_lt(n, 9223372036854775808) && gimple.usable(w.vm, w.objs, d, n, true)
+    // (the requirement not met: anything)
+    have np: !PRE -> runs(SPEC, w, o) proof
+      assume hn2
+      show by simp(pu, hn2, keep(abi.overflow, gimple.usable))
+    qed
+    have yp: PRE -> runs(SPEC, w, o) proof
+      assume hp
+      have hnz hn63 hus := hp
+      have hu: w in univ(1) by simp(pu)
+      have n0: n in omega by simp(hn)
+      have d0: d in omega by simp(hd)
+      have hdn := apply(mp.usable_end, {w.vm}, {w.objs}, {d}, {n}, {true}, hus, hd, n0)
+      step z1 z2 z3 z4 z5 z6 z7 x20, e from hr
+      have e1 e2 := e
+      // more than 126 bytes
+      have big: int_lt(126, n) -> runs(SPEC, w, o) proof
+        assume h126
+        // (the last word: at n - 8, its signed offset n - 8, usable)
+        have s8: bits_sub(64, n, 8) = int_sub(n, 8) := apply(x86.bsub_nowrap, {n}, {8}, n0, simp(), (int_le(8, n) by arith(h126)), (int_lt(n, 18446744073709551616) by arith(hn63)))
+        have v8: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), bits_sub(64, n, 8)) = int_sub(n, 8) by simp(s8, apply(g.sval64_lit, {int_sub(n, 8)}, (int_sub(n, 8) in omega by arith(h126)), (int_lt(int_sub(n, 8), 9223372036854775808) by arith(hn63))))
+        have u8a := mp(mp.usable_sub[vm := w.vm, objs := w.objs, a := d, n := n, k := int_sub(n, 8), m := 8, w := true], (int_sub(n, 8) in omega by arith(h126)), simp(), (int_le(int_add(int_sub(n, 8), 8), n) by arith()), hus)
+        have a8: bits_add(64, d, bits_sub(64, n, 8)) = int_add(d, int_sub(n, 8)) by simp(s8, apply(x86.add_nowrap, {d}, {int_sub(n, 8)}, d0, (int_sub(n, 8) in omega by arith(h126)), (int_lt(int_add(d, int_sub(n, 8)), 18446744073709551616) by arith(hdn, h126))))
+        have u8: gimple.usable(w.vm, w.objs, bits_add(64, d, bits_sub(64, n, 8)), 8, true) by simp(a8, u8a)
+        have wvm wfn wdm bm := apply(ms.world_parts, hw)
+        step g1 from e1 with g.st64_s_det using conj(h126), hu, hd, hnz, v8, u8, hdn, hw, wvm, wfn, wdm
+        // (the world after it: a world)
+        let V := bits_mul(64, bits_of_int(64, bits_of_int(8, c)), 72340172838076673)
+        let W1 := fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, bits_add(64, d, bits_sub(64, n, 8)), 8, V)))
+        have w1W w1u := apply(tr.world_store, {w}, {bits_add(64, d, bits_sub(64, n, 8))}, {8}, {V}, hw, hu, simp())
+        have w1vm0 w1fn w1dm _ := apply(ms.world_parts, w1W)
+        have w1vm: fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, bits_add(64, d, bits_sub(64, n, 8)), 8, V)) in x86_64_linux.Vm by simp(w1vm0)
+        // (d 16-aligned: the n / 8 words from d)
+        have alg: bits_and(32, bits_of_int(32, d), 15) = 0 -> runs(SPEC, w, o) proof
+          assume al
+          let Q := bits_shr(64, n, 3)
+          have qe := apply(mp.shr3, {n}, hn)
+          have q0 r0 := mp(div_nat[x := n, m := 8], n0, simp())
+          have ne: n = int_add(int_mul(8, int_div(n, 8)), int_mod(n, 8)) by arith(n0)
+          have q8: int_le(int_mul(8, Q), n) by arith(qe, ne, r0)
+          have qb: Q in bits(64) by simp(qe, q0, (int_lt(int_div(n, 8), 18446744073709551616) by arith(ne, r0, hn63)))
+          have uq0 := mp(mp.usable_sub[vm := w.vm, objs := w.objs, a := d, n := n, k := 0, m := int_mul(8, Q), w := true], simp(), (int_mul(8, Q) in omega by simp(qb)), (int_le(int_add(0, int_mul(8, Q)), n) by arith(q8)), hus)
+          have uq: gimple.usable(w.vm, w.objs, d, int_mul(8, Q), true) by simp(uq0, d0)
+          have qn: !int_le(int_pow(2, 64), int_mul(8, Q)) by arith(q8, hn63, (int_pow(2, 64) = 18446744073709551616 by simp()))
+          step g2 from g1 with g.fill_det using conj(al), uq, qn, hd, w1u, w1vm, w1fn, w1dm, w1W
+          step g3 from conj(g2, e2)
+          // (the bytes: the last word and the words, covering the n)
+          let k := bits_of_int(8, c)
+          have dg1 dg8 _ _ vb := apply(mz.v_digs, hc)
+          have c0 := apply(mz.cov0, {w.vm.bytes}, {d}, {n}, {k}, bm)
+          have o8: bits_sub(64, n, 8) in omega by simp(s8, (int_sub(n, 8) in omega by arith(h126)))
+          have nb: int_le(n, 18446744073709551616) by arith(hn63)
+          have c1 := apply(mz.cov_store[P := t. false], {w.vm.bytes}, {w.vm.bytes}, {d}, {n}, {k}, {bits_sub(64, n, 8)}, {8}, {V}, {bits_add(64, d, bits_sub(64, n, 8))},
+            c0, hd, o8, simp(), (int_le(int_add(bits_sub(64, n, 8), 8), n) by arith(s8)), nb, dg8, refl({bits_add(64, d, bits_sub(64, n, 8))}))
+          have vo: V in omega by simp(vb)
+          have vl: int_lt(V, 18446744073709551616) by simp(vb)
+          have qo: Q in omega by simp(qb)
+          have df := apply(mz.digs_fillv, {V}, {k}, {Q}, vo, vl, dg8, qo)
+          have c2 := apply(mz.cov_store[P := t. false || (int_le(bits_sub(64, n, 8), t) && int_lt(t, int_add(bits_sub(64, n, 8), 8)))],
+            {x86_64_linux.store_le(w.vm.bytes, bits_add(64, d, bits_sub(64, n, 8)), 8, V)}, {w.vm.bytes}, {d}, {n}, {k}, {0}, {int_mul(8, Q)}, {x86.fillv(V, Q)}, {d},
+            c1, hd, simp(), (int_mul(8, Q) in omega by simp(qo)), (int_le(int_add(0, int_mul(8, Q)), n) by arith(q8)), nb, df, (d = bits_add(64, d, 0) by defs(simp(hd), bits_add)))
+          have all: all t. t in omega -> int_lt(t, n) -> false || (int_le(bits_sub(64, n, 8), t) && int_lt(t, int_add(bits_sub(64, n, 8), 8))) || (int_le(0, t) && int_lt(t, int_add(0, int_mul(8, Q)))) proof
+            fix t
+            assume ht htn
+            show by arith(ht, htn, s8, qe, ne, r0)
+          qed
+          have bw := apply(mz.cov_fin[P := t. false || (int_le(bits_sub(64, n, 8), t) && int_lt(t, int_add(bits_sub(64, n, 8), 8))) || (int_le(0, t) && int_lt(t, int_add(0, int_mul(8, Q))))],
+            {x86_64_linux.store_le(x86_64_linux.store_le(w.vm.bytes, bits_add(64, d, bits_sub(64, n, 8)), 8, V), d, int_mul(8, Q), x86.fillv(V, Q))}, {w.vm.bytes}, {d}, {n}, {k}, c2, all)
+          have sp := apply(mz.memset_spec_ok, {w}, {d}, {c}, {n}, hw, hu, hd, hc, hn, hnz, hn63, hus)
+          have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g3, bw)
+          show := rewrite(sym(e3), sp)
+        qed
+        // (not aligned: d's first 16 bytes, then the words from d + e, e
+        // below 16 its distance to the boundary)
+        have nal: !(bits_and(32, bits_of_int(32, d), 15) = 0) -> runs(SPEC, w, o) proof
+          assume na
+          have u0a := mp(mp.usable_sub[vm := w.vm, objs := w.objs, a := d, n := n, k := 0, m := 8, w := true], simp(), simp(), (int_le(int_add(0, 8), n) by arith(h126)), hus)
+          have u8a := mp(mp.usable_sub[vm := w.vm, objs := w.objs, a := d, n := n, k := 8, m := 8, w := true], simp(), simp(), (int_le(int_add(8, 8), n) by arith(h126)), hus)
+          have dl0: int_lt(int_add(d, 0), pow2(64)) by arith(hdn, h126, (pow2(64) = 18446744073709551616 by simp()))
+          have dl8: int_lt(int_add(d, 8), pow2(64)) by arith(hdn, h126, (pow2(64) = 18446744073709551616 by simp()))
+          // (the worlds after the two: worlds)
+          let B2 := x86_64_linux.store_le(x86_64_linux.store_le(w.vm.bytes, bits_add(64, d, bits_sub(64, n, 8)), 8, V), int_add(d, 0), 8, V)
+          let B3 := x86_64_linux.store_le(B2, int_add(d, 8), 8, V)
+          have w2W w2u := apply(tr.world_store, {W1}, {int_add(d, 0)}, {8}, {V}, w1W, w1u, (int_add(d, 0) in bits(64) by arith(d0, dl0, (pow2(64) = 18446744073709551616 by simp()))))
+          have w2vm0 w2fn0 w2dm0 _ := apply(ms.world_parts, w2W)
+          have w2W2: fn_update(w, "vm", fn_update(w.vm, "bytes", B2)) in abi.World by simp(w2W)
+          have w2u2: fn_update(w, "vm", fn_update(w.vm, "bytes", B2)) in univ(1) by simp(w2u)
+          have w2vm: fn_update(w.vm, "bytes", B2) in x86_64_linux.Vm by simp(w2vm0)
+          have w2fn: is_fun(fn_update(w, "vm", fn_update(w.vm, "bytes", B2))) by simp(w2fn0)
+          have w2dm: "vm" in dom(fn_update(w, "vm", fn_update(w.vm, "bytes", B2))) by simp(w2dm0)
+          have w3W w3u := apply(tr.world_store, {fn_update(w, "vm", fn_update(w.vm, "bytes", B2))}, {int_add(d, 8)}, {8}, {V}, w2W2, w2u2, (int_add(d, 8) in bits(64) by arith(d0, dl8, (pow2(64) = 18446744073709551616 by simp()))))
+          have w3vm0 w3fn0 w3dm0 _ := apply(ms.world_parts, w3W)
+          have w3W2: fn_update(w, "vm", fn_update(w.vm, "bytes", B3)) in abi.World by simp(w3W)
+          have w3u2: fn_update(w, "vm", fn_update(w.vm, "bytes", B3)) in univ(1) by simp(w3u)
+          have w3vm: fn_update(w.vm, "bytes", B3) in x86_64_linux.Vm by simp(w3vm0)
+          have w3fn: is_fun(fn_update(w, "vm", fn_update(w.vm, "bytes", B3))) by simp(w3fn0)
+          have w3dm: "vm" in dom(fn_update(w, "vm", fn_update(w.vm, "bytes", B3))) by simp(w3dm0)
+          // (e: d's distance to the boundary, below 16; the words from d + e)
+          let Y := bits_sub(32, 0, bits_of_int(32, d))
+          let E := bits_and(32, Y, 15)
+          have ee := apply(mz.low4, {Y}, simp())
+          have eo: E in omega && int_lt(E, 16) by simp(ee, (int_mod(Y, 16) in omega && int_lt(int_mod(Y, 16), 16) by arith((Y in bits(32) by simp()))))
+          have eo1 eo2 := eo
+          have e64: bits_of_int(64, E) = E by defs(simp(eo1, eo2), bits_of_int, pow2)
+          have ce: bits_sub(64, n, bits_of_int(64, E)) = int_sub(n, E) := trans(rewrite(e64, refl({bits_sub(64, n, bits_of_int(64, E))}), {2}),
+            apply(x86.bsub_nowrap, {n}, {E}, n0, eo1, (int_le(E, n) by arith(eo2, h126)), (int_lt(n, 18446744073709551616) by arith(hn63))))
+          have de: bits_add(64, d, bits_of_int(64, E)) = int_add(d, E) := trans(rewrite(e64, refl({bits_add(64, d, bits_of_int(64, E))}), {2}),
+            apply(x86.add_nowrap, {d}, {E}, d0, eo1, (int_lt(int_add(d, E), 18446744073709551616) by arith(hdn, eo2, h126))))
+          let Q := bits_shr(64, bits_sub(64, n, bits_of_int(64, E)), 3)
+          have nb2: bits_sub(64, n, bits_of_int(64, E)) in bits(64) by simp()
+          have qe := apply(mp.shr3, {bits_sub(64, n, bits_of_int(64, E))}, nb2)
+          have ne0: int_sub(n, E) in omega by arith(eo2, h126)
+          have q0 r0 := mp(div_nat[x := int_sub(n, E), m := 8], ne0, simp())
+          have nde: int_sub(n, E) = int_add(int_mul(8, int_div(int_sub(n, E), 8)), int_mod(int_sub(n, E), 8)) by arith(ne0)
+          have q8: int_le(int_add(E, int_mul(8, Q)), n) by arith(qe, ce, nde, r0)
+          have qb: Q in bits(64) by simp(qe, ce, q0, (int_lt(int_div(int_sub(n, E), 8), 18446744073709551616) by arith(nde, r0, hn63)))
+          have qo: Q in omega by simp(qb)
+          have uqa := mp(mp.usable_sub[vm := w.vm, objs := w.objs, a := d, n := n, k := E, m := int_mul(8, Q), w := true], eo1, (int_mul(8, Q) in omega by simp(qo)), q8, hus)
+          have uq: gimple.usable(w.vm, w.objs, bits_add(64, d, bits_of_int(64, E)), int_mul(8, Q), true) by simp(de, uqa)
+          have qn: !int_le(int_pow(2, 64), int_mul(8, Q)) by arith(q8, hn63, (int_pow(2, 64) = 18446744073709551616 by simp()))
+          have dEb: bits_add(64, d, bits_of_int(64, E)) in bits(64) by simp()
+          step g2 from g1 with g.st64_det, g.fill_det using conj(na), u0a, u8a, dl0, dl8, hnz, hd, w1u, w1vm, w1fn, w1dm, w1W, w2u2, w2vm, w2fn, w2dm, w2W2,
+            uq, qn, dEb, w3u2, w3vm, w3fn, w3dm, w3W2
+          step g3 from conj(g2, e2)
+          // (the bytes: the last word, the first two, the words from d + e)
+          let k := bits_of_int(8, c)
+          have dg1 dg8 _ _ vb := apply(mz.v_digs, hc)
+          have vo: V in omega by simp(vb)
+          have vl: int_lt(V, 18446744073709551616) by simp(vb)
+          have nb: int_le(n, 18446744073709551616) by arith(hn63)
+          have o8: bits_sub(64, n, 8) in omega by simp(s8, (int_sub(n, 8) in omega by arith(h126)))
+          let P1(t) := false || (int_le(bits_sub(64, n, 8), t) && int_lt(t, int_add(bits_sub(64, n, 8), 8)))
+          let P2(t) := P1(t) || (int_le(0, t) && int_lt(t, int_add(0, 8)))
+          let P3(t) := P2(t) || (int_le(8, t) && int_lt(t, int_add(8, 8)))
+          let P4(t) := P3(t) || (int_le(E, t) && int_lt(t, int_add(E, int_mul(8, Q))))
+          have c0 := apply(mz.cov0, {w.vm.bytes}, {d}, {n}, {k}, bm)
+          have c1 := apply(mz.cov_store[P := t. false], {w.vm.bytes}, {w.vm.bytes}, {d}, {n}, {k}, {bits_sub(64, n, 8)}, {8}, {V}, {bits_add(64, d, bits_sub(64, n, 8))},
+            c0, hd, o8, simp(), (int_le(int_add(bits_sub(64, n, 8), 8), n) by arith(s8)), nb, dg8, refl({bits_add(64, d, bits_sub(64, n, 8))}))
+          have a0: int_add(d, 0) = bits_add(64, d, 0) by defs(simp(hd, d0), bits_add)
+          have c2 := apply(mz.cov_store[P := t. P1(t)], {x86_64_linux.store_le(w.vm.bytes, bits_add(64, d, bits_sub(64, n, 8)), 8, V)}, {w.vm.bytes}, {d}, {n}, {k}, {0}, {8}, {V}, {int_add(d, 0)},
+            c1, hd, simp(), simp(), (int_le(int_add(0, 8), n) by arith(h126)), nb, dg8, a0)
+          have a8b: int_add(d, 8) = bits_add(64, d, 8) := sym(apply(x86.add_nowrap, {d}, {8}, d0, simp(), (int_lt(int_add(d, 8), 18446744073709551616) by arith(hdn, h126))))
+          have c3 := apply(mz.cov_store[P := t. P2(t)], {B2}, {w.vm.bytes}, {d}, {n}, {k}, {8}, {8}, {V}, {int_add(d, 8)},
+            c2, hd, simp(), simp(), (int_le(int_add(8, 8), n) by arith(h126)), nb, dg8, a8b)
+          have df := apply(mz.digs_fillv, {V}, {k}, {Q}, vo, vl, dg8, qo)
+          have aE: bits_add(64, d, bits_of_int(64, E)) = bits_add(64, d, E) := rewrite(e64, refl({bits_add(64, d, bits_of_int(64, E))}), {2})
+          have c4 := apply(mz.cov_store[P := t. P3(t)], {B3}, {w.vm.bytes}, {d}, {n}, {k}, {E}, {int_mul(8, Q)}, {x86.fillv(V, Q)}, {bits_add(64, d, bits_of_int(64, E))},
+            c3, hd, eo1, (int_mul(8, Q) in omega by simp(qo)), q8, nb, df, aE)
+          have all: all t. t in omega -> int_lt(t, n) -> P4(t) proof
+            fix t
+            assume ht htn
+            show by arith(ht, htn, s8, eo1, eo2, qe, ce, nde, r0)
+          qed
+          have bw := apply(mz.cov_fin[P := t. P4(t)], {x86_64_linux.store_le(B3, bits_add(64, d, bits_of_int(64, E)), int_mul(8, Q), x86.fillv(V, Q))}, {w.vm.bytes}, {d}, {n}, {k}, c4, all)
+          have sp := apply(mz.memset_spec_ok, {w}, {d}, {c}, {n}, hw, hu, hd, hc, hn, hnz, hn63, hus)
+          have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g3, bw)
+          show := rewrite(sym(e3), sp)
+        qed
+        show by taut(alg, nal)
+      qed
+      // up to 126 bytes: from both ends
+      have small: !int_lt(126, n) -> runs(SPEC, w, o) proof
+        assume hsm
+        have wvm0 wfn0 wdm0 bm := apply(ms.world_parts, hw)
+        have b32: bits_of_int(32, n) = n by defs(simp(n0, (int_lt(n, 4294967296) by arith(hsm))), bits_of_int, pow2)
+        step g1 from e1 using conj(hsm)
+        have z0: n = 0 -> runs(SPEC, w, o) proof
+          assume h0
+          have b0: bits_of_int(32, n) = 0 by simp(b32, h0)
+          step g2 from conj(g1, e2) using b0
+          have c0 := apply(mz.cov0, {w.vm.bytes}, {d}, {n}, {bits_of_int(8, c)}, bm)
+          have none: all t. t in omega -> int_lt(t, n) -> false proof
+            fix t
+            assume ht htn
+            show by arith(ht, htn, h0)
+          qed
+          have bw := apply(mz.cov_fin[P := t. false], {w.vm.bytes}, {w.vm.bytes}, {d}, {n}, {bits_of_int(8, c)}, c0, none)
+          have vf: is_fun(w.vm) && "bytes" in dom(w.vm) by simp(expand(wvm0, x86_64_linux.Vm))
+          have vs := mp(fn_update_same[f := w.vm, k := "bytes"], taut(vf), taut(vf))
+          have ws := mp(fn_update_same[f := w, k := "vm"], wfn0, wdm0)
+          have sp := apply(mz.memset_spec_ok, {w}, {d}, {c}, {n}, hw, hu, hd, hc, hn, hnz, hn63, hus)
+          have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, sym(bw), vs, ws)
+          show := rewrite(sym(e3), sp)
+        qed
+        // (the shared facts of the stores: c's byte in the values, the
+        // worlds' parts)
+        let k := bits_of_int(8, c)
+        let V := bits_mul(64, bits_of_int(64, bits_of_int(8, c)), 72340172838076673)
+        have dg1 dg8 dg2 dg4 vb := apply(mz.v_digs, hc)
+        have nz: !(n = 0) -> !(bits_of_int(32, n) = 0) by simp(b32)
+        have c0 := apply(mz.cov0, {w.vm.bytes}, {d}, {n}, {k}, bm)
+        have sp := apply(mz.memset_spec_ok, {w}, {d}, {c}, {n}, hw, hu, hd, hc, hn, hnz, hn63, hus)
+        have nb: int_le(n, 18446744073709551616) by arith(hn63)
+        // (from both ends: each size range's stores those of the smaller
+        // ones and two -- or four, eight -- more, the bytes covered so far
+        // kept from range to range)
+        have r1: int_le(1, n) -> runs(SPEC, w, o) proof
+          assume h1
+          have l0 l0u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {0}, {1}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(0, 1), n) by arith(h1)))
+          have s1a s1b s1u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {1}, {1}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), h1)
+          have nz1 := mp(nz, (!(n = 0) by arith(h1)))
+          let B1 := x86_64_linux.store_le(w.vm.bytes, int_add(d, 0), 1, k)
+          let B2 := x86_64_linux.store_le(B1, bits_add(64, d, bits_sub(64, n, 1)), 1, k)
+          let P1(t) := false || (int_le(0, t) && int_lt(t, int_add(0, 1)))
+          let P2(t) := P1(t) || (int_le(int_sub(n, 1), t) && int_lt(t, int_add(int_sub(n, 1), 1)))
+          have c1 := apply(mz.st_lit[Q := t. false], {w.vm.bytes}, {w.vm.bytes}, {d}, {n}, {k}, {0}, {1}, {k}, c0, hd, simp(), simp(), (int_le(int_add(0, 1), n) by arith(h1)), nb, dg1, l0)
+          have c2 := apply(mz.st_sub[Q := t. P1(t)], {B1}, {w.vm.bytes}, {d}, {n}, {k}, {1}, {1}, {k}, c1, hd, hn, simp(), simp(), simp(), h1, dg1)
+          // (1 or 2 bytes: one at each end)
+          have z1: int_le(n, 2) -> runs(SPEC, w, o) proof
+            assume h2
+            have le2: int_le(bits_of_int(32, n), 2) by simp(b32, h2)
+            step g2 from conj(g1, e2) with mz.st8_det, mz.st8_s_det using nz1, le2, hnz, hd, hu, hw, l0, l0u, s1a, s1b, s1u
+            have all: all t. t in omega -> int_lt(t, n) -> P2(t) proof
+              fix t
+              assume ht htn
+              show by arith(ht, htn, h2)
+            qed
+            have bw := apply(mz.cov_fin[P := t. P2(t)], {B2}, {w.vm.bytes}, {d}, {n}, {k}, c2, all)
+            have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, bw)
+            show := rewrite(sym(e3), sp)
+          qed
+          have r3: int_le(3, n) -> runs(SPEC, w, o) proof
+            assume h3
+            have gt2: !int_le(bits_of_int(32, n), 2) by simp(b32, (!int_le(n, 2) by arith(h3)))
+            have l1 l1u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {1}, {2}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(1, 2), n) by arith(h3)))
+            have s3a s3b s3u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {3}, {2}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), h3)
+            let B3 := x86_64_linux.store_le(B2, int_add(d, 1), 2, bits_of_int(16, V))
+            let B4 := x86_64_linux.store_le(B3, bits_add(64, d, bits_sub(64, n, 3)), 2, bits_of_int(16, V))
+            let P3(t) := P2(t) || (int_le(1, t) && int_lt(t, int_add(1, 2)))
+            let P4(t) := P3(t) || (int_le(int_sub(n, 3), t) && int_lt(t, int_add(int_sub(n, 3), 2)))
+            have c3 := apply(mz.st_lit[Q := t. P2(t)], {B2}, {w.vm.bytes}, {d}, {n}, {k}, {1}, {2}, {bits_of_int(16, V)}, c2, hd, simp(), simp(), (int_le(int_add(1, 2), n) by arith(h3)), nb, dg2, l1)
+            have c4 := apply(mz.st_sub[Q := t. P3(t)], {B3}, {w.vm.bytes}, {d}, {n}, {k}, {3}, {2}, {bits_of_int(16, V)}, c3, hd, hn, simp(), simp(), simp(), h3, dg2)
+            // (3 to 6: two more, of 2 bytes)
+            have z2: int_le(n, 6) -> runs(SPEC, w, o) proof
+              assume h6
+              have le6: int_le(bits_of_int(32, n), 6) by simp(b32, h6)
+              step g2 from conj(g1, e2) with mz.st8_det, mz.st8_s_det, mz.st16_det, mz.st16_s_det using nz1, gt2, le6, hnz, hd, hu, hw,
+                l0, l0u, s1a, s1b, s1u, l1, l1u, s3a, s3b, s3u
+              have all: all t. t in omega -> int_lt(t, n) -> P4(t) proof
+                fix t
+                assume ht htn
+                show by arith(ht, htn, h6)
+              qed
+              have bw := apply(mz.cov_fin[P := t. P4(t)], {B4}, {w.vm.bytes}, {d}, {n}, {k}, c4, all)
+              have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, bw)
+              show := rewrite(sym(e3), sp)
+            qed
+            have r7: int_le(7, n) -> runs(SPEC, w, o) proof
+              assume h7
+              have gt6: !int_le(bits_of_int(32, n), 6) by simp(b32, (!int_le(n, 6) by arith(h7)))
+              have l3 l3u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {3}, {4}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(3, 4), n) by arith(h7)))
+              have s7a s7b s7u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {7}, {4}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), h7)
+              let B5 := x86_64_linux.store_le(B4, int_add(d, 3), 4, bits_of_int(32, V))
+              let B6 := x86_64_linux.store_le(B5, bits_add(64, d, bits_sub(64, n, 7)), 4, bits_of_int(32, V))
+              let P5(t) := P4(t) || (int_le(3, t) && int_lt(t, int_add(3, 4)))
+              let P6(t) := P5(t) || (int_le(int_sub(n, 7), t) && int_lt(t, int_add(int_sub(n, 7), 4)))
+              have c5 := apply(mz.st_lit[Q := t. P4(t)], {B4}, {w.vm.bytes}, {d}, {n}, {k}, {3}, {4}, {bits_of_int(32, V)}, c4, hd, simp(), simp(), (int_le(int_add(3, 4), n) by arith(h7)), nb, dg4, l3)
+              have c6 := apply(mz.st_sub[Q := t. P5(t)], {B5}, {w.vm.bytes}, {d}, {n}, {k}, {7}, {4}, {bits_of_int(32, V)}, c5, hd, hn, simp(), simp(), simp(), h7, dg4)
+              // (7 to 14: two more, of 4 bytes)
+              have z3: int_le(n, 14) -> runs(SPEC, w, o) proof
+                assume h14
+                have le14: int_le(bits_of_int(32, n), 14) by simp(b32, h14)
+                step g2 from conj(g1, e2) with mz.st8_det, mz.st8_s_det, mz.st16_det, mz.st16_s_det, mz.st32_det, mz.st32_s_det using nz1, gt2, gt6, le14, hnz, hd, hu, hw,
+                  l0, l0u, s1a, s1b, s1u, l1, l1u, s3a, s3b, s3u, l3, l3u, s7a, s7b, s7u
+                have all: all t. t in omega -> int_lt(t, n) -> P6(t) proof
+                  fix t
+                  assume ht htn
+                  show by arith(ht, htn, h14)
+                qed
+                have bw := apply(mz.cov_fin[P := t. P6(t)], {B6}, {w.vm.bytes}, {d}, {n}, {k}, c6, all)
+                have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, bw)
+                show := rewrite(sym(e3), sp)
+              qed
+              have r15: int_le(15, n) -> runs(SPEC, w, o) proof
+                assume h15
+                have gt14: !int_le(bits_of_int(32, n), 14) by simp(b32, (!int_le(n, 14) by arith(h15)))
+                have l7 l7u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {7}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(7, 8), n) by arith(h15)))
+                have s15a s15b s15u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {15}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), h15)
+                let B7 := x86_64_linux.store_le(B6, int_add(d, 7), 8, V)
+                let B8 := x86_64_linux.store_le(B7, bits_add(64, d, bits_sub(64, n, 15)), 8, V)
+                let P7(t) := P6(t) || (int_le(7, t) && int_lt(t, int_add(7, 8)))
+                let P8(t) := P7(t) || (int_le(int_sub(n, 15), t) && int_lt(t, int_add(int_sub(n, 15), 8)))
+                have c7 := apply(mz.st_lit[Q := t. P6(t)], {B6}, {w.vm.bytes}, {d}, {n}, {k}, {7}, {8}, {V}, c6, hd, simp(), simp(), (int_le(int_add(7, 8), n) by arith(h15)), nb, dg8, l7)
+                have c8 := apply(mz.st_sub[Q := t. P7(t)], {B7}, {w.vm.bytes}, {d}, {n}, {k}, {15}, {8}, {V}, c7, hd, hn, simp(), simp(), simp(), h15, dg8)
+                // (15 to 30: two more, of 8 bytes)
+                have z4: int_le(n, 30) -> runs(SPEC, w, o) proof
+                  assume h30
+                  have le30: int_le(bits_of_int(32, n), 30) by simp(b32, h30)
+                  step g2 from conj(g1, e2) with mz.st8_det, mz.st8_s_det, mz.st16_det, mz.st16_s_det, mz.st32_det, mz.st32_s_det, mz.st64_det, mz.st64_s_det using nz1, gt2, gt6, gt14, le30, hnz, hd, hu, hw,
+                    l0, l0u, s1a, s1b, s1u, l1, l1u, s3a, s3b, s3u, l3, l3u, s7a, s7b, s7u, l7, l7u, s15a, s15b, s15u
+                  have all: all t. t in omega -> int_lt(t, n) -> P8(t) proof
+                    fix t
+                    assume ht htn
+                    show by arith(ht, htn, h30)
+                  qed
+                  have bw := apply(mz.cov_fin[P := t. P8(t)], {B8}, {w.vm.bytes}, {d}, {n}, {k}, c8, all)
+                  have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, bw)
+                  show := rewrite(sym(e3), sp)
+                qed
+                have r31: int_le(31, n) -> runs(SPEC, w, o) proof
+                  assume h31
+                  have gt30: !int_le(bits_of_int(32, n), 30) by simp(b32, (!int_le(n, 30) by arith(h31)))
+                  have l15 l15u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {15}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(15, 8), n) by arith(h31)))
+                  have l23 l23u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {23}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(23, 8), n) by arith(h31)))
+                  have s31a s31b s31u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {31}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), h31)
+                  have s23a s23b s23u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {23}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), (int_le(23, n) by arith(h31)))
+                  let B9 := x86_64_linux.store_le(B8, int_add(d, 15), 8, V)
+                  let B10 := x86_64_linux.store_le(B9, int_add(d, 23), 8, V)
+                  let B11 := x86_64_linux.store_le(B10, bits_add(64, d, bits_sub(64, n, 31)), 8, V)
+                  let B12 := x86_64_linux.store_le(B11, bits_add(64, d, bits_sub(64, n, 23)), 8, V)
+                  let P9(t) := P8(t) || (int_le(15, t) && int_lt(t, int_add(15, 8)))
+                  let P10(t) := P9(t) || (int_le(23, t) && int_lt(t, int_add(23, 8)))
+                  let P11(t) := P10(t) || (int_le(int_sub(n, 31), t) && int_lt(t, int_add(int_sub(n, 31), 8)))
+                  let P12(t) := P11(t) || (int_le(int_sub(n, 23), t) && int_lt(t, int_add(int_sub(n, 23), 8)))
+                  have c9 := apply(mz.st_lit[Q := t. P8(t)], {B8}, {w.vm.bytes}, {d}, {n}, {k}, {15}, {8}, {V}, c8, hd, simp(), simp(), (int_le(int_add(15, 8), n) by arith(h31)), nb, dg8, l15)
+                  have c10 := apply(mz.st_lit[Q := t. P9(t)], {B9}, {w.vm.bytes}, {d}, {n}, {k}, {23}, {8}, {V}, c9, hd, simp(), simp(), (int_le(int_add(23, 8), n) by arith(h31)), nb, dg8, l23)
+                  have c11 := apply(mz.st_sub[Q := t. P10(t)], {B10}, {w.vm.bytes}, {d}, {n}, {k}, {31}, {8}, {V}, c10, hd, hn, simp(), simp(), simp(), h31, dg8)
+                  have c12 := apply(mz.st_sub[Q := t. P11(t)], {B11}, {w.vm.bytes}, {d}, {n}, {k}, {23}, {8}, {V}, c11, hd, hn, simp(), simp(), simp(), (int_le(23, n) by arith(h31)), dg8)
+                  // (31 to 62: four more, of 8 bytes)
+                  have z5: int_le(n, 62) -> runs(SPEC, w, o) proof
+                    assume h62
+                    have le62: int_le(bits_of_int(32, n), 62) by simp(b32, h62)
+                    step g2 from conj(g1, e2) with mz.st8_det, mz.st8_s_det, mz.st16_det, mz.st16_s_det, mz.st32_det, mz.st32_s_det, mz.st64_det, mz.st64_s_det using nz1, gt2, gt6, gt14, gt30, le62, hnz, hd, hu, hw,
+                      l0, l0u, s1a, s1b, s1u, l1, l1u, s3a, s3b, s3u, l3, l3u, s7a, s7b, s7u, l7, l7u, s15a, s15b, s15u, l15, l15u, l23, l23u, s31a, s31b, s31u, s23a, s23b, s23u
+                    have all: all t. t in omega -> int_lt(t, n) -> P12(t) proof
+                      fix t
+                      assume ht htn
+                      show by arith(ht, htn, h62)
+                    qed
+                    have bw := apply(mz.cov_fin[P := t. P12(t)], {B12}, {w.vm.bytes}, {d}, {n}, {k}, c12, all)
+                    have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, bw)
+                    show := rewrite(sym(e3), sp)
+                  qed
+                  // (63 to 126: eight more, of 8 bytes)
+                  have z6: int_le(63, n) -> runs(SPEC, w, o) proof
+                    assume h63
+                    have gt62: !int_le(bits_of_int(32, n), 62) by simp(b32, (!int_le(n, 62) by arith(h63)))
+                    have l31 l31u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {31}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(31, 8), n) by arith(h63)))
+                    have l39 l39u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {39}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(39, 8), n) by arith(h63)))
+                    have l47 l47u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {47}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(47, 8), n) by arith(h63)))
+                    have l55 l55u := apply(mz.lit_ok, {w.vm}, {w.objs}, {d}, {n}, {55}, {8}, hd, hus, hdn, simp(), simp(), simp(), (int_le(int_add(55, 8), n) by arith(h63)))
+                    have s63a s63b s63u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {63}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), h63)
+                    have s55a s55b s55u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {55}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), (int_le(55, n) by arith(h63)))
+                    have s47a s47b s47u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {47}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), (int_le(47, n) by arith(h63)))
+                    have s39a s39b s39u := apply(mz.sub_ok, {w.vm}, {w.objs}, {d}, {n}, {39}, {8}, hd, hn, hus, hdn, hn63, simp(), simp(), simp(), simp(), (int_le(39, n) by arith(h63)))
+                    step g2 from conj(g1, e2) with mz.st8_det, mz.st8_s_det, mz.st16_det, mz.st16_s_det, mz.st32_det, mz.st32_s_det, mz.st64_det, mz.st64_s_det using nz1, gt2, gt6, gt14, gt30, gt62, hnz, hd, hu, hw,
+                      l0, l0u, s1a, s1b, s1u, l1, l1u, s3a, s3b, s3u, l3, l3u, s7a, s7b, s7u, l7, l7u, s15a, s15b, s15u, l15, l15u, l23, l23u, s31a, s31b, s31u, s23a, s23b, s23u,
+                      l31, l31u, l39, l39u, l47, l47u, l55, l55u, s63a, s63b, s63u, s55a, s55b, s55u, s47a, s47b, s47u, s39a, s39b, s39u
+                    let B13 := x86_64_linux.store_le(B12, int_add(d, 31), 8, V)
+                    let B14 := x86_64_linux.store_le(B13, int_add(d, 39), 8, V)
+                    let B15 := x86_64_linux.store_le(B14, int_add(d, 47), 8, V)
+                    let B16 := x86_64_linux.store_le(B15, int_add(d, 55), 8, V)
+                    let B17 := x86_64_linux.store_le(B16, bits_add(64, d, bits_sub(64, n, 63)), 8, V)
+                    let B18 := x86_64_linux.store_le(B17, bits_add(64, d, bits_sub(64, n, 55)), 8, V)
+                    let B19 := x86_64_linux.store_le(B18, bits_add(64, d, bits_sub(64, n, 47)), 8, V)
+                    let P13(t) := P12(t) || (int_le(31, t) && int_lt(t, int_add(31, 8)))
+                    let P14(t) := P13(t) || (int_le(39, t) && int_lt(t, int_add(39, 8)))
+                    let P15(t) := P14(t) || (int_le(47, t) && int_lt(t, int_add(47, 8)))
+                    let P16(t) := P15(t) || (int_le(55, t) && int_lt(t, int_add(55, 8)))
+                    let P17(t) := P16(t) || (int_le(int_sub(n, 63), t) && int_lt(t, int_add(int_sub(n, 63), 8)))
+                    let P18(t) := P17(t) || (int_le(int_sub(n, 55), t) && int_lt(t, int_add(int_sub(n, 55), 8)))
+                    let P19(t) := P18(t) || (int_le(int_sub(n, 47), t) && int_lt(t, int_add(int_sub(n, 47), 8)))
+                    let P20(t) := P19(t) || (int_le(int_sub(n, 39), t) && int_lt(t, int_add(int_sub(n, 39), 8)))
+                    have c13 := apply(mz.st_lit[Q := t. P12(t)], {B12}, {w.vm.bytes}, {d}, {n}, {k}, {31}, {8}, {V}, c12, hd, simp(), simp(), (int_le(int_add(31, 8), n) by arith(h63)), nb, dg8, l31)
+                    have c14 := apply(mz.st_lit[Q := t. P13(t)], {B13}, {w.vm.bytes}, {d}, {n}, {k}, {39}, {8}, {V}, c13, hd, simp(), simp(), (int_le(int_add(39, 8), n) by arith(h63)), nb, dg8, l39)
+                    have c15 := apply(mz.st_lit[Q := t. P14(t)], {B14}, {w.vm.bytes}, {d}, {n}, {k}, {47}, {8}, {V}, c14, hd, simp(), simp(), (int_le(int_add(47, 8), n) by arith(h63)), nb, dg8, l47)
+                    have c16 := apply(mz.st_lit[Q := t. P15(t)], {B15}, {w.vm.bytes}, {d}, {n}, {k}, {55}, {8}, {V}, c15, hd, simp(), simp(), (int_le(int_add(55, 8), n) by arith(h63)), nb, dg8, l55)
+                    have c17 := apply(mz.st_sub[Q := t. P16(t)], {B16}, {w.vm.bytes}, {d}, {n}, {k}, {63}, {8}, {V}, c16, hd, hn, simp(), simp(), simp(), h63, dg8)
+                    have c18 := apply(mz.st_sub[Q := t. P17(t)], {B17}, {w.vm.bytes}, {d}, {n}, {k}, {55}, {8}, {V}, c17, hd, hn, simp(), simp(), simp(), (int_le(55, n) by arith(h63)), dg8)
+                    have c19 := apply(mz.st_sub[Q := t. P18(t)], {B18}, {w.vm.bytes}, {d}, {n}, {k}, {47}, {8}, {V}, c18, hd, hn, simp(), simp(), simp(), (int_le(47, n) by arith(h63)), dg8)
+                    have c20 := apply(mz.st_sub[Q := t. P19(t)], {B19}, {w.vm.bytes}, {d}, {n}, {k}, {39}, {8}, {V}, c19, hd, hn, simp(), simp(), simp(), (int_le(39, n) by arith(h63)), dg8)
+                    have all: all t. t in omega -> int_lt(t, n) -> P20(t) proof
+                      fix t
+                      assume ht htn
+                      show by arith(ht, htn, hsm)
+                    qed
+                    have bw := apply(mz.cov_fin[P := t. P20(t)], {x86_64_linux.store_le(B19, bits_add(64, d, bits_sub(64, n, 39)), 8, V)}, {w.vm.bytes}, {d}, {n}, {k}, c20, all)
+                    have e3: o = ok(mz.fw(w, d, n, c), d) by simp(g2, bw)
+                    show := rewrite(sym(e3), sp)
+                  qed
+                  show by taut(z5, z6, (int_le(n, 62) || int_le(63, n) by arith()))
+                qed
+                show by taut(z4, r31, (int_le(n, 30) || int_le(31, n) by arith()))
+              qed
+              show by taut(z3, r15, (int_le(n, 14) || int_le(15, n) by arith()))
+            qed
+            show by taut(z2, r7, (int_le(n, 6) || int_le(7, n) by arith()))
+          qed
+          show by taut(z1, r3, (int_le(n, 2) || int_le(3, n) by arith()))
+        qed
+        show by taut(z0, r1, (n = 0 || int_le(1, n) by arith(n0)))
+      qed
+      show by taut(big, small)
+    qed
+    show by taut(np, yp)
+  qed
 qed

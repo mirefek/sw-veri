@@ -186,12 +186,12 @@ The binary as linked (gcc's crtbegin included). The steps:
     top turns the stop's startup view (tr.at_tm(false, ..)) into main's
     world.
 - memset (src/string/x86_64/memset.s; layers/musl_asm.sl, its CFG
-  musl_asm_cfg.sl): C1 in the startup mode done (proofs/translate_memset.core:
-  stores at computed offsets, `g.mem_defined_s`; the `test` kept to its
-  `jne`; `rep stosq` as one store of x86.fillv's words, x86.store_cat).
-  Left: its CFG ⊑ structured (refines), its purpose spec (the n bytes at
-  d all c's low byte) and C2, the call rule of `call memset` against
-  GIMPLE's `st_bytes` (`__init_libc`'s zeroed aux array).
+  musl_asm_cfg.sl): C1 in the startup mode, refines, C2 against
+  mallocng_specs.memset_spec (proofs/mallocng/fun/memset.core: the bytes
+  covered by the stores, mz.cov). Left: memset_fun's C2 and the composed
+  startup contract (a spec-refinement lemma for tr.impl_m), the call rule
+  of `call memset` against GIMPLE's `st_bytes` (`__init_libc`'s zeroed aux
+  array).
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
