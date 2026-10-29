@@ -1507,6 +1507,73 @@ proof
   show by defs(simp(hw, h2, he, hn, bd, keep(gimple.usable, gimple.write_bytes)), musl_asm.fill_words, letin)
 qed
 
+// (its effects, for the bookkeeping of its callers -- slc's eff.rs: a
+// defined fill writes only usable bytes, its world valid; an undefined one
+// allows every exception and divergence)
+theorem tr.fill_valid: all w d v c w2 r. g.fill_ok(w, bits_of_int(64, d), c) -> runs(musl_asm.fill_words(d, v, c), w, ok(w2, r)) -> tr.returns_valid(w, w2)
+proof
+  fix w d v c w2 r
+  assume hm h
+  have hd: bits_of_int(64, d) in bits(64) by simp()
+  have hus _ := hm
+  obtain x2, hc hk from expand(apply(g.runs_elim, expand(h, musl_asm.fill_words)), letin)
+  have e2: x2 = ok(pair(w, empty), empty) by taut(hc, hm)
+  let SUM := int_sum(0, c, x0. int_mul(v, int_pow(2, int_mul(64, x0))))
+  have b: bind_rel(gimple.write_bytes(bits_of_int(64, d), int_mul(8, c), SUM), w, x3 x4. ok(w2, r) = ok(x3, empty), x3 x4. ok(w2, r) = exc(x3, x4), x3. ok(w2, r) = diverge(x3))
+    by simp(rewrite(e2, hk), keep(gimple.write_bytes))
+  obtain o2, hw hc2 from expand(b, bind_rel)
+  have d2: (ex s3 r3. o2 = ok(s3, r3) && ok(w2, r) = ok(s3, empty)) -> tr.returns_valid(w, w2) proof
+    assume e
+    obtain s3 r3, eo ee from e
+    have e3: w2 = s3 by simp(ee)
+    have wo := apply(tr.write_wr, {w}, {bits_of_int(64, d)}, {int_mul(8, c)}, {SUM}, {s3}, {r3}, rewrite(eo, hw), hus, hd)
+    show := rewrite(sym(e3), apply(tr.wr_only_valid, wo))
+  qed
+  have d3: (ex s3 e3. o2 = exc(s3, e3) && ok(w2, r) = exc(s3, e3)) -> tr.returns_valid(w, w2) proof
+    assume e
+    obtain s3 e3, _ ee from e
+    show by simp(ee)
+  qed
+  have d4: (ex t. o2 = diverge(t) && ok(w2, r) = diverge(t)) -> tr.returns_valid(w, w2) proof
+    assume e
+    obtain t, _ ee from e
+    show by simp(ee)
+  qed
+  show by taut(hc2, d2, d3, d4)
+qed
+
+theorem tr.eff_musl_asm_fill_words: all w d v c. tr.eff(w, o. runs(musl_asm.fill_words(d, v, c), w, o))
+proof
+  fix w d v c
+  have a1: g.fill_ok(w, bits_of_int(64, d), c) -> (all w2 r. runs(musl_asm.fill_words(d, v, c), w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hm
+    fix w2 r
+    assume h
+    show := apply(tr.fill_valid, {w}, {d}, {v}, {c}, {w2}, {r}, hm, h)
+  qed
+  have a2: w in univ(1) -> !g.fill_ok(w, bits_of_int(64, d), c) -> tr.undef(o. runs(musl_asm.fill_words(d, v, c), w, o)) proof
+    assume hw hn2
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(musl_asm.fill_words(d, v, c), w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      show by defs(simp(hw, hx, he, hn2, keep(gimple.usable, gimple.write_bytes)), musl_asm.fill_words, letin)
+    qed
+    have dv: all t. t in univ(1) -> runs(musl_asm.fill_words(d, v, c), w, diverge(t)) proof
+      fix t
+      assume ht
+      show by defs(simp(hw, ht, hn2, keep(gimple.usable, gimple.write_bytes)), musl_asm.fill_words, letin)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
+  qed
+  have a3: !(w in univ(1)) -> (all w2 r. runs(musl_asm.fill_words(d, v, c), w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hn2
+    fix w2 r
+    assume h
+    show by taut(hn2, apply(tr.runs_univ, h))
+  qed
+  show by defs(taut(a1, a2, a3), tr.eff)
+qed
+
 // a step storing n bytes of x at dd (the spec's store there: writable),
 // the registers G's (as tr.move_step, the value any)
 theorem tr.store_steps(zb. bkp, zb pb wb. bka, g. G): all s v base code fr a a2 dd n x hs ds rs rs2 p p2 w w2. tr.hap(s, hs, v) ->

@@ -678,6 +678,71 @@ proof
   show by taut(c, k)
 qed
 
+// ... the startup mode's call0 (the thread not checked, the callee's world
+// with the caller's objects back: gc.back0)
+theorem gc.call0_cases: all g args s o. runs(gimple.call0(g, args), s, o) -> o = exc(s, exc_val("stack_overflow", empty)) || gc.cc0(g, args, s, o)
+proof
+  fix g args s o
+  assume h
+  show by simp(h, keep(gimple.call0_callee, bind_rel))
+qed
+
+theorem gc.cc0_inv: all g args s o. runs(gimple.call0_callee(g, args), s, o) -> (ex regs. gc.regs_ok(regs, args)) ->
+  ex regs o2. gc.regs_ok(regs, args) && runs(g[regs], s, o2) &&
+    ((ex w4 r. o2 = ok(w4, r) && o = ok(gc.back0(w4, s), pair(fst(r), snd(r)))) || (ex x e. o2 = exc(x, e) && o = exc(x, e)) || (ex t. o2 = diverge(t) && o = diverge(t)))
+proof
+  fix g args s o
+  assume h he
+  show by simp(h, he)
+qed
+
+theorem gc.call0_inv(o2. Q): all g args s o. (ex regs. gc.regs_ok(regs, args)) ->
+  (all regs o2. gc.regs_ok(regs, args) -> runs(g[regs], s, o2) -> Q(o2)) ->
+  runs(gimple.call0(g, args), s, o) ->
+  o = exc(s, exc_val("stack_overflow", empty)) ||
+  (ex w4 r. Q(ok(w4, r)) && (o = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back0(w4, s), exc_val("stack_overflow", empty)))) ||
+  (ex x e. Q(exc(x, e)) && o = exc(x, e)) || (ex t. Q(diverge(t)) && o = diverge(t))
+proof
+  fix g args s o
+  assume he hq h
+  have c := apply(gc.call0_cases, h)
+  have k: gc.cc0(g, args, s, o) ->
+      (ex w4 r. Q(ok(w4, r)) && (o = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back0(w4, s), exc_val("stack_overflow", empty)))) ||
+      (ex x e. Q(exc(x, e)) && o = exc(x, e)) || (ex t. Q(diverge(t)) && o = diverge(t)) proof
+    assume hc
+    obtain o1, hr hk from expand(hc, bind_rel)
+    have ci := apply(gc.cc0_inv, hr, he)
+    obtain regs o2, r1 r2 r3 hrun hcs from ci
+    have hro: gc.regs_ok(regs, args) by taut(r1, r2, r3)
+    have q := mp(all_elim(hq, {regs}, {o2}), hro, hrun)
+    let OVF := exc_val("stack_overflow", empty)
+    have ca: (ex w4 r. o2 = ok(w4, r) && o1 = ok(gc.back0(w4, s), pair(fst(r), snd(r)))) ->
+        (ex w4 r. Q(ok(w4, r)) && (o = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back0(w4, s), OVF))) proof
+      assume ha
+      obtain w4 r, e2 e1 from ha
+      have qa := rewrite(e2, q)
+      have oo: o = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || o = exc(gc.back0(w4, s), OVF) by simp(hk, e1)
+      show by ex_intro({w4}, {r}, taut(qa, oo))
+    qed
+    have cb: (ex x e. o2 = exc(x, e) && o1 = exc(x, e)) -> (ex x e. Q(exc(x, e)) && o = exc(x, e)) proof
+      assume hb
+      obtain x e, e2 e1 from hb
+      have qb := rewrite(e2, q)
+      have oo: o = exc(x, e) by simp(hk, e1)
+      show by ex_intro({x}, {e}, taut(qb, oo))
+    qed
+    have cc: (ex t. o2 = diverge(t) && o1 = diverge(t)) -> (ex t. Q(diverge(t)) && o = diverge(t)) proof
+      assume hd
+      obtain t, e2 e1 from hd
+      have qd := rewrite(e2, q)
+      have oo: o = diverge(t) by simp(hk, e1)
+      show by ex_intro({t}, taut(qd, oo))
+    qed
+    show by taut(hcs, ca, cb, cc)
+  qed
+  show by taut(c, k)
+qed
+
 // a call's arguments, registers for them existing (built along the list:
 // `step` composes `gc.regs_one` and `gc.regs_cat` by the arguments' nesting)
 abbrev gc.regs_for(args) := args in list_type(univ(1)) && (ex regs. gc.regs_ok(regs, args))

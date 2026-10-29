@@ -1094,3 +1094,240 @@ proof
   show := mp(all_elim(tr.impl_m_refine, {false}, {true}, {4214052}, {musl_asm.memset_fun()}, {mallocng_specs.memset_spec_fun()}, {4198873}, {false}, {4198400}, {text.code}, {statics}),
     st, mz.memset_fun_c2)
 qed
+
+// ----------------------------------------------------------------------
+//  memset at a call
+
+// (n usable bytes at d, d not null: an overflow, or the n bytes c's low
+// byte, d returned)
+theorem mz.ms_q: all t d c n regs o2. t in abi.World -> t in univ(1) -> d in bits(64) -> c in bits(64) -> n in bits(64) ->
+  !(d = 0) -> int_lt(n, 9223372036854775808) -> gimple.usable(t.vm, t.objs, d, n, true) ->
+  gc.regs_ok(regs, seq_concat(seq_concat(seq_one(gimple.arg(64, d)), seq_one(gimple.arg(64, c))), seq_one(gimple.arg(64, n)))) ->
+  runs(mallocng_specs.memset_spec_fun()[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex r. o2 = ok(mz.fw(t, d, n, c), r) && fst(r) = d)
+proof
+  fix t d c n regs o2
+  assume hw htu hd hc hn hnz hn63 hus hro h
+  let OVF := exc_val("stack_overflow", empty)
+  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, d)), seq_one(gimple.arg(64, c))), seq_one(gimple.arg(64, n)))
+  have rl rln _ := hro
+  have an: seq_len(ARGS) = 3 by simp()
+  have rn: seq_len(regs) = 3 := trans(rln, an)
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := d], hro, simp(), simp(an), at({ARGS[0]}), simp(), hd)
+  have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 64, x := c], hro, simp(), simp(an), at({ARGS[1]}), simp(), hc)
+  have q2 := apply(gc.reg_at[regs := regs, args := ARGS, i := 2, w := 64, x := n], hro, simp(), simp(an), at({ARGS[2]}), simp(), hn)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, mallocng_specs.memset_spec_fun, app_fn_build, ra in h
+  have o3l: ord_le(3, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q2, rewrite(q1, rewrite(q0, apply(g.runs_elim, h))))
+  have b2: bind_rel(mallocng_specs.memset_spec(d, c, n), t, x0 x1. letin(x1, x2. bind_rel(gimple.result(64, x2), x0, x3 x4. any_rel(x5. x5 in bits(64), x5. o2 = ok(x3, pair(x4, x5))),
+      x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))), x0 x1. o2 = exc(x0, x1), x0. o2 = diverge(x0)) by taut(b, o3l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  rsimp only, mallocng_specs.memset_spec in hs3
+  have hp2: int_lt(n, int_pow(2, 63)) by simp(hn63)
+  obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), (!(d = 0) && int_lt(n, int_pow(2, 63)) && gimple.usable(t.vm, t.objs, d, n, true) by taut(hnz, hp2, hus)))
+  let T2 := mz.fw(t, d, n, c)
+  have k1: case 1 of hbr proof
+    assume e
+    rsimp only, abi.overflow in e
+    have pv _ _ _ := apply(ms.world_parts, hw)
+    have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x0 = exc(pair(fn_update(fn_update(t, "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e, vv, ct.objs_ne)
+    obtain v ob, hv hob hx from l
+    have oe: o3 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
+    have o2e: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(oe, hk3))
+    have x: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, o2e))
+    show by taut(x)
+  qed
+  have k2: case 2 of hbr proof
+    assume e
+    have e2: x0 = exc(pair(T2, empty), pair("ret", d)) by simp(expand(e, letin))
+    have oe: o3 = ok(T2, d) by simp(rewrite(e2, hout))
+    have k4: bind_rel(gimple.result(64, d), T2, x3 x4. any_rel(x5. x5 in bits(64), x5. o2 = ok(x3, pair(x4, x5))), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
+      by simp(expand(rewrite(oe, hk3), letin), keep(bind_rel, gimple.result))
+    obtain o4, hr4 hk4 from expand(k4, bind_rel)
+    have ho4 := apply(g.result64_inv, hd, hr4)
+    have k5: any_rel(x5. x5 in bits(64), x5. o2 = ok(T2, pair(d, x5))) by simp(expand(rewrite(ho4, hk4), letin), keep(any_rel))
+    obtain z, hz hoz from apply(g.any_e, (ex z. z in bits(64) by ex_intro({0}, simp())), k5)
+    have x: ex r. o2 = ok(T2, r) && fst(r) = d by ex_intro({pair(d, z)}, taut(hoz, (fst(pair(d, z)) = d by simp())))
+    show by taut(x)
+  qed
+  show by taut(hbr, k1, k2)
+qed
+
+// (n zero bytes at a by memset: the world the zero store makes)
+theorem mz.fw_zero: all w p off a n. w in abi.World -> p in bits(64) -> off in bits(32) -> a = bits_add(64, p, off) -> int_lt(int_add(p, off), pow2(64)) ->
+  n in omega -> int_le(n, 18446744073709551616) ->
+  mz.fw(w, a, n, 0) = fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, int_add(p, off), n, 0)))
+proof
+  fix w p off a n
+  assume hw hp ho ha hlt hn hnb
+  have _ _ _ bm := apply(ms.world_parts, hw)
+  have p0: p in omega by simp(hp)
+  have o0: off in omega by simp(ho)
+  have ia: int_add(p, off) = a := trans(sym(apply(x86.add_nowrap, {p}, {off}, p0, o0, (int_lt(int_add(p, off), 18446744073709551616) by arith(hlt, (pow2(64) = 18446744073709551616 by simp()))))), sym(ha))
+  have ab: a in bits(64) by simp(ha)
+  let k := bits_of_int(8, 0)
+  have c0 := apply(mz.cov0, {w.vm.bytes}, {a}, {n}, {k}, bm)
+  have dz: mz.digs(0, n, k) proof
+    fix i
+    assume hi hil
+    have pp := mp(all_elim(pow256_pos, {i}), hi)
+    have d0 _ := mp(div_unique[x := 0, m := int_pow(256, i), q := 0, r := 0], simp(), simp(), simp(), pp, pp, (0 = int_add(int_mul(int_pow(256, i), 0), 0) by arith()))
+    show by simp(d0)
+  qed
+  have a0: int_add(p, off) = bits_add(64, a, 0) := trans(ia, (a = bits_add(64, a, 0) by defs(simp(ab), bits_add)))
+  have c1 := apply(mz.cov_store[P := t. false], {w.vm.bytes}, {w.vm.bytes}, {a}, {n}, {k}, {0}, {n}, {0}, {int_add(p, off)}, c0, ab, simp(), hn, (int_le(int_add(0, n), n) by arith(hn)), hnb, dz, a0)
+  have all: all t. t in omega -> int_lt(t, n) -> false || (int_le(0, t) && int_lt(t, int_add(0, n))) proof
+    fix t
+    assume ht htn
+    show by arith(ht, htn)
+  qed
+  have bw := apply(mz.cov_fin[P := t. false || (int_le(0, t) && int_lt(t, int_add(0, n)))], {x86_64_linux.store_le(w.vm.bytes, int_add(p, off), n, 0)}, {w.vm.bytes}, {a}, {n}, {k}, c1, all)
+  show by simp(bw)
+qed
+
+// The zero store implemented by a call to memset (its result unused): the
+// call's runs the store's, but the overflows -- at the call, in memset,
+// after it -- with the I/O as at the call (w's, the entry's, as nothing
+// was written yet)
+theorem mz.stz_incl(x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw): all s w p off data a n.
+  w in abi.World -> w in univ(1) -> p in bits(64) -> off in bits(32) -> data in list_type(omega) && tr.zeros(data) -> a = bits_add(64, p, off) -> n = seq_len(data) ->
+  int_lt(n, 9223372036854775808) -> g.mem_defined(w, p, off, n, true) -> w.os.events = s.os.events ->
+  (all x e x8 y. xx(x, e, x8) -> k(x8, y) -> y = exc(x, e)) ->
+  all o. runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.call0(musl_asm_cfg.memset_fun(), seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, 0))), seq_one(gimple.arg(64, n)))), x0,
+      x9 x10. ka(x9, empty, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) ->
+  runs(mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.st_bytes(p, off, data), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+    x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) || tr.ovs(s, o)
+proof
+  fix s w p off data a n
+  assume hW hu hp ho hdz ha hln hn63 hdf hev hpr
+  fix o
+  assume hr
+  let OVF := exc_val("stack_overflow", empty)
+  let G := musl_asm_cfg.memset_fun()
+  let ARGS := seq_concat(seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, 0))), seq_one(gimple.arg(64, n)))
+  let IC := mkprog(x0 x1. ex x8. bind_rel(gimple.call0(G, ARGS), x0, x9 x10. ka(x9, empty, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1))
+  let IS := mkprog(x0 x1. ex x8. bind_rel(gimple.st_bytes(p, off, data), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1))
+  let GOAL := runs(mkprog(x1 x2. bind_rel(IS, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w, o) || tr.ovs(s, o)
+  have pu := apply(g.runs_univ, hr)
+  obtain y, hy hky from expand(apply(g.runs_elim, hr), bind_rel)
+  have yu := apply(g.runs_univ, hy)
+  obtain x8, hb8 hk8 from apply(g.runs_elim, hy)
+  obtain z, hz hkz from expand(hb8, bind_rel)
+  // (the parts: the arguments' registers, the address, the world's)
+  have hl hz0 := hdz
+  have nz hlt hus := hdf
+  have p0: p in omega by simp(hp)
+  have o0: off in omega by simp(ho)
+  have ia: int_add(p, off) = a := trans(sym(apply(x86.add_nowrap, {p}, {off}, p0, o0, (int_lt(int_add(p, off), 18446744073709551616) by arith(hlt, (pow2(64) = 18446744073709551616 by simp()))))), sym(ha))
+  have ab: a in bits(64) by simp(ha)
+  have n0: n in omega by simp(hln, hl)
+  have nb: n in bits(64) by simp(n0, (int_lt(n, 18446744073709551616) by arith(hn63)))
+  have anz: !(a = 0) by arith(ia, p0, o0, nz)
+  have aus: gimple.usable(w.vm, w.objs, a, n, true) := rewrite(ia, hus)
+  have ra1 := mp(gc.regs_one[w := 64, x := a], simp(), simp(), ab)
+  have ra2 := mp(gc.regs_one[w := 64, x := 0], simp(), simp(), simp())
+  have ra3 := mp(gc.regs_one[w := 64, x := n], simp(), simp(), nb)
+  have ra12 := mp(gc.regs_cat[a := seq_one(gimple.arg(64, a)), b := seq_one(gimple.arg(64, 0))], ra1, ra2)
+  have rf := mp(gc.regs_cat[a := seq_concat(seq_one(gimple.arg(64, a)), seq_one(gimple.arg(64, 0))), b := seq_one(gimple.arg(64, n))], ra12, ra3)
+  have _ er := rf
+  // (memset's outcomes on the world: its purpose spec's, by its refinements)
+  have hq: all regs o2. gc.regs_ok(regs, ARGS) -> runs(G[regs], w, o2) -> abi.ovf_out(w, o2) || (ex r. o2 = ok(mz.fw(w, a, n, 0), r) && fst(r) = a) proof
+    fix regs o2
+    assume hro hg
+    have rl rln _ := hro
+    have l3: seq_len(regs) = 3 := trans(rln, (seq_len(ARGS) = 3 by simp()))
+    have l6: int_le(seq_len(regs), 6) by arith(l3)
+    have h2 := mp(all_elim(memset_ref, {regs}, {w}, {o2}), rl, l6, hW, hg)
+    have h3 := mp(all_elim(mz.memset_fun_c2, {regs}, {w}, {o2}), rl, l6, hW, h2)
+    show := apply(mz.ms_q, {w}, {a}, {0}, {n}, {regs}, {o2}, hW, hu, ab, simp(), nb, anz, hn63, aus, hro, h3)
+  qed
+  have ci := apply(gc.call0_inv[Q := o2. abi.ovf_out(w, o2) || (ex r. o2 = ok(mz.fw(w, a, n, 0), r) && fst(r) = a)], {G}, {ARGS}, {w}, {z}, er, hq, hz)
+  // an overflow at x, its I/O w's: an overflow of the entry's I/O
+  have ovk: all x. z = exc(x, OVF) -> x.os.events = w.os.events -> GOAL proof
+    fix x
+    assume ze xe
+    have xh: ex s1 e. z = exc(s1, e) && xx(s1, e, x8) by simp(hkz, ze)
+    obtain s1 e, ze2 hxx from xh
+    have se: s1 = x && e = OVF by simp(ze, ze2)
+    have s1e e1 := se
+    have ye := mp(all_elim(hpr, {s1}, {e}, {x8}, {y}), hxx, hk8)
+    have oe: o = exc(s1, e) by simp(hky, ye)
+    have ov: tr.ovs(s, o) by ex_intro({x}, simp(oe, s1e, e1, xe, hev))
+    show by taut(ov)
+  qed
+  have c1: z = exc(w, OVF) -> GOAL proof
+    assume ze
+    show := mp(all_elim(ovk, {w}), ze, refl({w.os.events}))
+  qed
+  // (memset's return: the zero store's world)
+  have c2: (ex w4 r. (abi.ovf_out(w, ok(w4, r)) || (ex r2. ok(w4, r) = ok(mz.fw(w, a, n, 0), r2) && fst(r2) = a)) &&
+      (z = ok(gc.back0(w4, w), pair(fst(r), snd(r))) || z = exc(gc.back0(w4, w), OVF))) -> GOAL proof
+    assume e
+    obtain w4 r, hq4 hz4 from e
+    have w4e: w4 = mz.fw(w, a, n, 0) by simp(hq4)
+    have bfw: gc.back0(w4, w) = mz.fw(w, a, n, 0) by simp(w4e, all_elim(gc.back0_vm, {w}, {fn_update(w.vm, "bytes", fn_build(bits(64), x. ite(int_lt(bits_sub(64, x, a), n), bits_of_int(8, 0), w.vm.bytes[x])))}), hW)
+    let WS := fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, int_add(p, off), n, 0)))
+    have fz := apply(mz.fw_zero, {w}, {p}, {off}, {a}, {n}, hW, hp, ho, ha, hlt, n0, (int_le(n, 18446744073709551616) by arith(hn63)))
+    have bws: gc.back0(w4, w) = WS := trans(bfw, fz)
+    have d1: z = ok(gc.back0(w4, w), pair(fst(r), snd(r))) -> GOAL proof
+      assume ze
+      have kz: ka(gc.back0(w4, w), empty, x8) by simp(hkz, ze)
+      have kah: ka(WS, empty, x8) := rewrite(bws, kz)
+      have wv wf wd _ := apply(ms.world_parts, hW)
+      have sr := apply(g.stz_ok, {w}, {p}, {off}, {data}, hu, hp, ho, hl, hz0, rewrite(hln, hdf), wv, wf, wd)
+      have sr2: runs(gimple.st_bytes(p, off, data), w, ok(WS, empty)) := rewrite(sym(hln), sr)
+      have bs := apply(gc.bind_ok[p := gimple.st_bytes(p, off, data), k := x9 x10. ka(x9, x10, x8), x := x9 x10. xx(x9, x10, x8), d := x9. dd(x9, x8)], {w}, {WS}, {empty}, sr2, kah)
+      have ei: ex x7. bind_rel(gimple.st_bytes(p, off, data), w, x9 x10. ka(x9, x10, x7), x9 x10. xx(x9, x10, x7), x9. dd(x9, x7)) && k(x7, y) by ex_intro({x8}, taut(bs, hk8))
+      have ri: runs(IS, w, y) := apply(tr.runs_intro[r := x0 x1. ex x8. bind_rel(gimple.st_bytes(p, off, data), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)], {w}, {y}, yu, ei)
+      // (the outer bind by its case: kw on, or the raise, the divergence)
+      have bo: bind_rel(IS, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+        have b1: (ex x0 x1. y = ok(x0, x1) && kw(x0, x1, o)) -> bind_rel(IS, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+          assume e1
+          obtain s1 v1, ye hkw from e1
+          show := apply(gc.bind_ok[p := IS, k := x3 x4. kw(x3, x4, o), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], {w}, {s1}, {v1}, rewrite(ye, ri), hkw)
+        qed
+        have b2: (ex x0 x1. y = exc(x0, x1) && o = exc(x0, x1)) -> bind_rel(IS, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+          assume e1
+          obtain s1 v1, ye he from e1
+          show := apply(gc.bind_exc[p := IS, k := x3 x4. kw(x3, x4, o), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], {w}, {s1}, {v1}, rewrite(ye, ri), he)
+        qed
+        have b3: (ex x0. y = diverge(x0) && o = diverge(x0)) -> bind_rel(IS, w, x3 x4. kw(x3, x4, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+          assume e1
+          obtain t, ye hd2 from e1
+          show := apply(gc.bind_div[p := IS, k := x3 x4. kw(x3, x4, o), x := x3 x4. o = exc(x3, x4), d := x3. o = diverge(x3)], {w}, {t}, rewrite(ye, ri), hd2)
+        qed
+        show by taut(hky, b1, b2, b3)
+      qed
+      have ro := apply(tr.runs_intro[r := x1 x2. bind_rel(IS, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {w}, {o}, pu, bo)
+      show by taut(ro)
+    qed
+    have d2: z = exc(gc.back0(w4, w), OVF) -> GOAL proof
+      assume ze
+      have e0: WS.os.events = w.os.events by simp()
+      have ev: gc.back0(w4, w).os.events = w.os.events := rewrite(sym(bws), e0)
+      show := mp(all_elim(ovk, {gc.back0(w4, w)}), ze, ev)
+    qed
+    show by taut(hz4, d1, d2)
+  qed
+  // (memset raising: an overflow, its I/O w's)
+  have c3: (ex x e. (abi.ovf_out(w, exc(x, e)) || (ex r2. exc(x, e) = ok(mz.fw(w, a, n, 0), r2) && fst(r2) = a)) && z = exc(x, e)) -> GOAL proof
+    assume e0
+    obtain x e, hq3 ze from e0
+    obtain v ob, hv hob hx from (abi.ovf_out(w, exc(x, e)) by simp(hq3))
+    have xe: x = fn_update(fn_update(w, "vm", v), "objs", ob) && e = OVF by simp(hx)
+    have x1 x2 := xe
+    have ev: x.os.events = w.os.events by simp(x1)
+    show := mp(all_elim(ovk, {x}), rewrite(x2, ze), ev)
+  qed
+  // (no divergence)
+  have c4: (ex t. (abi.ovf_out(w, diverge(t)) || (ex r2. diverge(t) = ok(mz.fw(w, a, n, 0), r2) && fst(r2) = a)) && z = diverge(t)) -> GOAL proof
+    assume e0
+    obtain t, hq5 _ from e0
+    show by simp(hq5)
+  qed
+  show by taut(ci, c1, c2, c3, c4)
+qed
