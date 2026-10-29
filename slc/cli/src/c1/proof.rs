@@ -4,6 +4,20 @@
 use super::rec::*;
 use super::*;
 
+/// A statement the spec makes and the code implements by a call (a zero
+/// store by memset's): the callee's contract, typing and returns' effects,
+/// the statement, the proofs of its runs' inclusion and of the breakpoints'
+/// relation kept (tr.call0_stb's last premises)
+#[derive(Clone)]
+pub(super) struct LibCall {
+    hcall: Seq,
+    htyp: Seq,
+    hio: Seq,
+    stmt: Term,
+    incl: RA,
+    bka: RA,
+}
+
 /// the context a point's recipes evaluate in (restored after a recursion)
 struct Ctx {
     fr: u128,
@@ -762,7 +776,7 @@ impl<'e> Gen<'e> {
                 // (a call: at the machine's call; the instructions before it first)
                 Some(Red::Call { g, args, list, one, stk, a, xx, dd, k }) => {
                     if matches!(self.insns.get(&st.a).map(|i| i.row), Some(120 | 121)) {
-                        return self.call_at(&st, qi, g, &args, list, one, stk, a, xx, dd, k);
+                        return self.call_at(&st, qi, g, &args, list, one, stk, a, xx, dd, k, None);
                     }
                     // (a stack argument pushed: the call's first step)
                     if stk && self.insns.get(&st.a).map(|i| i.row) == Some(118) {
@@ -834,7 +848,12 @@ impl<'e> Gen<'e> {
                     let d = self.close(rest, &[cond.clone()], &[])?;
                     return self.wsplit(&st, qi, &cond, u, d);
                 }
-                None => {}
+                // (a zero store the code makes by a call: at the call)
+                None => {
+                    if let Some(pf) = self.stz_call_try(&st, qi)? {
+                        return Ok(pf);
+                    }
+                }
             }
         }
         // after the procedure's result: the wrapper's rest reduced up to its
@@ -1024,18 +1043,116 @@ impl<'e> Gen<'e> {
         Ok(mpf("tr.hin_upd", vec![t(&h), t(&lit(fr)), t(&c), t(&x), p(ph), simp0()]))
     }
 
+    /// At a `call f` against the spec's store of zeros (its definedness in
+    /// hand), the startup mode's: f's contract `X.impl_m` (for any
+    /// alignment, never stopping) with X.typed, X.io and X.stz_incl (the
+    /// call's runs the store's but overflows) -- the call making the store
+    /// (tr.call0_stb: memset's for a zeroed object). None if not so.
+    fn stz_call_try(&mut self, st: &St, qi: usize) -> Result<Option<Seq>, String> {
+        let Some(insn) = self.insns.get(&st.a).cloned() else { return Ok(None) };
+        let (Some((tt, k)), true) = (self.stop, self.startup) else { return Ok(None) };
+        if insn.row != 120 {
+            return Ok(None);
+        }
+        let Some(off) = nat(&insn.fields) else { return Ok(None) };
+        let a2 = (st.a + insn.len) % P64;
+        let fa = (a2 + if off >= 1 << 31 { off + (P64 - (1 << 32)) } else { off }) % P64;
+        // (the spec's head: a store of zeros, defined)
+        let q = self.qs[qi].clone();
+        self.trace(|| format!("at {:x}: a call of {:x}, the spec's rest {}", st.a, fa, self.print(&q)));
+        let Some(body) = self.app(&q, "mkprog", 1).map(|x| x[0].clone()) else { return Ok(None) };
+        let Some(ex) = self.app(&body, "ex", 1).and_then(|e| self.app(&e[0], "and", 2).map(|x| x.to_vec())) else { return Ok(None) };
+        let Some(x) = self.app(&ex[0], "bind_rel", 5).map(|x| x.to_vec()) else { return Ok(None) };
+        let Some(so) = self.store_op(&x[0])? else { return Ok(None) };
+        let Some(data) = so.data.clone() else { return Ok(None) };
+        if so.inner != x[0] {
+            self.trace(|| format!("at {:x}: a zero store through a helper, not by a call", st.a));
+            return Ok(None);
+        }
+        let Some(hc) = self.hyp_find(&st.hyps, &so.cond).map(|h| h.1.clone()) else {
+            self.trace(|| format!("at {:x}: a zero store, its definedness not in hand", st.a));
+            return Ok(None);
+        };
+        // (f's contract: `all statics. tr.impl_m(false, true, f, G, t, k, ..)`)
+        let statics = self.statics_var();
+        let mut found = None;
+        for (name, th) in self.env.theorems.iter() {
+            let Some(pre) = name.strip_suffix(".impl_m") else { continue };
+            let Some(b) = self.app(th.prop(), "all", 1).map(|x| x[0].clone()) else { continue };
+            let b = b.instantiate_params(&[statics.clone()], &self.env.binders_fn());
+            let Some(c) = self.app(&b, "tr.impl_m", 9).map(|x| x.to_vec()) else { continue };
+            if nat(&c[2]) == Some(fa) && self.app(&c[0], "false", 0).is_some() && self.app(&c[1], "true", 0).is_some() && nat(&c[4]) == Some(tt) && self.app(&c[5], if k { "true" } else { "false" }, 0).is_some() {
+                found = Some((name.clone(), pre.to_string(), c[3].clone()));
+                break;
+            }
+        }
+        let Some((cname, pre, g)) = found else {
+            self.trace(|| format!("at {:x}: a zero store, no contract `X.impl_m` of the callee at {:x} (any alignment, the caller's stop)", st.a, fa));
+            return Ok(None);
+        };
+        self.trace(|| format!("at {:x}: the zero store by the call of {:x} ({})", st.a, fa, cname));
+        let hcall = self.run(&R::Apply(Box::new(f(&cname)), vec![t(&statics)]), &[])?;
+        let htyp = self.run(&f(&format!("{pre}.typed")), &[])?;
+        let hio = self.run(&f(&format!("{pre}.io")), &[])?;
+        // (the statement's parts, as a store's: its continuation, handlers, rest)
+        let kl = self.lam(&ex[1], &["x0", "x1", "x8"], &["x8", "x1"]).ok_or("a block's rest reads the world")?;
+        let c5 = ["x0", "x1", "x8", "x9", "x10"];
+        let al = self.lam(&x[2], &c5, &["x9", "x10", "x8"]).ok_or("a store's continuation reads the world before it")?;
+        let xl = self.lam(&x[3], &c5, &["x9", "x10", "x8"]).ok_or("a store's handler reads the world before it")?;
+        let dl = self.lam(&x[4], &["x0", "x1", "x8", "x9"], &["x9", "x8"]).ok_or("a store's handler reads the world before it")?;
+        // (the call's arguments: the address, 0, the size)
+        let arg = |gg: &Gen, v: Term| gg.mk("seq_one", vec![gg.mk("gimple.arg", vec![lit(64), v])]);
+        let items = vec![self.mk("gimple.arg", vec![lit(64), so.addr.clone()]), self.mk("gimple.arg", vec![lit(64), lit(0)]), self.mk("gimple.arg", vec![lit(64), lit(so.n)])];
+        let list = self.mk("seq_concat", vec![self.mk("seq_concat", vec![arg(self, so.addr.clone()), arg(self, lit(0))]), arg(self, lit(so.n))]);
+        // (the call's runs the store's: X.stz_incl at the store; the I/O at
+        // the call the entry's)
+        let w = st.w.clone();
+        let incl = p(R::Apply(
+            Box::new(R::Inst(format!("{pre}.stz_incl"), vec![("ka", al.clone()), ("xx", xl.clone()), ("dd", dl.clone()), ("k", kl.clone()), ("kw", self.kw3())])),
+            vec![
+                t(&self.s.clone()),
+                t(&w),
+                t(&so.p),
+                t(&so.off),
+                t(&data),
+                t(&so.addr),
+                t(&lit(so.n)),
+                taut(vec![R::S(st.hw.clone())]),
+                s(&st.hvu),
+                simp_l(),
+                simp_l(),
+                p(self.zeros_proof(&data)?),
+                simp_l(),
+                arith(vec![]),
+                simp0(),
+                s(&hc),
+                simp_l(),
+                simp0(),
+            ],
+        ));
+        let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+        let bka = p(R::Inst("tr.bka_ovs_at".into(), vec![("b", self.mk("false", vec![])), ("k", kt)]));
+        let lib = LibCall { hcall, htyp, hio, stmt: x[0].clone(), incl, bka };
+        self.call_at(st, qi, g, &items, list, false, false, al, xl, dl, kl, Some(lib)).map(Some)
+    }
+
     /// A call (tr.call, tr.call1 for call1): the machine's `call rel32` at
     /// st's address from a frame of fr bytes, the spec's call of g with the
     /// arguments in their registers; the claim after it (at the return
     /// address, rax:rdx the result -- rax for call1 --, the homes kept, the
-    /// frame from the push up) for every world and result
+    /// frame from the push up) for every world and result. (lib: a call the
+    /// spec makes as a statement of its own, tr.call0_stb -- its callee's
+    /// facts given, no result.)
     #[allow(clippy::too_many_arguments)]
-    fn call_at(&mut self, st: &St, qi: usize, g: Term, args_all: &[Term], list: Term, one: bool, stk: bool, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+    fn call_at(&mut self, st: &St, qi: usize, g: Term, args_all: &[Term], list: Term, one: bool, stk: bool, al: Term, xl: Term, dl: Term, kl: Term, lib: Option<LibCall>) -> Result<Seq, String> {
         let a = st.a;
         let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
         let indirect = insn.row == 121;
         if insn.row != 120 && !indirect {
             return Err(format!("{:x}: the spec calls, the machine does not", a));
+        }
+        if lib.is_some() && (indirect || stk || one || !self.startup || self.stop.is_none()) {
+            return Err(format!("{:x}: a statement by a call: only a direct call in the startup mode", a));
         }
         // (`call *%r` against a call through the code map G[p], stopping at
         // t: r holding p -- the register, the instruction's rest, p, G)
@@ -1116,6 +1233,32 @@ impl<'e> Gen<'e> {
         }
         let hreg = if nargs == 0 { mpf("tr.args0", vec![t(&st.rs)]) } else { R::Apply(Box::new(f(&format!("tr.args{}", args.len()))), aps) };
         let hin = self.hin_proof(&st.hst, st.fr)?;
+        let (hcall, htyp, hio) = match &lib {
+            Some(l) => (l.hcall.clone(), l.htyp.clone(), l.hio.clone()),
+            None => self.callee_facts(st, &g, fa, nargs, aligned, stk, &ind)?,
+        };
+        // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
+        let ccname = if self.startup { "tr.ccs_m" } else if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
+        let hcon = if lib.is_some() {
+            defs(RP::Taut(vec![R::S(hcall.clone())]), &[ccname])
+        } else if stk || ind.is_some() {
+            p(R::S(hcall.clone()))
+        } else if aligned {
+            let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
+            defs(RP::Taut(vec![R::S(hcall), R::S(fr16)]), &[ccname])
+        } else {
+            defs(RP::Taut(vec![R::S(hcall)]), &[ccname])
+        };
+        self.call_rest(st, qi, g, args_all, list, one, stk, al, xl, dl, kl, lib, insn, fa, off, a2, aligned, nargs, ind, hreg, hin, htyp, hio, hcon)
+    }
+
+    /// (a call's callee G{i}, a parameter of the spec: its contract, typing
+    /// and returns' effects -- premises of the C1 theorem, assumed at its
+    /// first call)
+    #[allow(clippy::too_many_arguments)]
+    fn callee_facts(&mut self, st: &St, g: &Term, fa: u128, nargs: usize, aligned: bool, stk: bool, ind: &Option<(u128, Term, Term, Term)>) -> Result<(Seq, Seq, Seq), String> {
+        let a = st.a;
+        let g = g.clone();
         let ci = self.callees.iter().position(|c| c.0 == g && c.1 == fa).unwrap_or_else(|| {
             self.callees.push((g.clone(), fa, nargs, false));
             self.callees.len() - 1
@@ -1180,17 +1323,42 @@ impl<'e> Gen<'e> {
                 }
             }
         }
-        let (hcall, htyp, hio) = (self.hcall[gi].clone().unwrap(), self.htyp[gi].clone().unwrap(), self.hio[gi].clone().unwrap());
-        // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
-        let ccname = if self.startup { "tr.ccs_m" } else if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
-        let hcon = if stk || ind.is_some() {
-            p(R::S(hcall.clone()))
-        } else if aligned {
-            let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
-            defs(RP::Taut(vec![R::S(hcall), R::S(fr16)]), &[ccname])
-        } else {
-            defs(RP::Taut(vec![R::S(hcall)]), &[ccname])
-        };
+        Ok((self.hcall[gi].clone().unwrap(), self.htyp[gi].clone().unwrap(), self.hio[gi].clone().unwrap()))
+    }
+
+    /// (the call's claim: its continuation's raise and divergence, the claim
+    /// after it, the rule)
+    #[allow(clippy::too_many_arguments)]
+    fn call_rest(
+        &mut self,
+        st: &St,
+        qi: usize,
+        g: Term,
+        args_all: &[Term],
+        list: Term,
+        one: bool,
+        stk: bool,
+        al: Term,
+        xl: Term,
+        dl: Term,
+        kl: Term,
+        lib: Option<LibCall>,
+        insn: Insn,
+        fa: u128,
+        off: u128,
+        a2: u128,
+        aligned: bool,
+        nargs: usize,
+        ind: Option<(u128, Term, Term, Term)>,
+        hreg: R,
+        hin: R,
+        htyp: Seq,
+        hio: Seq,
+        hcon: RA,
+    ) -> Result<Seq, String> {
+        let a = st.a;
+        let args = &args_all[..nargs.min(6)];
+        let _ = args;
         let w = st.w.clone();
         let hv = st.hvu.clone();
         // the continuation's raise and divergence: the function's
@@ -1221,7 +1389,14 @@ impl<'e> Gen<'e> {
         let hd = self.close(d0, &[ht], &[Self::var_id(&tv)])?;
         // the claim after the call, for every world W4 and result R0 (:R1)
         let (w4, r0, r1) = (self.var(&format!("WC{n}")), self.var(&format!("RC{n}")), self.var(&format!("RD{n}")));
-        let res = if one { r0.clone() } else { self.mk("pair", vec![r0.clone(), r1.clone()]) };
+        // (a statement by a call: no result)
+        let res = if lib.is_some() {
+            self.mk("empty", vec![])
+        } else if one {
+            r0.clone()
+        } else {
+            self.mk("pair", vec![r0.clone(), r1.clone()])
+        };
         let ka = al.instantiate_params(&[Term::bvar(2), res, Term::bvar(0)], &self.env.binders_fn());
         let q2 = self.canon(&mkq(self, ka));
         let j = self.new_q(q2);
@@ -1361,6 +1536,7 @@ impl<'e> Gen<'e> {
             );
         }
         let rname = match (self.stop.is_some(), one) {
+            _ if lib.is_some() => "tr.call0_stb",
             (false, true) => "tr.call1",
             (false, false) => "tr.call",
             (true, true) if self.startup => "tr.call1_0_st",
@@ -1403,7 +1579,14 @@ impl<'e> Gen<'e> {
             Some((tt, k)) => {
                 let kt = self.mk(if k { "true" } else { "false" }, vec![]);
                 binds.extend([("t", lit(tt)), ("ks", kt.clone()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())]);
-                Some(vec![simp0(), self.tbp_below(&self.bkp.clone(), st.fr, tt), self.hat_pf(tt, k)])
+                let mut tl = vec![simp0(), self.tbp_below(&self.bkp.clone(), st.fr, tt), self.hat_pf(tt, k)];
+                // (a statement by a call: the statement, the call's runs its
+                // own, the breakpoints' relation kept)
+                if let Some(l) = &lib {
+                    binds.push(("S", l.stmt.clone()));
+                    tl.extend([l.incl.clone(), l.bka.clone()]);
+                }
+                Some(tl)
             }
             None => None,
         };

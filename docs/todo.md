@@ -194,11 +194,15 @@ The binary as linked (gcc's crtbegin included). The steps:
   claim for the call is the statement's: tr.lv_ovs, the call's runs the
   statement's but overflows with the entry's I/O -- the crash matched by
   the events unchanged, tr.crash's io; the breakpoints' relation kept,
-  tr.bka_ovs), the call's runs by mz.stz_incl (premise: the I/O at the
-  call the entry's, as nothing was written before it). Left: the engine's
-  use of it (a `call` to memset against the spec's zero store: the
-  arguments, mset.impl_m/typed/io, the premises), `__init_libc`'s C1
-  after proofs/mallocng/fun/memset.core.
+  tr.bka_ovs), the call's runs by mset.stz_incl (premise: the I/O at the
+  call the entry's, as nothing was written before it). The engine's use
+  (proof.rs stz_call_try: a `call f` against the spec's zero store, f's
+  contract `X.impl_m` found by its address, X.typed, X.io, X.stz_incl)
+  written, not yet exercised: `__init_libc`'s C1 (a file after
+  proofs/mallocng/fun/memset.core) stops before it, at the frame's
+  objects -- two (pfd, aux), aux's first use its address passed to
+  memset, not a store (alloc_at: one object, at its first `mov [rsp+d],
+  r64`).
 - (d) C1 of the startup functions (~560 instructions), C2 against
   purpose specs: `__init_libc` (auxv into `libc.auxv`, the program name,
   environ; unprivileged: the secure path skipped), `__init_tls` (the
