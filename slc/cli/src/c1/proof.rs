@@ -1280,10 +1280,10 @@ impl<'e> Gen<'e> {
             None => self.callee_facts(st, &g, fa, nargs, aligned, stk, &ind)?,
         };
         // (the callee's contract at this call: the ABI's if aligned, else the one for any entry)
-        let ccname = if self.startup { "tr.ccs_m" } else if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
+        let ccname = if self.startup && stk { "tr.ccs_ms" } else if self.startup { "tr.ccs_m" } else if self.stop.is_some() { "tr.callee_contract_s" } else { "tr.callee_contract" };
         let hcon = if lib.is_some() {
             defs(RP::Taut(vec![R::S(hcall.clone())]), &[ccname])
-        } else if stk || ind.is_some() {
+        } else if (stk && !self.startup) || ind.is_some() {
             p(R::S(hcall.clone()))
         } else if aligned {
             let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
@@ -1337,11 +1337,12 @@ impl<'e> Gen<'e> {
                         self.cinfo[gi] = Some((fa, nargs, !aligned, vec![hc.clone(), ht]));
                         hc
                     }
-                    Some((tt, k)) if !stk && self.startup => {
-                        // (the startup mode's: tr.impl_m(false, u, ..))
+                    Some((tt, k)) if self.startup => {
+                        // (the startup mode's: tr.impl_m(false, u, ..), with
+                        // stack arguments tr.impl_m_s)
                         let kt = self.mk(if k { "true" } else { "false" }, vec![]);
                         let (ff, ut) = (self.mk("false", vec![]), self.mk(if aligned { "false" } else { "true" }, vec![]));
-                        self.mk("tr.impl_m", vec![ff, ut, lit(fa), g.clone(), lit(tt), kt, lb, lc, statics])
+                        self.mk(if stk { "tr.impl_m_s" } else { "tr.impl_m" }, vec![ff, ut, lit(fa), g.clone(), lit(tt), kt, lb, lc, statics])
                     }
                     Some((tt, k)) if !stk => {
                         let kt = self.mk(if k { "true" } else { "false" }, vec![]);
@@ -1485,47 +1486,55 @@ impl<'e> Gen<'e> {
             if kb != 8 || self.canon(&xh) != self.canon(&yv) {
                 return Err(format!("{:x}: the frame's bottom holds {}, the spec passes {}", a, self.print(&xh), self.print(&yv)));
             }
-            let inst = R::Inst(
-                "tr.call1_sc".into(),
-                vec![
-                    ("s", self.s.clone()),
-                    ("v", self.v.clone()),
-                    ("base", self.base.clone()),
-                    ("code", self.code.clone()),
-                    ("fr", lit(st.fr)),
-                    ("a", lit(a)),
-                    ("a2", lit(a2)),
-                    ("len", lit(insn.len)),
-                    ("off", lit(off)),
-                    ("f", lit(fa)),
-                    ("G", g.clone()),
-                    ("x", xh.clone()),
-                    ("a6", l6),
-                    ("y", y),
-                    ("cb", self.lbase.clone()),
-                    ("cc", self.lcode.clone()),
-                    ("st", self.statics_var()),
-                    ("hs", st.hst.clone()),
-                    ("ds", st.ds.clone()),
-                    ("fd2", lit(fd2)),
-                    ("rs", st.rs.clone()),
-                    ("rc", self.regs_map(&rc)),
-                    ("w", w.clone()),
-                    ("ka", al),
-                    ("xx", xl),
-                    ("dd", dl),
-                    ("k", kl),
-                    ("kw", self.kw3()),
-                    ("bkp", self.bkp.clone()),
-                    ("bka", self.bka.clone()),
-                ],
-            );
+            let mut binds = vec![
+                ("s", self.s.clone()),
+                ("v", self.v.clone()),
+                ("base", self.base.clone()),
+                ("code", self.code.clone()),
+                ("fr", lit(st.fr)),
+                ("a", lit(a)),
+                ("a2", lit(a2)),
+                ("len", lit(insn.len)),
+                ("off", lit(off)),
+                ("f", lit(fa)),
+                ("G", g.clone()),
+                ("x", xh.clone()),
+                ("a6", l6),
+                ("y", y),
+                ("cb", self.lbase.clone()),
+                ("cc", self.lcode.clone()),
+                ("st", self.statics_var()),
+                ("hs", st.hst.clone()),
+                ("ds", st.ds.clone()),
+                ("fd2", lit(fd2)),
+                ("rs", st.rs.clone()),
+                ("rc", self.regs_map(&rc)),
+                ("w", w.clone()),
+                ("ka", al),
+                ("xx", xl),
+                ("dd", dl),
+                ("k", kl),
+                ("kw", self.kw3()),
+                ("bkp", self.bkp.clone()),
+                ("bka", self.bka.clone()),
+            ];
             let hl = self.hl.clone().unwrap();
             let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
             let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
             let s16 = self.sal16()?;
-            let nobp = self.nobp_below(&self.bkp.clone(), st.fr);
             let csp = self.cs_sub_pf(&rc, &st.rs);
+            // (the startup mode's, stopping at t: tr.call1_0_sc -- the
+            // callee's contract tr.ccs_ms, t's states breakpoints, the
+            // relation at a stop the caller's)
+            let (rule, mid, tail) = match self.stop {
+                Some((tt, k)) if self.startup => {
+                    binds.extend([("t", lit(tt)), ("ks", self.mk(if k { "true" } else { "false" }, vec![]))]);
+                    ("tr.call1_0_sc", vec![hcon, simp0(), taut(vec![R::S(s16)])], vec![simp0(), self.tbp_below(&self.bkp.clone(), st.fr, tt), self.hat_pf(tt, k)])
+                }
+                _ if self.startup => return Err(format!("{:x}: a call with stack arguments in the startup mode never stopping", a)),
+                _ => ("tr.call1_sc", vec![s(&fr16), taut(vec![R::S(s16)]), hcon], vec![self.nobp_below(&self.bkp.clone(), st.fr)]),
+            };
+            let inst = R::Inst(rule.into(), binds);
             // (the six a list of univ(1): its items' by tr.seq_one_type, tr.concat_list)
             fn list_univ(g: &Gen, l: &Term) -> Option<R> {
                 let u1 = g.mk("univ", vec![lit(1)]);
@@ -1539,7 +1548,7 @@ impl<'e> Gen<'e> {
             return self.run(
                 &mp(
                     inst,
-                    vec![
+                    [vec![
                         simp0(),
                         p(self.ofr_pf(&self.mk("int_sub", vec![lit(st.fr), lit(8)]))),
                         p(self.hap_pf(&st.hst)),
@@ -1548,9 +1557,7 @@ impl<'e> Gen<'e> {
                         simp_l(),
                         simp_l(),
                         simp_l(),
-                        s(&fr16),
-                        taut(vec![R::S(s16)]),
-                        hcon,
+                    ], mid, vec![
                         s(&hl),
                         simp0(),
                         cfr,
@@ -1571,8 +1578,8 @@ impl<'e> Gen<'e> {
                         s(&hk),
                         s(&hd),
                         s(&pc),
-                        nobp,
-                    ],
+                    ], tail]
+                    .concat(),
                 ),
                 &[],
             );
@@ -1878,8 +1885,9 @@ impl<'e> Gen<'e> {
         let kd: Vec<String> = if self.lpg.is_some() { ["tr.lcont", "tr.isout", "tr.mk"].map(String::from).to_vec() } else { vec!["runs".into(), "mkprog".into()] };
         let k0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hxs), R::S(hes), R::S(hv)], vec![], false)), kd), &gk, &[])?;
         let hkx = self.close(k0, &[hx, he], &[Self::var_id(&xv), Self::var_id(&ev)])?;
+        // (the startup mode's: tr.push_m64_c0, the call call1_0_s)
         let inst = R::Inst(
-            "tr.push_m64_c".into(),
+            if self.startup { "tr.push_m64_c0" } else { "tr.push_m64_c" }.into(),
             vec![("ka", al), ("xx", xl), ("dd", dl), ("k", kl), ("kw", self.kw3()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())],
         );
         let mut args = self.head(a, &insn);

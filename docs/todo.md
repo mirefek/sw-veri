@@ -12,20 +12,27 @@ the invariant holding for the empty heap. The binary as linked (gcc's
 crtbegin included). Done so far (docs/done.md, Init): the startup units'
 readable GIMPLE, the stop mode (runs stopping at main's entry), the
 startup mode (no thread pointer, no canary yet), memset, frames with
-several stack objects; C1 of `_start_c`, `__libc_start_main`,
-`libc_start_main_stage2`, `__libc_start_init`.
+several stack objects, calls with a stack argument in either mode; C1 of
+`_start_c`, `__libc_start_main`, `libc_start_main_stage2`,
+`__libc_start_init`, `__init_libc`, `__init_ssp`, __init_tls.c's
+`__syscall6`.
 
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
-  - `__init_tls` (the program headers, builtin TLS, `__init_tp`:
-    arch_prctl, set_tid_address; __init_tls.c not yet in check.sh's
-    units): `static_init_tls`'s mmap branch calls the unit's own
-    `__syscall6` with a stack argument, which the startup mode has no form
-    for -- GIMPLE's `call0_s` / `call1_0_s` (and `slc gimple --startup`
-    emitting them), the startup stop rule for it (as tr.call_s /
-    tr.call1_s, mode-generic like tr.call_stm), the engine's case.
-  - The startup unit's copies of the leaves (`__syscall2`, `__syscall3`,
-    `a_crash`: `lsm_*` in the steps line).
+  - `__init_tls` (proofs/mallocng/machine/c1_init_tls.core; its
+    `__syscall6` done):
+    - `__copy_tls`, `static_init_tls`: instruction rules missing --
+      `sub rax, imm32` (row 52, as `add64_rax_imm`'s), and
+      static_init_tls's `cmova`, `jbe` / `ja` / `jae`, `mov r32, r32` of
+      one register, `and rax, imm8`, ... (one C1 run names the next).
+    - `__init_tp`: GIMPLE's `sys_call1` is brk's (12) only --
+      set_tid_address (218, the Linux model's: a tid in (0, 2^22)) in the
+      C world (layers/gimple.sl, trusted) and its C1 rule;
+      `__set_thread_area`'s readable model (as musl_asm.sl's) with
+      arch_prctl (158: the Linux model's `sys_arch_prctl` sets fs_base),
+      GIMPLE's `sys_call2` being munmap's (11) only.
+  - The startup units' copies of the leaves (`__syscall1`, `__syscall2`,
+    `__syscall3`, `a_crash`: `lsm_*`, `tls_*` in the steps line).
   - The code without musl C: readable models (as musl_asm.sl's) and C1 of
     `_start`, `__set_thread_area`, crti/crtn's `_init`, and gcc's
     `frame_dummy` -> `register_tm_clones` (the init_array's one

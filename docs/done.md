@@ -1362,3 +1362,13 @@ item is a short summary of finished work; details are in the files named.
   `__get_tp` as `ssp___get_tp`): memcpy called before main by its
   startup contract (`mcpz.composed`: a second C1 of memcpy in the startup
   mode, composed with its refinement and C2 as memset's).
+- **Calls with a stack argument in either mode** (proofs/
+  translate_scall.core; GIMPLE's `call0_s` / `call1_0_s`, emitted by
+  `slc gimple --startup`): the callee's contract `tr.impl_m_s` (for
+  either alignment `tr.ccs_ms`), its claim at the call's entry
+  (`tr.chc`, which the register calls' `tr.call_stmc` now takes per
+  entry); the caller's rules `tr.call_s_stm` / `tr.call1_s_stm`, the
+  startup's `tr.call1_0_sc` and the push `tr.push_m64_c0` (from
+  `tr.push_m64_cm`); the callee's entry `tr.entry_nskm` and contract
+  `tr.impl_m_s_intro`. C1 of __init_tls.c's `__syscall6` (the unit in
+  check.sh, its location map in scripts/locmap.py).

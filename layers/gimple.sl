@@ -647,6 +647,25 @@ proc[World] call1_0_objs(objs: List[Addr], g: CFun2[World], args: List[(nat, Ty)
   let (r0, r1) = call0_objs(objs, g, args)
   return r0
 }
+// (before main, a callee of more than six arguments: call0 -- the stack's
+// part the bridge's, as call_s's)
+proc[World] call0_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  either { raise stack_overflow } or { }
+  let (r0, r1) = call0_callee_s(g, args)
+  either { raise stack_overflow } or { }
+  return (r0, r1)
+}
+proc[World] call0_callee_s(g: CFunS[World], args: List[(nat, Ty)]) -> (bits[64], bits[64]) {
+  let regs = any l: List[bits[64]] where len(l) = len(args) && (all i: nat. i < len(args) -> l[i] in in_reg(args[i][0], args[i][1]))
+  let live0 = objs.live
+  let (r0, r1) = g(regs)
+  objs := objs with { live: live0 }
+  return (r0, r1)
+}
+proc[World] call1_0_s(g: CFunS[World], args: List[(nat, Ty)]) -> bits[64] {
+  let (r0, r1) = call0_s(g, args)
+  return r0
+}
 
 // (readable GIMPLE) the address of element i (signed) of `size` bytes
 proc[World] elem(p: Addr, i: bits[64], size: nat) -> Addr { return padd(p, smul(i, bits[64](size))) }

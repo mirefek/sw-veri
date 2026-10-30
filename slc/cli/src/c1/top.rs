@@ -538,13 +538,18 @@ impl<'e> Gen<'e> {
         let hstk_t = self.mk("in", vec![stk.clone(), lty.clone()]);
         let lstk = self.mk("seq_len", vec![stk.clone()]);
         let hle_t = self.mk("int_le", vec![lit(nargs), self.mk("int_add", vec![lit(6), lstk.clone()])]);
-        if nstk > 0 && self.startup {
-            return Err("stack arguments in the startup mode: not supported".into());
+        if nstk > 0 && self.startup && self.stop.is_none() {
+            return Err("stack arguments in the startup mode never stopping: not supported".into());
         }
         if nstk > 0 {
             let (hstk, hle) = (self.assume(&hstk_t)?, self.assume(&hle_t)?);
             let largs = self.mk("seq_len", vec![args_t.clone()]);
-            let eo_t = self.mk("abi.entry_ok", vec![s.clone(), args_t.clone()]);
+            // (the startup mode's entry: tr.eok(false, false, ..), aligned)
+            let eo_t = if self.startup {
+                self.mk("tr.eok", vec![self.mk("false", vec![]), self.mk("false", vec![]), s.clone(), args_t.clone()])
+            } else {
+                self.mk("abi.entry_ok", vec![s.clone(), args_t.clone()])
+            };
             let sa_t = self.mk("abi.stack_args", vec![s.clone(), stk.clone()]);
             let h6_t = self.mk("eq", vec![largs.clone(), lit(6)]);
             let so_t = self.mk("tr.sargs_off", vec![s.clone(), vv.clone(), lstk.clone()]);
@@ -552,7 +557,11 @@ impl<'e> Gen<'e> {
             let he = self.assume(&e_t)?;
             let [eo, hsa, h6, hso] = [&eo_t, &sa_t, &h6_t, &so_t].map(|g| self.evp(&RP::Taut(vec![R::S(he.clone())]), g, &[]));
             let (eo, hsa, h6, hso) = (eo?, hsa?, h6?, hso?);
-            let st = self.run(&R::Apply(Box::new(f("abi.entry_stack")), vec![s_(&s_hm), s_(&eo)]), &[])?;
+            let st = if self.startup {
+                self.run(&R::Apply(Box::new(f("tr.eok_al")), vec![s_(&eo)]), &[])?
+            } else {
+                self.run(&R::Apply(Box::new(f("abi.entry_stack")), vec![s_(&s_hm), s_(&eo)]), &[])?
+            };
             let goal = self.mk("eq", vec![self.mk("int_mod", vec![self.mk("bits_add", vec![lit(64), self.gpr(&s, 4), lit(8)]), lit(16)]), lit(0)]);
             let sal = self.evp(&RP::Taut(vec![R::S(st)]), &goal, &[])?;
             self.ent_al = Some((e_t, sal));
@@ -591,7 +600,9 @@ impl<'e> Gen<'e> {
         inner_h.push(vab_t);
         // (E of the entry, its arguments and the callers' stack objects)
         let e_lam = self.abs(&e_t, &[Self::var_id(&s), Self::var_id(&args_t), Self::var_id(&vv)]);
-        let h_e = if nstk > 0 {
+        let h_e = if nstk > 0 && self.startup {
+            super::rec::p(R::Inst("tr.eok_e_s".into(), vec![("b", self.mk("false", vec![])), ("stk", stk.clone())]))
+        } else if nstk > 0 {
             super::rec::p(R::Inst("tr.entry_e_s".into(), vec![("stk", stk.clone())]))
         } else if self.startup {
             // (E -> tr.eok(false, true, ..): the startup mode's entry, any alignment's)
@@ -679,6 +690,33 @@ impl<'e> Gen<'e> {
                 // (the spec's procedure on x0 itself, q; on x0 with stk, q2)
                 let qx = proc.instantiate_params(&[x0.clone()], &self.env.binders_fn());
                 let qx = self.abs(&qx, &[Self::var_id(&x0)]);
+                // (the startup mode's, stopping at t: tr.entry_nskm, b false)
+                if let (true, Some((tt, k))) = (self.startup, self.stop) {
+                    let inst = R::Inst(
+                        "tr.entry_nskm".into(),
+                        vec![
+                            ("b", self.mk("false", vec![])),
+                            ("lb", lb.clone()),
+                            ("lc", lc.clone()),
+                            ("base", b.clone()),
+                            ("code", c.clone()),
+                            ("statics", statics.clone()),
+                            ("f", b.clone()),
+                            ("n", lit(nargs)),
+                            ("fd", lit(fd)),
+                            ("t", lit(tt)),
+                            ("k", self.mk(if k { "true" } else { "false" }, vec![])),
+                            ("rs", rsl),
+                            ("q", qx),
+                            ("q2", ql),
+                            ("kw", kwl),
+                            ("E", e_lam.clone()),
+                            ("stk", stk.clone()),
+                        ],
+                    );
+                    let hle = self.assume(&hle_t)?;
+                    self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in), simp0(), simp0(), simp0(), s_(&sq.hstk), simp0(), s_(&hle)]), &[])?
+                } else {
                 let inst = R::Inst(
                     "tr.entry_ns".into(),
                     vec![
@@ -700,6 +738,7 @@ impl<'e> Gen<'e> {
                 );
                 let hle = self.assume(&hle_t)?;
                 self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in), simp0(), simp0(), s_(&sq.hstk), simp0(), s_(&hle)]), &[])?
+                }
             } else if let (Some((_, _, bl3)), Some((tt, k))) = (&plain_g, self.stop) {
                 // (stopping at t, past the guard any program P of the
                 // arguments: tr.entry_nkpm, tr.entry_gkpm -- the mode b)
@@ -907,6 +946,32 @@ impl<'e> Gen<'e> {
         // (stack arguments: for any stk long enough, tr.implements_at_s)
         if let (Some(_), Some(bl)) = (&sargs, &bl) {
             let h = self.close(m0, &[hstk_t.clone(), hle_t.clone()], &[Self::var_id(&stk)])?;
+            // (the startup mode's, stopping at t: tr.impl_m_s(false, false, ..) by tr.impl_m_s_intro)
+            if let (true, Some((tt, k))) = (self.startup, self.stop) {
+                let (ff, kt) = (self.mk("false", vec![]), self.mk(if k { "true" } else { "false" }, vec![]));
+                let inst = R::Inst(
+                    "tr.impl_m_s_intro".into(),
+                    vec![
+                        ("b", ff.clone()),
+                        ("u", ff.clone()),
+                        ("f", b.clone()),
+                        ("t", lit(tt)),
+                        ("k", kt.clone()),
+                        ("base", lb.clone()),
+                        ("code", lc.clone()),
+                        ("statics", statics.clone()),
+                        ("n", lit(nargs)),
+                        ("B", bl.clone()),
+                    ],
+                );
+                let i0 = self.run(&mp(inst, vec![simp0(), simp0(), s_(&h)]), &[])?;
+                let goal = self.mk("tr.impl_m_s", vec![ff.clone(), ff, b.clone(), spec_app.clone(), lit(tt), kt, lb.clone(), lc.clone(), statics.clone()]);
+                let imp_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(i0))), vec![spec_name.to_string()]), &goal, &[])?;
+                let imp = self.close(imp_in, &cprem, &gvs)?;
+                out.push((format!("{p}.impl_m_s"), imp));
+                self.callee_effects(&p, ssym, &cns, &mut out)?;
+                return Ok(out);
+            }
             let inst = R::Inst(
                 "tr.implements_s_intro".into(),
                 vec![("f", b.clone()), ("base", lb.clone()), ("code", lc.clone()), ("statics", statics.clone()), ("n", lit(nargs)), ("B", bl.clone())],

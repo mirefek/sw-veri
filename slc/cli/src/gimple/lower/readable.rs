@@ -1191,10 +1191,9 @@ impl<'a> Lower<'a> {
                     }
                     rx.callees_s.insert(fname.clone());
                 }
-                if stack && sh.startup {
-                    return Err(format!("a call of {} with stack arguments before main (not yet in readable form)", f));
-                }
-                let (c1, c2) = if stack {
+                let (c1, c2) = if stack && sh.startup {
+                    ("call1_0_s(", "call0_s(")
+                } else if stack {
                     ("call1_s(", "call_s(")
                 } else if sh.startup && objs {
                     ("call1_0_objs(objs, ", "call0_objs(objs, ")
