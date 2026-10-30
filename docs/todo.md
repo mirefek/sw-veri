@@ -14,8 +14,8 @@ readable GIMPLE, the stop mode (runs stopping at main's entry), the
 startup mode (no thread pointer, no canary yet), memset, frames with
 several stack objects, calls with a stack argument in either mode; C1 of
 `_start_c`, `__libc_start_main`, `libc_start_main_stage2`,
-`__libc_start_init`, `__init_libc`, `__init_ssp`, __init_tls.c's
-`__syscall6`.
+`__libc_start_init`, `__init_libc`, `__init_ssp`, all of __init_tls.c
+(`__init_tls` is `static_init_tls`), `__set_thread_area`, the units' leaf copies.
 
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
@@ -26,11 +26,8 @@ The steps left, in order:
   - `tr.eff_sys_set_fs` (`sys_set_fs`'s effect: its returns valid, the
     thread pointer set) for `__set_thread_area`'s `tr.callee_io` -- the
     contract linking's, (b).
-  - The startup units' copies of the leaves (`__syscall2`, `__syscall3`,
-    `a_crash`: `lsm_*`, `tls_a_crash` in the steps line; `a_crash`'s
-    `hlt` as proofs/mallocng/machine/a_crash.core has it).
   - The code without musl C: readable models (as musl_asm.sl's) and C1 of
-    `_start`, `__set_thread_area`, crti/crtn's `_init`, and gcc's
+    `_start`, crti/crtn's `_init`, and gcc's
     `frame_dummy` -> `register_tm_clones` (the init_array's one
     constructor: no memory, its branch on `__TMC_END__ - __TMC_END__` = 0,
     so no effect).

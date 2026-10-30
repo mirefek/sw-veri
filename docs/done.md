@@ -1396,3 +1396,7 @@ item is a short summary of finished work; details are in the files named.
   `__set_thread_area`'s readable model (layers/musl_asm.sl, _cfg) and
   C1; a `[b + d]` store at the spec's p + off written otherwise
   (tr.store64_bd_a). C1 of the unit's `__syscall1` copy and `__init_tp`.
+- **The startup units' leaf copies**: C1 of `__libc_start_main.c`'s
+  `__syscall2` / `__syscall3` (lsm_*, c1_init_libc.core); the `a_crash`
+  copies (tls_a_crash, lsm_a_crash: hlt) by a contract in either mode at
+  any address (acr.impl_m, a_crash_m.core: its spec raises everywhere).
