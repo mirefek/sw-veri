@@ -1337,3 +1337,192 @@ proof
   qed
   show by taut(m)
 qed
+
+// syscall with rax 218: set_tid_address(rdi), as x86i.syscall_brk
+theorem x86i.syscall_tid(m, y): m.gpr[0] = 218 -> runs(x86_64_linux.syscall(), m, y) ->
+  ex z. runs(x86_64_linux.sys_set_tid_address(m.gpr[7]), fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags))), z) &&
+    ((ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) || (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) ||
+     (ex t. z = diverge(t) && y = diverge(t)))
+proof
+  assume h0 h
+  have b0 := expand(apply(g.runs_elim, expand(h, x86_64_linux.syscall)), letin)
+  let X1 := fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags)))
+  have eX: fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)), "gpr", fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).gpr, 11,
+    x86_64_linux.rflags_word(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).flags))) = X1 by simp(fn_update_twice, app_update_same, app_update_other)
+  have e0: X1.gpr[0] = 218 by simp(h0, app_update_same, app_update_other)
+  have e7: X1.gpr[7] = m.gpr[7] by simp(app_update_same, app_update_other)
+  obtain z1, hz hp1 from expand(rewrite(e7, rewrite(e0, rewrite(eX, b0))), bind_rel)
+  obtain x2, hd hp2 from apply(lx.or_true, apply(g.runs_elim, expand(hz, x86_64_linux.linux_syscall)))
+  have hb: bind_rel(x86_64_linux.sys_set_tid_address(m.gpr[7]), X1, x3 x4. x2 = exc(pair(x3, empty), pair("ret", x4)), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)),
+    x3. x2 = diverge(x3)) := rsimp(hd)
+  obtain z, hr hc from expand(hb, bind_rel)
+  have c1: (ex s1 v. z = ok(s1, v) && x2 = exc(pair(s1, empty), pair("ret", v))) ->
+      (ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) proof
+    assume h1
+    obtain s1 v, e1 e2 from h1
+    have ez := apply(lx.top_ret, rewrite(e2, hp2))
+    have o1: y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, v)), empty) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {v}, taut(e1, o1))
+  qed
+  have c2: (ex s1 e. z = exc(s1, e) && x2 = exc(pair(s1, empty), pair("raise", e))) -> (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) proof
+    assume h1
+    obtain s1 x, e1 e2 from h1
+    have ez := apply(lx.top_raise, rewrite(e2, hp2))
+    have o1: y = exc(s1, x) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {x}, taut(e1, o1))
+  qed
+  have c3: (ex t. z = diverge(t) && x2 = diverge(t)) -> (ex t. z = diverge(t) && y = diverge(t)) proof
+    assume h1
+    obtain t, e1 e2 from h1
+    have ez := apply(lx.top_div, rewrite(e2, hp2))
+    have o1: y = diverge(t) by simp(rewrite(ez, hp1))
+    show by ex_intro({t}, taut(e1, o1))
+  qed
+  show by ex_intro({z}, taut(hr, hc, c1, c2, c3))
+qed
+
+// the syscall instruction with rax 218: the machine with rip on, rcx and
+// r11 set, rax a thread id in (0, 2^22); its memory as it was (written in
+// x86i.brk_insn's form)
+theorem x86i.tid_insn(m, o, len): m in x86_64_linux.Machine -> m.gpr[0] = 218 -> runs(x86_64_linux.exec_body(len, tag(156, empty)), m, o) ->
+  ex r. r in bits(64) && int_lt(0, r) && int_lt(r, 4194304) &&
+    o = ok(fn_update(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), "gpr",
+      fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags))), "vm", m.vm), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags)), 0, r)), empty)
+proof
+  assume hM h0 h
+  let A := bits_add(64, m.rip, bits_of_int(64, len))
+  let M0 := fn_update(m, "rip", A)
+  let G := fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))
+  let X1 := fn_update(M0, "gpr", G)
+  obtain y, hy hc from apply(x86i.syscall_run, h)
+  have g0: M0.gpr[0] = 218 by simp(h0, app_update_other)
+  obtain z, hz hzc from apply(x86i.syscall_tid, g0, hy)
+  have ex1: fn_update(M0, "gpr", fn_update(fn_update(M0.gpr, 1, M0.rip), 11, x86_64_linux.rflags_word(M0.flags))) = X1 by simp(app_update_same, app_update_other)
+  have hz2 := rewrite(ex1, hz)
+  // (set_tid_address's run: ok(X1, t), t a thread id)
+  have ne: ex t. t in bits(64) && (int_lt(0, t) && int_lt(t, int_pow(2, 22))) by ex_intro({1}, simp())
+  have b1 := apply(g.runs_elim, expand(hz2, x86_64_linux.sys_set_tid_address))
+  obtain t, ht ht2 ek from apply(g.any_e, ne, b1)
+  have ez: z = ok(X1, t) by simp(ek)
+  have yy: y = ok(fn_update(X1, "gpr", fn_update(X1.gpr, 0, t)), empty) by simp(rewrite(ez, hzc))
+  have eg: X1.gpr = G by simp(app_update_same)
+  have eo: o = ok(fn_update(X1, "gpr", fn_update(G, 0, t)), empty) by simp(rewrite(eg, rewrite(yy, hc)))
+  // (X1 with its own memory: X1)
+  have rb := apply(lx.rec_machine, hM)
+  have r0: lx.rec(m) by taut(rb)
+  have r10 := mp(lx.rec_set[x := m, k := "rip", v := A], r0, (!("rip" = "vm") by rsimp()))
+  have r1 := mp(lx.rec_set[x := M0, k := "gpr", v := G], r10, (!("gpr" = "vm") by rsimp()))
+  have xv: X1.vm = m.vm by simp(app_update_other)
+  have xf xd _ _ _ := r1
+  have xs := rewrite(xv, mp(mp(fn_update_same[f := X1, k := "vm"], xf), xd))
+  have eo2 := rewrite(sym(xs), eo, {1})
+  have pw: int_pow(2, 22) = 4194304 by simp()
+  show by ex_intro({t}, taut(ht, rewrite(pw, ht2), eo2))
+qed
+
+// syscall with rax 158: arch_prctl(rdi, rsi), as x86i.syscall_brk
+theorem x86i.syscall_aprctl(m, y): m.gpr[0] = 158 -> runs(x86_64_linux.syscall(), m, y) ->
+  ex z. runs(x86_64_linux.sys_arch_prctl(m.gpr[7], m.gpr[6]), fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags))), z) &&
+    ((ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) || (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) ||
+     (ex t. z = diverge(t) && y = diverge(t)))
+proof
+  assume h0 h
+  have b0 := expand(apply(g.runs_elim, expand(h, x86_64_linux.syscall)), letin)
+  let X1 := fn_update(m, "gpr", fn_update(fn_update(m.gpr, 1, m.rip), 11, x86_64_linux.rflags_word(m.flags)))
+  have eX: fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)), "gpr", fn_update(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).gpr, 11,
+    x86_64_linux.rflags_word(fn_update(m, "gpr", fn_update(m.gpr, 1, m.rip)).flags))) = X1 by simp(fn_update_twice, app_update_same, app_update_other)
+  have e0: X1.gpr[0] = 158 by simp(h0, app_update_same, app_update_other)
+  have e7: X1.gpr[7] = m.gpr[7] by simp(app_update_same, app_update_other)
+  have e6: X1.gpr[6] = m.gpr[6] by simp(app_update_same, app_update_other)
+  obtain z1, hz hp1 from expand(rewrite(e6, rewrite(e7, rewrite(e0, rewrite(eX, b0)))), bind_rel)
+  obtain x2, hd hp2 from apply(lx.or_true, apply(g.runs_elim, expand(hz, x86_64_linux.linux_syscall)))
+  have hb: bind_rel(x86_64_linux.sys_arch_prctl(m.gpr[7], m.gpr[6]), X1, x3 x4. x2 = exc(pair(x3, empty), pair("ret", x4)), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)),
+    x3. x2 = diverge(x3)) := rsimp(hd)
+  obtain z, hr hc from expand(hb, bind_rel)
+  have c1: (ex s1 v. z = ok(s1, v) && x2 = exc(pair(s1, empty), pair("ret", v))) ->
+      (ex s1 r. z = ok(s1, r) && y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, r)), empty)) proof
+    assume h1
+    obtain s1 v, e1 e2 from h1
+    have ez := apply(lx.top_ret, rewrite(e2, hp2))
+    have o1: y = ok(fn_update(s1, "gpr", fn_update(s1.gpr, 0, v)), empty) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {v}, taut(e1, o1))
+  qed
+  have c2: (ex s1 e. z = exc(s1, e) && x2 = exc(pair(s1, empty), pair("raise", e))) -> (ex s1 e. z = exc(s1, e) && y = exc(s1, e)) proof
+    assume h1
+    obtain s1 x, e1 e2 from h1
+    have ez := apply(lx.top_raise, rewrite(e2, hp2))
+    have o1: y = exc(s1, x) by simp(rewrite(ez, hp1))
+    show by ex_intro({s1}, {x}, taut(e1, o1))
+  qed
+  have c3: (ex t. z = diverge(t) && x2 = diverge(t)) -> (ex t. z = diverge(t) && y = diverge(t)) proof
+    assume h1
+    obtain t, e1 e2 from h1
+    have ez := apply(lx.top_div, rewrite(e2, hp2))
+    have o1: y = diverge(t) by simp(rewrite(ez, hp1))
+    show by ex_intro({t}, taut(e1, o1))
+  qed
+  show by ex_intro({z}, taut(hr, hc, c1, c2, c3))
+qed
+
+// the syscall instruction with rax 158 and rdi ARCH_SET_FS (4098): the
+// machine with rip on, rcx and r11 set; an address at or above TASK_SIZE
+// (rsi): rax -EPERM, else rax 0 and fs_base the address (written in
+// x86i.brk_insn's form, its memory its own)
+theorem x86i.aprctl_insn(m, o, len): m in x86_64_linux.Machine -> m.gpr[0] = 158 -> m.gpr[7] = 4098 -> runs(x86_64_linux.exec_body(len, tag(156, empty)), m, o) ->
+  (int_le(x86_64_linux.TASK_SIZE, m.gpr[6]) && o = ok(fn_update(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), "gpr",
+      fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags))), "vm", m.vm), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags)), 0, x86_64_linux.err(x86_64_linux.EPERM))), empty)) ||
+  (int_lt(m.gpr[6], x86_64_linux.TASK_SIZE) && o = ok(fn_update(fn_update(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), "gpr",
+      fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags))), "vm", m.vm), "gpr",
+      fn_update(fn_update(fn_update(m.gpr, 1, bits_add(64, m.rip, bits_of_int(64, len))), 11, x86_64_linux.rflags_word(m.flags)), 0, 0)), "fs_base", m.gpr[6]), empty))
+proof
+  assume hM h0 h7 h
+  let A := bits_add(64, m.rip, bits_of_int(64, len))
+  let M0 := fn_update(m, "rip", A)
+  let G := fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))
+  let X1 := fn_update(M0, "gpr", G)
+  obtain y, hy hc from apply(x86i.syscall_run, h)
+  have g0: M0.gpr[0] = 158 by simp(h0, app_update_other)
+  obtain z, hz hzc from apply(x86i.syscall_aprctl, g0, hy)
+  have ex1: fn_update(M0, "gpr", fn_update(fn_update(M0.gpr, 1, M0.rip), 11, x86_64_linux.rflags_word(M0.flags))) = X1 by simp(app_update_same, app_update_other)
+  have e7: M0.gpr[7] = 4098 by simp(h7, app_update_other)
+  have e6: M0.gpr[6] = m.gpr[6] by simp(app_update_other)
+  have hz2 := rewrite(e6, rewrite(e7, rewrite(ex1, hz)))
+  have b1 := apply(g.runs_elim, expand(hz2, x86_64_linux.sys_arch_prctl))
+  // (X1 with its own memory: X1)
+  have rb := apply(lx.rec_machine, hM)
+  have r0: lx.rec(m) by taut(rb)
+  have r10 := mp(lx.rec_set[x := m, k := "rip", v := A], r0, (!("rip" = "vm") by rsimp()))
+  have r1 := mp(lx.rec_set[x := M0, k := "gpr", v := G], r10, (!("gpr" = "vm") by rsimp()))
+  have xv: X1.vm = m.vm by simp(app_update_other)
+  have xf xd _ _ _ := r1
+  have xs := rewrite(xv, mp(mp(fn_update_same[f := X1, k := "vm"], xf), xd))
+  have eg: X1.gpr = G by simp(app_update_same)
+  have c1: int_le(x86_64_linux.TASK_SIZE, m.gpr[6]) -> o = ok(fn_update(X1, "gpr", fn_update(G, 0, x86_64_linux.err(x86_64_linux.EPERM))), empty) proof
+    assume hle
+    have ez: z = ok(X1, x86_64_linux.err(x86_64_linux.EPERM)) by simp(b1, hle)
+    have yy: y = ok(fn_update(X1, "gpr", fn_update(X1.gpr, 0, x86_64_linux.err(x86_64_linux.EPERM))), empty) by simp(rewrite(ez, hzc))
+    show by simp(rewrite(eg, rewrite(yy, hc)))
+  qed
+  have c2: int_lt(m.gpr[6], x86_64_linux.TASK_SIZE) -> o = ok(fn_update(fn_update(X1, "gpr", fn_update(G, 0, 0)), "fs_base", m.gpr[6]), empty) proof
+    assume hlt
+    have ez: z = ok(fn_update(X1, "fs_base", m.gpr[6]), 0) by simp(b1, hlt)
+    have yy: y = ok(fn_update(fn_update(X1, "fs_base", m.gpr[6]), "gpr", fn_update(fn_update(X1, "fs_base", m.gpr[6]).gpr, 0, 0)), empty) by simp(rewrite(ez, hzc))
+    have eg2: fn_update(X1, "fs_base", m.gpr[6]).gpr = G by simp(app_update_same, app_update_other)
+    have sw := fn_update_swap[f := X1, k := "fs_base", a := m.gpr[6], j := "gpr", b := fn_update(G, 0, 0)]
+    have sw2 := mp(sw, (!("fs_base" = "gpr") by rsimp()))
+    show by simp(rewrite(sw2, rewrite(eg2, rewrite(yy, hc))))
+  qed
+  have r6 := mp(x86i.reg_typed, {m}, {6}, hM, simp())
+  have tot: int_le(x86_64_linux.TASK_SIZE, m.gpr[6]) || int_lt(m.gpr[6], x86_64_linux.TASK_SIZE) by arith(simp(r6))
+  have d1: int_le(x86_64_linux.TASK_SIZE, m.gpr[6]) -> o = ok(fn_update(fn_update(X1, "vm", m.vm), "gpr", fn_update(G, 0, x86_64_linux.err(x86_64_linux.EPERM))), empty) proof
+    assume hle
+    show := rewrite(sym(xs), mp(c1, hle), {1})
+  qed
+  have d2: int_lt(m.gpr[6], x86_64_linux.TASK_SIZE) -> o = ok(fn_update(fn_update(fn_update(X1, "vm", m.vm), "gpr", fn_update(G, 0, 0)), "fs_base", m.gpr[6]), empty) proof
+    assume hlt
+    show := rewrite(sym(xs), mp(c2, hlt), {1})
+  qed
+  show by taut(tot, d1, d2)
+qed

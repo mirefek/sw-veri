@@ -394,6 +394,66 @@ proof
   show by defs(simp(h, pu, keep(gimple.os_munmap, gimple.sys_pages_ok, bind_rel)), gimple.sys_call2)
 qed
 
+// sys_set_fs(a2): an address beyond the user space, -EPERM; else the
+// world's thread pointer a2
+theorem g.sys_set_fs_eperm(w, a2): w in univ(1) -> a2 in bits(64) -> int_le(x86_64_linux.TASK_SIZE, a2) ->
+  runs(gimple.sys_set_fs(a2), w, ok(w, x86_64_linux.err(x86_64_linux.EPERM)))
+proof
+  assume hw ha hl
+  have eb: x86_64_linux.err(x86_64_linux.EPERM) in bits(64) by defs(simp(), x86_64_linux.err)
+  have eu := mp(mp(univ_trans[u := 1, a := x86_64_linux.err(x86_64_linux.EPERM), b := bits(64)], bits_univ[n := 64]), eb)
+  have pu: pair(w, ok(w, x86_64_linux.err(x86_64_linux.EPERM))) in univ(1) by simp(hw, eu)
+  show by defs(simp(pu, ha, hl, keep(bind_rel)), gimple.sys_set_fs)
+qed
+
+theorem g.sys_set_fs_ok(w, a2): w in univ(1) -> a2 in bits(64) -> int_lt(a2, x86_64_linux.TASK_SIZE) ->
+  runs(gimple.sys_set_fs(a2), w, ok(fn_update(w, "fs_base", a2), 0))
+proof
+  assume hw ha hl
+  have au := mp(mp(univ_trans[u := 1, a := a2, b := bits(64)], bits_univ[n := 64]), ha)
+  have pu: pair(w, ok(fn_update(w, "fs_base", a2), 0)) in univ(1) by simp(hw, au)
+  show by defs(simp(pu, ha, hl, keep(bind_rel)), gimple.sys_set_fs)
+qed
+
+// (the startup mode's objects, all bytes: not the main mode's, which keep
+// the canary's)
+theorem tr.cball_nmain(s, v): v.c_bytes = abi.cball -> s.fs_base in bits(64) -> !tr.mainv(s, v)
+proof
+  assume hc hf hmv
+  let X := int_add(s.fs_base, 40)
+  have xo: X in omega by arith(simp(hf))
+  have e: abi.cball = abi.cbytes0(s.fs_base) := trans(sym(hc), hmv)
+  have xc: X in abi.cball by simp(xo)
+  have x0 := rewrite(e, xc)
+  have nk: !(X in abi.canary(s.fs_base)) by simp(x0)
+  have kc: X in abi.canary(s.fs_base) by defs(simp(xo, hf), abi.canary)
+  show by taut(nk, kc)
+qed
+
+// (the thread pointer set in the startup mode: the coupling kept -- tr.mem
+// reads the entry's fs_base, the world's only in the main mode)
+theorem tr.mem_fs(s, m, w, v, m2, w2): tr.mem(s, m, w, v) -> !tr.mainv(s, v) -> m2.vm = m.vm -> w2.vm = w.vm -> w2.objs = w.objs -> tr.mem(s, m2, w2, v)
+proof
+  assume hm hn em ew eo
+  have {wob, wm, oacc, hlv, cok} := hm
+  have wob2 := trans(eo, wob)
+  have wm2 := rewrite(sym(ew), rewrite(sym(em), wm))
+  have oacc2 := rewrite(sym(em), oacc)
+  have mfs2: tr.mainv(s, v) -> w2.fs_base = s.fs_base by taut(hn)
+  show by defs(taut(wob2, wm2, oacc2, hlv, cok, mfs2), tr.mem)
+qed
+
+// (a machine with its thread pointer set: a machine)
+theorem tr.mach_fs(M, f): M in x86_64_linux.Machine -> M in univ(1) -> f in bits(64) ->
+  fn_update(M, "fs_base", f) in x86_64_linux.Machine && fn_update(M, "fs_base", f) in univ(1)
+proof
+  assume hM hu hf
+  have fu := mp(mp(univ_trans[u := 1, a := f, b := bits(64)], bits_univ[n := 64]), hf)
+  have a: fn_update(M, "fs_base", f) in x86_64_linux.Machine by defs(simp(expand(hM, x86_64_linux.Machine), hf, fu, hu), x86_64_linux.Machine)
+  have b: fn_update(M, "fs_base", f) in univ(1) by simp(hu, fu)
+  show by taut(a, b)
+qed
+
 // syscall (0F 05), rax holding n, rdi a1, rsi a2: the spec's
 // sys_call2(n, a1, a2) -- undefined but for munmap meeting its
 // requirement; else Linux's munmap, the world's memory changed alike, the
@@ -536,6 +596,172 @@ proof
       show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := P, w := w, m := m, q := y. QM(y)], st), nr), post)
     qed
     show by taut(cu, cd)
+  qed
+  show by defs(g, tr.lv)
+qed
+
+// syscall (0F 05), rax 158, rdi ARCH_SET_FS, rsi b2, in the startup mode
+// (the objects all bytes): the spec's sys_set_fs(b2) -- -EPERM, or the
+// thread pointer b2, the machine's and the world's alike; the result in
+// rax (rcx and r11 clobbered), the frame 8 bytes (rsp's page)
+theorem tr.sys_set_fs(s, v, base, code, fr, a, a2, hs, ds, rs, rc, w, b2, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw, zb. bkp, zb pb wb. bka):
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(2, tag(156, empty)), m, o)) ->
+  a2 = bits_add(64, a, bits_of_int(64, 2)) ->
+  0 in dom(rs) -> rs[0] = pair(8, 158) -> 7 in dom(rs) -> rs[7] = pair(8, 4098) -> 6 in dom(rs) -> rs[6] = pair(8, b2) -> tr.cs_sub(rc, rs) -> tr.sal16(s) ->
+  v.c_bytes = abi.cball ->
+  (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
+  (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, 8, fn_update(rc, 0, pair(8, r0)),
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs,
+    mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. bind_rel(gimple.sys_set_fs(b2), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1)), x1,
+      x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w)
+proof
+  assume hat ha2 h0d h0u h7d h7u h6d h6u hsub h16 cba hk hpost
+  let Q := mkprog(x0 x1. ex x8. bind_rel(gimple.sys_set_fs(b2), x0, x9 x10. ka(x9, x10, x8), x9 x10. xx(x9, x10, x8), x9. dd(x9, x8)) && k(x8, x1))
+  let P := mkprog(x1 x2. bind_rel(Q, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3)))
+  have g: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, ds) ->
+      tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m) proof
+    fix m
+    assume hi hr hh hrs hmm hfr
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have {sM, srsv, wW, wu} := hi
+    have rn nb := apply(tr.regs_get, {m}, {rs}, {0}, {8}, {158}, hrs, h0d, h0u)
+    have r7 ab := apply(tr.regs_get, {m}, {rs}, {7}, {8}, {4098}, hrs, h7d, h7u)
+    have r6 bb2 := apply(tr.regs_get, {m}, {rs}, {6}, {8}, {b2}, hrs, h6d, h6u)
+      let A := bits_add(64, m.rip, bits_of_int(64, 2))
+      let G1 := fn_update(fn_update(m.gpr, 1, A), 11, x86_64_linux.rflags_word(m.flags))
+      let MM(V, r) := fn_update(fn_update(fn_update(fn_update(m, "rip", A), "gpr", G1), "vm", V), "gpr", fn_update(G1, 0, r))
+      let EP := x86_64_linux.err(x86_64_linux.EPERM)
+      let QM(y) := (int_le(x86_64_linux.TASK_SIZE, b2) && y = MM(m.vm, EP)) || (int_lt(b2, x86_64_linux.TASK_SIZE) && y = fn_update(MM(m.vm, 0), "fs_base", b2))
+      have g158: m.gpr[0] = 158 := rn
+      have g7: m.gpr[7] = 4098 := r7
+      have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && QM(m2)) proof
+        fix o
+        assume ho
+        have hx := mp(all_elim(hat, {m}, {o}), ho, ipC, hr)
+        have eo := rewrite(r6, apply(x86i.aprctl_insn, ipM, g158, g7, hx))
+        have c1: int_le(x86_64_linux.TASK_SIZE, b2) && o = ok(MM(m.vm, EP), empty) -> (ex m2. o = ok(m2, empty) && QM(m2)) proof
+          assume hc
+          show by ex_intro({MM(m.vm, EP)}, taut(hc, refl({MM(m.vm, EP)})))
+        qed
+        have c2: int_lt(b2, x86_64_linux.TASK_SIZE) && o = ok(fn_update(MM(m.vm, 0), "fs_base", b2), empty) -> (ex m2. o = ok(m2, empty) && QM(m2)) proof
+          assume hc
+          show by ex_intro({fn_update(MM(m.vm, 0), "fs_base", b2)}, taut(hc, refl({fn_update(MM(m.vm, 0), "fs_base", b2)})))
+        qed
+        show by taut(eo, c1, c2)
+      qed
+      have nr := apply(tr.inv_nr, hi)
+      // (the coupling's parts at m)
+      have {rsv} := expand(hmm, tr.mem).wm
+      have rm := mp(rsv, srsv)
+      have {cok} := hmm
+      have sfb: s.fs_base in bits(64) by taut(cok)
+      have nm := apply(tr.cball_nmain, cba, sfb)
+      have mvm: m.vm in x86_64_linux.Vm := apply(x86i.parts, ipM).4
+      have wf := expand(wW, abi.World)
+      have wvm: w.vm in x86_64_linux.Vm by simp(wf)
+      have wos: w.os in x86_64_linux.Os by simp(wf)
+      have wfs: w.fs_base in bits(64) by simp(wf)
+      have wosu := mp(app_univ[u := 1, f := w, k := "os"], wu)
+      have wvu := apply(x86.vm_univ, wvm)
+      have pf pd po := (is_fun(w) && "vm" in dom(w) && "os" in dom(w) by simp(wf))
+      have ss: fn_update(w, "vm", w.vm) = w := mp(fn_update_same[f := w, k := "vm"], pf, pd)
+      have oss: fn_update(w, "os", w.os) = w := mp(fn_update_same[f := w, k := "os"], pf, po)
+      have b2b: b2 in bits(64) by simp(bb2)
+      have ch hoff := apply(tr.same_chg, hmm, rm)
+      have htop: m.vm.stack_top in omega by simp(expand(mvm, x86_64_linux.Vm))
+      have {mdf} := hi
+      have post: all m2. QM(m2) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m2) proof
+        fix m2
+        assume hq
+        // -EPERM: rax only
+        have p1: int_le(x86_64_linux.TASK_SIZE, b2) && m2 = MM(m.vm, EP) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m2) proof
+          assume hc
+          have hle em := hc
+          let W4 := fn_update(w, "vm", w.vm)
+          have _ _ w4W w4u := apply(tr.world_set, wW, wu, wvm, wvu, wos, wosu, wfs)
+          have rb: EP in bits(64) by defs(simp(), x86_64_linux.err)
+          have o1 := apply(g.sys_set_fs_eperm[w := w, a2 := b2], wu, b2b, hle)
+          have okw := rewrite(sym(ss), o1, {2})
+          have mt mu2 := apply(tr.mach_sys, ipM, ipU, (A in bits(64) by simp()), mvm, rb)
+          have m2M := rewrite(sym(em), mt)
+          have m2u := rewrite(sym(em), mu2)
+          have ev: m2.vm = m.vm by rsimp(em)
+          have e4: m2.gpr[4] = m.gpr[4] by rsimp(em)
+          have cs := apply(tr.cs_eq[m := m, x := m2], (m2.gpr[3] = m.gpr[3] && m2.gpr[5] = m.gpr[5] && m2.gpr[12] = m.gpr[12] && m2.gpr[13] = m.gpr[13] &&
+            m2.gpr[14] = m.gpr[14] && m2.gpr[15] = m.gpr[15] by rsimp(em)))
+          have ecpu: m2.cpu = m.cpu by rsimp(em)
+          have egs: m2.gs_base = m.gs_base by rsimp(em)
+          have eos: m2.os = m.os by rsimp(em)
+          have efs: m2.fs_base = m.fs_base by rsimp(em)
+          have df2: !m2.flags.df by rsimp(em, mdf)
+          have e0: m2.gpr[0] = EP by rsimp(em)
+          have rip2: m2.rip = a2 by rsimp(em, hr, ha2)
+          have w4v: W4.vm = w.vm by rsimp()
+          have w4os: W4.os = w.os by rsimp()
+          have w4fs: W4.fs_base = w.fs_base by rsimp()
+          have w4cpu: W4.cpu = w.cpu by rsimp()
+          have w4ob: W4.objs = w.objs by rsimp()
+          have i2 := apply(tr.inv_chg, hi, hmm, ch, m2M, m2u, ev, e4, ecpu, egs, eos, efs, df2, w4W, w4u, w4v, w4os, w4fs, w4cpu)
+          have mm2 := apply(tr.mem_chg, hmm, srsv, htop, ch, hoff, ev, w4v, w4ob, w4fs)
+          have hh2 := apply(tr.homes_chg, hh, rm, ch, ev)
+          have rs2 := apply(tr.regs_add, apply(tr.regs_cs_keep, hrs, hsub, cs), e0, (EP in bits(int_mul(8, 8)) by simp(rb)))
+          have f2 := apply(tr.frame8, i2, h16, (8 in omega by simp()), (int_le(8, 8) by arith()))
+          have pt := mp(all_elim(hpost, {W4}, {EP}), (W4 in abi.World && W4 in univ(1) by taut(w4W, w4u)), rb)
+          have cl := mp(all_elim(expand(pt, tr.pt), {m2}), i2, rip2, hh2, rs2, mm2, f2)
+          let Q2 := mkprog(x0 x1. ex x8. ka(x0, EP, x8) && k(x8, x1))
+          have q1 := mp(all_elim(tr.qs_call[op := gimple.sys_set_fs(b2), w4 := W4, r := EP, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
+            dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), wu, okw)
+          have r2r := mp(all_elim(tr.p_red[q := Q, q2 := Q2, kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {W4}), wu, q1)
+          have red: tr.red(P, w, mkprog(x1 x2. bind_rel(Q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W4) by defs(r2r, tr.red)
+          show := apply(tr.cl_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], red, cl)
+        qed
+        // the thread pointers b2 (the startup mode's coupling kept), rax 0
+        have p2: int_lt(b2, x86_64_linux.TASK_SIZE) && m2 = fn_update(MM(m.vm, 0), "fs_base", b2) -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, P, w, m2) proof
+          assume hc
+          have hlt em := hc
+          let W4 := fn_update(fn_update(fn_update(w, "vm", w.vm), "os", w.os), "fs_base", b2)
+          have w4W w4u _ _ := apply(tr.world_set, wW, wu, wvm, wvu, wos, wosu, b2b)
+          have eW: W4 = fn_update(w, "fs_base", b2) by rsimp(ss, oss)
+          have o1 := apply(g.sys_set_fs_ok[w := w, a2 := b2], wu, b2b, hlt)
+          have okw := rewrite(sym(eW), o1)
+          have r0b: 0 in bits(64) by simp()
+          have mt0 mu0 := apply(tr.mach_sys, ipM, ipU, (A in bits(64) by simp()), mvm, r0b)
+          have mt mu2 := apply(tr.mach_fs, mt0, mu0, b2b)
+          have m2M := rewrite(sym(em), mt)
+          have m2u := rewrite(sym(em), mu2)
+          have ev: m2.vm = m.vm by rsimp(em)
+          have e4: m2.gpr[4] = m.gpr[4] by rsimp(em)
+          have cs := apply(tr.cs_eq[m := m, x := m2], (m2.gpr[3] = m.gpr[3] && m2.gpr[5] = m.gpr[5] && m2.gpr[12] = m.gpr[12] && m2.gpr[13] = m.gpr[13] &&
+            m2.gpr[14] = m.gpr[14] && m2.gpr[15] = m.gpr[15] by rsimp(em)))
+          have ecpu: m2.cpu = m.cpu by rsimp(em)
+          have egs: m2.gs_base = m.gs_base by rsimp(em)
+          have eos: m2.os = m.os by rsimp(em)
+          have mfs2: m2.fs_base = W4.fs_base by rsimp(em)
+          have df2: !m2.flags.df by rsimp(em, mdf)
+          have e0: m2.gpr[0] = 0 by rsimp(em)
+          have rip2: m2.rip = a2 by rsimp(em, hr, ha2)
+          have w4v: W4.vm = w.vm by rsimp()
+          have w4os: W4.os = w.os by rsimp()
+          have w4cpu: W4.cpu = w.cpu by rsimp()
+          have w4ob: W4.objs = w.objs by rsimp()
+          have i2 := apply(tr.inv_chg_fs, hi, hmm, ch, m2M, m2u, ev, e4, ecpu, egs, eos, df2, w4W, w4u, w4v, w4os, mfs2, w4cpu)
+          have mm2 := apply(tr.mem_fs, hmm, nm, ev, w4v, w4ob)
+          have hh2 := apply(tr.homes_chg, hh, rm, ch, ev)
+          have rs2 := apply(tr.regs_add, apply(tr.regs_cs_keep, hrs, hsub, cs), e0, (0 in bits(int_mul(8, 8)) by simp()))
+          have f2 := apply(tr.frame8, i2, h16, (8 in omega by simp()), (int_le(8, 8) by arith()))
+          have pt := mp(all_elim(hpost, {W4}, {0}), (W4 in abi.World && W4 in univ(1) by taut(w4W, w4u)), r0b)
+          have cl := mp(all_elim(expand(pt, tr.pt), {m2}), i2, rip2, hh2, rs2, mm2, f2)
+          let Q2 := mkprog(x0 x1. ex x8. ka(x0, 0, x8) && k(x8, x1))
+          have q1 := mp(all_elim(tr.qs_call[op := gimple.sys_set_fs(b2), w4 := W4, r := 0, a := x9 x10 x8. ka(x9, x10, x8), xx := x9 x10 x8. xx(x9, x10, x8),
+            dd := x9 x8. dd(x9, x8), k := x8 x1. k(x8, x1)], {w}), wu, okw)
+          have r2r := mp(all_elim(tr.p_red[q := Q, q2 := Q2, kw := x3 x4 x2. kw(x3, x4, x2)], {w}, {W4}), wu, q1)
+          have red: tr.red(P, w, mkprog(x1 x2. bind_rel(Q2, x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), W4) by defs(r2r, tr.red)
+          show := apply(tr.cl_red[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], red, cl)
+        qed
+        show by taut(hq, p1, p2)
+      qed
+      show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := P, w := w, m := m, q := y. QM(y)], st), nr), post)
   qed
   show by defs(g, tr.lv)
 qed

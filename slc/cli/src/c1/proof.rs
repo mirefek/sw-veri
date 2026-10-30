@@ -34,7 +34,7 @@ const HAPART: &[&str] = &[
     "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
     "store64i_bd", "store32i_bd", "store16i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "or32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
     "store64_bd_eq", "store64_bi", "movsb", "rep_movsq", "rep_stosq", "store32_bd_w", "store8_bid", "store16_bid", "store32_bid", "store64_bid", "store64_rsib", "store32i_rsp",
-    "store32_rip_w",
+    "store32_rip_w", "store64_bd_a",
 ];
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
@@ -799,9 +799,9 @@ impl<'e> Gen<'e> {
                     }
                 }
                 // (a system call: at the machine's syscall)
-                Some(Red::Sys { n, args, a, xx, dd, k }) => {
+                Some(Red::Sys { n, args, a, xx, dd, k, fs }) => {
                     if self.insns.get(&st.a).map(|i| i.row) == Some(156) {
-                        return self.sys_at(&st, n, &args, a, xx, dd, k);
+                        return self.sys_at(&st, n, &args, a, xx, dd, k, fs);
                     }
                 }
                 // the loop's exit: the rest in the function's wrapper, no
@@ -1960,11 +1960,12 @@ impl<'e> Gen<'e> {
     /// arguments; the claim after it (rax the result, the other registers
     /// not known, the frame rsp's page) for every world and result
     #[allow(clippy::too_many_arguments)]
-    fn sys_at(&mut self, st: &St, nv: Term, args: &[Term], al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+    fn sys_at(&mut self, st: &St, nv: Term, args: &[Term], al: Term, xl: Term, dl: Term, kl: Term, fs: bool) -> Result<Seq, String> {
         let a = st.a;
         let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
         let a2 = (a + insn.len) % P64;
         let (rule, names): (&str, &[&str]) = match args.len() {
+            2 if fs => ("tr.sys_set_fs", &["", "b2"]),
             1 => ("tr.sys_call1", &["a1"]),
             2 => ("tr.sys_call2", &["a1", "b2"]),
             3 => ("tr.sys_call3", &["a1", "b2", "b3"]),
@@ -1975,6 +1976,12 @@ impl<'e> Gen<'e> {
         // (Linux's argument registers: rdi, rsi, rdx, r10, r8, r9)
         for (r, x) in [7u128, 6, 2, 10, 8, 9].iter().zip(args.iter()) {
             regs.push((*r, x));
+        }
+        // (a register of 4 bytes -- `mov r32, imm32`: its 8, zero-extended)
+        for (r, _) in &regs {
+            if let Some(pf) = self.widen(st, *r, 8)? {
+                return Ok(pf);
+            }
         }
         for (r, x) in regs {
             let (k, v) = self.reg(st, r).ok_or_else(|| format!("{:x}: register {} holds no value at the syscall", a, r))?;
@@ -2038,9 +2045,12 @@ impl<'e> Gen<'e> {
             ("rs", st.rs.clone()),
             ("rc", self.regs_map(&rc)),
             ("w", w),
-            ("nv", nv),
         ];
-        iv.extend(names.iter().copied().zip(args.iter().cloned()));
+        // (sys_set_fs: rax and rdi literals of the rule's)
+        if !fs {
+            iv.push(("nv", nv));
+        }
+        iv.extend(names.iter().copied().zip(args.iter().cloned()).filter(|(nm, _)| !nm.is_empty()));
         iv.extend([("ka", al), ("xx", xl), ("dd", dl), ("k", kl), ("kw", self.kw3()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())]);
         let inst = R::Inst(rule.into(), iv);
         // (rip's step, then each register's two facts)
@@ -2061,7 +2071,12 @@ impl<'e> Gen<'e> {
             None if rule == "tr.sys_call6" => taut(vec![R::S(self.sal16()?)]),
             None => s(&self.sal16()?),
         };
-        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), h16, s(&hk), s(&pc)]);
+        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), h16]);
+        // (sys_set_fs: the startup mode's objects, all bytes)
+        if fs {
+            prem.push(simpw(vec![f("tr.cbm_f")]));
+        }
+        prem.extend([s(&hk), s(&pc)]);
         self.run(&mp(inst, prem), &[])
     }
 

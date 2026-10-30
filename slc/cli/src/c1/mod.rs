@@ -135,8 +135,9 @@ enum Red {
     Call { g: Term, args: Vec<Term>, list: Term, one: bool, stk: bool, a: Term, xx: Term, dd: Term, k: Term },
     /// a system call (gimple.sys_call1, sys_call2, sys_call3, sys_call6; the machine's `syscall`
     /// makes it): its number and arguments, the block's continuation,
-    /// handlers and rest
-    Sys { n: Term, args: Vec<Term>, a: Term, xx: Term, dd: Term, k: Term },
+    /// handlers and rest (fs: gimple.sys_set_fs, arch_prctl's -- n 158,
+    /// the arguments ARCH_SET_FS and the address)
+    Sys { n: Term, args: Vec<Term>, a: Term, xx: Term, dd: Term, k: Term, fs: bool },
     /// a loop's iteration ended by the body leaving with `e` (`tr.lcont`):
     /// the rest `k` in the wrapper `kw`
     Exit { e: Term, k: Term, kw: Term },

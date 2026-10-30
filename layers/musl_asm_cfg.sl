@@ -233,3 +233,22 @@ fn memset_fun() -> CFun2[World] = (args: Args) => {
   let r = memset(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
   return (result(r), any bits[64])
 }
+
+// __set_thread_area: one block at 40574c (2), its result in rax
+proc[World] __set_thread_area(p: Addr) -> bits[64] {
+  var bb: nat = 2
+  var r: bits[64] = any bits[64]
+  loop {
+    // <bb 2>
+    r := sys_set_fs(p)
+    return r
+  }
+}
+fn __set_thread_area_cfg_live() -> List[(nat, nat)] = [(2, 0)]
+fn __set_thread_area_cfg_widths() -> List[nat] = [64]
+fn __set_thread_area_cfg_regs() -> List[(nat, nat)] = [(0, 0)]
+fn __set_thread_area_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = __set_thread_area(bits[64](args[0]))
+  return (result(r), any bits[64])
+}

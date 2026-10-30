@@ -185,3 +185,20 @@ fn memset_fun() -> CFun2[World] = (args: Args) => {
   let r = memset(bits[64](args[0]), bits[64](args[1]), bits[64](args[2]))
   return (result(r), any bits[64])
 }
+
+///////////////////////////////////////////////////////////////////////
+//  __set_thread_area (src/thread/x86_64/__set_thread_area.s)
+//
+//   mov rsi, rdi; mov edi, 0x1002; mov eax, 158; syscall; ret
+//
+// arch_prctl(ARCH_SET_FS, p): the thread pointer p (before main)
+proc[World] __set_thread_area(p: Addr) -> bits[64] {
+  var r: bits[64] = any bits[64]
+  r := sys_set_fs(p)
+  return r
+}
+fn __set_thread_area_fun() -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  let r = __set_thread_area(bits[64](args[0]))
+  return (result(r), any bits[64])
+}

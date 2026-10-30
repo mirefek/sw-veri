@@ -1106,7 +1106,24 @@ impl<'e> Gen<'e> {
                     let u = self.need_reg(st, g, 8)?;
                     let ad = self.canon(&self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]));
                     let w0 = st.w.clone();
-                    let (hc, v, st2, red, sa, so) = self.spec_store_x(st, Some(&ad), Some(8))?;
+                    let (hc, v, st2, red, sa, so) = self.spec_store_x(st, None, Some(8))?;
+                    // (the spec's address p + off written otherwise -- the
+                    // same by N: tr.store64_bd_a with the equation)
+                    let same_lit = self.eval_lit(&so.addr).is_some() && self.eval_lit(&so.addr) == self.eval_lit(&ad);
+                    if self.canon(&so.addr) != self.canon(&ad) && !same_lit && so.bf.is_none() {
+                        let ea = self.mk("bits_add", vec![lit(64), bv.clone(), d.clone()]);
+                        let pa = self.mk("bits_add", vec![lit(64), so.p.clone(), so.off.clone()]);
+                        let q = self.addr_eq(st, &ea, &pa).map_err(|e| format!("{:x}: the machine stores at {}, the spec at {}: {}", a, self.print(&ad), self.print(&so.addr), e))?;
+                        let hux = if self.canon(&v) == self.canon(&u) {
+                            simp0()
+                        } else {
+                            self.eq_nf(&u, &v)?.ok_or_else(|| format!("{:x}: the machine stores {}, the spec {}", a, self.print(&u), self.print(&v)))?
+                        };
+                        let tr = self.step("store64_bd_a", a, insn, &[&x[1], &b, &d, &x[3], &x[4], &bv, &u, &v, &so.p, &so.off], self.tail_s(st, &st2, insn, 9, vec![hux, simp_l(), simp_l(), s(&q)], &hc, &red));
+                        let mut st3 = st2;
+                        st3.a = a2;
+                        return self.then(tr, st3);
+                    }
                     // (a bitfield's merged word: the register's, shown equal)
                     if let Some((_, pos, k, fv)) = &so.bf {
                         let lp = self.bf_merge(st, &w0, &sa, 8, pos, k, fv, &u, &u)?;

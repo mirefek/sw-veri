@@ -1384,3 +1384,15 @@ item is a short summary of finished work; details are in the files named.
   u), the 7-argument call so (ccs_ms's second case); the syscall's
   8-byte frame after it without the ABI's alignment, from a home within
   4 KiB below rsp (tr.home8, tr.frame8_h; tr.sys_call6 takes either).
+- **`__init_tp` and the thread pointer** (c1_init_tls.core, c1_asm.core):
+  GIMPLE's `sys_call1` with set_tid_address (218; layers/gimple.sl,
+  `os_set_tid_address`, as Linux's: a tid in (0, 2^22)) -- machine
+  x86i.syscall_tid / tid_insn, the rule's third case (tr.sys_call1,
+  tr.sys1_tid, tr.same_chg), its effect; arch_prctl(ARCH_SET_FS) as an op
+  of its own, `sys_set_fs` (a generic wrapper's arch_prctl could not keep
+  the main mode's thread pointer) -- machine x86i.syscall_aprctl /
+  aprctl_insn, the rule tr.sys_set_fs in the startup mode (both thread
+  pointers set: tr.inv_chg_fs, tr.mem_fs, tr.cball_nmain);
+  `__set_thread_area`'s readable model (layers/musl_asm.sl, _cfg) and
+  C1; a `[b + d]` store at the spec's p + off written otherwise
+  (tr.store64_bd_a). C1 of the unit's `__syscall1` copy and `__init_tp`.

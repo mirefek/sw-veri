@@ -457,12 +457,19 @@ proc[World] os_munmap(addr: Addr, len: bits[64]) -> bits[64] {
   return 0
 }
 
+// set_tid_address: the thread id (the pointer kept for the thread's exit,
+// which is not modelled -- Linux's sys_set_tid_address)
+proc[World] os_set_tid_address(tidptr: Addr) -> bits[64] {
+  return any t: bits[64] where 0 < uint(t) && uint(t) < 2^22
+}
+
 // The calls by the arguments passed (the registers not passed no
 // argument of the call made, which reads only its own): with one, brk
-// (12); with two, munmap (11); with three, mprotect (10); with six, mmap
-// (9).
+// (12) or set_tid_address (218); with two, munmap (11); with three,
+// mprotect (10); with six, mmap (9).
 proc[World] sys_call1(n: bits[64], a1: bits[64]) -> bits[64] {
-  require uint(n) = 12
+  require uint(n) = 12 || uint(n) = 218
+  if uint(n) = 218 { return os_set_tid_address(a1) }
   // the pages it gives back, the break's own (it takes new ones only where
   // they are free, off the stack's space)
   require pages_for(uint(a1)) < pages_for(uint(vm.brk)) -> a1 >= vm.brk_start ->
@@ -492,6 +499,16 @@ proc[World] sys_call6(n: bits[64], a1: bits[64], a2: bits[64], a3: bits[64], a4:
   // pages off the stack's space)
   require if a4[4] { sys_pages_ok(vm, objs, page_of(a1), pages_for(uint(a2))) } else { uint(a1) = 0 }
   return os_mmap(a1, a2, a3, a4, a5, a6)
+}
+
+// arch_prctl(ARCH_SET_FS, addr) (158): the thread pointer set (Linux's
+// sys_arch_prctl) -- a call of its own, musl's __set_thread_area's
+// before main: a generic wrapper's could not keep the thread pointer its
+// callers' have
+proc[World] sys_set_fs(addr: bits[64]) -> bits[64] {
+  if uint(addr) >= TASK_SIZE { return err(EPERM) }
+  fs_base := addr
+  return 0
 }
 
 // the thread pointer (`mov %fs:0, r`, musl's __get_tp): the ABI's, in a

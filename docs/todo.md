@@ -19,20 +19,16 @@ several stack objects, calls with a stack argument in either mode; C1 of
 
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
-  - `__init_tls` (proofs/mallocng/machine/c1_init_tls.core; its
-    `__syscall6`, `__copy_tls`, `static_init_tls` done):
-    - proofs/translate_init_insns.core (the rules first needed here, late
-      in the chain for short checks): its x86i lemmas to
-      proofs/x86_insn.core, the tr rules beside their siblings
-      (translate_store_loop.core, translate_scall.core, translate_cfg.core).
-    - `__init_tp`: GIMPLE's `sys_call1` is brk's (12) only --
-      set_tid_address (218, the Linux model's: a tid in (0, 2^22)) in the
-      C world (layers/gimple.sl, trusted) and its C1 rule;
-      `__set_thread_area`'s readable model (as musl_asm.sl's) with
-      arch_prctl (158: the Linux model's `sys_arch_prctl` sets fs_base),
-      GIMPLE's `sys_call2` being munmap's (11) only.
-  - The startup units' copies of the leaves (`__syscall1`, `__syscall2`,
-    `__syscall3`, `a_crash`: `lsm_*`, `tls_*` in the steps line).
+  - proofs/translate_init_insns.core (the rules first needed by
+    __init_tls.c, late in the chain for short checks): its x86i lemmas to
+    proofs/x86_insn.core, the tr rules beside their siblings
+    (translate_store_loop.core, translate_scall.core, translate_cfg.core).
+  - `tr.eff_sys_set_fs` (`sys_set_fs`'s effect: its returns valid, the
+    thread pointer set) for `__set_thread_area`'s `tr.callee_io` -- the
+    contract linking's, (b).
+  - The startup units' copies of the leaves (`__syscall2`, `__syscall3`,
+    `a_crash`: `lsm_*`, `tls_a_crash` in the steps line; `a_crash`'s
+    `hlt` as proofs/mallocng/machine/a_crash.core has it).
   - The code without musl C: readable models (as musl_asm.sl's) and C1 of
     `_start`, `__set_thread_area`, crti/crtn's `_init`, and gcc's
     `frame_dummy` -> `register_tm_clones` (the init_array's one
