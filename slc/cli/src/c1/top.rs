@@ -513,8 +513,9 @@ impl<'e> Gen<'e> {
         };
         let x0 = self.var("x0");
         let mut rs_lam = self.mk("empty", vec![]);
-        // (the callee-saved registers: their entry values, to be restored)
-        for r in CS_REGS {
+        // (the callee-saved registers: their entry values, to be restored;
+        // a scratch register the code pushes too -- crti's `push rax`)
+        for r in self.entry_held() {
             let v = self.gpr(&s, r);
             st0 = self.set_reg(&st0, entry, r, 8, v.clone());
             rs_lam = self.upd(&rs_lam, r, 8, &v);
@@ -1131,12 +1132,27 @@ impl<'e> Gen<'e> {
         }
     }
 
-    /// `tr.regs(m, rs)`, rs the callee-saved registers at their values on m
+    /// the registers held at the entry at their values there: the
+    /// callee-saved ones, and those others the code pushes (no argument's,
+    /// not rsp)
+    pub(super) fn entry_held(&self) -> Vec<u128> {
+        let mut rs = CS_REGS.to_vec();
+        for i in self.insns.values() {
+            if let (114, Some(g)) = (i.row, nat(&i.fields)) {
+                if !rs.contains(&g) && ![4u128, 7, 6, 2, 1, 8, 9].contains(&g) {
+                    rs.push(g);
+                }
+            }
+        }
+        rs
+    }
+
+    /// `tr.regs(m, rs)`, rs the registers entry_held at their values on m
     /// (hm: m a machine); and rs
     fn cs_entry_regs(&mut self, m: &Term, hm: &Seq) -> Result<(Seq, Term), String> {
         let mut r = self.run(&mpf("tr.regs_empty", vec![t(m)]), &[])?;
         let mut prev = self.mk("empty", vec![]);
-        for g in CS_REGS {
+        for g in self.entry_held() {
             let v = self.gpr(m, g);
             let ty = R::Apply(Box::new(f("x86i.reg_typed")), vec![t(m), t(&lit(g)), s_(hm), simp0()]);
             r = self.run(&R::Apply(Box::new(f("tr.regs_add")), vec![t(m), t(&prev), t(&lit(g)), t(&lit(8)), t(&v), s_(&r), simp0(), simpw(vec![ty])]), &[])?;

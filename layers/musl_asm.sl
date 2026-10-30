@@ -202,3 +202,17 @@ fn __set_thread_area_fun() -> CFun2[World] = (args: Args) => {
   let r = __set_thread_area(bits[64](args[0]))
   return (result(r), any bits[64])
 }
+
+///////////////////////////////////////////////////////////////////////
+//  _init (crti.s / crtn.s: the prologue's and the epilogue's halves)
+//
+//   push rax; pop rax; ret
+//
+// nothing (the stack realigned for the calls between the halves: none)
+proc[World] _init() {
+  return
+}
+fn _init_fun() -> CFun2[World] = (args: Args) => {
+  _init()
+  return (any bits[64], any bits[64])
+}

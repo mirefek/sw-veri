@@ -83,7 +83,7 @@ impl<'e> Gen<'e> {
             let rsp_reg = |t: &Term| self.tag(t).is_some_and(|(k, r)| k == 0 && nat(&r) == Some(4));
             let sub_rsp = matches!(i.row, 59 | 60) && x.as_ref().is_some_and(|x| nat(&x[1]) == Some(5) && rsp_reg(&x[2]));
             let arg_store = i.row == 75 && x.as_ref().is_some_and(|x| self.rsp_mem(&x[2]).is_some() && nat(&x[1]).is_some_and(|g| [7, 6, 2, 1, 8, 9].contains(&g)));
-            let push_cs = i.row == 114 && nat(&i.fields).is_some_and(|g| CS_REGS.contains(&g));
+            let push_cs = i.row == 114 && nat(&i.fields).is_some_and(|g| self.entry_held().contains(&g));
             if !sub_rsp && !arg_store && !push_cs {
                 break;
             }

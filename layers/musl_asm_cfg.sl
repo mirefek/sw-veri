@@ -252,3 +252,20 @@ fn __set_thread_area_fun() -> CFun2[World] = (args: Args) => {
   let r = __set_thread_area(bits[64](args[0]))
   return (result(r), any bits[64])
 }
+
+// _init: one block at 401000 (2)
+proc[World] _init() {
+  var bb: nat = 2
+  var bb_none: nat = 0
+  loop {
+    // <bb 2>
+    return
+  }
+}
+fn _init_cfg_live() -> List[(nat, nat)] = [(2, 0)]
+fn _init_cfg_widths() -> List[nat] = []
+fn _init_cfg_regs() -> List[(nat, nat)] = []
+fn _init_fun() -> CFun2[World] = (args: Args) => {
+  _init()
+  return (any bits[64], any bits[64])
+}
