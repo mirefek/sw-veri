@@ -2345,3 +2345,105 @@ proof
   have pt := apply(x86i.parts, hM)
   show by simp(hr, hu, pt, mp(x86i.reg_typed, {m}, {0}, hM, simp()), x86i.bool_univ)
 qed
+
+
+// sub rax, imm32 (REX.W 2D id)
+theorem x86i.sub64_rax_imm32: all m o k len. m in x86_64_linux.Machine -> m in univ(1) -> k in bits(32) ->
+  runs(x86_64_linux.exec_body(len, tag(52, pair(8, k))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "flags", f), "gpr",
+    fn_update(m.gpr, 0, bits_sub(64, m.gpr[0], bits_sext(32, 64, k)))), empty)
+proof
+  fix m o k len
+  assume hM hu hk hr
+  have pt := apply(x86i.parts, hM)
+  show by defs(simp(hr, hu, pt, mp(x86i.reg_typed, {m}, {0}, hM, simp()), hk, x86i.bool_univ), x86i.flags_ok)
+qed
+
+// sub qword [rsp + d], imm8 (REX.W 83 /5 ib)
+theorem x86i.sub64_rsp_imm: all m o d k len. m in x86_64_linux.Machine -> m in univ(1) -> d in bits(64) -> k in bits(8) ->
+  x86i.acc(m, x86i.rsp_ea(m, d), 8, 0) -> x86i.acc(m, x86i.rsp_ea(m, d), 8, 1) ->
+  runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(5, pair(x86i.rsp_mem(d), pair(x86i.rsp_mem(d), k)))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "flags", f), "vm",
+    fn_update(m.vm, "bytes", x86_64_linux.store_le(m.vm.bytes, x86i.rsp_ea(m, d), 8,
+      bits_sub(64, x86_64_linux.le(m.vm.bytes, x86i.rsp_ea(m, d), 8), bits_sext(8, 64, k))))), empty)
+proof
+  fix m o d k len
+  assume hM hu hd hk a0 a1 h
+  have pt := apply(x86i.parts, hM)
+  have k0: all i. i in omega -> int_lt(i, 8) -> x86_64_linux.canonical(bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))) proof
+    fix i
+    assume i1 i2
+    show by mp(all_elim(all_elim(all_elim(x86.access_canonical, {m.vm}), {bits_add(64, x86i.rsp_ea(m, d), bits_of_int(64, i))}), {0}), mp(mp(all_elim(a0, {i}), i1), i2))
+  qed
+  show by defs(simp(h, hu, pt, hk, hd, apply(x86i.rsp_typed, hM), a0, a1, k0, x86.touch_range_access, x86i.bool_univ, keep(x86_64_linux.touch_range, x86_64_linux.can_access)), x86i.flags_ok)
+qed
+
+// and r64, imm8 (REX.W 83 /4 ib)
+theorem x86i.and64_imm8: all m o g z k len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> k in bits(8) ->
+  runs(x86_64_linux.exec_body(len, tag(60, pair(8, pair(4, pair(tag(0, g), pair(z, k)))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "flags", f), "gpr",
+    fn_update(m.gpr, g, bits_and(64, m.gpr[g], bits_sext(8, 64, k)))), empty)
+proof
+  fix m o g z k len
+  assume hM hu hg hk hr
+  have pt := apply(x86i.parts, hM)
+  show by defs(simp(hr, hu, pt, apply(x86i.reg_typed, hM, hg), hk, x86i.bool_univ), x86i.flags_ok)
+qed
+
+// push imm8 (6A ib) before a call with stack arguments: the word sext(k)
+// at the frame's new bottom, as `push [rsp + d]`'s (x86i.push_m,
+// tr.push_m64_cm, tr.push_m64_c0)
+theorem x86i.push_i8: all m o k len. m in x86_64_linux.Machine -> m in univ(1) -> k in bits(8) ->
+  int_le(8, m.gpr[4]) -> int_lt(m.gpr[4], 140737488355328) ->
+  runs(x86_64_linux.exec_body(len, tag(116, k)), m, o) ->
+  (ex m1 e1. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), ok(m1, e1)) &&
+    o = ok(fn_update(fn_update(m1, "vm", fn_update(m1.vm, "bytes", x86_64_linux.store_le(m1.vm.bytes, bits_sub(64, m.gpr[4], 8), 8,
+      bits_sext(8, 64, k)))), "gpr", fn_update(m1.gpr, 4, bits_sub(64, m.gpr[4], 8))), empty)) ||
+  (ex x e. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), exc(x, e)) &&
+    o = exc(x, e)) ||
+  (ex t. runs(x86_64_linux.touch_range(bits_sub(64, m.gpr[4], 8), 8, 1), fn_update(m, "rip", bits_add(64, m.rip, bits_of_int(64, len))), diverge(t)) &&
+    o = diverge(t))
+proof
+  fix m o k len
+  assume hM hu hk h8 hl hr
+  have pt := apply(x86i.parts, hM)
+  have r4 := apply(x86i.rsp_typed, hM)
+  have k0: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.canonical(bits_add(64, bits_sub(64, m.gpr[4], 8), bits_of_int(64, j))) proof
+    fix j
+    assume j1 j2
+    have p64: pow2(64) = 18446744073709551616 by simp()
+    have e0: int_mod(int_add(int_mod(int_sub(m.gpr[4], 8), 18446744073709551616), int_mod(j, 18446744073709551616)), 18446744073709551616) =
+      int_add(int_sub(m.gpr[4], 8), j) by arith(r4, h8, hl, j1, j2)
+    have e: bits_add(64, bits_sub(64, m.gpr[4], 8), bits_of_int(64, j)) = int_add(int_sub(m.gpr[4], 8), j)
+      by defs(rewrite(sym(p64), e0), bits_add, bits_sub, bits_of_int)
+    have c0: int_lt(int_add(int_sub(m.gpr[4], 8), j), 140737488355328) by arith(r4, hl, j1, j2)
+    have pw: int_pow(2, 47) = 140737488355328 by simp()
+    have c := rewrite(sym(pw), c0)
+    have c2 := rewrite(sym(e), c)
+    show by defs(taut(c2), x86_64_linux.canonical)
+  qed
+  show by simp(hr, hu, pt, r4, hk, k0, x86.touch_range_access, keep(x86_64_linux.touch_range, x86_64_linux.can_access))
+qed
+
+// sar r64, imm8 (REX.W C1 /7 ib)
+theorem x86i.sar64_imm: all m o g z c len. m in x86_64_linux.Machine -> m in univ(1) -> g in x86_64_linux.Reg -> c in omega -> int_lt(0, c) -> int_lt(c, 64) ->
+  runs(x86_64_linux.exec_body(len, tag(72, pair(8, pair(7, pair(tag(0, g), pair(z, c)))))), m, o) ->
+  ex f. x86i.flags_ok(m, f) && o = ok(fn_update(fn_update(fn_update(m, "rip", bits_add(64, m.rip, len)), "flags", f), "gpr", fn_update(m.gpr, g, bits_sar(64, m.gpr[g], c))), empty)
+proof
+  fix m o g z c len
+  assume hM hu h0 h1 h2 h3 hr
+  have pt := apply(x86i.parts, hM)
+  have cm: bits_add(6, c, 0) = c by arith(h1, h3)
+  show by defs(simp(hr, hu, pt, h0, h1, h2, h3, cm, apply(x86i.reg_typed, hM, h0), x86i.bool_univ), x86i.flags_ok)
+qed
+
+// endbr64 (F3 0F 1E FA): rip on
+theorem x86i.endbr64: all m o len. m in x86_64_linux.Machine -> m in univ(1) ->
+  runs(x86_64_linux.exec_body(len, tag(155, empty)), m, o) ->
+  o = ok(fn_update(m, "rip", bits_add(64, m.rip, len)), empty)
+proof
+  fix m o len
+  assume hM hu hr
+  have pt := apply(x86i.parts, hM)
+  show by simp(hr, hu, pt)
+qed

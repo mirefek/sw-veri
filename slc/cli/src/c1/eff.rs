@@ -61,7 +61,7 @@ pub struct Eff<'e> {
 
 /// A world changed in a field (`fn_update(S, field, V)`): the lemma showing
 /// it valid (proofs/translate_struct.core)
-const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm"), ("vm", "tr.valid_gone"), ("objs", "tr.valid_objs")];
+const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm"), ("vm", "tr.valid_gone"), ("objs", "tr.valid_objs"), ("fs_base", "tr.valid_fs")];
 
 /// A term's type by its head (`f(a..) in T`): the lemma, all a.. ->
 /// premises on the arguments (each `a in T'`) -> f(a..) in T

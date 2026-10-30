@@ -17,22 +17,18 @@ several stack objects, calls with a stack argument in either mode; C1 of
 `__libc_start_init`, `__init_libc`, `__init_ssp`, all of __init_tls.c
 (`__init_tls` is `static_init_tls`), `__set_thread_area`, the units' leaf
 copies, crti/crtn's `_init`; gcc's `register_tm_clones` and
-`frame_dummy`'s contract.
+`frame_dummy`'s contract (step (a): the C1 of all the path's code but
+`_start`'s, its own in (d)).
 
 The steps left, in order:
-- (a) C1 of the rest of the path's code, in the startup mode:
-  - proofs/translate_init_insns.core (the rules first needed by
-    __init_tls.c, late in the chain for short checks): its x86i lemmas to
-    proofs/x86_insn.core, the tr rules beside their siblings
-    (translate_store_loop.core, translate_scall.core, translate_cfg.core).
-  - `tr.eff_sys_set_fs` (`sys_set_fs`'s effect: its returns valid, the
-    thread pointer set) for `__set_thread_area`'s `tr.callee_io` -- the
-    contract linking's, (b).
 - (b) Linking the path's contracts: contract.rs linking the stop
   contracts (an aligned call's from the callee's _u contract; k false's
   into k true's); the entry variants entry_np, entry0p generic like
   tr.entry_n, tr.entry0; a body using neither mode's rules gives both
-  contracts (memcpy, memset proven once).
+  contracts (memcpy, memset proven once). The callees' effects
+  (`tr.callee_io`) the startup C1 lines note missing: `call0`'s
+  (`tr.eff_call0`, `_callee`, `call1_0`, `_s`), and register_tm_clones's
+  (eff.rs: a branch on a value its block set, `letin(0, ..)`).
 - (c) Purpose specs and C2: `__init_libc` (auxv into `libc.auxv`, the
   program name, environ; unprivileged: the secure path skipped),
   `__init_tls`, `__init_ssp`, `__libc_start_init` (`_init`, the

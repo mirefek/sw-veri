@@ -1373,7 +1373,7 @@ item is a short summary of finished work; details are in the files named.
   `tr.impl_m_s_intro`. C1 of __init_tls.c's `__syscall6` (the unit in
   check.sh, its location map in scripts/locmap.py).
 - **`__copy_tls`, `static_init_tls`'s C1** (c1_init_tls.core; new rules
-  in proofs/translate_init_insns.core): `sub rax, imm32`, `sub qword
+  among their siblings, translate*.core): `sub rax, imm32`, `sub qword
   [rsp + d], imm8`, `and r64, imm8`, a compare's `cmova` as GIMPLE's
   `umin` (tr.cmov64, engine `cmov_after`), a 32-bit store at a static
   of a wider register (tr.store32_rip_w), `push imm8` before a call
@@ -1411,3 +1411,10 @@ item is a short summary of finished work; details are in the files named.
   (tr.impl_m_jmp: a step of one outcome skipped, tr.run_s_det; the
   entry's rip read by neither the run nor the match, tr.run_s_rip,
   tr.mtv_rip).
+- **The startup rules in place**: the rules first proven late for short
+  checks (`__init_tls.c`'s, the startup code's) moved beside their
+  siblings (x86_insn.core, translate.core, translate_frame.core,
+  translate_flags.core, translate_memset.core, translate_store_loop.core,
+  translate_scall.core, translate_asm.core, translate_stop.core); a
+  return to the world with its thread pointer set valid (tr.valid_fs,
+  eff.rs's VALID): `__set_thread_area`'s `tr.callee_io` derived.
