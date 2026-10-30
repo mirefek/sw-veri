@@ -856,6 +856,15 @@ impl<'e> Gen<'e> {
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
                     }
+                    // sar r64, c
+                    (8, 7) => {
+                        let u = self.need_reg(st, gn, 8)?;
+                        let (r, hr) = self.result(&self.mk("bits_sar", vec![lit(64), u.clone(), x[4].clone()]))?;
+                        let tr = self.step("sar64_imm", a, insn, &[&g, &x[3], &x[4], &u, &r], self.tail(st, insn, 7, vec![hr]));
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 8, r);
+                        return self.then(tr, st2);
+                    }
                     // shl r64, 12 of a word shifted down by 12: the field above
                     // its first byte, times 4096
                     (8, 4) if c == 12 && self.reg(st, gn).is_some_and(|(_, u)| self.app(&self.expand(&u), "bits_shr", 3).is_some()) => {
@@ -1228,6 +1237,21 @@ impl<'e> Gen<'e> {
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         return self.then(tr, st2);
+                    }
+                }
+                // sar r64, 1, the jump on its zero flag after it
+                if let (Some(8), Some(7), Some((0, g))) = (nat(&x[0]), nat(&x[1]), self.tag(&x[2])) {
+                    if x[2] == x[3] && self.insns.get(&a2).is_some_and(|j| matches!(j.row, 127 | 128)) {
+                        let gn = reg(&g)?;
+                        let u = self.need_reg(st, gn, 8)?;
+                        let (r, hr) = self.result(&self.mk("bits_sar", vec![lit(64), u.clone(), lit(1)]))?;
+                        let mut v = self.head(a, insn);
+                        v.extend([&g, &u, &r, &st.hst, &st.rs, &st.w].into_iter().map(t));
+                        v.push(p(R::F(insn.name.clone())));
+                        v.extend((0..4).map(|_| simp_l()));
+                        v.push(hr);
+                        let step = mpf("tr.fs_sar64_1", v);
+                        return self.compare_x(st, a, a2, step, Flags::Zero(64, r.clone()), Some((gn, r, 8)));
                     }
                 }
                 // sar dword [rsp + d], 1: the home's value shifted, signed

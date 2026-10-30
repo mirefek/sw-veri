@@ -1400,3 +1400,14 @@ item is a short summary of finished work; details are in the files named.
   `__syscall2` / `__syscall3` (lsm_*, c1_init_libc.core); the `a_crash`
   copies (tls_a_crash, lsm_a_crash: hlt) by a contract in either mode at
   any address (acr.impl_m, a_crash_m.core: its spec raises everywhere).
+- **The startup code without musl C** (layers/musl_asm.sl, _cfg;
+  proofs/mallocng/machine/c1_start_asm.core): crti/crtn's `_init` (`push
+  rax; pop rax; ret` -- a scratch register the code pushes held at its
+  entry value, its push a prologue's: Gen::entry_held); gcc's
+  `register_tm_clones` (its constants' arithmetic, `__TMC_END__` a
+  static; `sar r64` by an immediate, and by 1 before a jump on its zero
+  flag: tr.sar64_imm, tr.fs_sar64_1); `frame_dummy` (`endbr64; jmp
+  register_tm_clones`) by register_tm_clones's contract through the jump
+  (tr.impl_m_jmp: a step of one outcome skipped, tr.run_s_det; the
+  entry's rip read by neither the run nor the match, tr.run_s_rip,
+  tr.mtv_rip).

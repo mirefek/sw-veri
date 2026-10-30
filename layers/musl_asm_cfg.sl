@@ -269,3 +269,51 @@ fn _init_fun() -> CFun2[World] = (args: Args) => {
   _init()
   return (any bits[64], any bits[64])
 }
+
+// register_tm_clones: the blocks at 401140 (2), the registration's test
+// (3), its call (4)
+proc[World] register_tm_clones() {
+  var bb: nat = 2
+  var ax: bits[64] = any bits[64]
+  var di: bits[64] = any bits[64]
+  var si: bits[64] = any bits[64]
+  loop {
+    if bb < 3 {
+      // <bb 2>
+      di := __TMC_END__
+      si := __TMC_END__
+      si := si - di
+      ax := si
+      si := si >> 63
+      ax := ax >>s 3
+      si := si + ax
+      si := si >>s 1
+      if si = 0 {
+        return
+      } else {
+        bb := 3
+      }
+    } else {
+      if bb < 4 {
+        // <bb 3>
+        ax := 0
+        if ax = 0 {
+          return
+        } else {
+          bb := 4
+        }
+      } else {
+        // <bb 4>
+        undefined
+      }
+    }
+  }
+}
+// (locals: ax, di, si -- in rax, rdi, rsi)
+fn register_tm_clones_cfg_live() -> List[(nat, nat)] = [(2, 0), (3, 0), (4, 1)]
+fn register_tm_clones_cfg_widths() -> List[nat] = [64, 64, 64]
+fn register_tm_clones_cfg_regs() -> List[(nat, nat)] = [(0, 0), (1, 7), (2, 6)]
+fn register_tm_clones_fun() -> CFun2[World] = (args: Args) => {
+  register_tm_clones()
+  return (any bits[64], any bits[64])
+}

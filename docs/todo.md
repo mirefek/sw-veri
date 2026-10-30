@@ -15,7 +15,9 @@ startup mode (no thread pointer, no canary yet), memset, frames with
 several stack objects, calls with a stack argument in either mode; C1 of
 `_start_c`, `__libc_start_main`, `libc_start_main_stage2`,
 `__libc_start_init`, `__init_libc`, `__init_ssp`, all of __init_tls.c
-(`__init_tls` is `static_init_tls`), `__set_thread_area`, the units' leaf copies.
+(`__init_tls` is `static_init_tls`), `__set_thread_area`, the units' leaf
+copies, crti/crtn's `_init`; gcc's `register_tm_clones` and
+`frame_dummy`'s contract.
 
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
@@ -26,11 +28,6 @@ The steps left, in order:
   - `tr.eff_sys_set_fs` (`sys_set_fs`'s effect: its returns valid, the
     thread pointer set) for `__set_thread_area`'s `tr.callee_io` -- the
     contract linking's, (b).
-  - The code without musl C: readable models (as musl_asm.sl's) and C1 of
-    `_start`, crti/crtn's `_init`, and gcc's
-    `frame_dummy` -> `register_tm_clones` (the init_array's one
-    constructor: no memory, its branch on `__TMC_END__ - __TMC_END__` = 0,
-    so no effect).
 - (b) Linking the path's contracts: contract.rs linking the stop
   contracts (an aligned call's from the callee's _u contract; k false's
   into k true's); the entry variants entry_np, entry0p generic like
@@ -40,7 +37,11 @@ The steps left, in order:
   program name, environ; unprivileged: the secure path skipped),
   `__init_tls`, `__init_ssp`, `__libc_start_init` (`_init`, the
   init_array), stage2, `__libc_start_main`, `_start_c`.
-- (d) The top: exec_state to the C world at `_start`; the stop's startup
+- (d) The top: exec_state to the C world at `_start` (its 5 instructions
+  -- `xor rbp, rbp; mov rdi, rsp; lea rsi, [0]; and rsp, -16; call
+  _start_c` -- entered as exec leaves the machine, rsp at argc and no
+  return address: no ABI contract, so here; its decode facts in the steps
+  line, `_start:22`); the stop's startup
   view (tr.at_tm(false, ..)) turned into main's world; at `main` the
   empty heap's rep (the context zero from .bss, the thread block in .bss
   apart from the allocator's ranges) and `owned` within the statics, the

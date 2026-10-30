@@ -216,3 +216,51 @@ fn _init_fun() -> CFun2[World] = (args: Args) => {
   _init()
   return (any bits[64], any bits[64])
 }
+
+///////////////////////////////////////////////////////////////////////
+//  register_tm_clones (gcc's crtstuff.c, crtbegin.o: the init_array's
+//  one constructor, frame_dummy's tail)
+//
+//   lea rdi, [__TMC_END__]; lea rsi, [__TMC_END__]; sub rsi, rdi
+//   mov rax, rsi; shr rsi, 63; sar rax, 3; add rsi, rax; sar rsi, 1
+//   je 1f; mov rax, 0; test rax, rax; je 1f; jmp rax
+//   1: ret
+//
+// the transactional-memory clone table's size (its start and end both
+// __TMC_END__: none), and its registration (_ITM_registerTMCloneTable, a
+// weak symbol not linked: 0) -- so nothing
+const __TMC_END__: Addr = 0x408010
+proc[World] register_tm_clones() {
+  var ax: bits[64] = any bits[64]
+  var di: bits[64] = any bits[64]
+  var si: bits[64] = any bits[64]
+  di := __TMC_END__
+  si := __TMC_END__
+  si := si - di
+  ax := si
+  si := si >> 63
+  ax := ax >>s 3
+  si := si + ax
+  si := si >>s 1
+  if si = 0 {
+    return
+  }
+  ax := 0
+  if ax = 0 {
+    return
+  }
+  // (jmp rax: no code at 0)
+  undefined
+}
+fn register_tm_clones_fun() -> CFun2[World] = (args: Args) => {
+  register_tm_clones()
+  return (any bits[64], any bits[64])
+}
+
+///////////////////////////////////////////////////////////////////////
+//  frame_dummy (crtstuff.c: the init_array's entry)
+//
+//   endbr64; jmp register_tm_clones
+//
+// register_tm_clones itself (a jump to it: its run from this entry)
+fn frame_dummy_fun() -> CFun2[World] = register_tm_clones_fun()
