@@ -1357,3 +1357,8 @@ item is a short summary of finished work; details are in the files named.
   test, a load through a register holding a static's address, a void
   return releasing the frame's objects (tr.ret_void_w), the entry of a
   guarded spec in the stop modes (tr.entry_nkpm, tr.entry_gkpm).
+- **`__init_ssp`'s C1** (proofs/mallocng/machine/c1_ssp.core; the unit
+  __stack_chk_fail.c a startup unit in scripts/check.sh, its own
+  `__get_tp` as `ssp___get_tp`): memcpy called before main by its
+  startup contract (`mcpz.composed`: a second C1 of memcpy in the startup
+  mode, composed with its refinement and C2 as memset's).

@@ -17,10 +17,6 @@ several stack objects; C1 of `_start_c`, `__libc_start_main`,
 
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
-  - `__init_ssp` (the canary from AT_RANDOM; __stack_chk_fail.c, whose
-    readable GIMPLE translates whole -- the unit not yet in
-    scripts/check.sh's units; `__stack_chk_fail` itself runs in the main
-    mode).
   - `__init_tls` (the program headers, builtin TLS, `__init_tp`:
     arch_prctl, set_tid_address; __init_tls.c not yet in check.sh's
     units): `static_init_tls`'s mmap branch calls the unit's own
