@@ -20,11 +20,11 @@ several stack objects, calls with a stack argument in either mode; C1 of
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
   - `__init_tls` (proofs/mallocng/machine/c1_init_tls.core; its
-    `__syscall6` done):
-    - `__copy_tls`, `static_init_tls`: instruction rules missing --
-      `sub rax, imm32` (row 52, as `add64_rax_imm`'s), and
-      static_init_tls's `cmova`, `jbe` / `ja` / `jae`, `mov r32, r32` of
-      one register, `and rax, imm8`, ... (one C1 run names the next).
+    `__syscall6`, `__copy_tls`, `static_init_tls` done):
+    - proofs/translate_init_insns.core (the rules first needed here, late
+      in the chain for short checks): its x86i lemmas to
+      proofs/x86_insn.core, the tr rules beside their siblings
+      (translate_store_loop.core, translate_scall.core, translate_cfg.core).
     - `__init_tp`: GIMPLE's `sys_call1` is brk's (12) only --
       set_tid_address (218, the Linux model's: a tid in (0, 2^22)) in the
       C world (layers/gimple.sl, trusted) and its C1 rule;

@@ -519,17 +519,98 @@ proof
   show by taut(h, c1, c2)
 qed
 
+// ----------------------------------------------------------------------
+//  The 8 bytes below the entry's rsp R accessible without the ABI's
+//  alignment (a callee GCC calls misaligned: a static leaf): R on a
+//  multiple of 8, so they are on R's page -- or, R a page's start, on the
+//  page below, which a home within 4 KiB below R is on (tr.frame8_h, as
+//  tr.frame8)
+
+// (a home at most 4 KiB below the entry's rsp, 16 or more)
+def tr.home8(hs) := ex c n x. c in dom(hs) && hs[c] = pair(n, x) && int_lt(0, n) && int_le(18446744073709547520, c) && int_le(c, 18446744073709551600)
+
+theorem tr.home8_intro: all hs c n x. c in dom(hs) -> hs[c] = pair(n, x) -> int_lt(0, n) -> int_le(18446744073709547520, c) -> int_le(c, 18446744073709551600) -> tr.home8(hs)
+proof
+  fix hs c n x
+  assume h1 h2 h3 h4 h5
+  show by defs(ex_intro({c}, {n}, {x}, conj(h1, h2, h3, h4, h5)), tr.home8)
+qed
+
+// (an address on a's page: accessible as a is)
+theorem tr.acc_same_page: all vm a b k. x86_64_linux.page_of(b) = x86_64_linux.page_of(a) -> x86_64_linux.can_access(vm, a, k) -> x86_64_linux.can_access(vm, b, k)
+proof
+  fix vm a b k
+  assume e h
+  show by defs(rewrite(sym(e), expand(h, x86_64_linux.can_access, x86_64_linux.mapped)), x86_64_linux.can_access, x86_64_linux.mapped)
+qed
+
+theorem tr.frame8_h: all s base code fr m w hs. tr.inv(s, base, code, fr, m, w) -> tr.homes(s, m, hs) -> tr.home8(hs) -> tr.frame(s, m, 8)
+proof
+  fix s base code fr m w hs
+  assume hi hh h8
+  obtain c n x, hcd hcx hn0 hc1 hc2 from expand(h8, tr.home8)
+  have {kp, sM, sacc, sal, slt, hsps} := hi
+  have r4 := apply(x86i.rsp_typed, sM)
+  have g8 := apply(tr.inv_gap, hi)
+  let R := s.gpr[4]
+  have ro: R in omega by simp(r4)
+  have _ hcr ha := mp(all_elim(expand(hh, tr.homes), {c}), hcd)
+  have fn: fst(hs[c]) = n by simp(hcx)
+  have hcr2 := rewrite(fn, hcr)
+  have ha2 := rewrite(fn, ha)
+  // (the home's first byte A0, at R - (2^64 - c): accessible, on a stack page)
+  have e0 _ _ _ := apply(tr.ha_byte, {R}, {c}, {n}, {0}, r4, g8, hcr2, simp(), hn0)
+  let A0 := int_add(int_sub(R, int_sub(18446744073709551616, c)), 0)
+  have a0c a0s := mp(all_elim(expand(ha2, tr.hacc), {0}), simp(), hn0)
+  have a0c2 := rewrite(e0, a0c)
+  have a0s2 := rewrite(e0, a0s)
+  have g: all i. i in omega -> int_lt(i, 8) ->
+      x86_64_linux.can_access(m.vm, bits_add(64, tr.ha(s, int_sub(18446744073709551616, 8)), bits_of_int(64, i)), 1) &&
+      abi.stack_page(m.vm, int_div(bits_add(64, tr.ha(s, int_sub(18446744073709551616, 8)), bits_of_int(64, i)), 4096)) proof
+    fix i
+    assume i1 i2
+    have hr0: tr.hrange(int_sub(18446744073709551616, 8), 8) by defs(arith(), tr.hrange)
+    have e xo xl .. := apply(tr.ha_byte, {R}, {int_sub(18446744073709551616, 8)}, {8}, {i}, r4, g8, hr0, i1, i2)
+    let X := int_add(int_sub(R, int_sub(18446744073709551616, int_sub(18446744073709551616, 8))), i)
+    // R not a page's start: X on R's page, its page as at the entry
+    have c1: !(int_mod(R, 4096) = 0) -> x86_64_linux.can_access(m.vm, X, 1) && abi.stack_page(m.vm, int_div(X, 4096)) proof
+      assume hnz
+      have pn: int_div(X, 4096) = int_div(R, 4096) by arith(ro, sal, hnz, i1, i2)
+      have kx := mp(all_elim(expand(kp, tr.kept), {R}), ro, arith(ro), arith(ro))
+      have kx2 := expand(kx, x86_64_linux.page_of, x86_64_linux.PAGE)
+      have pe: m.vm.pages[int_div(X, 4096)] = s.vm.pages[int_div(R, 4096)] by simp(kx2, pn)
+      have ca: x86_64_linux.can_access(m.vm, X, 1) by defs(simp(pe, pn, expand(sacc, x86_64_linux.can_access, x86_64_linux.mapped, x86_64_linux.page_of, x86_64_linux.PAGE), keep(x86_64_linux.hw_allows)),
+        x86_64_linux.can_access, x86_64_linux.mapped, x86_64_linux.page_of, x86_64_linux.PAGE)
+      have sp0: abi.stack_page(m.vm, int_div(R, 4096)) by defs(simp(rewrite(pn, pe), expand(hsps, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+      have sp: abi.stack_page(m.vm, int_div(X, 4096)) := rewrite(sym(pn), sp0)
+      show by taut(ca, sp)
+    qed
+    // R a page's start: X on the page below, the home's
+    have c2: int_mod(R, 4096) = 0 -> x86_64_linux.can_access(m.vm, X, 1) && abi.stack_page(m.vm, int_div(X, 4096)) proof
+      assume hz
+      have pn: int_div(X, 4096) = int_div(A0, 4096) by arith(ro, hz, i1, i2, hc1, hc2)
+      have pg: x86_64_linux.page_of(X) = x86_64_linux.page_of(A0) by defs(pn, x86_64_linux.page_of, x86_64_linux.PAGE)
+      have ca := apply(tr.acc_same_page, {m.vm}, {A0}, {X}, {1}, pg, a0c2)
+      show by taut(ca, rewrite(sym(pn), a0s2))
+    qed
+    show by simp(e, (x86_64_linux.can_access(m.vm, X, 1) && abi.stack_page(m.vm, int_div(X, 4096)) by taut(c1, c2)))
+  qed
+  have h: tr.hacc(s, m.vm, int_sub(18446744073709551616, 8), 8) by defs(g, tr.hacc)
+  show by defs(taut(h), tr.frame)
+qed
+
 // syscall (0F 05), rax holding n, rdi a1, rsi b2, rdx b3, r10 b4, r8 b5, r9
 // b6: the spec's sys_call6(n, a1, .., b6) -- undefined but for mmap meeting
 // its requirement; else Linux's mmap, the world's memory changed alike,
 // the result in rax (the other registers not known on: rcx and r11
-// clobbered), the frame 8 bytes (rsp's page)
+// clobbered), the frame 8 bytes (rsp's page: the entry aligned, or a home
+// within 4 KiB below it, tr.home8)
 theorem tr.sys_call6(s, v, base, code, fr, a, a2, hs, ds, rs, rc, w, nv, a1, b2, b3, b4, b5, b6, x9 x10 x8. ka, x9 x10 x8. xx, x9 x8. dd, x8 x1. k, x3 x4 x2. kw,
     zb. bkp, zb pb wb. bka):
   (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(2, tag(156, empty)), m, o)) ->
   a2 = bits_add(64, a, bits_of_int(64, 2)) ->
   0 in dom(rs) -> rs[0] = pair(8, nv) -> 7 in dom(rs) -> rs[7] = pair(8, a1) -> 6 in dom(rs) -> rs[6] = pair(8, b2) -> 2 in dom(rs) -> rs[2] = pair(8, b3) ->
-  10 in dom(rs) -> rs[10] = pair(8, b4) -> 8 in dom(rs) -> rs[8] = pair(8, b5) -> 9 in dom(rs) -> rs[9] = pair(8, b6) -> tr.cs_sub(rc, rs) -> tr.sal16(s) ->
+  10 in dom(rs) -> rs[10] = pair(8, b4) -> 8 in dom(rs) -> rs[8] = pair(8, b5) -> 9 in dom(rs) -> rs[9] = pair(8, b6) -> tr.cs_sub(rc, rs) -> (tr.sal16(s) || tr.home8(hs)) ->
   (all x e. x in univ(1) -> e in univ(1) -> runs(mkprog(x0 x1. ex x8. xx(x, e, x8) && k(x8, x1)), w, exc(x, e))) ->
   (all w4 r0. w4 in abi.World && w4 in univ(1) -> r0 in bits(64) -> tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, 8, fn_update(rc, 0, pair(8, r0)),
     mkprog(x1 x2. bind_rel(mkprog(x0 x1. ex x8. ka(x0, r0, x8) && k(x8, x1)), x1, x3 x4. kw(x3, x4, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))), w4)) ->
@@ -635,7 +716,15 @@ proof
         have mm2 := apply(tr.mem_chg, hmm, srsv, htop, ch, hoff, ev, w4v, w4ob, w4fs)
         have hh2 := apply(tr.homes_chg, hh, rm, ch, ev)
         have rs2 := apply(tr.regs_add, apply(tr.regs_cs_keep, hrs, hsub, cs), e0, (r in bits(int_mul(8, 8)) by simp(rb)))
-        have f2 := apply(tr.frame8, i2, h16, (8 in omega by simp()), (int_le(8, 8) by arith()))
+        have f2a: tr.sal16(s) -> tr.frame(s, m2, 8) proof
+          assume ha
+          show := apply(tr.frame8, i2, ha, (8 in omega by simp()), (int_le(8, 8) by arith()))
+        qed
+        have f2b: tr.home8(hs) -> tr.frame(s, m2, 8) proof
+          assume hb
+          show := apply(tr.frame8_h, i2, hh2, hb)
+        qed
+        have f2: tr.frame(s, m2, 8) by taut(h16, f2a, f2b)
         have pt := mp(all_elim(hpost, {W4}, {r}), (W4 in abi.World && W4 in univ(1) by taut(w4W, w4u)), rb)
         have cl := mp(all_elim(expand(pt, tr.pt), {m2}), i2, rip2, hh2, rs2, mm2, f2)
         // the spec's call: allowed, its rest from the result

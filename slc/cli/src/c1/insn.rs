@@ -302,7 +302,24 @@ impl<'e> Gen<'e> {
                     let (pp, off, hc) = self.static_mem_hyp(st, biga, n)?;
                     let rule = if n == 8 { "load64_rip" } else { "load32_rip" };
                     let v = self.parse(&format!("bits_of_int({}, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), {}))", 8 * n, self.print(&pp), self.print(&off), n))?;
-                    let (v, hr) = self.result(&v)?;
+                    // (the spec's load of the static at offset 0 already
+                    // named -- at pp itself: that name, equal by evaluation)
+                    let shared = if nat(&off) == Some(0) {
+                        let v0 = self.parse(&format!("bits_of_int({}, gimple.bytes_at(app({wn}, \"vm\"), {}, {}))", 8 * n, self.print(&pp), n))?;
+                        let c = self.canon(&v0);
+                        if matches!(c.node(), Node::Var(..)) {
+                            let e = self.mk("eq", vec![c.clone(), v.clone()]);
+                            Some((c, s(&self.evp(&RP::Simp(false, vec![], vec![], false), &e, &[])?)))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let (v, hr) = match shared {
+                        Some(x) => x,
+                        None => self.result(&v)?,
+                    };
                     let tr = self.step(rule, a, insn, &[&x[1], &lit(d), &x[4], &pp, &off, &v], self.tail(st, insn, 6, vec![s(&hc), hr]));
                     self.scratch.insert(g);
                     let st2 = self.set_reg(st, a2, g, n, v);
@@ -1134,6 +1151,20 @@ impl<'e> Gen<'e> {
                 if let (Some(m), Some(4)) = (self.memop(&x[2]).filter(|m| self.tag(&m["base"]).is_some_and(|b| b.0 == 1)), nat(&x[0])) {
                     let d = nat(&m["disp"]).ok_or_else(|| bad("a displacement that is not a literal"))?;
                     let biga = lit((a2 + d) % P64);
+                    // (a register of 8 bytes: its low dword, tr.store32_rip_w)
+                    if let Some((8, u8)) = self.reg(st, g) {
+                        let (hc, v, st2, red, _) = self.spec_store(st, &biga, 4)?;
+                        let lo = self.mk("bits_of_int", vec![lit(32), u8.clone()]);
+                        let hux = if self.canon(&lo) == self.canon(&v) {
+                            simp0()
+                        } else {
+                            self.eq_nf(&lo, &v)?.ok_or_else(|| format!("{:x}: the machine stores {}'s low dword, the spec {}", a, self.print(&u8), self.print(&v)))?
+                        };
+                        let tr = self.step("store32_rip_w", a, insn, &[&x[1], &lit(d), &x[3], &x[4], &lit(8), &u8, &v, &biga], self.tail_s(st, &st2, insn, 6, vec![hux, simp_l()], &hc, &red));
+                        let mut st3 = st2;
+                        st3.a = a2;
+                        return self.then(tr, st3);
+                    }
                     let u = self.need_reg(st, g, 4)?;
                     let (hc, v, st2, red, _) = self.spec_store(st, &biga, 4)?;
                     if self.canon(&v) != self.canon(&u) {
@@ -1475,6 +1506,24 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, 0, 8, r);
                 self.then(tr, st2)
             }
+            // sub rax, imm32
+            52 => {
+                let x = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
+                if nat(&x[0]) != Some(8) {
+                    return Err(bad("not sub rax, imm32"));
+                }
+                let k = nat(&x[1]).ok_or_else(|| bad("an immediate that is not a literal"))?;
+                let kk = if k >= 1 << 31 { k + (P64 - (1 << 32)) } else { k };
+                if let Some(pf) = self.widen(st, 0, 8)? {
+                    return Ok(pf);
+                }
+                let u = self.need_reg(st, 0, 8)?;
+                let (r, hr) = self.result(&self.mk("bits_sub", vec![lit(64), u.clone(), lit(kk)]))?;
+                let tr = self.step("sub64_rax_imm", a, insn, &[&x[1], &lit(kk), &u, &r], self.tail(st, insn, 5, vec![hr]));
+                self.scratch.insert(0);
+                let st2 = self.set_reg(st, a2, 0, 8, r);
+                self.then(tr, st2)
+            }
             // mov r64, imm64
             112 => {
                 let x = self.pairs(&f, 2).ok_or_else(|| bad("fields"))?;
@@ -1602,14 +1651,15 @@ impl<'e> Gen<'e> {
                         let Some((8, xv)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
                         return self.compare(st, a, a2, insn, "fs64_hi8", &[&d, &lit(cn), &x[4], &kk, &xv], 7, Flags::Sub(64, xv.clone(), kk.clone()));
                     }
-                    // add qword [rsp + d], imm8: the 8-byte home's u + kk
-                    if nat(&x[0]) == Some(8) && x[3] == x[2] && nat(&x[1]) == Some(0) {
+                    // add / sub qword [rsp + d], imm8: the 8-byte home's u + kk / u - kk
+                    if nat(&x[0]) == Some(8) && x[3] == x[2] && matches!(nat(&x[1]), Some(0 | 5)) {
+                        let sub = nat(&x[1]) == Some(5);
                         let kk = lit(if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm });
                         let cn = self.hkey(dn);
                         let Some((8, u)) = st.hsm.get(&cn).cloned() else { return Err(bad("no 8-byte home there")) };
                         let (_, hs2, hk) = self.hkeep(st, cn, 8);
-                        let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), kk.clone()]))?;
-                        let tr = self.step("add64_home", a, insn, &[&d, &lit(cn), &x[4], &kk, &u, &r], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone()), hr]));
+                        let (r, hr) = self.result(&self.mk(if sub { "bits_sub" } else { "bits_add" }, vec![lit(64), u.clone(), kk.clone()]))?;
+                        let tr = self.step(if sub { "sub64_home_imm" } else { "add64_home" }, a, insn, &[&d, &lit(cn), &x[4], &kk, &u, &r], self.tail_h(st, insn, &hs2, 8, vec![p(hk.clone()), hr]));
                         let st2 = self.set_home(st, a2, cn, 8, r);
                         return self.then(tr, st2);
                     }
@@ -1790,6 +1840,15 @@ impl<'e> Gen<'e> {
                         let neg = self.mk("bits_neg", vec![lit(64), lit(kk)]);
                         let (r, hr) = self.result(&self.mk("bits_add", vec![lit(64), u.clone(), neg]))?;
                         let tr = self.step("sub64_imm", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u, &r], self.tail(st, insn, 6, vec![hr]));
+                        self.scratch.insert(gn);
+                        let st2 = self.set_reg(st, a2, gn, 8, r);
+                        self.then(tr, st2)
+                    }
+                    // and r64, imm8: g := u & kk
+                    (8, Some(4)) => {
+                        let kk = if imm >= 128 { imm + 0xffff_ffff_ffff_ff00 } else { imm };
+                        let (r, hr) = self.result(&self.mk("bits_and", vec![lit(64), u.clone(), lit(kk)]))?;
+                        let tr = self.step("and64_imm8", a, insn, &[&g, &x[3], &x[4], &lit(kk), &u, &r], self.tail(st, insn, 6, vec![hr]));
                         self.scratch.insert(gn);
                         let st2 = self.set_reg(st, a2, gn, 8, r);
                         self.then(tr, st2)

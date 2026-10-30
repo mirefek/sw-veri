@@ -538,15 +538,18 @@ impl<'e> Gen<'e> {
         let hstk_t = self.mk("in", vec![stk.clone(), lty.clone()]);
         let lstk = self.mk("seq_len", vec![stk.clone()]);
         let hle_t = self.mk("int_le", vec![lit(nargs), self.mk("int_add", vec![lit(6), lstk.clone()])]);
+        // (the startup mode's entry with stack arguments: its E, any alignment)
+        let mut stk_et: Option<Term> = None;
         if nstk > 0 && self.startup && self.stop.is_none() {
             return Err("stack arguments in the startup mode never stopping: not supported".into());
         }
         if nstk > 0 {
             let (hstk, hle) = (self.assume(&hstk_t)?, self.assume(&hle_t)?);
             let largs = self.mk("seq_len", vec![args_t.clone()]);
-            // (the startup mode's entry: tr.eok(false, false, ..), aligned)
+            // (the startup mode's entry: tr.eok(false, true, ..), any
+            // alignment -- GCC calls a static leaf misaligned)
             let eo_t = if self.startup {
-                self.mk("tr.eok", vec![self.mk("false", vec![]), self.mk("false", vec![]), s.clone(), args_t.clone()])
+                self.mk("tr.eok", vec![self.mk("false", vec![]), self.mk("true", vec![]), s.clone(), args_t.clone()])
             } else {
                 self.mk("abi.entry_ok", vec![s.clone(), args_t.clone()])
             };
@@ -557,14 +560,14 @@ impl<'e> Gen<'e> {
             let he = self.assume(&e_t)?;
             let [eo, hsa, h6, hso] = [&eo_t, &sa_t, &h6_t, &so_t].map(|g| self.evp(&RP::Taut(vec![R::S(he.clone())]), g, &[]));
             let (eo, hsa, h6, hso) = (eo?, hsa?, h6?, hso?);
-            let st = if self.startup {
-                self.run(&R::Apply(Box::new(f("tr.eok_al")), vec![s_(&eo)]), &[])?
+            if self.startup {
+                stk_et = Some(e_t);
             } else {
-                self.run(&R::Apply(Box::new(f("abi.entry_stack")), vec![s_(&s_hm), s_(&eo)]), &[])?
-            };
-            let goal = self.mk("eq", vec![self.mk("int_mod", vec![self.mk("bits_add", vec![lit(64), self.gpr(&s, 4), lit(8)]), lit(16)]), lit(0)]);
-            let sal = self.evp(&RP::Taut(vec![R::S(st)]), &goal, &[])?;
-            self.ent_al = Some((e_t, sal));
+                let st = self.run(&R::Apply(Box::new(f("abi.entry_stack")), vec![s_(&s_hm), s_(&eo)]), &[])?;
+                let goal = self.mk("eq", vec![self.mk("int_mod", vec![self.mk("bits_add", vec![lit(64), self.gpr(&s, 4), lit(8)]), lit(16)]), lit(0)]);
+                let sal = self.evp(&RP::Taut(vec![R::S(st)]), &goal, &[])?;
+                self.ent_al = Some((e_t, sal));
+            }
             let hal = self.evp(&RP::Simp(false, vec![R::S(hseqs[0].clone())], vec![], false), &self.mk("in", vec![args_t.clone(), lty.clone()]), &[])?;
             let ln = self.evp(&RP::Simp(false, vec![R::S(hstk.clone())], vec![], false), &self.mk("in", vec![lstk.clone(), self.mk("omega", vec![])]), &[])?;
             let mut sargs = Vec::new();
@@ -589,6 +592,8 @@ impl<'e> Gen<'e> {
         self.hva = Some(self.assume(&vab_t)?);
         let pt = self.prove_pt(st0)?;
         let (aligned, e_t) = match self.ent_al.take() {
+            Some(_) if stk_et.is_some() => return Err("stack arguments in the startup mode, the body needing the ABI's alignment: not supported".into()),
+            None if stk_et.is_some() => (false, stk_et.clone().unwrap()),
             Some((et, _)) => (true, et),
             None if self.startup => (false, self.mk("tr.eok", vec![self.mk("false", vec![]), self.mk("true", vec![]), s.clone(), args_t.clone()])),
             None => (false, self.mk("tr.entry_ok_u", vec![s.clone(), args_t.clone()])),
@@ -601,7 +606,7 @@ impl<'e> Gen<'e> {
         // (E of the entry, its arguments and the callers' stack objects)
         let e_lam = self.abs(&e_t, &[Self::var_id(&s), Self::var_id(&args_t), Self::var_id(&vv)]);
         let h_e = if nstk > 0 && self.startup {
-            super::rec::p(R::Inst("tr.eok_e_s".into(), vec![("b", self.mk("false", vec![])), ("stk", stk.clone())]))
+            super::rec::p(R::Inst("tr.eok_e_s".into(), vec![("b", self.mk("false", vec![])), ("u", self.mk("true", vec![])), ("stk", stk.clone())]))
         } else if nstk > 0 {
             super::rec::p(R::Inst("tr.entry_e_s".into(), vec![("stk", stk.clone())]))
         } else if self.startup {
@@ -946,14 +951,16 @@ impl<'e> Gen<'e> {
         // (stack arguments: for any stk long enough, tr.implements_at_s)
         if let (Some(_), Some(bl)) = (&sargs, &bl) {
             let h = self.close(m0, &[hstk_t.clone(), hle_t.clone()], &[Self::var_id(&stk)])?;
-            // (the startup mode's, stopping at t: tr.impl_m_s(false, false, ..) by tr.impl_m_s_intro)
+            // (the startup mode's, stopping at t: tr.impl_m_s(false, u, ..) by
+            // tr.impl_m_s_intro, u for any alignment)
             if let (true, Some((tt, k))) = (self.startup, self.stop) {
                 let (ff, kt) = (self.mk("false", vec![]), self.mk(if k { "true" } else { "false" }, vec![]));
+                let ut = self.mk(if aligned { "false" } else { "true" }, vec![]);
                 let inst = R::Inst(
                     "tr.impl_m_s_intro".into(),
                     vec![
                         ("b", ff.clone()),
-                        ("u", ff.clone()),
+                        ("u", ut.clone()),
                         ("f", b.clone()),
                         ("t", lit(tt)),
                         ("k", kt.clone()),
@@ -965,7 +972,7 @@ impl<'e> Gen<'e> {
                     ],
                 );
                 let i0 = self.run(&mp(inst, vec![simp0(), simp0(), s_(&h)]), &[])?;
-                let goal = self.mk("tr.impl_m_s", vec![ff.clone(), ff, b.clone(), spec_app.clone(), lit(tt), kt, lb.clone(), lc.clone(), statics.clone()]);
+                let goal = self.mk("tr.impl_m_s", vec![ff, ut, b.clone(), spec_app.clone(), lit(tt), kt, lb.clone(), lc.clone(), statics.clone()]);
                 let imp_in = self.evp(&RP::Defs(Box::new(RP::By(R::S(i0))), vec![spec_name.to_string()]), &goal, &[])?;
                 let imp = self.close(imp_in, &cprem, &gvs)?;
                 out.push((format!("{p}.impl_m_s"), imp));

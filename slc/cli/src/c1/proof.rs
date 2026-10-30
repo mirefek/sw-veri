@@ -34,6 +34,7 @@ const HAPART: &[&str] = &[
     "store8i_rip", "store32i_rip", "store64i_rip", "store8_rip", "store8_bi", "store8i_bi", "store8_b", "store8i_b", "store32_b", "store16_b", "store64_bd",
     "store64i_bd", "store32i_bd", "store16i_bd", "store64_rip", "store32_rip", "store_reg_step", "cas32_b", "or32_b", "store32_bd", "store32_bd_eq", "store8_bd", "store16_bd",
     "store64_bd_eq", "store64_bi", "movsb", "rep_movsq", "rep_stosq", "store32_bd_w", "store8_bid", "store16_bid", "store32_bid", "store64_bid", "store64_rsib", "store32i_rsp",
+    "store32_rip_w",
 ];
 impl<'e> Gen<'e> {
     fn save(&self) -> Ctx {
@@ -782,6 +783,10 @@ impl<'e> Gen<'e> {
                     if stk && self.insns.get(&st.a).map(|i| i.row) == Some(118) {
                         return self.push_c_at(&st, g, list, a, xx, dd, k);
                     }
+                    // (... an immediate, in the startup mode)
+                    if stk && self.startup && self.insns.get(&st.a).map(|i| i.row) == Some(116) {
+                        return self.push_i_at(&st, g, list, a, xx, dd, k);
+                    }
                 }
                 // (the frame's stack objects: at the machine's first store to
                 // one; the instructions before it first)
@@ -1223,7 +1228,7 @@ impl<'e> Gen<'e> {
         let nargs = args_all.len();
         // (a callee with stack arguments: seven, the last the home at the
         // frame's bottom, pushed there; the call aligned, rax the result)
-        if stk && (nargs != 7 || !aligned || !one) {
+        if stk && (nargs != 7 || (!aligned && !self.startup) || !one) {
             return Err(format!("{:x}: a call with stack arguments other than seven, aligned, of call1_s", a));
         }
         if nargs > 6 && !stk {
@@ -1483,7 +1488,9 @@ impl<'e> Gen<'e> {
             let cb = P64 - st.fr;
             let (kb, xh) = st.hsm.get(&cb).cloned().ok_or_else(|| format!("{:x}: no home at the frame's bottom (the stack argument)", a))?;
             let yv = self.app(&y, "gimple.arg", 2).map(|x| x[1].clone()).ok_or_else(|| format!("{:x}: the stack argument not an argument", a))?;
-            if kb != 8 || self.canon(&xh) != self.canon(&yv) {
+            // (the same value, or the same literal: an immediate pushed)
+            let lit_eq = self.eval_lit(&xh).is_some() && self.eval_lit(&xh) == self.eval_lit(&self.lit_bits(&yv));
+            if kb != 8 || (self.canon(&xh) != self.canon(&yv) && !lit_eq) {
                 return Err(format!("{:x}: the frame's bottom holds {}, the spec passes {}", a, self.print(&xh), self.print(&yv)));
             }
             let mut binds = vec![
@@ -1520,19 +1527,22 @@ impl<'e> Gen<'e> {
             ];
             let hl = self.hl.clone().unwrap();
             let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
-            let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
-            let s16 = self.sal16()?;
             let csp = self.cs_sub_pf(&rc, &st.rs);
             // (the startup mode's, stopping at t: tr.call1_0_sc -- the
             // callee's contract tr.ccs_ms, t's states breakpoints, the
-            // relation at a stop the caller's)
+            // relation at a stop the caller's; the call aligned or not)
             let (rule, mid, tail) = match self.stop {
                 Some((tt, k)) if self.startup => {
                     binds.extend([("t", lit(tt)), ("ks", self.mk(if k { "true" } else { "false" }, vec![]))]);
-                    ("tr.call1_0_sc", vec![hcon, simp0(), taut(vec![R::S(s16)])], vec![simp0(), self.tbp_below(&self.bkp.clone(), st.fr, tt), self.hat_pf(tt, k)])
+                    let hal = if aligned { taut(vec![R::S(self.sal16()?)]) } else { simp0() };
+                    ("tr.call1_0_sc", vec![hcon, simp0(), hal], vec![simp0(), self.tbp_below(&self.bkp.clone(), st.fr, tt), self.hat_pf(tt, k)])
                 }
                 _ if self.startup => return Err(format!("{:x}: a call with stack arguments in the startup mode never stopping", a)),
-                _ => ("tr.call1_sc", vec![s(&fr16), taut(vec![R::S(s16)]), hcon], vec![self.nobp_below(&self.bkp.clone(), st.fr)]),
+                _ => {
+                    let fr16 = self.evp(&RP::Simp(false, vec![], vec![], false), &self.mk("eq", vec![self.mk("int_mod", vec![lit(st.fr), lit(16)]), lit(8)]), &[])?;
+                    let s16 = self.sal16()?;
+                    ("tr.call1_sc", vec![s(&fr16), taut(vec![R::S(s16)]), hcon], vec![self.nobp_below(&self.bkp.clone(), st.fr)])
+                }
             };
             let inst = R::Inst(rule.into(), binds);
             // (the six a list of univ(1): its items' by tr.seq_one_type, tr.concat_list)
@@ -1901,6 +1911,50 @@ impl<'e> Gen<'e> {
         self.then(tr, st2)
     }
 
+    /// `push imm8` before a call with stack arguments, in the startup mode
+    /// (tr.push_i8_c0): the word sext(k) at the frame's new bottom, a home
+    #[allow(clippy::too_many_arguments)]
+    fn push_i_at(&mut self, st: &St, g: Term, list: Term, al: Term, xl: Term, dl: Term, kl: Term) -> Result<Seq, String> {
+        let a = st.a;
+        let insn = self.insns.get(&a).cloned().ok_or_else(|| format!("no decode fact at {:x}", a))?;
+        let a2 = (a + insn.len) % P64;
+        let bad = |m: &str| format!("{:x}: {}", a, m);
+        let kb = nat(&insn.fields).ok_or_else(|| bad("push of an immediate not a literal"))?;
+        let x = lit(if kb >= 128 { kb + 0xffff_ffff_ffff_ff00 } else { kb });
+        let fr2 = st.fr + 8;
+        if fr2 > 65536 || st.fr % 8 != 0 {
+            return Err(bad("push beyond the frame's bound"));
+        }
+        let c = P64 - fr2;
+        let n4 = self.dom_out_pf(&st.rs, 4).ok_or_else(|| bad("rsp in the register map"))?;
+        let (_, hs2, hk) = self.hkeep(st, c, 8);
+        // (the call's raise: the function's, as at the call)
+        let w = st.w.clone();
+        let hv = st.hvu.clone();
+        let n = self.fresh("c");
+        let (xv, ev) = (self.var(&format!("XP{n}")), self.var(&format!("EP{n}")));
+        let x8 = Term::bvar(0);
+        let kk = kl.instantiate_params(&[Term::bvar(0), Term::bvar(1)], &self.env.binders_fn());
+        let qx = self.mk("mkprog", vec![self.mk("ex", vec![self.mk("and", vec![xl.instantiate_params(&[xv.clone(), ev.clone(), x8], &self.env.binders_fn()), kk])])]);
+        let univ = |gg: &Gen, x: &Term| gg.mk("in", vec![x.clone(), gg.mk("univ", vec![lit(1)])]);
+        let (hx, he) = (univ(self, &xv), univ(self, &ev));
+        let (hxs, hes) = (self.assume(&hx)?, self.assume(&he)?);
+        let gk = self.mk("runs", vec![qx, w.clone(), self.mk("exc", vec![xv.clone(), ev.clone()])]);
+        let kd: Vec<String> = if self.lpg.is_some() { ["tr.lcont", "tr.isout", "tr.mk"].map(String::from).to_vec() } else { vec!["runs".into(), "mkprog".into()] };
+        let k0 = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![R::S(hxs), R::S(hes), R::S(hv)], vec![], false)), kd), &gk, &[])?;
+        let hkx = self.close(k0, &[hx, he], &[Self::var_id(&xv), Self::var_id(&ev)])?;
+        let inst = R::Inst("tr.push_i8_c0".into(), vec![("ka", al), ("xx", xl), ("dd", dl), ("k", kl), ("kw", self.kw3()), ("bkp", self.bkp.clone()), ("bka", self.bka.clone())]);
+        let mut args = self.head(a, &insn);
+        args.extend([&lit(kb), &x, &lit(fr2), &lit(c), &g, &list].iter().map(|y| t(y)));
+        let cfr = defs(RP::Simp(false, vec![], vec![], false), &["tr.cfr"]);
+        let extra = vec![p(n4), simp_l(), simp_l(), simp_l(), cfr, p(hk), simp0(), s(&hkx)];
+        args.extend(self.tail_h(st, &insn, &hs2, 4, extra));
+        let tr = mp(inst, args);
+        let mut st2 = self.set_home(st, a2, c, 8, x);
+        st2.fr = fr2;
+        self.then(tr, st2)
+    }
+
     /// A system call (tr.sys_call1, tr.sys_call2, tr.sys_call3, tr.sys_call6): the machine's
     /// `syscall` at st's address, rax and rdi (rsi, rdx, r10, r8, r9) holding the spec's number and
     /// arguments; the claim after it (rax the result, the other registers
@@ -1992,9 +2046,22 @@ impl<'e> Gen<'e> {
         // (rip's step, then each register's two facts)
         let mut prem = vec![p(f(&insn.name))];
         prem.extend((0..1 + 2 * (1 + args.len())).map(|_| simp_l()));
-        // (the frame of 8 bytes after it: the entry aligned)
-        let h16 = self.sal16()?;
-        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), s(&h16), s(&hk), s(&pc)]);
+        // (the frame of 8 bytes after it: the entry aligned -- for mmap's,
+        // or a home within 4 KiB below rsp, tr.home8: no alignment needed)
+        let home8 = if rule == "tr.sys_call6" {
+            st.hsm.iter().find(|(c, (n, _))| *n > 0 && **c >= P64 - 4096 && **c <= P64 - 16).map(|(c, (n, x))| (*c, *n, x.clone()))
+        } else {
+            None
+        };
+        let h16 = match home8 {
+            Some((c, n, x)) => {
+                let h = mpf("tr.home8_intro", vec![t(&st.hst), t(&lit(c)), t(&lit(n)), t(&x), simp_l(), simp_l(), simp0(), simp0(), simp0()]);
+                taut(vec![h])
+            }
+            None if rule == "tr.sys_call6" => taut(vec![R::S(self.sal16()?)]),
+            None => s(&self.sal16()?),
+        };
+        prem.extend([p(self.cs_sub_pf(&rc, &st.rs)), h16, s(&hk), s(&pc)]);
         self.run(&mp(inst, prem), &[])
     }
 
@@ -2151,6 +2218,14 @@ impl<'e> Gen<'e> {
             Some((c[0].clone(), c[1].clone(), c[2].clone(), o[1].clone()))
         })();
         if let Some((s0, fr, ct, outer)) = cut {
+            // (from a deeper frame: rsp below the points' -- a call with
+            // its arguments pushed)
+            if nat(&fr).is_some_and(|f| f != frc) {
+                return p(R::Mp(
+                    Box::new(R::Inst("tr.tbp_cut_le".into(), vec![("s", s0), ("fr", fr), ("fr2", lit(frc)), ("ct", ct), ("bkp", outer.clone()), ("t", lit(tt))])),
+                    vec![simp0(), self.tbp_below(&outer, frc, tt)],
+                ));
+            }
             return p(R::Mp(Box::new(R::Inst("tr.tbp_cut".into(), vec![("s", s0), ("fr", fr), ("ct", ct), ("bkp", outer.clone()), ("t", lit(tt))])), vec![self.tbp_below(&outer, frc, tt)]));
         }
         match hd {
@@ -2811,6 +2886,11 @@ impl<'e> Gen<'e> {
     pub(super) fn compare_x(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, write: Option<(u128, Term, u128)>) -> Result<Seq, String> {
         // (setcc after it: the byte register written, tr.setcc)
         let set = self.insns.get(&a2).filter(|j| j.row == 31 && write.is_none()).map(|j| (j.fields.clone(), j.len));
+        // (cmovcc r64, r64 after it: tr.cmov64)
+        let cmov = self.insns.get(&a2).filter(|j| j.row == 84 && write.is_none()).map(|j| (j.fields.clone(), j.len, j.name.clone()));
+        if let Some((fx, len2, iname)) = cmov {
+            return self.cmov_after(st, a, a2, step, fl, fx, len2, iname);
+        }
         // (neither: the flags kept to the jump on, tr.flags_set -- the
         // instructions between keeping them, their rules' _f forms)
         if set.is_none() && write.is_none() && !self.insns.get(&a2).is_some_and(|j| matches!(j.row, 127 | 128)) {
@@ -2852,6 +2932,42 @@ impl<'e> Gen<'e> {
         ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
         let ccf = mpf(&format!("tr.{lemma}"), ca);
         self.compare_jump(st, a, a2, step, ccf, c, ff, set.is_some(), j, len2, a3, tt, cc, write)
+    }
+
+    /// ... the compare's cmovcc r64 g, r64 h at a2 (tr.cmov64): g's value
+    /// ite(c, u, x) -- named as GIMPLE's umin when c is u <= x
+    #[allow(clippy::too_many_arguments)]
+    fn cmov_after(&mut self, st: &St, a: u128, a2: u128, step: R, fl: Flags, fx: Term, len2: u128, iname: String) -> Result<Seq, String> {
+        let bad = |m: &str| format!("{:x}: cmov: {}", a2, m);
+        let x = self.pairs(&fx, 6).ok_or_else(|| bad("fields"))?;
+        if nat(&x[0]) != Some(8) {
+            return Err(bad("not 64-bit"));
+        }
+        let cc = nat(&x[1]).ok_or_else(|| bad("the condition"))?;
+        let gn = nat(&x[2]).ok_or_else(|| bad("the destination"))?;
+        let hn = self.tag(&x[3]).filter(|t| t.0 == 0).and_then(|t| nat(&t.1)).ok_or_else(|| bad("a source other than a register"))?;
+        let u = self.need_reg(st, gn, 8)?;
+        // (the source of 4 or 8 bytes: its value, zero-extended)
+        let (nh, xv) = self.reg(st, hn).filter(|r| matches!(r.0, 4 | 8)).ok_or_else(|| bad("the source holds no 4- or 8-byte value"))?;
+        let (lemma, c, args, ff) = self.cc_lemma(a, &fl, cc)?;
+        let mut ca: Vec<RA> = args.iter().map(t).collect();
+        ca.push(defs(RP::Simp(false, vec![], vec![], false), &["tr.width"]));
+        let ccf = mpf(&format!("tr.{lemma}"), ca);
+        let a3 = (a2 + len2) % P64;
+        let e = self.mk("ite", vec![c.clone(), u.clone(), xv.clone()]);
+        let le = self.mk("int_le", vec![u.clone(), xv.clone()]);
+        let tv = if self.canon(&c) == self.canon(&le) { self.mk("gimple.umin", vec![lit(64), u.clone(), xv.clone()]) } else { e.clone() };
+        let r = self.value(&tv);
+        let hr = self.evp(&RP::Defs(Box::new(RP::Simp(false, vec![], vec![], false)), vec!["gimple.umin".into()]), &self.mk("eq", vec![r.clone(), e]), &[])?;
+        let mut sv = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(self.fr)), t(&lit(a)), t(&lit(a2)), t(&lit(a3))];
+        sv.extend([t(&lit(len2)), t(&lit(cc)), t(&c), t(&x[2]), t(&lit(hn)), t(&x[4]), t(&x[5]), t(&u), t(&lit(nh)), t(&xv), t(&r), t(&st.hst), t(&st.ds), t(&st.rs), t(&self.p(&st.spec)), t(&st.w)]);
+        sv.extend([p(step), p(ccf), p(f(&iname))]);
+        sv.extend((0..9).map(|_| simp_l()));
+        sv.extend([self.nobp(), s(&hr), p(R::Slot("NEXT"))]);
+        let rule = mp(R::Inst("tr.cmov64".into(), vec![("ff", ff)]), sv);
+        self.scratch.insert(gn);
+        let st2 = self.set_reg(st, a3, gn, 8, r);
+        self.then(rule, st2)
     }
 
     /// the conditional jump at a, the flags fl's kept to it (tr.jcc_f):

@@ -1372,3 +1372,15 @@ item is a short summary of finished work; details are in the files named.
   `tr.push_m64_cm`); the callee's entry `tr.entry_nskm` and contract
   `tr.impl_m_s_intro`. C1 of __init_tls.c's `__syscall6` (the unit in
   check.sh, its location map in scripts/locmap.py).
+- **`__copy_tls`, `static_init_tls`'s C1** (c1_init_tls.core; new rules
+  in proofs/translate_init_insns.core): `sub rax, imm32`, `sub qword
+  [rsp + d], imm8`, `and r64, imm8`, a compare's `cmova` as GIMPLE's
+  `umin` (tr.cmov64, engine `cmov_after`), a 32-bit store at a static
+  of a wider register (tr.store32_rip_w), `push imm8` before a call
+  (tr.push_i8_cm / _c0), a CFG's cut points against a deeper frame
+  (tr.tbp_cut_le); a static's load sharing the spec's name for it. GCC
+  calls the static leaf `__syscall6` misaligned (frame 0x48 plus the
+  pushed word): its startup contract for any alignment (tr.eok_e_s with
+  u), the 7-argument call so (ccs_ms's second case); the syscall's
+  8-byte frame after it without the ABI's alignment, from a home within
+  4 KiB below rsp (tr.home8, tr.frame8_h; tr.sys_call6 takes either).
