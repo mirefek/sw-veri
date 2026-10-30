@@ -700,6 +700,46 @@ impl<'e> Gen<'e> {
                 );
                 let hle = self.assume(&hle_t)?;
                 self.run(&mp(inst, vec![simp0(), s_(&hsub), h_e, s_(&hregs), s_(&body_in), simp0(), simp0(), s_(&sq.hstk), simp0(), s_(&hle)]), &[])?
+            } else if let (Some((_, _, bl3)), Some((tt, k))) = (&plain_g, self.stop) {
+                // (stopping at t, past the guard any program P of the
+                // arguments: tr.entry_nkpm, tr.entry_gkpm -- the mode b)
+                let kt = self.mk(if k { "true" } else { "false" }, vec![]);
+                let bt = self.mk(if self.startup { "false" } else { "true" }, vec![]);
+                let nk_binds = vec![
+                    ("b", bt.clone()),
+                    ("lb", lb.clone()),
+                    ("lc", lc.clone()),
+                    ("base", b.clone()),
+                    ("code", c.clone()),
+                    ("statics", statics.clone()),
+                    ("f", b.clone()),
+                    ("n", lit(nargs)),
+                    ("fd", lit(fd)),
+                    ("rs", rsl),
+                    ("P", bl3.clone()),
+                    ("E", e_lam.clone()),
+                    ("B", self.bkp.clone()),
+                    ("A", self.bka.clone()),
+                ];
+                let hpro = self.run(&mp(R::Inst("tr.entry_nkpm".into(), nk_binds), vec![simp0(), s_(&hsub), h_e.clone(), s_(&hregs), s_(&body_in), simp0()]), &[])?;
+                let run_l = self.mk("tr.run_s", vec![Term::bvar(1), lit(tt), Term::bvar(1), Term::bvar(0)]);
+                let match_l = self.match_k(&kt);
+                let gk_binds = vec![
+                    ("b", bt),
+                    ("base", lb.clone()),
+                    ("code", lc.clone()),
+                    ("statics", statics.clone()),
+                    ("f", b.clone()),
+                    ("n", lit(nargs)),
+                    ("P", bl3.clone()),
+                    ("E", e_lam.clone()),
+                    ("B", self.bkp.clone()),
+                    ("A", self.bka.clone()),
+                    ("RUN", run_l),
+                    ("MATCH", match_l),
+                ];
+                let (fin, ub) = self.fin_ub(tt, &b, &kt);
+                self.run(&mp(R::Inst("tr.entry_gkpm".into(), gk_binds), vec![super::rec::p(fin), ub, h_e, s_(&hpro)]), &[])?
             } else if let Some((_, _, bl3)) = &plain_g {
                 // (past the guard any program of the arguments)
                 let inst = R::Inst(

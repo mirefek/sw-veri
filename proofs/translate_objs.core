@@ -2241,6 +2241,116 @@ proof
   show by taut(r1, r2, e1, e2, e3, e4, lu)
 qed
 
+// (no result, the objects released: the world w with the callers'
+// objects L)
+theorem tr.result_void_live: all w L. L in univ(1) -> w in univ(1) -> (all y1 y2. y1 in bits(64) -> y2 in bits(64) ->
+  runs(mkprog(x1 x2. letin(fn_update(x1, "objs", fn_update(x1.objs, "live", L)), x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x4, pair(x5, x6)))))),
+    w, ok(tr.wlive(w, L), pair(y1, y2))))
+proof
+  fix w L
+  assume hl hw
+  fix y1 y2
+  assume h1 h2
+  let W2 := tr.wlive(w, L)
+  let R2 := ok(W2, pair(y1, y2))
+  have ou := mp(app_univ[u := 1, f := w, k := "objs"], hw)
+  have w2u: W2 in univ(1) by simp(hw, hl, ou)
+  have e2: ex x6. x6 in bits(64) && R2 = ok(W2, pair(y1, x6)) by ex_intro({y2}, simp(h2))
+  have i2: any_rel(x6. x6 in bits(64), x6. R2 = ok(W2, pair(y1, x6))) by defs(taut(e2), any_rel)
+  have e1: ex x5. x5 in bits(64) && any_rel(x6. x6 in bits(64), x6. R2 = ok(W2, pair(x5, x6))) by ex_intro({y1}, taut(h1, i2))
+  have k: any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. R2 = ok(W2, pair(x5, x6)))) by defs(taut(expand(e1, any_rel)), any_rel)
+  have b: letin(fn_update(w, "objs", fn_update(w.objs, "live", L)), x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. R2 = ok(x4, pair(x5, x6))))) by defs(k, letin)
+  have pu: pair(w, R2) in univ(1) by simp(hw, w2u, h1, h2)
+  show := apply(tr.runs_intro[r := x1 x2. letin(fn_update(x1, "objs", fn_update(x1.objs, "live", L)), x4. any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. x2 = ok(x4, pair(x5, x6)))))], {w}, {R2}, pu, b)
+qed
+
+// ret with no result: as tr.ret_void, the spec's result world w2 (w's
+// memory, I/O, thread pointer and own bytes; its objects the callers')
+theorem tr.ret_void_w(zb. bkp, zb pb wb. bka): all s v base code a len hs fd rs p w w2.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a -> runs(x86_64_linux.exec_body(len, tag(122, empty)), m, o)) ->
+  tr.cs_rs(s, rs) ->
+  w2 in abi.World -> w2 in univ(1) -> w2.vm = w.vm -> w2.os = w.os -> w2.fs_base = w.fs_base -> w2.objs.c_bytes = w.objs.c_bytes ->
+  (w in univ(1) -> (all y1 y2. y1 in bits(64) -> y2 in bits(64) -> runs(p, w, ok(w2, pair(y1, y2))))) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, 0, a, hs, fd, rs, p, w)
+proof
+  fix s v base code a len hs fd rs p w w2
+  assume hat hcs hW2 hu2 evm eos efs eown hsp
+  have g: all m. tr.inv(s, base, code, 0, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> tr.frame(s, m, fd) -> tr.sim(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m) proof
+    fix m
+    assume hi hr hhs hrs hmm hfr
+    have {mM, mu, cd, kp, ra8, mcpu, mgs, mos, mfs, mdf, wW, wu, sM, sacc, sal, slt} := hi
+    have {wob, mfs0} := hmm
+    have mcs := apply(tr.cs_of_rs, hrs, hcs)
+    have rspm := apply(tr.inv0_rsp, hi)
+    have rest: x86_64_linux.le(m.vm.bytes, s.gpr[4], 8) = abi.ret(s) && abi.callee_saved(m, s) && m.cpu = s.cpu && m.gs_base = s.gs_base &&
+      m.os = w.os && m.fs_base = w.fs_base && !m.flags.df && w in abi.World && w in univ(1)
+      := conj(ra8, mcs, mcpu, mgs, mos, mfs, mdf, wW, wu)
+    have r4 := apply(x86i.rsp_typed, sM)
+    have ra := apply(abi.ret_access, {s.vm}, {s.gpr[4]}, r4, sacc, sal)
+    have acc: all j. j in omega -> int_lt(j, 8) -> x86_64_linux.can_access(m.vm, bits_add(64, m.gpr[4], bits_of_int(64, j)), 0) proof
+      fix j
+      assume j1 j2
+      have c1 := mp(mp(all_elim(ra, {j}), j1), j2)
+      have jr1 jr2 jr3 := apply(tr.ret_range, {s.gpr[4]}, {j}, r4, slt, j1, j2)
+      have c3 := apply(tr.kept_acc, {s.vm}, {m.vm}, {s.gpr[4]}, {bits_add(64, s.gpr[4], bits_of_int(64, j))}, {0}, kp,
+        jr1, jr2, jr3, c1)
+      show by simp(c3, rspm)
+    qed
+    let M2 := fn_update(fn_update(m, "gpr", fn_update(m.gpr, 4, bits_add(64, m.gpr[4], 8))), "rip", x86_64_linux.le(m.vm.bytes, m.gpr[4], 8))
+    have st: all o. runs(x86_64_linux.step(), m, o) -> (ex m2. o = ok(m2, empty) && m2 = M2) proof
+      fix o
+      assume ho
+      have hx := mp(mp(mp(all_elim(hat, {m}, {o}), ho), cd), hr)
+      have e := apply(x86i.ret, {m}, {o}, {len}, mM, mu, acc, hx)
+      show by ex_intro({M2}, simp(e))
+    qed
+    have nr := apply(tr.inv_nr, hi)
+    have post: all m2. m2 = M2 -> tr.cl(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, p, w, m2) proof
+      fix m2
+      assume e2
+      have pt := apply(x86i.parts, mM)
+      have r0R: 0 in x86_64_linux.Reg by simp()
+      have r0t := mp(mp(all_elim(x86i.reg_typed, {m}, {0}), mM), r0R)
+      have r2R: 2 in x86_64_linux.Reg by simp()
+      have r2t := mp(mp(all_elim(x86i.reg_typed, {m}, {2}), mM), r2R)
+      have atr: tr.at_ret(s, M2) by simp(rest, rspm, r4)
+      have lt: x86_64_linux.le(m.vm.bytes, m.gpr[4], 8) in bits(64) by simp()
+      have m2M: M2 in x86_64_linux.Machine by defs(simp(expand(mM, x86_64_linux.Machine), mu, pt, lt, r4, rspm), x86_64_linux.Machine)
+      have sp := mp(hsp, wu)
+      have rr0 := mp(all_elim(sp, {m.gpr[0]}, {m.gpr[2]}), r0t, r2t)
+      have rr: runs(p, w, ok(w2, pair(M2.gpr[0], M2.gpr[2]))) by simp(rr0)
+      have wm := apply(tr.mem_wm, {s}, {m}, {w}, {v}, hmm)
+      have wcb: w.objs.c_bytes = v.c_bytes by simp(wob)
+      have w2c: w2.objs.c_bytes = v.c_bytes := trans(eown, wcb)
+      have wm2: tr.wmc(s.vm, M2.vm, w2.vm, abi.wob(v.live, w2.objs.c_bytes), s.fs_base, abi.sp(s)) by simp(wm, evm, w2c, keep(tr.wmc))
+      have e3 := mp(app_update_other[f := m.gpr, k := 4, v := bits_add(64, m.gpr[4], 8), x := 3], simp())
+      have e5 := mp(app_update_other[f := m.gpr, k := 4, v := bits_add(64, m.gpr[4], 8), x := 5], simp())
+      have e12 := mp(app_update_other[f := m.gpr, k := 4, v := bits_add(64, m.gpr[4], 8), x := 12], simp())
+      have e13 := mp(app_update_other[f := m.gpr, k := 4, v := bits_add(64, m.gpr[4], 8), x := 13], simp())
+      have e14 := mp(app_update_other[f := m.gpr, k := 4, v := bits_add(64, m.gpr[4], 8), x := 14], simp())
+      have e15 := mp(app_update_other[f := m.gpr, k := 4, v := bits_add(64, m.gpr[4], 8), x := 15], simp())
+      have cs: abi.callee_saved(M2, s) by simp(rest, e3, e5, e12, e13, e14, e15)
+      have oth: M2.os = w2.os && M2.fs_base = w2.fs_base && M2.cpu = s.cpu && M2.gs_base = s.gs_base &&
+        !M2.flags.df by simp(rest, eos, efs)
+      have rf: tr.mainv(s, v) -> M2.fs_base = s.fs_base proof
+        assume hm
+        show by simp(rest, mp(mfs0, hm))
+      qed
+      have gu := mp(app_univ[u := 1, f := m, k := "gpr"], mu)
+      have m2u: M2 in univ(1) by simp(mu, gu, lt, r4)
+      have ew: ex w3. runs(p, w, ok(w3, pair(M2.gpr[0], M2.gpr[2]))) && w3 in abi.World && w3 in univ(1) &&
+          tr.wmc(s.vm, M2.vm, w3.vm, abi.wob(v.live, w3.objs.c_bytes), s.fs_base, abi.sp(s)) && M2.os = w3.os && tr.rfs(s, v, M2, w3)
+        by ex_intro({w2}, taut(rr, hW2, hu2, wm2, oth, w2c, rf))
+      have rk: tr.retok(s, v, p, w, M2) by defs(taut(m2M, m2u, ew, oth, atr, cs), tr.retok)
+      have ou: tr.out(s, M2) by simp(atr)
+      have c := apply(tr.cl_ret[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {p}, {w}, {M2}, ou, rk)
+      show := rewrite(sym(e2), c)
+    qed
+    show := mp(mp(mp(tr.step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb), s := s, v := v, p := p, w := w, m := m, q := x. x = M2], st), nr), post)
+  qed
+  show by defs(g, tr.lv)
+qed
+
 // ret: as tr.ret_insn, the spec's result world w2 (w's memory, I/O,
 // thread pointer and own bytes; its objects the callers')
 theorem tr.ret_insn_w(zb. bkp, zb pb wb. bka): all s v base code a len hs fd rs p w n bigv w2.

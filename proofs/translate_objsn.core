@@ -877,6 +877,52 @@ proof
   show := apply(tr.store_step[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {A}, {4}, {k}, {hs}, {ds}, {rs}, {p}, {p2}, {w}, {w2}, hap, he, hbase, a2b, ab, simp(), simp(), hus, hw2, hred, hpt)
 qed
 
+// movzx r32, word [rsp + i*k + d] (i holding iv): the spec's 2-byte load at
+// pp + off, the frame's address at the offset c plus i*k
+theorem tr.movzx16_rsib(zb. bkp, zb pb wb. bka): all s v base code fr a a2 len g i k d c z2 iv pp off r hs ds rs p w.
+  (all m o. runs(x86_64_linux.step(), m, o) -> abi.code_at(m.vm, base, code) -> m.rip = a ->
+    runs(x86_64_linux.exec_body(len, tag(80, pair(4, pair(g, pair(x86i.sib_mem(4, i, k, d), pair(x86i.sib_mem(4, i, k, d), z2)))))), m, o)) ->
+  a2 = bits_add(64, a, len) -> tr.scratch_reg(g) -> i in x86_64_linux.Reg -> k in bits(64) -> i in dom(rs) -> rs[i] = pair(8, iv) ->
+  d in bits(64) -> c = int_mod(int_sub(d, fr), 18446744073709551616) -> pp in bits(64) -> off in bits(32) ->
+  bits_add(64, tr.ha(s, c), bits_mul(64, iv, k)) = bits_add(64, pp, off) -> g.mem_defined(w, pp, off, 2, false) ->
+  r = bits_of_int(16, gimple.bytes_at(w.vm, bits_add(64, pp, off), 2)) ->
+  tr.pt(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a2, hs, ds, fn_update(rs, g, pair(2, r)), p, w) ->
+  tr.lv(s, zb. bkp(zb), zb pb wb. bka(zb, pb, wb), v, base, code, fr, a, hs, ds, rs, p, w)
+proof
+  fix s v base code fr a a2 len g i k d c z2 iv pp off r hs ds rs p w
+  assume hat ha2 hg hi0 hk hid hiu hd hc hp ho hA hdef hr hpt0
+  have hpt := rewrite(hr, hpt0)
+  let A := bits_add(64, pp, off)
+  let BY := bits_of_int(16, gimple.bytes_at(w.vm, A, 2))
+  have he: all m o. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> runs(x86_64_linux.step(), m, o) ->
+      o = ok(fn_update(fn_update(m, "rip", a2), "gpr", fn_update(m.gpr, g, BY)), empty) proof
+    fix m o
+    assume hi hr2 hhs hrs hmm ho2
+    have ipM ipU ipC .. := apply(tr.inv_parts, hi)
+    have gR: g in x86_64_linux.Reg by taut(expand(hg, tr.scratch_reg))
+    have ri .. := apply(tr.regs_get, {m}, {rs}, {i}, {8}, {iv}, hrs, hid, hiu)
+    // (the frame's address at c, plus the index's)
+    let X := bits_mul(64, iv, k)
+    have xo: X in omega by simp()
+    have fe := apply(tr.frame_ea, {s}, {base}, {code}, {fr}, {m}, {w}, {d}, {c}, {X}, hi, hd, hc, xo)
+    have q1: bits_add(64, int_add(int_add(m.gpr[4], X), d), 0) = bits_add(64, int_add(m.gpr[4], d), X) by defs(arith(), bits_add)
+    have q2: bits_add(64, int_add(s.gpr[4], c), X) = bits_add(64, tr.ha(s, c), X) by defs(arith(), bits_add)
+    have ea: x86i.sib_ea(m, 4, i, k, d) = A by simp(ri, q1, fe, q2, hA)
+    have rd := apply(tr.reads, {s}, {m}, {w}, {v}, {pp}, {off}, {2}, hp, ho, hdef, hmm, simp())
+    have ac := rewrite(sym(ea), rd.1)
+    have hx := mp(all_elim(hat, {m}, {o}), ho2, ipC, hr2)
+    have e := apply(x86i.movzx16_sib, {m}, {o}, {g}, {4}, {i}, {k}, {d}, {z2}, {len}, ipM, ipU, gR, simp(), hi0, hk, ac, hx)
+    have lw := all_elim(tr.le_bytes, {w.vm}, {A}, {2})
+    show by simp(e, ea, rd.2, lw, hr2, ha2, keep(gimple.bytes_at, x86_64_linux.le))
+  qed
+  have ty: all m. tr.inv(s, base, code, fr, m, w) -> m.rip = a -> tr.homes(s, m, hs) -> tr.regs(m, rs) -> tr.mem(s, m, w, v) -> BY in bits(int_mul(8, 2)) && BY in bits(64) proof
+    fix m
+    show by simp(keep(tr.inv, tr.homes, tr.regs, gimple.bytes_at))
+  qed
+  have a2b: a2 in bits(64) by simp(ha2)
+  show := apply(tr.reg_step0v[bkp := zb. bkp(zb), bka := zb pb wb. bka(zb, pb, wb)], {s}, {v}, {base}, {code}, {fr}, {a}, {a2}, {g}, {2}, {BY}, {hs}, {ds}, {rs}, {p}, {w}, he, a2b, hg, ty, hpt)
+qed
+
 // ----------------------------------------------------------------------
 //  A call from a function with stack objects, its value in rax only
 //  (call1_objs, the startup mode's call1_0_objs): the plain call's

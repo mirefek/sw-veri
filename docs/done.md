@@ -1349,3 +1349,11 @@ item is a short summary of finished work; details are in the files named.
   frame reaching them; their addresses through N; element stores and
   loads at [rsp + i*k + d], immediate stores, zero-initialization by
   movaps / movq, calls passing them.
+- **`__init_libc`'s C1** (proofs/mallocng/machine/c1_init_libc.core, in
+  the startup mode, never at main): its two objects, memset against the
+  aux array's zero store, the auxv loop, the program name, the secure
+  path's poll and open("/dev/null"). New for it: 2-byte loads (field
+  `ld16`, `movzwl` at [rsp + i*k + d]), `cwde`, `jns` after a 64-bit
+  test, a load through a register holding a static's address, a void
+  return releasing the frame's objects (tr.ret_void_w), the entry of a
+  guarded spec in the stop modes (tr.entry_nkpm, tr.entry_gkpm).

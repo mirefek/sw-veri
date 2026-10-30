@@ -2909,6 +2909,10 @@ impl<'e> Gen<'e> {
                     (5, _) => ("ccl_ne", z),
                     // (jns after a test: r's sign, as GIMPLE writes `r <s 0`)
                     (9, 32) => ("ccl32_ns", self.mk("int_lt", vec![si(self, r), si(self, &lit(0))])),
+                    (9, 64) => {
+                        let s64 = |g: &Gen, x: &Term| g.mk("sint", vec![lit(64), x.clone()]);
+                        ("ccl64_ns", self.mk("int_lt", vec![s64(self, r), s64(self, &lit(0))]))
+                    }
                     _ => return Err(format!("{:x}: a {}-bit test's jump on condition {}: no lemma", a, w, cc)),
                 };
                 (l, c, vec![lit(*w), r.clone()], self.mk("x86i.logf", vec![lit(*w), r.clone(), Term::bvar(0)]))

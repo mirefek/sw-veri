@@ -17,17 +17,19 @@ several stack objects; C1 of `_start_c`, `__libc_start_main`,
 
 The steps left, in order:
 - (a) C1 of the rest of the path's code, in the startup mode:
-  - `__init_libc` (a file after proofs/mallocng/fun/memset.core: `c1
-    __init_libc c_src_env___libc_start_main_cfg.__init_libc_fun c1il
-    nostop 4198873 startup`): it runs through the objects, memset, the
-    auxv loop, the program name and the poll call, and stops at
-    0x4015f6, `movzwl 0x16(%rsp,%rax,8)` (pfd[i].revents: a 2-byte
-    zero-extending load at [rsp + i*k + d]; the spec's `ld16(p, 6)` has
-    its rule, tr.ld16_ok); then `cwtl` and the open("/dev/null") branch.
+  - `__init_ssp` (the canary from AT_RANDOM; __stack_chk_fail.c, whose
+    readable GIMPLE translates whole -- the unit not yet in
+    scripts/check.sh's units; `__stack_chk_fail` itself runs in the main
+    mode).
   - `__init_tls` (the program headers, builtin TLS, `__init_tp`:
-    arch_prctl, set_tid_address) and `__init_ssp` (the canary from
-    AT_RANDOM); the startup unit's copies of the leaves (`__syscall2`,
-    `__syscall3`, `a_crash`: `lsm_*` in the steps line).
+    arch_prctl, set_tid_address; __init_tls.c not yet in check.sh's
+    units): `static_init_tls`'s mmap branch calls the unit's own
+    `__syscall6` with a stack argument, which the startup mode has no form
+    for -- GIMPLE's `call0_s` / `call1_0_s` (and `slc gimple --startup`
+    emitting them), the startup stop rule for it (as tr.call_s /
+    tr.call1_s, mode-generic like tr.call_stm), the engine's case.
+  - The startup unit's copies of the leaves (`__syscall2`, `__syscall3`,
+    `a_crash`: `lsm_*` in the steps line).
   - The code without musl C: readable models (as musl_asm.sl's) and C1 of
     `_start`, `__set_thread_area`, crti/crtn's `_init`, and gcc's
     `frame_dummy` -> `register_tm_clones` (the init_array's one

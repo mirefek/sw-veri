@@ -1856,8 +1856,20 @@ impl<'e> Gen<'e> {
                 let st2 = self.set_reg(st, a2, g, 8, r);
                 self.then(tr, st2)
             }
+            // cwde: eax := ax sign-extended (a 2-byte value's: tr.cwde)
+            91 if nat(&f) == Some(4) => {
+                let u = self.need_reg(st, 0, 2)?;
+                let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(16), lit(32), u.clone()]))?;
+                let tr = self.step("cwde", a, insn, &[&u, &r], self.tail(st, insn, 3, vec![hr]));
+                self.scratch.insert(0);
+                let st2 = self.set_reg(st, a2, 0, 4, r);
+                self.then(tr, st2)
+            }
             // cdqe
             91 => {
+                if nat(&f) != Some(8) {
+                    return Err(bad("cbw (not cwde, cdqe)"));
+                }
                 let u = self.need_reg(st, 0, 4)?;
                 let (r, hr) = self.result(&self.mk("bits_sext", vec![lit(32), lit(64), u.clone()]))?;
                 let tr = self.step("cdqe", a, insn, &[&u, &r], self.tail(st, insn, 3, vec![hr]));
@@ -1970,6 +1982,39 @@ impl<'e> Gen<'e> {
                 let tr = self.step("lea_rip", a, insn, &[&x[1], &lit(d), &x[2], &x[3], &x[4], &biga], self.tail(st, insn, 4, vec![]));
                 self.scratch.insert(g);
                 let st2 = self.set_reg(st, a2, g, 8, biga);
+                self.then(tr, st2)
+            }
+            // movzx r32, word [rsp + i*k + d]: the spec's 2-byte load at an
+            // element of a frame's stack object (its address the frame's at
+            // the offset c, plus i*k; the other forms below)
+            80 if self.objs_n.is_some()
+                && self
+                    .pairs(&f, 5)
+                    .and_then(|x| self.memop(&x[2]))
+                    .is_some_and(|m| self.tag(&m["base"]).is_some_and(|b| b.0 == 2 && nat(&b.1) == Some(4)) && self.app(&m["index"], "some", 1).is_some()) =>
+            {
+                let x = self.pairs(&f, 5).ok_or_else(|| bad("fields"))?;
+                let g = reg(&x[1])?;
+                let m = self.memop(&x[2]).filter(|_| x[3] == x[2] && nat(&x[0]) == Some(4)).ok_or_else(|| bad("not movzx r32, word [m]"))?;
+                let (Some((2, b)), Some(ix), Some(k), Some(dn)) = (self.tag(&m["base"]), self.app(&m["index"], "some", 1).map(|y| y[0].clone()), nat(&m["scale"]), nat(&m["disp"])) else {
+                    return Err(bad("movzx r32, word [m] other than [rsp + i*k + d]"));
+                };
+                if nat(&b) != Some(4) || self.objs_n.is_none() {
+                    return Err(bad("movzx r32, word [b + i*k + d] other than a frame object's"));
+                }
+                if let Some(pf) = self.widen(st, reg(&ix)?, 8)? {
+                    return Ok(pf);
+                }
+                let iv = self.need_reg(st, reg(&ix)?, 8)?;
+                let c = self.hkey(dn);
+                let ha = self.mk("tr.ha", vec![self.s.clone(), lit(c)]);
+                let ea = self.mk("bits_add", vec![lit(64), ha, self.mk("bits_mul", vec![lit(64), iv.clone(), lit(k)])]);
+                let (pp, off, hc, heq) = self.mem_hyp_eq(st, &ea, 2)?;
+                let v = self.parse(&format!("bits_of_int(16, gimple.bytes_at(app({wn}, \"vm\"), bits_add(64, {}, {}), 2))", self.print(&pp), self.print(&off)))?;
+                let (v, hr) = self.result(&v)?;
+                let tr = self.step("movzx16_rsib", a, insn, &[&x[1], &ix, &lit(k), &lit(dn), &lit(c), &x[4], &iv, &pp, &off, &v], self.tail(st, insn, 10, vec![s(&heq), s(&hc), hr]));
+                self.scratch.insert(g);
+                let st2 = self.set_reg(st, a2, g, 2, v);
                 self.then(tr, st2)
             }
             // movzx r32, byte [b + i]: the spec's byte load at i + b
@@ -2344,7 +2389,21 @@ impl<'e> Gen<'e> {
                     v.extend([t(&lit(n1)), t(&lit(n2)), t(&x), t(&y), p(R::F(insn.name.clone())), simp_l(), simp_l(), simp_l(), simp_l(), p(self.cs_rs_pf(&st.rs)), p(res)]);
                     return self.run(&mpf("tr.ret_pair", v), &[]);
                 }
-                // (no result: rax:rdx anything)
+                // (no result: rax:rdx anything; the objects released, the
+                // result's world w with the callers' objects -- tr.ret_void_w)
+                if let (0, Some(l)) = (self.rbytes, self.live_back(pr)) {
+                    let ol = self.mk("fn_update", vec![self.mk("app", vec![st.w.clone(), Term::bytes(b"objs")]), Term::bytes(b"live"), l.clone()]);
+                    let w2 = self.mk("fn_update", vec![st.w.clone(), Term::bytes(b"objs"), ol]);
+                    let hw0 = self.hw0.clone().ok_or("the entry's world")?;
+                    let wo = self.run(&mpf("tr.world_live", vec![t(&st.w), t(&self.vw), taut(vec![R::S(st.hw.clone())]), taut(vec![R::S(st.hw.clone())]),
+                        taut(vec![R::S(hw0.clone())]), taut(vec![R::S(hw0)])]), &[])?;
+                    let res = mpf("tr.result_void_live", vec![t(&st.w), t(&l), taut(vec![R::S(wo.clone())])]);
+                    let mut v = vec![t(&self.s), t(&self.v), t(&self.base), t(&self.code), t(&lit(a)), t(&lit(insn.len)), t(&st.hst), t(&st.ds), t(&st.rs), t(pr), t(&st.w)];
+                    v.extend([t(&w2), p(R::F(insn.name.clone())), p(self.cs_rs_pf(&st.rs))]);
+                    v.extend((0..6).map(|_| taut(vec![R::S(wo.clone())])));
+                    v.push(p(res));
+                    return self.run(&mpf("tr.ret_void_w", v), &[]);
+                }
                 if self.rbytes == 0 {
                     let r = self.ret_step("tr.ret_void", a, insn, pr, vec![], mpf("tr.result_void", vec![t(&st.w)]), st);
                     return self.run(&r, &[]);
