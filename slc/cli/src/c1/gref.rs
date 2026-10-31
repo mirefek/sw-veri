@@ -784,6 +784,18 @@ impl<'e> Gen<'e> {
             let rr = mp(R::Inst("g.ref_wrw".into(), vec![("l", lo.clone()), ("q", self.qs[qi].clone()), ("c", c), ("a", r), ("b", v)]), vec![p(eq), s(&rest)]);
             return self.run(&rr, &[]);
         }
+        // (the structured side undefined here -- every outcome: the CFG's
+        // any)
+        {
+            let q = self.qs[qi].clone();
+            let u1 = self.parse("mkprog(x0 x1. true)")?;
+            let u2 = self.parse("mkprog(x0 x1. ex x2. true && x1 = x2)")?;
+            for (u, lemma) in [(u1, "g.ref_undef"), (u2, "g.ref_undef2")] {
+                if self.canon(&q) == self.canon(&u) {
+                    return self.run(&mp(R::Inst(lemma.into(), vec![("l", lo.clone())]), vec![t(w)]), &[]);
+                }
+            }
+        }
         // (the structured side reading the world here: from its start)
         if let Some(ub) = self.app(&self.qs[qi], "mkprog", 1).map(|x| x[0].clone()) {
             let leaf = self.app(&ub, "eq", 2).is_some_and(|x| matches!(x[0].node(), Node::BVar(0)));
@@ -1209,7 +1221,15 @@ impl<'e> Gen<'e> {
     fn leaf_eq(&mut self, e: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
         let lo = self.mk("eq", vec![Term::bvar(0), e.clone()]);
         if let Some((j, r)) = self.or_side(qi, w, false)? {
-            let rest = self.leaf_eq(e, j, w)?;
+            // (a trip's break: at an exit -- or, the CFG returning in the
+            // loop, the structured loop's rest after the break)
+            let (j, r, rest) = match self.leaf_eq(e, j, w) {
+                Ok(rest) => (j, r, rest),
+                Err(err) => match self.or_side(qi, w, true)? {
+                    Some((j2, r2)) => (j2, r2, self.leaf_eq(e, j2, w).map_err(|_| err)?),
+                    None => return Err(err),
+                },
+            };
             let rr = mp(R::Inst("g.ref_up".into(), vec![("l", lo), ("q", self.qs[qi].clone()), ("q2", self.qs[j].clone())]), vec![t(w), s(&rest), p(r)]);
             return self.run(&rr, &[]);
         }
@@ -1823,6 +1843,16 @@ impl<'e> Gen<'e> {
     /// all labels; the cut points (a cut label, its locals' shape, the
     /// structured side's program there) found in a first pass of their
     /// segments' walks, proven in a second
+    /// The CFG's loop by its first trip (g.ref_while1): the trip walked,
+    /// its ends the loop's, its going on the loop again -- where the
+    /// structured side is undefined
+    fn cfg_once(&mut self, l0: &Term, b: &Term, tr: &Term, kk: &Term, q0: &Term, w: &Term) -> Result<Seq, String> {
+        let (rr, stmt) = self.inst("g.ref_while1", &[("l0", l0.clone()), ("b", b.clone()), ("tr", tr.clone()), ("k", kk.clone()), ("q", q0.clone()), ("s", w.clone())])?;
+        let (prems, _) = self.imps(&stmt);
+        let pf = self.sub_walk(&prems[0], &[])?;
+        self.run(&mp(rr, vec![s(&pf)]), &[])
+    }
+
     fn cfg_loop(&mut self, lo: &Term, a: &Term, k: &Term, qi: usize, w: &Term) -> Result<Seq, String> {
         let x = self.app(a, "while_rel", 5).ok_or("the CFG's loop")?.to_vec();
         let lctx = ["o", "x8"];
@@ -1850,7 +1880,19 @@ impl<'e> Gen<'e> {
                 continue;
             }
             self.gref.as_mut().unwrap().cur = kl;
-            ways.insert(kl, self.label_ways(kl)?);
+            let wy = match self.label_ways(kl) {
+                Ok(x) => x,
+                // (a block that may go on anywhere -- undefined: the loop by
+                // its first trip, the structured side undefined there)
+                Err(err) => match self.cfg_once(&l0, &b, &tr, &kk, &q0, w) {
+                    Ok(r) => return Ok(r),
+                    Err(e2) => {
+                        self.trace(|| format!("ref: by the first trip: {}", e2));
+                        return Err(err);
+                    }
+                },
+            };
+            ways.insert(kl, wy);
             self.drop_caches();
             let succ = self.gref.as_ref().unwrap().cut.as_ref().unwrap().succ.get(&kl).cloned().unwrap_or_default();
             work.extend(succ.into_iter().flatten());
