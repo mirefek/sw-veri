@@ -1,0 +1,207 @@
+// Prototype: __init_libc's walk of the initial stack (envp, then the
+// auxiliary vector into its aux array), the stack's data the callers'
+// stack objects.
+
+// (the live objects with the new ones at l, of sizes sz)
+abbrev g.live_with(v, l, sz) := set_select(omega, x7. x7 in v || (ex x8. x8 in omega && ((int_lt(x8, seq_len(sz)) && int_le(app(l, x8), x7)) &&
+  int_lt(x7, int_add(app(l, x8), fst(app(sz, x8)))))))
+
+// stack objects allocated (as mp.alloc1_inv, for any sizes): no room, an
+// overflow; or at l, placed as objs_fit has it, their bytes any
+theorem g.alloc_inv: all sz w o. w in abi.World -> runs(gimple.alloc_objs(sz), w, o) ->
+  abi.ovf_out(w, o) ||
+  (ex l V. ((l in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, sz, l)) &&
+     (V in x86_64_linux.Vm && (fn_update(V, "bytes", w.vm.bytes) = w.vm &&
+      (all x5. x5 in bits(64) -> (all x6. x6 in omega -> int_lt(x6, seq_len(sz)) -> !(int_le(l[x6], x5) && int_lt(x5, int_add(l[x6], fst(sz[x6]))))) ->
+        V.bytes[x5] = w.vm.bytes[x5])))) &&
+     o = ok(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", g.live_with(w.objs.live, l, sz))), l))
+proof
+  fix sz w o
+  assume hw h
+  let OVF := exc_val("stack_overflow", empty)
+  have b := apply(g.runs_elim, expand(h, gimple.alloc_objs))
+  obtain x0, hg ht from b
+  let FIT := ex x1. x1 in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, sz, x1)
+  have pv pf pd _ := apply(ms.world_parts, hw)
+  have ws: fn_update(w, "vm", w.vm) = w := mp(fn_update_same[f := w, k := "vm"], pf, pd)
+  have wo: fn_update(fn_update(w, "vm", w.vm), "objs", w.objs) = w := trans(apply(gc.vm_objs, {w}, {w.vm}, hw), ws)
+  have oo: w.objs in abi.Objs by simp(expand(hw, abi.World))
+  have c1: !FIT -> abi.ovf_out(w, o) proof
+    assume nf
+    have e: x0 = exc(pair(w, empty), pair("raise", OVF)) by taut(hg, nf)
+    have oe: o = exc(w, OVF) by simp(rewrite(e, ht))
+    show by ex_intro({w.vm}, {w.objs}, taut(pv, oo, subst({y. o = exc(y, OVF)}, sym(wo), oe)))
+  qed
+  let PV(l, V) := V in x86_64_linux.Vm && (fn_update(V, "bytes", w.vm.bytes) = w.vm && (all x5. x5 in bits(64) -> (all x6. x6 in omega -> int_lt(x6, seq_len(sz)) ->
+    !(int_le(l[x6], x5) && int_lt(x5, int_add(l[x6], fst(sz[x6]))))) -> V.bytes[x5] = w.vm.bytes[x5]))
+  have c2: FIT -> ex l V. ((l in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, sz, l)) && PV(l, V)) &&
+      o = ok(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", g.live_with(w.objs.live, l, sz))), l) proof
+    assume f
+    have e: x0 = ok(pair(w, empty), empty) by taut(hg, f)
+    have t1 := rewrite(e, ht)
+    have f0: fst(ok(pair(w, empty), empty)) = 0 by simp()
+    have f1: fst(out_state(ok(pair(w, empty), empty))) = w by simp()
+    have t2 := rewrite(f1, rewrite(f0, t1))
+    have a0: any_rel(x1. x1 in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, sz, x1), x1. letin(x1, x2. letin(w.vm, x3. any_rel(x4. x4 in x86_64_linux.Vm &&
+        (fn_update(fn_update(w, "vm", x4).vm, "bytes", x3.bytes) = x3 && (all x5. x5 in bits(64) -> (all x6. x6 in omega -> int_lt(x6, seq_len(sz)) ->
+          !(int_le(x2[x6], x5) && int_lt(x5, int_add(x2[x6], fst(sz[x6]))))) -> fn_update(w, "vm", x4).vm.bytes[x5] = x3.bytes[x5])),
+        x4. letin(fn_update(w, "vm", x4), x5. letin(fn_update(x5, "objs", fn_update(x5.objs, "live", set_select(omega, x6. x6 in x5.objs.live ||
+          (ex x7. x7 in omega && ((int_lt(x7, seq_len(sz)) && int_le(x2[x7], x6)) && int_lt(x6, int_add(x2[x7], fst(sz[x7])))))))), x6. o = ok(x6, x2)))))))
+      by taut(t2, refl({0}), (!(0 = 1) by simp()), (!(0 = 2) by simp()))
+    obtain l, hl1 hl2 hk from apply(g.any_e, f, a0)
+    have hl: l in list_type(bits(64)) && gimple.objs_fit(w.vm, w.objs, sz, l) by taut(hl1, hl2)
+    have vb: fn_update(w.vm, "bytes", w.vm.bytes) = w.vm := mp(fn_update_same[f := w.vm, k := "bytes"], (is_fun(w.vm) by simp(expand(pv, x86_64_linux.Vm))), ("bytes" in dom(w.vm) by simp(expand(pv, x86_64_linux.Vm))))
+    have vx: ex V. PV(l, V) by ex_intro({w.vm}, simp(pv, vb))
+    have k2: any_rel(x4. PV(l, x4), x4. o = ok(fn_update(fn_update(w, "vm", x4), "objs", fn_update(w.objs, "live", g.live_with(w.objs.live, l, sz))), l))
+      by simp(expand(hk, letin), keep(any_rel))
+    obtain V, v1 v23 hoV from apply(g.any_e, vx, k2)
+    have pvv: PV(l, V) by taut(v1, v23)
+    show by ex_intro({l}, {V}, taut(hl, pvv, hoV))
+  qed
+  show by taut(c1, c2)
+qed
+
+// (an object alloc_objs placed, k-th: usable -- its bytes the new live
+// objects', on none of the world's pages; as mp.obj_usable for any sizes)
+theorem g.alloc_usable(vm, objs, sz, V, l, k, wr): gimple.objs_fit(vm, objs, sz, l) -> l[k] in omega -> V.pages = vm.pages -> k in omega -> int_lt(k, seq_len(sz)) ->
+  gimple.usable(V, fn_update(objs, "live", g.live_with(objs.live, l, sz)), l[k], fst(sz[k]), wr)
+proof
+  assume hf ho hp hk hkl
+  have _ hall _ := expand(hf, gimple.objs_fit)
+  have _ _ l8 sf := mp(all_elim(hall, {k}), hk, hkl)
+  let N := fst(sz[k])
+  let O := fn_update(objs, "live", g.live_with(objs.live, l, sz))
+  let P(i) := int_div(int_add(l[k], i), x86_64_linux.PAGE)
+  let C(i) := x86_64_linux.mapped(V, P(i)) && !(snd(V.pages[P(i)]).kind = 2)
+  have g: all i. i in omega -> int_lt(i, N) -> ite(C(i), ite(wr, snd(V.pages[P(i)]).prot.w, snd(V.pages[P(i)]).prot.r) && int_add(l[k], i) in O.c_bytes,
+      int_lt(int_add(l[k], i), int_pow(2, 64)) && int_add(l[k], i) in O.live) proof
+    fix i
+    assume hi hil
+    have s1 := mp(all_elim(sf, {int_add(l[k], i)}), arith(ho, hi), arith(ho, hi, hil))
+    have s2 := rewrite(sym(hp), expand(s1, abi.stack_free, x86_64_linux.mapped))
+    have nc: !C(i) by defs(taut(s2), x86_64_linux.mapped)
+    have lt: int_lt(int_add(l[k], i), int_pow(2, 64)) by arith(l8, hil, ho, hi)
+    have ek: ex x8. x8 in omega && ((int_lt(x8, seq_len(sz)) && int_le(app(l, x8), int_add(l[k], i))) &&
+        int_lt(int_add(l[k], i), int_add(app(l, x8), fst(app(sz, x8))))) by ex_intro({k},
+          taut(hk, hkl, (int_le(l[k], int_add(l[k], i)) by arith(ho, hi)), (int_lt(int_add(l[k], i), int_add(l[k], N)) by arith(ho, hil))))
+    have il0: int_add(l[k], i) in g.live_with(objs.live, l, sz) by sel(taut((int_add(l[k], i) in omega by arith(ho, hi)), ek))
+    have il: int_add(l[k], i) in O.live by simp(il0)
+    show := rewrite(sym(mp(ite_f[c := C(i), a := ite(wr, snd(V.pages[P(i)]).prot.w, snd(V.pages[P(i)]).prot.r) && int_add(l[k], i) in O.c_bytes,
+      b := int_lt(int_add(l[k], i), int_pow(2, 64)) && int_add(l[k], i) in O.live], nc)),
+      (int_lt(int_add(l[k], i), int_pow(2, 64)) && int_add(l[k], i) in O.live by taut(lt, il)))
+  qed
+  show by defs(g, gimple.usable)
+qed
+
+// (the world after alloc_objs: a world -- as mp.w1_world for any sizes)
+theorem g.alloc_world(s, V, l, sz): s in abi.World -> s in univ(1) -> V in x86_64_linux.Vm ->
+  fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", g.live_with(s.objs.live, l, sz))) in abi.World &&
+  fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", g.live_with(s.objs.live, l, sz))) in univ(1)
+proof
+  assume hw hu hv
+  let L := g.live_with(s.objs.live, l, sz)
+  have vu := apply(x86.vm_univ, hv)
+  have ss: subset(L, omega) proof
+    have g: all z. z in L -> z in omega proof
+      fix z
+      assume hz
+      have d := set_select_def[s := omega, p := x7. x7 in s.objs.live || (ex x8. x8 in omega && ((int_lt(x8, seq_len(sz)) && int_le(app(l, x8), x7)) &&
+        int_lt(x7, int_add(app(l, x8), fst(app(sz, x8)))))), z := z]
+      show by taut(d, hz)
+    qed
+    show by defs(g, subset)
+  qed
+  have lu := mp(univ_subset[u := 1, a := L, b := omega], omega_univ, ss)
+  have lt: L in set_type(omega) by defs(taut(ss, powerset_def[s := omega, a := L]), set_type)
+  have wou := mp(app_univ[u := 1, f := s, k := "objs"], hu)
+  have ou: fn_update(s.objs, "live", L) in univ(1) by simp(wou, lu)
+  have wW: fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", L)) in abi.World by defs(simp(expand(hw, abi.World), hu, hv, vu, ss, lu, lt), abi.World)
+  show by taut(wW, (fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", L)) in univ(1) by simp(hu, vu, ou)))
+qed
+
+// (a list of zeros with its length, one zero longer)
+theorem tr.zeros_snoc_n: all l n. (l in list_type(omega) && tr.zeros(l)) && seq_len(l) = n ->
+  (seq_concat(l, seq_one(0)) in list_type(omega) && tr.zeros(seq_concat(l, seq_one(0)))) && seq_len(seq_concat(l, seq_one(0))) = int_add(n, 1)
+proof
+  fix l n
+  assume h
+  have hl hz0 hn := h
+  have z := apply(tr.zeros_snoc, conj(hl, hz0))
+  have t1 := apply(tr.seq_one_type, (0 in omega by simp()))
+  have ln: seq_len(seq_concat(l, seq_one(0))) = int_add(n, 1) by simp(hl, t1, hn)
+  show by taut(z, ln)
+qed
+
+theorem tr.zeros_one_n: (seq_one(0) in list_type(omega) && tr.zeros(seq_one(0))) && seq_len(seq_one(0)) = 1
+proof
+  show by taut(tr.zeros_one, (seq_len(seq_one(0)) = 1 by simp()))
+qed
+
+theorem sp.il_probe: all envp pn G1 G2 G3 G4 G5 w o. w in abi.World -> runs(c_src_env___libc_start_main.__init_libc(envp, pn, G1, G2, G3, G4, G5), w, o) ->
+  envp in bits(64) -> g.mem_defined(w, c_src_env___libc_start_main.__environ, 0, 8, true) ->
+  abi.ovf_out(w, o) || true
+proof
+  fix envp pn G1 G2 G3 G4 G5 w o
+  assume hw hr heb hev
+  have pu := apply(g.runs_univ, hr)
+  have hu: w in univ(1) by simp(pu)
+  step a1 a2 a3 o1 l V, hk hll hfit hVm hvb hvf from hr with g.alloc_inv using conj(hw, hu)
+  let SZ := seq_concat(seq_one(pair(24, 16)), seq_one(pair(304, 16)))
+  let O1 := fn_update(w.objs, "live", g.live_with(w.objs.live, l, SZ))
+  let W1 := fn_update(fn_update(w, "vm", V), "objs", O1)
+  // (the aux array's 304 zero bytes, as GIMPLE writes them: a list of zeros)
+  have zln := apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, apply(tr.zeros_snoc_n, tr.zeros_one_n)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+  have zl1 zl2 zn := zln
+  rsimp in zn
+  have zl := conj(zl1, zl2)
+  have e2 := mp(app_update_other[f := V, k := "bytes", v := w.vm.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have pe: V.pages = w.vm.pages := sym(rewrite(hvb, e2))
+  have ln2: seq_len(l) = 2 by simp(expand(hfit, gimple.objs_fit))
+  have l1b: l[1] in bits(64) := mp(at_type[l := l, t := bits(64), i := 1], hll, simp(), simp(ln2))
+  have us := apply(g.alloc_usable[vm := w.vm, objs := w.objs, sz := SZ, V := V, l := l, k := 1, wr := true], hfit, simp(l1b), pe, simp(), simp())
+  have w1W w1u := apply(g.alloc_world[s := w, V := V, l := l, sz := SZ], hw, hu, hVm)
+  have t1 := apply(tr.seq_one_type, (pair(24, 16) in univ(1) by simp()))
+  have t2 := apply(tr.seq_one_type, (pair(304, 16) in univ(1) by simp()))
+  have a1 := at({SZ[1]}, t1, t2)
+  have sz1: fst(SZ[1]) = 304 by simp(a1)
+  have szl: seq_len(SZ) = 2 by simp(t1, t2)
+  have _ hall _ := expand(hfit, gimple.objs_fit)
+  have _ l1nz l1le _ := mp(all_elim(hall, {1}), simp(), simp(szl))
+  have us2 := rewrite(sz1, us)
+  have md0: g.mem_defined(W1, l[1], 0, 304, true) by simp(us2, l1nz, rewrite(sz1, l1le), l1b)
+  have md := rewrite(sym(zn), md0, {5})
+  have _ w1f w1d _ := apply(ms.world_parts, w1W)
+  obtain x4, hs4 hk4 from hk
+  have sd := apply(g.stz_det, w1u, l1b, simp(), zl, md, (W1.vm in x86_64_linux.Vm by simp(hVm)), w1f, w1d)
+  have e4 := mp(all_elim(expand(sd, g.det), {x4}), hs4)
+  have hk5 := rewrite(e4, hk4)
+  let ENV := c_src_env___libc_start_main.__environ
+  have hk6 := rewrite(zn, hk5)
+  let W2 := fn_update(W1, "vm", fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, int_add(l[1], 0), 304, 0)))
+  have w2W0 w2u0 := apply(tr.world_store, {W1}, {int_add(l[1], 0)}, {304}, {0}, w1W, w1u, (int_add(l[1], 0) in bits(64) by simp(l1b)))
+  have w2u: W2 in univ(1) by simp(w2u0)
+  have w2W: W2 in abi.World by simp(w2W0)
+  have lv2: all x. x in w.objs.live -> x in g.live_with(w.objs.live, l, SZ) proof
+    fix x
+    assume hx
+    have wob: w.objs in abi.Objs by simp(expand(hw, abi.World))
+    have lo _ := apply(abi.objs_parts, wob)
+    have sub: subset(w.objs.live, omega) by taut(powerset_def[s := omega, a := w.objs.live], expand(lo, set_type))
+    have xo := mp(subset_elim[a := w.objs.live, b := omega, z := x], sub, hx)
+    show by sel(taut(hx, xo))
+  qed
+  have _ _ evu := hev
+  have evl := apply(mp.usable_live[vm := w.vm, objs := w.objs, L := g.live_with(w.objs.live, l, SZ), a := int_add(ENV, 0), n := 8, w := true], evu, lv2)
+  have vb2: fn_update(W2.vm, "bytes", w.vm.bytes) = w.vm by simp(hvb)
+  have evb := apply(mp.usable_bytes[v := w.vm, v2 := W2.vm, objs := O1, a := int_add(ENV, 0), n := 8, w := true], vb2, evl)
+  have ev2: g.mem_defined(W2, ENV, 0, 8, true) by simp(hev, evb)
+  have envb: ENV in bits(64) by defs(simp(), c_src_env___libc_start_main.__environ)
+  have w2v w2f w2d _ := apply(ms.world_parts, w2W)
+  step hk7 from hk6
+  obtain x6, hs6 hk6b from hk7
+  have sd6 := apply(g.st64_det, {W2}, {ENV}, {0}, {envp}, w2u, envb, simp(), ev2, w2v, w2f, w2d)
+  have e6 := mp(all_elim(expand(sd6, g.det), {x6}), hs6)
+  have h6 := rewrite(e6, hk6b)
+  print h6
+  show by taut()
+qed
