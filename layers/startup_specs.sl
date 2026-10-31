@@ -82,7 +82,7 @@ const PT_TLS: nat = 7
 
 pred phdrs_ok(vm: Vm, objs: Objs, ph: nat, pe: nat, pn: nat, w: Set[nat]) =
   ph + pe * pn + 56 < 2^63 &&
-  (all i: nat. i < pn -> usable(vm, objs, ph + pe * i, 56, false) && bytes_at(vm, bits[64](ph + pe * i), 4) != PT_TLS &&
+  (all i: nat. i < pn -> ph + pe * i != 0 && usable(vm, objs, ph + pe * i, 56, false) && bytes_at(vm, bits[64](ph + pe * i), 4) != PT_TLS &&
      (all j: nat. j < 56 -> ph + pe * i + j notin w))
 
 // a stack overflow during startup: as abi's, the thread pointer as a
