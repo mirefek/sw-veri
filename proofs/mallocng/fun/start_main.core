@@ -179,8 +179,12 @@ abbrev sp.DS(x2, x1) := (fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || (
     ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))
 abbrev sp.BR(p, x0, x2) := bind_rel(p, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))
 
+// a spec's body `either { overflow_start() } or { q }` (TM's with q
+// to_main)
+abbrev sp.EO(q, x0, x1) := ex x2. (sp.BR(startup_specs.overflow_start, x0, x2) || sp.BR(q, x0, x2)) && sp.DS(x2, x1)
+
 // an overflow: the body's
-theorem sp.tm_ovf(g, e, s, o): pair(s, o) in univ(1) -> sp.ovf_any(s, o) -> sp.TM(g, e, s, o)
+theorem sp.eo_ovf(q, s, o): pair(s, o) in univ(1) -> sp.ovf_any(s, o) -> sp.EO(q, s, o)
 proof
   assume pu ho0
   obtain f v ob, hf hv hob ho from expand(ho0, sp.ovf_any)
@@ -429,7 +433,7 @@ proof
       have sob: s.objs in abi.Objs by simp(expand(hw, abi.World))
       have se: fn_update(fn_update(fn_update(s, "fs_base", s.fs_base), "vm", s.vm), "objs", s.objs) = s by simp(wf, wd, pf, pd)
       have ov: sp.ovf_any(s, o) by defs(ex_intro({s.fs_base}, {s.vm}, {s.objs}, taut(fsb, sv, sob, rewrite(sym(se), oe))), sp.ovf_any)
-      show := mp(all_elim(mkSC, {o}), pu, apply(sp.tm_ovf, pu, ov))
+      show := mp(all_elim(mkSC, {o}), pu, apply(sp.eo_ovf[q := startup_specs.to_main(g, E2(s))], pu, ov))
     qed
     have kB: (ex w4 r. QQ(ok(w4, r)) && (oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || oc = exc(gc.back0(w4, s), OVF))) -> runs(SC, s, o) proof
       assume q
@@ -507,4 +511,97 @@ proof
   qed
   show by defs(apply(sp.fun_r[n := 1, P := a. c_crt_crt1._start_c(bits_of_int(64, a[0]), LSM), Q := a. startup_specs.start_c_spec(g, P, bits_of_int(64, a[0]))],
     {regs}, {s}, {o}, ra, hp, expand(h, c_crt_crt1._start_c_fun)), startup_specs.start_c_spec_fun)
+qed
+
+// ----------------------------------------------------------------------
+//  libc_start_main_stage2(main, argc, argv): __libc_start_init called as
+//  its spec says (an overflow, or nothing), then main entered
+
+// (a spec function's ok outcome: at its procedure's world)
+theorem sp.anyv_ok(w, o2): sp.anyv(w, o2) -> ex v. o2 = ok(w, v)
+proof
+  assume h
+  have nb: ex z. z in bits(64) by ex_intro({0}, simp())
+  obtain z1, _ k1 from apply(g.any_e, nb, h)
+  obtain z2, _ k2 from apply(g.any_e, nb, k1)
+  show by ex_intro({pair(z1, z2)}, k2)
+qed
+
+// (a spec function without a requirement called)
+theorem sp.fun_out0(a. Q): all regs s o2. regs in sp.REGS ->
+  runs(fn_build(sp.REGS, x0. mkprog(x1 x2. bind_rel(Q(x0), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o2) ->
+  bind_rel(Q(regs), s, x3 x4. sp.anyv(x3, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
+proof
+  fix regs s o2
+  assume hr h
+  rsimp only, app_fn_build, hr in h
+  show := apply(g.runs_elim, h)
+qed
+
+// (an overflow_start of the body: an overflow)
+theorem sp.ovs_case(s, x2, o): s in abi.World -> sp.BR(startup_specs.overflow_start, s, x2) -> sp.DS(x2, o) -> sp.ovf_any(s, o)
+proof
+  assume hw e1 hout
+  let OVF := exc_val("stack_overflow", empty)
+  rsimp only, startup_specs.overflow_start, abi.overflow in e1
+  have pv _ _ _ := apply(ms.world_parts, hw)
+  have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
+  have fv: ex x. x in bits(64) by ex_intro({0}, simp())
+  have l: ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+    x2 = exc(pair(fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e1, vv, fv, ct.objs_ne)
+  obtain f v ob, hf hv hob hx from l
+  have oe: o = exc(fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
+  show by defs(ex_intro({f}, {v}, {ob}, taut(hf, hv, hob, oe)), sp.ovf_any)
+qed
+
+// __libc_start_init's spec called: an overflow, or nothing changed
+theorem sp.si_call(P, s, o2): s in abi.World -> startup_specs.ctors_ok(s.vm, s.objs, P, set_select(omega, x2. false)) ->
+  bind_rel(startup_specs.start_init_spec(P), s, x3 x4. sp.anyv(x3, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3)) ->
+  sp.ovf_any(s, o2) || (ex v. o2 = ok(s, v))
+proof
+  assume hw hc h
+  obtain o4, r4 k4 from expand(h, bind_rel)
+  have b := apply(or_resolve, apply(g.runs_elim, expand(r4, startup_specs.start_init_spec)), hc)
+  obtain x2, hbr hd from b
+  have c1: sp.BR(startup_specs.overflow_start, s, x2) -> sp.ovf_any(s, o2) || (ex v. o2 = ok(s, v)) proof
+    assume e
+    have ov := apply(sp.ovs_case, hw, e, hd)
+    obtain f v ob, _ _ _ oe from expand(ov, sp.ovf_any)
+    have nk: !is_ok(o4) := rewrite(sym(oe), all_elim(g.not_ok_exc, {fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob)}, {exc_val("stack_overflow", empty)}))
+    have kc := apply(sp.k_cases, k4)
+    have q: (!is_ok(o4) && o2 = o4) -> sp.ovf_any(s, o2) proof
+      assume q2
+      have _ e2 := q2
+      show := rewrite(sym(e2), ov)
+    qed
+    show by taut(kc, nk, q)
+  qed
+  have c2: x2 = ok(pair(s, empty), empty) -> sp.ovf_any(s, o2) || (ex v. o2 = ok(s, v)) proof
+    assume e
+    have oe: o4 = ok(s, empty) by simp(rewrite(e, hd))
+    have a: sp.anyv(s, o2) by simp(rewrite(oe, k4), keep(any_rel))
+    show by taut(apply(sp.anyv_ok, a))
+  qed
+  show by taut(hbr, c1, c2)
+qed
+
+// main's spec called: main entered, at the world it is called in
+theorem sp.main_call(regs, s, o2): regs in sp.REGS -> runs(startup_specs.main_spec_fun()[regs], s, o2) -> o2 = exc(s, sp.AM)
+proof
+  assume hr h
+  have b := apply(sp.fun_out0[Q := a. startup_specs.main_entered], {regs}, {s}, {o2}, hr, expand(h, startup_specs.main_spec_fun))
+  obtain o5, r5 k5 from expand(b, bind_rel)
+  have e5: o5 = exc(s, sp.AM) by simp(apply(g.runs_elim, expand(r5, startup_specs.main_entered)))
+  show by simp(rewrite(e5, k5))
+qed
+
+// main entered: the body's
+theorem sp.eo_q(q, s, w, e): runs(q, s, exc(w, e)) -> sp.EO(q, s, exc(w, e))
+proof
+  assume r
+  let X2 := exc(pair(w, empty), pair("raise", e))
+  have cx: ex x3 x4. exc(w, e) = exc(x3, x4) && X2 = exc(pair(x3, empty), pair("raise", x4)) by ex_intro({w}, {e}, taut(refl({exc(w, e)}), refl({X2})))
+  have b: sp.BR(q, s, X2) by defs(ex_intro({exc(w, e)}, taut(r, cx)), bind_rel)
+  have d: sp.DS(X2, exc(w, e)) by simp()
+  show by ex_intro({X2}, taut(b, d))
 qed

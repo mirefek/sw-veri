@@ -239,15 +239,15 @@ fn start_init_spec_fun(p: StartProgram) -> CFun2[World] = (args: Args) => {
 }
 
 // libc_start_main_stage2(main, argc, argv): the constructors, then main
-// (exit after it, with main's value)
-proc[World] stage2_spec(p: StartProgram, main: Addr) {
-  require main = p.main && ctors_ok(vm, objs, p, {x: nat | false})
+// (exit after it, with main's value); envp past argv's words
+proc[World] stage2_spec(p: StartProgram, main: Addr, argc: bits[32], argv: Addr) {
+  require main = p.main && uint(argc) < 2^31 && uint(argv) + 8 * (uint(argc) + 1) < 2^63 && ctors_ok(vm, objs, p, {x: nat | false})
   either { overflow_start() } or { main_entered() }
 }
 
 fn stage2_spec_fun(p: StartProgram) -> CFun2[World] = (args: Args) => {
   require len(args) >= 3
-  stage2_spec(p, bits[64](args[0]))
+  stage2_spec(p, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
   return (any bits[64], any bits[64])
 }
 
