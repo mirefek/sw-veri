@@ -642,15 +642,22 @@ fact h, as it is); `g.loop` (proofs/gimple_inv.core) takes an invariant p
 with p(l0), a variant m with p(l) -> m(l) in omega, and the step
 `all l l2. p(l) -> B(l, ok(l2, empty)) -> p(l2) && m(l2) < m(l)` to the
 loop's exit: `ex l. p(l) && B(l, r) && !is_ok(r)` -- a break, a return or
-a failure from a state with the invariant (ms.sq_run).
-A branch step cannot decide (a value the precondition leaves open) is a
-join: `let K(x) := rest(h)` names what follows the branch's outcome x, a
-lemma `all U. P(U) -> K(ok(S(U), empty)) -> goal` proves the rest once for
-any state with P, and each branch gives its own state with P:
+a failure from a state with the invariant (ms.sq_run):
 
 ```
 let BODY(l, o) := loop_body(wl)
 have wv := apply(g.loop[b := l o. BODY(l, o), p := l. P(l), m := l. M(l)], p0, pm, nx, wl)
+```
+
+**Joins.** A branch `step` cannot decide (a value the precondition leaves
+open) is a join: `let K(x) := rest(h)` names what follows the branch's
+outcome x, a lemma proves the rest once for any state with a property P,
+and each branch gives its own state with P (sp.il_probe's `__sysinfo`):
+
+```
+let K12(x) := rest(h12)
+obtain x12, hif hK from h12
+have J: all U. P(U) -> K12(ok(S(U), empty)) -> goal proof .. qed
 ```
 
 ```
