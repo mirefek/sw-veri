@@ -56,10 +56,8 @@ The steps left, in order:
 
 ## 2. The engine, when a function needs it
 
-- The two modes' contracts from one body (optional): a body using
-  neither mode's rules gives both contracts (memcpy proven once, now
-  `mcpc` and `mcpz`); the entry variants entry_np, entry0p generic like
-  tr.entry_n, tr.entry0.
+- The entry variants entry_np, entry0p generic like tr.entry_n,
+  tr.entry0 (optional).
 - Stack objects read before their first store (none at -O0 yet); the
   single object's older path (alloc_at, tr.astore_r: get_random_secret)
   and the several objects' one unified (optional).

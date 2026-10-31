@@ -1329,7 +1329,7 @@ impl<'e> Gen<'e> {
                     // startup mode's tr.code_okm(false, ..))
                     Some((tt, _)) if ind.is_some() => {
                         let hc = if self.startup {
-                            self.mk("tr.code_okm", vec![self.mk("false", vec![]), g.clone(), lit(nargs as u128), lit(st.fr), lit(tt), lb, lc, statics])
+                            self.mk("tr.code_okm", vec![self.bm(), g.clone(), lit(nargs as u128), lit(st.fr), lit(tt), lb, lc, statics])
                         } else {
                             self.mk("tr.code_ok", vec![g.clone(), lit(nargs as u128), lit(st.fr), lit(tt), lb, lc, statics])
                         };
@@ -1346,7 +1346,7 @@ impl<'e> Gen<'e> {
                         // (the startup mode's: tr.impl_m(false, u, ..), with
                         // stack arguments tr.impl_m_s)
                         let kt = self.mk(if k { "true" } else { "false" }, vec![]);
-                        let (ff, ut) = (self.mk("false", vec![]), self.mk(if aligned { "false" } else { "true" }, vec![]));
+                        let (ff, ut) = (self.bm(), self.mk(if aligned { "false" } else { "true" }, vec![]));
                         self.mk(if stk { "tr.impl_m_s" } else { "tr.impl_m" }, vec![ff, ut, lit(fa), g.clone(), lit(tt), kt, lb, lc, statics])
                     }
                     Some((tt, k)) if !stk => {
@@ -2181,7 +2181,7 @@ impl<'e> Gen<'e> {
     pub(super) fn ec_pf(&self) -> RA {
         match self.stop {
             None => p(f("tr.ec_false")),
-            Some((_, k)) if self.startup => p(R::Inst("tr.ec_at_tm".into(), vec![("b", self.mk("false", vec![])), ("k", self.mk(if k { "true" } else { "false" }, vec![]))])),
+            Some((_, k)) if self.startup => p(R::Inst("tr.ec_at_tm".into(), vec![("b", self.bm()), ("k", self.mk(if k { "true" } else { "false" }, vec![]))])),
             Some((_, k)) => p(R::Inst("tr.ec_at_t".into(), vec![("k", self.mk(if k { "true" } else { "false" }, vec![]))])),
         }
     }
@@ -2197,7 +2197,7 @@ impl<'e> Gen<'e> {
         // (the startup mode's: tr.hat_nonem, tr.hat_topm, tr.hat_cutm with b false)
         let mb = |mut v: Vec<(&'static str, Term)>| {
             if self.startup {
-                v.push(("b", self.mk("false", vec![])));
+                v.push(("b", self.bm()));
             }
             v
         };

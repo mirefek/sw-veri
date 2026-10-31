@@ -367,6 +367,10 @@ struct Gen<'e> {
     /// tr.impl_m(false, ..), the calls call0 (tr.call0_st, ..), the
     /// relation at a stop tr.at_tm(false, ..)
     startup: bool,
+    /// ... in either mode (`both`): the mode b a variable, the contracts
+    /// for every b (the startup mode's rules otherwise, none of a mode's
+    /// own -- a call, the thread pointer)
+    bmode: Option<Term>,
     /// the loop whose iteration is being walked (its head the breakpoint)
     lpg: Option<LoopG>,
     /// the readable CFG's guide (cfg.rs): each block's live locals, the
@@ -833,7 +837,7 @@ impl<'e> Gen<'e> {
         let (hm, args) = self.ent_m.clone().ok_or("the entry's machine: not known")?;
         // (the startup mode's entry: tr.eok(false, false, ..), its alignment by tr.eok_al)
         let et = if self.startup {
-            self.mk("tr.eok", vec![self.mk("false", vec![]), self.mk("false", vec![]), self.s.clone(), args])
+            self.mk("tr.eok", vec![self.bm(), self.mk("false", vec![]), self.s.clone(), args])
         } else {
             self.mk("abi.entry_ok", vec![self.s.clone(), args])
         };
@@ -847,6 +851,12 @@ impl<'e> Gen<'e> {
         let sal = self.evp(&rec::RP::Taut(vec![R::S(st)]), &goal, &[])?;
         self.ent_al = Some((et, sal.clone()));
         Ok(sal)
+    }
+
+    /// the mode b of the startup mode's rules: false, or (`both`) the
+    /// variable the contracts are for every value of
+    fn bm(&self) -> Term {
+        self.bmode.clone().unwrap_or_else(|| self.mk("false", vec![]))
     }
 
     /// m's register r, `app(app(m, "gpr"), r)`
@@ -1015,8 +1025,8 @@ impl syntax::Prover for Checker {
         sl_proof::ScriptProver.prove(env, req)
     }
 
-    fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str, stop: Option<(u128, bool)>, startup: bool, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
-        c1(env, fname, spec, prefix, stop, startup, hints).map_err(sl_kernel::KernelError)
+    fn c1(&mut self, env: &mut Env, fname: &str, spec: &str, prefix: &str, stop: Option<(u128, bool)>, mode: u8, hints: &[String]) -> sl_kernel::KResult<Vec<(String, Seq)>> {
+        c1(env, fname, spec, prefix, stop, mode, hints).map_err(sl_kernel::KernelError)
     }
 
     fn refines(&mut self, env: &mut Env, name: &str, low: &str, high: &str) -> sl_kernel::KResult<Seq> {

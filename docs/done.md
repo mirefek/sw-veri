@@ -1434,3 +1434,9 @@ item is a short summary of finished work; details are in the files named.
   `lnk.main()` --, one callee, a_crash's undefined contract elsewhere;
   their `tr.code_okm` by lnk.code_ok1); frame_dummy's entry
   register_tm_clones's CFG form through the jump.
+- **memcpy proven once** (c1_asm.core: `c1 .. both`): a C1 line in
+  either mode -- the mode b a variable (the engine's `bm()`; the kernel's
+  directive parser: `startup` / `both`), its contract `tr.impl_m(b, ..)`
+  for every b; the main mode's ABI contract from b true
+  (tr.impl_m_main: never stopping at t, a run reaching t is undefined);
+  memcpy's composition `mcp.composed_m` for every b.
