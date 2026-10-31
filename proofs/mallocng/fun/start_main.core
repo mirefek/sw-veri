@@ -1722,3 +1722,118 @@ proof
   show by defs(apply(sp.fun_r0[P := a. c_src_env___libc_start_main.libc_start_init(I, FP), Q := a. startup_specs.start_init_spec(P)],
     {regs}, {s}, {o}, ra, hp, expand(h, c_src_env___libc_start_main.libc_start_init_fun)), startup_specs.start_init_spec_fun)
 qed
+
+// ----------------------------------------------------------------------
+//  The linked CFG forms (link_start.core's) called as their specs say,
+//  and _start_c's machine code implementing its purpose
+
+// the program's addresses: its constructors' table (frame_dummy's one
+// entry), main
+abbrev lk.pok(P) := P.init_array = c_src_env___libc_start_main.__init_array_start && P.init_array_end = c_src_env___libc_start_main.__init_array_end &&
+  P.ctor = 4198864 && P.main = c_crt_crt1.main_at
+
+// startup's globals: the units' symbols
+abbrev lk.gok(g) := g.environ = c_src_env___libc_start_main.__environ && g.hwcap = c_src_env___libc_start_main.__hwcap && g.sysinfo = c_src_env___libc_start_main.__sysinfo &&
+  g.libc = c_src_env___libc_start_main.__libc && g.progname = c_src_env___libc_start_main.__progname && g.progname_full = c_src_env___libc_start_main.__progname_full &&
+  g.empty_str = c_src_env___libc_start_main.str_ && g.main_tls = c_src_env___init_tls.main_tls && g.builtin_tls = c_src_env___init_tls.builtin_tls &&
+  g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard && g.default_stacksize = c_src_env___init_tls.__default_stacksize
+
+// main at t (link_start.core's lnk.main): main entered
+theorem lk.main_calls: mp.calls(lnk.main(), startup_specs.main_spec_fun())
+proof
+  fix regs s o
+  assume h1 h2 h3 hr
+  have ra := mp(sp.regs_in[regs := regs], h1, h2)
+  rsimp only, lnk.main, app_fn_build, ra in hr
+  have pu := apply(g.runs_univ, hr)
+  have oe: o = exc(s, sp.AM) := apply(g.runs_elim, hr)
+  have rm: runs(startup_specs.main_entered, s, o) by defs(apply(tr.runs_intro[r := x0 x1. x1 = exc(x0, sp.AM)], {s}, {o}, pu, oe), startup_specs.main_entered)
+  have xe: ex x3 x4. o = exc(x3, x4) && o = exc(x3, x4) by ex_intro({s}, {sp.AM}, conj(oe, oe))
+  have bm: bind_rel(startup_specs.main_entered, s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by defs(ex_intro({o}, taut(rm, xe)), bind_rel)
+  unfold startup_specs.main_spec_fun
+  rsimp only, app_fn_build, ra
+  show := apply(tr.runs_intro[r := x1 x2. bind_rel(startup_specs.main_entered, x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {s}, {o}, pu, bm)
+qed
+
+// __libc_start_init with _init and the init_array's map
+theorem lk.si_calls: all P. lk.pok(P) -> mp.calls(lsil.F, startup_specs.start_init_spec_fun(P))
+proof
+  fix P
+  assume hp
+  have ha he hc _ := hp
+  let G := musl_asm_cfg.register_tm_clones_fun()
+  have hio := mp(all_elim(lnk.fp1_io, {4198873}, {4198864}, {G}, {0}), c1rtc.io)
+  have r0 := mp(all_elim(start_init_ref, {musl_asm_cfg._init_fun()}, {lsil.FP}), c1in.io, hio)
+  have fe := mp(app_fn_build[d := bits(64), v := x. ite(x = 4198873, lnk.main(), ite(x = 4198864, G, lnk.A)), a := 4198864], (4198864 in bits(64) by simp()))
+  have fpe: lsil.FP[P.ctor] = G by simp(fe, hc)
+  have hFP: mp.calls(lsil.FP[P.ctor], musl_asm.frame_dummy_fun()) proof
+    fix regs s o
+    assume h1 h2 h3 hr
+    have r := mp(all_elim(rtc_ref, {regs}, {s}, {o}), h1, h2, h3, rewrite(fpe, hr))
+    show by defs(r, musl_asm.frame_dummy_fun)
+  qed
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(r0, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.si_fun, {P}, {musl_asm_cfg._init_fun()}, {lsil.FP}, {regs}, {s}, {o}), ha, he, init_ref, hFP, h1, h2, h3, hs)
+qed
+
+// stage2 with __libc_start_init (linked) and main's map
+theorem lk.s2_calls: all P. lk.pok(P) -> mp.calls(s2l.F, startup_specs.stage2_spec_fun(P))
+proof
+  fix P
+  assume hp
+  have _ _ _ hm := hp
+  have hSI := mp(all_elim(lk.si_calls, {P}), hp)
+  have fe := mp(app_fn_build[d := bits(64), v := x. ite(x = 4198873, lnk.main(), lnk.A), a := P.main], (P.main in bits(64) by defs(simp(hm), c_crt_crt1.main_at)))
+  have fpm: s2l.FP[P.main] = lnk.main() by defs(simp(fe, hm), c_crt_crt1.main_at)
+  have hFP: mp.calls(s2l.FP[P.main], startup_specs.main_spec_fun()) := rewrite(sym(fpm), lk.main_calls)
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(stage2_ref, {lsil.F}, {s2l.FP}, {lnk.A}, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.st2_fun, {P}, {lsil.F}, {s2l.FP}, {lnk.A}, {regs}, {s}, {o}), hSI, hFP, h1, h2, h3, hs)
+qed
+
+// __libc_start_main with __init_libc (linked) and stage2's map
+theorem lk.lsm_calls: all g P. lk.gok(g) -> lk.pok(P) -> mp.calls(lsml.F, startup_specs.start_main_spec_fun(g, P))
+proof
+  fix g P
+  assume hg hp
+  have hgE hgH hgS hgL hgP hgF hgZ hgM hgB hgG hgD := hg
+  have ha _ _ _ := hp
+  have hIL := mp(all_elim(lk.libc_calls, {g}), hgE, hgH, hgS, hgL, hgP, hgF, hgZ, hgM, hgB, hgG, hgD)
+  have fe := mp(app_fn_build[d := bits(64), v := x. ite(x = 4198873, lnk.main(), ite(x = 4200218, s2l.F, lnk.A)), a := c_src_env___libc_start_main.libc_start_main_stage2_at],
+    (c_src_env___libc_start_main.libc_start_main_stage2_at in bits(64) by defs(simp(), c_src_env___libc_start_main.libc_start_main_stage2_at)))
+  have fps: lsml.FP[c_src_env___libc_start_main.libc_start_main_stage2_at] = s2l.F by defs(simp(fe), c_src_env___libc_start_main.libc_start_main_stage2_at)
+  have hFP: mp.calls(lsml.FP[c_src_env___libc_start_main.libc_start_main_stage2_at], startup_specs.stage2_spec_fun(P)) := rewrite(sym(fps), mp(all_elim(lk.s2_calls, {P}), hp))
+  have pb: P.init_array in bits(64) by defs(simp(ha), c_src_env___libc_start_main.__init_array_start)
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(start_main_ref, {ilcl.F}, {lsml.FP}, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.lsm_fun, {g}, {P}, {ilcl.F}, {lsml.FP}, {regs}, {s}, {o}), pb, hIL, hFP, h1, h2, h3, hs)
+qed
+
+// _start_c with __libc_start_main (linked): the startup path from
+// _start_c's entry called as its purpose says
+theorem lk.stc_calls: all g P. lk.gok(g) -> lk.pok(P) -> mp.calls(stl.F, startup_specs.start_c_spec_fun(g, P))
+proof
+  fix g P
+  assume hg hp
+  have _ _ _ hm := hp
+  have hL := mp(all_elim(lk.lsm_calls, {g}, {P}), hg, hp)
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(start_c_ref, {lsml.F}, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.stc_fun, {g}, {P}, {lsml.F}, {regs}, {s}, {o}), hm, hL, h1, h2, h3, hs)
+qed
+
+// _start_c's machine code (the startup path, linked) implements its
+// purpose: main entered with libc set up -- or a stack overflow
+theorem lk.start_impl: all g P statics. lk.gok(g) -> lk.pok(P) ->
+  tr.impl_m(false, false, 4198565, startup_specs.start_c_spec_fun(g, P), 4198873, true, 4198400, text.code, statics)
+proof
+  fix g P statics
+  assume hg hp
+  show := mp(all_elim(tr.impl_m_refine, {false}, {false}, {4198565}, {stl.F}, {startup_specs.start_c_spec_fun(g, P)}, {4198873}, {true}, {4198400}, {text.code}, {statics}),
+    all_elim(stl.linked, {statics}), mp(all_elim(lk.stc_calls, {g}, {P}), hg, hp))
+qed
