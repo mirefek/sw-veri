@@ -1,0 +1,510 @@
+// The startup path to main: __libc_start_init, libc_start_main_stage2,
+// __libc_start_main, _start_c refine their specs (layers/startup_specs.sl:
+// main entered), and their machine code implements them.
+
+// ----------------------------------------------------------------------
+//  A function value refining a spec's: its procedure's outcomes the
+//  spec's procedure's (an ok one up to its value: the function's values
+//  any)
+
+// (the registers' domain)
+abbrev sp.REGS := set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6))
+
+// (the spec's function's ok outcomes: any values)
+abbrev sp.anyv(w, o) := any_rel(x5. x5 in bits(64), x5. any_rel(x6. x6 in bits(64), x6. o = ok(w, pair(x5, x6))))
+
+// a procedure's outcome as the spec's: an ok one at the same world
+abbrev sp.as_spec(Q, s, o3) := (ex w v. o3 = ok(w, v) && (ex v2. runs(Q, s, ok(w, v2)))) || (!is_ok(o3) && runs(Q, s, o3))
+
+// (the continuation of an outcome as the spec's)
+theorem sp.cont_as(Q, s, o, o3):
+  ((ex s1 v. o3 = ok(s1, v) && sp.anyv(s1, o)) || (ex s1 e. o3 = exc(s1, e) && o = exc(s1, e)) || (ex t. o3 = diverge(t) && o = diverge(t))) ->
+  sp.as_spec(Q, s, o3) ->
+  bind_rel(Q, s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3))
+proof
+  assume hk hq
+  have c1: (ex w v. o3 = ok(w, v) && (ex v2. runs(Q, s, ok(w, v2)))) -> bind_rel(Q, s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume e
+    obtain w v, e3 hv from e
+    obtain v2, hq2 from hv
+    have d: sp.anyv(w, o) by simp(rewrite(e3, hk), keep(any_rel))
+    have k: ex s1 v3. ok(w, v2) = ok(s1, v3) && sp.anyv(s1, o) by ex_intro({w}, {v2}, taut(refl({ok(w, v2)}), d))
+    show by defs(ex_intro({ok(w, v2)}, taut(hq2, k)), bind_rel)
+  qed
+  have c2: (!is_ok(o3) && runs(Q, s, o3)) -> bind_rel(Q, s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume e
+    show by defs(ex_intro({o3}, taut(e, hk)), bind_rel)
+  qed
+  show by taut(hq, c1, c2)
+qed
+
+// a function value with a requirement on its arguments (n of them)
+theorem sp.fun_r(n, a. P, a. Q): all regs s o. regs in sp.REGS ->
+  (ord_le(n, seq_len(regs)) -> all o3. runs(P(regs), s, o3) -> sp.as_spec(Q(regs), s, o3)) ->
+  runs(fn_build(sp.REGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(P(x0), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o) ->
+  runs(fn_build(sp.REGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(Q(x0), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o)
+proof
+  fix regs s o
+  assume hr hp h
+  rsimp only, app_fn_build, hr in h
+  rsimp only, app_fn_build, hr
+  have pu := apply(g.runs_univ, h)
+  have b := apply(g.runs_elim, h)
+  have c1: ord_le(n, seq_len(regs)) -> bind_rel(Q(regs), s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) proof
+    assume hn
+    have b2: bind_rel(P(regs), s, x3 x4. sp.anyv(x3, o), x3 x4. o = exc(x3, x4), x3. o = diverge(x3)) by taut(b, hn)
+    obtain o3, hs3 hk3 from expand(b2, bind_rel)
+    have q := mp(all_elim(mp(hp, hn), {o3}), hs3)
+    show := mp(sp.cont_as[Q := Q(regs), s := s, o := o, o3 := o3], hk3, q)
+  qed
+  show := apply(tr.runs_intro[r := x1 x2. !ord_le(n, seq_len(regs)) || bind_rel(Q(regs), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))],
+    {s}, {o}, pu, taut(b, c1))
+qed
+
+// (a run is the spec's outcome)
+theorem sp.as_of(Q, s, o3): runs(Q, s, o3) -> sp.as_spec(Q, s, o3)
+proof
+  assume h
+  have c: is_ok(o3) -> ex w v. o3 = ok(w, v) && (ex v2. runs(Q, s, ok(w, v2))) proof
+    assume i
+    obtain w v, e from expand(i, is_ok)
+    have r: ex v2. runs(Q, s, ok(w, v2)) by ex_intro({v}, rewrite(e, h))
+    show by ex_intro({w}, {v}, taut(e, r))
+  qed
+  show by taut(c, h)
+qed
+
+// a spec's function called: its procedure's outcome (an ok one with any
+// values)
+theorem sp.fun_out(n, a. Q): all regs s o2. regs in sp.REGS -> ord_le(n, seq_len(regs)) ->
+  runs(fn_build(sp.REGS, x0. mkprog(x1 x2. !ord_le(n, seq_len(x0)) || bind_rel(Q(x0), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o2) ->
+  bind_rel(Q(regs), s, x3 x4. sp.anyv(x3, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
+proof
+  fix regs s o2
+  assume hr hn h
+  rsimp only, app_fn_build, hr in h
+  have b := apply(g.runs_elim, h)
+  show by taut(b, hn)
+qed
+
+// ----------------------------------------------------------------------
+//  Main entered: the specs of __libc_start_main and _start_c (an
+//  overflow, or libc set up and main entered: to_main at envp e)
+
+abbrev sp.TM(g, e, x0, x1) := ex x2. (bind_rel(startup_specs.overflow_start, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)),
+    x3. x2 = diverge(x3)) ||
+  bind_rel(startup_specs.to_main(g, e), x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))) &&
+  ((fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+    ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2)))))
+
+// one such spec's run another's: both requirements met, the same envp
+theorem sp.tm_same(x0. R1, x0. R2, x0. E1, x0. E2, g): all s o. R1(s) -> R2(s) -> E1(s) = E2(s) ->
+  runs(mkprog(x0 x1. !R1(x0) || sp.TM(g, E1(x0), x0, x1)), s, o) -> runs(mkprog(x0 x1. !R2(x0) || sp.TM(g, E2(x0), x0, x1)), s, o)
+proof
+  fix s o
+  assume h1 h2 he hr
+  have pu := apply(g.runs_univ, hr)
+  have b := apply(g.runs_elim, hr)
+  have t: sp.TM(g, E1(s), s, o) by taut(b, h1)
+  have t2 := rewrite(he, t)
+  show := apply(tr.runs_intro[r := x0 x1. !R2(x0) || sp.TM(g, E2(x0), x0, x1)], {s}, {o}, pu, taut(t2))
+qed
+
+// (a requirement not met: anything)
+theorem sp.req_fail(x0. R, x0 x1. B): all s o. pair(s, o) in univ(1) -> !R(s) -> runs(mkprog(x0 x1. !R(x0) || B(x0, x1)), s, o)
+proof
+  fix s o
+  assume pu hn
+  show := apply(tr.runs_intro[r := x0 x1. !R(x0) || B(x0, x1)], {s}, {o}, pu, taut(hn))
+qed
+
+// to_main's memory at e: the frame of startup's writes, libc.auxv after
+// envp's words, a thread set up
+abbrev sp.TMV(g, e, s, V) := V in x86_64_linux.Vm && ((startup_specs.frame(s.vm, V, s.objs, startup_specs.start_writes(g)) &&
+  (all n. n in omega -> startup_specs.env_at(s.vm, s.objs, e, n) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(e, int_mul(8, int_add(n, 1))))) &&
+  (ex fs. fs in bits(64) && startup_specs.thread_set(V, fs)))
+
+abbrev sp.AM := exc_val("at_main", empty)
+
+// the body's outcomes: an overflow, main entered with such a memory and
+// thread -- or no such memory (to_main undefined)
+theorem sp.tm_cases(g, e, s, o): s in abi.World -> sp.TM(g, e, s, o) ->
+  sp.ovf_any(s, o) || (ex V fs. (sp.TMV(g, e, s, V) && fs in bits(64) && startup_specs.thread_set(V, fs)) &&
+    o = exc(fn_update(fn_update(s, "vm", V), "fs_base", fs), sp.AM)) || !(ex V. sp.TMV(g, e, s, V))
+proof
+  assume hw h
+  obtain x2, hbr hout from h
+  let OVF := exc_val("stack_overflow", empty)
+  have k1: case 1 of hbr proof
+    assume e1
+    rsimp only, startup_specs.overflow_start, abi.overflow in e1
+    have pv _ _ _ := apply(ms.world_parts, hw)
+    have vv: ex x. x in x86_64_linux.Vm by ex_intro({s.vm}, simp(pv))
+    have fv: ex x. x in bits(64) by ex_intro({0}, simp())
+    have l: ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+      x2 = exc(pair(fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e1, vv, fv, ct.objs_ne)
+    obtain f v ob, hf hv hob hx from l
+    have oe: o = exc(fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
+    have x: sp.ovf_any(s, o) by defs(ex_intro({f}, {v}, {ob}, taut(hf, hv, hob, oe)), sp.ovf_any)
+    show by taut(x)
+  qed
+  have k2: case 2 of hbr proof
+    assume e2
+    have cv: (ex V. sp.TMV(g, e, s, V)) -> ex V fs. (sp.TMV(g, e, s, V) && fs in bits(64) && startup_specs.thread_set(V, fs)) &&
+        o = exc(fn_update(fn_update(s, "vm", V), "fs_base", fs), sp.AM) proof
+      assume hex
+      obtain o5, r5 k5 from apply(g.bind_open, e2)
+      have b5 := apply(g.letin_e, apply(g.runs_elim, expand(r5, startup_specs.to_main)))
+      rsimp in b5
+      obtain V, hV hfr hl8 hfs0 hk from apply(g.any_e, hex, b5)
+      have hk1 := apply(g.letin_e, hk)
+      rsimp in hk1
+      obtain fs, hfb hts hk2 from apply(g.any_e, hfs0, hk1)
+      have hk3 := apply(g.letin_e, hk2)
+      let S := fn_update(fn_update(s, "vm", V), "fs_base", fs)
+      obtain o6, r6 k6 from apply(g.bind_open, hk3)
+      have o6e: o6 = exc(S, sp.AM) by simp(apply(g.runs_elim, expand(r6, startup_specs.main_entered)))
+      have o5e: o5 = exc(S, sp.AM) by simp(rewrite(o6e, k6))
+      have x2e: x2 = exc(pair(S, empty), pair("raise", sp.AM)) by simp(rewrite(o5e, k5))
+      have oe: o = exc(S, sp.AM) by simp(rewrite(x2e, hout))
+      show by ex_intro({V}, {fs}, taut(hV, hfr, hl8, hfs0, hfb, hts, oe))
+    qed
+    show by taut(cv)
+  qed
+  show by taut(hbr, k1, k2)
+qed
+
+// (the body's ending: its procedures' outcomes the spec's)
+abbrev sp.DS(x2, x1) := (fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+    ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))
+abbrev sp.BR(p, x0, x2) := bind_rel(p, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))
+
+// an overflow: the body's
+theorem sp.tm_ovf(g, e, s, o): pair(s, o) in univ(1) -> sp.ovf_any(s, o) -> sp.TM(g, e, s, o)
+proof
+  assume pu ho0
+  obtain f v ob, hf hv hob ho from expand(ho0, sp.ovf_any)
+  let OVF := exc_val("stack_overflow", empty)
+  let WO := fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob)
+  let X2 := exc(pair(WO, empty), pair("raise", OVF))
+  have hu: s in univ(1) by simp(pu)
+  have r1 := apply(sp.ovs_intro, {s}, {f}, {v}, {ob}, hu, hf, hv, hob, rewrite(ho, pu))
+  have cx: ex x3 x4. exc(WO, OVF) = exc(x3, x4) && X2 = exc(pair(x3, empty), pair("raise", x4)) by ex_intro({WO}, {OVF}, taut(refl({exc(WO, OVF)}), refl({X2})))
+  have b1: sp.BR(startup_specs.overflow_start, s, X2) by defs(ex_intro({exc(WO, OVF)}, taut(r1, cx)), bind_rel)
+  have d1: sp.DS(X2, o) by simp(ho)
+  show by ex_intro({X2}, taut(b1, d1))
+qed
+
+// (the outcomes the body's ending makes)
+abbrev sp.tmo(o) := (ex w. o = ok(w, empty)) || (ex w x. o = exc(w, x)) || (ex t. o = diverge(t))
+
+// no memory to_main's: every such outcome the body's
+theorem sp.tm_vac(g, e, s, o): pair(s, o) in univ(1) -> !(ex V. sp.TMV(g, e, s, V)) -> sp.tmo(o) -> sp.TM(g, e, s, o)
+proof
+  assume pu hn ho
+  have r5: runs(startup_specs.to_main(g, e), s, o) proof
+    unfold startup_specs.to_main
+    refine tr.runs_intro with pu
+    rsimp
+    show by defs(taut(hn), any_rel)
+  qed
+  have c1: (ex w. o = ok(w, empty)) -> sp.TM(g, e, s, o) proof
+    assume q
+    obtain w, ew from q
+    let X2 := ok(pair(w, empty), empty)
+    have k: ex x3 x4. o = ok(x3, x4) && X2 = ok(pair(x3, empty), empty) by ex_intro({w}, {empty}, taut(ew, refl({X2})))
+    have b: sp.BR(startup_specs.to_main(g, e), s, X2) by defs(ex_intro({o}, taut(r5, k)), bind_rel)
+    have d: sp.DS(X2, o) by simp(ew)
+    show by ex_intro({X2}, taut(b, d))
+  qed
+  have c2: (ex w x. o = exc(w, x)) -> sp.TM(g, e, s, o) proof
+    assume q
+    obtain w x, ew from q
+    let X2 := exc(pair(w, empty), pair("raise", x))
+    have k: ex x3 x4. o = exc(x3, x4) && X2 = exc(pair(x3, empty), pair("raise", x4)) by ex_intro({w}, {x}, taut(ew, refl({X2})))
+    have b: sp.BR(startup_specs.to_main(g, e), s, X2) by defs(ex_intro({o}, taut(r5, k)), bind_rel)
+    have d: sp.DS(X2, o) by simp(ew)
+    show by ex_intro({X2}, taut(b, d))
+  qed
+  have c3: (ex t. o = diverge(t)) -> sp.TM(g, e, s, o) proof
+    assume q
+    obtain t, ew from q
+    let X2 := diverge(t)
+    have k: ex x3. o = diverge(x3) && X2 = diverge(x3) by ex_intro({t}, taut(ew, refl({X2})))
+    have b: sp.BR(startup_specs.to_main(g, e), s, X2) by defs(ex_intro({o}, taut(r5, k)), bind_rel)
+    have d: sp.DS(X2, o) by simp(ew)
+    show by ex_intro({X2}, taut(b, d))
+  qed
+  show by taut(ho, c1, c2, c3)
+qed
+
+// (a spec function's outcome o2 from its procedure's o4: o4 ok, or o2
+// the same)
+theorem sp.k_cases(o4, o2): ((ex s1 v. o4 = ok(s1, v) && sp.anyv(s1, o2)) || (ex s1 e. o4 = exc(s1, e) && o2 = exc(s1, e)) || (ex t. o4 = diverge(t) && o2 = diverge(t))) ->
+  is_ok(o4) || (!is_ok(o4) && o2 = o4)
+proof
+  assume h
+  have c1: (ex s1 v. o4 = ok(s1, v) && sp.anyv(s1, o2)) -> is_ok(o4) proof
+    assume q
+    obtain s1 v, e1 _ from q
+    show by defs(ex_intro({s1}, {v}, e1), is_ok)
+  qed
+  have c2: (ex s1 e. o4 = exc(s1, e) && o2 = exc(s1, e)) -> !is_ok(o4) && o2 = o4 proof
+    assume q
+    obtain s1 e, e1 e2 from q
+    have n := rewrite(sym(e1), all_elim(g.not_ok_exc, {s1}, {e}))
+    show by taut(n, trans(e2, sym(e1)))
+  qed
+  have c3: (ex t. o4 = diverge(t) && o2 = diverge(t)) -> !is_ok(o4) && o2 = o4 proof
+    assume q
+    obtain t, e1 e2 from q
+    have n := rewrite(sym(e1), all_elim(g.not_ok_div, {t}))
+    show by taut(n, trans(e2, sym(e1)))
+  qed
+  show by taut(h, c1, c2, c3)
+qed
+
+// (a procedure's outcome o from its last call's oc, the procedure
+// returning nothing after it: o oc's if not ok, of the body's ending's
+// forms)
+theorem sp.d_cases(oc, o): ((ex s1 v. oc = ok(s1, v) && o = ok(s1, empty)) || (ex s1 e. oc = exc(s1, e) && o = exc(s1, e)) || (ex t. oc = diverge(t) && o = diverge(t))) ->
+  (!is_ok(oc) -> o = oc) && sp.tmo(o)
+proof
+  assume h
+  have c1: (ex s1 v. oc = ok(s1, v) && o = ok(s1, empty)) -> (!is_ok(oc) -> o = oc) && sp.tmo(o) proof
+    assume q
+    obtain s1 v, e1 e2 from q
+    have i: is_ok(oc) by defs(ex_intro({s1}, {v}, e1), is_ok)
+    have t: ex w. o = ok(w, empty) by ex_intro({s1}, e2)
+    show by taut(i, t)
+  qed
+  have c2: (ex s1 e. oc = exc(s1, e) && o = exc(s1, e)) -> (!is_ok(oc) -> o = oc) && sp.tmo(o) proof
+    assume q
+    obtain s1 e, e1 e2 from q
+    have t: ex w x. o = exc(w, x) by ex_intro({s1}, {e}, e2)
+    show by taut(trans(e2, sym(e1)), t)
+  qed
+  have c3: (ex t. oc = diverge(t) && o = diverge(t)) -> (!is_ok(oc) -> o = oc) && sp.tmo(o) proof
+    assume q
+    obtain t, e1 e2 from q
+    have t2: ex t3. o = diverge(t3) by ex_intro({t}, e2)
+    show by taut(trans(e2, sym(e1)), t2)
+  qed
+  show by taut(h, c1, c2, c3)
+qed
+
+// ----------------------------------------------------------------------
+//  _start_c(sp): argc's word read, argv after it; __libc_start_main
+//  called as its spec says -- its requirement _start_c's, its envp the
+//  same
+
+theorem sp.stc_run: all g P LSM p s o. s in abi.World -> p in bits(64) -> P.main = c_crt_crt1.main_at ->
+  mp.calls(LSM, startup_specs.start_main_spec_fun(g, P)) -> runs(c_crt_crt1._start_c(p, LSM), s, o) -> sp.as_spec(startup_specs.start_c_spec(g, P, p), s, o)
+proof
+  fix g P LSM p s o
+  assume hw hp hm hL h
+  let SC := startup_specs.start_c_spec(g, P, p)
+  have pu := apply(g.runs_univ, expand(h, c_crt_crt1._start_c))
+  have hu: s in univ(1) by simp(pu)
+  let PRE(x0) := ((!(p = 0) && int_lt(int_add(p, 16), int_pow(2, 63))) && gimple.usable(app(x0, "vm"), app(x0, "objs"), p, 8, false)) &&
+    startup_specs.start_main_pre(app(x0, "vm"), app(x0, "objs"), g, P, gimple.bytes_at(app(x0, "vm"), p, 8), bits_add(64, p, 8))
+  have cN: !PRE(s) -> sp.as_spec(SC, s, o) proof
+    assume hn
+    have r: runs(SC, s, o) by defs(apply(sp.req_fail[R := x0. PRE(x0), B := x0 x1. sp.TM(g, bits_add(64, p, int_mul(8, int_add(gimple.bytes_at(app(x0, "vm"), p, 8), 2))), x0, x1)],
+      {s}, {o}, pu, hn), startup_specs.start_c_spec)
+    show := apply(sp.as_of, r)
+  qed
+  have cP: PRE(s) -> sp.as_spec(SC, s, o) proof
+    assume hpre
+    have hp1 hp2 hus hsm := hpre
+    have b := apply(g.runs_elim, expand(h, c_crt_crt1._start_c))
+    have pl: int_lt(int_add(p, 0), pow2(64)) by arith(hp2, hp)
+    have p0: int_add(p, 0) = p by arith(hp)
+    have md: g.mem_defined(s, p, 0, 8, false) by simp(hp1, hus, pl, p0)
+    have sv8: g.sv64(8) = 8 by simp()
+    have pl8: int_lt(int_add(p, g.sv64(8)), pow2(64)) by arith(hp2, hp, sv8)
+    have pz8: int_le(0, int_add(p, g.sv64(8))) by arith(hp, sv8)
+    step a1, h0 from b
+    step a2, h1 from h0 with g.ld64_det, g.padd_det using conj(hu, hp, md, pl8, pz8)
+    // the call's arguments: main, argc (the word, under 2^31), argv
+    let W := gimple.bytes_at(s.vm, p, 8)
+    let AV := bits_add(64, p, 8)
+    have sa1 _ sa3 _ _ _ := expand(hsm, startup_specs.start_main_pre)
+    have _ _ _ sbt := apply(ms.world_parts, hw)
+    have wo _ := apply(g.bytes_bound, {s.vm}, {p}, {8}, sbt, simp())
+    have eA: bits_of_int(32, bits_of_int(64, W)) = W by defs(arith(wo, sa1), bits_of_int)
+    have e8: gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), 8) = 8 by simp()
+    have bq: int_add(p, 8) = AV by defs(arith(hp, hp2), bits_add, bits_of_int)
+    have h2 := rewrite(bq, rewrite(e8, rewrite(eA, rewrite(p0, h1))))
+    obtain oc, hrc hdc from apply(g.bind_open, h2)
+    let ARGS := seq_concat(seq_concat(seq_concat(seq_concat(seq_concat(seq_one(gimple.arg(64, c_crt_crt1.main_at)), seq_one(gimple.arg(32, W))), seq_one(gimple.arg(64, AV))),
+      seq_one(gimple.arg(64, c_crt_crt1._init_at))), seq_one(gimple.arg(64, c_crt_crt1._fini_at))), seq_one(gimple.arg(64, bits_of_int(64, 0))))
+    let SM := startup_specs.start_main_spec(g, P, c_crt_crt1.main_at, W, AV)
+    let QQ(o2) := bind_rel(SM, s, x3 x4. sp.anyv(x3, o2), x3 x4. o2 = exc(x3, x4), x3. o2 = diverge(x3))
+    have mb: c_crt_crt1.main_at in bits(64) by defs(simp(), c_crt_crt1.main_at)
+    have ib: c_crt_crt1._init_at in bits(64) by defs(simp(), c_crt_crt1._init_at)
+    have fb: c_crt_crt1._fini_at in bits(64) by defs(simp(), c_crt_crt1._fini_at)
+    have w32: int_lt(W, pow2(32)) by arith(sa1, wo)
+    have wb: W in bits(32) by defs(simp(wo, w32), bits)
+    have avb: AV in bits(64) by simp()
+    // (registers for the call exist)
+    have rg := apply(gc.regs_get, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat, apply(gc.regs_cat,
+      apply(gc.regs_one[w := 64, x := c_crt_crt1.main_at], simp(), simp(), mb), apply(gc.regs_one[w := 32, x := W], simp(), simp(), wb)),
+      apply(gc.regs_one[w := 64, x := AV], simp(), simp(), avb)), apply(gc.regs_one[w := 64, x := c_crt_crt1._init_at], simp(), simp(), ib)),
+      apply(gc.regs_one[w := 64, x := c_crt_crt1._fini_at], simp(), simp(), fb)), apply(gc.regs_one[w := 64, x := bits_of_int(64, 0)], simp(), simp(), simp())))
+    // __libc_start_main called: its spec's procedure at main, argc, argv
+    have hq: all regs o2. gc.regs_ok(regs, ARGS) -> runs(LSM[regs], s, o2) -> QQ(o2) proof
+      fix regs o2
+      assume hro hg
+      have rl rln _ := hro
+      have rn: seq_len(regs) = 6 := trans(rln, (seq_len(ARGS) = 6 by simp()))
+      have lo: seq_len(regs) in omega by simp(rn)
+      have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+      have ra: regs in sp.REGS by simp(rl, ol, keep(ord_le))
+      have l6: int_le(seq_len(regs), 6) by arith(rn)
+      have o6: ord_le(6, seq_len(regs)) by defs(simp(rn), ord_le)
+      have hs := mp(all_elim(hL, {regs}, {s}, {o2}), rl, l6, hw, hg)
+      have q0 := apply(gc.reg_at[regs := regs, args := ARGS, i := 0, w := 64, x := c_crt_crt1.main_at], hro, simp(), simp(), at({ARGS[0]}), simp(), mb)
+      have q1 := apply(gc.reg_at[regs := regs, args := ARGS, i := 1, w := 32, x := W], hro, simp(), simp(), at({ARGS[1]}), simp(), wb)
+      have q2 := apply(gc.reg_at[regs := regs, args := ARGS, i := 2, w := 64, x := AV], hro, simp(), simp(), at({ARGS[2]}), simp(), avb)
+      have b := apply(sp.fun_out[n := 6, Q := a. startup_specs.start_main_spec(g, P, bits_of_int(64, a[0]), bits_of_int(32, a[1]), bits_of_int(64, a[2]))], ra, o6,
+        expand(hs, startup_specs.start_main_spec_fun))
+      show := rewrite(q0, rewrite(q1, rewrite(q2, b)))
+    qed
+    have ci := apply(gc.call0_inv[Q := o2. QQ(o2)], {LSM}, {ARGS}, {s}, {oc}, rg, hq, hrc)
+    // its spec's runs _start_c's (the same requirement met, the same envp)
+    let E2(x0) := bits_add(64, p, int_mul(8, int_add(gimple.bytes_at(app(x0, "vm"), p, 8), 2)))
+    have eE: bits_add(64, AV, int_mul(8, int_add(W, 1))) = E2(s) by defs(arith(hp, hp2, wo, bq, sa3), bits_add, bits_of_int)
+    have toSC: all o4. runs(SM, s, o4) -> runs(SC, s, o4) proof
+      fix o4
+      assume r4
+      have x := mp(all_elim(sp.tm_same[R1 := x0. c_crt_crt1.main_at = P.main && startup_specs.start_main_pre(app(x0, "vm"), app(x0, "objs"), g, P, W, AV), R2 := x0. PRE(x0),
+          E1 := x0. bits_add(64, AV, int_mul(8, int_add(W, 1))), E2 := x0. E2(x0), g := g], {s}, {o4}), taut(sym(hm), hsm), hpre, eE, expand(r4, startup_specs.start_main_spec))
+      show by defs(x, startup_specs.start_c_spec)
+    qed
+    have mkSC: all o5. pair(s, o5) in univ(1) -> sp.TM(g, E2(s), s, o5) -> runs(SC, s, o5) proof
+      fix o5
+      assume pu5 t
+      show by defs(apply(tr.runs_intro[r := x0 x1. !PRE(x0) || sp.TM(g, E2(x0), x0, x1)], {s}, {o5}, pu5, taut(t)), startup_specs.start_c_spec)
+    qed
+    have dc dt := apply(sp.d_cases, hdc)
+    // a callee's outcome o4: _start_c's, or ok (to_main undefined: anything)
+    have fin: all o4. runs(SM, s, o4) -> is_ok(o4) || (!is_ok(o4) && o = o4) -> runs(SC, s, o) proof
+      fix o4
+      assume r4 c
+      have rsc := mp(all_elim(toSC, {o4}), r4)
+      have c2: !is_ok(o4) && o = o4 -> runs(SC, s, o) proof
+        assume q
+        have _ e := q
+        show := rewrite(sym(e), rsc)
+      qed
+      have c1: is_ok(o4) -> runs(SC, s, o) proof
+        assume io
+        have tsc: sp.TM(g, E2(s), s, o4) by taut(apply(g.runs_elim, expand(rsc, startup_specs.start_c_spec)), hpre)
+        have cs := apply(sp.tm_cases, hw, tsc)
+        have n1: sp.ovf_any(s, o4) -> false proof
+          assume q
+          obtain f v ob, _ _ _ e from expand(q, sp.ovf_any)
+          show by taut(io, rewrite(sym(e), all_elim(g.not_ok_exc, {fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob)}, {exc_val("stack_overflow", empty)})))
+        qed
+        have n2: (ex V fs. (sp.TMV(g, E2(s), s, V) && fs in bits(64) && startup_specs.thread_set(V, fs)) &&
+            o4 = exc(fn_update(fn_update(s, "vm", V), "fs_base", fs), sp.AM)) -> false proof
+          assume q
+          obtain V fs, _ _ _ _ _ _ e from q
+          show by taut(io, rewrite(sym(e), all_elim(g.not_ok_exc, {fn_update(fn_update(s, "vm", V), "fs_base", fs)}, {sp.AM})))
+        qed
+        have vac: !(ex V. sp.TMV(g, E2(s), s, V)) by taut(cs, n1, n2)
+        show := mp(all_elim(mkSC, {o}), pu, apply(sp.tm_vac, pu, vac, dt))
+      qed
+      show by taut(c, c1, c2)
+    qed
+    // the call's outcomes
+    let OVF := exc_val("stack_overflow", empty)
+    have pf pd := (("fs_base" in dom(s)) && ("objs" in dom(s)) by simp(expand(hw, abi.World)))
+    have kA: oc = exc(s, OVF) -> runs(SC, s, o) proof
+      assume e
+      have oe: o = exc(s, OVF) := trans(mp(dc, rewrite(sym(e), all_elim(g.not_ok_exc, {s}, {OVF}))), e)
+      have sv wf wd _ := apply(ms.world_parts, hw)
+      have fsb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
+      have sob: s.objs in abi.Objs by simp(expand(hw, abi.World))
+      have se: fn_update(fn_update(fn_update(s, "fs_base", s.fs_base), "vm", s.vm), "objs", s.objs) = s by simp(wf, wd, pf, pd)
+      have ov: sp.ovf_any(s, o) by defs(ex_intro({s.fs_base}, {s.vm}, {s.objs}, taut(fsb, sv, sob, rewrite(sym(se), oe))), sp.ovf_any)
+      show := mp(all_elim(mkSC, {o}), pu, apply(sp.tm_ovf, pu, ov))
+    qed
+    have kB: (ex w4 r. QQ(ok(w4, r)) && (oc = ok(gc.back0(w4, s), pair(fst(r), snd(r))) || oc = exc(gc.back0(w4, s), OVF))) -> runs(SC, s, o) proof
+      assume q
+      obtain w4 r, hq4 _ from q
+      obtain o4, r4 k4 from expand(hq4, bind_rel)
+      have kc := apply(sp.k_cases, k4)
+      have iw: is_ok(ok(w4, r)) by defs(ex_intro({w4}, {r}, refl({ok(w4, r)})), is_ok)
+      have c: is_ok(o4) || (!is_ok(o4) && o = o4) proof
+        have n: (!is_ok(o4) && ok(w4, r) = o4) -> false proof
+          assume q2
+          have n4 e4 := q2
+          show by taut(n4, rewrite(e4, iw))
+        qed
+        show by taut(kc, n)
+      qed
+      show := mp(all_elim(fin, {o4}), r4, c)
+    qed
+    have kC: (ex x e. QQ(exc(x, e)) && oc = exc(x, e)) -> runs(SC, s, o) proof
+      assume q
+      obtain x e, hq4 he from q
+      obtain o4, r4 k4 from expand(hq4, bind_rel)
+      have kc := apply(sp.k_cases, k4)
+      have oe: o = exc(x, e) := rewrite(he, mp(dc, rewrite(sym(he), all_elim(g.not_ok_exc, {x}, {e}))))
+      have n: (!is_ok(o4) && exc(x, e) = o4) -> !is_ok(o4) && o = o4 proof
+        assume q2
+        have a1 a2 := q2
+        show by taut(a1, trans(oe, a2))
+      qed
+      have c: is_ok(o4) || (!is_ok(o4) && o = o4) by taut(kc, n)
+      show := mp(all_elim(fin, {o4}), r4, c)
+    qed
+    have kD: (ex t. QQ(diverge(t)) && oc = diverge(t)) -> runs(SC, s, o) proof
+      assume q
+      obtain t, hq4 he from q
+      obtain o4, r4 k4 from expand(hq4, bind_rel)
+      have kc := apply(sp.k_cases, k4)
+      have oe: o = diverge(t) := rewrite(he, mp(dc, rewrite(sym(he), all_elim(g.not_ok_div, {t}))))
+      have n: (!is_ok(o4) && diverge(t) = o4) -> !is_ok(o4) && o = o4 proof
+        assume q2
+        have a1 a2 := q2
+        show by taut(a1, trans(oe, a2))
+      qed
+      have c: is_ok(o4) || (!is_ok(o4) && o = o4) by taut(kc, n)
+      show := mp(all_elim(fin, {o4}), r4, c)
+    qed
+    have r: runs(SC, s, o) by taut(ci, kA, kB, kC, kD)
+    show := apply(sp.as_of, r)
+  qed
+  show by taut(cN, cP)
+qed
+
+// (the registers: the function's domain)
+theorem sp.regs_in(regs): regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> regs in sp.REGS
+proof
+  assume hr hl
+  have lo: seq_len(regs) in omega by simp(hr)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(hl, lo), ord_le)
+  show by simp(hr, ol, keep(ord_le))
+qed
+
+// _start_c's C function refines its spec's
+theorem sp.stc_fun: all g P LSM regs s o. P.main = c_crt_crt1.main_at -> mp.calls(LSM, startup_specs.start_main_spec_fun(g, P)) ->
+  regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(c_crt_crt1._start_c_fun(LSM)[regs], s, o) -> runs(startup_specs.start_c_spec_fun(g, P)[regs], s, o)
+proof
+  fix g P LSM regs s o
+  assume hm hL hr hl hw h
+  have ra := mp(sp.regs_in[regs := regs], hr, hl)
+  have hp: ord_le(1, seq_len(regs)) -> all o3. runs(c_crt_crt1._start_c(bits_of_int(64, regs[0]), LSM), s, o3) ->
+      sp.as_spec(startup_specs.start_c_spec(g, P, bits_of_int(64, regs[0])), s, o3) proof
+    assume _
+    fix o3
+    assume r3
+    show := mp(all_elim(sp.stc_run, {g}, {P}, {LSM}, {bits_of_int(64, regs[0])}, {s}, {o3}), hw, (bits_of_int(64, regs[0]) in bits(64) by simp()), hm, hL, r3)
+  qed
+  show by defs(apply(sp.fun_r[n := 1, P := a. c_crt_crt1._start_c(bits_of_int(64, a[0]), LSM), Q := a. startup_specs.start_c_spec(g, P, bits_of_int(64, a[0]))],
+    {regs}, {s}, {o}, ra, hp, expand(h, c_crt_crt1._start_c_fun)), startup_specs.start_c_spec_fun)
+qed
