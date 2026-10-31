@@ -1,0 +1,139 @@
+// The startup specs' runs (layers/startup_specs.sl): a spec function run
+// with its precondition met -- an overflow, or its frame and guarantees.
+// What a caller's call of it gives (gc.call0_inv's Q).
+
+// (the static TLS area's bytes: startup writes them)
+theorem sp.tls_w: all g i. g.builtin_tls in bits(64) -> i in omega -> int_lt(i, 336) -> int_add(g.builtin_tls, i) in startup_specs.start_writes(g)
+proof
+  fix g i
+  assume hb hi hil
+  have io: int_add(g.builtin_tls, i) in omega by arith(hb, hi)
+  have sp: int_add(g.builtin_tls, i) in startup_specs.span(g.builtin_tls, 336) by defs(sel(taut(io, (int_le(g.builtin_tls, int_add(g.builtin_tls, i)) && int_lt(int_add(g.builtin_tls, i), int_add(g.builtin_tls, 336)) by arith(hb, hi, hil)))), startup_specs.span)
+  show by defs(sel(taut(io, sp)), startup_specs.start_writes)
+qed
+
+// (a memory as the spec's: the descriptor's self pointer stored at
+// builtin_tls -- init_tls_spec's choice is possible)
+theorem sp.tls_exists: all g t. t in abi.World -> g.builtin_tls in bits(64) -> startup_specs.globals_ok(t.vm, t.objs, g) ->
+  ex V. V in x86_64_linux.Vm && (startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
+    (ex fs. fs in bits(64) && (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))))
+proof
+  fix g t
+  assume hw hb hg
+  let FS := g.builtin_tls
+  let V := fn_update(t.vm, "bytes", x86_64_linux.store_le(t.vm.bytes, FS, 8, FS))
+  have hall _ hnz hbd := expand(hg, startup_specs.globals_ok)
+  have tv _ _ tb := apply(ms.world_parts, hw)
+  have su := apply(g.store_univ, {t.vm}, {FS}, {8}, {FS}, tv)
+  have vu: V in univ(1) by simp(apply(x86.vm_univ, tv), su)
+  have vV := apply(x86.store_vm, {t.vm}, {FS}, {8}, {FS}, tv, vu)
+  // (the bytes of the area: data pages)
+  have pg: all i. i in omega -> int_lt(i, 336) -> x86_64_linux.mapped(t.vm, int_div(int_add(FS, i), x86_64_linux.PAGE)) &&
+      snd(t.vm.pages[int_div(int_add(FS, i), x86_64_linux.PAGE)]).prot.r && snd(t.vm.pages[int_div(int_add(FS, i), x86_64_linux.PAGE)]).prot.w &&
+      !abi.stack_page(t.vm, int_div(int_add(FS, i), x86_64_linux.PAGE)) proof
+    fix i
+    assume hi hil
+    have x := mp(all_elim(hall, {int_add(FS, i)}), arith(hb, hi), apply(sp.tls_w, {g}, {i}, hb, hi, hil))
+    show by taut(x)
+  qed
+  let W := startup_specs.start_writes(g)
+  // (the frame: only the descriptor's first word written, in the area)
+  have vf: is_fun(t.vm) && "bytes" in dom(t.vm) by simp(tv)
+  have f1: fn_update(V, "bytes", t.vm.bytes) = t.vm := trans(fn_update_twice[f := t.vm, k := "bytes", a := x86_64_linux.store_le(t.vm.bytes, FS, 8, FS), b := t.vm.bytes],
+    mp(fn_update_same[f := t.vm, k := "bytes"], taut(vf), taut(vf)))
+  have f2: all x. x in bits(64) -> !(x in W) -> !abi.stack_free(t.vm, t.objs, x) -> V.bytes[x] = t.vm.bytes[x] proof
+    fix x
+    assume hx hn _
+    have ne: all i. i in omega -> int_lt(i, 8) -> !(bits_add(64, FS, bits_of_int(64, i)) = x) proof
+      fix i
+      assume hi hil
+      have ea := apply(ms.add_i, {FS}, {i}, simp(hb), hi, arith(hb, hi, hil, hbd))
+      have iw := apply(sp.tls_w, {g}, {i}, hb, hi, arith(hil))
+      have c: bits_add(64, FS, bits_of_int(64, i)) = x -> false proof
+        assume e
+        show by taut(hn, rewrite(trans(sym(ea), e), iw))
+      qed
+      show by taut(c)
+    qed
+    have so := apply(x86.store_outside, {t.vm.bytes}, {FS}, {8}, {FS}, {x}, hx, ne)
+    show by simp(so)
+  qed
+  have fr: startup_specs.frame(t.vm, V, t.objs, W) by defs(taut(f1, f2), startup_specs.frame)
+  // (the descriptor at FS: its own address in its first word, the canary's
+  // word on data pages)
+  have vp: V.pages = t.vm.pages by simp()
+  have rd: all k. k in omega -> int_le(int_add(k, 8), 336) -> x86_64_linux.readable(V, int_add(FS, k), 8) &&
+      (all i. i in omega -> int_lt(i, 8) -> snd(V.pages[int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)]).prot.w &&
+        !abi.stack_page(V, int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE))) proof
+    fix k
+    assume hk hk8
+    have each: all i. i in omega -> int_lt(i, 8) -> (x86_64_linux.mapped(V, int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)) &&
+        snd(V.pages[int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)]).prot.r) &&
+        snd(V.pages[int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)]).prot.w && !abi.stack_page(V, int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)) proof
+      fix i
+      assume hi hil
+      have e: int_add(int_add(FS, k), i) = int_add(FS, int_add(k, i)) by arith(hb, hk, hi)
+      have pi := mp(all_elim(pg, {int_add(k, i)}), arith(hk, hi), arith(hk8, hil))
+      show by defs(simp(e, vp, expand(pi, x86_64_linux.mapped, abi.stack_page)), x86_64_linux.mapped, abi.stack_page)
+    qed
+    have r1: all i. i in omega -> int_lt(i, 8) -> x86_64_linux.mapped(V, int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)) &&
+        snd(V.pages[int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)]).prot.r proof
+      fix i
+      assume hi hil
+      have x := mp(all_elim(each, {i}), hi, hil)
+      show by taut(x)
+    qed
+    have r2: all i. i in omega -> int_lt(i, 8) -> snd(V.pages[int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)]).prot.w &&
+        !abi.stack_page(V, int_div(int_add(int_add(FS, k), i), x86_64_linux.PAGE)) proof
+      fix i
+      assume hi hil
+      have x := mp(all_elim(each, {i}), hi, hil)
+      show by taut(x)
+    qed
+    have r3: x86_64_linux.readable(V, int_add(FS, k), 8) by defs(r1, x86_64_linux.readable)
+    show by taut(r3, r2)
+  qed
+  have r0 r0w := mp(all_elim(rd, {0}), simp(), simp())
+  have r40 r40w := mp(all_elim(rd, {40}), simp(), simp())
+  have z0: int_add(FS, 0) = FS by arith(hb)
+  have vb: V.bytes in fn_space(bits(64), bits(8)) by simp(apply(x86.store_typed, {t.vm.bytes}, {FS}, {8}, {FS}, tb))
+  have le0: x86_64_linux.le(V.bytes, FS, 8) = gimple.bytes_at(V, FS, 8) := apply(x86.le8_nat, {V}, {FS}, vb)
+  have b8: gimple.bytes_at(V, FS, 8) = FS by mem(hb, hbd)
+  have tok: abi.thread_ok(V, FS) proof
+    have st: all i. i in omega -> int_lt(i, 8) -> !abi.stack_page(V, int_div(int_add(FS, i), x86_64_linux.PAGE)) proof
+      fix i
+      assume hi hil
+      have x := rewrite(z0, mp(all_elim(r0w, {i}), hi, hil))
+      show by taut(x)
+    qed
+    show by defs(taut(rewrite(z0, r0), st, trans(le0, b8), hnz), abi.thread_ok)
+  qed
+  have cok: abi.canary_ok(V, FS) by defs(taut(r40, r40w), abi.canary_ok)
+  have it: startup_specs.in_tls(g, FS) by defs(arith(hb), startup_specs.in_tls)
+  have ts: startup_specs.thread_set(V, FS) by defs(taut(tok, cok), startup_specs.thread_set)
+  have efs: ex fs. fs in bits(64) && (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs)) by ex_intro({FS}, taut(hb, ts, it))
+  show by ex_intro({V}, taut(vV, fr, efs))
+qed
+
+theorem sp.tls_q: all g t aux regs o2. t in abi.World -> t in univ(1) -> aux in bits(64) -> startup_specs.init_tls_pre(t.vm, t.objs, g, aux) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, aux))) -> runs(startup_specs.init_tls_spec_fun(g)[regs], t, o2) -> true
+proof
+  fix g t aux regs o2
+  assume hw htu ha hpre hro h
+  have rl rln _ := hro
+  have rn: seq_len(regs) = 1 := trans(rln, (seq_len(seq_one(gimple.arg(64, aux))) = 1 by simp()))
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := seq_one(gimple.arg(64, aux)), i := 0, w := 64, x := aux], hro, simp(), simp(), simp(), simp(), ha)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, startup_specs.init_tls_spec_fun, app_fn_build, ra in h
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q0, apply(g.runs_elim, h))
+  have b2: bind_rel(startup_specs.init_tls_spec(g, aux), t, x0 x1. any_rel(x2. x2 in bits(64), x2. any_rel(x3. x3 in bits(64), x3. o2 = ok(x0, pair(x2, x3)))),
+    x0 x1. o2 = exc(x0, x1), x0. o2 = diverge(x0)) by taut(b, o1l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  rsimp only, startup_specs.init_tls_spec in hs3
+  obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), hpre)
+  print hbr
+  show by taut()
+qed

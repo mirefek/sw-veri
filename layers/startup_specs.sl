@@ -76,11 +76,13 @@ pred phdrs_ok(vm: Vm, objs: Objs, ph: nat, pe: nat, pn: nat, w: Set[nat]) =
 ///////////////////////////////////////////////////////////////////////
 //  __init_tls(aux), __init_ssp(entropy)
 
-// startup's globals writable and readable; libc's TLS fields and main_tls
-// still zero (in .bss: TLS not yet set up)
+// startup's globals writable and readable, on data pages (mapped,
+// readable, writable, off the stack); libc's TLS fields and main_tls still
+// zero (in .bss: TLS not yet set up)
 pred globals_ok(vm: Vm, objs: Objs, g: StartGlobals) =
-  (all x: nat. x in start_writes(g) -> usable(vm, objs, x, 1, true) && usable(vm, objs, x, 1, false)) &&
-  uint(g.libc) + 56 < 2^63
+  (all x: nat. x in start_writes(g) -> usable(vm, objs, x, 1, true) && usable(vm, objs, x, 1, false) &&
+     mapped(vm, x / PAGE) && vm.pages[x / PAGE].value.prot.r && vm.pages[x / PAGE].value.prot.w && !stack_page(vm, x / PAGE)) &&
+  uint(g.libc) + 56 < 2^63 && g.builtin_tls != 0 && uint(g.builtin_tls) + 336 < 2^63
 
 pred tls_fresh(vm: Vm, g: StartGlobals) =
   bytes_at(vm, g.libc + 16, 8) = 0 && bytes_at(vm, g.libc + 24, 8) = 0 && bytes_at(vm, g.libc + 32, 8) = 0 &&
@@ -105,7 +107,7 @@ proc[World] init_tls_spec(g: StartGlobals, aux: Addr) {
   require init_tls_pre(vm, objs, g, aux)
   either { overflow() } or {
     let before = vm
-    havoc vm where frame(before, vm, objs, start_writes(g))
+    havoc vm where frame(before, vm, objs, start_writes(g)) && (ex fs: Addr. thread_set(vm, fs) && in_tls(g, fs))
     fs_base := any fs: Addr where thread_set(vm, fs) && in_tls(g, fs)
   }
 }
@@ -164,7 +166,8 @@ proc[World] init_libc_spec(g: StartGlobals, envp: Addr, pn: Addr) {
   either { overflow() } or {
     let before = vm
     havoc vm where frame(before, vm, objs, start_writes(g)) &&
-      (all n: nat. env_at(before, objs, envp, n) -> bytes_at(vm, g.libc + 8, 8) = uint(envp) + 8 * (n + 1))
+      (all n: nat. env_at(before, objs, envp, n) -> bytes_at(vm, g.libc + 8, 8) = uint(envp) + 8 * (n + 1)) &&
+      (ex fs: Addr. thread_set(vm, fs))
     fs_base := any fs: Addr where thread_set(vm, fs)
   }
 }
