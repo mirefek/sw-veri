@@ -24,9 +24,14 @@ function with its callees', the code maps `lnk.FP1`/`lnk.FP0` with main
 `lnk.main()` at t, exit and the a_crash copies undefined).
 
 The steps left, in order:
-- (c) Purpose specs and C2: `__init_libc` (auxv into `libc.auxv`, the
-  program name, environ; unprivileged: the secure path skipped),
-  `__init_tls`, `__init_ssp`, `__libc_start_init` (`_init`, the
+- (c) Purpose specs and C2. The specs of `__init_libc`, `__init_tls`,
+  `__init_ssp` are in layers/startup_specs.sl (a frame of what may be
+  written, plus what malloc needs: the thread set up and `libc.auxv`).
+  `__init_libc`'s GIMPLE run is proven to its outcomes `sp.il_out` under
+  explicit hypotheses (proofs/mallocng/fun/startup_proto.core,
+  `sp.il_probe`); left for it: those hypotheses from `init_libc_pre`, and
+  il_out to the spec's runs. Then `__init_tls`, `__init_ssp` against their
+  specs, `__libc_start_init` (`_init`, the
   init_array), stage2, `__libc_start_main`, `_start_c` -- each CFG
   function as link_start.core links it (`stl.F`): its refinement to the
   structured form, then its purpose (main's: raising at main).
