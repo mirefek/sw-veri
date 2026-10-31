@@ -483,7 +483,8 @@ step x.., h.. from P with f.. [using u..]   a run of readable GIMPLE inverted st
 show P / show φ by R(..)  the result (else the last `have`); the block's last step
 show [φ] proof ... qed    a sub-proof with its own scope (also `have h: φ proof ... qed`)
 have c: case k of P proof ... qed   a sub-proof of P's k-th disjunct (as written) -> the goal
-let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_body(h)`: h's loop's body)
+let N := t / let N(a) := t   an abbreviation to the end of the block (`:= loop_body(h)`: h's loop's body;
+                          `let K(x) := rest(h)`: for h `ex x. A(x) && K(x)`, its K)
 unfold [D..] [in h]       unfold definitions in the goal (or fact h)
 refine L [with f..]       the goal by L backward: L's conclusion matched with the goal (its variables,
                           also higher-order ones: a contract's body), its premises but the last by the
@@ -641,7 +642,11 @@ fact h, as it is); `g.loop` (proofs/gimple_inv.core) takes an invariant p
 with p(l0), a variant m with p(l) -> m(l) in omega, and the step
 `all l l2. p(l) -> B(l, ok(l2, empty)) -> p(l2) && m(l2) < m(l)` to the
 loop's exit: `ex l. p(l) && B(l, r) && !is_ok(r)` -- a break, a return or
-a failure from a state with the invariant (ms.sq_run):
+a failure from a state with the invariant (ms.sq_run).
+A branch step cannot decide (a value the precondition leaves open) is a
+join: `let K(x) := rest(h)` names what follows the branch's outcome x, a
+lemma `all U. P(U) -> K(ok(S(U), empty)) -> goal` proves the rest once for
+any state with P, and each branch gives its own state with P:
 
 ```
 let BODY(l, o) := loop_body(wl)

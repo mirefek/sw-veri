@@ -1025,7 +1025,25 @@ impl State {
                 // the body or condition of the loop `while_rel(..)` in the
                 // fact F, as it is -- not written out)
                 let part = body.trim().strip_prefix("loop_body(").map(|r| (r, 2usize)).or_else(|| body.trim().strip_prefix("loop_cond(").map(|r| (r, 1usize)));
-                let t = if let Some((r, ar)) = part {
+                // (`let K(x) := rest(F)`: F `ex x. A(x) && K(x)` -- an
+                // outcome and what follows it --: its K, as it is)
+                let rest_of = body.trim().strip_prefix("rest(");
+                let t = if let Some(r) = rest_of {
+                    let fname = r.strip_suffix(')').ok_or_else(|| KernelError("expected `rest(F)`".into()))?.trim();
+                    if k != 1 {
+                        return err(format!("`{}`: an outcome's rest has 1 parameter", name));
+                    }
+                    let f = self.eval(env, lg, &parse_pe(fname)?)?;
+                    let and = env.sym_by_name.get("and").copied();
+                    let k_part = match f.concl().node() {
+                        Node::App(e, a) if *e == lg.ex && a.len() == 1 => match a[0].node() {
+                            Node::App(c, b) if Some(*c) == and && b.len() == 2 => Some(b[1].clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    k_part.ok_or_else(|| KernelError(format!("`{}`: `{}` is not `ex x. A(x) && K(x)`", name, Printer::new(env).short(f.concl()))))?
+                } else if let Some((r, ar)) = part {
                     let fname = r.strip_suffix(')').ok_or_else(|| KernelError("expected `loop_body(F)` / `loop_cond(F)`".into()))?.trim();
                     if k != ar {
                         return err(format!("`{}`: a loop's {} has {} parameters", name, if ar == 2 { "body" } else { "condition" }, ar));
