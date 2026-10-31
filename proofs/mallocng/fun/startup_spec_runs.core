@@ -115,11 +115,13 @@ proof
   show by ex_intro({V}, taut(vV, fr, efs))
 qed
 
-theorem sp.tls_q: all g t aux regs o2. t in abi.World -> t in univ(1) -> aux in bits(64) -> startup_specs.init_tls_pre(t.vm, t.objs, g, aux) ->
-  gc.regs_ok(regs, seq_one(gimple.arg(64, aux))) -> runs(startup_specs.init_tls_spec_fun(g)[regs], t, o2) -> true
+theorem sp.tls_q: all g t aux regs o2. t in abi.World -> t in univ(1) -> g.builtin_tls in bits(64) -> aux in bits(64) -> startup_specs.init_tls_pre(t.vm, t.objs, g, aux) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, aux))) -> runs(startup_specs.init_tls_spec_fun(g)[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+    (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", fs), r))
 proof
   fix g t aux regs o2
-  assume hw htu ha hpre hro h
+  assume hw htu hb ha hpre hro h
   have rl rln _ := hro
   have rn: seq_len(regs) = 1 := trans(rln, (seq_len(seq_one(gimple.arg(64, aux))) = 1 by simp()))
   have lo: seq_len(regs) in omega by simp(rn)
@@ -134,6 +136,104 @@ proof
   obtain o3, hs3 hk3 from expand(b2, bind_rel)
   rsimp only, startup_specs.init_tls_spec in hs3
   obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), hpre)
-  print hbr
-  show by taut()
+  let OVF := exc_val("stack_overflow", empty)
+  have k1: case 1 of hbr proof
+    assume e
+    rsimp only, abi.overflow in e
+    have pv _ _ _ := apply(ms.world_parts, hw)
+    have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x0 = exc(pair(fn_update(fn_update(t, "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e, vv, ct.objs_ne)
+    obtain v ob, hv hob hx from l
+    have oe: o3 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
+    have o2e: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(oe, hk3))
+    have x: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, o2e))
+    show by taut(x)
+  qed
+  have k2: case 2 of hbr proof
+    assume e
+    rsimp in e
+    have _ _ _ hg _ _ := expand(hpre, startup_specs.init_tls_pre)
+    obtain V, hV hfr hfs0 hk from apply(g.any_e, apply(sp.tls_exists, {g}, {t}, hw, hb, hg), e)
+    have hk1 := apply(g.letin_e, hk)
+    rsimp in hk1
+    obtain fs, hfb hts hit hk2 from apply(g.any_e, hfs0, hk1)
+    have xe := apply(g.letin_e, hk2)
+    let S := fn_update(fn_update(t, "vm", V), "fs_base", fs)
+    have oe: o3 = ok(S, empty) by simp(rewrite(xe, hout))
+    have k4: any_rel(x2. x2 in bits(64), x2. any_rel(x3. x3 in bits(64), x3. o2 = ok(S, pair(x2, x3)))) by simp(rewrite(oe, hk3), keep(any_rel))
+    have nb: ex z. z in bits(64) by ex_intro({0}, simp())
+    obtain z1, _ k5 from apply(g.any_e, nb, k4)
+    obtain z2, _ k6 from apply(g.any_e, nb, k5)
+    have x: ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+      (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", fs), r)
+      by ex_intro({V}, {fs}, {pair(z1, z2)}, taut(hV, hfr, hts, hit, k6))
+    show by taut(x)
+  qed
+  show by taut(hbr, k1, k2)
+qed
+
+// (__init_ssp's choice: the memory as it was is one -- its frame empty,
+// the thread as the precondition has it)
+theorem sp.ssp_q: all g t e regs o2. t in abi.World -> t in univ(1) -> e in bits(64) -> startup_specs.init_ssp_pre(t.vm, t.objs, g, t.fs_base, e) ->
+  gc.regs_ok(regs, seq_one(gimple.arg(64, e))) -> runs(startup_specs.init_ssp_spec_fun(g)[regs], t, o2) ->
+  abi.ovf_out(t, o2) || (ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+    startup_specs.thread_set(V, t.fs_base)) && o2 = ok(fn_update(t, "vm", V), r))
+proof
+  fix g t e regs o2
+  assume hw htu he hpre hro h
+  have rl rln _ := hro
+  have rn: seq_len(regs) = 1 := trans(rln, (seq_len(seq_one(gimple.arg(64, e))) = 1 by simp()))
+  have lo: seq_len(regs) in omega by simp(rn)
+  have q0 := apply(gc.reg_at[regs := regs, args := seq_one(gimple.arg(64, e)), i := 0, w := 64, x := e], hro, simp(), simp(), simp(), simp(), he)
+  have ol: ord_le(seq_len(regs), 6) by defs(arith(rn, lo), ord_le)
+  have ra: regs in set_select(list_type(bits(64)), x0. ord_le(seq_len(x0), 6)) by simp(rl, ol, keep(ord_le))
+  rsimp only, startup_specs.init_ssp_spec_fun, app_fn_build, ra in h
+  have o1l: ord_le(1, seq_len(regs)) by defs(simp(rn), ord_le)
+  have b := rewrite(q0, apply(g.runs_elim, h))
+  have b2: bind_rel(startup_specs.init_ssp_spec(g, e), t, x0 x1. any_rel(x2. x2 in bits(64), x2. any_rel(x3. x3 in bits(64), x3. o2 = ok(x0, pair(x2, x3)))),
+    x0 x1. o2 = exc(x0, x1), x0. o2 = diverge(x0)) by taut(b, o1l)
+  obtain o3, hs3 hk3 from expand(b2, bind_rel)
+  rsimp only, startup_specs.init_ssp_spec in hs3
+  obtain x0, hbr hout from apply(or_resolve, apply(g.runs_elim, hs3), hpre)
+  let OVF := exc_val("stack_overflow", empty)
+  have k1: case 1 of hbr proof
+    assume e1
+    rsimp only, abi.overflow in e1
+    have pv _ _ _ := apply(ms.world_parts, hw)
+    have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
+    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x0 = exc(pair(fn_update(fn_update(t, "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e1, vv, ct.objs_ne)
+    obtain v ob, hv hob hx from l
+    have oe: o3 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
+    have o2e: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(oe, hk3))
+    have x: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, o2e))
+    show by taut(x)
+  qed
+  have k2: case 2 of hbr proof
+    assume e1
+    rsimp in e1
+    have tv _ _ _ := apply(ms.world_parts, hw)
+    have vf: is_fun(t.vm) && "bytes" in dom(t.vm) by simp(tv)
+    have f1: fn_update(t.vm, "bytes", t.vm.bytes) = t.vm := mp(fn_update_same[f := t.vm, k := "bytes"], taut(vf), taut(vf))
+    have f2: all x. x in bits(64) -> !(x in startup_specs.start_writes(g)) -> !abi.stack_free(t.vm, t.objs, x) -> t.vm.bytes[x] = t.vm.bytes[x] proof
+      fix x
+      assume _ _ _
+      show := refl({t.vm.bytes[x]})
+    qed
+    have fr: startup_specs.frame(t.vm, t.vm, t.objs, startup_specs.start_writes(g)) by defs(taut(f1, f2), startup_specs.frame)
+    have ts _ _ _ := expand(hpre, startup_specs.init_ssp_pre)
+    have wx: ex x. x in x86_64_linux.Vm && (startup_specs.frame(t.vm, x, t.objs, startup_specs.start_writes(g)) && startup_specs.thread_set(x, t.fs_base))
+      by ex_intro({t.vm}, taut(tv, fr, ts))
+    obtain V, hV hfr hts hk from apply(g.any_e, wx, e1)
+    have xe := apply(g.letin_e, hk)
+    let S := fn_update(t, "vm", V)
+    have oe: o3 = ok(S, empty) by simp(rewrite(xe, hout))
+    have k4: any_rel(x2. x2 in bits(64), x2. any_rel(x3. x3 in bits(64), x3. o2 = ok(S, pair(x2, x3)))) by simp(rewrite(oe, hk3), keep(any_rel))
+    have nb: ex z. z in bits(64) by ex_intro({0}, simp())
+    obtain z1, _ k5 from apply(g.any_e, nb, k4)
+    obtain z2, _ k6 from apply(g.any_e, nb, k5)
+    have x: ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+      startup_specs.thread_set(V, t.fs_base)) && o2 = ok(fn_update(t, "vm", V), r) by ex_intro({V}, {pair(z1, z2)}, taut(hV, hfr, hts, k6))
+    show by taut(x)
+  qed
+  show by taut(hbr, k1, k2)
 qed
