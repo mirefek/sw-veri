@@ -878,3 +878,365 @@ proof
     show by simp(rewrite(re, ht))
   qed
 qed
+
+// ----------------------------------------------------------------------
+//  GIMPLE's store of n zero bytes (st_zero): its run, effect, determinism
+
+theorem g.stzero_ok: all s p off n. s in univ(1) -> p in bits(64) -> off in bits(32) -> n in omega ->
+  g.mem_defined(s, p, off, n, true) -> s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  runs(gimple.st_zero(p, off, n), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), n, 0))), empty))
+proof
+  fix s p off n
+  assume hs hp ho hn hdf hvm hf hd
+  let a := int_add(p, off)
+  have dnz dlt dus := hdf
+  have ha: a in bits(64) by simp(hdf, hp, ho)
+  have hn64: int_lt(n, 18446744073709551616) proof
+    have c: int_lt(0, n) -> int_lt(n, 18446744073709551616) proof
+      assume h0
+      have e := apply(tr.usable_dom, {s.vm}, {s.objs}, {a}, {n}, {true}, {int_sub(n, 1)}, dus, simp(ha), arith(hn, h0), arith(hn))
+      show by arith(e, hn, hp, ho, dnz)
+    qed
+    show by arith(c, hn)
+  qed
+  let B := s.vm.bytes
+  let ST(i) := fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(B, a, i, 0)))
+  let P(l) := ex i. i in omega && int_le(i, n) && l = pair(ST(i), i)
+  let M(l) := int_sub(n, snd(l))
+  let G(l, r) := r = exc(pair(fst(l), snd(l)), pair("brk", empty))
+  let BODY(l, o) := (int_lt(snd(l), n) && letin(snd(l), x9. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes",
+      fn_update(fst(l).vm.bytes, bits_add(64, a, bits_of_int(64, x9)), 0))), x10. o = ok(pair(x10, int_add(snd(l), 1)), empty)))) ||
+    (!int_lt(snd(l), n) && o = exc(pair(fst(l), snd(l)), pair("brk", empty)))
+  have bf: is_fun(B) && dom(B) = bits(64) by simp(hvm)
+  have vf: is_fun(s.vm) && "bytes" in dom(s.vm) by simp(hvm)
+  have z := apply(x86.store_zero, {B}, {a}, {0}, taut(bf), taut(bf), ha)
+  have e0v := mp(fn_update_same[f := s.vm, k := "bytes"], taut(vf), taut(vf))
+  have e0s := mp(fn_update_same[f := s, k := "vm"], hf, hd)
+  have s0: ST(0) = s by simp(z, e0v, e0s)
+  have p0: P(pair(s, 0)) by ex_intro({0}, simp(hn, s0))
+  have pm: all l. P(l) -> M(l) in omega proof
+    fix l
+    assume hp2
+    obtain i, hi from hp2
+    show by simp(hi, hn)
+  qed
+  have pb: all l. P(l) -> true -> (ex l2. BODY(l, ok(l2, empty)) && P(l2) && int_lt(M(l2), M(l))) || (ex r. BODY(l, r) && G(l, r) && !is_ok(r) && !(fst(r) = 2)) proof
+    fix l
+    assume hp2 ht
+    obtain i, io il le from hp2
+    have more: int_lt(i, n) -> (ex l2. BODY(l, ok(l2, empty)) && P(l2) && int_lt(M(l2), M(l))) proof
+      assume hlt
+      have i64: int_lt(i, 18446744073709551616) by arith(hlt, hn64)
+      have sst := rewrite(apply(tr.byte0, io), apply(x86.store_step, {B}, {a}, {i}, {0}, ha, io, i64))
+      have tw1 := fn_update_twice[f := s.vm, k := "bytes", a := x86_64_linux.store_le(B, a, i, 0), b := x86_64_linux.store_le(B, a, int_add(i, 1), 0)]
+      have tw2 := fn_update_twice[f := s, k := "vm", a := fn_update(s.vm, "bytes", x86_64_linux.store_le(B, a, i, 0)), b := fn_update(s.vm, "bytes", x86_64_linux.store_le(B, a, int_add(i, 1), 0))]
+      have bd: BODY(l, ok(pair(ST(int_add(i, 1)), int_add(i, 1)), empty)) by defs(simp(le, hlt, sst, tw1, tw2), letin)
+      have p2: P(pair(ST(int_add(i, 1)), int_add(i, 1))) by ex_intro({int_add(i, 1)}, simp(io, hlt))
+      have m2: int_lt(M(pair(ST(int_add(i, 1)), int_add(i, 1))), M(l)) by simp(le, io)
+      show by ex_intro({pair(ST(int_add(i, 1)), int_add(i, 1))}, taut(bd, p2, m2))
+    qed
+    have done: !int_lt(i, n) -> (ex r. BODY(l, r) && G(l, r) && !is_ok(r) && !(fst(r) = 2)) proof
+      assume hge
+      let R := exc(pair(fst(l), snd(l)), pair("brk", empty))
+      have bd: BODY(l, R) by simp(le, hge)
+      have g: G(l, R) by simp()
+      have no: !is_ok(R) by defs(simp(), is_ok)
+      have nd: !(fst(R) = 2) by simp()
+      show by ex_intro({R}, taut(bd, g, no, nd))
+    qed
+    have cs: int_lt(i, n) || !int_lt(i, n) by taut()
+    show by taut(cs, more, done)
+  qed
+  have ex := mp(while_exists[l0 := pair(s, 0), c := l. true, b := l o. BODY(l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events), p := l. P(l), m := l. M(l),
+    g := l r. G(l, r)], p0, pm, pb)
+  obtain r, hw hnd hcase from ex
+  have nst: (ex l. P(l) && !true && r = ok(l, empty)) -> false proof
+    assume h
+    obtain l0, hl0 from h
+    show by taut(hl0)
+  qed
+  have lft: ex l. P(l) && true && BODY(l, r) && G(l, r) && !is_ok(r) by taut(hcase, nst)
+  obtain l, hpl _ hbl hgl hno from lft
+  obtain i, io il le from hpl
+  have ni: !int_lt(i, n) proof
+    have c: int_lt(i, n) -> false proof
+      assume hlt
+      have b1: ex x10. r = ok(pair(x10, int_add(i, 1)), empty) proof
+        have bb := rewrite(le, hbl)
+        have bb2: letin(i, x9. letin(fn_update(ST(i), "vm", fn_update(ST(i).vm, "bytes",
+            fn_update(ST(i).vm.bytes, bits_add(64, a, bits_of_int(64, x9)), 0))), x10. r = ok(pair(x10, int_add(i, 1)), empty))) by simp(bb, hlt)
+        show by ex_intro({fn_update(ST(i), "vm", fn_update(ST(i).vm, "bytes", fn_update(ST(i).vm.bytes, bits_add(64, a, bits_of_int(64, i)), 0)))},
+          defs(bb2, letin))
+      qed
+      obtain x10, hx10 from b1
+      have ok10: is_ok(r) by defs(ex_intro({pair(x10, int_add(i, 1))}, {empty}, hx10), is_ok)
+      show by taut(ok10, hno)
+    qed
+    show by taut(c)
+  qed
+  have ien: i = n by arith(il, ni, io, hn)
+  have re: r = exc(pair(ST(n), n), pair("brk", empty)) by simp(hgl, le, ien)
+  have hw2 := rewrite(re, hw)
+  have m := apply(g.mem_at_ok, {s}, {p}, {off}, {n}, {true}, hs, hp, ho, hdf)
+  have stu := apply(fn_space_univ, bits_univ[n := 64], bits_univ[n := 8], apply(x86.store_typed, {B}, {a}, {n}, {0}, simp(hvm)))
+  have pu: pair(s, ok(ST(n), empty)) in univ(1) by simp(hs, stu)
+  have rel: letin(a, x4. letin(0, x5. ex x6. while_rel(pair(s, x5), x7. true, x7 x8. BODY(x7, x8), x7. fn_update(empty, "os.events", fst(x7).os.events), x6) &&
+      (((fst(x6) = 0 || (fst(x6) = 1 && fst(out_value(x6)) = "brk")) && ok(ST(n), empty) = ok(fst(out_state(x6)), empty)) ||
+       ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && ok(ST(n), empty) = ok(fst(out_state(x6)), snd(out_value(x6)))) ||
+         ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && ok(ST(n), empty) = exc(fst(out_state(x6)), snd(out_value(x6))))) ||
+        (fst(x6) = 2 && ok(ST(n), empty) = diverge(snd(x6))))))) by defs(ex_intro({exc(pair(ST(n), n), pair("brk", empty))}, simp(hw2, keep(while_rel))), letin, out_state, out_value)
+  // (the procedure: mem's address a, then the loop)
+  let K(x2, x3) := letin(x3, x4. letin(0, x5. ex x6. while_rel(pair(x2, x5), x7. true, x7 x8. (int_lt(snd(x7), n) && letin(snd(x7), x9. letin(fn_update(fst(x7), "vm", fn_update(fst(x7).vm, "bytes",
+      fn_update(fst(x7).vm.bytes, bits_add(64, x4, bits_of_int(64, x9)), 0))), x10. x8 = ok(pair(x10, int_add(snd(x7), 1)), empty)))) ||
+      (!int_lt(snd(x7), n) && x8 = exc(pair(fst(x7), snd(x7)), pair("brk", empty))), x7. fn_update(empty, "os.events", fst(x7).os.events), x6) &&
+      (((fst(x6) = 0 || (fst(x6) = 1 && fst(out_value(x6)) = "brk")) && ok(ST(n), empty) = ok(fst(out_state(x6)), empty)) ||
+       ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && ok(ST(n), empty) = ok(fst(out_state(x6)), snd(out_value(x6)))) ||
+         ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && ok(ST(n), empty) = exc(fst(out_state(x6)), snd(out_value(x6))))) ||
+        (fst(x6) = 2 && ok(ST(n), empty) = diverge(snd(x6)))))))
+  have k: K(s, a) by defs(rel, letin)
+  have kk: ex s1 v. ok(s, a) = ok(s1, v) && K(s1, v) by ex_intro({s}, {a}, taut(refl({ok(s, a)}), k))
+  have br: bind_rel(gimple.mem(p, off, n, true), s, x2 x3. K(x2, x3), x2 x3. ok(ST(n), empty) = exc(x2, x3), x2. ok(ST(n), empty) = diverge(x2))
+    by defs(ex_intro({ok(s, a)}, taut(m, kk)), bind_rel)
+  show by defs(apply(tr.runs_intro, {s}, {ok(ST(n), empty)}, pu, br), gimple.st_zero)
+qed
+
+theorem g.stzero_ub: all s p off n s2 e. s in univ(1) -> s2 in univ(1) -> e in univ(1) -> p in bits(64) -> off in bits(32) -> !g.mem_defined(s, p, off, n, true) ->
+  runs(gimple.st_zero(p, off, n), s, exc(s2, e))
+proof
+  fix s p off n s2 e
+  assume hs h2 he hp ho hn
+  have mu := apply(g.mem_at_ub, {s}, {p}, {off}, {n}, {true}, {s2}, {e}, hs, h2, he, hp, ho, hn)
+  show by defs(simp(hs, h2, he, mu, keep(gimple.mem, while_rel)), gimple.st_zero)
+qed
+
+// (in a world: the address as the machine's, p + off without wrap)
+theorem tr.stzero_at_ok: all w p off n a. w in abi.World -> w in univ(1) -> p in bits(64) -> off in bits(32) -> n in omega ->
+  a = bits_add(64, p, off) -> g.mem_defined(w, p, off, n, true) ->
+  runs(gimple.st_zero(p, off, n), w, ok(fn_update(w, "vm", fn_update(w.vm, "bytes", x86_64_linux.store_le(w.vm.bytes, a, n, 0))), empty))
+proof
+  fix w p off n a
+  assume hW hw hp ho hn ha hd
+  have wf := expand(hW, abi.World)
+  have vV: w.vm in x86_64_linux.Vm by simp(wf)
+  have fw: is_fun(w) by simp(wf)
+  have dw: "vm" in dom(w) by simp(wf)
+  have r := apply(g.stzero_ok, {w}, {p}, {off}, {n}, hw, hp, ho, hn, hd, vV, fw, dw)
+  have ev := apply(tr.bd_int, {p}, {off}, hp, ho, taut(hd))
+  show := rewrite(sym(ha), rewrite(ev, r))
+qed
+
+theorem tr.eff_st_zero: all w p off n. tr.eff(w, o. runs(gimple.st_zero(p, off, n), w, o))
+proof
+  fix w p off n
+  let AD := bits_add(64, int_add(p, gimple.sval(fn_update(fn_update(empty, "prec", 64), "signed", true), off)), 0)
+  // defined: only bytes w may write changed
+  have a1: tr.mem_def(w, p, off, n, true) -> (all w2 r. runs(gimple.st_zero(p, off, n), w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hd
+    fix w2 r
+    assume h
+    obtain o1, hm hc from expand(apply(g.runs_elim, expand(h, gimple.st_zero)), bind_rel)
+    have hu: gimple.usable(w.vm, w.objs, AD, n, true) by taut(expand(hd, tr.mem_def))
+    have ab: AD in bits(64) by simp()
+    let B(x7, x8) := (int_lt(snd(x7), n) && x8 = ok(pair(fn_update(fst(x7), "vm", fn_update(fst(x7).vm, "bytes", fn_update(fst(x7).vm.bytes,
+        bits_add(64, AD, bits_of_int(64, snd(x7))), 0))), int_add(snd(x7), 1)), empty)) ||
+      (!int_lt(snd(x7), n) && x8 = exc(pair(fst(x7), snd(x7)), pair("brk", empty)))
+    let TR(x7) := fn_update(empty, "os.events", fst(x7).os.events)
+    have c1: (ex s1 a1. o1 = ok(s1, a1) && letin(a1, x4. letin(0, x5. ex x6. while_rel(pair(s1, x5), x7. true, x7 x8. (int_lt(snd(x7), n) && letin(snd(x7), x9. letin(fn_update(fst(x7), "vm", fn_update(fst(x7).vm, "bytes",
+        fn_update(fst(x7).vm.bytes, bits_add(64, x4, bits_of_int(64, x9)), 0))), x10. x8 = ok(pair(x10, int_add(snd(x7), 1)), empty)))) ||
+        (!int_lt(snd(x7), n) && x8 = exc(pair(fst(x7), snd(x7)), pair("brk", empty))), x7. fn_update(empty, "os.events", fst(x7).os.events), x6) &&
+        (((fst(x6) = 0 || (fst(x6) = 1 && fst(out_value(x6)) = "brk")) && ok(w2, r) = ok(fst(out_state(x6)), empty)) ||
+         ((((fst(x6) = 1 && fst(out_value(x6)) = "ret") && ok(w2, r) = ok(fst(out_state(x6)), snd(out_value(x6)))) ||
+           ((fst(x6) = 1 && fst(out_value(x6)) = "raise") && ok(w2, r) = exc(fst(out_state(x6)), snd(out_value(x6))))) ||
+          (fst(x6) = 2 && ok(w2, r) = diverge(snd(x6)))))))) -> tr.returns_valid(w, w2) proof
+      assume e1
+      obtain s1 a1, eo hb from e1
+      have es ea := mp(all_elim(tr.mem_fwd, {w}, {p}, {off}, {n}, {true}, {s1}, {a1}), rewrite(eo, hm), hd)
+      have hb2 := rewrite(es, rewrite(ea, expand(hb, letin)))
+      obtain x3, hw hdo from hb2
+      have st: all l l2. tr.wr_only(w, fst(l)) && snd(l) in omega -> true -> B(l, ok(l2, empty)) -> tr.wr_only(w, fst(l2)) && snd(l2) in omega proof
+        fix l l2
+        assume hp _ hbd
+        have hwo ho := hp
+        have k1: int_lt(snd(l), n) && ok(l2, empty) = ok(pair(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes", fn_update(fst(l).vm.bytes,
+            bits_add(64, AD, bits_of_int(64, snd(l))), 0))), int_add(snd(l), 1)), empty) -> tr.wr_only(w, fst(l2)) && snd(l2) in omega proof
+          assume hk
+          have hlt he := hk
+          have e2: l2 = pair(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes", fn_update(fst(l).vm.bytes,
+            bits_add(64, AD, bits_of_int(64, snd(l))), 0))), int_add(snd(l), 1)) by simp(he)
+          have cw2 := apply(tr.usable_wbl, {w}, {AD}, {n}, {snd(l)}, hu, ab, ho, hlt)
+          have w3 := apply(tr.wr_only_step, {w}, {fst(l)}, {bits_add(64, AD, bits_of_int(64, snd(l)))}, {0}, hwo, cw2)
+          show by simp(e2, w3, ho)
+        qed
+        have k2: !int_lt(snd(l), n) && ok(l2, empty) = exc(pair(fst(l), snd(l)), pair("brk", empty)) -> tr.wr_only(w, fst(l2)) && snd(l2) in omega proof
+          assume hk
+          show by simp(hk.2)
+        qed
+        show by taut(hbd, k1, k2)
+      qed
+      have p0: tr.wr_only(w, fst(pair(w, 0))) && snd(pair(w, 0)) in omega by defs(simp(), tr.wr_only)
+      have iv := mp(while_inv[l0 := pair(w, 0), c := l. true, b := x7 x8. B(x7, x8), tr := x7. TR(x7), r := x3, p := l. tr.wr_only(w, fst(l)) && snd(l) in omega], p0, st, hw)
+      have d1: (ex t. x3 = diverge(t)) -> tr.wr_only(w, w2) proof
+        assume e
+        obtain t, et from e
+        show by simp(rewrite(et, hdo))
+      qed
+      have d2: (ex l. (tr.wr_only(w, fst(l)) && snd(l) in omega) && ((!true && x3 = ok(l, empty)) || ((true && B(l, x3)) && !is_ok(x3)))) -> tr.wr_only(w, w2) proof
+        assume e
+        obtain l, hwo _ hcl from e
+        have xe: x3 = exc(pair(fst(l), snd(l)), pair("brk", empty)) by simp(hcl)
+        have es2: w2 = fst(l) by simp(rewrite(xe, hdo))
+        show := rewrite(sym(es2), hwo)
+      qed
+      have wo: tr.wr_only(w, w2) by taut(iv, d1, d2)
+      show := mp(all_elim(tr.wr_only_valid, {w}, {w2}), wo)
+    qed
+    have c2: (ex s1 e1. o1 = exc(s1, e1) && ok(w2, r) = exc(s1, e1)) -> tr.returns_valid(w, w2) proof
+      assume e2
+      obtain s1 e1, _ ee from e2
+      show by simp(ee)
+    qed
+    have c3: (ex t. o1 = diverge(t) && ok(w2, r) = diverge(t)) -> tr.returns_valid(w, w2) proof
+      assume e2
+      obtain t, _ ee from e2
+      show by simp(ee)
+    qed
+    show by taut(hc, c1, c2, c3)
+  qed
+  // undefined: every exception and divergence (the address's)
+  have a2: w in univ(1) -> !tr.mem_def(w, p, off, n, true) -> tr.undef(o. runs(gimple.st_zero(p, off, n), w, o)) proof
+    assume hw hn
+    have ex: all x e. x in univ(1) -> e in univ(1) -> runs(gimple.st_zero(p, off, n), w, exc(x, e)) proof
+      fix x e
+      assume hx he
+      have mu := mp(all_elim(tr.mem_ub, {w}, {p}, {off}, {n}, {true}, {x}, {e}), hw, hx, he, hn)
+      show by defs(simp(hw, hx, he, mu, keep(gimple.mem, while_rel)), gimple.st_zero)
+    qed
+    have dv: all t. t in univ(1) -> runs(gimple.st_zero(p, off, n), w, diverge(t)) proof
+      fix t
+      assume ht
+      have mu := mp(all_elim(tr.mem_ub_div, {w}, {p}, {off}, {n}, {true}, {t}), hw, ht, hn)
+      show by defs(simp(hw, ht, mu, keep(gimple.mem, while_rel)), gimple.st_zero)
+    qed
+    show by defs(taut(ex, dv), tr.undef)
+  qed
+  have a3: !(w in univ(1)) -> (all w2 r. runs(gimple.st_zero(p, off, n), w, ok(w2, r)) -> tr.returns_valid(w, w2)) proof
+    assume hn
+    fix w2 r
+    assume h
+    show by taut(hn, apply(tr.runs_univ, h))
+  qed
+  show by defs(taut(a1, a2, a3), tr.eff)
+qed
+
+theorem g.stzero_det: all s p off n. s in univ(1) -> p in bits(64) -> off in bits(32) -> n in omega ->
+  g.mem_defined(s, p, off, n, true) -> s.vm in x86_64_linux.Vm -> is_fun(s) -> "vm" in dom(s) ->
+  g.det(gimple.st_zero(p, off, n), s, ok(fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(s.vm.bytes, int_add(p, off), n, 0))), empty))
+proof
+  fix s p off n
+  assume hs hp ho hn hdf hvm hf hd
+  let a := int_add(p, off)
+  have dnz dlt dus := hdf
+  have ha: a in bits(64) by simp(hdf, hp, ho)
+  have hn64: int_lt(n, 18446744073709551616) proof
+    have c: int_lt(0, n) -> int_lt(n, 18446744073709551616) proof
+      assume h0
+      have e := apply(tr.usable_dom, {s.vm}, {s.objs}, {a}, {n}, {true}, {int_sub(n, 1)}, dus, simp(ha), arith(hn, h0), arith(hn))
+      show by arith(e, hn, hp, ho, dnz)
+    qed
+    show by arith(c, hn)
+  qed
+  let B := s.vm.bytes
+  let ST(i) := fn_update(s, "vm", fn_update(s.vm, "bytes", x86_64_linux.store_le(B, a, i, 0)))
+  let P(l) := ex i. i in omega && int_le(i, n) && l = pair(ST(i), i)
+  let M(l) := int_sub(n, snd(l))
+  let BODY(l, o) := (int_lt(snd(l), n) && letin(snd(l), x9. letin(fn_update(fst(l), "vm", fn_update(fst(l).vm, "bytes",
+      fn_update(fst(l).vm.bytes, bits_add(64, a, bits_of_int(64, x9)), 0))), x10. o = ok(pair(x10, int_add(snd(l), 1)), empty)))) ||
+    (!int_lt(snd(l), n) && o = exc(pair(fst(l), snd(l)), pair("brk", empty)))
+  have bf: is_fun(B) && dom(B) = bits(64) by simp(hvm)
+  have vf: is_fun(s.vm) && "bytes" in dom(s.vm) by simp(hvm)
+  have z := apply(x86.store_zero, {B}, {a}, {0}, taut(bf), taut(bf), ha)
+  have e0v := mp(fn_update_same[f := s.vm, k := "bytes"], taut(vf), taut(vf))
+  have e0s := mp(fn_update_same[f := s, k := "vm"], hf, hd)
+  have s0: ST(0) = s by simp(z, e0v, e0s)
+  have p0: P(pair(s, 0)) by ex_intro({0}, simp(hn, s0))
+  have pm: all l. P(l) -> M(l) in omega proof
+    fix l
+    assume hp2
+    obtain i, hi from hp2
+    show by simp(hi, hn)
+  qed
+  have nx: all l l2. P(l) -> true -> BODY(l, ok(l2, empty)) -> P(l2) && int_lt(M(l2), M(l)) proof
+    fix l l2
+    assume hp2 ht hb
+    obtain i, io il le from hp2
+    have hb2 := rewrite(le, hb)
+    have more: int_lt(i, n) -> P(l2) && int_lt(M(l2), M(l)) proof
+      assume hlt
+      have i64: int_lt(i, 18446744073709551616) by arith(hlt, hn64)
+      have sst := rewrite(apply(tr.byte0, io), apply(x86.store_step, {B}, {a}, {i}, {0}, ha, io, i64))
+      have tw1 := fn_update_twice[f := s.vm, k := "bytes", a := x86_64_linux.store_le(B, a, i, 0), b := x86_64_linux.store_le(B, a, int_add(i, 1), 0)]
+      have tw2 := fn_update_twice[f := s, k := "vm", a := fn_update(s.vm, "bytes", x86_64_linux.store_le(B, a, i, 0)), b := fn_update(s.vm, "bytes", x86_64_linux.store_le(B, a, int_add(i, 1), 0))]
+      have e2: l2 = pair(ST(int_add(i, 1)), int_add(i, 1)) by simp(expand(hb2, letin), hlt, sst, tw1, tw2)
+      have p2: P(l2) by ex_intro({int_add(i, 1)}, simp(io, hlt, e2))
+      have m2: int_lt(M(l2), M(l)) by simp(e2, le, io)
+      show by taut(p2, m2)
+    qed
+    have stop: !int_lt(i, n) -> P(l2) && int_lt(M(l2), M(l)) proof
+      assume hge
+      have no: !(ok(l2, empty) = exc(pair(ST(i), i), pair("brk", empty))) by defs(simp(), ok, exc)
+      have f: false by simp(hb2, hge, no)
+      show by taut(f)
+    qed
+    show by taut(more, stop)
+  qed
+  have ps: all l l2. P(l) -> true -> BODY(l, ok(l2, empty)) -> P(l2) proof
+    fix l l2
+    assume hp2 ht hb
+    show by taut(mp(all_elim(nx, {l}, {l2}), hp2, ht, hb))
+  qed
+  have md: all l l2. P(l) -> true -> BODY(l, ok(l2, empty)) -> int_lt(M(l2), M(l)) proof
+    fix l l2
+    assume hp2 ht hb
+    show by taut(mp(all_elim(nx, {l}, {l2}), hp2, ht, hb))
+  qed
+  have mdet := apply(g.mem_det, {s}, {p}, {off}, {n}, {true}, hs, hp, ho, hdf)
+  show proof
+    fix o
+    assume hr
+    have b := apply(g.bind_inv, apply(g.runs_elim, expand(hr, gimple.st_zero)), mdet)
+    obtain r, hw ht from expand(b, letin)
+    have wv := mp(while_var[l0 := pair(s, 0), c := l. true, b := l o. BODY(l, o), tr := l. fn_update(empty, "os.events", fst(l).os.events), r := r, p := l. P(l), m := l. M(l)],
+      p0, ps, pm, md, hw)
+    obtain l, hpl hcase from wv
+    obtain i, io il le from hpl
+    have hb: BODY(pair(ST(i), i), r) && !is_ok(r) proof
+      have c1: (!true && r = ok(l, empty)) -> BODY(pair(ST(i), i), r) && !is_ok(r) by taut()
+      have c2: (true && BODY(l, r) && !is_ok(r)) -> BODY(pair(ST(i), i), r) && !is_ok(r) proof
+        assume h
+        have _ hb3 hnk := h
+        have r2 := rewrite(le, hb3)
+        show by taut(r2, hnk)
+      qed
+      show by taut(hcase, c1, c2)
+    qed
+    have br: r = exc(pair(ST(i), i), pair("brk", empty)) && !int_lt(i, n) proof
+      have bb nk := hb
+      have c1: int_lt(i, n) -> false proof
+        assume hlt
+        have ok1: ex x10. r = ok(pair(x10, int_add(i, 1)), empty) proof
+          let NX := fn_update(ST(i), "vm", fn_update(ST(i).vm, "bytes", fn_update(ST(i).vm.bytes, bits_add(64, a, bits_of_int(64, i)), 0)))
+          have b1: r = ok(pair(NX, int_add(i, 1)), empty) by simp(expand(bb, letin), hlt)
+          show by ex_intro({NX}, b1)
+        qed
+        obtain x10, hx10 from ok1
+        have k: is_ok(r) by defs(ex_intro({pair(x10, int_add(i, 1))}, {empty}, hx10), is_ok)
+        show by taut(k, nk)
+      qed
+      have nl: !int_lt(i, n) by taut(c1)
+      show by simp(bb, nl)
+    qed
+    have ien: i = n by arith(il, br, io, hn)
+    have re: r = exc(pair(ST(n), n), pair("brk", empty)) by simp(br, ien)
+    show by simp(rewrite(re, ht))
+  qed
+qed

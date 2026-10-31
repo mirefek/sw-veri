@@ -194,7 +194,7 @@ struct StoreOp {
     helper: Option<String>,
     /// its raise when undefined (the slot `HN`)
     ub: rec::RA,
-    /// st_bytes of zeros: its list (the stored value 0, n its length)
+    /// st_zero: its length n (the stored value 0)
     data: Option<Term>,
     /// a compare-and-swap (gimple.cas32): its operands t, s; its result
     /// (the old dword)

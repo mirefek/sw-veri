@@ -525,6 +525,12 @@ proc[World] st_bytes(p: Addr, off: bits[64], data: List[bits[8]]) {
   for i in 0..len(data) { vm.bytes[a + bits[64](i)] := data[i] }
 }
 
+// n zero bytes (an aggregate's `= {0}`)
+proc[World] st_zero(p: Addr, off: bits[64], n: nat) {
+  let a = mem(p, off, n, true)
+  for i in 0..n { vm.bytes[a + bits[64](i)] := 0 }
+}
+
 // a bitfield: `bits` bits at bit `pos` of the `size` bytes at p + off
 proc[World] ldbf(p: Addr, off: bits[64], size: nat, pos: nat, bits: nat) -> nat {
   return bytes_at(vm, mem(p, off, size, false), size) / 2^pos % 2^bits

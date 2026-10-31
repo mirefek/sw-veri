@@ -28,7 +28,7 @@ pub struct Shared {
 /// keywords, the state's fields).
 const RESERVED: &[&str] = &[
     "sadd", "ssub", "smul", "sneg", "cdiv", "crem", "div", "rem", "shl", "shr", "sar", "smin", "smax", "umin", "umax", "b1", "padd", "mem", "ld8", "ld16",
-    "ld32", "ld64", "ld128", "st8", "st16", "st32", "st64", "st128", "st_bytes", "ldbf", "stbf", "call", "call1", "call_objs", "call1_objs", "call_s", "call1_s", "call0", "call1_0", "call0_objs", "call1_0_objs",
+    "ld32", "ld64", "ld128", "st8", "st16", "st32", "st64", "st128", "st_bytes", "st_zero", "ldbf", "stbf", "call", "call1", "call_objs", "call1_objs", "call_s", "call1_s", "call0", "call1_0", "call0_objs", "call1_0_objs",
     "arg", "result", "elem", "inline_asm", "alloc_objs", "objs", "args", "any", "let", "var", "if", "else", "match", "while", "for", "in",
     "return", "fn", "proc", "pred", "type", "state", "self", "true", "false", "loop", "break", "either", "or", "havoc", "where", "require",
     "undefined", "ghost", "emit", "raise", "try", "catch", "vm", "os", "sp", "cpu", "fs_base", "uint", "sint", "zext", "sext", "bits",
@@ -1417,6 +1417,10 @@ impl<'a> Lower<'a> {
                     b
                 };
                 let (b, o) = self.raddr(rx, sh, lhs)?;
+                if bytes.iter().all(|x| *x == 0) {
+                    self.line(rx, format!("st_zero({}, {}, {})", b, lit(o, 64), bytes.len()));
+                    return Ok(());
+                }
                 let data: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
                 self.line(rx, format!("st_bytes({}, {}, [{}])", b, lit(o, 64), data.join(", ")));
                 return Ok(());

@@ -2970,10 +2970,7 @@ impl State {
                 cur = self.lemma(env, lg, "g.letin_e", &[cur])?;
             } else if Some(f) == bind && !xs.is_empty() && head(&a[0]).is_some_and(|(p, _)| (0..withs.len()).any(|i| is_run[i] && run_lemma_head(env, lg, withs[i].concl()) == Some(p))) {
                 // (a program with a run lemma: its bind opened, its outcome named)
-                self.facts.push(("__stepb".into(), cur.clone()));
-                let r = self.eval(env, lg, &parse_pe("expand(__stepb, bind_rel)")?);
-                self.facts.pop();
-                cur = r?;
+                cur = self.step_open_bind(env, lg, &cur)?;
             } else if Some(f) == bind {
                 // (an operation's one outcome: a `with` fact for it; a call:
                 // its callee's contract)
@@ -2985,12 +2982,12 @@ impl State {
                         // spec --: its run, its outcome named)
                         None if !xs.is_empty() && head(&a[0]).is_some_and(|(p, _)| {
                             matches!(env.syms[p as usize].kind, sl_kernel::env::SymKind::Defined { .. })
-                                && (!env.syms[p as usize].name.starts_with("gimple.") || (0..withs.len()).any(|i| is_run[i] && run_lemma_head(env, lg, withs[i].concl()) == Some(p)))
+                                && (!env.syms[p as usize].name.starts_with("gimple.")
+                                    || (0..withs.len()).any(|i| is_run[i] && run_lemma_head(env, lg, withs[i].concl()) == Some(p))
+                                    // (a call through its definition: a callee's contract among the facts)
+                                    || (["gimple.call_objs", "gimple.call1_objs"].contains(&env.syms[p as usize].name.as_str()) && (0..withs.len()).any(|i| is_call[i])))
                         }) => {
-                            self.facts.push(("__stepb".into(), cur.clone()));
-                            let r = self.eval(env, lg, &parse_pe("expand(__stepb, bind_rel)")?);
-                            self.facts.pop();
-                            cur = r?;
+                            cur = self.step_open_bind(env, lg, &cur)?;
                         }
                         None => break,
                     },
@@ -3248,6 +3245,18 @@ impl State {
     /// a bind stepped by a `with` fact for its operation: the first that
     /// applies (marked used, with its copies); None if none does (`why`:
     /// a lemma's failure, for the report)
+    /// a bind opened (g.bind_open): its program's outcome, its dispatch --
+    /// the binds after it left closed, for `step` to go on with
+    fn step_open_bind(&mut self, env: &mut Env, lg: &Logic, b: &Seq) -> KResult<Seq> {
+        if facts::seq_of(env, "g.bind_open").is_some() {
+            return self.lemma(env, lg, "g.bind_open", &[b.clone()]);
+        }
+        self.facts.push(("__stepb".into(), b.clone()));
+        let r = self.eval(env, lg, &parse_pe("expand(__stepb, bind_rel)")?);
+        self.facts.pop();
+        r
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn step_bind_any(&mut self, env: &mut Env, lg: &Logic, b: &Seq, withs: &[Seq], is_op: &[bool], used: &mut [bool], using: &[Seq], why: &mut Option<String>) -> KResult<Option<Seq>> {
         for i in 0..withs.len() {

@@ -903,7 +903,7 @@ impl<'e> Gen<'e> {
         }
         let is_store = |g: &Gen, t: &Term| {
             g.app(t, "gimple.stbf", 6).is_some() ||
-            g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st16", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some() || g.app(t, "gimple.st_bytes", 3).is_some()
+            g.app(t, "gimple.st8", 3).is_some() || g.app(t, "gimple.st16", 3).is_some() || g.app(t, "gimple.st32", 3).is_some() || g.app(t, "gimple.st64", 3).is_some() || g.app(t, "gimple.st_zero", 3).is_some()
         };
         let (inner, helper) = if is_store(self, op) {
             (op.clone(), None)
@@ -951,17 +951,15 @@ impl<'e> Gen<'e> {
         }
         // (constant bytes: all zero, else not covered)
         let mut data = None;
-        let (n, x) = match (self.app(&inner, "gimple.st8", 3), self.app(&inner, "gimple.st32", 3), self.app(&inner, "gimple.st_bytes", 3)) {
+        let (n, x) = match (self.app(&inner, "gimple.st8", 3), self.app(&inner, "gimple.st32", 3), self.app(&inner, "gimple.st_zero", 3)) {
             (Some(x), _, _) => (1, x.to_vec()),
             (_, Some(x), _) => (4, x.to_vec()),
             (_, _, Some(x)) => {
-                let items = self.list_items(&x[2]).ok_or("st_bytes of a list that is not a literal")?;
-                if items.is_empty() || items.iter().any(|t| nat(t) != Some(0)) {
-                    return Err(format!("st_bytes of {}: only zeros covered", self.print(&x[2])));
-                }
+                let k = nat(&x[2]).filter(|k| *k > 0).ok_or_else(|| format!("st_zero of {}: a positive literal length only", self.print(&x[2])))?;
                 data = Some(x[2].clone());
-                (items.len() as u128, vec![x[0].clone(), x[1].clone(), lit(0)])
+                (k, vec![x[0].clone(), x[1].clone(), lit(0)])
             }
+            _ if self.app(&inner, "gimple.st_bytes", 3).is_some() => return Err("st_bytes: only st_zero covered".into()),
             _ if self.app(&inner, "gimple.st16", 3).is_some() => (2, self.app(&inner, "gimple.st16", 3).unwrap().to_vec()),
             _ => (8, self.app(&inner, "gimple.st64", 3).unwrap().to_vec()),
         };
@@ -991,8 +989,8 @@ impl<'e> Gen<'e> {
                 vec![t(&w), t(&pp), t(&off), t(&v), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
             ),
             Some(d) => mpf(
-                "g.stz_ub",
-                vec![t(&w), t(&pp), t(&off), t(d), t(&self.vw), t(&empty), t(&lit(n)), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), arith(vec![]), p(R::Slot("HN"))],
+                "g.stzero_ub",
+                vec![t(&w), t(&pp), t(&off), t(d), t(&self.vw), t(&empty), p(self.hv()), p(self.hvu_w()), simp0(), simp_l(), simp_l(), p(R::Slot("HN"))],
             ),
             None => mpf(
                 &format!("g.st{}_at_ub", 8 * n),
@@ -1066,16 +1064,6 @@ impl<'e> Gen<'e> {
         let cleared = self.mk("bits_and", vec![lit(128), self.mk("gimple.b128", vec![old]), self.mk("bits_not", vec![lit(128), self.mk("gimple.b128", vec![m])])]);
         let field = self.mk("int_mul", vec![self.mk("int_mod", vec![fv.clone(), pw(self, k)]), pw(self, pos)]);
         self.mk("int_add", vec![cleared, field])
-    }
-
-    /// `l in list_type(omega) && tr.zeros(l)` for a list literal of zeros
-    /// (left-nested, as GIMPLE's): tr.zeros_one, then tr.zeros_snoc
-    pub(super) fn zeros_proof(&self, l: &Term) -> Result<R, String> {
-        if self.app(l, "seq_one", 1).is_some() {
-            return Ok(f("tr.zeros_one"));
-        }
-        let x = self.app(l, "seq_concat", 2).filter(|x| self.app(&x[1], "seq_one", 1).is_some()).ok_or("a list of zeros not left-nested")?;
-        Ok(R::Apply(Box::new(f("tr.zeros_snoc")), vec![p(self.zeros_proof(&x[0])?)]))
     }
 
     /// `[b + d]` (b a register, no index): b's number, b, d
