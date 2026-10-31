@@ -124,9 +124,13 @@ proof
   show by ex_intro({V}, taut(vV, fr, efs))
 qed
 
+// (a stack overflow during startup: any memory, objects, thread pointer)
+def sp.ovf_any(t, o) := ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+  o = exc(fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob), exc_val("stack_overflow", empty))
+
 theorem sp.tls_q: all g t aux regs o2. t in abi.World -> t in univ(1) -> g.builtin_tls in bits(64) -> aux in bits(64) -> startup_specs.init_tls_pre(t.vm, t.objs, g, aux) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, aux))) -> runs(startup_specs.init_tls_spec_fun(g)[regs], t, o2) ->
-  abi.ovf_out(t, o2) || (ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) &&
+  sp.ovf_any(t, o2) || (ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) &&
     (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", fs), r))
 proof
   fix g t aux regs o2
@@ -148,14 +152,17 @@ proof
   let OVF := exc_val("stack_overflow", empty)
   have k1: case 1 of hbr proof
     assume e
-    rsimp only, abi.overflow in e
+    rsimp only, startup_specs.overflow_start, abi.overflow in e
     have pv _ _ _ := apply(ms.world_parts, hw)
     have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
-    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x0 = exc(pair(fn_update(fn_update(t, "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e, vv, ct.objs_ne)
-    obtain v ob, hv hob hx from l
-    have oe: o3 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
-    have o2e: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(oe, hk3))
-    have x: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, o2e))
+    have fv: ex x. x in bits(64) by ex_intro({0}, simp())
+    have l: ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+      x0 = exc(pair(fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e, vv, fv, ct.objs_ne)
+    obtain f v ob, hf hv hob hx from l
+    let T := fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob)
+    have oe: o3 = exc(T, OVF) by simp(rewrite(hx, hout))
+    have o2e: o2 = exc(T, OVF) by simp(rewrite(oe, hk3))
+    have x: sp.ovf_any(t, o2) by defs(ex_intro({f}, {v}, {ob}, taut(hf, hv, hob, o2e)), sp.ovf_any)
     show by taut(x)
   qed
   have k2: case 2 of hbr proof
@@ -185,7 +192,7 @@ qed
 // the thread as the precondition has it)
 theorem sp.ssp_q: all g t e regs o2. t in abi.World -> t in univ(1) -> e in bits(64) -> startup_specs.init_ssp_pre(t.vm, t.objs, g, t.fs_base, e) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, e))) -> runs(startup_specs.init_ssp_spec_fun(g)[regs], t, o2) ->
-  abi.ovf_out(t, o2) || (ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.ssp_writes(g))) &&
+  sp.ovf_any(t, o2) || (ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.ssp_writes(g))) &&
     startup_specs.thread_set(V, t.fs_base)) && o2 = ok(fn_update(t, "vm", V), r))
 proof
   fix g t e regs o2
@@ -207,14 +214,17 @@ proof
   let OVF := exc_val("stack_overflow", empty)
   have k1: case 1 of hbr proof
     assume e1
-    rsimp only, abi.overflow in e1
+    rsimp only, startup_specs.overflow_start, abi.overflow in e1
     have pv _ _ _ := apply(ms.world_parts, hw)
     have vv: ex x. x in x86_64_linux.Vm by ex_intro({t.vm}, simp(pv))
-    have l: ex v ob. (v in x86_64_linux.Vm && ob in abi.Objs) && x0 = exc(pair(fn_update(fn_update(t, "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e1, vv, ct.objs_ne)
-    obtain v ob, hv hob hx from l
-    have oe: o3 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(hx, hout))
-    have o2e: o2 = exc(fn_update(fn_update(t, "vm", v), "objs", ob), OVF) by simp(rewrite(oe, hk3))
-    have x: abi.ovf_out(t, o2) by ex_intro({v}, {ob}, taut(hv, hob, o2e))
+    have fv: ex x. x in bits(64) by ex_intro({0}, simp())
+    have l: ex f v ob. ((f in bits(64) && v in x86_64_linux.Vm) && ob in abi.Objs) &&
+      x0 = exc(pair(fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob), empty), pair("raise", OVF)) by simp(e1, vv, fv, ct.objs_ne)
+    obtain f v ob, hf hv hob hx from l
+    let T := fn_update(fn_update(fn_update(t, "fs_base", f), "vm", v), "objs", ob)
+    have oe: o3 = exc(T, OVF) by simp(rewrite(hx, hout))
+    have o2e: o2 = exc(T, OVF) by simp(rewrite(oe, hk3))
+    have x: sp.ovf_any(t, o2) by defs(ex_intro({f}, {v}, {ob}, taut(hf, hv, hob, o2e)), sp.ovf_any)
     show by taut(x)
   qed
   have k2: case 2 of hbr proof
@@ -354,7 +364,7 @@ qed
 //  overflow, or its frame, libc.auxv past envp's zero word, the thread set
 //  up -- its stack objects still live (L), as a function's are at its end
 
-def sp.il_out(g, w, envp, o) := abi.ovf_out(w, o) ||
+abbrev sp.il_out(g, w, envp, o) := abi.ovf_out(w, o) || sp.ovf_any(w, o) ||
   (ex V fs L. ((V in x86_64_linux.Vm && startup_specs.frame(w.vm, V, w.objs, startup_specs.start_writes(g))) &&
      (all n. n in omega -> startup_specs.env_at(w.vm, w.objs, envp, n) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(envp, int_mul(8, int_add(n, 1)))) &&
      fs in bits(64) && startup_specs.thread_set(V, fs)) &&
@@ -463,4 +473,430 @@ proof
     show by defs(sel(taut(xo, (int_le(g.libc, x) && int_lt(x, int_add(g.libc, 56)) by arith(a2, hl)))), startup_specs.span)
   qed
   show by defs(sel(taut(xo, h, s4, s5)), startup_specs.start_writes)
+qed
+
+// (the i-th byte of a span: in it)
+theorem sp.span_i: all a n i. a in omega -> i in omega -> int_lt(i, n) -> int_add(a, i) in startup_specs.span(a, n)
+proof
+  fix a n i
+  assume ha hi hil
+  show by defs(sel(taut((int_add(a, i) in omega by arith(ha, hi)), (int_le(a, int_add(a, i)) && int_lt(int_add(a, i), int_add(a, n)) by arith(ha, hi, hil)))), startup_specs.span)
+qed
+
+// (two memories as X but for bytes: each as the other but for bytes)
+theorem sp.bytes_rel(U, M, X): fn_update(U, "bytes", X.bytes) = X -> fn_update(M, "bytes", X.bytes) = X -> M in x86_64_linux.Vm ->
+  fn_update(U, "bytes", M.bytes) = M
+proof
+  assume hu hm hv
+  have vf: is_fun(M) && "bytes" in dom(M) by simp(hv)
+  have t1 := fn_update_twice[f := U, k := "bytes", a := X.bytes, b := M.bytes]
+  have t2 := fn_update_twice[f := M, k := "bytes", a := X.bytes, b := M.bytes]
+  have e1: fn_update(fn_update(U, "bytes", X.bytes), "bytes", M.bytes) = fn_update(X, "bytes", M.bytes) := subst({y. fn_update(fn_update(U, "bytes", X.bytes), "bytes", M.bytes) = fn_update(y, "bytes", M.bytes)}, hu,
+    refl({fn_update(fn_update(U, "bytes", X.bytes), "bytes", M.bytes)}))
+  have e2: fn_update(fn_update(M, "bytes", X.bytes), "bytes", M.bytes) = fn_update(X, "bytes", M.bytes) := subst({y. fn_update(fn_update(M, "bytes", X.bytes), "bytes", M.bytes) = fn_update(y, "bytes", M.bytes)}, hm,
+    refl({fn_update(fn_update(M, "bytes", X.bytes), "bytes", M.bytes)}))
+  have s := mp(fn_update_same[f := M, k := "bytes"], taut(vf), taut(vf))
+  show := trans(sym(t1), trans(e1, trans(sym(e2), trans(t2, s))))
+qed
+
+// ----------------------------------------------------------------------
+//  Preconditions carried across a function's own steps (its memory as the
+//  entry's but for bytes, more objects live)
+
+theorem sp.usable_keep(b, U, o, L, a, n, wr): gimple.usable(b, o, a, n, wr) -> fn_update(U, "bytes", b.bytes) = b -> (all x. x in o.live -> x in L) ->
+  gimple.usable(U, fn_update(o, "live", L), a, n, wr)
+proof
+  assume hu hb hl
+  have ul := apply(mp.usable_live[vm := b, objs := o, L := L, a := a, n := n, w := wr], hu, hl)
+  show := apply(mp.usable_bytes[v := b, v2 := U, objs := fn_update(o, "live", L), a := a, n := n, w := wr], hb, ul)
+qed
+
+theorem sp.globals_keep(b, U, o, L, g): startup_specs.globals_ok(b, o, g) -> fn_update(U, "bytes", b.bytes) = b -> (all x. x in o.live -> x in L) ->
+  startup_specs.globals_ok(U, fn_update(o, "live", L), g)
+proof
+  assume hg hb hl
+  have hall h1 h2 h3 := expand(hg, startup_specs.globals_ok)
+  have e2 := mp(app_update_other[f := U, k := "bytes", v := b.bytes, x := "pages"], (!("pages" = "bytes") by simp()))
+  have pe: U.pages = b.pages := sym(rewrite(hb, e2))
+  have each: all x. x in omega -> x in startup_specs.start_writes(g) -> ((((gimple.usable(U, fn_update(o, "live", L), x, 1, true) && gimple.usable(U, fn_update(o, "live", L), x, 1, false)) &&
+      x86_64_linux.mapped(U, int_div(x, x86_64_linux.PAGE))) && snd(U.pages[int_div(x, x86_64_linux.PAGE)]).prot.r) && snd(U.pages[int_div(x, x86_64_linux.PAGE)]).prot.w) &&
+      !abi.stack_page(U, int_div(x, x86_64_linux.PAGE)) proof
+    fix x
+    assume hx hw
+    have u1 u2 m r w2 ns := mp(all_elim(hall, {x}), hx, hw)
+    have v1 := apply(sp.usable_keep[b := b, U := U, o := o, L := L, a := x, n := 1, wr := true], u1, hb, hl)
+    have v2 := apply(sp.usable_keep[b := b, U := U, o := o, L := L, a := x, n := 1, wr := false], u2, hb, hl)
+    have m2: x86_64_linux.mapped(U, int_div(x, x86_64_linux.PAGE)) by defs(simp(pe, expand(m, x86_64_linux.mapped)), x86_64_linux.mapped)
+    have ns2: !abi.stack_page(U, int_div(x, x86_64_linux.PAGE)) by defs(simp(pe, expand(ns, abi.stack_page, x86_64_linux.mapped)), abi.stack_page, x86_64_linux.mapped)
+    have r2: snd(U.pages[int_div(x, x86_64_linux.PAGE)]).prot.r by simp(pe, r)
+    have w3: snd(U.pages[int_div(x, x86_64_linux.PAGE)]).prot.w by simp(pe, w2)
+    show by taut(v1, v2, m2, r2, w3, ns2)
+  qed
+  show by defs(taut(each, h1, h2, h3), startup_specs.globals_ok)
+qed
+
+// (each byte usable: the bytes usable)
+theorem sp.usable_of_bytes(vm, o, a, n, wr): a in omega -> (all i. i in omega -> int_lt(i, n) -> gimple.usable(vm, o, int_add(a, i), 1, wr)) -> gimple.usable(vm, o, a, n, wr)
+proof
+  assume ha h
+  let P(i) := int_div(int_add(a, i), x86_64_linux.PAGE)
+  have each: all i. i in omega -> int_lt(i, n) -> ite(x86_64_linux.mapped(vm, P(i)) && !(snd(vm.pages[P(i)]).kind = 2),
+      ite(wr, snd(vm.pages[P(i)]).prot.w, snd(vm.pages[P(i)]).prot.r) && int_add(a, i) in o.c_bytes, int_lt(int_add(a, i), int_pow(2, 64)) && int_add(a, i) in o.live) proof
+    fix i
+    assume hi hil
+    have u := mp(all_elim(expand(mp(all_elim(h, {i}), hi, hil), gimple.usable), {0}), simp(), simp())
+    have z: int_add(int_add(a, i), 0) = int_add(a, i) by arith(ha, hi)
+    show := rewrite(z, u)
+  qed
+  show by defs(each, gimple.usable)
+qed
+
+// aux[j] after the first k pairs of the auxiliary vector AX: the value of
+// a pair with key j among them, else 0
+def sp.aux_val(AX, k, j, v) := (ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = j && snd(AX[m]) = v) ||
+  (!(ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = j) && v = 0)
+
+theorem sp.aux_val0: all AX j. sp.aux_val(AX, 0, j, 0)
+proof
+  fix AX j
+  have n: !(ex m. (m in omega && int_lt(m, 0)) && fst(AX[m]) = j) proof
+    assume h
+    obtain m, hm hl _ from h
+    show by arith(hm, hl)
+  qed
+  show by defs(taut(n, refl({0})), sp.aux_val)
+qed
+
+theorem sp.aux_hit: all AX k j. k in omega -> fst(AX[k]) = j -> sp.aux_val(AX, int_add(k, 1), j, snd(AX[k]))
+proof
+  fix AX k j
+  assume hk he
+  have e: ex m. (m in omega && int_lt(m, int_add(k, 1))) && fst(AX[m]) = j && snd(AX[m]) = snd(AX[k])
+    by ex_intro({k}, taut(hk, (int_lt(k, int_add(k, 1)) by arith(hk)), he, refl({snd(AX[k])})))
+  show by defs(taut(e), sp.aux_val)
+qed
+
+theorem sp.aux_miss: all AX k j v. k in omega -> !(fst(AX[k]) = j) -> sp.aux_val(AX, k, j, v) -> sp.aux_val(AX, int_add(k, 1), j, v)
+proof
+  fix AX k j v
+  assume hk hn ha
+  have c1: (ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = j && snd(AX[m]) = v) -> sp.aux_val(AX, int_add(k, 1), j, v) proof
+    assume h
+    obtain m, hm hl h1 h2 from h
+    have e: ex m. (m in omega && int_lt(m, int_add(k, 1))) && fst(AX[m]) = j && snd(AX[m]) = v
+      by ex_intro({m}, taut(hm, (int_lt(m, int_add(k, 1)) by arith(hl)), h1, h2))
+    show by defs(taut(e), sp.aux_val)
+  qed
+  have c2: !(ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = j) -> v = 0 -> sp.aux_val(AX, int_add(k, 1), j, v) proof
+    assume hno hv
+    have n: !(ex m. (m in omega && int_lt(m, int_add(k, 1))) && fst(AX[m]) = j) proof
+      assume h
+      obtain m, hm hl h1 from h
+      have c: int_lt(m, k) || m = k by arith(hl, hm, hk)
+      have d1: int_lt(m, k) -> false proof
+        assume lt
+        have e: ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = j by ex_intro({m}, taut(hm, lt, h1))
+        show by taut(e, hno)
+      qed
+      have d2: m = k -> false proof
+        assume eq
+        show by taut(hn, rewrite(eq, h1))
+      qed
+      show by taut(c, d1, d2)
+    qed
+    show by defs(taut(n, hv), sp.aux_val)
+  qed
+  show by taut(expand(ha, sp.aux_val), c1, c2)
+qed
+
+// (the copy's aux[key], key not AT_NULL's: the vector's value for it, or 0
+// -- aux_is's, the keys each once)
+theorem sp.aux_val_is(AX, k, key, v, v2): int_add(k, 1) = seq_len(AX) -> k in omega ->
+  (all a b. a in omega -> b in omega -> int_lt(a, seq_len(AX)) -> int_lt(b, seq_len(AX)) -> fst(AX[a]) = fst(AX[b]) -> a = b) ->
+  !(key = 0) -> fst(AX[k]) = 0 -> sp.aux_val(AX, k, key, v) -> startup_specs.aux_is(AX, key, v2) -> v = v2
+proof
+  assume hk ho hu hn hz hv hi
+  have c1: (ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = key && snd(AX[m]) = v) -> v = v2 proof
+    assume e
+    obtain m, hm hml hmk hmv from e
+    have d1: (ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = v2)) -> v = v2 proof
+      assume e2
+      obtain j, hj hjl hjk hjv from e2
+      have mj: m = j := mp(all_elim(hu, {m}, {j}), hm, hj, arith(hml, hk, ho), hjl, trans(hmk, sym(hjk)))
+      show := trans(sym(hmv), rewrite(sym(mj), hjv))
+    qed
+    have d2: !(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) -> v = v2 proof
+      assume n2
+      have e3: ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) by ex_intro({m}, taut(hm, (int_lt(m, seq_len(AX)) by arith(hml, hk, ho)), hmk))
+      show by taut(n2, e3)
+    qed
+    show by taut(expand(hi, startup_specs.aux_is), d1, d2)
+  qed
+  have c2: !(ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = key) && v = 0 -> v = v2 proof
+    assume e
+    have nm v0 := e
+    have d1: (ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = v2)) -> v = v2 proof
+      assume e2
+      obtain j, hj hjl hjk _ from e2
+      have jk: !(j = k) proof
+        assume e3
+        show by taut(hn, trans(sym(hjk), rewrite(sym(e3), hz)))
+      qed
+      have e4: ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = key by ex_intro({j}, taut(hj, (int_lt(j, k) by arith(hjl, hk, jk, hj, ho)), hjk))
+      show by taut(nm, e4)
+    qed
+    have d2: (!(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) && v2 = 0) -> v = v2 proof
+      assume e2
+      have _ z2 := e2
+      show := trans(v0, sym(z2))
+    qed
+    show by taut(expand(hi, startup_specs.aux_is), d1, d2)
+  qed
+  show by taut(expand(hv, sp.aux_val), c1, c2)
+qed
+
+// (the program headers: as at the entry -- none of their bytes written)
+theorem sp.phdrs_keep(b, U, o, L, ph, pe, pn, W, IW): startup_specs.phdrs_ok(b, o, ph, pe, pn, W) -> startup_specs.frame(b, U, o, IW) ->
+  (all x. x in IW -> x in W) -> (all x. x in o.live -> x in L) -> ph in omega -> pe in omega -> pn in omega ->
+  startup_specs.phdrs_ok(U, fn_update(o, "live", L), ph, pe, pn, W)
+proof
+  assume hp hf hs hl hph hpe hpn
+  have hb _ := expand(hf, startup_specs.frame)
+  have bd hall := expand(hp, startup_specs.phdrs_ok)
+  have each: all i. i in omega -> int_lt(i, pn) -> (gimple.usable(U, fn_update(o, "live", L), int_add(ph, int_mul(pe, i)), 56, false) &&
+      !(gimple.bytes_at(U, bits_of_int(64, int_add(ph, int_mul(pe, i))), 4) = startup_specs.PT_TLS)) &&
+      (all j. j in omega -> int_lt(j, 56) -> !(int_add(int_add(ph, int_mul(pe, i)), j) in W)) proof
+    fix i
+    assume hi hil
+    have u nt nw := mp(all_elim(hall, {i}), hi, hil)
+    let A := int_add(ph, int_mul(pe, i))
+    have ao: A in omega by arith(hph, hpe, hi)
+    have ml := apply(ms.mul_le, {pe}, {i}, {pe}, {pn}, hpe, hi, simp(hpe), simp(hpn), arith(hpe), arith(hil))
+    have al: int_lt(A, 18446744073709551616) by arith(bd, hph, hpe, hi, ml)
+    have ab: bits_of_int(64, A) = A := apply(mp.boi[x := A], ao, al)
+    have u2 := apply(sp.usable_keep[b := b, U := U, o := o, L := L, a := A, n := 56, wr := false], u, hb, hl)
+    have u4 := apply(mp.usable_sub[vm := b, objs := o, a := A, n := 56, k := 0, m := 4, w := false], simp(), simp(), simp(), u)
+    have z: int_add(A, 0) = A by arith(ao)
+    have niw: all j. j in omega -> int_lt(j, 4) -> !(int_add(A, j) in IW) proof
+      fix j
+      assume hj hjl
+      have n := mp(all_elim(nw, {j}), hj, arith(hjl))
+      have c: int_add(A, j) in IW -> false proof
+        assume h
+        show by taut(n, mp(all_elim(hs, {int_add(A, j)}), h))
+      qed
+      show by taut(c)
+    qed
+    have rd := apply(sp.fr_read[b := b, U := U, objs := o, W := IW, a := A, n := 4, wr := false], hf, rewrite(z, u4), niw, ao, simp())
+    have nt2: !(gimple.bytes_at(U, bits_of_int(64, A), 4) = startup_specs.PT_TLS) := rewrite(sym(ab), rewrite(sym(rd), rewrite(ab, nt)))
+    show by taut(u2, nt2, nw)
+  qed
+  show by defs(taut(bd, each), startup_specs.phdrs_ok)
+qed
+
+// (libc's and main_tls's bytes: startup writes them)
+theorem sp.sw_libc: all g i. g.libc in omega -> i in omega -> int_lt(i, 56) -> int_add(g.libc, i) in startup_specs.start_writes(g)
+proof
+  fix g i
+  assume hb hi hil
+  have sp := apply(sp.span_i, {g.libc}, {56}, {i}, hb, hi, hil)
+  show by defs(sel(taut((int_add(g.libc, i) in omega by arith(hb, hi)), sp)), startup_specs.start_writes)
+qed
+
+theorem sp.sw_main: all g i. g.main_tls in omega -> i in omega -> int_lt(i, 48) -> int_add(g.main_tls, i) in startup_specs.start_writes(g)
+proof
+  fix g i
+  assume hb hi hil
+  have sp := apply(sp.span_i, {g.main_tls}, {48}, {i}, hb, hi, hil)
+  show by defs(sel(taut((int_add(g.main_tls, i) in omega by arith(hb, hi)), sp)), startup_specs.start_writes)
+qed
+
+// (a byte of a span: within it)
+theorem sp.span_e: all a n x. x in startup_specs.span(a, n) -> int_le(a, x) && int_lt(x, int_add(a, n))
+proof
+  fix a n x
+  assume h
+  have _ e := unsel(expand(h, startup_specs.span))
+  show := e
+qed
+
+// (a byte before or after a span: not in it)
+theorem sp.span_out: all a n x. int_lt(x, a) || int_le(int_add(a, n), x) -> !(x in startup_specs.span(a, n))
+proof
+  fix a n x
+  assume h
+  have c: x in startup_specs.span(a, n) -> false proof
+    assume hin
+    have e := apply(sp.span_e, {a}, {n}, {x}, hin)
+    show by arith(e, h)
+  qed
+  show by taut(c)
+qed
+
+// (a byte in none of __init_libc's seven spans: not its write)
+theorem sp.il_not: all g x. !(x in startup_specs.span(g.environ, 8)) -> !(x in startup_specs.span(g.hwcap, 8)) -> !(x in startup_specs.span(g.sysinfo, 8)) ->
+  !(x in startup_specs.span(bits_add(64, g.libc, 8), 8)) -> !(x in startup_specs.span(bits_add(64, g.libc, 48), 8)) ->
+  !(x in startup_specs.span(g.progname, 8)) -> !(x in startup_specs.span(g.progname_full, 8)) -> !(x in sp.il_writes(g))
+proof
+  fix g x
+  assume n1 n2 n3 n4 n5 n6 n7
+  have c: x in sp.il_writes(g) -> false proof
+    assume hx
+    have _ h := unsel(expand(hx, sp.il_writes))
+    show by taut(h, n1, n2, n3, n4, n5, n6, n7)
+  qed
+  show by taut(c)
+qed
+
+// (a call from a function with stack objects: the call's outcomes)
+theorem sp.call0_objs_e: all objs g args s o. runs(gimple.call0_objs(objs, g, args), s, o) -> runs(gimple.call0(g, args), s, o)
+proof
+  fix objs g args s o
+  assume h
+  have b := apply(g.runs_elim, expand(h, gimple.call0_objs))
+  obtain o3, hr hd from expand(b, bind_rel)
+  have c1: (ex x0 x1. o3 = ok(x0, x1) && o = ok(x0, x1)) -> o3 = o proof
+    assume e
+    obtain x0 x1, e1 e2 from e
+    show := trans(e1, sym(e2))
+  qed
+  have c2: (ex x0 x1. o3 = exc(x0, x1) && o = exc(x0, x1)) -> o3 = o proof
+    assume e
+    obtain x0 x1, e1 e2 from e
+    show := trans(e1, sym(e2))
+  qed
+  have c3: (ex x0. o3 = diverge(x0) && o = diverge(x0)) -> o3 = o proof
+    assume e
+    obtain x0, e1 e2 from e
+    show := trans(e1, sym(e2))
+  qed
+  have eo: o3 = o by taut(hd, c1, c2, c3)
+  show := rewrite(eo, hr)
+qed
+
+// (a world as another but for its memory and objects: their overflows'
+// worlds the same)
+theorem sp.ovf_norm: all s A B f v ob. fn_update(fn_update(fn_update(fn_update(fn_update(s, "vm", A), "objs", B), "fs_base", f), "vm", v), "objs", ob) =
+  fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob)
+proof
+  fix s A B f v ob
+  show by simp()
+qed
+
+// (the callees' writes: startup's)
+theorem sp.tls_sub: all g x. g.libc in bits(64) -> int_lt(int_add(g.libc, 56), 18446744073709551616) -> x in startup_specs.tls_writes(g) -> x in startup_specs.start_writes(g)
+proof
+  fix g x
+  assume hl hl56 hx
+  have xo h := unsel(expand(hx, startup_specs.tls_writes))
+  have b16: bits_add(64, g.libc, 16) = int_add(g.libc, 16) by defs(arith(hl, hl56), bits_add, bits_of_int, pow2)
+  have s1: x in startup_specs.span(g.libc, 1) -> x in startup_specs.span(g.libc, 56) proof
+    assume h0
+    have a1 := apply(sp.span_e, {g.libc}, {1}, {x}, h0)
+    show by defs(sel(taut(xo, (int_le(g.libc, x) && int_lt(x, int_add(g.libc, 56)) by arith(a1, hl)))), startup_specs.span)
+  qed
+  have s2: x in startup_specs.span(bits_add(64, g.libc, 16), 32) -> x in startup_specs.span(g.libc, 56) proof
+    assume h0
+    have a1 := apply(sp.span_e, {bits_add(64, g.libc, 16)}, {32}, {x}, h0)
+    show by defs(sel(taut(xo, (int_le(g.libc, x) && int_lt(x, int_add(g.libc, 56)) by arith(a1, b16, hl)))), startup_specs.span)
+  qed
+  show by defs(sel(taut(xo, h, s1, s2)), startup_specs.start_writes)
+qed
+
+theorem sp.ssp_sub: all g x. x in startup_specs.ssp_writes(g) -> x in startup_specs.start_writes(g)
+proof
+  fix g x
+  assume hx
+  have xo h := unsel(expand(hx, startup_specs.ssp_writes))
+  show by defs(sel(taut(xo, h)), startup_specs.start_writes)
+qed
+
+// (as B but for bytes, B as C but for bytes: as C but for bytes)
+theorem sp.bytes_trans(A, B, C): fn_update(A, "bytes", B.bytes) = B -> fn_update(B, "bytes", C.bytes) = C -> fn_update(A, "bytes", C.bytes) = C
+proof
+  assume h1 h2
+  have t := fn_update_twice[f := A, k := "bytes", a := B.bytes, b := C.bytes]
+  have e := subst({y. fn_update(fn_update(A, "bytes", B.bytes), "bytes", C.bytes) = fn_update(y, "bytes", C.bytes)}, h1, refl({fn_update(fn_update(A, "bytes", B.bytes), "bytes", C.bytes)}))
+  show := trans(sym(t), trans(e, h2))
+qed
+
+// (a world with another thread pointer, other objects: a world)
+theorem sp.world_fs(s, f): s in abi.World -> s in univ(1) -> f in bits(64) -> fn_update(s, "fs_base", f) in abi.World && fn_update(s, "fs_base", f) in univ(1)
+proof
+  assume hw hu hf
+  have fu: f in univ(1) by simp(hf)
+  have wW: fn_update(s, "fs_base", f) in abi.World by defs(simp(expand(hw, abi.World), hu, hf, fu), abi.World)
+  show by taut(wW, (fn_update(s, "fs_base", f) in univ(1) by simp(hu, fu)))
+qed
+
+theorem sp.world_objs(s, ob): s in abi.World -> s in univ(1) -> ob in abi.Objs -> fn_update(s, "objs", ob) in abi.World && fn_update(s, "objs", ob) in univ(1)
+proof
+  assume hw hu ho
+  have ou := apply(ct.objs_univ, ho)
+  have wW: fn_update(s, "objs", ob) in abi.World by defs(simp(expand(hw, abi.World), hu, ho, ou), abi.World)
+  show by taut(wW, (fn_update(s, "objs", ob) in univ(1) by simp(hu, ou)))
+qed
+
+// (the copy's aux[key]: aux_is's value for key -- key not AT_NULL's)
+theorem sp.aux_val_to_is(AX, k, key, v): int_add(k, 1) = seq_len(AX) -> k in omega -> !(key = 0) -> fst(AX[k]) = 0 -> sp.aux_val(AX, k, key, v) ->
+  startup_specs.aux_is(AX, key, v)
+proof
+  assume hk ho hn hz hv
+  have c1: (ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = key && snd(AX[m]) = v) -> startup_specs.aux_is(AX, key, v) proof
+    assume e
+    obtain m, hm hml hmk hmv from e
+    have x: ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = v) by ex_intro({m}, taut(hm, (int_lt(m, seq_len(AX)) by arith(hml, hk, ho)), hmk, hmv))
+    show by defs(taut(x), startup_specs.aux_is)
+  qed
+  have c2: !(ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = key) && v = 0 -> startup_specs.aux_is(AX, key, v) proof
+    assume e
+    have nm v0 := e
+    have n2: !(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) proof
+      assume e2
+      obtain j, hj hjl hjk from e2
+      have jk: !(j = k) proof
+        assume e3
+        show by taut(hn, trans(sym(hjk), rewrite(sym(e3), hz)))
+      qed
+      have e4: ex m. (m in omega && int_lt(m, k)) && fst(AX[m]) = key by ex_intro({j}, taut(hj, (int_lt(j, k) by arith(hjl, hk, jk, hj, ho)), hjk))
+      show by taut(nm, e4)
+    qed
+    show by defs(taut(n2, v0), startup_specs.aux_is)
+  qed
+  show by taut(expand(hv, sp.aux_val), c1, c2)
+qed
+
+// (aux_is: one value per key, the keys each once)
+theorem sp.aux_is_fun(AX, key, a, b): (all x y. x in omega -> y in omega -> int_lt(x, seq_len(AX)) -> int_lt(y, seq_len(AX)) -> fst(AX[x]) = fst(AX[y]) -> x = y) ->
+  startup_specs.aux_is(AX, key, a) -> startup_specs.aux_is(AX, key, b) -> a = b
+proof
+  assume hu ha hb
+  have c11: (ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = a)) ->
+      (ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = b)) -> a = b proof
+    assume e1 e2
+    obtain i, hi hil hik hia from e1
+    obtain j, hj hjl hjk hjb from e2
+    have ij := mp(all_elim(hu, {i}, {j}), hi, hj, hil, hjl, trans(hik, sym(hjk)))
+    show := trans(sym(hia), rewrite(sym(ij), hjb))
+  qed
+  have n1: (ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = a)) ->
+      !(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) -> false proof
+    assume e1 n
+    obtain i, hi hil hik _ from e1
+    have e3: ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) by ex_intro({i}, taut(hi, hil, hik))
+    show by taut(n, e3)
+  qed
+  have n2: (ex x0. x0 in omega && ((int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) && snd(AX[x0]) = b)) ->
+      !(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) -> false proof
+    assume e1 n
+    obtain i, hi hil hik _ from e1
+    have e3: ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key) by ex_intro({i}, taut(hi, hil, hik))
+    show by taut(n, e3)
+  qed
+  have c22: (!(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) && a = 0) ->
+      (!(ex x0. x0 in omega && (int_lt(x0, seq_len(AX)) && fst(AX[x0]) = key)) && b = 0) -> a = b proof
+    assume e1 e2
+    show := trans(e1.2, sym(e2.2))
+  qed
+  show by taut(expand(ha, startup_specs.aux_is), expand(hb, startup_specs.aux_is), c11, n1, n2, c22)
 qed

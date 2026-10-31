@@ -85,6 +85,13 @@ pred phdrs_ok(vm: Vm, objs: Objs, ph: nat, pe: nat, pn: nat, w: Set[nat]) =
   (all i: nat. i < pn -> usable(vm, objs, ph + pe * i, 56, false) && bytes_at(vm, bits[64](ph + pe * i), 4) != PT_TLS &&
      (all j: nat. j < 56 -> ph + pe * i + j notin w))
 
+// a stack overflow during startup: as abi's, the thread pointer as a
+// callee may have left it (an overflow after __init_tls set it up)
+proc[World] overflow_start() {
+  havoc fs_base
+  overflow()
+}
+
 ///////////////////////////////////////////////////////////////////////
 //  __init_tls(aux), __init_ssp(entropy)
 
@@ -117,7 +124,7 @@ pred init_tls_pre(vm: Vm, objs: Objs, g: StartGlobals, aux: Addr) =
 
 proc[World] init_tls_spec(g: StartGlobals, aux: Addr) {
   require init_tls_pre(vm, objs, g, aux)
-  either { overflow() } or {
+  either { overflow_start() } or {
     let before = vm
     havoc vm where frame(before, vm, objs, tls_writes(g)) && (ex fs: Addr. thread_set(vm, fs) && in_tls(g, fs))
     fs_base := any fs: Addr where thread_set(vm, fs) && in_tls(g, fs)
@@ -139,7 +146,7 @@ pred init_ssp_pre(vm: Vm, objs: Objs, g: StartGlobals, fs: Addr, entropy: Addr) 
 
 proc[World] init_ssp_spec(g: StartGlobals, entropy: Addr) {
   require init_ssp_pre(vm, objs, g, fs_base, entropy)
-  either { overflow() } or {
+  either { overflow_start() } or {
     let before = vm
     havoc vm where frame(before, vm, objs, ssp_writes(g)) && thread_set(vm, fs_base)
   }
@@ -175,7 +182,7 @@ pred init_libc_pre(vm: Vm, objs: Objs, g: StartGlobals, envp: Addr, pn: Addr) =
 // the thread set up, libc.auxv the vector's address (past envp's zero word)
 proc[World] init_libc_spec(g: StartGlobals, envp: Addr, pn: Addr) {
   require init_libc_pre(vm, objs, g, envp, pn)
-  either { overflow() } or {
+  either { overflow_start() } or {
     let before = vm
     havoc vm where frame(before, vm, objs, start_writes(g)) &&
       (all n: nat. env_at(before, objs, envp, n) -> bytes_at(vm, g.libc + 8, 8) = uint(envp) + 8 * (n + 1)) &&
