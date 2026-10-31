@@ -119,6 +119,66 @@ proof
   show by taut(wW, (fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", L)) in univ(1) by simp(hu, vu, ou)))
 qed
 
+// (usable bytes: apart from a new object -- its bytes free, theirs not)
+theorem g.alloc_apart(vm, objs, sz, l, k, a, n, wr): gimple.objs_fit(vm, objs, sz, l) -> k in omega -> int_lt(k, seq_len(sz)) -> l[k] in omega ->
+  int_lt(0, fst(sz[k])) -> gimple.usable(vm, objs, a, n, wr) -> a in omega -> n in omega -> int_lt(0, n) ->
+  int_le(int_add(a, n), l[k]) || int_le(int_add(l[k], fst(sz[k])), a)
+proof
+  assume hf hk hkl ho hs hu ha hn hn0
+  have _ hall _ := expand(hf, gimple.objs_fit)
+  have _ _ _ sf := mp(all_elim(hall, {k}), hk, hkl)
+  let N := fst(sz[k])
+  have c1: int_le(l[k], a) -> int_lt(a, int_add(l[k], N)) -> false proof
+    assume h1 h2
+    have fr := mp(all_elim(sf, {a}), ha, (int_le(l[k], a) && int_lt(a, int_add(l[k], N)) by taut(h1, h2)))
+    have nf := apply(mp.nofree[vm := vm, objs := objs, a := a, n := n, w := wr, i := 0], hu, simp(), hn0)
+    have z: int_add(a, 0) = a by arith(ha)
+    show by taut(fr, rewrite(z, nf))
+  qed
+  have c2: int_lt(a, l[k]) -> int_lt(l[k], int_add(a, n)) -> false proof
+    assume h1 h2
+    let J := int_sub(l[k], a)
+    have fr := mp(all_elim(sf, {l[k]}), ho, (int_le(l[k], l[k]) && int_lt(l[k], int_add(l[k], N)) by arith(ho, hs)))
+    have nf := apply(mp.nofree[vm := vm, objs := objs, a := a, n := n, w := wr, i := J], hu, arith(h1, ha, ho), arith(h2, ha, ho))
+    have z: int_add(a, J) = l[k] by arith(ha, ho)
+    show by taut(fr, rewrite(z, nf))
+  qed
+  show by arith(c1, c2, ha, hn, ho, hn0)
+qed
+
+// (bytes usable before the allocation: read in the memory after it as
+// before)
+theorem g.alloc_read(vm, objs, sz, l, V, a, n, wr): gimple.objs_fit(vm, objs, sz, l) ->
+  (all x5. x5 in bits(64) -> (all x6. x6 in omega -> int_lt(x6, seq_len(sz)) -> !(int_le(l[x6], x5) && int_lt(x5, int_add(l[x6], fst(sz[x6]))))) ->
+    V.bytes[x5] = vm.bytes[x5]) ->
+  gimple.usable(vm, objs, a, n, wr) -> a in omega -> n in omega ->
+  gimple.bytes_at(V, a, n) = gimple.bytes_at(vm, a, n)
+proof
+  assume hf hv hu ha hn
+  have _ hall _ := expand(hf, gimple.objs_fit)
+  have pe: all i. i in omega -> int_lt(i, n) -> V.bytes[bits_add(64, a, bits_of_int(64, i))] = vm.bytes[bits_add(64, a, bits_of_int(64, i))] proof
+    fix i
+    assume hi hil
+    have nf := apply(mp.nofree[vm := vm, objs := objs, a := a, n := n, w := wr, i := i], hu, hi, hil)
+    have lt := apply(mp.usable_lt[vm := vm, objs := objs, a := a, n := n, w := wr, i := i], hu, ha, hi, hil)
+    have ea: bits_add(64, a, bits_of_int(64, i)) = int_add(a, i) by defs(arith(ha, hi, lt), bits_add, bits_of_int, pow2)
+    have ab: int_add(a, i) in bits(64) by arith(ha, hi, lt)
+    have out: all x6. x6 in omega -> int_lt(x6, seq_len(sz)) -> !(int_le(l[x6], int_add(a, i)) && int_lt(int_add(a, i), int_add(l[x6], fst(sz[x6])))) proof
+      fix x6
+      assume h6 h6l
+      have _ _ _ sf := mp(all_elim(hall, {x6}), h6, h6l)
+      have c: int_le(l[x6], int_add(a, i)) && int_lt(int_add(a, i), int_add(l[x6], fst(sz[x6]))) -> false proof
+        assume hin
+        have fr := mp(all_elim(sf, {int_add(a, i)}), arith(ha, hi), hin)
+        show by taut(fr, nf)
+      qed
+      show by taut(c)
+    qed
+    show := rewrite(sym(ea), mp(all_elim(hv, {int_add(a, i)}), ab, out))
+  qed
+  show := apply(mp.bytes_same[U := V, vm := vm, a := a, n := n], hn, pe)
+qed
+
 // (memory defined before stack objects are allocated: defined after -- the
 // same pages, the live objects grown, bytes changed only)
 theorem g.md_alloc: all w V l sz p off k wr. g.mem_defined(w, p, off, k, wr) -> w in abi.World -> fn_update(V, "bytes", w.vm.bytes) = w.vm ->
@@ -172,10 +232,18 @@ mem_closure g.md_st_objs
 
 theorem sp.il_probe: all envp pn G1 G2 G3 G4 G5 w o. w in abi.World -> runs(c_src_env___libc_start_main.__init_libc(envp, pn, G1, G2, G3, G4, G5), w, o) ->
   envp in bits(64) -> g.mem_defined(w, c_src_env___libc_start_main.__environ, 0, 8, true) ->
-  abi.ovf_out(w, o) || true
+  // envp: N words, nonzero, then a zero word (readable, apart from __environ)
+  (all N. N in omega -> !(envp = 0) -> int_lt(int_add(envp, int_mul(8, int_add(N, 2))), int_pow(2, 63)) ->
+    (all i. i in omega -> int_le(i, N) -> gimple.usable(w.vm, w.objs, int_add(envp, int_mul(8, i)), 8, false)) ->
+    (all i. i in omega -> int_lt(i, N) -> !(gimple.bytes_at(w.vm, int_add(envp, int_mul(8, i)), 8) = 0)) ->
+    gimple.bytes_at(w.vm, int_add(envp, int_mul(8, N)), 8) = 0 ->
+    int_le(int_add(envp, int_mul(8, int_add(N, 1))), c_src_env___libc_start_main.__environ) || int_le(int_add(c_src_env___libc_start_main.__environ, 8), envp) ->
+  abi.ovf_out(w, o) || true)
 proof
   fix envp pn G1 G2 G3 G4 G5 w o
   assume hw hr heb hev
+  fix N
+  assume hN hen0 hbd hus hnz hz0 hea
   have pu := apply(g.runs_univ, hr)
   have hu: w in univ(1) by simp(pu)
   step a1 a2 a3 o1 l V, hk hll hfit hVm hvb hvf from hr with g.alloc_inv using conj(hw, hu)
@@ -190,8 +258,8 @@ proof
   have w1W w1u := apply(g.alloc_world[s := w, V := V, l := l, sz := SZ], hw, hu, hVm)
   have t1 := apply(tr.seq_one_type, (pair(24, 16) in univ(1) by simp()))
   have t2 := apply(tr.seq_one_type, (pair(304, 16) in univ(1) by simp()))
-  have a1 := at({SZ[1]}, t1, t2)
-  have sz1: fst(SZ[1]) = 304 by simp(a1)
+  have aS := at({SZ[1]}, t1, t2)
+  have sz1: fst(SZ[1]) = 304 by simp(aS)
   have szl: seq_len(SZ) = 2 by simp(t1, t2)
   have _ hall _ := expand(hfit, gimple.objs_fit)
   have _ l1nz l1le _ := mp(all_elim(hall, {1}), simp(), simp(szl))
@@ -200,6 +268,97 @@ proof
   let ENV := c_src_env___libc_start_main.__environ
   have envb: ENV in bits(64) by defs(simp(), c_src_env___libc_start_main.__environ)
   step h6 from hk with g.stzero_det, g.st64_det using conj(hw, hu, hVm, hvb, l1b, md0, envb, hev)
-  print h6
+  // the envp scan: i words passed, nonzero (the world W3 as the stores left it)
+  obtain r, wl kr from h6
+  let BODY(x, y) := loop_body(wl)
+  let VM3 := fn_update(V, "bytes", x86_64_linux.store_le(x86_64_linux.store_le(V.bytes, int_add(l[1], 0), 304, 0), int_add(ENV, 0), 8, envp))
+  let W3 := fn_update(W1, "vm", VM3)
+  let X(i) := pair(W3, pair(pn, pair(a1, pair(i, a3))))
+  let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+  have l1o: l[1] in omega by simp(l1b)
+  have l1r: int_le(int_add(int_add(l[1], 0), 304), 18446744073709551616) by arith(rewrite(sz1, l1le), l1o)
+  have w2W w2u := apply(g.sw_st_objs, {w}, {V}, {O1}, {int_add(l[1], 0)}, {304}, {0}, w1W, w1u, arith(l1b))
+  have w3W w3u := apply(ms.sw_st, {W1}, {V}, {x86_64_linux.store_le(V.bytes, int_add(l[1], 0), 304, 0)}, {int_add(ENV, 0)}, {8}, {envp}, w2W, w2u, arith(envb))
+  have trip: all i y. i in omega -> int_le(i, N) -> BODY(X(i), y) ->
+      (int_lt(i, N) && y = ok(X(int_add(i, 1)), empty)) || (i = N && y = exc(X(i), pair("brk", empty))) proof
+    fix i y
+    assume hi hiN hb
+    let A := int_add(envp, int_mul(8, i))
+    have de: bits_mul(64, i, 8) = int_mul(8, i) by defs(arith(hi, hiN, hbd, heb), bits_mul, bits_of_int, pow2)
+    have sv: gimple.sval(T64, int_mul(8, i)) = int_mul(8, i) by defs(simp((int_lt(int_mul(8, i), 9223372036854775808) by arith(hi, hiN, hbd, heb))), gimple.sval)
+    have pe8: int_add(envp, gimple.sval(T64, bits_mul(64, i, 8))) = A by simp(de, sv)
+    have ab: A in bits(64) by arith(hi, hiN, hbd, heb)
+    have pd := apply(g.padd_det, {W3}, {envp}, {bits_mul(64, i, 8)}, w3u, heb, simp(), arith(pe8, ab), defs(arith(pe8, ab), pow2))
+    have ui := mp(all_elim(hus, {i}), hi, hiN)
+    have hmA: g.mem_defined(w, A, 0, 8, false) by simp(ui, (!(A = 0) by arith(hi, hen0, heb)), (int_lt(A, pow2(64)) by defs(arith(ab), pow2)))
+    have ap1 := apply(g.alloc_apart[vm := w.vm, objs := w.objs, sz := SZ, l := l, k := 1, a := A, n := 8, wr := false], hfit, simp(), simp(szl), l1o, simp(sz1), ui, arith(ab), simp(), simp())
+    have rd := apply(g.alloc_read[vm := w.vm, objs := w.objs, sz := SZ, l := l, V := V, a := A, n := 8, wr := false], hfit, hvf, ui, arith(ab), simp())
+    // (the word read: the entry's, through the stores and the allocation)
+    let P := int_add(envp, gimple.sval(T64, bits_mul(64, i, 8)))
+    have pb: P in bits(64) by simp(pe8, ab)
+    have hmP: g.mem_defined(w, P, 0, 8, false) := rewrite(sym(pe8), hmA)
+    have pr: int_le(int_add(P, 8), 18446744073709551616) by arith(pe8, hi, hiN, hbd, heb)
+    have ap2: int_le(int_add(int_add(P, 0), 8), int_add(l[1], 0)) || int_le(int_add(int_add(l[1], 0), 304), int_add(P, 0)) by arith(rewrite(sz1, ap1), pe8, l1o, ab)
+    have m1 := apply(g.md_alloc, {w}, {V}, {l}, {SZ}, {P}, {0}, {8}, {false}, hmP, hw, hvb)
+    have m2 := apply(g.md_st_objs, {w}, {V}, {O1}, {int_add(l[1], 0)}, {304}, {0}, {P}, {0}, {8}, {false}, m1)
+    have mdW3: g.mem_defined(W3, P, 0, 8, false) := apply(ms.md_st, {W1}, {V}, {x86_64_linux.store_le(V.bytes, int_add(l[1], 0), 304, 0)}, {int_add(ENV, 0)}, {8}, {envp}, {P}, {0}, {8}, {false}, m2)
+    have rd2: gimple.bytes_at(V, int_add(P, 0), 8) = gimple.bytes_at(w.vm, A, 8) by simp(pe8, rd, ab)
+    have hea2: int_le(int_add(int_add(P, 0), 8), int_add(ENV, 0)) || int_le(int_add(int_add(ENV, 0), 8), int_add(P, 0)) by arith(hea, pe8, hi, hiN, heb)
+    have rv: gimple.bytes_at(VM3, int_add(P, 0), 8) = gimple.bytes_at(w.vm, A, 8) by mem(pe8, ap2, hea2, rd2, l1o, l1r, ab, pb, pr)
+    have _ _ _ svb := apply(ms.world_parts, hw)
+    have vo vl := apply(g.bytes_bound, {w.vm}, {A}, {8}, svb, simp())
+    have bv: bits_of_int(64, gimple.bytes_at(VM3, int_add(P, 0), 8)) = gimple.bytes_at(w.vm, A, 8) := rewrite(sym(rv), apply(mp.boi[x := gimple.bytes_at(w.vm, A, 8)], vo, simp(vl)))
+    have i1: bits_add(64, i, 1) = int_add(i, 1) by defs(arith(hi, hiN, hbd, heb), bits_add, bits_of_int, pow2)
+    have c1: int_lt(i, N) -> (int_lt(i, N) && y = ok(X(int_add(i, 1)), empty)) || (i = N && y = exc(X(i), pair("brk", empty))) proof
+      assume hlt
+      have nz := mp(all_elim(hnz, {i}), hi, hlt)
+      have cnz: !(bits_of_int(64, gimple.bytes_at(VM3, int_add(P, 0), 8)) = 0) := rewrite(sym(bv), nz)
+      step eT from hb with pd, g.ld64_det using conj(w3u, pb, mdW3, cnz)
+      show by taut(hlt, rewrite(i1, eT))
+    qed
+    have c2: i = N -> (int_lt(i, N) && y = ok(X(int_add(i, 1)), empty)) || (i = N && y = exc(X(i), pair("brk", empty))) proof
+      assume heq
+      have z: gimple.bytes_at(w.vm, A, 8) = 0 := rewrite(sym(heq), hz0)
+      have cz: bits_of_int(64, gimple.bytes_at(VM3, int_add(P, 0), 8)) = 0 := trans(bv, z)
+      step eT from hb with pd, g.ld64_det using conj(w3u, pb, mdW3, cz)
+      show by taut(heq, eT)
+    qed
+    show by taut(c1, c2, (int_lt(i, N) || i = N by arith(hiN)))
+  qed
+  let PI(x) := ex i. (i in omega && int_le(i, N)) && x = X(i)
+  let M(x) := int_sub(N, fst(snd(snd(snd(x)))))
+  have p0: PI(X(0)) by ex_intro({0}, taut((0 in omega by simp()), (int_le(0, N) by arith(hN)), refl({X(0)})))
+  have pm: all x. PI(x) -> M(x) in omega proof
+    fix x
+    assume hp
+    obtain i, hi hiN hx from hp
+    show by simp(hx, (int_sub(N, i) in omega by arith(hi, hiN)))
+  qed
+  have nx: all x x2. PI(x) -> BODY(x, ok(x2, empty)) -> PI(x2) && int_lt(M(x2), M(x)) proof
+    fix x x2
+    assume hp hb
+    obtain i, hi hiN hx from hp
+    have t := mp(all_elim(trip, {i}, {ok(x2, empty)}), hi, hiN, rewrite(hx, hb))
+    have nb: !(ok(x2, empty) = exc(X(i), pair("brk", empty))) by defs(simp(), ok, exc)
+    have lt e2 := (int_lt(i, N) && ok(x2, empty) = ok(X(int_add(i, 1)), empty) by taut(t, nb))
+    have xe: x2 = X(int_add(i, 1)) by simp(e2)
+    have p2: PI(x2) by ex_intro({int_add(i, 1)}, taut((int_add(i, 1) in omega by arith(hi)), (int_le(int_add(i, 1), N) by arith(lt)), xe))
+    have m2: int_lt(M(x2), M(x)) by simp(xe, hx, (int_lt(int_sub(N, int_add(i, 1)), int_sub(N, i)) by arith(hi)))
+    show by taut(p2, m2)
+  qed
+  have wv := apply(g.loop[b := x y. BODY(x, y), p := x. PI(x), m := x. M(x)], p0, pm, nx, wl)
+  obtain x, hpl bb nk from wv
+  obtain i, hi hiN hx from hpl
+  have t := mp(all_elim(trip, {i}, {r}), hi, hiN, rewrite(hx, bb))
+  have ok1: !(int_lt(i, N) && r = ok(X(int_add(i, 1)), empty)) proof
+    assume h
+    have _ e := h
+    have io: is_ok(r) by defs(ex_intro({X(int_add(i, 1))}, {empty}, e), is_ok)
+    show by taut(io, nk)
+  qed
+  have ie re := (i = N && r = exc(X(i), pair("brk", empty)) by taut(t, ok1))
+  // after the scan: i = N
+  step h8 from rewrite(ie, rewrite(re, kr))
+  print h8
   show by taut()
 qed
