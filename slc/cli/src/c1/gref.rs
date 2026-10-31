@@ -78,7 +78,7 @@ impl<'e> Gen<'e> {
             return Err("the two functions' domains differ".into());
         }
         // each argument list's program: mkprog(x1 x2. [c ||] bind_rel(P(..), x1, K, X, D)),
-        // or (a function with stack objects) mkprog(x1 x2. letin(A, z. bind_rel(..)))
+        // or (a function with stack objects) mkprog(x1 x2. [c ||] letin(A, z. bind_rel(..)))
         let parts = |g: &Gen, m: &Term| -> Option<(Option<Term>, Option<Term>, Term, Vec<Term>)> {
             let body = g.app(m, "mkprog", 1)?[0].clone();
             let (c, b) = match g.app(&body, "or", 2) {
@@ -86,7 +86,7 @@ impl<'e> Gen<'e> {
                 None => (None, body),
             };
             let (lv, b) = match g.app(&b, "letin", 2) {
-                Some(l) if c.is_none() => (Some(l[0].clone()), l[1].clone()),
+                Some(l) => (Some(l[0].clone()), l[1].clone()),
                 _ => (None, b),
             };
             let br = g.app(&b, "bind_rel", 5)?.to_vec();
@@ -129,7 +129,12 @@ impl<'e> Gen<'e> {
         let x = self.lam(&br[3], &cx(&["y", "e"]), &ps(&["y", "e"])).ok_or("the wrapper's handler")?;
         let d = self.lam(&br[4], &cx(&["t"]), &ps(&["t"])).ok_or("the wrapper's handler")?;
         let wrap = match (&ca, &la) {
-            (_, Some(a)) => {
+            (Some(c), Some(a)) => {
+                let c1 = self.lam(c, &["x1", "x2"], &["x1"]).ok_or("the wrapper's guard")?;
+                let a1 = self.lam(a, &["x1", "x2"], &["x1"]).ok_or("the wrapper's value")?;
+                R::Inst("g.wrap_ref1_let".into(), vec![("c", c1), ("p1", pa.clone()), ("p2", pb.clone()), ("a", a1), ("k", k), ("x", x), ("d", d)])
+            }
+            (None, Some(a)) => {
                 let a1 = self.lam(a, &["x1", "x2"], &["x1"]).ok_or("the wrapper's value")?;
                 R::Inst("g.wrap_ref_let".into(), vec![("p1", pa.clone()), ("p2", pb.clone()), ("a", a1), ("k", k), ("x", x), ("d", d)])
             }
@@ -944,8 +949,13 @@ impl<'e> Gen<'e> {
                         let (a, bb0) = (ab[1].clone(), ab[0].clone());
                         let e2 = self.mk("not", vec![self.mk(other, vec![a.clone(), bb0.clone()])]);
                         let eq = (|| -> Result<Seq, String> {
-                            let (ia, ib) = (self.int_of(&a)?, self.int_of(&bb0)?);
-                            let e = self.run(&mp(R::Inst(lemma.into(), vec![("a", a.clone()), ("b", bb0.clone())]), vec![s(&ia), s(&ib)]), &[])?;
+                            // (operands known integers: g.lt_flip / g.le_flip;
+                            // else -- a loop's counter of no known type -- the
+                            // comparisons' own reading, g.lt_flip_any / g.le_flip_any)
+                            let e = match (self.int_of(&a), self.int_of(&bb0)) {
+                                (Ok(ia), Ok(ib)) => self.run(&mp(R::Inst(lemma.into(), vec![("a", a.clone()), ("b", bb0.clone())]), vec![s(&ia), s(&ib)]), &[])?,
+                                _ => self.run(&R::Inst(format!("{lemma}_any"), vec![("a", a.clone()), ("b", bb0.clone())]), &[])?,
+                            };
                             let eq_t = self.mk("eq", vec![cu2.clone(), e2.clone()]);
                             self.evp(&RP::Taut(vec![R::S(e)]), &eq_t, &[])
                         })();
