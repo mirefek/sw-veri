@@ -80,6 +80,7 @@ const AT_GID    : nat = 13
 const AT_EGID   : nat = 14
 const AT_SECURE : nat = 23
 const AT_RANDOM : nat = 25
+const AT_EXECFN : nat = 31
 
 fn u64_at(vm: Vm, a: nat) -> nat = uint(le(vm.bytes, bits[64](a), 8))
 
@@ -109,6 +110,20 @@ pred auxv_at(vm: Vm, a: nat, auxv: List[(nat, nat)]) =
 
 // the value of an auxv entry (keys are unique)
 pred aux(auxv: List[(nat, nat)], key: nat, v: nat) = ex k: nat. k < len(auxv) && auxv[k] = (key, v)
+
+// the n bytes at a within [sp, top): the initial stack's data
+pred in_stack(sp: nat, top: nat, a: nat, n: nat) = sp <= a && a + n <= top
+
+// where the initial stack's data lies (Linux's create_elf_tables): all of it
+// between sp and the stack's top -- the tables (argc, argv, envp, auxv), the
+// argument and environment strings, AT_RANDOM's 16 bytes, and the
+// executable's name, a string AT_EXECFN points to
+pred stack_data(vm: Vm, sp: nat, top: nat, argv: List[List[bits[8]]], envp: List[List[bits[8]]], auxv: List[(nat, nat)]) =
+  in_stack(sp, top, sp, 24 + 8 * len(argv) + 8 * len(envp) + 16 * len(auxv)) &&
+  (all i: nat. i < len(argv) -> in_stack(sp, top, u64_at(vm, sp + 8 + 8 * i), len(argv[i]) + 1)) &&
+  (all i: nat. i < len(envp) -> in_stack(sp, top, u64_at(vm, sp + 16 + 8 * len(argv) + 8 * i), len(envp[i]) + 1)) &&
+  (ex q: nat. aux(auxv, AT_RANDOM, q) && in_stack(sp, top, q, 16)) &&
+  (ex q: nat, s: List[bits[8]]. aux(auxv, AT_EXECFN, q) && cstring(vm, q, s) && in_stack(sp, top, q, len(s) + 1))
 
 pred auxv_ok(f: File, vm: Vm, os: Os, auxv: List[(nat, nat)]) =
   aux(auxv, AT_PAGESZ, PAGE) && aux(auxv, AT_ENTRY, entry_of(f)) &&
@@ -146,7 +161,8 @@ pred exec_state(f: File, argv: List[List[bits[8]]], envp: List[List[bits[8]]], m
      // was not started with the SVr4 personality MMAP_PAGE_ZERO, which maps it)
      (!covered(f, 0) -> !mapped(m.vm, 0)) &&
      lo * PAGE <= uint(m.gpr[rsp]) && uint(m.gpr[rsp]) < top * PAGE &&
-     stack_layout(m.vm, uint(m.gpr[rsp]), argv, envp, auxv) && auxv_ok(f, m.vm, m.os, auxv)) &&
+     stack_layout(m.vm, uint(m.gpr[rsp]), argv, envp, auxv) && auxv_ok(f, m.vm, m.os, auxv) &&
+     stack_data(m.vm, uint(m.gpr[rsp]), top * PAGE, argv, envp, auxv)) &&
   // brk: page aligned, somewhere above the image (randomized), empty
   uint(m.vm.brk_start) % PAGE = 0 && uint(m.vm.brk_start) >= image_end(f) && uint(m.vm.brk_start) >= PAGE &&
   m.vm.brk = m.vm.brk_start &&
