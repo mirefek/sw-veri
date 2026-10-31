@@ -29,6 +29,16 @@ fn start_writes(g: StartGlobals) -> Set[nat] =
      x in span(g.progname, 8) || x in span(g.progname_full, 8) || x in span(g.default_stacksize, 4) ||
      x in span(g.builtin_tls, 336) || x in span(g.main_tls, 48) || x in span(g.stack_chk_guard, 8)}
 
+// what __init_tls writes: libc's can_do_threads (its first byte) and TLS
+// fields, the main TLS module, the default stack size, the static TLS area
+fn tls_writes(g: StartGlobals) -> Set[nat] =
+  {x: nat | x in span(g.libc, 1) || x in span(g.libc + 16, 32) || x in span(g.default_stacksize, 4) ||
+     x in span(g.builtin_tls, 336) || x in span(g.main_tls, 48)}
+
+// what __init_ssp writes: the guard, the canary in the descriptor (in the
+// static TLS area)
+fn ssp_writes(g: StartGlobals) -> Set[nat] = {x: nat | x in span(g.stack_chk_guard, 8) || x in span(g.builtin_tls, 336)}
+
 // before -> after: only bytes changed, and only those of w or the stack's
 // free bytes (the function's stack objects, dead after it)
 pred frame(before: Vm, after: Vm, objs: Objs, w: Set[nat]) =
@@ -51,7 +61,9 @@ pred auxv_list(vm: Vm, objs: Objs, a: nat, auxv: List[(nat, nat)]) =
   (all k: nat. k < len(auxv) ->
      usable(vm, objs, a + 16 * k, 16, false) &&
      bytes_at(vm, bits[64](a + 16 * k), 8) = auxv[k][0] && bytes_at(vm, bits[64](a + 16 * k + 8), 8) = auxv[k][1]) &&
-  auxv[len(auxv) - 1][0] = AT_NULL && (all k: nat. k + 1 < len(auxv) -> auxv[k][0] != AT_NULL)
+  auxv[len(auxv) - 1][0] = AT_NULL && (all k: nat. k + 1 < len(auxv) -> auxv[k][0] != AT_NULL) &&
+  // (each key once -- Linux's vector)
+  (all k: nat, j: nat. k < len(auxv) && j < len(auxv) && auxv[k][0] = auxv[j][0] -> k = j)
 
 // aux[key] as musl copies it: the pair's value, or 0 (no pair)
 pred aux_is(auxv: List[(nat, nat)], key: nat, v: nat) =
@@ -98,7 +110,7 @@ pred thread_set(vm: Vm, fs: Addr) = thread_ok(vm, fs) && canary_ok(vm, fs)
 // __init_tls(aux): aux the 38 words musl copied the vector to; the thread
 // pointer set to a descriptor in the static TLS area
 pred init_tls_pre(vm: Vm, objs: Objs, g: StartGlobals, aux: Addr) =
-  usable(vm, objs, uint(aux), 304, false) && uint(aux) + 304 < 2^63 &&
+  usable(vm, objs, uint(aux), 304, false) && uint(aux) + 304 <= 2^64 &&
   (all x: nat. uint(aux) <= x && x < uint(aux) + 304 -> x notin start_writes(g)) &&
   globals_ok(vm, objs, g) && tls_fresh(vm, g) &&
   phdrs_ok(vm, objs, bytes_at(vm, aux + 24, 8), bytes_at(vm, aux + 32, 8), bytes_at(vm, aux + 40, 8), start_writes(g))
@@ -107,7 +119,7 @@ proc[World] init_tls_spec(g: StartGlobals, aux: Addr) {
   require init_tls_pre(vm, objs, g, aux)
   either { overflow() } or {
     let before = vm
-    havoc vm where frame(before, vm, objs, start_writes(g)) && (ex fs: Addr. thread_set(vm, fs) && in_tls(g, fs))
+    havoc vm where frame(before, vm, objs, tls_writes(g)) && (ex fs: Addr. thread_set(vm, fs) && in_tls(g, fs))
     fs_base := any fs: Addr where thread_set(vm, fs) && in_tls(g, fs)
   }
 }
@@ -129,7 +141,7 @@ proc[World] init_ssp_spec(g: StartGlobals, entropy: Addr) {
   require init_ssp_pre(vm, objs, g, fs_base, entropy)
   either { overflow() } or {
     let before = vm
-    havoc vm where frame(before, vm, objs, start_writes(g)) && thread_set(vm, fs_base)
+    havoc vm where frame(before, vm, objs, ssp_writes(g)) && thread_set(vm, fs_base)
   }
 }
 

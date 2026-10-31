@@ -12,10 +12,19 @@ proof
   show by defs(sel(taut(io, sp)), startup_specs.start_writes)
 qed
 
+theorem sp.tls_w2: all g i. g.builtin_tls in bits(64) -> i in omega -> int_lt(i, 336) -> int_add(g.builtin_tls, i) in startup_specs.tls_writes(g)
+proof
+  fix g i
+  assume hb hi hil
+  have io: int_add(g.builtin_tls, i) in omega by arith(hb, hi)
+  have sp: int_add(g.builtin_tls, i) in startup_specs.span(g.builtin_tls, 336) by defs(sel(taut(io, (int_le(g.builtin_tls, int_add(g.builtin_tls, i)) && int_lt(int_add(g.builtin_tls, i), int_add(g.builtin_tls, 336)) by arith(hb, hi, hil)))), startup_specs.span)
+  show by defs(sel(taut(io, sp)), startup_specs.tls_writes)
+qed
+
 // (a memory as the spec's: the descriptor's self pointer stored at
 // builtin_tls -- init_tls_spec's choice is possible)
 theorem sp.tls_exists: all g t. t in abi.World -> g.builtin_tls in bits(64) -> startup_specs.globals_ok(t.vm, t.objs, g) ->
-  ex V. V in x86_64_linux.Vm && (startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g)) &&
+  ex V. V in x86_64_linux.Vm && (startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g)) &&
     (ex fs. fs in bits(64) && (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))))
 proof
   fix g t
@@ -36,7 +45,7 @@ proof
     have x := mp(all_elim(hall, {int_add(FS, i)}), arith(hb, hi), apply(sp.tls_w, {g}, {i}, hb, hi, hil))
     show by taut(x)
   qed
-  let W := startup_specs.start_writes(g)
+  let W := startup_specs.tls_writes(g)
   // (the frame: only the descriptor's first word written, in the area)
   have vf: is_fun(t.vm) && "bytes" in dom(t.vm) by simp(tv)
   have f1: fn_update(V, "bytes", t.vm.bytes) = t.vm := trans(fn_update_twice[f := t.vm, k := "bytes", a := x86_64_linux.store_le(t.vm.bytes, FS, 8, FS), b := t.vm.bytes],
@@ -48,7 +57,7 @@ proof
       fix i
       assume hi hil
       have ea := apply(ms.add_i, {FS}, {i}, simp(hb), hi, arith(hb, hi, hil, hbd))
-      have iw := apply(sp.tls_w, {g}, {i}, hb, hi, arith(hil))
+      have iw := apply(sp.tls_w2, {g}, {i}, hb, hi, arith(hil))
       have c: bits_add(64, FS, bits_of_int(64, i)) = x -> false proof
         assume e
         show by taut(hn, rewrite(trans(sym(ea), e), iw))
@@ -117,7 +126,7 @@ qed
 
 theorem sp.tls_q: all g t aux regs o2. t in abi.World -> t in univ(1) -> g.builtin_tls in bits(64) -> aux in bits(64) -> startup_specs.init_tls_pre(t.vm, t.objs, g, aux) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, aux))) -> runs(startup_specs.init_tls_spec_fun(g)[regs], t, o2) ->
-  abi.ovf_out(t, o2) || (ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+  abi.ovf_out(t, o2) || (ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) &&
     (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", fs), r))
 proof
   fix g t aux regs o2
@@ -164,7 +173,7 @@ proof
     have nb: ex z. z in bits(64) by ex_intro({0}, simp())
     obtain z1, _ k5 from apply(g.any_e, nb, k4)
     obtain z2, _ k6 from apply(g.any_e, nb, k5)
-    have x: ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+    have x: ex V fs r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.tls_writes(g))) &&
       (startup_specs.thread_set(V, fs) && startup_specs.in_tls(g, fs))) && o2 = ok(fn_update(fn_update(t, "vm", V), "fs_base", fs), r)
       by ex_intro({V}, {fs}, {pair(z1, z2)}, taut(hV, hfr, hts, hit, k6))
     show by taut(x)
@@ -176,7 +185,7 @@ qed
 // the thread as the precondition has it)
 theorem sp.ssp_q: all g t e regs o2. t in abi.World -> t in univ(1) -> e in bits(64) -> startup_specs.init_ssp_pre(t.vm, t.objs, g, t.fs_base, e) ->
   gc.regs_ok(regs, seq_one(gimple.arg(64, e))) -> runs(startup_specs.init_ssp_spec_fun(g)[regs], t, o2) ->
-  abi.ovf_out(t, o2) || (ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+  abi.ovf_out(t, o2) || (ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.ssp_writes(g))) &&
     startup_specs.thread_set(V, t.fs_base)) && o2 = ok(fn_update(t, "vm", V), r))
 proof
   fix g t e regs o2
@@ -214,14 +223,14 @@ proof
     have tv _ _ _ := apply(ms.world_parts, hw)
     have vf: is_fun(t.vm) && "bytes" in dom(t.vm) by simp(tv)
     have f1: fn_update(t.vm, "bytes", t.vm.bytes) = t.vm := mp(fn_update_same[f := t.vm, k := "bytes"], taut(vf), taut(vf))
-    have f2: all x. x in bits(64) -> !(x in startup_specs.start_writes(g)) -> !abi.stack_free(t.vm, t.objs, x) -> t.vm.bytes[x] = t.vm.bytes[x] proof
+    have f2: all x. x in bits(64) -> !(x in startup_specs.ssp_writes(g)) -> !abi.stack_free(t.vm, t.objs, x) -> t.vm.bytes[x] = t.vm.bytes[x] proof
       fix x
       assume _ _ _
       show := refl({t.vm.bytes[x]})
     qed
-    have fr: startup_specs.frame(t.vm, t.vm, t.objs, startup_specs.start_writes(g)) by defs(taut(f1, f2), startup_specs.frame)
+    have fr: startup_specs.frame(t.vm, t.vm, t.objs, startup_specs.ssp_writes(g)) by defs(taut(f1, f2), startup_specs.frame)
     have ts _ _ _ := expand(hpre, startup_specs.init_ssp_pre)
-    have wx: ex x. x in x86_64_linux.Vm && (startup_specs.frame(t.vm, x, t.objs, startup_specs.start_writes(g)) && startup_specs.thread_set(x, t.fs_base))
+    have wx: ex x. x in x86_64_linux.Vm && (startup_specs.frame(t.vm, x, t.objs, startup_specs.ssp_writes(g)) && startup_specs.thread_set(x, t.fs_base))
       by ex_intro({t.vm}, taut(tv, fr, ts))
     obtain V, hV hfr hts hk from apply(g.any_e, wx, e1)
     have xe := apply(g.letin_e, hk)
@@ -231,7 +240,7 @@ proof
     have nb: ex z. z in bits(64) by ex_intro({0}, simp())
     obtain z1, _ k5 from apply(g.any_e, nb, k4)
     obtain z2, _ k6 from apply(g.any_e, nb, k5)
-    have x: ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.start_writes(g))) &&
+    have x: ex V r. ((V in x86_64_linux.Vm && startup_specs.frame(t.vm, V, t.objs, startup_specs.ssp_writes(g))) &&
       startup_specs.thread_set(V, t.fs_base)) && o2 = ok(fn_update(t, "vm", V), r) by ex_intro({V}, {pair(z1, z2)}, taut(hV, hfr, hts, k6))
     show by taut(x)
   qed
@@ -350,3 +359,70 @@ def sp.il_out(g, w, envp, o) := abi.ovf_out(w, o) ||
      (all n. n in omega -> startup_specs.env_at(w.vm, w.objs, envp, n) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(envp, int_mul(8, int_add(n, 1)))) &&
      fs in bits(64) && startup_specs.thread_set(V, fs)) &&
    o = ok(fn_update(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", L)), "fs_base", fs), empty))
+
+// (two frames, the second a callee's -- the same pages, its objects the
+// first's or more: one frame)
+theorem sp.fr_trans(b1, b2, b3, o1, o2, W): startup_specs.frame(b1, b2, o1, W) -> startup_specs.frame(b2, b3, o2, W) -> b2.pages = b1.pages ->
+  (all x. x in o1.live -> x in o2.live) -> startup_specs.frame(b1, b3, o1, W)
+proof
+  assume f12 f23 hp hl
+  have a1 a2 := expand(f12, startup_specs.frame)
+  have c1 c2 := expand(f23, startup_specs.frame)
+  have t1 := fn_update_twice[f := b3, k := "bytes", a := b2.bytes, b := b1.bytes]
+  have g1: fn_update(b3, "bytes", b1.bytes) = b1 := trans(sym(t1), trans(subst({y. fn_update(fn_update(b3, "bytes", b2.bytes), "bytes", b1.bytes) = fn_update(y, "bytes", b1.bytes)}, c1,
+    refl({fn_update(fn_update(b3, "bytes", b2.bytes), "bytes", b1.bytes)})), a1))
+  have g2: all x. x in bits(64) -> !(x in W) -> !abi.stack_free(b1, o1, x) -> b3.bytes[x] = b1.bytes[x] proof
+    fix x
+    assume hx hnw hns
+    have ns2: !abi.stack_free(b2, o2, x) proof
+      have e1 := expand(hns, abi.stack_free)
+      have c: (x86_64_linux.mapped(b1, int_div(x, x86_64_linux.PAGE)) && !(snd(b1.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2)) || x in o1.live by taut(e1)
+      have d1: x86_64_linux.mapped(b1, int_div(x, x86_64_linux.PAGE)) && !(snd(b1.pages[int_div(x, x86_64_linux.PAGE)]).kind = 2) -> !abi.stack_free(b2, o2, x) proof
+        assume h
+        show by defs(simp(hp, expand(h, x86_64_linux.mapped)), abi.stack_free, x86_64_linux.mapped)
+      qed
+      have d2: x in o1.live -> !abi.stack_free(b2, o2, x) proof
+        assume h
+        have l2 := mp(all_elim(hl, {x}), h)
+        show by defs(taut(l2), abi.stack_free)
+      qed
+      show by taut(c, d1, d2)
+    qed
+    show := trans(mp(all_elim(c2, {x}), hx, hnw, ns2), mp(all_elim(a2, {x}), hx, hnw, hns))
+  qed
+  show by defs(taut(g1, g2), startup_specs.frame)
+qed
+
+// (a frame within a larger write set)
+theorem sp.fr_mono(b, U, o, W1, W2): startup_specs.frame(b, U, o, W1) -> (all x. x in W1 -> x in W2) -> startup_specs.frame(b, U, o, W2)
+proof
+  assume hf hs
+  have a1 a2 := expand(hf, startup_specs.frame)
+  have g2: all x. x in bits(64) -> !(x in W2) -> !abi.stack_free(b, o, x) -> U.bytes[x] = b.bytes[x] proof
+    fix x
+    assume hx hn hns
+    have n1: !(x in W1) proof
+      assume h
+      show by taut(hn, mp(all_elim(hs, {x}), h))
+    qed
+    show := mp(all_elim(a2, {x}), hx, n1, hns)
+  qed
+  show by defs(taut(a1, g2), startup_specs.frame)
+qed
+
+// (envp's words up to its first zero: their number one)
+theorem sp.env_unique(vm, o, e, n1, n2): n1 in omega -> n2 in omega -> startup_specs.env_at(vm, o, e, n1) -> startup_specs.env_at(vm, o, e, n2) -> n1 = n2
+proof
+  assume h1 h2 e1 e2
+  have _ _ _ nz1 z1 := expand(e1, startup_specs.env_at)
+  have _ _ _ nz2 z2 := expand(e2, startup_specs.env_at)
+  have c1: int_lt(n1, n2) -> false proof
+    assume lt
+    show by taut(z1, mp(all_elim(nz2, {n1}), h1, lt))
+  qed
+  have c2: int_lt(n2, n1) -> false proof
+    assume lt
+    show by taut(z2, mp(all_elim(nz1, {n2}), h2, lt))
+  qed
+  show by arith(c1, c2, h1, h2)
+qed
