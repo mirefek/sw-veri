@@ -1686,3 +1686,39 @@ proof
   qed
   show by taut(cN, cP)
 qed
+
+// a function value without a requirement on its arguments
+theorem sp.fun_r0(a. P, a. Q): all regs s o. regs in sp.REGS ->
+  (all o3. runs(P(regs), s, o3) -> sp.as_spec(Q(regs), s, o3)) ->
+  runs(fn_build(sp.REGS, x0. mkprog(x1 x2. bind_rel(P(x0), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o) ->
+  runs(fn_build(sp.REGS, x0. mkprog(x1 x2. bind_rel(Q(x0), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))))[regs], s, o)
+proof
+  fix regs s o
+  assume hr hp h
+  rsimp only, app_fn_build, hr in h
+  rsimp only, app_fn_build, hr
+  have pu := apply(g.runs_univ, h)
+  have b := apply(g.runs_elim, h)
+  obtain o3, hs3 hk3 from expand(b, bind_rel)
+  have q := mp(all_elim(hp, {o3}), hs3)
+  have c := mp(sp.cont_as[Q := Q(regs), s := s, o := o, o3 := o3], hk3, q)
+  show := apply(tr.runs_intro[r := x1 x2. bind_rel(Q(regs), x1, x3 x4. sp.anyv(x3, x2), x3 x4. x2 = exc(x3, x4), x3. x2 = diverge(x3))], {s}, {o}, pu, c)
+qed
+
+// __libc_start_init's C function refines its spec's
+theorem sp.si_fun: all P I FP regs s o. P.init_array = c_src_env___libc_start_main.__init_array_start -> P.init_array_end = c_src_env___libc_start_main.__init_array_end ->
+  mp.calls(I, musl_asm._init_fun()) -> mp.calls(FP[P.ctor], musl_asm.frame_dummy_fun()) ->
+  regs in list_type(bits(64)) -> int_le(seq_len(regs), 6) -> s in abi.World ->
+  runs(c_src_env___libc_start_main.libc_start_init_fun(I, FP)[regs], s, o) -> runs(startup_specs.start_init_spec_fun(P)[regs], s, o)
+proof
+  fix P I FP regs s o
+  assume hia hie hI hFP hr hl hw h
+  have ra := mp(sp.regs_in[regs := regs], hr, hl)
+  have hp: all o3. runs(c_src_env___libc_start_main.libc_start_init(I, FP), s, o3) -> sp.as_spec(startup_specs.start_init_spec(P), s, o3) proof
+    fix o3
+    assume r3
+    show := mp(all_elim(sp.si_run, {P}, {I}, {FP}, {s}, {o3}), hw, hia, hie, hI, hFP, r3)
+  qed
+  show by defs(apply(sp.fun_r0[P := a. c_src_env___libc_start_main.libc_start_init(I, FP), Q := a. startup_specs.start_init_spec(P)],
+    {regs}, {s}, {o}, ra, hp, expand(h, c_src_env___libc_start_main.libc_start_init_fun)), startup_specs.start_init_spec_fun)
+qed
