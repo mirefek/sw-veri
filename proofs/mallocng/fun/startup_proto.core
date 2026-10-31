@@ -2071,3 +2071,101 @@ proof
   have r2 := mp(all_elim(r1, {N}), hN, e0, e1, e2, hnz, hz0, hea, taut(mH), taut(mS), taut(mL48), taut(mP), taut(mF), taut(mF))
   show := mp(all_elim(r2, {AX}), axt, ax1, axk, axe, axn, a2, axe1, axe2, hpn, hex, hstr, hglob, htf, hph, hrnd, huid, hsec, huniq, henv)
 qed
+
+// ----------------------------------------------------------------------
+//  The spec's runs
+
+// (an overflow with the thread pointer f: overflow_start's)
+theorem sp.ovs_intro: all s f v ob. s in univ(1) -> f in bits(64) -> v in x86_64_linux.Vm -> ob in abi.Objs ->
+  pair(s, exc(fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob), exc_val("stack_overflow", empty))) in univ(1) ->
+  runs(startup_specs.overflow_start, s, exc(fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob), exc_val("stack_overflow", empty)))
+proof
+  fix s f v ob
+  assume hu hf hv hob pu
+  let S1 := fn_update(s, "fs_base", f)
+  let O := exc(fn_update(fn_update(S1, "vm", v), "objs", ob), exc_val("stack_overflow", empty))
+  have fu: f in univ(1) by simp(hf)
+  have pu1: pair(S1, O) in univ(1) by simp(pu, hu, fu)
+  have r1 := apply(ct.overflow_intro, hv, hob, pu1)
+  have bo: bind_rel(abi.overflow, S1, x4 x5. O = ok(x4, empty), x4 x5. O = exc(x4, x5), x4. O = diverge(x4)) by defs(ex_intro({O}, simp(r1, pu1)), bind_rel)
+  have b: any_rel(x2. x2 in bits(64), x2. letin(fn_update(s, "fs_base", x2), x3. bind_rel(abi.overflow, x3, x4 x5. O = ok(x4, empty), x4 x5. O = exc(x4, x5), x4. O = diverge(x4))))
+    by defs(taut((ex x2. x2 in bits(64) && bind_rel(abi.overflow, fn_update(s, "fs_base", x2), x4 x5. O = ok(x4, empty), x4 x5. O = exc(x4, x5), x4. O = diverge(x4)) by ex_intro({f}, taut(hf, bo)))), any_rel, letin)
+  show by defs(apply(tr.runs_intro[r := x0 x1. any_rel(x2. x2 in bits(64), x2. letin(fn_update(x0, "fs_base", x2), x3. bind_rel(abi.overflow, x3, x4 x5. x1 = ok(x4, empty),
+    x4 x5. x1 = exc(x4, x5), x4. x1 = diverge(x4))))], {s}, {O}, pu, b), startup_specs.overflow_start)
+qed
+
+// (abi's overflow: one with the thread pointer as it was)
+theorem sp.ovf_out_any(s, o): s in abi.World -> abi.ovf_out(s, o) -> sp.ovf_any(s, o)
+proof
+  assume hw h
+  obtain v ob, hv hob ho from h
+  have _ pf _ _ := apply(ms.world_parts, hw)
+  have fd: "fs_base" in dom(s) by simp(expand(hw, abi.World))
+  have fb: s.fs_base in bits(64) by simp(expand(hw, abi.World))
+  have e := mp(fn_update_same[f := s, k := "fs_base"], pf, fd)
+  have ho2 := subst({y. o = exc(fn_update(fn_update(y, "vm", v), "objs", ob), exc_val("stack_overflow", empty))}, sym(e), ho)
+  show by defs(ex_intro({s.fs_base}, {v}, {ob}, taut(fb, hv, hob, ho2)), sp.ovf_any)
+qed
+
+// (its requirement not met: anything; else an overflow, or the memory
+// within the frame, libc.auxv set, the thread set up)
+theorem sp.ils_run(g, envp, pn, s, o): s in abi.World -> pair(s, o) in univ(1) ->
+  (!startup_specs.init_libc_pre(s.vm, s.objs, g, envp, pn) || sp.ovf_any(s, o) ||
+   (ex V fs. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.start_writes(g))) &&
+      (all n. n in omega -> startup_specs.env_at(s.vm, s.objs, envp, n) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(envp, int_mul(8, int_add(n, 1)))) &&
+      fs in bits(64) && startup_specs.thread_set(V, fs)) && o = ok(fn_update(fn_update(s, "vm", V), "fs_base", fs), empty))) ->
+  runs(startup_specs.init_libc_spec(g, envp, pn), s, o)
+proof
+  assume hw pu h
+  let OVF := exc_val("stack_overflow", empty)
+  let SW := startup_specs.start_writes(g)
+  let PRE(x0) := startup_specs.init_libc_pre(app(x0, "vm"), app(x0, "objs"), g, envp, pn)
+  let BR1(x0, x2) := bind_rel(startup_specs.overflow_start, x0, x3 x4. x2 = ok(pair(x3, empty), empty), x3 x4. x2 = exc(pair(x3, empty), pair("raise", x4)), x3. x2 = diverge(x3))
+  let BR2(x0, x2) := letin(app(x0, "vm"), x3. any_rel(x4. x4 in x86_64_linux.Vm && ((startup_specs.frame(x3, app(fn_update(x0, "vm", x4), "vm"), app(fn_update(x0, "vm", x4), "objs"), SW) &&
+    (all x5. x5 in omega -> startup_specs.env_at(x3, app(fn_update(x0, "vm", x4), "objs"), envp, x5) -> gimple.bytes_at(app(fn_update(x0, "vm", x4), "vm"), bits_add(64, g.libc, 8), 8) =
+      int_add(envp, int_mul(8, int_add(x5, 1))))) && (ex x5. x5 in bits(64) && startup_specs.thread_set(app(fn_update(x0, "vm", x4), "vm"), x5))),
+    x4. letin(fn_update(x0, "vm", x4), x5. any_rel(x6. x6 in bits(64) && startup_specs.thread_set(app(x5, "vm"), x6), x6. letin(fn_update(x5, "fs_base", x6), x7. x2 = ok(pair(x7, empty), empty))))))
+  let DS(x2, x1) := (fst(x2) = 0 && x1 = ok(fst(out_state(x2)), empty)) || ((((fst(x2) = 1 && fst(out_value(x2)) = "ret") && x1 = ok(fst(out_state(x2)), snd(out_value(x2)))) ||
+    ((fst(x2) = 1 && fst(out_value(x2)) = "raise") && x1 = exc(fst(out_state(x2)), snd(out_value(x2))))) || (fst(x2) = 2 && x1 = diverge(snd(x2))))
+  let SB(x0, x1) := !PRE(x0) || (ex x2. (BR1(x0, x2) || BR2(x0, x2)) && DS(x2, x1))
+  have hu: s in univ(1) by simp(pu)
+  have g0: SB(s, o) proof
+    have c1: !PRE(s) -> SB(s, o) proof
+      assume hn
+      show by taut(hn)
+    qed
+    have c2: sp.ovf_any(s, o) -> SB(s, o) proof
+      assume e
+      obtain f v ob, hf hv hob ho from expand(e, sp.ovf_any)
+      let WO := fn_update(fn_update(fn_update(s, "fs_base", f), "vm", v), "objs", ob)
+      let X2 := exc(pair(WO, empty), pair("raise", OVF))
+      have pu1 := rewrite(ho, pu)
+      have r1 := apply(sp.ovs_intro, {s}, {f}, {v}, {ob}, hu, hf, hv, hob, pu1)
+      have cx: ex x3 x4. exc(WO, OVF) = exc(x3, x4) && X2 = exc(pair(x3, empty), pair("raise", x4)) by ex_intro({WO}, {OVF}, taut(refl({exc(WO, OVF)}), refl({X2})))
+      have b1: BR1(s, X2) by defs(ex_intro({exc(WO, OVF)}, taut(r1, cx)), bind_rel)
+      have d1: DS(X2, o) by simp(ho)
+      show by taut((ex x2. (BR1(s, x2) || BR2(s, x2)) && DS(x2, o) by ex_intro({X2}, taut(b1, d1))))
+    qed
+    have c3: (ex V fs. ((V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, SW)) &&
+        (all n. n in omega -> startup_specs.env_at(s.vm, s.objs, envp, n) -> gimple.bytes_at(V, bits_add(64, g.libc, 8), 8) = int_add(envp, int_mul(8, int_add(n, 1)))) &&
+        fs in bits(64) && startup_specs.thread_set(V, fs)) && o = ok(fn_update(fn_update(s, "vm", V), "fs_base", fs), empty)) -> SB(s, o) proof
+      assume e
+      obtain V fs, hV hfr hl8 hfs hts ho from e
+      let WV := fn_update(s, "vm", V)
+      let X2 := ok(pair(fn_update(WV, "fs_base", fs), empty), empty)
+      have ar: any_rel(x6. x6 in bits(64) && startup_specs.thread_set(V, x6), x6. X2 = ok(pair(fn_update(WV, "fs_base", x6), empty), empty))
+        by defs(taut((ex x6. (x6 in bits(64) && startup_specs.thread_set(V, x6)) && X2 = ok(pair(fn_update(WV, "fs_base", x6), empty), empty) by ex_intro({fs}, taut(hfs, hts, refl({X2}))))), any_rel)
+      have et: ex x5. x5 in bits(64) && startup_specs.thread_set(V, x5) by ex_intro({fs}, taut(hfs, hts))
+      have ev: ex x4. (x4 in x86_64_linux.Vm && ((startup_specs.frame(s.vm, app(fn_update(s, "vm", x4), "vm"), app(fn_update(s, "vm", x4), "objs"), SW) &&
+          (all x5. x5 in omega -> startup_specs.env_at(s.vm, app(fn_update(s, "vm", x4), "objs"), envp, x5) -> gimple.bytes_at(app(fn_update(s, "vm", x4), "vm"), bits_add(64, g.libc, 8), 8) =
+            int_add(envp, int_mul(8, int_add(x5, 1))))) && (ex x5. x5 in bits(64) && startup_specs.thread_set(app(fn_update(s, "vm", x4), "vm"), x5)))) &&
+          letin(fn_update(s, "vm", x4), x5. any_rel(x6. x6 in bits(64) && startup_specs.thread_set(app(x5, "vm"), x6), x6. letin(fn_update(x5, "fs_base", x6), x7. X2 = ok(pair(x7, empty), empty))))
+        by ex_intro({V}, defs(simp(hV, hfr, hl8, et, ar, keep(startup_specs.frame, startup_specs.env_at, startup_specs.thread_set, any_rel)), letin))
+      have b2: BR2(s, X2) by defs(taut(expand(ev, any_rel, letin)), any_rel, letin)
+      have d2: DS(X2, o) by simp(ho)
+      show by taut((ex x2. (BR1(s, x2) || BR2(s, x2)) && DS(x2, o) by ex_intro({X2}, taut(b2, d2))))
+    qed
+    show by taut(h, c1, c2, c3)
+  qed
+  show by defs(apply(tr.runs_intro[r := x0 x1. SB(x0, x1)], {s}, {o}, pu, g0), startup_specs.init_libc_spec)
+qed
