@@ -318,6 +318,12 @@ proof
   show := apply(mp.bytes_same[U := U, vm := M, a := a, n := n], hn, pe)
 qed
 
+// a C string of L bytes at p, its NUL after them: readable, below the
+// startup globals or above them, low enough for pointer arithmetic
+def sp.cstr(vm, objs, p, L) := ((p in omega && L in omega) && !(p = 0)) && gimple.usable(vm, objs, p, int_add(L, 1), false) &&
+  (all i. i in omega -> int_lt(i, L) -> !(gimple.bytes_at(vm, int_add(p, i), 1) = 0)) && gimple.bytes_at(vm, int_add(p, L), 1) = 0 &&
+  (int_le(int_add(int_add(p, L), 1), 4227112) || int_le(4228272, p)) && int_lt(int_add(int_add(p, L), 1), int_pow(2, 63))
+
 theorem sp.il_probe: all envp pn G1 G2 G3 G4 G5 w o. w in abi.World -> runs(c_src_env___libc_start_main.__init_libc(envp, pn, G1, G2, G3, G4, G5), w, o) ->
   envp in bits(64) -> g.mem_defined(w, c_src_env___libc_start_main.__environ, 0, 8, true) -> g.mem_defined(w, c_src_env___libc_start_main.__libc, 8, 8, true) ->
   // envp: N words, nonzero, then a zero word (readable, apart from __environ)
@@ -344,6 +350,10 @@ theorem sp.il_probe: all envp pn G1 G2 G3 G4 G5 w o. w in abi.World -> runs(c_sr
         int_le(int_add(c_src_env___libc_start_main.__environ, 8), int_add(envp, int_mul(8, int_add(N, 1)))) ->
       int_le(int_add(int_add(envp, int_mul(8, int_add(N, 1))), int_mul(16, seq_len(AX))), int_add(c_src_env___libc_start_main.__libc, 8)) ||
         int_le(int_add(c_src_env___libc_start_main.__libc, 16), int_add(envp, int_mul(8, int_add(N, 1)))) ->
+      // (the program's name: pn, AT_EXECFN's, "" -- C strings)
+      (!(pn = 0) -> (ex L. sp.cstr(w.vm, w.objs, pn, L))) ->
+      (all m. m in omega -> int_lt(m, seq_len(AX)) -> fst(AX[m]) = 31 -> !(snd(AX[m]) = 0) -> (ex L. sp.cstr(w.vm, w.objs, snd(AX[m]), L))) ->
+      (ex L. sp.cstr(w.vm, w.objs, c_src_env___libc_start_main.str_, L)) ->
   abi.ovf_out(w, o) || true))
 proof
   fix envp pn G1 G2 G3 G4 G5 w o
@@ -351,7 +361,7 @@ proof
   fix N
   assume hN hen0 hbd hus hnz hz0 hea hhw hsi hps hpg hpf hpfr hst
   fix AX
-  assume axt ax1 axk axe axn axb axe1 axe2
+  assume axt ax1 axk axe axn axb axe1 axe2 hpn hex hstr
   have pu := apply(g.runs_univ, hr)
   have hu: w in univ(1) by simp(pu)
   step a1 a2 a3 o1 l V, hk hll hfit hVm hvb hvf from hr with g.alloc_inv using conj(hw, hu)
@@ -688,6 +698,12 @@ proof
   have _ _ lbu := hlb
   have apE := rewrite(sz1, apply(g.alloc_apart[vm := w.vm, objs := w.objs, sz := SZ, l := l, k := 1, a := int_add(ENV, 0), n := 8, wr := true], hfit, simp(), simp(szl), l1o, simp(sz1), evu, arith(envb), simp(), simp()))
   have apL := rewrite(sz1, apply(g.alloc_apart[vm := w.vm, objs := w.objs, sz := SZ, l := l, k := 1, a := int_add(LB, 8), n := 8, wr := true], hfit, simp(), simp(szl), l1o, simp(sz1), lbu, arith(lbb), simp(), simp()))
+  have _ _ hwu := hhw
+  have _ _ siu := hsi
+  have _ _ psu := hps
+  have apH := rewrite(sz1, apply(g.alloc_apart[vm := w.vm, objs := w.objs, sz := SZ, l := l, k := 1, a := int_add(c_src_env___libc_start_main.__hwcap, 0), n := 8, wr := true], hfit, simp(), simp(szl), l1o, simp(sz1), hwu, defs(simp(), c_src_env___libc_start_main.__hwcap), simp(), simp()))
+  have apS := rewrite(sz1, apply(g.alloc_apart[vm := w.vm, objs := w.objs, sz := SZ, l := l, k := 1, a := int_add(c_src_env___libc_start_main.__sysinfo, 0), n := 8, wr := true], hfit, simp(), simp(szl), l1o, simp(sz1), siu, defs(simp(), c_src_env___libc_start_main.__sysinfo), simp(), simp()))
+  have apP := rewrite(sz1, apply(g.alloc_apart[vm := w.vm, objs := w.objs, sz := SZ, l := l, k := 1, a := int_add(LB, 48), n := 8, wr := true], hfit, simp(), simp(szl), l1o, simp(sz1), psu, arith(lbb), simp(), simp()))
   have a4: all j. j in omega -> int_le(j, 37) -> sp.aux_val(AX, 0, j, gimple.bytes_at(VM4, int_add(L1, int_mul(8, j)), 8)) proof
     fix j
     assume hj hj37
@@ -816,7 +832,7 @@ proof
     let A31 := bits_of_int(64, gimple.bytes_at(U7, int_add(l[1], 248), 8))
     let K13(x) := rest(h13)
     obtain x13, hif2 hK2 from h13
-    have J2: all p1. p1 = pn || p1 = A31 -> K13(ok(pair(W7, pair(p1, R)), empty)) -> abi.ovf_out(w, o) || true proof
+    have J2: all p1. p1 = 0 || (ex L. sp.cstr(w.vm, w.objs, p1, L)) -> K13(ok(pair(W7, pair(p1, R)), empty)) -> abi.ovf_out(w, o) || true proof
       fix p1
       assume hp1 hk7
       step h14 from hk7
@@ -834,7 +850,7 @@ proof
       qed
       let K14(x) := rest(h14)
       obtain x14, hif3 hK3 from h14
-      have J3: all p2. !(p2 = 0) && (p2 = p1 || p2 = STR) -> K14(ok(pair(W7, pair(p2, R)), empty)) -> abi.ovf_out(w, o) || true proof
+      have J3: all p2. (ex L. sp.cstr(w.vm, w.objs, p2, L)) -> K14(ok(pair(W7, pair(p2, R)), empty)) -> abi.ovf_out(w, o) || true proof
         fix p2
         assume hp2 hk8
         have pfb: PF in bits(64) by defs(simp(), c_src_env___libc_start_main.__progname_full)
@@ -851,25 +867,58 @@ proof
       have z: p1 = 0 -> abi.ovf_out(w, o) || true proof
         assume h0
         step xe from hif3 using conj(h0)
-        have sn: !(STR = 0) by defs(simp(), c_src_env___libc_start_main.str_)
-        show := mp(all_elim(J3, {STR}), taut(sn, refl({STR})), rewrite(xe, hK3))
+        show := mp(all_elim(J3, {STR}), hstr, rewrite(xe, hK3))
       qed
       have nz: !(p1 = 0) -> abi.ovf_out(w, o) || true proof
         assume h0
         step xe from hif3 using conj(h0)
-        show := mp(all_elim(J3, {p1}), taut(h0, refl({p1})), rewrite(xe, hK3))
+        show := mp(all_elim(J3, {p1}), taut(hp1, h0), rewrite(xe, hK3))
       qed
       show by taut(z, nz)
     qed
     have z: pn = 0 -> abi.ovf_out(w, o) || true proof
       assume h0
       step xe from hif2 with g.ld64_det using conj(h0, w7u, l1b, mA31)
-      show := mp(all_elim(J2, {A31}), (A31 = pn || A31 = A31 by taut(refl({A31}))), rewrite(xe, hK2))
+      // (aux[AT_EXECFN] as the copy left it: AT_EXECFN's value, or 0)
+      have r1: gimple.bytes_at(U7, int_add(l[1], 248), 8) = gimple.bytes_at(U6, int_add(l[1], 248), 8) by mem(l1o, l1r, lbb, apP)
+      have r2 := apply(g.read_outside[U := U6, M := U5, b := SI, m := 8, a := int_add(l[1], 248), n := 8], hU6o, arith(l1o, l1r, apS), arith(l1o), simp(), arith(l1o, l1r))
+      have r3: gimple.bytes_at(U5, int_add(l[1], 248), 8) = gimple.bytes_at(UE, int_add(L1, int_mul(8, 31)), 8) by mem(l1o, l1r, hwb, apH)
+      have av := rewrite(sym(trans(r1, trans(r2, r3))), mp(all_elim(hUEa, {31}), simp(), simp()))
+      have _ _ _ svb := apply(ms.world_parts, hw)
+      have A31c: A31 = 0 || (ex L. sp.cstr(w.vm, w.objs, A31, L)) proof
+        let VA := gimple.bytes_at(U7, int_add(l[1], 248), 8)
+        have c1: (ex m. (m in omega && int_lt(m, kE)) && fst(AX[m]) = 31 && snd(AX[m]) = VA) -> A31 = 0 || (ex L. sp.cstr(w.vm, w.objs, A31, L)) proof
+          assume h
+          obtain m, hm hml hk31 hv from h
+          have mo := apply(at_type[l := AX, t := cart(omega, omega), i := m], axt, hm, arith(hml, kl))
+          have _ _ kv1 := mp(all_elim(axk, {m}), hm, arith(hml, kl))
+          have vo vl := apply(g.bytes_bound, {w.vm}, {int_add(int_add(int_add(envp, int_mul(8, int_add(N, 1))), int_mul(16, m)), 8)}, {8}, svb, simp())
+          have ab: A31 = VA := apply(mp.boi[x := VA], arith(hv, kv1, vo), arith(hv, kv1, vl))
+          have cz: VA = 0 -> A31 = 0 || (ex L. sp.cstr(w.vm, w.objs, A31, L)) proof
+            assume h0
+            show by taut(trans(ab, h0))
+          qed
+          have cn: !(VA = 0) -> A31 = 0 || (ex L. sp.cstr(w.vm, w.objs, A31, L)) proof
+            assume hn
+            have cs := mp(all_elim(hex, {m}), hm, arith(hml, kl), hk31, rewrite(sym(hv), hn))
+            show by taut(rewrite(trans(hv, sym(ab)), cs))
+          qed
+          show by taut(cz, cn)
+        qed
+        have c2: !(ex m. (m in omega && int_lt(m, kE)) && fst(AX[m]) = 31) && VA = 0 -> A31 = 0 || (ex L. sp.cstr(w.vm, w.objs, A31, L)) proof
+          assume h
+          have _ h0 := h
+          have a0: A31 = 0 by simp(h0)
+          show by taut(a0)
+        qed
+        show by taut(expand(av, sp.aux_val), c1, c2)
+      qed
+      show := mp(all_elim(J2, {A31}), A31c, rewrite(xe, hK2))
     qed
     have nz: !(pn = 0) -> abi.ovf_out(w, o) || true proof
       assume h0
       step xe from hif2 using conj(h0)
-      show := mp(all_elim(J2, {pn}), (pn = pn || pn = A31 by taut(refl({pn}))), rewrite(xe, hK2))
+      show := mp(all_elim(J2, {pn}), taut(mp(hpn, h0)), rewrite(xe, hK2))
     qed
     show by taut(z, nz)
   qed
