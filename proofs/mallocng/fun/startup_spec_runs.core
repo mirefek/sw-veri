@@ -237,3 +237,105 @@ proof
   qed
   show by taut(hbr, k1, k2)
 qed
+
+// ----------------------------------------------------------------------
+//  Frames (startup_specs.frame): built step by step -- an allocation, a
+//  store of bytes the frame allows, a memory as another but in a region the
+//  frame allows -- and read: bytes usable at the start and not written read
+//  as at the start
+
+theorem sp.fr_alloc(b, V, objs, sz, l, W): gimple.objs_fit(b, objs, sz, l) -> fn_update(V, "bytes", b.bytes) = b ->
+  (all x5. x5 in bits(64) -> (all x6. x6 in omega -> int_lt(x6, seq_len(sz)) -> !(int_le(l[x6], x5) && int_lt(x5, int_add(l[x6], fst(sz[x6]))))) ->
+    V.bytes[x5] = b.bytes[x5]) ->
+  startup_specs.frame(b, V, objs, W)
+proof
+  assume hf hb hv
+  have _ hall _ := expand(hf, gimple.objs_fit)
+  have f2: all x. x in bits(64) -> !(x in W) -> !abi.stack_free(b, objs, x) -> V.bytes[x] = b.bytes[x] proof
+    fix x
+    assume hx _ hn
+    have out: all x6. x6 in omega -> int_lt(x6, seq_len(sz)) -> !(int_le(l[x6], x) && int_lt(x, int_add(l[x6], fst(sz[x6])))) proof
+      fix x6
+      assume h6 h6l
+      have _ _ _ sf := mp(all_elim(hall, {x6}), h6, h6l)
+      have c: int_le(l[x6], x) && int_lt(x, int_add(l[x6], fst(sz[x6]))) -> false proof
+        assume hin
+        show by taut(hn, mp(all_elim(sf, {x}), (x in omega by simp(hx)), hin))
+      qed
+      show by taut(c)
+    qed
+    show := mp(all_elim(hv, {x}), hx, out)
+  qed
+  show by defs(taut(hb, f2), startup_specs.frame)
+qed
+
+theorem sp.fr_store(b, U, objs, W, a, n, v): startup_specs.frame(b, U, objs, W) -> a in bits(64) -> n in omega -> int_le(int_add(a, n), 18446744073709551616) ->
+  (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in W || abi.stack_free(b, objs, int_add(a, i))) ->
+  startup_specs.frame(b, fn_update(U, "bytes", x86_64_linux.store_le(U.bytes, a, n, v)), objs, W)
+proof
+  assume hf ha hn hl hw
+  have f1 f2 := expand(hf, startup_specs.frame)
+  have g1: fn_update(fn_update(U, "bytes", x86_64_linux.store_le(U.bytes, a, n, v)), "bytes", b.bytes) = b :=
+    trans(fn_update_twice[f := U, k := "bytes", a := x86_64_linux.store_le(U.bytes, a, n, v), b := b.bytes], f1)
+  have g2: all x. x in bits(64) -> !(x in W) -> !abi.stack_free(b, objs, x) -> fn_update(U, "bytes", x86_64_linux.store_le(U.bytes, a, n, v)).bytes[x] = b.bytes[x] proof
+    fix x
+    assume hx hnw hns
+    have ne: all i. i in omega -> int_lt(i, n) -> !(bits_add(64, a, bits_of_int(64, i)) = x) proof
+      fix i
+      assume hi hil
+      have ea := apply(ms.add_i, {a}, {i}, simp(ha), hi, arith(ha, hi, hil, hl))
+      have c: bits_add(64, a, bits_of_int(64, i)) = x -> false proof
+        assume e
+        have e2: int_add(a, i) = x := trans(sym(ea), e)
+        show by taut(hnw, hns, rewrite(e2, mp(all_elim(hw, {i}), hi, hil)))
+      qed
+      show by taut(c)
+    qed
+    have so := apply(x86.store_outside, {U.bytes}, {a}, {n}, {v}, {x}, hx, ne)
+    have e1: fn_update(U, "bytes", x86_64_linux.store_le(U.bytes, a, n, v)).bytes[x] = U.bytes[x] by simp(so)
+    show := trans(e1, mp(all_elim(f2, {x}), hx, hnw, hns))
+  qed
+  show by defs(taut(g1, g2), startup_specs.frame)
+qed
+
+theorem sp.fr_out(b, M, U, objs, W, c, m): startup_specs.frame(b, M, objs, W) -> fn_update(U, "bytes", M.bytes) = M ->
+  (all x. x in bits(64) -> !(int_le(c, x) && int_lt(x, int_add(c, m))) -> U.bytes[x] = M.bytes[x]) ->
+  (all x. x in omega -> int_le(c, x) -> int_lt(x, int_add(c, m)) -> x in W || abi.stack_free(b, objs, x)) ->
+  startup_specs.frame(b, U, objs, W)
+proof
+  assume hf hu ho hw
+  have f1 f2 := expand(hf, startup_specs.frame)
+  have t1 := fn_update_twice[f := U, k := "bytes", a := M.bytes, b := b.bytes]
+  have g1: fn_update(U, "bytes", b.bytes) = b := trans(sym(t1), trans(subst({y. fn_update(fn_update(U, "bytes", M.bytes), "bytes", b.bytes) = fn_update(y, "bytes", b.bytes)}, hu,
+    refl({fn_update(fn_update(U, "bytes", M.bytes), "bytes", b.bytes)})), f1))
+  have g2: all x. x in bits(64) -> !(x in W) -> !abi.stack_free(b, objs, x) -> U.bytes[x] = b.bytes[x] proof
+    fix x
+    assume hx hnw hns
+    have c: int_le(c, x) && int_lt(x, int_add(c, m)) -> false proof
+      assume hin
+      have _ _ := hin
+      show by taut(hnw, hns, mp(all_elim(hw, {x}), (x in omega by simp(hx)), hin.1, hin.2))
+    qed
+    have uo := mp(all_elim(ho, {x}), hx, (!(int_le(c, x) && int_lt(x, int_add(c, m))) by taut(c)))
+    show := trans(uo, mp(all_elim(f2, {x}), hx, hnw, hns))
+  qed
+  show by defs(taut(g1, g2), startup_specs.frame)
+qed
+
+theorem sp.fr_read(b, U, objs, W, a, n, wr): startup_specs.frame(b, U, objs, W) -> gimple.usable(b, objs, a, n, wr) ->
+  (all i. i in omega -> int_lt(i, n) -> !(int_add(a, i) in W)) -> a in omega -> n in omega ->
+  gimple.bytes_at(U, a, n) = gimple.bytes_at(b, a, n)
+proof
+  assume hf hu hw ha hn
+  have _ f2 := expand(hf, startup_specs.frame)
+  have pe: all i. i in omega -> int_lt(i, n) -> U.bytes[bits_add(64, a, bits_of_int(64, i))] = b.bytes[bits_add(64, a, bits_of_int(64, i))] proof
+    fix i
+    assume hi hil
+    have nf := apply(mp.nofree[vm := b, objs := objs, a := a, n := n, w := wr, i := i], hu, hi, hil)
+    have lt := apply(mp.usable_lt[vm := b, objs := objs, a := a, n := n, w := wr, i := i], hu, ha, hi, hil)
+    have ea: bits_add(64, a, bits_of_int(64, i)) = int_add(a, i) by defs(arith(ha, hi, lt), bits_add, bits_of_int, pow2)
+    have ab: int_add(a, i) in bits(64) by arith(ha, hi, lt)
+    show := rewrite(sym(ea), mp(all_elim(f2, {int_add(a, i)}), ab, mp(all_elim(hw, {i}), hi, hil), nf))
+  qed
+  show := apply(mp.bytes_same[U := U, vm := b, a := a, n := n], hn, pe)
+qed
