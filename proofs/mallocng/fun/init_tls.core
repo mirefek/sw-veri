@@ -598,3 +598,105 @@ proof
   qed
   show by taut(ci, cA, cB, cC, cD)
 qed
+
+// ----------------------------------------------------------------------
+//  __copy_tls(builtin_tls): no TLS module; the descriptor at its end,
+//  aligned (builtin_tls + 24), its dtv the area's start
+
+abbrev sp.ctl_out(g, s, o) := ex V. (V in x86_64_linux.Vm && startup_specs.frame(s.vm, V, s.objs, startup_specs.tls_writes(g))) &&
+  o = ok(fn_update(s, "vm", V), int_add(c_src_env___init_tls.builtin_tls, 24))
+
+theorem sp.ctl_run: all g MC s o. s in abi.World -> runs(c_src_env___init_tls.__copy_tls(c_src_env___init_tls.builtin_tls, MC), s, o) ->
+  g.libc = c_src_env___init_tls.__libc -> g.builtin_tls = c_src_env___init_tls.builtin_tls -> startup_specs.globals_ok(s.vm, s.objs, g) ->
+  gimple.bytes_at(s.vm, int_add(c_src_env___init_tls.__libc, 16), 8) = 0 -> gimple.bytes_at(s.vm, int_add(c_src_env___init_tls.__libc, 24), 8) = 224 ->
+  gimple.bytes_at(s.vm, int_add(c_src_env___init_tls.__libc, 32), 8) = 8 -> gimple.bytes_at(s.vm, int_add(c_src_env___init_tls.__libc, 40), 8) = 0 ->
+  sp.ctl_out(g, s, o)
+proof
+  fix g MC s o
+  assume hw hr hgL hgB hglob hhd hsz hal hcn
+  have pu := apply(g.runs_univ, expand(hr, c_src_env___init_tls.__copy_tls))
+  have hu: s in univ(1) by simp(pu)
+  have sv pf pd sb := apply(ms.world_parts, hw)
+  let LIB := c_src_env___init_tls.__libc
+  let BT := c_src_env___init_tls.builtin_tls
+  have btv: BT = 4228288 by defs(refl({4228288}), c_src_env___init_tls.builtin_tls)
+  have lbv: LIB = 4227136 by defs(refl({4227136}), c_src_env___init_tls.__libc)
+  have lb: LIB in bits(64) by defs(simp(), c_src_env___init_tls.__libc)
+  have bb: BT in bits(64) by defs(simp(), c_src_env___init_tls.builtin_tls)
+  // (libc's TLS fields: readable)
+  have rL: all x. x in omega -> int_le(g.libc, x) -> int_lt(x, int_add(g.libc, 56)) -> x in startup_specs.start_writes(g) proof
+    fix x
+    assume xo h1 h2
+    show := apply(sp.sw_rng, {g}, {x}, xo, taut(apply(sp.in_span, {g.libc}, {56}, {x}, xo, h1, h2)))
+  qed
+  have _ ul := apply(sp.glob_usable, {g}, {s.vm}, {s.objs}, {g.libc}, {56}, hglob, arith(hgL, lbv), rL)
+  have ul2: gimple.usable(s.vm, s.objs, LIB, 56, false) := rewrite(hgL, ul)
+  have u16 := apply(mp.usable_sub[vm := s.vm, objs := s.objs, a := LIB, n := 56, k := 16, m := 8, w := false], simp(), simp(), simp(), ul2)
+  have u24 := apply(mp.usable_sub[vm := s.vm, objs := s.objs, a := LIB, n := 56, k := 24, m := 8, w := false], simp(), simp(), simp(), ul2)
+  have u32 := apply(mp.usable_sub[vm := s.vm, objs := s.objs, a := LIB, n := 56, k := 32, m := 8, w := false], simp(), simp(), simp(), ul2)
+  have u40 := apply(mp.usable_sub[vm := s.vm, objs := s.objs, a := LIB, n := 56, k := 40, m := 8, w := false], simp(), simp(), simp(), ul2)
+  have m16: g.mem_defined(s, LIB, 16, 8, false) by simp(lbv, u16)
+  have m24: g.mem_defined(s, LIB, 24, 8, false) by simp(lbv, u24)
+  have m32: g.mem_defined(s, LIB, 32, 8, false) by simp(lbv, u32)
+  have m40: g.mem_defined(s, LIB, 40, 8, false) by simp(lbv, u40)
+  unfold c_src_env___init_tls.__copy_tls c_src_env___init_tls.__libc_tls_size c_src_env___init_tls.__libc_tls_align c_src_env___init_tls.__libc_tls_head c_src_env___init_tls.__libc_tls_cnt c_src_env___init_tls.set___pthread_dtv in hr
+  have e16: bits_of_int(64, gimple.bytes_at(s.vm, int_add(LIB, 16), 8)) = 0 by simp(hhd)
+  have e24: bits_of_int(64, gimple.bytes_at(s.vm, int_add(LIB, 24), 8)) = 224 by simp(hsz)
+  have e32: bits_of_int(64, gimple.bytes_at(s.vm, int_add(LIB, 32), 8)) = 8 by simp(hal)
+  have e40: bits_of_int(64, gimple.bytes_at(s.vm, int_add(LIB, 40), 8)) = 0 by simp(hcn)
+  step a1 a2 a3 a4 a5, h1 from hr with g.ld64_det, g.padd_det, e16, e24, e32 using conj(hu, lb, bb, m16, m24, m32, m40, btv)
+  obtain r, wl kr from h1
+  // the modules' loop: none (the list's head 0)
+  let T64 := fn_update(fn_update(empty, "prec", 64), "signed", true)
+  let M24 := int_add(BT, gimple.sval(T64, bits_add(64, 224, bits_neg(64, 200))))
+  let TD := int_add(M24, gimple.sval(T64, bits_sub(64, 0, bits_and(64, bits_add(64, 8, bits_neg(64, 1)), M24))))
+  let L0 := pair(s, pair(TD, pair(BT, pair(1, pair(0, pair(a4, TD))))))
+  let BODY(x, y) := loop_body(wl)
+  have nx: all x x2. x = L0 -> BODY(x, ok(x2, empty)) -> x2 = L0 && int_lt(0, 0) proof
+    fix x x2
+    assume hp hb
+    step eT from rewrite(hp, hb)
+    show by defs(simp(eT), ok, exc)
+  qed
+  have wv := apply(g.loop[b := x y. BODY(x, y), p := x. x = L0, m := x. 0], refl({L0}), (all x. x = L0 -> 0 in omega by simp()), nx, wl)
+  obtain x, hpl bb nk from wv
+  step y, eB from rewrite(hpl, bb)
+  have tde: TD = int_add(BT, 24) by defs(simp(btv), gimple.sval)
+  // the dtv: the module count at the area's start, the descriptor's dtv
+  have rB: all x. x in omega -> int_le(BT, x) -> int_lt(x, int_add(BT, 336)) -> x in startup_specs.start_writes(g) proof
+    fix x
+    assume xo h1 h2
+    have a _ := apply(sp.tw_b, {g}, {x}, xo, arith(hgB, h1), arith(hgB, h2))
+    show := a
+  qed
+  have ub _ := apply(sp.glob_usable, {g}, {s.vm}, {s.objs}, {BT}, {336}, hglob, arith(btv), rB)
+  have ub0 := apply(mp.usable_sub[vm := s.vm, objs := s.objs, a := BT, n := 336, k := 0, m := 8, w := true], simp(), simp(), simp(), ub)
+  have ub32 := apply(mp.usable_sub[vm := s.vm, objs := s.objs, a := BT, n := 336, k := 32, m := 8, w := true], simp(), simp(), simp(), ub)
+  have md0: g.mem_defined(s, BT, 0, 8, true) by simp(btv, ub0)
+  have ut8: gimple.usable(s.vm, s.objs, int_add(TD, 8), 8, true) by simp(tde, btv, ub32)
+  have tdb: TD in bits(64) by simp(tde, btv)
+  step h2 from rewrite(eB, kr) with g.ld64_det, g.st64_det, e40 using conj(hw, hu, lb, bb, m40, md0, ut8, tdb, tde, btv, sv, pf, pd)
+  // the memory: the two words in the static TLS area
+  let TW := startup_specs.tls_writes(g)
+  let X1 := x86_64_linux.store_le(s.vm.bytes, int_add(BT, 0), 8, 0)
+  let A8 := int_add(int_add(BT, 24), 8)
+  let V := fn_update(s.vm, "bytes", x86_64_linux.store_le(X1, A8, 8, BT))
+  have og: all a n. a in omega -> n in omega -> int_le(BT, a) -> int_le(int_add(a, n), int_add(BT, 336)) ->
+      (all i. i in omega -> int_lt(i, n) -> int_add(a, i) in TW || abi.stack_free(s.vm, s.objs, int_add(a, i))) proof
+    fix a n
+    assume ao no h1 h2
+    fix i
+    assume hi hil
+    have _ b := apply(sp.tw_b, {g}, {int_add(a, i)}, arith(ao, hi), arith(hgB, h1, hi), arith(hgB, h2, hil, hi))
+    show by taut(b)
+  qed
+  have F1 := apply(sp.fr_store[b := s.vm, U := s.vm, objs := s.objs, W := TW, a := int_add(BT, 0), n := 8, v := 0], apply(sp.fr_self[b := s.vm, objs := s.objs, W := TW], sv),
+    arith(bb), simp(), arith(btv), mp(all_elim(og, {int_add(BT, 0)}, {8}), arith(btv), simp(), arith(btv), arith(btv)))
+  have F2 := apply(sp.fr_store[b := s.vm, U := fn_update(s.vm, "bytes", X1), objs := s.objs, W := TW, a := A8, n := 8, v := BT], F1,
+    arith(btv), simp(), arith(btv), mp(all_elim(og, {A8}, {8}), arith(btv), simp(), arith(btv), arith(btv)))
+  have fr: startup_specs.frame(s.vm, V, s.objs, TW) by simp(F2, keep(startup_specs.frame))
+  have v1 := apply(ms.wr_any, {s.vm}, {int_add(BT, 0)}, {8}, {0}, sv)
+  have vV: V in x86_64_linux.Vm by simp(apply(ms.wr_any, {fn_update(s.vm, "bytes", X1)}, {A8}, {8}, {BT}, v1))
+  have oe := rewrite(tde, h2)
+  show by ex_intro({V}, taut(vV, fr, oe))
+qed
