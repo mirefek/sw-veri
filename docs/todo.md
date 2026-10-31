@@ -31,8 +31,9 @@ The steps left, in order:
   `__init_ssp` (memcpy as its spec) and `__init_tls` (static_init_tls:
   __copy_tls, __init_tp and their system calls as the unit's functions)
   refine their specs' (proofs/mallocng/fun/init_libc.core `sp.il_fun`,
-  init_ssp.core `sp.ss_fun`, init_tls.core `sp.sit_fun`); left for them:
-  the links (`tr.implements_at`, as `grsc.composed`). Then
+  init_ssp.core `sp.ss_fun`, init_tls.core `sp.sit_fun`); linked
+  (init_link.core: `lk.libc_calls`, `__init_libc`'s CFG function with its
+  callees' as its spec; `lk.libc_impl`, its machine code). Left:
   `__libc_start_init` (`_init`, the
   init_array), stage2, `__libc_start_main`, `_start_c` -- each CFG
   function as link_start.core links it (`stl.F`): its refinement to the

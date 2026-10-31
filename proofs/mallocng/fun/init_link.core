@@ -103,3 +103,97 @@ refines sit_ref c_src_env___init_tls_cfg.static_init_tls_fun c_src_env___init_tl
 refines ssp_gtp_ref c_src_env___stack_chk_fail_cfg.__get_tp_fun c_src_env___stack_chk_fail.__get_tp_fun
 refines init_ssp_ref c_src_env___stack_chk_fail_cfg.__init_ssp_fun c_src_env___stack_chk_fail.__init_ssp_fun
 refines init_libc_ref c_src_env___libc_start_main_cfg.__init_libc_fun c_src_env___libc_start_main.__init_libc_fun
+
+// ----------------------------------------------------------------------
+//  The linked CFG forms (link_start.core's) called as their purposes say,
+//  and the machine code implementing them
+
+// (memcpy's CFG form called as its contract says)
+theorem lk.mcp: mp.calls(musl_asm_cfg.memcpy_fun(), mallocng_specs.memcpy_spec_fun())
+proof
+  fix regs s o
+  assume h1 h2 h3 hr
+  show := mp(all_elim(mp.memcpy_fun_c2, {regs}, {s}, {o}), h1, h2, h3, mp(all_elim(memcpy_ref, {regs}, {s}, {o}), h1, h2, h3, hr))
+qed
+
+// __init_ssp with memcpy and its unit's __get_tp
+theorem lk.ssp_calls: all g. g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard -> g.builtin_tls = c_src_env___init_tls.builtin_tls ->
+  mp.calls(sspl.F, startup_specs.init_ssp_spec_fun(g))
+proof
+  fix g
+  assume hgG hgB
+  let MC := musl_asm_cfg.memcpy_fun()
+  let GT := c_src_env___stack_chk_fail_cfg.__get_tp_fun()
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(init_ssp_ref, {MC}, {GT}, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.ss_fun, {g}, {MC}, {GT}, {regs}, {s}, {o}), hgG, hgB, lk.mcp, ssp_gtp_ref, h1, h2, h3, hs)
+qed
+
+// __init_tls (static_init_tls) with its unit's __syscall6, __copy_tls
+// (memcpy), __init_tp (__set_thread_area, the unit's __syscall1)
+theorem lk.tls_calls: all g. g.libc = c_src_env___init_tls.__libc -> g.builtin_tls = c_src_env___init_tls.builtin_tls -> g.sysinfo = c_src_env___init_tls.__sysinfo ->
+  g.main_tls = c_src_env___init_tls.main_tls -> g.default_stacksize = c_src_env___init_tls.__default_stacksize ->
+  mp.calls(sitl.F, startup_specs.init_tls_spec_fun(g))
+proof
+  fix g
+  assume hgL hgB hgS hgM hgD
+  let MC := musl_asm_cfg.memcpy_fun()
+  let SA := musl_asm_cfg.__set_thread_area_fun()
+  let S1 := c_src_env___init_tls_cfg.__syscall1_fun()
+  let S6 := c_src_env___init_tls_cfg.__syscall6_fun()
+  let CT := c_src_env___init_tls_cfg.__copy_tls_fun(MC)
+  let ITP := c_src_env___init_tls_cfg.__init_tp_fun(SA, S1)
+  let AC := mallocng_specs.a_crash_spec_fun()
+  have hCT := mp(all_elim(copy_tls_ref, {MC}), mcp.io)
+  have hITP := all_elim(init_tp_ref, {SA}, {S1})
+  have hr0 := mp(all_elim(sit_ref, {S6}, {CT}, {ITP}, {AC}), c1t6.io, ctll.io, itpl.io, acr.io)
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(hr0, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.sit_fun, {g}, {S6}, {CT}, {ITP}, {AC}, {MC}, {SA}, {S1}, {regs}, {s}, {o}), hgL, hgB, hgS, hgM, hgD, hCT, hITP, sta_ref, tls_sy1_ref,
+    h1, h2, h3, hs)
+qed
+
+// __init_libc with __init_tls, __init_ssp (linked), its unit's
+// __syscall3, __syscall2, a_crash's contract
+theorem lk.libc_calls: all g.
+  g.environ = c_src_env___libc_start_main.__environ -> g.hwcap = c_src_env___libc_start_main.__hwcap -> g.sysinfo = c_src_env___libc_start_main.__sysinfo ->
+  g.libc = c_src_env___libc_start_main.__libc -> g.progname = c_src_env___libc_start_main.__progname -> g.progname_full = c_src_env___libc_start_main.__progname_full ->
+  g.empty_str = c_src_env___libc_start_main.str_ -> g.main_tls = c_src_env___init_tls.main_tls -> g.builtin_tls = c_src_env___init_tls.builtin_tls ->
+  g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard -> g.default_stacksize = c_src_env___init_tls.__default_stacksize ->
+  mp.calls(ilcl.F, startup_specs.init_libc_spec_fun(g))
+proof
+  fix g
+  assume hgE hgH hgS hgL hgP hgF hgZ hgM hgB hgG hgD
+  // (the units' symbols at the same addresses)
+  have eL: c_src_env___libc_start_main.__libc = c_src_env___init_tls.__libc by defs(simp(), c_src_env___libc_start_main.__libc, c_src_env___init_tls.__libc)
+  have eS: c_src_env___libc_start_main.__sysinfo = c_src_env___init_tls.__sysinfo by defs(simp(), c_src_env___libc_start_main.__sysinfo, c_src_env___init_tls.__sysinfo)
+  have hT := mp(all_elim(lk.tls_calls, {g}), trans(hgL, eL), hgB, trans(hgS, eS), hgM, hgD)
+  have hS := mp(all_elim(lk.ssp_calls, {g}), hgG, hgB)
+  let S3 := c_src_env___libc_start_main_cfg.__syscall3_fun()
+  let S2 := c_src_env___libc_start_main_cfg.__syscall2_fun()
+  let AC := mallocng_specs.a_crash_spec_fun()
+  have hr0 := mp(all_elim(init_libc_ref, {sitl.F}, {sspl.F}, {S3}, {AC}, {S2}), sitl.io, sspl.io, c1l3.io, acr.io, c1l2.io)
+  fix regs s o
+  assume h1 h2 h3 hr
+  have hs := mp(all_elim(hr0, {regs}, {s}, {o}), h1, h2, h3, hr)
+  show := mp(all_elim(sp.il_fun, {g}, {sitl.F}, {sspl.F}, {S3}, {AC}, {S2}, {regs}, {s}, {o}), hgE, hgH, hgS, hgL, hgP, hgF, hgZ, hgM, hgB, hgG, hgD, hT, hS,
+    h1, h2, h3, hs)
+qed
+
+// __init_libc's machine code (with its callees, linked) implements its
+// purpose
+theorem lk.libc_impl: all g statics.
+  g.environ = c_src_env___libc_start_main.__environ -> g.hwcap = c_src_env___libc_start_main.__hwcap -> g.sysinfo = c_src_env___libc_start_main.__sysinfo ->
+  g.libc = c_src_env___libc_start_main.__libc -> g.progname = c_src_env___libc_start_main.__progname -> g.progname_full = c_src_env___libc_start_main.__progname_full ->
+  g.empty_str = c_src_env___libc_start_main.str_ -> g.main_tls = c_src_env___init_tls.main_tls -> g.builtin_tls = c_src_env___init_tls.builtin_tls ->
+  g.stack_chk_guard = c_src_env___stack_chk_fail.__stack_chk_guard -> g.default_stacksize = c_src_env___init_tls.__default_stacksize ->
+  tr.impl_m(false, false, 4199181, startup_specs.init_libc_spec_fun(g), 4198873, false, 4198400, text.code, statics)
+proof
+  fix g statics
+  assume hgE hgH hgS hgL hgP hgF hgZ hgM hgB hgG hgD
+  have c := mp(all_elim(lk.libc_calls, {g}), hgE, hgH, hgS, hgL, hgP, hgF, hgZ, hgM, hgB, hgG, hgD)
+  show := mp(all_elim(tr.impl_m_refine, {false}, {false}, {4199181}, {ilcl.F}, {startup_specs.init_libc_spec_fun(g)}, {4198873}, {false}, {4198400}, {text.code}, {statics}),
+    all_elim(ilcl.linked, {statics}), c)
+qed
