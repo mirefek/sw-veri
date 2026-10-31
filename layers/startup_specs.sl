@@ -196,3 +196,101 @@ fn init_libc_spec_fun(g: StartGlobals) -> CFun2[World] = (args: Args) => {
   init_libc_spec(g, bits[64](args[0]), bits[64](args[1]))
   return (any bits[64], any bits[64])
 }
+
+///////////////////////////////////////////////////////////////////////
+//  main entered: __libc_start_init(), libc_start_main_stage2(main, argc,
+//  argv), __libc_start_main(main, argc, argv, ..), _start_c(sp)
+
+// main entered: where startup's runs end (the claim's stop at main), the
+// world as startup leaves it
+exception at_main
+
+proc[World] main_entered() {
+  raise at_main
+}
+
+// the program's main as startup sees it
+fn main_spec_fun() -> CFun2[World] = (args: Args) => {
+  main_entered()
+  return (any bits[64], any bits[64])
+}
+
+// the program's addresses startup uses: its constructors (the init_array,
+// [init_array, init_array_end), each entry `ctor`: crtbegin's frame_dummy,
+// a constructor doing nothing -- no clone table to register), main
+record StartProgram { init_array: Addr, init_array_end: Addr, ctor: Addr, main: Addr }
+
+// the constructors' table: readable, none of its bytes in w
+pred ctors_ok(vm: Vm, objs: Objs, p: StartProgram, w: Set[nat]) =
+  ex n: nat. uint(p.init_array_end) = uint(p.init_array) + 8 * n && uint(p.init_array_end) < 2^63 &&
+    (all i: nat. i < n -> usable(vm, objs, uint(p.init_array) + 8 * i, 8, false) &&
+       bytes_at(vm, p.init_array + 8 * i, 8) = uint(p.ctor) && (all j: nat. j < 8 -> uint(p.init_array) + 8 * i + j notin w))
+
+// __libc_start_init(): _init (crti/crtn's: nothing), then the
+// constructors -- this program's do nothing
+proc[World] start_init_spec(p: StartProgram) {
+  require ctors_ok(vm, objs, p, {x: nat | false})
+  either { overflow_start() } or { }
+}
+
+fn start_init_spec_fun(p: StartProgram) -> CFun2[World] = (args: Args) => {
+  start_init_spec(p)
+  return (any bits[64], any bits[64])
+}
+
+// libc_start_main_stage2(main, argc, argv): the constructors, then main
+// (exit after it, with main's value)
+proc[World] stage2_spec(p: StartProgram, main: Addr) {
+  require main = p.main && ctors_ok(vm, objs, p, {x: nat | false})
+  either { overflow_start() } or { main_entered() }
+}
+
+fn stage2_spec_fun(p: StartProgram) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 3
+  stage2_spec(p, bits[64](args[0]))
+  return (any bits[64], any bits[64])
+}
+
+// startup's effect: libc set up (as __init_libc's spec: only startup's
+// globals written, the thread set up, libc.auxv the vector past envp's
+// zero word), then main entered
+proc[World] to_main(g: StartGlobals, envp: Addr) {
+  let before = vm
+  havoc vm where frame(before, vm, objs, start_writes(g)) &&
+    (all n: nat. env_at(before, objs, envp, n) -> bytes_at(vm, g.libc + 8, 8) = uint(envp) + 8 * (n + 1)) &&
+    (ex fs: Addr. thread_set(vm, fs))
+  fs_base := any fs: Addr where thread_set(vm, fs)
+  main_entered()
+}
+
+// __libc_start_main(main, argc, argv, ..): argv's words, then envp's
+// (argc's count of them, then a null word); __init_libc's precondition at
+// envp and argv[0], the constructors apart from what it writes
+pred start_main_pre(vm: Vm, objs: Objs, g: StartGlobals, p: StartProgram, argc: nat, argv: Addr) =
+  argc < 2^31 && argv != 0 && uint(argv) + 8 * (argc + 1) < 2^63 && usable(vm, objs, uint(argv), 8, false) &&
+  init_libc_pre(vm, objs, g, argv + 8 * (argc + 1), bits[64](bytes_at(vm, argv, 8))) &&
+  ctors_ok(vm, objs, p, start_writes(g))
+
+proc[World] start_main_spec(g: StartGlobals, p: StartProgram, main: Addr, argc: bits[32], argv: Addr) {
+  require main = p.main && start_main_pre(vm, objs, g, p, uint(argc), argv)
+  either { overflow_start() } or { to_main(g, argv + 8 * (uint(argc) + 1)) }
+}
+
+fn start_main_spec_fun(g: StartGlobals, p: StartProgram) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 6
+  start_main_spec(g, p, bits[64](args[0]), bits[32](args[1]), bits[64](args[2]))
+  return (any bits[64], any bits[64])
+}
+
+// _start_c(sp): sp the stack exec set up -- argc's word, then argv
+proc[World] start_c_spec(g: StartGlobals, p: StartProgram, sp: Addr) {
+  require sp != 0 && uint(sp) + 16 < 2^63 && usable(vm, objs, uint(sp), 8, false) &&
+    start_main_pre(vm, objs, g, p, bytes_at(vm, sp, 8), sp + 8)
+  either { overflow_start() } or { to_main(g, sp + 8 * (bytes_at(vm, sp, 8) + 2)) }
+}
+
+fn start_c_spec_fun(g: StartGlobals, p: StartProgram) -> CFun2[World] = (args: Args) => {
+  require len(args) >= 1
+  start_c_spec(g, p, bits[64](args[0]))
+  return (any bits[64], any bits[64])
+}
