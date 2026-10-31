@@ -117,7 +117,7 @@ pred thread_set(vm: Vm, fs: Addr) = thread_ok(vm, fs) && canary_ok(vm, fs)
 // __init_tls(aux): aux the 38 words musl copied the vector to; the thread
 // pointer set to a descriptor in the static TLS area
 pred init_tls_pre(vm: Vm, objs: Objs, g: StartGlobals, aux: Addr) =
-  usable(vm, objs, uint(aux), 304, false) && uint(aux) + 304 <= 2^64 &&
+  aux != 0 && usable(vm, objs, uint(aux), 304, false) && uint(aux) + 304 <= 2^64 &&
   (all x: nat. uint(aux) <= x && x < uint(aux) + 304 -> x notin start_writes(g)) &&
   globals_ok(vm, objs, g) && tls_fresh(vm, g) &&
   phdrs_ok(vm, objs, bytes_at(vm, aux + 24, 8), bytes_at(vm, aux + 32, 8), bytes_at(vm, aux + 40, 8), start_writes(g))
