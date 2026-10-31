@@ -18,21 +18,18 @@ several stack objects, calls with a stack argument in either mode; C1 of
 (`__init_tls` is `static_init_tls`), `__set_thread_area`, the units' leaf
 copies, crti/crtn's `_init`; gcc's `register_tm_clones` and
 `frame_dummy`'s contract (step (a): the C1 of all the path's code but
-`_start`'s, its own in (d)).
+`_start`'s, its own in (d)); all of it linked (step (b),
+proofs/mallocng/machine/link_start.core: `stl.linked`, `_start_c`'s CFG
+function with its callees', the code maps `lnk.FP1`/`lnk.FP0` with main
+`lnk.main()` at t, exit and the a_crash copies undefined).
 
 The steps left, in order:
-- (b) Linking the path's contracts: contract.rs linking the stop
-  contracts (an aligned call's from the callee's _u contract; k false's
-  into k true's); the entry variants entry_np, entry0p generic like
-  tr.entry_n, tr.entry0; a body using neither mode's rules gives both
-  contracts (memcpy, memset proven once). The callees' effects
-  (`tr.callee_io`) the startup C1 lines note missing: `call0`'s
-  (`tr.eff_call0`, `_callee`, `call1_0`, `_s`), and register_tm_clones's
-  (eff.rs: a branch on a value its block set, `letin(0, ..)`).
 - (c) Purpose specs and C2: `__init_libc` (auxv into `libc.auxv`, the
   program name, environ; unprivileged: the secure path skipped),
   `__init_tls`, `__init_ssp`, `__libc_start_init` (`_init`, the
-  init_array), stage2, `__libc_start_main`, `_start_c`.
+  init_array), stage2, `__libc_start_main`, `_start_c` -- each CFG
+  function as link_start.core links it (`stl.F`): its refinement to the
+  structured form, then its purpose (main's: raising at main).
 - (d) The top: exec_state to the C world at `_start` (its 5 instructions
   -- `xor rbp, rbp; mov rdi, rsp; lea rsi, [0]; and rsp, -16; call
   _start_c` -- entered as exec leaves the machine, rsp at argc and no
@@ -59,6 +56,10 @@ The steps left, in order:
 
 ## 2. The engine, when a function needs it
 
+- The two modes' contracts from one body (optional): a body using
+  neither mode's rules gives both contracts (memcpy proven once, now
+  `mcpc` and `mcpz`); the entry variants entry_np, entry0p generic like
+  tr.entry_n, tr.entry0.
 - Stack objects read before their first store (none at -O0 yet); the
   single object's older path (alloc_at, tr.astore_r: get_random_secret)
   and the several objects' one unified (optional).

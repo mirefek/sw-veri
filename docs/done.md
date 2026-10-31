@@ -1418,3 +1418,19 @@ item is a short summary of finished work; details are in the files named.
   translate_scall.core, translate_asm.core, translate_stop.core); a
   return to the world with its thread pointer set valid (tr.valid_fs,
   eff.rs's VALID): `__set_thread_area`'s `tr.callee_io` derived.
+- **The startup path linked** (step (b)): the startup calls' effects
+  (proofs/translate_effects_startup.core: `tr.eff_call0`, `call1_0`, the
+  `_objs` and `_s` forms; an `undefined` statement, `true`, and an `if`
+  whose other branch it is; a loaded word's type in hand) and eff.rs's
+  callees as tables (`fptr[T]`: `all T. T in bits(64) -> tr.callee_io(..)`,
+  a parameter typed `fn_space(bits(64), ..)` by its procedure), a
+  procedure's lemma from its own facts only; `tr.raises_main` over a
+  call's argument lists (abi.ARGS -- a typed spec could not meet it);
+  the conversions tr.impl_m_u / tr.impl_m_k (an aligned call's contract
+  from one for any alignment, one allowed to stop from one never
+  stopping). proofs/mallocng/machine/link_start.core: each caller's C1
+  with its callees', bottom up to `stl.linked` (`_start_c`); the code
+  maps a concrete table (`lnk.FP1`: main at t, raising at main only --
+  `lnk.main()` --, one callee, a_crash's undefined contract elsewhere;
+  their `tr.code_okm` by lnk.code_ok1); frame_dummy's entry
+  register_tm_clones's CFG form through the jump.

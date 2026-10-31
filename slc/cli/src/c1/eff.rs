@@ -57,6 +57,10 @@ pub struct Eff<'e> {
     /// a procedure's lemma: the parameter types it assumes (indices into
     /// `param_types`)
     typed: HashMap<SymId, Vec<usize>>,
+    /// the callees in scope that are tables of callees (GIMPLE's `fptr`,
+    /// a call through a pointer): their hypothesis for every address,
+    /// `all T. T in bits(64) -> tr.callee_io(fptr[T], k)`
+    tables: std::collections::HashSet<VarId>,
 }
 
 /// A world changed in a field (`fn_update(S, field, V)`): the lemma showing
@@ -67,6 +71,10 @@ const VALID: &[(&str, &str)] = &[("vm", "tr.valid_vm"), ("vm", "tr.valid_gone"),
 /// premises on the arguments (each `a in T'`) -> f(a..) in T
 const TYPES: &[(&str, &str)] = &[("bits_of_int", "nf.of_int_in"), ("x86_64_linux.page_of", "tr.ty_page_of"), ("x86_64_linux.pages_for", "tr.ty_pages_for")];
 
+/// A program's result type (`all args.. w w2 v. runs(p(args..), w, ok(w2, v))
+/// -> v in T`): a value bound from it, its type in hand
+const RESULT_TYPES: &[(&str, &str)] = &[("gimple.ld64", "tr.ld64_typed")];
+
 type R<T> = Result<T, String>;
 
 fn e(x: sl_kernel::KernelError) -> String {
@@ -76,7 +84,7 @@ fn e(x: sl_kernel::KernelError) -> String {
 impl<'e> Eff<'e> {
     pub fn new(env: &'e mut Env, prefix: &str) -> R<Eff<'e>> {
         let api = Api::new(env, Vec::new()).map_err(e)?;
-        Ok(Eff { env, api, prefix: prefix.to_string(), n: 0, procs: HashMap::new(), under_way: BTreeSet::new(), out: Vec::new(), hios: HashMap::new(), callee_params: HashMap::new(), ctx: Vec::new(), typed: HashMap::new() })
+        Ok(Eff { env, api, prefix: prefix.to_string(), n: 0, procs: HashMap::new(), under_way: BTreeSet::new(), out: Vec::new(), hios: HashMap::new(), callee_params: HashMap::new(), ctx: Vec::new(), typed: HashMap::new(), tables: std::collections::HashSet::new() })
     }
 
     /// t assumed, a fact in hand (with its parts)
@@ -185,6 +193,79 @@ impl<'e> Eff<'e> {
             }
         }
         parts
+    }
+
+    /// A `_fun` wrapper's parameters (its body over `params`) that are
+    /// tables of callees: those its procedure (called with the parameters
+    /// themselves) types `fn_space(bits(64), ..)` (GIMPLE's `fptr`)
+    fn wrapper_tables(&mut self, body: &Term, params: &[VarId]) -> std::collections::HashSet<usize> {
+        let doms = self.wrapper_doms(body, params);
+        let mut out = std::collections::HashSet::new();
+        for (i, d) in doms.iter().enumerate() {
+            let Some(ty) = d else { continue };
+            let p = self.app(ty, "in", 2).unwrap();
+            if self.app(&p[1], "fn_space", 2).is_some_and(|fs| self.app(&fs[0], "bits", 1).is_some()) {
+                out.insert(i);
+            }
+        }
+        out
+    }
+
+    /// ... each parameter's type (`p in T`), as its procedure has it
+    fn wrapper_doms(&mut self, body: &Term, params: &[VarId]) -> Vec<Option<Term>> {
+        let mut out = vec![None; params.len()];
+        let Some((f, args)) = self.wrapper_proc(body, params) else { return out };
+        // (the other arguments, under the wrapper's binders: placeholders)
+        let args: Vec<Term> = args
+            .iter()
+            .map(|x| if matches!(x.node(), Node::Var(v, _) if params.contains(v)) { x.clone() } else { self.fresh("ph").1 })
+            .collect();
+        for ty in self.param_types(f, &args) {
+            let Some(p) = self.app(&ty, "in", 2) else { continue };
+            if let Some(i) = params.iter().position(|v| matches!(p[0].node(), Node::Var(x, _) if x == v)) {
+                out[i] = Some(ty.clone());
+            }
+        }
+        out
+    }
+
+    /// the procedure a `_fun` wrapper's body calls with all its parameters
+    /// among the arguments (the first such call): it, the arguments
+    fn wrapper_proc(&self, body: &Term, params: &[VarId]) -> Option<(SymId, Vec<Term>)> {
+        if params.is_empty() {
+            return None;
+        }
+        fn find(g: &Eff, t: &Term, params: &[VarId]) -> Option<(SymId, Vec<Term>)> {
+            if let Node::App(h, a) = t.node() {
+                let all_in = params.iter().all(|p| a.iter().any(|x| matches!(x.node(), Node::Var(v, _) if v == p)));
+                let dom = g.env.sym_by_name.get(&format!("{}.dom", g.env.syms[*h as usize].name)).map(|d| &g.env.syms[*d as usize].kind);
+                if let (true, Some(SymKind::Defined { params: dps, .. })) = (all_in, dom) {
+                    if dps.len() == a.len() && dps.iter().all(|v| g.env.var(*v).arity == 0) {
+                        return Some((*h, a.to_vec()));
+                    }
+                }
+                return a.iter().find_map(|x| find(g, x, params));
+            }
+            None
+        }
+        find(self, body, params)
+    }
+
+    /// ... the wrapper's parameters its procedure calls: the fewest
+    /// arguments of their calls (a table's, `g[T](..)`, too)
+    fn wrapper_called(&self, body: &Term, params: &[VarId]) -> HashMap<usize, usize> {
+        let mut out = HashMap::new();
+        let Some((f, args)) = self.wrapper_proc(body, params) else { return out };
+        let SymKind::Defined { params: fps, body: fb } = self.env.syms[f as usize].kind.clone() else { return out };
+        let (called, _) = self.called(&fb);
+        for (i, p) in params.iter().enumerate() {
+            if let Some(j) = args.iter().position(|x| matches!(x.node(), Node::Var(v, _) if v == p)) {
+                if let Some(k) = fps.get(j).and_then(|fp| called.get(fp)) {
+                    out.insert(i, *k);
+                }
+            }
+        }
+        out
     }
 
     /// `tr.returns_valid(s, s2)`, s2 a world changed (`VALID`): the lemma's
@@ -413,6 +494,10 @@ impl<'e> Eff<'e> {
         let goal = self.eff(st, s, r, o)?;
         let ov = Term::var(o, vec![]);
         let pre = if st { "tr.seff" } else { "tr.eff" };
+        // true (GIMPLE's `undefined`): every outcome
+        if self.app(r, "true", 0).is_some() {
+            return self.show(&goal, &format!("{pre}_true"), s, vec![]);
+        }
         // letin(a, x. R): R with a
         if let Some(a) = self.app(r, "letin", 2) {
             let r2 = self.open(&a[1], &[a[0].clone()]);
@@ -469,9 +554,21 @@ impl<'e> Eff<'e> {
             let (vn, vv) = self.fresh("vs");
             let k = self.open(&b[2], &[sv.clone(), vv.clone()]);
             let runs = self.unlet(&self.mk("runs", vec![b[0].clone(), s.clone(), self.mk("ok", vec![sv.clone(), vv.clone()])?])?);
-            let _h = Seq::assume(self.env, runs.clone()).map_err(e)?;
-            let kk = self.prove(st, &sv, &k, o)?;
-            let hk = self.close(kk, &[runs], &[sn, vn])?;
+            let h = Seq::assume(self.env, runs.clone()).map_err(e)?;
+            let sc = self.ctx.len();
+            if let Node::App(hf, pa) = b[0].node() {
+                let pname = self.env.syms[*hf as usize].name.clone();
+                if let Some((_, rule)) = RESULT_TYPES.iter().find(|(n, _)| *n == pname) {
+                    let f = self.api.fact(self.env, rule).map_err(e)?;
+                    let mut a: Vec<A> = pa.iter().map(|x| A::T(self.unlet(x))).collect();
+                    a.extend([A::T(self.unlet(s)), A::T(sv.clone()), A::T(vv.clone()), A::G(G::By(h))]);
+                    let ty = self.api.mp(self.env, f, a).map_err(|x| format!("{}: {}", rule, x.0))?;
+                    self.ctx.push(ty);
+                }
+            }
+            let kk = self.prove(st, &sv, &k, o);
+            self.ctx.truncate(sc);
+            let hk = self.close(kk?, &[runs], &[sn, vn])?;
             return self.show(&goal, &format!("{pre}_bind"), s, vec![A::G(G::By(pe)), A::G(G::By(hk))]);
         }
         // a statement `while`: while_rel(pair(S, loc), l. c, l o. B, l. tr, o), the body's
@@ -527,6 +624,19 @@ impl<'e> Eff<'e> {
                     self.ctx.truncate(sc);
                     let h2 = self.close(k2, &[nc], &[])?;
                     return self.show(&goal, &format!("{pre}_if"), s, vec![A::G(G::By(h1)), A::G(G::By(h2))]);
+                }
+            }
+            // `if c` with the other branch `undefined` (`true`, as
+            // elaborated): (c && R) || !c, R's with c
+            if let (Some(a1), Some(n)) = (self.app(&or[0], "and", 2), self.app(&or[1], "not", 1)) {
+                if n[0] == a1[0] {
+                    let (c, r1) = (self.unlet(&a1[0]), a1[1].clone());
+                    let sc = self.ctx.len();
+                    self.assume(&c)?;
+                    let k1 = self.prove(st, s, &r1, o)?;
+                    self.ctx.truncate(sc);
+                    let h1 = self.close(k1, &[c], &[])?;
+                    return self.show(&goal, &format!("{pre}_if_undef"), s, vec![A::G(G::By(h1))]);
                 }
             }
             // `require c`: !c || R, R's with c
@@ -619,27 +729,40 @@ impl<'e> Eff<'e> {
         let mut terms = vec![A::T(self.unlet(s))];
         terms.extend(args.iter().map(|a| A::T(self.unlet(a))));
         // a call of a callee: its tr.callee_io
-        if name == "gimple.call" || name == "gimple.call1" {
-            let Node::Var(g, _) = args[0].node() else { return Err(format!("a call of other than a callee: {}", self.short(p))) };
-            let (h, k) = self.hios.get(g).cloned().ok_or_else(|| format!("a call of an unknown callee: {}", self.short(p)))?;
-            let rule = if name == "gimple.call" { "tr.eff_call" } else { "tr.eff_call1" };
+        // (the startup mode's calls, call0: their own lemmas; with the
+        // caller's objects named, `_objs`, those first)
+        let call_rule = match name.as_str() {
+            "gimple.call" => Some(("tr.eff_call", 0)),
+            "gimple.call1" => Some(("tr.eff_call1", 0)),
+            "gimple.call0" => Some(("tr.eff_call0", 0)),
+            "gimple.call1_0" => Some(("tr.eff_call1_0", 0)),
+            "gimple.call0_objs" => Some(("tr.eff_call0_objs", 1)),
+            "gimple.call1_0_objs" => Some(("tr.eff_call1_0_objs", 1)),
+            _ => None,
+        };
+        if let Some((rule, skip)) = call_rule {
+            let (h, k) = self.callee_io_of(&args[skip].clone(), p)?;
             let f0 = self.api.fact(self.env, rule).map_err(e)?;
             let ord_le = self.sym("ord_le")?;
-            let a = vec![
-                A::T(self.unlet(&args[0])),
-                A::T(self.unlet(&args[1])),
+            let mut a: Vec<A> = args[..skip + 2].iter().map(|x| A::T(self.unlet(x))).collect();
+            a.extend([
                 A::T(Term::nat(sl_kernel::Nat::from_u128(k as u128))),
                 A::T(self.unlet(s)),
                 A::G(G::By(h)),
                 A::G(G::Defs(Box::new(G::Arith(vec![])), vec![ord_le])),
-            ];
+            ]);
             return self.api.mp(self.env, f0, a).map_err(|x| format!("{}: {}", rule, x.0));
         }
         // a call of a callee with stack arguments: its tr.callee_io_s (called with exactly its k)
-        if name == "gimple.call1_s" {
-            let Node::Var(g, _) = args[0].node() else { return Err(format!("a call of other than a callee: {}", self.short(p))) };
-            let (h, k) = self.hios.get(g).cloned().ok_or_else(|| format!("a call of an unknown callee: {}", self.short(p)))?;
-            let f0 = self.api.fact(self.env, "tr.eff_call1_s").map_err(e)?;
+        let call_s_rule = match name.as_str() {
+            "gimple.call1_s" => Some("tr.eff_call1_s"),
+            "gimple.call0_s" => Some("tr.eff_call0_s"),
+            "gimple.call1_0_s" => Some("tr.eff_call1_0_s"),
+            _ => None,
+        };
+        if let Some(rule) = call_s_rule {
+            let (h, k) = self.callee_io_of(&args[0].clone(), p)?;
+            let f0 = self.api.fact(self.env, rule).map_err(e)?;
             let a = vec![
                 A::T(self.unlet(&args[0])),
                 A::T(self.unlet(&args[1])),
@@ -648,7 +771,7 @@ impl<'e> Eff<'e> {
                 A::G(G::By(h)),
                 A::G(G::Simp(vec![], vec![], false)),
             ];
-            return self.api.mp(self.env, f0, a).map_err(|x| format!("tr.eff_call1_s: {}", x.0));
+            return self.api.mp(self.env, f0, a).map_err(|x| format!("{}: {}", rule, x.0));
         }
         // an unsigned 64-bit division: its own lemma (w, a, b)
         if name == "gimple.cdiv" && args.len() == 4 && args[0] == Term::nat(sl_kernel::Nat::from_u128(64)) && self.app(&args[3], "false", 0).is_some() {
@@ -708,38 +831,82 @@ impl<'e> Eff<'e> {
 
     /// a callee's hypothesis: `tr.callee_io(g, k)`, or with more than six
     /// arguments (stack arguments, CFunS) `tr.callee_io_s(g, k)`
-    fn callee_hyp(&self, g: &Term, k: usize) -> R<Term> {
-        self.mk(if k > 6 { "tr.callee_io_s" } else { "tr.callee_io" }, vec![g.clone(), Term::nat(sl_kernel::Nat::from_u128(k as u128))])
+    /// ... a table's (`table`): `all T. T in bits(64) -> tr.callee_io(g[T], k)`
+    fn callee_hyp(&mut self, g: &Term, k: usize, table: bool) -> R<Term> {
+        let kt = Term::nat(sl_kernel::Nat::from_u128(k as u128));
+        if !table {
+            return self.mk(if k > 6 { "tr.callee_io_s" } else { "tr.callee_io" }, vec![g.clone(), kt]);
+        }
+        let (tv, tt) = self.fresh("T");
+        let ty = self.mk("in", vec![tt.clone(), self.mk("bits", vec![Term::nat(sl_kernel::Nat::from_u128(64))])?])?;
+        let io = self.mk("tr.callee_io", vec![self.mk("app", vec![g.clone(), tt])?, kt])?;
+        let body = self.env.mk_imp(ty, io);
+        Ok(Term::app(self.api.lg.all, vec![self.close_var(&body, tv)]))
     }
 
     /// the variables called in t (`call(g, args)`, `call1(g, args)`), with
-    /// their calls' numbers of arguments (the least)
-    fn called(&self, t: &Term) -> HashMap<VarId, usize> {
+    /// their calls' numbers of arguments (the least); those called as
+    /// tables (`call(g[T], args)`)
+    fn called(&self, t: &Term) -> (HashMap<VarId, usize>, std::collections::HashSet<VarId>) {
         let mut m: HashMap<VarId, usize> = HashMap::new();
-        self.called_in(t, &mut m);
-        m
+        let mut tabs = std::collections::HashSet::new();
+        self.called_in(t, &mut m, &mut tabs);
+        (m, tabs)
     }
 
-    fn called_in(&self, t: &Term, m: &mut HashMap<VarId, usize>) {
-        for name in ["gimple.call", "gimple.call1", "gimple.call1_s", "gimple.call0", "gimple.call1_0"] {
-            if let Some(c) = self.app(t, name, 2) {
-                if let (Node::Var(g, _), Some(k)) = (c[0].node(), list_len(self, &c[1])) {
-                    let e = m.entry(*g).or_insert(k);
-                    *e = (*e).min(k);
+    fn called_in(&self, t: &Term, m: &mut HashMap<VarId, usize>, tabs: &mut std::collections::HashSet<VarId>) {
+        // (the callee: a variable, or a table's entry g[T])
+        let mut note = |g: &Term, args: &Term| {
+            let (v, table) = match g.node() {
+                Node::Var(v, _) => (*v, false),
+                _ => match self.app(g, "app", 2).map(|x| x[0].node().clone()) {
+                    Some(Node::Var(v, _)) => (v, true),
+                    _ => return,
+                },
+            };
+            if let Some(k) = list_len(self, args) {
+                let e = m.entry(v).or_insert(k);
+                *e = (*e).min(k);
+                if table {
+                    tabs.insert(v);
                 }
+            }
+        };
+        for name in ["gimple.call", "gimple.call1", "gimple.call1_s", "gimple.call0", "gimple.call1_0", "gimple.call0_s", "gimple.call1_0_s"] {
+            if let Some(c) = self.app(t, name, 2) {
+                note(&c[0], &c[1]);
             }
         }
         // (a call from a function with stack objects: `call_objs(objs, g, args)`)
-        if let Some(c) = self.app(t, "gimple.call_objs", 3).or_else(|| self.app(t, "gimple.call0_objs", 3)) {
-            if let (Node::Var(g, _), Some(k)) = (c[1].node(), list_len(self, &c[2])) {
-                let e = m.entry(*g).or_insert(k);
-                *e = (*e).min(k);
+        for name in ["gimple.call_objs", "gimple.call1_objs", "gimple.call0_objs", "gimple.call1_0_objs"] {
+            if let Some(c) = self.app(t, name, 3) {
+                note(&c[1], &c[2]);
             }
         }
         match t.node() {
-            Node::App(_, a) | Node::Var(_, a) => a.iter().for_each(|x| self.called_in(x, m)),
+            Node::App(_, a) | Node::Var(_, a) => a.iter().for_each(|x| self.called_in(x, m, tabs)),
             _ => {}
         }
+    }
+
+    /// a call's callee g (a variable, or a table's entry g[T]): its
+    /// hypothesis `tr.callee_io(g, k)` (a table's at T, T's type shown) and k
+    fn callee_io_of(&mut self, g: &Term, p: &Term) -> R<(Seq, usize)> {
+        if let Node::Var(v, _) = g.node() {
+            return self.hios.get(v).cloned().ok_or_else(|| format!("a call of an unknown callee: {}", self.short(p)));
+        }
+        let x = self.app(g, "app", 2).ok_or_else(|| format!("a call of other than a callee: {}", self.short(p)))?.to_vec();
+        let Node::Var(v, _) = x[0].node() else { return Err(format!("a call of other than a callee: {}", self.short(p))) };
+        if !self.tables.contains(v) {
+            return Err(format!("a call of an unknown table: {}", self.short(p)));
+        }
+        let (h, k) = self.hios.get(v).cloned().ok_or_else(|| format!("a call of an unknown callee: {}", self.short(p)))?;
+        let t = self.unlet(&x[1]);
+        let hi = Seq::all_elim(self.env, &self.api.lg, &h, &t).map_err(e)?;
+        let b64 = self.mk("bits", vec![Term::nat(sl_kernel::Nat::from_u128(64))])?;
+        let ty = self.ty(&t, &b64)?;
+        let r = self.api.mp(self.env, hi, vec![A::G(G::By(ty))]).map_err(|x| format!("a table's callee: {}", x.0))?;
+        Ok((r, k))
     }
 
     /// The program's procedure `f` (a definition `mkprog(x0 x1. B)`): its
@@ -759,7 +926,7 @@ impl<'e> Eff<'e> {
         let mut pvars = Vec::new();
         let mut body = body;
         // (its callees: the parameters called, with their numbers of arguments)
-        let called = self.called(&body);
+        let (called, tabs) = self.called(&body);
         let mut hyps = Vec::new();
         for (i, p) in params.iter().enumerate() {
             if self.env.var(*p).arity > 0 {
@@ -767,7 +934,10 @@ impl<'e> Eff<'e> {
             }
             let (pn, pv) = self.fresh("as");
             if let Some(&k) = called.get(p) {
-                let h = self.callee_hyp(&pv, k)?;
+                if tabs.contains(p) {
+                    self.tables.insert(pn);
+                }
+                let h = self.callee_hyp(&pv, k, tabs.contains(p))?;
                 let hs = Seq::assume(self.env, h.clone()).map_err(e)?;
                 self.hios.insert(pn, (hs, k));
                 hyps.push(h);
@@ -777,20 +947,24 @@ impl<'e> Eff<'e> {
             pvars.push((pn, pv));
         }
         // (its parameters' types, facts in hand: the ones its proof uses
-        // its premises, first)
-        let sc = self.ctx.len();
+        // its premises, first -- its own facts only, the caller's set aside)
+        let saved = std::mem::take(&mut self.ctx);
         let tys = self.param_types(f, &pvars.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>());
-        for t in &tys {
-            self.assume(t)?;
-        }
-        let m = self.app(&body, "mkprog", 1).ok_or_else(|| format!("`{}`: not a program", name))?.to_vec();
-        let (o, ov) = self.fresh("os");
-        let b = self.open(&m[0], &[wv.clone(), ov.clone()]);
-        let call = self.mk(&name, pvars.iter().map(|(_, v)| v.clone()).collect())?;
-        let runs = self.mk("runs", vec![call, wv.clone(), ov.clone()])?;
-        let goal = self.eff(false, &wv, &runs, o)?;
-        let kb = self.prove(false, &wv, &b, o)?;
-        self.ctx.truncate(sc);
+        let kb = (|| {
+            for t in &tys {
+                self.assume(t)?;
+            }
+            let m = self.app(&body, "mkprog", 1).ok_or_else(|| format!("`{}`: not a program", name))?.to_vec();
+            let (o, ov) = self.fresh("os");
+            let b = self.open(&m[0], &[wv.clone(), ov.clone()]);
+            let call = self.mk(&name, pvars.iter().map(|(_, v)| v.clone()).collect())?;
+            let runs = self.mk("runs", vec![call, wv.clone(), ov.clone()])?;
+            let goal = self.eff(false, &wv, &runs, o)?;
+            let kb = self.prove(false, &wv, &b, o)?;
+            Ok::<_, String>((goal, kb))
+        })();
+        self.ctx = saved;
+        let (goal, kb) = kb?;
         let ep = self.api.fact(self.env, "tr.eff_prog").map_err(e)?;
         let (fsym, letin) = (f, self.sym("letin")?);
         let r = self.api.by(self.env, &goal, G::Defs(Box::new(G::Apply(ep, vec![A::T(wv.clone()), A::G(G::By(kb))])), vec![fsym, letin])).map_err(|x| format!("{}: {}", lemma, x.0))?;
@@ -814,9 +988,13 @@ impl<'e> Eff<'e> {
         let (ln, lv) = self.fresh("ls");
         let (o, ov) = self.fresh("os");
         let body = self.open(b, &[lv.clone(), ov.clone()]);
-        for (g, k) in self.called(&body) {
+        let (called, tabs) = self.called(&body);
+        for (g, k) in called {
             if !self.hios.contains_key(&g) {
-                let h = self.callee_hyp(&Term::var(g, vec![]), k)?;
+                if tabs.contains(&g) {
+                    self.tables.insert(g);
+                }
+                let h = self.callee_hyp(&Term::var(g, vec![]), k, tabs.contains(&g))?;
                 let hs = Seq::assume(self.env, h).map_err(e)?;
                 self.hios.insert(g, (hs, k));
             }
@@ -838,14 +1016,28 @@ impl<'e> Eff<'e> {
         let mut gs = Vec::new();
         let mut ghyps = Vec::new();
         let cn = |i: usize| callee_ns.get(i).copied().unwrap_or(1);
+        let tabs = self.wrapper_tables(&body, &params);
+        let wks = self.wrapper_called(&body, &params);
+        // (a table's number of arguments: its procedure's calls')
+        let cn = |i: usize| if tabs.contains(&i) { wks.get(&i).copied().unwrap_or_else(|| cn(i)) } else { cn(i) };
+        let doms = self.wrapper_doms(&body, &params);
+        let mut gtys = Vec::new();
         for (i, p) in params.iter().enumerate() {
             let gv = self.env.new_var(&format!("G{i}"), 0);
             let gt = Term::var(gv, vec![]);
             body = body.subst_var(*p, &gt, &self.env.binders_fn());
-            let h = self.callee_hyp(&gt, cn(i))?;
+            let h = self.callee_hyp(&gt, cn(i), tabs.contains(&i))?;
+            if tabs.contains(&i) {
+                self.tables.insert(gv);
+            }
             let hs = Seq::assume(self.env, h.clone()).map_err(e)?;
             self.hios.insert(gv, (hs, cn(i)));
             ghyps.push(h);
+            if let Some(d) = &doms[i] {
+                let d = d.subst_var(*p, &gt, &self.env.binders_fn());
+                self.assume(&d)?;
+                gtys.push(d);
+            }
             gs.push((gv, gt));
         }
         let app = self.mk(&name, gs.iter().map(|g| g.1.clone()).collect())?;
@@ -894,6 +1086,9 @@ impl<'e> Eff<'e> {
         let cio = self.api.fact(self.env, if stack { "tr.callee_io_s_fun" } else { "tr.callee_io_fun" }).map_err(e)?;
         let io = self.api.by(self.env, &io_goal, G::Defs(Box::new(G::Apply(cio, vec![A::T(n), A::G(G::By(g1))])), vec![spec, letin])).map_err(|x| format!("{}.io: {}", self.prefix, x.0))?;
         let gvs: Vec<VarId> = gs.iter().map(|g| g.0).collect();
+        // (the callees' types its proof used: premises too)
+        let mut ghyps = ghyps;
+        ghyps.extend(gtys.into_iter().filter(|t| io.hyps().contains(t)));
         let io = self.close(io, &ghyps, &gvs)?;
         self.out.push((format!("{}.io", self.prefix), io));
         // its spec typed
