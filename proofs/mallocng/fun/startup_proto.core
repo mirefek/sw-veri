@@ -119,6 +119,57 @@ proof
   show by taut(wW, (fn_update(fn_update(s, "vm", V), "objs", fn_update(s.objs, "live", L)) in univ(1) by simp(hu, vu, ou)))
 qed
 
+// (memory defined before stack objects are allocated: defined after -- the
+// same pages, the live objects grown, bytes changed only)
+theorem g.md_alloc: all w V l sz p off k wr. g.mem_defined(w, p, off, k, wr) -> w in abi.World -> fn_update(V, "bytes", w.vm.bytes) = w.vm ->
+  g.mem_defined(fn_update(fn_update(w, "vm", V), "objs", fn_update(w.objs, "live", g.live_with(w.objs.live, l, sz))), p, off, k, wr)
+proof
+  fix w V l sz p off k wr
+  assume hd hw hvb
+  have lv: all x. x in w.objs.live -> x in g.live_with(w.objs.live, l, sz) proof
+    fix x
+    assume hx
+    have wob: w.objs in abi.Objs by simp(expand(hw, abi.World))
+    have lo _ := apply(abi.objs_parts, wob)
+    have sub: subset(w.objs.live, omega) by taut(powerset_def[s := omega, a := w.objs.live], expand(lo, set_type))
+    have xo := mp(subset_elim[a := w.objs.live, b := omega, z := x], sub, hx)
+    show by sel(taut(hx, xo))
+  qed
+  have d1 d2 du := hd
+  have ul := apply(mp.usable_live[vm := w.vm, objs := w.objs, L := g.live_with(w.objs.live, l, sz), a := int_add(p, off), n := k, w := wr], du, lv)
+  have ub := apply(mp.usable_bytes[v := w.vm, v2 := V, objs := fn_update(w.objs, "live", g.live_with(w.objs.live, l, sz)), a := int_add(p, off), n := k, w := wr], hvb, ul)
+  show by simp(d1, d2, ub)
+qed
+
+mem_closure g.md_alloc
+mem_closure g.alloc_world
+mem_closure ms.world_parts
+
+// (a world with its objects set, its memory then written: a world, its
+// memory's facts -- as ms.sw_st0, ms.md_st0 after an allocation)
+theorem g.sw_st_objs: all s V O a n v. fn_update(fn_update(s, "vm", V), "objs", O) in abi.World -> fn_update(fn_update(s, "vm", V), "objs", O) in univ(1) -> a in bits(64) ->
+  fn_update(fn_update(fn_update(s, "vm", V), "objs", O), "vm", fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, a, n, v))) in abi.World &&
+  fn_update(fn_update(fn_update(s, "vm", V), "objs", O), "vm", fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, a, n, v))) in univ(1)
+proof
+  fix s V O a n v
+  assume hw hu ha
+  have w2 u2 := apply(tr.world_store, {fn_update(fn_update(s, "vm", V), "objs", O)}, {a}, {n}, {v}, hw, hu, ha)
+  show by simp(w2, u2)
+qed
+
+theorem g.md_st_objs: all s V O a n v p off k w. g.mem_defined(fn_update(fn_update(s, "vm", V), "objs", O), p, off, k, w) ->
+  g.mem_defined(fn_update(fn_update(fn_update(s, "vm", V), "objs", O), "vm", fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, a, n, v))), p, off, k, w)
+proof
+  fix s V O a n v p off k w
+  assume hd
+  have d1 d2 du := hd
+  have e := all_elim(ms.f_usable, {V}, {x86_64_linux.store_le(V.bytes, a, n, v)}, {O}, {int_add(p, off)}, {k}, {w})
+  show by simp(d1, d2, du, e)
+qed
+
+mem_closure g.sw_st_objs
+mem_closure g.md_st_objs
+
 theorem sp.il_probe: all envp pn G1 G2 G3 G4 G5 w o. w in abi.World -> runs(c_src_env___libc_start_main.__init_libc(envp, pn, G1, G2, G3, G4, G5), w, o) ->
   envp in bits(64) -> g.mem_defined(w, c_src_env___libc_start_main.__environ, 0, 8, true) ->
   abi.ovf_out(w, o) || true
@@ -146,33 +197,9 @@ proof
   have _ l1nz l1le _ := mp(all_elim(hall, {1}), simp(), simp(szl))
   have us2 := rewrite(sz1, us)
   have md0: g.mem_defined(W1, l[1], 0, 304, true) by simp(us2, l1nz, rewrite(sz1, l1le), l1b)
-  have _ w1f w1d _ := apply(ms.world_parts, w1W)
-  have w1v: W1.vm in x86_64_linux.Vm by simp(hVm)
-  step hk5 from hk with g.stzero_det using conj(w1u, l1b, md0, w1v, w1f, w1d)
-  print hk5
   let ENV := c_src_env___libc_start_main.__environ
-  have hk6 := hk5
-  let W2 := fn_update(W1, "vm", fn_update(V, "bytes", x86_64_linux.store_le(V.bytes, int_add(l[1], 0), 304, 0)))
-  have w2W0 w2u0 := apply(tr.world_store, {W1}, {int_add(l[1], 0)}, {304}, {0}, w1W, w1u, (int_add(l[1], 0) in bits(64) by simp(l1b)))
-  have w2u: W2 in univ(1) by simp(w2u0)
-  have w2W: W2 in abi.World by simp(w2W0)
-  have lv2: all x. x in w.objs.live -> x in g.live_with(w.objs.live, l, SZ) proof
-    fix x
-    assume hx
-    have wob: w.objs in abi.Objs by simp(expand(hw, abi.World))
-    have lo _ := apply(abi.objs_parts, wob)
-    have sub: subset(w.objs.live, omega) by taut(powerset_def[s := omega, a := w.objs.live], expand(lo, set_type))
-    have xo := mp(subset_elim[a := w.objs.live, b := omega, z := x], sub, hx)
-    show by sel(taut(hx, xo))
-  qed
-  have _ _ evu := hev
-  have evl := apply(mp.usable_live[vm := w.vm, objs := w.objs, L := g.live_with(w.objs.live, l, SZ), a := int_add(ENV, 0), n := 8, w := true], evu, lv2)
-  have vb2: fn_update(W2.vm, "bytes", w.vm.bytes) = w.vm by simp(hvb)
-  have evb := apply(mp.usable_bytes[v := w.vm, v2 := W2.vm, objs := O1, a := int_add(ENV, 0), n := 8, w := true], vb2, evl)
-  have ev2: g.mem_defined(W2, ENV, 0, 8, true) by simp(hev, evb)
   have envb: ENV in bits(64) by defs(simp(), c_src_env___libc_start_main.__environ)
-  have w2v w2f w2d _ := apply(ms.world_parts, w2W)
-  step h6 from hk6 with g.st64_det using conj(w2u, envb, ev2, w2v, w2f, w2d)
+  step h6 from hk with g.stzero_det, g.st64_det using conj(hw, hu, hVm, hvb, l1b, md0, envb, hev)
   print h6
   show by taut()
 qed
